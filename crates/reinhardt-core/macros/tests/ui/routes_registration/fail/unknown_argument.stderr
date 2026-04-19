@@ -1,0 +1,5 @@
+error: unknown argument for #[routes]; expected `standalone` or no arguments
+ --> tests/ui/routes_registration/fail/unknown_argument.rs:3:10
+  |
+3 | #[routes(foobar)]
+  |          ^^^^^^

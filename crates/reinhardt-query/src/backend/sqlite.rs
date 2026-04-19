@@ -1944,6 +1944,16 @@ impl SqliteQueryBuilder {
 	}
 }
 
+impl crate::query::QueryBuilderTrait for SqliteQueryBuilder {
+	fn placeholder(&self) -> (&str, bool) {
+		("?", false)
+	}
+
+	fn quote_char(&self) -> char {
+		'"'
+	}
+}
+
 #[cfg(test)]
 mod tests {
 	use super::*;
@@ -5396,15 +5406,5 @@ mod tests {
 		// Assert
 		assert!(sql.contains("\"orders\".\"status\""));
 		assert!(sql.contains("WHERE"));
-	}
-}
-
-impl crate::query::QueryBuilderTrait for SqliteQueryBuilder {
-	fn placeholder(&self) -> (&str, bool) {
-		("?", false)
-	}
-
-	fn quote_char(&self) -> char {
-		'"'
 	}
 }

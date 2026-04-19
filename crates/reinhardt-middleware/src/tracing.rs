@@ -46,7 +46,7 @@ impl Span {
 	/// Create a new span
 	pub fn new(trace_id: String, operation_name: String) -> Self {
 		Self {
-			span_id: uuid::Uuid::new_v4().to_string(),
+			span_id: uuid::Uuid::now_v7().to_string(),
 			parent_span_id: None,
 			trace_id,
 			operation_name,
@@ -431,7 +431,7 @@ impl TracingMiddleware {
 			.get(&self.config.trace_id_header)
 			.and_then(|v| v.to_str().ok())
 			.map(|s| s.to_string())
-			.unwrap_or_else(|| uuid::Uuid::new_v4().to_string())
+			.unwrap_or_else(|| uuid::Uuid::now_v7().to_string())
 	}
 }
 

@@ -255,6 +255,7 @@ Edit `src/config/urls.rs`:
 use reinhardt::prelude::*;
 use reinhardt::routes;
 
+// Note: UnifiedRouter requires the `client-router` feature flag
 #[routes]
 pub fn routes() -> UnifiedRouter {
     UnifiedRouter::new()

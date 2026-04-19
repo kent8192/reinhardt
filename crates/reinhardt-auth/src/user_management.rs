@@ -253,7 +253,7 @@ impl<H: PasswordHasher> UserManager<H> {
 
 		// Create user
 		let user = SimpleUser {
-			id: Uuid::new_v4(),
+			id: Uuid::now_v7(),
 			username: data.username.clone(),
 			email: data.email,
 			is_active: data.is_active,
@@ -837,7 +837,7 @@ mod tests {
 		// Arrange
 		let hasher = Argon2Hasher::new();
 		let manager = UserManager::new(hasher);
-		let nonexistent_id = Uuid::new_v4().to_string();
+		let nonexistent_id = Uuid::now_v7().to_string();
 
 		// Act
 		let result = manager.get_user(&nonexistent_id).await;

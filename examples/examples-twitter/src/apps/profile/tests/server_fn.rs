@@ -52,7 +52,7 @@ async fn test_fetch_profile_not_found(#[future] twitter_db_pool: (PgPool, String
 	let profile_factory = ProfileFactory::new();
 
 	// Try to find profile for non-existent user
-	let fake_id = uuid::Uuid::new_v4();
+	let fake_id = uuid::Uuid::now_v7();
 	let result = profile_factory.find_by_user_id(&pool, fake_id).await;
 
 	// Should return error (no profile found)

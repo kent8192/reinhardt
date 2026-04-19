@@ -20,7 +20,7 @@ use crate::reactive::Signal;
 ///
 /// # Example
 ///
-/// ```ignore
+/// ```no_run
 /// use reinhardt_pages::reactive::hooks::ActionPhase;
 ///
 /// let phase: ActionPhase<String, String> = ActionPhase::Idle;
@@ -258,7 +258,7 @@ where
 
 			state.set(ActionPhase::Pending);
 
-			#[cfg(target_arch = "wasm32")]
+			#[cfg(wasm)]
 			{
 				use crate::spawn::spawn_task;
 				let state = state.clone();
@@ -271,7 +271,7 @@ where
 				});
 			}
 
-			#[cfg(not(target_arch = "wasm32"))]
+			#[cfg(native)]
 			{
 				// Non-WASM: drop the future, reset to Idle
 				let _fut = action_fn(*payload);

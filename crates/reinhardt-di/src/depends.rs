@@ -8,31 +8,37 @@
 //!
 //! ## Examples
 //!
-//! ```
-//! use reinhardt_di::{Depends, DiResult, Injectable, InjectionContext, SingletonScope};
-//! use async_trait::async_trait;
+//! ```rust,no_run
+//! use reinhardt_di::{Depends, DiResult, Injectable, InjectionContext, SingletonScope, global_registry, DependencyScope};
+//! # use async_trait::async_trait;
 //! use std::sync::Arc;
 //!
-//! #[derive(Clone, Default)]
+//! #[derive(Default)]
 //! struct Config {
 //!     database_url: String,
 //! }
 //!
-//! #[async_trait]
-//! impl Injectable for Config {
-//!     async fn inject(_ctx: &InjectionContext) -> DiResult<Self> {
-//!         Ok(Self::default())
-//!     }
-//! }
-//!
+//! # #[async_trait]
+//! # impl Injectable for Config {
+//! #     async fn inject(_ctx: &InjectionContext) -> DiResult<Self> {
+//! #         Ok(Config::default())
+//! #     }
+//! # }
 //! # async fn example() -> Result<(), Box<dyn std::error::Error>> {
+//! // Register Config in the global registry (normally done via #[injectable] or #[injectable_factory])
+//! let registry = global_registry();
+//! registry.register_async::<Config, _, _>(DependencyScope::Request, |_ctx| async {
+//!     Ok(Config::default())
+//! });
+//!
 //! let singleton = Arc::new(SingletonScope::new());
 //! let ctx = InjectionContext::builder(singleton).build();
 //!
 //! // Basic usage - with caching (default)
 //! let config = Depends::<Config>::builder().resolve(&ctx).await?;
 //!
-//! // Without caching - creates new instance every time
+//! // Without caching flag - caching behavior is determined by the registered
+//! // DependencyScope (Singleton/Request/Transient), not by this flag.
 //! let config = Depends::<Config>::builder_no_cache().resolve(&ctx).await?;
 //! # Ok(())
 //! # }
@@ -40,10 +46,8 @@
 
 use crate::injected::DependencyScope;
 use crate::{
-	DiError, DiResult, Injectable, begin_resolution, context::InjectionContext,
-	injected::InjectionMetadata, with_cycle_detection_scope,
+	DiError, DiResult, Injectable, context::InjectionContext, injected::InjectionMetadata,
 };
-use std::any::TypeId;
 use std::ops::Deref;
 use std::sync::Arc;
 
@@ -51,16 +55,21 @@ use std::sync::Arc;
 ///
 /// Provides automatic dependency resolution with optional caching
 /// and circular dependency detection.
+///
+/// Two resolution methods are available:
+/// - [`resolve()`](Self::resolve): Resolves via the global registry first,
+///   falling back to `T::inject()` for types with manual `Injectable`
+///   implementations. Requires `T: Injectable`.
+/// - [`resolve_from_registry()`](Self::resolve_from_registry): Resolves via
+///   the global registry only. Does not require `T: Injectable`. Used by
+///   `#[injectable_factory]` for factory-produced types.
 #[derive(Debug)]
-pub struct Depends<T: Injectable> {
+pub struct Depends<T: Send + Sync + 'static> {
 	inner: Arc<T>,
 	metadata: InjectionMetadata,
 }
 
-impl<T: Injectable> Depends<T>
-where
-	T: Clone,
-{
+impl<T: Send + Sync + 'static> Depends<T> {
 	/// Create a new DependsBuilder with caching enabled (default behavior).
 	///
 	/// Similar to FastAPI's `Depends(dependency, use_cache=True)`.
@@ -124,11 +133,13 @@ where
 	}
 	/// Resolve the dependency from the injection context.
 	///
-	/// This method will:
-	/// 1. Detect circular dependencies
-	/// 2. Check cache if `use_cache` is true
-	/// 3. Call `T::inject(ctx)` if not cached or cache is disabled
-	/// 4. Store in cache if `use_cache` is true
+	/// This method delegates to `ctx.resolve::<T>()` which:
+	/// 1. Detects circular dependencies
+	/// 2. Checks scope caches (singleton/request)
+	/// 3. Calls the registered factory if not cached
+	///
+	/// If the type is not in the global registry, falls back to `T::inject()`
+	/// for types with manual `Injectable` implementations.
 	///
 	/// # Examples
 	///
@@ -156,45 +167,72 @@ where
 	/// # Ok(())
 	/// # }
 	/// ```
-	pub async fn resolve(ctx: &InjectionContext, use_cache: bool) -> DiResult<Self> {
-		with_cycle_detection_scope(async {
-			let value = if use_cache {
-				// Check request cache first
-				if let Some(cached) = ctx.get_request::<T>() {
-					Arc::try_unwrap(cached).unwrap_or_else(|arc| (*arc).clone())
-				} else {
-					// Begin circular dependency detection
-					let type_id = TypeId::of::<T>();
-					let type_name = std::any::type_name::<T>();
-					crate::register_type_name::<T>(type_name);
-					let _guard = begin_resolution(type_id, type_name)
-						.map_err(|e| DiError::CircularDependency(e.to_string()))?;
+	pub async fn resolve(ctx: &InjectionContext, use_cache: bool) -> DiResult<Self>
+	where
+		T: Injectable,
+	{
+		// Resolve via the global dependency registry first.
+		// If the type is not registered (e.g., manual `impl Injectable` without
+		// `#[injectable]`), fall back to `T::inject()` directly.
+		let arc = match ctx.resolve::<T>().await {
+			Ok(arc) => arc,
+			Err(DiError::DependencyNotRegistered { .. }) => Arc::new(T::inject(ctx).await?),
+			Err(e) => return Err(e),
+		};
 
-					let v = T::inject(ctx).await?;
-					ctx.set_request(v.clone());
-					v
-				}
-			} else {
-				// Begin circular dependency detection (even for uncached)
-				let type_id = TypeId::of::<T>();
-				let type_name = std::any::type_name::<T>();
-				crate::register_type_name::<T>(type_name);
-				let _guard = begin_resolution(type_id, type_name)
-					.map_err(|e| DiError::CircularDependency(e.to_string()))?;
-
-				// Skip cache
-				T::inject_uncached(ctx).await?
-			};
-
-			Ok(Self {
-				inner: Arc::new(value),
-				metadata: InjectionMetadata {
-					scope: DependencyScope::Request,
-					cached: use_cache,
-				},
-			})
+		Ok(Self {
+			inner: arc,
+			metadata: InjectionMetadata {
+				scope: DependencyScope::Request,
+				cached: use_cache,
+			},
 		})
-		.await
+	}
+
+	/// Resolve the dependency from the global registry only.
+	///
+	/// Unlike [`resolve()`](Self::resolve), this method does **not** require
+	/// `T: Injectable` and does **not** fall back to `T::inject()`. It returns
+	/// an error if the type is not registered in the global registry.
+	///
+	/// This is the method used by `#[injectable_factory]` for dependency
+	/// resolution, allowing factory-produced types to be injected without an
+	/// `Injectable` implementation.
+	///
+	/// # Examples
+	///
+	/// ```
+	/// use reinhardt_di::{Depends, InjectionContext, SingletonScope, DiResult, global_registry, DependencyScope};
+	/// use std::sync::Arc;
+	///
+	/// #[derive(Clone, Default)]
+	/// struct Config {
+	///     value: String,
+	/// }
+	///
+	/// # async fn example() -> DiResult<()> {
+	/// // Register via factory (no Injectable impl needed)
+	/// let registry = global_registry();
+	/// registry.register_async::<Config, _, _>(DependencyScope::Singleton, |_ctx| async {
+	///     Ok(Config::default())
+	/// });
+	///
+	/// let singleton_scope = Arc::new(SingletonScope::new());
+	/// let ctx = InjectionContext::builder(singleton_scope).build();
+	/// let result = Depends::<Config>::resolve_from_registry(&ctx, true).await?;
+	/// # Ok(())
+	/// # }
+	/// ```
+	pub async fn resolve_from_registry(ctx: &InjectionContext, use_cache: bool) -> DiResult<Self> {
+		let arc = ctx.resolve::<T>().await?;
+
+		Ok(Self {
+			inner: arc,
+			metadata: InjectionMetadata {
+				scope: DependencyScope::Request,
+				cached: use_cache,
+			},
+		})
 	}
 	/// Create a Depends from an existing value (for testing).
 	///
@@ -228,38 +266,6 @@ where
 				cached: false,
 			},
 		}
-	}
-
-	/// Extract the inner value from the Depends wrapper.
-	///
-	/// This method tries to unwrap the Arc. If the Arc has multiple strong references,
-	/// it clones the inner value instead.
-	///
-	/// # Examples
-	///
-	/// ```
-	/// use reinhardt_di::{Depends, Injectable, InjectionContext, DiResult};
-	/// # use async_trait::async_trait;
-	///
-	/// #[derive(Clone, Default)]
-	/// struct Config {
-	///     value: String,
-	/// }
-	///
-	/// # #[async_trait]
-	/// # impl Injectable for Config {
-	/// #     async fn inject(_ctx: &InjectionContext) -> DiResult<Self> {
-	/// #         Ok(Config::default())
-	/// #     }
-	/// # }
-	///
-	/// let config = Config { value: "test".to_string() };
-	/// let depends = Depends::from_value(config);
-	/// let inner = depends.into_inner();
-	/// assert_eq!(inner.value, "test");
-	/// ```
-	pub fn into_inner(self) -> T {
-		Arc::try_unwrap(self.inner).unwrap_or_else(|arc| (*arc).clone())
 	}
 
 	/// Get Arc reference
@@ -311,18 +317,82 @@ where
 	pub fn metadata(&self) -> &InjectionMetadata {
 		&self.metadata
 	}
+
+	/// Attempt to unwrap the inner `Arc`, returning `T` if this is the only
+	/// strong reference. Returns `Err(Self)` if other references exist.
+	///
+	/// This mirrors [`Arc::try_unwrap`] semantics. Unlike
+	/// [`into_inner`](Depends::into_inner), this method does **not** require
+	/// `T: Clone`.
+	///
+	/// # Examples
+	///
+	/// ```
+	/// use reinhardt_di::Depends;
+	///
+	/// // Success: single owner
+	/// let depends = Depends::from_value(42u32);
+	/// let value = depends.try_unwrap().unwrap();
+	/// assert_eq!(value, 42);
+	///
+	/// // Failure: multiple owners
+	/// let depends = Depends::from_value(42u32);
+	/// let _clone = depends.clone();
+	/// let err = depends.try_unwrap().unwrap_err();
+	/// assert_eq!(*err, 42); // still accessible via Deref
+	/// ```
+	pub fn try_unwrap(self) -> Result<T, Self> {
+		match Arc::try_unwrap(self.inner) {
+			Ok(val) => Ok(val),
+			Err(arc) => Err(Self {
+				inner: arc,
+				metadata: self.metadata,
+			}),
+		}
+	}
+}
+
+impl<T: Clone + Send + Sync + 'static> Depends<T> {
+	/// Extract the inner value from the Depends wrapper.
+	///
+	/// This method tries to unwrap the Arc. If the Arc has multiple strong references,
+	/// it clones the inner value instead.
+	///
+	/// # Examples
+	///
+	/// ```
+	/// use reinhardt_di::{Depends, Injectable, InjectionContext, DiResult};
+	/// # use async_trait::async_trait;
+	///
+	/// #[derive(Clone, Default)]
+	/// struct Config {
+	///     value: String,
+	/// }
+	///
+	/// # #[async_trait]
+	/// # impl Injectable for Config {
+	/// #     async fn inject(_ctx: &InjectionContext) -> DiResult<Self> {
+	/// #         Ok(Config::default())
+	/// #     }
+	/// # }
+	///
+	/// let config = Config { value: "test".to_string() };
+	/// let depends = Depends::from_value(config);
+	/// let inner = depends.into_inner();
+	/// assert_eq!(inner.value, "test");
+	/// ```
+	pub fn into_inner(self) -> T {
+		Arc::try_unwrap(self.inner).unwrap_or_else(|arc| (*arc).clone())
+	}
 }
 
 /// Builder for Depends to support FastAPI-style API.
-pub struct DependsBuilder<T: Injectable> {
+pub struct DependsBuilder<T: Send + Sync + 'static> {
 	use_cache: bool,
 	_phantom: std::marker::PhantomData<T>,
 }
 
-impl<T: Injectable> DependsBuilder<T>
-where
-	T: Clone,
-{
+impl<T: Send + Sync + 'static> DependsBuilder<T> {
 	/// Resolve the dependency.
 	///
 	/// # Examples
@@ -352,12 +422,15 @@ where
 	/// # Ok(())
 	/// # }
 	/// ```
-	pub async fn resolve(self, ctx: &InjectionContext) -> DiResult<Depends<T>> {
+	pub async fn resolve(self, ctx: &InjectionContext) -> DiResult<Depends<T>>
+	where
+		T: Injectable,
+	{
 		Depends::resolve(ctx, self.use_cache).await
 	}
 }
 
-impl<T: Injectable> Deref for Depends<T> {
+impl<T: Send + Sync + 'static> Deref for Depends<T> {
 	type Target = T;
 
 	fn deref(&self) -> &Self::Target {
@@ -365,7 +438,7 @@ impl<T: Injectable> Deref for Depends<T> {
 	}
 }
 
-impl<T: Injectable> Clone for Depends<T> {
+impl<T: Send + Sync + 'static> Clone for Depends<T> {
 	fn clone(&self) -> Self {
 		Self {
 			inner: Arc::clone(&self.inner),
@@ -374,7 +447,7 @@ impl<T: Injectable> Clone for Depends<T> {
 	}
 }
 
-impl<T: Injectable> AsRef<T> for Depends<T> {
+impl<T: Send + Sync + 'static> AsRef<T> for Depends<T> {
 	fn as_ref(&self) -> &T {
 		&self.inner
 	}
@@ -383,7 +456,7 @@ impl<T: Injectable> AsRef<T> for Depends<T> {
 #[cfg(test)]
 mod tests {
 	use super::*;
-	use crate::SingletonScope;
+	use crate::{DependencyScope as RegistryScope, SingletonScope, global_registry};
 	use rstest::rstest;
 
 	#[derive(Clone, Default, Debug)]
@@ -397,6 +470,18 @@ mod tests {
 			Ok(TestConfig {
 				value: "test".to_string(),
 			})
+		}
+	}
+
+	/// Register TestConfig in the global registry for resolution tests.
+	fn register_test_config() {
+		let registry = global_registry();
+		if !registry.is_registered::<TestConfig>() {
+			registry.register_async::<TestConfig, _, _>(RegistryScope::Request, |_ctx| async {
+				Ok(TestConfig {
+					value: "test".to_string(),
+				})
+			});
 		}
 	}
 
@@ -516,6 +601,7 @@ mod tests {
 	#[tokio::test]
 	async fn test_depends_resolve_with_context() {
 		// Arrange
+		register_test_config();
 		let singleton_scope = Arc::new(SingletonScope::new());
 		let ctx = InjectionContext::builder(singleton_scope).build();
 
@@ -532,6 +618,7 @@ mod tests {
 	#[tokio::test]
 	async fn test_depends_resolve_uncached() {
 		// Arrange
+		register_test_config();
 		let singleton_scope = Arc::new(SingletonScope::new());
 		let ctx = InjectionContext::builder(singleton_scope).build();
 
@@ -547,6 +634,7 @@ mod tests {
 	#[tokio::test]
 	async fn test_depends_builder_resolve() {
 		// Arrange
+		register_test_config();
 		let singleton_scope = Arc::new(SingletonScope::new());
 		let ctx = InjectionContext::builder(singleton_scope).build();
 
@@ -565,6 +653,7 @@ mod tests {
 	#[tokio::test]
 	async fn test_depends_builder_no_cache_resolve() {
 		// Arrange
+		register_test_config();
 		let singleton_scope = Arc::new(SingletonScope::new());
 		let ctx = InjectionContext::builder(singleton_scope).build();
 
@@ -581,17 +670,19 @@ mod tests {
 
 	#[rstest]
 	#[tokio::test]
-	async fn test_depends_circular_dependency_detection() {
-		// Arrange
-		#[derive(Clone, Default, Debug)]
-		struct CircularA;
+	async fn test_depends_resolve_or_inject_failing_injectable_returns_error() {
+		// Arrange: type whose inject() always fails and is not in the registry.
+		// resolve_or_inject() falls back to T::inject() which returns an error.
+		#[derive(Debug)]
+		struct FailingType;
 
 		#[async_trait::async_trait]
-		impl Injectable for CircularA {
-			async fn inject(ctx: &InjectionContext) -> DiResult<Self> {
-				// Attempt to resolve self, creating a circular dependency
-				let _self_ref = Depends::<CircularA>::resolve(ctx, true).await?;
-				Ok(CircularA)
+		impl Injectable for FailingType {
+			async fn inject(_ctx: &InjectionContext) -> DiResult<Self> {
+				Err(crate::DiError::NotRegistered {
+					type_name: "FailingType".into(),
+					hint: "intentionally failing".into(),
+				})
 			}
 		}
 
@@ -599,15 +690,97 @@ mod tests {
 		let ctx = InjectionContext::builder(singleton_scope).build();
 
 		// Act
-		let result = Depends::<CircularA>::resolve(&ctx, true).await;
+		let result = Depends::<FailingType>::resolve(&ctx, true).await;
 
 		// Assert
 		assert!(result.is_err());
-		if let Err(DiError::CircularDependency(msg)) = &result {
-			assert!(msg.contains("CircularA"));
-		} else {
-			panic!("Expected CircularDependency error, got: {:?}", result);
+	}
+
+	#[rstest]
+	#[tokio::test]
+	async fn test_depends_resolve_from_registry_unregistered_type_returns_error() {
+		// Arrange: type that is not in the registry.
+		// resolve_from_registry() returns DependencyNotRegistered.
+		#[derive(Debug)]
+		struct UnregisteredType;
+
+		let singleton_scope = Arc::new(SingletonScope::new());
+		let ctx = InjectionContext::builder(singleton_scope).build();
+
+		// Act
+		let result = Depends::<UnregisteredType>::resolve_from_registry(&ctx, true).await;
+
+		// Assert
+		assert!(result.is_err());
+		assert!(matches!(
+			result.unwrap_err(),
+			DiError::DependencyNotRegistered { .. }
+		),);
+	}
+
+	/// Factory-registered type can be resolved via `resolve_from_registry()`
+	/// without an `Injectable` implementation. This is the core fix for #3515.
+	#[rstest]
+	#[tokio::test]
+	async fn test_depends_resolve_from_registry_factory_type_without_injectable() {
+		// Arrange: type registered via factory, no Injectable impl
+		#[derive(Debug, Clone)]
+		struct FactoryOnlyType {
+			value: String,
 		}
+
+		let registry = global_registry();
+		if !registry.is_registered::<FactoryOnlyType>() {
+			registry.register_async::<FactoryOnlyType, _, _>(
+				RegistryScope::Request,
+				|_ctx| async {
+					Ok(FactoryOnlyType {
+						value: "from_factory".to_string(),
+					})
+				},
+			);
+		}
+
+		let singleton_scope = Arc::new(SingletonScope::new());
+		let ctx = InjectionContext::builder(singleton_scope).build();
+
+		// Act
+		let depends = Depends::<FactoryOnlyType>::resolve_from_registry(&ctx, true)
+			.await
+			.unwrap();
+
+		// Assert
+		assert_eq!(depends.value, "from_factory");
+	}
+
+	/// Manual Injectable impl can be resolved via `resolve()` even when the
+	/// type is not in the global registry (falls back to T::inject()).
+	#[rstest]
+	#[tokio::test]
+	async fn test_depends_resolve_manual_injectable_fallback() {
+		// Arrange: type with manual Injectable impl, not in registry
+		#[derive(Debug, Clone)]
+		struct ManualType {
+			origin: String,
+		}
+
+		#[async_trait::async_trait]
+		impl Injectable for ManualType {
+			async fn inject(_ctx: &InjectionContext) -> DiResult<Self> {
+				Ok(ManualType {
+					origin: "from_inject".to_string(),
+				})
+			}
+		}
+
+		let singleton_scope = Arc::new(SingletonScope::new());
+		let ctx = InjectionContext::builder(singleton_scope).build();
+
+		// Act
+		let depends = Depends::<ManualType>::resolve(&ctx, true).await.unwrap();
+
+		// Assert
+		assert_eq!(depends.origin, "from_inject");
 	}
 
 	#[rstest]
@@ -625,5 +798,136 @@ mod tests {
 		// Assert
 		assert_eq!(depends1.metadata().scope, depends2.metadata().scope);
 		assert_eq!(depends1.metadata().cached, depends2.metadata().cached);
+	}
+
+	/// Non-Clone type can be used with `Depends<T>` via `from_value()`,
+	/// `clone()` (Arc-based), `Deref`, and `AsRef`.
+	/// `into_inner()` is NOT available for non-Clone types.
+	#[rstest]
+	#[tokio::test]
+	async fn test_depends_non_clone_type() {
+		// Arrange
+		#[derive(Debug)]
+		struct NonCloneService {
+			id: u32,
+		}
+
+		let service = NonCloneService { id: 42 };
+
+		// Act
+		let depends = Depends::from_value(service);
+		let cloned_depends = depends.clone();
+
+		// Assert
+		assert_eq!(depends.id, 42);
+		assert_eq!(cloned_depends.id, 42);
+		assert!(Arc::ptr_eq(depends.as_arc(), cloned_depends.as_arc()));
+		assert_eq!(depends.as_ref().id, 42);
+	}
+
+	/// Non-Clone type can be resolved via the global registry.
+	#[rstest]
+	#[tokio::test]
+	async fn test_depends_non_clone_type_resolve() {
+		// Arrange
+		#[derive(Debug)]
+		struct NonCloneRouter {
+			prefix: String,
+		}
+
+		#[async_trait::async_trait]
+		impl Injectable for NonCloneRouter {
+			async fn inject(_ctx: &InjectionContext) -> DiResult<Self> {
+				Ok(NonCloneRouter {
+					prefix: "/api".to_string(),
+				})
+			}
+		}
+
+		let registry = global_registry();
+		if !registry.is_registered::<NonCloneRouter>() {
+			registry.register_async::<NonCloneRouter, _, _>(RegistryScope::Request, |_ctx| async {
+				Ok(NonCloneRouter {
+					prefix: "/api".to_string(),
+				})
+			});
+		}
+
+		let singleton_scope = Arc::new(SingletonScope::new());
+		let ctx = InjectionContext::builder(singleton_scope).build();
+
+		// Act
+		let depends = Depends::<NonCloneRouter>::resolve(&ctx, true)
+			.await
+			.unwrap();
+
+		// Assert
+		assert_eq!(depends.prefix, "/api");
+		assert!(depends.metadata().cached);
+	}
+
+	/// `try_unwrap()` succeeds when there is only one strong reference.
+	#[rstest]
+	#[tokio::test]
+	async fn test_depends_try_unwrap_success() {
+		// Arrange
+		let config = TestConfig {
+			value: "owned".to_string(),
+		};
+		let depends = Depends::from_value(config);
+
+		// Act
+		let result = depends.try_unwrap();
+
+		// Assert
+		assert!(result.is_ok());
+		assert_eq!(result.unwrap().value, "owned");
+	}
+
+	/// `try_unwrap()` returns `Err(Self)` when multiple references exist.
+	#[rstest]
+	#[tokio::test]
+	async fn test_depends_try_unwrap_err_multiple_refs() {
+		// Arrange
+		let config = TestConfig {
+			value: "shared".to_string(),
+		};
+		let depends = Depends::from_value(config);
+		let _clone = depends.clone();
+
+		// Act
+		let result = depends.try_unwrap();
+
+		// Assert
+		let returned = result.unwrap_err();
+		assert_eq!(returned.value, "shared");
+		assert_eq!(returned.metadata().scope, DependencyScope::Request);
+	}
+
+	/// `try_unwrap()` works with non-Clone types (the primary use case).
+	#[rstest]
+	#[tokio::test]
+	async fn test_depends_try_unwrap_non_clone_type() {
+		// Arrange
+		#[derive(Debug, PartialEq)]
+		struct NonCloneRouter {
+			prefix: String,
+		}
+
+		let router = NonCloneRouter {
+			prefix: "/api".to_string(),
+		};
+		let depends = Depends::from_value(router);
+
+		// Act
+		let result = depends.try_unwrap();
+
+		// Assert
+		assert_eq!(
+			result.unwrap(),
+			NonCloneRouter {
+				prefix: "/api".to_string()
+			}
+		);
 	}
 }

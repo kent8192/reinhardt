@@ -7,7 +7,7 @@ async fn test_default_user_with_password() {
 	// Test intent: Verify DefaultUser password hashing, verification,
 	// and session auth hash functionality using Argon2id
 	let mut user = DefaultUser {
-		id: Uuid::new_v4(),
+		id: Uuid::now_v7(),
 		username: "alice".to_string(),
 		email: "alice@example.com".to_string(),
 		first_name: "Alice".to_string(),
@@ -124,7 +124,7 @@ async fn test_unusable_password() {
 	// Test intent: Verify set_unusable_password() creates password hash that
 	// cannot be used for authentication
 	let mut user = DefaultUser {
-		id: Uuid::new_v4(),
+		id: Uuid::now_v7(),
 		username: "oauth_user".to_string(),
 		email: "oauth@example.com".to_string(),
 		first_name: String::new(),

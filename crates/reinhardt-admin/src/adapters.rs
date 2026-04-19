@@ -9,14 +9,14 @@
 //! This eliminates the need for conditional imports in Server Function files.
 
 // Server-side: Use actual implementations
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(server)]
 pub use crate::core::{
 	AdminDatabase, AdminRecord, AdminSite, ExportFormat, ImportBuilder, ImportError, ImportFormat,
 	ImportResult, ModelAdmin, ModelAdminConfig, ModelAdminConfigBuilder,
 };
 
 // WASM: Use stub types
-#[cfg(target_arch = "wasm32")]
+#[cfg(client)]
 pub use crate::types::{
 	AdminDatabase, AdminRecord, AdminSite, ExportFormat, ImportBuilder, ImportError, ImportFormat,
 	ImportResult, ModelAdmin,
@@ -30,5 +30,5 @@ pub use crate::types::{
 	AdminError, BulkDeleteRequest, BulkDeleteResponse, ColumnInfo, DashboardResponse,
 	DetailResponse, ExportFormat as RequestExportFormat, ExportResponse, FieldInfo, FieldType,
 	FieldsResponse, FilterChoice, FilterInfo, FilterType, ImportResponse, ListQueryParams,
-	ListResponse, ModelInfo, MutationRequest, MutationResponse,
+	ListResponse, LoginResponse, ModelInfo, MutationRequest, MutationResponse,
 };

@@ -1,3 +1,4 @@
+#![cfg(not(target_arch = "wasm32"))]
 //! Integration tests for DOM Abstraction
 //!
 //! These tests verify the DOM abstraction layer:
@@ -68,20 +69,20 @@ fn test_reactive_attribute() {
 	// Initial value
 	// Note: Effect runs immediately, but we need to flush updates
 	use reinhardt_pages::reactive::with_runtime;
-	with_runtime(|rt| rt.flush_updates_enhanced());
+	with_runtime(|rt| rt.flush_updates());
 
 	assert_eq!(div.get_attribute("data-count"), Some("0".to_string()));
 
 	// Update Signal
 	count.set(42);
-	with_runtime(|rt| rt.flush_updates_enhanced());
+	with_runtime(|rt| rt.flush_updates());
 
 	// Attribute should be updated automatically
 	assert_eq!(div.get_attribute("data-count"), Some("42".to_string()));
 
 	// Update again
 	count.set(100);
-	with_runtime(|rt| rt.flush_updates_enhanced());
+	with_runtime(|rt| rt.flush_updates());
 
 	assert_eq!(div.get_attribute("data-count"), Some("100".to_string()));
 }
@@ -99,7 +100,7 @@ fn test_multiple_reactive_attributes() {
 	div.set_reactive_attribute("data-y", y.clone());
 
 	use reinhardt_pages::reactive::with_runtime;
-	with_runtime(|rt| rt.flush_updates_enhanced());
+	with_runtime(|rt| rt.flush_updates());
 
 	assert_eq!(div.get_attribute("data-x"), Some("10".to_string()));
 	assert_eq!(div.get_attribute("data-y"), Some("20".to_string()));
@@ -107,7 +108,7 @@ fn test_multiple_reactive_attributes() {
 	// Update both
 	x.set(100);
 	y.set(200);
-	with_runtime(|rt| rt.flush_updates_enhanced());
+	with_runtime(|rt| rt.flush_updates());
 
 	assert_eq!(div.get_attribute("data-x"), Some("100".to_string()));
 	assert_eq!(div.get_attribute("data-y"), Some("200".to_string()));
@@ -235,7 +236,7 @@ fn test_reactive_attribute_with_event_listener() {
 	button.set_reactive_attribute("data-count", count.clone());
 
 	use reinhardt_pages::reactive::with_runtime;
-	with_runtime(|rt| rt.flush_updates_enhanced());
+	with_runtime(|rt| rt.flush_updates());
 
 	assert_eq!(button.get_attribute("data-count"), Some("0".to_string()));
 
@@ -249,14 +250,14 @@ fn test_reactive_attribute_with_event_listener() {
 	button.as_web_sys().dispatch_event(&event).unwrap();
 
 	// Flush updates to apply reactive changes
-	with_runtime(|rt| rt.flush_updates_enhanced());
+	with_runtime(|rt| rt.flush_updates());
 
 	// Attribute should be updated automatically
 	assert_eq!(button.get_attribute("data-count"), Some("1".to_string()));
 
 	// Click again
 	button.as_web_sys().dispatch_event(&event).unwrap();
-	with_runtime(|rt| rt.flush_updates_enhanced());
+	with_runtime(|rt| rt.flush_updates());
 
 	assert_eq!(button.get_attribute("data-count"), Some("2".to_string()));
 }

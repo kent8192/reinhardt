@@ -19,6 +19,8 @@ use crate::AuthenticationError;
 use crate::BaseUser;
 use async_trait::async_trait;
 use reinhardt_db::orm::{DatabaseConnection, Model};
+#[cfg(not(feature = "params"))]
+use reinhardt_di::DiError;
 use reinhardt_di::{DiResult, Injectable, InjectionContext};
 use reinhardt_http::AuthState;
 use std::sync::Arc;
@@ -162,7 +164,9 @@ where
 		};
 
 		#[cfg(not(feature = "params"))]
-		return Ok(Self::anonymous());
+		return Err(DiError::NotFound(
+			"CurrentUser requires the 'params' feature to be enabled".to_string(),
+		));
 
 		// 2. Get AuthState from request extensions
 		#[cfg(feature = "params")]
@@ -189,12 +193,18 @@ where
 		let model_pk: <U as Model>::PrimaryKey = base_pk.into();
 
 		// 5. Get DatabaseConnection from DI context
+		// Resolve DatabaseConnection from DI (singleton-first, request-scope fallback)
+		// Uses get_singleton/get_request directly instead of ctx.resolve() because
+		// DatabaseConnection is pre-seeded into the singleton scope at server startup,
+		// not registered in the global DependencyRegistry.
 		#[cfg(feature = "params")]
-		let db: Arc<DatabaseConnection> = match ctx.resolve::<DatabaseConnection>().await {
-			Ok(conn) => conn,
-			Err(e) => {
+		let db: Arc<DatabaseConnection> = match ctx
+			.get_singleton::<DatabaseConnection>()
+			.or_else(|| ctx.get_request::<DatabaseConnection>())
+		{
+			Some(conn) => conn,
+			None => {
 				::tracing::warn!(
-					error = %e,
 					"DatabaseConnection not registered in DI context. \
 					 CurrentUser will be anonymous. \
 					 Hint: Register DatabaseConnection as a singleton in InjectionContext."
@@ -294,7 +304,7 @@ mod tests {
 
 	#[test]
 	fn test_authenticated_user() {
-		let user_id = Uuid::new_v4();
+		let user_id = Uuid::now_v7();
 		let user = TestUser {
 			id: user_id,
 			username: "testuser".to_string(),
@@ -319,7 +329,7 @@ mod tests {
 
 	#[test]
 	fn test_into_user_authenticated() {
-		let user_id = Uuid::new_v4();
+		let user_id = Uuid::now_v7();
 		let user = TestUser {
 			id: user_id,
 			username: "testuser".to_string(),

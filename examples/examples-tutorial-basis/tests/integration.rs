@@ -480,7 +480,7 @@ mod database_tests {
 // Server Function Tests
 // ============================================================================
 
-#[cfg(all(with_reinhardt, not(target_arch = "wasm32")))]
+#[cfg(all(with_reinhardt, server))]
 mod server_fn_tests {
 	use reinhardt::DatabaseConnection;
 	use reinhardt::db::orm::reinitialize_database;

@@ -25,10 +25,14 @@ permissions:
   id-token: write
   contents: read
 
+concurrency:
+  group: build-runner-ami-${{ github.ref }}
+  cancel-in-progress: false
+
 jobs:
   build-ami:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 360
     env:
       RUNNER_ARCH: ${{ github.event.inputs.architecture || 'arm64' }}
       PKR_VAR_runner_arch: ${{ github.event.inputs.architecture || 'arm64' }}

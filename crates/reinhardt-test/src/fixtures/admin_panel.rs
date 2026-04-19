@@ -158,7 +158,7 @@ pub async fn test_model_with_table(
 	use sqlx::Executor;
 
 	let (pool, _database_name) = shared_db_pool.await;
-	let table_name = format!("test_models_{}", uuid::Uuid::new_v4().simple());
+	let table_name = format!("test_models_{}", uuid::Uuid::now_v7().simple());
 
 	// Create test table
 	let create_table_sql = format!(
@@ -264,7 +264,7 @@ pub async fn export_import_test_context(
 	let db = Arc::new(AdminDatabase::new(connection));
 
 	// Generate unique table name
-	let table_name = format!("test_exports_{}", Uuid::new_v4().simple());
+	let table_name = format!("test_exports_{}", Uuid::now_v7().simple());
 
 	// Table definition identifiers
 	#[derive(Debug, Iden)]

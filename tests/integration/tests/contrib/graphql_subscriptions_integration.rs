@@ -64,7 +64,7 @@ impl OrmUserStorage {
 	}
 
 	async fn create_user(&self, name: String, email: String) -> Result<User, sqlx::Error> {
-		let id = uuid::Uuid::new_v4().to_string();
+		let id = uuid::Uuid::now_v7().to_string();
 		let user = sqlx::query_as::<_, DbUser>(
 			"INSERT INTO users (id, name, email, active) VALUES ($1, $2, $3, true) RETURNING *",
 		)
@@ -703,7 +703,7 @@ async fn test_subscription_with_database_transaction(
 			.await
 			.expect("Failed to begin transaction");
 
-		let user_id = uuid::Uuid::new_v4().to_string();
+		let user_id = uuid::Uuid::now_v7().to_string();
 		sqlx::query("INSERT INTO users (id, name, email, active) VALUES ($1, $2, $3, true)")
 			.bind(&user_id)
 			.bind("TxUser")

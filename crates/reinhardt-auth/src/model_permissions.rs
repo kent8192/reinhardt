@@ -662,7 +662,7 @@ mod tests {
 
 	fn make_user(username: &str) -> Box<dyn crate::User> {
 		Box::new(crate::SimpleUser {
-			id: uuid::Uuid::new_v4(),
+			id: uuid::Uuid::now_v7(),
 			username: username.to_string(),
 			email: format!("{}@example.com", username),
 			is_active: true,

@@ -77,7 +77,4 @@ mod tests {
 		// Just verify it constructs without panic
 		assert!(std::mem::size_of_val(&userinfo_client) > 0);
 	}
-
-	// Integration tests with mock server would go here
-	// For now, we rely on manual testing with real providers
 }

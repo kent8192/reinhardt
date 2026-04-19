@@ -71,7 +71,7 @@ cp production.example.toml production.toml
 debug = false
 secret_key = "your-secret-key-here"
 
-[database]
+[databases.default]
 engine = "postgresql"
 host = "localhost"
 port = 5432
@@ -86,7 +86,7 @@ password = "change-this"
 debug = true
 secret_key = "development-secret-key"
 
-[database]
+[databases.default]
 name = "mydb_dev"
 password = "local-password"
 ```
@@ -106,7 +106,7 @@ use std::env;
 pub struct ProjectSettings;
 
 pub fn get_settings() -> ProjectSettings {
-	let profile_str = env::var("REINHARDT_ENV").unwrap_or_else(|_| "local".to_string());
+	let profile_str = env::var("REINHARDT_ENV").unwrap_or_else(|_| "dev".to_string());
 	let profile = Profile::parse(&profile_str);
 	let settings_dir = env::current_dir().expect("Failed to get current directory").join("settings");
 
@@ -126,11 +126,11 @@ pub fn get_settings() -> ProjectSettings {
 ### 5. Starting the Application
 
 ```bash
-# Start in local environment (default)
+# Start in development environment (default)
 cargo make runserver
 
 # Explicitly specify environment
-REINHARDT_ENV=local cargo make runserver
+REINHARDT_ENV=dev cargo make runserver
 REINHARDT_ENV=staging cargo make runserver
 REINHARDT_ENV=production cargo make runserver
 ```
@@ -210,7 +210,7 @@ You can choose between two environment variable sources depending on your needs:
 debug = false
 secret_key = "base-secret"
 
-[database]
+[databases.default]
 host = "localhost"
 port = 5432
 ```
@@ -219,7 +219,7 @@ port = 5432
 # local.toml
 debug = true
 
-[database]
+[databases.default]
 host = "127.0.0.1"
 ```
 
@@ -232,16 +232,16 @@ export REINHARDT_DATABASE_PORT=5433
 
 - `debug = true` (local.toml overrides base.toml)
 - `secret_key = "base-secret"` (not defined in local.toml, uses base.toml value)
-- `database.host = "127.0.0.1"` (local.toml overrides base.toml)
-- `database.port = 5432` (base.toml overrides environment variable because TOML
+- `databases.default.host = "127.0.0.1"` (local.toml overrides base.toml)
+- `databases.default.port = 5432` (base.toml overrides environment variable because TOML
   has higher priority than LowPriorityEnvSource)
 
 **Result if using EnvSource instead:**
 
 - `debug = true` (local.toml value)
 - `secret_key = "base-secret"` (base.toml value)
-- `database.host = "127.0.0.1"` (local.toml value)
-- `database.port = 5433` (environment variable overrides TOML because EnvSource
+- `databases.default.host = "127.0.0.1"` (local.toml value)
+- `databases.default.port = 5433` (environment variable overrides TOML because EnvSource
   has higher priority)
 
 ---
@@ -257,17 +257,15 @@ debug = false
 secret_key = "CHANGE_THIS_IN_PRODUCTION"
 allowed_hosts = ["localhost", "127.0.0.1"]
 
-[database]
+[databases.default]
 engine = "postgresql"
 host = "localhost"
 port = 5432
 name = "mydb"
 user = "postgres"
 password = "CHANGE_THIS"
-max_connections = 10
-min_connections = 2
 
-[static]
+[static_files]
 url = "/static/"
 root = "static/"
 
@@ -288,10 +286,9 @@ Settings for development:
 debug = true
 secret_key = "dev-secret-key-not-for-production"
 
-[database]
+[databases.default]
 name = "mydb_dev"
 password = "local-dev-password"
-max_connections = 5
 
 [logging]
 level = "debug"
@@ -305,12 +302,10 @@ debug = false
 secret_key = "staging-secret-key"
 allowed_hosts = ["staging.example.com"]
 
-[database]
+[databases.default]
 host = "staging-db.example.com"
 name = "mydb_staging"
 password = "staging-db-password"
-max_connections = 20
-ssl_mode = "require"
 
 [logging]
 level = "info"
@@ -324,17 +319,14 @@ debug = false
 secret_key = "production-secret-key-from-secret-manager"
 allowed_hosts = ["www.example.com", "api.example.com"]
 
-[database]
+[databases.default]
 host = "prod-db.example.com"
 port = 5432
 name = "mydb_production"
 user = "app_user"
 password = "production-db-password"
-max_connections = 50
-min_connections = 10
-ssl_mode = "require"
 
-[static]
+[static_files]
 url = "https://cdn.example.com/static/"
 
 [media]
@@ -359,13 +351,24 @@ Every settings fragment implements the `SettingsFragment` trait, which defines t
 TOML section name and optional profile-based validation:
 
 ```rust
-pub trait SettingsFragment: Default + Serialize + DeserializeOwned {
+pub trait SettingsFragment:
+	Clone + Debug + Serialize + DeserializeOwned + Send + Sync + 'static
+{
+	/// The accessor trait for this fragment.
+	/// Use `()` for fragments without a dedicated accessor trait.
+	type Accessor: ?Sized;
+
 	/// The TOML section key for this fragment (e.g., "core", "cache").
 	fn section() -> &'static str;
 
+	/// Returns the default field policies for this fragment.
+	fn field_policies() -> &'static [FieldPolicy] {
+		&[]
+	}
+
 	/// Optional validation that runs after deserialization.
 	/// Override this to add profile-specific validation logic.
-	fn validate(&self, _profile: &Profile) -> Result<(), String> {
+	fn validate(&self, _profile: &Profile) -> ValidationResult {
 		Ok(())
 	}
 }
@@ -382,7 +385,7 @@ Reinhardt provides 12 built-in fragments:
 | `CacheSettings`      | `cache`        | `[cache]`      | `HasCacheSettings`      |
 | `SessionSettings`    | `session`      | `[session]`    | `HasSessionSettings`    |
 | `CorsSettings`       | `cors`         | `[cors]`       | `HasCorsSettings`       |
-| `StaticSettings`     | `static_files` | `[static]`     | `HasStaticSettings`     |
+| `StaticSettings`     | `static_files` | `[static_files]` | `HasStaticSettings`     |
 | `MediaSettings`      | `media`        | `[media]`      | `HasMediaSettings`      |
 | `EmailSettings`      | `email`        | `[email]`      | `HasEmailSettings`      |
 | `LoggingSettings`    | `logging`      | `[logging]`    | `HasLoggingSettings`    |
@@ -428,7 +431,7 @@ pub struct ProjectSettings;
 // settings.core.debug
 // settings.cache.backend
 // settings.session.cookie_name
-// settings.cors.allowed_origins
+// settings.cors.allow_origins
 ```
 
 #### Without CoreSettings
@@ -476,7 +479,7 @@ Fragments can implement custom validation logic that runs based on the active
 profile:
 
 ```rust
-use reinhardt::conf::settings::fragment::SettingsFragment;
+use reinhardt::SettingsFragment;
 use reinhardt::Profile;
 use serde::{Deserialize, Serialize};
 
@@ -488,11 +491,13 @@ pub struct ApiSettings {
 }
 
 impl SettingsFragment for ApiSettings {
+	type Accessor = ();
+
 	fn section() -> &'static str { "api" }
 
-	fn validate(&self, profile: &Profile) -> Result<(), String> {
+	fn validate(&self, profile: &Profile) -> ValidationResult {
 		if profile.is_production() && self.base_url.starts_with("http://") {
-			return Err("Production API base_url must use HTTPS".to_string());
+			return Err("Production API base_url must use HTTPS".into());
 		}
 		Ok(())
 	}
@@ -616,7 +621,7 @@ use std::env;
 pub struct ProjectSettings;
 
 pub fn get_settings() -> ProjectSettings {
-	let profile_str = env::var("REINHARDT_ENV").unwrap_or_else(|_| "local".to_string());
+	let profile_str = env::var("REINHARDT_ENV").unwrap_or_else(|_| "dev".to_string());
 	let profile = Profile::parse(&profile_str);
 	let settings_dir = env::current_dir().expect("Failed to get current directory").join("settings");
 
@@ -729,7 +734,7 @@ configuration:
 `src/config/api_settings.rs`:
 
 ```rust
-use reinhardt::conf::settings::fragment::SettingsFragment;
+use reinhardt::SettingsFragment;
 use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -750,6 +755,8 @@ impl Default for ApiSettings {
 }
 
 impl SettingsFragment for ApiSettings {
+	type Accessor = ();
+
 	fn section() -> &'static str { "api" }
 }
 ```

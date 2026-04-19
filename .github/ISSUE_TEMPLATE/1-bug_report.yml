@@ -60,7 +60,7 @@ body:
       label: Environment
       description: Please provide your environment details
       value: |
-        - Rust version: [e.g., 1.91.1]
+        - Rust version: [e.g., 1.94.1]
         - OS: [e.g., macOS 15.0, Ubuntu 24.04]
         - Crate version: [e.g., reinhardt-core 0.1.0]
       render: markdown

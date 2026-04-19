@@ -120,9 +120,12 @@ pub fn dcl_tracker() -> DclTracker {
 	DclTracker::new()
 }
 
-/// Generate a short unique suffix from UUID for naming
+/// Generate a short unique suffix from UUID for naming.
+/// Uses the last 12 characters (random portion) of UUID v7 to ensure
+/// uniqueness even when called within the same millisecond.
 fn unique_suffix() -> String {
-	Uuid::new_v4().simple().to_string()[..12].to_string()
+	let s = Uuid::now_v7().simple().to_string();
+	s[s.len() - 12..].to_string()
 }
 
 /// Create a test table for DCL privilege testing

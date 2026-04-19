@@ -5,7 +5,7 @@
 
 use crate::component::Page;
 
-#[cfg(target_arch = "wasm32")]
+#[cfg(wasm)]
 use crate::dom::Element;
 
 /// Errors that can occur during reconciliation.
@@ -148,7 +148,7 @@ impl ReconcileOptions {
 /// This function verifies that the SSR-rendered HTML matches what
 /// the component would render, issuing warnings for mismatches
 /// but generally allowing hydration to proceed.
-#[cfg(target_arch = "wasm32")]
+#[cfg(wasm)]
 pub fn reconcile(element: &Element, view: &Page) -> Result<(), ReconcileError> {
 	match view {
 		Page::Element(el_view) => {
@@ -248,7 +248,7 @@ pub fn reconcile(element: &Element, view: &Page) -> Result<(), ReconcileError> {
 /// - If `options.island_only` is true, only elements with `data-rh-island="true"` are reconciled
 /// - If `options.skip_static` is true, elements with `data-rh-static="true"` are skipped
 /// - If `options.warn_on_mismatch` is true, mismatches are logged as warnings instead of errors
-#[cfg(target_arch = "wasm32")]
+#[cfg(wasm)]
 pub fn reconcile_with_options(
 	element: &Element,
 	view: &Page,
@@ -328,13 +328,13 @@ pub fn reconcile_with_options(
 }
 
 /// Non-WASM version for testing.
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(native)]
 pub fn reconcile(_element: &str, _view: &Page) -> Result<(), ReconcileError> {
 	Ok(())
 }
 
 /// Non-WASM version for testing (Phase 2-B).
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(native)]
 pub fn reconcile_with_options(
 	_element: &str,
 	_view: &Page,
@@ -351,7 +351,7 @@ fn normalize_whitespace(s: &str) -> String {
 }
 
 /// Checks if an element's structure matches the view.
-#[cfg(target_arch = "wasm32")]
+#[cfg(wasm)]
 // Allow dead_code: WASM structure comparison reserved for future reconciliation
 #[allow(dead_code)]
 pub(super) fn structure_matches(element: &Element, view: &Page) -> bool {
@@ -359,7 +359,7 @@ pub(super) fn structure_matches(element: &Element, view: &Page) -> bool {
 }
 
 /// Non-WASM version for testing.
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(native)]
 // Allow dead_code: non-WASM stub for structure comparison
 #[allow(dead_code)]
 pub(super) fn structure_matches(_element: &str, _view: &Page) -> bool {
@@ -398,7 +398,7 @@ impl CompareResult {
 }
 
 /// Compares DOM structure with view and returns detailed results.
-#[cfg(target_arch = "wasm32")]
+#[cfg(wasm)]
 // Allow dead_code: WASM structure comparison reserved for future reconciliation
 #[allow(dead_code)]
 pub(super) fn compare_structure(element: &Element, view: &Page) -> CompareResult {
@@ -412,7 +412,7 @@ pub(super) fn compare_structure(element: &Element, view: &Page) -> CompareResult
 	}
 }
 
-#[cfg(target_arch = "wasm32")]
+#[cfg(wasm)]
 fn compare_recursive(element: &Element, view: &Page, path: &str, differences: &mut Vec<String>) {
 	match view {
 		Page::Element(el_view) => {
@@ -482,7 +482,7 @@ fn compare_recursive(element: &Element, view: &Page, path: &str, differences: &m
 }
 
 /// Non-WASM version for testing.
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(native)]
 // Allow dead_code: non-WASM stub for structure comparison
 #[allow(dead_code)]
 pub(super) fn compare_structure(_element: &str, _view: &Page) -> CompareResult {
@@ -522,6 +522,7 @@ fn test_reconcile_options_warn_on_mismatch() {
 }
 
 #[test]
+#[cfg(native)]
 fn test_reconcile_with_options_non_wasm() {
 	// Non-WASM version always succeeds
 	let view = Page::Empty;
@@ -575,6 +576,7 @@ mod tests {
 		assert_eq!(result.differences.len(), 2);
 	}
 
+	#[cfg(native)]
 	#[test]
 	fn test_structure_matches_non_wasm() {
 		// Non-WASM version always returns true
@@ -582,6 +584,7 @@ mod tests {
 		assert!(structure_matches("", &view));
 	}
 
+	#[cfg(native)]
 	#[test]
 	fn test_reconcile_non_wasm() {
 		// Non-WASM version always succeeds

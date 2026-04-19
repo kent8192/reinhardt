@@ -1,7 +1,8 @@
 [package]
 name = "reinhardt-commands"
-version = "0.1.0-rc.14"
+version = "0.1.0-rc.15"
 edition.workspace = true
+rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 authors.workspace = true
@@ -20,13 +21,17 @@ reinhardt-http = { workspace = true, optional = true }
 sqlx = { workspace = true, optional = true }
 reinhardt-server = { workspace = true, optional = true }
 reinhardt-middleware = { workspace = true, optional = true }
+reinhardt-auth = { workspace = true, optional = true }
+reinhardt-admin = { workspace = true, optional = true }
+reqwest = { workspace = true, optional = true }
 reinhardt-pages = { workspace = true }
 chrono = { workspace = true }
 clap = { workspace = true }
-tokio = { workspace = true }
+tokio = { workspace = true, features = ["signal", "process", "fs"] }
 async-trait = { workspace = true }
 thiserror = { workspace = true }
 colored = { workspace = true }
+console = "0.16.1"
 dialoguer = "0.12.0"
 hyper = { workspace = true }
 hyper-util = { workspace = true }
@@ -84,7 +89,7 @@ di = ["dep:reinhardt-di"]
 openapi = ["dep:reinhardt-rest", "dep:reinhardt-http"]
 introspect = ["routers", "dep:cargo_metadata", "dep:serde_yaml"]
 openapi-router = ["dep:reinhardt-openapi", "openapi"]
-server = ["dep:reinhardt-server", "dep:reinhardt-middleware", "routers", "di"]
+server = ["dep:reinhardt-server", "dep:reinhardt-middleware", "routers", "di", "dep:reinhardt-admin", "dep:reqwest"]
 autoreload = ["dep:notify", "server"]
 shell = ["dep:rustyline"]
 shell-rhai = ["shell", "dep:rhai"]
@@ -94,6 +99,9 @@ sqlite = ["reinhardt-db?/sqlite", "dep:sqlx", "sqlx/sqlite"]
 mysql = ["reinhardt-db?/mysql", "dep:sqlx", "sqlx/mysql"]
 testcontainers = ["dep:reinhardt-test", "reinhardt-test?/testcontainers"]
 plugins = ["dep:reinhardt-dentdelion"]
+auth = ["dep:reinhardt-auth", "reinhardt-auth?/database", "reinhardt-db"]
+admin = []
+pages = []
 full = [
   "migrations",
   "routers",
@@ -111,4 +119,7 @@ full = [
   "mysql",
   "testcontainers",
   "plugins",
+  "auth",
+  "admin",
+  "pages",
 ]

@@ -14,7 +14,7 @@ use crate::reactive::Signal;
 ///
 /// Contains the current state, the action function, and pending status.
 #[deprecated(
-	since = "0.2.0",
+	since = "0.1.0-rc.16",
 	note = "use `(Signal<S>, Dispatch<A>)` from `use_reducer` instead"
 )]
 pub struct ActionState<S: 'static, P> {
@@ -72,7 +72,7 @@ impl<S: Clone + 'static, P> Clone for ActionState<S, P> {
 ///
 /// # Example
 ///
-/// ```ignore
+/// ```no_run
 /// use reinhardt_pages::reactive::hooks::use_action_state;
 ///
 /// #[derive(Clone, Default)]
@@ -115,7 +115,7 @@ impl<S: Clone + 'static, P> Clone for ActionState<S, P> {
 /// }
 /// ```
 #[deprecated(
-	since = "0.2.0",
+	since = "0.1.0-rc.16",
 	note = "use `use_reducer` from `reinhardt_pages::reactive::hooks::state` instead"
 )]
 #[allow(deprecated)] // Intentional: deprecated function constructs deprecated ActionState

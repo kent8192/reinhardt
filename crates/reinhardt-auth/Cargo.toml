@@ -1,12 +1,13 @@
 [package]
 name = "reinhardt-auth"
-version = "0.1.0-rc.14"
+version = "0.1.0-rc.15"
 description = "Authentication and authorization system"
 keywords = ["auth", "jwt", "authentication", "django", "web"]
 categories = ["authentication", "web-programming"]
 readme = "README.md"
 documentation = "https://docs.rs/reinhardt-auth"
 edition.workspace = true
+rust-version.workspace = true
 authors.workspace = true
 license.workspace = true
 repository.workspace = true
@@ -65,6 +66,7 @@ full = [
 ]
 
 [dependencies]
+reinhardt-auth-macros = { workspace = true }
 reinhardt-core = { workspace = true, features = ["exception", "macros", "types"] }
 reinhardt-di = { workspace = true }
 reinhardt-db = { workspace = true, features = ["migrations", "orm"] }
@@ -83,6 +85,7 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 chrono = { workspace = true }
 async-trait = { workspace = true }
+inventory = { workspace = true }
 tokio = { workspace = true, features = ["fs", "macros", "rt", "sync", "time"]}
 base64 = "0.22"
 sha2 = { workspace = true }
@@ -90,7 +93,7 @@ hmac = { workspace = true }
 hex = "0.4"
 subtle = { workspace = true }
 unicode-normalization = "0.1"
-reqwest = { version = "0.12", features = ["json"] }
+reqwest = { workspace = true }
 url = "2.5"
 totp-lite = "2.0"
 data-encoding = "2.6"
@@ -134,3 +137,6 @@ filetime = "0.2"
 reinhardt-query = { workspace = true }
 reinhardt-db = {workspace = true, features = ["orm"]}
 reinhardt-macros = { workspace = true }
+wiremock = "0.6"
+rsa = { version = "0.9", features = ["sha2"] }
+rand_core = { version = "0.6", features = ["std", "getrandom"] }

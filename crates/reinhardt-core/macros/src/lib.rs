@@ -17,19 +17,24 @@ use syn::{ItemFn, ItemStruct, parse_macro_input};
 mod action;
 mod admin;
 mod api_view;
+// client_routes module removed: superseded by #[url_patterns(InstalledApp::<variant>, mode = client)]
 mod app_config_attribute;
 mod app_config_derive;
 mod apply_update_attribute;
 mod apply_update_derive;
 mod collect_migrations;
 mod crate_paths;
+mod flatten_imports;
+mod hook;
 mod injectable_common;
 mod injectable_fn;
 mod injectable_struct;
 mod installed_apps;
+mod macro_state;
 mod model_attribute;
 mod model_derive;
 mod orm_reflectable_derive;
+mod pascal_case;
 mod path_macro;
 mod permission_macro;
 mod permissions;
@@ -65,7 +70,10 @@ use query_fields::derive_query_fields_impl;
 use receiver::receiver_impl;
 use routes::{delete_impl, get_impl, patch_impl, post_impl, put_impl};
 use routes_registration::routes_impl;
+mod url_patterns;
+mod viewset_macro;
 use schema::derive_schema_impl;
+use url_patterns::url_patterns_impl;
 use use_inject::use_inject_impl;
 use user_attribute::user_attribute_impl;
 
@@ -272,14 +280,11 @@ pub fn installed_apps(input: TokenStream) -> TokenStream {
 /// }
 /// ```
 ///
-/// # Usage
+/// # Supported Function Signatures
 ///
-/// In your `src/config/urls.rs`:
+/// ## 1. Sync function (standard)
 ///
 /// ```rust,ignore
-/// use reinhardt::prelude::*;
-/// use reinhardt::routes;
-///
 /// #[routes]
 /// pub fn routes() -> UnifiedRouter {
 ///     UnifiedRouter::new()
@@ -288,16 +293,84 @@ pub fn installed_apps(input: TokenStream) -> TokenStream {
 /// }
 /// ```
 ///
+/// ## 2. Async function (no DI)
+///
+/// ```rust,ignore
+/// #[routes]
+/// pub async fn routes() -> UnifiedRouter {
+///     UnifiedRouter::new()
+///         .mount("/api/", api::routes())
+/// }
+/// ```
+///
+/// ## 3. Async function with `#[inject]` (DI-aware)
+///
+/// ```rust,ignore
+/// #[routes]
+/// pub async fn routes(#[inject] router: UnifiedRouter) -> UnifiedRouter {
+///     router
+/// }
+/// ```
+///
+/// When `#[inject]` parameters are present, the macro automatically creates
+/// a DI context (`SingletonScope` + `InjectionContext`) and resolves each
+/// injected dependency before calling the function.
+///
+/// # Arguments
+///
+/// - `#[routes]` — Default mode. Generates `ResolvedUrls` and `url_prelude`
+///   module with URL resolver traits from all installed apps. Requires
+///   `installed_apps!` to be present in the crate.
+/// - `#[routes(standalone)]` — Standalone mode. Generates `ResolvedUrls` only,
+///   without `url_prelude` module. Use this for projects that don't use
+///   `installed_apps!`.
+///
 /// # Notes
 ///
 /// - The function can have any name (e.g., `routes`, `app_routes`, `url_patterns`)
 /// - The return type must be `UnifiedRouter` (not `Arc<UnifiedRouter>`)
 /// - The framework automatically wraps the router in `Arc`
+/// - Sync functions cannot use `#[inject]` (DI resolution is inherently async)
 #[proc_macro_attribute]
 pub fn routes(args: TokenStream, input: TokenStream) -> TokenStream {
 	let input = parse_macro_input!(input as ItemFn);
 
 	routes_impl(args.into(), input)
+		.unwrap_or_else(|e| e.to_compile_error())
+		.into()
+}
+
+/// Aggregate URL resolver traits from endpoint view modules.
+///
+/// When applied to a function returning `ServerRouter`, scans `.endpoint()` calls
+/// and generates a `url_resolvers` module re-exporting all resolver traits.
+///
+/// Requires the `url-resolver` feature in the consuming crate.
+#[proc_macro_attribute]
+pub fn url_patterns(args: TokenStream, input: TokenStream) -> TokenStream {
+	url_patterns_impl(args.into(), input.into())
+		.unwrap_or_else(|e| e.to_compile_error())
+		.into()
+}
+
+/// Generate URL resolver traits for a ViewSet function.
+///
+/// When applied to a function returning a ViewSet (e.g., `ModelViewSet`), extracts
+/// the basename from the function body and generates `__url_resolver_{basename}_list`
+/// and `__url_resolver_{basename}_detail` modules.
+///
+/// # Example
+///
+/// ```rust,ignore
+/// #[viewset]
+/// pub fn viewset() -> ModelViewSet<Snippet, SnippetSerializer> {
+///     ModelViewSet::new("snippet")
+/// }
+/// // Generates: __url_resolver_snippet_list, __url_resolver_snippet_detail
+/// ```
+#[proc_macro_attribute]
+pub fn viewset(args: TokenStream, input: TokenStream) -> TokenStream {
+	viewset_macro::viewset_macro_impl(args.into(), input.into())
 		.unwrap_or_else(|e| e.to_compile_error())
 		.into()
 }
@@ -342,6 +415,34 @@ pub fn receiver(args: TokenStream, input: TokenStream) -> TokenStream {
 	let input = parse_macro_input!(input as ItemFn);
 
 	receiver_impl(args.into(), input)
+		.unwrap_or_else(|e| e.to_compile_error())
+		.into()
+}
+
+/// Attribute macro for registering lifecycle hooks.
+///
+/// Currently supports `runserver` hooks for extending server startup behavior.
+///
+/// # Usage
+///
+/// ```rust,ignore
+/// use reinhardt::commands::{RunserverHook, RunserverContext};
+///
+/// #[reinhardt::hook(on = runserver)]
+/// struct MyValidationHook;
+///
+/// #[async_trait]
+/// impl RunserverHook for MyValidationHook {
+///     async fn validate(&self) -> Result<(), Box<dyn Error + Send + Sync>> {
+///         // Fail-fast validation before server starts
+///         Ok(())
+///     }
+/// }
+/// ```
+#[proc_macro_attribute]
+pub fn hook(args: TokenStream, input: TokenStream) -> TokenStream {
+	let input = parse_macro_input!(input as ItemStruct);
+	hook::hook_impl(args.into(), input)
 		.unwrap_or_else(|e| e.to_compile_error())
 		.into()
 }
@@ -447,8 +548,29 @@ pub fn derive_schema(input: TokenStream) -> TokenStream {
 /// - Struct must have named fields
 /// - All fields must have either `#[inject]` or `#[no_inject]` attribute
 /// - `#[no_inject]` without default value requires field type to be `Option<T>`
-/// - Struct must be `Clone` (required by `Injectable` trait)
+/// - `Clone` is auto-derived if not already present (used by `into_inner()` and `injectable_factory` patterns)
 /// - All `#[inject]` field types must implement `Injectable`
+///
+/// # Attribute Ordering
+///
+/// **`#[injectable]` must be placed above `#[derive(...)]` attributes.**
+///
+/// In Rust 2024 edition, attribute macros can only see attributes listed
+/// below them. If `#[derive(Clone)]` appears above `#[injectable]`, the
+/// macro cannot detect it and will add a duplicate `#[derive(Clone)]`,
+/// causing a compilation error.
+///
+/// ```ignore
+/// // Correct
+/// #[injectable]
+/// #[derive(Default, Debug)]
+/// struct MyService { /* ... */ }
+///
+/// // Incorrect — may cause duplicate Clone derive
+/// #[derive(Default, Debug)]
+/// #[injectable]
+/// struct MyService { /* ... */ }
+/// ```
 ///
 #[proc_macro_attribute]
 pub fn injectable(args: TokenStream, input: TokenStream) -> TokenStream {
@@ -860,4 +982,42 @@ pub fn settings(args: TokenStream, input: TokenStream) -> TokenStream {
 			.unwrap_or_else(|e| e.to_compile_error())
 			.into()
 	}
+}
+
+/// Function-like proc macro for multi-file view modules.
+///
+/// When a view module uses per-file endpoint organization (one file per view in
+/// `views/`), the URL resolver modules generated by `#[get]`/`#[post]`/etc.
+/// live inside the submodules. This macro generates `pub use submod::*;`
+/// for each `pub mod` declaration, bringing endpoint functions and their
+/// resolver modules into the parent module scope.
+///
+/// This enables `#[url_patterns]` to discover resolvers using the standard
+/// parent-module path convention (e.g., `.endpoint(views::login)`).
+///
+/// # Usage
+///
+/// ```rust,ignore
+/// // views.rs (multi-file pattern)
+/// use reinhardt::flatten_imports;
+///
+/// flatten_imports! {
+///     pub mod login;
+///     pub mod register;
+/// }
+///
+/// // Generates:
+/// //   pub mod login;
+/// //   pub mod register;
+/// //   pub use login::*;
+/// //   pub use register::*;
+/// ```
+///
+/// For single-file views where all functions are defined directly in
+/// `views.rs`, this macro is not needed.
+#[proc_macro]
+pub fn flatten_imports(input: TokenStream) -> TokenStream {
+	flatten_imports::flatten_imports_impl(input.into())
+		.unwrap_or_else(|e| e.to_compile_error())
+		.into()
 }

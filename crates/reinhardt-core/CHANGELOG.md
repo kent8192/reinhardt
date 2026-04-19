@@ -7,6 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.0-rc.15](https://github.com/kent8192/reinhardt-web/compare/reinhardt-core@v0.1.0-rc.14...reinhardt-core@v0.1.0-rc.15) - 2026-03-29
+
+### Added
+
+- *(orm)* add Vec/Value/HashMap support to field_type_to_metadata_string
+- *(macros)* inject ManyToMany relationships in #[user] + #[model]
+- *(orm)* add #[field(skip = true)] attribute for non-DB fields
+
+### Fixed
+
+- *(admin)* generate table_name() and permission methods in admin macro
+- *(macros)* allow too_many_arguments on generated Model::new function
+- *(core)* add feature gates to conditionally compiled modules
+
+### Maintenance
+
+- update rust toolchain to 1.94.1 and set MSRV 1.94.0
+
 ## [0.1.0-rc.14](https://github.com/kent8192/reinhardt-web/compare/reinhardt-core@v0.1.0-rc.13...reinhardt-core@v0.1.0-rc.14) - 2026-03-24
 
 ### Added

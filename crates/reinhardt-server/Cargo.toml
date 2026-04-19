@@ -1,7 +1,8 @@
 [package]
 name = "reinhardt-server"
-version = "0.1.0-rc.14"
+version = "0.1.0-rc.15"
 edition.workspace = true
+rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 authors.workspace = true
@@ -17,7 +18,7 @@ hyper = { workspace = true }
 hyper-util = { version = "0.1", features = ["tokio", "server", "http2"] }
 http-body-util = { workspace = true }
 http = { workspace = true }
-tokio = { workspace = true }
+tokio = { workspace = true, features = ["signal"] }
 async-trait = { workspace = true }
 ipnet = "2.10"
 async-graphql = { version = "7.0", optional = true }
@@ -39,7 +40,7 @@ insta = { workspace = true }
 rstest = { workspace = true }
 tokio-test = "0.4"
 anyhow = { workspace = true }
-reqwest = { version = "0.12", features = ["json"] }
+reqwest = { workspace = true }
 async-graphql = "7.0"
 tokio-tungstenite = "0.28.0"
 futures-util = "0.3"

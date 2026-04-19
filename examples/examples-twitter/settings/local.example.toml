@@ -14,11 +14,6 @@ secret_key = "local-development-secret-key-change-in-production"
 # Allow all hosts in development
 allowed_hosts = ["*"]
 
-# Security settings (relaxed for development)
-session_cookie_secure = false
-csrf_cookie_secure = false
-secure_ssl_redirect = false
-
 # Database configuration for local development
 [database]
 engine = "postgresql"
@@ -32,3 +27,9 @@ password = "postgres"
 # [database]
 # engine = "sqlite"
 # name = "db.sqlite3"
+
+# Security settings (relaxed for development)
+[core.security]
+session_cookie_secure = false
+csrf_cookie_secure = false
+secure_ssl_redirect = false

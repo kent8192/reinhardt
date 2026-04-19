@@ -47,7 +47,7 @@ pub type PermissionMap = Arc<RwLock<HashMap<(String, String), Vec<String>>>>;
 /// async fn main() {
 ///     let checker = ArticlePermissionChecker;
 ///     let user = SimpleUser {
-///         id: Uuid::new_v4(),
+///         id: Uuid::now_v7(),
 ///         username: "alice".to_string(),
 ///         email: "alice@example.com".to_string(),
 ///         is_active: true,
@@ -100,7 +100,7 @@ pub trait ObjectPermissionChecker: Send + Sync {
 ///     manager.grant_permission("alice", "article:123", "change").await;
 ///
 ///     let user = SimpleUser {
-///         id: Uuid::new_v4(),
+///         id: Uuid::now_v7(),
 ///         username: "alice".to_string(),
 ///         email: "alice@example.com".to_string(),
 ///         is_active: true,
@@ -274,7 +274,7 @@ impl ObjectPermissionChecker for ObjectPermissionManager {
 ///     let perm = ObjectPermission::new(manager, "article:123", "view");
 ///
 ///     let user = SimpleUser {
-///         id: Uuid::new_v4(),
+///         id: Uuid::now_v7(),
 ///         username: "alice".to_string(),
 ///         email: "alice@example.com".to_string(),
 ///         is_active: true,
@@ -366,7 +366,7 @@ mod tests {
 			.await;
 
 		let user = SimpleUser {
-			id: Uuid::new_v4(),
+			id: Uuid::now_v7(),
 			username: "alice".to_string(),
 			email: "alice@example.com".to_string(),
 			is_active: true,
@@ -403,7 +403,7 @@ mod tests {
 			.await;
 
 		let user = SimpleUser {
-			id: Uuid::new_v4(),
+			id: Uuid::now_v7(),
 			username: "alice".to_string(),
 			email: "alice@example.com".to_string(),
 			is_active: true,
@@ -439,7 +439,7 @@ mod tests {
 			.await;
 
 		let user = SimpleUser {
-			id: Uuid::new_v4(),
+			id: Uuid::now_v7(),
 			username: "alice".to_string(),
 			email: "alice@example.com".to_string(),
 			is_active: true,
@@ -489,7 +489,7 @@ mod tests {
 			.await;
 
 		let user = SimpleUser {
-			id: Uuid::new_v4(),
+			id: Uuid::now_v7(),
 			username: "alice".to_string(),
 			email: "alice@example.com".to_string(),
 			is_active: true,
@@ -530,7 +530,7 @@ mod tests {
 		let perm = ObjectPermission::new(manager, "article:123", "view");
 
 		let user = SimpleUser {
-			id: Uuid::new_v4(),
+			id: Uuid::now_v7(),
 			username: "alice".to_string(),
 			email: "alice@example.com".to_string(),
 			is_active: true,
@@ -586,7 +586,7 @@ mod tests {
 		let perm = ObjectPermission::new(manager, "article:123", "delete");
 
 		let user = SimpleUser {
-			id: Uuid::new_v4(),
+			id: Uuid::now_v7(),
 			username: "alice".to_string(),
 			email: "alice@example.com".to_string(),
 			is_active: true,
@@ -625,7 +625,7 @@ mod tests {
 		// article:3 has no permissions granted for alice
 
 		let user = SimpleUser {
-			id: Uuid::new_v4(),
+			id: Uuid::now_v7(),
 			username: "alice".to_string(),
 			email: "alice@example.com".to_string(),
 			is_active: true,
@@ -661,7 +661,7 @@ mod tests {
 			.await;
 
 		let user_a = SimpleUser {
-			id: Uuid::new_v4(),
+			id: Uuid::now_v7(),
 			username: "alice".to_string(),
 			email: "alice@example.com".to_string(),
 			is_active: true,
@@ -670,7 +670,7 @@ mod tests {
 			is_superuser: false,
 		};
 		let user_b = SimpleUser {
-			id: Uuid::new_v4(),
+			id: Uuid::now_v7(),
 			username: "bob".to_string(),
 			email: "bob@example.com".to_string(),
 			is_active: true,

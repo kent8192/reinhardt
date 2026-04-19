@@ -1,8 +1,9 @@
 [package]
 name = "reinhardt-websockets"
-version = "0.1.0-rc.14"
+version = "0.1.0-rc.15"
 description = "WebSocket support for real-time bidirectional communication"
 edition.workspace = true
+rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 authors.workspace = true
@@ -44,7 +45,7 @@ flate2 = { version = "1.0", optional = true }
 brotli = { version = "8.0.2", optional = true }
 
 # Redis channel layer
-redis = { version = "0.32.7", features = [
+redis = { workspace = true, features = [
     "tokio-comp",
     "connection-manager",
 ], optional = true }

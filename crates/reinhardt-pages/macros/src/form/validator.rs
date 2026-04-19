@@ -17,15 +17,15 @@ use std::collections::HashSet;
 use syn::{Error, Result};
 
 use reinhardt_manouche::core::{
-	ClientValidator, ClientValidatorRule, FormAction, FormCallbacks, FormDerived, FormFieldDef,
-	FormFieldEntry, FormFieldGroup, FormFieldProperty, FormMacro, FormMethod, FormSlots, FormState,
-	FormValidator, FormWatch, IconPosition, TypedChoicesConfig, TypedClientValidator,
-	TypedClientValidatorRule, TypedCustomAttr, TypedDerivedItem, TypedFieldDisplay,
-	TypedFieldStyling, TypedFieldType, TypedFieldValidation, TypedFormAction, TypedFormCallbacks,
-	TypedFormDerived, TypedFormFieldDef, TypedFormFieldEntry, TypedFormFieldGroup, TypedFormMacro,
-	TypedFormSlots, TypedFormState, TypedFormStyling, TypedFormValidator, TypedFormWatch,
-	TypedFormWatchItem, TypedIcon, TypedIconAttr, TypedIconChild, TypedIconPosition,
-	TypedValidatorRule, TypedWidget, TypedWrapper, TypedWrapperAttr, ValidatorRule,
+	FormAction, FormCallbacks, FormDerived, FormFieldDef, FormFieldEntry, FormFieldGroup,
+	FormFieldProperty, FormMacro, FormMethod, FormSlots, FormState, FormSubmitButtonDef,
+	FormValidator, FormWatch, IconPosition, TypedChoicesConfig, TypedCustomAttr, TypedDerivedItem,
+	TypedFieldDisplay, TypedFieldStyling, TypedFieldType, TypedFieldValidation, TypedFormAction,
+	TypedFormCallbacks, TypedFormDerived, TypedFormFieldDef, TypedFormFieldEntry,
+	TypedFormFieldGroup, TypedFormMacro, TypedFormSlots, TypedFormState, TypedFormStyling,
+	TypedFormValidator, TypedFormWatch, TypedFormWatchItem, TypedIcon, TypedIconAttr,
+	TypedIconChild, TypedIconPosition, TypedSubmitButtonDef, TypedValidatorRule, TypedWidget,
+	TypedWrapper, TypedWrapperAttr, ValidatorRule,
 };
 
 /// Allowlist of safe HTML tag names for wrapper and icon child elements.
@@ -158,11 +158,8 @@ pub(super) fn validate(ast: &FormMacro) -> Result<TypedFormMacro> {
 	// Transform fields
 	let fields = transform_fields(&ast.fields)?;
 
-	// Transform server-side validators
+	// Transform unified validators (scope filtering happens at codegen)
 	let validators = transform_validators(&ast.validators, &ast.fields)?;
-
-	// Transform client-side validators
-	let client_validators = transform_client_validators(&ast.client_validators, &ast.fields)?;
 
 	// The parser guarantees that `name` is Some after successful parsing.
 	let name = ast
@@ -185,7 +182,6 @@ pub(super) fn validate(ast: &FormMacro) -> Result<TypedFormMacro> {
 		slots,
 		fields,
 		validators,
-		client_validators,
 		span: ast.span,
 	})
 }
@@ -227,6 +223,15 @@ fn validate_unique_field_names(entries: &[FormFieldEntry]) -> Result<()> {
 							),
 						));
 					}
+				}
+			}
+			FormFieldEntry::SubmitButton(btn) => {
+				let name = btn.name.to_string();
+				if !seen.insert(name.clone()) {
+					return Err(Error::new(
+						btn.name.span(),
+						format!("duplicate field/button name: '{}'", name),
+					));
 				}
 			}
 		}
@@ -476,6 +481,10 @@ fn transform_field_entry(entry: &FormFieldEntry) -> Result<TypedFormFieldEntry> 
 			let typed_group = transform_field_group(group)?;
 			Ok(TypedFormFieldEntry::Group(typed_group))
 		}
+		FormFieldEntry::SubmitButton(btn) => {
+			let typed_btn = transform_submit_button(btn)?;
+			Ok(TypedFormFieldEntry::SubmitButton(typed_btn))
+		}
 	}
 }
 
@@ -494,6 +503,99 @@ fn transform_field_group(group: &FormFieldGroup) -> Result<TypedFormFieldGroup> 
 		class: group.class.as_ref().map(|c| c.value()),
 		fields: typed_fields,
 		span: group.span,
+	})
+}
+
+/// Transforms a submit button definition into a typed submit button.
+const ALLOWED_SUBMIT_BUTTON_PROPERTIES: &[&str] = &["label", "class", "id", "disabled"];
+
+fn transform_submit_button(btn: &FormSubmitButtonDef) -> Result<TypedSubmitButtonDef> {
+	let mut label = None;
+	let mut class = None;
+	let mut id = None;
+	let mut disabled = false;
+
+	for prop in &btn.properties {
+		match prop {
+			FormFieldProperty::Named { name, value, span } => {
+				let prop_name = name.to_string();
+				match prop_name.as_str() {
+					"label" => {
+						if let syn::Expr::Lit(syn::ExprLit {
+							lit: syn::Lit::Str(s),
+							..
+						}) = value
+						{
+							label = Some(s.value());
+						} else {
+							return Err(Error::new(*span, "label must be a string literal"));
+						}
+					}
+					"class" => {
+						if let syn::Expr::Lit(syn::ExprLit {
+							lit: syn::Lit::Str(s),
+							..
+						}) = value
+						{
+							class = Some(s.value());
+						} else {
+							return Err(Error::new(*span, "class must be a string literal"));
+						}
+					}
+					"id" => {
+						if let syn::Expr::Lit(syn::ExprLit {
+							lit: syn::Lit::Str(s),
+							..
+						}) = value
+						{
+							id = Some(s.value());
+						} else {
+							return Err(Error::new(*span, "id must be a string literal"));
+						}
+					}
+					_ => {
+						return Err(Error::new(
+							*span,
+							format!(
+								"unknown SubmitButton property: '{}'. Allowed: {}",
+								prop_name,
+								ALLOWED_SUBMIT_BUTTON_PROPERTIES.join(", ")
+							),
+						));
+					}
+				}
+			}
+			FormFieldProperty::Flag { name, span } => {
+				let prop_name = name.to_string();
+				match prop_name.as_str() {
+					"disabled" => disabled = true,
+					_ => {
+						return Err(Error::new(
+							*span,
+							format!(
+								"unknown SubmitButton flag: '{}'. Allowed flags: disabled",
+								prop_name
+							),
+						));
+					}
+				}
+			}
+			_ => {
+				return Err(Error::new(
+					btn.span,
+					"SubmitButton only supports: label, class, id, disabled",
+				));
+			}
+		}
+	}
+
+	Ok(TypedSubmitButtonDef {
+		name: btn.name.clone(),
+		label: label.unwrap_or_else(|| "Submit".to_string()),
+		class,
+		id,
+		disabled,
+		span: btn.span,
 	})
 }
 
@@ -652,6 +754,7 @@ fn extract_display_properties(properties: &[FormFieldProperty]) -> Result<TypedF
 	let mut disabled = false;
 	let mut readonly = false;
 	let mut autofocus = false;
+	let mut autocomplete = None;
 
 	for prop in properties {
 		match prop {
@@ -677,6 +780,13 @@ fn extract_display_properties(properties: &[FormFieldProperty]) -> Result<TypedF
 					"help_text" => {
 						help_text =
 							Some(extract_string_value_from_expr(value, "help_text", *span)?);
+					}
+					"autocomplete" => {
+						autocomplete = Some(extract_string_value_from_expr(
+							value,
+							"autocomplete",
+							*span,
+						)?);
 					}
 					"disabled" => {
 						if let syn::Expr::Lit(lit) = value
@@ -737,6 +847,7 @@ fn extract_display_properties(properties: &[FormFieldProperty]) -> Result<TypedF
 		disabled,
 		readonly,
 		autofocus,
+		autocomplete,
 	})
 }
 
@@ -1142,6 +1253,7 @@ fn field_exists(entries: &[FormFieldEntry], name: &syn::Ident) -> bool {
 					return true;
 				}
 			}
+			FormFieldEntry::SubmitButton(_) => {}
 		}
 	}
 	false
@@ -1194,7 +1306,7 @@ fn transform_validators(
 	Ok(result)
 }
 
-/// Transforms a validator rule.
+/// Transforms a validator rule, propagating its execution scope.
 ///
 /// Converts the closure expression to a regular expression for code generation.
 fn transform_validator_rule(rule: &ValidatorRule) -> Result<TypedValidatorRule> {
@@ -1202,56 +1314,8 @@ fn transform_validator_rule(rule: &ValidatorRule) -> Result<TypedValidatorRule> 
 	let condition: syn::Expr = (*rule.expr.body).clone();
 
 	Ok(TypedValidatorRule {
+		scope: rule.scope.clone(),
 		condition,
-		message: rule.message.value(),
-		span: rule.span,
-	})
-}
-
-/// Transforms client-side validators.
-fn transform_client_validators(
-	validators: &[ClientValidator],
-	fields: &[FormFieldEntry],
-) -> Result<Vec<TypedClientValidator>> {
-	validators
-		.iter()
-		.map(|v| transform_client_validator(v, fields))
-		.collect()
-}
-
-/// Transforms a single client-side validator.
-fn transform_client_validator(
-	validator: &ClientValidator,
-	fields: &[FormFieldEntry],
-) -> Result<TypedClientValidator> {
-	// Validate that field exists (including in groups)
-	if !field_exists(fields, &validator.field_name) {
-		return Err(Error::new(
-			validator.field_name.span(),
-			format!(
-				"client validator references unknown field: '{}'",
-				validator.field_name
-			),
-		));
-	}
-
-	let rules = validator
-		.rules
-		.iter()
-		.map(transform_client_validator_rule)
-		.collect::<Result<Vec<_>>>()?;
-
-	Ok(TypedClientValidator {
-		field_name: validator.field_name.clone(),
-		rules,
-		span: validator.span,
-	})
-}
-
-/// Transforms a client validator rule.
-fn transform_client_validator_rule(rule: &ClientValidatorRule) -> Result<TypedClientValidatorRule> {
-	Ok(TypedClientValidatorRule {
-		js_condition: rule.js_expr.value(),
 		message: rule.message.value(),
 		span: rule.span,
 	})
@@ -2292,7 +2356,7 @@ mod tests {
 		assert!(typed.initial_loader.is_some());
 		let loader = typed.initial_loader.as_ref().unwrap();
 		// Check that the path contains the expected identifier
-		assert!(loader.segments.len() > 0);
+		assert!(!loader.segments.is_empty());
 		assert_eq!(
 			loader.segments.last().unwrap().ident.to_string(),
 			"get_profile_data"
@@ -3607,5 +3671,125 @@ mod tests {
 		let result = transform_redirect(&None);
 		assert!(result.is_ok());
 		assert_eq!(result.unwrap(), None);
+	}
+
+	#[rstest::rstest]
+	fn test_validate_file_field() {
+		// Arrange
+		let input = quote! {
+			name: UploadForm,
+			action: "/api/upload",
+
+			fields: {
+				document: FileField {},
+			},
+		};
+
+		// Act
+		let result = parse_and_validate(input);
+
+		// Assert
+		assert!(result.is_ok());
+		let typed = result.unwrap();
+		assert_eq!(typed.fields.len(), 1);
+		let field = typed.fields[0].as_field().unwrap();
+		assert!(matches!(field.field_type, TypedFieldType::FileField));
+		assert!(matches!(field.widget, TypedWidget::FileInput));
+	}
+
+	#[rstest::rstest]
+	fn test_validate_image_field() {
+		// Arrange
+		let input = quote! {
+			name: AvatarForm,
+			action: "/api/avatar",
+
+			fields: {
+				photo: ImageField {},
+			},
+		};
+
+		// Act
+		let result = parse_and_validate(input);
+
+		// Assert
+		assert!(result.is_ok());
+		let typed = result.unwrap();
+		assert_eq!(typed.fields.len(), 1);
+		let field = typed.fields[0].as_field().unwrap();
+		assert!(matches!(field.field_type, TypedFieldType::ImageField));
+		assert!(matches!(field.widget, TypedWidget::FileInput));
+	}
+
+	#[rstest::rstest]
+	fn test_validate_form_with_mixed_file_and_text_fields() {
+		// Arrange
+		let input = quote! {
+			name: ProfileForm,
+			action: "/api/profile",
+
+			fields: {
+				name: CharField { required },
+				avatar: ImageField {},
+				resume: FileField {},
+			},
+		};
+
+		// Act
+		let result = parse_and_validate(input);
+
+		// Assert
+		assert!(result.is_ok());
+		let typed = result.unwrap();
+		assert_eq!(typed.fields.len(), 3);
+		assert!(matches!(
+			typed.fields[0].as_field().unwrap().field_type,
+			TypedFieldType::CharField
+		));
+		assert!(matches!(
+			typed.fields[1].as_field().unwrap().field_type,
+			TypedFieldType::ImageField
+		));
+		assert!(matches!(
+			typed.fields[2].as_field().unwrap().field_type,
+			TypedFieldType::FileField
+		));
+	}
+}
+
+#[cfg(test)]
+mod scope_transform_tests {
+	use super::*;
+	use reinhardt_manouche::core::{ClientTrigger, ValidatorRule, ValidatorScope};
+	use rstest::*;
+
+	fn make_rule(scope: ValidatorScope) -> ValidatorRule {
+		ValidatorRule {
+			scope,
+			expr: syn::parse_str("|v| v.len() > 0").unwrap(),
+			message: syn::parse_str("\"error\"").unwrap(),
+			span: proc_macro2::Span::call_site(),
+		}
+	}
+
+	#[rstest]
+	#[case(ValidatorScope::Both)]
+	#[case(ValidatorScope::Server)]
+	#[case(ValidatorScope::Client {
+		trigger: ClientTrigger::Input,
+	})]
+	#[case(ValidatorScope::ServerAndClient {
+		trigger: ClientTrigger::Blur,
+	})]
+	fn test_scope_propagated_through_transform(#[case] scope: ValidatorScope) {
+		// Arrange
+		let rule = make_rule(scope.clone());
+
+		// Act
+		let typed = transform_validator_rule(&rule).unwrap();
+
+		// Assert
+		assert_eq!(typed.scope, scope);
+		assert_eq!(typed.message, "error");
 	}
 }

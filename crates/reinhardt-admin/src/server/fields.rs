@@ -2,18 +2,20 @@
 //!
 //! Provides field information for dynamic form generation.
 
-use super::user::AdminDefaultUser;
+#[cfg(server)]
+use super::admin_auth::AdminAuthenticatedUser;
 use crate::adapters::{AdminDatabase, AdminRecord, AdminSite, FieldInfo, FieldType};
 use crate::types::FieldsResponse;
-use reinhardt_auth::AuthUser;
-use reinhardt_pages::server_fn::{ServerFnError, ServerFnRequest, server_fn};
-use std::sync::Arc;
+use reinhardt_di::Depends;
+#[cfg(server)]
+use reinhardt_pages::server_fn::ServerFnRequest;
+use reinhardt_pages::server_fn::{ServerFnError, server_fn};
 
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(server)]
 use super::error::{AdminAuth, MapServerFnError, ModelPermission};
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(server)]
 use crate::server::type_inference::{get_field_metadata, infer_admin_field_type, infer_required};
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(server)]
 use reinhardt_utils::utils_core::text::humanize_field_name;
 
 /// Get field definitions for dynamic form generation
@@ -43,20 +45,16 @@ use reinhardt_utils::utils_core::text::humanize_field_name;
 pub async fn get_fields(
 	model_name: String,
 	id: Option<String>,
-	#[inject] site: Arc<AdminSite>,
-	#[inject] db: Arc<AdminDatabase>,
+	#[inject] site: Depends<AdminSite>,
+	#[inject] db: Depends<AdminDatabase>,
 	#[inject] http_request: ServerFnRequest,
-	#[inject] AuthUser(user): AuthUser<AdminDefaultUser>,
+	#[inject] AdminAuthenticatedUser(user): AdminAuthenticatedUser,
 ) -> Result<FieldsResponse, ServerFnError> {
 	// Authentication and authorization check
 	let auth = AdminAuth::from_request(&http_request);
 	let model_admin = site.get_model_admin(&model_name).map_server_fn_error()?;
-	auth.require_model_permission(
-		model_admin.as_ref(),
-		&user as &dyn crate::core::AdminUser,
-		ModelPermission::View,
-	)
-	.await?;
+	auth.require_model_permission(model_admin.as_ref(), user.as_ref(), ModelPermission::View)
+		.await?;
 	let field_names = model_admin
 		.fields()
 		.unwrap_or_else(|| model_admin.list_display());

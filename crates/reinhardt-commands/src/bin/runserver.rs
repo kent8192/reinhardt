@@ -14,9 +14,12 @@ use hyper::service::service_fn;
 use hyper::{Request, Response, StatusCode, body::Incoming};
 use hyper_util::rt::TokioIo;
 use reinhardt_commands::WelcomePage;
+use reinhardt_commands::{CollectStaticCommand, CollectStaticOptions};
+use reinhardt_commands::{WasmBuildConfig, WasmBuilder, detect_cdylib_in_cargo_toml};
 use reinhardt_pages::component::Component;
 use reinhardt_pages::ssr::SsrRenderer;
 use reinhardt_utils::safe_path_join;
+use reinhardt_utils::staticfiles::StaticFilesConfig;
 use rustls::ServerConfig;
 use rustls_pemfile::{certs, private_key};
 use std::convert::Infallible;
@@ -69,6 +72,18 @@ struct Args {
 	/// Generate and use a self-signed certificate for development (enables HTTPS)
 	#[arg(long)]
 	self_signed: bool,
+
+	/// Skip WASM builds at startup
+	#[arg(long)]
+	no_wasm: bool,
+
+	/// Force rebuild WASM even if artifacts exist
+	#[arg(long)]
+	force_wasm: bool,
+
+	/// Skip collectstatic at startup
+	#[arg(long)]
+	no_collectstatic: bool,
 }
 
 /// Get MIME type based on file extension
@@ -245,6 +260,7 @@ fn load_settings() -> Settings {
 async fn handle_request(
 	req: Request<Incoming>,
 	settings: Arc<Settings>,
+	spa_index: Option<Arc<PathBuf>>,
 ) -> Result<Response<Full<Bytes>>, Infallible> {
 	let path = req.uri().path();
 
@@ -301,6 +317,26 @@ async fn handle_request(
 			return serve_static_file(file_path).await;
 		}
 
+		// Also search STATIC_ROOT for already-collected files
+		let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+
+		if let Some(ref root) = settings.static_root
+			&& let Ok(file_path) = safe_path_join(root, relative_path)
+			&& file_path.exists()
+			&& file_path.is_file()
+		{
+			return serve_static_file(&file_path).await;
+		}
+
+		// Fallback: check <cwd>/staticfiles/
+		let default_root = cwd.join("staticfiles");
+		if let Ok(file_path) = safe_path_join(&default_root, relative_path)
+			&& file_path.exists()
+			&& file_path.is_file()
+		{
+			return serve_static_file(&file_path).await;
+		}
+
 		// File not found, return 404
 		return Ok(Response::builder()
 			.status(StatusCode::NOT_FOUND)
@@ -312,7 +348,10 @@ async fn handle_request(
 			.unwrap());
 	}
 
-	// Fall through to welcome page
+	// SPA fallback: serve index.html for non-static routes if available
+	if let Some(ref index_path) = spa_index {
+		return serve_static_file(index_path).await;
+	}
 	serve_welcome_page()
 }
 
@@ -396,6 +435,261 @@ fn generate_random_secret_key() -> String {
 	hex_string
 }
 
+/// Build the admin WASM bundle from the reinhardt-admin crate.
+///
+/// Returns `true` if the build succeeded or was skipped, `false` on failure.
+#[cfg(feature = "admin")]
+fn build_admin_wasm(force: bool) -> bool {
+	// Determine workspace root from this binary's manifest dir
+	let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+	// Go up: src/bin → src → reinhardt-commands → crates → workspace root
+	let workspace_root = manifest_dir
+		.parent() // src/bin → src
+		.and_then(|p| p.parent()) // src → reinhardt-commands
+		.and_then(|p| p.parent()) // reinhardt-commands → crates
+		.and_then(|p| p.parent()) // crates → workspace root
+		.map(PathBuf::from)
+		.unwrap_or_else(|| PathBuf::from("."));
+	let admin_crate_dir = workspace_root.join("crates").join("reinhardt-admin");
+
+	let artifact = admin_crate_dir
+		.join("dist-admin")
+		.join("reinhardt_admin.js");
+	if artifact.exists() && !force {
+		println!(
+			"{}",
+			"Admin WASM: artifacts exist, skipping build (use --force-wasm to rebuild)".dimmed()
+		);
+		return true;
+	}
+
+	println!("{}", "Building admin WASM...".cyan());
+	let config = WasmBuildConfig::new(&admin_crate_dir)
+		.output_dir("dist-admin")
+		.target_name("reinhardt-admin");
+	match WasmBuilder::new(config).build() {
+		Ok(_) => {
+			println!("{}", "Admin WASM build succeeded.".green());
+			true
+		}
+		Err(e) => {
+			eprintln!(
+				"{}",
+				format!("Warning: Admin WASM build failed: {}", e).yellow()
+			);
+			false
+		}
+	}
+}
+
+/// Build the pages WASM bundle from the current project (if it declares cdylib).
+///
+/// Returns `true` if the build succeeded or was skipped, `false` on failure or if the
+/// current project is not a cdylib.
+#[cfg(feature = "pages")]
+fn build_pages_wasm(force: bool) -> bool {
+	let cwd = match env::current_dir() {
+		Ok(d) => d,
+		Err(e) => {
+			eprintln!(
+				"{}",
+				format!("Warning: Failed to get current directory: {}", e).yellow()
+			);
+			return false;
+		}
+	};
+	let cargo_toml_path = cwd.join("Cargo.toml");
+
+	// Only build if this project exports cdylib
+	if !detect_cdylib_in_cargo_toml(&cargo_toml_path) {
+		return false;
+	}
+
+	// Parse the crate name from Cargo.toml
+	let crate_name = match std::fs::read_to_string(&cargo_toml_path) {
+		Ok(content) => {
+			let mut name = String::new();
+			for line in content.lines() {
+				let trimmed = line.trim();
+				if trimmed.starts_with("name")
+					&& trimmed.contains('=')
+					&& let Some(val) = trimmed.split('=').nth(1)
+				{
+					name = val.trim().trim_matches('"').trim_matches('\'').to_string();
+					break;
+				}
+			}
+			if name.is_empty() {
+				eprintln!(
+					"{}",
+					"Warning: Could not determine crate name from Cargo.toml".yellow()
+				);
+				return false;
+			}
+			name
+		}
+		Err(e) => {
+			eprintln!(
+				"{}",
+				format!("Warning: Failed to read Cargo.toml: {}", e).yellow()
+			);
+			return false;
+		}
+	};
+
+	let js_name = crate_name.replace('-', "_");
+	let artifact = cwd.join("dist").join(format!("{}.js", js_name));
+	if artifact.exists() && !force {
+		println!(
+			"{}",
+			"Pages WASM: artifacts exist, skipping build (use --force-wasm to rebuild)".dimmed()
+		);
+		return true;
+	}
+
+	println!(
+		"{}",
+		format!("Building pages WASM for {}...", crate_name).cyan()
+	);
+	// Resolve workspace root so wasm-bindgen finds the artifact in the
+	// workspace-level target directory, not relative to the member crate CWD.
+	let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+	let workspace_root = manifest_dir
+		.parent()
+		.and_then(|p| p.parent())
+		.and_then(|p| p.parent())
+		.and_then(|p| p.parent())
+		.map(PathBuf::from)
+		.unwrap_or_else(|| PathBuf::from("."));
+	let config = WasmBuildConfig::new(".")
+		.output_dir("dist")
+		.target_dir(workspace_root.join("target"));
+	match WasmBuilder::new(config).build() {
+		Ok(_) => {
+			println!("{}", "Pages WASM build succeeded.".green());
+			true
+		}
+		Err(e) => {
+			eprintln!(
+				"{}",
+				format!("Warning: Pages WASM build failed: {}", e).yellow()
+			);
+			false
+		}
+	}
+}
+
+/// Orchestrate WASM builds for all enabled targets.
+fn build_wasm_targets(no_wasm: bool, force_wasm: bool) {
+	if no_wasm {
+		println!("{}", "WASM builds skipped (--no-wasm)".dimmed());
+		return;
+	}
+
+	#[cfg(feature = "admin")]
+	build_admin_wasm(force_wasm);
+
+	#[cfg(feature = "pages")]
+	build_pages_wasm(force_wasm);
+}
+
+/// Run collectstatic to copy all static files into STATIC_ROOT.
+///
+/// Returns `true` on success, `false` on failure.
+fn run_collectstatic(settings: &Settings) -> bool {
+	let cwd = match env::current_dir() {
+		Ok(d) => d,
+		Err(e) => {
+			eprintln!(
+				"{}",
+				format!("Warning: Failed to get current directory: {}", e).yellow()
+			);
+			return false;
+		}
+	};
+
+	// Determine STATIC_ROOT
+	let static_root = match &settings.static_root {
+		Some(root) => root.clone(),
+		None => {
+			let default_root = cwd.join("staticfiles");
+			println!(
+				"{}",
+				format!(
+					"STATIC_ROOT not configured, defaulting to {}",
+					default_root.display()
+				)
+				.dimmed()
+			);
+			default_root
+		}
+	};
+
+	let config = StaticFilesConfig {
+		static_root: static_root.clone(),
+		static_url: settings.static_url.clone(),
+		staticfiles_dirs: settings.staticfiles_dirs.clone(),
+		media_url: None,
+	};
+
+	let options = CollectStaticOptions {
+		no_input: true,
+		enable_hashing: true,
+		verbosity: 1,
+		..CollectStaticOptions::default()
+	};
+
+	let mut cmd = CollectStaticCommand::new(config, options);
+
+	// If dist/index.html exists in cwd, set it as the index source
+	let index_path = cwd.join("dist").join("index.html");
+	if index_path.exists() {
+		cmd.set_index_source(Some(index_path));
+	}
+
+	match cmd.execute() {
+		Ok(stats) => {
+			println!(
+				"{}",
+				format!(
+					"collectstatic complete: {} copied, {} unmodified",
+					stats.copied, stats.unmodified
+				)
+				.green()
+			);
+			true
+		}
+		Err(e) => {
+			eprintln!(
+				"{}",
+				format!("Warning: collectstatic failed: {}", e).yellow()
+			);
+			false
+		}
+	}
+}
+
+/// Resolve the SPA index.html path for client-side routing fallback.
+fn resolve_spa_index(settings: &Settings) -> Option<PathBuf> {
+	let cwd = env::current_dir().ok()?;
+
+	// Prefer configured STATIC_ROOT
+	if let Some(ref root) = settings.static_root {
+		let candidate = root.join("index.html");
+		if candidate.exists() {
+			return Some(candidate);
+		}
+	}
+
+	// Fallback: <cwd>/staticfiles/index.html
+	let candidate = cwd.join("staticfiles").join("index.html");
+	if candidate.exists() {
+		return Some(candidate);
+	}
+
+	None
+}
+
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
 	let args = Args::parse();
@@ -411,8 +705,27 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 		return Err("Cannot use both --cert/--key and --self-signed".into());
 	}
 
+	// Phase 1: Build WASM targets
+	build_wasm_targets(args.no_wasm, args.force_wasm);
+
 	// Load settings at startup
 	let settings = Arc::new(load_settings());
+
+	// Phase 2: Run collectstatic
+	if !args.no_collectstatic {
+		run_collectstatic(&settings);
+	} else {
+		println!("{}", "collectstatic skipped (--no-collectstatic)".dimmed());
+	}
+
+	// Detect SPA index.html for client-side routing fallback
+	let spa_index = resolve_spa_index(&settings).map(Arc::new);
+	if spa_index.is_some() {
+		println!(
+			"{}",
+			"SPA mode: index.html detected, enabling client-side routing fallback".green()
+		);
+	}
 
 	// Display loaded settings info (debug mode only)
 	if settings.core.debug {
@@ -501,6 +814,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 			// HTTPS connection
 			let acceptor = acceptor.clone();
 			let settings_clone = Arc::clone(&settings);
+			let spa_clone = spa_index.clone();
 			tokio::task::spawn(async move {
 				match acceptor.accept(stream).await {
 					Ok(tls_stream) => {
@@ -510,7 +824,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 								io,
 								service_fn(move |req| {
 									let settings = Arc::clone(&settings_clone);
-									async move { handle_request(req, settings).await }
+									let spa = spa_clone.clone();
+									async move { handle_request(req, settings, spa).await }
 								}),
 							)
 							.await
@@ -526,6 +841,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 		} else {
 			// HTTP connection
 			let settings_clone = Arc::clone(&settings);
+			let spa_clone = spa_index.clone();
 			let io = TokioIo::new(stream);
 			tokio::task::spawn(async move {
 				if let Err(err) = http1::Builder::new()
@@ -533,7 +849,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 						io,
 						service_fn(move |req| {
 							let settings = Arc::clone(&settings_clone);
-							async move { handle_request(req, settings).await }
+							let spa = spa_clone.clone();
+							async move { handle_request(req, settings, spa).await }
 						}),
 					)
 					.await

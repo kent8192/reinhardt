@@ -70,10 +70,10 @@ fn has_model_attribute(input: &ItemStruct) -> bool {
 }
 
 fn inject_skip_getter(input: &mut ItemStruct, mapping: &FieldMapping, args: &UserMacroArgs) {
-	let mut skip_fields: Vec<String> = Vec::new();
+	let mut skip_getter_fields: Vec<String> = Vec::new();
 
 	// Username field (always)
-	skip_fields.push(args.username_field.clone());
+	skip_getter_fields.push(args.username_field.clone());
 
 	// BaseUser fields (always)
 	for role in &[
@@ -82,7 +82,7 @@ fn inject_skip_getter(input: &mut ItemStruct, mapping: &FieldMapping, args: &Use
 		FieldRole::IsActive,
 	] {
 		if let Some(ident) = mapping.get(*role) {
-			skip_fields.push(ident.to_string());
+			skip_getter_fields.push(ident.to_string());
 		}
 	}
 
@@ -96,17 +96,19 @@ fn inject_skip_getter(input: &mut ItemStruct, mapping: &FieldMapping, args: &Use
 			FieldRole::DateJoined,
 		] {
 			if let Some(ident) = mapping.get(*role) {
-				skip_fields.push(ident.to_string());
+				skip_getter_fields.push(ident.to_string());
 			}
 		}
 	}
 
-	// PermissionsMixin fields
-	for role in &[
-		FieldRole::IsSuperuser,
-		FieldRole::UserPermissions,
-		FieldRole::Groups,
-	] {
+	// IsSuperuser — DB field, skip_getter only
+	if let Some(ident) = mapping.get(FieldRole::IsSuperuser) {
+		skip_getter_fields.push(ident.to_string());
+	}
+
+	// UserPermissions and Groups — non-DB cache fields, fully skipped by model
+	let mut skip_fields: Vec<String> = Vec::new();
+	for role in &[FieldRole::UserPermissions, FieldRole::Groups] {
 		if let Some(ident) = mapping.get(*role) {
 			skip_fields.push(ident.to_string());
 		}
@@ -114,13 +116,71 @@ fn inject_skip_getter(input: &mut ItemStruct, mapping: &FieldMapping, args: &Use
 
 	if let syn::Fields::Named(ref mut fields) = input.fields {
 		for field in &mut fields.named {
-			if let Some(ref ident) = field.ident
-				&& skip_fields.contains(&ident.to_string())
-			{
-				field
-					.attrs
-					.push(syn::parse_quote!(#[field(skip_getter = true)]));
+			if let Some(ref ident) = field.ident {
+				let name = ident.to_string();
+				if skip_fields.contains(&name) {
+					field.attrs.push(syn::parse_quote!(#[field(skip = true)]));
+				} else if skip_getter_fields.contains(&name) {
+					field
+						.attrs
+						.push(syn::parse_quote!(#[field(skip_getter = true)]));
+				}
 			}
+		}
+	}
+}
+
+/// When `#[model]` is present, inject `ManyToManyField` relationships for
+/// `Permission` and `Group` models alongside the existing `Vec<String>` fields.
+fn inject_m2m_relationships(input: &mut ItemStruct, mapping: &FieldMapping) {
+	let auth_crate = get_reinhardt_auth_crate();
+	let db_crate = crate::crate_paths::get_reinhardt_db_crate();
+
+	if let syn::Fields::Named(ref mut fields) = input.fields {
+		let mut new_fields: Vec<syn::Field> = Vec::new();
+
+		for field in fields.named.iter_mut() {
+			if let Some(ref ident) = field.ident {
+				let name = ident.to_string();
+
+				if mapping
+					.get(FieldRole::UserPermissions)
+					.map(|i| *i == name)
+					.unwrap_or(false)
+				{
+					// Mark original Vec<String> field as serde-skipped (non-serialized cache)
+					field.attrs.push(syn::parse_quote!(#[serde(skip)]));
+
+					// Inject ManyToManyField for DB relationship
+					let m2m_field: syn::Field = syn::parse_quote! {
+						#[serde(skip, default)]
+						#[rel(many_to_many, related_name = "users")]
+						#[field(skip_getter = true)]
+						_permissions_rel: #db_crate::associations::ManyToManyField<Self, #auth_crate::AuthPermission>
+					};
+					new_fields.push(m2m_field);
+				}
+
+				if mapping
+					.get(FieldRole::Groups)
+					.map(|i| *i == name)
+					.unwrap_or(false)
+				{
+					field.attrs.push(syn::parse_quote!(#[serde(skip)]));
+
+					let m2m_field: syn::Field = syn::parse_quote! {
+						#[serde(skip, default)]
+						#[rel(many_to_many, related_name = "members")]
+						#[field(skip_getter = true)]
+						_groups_rel: #db_crate::associations::ManyToManyField<Self, #auth_crate::Group>
+					};
+					new_fields.push(m2m_field);
+				}
+			}
+		}
+
+		for new_field in new_fields {
+			fields.named.push(new_field);
 		}
 	}
 }
@@ -258,6 +318,62 @@ fn generate_permissions_mixin_impl(
 	})
 }
 
+fn generate_superuser_init_impl(
+	struct_name: &Ident,
+	mapping: &FieldMapping,
+	args: &UserMacroArgs,
+) -> TokenStream {
+	let auth_crate = get_reinhardt_auth_crate();
+	let username_field_ident = Ident::new(&args.username_field, proc_macro2::Span::call_site());
+
+	// email field: use mapping if available, fall back to convention name
+	let email_setter = if let Some(email_ident) = mapping.get(FieldRole::Email) {
+		quote! { user.#email_ident = email.to_string(); }
+	} else {
+		quote! {}
+	};
+
+	let is_staff_setter = if let Some(ident) = mapping.get(FieldRole::IsStaff) {
+		quote! { user.#ident = true; }
+	} else {
+		quote! {}
+	};
+
+	let is_superuser_setter = if let Some(ident) = mapping.get(FieldRole::IsSuperuser) {
+		quote! { user.#ident = true; }
+	} else {
+		// IsSuperuser is required by validate_required_fields, so this is unreachable
+		quote! {}
+	};
+
+	let is_active_setter = if let Some(ident) = mapping.get(FieldRole::IsActive) {
+		quote! { user.#ident = true; }
+	} else {
+		quote! {}
+	};
+
+	let date_joined_setter = if let Some(ident) = mapping.get(FieldRole::DateJoined) {
+		quote! { user.#ident = chrono::Utc::now(); }
+	} else {
+		quote! {}
+	};
+
+	quote! {
+		impl #auth_crate::SuperuserInit for #struct_name {
+			fn init_superuser(username: &str, email: &str) -> Self {
+				let mut user = Self::default();
+				user.#username_field_ident = username.to_string();
+				#email_setter
+				#is_staff_setter
+				#is_superuser_setter
+				#is_active_setter
+				#date_joined_setter
+				user
+			}
+		}
+	}
+}
+
 fn generate_auth_identity_impl(struct_name: &Ident, mapping: &FieldMapping) -> TokenStream {
 	let auth_crate = get_reinhardt_auth_crate();
 	let pk_field = mapping.pk_field.as_ref().expect("PK validated");
@@ -294,6 +410,7 @@ pub(crate) fn user_attribute_impl(args: TokenStream, mut input: ItemStruct) -> R
 
 	if has_model {
 		inject_skip_getter(&mut input, &mapping, &parsed_args);
+		inject_m2m_relationships(&mut input, &mapping);
 	}
 
 	strip_user_field_attrs(&mut input);
@@ -308,6 +425,30 @@ pub(crate) fn user_attribute_impl(args: TokenStream, mut input: ItemStruct) -> R
 	let permissions_impl =
 		generate_permissions_mixin_impl(struct_name, &mapping).unwrap_or_else(|| quote! {});
 	let auth_identity_impl = generate_auth_identity_impl(struct_name, &mapping);
+	// SuperuserInit is only generated for full user types with #[model].
+	// The user type must also implement Default (typically via #[derive(Default)]
+	// or a manual impl).
+	// When both conditions are met, also auto-register a SuperuserCreator via
+	// inventory so that manual register_superuser_creator() calls are not needed.
+	let superuser_init_impl = if parsed_args.full && has_model {
+		let auth_crate = get_reinhardt_auth_crate();
+		let reinhardt_crate = crate::crate_paths::get_reinhardt_crate();
+		let superuser_init = generate_superuser_init_impl(struct_name, &mapping, &parsed_args);
+		let type_name_str = struct_name.to_string();
+
+		quote! {
+			#superuser_init
+
+			#reinhardt_crate::inventory::submit! {
+				#auth_crate::SuperuserCreatorRegistration::__macro_new(
+					|| #auth_crate::superuser_creator_for::<#struct_name>(),
+					#type_name_str,
+				)
+			}
+		}
+	} else {
+		quote! {}
+	};
 
 	Ok(quote! {
 		#input
@@ -316,5 +457,6 @@ pub(crate) fn user_attribute_impl(args: TokenStream, mut input: ItemStruct) -> R
 		#full_user_impl
 		#permissions_impl
 		#auth_identity_impl
+		#superuser_init_impl
 	})
 }

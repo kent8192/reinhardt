@@ -22,7 +22,7 @@ use reinhardt::pages::Signal;
 use reinhardt::pages::component::{IntoPage, Page, PageElement};
 use reinhardt::pages::page;
 
-#[cfg(client)]
+#[cfg(wasm)]
 use wasm_bindgen::JsCast;
 
 /// Button variant styles
@@ -119,7 +119,7 @@ pub fn button_with_size(
 	};
 	let text = text.to_string();
 
-	#[cfg(client)]
+	#[cfg(wasm)]
 	{
 		let on_click_clone = on_click.clone();
 		page!(|class: String, text: String, disabled: bool| {
@@ -138,7 +138,7 @@ pub fn button_with_size(
 		})(class, text, disabled)
 	}
 
-	#[cfg(server)]
+	#[cfg(native)]
 	{
 		let _ = on_click; // Suppress unused warning
 		page!(|class: String, text: String, disabled: bool| {
@@ -308,7 +308,7 @@ pub fn text_input(
 	// Clone Signal for passing to page! macro (NOT extracting values)
 	let value_signal = value.clone();
 
-	#[cfg(client)]
+	#[cfg(wasm)]
 	{
 		let value_clone = value.clone();
 		page!(|id_owned: String, label_owned: String, input_type_owned: String, placeholder_owned: String, value_signal: Signal<String>, required: bool| {
@@ -351,7 +351,7 @@ pub fn text_input(
 		)
 	}
 
-	#[cfg(server)]
+	#[cfg(native)]
 	{
 		page!(|id_owned: String, label_owned: String, input_type_owned: String, placeholder_owned: String, value_signal: Signal<String>, required: bool| {
 			div {
@@ -421,7 +421,7 @@ pub fn textarea(
 	let value_signal = value.clone();
 	let value_signal_for_count = value.clone();
 
-	#[cfg(client)]
+	#[cfg(wasm)]
 	{
 		let value_clone = value.clone();
 		page!(|id_owned: String, label_owned: String, rows_str: String, placeholder_owned: String, value_signal: Signal<String>, value_signal_for_count: Signal<String>, maxlength_attr: String, show_count: bool, max_length: usize| {
@@ -478,7 +478,7 @@ pub fn textarea(
 		)
 	}
 
-	#[cfg(server)]
+	#[cfg(native)]
 	{
 		page!(|id_owned: String, label_owned: String, rows_str: String, placeholder_owned: String, value_signal: Signal<String>, maxlength_attr: String, show_count: bool, max_length: usize| {
 			div {

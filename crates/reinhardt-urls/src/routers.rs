@@ -109,75 +109,80 @@ pub mod client_router;
 
 // Server-only modules (not available on WASM)
 /// Route matching result cache for repeated lookups.
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(native)]
 pub mod cache;
 /// Path parameter type converters (integer, UUID, slug, date, etc.).
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(native)]
 pub mod converters;
 /// Helper functions for building routes (similar to Django's `path()` and `re_path()`).
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(native)]
 pub mod helpers;
 /// Route introspection and analysis utilities.
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(native)]
 pub mod introspection;
 /// Hierarchical namespace management for URL resolution.
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(native)]
 pub mod namespace;
 /// OpenAPI specification generation from registered routes.
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(native)]
 pub mod openapi_integration;
+/// URL path joining and normalization utilities.
+#[cfg(native)]
+pub(crate) mod path_utils;
 /// Path pattern matching and radix tree routing.
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(native)]
 pub mod pattern;
 /// Compile-time URL pattern registration via `inventory`.
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(native)]
 pub mod registration;
+/// URL resolver trait for type-safe URL generation.
+pub mod resolver;
 /// URL reverse resolution (name-to-URL mapping).
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(native)]
 pub mod reverse;
 /// Route definition combining path patterns with handlers.
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(native)]
 pub mod route;
 /// Route grouping with shared prefix and middleware.
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(native)]
 pub mod route_group;
 /// Router trait and default implementation.
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(native)]
 pub mod router;
 /// SCRIPT_NAME prefix management for reverse proxy deployments.
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(native)]
 pub mod script_prefix;
 /// Full HTTP routing implementation with global router management.
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(native)]
 pub mod server_router;
 /// Minimal router for simple routing use cases.
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(native)]
 pub mod simple;
 /// Unified router combining server and client routing.
-#[cfg(any(not(target_arch = "wasm32"), feature = "client-router"))]
+#[cfg(any(native, feature = "client-router"))]
 pub mod unified_router;
 /// Route map visualization in multiple formats (tree, DOT, Markdown).
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(native)]
 pub mod visualization;
 
 // Re-export the path! macro for compile-time path validation
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(native)]
 pub use reinhardt_routers_macros::path;
 
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(native)]
 pub use cache::RouteCache;
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(native)]
 pub use converters::{
 	Converter, ConverterError, ConverterResult, DateConverter, FloatConverter, IntegerConverter,
 	PathConverter, SlugConverter, UuidConverter,
 };
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(native)]
 pub use helpers::{IncludedRouter, include_routes, path, re_path};
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(native)]
 pub use pattern::{MatchingMode, PathMatcher, PathPattern, RadixRouter, RadixRouterError};
-#[cfg(not(target_arch = "wasm32"))]
-pub use registration::UrlPatternsRegistration;
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(native)]
+pub use registration::{RouterFactory, UrlPatternsRegistration};
+#[cfg(native)]
 pub use reverse::{
 	ReverseError,
 	ReverseResult,
@@ -193,30 +198,33 @@ pub use reverse::{
 	reverse_typed_with_params,
 	reverse_with_aho_corasick,
 };
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(native)]
 pub use route::Route;
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(native)]
 pub use route_group::{RouteGroup, RouteInfo};
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(native)]
 pub use router::{DefaultRouter, Router};
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(native)]
 pub use script_prefix::{clear_script_prefix, get_script_prefix, set_script_prefix};
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(native)]
 pub use simple::SimpleRouter;
 // Server router (full HTTP routing implementation)
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(native)]
 pub use server_router::{
-	FunctionHandler, MiddlewareInfo, ServerRouter, clear_router, get_router, is_router_registered,
-	register_di_registrations, register_router, register_router_arc, take_di_registrations,
+	FunctionHandler, MiddlewareInfo, ServerRouter, clear_router, get_router, get_router_di_context,
+	is_router_registered, register_di_registrations, register_router, register_router_arc,
+	take_di_registrations,
 };
 
 // Unified router (closure-based API combining server and client routers)
-#[cfg(any(not(target_arch = "wasm32"), feature = "client-router"))]
+#[cfg(any(native, feature = "client-router"))]
 pub use unified_router::UnifiedRouter;
 
 // Client router re-exports
 #[cfg(feature = "client-router")]
 pub use client_router::{
-	ClientPathPattern, ClientRoute, ClientRouteMatch, ClientRouter, FromPath, HistoryState,
-	NavigationType, ParamContext, Path, RouteHandler, SingleFromPath,
+	ClientPathPattern, ClientRoute, ClientRouteMatch, ClientRouter, ClientUrlReverser, FromPath,
+	HistoryState, NavigationType, ParamContext, Path, RouteHandler, SingleFromPath,
+	clear_client_reverser, get_client_reverser, register_client_reverser,
 };
+pub use resolver::ClientUrlResolver;

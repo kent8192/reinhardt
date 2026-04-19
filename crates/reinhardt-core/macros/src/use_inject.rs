@@ -201,21 +201,23 @@ pub(crate) fn use_inject_impl(_args: TokenStream, input: ItemFn) -> Result<Token
 	// the HTTP request is available for parameter extraction (e.g. AuthInfo).
 	let di_context_extraction = if !inject_params.is_empty() {
 		quote! {
-			let __di_ctx = {
-				let __shared_ctx = match #request_pat.get_di_context::<::std::sync::Arc<#di_crate::InjectionContext>>() {
-					Some(ctx) => ctx,
-					None => {
-						::tracing::warn!(
-							"DI context not set on router. Creating empty fallback context. \
-							 Hint: Configure the router with .with_di_context() for proper dependency injection."
-						);
-						::std::sync::Arc::new(::std::sync::Arc::new(
-							#di_crate::InjectionContext::builder(#di_crate::SingletonScope::new()).build()
-						))
-					}
-				};
-				let __di_request = #request_pat.clone_for_di();
-				::std::sync::Arc::new((*__shared_ctx).fork_for_request(__di_request))
+			let __shared_ctx = match #request_pat.get_di_context::<::std::sync::Arc<#di_crate::InjectionContext>>() {
+				Some(ctx) => ctx,
+				None => {
+					::tracing::warn!(
+						"DI context not set on router. Creating empty fallback context. \
+						 Hint: Configure the router with .with_di_context() for proper dependency injection."
+					);
+					::std::sync::Arc::new(::std::sync::Arc::new(
+						#di_crate::InjectionContext::builder(#di_crate::SingletonScope::new()).build()
+					))
+				}
+			};
+			let __di_request = #request_pat.clone_for_di();
+			let __di_ctx = ::std::sync::Arc::new((*__shared_ctx).fork_for_request(__di_request));
+			let __resolve_ctx = #di_crate::resolve_context::ResolveContext {
+				root: ::std::sync::Arc::clone(&__shared_ctx),
+				current: ::std::sync::Arc::clone(&__di_ctx),
 			};
 		}
 	} else {
@@ -230,24 +232,16 @@ pub(crate) fn use_inject_impl(_args: TokenStream, input: ItemFn) -> Result<Token
 
 		let injection_code = if arg.use_cache {
 			quote! {
-				let #pat: #ty = #di_crate::Injected::<#ty>::resolve(&__di_ctx)
+				let #pat: #ty = #di_crate::Depends::<#ty>::resolve(&__di_ctx, true)
 					.await
-					.map_err(|e| {
-						#core_crate::exception::Error::Internal(
-							format!("Dependency injection failed: {:?}", e)
-						)
-					})?
+					.map_err(#core_crate::exception::Error::from)?
 					.into_inner();
 			}
 		} else {
 			quote! {
-				let #pat: #ty = #di_crate::Injected::<#ty>::resolve_uncached(&__di_ctx)
+				let #pat: #ty = #di_crate::Depends::<#ty>::resolve(&__di_ctx, false)
 					.await
-					.map_err(|e| {
-						#core_crate::exception::Error::Internal(
-							format!("Dependency injection failed: {:?}", e)
-						)
-					})?
+					.map_err(#core_crate::exception::Error::from)?
 					.into_inner();
 			}
 		};
@@ -320,6 +314,26 @@ pub(crate) fn use_inject_impl(_args: TokenStream, input: ItemFn) -> Result<Token
 		}
 	};
 
+	// Generate the handler body (injection resolution + original call)
+	let handler_body = quote! {
+		// Resolve #[inject] dependencies
+		#(#injection_stmts)*
+
+		// Call the original function
+		#original_call
+	};
+
+	// Wrap handler body in RESOLVE_CTX.scope() when DI is active
+	let scoped_handler_body = if !inject_params.is_empty() {
+		quote! {
+			#di_crate::resolve_context::RESOLVE_CTX.scope(__resolve_ctx, async {
+				#handler_body
+			}).await
+		}
+	} else {
+		handler_body
+	};
+
 	// Generate the expanded code with both original and wrapper functions
 	let expanded = quote! {
 		// Original function (renamed, private)
@@ -333,11 +347,8 @@ pub(crate) fn use_inject_impl(_args: TokenStream, input: ItemFn) -> Result<Token
 			// Extract DI context from Request (set by router before dispatching)
 			#di_context_extraction
 
-			// Resolve #[inject] dependencies
-			#(#injection_stmts)*
-
-			// Call the original function
-			#original_call
+			// Execute handler within resolve context scope
+			#scoped_handler_body
 		}
 	};
 

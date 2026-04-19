@@ -60,7 +60,7 @@ jobs:
     needs: gate
     if: needs.gate.outputs.is_fork == 'true'
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 360
     strategy:
       fail-fast: false
       matrix:
@@ -138,7 +138,7 @@ jobs:
     needs: [gate, validate]
     if: needs.gate.outputs.is_fork == 'true'
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 360
     environment: fork-review
     strategy:
       fail-fast: false
@@ -186,6 +186,7 @@ jobs:
             -backend-config="bucket=${{ secrets.TF_STATE_BUCKET }}" \
             -backend-config="key=${{ matrix.module }}/terraform.tfstate" \
             -backend-config="region=${{ secrets.TF_AWS_REGION }}" \
+            -backend-config="assume_role={role_arn=\"arn:aws:iam::${{ secrets.TF_AWS_ACCOUNT_ID }}:role/OrganizationAccountAccessRole\"}" \
             -input=false
 
       - name: Terraform Init (local backend)

@@ -164,8 +164,12 @@ impl Middleware for ConditionalGetMiddleware {
 		let if_unmodified_since = request.headers.get(IF_UNMODIFIED_SINCE).cloned();
 		let method = request.method.clone();
 
-		// Call the handler first
-		let mut response = handler.handle(request).await?;
+		// Convert errors to responses so post-processing always runs,
+		// even when invoked outside MiddlewareChain. (#3244)
+		let mut response = match handler.handle(request).await {
+			Ok(resp) => resp,
+			Err(e) => Response::from(e),
+		};
 
 		// Only process GET and HEAD requests
 		if method != Method::GET && method != Method::HEAD {

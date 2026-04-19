@@ -393,7 +393,12 @@ impl Middleware for CsrfMiddleware {
 		let token = get_token(&secret, &session_id);
 
 		// Process request
-		let mut response = handler.handle(request).await?;
+		// Convert errors to responses so post-processing (e.g., security headers)
+		// always runs, even when invoked outside MiddlewareChain. (#3244)
+		let mut response = match handler.handle(request).await {
+			Ok(resp) => resp,
+			Err(e) => Response::from(e),
+		};
 		let cookie_header = self.build_set_cookie_header(&token);
 		match cookie_header.parse() {
 			Ok(value) => {
@@ -1064,6 +1069,45 @@ mod tests {
 		assert!(
 			response.is_err(),
 			"Path /application/form should NOT be exempt when only /api is in exempt_paths"
+		);
+	}
+
+	/// Handler that always returns an error to simulate inner handler failure.
+	struct ErrorHandler;
+
+	#[async_trait]
+	impl Handler for ErrorHandler {
+		async fn handle(&self, _request: Request) -> reinhardt_http::Result<Response> {
+			Err(reinhardt_core::exception::Error::Http(
+				"handler error".to_string(),
+			))
+		}
+	}
+
+	#[rstest]
+	#[tokio::test]
+	async fn test_csrf_post_processing_on_handler_error() {
+		// Arrange
+		let middleware = CsrfMiddleware::new();
+		let handler: Arc<dyn Handler> = Arc::new(ErrorHandler);
+
+		let request = Request::builder()
+			.method(Method::GET)
+			.uri("/test")
+			.version(Version::HTTP_11)
+			.headers(HeaderMap::new())
+			.body(Bytes::new())
+			.build()
+			.unwrap();
+
+		// Act
+		let response = middleware.process(request, handler).await.unwrap();
+
+		// Assert — error is converted to response, middleware completes post-processing
+		assert!(response.status.is_client_error() || response.status.is_server_error());
+		assert!(
+			response.headers.contains_key("Set-Cookie"),
+			"CSRF Set-Cookie header should be applied even when handler returns an error"
 		);
 	}
 

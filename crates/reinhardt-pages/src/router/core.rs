@@ -3,7 +3,7 @@
 //! This module provides the main Router struct and routing logic.
 
 use super::handler::{RouteHandler, no_params_handler, result_handler, with_params_handler};
-#[cfg(target_arch = "wasm32")]
+#[cfg(wasm)]
 use super::history::setup_popstate_listener;
 use super::history::{HistoryState, NavigationType, current_path, push_state, replace_state};
 use super::params::{FromPath, ParamContext, PathParams};
@@ -526,7 +526,7 @@ impl Router {
 	///
 	/// # Example
 	///
-	/// ```ignore
+	/// ```no_run
 	/// let router = Router::new()
 	///     .route("/", home_page)
 	///     .route("/users/{id}/", user_detail);
@@ -540,7 +540,7 @@ impl Router {
 	/// The listener closure is kept alive using `.forget()`, meaning it will
 	/// persist for the lifetime of the page. This is intentional for SPA
 	/// navigation handling.
-	#[cfg(target_arch = "wasm32")]
+	#[cfg(wasm)]
 	pub fn setup_history_listener(&self) {
 		let path_signal = self.current_path.clone();
 		let params_signal = self.current_params.clone();
@@ -568,7 +568,7 @@ impl Router {
 	}
 
 	/// Non-WASM version of `setup_history_listener`.
-	#[cfg(not(target_arch = "wasm32"))]
+	#[cfg(native)]
 	pub fn setup_history_listener(&self) {
 		// No-op on non-WASM targets
 	}

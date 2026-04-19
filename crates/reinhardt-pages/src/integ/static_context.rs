@@ -6,7 +6,7 @@
 //!
 //! ## Usage
 //!
-//! ```ignore
+//! ```no_run
 //! use reinhardt_pages::integ::static_context;
 //! use std::collections::HashMap;
 //!
@@ -41,7 +41,7 @@ static STATIC_MANIFEST: OnceLock<HashMap<String, String>> = OnceLock::new();
 ///
 /// # Examples
 ///
-/// ```ignore
+/// ```no_run
 /// use reinhardt_pages::integ::static_context;
 /// use std::collections::HashMap;
 ///
@@ -90,6 +90,24 @@ pub fn resolve_static_url(path: &str) -> Result<String, String> {
 		.get(path)
 		.map(|hashed_path| format!("/static/{}", hashed_path))
 		.unwrap_or_else(|| format!("/static/{}", path)))
+}
+
+/// Resets the static context for testing purposes.
+///
+/// # Safety
+///
+/// This function replaces the static `OnceLock` value using `std::ptr::write`.
+/// It is only safe to call from a single-threaded test context (e.g., with
+/// `#[serial]`) where no other thread is concurrently reading the static.
+#[cfg(any(test, feature = "testing"))]
+pub fn reset_static_context() {
+	// SAFETY: We replace the OnceLock in-place with a fresh instance.
+	// This is safe only when called from a single-threaded test context
+	// (enforced by #[serial]) where no concurrent readers exist.
+	unsafe {
+		let ptr = std::ptr::addr_of!(STATIC_MANIFEST) as *mut OnceLock<HashMap<String, String>>;
+		std::ptr::write(ptr, OnceLock::new());
+	}
 }
 
 #[cfg(test)]

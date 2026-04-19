@@ -425,7 +425,7 @@ async fn state_transition_session_creation_to_csrf_verification() {
 	// Session creation → CSRF token generation → Verification → Success
 
 	// Step 1: Create session
-	let session_id = Uuid::new_v4();
+	let session_id = Uuid::now_v7();
 
 	// Step 2: Generate CSRF token
 	let csrf_token = generate_csrf_token();

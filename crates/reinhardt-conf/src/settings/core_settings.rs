@@ -3,11 +3,11 @@
 //! Essential configuration shared by all reinhardt applications.
 
 use super::database_config::DatabaseConfig;
-use super::fragment::{HasSettings, SettingsFragment};
-use super::policy::{FieldPolicy, FieldRequirement};
+use super::fragment::SettingsValidation;
 use super::profile::Profile;
 use super::security::SecuritySettings;
 use super::validation::{ValidationError, ValidationResult};
+use reinhardt_core::macros::settings;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -16,12 +16,14 @@ use std::path::PathBuf;
 ///
 /// Contains essential configuration: base directory, secret key, debug mode,
 /// allowed hosts, database configs, security settings, middleware, and apps.
+#[settings(fragment = true, section = "core", validate = false)]
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct CoreSettings {
 	/// Base directory of the project.
 	#[serde(default = "default_base_dir")]
 	pub base_dir: PathBuf,
 	/// Secret key for cryptographic signing.
+	#[setting(required)]
 	pub secret_key: String,
 	/// Debug mode flag.
 	#[serde(default = "default_debug")]
@@ -32,12 +34,32 @@ pub struct CoreSettings {
 	/// Database configurations keyed by alias.
 	#[serde(default = "default_databases")]
 	pub databases: HashMap<String, DatabaseConfig>,
-	/// Security settings (nested fragment).
+	/// Security settings (nested sub-section).
 	///
-	/// Flattened for backward-compatible deserialization: legacy TOML keys like
-	/// `secure_ssl_redirect` at the top level are accepted alongside the nested
-	/// `[security]` section form.
-	#[serde(default, flatten)]
+	/// In TOML, security fields are placed under a `[core.security]` sub-section
+	/// (composable settings) or `[security]` section (legacy `Settings`):
+	///
+	/// ```toml
+	/// # Composable settings format
+	/// [core]
+	/// secret_key = "..."
+	/// debug = false
+	///
+	/// [core.security]
+	/// secure_ssl_redirect = true
+	/// session_cookie_secure = true
+	/// ```
+	///
+	/// ```toml
+	/// # Legacy Settings format (CoreSettings flattened at root)
+	/// secret_key = "..."
+	/// debug = false
+	///
+	/// [security]
+	/// secure_ssl_redirect = true
+	/// session_cookie_secure = true
+	/// ```
+	#[serde(default)]
 	pub security: SecuritySettings,
 	/// Middleware class paths.
 	#[serde(default)]
@@ -80,66 +102,7 @@ impl Default for CoreSettings {
 	}
 }
 
-impl SettingsFragment for CoreSettings {
-	type Accessor = dyn HasCoreSettings;
-
-	fn section() -> &'static str {
-		"core"
-	}
-
-	fn field_policies() -> &'static [FieldPolicy] {
-		// secret_key has no default and must be explicitly provided by the user.
-		// All other fields have serde defaults or implement Default.
-		static POLICIES: [FieldPolicy; 9] = [
-			FieldPolicy {
-				name: "base_dir",
-				requirement: FieldRequirement::Optional,
-				has_default: true,
-			},
-			FieldPolicy {
-				name: "secret_key",
-				requirement: FieldRequirement::Required,
-				has_default: false,
-			},
-			FieldPolicy {
-				name: "debug",
-				requirement: FieldRequirement::Optional,
-				has_default: true,
-			},
-			FieldPolicy {
-				name: "allowed_hosts",
-				requirement: FieldRequirement::Optional,
-				has_default: true,
-			},
-			FieldPolicy {
-				name: "databases",
-				requirement: FieldRequirement::Optional,
-				has_default: true,
-			},
-			FieldPolicy {
-				name: "security",
-				requirement: FieldRequirement::Optional,
-				has_default: true,
-			},
-			FieldPolicy {
-				name: "middleware",
-				requirement: FieldRequirement::Optional,
-				has_default: true,
-			},
-			FieldPolicy {
-				name: "root_urlconf",
-				requirement: FieldRequirement::Optional,
-				has_default: true,
-			},
-			FieldPolicy {
-				name: "installed_apps",
-				requirement: FieldRequirement::Optional,
-				has_default: true,
-			},
-		];
-		&POLICIES
-	}
-
+impl SettingsValidation for CoreSettings {
 	fn validate(&self, profile: &Profile) -> ValidationResult {
 		if self.secret_key.is_empty() {
 			return Err(ValidationError::MissingRequired("secret_key".to_string()));
@@ -165,21 +128,9 @@ impl SettingsFragment for CoreSettings {
 	}
 }
 
-/// Trait for accessing [`CoreSettings`] from a composed settings type.
-pub trait HasCoreSettings {
-	/// Get a reference to the core settings.
-	fn core(&self) -> &CoreSettings;
-}
-
-impl<T: HasSettings<CoreSettings>> HasCoreSettings for T {
-	fn core(&self) -> &CoreSettings {
-		self.get_settings()
-	}
-}
-
 #[cfg(test)]
 mod tests {
-	use super::*;
+	use super::{CoreSettings, SecuritySettings};
 	use crate::settings::fragment::SettingsFragment;
 	use crate::settings::profile::Profile;
 	use rstest::rstest;
@@ -310,6 +261,73 @@ mod tests {
 			!policy.has_default,
 			"secret_key must not have a default value"
 		);
+	}
+
+	#[rstest]
+	fn test_core_settings_deserialize_nested_security_section() {
+		// Arrange — composable settings format with [core.security] sub-section
+		let toml_str = r#"
+secret_key = "test-secret"
+debug = false
+
+[security]
+secure_ssl_redirect = true
+session_cookie_secure = true
+csrf_cookie_secure = true
+secure_hsts_seconds = 31536000
+secure_hsts_include_subdomains = true
+secure_hsts_preload = true
+"#;
+
+		// Act
+		let settings: CoreSettings = toml::from_str(toml_str).expect("failed to parse TOML");
+
+		// Assert — security fields parsed from nested section
+		assert_eq!(settings.secret_key, "test-secret");
+		assert!(!settings.debug);
+		assert!(settings.security.secure_ssl_redirect);
+		assert!(settings.security.session_cookie_secure);
+		assert!(settings.security.csrf_cookie_secure);
+		assert_eq!(settings.security.secure_hsts_seconds, Some(31536000));
+		assert!(settings.security.secure_hsts_include_subdomains);
+		assert!(settings.security.secure_hsts_preload);
+	}
+
+	#[rstest]
+	fn test_core_settings_deserialize_omitted_security_uses_defaults() {
+		// Arrange — no security section at all
+		let toml_str = r#"
+secret_key = "test-secret"
+debug = true
+"#;
+
+		// Act
+		let settings: CoreSettings = toml::from_str(toml_str).expect("failed to parse TOML");
+
+		// Assert — security defaults applied
+		assert!(!settings.security.secure_ssl_redirect);
+		assert!(!settings.security.session_cookie_secure);
+		assert!(!settings.security.csrf_cookie_secure);
+		assert_eq!(settings.security.secure_hsts_seconds, None);
+	}
+
+	#[rstest]
+	fn test_core_settings_deserialize_partial_security_section() {
+		// Arrange — only some security fields specified
+		let toml_str = r#"
+secret_key = "test-secret"
+
+[security]
+secure_ssl_redirect = true
+"#;
+
+		// Act
+		let settings: CoreSettings = toml::from_str(toml_str).expect("failed to parse TOML");
+
+		// Assert — specified field overridden, others use defaults
+		assert!(settings.security.secure_ssl_redirect);
+		assert!(!settings.security.session_cookie_secure);
+		assert!(!settings.security.csrf_cookie_secure);
 	}
 
 	#[rstest]

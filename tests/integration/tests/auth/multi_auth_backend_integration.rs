@@ -52,6 +52,8 @@ fn create_jwt_token(jwt_auth: &JwtAuth, user_id: &str, username: &str) -> String
 		user_id.to_string(),
 		username.to_string(),
 		Duration::hours(1),
+		false,
+		false,
 	);
 	jwt_auth.encode(&claims).unwrap()
 }
@@ -99,7 +101,7 @@ async fn test_composite_auth_jwt_to_session_fallback() {
 		.with_backend((*session_auth).clone());
 
 	// Create session with authenticated user
-	let user_id = Uuid::new_v4();
+	let user_id = Uuid::now_v7();
 	let session_key = create_authenticated_session(
 		session_backend.clone(),
 		user_id,
@@ -137,7 +139,7 @@ async fn test_composite_auth_session_to_token_fallback() {
 
 	// Create token auth with test token
 	let mut token_auth = TokenAuthentication::new();
-	let user_id = Uuid::new_v4();
+	let user_id = Uuid::now_v7();
 	token_auth.add_token("test_token_abc123", user_id.to_string());
 
 	// Create composite auth: Session -> Token
@@ -170,7 +172,7 @@ async fn test_composite_auth_full_chain_fallback() {
 	let session_auth = Arc::new(SessionAuthentication::new((*session_backend).clone()));
 
 	let mut token_auth = TokenAuthentication::new();
-	let user_id = Uuid::new_v4();
+	let user_id = Uuid::now_v7();
 	token_auth.add_token("valid_token", user_id.to_string());
 
 	// Create composite auth: JWT -> Session -> Token
@@ -242,10 +244,10 @@ async fn test_backend_priority_jwt_first() {
 		.with_backend((*session_auth).clone());
 
 	// Create both JWT token and session
-	let jwt_user_id = Uuid::new_v4();
+	let jwt_user_id = Uuid::now_v7();
 	let jwt_token = create_jwt_token(&jwt_auth, &jwt_user_id.to_string(), "jwt_user");
 
-	let session_user_id = Uuid::new_v4();
+	let session_user_id = Uuid::now_v7();
 	let session_key = create_authenticated_session(
 		session_backend,
 		session_user_id,
@@ -286,7 +288,7 @@ async fn test_backend_priority_session_first() {
 	let session_auth = Arc::new(SessionAuthentication::new((*session_backend).clone()));
 
 	let mut token_auth = TokenAuthentication::new();
-	let token_user_id = Uuid::new_v4();
+	let token_user_id = Uuid::now_v7();
 	token_auth.add_token("token123", token_user_id.to_string());
 
 	// Create composite: Session has higher priority than Token
@@ -295,7 +297,7 @@ async fn test_backend_priority_session_first() {
 		.with_backend(token_auth);
 
 	// Create both session and token
-	let session_user_id = Uuid::new_v4();
+	let session_user_id = Uuid::now_v7();
 	let session_key = create_authenticated_session(
 		session_backend,
 		session_user_id,
@@ -344,10 +346,10 @@ async fn test_backend_order_affects_result() {
 		.with_backend((*jwt_auth).clone());
 
 	// Create both credentials
-	let jwt_user_id = Uuid::new_v4();
+	let jwt_user_id = Uuid::now_v7();
 	let jwt_token = create_jwt_token(&jwt_auth, &jwt_user_id.to_string(), "jwt_user");
 
-	let session_user_id = Uuid::new_v4();
+	let session_user_id = Uuid::now_v7();
 	let session_key = create_authenticated_session(
 		session_backend,
 		session_user_id,
@@ -400,7 +402,7 @@ async fn test_single_request_multiple_valid_credentials() {
 	let session_auth = Arc::new(SessionAuthentication::new((*session_backend).clone()));
 
 	let mut token_auth = TokenAuthentication::new();
-	let token_user_id = Uuid::new_v4();
+	let token_user_id = Uuid::now_v7();
 	token_auth.add_token("multi_token", token_user_id.to_string());
 
 	// Create composite: JWT -> Session -> Token
@@ -410,10 +412,10 @@ async fn test_single_request_multiple_valid_credentials() {
 		.with_backend(token_auth);
 
 	// Create all three types of credentials
-	let jwt_user_id = Uuid::new_v4();
+	let jwt_user_id = Uuid::now_v7();
 	let jwt_token = create_jwt_token(&jwt_auth, &jwt_user_id.to_string(), "jwt_alice");
 
-	let session_user_id = Uuid::new_v4();
+	let session_user_id = Uuid::now_v7();
 	let session_key = create_authenticated_session(
 		session_backend,
 		session_user_id,
@@ -461,7 +463,7 @@ async fn test_single_request_mixed_valid_invalid_credentials() {
 		.with_backend((*session_auth).clone());
 
 	// Create valid session
-	let session_user_id = Uuid::new_v4();
+	let session_user_id = Uuid::now_v7();
 	let session_key = create_authenticated_session(
 		session_backend,
 		session_user_id,
@@ -537,7 +539,7 @@ async fn test_jwt_backend_user_model() {
 	let jwt_auth = Arc::new(JwtAuth::new(b"user_model_secret"));
 
 	// Create JWT token with specific user data
-	let user_id = Uuid::new_v4();
+	let user_id = Uuid::now_v7();
 	let token = create_jwt_token(&jwt_auth, &user_id.to_string(), "jwt_specific_user");
 
 	// Create request with JWT
@@ -571,7 +573,7 @@ async fn test_session_backend_user_model() {
 	let session_auth = SessionAuthentication::new((*session_backend).clone());
 
 	// Create session with comprehensive user data
-	let user_id = Uuid::new_v4();
+	let user_id = Uuid::now_v7();
 	let mut session = Session::new((*session_backend).clone());
 	session.set("_auth_user_id", user_id.to_string()).unwrap();
 	session
@@ -618,7 +620,7 @@ async fn test_token_backend_user_model() {
 	// only ID field populated from token storage (username generated from ID).
 	// Not intent: Token rotation, token blacklist, database lookup
 	let mut token_auth = TokenAuthentication::new();
-	let user_id = Uuid::new_v4();
+	let user_id = Uuid::now_v7();
 	token_auth.add_token("specific_token_xyz", user_id.to_string());
 
 	// Create request with token
@@ -657,7 +659,7 @@ async fn test_api_requests_prefer_jwt() {
 		.with_backend((*session_auth).clone());
 
 	// Create JWT token
-	let user_id = Uuid::new_v4();
+	let user_id = Uuid::now_v7();
 	let token = create_jwt_token(&jwt_auth, &user_id.to_string(), "api_user");
 
 	// API request with JWT
@@ -693,7 +695,7 @@ async fn test_web_requests_prefer_session() {
 		.with_backend((*jwt_auth).clone());
 
 	// Create session
-	let user_id = Uuid::new_v4();
+	let user_id = Uuid::now_v7();
 	let session_key =
 		create_authenticated_session(session_backend, user_id, "web_user", "web@example.com").await;
 
@@ -721,7 +723,7 @@ async fn test_mobile_requests_use_token() {
 	// Token when configured in typical mobile-first backend order.
 	// Not intent: Device fingerprinting, token refresh, push notifications
 	let mut token_auth = TokenAuthentication::new();
-	let user_id = Uuid::new_v4();
+	let user_id = Uuid::now_v7();
 	token_auth.add_token("mobile_app_token", user_id.to_string());
 
 	let session_backend = Arc::new(InMemorySessionBackend::new());
@@ -751,7 +753,7 @@ async fn test_same_user_different_backends() {
 	// Test intent: Verify same user can authenticate successfully via different
 	// backends (JWT and Session) in separate requests, backend choice doesn't affect user identity.
 	// Not intent: Concurrent sessions, session sharing, token synchronization
-	let user_id = Uuid::new_v4();
+	let user_id = Uuid::now_v7();
 	let username = "multi_backend_user";
 
 	// Setup JWT backend
@@ -930,7 +932,7 @@ async fn test_database_backend_authenticates_user(
 	let db_backend = DatabaseAuthBackend::new(pool.clone(), db_url).await;
 
 	// Insert test user into database
-	let user_id = Uuid::new_v4();
+	let user_id = Uuid::now_v7();
 	db_backend
 		.insert_user(user_id, "db_alice", "alice@db.com", true, false)
 		.await;
@@ -971,7 +973,7 @@ async fn test_composite_with_database_fallback(
 		.with_backend((*db_backend).clone());
 
 	// Insert test user into database
-	let user_id = Uuid::new_v4();
+	let user_id = Uuid::now_v7();
 	db_backend
 		.insert_user(user_id, "fallback_user", "fallback@db.com", true, true)
 		.await;
@@ -1006,8 +1008,8 @@ async fn test_database_backend_multiple_users(
 	let db_backend = DatabaseAuthBackend::new(pool.clone(), db_url).await;
 
 	// Insert multiple users
-	let user1_id = Uuid::new_v4();
-	let user2_id = Uuid::new_v4();
+	let user1_id = Uuid::now_v7();
+	let user2_id = Uuid::now_v7();
 	db_backend
 		.insert_user(user1_id, "alice", "alice@db.com", true, false)
 		.await;
@@ -1060,7 +1062,7 @@ async fn test_all_backends_jwt_session_database_chain(
 		.with_backend((*db_backend).clone());
 
 	// Insert user into database
-	let user_id = Uuid::new_v4();
+	let user_id = Uuid::now_v7();
 	db_backend
 		.insert_user(user_id, "chain_user", "chain@db.com", true, false)
 		.await;

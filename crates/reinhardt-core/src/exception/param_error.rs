@@ -177,6 +177,21 @@ pub fn extract_field_from_serde_error(err: &serde_json::Error) -> Option<String>
 	None
 }
 
+/// Extract field name from serde_urlencoded error message
+pub fn extract_field_from_urlencoded_error(err: &serde_urlencoded::de::Error) -> Option<String> {
+	let msg = err.to_string();
+
+	// "missing field `xxx`" pattern
+	if let Some(start) = msg.find("missing field `") {
+		let rest = &msg[start + 15..];
+		if let Some(end) = rest.find('`') {
+			return Some(rest[..end].to_string());
+		}
+	}
+
+	None
+}
+
 #[cfg(test)]
 mod tests {
 	use rstest::rstest;
@@ -187,7 +202,7 @@ mod tests {
 	fn with_raw_value_does_not_panic_on_multibyte_utf8() {
 		// Arrange - 500+ bytes of multi-byte Japanese characters
 		// Each character is 3 bytes in UTF-8, so 200 chars = 600 bytes
-		let japanese_str: String = std::iter::repeat('あ').take(200).collect();
+		let japanese_str: String = "あ".repeat(200);
 		assert!(japanese_str.len() > 500);
 
 		// Act - must not panic on multi-byte boundary
@@ -201,7 +216,7 @@ mod tests {
 	#[rstest]
 	fn with_raw_value_does_not_panic_on_emoji() {
 		// Arrange - emoji are 4 bytes each, 150 emojis = 600 bytes
-		let emoji_str: String = std::iter::repeat('\u{1F600}').take(150).collect();
+		let emoji_str: String = "\u{1F600}".repeat(150);
 		assert!(emoji_str.len() > 500);
 
 		// Act - must not panic on 4-byte char boundary
@@ -252,19 +267,4 @@ mod tests {
 		// Assert - should NOT be truncated (len is not > 500)
 		assert_eq!(ctx.raw_value.unwrap(), exact);
 	}
-}
-
-/// Extract field name from serde_urlencoded error message
-pub fn extract_field_from_urlencoded_error(err: &serde_urlencoded::de::Error) -> Option<String> {
-	let msg = err.to_string();
-
-	// "missing field `xxx`" pattern
-	if let Some(start) = msg.find("missing field `") {
-		let rest = &msg[start + 15..];
-		if let Some(end) = rest.find('`') {
-			return Some(rest[..end].to_string());
-		}
-	}
-
-	None
 }

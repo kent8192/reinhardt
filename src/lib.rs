@@ -115,19 +115,31 @@ pub mod reinhardt_types {
 }
 
 // Server-side only re-exports (NOT for WASM)
-#[cfg(all(feature = "core", not(target_arch = "wasm32")))]
+#[cfg(all(feature = "core", native))]
 #[doc(hidden)]
 pub mod reinhardt_apps {
 	pub use reinhardt_apps::*;
 }
 
-#[cfg(all(feature = "di", not(target_arch = "wasm32")))]
+#[cfg(all(feature = "di", native))]
 #[doc(hidden)]
 pub mod reinhardt_di {
 	pub use reinhardt_di::*;
 }
 
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(all(feature = "auth", native))]
+#[doc(hidden)]
+pub mod reinhardt_auth {
+	pub use reinhardt_auth::*;
+}
+
+#[cfg(all(feature = "commands", native))]
+#[doc(hidden)]
+pub mod reinhardt_commands {
+	pub use reinhardt_commands::*;
+}
+
+#[cfg(native)]
 #[doc(hidden)]
 pub mod reinhardt_core {
 	pub use reinhardt_core::*;
@@ -135,37 +147,42 @@ pub mod reinhardt_core {
 	pub use reinhardt_core::endpoint::EndpointMetadata;
 }
 
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(native)]
 #[doc(hidden)]
 pub mod reinhardt_http {
 	pub use reinhardt_http::*;
 }
 
-#[cfg(all(feature = "di", not(target_arch = "wasm32")))]
+#[cfg(all(feature = "di", native))]
 #[doc(hidden)]
 pub mod reinhardt_params {
 	pub use reinhardt_di::params::*;
 }
 
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(native)]
 #[doc(hidden)]
 pub mod async_trait {
 	pub use async_trait::*;
 }
 
-#[cfg(all(feature = "database", not(target_arch = "wasm32")))]
+#[cfg(all(feature = "database", native))]
 #[doc(hidden)]
 pub mod linkme {
 	pub use linkme::*;
 }
 
-#[cfg(all(feature = "database", not(target_arch = "wasm32")))]
+#[cfg(all(feature = "database", native))]
 #[doc(hidden)]
 pub mod ctor {
 	pub use ctor::*;
 }
 
-#[cfg(all(feature = "database", not(target_arch = "wasm32")))]
+// Re-export paste for macro-generated code (Issue #3526: namespaced URL resolvers)
+#[cfg(native)]
+#[doc(hidden)]
+pub use paste::paste;
+
+#[cfg(all(feature = "database", native))]
 #[doc(hidden)]
 pub mod reinhardt_orm {
 	pub use reinhardt_db::orm::*;
@@ -177,112 +194,128 @@ pub mod reinhardt_orm {
 pub mod pages;
 
 // Server-side only modules (NOT for WASM)
-#[cfg(all(feature = "admin", not(target_arch = "wasm32")))]
+#[cfg(all(feature = "admin", native))]
 pub mod admin;
-#[cfg(all(feature = "core", not(target_arch = "wasm32")))]
+#[cfg(all(feature = "core", native))]
 pub mod apps;
-#[cfg(all(feature = "commands", not(target_arch = "wasm32")))]
+#[cfg(all(feature = "commands", native))]
 pub mod commands;
-#[cfg(all(feature = "conf", not(target_arch = "wasm32")))]
+#[cfg(all(feature = "conf", native))]
 pub mod conf;
-#[cfg(all(feature = "core", not(target_arch = "wasm32")))]
+#[cfg(all(feature = "core", native))]
 pub mod core;
-#[cfg(all(feature = "deeplink", not(target_arch = "wasm32")))]
+#[cfg(all(feature = "deeplink", native))]
 pub mod deeplink;
-#[cfg(all(feature = "dentdelion", not(target_arch = "wasm32")))]
+#[cfg(all(feature = "dentdelion", native))]
 pub mod dentdelion;
-#[cfg(all(feature = "di", not(target_arch = "wasm32")))]
+#[cfg(all(feature = "di", native))]
 pub mod di;
-#[cfg(all(feature = "dispatch", not(target_arch = "wasm32")))]
+#[cfg(all(feature = "dispatch", native))]
 pub mod dispatch;
-#[cfg(all(feature = "forms", not(target_arch = "wasm32")))]
+#[cfg(all(feature = "forms", native))]
 pub mod forms;
-#[cfg(all(feature = "graphql", not(target_arch = "wasm32")))]
+#[cfg(all(feature = "graphql", native))]
 pub mod graphql;
-#[cfg(all(feature = "grpc", not(target_arch = "wasm32")))]
+#[cfg(all(feature = "grpc", native))]
 pub mod grpc;
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(native)]
 pub mod http;
-#[cfg(all(feature = "i18n", not(target_arch = "wasm32")))]
+#[cfg(all(feature = "i18n", native))]
 pub mod i18n;
-#[cfg(all(feature = "mail", not(target_arch = "wasm32")))]
+#[cfg(all(feature = "mail", native))]
 pub mod mail;
-#[cfg(all(
-	any(feature = "standard", feature = "middleware"),
-	not(target_arch = "wasm32")
-))]
+#[cfg(all(any(feature = "standard", feature = "middleware"), native))]
 pub mod middleware;
-#[cfg(all(feature = "rest", not(target_arch = "wasm32")))]
+#[cfg(all(feature = "rest", native))]
 pub mod rest;
-#[cfg(all(feature = "server", not(target_arch = "wasm32")))]
+#[cfg(all(feature = "server", native))]
 pub mod server;
-#[cfg(all(feature = "shortcuts", not(target_arch = "wasm32")))]
+#[cfg(all(feature = "shortcuts", native))]
 pub mod shortcuts;
-#[cfg(all(feature = "tasks", not(target_arch = "wasm32")))]
+#[cfg(all(feature = "tasks", native))]
 pub mod tasks;
-#[cfg(all(feature = "templates", not(target_arch = "wasm32")))]
+#[cfg(all(feature = "templates", native))]
 pub mod template;
-#[cfg(all(feature = "test", not(target_arch = "wasm32")))]
+#[cfg(all(feature = "test", native))]
 pub mod test;
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(native)]
 pub mod urls;
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(native)]
 pub mod utils;
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(native)]
 pub mod views;
 
 // Server-side only re-exports (NOT for WASM)
 // Re-export app types from reinhardt-apps
-#[cfg(all(feature = "core", not(target_arch = "wasm32")))]
+#[cfg(all(feature = "core", native))]
 pub use reinhardt_apps::{AppConfig, AppError, AppResult, Apps};
 
 // Re-export macros
-#[cfg(all(feature = "core", not(target_arch = "wasm32")))]
+#[cfg(all(feature = "core", native))]
 pub use reinhardt_macros::{AppConfig, app_config, installed_apps};
 
 // Re-export settings attribute macro (requires conf feature)
-#[cfg(all(feature = "conf", not(target_arch = "wasm32")))]
+#[cfg(all(feature = "conf", native))]
 pub use reinhardt_macros::settings;
 
 // Re-export Model derive macro and model attribute macro (requires database feature)
-#[cfg(all(feature = "database", not(target_arch = "wasm32")))]
+#[cfg(all(feature = "database", native))]
 pub use reinhardt_macros::{Model, model};
 
 // Re-export collect_migrations macro (requires database feature)
-#[cfg(all(feature = "database", not(target_arch = "wasm32")))]
+#[cfg(all(feature = "database", native))]
 pub use reinhardt_macros::collect_migrations;
 
 // Re-export reinhardt_migrations crate (used by collect_migrations! macro)
-#[cfg(all(feature = "database", not(target_arch = "wasm32")))]
+#[cfg(all(feature = "database", native))]
 pub use reinhardt_db::migrations;
 
 // Alias for macro compatibility
-#[cfg(all(feature = "database", not(target_arch = "wasm32")))]
+#[cfg(all(feature = "database", native))]
 #[doc(hidden)]
 pub use migrations as reinhardt_migrations;
 
 // Re-export reinhardt_macros as a module for hierarchical imports
 // This allows macro-generated code to use ::reinhardt::macros::Model
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(native)]
 #[doc(hidden)]
 pub mod macros {
 	pub use reinhardt_macros::*;
 }
 
 // Re-export HTTP method macros
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(native)]
 pub use reinhardt_macros::{api_view, delete, get, patch, post, put};
 
-// Re-export routes attribute macro for URL pattern registration
-#[cfg(not(target_arch = "wasm32"))]
+// Re-export `flatten_imports` and provide a deprecated `define_views!` shim for compatibility
+#[cfg(native)]
+pub use reinhardt_macros::flatten_imports;
+#[cfg(native)]
+#[deprecated(
+	since = "0.1.0-rc.16",
+	note = "use `flatten_imports!` instead. `define_views!` will be removed in a future version."
+)]
+#[macro_export]
+macro_rules! define_views {
+    ($($tt:tt)*) => {
+        $crate::flatten_imports!($($tt)*)
+    };
+}
+#[cfg(native)]
 pub use reinhardt_macros::routes;
+#[cfg(native)]
+pub use reinhardt_macros::url_patterns;
+#[cfg(native)]
+pub use reinhardt_macros::viewset;
+
+// client_routes! proc macro removed: superseded by #[url_patterns(client = true)]
 
 // Re-export admin attribute macro (requires admin feature)
-#[cfg(all(feature = "admin", not(target_arch = "wasm32")))]
+#[cfg(all(feature = "admin", native))]
 pub use reinhardt_macros::admin;
 
 // Re-export settings from dedicated crate
-#[cfg(all(feature = "conf", not(target_arch = "wasm32")))]
+#[cfg(all(feature = "conf", native))]
 #[allow(deprecated)]
 // Re-exports deprecated Settings and AdvancedSettings for backward compatibility
 pub use reinhardt_conf::settings::{
@@ -291,49 +324,52 @@ pub use reinhardt_conf::settings::{
 	TemplateConfig,
 };
 
-#[cfg(all(feature = "conf", not(target_arch = "wasm32")))]
+#[cfg(all(feature = "conf", native))]
+pub use reinhardt_conf::SecuritySettings;
+
+#[cfg(all(feature = "conf", native))]
 pub use reinhardt_conf::settings::core_settings::{CoreSettings, HasCoreSettings};
 
-#[cfg(all(feature = "conf", not(target_arch = "wasm32")))]
+#[cfg(all(feature = "conf", native))]
 pub use reinhardt_conf::settings::fragment::SettingsFragment;
 
-#[cfg(all(feature = "conf", not(target_arch = "wasm32")))]
+#[cfg(all(feature = "conf", native))]
 pub use reinhardt_conf::settings::fragment::HasSettings;
 
-#[cfg(all(feature = "conf", not(target_arch = "wasm32")))]
+#[cfg(all(feature = "conf", native))]
 pub use reinhardt_conf::settings::builder::SettingsBuilder;
 
-#[cfg(all(feature = "conf", not(target_arch = "wasm32")))]
+#[cfg(all(feature = "conf", native))]
 pub use reinhardt_conf::settings::profile::Profile;
 
-#[cfg(all(feature = "conf", not(target_arch = "wasm32")))]
+#[cfg(all(feature = "conf", native))]
 pub use reinhardt_conf::settings::sources::{
 	DefaultSource, EnvSource, LowPriorityEnvSource, TomlFileSource,
 };
 
 // Re-export ApplyUpdate trait and macros
 pub use reinhardt_core::apply_update::ApplyUpdate;
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(native)]
 pub use reinhardt_macros::{ApplyUpdate as DeriveApplyUpdate, apply_update};
 
 // Re-export core types
-#[cfg(all(feature = "core", not(target_arch = "wasm32")))]
+#[cfg(all(feature = "core", native))]
 pub use reinhardt_core::{
 	endpoint::EndpointMetadata,
 	exception::{Error, Result},
 };
 
 // Re-export HTTP types
-#[cfg(all(feature = "core", not(target_arch = "wasm32")))]
+#[cfg(all(feature = "core", native))]
 pub use reinhardt_http::{Handler, Middleware, MiddlewareChain, Request, Response, ViewResult};
 
 // Re-export inventory crate (used by HTTP method macros for endpoint registration)
-#[cfg(all(feature = "core", not(target_arch = "wasm32")))]
+#[cfg(all(feature = "core", native))]
 #[doc(hidden)]
 pub use inventory;
 
 // Re-export ORM
-#[cfg(all(feature = "database", not(target_arch = "wasm32")))]
+#[cfg(all(feature = "database", native))]
 pub use reinhardt_db::orm::{
 	DatabaseBackend, DatabaseConnection, Model, QuerySet, SoftDeletable, SoftDelete, Timestamped,
 	Timestamps,
@@ -358,7 +394,7 @@ pub use reinhardt_db::orm::{
 //     Q::field("price").gt(100),
 // ]);
 // ```
-#[cfg(all(feature = "database", not(target_arch = "wasm32")))]
+#[cfg(all(feature = "database", native))]
 pub use reinhardt_db::orm::{
 	// Query expressions (equivalent to Django's F and Q)
 	Exists,
@@ -405,7 +441,7 @@ pub use reinhardt_db::orm::{
 // let stats = Product::objects()
 //     .aggregate("avg_price", Aggregate::avg("price"));
 // ```
-#[cfg(all(feature = "database", not(target_arch = "wasm32")))]
+#[cfg(all(feature = "database", native))]
 pub use reinhardt_db::orm::{
 	// Aggregations
 	Aggregate,
@@ -445,7 +481,7 @@ pub use reinhardt_db::orm::{
 // # Ok(())
 // # }
 // ```
-#[cfg(all(feature = "database", not(target_arch = "wasm32")))]
+#[cfg(all(feature = "database", native))]
 pub use reinhardt_db::orm::{
 	// Transaction management
 	IsolationLevel,
@@ -488,7 +524,7 @@ pub use reinhardt_db::orm::{
 // let recent_users = User::objects()
 //     .filter(Q::field("created_at").gte(Now::new()));
 // ```
-#[cfg(all(feature = "database", not(target_arch = "wasm32")))]
+#[cfg(all(feature = "database", native))]
 pub use reinhardt_db::orm::{
 	// Math functions
 	Abs,
@@ -550,7 +586,7 @@ pub use reinhardt_db::orm::{
 //             .partition_by("category")
 //             .order_by("-amount")));
 // ```
-#[cfg(all(feature = "database", not(target_arch = "wasm32")))]
+#[cfg(all(feature = "database", native))]
 pub use reinhardt_db::orm::{
 	// Ranking functions
 	DenseRank,
@@ -587,7 +623,7 @@ pub use reinhardt_db::orm::{
 // // Create indexes
 // let index = BTreeIndex::new("user_email_idx", vec!["email"]);
 // ```
-#[cfg(all(feature = "database", not(target_arch = "wasm32")))]
+#[cfg(all(feature = "database", native))]
 pub use reinhardt_db::orm::{
 	// Indexes
 	BTreeIndex,
@@ -608,60 +644,66 @@ pub use reinhardt_db::orm::{
 // Query builder Query type is available as reinhardt::db::orm::Query
 // to avoid name conflict with reinhardt::Query (DI params extractor).
 // Value is re-exported as QueryBuilderValue to avoid conflicts with existing types.
-#[cfg(all(feature = "database", not(target_arch = "wasm32")))]
+#[cfg(all(feature = "database", native))]
 pub use reinhardt_db::orm::{IntoValue, Order, QueryBuilderValue};
 
 // Re-export database pool
-#[cfg(all(feature = "database", not(target_arch = "wasm32")))]
+#[cfg(all(feature = "database", native))]
 pub use reinhardt_db::pool::{ConnectionPool, PoolConfig, PoolError};
 
 // Re-export serializers
-#[cfg(all(feature = "rest", not(target_arch = "wasm32")))]
+#[cfg(all(feature = "rest", native))]
 pub use reinhardt_rest::serializers::{Deserializer, JsonSerializer, Serializer};
 
 // Re-export viewsets
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(native)]
 pub use reinhardt_views::viewsets::{
 	Action, ActionType, CreateMixin, DestroyMixin, GenericViewSet, ListMixin, ModelViewSet,
 	ReadOnlyModelViewSet, RetrieveMixin, UpdateMixin, ViewSet,
 };
 
 // Re-export routers
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(native)]
 pub use reinhardt_urls::routers::{
-	DefaultRouter, PathMatcher, PathPattern, Route, Router, ServerRouter, UrlPatternsRegistration,
-	clear_router, get_router, is_router_registered, register_router, register_router_arc,
+	DefaultRouter, PathMatcher, PathPattern, Route, Router, RouterFactory, ServerRouter,
+	UrlPatternsRegistration, clear_router, get_router, is_router_registered, register_router,
+	register_router_arc,
 };
 
 // Re-export client-router types (requires client-router feature)
 // These types enable UnifiedRouter<V> with both .server() and .client() methods
 #[cfg(feature = "client-router")]
 pub use reinhardt_urls::routers::{
-	ClientPathPattern, ClientRoute, ClientRouteMatch, ClientRouter, FromPath, HistoryState,
-	NavigationType, ParamContext, SingleFromPath, UnifiedRouter,
+	ClientPathPattern, ClientRoute, ClientRouteMatch, ClientRouter, ClientUrlReverser, FromPath,
+	HistoryState, NavigationType, ParamContext, SingleFromPath, UnifiedRouter,
+	clear_client_reverser, get_client_reverser, register_client_reverser,
 };
 // Path extractor for client-side routing (separate from server-side Path from reinhardt-di)
 #[cfg(feature = "client-router")]
 pub use reinhardt_urls::routers::Path as ClientPath;
 
+// Re-export URL resolver traits
+pub use reinhardt_urls::routers::ClientUrlResolver;
+#[cfg(native)]
+pub use reinhardt_urls::routers::resolver::UrlResolver;
+
 // Re-export auth
-#[cfg(all(feature = "auth", not(target_arch = "wasm32")))]
+#[cfg(all(feature = "auth", native))]
 #[allow(deprecated)] // CurrentUser is deprecated in favor of AuthUser
 pub use reinhardt_auth::{
-	AllowAny, AnonymousUser, AuthBackend, AuthInfo, AuthUser, BaseUser, CurrentUser, DefaultUser,
-	FullUser, IsAdminUser, IsAuthenticated, PasswordHasher, Permission, PermissionsMixin,
-	SimpleUser, User, validate_auth_extractors,
+	AllowAny, AnonymousUser, AuthBackend, AuthInfo, AuthUser, BaseUser, CurrentUser, FullUser,
+	IsAdminUser, IsAuthenticated, PasswordHasher, Permission, PermissionsMixin, SimpleUser,
+	validate_auth_extractors,
 };
 
-#[cfg(all(
-	feature = "auth",
-	feature = "argon2-hasher",
-	not(target_arch = "wasm32")
-))]
+// Re-export argon2-hasher gated types (DefaultUser, DefaultUserManager, Argon2Hasher)
+// These require the argon2-hasher feature because the entire default_user module
+// in reinhardt-auth is conditionally compiled with #[cfg(feature = "argon2-hasher")]
+#[cfg(all(feature = "auth", feature = "argon2-hasher", native))]
 #[cfg_attr(docsrs, doc(cfg(all(feature = "auth", feature = "argon2-hasher"))))]
-pub use reinhardt_auth::Argon2Hasher;
+pub use reinhardt_auth::{Argon2Hasher, DefaultUser, DefaultUserManager};
 
-#[cfg(all(feature = "auth-jwt", not(target_arch = "wasm32")))]
+#[cfg(all(feature = "auth-jwt", native))]
 pub use reinhardt_auth::{Claims, JwtAuth, JwtError};
 
 // Re-export auth management
@@ -695,7 +737,7 @@ pub use reinhardt_auth::{Claims, JwtAuth, JwtError};
 // # Ok(())
 // # }
 // ```
-#[cfg(all(feature = "auth", not(target_arch = "wasm32")))]
+#[cfg(all(feature = "auth", native))]
 pub use reinhardt_auth::{
 	// Group management
 	CreateGroupData,
@@ -718,50 +760,83 @@ pub use reinhardt_auth::{
 // Re-export middleware
 // AuthenticationMiddleware requires both sessions (for session backend) and
 // middleware (for the reinhardt-middleware crate dependency)
-#[cfg(all(
-	feature = "sessions",
-	feature = "middleware",
-	not(target_arch = "wasm32")
-))]
+#[cfg(all(feature = "sessions", feature = "middleware", native))]
 pub use reinhardt_middleware::AuthenticationMiddleware;
 
-#[cfg(all(
-	any(feature = "standard", feature = "middleware"),
-	not(target_arch = "wasm32")
-))]
+// JWT authentication middleware (requires middleware-auth-jwt feature)
+#[cfg(all(feature = "middleware-auth-jwt", native))]
+pub use reinhardt_middleware::JwtAuthMiddleware;
+
+// Cookie-based session authentication middleware (requires sessions + middleware)
+#[cfg(all(feature = "sessions", feature = "middleware", native))]
+pub use reinhardt_middleware::{CookieSessionAuthMiddleware, CookieSessionConfig};
+
+// Redis session backend (requires session-redis + middleware)
+#[cfg(all(feature = "session-redis", feature = "middleware", native))]
+pub use reinhardt_middleware::RedisSessionBackend;
+
+// Origin guard middleware for CSRF protection
+#[cfg(all(any(feature = "standard", feature = "middleware"), native))]
+pub use reinhardt_middleware::OriginGuardMiddleware;
+
+// Remote user authentication middleware (requires sessions + middleware)
+#[cfg(all(feature = "sessions", feature = "middleware", native))]
+pub use reinhardt_middleware::{PersistentRemoteUserMiddleware, RemoteUserMiddleware};
+
+// Login required middleware (available with any middleware feature)
+#[cfg(all(any(feature = "standard", feature = "middleware"), native))]
+pub use reinhardt_middleware::{LoginRequiredConfig, LoginRequiredMiddleware};
+
+#[cfg(all(any(feature = "standard", feature = "middleware"), native))]
 pub use reinhardt_middleware::LoggingMiddleware;
 
-#[cfg(all(feature = "middleware-cors", not(target_arch = "wasm32")))]
+#[cfg(all(feature = "middleware-cors", native))]
 pub use reinhardt_middleware::CorsMiddleware;
 
+// Security middleware (requires middleware-security feature)
+#[cfg(all(feature = "middleware-security", native))]
+pub use reinhardt_middleware::SecurityMiddleware;
+
+#[cfg(all(feature = "middleware-security", native))]
+#[allow(deprecated)] // SecurityConfig is deprecated but still re-exported for compatibility
+pub use reinhardt_middleware::SecurityConfig;
+
+// CSP middleware (available with any middleware feature)
+#[cfg(all(any(feature = "standard", feature = "middleware"), native))]
+pub use reinhardt_middleware::{CspConfig, CspMiddleware, CspNonce};
+
+// XFrame middleware (available with any middleware feature)
+#[cfg(all(any(feature = "standard", feature = "middleware"), native))]
+pub use reinhardt_middleware::{XFrameOptions, XFrameOptionsMiddleware};
+
 // Re-export HTTP types (additional commonly used types)
-#[cfg(all(feature = "core", not(target_arch = "wasm32")))]
+#[cfg(all(feature = "core", native))]
 pub use reinhardt_http::Extensions;
 
 // Re-export HTTP types from hyper (already used in reinhardt_http)
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(native)]
 pub use hyper::{Method, StatusCode};
 
 // Re-export pagination
-#[cfg(all(feature = "rest", not(target_arch = "wasm32")))]
+#[cfg(all(feature = "rest", native))]
 pub use reinhardt_rest::pagination::{
 	CursorPagination, LimitOffsetPagination, PageNumberPagination, PaginatedResponse, Paginator,
 };
 
 // Re-export filters
-#[cfg(all(feature = "rest", not(target_arch = "wasm32")))]
+#[cfg(all(feature = "rest", native))]
 pub use reinhardt_rest::filters::{
 	FieldOrderingExt, FilterBackend, FilterError, FilterResult, MultiTermSearch,
 };
 
 // Re-export throttling
-#[cfg(all(feature = "rest", not(target_arch = "wasm32")))]
+#[cfg(all(feature = "rest", native))]
 pub use reinhardt_rest::throttling::{
 	AnonRateThrottle, ScopedRateThrottle, Throttle, UserRateThrottle,
 };
 
 // Re-export signals
-#[cfg(all(feature = "core", not(target_arch = "wasm32")))]
+#[cfg(all(feature = "core", native))]
 pub use reinhardt_core::signals::{
 	M2MAction, M2MChangeEvent, Signal, m2m_changed, post_delete, post_save, pre_delete, pre_save,
 };
@@ -770,7 +845,7 @@ pub use reinhardt_core::signals::{
 // Note: reinhardt_types provides Handler, Middleware, etc. which are already re-exported via reinhardt_apps
 
 // Re-export validators
-#[cfg(all(feature = "core", not(target_arch = "wasm32")))]
+#[cfg(all(feature = "core", native))]
 pub use reinhardt_core::validators::{
 	CreditCardValidator, EmailValidator, IBANValidator, IPAddressValidator, PhoneNumberValidator,
 	UrlValidator, Validate, ValidationError as ValidatorError, ValidationErrors, ValidationResult,
@@ -778,20 +853,20 @@ pub use reinhardt_core::validators::{
 };
 
 // Re-export views
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(native)]
 pub use reinhardt_views::{
 	Context, DetailView, ListView, MultipleObjectMixin, SingleObjectMixin, View,
 };
 
 // Re-export parsers
-#[cfg(all(feature = "rest", not(target_arch = "wasm32")))]
+#[cfg(all(feature = "rest", native))]
 pub use reinhardt_rest::parsers::{
 	FileUploadParser, FormParser, JSONParser, MediaType, MultiPartParser, ParseError, ParseResult,
 	Parser,
 };
 
 // Re-export versioning
-#[cfg(all(feature = "rest", not(target_arch = "wasm32")))]
+#[cfg(all(feature = "rest", native))]
 pub use reinhardt_rest::versioning::{
 	AcceptHeaderVersioning, BaseVersioning, HostNameVersioning, NamespaceVersioning,
 	QueryParameterVersioning, RequestVersionExt, URLPathVersioning, VersioningError,
@@ -799,24 +874,24 @@ pub use reinhardt_rest::versioning::{
 };
 
 // Re-export metadata
-#[cfg(all(feature = "rest", not(target_arch = "wasm32")))]
+#[cfg(all(feature = "rest", native))]
 pub use reinhardt_rest::metadata::{
 	ActionMetadata, BaseMetadata, ChoiceInfo, FieldInfo, FieldInfoBuilder, FieldType,
 	MetadataOptions, MetadataResponse, SimpleMetadata,
 };
 
 // Re-export negotiation
-#[cfg(all(feature = "rest", not(target_arch = "wasm32")))]
+#[cfg(all(feature = "rest", native))]
 pub use reinhardt_rest::negotiation::*;
 
 // Re-export REST integration modules
-#[cfg(all(feature = "rest", not(target_arch = "wasm32")))]
+#[cfg(all(feature = "rest", native))]
 pub use reinhardt_rest::{
 	filters, metadata, negotiation, pagination, parsers, serializers, throttling, versioning,
 };
 
 // Re-export browsable API (from reinhardt-browsable-api via reinhardt-rest)
-#[cfg(all(feature = "rest", not(target_arch = "wasm32")))]
+#[cfg(all(feature = "rest", native))]
 pub use reinhardt_rest::browsable_api;
 
 // Re-export OpenAPI types
@@ -840,21 +915,22 @@ pub use reinhardt_rest::browsable_api;
 // // let openapi = ApiDoc::openapi();
 // // let json = serde_json::to_string_pretty(&openapi)?;
 // ```
-#[cfg(all(feature = "openapi", not(target_arch = "wasm32")))]
+#[cfg(all(feature = "openapi", native))]
 pub use reinhardt_rest::openapi::*;
 
 // Re-export OpenApiRouter (requires openapi-router feature)
-#[cfg(all(feature = "openapi-router", not(target_arch = "wasm32")))]
+#[cfg(all(feature = "openapi-router", native))]
 pub use reinhardt_openapi::OpenApiRouter;
 
 // Re-export shortcuts (Django-style convenience functions)
-#[cfg(all(feature = "shortcuts", not(target_arch = "wasm32")))]
-pub use reinhardt_shortcuts::{
-	get_list_or_404, get_object_or_404, redirect, render_html, render_json, render_text,
-};
+#[cfg(all(feature = "shortcuts", native))]
+pub use reinhardt_shortcuts::{redirect, render_html, render_json, render_text};
+// ORM-integrated shortcuts require database feature
+#[cfg(all(feature = "shortcuts", feature = "database", native))]
+pub use reinhardt_shortcuts::{get_list_or_404, get_object_or_404};
 
 // Re-export URL utilities
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(native)]
 pub use reinhardt_urls::routers::{
 	UrlPattern, UrlPatternWithParams, UrlReverser, include_routes as include, path, re_path,
 	reverse,
@@ -864,43 +940,35 @@ pub use reinhardt_urls::routers::{
 // See reinhardt-admin-types for type definitions
 
 // Re-export database related (database feature)
-#[cfg(all(feature = "database", not(target_arch = "wasm32")))]
+#[cfg(all(feature = "database", native))]
 pub use reinhardt_db::contenttypes::{
 	CONTENT_TYPE_REGISTRY, ContentType, ContentTypeRegistry, GenericForeignKey, GenericRelatable,
 	GenericRelationQuery, ModelType,
 };
-#[cfg(all(feature = "database", not(target_arch = "wasm32")))]
+#[cfg(all(feature = "database", native))]
 pub use reinhardt_db::migrations::{
 	FieldState, Migration, MigrationAutodetector, MigrationError, MigrationPlan, MigrationRecorder,
 	ModelState, ProjectState,
 };
 
 // Re-export cache (cache feature)
-#[cfg(all(feature = "cache", not(target_arch = "wasm32")))]
+#[cfg(all(feature = "cache", native))]
 pub use reinhardt_utils::cache::{Cache, CacheKeyBuilder, InMemoryCache};
 
 // Cache middleware is in reinhardt-middleware
-#[cfg(all(feature = "middleware", not(target_arch = "wasm32")))]
+#[cfg(all(feature = "middleware", native))]
 pub use reinhardt_middleware::CacheMiddleware;
 
-#[cfg(all(
-	feature = "cache",
-	feature = "redis-backend",
-	not(target_arch = "wasm32")
-))]
+#[cfg(all(feature = "cache", feature = "redis-backend", native))]
 pub use reinhardt_utils::cache::RedisCache;
 
 // Re-export sessions (sessions feature)
-#[cfg(all(feature = "sessions", not(target_arch = "wasm32")))]
+#[cfg(all(feature = "sessions", native))]
 pub use reinhardt_auth::sessions::{
 	CacheSessionBackend, InMemorySessionBackend, Session, SessionBackend, SessionError,
 };
 
-#[cfg(all(
-	feature = "sessions",
-	feature = "middleware",
-	not(target_arch = "wasm32")
-))]
+#[cfg(all(feature = "sessions", feature = "middleware", native))]
 pub use reinhardt_auth::sessions::{HttpSessionConfig, SameSite, SessionMiddleware};
 
 // Re-export contrib modules (contrib feature)
@@ -908,47 +976,45 @@ pub use reinhardt_auth::sessions::{HttpSessionConfig, SameSite, SessionMiddlewar
 // rather than a single "contrib" module
 
 // Re-export forms (forms feature)
-#[cfg(all(feature = "forms", not(target_arch = "wasm32")))]
+#[cfg(all(feature = "forms", native))]
 pub use reinhardt_forms::{
 	BoundField, CharField, EmailField, FieldError, FileField, Form, FormError, FormResult,
 	IntegerField, ModelForm,
 };
 
 // Re-export DI and parameters (FastAPI-style parameter extraction)
-#[cfg(all(feature = "di", not(target_arch = "wasm32")))]
+#[cfg(all(feature = "di", native))]
+#[allow(deprecated)]
 pub use reinhardt_di::injected::{Injected, OptionalInjected};
-#[cfg(all(feature = "di", not(target_arch = "wasm32")))]
+#[cfg(all(feature = "di", native))]
 pub use reinhardt_di::scope::{RequestScope, Scope, SingletonScope};
-#[cfg(all(feature = "di", not(target_arch = "wasm32")))]
+#[cfg(all(feature = "di", native))]
 pub use reinhardt_di::{
 	Depends, DependsBuilder, DiError, DiResult, Injectable, InjectionContext,
 	InjectionContextBuilder, InjectionMetadata, RequestContext,
 };
 
 // Re-export DI params - available in minimal, standard, and di features
-#[cfg(all(
-	any(feature = "minimal", feature = "standard", feature = "di"),
-	not(target_arch = "wasm32")
-))]
+#[cfg(all(any(feature = "minimal", feature = "standard", feature = "di"), native))]
 pub use reinhardt_di::params::{Body, Cookie, Header, Json, Path, Query};
 
 // Re-export template/rendering functionality from reinhardt-pages
 // Note: TemplateError was removed as Tera templating was replaced with reinhardt-pages SSR
 
 // Re-export tasks
-#[cfg(all(feature = "tasks", not(target_arch = "wasm32")))]
+#[cfg(all(feature = "tasks", native))]
 pub use reinhardt_tasks::{Scheduler, Task, TaskExecutor, TaskQueue};
 
 // Re-export test utilities
-#[cfg(all(feature = "test", not(target_arch = "wasm32")))]
+#[cfg(all(feature = "test", native))]
 pub use reinhardt_test::{APIClient, APIRequestFactory, APITestCase, TestResponse};
 
 // Re-export storage
-#[cfg(all(feature = "storage", not(target_arch = "wasm32")))]
+#[cfg(all(feature = "storage", native))]
 pub use reinhardt_utils::storage::{InMemoryStorage, LocalStorage, Storage};
 
 /// Convenience re-exports of commonly used types (server-side only).
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(native)]
 pub mod prelude {
 	// Core types - always available
 	pub use crate::{
@@ -1049,7 +1115,6 @@ pub mod prelude {
 		PasswordHasher,
 		Permission,
 		SimpleUser,
-		User,
 		// User and group management
 		UserManager,
 	};
@@ -1103,12 +1168,12 @@ pub mod prelude {
 	#[cfg(any(feature = "standard", feature = "middleware"))]
 	pub use crate::LoggingMiddleware;
 
+	// Security middleware
+	#[cfg(feature = "middleware-security")]
+	pub use crate::SecurityMiddleware;
+
 	// Sessions feature
-	#[cfg(all(
-		feature = "sessions",
-		feature = "middleware",
-		not(target_arch = "wasm32")
-	))]
+	#[cfg(all(feature = "sessions", feature = "middleware", native))]
 	pub use crate::AuthenticationMiddleware;
 	#[cfg(feature = "sessions")]
 	pub use crate::Session;
@@ -1121,15 +1186,16 @@ pub mod prelude {
 }
 
 // Re-export WebSocket types
-#[cfg(all(feature = "websockets-pages", not(target_arch = "wasm32")))]
+#[cfg(all(feature = "websockets-pages", native))]
 pub use reinhardt_websockets::integration::pages::PagesAuthenticator;
-#[cfg(all(feature = "websockets", not(target_arch = "wasm32")))]
-pub use reinhardt_websockets::room::RoomManager;
-#[cfg(all(feature = "websockets", not(target_arch = "wasm32")))]
+#[cfg(all(feature = "websockets", native))]
+pub use reinhardt_websockets::room::{BroadcastResult, Room, RoomError, RoomManager, RoomResult};
+#[cfg(all(feature = "websockets", native))]
 pub use reinhardt_websockets::{
-	ConsumerContext, Message, WebSocketConsumer, WebSocketError, WebSocketResult,
+	ConsumerContext, Message, WebSocketConnection, WebSocketConsumer, WebSocketError,
+	WebSocketResult,
 };
-#[cfg(all(feature = "websockets", not(target_arch = "wasm32")))]
+#[cfg(all(feature = "websockets", native))]
 pub use reinhardt_websockets::{
 	RouteError, RouteResult, WebSocketRoute, WebSocketRouter, clear_websocket_router,
 	get_websocket_router, register_websocket_router, reverse_websocket_url,
@@ -1139,13 +1205,13 @@ pub use reinhardt_websockets::{
 ///
 /// Re-exports [`reinhardt_query`] for building type-safe SQL queries.
 /// Requires `database` feature.
-#[cfg(all(feature = "database", not(target_arch = "wasm32")))]
+#[cfg(all(feature = "database", native))]
 pub mod query;
 
 /// Database re-exports for Model derive macro generated code.
 ///
 /// These must be available at `::reinhardt::db::*` for the macro to work correctly.
-#[cfg(all(feature = "database", not(target_arch = "wasm32")))]
+#[cfg(all(feature = "database", native))]
 pub mod db {
 	// Re-export commonly used types at module level for easier access
 	pub use reinhardt_db::DatabaseConnection;

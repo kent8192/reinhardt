@@ -19,14 +19,14 @@ use reinhardt::pages::reactive::Signal;
 use reinhardt::pages::reactive::hooks::{use_action, use_effect, use_state};
 use uuid::Uuid;
 
-#[cfg(client)]
+#[cfg(wasm)]
 use {
 	crate::apps::profile::shared::server_fn::{fetch_profile, update_profile_form},
 	reinhardt::pages::create_resource,
 	reinhardt::pages::reactive::ResourceState,
 };
 
-#[cfg(server)]
+#[cfg(native)]
 use crate::apps::profile::shared::server_fn::fetch_profile;
 
 /// Profile view component using hooks
@@ -40,7 +40,7 @@ pub fn profile_view(user_id: Uuid) -> Page {
 	let (loading, _set_loading) = use_state(true);
 	let (error, _set_error) = use_state(None::<String>);
 
-	#[cfg(client)]
+	#[cfg(wasm)]
 	{
 		let resource = create_resource(move || async move {
 			fetch_profile(user_id).await.map_err(|e| e.to_string())

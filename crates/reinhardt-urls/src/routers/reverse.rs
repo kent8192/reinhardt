@@ -3,7 +3,6 @@
 ///
 /// This module provides both string-based (runtime) and type-safe (compile-time)
 /// URL reversal mechanisms.
-// use crate::path;
 use super::pattern::validate_reverse_param;
 use super::{PathPattern, Route};
 use aho_corasick::AhoCorasick;
@@ -212,6 +211,9 @@ pub fn reverse_single_pass(pattern: &str, params: &HashMap<String, String>) -> S
 pub struct UrlReverser {
 	/// Map of route names (including namespace) to routes
 	routes: HashMap<String, Route>,
+	/// Alias map: alias name → canonical name.
+	/// Used for backward compatibility when route names change format.
+	aliases: HashMap<String, String>,
 }
 
 impl UrlReverser {
@@ -219,13 +221,31 @@ impl UrlReverser {
 	pub fn new() -> Self {
 		Self {
 			routes: HashMap::new(),
+			aliases: HashMap::new(),
 		}
 	}
 
-	/// Register a route for reverse lookup
-	pub fn register(&mut self, route: Route) {
+	/// Register a route for reverse lookup.
+	///
+	/// Returns `Err` with a descriptive message if a route with the same
+	/// fully-qualified name has already been registered.
+	pub fn register(&mut self, route: Route) -> std::result::Result<(), String> {
 		if let Some(full_name) = route.full_name() {
-			self.routes.insert(full_name, route);
+			use std::collections::hash_map::Entry;
+			match self.routes.entry(full_name.clone()) {
+				Entry::Occupied(existing) => Err(format!(
+					"Duplicate route name '{}': path '{}' conflicts with existing path '{}'",
+					full_name,
+					route.path,
+					existing.get().path
+				)),
+				Entry::Vacant(entry) => {
+					entry.insert(route);
+					Ok(())
+				}
+			}
+		} else {
+			Ok(())
 		}
 	}
 
@@ -245,12 +265,12 @@ impl UrlReverser {
 	/// use reinhardt_urls::routers::UrlReverser;
 	///
 	/// let mut reverser = UrlReverser::new();
-	/// reverser.register_path("v1:users:detail", "/api/v1/users/{id}/");
+	/// reverser.register_path("v1:users:detail", "/api/v1/users/{id}/").unwrap();
 	///
 	/// let url = reverser.reverse_with("v1:users:detail", &[("id", "123")]).unwrap();
 	/// assert_eq!(url, "/api/v1/users/123/");
 	/// ```
-	pub fn register_path(&mut self, name: &str, path: &str) {
+	pub fn register_path(&mut self, name: &str, path: &str) -> std::result::Result<(), String> {
 		// Create a dummy handler for the route
 		// The handler is never used for URL reversal
 		use reinhardt_http::Handler;
@@ -285,7 +305,19 @@ impl UrlReverser {
 			route
 		};
 
-		self.routes.insert(name.to_string(), route);
+		use std::collections::hash_map::Entry;
+		match self.routes.entry(name.to_string()) {
+			Entry::Occupied(existing) => Err(format!(
+				"Duplicate route name '{}': path '{}' conflicts with existing path '{}'",
+				name,
+				path,
+				existing.get().path
+			)),
+			Entry::Vacant(entry) => {
+				entry.insert(route);
+				Ok(())
+			}
+		}
 	}
 
 	/// Reverse a URL name to a path with parameters
@@ -318,7 +350,7 @@ impl UrlReverser {
 	/// let route = Route::new("/users/{id}/", handler)
 	///     .with_name("detail")
 	///     .with_namespace("users");
-	/// reverser.register(route);
+	/// reverser.register(route).unwrap();
 	///
 	/// let mut params = HashMap::new();
 	/// params.insert("id".to_string(), "123".to_string());
@@ -327,10 +359,17 @@ impl UrlReverser {
 	/// assert_eq!(url, "/users/123/");
 	/// ```
 	pub fn reverse(&self, name: &str, params: &HashMap<String, String>) -> ReverseResult<String> {
-		let route = self
-			.routes
-			.get(name)
-			.ok_or_else(|| Error::NotFound(name.to_string()))?;
+		// Prefer canonical route name; fall back to alias resolution only
+		// when the direct lookup misses. This prevents an alias entry from
+		// shadowing a real route with the same key.
+		let route = if let Some(r) = self.routes.get(name) {
+			r
+		} else {
+			let resolved_name = self.aliases.get(name).map(|s| s.as_str()).unwrap_or(name);
+			self.routes
+				.get(resolved_name)
+				.ok_or_else(|| Error::NotFound(name.to_string()))?
+		};
 
 		// Parse the path pattern to find parameters
 		let pattern = PathPattern::new(&route.path)
@@ -380,7 +419,7 @@ impl UrlReverser {
 	/// let mut reverser = UrlReverser::new();
 	/// let route = Route::new("/users/{id}/", handler)
 	///     .with_name("detail");
-	/// reverser.register(route);
+	/// reverser.register(route).unwrap();
 	///
 	/// let url = reverser.reverse_with("detail", &[("id", "123")]).unwrap();
 	/// assert_eq!(url, "/users/123/");
@@ -406,6 +445,18 @@ impl UrlReverser {
 	/// Get all registered route names
 	pub fn route_names(&self) -> Vec<String> {
 		self.routes.keys().cloned().collect()
+	}
+
+	/// Register an alias for a route name.
+	///
+	/// `reverse(alias)` will resolve to the same URL as `reverse(canonical)`.
+	/// If the alias already exists, it is overwritten (last-write-wins).
+	///
+	/// The canonical target is resolved lazily — if the canonical route does
+	/// not exist at the time of `reverse()`, the lookup returns `NotFound`.
+	pub fn add_name_alias(&mut self, alias: &str, canonical: &str) {
+		self.aliases
+			.insert(alias.to_string(), canonical.to_string());
 	}
 }
 
@@ -647,7 +698,7 @@ mod tests {
 
 		let route = Route::new(path!("/users/"), Arc::new(TestHandler)).with_name("users-list");
 
-		reverser.register(route);
+		reverser.register(route).unwrap();
 
 		let url = reverser.reverse("users-list", &HashMap::new()).unwrap();
 		assert_eq!(url, path!("/users/"));
@@ -660,7 +711,7 @@ mod tests {
 		let route =
 			Route::new(path!("/users/{id}/"), Arc::new(TestHandler)).with_name("users-detail");
 
-		reverser.register(route);
+		reverser.register(route).unwrap();
 
 		let mut params = HashMap::new();
 		params.insert("id".to_string(), "123".to_string());
@@ -677,7 +728,7 @@ mod tests {
 			.with_name("detail")
 			.with_namespace("users");
 
-		reverser.register(route);
+		reverser.register(route).unwrap();
 
 		let mut params = HashMap::new();
 		params.insert("id".to_string(), "456".to_string());
@@ -693,7 +744,7 @@ mod tests {
 		let route =
 			Route::new(path!("/users/{id}/"), Arc::new(TestHandler)).with_name("users-detail");
 
-		reverser.register(route);
+		reverser.register(route).unwrap();
 
 		let result = reverser.reverse("users-detail", &HashMap::new());
 		assert!(result.is_err());
@@ -716,7 +767,7 @@ mod tests {
 		let route = Route::new(path!("/users/{id}/posts/{post_id}/"), Arc::new(TestHandler))
 			.with_name("user-posts");
 
-		reverser.register(route);
+		reverser.register(route).unwrap();
 
 		let url = reverser
 			.reverse_with("user-posts", &[("id", "123"), ("post_id", "456")])
@@ -731,7 +782,7 @@ mod tests {
 
 		let route = Route::new(path!("/users/"), Arc::new(TestHandler)).with_name("users-list");
 
-		reverser.register(route);
+		reverser.register(route).unwrap();
 
 		assert!(reverser.has_route("users-list"));
 		assert!(!reverser.has_route("nonexistent"));
@@ -1245,7 +1296,7 @@ mod tests {
 		let mut reverser = UrlReverser::new();
 		let route =
 			Route::new(path!("/users/{id}/"), Arc::new(TestHandler)).with_name("users-detail");
-		reverser.register(route);
+		reverser.register(route).unwrap();
 
 		let mut params = HashMap::new();
 		params.insert("id".to_string(), "123/../../admin".to_string());
@@ -1266,7 +1317,7 @@ mod tests {
 		let mut reverser = UrlReverser::new();
 		let route =
 			Route::new(path!("/users/{id}/"), Arc::new(TestHandler)).with_name("users-detail");
-		reverser.register(route);
+		reverser.register(route).unwrap();
 
 		let mut params = HashMap::new();
 		params.insert("id".to_string(), "123?admin=true".to_string());
@@ -1287,7 +1338,7 @@ mod tests {
 		let mut reverser = UrlReverser::new();
 		let route =
 			Route::new(path!("/users/{id}/"), Arc::new(TestHandler)).with_name("users-detail");
-		reverser.register(route);
+		reverser.register(route).unwrap();
 
 		let mut params = HashMap::new();
 		params.insert("id".to_string(), "123#admin".to_string());
@@ -1305,7 +1356,7 @@ mod tests {
 		let mut reverser = UrlReverser::new();
 		let route =
 			Route::new(path!("/users/{id}/"), Arc::new(TestHandler)).with_name("users-detail");
-		reverser.register(route);
+		reverser.register(route).unwrap();
 
 		let mut params = HashMap::new();
 		params.insert("id".to_string(), "123%2f..%2fadmin".to_string());
@@ -1326,7 +1377,7 @@ mod tests {
 		let mut reverser = UrlReverser::new();
 		let route =
 			Route::new(path!("/users/{id}/"), Arc::new(TestHandler)).with_name("users-detail");
-		reverser.register(route);
+		reverser.register(route).unwrap();
 
 		let mut params = HashMap::new();
 		params.insert("id".to_string(), "456".to_string());
@@ -1380,7 +1431,7 @@ mod tests {
 		let mut reverser = UrlReverser::new();
 		let route =
 			Route::new(path!("/users/{id}/"), Arc::new(TestHandler)).with_name("users-detail");
-		reverser.register(route);
+		reverser.register(route).unwrap();
 
 		// Act
 		let result = reverser.reverse_with("users-detail", &[("id", "123?admin=true")]);
@@ -1389,6 +1440,175 @@ mod tests {
 		assert!(
 			result.is_err(),
 			"reverse_with should reject query injection"
+		);
+	}
+
+	// ===================================================================
+	// Duplicate route name detection tests (Issue #3462)
+	// ===================================================================
+
+	#[test]
+	fn test_register_duplicate_name_returns_error() {
+		// Arrange
+		let mut reverser = UrlReverser::new();
+		let route_a = Route::new(path!("/users/"), Arc::new(TestHandler)).with_name("users-list");
+		let route_b = Route::new(path!("/people/"), Arc::new(TestHandler)).with_name("users-list");
+
+		// Act
+		let first = reverser.register(route_a);
+		let second = reverser.register(route_b);
+
+		// Assert
+		assert!(first.is_ok());
+		assert!(second.is_err());
+		let err = second.unwrap_err();
+		assert!(err.contains("Duplicate route name 'users-list'"));
+		assert!(err.contains("/people/"));
+		assert!(err.contains("/users/"));
+	}
+
+	#[test]
+	fn test_register_path_duplicate_name_returns_error() {
+		// Arrange
+		let mut reverser = UrlReverser::new();
+
+		// Act
+		let first = reverser.register_path("v1:users:detail", "/api/v1/users/{id}/");
+		let second = reverser.register_path("v1:users:detail", "/api/v1/people/{id}/");
+
+		// Assert
+		assert!(first.is_ok());
+		assert!(second.is_err());
+		let err = second.unwrap_err();
+		assert!(err.contains("Duplicate route name 'v1:users:detail'"));
+	}
+
+	#[test]
+	fn test_register_unique_names_succeeds() {
+		// Arrange
+		let mut reverser = UrlReverser::new();
+		let route_a = Route::new(path!("/users/"), Arc::new(TestHandler)).with_name("users-list");
+		let route_b = Route::new(path!("/posts/"), Arc::new(TestHandler)).with_name("posts-list");
+
+		// Act & Assert
+		assert!(reverser.register(route_a).is_ok());
+		assert!(reverser.register(route_b).is_ok());
+	}
+
+	// --- Name alias tests (Issue #3526) ---
+
+	#[test]
+	fn test_alias_resolves_to_canonical() {
+		// Arrange
+		let mut reverser = UrlReverser::new();
+		reverser
+			.register_path("users:list", path!("/users/"))
+			.unwrap();
+		reverser.add_name_alias("user_list", "users:list");
+
+		// Act
+		let result = reverser
+			.reverse_with("user_list", &[] as &[(&str, &str)])
+			.unwrap();
+
+		// Assert
+		assert_eq!(result, path!("/users/"));
+	}
+
+	#[test]
+	fn test_alias_and_canonical_return_same_result() {
+		// Arrange
+		let mut reverser = UrlReverser::new();
+		reverser
+			.register_path("users:detail", path!("/users/{id}/"))
+			.unwrap();
+		reverser.add_name_alias("user_detail", "users:detail");
+
+		// Act
+		let canonical = reverser
+			.reverse_with("users:detail", &[("id", "42")])
+			.unwrap();
+		let aliased = reverser
+			.reverse_with("user_detail", &[("id", "42")])
+			.unwrap();
+
+		// Assert
+		assert_eq!(canonical, aliased);
+	}
+
+	#[test]
+	fn test_alias_target_not_found() {
+		// Arrange
+		let mut reverser = UrlReverser::new();
+		reverser.add_name_alias("old_name", "nonexistent:route");
+
+		// Act
+		let result = reverser.reverse_with("old_name", &[] as &[(&str, &str)]);
+
+		// Assert
+		assert!(result.is_err());
+	}
+
+	#[test]
+	fn test_duplicate_alias_last_write_wins() {
+		// Arrange
+		let mut reverser = UrlReverser::new();
+		reverser
+			.register_path("users:list", path!("/users/"))
+			.unwrap();
+		reverser
+			.register_path("posts:list", path!("/posts/"))
+			.unwrap();
+
+		// Act
+		reverser.add_name_alias("the_list", "users:list");
+		reverser.add_name_alias("the_list", "posts:list");
+		let result = reverser
+			.reverse_with("the_list", &[] as &[(&str, &str)])
+			.unwrap();
+
+		// Assert
+		assert_eq!(result, path!("/posts/"));
+	}
+
+	#[test]
+	fn test_alias_does_not_shadow_canonical_route() {
+		// Arrange — register route "X", then add alias "X" -> "Y" (same key as route)
+		let mut reverser = UrlReverser::new();
+		reverser
+			.register_path("users:list", path!("/users/"))
+			.unwrap();
+		reverser
+			.register_path("posts:list", path!("/posts/"))
+			.unwrap();
+		// Alias "users:list" -> "posts:list" should NOT shadow the real "users:list" route
+		reverser.add_name_alias("users:list", "posts:list");
+
+		// Act
+		let result = reverser.reverse("users:list", &HashMap::new()).unwrap();
+
+		// Assert — canonical route takes precedence over alias
+		assert_eq!(result, "/users/");
+	}
+
+	#[test]
+	fn test_alias_with_params() {
+		// Arrange
+		let mut reverser = UrlReverser::new();
+		reverser
+			.register_path("users:detail", path!("/users/{id}/"))
+			.unwrap();
+		reverser.add_name_alias("user_detail", "users:detail");
+
+		// Act
+		let result = reverser
+			.reverse_with("user_detail", &[("id", "foo/bar")])
+			.unwrap_err();
+
+		// Assert — path separators are rejected by validation
+		assert!(
+			matches!(result, Error::Validation(_)),
+			"expected Validation error for dangerous param"
 		);
 	}
 }

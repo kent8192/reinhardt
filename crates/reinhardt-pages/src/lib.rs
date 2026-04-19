@@ -38,7 +38,7 @@
 //!
 //! ### Basic Component
 //!
-//! ```ignore
+//! ```no_run
 //! use reinhardt_pages::{Signal, Page, page};
 //!
 //! fn counter() -> Page {
@@ -163,7 +163,7 @@ pub mod csrf;
 pub mod form_generated;
 // FormComponent requires reinhardt-forms which is not WASM-compatible yet
 // For now, client-side forms should use PageElement
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(native)]
 pub mod form;
 
 // API and communication
@@ -204,21 +204,23 @@ pub use builder::{
 	},
 };
 pub use callback::{Callback, IntoEventHandler, event_handler, into_event_handler};
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(native)]
 pub use component::DummyEvent;
+#[cfg(wasm)]
+pub use component::cleanup_reactive_nodes;
 pub use component::{
 	Component, Head, IntoPage, LinkTag, MetaTag, Page, PageElement, PageExt, Props, ScriptTag,
 	StyleTag,
 };
 pub use csrf::{CsrfManager, get_csrf_token};
 pub use dom::{Document, Element, EventHandle, EventType, document};
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(native)]
 pub use form::{FormBinding, FormComponent};
 // Static form metadata types (always available, used by form! macro)
 pub use form_generated::{StaticFieldMetadata, StaticFormMetadata};
 pub use hydration::{HydrationContext, HydrationError, hydrate};
 pub use reactive::{Effect, Memo, Resource, ResourceState, Signal};
-#[cfg(target_arch = "wasm32")]
+#[cfg(wasm)]
 pub use reactive::{create_resource, create_resource_with_deps};
 // Re-export Context system
 pub use reactive::{
@@ -234,7 +236,7 @@ pub use reactive::{
 	use_optimistic, use_reducer, use_ref, use_shared_state, use_state, use_sync_external_store,
 	use_transition,
 };
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(native)]
 pub use reinhardt_forms::{
 	Widget,
 	wasm_compat::{FieldMetadata, FormMetadata},
@@ -248,6 +250,23 @@ pub use static_resolver::{init_static_resolver, is_initialized, resolve_static};
 pub use reinhardt_pages_macros::form;
 pub use reinhardt_pages_macros::head;
 pub use reinhardt_pages_macros::page;
+
+// Private re-exports used by macro-generated code. Not part of the public API.
+#[doc(hidden)]
+pub mod __private {
+    // `reqwest` is enabled for all wasm32 targets (including WASI, wasm32-unknown-unknown, etc.)
+    // because the HTTP client is needed on any wasm32 platform.
+    #[cfg(target_arch = "wasm32")]
+    pub use reqwest;
+
+    // `tracing` is enabled for all targets *except* browser wasm (wasm32-unknown-unknown).
+    // Browser wasm uses a different logging mechanism, so tracing is intentionally excluded there.
+    // The cfg condition `not(all(target_family = "wasm", target_os = "unknown"))` precisely
+    // targets browser wasm, which reports target_family = "wasm" and target_os = "unknown".
+    // This is intentionally different from the `reqwest` cfg above.
+    #[cfg(not(all(target_family = "wasm", target_os = "unknown")))]
+    pub use tracing;
+}
 
 // Logging macros are automatically exported via #[macro_export]
 // Users can access them as: reinhardt_pages::debug_log!, reinhardt_pages::info_log!, etc.

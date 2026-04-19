@@ -2,17 +2,21 @@
 name = "reinhardt-integration-tests"
 version = "0.1.0-rc.1"
 edition.workspace = true
+rust-version.workspace = true
 publish = false
 autotests = true
 
 [dependencies]
 # Main reinhardt facade crate for proc macro path resolution.
 # Proc macros generate code with absolute paths like ::reinhardt::db::orm::Model
-# This dependency makes those paths resolvable in test files.
-reinhardt = { workspace = true, features = ["full", "openapi-router"] }
+# or ::reinhardt::pages::server_fn::ServerFnError. This dependency makes those
+# paths resolvable in test files.
+# The `pages` feature is required so that `::reinhardt::pages::...` references
+# emitted by the `#[server_fn]` macro resolve in trybuild UI tests.
+reinhardt = { workspace = true, features = ["full", "openapi-router", "pages"] }
 
 # Reinhardt crates
-reinhardt-apps = { workspace = true }
+reinhardt-apps = { workspace = true, features = ["testing"] }
 reinhardt-core = { workspace = true, features = ["exception", "messages", "negotiation", "pagination", "parsers", "security", "signals", "types", "validators"] }
 reinhardt-auth = { workspace = true, features = [
   "argon2-hasher",
@@ -51,7 +55,7 @@ reinhardt-test = { workspace = true, features = ["testcontainers"] }
 reinhardt-urls = { workspace = true }
 reinhardt-conf = { workspace = true }
 reinhardt-admin = { workspace = true, features = ["core"] }
-reinhardt-pages = { workspace = true }
+reinhardt-pages = { workspace = true, features = ["testing", "static", "urls"] }
 reinhardt-commands = { workspace = true }
 
 # HTTP primitives (used in lib.rs make_request helpers)
@@ -127,8 +131,10 @@ image = { workspace = true }
 url = { workspace = true }
 rust_decimal = { workspace = true }
 async-stream = "0.3"
+multer = "3.1"
 regex = { workspace = true }
 tracing = { workspace = true }
+trybuild = { workspace = true }
 
 [features]
 default = ["postgres", "sqlite", "caching", "hot-reload", "dynamic-redis"]

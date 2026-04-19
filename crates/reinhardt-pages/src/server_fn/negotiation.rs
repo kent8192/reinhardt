@@ -12,7 +12,7 @@
 //!
 //! ## Example
 //!
-//! ```ignore
+//! ```no_run
 //! use reinhardt_pages::server_fn::negotiation::convert_body_for_codec;
 //!
 //! // Convert a URL-encoded form body to JSON for a JSON-codec server function

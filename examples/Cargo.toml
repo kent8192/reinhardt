@@ -1,14 +1,9 @@
 [workspace]
 resolver = "2"
 members = [
-	"examples-hello-world",
-	"examples-rest-api",
-	"examples-database-integration",
 	"examples-tutorial-basis",
 	"examples-tutorial-rest",
-	"examples-github-issues",
 	"examples-twitter",
-	"examples-di-showcase",
 ]
 
 # Note: Each example has a binary named "manage"
@@ -38,3 +33,14 @@ chrono = { version = "0.4.42", features = ["serde"] }
 
 # Error handling
 anyhow = "1.0.100"
+
+# Shared lint configuration for all examples.
+# reinhardt_macros generates code with cfg(native), cfg(wasm) that are defined
+# in the main workspace but not in the examples workspace. Declare them here so
+# check-cfg does not reject them.
+[workspace.lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = [
+	'cfg(native)',
+	'cfg(wasm)',
+	'cfg(with_reinhardt)',
+] }

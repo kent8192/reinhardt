@@ -1,21 +1,32 @@
 //! Cache settings fragment
 //!
-//! Provides composable cache configuration as a [`SettingsFragment`].
+//! Provides composable cache configuration as a [`SettingsFragment`](crate::settings::fragment::SettingsFragment).
 
-use super::fragment::{HasSettings, SettingsFragment};
+use reinhardt_core::macros::settings;
 use serde::{Deserialize, Serialize};
+
+fn default_backend() -> String {
+	"memory".to_string()
+}
+
+fn default_timeout() -> u64 {
+	300
+}
 
 /// Cache configuration fragment.
 ///
 /// Controls the cache backend, location, and default timeout.
+#[settings(fragment = true, section = "cache")]
 #[non_exhaustive]
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct CacheSettings {
 	/// Cache backend type (e.g., `"memory"`, `"redis"`, `"database"`).
+	#[serde(default = "default_backend")]
 	pub backend: String,
 	/// Backend-specific connection location or URL.
 	pub location: Option<String>,
 	/// Default cache entry timeout in seconds.
+	#[serde(default = "default_timeout")]
 	pub timeout: u64,
 }
 
@@ -29,29 +40,10 @@ impl Default for CacheSettings {
 	}
 }
 
-impl SettingsFragment for CacheSettings {
-	type Accessor = dyn HasCacheSettings;
-
-	fn section() -> &'static str {
-		"cache"
-	}
-}
-
-/// Trait for settings containers that include cache configuration.
-pub trait HasCacheSettings {
-	/// Returns a reference to the cache settings.
-	fn cache(&self) -> &CacheSettings;
-}
-
-impl<T: HasSettings<CacheSettings>> HasCacheSettings for T {
-	fn cache(&self) -> &CacheSettings {
-		self.get_settings()
-	}
-}
-
 #[cfg(test)]
 mod tests {
 	use super::*;
+	use crate::settings::fragment::SettingsFragment;
 	use rstest::rstest;
 
 	#[rstest]

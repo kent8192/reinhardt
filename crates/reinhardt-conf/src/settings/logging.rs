@@ -1,19 +1,30 @@
 //! Logging settings fragment
 //!
-//! Provides composable logging configuration as a [`SettingsFragment`].
+//! Provides composable logging configuration as a [`SettingsFragment`](crate::settings::fragment::SettingsFragment).
 
-use super::fragment::{HasSettings, SettingsFragment};
+use reinhardt_core::macros::settings;
 use serde::{Deserialize, Serialize};
+
+fn default_level() -> String {
+	"info".to_string()
+}
+
+fn default_format() -> String {
+	"text".to_string()
+}
 
 /// Logging configuration fragment.
 ///
 /// Controls the log level and output format.
+#[settings(fragment = true, section = "logging")]
 #[non_exhaustive]
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct LoggingSettings {
 	/// Log level (e.g., `"trace"`, `"debug"`, `"info"`, `"warn"`, `"error"`).
+	#[serde(default = "default_level")]
 	pub level: String,
 	/// Log output format (e.g., `"text"`, `"json"`).
+	#[serde(default = "default_format")]
 	pub format: String,
 }
 
@@ -26,29 +37,10 @@ impl Default for LoggingSettings {
 	}
 }
 
-impl SettingsFragment for LoggingSettings {
-	type Accessor = dyn HasLoggingSettings;
-
-	fn section() -> &'static str {
-		"logging"
-	}
-}
-
-/// Trait for settings containers that include logging configuration.
-pub trait HasLoggingSettings {
-	/// Returns a reference to the logging settings.
-	fn logging(&self) -> &LoggingSettings;
-}
-
-impl<T: HasSettings<LoggingSettings>> HasLoggingSettings for T {
-	fn logging(&self) -> &LoggingSettings {
-		self.get_settings()
-	}
-}
-
 #[cfg(test)]
 mod tests {
 	use super::*;
+	use crate::settings::fragment::SettingsFragment;
 	use rstest::rstest;
 
 	#[rstest]

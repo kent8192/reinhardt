@@ -14,6 +14,9 @@ use async_trait::async_trait;
 /// A blanket implementation is provided for all types implementing
 /// [`FullUser`](reinhardt_auth::FullUser), so [`DefaultUser`](reinhardt_auth::DefaultUser)
 /// and any custom user model with `FullUser` will automatically satisfy this trait.
+///
+/// For simpler user models that only implement `BaseUser` (without `FullUser`),
+/// this trait can be implemented manually to enable admin authentication.
 pub trait AdminUser: Send + Sync {
 	/// Whether the user account is active
 	fn is_active(&self) -> bool;
@@ -879,5 +882,80 @@ mod tests {
 		assert_eq!(add, true);
 		assert_eq!(change, false);
 		assert_eq!(delete, false);
+	}
+
+	// ==================== Decision table: allow_all controls permissions ====================
+
+	#[rstest]
+	#[case::allow_all_true(true, true)]
+	#[case::allow_all_false(false, false)]
+	#[tokio::test]
+	async fn test_allow_all_controls_view_permission(
+		#[case] allow_all: bool,
+		#[case] expected: bool,
+	) {
+		// Arrange
+		let admin = ModelAdminConfig::builder()
+			.model_name("PermTest")
+			.allow_all(allow_all)
+			.build()
+			.unwrap();
+		let user = TestAdminUser::new();
+
+		// Act
+		let result = admin.has_view_permission(&user as &dyn AdminUser).await;
+
+		// Assert
+		assert_eq!(result, expected);
+	}
+
+	// ==================== Boundary value: list_per_page override ====================
+
+	#[rstest]
+	#[case::with_list_per_page(Some(50), Some(50))]
+	#[case::without_list_per_page(None, None)]
+	fn test_list_per_page_override(
+		#[case] override_value: Option<usize>,
+		#[case] expected: Option<usize>,
+	) {
+		// Arrange
+		let mut builder = ModelAdminConfig::builder().model_name("PageTest");
+		if let Some(v) = override_value {
+			builder = builder.list_per_page(v);
+		}
+		let admin = builder.build().unwrap();
+
+		// Act
+		let result = admin.list_per_page();
+
+		// Assert
+		assert_eq!(result, expected);
+	}
+
+	// ==================== Boundary value: builder model_name validation ====================
+
+	#[rstest]
+	#[case::missing_model_name(true)]
+	#[case::valid_model_name(false)]
+	fn test_builder_model_name_validation(#[case] should_error: bool) {
+		// Arrange
+		let builder = if should_error {
+			// Do not set model_name to trigger error
+			ModelAdminConfig::builder()
+		} else {
+			ModelAdminConfig::builder().model_name("User")
+		};
+
+		// Act
+		let result = builder.build();
+
+		// Assert
+		assert_eq!(
+			result.is_err(),
+			should_error,
+			"should_error={}, got {:?}",
+			should_error,
+			result
+		);
 	}
 }

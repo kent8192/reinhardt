@@ -2,13 +2,15 @@
 //!
 //! Provides detail view operations for admin models.
 
-use super::user::AdminDefaultUser;
+#[cfg(server)]
+use super::admin_auth::AdminAuthenticatedUser;
 use crate::adapters::{AdminDatabase, AdminRecord, AdminSite, DetailResponse};
-use reinhardt_auth::AuthUser;
-use reinhardt_pages::server_fn::{ServerFnError, ServerFnRequest, server_fn};
-use std::sync::Arc;
+use reinhardt_di::Depends;
+#[cfg(server)]
+use reinhardt_pages::server_fn::ServerFnRequest;
+use reinhardt_pages::server_fn::{ServerFnError, server_fn};
 
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(server)]
 use super::error::{AdminAuth, MapServerFnError, ModelPermission};
 
 /// Get detail view data for a single model instance
@@ -38,20 +40,16 @@ use super::error::{AdminAuth, MapServerFnError, ModelPermission};
 pub async fn get_detail(
 	model_name: String,
 	id: String,
-	#[inject] site: Arc<AdminSite>,
-	#[inject] db: Arc<AdminDatabase>,
+	#[inject] site: Depends<AdminSite>,
+	#[inject] db: Depends<AdminDatabase>,
 	#[inject] http_request: ServerFnRequest,
-	#[inject] AuthUser(user): AuthUser<AdminDefaultUser>,
+	#[inject] AdminAuthenticatedUser(user): AdminAuthenticatedUser,
 ) -> Result<DetailResponse, ServerFnError> {
 	// Authentication and authorization check
 	let auth = AdminAuth::from_request(&http_request);
 	let model_admin = site.get_model_admin(&model_name).map_server_fn_error()?;
-	auth.require_model_permission(
-		model_admin.as_ref(),
-		&user as &dyn crate::core::AdminUser,
-		ModelPermission::View,
-	)
-	.await?;
+	auth.require_model_permission(model_admin.as_ref(), user.as_ref(), ModelPermission::View)
+		.await?;
 	let table_name = model_admin.table_name();
 	let pk_field = model_admin.pk_field();
 

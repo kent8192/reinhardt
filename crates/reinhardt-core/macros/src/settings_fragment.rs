@@ -127,9 +127,10 @@ fn strip_setting_attrs(attrs: &[syn::Attribute]) -> Vec<&syn::Attribute> {
 pub(crate) fn settings_fragment_impl(args: TokenStream, input: ItemStruct) -> Result<TokenStream> {
 	let conf_crate = crate::crate_paths::get_reinhardt_conf_crate();
 
-	// Parse section and default_policy from args
+	// Parse section, default_policy, and validate from args
 	let mut section: Option<String> = None;
 	let mut default_policy: Option<String> = None;
+	let mut generate_validation: Option<bool> = None;
 
 	let parser = syn::meta::parser(|meta| {
 		if meta.path.is_ident("fragment") {
@@ -150,9 +151,13 @@ pub(crate) fn settings_fragment_impl(args: TokenStream, input: ItemStruct) -> Re
 			}
 			default_policy = Some(val);
 			Ok(())
+		} else if meta.path.is_ident("validate") {
+			let lit: syn::LitBool = meta.value()?.parse()?;
+			generate_validation = Some(lit.value());
+			Ok(())
 		} else {
 			Err(meta.error(
-				"expected `fragment = true`, `section = \"...\"`, or `default_policy = \"...\"`",
+				"expected `fragment = true`, `section = \"...\"`, `default_policy = \"...\"`, or `validate = true|false`",
 			))
 		}
 	});
@@ -168,6 +173,9 @@ pub(crate) fn settings_fragment_impl(args: TokenStream, input: ItemStruct) -> Re
 
 	// Default policy: "optional" for backward compatibility
 	let default_policy_is_required = default_policy.as_deref() == Some("required");
+
+	// Whether to generate SettingsValidation impl (default: true)
+	let should_generate_validation = generate_validation.unwrap_or(true);
 
 	let struct_name = &input.ident;
 	let vis = &input.vis;
@@ -324,6 +332,36 @@ pub(crate) fn settings_fragment_impl(args: TokenStream, input: ItemStruct) -> Re
 
 	let field_count = field_policy_entries.len();
 
+	// Conditionally generate SettingsValidation impl and validate bridge.
+	//
+	// When `validate = true` (default): generate a no-op SettingsValidation impl.
+	//   SettingsFragment uses its default no-op validate().
+	// When `validate = false`: the user provides a custom SettingsValidation impl.
+	//   Generate a SettingsFragment::validate() that delegates to SettingsValidation.
+	let validation_impl = if should_generate_validation {
+		quote! {
+			impl #conf_crate::settings::fragment::SettingsValidation for #struct_name {}
+		}
+	} else {
+		quote! {}
+	};
+
+	// When custom validation is provided (validate = false), bridge
+	// SettingsFragment::validate to the user's SettingsValidation impl
+	// so that callers using SettingsFragment::validate get custom logic.
+	let validate_override = if !should_generate_validation {
+		quote! {
+			fn validate(
+				&self,
+				profile: &#conf_crate::settings::profile::Profile,
+			) -> #conf_crate::settings::validation::ValidationResult {
+				<Self as #conf_crate::settings::fragment::SettingsValidation>::validate(self, profile)
+			}
+		}
+	} else {
+		quote! {}
+	};
+
 	Ok(quote! {
 		#derive_attr
 		#(#attrs)*
@@ -331,12 +369,16 @@ pub(crate) fn settings_fragment_impl(args: TokenStream, input: ItemStruct) -> Re
 
 		#(#default_fn_defs)*
 
+		#validation_impl
+
 		impl #conf_crate::settings::fragment::SettingsFragment for #struct_name {
 			type Accessor = dyn #trait_name;
 
 			fn section() -> &'static str {
 				#section
 			}
+
+			#validate_override
 
 			fn field_policies() -> &'static [#conf_crate::settings::policy::FieldPolicy] {
 				static POLICIES: [#conf_crate::settings::policy::FieldPolicy; #field_count] = [

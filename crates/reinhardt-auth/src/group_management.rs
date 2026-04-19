@@ -3,9 +3,34 @@
 //! Provides group management and permission assignment functionality.
 
 use std::collections::{HashMap, HashSet};
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 use tokio::sync::RwLock;
 use uuid::Uuid;
+
+// ---------------------------------------------------------------------------
+// Global GroupManager registry
+// ---------------------------------------------------------------------------
+
+static GLOBAL_GROUP_MANAGER: OnceLock<Arc<GroupManager>> = OnceLock::new();
+
+/// Register a global `GroupManager` instance.
+///
+/// Once registered, `PermissionsMixin::get_group_permissions()` will
+/// automatically resolve group permissions via this manager.
+///
+/// # Panics
+///
+/// Panics if called more than once (the global slot is write-once).
+pub fn register_group_manager(manager: Arc<GroupManager>) {
+	GLOBAL_GROUP_MANAGER
+		.set(manager)
+		.expect("GroupManager has already been registered");
+}
+
+/// Retrieve the global `GroupManager`, if registered.
+pub fn get_group_manager() -> Option<&'static Arc<GroupManager>> {
+	GLOBAL_GROUP_MANAGER.get()
+}
 
 /// Group management error
 #[non_exhaustive]
@@ -42,6 +67,9 @@ pub type GroupManagementResult<T> = Result<T, GroupManagementError>;
 
 /// User group
 ///
+/// When the `database` feature is enabled, this struct is also a database model
+/// mapped to the `auth_group` table.
+///
 /// # Examples
 ///
 /// ```
@@ -49,20 +77,28 @@ pub type GroupManagementResult<T> = Result<T, GroupManagementError>;
 /// use uuid::Uuid;
 ///
 /// let group = Group {
-///     id: Uuid::new_v4(),
+///     id: Uuid::now_v7(),
 ///     name: "Editors".to_string(),
 ///     description: Some("Content editors".to_string()),
 /// };
 ///
 /// assert_eq!(group.name, "Editors");
 /// ```
+#[cfg_attr(
+	feature = "database",
+	reinhardt_core::macros::model(app_label = "auth", table_name = "auth_group")
+)]
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[cfg_attr(feature = "database", derive(serde::Serialize, serde::Deserialize))]
 pub struct Group {
 	/// Unique identifier for the group.
+	#[cfg_attr(feature = "database", field(primary_key = true))]
 	pub id: Uuid,
 	/// Name of the group.
+	#[cfg_attr(feature = "database", field(max_length = 150, unique = true))]
 	pub name: String,
 	/// Optional description of the group's purpose.
+	#[cfg_attr(feature = "database", field(max_length = 500, null = true))]
 	pub description: Option<String>,
 }
 
@@ -122,6 +158,7 @@ pub struct CreateGroupData {
 ///     assert!(perms.contains(&"blog.add_article".to_string()));
 /// }
 /// ```
+#[derive(Debug)]
 pub struct GroupManager {
 	groups: Arc<RwLock<HashMap<Uuid, Group>>>,
 	group_index: Arc<RwLock<HashMap<String, Uuid>>>,
@@ -183,7 +220,7 @@ impl GroupManager {
 
 		// Create group
 		let group = Group {
-			id: Uuid::new_v4(),
+			id: Uuid::now_v7(),
 			name: data.name.clone(),
 			description: data.description,
 		};
@@ -636,6 +673,37 @@ impl GroupManager {
 	pub async fn list_groups(&self) -> Vec<Group> {
 		let groups = self.groups.read().await;
 		groups.values().cloned().collect()
+	}
+
+	/// Synchronously resolve permissions for the given group names.
+	///
+	/// Uses `try_read()` for non-blocking access to internal state.
+	/// Returns an empty set if the lock is held by a writer.
+	///
+	/// This method is designed for use in synchronous contexts such as
+	/// `PermissionsMixin::get_group_permissions()`.
+	pub fn get_permissions_for_groups_sync(
+		&self,
+		group_names: &[String],
+	) -> std::collections::HashSet<String> {
+		let index = match self.group_index.try_read() {
+			Ok(guard) => guard,
+			Err(_) => return std::collections::HashSet::new(),
+		};
+		let perms = match self.group_permissions.try_read() {
+			Ok(guard) => guard,
+			Err(_) => return std::collections::HashSet::new(),
+		};
+
+		let mut result = std::collections::HashSet::new();
+		for name in group_names {
+			if let Some(group_id) = index.get(name)
+				&& let Some(group_perms) = perms.get(group_id)
+			{
+				result.extend(group_perms.iter().cloned());
+			}
+		}
+		result
 	}
 }
 

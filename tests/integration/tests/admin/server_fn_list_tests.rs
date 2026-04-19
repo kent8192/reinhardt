@@ -8,10 +8,10 @@ use reinhardt_admin::adapters::ListQueryParams;
 use reinhardt_admin::core::AdminRecord;
 use reinhardt_admin::core::{AdminDatabase, AdminSite};
 use reinhardt_admin::server::get_list;
+use reinhardt_di::Depends;
 use rstest::*;
 use serde_json::json;
 use std::collections::HashMap;
-use std::sync::Arc;
 
 use super::server_fn_helpers::make_auth_user;
 
@@ -21,7 +21,7 @@ use super::server_fn_helpers::make_auth_user;
 #[rstest]
 #[tokio::test]
 async fn test_get_list_happy_path(
-	#[future] server_fn_context: (Arc<AdminSite>, Arc<AdminDatabase>),
+	#[future] server_fn_context: (Depends<AdminSite>, Depends<AdminDatabase>),
 ) {
 	// Arrange
 	let (site, db) = server_fn_context.await;
@@ -55,7 +55,7 @@ async fn test_get_list_happy_path(
 #[rstest]
 #[tokio::test]
 async fn test_get_list_with_search(
-	#[future] server_fn_context: (Arc<AdminSite>, Arc<AdminDatabase>),
+	#[future] server_fn_context: (Depends<AdminSite>, Depends<AdminDatabase>),
 ) {
 	// Arrange
 	let (site, db) = server_fn_context.await;
@@ -88,7 +88,7 @@ async fn test_get_list_with_search(
 #[rstest]
 #[tokio::test]
 async fn test_get_list_with_filter(
-	#[future] server_fn_context: (Arc<AdminSite>, Arc<AdminDatabase>),
+	#[future] server_fn_context: (Depends<AdminSite>, Depends<AdminDatabase>),
 ) {
 	// Arrange
 	let (site, db) = server_fn_context.await;
@@ -124,7 +124,7 @@ async fn test_get_list_with_filter(
 #[rstest]
 #[tokio::test]
 async fn test_get_list_sort_descending(
-	#[future] server_fn_context: (Arc<AdminSite>, Arc<AdminDatabase>),
+	#[future] server_fn_context: (Depends<AdminSite>, Depends<AdminDatabase>),
 ) {
 	// Arrange
 	let (site, db) = server_fn_context.await;
@@ -152,7 +152,7 @@ async fn test_get_list_sort_descending(
 #[rstest]
 #[tokio::test]
 async fn test_get_list_sort_by_invalid_field(
-	#[future] server_fn_context: (Arc<AdminSite>, Arc<AdminDatabase>),
+	#[future] server_fn_context: (Depends<AdminSite>, Depends<AdminDatabase>),
 ) {
 	// Arrange
 	let (site, db) = server_fn_context.await;
@@ -183,7 +183,7 @@ async fn test_get_list_sort_by_invalid_field(
 #[rstest]
 #[tokio::test]
 async fn test_get_list_unknown_filter_field(
-	#[future] server_fn_context: (Arc<AdminSite>, Arc<AdminDatabase>),
+	#[future] server_fn_context: (Depends<AdminSite>, Depends<AdminDatabase>),
 ) {
 	// Arrange
 	let (site, db) = server_fn_context.await;
@@ -219,7 +219,7 @@ async fn test_get_list_unknown_filter_field(
 #[rstest]
 #[tokio::test]
 async fn test_get_list_pagination_defaults(
-	#[future] server_fn_context: (Arc<AdminSite>, Arc<AdminDatabase>),
+	#[future] server_fn_context: (Depends<AdminSite>, Depends<AdminDatabase>),
 ) {
 	// Arrange
 	let (site, db) = server_fn_context.await;
@@ -248,7 +248,7 @@ async fn test_get_list_pagination_defaults(
 #[rstest]
 #[tokio::test]
 async fn test_get_list_page_size_capped(
-	#[future] server_fn_context: (Arc<AdminSite>, Arc<AdminDatabase>),
+	#[future] server_fn_context: (Depends<AdminSite>, Depends<AdminDatabase>),
 ) {
 	// Arrange
 	let (site, db) = server_fn_context.await;
@@ -275,7 +275,7 @@ async fn test_get_list_page_size_capped(
 #[rstest]
 #[tokio::test]
 async fn test_get_list_page_zero_treated_as_one(
-	#[future] server_fn_context: (Arc<AdminSite>, Arc<AdminDatabase>),
+	#[future] server_fn_context: (Depends<AdminSite>, Depends<AdminDatabase>),
 ) {
 	// Arrange
 	let (site, db) = server_fn_context.await;
@@ -300,7 +300,7 @@ async fn test_get_list_page_zero_treated_as_one(
 #[rstest]
 #[tokio::test]
 async fn test_get_list_empty_table(
-	#[future] server_fn_context: (Arc<AdminSite>, Arc<AdminDatabase>),
+	#[future] server_fn_context: (Depends<AdminSite>, Depends<AdminDatabase>),
 ) {
 	// Arrange
 	let (site, db) = server_fn_context.await;
@@ -327,7 +327,7 @@ async fn test_get_list_empty_table(
 #[rstest]
 #[tokio::test]
 async fn test_get_list_columns_match_list_display(
-	#[future] server_fn_context: (Arc<AdminSite>, Arc<AdminDatabase>),
+	#[future] server_fn_context: (Depends<AdminSite>, Depends<AdminDatabase>),
 ) {
 	// Arrange
 	let (site, db) = server_fn_context.await;
@@ -363,7 +363,7 @@ async fn test_get_list_columns_match_list_display(
 #[rstest]
 #[tokio::test]
 async fn test_get_list_filters_match_list_filter(
-	#[future] server_fn_context: (Arc<AdminSite>, Arc<AdminDatabase>),
+	#[future] server_fn_context: (Depends<AdminSite>, Depends<AdminDatabase>),
 ) {
 	// Arrange
 	let (site, db) = server_fn_context.await;
@@ -398,7 +398,7 @@ async fn test_get_list_filters_match_list_filter(
 #[rstest]
 #[tokio::test]
 async fn test_get_list_model_not_registered(
-	#[future] server_fn_context: (Arc<AdminSite>, Arc<AdminDatabase>),
+	#[future] server_fn_context: (Depends<AdminSite>, Depends<AdminDatabase>),
 ) {
 	// Arrange
 	let (site, db) = server_fn_context.await;

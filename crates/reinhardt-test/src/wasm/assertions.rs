@@ -1,4 +1,4 @@
-#![cfg(target_arch = "wasm32")]
+#![cfg(wasm)]
 
 //! DOM assertion helpers for WASM testing.
 //!
@@ -7,7 +7,7 @@
 //!
 //! # Example
 //!
-//! ```ignore
+//! ```no_run
 //! use reinhardt_test::wasm::assertions::ElementAssertions;
 //!
 //! let element = document.get_element_by_id("submit-button").unwrap();
@@ -17,7 +17,7 @@
 //! element.should_have_class("btn-primary");
 //! ```
 
-#![cfg(target_arch = "wasm32")]
+#![cfg(wasm)]
 
 use wasm_bindgen::JsCast;
 use web_sys::{Document, Element, HtmlElement, HtmlInputElement, Window};

@@ -21,7 +21,7 @@
 //! let session = MockSession::authenticated(user);
 //! ```
 
-#![cfg(not(target_arch = "wasm32"))]
+#![cfg(native)]
 
 use std::collections::HashMap;
 
@@ -73,7 +73,7 @@ pub struct TestUser {
 impl Default for TestUser {
 	fn default() -> Self {
 		Self {
-			id: Uuid::new_v4(),
+			id: Uuid::now_v7(),
 			username: String::new(),
 			email: String::new(),
 			permissions: Vec::new(),
@@ -94,7 +94,7 @@ impl TestUser {
 	pub fn authenticated(username: impl Into<String>) -> Self {
 		let username = username.into();
 		Self {
-			id: Uuid::new_v4(),
+			id: Uuid::now_v7(),
 			email: format!("{}@test.example.com", username),
 			username,
 			is_authenticated: true,
@@ -105,7 +105,7 @@ impl TestUser {
 	/// Create an admin user with full permissions.
 	pub fn admin() -> Self {
 		Self {
-			id: Uuid::new_v4(),
+			id: Uuid::now_v7(),
 			username: "admin".to_string(),
 			email: "admin@test.example.com".to_string(),
 			permissions: vec![
@@ -236,7 +236,7 @@ impl MockSession {
 	/// Create a new anonymous session.
 	pub fn anonymous() -> Self {
 		Self {
-			id: Uuid::new_v4().to_string(),
+			id: Uuid::now_v7().to_string(),
 			user: None,
 			data: HashMap::new(),
 			csrf_token: generate_csrf_token(),
@@ -249,7 +249,7 @@ impl MockSession {
 	/// Create an authenticated session with the given user.
 	pub fn authenticated(user: TestUser) -> Self {
 		Self {
-			id: Uuid::new_v4().to_string(),
+			id: Uuid::now_v7().to_string(),
 			user: Some(user),
 			data: HashMap::new(),
 			csrf_token: generate_csrf_token(),
@@ -257,6 +257,34 @@ impl MockSession {
 			expires_at: None,
 			invalidated: false,
 		}
+	}
+
+	/// Create an authenticated session from a [`SessionIdentity`](crate::auth::SessionIdentity).
+	///
+	/// Bridges the shared identity type to the server_fn test context.
+	/// Creates a stub `TestUser` internally to maintain `is_authenticated()` compatibility.
+	pub fn from_identity(identity: &crate::auth::SessionIdentity) -> Self {
+		let stub_user = TestUser {
+			id: uuid::Uuid::parse_str(&identity.user_id).unwrap_or(uuid::Uuid::nil()),
+			username: identity.user_id.clone(),
+			email: String::new(),
+			permissions: Vec::new(),
+			roles: Vec::new(),
+			is_authenticated: true,
+			attributes: HashMap::new(),
+		};
+		let mut session = Self::authenticated(stub_user);
+		session
+			.data
+			.insert("user_id".into(), serde_json::json!(identity.user_id));
+		session
+			.data
+			.insert("is_staff".into(), serde_json::json!(identity.is_staff));
+		session.data.insert(
+			"is_superuser".into(),
+			serde_json::json!(identity.is_superuser),
+		);
+		session
 	}
 
 	/// Set a custom session ID.
@@ -347,7 +375,7 @@ impl MockSession {
 
 	/// Regenerate the session ID (for security after login).
 	pub fn regenerate_id(&mut self) {
-		self.id = Uuid::new_v4().to_string();
+		self.id = Uuid::now_v7().to_string();
 	}
 
 	/// Regenerate the CSRF token.
@@ -429,7 +457,7 @@ impl TestTokenClaims {
 /// Generate a random CSRF token.
 fn generate_csrf_token() -> String {
 	// Use UUID for simplicity in tests
-	Uuid::new_v4().to_string().replace('-', "")
+	Uuid::now_v7().to_string().replace('-', "")
 }
 
 /// Test helper for permission assertions.

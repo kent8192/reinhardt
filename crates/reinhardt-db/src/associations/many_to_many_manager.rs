@@ -29,11 +29,11 @@ use std::marker::PhantomData;
 /// # async fn main() -> Result<(), Box<dyn std::error::Error>> {
 /// use reinhardt_db::associations::ManyToManyManager;
 /// # use uuid::Uuid;
-/// # let user_id = Uuid::new_v4();
+/// # let user_id = Uuid::now_v7();
 /// # struct Database;
 /// # let db = Database;
 /// # struct Group { id: Uuid }
-/// # let group = Group { id: Uuid::new_v4() };
+/// # let group = Group { id: Uuid::now_v7() };
 ///
 /// let manager = ManyToManyManager::new(
 ///     user_id,

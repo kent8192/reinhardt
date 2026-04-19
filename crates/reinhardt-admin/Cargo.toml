@@ -1,46 +1,63 @@
 [package]
 name = "reinhardt-admin"
-version = "0.1.0-rc.14"
+version = "0.1.0-rc.15"
 edition.workspace = true
+rust-version.workspace = true
 license.workspace = true
 authors.workspace = true
 repository.workspace = true
 description = "Admin panel functionality for Reinhardt framework"
 publish = true
 
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+# Common dependencies (both server and WASM targets)
 [dependencies]
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
+serde_urlencoded = { workspace = true }  # Needed for URL codec in server functions
+serde_bytes = { workspace = true }
+thiserror = { workspace = true }
+anyhow = { workspace = true }
+base64 = { workspace = true }
+percent-encoding = "2.3"
+reinhardt-pages = { workspace = true }
+sha2 = "0.10"
+subtle = "2"
+getrandom = { workspace = true }
+
+# Server-only dependencies (native target)
+[target.'cfg(not(all(target_family = "wasm", target_os = "unknown")))'.dependencies]
 reinhardt-apps = { workspace = true }
-reinhardt-auth = { workspace = true, features = ["argon2-hasher", "params"] }
+reinhardt-conf = { workspace = true }
+reinhardt-auth = { workspace = true, features = ["argon2-hasher", "params", "jwt"] }
 reinhardt-macros = { workspace = true }
-reinhardt-core = { workspace = true, features = ["exception"]}
+reinhardt-core = { workspace = true, features = ["exception"] }
 reinhardt-db = { workspace = true, features = ["orm"] }
 reinhardt-di = { workspace = true }
 reinhardt-http = { workspace = true }
 reinhardt-urls = { workspace = true, features = ["routers"] }
 reinhardt-utils = { workspace = true, features = ["storage", "utils-core"] }
+reinhardt-query = { workspace = true }
+reqwest = { workspace = true }
+tempfile = { workspace = true }
 tokio = { workspace = true }
 async-trait = { workspace = true }
 futures = { workspace = true }
-serde = { workspace = true, features = ["derive"]}
-serde_json = { workspace = true }
-thiserror = { workspace = true }
-anyhow = { workspace = true }
-parking_lot = { workspace = true }
-dashmap = "6.1.0"
-chrono = { workspace = true }
-reinhardt-query = { workspace = true }
-rayon = "1.10"
-csv = "1.3"
-uuid = { workspace = true }
-base64 = { workspace = true }
-getrandom = { workspace = true }
-subtle = "2"
-sha2 = "0.10"
-tracing = { workspace = true }
-inventory = { workspace = true }
-reinhardt-pages = { workspace = true }
 bytes = { workspace = true }
 hyper = { workspace = true }
+parking_lot = { workspace = true }
+dashmap = "6.1.0"
+rayon = "1.10"
+csv = "1.3"
+tracing = { workspace = true }
+inventory = { workspace = true }
+chrono = { workspace = true }
+uuid = { workspace = true }
+
+# WASM-only dependencies (wasm32 target)
+[target.'cfg(all(target_family = "wasm", target_os = "unknown"))'.dependencies]
 wasm-bindgen = "0.2.106"
 console_error_panic_hook = { version = "0.1", optional = true }
 web-sys = { version = "0.3.83", features = [
@@ -62,9 +79,10 @@ web-sys = { version = "0.3.83", features = [
 ] }
 js-sys = "0.3.83"
 serde-wasm-bindgen = "0.6"
-serde_urlencoded = { workspace = true }  # Needed for URL codec in server functions
-serde_bytes = { workspace = true }
-percent-encoding = "2.3"
+reqwest = { workspace = true }
+wasm-bindgen-futures = "0.4"
+chrono = { workspace = true, features = ["wasmbind"] }
+uuid = { workspace = true, features = ["js"] }
 
 [features]
 default = []
@@ -83,12 +101,31 @@ admin = []
 full = ["console_error_panic_hook", "file-uploads", "all"]
 console_error_panic_hook = ["dep:console_error_panic_hook"]
 
-[dev-dependencies]
+# Server-only dev-dependencies
+[target.'cfg(not(all(target_family = "wasm", target_os = "unknown")))'.dev-dependencies]
 insta = { workspace = true }
-reinhardt-db = { workspace = true }
+reinhardt-db = { workspace = true, features = ["orm", "backends"] }
+reinhardt-test = { workspace = true, features = ["e2e-cdp", "testcontainers"] }
+reinhardt-pages = { workspace = true, features = ["testing"] }
+reinhardt-server = { workspace = true }
+reinhardt-di = { workspace = true }
+reinhardt-testkit = { workspace = true }
+tokio = { workspace = true, features = ["full"] }
 tokio-test = { workspace = true }
 rstest = { workspace = true }
-wasm-bindgen-test = "0.3.56"
 sqlx = { workspace = true, features = ["postgres", "runtime-tokio-native-tls"] }
 # Pin to avoid build failure in native-tls 0.2.17 (non-exhaustive pattern in openssl.rs)
 native-tls = { workspace = true }
+futures = { workspace = true }
+serial_test = { workspace = true }
+tempfile = { workspace = true }
+toml = { workspace = true }
+
+# WASM-only dev-dependencies
+[target.'cfg(all(target_family = "wasm", target_os = "unknown"))'.dev-dependencies]
+wasm-bindgen-test = "0.3.56"
+reinhardt-test = { workspace = true, features = ["wasm"] }
+
+
+[build-dependencies]
+cfg_aliases = "0.2"

@@ -237,7 +237,7 @@ async fn test_delete_tweet_not_found(#[future] twitter_db_pool: (PgPool, String)
 	let tweet_factory = TweetFactory::new();
 
 	// Try to delete non-existent tweet
-	let fake_id = uuid::Uuid::new_v4();
+	let fake_id = uuid::Uuid::now_v7();
 	let result = tweet_factory.delete(&pool, fake_id).await;
 
 	// Delete of non-existent should succeed (no-op) or handle appropriately

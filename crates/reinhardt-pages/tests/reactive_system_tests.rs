@@ -1,3 +1,4 @@
+#![cfg(not(target_arch = "wasm32"))]
 //! Integration tests for Core Reactive System
 //!
 //! These tests verify the reactive system functionality:
@@ -28,17 +29,17 @@ fn test_effect_auto_execution_on_signal_change() {
 
 	// Change signal and flush updates
 	count.set(10);
-	with_runtime(|rt| rt.flush_updates_enhanced());
+	with_runtime(|rt| rt.flush_updates());
 	assert_eq!(*execution_log.borrow(), vec![0, 10]);
 
 	// Change again
 	count.set(20);
-	with_runtime(|rt| rt.flush_updates_enhanced());
+	with_runtime(|rt| rt.flush_updates());
 	assert_eq!(*execution_log.borrow(), vec![0, 10, 20]);
 
 	// Update with function
 	count.update(|n| *n += 5);
-	with_runtime(|rt| rt.flush_updates_enhanced());
+	with_runtime(|rt| rt.flush_updates());
 	assert_eq!(*execution_log.borrow(), vec![0, 10, 20, 25]);
 }
 
@@ -62,18 +63,18 @@ fn test_effect_with_multiple_signals() {
 
 	// Change first signal
 	signal1.set(10);
-	with_runtime(|rt| rt.flush_updates_enhanced());
+	with_runtime(|rt| rt.flush_updates());
 	assert_eq!(*sum.borrow(), 12); // 10 + 2
 
 	// Change second signal
 	signal2.set(20);
-	with_runtime(|rt| rt.flush_updates_enhanced());
+	with_runtime(|rt| rt.flush_updates());
 	assert_eq!(*sum.borrow(), 30); // 10 + 20
 
 	// Change both (only one effect execution after flush)
 	signal1.set(100);
 	signal2.set(200);
-	with_runtime(|rt| rt.flush_updates_enhanced());
+	with_runtime(|rt| rt.flush_updates());
 	assert_eq!(*sum.borrow(), 300); // 100 + 200
 }
 
@@ -144,7 +145,7 @@ fn test_effect_with_memo_dependency() {
 	// Change signal, mark memo dirty, flush effect
 	count.set(5);
 	doubled.mark_dirty();
-	with_runtime(|rt| rt.flush_updates_enhanced());
+	with_runtime(|rt| rt.flush_updates());
 
 	// Should trigger effect: 5 * 2 = 10
 	assert_eq!(*log.borrow(), vec![6, 10]);
@@ -187,7 +188,7 @@ fn test_effect_cleanup_on_drop() {
 
 	// Change signal - effect should NOT run (it's dropped)
 	signal.set(10);
-	with_runtime(|rt| rt.flush_updates_enhanced());
+	with_runtime(|rt| rt.flush_updates());
 	assert_eq!(*run_count.borrow(), 1); // Still 1
 
 	// Verify effect was removed from runtime
@@ -275,19 +276,19 @@ fn test_complex_reactive_graph() {
 	// Change first name
 	first_name.set("Jane".to_string());
 	full_name.mark_dirty();
-	with_runtime(|rt| rt.flush_updates_enhanced());
+	with_runtime(|rt| rt.flush_updates());
 	assert_eq!(log.borrow()[1], "Jane Doe is a Adult");
 
 	// Change age
 	age.set(70);
 	age_category.mark_dirty();
-	with_runtime(|rt| rt.flush_updates_enhanced());
+	with_runtime(|rt| rt.flush_updates());
 	assert_eq!(log.borrow()[2], "Jane Doe is a Senior");
 
 	// Change last name
 	last_name.set("Smith".to_string());
 	full_name.mark_dirty();
-	with_runtime(|rt| rt.flush_updates_enhanced());
+	with_runtime(|rt| rt.flush_updates());
 	assert_eq!(log.borrow()[3], "Jane Smith is a Senior");
 }
 
@@ -311,7 +312,7 @@ fn test_get_untracked_no_dependency() {
 
 	// Change signal - effect should NOT rerun (no dependency)
 	signal.set(100);
-	with_runtime(|rt| rt.flush_updates_enhanced());
+	with_runtime(|rt| rt.flush_updates());
 	assert_eq!(*run_count.borrow(), 1); // Still 1
 }
 

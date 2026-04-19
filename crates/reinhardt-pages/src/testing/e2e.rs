@@ -32,7 +32,7 @@
 //!
 //! ```rust,ignore
 //! use reinhardt_pages::testing::e2e::get_e2e_server_url;
-//! use gloo_net::http::Request;
+//! use reqwest::Client;
 //!
 //! #[wasm_bindgen_test]
 //! async fn test_wasm_e2e() {
@@ -50,13 +50,13 @@
 
 use std::time::Duration;
 
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(native)]
 use std::net::SocketAddr;
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(native)]
 use std::sync::Arc;
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(native)]
 use tokio::net::TcpListener;
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(native)]
 use tokio::task::JoinHandle;
 
 /// Configuration for E2E test environment
@@ -115,7 +115,7 @@ impl E2ETestConfig {
 }
 
 /// E2E test environment that manages server lifecycle
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(native)]
 pub struct E2ETestEnv {
 	/// Server URL (e.g., "http://127.0.0.1:12345")
 	server_url: String,
@@ -127,7 +127,7 @@ pub struct E2ETestEnv {
 	server_task: Option<JoinHandle<()>>,
 }
 
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(native)]
 impl E2ETestEnv {
 	/// Create a new E2E test environment with the given router
 	///
@@ -221,7 +221,7 @@ impl E2ETestEnv {
 	}
 }
 
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(native)]
 impl Drop for E2ETestEnv {
 	fn drop(&mut self) {
 		// Trigger shutdown signal
@@ -272,7 +272,7 @@ pub const E2E_SERVER_URL_KEY: &str = "__E2E_TEST_SERVER_URL__";
 /// # Returns
 ///
 /// The server URL if set, or None if not running in E2E test mode.
-#[cfg(target_arch = "wasm32")]
+#[cfg(wasm)]
 pub fn get_e2e_server_url() -> Option<String> {
 	let window = web_sys::window()?;
 	let url = js_sys::Reflect::get(&window, &E2E_SERVER_URL_KEY.into()).ok()?;
@@ -287,7 +287,7 @@ pub fn get_e2e_server_url() -> Option<String> {
 /// # Arguments
 ///
 /// * `url` - The server URL to set
-#[cfg(target_arch = "wasm32")]
+#[cfg(wasm)]
 pub fn set_e2e_server_url(url: &str) {
 	if let Some(window) = web_sys::window() {
 		let _ = js_sys::Reflect::set(&window, &E2E_SERVER_URL_KEY.into(), &url.into());
@@ -297,7 +297,7 @@ pub fn set_e2e_server_url(url: &str) {
 /// Check if running in E2E test mode.
 ///
 /// Returns true if the E2E test server URL has been set.
-#[cfg(target_arch = "wasm32")]
+#[cfg(wasm)]
 pub fn is_e2e_test_mode() -> bool {
 	get_e2e_server_url().is_some()
 }
@@ -312,7 +312,7 @@ pub fn is_e2e_test_mode() -> bool {
 /// # Returns
 ///
 /// The server URL if set, or None if not running in E2E test mode.
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(native)]
 pub fn get_e2e_server_url() -> Option<String> {
 	std::env::var(E2E_SERVER_URL_KEY).ok()
 }
@@ -330,7 +330,7 @@ pub fn get_e2e_server_url() -> Option<String> {
 ///
 /// This function modifies environment variables. It should only be called
 /// during test setup, before parallel test execution begins.
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(native)]
 pub fn set_e2e_server_url(url: &str) {
 	// SAFETY: This function is only called during test setup, before parallel test execution.
 	// The E2E test framework ensures single-threaded access during URL configuration.
@@ -347,7 +347,7 @@ pub fn set_e2e_server_url(url: &str) {
 /// # Returns
 ///
 /// `true` if the E2E test server URL has been set, `false` otherwise.
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(native)]
 pub fn is_e2e_test_mode() -> bool {
 	get_e2e_server_url().is_some()
 }
@@ -370,13 +370,13 @@ pub fn is_e2e_test_mode() -> bool {
 /// # Returns
 ///
 /// The response status and body, or an error.
-#[cfg(target_arch = "wasm32")]
+#[cfg(wasm)]
 pub async fn e2e_fetch(
 	path: &str,
 	method: &str,
 	body: Option<&str>,
 ) -> Result<(u16, String), E2ETestError> {
-	use gloo_net::http::Request;
+	let client = reqwest::Client::new();
 
 	let server_url = get_e2e_server_url()
 		.ok_or_else(|| E2ETestError::Client("E2E server URL not set".into()))?;
@@ -384,11 +384,11 @@ pub async fn e2e_fetch(
 	let url = format!("{}{}", server_url, path);
 
 	let mut request = match method.to_uppercase().as_str() {
-		"GET" => Request::get(&url),
-		"POST" => Request::post(&url),
-		"PUT" => Request::put(&url),
-		"DELETE" => Request::delete(&url),
-		"PATCH" => Request::patch(&url),
+		"GET" => client.get(&url),
+		"POST" => client.post(&url),
+		"PUT" => client.put(&url),
+		"DELETE" => client.delete(&url),
+		"PATCH" => client.patch(&url),
 		_ => {
 			return Err(E2ETestError::Client(format!(
 				"Unsupported method: {}",
@@ -399,22 +399,16 @@ pub async fn e2e_fetch(
 
 	request = request.header("Content-Type", "application/json");
 
-	let request = if let Some(body) = body {
-		request
-			.body(body)
-			.map_err(|e| E2ETestError::Client(e.to_string()))?
-	} else {
-		request
-			.build()
-			.map_err(|e| E2ETestError::Client(e.to_string()))?
-	};
+	if let Some(body) = body {
+		request = request.body(body.to_string());
+	}
 
 	let response = request
 		.send()
 		.await
 		.map_err(|e| E2ETestError::Client(e.to_string()))?;
 
-	let status = response.status();
+	let status = response.status().as_u16();
 	let text = response
 		.text()
 		.await
@@ -424,7 +418,7 @@ pub async fn e2e_fetch(
 }
 
 #[cfg(test)]
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(native)]
 mod tests {
 	use super::*;
 

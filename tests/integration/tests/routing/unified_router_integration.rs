@@ -106,7 +106,8 @@ async fn test_unified_router_hierarchical_namespace() {
 		.mount("/users/", users);
 
 	// Register all routes
-	api.register_all_routes();
+	let errors = api.register_all_routes();
+	assert!(errors.is_empty());
 
 	// Check namespace resolution
 	assert_eq!(api.namespace(), Some("v1"));
@@ -118,7 +119,8 @@ async fn test_unified_router_url_reversal() {
 		.with_namespace("api")
 		.endpoint(health_handler);
 
-	router.register_all_routes();
+	let errors = router.register_all_routes();
+	assert!(errors.is_empty());
 
 	// Reverse URL with namespace
 	let url = router.reverse("api:health", &[]);
@@ -138,7 +140,8 @@ async fn test_unified_router_nested_namespace_reversal() {
 
 	let mut api = ServerRouter::new().with_namespace("api").mount("/v1/", v1);
 
-	api.register_all_routes();
+	let errors = api.register_all_routes();
+	assert!(errors.is_empty());
 
 	// Reverse with full namespace chain
 	let url = api.reverse("api:v1:users:list", &[]);
@@ -202,7 +205,8 @@ async fn test_unified_router_deep_nesting() {
 		.with_prefix("/api")
 		.mount("/v1/", v1);
 
-	api.register_all_routes();
+	let errors = api.register_all_routes();
+	assert!(errors.is_empty());
 
 	// Test deep namespace resolution
 	let url = api.reverse("api:v1:v2:resource:action", &[]);
@@ -240,7 +244,8 @@ async fn test_unified_router_viewset_url_reversal() {
 		.with_prefix("/api")
 		.viewset("users", UserViewSet);
 
-	router.register_all_routes();
+	let errors = router.register_all_routes();
+	assert!(errors.is_empty());
 
 	// ViewSets should register standard action names
 	let list_url = router.reverse("api:users-list", &[]);
@@ -264,7 +269,8 @@ async fn test_unified_router_namespace_inheritance() {
 		.with_namespace("parent")
 		.mount("/child/", child);
 
-	parent.register_all_routes();
+	let errors = parent.register_all_routes();
+	assert!(errors.is_empty());
 
 	// Child route should inherit parent namespace
 	let url = parent.reverse("parent:action", &[]);

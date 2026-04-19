@@ -210,57 +210,57 @@ pub async fn mysql_ddl() -> (MySqlContainer, Arc<sqlx::MySqlPool>, u16, String) 
 
 /// Generate unique table name with UUID suffix
 pub fn unique_table_name(prefix: &str) -> String {
-	format!("{}_{}", prefix, uuid::Uuid::new_v4().as_simple())
+	format!("{}_{}", prefix, uuid::Uuid::now_v7().as_simple())
 }
 
 /// Generate unique schema name with UUID suffix
 pub fn unique_schema_name(prefix: &str) -> String {
-	format!("{}_{}", prefix, uuid::Uuid::new_v4().as_simple())
+	format!("{}_{}", prefix, uuid::Uuid::now_v7().as_simple())
 }
 
 /// Generate unique view name with UUID suffix
 pub fn unique_view_name(prefix: &str) -> String {
-	format!("{}_{}", prefix, uuid::Uuid::new_v4().as_simple())
+	format!("{}_{}", prefix, uuid::Uuid::now_v7().as_simple())
 }
 
 /// Generate unique index name with UUID suffix
 pub fn unique_index_name(prefix: &str) -> String {
-	format!("{}_{}", prefix, uuid::Uuid::new_v4().as_simple())
+	format!("{}_{}", prefix, uuid::Uuid::now_v7().as_simple())
 }
 
 /// Generate unique sequence name with UUID suffix
 pub fn unique_sequence_name(prefix: &str) -> String {
-	format!("{}_{}", prefix, uuid::Uuid::new_v4().as_simple())
+	format!("{}_{}", prefix, uuid::Uuid::now_v7().as_simple())
 }
 
 /// Generate unique function name with UUID suffix
 pub fn unique_function_name(prefix: &str) -> String {
-	format!("{}_{}", prefix, uuid::Uuid::new_v4().as_simple())
+	format!("{}_{}", prefix, uuid::Uuid::now_v7().as_simple())
 }
 
 /// Generate unique trigger name with UUID suffix
 pub fn unique_trigger_name(prefix: &str) -> String {
-	format!("{}_{}", prefix, uuid::Uuid::new_v4().as_simple())
+	format!("{}_{}", prefix, uuid::Uuid::now_v7().as_simple())
 }
 
 /// Generate unique type name with UUID suffix
 pub fn unique_type_name(prefix: &str) -> String {
-	format!("{}_{}", prefix, uuid::Uuid::new_v4().as_simple())
+	format!("{}_{}", prefix, uuid::Uuid::now_v7().as_simple())
 }
 
 /// Generate unique database name with UUID suffix
 pub fn unique_database_name(prefix: &str) -> String {
-	format!("{}_{}", prefix, uuid::Uuid::new_v4().as_simple())
+	format!("{}_{}", prefix, uuid::Uuid::now_v7().as_simple())
 }
 
 /// Generate unique procedure name with UUID suffix
 pub fn unique_procedure_name(prefix: &str) -> String {
-	format!("{}_{}", prefix, uuid::Uuid::new_v4().as_simple())
+	format!("{}_{}", prefix, uuid::Uuid::now_v7().as_simple())
 }
 
 /// Generate unique constraint name with UUID suffix
 pub fn unique_constraint_name(prefix: &str) -> String {
-	format!("{}_{}", prefix, uuid::Uuid::new_v4().as_simple())
+	format!("{}_{}", prefix, uuid::Uuid::now_v7().as_simple())
 }
 
 // =============================================================================

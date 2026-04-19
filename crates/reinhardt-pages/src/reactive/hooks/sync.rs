@@ -237,7 +237,7 @@ where
 	GS: Fn() -> T + 'static,
 {
 	// Use server snapshot during SSR
-	#[cfg(not(target_arch = "wasm32"))]
+	#[cfg(native)]
 	{
 		let _ = subscribe;
 		let _ = get_snapshot;
@@ -248,7 +248,7 @@ where
 	}
 
 	// Use client snapshot in browser
-	#[cfg(target_arch = "wasm32")]
+	#[cfg(wasm)]
 	{
 		let _ = get_server_snapshot;
 		use_sync_external_store(subscribe, get_snapshot)
@@ -310,7 +310,7 @@ mod tests {
 		assert_eq!(signal_with_sub.get(), 100);
 	}
 
-	#[cfg(not(target_arch = "wasm32"))]
+	#[cfg(native)]
 	#[test]
 	fn test_use_sync_external_store_with_server() {
 		let signal_with_sub = use_sync_external_store_with_server(

@@ -24,6 +24,8 @@ fn benchmark_jwt_creation(c: &mut Criterion) {
 				"user_123".to_string(),
 				"testuser".to_string(),
 				Duration::hours(24),
+				false,
+				false,
 			))
 		});
 	});
@@ -38,20 +40,29 @@ fn benchmark_jwt_encoding(c: &mut Criterion) {
 			"user_123".to_string(),
 			"testuser".to_string(),
 			Duration::hours(24),
+			false,
+			false,
 		);
 		b.iter(|| black_box(jwt.encode(&claims)));
 	});
 
 	// Token generation (includes Claims creation)
 	c.bench_function("jwt_generate_token", |b| {
-		b.iter(|| black_box(jwt.generate_token("user_123".to_string(), "testuser".to_string())));
+		b.iter(|| {
+			black_box(jwt.generate_token(
+				"user_123".to_string(),
+				"testuser".to_string(),
+				false,
+				false,
+			))
+		});
 	});
 }
 
 fn benchmark_jwt_decoding(c: &mut Criterion) {
 	let jwt = JwtAuth::new(b"my-super-secret-key-32bytes!!!");
 	let token = jwt
-		.generate_token("user_123".to_string(), "testuser".to_string())
+		.generate_token("user_123".to_string(), "testuser".to_string(), false, false)
 		.unwrap();
 
 	// Token decoding
@@ -75,7 +86,7 @@ fn benchmark_jwt_full_cycle(c: &mut Criterion) {
 	c.bench_function("jwt_full_cycle", |b| {
 		b.iter(|| {
 			let token = jwt
-				.generate_token("user_123".to_string(), "testuser".to_string())
+				.generate_token("user_123".to_string(), "testuser".to_string(), false, false)
 				.unwrap();
 			let claims = jwt.decode(&token).unwrap();
 			black_box(!claims.is_expired())
@@ -86,8 +97,13 @@ fn benchmark_jwt_full_cycle(c: &mut Criterion) {
 	c.bench_function("jwt_batch_verify_10", |b| {
 		let tokens: Vec<_> = (0..10)
 			.map(|i| {
-				jwt.generate_token(format!("user_{}", i), format!("testuser{}", i))
-					.unwrap()
+				jwt.generate_token(
+					format!("user_{}", i),
+					format!("testuser{}", i),
+					false,
+					false,
+				)
+				.unwrap()
 			})
 			.collect();
 
@@ -107,6 +123,8 @@ fn benchmark_claims_operations(c: &mut Criterion) {
 			"user_123".to_string(),
 			"testuser".to_string(),
 			Duration::hours(24),
+			false,
+			false,
 		);
 		b.iter(|| black_box(claims.is_expired()));
 	});
@@ -117,6 +135,8 @@ fn benchmark_claims_operations(c: &mut Criterion) {
 			"user_123".to_string(),
 			"testuser".to_string(),
 			Duration::hours(24),
+			false,
+			false,
 		);
 		b.iter(|| black_box(claims.clone()));
 	});

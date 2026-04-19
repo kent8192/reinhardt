@@ -10,7 +10,7 @@
 //!
 //! ## Example
 //!
-//! ```ignore
+//! ```rust
 //! use reinhardt_core::types::page::{Page, PageElement, IntoPage};
 //!
 //! let view = PageElement::new("div")
@@ -34,7 +34,7 @@ use std::borrow::Cow;
 use std::sync::Arc;
 
 /// Type alias for event handler functions.
-#[cfg(target_arch = "wasm32")]
+#[cfg(wasm)]
 pub type PageEventHandler = Arc<dyn Fn(web_sys::Event) + 'static>;
 
 /// Dummy event type for non-WASM environments.
@@ -42,11 +42,11 @@ pub type PageEventHandler = Arc<dyn Fn(web_sys::Event) + 'static>;
 /// This type exists to maintain API compatibility between WASM and non-WASM builds.
 /// In non-WASM environments, event handlers still accept an argument (this dummy type)
 /// so that user code doesn't need conditional compilation for event handler signatures.
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(native)]
 #[derive(Debug, Clone, Default)]
 pub struct DummyEvent;
 
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(native)]
 impl DummyEvent {
 	/// No-op method for API compatibility with web_sys::Event.
 	///
@@ -60,7 +60,7 @@ impl DummyEvent {
 /// Uses `DummyEvent` to maintain API compatibility with the WASM version,
 /// allowing the same event handler signatures (e.g., `|_| { ... }`) to work
 /// in both WASM and non-WASM environments.
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(native)]
 pub type PageEventHandler = Arc<dyn Fn(DummyEvent) + 'static>;
 
 /// Error type for mounting views to the DOM.
@@ -283,10 +283,13 @@ impl PageElement {
 	///
 	/// # Example
 	///
-	/// ```ignore
+	/// ```rust
+	/// use reinhardt_core::types::page::PageElement;
+	///
+	/// let is_disabled = true;
 	/// PageElement::new("button")
 	///     .bool_attr("disabled", is_disabled)
-	///     .child("Click me")
+	///     .child("Click me");
 	/// ```
 	pub fn bool_attr(self, name: impl Into<Cow<'static, str>>, value: bool) -> Self {
 		if value {
@@ -339,7 +342,7 @@ impl PageElement {
 	///         console::log_1(&"Button clicked!".into());
 	///     })
 	/// ```
-	#[cfg(target_arch = "wasm32")]
+	#[cfg(wasm)]
 	pub fn listener<F>(self, event_name: &str, handler: F) -> Self
 	where
 		F: Fn(web_sys::Event) + 'static,
@@ -354,10 +357,10 @@ impl PageElement {
 	///
 	/// In non-WASM environments, this is a stub that stores the handler
 	/// for API compatibility but won't actually attach to DOM events.
-	#[cfg(not(target_arch = "wasm32"))]
+	#[cfg(native)]
 	pub fn listener<F>(self, event_name: &str, handler: F) -> Self
 	where
-		F: Fn(DummyEvent) + Send + Sync + 'static,
+		F: Fn(DummyEvent) + 'static,
 	{
 		use std::str::FromStr;
 		let event_type = EventType::from_str(event_name)
@@ -470,7 +473,7 @@ impl Page {
 	///
 	/// # Example
 	///
-	/// ```ignore
+	/// ```rust
 	/// use reinhardt_core::types::page::{Page, Head};
 	///
 	/// let view = Page::text("Hello, World!");

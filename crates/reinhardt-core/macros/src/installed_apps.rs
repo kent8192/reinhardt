@@ -350,7 +350,7 @@
 //! - `crates/reinhardt-apps/README.md` for comprehensive usage guide
 //! - Tutorial: `docs/tutorials/en/basis/1-project-setup.md`
 
-use crate::crate_paths::get_reinhardt_core_crate;
+use crate::crate_paths::{get_reinhardt_apps_crate, get_reinhardt_core_crate};
 use proc_macro2::TokenStream;
 use quote::quote;
 use syn::{
@@ -488,6 +488,7 @@ impl Parse for InstalledApps {
 /// - `lib.rs` for public API documentation
 pub(crate) fn installed_apps_impl(input: TokenStream) -> Result<TokenStream> {
 	let core_crate = get_reinhardt_core_crate();
+	let apps_crate = get_reinhardt_apps_crate();
 	let InstalledApps { apps } = syn::parse2(input)?;
 
 	// Handle empty input: generate an uninhabited enum with valid implementations.
@@ -528,6 +529,17 @@ pub(crate) fn installed_apps_impl(input: TokenStream) -> Result<TokenStream> {
 					match *self {}
 				}
 			}
+
+			// AppLabel trait impl for typed #[url_patterns] (Issue #3670).
+			// `LABEL` is required by the trait but unused here: an empty enum
+			// has no values, so `path()` is unreachable.
+			impl #apps_crate::apps::AppLabel for InstalledApp {
+				const LABEL: &'static str = "";
+
+				fn path(&self) -> &'static str {
+					match *self {}
+				}
+			}
 		});
 	}
 
@@ -535,6 +547,20 @@ pub(crate) fn installed_apps_impl(input: TokenStream) -> Result<TokenStream> {
 	let labels: Vec<_> = apps.iter().map(|app| &app.label).collect();
 	let paths: Vec<_> = apps.iter().map(|app| &app.path).collect();
 	let path_strings: Vec<String> = paths.iter().map(|p| p.value()).collect();
+
+	// Write app labels to state file for cross-macro communication with #[routes].
+	// This replaces the __reinhardt_for_each_app #[macro_export] callback pattern
+	// that triggers macro_expanded_macro_exports_accessed_by_absolute_paths on Rust 1.94+.
+	let label_strings: Vec<String> = labels.iter().map(|l| l.to_string()).collect();
+	if let Err(err) = crate::macro_state::write_installed_apps(&label_strings) {
+		return Err(syn::Error::new(
+			proc_macro2::Span::call_site(),
+			format!(
+				"failed to persist installed_apps! macro state: {err}. \
+				 Ensure the build directory is writable and try again."
+			),
+		));
+	}
 
 	// Generate enum variants for each app
 	// Convert labels to CamelCase for enum variants
@@ -636,6 +662,20 @@ pub(crate) fn installed_apps_impl(input: TokenStream) -> Result<TokenStream> {
 				match self {
 					#(InstalledApp::#labels => #paths),*
 				}
+			}
+		}
+
+		// AppLabel trait impl for typed #[url_patterns] (Issue #3670).
+		// Delegates to the inherent `InstalledApp::path()` method defined above.
+		// The inherent method is named explicitly to avoid ambiguity with the
+		// trait method of the same name (which would otherwise recurse).
+		// `LABEL` is required by the trait but unused for enum implementors,
+		// which dispatch on `self` via `path()`.
+		impl #apps_crate::apps::AppLabel for InstalledApp {
+			const LABEL: &'static str = "";
+
+			fn path(&self) -> &'static str {
+				InstalledApp::path(self)
 			}
 		}
 

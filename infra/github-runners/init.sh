@@ -46,6 +46,10 @@ REGION="${REGION:-us-east-1}"
 BUCKET_NAME="reinhardt-ci-terraform-state-${ACCOUNT_ID}"
 
 # Generate backend.tfvars
+# The S3 state bucket lives in the CI sub-account, so the backend must also
+# assume the OrganizationAccountAccessRole to access it.
+ROLE_ARN="arn:aws:iam::${ACCOUNT_ID}:role/OrganizationAccountAccessRole"
+
 cat > "$BACKEND_FILE" <<EOF
 bucket       = "${BUCKET_NAME}"
 key          = "${STATE_KEY}"
@@ -58,10 +62,15 @@ echo "  bucket       = \"${BUCKET_NAME}\""
 echo "  key          = \"${STATE_KEY}\""
 echo "  region       = \"${REGION}\""
 echo "  use_lockfile = true"
+echo "  assume_role  = ${ROLE_ARN}"
 echo ""
 
-# Run terraform init with generated backend config
-terraform init -backend-config="$BACKEND_FILE"
+# Run terraform init with generated backend config.
+# The assume_role block is passed via CLI because .tfvars files do not support
+# nested blocks. This allows the S3 backend to access the sub-account bucket.
+terraform init \
+  -backend-config="$BACKEND_FILE" \
+  -backend-config="assume_role={role_arn=\"${ROLE_ARN}\"}"
 echo ""
 
 # --- Download pre-built Lambda zip files ---

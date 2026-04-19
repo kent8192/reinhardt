@@ -29,7 +29,7 @@ fn main() {
 	use reinhardt_auth::{BaseUser, FullUser};
 
 	let user = CustomNameUser {
-		id: Uuid::new_v4(),
+		id: Uuid::now_v7(),
 		email: "bob@example.com".to_string(),
 		first_name: "Bob".to_string(),
 		last_name: "Jones".to_string(),

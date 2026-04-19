@@ -51,7 +51,7 @@ use reinhardt_manouche::core::{
 	FormMethod, TypedCustomAttr, TypedFieldType, TypedFormAction, TypedFormCallbacks,
 	TypedFormDerived, TypedFormFieldDef, TypedFormFieldEntry, TypedFormFieldGroup, TypedFormMacro,
 	TypedFormSlots, TypedFormState, TypedFormWatch, TypedIcon, TypedIconChild, TypedIconPosition,
-	TypedValidatorRule, TypedWidget, TypedWrapper,
+	TypedSubmitButtonDef, TypedValidatorRule, TypedWidget, TypedWrapper,
 };
 
 /// Collects all fields from field entries, flattening groups.
@@ -66,6 +66,7 @@ fn collect_all_fields(entries: &[TypedFormFieldEntry]) -> Vec<&TypedFormFieldDef
 			TypedFormFieldEntry::Group(group) => {
 				fields.extend(group.fields.iter());
 			}
+			TypedFormFieldEntry::SubmitButton(_) => {} // Not a data field
 		}
 	}
 	fields
@@ -522,7 +523,8 @@ fn generate_derived_methods(
 				/// The value is computed fresh on each call, reading current signal values.
 				///
 				/// For memoization, wrap in a `Memo`:
-				/// ```ignore
+				/// ```no_run
+				/// # use reinhardt_pages::reactive::Memo;
 				/// let form = form.clone();
 				/// let memo = Memo::new(move || form.char_count());
 				/// ```
@@ -702,6 +704,13 @@ fn generate_onsubmit_handler(macro_ast: &TypedFormMacro, pages_crate: &TokenStre
 	// Determine if CSRF protection is needed (non-GET methods)
 	let needs_csrf = !matches!(macro_ast.method, FormMethod::Get);
 
+	// Check if CSRF token should be auto-injected as a server_fn argument.
+	// This is needed when: non-GET method, using server_fn, and no explicit csrf_token field.
+	let has_explicit_csrf_field = all_fields.iter().any(|f| f.name == "csrf_token");
+	let auto_csrf_arg = needs_csrf
+		&& matches!(macro_ast.action, TypedFormAction::ServerFn(_))
+		&& !has_explicit_csrf_field;
+
 	// Generate CSRF token injection for non-GET methods
 	let csrf_injection = if needs_csrf {
 		quote! {
@@ -767,6 +776,19 @@ fn generate_onsubmit_handler(macro_ast: &TypedFormMacro, pages_crate: &TokenStre
 				})
 				.collect();
 
+			// Generate server_fn call expression (with auto CSRF token if needed)
+			let server_fn_call = if auto_csrf_arg {
+				quote! {
+					{
+						let __csrf_token = #pages_crate::csrf::get_csrf_token()
+							.unwrap_or_default();
+						#server_fn_ident(#(#field_names,)* __csrf_token).await
+					}
+				}
+			} else {
+				quote! { #server_fn_ident(#(#field_names),*).await }
+			};
+
 			// Generate callbacks
 			let callbacks = &macro_ast.callbacks;
 			let state = &macro_ast.state;
@@ -815,7 +837,7 @@ fn generate_onsubmit_handler(macro_ast: &TypedFormMacro, pages_crate: &TokenStre
 
 			// Generate on_error callback if present
 			let on_error_code = if let Some(callback) = &callbacks.on_error {
-				quote! { (#callback)(&e); }
+				quote! { (#callback)(e.clone()); }
 			} else {
 				quote! {}
 			};
@@ -866,7 +888,7 @@ fn generate_onsubmit_handler(macro_ast: &TypedFormMacro, pages_crate: &TokenStre
 					.on(
 					#pages_crate::dom::event::EventType::Submit,
 					{
-						#[cfg(target_arch = "wasm32")]
+						#[cfg(all(target_family = "wasm", target_os = "unknown"))]
 						{
 							::std::sync::Arc::new(move |event: web_sys::Event| {
 								// Prevent default form submission by handling it ourselves
@@ -877,64 +899,33 @@ fn generate_onsubmit_handler(macro_ast: &TypedFormMacro, pages_crate: &TokenStre
 
 								// Get field values from cloned signals - allow non_snake_case for generated variable names
 								#(
-									#[allow(non_snake_case)]
+									#[allow(non_snake_case, unused_variables)]
 									let #field_names = #field_value_getters;
 								)*
 
-								#[cfg(target_arch = "wasm32")]
-								{
-									// Clone loading/error signals for async block if they exist
-									#async_signal_clones
+								// Clone loading/error signals for async block if they exist
+								#async_signal_clones
 
-									#pages_crate::spawn::spawn_task(async move {
-										match #server_fn_ident(#(#field_names),*).await {
-											Ok(_value) => {
-												#on_success_code
-												#redirect_code
-											}
-											Err(e) => {
-												#on_error_code
-												#async_error_handling
-											}
+								#pages_crate::spawn::spawn_task(async move {
+									match #server_fn_call {
+										Ok(_value) => {
+											#on_success_code
+											#redirect_code
 										}
-										#async_loading_end
-									});
-								}
+										Err(e) => {
+											#on_error_code
+											#async_error_handling
+										}
+									}
+									#async_loading_end
+								});
 							})
 						}
-						#[cfg(not(target_arch = "wasm32"))]
+						#[cfg(not(all(target_family = "wasm", target_os = "unknown")))]
 						{
 							::std::sync::Arc::new(move |event: #pages_crate::component::DummyEvent| {
-								// Prevent default form submission by handling it ourselves (no-op in non-WASM)
+								// Non-WASM: form submission is handled via HTTP, not JavaScript
 								event.prevent_default();
-
-								// Get field values from cloned signals - allow non_snake_case for generated variable names
-								#loading_start
-
-								#(
-									#[allow(non_snake_case)]
-									let #field_names = #field_value_getters;
-								)*
-
-								#[cfg(target_arch = "wasm32")]
-								{
-									// Clone loading/error signals for async block if they exist
-									#async_signal_clones
-
-									#pages_crate::spawn::spawn_task(async move {
-										match #server_fn_ident(#(#field_names),*).await {
-											Ok(_value) => {
-												#on_success_code
-												#redirect_code
-											}
-											Err(e) => {
-												#on_error_code
-												#async_error_handling
-											}
-										}
-										#async_loading_end
-									});
-								}
 							})
 						}
 					}
@@ -1013,6 +1004,38 @@ fn generate_field_entry_view(
 		TypedFormFieldEntry::Group(group) => {
 			generate_field_group_view(group, pages_crate, all_fields)
 		}
+		TypedFormFieldEntry::SubmitButton(btn) => generate_submit_button_view(btn),
+	}
+}
+
+/// Generates view code for a submit button.
+///
+/// Produces a `<button type="submit">` element with optional class, id, and disabled attributes.
+/// No wrapper div or label — just the bare button element.
+fn generate_submit_button_view(btn: &TypedSubmitButtonDef) -> TokenStream {
+	let label = &btn.label;
+
+	let class_attr = btn.class.as_deref().map(|c| {
+		quote! { .attr("class", #c) }
+	});
+
+	let id_attr = btn.id.as_deref().map(|id| {
+		quote! { .attr("id", #id) }
+	});
+
+	let disabled_attr = if btn.disabled {
+		Some(quote! { .attr("disabled", "disabled") })
+	} else {
+		None
+	};
+
+	quote! {
+		PageElement::new("button")
+			.attr("type", "submit")
+			#class_attr
+			#id_attr
+			#disabled_attr
+			.child(#label)
 	}
 }
 
@@ -1079,6 +1102,10 @@ fn generate_field_view(
 	let placeholder = field.display.placeholder.as_deref().unwrap_or("");
 	let required = field.validation.required;
 
+	let autocomplete_attr = field.display.autocomplete.as_deref().map(|val| {
+		quote! { .attr("autocomplete", #val) }
+	});
+
 	let wrapper_class = field.styling.wrapper_class();
 	let label_class = field.styling.label_class();
 	let input_class = field.styling.input_class();
@@ -1099,6 +1126,7 @@ fn generate_field_view(
 					.attr("class", #input_class)
 					.attr("placeholder", #placeholder)
 					.bool_attr("required", #required)
+					#autocomplete_attr
 					#custom_attrs
 					#event_listener
 			}
@@ -1112,6 +1140,7 @@ fn generate_field_view(
 					.attr("class", #input_class)
 					.bool_attr("required", #required)
 					.bool_attr("multiple", #multiple)
+					#autocomplete_attr
 					#custom_attrs
 					#event_listener
 			}
@@ -1150,6 +1179,7 @@ fn generate_field_view(
 					.attr("class", #input_class)
 					.attr("placeholder", #placeholder)
 					.bool_attr("required", #required)
+					#autocomplete_attr
 					#custom_attrs
 					#event_listener
 			}
@@ -1375,7 +1405,7 @@ fn generate_bind_listener(
 		.listener(#event_name, {
 			let signal = #signal_ident.clone();
 			move |event| {
-				#[cfg(target_arch = "wasm32")]
+				#[cfg(all(target_family = "wasm", target_os = "unknown"))]
 				{
 					use wasm_bindgen::JsCast;
 					if let Some(target) = event.target() {
@@ -1384,7 +1414,7 @@ fn generate_bind_listener(
 						}
 					}
 				}
-				#[cfg(not(target_arch = "wasm32"))]
+				#[cfg(not(all(target_family = "wasm", target_os = "unknown")))]
 				{
 					let _ = event;
 					let _ = &#pages_crate::component::DummyEvent;
@@ -1394,12 +1424,15 @@ fn generate_bind_listener(
 	}
 }
 
-/// Generates the validate method.
+/// Generates the validate method (server-side).
+///
+/// Only rules whose scope includes server-side execution are emitted; rules
+/// scoped strictly to the client (`#[client(on = ...)]`) are excluded.
 fn generate_validate_method(macro_ast: &TypedFormMacro, _pages_crate: &TokenStream) -> TokenStream {
 	let validators: Vec<TokenStream> = macro_ast
 		.validators
 		.iter()
-		.flat_map(|v| generate_validator_rules(&v.field_name, &v.rules))
+		.flat_map(|v| generate_server_validator_rules(&v.field_name, &v.rules))
 		.collect();
 
 	if validators.is_empty() {
@@ -1423,13 +1456,17 @@ fn generate_validate_method(macro_ast: &TypedFormMacro, _pages_crate: &TokenStre
 	}
 }
 
-/// Generates validator rule checks.
-fn generate_validator_rules(
+/// Generates server-side validation code for rules that include server scope.
+///
+/// Rules with scope `Both`, `Server`, or `ServerAndClient { .. }` are included;
+/// rules with scope `Client { .. }` are excluded (they fire only on the client).
+fn generate_server_validator_rules(
 	field_name: &syn::Ident,
 	rules: &[TypedValidatorRule],
 ) -> Vec<TokenStream> {
 	rules
 		.iter()
+		.filter(|rule| rule.scope.includes_server())
 		.map(|rule| {
 			let condition = &rule.condition;
 			let message = &rule.message;
@@ -1464,6 +1501,21 @@ fn generate_submit_method(macro_ast: &TypedFormMacro, pages_crate: &TokenStream)
 			let all_fields = collect_all_fields(&macro_ast.fields);
 			let field_names: Vec<&syn::Ident> = all_fields.iter().map(|f| &f.name).collect();
 
+			// Check if CSRF token should be auto-injected as a server_fn argument
+			let has_explicit_csrf_field = all_fields.iter().any(|f| f.name == "csrf_token");
+			let needs_csrf = !matches!(macro_ast.method, FormMethod::Get);
+			let submit_server_fn_call = if needs_csrf && !has_explicit_csrf_field {
+				quote! {
+					{
+						let __csrf_token = #pages_crate::csrf::get_csrf_token()
+							.unwrap_or_default();
+						#server_fn_ident(#(self.#field_names.get(),)* __csrf_token).await
+					}
+				}
+			} else {
+				quote! { #server_fn_ident(#(self.#field_names.get()),*).await }
+			};
+
 			// Generate callback invocations
 			let on_submit_code = generate_on_submit_callback(callbacks);
 			let on_loading_start_code = generate_on_loading_callback(callbacks, state, true);
@@ -1473,7 +1525,7 @@ fn generate_submit_method(macro_ast: &TypedFormMacro, pages_crate: &TokenStream)
 			let redirect_code = generate_redirect_code(redirect);
 
 			quote! {
-				#[cfg(target_arch = "wasm32")]
+				#[cfg(all(target_family = "wasm", target_os = "unknown"))]
 				pub async fn submit(&self) -> Result<(), #pages_crate::ServerFnError> {
 					// Call on_submit callback before submission
 					#on_submit_code
@@ -1482,7 +1534,7 @@ fn generate_submit_method(macro_ast: &TypedFormMacro, pages_crate: &TokenStream)
 					#on_loading_start_code
 
 					// Call the server function with individual field values as arguments
-					let result = #server_fn_ident(#(self.#field_names.get()),*).await;
+					let result = #submit_server_fn_call;
 
 					// Clear loading state
 					#on_loading_end_code
@@ -1501,7 +1553,7 @@ fn generate_submit_method(macro_ast: &TypedFormMacro, pages_crate: &TokenStream)
 					}
 				}
 
-				#[cfg(not(target_arch = "wasm32"))]
+				#[cfg(not(all(target_family = "wasm", target_os = "unknown")))]
 				pub async fn submit(&self) -> Result<(), #pages_crate::ServerFnError> {
 					// On server, submit is a no-op (form is submitted via HTTP)
 					Ok(())
@@ -1514,7 +1566,7 @@ fn generate_submit_method(macro_ast: &TypedFormMacro, pages_crate: &TokenStream)
 			let on_submit_code = generate_on_submit_callback(callbacks);
 
 			quote! {
-				#[cfg(target_arch = "wasm32")]
+				#[cfg(all(target_family = "wasm", target_os = "unknown"))]
 				pub fn submit(&self) {
 					// Call on_submit callback before submission
 					#on_submit_code
@@ -1524,7 +1576,7 @@ fn generate_submit_method(macro_ast: &TypedFormMacro, pages_crate: &TokenStream)
 					#pages_crate::dom::submit_form(&self.metadata());
 				}
 
-				#[cfg(not(target_arch = "wasm32"))]
+				#[cfg(not(all(target_family = "wasm", target_os = "unknown")))]
 				pub fn submit(&self) {
 					// On server, submit is a no-op
 				}
@@ -1598,13 +1650,13 @@ fn generate_load_initial_values(
 			///
 			/// Note: No fields have `initial_from` specified, so this method
 			/// only calls the loader without populating any fields.
-			#[cfg(target_arch = "wasm32")]
+			#[cfg(all(target_family = "wasm", target_os = "unknown"))]
 			pub async fn load_initial_values(&self) -> Result<(), #pages_crate::ServerFnError> {
 				let _data = #initial_loader().await?;
 				Ok(())
 			}
 
-			#[cfg(not(target_arch = "wasm32"))]
+			#[cfg(not(all(target_family = "wasm", target_os = "unknown")))]
 			pub async fn load_initial_values(&self) -> Result<(), #pages_crate::ServerFnError> {
 				// On server, this is a no-op since initial values are typically
 				// loaded differently in SSR context
@@ -1617,14 +1669,14 @@ fn generate_load_initial_values(
 			///
 			/// Calls the configured initial_loader and populates fields
 			/// that have `initial_from` specified with values from the result.
-			#[cfg(target_arch = "wasm32")]
+			#[cfg(all(target_family = "wasm", target_os = "unknown"))]
 			pub async fn load_initial_values(&self) -> Result<(), #pages_crate::ServerFnError> {
 				let data = #initial_loader().await?;
 				#(#field_setters)*
 				Ok(())
 			}
 
-			#[cfg(not(target_arch = "wasm32"))]
+			#[cfg(not(all(target_family = "wasm", target_os = "unknown")))]
 			pub async fn load_initial_values(&self) -> Result<(), #pages_crate::ServerFnError> {
 				// On server, this is a no-op since initial values are typically
 				// loaded differently in SSR context
@@ -1706,13 +1758,13 @@ fn generate_load_choices(macro_ast: &TypedFormMacro, pages_crate: &TokenStream) 
 			///
 			/// Note: No fields have `choices_from` specified, so this method
 			/// only calls the loader without populating any choices.
-			#[cfg(target_arch = "wasm32")]
+			#[cfg(all(target_family = "wasm", target_os = "unknown"))]
 			pub async fn load_choices(&self) -> Result<(), #pages_crate::ServerFnError> {
 				let _data = #choices_loader().await?;
 				Ok(())
 			}
 
-			#[cfg(not(target_arch = "wasm32"))]
+			#[cfg(not(all(target_family = "wasm", target_os = "unknown")))]
 			pub async fn load_choices(&self) -> Result<(), #pages_crate::ServerFnError> {
 				// On server, this is a no-op since choices are typically
 				// loaded differently in SSR context
@@ -1725,14 +1777,14 @@ fn generate_load_choices(macro_ast: &TypedFormMacro, pages_crate: &TokenStream) 
 			///
 			/// Calls the configured choices_loader and populates the choices signals
 			/// for fields that have `choices_from` specified.
-			#[cfg(target_arch = "wasm32")]
+			#[cfg(all(target_family = "wasm", target_os = "unknown"))]
 			pub async fn load_choices(&self) -> Result<(), #pages_crate::ServerFnError> {
 				let data = #choices_loader().await?;
 				#(#field_setters)*
 				Ok(())
 			}
 
-			#[cfg(not(target_arch = "wasm32"))]
+			#[cfg(not(all(target_family = "wasm", target_os = "unknown")))]
 			pub async fn load_choices(&self) -> Result<(), #pages_crate::ServerFnError> {
 				// On server, this is a no-op since choices are typically
 				// loaded differently in SSR context
@@ -2971,8 +3023,15 @@ mod tests {
 		let output_str = output.to_string();
 
 		// Generated code should have cfg attributes for platform-specific code
-		assert!(output_str.contains("# [cfg (target_arch = \"wasm32\")]"));
-		assert!(output_str.contains("# [cfg (not (target_arch = \"wasm32\"))]"));
+		assert!(
+			output_str
+				.contains("# [cfg (all (target_family = \"wasm\" , target_os = \"unknown\"))]")
+		);
+		assert!(
+			output_str.contains(
+				"# [cfg (not (all (target_family = \"wasm\" , target_os = \"unknown\")))]"
+			)
+		);
 	}
 
 	// ===========================================
@@ -3951,6 +4010,165 @@ mod tests {
 		assert!(
 			output_str.contains("\"path\""),
 			"Expected path element to be generated"
+		);
+	}
+
+	// --- SubmitButton rendering regression tests (Fixes #3334) ---
+
+	#[rstest::rstest]
+	fn test_submit_button_rendered_in_url_action_form() {
+		// Arrange
+		let input = quote! {
+			name: LoginForm,
+			action: "/api/login",
+
+			fields: {
+				username: CharField { required, label: "Username" },
+				password: CharField { required, widget: PasswordInput, label: "Password" },
+				submit: SubmitButton { label: "Sign in", class: "btn-primary" },
+			},
+		};
+
+		// Act
+		let output = parse_validate_generate(input);
+		let output_str = output.to_string();
+
+		// Assert
+		assert!(
+			output_str.contains("\"button\""),
+			"URL action form: codegen must emit a <button> element for SubmitButton"
+		);
+		assert!(
+			output_str.contains("\"submit\""),
+			"URL action form: codegen must set type=\"submit\" on the button"
+		);
+		assert!(
+			output_str.contains("Sign in"),
+			"URL action form: codegen must include the button label"
+		);
+		assert!(
+			output_str.contains("btn-primary"),
+			"URL action form: codegen must include the button class"
+		);
+	}
+
+	#[rstest::rstest]
+	fn test_submit_button_rendered_in_server_fn_form() {
+		// Arrange
+		let input = quote! {
+			name: LoginForm,
+			server_fn: login,
+
+			fields: {
+				username: CharField { required, label: "Username" },
+				password: CharField { required, widget: PasswordInput, label: "Password" },
+				submit: SubmitButton { label: "Sign in", class: "btn-primary" },
+			},
+		};
+
+		// Act
+		let output = parse_validate_generate(input);
+		let output_str = output.to_string();
+
+		// Assert
+		assert!(
+			output_str.contains("\"button\""),
+			"server_fn form: codegen must emit a <button> element for SubmitButton"
+		);
+		assert!(
+			output_str.contains("\"submit\""),
+			"server_fn form: codegen must set type=\"submit\" on the button"
+		);
+		assert!(
+			output_str.contains("Sign in"),
+			"server_fn form: codegen must include the button label"
+		);
+		assert!(
+			output_str.contains("btn-primary"),
+			"server_fn form: codegen must include the button class"
+		);
+	}
+
+	#[rstest::rstest]
+	fn test_submit_button_with_id_and_disabled() {
+		// Arrange
+		let input = quote! {
+			name: TestForm,
+			action: "/test",
+
+			fields: {
+				name: CharField { required },
+				submit: SubmitButton { label: "Send", id: "submit-btn", disabled },
+			},
+		};
+
+		// Act
+		let output = parse_validate_generate(input);
+		let output_str = output.to_string();
+
+		// Assert
+		assert!(
+			output_str.contains("\"button\""),
+			"codegen must emit a <button> element"
+		);
+		assert!(
+			output_str.contains("submit-btn"),
+			"codegen must include the button id"
+		);
+		assert!(
+			output_str.contains("\"disabled\""),
+			"codegen must include the disabled attribute"
+		);
+	}
+
+	#[rstest::rstest]
+	fn test_submit_button_with_default_label() {
+		// Arrange
+		let input = quote! {
+			name: MinimalForm,
+			action: "/test",
+
+			fields: {
+				name: CharField { required },
+				submit: SubmitButton {},
+			},
+		};
+
+		// Act
+		let output = parse_validate_generate(input);
+		let output_str = output.to_string();
+
+		// Assert
+		assert!(
+			output_str.contains("\"button\""),
+			"codegen must emit a <button> element even with no explicit label"
+		);
+		assert!(
+			output_str.contains("Submit"),
+			"codegen must use default label \"Submit\" when none specified"
+		);
+	}
+
+	#[rstest::rstest]
+	fn test_no_submit_button_when_not_specified() {
+		// Arrange
+		let input = quote! {
+			name: NoButtonForm,
+			action: "/test",
+
+			fields: {
+				name: CharField { required },
+			},
+		};
+
+		// Act
+		let output = parse_validate_generate(input);
+		let output_str = output.to_string();
+
+		// Assert - no button element should be generated
+		assert!(
+			!output_str.contains("\"button\""),
+			"form without SubmitButton must not generate a <button> element"
 		);
 	}
 }

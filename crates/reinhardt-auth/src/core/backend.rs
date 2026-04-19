@@ -34,7 +34,7 @@ use crate::core::user::User;
 ///         let hasher = Argon2Hasher::new();
 ///
 ///         let user = SimpleUser {
-///             id: Uuid::new_v4(),
+///             id: Uuid::now_v7(),
 ///             username: "alice".to_string(),
 ///             email: "alice@example.com".to_string(),
 ///             is_active: true,

@@ -326,7 +326,7 @@ mod tests {
 
 	/// Helper to create a temporary test directory
 	fn create_test_dir() -> PathBuf {
-		let test_dir = PathBuf::from(format!("/tmp/reinhardt_test_{}", uuid::Uuid::new_v4()));
+		let test_dir = PathBuf::from(format!("/tmp/reinhardt_test_{}", uuid::Uuid::now_v7()));
 		fs::create_dir_all(&test_dir).expect("Failed to create test directory");
 		test_dir
 	}
@@ -563,7 +563,7 @@ mod tests {
 		let backend = FileSessionBackend::new(None).expect("Failed to create backend");
 
 		let session_data = json!({ "test": "default_dir" });
-		let session_key = format!("test_default_{}", uuid::Uuid::new_v4());
+		let session_key = format!("test_default_{}", uuid::Uuid::now_v7());
 
 		backend
 			.save(&session_key, &session_data, None)

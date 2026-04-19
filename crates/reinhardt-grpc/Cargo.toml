@@ -1,8 +1,9 @@
 [package]
 name = "reinhardt-grpc"
-version = "0.1.0-rc.14"
+version = "0.1.0-rc.15"
 description = "gRPC support for building RPC services"
 edition.workspace = true
+rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 authors.workspace = true

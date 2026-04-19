@@ -35,7 +35,7 @@ impl DMRoomFactory {
 		user1_id: Uuid,
 		user2_id: Uuid,
 	) -> Result<DMRoom, sqlx::Error> {
-		let id = Uuid::new_v4();
+		let id = Uuid::now_v7();
 		let now = Utc::now();
 
 		// Insert room
@@ -73,7 +73,7 @@ impl DMRoomFactory {
 		name: &str,
 		member_ids: &[Uuid],
 	) -> Result<DMRoom, sqlx::Error> {
-		let id = Uuid::new_v4();
+		let id = Uuid::now_v7();
 		let now = Utc::now();
 
 		// Insert room
@@ -215,7 +215,7 @@ impl DMMessageFactory {
 		sender_id: Uuid,
 		content: &str,
 	) -> Result<DMMessage, sqlx::Error> {
-		let id = Uuid::new_v4();
+		let id = Uuid::now_v7();
 		let now = Utc::now();
 
 		let sql = Query::insert()

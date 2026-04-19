@@ -5,7 +5,7 @@
 //!
 //! # Usage
 //!
-//! ```rust,ignore
+//! ```ignore
 //! use reinhardt_views::viewsets::{InjectableViewSet, ModelViewSet, ViewSet};
 //! use reinhardt_di::Injectable;
 //! use std::sync::Arc;
@@ -25,7 +25,7 @@
 
 use crate::ViewSet;
 use async_trait::async_trait;
-use reinhardt_di::{Injectable, Injected, InjectionContext};
+use reinhardt_di::{Depends, Injectable, InjectionContext};
 use reinhardt_http::{Request, Result};
 use std::sync::Arc;
 
@@ -36,7 +36,7 @@ use std::sync::Arc;
 ///
 /// # Examples
 ///
-/// ```rust,ignore
+/// ```ignore
 /// # #[tokio::main]
 /// # async fn main() {
 /// use reinhardt_views::viewsets::{InjectableViewSet, ModelViewSet, ViewSet};
@@ -92,7 +92,7 @@ pub trait InjectableViewSet: ViewSet {
 				)
 			})?;
 
-		let injected = Injected::<T>::resolve(&di_ctx).await.map_err(|e| {
+		let injected = Depends::<T>::resolve(&di_ctx, true).await.map_err(|e| {
 			reinhardt_core::exception::Error::Internal(format!(
 				"Dependency injection failed for {}: {:?}",
 				std::any::type_name::<T>(),
@@ -136,15 +136,13 @@ pub trait InjectableViewSet: ViewSet {
 				)
 			})?;
 
-		let injected = Injected::<T>::resolve_uncached(&di_ctx)
-			.await
-			.map_err(|e| {
-				reinhardt_core::exception::Error::Internal(format!(
-					"Dependency injection failed for {}: {:?}",
-					std::any::type_name::<T>(),
-					e
-				))
-			})?;
+		let injected = Depends::<T>::resolve(&di_ctx, false).await.map_err(|e| {
+			reinhardt_core::exception::Error::Internal(format!(
+				"Dependency injection failed for {}: {:?}",
+				std::any::type_name::<T>(),
+				e
+			))
+		})?;
 
 		Ok(injected.into_inner())
 	}
@@ -169,7 +167,7 @@ pub trait InjectableViewSet: ViewSet {
 	{
 		let di_ctx = request.get_di_context::<Arc<InjectionContext>>()?;
 
-		Injected::<T>::resolve(&di_ctx)
+		Depends::<T>::resolve(&di_ctx, true)
 			.await
 			.ok()
 			.map(|injected| injected.into_inner())

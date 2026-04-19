@@ -26,7 +26,7 @@ use uuid::Uuid;
 #[fixture]
 fn basic_user() -> DefaultUser {
 	DefaultUser {
-		id: Uuid::new_v4(),
+		id: Uuid::now_v7(),
 		username: "testuser".to_string(),
 		email: "test@example.com".to_string(),
 		first_name: "Test".to_string(),
@@ -46,7 +46,7 @@ fn basic_user() -> DefaultUser {
 #[fixture]
 fn staff_user() -> DefaultUser {
 	DefaultUser {
-		id: Uuid::new_v4(),
+		id: Uuid::now_v7(),
 		username: "staffuser".to_string(),
 		email: "staff@example.com".to_string(),
 		first_name: "Staff".to_string(),
@@ -66,7 +66,7 @@ fn staff_user() -> DefaultUser {
 #[fixture]
 fn superuser() -> DefaultUser {
 	DefaultUser {
-		id: Uuid::new_v4(),
+		id: Uuid::now_v7(),
 		username: "admin".to_string(),
 		email: "admin@example.com".to_string(),
 		first_name: "Super".to_string(),
@@ -86,7 +86,7 @@ fn superuser() -> DefaultUser {
 #[fixture]
 fn inactive_user() -> DefaultUser {
 	DefaultUser {
-		id: Uuid::new_v4(),
+		id: Uuid::now_v7(),
 		username: "inactive".to_string(),
 		email: "inactive@example.com".to_string(),
 		first_name: "Inactive".to_string(),
@@ -299,7 +299,7 @@ fn test_model_trait(basic_user: DefaultUser) {
 
 	// Test set_primary_key
 	let mut user = basic_user.clone();
-	let new_id = Uuid::new_v4();
+	let new_id = Uuid::now_v7();
 	user.set_primary_key(new_id);
 	assert_eq!(user.primary_key(), Some(new_id));
 }
@@ -672,7 +672,7 @@ fn test_password_with_null_bytes(mut basic_user: DefaultUser) {
 #[case("ユーザー", "Japanese")]
 fn test_username_variants(#[case] username: &str, #[case] desc: &str) {
 	let user = DefaultUser {
-		id: Uuid::new_v4(),
+		id: Uuid::now_v7(),
 		username: username.to_string(),
 		email: "test@example.com".to_string(),
 		first_name: String::new(),
@@ -718,7 +718,7 @@ fn test_user_role_combinations(
 	#[case] desc: &str,
 ) {
 	let user = DefaultUser {
-		id: Uuid::new_v4(),
+		id: Uuid::now_v7(),
 		username: "testuser".to_string(),
 		email: "test@example.com".to_string(),
 		first_name: String::new(),
@@ -777,7 +777,7 @@ fn test_permission_decision_table(
 	#[case] desc: &str,
 ) {
 	let user = DefaultUser {
-		id: Uuid::new_v4(),
+		id: Uuid::now_v7(),
 		username: "testuser".to_string(),
 		email: "test@example.com".to_string(),
 		first_name: String::new(),

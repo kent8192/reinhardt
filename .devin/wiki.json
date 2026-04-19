@@ -9,38 +9,88 @@
       "author": "Architect"
     },
     {
-      "content": "The crates/ directory contains all workspace members. The examples/local/ directory contains 7 example projects demonstrating real-world usage. The docs/ directory contains comprehensive documentation including tutorials, API references, and coding standards.",
+      "content": "The crates/ directory contains all workspace members. The examples/ directory currently contains 3 workspace members: examples-tutorial-basis, examples-tutorial-rest, examples-twitter. The docs/ directory contains comprehensive documentation.",
       "author": "Maintainer"
     },
     {
-      "content": "Feature flag system: 'minimal' for microservices (~5-10MB), 'standard' for typical web apps (~20-30MB), 'full' for all features (~50+MB). Individual features can be toggled granularly (e.g., db-postgres, auth-jwt, middleware-cors).",
+      "content": "Feature flag system: 'minimal' for microservices (~5-10MB), 'standard' for typical web apps (~20-30MB), 'full' for all features (~50+MB). Individual features can be toggled granularly (e.g., db-postgres, auth-jwt, middleware-cors). Note: the url-resolver feature has been REMOVED — URL resolution is always available on native targets.",
+      "author": "Architect"
+    },
+    {
+      "content": "DI System migration (breaking, deprecated as of rc.16): (1) Injected<T>/OptionalInjected<T> deprecated → use Depends<T>. (2) #[inject] parameter type changed Arc<T> → Depends<T>. (3) #[injectable] no longer auto-derives Clone — add #[derive(Clone)] explicitly. (4) #[injectable] without explicit scope now registers with Request scope. (5) DependencyRegistration struct fields changed to fn pointers (const-compatible, Rust 2024). (6) Pseudo orphan rule: cannot register #[injectable_factory]/#[injectable] for reinhardt-managed types — use newtype wrapper. (7) Validated<T> extractor auto-calls Validate::validate() during extraction.",
+      "author": "Maintainer"
+    },
+    {
+      "content": "URL Routing migration (breaking): (1) #[url_patterns] now requires typed enum syntax: #[url_patterns(InstalledApp::app_name, mode = server|client|unified)]. Recommended naming convention: use server_url_patterns() / client_url_patterns() / unified_url_patterns() instead of url_patterns(); the #[url_patterns] macro does not require a specific function name. (2) Namespaced URL resolver access: urls.user_list() (deprecated) → urls.users().list(). (3) ViewSet route names use get_basename() instead of prefix. (4) UrlPatternsRegistration.get_server_router field renamed to factory.",
+      "author": "Architect"
+    },
+    {
+      "content": "Macros migration (breaking): #[export_endpoints] attribute macro removed — multi-file view module organization is now supported through stable alternatives.",
+      "author": "Maintainer"
+    },
+    {
+      "content": "Forms/Frontend migration (breaking): (1) client_validators block in form! macro now emits compile error — migrate to unified validators with scope annotations: #[client(on = submit|input|blur)]. (2) form! macro now auto-passes CSRF token to server_fn on non-GET forms (no explicit csrf_token field needed). (3) SubmitButton is now a first-class field type in form! macro.",
+      "author": "Maintainer"
+    },
+    {
+      "content": "Auth system migration (breaking): (1) User trait deprecated → use AuthIdentity + BaseUser/FullUser + PermissionsMixin. (2) DefaultUser deprecated → define own struct with #[user(hasher = ..., username_field = ..., full = ...)] macro. (3) JwtAuth method return types changed to Result<_, JwtError> (was reinhardt_core::exception::Result). Expired tokens are now rejected by default.",
+      "author": "Architect"
+    },
+    {
+      "content": "Admin system migration (breaking): (1) admin_routes() removed (was deprecated since rc.14). admin_routes_with_di_deferred(site) renamed to admin_routes_with_di(site). (2) ModelAdmin permission methods now accept &dyn AdminUser instead of &(dyn Any + Send + Sync). (3) FormFieldSpec enum added — field_type_to_html_input_type removed. (4) Admin JWT authentication flow added for WASM SPA.",
+      "author": "Architect"
+    },
+    {
+      "content": "Configuration migration (breaking): (1) #[settings] macro introduced for Settings structs. SettingsFragment.validate() moved to SettingsValidation supertrait — import SettingsValidation where .validate() is called. External SettingsFragment implementors must also impl SettingsValidation. (2) Settings.installed_apps field, add_app(), and with_validated_apps() are deprecated → use installed_apps! macro with ApplicationBuilder.",
+      "author": "Maintainer"
+    },
+    {
+      "content": "Background Tasks migration (breaking): TaskLock trait API changed. acquire() now returns Option<LockToken> instead of bool. release(task_id, &token) and extend(task_id, &token, ttl) now require ownership token for safety.",
+      "author": "Maintainer"
+    },
+    {
+      "content": "Database migration (breaking): BatchUpdateBuilder::add_update() and build_sql() removed (were SQL injection vulnerable). SetAutoIncrementValue and CreateCompositePrimaryKey migration ops added. Silent PostgreSQL fallbacks now cause hard failures.",
+      "author": "Maintainer"
+    },
+    {
+      "content": "Security hardening: DI resolution errors are redacted from server_fn 500 responses. UUID generation migrated to v7 across the codebase (v4 retained for security-sensitive tokens). Empty user_id is rejected as unauthenticated. is_active DB check enforced in admin dashboard. All deprecation since versions corrected to 0.1.0-rc.16.",
       "author": "Architect"
     }
   ],
   "pages": [
     {
       "title": "Architecture Overview",
-      "purpose": "Explain the polylithic architecture philosophy, how crates are organized in layers (Foundation, Data, REST, Auth, Advanced), and the request/response flow through the framework.",
+      "purpose": "Explain the polylithic architecture philosophy, how crates are organized in layers (Foundation, Data, REST, Auth, Advanced), the request/response flow through the framework, and the roadmap for upcoming crates.",
       "parent": null
     },
     {
       "title": "Core Foundation",
-      "purpose": "Document reinhardt-core (types, exceptions, validators, signals), reinhardt-http (request/response types), reinhardt-server (Hyper-based server), and reinhardt-macros.",
+      "purpose": "Document reinhardt-core (types, exceptions, validators, signals), reinhardt-http (request/response types), reinhardt-server (Hyper-based server with lifecycle hooks), and reinhardt-macros.",
       "parent": "Architecture Overview"
     },
     {
       "title": "Dependency Injection",
-      "purpose": "Document reinhardt-di: FastAPI-inspired type-safe async DI system with scoped/singleton support, injectable types, and integration with request handlers.",
+      "purpose": "Document reinhardt-di: FastAPI-inspired type-safe async DI system with scoped/singleton/request-scope support, injectable types and macros, validation extractors, startup registry sanity checks, pseudo orphan rule for framework type safety, and test isolation utilities.",
       "parent": "Architecture Overview"
     },
     {
       "title": "URL Routing",
-      "purpose": "Document reinhardt-urls: URL pattern matching, path converters, route registration, and how routing integrates with the middleware pipeline.",
+      "purpose": "Document reinhardt-urls: typed URL pattern matching with mode-aware route registration (server/client/unified), per-app namespaced URL resolvers, ViewSet and route macros, client-side type-safe URL resolution, and multi-file view module organization.",
+      "parent": "Architecture Overview"
+    },
+    {
+      "title": "App Registry",
+      "purpose": "Document reinhardt-apps: application registry and discovery, AppLabel trait, installed_apps! macro with ApplicationBuilder, and the startapp command.",
+      "parent": "Architecture Overview"
+    },
+    {
+      "title": "Configuration",
+      "purpose": "Document reinhardt-conf: settings struct macros, SettingsFragment trait, per-test settings override, and environment variable configuration.",
       "parent": "Architecture Overview"
     },
     {
       "title": "Database Layer",
-      "purpose": "Document reinhardt-db: ORM with Model definitions, QuerySet API (filter, exclude, annotate, aggregate), migrations system, relationships (ForeignKey, ManyToMany), and supported backends (PostgreSQL, MySQL, SQLite, CockroachDB).",
+      "purpose": "Document reinhardt-db: ORM with Model definitions, QuerySet API, migrations system, relationships (ForeignKey, ManyToMany), and supported backends (PostgreSQL, MySQL, SQLite, CockroachDB). Use reinhardt-query for SQL construction.",
       "parent": null
     },
     {
@@ -55,7 +105,7 @@
     },
     {
       "title": "Authentication System",
-      "purpose": "Document reinhardt-auth: Authentication backends (JWT, Token, Session, OAuth2, Basic), permission system (DjangoModelPermissions, object-level), user/group management.",
+      "purpose": "Document reinhardt-auth: user identity traits and macros, authentication backends (JWT, Token, Session, OAuth2, Basic), and permission system (DjangoModelPermissions, object-level).",
       "parent": null
     },
     {
@@ -65,12 +115,12 @@
     },
     {
       "title": "Forms",
-      "purpose": "Document reinhardt-forms: Django-style form processing with 20+ field types, validation, ModelForms, FormSets, and FormWizards.",
+      "purpose": "Document reinhardt-forms: Django-style form processing with multiple field types, form! macro with unified client/server validation, ModelForms, FormSets, and FormWizards.",
       "parent": null
     },
     {
       "title": "Frontend Framework",
-      "purpose": "Document reinhardt-pages: WASM-based frontend with fine-grained reactivity, SSR, hydration, and JSX-like macros (page!, head!).",
+      "purpose": "Document reinhardt-pages: WASM-based frontend with fine-grained reactivity, SSR, hydration, JSX-like macros, network interception for testing, and multi-file view module organization.",
       "parent": null
     },
     {
@@ -80,17 +130,17 @@
     },
     {
       "title": "Background Tasks",
-      "purpose": "Document reinhardt-tasks: Celery-inspired task queue with scheduling, retries, DAG execution, worker load balancing, and integration with the framework.",
+      "purpose": "Document reinhardt-tasks: Celery-inspired task queue with scheduling, retries, DAG execution with edge rollback, worker load balancing, distributed lock primitives, and framework integration.",
       "parent": null
     },
     {
       "title": "Admin Panel",
-      "purpose": "Document reinhardt-admin: Admin interface generation, model registration, custom admin views, and reinhardt-admin-cli.",
+      "purpose": "Document reinhardt-admin: auto-generated admin interface, model registration, permission system, form field rendering, JWT authentication for WASM SPA, and reinhardt-admin-cli for code generation.",
       "parent": null
     },
     {
       "title": "Utilities",
-      "purpose": "Document reinhardt-utils (timezone, caching, storage, static files), reinhardt-i18n (internationalization), reinhardt-mail (email backends).",
+      "purpose": "Document reinhardt-utils (timezone, caching, storage, static files), reinhardt-i18n (internationalization), and reinhardt-mail (email backends).",
       "parent": null
     },
     {
@@ -100,12 +150,17 @@
     },
     {
       "title": "Example Projects",
-      "purpose": "Document the 7 example projects in examples/local/: hello-world, rest-api, database-integration, tutorial-basis, tutorial-rest, twitter, github-issues.",
+      "purpose": "Document the 3 example projects in examples/: tutorial-basis, tutorial-rest, and twitter.",
       "parent": null
     },
     {
       "title": "Testing Guide",
-      "purpose": "Document reinhardt-test: TestContainers integration, test fixtures, and testing best practices for Reinhardt applications.",
+      "purpose": "Document reinhardt-test (TestContainers integration, test fixtures) and reinhardt-testkit (auth testing utilities, DI context isolation for parallel tests, per-test settings override). Testing best practices: rstest, AAA pattern.",
+      "parent": null
+    },
+    {
+      "title": "Security Hardening",
+      "purpose": "Document security hardening across the framework: error response sanitization, UUID generation strategy, authentication strictness, admin access controls, SQL injection surface reduction, and DI registry type safety.",
       "parent": null
     }
   ]

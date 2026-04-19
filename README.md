@@ -28,6 +28,7 @@
 - [Installation](#installation)
 - [Getting Started Guide](#getting-started-guide)
 - [Available Components](#available-components)
+- [Ecosystem](#ecosystem)
 - [API Stability](#api-stability)
 
 ## Who is Reinhardt For?
@@ -97,7 +98,7 @@ Reinhardt follows a **three-phase lifecycle** for every crate:
 | **RC** (`0.x.0-rc.N`) | API frozen. Bug fixes only. Safe to build against. |
 | **Stable** (`0.x.0`) | Full SemVer 2.0 guarantees. |
 
-**Current status:** All crates are at `0.1.0-rc.9` (Release Candidate).
+**Current status:** All crates are at `0.1.0-rc.15` (Release Candidate).
 
 **What this means for you:**
 - Public APIs will only change to fix critical bugs -- no new features or additions
@@ -122,7 +123,7 @@ Get a well-balanced feature set with zero configuration:
 [dependencies]
 # Import as 'reinhardt', published as 'reinhardt-web'
 # Default enables the "standard" preset (balanced feature set)
-reinhardt = { version = "0.1.0-rc.9", package = "reinhardt-web" }
+reinhardt = { version = "0.1.0-rc.15", package = "reinhardt-web" }
 ```
 
 **Includes:** Core, Database (PostgreSQL), REST API (serializers, parsers, pagination, filters, throttling, versioning, metadata, content negotiation), Auth, Middleware (sessions), Pages (WASM Frontend with SSR), Signals
@@ -141,7 +142,7 @@ For projects that need every available component:
 
 ```toml
 [dependencies]
-reinhardt = { version = "0.1.0-rc.9", package = "reinhardt-web", default-features = false, features = ["full"] }
+reinhardt = { version = "0.1.0-rc.15", package = "reinhardt-web", default-features = false, features = ["full"] }
 ```
 
 **Includes:** Everything in Standard, plus Admin, GraphQL, WebSockets, Cache, i18n, Mail, Static Files, Storage, and more
@@ -154,7 +155,7 @@ Lightweight and fast, perfect for simple APIs:
 
 ```toml
 [dependencies]
-reinhardt = { version = "0.1.0-rc.9", package = "reinhardt-web", default-features = false, features = ["minimal"] }
+reinhardt = { version = "0.1.0-rc.15", package = "reinhardt-web", default-features = false, features = ["minimal"] }
 ```
 
 **Includes:** HTTP, routing, DI, parameter extraction, server
@@ -168,24 +169,24 @@ Install only the components you need:
 ```toml
 [dependencies]
 # Core components
-reinhardt-http = "0.1.0-rc.9"
-reinhardt-urls = "0.1.0-rc.9"
+reinhardt-http = "0.1.0-rc.15"
+reinhardt-urls = "0.1.0-rc.15"
 
 # Optional: Database
-reinhardt-db = "0.1.0-rc.9"
+reinhardt-db = "0.1.0-rc.15"
 
 # Optional: Authentication
-reinhardt-auth = "0.1.0-rc.9"
+reinhardt-auth = "0.1.0-rc.15"
 
 # Optional: REST API features
-reinhardt-rest = "0.1.0-rc.9"
+reinhardt-rest = "0.1.0-rc.15"
 
 # Optional: Admin panel
-reinhardt-admin = "0.1.0-rc.9"
+reinhardt-admin = "0.1.0-rc.15"
 
 # Optional: Advanced features
-reinhardt-graphql = "0.1.0-rc.9"
-reinhardt-websockets = "0.1.0-rc.9"
+reinhardt-graphql = "0.1.0-rc.15"
+reinhardt-websockets = "0.1.0-rc.15"
 ```
 
 **Note on Crate Naming:**
@@ -550,10 +551,9 @@ use reinhardt::DefaultUser;
 
 // Django-style F/Q object queries with type-safe field references
 async fn complex_user_query() -> Result<Vec<DefaultUser>, Box<dyn std::error::Error>> {
-	// Q objects with type-safe field references (using generated field accessors)
-	let active_query = Q::new()
-		.field("is_active").eq(true)
-		.and(Q::new().field("date_joined").gte(Now::new()));
+	// Q objects for building complex conditions
+	let active_query = Q::new("is_active", "=", "true")
+		.and(Q::new("date_joined", ">=", "NOW()"));
 
 	// Database functions with type-safe field references
 	let email_lower = Lower::new(DefaultUser::field_email().into());
@@ -1076,6 +1076,16 @@ Reinhardt offers modular components you can mix and match:
 | Test Utilities      | `reinhardt-test`          | Testing helpers, fixtures, TestContainers   |
 
 **For detailed feature flags within each crate, see the [Feature Flags Guide](https://reinhardt-web.dev/docs/feature-flags/).**
+
+---
+
+## Ecosystem
+
+| Project | Status | Description |
+|---------|--------|-------------|
+| [reinhardt-cloud](https://github.com/kent8192/reinhardt-cloud) | WIP | Kubernetes operator & CLI for deploying Reinhardt apps |
+
+> **Dog-fooding in progress:** We are actively developing reinhardt-cloud as the deployment infrastructure for Reinhardt applications, and using it to deploy reinhardt-web itself. As a work-in-progress project, APIs and features may change significantly.
 
 ---
 

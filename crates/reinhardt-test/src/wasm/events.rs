@@ -1,4 +1,4 @@
-#![cfg(target_arch = "wasm32")]
+#![cfg(wasm)]
 
 //! Event Simulation for WASM Frontend Testing
 //!
@@ -480,7 +480,7 @@ pub mod fire_event {
 		init.cancelable(false);
 		init.data(Some(value));
 		init.input_type("insertText");
-		let event = InputEvent::new_with_input_event_init_dict("input", &init).unwrap();
+		let event = InputEvent::new_with_event_init_dict("input", &init).unwrap();
 		dispatch(element, &event);
 	}
 
@@ -538,7 +538,7 @@ pub mod fire_event {
 		if let Some(d) = detail {
 			init.detail(d);
 		}
-		let event = CustomEvent::new_with_custom_event_init_dict(event_type, &init).unwrap();
+		let event = CustomEvent::new_with_event_init_dict(event_type, &init).unwrap();
 		dispatch(element, &event);
 	}
 

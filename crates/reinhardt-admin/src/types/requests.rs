@@ -19,7 +19,7 @@ const MAX_FILTER_STRING_LENGTH: usize = 500;
 /// Filter parameters are explicitly provided via the `filters` field rather than
 /// captured via `serde(flatten)`, preventing unrecognized query parameters from
 /// silently becoming database filters.
-#[derive(Debug, Deserialize, Default)]
+#[derive(Debug, Serialize, Deserialize, Default)]
 pub struct ListQueryParams {
 	/// Page number (1-indexed)
 	pub page: Option<u64>,
@@ -100,7 +100,7 @@ pub struct MutationRequest {
 	/// CSRF token for mutation verification (double-submit cookie pattern).
 	///
 	/// The client must send the CSRF token received from the dashboard response
-	/// in this field. The server validates this value against the `__csrf_token`
+	/// in this field. The server validates this value against the `csrftoken`
 	/// cookie set by the dashboard endpoint. An attacker on a different origin
 	/// cannot read the cookie, preventing CSRF attacks.
 	pub csrf_token: String,
@@ -110,12 +110,12 @@ pub struct MutationRequest {
 }
 
 /// Request body for bulk delete
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct BulkDeleteRequest {
 	/// CSRF token for mutation verification (double-submit cookie pattern).
 	///
 	/// The client must send the CSRF token received from the dashboard response
-	/// in this field. The server validates this value against the `__csrf_token`
+	/// in this field. The server validates this value against the `csrftoken`
 	/// cookie set by the dashboard endpoint. An attacker on a different origin
 	/// cannot read the cookie, preventing CSRF attacks.
 	pub csrf_token: String,
@@ -328,5 +328,92 @@ mod tests {
 		// Assert
 		assert!(result.is_ok());
 		assert!(result.unwrap().filters.is_empty());
+	}
+
+	// ==================== Boundary value: filter count ====================
+
+	#[rstest]
+	#[case::zero_filters(0, true)]
+	#[case::nineteen_filters(19, true)]
+	#[case::twenty_filters(20, true)]
+	#[case::twentyone_filters(21, false)]
+	fn test_filter_count_boundary(#[case] count: usize, #[case] should_pass: bool) {
+		// Arrange
+		let mut filters = serde_json::Map::new();
+		for i in 0..count {
+			filters.insert(
+				format!("field_{}", i),
+				serde_json::Value::String(format!("value_{}", i)),
+			);
+		}
+		let json = serde_json::json!({"filters": filters}).to_string();
+
+		// Act
+		let result = parse_list_query(&json);
+
+		// Assert
+		assert_eq!(
+			result.is_ok(),
+			should_pass,
+			"count={}, expected pass={}, got {:?}",
+			count,
+			should_pass,
+			result
+		);
+	}
+
+	// ==================== Boundary value: filter key length ====================
+
+	#[rstest]
+	#[case::short_key(10, true)]
+	#[case::at_limit(500, true)]
+	#[case::above_limit(501, false)]
+	fn test_filter_key_length_boundary(#[case] length: usize, #[case] should_pass: bool) {
+		// Arrange: key composed of alphanumeric chars only
+		let key: String = "a".repeat(length);
+		let json = serde_json::json!({"filters": {key: "value"}}).to_string();
+
+		// Act
+		let result = parse_list_query(&json);
+
+		// Assert
+		assert_eq!(
+			result.is_ok(),
+			should_pass,
+			"key_length={}, expected pass={}, got {:?}",
+			length,
+			should_pass,
+			result
+		);
+	}
+
+	// ==================== Equivalence partitioning: filter key format ====================
+
+	#[rstest]
+	#[case::alphanumeric("status", true)]
+	#[case::with_underscore("created_at", true)]
+	#[case::with_hyphen("is-active", true)]
+	#[case::with_dot("user.name", true)]
+	#[case::with_semicolon("status;DROP", false)]
+	#[case::with_space("some field", false)]
+	#[case::with_quotes("field\"name", false)]
+	fn test_filter_key_format_equivalence(#[case] key: &str, #[case] should_pass: bool) {
+		// Arrange
+		let mut filters = HashMap::new();
+		filters.insert(key.to_string(), "value".to_string());
+		let json = serde_json::json!({"filters": filters}).to_string();
+
+		// Act
+		let result = parse_list_query(&json);
+
+		// Assert
+		assert_eq!(
+			result.is_ok(),
+			should_pass,
+			"key='{}', expected pass={}, got {:?}",
+			key,
+			should_pass,
+			result
+		);
 	}
 }

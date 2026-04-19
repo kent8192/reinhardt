@@ -6,7 +6,7 @@
 //!
 //! ## Usage
 //!
-//! ```ignore
+//! ```no_run
 //! use reinhardt_pages::integ::url_resolver;
 //! use std::collections::HashMap;
 //!
@@ -42,7 +42,7 @@ static URL_ROUTES: OnceLock<HashMap<String, String>> = OnceLock::new();
 ///
 /// # Examples
 ///
-/// ```ignore
+/// ```no_run
 /// use reinhardt_pages::integ::url_resolver;
 /// use std::collections::HashMap;
 ///
@@ -124,6 +124,24 @@ pub fn resolve_url(route_name: &str) -> Result<String, UrlResolveError> {
 		.ok_or_else(|| UrlResolveError::RouteNotFound {
 			route_name: route_name.to_string(),
 		})
+}
+
+/// Resets the URL resolver for testing purposes.
+///
+/// # Safety
+///
+/// This function replaces the static `OnceLock` value using `std::ptr::write`.
+/// It is only safe to call from a single-threaded test context (e.g., with
+/// `#[serial]`) where no other thread is concurrently reading the static.
+#[cfg(any(test, feature = "testing"))]
+pub fn reset_url_resolver() {
+	// SAFETY: We replace the OnceLock in-place with a fresh instance.
+	// This is safe only when called from a single-threaded test context
+	// (enforced by #[serial]) where no concurrent readers exist.
+	unsafe {
+		let ptr = std::ptr::addr_of!(URL_ROUTES) as *mut OnceLock<HashMap<String, String>>;
+		std::ptr::write(ptr, OnceLock::new());
+	}
 }
 
 #[cfg(test)]

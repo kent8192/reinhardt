@@ -35,7 +35,7 @@ impl TweetFactory {
 		user_id: Uuid,
 		content: &str,
 	) -> Result<Tweet, sqlx::Error> {
-		let id = Uuid::new_v4();
+		let id = Uuid::now_v7();
 		let now = Utc::now();
 
 		let sql = Query::insert()
@@ -74,7 +74,7 @@ impl TweetFactory {
 		like_count: i32,
 		retweet_count: i32,
 	) -> Result<Tweet, sqlx::Error> {
-		let id = Uuid::new_v4();
+		let id = Uuid::now_v7();
 		let now = Utc::now();
 
 		let sql = Query::insert()

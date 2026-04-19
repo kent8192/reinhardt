@@ -1,3 +1,4 @@
+#![cfg(not(target_arch = "wasm32"))]
 //! Component System integration tests
 //!
 //! Success Criteria:
@@ -22,8 +23,9 @@
 //!
 //! Total: 30 tests
 
-use proptest::prelude::*;
 #[cfg(not(target_arch = "wasm32"))]
+use proptest::prelude::*;
+#[cfg(native)]
 use reinhardt_pages::component::DummyEvent;
 use reinhardt_pages::component::{Component, IntoPage, Page, PageElement};
 use rstest::*;
@@ -339,6 +341,7 @@ fn test_component_use_case_nested() {
 // ============================================================================
 
 /// Tests props immutability and consistency
+#[cfg(not(target_arch = "wasm32"))]
 #[rstest]
 fn test_component_property_props_immutability() {
 	proptest!(|(value in -1000i32..1000i32)| {
@@ -541,14 +544,14 @@ fn test_component_decision_case4_props_and_children() {
 #[rstest]
 #[case::no_props_with_listener()]
 fn test_component_decision_case5_with_listener() {
-	#[cfg(not(target_arch = "wasm32"))]
+	#[cfg(native)]
 	let view = PageElement::new("button")
 		.listener("click", |_event: DummyEvent| {
 			// Handler logic
 		})
 		.into_page();
 
-	#[cfg(target_arch = "wasm32")]
+	#[cfg(wasm)]
 	let view = PageElement::new("button")
 		.listener("click", |_event| {
 			// Handler logic

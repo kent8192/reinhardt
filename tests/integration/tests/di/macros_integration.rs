@@ -25,13 +25,17 @@
 use bytes::Bytes;
 use hyper::{HeaderMap, Method, Version};
 use reinhardt_core::exception::Result as ExceptionResult;
-use reinhardt_di::{Injectable, InjectionContext, SingletonScope};
+use reinhardt_di::{
+	DependencyScope, Injectable, InjectionContext, SingletonScope, global_registry,
+};
 use reinhardt_http::Request;
 use reinhardt_macros::use_inject;
 use std::sync::Arc;
 
-/// Helper to create a test Request with DI context attached
+/// Helper to create a test Request with DI context attached.
+/// Also ensures test types are registered in the global DI registry.
 fn create_test_request_with_di(ctx: Arc<InjectionContext>) -> Request {
+	register_test_types();
 	let mut req = Request::builder()
 		.method(Method::GET)
 		.uri("/test")
@@ -92,6 +96,32 @@ struct CustomService {
 impl Injectable for CustomService {
 	async fn inject(_ctx: &InjectionContext) -> reinhardt_di::DiResult<Self> {
 		Ok(CustomService { value: 42 })
+	}
+}
+
+/// Register all test types in the global DI registry.
+/// `Depends::resolve()` requires types to be registered (not just `impl Injectable`).
+fn register_test_types() {
+	let registry = global_registry();
+	if !registry.is_registered::<Database>() {
+		registry.register_async::<Database, _, _>(DependencyScope::Request, |_ctx| async {
+			Ok(Database::default())
+		});
+	}
+	if !registry.is_registered::<Config>() {
+		registry.register_async::<Config, _, _>(DependencyScope::Request, |_ctx| async {
+			Ok(Config::default())
+		});
+	}
+	if !registry.is_registered::<Logger>() {
+		registry.register_async::<Logger, _, _>(DependencyScope::Request, |_ctx| async {
+			Ok(Logger::default())
+		});
+	}
+	if !registry.is_registered::<CustomService>() {
+		registry.register_async::<CustomService, _, _>(DependencyScope::Request, |_ctx| async {
+			Ok(CustomService { value: 42 })
+		});
 	}
 }
 

@@ -1,7 +1,8 @@
 [package]
 name = "reinhardt-shortcuts"
-version = "0.1.0-rc.14"
+version = "0.1.0-rc.15"
 edition.workspace = true
+rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 authors.workspace = true
@@ -26,7 +27,7 @@ reinhardt-test = { workspace = true, optional = true }
 
 [features]
 default = []
-database = ["reinhardt-db", "reinhardt-db/backends", "reinhardt-db/pool", "reinhardt-db/orm", "reinhardt-db/postgres"]
+database = ["reinhardt-db", "reinhardt-db/orm"]
 full = ["database"]
 # Test utilities
 test-utils = ["dep:reinhardt-test", "reinhardt-test/testcontainers"]

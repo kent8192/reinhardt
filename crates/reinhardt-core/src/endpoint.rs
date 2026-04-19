@@ -1,9 +1,13 @@
-#![cfg(not(target_arch = "wasm32"))]
+#![cfg(native)]
 
 //! Endpoint metadata trait for HTTP Method Macros
 //!
 //! This module provides the `EndpointInfo` trait that HTTP Method Macros
 //! (`#[get]`, `#[post]`, etc.) implement to provide route metadata.
+
+pub mod auth_protection;
+
+pub use auth_protection::{AuthProtection, validate_endpoint_security};
 
 use hyper::Method;
 
@@ -58,6 +62,12 @@ pub struct EndpointMetadata {
 
 	/// Security requirements (e.g., "bearer", "api_key")
 	pub security: &'static [&'static str],
+
+	/// Authentication protection level detected from handler parameters.
+	pub auth_protection: AuthProtection,
+
+	/// Human-readable description of the guard expression (if any).
+	pub guard_description: Option<&'static str>,
 }
 
 /// A response definition for an endpoint

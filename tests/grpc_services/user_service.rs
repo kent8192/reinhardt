@@ -88,7 +88,7 @@ impl UserService for UserServiceImpl {
 		let req = request.into_inner();
 
 		let user = User {
-			id: Uuid::new_v4().to_string(),
+			id: Uuid::now_v7().to_string(),
 			name: req.name,
 			email: req.email,
 			active: true,

@@ -162,7 +162,7 @@ impl Permission for AllowAny {
 ///
 /// // Authenticated user - permission granted
 /// let user = SimpleUser {
-///     id: Uuid::new_v4(),
+///     id: Uuid::now_v7(),
 ///     username: "alice".to_string(),
 ///     email: "alice@example.com".to_string(),
 ///     is_active: true,
@@ -214,7 +214,7 @@ impl Permission for IsAuthenticated {
 ///
 /// // Non-admin user - permission denied
 /// let user = SimpleUser {
-///     id: Uuid::new_v4(),
+///     id: Uuid::now_v7(),
 ///     username: "alice".to_string(),
 ///     email: "alice@example.com".to_string(),
 ///     is_active: true,
@@ -233,7 +233,7 @@ impl Permission for IsAuthenticated {
 ///
 /// // Admin user - permission granted
 /// let admin = SimpleUser {
-///     id: Uuid::new_v4(),
+///     id: Uuid::now_v7(),
 ///     username: "admin".to_string(),
 ///     email: "admin@example.com".to_string(),
 ///     is_active: true,

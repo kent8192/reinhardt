@@ -6,6 +6,9 @@
 //! 3. Arbitrary nesting depths produce valid Views
 //! 4. View structure invariants are maintained
 
+// proptest does not support WASM targets
+#![cfg(not(target_arch = "wasm32"))]
+
 use proptest::prelude::*;
 use reinhardt_pages::component::Page;
 use reinhardt_pages::page;

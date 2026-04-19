@@ -290,7 +290,7 @@ impl Cache for RedisCache {
 			.map_err(|e| Error::Http(format!("Failed to get connection from pool: {}", e)))?;
 
 		let values: Vec<Option<Vec<u8>>> = conn
-			.get(&full_keys)
+			.mget(&full_keys)
 			.await
 			.map_err(|e| Error::Http(format!("Failed to get multiple values from Redis: {}", e)))?;
 

@@ -13,14 +13,14 @@ use reinhardt::pages::page;
 use reinhardt::pages::reactive::hooks::{Action, use_action, use_effect, use_state};
 use uuid::Uuid;
 
-#[cfg(client)]
+#[cfg(wasm)]
 use {
 	crate::apps::tweet::shared::server_fn::{create_tweet, delete_tweet, list_tweets},
 	reinhardt::pages::create_resource,
 	reinhardt::pages::reactive::ResourceState,
 };
 
-#[cfg(server)]
+#[cfg(native)]
 use crate::apps::tweet::shared::server_fn::{create_tweet, delete_tweet};
 
 /// Like button component (extracted to avoid nested watch blocks)
@@ -359,7 +359,7 @@ pub fn tweet_form() -> Page {
 
 		// Callback for successful submission - reload page
 		on_success: |_result| {
-			#[cfg(client)]
+			#[cfg(wasm)]
 			{
 				if let Some(window) = web_sys::window() {
 					let _ = window.location().reload();
@@ -408,7 +408,7 @@ pub fn tweet_list(user_id: Option<Uuid>) -> Page {
 	let (loading, _set_loading) = use_state(true);
 	let (error, _set_error) = use_state(None::<String>);
 
-	#[cfg(client)]
+	#[cfg(wasm)]
 	{
 		let resource = create_resource(move || async move {
 			list_tweets(user_id, 0).await.map_err(|e| e.to_string())

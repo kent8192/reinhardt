@@ -5,7 +5,7 @@
 
 use async_trait::async_trait;
 use reinhardt_di::{DiError, DiResult, Injectable, InjectionContext};
-use reinhardt_http::Request;
+use reinhardt_http::{Request, ResponseCookies, SharedResponseCookies};
 use std::sync::Arc;
 
 /// Wrapper for Request that can be injected into server function handlers.
@@ -24,6 +24,40 @@ impl ServerFnRequest {
 	/// Consumes self and returns the inner Request.
 	pub fn into_inner(self) -> Arc<Request> {
 		self.0
+	}
+
+	/// Add a `Set-Cookie` header value to the response.
+	///
+	/// Uses the [`SharedResponseCookies`] jar inserted by the server function
+	/// router wrapper. Falls back to inserting [`ResponseCookies`] directly
+	/// into extensions if the shared jar is not available.
+	///
+	/// # Example
+	///
+	/// ```ignore
+	/// #[server_fn]
+	/// pub async fn login(
+	///     #[inject] http_request: ServerFnRequest,
+	/// ) -> Result<(), ServerFnError> {
+	///     http_request.add_response_cookie(
+	///         "session=abc; HttpOnly; Path=/".to_string(),
+	///     );
+	///     Ok(())
+	/// }
+	/// ```
+	pub fn add_response_cookie(&self, cookie: String) {
+		if let Some(jar) = self.inner().extensions.get::<SharedResponseCookies>() {
+			jar.add(cookie);
+		} else {
+			// Fallback for handlers not invoked through the server_fn router
+			let mut cookies = self
+				.inner()
+				.extensions
+				.remove::<ResponseCookies>()
+				.unwrap_or_default();
+			cookies.add(cookie);
+			self.inner().extensions.insert(cookies);
+		}
 	}
 }
 

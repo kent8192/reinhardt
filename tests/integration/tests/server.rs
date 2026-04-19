@@ -49,6 +49,9 @@ mod edge_cases_integration;
 #[path = "server/use_case_integration.rs"]
 mod use_case_integration;
 
+#[path = "server/http_response_pipeline_integration.rs"]
+mod http_response_pipeline_integration;
+
 #[cfg(feature = "graphql")]
 #[path = "server/graphql_advanced_integration.rs"]
 mod graphql_advanced_integration;

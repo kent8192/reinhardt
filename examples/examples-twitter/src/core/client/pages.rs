@@ -18,7 +18,7 @@
 //! Pages are typically accessed through the router, but can also be
 //! rendered directly for testing or embedding:
 //!
-//! ```ignore
+//! ```no_run
 //! use crate::core::client::pages::timeline_page;
 //!
 //! let page = timeline_page();

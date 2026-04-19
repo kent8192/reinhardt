@@ -233,3 +233,15 @@ where
 		}
 	}
 }
+
+impl<T> super::has_inner::HasInner for Form<T> {
+	type Inner = T;
+
+	fn inner_ref(&self) -> &T {
+		&self.0
+	}
+
+	fn into_inner(self) -> T {
+		self.0
+	}
+}

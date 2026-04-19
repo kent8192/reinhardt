@@ -161,14 +161,11 @@ pub fn strip_spaces_between_tags(html: &str) -> String {
 /// assert_eq!(escape_attr("tab\there"), "tab&#9;here");
 /// ```
 pub fn escape_attr(text: &str) -> String {
-	let mut result = String::with_capacity(text.len() + 10);
-	for ch in text.chars() {
+	let escaped = escape(text);
+	// Extend with whitespace escaping required for attribute context
+	let mut result = String::with_capacity(escaped.len());
+	for ch in escaped.chars() {
 		match ch {
-			'&' => result.push_str("&amp;"),
-			'<' => result.push_str("&lt;"),
-			'>' => result.push_str("&gt;"),
-			'"' => result.push_str("&quot;"),
-			'\'' => result.push_str("&#x27;"),
 			'\n' => result.push_str("&#10;"),
 			'\r' => result.push_str("&#13;"),
 			'\t' => result.push_str("&#9;"),

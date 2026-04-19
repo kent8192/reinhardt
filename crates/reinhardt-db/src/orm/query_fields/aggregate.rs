@@ -24,7 +24,7 @@ pub enum AggregateFunction {
 ///
 /// # Examples
 ///
-/// ```ignore
+/// ```no_run
 /// use reinhardt_db::orm::query_fields::aggregate::*;
 ///
 /// // COUNT(*) > 5
@@ -166,8 +166,9 @@ impl From<f32> for ComparisonValue {
 ///
 /// # Examples
 ///
-/// ```ignore
+/// ```no_run
 /// use reinhardt_db::orm::query_fields::aggregate::*;
+/// use reinhardt_db::orm::query_fields::comparison::ComparisonOperator;
 ///
 /// // COUNT(*) > 5
 /// let expr = ComparisonExpr::new(

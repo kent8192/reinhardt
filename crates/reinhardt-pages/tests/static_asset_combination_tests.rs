@@ -1,8 +1,9 @@
+#![cfg(not(target_arch = "wasm32"))]
 //! Combination tests for static asset URL resolution
 //!
 //! Tests combinations of multiple configuration options and input variations.
 
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(native)]
 mod combination_tests {
 	use reinhardt_pages::static_resolver::{init_static_resolver, resolve_static};
 	use reinhardt_utils::staticfiles::TemplateStaticConfig;
@@ -187,7 +188,7 @@ mod combination_tests {
 	}
 }
 
-#[cfg(target_arch = "wasm32")]
+#[cfg(wasm)]
 mod wasm_combination_tests {
 	use reinhardt_pages::static_resolver::{init_static_resolver, resolve_static};
 	use wasm_bindgen_test::*;

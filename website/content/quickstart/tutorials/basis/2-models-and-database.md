@@ -239,6 +239,61 @@ The `#[field(...)]` and `#[rel(...)]` attributes provide metadata for the ORM:
   - **⚠️ IMPORTANT**: `related_name` is REQUIRED for `#[rel(foreign_key)]`
   - It defines the name for reverse access from the related model
   - Example: `related_name = "choices"` allows `Question.choices_accessor()`
+- `#[rel(many_to_many, related_name = "name")]` - Defines a many-to-many relationship
+  - Creates an intermediate (join) table automatically
+  - Example: `related_name = "followers"` allows reverse access from the target model
+
+### Many-to-Many Relationships
+
+For relationships where both sides can have multiple associated records, use
+`ManyToManyField<Source, Target>`:
+
+```rust
+use reinhardt::prelude::*;
+use reinhardt::db::associations::ManyToManyField;
+
+#[model(app_label = "blog", table_name = "blog_article")]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Article {
+    #[field(primary_key = true)]
+    pub id: i64,
+
+    #[field(max_length = 200)]
+    pub title: String,
+
+    // Many-to-many: an article can have multiple tags, a tag can belong to multiple articles
+    #[serde(skip, default)]
+    #[rel(many_to_many, related_name = "articles")]
+    pub tags: ManyToManyField<Article, Tag>,
+}
+
+#[model(app_label = "blog", table_name = "blog_tag")]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Tag {
+    #[field(primary_key = true)]
+    pub id: i64,
+
+    #[field(max_length = 50, unique = true)]
+    pub name: String,
+}
+```
+
+This automatically creates an intermediate table `blog_article_tags` with
+`article_id` and `tag_id` columns. Access related objects through the accessor:
+
+```rust
+// Get all tags for an article
+let tags = article.tags_accessor(&db).all().await?;
+
+// Add a tag to an article
+article.tags_accessor(&db).add(&tag).await?;
+
+// Remove a tag
+article.tags_accessor(&db).remove(&tag).await?;
+
+// Count tags
+let count = article.tags_accessor(&db).count().await?;
+```
 
 ## Model Macro Benefits
 
@@ -304,7 +359,7 @@ Running migrations:
 ## Playing with the Database API
 
 Now let's use Reinhardt's ORM to interact with the database. With
-`#[derive(Model)]`, many common operations are automatically available. Here are
+`#[model(...)]`, many common operations are automatically available. Here are
 some examples:
 
 ### Creating Records

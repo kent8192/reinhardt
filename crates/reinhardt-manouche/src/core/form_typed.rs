@@ -19,7 +19,7 @@
 //! | Properties | `TypedFieldValidation`, `TypedFieldDisplay`, `TypedFieldStyling` |
 //! | State | `TypedFormState`, `TypedFormCallbacks`, `TypedFormWatch` |
 //! | Customization | `TypedWrapper`, `TypedIcon`, `TypedCustomAttr`, `TypedFormSlots` |
-//! | Validation | `TypedFormValidator`, `TypedClientValidator` |
+//! | Validation | `TypedFormValidator` (with `ValidatorScope` per rule) |
 //!
 //! # Transformation Flow
 //!
@@ -32,6 +32,8 @@
 
 use proc_macro2::Span;
 use syn::{ExprClosure, Ident, Path};
+
+use super::form_node::ValidatorScope;
 
 #[cfg_attr(doc, aquamarine::aquamarine)]
 /// The top-level typed AST node representing a validated form! macro invocation.
@@ -112,10 +114,9 @@ pub struct TypedFormMacro {
 	pub slots: Option<TypedFormSlots>,
 	/// Validated field definitions (can include field groups)
 	pub fields: Vec<TypedFormFieldEntry>,
-	/// Validated server-side validators
+	/// Validated unified validators. Each rule carries a `ValidatorScope`
+	/// controlling whether it executes on server, client, or both.
 	pub validators: Vec<TypedFormValidator>,
-	/// Validated client-side validators
-	pub client_validators: Vec<TypedClientValidator>,
 	/// Span for error reporting
 	pub span: Span,
 }
@@ -543,6 +544,8 @@ pub enum TypedFormFieldEntry {
 	Field(Box<TypedFormFieldDef>),
 	/// A group of related fields
 	Group(TypedFormFieldGroup),
+	/// A submit button (not a data field — generates no Signal)
+	SubmitButton(TypedSubmitButtonDef),
 }
 
 impl TypedFormFieldEntry {
@@ -556,11 +559,17 @@ impl TypedFormFieldEntry {
 		matches!(self, TypedFormFieldEntry::Field(_))
 	}
 
+	/// Returns true if this is a submit button.
+	pub fn is_submit_button(&self) -> bool {
+		matches!(self, TypedFormFieldEntry::SubmitButton(_))
+	}
+
 	/// Returns the name of the entry.
 	pub fn name(&self) -> &Ident {
 		match self {
 			TypedFormFieldEntry::Field(f) => &f.as_ref().name,
 			TypedFormFieldEntry::Group(g) => &g.name,
+			TypedFormFieldEntry::SubmitButton(b) => &b.name,
 		}
 	}
 
@@ -569,6 +578,7 @@ impl TypedFormFieldEntry {
 		match self {
 			TypedFormFieldEntry::Field(f) => f.as_ref().span,
 			TypedFormFieldEntry::Group(g) => g.span,
+			TypedFormFieldEntry::SubmitButton(b) => b.span,
 		}
 	}
 
@@ -576,17 +586,45 @@ impl TypedFormFieldEntry {
 	pub fn as_field(&self) -> Option<&TypedFormFieldDef> {
 		match self {
 			TypedFormFieldEntry::Field(f) => Some(f.as_ref()),
-			TypedFormFieldEntry::Group(_) => None,
+			_ => None,
 		}
 	}
 
 	/// Returns a reference to the inner group if this is a Group variant.
 	pub fn as_group(&self) -> Option<&TypedFormFieldGroup> {
 		match self {
-			TypedFormFieldEntry::Field(_) => None,
 			TypedFormFieldEntry::Group(g) => Some(g),
+			_ => None,
 		}
 	}
+
+	/// Returns a reference to the inner submit button if this is a SubmitButton variant.
+	pub fn as_submit_button(&self) -> Option<&TypedSubmitButtonDef> {
+		match self {
+			TypedFormFieldEntry::SubmitButton(b) => Some(b),
+			_ => None,
+		}
+	}
+}
+
+/// A validated submit button definition.
+///
+/// Contains the resolved properties for a submit button element.
+/// Unlike regular fields, submit buttons do not generate Signal members.
+#[derive(Debug)]
+pub struct TypedSubmitButtonDef {
+	/// Button name identifier
+	pub name: Ident,
+	/// Button text (defaults to "Submit")
+	pub label: String,
+	/// Optional CSS class
+	pub class: Option<String>,
+	/// Optional HTML id attribute
+	pub id: Option<String>,
+	/// Whether the button is disabled
+	pub disabled: bool,
+	/// Span for error reporting
+	pub span: Span,
 }
 
 /// A validated group of related fields.
@@ -911,6 +949,8 @@ pub struct TypedFieldDisplay {
 	pub readonly: bool,
 	/// Whether to autofocus this field
 	pub autofocus: bool,
+	/// Autocomplete hint for the browser
+	pub autocomplete: Option<String>,
 }
 
 /// Styling-related properties of a field.
@@ -971,33 +1011,13 @@ pub struct TypedFormValidator {
 	pub span: Span,
 }
 
-/// A typed validation rule with condition expression and error message.
+/// A typed validation rule with condition expression, error message, and execution scope.
 #[derive(Debug)]
 pub struct TypedValidatorRule {
+	/// Execution scope propagated from `ValidatorRule`.
+	pub scope: ValidatorScope,
 	/// Validation condition expression (should evaluate to bool)
 	pub condition: syn::Expr,
-	/// Error message when validation fails
-	pub message: String,
-	/// Span for error reporting
-	pub span: Span,
-}
-
-/// Typed client-side validator.
-#[derive(Debug)]
-pub struct TypedClientValidator {
-	/// Field name to validate
-	pub field_name: Ident,
-	/// Validation rules
-	pub rules: Vec<TypedClientValidatorRule>,
-	/// Span for error reporting
-	pub span: Span,
-}
-
-/// A typed client-side validation rule.
-#[derive(Debug)]
-pub struct TypedClientValidatorRule {
-	/// JavaScript condition expression for validation
-	pub js_condition: String,
 	/// Error message when validation fails
 	pub message: String,
 	/// Span for error reporting
@@ -1273,7 +1293,6 @@ impl TypedFormMacro {
 			slots: None,
 			fields: Vec::new(),
 			validators: Vec::new(),
-			client_validators: Vec::new(),
 			span,
 		}
 	}
@@ -1448,18 +1467,24 @@ mod tests {
 		let integer_field = TypedFieldType::IntegerField;
 		let boolean_field = TypedFieldType::BooleanField;
 		let date_field = TypedFieldType::DateField;
+		let file_field = TypedFieldType::FileField;
+		let image_field = TypedFieldType::ImageField;
 
 		// Act
 		let char_type = char_field.rust_type();
 		let integer_type = integer_field.rust_type();
 		let boolean_type = boolean_field.rust_type();
 		let date_type = date_field.rust_type();
+		let file_type = file_field.rust_type();
+		let image_type = image_field.rust_type();
 
 		// Assert
 		assert_eq!(char_type, "String");
 		assert_eq!(integer_type, "i64");
 		assert_eq!(boolean_type, "bool");
 		assert_eq!(date_type, "Option<chrono::NaiveDate>");
+		assert_eq!(file_type, "Option<web_sys::File>");
+		assert_eq!(image_type, "Option<web_sys::File>");
 	}
 
 	#[rstest]
@@ -1469,18 +1494,24 @@ mod tests {
 		let email_field = TypedFieldType::EmailField;
 		let password_field = TypedFieldType::PasswordField;
 		let boolean_field = TypedFieldType::BooleanField;
+		let file_field = TypedFieldType::FileField;
+		let image_field = TypedFieldType::ImageField;
 
 		// Act
 		let char_widget = char_field.default_widget();
 		let email_widget = email_field.default_widget();
 		let password_widget = password_field.default_widget();
 		let boolean_widget = boolean_field.default_widget();
+		let file_widget = file_field.default_widget();
+		let image_widget = image_field.default_widget();
 
 		// Assert
 		assert_eq!(char_widget, TypedWidget::TextInput);
 		assert_eq!(email_widget, TypedWidget::EmailInput);
 		assert_eq!(password_widget, TypedWidget::PasswordInput);
 		assert_eq!(boolean_widget, TypedWidget::CheckboxInput);
+		assert_eq!(file_widget, TypedWidget::FileInput);
+		assert_eq!(image_widget, TypedWidget::FileInput);
 	}
 
 	#[rstest]
@@ -1491,6 +1522,7 @@ mod tests {
 		let password_input = TypedWidget::PasswordInput;
 		let number_input = TypedWidget::NumberInput;
 		let date_input = TypedWidget::DateInput;
+		let file_input = TypedWidget::FileInput;
 
 		// Act
 		let text_type = text_input.html_type();
@@ -1498,6 +1530,7 @@ mod tests {
 		let password_type = password_input.html_type();
 		let number_type = number_input.html_type();
 		let date_type = date_input.html_type();
+		let file_type = file_input.html_type();
 
 		// Assert
 		assert_eq!(text_type, "text");
@@ -1505,6 +1538,7 @@ mod tests {
 		assert_eq!(password_type, "password");
 		assert_eq!(number_type, "number");
 		assert_eq!(date_type, "date");
+		assert_eq!(file_type, "file");
 	}
 
 	#[rstest]
@@ -1512,18 +1546,21 @@ mod tests {
 		// Arrange
 		let text_input = TypedWidget::TextInput;
 		let email_input = TypedWidget::EmailInput;
+		let file_input = TypedWidget::FileInput;
 		let textarea = TypedWidget::Textarea;
 		let select = TypedWidget::Select;
 
 		// Act
 		let text_is_input = text_input.is_input();
 		let email_is_input = email_input.is_input();
+		let file_is_input = file_input.is_input();
 		let textarea_is_input = textarea.is_input();
 		let select_is_input = select.is_input();
 
 		// Assert
 		assert!(text_is_input);
 		assert!(email_is_input);
+		assert!(file_is_input);
 		assert!(!textarea_is_input);
 		assert!(!select_is_input);
 	}
@@ -1534,16 +1571,19 @@ mod tests {
 		let text_input = TypedWidget::TextInput;
 		let textarea = TypedWidget::Textarea;
 		let select = TypedWidget::Select;
+		let file_input = TypedWidget::FileInput;
 
 		// Act
 		let text_tag = text_input.html_tag();
 		let textarea_tag = textarea.html_tag();
 		let select_tag = select.html_tag();
+		let file_tag = file_input.html_tag();
 
 		// Assert
 		assert_eq!(text_tag, "input");
 		assert_eq!(textarea_tag, "textarea");
 		assert_eq!(select_tag, "select");
+		assert_eq!(file_tag, "input");
 	}
 
 	#[rstest]

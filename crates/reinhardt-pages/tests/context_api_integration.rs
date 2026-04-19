@@ -1,3 +1,4 @@
+#![cfg(not(target_arch = "wasm32"))]
 //! Context API integration tests
 //!
 //! Success Criteria:

@@ -33,10 +33,7 @@
 
 use rstest::*;
 
-use crate::wasm::{
-	mock::{MockCookies, MockFetch, MockStorage},
-	query::Screen,
-};
+use crate::wasm::{MockCookies, MockFetch, MockStorage, Screen};
 
 // ============================================================================
 // Screen / Query Fixtures
@@ -84,7 +81,7 @@ pub fn screen() -> Screen {
 /// ```
 #[fixture]
 pub fn mock_local_storage() -> MockStorage {
-	MockStorage::local()
+	MockStorage::new()
 }
 
 /// Fixture providing an empty mock sessionStorage.
@@ -103,7 +100,7 @@ pub fn mock_local_storage() -> MockStorage {
 /// ```
 #[fixture]
 pub fn mock_session_storage() -> MockStorage {
-	MockStorage::session()
+	MockStorage::new()
 }
 
 /// Fixture providing mock localStorage pre-populated with common test data.
@@ -126,10 +123,10 @@ pub fn mock_session_storage() -> MockStorage {
 /// ```
 #[fixture]
 pub fn populated_storage() -> MockStorage {
-	let storage = MockStorage::local();
-	storage.set("user_id", "test-user-123");
-	storage.set("theme", "dark");
-	storage.set("locale", "en-US");
+	let storage = MockStorage::new();
+	storage.set_item("user_id", "test-user-123");
+	storage.set_item("theme", "dark");
+	storage.set_item("locale", "en-US");
 	storage
 }
 
@@ -229,8 +226,8 @@ impl WasmTestEnv {
 	pub fn new() -> Self {
 		Self {
 			screen: Screen::new(),
-			local_storage: MockStorage::local(),
-			session_storage: MockStorage::session(),
+			local_storage: MockStorage::new(),
+			session_storage: MockStorage::new(),
 			cookies: MockCookies::new(),
 			fetch: MockFetch::new(),
 		}

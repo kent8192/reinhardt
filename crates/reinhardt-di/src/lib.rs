@@ -88,7 +88,7 @@
 //!
 //! Optional request and param context can be added:
 //!
-//! ```ignore
+//! ```no_run
 //! use reinhardt_di::{InjectionContext, SingletonScope};
 //! use reinhardt_http::Request;
 //! use std::sync::Arc;
@@ -109,6 +109,34 @@
 //!     .with_request(request)
 //!     .build();
 //! ```
+//!
+//! ## Resolve Context
+//!
+//! The [`get_di_context`] function provides access to the active
+//! [`InjectionContext`] within `#[injectable_factory]` and `#[injectable]`
+//! function bodies, without requiring `#[inject]`.
+//!
+//! This enables factories to access the DI context for purposes like
+//! passing it to downstream consumers:
+//!
+//! ```rust,ignore
+//! use reinhardt_di::{ContextLevel, Depends, get_di_context};
+//!
+//! #[injectable_factory(scope = "transient")]
+//! async fn make_router(
+//!     #[inject] config: Depends<AppConfig>,
+//! ) -> Router {
+//!     let di_ctx = get_di_context(ContextLevel::Current);
+//!     Router::new().with_di_context(di_ctx)
+//! }
+//! ```
+//!
+//! [`ContextLevel::Root`] returns the application-level context, while
+//! [`ContextLevel::Current`] returns the currently active context
+//! (which may be a request-scoped fork).
+//!
+//! Use [`try_get_di_context`] for a non-panicking variant that returns
+//! `None` when called outside of a DI resolution context.
 //!
 //! ## Circular Dependency Detection
 //!
@@ -162,7 +190,7 @@
 //!
 //! ## Development Tools Example
 //!
-//! ```ignore
+//! ```no_run
 //! # #[cfg(feature = "dev-tools")]
 //! # use reinhardt_di::{visualization::DependencyGraph, profiling::DependencyProfiler};
 //! # #[cfg(feature = "dev-tools")]
@@ -204,7 +232,7 @@
 //!
 //! Returns an injection error if any requirement is missing (fail-fast behavior).
 //!
-//! ```rust,ignore
+//! ```ignore
 //! use reinhardt_auth::AuthUser;
 //! use reinhardt_auth::DefaultUser;
 //!
@@ -250,7 +278,9 @@ pub mod override_registry;
 pub mod provider;
 pub mod registration;
 pub mod registry;
+pub mod resolve_context;
 pub mod scope;
+pub mod validation;
 
 use thiserror::Error;
 
@@ -265,17 +295,22 @@ pub use override_registry::OverrideRegistry;
 pub use context::{ParamContext, Request};
 pub use depends::{Depends, DependsBuilder};
 pub use injectable::Injectable;
+#[allow(deprecated)]
 pub use injected::{
 	DependencyScope as InjectedScope, Injected, InjectionMetadata, OptionalInjected,
 };
 pub use provider::{Provider, ProviderFn};
 pub use registration::DiRegistrationList;
 pub use registry::{
-	DependencyRegistration, DependencyRegistry, DependencyScope, FactoryTrait, global_registry,
+	DependencyRegistration, DependencyRegistry, DependencyScope, FactoryTrait, InjectableFactory,
+	InjectableRegistration, global_registry,
 };
+pub use resolve_context::{ContextLevel, get_di_context, try_get_di_context};
 pub use scope::{RequestScope, Scope, SingletonScope};
+pub use validation::{RegistryValidator, ValidationError, ValidationErrorKind};
 
-// Re-export inventory for macro use
+// Re-export inventory and async_trait for macro use
+pub use async_trait;
 pub use inventory;
 
 // Re-export macros
@@ -284,6 +319,7 @@ pub use reinhardt_di_macros::{injectable, injectable_factory};
 
 /// Errors that can occur during dependency injection resolution.
 #[derive(Debug, Error)]
+#[non_exhaustive]
 pub enum DiError {
 	/// The requested dependency was not found in the container.
 	#[error("Dependency not found: {0}")]
@@ -332,6 +368,14 @@ pub enum DiError {
 		/// A description of the internal error.
 		message: String,
 	},
+
+	/// An authorization error (insufficient permissions).
+	#[error("Authorization error: {0}")]
+	Authorization(String),
+
+	/// An authentication error (user not authenticated).
+	#[error("Authentication error: {0}")]
+	Authentication(String),
 }
 
 impl From<DiError> for reinhardt_core::exception::Error {
@@ -342,6 +386,12 @@ impl From<DiError> for reinhardt_core::exception::Error {
 			| DiError::DependencyNotRegistered { .. } => reinhardt_core::exception::Error::NotFound(
 				format!("Dependency injection error: {}", err),
 			),
+			DiError::Authorization(msg) => {
+				reinhardt_core::exception::Error::Authorization(msg.clone())
+			}
+			DiError::Authentication(msg) => {
+				reinhardt_core::exception::Error::Authentication(msg.clone())
+			}
 			_ => reinhardt_core::exception::Error::Internal(format!(
 				"Dependency injection error: {}",
 				err
@@ -356,6 +406,37 @@ pub type DiResult<T> = std::result::Result<T, DiError>;
 // Generator support
 #[cfg(feature = "generator")]
 pub mod generator;
+
+#[cfg(test)]
+mod tests {
+	use rstest::rstest;
+
+	use super::*;
+
+	#[rstest]
+	#[case::not_found(DiError::NotFound("missing".to_string()), 404)]
+	#[case::not_registered(DiError::NotRegistered { type_name: "Foo".to_string(), hint: "".to_string() }, 404)]
+	#[case::dependency_not_registered(DiError::DependencyNotRegistered { type_name: "Bar".to_string() }, 404)]
+	#[case::authorization(DiError::Authorization("forbidden".to_string()), 403)]
+	#[case::authentication(DiError::Authentication("not authenticated".to_string()), 401)]
+	#[case::circular_dependency(DiError::CircularDependency("A -> B -> A".to_string()), 500)]
+	#[case::provider_error(DiError::ProviderError("boom".to_string()), 500)]
+	#[case::type_mismatch(DiError::TypeMismatch { expected: "A".to_string(), actual: "B".to_string() }, 500)]
+	#[case::scope_error(DiError::ScopeError("wrong scope".to_string()), 500)]
+	#[case::internal(DiError::Internal { message: "oops".to_string() }, 500)]
+	fn test_di_error_to_http_error_status_mapping(
+		#[case] di_err: DiError,
+		#[case] expected_status: u16,
+	) {
+		// Arrange (provided by #[case])
+
+		// Act
+		let err: reinhardt_core::exception::Error = di_err.into();
+
+		// Assert
+		assert_eq!(err.status_code(), expected_status);
+	}
+}
 
 // Development tools
 #[cfg(feature = "dev-tools")]

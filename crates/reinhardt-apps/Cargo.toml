@@ -1,8 +1,9 @@
 [package]
 name = "reinhardt-apps"
-version = "0.1.0-rc.14"
+version = "0.1.0-rc.15"
 description = "Application registry and management for Reinhardt framework"
 edition.workspace = true
+rust-version.workspace = true
 authors.workspace = true
 license.workspace = true
 repository.workspace = true
@@ -27,7 +28,7 @@ chrono = { workspace = true }
 sha2 = "0.10"
 flate2 = { workspace = true }
 brotli = { workspace = true }
-reqwest = { version = "0.12", features = ["json"] }
+reqwest = { workspace = true }
 futures = "0.3.31"
 pin-project = "1.1"
 linkme = "0.3"
@@ -39,11 +40,16 @@ reinhardt-core = {workspace = true, features = ["types"]}
 default = []
 full = ["di"]
 di = ["dep:reinhardt-di"]
+testing = []
 
 [dev-dependencies]
 insta = { workspace = true }
 serial_test = { workspace = true }
 rstest = { workspace = true }
+# Workaround for KI-2 (rust-lang/cargo#4242, rust-lang/cargo#15151):
+# Path-only dev-dep (no version) is stripped from published manifest by cargo,
+# avoiding dev-dependency version resolution failure during `cargo publish`.
+# When upstream cargo resolves these issues, replace with `workspace = true`.
 reinhardt-test = { path = "../reinhardt-test" }
 reinhardt-conf = { workspace = true, features = ["settings"] }
 reinhardt-core = {workspace = true, features = ["exception"]}

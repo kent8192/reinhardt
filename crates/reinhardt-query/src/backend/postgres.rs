@@ -4446,6 +4446,115 @@ impl PostgresQueryBuilder {
 	}
 }
 
+/// Collect all dollar-quote delimiters present in the body text.
+///
+/// A dollar-quote delimiter in PostgreSQL has the form `$tag$` where `tag` is
+/// either empty or consists of `[a-zA-Z0-9_]` characters not starting with a
+/// digit. This function scans the body and returns the set of all such
+/// delimiters (including the surrounding `$` signs).
+///
+/// Using exact delimiter boundary detection instead of substring matching
+/// prevents false positives (e.g. `$100` is not a delimiter) and false
+/// negatives (e.g. partial overlap with candidate delimiter tags).
+fn collect_dollar_quote_delimiters(body: &str) -> std::collections::HashSet<String> {
+	let mut delimiters = std::collections::HashSet::new();
+	let bytes = body.as_bytes();
+	let len = bytes.len();
+	let mut i = 0;
+
+	while i < len {
+		if bytes[i] == b'$' {
+			// Found a '$', try to parse a dollar-quote delimiter
+			let start = i;
+			i += 1;
+
+			// Empty tag: `$$`
+			if i < len && bytes[i] == b'$' {
+				delimiters.insert("$$".to_string());
+				i += 1;
+				continue;
+			}
+
+			// Non-empty tag: tag must match [a-zA-Z_][a-zA-Z0-9_]*
+			if i < len && (bytes[i].is_ascii_alphabetic() || bytes[i] == b'_') {
+				let tag_start = i;
+				i += 1;
+				while i < len && (bytes[i].is_ascii_alphanumeric() || bytes[i] == b'_') {
+					i += 1;
+				}
+				// Check for closing '$'
+				if i < len && bytes[i] == b'$' {
+					let delimiter = &body[start..=i];
+					delimiters.insert(delimiter.to_string());
+					i += 1;
+					continue;
+				}
+				// Not a valid delimiter, continue from after the initial '$'
+				i = tag_start;
+				continue;
+			}
+
+			// '$' followed by a digit or other non-tag character -- not a delimiter
+			continue;
+		}
+		i += 1;
+	}
+
+	delimiters
+}
+
+/// Generate a safe dollar-quote delimiter that does not appear in the body.
+///
+/// PostgreSQL dollar-quoting uses `$$` as the default delimiter. If the function
+/// body contains `$$`, an attacker could break out of the dollar-quoted string.
+/// This function scans for all dollar-quote delimiter patterns in the body and
+/// generates a unique delimiter that does not conflict with any of them.
+fn generate_safe_dollar_quote_delimiter(body: &str) -> String {
+	let existing = collect_dollar_quote_delimiters(body);
+
+	if !existing.contains("$$") {
+		return "$$".to_string();
+	}
+
+	// Try numbered delimiters: $body_0$, $body_1$, ...
+	for i in 0u64.. {
+		let candidate = format!("$body_{}$", i);
+		if !existing.contains(&candidate) {
+			return candidate;
+		}
+	}
+
+	// Unreachable in practice, but satisfy the compiler
+	"$$".to_string()
+}
+
+/// Determine the byte width of a UTF-8 character from its leading byte.
+///
+/// This avoids pushing individual bytes as `char` (which corrupts multi-byte
+/// UTF-8 sequences). The function assumes valid UTF-8 input, which is
+/// guaranteed because the input is a Rust `&str`.
+fn utf8_char_width(leading_byte: u8) -> usize {
+	if leading_byte < 0x80 {
+		1
+	} else if leading_byte < 0xE0 {
+		2
+	} else if leading_byte < 0xF0 {
+		3
+	} else {
+		4
+	}
+}
+
+impl crate::query::QueryBuilderTrait for PostgresQueryBuilder {
+	fn placeholder(&self) -> (&str, bool) {
+		("$", true)
+	}
+
+	fn quote_char(&self) -> char {
+		'"'
+	}
+}
+
 #[cfg(test)]
 mod tests {
 	use super::*;
@@ -9783,114 +9892,5 @@ mod tests {
 			"Should NOT contain type cast syntax, got: {}",
 			sql
 		);
-	}
-}
-
-/// Collect all dollar-quote delimiters present in the body text.
-///
-/// A dollar-quote delimiter in PostgreSQL has the form `$tag$` where `tag` is
-/// either empty or consists of `[a-zA-Z0-9_]` characters not starting with a
-/// digit. This function scans the body and returns the set of all such
-/// delimiters (including the surrounding `$` signs).
-///
-/// Using exact delimiter boundary detection instead of substring matching
-/// prevents false positives (e.g. `$100` is not a delimiter) and false
-/// negatives (e.g. partial overlap with candidate delimiter tags).
-fn collect_dollar_quote_delimiters(body: &str) -> std::collections::HashSet<String> {
-	let mut delimiters = std::collections::HashSet::new();
-	let bytes = body.as_bytes();
-	let len = bytes.len();
-	let mut i = 0;
-
-	while i < len {
-		if bytes[i] == b'$' {
-			// Found a '$', try to parse a dollar-quote delimiter
-			let start = i;
-			i += 1;
-
-			// Empty tag: `$$`
-			if i < len && bytes[i] == b'$' {
-				delimiters.insert("$$".to_string());
-				i += 1;
-				continue;
-			}
-
-			// Non-empty tag: tag must match [a-zA-Z_][a-zA-Z0-9_]*
-			if i < len && (bytes[i].is_ascii_alphabetic() || bytes[i] == b'_') {
-				let tag_start = i;
-				i += 1;
-				while i < len && (bytes[i].is_ascii_alphanumeric() || bytes[i] == b'_') {
-					i += 1;
-				}
-				// Check for closing '$'
-				if i < len && bytes[i] == b'$' {
-					let delimiter = &body[start..=i];
-					delimiters.insert(delimiter.to_string());
-					i += 1;
-					continue;
-				}
-				// Not a valid delimiter, continue from after the initial '$'
-				i = tag_start;
-				continue;
-			}
-
-			// '$' followed by a digit or other non-tag character -- not a delimiter
-			continue;
-		}
-		i += 1;
-	}
-
-	delimiters
-}
-
-/// Generate a safe dollar-quote delimiter that does not appear in the body.
-///
-/// PostgreSQL dollar-quoting uses `$$` as the default delimiter. If the function
-/// body contains `$$`, an attacker could break out of the dollar-quoted string.
-/// This function scans for all dollar-quote delimiter patterns in the body and
-/// generates a unique delimiter that does not conflict with any of them.
-fn generate_safe_dollar_quote_delimiter(body: &str) -> String {
-	let existing = collect_dollar_quote_delimiters(body);
-
-	if !existing.contains("$$") {
-		return "$$".to_string();
-	}
-
-	// Try numbered delimiters: $body_0$, $body_1$, ...
-	for i in 0u64.. {
-		let candidate = format!("$body_{}$", i);
-		if !existing.contains(&candidate) {
-			return candidate;
-		}
-	}
-
-	// Unreachable in practice, but satisfy the compiler
-	"$$".to_string()
-}
-
-/// Determine the byte width of a UTF-8 character from its leading byte.
-///
-/// This avoids pushing individual bytes as `char` (which corrupts multi-byte
-/// UTF-8 sequences). The function assumes valid UTF-8 input, which is
-/// guaranteed because the input is a Rust `&str`.
-fn utf8_char_width(leading_byte: u8) -> usize {
-	if leading_byte < 0x80 {
-		1
-	} else if leading_byte < 0xE0 {
-		2
-	} else if leading_byte < 0xF0 {
-		3
-	} else {
-		4
-	}
-}
-
-impl crate::query::QueryBuilderTrait for PostgresQueryBuilder {
-	fn placeholder(&self) -> (&str, bool) {
-		("$", true)
-	}
-
-	fn quote_char(&self) -> char {
-		'"'
 	}
 }

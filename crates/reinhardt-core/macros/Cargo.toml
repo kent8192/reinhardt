@@ -1,7 +1,8 @@
 [package]
 name = "reinhardt-macros"
-version = "0.1.0-rc.14"
+version = "0.1.0-rc.15"
 edition.workspace = true
+rust-version.workspace = true
 license.workspace = true
 description = "Procedural macros for Reinhardt framework"
 repository.workspace = true
@@ -40,6 +41,9 @@ uuid = { workspace = true }
 # during `cargo publish`. This is safe because dev-dependencies are not required
 # for published crates, and publish_no_verify = true is configured.
 reinhardt-auth = { path = "../../reinhardt-auth", features = ["argon2-hasher"] }
+# reinhardt-apps is path-only for the same reason; required by installed_apps!-
+# generated `impl AppLabel for InstalledApp` in the integration tests (Issue #3670).
+reinhardt-apps = { path = "../../reinhardt-apps" }
 # Note: Internal workspace crates (reinhardt-db, reinhardt-di, reinhardt-core, etc.)
 # are excluded from dev-dependencies to avoid circular dependency issues during publishing.
 # Tests that require these crates have been moved to reinhardt-integration-tests.

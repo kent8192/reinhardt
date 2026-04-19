@@ -602,6 +602,97 @@ impl ConfigSource for LowPriorityEnvSource {
 	}
 }
 
+/// High-priority environment variable configuration source for test overrides
+///
+/// This wrapper provides the same functionality as `EnvSource` but with higher priority
+/// than TOML files, allowing environment variables to override TOML configuration.
+/// Intended for integration tests where dynamic values (e.g., TestContainer ports)
+/// must override file-based settings.
+///
+/// Priority: 60 (higher than TOML files at 50, lower than `DotEnvSource` at 90)
+///
+/// # Examples
+///
+/// ```
+/// use reinhardt_conf::settings::sources::HighPriorityEnvSource;
+/// use reinhardt_conf::settings::builder::SettingsBuilder;
+///
+/// let settings = SettingsBuilder::new()
+///     .add_source(HighPriorityEnvSource::new().with_prefix("REINHARDT_TEST_"))
+///     .build()
+///     .unwrap();
+/// ```
+pub struct HighPriorityEnvSource {
+	inner: EnvSource,
+}
+
+impl HighPriorityEnvSource {
+	/// Create a new high-priority environment variable configuration source
+	///
+	/// # Examples
+	///
+	/// ```
+	/// use reinhardt_conf::settings::sources::HighPriorityEnvSource;
+	///
+	/// let source = HighPriorityEnvSource::new();
+	/// ```
+	pub fn new() -> Self {
+		Self {
+			inner: EnvSource::new(),
+		}
+	}
+
+	/// Set a prefix filter for environment variables
+	///
+	/// # Examples
+	///
+	/// ```
+	/// use reinhardt_conf::settings::sources::HighPriorityEnvSource;
+	///
+	/// let source = HighPriorityEnvSource::new()
+	///     .with_prefix("REINHARDT_TEST_");
+	/// ```
+	pub fn with_prefix(mut self, prefix: impl Into<String>) -> Self {
+		self.inner = self.inner.with_prefix(prefix);
+		self
+	}
+
+	/// Enable variable interpolation for environment values
+	///
+	/// # Examples
+	///
+	/// ```
+	/// use reinhardt_conf::settings::sources::HighPriorityEnvSource;
+	///
+	/// let source = HighPriorityEnvSource::new()
+	///     .with_interpolation(true);
+	/// ```
+	pub fn with_interpolation(mut self, enabled: bool) -> Self {
+		self.inner = self.inner.with_interpolation(enabled);
+		self
+	}
+}
+
+impl Default for HighPriorityEnvSource {
+	fn default() -> Self {
+		Self::new()
+	}
+}
+
+impl ConfigSource for HighPriorityEnvSource {
+	fn load(&self) -> Result<IndexMap<String, Value>, SourceError> {
+		self.inner.load()
+	}
+
+	fn priority(&self) -> u8 {
+		60 // Higher than TOML files (50), allowing env vars to override TOML config
+	}
+
+	fn description(&self) -> String {
+		format!("{} (high priority)", self.inner.description())
+	}
+}
+
 #[cfg(test)]
 mod tests {
 	use super::*;
@@ -705,7 +796,65 @@ secret_key = "test-key"
 	fn test_source_priority() {
 		assert_eq!(EnvSource::new().priority(), 100);
 		assert_eq!(DotEnvSource::new().priority(), 90);
+		assert_eq!(HighPriorityEnvSource::new().priority(), 60);
 		assert_eq!(TomlFileSource::new("test.toml").priority(), 50);
+		assert_eq!(LowPriorityEnvSource::new().priority(), 40);
 		assert_eq!(DefaultSource::new().priority(), 0);
+	}
+
+	#[test]
+	fn test_high_priority_env_source_wraps_env_source() {
+		// Arrange
+		let source = HighPriorityEnvSource::new();
+
+		// Act
+		let priority = source.priority();
+		let description = source.description();
+
+		// Assert
+		assert_eq!(priority, 60);
+		assert!(description.contains("high priority"));
+	}
+
+	#[test]
+	fn test_high_priority_env_source_with_prefix() {
+		// Arrange
+		let source = HighPriorityEnvSource::new().with_prefix("REINHARDT_TEST_");
+
+		// Act
+		let description = source.description();
+
+		// Assert
+		assert!(description.contains("REINHARDT_TEST_"));
+		assert!(description.contains("high priority"));
+	}
+
+	#[test]
+	fn test_high_priority_env_source_overrides_toml() {
+		// Arrange
+		let temp_dir = TempDir::new().unwrap();
+		let config_path = temp_dir.path().join("config.toml");
+		let mut file = File::create(&config_path).unwrap();
+		writeln!(file, r#"port = 1025"#).unwrap();
+
+		let prefix = "HPENV_TEST_3518_";
+		let env_key = format!("{prefix}PORT");
+
+		// SAFETY: Single-threaded test, no concurrent env access.
+		unsafe { env::set_var(&env_key, "9999") };
+
+		// Act
+		let settings = crate::settings::builder::SettingsBuilder::new()
+			.add_source(TomlFileSource::new(&config_path))
+			.add_source(HighPriorityEnvSource::new().with_prefix(prefix))
+			.build()
+			.unwrap();
+
+		// Assert — HighPriorityEnvSource (60) overrides TOML (50)
+		let port: i64 = settings.get("port").unwrap();
+		assert_eq!(port, 9999);
+
+		// Cleanup
+		unsafe { env::remove_var(&env_key) };
 	}
 }

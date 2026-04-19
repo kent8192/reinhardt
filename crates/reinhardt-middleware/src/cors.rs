@@ -211,7 +211,12 @@ impl Middleware for CorsMiddleware {
 		}
 
 		// Process request and add CORS headers to response
-		let mut response = next.handle(request).await?;
+		// Convert errors to responses so post-processing (e.g., security headers)
+		// always runs, even when invoked outside MiddlewareChain. (#3244)
+		let mut response = match next.handle(request).await {
+			Ok(resp) => resp,
+			Err(e) => Response::from(e),
+		};
 
 		if let Some(origin) = &allowed_origin {
 			response.headers.insert(
@@ -277,6 +282,8 @@ mod tests {
 	use super::*;
 	use bytes::Bytes;
 	use hyper::{HeaderMap, Method, StatusCode, Version};
+	use reinhardt_http::Error;
+	use rstest::rstest;
 
 	struct TestHandler;
 
@@ -790,6 +797,39 @@ mod tests {
 		assert!(
 			vary_values.contains(&"Origin"),
 			"CORS Vary: Origin should be present in preflight"
+		);
+	}
+
+	/// Handler that always returns an error to simulate inner handler failure.
+	struct ErrorHandler;
+
+	#[async_trait]
+	impl Handler for ErrorHandler {
+		async fn handle(&self, _request: Request) -> Result<Response> {
+			Err(Error::Http("handler error".to_string()))
+		}
+	}
+
+	#[rstest]
+	#[tokio::test]
+	async fn test_cors_headers_applied_on_handler_error() {
+		// Arrange
+		let middleware = CorsMiddleware::permissive();
+		let handler: Arc<dyn Handler> = Arc::new(ErrorHandler);
+
+		let request = create_request_with_origin(Method::GET, "/test", "http://example.com");
+
+		// Act
+		let response = middleware.process(request, handler).await.unwrap();
+
+		// Assert — error is converted to response, CORS headers applied
+		assert!(response.status.is_client_error() || response.status.is_server_error());
+		assert_eq!(
+			response
+				.headers
+				.get(hyper::header::ACCESS_CONTROL_ALLOW_ORIGIN)
+				.unwrap(),
+			"*"
 		);
 	}
 }

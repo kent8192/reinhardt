@@ -1,8 +1,20 @@
+use cfg_aliases::cfg_aliases;
+
 fn main() -> Result<(), Box<dyn std::error::Error>> {
+	// Rust 2024 edition requires explicit check-cfg declarations
+	println!("cargo::rustc-check-cfg=cfg(wasm)");
+	println!("cargo::rustc-check-cfg=cfg(native)");
+
+	cfg_aliases! {
+		wasm: { all(target_family = "wasm", target_os = "unknown") },
+		native: { not(all(target_family = "wasm", target_os = "unknown")) },
+	}
+
 	// Skip gRPC proto compilation when building for WASM
-	// CARGO_CFG_TARGET_ARCH is set by Cargo during cross-compilation
-	let target_arch = std::env::var("CARGO_CFG_TARGET_ARCH").unwrap_or_default();
-	if target_arch == "wasm32" {
+	// CARGO_CFG_TARGET_FAMILY and CARGO_CFG_TARGET_OS are set by Cargo during cross-compilation
+	let target_family = std::env::var("CARGO_CFG_TARGET_FAMILY").unwrap_or_default();
+	let target_os = std::env::var("CARGO_CFG_TARGET_OS").unwrap_or_default();
+	if target_family == "wasm" && target_os == "unknown" {
 		return Ok(());
 	}
 

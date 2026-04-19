@@ -49,25 +49,6 @@ fn create_test_migration(app: &str, name: &str, operations: Vec<Operation>) -> M
 	}
 }
 
-/// Create a non-atomic migration (for testing partial failure scenarios)
-// TODO: Temporarily unused but may be needed for future non-atomic test scenarios
-#[allow(dead_code)]
-fn create_non_atomic_migration(app: &str, name: &str, operations: Vec<Operation>) -> Migration {
-	Migration {
-		app_label: app.to_string(),
-		name: name.to_string(),
-		operations,
-		dependencies: vec![],
-		replaces: vec![],
-		atomic: false,
-		initial: None,
-		state_only: false,
-		database_only: false,
-		swappable_dependencies: vec![],
-		optional_dependencies: vec![],
-	}
-}
-
 /// Create a basic column definition
 fn create_basic_column(name: &str, type_def: FieldType) -> ColumnDefinition {
 	ColumnDefinition {

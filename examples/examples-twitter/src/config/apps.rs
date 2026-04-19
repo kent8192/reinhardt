@@ -8,7 +8,11 @@ use reinhardt::installed_apps;
 // Note: Framework features (auth, sessions, REST API) are enabled via Cargo.toml feature flags.
 // Only register application-specific apps here.
 installed_apps! {
+	auth: "auth",
 	tweet: "tweet",
+	profile: "profile",
+	relationship: "relationship",
+	dm: "dm",
 }
 
 // Framework features are enabled in Cargo.toml:

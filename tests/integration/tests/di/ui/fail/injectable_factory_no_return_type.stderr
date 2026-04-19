@@ -1,0 +1,5 @@
+error: #[injectable_factory] functions must have an explicit return type
+ --> tests/di/ui/fail/injectable_factory_no_return_type.rs:6:1
+  |
+6 | async fn make_service() {
+  | ^^^^^^^^^^^^^^^^^^^^^^^

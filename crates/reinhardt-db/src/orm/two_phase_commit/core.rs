@@ -576,7 +576,7 @@ impl TwoPhaseCommit {
 
 impl Default for TwoPhaseCommit {
 	fn default() -> Self {
-		Self::new(uuid::Uuid::new_v4().to_string())
+		Self::new(uuid::Uuid::now_v7().to_string())
 	}
 }
 

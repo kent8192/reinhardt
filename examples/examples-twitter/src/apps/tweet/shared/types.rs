@@ -3,18 +3,19 @@
 //! These types are serializable and can be sent between the WASM client
 //! and the Rust server via server functions.
 
+#[cfg(native)]
 use reinhardt::Validate;
-use reinhardt::core::serde::{Deserialize, Serialize};
+use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 // OpenAPI schema generation (server-side only)
-#[cfg(server)]
+#[cfg(native)]
 use reinhardt::rest::ToSchema;
-#[cfg(server)]
+#[cfg(native)]
 use reinhardt::rest::openapi::Schema;
 
 /// Tweet information
-#[cfg_attr(server, derive(Schema))]
+#[cfg_attr(native, derive(Schema))]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TweetInfo {
 	pub id: Uuid,
@@ -50,7 +51,7 @@ impl TweetInfo {
 }
 
 /// Conversion from server-side Tweet model to shared TweetInfo
-#[cfg(server)]
+#[cfg(native)]
 impl From<crate::apps::tweet::models::Tweet> for TweetInfo {
 	fn from(tweet: crate::apps::tweet::models::Tweet) -> Self {
 		TweetInfo {
@@ -66,13 +67,17 @@ impl From<crate::apps::tweet::models::Tweet> for TweetInfo {
 }
 
 /// Create tweet request
-#[cfg_attr(server, derive(Schema))]
-#[derive(Debug, Clone, Serialize, Deserialize, Validate)]
+#[cfg_attr(native, derive(Schema))]
+#[cfg_attr(native, derive(Validate))]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CreateTweetRequest {
-	#[validate(length(
-		min = 1,
-		max = 280,
-		message = "Tweet must be between 1 and 280 characters"
-	))]
+	#[cfg_attr(
+		native,
+		validate(length(
+			min = 1,
+			max = 280,
+			message = "Tweet must be between 1 and 280 characters"
+		))
+	)]
 	pub content: String,
 }

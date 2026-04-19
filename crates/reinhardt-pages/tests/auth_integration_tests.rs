@@ -1,3 +1,4 @@
+#![cfg(not(target_arch = "wasm32"))]
 //! Authentication Integration Tests
 //!
 //! Tests for the authentication system's integration with reactive signals,
@@ -42,10 +43,10 @@ fn test_initial_unauthenticated_state() {
 #[test]
 fn test_basic_login() {
 	let state = AuthState::new();
-	state.login(1, "testuser");
+	state.login("1", "testuser");
 
 	assert!(state.is_authenticated());
-	assert_eq!(state.user_id(), Some(1));
+	assert_eq!(state.user_id(), Some("1".to_string()));
 	assert_eq!(state.username(), Some("testuser".to_string()));
 }
 
@@ -54,7 +55,7 @@ fn test_basic_login() {
 fn test_login_full_with_all_fields() {
 	let state = AuthState::new();
 	state.login_full(
-		42,
+		"42",
 		"admin",
 		Some("admin@example.com".to_string()),
 		true,
@@ -62,7 +63,7 @@ fn test_login_full_with_all_fields() {
 	);
 
 	assert!(state.is_authenticated());
-	assert_eq!(state.user_id(), Some(42));
+	assert_eq!(state.user_id(), Some("42".to_string()));
 	assert_eq!(state.username(), Some("admin".to_string()));
 	assert_eq!(state.email(), Some("admin@example.com".to_string()));
 	assert!(state.is_staff());
@@ -73,7 +74,7 @@ fn test_login_full_with_all_fields() {
 #[test]
 fn test_login_full_without_email() {
 	let state = AuthState::new();
-	state.login_full(10, "staff_user", None, true, false);
+	state.login_full("10", "staff_user", None, true, false);
 
 	assert!(state.is_authenticated());
 	assert!(state.email().is_none());
@@ -85,7 +86,13 @@ fn test_login_full_without_email() {
 #[test]
 fn test_logout_clears_all_fields() {
 	let state = AuthState::new();
-	state.login_full(1, "user", Some("user@example.com".to_string()), true, false);
+	state.login_full(
+		"1",
+		"user",
+		Some("user@example.com".to_string()),
+		true,
+		false,
+	);
 	state.logout();
 
 	assert!(!state.is_authenticated());
@@ -100,12 +107,12 @@ fn test_logout_clears_all_fields() {
 #[test]
 fn test_update_with_auth_data() {
 	let state = AuthState::new();
-	state.login(1, "initial");
+	state.login("1", "initial");
 
-	let new_data = AuthData::authenticated(2, "updated");
+	let new_data = AuthData::authenticated("2", "updated");
 	state.update(new_data);
 
-	assert_eq!(state.user_id(), Some(2));
+	assert_eq!(state.user_id(), Some("2".to_string()));
 	assert_eq!(state.username(), Some("updated".to_string()));
 }
 
@@ -113,7 +120,7 @@ fn test_update_with_auth_data() {
 #[test]
 fn test_from_server_data_authenticated() {
 	let data = AuthData::full(
-		99,
+		"99",
 		"serveruser",
 		Some("server@example.com".to_string()),
 		false,
@@ -122,7 +129,7 @@ fn test_from_server_data_authenticated() {
 	let state = AuthState::from_server_data(data);
 
 	assert!(state.is_authenticated());
-	assert_eq!(state.user_id(), Some(99));
+	assert_eq!(state.user_id(), Some("99".to_string()));
 	assert_eq!(state.username(), Some("serveruser".to_string()));
 	assert_eq!(state.email(), Some("server@example.com".to_string()));
 }
@@ -144,20 +151,20 @@ fn test_multiple_login_logout_cycles() {
 	let state = AuthState::new();
 
 	// Cycle 1
-	state.login(1, "user1");
+	state.login("1", "user1");
 	assert!(state.is_authenticated());
 	state.logout();
 	assert!(!state.is_authenticated());
 
 	// Cycle 2
-	state.login(2, "user2");
-	assert_eq!(state.user_id(), Some(2));
+	state.login("2", "user2");
+	assert_eq!(state.user_id(), Some("2".to_string()));
 	state.logout();
 	assert!(state.user_id().is_none());
 
 	// Cycle 3
 	state.login_full(
-		3,
+		"3",
 		"user3",
 		Some("user3@example.com".to_string()),
 		true,
@@ -172,10 +179,10 @@ fn test_multiple_login_logout_cycles() {
 #[test]
 fn test_login_overwrites_previous_session() {
 	let state = AuthState::new();
-	state.login(1, "first_user");
-	state.login(2, "second_user");
+	state.login("1", "first_user");
+	state.login("2", "second_user");
 
-	assert_eq!(state.user_id(), Some(2));
+	assert_eq!(state.user_id(), Some("2".to_string()));
 	assert_eq!(state.username(), Some("second_user".to_string()));
 }
 
@@ -199,7 +206,7 @@ fn test_has_permission_basic() {
 #[test]
 fn test_superuser_bypass_permission_check() {
 	let state = AuthState::new();
-	state.login_full(1, "superadmin", None, true, true);
+	state.login_full("1", "superadmin", None, true, true);
 
 	// Superuser should have any permission without explicit grant
 	assert!(state.has_permission("any.random.permission"));
@@ -225,7 +232,7 @@ fn test_has_any_permission_partial_match() {
 #[test]
 fn test_has_any_permission_superuser() {
 	let state = AuthState::new();
-	state.login_full(1, "admin", None, true, true);
+	state.login_full("1", "admin", None, true, true);
 
 	assert!(state.has_any_permission(&["any.perm1", "any.perm2"]));
 }
@@ -249,7 +256,7 @@ fn test_has_all_permissions_complete_match() {
 #[test]
 fn test_has_all_permissions_superuser() {
 	let state = AuthState::new();
-	state.login_full(1, "admin", None, true, true);
+	state.login_full("1", "admin", None, true, true);
 
 	assert!(state.has_all_permissions(&["perm1", "perm2", "perm3"]));
 }
@@ -281,7 +288,7 @@ fn test_permissions_cleared_on_logout() {
 	perms.insert("blog.add_post".to_string());
 	perms.insert("blog.edit_post".to_string());
 	state.set_permissions(perms);
-	state.login(1, "user");
+	state.login("1", "user");
 
 	state.logout();
 
@@ -294,7 +301,7 @@ fn test_permissions_cleared_on_logout() {
 fn test_permissions_from_auth_data_initialization() {
 	let data = AuthData {
 		is_authenticated: true,
-		user_id: Some(1),
+		user_id: Some("1".to_string()),
 		username: Some("user".to_string()),
 		email: None,
 		is_staff: false,
@@ -317,11 +324,11 @@ fn test_permissions_from_auth_data_initialization() {
 #[test]
 fn test_permissions_updated_via_auth_data_update() {
 	let state = AuthState::new();
-	state.login(1, "user");
+	state.login("1", "user");
 
 	let data = AuthData {
 		is_authenticated: true,
-		user_id: Some(1),
+		user_id: Some("1".to_string()),
 		username: Some("user".to_string()),
 		email: None,
 		is_staff: false,
@@ -349,17 +356,17 @@ fn test_signal_updates_on_login() {
 	assert!(!auth_signal.get());
 	assert!(user_id_signal.get().is_none());
 
-	state.login(100, "reactive_user");
+	state.login("100", "reactive_user");
 
 	assert!(auth_signal.get());
-	assert_eq!(user_id_signal.get(), Some(100));
+	assert_eq!(user_id_signal.get(), Some("100".to_string()));
 }
 
 /// Tests signal updates when logout is called
 #[test]
 fn test_signal_updates_on_logout() {
 	let state = AuthState::new();
-	state.login(200, "temp_user");
+	state.login("200", "temp_user");
 
 	let auth_signal = state.is_authenticated_signal();
 	assert!(auth_signal.get());
@@ -388,8 +395,8 @@ fn test_effect_triggered_by_auth_change() {
 	assert!(!triggered.get());
 
 	// Trigger effect by logging in
-	state.login(1, "effect_test");
-	with_runtime(|rt| rt.flush_updates_enhanced());
+	state.login("1", "effect_test");
+	with_runtime(|rt| rt.flush_updates());
 
 	// Effect should be triggered
 	assert!(triggered.get());
@@ -408,10 +415,10 @@ fn test_effect_triggered_by_user_id_change() {
 		captured_clone.set(user_id_signal.get());
 	});
 
-	state.login(42, "user");
-	with_runtime(|rt| rt.flush_updates_enhanced());
+	state.login("42", "user");
+	with_runtime(|rt| rt.flush_updates());
 
-	assert_eq!(captured_id.get(), Some(42));
+	assert_eq!(captured_id.get(), Some("42".to_string()));
 }
 
 /// Tests effect triggered by permission change
@@ -431,7 +438,7 @@ fn test_effect_triggered_by_permission_change() {
 	perms.insert("perm1".to_string());
 	perms.insert("perm2".to_string());
 	state.set_permissions(perms);
-	with_runtime(|rt| rt.flush_updates_enhanced());
+	with_runtime(|rt| rt.flush_updates());
 
 	assert_eq!(perm_count.get(), 2);
 }
@@ -461,8 +468,8 @@ fn test_multiple_effects_on_same_signal() {
 		}
 	});
 
-	state.login(1, "multi_effect");
-	with_runtime(|rt| rt.flush_updates_enhanced());
+	state.login("1", "multi_effect");
+	with_runtime(|rt| rt.flush_updates());
 
 	assert!(effect1_triggered.get());
 	assert!(effect2_triggered.get());
@@ -475,7 +482,7 @@ fn test_signal_clone_shares_value() {
 	let signal1 = state.username_signal();
 	let signal2 = state.username_signal();
 
-	state.login(1, "shared");
+	state.login("1", "shared");
 
 	assert_eq!(signal1.get(), Some("shared".to_string()));
 	assert_eq!(signal2.get(), Some("shared".to_string()));
@@ -492,10 +499,10 @@ fn test_global_auth_state_singleton() {
 	let state1 = auth_state();
 	let state2 = auth_state();
 
-	state1.login(999, "global_user");
+	state1.login("999", "global_user");
 
 	assert!(state2.is_authenticated());
-	assert_eq!(state2.user_id(), Some(999));
+	assert_eq!(state2.user_id(), Some("999".to_string()));
 
 	// Cleanup
 	state1.logout();
@@ -510,7 +517,7 @@ fn test_global_state_persistence() {
 	let state2 = auth_state();
 
 	// Login with first instance
-	state1.login(100, "persistent");
+	state1.login("100", "persistent");
 
 	// Verify second instance sees the change
 	assert!(state2.is_authenticated());
@@ -530,7 +537,7 @@ fn test_global_state_update_propagation() {
 	let signal1 = state1.is_authenticated_signal();
 	let signal2 = state2.is_authenticated_signal();
 
-	state1.login(1, "propagate");
+	state1.login("1", "propagate");
 
 	assert!(signal1.get());
 	assert!(signal2.get());
@@ -546,7 +553,7 @@ fn test_global_state_logout_affects_all() {
 	let state1 = auth_state();
 	let state2 = auth_state();
 
-	state1.login(1, "shared");
+	state1.login("1", "shared");
 	assert!(state2.is_authenticated());
 
 	state1.logout();

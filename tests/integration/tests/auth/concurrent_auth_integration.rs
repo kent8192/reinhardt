@@ -274,7 +274,7 @@ async fn test_concurrent_token_revocation(token_storage: Arc<InMemoryTokenStorag
 #[tokio::test]
 async fn test_concurrent_user_password_updates() {
 	let user = Arc::new(tokio::sync::RwLock::new(DefaultUser {
-		id: Uuid::new_v4(),
+		id: Uuid::now_v7(),
 		username: "concurrent_user".to_string(),
 		email: "concurrent@example.com".to_string(),
 		first_name: "Concurrent".to_string(),

@@ -10,7 +10,9 @@ fn test_auth_tokens_jwt_generate() {
 	let user_id = "user123".to_string();
 	let username = "testuser".to_string();
 
-	let token = jwt_auth.generate_token(user_id, username).unwrap();
+	let token = jwt_auth
+		.generate_token(user_id, username, false, false)
+		.unwrap();
 
 	assert!(!token.is_empty());
 	// JWT tokens should have 3 parts separated by dots
@@ -24,7 +26,7 @@ fn test_jwt_verify_valid_token() {
 	let username = "testuser".to_string();
 
 	let token = jwt_auth
-		.generate_token(user_id.clone(), username.clone())
+		.generate_token(user_id.clone(), username.clone(), false, false)
 		.unwrap();
 	let claims = jwt_auth.verify_token(&token).unwrap();
 
@@ -49,7 +51,9 @@ fn test_jwt_verify_token_with_wrong_secret() {
 	let user_id = "user123".to_string();
 	let username = "testuser".to_string();
 
-	let token = jwt_auth1.generate_token(user_id, username).unwrap();
+	let token = jwt_auth1
+		.generate_token(user_id, username, false, false)
+		.unwrap();
 
 	// Token should not verify with different secret
 	assert!(jwt_auth2.verify_token(&token).is_err());
@@ -64,9 +68,11 @@ fn test_jwt_token_with_different_secret() {
 	let username = "testuser".to_string();
 
 	let token1 = jwt_auth1
-		.generate_token(user_id.clone(), username.clone())
+		.generate_token(user_id.clone(), username.clone(), false, false)
 		.unwrap();
-	let token2 = jwt_auth2.generate_token(user_id, username).unwrap();
+	let token2 = jwt_auth2
+		.generate_token(user_id, username, false, false)
+		.unwrap();
 
 	assert_ne!(token1, token2);
 }
@@ -79,9 +85,11 @@ fn test_jwt_multiple_tokens_same_user() {
 	let username = "testuser".to_string();
 
 	let token1 = jwt_auth
-		.generate_token(user_id.clone(), username.clone())
+		.generate_token(user_id.clone(), username.clone(), false, false)
 		.unwrap();
-	let token2 = jwt_auth.generate_token(user_id, username).unwrap();
+	let token2 = jwt_auth
+		.generate_token(user_id, username, false, false)
+		.unwrap();
 
 	// Both tokens should verify successfully
 	assert!(jwt_auth.verify_token(&token1).is_ok());
@@ -95,7 +103,7 @@ fn test_jwt_claims_structure() {
 	let username = "anotheruser".to_string();
 
 	let token = jwt_auth
-		.generate_token(user_id.clone(), username.clone())
+		.generate_token(user_id.clone(), username.clone(), false, false)
 		.unwrap();
 	let claims = jwt_auth.verify_token(&token).unwrap();
 
@@ -111,7 +119,9 @@ fn test_jwt_token_expiration_is_set() {
 	let user_id = "user123".to_string();
 	let username = "testuser".to_string();
 
-	let token = jwt_auth.generate_token(user_id, username).unwrap();
+	let token = jwt_auth
+		.generate_token(user_id, username, false, false)
+		.unwrap();
 	let claims = jwt_auth.verify_token(&token).unwrap();
 
 	// Token should have an expiration timestamp
@@ -131,7 +141,7 @@ fn test_jwt_empty_secret_handling() {
 	let user_id = "user123".to_string();
 	let username = "testuser".to_string();
 
-	let token_result = jwt_auth.generate_token(user_id, username);
+	let token_result = jwt_auth.generate_token(user_id, username, false, false);
 	// Should still generate a token (implementation dependent)
 	assert!(token_result.is_ok());
 }
@@ -143,7 +153,7 @@ fn test_jwt_special_characters_in_username() {
 	let username = "user@example.com".to_string(); // Email as username
 
 	let token = jwt_auth
-		.generate_token(user_id.clone(), username.clone())
+		.generate_token(user_id.clone(), username.clone(), false, false)
 		.unwrap();
 	let claims = jwt_auth.verify_token(&token).unwrap();
 
@@ -158,7 +168,7 @@ fn test_jwt_unicode_username() {
 	let username = "ユーザー名".to_string(); // Japanese username (test string)
 
 	let token = jwt_auth
-		.generate_token(user_id.clone(), username.clone())
+		.generate_token(user_id.clone(), username.clone(), false, false)
 		.unwrap();
 	let claims = jwt_auth.verify_token(&token).unwrap();
 
@@ -175,7 +185,7 @@ fn test_jwt_long_secret_key() {
 	let username = "testuser".to_string();
 
 	let token = jwt_auth
-		.generate_token(user_id.clone(), username.clone())
+		.generate_token(user_id.clone(), username.clone(), false, false)
 		.unwrap();
 	let claims = jwt_auth.verify_token(&token).unwrap();
 
@@ -200,7 +210,9 @@ fn test_jwt_tampered_token() {
 	let user_id = "user123".to_string();
 	let username = "testuser".to_string();
 
-	let token = jwt_auth.generate_token(user_id, username).unwrap();
+	let token = jwt_auth
+		.generate_token(user_id, username, false, false)
+		.unwrap();
 
 	// Tamper with the token by changing a character
 	let mut tampered = token.clone();
@@ -219,7 +231,9 @@ fn test_jwt_token_reuse() {
 	let user_id = "user123".to_string();
 	let username = "testuser".to_string();
 
-	let token = jwt_auth.generate_token(user_id, username).unwrap();
+	let token = jwt_auth
+		.generate_token(user_id, username, false, false)
+		.unwrap();
 
 	// Verify multiple times
 	for _ in 0..5 {
@@ -234,10 +248,10 @@ fn test_jwt_different_users_different_tokens() {
 	let jwt_auth = JwtAuth::new(b"test_secret_key");
 
 	let token1 = jwt_auth
-		.generate_token("user1".to_string(), "alice".to_string())
+		.generate_token("user1".to_string(), "alice".to_string(), false, false)
 		.unwrap();
 	let token2 = jwt_auth
-		.generate_token("user2".to_string(), "bob".to_string())
+		.generate_token("user2".to_string(), "bob".to_string(), false, false)
 		.unwrap();
 
 	assert_ne!(token1, token2);
@@ -256,7 +270,7 @@ fn test_jwt_secret_key_matters() {
 	let jwt_auth2 = JwtAuth::new(b"secret_key_2");
 
 	let token = jwt_auth1
-		.generate_token("user123".to_string(), "testuser".to_string())
+		.generate_token("user123".to_string(), "testuser".to_string(), false, false)
 		.unwrap();
 
 	// Should verify with same key

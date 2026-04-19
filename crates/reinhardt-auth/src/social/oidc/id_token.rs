@@ -178,7 +178,4 @@ mod tests {
 		let validator = IdTokenValidator::new(jwks_cache, config);
 		assert_eq!(validator.config.issuer, "https://example.com");
 	}
-
-	// Integration tests with actual JWT tokens would require mock JWKS server
-	// For now, we rely on manual testing with real providers
 }

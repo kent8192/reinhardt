@@ -406,7 +406,7 @@ mod tests {
 	#[test]
 	fn test_uuid_type() {
 		let uuid_type = UuidType;
-		let uuid = Uuid::new_v4();
+		let uuid = Uuid::now_v7();
 
 		let bound = uuid_type.process_bind_param(uuid).unwrap();
 		let uuid_str = match &bound {

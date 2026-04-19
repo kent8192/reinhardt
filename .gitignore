@@ -106,6 +106,7 @@ docs/Gemfile.lock
 !.env.sample
 .ignore/
 .claude/
+.wtp.yml
 :memory:
 
 # Bacon export files
@@ -132,7 +133,12 @@ db.sqlite3
 # Git worktrees
 .worktrees/
 
-# WASM build artifacts (examples)
+# WASM build artifacts
+dist-admin/
+
+# Admin vendor assets (downloaded/generated at build time or collectstatic)
+crates/reinhardt-admin/assets/vendor/*
+!crates/reinhardt-admin/assets/vendor/.gitkeep
 examples/examples-twitter/static/admin/
 
 # Design/planning documents (local only)

@@ -27,13 +27,12 @@ Use `CorsMiddleware` to configure CORS.
 use reinhardt::CorsMiddleware;
 use reinhardt_middleware::cors::CorsConfig;
 
-let config = CorsConfig {
-    allow_origins: vec!["https://example.com"],
-    allow_methods: vec!["GET", "POST"],
-    allow_headers: vec!["Content-Type"],
-    allow_credentials: true,
-    max_age: Some(3600),
-};
+let mut config = CorsConfig::default();
+config.allow_origins = vec!["https://example.com".to_string()];
+config.allow_methods = vec!["GET".to_string(), "POST".to_string()];
+config.allow_headers = vec!["Content-Type".to_string()];
+config.allow_credentials = true;
+config.max_age = Some(3600);
 
 let middleware = CorsMiddleware::new(config);
 ```
@@ -103,20 +102,19 @@ This is equivalent to:
 ```rust
 use reinhardt_middleware::cors::CorsConfig;
 
-let config = CorsConfig {
-    allow_origins: vec!["*"],
-    allow_methods: vec![
-        "GET",
-        "POST",
-        "PUT",
-        "PATCH",
-        "DELETE",
-        "OPTIONS",
-    ],
-    allow_headers: vec!["Content-Type", "Authorization"],
-    allow_credentials: false,
-    max_age: Some(3600),
-};
+let mut config = CorsConfig::default();
+config.allow_origins = vec!["*".to_string()];
+config.allow_methods = vec![
+    "GET".to_string(),
+    "POST".to_string(),
+    "PUT".to_string(),
+    "PATCH".to_string(),
+    "DELETE".to_string(),
+    "OPTIONS".to_string(),
+];
+config.allow_headers = vec!["Content-Type".to_string(), "Authorization".to_string()];
+config.allow_credentials = false;
+config.max_age = Some(3600);
 ```
 
 ---
@@ -130,13 +128,12 @@ Allow only a specific origin.
 ```rust
 use reinhardt_middleware::cors::CorsConfig;
 
-let config = CorsConfig {
-    allow_origins: vec!["https://app.example.com"],
-    allow_methods: vec!["GET", "POST"],
-    allow_headers: vec!["Content-Type"],
-    allow_credentials: false,
-    max_age: Some(3600),
-};
+let mut config = CorsConfig::default();
+config.allow_origins = vec!["https://app.example.com".to_string()];
+config.allow_methods = vec!["GET".to_string(), "POST".to_string()];
+config.allow_headers = vec!["Content-Type".to_string()];
+config.allow_credentials = false;
+config.max_age = Some(3600);
 ```
 
 ### Multiple Origins
@@ -146,13 +143,12 @@ Allow multiple origins (comma-separated).
 ```rust
 use reinhardt_middleware::cors::CorsConfig;
 
-let config = CorsConfig {
-    allow_origins: vec![
-        "https://app1.example.com",
-        "https://app2.example.com",
-    ],
-    // ... other config
-};
+let mut config = CorsConfig::default();
+config.allow_origins = vec![
+    "https://app1.example.com".to_string(),
+    "https://app2.example.com".to_string(),
+];
+// ... other config
 ```
 
 ### Allow Credentials
@@ -164,18 +160,17 @@ Allow requests with cookies and authentication headers.
 ```rust
 use reinhardt_middleware::cors::CorsConfig;
 
-let config = CorsConfig {
-    // Cannot use wildcard with credentials
-    allow_origins: vec!["https://app.example.com"],
-    allow_methods: vec!["GET", "POST"],
-    allow_headers: vec![
-        "Content-Type",
-        "Authorization",
-        "X-CSRF-Token",
-    ],
-    allow_credentials: true,
-    max_age: Some(7200), // 2 hours
-};
+// Cannot use wildcard with credentials
+let mut config = CorsConfig::default();
+config.allow_origins = vec!["https://app.example.com".to_string()];
+config.allow_methods = vec!["GET".to_string(), "POST".to_string()];
+config.allow_headers = vec![
+    "Content-Type".to_string(),
+    "Authorization".to_string(),
+    "X-CSRF-Token".to_string(),
+];
+config.allow_credentials = true;
+config.max_age = Some(7200); // 2 hours
 ```
 
 ---
@@ -222,9 +217,8 @@ CORS middleware should be applied as early as possible.
 
 ```rust
 use reinhardt::ServerRouter;
-use reinhardt::{
-    CorsMiddleware, LoggingMiddleware, SecurityMiddleware
-};
+use reinhardt::{CorsMiddleware, LoggingMiddleware};
+use reinhardt_middleware::SecurityMiddleware;
 
 let router = ServerRouter::new()
     .with_middleware(LoggingMiddleware::new())

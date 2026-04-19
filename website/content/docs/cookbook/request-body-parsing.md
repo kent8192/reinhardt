@@ -135,7 +135,7 @@ async fn contact(Form(form): Form<ContactForm>) -> reinhardt::Response {
 Extracts `multipart/form-data` (used for file uploads).
 
 ```rust
-use reinhardt_di::params::Body;
+use reinhardt_di::params::Multipart;
 use multer::Field;
 
 async fn upload_file(mut multipart: Multipart) -> reinhardt::Response {

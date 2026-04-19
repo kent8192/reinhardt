@@ -77,7 +77,7 @@ async fn test_session_creation_on_login(
 	let backend = init_session_test(&database_url).await;
 
 	// Simulate login - create session with user credentials
-	let user_id = Uuid::new_v4();
+	let user_id = Uuid::now_v7();
 	let mut session = Session::new(backend.clone());
 	session.set("_auth_user_id", user_id.to_string()).unwrap();
 	session.set("_auth_user_name", "alice".to_string()).unwrap();
@@ -136,8 +136,8 @@ async fn test_session_creation_with_csrf_token(
 	let backend = init_session_test(&database_url).await;
 
 	// Create session with CSRF token
-	let user_id = Uuid::new_v4();
-	let csrf_token = Uuid::new_v4().to_string();
+	let user_id = Uuid::now_v7();
+	let csrf_token = Uuid::now_v7().to_string();
 	let mut session = Session::new(backend.clone());
 	session.set("_auth_user_id", user_id.to_string()).unwrap();
 	session.set("_csrf_token", &csrf_token).unwrap();
@@ -185,7 +185,7 @@ async fn test_session_creation_with_user_metadata(
 	let backend = init_session_test(&database_url).await;
 
 	// Create session with user metadata
-	let user_id = Uuid::new_v4();
+	let user_id = Uuid::now_v7();
 	let mut session = Session::new(backend.clone());
 	session.set("_auth_user_id", user_id.to_string()).unwrap();
 	session.set("_user_language", "en-US".to_string()).unwrap();
@@ -243,7 +243,7 @@ async fn test_session_invalidation_on_logout(
 	let backend = init_session_test(&database_url).await;
 
 	// Create session
-	let user_id = Uuid::new_v4();
+	let user_id = Uuid::now_v7();
 	let mut session = Session::new(backend.clone());
 	session.set("_auth_user_id", user_id.to_string()).unwrap();
 	session.save().await.expect("Failed to save session");
@@ -299,10 +299,10 @@ async fn test_session_invalidation_clears_all_data(
 	// Create session with comprehensive data
 	let mut session = Session::new(backend.clone());
 	session
-		.set("_auth_user_id", Uuid::new_v4().to_string())
+		.set("_auth_user_id", Uuid::now_v7().to_string())
 		.unwrap();
 	session
-		.set("_csrf_token", Uuid::new_v4().to_string())
+		.set("_csrf_token", Uuid::now_v7().to_string())
 		.unwrap();
 	session.set("_user_language", "en".to_string()).unwrap();
 	session.set("_cart_items", vec![1, 2, 3]).unwrap();
@@ -359,7 +359,7 @@ async fn test_logout_immediate_invalidation(
 	// Create session
 	let mut session = Session::new(backend.clone());
 	session
-		.set("_auth_user_id", Uuid::new_v4().to_string())
+		.set("_auth_user_id", Uuid::now_v7().to_string())
 		.unwrap();
 	session.save().await.expect("Failed to save session");
 	let session_key = session.session_key().unwrap();
@@ -409,7 +409,7 @@ async fn test_session_persists_user_association(
 	let backend = init_session_test(&database_url).await;
 
 	// Create session with user
-	let user_id = Uuid::new_v4();
+	let user_id = Uuid::now_v7();
 	let mut session = Session::new(backend.clone());
 	session.set("_auth_user_id", user_id.to_string()).unwrap();
 	session.set("_auth_user_name", "bob".to_string()).unwrap();
@@ -458,7 +458,7 @@ async fn test_session_updates_user_data(
 	let backend = init_session_test(&database_url).await;
 
 	// Create session with initial user data
-	let user_id = Uuid::new_v4();
+	let user_id = Uuid::now_v7();
 	let mut session = Session::new(backend.clone());
 	session.set("_auth_user_id", user_id.to_string()).unwrap();
 	session.set("_user_role", "user".to_string()).unwrap();
@@ -509,7 +509,7 @@ async fn test_session_multiple_user_attributes(
 	let backend = init_session_test(&database_url).await;
 
 	// Create session with comprehensive user data
-	let user_id = Uuid::new_v4();
+	let user_id = Uuid::now_v7();
 	let mut session = Session::new(backend.clone());
 	session.set("_auth_user_id", user_id.to_string()).unwrap();
 	session
@@ -583,10 +583,10 @@ async fn test_session_csrf_token_validation(
 	let backend = init_session_test(&database_url).await;
 
 	// Create session with CSRF token
-	let csrf_token = Uuid::new_v4().to_string();
+	let csrf_token = Uuid::now_v7().to_string();
 	let mut session = Session::new(backend.clone());
 	session
-		.set("_auth_user_id", Uuid::new_v4().to_string())
+		.set("_auth_user_id", Uuid::now_v7().to_string())
 		.unwrap();
 	session.set("_csrf_token", &csrf_token).unwrap();
 	session.save().await.expect("Failed to save session");
@@ -607,7 +607,7 @@ async fn test_session_csrf_token_validation(
 	);
 
 	// Simulate CSRF validation (mismatched token - attack scenario)
-	let invalid_csrf_token = Uuid::new_v4().to_string();
+	let invalid_csrf_token = Uuid::now_v7().to_string();
 	assert_ne!(
 		invalid_csrf_token, stored_token,
 		"CSRF validation should fail for mismatched token"
@@ -635,7 +635,7 @@ async fn test_session_secure_cookie_flags(
 	// Create session
 	let mut session = Session::new(backend.clone());
 	session
-		.set("_auth_user_id", Uuid::new_v4().to_string())
+		.set("_auth_user_id", Uuid::now_v7().to_string())
 		.unwrap();
 	session.save().await.expect("Failed to save session");
 	let session_key = session.session_key().unwrap();
@@ -685,7 +685,7 @@ async fn test_session_regeneration_on_privilege_escalation(
 	let backend = init_session_test(&database_url).await;
 
 	// Create initial session with regular user
-	let user_id = Uuid::new_v4();
+	let user_id = Uuid::now_v7();
 	let mut session_before = Session::new(backend.clone());
 	session_before
 		.set("_auth_user_id", user_id.to_string())
@@ -767,7 +767,7 @@ async fn test_session_ip_binding(
 	let client_ip = "192.168.1.100";
 	let mut session = Session::new(backend.clone());
 	session
-		.set("_auth_user_id", Uuid::new_v4().to_string())
+		.set("_auth_user_id", Uuid::now_v7().to_string())
 		.unwrap();
 	session.set("_client_ip", client_ip.to_string()).unwrap();
 	session.save().await.expect("Failed to save session");
@@ -813,7 +813,7 @@ async fn test_session_user_agent_binding(
 	let user_agent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36";
 	let mut session = Session::new(backend.clone());
 	session
-		.set("_auth_user_id", Uuid::new_v4().to_string())
+		.set("_auth_user_id", Uuid::now_v7().to_string())
 		.unwrap();
 	session.set("_user_agent", user_agent.to_string()).unwrap();
 	session.save().await.expect("Failed to save session");
@@ -856,7 +856,7 @@ async fn test_session_timeout_and_idle_detection(
 	let backend = init_session_test(&database_url).await;
 
 	// Create session with activity timestamp
-	let user_id = Uuid::new_v4();
+	let user_id = Uuid::now_v7();
 	let mut session = Session::new(backend.clone());
 	session.set("_auth_user_id", user_id.to_string()).unwrap();
 	session
@@ -912,7 +912,7 @@ async fn test_concurrent_sessions_per_user(
 	let backend = init_session_test(&database_url).await;
 
 	// Create first session (desktop)
-	let user_id = Uuid::new_v4();
+	let user_id = Uuid::now_v7();
 	let mut session1 = Session::new(backend.clone());
 	session1.set("_auth_user_id", user_id.to_string()).unwrap();
 	session1.set("_device_type", "desktop".to_string()).unwrap();

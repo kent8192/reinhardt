@@ -9,13 +9,21 @@
 //!
 //! # Example
 //!
-//! ```ignore
+//! ```rust
 //! use reinhardt_dentdelion::prelude::*;
 //!
 //! struct MyPlugin {
 //!     metadata: PluginMetadata,
 //! }
 //!
+//! # impl MyPlugin {
+//! #     fn new() -> Self {
+//! #         Self {
+//! #             metadata: PluginMetadata::builder("my-delion", "1.0.0")
+//! #                 .build().unwrap(),
+//! #         }
+//! #     }
+//! # }
 //! impl Plugin for MyPlugin {
 //!     fn metadata(&self) -> &PluginMetadata {
 //!         &self.metadata

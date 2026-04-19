@@ -4,6 +4,11 @@
 //!
 //! This module is part of reinhardt-conf crate.
 
+/// Thread-local settings override mechanism for integration testing.
+pub mod overrides;
+
+pub use overrides::{SettingsOverride, SettingsOverrideGuard};
+
 use super::env_loader::load_env_optional;
 use std::collections::HashMap;
 use std::env;

@@ -622,6 +622,33 @@ impl Response {
 		self
 	}
 
+	/// Append a header value without replacing existing values.
+	///
+	/// Unlike [`with_header`](Self::with_header) which replaces any existing value
+	/// for the same header name, this method adds the value alongside existing ones.
+	/// Required for headers like `Set-Cookie` where multiple values must coexist
+	/// as separate header lines (RFC 6265 Section 4.1).
+	///
+	/// # Examples
+	///
+	/// ```
+	/// use reinhardt_http::Response;
+	///
+	/// let response = Response::ok()
+	///     .append_header("Set-Cookie", "a=1; Path=/")
+	///     .append_header("Set-Cookie", "b=2; Path=/");
+	/// let cookies: Vec<_> = response.headers.get_all("set-cookie").iter().collect();
+	/// assert_eq!(cookies.len(), 2);
+	/// ```
+	pub fn append_header(mut self, name: &str, value: &str) -> Self {
+		if let Ok(header_name) = hyper::header::HeaderName::from_bytes(name.as_bytes())
+			&& let Ok(header_value) = hyper::header::HeaderValue::from_str(value)
+		{
+			self.headers.append(header_name, header_value);
+		}
+		self
+	}
+
 	/// Add a Location header to the response (typically used for redirects)
 	///
 	/// # Examples
@@ -1343,5 +1370,31 @@ mod tests {
 			response.headers.get("X-Custom").unwrap().to_str().unwrap(),
 			"valid-value"
 		);
+	}
+
+	#[rstest]
+	fn test_append_header_adds_multiple_values() {
+		// Arrange & Act
+		let response = Response::ok()
+			.append_header("Set-Cookie", "a=1; Path=/")
+			.append_header("Set-Cookie", "b=2; Path=/");
+
+		// Assert
+		let cookies: Vec<_> = response.headers.get_all("set-cookie").iter().collect();
+		assert_eq!(cookies.len(), 2);
+		assert_eq!(cookies[0].to_str().unwrap(), "a=1; Path=/");
+		assert_eq!(cookies[1].to_str().unwrap(), "b=2; Path=/");
+	}
+
+	#[rstest]
+	fn test_append_header_coexists_with_with_header() {
+		// Arrange & Act
+		let response = Response::ok()
+			.with_header("Set-Cookie", "a=1; Path=/")
+			.append_header("Set-Cookie", "b=2; Path=/");
+
+		// Assert
+		let cookies: Vec<_> = response.headers.get_all("set-cookie").iter().collect();
+		assert_eq!(cookies.len(), 2);
 	}
 }

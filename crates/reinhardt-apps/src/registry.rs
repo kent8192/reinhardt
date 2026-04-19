@@ -546,7 +546,7 @@ pub fn get_reverse_relations_for_model(model_name: &str) -> Vec<ReverseRelationM
 /// This function replaces static `OnceLock` values using `std::ptr::write`.
 /// It is only safe to call from a single-threaded test context (e.g., with
 /// `#[serial]`) where no other thread is concurrently reading these statics.
-#[cfg(test)]
+#[cfg(any(test, feature = "testing"))]
 pub fn reset_global_registry() {
 	use std::sync::PoisonError;
 

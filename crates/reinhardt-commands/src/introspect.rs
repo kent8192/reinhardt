@@ -225,7 +225,7 @@ fn collect_app_metadata() -> Result<AppMetadata, Box<dyn std::error::Error>> {
 
 	if let Some(root) = metadata.root_package() {
 		Ok(AppMetadata {
-			name: root.name.clone(),
+			name: root.name.to_string(),
 			version: root.version.to_string(),
 		})
 	} else {
@@ -562,7 +562,7 @@ fn collect_features_metadata() -> FeaturesMetadata {
 				node.id.repr.contains("reinhardt") && !node.id.repr.contains("reinhardt-test")
 			})
 		})
-		.map(|node| node.features.clone())
+		.map(|node| node.features.iter().map(|f| f.to_string()).collect())
 		.unwrap_or_default();
 
 	// Combine all features for signal detection

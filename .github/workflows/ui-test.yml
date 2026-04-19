@@ -19,6 +19,14 @@ on:
         description: "Whether to run all tests"
         type: string
         default: "true"
+      partitions-json:
+        description: "JSON array of partition indices for dynamic matrix. Issue #2881"
+        type: string
+        default: "[1,2,3,4,5,6,7,8]"
+      partition-count:
+        description: "Total partition count for nextest --partition. Issue #2881"
+        type: string
+        default: "8"
   workflow_dispatch:
 
 env:
@@ -32,13 +40,13 @@ env:
 
 jobs:
   ui-test:
-    name: UI Tests (${{ matrix.partition }}/8)
+    name: UI Tests (${{ matrix.partition }}/${{ inputs.partition-count || '8' }})
     runs-on: ${{ fromJSON(inputs.runner) }}
-    timeout-minutes: 60
+    timeout-minutes: 360
     strategy:
       fail-fast: false
       matrix:
-        partition: [1, 2, 3, 4, 5, 6, 7, 8]
+        partition: ${{ fromJSON(inputs.partitions-json || '[1,2,3,4,5,6,7,8]') }}
     steps:
       - name: Free Disk Space (Ubuntu)
         if: ${{ !contains(inputs.runner, 'self-hosted') }}
@@ -74,8 +82,9 @@ jobs:
 
       - name: Install mold linker and build dependencies
         run: |
-          sudo -E apt-get -o DPkg::Lock::Timeout=120 update
-          sudo -E apt-get -o DPkg::Lock::Timeout=120 install -y mold clang lld build-essential
+          sudo systemctl stop unattended-upgrades || true
+          sudo apt-get update -o DPkg::Lock::Timeout=120
+          sudo apt-get install -y -o DPkg::Lock::Timeout=120 mold clang lld build-essential
           sudo apt-get clean
           sudo rm -rf /var/lib/apt/lists/*
 
@@ -109,11 +118,12 @@ jobs:
           echo "Disk usage after additional cleanup:"
           df -h
 
-      - name: Run UI tests (partition ${{ matrix.partition }}/8)
+      - name: Run UI tests (partition ${{ matrix.partition }}/${{ inputs.partition-count || '8' }})
         env:
           RUSTFLAGS: "-C linker=clang -C link-arg=-fuse-ld=mold"
           NEXTEST_FILTER_EXPR: ${{ inputs.nextest-filter }}
           RUN_ALL: ${{ inputs.run-all }}
+          PARTITION_COUNT: ${{ inputs.partition-count || '8' }}
         run: |
           if [[ "$RUN_ALL" != "true" && -n "$NEXTEST_FILTER_EXPR" ]]; then
             FILTER_EXPR="binary(/ui/) & ($NEXTEST_FILTER_EXPR)"
@@ -124,7 +134,7 @@ jobs:
             --profile ui-test \
             --workspace \
             -E "$FILTER_EXPR" \
-            --partition hash:${{ matrix.partition }}/8 \
+            --partition hash:${{ matrix.partition }}/$PARTITION_COUNT \
             --no-fail-fast \
             --no-tests=warn \
             --status-level=none \

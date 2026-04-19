@@ -6,7 +6,9 @@
 #![cfg(feature = "di")]
 
 use async_graphql::{Context, EmptyMutation, EmptySubscription, ID, Object, Result, Schema};
-use reinhardt_di::{DiError, Injectable, InjectionContext, SingletonScope};
+use reinhardt_di::{
+	DependencyScope, DiError, Injectable, InjectionContext, SingletonScope, global_registry,
+};
 use reinhardt_graphql::{SchemaBuilderExt, graphql_handler};
 use rstest::*;
 use std::sync::{Arc, Mutex};
@@ -107,9 +109,25 @@ impl User {
 	}
 }
 
+/// Register mock types in the global registry for DI resolution.
+fn register_mock_types() {
+	let registry = global_registry();
+	if !registry.is_registered::<MockDatabase>() {
+		registry.register_async::<MockDatabase, _, _>(DependencyScope::Request, |_ctx| async {
+			Ok(MockDatabase::new())
+		});
+	}
+	if !registry.is_registered::<MockCache>() {
+		registry.register_async::<MockCache, _, _>(DependencyScope::Request, |_ctx| async {
+			Ok(MockCache::new())
+		});
+	}
+}
+
 /// Fixture: Injection context with database and cache
 #[fixture]
 fn injection_context_with_database() -> Arc<InjectionContext> {
+	register_mock_types();
 	let singleton_scope = SingletonScope::new();
 	Arc::new(InjectionContext::builder(singleton_scope).build())
 }

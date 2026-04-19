@@ -15,7 +15,7 @@
 //! ```
 
 /// Platform-specific types for WASM targets.
-#[cfg(target_arch = "wasm32")]
+#[cfg(wasm)]
 mod inner {
 	/// DOM Event type (web_sys::Event on WASM).
 	pub type Event = web_sys::Event;
@@ -43,7 +43,7 @@ mod inner {
 ///
 /// These are stub types that maintain API compatibility with WASM code
 /// without requiring web-sys dependencies on native targets.
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(native)]
 mod inner {
 	pub use crate::component::DummyEvent as Event;
 

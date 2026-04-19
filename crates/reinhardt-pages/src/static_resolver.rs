@@ -31,7 +31,7 @@
 //!
 //! Once initialized, use `resolve_static` to get the final URL:
 //!
-//! ```ignore
+//! ```no_run
 //! use reinhardt_pages::static_resolver::resolve_static;
 //!
 //! let css_url = resolve_static("css/style.css");
@@ -185,21 +185,21 @@
 
 use std::sync::OnceLock;
 
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(native)]
 use reinhardt_utils::staticfiles::TemplateStaticConfig;
 
 /// Global static configuration storage.
 ///
 /// This is initialized once at application startup and provides
 /// thread-safe access to the static URL resolver.
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(native)]
 static STATIC_CONFIG: OnceLock<TemplateStaticConfig> = OnceLock::new();
 
 /// WASM-specific static URL prefix.
 ///
 /// In WASM environments, we use a simple prefix since there's no
 /// server-side manifest processing.
-#[cfg(target_arch = "wasm32")]
+#[cfg(wasm)]
 static STATIC_URL_PREFIX: OnceLock<String> = OnceLock::new();
 
 /// Initializes the static resolver with the given configuration.
@@ -221,7 +221,7 @@ static STATIC_URL_PREFIX: OnceLock<String> = OnceLock::new();
 ///
 /// This function does not panic if called multiple times; subsequent
 /// calls are silently ignored.
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(native)]
 pub fn init_static_resolver(config: TemplateStaticConfig) {
 	// OnceLock::set returns Err if already set, but we ignore this
 	// to allow for idempotent initialization
@@ -235,12 +235,12 @@ pub fn init_static_resolver(config: TemplateStaticConfig) {
 ///
 /// ## Example
 ///
-/// ```ignore
+/// ```no_run
 /// use reinhardt_pages::static_resolver::init_static_resolver;
 ///
 /// init_static_resolver("/static/".to_string());
 /// ```
-#[cfg(target_arch = "wasm32")]
+#[cfg(wasm)]
 pub fn init_static_resolver(static_url: String) {
 	let _ = STATIC_URL_PREFIX.set(static_url);
 }
@@ -261,7 +261,7 @@ pub fn init_static_resolver(static_url: String) {
 ///
 /// ## Example
 ///
-/// ```ignore
+/// ```no_run
 /// use reinhardt_pages::static_resolver::resolve_static;
 ///
 /// let css_url = resolve_static("css/style.css");
@@ -279,7 +279,7 @@ pub fn init_static_resolver(static_url: String) {
 ///
 /// This ensures the application continues to work even if initialization
 /// was missed, though cache busting won't be available.
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(native)]
 pub fn resolve_static(path: &str) -> String {
 	STATIC_CONFIG
 		.get()
@@ -304,7 +304,7 @@ pub fn resolve_static(path: &str) -> String {
 ///
 /// In WASM environments, this simply concatenates the configured
 /// prefix with the path.
-#[cfg(target_arch = "wasm32")]
+#[cfg(wasm)]
 pub fn resolve_static(path: &str) -> String {
 	let prefix = STATIC_URL_PREFIX
 		.get()
@@ -329,13 +329,13 @@ pub fn resolve_static(path: &str) -> String {
 ///     init_static_resolver(config);
 /// }
 /// ```
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(native)]
 pub fn is_initialized() -> bool {
 	STATIC_CONFIG.get().is_some()
 }
 
 /// Checks if the static resolver has been initialized (WASM version).
-#[cfg(target_arch = "wasm32")]
+#[cfg(wasm)]
 pub fn is_initialized() -> bool {
 	STATIC_URL_PREFIX.get().is_some()
 }
@@ -345,7 +345,7 @@ mod tests {
 	use super::*;
 	use rstest::rstest;
 
-	#[cfg(not(target_arch = "wasm32"))]
+	#[cfg(native)]
 	mod native_tests {
 		use super::*;
 
@@ -366,7 +366,7 @@ mod tests {
 		}
 	}
 
-	#[cfg(target_arch = "wasm32")]
+	#[cfg(wasm)]
 	mod wasm_tests {
 		use super::*;
 		use wasm_bindgen_test::*;

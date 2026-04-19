@@ -43,7 +43,7 @@ impl TransactionHandle {
 	/// Create a new transaction handle with a unique ID
 	pub fn new() -> Self {
 		Self {
-			id: uuid::Uuid::new_v4().to_string(),
+			id: uuid::Uuid::now_v7().to_string(),
 			committed: false,
 		}
 	}
@@ -313,6 +313,7 @@ macro_rules! authenticated_test_case {
             });
             {
                 let client = $case.client().await;
+                #[allow(deprecated)]
                 client.force_authenticate(Some($user.clone())).await;
             }
 

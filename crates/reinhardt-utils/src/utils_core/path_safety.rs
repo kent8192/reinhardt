@@ -153,7 +153,7 @@ mod tests {
 	fn create_test_dir() -> PathBuf {
 		let dir = PathBuf::from(format!(
 			"/tmp/reinhardt_path_safety_test_{}",
-			uuid::Uuid::new_v4()
+			uuid::Uuid::now_v7()
 		));
 		fs::create_dir_all(&dir).expect("Failed to create test directory");
 		dir

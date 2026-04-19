@@ -227,10 +227,8 @@ Middleware execution order matters. A typical recommended order:
 
 ```rust
 use reinhardt::ServerRouter;
-use reinhardt::{
-    LoggingMiddleware, SecurityMiddleware, CorsMiddleware,
-    SessionMiddleware, CsrfMiddleware, RateLimitMiddleware
-};
+use reinhardt::{LoggingMiddleware, CorsMiddleware, SessionMiddleware};
+use reinhardt_middleware::{SecurityMiddleware, CsrfMiddleware, RateLimitMiddleware};
 
 let router = ServerRouter::new()
     .with_middleware(LoggingMiddleware::new())

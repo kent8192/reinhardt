@@ -8,7 +8,7 @@ use super::handler::{
 	RouteHandler, no_params_handler, result_handler, single_path_handler, three_path_handler,
 	two_path_handler, with_params_handler,
 };
-#[cfg(target_arch = "wasm32")]
+#[cfg(wasm)]
 use super::history::setup_popstate_listener;
 use super::history::{HistoryState, NavigationType, current_path, push_state, replace_state};
 use super::params::{FromPath, ParamContext, Path, SingleFromPath};
@@ -195,6 +195,26 @@ impl ClientRouter {
 			self.named_routes.insert(name, idx + offset);
 		}
 		self.routes.extend(other.routes);
+		self
+	}
+
+	/// Prefix all named route keys with `"namespace:"`.
+	///
+	/// This is the client-side equivalent of `ServerRouter::with_namespace()`.
+	/// Called by `#[url_patterns(InstalledApp::<variant>, mode = client)]` (or
+	/// `mode = unified`) to ensure registered names match the `"app:route"`
+	/// format used by per-app resolver structs.
+	pub fn with_namespace(mut self, namespace: &str) -> Self {
+		let old = std::mem::take(&mut self.named_routes);
+		for (name, idx) in old {
+			self.named_routes.insert(format!("{namespace}:{name}"), idx);
+		}
+		// Also update route names stored inside ClientRoute
+		for route in &mut self.routes {
+			if let Some(ref old_name) = route.name {
+				route.name = Some(format!("{namespace}:{old_name}"));
+			}
+		}
 		self
 	}
 
@@ -585,6 +605,23 @@ impl ClientRouter {
 		self.named_routes.contains_key(name)
 	}
 
+	/// Extract a lightweight, thread-safe URL reverser.
+	///
+	/// The returned `ClientUrlReverser` contains only the
+	/// named-route-to-pattern mapping and can be shared across threads
+	/// (unlike `ClientRouter` itself which holds reactive signals).
+	pub fn to_reverser(&self) -> super::reverser::ClientUrlReverser {
+		let named_patterns = self
+			.named_routes
+			.iter()
+			.map(|(name, &idx)| {
+				let pattern = self.routes[idx].pattern.pattern().to_string();
+				(name.clone(), pattern)
+			})
+			.collect();
+		super::reverser::ClientUrlReverser::new(named_patterns)
+	}
+
 	/// Sets up a popstate event listener for browser back/forward navigation.
 	///
 	/// This method registers a listener for the browser's `popstate` event,
@@ -602,7 +639,7 @@ impl ClientRouter {
 	/// The listener closure is kept alive using `.forget()`, meaning it will
 	/// persist for the lifetime of the page. This is intentional for SPA
 	/// navigation handling.
-	#[cfg(target_arch = "wasm32")]
+	#[cfg(wasm)]
 	pub fn setup_history_listener(&self) {
 		let path_signal = self.current_path.clone();
 		let params_signal = self.current_params.clone();
@@ -630,7 +667,7 @@ impl ClientRouter {
 	}
 
 	/// Non-WASM version of `setup_history_listener`.
-	#[cfg(not(target_arch = "wasm32"))]
+	#[cfg(native)]
 	pub fn setup_history_listener(&self) {
 		// No-op on non-WASM targets
 	}

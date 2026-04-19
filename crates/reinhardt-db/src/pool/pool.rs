@@ -207,7 +207,7 @@ where
 		let is_first = !self.first_connect_fired.swap(true, Ordering::SeqCst);
 
 		let conn = self.pool.acquire().await?;
-		let connection_id = uuid::Uuid::new_v4().to_string();
+		let connection_id = uuid::Uuid::now_v7().to_string();
 
 		if is_first {
 			// Emit first_connect event (using ConnectionCreated as proxy)

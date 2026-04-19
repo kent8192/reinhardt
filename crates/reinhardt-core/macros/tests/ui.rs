@@ -97,6 +97,14 @@ fn test_api_view_macro_fail() {
 	t.compile_fail("tests/ui/api_view/fail/*.rs");
 }
 
+// ===== Routes Registration (#[routes] attribute) =====
+
+#[test]
+fn test_routes_registration_macro_fail() {
+	let t = trybuild::TestCases::new();
+	t.compile_fail("tests/ui/routes_registration/fail/*.rs");
+}
+
 // ===== Injectable =====
 
 #[test]
@@ -127,6 +135,14 @@ fn test_app_config_fail() {
 fn test_validate_macro_fail() {
 	let t = trybuild::TestCases::new();
 	t.compile_fail("tests/ui/validate/fail/*.rs");
+}
+
+// ===== Hook =====
+
+#[test]
+fn test_hook_macro_fail() {
+	let t = trybuild::TestCases::new();
+	t.compile_fail("tests/ui/hook/fail/*.rs");
 }
 
 // ===== Settings =====

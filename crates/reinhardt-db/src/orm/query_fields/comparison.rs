@@ -72,7 +72,7 @@ impl FieldRef {
 ///
 /// # Examples
 ///
-/// ```ignore
+/// ```no_run
 /// use reinhardt_db::orm::query_fields::comparison::*;
 ///
 /// // u1.id < u2.id

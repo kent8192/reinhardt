@@ -7,7 +7,7 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-#[cfg(target_arch = "wasm32")]
+#[cfg(wasm)]
 use crate::dom::{Element, EventHandle, EventType};
 
 /// A binding between an event and its handler.
@@ -69,10 +69,10 @@ impl EventBinding {
 #[derive(Debug, Default)]
 pub struct EventRegistry {
 	/// Event handles indexed by element ID.
-	#[cfg(target_arch = "wasm32")]
+	#[cfg(wasm)]
 	handles: HashMap<String, Vec<EventHandle>>,
 	/// Event handles for non-WASM (placeholder).
-	#[cfg(not(target_arch = "wasm32"))]
+	#[cfg(native)]
 	handles: HashMap<String, Vec<String>>,
 }
 
@@ -83,7 +83,7 @@ impl EventRegistry {
 	}
 
 	/// Registers an event handle for an element.
-	#[cfg(target_arch = "wasm32")]
+	#[cfg(wasm)]
 	pub fn register(&mut self, element_id: impl Into<String>, handle: EventHandle) {
 		self.handles
 			.entry(element_id.into())
@@ -92,7 +92,7 @@ impl EventRegistry {
 	}
 
 	/// Registers an event handle (non-WASM placeholder).
-	#[cfg(not(target_arch = "wasm32"))]
+	#[cfg(native)]
 	pub fn register(&mut self, element_id: impl Into<String>, handle: String) {
 		self.handles
 			.entry(element_id.into())
@@ -143,11 +143,11 @@ impl std::fmt::Display for EventAttachError {
 impl std::error::Error for EventAttachError {}
 
 /// Type alias for event handler functions.
-#[cfg(target_arch = "wasm32")]
+#[cfg(wasm)]
 pub(super) type EventHandler = Arc<dyn Fn(web_sys::Event) + 'static>;
 
 /// Type alias for event handler functions (non-WASM placeholder).
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(native)]
 pub(super) type EventHandler = Arc<dyn Fn() + Send + Sync + 'static>;
 
 /// Options for attaching events (Phase 2-B).
@@ -181,7 +181,7 @@ impl AttachOptions {
 }
 
 /// Attaches an event handler to a DOM element.
-#[cfg(target_arch = "wasm32")]
+#[cfg(wasm)]
 pub fn attach_event(
 	element: &Element,
 	event_type: &EventType,
@@ -223,7 +223,7 @@ pub fn attach_event(
 /// - If `options.island_only` is true, only elements with `data-rh-island="true"` are hydrated
 /// - If `options.skip_static` is true, elements with `data-rh-static="true"` are skipped
 /// - Recursively processes child elements
-#[cfg(target_arch = "wasm32")]
+#[cfg(wasm)]
 pub fn attach_events_recursive(
 	element: &Element,
 	bindings: &[EventBinding],
@@ -292,7 +292,7 @@ pub fn attach_events_recursive(
 }
 
 /// Non-WASM version for testing.
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(native)]
 pub fn attach_event(
 	_element: &str,
 	event_type: &str,
@@ -304,7 +304,7 @@ pub fn attach_event(
 }
 
 /// Non-WASM version for testing (Phase 2-B).
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(native)]
 // Allow dead_code: non-WASM stub for event attachment
 #[allow(dead_code)]
 pub fn attach_events_recursive(
@@ -320,7 +320,7 @@ pub fn attach_events_recursive(
 }
 
 /// Attaches multiple events based on bindings.
-#[cfg(target_arch = "wasm32")]
+#[cfg(wasm)]
 // Allow dead_code: WASM event attachment reserved for future hydration
 #[allow(dead_code)]
 pub(super) fn attach_events(
@@ -344,7 +344,7 @@ pub(super) fn attach_events(
 /// Returns `None` if the event type string is not recognized. Unknown event
 /// types are logged as warnings rather than silently falling back to a
 /// default value.
-#[cfg(target_arch = "wasm32")]
+#[cfg(wasm)]
 fn event_type_from_string(s: &str) -> Option<EventType> {
 	match s {
 		// Mouse events
@@ -396,7 +396,7 @@ fn event_type_from_string(s: &str) -> Option<EventType> {
 }
 
 /// Non-WASM version for testing.
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(native)]
 // Allow dead_code: non-WASM stub for event attachment
 #[allow(dead_code)]
 pub(super) fn attach_events(
@@ -441,6 +441,7 @@ fn test_attach_options_full_hydration() {
 	assert!(!options.skip_static);
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 #[test]
 fn test_attach_events_recursive_non_wasm() {
 	let mut registry = EventRegistry::new();
@@ -453,7 +454,7 @@ fn test_attach_events_recursive_non_wasm() {
 	assert!(result.is_ok());
 	assert!(!registry.is_empty());
 }
-#[cfg(test)]
+#[cfg(all(test, not(target_arch = "wasm32")))]
 mod tests {
 	use super::*;
 

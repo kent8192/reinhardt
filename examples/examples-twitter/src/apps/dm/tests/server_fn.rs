@@ -144,7 +144,7 @@ async fn test_room_not_found(#[future] twitter_db_pool: (PgPool, String)) {
 	let room_factory = DMRoomFactory::new();
 
 	// Try to find non-existent room
-	let fake_id = uuid::Uuid::new_v4();
+	let fake_id = uuid::Uuid::now_v7();
 	let result = room_factory.find_by_id(&pool, fake_id).await;
 
 	assert!(result.is_err(), "Non-existent room should not be found");
@@ -469,10 +469,10 @@ async fn test_mark_room_as_read(#[future] twitter_db_pool: (PgPool, String)) {
 async fn test_room_info_structure() {
 	// Test RoomInfo structure
 	let room_info = RoomInfo {
-		id: uuid::Uuid::new_v4(),
+		id: uuid::Uuid::now_v7(),
 		name: "Test Room".to_string(),
 		is_group: false,
-		participants: vec![uuid::Uuid::new_v4(), uuid::Uuid::new_v4()],
+		participants: vec![uuid::Uuid::now_v7(), uuid::Uuid::now_v7()],
 		last_message: Some("Hello!".to_string()),
 		last_activity: Some("2025-01-01T00:00:00Z".to_string()),
 		unread_count: 5,
@@ -487,12 +487,12 @@ async fn test_room_info_structure() {
 #[rstest]
 #[tokio::test]
 async fn test_message_info_structure() {
-	let sender_id = uuid::Uuid::new_v4();
-	let room_id = uuid::Uuid::new_v4();
+	let sender_id = uuid::Uuid::now_v7();
+	let room_id = uuid::Uuid::now_v7();
 
 	// Test MessageInfo structure
 	let message_info = MessageInfo {
-		id: uuid::Uuid::new_v4(),
+		id: uuid::Uuid::now_v7(),
 		room_id,
 		sender_id,
 		sender_username: "testuser".to_string(),
@@ -511,7 +511,7 @@ async fn test_message_info_structure() {
 #[rstest]
 #[tokio::test]
 async fn test_send_message_request_structure() {
-	let room_id = uuid::Uuid::new_v4();
+	let room_id = uuid::Uuid::now_v7();
 
 	// Test SendMessageRequest structure
 	let request = SendMessageRequest {
@@ -526,7 +526,7 @@ async fn test_send_message_request_structure() {
 #[rstest]
 #[tokio::test]
 async fn test_create_room_request_structure() {
-	let participant_id = uuid::Uuid::new_v4();
+	let participant_id = uuid::Uuid::now_v7();
 
 	// Test CreateRoomRequest structure
 	let request = CreateRoomRequest {
@@ -542,7 +542,7 @@ async fn test_create_room_request_structure() {
 #[rstest]
 #[tokio::test]
 async fn test_new_message_notification_structure() {
-	let room_id = uuid::Uuid::new_v4();
+	let room_id = uuid::Uuid::now_v7();
 
 	// Test NewMessageNotification structure
 	let notification = NewMessageNotification {

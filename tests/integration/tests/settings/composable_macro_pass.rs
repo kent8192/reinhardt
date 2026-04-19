@@ -14,6 +14,7 @@
 use reinhardt_conf::settings::cache::{CacheSettings, HasCacheSettings};
 use reinhardt_conf::settings::core_settings::{CoreSettings, HasCoreSettings};
 use reinhardt_conf::settings::fragment::SettingsFragment;
+use reinhardt_conf::settings::openapi::{HasOpenApiSettings, OpenApiSettings};
 use reinhardt_conf::settings::policy::FieldRequirement;
 use reinhardt_conf::settings::profile::Profile;
 use reinhardt_macros::settings;
@@ -631,4 +632,145 @@ fn fragment_without_setting_attrs_returns_all_optional() {
 			policy.name,
 		);
 	}
+}
+
+// ============================================================================
+// OpenApiSettings composition tests
+// ============================================================================
+
+/// Compose CoreSettings with OpenApiSettings.
+#[settings(core: CoreSettings | openapi: OpenApiSettings)]
+struct WithOpenApiSettings;
+
+#[rstest]
+fn compose_openapi_has_core_and_openapi() {
+	// Arrange
+	let settings = WithOpenApiSettings {
+		core: reinhardt_conf::CoreSettings::default(),
+		openapi: OpenApiSettings::default(),
+	};
+
+	// Act
+	let core = settings.core();
+	let openapi = settings.openapi();
+
+	// Assert
+	assert!(core.debug, "CoreSettings should be accessible");
+	assert!(openapi.enabled, "OpenApiSettings should be accessible");
+	assert_eq!(openapi.swagger_path, "/api/docs");
+}
+
+#[rstest]
+fn compose_openapi_custom_values() {
+	// Arrange
+	// Use serde to construct OpenApiSettings with custom values
+	// because the struct is #[non_exhaustive] (cannot use struct literal from outside crate)
+	let openapi: OpenApiSettings = serde_json::from_str(
+		r#"{"title":"My REST API","version":"2.0.0","swagger_path":"/swagger"}"#,
+	)
+	.unwrap();
+	let settings = WithOpenApiSettings {
+		core: reinhardt_conf::CoreSettings {
+			secret_key: "test-key".to_string(),
+			..Default::default()
+		},
+		openapi,
+	};
+
+	// Act
+	let openapi = settings.openapi();
+
+	// Assert
+	assert_eq!(openapi.title, "My REST API");
+	assert_eq!(openapi.version, "2.0.0");
+	assert_eq!(openapi.swagger_path, "/swagger");
+	assert_eq!(openapi.redoc_path, "/api/redoc");
+}
+
+#[rstest]
+fn compose_openapi_serde_roundtrip() {
+	// Arrange
+	let openapi: OpenApiSettings =
+		serde_json::from_str(r#"{"title":"Serde Test","description":"Roundtrip check"}"#).unwrap();
+	let original = WithOpenApiSettings {
+		core: reinhardt_conf::CoreSettings {
+			secret_key: "roundtrip-key".to_string(),
+			..Default::default()
+		},
+		openapi,
+	};
+
+	// Act
+	let json = serde_json::to_string(&original).unwrap();
+	let deserialized: WithOpenApiSettings = serde_json::from_str(&json).unwrap();
+
+	// Assert
+	assert_eq!(deserialized.core.secret_key, "roundtrip-key");
+	assert_eq!(deserialized.openapi.title, "Serde Test");
+	assert_eq!(
+		deserialized.openapi.description,
+		Some("Roundtrip check".to_string())
+	);
+}
+
+#[rstest]
+fn compose_openapi_validate_delegates() {
+	// Arrange
+	let settings = WithOpenApiSettings {
+		core: reinhardt_conf::CoreSettings {
+			secret_key: "valid-key".to_string(),
+			..Default::default()
+		},
+		openapi: OpenApiSettings::default(),
+	};
+
+	// Act
+	let result = settings.validate(&Profile::Development);
+
+	// Assert
+	assert!(result.is_ok(), "validate() should pass: {result:?}");
+}
+
+#[rstest]
+fn compose_openapi_has_trait_as_generic_bound() {
+	// Arrange
+	fn get_swagger_path(s: &impl HasOpenApiSettings) -> &str {
+		&s.openapi().swagger_path
+	}
+
+	// Use serde to construct with custom swagger_path (#[non_exhaustive])
+	let openapi: OpenApiSettings =
+		serde_json::from_str(r#"{"swagger_path":"/custom/docs"}"#).unwrap();
+	let settings = WithOpenApiSettings {
+		core: reinhardt_conf::CoreSettings::default(),
+		openapi,
+	};
+
+	// Act
+	let path = get_swagger_path(&settings);
+
+	// Assert
+	assert_eq!(path, "/custom/docs");
+}
+
+/// Type-only syntax with OpenApiSettings.
+/// The macro infers the field name as `open_api` from `OpenApiSettings`.
+#[settings(CoreSettings | OpenApiSettings)]
+struct TypeOnlyWithOpenApi;
+
+#[rstest]
+fn compose_openapi_type_only_syntax() {
+	// Arrange
+	// Type-only syntax infers field name `open_api` from `OpenApiSettings`
+	let openapi: OpenApiSettings = serde_json::from_str(r#"{"title":"Type-Only Test"}"#).unwrap();
+	let settings = TypeOnlyWithOpenApi {
+		core: reinhardt_conf::CoreSettings::default(),
+		open_api: openapi,
+	};
+
+	// Act — trait method .openapi() works via HasSettings<OpenApiSettings> blanket impl
+	let openapi = settings.openapi();
+
+	// Assert
+	assert_eq!(openapi.title, "Type-Only Test");
 }

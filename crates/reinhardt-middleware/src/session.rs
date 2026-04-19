@@ -93,7 +93,7 @@ pub struct SessionData {
 
 impl SessionData {
 	/// Create a new session
-	fn new(ttl: Duration) -> Self {
+	pub fn new(ttl: Duration) -> Self {
 		let now = SystemTime::now();
 		Self {
 			id: Uuid::new_v4().to_string(),
@@ -110,7 +110,7 @@ impl SessionData {
 	}
 
 	/// Update last access timestamp
-	fn touch(&mut self, ttl: Duration) {
+	pub fn touch(&mut self, ttl: Duration) {
 		let now = SystemTime::now();
 		self.last_accessed = now;
 		self.expires_at = now + ttl;
@@ -231,6 +231,44 @@ impl SessionStore {
 		let sessions = self.sessions.read().unwrap_or_else(|e| e.into_inner());
 		sessions.is_empty()
 	}
+}
+
+/// Async trait for pluggable session storage backends.
+///
+/// Implement this trait to integrate any async-capable session store
+/// (e.g. Redis, DynamoDB, PostgreSQL) with the session middleware layer.
+///
+/// # Example
+///
+/// ```rust,ignore
+/// use std::time::Duration;
+/// use reinhardt_middleware::session::{AsyncSessionBackend, SessionData};
+/// use reinhardt_http::Result;
+///
+/// struct MyBackend;
+///
+/// #[async_trait::async_trait]
+/// impl AsyncSessionBackend for MyBackend {
+///     async fn load(&self, id: &str) -> Result<Option<SessionData>> { Ok(None) }
+///     async fn save(&self, session: &SessionData) -> Result<()> { Ok(()) }
+///     async fn destroy(&self, id: &str) -> Result<()> { Ok(()) }
+///     async fn touch(&self, id: &str, ttl: Duration) -> Result<()> { Ok(()) }
+/// }
+/// ```
+#[async_trait]
+pub trait AsyncSessionBackend: Send + Sync {
+	/// Load a session by ID. Returns `None` if the session does not exist
+	/// or has expired.
+	async fn load(&self, id: &str) -> Result<Option<SessionData>>;
+
+	/// Persist a session (insert or update).
+	async fn save(&self, session: &SessionData) -> Result<()>;
+
+	/// Remove a session by ID.
+	async fn destroy(&self, id: &str) -> Result<()>;
+
+	/// Refresh the TTL of an existing session without rewriting the full payload.
+	async fn touch(&self, id: &str, ttl: Duration) -> Result<()>;
 }
 
 /// Session configuration
@@ -592,7 +630,12 @@ impl Middleware for SessionMiddleware {
 			.insert(SessionCookieName::new(self.config.cookie_name.clone()));
 
 		// Call the handler
-		let mut response = handler.handle(request).await?;
+		// Convert errors to responses so post-processing (e.g., security headers)
+		// always runs, even when invoked outside MiddlewareChain. (#3244)
+		let mut response = match handler.handle(request).await {
+			Ok(resp) => resp,
+			Err(e) => Response::from(e),
+		};
 
 		// Append Set-Cookie header (use append to preserve existing Set-Cookie headers)
 		let cookie = self.build_cookie_header(&session.id);
@@ -1401,5 +1444,154 @@ impl Injectable for SessionStoreRef {
 						.to_string(),
 				)
 			})
+	}
+}
+
+#[cfg(test)]
+mod async_backend_tests {
+	use super::*;
+	use std::collections::HashMap;
+	use std::sync::{Arc, RwLock};
+
+	/// In-memory MockBackend for testing `AsyncSessionBackend`.
+	struct MockBackend {
+		sessions: RwLock<HashMap<String, SessionData>>,
+	}
+
+	impl MockBackend {
+		fn new() -> Self {
+			Self {
+				sessions: RwLock::new(HashMap::new()),
+			}
+		}
+	}
+
+	#[async_trait]
+	impl AsyncSessionBackend for MockBackend {
+		async fn load(&self, id: &str) -> Result<Option<SessionData>> {
+			let sessions = self.sessions.read().unwrap_or_else(|e| e.into_inner());
+			Ok(sessions.get(id).cloned())
+		}
+
+		async fn save(&self, session: &SessionData) -> Result<()> {
+			let mut sessions = self.sessions.write().unwrap_or_else(|e| e.into_inner());
+			sessions.insert(session.id.clone(), session.clone());
+			Ok(())
+		}
+
+		async fn destroy(&self, id: &str) -> Result<()> {
+			let mut sessions = self.sessions.write().unwrap_or_else(|e| e.into_inner());
+			sessions.remove(id);
+			Ok(())
+		}
+
+		async fn touch(&self, id: &str, ttl: Duration) -> Result<()> {
+			let mut sessions = self.sessions.write().unwrap_or_else(|e| e.into_inner());
+			if let Some(session) = sessions.get_mut(id) {
+				session.touch(ttl);
+			}
+			Ok(())
+		}
+	}
+
+	#[tokio::test]
+	async fn test_mock_backend_load_nonexistent() {
+		let backend = MockBackend::new();
+		let result = backend.load("nonexistent-id").await.unwrap();
+		assert!(result.is_none());
+	}
+
+	#[tokio::test]
+	async fn test_mock_backend_save_and_load() {
+		let backend = MockBackend::new();
+		let session = SessionData::new(Duration::from_secs(3600));
+		let id = session.id.clone();
+
+		backend.save(&session).await.unwrap();
+
+		let loaded = backend.load(&id).await.unwrap();
+		assert!(loaded.is_some());
+		assert_eq!(loaded.unwrap().id, id);
+	}
+
+	#[tokio::test]
+	async fn test_mock_backend_save_overwrites() {
+		let backend = MockBackend::new();
+		let mut session = SessionData::new(Duration::from_secs(3600));
+		let id = session.id.clone();
+
+		backend.save(&session).await.unwrap();
+
+		// Update a value and save again
+		session.set("key".to_string(), "value").unwrap();
+		backend.save(&session).await.unwrap();
+
+		let loaded = backend.load(&id).await.unwrap().unwrap();
+		let val: String = loaded.get("key").unwrap();
+		assert_eq!(val, "value");
+	}
+
+	#[tokio::test]
+	async fn test_mock_backend_destroy() {
+		let backend = MockBackend::new();
+		let session = SessionData::new(Duration::from_secs(3600));
+		let id = session.id.clone();
+
+		backend.save(&session).await.unwrap();
+		assert!(backend.load(&id).await.unwrap().is_some());
+
+		backend.destroy(&id).await.unwrap();
+		assert!(backend.load(&id).await.unwrap().is_none());
+	}
+
+	#[tokio::test]
+	async fn test_mock_backend_destroy_nonexistent_is_ok() {
+		let backend = MockBackend::new();
+		// Destroying a session that doesn't exist should not return an error
+		let result = backend.destroy("ghost-id").await;
+		assert!(result.is_ok());
+	}
+
+	#[tokio::test]
+	async fn test_mock_backend_touch_updates_expiry() {
+		let backend = MockBackend::new();
+		let session = SessionData::new(Duration::from_secs(3600));
+		let id = session.id.clone();
+		let original_expires = session.expires_at;
+
+		backend.save(&session).await.unwrap();
+
+		// Touch with a longer TTL
+		backend.touch(&id, Duration::from_secs(7200)).await.unwrap();
+
+		let loaded = backend.load(&id).await.unwrap().unwrap();
+		assert!(
+			loaded.expires_at > original_expires,
+			"expires_at should be extended after touch"
+		);
+	}
+
+	#[tokio::test]
+	async fn test_mock_backend_touch_nonexistent_is_ok() {
+		let backend = MockBackend::new();
+		// Touching a non-existent session is a no-op (not an error)
+		let result = backend.touch("ghost-id", Duration::from_secs(3600)).await;
+		assert!(result.is_ok());
+	}
+
+	#[tokio::test]
+	async fn test_backend_dyn_dispatch() {
+		// Verify the trait is object-safe and usable via Arc<dyn AsyncSessionBackend>
+		let backend: Arc<dyn AsyncSessionBackend> = Arc::new(MockBackend::new());
+		let session = SessionData::new(Duration::from_secs(3600));
+		let id = session.id.clone();
+
+		backend.save(&session).await.unwrap();
+		let loaded = backend.load(&id).await.unwrap();
+		assert!(loaded.is_some());
+
+		backend.touch(&id, Duration::from_secs(1800)).await.unwrap();
+		backend.destroy(&id).await.unwrap();
+		assert!(backend.load(&id).await.unwrap().is_none());
 	}
 }

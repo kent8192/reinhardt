@@ -14,6 +14,8 @@ See README.md for project details.
 
 **Repository URL**: https://github.com/kent8192/reinhardt-web
 
+@instructions/DESIGN_PHILOSOPHY.md
+
 ---
 
 ## Tech Stack
@@ -63,6 +65,20 @@ See instructions/MODULE_SYSTEM.md for comprehensive module system standards incl
 - Existing TODOs are not flagged due to diff-aware scanning
 - `cargo make clippy-todo-check` enforces `clippy::todo`, `clippy::unimplemented`, and `clippy::dbg_macro` as deny lints
 - Local pre-check: `semgrep scan --config .semgrep/ --error --metrics off`
+
+**Workaround Comments:**
+- When introducing workaround code, MUST include the ideal implementation (the correct code without the workaround) as a comment
+- This is in addition to the UR-4 format (issue reference + removal condition) in instructions/UPSTREAM_ISSUE_REPORTING.md
+- The ideal implementation comment enables future developers to remove the workaround without re-investigating the intended design
+
+**Comment template:**
+```rust
+// Workaround for upstream-repo#42 (tracked in reinhardt-web#15)
+// Remove this workaround when the upstream issue is resolved.
+//
+// Ideal implementation (without workaround):
+//   pool.health_check().await?;
+```
 
 See instructions/ANTI_PATTERNS.md for comprehensive anti-patterns guide.
 
@@ -134,6 +150,7 @@ See instructions/DOCUMENTATION_STANDARDS.md for comprehensive documentation stan
 **Branch Operations:**
 - When merging branches and resolving conflicts, execute immediately without entering Plan Mode
 - Before creating branches, verify names don't conflict with existing ones using `git worktree list` and `git branch -a`
+- Issue-linked branches: `<type>/issue-XXXX-to-YYYY-<desc>` (range), `<type>/issue-XXXX-to-YYYY-and-WWWW-to-ZZZZ-<desc>` (multiple ranges)
 
 **PR Conflict Resolution:**
 - **MUST** use worktree-based merge strategy for resolving PR conflicts (NOT rebase or force-push)
@@ -275,6 +292,17 @@ See instructions/ISSUE_HANDLING.md for comprehensive issue handling principles i
 - Work unit principles (WU-1 ~ WU-3)
 - Workflow examples
 
+**Upstream Issue Reporting:**
+- When an upstream dependency issue is discovered during reinhardt-web development, **immediately** create an issue in the upstream repository (UR-1)
+- Use `gh issue create -R [owner]/[repo]` for upstream issue creation (UR-2)
+- Create a tracking issue in reinhardt-web with `upstream-tracking` label for every upstream issue (UR-4)
+- **NEVER** implement workarounds without creating an upstream issue first (WP-2)
+
+See instructions/UPSTREAM_ISSUE_REPORTING.md for upstream dependency issue reporting policy including:
+- Reporting policy (UR-1 ~ UR-5)
+- Issue categories (IC-1, IC-2)
+- Workaround policy (WP-1 ~ WP-3)
+
 ---
 
 ## Common Commands
@@ -283,6 +311,7 @@ See instructions/ISSUE_HANDLING.md for comprehensive issue handling principles i
 ```bash
 cargo check --workspace --all --all-features
 cargo build --workspace --all --all-features
+cargo make feature-check  # Check representative feature combinations (27 patterns)
 ```
 
 **Testing:**
@@ -440,6 +469,7 @@ Before submitting code:
    - [ ] Git commit policy (@instructions/COMMIT_GUIDELINE.md)
    - [ ] GitHub interaction policy (@instructions/GITHUB_INTERACTION.md)
    - [ ] Issue handling principles (@instructions/ISSUE_HANDLING.md)
+   - [ ] Upstream issues reported (@instructions/UPSTREAM_ISSUE_REPORTING.md)
    - [ ] No unresolved TODO/FIXME comments in new code (TODO Check CI)
 
 ---
@@ -507,6 +537,7 @@ Before submitting code:
 - Provide structured agent context using AC-2 template format
 - Fall back to `gh` CLI when GitHub MCP tools return errors
 - Verify branch name uniqueness before creation (`git worktree list` and `git branch -a`)
+- Use `issue-XXXX-to-YYYY` for consecutive issue ranges and `and` for multiple ranges in branch names
 - Check known CI failure patterns before deep investigation
 - Run `cargo doc --no-deps` locally before pushing doc-related fixes
 - Execute merge/conflict resolution and straightforward operations immediately without Plan Mode
@@ -525,6 +556,9 @@ Before submitting code:
 - Evaluate, respond to, and resolve Copilot review comments after PR creation (CR-1 ~ CR-4)
 - Reply to every Copilot review thread before resolving it (no silent resolves)
 - Use GraphQL `resolveReviewThread` mutation to resolve Copilot review threads
+- Create upstream issue before implementing any workaround for external dependency bugs (WP-2)
+- Include the ideal implementation as a comment when introducing workaround code (WP-3)
+- Create a tracking issue in reinhardt-web for every upstream dependency issue with `upstream-tracking` label (UR-4)
 
 ### ❌ NEVER DO
 - Use `mod.rs` files (deprecated pattern)
@@ -582,6 +616,7 @@ Before submitting code:
 - Enter Plan Mode for merge operations, branch deletion, or worktree cleanup
 - Retry GitHub MCP tools after errors instead of falling back to `gh` CLI
 - Create branches without checking for name conflicts
+- Use hyphens between issue numbers for ranges in branch names (use `to` and `and` instead)
 - Use rebase or force-push to resolve PR conflicts (use worktree merge instead)
 - Merge develop/* branches into main without `migration-approved` label and CI version validation
 - Remove `agent-suspect` label without independent verification (separate agent or human)
@@ -596,6 +631,9 @@ Before submitting code:
 - Resolve Copilot review threads without posting a reply first
 - Poll in a loop waiting for Copilot review to appear
 - Dismiss valid Copilot review concerns without fixing the code
+- Implement workarounds for upstream dependency issues without creating an upstream issue first (WP-2)
+- Introduce workaround code without an ideal implementation comment (WP-3)
+- Create upstream issues without corresponding reinhardt-web tracking issues (UR-4)
 
 ### 📚 Detailed Standards
 
@@ -610,6 +648,7 @@ For comprehensive guidelines, see:
 - **Agent Bug Discovery**: instructions/STABILITY_POLICY.md (SC-2a)
 - **Issues**: instructions/ISSUE_GUIDELINES.md
 - **Issue Handling**: instructions/ISSUE_HANDLING.md
+- **Upstream Issue Reporting**: instructions/UPSTREAM_ISSUE_REPORTING.md
 - **GitHub Interactions**: instructions/GITHUB_INTERACTION.md
 - **Copilot Review Handling**: instructions/GITHUB_INTERACTION.md (CR-1 ~ CR-5)
 - **GitHub Discussions**: https://github.com/kent8192/reinhardt-web/discussions

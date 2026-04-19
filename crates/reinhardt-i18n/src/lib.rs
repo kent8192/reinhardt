@@ -33,7 +33,7 @@
 //!
 //! When the `di` feature is enabled, `TranslationContext` implements `Injectable`:
 //!
-//! ```ignore
+//! ```no_run
 //! use reinhardt_di::{InjectionContext, SingletonScope, Injectable};
 //! use reinhardt_i18n::TranslationContext;
 //!

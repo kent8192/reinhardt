@@ -2,7 +2,7 @@
 //!
 //! Composable fragment for template engine configuration.
 
-use super::fragment::{HasSettings, SettingsFragment};
+use reinhardt_core::macros::settings;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -26,31 +26,12 @@ pub struct FragmentTemplateConfig {
 /// Template engine settings fragment.
 ///
 /// Django compatibility: wraps template engine configurations.
+#[settings(fragment = true, section = "templates")]
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct TemplateSettings {
 	/// Template configurations list.
 	#[serde(default)]
 	pub configs: Vec<FragmentTemplateConfig>,
-}
-
-impl SettingsFragment for TemplateSettings {
-	type Accessor = dyn HasTemplateSettings;
-
-	fn section() -> &'static str {
-		"templates"
-	}
-}
-
-/// Trait for accessing [`TemplateSettings`] from a composed settings type.
-pub trait HasTemplateSettings {
-	/// Get a reference to the template settings.
-	fn templates(&self) -> &TemplateSettings;
-}
-
-impl<T: HasSettings<TemplateSettings>> HasTemplateSettings for T {
-	fn templates(&self) -> &TemplateSettings {
-		self.get_settings()
-	}
 }
 
 #[cfg(test)]

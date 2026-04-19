@@ -141,7 +141,7 @@ mod tests {
 
 	fn test_account(user_id: Uuid) -> SocialAccount {
 		SocialAccount {
-			id: Uuid::new_v4(),
+			id: Uuid::now_v7(),
 			user_id,
 			provider: "github".to_string(),
 			provider_user_id: "gh_123".to_string(),
@@ -162,7 +162,7 @@ mod tests {
 	async fn test_create_and_find() {
 		// Arrange
 		let storage = InMemorySocialAccountStorage::new();
-		let user_id = Uuid::new_v4();
+		let user_id = Uuid::now_v7();
 		let account = test_account(user_id);
 		let provider_uid = account.provider_user_id.clone();
 
@@ -183,7 +183,7 @@ mod tests {
 	async fn test_find_by_user() {
 		// Arrange
 		let storage = InMemorySocialAccountStorage::new();
-		let user_id = Uuid::new_v4();
+		let user_id = Uuid::now_v7();
 		let account = test_account(user_id);
 
 		// Act
@@ -200,7 +200,7 @@ mod tests {
 	async fn test_update() {
 		// Arrange
 		let storage = InMemorySocialAccountStorage::new();
-		let user_id = Uuid::new_v4();
+		let user_id = Uuid::now_v7();
 		let mut account = test_account(user_id);
 		storage.create(account.clone()).await.unwrap();
 
@@ -219,7 +219,7 @@ mod tests {
 	async fn test_delete() {
 		// Arrange
 		let storage = InMemorySocialAccountStorage::new();
-		let user_id = Uuid::new_v4();
+		let user_id = Uuid::now_v7();
 		let account = test_account(user_id);
 		let id = account.id;
 		storage.create(account).await.unwrap();
@@ -239,7 +239,7 @@ mod tests {
 		let storage = InMemorySocialAccountStorage::new();
 
 		// Act
-		let result = storage.delete(Uuid::new_v4()).await;
+		let result = storage.delete(Uuid::now_v7()).await;
 
 		// Assert
 		assert!(result.is_err());
@@ -250,7 +250,7 @@ mod tests {
 	async fn test_update_nonexistent() {
 		// Arrange
 		let storage = InMemorySocialAccountStorage::new();
-		let account = test_account(Uuid::new_v4());
+		let account = test_account(Uuid::now_v7());
 
 		// Act
 		let result = storage.update(account).await;
@@ -280,7 +280,7 @@ mod tests {
 	async fn test_find_by_user_no_accounts_returns_empty() {
 		// Arrange
 		let storage = InMemorySocialAccountStorage::new();
-		let random_user_id = Uuid::new_v4();
+		let random_user_id = Uuid::now_v7();
 
 		// Act
 		let accounts = storage.find_by_user(random_user_id).await.unwrap();
@@ -294,14 +294,14 @@ mod tests {
 	async fn test_create_multiple_providers_same_user() {
 		// Arrange
 		let storage = InMemorySocialAccountStorage::new();
-		let user_id = Uuid::new_v4();
+		let user_id = Uuid::now_v7();
 
 		let mut github_account = test_account(user_id);
 		github_account.provider = "github".to_string();
 		github_account.provider_user_id = "gh_user_1".to_string();
 
 		let mut google_account = test_account(user_id);
-		google_account.id = Uuid::new_v4();
+		google_account.id = Uuid::now_v7();
 		google_account.provider = "google".to_string();
 		google_account.provider_user_id = "google_user_1".to_string();
 
@@ -322,7 +322,7 @@ mod tests {
 	async fn test_update_token_fields() {
 		// Arrange
 		let storage = InMemorySocialAccountStorage::new();
-		let user_id = Uuid::new_v4();
+		let user_id = Uuid::now_v7();
 		let mut account = test_account(user_id);
 		let account_id = account.id;
 		storage.create(account.clone()).await.unwrap();

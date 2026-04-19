@@ -82,10 +82,7 @@ impl TestService {
 		#[inject] db: MockDatabase,
 	) -> Result<Response<String>, Status> {
 		let user_id = &request.into_inner().id;
-		let user = db
-			.fetch_user(user_id)
-			.await
-			.map_err(|e| Status::not_found(e))?;
+		let user = db.fetch_user(user_id).await.map_err(Status::not_found)?;
 		Ok(Response::new(user))
 	}
 
@@ -104,10 +101,7 @@ impl TestService {
 		}
 
 		// Fetch from database
-		let user = db
-			.fetch_user(user_id)
-			.await
-			.map_err(|e| Status::not_found(e))?;
+		let user = db.fetch_user(user_id).await.map_err(Status::not_found)?;
 		Ok(Response::new(user))
 	}
 
@@ -118,10 +112,7 @@ impl TestService {
 		#[inject(cache = false)] db: MockDatabase,
 	) -> Result<Response<String>, Status> {
 		let user_id = &request.into_inner().id;
-		let user = db
-			.fetch_user(user_id)
-			.await
-			.map_err(|e| Status::not_found(e))?;
+		let user = db.fetch_user(user_id).await.map_err(Status::not_found)?;
 		Ok(Response::new(user))
 	}
 }

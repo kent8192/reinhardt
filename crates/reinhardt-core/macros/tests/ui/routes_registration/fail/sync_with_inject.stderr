@@ -1,0 +1,5 @@
+error: Sync #[routes] functions cannot use #[inject] parameters. Make the function async to use dependency injection.
+ --> tests/ui/routes_registration/fail/sync_with_inject.rs:6:5
+  |
+6 | pub fn routes(#[inject] _router: UnifiedRouter) -> UnifiedRouter {
+  |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^

@@ -196,6 +196,10 @@ impl RouteGroup {
 	/// assert!(!routes.is_empty());
 	/// assert!(routes.len() >= 1);
 	/// ```
+	#[deprecated(
+		since = "0.2.0",
+		note = "Use `#[get(\"/path\", name = \"name\")]` + `.endpoint()` instead"
+	)]
 	pub fn function_named<F, Fut>(
 		mut self,
 		path: &str,
@@ -210,7 +214,10 @@ impl RouteGroup {
 			> + Send
 			+ 'static,
 	{
-		self.router = self.router.function_named(path, method, name, func);
+		#[allow(deprecated)]
+		{
+			self.router = self.router.function_named(path, method, name, func);
+		}
 		self
 	}
 
@@ -238,6 +245,10 @@ impl RouteGroup {
 	/// let group = RouteGroup::new()
 	///     .handler_with_method_named("/articles", Method::GET, "list_articles", ArticleHandler);
 	/// ```
+	#[deprecated(
+		since = "0.2.0",
+		note = "Use `#[get(\"/path\", name = \"name\")]` + `.endpoint()` instead"
+	)]
 	pub fn handler_with_method_named<H: reinhardt_http::Handler + 'static>(
 		mut self,
 		path: &str,
@@ -245,9 +256,12 @@ impl RouteGroup {
 		name: &str,
 		handler: H,
 	) -> Self {
-		self.router = self
-			.router
-			.handler_with_method_named(path, method, name, handler);
+		#[allow(deprecated)]
+		{
+			self.router = self
+				.router
+				.handler_with_method_named(path, method, name, handler);
+		}
 		self
 	}
 
@@ -331,11 +345,18 @@ impl RouteGroup {
 	///
 	/// // RouteGroup created successfully
 	/// ```
+	#[deprecated(
+		since = "0.2.0",
+		note = "Use `#[get(\"/path\", name = \"name\")]` + `.endpoint()` instead"
+	)]
 	pub fn view_named<V>(mut self, path: &str, name: &str, view: V) -> Self
 	where
 		V: reinhardt_http::Handler + 'static,
 	{
-		self.router = self.router.view_named(path, name, view);
+		#[allow(deprecated)]
+		{
+			self.router = self.router.view_named(path, name, view);
+		}
 		self
 	}
 

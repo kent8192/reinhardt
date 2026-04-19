@@ -7,6 +7,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.0-rc.15](https://github.com/kent8192/reinhardt-web/compare/reinhardt-auth@v0.1.0-rc.14...reinhardt-auth@v0.1.0-rc.15) - 2026-03-29
+
+### Added
+
+- *(auth)* add AuthIdentity trait as User trait replacement
+- *(auth)* add AuthPermission database model
+- *(auth)* extend Group struct with #[model] support
+- *(auth)* integrate GroupManager with PermissionsMixin
+
+### Deprecated
+
+- *(auth)* mark User trait and DefaultUser as deprecated
+
+### Fixed
+
+- fix!(auth): add JwtError enum and reject expired tokens by default
+- *(macros)* apply formatting and clippy fixes to #[user] macro
+- *(auth)* reword deprecated note to fix rustdoc intra-doc link error
+- *(auth)* require jwt/token feature for DatabaseTokenStorage re-export
+- *(auth)* use get_singleton instead of resolve for DatabaseConnection in DI
+
+### Styling
+
+- apply rustfmt to user_macro_integration tests
+
+### Testing
+
+- *(auth)* add comprehensive edge case and custom field tests for #[user] macro
+- *(auth)* add GroupManager integration and user macro tests
+
 ## [0.1.0-rc.14](https://github.com/kent8192/reinhardt-web/compare/reinhardt-auth@v0.1.0-rc.13...reinhardt-auth@v0.1.0-rc.14) - 2026-03-24
 
 ### Fixed

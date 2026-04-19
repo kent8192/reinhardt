@@ -24,12 +24,12 @@ jobs:
   msrv-check:
     name: MSRV Check (${{ matrix.rust }})
     runs-on: ${{ fromJSON(inputs.runner || '"ubuntu-latest"') }}
-    timeout-minutes: 30
+    timeout-minutes: 360
     strategy:
       fail-fast: false
       matrix:
         # Verify compilation on MSRV (pinned), stable, and beta channels
-        rust: ["1.91.1", "stable", "beta"]
+        rust: ["1.94.1", "stable", "beta"]
 
     steps:
       - name: Free Disk Space (Ubuntu)

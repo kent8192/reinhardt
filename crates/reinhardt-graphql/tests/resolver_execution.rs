@@ -123,7 +123,7 @@ impl ExtendedMutation {
 		let storage = ctx.data::<UserStorage>()?;
 
 		let user = User {
-			id: ID::from(uuid::Uuid::new_v4().to_string()),
+			id: ID::from(uuid::Uuid::now_v7().to_string()),
 			name: input.name,
 			email: input.email,
 			active: true,
@@ -149,7 +149,7 @@ impl ExtendedMutation {
 		}
 
 		let post = Post {
-			id: ID::from(uuid::Uuid::new_v4().to_string()),
+			id: ID::from(uuid::Uuid::now_v7().to_string()),
 			title,
 			content,
 			author_id,

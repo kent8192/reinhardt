@@ -15,7 +15,7 @@ async fn test_session_authentication_with_inmemory_backend() {
 	let auth = SessionAuthentication::new(session_backend.clone());
 
 	// Create a test session with user data
-	let user_id = Uuid::new_v4();
+	let user_id = Uuid::now_v7();
 	let mut session = Session::new(session_backend.clone());
 	session.set("_auth_user_id", user_id.to_string()).unwrap();
 	session.set("_auth_user_name", "alice".to_string()).unwrap();
@@ -168,7 +168,7 @@ async fn test_session_authentication_custom_cookie_name() {
 	let auth = SessionAuthentication::with_config(config, session_backend.clone());
 
 	// Create a test session with user data
-	let user_id = Uuid::new_v4();
+	let user_id = Uuid::now_v7();
 	let mut session = Session::new(session_backend.clone());
 	session.set("_auth_user_id", user_id.to_string()).unwrap();
 	session.save().await.unwrap();

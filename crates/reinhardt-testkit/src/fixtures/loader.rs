@@ -245,7 +245,7 @@ where
 /// ```
 pub fn random_test_key() -> String {
 	use uuid::Uuid;
-	format!("test_key_{}", Uuid::new_v4().simple())
+	format!("test_key_{}", Uuid::now_v7().simple())
 }
 
 /// Generate test configuration data with timestamp

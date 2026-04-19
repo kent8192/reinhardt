@@ -69,10 +69,13 @@ pub(super) fn generate(macro_ast: &TypedPageMacro) -> TokenStream {
 		body
 	};
 
-	// Wrap in a closure with conditional use statement if needed
+	// Wrap in a closure with conditional use statement if needed.
+	// #[allow(unused_variables)] suppresses warnings for closure parameters that are
+	// only used inside @event handlers, which are cfg-gated to wasm32 (#3327).
 	quote! {
 		{
 			#use_statement
+			#[allow(unused_variables)]
 			#params -> #pages_crate::component::Page {
 				#body_with_head
 			}
@@ -190,7 +193,7 @@ fn generate_element(elem: &TypedPageElement, pages_crate: &TokenStream) -> Token
 	}
 
 	// Has events - generate conditional compilation code
-	// This eliminates the need for users to write #[cfg(target_arch = "wasm32")] blocks
+	// This eliminates the need for users to write #[cfg(all(target_family = "wasm", target_os = "unknown"))] blocks
 
 	// Generate event bindings for WASM target
 	let event_bindings: Vec<TokenStream> = elem
@@ -211,15 +214,11 @@ fn generate_element(elem: &TypedPageElement, pages_crate: &TokenStream) -> Token
 		.map(|handler| {
 			// Check if the handler is a closure expression
 			if matches!(handler, syn::Expr::Closure(_)) {
-				// For closures, wrap in a typed closure to enable type inference
-				quote! {
-					{
-						let __typed_wrapper = |__e: #pages_crate::component::DummyEvent| {
-							(#handler)(__e)
-						};
-						let _ = &__typed_wrapper;
-					}
-				}
+				// Closures now have explicit type annotations on their parameters,
+				// so no wrapper is needed for type inference. The closure body may
+				// reference WASM-only types (JsCast, web_sys::HtmlSelectElement),
+				// so we skip compiling it on non-WASM targets entirely.
+				quote! {}
 			} else {
 				// For non-closure handlers (Callback, variables, etc.),
 				// convert to ViewEventHandler first then reference it
@@ -237,10 +236,10 @@ fn generate_element(elem: &TypedPageElement, pages_crate: &TokenStream) -> Token
 		{
 			let __elem_base = #base_builder;
 
-			#[cfg(target_arch = "wasm32")]
+			#[cfg(all(target_family = "wasm", target_os = "unknown"))]
 			let __elem_with_events = __elem_base #(#event_bindings)*;
 
-			#[cfg(not(target_arch = "wasm32"))]
+			#[cfg(not(all(target_family = "wasm", target_os = "unknown")))]
 			let __elem_with_events = {
 				// Create typed wrappers to enable closure parameter type inference.
 				// The wrapper calls the user's handler with a typed argument, which forces
@@ -407,33 +406,46 @@ fn generate_event(event: &PageEvent, pages_crate: &TokenStream) -> TokenStream {
 	}
 
 	// Generate event handler code.
-	// For closure expressions, we use a typed wrapper to enable type inference.
+	// For closure expressions, add explicit type annotation to the parameter and
+	// wrap directly in Arc — no nested wrapper closure needed.
 	// For non-closure handlers (Callback, variables), we use into_event_handler.
-	if matches!(handler, syn::Expr::Closure(_)) {
-		// For closures, wrap in a typed closure to enable type inference.
-		// The wrapper calls the user's closure with a typed argument, which forces
-		// Rust to infer the closure parameter type.
+	if let syn::Expr::Closure(closure) = handler {
+		// Add ::web_sys::Event type annotation to the closure's first parameter.
+		// This replaces the previous nested wrapper pattern that caused FnOnce issues
+		// when the user's closure captured variables via `move` (#3322).
+		let mut modified = closure.clone();
+		if let Some(first_param) = modified.inputs.first_mut() {
+			match first_param {
+				syn::Pat::Type(pat_type) => {
+					// Already has type annotation — replace with web_sys::Event
+					*pat_type.ty = syn::parse_quote!(::web_sys::Event);
+				}
+				other => {
+					// No type annotation — wrap in PatType
+					let pat = other.clone();
+					*other = syn::Pat::Type(syn::PatType {
+						attrs: vec![],
+						pat: Box::new(pat),
+						colon_token: Default::default(),
+						ty: Box::new(syn::parse_quote!(::web_sys::Event)),
+					});
+				}
+			}
+		}
+		let typed_closure = syn::Expr::Closure(modified);
+		// The entire .on() call is cfg-gated to wasm32 only, because event handlers
+		// are no-ops on SSR and DummyEvent lacks web_sys::Event methods (#3312),
+		// and Signal is !Send+!Sync which conflicts with non-WASM bounds (#3315).
 		quote! {
 			.on(
 				#pages_crate::dom::EventType::#event_type_ident,
-				{
-					#[cfg(target_arch = "wasm32")]
-					let __typed_wrapper = |__event: ::web_sys::Event| {
-						(#handler)(__event)
-					};
-
-					#[cfg(not(target_arch = "wasm32"))]
-					let __typed_wrapper = |__event: #pages_crate::component::DummyEvent| {
-						(#handler)(__event)
-					};
-
-					::std::sync::Arc::new(__typed_wrapper)
-				}
+				::std::sync::Arc::new(#typed_closure)
 			)
 		}
 	} else {
 		// For non-closure handlers (Callback, variables, etc.),
 		// use into_event_handler which handles all handler types correctly.
+		// Also cfg-gated to wasm32 only for the same reasons as above.
 		quote! {
 			.on(
 				#pages_crate::dom::EventType::#event_type_ident,

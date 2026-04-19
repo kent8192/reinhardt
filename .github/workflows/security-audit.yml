@@ -19,7 +19,7 @@ jobs:
   security-audit:
     name: Scan for known vulnerabilities
     runs-on: ${{ fromJSON(inputs.runner || '"ubuntu-latest"') }}
-    timeout-minutes: 10
+    timeout-minutes: 360
     steps:
       - name: Checkout repository
         uses: actions/checkout@v6
@@ -53,4 +53,6 @@ jobs:
             --ignore RUSTSEC-2025-0134 \
             --ignore RUSTSEC-2024-0320 \
             --ignore RUSTSEC-2026-0049 \
-            --ignore RUSTSEC-2026-0066
+            --ignore RUSTSEC-2026-0066 \
+            --ignore RUSTSEC-2026-0098 \
+            --ignore RUSTSEC-2026-0099

@@ -67,8 +67,8 @@ async fn test_remember_me_token_integration(
 		.expect("Failed to create sessions table");
 
 	// Create initial session with user and remember_me token
-	let user_id = Uuid::new_v4();
-	let remember_me_token = Uuid::new_v4().to_string();
+	let user_id = Uuid::now_v7();
+	let remember_me_token = Uuid::now_v7().to_string();
 	let mut session = Session::new(backend.clone());
 	session.set("_auth_user_id", user_id.to_string()).unwrap();
 	session.set("_auth_user_name", "alice".to_string()).unwrap();
@@ -190,7 +190,7 @@ async fn test_session_after_mfa_verification(
 		.expect("Failed to create sessions table");
 
 	// Step 1: Create partial session after password verification
-	let user_id = Uuid::new_v4();
+	let user_id = Uuid::now_v7();
 	let mut partial_session = Session::new(backend.clone());
 	partial_session
 		.set("_auth_user_id", user_id.to_string())
@@ -305,7 +305,7 @@ async fn test_invalidate_all_sessions_on_password_change(
 		.expect("Failed to create sessions table");
 
 	// Create multiple sessions for the same user (desktop, mobile, tablet)
-	let user_id = Uuid::new_v4();
+	let user_id = Uuid::now_v7();
 	let user_id_str = user_id.to_string();
 
 	// Session 1: Desktop
@@ -456,8 +456,8 @@ async fn test_logout_complete_data_removal(
 		.expect("Failed to create sessions table");
 
 	// Create comprehensive session with all types of data
-	let user_id = Uuid::new_v4();
-	let csrf_token = Uuid::new_v4().to_string();
+	let user_id = Uuid::now_v7();
+	let csrf_token = Uuid::now_v7().to_string();
 	let client_ip = "192.168.1.100";
 	let user_agent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64)";
 

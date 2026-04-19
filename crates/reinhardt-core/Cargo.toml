@@ -1,7 +1,8 @@
 [package]
 name = "reinhardt-core"
-version = "0.1.0-rc.14"
+version = "0.1.0-rc.15"
 edition.workspace = true
+rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 authors.workspace = true
@@ -56,19 +57,19 @@ fluent-bundle = { version = "0.15", optional = true }
 image = "0.25"
 
 # Server-side dependencies (not available on WASM)
-[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+[target.'cfg(not(all(target_family = "wasm", target_os = "unknown")))'.dependencies]
 tokio = { workspace = true, features = ["rt", "sync", "time"] }
 hyper = { workspace = true }
 jsonschema = { version = "0.26", optional = true }
 rayon = { version = "1.10", optional = true }
 unic-langid = { version = "0.9", optional = true }
-uuid = { version = "1.0", features = ["v4", "serde"] }
+uuid = { version = "1.7", features = ["v4", "v7", "serde"] }
 
 # WASM-specific dependencies
-[target.'cfg(target_arch = "wasm32")'.dependencies]
+[target.'cfg(all(target_family = "wasm", target_os = "unknown"))'.dependencies]
 web-sys = { version = "0.3", features = ["Event"] }
 wasm-bindgen = "0.2"
-uuid = { version = "1.0", features = ["v4", "serde", "js"] }
+uuid = { version = "1.7", features = ["v4", "v7", "serde", "js"] }
 getrandom = { version = "0.3", features = ["wasm_js"] }
 
 [features]
@@ -82,17 +83,17 @@ default = [
   "serializers",
 ]
 
-# Module features (modules are always compiled, features for backwards compatibility)
+# Module features (conditionally compiled when feature is enabled)
 types = []
 exception = []
 signals = ["serde"]
 security = []
 validators = ["serde"]
 serializers = ["serde"]
-messages = []
+messages = ["serde"]
 negotiation = []
 parsers = []
-pagination = []
+pagination = ["serde"]
 reactive = []
 
 # Page types feature
@@ -129,6 +130,9 @@ serde = ["dep:serde"]
 jsonschema = ["dep:jsonschema"]
 parallel = ["dep:rayon"]
 i18n = ["dep:fluent-bundle", "dep:unic-langid"]
+
+[build-dependencies]
+cfg_aliases = "0.2"
 
 [dev-dependencies]
 insta = { workspace = true }

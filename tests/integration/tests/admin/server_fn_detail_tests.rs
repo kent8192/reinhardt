@@ -2,14 +2,14 @@
 //!
 //! Tests the detail view server function which retrieves a single record by ID.
 
-use super::server_fn_helpers::server_fn_context;
+use super::server_fn_helpers::{server_fn_context, uuid_pk_context};
 use reinhardt_admin::core::AdminRecord;
 use reinhardt_admin::core::{AdminDatabase, AdminSite};
 use reinhardt_admin::server::get_detail;
+use reinhardt_di::Depends;
 use rstest::*;
 use serde_json::json;
 use std::collections::HashMap;
-use std::sync::Arc;
 
 use super::server_fn_helpers::{make_auth_user, make_staff_request};
 
@@ -19,7 +19,7 @@ use super::server_fn_helpers::{make_auth_user, make_staff_request};
 #[rstest]
 #[tokio::test]
 async fn test_get_detail_happy_path(
-	#[future] server_fn_context: (Arc<AdminSite>, Arc<AdminDatabase>),
+	#[future] server_fn_context: (Depends<AdminSite>, Depends<AdminDatabase>),
 ) {
 	// Arrange
 	let (site, db) = server_fn_context.await;
@@ -58,7 +58,7 @@ async fn test_get_detail_happy_path(
 #[rstest]
 #[tokio::test]
 async fn test_get_detail_returns_all_fields(
-	#[future] server_fn_context: (Arc<AdminSite>, Arc<AdminDatabase>),
+	#[future] server_fn_context: (Depends<AdminSite>, Depends<AdminDatabase>),
 ) {
 	// Arrange
 	let (site, db) = server_fn_context.await;
@@ -102,7 +102,7 @@ async fn test_get_detail_returns_all_fields(
 #[rstest]
 #[tokio::test]
 async fn test_get_detail_with_various_data_types(
-	#[future] server_fn_context: (Arc<AdminSite>, Arc<AdminDatabase>),
+	#[future] server_fn_context: (Depends<AdminSite>, Depends<AdminDatabase>),
 ) {
 	// Arrange
 	let (site, db) = server_fn_context.await;
@@ -146,7 +146,7 @@ async fn test_get_detail_with_various_data_types(
 #[rstest]
 #[tokio::test]
 async fn test_get_detail_not_found(
-	#[future] server_fn_context: (Arc<AdminSite>, Arc<AdminDatabase>),
+	#[future] server_fn_context: (Depends<AdminSite>, Depends<AdminDatabase>),
 ) {
 	// Arrange
 	let (site, db) = server_fn_context.await;
@@ -178,7 +178,7 @@ async fn test_get_detail_not_found(
 #[rstest]
 #[tokio::test]
 async fn test_get_detail_model_not_registered(
-	#[future] server_fn_context: (Arc<AdminSite>, Arc<AdminDatabase>),
+	#[future] server_fn_context: (Depends<AdminSite>, Depends<AdminDatabase>),
 ) {
 	// Arrange
 	let (site, db) = server_fn_context.await;
@@ -201,4 +201,50 @@ async fn test_get_detail_model_not_registered(
 		result.is_err(),
 		"Should return error for unregistered model"
 	);
+}
+
+// ==================== UUID primary key tests ====================
+
+/// Verify that get_detail works with UUID primary keys (issue #3099)
+#[rstest]
+#[tokio::test]
+async fn test_get_detail_uuid_pk(
+	#[future] uuid_pk_context: (Depends<AdminSite>, Depends<AdminDatabase>, sqlx::PgPool),
+) {
+	// Arrange
+	let (site, db, pool) = uuid_pk_context.await;
+	let http_request = make_staff_request();
+	let auth_user = make_auth_user();
+
+	// Insert a record with UUID PK via sqlx (AdminDatabase::create returns u64,
+	// which cannot represent UUIDs)
+	let uuid_id = uuid::Uuid::now_v7();
+	sqlx::query("INSERT INTO uuid_test_models (id, name, status) VALUES ($1, $2, $3)")
+		.bind(uuid_id)
+		.bind("UUID Test Item")
+		.bind("active")
+		.execute(&pool)
+		.await
+		.expect("Failed to insert UUID test record");
+
+	// Act
+	let result = get_detail(
+		"UuidModel".to_string(),
+		uuid_id.to_string(),
+		site,
+		db,
+		http_request,
+		auth_user,
+	)
+	.await;
+
+	// Assert
+	assert!(
+		result.is_ok(),
+		"get_detail should find UUID PK record: {:?}",
+		result
+	);
+	let response = result.unwrap();
+	assert_eq!(response.model_name, "UuidModel");
+	assert_eq!(response.data.get("name"), Some(&json!("UUID Test Item")),);
 }

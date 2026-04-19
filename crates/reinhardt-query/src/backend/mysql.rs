@@ -3347,6 +3347,16 @@ impl MySqlQueryBuilder {
 	}
 }
 
+impl crate::query::QueryBuilderTrait for MySqlQueryBuilder {
+	fn placeholder(&self) -> (&str, bool) {
+		("?", false)
+	}
+
+	fn quote_char(&self) -> char {
+		'`'
+	}
+}
+
 #[cfg(test)]
 mod tests {
 	use super::*;
@@ -7668,15 +7678,5 @@ mod tests {
 
 		// Assert - single quotes in host must be escaped by doubling
 		assert_eq!(result, "'admin'@'host''; DROP USER root; --'");
-	}
-}
-
-impl crate::query::QueryBuilderTrait for MySqlQueryBuilder {
-	fn placeholder(&self) -> (&str, bool) {
-		("?", false)
-	}
-
-	fn quote_char(&self) -> char {
-		'`'
 	}
 }

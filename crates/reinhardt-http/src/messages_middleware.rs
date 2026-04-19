@@ -99,8 +99,12 @@ impl<S: MessageStorage + 'static> Middleware for MessagesMiddleware<S> {
 		let container = MessagesContainer::new(initial_messages);
 		request.extensions.insert(container.clone());
 
-		// Process the request through the handler chain
-		let response = next.handle(request).await?;
+		// Convert errors to responses so post-processing always runs,
+		// even when invoked outside MiddlewareChain. (#3244)
+		let response = match next.handle(request).await {
+			Ok(resp) => resp,
+			Err(e) => Response::from(e),
+		};
 
 		// Sync storage with container state after handler processing
 		{

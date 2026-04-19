@@ -3,7 +3,6 @@
 //! This module provides Django REST Framework-inspired field types for data validation
 //! and transformation in serializers.
 
-// use serde::{Deserialize, Serialize};
 use chrono::{NaiveDate, NaiveDateTime};
 use std::fmt;
 

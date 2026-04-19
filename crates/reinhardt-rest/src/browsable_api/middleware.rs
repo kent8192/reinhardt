@@ -209,8 +209,12 @@ impl Middleware for BrowsableApiMiddleware {
 		let request_uri = request.uri.clone();
 		let request_method = request.method.clone();
 
-		// Get response from handler
-		let response = handler.handle(request).await?;
+		// Convert errors to responses so post-processing always runs,
+		// even when invoked outside MiddlewareChain. (#3244)
+		let response = match handler.handle(request).await {
+			Ok(resp) => resp,
+			Err(e) => Response::from(e),
+		};
 
 		// If client prefers HTML and response is JSON, convert to browsable HTML
 		if prefers_html && Self::is_json_response(&response) {

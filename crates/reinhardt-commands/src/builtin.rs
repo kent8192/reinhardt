@@ -382,6 +382,45 @@ async fn build_from_state_from_testcontainers(
 	))
 }
 
+/// Build from_state by replaying migration files from disk (offline fallback)
+///
+/// This approach requires no database or Docker. It reads all `.rs` migration files,
+/// builds a dependency graph, topologically sorts them, and replays all operations
+/// to reconstruct the current `ProjectState`.
+#[cfg(feature = "migrations")]
+async fn build_from_state_from_files(
+	migrations_dir: &std::path::Path,
+) -> Result<reinhardt_db::migrations::ProjectState, crate::CommandError> {
+	use reinhardt_db::migrations::{FilesystemSource, MigrationSource, build_state_from_files};
+
+	let source = FilesystemSource::new(migrations_dir);
+
+	// Check if there are any migrations on disk
+	let all_migrations = source.all_migrations().await.map_err(|e| {
+		crate::CommandError::ExecutionError(format!("Failed to load migrations from disk: {}", e))
+	})?;
+
+	if all_migrations.is_empty() {
+		// No migration files found -- this is genuinely an initial migration
+		return Ok(reinhardt_db::migrations::ProjectState::default());
+	}
+
+	eprintln!(
+		"[DEBUG] Building state from {} migration files on disk",
+		all_migrations.len()
+	);
+	for migration in &all_migrations {
+		eprintln!("[DEBUG]   - {}/{}", migration.app_label, migration.name);
+	}
+
+	build_state_from_files(&source).await.map_err(|e| {
+		crate::CommandError::ExecutionError(format!(
+			"Failed to build state from migration files: {}",
+			e
+		))
+	})
+}
+
 /// Make migrations command
 #[cfg(feature = "migrations")]
 pub struct MakeMigrationsCommand;
@@ -509,6 +548,19 @@ impl BaseCommand for MakeMigrationsCommand {
 			.map(|s| s.to_string())
 			.unwrap_or_else(|| "migrations".to_string());
 		let migrations_dir = PathBuf::from(migrations_dir_str);
+
+		// Validate that we are running inside a Reinhardt project directory.
+		// A valid project must contain src/bin/manage.rs (the management command
+		// entry point). Running makemigrations from the wrong directory would
+		// silently create migration files in unexpected locations.
+		if !PathBuf::from("src/bin/manage.rs").exists() {
+			return Err(crate::CommandError::ExecutionError(
+				"Cannot find src/bin/manage.rs in the current directory. \
+				 Please run makemigrations from your Reinhardt project root \
+				 (the directory containing src/bin/manage.rs)."
+					.to_string(),
+			));
+		}
 
 		if is_dry_run {
 			ctx.warning("Dry run mode: No files will be created");
@@ -781,30 +833,45 @@ impl BaseCommand for MakeMigrationsCommand {
 								state
 							}
 							Err(e) => {
-								ctx.error(&format!("Failed to use TestContainers: {}", e));
-								ctx.error(
-									"⚠️  CRITICAL: Cannot build from_state from existing migrations!",
-								);
-								ctx.error(
-									"This will cause ALL tables to be regenerated, creating duplicate migrations.",
-								);
-								ctx.error("");
-								ctx.error("Possible solutions:");
-								ctx.error("  1. Fix TestContainers setup (recommended)");
-								ctx.error("  2. Use --from-db flag to build from database history");
-								ctx.error(
-									"  3. Use --force-empty-state to proceed anyway (dangerous)",
-								);
-								ctx.error("");
+								ctx.warning(&format!("Failed to use TestContainers: {}", e));
+								ctx.info("Falling back to file-based state reconstruction...");
+								match build_from_state_from_files(&migrations_dir).await {
+									Ok(state) => {
+										ctx.verbose("Built state from migration files (offline)");
+										state
+									}
+									Err(e_files) => {
+										ctx.error(&format!(
+											"Failed file-based reconstruction: {}",
+											e_files
+										));
+										ctx.error(
+											"⚠️  CRITICAL: Cannot build from_state from existing migrations!",
+										);
+										ctx.error(
+											"This will cause ALL tables to be regenerated, creating duplicate migrations.",
+										);
+										ctx.error("");
+										ctx.error("Possible solutions:");
+										ctx.error("  1. Fix TestContainers setup (recommended)");
+										ctx.error(
+											"  2. Use --from-db flag to build from database history",
+										);
+										ctx.error(
+											"  3. Use --force-empty-state to proceed anyway (dangerous)",
+										);
+										ctx.error("");
 
-								if ctx.has_option("force-empty-state") {
-									ctx.warning(
-										"⚠️  Using empty state as requested (--force-empty-state)",
-									);
-									ctx.warning("This may create duplicate migrations!");
-									ProjectState::new()
-								} else {
-									return Err("from_state construction failed. Please fix TestContainers, use --from-db, or use --force-empty-state to continue anyway.".to_string().into());
+										if ctx.has_option("force-empty-state") {
+											ctx.warning(
+												"⚠️  Using empty state as requested (--force-empty-state)",
+											);
+											ctx.warning("This may create duplicate migrations!");
+											ProjectState::new()
+										} else {
+											return Err("from_state construction failed. Please fix TestContainers, use --from-db, or use --force-empty-state to continue anyway.".to_string().into());
+										}
+									}
 								}
 							}
 						}
@@ -826,32 +893,45 @@ impl BaseCommand for MakeMigrationsCommand {
 								state
 							}
 							Err(e) => {
-								ctx.error(&format!("Failed to connect to database: {}", e));
-								ctx.error(
-									"⚠️  CRITICAL: Cannot build from_state from existing migrations!",
-								);
-								ctx.error(
-									"This will cause ALL tables to be regenerated, creating duplicate migrations.",
-								);
-								ctx.error("");
-								ctx.error("Possible solutions:");
-								ctx.error("  1. Fix database connection (recommended)");
-								ctx.error(
-									"  2. Use TestContainers (default behavior without --from-db)",
-								);
-								ctx.error(
-									"  3. Use --force-empty-state to proceed anyway (dangerous)",
-								);
-								ctx.error("");
+								ctx.warning(&format!("Failed to connect to database: {}", e));
+								ctx.info("Falling back to file-based state reconstruction...");
+								match build_from_state_from_files(&migrations_dir).await {
+									Ok(state) => {
+										ctx.verbose("Built state from migration files (offline)");
+										state
+									}
+									Err(e_files) => {
+										ctx.error(&format!(
+											"Failed file-based reconstruction: {}",
+											e_files
+										));
+										ctx.error(
+											"⚠️  CRITICAL: Cannot build from_state from existing migrations!",
+										);
+										ctx.error(
+											"This will cause ALL tables to be regenerated, creating duplicate migrations.",
+										);
+										ctx.error("");
+										ctx.error("Possible solutions:");
+										ctx.error("  1. Fix database connection (recommended)");
+										ctx.error(
+											"  2. Use TestContainers (default behavior without --from-db)",
+										);
+										ctx.error(
+											"  3. Use --force-empty-state to proceed anyway (dangerous)",
+										);
+										ctx.error("");
 
-								if ctx.has_option("force-empty-state") {
-									ctx.warning(
-										"⚠️  Using empty state as requested (--force-empty-state)",
-									);
-									ctx.warning("This may create duplicate migrations!");
-									ProjectState::new()
-								} else {
-									return Err("from_state construction failed. Please fix database connection, remove --from-db, or use --force-empty-state to continue anyway.".to_string().into());
+										if ctx.has_option("force-empty-state") {
+											ctx.warning(
+												"⚠️  Using empty state as requested (--force-empty-state)",
+											);
+											ctx.warning("This may create duplicate migrations!");
+											ProjectState::new()
+										} else {
+											return Err("from_state construction failed. Please fix database connection, remove --from-db, or use --force-empty-state to continue anyway.".to_string().into());
+										}
+									}
 								}
 							}
 						}
@@ -936,11 +1016,12 @@ impl BaseCommand for MakeMigrationsCommand {
 				for migration in generated_migrations {
 					if migration.app_label == app_name.as_str() {
 						// Generate migration name
-						let base_name = migration_name_opt.clone().unwrap_or_else(|| {
-							MigrationNamer::generate_name(&migration.operations, true)
-						});
 						let migration_number =
 							MigrationNumbering::next_number(&migrations_dir, app_name);
+						let is_initial = migration_number == "0001";
+						let base_name = migration_name_opt.clone().unwrap_or_else(|| {
+							MigrationNamer::generate_name(&migration.operations, is_initial)
+						});
 						let final_name = format!("{}_{}", migration_number, base_name);
 
 						// Determine dependencies
@@ -1253,6 +1334,17 @@ impl BaseCommand for RunServerCommand {
 			)
 			.with_default("dist"),
 			CommandOption::flag(None, "no-spa", "Disable SPA mode (no index.html fallback)"),
+			CommandOption::flag(None, "no-wasm", "Skip WASM build at startup"),
+			CommandOption::flag(
+				None,
+				"force-wasm",
+				"Force rebuild WASM even if artifacts exist",
+			),
+			CommandOption::flag(
+				None,
+				"wasm-optional",
+				"Allow server to start even if WASM build fails",
+			),
 		]
 	}
 
@@ -1267,6 +1359,29 @@ impl BaseCommand for RunServerCommand {
 			.map(|s| s.to_string())
 			.unwrap_or_else(|| "dist".to_string());
 		let no_spa = ctx.has_option("no-spa");
+		// Build WASM frontend if --with-pages and not --no-wasm
+		#[cfg(feature = "pages")]
+		{
+			let no_wasm = ctx.has_option("no-wasm");
+			let force_wasm = ctx.has_option("force-wasm");
+			let wasm_optional = ctx.has_option("wasm-optional");
+			if with_pages
+				&& !no_wasm && let Err(e) = Self::build_pages_wasm(ctx, force_wasm)
+			{
+				if wasm_optional {
+					ctx.warning(&format!(
+						"Pages WASM build failed: {}. Server will start without WASM frontend.",
+						e
+					));
+				} else {
+					ctx.error(&format!(
+						"WASM build failed: {}. Fix compilation errors or use --wasm-optional to start without WASM.",
+						e
+					));
+					return Ok(());
+				}
+			}
+		}
 
 		// Find available port early (before displaying banner)
 		#[cfg(feature = "server")]
@@ -1492,73 +1607,95 @@ impl RunServerCommand {
 			shutdown_tx.shutdown();
 		});
 
-		// OpenAPI documentation is shown in startup banner above
-
-		// Create DI context for dependency injection
-		let singleton_scope = std::sync::Arc::new(reinhardt_di::SingletonScope::new());
-
-		// Apply deferred DI registrations from route configuration (e.g., AdminSite from admin_routes_with_di_deferred)
-		if let Some(registrations) = reinhardt_urls::routers::take_di_registrations() {
-			ctx.verbose("Applying deferred DI registrations from route configuration");
-			registrations.apply_to(&singleton_scope);
+		// Collect and validate runserver hooks (#3442)
+		let hooks = crate::runserver_hooks::collect_hooks();
+		if !hooks.is_empty() {
+			ctx.verbose(&format!("Found {} runserver hook(s)", hooks.len()));
+		}
+		for collected in &hooks {
+			collected.hook.validate().await.map_err(|e| {
+				crate::CommandError::ExecutionError(format!(
+					"Runserver hook validation failed for {}: {}",
+					collected.type_name, e
+				))
+			})?;
 		}
 
-		// Register DatabaseConnection as singleton when database feature is enabled
+		// OpenAPI documentation is shown in startup banner above
+
+		// Resolve DI context: reuse user-provided context from router, or create a new one.
+		// When the user attaches a DI context via UnifiedRouter::with_di_context(),
+		// we must register server-managed singletons (e.g., DatabaseConnection)
+		// into that context's singleton scope rather than creating a separate one.
+		let (singleton_scope, user_provided_context) =
+			if let Some(existing_ctx) = reinhardt_urls::routers::get_router_di_context() {
+				ctx.verbose("Using user-provided DI context from router configuration");
+				(existing_ctx.singleton_scope().clone(), Some(existing_ctx))
+			} else {
+				let scope = std::sync::Arc::new(reinhardt_di::SingletonScope::new());
+				// Apply deferred DI registrations only when no user context exists.
+				// When a user context is present, UnifiedRouter::flush_di_registrations
+				// has already applied them to the user's singleton scope.
+				if let Some(registrations) = reinhardt_urls::routers::take_di_registrations() {
+					ctx.verbose("Applying deferred DI registrations from route configuration");
+					registrations.apply_to(&scope);
+				}
+				(scope, None)
+			};
+
+		// Register DatabaseConnection in DI context when database feature is enabled.
+		// ORM is already initialized by run_command_with_registry() via
+		// initialize_orm_database(), so we only need to get the connection
+		// and register it in the DI singleton scope. (#3186)
 		#[cfg(feature = "reinhardt-db")]
 		{
-			// Check if DATABASE_URL was explicitly set in the environment before resolution
-			let env_database_url = std::env::var("DATABASE_URL").ok();
-
-			// Try to connect to database and register connection
-			match get_database_url() {
-				Ok(url) => {
-					// Sync DATABASE_URL to environment so all connection paths use the same URL.
-					// This prevents divergence where the ORM uses settings.toml but other code
-					// (e.g., sqlx::AnyPool, ModelViewSetHandler) reads DATABASE_URL directly.
-					sync_database_url_to_env(env_database_url.as_deref(), &url, ctx);
-
-					// Initialize ORM global database first, which also creates the connection pool
-					match reinhardt_db::orm::init_database(&url).await {
-						Ok(()) => {
-							ctx.verbose("ORM database initialized");
-							// Get the connection from ORM and register in DI context for dependency injection
-							match reinhardt_db::orm::get_connection().await {
-								Ok(db_conn) => {
-									// Register DatabaseConnection directly (not wrapped in Arc)
-									// The DI system wraps it in Arc internally via SingletonScope::set
-									singleton_scope.set(db_conn);
-									ctx.info(&format!(
-										"💾 Database: {} (connected)",
-										sanitize_database_url(&url)
-									));
-								}
-								Err(e) => {
-									ctx.warning(&format!(
-										"⚠️ Failed to get database connection for DI: {}",
-										e
-									));
-								}
-							}
-						}
-						Err(e) => {
-							ctx.warning(&format!(
-								"⚠️ Failed to initialize ORM database: {}. DI injection for DatabaseConnection will fail.",
-								e
-							));
-						}
-					}
+			match reinhardt_db::orm::get_connection().await {
+				Ok(db_conn) => {
+					// Register DatabaseConnection directly (not wrapped in Arc)
+					// The DI system wraps it in Arc internally via SingletonScope::set
+					singleton_scope.set(db_conn);
+					let url = get_database_url().unwrap_or_default();
+					ctx.info(&format!(
+						"💾 Database: {} (DI registered)",
+						sanitize_database_url(&url)
+					));
 				}
 				Err(e) => {
 					ctx.warning(&format!(
-						"⚠️ No DATABASE_URL configured: {}. DI injection for DatabaseConnection will fail.",
+						"⚠️ Failed to get database connection for DI: {}",
 						e
 					));
 				}
 			}
 		}
 
-		let di_context =
-			std::sync::Arc::new(reinhardt_di::InjectionContext::builder(singleton_scope).build());
+		// Build or reuse the DI context
+		let di_context = match user_provided_context {
+			Some(ctx) => ctx,
+			None => std::sync::Arc::new(
+				reinhardt_di::InjectionContext::builder(singleton_scope).build(),
+			),
+		};
+
+		// Invoke runserver hook startup phase (#3442)
+		if !hooks.is_empty() {
+			let runserver_ctx = crate::runserver_hooks::RunserverContext {
+				shutdown_coordinator: coordinator.clone(),
+				di_context: di_context.clone(),
+			};
+			for collected in &hooks {
+				collected
+					.hook
+					.on_server_start(&runserver_ctx)
+					.await
+					.map_err(|e| {
+						crate::CommandError::ExecutionError(format!(
+							"Runserver hook startup failed for {}: {}",
+							collected.type_name, e
+						))
+					})?;
+			}
+		}
 
 		// Create HTTP server with DI context and logging middleware
 		let mut server = HttpServer::new(router)
@@ -1873,6 +2010,74 @@ impl RunServerCommand {
 				&& !path_str.ends_with(".tmp")
 				&& (path_str.ends_with(".rs") || path_str.ends_with(".toml"))
 		})
+	}
+
+	/// Build the pages WASM bundle from the current project (if it declares cdylib).
+	///
+	/// Mirrors the logic in the standalone runserver binary. Returns an error
+	/// when the WASM compilation fails so the caller can decide whether to
+	/// abort or continue.
+	#[cfg(feature = "pages")]
+	fn build_pages_wasm(
+		ctx: &CommandContext,
+		force: bool,
+	) -> Result<(), crate::wasm_builder::WasmBuildError> {
+		let cwd = match std::env::current_dir() {
+			Ok(d) => d,
+			Err(e) => {
+				ctx.warning(&format!("Failed to get current directory: {}", e));
+				return Ok(());
+			}
+		};
+		let cargo_toml_path = cwd.join("Cargo.toml");
+
+		// Only build if this project exports cdylib
+		if !crate::wasm_builder::detect_cdylib_in_cargo_toml(&cargo_toml_path) {
+			return Ok(());
+		}
+
+		// Parse the crate name from Cargo.toml
+		let crate_name = match std::fs::read_to_string(&cargo_toml_path) {
+			Ok(content) => {
+				let mut name = String::new();
+				for line in content.lines() {
+					let trimmed = line.trim();
+					if trimmed.starts_with("name")
+						&& trimmed.contains('=')
+						&& let Some(val) = trimmed.split('=').nth(1)
+					{
+						name = val.trim().trim_matches('"').trim_matches('\'').to_string();
+						break;
+					}
+				}
+				if name.is_empty() {
+					ctx.warning("Could not determine crate name from Cargo.toml");
+					return Ok(());
+				}
+				name
+			}
+			Err(e) => {
+				ctx.warning(&format!("Failed to read Cargo.toml: {}", e));
+				return Ok(());
+			}
+		};
+
+		let js_name = crate_name.replace('-', "_");
+		let artifact = cwd.join("dist").join(format!("{}.js", js_name));
+		if artifact.exists() && !force {
+			ctx.info("Pages WASM: artifacts exist, skipping build (use --force-wasm to rebuild)");
+			return Ok(());
+		}
+
+		ctx.info(&format!("Building pages WASM for {}...", crate_name));
+		let config = crate::wasm_builder::WasmBuildConfig::new(".").output_dir("dist");
+		match crate::wasm_builder::WasmBuilder::new(config).build() {
+			Ok(_) => {
+				ctx.info("Pages WASM build succeeded.");
+				Ok(())
+			}
+			Err(e) => Err(e),
+		}
 	}
 }
 
@@ -2298,6 +2503,42 @@ fn sanitize_database_url(url: &str) -> String {
 	}
 	// For non-URL formats (e.g., sqlite:file.db), return as-is
 	url.to_string()
+}
+
+/// Initialize the ORM database connection from reinhardt-conf settings.
+///
+/// Resolves the database URL via [`get_database_url()`] (reinhardt-conf
+/// settings as primary source, `DATABASE_URL` env var as fallback),
+/// syncs the resolved URL to the `DATABASE_URL` environment variable,
+/// and initializes the ORM global connection pool.
+///
+/// This function does **not** handle DI registration — that remains
+/// the responsibility of `runserver` since only HTTP-serving commands
+/// need the `DatabaseConnection` registered in the DI context.
+///
+/// # Errors
+///
+/// Returns [`CommandError::ExecutionError`] if the database URL cannot
+/// be resolved or the ORM connection pool fails to initialize.
+#[cfg(feature = "reinhardt-db")]
+pub(crate) async fn initialize_orm_database(
+	ctx: &CommandContext,
+) -> Result<(), crate::CommandError> {
+	let env_database_url = std::env::var("DATABASE_URL").ok();
+	let url = get_database_url()?;
+
+	sync_database_url_to_env(env_database_url.as_deref(), &url, ctx);
+
+	reinhardt_db::orm::init_database(&url).await.map_err(|e| {
+		crate::CommandError::ExecutionError(format!("Failed to initialize ORM database: {}", e))
+	})?;
+
+	ctx.verbose("ORM database initialized");
+	ctx.info(&format!(
+		"💾 Database: {} (connected)",
+		sanitize_database_url(&url)
+	));
+	Ok(())
 }
 
 /// Helper function to get DATABASE_URL from environment or settings
@@ -2893,6 +3134,13 @@ mod tests {
 		use reinhardt_db::prelude::FieldType;
 		use tempfile::TempDir;
 
+		// Create a temporary project directory with the required structure
+		let project_dir = TempDir::new().unwrap();
+		std::fs::create_dir_all(project_dir.path().join("src/bin")).unwrap();
+		std::fs::write(project_dir.path().join("src/bin/manage.rs"), "fn main() {}").unwrap();
+		let original_dir = std::env::current_dir().unwrap();
+		std::env::set_current_dir(project_dir.path()).unwrap();
+
 		// Create a temporary directory for migrations
 		let temp_dir = TempDir::new().unwrap();
 		let migrations_dir = temp_dir.path();
@@ -2925,6 +3173,7 @@ mod tests {
 
 		let result = cmd.execute(&ctx).await;
 		unsafe { std::env::remove_var("DATABASE_URL") };
+		std::env::set_current_dir(&original_dir).unwrap();
 
 		// Should succeed (creates an empty migration)
 		assert!(result.is_ok(), "Failed with: {:?}", result.err());
@@ -2939,6 +3188,13 @@ mod tests {
 			prelude::FieldType,
 		};
 		use tempfile::TempDir;
+
+		// Create a temporary project directory with the required structure
+		let project_dir = TempDir::new().unwrap();
+		std::fs::create_dir_all(project_dir.path().join("src/bin")).unwrap();
+		std::fs::write(project_dir.path().join("src/bin/manage.rs"), "fn main() {}").unwrap();
+		let original_dir = std::env::current_dir().unwrap();
+		std::env::set_current_dir(project_dir.path()).unwrap();
 
 		// Create a temporary directory for migrations
 		let temp_dir = TempDir::new().unwrap();
@@ -2973,6 +3229,7 @@ mod tests {
 
 		let result = cmd.execute(&ctx).await;
 		unsafe { std::env::remove_var("DATABASE_URL") };
+		std::env::set_current_dir(&original_dir).unwrap();
 
 		// Should succeed (dry-run mode, no actual files created)
 		assert!(result.is_ok(), "Failed with: {:?}", result.err());

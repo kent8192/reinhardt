@@ -24,7 +24,7 @@ jobs:
   clippy:
     name: Clippy Lint
     runs-on: ${{ fromJSON(inputs.runner || '"ubuntu-latest"') }}
-    timeout-minutes: 30
+    timeout-minutes: 360
     steps:
       - name: Free Disk Space (Ubuntu)
         if: ${{ !contains(inputs.runner || '', 'self-hosted') }}

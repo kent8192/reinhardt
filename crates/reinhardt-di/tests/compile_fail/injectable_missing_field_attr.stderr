@@ -1,0 +1,5 @@
+error: Field must have either #[inject] or #[no_inject] attribute. Use #[inject] for dependency injection, or #[no_inject] for default initialization.
+ --> tests/compile_fail/injectable_missing_field_attr.rs:6:5
+  |
+6 |     name: String,
+  |     ^^^^^^^^^^^^

@@ -22,7 +22,7 @@ use std::collections::HashMap;
 ///
 /// Implementing a simple in-memory user manager:
 ///
-/// ```rust,ignore
+/// ```no_run
 /// # #[tokio::main]
 /// # async fn main() -> Result<(), Box<dyn std::error::Error>> {
 /// use reinhardt_auth::{BaseUser, BaseUserManager, Argon2Hasher};
@@ -70,7 +70,7 @@ use std::collections::HashMap;
 ///         extra: HashMap<String, Value>,
 ///     ) -> Result<MyUser> {
 ///         let mut user = MyUser {
-///             id: Uuid::new_v4(),
+///             id: Uuid::now_v7(),
 ///             email: username.to_string(),
 ///             password_hash: None,
 ///             last_login: None,

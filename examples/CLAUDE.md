@@ -116,10 +116,14 @@ use reinhardt::endpoint;
 use reinhardt::db::orm::Manager;
 use reinhardt::db::DatabaseConnection;
 
-// Pattern 4: External dependencies via reinhardt re-exports
-use reinhardt::core::serde::{Serialize, Deserialize};
-use reinhardt::core::serde::json::json;
-use reinhardt::core::async_trait;
+// Pattern 4: External dependencies - prefer direct import when in [dependencies]
+use serde::{Serialize, Deserialize};  // Preferred (serde is in [dependencies])
+use reinhardt::core::serde::json::json;  // Also valid via re-export
+use reinhardt::core::async_trait;  // Use re-export (async_trait not in [dependencies])
+
+// Pattern 5: External crate direct imports (when in [dependencies])
+use serde::{Serialize, Deserialize};
+use serde_json::json;
 ```
 
 #### ❌ INCORRECT Import Patterns
@@ -136,10 +140,12 @@ use reinhardt_test::fixtures::postgres_container;
 // ❌ NEVER import from hyper directly (use reinhardt re-exports)
 use hyper::{Method, StatusCode};
 
-// ❌ NEVER import external dependencies directly when re-exports exist
-use serde::{Serialize, Deserialize};  // Use reinhardt::core::serde instead
-use serde_json::json;                 // Use reinhardt::core::serde::json::json instead
-use async_trait::async_trait;         // Use reinhardt::core::async_trait instead
+// Note: When serde or serde_json are direct dependencies in Cargo.toml,
+// prefer importing from the crate directly: use serde::{Serialize, Deserialize};
+// The re-export path (reinhardt::core::serde) is also valid but direct import is preferred.
+
+// ❌ NEVER import external dependencies that are NOT in your Cargo.toml
+use async_trait::async_trait;         // Use reinhardt::core::async_trait instead (unless async_trait is in [dependencies])
 ```
 
 ---
@@ -297,6 +303,24 @@ use reinhardt::Request;  // ❌ Already in prelude!
 use reinhardt_http::Response;  // ❌ Wrong crate!
 ```
 
+### CS-3 (MUST): Attribute Macro Ordering on Model Structs
+
+`#[model(...)]` MUST come before `#[derive(...)]` on model structs:
+
+```rust
+// ✅ CORRECT: #[model] before #[derive]
+#[model(app_label = "users", table_name = "users")]
+#[derive(Serialize, Deserialize)]
+pub struct User { ... }
+
+// ❌ INCORRECT: #[derive] before #[model]
+#[derive(Serialize, Deserialize)]
+#[model(app_label = "users", table_name = "users")]
+pub struct User { ... }
+```
+
+**Why:** Rust attribute macros are applied from outside to inside. `#[model]` transforms `ForeignKeyField<T>` into concrete columns and may generate trait implementations (e.g., `Clone`). If `#[derive]` runs first, it sees the untransformed struct and fails.
+
 ---
 
 ## Testing Standards
@@ -352,9 +376,10 @@ Each mistake is paired with its correct alternative:
 - ❌ `use reinhardt_macros::endpoint;`
 - ✅ `use reinhardt::endpoint;`
 
-**Mistake 4: Importing from hyper directly**
-- ❌ `use hyper::Method;`
-- ✅ `use reinhardt::Method;`
+**Mistake 4: Importing external dependencies not in your Cargo.toml**
+- ❌ `use async_trait::async_trait;` (when async_trait is not in `[dependencies]`)
+- ✅ `use reinhardt::core::async_trait;` (use re-export)
+- ✅ `use serde::{Serialize, Deserialize};` (direct import is preferred when serde is in `[dependencies]`)
 
 **Mistake 5: Including sub-crates in dependencies**
 - ❌ `reinhardt-http = { path = "..." }` in `[dependencies]`

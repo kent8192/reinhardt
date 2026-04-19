@@ -1,10 +1,11 @@
+#![cfg(not(target_arch = "wasm32"))]
 //! State transition tests for static resolver
 //!
 //! These tests verify that the resolver correctly transitions between states
 //! (uninitialized → initialized) and handles state-dependent behavior.
 //! Uses serial_test to ensure tests don't interfere with each other.
 
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(native)]
 mod state_transition_tests {
 	use reinhardt_pages::static_resolver::{init_static_resolver, is_initialized, resolve_static};
 	use reinhardt_utils::staticfiles::TemplateStaticConfig;
@@ -136,7 +137,7 @@ mod state_transition_tests {
 	}
 }
 
-#[cfg(target_arch = "wasm32")]
+#[cfg(wasm)]
 mod wasm_state_transition_tests {
 	use reinhardt_pages::static_resolver::{init_static_resolver, is_initialized, resolve_static};
 	use serial_test::serial;

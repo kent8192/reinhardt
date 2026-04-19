@@ -1,3 +1,4 @@
+#![cfg(not(target_arch = "wasm32"))]
 //! Integration tests for Client-Side Router
 //!
 //! These tests verify the routing system functionality:

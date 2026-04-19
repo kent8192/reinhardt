@@ -1,3 +1,4 @@
+#![cfg(not(target_arch = "wasm32"))]
 //! Resource Integration Tests
 //!
 //! This module contains comprehensive integration tests for the reinhardt-pages
@@ -32,10 +33,10 @@ use reinhardt_pages::reactive::resource::ResourceState;
 use rstest::*;
 use serde::{Deserialize, Serialize};
 
-#[cfg(target_arch = "wasm32")]
+#[cfg(wasm)]
 use reinhardt_pages::reactive::{Resource, Signal, create_resource, create_resource_with_deps};
 
-#[cfg(target_arch = "wasm32")]
+#[cfg(wasm)]
 use wasm_bindgen_test::*;
 
 // ============================================================================
@@ -124,7 +125,7 @@ fn test_resource_state_error_basic() {
 // ============================================================================
 
 /// Tests Resource handling fetch error
-#[cfg(target_arch = "wasm32")]
+#[cfg(wasm)]
 #[wasm_bindgen_test]
 async fn test_resource_fetch_error() {
 	let resource: Resource<User, String> =
@@ -198,7 +199,7 @@ fn test_resource_state_transition_loading_to_success(test_user: User) {
 }
 
 /// Tests manual refetch state transition (WASM-only)
-#[cfg(target_arch = "wasm32")]
+#[cfg(wasm)]
 #[wasm_bindgen_test]
 async fn test_resource_manual_refetch() {
 	use std::cell::RefCell;
@@ -248,7 +249,7 @@ async fn test_resource_manual_refetch() {
 // ============================================================================
 
 /// Tests Resource for API call simulation
-#[cfg(target_arch = "wasm32")]
+#[cfg(wasm)]
 #[wasm_bindgen_test]
 async fn test_resource_use_case_api_call(test_user: User) {
 	let user = test_user.clone();
@@ -308,7 +309,7 @@ fn test_resource_refetch_idempotency_property() {
 // ============================================================================
 
 /// Tests Resource with Signal dependency (WASM-only)
-#[cfg(target_arch = "wasm32")]
+#[cfg(wasm)]
 #[wasm_bindgen_test]
 async fn test_resource_with_signal_dependency() {
 	let user_id = Signal::new(1u32);

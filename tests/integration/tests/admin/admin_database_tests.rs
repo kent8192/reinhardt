@@ -12,6 +12,7 @@ use reinhardt_db::orm::expressions::{F, OuterRef};
 use reinhardt_db::orm::{
 	DatabaseBackend, DatabaseConnection, Filter, FilterCondition, FilterOperator, FilterValue,
 };
+use reinhardt_di::Depends;
 use reinhardt_query::{
 	Alias, ColumnRef, Condition, PostgresQueryBuilder, Query, QueryStatementBuilder, Value,
 };
@@ -823,8 +824,8 @@ async fn test_create_returns_id_when_response_has_id_field() {
 
 #[rstest]
 #[tokio::test]
-async fn test_create_returns_zero_when_id_is_non_number() {
-	// Arrange: Create a mock that returns "id" as a string (non-number)
+async fn test_create_returns_error_when_pk_field_missing() {
+	// Arrange: Create a mock that returns a row without the expected "id" field
 	use reinhardt_db::backends::{
 		backend::DatabaseBackend as BackendTrait,
 		connection::DatabaseConnection as BackendsConnection,
@@ -844,7 +845,60 @@ async fn test_create_returns_zero_when_id_is_non_number() {
 	mock.expect_fetch_all().returning(|_, _| Ok(Vec::new()));
 	mock.expect_fetch_optional().returning(|_, _| Ok(None));
 
-	// Return "id" as a string value (e.g., UUID)
+	// Return a row that does NOT contain the expected "id" pk field
+	mock.expect_fetch_one().returning(|_, _| {
+		let mut row = Row::new();
+		row.data.insert(
+			"other_field".to_string(),
+			QueryValue::String("some-value".to_string()),
+		);
+		Ok(row)
+	});
+
+	let backends_conn = BackendsConnection::new(Arc::new(mock));
+	let conn = DatabaseConnection::new(DatabaseBackend::Postgres, backends_conn);
+	let db = AdminDatabase::new(conn);
+
+	let mut data = HashMap::new();
+	data.insert("name".to_string(), serde_json::json!("Bob"));
+
+	// Act
+	let result = db.create::<User>("users", None, data).await;
+
+	// Assert: Missing pk field triggers an error. Fixes #2946, #3029
+	assert!(result.is_err());
+	let err_msg = result.unwrap_err().to_string();
+	assert!(
+		err_msg.contains("RETURNING clause did not return expected primary key field"),
+		"Expected missing pk field error, got: {}",
+		err_msg
+	);
+}
+
+#[rstest]
+#[tokio::test]
+async fn test_create_returns_one_for_string_pk() {
+	// Arrange: Create a mock that returns "id" as a string (e.g., UUID)
+	use reinhardt_db::backends::{
+		backend::DatabaseBackend as BackendTrait,
+		connection::DatabaseConnection as BackendsConnection,
+		types::{DatabaseType, QueryResult, QueryValue, Row},
+	};
+	use reinhardt_test::fixtures::mock::MockDatabaseBackend;
+
+	let mut mock = MockDatabaseBackend::new();
+	mock.expect_database_type()
+		.return_const(DatabaseType::Postgres);
+	mock.expect_placeholder()
+		.returning(|idx| format!("${}", idx));
+	mock.expect_supports_returning().return_const(true);
+	mock.expect_supports_on_conflict().return_const(true);
+	mock.expect_execute()
+		.returning(|_, _| Ok(QueryResult { rows_affected: 1 }));
+	mock.expect_fetch_all().returning(|_, _| Ok(Vec::new()));
+	mock.expect_fetch_optional().returning(|_, _| Ok(None));
+
+	// Return "id" as a UUID string
 	mock.expect_fetch_one().returning(|_, _| {
 		let mut row = Row::new();
 		row.data
@@ -862,16 +916,13 @@ async fn test_create_returns_zero_when_id_is_non_number() {
 	// Act
 	let result = db.create::<User>("users", None, data).await;
 
-	// Assert
-	// Bug #2946 was fixed: Non-numeric ID values now return Err instead of
-	// silently returning 0. Fixes #3029
-	assert!(result.is_err());
-	let err_msg = result.unwrap_err().to_string();
+	// Assert: String PKs (UUIDs) return Ok(1) as affected count
 	assert!(
-		err_msg.contains("RETURNING clause did not return expected primary key field"),
-		"Expected missing pk field error, got: {}",
-		err_msg
+		result.is_ok(),
+		"Expected Ok(1) for string PK, got: {:?}",
+		result.err()
 	);
+	assert_eq!(result.unwrap(), 1);
 }
 
 // ==================== update/delete affected count tests ====================

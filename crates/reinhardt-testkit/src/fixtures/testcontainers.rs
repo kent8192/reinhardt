@@ -78,7 +78,7 @@ fn get_pool_config() -> (u32, u64) {
 /// * `database_url` - Connection URL (postgres://, mysql://, sqlite://)
 ///
 /// # Example
-/// ```ignore
+/// ```no_run
 /// use reinhardt_testkit::fixtures::testcontainers::create_test_any_pool;
 ///
 /// # async fn example() {
@@ -223,7 +223,7 @@ use fs2::FileExt;
 ///
 /// # Examples
 ///
-/// ```ignore
+/// ```no_run
 /// use reinhardt_testkit::fixtures::FileLockGuard;
 ///
 /// // Acquire lock (blocks until available)
@@ -281,7 +281,7 @@ impl Drop for FileLockGuard {
 ///
 /// # Examples
 ///
-/// ```ignore
+/// ```no_run
 /// use reinhardt_testkit::fixtures::postgres_container;
 /// use rstest::*;
 ///
@@ -482,7 +482,7 @@ pub async fn cockroachdb_container()
 ///
 /// # Examples
 ///
-/// ```ignore
+/// ```no_run
 /// use reinhardt_testkit::fixtures::redis_container;
 /// use rstest::*;
 ///
@@ -577,7 +577,7 @@ impl std::fmt::Debug for RedisClusterContainer {
 ///
 /// # Examples
 ///
-/// ```ignore
+/// ```no_run
 /// use reinhardt_testkit::fixtures::testcontainers::redis_cluster_lock;
 /// use rstest::*;
 ///
@@ -599,7 +599,7 @@ pub fn redis_cluster_lock() -> FileLockGuard {
 ///
 /// # Examples
 ///
-/// ```ignore
+/// ```no_run
 /// use reinhardt_testkit::fixtures::testcontainers::{redis_cluster_lock, redis_cluster_cleanup};
 /// use rstest::*;
 ///
@@ -803,7 +803,7 @@ pub async fn redis_cluster_ports_ready(
 ///
 /// # Examples
 ///
-/// ```ignore
+/// ```no_run
 /// use reinhardt_testkit::fixtures::testcontainers::redis_cluster_container;
 /// use rstest::*;
 ///
@@ -912,7 +912,7 @@ pub async fn redis_cluster(
 ///
 /// # Examples
 ///
-/// ```ignore
+/// ```no_run
 /// use reinhardt_testkit::fixtures::testcontainers::redis_cluster_client;
 /// use rstest::*;
 ///
@@ -976,7 +976,7 @@ pub async fn redis_cluster_client(
 ///
 /// # Examples
 ///
-/// ```ignore
+/// ```no_run
 /// use reinhardt_testkit::fixtures::testcontainers::redis_cluster_urls;
 /// use rstest::*;
 ///
@@ -1015,7 +1015,7 @@ pub async fn redis_cluster_urls(
 ///
 /// # Examples
 ///
-/// ```ignore
+/// ```no_run
 /// use reinhardt_testkit::fixtures::testcontainers::redis_cluster_fixture;
 /// use rstest::*;
 ///
@@ -1279,7 +1279,7 @@ pub async fn mongodb_container() -> (ContainerAsync<GenericImage>, String, u16) 
 ///
 /// # Examples
 ///
-/// ```ignore
+/// ```no_run
 /// use reinhardt_testkit::fixtures::localstack_fixture;
 /// use rstest::*;
 ///
@@ -1335,7 +1335,7 @@ pub async fn localstack_fixture() -> (ContainerAsync<GenericImage>, u16, String)
 ///
 /// # Example
 ///
-/// ```ignore
+/// ```no_run
 /// # use reinhardt_testkit::fixtures::postgres_with_migrations_from;
 /// # use reinhardt_db::migrations::MigrationProvider;
 /// # #[tokio::main]
@@ -1402,7 +1402,7 @@ pub async fn postgres_with_migrations_from<P: reinhardt_db::migrations::Migratio
 ///
 /// # Examples
 ///
-/// ```ignore
+/// ```no_run
 /// use reinhardt_testkit::fixtures::mysql_container;
 /// use rstest::*;
 ///
@@ -1543,7 +1543,7 @@ pub async fn mysql_container() -> (
 ///
 /// # Example
 ///
-/// ```ignore
+/// ```no_run
 /// # use reinhardt_testkit::fixtures::mysql_with_migrations_from;
 /// # use reinhardt_db::migrations::MigrationProvider;
 /// # #[tokio::main]
@@ -1609,7 +1609,7 @@ pub async fn mysql_with_migrations_from<P: reinhardt_db::migrations::MigrationPr
 ///
 /// # Example
 ///
-/// ```ignore
+/// ```no_run
 /// # use reinhardt_testkit::fixtures::sqlite_with_migrations_from;
 /// # use reinhardt_db::migrations::MigrationProvider;
 /// # #[tokio::main]
@@ -1673,7 +1673,7 @@ pub async fn sqlite_with_migrations_from<P: reinhardt_db::migrations::MigrationP
 ///
 /// # Example
 ///
-/// ```ignore
+/// ```no_run
 /// # use reinhardt_testkit::fixtures::*;
 /// # use rstest::*;
 /// # use std::sync::Arc;
@@ -1695,7 +1695,7 @@ pub async fn sqlite_with_migrations_from<P: reinhardt_db::migrations::MigrationP
 ///
 /// Your app must register migrations using `collect_migrations!`:
 ///
-/// ```rust,ignore
+/// ```ignore
 /// // In your app's migrations.rs
 /// reinhardt::collect_migrations!(
 ///     app_label = "polls",
@@ -1705,7 +1705,7 @@ pub async fn sqlite_with_migrations_from<P: reinhardt_db::migrations::MigrationP
 /// ```
 #[cfg(feature = "testcontainers")]
 #[deprecated(
-	since = "0.2.0",
+	since = "0.1.0-rc.16",
 	note = "Use `postgres_with_migrations_from_dir()` instead. \
 			This fixture requires `collect_migrations!` macro registration \
 			which is being deprecated in favor of `FilesystemSource`."
@@ -1756,7 +1756,7 @@ pub async fn postgres_with_all_migrations() -> Result<
 ///
 /// # Example
 ///
-/// ```ignore
+/// ```no_run
 /// # use reinhardt_testkit::fixtures::postgres_with_apps_migrations;
 /// # #[tokio::main]
 /// # async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -1770,7 +1770,7 @@ pub async fn postgres_with_all_migrations() -> Result<
 /// ```
 #[cfg(feature = "testcontainers")]
 #[deprecated(
-	since = "0.2.0",
+	since = "0.1.0-rc.16",
 	note = "Use `postgres_with_migrations_from_dir()` instead. \
 			This function requires `collect_migrations!` macro registration \
 			which is being deprecated in favor of `FilesystemSource`."
@@ -1831,7 +1831,7 @@ pub async fn postgres_with_apps_migrations(
 ///
 /// # Example
 ///
-/// ```ignore
+/// ```no_run
 /// use reinhardt_testkit::fixtures::postgres_with_migrations_from_dir;
 /// use std::sync::Arc;
 ///
@@ -1900,7 +1900,7 @@ pub async fn postgres_with_migrations_from_dir(
 ///
 /// # Example
 ///
-/// ```ignore
+/// ```no_run
 /// # use reinhardt_testkit::fixtures::*;
 /// # use rstest::*;
 /// # use std::sync::Arc;
@@ -1917,7 +1917,7 @@ pub async fn postgres_with_migrations_from_dir(
 /// ```
 #[cfg(feature = "testcontainers")]
 #[deprecated(
-	since = "0.2.0",
+	since = "0.1.0-rc.16",
 	note = "Use filesystem-based migration loading instead. \
 			This fixture requires `collect_migrations!` macro registration \
 			which is being deprecated in favor of `FilesystemSource`."
@@ -1962,7 +1962,7 @@ pub async fn mysql_with_all_migrations() -> (
 /// * `app_labels` - List of app labels to include
 #[cfg(feature = "testcontainers")]
 #[deprecated(
-	since = "0.2.0",
+	since = "0.1.0-rc.16",
 	note = "Use filesystem-based migration loading instead. \
 			This function requires `collect_migrations!` macro registration \
 			which is being deprecated in favor of `FilesystemSource`."
@@ -2012,7 +2012,7 @@ pub async fn mysql_with_apps_migrations(
 ///
 /// # Example
 ///
-/// ```ignore
+/// ```no_run
 /// # use reinhardt_testkit::fixtures::*;
 /// # use rstest::*;
 /// # use std::sync::Arc;
@@ -2028,7 +2028,7 @@ pub async fn mysql_with_apps_migrations(
 /// ```
 #[cfg(feature = "testcontainers")]
 #[deprecated(
-	since = "0.2.0",
+	since = "0.1.0-rc.16",
 	note = "Use filesystem-based migration loading instead. \
 			This fixture requires `collect_migrations!` macro registration \
 			which is being deprecated in favor of `FilesystemSource`."
@@ -2069,7 +2069,7 @@ pub async fn sqlite_with_all_migrations() -> std::sync::Arc<reinhardt_db::Databa
 /// * `app_labels` - List of app labels to include
 #[cfg(feature = "testcontainers")]
 #[deprecated(
-	since = "0.2.0",
+	since = "0.1.0-rc.16",
 	note = "Use filesystem-based migration loading instead. \
 			This function requires `collect_migrations!` macro registration \
 			which is being deprecated in favor of `FilesystemSource`."

@@ -1,7 +1,8 @@
 [package]
 name = "reinhardt-pages-macros"
-version = "0.1.0-rc.14"
+version = "0.1.0-rc.15"
 edition.workspace = true
+rust-version.workspace = true
 authors.workspace = true
 license.workspace = true
 description = "Procedural macros for reinhardt-pages (WASM frontend framework)"
@@ -14,13 +15,11 @@ proc-macro = true
 
 [features]
 default = []
+msw = []
 
 [dependencies]
 # DSL definitions (new canonical location)
 reinhardt-manouche = { workspace = true }
-
-# Security utilities for URL validation (Fixes #849)
-reinhardt-core = { workspace = true }
 
 # Procedural macro essentials
 syn = { workspace = true, features = ["full", "extra-traits"] }

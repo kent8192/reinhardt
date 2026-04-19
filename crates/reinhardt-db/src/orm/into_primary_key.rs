@@ -10,7 +10,7 @@
 /// use uuid::Uuid;
 ///
 /// // Pass a primary key value directly
-/// let user_id = Uuid::new_v4();
+/// let user_id = Uuid::now_v7();
 /// let message = DMMessage::new(room_id, user_id, "Hello".to_string());
 ///
 /// // Pass a model instance

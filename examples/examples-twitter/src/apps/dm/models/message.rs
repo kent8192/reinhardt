@@ -1,9 +1,9 @@
 //! DMMessage model for direct messaging
 
 use chrono::{DateTime, Utc};
-use reinhardt::core::serde::{Deserialize, Serialize};
 use reinhardt::db::associations::ForeignKeyField;
 use reinhardt::model;
+use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 // Used by #[model] macro for type inference in ForeignKeyField<T> relationship fields.
@@ -15,7 +15,7 @@ use super::room::DMRoom;
 use crate::apps::auth::models::User;
 
 // Test-only dependency for sqlx::FromRow (server-side only)
-#[cfg(all(test, server))]
+#[cfg(all(test, native))]
 use sqlx::FromRow;
 
 /// DMMessage model representing a message within a room
@@ -24,32 +24,32 @@ use sqlx::FromRow;
 /// `ForeignKeyField<T>` automatically generates the `_id` column.
 #[model(app_label = "dm", table_name = "dm_message")]
 #[derive(Serialize, Deserialize)]
-#[cfg_attr(all(test, server), derive(FromRow))]
+#[cfg_attr(all(test, native), derive(FromRow))]
 pub struct DMMessage {
 	#[field(primary_key = true)]
-	id: Uuid,
+	pub id: Uuid,
 
 	/// Room this message belongs to (generates room_id column)
-	#[cfg_attr(all(test, server), sqlx(skip))]
+	#[cfg_attr(all(test, native), sqlx(skip))]
 	#[rel(foreign_key, related_name = "messages")]
-	room: ForeignKeyField<DMRoom>,
+	pub room: ForeignKeyField<DMRoom>,
 
 	/// User who sent the message (generates sender_id column)
-	#[cfg_attr(all(test, server), sqlx(skip))]
+	#[cfg_attr(all(test, native), sqlx(skip))]
 	#[rel(foreign_key, related_name = "sent_messages")]
-	sender: ForeignKeyField<User>,
+	pub sender: ForeignKeyField<User>,
 
 	#[field(max_length = 1000)]
-	content: String,
+	pub content: String,
 
 	#[field(default = false, include_in_new = false)]
-	is_read: bool,
+	pub is_read: bool,
 
 	#[field(auto_now_add = true)]
-	created_at: DateTime<Utc>,
+	pub created_at: DateTime<Utc>,
 
 	#[field(auto_now = true)]
-	updated_at: DateTime<Utc>,
+	pub updated_at: DateTime<Utc>,
 }
 
 impl DMMessage {

@@ -8,6 +8,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 <!-- release-plz-separator -->
 <!-- Entries below this line were created before release-plz adoption -->
 
+## [0.1.0-rc.15](https://github.com/kent8192/reinhardt-web/compare/reinhardt-admin@v0.1.0-rc.14...reinhardt-admin@v0.1.0-rc.15) - 2026-03-29
+
+### Changed
+
+- *(admin)* migrate CurrentUser to AuthUser in server functions
+
+### Fixed
+
+- *(admin)* preserve query string in popstate navigation handler
+- *(admin)* migrate remaining CurrentUser to AuthUser and update example
+- *(admin)* replace CRLF before individual char replacement in TSV export
+- *(admin)* update require_model_permission and callers to use AdminUser trait
+- *(admin)* update test helpers to use AdminUser trait after merge
+- *(admin)* update integration tests to match new admin API signatures
+- *(di)* apply deferred DI registrations to existing singleton scope
+- *(admin)* add serde helper for Vec<String> ORM deserialization
+- *(admin)* accept any #[user] type for admin authentication via type-erased loader
+
+### Other
+
+- resolve conflict with main in delete.rs
+- resolve conflicts with main in features.rs
+- resolve conflict with main in delete.rs
+- resolve conflict with main (AdminUser + admin_routes_with_di)
+- resolve conflict with main in admin test module
+- resolve conflicts with main branch
+
+### Styling
+
+- apply rustfmt formatting
+
 ## [0.1.0-rc.14](https://github.com/kent8192/reinhardt-web/compare/reinhardt-admin@v0.1.0-rc.13...reinhardt-admin@v0.1.0-rc.14) - 2026-03-24
 
 ### Added

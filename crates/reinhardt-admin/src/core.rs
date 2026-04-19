@@ -13,6 +13,8 @@ pub mod import;
 pub mod model_admin;
 pub mod router;
 pub mod site;
+#[cfg(server)]
+pub mod vendor;
 
 // Re-exports
 pub use crate::types::{
@@ -27,10 +29,5 @@ pub use import::{
 	CsvImporter, ImportBuilder, ImportConfig, ImportError, ImportFormat, ImportResult, JsonImporter,
 };
 pub use model_admin::{AdminUser, ModelAdmin, ModelAdminConfig, ModelAdminConfigBuilder};
-#[allow(deprecated)]
-// re-exporting deprecated admin_routes and admin_routes_with_di for backward compatibility
-pub use router::{
-	AdminRouter, admin_routes, admin_routes_with_di, admin_routes_with_di_deferred,
-	admin_static_routes,
-};
+pub use router::{admin_csp_exempt_paths, admin_routes_with_di, admin_static_routes};
 pub use site::{AdminSite, AdminSiteConfig};

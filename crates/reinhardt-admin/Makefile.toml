@@ -1,0 +1,133 @@
+# Makefile.toml for reinhardt-admin WASM build
+#
+# This file provides cargo-make task definitions for WASM build operations.
+# Install cargo-make: `cargo install cargo-make`
+# Usage: `cd crates/reinhardt-admin && cargo make <task>`
+#
+# Development workflow:
+#   1. cargo make dev           -- Build WASM (debug) for development
+#   2. cargo make dev-release   -- Build WASM (release) with optimization
+#
+# After building WASM, run collectstatic from your application project:
+#   cargo run --bin <your-app> collectstatic --no-input
+#
+# Then start your development server:
+#   cargo run --bin <your-app> -- runserver
+
+[config]
+default_to_workspace = false
+skip_core_tasks = true
+
+# ============================================================================
+# WASM Build Tasks
+# ============================================================================
+
+[tasks.wasm-compile-dev]
+description = "Compile WASM binary (debug mode)"
+command = "cargo"
+args = ["build", "-p", "reinhardt-admin", "--target", "wasm32-unknown-unknown"]
+
+[tasks.wasm-bindgen-dev]
+description = "Generate WASM bindings using wasm-pack (debug mode)"
+dependencies = ["wasm-compile-dev"]
+command = "wasm-pack"
+args = [
+	"build",
+	"--target", "web",
+	"--out-dir", "dist-admin",
+	"--dev",
+	"--no-typescript"
+]
+
+[tasks.wasm-build-dev]
+description = "Build WASM in debug mode"
+dependencies = ["wasm-bindgen-dev", "unocss-generate"]
+
+[tasks.wasm-compile-release]
+description = "Compile WASM binary (release mode)"
+command = "cargo"
+args = ["build", "-p", "reinhardt-admin", "--target", "wasm32-unknown-unknown", "--release"]
+
+[tasks.wasm-bindgen-release]
+description = "Generate WASM bindings using wasm-pack (release mode)"
+dependencies = ["wasm-compile-release"]
+command = "wasm-pack"
+args = [
+	"build",
+	"--target", "web",
+	"--out-dir", "dist-admin",
+	"--release"
+]
+
+[tasks.wasm-finalize-release]
+description = "Optimize WASM with wasm-opt"
+script = '''
+if command -v wasm-opt &> /dev/null; then
+	echo "Running wasm-opt..."
+	WASM_FILE="dist-admin/reinhardt_admin_bg.wasm"
+	wasm-opt -O3 -o "$WASM_FILE.opt" "$WASM_FILE"
+	mv "$WASM_FILE.opt" "$WASM_FILE"
+	echo "✓ WASM optimized"
+else
+	echo "⚠️  wasm-opt not found, skipping optimization"
+fi
+'''
+dependencies = ["wasm-bindgen-release"]
+
+[tasks.wasm-build-release]
+description = "Build WASM in release mode with optimization"
+dependencies = ["wasm-finalize-release", "unocss-generate"]
+
+# ============================================================================
+# CSS Generation Tasks
+# ============================================================================
+
+[tasks.unocss-generate]
+description = "Generate UnoCSS utility CSS from admin sources"
+command = "npx"
+args = [
+	"unocss",
+	"src/**/*.rs",
+	"assets/main.js",
+	"--out-file", "assets/vendor/unocss.generated.css"
+]
+
+# ============================================================================
+# WASM Testing Tasks
+# ============================================================================
+
+[tasks.wasm-test]
+description = "Run WASM tests in headless Chrome"
+command = "wasm-pack"
+args = ["test", "--headless", "--chrome"]
+
+# ============================================================================
+# Clean Tasks
+# ============================================================================
+
+[tasks.wasm-clean]
+description = "Clean WASM build artifacts"
+script = '''
+rm -rf dist-admin
+echo "✓ Cleaned WASM artifacts"
+'''
+
+[tasks.clean-cache]
+description = "Clean WASM artifacts and incremental build cache"
+script = '''
+rm -rf dist-admin
+rm -rf target/wasm32-unknown-unknown
+echo "✓ Cleaned WASM artifacts and incremental cache"
+'''
+
+# ============================================================================
+# Development Workflow
+# ============================================================================
+
+[tasks.dev]
+description = "Clean and build WASM in debug mode for development"
+dependencies = ["clean-cache", "wasm-build-dev"]
+
+[tasks.dev-release]
+description = "Clean and build optimized WASM for production"
+dependencies = ["clean-cache", "wasm-build-release"]

@@ -1101,7 +1101,7 @@ mod tests {
 		// Arrange
 		let dir = tempfile::tempdir().unwrap();
 		std::fs::write(dir.path().join("my_app.js"), "// js").unwrap();
-		std::fs::write(dir.path().join("my_app_bg.wasm"), &[0u8; 4]).unwrap();
+		std::fs::write(dir.path().join("my_app_bg.wasm"), [0u8; 4]).unwrap();
 		let config = StaticFilesConfig::new(dir.path());
 
 		// Act
@@ -1133,9 +1133,9 @@ mod tests {
 		// Arrange
 		let dir = tempfile::tempdir().unwrap();
 		std::fs::write(dir.path().join("app_a.js"), "// js a").unwrap();
-		std::fs::write(dir.path().join("app_a_bg.wasm"), &[0u8; 4]).unwrap();
+		std::fs::write(dir.path().join("app_a_bg.wasm"), [0u8; 4]).unwrap();
 		std::fs::write(dir.path().join("app_b.js"), "// js b").unwrap();
-		std::fs::write(dir.path().join("app_b_bg.wasm"), &[0u8; 4]).unwrap();
+		std::fs::write(dir.path().join("app_b_bg.wasm"), [0u8; 4]).unwrap();
 		let config = StaticFilesConfig::new(dir.path()).wasm_entry("app_a.js");
 
 		// Act
@@ -1167,7 +1167,7 @@ mod tests {
 		// Arrange
 		let dir = tempfile::tempdir().unwrap();
 		std::fs::write(dir.path().join("my_app.js"), "// js").unwrap();
-		std::fs::write(dir.path().join("my_app_bg.wasm"), &[0u8; 4]).unwrap();
+		std::fs::write(dir.path().join("my_app_bg.wasm"), [0u8; 4]).unwrap();
 		let config = StaticFilesConfig::new(dir.path()).auto_inject_wasm(false);
 
 		// Act
@@ -1325,7 +1325,7 @@ mod tests {
 		let sub = dir.path().join("pkg");
 		std::fs::create_dir_all(&sub).unwrap();
 		std::fs::write(sub.join("my_app.js"), "// js").unwrap();
-		std::fs::write(sub.join("my_app_bg.wasm"), &[0u8; 4]).unwrap();
+		std::fs::write(sub.join("my_app_bg.wasm"), [0u8; 4]).unwrap();
 		let config = StaticFilesConfig::new(dir.path()).wasm_entry("pkg/my_app.js");
 
 		// Act
@@ -1375,7 +1375,7 @@ mod tests {
 		)
 		.unwrap();
 		std::fs::write(dir.path().join("my_app.js"), "// js").unwrap();
-		std::fs::write(dir.path().join("my_app_bg.wasm"), &[0u8; 4]).unwrap();
+		std::fs::write(dir.path().join("my_app_bg.wasm"), [0u8; 4]).unwrap();
 
 		let config = StaticFilesConfig::new(dir.path());
 		let middleware = StaticFilesMiddleware::new(config);
@@ -1403,7 +1403,7 @@ mod tests {
 		)
 		.unwrap();
 		std::fs::write(dir.path().join("my_app.js"), "// js").unwrap();
-		std::fs::write(dir.path().join("my_app_bg.wasm"), &[0u8; 4]).unwrap();
+		std::fs::write(dir.path().join("my_app_bg.wasm"), [0u8; 4]).unwrap();
 
 		let config = StaticFilesConfig::new(dir.path()).auto_inject_wasm(false);
 		let middleware = StaticFilesMiddleware::new(config);
@@ -1425,7 +1425,7 @@ mod tests {
 		let dir = tempfile::tempdir().unwrap();
 		std::fs::write(dir.path().join("index.html"), "<html><body></body></html>").unwrap();
 		std::fs::write(dir.path().join("my_app.js"), "// js").unwrap();
-		std::fs::write(dir.path().join("my_app_bg.wasm"), &[0u8; 4]).unwrap();
+		std::fs::write(dir.path().join("my_app_bg.wasm"), [0u8; 4]).unwrap();
 
 		let config_with = StaticFilesConfig::new(dir.path());
 		let mw_with = StaticFilesMiddleware::new(config_with);
@@ -1470,7 +1470,7 @@ mod tests {
 		let invalid_bytes: Vec<u8> = vec![0xFF, 0xFE, 0x00, 0x3C, 0x68, 0x74, 0x6D, 0x6C];
 		std::fs::write(dir.path().join("index.html"), &invalid_bytes).unwrap();
 		std::fs::write(dir.path().join("my_app.js"), "// js").unwrap();
-		std::fs::write(dir.path().join("my_app_bg.wasm"), &[0u8; 4]).unwrap();
+		std::fs::write(dir.path().join("my_app_bg.wasm"), [0u8; 4]).unwrap();
 
 		let config = StaticFilesConfig::new(dir.path());
 		let middleware = StaticFilesMiddleware::new(config);
@@ -1490,7 +1490,7 @@ mod tests {
 		let dir = tempfile::tempdir().unwrap();
 		std::fs::write(dir.path().join("index.html"), "<html><body></body></html>").unwrap();
 		std::fs::write(dir.path().join("my_app.js"), "// js").unwrap();
-		std::fs::write(dir.path().join("my_app_bg.wasm"), &[0u8; 4]).unwrap();
+		std::fs::write(dir.path().join("my_app_bg.wasm"), [0u8; 4]).unwrap();
 
 		let config = StaticFilesConfig::new(dir.path());
 		let middleware = StaticFilesMiddleware::new(config);

@@ -3,15 +3,17 @@
 //! Provides dashboard data retrieval functionality.
 
 use crate::adapters::{AdminSite, DashboardResponse, ModelInfo};
-use reinhardt_pages::server_fn::{ServerFnError, ServerFnRequest, server_fn};
-use std::sync::Arc;
+use reinhardt_di::Depends;
+#[cfg(server)]
+use reinhardt_pages::server_fn::ServerFnRequest;
+use reinhardt_pages::server_fn::{ServerFnError, server_fn};
 
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(server)]
+use super::admin_auth::AdminAuthenticatedUser;
+#[cfg(server)]
 use super::error::AdminAuth;
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(server)]
 use super::security::{build_csrf_cookie, generate_csrf_token};
-#[cfg(not(target_arch = "wasm32"))]
-use reinhardt_http::ResponseCookies;
 
 /// Get dashboard data
 ///
@@ -37,10 +39,13 @@ use reinhardt_http::ResponseCookies;
 /// ```
 #[server_fn]
 pub async fn get_dashboard(
-	#[inject] site: Arc<AdminSite>,
+	#[inject] site: Depends<AdminSite>,
 	#[inject] http_request: ServerFnRequest,
+	#[inject] AdminAuthenticatedUser(_user): AdminAuthenticatedUser,
 ) -> Result<DashboardResponse, ServerFnError> {
-	// Authentication and authorization check
+	// Authentication and authorization check (Fixes #3679)
+	// AdminAuthenticatedUser injection performs DB lookup to verify is_active and is_staff.
+	// AdminAuth::require_staff() provides the HTTP-level error response.
 	let auth = AdminAuth::from_request(&http_request);
 	auth.require_staff()?;
 
@@ -57,18 +62,21 @@ pub async fn get_dashboard(
 	// Build dashboard response with CSRF token for mutation requests
 	let csrf_token = generate_csrf_token();
 
-	// Set the CSRF token as a cookie via request extensions.
-	// The server function router extracts ResponseCookies and applies
-	// them as Set-Cookie headers on the HTTP response.
+	// Set the CSRF token as a cookie via the shared cookie jar.
+	// The server function router reads SharedResponseCookies and
+	// applies them as Set-Cookie headers on the HTTP response.
 	let is_secure = http_request.inner().is_secure;
 	let cookie_value = build_csrf_cookie(&csrf_token, is_secure);
-	let mut response_cookies = ResponseCookies::new();
-	response_cookies.add(cookie_value);
-	http_request.inner().extensions.insert(response_cookies);
+	http_request.add_response_cookie(cookie_value);
+
+	let admin_settings = crate::settings::get_admin_settings();
 
 	Ok(DashboardResponse {
 		site_name: site.name().to_string(),
+		site_header: admin_settings.site_header.clone(),
 		url_prefix: site.url_prefix().to_string(),
+		login_url: admin_settings.login_url.clone(),
+		logout_url: admin_settings.logout_url.clone(),
 		models,
 		csrf_token: Some(csrf_token),
 	})
@@ -78,6 +86,7 @@ pub async fn get_dashboard(
 mod tests {
 	use super::*;
 	use crate::types::ModelInfo;
+	use std::sync::Arc;
 
 	#[tokio::test]
 	async fn test_dashboard_response_structure() {

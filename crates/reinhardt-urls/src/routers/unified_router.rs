@@ -39,25 +39,25 @@
 //! - When `client-router` feature is **disabled**: Server-only [`UnifiedRouter`] with
 //!   only `.server()` method available.
 
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(native)]
 use crate::routers::server_router::ServerRouter;
 
 #[cfg(feature = "client-router")]
 use crate::routers::client_router::ClientRouter;
 
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(native)]
 use hyper::Method;
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(native)]
 use reinhardt_core::exception::Result;
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(native)]
 use reinhardt_di::InjectionContext;
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(native)]
 use reinhardt_http::{Request, Response};
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(native)]
 use reinhardt_middleware::Middleware;
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(native)]
 use std::future::Future;
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(native)]
 use std::sync::Arc;
 
 // ============================================================================
@@ -82,14 +82,14 @@ use std::sync::Arc;
 /// ```
 ///
 /// [`Page`]: reinhardt_core::page::Page
-#[cfg(all(feature = "client-router", not(target_arch = "wasm32")))]
+#[cfg(all(feature = "client-router", native))]
 pub struct UnifiedRouter {
 	server: ServerRouter,
 	client: ClientRouter,
 	di_registrations: reinhardt_di::DiRegistrationList,
 }
 
-#[cfg(all(feature = "client-router", not(target_arch = "wasm32")))]
+#[cfg(all(feature = "client-router", native))]
 impl UnifiedRouter {
 	/// Creates a new `UnifiedRouter` with default server and client routers.
 	pub fn new() -> Self {
@@ -160,29 +160,52 @@ impl UnifiedRouter {
 		&mut self.client
 	}
 
+	/// Apply or stash deferred DI registrations.
+	///
+	/// If the server router already has a DI context, registrations are applied
+	/// directly to its singleton scope. Otherwise they are stashed globally
+	/// for later application (e.g., by the `runall` command).
+	fn flush_di_registrations(&mut self) {
+		if self.di_registrations.is_empty() {
+			return;
+		}
+		let registrations = std::mem::take(&mut self.di_registrations);
+		match self
+			.server
+			.di_context()
+			.map(|ctx| Arc::clone(ctx.singleton_scope()))
+		{
+			Some(scope) => registrations.apply_to(&scope),
+			None => crate::routers::register_di_registrations(registrations),
+		}
+	}
+
 	/// Consumes the router and returns the server router.
 	///
-	/// If this router has deferred DI registrations, they are stashed
-	/// in the global registry for later application by the server.
-	pub fn into_server(self) -> ServerRouter {
-		if !self.di_registrations.is_empty() {
-			crate::routers::register_di_registrations(self.di_registrations);
+	/// If this router has a DI context, deferred DI registrations are applied
+	/// directly to its singleton scope. Otherwise they are stashed in the
+	/// global registry for later application by the server.
+	pub fn into_server(mut self) -> ServerRouter {
+		self.flush_di_registrations();
+		let errors = self.server.register_all_routes();
+		for error in &errors {
+			tracing::warn!("{}", error);
 		}
 		self.server
 	}
 
 	/// Consumes the router and returns the client router.
-	pub fn into_client(self) -> ClientRouter {
-		if !self.di_registrations.is_empty() {
-			crate::routers::register_di_registrations(self.di_registrations);
-		}
+	pub fn into_client(mut self) -> ClientRouter {
+		self.flush_di_registrations();
 		self.client
 	}
 
 	/// Consumes the router and returns both parts.
-	pub fn into_parts(self) -> (ServerRouter, ClientRouter) {
-		if !self.di_registrations.is_empty() {
-			crate::routers::register_di_registrations(self.di_registrations);
+	pub fn into_parts(mut self) -> (ServerRouter, ClientRouter) {
+		self.flush_di_registrations();
+		let errors = self.server.register_all_routes();
+		for error in &errors {
+			tracing::warn!("{}", error);
 		}
 		(self.server, self.client)
 	}
@@ -206,17 +229,18 @@ impl UnifiedRouter {
 	/// ```
 	pub fn register_globally(self) -> ClientRouter {
 		let (server, client) = self.into_parts();
+		let reverser = client.to_reverser();
 		crate::routers::register_router(server);
+		crate::routers::client_router::register_client_reverser(reverser);
 		client
 	}
 
 	/// Attach deferred DI registrations to this router.
 	///
-	/// These registrations will be stashed globally when the router is
-	/// consumed (via [`into_server`](Self::into_server),
-	/// [`into_parts`](Self::into_parts), or
-	/// [`register_globally`](Self::register_globally)),
-	/// and applied to the server's singleton scope during startup.
+	/// When the router is consumed, these registrations are applied directly
+	/// to the DI context's singleton scope if one has been set via
+	/// [`with_di_context`](Self::with_di_context). Otherwise they are stashed
+	/// globally for later application (e.g., by the `runall` command).
 	pub fn with_di_registrations(mut self, list: reinhardt_di::DiRegistrationList) -> Self {
 		self.di_registrations.merge(list);
 		self
@@ -234,11 +258,19 @@ impl UnifiedRouter {
 		self
 	}
 
-	/// Set namespace for server router.
+	/// Set namespace for both server and client routers.
 	///
-	/// This is a convenience method that delegates to [`ServerRouter::with_namespace`].
+	/// Delegates to [`ServerRouter::with_namespace`] and
+	/// [`ClientRouter::with_namespace`] so that server-side URL resolvers
+	/// and client-side named route keys are both prefixed consistently
+	/// with `"<namespace>:"`. Fixes #3726.
 	pub fn with_namespace(mut self, namespace: impl Into<String>) -> Self {
-		self.server = self.server.with_namespace(namespace);
+		let ns: String = namespace.into();
+		// Borrow for the client (accepts `&str`) first, then move the owned
+		// `String` into the server (accepts `impl Into<String>`) to avoid a
+		// redundant `String` allocation.
+		self.client = self.client.with_namespace(&ns);
+		self.server = self.server.with_namespace(ns);
 		self
 	}
 
@@ -308,17 +340,35 @@ impl UnifiedRouter {
 	/// Register a named function-based route on server router.
 	///
 	/// This is a convenience method that delegates to [`ServerRouter::function_named`].
+	#[deprecated(
+		since = "0.2.0",
+		note = "Use `#[get(\"/path\", name = \"name\")]` + `.endpoint()` instead"
+	)]
 	pub fn function_named<F, Fut>(mut self, path: &str, method: Method, name: &str, func: F) -> Self
 	where
 		F: Fn(Request) -> Fut + Send + Sync + 'static,
 		Fut: Future<Output = Result<Response>> + Send + 'static,
 	{
-		self.server = self.server.function_named(path, method, name, func);
+		#[allow(deprecated)]
+		{
+			self.server = self.server.function_named(path, method, name, func);
+		}
 		self
 	}
 }
 
-#[cfg(all(feature = "client-router", not(target_arch = "wasm32")))]
+#[cfg(all(feature = "client-router", native))]
+impl std::fmt::Debug for UnifiedRouter {
+	fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+		f.debug_struct("UnifiedRouter")
+			.field("server", &self.server)
+			.field("client", &self.client)
+			.field("di_registrations", &self.di_registrations)
+			.finish()
+	}
+}
+
+#[cfg(all(feature = "client-router", native))]
 impl Default for UnifiedRouter {
 	fn default() -> Self {
 		Self::new()
@@ -381,32 +431,52 @@ impl UnifiedRouter {
 		&mut self.server
 	}
 
+	/// Apply or stash deferred DI registrations.
+	///
+	/// If the server router already has a DI context, registrations are applied
+	/// directly to its singleton scope. Otherwise they are stashed globally
+	/// for later application (e.g., by the `runall` command).
+	fn flush_di_registrations(&mut self) {
+		if self.di_registrations.is_empty() {
+			return;
+		}
+		let registrations = std::mem::take(&mut self.di_registrations);
+		match self
+			.server
+			.di_context()
+			.map(|ctx| Arc::clone(ctx.singleton_scope()))
+		{
+			Some(scope) => registrations.apply_to(&scope),
+			None => crate::routers::register_di_registrations(registrations),
+		}
+	}
+
 	/// Consumes the router and returns the server router.
 	///
-	/// If this router has deferred DI registrations, they are stashed
-	/// in the global registry for later application by the server.
-	pub fn into_server(self) -> ServerRouter {
-		if !self.di_registrations.is_empty() {
-			crate::routers::register_di_registrations(self.di_registrations);
+	/// If this router has a DI context, deferred DI registrations are applied
+	/// directly to its singleton scope. Otherwise they are stashed in the
+	/// global registry for later application by the server.
+	pub fn into_server(mut self) -> ServerRouter {
+		self.flush_di_registrations();
+		let errors = self.server.register_all_routes();
+		for error in &errors {
+			tracing::warn!("{}", error);
 		}
 		self.server
 	}
 
 	/// Registers server router globally.
-	pub fn register_globally(self) {
-		let di = self.di_registrations;
-		if !di.is_empty() {
-			crate::routers::register_di_registrations(di);
-		}
+	pub fn register_globally(mut self) {
+		self.flush_di_registrations();
 		crate::routers::register_router(self.server);
 	}
 
 	/// Attach deferred DI registrations to this router.
 	///
-	/// These registrations will be stashed globally when the router is
-	/// consumed (via [`into_server`](Self::into_server) or
-	/// [`register_globally`](Self::register_globally)),
-	/// and applied to the server's singleton scope during startup.
+	/// When the router is consumed, these registrations are applied directly
+	/// to the DI context's singleton scope if one has been set via
+	/// [`with_di_context`](Self::with_di_context). Otherwise they are stashed
+	/// globally for later application (e.g., by the `runall` command).
 	pub fn with_di_registrations(mut self, list: reinhardt_di::DiRegistrationList) -> Self {
 		self.di_registrations.merge(list);
 		self
@@ -472,13 +542,30 @@ impl UnifiedRouter {
 	}
 
 	/// Register a named function-based route on server router.
+	#[deprecated(
+		since = "0.2.0",
+		note = "Use `#[get(\"/path\", name = \"name\")]` + `.endpoint()` instead"
+	)]
 	pub fn function_named<F, Fut>(mut self, path: &str, method: Method, name: &str, func: F) -> Self
 	where
 		F: Fn(Request) -> Fut + Send + Sync + 'static,
 		Fut: Future<Output = Result<Response>> + Send + 'static,
 	{
-		self.server = self.server.function_named(path, method, name, func);
+		#[allow(deprecated)]
+		{
+			self.server = self.server.function_named(path, method, name, func);
+		}
 		self
+	}
+}
+
+#[cfg(not(feature = "client-router"))]
+impl std::fmt::Debug for UnifiedRouter {
+	fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+		f.debug_struct("UnifiedRouter")
+			.field("server", &self.server)
+			.field("di_registrations", &self.di_registrations)
+			.finish()
 	}
 }
 
@@ -507,7 +594,7 @@ impl reinhardt_http::Handler for UnifiedRouter {
 /// On WASM, server-side routing is not available. This stub allows
 /// `UnifiedRouter::server()` closures to compile by accepting and
 /// ignoring the server configuration closure.
-#[cfg(target_arch = "wasm32")]
+#[cfg(wasm)]
 pub struct ServerRouterStub;
 
 /// Unified router for WASM targets with client-side routing.
@@ -515,12 +602,12 @@ pub struct ServerRouterStub;
 /// On WASM, only client-side routing is available. The `.server()` method
 /// accepts a closure but discards its result, allowing shared route
 /// definitions to compile on both server and client.
-#[cfg(all(target_arch = "wasm32", feature = "client-router"))]
+#[cfg(all(wasm, feature = "client-router"))]
 pub struct UnifiedRouter {
 	client: ClientRouter,
 }
 
-#[cfg(all(target_arch = "wasm32", feature = "client-router"))]
+#[cfg(all(wasm, feature = "client-router"))]
 impl UnifiedRouter {
 	/// Creates a new `UnifiedRouter` with a default client router.
 	pub fn new() -> Self {
@@ -564,8 +651,10 @@ impl UnifiedRouter {
 		self.client
 	}
 
-	/// Registers (no-op for server) and returns client router.
+	/// Registers client reverser globally and returns client router.
 	pub fn register_globally(self) -> ClientRouter {
+		let reverser = self.client.to_reverser();
+		crate::routers::client_router::register_client_reverser(reverser);
 		self.client
 	}
 
@@ -581,13 +670,28 @@ impl UnifiedRouter {
 		self
 	}
 
-	/// No-op on WASM - server namespace is not applicable.
-	pub fn with_namespace(self, _namespace: impl Into<String>) -> Self {
+	/// Set namespace for the client router.
+	///
+	/// On WASM, only the client router is present; server-side namespacing
+	/// does not apply. Propagates to [`ClientRouter::with_namespace`] so
+	/// that named route keys are prefixed with `"<namespace>:"`. Fixes #3726.
+	pub fn with_namespace(mut self, namespace: impl Into<String>) -> Self {
+		let ns: String = namespace.into();
+		self.client = self.client.with_namespace(&ns);
 		self
 	}
 }
 
-#[cfg(all(target_arch = "wasm32", feature = "client-router"))]
+#[cfg(all(wasm, feature = "client-router"))]
+impl std::fmt::Debug for UnifiedRouter {
+	fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+		f.debug_struct("UnifiedRouter")
+			.field("client", &self.client)
+			.finish()
+	}
+}
+
+#[cfg(all(wasm, feature = "client-router"))]
 impl Default for UnifiedRouter {
 	fn default() -> Self {
 		Self::new()
@@ -599,6 +703,7 @@ impl Default for UnifiedRouter {
 // ============================================================================
 
 #[cfg(test)]
+#[allow(deprecated)]
 mod tests {
 	use super::*;
 	#[cfg(feature = "client-router")]
@@ -637,6 +742,45 @@ mod tests {
 		assert_eq!(router.client_ref().route_count(), 1);
 	}
 
+	#[cfg(all(feature = "client-router", native))]
+	#[test]
+	fn unified_with_namespace_propagates_to_client() {
+		// Arrange: routes are added first, namespace applied after (matches
+		// the call pattern generated by `#[url_patterns]`).
+		let router = UnifiedRouter::new()
+			.client(|c| c.named_route("login", "/login/", || Page::Empty))
+			.with_namespace("app");
+
+		// Act & Assert
+		assert!(
+			router.client_ref().has_route("app:login"),
+			"client-side named route should be namespaced by UnifiedRouter::with_namespace"
+		);
+		assert!(
+			!router.client_ref().has_route("login"),
+			"unprefixed name should no longer resolve after with_namespace"
+		);
+	}
+
+	#[cfg(all(wasm, feature = "client-router"))]
+	#[test]
+	fn unified_wasm_with_namespace_propagates_to_client() {
+		// Arrange
+		let router = UnifiedRouter::new()
+			.client(|c| c.named_route("login", "/login/", || Page::Empty))
+			.with_namespace("app");
+
+		// Act & Assert
+		assert!(
+			router.client_ref().has_route("app:login"),
+			"WASM UnifiedRouter::with_namespace must propagate to ClientRouter"
+		);
+		assert!(
+			!router.client_ref().has_route("login"),
+			"unprefixed name should no longer resolve after with_namespace on WASM"
+		);
+	}
+
 	#[cfg(feature = "client-router")]
 	#[test]
 	fn test_unified_router_into_parts() {
@@ -665,5 +809,148 @@ mod tests {
 
 		let client = router.into_client();
 		assert_eq!(client.route_count(), 1);
+	}
+
+	mod flush_di_registrations {
+		use super::*;
+		use reinhardt_di::{DiRegistrationList, InjectionContext, SingletonScope};
+		use rstest::rstest;
+		use std::sync::Arc;
+
+		#[rstest]
+		fn applies_registrations_to_di_context_singleton_scope() {
+			// Arrange
+			let singleton_scope = Arc::new(SingletonScope::new());
+			let di_ctx = Arc::new(InjectionContext::builder(Arc::clone(&singleton_scope)).build());
+
+			let mut registrations = DiRegistrationList::new();
+			registrations.register(42i32);
+
+			// Act
+			let _server = UnifiedRouter::new()
+				.with_di_registrations(registrations)
+				.with_di_context(di_ctx)
+				.into_server();
+
+			// Assert
+			let value = singleton_scope
+				.get::<i32>()
+				.expect("i32 should be registered");
+			assert_eq!(*value, 42);
+		}
+
+		#[rstest]
+		fn applies_registrations_regardless_of_builder_order() {
+			// Arrange
+			let singleton_scope = Arc::new(SingletonScope::new());
+			let di_ctx = Arc::new(InjectionContext::builder(Arc::clone(&singleton_scope)).build());
+
+			let mut registrations = DiRegistrationList::new();
+			registrations.register(99u64);
+
+			// Act: with_di_context BEFORE with_di_registrations
+			let _server = UnifiedRouter::new()
+				.with_di_context(di_ctx)
+				.with_di_registrations(registrations)
+				.into_server();
+
+			// Assert
+			let value = singleton_scope
+				.get::<u64>()
+				.expect("u64 should be registered");
+			assert_eq!(*value, 99);
+		}
+
+		#[rstest]
+		#[serial_test::serial(global_di)]
+		fn stashes_globally_when_no_di_context() {
+			// Arrange
+			let mut registrations = DiRegistrationList::new();
+			registrations.register(7u8);
+
+			// Act
+			let _server = UnifiedRouter::new()
+				.with_di_registrations(registrations)
+				.into_server();
+
+			// Assert: registrations stashed globally
+			let taken = crate::routers::take_di_registrations();
+			assert!(taken.is_some(), "registrations should be stashed globally");
+		}
+	}
+
+	mod debug_impl {
+		use super::*;
+		use rstest::rstest;
+		use std::sync::Arc;
+
+		#[rstest]
+		fn unified_router_implements_debug() {
+			let router = UnifiedRouter::new().with_prefix("/api");
+			let debug_output = format!("{:?}", router);
+			assert!(debug_output.contains("UnifiedRouter"));
+			assert!(debug_output.contains("ServerRouter"));
+		}
+
+		#[rstest]
+		fn arc_try_unwrap_with_expect() {
+			// This is the primary use case from #3391:
+			// Arc::try_unwrap().expect() requires Debug on the error type
+			let router = Arc::new(UnifiedRouter::new());
+			let unwrapped = Arc::try_unwrap(router).expect("should have single ref");
+			assert_eq!(unwrapped.server_ref().prefix(), "");
+		}
+	}
+
+	mod route_registration {
+		use super::*;
+		use hyper::Method;
+		use reinhardt_http::{Request, Response, Result};
+		use rstest::rstest;
+
+		async fn dummy_handler(_req: Request) -> Result<Response> {
+			Ok(Response::ok())
+		}
+
+		#[rstest]
+		fn into_server_registers_routes_for_reverse() {
+			// Arrange
+			let router = UnifiedRouter::new().server(|s| {
+				s.with_namespace("api").function_named(
+					"/health",
+					Method::GET,
+					"health",
+					dummy_handler,
+				)
+			});
+
+			// Act
+			let server = router.into_server();
+
+			// Assert
+			let url = server.reverse("api:health", &[]);
+			assert_eq!(url, Some("/health".to_string()));
+		}
+
+		#[cfg(feature = "client-router")]
+		#[rstest]
+		fn into_parts_registers_routes_for_reverse() {
+			// Arrange
+			let router = UnifiedRouter::new().server(|s| {
+				s.with_namespace("api").function_named(
+					"/health",
+					Method::GET,
+					"health",
+					dummy_handler,
+				)
+			});
+
+			// Act
+			let (server, _client) = router.into_parts();
+
+			// Assert
+			let url = server.reverse("api:health", &[]);
+			assert_eq!(url, Some("/health".to_string()));
+		}
 	}
 }

@@ -311,7 +311,7 @@ impl TypedFormCallbacks {
 ///
 /// ## Example Generated Code
 ///
-/// ```ignore
+/// ```no_run
 /// impl LoginForm {
 ///     pub fn error_display(&self) -> impl IntoView {
 ///         let form = self.clone();
@@ -368,7 +368,8 @@ pub struct TypedFormWatchItem {
 ///
 /// ## Generated Code Example
 ///
-/// ```ignore
+/// ```no_run
+/// # use reinhardt_pages::reactive::Memo;
 /// // Given:
 /// derived: {
 ///     char_count: |form| form.content().get().len(),
@@ -886,6 +887,8 @@ pub struct TypedFieldDisplay {
 	pub readonly: bool,
 	/// Whether to autofocus this field
 	pub autofocus: bool,
+	/// Autocomplete hint for the browser
+	pub autocomplete: Option<String>,
 }
 
 /// Styling-related properties of a field.
@@ -1065,7 +1068,7 @@ impl TypedCustomAttr {
 	///
 	/// # Example
 	///
-	/// ```ignore
+	/// ```no_run
 	/// let attr = TypedCustomAttr { name: "aria_label".to_string(), ... };
 	/// assert_eq!(attr.html_name(), "aria-label");
 	/// ```

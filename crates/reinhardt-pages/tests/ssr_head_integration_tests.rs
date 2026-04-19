@@ -1,3 +1,4 @@
+#![cfg(not(target_arch = "wasm32"))]
 //! SSR and Head integration tests
 //!
 //! Tests the integration between SsrRenderer and View's Head system.
@@ -16,7 +17,7 @@
 //!
 //! Total: 8 tests
 
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(native)]
 mod ssr_tests {
 	use reinhardt_pages::component::{Head, IntoPage, LinkTag, MetaTag, PageElement};
 	use reinhardt_pages::head;

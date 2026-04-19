@@ -7,7 +7,29 @@ use std::any::{Any, TypeId};
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
+/// Whether the current user is authenticated.
+/// Newtype wrapper to avoid `TypeId` collision with other bool values in extensions.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct IsAuthenticated(pub bool);
+
+/// Whether the current user has admin privileges (staff or superuser).
+/// Newtype wrapper to avoid `TypeId` collision with other bool values in extensions.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct IsAdmin(pub bool);
+
+/// Whether the current user account is active.
+/// Newtype wrapper to avoid `TypeId` collision with other bool values in extensions.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct IsActive(pub bool);
+
 /// Type-safe extension storage
+///
+/// # Clone semantics
+///
+/// `Extensions` uses `Arc<Mutex<HashMap>>` internally. Cloning an
+/// `Extensions` creates a **shared** reference to the same backing
+/// store — it does NOT deep-copy the stored values. Mutations through
+/// one clone are visible through all other clones.
 #[derive(Clone, Default)]
 pub struct Extensions {
 	map: Arc<Mutex<HashMap<TypeId, Box<dyn Any + Send + Sync>>>>,
@@ -143,10 +165,30 @@ impl Extensions {
 #[cfg(test)]
 mod tests {
 	use super::*;
+	use rstest::rstest;
 
 	#[derive(Clone, Debug, PartialEq)]
 	struct TestData {
 		value: String,
+	}
+
+	#[rstest]
+	fn test_newtype_bools_coexist_in_extensions() {
+		// Arrange
+		let extensions = Extensions::new();
+
+		// Act
+		extensions.insert(IsAuthenticated(true));
+		extensions.insert(IsAdmin(false));
+		extensions.insert(IsActive(true));
+
+		// Assert
+		assert_eq!(
+			extensions.get::<IsAuthenticated>(),
+			Some(IsAuthenticated(true))
+		);
+		assert_eq!(extensions.get::<IsAdmin>(), Some(IsAdmin(false)));
+		assert_eq!(extensions.get::<IsActive>(), Some(IsActive(true)));
 	}
 
 	#[test]
@@ -241,5 +283,25 @@ mod tests {
 		);
 		assert_eq!(extensions.get::<u32>(), Some(42));
 		assert_eq!(extensions.get::<String>(), Some("string value".to_string()));
+	}
+
+	#[test]
+	fn test_clone_shares_backing_store() {
+		// Arrange
+		let original = Extensions::new();
+		let cloned = original.clone();
+
+		// Act - insert via clone
+		cloned.insert(42u32);
+
+		// Assert - original sees the value
+		assert_eq!(original.get::<u32>(), Some(42));
+
+		// Act - remove via original
+		let removed = original.remove::<u32>();
+
+		// Assert - clone no longer sees it
+		assert_eq!(removed, Some(42));
+		assert!(!cloned.contains::<u32>());
 	}
 }

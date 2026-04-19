@@ -303,7 +303,7 @@ pub async fn get_shared_postgres() -> &'static SharedPostgres {
 /// Panics if the test database cannot be created or connected to.
 pub async fn get_test_pool() -> PgPool {
 	let pg = get_shared_postgres().await;
-	let db_name = format!("test_{}", Uuid::new_v4().simple());
+	let db_name = format!("test_{}", Uuid::now_v7().simple());
 
 	// Connect to postgres database to create test database
 	let admin_pool = sqlx::postgres::PgPoolOptions::new()
@@ -388,7 +388,7 @@ pub async fn get_test_pool_with_table(table_sql: &str) -> PgPool {
 /// initialization fails.
 pub async fn get_test_pool_with_orm() -> (PgPool, String) {
 	let pg = get_shared_postgres().await;
-	let db_name = format!("test_{}", Uuid::new_v4().simple());
+	let db_name = format!("test_{}", Uuid::now_v7().simple());
 	let db_url = format!("{}/{}?sslmode=disable", pg.base_url, db_name);
 
 	// Connect to postgres database to create test database

@@ -4,7 +4,7 @@ A Reinhardt Pages project with WASM frontend and server-side rendering.
 
 ## Prerequisites
 
-- Rust 1.91.1 or later (2024 Edition)
+- Rust 1.94.1 or later (2024 Edition)
 - wasm-bindgen-cli: `cargo install wasm-bindgen-cli`
 - PostgreSQL (optional, for database features)
 

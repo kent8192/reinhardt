@@ -37,7 +37,7 @@
 //! }
 //! ```
 
-#![cfg(all(target_arch = "wasm32", feature = "wasm"))]
+#![cfg(all(wasm, feature = "wasm"))]
 
 mod assertions;
 mod events;
@@ -53,5 +53,5 @@ pub use query::*;
 pub use wait::*;
 
 // Re-export wasm-bindgen-test for convenience
-#[cfg(target_arch = "wasm32")]
+#[cfg(wasm)]
 pub use wasm_bindgen_test::*;

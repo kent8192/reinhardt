@@ -50,7 +50,7 @@ async fn test_filefield_save_with_none_name() {
 
 	let content = b"content without name";
 	// When name is None, storage should generate a unique name
-	let generated_path = format!("uploads/{}.bin", uuid::Uuid::new_v4());
+	let generated_path = format!("uploads/{}.bin", uuid::Uuid::now_v7());
 
 	storage.save(&generated_path, content).await.unwrap();
 	assert!(storage.exists(&generated_path).await.unwrap());
@@ -66,7 +66,7 @@ async fn test_filefield_generate_filename() {
 	// Simulate filename generation
 	let base_name = "document";
 	let extension = "pdf";
-	let generated = format!("{}_{}.{}", base_name, uuid::Uuid::new_v4(), extension);
+	let generated = format!("{}_{}.{}", base_name, uuid::Uuid::now_v7(), extension);
 
 	assert!(generated.contains(base_name));
 	assert!(generated.ends_with(extension));

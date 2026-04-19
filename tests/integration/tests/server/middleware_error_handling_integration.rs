@@ -85,22 +85,31 @@ impl Middleware for ResponseTransformErrorMiddleware {
 	}
 }
 
-/// Middleware that transforms errors into custom error responses
+/// Middleware that transforms error responses into custom error responses.
+///
+/// With `ErrorToResponseHandler`, handler errors are converted to responses
+/// before reaching middleware. This middleware checks for server error status
+/// codes (5xx) in the response and replaces them with a custom JSON format.
 struct CustomErrorResponseMiddleware;
 
 #[async_trait]
 impl Middleware for CustomErrorResponseMiddleware {
 	async fn process(&self, request: Request, next: Arc<dyn Handler>) -> Result<Response> {
-		match next.handle(request).await {
-			Ok(response) => Ok(response),
-			Err(e) => {
-				// Transform error into custom JSON response
-				let error_json =
-					format!(r#"{{"error":"{}","type":"custom_error"}}"#, e.to_string());
-				Ok(Response::internal_server_error()
-					.with_body(error_json)
-					.with_header("Content-Type", "application/json"))
-			}
+		let response = next.handle(request).await?;
+		if response.status.is_server_error() {
+			// Transform server error response into custom JSON response
+			let error_json = format!(
+				r#"{{"error":"{}","type":"custom_error"}}"#,
+				response
+					.status
+					.canonical_reason()
+					.unwrap_or("Unknown Error")
+			);
+			Ok(Response::internal_server_error()
+				.with_body(error_json)
+				.with_header("Content-Type", "application/json"))
+		} else {
+			Ok(response)
 		}
 	}
 }

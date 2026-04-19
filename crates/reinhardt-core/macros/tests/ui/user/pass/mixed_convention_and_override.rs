@@ -33,7 +33,7 @@ fn main() {
 	use reinhardt_auth::{BaseUser, FullUser, PermissionsMixin};
 
 	let mut user = MixedUser {
-		id: Uuid::new_v4(),
+		id: Uuid::now_v7(),
 		username: "mixed".to_string(),
 		email: "mixed@example.com".to_string(),
 		first_name: "Mix".to_string(),

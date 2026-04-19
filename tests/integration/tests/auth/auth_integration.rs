@@ -255,7 +255,9 @@ mod jwt_tests {
 		let user_id = "user_123".to_string();
 		let username = "alice".to_string();
 
-		let token = jwt_auth.generate_token(user_id, username).unwrap();
+		let token = jwt_auth
+			.generate_token(user_id, username, false, false)
+			.unwrap();
 
 		assert!(!token.is_empty());
 		assert!(token.contains('.'));
@@ -274,7 +276,7 @@ mod jwt_tests {
 		let username = "alice".to_string();
 
 		let token = jwt_auth
-			.generate_token(user_id.clone(), username.clone())
+			.generate_token(user_id.clone(), username.clone(), false, false)
 			.unwrap();
 		let claims = jwt_auth.verify_token(&token).unwrap();
 
@@ -295,7 +297,7 @@ mod jwt_tests {
 		let jwt_auth2 = JwtAuth::new(b"secret_key_2");
 
 		let token = jwt_auth1
-			.generate_token("user_123".to_string(), "alice".to_string())
+			.generate_token("user_123".to_string(), "alice".to_string(), false, false)
 			.unwrap();
 
 		// Verification with different secret should fail
@@ -316,6 +318,8 @@ mod jwt_tests {
 			"user_123".to_string(),
 			"alice".to_string(),
 			chrono::Duration::hours(24),
+			false,
+			false,
 		);
 		assert!(!claims.is_expired());
 
@@ -324,6 +328,8 @@ mod jwt_tests {
 			"user_123".to_string(),
 			"alice".to_string(),
 			chrono::Duration::seconds(-10),
+			false,
+			false,
 		);
 		assert!(expired_claims.is_expired());
 	}
@@ -346,7 +352,7 @@ mod user_model_tests {
 	#[tokio::test]
 	async fn test_simple_user_implementation() {
 		let user = SimpleUser {
-			id: Uuid::new_v4(),
+			id: Uuid::now_v7(),
 			username: "testuser".to_string(),
 			email: "test@example.com".to_string(),
 			is_active: true,
@@ -397,7 +403,7 @@ mod user_model_tests {
 		#[case] is_superuser: bool,
 	) {
 		let user = SimpleUser {
-			id: Uuid::new_v4(),
+			id: Uuid::now_v7(),
 			username: "user".to_string(),
 			email: "user@example.com".to_string(),
 			is_active,
@@ -489,7 +495,7 @@ mod database_integration_tests {
 
 		// Create a test user
 		let user = SimpleUser {
-			id: Uuid::new_v4(),
+			id: Uuid::now_v7(),
 			username: "session_user".to_string(),
 			email: "session@example.com".to_string(),
 			is_active: true,
@@ -523,7 +529,7 @@ mod database_integration_tests {
 		let (_container, _connection, _port, _url) = auth_test_db.await;
 
 		let mut user = DefaultUser {
-			id: Uuid::new_v4(),
+			id: Uuid::now_v7(),
 			username: "passworduser".to_string(),
 			email: "password@example.com".to_string(),
 			first_name: "Password".to_string(),
@@ -568,7 +574,7 @@ mod database_integration_tests {
 		let (_container, _connection, _port, _url) = auth_test_db.await;
 
 		let user = DefaultUser {
-			id: Uuid::new_v4(),
+			id: Uuid::now_v7(),
 			username: "permuser".to_string(),
 			email: "perm@example.com".to_string(),
 			first_name: "Permission".to_string(),
@@ -612,7 +618,7 @@ mod database_integration_tests {
 		let (_container, _connection, _port, _url) = auth_test_db.await;
 
 		let superuser = DefaultUser {
-			id: Uuid::new_v4(),
+			id: Uuid::now_v7(),
 			username: "superuser".to_string(),
 			email: "super@example.com".to_string(),
 			first_name: "Super".to_string(),

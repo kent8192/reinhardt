@@ -1,7 +1,8 @@
 [package]
 name = "reinhardt-testkit"
-version = "0.1.0-rc.14"
+version = "0.1.0-rc.15"
 edition.workspace = true
+rust-version.workspace = true
 authors.workspace = true
 description = "Core testing infrastructure for Reinhardt framework (no functional crate dependencies)"
 license.workspace = true
@@ -22,7 +23,10 @@ static = ["reinhardt-utils/staticfiles"]
 websockets = ["dep:reinhardt-websockets", "reinhardt-server/websocket"]
 graphql = ["reinhardt-server/graphql", "dep:async-graphql"]
 property-based = ["dep:proptest"]
-full = ["testcontainers", "static", "websockets", "graphql", "property-based"]
+viewsets = []
+admin = ["dep:reinhardt-conf"]
+messages = ["reinhardt-core/messages"]
+full = ["testcontainers", "static", "websockets", "graphql", "property-based", "viewsets", "admin", "messages"]
 
 [dependencies]
 reinhardt-db = { workspace = true, features = ["backends", "migrations", "mysql", "orm", "postgres", "sqlite"] }
@@ -51,7 +55,7 @@ uuid = { workspace = true }
 chrono = { workspace = true }
 reinhardt-query = { workspace = true, features = ["derive"] }
 env_logger = "0.11"
-reqwest = { version = "0.12", features = ["json", "cookies"] }
+reqwest = { workspace = true, features = ["cookies"] }
 urlencoding = "2.1"
 serde_urlencoded = "0.7"
 tracing = { workspace = true }
@@ -74,14 +78,13 @@ proptest = { workspace = true, optional = true }
 # Optional dependencies for graphql feature
 async-graphql = { workspace = true, optional = true }
 
+
 # WebSocket and messaging
 tokio-tungstenite = "0.28.0"
 lapin = "3.7.2"
-reinhardt-rest = { workspace = true, features = ["serializers", "parsers"] }
 reinhardt-core = { workspace = true, features = [
   "types",
   "exception",
-  "messages",
 ] }
 reinhardt-utils = { workspace = true, features = ["cache", "staticfiles"] }
 
@@ -95,7 +98,15 @@ rstest = "0.26.1"
 mockall = { workspace = true }
 
 reinhardt-urls = { workspace = true, features = ["routers"] }
-reinhardt-conf = { workspace = true, features = ["settings", "async"] }
+reinhardt-conf = { workspace = true, features = ["settings", "async"], optional = true }
+
+[target.'cfg(not(all(target_family = "wasm", target_os = "unknown")))'.dependencies]
+reinhardt-auth = { workspace = true, features = ["jwt", "sessions"] }
+reinhardt-middleware = { workspace = true, features = ["sessions"] }
+totp-lite = { version = "2.0" }
+
+[build-dependencies]
+cfg_aliases = "0.2"
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["full"] }

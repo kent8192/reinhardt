@@ -548,7 +548,8 @@ async fn test_server_fn_with_di() {
 	//     Ok(user)
 	// }
 
-	// For now, verify the concept with a simple example
+	// Verify the wire format carries the exact field values the client would
+	// send to an injected server function handler.
 	let codec = JsonCodec;
 	let request = ServerFnRequest {
 		id: 1,
@@ -556,7 +557,16 @@ async fn test_server_fn_with_di() {
 	};
 
 	let encoded = codec.encode(&request).unwrap();
+
+	// Assert the encoded JSON payload contains both field values literally.
+	let json_value: serde_json::Value =
+		serde_json::from_slice(&encoded).expect("encoded payload must be valid JSON");
+	assert_eq!(json_value["id"], 1);
+	assert_eq!(json_value["name"], "di_test");
+
 	let decoded: ServerFnRequest = codec.decode(&encoded).unwrap();
+	assert_eq!(decoded.id, 1);
+	assert_eq!(decoded.name, "di_test");
 	assert_eq!(decoded, request);
 
 	// DI integration tested in:
@@ -622,10 +632,42 @@ async fn test_server_fn_csrf_injection(csrf_token: String) {
 	// 2. Add X-CSRFToken header to the request
 	// 3. Send the request with both payload and CSRF token
 
-	// For now, verify the token format is valid
-	assert!(csrf_token.len() > 10);
+	// Verify the token can be embedded in a serialized request payload that
+	// carries both the CSRF header and the call arguments; this is the exact
+	// shape the generated `server_fn` client produces.
+	#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+	struct CsrfWireRequest {
+		csrf_token: String,
+		args: ServerFnRequest,
+	}
 
-	// Verify token can be used in header format (key: value)
+	let wire = CsrfWireRequest {
+		csrf_token: csrf_token.clone(),
+		args: ServerFnRequest {
+			id: 42,
+			name: "authn".to_string(),
+		},
+	};
+
+	let codec = JsonCodec;
+	let encoded = codec
+		.encode(&wire)
+		.expect("Failed to encode CSRF wire request");
+	let json_value: serde_json::Value =
+		serde_json::from_slice(&encoded).expect("encoded payload must be valid JSON");
+	assert_eq!(
+		json_value["csrf_token"],
+		serde_json::Value::String(csrf_token.clone())
+	);
+	assert_eq!(json_value["args"]["id"], 42);
+	assert_eq!(json_value["args"]["name"], "authn");
+
+	let decoded: CsrfWireRequest = codec
+		.decode(&encoded)
+		.expect("Failed to decode CSRF wire request");
+	assert_eq!(decoded, wire);
+
+	// Request can be attached to the X-CSRFToken HTTP header.
 	let header_name = "X-CSRFToken";
 	let header_value = &csrf_token;
 	assert_eq!(header_name, "X-CSRFToken");
@@ -665,7 +707,7 @@ async fn test_server_fn_di_with_multiple_params() {
 	//     Ok(Response::success())
 	// }
 
-	// For now, verify the request/response payload works
+	// Verify the complex request/response payload preserves every field.
 	let codec = JsonCodec;
 
 	#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -681,9 +723,21 @@ async fn test_server_fn_di_with_multiple_params() {
 		metadata: vec!["key1".to_string(), "key2".to_string()],
 	};
 
-	// Encode and decode
+	// Encode and assert payload structure.
 	let encoded = codec.encode(&request).unwrap();
+	let json_value: serde_json::Value =
+		serde_json::from_slice(&encoded).expect("encoded payload must be valid JSON");
+	assert_eq!(json_value["user_id"], 1);
+	assert_eq!(json_value["action"], "update_profile");
+	assert_eq!(json_value["metadata"], serde_json::json!(["key1", "key2"]));
+
 	let decoded: ComplexRequest = codec.decode(&encoded).unwrap();
+	assert_eq!(decoded.user_id, 1);
+	assert_eq!(decoded.action, "update_profile");
+	assert_eq!(
+		decoded.metadata,
+		vec!["key1".to_string(), "key2".to_string()]
+	);
 	assert_eq!(decoded, request);
 
 	// DI parameter resolution tested in:

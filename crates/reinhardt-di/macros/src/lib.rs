@@ -14,6 +14,36 @@ mod utils;
 
 /// Mark a struct as injectable and register it with the global registry
 ///
+/// This macro automatically derives `Clone` for the annotated type if it is
+/// not already derived. `Clone` is used by `into_inner()` and `injectable_factory` patterns.
+///
+/// # Attribute Ordering
+///
+/// **`#[injectable]` must be placed above `#[derive(...)]` attributes.**
+///
+/// In Rust 2024 edition, attribute macros can only see attributes listed
+/// below them. If `#[derive(Clone)]` appears above `#[injectable]`, the
+/// macro cannot detect it and will add a duplicate `#[derive(Clone)]`,
+/// causing a compilation error.
+///
+/// ```ignore
+/// // Correct — #[injectable] is the outermost attribute
+/// #[injectable]
+/// #[derive(Default, Debug)]
+/// struct MyService {
+///     #[no_inject]
+///     name: String,
+/// }
+///
+/// // Incorrect — #[derive] above #[injectable] is not visible to the macro
+/// #[derive(Default, Debug)]
+/// #[injectable]  // Cannot detect derives above; may cause duplicate Clone
+/// struct MyService {
+///     #[no_inject]
+///     name: String,
+/// }
+/// ```
+///
 /// # Example
 ///
 /// ```ignore
@@ -46,11 +76,12 @@ pub fn injectable(args: TokenStream, input: TokenStream) -> TokenStream {
 /// # Example
 ///
 /// ```ignore
+/// use reinhardt_di::Depends;
 /// use reinhardt_di_macros::injectable_factory;
 ///
 /// #[injectable_factory]
 /// #[scope(singleton)]
-/// async fn create_database(#[inject] config: Arc<Config>) -> DatabaseConnection {
+/// async fn create_database(#[inject] config: Depends<Config>) -> DatabaseConnection {
 ///     DatabaseConnection::connect(&config.database_url).await.unwrap()
 /// }
 /// ```

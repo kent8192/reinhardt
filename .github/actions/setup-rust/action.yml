@@ -20,10 +20,16 @@ inputs:
 runs:
   using: composite
   steps:
-    - name: Install Rust 1.91.1
-      uses: dtolnay/rust-toolchain@1.91.1
+    - name: Install Rust 1.94.1
+      uses: dtolnay/rust-toolchain@1.94.1
       with:
         components: ${{ inputs.components }}
+
+    - name: Setup sccache
+      if: inputs.cache == 'true'
+      uses: mozilla-actions/sccache-action@v0.0.9
+      with:
+        version: "v0.10.0"
 
     # Issue #1831: Detect the actual CARGO_TARGET_DIR from the calling workflow's
     # environment. Workflows set CARGO_TARGET_DIR to an absolute path (e.g.

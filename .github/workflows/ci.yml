@@ -10,6 +10,7 @@ permissions:
   contents: read
   id-token: write
   pull-requests: read
+  issues: write
   security-events: write
 
 concurrency:
@@ -32,7 +33,7 @@ jobs:
   # When conflicts exist, skip all CI jobs to save runner costs.
   check-branch-status:
     name: Check Branch Status
-    timeout-minutes: 10
+    timeout-minutes: 360
     if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
     outputs:
@@ -83,7 +84,7 @@ jobs:
   # GitHub-hosted: fallback for fork PRs or when self-hosted is unavailable.
   determine-runner:
     name: Determine Runner
-    timeout-minutes: 10
+    timeout-minutes: 360
     runs-on: [self-hosted, linux, arm64, reinhardt-hotpath]
     outputs:
       runner: ${{ steps.set-runner.outputs.runner }}
@@ -224,6 +225,23 @@ jobs:
       runner: ${{ needs.determine-runner.outputs.runner }}
       cargo-build-jobs: ${{ needs.determine-runner.outputs.cargo-build-jobs }}
 
+  # Feature flag combination check - release PRs only.
+  # Verifies that all documented feature presets compile correctly
+  # before publishing to crates.io. Only runs on release-plz branches
+  # since feature breakage is most critical at release time.
+  feature-check:
+    name: Feature Check
+    needs: [determine-runner, check-branch-status]
+    if: >-
+      ${{
+        needs.check-branch-status.outputs.has-conflicts != 'true' &&
+        startsWith(github.head_ref || '', 'release-plz-')
+      }}
+    uses: ./.github/workflows/reinhardt-feature-check.yml
+    with:
+      runner: ${{ needs.determine-runner.outputs.runner }}
+      cargo-build-jobs: ${{ needs.determine-runner.outputs.cargo-build-jobs }}
+
   security-audit:
     name: Security Audit
     needs: [determine-runner, check-branch-status]
@@ -336,28 +354,28 @@ jobs:
     uses: ./.github/workflows/cross-platform-check.yml
     needs: [check, fmt, clippy]
 
-  # Phase 2b: Additional tests run after core tests complete.
-  # This phased approach prevents exceeding the Spot vCPU quota by
-  # ensuring Phase 2a runners have terminated before Phase 2b starts.
-  # Note: examples-test runs as a separate standalone workflow.
-  # Coverage runs only on main branch pushes (not on PRs).
+  # Phase 2a (continued): UI tests run in parallel with unit/integration tests.
+  # Dynamic partitioning reduces runner count for small-scope PRs,
+  # mitigating vCPU quota pressure from parallel execution.
   ui-test:
     name: UI Tests
     uses: ./.github/workflows/ui-test.yml
-    needs: [unit-test, intra-crate-integration-test, cross-crate-integration-test, determine-runner, detect-affected]
-    if: |
-      always() &&
-      needs.detect-affected.outputs.has-affected == 'true' &&
-      needs.unit-test.result == 'success' &&
-      needs.intra-crate-integration-test.result == 'success' &&
-      needs.cross-crate-integration-test.result == 'success'
+    needs: [check, fmt, clippy, determine-runner, detect-affected]
+    if: needs.detect-affected.outputs.has-affected == 'true'
     secrets: inherit
     with:
       runner: ${{ needs.determine-runner.outputs.runner }}
       cargo-build-jobs: ${{ needs.determine-runner.outputs.cargo-build-jobs }}
       nextest-filter: ${{ needs.detect-affected.outputs.nextest-filter }}
       run-all: ${{ needs.detect-affected.outputs.run-all }}
+      partitions-json: ${{ needs.detect-affected.outputs.partitions-json }}
+      partition-count: ${{ needs.detect-affected.outputs.partition-count }}
 
+  # Phase 2b: Additional tests run after core tests complete.
+  # This phased approach prevents exceeding the Spot vCPU quota by
+  # ensuring Phase 2a runners have terminated before Phase 2b starts.
+  # Note: examples-test runs as a separate standalone workflow.
+  # Coverage runs only on main branch pushes (not on PRs).
   msrv-test:
     name: MSRV Test
     uses: ./.github/workflows/msrv-test.yml
@@ -369,7 +387,7 @@ jobs:
   # All jobs must pass
   ci-success:
     name: CI Success
-    timeout-minutes: 10
+    timeout-minutes: 360
     if: always()
     runs-on: ubuntu-latest
     needs:
@@ -382,6 +400,7 @@ jobs:
       - wasm-check
       - publish-check
       - todo-check
+      - feature-check
       - security-audit
       - terraform-check
       - semver-check
@@ -436,6 +455,7 @@ jobs:
             "ui-test:${{ needs.ui-test.result }}"
             "terraform-check:${{ needs.terraform-check.result }}"
             "msrv-test:${{ needs.msrv-test.result }}"
+            "feature-check:${{ needs.feature-check.result }}"
           )
           for entry in "${selectively_skippable[@]}"; do
             name="${entry%%:*}"

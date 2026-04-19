@@ -348,7 +348,7 @@ pub trait BaseDatabaseSchemaEditor: Send + Sync {
 		unique: bool,
 		condition: Option<&str>,
 	) -> Result<CreateIndexStatement, String> {
-		if condition.is_some() {
+		if let Some(cond) = condition {
 			// reinhardt-query doesn't support partial indexes, return error to indicate fallback needed
 			// Always use double quotes for PostgreSQL identifier safety
 			return Err(format!(
@@ -361,7 +361,7 @@ pub trait BaseDatabaseSchemaEditor: Send + Sync {
 					.map(|c| format!("\"{}\"", c))
 					.collect::<Vec<_>>()
 					.join(", "),
-				condition.unwrap()
+				cond
 			));
 		}
 

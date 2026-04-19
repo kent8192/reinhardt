@@ -71,9 +71,10 @@ static CONTEXT_ID_COUNTER: AtomicUsize = AtomicUsize::new(0);
 ///
 /// ## Example
 ///
-/// ```ignore
+/// ```rust
 /// use reinhardt_core::reactive::context::{Context, create_context};
 ///
+/// # struct User;
 /// // Create a context for user authentication
 /// static AUTH_CONTEXT: Context<User> = create_context();
 /// ```
@@ -140,7 +141,7 @@ thread_local! {
 ///
 /// ## Example
 ///
-/// ```ignore
+/// ```rust
 /// use reinhardt_core::reactive::context::create_context;
 ///
 /// let theme_context = create_context::<String>();
@@ -165,7 +166,7 @@ pub const fn create_context<T: 'static>() -> Context<T> {
 ///
 /// ## Example
 ///
-/// ```ignore
+/// ```rust
 /// use reinhardt_core::reactive::context::{Context, provide_context};
 ///
 /// let ctx: Context<i32> = Context::new();
@@ -196,7 +197,7 @@ pub fn provide_context<T: Clone + 'static>(ctx: &Context<T>, value: T) {
 ///
 /// ## Example
 ///
-/// ```ignore
+/// ```rust
 /// use reinhardt_core::reactive::context::{Context, provide_context, get_context};
 ///
 /// let ctx: Context<i32> = Context::new();
@@ -368,7 +369,7 @@ mod tests {
 	#[test]
 	fn test_context_clone() {
 		let ctx1: Context<i32> = Context::new();
-		let ctx2 = ctx1.clone();
+		let ctx2 = ctx1;
 
 		assert_eq!(ctx1.id(), ctx2.id());
 	}

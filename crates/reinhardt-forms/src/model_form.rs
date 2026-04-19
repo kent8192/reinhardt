@@ -49,7 +49,7 @@ pub trait FormModel: Send + Sync {
 	///
 	/// # Examples
 	///
-	/// ```no_run
+	/// ```ignore
 	/// # use reinhardt_forms::model_form::FieldType;
 	/// fn field_type(name: &str) -> Option<FieldType> {
 	///     match name {
@@ -85,7 +85,7 @@ pub trait FormModel: Send + Sync {
 	///
 	/// # Examples
 	///
-	/// ```no_run
+	/// ```ignore
 	/// # struct Example { id: i32, name: String }
 	/// # impl Example {
 	/// fn to_choice_label(&self) -> String {
@@ -110,7 +110,7 @@ pub trait FormModel: Send + Sync {
 	///
 	/// # Examples
 	///
-	/// ```no_run
+	/// ```ignore
 	/// # struct Example { id: i32 }
 	/// # impl Example {
 	/// fn to_choice_value(&self) -> String {

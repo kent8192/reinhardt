@@ -283,9 +283,16 @@ async fn test_invalid_version_rejection() {
 	let chain = MiddlewareChain::new(handler).with_middleware(middleware);
 
 	// Test with invalid version (v3 not in allowed list)
+	// MiddlewareChain's ErrorToResponseHandler converts errors to responses,
+	// so the result is Ok with an error status code rather than Err.
 	let request = create_request("/v3/users/", vec![]);
 	let result = chain.handle(request).await;
-	assert!(result.is_err());
+	let response = result.expect("MiddlewareChain should convert errors to responses");
+	assert!(
+		response.status.is_client_error(),
+		"Invalid version should return a 4xx error, got: {}",
+		response.status
+	);
 }
 
 #[tokio::test]

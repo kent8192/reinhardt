@@ -20,7 +20,7 @@
 use super::ServerFnError;
 use super::registration::ServerFnRegistration;
 use hyper::{Method, StatusCode};
-use reinhardt_http::{Request, Response, ResponseCookies};
+use reinhardt_http::{Request, Response, SharedResponseCookies};
 use reinhardt_urls::routers::ServerRouter;
 use std::future::Future;
 use std::pin::Pin;
@@ -90,9 +90,11 @@ impl ServerFnRouterExt for ServerRouter {
 			Box<dyn Future<Output = Result<Response, reinhardt_http::Error>> + Send>,
 		> {
 			Box::pin(async move {
-				// Clone extensions before moving the request into the handler.
-				// This allows extracting ResponseCookies set by the handler.
-				let extensions = req.extensions.clone();
+				// Insert a shared cookie jar so the handler can set response
+				// cookies. Clones share the same backing store, so cookies
+				// added by the handler are visible to this wrapper afterwards.
+				let cookie_jar = SharedResponseCookies::new();
+				req.extensions.insert(cookie_jar.clone());
 
 				let mut response = match handler(req).await {
 					Ok(body) => Response::ok()
@@ -120,13 +122,10 @@ impl ServerFnRouterExt for ServerRouter {
 					}
 				};
 
-				// Apply response cookies set by the handler via request extensions.
-				// This enables server functions to set Set-Cookie headers
-				// (e.g., for CSRF double-submit cookie pattern).
-				if let Some(cookies) = extensions.remove::<ResponseCookies>() {
-					for cookie in cookies.cookies() {
-						response = response.with_header("Set-Cookie", cookie);
-					}
+				// Apply response cookies from the shared cookie jar.
+				let cookies = cookie_jar.take();
+				for cookie in cookies.cookies() {
+					response = response.append_header("Set-Cookie", cookie);
 				}
 
 				Ok(response)

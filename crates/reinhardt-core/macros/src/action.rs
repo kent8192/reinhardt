@@ -1,5 +1,6 @@
 //! action macro implementation
 
+use crate::crate_paths::get_reinhardt_di_crate;
 use crate::injectable_common::{
 	detect_inject_params, generate_di_context_extraction, generate_injection_calls,
 	strip_inject_attrs,
@@ -225,6 +226,8 @@ pub(crate) fn action_impl(args: TokenStream, input: ItemFn) -> Result<TokenStrea
 			})
 			.collect();
 
+		let di_crate = get_reinhardt_di_crate();
+
 		Ok(quote! {
 			// Original function (renamed, private)
 			#asyncness fn #original_fn_name #generics (#stripped_inputs) #fn_output #where_clause {
@@ -240,11 +243,14 @@ pub(crate) fn action_impl(args: TokenStream, input: ItemFn) -> Result<TokenStrea
 				// DI context extraction
 				#di_extraction
 
-				// Dependency resolution
-				#(#injection_calls)*
+				// Execute handler within resolve context scope
+				#di_crate::resolve_context::RESOLVE_CTX.scope(__resolve_ctx, async {
+					// Dependency resolution
+					#(#injection_calls)*
 
-				// Call original function
-				#original_fn_name(#(#regular_args,)* #(#inject_args),*).await
+					// Call original function
+					#original_fn_name(#(#regular_args,)* #(#inject_args),*).await
+				}).await
 			}
 		})
 	} else {

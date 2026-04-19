@@ -20,6 +20,10 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: mutation-test-${{ github.ref }}
+  cancel-in-progress: false
+
 env:
   CARGO_TERM_COLOR: always
   RUST_BACKTRACE: 1
@@ -30,7 +34,7 @@ jobs:
   mutation-test:
     name: "Shard ${{ matrix.shard }}/5"
     runs-on: ubuntu-latest
-    if: github.event_name != 'workflow_dispatch' || inputs.shard == '0' || inputs.shard == matrix.shard
+    if: github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && (github.event.inputs.shard == '0' || github.event.inputs.shard == matrix.shard))
     timeout-minutes: 360
     strategy:
       fail-fast: false

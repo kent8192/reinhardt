@@ -1,9 +1,10 @@
+#![cfg(not(target_arch = "wasm32"))]
 //! Error path tests for static asset URL resolution
 //!
 //! These tests verify that the system gracefully handles error conditions
 //! and edge cases that should produce errors or fallback behavior.
 
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(native)]
 mod error_tests {
 	use reinhardt_pages::static_resolver::{init_static_resolver, resolve_static};
 	use reinhardt_utils::staticfiles::TemplateStaticConfig;
@@ -159,7 +160,7 @@ mod error_tests {
 	}
 }
 
-#[cfg(target_arch = "wasm32")]
+#[cfg(wasm)]
 mod wasm_error_tests {
 	use reinhardt_pages::static_resolver::{init_static_resolver, resolve_static};
 	use wasm_bindgen_test::*;

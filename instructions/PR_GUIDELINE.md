@@ -98,6 +98,22 @@ test/database-integration-tests
 chore/ci-github-actions-update
 ```
 
+**Issue-Linked Branch Naming:**
+
+When a branch addresses specific GitHub Issues, include the issue number(s) in the branch name:
+
+| Pattern | Format | Example |
+|---------|--------|---------|
+| Single issue | `<type>/issue-XXXX-<description>` | `fix/issue-2636-retrieve-view-integer-pk` |
+| Consecutive range | `<type>/issue-XXXX-to-YYYY-<description>` | `fix/issue-3017-to-3019-feature-gate-compilation` |
+| Multiple ranges | `<type>/issue-XXXX-to-YYYY-and-WWWW-to-ZZZZ-<description>` | `fix/issue-1570-to-1572-and-1591-to-1596-workspace-deps` |
+
+**Rules for issue-linked branches:**
+- Use `to` to express consecutive issue number ranges (NOT hyphens between numbers)
+- Use `and` to separate multiple consecutive ranges
+- Single (non-consecutive) issues do NOT use `to` — just `<type>/issue-XXXX-<description>`
+- The `<description>` suffix MUST be kebab-case and describe the fix/feature
+
 **Exception:** Release branches follow the format `release/<crate>/vX.Y.Z` for compatibility with automated workflows.
 
 **RC Phase: Next-Version Feature Branches**

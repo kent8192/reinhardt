@@ -6,6 +6,7 @@
 use crate::types::{AdminError, AdminResult};
 use async_trait::async_trait;
 use reinhardt_core::macros::injectable;
+use reinhardt_db::migrations::FieldType as DbFieldType;
 use reinhardt_db::orm::execution::convert_values;
 use reinhardt_db::orm::{
 	DatabaseConnection, Filter, FilterCondition, FilterOperator, FilterValue, Model,
@@ -17,6 +18,62 @@ use reinhardt_query::prelude::{
 };
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+
+/// Converts a `serde_json::Value` into a reinhardt-query `Value`.
+///
+/// String values are inspected for ISO 8601 date/time patterns and converted
+/// to the appropriate chrono type so that PostgreSQL accepts them for
+/// `timestamptz`, `date`, and `time` columns without an explicit cast.
+fn json_to_sea_value(value: serde_json::Value) -> Value {
+	match value {
+		serde_json::Value::String(s) => {
+			// ISO 8601 datetime with timezone offset (e.g. "2026-04-02T16:45:50Z")
+			if let Ok(dt) = chrono::DateTime::parse_from_rfc3339(&s) {
+				Value::ChronoDateTimeUtc(Some(Box::new(dt.with_timezone(&chrono::Utc))))
+			// ISO 8601 datetime with fractional seconds and Z suffix
+			} else if let Ok(dt) =
+				chrono::NaiveDateTime::parse_from_str(&s, "%Y-%m-%dT%H:%M:%S%.fZ")
+			{
+				Value::ChronoDateTimeUtc(Some(Box::new(dt.and_utc())))
+			// Date only
+			} else if s.len() == 10 {
+				if let Ok(d) = chrono::NaiveDate::parse_from_str(&s, "%Y-%m-%d") {
+					return Value::ChronoDate(Some(Box::new(d)));
+				}
+				Value::String(Some(Box::new(s)))
+			// Time only
+			} else if s.len() == 8 && s.chars().filter(|c| *c == ':').count() == 2 {
+				if let Ok(t) = chrono::NaiveTime::parse_from_str(&s, "%H:%M:%S") {
+					return Value::ChronoTime(Some(Box::new(t)));
+				}
+				Value::String(Some(Box::new(s)))
+			// UUID (8-4-4-4-12 hex pattern)
+			} else if s.len() == 36
+				&& s.chars().enumerate().all(|(i, c)| {
+					matches!(i, 8 | 13 | 18 | 23) && c == '-' || c.is_ascii_hexdigit()
+				}) {
+				if let Ok(uuid) = uuid::Uuid::parse_str(&s) {
+					return Value::Uuid(Some(Box::new(uuid)));
+				}
+				Value::String(Some(Box::new(s)))
+			} else {
+				Value::String(Some(Box::new(s)))
+			}
+		}
+		serde_json::Value::Number(n) => {
+			if let Some(i) = n.as_i64() {
+				Value::BigInt(Some(i))
+			} else if let Some(f) = n.as_f64() {
+				Value::Double(Some(f))
+			} else {
+				Value::String(Some(Box::new(n.to_string())))
+			}
+		}
+		serde_json::Value::Bool(b) => Value::Bool(Some(b)),
+		serde_json::Value::Null => Value::Int(None),
+		_ => Value::String(Some(Box::new(value.to_string()))),
+	}
+}
 use std::sync::Arc;
 
 /// Dummy record type for admin panel CRUD operations
@@ -78,6 +135,55 @@ impl Model for AdminRecord {
 	fn set_primary_key(&mut self, pk: Self::PrimaryKey) {
 		self.id = Some(pk);
 	}
+}
+
+/// Converts a string primary key value to the appropriate SeaQuery `Value`
+/// based on the field's registered database type.
+///
+/// Looks up the field type from the migration registry. When the registry has
+/// metadata for the given table/field, the conversion is type-aware (e.g.
+/// UUID strings become `Value::Uuid`). Falls back to the i64-then-String
+/// heuristic when metadata is unavailable.
+fn parse_pk_value(table_name: &str, pk_field: &str, id: &str) -> Value {
+	if let Some(field_meta) =
+		crate::server::type_inference::get_field_metadata(table_name, pk_field)
+	{
+		match field_meta.field_type {
+			DbFieldType::Uuid => {
+				if let Ok(uuid) = uuid::Uuid::parse_str(id) {
+					return Value::Uuid(Some(Box::new(uuid)));
+				}
+			}
+			DbFieldType::BigInteger => {
+				if let Ok(num) = id.parse::<i64>() {
+					return Value::BigInt(Some(num));
+				}
+			}
+			DbFieldType::Integer
+			| DbFieldType::SmallInteger
+			| DbFieldType::TinyInt
+			| DbFieldType::MediumInt => {
+				if let Ok(num) = id.parse::<i32>() {
+					return Value::Int(Some(num));
+				}
+			}
+			_ => {}
+		}
+	}
+
+	// Fallback: existing heuristic for backward compatibility
+	if let Ok(num_id) = id.parse::<i64>() {
+		Value::BigInt(Some(num_id))
+	} else {
+		Value::String(Some(Box::new(id.to_string())))
+	}
+}
+
+/// Batch version of `parse_pk_value` for bulk operations.
+fn parse_pk_values(table_name: &str, pk_field: &str, ids: &[String]) -> Vec<Value> {
+	ids.iter()
+		.map(|id| parse_pk_value(table_name, pk_field, id))
+		.collect()
 }
 
 /// Convert FilterValue to Value
@@ -667,6 +773,9 @@ impl AdminDatabase {
 			.await
 			.map_err(|e| AdminError::DatabaseError(e.to_string()))?;
 
+		// Sensitive fields that must never be exposed in admin API responses
+		const SENSITIVE_FIELDS: &[&str] = &["password_hash", "password_salt"];
+
 		// Convert QueryRow to HashMap
 		Ok(rows
 			.into_iter()
@@ -674,6 +783,7 @@ impl AdminDatabase {
 				if let serde_json::Value::Object(map) = row.data {
 					Some(
 						map.into_iter()
+							.filter(|(key, _)| !SENSITIVE_FIELDS.contains(&key.as_str()))
 							.collect::<HashMap<String, serde_json::Value>>(),
 					)
 				} else {
@@ -757,12 +867,7 @@ impl AdminDatabase {
 		pk_field: &str,
 		id: &str,
 	) -> AdminResult<Option<HashMap<String, serde_json::Value>>> {
-		// Convert id to appropriate type for WHERE clause
-		let pk_value: Value = if let Ok(num_id) = id.parse::<i64>() {
-			Value::BigInt(Some(num_id))
-		} else {
-			Value::String(Some(Box::new(id.to_string())))
-		};
+		let pk_value = parse_pk_value(table_name, pk_field, id);
 
 		// SELECT * is intentional: admin detail view displays all fields from the
 		// model. The admin panel operates on dynamic schemas where the column set
@@ -840,21 +945,7 @@ impl AdminDatabase {
 			let value = data.get(&key).cloned().unwrap_or(serde_json::Value::Null);
 			columns.push(Alias::new(&key));
 
-			let sea_value = match value {
-				serde_json::Value::String(s) => Value::String(Some(Box::new(s))),
-				serde_json::Value::Number(n) => {
-					if let Some(i) = n.as_i64() {
-						Value::BigInt(Some(i))
-					} else if let Some(f) = n.as_f64() {
-						Value::Double(Some(f))
-					} else {
-						Value::String(Some(Box::new(n.to_string())))
-					}
-				}
-				serde_json::Value::Bool(b) => Value::Bool(Some(b)),
-				serde_json::Value::Null => Value::Int(None),
-				_ => Value::String(Some(Box::new(value.to_string()))),
-			};
+			let sea_value = json_to_sea_value(value);
 			values.push(sea_value);
 		}
 
@@ -875,18 +966,22 @@ impl AdminDatabase {
 			.map_err(|e| AdminError::DatabaseError(e.to_string()))?;
 
 		// Extract the ID from the returned row using the primary key field
-		if let Some(serde_json::Value::Number(n)) = row.data.get(pk_field) {
-			n.as_u64().ok_or_else(|| {
+		match row.data.get(pk_field) {
+			Some(serde_json::Value::Number(n)) => n.as_u64().ok_or_else(|| {
 				AdminError::DatabaseError(format!(
 					"RETURNING clause for '{}' returned non-unsigned-integer: {}",
 					pk_field, n
 				))
-			})
-		} else {
-			Err(AdminError::DatabaseError(format!(
+			}),
+			Some(serde_json::Value::String(_)) => {
+				// UUID and other string-based PKs: return 1 as affected count
+				// (the actual PK value is a string, not representable as u64)
+				Ok(1)
+			}
+			_ => Err(AdminError::DatabaseError(format!(
 				"RETURNING clause did not return expected primary key field '{}'",
 				pk_field
-			)))
+			))),
 		}
 	}
 
@@ -926,30 +1021,11 @@ impl AdminDatabase {
 		// Build SET clauses in sorted order
 		for key in sorted_keys {
 			let value = data.get(&key).cloned().unwrap_or(serde_json::Value::Null);
-			let sea_value = match value {
-				serde_json::Value::String(s) => Value::String(Some(Box::new(s))),
-				serde_json::Value::Number(n) => {
-					if let Some(i) = n.as_i64() {
-						Value::BigInt(Some(i))
-					} else if let Some(f) = n.as_f64() {
-						Value::Double(Some(f))
-					} else {
-						Value::String(Some(Box::new(n.to_string())))
-					}
-				}
-				serde_json::Value::Bool(b) => Value::Bool(Some(b)),
-				serde_json::Value::Null => Value::Int(None),
-				_ => Value::String(Some(Box::new(value.to_string()))),
-			};
+			let sea_value = json_to_sea_value(value);
 			query.value(Alias::new(&key), sea_value);
 		}
 
-		// Convert id to appropriate type for WHERE clause
-		let pk_value: Value = if let Ok(num_id) = id.parse::<i64>() {
-			Value::BigInt(Some(num_id))
-		} else {
-			Value::String(Some(Box::new(id.to_string())))
-		};
+		let pk_value = parse_pk_value(table_name, pk_field, id);
 		query.and_where(Expr::col(Alias::new(pk_field)).eq(pk_value));
 
 		let (sql, values) = query.build(PostgresQueryBuilder);
@@ -985,12 +1061,7 @@ impl AdminDatabase {
 		pk_field: &str,
 		id: &str,
 	) -> AdminResult<u64> {
-		// Convert id to appropriate type for WHERE clause
-		let pk_value: Value = if let Ok(num_id) = id.parse::<i64>() {
-			Value::BigInt(Some(num_id))
-		} else {
-			Value::String(Some(Box::new(id.to_string())))
-		};
+		let pk_value = parse_pk_value(table_name, pk_field, id);
 
 		let query = Query::delete()
 			.from_table(Alias::new(table_name))
@@ -1065,17 +1136,7 @@ impl AdminDatabase {
 			return Ok(0);
 		}
 
-		// Convert each id to appropriate type for WHERE clause
-		let pk_values: Vec<Value> = ids
-			.iter()
-			.map(|id| {
-				if let Ok(num_id) = id.parse::<i64>() {
-					Value::BigInt(Some(num_id))
-				} else {
-					Value::String(Some(Box::new(id.to_string())))
-				}
-			})
-			.collect();
+		let pk_values = parse_pk_values(table_name, pk_field, &ids);
 
 		let query = Query::delete()
 			.from_table(Alias::new(table_name))
@@ -1213,6 +1274,22 @@ impl Injectable for AdminDatabase {
 		ctx.set_singleton(db.clone());
 		Ok(db)
 	}
+}
+
+// Register AdminDatabase in the global dependency registry so that
+// Depends<AdminDatabase> can resolve it via ctx.resolve().
+// Delegates to Injectable::inject() for lazy construction from DatabaseConnection.
+fn __register_admin_database(registry: &reinhardt_di::DependencyRegistry) {
+	registry.register::<AdminDatabase>(
+		reinhardt_di::DependencyScope::Singleton,
+		reinhardt_di::InjectableFactory::<AdminDatabase>::new(),
+	);
+}
+
+reinhardt_di::inventory::submit! {
+	reinhardt_di::InjectableRegistration::new(
+		__register_admin_database
+	)
 }
 
 #[cfg(test)]
@@ -2819,5 +2896,66 @@ mod tests {
 
 		// Assert
 		assert!(result.is_err());
+	}
+
+	// ==================== parse_pk_value tests ====================
+
+	#[rstest]
+	fn test_parse_pk_value_integer_falls_back_to_bigint() {
+		// Arrange: No registry entry for this table, integer string input
+
+		// Act
+		let val = parse_pk_value("nonexistent_table", "id", "42");
+
+		// Assert
+		assert_eq!(val, Value::BigInt(Some(42)));
+	}
+
+	#[rstest]
+	fn test_parse_pk_value_uuid_string_without_registry_falls_back_to_string() {
+		// Arrange: No registry entry, UUID string input
+
+		// Act
+		let val = parse_pk_value(
+			"nonexistent_table",
+			"id",
+			"c1a363b1-cc42-4dea-81f0-9dc1cedf0083",
+		);
+
+		// Assert: Without registry metadata, UUID falls back to Value::String
+		assert!(matches!(val, Value::String(Some(_))));
+	}
+
+	#[rstest]
+	fn test_parse_pk_value_non_numeric_string_falls_back_to_string() {
+		// Arrange: No registry entry, non-numeric string input
+
+		// Act
+		let val = parse_pk_value("nonexistent_table", "id", "hello-world");
+
+		// Assert
+		assert!(matches!(val, Value::String(Some(_))));
+	}
+
+	#[rstest]
+	fn test_parse_pk_value_negative_integer() {
+		// Arrange: Negative integer string
+
+		// Act
+		let val = parse_pk_value("nonexistent_table", "id", "-1");
+
+		// Assert
+		assert_eq!(val, Value::BigInt(Some(-1)));
+	}
+
+	#[rstest]
+	fn test_parse_pk_value_zero() {
+		// Arrange: Zero as string
+
+		// Act
+		let val = parse_pk_value("nonexistent_table", "id", "0");
+
+		// Assert
+		assert_eq!(val, Value::BigInt(Some(0)));
 	}
 }

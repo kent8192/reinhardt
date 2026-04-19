@@ -59,7 +59,7 @@ async fn test_user_not_found_for_follow(#[future] twitter_db_pool: (PgPool, Stri
 	let user_factory = UserFactory::new();
 
 	// Try to find non-existent user
-	let fake_id = uuid::Uuid::new_v4();
+	let fake_id = uuid::Uuid::now_v7();
 	let result = user_factory.find_by_id(&pool, fake_id).await;
 
 	assert!(result.is_err(), "Non-existent user should not be found");

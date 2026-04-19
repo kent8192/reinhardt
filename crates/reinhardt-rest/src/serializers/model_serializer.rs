@@ -38,7 +38,7 @@ use std::marker::PhantomData;
 ///
 /// // Serialize a user
 /// let user = DefaultUser {
-///     id: Uuid::new_v4(),
+///     id: Uuid::now_v7(),
 ///     username: "alice".to_string(),
 ///     email: "alice@example.com".to_string(),
 ///     ..Default::default()
@@ -437,7 +437,7 @@ where
 	/// #
 	/// let serializer = ModelSerializer::<DefaultUser>::new();
 	/// let user = DefaultUser {
-	///     id: Uuid::new_v4(),
+	///     id: Uuid::now_v7(),
 	///     username: "alice".to_string(),
 	///     ..Default::default()
 	/// };
@@ -476,7 +476,7 @@ where
 	/// # let connection = DatabaseConnection::connect_postgres("postgres://localhost/test").await?;
 	/// let serializer = ModelSerializer::<DefaultUser>::new();
 	/// let user = DefaultUser {
-	///     id: Uuid::new_v4(),
+	///     id: Uuid::now_v7(),
 	///     username: "alice".to_string(),
 	///     ..Default::default()
 	/// };

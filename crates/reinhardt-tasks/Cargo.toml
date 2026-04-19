@@ -1,8 +1,9 @@
 [package]
 name = "reinhardt-tasks"
-version = "0.1.0-rc.14"
+version = "0.1.0-rc.15"
 description = "Background task execution and scheduling"
 edition.workspace = true
+rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 authors.workspace = true
@@ -18,7 +19,7 @@ chrono = { version = "0.4", features = ["serde"] }
 uuid = { workspace = true }
 cron = "0.15.0"
 rand = { workspace = true }
-reqwest = { version = "0.12", features = ["json"] }
+reqwest = { workspace = true }
 url = { workspace = true }
 ipnet = "2.0"
 tracing = { workspace = true }
@@ -50,6 +51,10 @@ serial_test = { workspace = true }
 mockito = "1.5"
 tempfile = { workspace = true }
 rstest = { workspace = true }
+# Workaround for KI-2 (rust-lang/cargo#4242, rust-lang/cargo#15151):
+# Path-only dev-dep (no version) is stripped from published manifest by cargo,
+# avoiding dev-dependency version resolution failure during `cargo publish`.
+# When upstream cargo resolves these issues, replace with `workspace = true`.
 reinhardt-testkit = { path = "../reinhardt-testkit", features = ["testcontainers"] }
 
 [features]

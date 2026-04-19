@@ -15,10 +15,8 @@ This crate serves as the foundation for the entire Reinhardt ecosystem, providin
 This crate provides the following modules:
 
 - **Types**: Core type definitions
-  - Handler trait for request processing
-  - Middleware trait for request/response pipelines
-  - MiddlewareChain for composable middleware
-  - Type aliases and async trait support
+  - Page types for component rendering (`Page`, `PageElement`, `Head`, etc.)
+  - Note: HTTP types (`Handler`, `Middleware`, `MiddlewareChain`) have moved to `reinhardt-http`
 
 - **Exception**: Exception handling and error types
   - Django-style exception hierarchy
@@ -35,9 +33,11 @@ This crate provides the following modules:
   - Performance monitoring
 
 - **Macros**: Procedural macros for code generation
-  - `#[handler]` macro for endpoint definitions
-  - `#[middleware]` macro for middleware implementations
-  - `#[injectable]` macro for dependency injection
+  - `#[api_view]` macro for API view definitions
+  - HTTP method macros: `#[get]`, `#[post]`, `#[put]`, `#[patch]`, `#[delete]`
+  - `#[action]` macro for admin action definitions
+  - `#[permission_required]` macro for access control
+  - Note: `#[injectable]` is provided by `reinhardt-di`
 
 - **Security**: Security primitives and utilities
   - Password hashing and verification

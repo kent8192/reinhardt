@@ -1,0 +1,8 @@
+error: #[hook] can only be applied to unit structs (structs without fields)
+ --> tests/ui/hook/fail/hook_struct_with_fields.rs:4:15
+  |
+4 |   struct MyHook {
+  |  _______________^
+5 | |     config: String,
+6 | | }
+  | |_^

@@ -321,6 +321,108 @@ command = "cargo"
 args = ["llvm-cov", "nextest", "--workspace", "--lib", "--all-features", "--no-fail-fast"]
 
 # ============================================================================
+# Feature Combination Check Tasks
+# ============================================================================
+
+[tasks.feature-check]
+description = "Check representative feature combinations (30 patterns)"
+dependencies = ["feature-check-facade", "feature-check-subcrate"]
+
+[tasks.feature-check-facade]
+description = "Check facade crate feature combinations (19 patterns)"
+script_runner = "bash"
+script = '''
+set -e
+echo "=== Feature Check: Facade Crate ==="
+
+combos=(
+	"no-default|reinhardt-web|--no-default-features"
+	"minimal|reinhardt-web|--no-default-features -F minimal"
+	"standard|reinhardt-web|"
+	"full|reinhardt-web|--no-default-features -F full"
+	"api-only|reinhardt-web|--no-default-features -F api-only"
+	"graphql-server|reinhardt-web|--no-default-features -F graphql-server"
+	"websocket-server|reinhardt-web|--no-default-features -F websocket-server"
+	"cli-tools|reinhardt-web|--no-default-features -F cli-tools"
+	"standard+mysql|reinhardt-web|--no-default-features -F standard,db-mysql"
+	"standard+sqlite|reinhardt-web|--no-default-features -F standard,db-sqlite"
+	"db-cockroachdb|reinhardt-web|--no-default-features -F minimal,db-cockroachdb"
+	"auth-variants|reinhardt-web|--no-default-features -F minimal,auth-jwt,auth-session,auth-oauth,auth-token"
+	"middleware-all|reinhardt-web|--no-default-features -F minimal,middleware-cors,middleware-compression,middleware-security,middleware-rate-limit"
+	"pages-graphql-ws|reinhardt-web|--no-default-features -F minimal,pages,graphql,websockets,database,db-postgres"
+	"auth-db|reinhardt-web|--no-default-features -F minimal,database,db-postgres,auth"
+	"shortcuts-db|reinhardt-web|--no-default-features -F minimal,database,db-postgres,shortcuts"
+	"admin-forms|reinhardt-web|--no-default-features -F minimal,admin,database,db-postgres,auth"
+	"plugins|reinhardt-web|--no-default-features -F minimal,dentdelion,deeplink,dispatch,grpc"
+	"openapi-router|reinhardt-web|--no-default-features -F minimal,openapi-router,database,db-postgres"
+)
+
+for combo in "${combos[@]}"; do
+	IFS='|' read -r name pkg flags <<< "$combo"
+	echo "--- Checking: ${name} ---"
+	cargo check -p "${pkg}" ${flags} --quiet
+	echo "  OK: ${name}"
+done
+
+echo "=== All facade checks passed ==="
+'''
+
+[tasks.feature-check-subcrate]
+description = "Check key sub-crate feature combinations (11 patterns)"
+script_runner = "bash"
+script = '''
+set -e
+echo "=== Feature Check: Sub-Crates ==="
+
+combos=(
+	"core-minimal|reinhardt-core|--no-default-features"
+	"core-full|reinhardt-core|--no-default-features -F core-full"
+	"db-minimal|reinhardt-db|--no-default-features"
+	"db-full|reinhardt-db|--no-default-features -F database-full"
+	"db-no-di|reinhardt-db|--no-default-features -F backends,orm"
+	"auth-minimal|reinhardt-auth|--no-default-features"
+	"auth-full|reinhardt-auth|--no-default-features -F auth-full"
+	"auth-jwt-no-db|reinhardt-auth|--no-default-features -F jwt"
+	"auth-sessions-no-db|reinhardt-auth|--no-default-features -F sessions"
+	"rest-minimal|reinhardt-rest|--no-default-features"
+	"rest-full|reinhardt-rest|--no-default-features -F rest-full"
+)
+
+for combo in "${combos[@]}"; do
+	IFS='|' read -r name pkg flags <<< "$combo"
+	echo "--- Checking: ${name} ---"
+	cargo check -p "${pkg}" ${flags} --quiet
+	echo "  OK: ${name}"
+done
+
+echo "=== All sub-crate checks passed ==="
+'''
+
+[tasks.feature-test-critical]
+description = "Run cargo test for critical feature combinations (4 patterns)"
+script_runner = "bash"
+script = '''
+set -e
+echo "=== Feature Test: Critical Combinations ==="
+
+combos=(
+	"standard|reinhardt-web|"
+	"full|reinhardt-web|--no-default-features -F full"
+	"api-only|reinhardt-web|--no-default-features -F api-only"
+	"admin-forms|reinhardt-web|--no-default-features -F minimal,admin,database,db-postgres,auth"
+)
+
+for combo in "${combos[@]}"; do
+	IFS='|' read -r name pkg flags <<< "$combo"
+	echo "--- Testing: ${name} ---"
+	cargo test -p "${pkg}" ${flags} --lib --quiet
+	echo "  OK: ${name}"
+done
+
+echo "=== All critical feature tests passed ==="
+'''
+
+# ============================================================================
 # CI Tasks
 # ============================================================================
 

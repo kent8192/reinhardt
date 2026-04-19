@@ -336,8 +336,12 @@ impl Middleware for FlatpagesMiddleware {
 			.map(|auth| auth.is_authenticated())
 			.unwrap_or(false);
 
-		// Call handler first
-		let response = handler.handle(request).await?;
+		// Convert errors to responses so post-processing always runs,
+		// even when invoked outside MiddlewareChain. (#3244)
+		let response = match handler.handle(request).await {
+			Ok(resp) => resp,
+			Err(e) => Response::from(e),
+		};
 
 		// Only intercept 404 responses
 		if response.status != StatusCode::NOT_FOUND {

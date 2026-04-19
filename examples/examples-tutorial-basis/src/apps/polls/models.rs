@@ -1,20 +1,20 @@
 use chrono::{DateTime, Utc};
-use reinhardt::core::serde::{Deserialize, Serialize};
 use reinhardt::db::associations::ForeignKeyField;
 use reinhardt::prelude::*;
+use serde::{Deserialize, Serialize};
 
 /// Question model representing a poll question
 #[model(app_label = "polls", table_name = "questions")]
 #[derive(Serialize, Deserialize)]
 pub struct Question {
 	#[field(primary_key = true)]
-	id: i64,
+	pub id: i64,
 
 	#[field(max_length = 200)]
-	question_text: String,
+	pub question_text: String,
 
 	#[field(auto_now_add = true)]
-	pub_date: DateTime<Utc>,
+	pub pub_date: DateTime<Utc>,
 }
 
 impl Question {
@@ -31,17 +31,17 @@ impl Question {
 #[derive(Serialize, Deserialize)]
 pub struct Choice {
 	#[field(primary_key = true)]
-	id: i64,
+	pub id: i64,
 
 	// ⚠️ IMPORTANT: related_name is REQUIRED for #[rel(foreign_key)]
 	#[rel(foreign_key, related_name = "choices")]
-	question: ForeignKeyField<Question>,
+	pub question: ForeignKeyField<Question>,
 
 	#[field(max_length = 200)]
-	choice_text: String,
+	pub choice_text: String,
 
 	#[field(default = 0)]
-	votes: i32,
+	pub votes: i32,
 }
 
 impl Choice {

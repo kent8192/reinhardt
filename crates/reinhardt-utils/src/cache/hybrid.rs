@@ -12,14 +12,14 @@
 //!
 //! # Examples
 //!
-//! ```rust,ignore
-//! use reinhardt_utils::cache::{Cache, HybridCache, InMemoryCache, RedisCache};
+//! ```
+//! use reinhardt_utils::cache::{Cache, HybridCache, InMemoryCache};
 //! use std::time::Duration;
 //!
 //! # async fn example() -> Result<(), Box<dyn std::error::Error>> {
-//! // Create L1 (memory) and L2 (Redis) caches
+//! // Create L1 (memory) and L2 (distributed) caches
 //! let l1_cache = InMemoryCache::new();
-//! let l2_cache = RedisCache::new("redis://localhost:6379").await?;
+//! let l2_cache = InMemoryCache::new(); // In production, use RedisCache or MemcachedCache
 //!
 //! // Create hybrid cache
 //! let cache = HybridCache::new(l1_cache, l2_cache);
@@ -76,15 +76,12 @@ where
 	///
 	/// # Examples
 	///
-	/// ```ignore
-	/// use reinhardt_utils::cache::{HybridCache, InMemoryCache, RedisCache};
+	/// ```
+	/// use reinhardt_utils::cache::{HybridCache, InMemoryCache};
 	///
-	/// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
 	/// let l1 = InMemoryCache::new();
-	/// let l2 = RedisCache::new("redis://localhost:6379").await?;
+	/// let l2 = InMemoryCache::new();
 	/// let cache = HybridCache::new(l1, l2);
-	/// # Ok(())
-	/// # }
 	/// ```
 	pub fn new(l1: L1, l2: L2) -> Self {
 		Self {
@@ -97,12 +94,12 @@ where
 	///
 	/// # Examples
 	///
-	/// ```ignore
-	/// use reinhardt_utils::cache::{Cache, HybridCache, InMemoryCache, RedisCache};
+	/// ```
+	/// use reinhardt_utils::cache::{Cache, HybridCache, InMemoryCache};
 	///
 	/// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
 	/// let l1 = InMemoryCache::new();
-	/// let l2 = RedisCache::new("redis://localhost:6379").await?;
+	/// let l2 = InMemoryCache::new();
 	/// let cache = HybridCache::new(l1, l2);
 	///
 	/// // Clear only L1 cache
@@ -118,12 +115,12 @@ where
 	///
 	/// # Examples
 	///
-	/// ```ignore
-	/// use reinhardt_utils::cache::{Cache, HybridCache, InMemoryCache, RedisCache};
+	/// ```
+	/// use reinhardt_utils::cache::{Cache, HybridCache, InMemoryCache};
 	///
 	/// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
 	/// let l1 = InMemoryCache::new();
-	/// let l2 = RedisCache::new("redis://localhost:6379").await?;
+	/// let l2 = InMemoryCache::new();
 	/// let cache = HybridCache::new(l1, l2);
 	///
 	/// // Clear only L2 cache

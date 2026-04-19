@@ -9,9 +9,23 @@ use crate::injectable_common::{
 	parse_inject_options, parse_no_inject_options,
 };
 use proc_macro2::TokenStream;
-use quote::quote;
+use quote::{format_ident, quote};
 use syn::parse::Parser;
 use syn::{Data, DeriveInput, Fields, Result, Type};
+
+/// Check if `Clone` is already in a `#[derive(...)]` attribute
+fn has_clone_derive(attrs: &[syn::Attribute]) -> bool {
+	attrs.iter().any(|attr| {
+		if !attr.path().is_ident("derive") {
+			return false;
+		}
+		attr.parse_args_with(
+			syn::punctuated::Punctuated::<syn::Path, syn::Token![,]>::parse_terminated,
+		)
+		.map(|paths| paths.iter().any(|p| p.is_ident("Clone")))
+		.unwrap_or(false)
+	})
+}
 
 /// Field information for processing
 struct FieldInfo {
@@ -164,6 +178,11 @@ pub(crate) fn injectable_struct_impl(
 	let generics = &input.generics;
 	let where_clause = &generics.where_clause;
 
+	// Auto-derive Clone for DI-ready types (used by into_inner() and injectable_factory patterns)
+	if !has_clone_derive(&input.attrs) {
+		input.attrs.push(syn::parse_quote!(#[derive(Clone)]));
+	}
+
 	// Prebuilt mode: skip field validation and Injectable impl generation.
 	// The struct is expected to have a manual Injectable impl and to be
 	// manually registered in SingletonScope via set_arc() before resolution.
@@ -272,11 +291,7 @@ pub(crate) fn injectable_struct_impl(
 							if let Some(cached) = __di_ctx.singleton_scope().get::<#ty>() {
 								(*cached).clone()
 							} else {
-								let __injected = if #use_cache {
-									#di_crate::Injected::<#ty>::resolve(__di_ctx).await
-								} else {
-									#di_crate::Injected::<#ty>::resolve_uncached(__di_ctx).await
-								}
+								let __injected = #di_crate::Depends::<#ty>::resolve(__di_ctx, #use_cache).await
 								.map_err(|e| {
 									tracing::debug!(
 										field = stringify!(#name),
@@ -295,11 +310,7 @@ pub(crate) fn injectable_struct_impl(
 				InjectionScope::Request => {
 					quote! {
 						{
-							let __injected = if #use_cache {
-								#di_crate::Injected::<#ty>::resolve(__di_ctx).await
-							} else {
-								#di_crate::Injected::<#ty>::resolve_uncached(__di_ctx).await
-							}
+							let __injected = #di_crate::Depends::<#ty>::resolve(__di_ctx, #use_cache).await
 							.map_err(|e| {
 								tracing::debug!(
 									field = stringify!(#name),
@@ -369,18 +380,29 @@ pub(crate) fn injectable_struct_impl(
 			&format!("__injectable_factory_{}", struct_name),
 			proc_macro2::Span::call_site(),
 		);
+		let register_fn_name = format_ident!("__reinhardt_register_{}", struct_name);
 		quote! {
+			#[allow(non_snake_case)]
 			async fn #factory_fn_name(
 				ctx: ::std::sync::Arc<#di_crate::InjectionContext>,
 			) -> #di_crate::DiResult<#struct_name> {
 				<#struct_name as #di_crate::Injectable>::inject(&ctx).await
 			}
 
+			#[allow(non_snake_case)]
+			fn #register_fn_name(registry: &#di_crate::DependencyRegistry) {
+				registry.register_async::<#struct_name, _, _>(#scope_tokens, #factory_fn_name);
+				registry.register_type_name(
+					::std::any::TypeId::of::<#struct_name>(),
+					#type_name_str,
+				);
+			}
+
 			#di_crate::inventory::submit! {
-				#di_crate::DependencyRegistration::new::<#struct_name, _, _>(
+				#di_crate::DependencyRegistration::new::<#struct_name>(
 					#type_name_str,
 					#scope_tokens,
-					#factory_fn_name
+					#register_fn_name
 				)
 			}
 		}
@@ -568,5 +590,77 @@ mod tests {
 		assert!(result.is_err());
 		let err = result.unwrap_err().to_string();
 		assert!(err.contains("duplicate"));
+	}
+
+	#[test]
+	fn test_injectable_struct_auto_derives_clone() {
+		// Arrange
+		let args = quote! {};
+		let input: DeriveInput = syn::parse2(quote! {
+			#[derive(Default)]
+			struct Foo;
+		})
+		.unwrap();
+
+		// Act
+		let result = injectable_struct_impl(args, input);
+
+		// Assert
+		let output = result.unwrap();
+		let file: syn::File = syn::parse2(output.clone()).expect("output should parse");
+		let item_struct = file
+			.items
+			.iter()
+			.find_map(|item| match item {
+				syn::Item::Struct(s) if s.ident == "Foo" => Some(s),
+				_ => None,
+			})
+			.expect("output should contain struct Foo");
+		assert!(
+			has_clone_derive(&item_struct.attrs),
+			"Output should derive Clone: {output}"
+		);
+	}
+
+	#[test]
+	fn test_injectable_struct_skips_clone_when_already_derived() {
+		// Arrange
+		let args = quote! {};
+		let input: DeriveInput = syn::parse2(quote! {
+			#[derive(Clone, Default)]
+			struct Foo;
+		})
+		.unwrap();
+
+		// Act
+		let result = injectable_struct_impl(args, input);
+
+		// Assert
+		let output = result.unwrap();
+		let file: syn::File = syn::parse2(output.clone()).expect("output should parse");
+		let item_struct = file
+			.items
+			.iter()
+			.find_map(|item| match item {
+				syn::Item::Struct(s) if s.ident == "Foo" => Some(s),
+				_ => None,
+			})
+			.expect("output should contain struct Foo");
+		let clone_count = item_struct
+			.attrs
+			.iter()
+			.filter(|attr| attr.path().is_ident("derive"))
+			.map(|attr| {
+				attr.parse_args_with(
+					syn::punctuated::Punctuated::<syn::Path, syn::Token![,]>::parse_terminated,
+				)
+				.map(|paths| paths.iter().filter(|p| p.is_ident("Clone")).count())
+				.unwrap_or(0)
+			})
+			.sum::<usize>();
+		assert_eq!(
+			clone_count, 1,
+			"Clone should appear exactly once in derive attributes: {output}"
+		);
 	}
 }

@@ -4,11 +4,12 @@
 //! dependencies. It uses the `inventory` crate to collect registrations at compile time
 //! and build a runtime registry that can be queried by type.
 
-use crate::{DiResult, InjectionContext};
+use crate::{DiResult, Injectable, InjectionContext};
 use async_trait::async_trait;
 use dashmap::DashMap;
 use std::any::{Any, TypeId};
 use std::future::Future;
+use std::marker::PhantomData;
 use std::sync::{Arc, OnceLock};
 
 /// Scope for dependency injection
@@ -37,7 +38,7 @@ pub trait FactoryTrait: Send + Sync {
 pub struct AsyncFactory<F, Fut, T>
 where
 	F: Fn(Arc<InjectionContext>) -> Fut + Send + Sync,
-	Fut: Future<Output = DiResult<T>> + Send + Sync,
+	Fut: Future<Output = DiResult<T>> + Send,
 	T: Any + Send + Sync + 'static,
 {
 	factory: F,
@@ -47,7 +48,7 @@ where
 impl<F, Fut, T> AsyncFactory<F, Fut, T>
 where
 	F: Fn(Arc<InjectionContext>) -> Fut + Send + Sync,
-	Fut: Future<Output = DiResult<T>> + Send + Sync,
+	Fut: Future<Output = DiResult<T>> + Send,
 	T: Any + Send + Sync + 'static,
 {
 	/// Creates a new async factory from the given closure.
@@ -63,13 +64,53 @@ where
 impl<F, Fut, T> FactoryTrait for AsyncFactory<F, Fut, T>
 where
 	F: Fn(Arc<InjectionContext>) -> Fut + Send + Sync,
-	Fut: Future<Output = DiResult<T>> + Send + Sync + 'static,
+	Fut: Future<Output = DiResult<T>> + Send + 'static,
 	T: Any + Send + Sync + 'static,
 {
 	async fn create(&self, ctx: &InjectionContext) -> DiResult<Arc<dyn Any + Send + Sync>> {
 		let ctx_arc = Arc::new(ctx.clone());
 		let instance = (self.factory)(ctx_arc).await?;
 		Ok(Arc::new(instance))
+	}
+}
+
+/// Factory that creates instances via the `Injectable` trait.
+///
+/// Bypasses `AsyncFactory`'s `Fut: Sync` bound by implementing `FactoryTrait`
+/// directly. This is necessary because `Injectable::inject` uses `async_trait`,
+/// which returns `Pin<Box<dyn Future + Send>>` (not `Sync`).
+pub struct InjectableFactory<T>(PhantomData<T>);
+
+impl<T> Default for InjectableFactory<T> {
+	fn default() -> Self {
+		Self(PhantomData)
+	}
+}
+
+impl<T> InjectableFactory<T> {
+	/// Create a new `InjectableFactory`.
+	pub fn new() -> Self {
+		Self::default()
+	}
+}
+
+#[async_trait]
+impl<T: Injectable + Any + Send + Sync + 'static> FactoryTrait for InjectableFactory<T> {
+	async fn create(&self, ctx: &InjectionContext) -> DiResult<Arc<dyn Any + Send + Sync>> {
+		// Set task-local resolve context for get_di_context() access.
+		// Since we only have &InjectionContext, clone into Arc (same pattern as AsyncFactory).
+		let ctx_arc = Arc::new(ctx.clone());
+		let resolve_ctx = crate::resolve_context::ResolveContext {
+			root: crate::resolve_context::RESOLVE_CTX
+				.try_with(|outer| Arc::clone(&outer.root))
+				.unwrap_or_else(|_| Arc::clone(&ctx_arc)),
+			current: Arc::clone(&ctx_arc),
+		};
+
+		let value = crate::resolve_context::RESOLVE_CTX
+			.scope(resolve_ctx, T::inject(ctx))
+			.await?;
+		Ok(Arc::new(value))
 	}
 }
 
@@ -87,6 +128,9 @@ pub struct DependencyRegistry {
 	dependencies: DashMap<TypeId, Vec<TypeId>>,
 	/// Maps type ID to its type name for debugging
 	type_names: DashMap<TypeId, &'static str>,
+	/// Maps type ID to its fully-qualified type name from `std::any::type_name`.
+	/// Used for framework type detection (pseudo orphan rule).
+	qualified_type_names: DashMap<TypeId, &'static str>,
 }
 
 impl DependencyRegistry {
@@ -97,16 +141,44 @@ impl DependencyRegistry {
 			scopes: DashMap::new(),
 			dependencies: DashMap::new(),
 			type_names: DashMap::new(),
+			qualified_type_names: DashMap::new(),
 		}
 	}
 
-	/// Register a factory for a type
+	/// Register a factory for a type.
+	///
+	/// # Panics
+	///
+	/// Panics if a factory for the same `TypeId` is already registered.
+	/// This prevents silent overwrites that lead to non-deterministic behavior
+	/// when multiple `#[injectable_factory]` or `#[injectable]` macros produce
+	/// the same return type. See [#3457].
+	///
+	/// To check before registering (e.g. in tests), use
+	/// [`is_registered`](Self::is_registered).
+	///
+	/// [#3457]: https://github.com/kent8192/reinhardt-web/issues/3457
 	pub fn register<T: Any + Send + Sync + 'static>(
 		&self,
 		scope: DependencyScope,
 		factory: impl FactoryTrait + 'static,
 	) {
 		let type_id = TypeId::of::<T>();
+		let type_name = std::any::type_name::<T>();
+		// Check for duplicates before inserting so that no state is mutated on the
+		// error path. This avoids leaving the registry inconsistent if the panic is
+		// caught (e.g. factories pointing to the new registration while scopes still
+		// reflects the old one).
+		if self.factories.contains_key(&type_id) {
+			let short = type_name.rsplit("::").next().unwrap_or(type_name);
+			panic!(
+				"Duplicate DependencyRegistry registration for type `{type_name}`.\n\
+\n\
+Hint: reinhardt DI uses TypeId as the sole registry key. Two factories\n\
+returning the same type will conflict regardless of function name or scope.\n\
+Use a distinct newtype (e.g., `struct Primary{short}({short})`) for each."
+			);
+		}
 		self.factories.insert(type_id, Box::new(factory));
 		self.scopes.insert(type_id, scope);
 	}
@@ -116,7 +188,7 @@ impl DependencyRegistry {
 	where
 		T: Any + Send + Sync + 'static,
 		F: Fn(Arc<InjectionContext>) -> Fut + Send + Sync + 'static,
-		Fut: Future<Output = DiResult<T>> + Send + Sync + 'static,
+		Fut: Future<Output = DiResult<T>> + Send + 'static,
 	{
 		self.register::<T>(scope, AsyncFactory::new(factory));
 	}
@@ -201,15 +273,54 @@ impl DependencyRegistry {
 	/// Register dependencies for a type
 	///
 	/// This is typically called automatically by the registration system.
-	pub(crate) fn register_dependencies(&self, type_id: TypeId, deps: Vec<TypeId>) {
-		self.dependencies.insert(type_id, deps);
+	/// Not intended for direct use; exposed for macro-generated code.
+	#[doc(hidden)]
+	pub fn register_dependencies(&self, type_id: TypeId, deps: impl AsRef<[TypeId]>) {
+		self.dependencies.insert(type_id, deps.as_ref().to_vec());
 	}
 
 	/// Register a type name for debugging
 	///
 	/// This is typically called automatically by the registration system.
-	pub(crate) fn register_type_name(&self, type_id: TypeId, type_name: &'static str) {
+	/// Not intended for direct use; exposed for macro-generated code.
+	#[doc(hidden)]
+	pub fn register_type_name(&self, type_id: TypeId, type_name: &'static str) {
 		self.type_names.insert(type_id, type_name);
+	}
+
+	/// Check if a type is registered by its `TypeId`.
+	pub(crate) fn is_registered_by_id(&self, type_id: TypeId) -> bool {
+		self.factories.contains_key(&type_id)
+	}
+
+	/// Get the scope for a type by its `TypeId`.
+	pub(crate) fn get_scope_by_id(&self, type_id: TypeId) -> Option<DependencyScope> {
+		self.scopes.get(&type_id).map(|entry| *entry.value())
+	}
+
+	/// Get the type name for a `TypeId`.
+	pub(crate) fn get_type_name(&self, type_id: TypeId) -> Option<&'static str> {
+		self.type_names.get(&type_id).map(|entry| *entry.value())
+	}
+
+	/// Register the fully-qualified type name obtained from `std::any::type_name::<T>()`.
+	///
+	/// Used by the pseudo orphan rule to detect framework-managed types.
+	#[doc(hidden)]
+	pub fn register_qualified_type_name(&self, type_id: TypeId, qualified_name: &'static str) {
+		self.qualified_type_names.insert(type_id, qualified_name);
+	}
+
+	/// Get the fully-qualified type name for a given `TypeId`.
+	pub fn get_qualified_type_name(&self, type_id: &TypeId) -> Option<&'static str> {
+		self.qualified_type_names.get(type_id).map(|r| *r.value())
+	}
+
+	/// Iterate over all qualified type name mappings without allocating a new map.
+	pub fn iter_qualified_type_names(&self) -> impl Iterator<Item = (TypeId, &'static str)> + '_ {
+		self.qualified_type_names
+			.iter()
+			.map(|entry| (*entry.key(), *entry.value()))
 	}
 }
 
@@ -261,60 +372,36 @@ pub struct DependencyRegistration {
 	/// The scope (request or singleton) for this dependency.
 	pub scope: DependencyScope,
 	/// Direct dependencies of this type.
-	pub dependencies: Vec<TypeId>,
+	pub dependencies: &'static [TypeId],
 	/// A function that registers this dependency's factory with the registry.
-	pub register_fn: Box<dyn Fn(&DependencyRegistry) + Send + Sync>,
+	pub register_fn: fn(&DependencyRegistry),
 }
 
 impl DependencyRegistration {
 	/// Create a new registration entry
-	pub fn new<T, F, Fut>(type_name: &'static str, scope: DependencyScope, factory: F) -> Self
-	where
-		T: Any + Send + Sync + 'static,
-		F: Fn(Arc<InjectionContext>) -> Fut + Send + Sync + 'static + Clone,
-		Fut: Future<Output = DiResult<T>> + Send + Sync + 'static,
-	{
-		let type_id = TypeId::of::<T>();
-		let register_fn = Box::new(move |registry: &DependencyRegistry| {
-			let factory = factory.clone();
-			registry.register_async::<T, _, _>(scope, factory);
-			// Register type name for debugging
-			registry.register_type_name(type_id, type_name);
-		});
-
+	pub const fn new<T: Send + Sync + 'static>(
+		type_name: &'static str,
+		scope: DependencyScope,
+		register_fn: fn(&DependencyRegistry),
+	) -> Self {
 		Self {
-			type_id,
+			type_id: TypeId::of::<T>(),
 			type_name,
 			scope,
-			dependencies: Vec::new(), // Dependencies will be populated by macros in the future
+			dependencies: &[],
 			register_fn,
 		}
 	}
 
 	/// Create a new registration entry with explicit dependencies
-	pub fn new_with_deps<T, F, Fut>(
+	pub const fn new_with_deps<T: Send + Sync + 'static>(
 		type_name: &'static str,
 		scope: DependencyScope,
-		dependencies: Vec<TypeId>,
-		factory: F,
-	) -> Self
-	where
-		T: Any + Send + Sync + 'static,
-		F: Fn(Arc<InjectionContext>) -> Fut + Send + Sync + 'static + Clone,
-		Fut: Future<Output = DiResult<T>> + Send + Sync + 'static,
-	{
-		let type_id = TypeId::of::<T>();
-		let deps_clone = dependencies.clone();
-		let register_fn = Box::new(move |registry: &DependencyRegistry| {
-			let factory = factory.clone();
-			registry.register_async::<T, _, _>(scope, factory);
-			// Register type name and dependencies
-			registry.register_type_name(type_id, type_name);
-			registry.register_dependencies(type_id, deps_clone.clone());
-		});
-
+		dependencies: &'static [TypeId],
+		register_fn: fn(&DependencyRegistry),
+	) -> Self {
 		Self {
-			type_id,
+			type_id: TypeId::of::<T>(),
 			type_name,
 			scope,
 			dependencies,
@@ -326,9 +413,31 @@ impl DependencyRegistration {
 // Collect all dependency registrations at compile time
 inventory::collect!(DependencyRegistration);
 
+/// Const-constructible registration entry for `#[injectable]` structs with `#[scope]`.
+///
+/// Unlike `DependencyRegistration` which uses `Box<dyn Fn>` (non-const),
+/// this struct stores a plain function pointer so it can be used in
+/// `inventory::submit!` which requires const-evaluable expressions.
+pub struct InjectableRegistration {
+	/// A function that registers this type's factory with the registry.
+	pub register_fn: fn(&DependencyRegistry),
+}
+
+impl InjectableRegistration {
+	/// Create a new `InjectableRegistration` with a function pointer.
+	pub const fn new(register_fn: fn(&DependencyRegistry)) -> Self {
+		Self { register_fn }
+	}
+}
+
+inventory::collect!(InjectableRegistration);
+
 /// Initialize the registry with all collected registrations
 fn initialize_registry(registry: &DependencyRegistry) {
 	for registration in inventory::iter::<DependencyRegistration> {
+		(registration.register_fn)(registry);
+	}
+	for registration in inventory::iter::<InjectableRegistration> {
 		(registration.register_fn)(registry);
 	}
 }
@@ -349,12 +458,14 @@ macro_rules! submit_registration {
 mod tests {
 	use super::*;
 	use crate::scope::SingletonScope;
+	use rstest::*;
 
 	#[derive(Clone)]
 	struct TestService {
 		value: i32,
 	}
 
+	#[rstest]
 	#[tokio::test]
 	async fn test_registry_basic() {
 		let registry = DependencyRegistry::new();
@@ -376,6 +487,7 @@ mod tests {
 		assert_eq!(service.value, 42);
 	}
 
+	#[rstest]
 	#[tokio::test]
 	async fn test_registry_not_registered() {
 		let registry = DependencyRegistry::new();
@@ -384,5 +496,61 @@ mod tests {
 
 		let result = registry.create::<TestService>(&ctx).await;
 		assert!(result.is_err());
+	}
+
+	// Fixes #3457
+	#[rstest]
+	fn test_duplicate_registration_panics() {
+		let registry = DependencyRegistry::new();
+
+		registry.register_async::<TestService, _, _>(DependencyScope::Singleton, |_ctx| async {
+			Ok(TestService { value: 1 })
+		});
+
+		// Act
+		let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+			registry.register_async::<TestService, _, _>(DependencyScope::Request, |_ctx| async {
+				Ok(TestService { value: 2 })
+			});
+		}));
+
+		// Assert
+		let err = result.expect_err("expected panic on duplicate registration");
+		let msg = err
+			.downcast_ref::<String>()
+			.map(|s| s.as_str())
+			.or_else(|| err.downcast_ref::<&str>().copied())
+			.expect("panic payload should be a string");
+		assert!(
+			msg.contains("Duplicate DependencyRegistry registration"),
+			"missing duplicate prefix: {msg}"
+		);
+		assert!(
+			msg.contains("TestService"),
+			"missing type name in panic message: {msg}"
+		);
+		assert!(
+			msg.contains("newtype"),
+			"missing newtype hint in panic message: {msg}"
+		);
+	}
+
+	// Fixes #3457 — is_registered guard prevents panic (test helper pattern)
+	#[rstest]
+	fn test_is_registered_guard_allows_skip() {
+		let registry = DependencyRegistry::new();
+
+		registry.register_async::<TestService, _, _>(DependencyScope::Singleton, |_ctx| async {
+			Ok(TestService { value: 1 })
+		});
+
+		// Second registration guarded — no panic
+		if !registry.is_registered::<TestService>() {
+			registry.register_async::<TestService, _, _>(DependencyScope::Request, |_ctx| async {
+				Ok(TestService { value: 2 })
+			});
+		}
+
+		assert!(registry.is_registered::<TestService>());
 	}
 }

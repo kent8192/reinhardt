@@ -82,11 +82,11 @@ mod into_value_tests {
 
 	#[rstest]
 	fn test_float_into_value() {
-		let f32_val: Value = 3.14f32.into_value();
-		assert!(matches!(f32_val, Value::Float(Some(v)) if (v - 3.14).abs() < 0.001));
+		let f32_val: Value = 2.78f32.into_value();
+		assert!(matches!(f32_val, Value::Float(Some(v)) if (v - 2.78).abs() < 0.001));
 
-		let f64_val: Value = 3.14159f64.into_value();
-		assert!(matches!(f64_val, Value::Double(Some(v)) if (v - 3.14159).abs() < 0.00001));
+		let f64_val: Value = 2.78159f64.into_value();
+		assert!(matches!(f64_val, Value::Double(Some(v)) if (v - 2.78159).abs() < 0.00001));
 	}
 
 	#[rstest]

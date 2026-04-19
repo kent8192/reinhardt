@@ -8,6 +8,7 @@
 pub mod common;
 pub mod features;
 pub mod layout;
+pub mod login;
 
 // Re-exports
 pub use common::*;

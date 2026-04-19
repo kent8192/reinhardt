@@ -19,12 +19,12 @@ pub(crate) struct CratePathInfo {
 /// Resolves the path to the reinhardt_pages crate dynamically.
 ///
 /// Since proc macros cannot detect the target architecture at runtime (they run on the host),
-/// this function generates conditional code using `#[cfg(target_arch = "wasm32")]` that the
+/// this function generates conditional code using `#[cfg(all(target_family = "wasm", target_os = "unknown"))]` that the
 /// Rust compiler will select at compile time.
 ///
 /// # Strategy
 ///
-/// 1. Internal crate usage (`Itself`): Use `crate` directly (no conditional needed)
+/// 1. Internal crate usage (`Itself`): Use `::reinhardt_pages` absolute path (doc test compatible)
 /// 2. Both `reinhardt` and `reinhardt-pages` are dependencies: Generate conditional code
 ///    - WASM: `use ::reinhardt_pages`
 ///    - Server: `use ::reinhardt::pages`
@@ -34,12 +34,15 @@ pub(crate) struct CratePathInfo {
 pub(crate) fn get_reinhardt_pages_crate_info() -> CratePathInfo {
 	use proc_macro_crate::{FoundCrate, crate_name};
 
-	// Check for internal crate usage first
+	// Check for internal crate usage first.
+	// Use absolute path `::reinhardt_pages` instead of `crate` for doc test compatibility.
+	// In doc tests, `crate` refers to the test binary, not `reinhardt_pages`.
+	// The target crate must have `extern crate self as reinhardt_pages;` for this to work.
 	if let Ok(FoundCrate::Itself) = crate_name("reinhardt-pages") {
 		return CratePathInfo {
 			needs_conditional: false,
 			use_statement: quote!(),
-			ident: quote!(crate),
+			ident: quote!(::reinhardt_pages),
 		};
 	}
 
@@ -54,9 +57,9 @@ pub(crate) fn get_reinhardt_pages_crate_info() -> CratePathInfo {
 		return CratePathInfo {
 			needs_conditional: true,
 			use_statement: quote! {
-				#[cfg(target_arch = "wasm32")]
+				#[cfg(all(target_family = "wasm", target_os = "unknown"))]
 				use ::reinhardt_pages as __reinhardt_pages;
-				#[cfg(not(target_arch = "wasm32"))]
+				#[cfg(not(all(target_family = "wasm", target_os = "unknown")))]
 				use ::reinhardt::pages as __reinhardt_pages;
 			},
 			ident: quote!(__reinhardt_pages),
@@ -120,7 +123,7 @@ pub(crate) fn get_reinhardt_di_crate() -> TokenStream {
 
 	// Try via reinhardt crate first (prioritized to avoid conditional dependency issues)
 	match crate_name("reinhardt") {
-		Ok(FoundCrate::Itself) => return quote!(crate::reinhardt_di),
+		Ok(FoundCrate::Itself) => return quote!(::reinhardt::reinhardt_di),
 		Ok(FoundCrate::Name(name)) => {
 			let ident = syn::Ident::new(&name, proc_macro2::Span::call_site());
 			return quote!(::#ident::reinhardt_di);
@@ -130,7 +133,7 @@ pub(crate) fn get_reinhardt_di_crate() -> TokenStream {
 
 	// Try via reinhardt-web (published package name)
 	match crate_name("reinhardt-web") {
-		Ok(FoundCrate::Itself) => return quote!(crate::reinhardt_di),
+		Ok(FoundCrate::Itself) => return quote!(::reinhardt::reinhardt_di),
 		Ok(FoundCrate::Name(name)) => {
 			let ident = syn::Ident::new(&name, proc_macro2::Span::call_site());
 			return quote!(::#ident::reinhardt_di);
@@ -140,7 +143,7 @@ pub(crate) fn get_reinhardt_di_crate() -> TokenStream {
 
 	// Try direct crate (for internal usage within reinhardt-di crate)
 	match crate_name("reinhardt-di") {
-		Ok(FoundCrate::Itself) => return quote!(crate),
+		Ok(FoundCrate::Itself) => return quote!(::reinhardt_di),
 		Ok(FoundCrate::Name(name)) => {
 			let ident = syn::Ident::new(&name, proc_macro2::Span::call_site());
 			return quote!(::#ident);
@@ -161,7 +164,7 @@ pub(crate) fn get_reinhardt_http_crate() -> TokenStream {
 
 	// Try via reinhardt crate first (prioritized to avoid conditional dependency issues)
 	match crate_name("reinhardt") {
-		Ok(FoundCrate::Itself) => return quote!(crate::reinhardt_http),
+		Ok(FoundCrate::Itself) => return quote!(::reinhardt::reinhardt_http),
 		Ok(FoundCrate::Name(name)) => {
 			let ident = syn::Ident::new(&name, proc_macro2::Span::call_site());
 			return quote!(::#ident::reinhardt_http);
@@ -171,7 +174,7 @@ pub(crate) fn get_reinhardt_http_crate() -> TokenStream {
 
 	// Try via reinhardt-web (published package name)
 	match crate_name("reinhardt-web") {
-		Ok(FoundCrate::Itself) => return quote!(crate::reinhardt_http),
+		Ok(FoundCrate::Itself) => return quote!(::reinhardt::reinhardt_http),
 		Ok(FoundCrate::Name(name)) => {
 			let ident = syn::Ident::new(&name, proc_macro2::Span::call_site());
 			return quote!(::#ident::reinhardt_http);
@@ -181,7 +184,7 @@ pub(crate) fn get_reinhardt_http_crate() -> TokenStream {
 
 	// Try direct crate (for internal usage within reinhardt-http crate)
 	match crate_name("reinhardt-http") {
-		Ok(FoundCrate::Itself) => return quote!(crate),
+		Ok(FoundCrate::Itself) => return quote!(::reinhardt_http),
 		Ok(FoundCrate::Name(name)) => {
 			let ident = syn::Ident::new(&name, proc_macro2::Span::call_site());
 			return quote!(::#ident);
@@ -199,7 +202,7 @@ pub(crate) fn get_reinhardt_core_crate() -> TokenStream {
 
 	// Try via reinhardt crate first
 	match crate_name("reinhardt") {
-		Ok(FoundCrate::Itself) => return quote!(crate::reinhardt_core),
+		Ok(FoundCrate::Itself) => return quote!(::reinhardt::reinhardt_core),
 		Ok(FoundCrate::Name(name)) => {
 			let ident = syn::Ident::new(&name, proc_macro2::Span::call_site());
 			return quote!(::#ident::reinhardt_core);
@@ -209,7 +212,7 @@ pub(crate) fn get_reinhardt_core_crate() -> TokenStream {
 
 	// Try via reinhardt-web (published package name)
 	match crate_name("reinhardt-web") {
-		Ok(FoundCrate::Itself) => return quote!(crate::reinhardt_core),
+		Ok(FoundCrate::Itself) => return quote!(::reinhardt::reinhardt_core),
 		Ok(FoundCrate::Name(name)) => {
 			let ident = syn::Ident::new(&name, proc_macro2::Span::call_site());
 			return quote!(::#ident::reinhardt_core);
@@ -219,7 +222,7 @@ pub(crate) fn get_reinhardt_core_crate() -> TokenStream {
 
 	// Try direct crate
 	match crate_name("reinhardt-core") {
-		Ok(FoundCrate::Itself) => return quote!(crate),
+		Ok(FoundCrate::Itself) => return quote!(::reinhardt_core),
 		Ok(FoundCrate::Name(name)) => {
 			let ident = syn::Ident::new(&name, proc_macro2::Span::call_site());
 			return quote!(::#ident);

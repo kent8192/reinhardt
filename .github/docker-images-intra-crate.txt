@@ -7,6 +7,13 @@ postgres:17-alpine
 
 # Cache/Key-Value Stores
 redis:7-alpine
+memcached:1.6-alpine
 
 # Message Queues
 rabbitmq:3-management-alpine
+
+# Email Testing
+axllent/mailpit:latest
+
+# Headless Browser (E2E CDP tests)
+chromedp/headless-shell:latest

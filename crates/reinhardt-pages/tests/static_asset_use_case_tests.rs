@@ -1,8 +1,9 @@
+#![cfg(not(target_arch = "wasm32"))]
 //! Use case tests for static asset URL resolution
 //!
 //! These tests verify real-world scenarios and integration patterns.
 
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(native)]
 mod use_case_tests {
 	use reinhardt_pages::static_resolver::{init_static_resolver, resolve_static};
 	use reinhardt_utils::staticfiles::TemplateStaticConfig;
@@ -189,7 +190,7 @@ mod use_case_tests {
 	}
 }
 
-#[cfg(target_arch = "wasm32")]
+#[cfg(wasm)]
 mod wasm_use_case_tests {
 	use reinhardt_pages::static_resolver::{init_static_resolver, resolve_static};
 	use wasm_bindgen_test::*;

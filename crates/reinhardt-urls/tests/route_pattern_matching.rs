@@ -97,7 +97,7 @@ fn path_pattern_too_many_segments_is_error() {
 #[case("abc", false)]
 fn type_int_matching(#[case] value: &str, #[case] should_match: bool) {
 	// Arrange
-	let pattern = PathPattern::new(&format!("/items/{{<int:id>}}/")).unwrap();
+	let pattern = PathPattern::new("/items/{<int:id>}/".to_string()).unwrap();
 	let path = format!("/items/{}/", value);
 
 	// Act
@@ -122,7 +122,7 @@ fn type_int_matching(#[case] value: &str, #[case] should_match: bool) {
 #[case("hello/world", false)]
 fn type_str_matching(#[case] value: &str, #[case] should_match: bool) {
 	// Arrange
-	let pattern = PathPattern::new(&format!("/items/{{<str:name>}}/")).unwrap();
+	let pattern = PathPattern::new("/items/{<str:name>}/".to_string()).unwrap();
 	let path = format!("/items/{}/", value);
 
 	// Act
@@ -148,7 +148,7 @@ fn type_str_matching(#[case] value: &str, #[case] should_match: bool) {
 #[case("550e8400e29b41d4a716446655440000", false)]
 fn type_uuid_matching(#[case] value: &str, #[case] should_match: bool) {
 	// Arrange
-	let pattern = PathPattern::new(&format!("/items/{{<uuid:id>}}/")).unwrap();
+	let pattern = PathPattern::new("/items/{<uuid:id>}/".to_string()).unwrap();
 	let path = format!("/items/{}/", value);
 
 	// Act
@@ -175,7 +175,7 @@ fn type_uuid_matching(#[case] value: &str, #[case] should_match: bool) {
 #[case("-leading-dash", false)]
 fn type_slug_matching(#[case] value: &str, #[case] should_match: bool) {
 	// Arrange
-	let pattern = PathPattern::new(&format!("/items/{{<slug:name>}}/")).unwrap();
+	let pattern = PathPattern::new("/items/{<slug:name>}/".to_string()).unwrap();
 	let path = format!("/items/{}/", value);
 
 	// Act
@@ -203,7 +203,7 @@ fn type_slug_matching(#[case] value: &str, #[case] should_match: bool) {
 #[case("True", false)]
 fn type_bool_matching(#[case] value: &str, #[case] should_match: bool) {
 	// Arrange
-	let pattern = PathPattern::new(&format!("/items/{{<bool:flag>}}/")).unwrap();
+	let pattern = PathPattern::new("/items/{<bool:flag>}/".to_string()).unwrap();
 	let path = format!("/items/{}/", value);
 
 	// Act
@@ -229,7 +229,7 @@ fn type_bool_matching(#[case] value: &str, #[case] should_match: bool) {
 #[case("2024/01/15", false)]
 fn type_date_matching(#[case] value: &str, #[case] should_match: bool) {
 	// Arrange
-	let pattern = PathPattern::new(&format!("/items/{{<date:d>}}/")).unwrap();
+	let pattern = PathPattern::new("/items/{<date:d>}/".to_string()).unwrap();
 	let path = format!("/items/{}/", value);
 
 	// Act
@@ -255,7 +255,7 @@ fn type_date_matching(#[case] value: &str, #[case] should_match: bool) {
 #[case("user@", false)]
 fn type_email_matching(#[case] value: &str, #[case] should_match: bool) {
 	// Arrange
-	let pattern = PathPattern::new(&format!("/items/{{<email:addr>}}/")).unwrap();
+	let pattern = PathPattern::new("/items/{<email:addr>}/".to_string()).unwrap();
 	let path = format!("/items/{}/", value);
 
 	// Act
@@ -289,7 +289,7 @@ fn type_signed_integers_matching(
 	#[case] should_match: bool,
 ) {
 	// Arrange
-	let pattern = PathPattern::new(&format!("/items/{{<{}:n>}}/", type_name)).unwrap();
+	let pattern = PathPattern::new(format!("/items/{{<{}:n>}}/", type_name)).unwrap();
 	let path = format!("/items/{}/", value);
 
 	// Act
@@ -321,7 +321,7 @@ fn type_unsigned_integers_matching(
 	#[case] should_match: bool,
 ) {
 	// Arrange
-	let pattern = PathPattern::new(&format!("/items/{{<{}:n>}}/", type_name)).unwrap();
+	let pattern = PathPattern::new(format!("/items/{{<{}:n>}}/", type_name)).unwrap();
 	let path = format!("/items/{}/", value);
 
 	// Act
@@ -349,7 +349,7 @@ fn type_unsigned_integers_matching(
 #[case("f64", "1.2.3", false)]
 fn type_float_matching(#[case] type_name: &str, #[case] value: &str, #[case] should_match: bool) {
 	// Arrange
-	let pattern = PathPattern::new(&format!("/items/{{<{}:n>}}/", type_name)).unwrap();
+	let pattern = PathPattern::new(format!("/items/{{<{}:n>}}/", type_name)).unwrap();
 	let path = format!("/items/{}/", value);
 
 	// Act

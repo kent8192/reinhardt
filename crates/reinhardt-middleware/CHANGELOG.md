@@ -7,6 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.0-rc.15](https://github.com/kent8192/reinhardt-web/compare/reinhardt-middleware@v0.1.0-rc.14...reinhardt-middleware@v0.1.0-rc.15) - 2026-03-29
+
+### Added
+
+- *(middleware)* add exempt_paths to CspConfig for path-based CSP bypass
+
+### Documentation
+
+- fix stale doc comments in middleware, admin, apps, and core crates
+
+### Fixed
+
+- suppress deprecated User trait warnings in downstream crates
+
+### Other
+
+- resolve conflict with main (CSRF cookie tests)
+
 ## [0.1.0-rc.14](https://github.com/kent8192/reinhardt-web/compare/reinhardt-middleware@v0.1.0-rc.13...reinhardt-middleware@v0.1.0-rc.14) - 2026-03-24
 
 ### Fixed

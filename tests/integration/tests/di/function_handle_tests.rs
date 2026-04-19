@@ -28,7 +28,7 @@ fn function_handle_stores_function(singleton_scope: Arc<reinhardt_di::SingletonS
 	let handle = ctx.dependency(create_test_string);
 
 	// Assert
-	assert_eq!(handle.func_ptr(), create_test_string as usize);
+	assert_eq!(handle.func_ptr(), create_test_string as *const () as usize);
 }
 
 #[rstest]

@@ -34,7 +34,7 @@
 
 use std::sync::Arc;
 
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(native)]
 use reinhardt_di::{InjectionContext, SingletonScope};
 
 /// Builder for creating test DI contexts for server function testing.
@@ -46,7 +46,7 @@ use reinhardt_di::{InjectionContext, SingletonScope};
 ///
 /// The builder tracks whether required dependencies have been set
 /// through its state, ensuring a complete test context at compile time.
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(native)]
 // Boxed closures for DI overrides require complex type signatures that cannot
 // be simplified without losing flexibility.
 #[allow(clippy::type_complexity)]
@@ -55,7 +55,7 @@ pub struct ServerFnTestContext {
 	overrides: Vec<Box<dyn FnOnce(&InjectionContext)>>,
 }
 
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(native)]
 impl ServerFnTestContext {
 	/// Create a new server function test context builder.
 	///
@@ -184,7 +184,7 @@ impl ServerFnTestContext {
 ///
 /// Server functions marked with `#[server_fn]` can implement this trait
 /// to enable direct testing without HTTP layer overhead.
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(native)]
 #[async_trait::async_trait]
 pub trait ServerFnTestable {
 	/// The input type for the server function
@@ -218,7 +218,7 @@ pub trait ServerFnTestable {
 /// Marker struct for test-specific session data.
 ///
 /// This can be used to create test sessions with predefined values.
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(native)]
 #[derive(Debug, Clone, Default)]
 pub struct TestSessionData {
 	/// User ID stored in session (if authenticated)
@@ -227,7 +227,7 @@ pub struct TestSessionData {
 	pub extra_data: std::collections::HashMap<String, String>,
 }
 
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(native)]
 impl TestSessionData {
 	/// Create a new empty test session
 	pub fn new() -> Self {
@@ -253,7 +253,7 @@ impl TestSessionData {
 mod tests {
 	use super::*;
 
-	#[cfg(not(target_arch = "wasm32"))]
+	#[cfg(native)]
 	#[test]
 	fn test_server_fn_test_context_creation() {
 		let singleton = Arc::new(SingletonScope::new());
@@ -264,19 +264,19 @@ mod tests {
 		let _scope = ctx.singleton_scope();
 	}
 
-	#[cfg(not(target_arch = "wasm32"))]
+	#[cfg(native)]
 	#[test]
 	fn test_test_session_data_creation() {
 		let session = TestSessionData::new();
 		assert!(session.user_id.is_none());
 		assert!(session.extra_data.is_empty());
 
-		let user_id = uuid::Uuid::new_v4();
+		let user_id = uuid::Uuid::now_v7();
 		let session_with_user = TestSessionData::with_user(user_id);
 		assert_eq!(session_with_user.user_id, Some(user_id));
 	}
 
-	#[cfg(not(target_arch = "wasm32"))]
+	#[cfg(native)]
 	#[test]
 	fn test_test_session_data_with_extra_data() {
 		let session = TestSessionData::new()

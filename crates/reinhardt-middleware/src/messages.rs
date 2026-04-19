@@ -310,8 +310,12 @@ impl Middleware for MessageMiddleware {
 	async fn process(&self, request: Request, handler: Arc<dyn Handler>) -> Result<Response> {
 		let _session_id = Self::get_session_id(&request);
 
-		// Process the request
-		let response = handler.handle(request).await?;
+		// Convert errors to responses so post-processing always runs,
+		// even when invoked outside MiddlewareChain. (#3244)
+		let response = match handler.handle(request).await {
+			Ok(resp) => resp,
+			Err(e) => Response::from(e),
+		};
 
 		// Messages are stored in the storage and can be retrieved by handlers
 		// In a complete implementation, we'd add messages to the response or template context

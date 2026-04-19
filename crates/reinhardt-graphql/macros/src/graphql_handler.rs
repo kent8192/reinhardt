@@ -219,7 +219,7 @@ pub(crate) fn expand_graphql_handler(input: ItemFn) -> Result<TokenStream> {
 
 			if use_cache {
 				quote! {
-					let #pat: #ty = #di_crate::Injected::<#ty>::resolve(&__di_ctx)
+					let #pat: #ty = #di_crate::Depends::<#ty>::resolve(&__di_ctx, true)
 						.await
 						.map_err(|e| ::async_graphql::Error::new(
 							format!("Dependency injection failed for {}: {:?}", stringify!(#ty), e)
@@ -228,7 +228,7 @@ pub(crate) fn expand_graphql_handler(input: ItemFn) -> Result<TokenStream> {
 				}
 			} else {
 				quote! {
-					let #pat: #ty = #di_crate::Injected::<#ty>::resolve_uncached(&__di_ctx)
+					let #pat: #ty = #di_crate::Depends::<#ty>::resolve(&__di_ctx, false)
 						.await
 						.map_err(|e| ::async_graphql::Error::new(
 							format!("Dependency injection failed for {}: {:?}", stringify!(#ty), e)

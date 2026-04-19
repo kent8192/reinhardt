@@ -7,10 +7,10 @@ use super::server_fn_helpers::server_fn_context;
 use reinhardt_admin::core::ExportFormat;
 use reinhardt_admin::core::{AdminDatabase, AdminSite};
 use reinhardt_admin::server::export_data;
+use reinhardt_di::Depends;
 use rstest::*;
 use serde_json::json;
 use std::collections::HashMap;
-use std::sync::Arc;
 
 use super::server_fn_helpers::{make_auth_user, make_staff_request};
 
@@ -20,7 +20,7 @@ use super::server_fn_helpers::{make_auth_user, make_staff_request};
 #[rstest]
 #[tokio::test]
 async fn test_export_json_happy_path(
-	#[future] server_fn_context: (Arc<AdminSite>, Arc<AdminDatabase>),
+	#[future] server_fn_context: (Depends<AdminSite>, Depends<AdminDatabase>),
 ) {
 	// Arrange
 	let (site, db) = server_fn_context.await;
@@ -54,15 +54,14 @@ async fn test_export_json_happy_path(
 	assert!(!response.truncated, "Small export should not be truncated");
 }
 
-/// Verify CSV export returns a serialization error for HashMap-based AdminRecord.
+/// Verify CSV export succeeds for HashMap-based AdminRecord.
 ///
-/// The csv crate does not support serializing maps (HashMap), so CSV export
-/// of AdminRecord is expected to fail with a serialization error.
-/// This documents the current limitation.
+/// The `serialize_delimited` function uses `write_record` to serialize
+/// records as ordered column values, avoiding the csv crate's map limitation.
 #[rstest]
 #[tokio::test]
-async fn test_export_csv_returns_serialization_error(
-	#[future] server_fn_context: (Arc<AdminSite>, Arc<AdminDatabase>),
+async fn test_export_csv_succeeds(
+	#[future] server_fn_context: (Depends<AdminSite>, Depends<AdminDatabase>),
 ) {
 	// Arrange
 	let (site, db) = server_fn_context.await;
@@ -87,26 +86,24 @@ async fn test_export_csv_returns_serialization_error(
 	)
 	.await;
 
-	// Assert - CSV serialization of HashMap is not supported by the csv crate
+	// Assert
+	let response = result.expect("CSV export should succeed");
 	assert!(
-		result.is_err(),
-		"CSV export of HashMap-based records should return serialization error"
+		!response.data.is_empty(),
+		"CSV export data should not be empty"
 	);
-	let err = format!("{}", result.unwrap_err());
-	assert!(
-		err.contains("serializ") || err.contains("CSV"),
-		"Error should be CSV serialization related: {}",
-		err
-	);
+	assert_eq!(response.content_type, "text/csv");
+	assert!(response.filename.ends_with(".csv"));
 }
 
-/// Verify TSV export returns a serialization error for HashMap-based AdminRecord.
+/// Verify TSV export succeeds for HashMap-based AdminRecord.
 ///
-/// Same limitation as CSV: the csv crate does not support serializing maps.
+/// The `serialize_delimited` function uses `write_record` to serialize
+/// records as ordered column values, avoiding the csv crate's map limitation.
 #[rstest]
 #[tokio::test]
-async fn test_export_tsv_returns_serialization_error(
-	#[future] server_fn_context: (Arc<AdminSite>, Arc<AdminDatabase>),
+async fn test_export_tsv_succeeds(
+	#[future] server_fn_context: (Depends<AdminSite>, Depends<AdminDatabase>),
 ) {
 	// Arrange
 	let (site, db) = server_fn_context.await;
@@ -131,17 +128,14 @@ async fn test_export_tsv_returns_serialization_error(
 	)
 	.await;
 
-	// Assert - TSV serialization of HashMap is not supported by the csv crate
+	// Assert
+	let response = result.expect("TSV export should succeed");
 	assert!(
-		result.is_err(),
-		"TSV export of HashMap-based records should return serialization error"
+		!response.data.is_empty(),
+		"TSV export data should not be empty"
 	);
-	let err = format!("{}", result.unwrap_err());
-	assert!(
-		err.contains("serializ") || err.contains("TSV"),
-		"Error should be TSV serialization related: {}",
-		err
-	);
+	assert_eq!(response.content_type, "text/tab-separated-values");
+	assert!(response.filename.ends_with(".tsv"));
 }
 
 // ==================== Boundary tests ====================
@@ -150,7 +144,7 @@ async fn test_export_tsv_returns_serialization_error(
 #[rstest]
 #[tokio::test]
 async fn test_export_truncation_flag(
-	#[future] server_fn_context: (Arc<AdminSite>, Arc<AdminDatabase>),
+	#[future] server_fn_context: (Depends<AdminSite>, Depends<AdminDatabase>),
 ) {
 	// Arrange
 	let (site, db) = server_fn_context.await;
@@ -183,7 +177,7 @@ async fn test_export_truncation_flag(
 #[rstest]
 #[tokio::test]
 async fn test_export_empty_table(
-	#[future] server_fn_context: (Arc<AdminSite>, Arc<AdminDatabase>),
+	#[future] server_fn_context: (Depends<AdminSite>, Depends<AdminDatabase>),
 ) {
 	// Arrange
 	let (site, db) = server_fn_context.await;
@@ -216,7 +210,7 @@ async fn test_export_empty_table(
 #[rstest]
 #[tokio::test]
 async fn test_export_json_content_type(
-	#[future] server_fn_context: (Arc<AdminSite>, Arc<AdminDatabase>),
+	#[future] server_fn_context: (Depends<AdminSite>, Depends<AdminDatabase>),
 ) {
 	// Arrange
 	let (site, db) = server_fn_context.await;
@@ -245,7 +239,7 @@ async fn test_export_json_content_type(
 #[rstest]
 #[tokio::test]
 async fn test_export_model_not_registered(
-	#[future] server_fn_context: (Arc<AdminSite>, Arc<AdminDatabase>),
+	#[future] server_fn_context: (Depends<AdminSite>, Depends<AdminDatabase>),
 ) {
 	// Arrange
 	let (site, db) = server_fn_context.await;

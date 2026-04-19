@@ -1,21 +1,32 @@
 //! Media settings fragment
 //!
-//! Provides composable media file serving configuration as a [`SettingsFragment`].
+//! Provides composable media file serving configuration as a [`SettingsFragment`](crate::settings::fragment::SettingsFragment).
 
-use super::fragment::{HasSettings, SettingsFragment};
+use reinhardt_core::macros::settings;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
 /// Media files configuration fragment.
 ///
 /// Controls the URL prefix and root directory for user-uploaded media files.
+#[settings(fragment = true, section = "media")]
 #[non_exhaustive]
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct MediaSettings {
 	/// URL prefix for serving user-uploaded media files (e.g., `"/media/"`).
+	#[serde(default = "default_media_url")]
 	pub url: String,
 	/// Root directory for user-uploaded media files.
+	#[serde(default = "default_media_root")]
 	pub root: PathBuf,
+}
+
+fn default_media_url() -> String {
+	"/media/".to_string()
+}
+
+fn default_media_root() -> PathBuf {
+	PathBuf::from("media")
 }
 
 impl Default for MediaSettings {
@@ -27,29 +38,10 @@ impl Default for MediaSettings {
 	}
 }
 
-impl SettingsFragment for MediaSettings {
-	type Accessor = dyn HasMediaSettings;
-
-	fn section() -> &'static str {
-		"media"
-	}
-}
-
-/// Trait for settings containers that include media configuration.
-pub trait HasMediaSettings {
-	/// Returns a reference to the media settings.
-	fn media(&self) -> &MediaSettings;
-}
-
-impl<T: HasSettings<MediaSettings>> HasMediaSettings for T {
-	fn media(&self) -> &MediaSettings {
-		self.get_settings()
-	}
-}
-
 #[cfg(test)]
 mod tests {
 	use super::*;
+	use crate::settings::fragment::SettingsFragment;
 	use rstest::rstest;
 
 	#[rstest]

@@ -326,4 +326,127 @@ mod tests {
 
 		assert!(validate_mutation_data(&data, &admin, false).is_ok());
 	}
+
+	// ==================== Boundary value: field count ====================
+
+	#[rstest]
+	#[case::below_limit(99, true)]
+	#[case::at_limit(100, true)]
+	#[case::above_limit(101, false)]
+	fn test_mutation_field_count_boundary(#[case] field_count: usize, #[case] should_pass: bool) {
+		// Arrange
+		// Use an admin that allows any field via list_display fallback
+		let field_names: Vec<String> = (0..field_count).map(|i| format!("f_{}", i)).collect();
+		let field_refs: Vec<&str> = field_names.iter().map(|s| s.as_str()).collect();
+		let admin = ModelAdminConfig::builder()
+			.model_name("TestModel")
+			.list_display(field_refs.clone())
+			.fields(field_refs)
+			.build()
+			.unwrap();
+
+		let mut data = HashMap::new();
+		for i in 0..field_count {
+			data.insert(format!("f_{}", i), serde_json::json!("v"));
+		}
+
+		// Act
+		let result = validate_mutation_data(&data, &admin, false);
+
+		// Assert
+		assert_eq!(
+			result.is_ok(),
+			should_pass,
+			"field_count={}, expected pass={}, got {:?}",
+			field_count,
+			should_pass,
+			result
+		);
+	}
+
+	// ==================== Boundary value: string length ====================
+
+	#[rstest]
+	#[case::within_limit(999_999, true)]
+	#[case::at_limit(1_000_000, true)]
+	#[case::above_limit(1_000_001, false)]
+	fn test_mutation_string_length_boundary(#[case] length: usize, #[case] should_pass: bool) {
+		// Arrange
+		let admin = create_test_admin();
+		let mut data = HashMap::new();
+		data.insert("name".to_string(), serde_json::json!("x".repeat(length)));
+
+		// Act
+		let result = validate_mutation_data(&data, &admin, false);
+
+		// Assert
+		assert_eq!(
+			result.is_ok(),
+			should_pass,
+			"length={}, expected pass={}, got {:?}",
+			length,
+			should_pass,
+			result
+		);
+	}
+
+	// ==================== Decision table: mutation validation ====================
+
+	#[rstest]
+	#[case::field_in_allowlist_not_readonly_create(true, false, false, true, true)]
+	#[case::field_in_allowlist_not_readonly_update(true, false, false, false, true)]
+	#[case::field_not_in_allowlist(false, false, false, true, false)]
+	#[case::field_is_readonly_on_create(true, true, false, true, false)]
+	#[case::field_is_readonly_on_update(true, true, false, false, false)]
+	#[case::pk_field_on_create(true, false, true, true, true)]
+	#[case::pk_field_on_update(true, false, true, false, false)]
+	fn test_mutation_validation_decision_table(
+		#[case] in_allowlist: bool,
+		#[case] is_readonly: bool,
+		#[case] is_pk: bool,
+		#[case] is_create: bool,
+		#[case] should_pass: bool,
+	) {
+		// Arrange
+		let field_name = if is_pk { "id" } else { "name" };
+		let is_update = !is_create;
+
+		let mut fields_list = vec!["id"];
+		if in_allowlist && !is_pk {
+			fields_list.push("name");
+		}
+
+		let readonly = if is_readonly && !is_pk {
+			vec!["name"]
+		} else {
+			vec![]
+		};
+
+		let admin = ModelAdminConfig::builder()
+			.model_name("TestModel")
+			.list_display(fields_list.clone())
+			.fields(fields_list)
+			.readonly_fields(readonly)
+			.build()
+			.unwrap();
+
+		let mut data = HashMap::new();
+		data.insert(field_name.to_string(), serde_json::json!("test_value"));
+
+		// Act
+		let result = validate_mutation_data(&data, &admin, is_update);
+
+		// Assert
+		assert_eq!(
+			result.is_ok(),
+			should_pass,
+			"in_allowlist={}, is_readonly={}, is_pk={}, is_create={}, expected pass={}, got {:?}",
+			in_allowlist,
+			is_readonly,
+			is_pk,
+			is_create,
+			should_pass,
+			result
+		);
+	}
 }

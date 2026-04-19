@@ -1,0 +1,5 @@
+error: #[routes] function must have a return type (-> UnifiedRouter)
+ --> tests/ui/routes_registration/fail/no_return_type.rs:4:5
+  |
+4 | pub fn routes() {
+  |     ^^^^^^^^^^^

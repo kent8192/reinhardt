@@ -4,7 +4,7 @@
 //! All types must be serializable with serde.
 
 use chrono::{DateTime, Utc};
-use reinhardt::core::serde::{Deserialize, Serialize};
+use serde::{Deserialize, Serialize};
 
 /// Question information (DTO)
 ///
@@ -41,7 +41,7 @@ pub struct VoteRequest {
 // Server-side conversions from models to DTOs
 // These are only compiled on the server side
 
-#[cfg(server)]
+#[cfg(native)]
 impl From<crate::apps::polls::models::Question> for QuestionInfo {
 	fn from(question: crate::apps::polls::models::Question) -> Self {
 		QuestionInfo {
@@ -52,7 +52,7 @@ impl From<crate::apps::polls::models::Question> for QuestionInfo {
 	}
 }
 
-#[cfg(server)]
+#[cfg(native)]
 impl From<crate::apps::polls::models::Choice> for ChoiceInfo {
 	fn from(choice: crate::apps::polls::models::Choice) -> Self {
 		ChoiceInfo {

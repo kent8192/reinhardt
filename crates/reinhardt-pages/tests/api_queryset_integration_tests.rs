@@ -1,3 +1,4 @@
+#![cfg(not(target_arch = "wasm32"))]
 //! API QuerySet Integration Tests
 //!
 //! Tests for the API QuerySet system's filter construction, query building,

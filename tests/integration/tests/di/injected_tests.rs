@@ -1,8 +1,8 @@
-//! Unit tests for Injected<T>, OptionalInjected<T>, and InjectionMetadata
+//! Unit tests for `Depends<T>`, `Option<Depends<T>>`, and `InjectionMetadata`
 
 use async_trait::async_trait;
-use reinhardt_di::injected::{DependencyScope, Injected, InjectionMetadata, OptionalInjected};
-use reinhardt_di::{DiResult, Injectable, InjectionContext};
+use reinhardt_di::injected::{DependencyScope, InjectionMetadata};
+use reinhardt_di::{Depends, DiResult, Injectable, InjectionContext};
 use reinhardt_test::fixtures::*;
 use rstest::*;
 
@@ -12,6 +12,7 @@ struct TestData {
 	value: String,
 }
 
+// Injectable implementation is needed for Depends::resolve (registry-based resolution)
 #[async_trait]
 impl Injectable for TestData {
 	async fn inject(_ctx: &InjectionContext) -> DiResult<Self> {
@@ -23,30 +24,30 @@ impl Injectable for TestData {
 
 #[rstest]
 #[tokio::test]
-async fn injected_wraps_value() {
+async fn depends_wraps_value() {
 	// Arrange
 	let data = TestData {
 		value: "wrapped".to_string(),
 	};
 
 	// Act
-	let injected = Injected::from_value(data);
+	let depends = Depends::from_value(data);
 
 	// Assert
-	assert_eq!(injected.value, "wrapped");
+	assert_eq!(depends.value, "wrapped");
 }
 
 #[rstest]
 #[tokio::test]
-async fn injected_metadata_stores_scope() {
+async fn depends_metadata_stores_scope() {
 	// Arrange
 	let data = TestData {
 		value: "metadata_test".to_string(),
 	};
-	let injected = Injected::from_value(data);
+	let depends = Depends::from_value(data);
 
 	// Act
-	let metadata = injected.metadata();
+	let metadata = depends.metadata();
 
 	// Assert
 	assert_eq!(metadata.scope, DependencyScope::Request);
@@ -55,15 +56,15 @@ async fn injected_metadata_stores_scope() {
 
 #[rstest]
 #[tokio::test]
-async fn optional_injected_some_value() {
+async fn option_depends_some_value() {
 	// Arrange
 	let data = TestData {
 		value: "optional_some".to_string(),
 	};
-	let injected = Injected::from_value(data);
+	let depends = Depends::from_value(data);
 
 	// Act
-	let optional: OptionalInjected<TestData> = Some(injected);
+	let optional: Option<Depends<TestData>> = Some(depends);
 
 	// Assert
 	assert!(optional.is_some());
@@ -72,9 +73,9 @@ async fn optional_injected_some_value() {
 
 #[rstest]
 #[tokio::test]
-async fn optional_injected_none_value() {
+async fn option_depends_none_value() {
 	// Act
-	let optional: OptionalInjected<TestData> = None;
+	let optional: Option<Depends<TestData>> = None;
 
 	// Assert
 	assert!(optional.is_none());
@@ -82,7 +83,7 @@ async fn optional_injected_none_value() {
 
 #[rstest]
 #[tokio::test]
-async fn injected_scope_singleton() {
+async fn depends_scope_singleton() {
 	// Arrange
 	let metadata = InjectionMetadata {
 		scope: DependencyScope::Singleton,
@@ -96,14 +97,14 @@ async fn injected_scope_singleton() {
 
 #[rstest]
 #[tokio::test]
-async fn injected_scope_request(injection_context: InjectionContext) {
+async fn depends_scope_request(injection_context: InjectionContext) {
 	// Act
-	let injected = Injected::<TestData>::resolve(&injection_context)
+	let depends = Depends::<TestData>::resolve(&injection_context, true)
 		.await
 		.unwrap();
 
 	// Assert
-	let metadata = injected.metadata();
+	let metadata = depends.metadata();
 	assert_eq!(metadata.scope, DependencyScope::Request);
 	assert!(metadata.cached);
 }

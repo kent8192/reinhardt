@@ -1,7 +1,8 @@
 [package]
 name = "reinhardt-test"
-version = "0.1.0-rc.14"
+version = "0.1.0-rc.15"
 edition.workspace = true
+rust-version.workspace = true
 authors.workspace = true
 description = "Testing utilities and helpers for Reinhardt framework"
 license.workspace = true
@@ -14,6 +15,8 @@ static = ["reinhardt-testkit/static"]
 websockets = ["reinhardt-testkit/websockets"]
 graphql = ["reinhardt-testkit/graphql"]
 property-based = ["reinhardt-testkit/property-based"]
+viewsets = ["reinhardt-testkit/viewsets"]
+messages = ["reinhardt-testkit/messages"]
 tasks = ["dep:reinhardt-tasks"]
 admin = [
   "dep:reinhardt-admin",
@@ -23,6 +26,7 @@ admin = [
   "reinhardt-admin/types",
   "reinhardt-admin/adapters",
   "reinhardt-testkit/testcontainers",
+  "reinhardt-testkit/admin",
   "reinhardt-conf/async",
 ]
 # WASM frontend testing utilities
@@ -33,21 +37,102 @@ wasm = [
   "dep:web-sys",
   "dep:js-sys",
   "dep:gloo-timers",
+  "dep:regex",
 ]
 wasm-full = ["wasm", "reinhardt-pages/web-sys-full"]
+# MSW-style network-level request interception (requires wasm)
+msw = ["wasm", "reinhardt-pages/msw"]
 # Server function testing utilities
 server-fn-test = []
 # E2E browser testing via WebDriver (fantoccini)
 e2e = ["dep:fantoccini", "dep:url"]
-full = ["testcontainers", "static", "websockets", "graphql", "property-based", "tasks", "admin"]
+# E2E browser testing via Chrome DevTools Protocol (chromiumoxide) + containerized Chrome
+e2e-cdp = ["dep:chromiumoxide", "dep:futures", "dep:testcontainers", "dep:url"]
+full = ["testcontainers", "static", "websockets", "graphql", "property-based", "viewsets", "messages", "tasks", "admin"]
 
 [dependencies]
+# Cross-platform dependencies
+reinhardt-pages = { workspace = true }
+reinhardt-core = { workspace = true }
+
+# Testing framework dependencies (proc-macro, compiles on host)
+rstest = "0.26.1"
+
+# Cross-platform serialization dependencies
+uuid = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+
+# Regex for WASM text matching queries
+regex = { version = "1", optional = true }
+
+# Optional WASM dependencies (feature-gated)
+wasm-bindgen = { version = "0.2.106", optional = true }
+wasm-bindgen-test = { version = "0.3.56", optional = true }
+wasm-bindgen-futures = { version = "0.4.56", optional = true }
+gloo-timers = { version = "0.3", optional = true, features = ["futures"] }
+js-sys = { version = "0.3.83", optional = true }
+web-sys = { version = "0.3.83", optional = true, features = [
+  "Window",
+  "Document",
+  "Element",
+  "HtmlElement",
+  "HtmlInputElement",
+  "HtmlFormElement",
+  "HtmlSelectElement",
+  "HtmlTextAreaElement",
+  "HtmlButtonElement",
+  "HtmlOptionElement",
+  "HtmlOptionsCollection",
+  "Node",
+  "NodeList",
+  "Event",
+  "EventInit",
+  "EventTarget",
+  "MouseEvent",
+  "MouseEventInit",
+  "KeyboardEvent",
+  "KeyboardEventInit",
+  "InputEvent",
+  "InputEventInit",
+  "FocusEvent",
+  "FocusEventInit",
+  "CustomEvent",
+  "CustomEventInit",
+  "DomRect",
+  "CssStyleDeclaration",
+  "HtmlCollection",
+  "NamedNodeMap",
+  "Attr",
+  "HtmlDocument",
+  "Location",
+  "History",
+  "Headers",
+  "Request",
+  "RequestInit",
+  "RequestMode",
+  "Response",
+  "ResponseInit",
+  "console",
+] }
+
+# Optional E2E testing dependencies (feature-gated)
+fantoccini = { workspace = true, optional = true }
+chromiumoxide = { workspace = true, optional = true }
+futures = { workspace = true, optional = true }
+testcontainers = { workspace = true, optional = true }
+url = { workspace = true, optional = true }
+
+[build-dependencies]
+cfg_aliases = "0.2"
+
+# Native-only dependencies (cannot compile on wasm32-unknown-unknown)
+[target.'cfg(not(all(target_family = "wasm", target_os = "unknown")))'.dependencies]
 # Core: delegate to reinhardt-testkit
 reinhardt-testkit = { workspace = true }
 
-# Dependencies required by reinhardt-test's own modules (auth, admin, wasm, server_fn)
+# Dependencies required by reinhardt-test's own modules (auth, admin)
 reinhardt-auth = { workspace = true, features = ["jwt", "argon2-hasher", "sessions", "oauth", "token"] }
-reinhardt-pages = { workspace = true }
 reinhardt-conf = { workspace = true, features = ["settings"] }
 
 # Optional dependencies for tasks feature
@@ -61,57 +146,10 @@ reinhardt-db = { workspace = true, features = ["backends", "migrations", "orm", 
 reinhardt-query = { workspace = true, features = ["derive"] }
 sqlx = { workspace = true, optional = true }
 
-# Testing framework dependencies (needed for fixtures)
-rstest = "0.26.1"
-
-# Dependencies needed by auth fixtures
-uuid = { workspace = true }
-serde = { workspace = true }
-serde_json = { workspace = true }
-
-# Optional WASM dependencies (feature-gated)
-wasm-bindgen = { version = "0.2.106", optional = true }
-wasm-bindgen-test = { version = "0.3.56", optional = true }
-wasm-bindgen-futures = { version = "0.4.56", optional = true }
-gloo-timers = { version = "0.3", optional = true }
-js-sys = { version = "0.3.83", optional = true }
-web-sys = { version = "0.3.83", optional = true, features = [
-  "Window",
-  "Document",
-  "Element",
-  "HtmlElement",
-  "HtmlInputElement",
-  "HtmlFormElement",
-  "HtmlSelectElement",
-  "HtmlTextAreaElement",
-  "HtmlButtonElement",
-  "Node",
-  "NodeList",
-  "Event",
-  "EventTarget",
-  "MouseEvent",
-  "KeyboardEvent",
-  "InputEvent",
-  "FocusEvent",
-  "CustomEvent",
-  "DomRect",
-  "CssStyleDeclaration",
-  "HtmlCollection",
-  "NamedNodeMap",
-  "Attr",
-  "HtmlDocument",
-  "Location",
-  "History",
-] }
-
-# Optional E2E testing dependencies (feature-gated)
-fantoccini = { workspace = true, optional = true }
-url = { workspace = true, optional = true }
-
 # Re-exported dependencies needed for backward compatibility
 tokio = { workspace = true }
 
-[dev-dependencies]
+[target.'cfg(not(all(target_family = "wasm", target_os = "unknown")))'.dev-dependencies]
 tokio = { workspace = true, features = ["full"] }
 tokio-test = "0.4"
 scopeguard = "1.2"

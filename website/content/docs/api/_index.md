@@ -43,7 +43,7 @@ Independent crates responsible for specific functional areas:
 
 Located under facade crates and accessed via parent crate:
 
-- **`reinhardt-db::orm`**: ORM functionality (`crates/reinhardt-db/crates/orm`)
+- **`reinhardt-db::orm`**: ORM functionality (`crates/reinhardt-db/src/orm/`)
 - **`reinhardt-db::migrations`**: Migration functionality
 - **`reinhardt-rest::serializers`**: Serializer functionality
 - **`reinhardt-di::params`**: Parameter extraction functionality
@@ -53,6 +53,7 @@ Located under facade crates and accessed via parent crate:
 
 ```rust
 // Access via facade crate (recommended)
+// Note: The contents of the prelude vary based on enabled feature flags.
 use reinhardt::prelude::*;
 
 // Or access individual crates directly
@@ -118,7 +119,7 @@ async fn my_view(request: Request) -> ViewResult<Response> {
 **Documentation:**
 
 - [Module documentation](https://docs.rs/reinhardt-views) (available after crates.io publish)
-- See `crates/reinhardt-views/crates/viewsets/src/lib.rs` for comprehensive ViewSets documentation
+- See `crates/reinhardt-views/src/viewsets.rs` for comprehensive ViewSets documentation
 
 ### reinhardt-di::params
 
@@ -183,7 +184,6 @@ struct Database {
     pool: DbPool,
 }
 
-#[async_trait]
 impl Injectable for Database {
     async fn inject(ctx: &InjectionContext) -> DiResult<Self> {
         Ok(Database { pool: get_pool().await? })
@@ -208,8 +208,7 @@ ORM layer for database abstraction with Reinhardt's own query builder (reinhardt
 **Key Components:**
 
 - `Model` trait - Base trait for models
-- `QuerySet` / `SQLAlchemyQuery` - Chainable query builders
-- `Manager` - Model manager for CRUD operations
+- `QuerySet` - Chainable query builder
 - Field types (`fields.rs`, `postgres_fields.rs`) - Database field definitions
 - Relationships (`relationship.rs`, `many_to_many.rs`) - Model relationships
 
@@ -224,7 +223,7 @@ ORM layer for database abstraction with Reinhardt's own query builder (reinhardt
 **Example (Current API):**
 
 ```rust
-use reinhardt::db::orm::{Model, Manager};
+use reinhardt::db::orm::Model;
 use reinhardt::query::prelude::{Query, Expr, PostgresQueryBuilder};
 
 // Model definition (currently manual implementation)
@@ -275,7 +274,7 @@ let users = User::objects()
 **Documentation:**
 
 - [Module documentation](https://docs.rs/reinhardt-db) (available after crates.io publish)
-- See `crates/reinhardt-db/crates/orm/src/lib.rs` for ORM documentation
+- See `crates/reinhardt-db/src/orm.rs` for ORM documentation
 - [reinhardt-query documentation](https://docs.rs/reinhardt-query/)
 
 ### reinhardt-db::migrations
@@ -293,7 +292,7 @@ Database migration system.
 **Documentation:**
 
 - [Module documentation](https://docs.rs/reinhardt-db) (available after crates.io publish)
-- See `crates/reinhardt-db/crates/migrations/src/lib.rs` for migrations documentation
+- See `crates/reinhardt-db/src/migrations.rs` for migrations documentation
 
 ### reinhardt-db
 
@@ -310,7 +309,7 @@ Low-level database operations and connection management.
 **Documentation:**
 
 - [Module documentation](https://docs.rs/reinhardt-db) (available after crates.io publish)
-- See `crates/reinhardt-db/crates/backends/src/lib.rs` for backends documentation
+- See `crates/reinhardt-db/src/lib.rs` for backends documentation
 
 ## REST API Components
 
@@ -359,7 +358,7 @@ impl Serializer for UserSerializer {
 **Documentation:**
 
 - [Module documentation](https://docs.rs/reinhardt-rest) (available after crates.io publish)
-- See `crates/reinhardt-rest/crates/serializers/src/lib.rs` for comprehensive serializers documentation
+- See `crates/reinhardt-rest/src/serializers.rs` for comprehensive serializers documentation
 - [Tutorial: Serialization](/quickstart/tutorials/rest/1-serialization/)
 
 ### reinhardt-views (viewsets feature)
@@ -394,14 +393,14 @@ reinhardt-views = { version = "LATEST_VERSION", features = ["viewsets"] }
 **Documentation:**
 
 - [Module documentation](https://docs.rs/reinhardt-views) (available after crates.io publish)
-- See `crates/reinhardt-views/crates/viewsets/src/lib.rs` for comprehensive ViewSets documentation
+- See `crates/reinhardt-views/src/viewsets.rs` for comprehensive ViewSets documentation
 - [Tutorial: ViewSets and Routers](/quickstart/tutorials/rest/6-viewsets-and-routers/)
 
-### reinhardt-rest::routers / reinhardt-urls::routers
+### reinhardt-urls::routers
 
 Automatic URL routing for ViewSets.
 
-> **Note**: Router functionality is provided by `reinhardt-rest::routers` and `reinhardt-urls::routers`.
+> **Note**: Router functionality is provided by `reinhardt-urls::routers`.
 
 **Key Components:**
 
@@ -412,7 +411,7 @@ Automatic URL routing for ViewSets.
 **Example:**
 
 ```rust
-use reinhardt::rest::routers::{DefaultRouter, Router};
+use reinhardt::urls::routers::{DefaultRouter, Router};
 
 let mut router = DefaultRouter::new();
 router.register("users", user_viewset);
@@ -421,7 +420,6 @@ router.register("posts", post_viewset);
 
 **Documentation:**
 
-- [Module documentation](https://docs.rs/reinhardt-rest) (available after crates.io publish)
 - [Module documentation](https://docs.rs/reinhardt-urls) (available after crates.io publish)
 - See `crates/reinhardt-urls/src/lib.rs` for URL routing documentation
 
@@ -457,8 +455,11 @@ Query filtering for ViewSets.
 
 **Key Components:**
 
-- `SearchFilter` - Search filter
-- `OrderingFilter` - Ordering filter
+- `SimpleSearchBackend` - Simple search backend
+- `SimpleOrderingBackend` - Simple ordering backend
+- `FuzzySearchFilter` - Fuzzy search filter
+- `FullTextSearchFilter` - Full-text search filter
+- `QueryFilter` - Query parameter filter
 - Custom filters - Custom filter definitions
 
 **Documentation:**
@@ -492,7 +493,7 @@ Authentication backends and permission system.
 - JWT authentication - `JwtAuth` (note lowercase `t`)
 - Token authentication - `TokenAuthentication`
 - Session authentication - `SessionAuthentication`
-- Basic authentication - `BasicAuthentication`
+- Basic authentication - `HttpBasicAuth`
 - Permission classes - `IsAuthenticated`, `IsAdminUser`, etc.
 
 **Example:**
@@ -507,6 +508,31 @@ let auth = JwtAuth::new(secret_key);
 // Use permission classes
 // Protect endpoints with IsAuthenticated
 ```
+
+**Database Models** (requires `database` feature):
+
+- `AuthPermission` — Database-backed permission model (`auth_permission` table).
+  Fields: `id` (UUID), `name`, `codename`, `app_label`.
+- `Group` — User group model (`auth_group` table) with conditional `#[model]` support.
+  Fields: `id` (UUID), `name`, `description`.
+
+**Group Management:**
+
+- `GroupManager` — In-memory group management with permission assignment.
+- `register_group_manager(Arc<GroupManager>)` — Register a global `GroupManager`.
+  Once registered, `PermissionsMixin::get_group_permissions()` automatically resolves
+  group permissions.
+- `get_group_manager()` — Retrieve the global `GroupManager`.
+
+**PermissionsMixin Integration:**
+
+- `user_permissions(&self) -> &[String]` — Direct user permissions
+- `groups(&self) -> &[String]` — User's group memberships
+- `get_group_permissions(&self) -> HashSet<String>` — Resolves permissions from groups
+  via global `GroupManager` (returns empty set if no manager registered)
+- `has_perm(&str) -> bool` — Check single permission (superuser always true)
+- `has_perms(&[&str]) -> bool` — Check multiple permissions (AND)
+- `has_module_perms(&str) -> bool` — Check app-level permissions
 
 **Documentation:**
 

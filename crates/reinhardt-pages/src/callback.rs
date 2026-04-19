@@ -31,13 +31,13 @@ use std::future::Future;
 use std::sync::Arc;
 
 use crate::component::PageEventHandler;
-#[cfg(target_arch = "wasm32")]
+#[cfg(wasm)]
 use crate::spawn::spawn_task;
 
-#[cfg(target_arch = "wasm32")]
+#[cfg(wasm)]
 type EventArg = web_sys::Event;
 
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(native)]
 type EventArg = crate::component::DummyEvent;
 
 /// A type-safe, cloneable callback wrapper for event handlers.
@@ -68,7 +68,7 @@ type EventArg = crate::component::DummyEvent;
 /// });
 /// ```
 // Callback struct with conditional Send + Sync bounds for non-WASM targets
-#[cfg(target_arch = "wasm32")]
+#[cfg(wasm)]
 pub struct Callback<Args = EventArg, Ret = ()> {
 	inner: Arc<dyn Fn(Args) -> Ret + 'static>,
 }
@@ -77,13 +77,13 @@ pub struct Callback<Args = EventArg, Ret = ()> {
 ///
 /// See the WASM version for full documentation.
 /// This version requires `Send + Sync` bounds for thread-safe server-side usage.
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(native)]
 pub struct Callback<Args = EventArg, Ret = ()> {
 	inner: Arc<dyn Fn(Args) -> Ret + Send + Sync + 'static>,
 }
 
 // WASM implementation without Send + Sync bounds
-#[cfg(target_arch = "wasm32")]
+#[cfg(wasm)]
 impl<Args, Ret> Callback<Args, Ret> {
 	/// Creates a new Callback from a function or closure.
 	///
@@ -93,7 +93,7 @@ impl<Args, Ret> Callback<Args, Ret> {
 	///
 	/// # Example
 	///
-	/// ```ignore
+	/// ```no_run
 	/// let handler = Callback::new(|event| {
 	///     // Handle event
 	/// });
@@ -116,7 +116,7 @@ impl<Args, Ret> Callback<Args, Ret> {
 }
 
 // Non-WASM implementation with Send + Sync bounds
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(native)]
 impl<Args, Ret> Callback<Args, Ret> {
 	/// Creates a new Callback from a function or closure.
 	///
@@ -199,7 +199,7 @@ pub trait IntoEventHandler {
 ///
 /// # Non-WASM Build
 /// Accepts `Fn(DummyEvent) + Send + Sync + 'static`
-#[cfg(target_arch = "wasm32")]
+#[cfg(wasm)]
 impl<F> IntoEventHandler for F
 where
 	F: Fn(web_sys::Event) + 'static,
@@ -209,10 +209,10 @@ where
 	}
 }
 
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(native)]
 impl<F> IntoEventHandler for F
 where
-	F: Fn(crate::component::DummyEvent) + Send + Sync + 'static,
+	F: Fn(crate::component::DummyEvent) + 'static,
 {
 	fn into_event_handler(self) -> PageEventHandler {
 		Arc::new(self)
@@ -263,7 +263,7 @@ pub fn into_event_handler<H: IntoEventHandler>(handler: H) -> PageEventHandler {
 ///     log!("clicked");
 /// });
 /// ```
-#[cfg(target_arch = "wasm32")]
+#[cfg(wasm)]
 pub fn event_handler(f: impl Fn(web_sys::Event) + 'static) -> PageEventHandler {
 	Arc::new(f)
 }
@@ -271,10 +271,8 @@ pub fn event_handler(f: impl Fn(web_sys::Event) + 'static) -> PageEventHandler {
 /// Event handler helper with concrete type for better type inference (server-side version).
 ///
 /// See WASM version for documentation.
-#[cfg(not(target_arch = "wasm32"))]
-pub fn event_handler(
-	f: impl Fn(crate::component::DummyEvent) + Send + Sync + 'static,
-) -> PageEventHandler {
+#[cfg(native)]
+pub fn event_handler(f: impl Fn(crate::component::DummyEvent) + 'static) -> PageEventHandler {
 	Arc::new(f)
 }
 
@@ -299,7 +297,7 @@ pub fn event_handler(
 ///     "Click me"
 /// }
 /// ```
-#[cfg(target_arch = "wasm32")]
+#[cfg(wasm)]
 pub fn async_handler<F, Fut>(f: F) -> PageEventHandler
 where
 	F: Fn(web_sys::Event) -> Fut + 'static,
@@ -312,7 +310,7 @@ where
 }
 
 /// Creates an async event handler stub for non-WASM targets.
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(native)]
 pub fn async_handler<F, Fut>(f: F) -> PageEventHandler
 where
 	F: Fn(crate::component::DummyEvent) -> Fut + Send + Sync + 'static,
@@ -370,7 +368,7 @@ mod tests {
 		assert!(debug_str.contains("Callback"));
 	}
 
-	#[cfg(not(target_arch = "wasm32"))]
+	#[cfg(native)]
 	#[test]
 	fn test_into_event_handler_closure() {
 		use crate::component::DummyEvent;
@@ -379,14 +377,14 @@ mod tests {
 		let _handler: PageEventHandler = closure.into_event_handler();
 	}
 
-	#[cfg(not(target_arch = "wasm32"))]
+	#[cfg(native)]
 	#[test]
 	fn test_into_event_handler_callback() {
 		let callback = Callback::new(|_: crate::component::DummyEvent| {});
 		let _handler: PageEventHandler = callback.into_event_handler();
 	}
 
-	#[cfg(not(target_arch = "wasm32"))]
+	#[cfg(native)]
 	#[test]
 	fn test_into_event_handler_function() {
 		use crate::component::DummyEvent;

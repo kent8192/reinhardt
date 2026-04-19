@@ -1,7 +1,8 @@
 [package]
 name = "reinhardt-query-macros"
-version = "0.1.0-rc.14"
+version = "0.1.0-rc.15"
 edition.workspace = true
+rust-version.workspace = true
 authors.workspace = true
 license.workspace = true
 description = "Procedural macros for reinhardt-query SQL identifier derivation"

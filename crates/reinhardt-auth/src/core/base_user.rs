@@ -51,7 +51,7 @@ use crate::core::hasher::PasswordHasher;
 /// # #[cfg(feature = "argon2-hasher")]
 /// # {
 /// let mut user = MyUser {
-///     id: Uuid::new_v4(),
+///     id: Uuid::now_v7(),
 ///     email: "user@example.com".to_string(),
 ///     password_hash: None,
 ///     last_login: None,
@@ -169,7 +169,7 @@ pub trait BaseUser: Send + Sync + Serialize + for<'de> Deserialize<'de> {
 	/// # #[cfg(feature = "argon2-hasher")]
 	/// # {
 	/// let mut user = MyUser {
-	///     id: Uuid::new_v4(),
+	///     id: Uuid::now_v7(),
 	///     email: "user@example.com".to_string(),
 	///     password_hash: None,
 	///     last_login: None,
@@ -218,7 +218,7 @@ pub trait BaseUser: Send + Sync + Serialize + for<'de> Deserialize<'de> {
 	/// # #[cfg(feature = "argon2-hasher")]
 	/// # {
 	/// let mut user = MyUser {
-	///     id: Uuid::new_v4(),
+	///     id: Uuid::now_v7(),
 	///     email: "user@example.com".to_string(),
 	///     password_hash: None,
 	///     last_login: None,
@@ -250,7 +250,7 @@ pub trait BaseUser: Send + Sync + Serialize + for<'de> Deserialize<'de> {
 	///
 	/// # Examples
 	///
-	/// ```ignore
+	/// ```no_run
 	/// # use reinhardt_auth::BaseUser;
 	/// # use reinhardt_auth::PasswordHasher;
 	/// # #[cfg(feature = "argon2-hasher")]
@@ -275,7 +275,7 @@ pub trait BaseUser: Send + Sync + Serialize + for<'de> Deserialize<'de> {
 	/// # }
 	///
 	/// let mut user = MyUser {
-	///     id: Uuid::new_v4(),
+	///     id: Uuid::now_v7(),
 	///     email: "user@example.com".to_string(),
 	///     password_hash: None,
 	///     last_login: None,
@@ -320,7 +320,7 @@ pub trait BaseUser: Send + Sync + Serialize + for<'de> Deserialize<'de> {
 	/// # #[cfg(feature = "argon2-hasher")]
 	/// # {
 	/// let mut user = MyUser {
-	///     id: Uuid::new_v4(),
+	///     id: Uuid::now_v7(),
 	///     email: "user@example.com".to_string(),
 	///     password_hash: None,
 	///     last_login: None,
@@ -383,7 +383,7 @@ pub trait BaseUser: Send + Sync + Serialize + for<'de> Deserialize<'de> {
 	/// # #[cfg(feature = "argon2-hasher")]
 	/// # {
 	/// let mut user = MyUser {
-	///     id: Uuid::new_v4(),
+	///     id: Uuid::now_v7(),
 	///     email: "user@example.com".to_string(),
 	///     password_hash: None,
 	///     last_login: None,

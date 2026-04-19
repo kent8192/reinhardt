@@ -323,7 +323,12 @@ impl Middleware for SiteMiddleware {
 						.unwrap_or_else(|e| e.into_inner())
 						.clone();
 					if let Some(site) = default_site {
-						let mut response = handler.handle(request).await?;
+						// Convert errors to responses so post-processing always runs,
+						// even when invoked outside MiddlewareChain. (#3244)
+						let mut response = match handler.handle(request).await {
+							Ok(resp) => resp,
+							Err(e) => Response::from(e),
+						};
 						if let (Ok(header_name), Ok(header_value)) = (
 							SITE_ID_HEADER.parse::<HeaderName>(),
 							site.id.to_string().parse(),
@@ -345,8 +350,12 @@ impl Middleware for SiteMiddleware {
 			site = self.registry.default_site();
 		}
 
-		// Call handler
-		let mut response = handler.handle(request).await?;
+		// Convert errors to responses so post-processing always runs,
+		// even when invoked outside MiddlewareChain. (#3244)
+		let mut response = match handler.handle(request).await {
+			Ok(resp) => resp,
+			Err(e) => Response::from(e),
+		};
 
 		// Add site ID to response headers if site was found
 		if let Some(site) = site

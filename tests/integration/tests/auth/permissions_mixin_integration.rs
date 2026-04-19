@@ -7,7 +7,7 @@ fn test_permissions_mixin_has_perm() {
 	// if user has specific permission in user_permissions list
 	// Not intent: Superuser bypass, group permissions, wildcard permissions
 	let user = DefaultUser {
-		id: Uuid::new_v4(),
+		id: Uuid::now_v7(),
 		username: "alice".to_string(),
 		email: "alice@example.com".to_string(),
 		first_name: "Alice".to_string(),
@@ -33,7 +33,7 @@ fn test_permissions_mixin_superuser_bypass() {
 	// permission string without explicit grant in user_permissions
 	// Not intent: Permission validation, actual authorization enforcement
 	let superuser = DefaultUser {
-		id: Uuid::new_v4(),
+		id: Uuid::now_v7(),
 		username: "admin".to_string(),
 		email: "admin@example.com".to_string(),
 		first_name: "Admin".to_string(),
@@ -60,7 +60,7 @@ fn test_permissions_mixin_has_module_perms() {
 	// any permission with module prefix (e.g., "blog.x")
 	// Not intent: Exact permission matching, wildcard modules, case sensitivity
 	let user = DefaultUser {
-		id: Uuid::new_v4(),
+		id: Uuid::now_v7(),
 		username: "bob".to_string(),
 		email: "bob@example.com".to_string(),
 		first_name: "Bob".to_string(),
@@ -85,7 +85,7 @@ fn test_permissions_mixin_group_permissions() {
 	// and contains() can check group membership
 	// Not intent: Group-based permission resolution, group hierarchy, permission inheritance
 	let user = DefaultUser {
-		id: Uuid::new_v4(),
+		id: Uuid::now_v7(),
 		username: "charlie".to_string(),
 		email: "charlie@example.com".to_string(),
 		first_name: "Charlie".to_string(),
@@ -111,7 +111,7 @@ fn test_permissions_mixin_get_all_permissions() {
 	// of user permissions with correct count and content
 	// Not intent: Group permissions aggregation, superuser all-permissions behavior, permission caching
 	let user = DefaultUser {
-		id: Uuid::new_v4(),
+		id: Uuid::now_v7(),
 		username: "dave".to_string(),
 		email: "dave@example.com".to_string(),
 		first_name: "Dave".to_string(),
@@ -143,7 +143,7 @@ fn test_permissions_mixin_no_permissions() {
 	// users with empty user_permissions and groups lists
 	// Not intent: Default permissions, anonymous user behavior, permission denial reasons
 	let user = DefaultUser {
-		id: Uuid::new_v4(),
+		id: Uuid::now_v7(),
 		username: "eve".to_string(),
 		email: "eve@example.com".to_string(),
 		first_name: "Eve".to_string(),

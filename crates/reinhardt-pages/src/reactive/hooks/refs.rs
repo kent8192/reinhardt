@@ -117,7 +117,7 @@ impl<T: std::fmt::Debug + 'static> std::fmt::Debug for Ref<T> {
 ///
 /// # Example
 ///
-/// ```ignore
+/// ```no_run
 /// use reinhardt_pages::reactive::hooks::use_ref;
 ///
 /// // Track render count without triggering re-renders

@@ -6,7 +6,7 @@ use crate::apps::auth::shared::types::UserInfo;
 use reinhardt::pages::server_fn::{ServerFnError, server_fn};
 
 // Server-only imports
-#[cfg(server)]
+#[cfg(native)]
 use {
 	crate::apps::auth::models::User,
 	crate::apps::auth::shared::types::{LoginRequest, RegisterRequest},
@@ -65,7 +65,7 @@ pub async fn login(
 
 	// Session fixation prevention: regenerate session ID
 	let old_id = session.id.clone();
-	session.id = Uuid::new_v4().to_string();
+	session.id = Uuid::now_v7().to_string();
 
 	// Persist user ID in session
 	session

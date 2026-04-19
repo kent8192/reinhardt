@@ -77,10 +77,14 @@ impl ConfigEncryptor {
 	///
 	/// # Examples
 	///
-	/// ```ignore
+	/// ```no_run
+	/// # fn main() -> Result<(), String> {
+	/// use reinhardt_conf::settings::encryption::ConfigEncryptor;
 	/// let key = vec![0u8; 32]; // Use a proper random key in production
 	/// let encryptor = ConfigEncryptor::new(key)?;
 	/// let encrypted = encryptor.encrypt(b"secret data")?;
+	/// # Ok(())
+	/// # }
 	/// ```
 	pub fn encrypt(&self, data: &[u8]) -> Result<EncryptedConfig, String> {
 		// Generate a random 12-byte nonce
@@ -121,12 +125,16 @@ impl ConfigEncryptor {
 	///
 	/// # Examples
 	///
-	/// ```ignore
+	/// ```no_run
+	/// # fn main() -> Result<(), String> {
+	/// use reinhardt_conf::settings::encryption::ConfigEncryptor;
 	/// let key = vec![0u8; 32]; // Use the same key as encryption
 	/// let encryptor = ConfigEncryptor::new(key)?;
 	/// let encrypted = encryptor.encrypt(b"secret data")?;
 	/// let decrypted = encryptor.decrypt(&encrypted)?;
 	/// assert_eq!(decrypted, b"secret data");
+	/// # Ok(())
+	/// # }
 	/// ```
 	pub fn decrypt(&self, encrypted: &EncryptedConfig) -> Result<Vec<u8>, String> {
 		// Validate nonce length

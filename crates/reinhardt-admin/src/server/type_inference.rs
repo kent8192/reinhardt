@@ -301,7 +301,7 @@ fn humanize_value(value: &str) -> String {
 ///
 /// # Examples
 ///
-/// ```ignore
+/// ```no_run
 /// use reinhardt_admin::server::type_inference::find_model_by_table_name;
 ///
 /// if let Some(metadata) = find_model_by_table_name("auth_user") {

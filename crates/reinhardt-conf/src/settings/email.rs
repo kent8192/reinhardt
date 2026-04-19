@@ -1,22 +1,46 @@
 //! Email settings fragment
 //!
-//! Provides composable email configuration as a [`SettingsFragment`].
+//! Provides composable email configuration as a [`SettingsFragment`](crate::settings::fragment::SettingsFragment).
 
-use super::fragment::{HasSettings, SettingsFragment};
+use reinhardt_core::macros::settings;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
+
+fn default_backend() -> String {
+	"console".to_string()
+}
+
+fn default_host() -> String {
+	"localhost".to_string()
+}
+
+fn default_port() -> u16 {
+	25
+}
+
+fn default_from_email() -> String {
+	"noreply@example.com".to_string()
+}
+
+fn default_server_email() -> String {
+	"root@localhost".to_string()
+}
 
 /// Email configuration fragment.
 ///
 /// Controls email backend, SMTP connection, and notification settings.
+#[settings(fragment = true, section = "email")]
 #[non_exhaustive]
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct EmailSettings {
 	/// Email backend type (e.g., `"smtp"`, `"console"`, `"file"`, `"memory"`).
+	#[serde(default = "default_backend")]
 	pub backend: String,
 	/// SMTP server hostname.
+	#[serde(default = "default_host")]
 	pub host: String,
 	/// SMTP server port number.
+	#[serde(default = "default_port")]
 	pub port: u16,
 	/// Optional SMTP authentication username.
 	pub username: Option<String>,
@@ -27,6 +51,7 @@ pub struct EmailSettings {
 	/// Whether to use direct TLS/SSL for the SMTP connection.
 	pub use_ssl: bool,
 	/// Default sender email address for outgoing emails.
+	#[serde(default = "default_from_email")]
 	pub from_email: String,
 
 	/// List of (name, email) tuples for site administrators.
@@ -62,10 +87,6 @@ pub struct EmailSettings {
 	pub file_path: Option<PathBuf>,
 }
 
-fn default_server_email() -> String {
-	"root@localhost".to_string()
-}
-
 impl Default for EmailSettings {
 	fn default() -> Self {
 		Self {
@@ -89,29 +110,10 @@ impl Default for EmailSettings {
 	}
 }
 
-impl SettingsFragment for EmailSettings {
-	type Accessor = dyn HasEmailSettings;
-
-	fn section() -> &'static str {
-		"email"
-	}
-}
-
-/// Trait for settings containers that include email configuration.
-pub trait HasEmailSettings {
-	/// Returns a reference to the email settings.
-	fn email(&self) -> &EmailSettings;
-}
-
-impl<T: HasSettings<EmailSettings>> HasEmailSettings for T {
-	fn email(&self) -> &EmailSettings {
-		self.get_settings()
-	}
-}
-
 #[cfg(test)]
 mod tests {
 	use super::*;
+	use crate::settings::fragment::SettingsFragment;
 	use rstest::rstest;
 
 	#[rstest]

@@ -2,17 +2,19 @@
 //!
 //! Provides import operations for admin models from various formats (JSON, CSV, TSV).
 
-use super::user::AdminDefaultUser;
+#[cfg(server)]
+use super::admin_auth::AdminAuthenticatedUser;
 use crate::adapters::{AdminDatabase, AdminRecord, AdminSite, ImportFormat, ImportResponse};
-use reinhardt_auth::AuthUser;
-use reinhardt_pages::server_fn::{ServerFnError, ServerFnRequest, server_fn};
-#[cfg(not(target_arch = "wasm32"))]
+use reinhardt_di::Depends;
+#[cfg(server)]
+use reinhardt_pages::server_fn::ServerFnRequest;
+use reinhardt_pages::server_fn::{ServerFnError, server_fn};
+#[cfg(server)]
 use std::collections::HashMap;
-use std::sync::Arc;
 
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(server)]
 use super::error::{AdminAuth, MapServerFnError, ModelPermission};
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(server)]
 use super::limits::{MAX_IMPORT_FILE_SIZE, MAX_IMPORT_RECORDS};
 
 /// Import model data from various formats
@@ -49,20 +51,16 @@ pub async fn import_data(
 	model_name: String,
 	format: ImportFormat,
 	data: Vec<u8>,
-	#[inject] site: Arc<AdminSite>,
-	#[inject] db: Arc<AdminDatabase>,
+	#[inject] site: Depends<AdminSite>,
+	#[inject] db: Depends<AdminDatabase>,
 	#[inject] http_request: ServerFnRequest,
-	#[inject] AuthUser(user): AuthUser<AdminDefaultUser>,
+	#[inject] AdminAuthenticatedUser(user): AdminAuthenticatedUser,
 ) -> Result<ImportResponse, ServerFnError> {
 	// Authentication and authorization check
 	let auth = AdminAuth::from_request(&http_request);
 	let model_admin = site.get_model_admin(&model_name).map_server_fn_error()?;
-	auth.require_model_permission(
-		model_admin.as_ref(),
-		&user as &dyn crate::core::AdminUser,
-		ModelPermission::Add,
-	)
-	.await?;
+	auth.require_model_permission(model_admin.as_ref(), user.as_ref(), ModelPermission::Add)
+		.await?;
 
 	// Validate import file size to prevent memory exhaustion
 	if data.len() > MAX_IMPORT_FILE_SIZE {

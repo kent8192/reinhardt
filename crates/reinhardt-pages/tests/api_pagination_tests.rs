@@ -1,3 +1,4 @@
+#![cfg(not(target_arch = "wasm32"))]
 //! API Pagination Integration Tests
 //!
 //! Tests for various pagination strategies supported by the API QuerySet system.

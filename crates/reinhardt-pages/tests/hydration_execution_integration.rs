@@ -1,3 +1,4 @@
+#![cfg(not(target_arch = "wasm32"))]
 //! Hydration Execution Integration Tests
 //!
 //! This module contains comprehensive integration tests for the reinhardt-pages
@@ -34,10 +35,10 @@ use reinhardt_pages::ssr::SsrState;
 use rstest::*;
 use serde_json::json;
 
-#[cfg(target_arch = "wasm32")]
+#[cfg(wasm)]
 use reinhardt_pages::hydration::{hydrate, hydrate_root};
 
-#[cfg(target_arch = "wasm32")]
+#[cfg(wasm)]
 use wasm_bindgen_test::*;
 
 // ============================================================================

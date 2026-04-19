@@ -63,7 +63,7 @@ where
 		})?;
 
 		if !auth_state.is_authenticated() {
-			return Err(DiError::NotFound(
+			return Err(DiError::Authentication(
 				"AuthUser: User is not authenticated".to_string(),
 			));
 		}
@@ -78,18 +78,20 @@ where
 					error = ?e,
 					"AuthUser: failed to parse user_id from AuthState"
 				);
-				DiError::NotFound("AuthUser: Invalid user_id format in AuthState".to_string())
+				DiError::Authentication("AuthUser: Invalid user_id format in AuthState".to_string())
 			})?;
 
 		let model_pk = <U as Model>::PrimaryKey::from(user_pk);
 
-		// Resolve DatabaseConnection from DI
-		let db: Arc<DatabaseConnection> =
-			ctx.resolve::<DatabaseConnection>().await.map_err(|e| {
-				::tracing::warn!(
-					error = ?e,
-					"AuthUser: DatabaseConnection not available for user resolution"
-				);
+		// Resolve DatabaseConnection from DI (singleton-first, request-scope fallback)
+		// Uses get_singleton/get_request directly instead of ctx.resolve() because
+		// DatabaseConnection is pre-seeded into the singleton scope at server startup,
+		// not registered in the global DependencyRegistry.
+		let db: Arc<DatabaseConnection> = ctx
+			.get_singleton::<DatabaseConnection>()
+			.or_else(|| ctx.get_request::<DatabaseConnection>())
+			.ok_or_else(|| {
+				::tracing::warn!("AuthUser: DatabaseConnection not available for user resolution");
 				DiError::Internal {
 					message: "AuthUser: DatabaseConnection not registered in DI context"
 						.to_string(),

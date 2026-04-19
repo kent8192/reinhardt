@@ -501,7 +501,7 @@ impl ApplicationBuilder {
 	///
 	/// # Examples
 	///
-	/// ```ignore
+	/// ```no_run
 	/// use reinhardt_apps::builder::ApplicationBuilder;
 	/// use reinhardt_apps::AppConfig;
 	/// use reinhardt_di::SingletonScope;

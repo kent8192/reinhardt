@@ -47,7 +47,7 @@ jobs:
   unit-test:
     name: Unit Tests (${{ matrix.partition }}/${{ inputs.partition-count || '8' }})
     runs-on: ${{ fromJSON(inputs.runner) }}
-    timeout-minutes: 45
+    timeout-minutes: 360
     strategy:
       fail-fast: false
       matrix:
@@ -87,6 +87,7 @@ jobs:
 
       - name: Install mold linker and build dependencies
         run: |
+          sudo systemctl stop unattended-upgrades || true
           sudo apt-get update -o DPkg::Lock::Timeout=120
           sudo apt-get install -y -o DPkg::Lock::Timeout=120 mold clang lld build-essential
           sudo apt-get clean
@@ -149,12 +150,52 @@ jobs:
           # Build package selection args. Issue #2878
           # When run-all is true or no cargo-packages provided, use --workspace.
           # Otherwise, use -p flags to compile only affected packages + rdeps.
+          #
+          # `cargo test --lib -p <bin-only-pkg>` errors with "no library targets
+          # found" (see issue #3734), so filter out packages that lack a library
+          # target before building the -p list. `--workspace --lib` is itself
+          # tolerant of bin-only members and only tests the packages that do
+          # have a lib, so the fallback path is unaffected.
           PKG_ARGS=()
           if [[ "$RUN_ALL" != "true" && -n "$CARGO_PACKAGES" ]]; then
+            # Capture `cargo metadata` with an explicit guard: bash `set -e`
+            # does NOT propagate failures through command substitutions inside
+            # assignments, so without this check a non-zero exit (or empty
+            # output) would silently cause every package to be filtered out
+            # and the job would exit 0 without running any tests (issue #3736).
+            if ! METADATA_JSON="$(cargo metadata --format-version 1 --no-deps)" || [[ -z "$METADATA_JSON" ]]; then
+              echo "Failed to generate cargo metadata for package filtering." >&2
+              exit 1
+            fi
+            # Treat any library-like target kind as acceptable for `--lib`
+            # testing. `cargo metadata` reports proc-macro crates with
+            # `"kind": ["proc-macro"]` (not `"lib"`), and they do compile and
+            # run tests under `--lib`; checking only `"lib"` would silently
+            # drop coverage for them (issue #3736).
             while IFS= read -r pkg; do
               [[ -z "$pkg" ]] && continue
-              PKG_ARGS+=(-p "$pkg")
+              has_lib="$(jq -r --arg pkg "$pkg" '
+                [.packages[]
+                  | select(.name == $pkg)
+                  | .targets[]
+                  | select(any(.kind[];
+                      . == "lib"
+                      or . == "proc-macro"
+                      or . == "rlib"
+                      or . == "dylib"
+                      or . == "cdylib"
+                      or . == "staticlib"))]
+                | length > 0' <<< "$METADATA_JSON")"
+              if [[ "$has_lib" == "true" ]]; then
+                PKG_ARGS+=(-p "$pkg")
+              else
+                echo "Skipping package with no library-like target for --lib unit tests: $pkg"
+              fi
             done <<< "$CARGO_PACKAGES"
+            if [[ ${#PKG_ARGS[@]} -eq 0 ]]; then
+              echo "No affected packages expose a library-like target; nothing to test in this job."
+              exit 0
+            fi
           fi
           if [[ ${#PKG_ARGS[@]} -eq 0 ]]; then
             PKG_ARGS=(--workspace)

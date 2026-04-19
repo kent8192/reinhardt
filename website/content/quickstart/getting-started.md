@@ -16,7 +16,7 @@ project and build a simple REST API.
 
 Before you begin, make sure you have:
 
-- **Rust** 1.91.1 or later (2024 Edition required)
+- **Rust** 1.94.1 or later (2024 Edition required)
   ([Install Rust](https://www.rust-lang.org/tools/install))
 - **PostgreSQL** (included in `standard` and `full` bundles; optional for custom setups)
 - Basic familiarity with Rust and async programming
@@ -218,8 +218,8 @@ pub async fn hello_world() -> ViewResult<Response> {
     let response_data = HelloResponse {
         message: "Hello, Reinhardt!".to_string(),
     };
-    Response::ok()
-        .with_json(&response_data)
+    Ok(Response::ok()
+        .with_json(&response_data)?)
 }
 ```
 
@@ -241,7 +241,7 @@ ViewSet (`todos/views.rs`):
 
 ```rust
 // todos/views.rs
-use reinhardt::viewsets::ModelViewSet;
+use reinhardt::ModelViewSet;
 use crate::models::Todo;
 use crate::serializers::TodoSerializer;
 
@@ -253,13 +253,12 @@ pub fn todo_viewset() -> ModelViewSet<Todo, TodoSerializer> {
 Register in `todos/urls.rs`:
 
 ```rust
-use reinhardt::routers::DefaultRouter;
-use std::sync::Arc;
+use reinhardt::ServerRouter;
 use crate::views::todo_viewset;
 
-pub fn url_patterns() -> DefaultRouter {
-    DefaultRouter::new()
-        .register_viewset("/todos", Arc::new(todo_viewset()))
+pub fn url_patterns() -> ServerRouter {
+    ServerRouter::new()
+        .viewset("/todos", todo_viewset())
 }
 ```
 
@@ -267,11 +266,13 @@ Then wire it up in `config/urls.rs`:
 
 ```rust
 use reinhardt::prelude::*;
+use reinhardt::UnifiedRouter;
 use reinhardt::routes;
 
+// Note: UnifiedRouter requires the `client-router` feature flag.
 #[routes]
-pub fn routes() -> DefaultRouter {
-    DefaultRouter::new()
+pub fn routes() -> UnifiedRouter {
+    UnifiedRouter::new()
         .mount("/api/", todos::urls::url_patterns())
 }
 ```
@@ -387,7 +388,7 @@ Check out the [ORM documentation](/docs/api/) for more details.
 
 **Port Already in Use**: Change the port in `serve()` function
 
-**Compilation Errors**: Ensure Rust 1.91.1+ (`rustc --version`)
+**Compilation Errors**: Ensure Rust 1.94.1+ (`rustc --version`)
 
 **Async Runtime**: Add `#[tokio::main]` to your main function
 

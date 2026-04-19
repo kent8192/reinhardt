@@ -1,8 +1,9 @@
 
 [package]
 name = "reinhardt-di"
-version = "0.1.0-rc.14"
+version = "0.1.0-rc.15"
 edition.workspace = true
+rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 authors.workspace = true
@@ -69,6 +70,7 @@ reinhardt-macros = { workspace = true }
 serde = { workspace = true }
 proptest = { workspace = true }
 rstest = { workspace = true }
+trybuild = { workspace = true }
 criterion = { workspace = true, features = ["async_tokio"] }
 [[bench]]
 name = "cache_performance"

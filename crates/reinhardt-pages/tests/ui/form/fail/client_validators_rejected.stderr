@@ -1,0 +1,26 @@
+error: `client_validators:` was never wired to code generation in any released version of reinhardt-web; removing it loses no runtime behavior.
+
+       Migrate to the unified `validators:` block with `#[client(on = submit|input|blur)]` annotations:
+
+           // Before (no longer supported):
+           client_validators: {
+               username: [ "value.length >= 3" => "Too short" ],
+           }
+
+           // After:
+           validators: {
+               username: [
+                   #[client(on = input)]
+                   |v| v.len() >= 3 => "Too short",
+               ],
+           }
+
+       See: docs/migration/0.2.0-client-validators-removal.md
+
+       This custom error is retained through the 0.1.x series. In 0.2.0, the `client_validators` identifier will be removed from the parser and using it will produce a generic `unknown property` error instead.
+
+       Tracked by: kent8192/reinhardt-web#3654
+  --> tests/ui/form/fail/client_validators_rejected.rs:17:3
+   |
+17 |         client_validators: {
+   |         ^^^^^^^^^^^^^^^^^

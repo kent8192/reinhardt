@@ -27,7 +27,7 @@ sidebar_weight = 20
 
 ## Overview
 
-Reinhardt employs a **highly granular feature flag system** with **70+ features** across **3 levels of granularity**:
+Reinhardt employs a **highly granular feature flag system** with **60+ features** across **3 levels of granularity**:
 
 1. **Bundle Features**: `minimal`, `standard`, `full`
 2. **Feature Groups**: `database`, `auth`, `cache`, `middleware`
@@ -107,10 +107,10 @@ Balanced configuration for most projects. ⚠️ PostgreSQL is now included by d
 **Includes**:
 - `minimal` features
 - Database (ORM, migrations, PostgreSQL backend)
-- REST API (Serializers, ViewSets, Parsers, Renderers)
+- REST API (Serializers, ViewSets, Parsers)
 - Auth, Middleware, Sessions
 - Pagination, Filtering, Throttling, Versioning
-- Templates, Signals
+- Pages, Signals
 
 {% versioned_code(lang="toml") %}
 reinhardt = { version = "LATEST_VERSION", package = "reinhardt-web", default-features = false, features = ["standard"] }
@@ -222,7 +222,7 @@ reinhardt = {
 
 | Bundle | Purpose | Key Features |
 |--------|---------|--------------|
-| `api-only` | REST API only | Serializers, ViewSets, Auth, Pagination |
+| `api-only` | REST API only | Serializers, ViewSets, Auth, Parsers, Pagination, Filters, Throttling, Versioning |
 | `graphql-server` | GraphQL API | GraphQL, Auth, Database |
 | `websocket-server` | Real-time | WebSockets, Auth, Cache |
 | `cli-tools` | CLI/Background jobs | Database, Migrations, Tasks, Mail |
@@ -236,10 +236,12 @@ reinhardt = {
 
 #### database
 
-Enables general database functionality.
+Enables general database functionality. Also enables database-backed models in
+`reinhardt-auth`: `AuthPermission` (permission model) and `Group` (group model
+with `#[model]` support).
 
 ```toml
-features = ["database"]  # Includes: ORM, migrations, contenttypes
+features = ["database"]  # Includes: ORM, migrations, contenttypes, auth models
 ```
 
 #### Database-Specific
@@ -270,14 +272,13 @@ features = ["database"]  # Includes: ORM, migrations, contenttypes
 | Feature | Backend | Exposure |
 |---------|---------|----------|
 | `redis-backend` | Redis | Root-level |
-| `redis-cluster` | Redis Cluster | Subcrate only* |
 | `redis-sentinel` | Redis Sentinel | Subcrate only* |
 | `memcached-backend` | Memcached | Subcrate only* |
 
 **Workaround for subcrate-only features**:
 {% versioned_code(lang="toml") %}
 reinhardt = { version = "LATEST_VERSION", package = "reinhardt-web", features = ["cache"] }
-reinhardt-utils = { version = "LATEST_VERSION", features = ["redis-cluster"] }
+reinhardt-utils = { version = "LATEST_VERSION", features = ["redis-sentinel"] }
 {% end %}
 
 ---
@@ -297,7 +298,7 @@ reinhardt-utils = { version = "LATEST_VERSION", features = ["redis-cluster"] }
 
 | Feature | Functionality |
 |---------|---------------|
-| `middleware` | Foundation (auto-enables `sessions`) |
+| `middleware` | Foundation (auto-enables `sessions`, `reinhardt-auth/middleware`) |
 | `middleware-cors` | CORS |
 | `middleware-compression` | gzip/brotli |
 | `middleware-security` | Security headers |
@@ -309,7 +310,7 @@ reinhardt-utils = { version = "LATEST_VERSION", features = ["redis-cluster"] }
 
 | Feature | Description | Auto-enables |
 |---------|-------------|--------------|
-| `di` | Full DI system | `reinhardt-di/params`, `reinhardt-core/di` |
+| `di` | Full DI system | `reinhardt-di/params`, `reinhardt-db?/di` |
 
 The `di` feature enables FastAPI-style dependency injection with parameter extraction:
 
@@ -457,9 +458,10 @@ The `tasks` feature provides background job processing with multiple backend opt
 | Feature | Backend | Persistence | Scalability | Use Case |
 |---------|---------|-------------|-------------|----------|
 | `tasks` | Immediate/Dummy | No | - | Development/Testing |
-| `tasks-redis` | Redis | Yes | High | Production (caching) |
-| `tasks-rabbitmq` | RabbitMQ | Yes | Very High | Production (messaging) |
-| `tasks-sqlite` | SQLite | Yes | Low | Small-scale production |
+| `redis-backend` | Redis | Yes | High | Production (caching) |
+| `rabbitmq-backend` | RabbitMQ | Yes | Very High | Production (messaging) |
+| `database-backend` | SQLx (Postgres/MySQL/SQLite) | Yes | Low-Medium | Small-scale production |
+| `sqs-backend` | AWS SQS | Yes | Very High | Production (AWS) |
 
 **Configuration Example**:
 
@@ -483,10 +485,10 @@ See [Task Backends Documentation](https://github.com/kent8192/reinhardt-web/blob
 | Crate | Default Features | Key Features |
 |-------|------------------|--------------|
 | `reinhardt-di` | None | `params`, `dev-tools`, `generator` |
-| `reinhardt-db` | `backends`, `pool`, `postgres`, `orm`, `migrations` | `sqlite`, `mysql`, `contenttypes` |
-| `reinhardt-auth` | None | `jwt`, `session`, `oauth`, `token`, `argon2-hasher` |
-| `reinhardt-rest` | `serializers`, `parsers`, `renderers` | `pagination`, `filters`, `throttling`, `versioning` |
-| `reinhardt-utils` (cache) | None | `redis-backend`, `redis-cluster`, `memcached-backend` |
+| `reinhardt-db` | `backends`, `pool`, `postgres`, `orm`, `migrations`, `hybrid`, `associations` | `sqlite`, `mysql`, `contenttypes` |
+| `reinhardt-auth` | `params` | `jwt`, `session`, `oauth`, `token`, `argon2-hasher` |
+| `reinhardt-rest` | `serializers`, `parsers` | `pagination`, `filters`, `throttling`, `versioning` |
+| `reinhardt-utils` (cache) | None | `redis-backend`, `redis-sentinel`, `memcached-backend` |
 | `reinhardt-middleware` | None | `cors`, `compression`, `security`, `rate-limit` |
 | `reinhardt-auth` (sessions) | None | `session-database`, `session-file`, `session-cookie`, `session-jwt` |
 | `reinhardt-test` | None | `testcontainers`, `static`, `websockets` |
@@ -494,8 +496,7 @@ See [Task Backends Documentation](https://github.com/kent8192/reinhardt-web/blob
 | `reinhardt-tasks` | None | `redis-backend`, `rabbitmq-backend`, `database-backend` |
 
 **Auto-enabled dependencies**:
-- `di` feature → `reinhardt-di/params` (parameter extraction types)
-- `pool` → `reinhardt-di` (database connection injection)
+- `di` feature → `reinhardt-di/params`, `reinhardt-db?/di` (parameter extraction types, database connection injection)
 - `minimal` / `standard` → `di` (DI system included in bundles)
 
 ---
@@ -621,13 +622,13 @@ features = ["reinhardt-rest", "reinhardt-rest/serializers"]
 
 ## Summary
 
-Reinhardt provides **70+ features** with **3 granularity levels** (bundle, group, individual).
+Reinhardt provides **60+ features** with **3 granularity levels** (bundle, group, individual).
 
 **Default**: `standard` bundle
 
 **Key bundles**: `minimal` (microservice), `standard` (balanced), `full` (all features, default), `api-only`, `graphql-server`, `cli-tools`
 
-**Auto-enabled dependencies**: `di` → `reinhardt-di/params`, `pool` → `reinhardt-di`, `middleware` → `sessions`, `auth-session` → `sessions`
+**Auto-enabled dependencies**: `di` → `reinhardt-di/params`, `reinhardt-db?/di`; `middleware` → `sessions`, `reinhardt-auth/middleware`; `auth-session` → `sessions`
 
 **Best Practice**: Use `default-features = false` for explicit control
 

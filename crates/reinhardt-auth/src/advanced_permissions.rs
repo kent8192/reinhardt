@@ -297,7 +297,7 @@ mod tests {
 
 	fn make_user(username: &str) -> Box<dyn crate::User> {
 		Box::new(SimpleUser {
-			id: Uuid::new_v4(),
+			id: Uuid::now_v7(),
 			username: username.to_string(),
 			email: format!("{}@example.com", username),
 			is_active: true,

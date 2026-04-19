@@ -23,7 +23,7 @@ pub struct TestTwitterUser {
 impl TestTwitterUser {
 	/// Create a new test user with the given username.
 	pub fn new(username: &str) -> Self {
-		let id = Uuid::new_v4();
+		let id = Uuid::now_v7();
 		Self {
 			id,
 			username: username.to_string(),

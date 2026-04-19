@@ -1,12 +1,13 @@
 [package]
 name = "reinhardt-middleware"
-version = "0.1.0-rc.14"
+version = "0.1.0-rc.15"
 description = "Middleware system for request/response processing pipeline"
 keywords = ["middleware", "web", "cors", "security", "http"]
 categories = ["web-programming", "web-programming::http-server"]
 readme = "README.md"
 documentation = "https://docs.rs/reinhardt-middleware"
 edition.workspace = true
+rust-version.workspace = true
 authors.workspace = true
 license.workspace = true
 repository.workspace = true
@@ -20,12 +21,16 @@ compression = []
 security = []
 rate-limit = []
 sessions = []
+auth-jwt = ["reinhardt-auth/jwt"]
 
 # Database support for certain middleware
 sqlx = ["dep:sqlx"]
 
+# Redis-backed session storage
+session-redis = ["sessions", "dep:redis"]
+
 # Aggregate all middleware features
-full = ["cors", "compression", "security", "rate-limit", "sessions", "sqlx"]
+full = ["cors", "compression", "security", "rate-limit", "sessions", "auth-jwt", "sqlx", "session-redis"]
 
 [dependencies]
 reinhardt-core = { workspace = true, features = [
@@ -51,6 +56,7 @@ rand = { workspace = true }
 httpdate = "1.0"
 bytes = { workspace = true }
 sqlx = { workspace = true, optional = true }
+redis = { version = "0.27", features = ["aio", "tokio-comp", "connection-manager"], optional = true }
 regex = "1.10"
 ipnet = "2.10"
 log = "0.4"
@@ -64,6 +70,10 @@ tracing = { workspace = true }
 
 [dev-dependencies]
 insta = { workspace = true }
+# Workaround for KI-2 (rust-lang/cargo#4242, rust-lang/cargo#15151):
+# Path-only dev-dep (no version) is stripped from published manifest by cargo,
+# avoiding dev-dependency version resolution failure during `cargo publish`.
+# When upstream cargo resolves these issues, replace with `workspace = true`.
 reinhardt-test = { path = "../reinhardt-test" }
 tokio-test = "0.4"
 tokio = { workspace = true }

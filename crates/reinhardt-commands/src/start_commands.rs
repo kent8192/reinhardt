@@ -14,6 +14,25 @@ use async_trait::async_trait;
 use std::env;
 use std::path::{Path, PathBuf};
 
+/// Validate that a name does not use the reserved `reinhardt_*` namespace.
+///
+/// Names starting with `reinhardt_` or `reinhardt-` conflict with the DI
+/// pseudo orphan rule (#3468, #3502) which treats `reinhardt_*::*` as
+/// framework-managed types.
+fn validate_not_reserved_namespace(name: &str) -> CommandResult<()> {
+	let normalized = name.replace('-', "_");
+	if normalized.starts_with("reinhardt_") || normalized == "reinhardt" {
+		return Err(CommandError::InvalidArguments(format!(
+			"Name '{}' is not allowed: names starting with 'reinhardt_' or 'reinhardt-' \
+			 are reserved for the Reinhardt framework. This conflicts with the DI pseudo \
+			 orphan rule which treats 'reinhardt_*' namespaces as framework-managed. \
+			 Please choose a different name.",
+			name
+		)));
+	}
+	Ok(())
+}
+
 /// Create a Reinhardt project directory structure
 ///
 /// Translation of Django's startproject command
@@ -61,6 +80,9 @@ impl BaseCommand for StartProjectCommand {
 				CommandError::InvalidArguments("You must provide a project name.".to_string())
 			})?
 			.clone();
+
+		// Reject reserved reinhardt_* namespace (#3502)
+		validate_not_reserved_namespace(&project_name)?;
 
 		let target = ctx.arg(1).map(PathBuf::from);
 
@@ -198,6 +220,9 @@ impl BaseCommand for StartAppCommand {
 			})?
 			.clone();
 
+		// Reject reserved reinhardt_* namespace (#3502)
+		validate_not_reserved_namespace(&app_name)?;
+
 		let target = ctx.arg(1).map(PathBuf::from);
 
 		// Determine app type and structure
@@ -323,12 +348,16 @@ impl BaseCommand for StartAppCommand {
 			// Update or create apps.rs to export the new app
 			update_apps_export(&app_name)?;
 
+			// Append to installed_apps! { ... } block (Issue #3670).
+			// Idempotent and silently skipped if src/config/apps.rs is
+			// missing (older project structure).
+			update_installed_apps_block(&app_name)?;
+
 			ctx.success(&format!(
 				"{} app '{}' created successfully in src/apps/{}!",
 				app_type, app_name, app_name
 			));
-			ctx.info("The app has been added to src/apps.rs");
-			ctx.info("Don't forget to add it to INSTALLED_APPS in your settings.rs");
+			ctx.info("The app has been added to src/apps.rs and src/config/apps.rs");
 		}
 
 		Ok(())
@@ -400,6 +429,16 @@ async fn create_workspace_app(
 	context.insert("camel_case_app_name", to_camel_case(app_name))?;
 	context.insert("is_restful", if !with_pages { "true" } else { "false" })?;
 	context.insert("with_pages", if with_pages { "true" } else { "false" })?;
+	// Workspace apps reference the parent project crate by name (for example
+	// `use my_project::config::apps::InstalledApp;`). Derive that name from
+	// the current directory (the workspace root), normalizing hyphens to
+	// underscores so the import is a valid Rust path. Falls back to
+	// `"project"` when the directory name is unavailable.
+	let project_crate_name = std::env::current_dir()
+		.ok()
+		.and_then(|p| p.file_name().map(|n| n.to_string_lossy().replace('-', "_")))
+		.unwrap_or_else(|| "project".to_string());
+	context.insert("project_crate_name", &project_crate_name)?;
 
 	// Determine template directory for workspace apps
 	let template_key = if with_pages { "pages" } else { "restful" };
@@ -578,6 +617,100 @@ fn update_apps_export(app_name: &str) -> CommandResult<()> {
 	let formatted = prettyplease::unparse(&ast);
 	fs::write(&apps_file, formatted)
 		.map_err(|e| CommandError::ExecutionError(format!("Failed to write apps.rs: {}", e)))?;
+
+	Ok(())
+}
+
+/// Append a new app entry to the `installed_apps! { ... }` block in
+/// `src/config/apps.rs`.
+///
+/// Issue #3670: the typed `#[url_patterns(InstalledApp::<name>, ...)]`
+/// form requires the app's label to be registered via `installed_apps!`.
+/// This function is idempotent: if an entry with the same label already
+/// exists, it is left alone.
+///
+/// Silently succeeds if `src/config/apps.rs` does not exist (projects
+/// scaffolded before this change may not have it; users are expected to
+/// add it manually following the migration guide).
+fn update_installed_apps_block(app_name: &str) -> CommandResult<()> {
+	use std::fs;
+
+	let apps_file = PathBuf::from("src/config/apps.rs");
+	if !apps_file.exists() {
+		// Pre-#3670 projects don't have this file — skip silently. Users
+		// on an older project structure can still use the new macro
+		// syntax by manually creating the file per the migration guide.
+		return Ok(());
+	}
+
+	let src = fs::read_to_string(&apps_file).map_err(|e| {
+		CommandError::ExecutionError(format!("Failed to read {}: {}", apps_file.display(), e))
+	})?;
+
+	// Idempotency: skip if the label is already present.
+	// We match `<name>:` since installed_apps! entries are of the form
+	// `<label>: "<path>"`.
+	let needle = format!("{}:", app_name);
+	if src.contains(&needle) {
+		return Ok(());
+	}
+
+	// Locate `installed_apps! { ... }` and append the entry before the
+	// closing `}`. A simple brace-walker suffices: we find the opening
+	// brace after `installed_apps!` and then the matching closing brace.
+	let Some(macro_start) = src.find("installed_apps!") else {
+		return Err(CommandError::ExecutionError(format!(
+			"{} does not contain `installed_apps! {{ ... }}`; cannot register new app",
+			apps_file.display()
+		)));
+	};
+
+	let Some(open_rel) = src[macro_start..].find('{') else {
+		return Err(CommandError::ExecutionError(format!(
+			"malformed installed_apps! block in {} (no opening brace)",
+			apps_file.display()
+		)));
+	};
+	let open_idx = macro_start + open_rel;
+
+	// Find matching closing brace.
+	let mut depth = 0usize;
+	let mut close_idx: Option<usize> = None;
+	for (i, ch) in src[open_idx..].char_indices() {
+		match ch {
+			'{' => depth += 1,
+			'}' => {
+				depth -= 1;
+				if depth == 0 {
+					close_idx = Some(open_idx + i);
+					break;
+				}
+			}
+			_ => {}
+		}
+	}
+	let Some(close_idx) = close_idx else {
+		return Err(CommandError::ExecutionError(format!(
+			"malformed installed_apps! block in {} (unmatched brace)",
+			apps_file.display()
+		)));
+	};
+
+	// Insert the new entry before the closing brace. Preserve existing
+	// trailing newline/indent style as best-effort.
+	let new_entry = format!("    {}: \"{}\",\n", app_name, app_name);
+	let mut out = String::with_capacity(src.len() + new_entry.len());
+	out.push_str(&src[..close_idx]);
+	// Ensure the content ends with a newline before we append.
+	if !out.ends_with('\n') {
+		out.push('\n');
+	}
+	out.push_str(&new_entry);
+	out.push_str(&src[close_idx..]);
+
+	fs::write(&apps_file, out).map_err(|e| {
+		CommandError::ExecutionError(format!("Failed to write {}: {}", apps_file.display(), e))
+	})?;
 
 	Ok(())
 }
@@ -779,5 +912,32 @@ mod tests {
 			options.iter().any(|opt| opt.long == "with-pages"),
 			"--with-pages flag should exist in StartAppCommand for mtv type mapping"
 		);
+	}
+
+	#[rstest]
+	#[case("reinhardt_myapp")]
+	#[case("reinhardt-myapp")]
+	#[case("reinhardt_")]
+	#[case("reinhardt-")]
+	#[case("reinhardt")]
+	fn test_reserved_namespace_rejected(#[case] name: &str) {
+		// Act
+		let result = validate_not_reserved_namespace(name);
+
+		// Assert
+		assert!(result.is_err(), "should reject '{}'", name);
+	}
+
+	#[rstest]
+	#[case("myapp")]
+	#[case("my_reinhardt_app")]
+	#[case("cool_project")]
+	#[case("reinhard")]
+	fn test_non_reserved_namespace_accepted(#[case] name: &str) {
+		// Act
+		let result = validate_not_reserved_namespace(name);
+
+		// Assert
+		assert!(result.is_ok(), "should accept '{}'", name);
 	}
 }

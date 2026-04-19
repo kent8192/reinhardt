@@ -31,6 +31,9 @@
 //! }
 //! ```
 
+#[cfg(client)]
+mod main;
+
 pub mod components;
 pub mod router;
 

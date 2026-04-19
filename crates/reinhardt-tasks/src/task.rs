@@ -38,7 +38,7 @@ impl TaskId {
 	/// println!("Task ID: {}", id);
 	/// ```
 	pub fn new() -> Self {
-		Self(uuid::Uuid::new_v4())
+		Self(uuid::Uuid::now_v7())
 	}
 }
 

@@ -32,10 +32,14 @@ fn should_use_cache(_field: &syn::Field) -> bool {
 /// Injection field type classification
 #[derive(Debug, Clone)]
 enum InjectionType {
-	/// `Injected<T>` - required dependency
+	/// `Injected<T>` - required dependency (deprecated, use `Depends<T>`)
 	Injected(Type),
-	/// `OptionalInjected<T>` (= `Option<Injected<T>>`) - optional dependency
+	/// `OptionalInjected<T>` (= `Option<Injected<T>>`) - optional dependency (deprecated)
 	OptionalInjected(Type),
+	/// `Depends<T>` - required dependency (preferred)
+	Depends(Type),
+	/// `Option<Depends<T>>` - optional dependency (preferred)
+	OptionalDepends(Type),
 }
 
 /// Check whether a type path likely originates from the `reinhardt_di` crate.
@@ -107,20 +111,36 @@ fn classify_injection_type(ty: &Type) -> Option<InjectionType> {
 			return Some(InjectionType::OptionalInjected(inner_ty.clone()));
 		}
 
-		// Check for Option<Injected<T>>
-		if ident == "Option"
+		// Check for Depends<T>
+		if ident == "Depends"
+			&& is_likely_reinhardt_di_path(segments)
 			&& let PathArguments::AngleBracketed(args) = &last_segment.arguments
 			&& let Some(GenericArgument::Type(inner_ty)) = args.args.first()
 		{
-			// Check if inner type is Injected<T> with path validation
-			if let Type::Path(inner_path) = inner_ty
-				&& let Some(inner_seg) = inner_path.path.segments.last()
-				&& inner_seg.ident == "Injected"
+			return Some(InjectionType::Depends(inner_ty.clone()));
+		}
+
+		// Check for Option<Injected<T>> or Option<Depends<T>>
+		if ident == "Option"
+			&& let PathArguments::AngleBracketed(args) = &last_segment.arguments
+			&& let Some(GenericArgument::Type(inner_ty)) = args.args.first()
+			&& let Type::Path(inner_path) = inner_ty
+			&& let Some(inner_seg) = inner_path.path.segments.last()
+			&& let PathArguments::AngleBracketed(inner_args) = &inner_seg.arguments
+			&& let Some(GenericArgument::Type(innermost_ty)) = inner_args.args.first()
+		{
+			// Check if inner type is Injected<T> (deprecated)
+			if inner_seg.ident == "Injected"
 				&& is_likely_reinhardt_di_path(&inner_path.path.segments)
-				&& let PathArguments::AngleBracketed(inner_args) = &inner_seg.arguments
-				&& let Some(GenericArgument::Type(innermost_ty)) = inner_args.args.first()
 			{
 				return Some(InjectionType::OptionalInjected(innermost_ty.clone()));
+			}
+
+			// Check if inner type is Depends<T>
+			if inner_seg.ident == "Depends"
+				&& is_likely_reinhardt_di_path(&inner_path.path.segments)
+			{
+				return Some(InjectionType::OptionalDepends(innermost_ty.clone()));
 			}
 		}
 	}
@@ -138,17 +158,15 @@ pub(crate) fn injectable_impl(args: TokenStream, input: DeriveInput) -> Result<T
 	let generics = &input.generics;
 	let (impl_generics, ty_generics, where_clause) = generics.split_for_impl();
 
-	// Parse macro arguments and reject scope (not yet supported on struct injectable)
-	if !args.is_empty() {
+	// Parse macro arguments (scope defaults to Request when omitted).
+	// All injectable types are registered in the global registry to enable
+	// resolution via ctx.resolve::<T>() and Depends<T>.
+	let scope = if !args.is_empty() {
 		let parsed_args: MacroArgs = syn::parse2(args)?;
-		if parsed_args.scope.is_some() {
-			return Err(syn::Error::new(
-				proc_macro2::Span::call_site(),
-				"the `scope` attribute is not yet supported on #[injectable] structs. \
-				 Scope configuration is only supported on #[injectable_factory] functions",
-			));
-		}
-	}
+		parsed_args.scope.unwrap_or(crate::utils::Scope::Request)
+	} else {
+		crate::utils::Scope::Request
+	};
 
 	// Validate that this is a struct and extract fields
 	let fields = match &input.data {
@@ -202,7 +220,7 @@ pub(crate) fn injectable_impl(args: TokenStream, input: DeriveInput) -> Result<T
 				let injection_type = classify_injection_type(ty).ok_or_else(|| {
 					syn::Error::new_spanned(
 						field,
-						"#[inject] field must have type Injected<T> or OptionalInjected<T>",
+						"#[inject] field must have type Depends<T>, Option<Depends<T>>, Injected<T>, or OptionalInjected<T>",
 					)
 				})?;
 
@@ -213,33 +231,79 @@ pub(crate) fn injectable_impl(args: TokenStream, input: DeriveInput) -> Result<T
 				// Get dynamic crate path once per field
 				let di_crate = get_reinhardt_di_crate();
 
-				// Generate Injected::<T>::resolve() call based on injection type
+				// Generate dependency resolution call based on injection type
 				let resolve_call = match injection_type {
-					InjectionType::Injected(inner_ty) => {
+					InjectionType::Depends(inner_ty) => {
 						if use_cache {
 							quote! {
-								#di_crate::Injected::<#inner_ty>::resolve(__di_ctx)
+								#di_crate::Depends::<#inner_ty>::resolve(__di_ctx, true)
 									.await?
 							}
 						} else {
 							quote! {
-								#di_crate::Injected::<#inner_ty>::resolve_uncached(__di_ctx)
+								#di_crate::Depends::<#inner_ty>::resolve(__di_ctx, false)
 									.await?
+							}
+						}
+					}
+					InjectionType::OptionalDepends(inner_ty) => {
+						if use_cache {
+							quote! {
+								#di_crate::Depends::<#inner_ty>::resolve(__di_ctx, true)
+									.await
+									.ok()
+							}
+						} else {
+							quote! {
+								#di_crate::Depends::<#inner_ty>::resolve(__di_ctx, false)
+									.await
+									.ok()
+							}
+						}
+					}
+					// Deprecated: Injected<T> and OptionalInjected<T> are still supported
+					// for backward compatibility but users should migrate to Depends<T>.
+					InjectionType::Injected(inner_ty) => {
+						if use_cache {
+							quote! {
+								{
+									#[allow(deprecated)]
+									let __v = #di_crate::Injected::<#inner_ty>::resolve(__di_ctx)
+										.await?;
+									__v
+								}
+							}
+						} else {
+							quote! {
+								{
+									#[allow(deprecated)]
+									let __v = #di_crate::Injected::<#inner_ty>::resolve_uncached(__di_ctx)
+										.await?;
+									__v
+								}
 							}
 						}
 					}
 					InjectionType::OptionalInjected(inner_ty) => {
 						if use_cache {
 							quote! {
-								#di_crate::Injected::<#inner_ty>::resolve(__di_ctx)
-									.await
-									.ok()
+								{
+									#[allow(deprecated)]
+									let __v = #di_crate::Injected::<#inner_ty>::resolve(__di_ctx)
+										.await
+										.ok();
+									__v
+								}
 							}
 						} else {
 							quote! {
-								#di_crate::Injected::<#inner_ty>::resolve_uncached(__di_ctx)
-									.await
-									.ok()
+								{
+									#[allow(deprecated)]
+									let __v = #di_crate::Injected::<#inner_ty>::resolve_uncached(__di_ctx)
+										.await
+										.ok();
+									__v
+								}
 							}
 						}
 					}
@@ -299,12 +363,45 @@ pub(crate) fn injectable_impl(args: TokenStream, input: DeriveInput) -> Result<T
 		}
 	};
 
-	// Combine cleaned struct (without #[inject] attributes) and Injectable impl
-	// Note: Global registry registration is removed to avoid const context issues
+	// Generate inventory registration for the global dependency registry.
+	// All injectable types are always registered (scope defaults to Request).
+	// Uses InjectableRegistration (const-constructible) instead of
+	// DependencyRegistration (which uses Box and cannot be used in
+	// inventory::submit!'s static context).
+	// InjectableFactory<T> bypasses AsyncFactory's Fut: Sync bound by
+	// implementing FactoryTrait directly via Injectable::inject.
+	let scope_tokens = scope.into_tokens();
+	let register_fn_name = syn::Ident::new(
+		&format!("__register_injectable_{}", struct_name),
+		proc_macro2::Span::call_site(),
+	);
+
+	let registration = quote! {
+		fn #register_fn_name(registry: &#di_crate::DependencyRegistry) {
+			registry.register::<#struct_name>(
+				#scope_tokens,
+				#di_crate::InjectableFactory::<#struct_name>::new(),
+			);
+			registry.register_qualified_type_name(
+				::std::any::TypeId::of::<#struct_name>(),
+				::std::any::type_name::<#struct_name>(),
+			);
+		}
+
+		#di_crate::inventory::submit! {
+			#di_crate::InjectableRegistration::new(
+				#register_fn_name
+			)
+		}
+	};
+
+	// Combine cleaned struct, Injectable impl, and optional registration
 	let expanded = quote! {
 		#cleaned_input
 
 		#injectable_impl
+
+		#registration
 	};
 
 	Ok(expanded)

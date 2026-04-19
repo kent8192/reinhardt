@@ -169,7 +169,7 @@ impl ProfileFactory {
 		bio: &str,
 		avatar_url: &str,
 	) -> Result<Profile, sqlx::Error> {
-		let id = Uuid::new_v4();
+		let id = Uuid::now_v7();
 		let now = Utc::now();
 
 		let sql = Query::insert()

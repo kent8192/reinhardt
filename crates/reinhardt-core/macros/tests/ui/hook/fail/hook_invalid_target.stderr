@@ -1,0 +1,5 @@
+error: unknown hook target `invalid_target`. Expected one of: runserver
+ --> tests/ui/hook/fail/hook_invalid_target.rs:3:13
+  |
+3 | #[hook(on = invalid_target)]
+  |             ^^^^^^^^^^^^^^

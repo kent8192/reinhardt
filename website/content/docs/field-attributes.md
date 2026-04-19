@@ -11,12 +11,17 @@ sidebar_weight = 30
 
 This document lists all available attributes for the `#[field(...)]` macro.
 
+> **Note:** This document describes the `#[field(...)]` attributes for the
+> `#[model(...)]` macro (RDB/SQL models). The `reinhardt-db-macros` crate has a
+> separate `#[field(...)]` system for NoSQL/document models with different
+> supported attributes.
+
 ## Overview
 
 Reinhardt's `#[model(...)]` attribute macro automatically applies
 `#[derive(Model)]` and provides fine-grained control over database schema
-through field-level attributes. Currently, **42 attributes** are supported (20
-existing + 22 newly implemented).
+through field-level attributes. Currently, **49 attributes** are supported (20
+existing + 22 newly implemented + 7 additional implemented attributes).
 
 **Note:** When using `#[model(...)]`, you don't need to explicitly add
 `#[derive(Model)]`.
@@ -26,6 +31,7 @@ existing + 22 newly implemented).
 ### Common to All DBMS
 
 - Basic attributes (primary_key, unique, null, default, etc.)
+- Auto-increment (auto_increment)
 - Generated Columns (generated, generated_stored)
 - Collation (collate)
 
@@ -36,7 +42,6 @@ existing + 22 newly implemented).
 
 ### MySQL-Specific
 
-- Auto-increment (auto_increment)
 - Character set (character_set)
 - ON UPDATE (on_update_current_timestamp)
 - Invisible columns (invisible)
@@ -108,6 +113,9 @@ status: String,
 
 Specifies a database function as the default value.
 
+> **Note:** This attribute is planned but not yet implemented in the current
+> parser.
+
 ```rust
 #[field(db_default = "CURRENT_TIMESTAMP")]
 created_at: chrono::NaiveDateTime,
@@ -117,7 +125,7 @@ created_at: chrono::NaiveDateTime,
 
 ### Field Types and Length
 
-#### `max_length: usize`
+#### `max_length: u64`
 
 Specifies the maximum length for VARCHAR type.
 
@@ -128,7 +136,7 @@ name: String,
 
 **Supported DBMS**: All **SQL Output**: `VARCHAR(255)`
 
-#### `min_length: usize`
+#### `min_length: u64`
 
 Minimum length validation (application-level).
 
@@ -196,6 +204,38 @@ age: i32,
 
 **Supported DBMS**: All **SQL Output**: `CHECK (age >= 0 AND age <= 150)`
 
+### Model Processing Control
+
+#### `skip: bool`
+
+Completely excludes a field from model processing. The field is not included in
+type validation, metadata, registration, getter/setter generation, or constructor
+parameters. Skipped fields are initialized with `Default::default()`.
+
+Used by the `#[user]` macro for non-database cache fields (e.g., `Vec<String>`
+permissions) when combined with `#[model]`.
+
+```rust
+#[field(skip = true)]
+cached_data: Vec<String>,
+```
+
+**Supported DBMS**: All (meta-attribute) **SQL Output**: None — field is excluded from schema
+
+#### `skip_getter: bool`
+
+Skips getter and setter method generation for this field. The field still
+participates in model processing (type validation, metadata, constructor).
+
+Used by the `#[user]` macro to avoid conflicts with trait method signatures.
+
+```rust
+#[field(skip_getter = true)]
+password_hash: Option<String>,
+```
+
+**Supported DBMS**: All (meta-attribute) **SQL Output**: None
+
 ### Relations
 
 #### `foreign_key: Type or &str`
@@ -214,18 +254,87 @@ user_id: i32,
 
 **Supported DBMS**: All **SQL Output**: `REFERENCES users(id)`
 
-#### `on_delete: &str`
+#### `on_delete`
 
 Specifies the action when the foreign key is deleted.
 
-Values: `"CASCADE"`, `"SET NULL"`, `"RESTRICT"`, `"NO ACTION"`, `"SET DEFAULT"`
+> **Note:** `on_delete` is configured via the `#[rel]` macro, not `#[field]`.
+
+Values: `Cascade`, `SetNull`, `Restrict`, `SetDefault`, `NoAction`
 
 ```rust
-#[field(foreign_key = User, on_delete = "CASCADE")]
-user_id: i32,
+#[rel(foreign_key, to = "User", on_delete = Cascade)]
+user: ForeignKeyField<User>,
 ```
 
 **Supported DBMS**: All **SQL Output**: `ON DELETE CASCADE`
+
+#### Many-to-Many Relationships
+
+Use `ManyToManyField<Source, Target>` with `#[rel(many_to_many, ...)]` for
+bidirectional N:N relationships. An intermediate table is auto-generated.
+
+```rust
+use reinhardt::db::associations::ManyToManyField;
+
+#[model(app_label = "blog", table_name = "blog_article")]
+pub struct Article {
+    #[field(primary_key = true)]
+    pub id: i64,
+
+    #[serde(skip, default)]
+    #[rel(many_to_many, related_name = "articles")]
+    pub tags: ManyToManyField<Article, Tag>,
+}
+```
+
+**Required attributes:**
+- `related_name` — reverse accessor name on the target model
+
+**Intermediate table:** Named `{app_label}_{source_model}_{field_name}`
+(e.g., `blog_article_tags`), containing `{source}_id` and `{target}_id` columns.
+
+**Supported DBMS**: All **SQL Output**: Creates intermediate table with foreign keys
+
+### PostgreSQL-Specific Types
+
+#### `Vec<T>` → ArrayField
+
+`Vec<T>` maps to PostgreSQL ARRAY columns. The element type is inferred automatically:
+
+```rust
+// Inferred: TEXT[] array
+pub tags: Vec<String>,
+
+// Inferred: INTEGER[] array
+pub scores: Vec<i32>,
+
+// Explicit base type override
+#[field(array_base_type = "VARCHAR(50)")]
+pub labels: Vec<String>,
+```
+
+**Supported DBMS**: PostgreSQL only **SQL Output**: `TEXT[]`, `INTEGER[]`, etc.
+
+#### `Value` → JsonField (JSONB)
+
+`serde_json::Value` maps to PostgreSQL JSONB columns:
+
+```rust
+pub metadata: serde_json::Value,
+```
+
+**Supported DBMS**: PostgreSQL only **SQL Output**: `JSONB`
+
+#### `HashMap` → HStoreField
+
+`HashMap<String, String>` maps to PostgreSQL HStore columns:
+
+```rust
+pub attributes: std::collections::HashMap<String, String>,
+```
+
+**Supported DBMS**: PostgreSQL only (requires hstore extension) **SQL Output**: `HSTORE`
 
 ### Other
 
@@ -266,6 +375,9 @@ created_at: chrono::NaiveDateTime,
 
 Defines choices (application-level).
 
+> **Note:** This attribute is planned but not yet implemented in the current
+> parser.
+
 ```rust
 #[field(choices = vec![("active", "Active"), ("inactive", "Inactive")])]
 status: String,
@@ -276,6 +388,9 @@ status: String,
 #### `help_text: &str`
 
 Help text (for documentation).
+
+> **Note:** This attribute is planned but not yet implemented in the current
+> parser.
 
 ```rust
 #[field(help_text = "User's full name")]
@@ -298,8 +413,12 @@ name: String,
 
 Specifies the expression for a generated (computed) column.
 
+> **Note:** When using `generated`, you **must** also specify either
+> `generated_stored = true` or `generated_virtual = true`. Omitting both will
+> result in a compile error.
+
 ```rust
-#[field(generated = "first_name || ' ' || last_name")]
+#[field(generated = "first_name || ' ' || last_name", generated_stored = true)]
 full_name: String,
 ```
 
@@ -372,12 +491,12 @@ id: i64,
 
 #### `auto_increment: bool`
 
-**Supported DBMS**: MySQL **Feature Flag**: `#[cfg(feature = "db-mysql")]`
+**Supported DBMS**: All **Feature Flag**: None
 
-Specifies MySQL AUTO_INCREMENT attribute.
+Specifies AUTO_INCREMENT attribute. Integer primary keys are treated as
+auto_increment by default unless explicitly disabled.
 
 ```rust
-#[cfg(feature = "db-mysql")]
 #[field(auto_increment = true)]
 id: u32,
 ```
@@ -583,7 +702,97 @@ recommended.
 
 ---
 
+### Additional Implemented Attributes (7 items)
+
+**Description**: Attributes implemented in the parser but not previously documented.
+
+#### `auto_now: bool`
+
+**Supported DBMS**: All **Feature Flag**: None
+
+Auto-set to current time on every save.
+
+```rust
+#[field(auto_now = true)]
+updated_at: chrono::NaiveDateTime,
+```
+
+#### `auto_now_add: bool`
+
+**Supported DBMS**: All **Feature Flag**: None
+
+Auto-set to current time on creation only.
+
+```rust
+#[field(auto_now_add = true)]
+created_at: chrono::NaiveDateTime,
+```
+
+#### `index: bool`
+
+**Supported DBMS**: All **Feature Flag**: None
+
+Create a database index on this field.
+
+```rust
+#[field(index = true)]
+email: String,
+```
+
+#### `field_type: String`
+
+**Supported DBMS**: PostgreSQL **Feature Flag**: `#[cfg(feature = "db-postgres")]`
+
+Specifies a custom PostgreSQL column type explicitly.
+
+```rust
+#[cfg(feature = "db-postgres")]
+#[field(field_type = "jsonb")]
+metadata: serde_json::Value,
+```
+
+#### `array_base_type: String`
+
+**Supported DBMS**: PostgreSQL **Feature Flag**: `#[cfg(feature = "db-postgres")]`
+
+Specifies the base type for PostgreSQL array fields.
+
+```rust
+#[cfg(feature = "db-postgres")]
+#[field(array_base_type = "text")]
+tags: Vec<String>,
+```
+
+#### `include_in_new: bool`
+
+**Supported DBMS**: All **Feature Flag**: None
+
+Controls whether this field is included in the auto-generated `new()`
+constructor.
+
+```rust
+#[field(include_in_new = false)]
+internal_state: i32,
+```
+
+#### `skip_getter: bool`
+
+**Supported DBMS**: All **Feature Flag**: None
+
+Skip getter method generation for this field.
+
+```rust
+#[field(skip_getter = true)]
+internal_data: Vec<u8>,
+```
+
+---
+
 ## Table-Level Attributes (`#[model(...)]`)
+
+> **Note:** These attributes (`strict`, `without_rowid`) are planned but not yet
+> supported in the `#[model(...)]` parser. They exist in the migration operations
+> layer but are not yet connected to the macro.
 
 ### `strict: bool`
 
@@ -631,8 +840,8 @@ Enable the necessary feature flags in your project's `Cargo.toml`:
 
 ```toml
 [dependencies]
-reinhardt-macros = { version = "0.1", features = ["db-postgres", "db-mysql", "db-sqlite"] }
-reinhardt-migrations = { version = "0.1", features = ["db-postgres", "db-mysql", "db-sqlite"] }
+reinhardt-core = { version = "0.1", features = ["db-postgres", "db-mysql", "db-sqlite"] }
+reinhardt-db = { version = "0.1", features = ["db-postgres", "db-mysql", "db-sqlite"] }
 ```
 
 Available feature flags:

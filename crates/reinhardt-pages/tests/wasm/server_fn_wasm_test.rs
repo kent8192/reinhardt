@@ -5,7 +5,7 @@
 //!
 //! **Run with**: `wasm-pack test --headless --chrome`
 
-#![cfg(target_arch = "wasm32")]
+#![cfg(wasm)]
 
 use wasm_bindgen_test::*;
 
@@ -75,7 +75,7 @@ fn test_csrf_header_name_django_compatible() {
 	assert_eq!(CSRF_HEADER_NAME, "X-CSRFToken");
 }
 
-/// Test headers can be used with gloo_net Request builder pattern
+/// Test headers can be used with reqwest Request builder pattern
 #[wasm_bindgen_test]
 fn test_csrf_headers_usable_with_request() {
 	cleanup_csrf_fixtures();
@@ -87,7 +87,7 @@ fn test_csrf_headers_usable_with_request() {
 		assert_eq!(header_name, "X-CSRFToken");
 		assert!(!header_value.is_empty());
 
-		// Verify header value type is compatible with gloo_net
+		// Verify header value type is compatible with reqwest
 		let _: &str = header_name; // Static str
 		let _: &str = &header_value; // String reference
 	} else {

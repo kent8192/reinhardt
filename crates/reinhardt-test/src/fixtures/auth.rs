@@ -2,6 +2,7 @@
 //!
 //! This module provides rstest fixtures for authentication integration tests,
 //! including pre-configured session backends, mock users, and test data.
+#![allow(deprecated)] // TestUser is deprecated but still used by fixture functions
 
 use rstest::*;
 use uuid::Uuid;
@@ -27,6 +28,10 @@ pub use reinhardt_auth::{
 ///     assert_eq!(test_user.username, "testuser");
 /// }
 /// ```
+#[deprecated(
+	since = "0.1.0-rc.16",
+	note = "define your own user type with `#[user]` macro and use `ForceLoginUser` trait"
+)]
 #[derive(Clone, Debug)]
 pub struct TestUser {
 	/// Unique identifier for the test user.
@@ -49,7 +54,7 @@ pub struct TestUser {
 #[fixture]
 pub fn test_user() -> TestUser {
 	TestUser {
-		id: Uuid::new_v4(),
+		id: Uuid::now_v7(),
 		username: "testuser".to_string(),
 		email: "test@example.com".to_string(),
 		is_active: true,
@@ -79,7 +84,7 @@ pub fn test_user() -> TestUser {
 #[fixture]
 pub fn admin_user() -> TestUser {
 	TestUser {
-		id: Uuid::new_v4(),
+		id: Uuid::now_v7(),
 		username: "admin".to_string(),
 		email: "admin@example.com".to_string(),
 		is_active: true,
@@ -109,7 +114,7 @@ pub fn admin_user() -> TestUser {
 pub fn test_users() -> Vec<TestUser> {
 	vec![
 		TestUser {
-			id: Uuid::new_v4(),
+			id: Uuid::now_v7(),
 			username: "user1".to_string(),
 			email: "user1@example.com".to_string(),
 			is_active: true,
@@ -118,7 +123,7 @@ pub fn test_users() -> Vec<TestUser> {
 			is_superuser: false,
 		},
 		TestUser {
-			id: Uuid::new_v4(),
+			id: Uuid::now_v7(),
 			username: "user2".to_string(),
 			email: "user2@example.com".to_string(),
 			is_active: true,
@@ -127,7 +132,7 @@ pub fn test_users() -> Vec<TestUser> {
 			is_superuser: false,
 		},
 		TestUser {
-			id: Uuid::new_v4(),
+			id: Uuid::now_v7(),
 			username: "user3".to_string(),
 			email: "user3@example.com".to_string(),
 			is_active: false, // Inactive user
@@ -136,7 +141,7 @@ pub fn test_users() -> Vec<TestUser> {
 			is_superuser: false,
 		},
 		TestUser {
-			id: Uuid::new_v4(),
+			id: Uuid::now_v7(),
 			username: "staff".to_string(),
 			email: "staff@example.com".to_string(),
 			is_active: true,
@@ -145,7 +150,7 @@ pub fn test_users() -> Vec<TestUser> {
 			is_superuser: false,
 		},
 		TestUser {
-			id: Uuid::new_v4(),
+			id: Uuid::now_v7(),
 			username: "superuser".to_string(),
 			email: "superuser@example.com".to_string(),
 			is_active: true,
@@ -223,7 +228,7 @@ pub fn mfa_with_registered_user(test_user: TestUser) -> (MfaManager, String) {
 ///
 /// #[rstest]
 /// fn test_with_jwt(jwt_auth: JwtAuth) {
-///     let token = jwt_auth.generate_token("user123".to_string(), "alice".to_string()).unwrap();
+///     let token = jwt_auth.generate_token("user123".to_string(), "alice".to_string(), false, false).unwrap();
 ///     assert!(!token.is_empty());
 /// }
 /// ```
@@ -313,7 +318,7 @@ pub fn token_storage_with_data() -> InMemoryTokenStorage {
 #[fixture]
 pub fn inactive_user() -> TestUser {
 	TestUser {
-		id: Uuid::new_v4(),
+		id: Uuid::now_v7(),
 		username: "inactive".to_string(),
 		email: "inactive@example.com".to_string(),
 		is_active: false,
@@ -329,7 +334,7 @@ pub fn inactive_user() -> TestUser {
 #[fixture]
 pub fn staff_user() -> TestUser {
 	TestUser {
-		id: Uuid::new_v4(),
+		id: Uuid::now_v7(),
 		username: "staffuser".to_string(),
 		email: "staff@example.com".to_string(),
 		is_active: true,

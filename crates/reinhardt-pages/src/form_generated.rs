@@ -18,7 +18,7 @@
 //!
 //! ## Example
 //!
-//! ```ignore
+//! ```no_run
 //! use reinhardt_pages::form;
 //!
 //! let login_form = form! {

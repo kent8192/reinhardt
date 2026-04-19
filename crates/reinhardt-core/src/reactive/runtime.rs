@@ -14,16 +14,17 @@
 //!
 //! ## Example
 //!
-//! ```ignore
+//! ```rust
 //! use reinhardt_core::reactive::{Signal, Effect, Runtime};
 //!
 //! // Create a signal
 //! let count = Signal::new(0);
 //!
 //! // Create an effect that automatically tracks dependencies
+//! let count_for_effect = count.clone();
 //! Effect::new(move || {
 //!     // This get() call automatically registers the dependency
-//!     println!("Count is: {}", count.get());
+//!     println!("Count is: {}", count_for_effect.get());
 //! });
 //!
 //! // Update the signal - the effect will automatically re-run
@@ -288,24 +289,6 @@ impl Runtime {
 		}
 	}
 
-	/// Flush all pending updates (basic version)
-	///
-	/// This is a basic implementation that clears the pending updates queue.
-	/// For actual Effect execution, use `flush_updates()` which is
-	/// implemented in the effect module.
-	///
-	/// Note: This method is kept for backward compatibility and simple testing.
-	/// Production code should use `flush_updates()` instead.
-	pub fn flush_updates(&self) {
-		*self.update_scheduled.borrow_mut() = false;
-
-		// Take all pending updates
-		let pending = core::mem::take(&mut *self.pending_updates.borrow_mut());
-
-		// Clear the queue (actual execution is handled by flush_updates)
-		drop(pending);
-	}
-
 	/// Clear dependencies for a node
 	///
 	/// This should be called before re-executing an Effect/Memo to clear old dependencies.
@@ -385,9 +368,10 @@ thread_local! {
 ///
 /// # Example
 ///
-/// ```ignore
-/// use reinhardt_core::reactive::runtime::with_runtime;
+/// ```rust
+/// use reinhardt_core::reactive::runtime::{with_runtime, NodeId};
 ///
+/// let signal_id = NodeId::new();
 /// with_runtime(|rt| {
 ///     rt.track_dependency(signal_id);
 /// });

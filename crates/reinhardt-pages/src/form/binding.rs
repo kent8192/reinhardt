@@ -271,7 +271,7 @@ impl FormBinding {
 	///     binding.submit().await?;
 	/// }
 	/// ```
-	#[cfg(target_arch = "wasm32")]
+	#[cfg(wasm)]
 	pub async fn submit(&self) -> Result<(), String> {
 		self.form_component.submit().await
 	}
@@ -453,7 +453,7 @@ mod tests {
 		username_signal.set("john_doe".to_string());
 
 		// Flush pending Effect updates
-		with_runtime(|rt| rt.flush_updates_enhanced());
+		with_runtime(|rt| rt.flush_updates());
 
 		// Verify Form was updated
 		assert_eq!(binding.get_field_value("username"), "john_doe");
@@ -537,7 +537,7 @@ mod tests {
 		username_signal.set("signal_update".to_string());
 
 		// Flush pending Effect updates
-		with_runtime(|rt| rt.flush_updates_enhanced());
+		with_runtime(|rt| rt.flush_updates());
 
 		// Sync to form (redundant due to Effect, but test explicit sync)
 		binding.sync_to_form();
@@ -568,7 +568,7 @@ mod tests {
 		email_signal.set("valid@example.com".to_string());
 
 		// Flush pending Effect updates
-		with_runtime(|rt| rt.flush_updates_enhanced());
+		with_runtime(|rt| rt.flush_updates());
 
 		// Note: Effects update the form automatically, so validation should pass
 		assert!(binding.validate());
@@ -594,7 +594,7 @@ mod tests {
 		email_signal.set("john@example.com".to_string());
 
 		// Flush pending Effect updates
-		with_runtime(|rt| rt.flush_updates_enhanced());
+		with_runtime(|rt| rt.flush_updates());
 
 		assert_eq!(binding.get_field_value("username"), "john");
 		assert_eq!(binding.get_field_value("email"), "john@example.com");

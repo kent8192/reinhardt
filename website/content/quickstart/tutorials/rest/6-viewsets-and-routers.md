@@ -296,26 +296,22 @@ ServerRouter::new()
 use reinhardt::ModelViewSet;
 use reinhardt::views::viewsets::{FilterConfig, OrderingConfig, PaginationConfig};
 
-pub struct SnippetViewSet;
-
-impl SnippetViewSet {
-    /// Create a configured ModelViewSet for Snippet model
-    pub fn viewset() -> ModelViewSet<Snippet, SnippetSerializer> {
-        ModelViewSet::new("snippet")
-            .with_pagination(PaginationConfig::page_number(10, Some(100)))
-            .with_filters(
-                FilterConfig::new()
-                    .with_filterable_fields(vec!["language".to_string(), "title".to_string()]),
-            )
-            .with_ordering(
-                OrderingConfig::new()
-                    .with_ordering_fields(vec!["created_at".to_string(), "title".to_string()]),
-            )
-    }
+#[reinhardt::viewset]
+pub fn viewset() -> ModelViewSet<Snippet, SnippetSerializer> {
+    ModelViewSet::new("snippet")
+        .with_pagination(PaginationConfig::page_number(10, Some(100)))
+        .with_filters(
+            FilterConfig::new()
+                .with_filterable_fields(vec!["language".to_string(), "title".to_string()]),
+        )
+        .with_ordering(
+            OrderingConfig::new()
+                .with_ordering_fields(vec!["created_at".to_string(), "title".to_string()]),
+        )
 }
 
 // URL registration in urls.rs
-ServerRouter::new().viewset("/snippets-viewset", SnippetViewSet::viewset())
+ServerRouter::new().viewset("/snippets-viewset", views::viewset())
 ```
 
 **Total**: ~15 lines for full CRUD + pagination + filtering + ordering

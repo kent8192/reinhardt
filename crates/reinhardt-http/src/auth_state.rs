@@ -10,6 +10,7 @@
 //! malicious code could insert a spoofed auth state into request extensions.
 
 use crate::Extensions;
+use crate::extensions::{IsActive, IsAdmin, IsAuthenticated};
 
 /// Private marker to validate that an `AuthState` was created through
 /// official constructors, not through external struct literal construction.
@@ -105,26 +106,31 @@ impl AuthState {
 	/// This method first attempts to retrieve an `AuthState` object that was
 	/// inserted directly into extensions (e.g., by custom middleware). If no
 	/// `AuthState` object is found, it falls back to reconstructing one from
-	/// individual `String` (user_id) and `bool` (is_authenticated) entries
-	/// stored in extensions by legacy middleware. Note that the fallback path
-	/// sets `is_admin` and `is_active` to `false` since those values are not
-	/// available as individual extension entries.
+	/// individual newtype-wrapped entries (`IsAuthenticated`, `IsAdmin`,
+	/// `IsActive`) stored in extensions by legacy middleware.
 	///
 	/// # Returns
 	///
 	/// Returns `Some(AuthState)` if an `AuthState` object is found or if both
-	/// user_id and is_authenticated individual entries exist, `None` otherwise.
+	/// user_id and `IsAuthenticated` individual entries exist, `None` otherwise.
 	pub fn from_extensions(extensions: &Extensions) -> Option<Self> {
 		// Primary: try to get AuthState object directly
 		if let Some(state) = extensions.get::<AuthState>() {
 			return Some(state);
 		}
 		// Fallback: reconstruct from individual extension entries (backward compatibility)
+		let user_id = extensions.get::<String>()?;
+		let is_authenticated = extensions
+			.get::<IsAuthenticated>()
+			.map(|v| v.0)
+			.unwrap_or(false);
+		let is_admin = extensions.get::<IsAdmin>().map(|v| v.0).unwrap_or(false);
+		let is_active = extensions.get::<IsActive>().map(|v| v.0).unwrap_or(false);
 		Some(Self {
-			user_id: extensions.get::<String>()?,
-			is_authenticated: extensions.get::<bool>()?,
-			is_admin: false,
-			is_active: false,
+			user_id,
+			is_authenticated,
+			is_admin,
+			is_active,
 			_marker: AuthStateMarker,
 		})
 	}
@@ -204,7 +210,7 @@ mod tests {
 		// Arrange
 		let extensions = Extensions::new();
 		extensions.insert("user-789".to_string());
-		extensions.insert(true);
+		extensions.insert(IsAuthenticated(true));
 
 		// Act
 		let result = AuthState::from_extensions(&extensions);

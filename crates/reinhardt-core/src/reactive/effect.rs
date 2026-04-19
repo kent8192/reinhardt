@@ -13,15 +13,16 @@
 //!
 //! ## Example
 //!
-//! ```ignore
+//! ```rust
 //! use reinhardt_core::reactive::{Signal, Effect};
 //!
 //! let count = Signal::new(0);
 //!
 //! // Create an effect that logs the count
+//! let count_for_effect = count.clone();
 //! let _effect = Effect::new(move || {
 //!     // This get() call automatically creates a dependency
-//!     println!("Count is: {}", count.get());
+//!     println!("Count is: {}", count_for_effect.get());
 //! });
 //!
 //! // This will trigger the effect to re-run
@@ -73,19 +74,21 @@ pub(crate) fn get_effect_timing(effect_id: NodeId) -> Option<EffectTiming> {
 ///
 /// ## Example
 ///
-/// ```ignore
+/// ```no_run
 /// use reinhardt_core::reactive::{Signal, Effect};
 ///
 /// let count = Signal::new(0);
 /// let doubled = Signal::new(0);
 ///
 /// // Effect that keeps doubled in sync with count
+/// let count_clone = count.clone();
+/// let doubled_clone = doubled.clone();
 /// Effect::new(move || {
-///     doubled.set(count.get() * 2);
+///     doubled_clone.set(count_clone.get() * 2);
 /// });
 ///
+/// // After async update, doubled would be 10
 /// count.set(5);
-/// assert_eq!(doubled.get(), 10);
 /// ```
 pub struct Effect {
 	/// Unique identifier for this effect
@@ -106,11 +109,14 @@ impl Effect {
 	///
 	/// # Example
 	///
-	/// ```ignore
+	/// ```rust
+	/// use reinhardt_core::reactive::{Signal, Effect};
+	///
 	/// let count = Signal::new(0);
 	///
+	/// let count_clone = count.clone();
 	/// Effect::new(move || {
-	///     println!("Count: {}", count.get());
+	///     println!("Count: {}", count_clone.get());
 	/// });
 	/// ```
 	pub fn new<F>(mut f: F) -> Self
@@ -156,11 +162,14 @@ impl Effect {
 	///
 	/// # Example
 	///
-	/// ```ignore
+	/// ```rust
+	/// use reinhardt_core::reactive::{Signal, Effect, EffectTiming};
+	///
 	/// let count = Signal::new(0);
 	///
+	/// let count_clone = count.clone();
 	/// Effect::new_with_timing(move || {
-	///     println!("Count: {}", count.get());
+	///     println!("Count: {}", count_clone.get());
 	/// }, EffectTiming::Layout);
 	/// ```
 	pub fn new_with_timing<F>(mut f: F, timing: EffectTiming) -> Self
@@ -299,11 +308,11 @@ impl super::runtime::Runtime {
 		Effect::execute_effect(effect_id);
 	}
 
-	/// Flush all pending updates (enhanced version)
+	/// Flush all pending updates
 	///
 	/// This executes all Effects that have been scheduled for update.
 	/// Skips effects that were disposed between scheduling and execution.
-	pub fn flush_updates_enhanced(&self) {
+	pub fn flush_updates(&self) {
 		*self.update_scheduled.borrow_mut() = false;
 
 		// Take all pending updates
@@ -380,12 +389,12 @@ mod tests {
 
 		// Change signal and flush updates
 		signal.set(10);
-		with_runtime(|rt| rt.flush_updates_enhanced());
+		with_runtime(|rt| rt.flush_updates());
 		assert_eq!(*values.borrow(), alloc::vec![0, 10]);
 
 		// Change again
 		signal.set(20);
-		with_runtime(|rt| rt.flush_updates_enhanced());
+		with_runtime(|rt| rt.flush_updates());
 		assert_eq!(*values.borrow(), alloc::vec![0, 10, 20]);
 	}
 
@@ -408,12 +417,12 @@ mod tests {
 
 		// Change first signal
 		signal1.set(10);
-		with_runtime(|rt| rt.flush_updates_enhanced());
+		with_runtime(|rt| rt.flush_updates());
 		assert_eq!(*sum.borrow(), 12);
 
 		// Change second signal
 		signal2.set(20);
-		with_runtime(|rt| rt.flush_updates_enhanced());
+		with_runtime(|rt| rt.flush_updates());
 		assert_eq!(*sum.borrow(), 30);
 	}
 
@@ -437,7 +446,7 @@ mod tests {
 
 		// Signal change should not trigger the effect
 		signal.set(10);
-		with_runtime(|rt| rt.flush_updates_enhanced());
+		with_runtime(|rt| rt.flush_updates());
 		assert_eq!(*run_count.borrow(), 1); // Still 1, not 2
 	}
 
@@ -460,7 +469,7 @@ mod tests {
 
 		// Signal change should not trigger the dropped effect
 		signal.set(10);
-		with_runtime(|rt| rt.flush_updates_enhanced());
+		with_runtime(|rt| rt.flush_updates());
 		assert_eq!(*run_count.borrow(), 1); // Still 1
 	}
 
@@ -488,8 +497,8 @@ mod tests {
 		});
 
 		// Assert - both effects should have executed without panic
-		assert_eq!(*outer_ran.borrow(), true);
-		assert_eq!(*inner_ran.borrow(), true);
+		assert!(*outer_ran.borrow());
+		assert!(*inner_ran.borrow());
 	}
 
 	#[rstest::rstest]
@@ -513,7 +522,7 @@ mod tests {
 		});
 
 		// Assert - outer ran and inner captured the signal value
-		assert_eq!(*outer_ran.borrow(), true);
+		assert!(*outer_ran.borrow());
 		assert_eq!(*inner_value.borrow(), 42);
 	}
 
@@ -546,16 +555,67 @@ mod tests {
 
 		// Act - trigger re-execution via signal change; effect disposes itself
 		signal.set(1);
-		with_runtime(|rt| rt.flush_updates_enhanced());
+		with_runtime(|rt| rt.flush_updates());
 
 		// Assert - effect ran a second time (during which it disposed itself)
 		assert_eq!(*run_count.borrow(), 2);
 
 		// Act - trigger another change; disposed effect should NOT run
 		signal.set(2);
-		with_runtime(|rt| rt.flush_updates_enhanced());
+		with_runtime(|rt| rt.flush_updates());
 
 		// Assert - still 2, effect did not run again
 		assert_eq!(*run_count.borrow(), 2);
+	}
+
+	/// Verify that `flush_updates()` actually executes pending passive effects.
+	///
+	/// This is a regression test for the bug where `flush_updates()` dropped
+	/// pending updates without executing them (Fixes #3348).
+	#[test]
+	#[serial]
+	fn test_flush_updates_executes_pending_effects() {
+		use crate::reactive::runtime::set_scheduler;
+		use std::sync::{Arc, Mutex};
+
+		// Collect tasks scheduled via set_scheduler
+		type ScheduledTasks = Arc<Mutex<Vec<Box<dyn FnOnce() + Send>>>>;
+		let scheduled_tasks: ScheduledTasks = Arc::new(Mutex::new(Vec::new()));
+		let tasks_clone = scheduled_tasks.clone();
+
+		// Install a scheduler that captures tasks instead of executing them
+		// Note: OnceLock means this only works once per process, but serial
+		// test ordering ensures no conflict
+		set_scheduler(move |task| {
+			tasks_clone.lock().unwrap().push(task);
+		});
+
+		let signal = Signal::new(0);
+		let values = Rc::new(RefCell::new(alloc::vec::Vec::new()));
+		let values_clone = values.clone();
+
+		let signal_clone = signal.clone();
+		// Default timing is Passive, so signal changes go through scheduler
+		let _effect = Effect::new(move || {
+			values_clone.borrow_mut().push(signal_clone.get());
+		});
+
+		// Effect ran once immediately during creation
+		assert_eq!(*values.borrow(), alloc::vec![0]);
+
+		// Change signal — passive effect should be scheduled, not executed immediately
+		signal.set(42);
+
+		// The scheduler captured the flush task
+		let tasks = std::mem::take(&mut *scheduled_tasks.lock().unwrap());
+		assert!(!tasks.is_empty(), "scheduler should have captured a task");
+
+		// Execute the captured tasks (simulating what spawn_local would do)
+		for task in tasks {
+			task();
+		}
+
+		// Effect should have re-executed with the new value
+		assert_eq!(*values.borrow(), alloc::vec![0, 42]);
 	}
 }

@@ -1,9 +1,10 @@
+#![cfg(not(target_arch = "wasm32"))]
 //! Sanity tests for static asset URL resolution
 //!
 //! These tests verify basic functionality of the static resolver and related
 //! components to ensure the system works at its most fundamental level.
 
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(native)]
 mod sanity_tests {
 	use reinhardt_pages::static_resolver::{init_static_resolver, is_initialized, resolve_static};
 	use reinhardt_utils::staticfiles::TemplateStaticConfig;
@@ -123,7 +124,7 @@ mod sanity_tests {
 	}
 }
 
-#[cfg(target_arch = "wasm32")]
+#[cfg(wasm)]
 mod wasm_sanity_tests {
 	use reinhardt_pages::static_resolver::{init_static_resolver, is_initialized, resolve_static};
 	use wasm_bindgen_test::*;

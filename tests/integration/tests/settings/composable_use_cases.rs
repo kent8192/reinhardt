@@ -194,23 +194,21 @@ fn use_case_all_has_traits_implemented_for_settings() {
 
 #[rstest]
 #[allow(deprecated)]
-fn use_case_legacy_flat_security_keys_deserialize() {
-	// Arrange — start from default Settings, serialize, then inject flat security keys
+fn use_case_nested_security_keys_deserialize() {
+	// Arrange — start from default Settings, serialize, then inject nested security keys.
+	// Since PR #3176 removed #[serde(flatten)] from CoreSettings.security,
+	// security fields must be provided as a nested "security" object.
 	let mut default_json: serde_json::Value = serde_json::to_value(Settings::default()).unwrap();
 	let obj = default_json.as_object_mut().unwrap();
 	obj.insert(
-		"secure_ssl_redirect".to_string(),
-		serde_json::Value::Bool(true),
+		"security".to_string(),
+		serde_json::json!({
+			"secure_ssl_redirect": true,
+			"session_cookie_secure": true,
+			"csrf_cookie_secure": true,
+			"append_slash": false
+		}),
 	);
-	obj.insert(
-		"session_cookie_secure".to_string(),
-		serde_json::Value::Bool(true),
-	);
-	obj.insert(
-		"csrf_cookie_secure".to_string(),
-		serde_json::Value::Bool(true),
-	);
-	obj.insert("append_slash".to_string(), serde_json::Value::Bool(false));
 	let json = default_json;
 
 	// Act
@@ -219,26 +217,28 @@ fn use_case_legacy_flat_security_keys_deserialize() {
 	// Assert — security fields should be accessible via core.security
 	assert!(
 		settings.core.security.secure_ssl_redirect,
-		"Legacy flat secure_ssl_redirect should deserialize into core.security"
+		"Nested secure_ssl_redirect should deserialize into core.security"
 	);
 	assert!(
 		settings.core.security.session_cookie_secure,
-		"Legacy flat session_cookie_secure should deserialize into core.security"
+		"Nested session_cookie_secure should deserialize into core.security"
 	);
 	assert!(
 		settings.core.security.csrf_cookie_secure,
-		"Legacy flat csrf_cookie_secure should deserialize into core.security"
+		"Nested csrf_cookie_secure should deserialize into core.security"
 	);
 	assert!(
 		!settings.core.security.append_slash,
-		"Legacy flat append_slash should deserialize into core.security"
+		"Nested append_slash should deserialize into core.security"
 	);
 }
 
 #[rstest]
 #[allow(deprecated)]
-fn use_case_settings_builder_flat_keys_into_typed() {
-	// Arrange — simulate DefaultSource with flat security keys (as used by introspect)
+fn use_case_settings_builder_nested_security_into_typed() {
+	// Arrange — simulate DefaultSource with nested security object.
+	// Since PR #3176 removed #[serde(flatten)] from CoreSettings.security,
+	// security fields must be provided as a nested "security" object.
 	use reinhardt_conf::settings::builder::SettingsBuilder;
 	use reinhardt_conf::settings::profile::Profile;
 	use reinhardt_conf::settings::sources::DefaultSource;
@@ -261,23 +261,25 @@ fn use_case_settings_builder_flat_keys_into_typed() {
 				.with_value("use_i18n", serde_json::json!(false))
 				.with_value("use_tz", serde_json::json!(false))
 				.with_value("default_auto_field", serde_json::json!("BigAutoField"))
-				// Flat security keys (same as introspect's build_settings)
-				.with_value("secure_ssl_redirect", serde_json::json!(true))
-				.with_value("session_cookie_secure", serde_json::json!(true))
-				.with_value("csrf_cookie_secure", serde_json::json!(true))
-				.with_value("append_slash", serde_json::json!(false))
+				// Nested security object (required since PR #3176)
+				.with_value("security", serde_json::json!({
+					"secure_ssl_redirect": true,
+					"session_cookie_secure": true,
+					"csrf_cookie_secure": true,
+					"append_slash": false
+				}))
 				.with_value("middleware", serde_json::json!([]))
 				.with_value("root_urlconf", serde_json::json!(""))
 				.with_value("admins", serde_json::json!([]))
 				.with_value("managers", serde_json::json!([])),
 		)
 		.build()
-		.expect("SettingsBuilder should build with flat keys");
+		.expect("SettingsBuilder should build with nested security keys");
 
-	// Act — into_typed should correctly map flat keys via #[serde(flatten)]
+	// Act — into_typed should correctly map nested security object via CoreSettings
 	let settings: Settings = merged
 		.into_typed()
-		.expect("into_typed should succeed with flat security keys");
+		.expect("into_typed should succeed with nested security keys");
 
 	// Assert — security fields should be accessible via core.security
 	assert_eq!(
@@ -287,18 +289,18 @@ fn use_case_settings_builder_flat_keys_into_typed() {
 	assert!(settings.core.debug, "debug should be in core via flatten");
 	assert!(
 		settings.core.security.secure_ssl_redirect,
-		"Flat secure_ssl_redirect should map to core.security via double flatten"
+		"Nested secure_ssl_redirect should map to core.security"
 	);
 	assert!(
 		settings.core.security.session_cookie_secure,
-		"Flat session_cookie_secure should map to core.security via double flatten"
+		"Nested session_cookie_secure should map to core.security"
 	);
 	assert!(
 		settings.core.security.csrf_cookie_secure,
-		"Flat csrf_cookie_secure should map to core.security via double flatten"
+		"Nested csrf_cookie_secure should map to core.security"
 	);
 	assert!(
 		!settings.core.security.append_slash,
-		"Flat append_slash should map to core.security via double flatten"
+		"Nested append_slash should map to core.security"
 	);
 }

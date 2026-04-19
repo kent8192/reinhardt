@@ -29,7 +29,7 @@ impl CollectionAggregations {
 	///
 	/// # Examples
 	///
-	/// ```ignore
+	/// ```no_run
 	/// use reinhardt_urls::proxy::{CollectionProxy, collection::CollectionAggregations};
 	///
 	/// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
@@ -59,7 +59,7 @@ impl CollectionAggregations {
 	///
 	/// # Examples
 	///
-	/// ```ignore
+	/// ```no_run
 	/// use reinhardt_urls::proxy::{CollectionProxy, collection::CollectionAggregations};
 	///
 	/// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
@@ -100,7 +100,7 @@ impl CollectionAggregations {
 	///
 	/// # Examples
 	///
-	/// ```ignore
+	/// ```no_run
 	/// use reinhardt_urls::proxy::{CollectionProxy, collection::CollectionAggregations};
 	///
 	/// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
@@ -137,7 +137,7 @@ impl CollectionAggregations {
 	///
 	/// # Examples
 	///
-	/// ```ignore
+	/// ```no_run
 	/// use reinhardt_urls::proxy::{CollectionProxy, collection::CollectionAggregations};
 	///
 	/// # async fn example() -> Result<(), Box<dyn std::error::Error>> {

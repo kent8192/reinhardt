@@ -11,7 +11,7 @@ jobs:
   cancel-stale-runs:
     name: Cancel Stale Workflow Runs
     runs-on: [self-hosted, linux, arm64, reinhardt-hotpath]
-    timeout-minutes: 8
+    timeout-minutes: 360
     steps:
       - name: Cancel and force-cancel stale runs
         uses: actions/github-script@v8
@@ -20,7 +20,7 @@ jobs:
             const owner = context.repo.owner;
             const repo = context.repo.repo;
             const branch = context.payload.pull_request.head.ref;
-            const targetWorkflows = ['ci.yml', 'test-examples.yml'];
+            const targetWorkflows = ['ci.yml', 'examples-test-standalone.yml'];
 
             // Phase 1: Find and cancel all non-completed runs
             const cancelledRunIds = [];
@@ -79,7 +79,8 @@ jobs:
               }
             }
 
-            // Phase 3: Force-cancel any remaining runs
+            // Phase 3: Force-cancel any remaining runs (#3543)
+            let forceCancelFailed = 0;
             for (const { id, workflow } of cancelledRunIds) {
               const { data: run } = await github.rest.actions.getWorkflowRun({
                 owner, repo, run_id: id,
@@ -87,11 +88,16 @@ jobs:
               if (run.status !== 'completed') {
                 console.log(`Force-cancelling ${workflow} run #${id}`);
                 try {
-                  await github.rest.actions.forceCancelWorkflowRun({
+                  await github.request('POST /repos/{owner}/{repo}/actions/runs/{run_id}/force-cancel', {
                     owner, repo, run_id: id,
                   });
                 } catch (e) {
-                  console.log(`Failed to force-cancel run #${id}: ${e.message}`);
+                  forceCancelFailed++;
+                  core.warning(`Failed to force-cancel ${workflow} run #${id}: ${e.message}`);
                 }
               }
+            }
+
+            if (forceCancelFailed > 0) {
+              core.setFailed(`${forceCancelFailed} run(s) could not be force-cancelled`);
             }

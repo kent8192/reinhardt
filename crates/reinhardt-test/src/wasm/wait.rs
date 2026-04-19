@@ -1,4 +1,4 @@
-#![cfg(target_arch = "wasm32")]
+#![cfg(wasm)]
 
 //! Async utilities for WASM testing.
 //!
@@ -8,7 +8,7 @@
 //!
 //! # Example
 //!
-//! ```ignore
+//! ```no_run
 //! use reinhardt_test::wasm::wait::{wait_for, sleep, WaitOptions};
 //!
 //! // Wait for a condition
@@ -25,7 +25,7 @@
 //! sleep(Duration::from_millis(100)).await;
 //! ```
 
-#![cfg(target_arch = "wasm32")]
+#![cfg(wasm)]
 
 use std::future::Future;
 use std::pin::Pin;
@@ -199,7 +199,7 @@ where
 
 impl<F> std::future::IntoFuture for WaitForBuilder<F>
 where
-	F: FnMut() -> bool,
+	F: FnMut() -> bool + 'static,
 {
 	type Output = WaitResult<()>;
 	type IntoFuture = Pin<Box<dyn Future<Output = Self::Output>>>;
@@ -215,7 +215,7 @@ where
 ///
 /// # Example
 ///
-/// ```ignore
+/// ```no_run
 /// use reinhardt_test::wasm::wait::wait_for;
 /// use std::time::Duration;
 ///
@@ -243,7 +243,7 @@ where
 ///
 /// # Example
 ///
-/// ```ignore
+/// ```no_run
 /// use reinhardt_test::wasm::wait::wait_for_element_visible;
 ///
 /// let element = wait_for_element_visible("#loading-spinner", None).await?;
@@ -291,7 +291,7 @@ pub async fn wait_for_element_visible(
 ///
 /// # Example
 ///
-/// ```ignore
+/// ```no_run
 /// use reinhardt_test::wasm::wait::wait_for_element_hidden;
 ///
 /// wait_for_element_hidden("#loading-spinner", None).await?;
@@ -416,7 +416,7 @@ pub async fn wait_for_element_removed(
 ///
 /// # Example
 ///
-/// ```ignore
+/// ```no_run
 /// use reinhardt_test::wasm::wait::sleep;
 /// use std::time::Duration;
 ///
@@ -433,7 +433,7 @@ pub async fn sleep(duration: Duration) {
 ///
 /// # Example
 ///
-/// ```ignore
+/// ```no_run
 /// use reinhardt_test::wasm::wait::flush_microtasks;
 ///
 /// // After triggering some async operation
@@ -452,7 +452,7 @@ pub async fn flush_microtasks() {
 ///
 /// # Example
 ///
-/// ```ignore
+/// ```no_run
 /// use reinhardt_test::wasm::wait::flush_effects;
 ///
 /// signal.set(new_value);
@@ -581,13 +581,13 @@ fn is_element_visible(element: &Element) -> bool {
 		}
 
 		// Check computed visibility
-		if let Ok(Some(style)) = get_window()
+		if let Some(style) = get_window()
 			.ok()
-			.and_then(|w| Some(w.get_computed_style(element)))
+			.and_then(|w| w.get_computed_style(element).ok())
 			.flatten()
 		{
-			let visibility = style.get_property_value("visibility").unwrap_or_default();
-			let display = style.get_property_value("display").unwrap_or_default();
+			let visibility: String = style.get_property_value("visibility").unwrap_or_default();
+			let display: String = style.get_property_value("display").unwrap_or_default();
 
 			if visibility == "hidden" || display == "none" {
 				return false;

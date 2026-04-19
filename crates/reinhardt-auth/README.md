@@ -48,7 +48,7 @@ use reinhardt::auth::jwt::{JwtAuth, Claims};
 use chrono::Duration;
 
 let jwt_auth = JwtAuth::new(b"my-secret-key");
-let token = jwt_auth.generate_token("user123".to_string(), "john_doe".to_string()).unwrap();
+let token = jwt_auth.generate_token("user123".to_string(), "john_doe".to_string(), false, false).unwrap();
 let claims = jwt_auth.verify_token(&token).unwrap();
 ```
 
@@ -574,7 +574,9 @@ basic_auth.add_user("alice", "password123");
 let user = basic_auth.authenticate(&request).unwrap().unwrap();
 let token = jwt_auth.generate_token(
     user.id(),
-    user.username().to_string()
+    user.username().to_string(),
+    false,
+    false,
 ).unwrap();
 
 // 4. Verify token on subsequent requests

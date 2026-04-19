@@ -14,7 +14,7 @@ use uuid::Uuid;
 /// use uuid::Uuid;
 ///
 /// let user = SimpleUser {
-///     id: Uuid::new_v4(),
+///     id: Uuid::now_v7(),
 ///     username: "alice".to_string(),
 ///     email: "alice@example.com".to_string(),
 ///     is_active: true,
@@ -83,7 +83,7 @@ pub trait User: Send + Sync {
 /// use uuid::Uuid;
 ///
 /// let user = SimpleUser {
-///     id: Uuid::new_v4(),
+///     id: Uuid::now_v7(),
 ///     username: "bob".to_string(),
 ///     email: "bob@example.com".to_string(),
 ///     is_active: true,

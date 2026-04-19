@@ -1,3 +1,4 @@
+#![cfg(not(target_arch = "wasm32"))]
 //! SSR Renderer Integration Tests
 //!
 //! This test suite validates the Server-Side Rendering functionality of reinhardt-pages.
@@ -547,7 +548,7 @@ fn test_full_page_with_auth_data() {
 	use reinhardt_pages::auth::AuthData;
 
 	let counter = Counter::new(0);
-	let auth = AuthData::authenticated(1, "testuser");
+	let auth = AuthData::authenticated("1", "testuser");
 	let options = SsrOptions::new().auth(auth);
 	let mut renderer = SsrRenderer::with_options(options);
 	let html = renderer.render_page(&counter);

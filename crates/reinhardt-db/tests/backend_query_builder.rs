@@ -484,7 +484,7 @@ fn test_query_value_timestamp() {
 #[rstest]
 fn test_query_value_uuid() {
 	// Arrange
-	let id = uuid::Uuid::new_v4();
+	let id = uuid::Uuid::now_v7();
 
 	// Act
 	let val = QueryValue::Uuid(id);
@@ -586,7 +586,7 @@ fn test_query_value_from_chrono_datetime() {
 #[rstest]
 fn test_query_value_from_uuid() {
 	// Arrange
-	let id = uuid::Uuid::new_v4();
+	let id = uuid::Uuid::now_v7();
 
 	// Act
 	let val: QueryValue = id.into();

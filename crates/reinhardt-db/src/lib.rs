@@ -46,6 +46,10 @@
 //!   - Replays applied migrations to reconstruct schema state
 //!   - Enables accurate change detection without database introspection
 //!   - Used internally by `makemigrations` command
+//! - **Composite Primary Key Detection**: Autodetector emits `CreateCompositePrimaryKey`
+//!   when a model adds a `primary_key` constraint covering 2+ columns
+//! - **Sequence Reset Detection**: Autodetector emits `SetAutoIncrementValue`
+//!   when a model adds or changes the `sequence_reset` option
 //!
 //! ## Available Database Backends
 //!
@@ -130,16 +134,29 @@
 //! | `sqlite` | disabled | SQLite backend |
 //! | `mysql` | disabled | MySQL backend |
 //! | `all-databases` | disabled | Enable all database backends |
+//! | `backends-pool` | disabled | Connection pool backend abstractions |
+//! | `contenttypes` | disabled | Generic foreign key support |
+//! | `nosql` | disabled | NoSQL/BSON type support |
+//! | `di` | disabled | Dependency injection integration |
+//! | `database-full` | disabled | Enable all database features |
 
+#[cfg(feature = "associations")]
 pub mod associations;
+#[cfg(feature = "backends")]
 pub mod backends;
+#[cfg(any(feature = "backends", feature = "backends-pool"))]
 pub mod backends_pool;
+#[cfg(feature = "contenttypes")]
 pub mod contenttypes;
+#[cfg(feature = "hybrid")]
 pub mod hybrid;
+#[cfg(feature = "migrations")]
 pub mod migrations;
 #[cfg(feature = "nosql")]
 pub mod nosql;
+#[cfg(feature = "orm")]
 pub mod orm;
+#[cfg(feature = "pool")]
 pub mod pool;
 
 /// Prelude module for convenient imports

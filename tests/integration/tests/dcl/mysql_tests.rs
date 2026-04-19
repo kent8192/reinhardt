@@ -19,11 +19,139 @@
 
 use reinhardt_query::dcl::*;
 use reinhardt_test::fixtures::dcl::*;
+use reinhardt_test::fixtures::testcontainers::mysql_container;
 use rstest::rstest;
+use serial_test::serial;
+use sqlx::{MySqlPool, Row};
+use std::sync::Arc;
+use testcontainers::{ContainerAsync, GenericImage};
 
-// NOTE: These tests would use testcontainers for real database testing
-// For now, we're creating the structure. Actual implementation would require
-// testcontainers setup and database connections.
+// `mysql_container` is an rstest `#[fixture]` that starts a MySQL testcontainer.
+
+// ============================================================================
+// GRANT / REVOKE Integration Tests (executed against real MySQL)
+// ============================================================================
+
+/// GRANT SELECT on a table to a user and verify it appears in
+/// `information_schema.table_privileges`.
+#[rstest]
+#[tokio::test]
+#[serial(dcl_mysql)]
+async fn test_grant_select_appears_in_information_schema(
+	#[future] mysql_container: (ContainerAsync<GenericImage>, Arc<MySqlPool>, u16, String),
+) {
+	// Arrange
+	let (_container, pool, _port, _url) = mysql_container.await;
+	let user = test_user();
+	let table = dcl_test_table();
+
+	sqlx::query(&format!(
+		"CREATE USER '{user}'@'%' IDENTIFIED BY 'test_pass'"
+	))
+	.execute(pool.as_ref())
+	.await
+	.expect("CREATE USER");
+	sqlx::query(&format!(
+		"CREATE TABLE {table} (id BIGINT PRIMARY KEY, name VARCHAR(100))"
+	))
+	.execute(pool.as_ref())
+	.await
+	.expect("CREATE TABLE");
+
+	// Act
+	sqlx::query(&format!(
+		"GRANT SELECT ON test_db.{table} TO '{user}'@'%'"
+	))
+	.execute(pool.as_ref())
+	.await
+	.expect("GRANT SELECT");
+
+	// Assert: SELECT privilege is present in information_schema.
+	let count: i64 = sqlx::query(
+		"SELECT COUNT(*) FROM information_schema.table_privileges
+		 WHERE grantee = ? AND table_name = ? AND privilege_type = 'SELECT'",
+	)
+	.bind(format!("'{user}'@'%'"))
+	.bind(&table)
+	.fetch_one(pool.as_ref())
+	.await
+	.expect("query information_schema")
+	.get::<i64, _>(0);
+	assert_eq!(count, 1, "GRANT SELECT must create one privilege row");
+
+	// Cleanup
+	let _ = sqlx::query(&format!("DROP TABLE IF EXISTS {table}"))
+		.execute(pool.as_ref())
+		.await;
+	let _ = sqlx::query(&format!("DROP USER IF EXISTS '{user}'@'%'"))
+		.execute(pool.as_ref())
+		.await;
+}
+
+/// REVOKE a previously granted SELECT and verify it disappears from
+/// `information_schema.table_privileges`.
+#[rstest]
+#[tokio::test]
+#[serial(dcl_mysql)]
+async fn test_revoke_select_removes_privilege(
+	#[future] mysql_container: (ContainerAsync<GenericImage>, Arc<MySqlPool>, u16, String),
+) {
+	// Arrange
+	let (_container, pool, _port, _url) = mysql_container.await;
+	let user = test_user();
+	let table = dcl_test_table();
+	sqlx::query(&format!(
+		"CREATE USER '{user}'@'%' IDENTIFIED BY 'test_pass'"
+	))
+	.execute(pool.as_ref())
+	.await
+	.expect("CREATE USER");
+	sqlx::query(&format!(
+		"CREATE TABLE {table} (id BIGINT PRIMARY KEY, name VARCHAR(100))"
+	))
+	.execute(pool.as_ref())
+	.await
+	.expect("CREATE TABLE");
+	sqlx::query(&format!(
+		"GRANT SELECT ON test_db.{table} TO '{user}'@'%'"
+	))
+	.execute(pool.as_ref())
+	.await
+	.expect("GRANT SELECT");
+
+	// Act
+	sqlx::query(&format!(
+		"REVOKE SELECT ON test_db.{table} FROM '{user}'@'%'"
+	))
+	.execute(pool.as_ref())
+	.await
+	.expect("REVOKE SELECT");
+
+	// Assert
+	let count: i64 = sqlx::query(
+		"SELECT COUNT(*) FROM information_schema.table_privileges
+		 WHERE grantee = ? AND table_name = ? AND privilege_type = 'SELECT'",
+	)
+	.bind(format!("'{user}'@'%'"))
+	.bind(&table)
+	.fetch_one(pool.as_ref())
+	.await
+	.expect("query information_schema")
+	.get::<i64, _>(0);
+	assert_eq!(count, 0, "REVOKE SELECT must remove all matching rows");
+
+	// Cleanup
+	let _ = sqlx::query(&format!("DROP TABLE IF EXISTS {table}"))
+		.execute(pool.as_ref())
+		.await;
+	let _ = sqlx::query(&format!("DROP USER IF EXISTS '{user}'@'%'"))
+		.execute(pool.as_ref())
+		.await;
+}
+
+// ============================================================================
+// Remaining test stubs (require additional scaffolding; tracked separately)
+// ============================================================================
 
 // ============================================================================
 // Role Management Integration Tests (8 tests)

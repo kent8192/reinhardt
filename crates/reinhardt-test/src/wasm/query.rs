@@ -1,4 +1,4 @@
-#![cfg(target_arch = "wasm32")]
+#![cfg(wasm)]
 
 //! DOM Query API for WASM Frontend Testing
 //!
@@ -34,8 +34,11 @@
 //! let loaded = screen.find_by_text("Loaded").await;
 //! ```
 
-use reinhardt_core::security::escape_css_selector;
+use wasm_bindgen::JsCast;
 use web_sys::{Document, Element, NodeList, window};
+
+// Re-export for use in sibling modules (assertions)
+pub(super) use reinhardt_core::security::escape_css_selector;
 
 /// Result of a DOM query operation.
 ///

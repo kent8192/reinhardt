@@ -239,7 +239,7 @@ async fn test_jwt_token_refresh_flow(
 	let token_storage = Arc::new(InMemoryTokenStorage::new());
 
 	// Store refresh token
-	let refresh_token = format!("refresh_{}", Uuid::new_v4());
+	let refresh_token = format!("refresh_{}", Uuid::now_v7());
 	token_storage
 		.store_token(&test_user.id.to_string(), &refresh_token, 3600)
 		.await
@@ -281,7 +281,7 @@ async fn test_token_authentication_with_header(
 	let token_storage = Arc::new(InMemoryTokenStorage::new());
 
 	// Generate and store token
-	let token = format!("token_{}", Uuid::new_v4());
+	let token = format!("token_{}", Uuid::now_v7());
 	token_storage
 		.store_token(&test_user.id.to_string(), &token, 3600)
 		.await
@@ -345,7 +345,7 @@ async fn test_token_revocation(
 	let token_storage = Arc::new(InMemoryTokenStorage::new());
 
 	// Store token
-	let token = format!("token_{}", Uuid::new_v4());
+	let token = format!("token_{}", Uuid::now_v7());
 	token_storage
 		.store_token(&test_user.id.to_string(), &token, 3600)
 		.await
@@ -426,7 +426,7 @@ async fn test_session_expiration(
 
 	// Session expiration is typically handled by session store
 	// Here we verify the integration expects proper expiration handling
-	let session_id = Uuid::new_v4().to_string();
+	let session_id = Uuid::now_v7().to_string();
 	let expiry_seconds = 3600; // 1 hour
 
 	// Verify expiry value is positive
@@ -603,7 +603,7 @@ async fn test_authentication_with_inactive_user(
 
 	// Insert inactive user
 	let inactive_user = TestUser {
-		id: Uuid::new_v4(),
+		id: Uuid::now_v7(),
 		username: "inactive".to_string(),
 		email: "inactive@example.com".to_string(),
 		is_active: false,
@@ -728,7 +728,7 @@ async fn test_authentication_with_default_user_model(
 	.expect("Failed to create users table");
 
 	// Insert DefaultUser
-	let user_id = Uuid::new_v4();
+	let user_id = Uuid::now_v7();
 	sqlx::query(
 		"INSERT INTO users (id, username, email, password_hash, first_name, last_name)
 		 VALUES ($1, $2, $3, $4, $5, $6)",

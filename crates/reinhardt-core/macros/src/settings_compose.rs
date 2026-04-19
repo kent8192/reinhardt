@@ -234,8 +234,9 @@ pub(crate) fn settings_compose_impl(args: TokenStream, input: ItemStruct) -> Res
 		})
 		.collect();
 
-	// Generate validate() method calls using fully-qualified path
-	// to avoid requiring SettingsFragment import at the call site
+	// Generate validate() method calls using fully-qualified SettingsFragment path.
+	// For fragments with custom validation (validate = false), the macro-generated
+	// SettingsFragment::validate delegates to SettingsValidation::validate automatically.
 	let validate_calls: Vec<_> = includes
 		.iter()
 		.map(|(key, _, _)| {

@@ -47,7 +47,6 @@ body:
 				- stale.yml
 				- terraform-check.yml
 				- terraform-plan.yml
-				- test-examples.yml
 				- todo-check.yml
 				- ui-test.yml
 				- unit-test.yml
@@ -121,7 +120,7 @@ body:
 				Tests pass locally with:
 				- Docker Desktop running
 				- macOS 14.0
-				- Rust 1.91.1
+				- Rust 1.94.1
 
 				Difference in CI:
 				- CI runner: ubuntu-latest

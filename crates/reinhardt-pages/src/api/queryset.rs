@@ -297,17 +297,18 @@ where
 	}
 
 	/// Fetches all matching results.
-	#[cfg(target_arch = "wasm32")]
+	#[cfg(wasm)]
 	pub async fn all(&self) -> Result<Vec<T>, ServerFnError> {
 		use crate::csrf::csrf_headers;
-		use gloo_net::http::Request;
+		use reqwest::Client;
 
 		let url = self.build_url();
-		let mut request = Request::get(&url);
+		let client = Client::new();
+		let mut request = client.get(&url);
 
 		// Add CSRF header
 		if let Some((header_name, header_value)) = csrf_headers() {
-			request = request.header(header_name, &header_value);
+			request = request.header(header_name, header_value);
 		}
 
 		let response = request
@@ -315,10 +316,14 @@ where
 			.await
 			.map_err(|e| ServerFnError::Network(e.to_string()))?;
 
-		if !response.ok() {
+		if !response.status().is_success() {
 			return Err(ServerFnError::Server {
-				status: response.status(),
-				message: response.status_text(),
+				status: response.status().as_u16(),
+				message: response
+					.status()
+					.canonical_reason()
+					.unwrap_or("Unknown")
+					.to_string(),
 			});
 		}
 
@@ -329,7 +334,7 @@ where
 	}
 
 	/// Fetches all matching results (non-WASM stub).
-	#[cfg(not(target_arch = "wasm32"))]
+	#[cfg(native)]
 	pub async fn all(&self) -> Result<Vec<T>, ServerFnError> {
 		Err(ServerFnError::Network(
 			"API calls not supported outside WASM".to_string(),
@@ -337,7 +342,7 @@ where
 	}
 
 	/// Fetches the first matching result.
-	#[cfg(target_arch = "wasm32")]
+	#[cfg(wasm)]
 	pub async fn first(&self) -> Result<Option<T>, ServerFnError>
 	where
 		T: Clone,
@@ -349,7 +354,7 @@ where
 	}
 
 	/// Fetches the first matching result (non-WASM stub).
-	#[cfg(not(target_arch = "wasm32"))]
+	#[cfg(native)]
 	pub async fn first(&self) -> Result<Option<T>, ServerFnError> {
 		Err(ServerFnError::Network(
 			"API calls not supported outside WASM".to_string(),
@@ -357,16 +362,17 @@ where
 	}
 
 	/// Fetches a single result by primary key.
-	#[cfg(target_arch = "wasm32")]
+	#[cfg(wasm)]
 	pub async fn get(&self, pk: impl std::fmt::Display) -> Result<T, ServerFnError> {
 		use crate::csrf::csrf_headers;
-		use gloo_net::http::Request;
+		use reqwest::Client;
 
 		let url = format!("{}{}/", self.endpoint.trim_end_matches('/'), pk);
-		let mut builder = Request::get(&url);
+		let client = Client::new();
+		let mut builder = client.get(&url);
 
 		if let Some((header_name, header_value)) = csrf_headers() {
-			builder = builder.header(header_name, &header_value);
+			builder = builder.header(header_name, header_value);
 		}
 
 		let response = builder
@@ -374,10 +380,14 @@ where
 			.await
 			.map_err(|e| ServerFnError::Network(e.to_string()))?;
 
-		if !response.ok() {
+		if !response.status().is_success() {
 			return Err(ServerFnError::Server {
-				status: response.status(),
-				message: response.status_text(),
+				status: response.status().as_u16(),
+				message: response
+					.status()
+					.canonical_reason()
+					.unwrap_or("Unknown")
+					.to_string(),
 			});
 		}
 
@@ -388,7 +398,7 @@ where
 	}
 
 	/// Fetches a single result by primary key (non-WASM stub).
-	#[cfg(not(target_arch = "wasm32"))]
+	#[cfg(native)]
 	pub async fn get(&self, _pk: impl std::fmt::Display) -> Result<T, ServerFnError> {
 		Err(ServerFnError::Network(
 			"API calls not supported outside WASM".to_string(),
@@ -396,17 +406,18 @@ where
 	}
 
 	/// Returns the count of matching results.
-	#[cfg(target_arch = "wasm32")]
+	#[cfg(wasm)]
 	pub async fn count(&self) -> Result<usize, ServerFnError> {
 		use crate::csrf::csrf_headers;
-		use gloo_net::http::Request;
+		use reqwest::Client;
 
 		// Many APIs support a count endpoint or header
 		let url = format!("{}?count=true", self.build_url());
-		let mut builder = Request::get(&url);
+		let client = Client::new();
+		let mut builder = client.get(&url);
 
 		if let Some((header_name, header_value)) = csrf_headers() {
-			builder = builder.header(header_name, &header_value);
+			builder = builder.header(header_name, header_value);
 		}
 
 		let response = builder
@@ -414,10 +425,14 @@ where
 			.await
 			.map_err(|e| ServerFnError::Network(e.to_string()))?;
 
-		if !response.ok() {
+		if !response.status().is_success() {
 			return Err(ServerFnError::Server {
-				status: response.status(),
-				message: response.status_text(),
+				status: response.status().as_u16(),
+				message: response
+					.status()
+					.canonical_reason()
+					.unwrap_or("Unknown")
+					.to_string(),
 			});
 		}
 
@@ -435,7 +450,7 @@ where
 	}
 
 	/// Returns the count of matching results (non-WASM stub).
-	#[cfg(not(target_arch = "wasm32"))]
+	#[cfg(native)]
 	pub async fn count(&self) -> Result<usize, ServerFnError> {
 		Err(ServerFnError::Network(
 			"API calls not supported outside WASM".to_string(),
@@ -452,30 +467,32 @@ where
 	}
 
 	/// Creates a new record.
-	#[cfg(target_arch = "wasm32")]
+	#[cfg(wasm)]
 	pub async fn create(&self, data: &T) -> Result<T, ServerFnError> {
 		use crate::csrf::csrf_headers;
-		use gloo_net::http::Request;
+		use reqwest::Client;
 
-		let mut builder = Request::post(&self.endpoint);
+		let client = Client::new();
+		let mut builder = client.post(&self.endpoint);
 
 		if let Some((header_name, header_value)) = csrf_headers() {
-			builder = builder.header(header_name, &header_value);
+			builder = builder.header(header_name, header_value);
 		}
 
-		let request = builder
+		let response = builder
 			.json(data)
-			.map_err(|e| ServerFnError::Serialization(e.to_string()))?;
-
-		let response = request
 			.send()
 			.await
 			.map_err(|e| ServerFnError::Network(e.to_string()))?;
 
-		if !response.ok() {
+		if !response.status().is_success() {
 			return Err(ServerFnError::Server {
-				status: response.status(),
-				message: response.status_text(),
+				status: response.status().as_u16(),
+				message: response
+					.status()
+					.canonical_reason()
+					.unwrap_or("Unknown")
+					.to_string(),
 			});
 		}
 
@@ -486,7 +503,7 @@ where
 	}
 
 	/// Creates a new record (non-WASM stub).
-	#[cfg(not(target_arch = "wasm32"))]
+	#[cfg(native)]
 	pub async fn create(&self, _data: &T) -> Result<T, ServerFnError> {
 		Err(ServerFnError::Network(
 			"API calls not supported outside WASM".to_string(),
@@ -494,31 +511,33 @@ where
 	}
 
 	/// Updates an existing record.
-	#[cfg(target_arch = "wasm32")]
+	#[cfg(wasm)]
 	pub async fn update(&self, pk: impl std::fmt::Display, data: &T) -> Result<T, ServerFnError> {
 		use crate::csrf::csrf_headers;
-		use gloo_net::http::Request;
+		use reqwest::Client;
 
 		let url = format!("{}{}/", self.endpoint.trim_end_matches('/'), pk);
-		let mut builder = Request::put(&url);
+		let client = Client::new();
+		let mut builder = client.put(&url);
 
 		if let Some((header_name, header_value)) = csrf_headers() {
-			builder = builder.header(header_name, &header_value);
+			builder = builder.header(header_name, header_value);
 		}
 
-		let request = builder
+		let response = builder
 			.json(data)
-			.map_err(|e| ServerFnError::Serialization(e.to_string()))?;
-
-		let response = request
 			.send()
 			.await
 			.map_err(|e| ServerFnError::Network(e.to_string()))?;
 
-		if !response.ok() {
+		if !response.status().is_success() {
 			return Err(ServerFnError::Server {
-				status: response.status(),
-				message: response.status_text(),
+				status: response.status().as_u16(),
+				message: response
+					.status()
+					.canonical_reason()
+					.unwrap_or("Unknown")
+					.to_string(),
 			});
 		}
 
@@ -529,7 +548,7 @@ where
 	}
 
 	/// Updates an existing record (non-WASM stub).
-	#[cfg(not(target_arch = "wasm32"))]
+	#[cfg(native)]
 	pub async fn update(&self, _pk: impl std::fmt::Display, _data: &T) -> Result<T, ServerFnError> {
 		Err(ServerFnError::Network(
 			"API calls not supported outside WASM".to_string(),
@@ -537,35 +556,37 @@ where
 	}
 
 	/// Partially updates an existing record.
-	#[cfg(target_arch = "wasm32")]
+	#[cfg(wasm)]
 	pub async fn partial_update(
 		&self,
 		pk: impl std::fmt::Display,
 		data: &serde_json::Value,
 	) -> Result<T, ServerFnError> {
 		use crate::csrf::csrf_headers;
-		use gloo_net::http::Request;
+		use reqwest::Client;
 
 		let url = format!("{}{}/", self.endpoint.trim_end_matches('/'), pk);
-		let mut builder = Request::patch(&url);
+		let client = Client::new();
+		let mut builder = client.patch(&url);
 
 		if let Some((header_name, header_value)) = csrf_headers() {
-			builder = builder.header(header_name, &header_value);
+			builder = builder.header(header_name, header_value);
 		}
 
-		let request = builder
+		let response = builder
 			.json(data)
-			.map_err(|e| ServerFnError::Serialization(e.to_string()))?;
-
-		let response = request
 			.send()
 			.await
 			.map_err(|e| ServerFnError::Network(e.to_string()))?;
 
-		if !response.ok() {
+		if !response.status().is_success() {
 			return Err(ServerFnError::Server {
-				status: response.status(),
-				message: response.status_text(),
+				status: response.status().as_u16(),
+				message: response
+					.status()
+					.canonical_reason()
+					.unwrap_or("Unknown")
+					.to_string(),
 			});
 		}
 
@@ -576,7 +597,7 @@ where
 	}
 
 	/// Partially updates an existing record (non-WASM stub).
-	#[cfg(not(target_arch = "wasm32"))]
+	#[cfg(native)]
 	pub async fn partial_update(
 		&self,
 		_pk: impl std::fmt::Display,
@@ -588,16 +609,17 @@ where
 	}
 
 	/// Deletes a record by primary key.
-	#[cfg(target_arch = "wasm32")]
+	#[cfg(wasm)]
 	pub async fn delete(&self, pk: impl std::fmt::Display) -> Result<(), ServerFnError> {
 		use crate::csrf::csrf_headers;
-		use gloo_net::http::Request;
+		use reqwest::Client;
 
 		let url = format!("{}{}/", self.endpoint.trim_end_matches('/'), pk);
-		let mut builder = Request::delete(&url);
+		let client = Client::new();
+		let mut builder = client.delete(&url);
 
 		if let Some((header_name, header_value)) = csrf_headers() {
-			builder = builder.header(header_name, &header_value);
+			builder = builder.header(header_name, header_value);
 		}
 
 		let response = builder
@@ -605,10 +627,14 @@ where
 			.await
 			.map_err(|e| ServerFnError::Network(e.to_string()))?;
 
-		if !response.ok() {
+		if !response.status().is_success() {
 			return Err(ServerFnError::Server {
-				status: response.status(),
-				message: response.status_text(),
+				status: response.status().as_u16(),
+				message: response
+					.status()
+					.canonical_reason()
+					.unwrap_or("Unknown")
+					.to_string(),
 			});
 		}
 
@@ -616,7 +642,7 @@ where
 	}
 
 	/// Deletes a record by primary key (non-WASM stub).
-	#[cfg(not(target_arch = "wasm32"))]
+	#[cfg(native)]
 	pub async fn delete(&self, _pk: impl std::fmt::Display) -> Result<(), ServerFnError> {
 		Err(ServerFnError::Network(
 			"API calls not supported outside WASM".to_string(),

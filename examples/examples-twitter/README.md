@@ -185,7 +185,7 @@ If you prefer to set up manually, or the quickstart script doesn't work for your
 
 ### Prerequisites
 
-- Rust 1.91.1+ (2024 Edition required)
+- Rust 1.94.1+ (2024 Edition required)
 - Docker (required for PostgreSQL and TestContainers-based integration tests)
 - wasm-pack (for WASM frontend build)
 - cargo-make (`cargo install cargo-make`)

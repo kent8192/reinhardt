@@ -1,9 +1,10 @@
+#![cfg(not(target_arch = "wasm32"))]
 //! Edge case tests for static asset URL resolution
 //!
 //! These tests verify behavior with unusual but valid inputs that might
 //! cause issues if not handled correctly.
 
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(native)]
 mod edge_case_tests {
 	use reinhardt_pages::static_resolver::{init_static_resolver, resolve_static};
 	use reinhardt_utils::staticfiles::TemplateStaticConfig;
@@ -223,7 +224,7 @@ mod edge_case_tests {
 	}
 }
 
-#[cfg(target_arch = "wasm32")]
+#[cfg(wasm)]
 mod wasm_edge_case_tests {
 	use reinhardt_pages::static_resolver::{init_static_resolver, resolve_static};
 	use wasm_bindgen_test::*;

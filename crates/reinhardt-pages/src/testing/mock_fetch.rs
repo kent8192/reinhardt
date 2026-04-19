@@ -35,7 +35,7 @@ use crate::server_fn::ServerFnError;
 /// # Returns
 ///
 /// A tuple of (status_code, response_body) on success, or a ServerFnError on failure.
-#[cfg(target_arch = "wasm32")]
+#[cfg(wasm)]
 pub async fn fetch_with_mock(
 	url: &str,
 	method: &str,
@@ -68,22 +68,22 @@ fn mock_response_to_result(response: MockResponse) -> Result<(u16, String), Serv
 	}
 }
 
-/// Perform a real HTTP fetch using gloo_net
-#[cfg(target_arch = "wasm32")]
+/// Perform a real HTTP fetch using reqwest
+#[cfg(wasm)]
 async fn real_fetch(
 	url: &str,
 	method: &str,
 	body: Option<&str>,
 	headers: &[(&str, &str)],
 ) -> Result<(u16, String), ServerFnError> {
-	use gloo_net::http::Request;
+	let client = reqwest::Client::new();
 
 	let mut request = match method.to_uppercase().as_str() {
-		"GET" => Request::get(url),
-		"POST" => Request::post(url),
-		"PUT" => Request::put(url),
-		"DELETE" => Request::delete(url),
-		"PATCH" => Request::patch(url),
+		"GET" => client.get(url),
+		"POST" => client.post(url),
+		"PUT" => client.put(url),
+		"DELETE" => client.delete(url),
+		"PATCH" => client.patch(url),
 		_ => {
 			return Err(ServerFnError::application(format!(
 				"Unsupported HTTP method: {}",
@@ -98,15 +98,9 @@ async fn real_fetch(
 	}
 
 	// Add body if present
-	let request = if let Some(body) = body {
-		request
-			.body(body)
-			.map_err(|e| ServerFnError::network(e.to_string()))?
-	} else {
-		request
-			.build()
-			.map_err(|e| ServerFnError::network(e.to_string()))?
-	};
+	if let Some(body) = body {
+		request = request.body(body.to_string());
+	}
 
 	// Send request
 	let response = request
@@ -114,7 +108,7 @@ async fn real_fetch(
 		.await
 		.map_err(|e| ServerFnError::network(e.to_string()))?;
 
-	let status = response.status();
+	let status = response.status().as_u16();
 	let text = response
 		.text()
 		.await
@@ -128,7 +122,7 @@ async fn real_fetch(
 }
 
 /// Non-WASM implementation for compilation purposes
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(native)]
 pub async fn fetch_with_mock(
 	url: &str,
 	method: &str,
@@ -152,9 +146,10 @@ pub async fn fetch_with_mock(
 	)))
 }
 
-#[cfg(test)]
+#[cfg(all(test, not(target_arch = "wasm32")))]
 mod tests {
 	use super::*;
+	#[allow(deprecated)]
 	use crate::testing::mock_http::{
 		clear_mocks, get_call_history, mock_server_fn, mock_server_fn_error,
 	};

@@ -90,7 +90,7 @@ impl DmRoomListHandle {
 ///
 /// # Example
 ///
-/// ```ignore
+/// ```no_run
 /// use crate::apps::dm::client::hooks::use_dm_chat;
 ///
 /// let chat = use_dm_chat(room_id);
@@ -120,7 +120,7 @@ pub fn use_dm_chat(room_id: Uuid) -> DmChatHandle {
 	let (error, set_error) = use_state(None::<String>);
 
 	// Initial message loading via create_resource
-	#[cfg(client)]
+	#[cfg(wasm)]
 	{
 		let initial_messages = reinhardt::pages::create_resource(move || async move {
 			crate::apps::dm::shared::server_fn::list_messages(room_id, Some(50), None)
@@ -209,7 +209,7 @@ pub fn use_dm_chat(room_id: Uuid) -> DmChatHandle {
 ///
 /// # Example
 ///
-/// ```ignore
+/// ```no_run
 /// use crate::apps::dm::client::hooks::use_dm_room_list;
 ///
 /// let room_list = use_dm_room_list();
@@ -237,7 +237,7 @@ pub fn use_dm_room_list() -> DmRoomListHandle {
 	let (error, set_error) = use_state(None::<String>);
 
 	// Initial room list loading via create_resource
-	#[cfg(client)]
+	#[cfg(wasm)]
 	{
 		let initial_rooms = reinhardt::pages::create_resource(move || async move {
 			crate::apps::dm::shared::server_fn::list_rooms()

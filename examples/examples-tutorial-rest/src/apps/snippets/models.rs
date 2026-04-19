@@ -1,10 +1,10 @@
 use chrono::{DateTime, Utc};
-use reinhardt::core::serde::{Deserialize, Serialize};
 use reinhardt::prelude::*;
+use serde::{Deserialize, Serialize};
 
 /// Snippet model representing a code snippet
-#[derive(Serialize, Deserialize)]
 #[model(app_label = "snippets", table_name = "snippets")]
+#[derive(Serialize, Deserialize)]
 pub struct Snippet {
 	#[field(primary_key = true)]
 	pub id: i64,
@@ -30,14 +30,14 @@ impl Snippet {
 	///
 	/// # Example
 	///
-	/// ```ignore
-	/// let snippet = Snippet {
-	///     id: 1,
-	///     title: "Hello World".to_string(),
-	///     code: "fn main() { println!(\"Hello!\"); }".to_string(),
-	///     language: "rust".to_string(),
-	///     created_at: Utc::now(),
-	/// };
+	/// ```no_run
+	/// use examples_tutorial_rest::apps::snippets::models::Snippet;
+	///
+	/// let snippet = Snippet::new(
+	///     "Hello World".to_string(),
+	///     "fn main() { println!(\"Hello!\"); }".to_string(),
+	///     "rust".to_string(),
+	/// );
 	/// let html = snippet.highlighted();
 	/// assert!(html.contains("<span"));
 	/// ```

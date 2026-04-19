@@ -158,7 +158,7 @@ impl BaseUserManager<DefaultUser> for DefaultUserManager {
 
 		// Create user with default values
 		let mut user = DefaultUser {
-			id: Uuid::new_v4(),
+			id: Uuid::now_v7(),
 			username: username.to_string(),
 			email: String::new(),
 			first_name: String::new(),

@@ -1,3 +1,5 @@
+// Server-side only: depends on reinhardt-utils which is not available for wasm32
+#![cfg(not(target_arch = "wasm32"))]
 //! Static Files Integration Tests
 //!
 //! Tests for static file URL generation and SSR component integration.

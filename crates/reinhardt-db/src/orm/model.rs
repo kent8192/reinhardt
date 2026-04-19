@@ -236,7 +236,7 @@ pub trait Model: Serialize + for<'de> Deserialize<'de> + Send + Sync + Clone {
 
 			if self.primary_key().is_none() {
 				// INSERT: new record
-				let instance_id = format!("{}-new-{}", Self::table_name(), uuid::Uuid::new_v4());
+				let instance_id = format!("{}-new-{}", Self::table_name(), uuid::Uuid::now_v7());
 
 				// Dispatch before_insert event if registry is active
 				if let Some(ref reg) = registry {

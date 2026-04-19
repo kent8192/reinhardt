@@ -24,7 +24,7 @@ jobs:
   wasm-check:
     name: WASM Check (${{ matrix.target.name }})
     runs-on: ${{ fromJSON(inputs.runner || '"ubuntu-latest"') }}
-    timeout-minutes: 30
+    timeout-minutes: 360
     strategy:
       fail-fast: false
       matrix:
@@ -72,7 +72,7 @@ jobs:
       - name: Run cargo check for WASM target (${{ matrix.target.name }})
         env:
           # Pass matrix values through env to avoid direct shell injection.
-          # Values are workflow-defined constants (not user input). Issue #2098
+          # Values are workflow-defined constants (not user input).
           TARGET_PACKAGE: ${{ matrix.target.package }}
           TARGET_FLAGS: ${{ matrix.target.flags }}
         run: |
@@ -81,3 +81,65 @@ jobs:
             -p "${TARGET_PACKAGE}" \
             ${TARGET_FLAGS} \
             --quiet
+
+  # Run existing wasm_bindgen_test tests in headless Chrome.
+  # Catches runtime errors in WASM code paths that cargo check cannot detect.
+  # Only triggered via workflow_call or workflow_dispatch (not on every push).
+  wasm-test:
+    name: WASM Test (headless Chrome)
+    if: github.event_name != 'push'
+    # Always use GitHub-hosted x86_64 runner: browser-actions/setup-chrome
+    # does not support ARM64 Linux (Fixes #3491)
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+    env:
+      CARGO_BUILD_JOBS: 1
+    steps:
+      - name: Free Disk Space (Ubuntu)
+        uses: jlumbroso/free-disk-space@v1.3.1
+        with:
+          tool-cache: true
+          android: true
+          dotnet: true
+          haskell: true
+          large-packages: true
+          docker-images: true
+          swap-storage: true
+
+      - name: Checkout repository
+        uses: actions/checkout@v6
+
+      - name: Setup Rust
+        uses: ./.github/actions/setup-rust
+        with:
+          cache-key: "wasm-test"
+
+      - name: Install wasm32-unknown-unknown target
+        run: rustup target add wasm32-unknown-unknown
+
+      - name: Install wasm-pack
+        run: curl https://rustwasm.github.io/wasm-pack/installer/init.sh -sSf | sh
+
+      - name: Setup Chrome
+        uses: browser-actions/setup-chrome@v1
+        with:
+          chrome-version: stable
+
+      - name: Run WASM lib tests (reinhardt-pages)
+        working-directory: crates/reinhardt-pages
+        # Run lib-level wasm_bindgen_test tests via wasm-pack.
+        # This also caches the wasm-bindgen-test-runner binary for the next step.
+        run: wasm-pack test --headless --chrome --lib
+
+      - name: Run WASM integration tests (reinhardt-pages)
+        working-directory: crates/reinhardt-pages
+        # wasm-pack places extra args after `--` in cargo test (going to the test
+        # binary), but --test is a cargo flag. So we invoke cargo test directly
+        # with the runner that wasm-pack cached. (See #3365)
+        run: |
+          RUNNER=$(find "${HOME}/.cache/.wasm-pack" -name "wasm-bindgen-test-runner" -type f 2>/dev/null | head -1)
+          CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER="$RUNNER" \
+          CHROMEDRIVER="$(which chromedriver)" \
+          WASM_BINDGEN_TEST_ONLY_WEB=1 \
+            cargo test --target wasm32-unknown-unknown \
+              --test csrf_wasm_test --test server_fn_wasm_test

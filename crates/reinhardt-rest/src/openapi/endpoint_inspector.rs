@@ -6,10 +6,11 @@
 use super::SchemaError;
 use indexmap::IndexMap;
 use regex::Regex;
-use reinhardt_core::endpoint::EndpointMetadata;
+use reinhardt_core::endpoint::{AuthProtection, EndpointMetadata};
 use utoipa::openapi::{
 	HttpMethod, PathItem, ResponseBuilder,
 	content::ContentBuilder,
+	extensions::Extensions,
 	header::HeaderBuilder,
 	path::{
 		Operation, OperationBuilder, Parameter, ParameterBuilder, ParameterIn, PathItemBuilder,
@@ -27,6 +28,9 @@ pub struct InspectorConfig {
 	pub include_function_names: bool,
 	/// Default tag when module path inference fails
 	pub default_tag: String,
+	/// Names of all configured security schemes (used when generating security requirements
+	/// for endpoints with `AuthProtection::Protected` or `AuthProtection::Optional`).
+	pub security_scheme_names: Vec<String>,
 }
 
 impl Default for InspectorConfig {
@@ -34,6 +38,7 @@ impl Default for InspectorConfig {
 		Self {
 			include_function_names: true,
 			default_tag: "Default".to_string(),
+			security_scheme_names: Vec::new(),
 		}
 	}
 }
@@ -234,10 +239,56 @@ impl EndpointInspector {
 			builder = builder.response(response.status.to_string(), resp_builder.build());
 		}
 
-		// Add security requirements from metadata
-		for security_name in metadata.security {
-			let requirement = SecurityRequirement::new::<&str, [&str; 0], &str>(security_name, []);
-			builder = builder.security(requirement);
+		// Add security requirements based on auth protection level.
+		// - Public: explicit empty security list (no auth required)
+		// - Protected: all configured schemes required
+		// - Optional: all configured schemes + anonymous option ({})
+		// - None: no security field added (startup validation catches this case)
+		match metadata.auth_protection {
+			AuthProtection::Public => {
+				// Explicitly mark as no security (empty security array entry)
+				builder = builder.security(SecurityRequirement::default());
+			}
+			AuthProtection::Protected => {
+				for name in &self.config.security_scheme_names {
+					let requirement = SecurityRequirement::new::<&str, [&str; 0], &str>(name, []);
+					builder = builder.security(requirement);
+				}
+				// Fall back to legacy metadata.security when no schemes are configured
+				if self.config.security_scheme_names.is_empty() {
+					for security_name in metadata.security {
+						let requirement =
+							SecurityRequirement::new::<&str, [&str; 0], &str>(security_name, []);
+						builder = builder.security(requirement);
+					}
+				}
+			}
+			AuthProtection::Optional => {
+				for name in &self.config.security_scheme_names {
+					let requirement = SecurityRequirement::new::<&str, [&str; 0], &str>(name, []);
+					builder = builder.security(requirement);
+				}
+				// Fall back to legacy metadata.security when no schemes are configured
+				if self.config.security_scheme_names.is_empty() {
+					for security_name in metadata.security {
+						let requirement =
+							SecurityRequirement::new::<&str, [&str; 0], &str>(security_name, []);
+						builder = builder.security(requirement);
+					}
+				}
+				// Add anonymous option (empty requirement = unauthenticated allowed)
+				builder = builder.security(SecurityRequirement::default());
+			}
+			AuthProtection::None => {
+				// No security field: startup validation catches this case
+			}
+		}
+
+		// Add x-guard extension when a guard description is available
+		if let Some(desc) = &metadata.guard_description {
+			let mut exts = Extensions::default();
+			exts.insert("x-guard".to_string(), serde_json::json!(desc));
+			builder = builder.extensions(Some(exts));
 		}
 
 		builder.build()
@@ -360,6 +411,7 @@ impl Default for EndpointInspector {
 mod tests {
 	use super::*;
 	use crate::openapi::schema_registration::SchemaRegistration;
+	use reinhardt_core::endpoint::AuthProtection;
 	use utoipa::openapi::schema::ObjectBuilder;
 
 	// Register a test schema for qualified-path lookup verification.
@@ -456,6 +508,8 @@ mod tests {
 			responses: &[],
 			headers: &[],
 			security: &[],
+			auth_protection: AuthProtection::None,
+			guard_description: None,
 		};
 
 		let request_body = inspector.create_request_body(&metadata);
@@ -485,6 +539,8 @@ mod tests {
 			responses: &[],
 			headers: &[],
 			security: &[],
+			auth_protection: AuthProtection::None,
+			guard_description: None,
 		};
 
 		let request_body = inspector.create_request_body(&metadata);
@@ -506,6 +562,8 @@ mod tests {
 			responses: &[],
 			headers: &[],
 			security: &[],
+			auth_protection: AuthProtection::None,
+			guard_description: None,
 		};
 
 		let request_body = inspector.create_request_body(&metadata);
@@ -532,6 +590,8 @@ mod tests {
 			responses: &[],
 			headers: &[],
 			security: &[],
+			auth_protection: AuthProtection::None,
+			guard_description: None,
 		};
 
 		// Act
@@ -667,6 +727,8 @@ mod tests {
 			responses: &[],
 			headers: &[],
 			security: &[],
+			auth_protection: AuthProtection::None,
+			guard_description: None,
 		};
 
 		// Act
@@ -712,5 +774,236 @@ mod tests {
 			}
 			None => panic!("Expected schema in content, got None"),
 		}
+	}
+
+	#[rstest::rstest]
+	#[case::public(AuthProtection::Public)]
+	fn test_create_operation_public_has_empty_security(#[case] protection: AuthProtection) {
+		// Arrange
+		let config = InspectorConfig {
+			security_scheme_names: vec!["bearer".to_string()],
+			..Default::default()
+		};
+		let inspector = EndpointInspector::with_config(config);
+		let metadata = EndpointMetadata {
+			path: "/api/public",
+			method: "GET",
+			name: Some("public_endpoint"),
+			function_name: "public_endpoint",
+			module_path: "app::views",
+			request_body_type: None,
+			request_content_type: None,
+			responses: &[],
+			headers: &[],
+			security: &[],
+			auth_protection: protection,
+			guard_description: None,
+		};
+
+		// Act
+		let operation = inspector.create_operation(&metadata, vec![]);
+		let json = serde_json::to_value(&operation).unwrap();
+
+		// Assert: Public endpoints have an empty security entry (no auth required)
+		let security = json["security"].as_array();
+		assert!(
+			security.is_some(),
+			"Public endpoint should have a security field"
+		);
+		assert_eq!(
+			security.unwrap().len(),
+			1,
+			"Public endpoint should have exactly one security entry"
+		);
+		assert!(
+			security.unwrap()[0].as_object().unwrap().is_empty(),
+			"Public endpoint security entry should be empty object"
+		);
+	}
+
+	#[rstest::rstest]
+	#[case::protected(AuthProtection::Protected)]
+	fn test_create_operation_protected_lists_all_schemes(#[case] protection: AuthProtection) {
+		// Arrange
+		let config = InspectorConfig {
+			security_scheme_names: vec!["bearer".to_string(), "cookie".to_string()],
+			..Default::default()
+		};
+		let inspector = EndpointInspector::with_config(config);
+		let metadata = EndpointMetadata {
+			path: "/api/protected",
+			method: "GET",
+			name: Some("protected_endpoint"),
+			function_name: "protected_endpoint",
+			module_path: "app::views",
+			request_body_type: None,
+			request_content_type: None,
+			responses: &[],
+			headers: &[],
+			security: &[],
+			auth_protection: protection,
+			guard_description: None,
+		};
+
+		// Act
+		let operation = inspector.create_operation(&metadata, vec![]);
+		let json = serde_json::to_value(&operation).unwrap();
+
+		// Assert: Protected endpoints list all configured security schemes
+		let security = json["security"]
+			.as_array()
+			.expect("security field should be present");
+		assert_eq!(
+			security.len(),
+			2,
+			"Protected endpoint should list both schemes"
+		);
+		assert!(
+			security[0].as_object().unwrap().contains_key("bearer"),
+			"First security entry should be bearer"
+		);
+		assert!(
+			security[1].as_object().unwrap().contains_key("cookie"),
+			"Second security entry should be cookie"
+		);
+	}
+
+	#[rstest::rstest]
+	#[case::optional(AuthProtection::Optional)]
+	fn test_create_operation_optional_includes_anonymous(#[case] protection: AuthProtection) {
+		// Arrange
+		let config = InspectorConfig {
+			security_scheme_names: vec!["bearer".to_string()],
+			..Default::default()
+		};
+		let inspector = EndpointInspector::with_config(config);
+		let metadata = EndpointMetadata {
+			path: "/api/optional",
+			method: "GET",
+			name: Some("optional_endpoint"),
+			function_name: "optional_endpoint",
+			module_path: "app::views",
+			request_body_type: None,
+			request_content_type: None,
+			responses: &[],
+			headers: &[],
+			security: &[],
+			auth_protection: protection,
+			guard_description: None,
+		};
+
+		// Act
+		let operation = inspector.create_operation(&metadata, vec![]);
+		let json = serde_json::to_value(&operation).unwrap();
+
+		// Assert: Optional endpoints list schemes + empty object (anonymous allowed)
+		let security = json["security"]
+			.as_array()
+			.expect("security field should be present");
+		assert_eq!(
+			security.len(),
+			2,
+			"Optional endpoint should have scheme + anonymous entry"
+		);
+		assert!(
+			security[0].as_object().unwrap().contains_key("bearer"),
+			"First entry should be the bearer scheme"
+		);
+		assert!(
+			security[1].as_object().unwrap().is_empty(),
+			"Second entry should be empty (anonymous option)"
+		);
+	}
+
+	#[rstest::rstest]
+	#[case::none(AuthProtection::None)]
+	fn test_create_operation_none_has_no_security_field(#[case] protection: AuthProtection) {
+		// Arrange
+		let inspector = EndpointInspector::new();
+		let metadata = EndpointMetadata {
+			path: "/api/unguarded",
+			method: "GET",
+			name: Some("unguarded"),
+			function_name: "unguarded",
+			module_path: "app::views",
+			request_body_type: None,
+			request_content_type: None,
+			responses: &[],
+			headers: &[],
+			security: &[],
+			auth_protection: protection,
+			guard_description: None,
+		};
+
+		// Act
+		let operation = inspector.create_operation(&metadata, vec![]);
+		let json = serde_json::to_value(&operation).unwrap();
+
+		// Assert: None protection produces no security field
+		assert!(
+			json["security"].is_null(),
+			"None protection should not add a security field"
+		);
+	}
+
+	#[rstest::rstest]
+	fn test_create_operation_guard_description_adds_x_guard_extension() {
+		// Arrange
+		let inspector = EndpointInspector::new();
+		let metadata = EndpointMetadata {
+			path: "/api/guarded",
+			method: "GET",
+			name: Some("guarded"),
+			function_name: "guarded",
+			module_path: "app::views",
+			request_body_type: None,
+			request_content_type: None,
+			responses: &[],
+			headers: &[],
+			security: &[],
+			auth_protection: AuthProtection::Protected,
+			guard_description: Some("HasPerm(read:items)"),
+		};
+
+		// Act
+		let operation = inspector.create_operation(&metadata, vec![]);
+		let json = serde_json::to_value(&operation).unwrap();
+
+		// Assert: x-guard extension is set to the guard description
+		assert_eq!(
+			json["x-guard"].as_str(),
+			Some("HasPerm(read:items)"),
+			"x-guard extension should contain the guard description"
+		);
+	}
+
+	#[rstest::rstest]
+	fn test_create_operation_no_guard_description_no_x_guard_extension() {
+		// Arrange
+		let inspector = EndpointInspector::new();
+		let metadata = EndpointMetadata {
+			path: "/api/no-guard",
+			method: "GET",
+			name: Some("no_guard"),
+			function_name: "no_guard",
+			module_path: "app::views",
+			request_body_type: None,
+			request_content_type: None,
+			responses: &[],
+			headers: &[],
+			security: &[],
+			auth_protection: AuthProtection::Public,
+			guard_description: None,
+		};
+
+		// Act
+		let operation = inspector.create_operation(&metadata, vec![]);
+		let json = serde_json::to_value(&operation).unwrap();
+
+		// Assert: no x-guard extension when guard_description is None
+		assert!(
+			json["x-guard"].is_null(),
+			"No guard_description should produce no x-guard extension"
+		);
 	}
 }

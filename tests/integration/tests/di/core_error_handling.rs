@@ -5,9 +5,12 @@
 //! - Injectable failure propagation
 //! - Async operation timeout handling
 //! - Depends lifetime management with Arc
+//! - DiError to HTTP error status code mapping
 
 use super::test_helpers::resolve_injectable;
+use reinhardt_core::exception::Error;
 use reinhardt_di::{Depends, DiError, DiResult, Injectable, InjectionContext, SingletonScope};
+use rstest::rstest;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::time::timeout;
@@ -201,6 +204,15 @@ async fn test_injectable_async_timeout() {
 
 #[tokio::test]
 async fn test_depends_lifetime_management() {
+	// Register ResourceOwner in the global registry for Depends<T> resolution
+	let registry = reinhardt_di::global_registry();
+	if !registry.is_registered::<ResourceOwner>() {
+		registry.register::<ResourceOwner>(
+			reinhardt_di::DependencyScope::Request,
+			reinhardt_di::InjectableFactory::<ResourceOwner>::new(),
+		);
+	}
+
 	let singleton = Arc::new(SingletonScope::new());
 	let ctx = InjectionContext::builder(singleton).build();
 
@@ -252,4 +264,86 @@ async fn test_depends_lifetime_management() {
 	let upgraded = weak_ref.upgrade();
 	assert!(upgraded.is_some());
 	assert_eq!(upgraded.unwrap().data, "owned-data");
+}
+
+// === DiError to HTTP Error Status Code Mapping ===
+
+#[derive(Clone, Debug)]
+struct AuthenticationFailService;
+
+#[async_trait::async_trait]
+impl Injectable for AuthenticationFailService {
+	async fn inject(_ctx: &InjectionContext) -> DiResult<Self> {
+		Err(DiError::Authentication(
+			"user is not authenticated".to_string(),
+		))
+	}
+}
+
+#[derive(Clone, Debug)]
+struct AuthorizationFailService;
+
+#[async_trait::async_trait]
+impl Injectable for AuthorizationFailService {
+	async fn inject(_ctx: &InjectionContext) -> DiResult<Self> {
+		Err(DiError::Authorization("access denied".to_string()))
+	}
+}
+
+#[derive(Clone, Debug)]
+struct NotFoundInjectService;
+
+#[async_trait::async_trait]
+impl Injectable for NotFoundInjectService {
+	async fn inject(_ctx: &InjectionContext) -> DiResult<Self> {
+		Err(DiError::NotFound("service not available".to_string()))
+	}
+}
+
+#[rstest]
+#[tokio::test]
+async fn test_authentication_di_error_maps_to_401_status() {
+	// Arrange
+	let singleton = Arc::new(SingletonScope::new());
+	let ctx = InjectionContext::builder(singleton).build();
+
+	// Act
+	let result = AuthenticationFailService::inject(&ctx).await;
+
+	// Assert
+	let di_err = result.unwrap_err();
+	let http_err: Error = di_err.into();
+	assert_eq!(http_err.status_code(), 401);
+}
+
+#[rstest]
+#[tokio::test]
+async fn test_authorization_di_error_maps_to_403_status() {
+	// Arrange
+	let singleton = Arc::new(SingletonScope::new());
+	let ctx = InjectionContext::builder(singleton).build();
+
+	// Act
+	let result = AuthorizationFailService::inject(&ctx).await;
+
+	// Assert
+	let di_err = result.unwrap_err();
+	let http_err: Error = di_err.into();
+	assert_eq!(http_err.status_code(), 403);
+}
+
+#[rstest]
+#[tokio::test]
+async fn test_not_found_di_error_maps_to_404_status() {
+	// Arrange
+	let singleton = Arc::new(SingletonScope::new());
+	let ctx = InjectionContext::builder(singleton).build();
+
+	// Act
+	let result = NotFoundInjectService::inject(&ctx).await;
+
+	// Assert
+	let di_err = result.unwrap_err();
+	let http_err: Error = di_err.into();
+	assert_eq!(http_err.status_code(), 404);
 }

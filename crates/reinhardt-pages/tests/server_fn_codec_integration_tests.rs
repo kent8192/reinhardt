@@ -1,3 +1,4 @@
+#![cfg(not(target_arch = "wasm32"))]
 //! Integration tests for Server Functions Codec System
 //!
 //! These tests verify the integration of different codecs with server functions:

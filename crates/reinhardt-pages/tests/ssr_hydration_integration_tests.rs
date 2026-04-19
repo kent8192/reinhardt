@@ -1,3 +1,4 @@
+#![cfg(not(target_arch = "wasm32"))]
 //! Integration tests for SSR and Hydration
 //!
 //! These tests verify the Server-Side Rendering and Client-Side Hydration flow:

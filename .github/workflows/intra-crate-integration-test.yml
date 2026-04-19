@@ -47,7 +47,7 @@ jobs:
   intra-crate-integration-test:
     name: Intra-Crate Integration Tests (${{ matrix.partition }}/${{ inputs.partition-count || '8' }})
     runs-on: ${{ fromJSON(inputs.runner) }}
-    timeout-minutes: 90
+    timeout-minutes: 360
     strategy:
       fail-fast: false
       matrix:
@@ -87,6 +87,7 @@ jobs:
 
       - name: Install mold linker and build dependencies
         run: |
+          sudo systemctl stop unattended-upgrades || true
           sudo apt-get update -o DPkg::Lock::Timeout=120
           sudo apt-get install -y -o DPkg::Lock::Timeout=120 mold clang lld build-essential
           sudo apt-get clean

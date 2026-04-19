@@ -298,9 +298,9 @@ where
 						request.get_di_context::<std::sync::Arc<reinhardt_di::InjectionContext>>()
 				{
 					use reinhardt_db::DatabaseConnection;
-					use reinhardt_di::Injected;
+					use reinhardt_di::Depends;
 
-					let conn = Injected::<DatabaseConnection>::resolve(&di_ctx)
+					let conn = Depends::<DatabaseConnection>::resolve(&di_ctx, true)
 						.await
 						.map_err(|e| Error::Internal(format!("Failed to resolve DB: {:?}", e)))?;
 

@@ -7,7 +7,7 @@ fn test_full_user_get_full_name() {
 	// first_name and last_name with space separator
 	// Not intent: Empty names, Unicode handling, name formatting rules
 	let user = DefaultUser {
-		id: Uuid::new_v4(),
+		id: Uuid::now_v7(),
 		username: "alice".to_string(),
 		email: "alice@example.com".to_string(),
 		first_name: "Alice".to_string(),
@@ -31,7 +31,7 @@ fn test_full_user_get_short_name() {
 	// the first_name field without last_name
 	// Not intent: Empty name handling, nickname field, name truncation
 	let user = DefaultUser {
-		id: Uuid::new_v4(),
+		id: Uuid::now_v7(),
 		username: "bob".to_string(),
 		email: "bob@example.com".to_string(),
 		first_name: "Bob".to_string(),
@@ -55,7 +55,7 @@ fn test_full_user_empty_names() {
 	// when both first_name and last_name are empty
 	// Not intent: Whitespace handling, null values, partial empty names
 	let user = DefaultUser {
-		id: Uuid::new_v4(),
+		id: Uuid::now_v7(),
 		username: "user123".to_string(),
 		email: "user@example.com".to_string(),
 		first_name: String::new(),
@@ -83,7 +83,7 @@ fn test_full_user_staff_and_superuser_flags() {
 
 	// Regular user
 	let regular_user = DefaultUser {
-		id: Uuid::new_v4(),
+		id: Uuid::now_v7(),
 		username: "regular".to_string(),
 		email: "regular@example.com".to_string(),
 		first_name: "Regular".to_string(),
@@ -103,7 +103,7 @@ fn test_full_user_staff_and_superuser_flags() {
 
 	// Staff user (not superuser)
 	let staff_user = DefaultUser {
-		id: Uuid::new_v4(),
+		id: Uuid::now_v7(),
 		username: "staff".to_string(),
 		email: "staff@example.com".to_string(),
 		first_name: "Staff".to_string(),
@@ -123,7 +123,7 @@ fn test_full_user_staff_and_superuser_flags() {
 
 	// Superuser (also staff)
 	let superuser = DefaultUser {
-		id: Uuid::new_v4(),
+		id: Uuid::now_v7(),
 		username: "admin".to_string(),
 		email: "admin@example.com".to_string(),
 		first_name: "Admin".to_string(),

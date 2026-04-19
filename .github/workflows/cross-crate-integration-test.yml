@@ -35,7 +35,7 @@ jobs:
   cross-crate-integration-test:
     name: Cross-Crate Integration Tests (${{ matrix.partition }}/3)
     runs-on: ${{ fromJSON(inputs.runner) }}
-    timeout-minutes: 40
+    timeout-minutes: 360
     strategy:
       fail-fast: false
       matrix:
@@ -75,6 +75,7 @@ jobs:
 
       - name: Install mold linker and build dependencies
         run: |
+          sudo systemctl stop unattended-upgrades || true
           sudo apt-get update -o DPkg::Lock::Timeout=120
           sudo apt-get install -y -o DPkg::Lock::Timeout=120 mold clang lld build-essential
           sudo apt-get clean

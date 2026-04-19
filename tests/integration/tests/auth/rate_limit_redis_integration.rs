@@ -103,7 +103,7 @@ fn create_basic_request() -> Request {
 /// Creates a test user
 fn create_test_user(username: &str) -> SimpleUser {
 	SimpleUser {
-		id: Uuid::new_v4(),
+		id: Uuid::now_v7(),
 		username: username.to_string(),
 		email: format!("{}@example.com", username),
 		is_active: true,

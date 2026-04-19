@@ -1,3 +1,4 @@
+#![cfg(not(target_arch = "wasm32"))]
 //! SSR tests for watch syntax in page! macro
 //!
 //! Tests validate:

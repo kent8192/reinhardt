@@ -6,6 +6,7 @@ use crate::crate_paths::{
 };
 use crate::injectable_common::{InjectOptions, is_inject_attr, parse_inject_options};
 use crate::path_macro;
+use crate::routes_registration::extract_depends_inner_type;
 use proc_macro2::{Span, TokenStream};
 use quote::quote;
 use syn::{
@@ -206,6 +207,161 @@ fn option_to_lit(opt: &Option<String>) -> TokenStream {
 	}
 }
 
+/// Result of auth parameter detection for a handler.
+struct AuthDetection {
+	/// The detected protection level for the endpoint.
+	protection: AuthProtectionKind,
+	/// The stringified guard expression for OpenAPI `x-guard`, if any.
+	guard_description: Option<String>,
+}
+
+/// Protection level detected from handler parameter types.
+///
+/// This mirrors `reinhardt_core::endpoint::AuthProtection` but lives in the
+/// macro crate where we cannot take a dependency on `reinhardt-auth`.
+enum AuthProtectionKind {
+	Protected,
+	Optional,
+	Public,
+	None,
+}
+
+/// Detect auth protection level from a list of type strings.
+///
+/// Each string is the stringified token stream of a parameter type.
+/// The first matching rule wins (rules are checked in priority order):
+///
+/// - Contains `"Guard"` → `Protected`; also captures `guard_description`
+/// - Contains `"AuthUser"` → `Protected`
+/// - Contains both `"Option"` and `"AuthInfo"` → `Optional`
+/// - Contains `"AuthInfo"` (alone) → `Protected`
+/// - Contains `"Public"` → `Public`
+/// - Otherwise → `None`
+fn detect_auth_from_type_strings(type_strings: &[String]) -> AuthDetection {
+	// Collect guard expression strings for guard_description
+	let mut guard_desc: Option<String> = None;
+	let mut found_protected = false;
+	let mut found_optional = false;
+	let mut found_public = false;
+
+	for ty_str in type_strings {
+		// Guard<...> or guard!(...) — highest priority
+		if ty_str.contains("Guard") || ty_str.contains("guard") {
+			found_protected = true;
+			// Capture the guard description for OpenAPI x-guard metadata.
+			// Use the full type string as the description.
+			if guard_desc.is_none() {
+				guard_desc = Some(ty_str.clone());
+			}
+			continue;
+		}
+
+		if ty_str.contains("AuthUser") {
+			found_protected = true;
+			continue;
+		}
+
+		// Option<AuthInfo<...>> → Optional
+		if ty_str.contains("Option") && ty_str.contains("AuthInfo") {
+			found_optional = true;
+			continue;
+		}
+
+		// Bare AuthInfo<...> → Protected
+		if ty_str.contains("AuthInfo") {
+			found_protected = true;
+			continue;
+		}
+
+		if ty_str.contains("Public") {
+			found_public = true;
+		}
+	}
+
+	// Priority: Protected > Optional > Public > None
+	if found_protected {
+		AuthDetection {
+			protection: AuthProtectionKind::Protected,
+			guard_description: guard_desc,
+		}
+	} else if found_optional {
+		AuthDetection {
+			protection: AuthProtectionKind::Optional,
+			guard_description: None,
+		}
+	} else if found_public {
+		AuthDetection {
+			protection: AuthProtectionKind::Public,
+			guard_description: None,
+		}
+	} else {
+		AuthDetection {
+			protection: AuthProtectionKind::None,
+			guard_description: None,
+		}
+	}
+}
+
+/// Detect auth protection from extractor and inject parameter types.
+///
+/// Inspects all parameter types (both regular extractors and `#[inject]` params)
+/// to determine the endpoint's auth protection level and guard description.
+fn detect_auth_protection(
+	extractors: &[ExtractorInfo],
+	inject_params: &[InjectInfo],
+) -> AuthDetection {
+	let type_strings: Vec<String> = extractors
+		.iter()
+		.map(|e| {
+			let ty = &e.ty;
+			quote!(#ty).to_string()
+		})
+		.chain(inject_params.iter().map(|p| {
+			let ty = &p.ty;
+			quote!(#ty).to_string()
+		}))
+		.collect();
+	detect_auth_from_type_strings(&type_strings)
+}
+
+/// Detect auth protection from raw function inputs (for simple routes without extractors/inject).
+fn detect_auth_protection_from_inputs(
+	inputs: &syn::punctuated::Punctuated<FnArg, Token![,]>,
+) -> AuthDetection {
+	let type_strings: Vec<String> = inputs
+		.iter()
+		.filter_map(|arg| {
+			if let FnArg::Typed(pat_type) = arg {
+				let ty = &pat_type.ty;
+				Some(quote!(#ty).to_string())
+			} else {
+				None
+			}
+		})
+		.collect();
+	detect_auth_from_type_strings(&type_strings)
+}
+
+/// Convert `AuthDetection` into the `auth_protection` and `guard_description` token streams.
+fn auth_detection_to_tokens(
+	detection: &AuthDetection,
+	core_crate: &TokenStream,
+) -> (TokenStream, TokenStream) {
+	let protection_ts = match detection.protection {
+		AuthProtectionKind::Protected => {
+			quote! { #core_crate::endpoint::AuthProtection::Protected }
+		}
+		AuthProtectionKind::Optional => quote! { #core_crate::endpoint::AuthProtection::Optional },
+		AuthProtectionKind::Public => quote! { #core_crate::endpoint::AuthProtection::Public },
+		AuthProtectionKind::None => quote! { #core_crate::endpoint::AuthProtection::None },
+	};
+	let guard_desc_ts = match &detection.guard_description {
+		Some(s) => quote! { Some(#s) },
+		None => quote! { None },
+	};
+	(protection_ts, guard_desc_ts)
+}
+
 /// Generate wrapper function with both extractors and inject params
 fn generate_wrapper_with_both(
 	original_fn: &ItemFn,
@@ -247,13 +403,15 @@ fn generate_wrapper_with_both(
 	// Generate DI context extraction
 	let di_context_extraction = if !inject_params.is_empty() {
 		quote! {
-			let __di_ctx = {
-				let __shared_ctx = req.get_di_context::<::std::sync::Arc<#di_crate::InjectionContext>>()
-					.ok_or_else(|| #core_crate::exception::Error::Internal(
-						"DI context not set. Ensure the router is configured with .with_di_context()".to_string()
-					))?;
-				let __di_request = req.clone_for_di();
-				::std::sync::Arc::new((*__shared_ctx).fork_for_request(__di_request))
+			let __shared_ctx = req.get_di_context::<::std::sync::Arc<#di_crate::InjectionContext>>()
+				.ok_or_else(|| #core_crate::exception::Error::Internal(
+					"DI context not set. Ensure the router is configured with .with_di_context()".to_string()
+				))?;
+			let __di_request = req.clone_for_di();
+			let __di_ctx = ::std::sync::Arc::new((*__shared_ctx).fork_for_request(__di_request));
+			let __resolve_ctx = #di_crate::resolve_context::ResolveContext {
+				root: ::std::sync::Arc::clone(&__shared_ctx),
+				current: ::std::sync::Arc::clone(&__di_ctx),
 			};
 		}
 	} else {
@@ -261,6 +419,12 @@ fn generate_wrapper_with_both(
 	};
 
 	// Generate injection calls
+	//
+	// For `Depends<T>` parameters we resolve via `resolve_from_registry()`, which
+	// has no `T: Injectable` trait bound. This allows factory-produced types
+	// (registered via `#[injectable_factory]`) to be injected without manually
+	// implementing `Injectable`. This mirrors the fix applied to `#[routes]` in
+	// commit `98adb15b9` (see routes_registration.rs).
 	let injection_calls: Vec<_> = inject_params
 		.iter()
 		.map(|param| {
@@ -268,22 +432,17 @@ fn generate_wrapper_with_both(
 			let ty = &param.ty;
 			let use_cache = param.options.use_cache;
 
-			if use_cache {
+			if let Some(inner_ty) = extract_depends_inner_type(ty) {
 				quote! {
-					let #pat: #ty = #di_crate::Injected::<#ty>::resolve(&__di_ctx)
+					let #pat: #ty = #di_crate::Depends::<#inner_ty>::resolve_from_registry(&__di_ctx, #use_cache)
 						.await
-						.map_err(|e| #core_crate::exception::Error::Internal(
-							format!("Dependency injection failed for {}: {:?}", stringify!(#ty), e)
-						))?
-						.into_inner();
+						.map_err(#core_crate::exception::Error::from)?;
 				}
 			} else {
 				quote! {
-					let #pat: #ty = #di_crate::Injected::<#ty>::resolve_uncached(&__di_ctx)
+					let #pat: #ty = #di_crate::Depends::<#ty>::resolve(&__di_ctx, #use_cache)
 						.await
-						.map_err(|e| #core_crate::exception::Error::Internal(
-							format!("Dependency injection failed for {}: {:?}", stringify!(#ty), e)
-						))?
+						.map_err(#core_crate::exception::Error::from)?
 						.into_inner();
 				}
 			}
@@ -379,6 +538,35 @@ fn generate_wrapper_with_both(
 		(calls, quote! {}, quote! {}, args)
 	};
 
+	// Generate the handler body (injection + extraction + call)
+	let handler_body = quote! {
+		// Resolve injected dependencies
+		#(#injection_calls)*
+
+		// Extract request parameters
+		#(#extractor_calls)*
+
+		// Validate extracted parameters (when pre_validate = true)
+		#validation_calls
+
+		// Destructure into original patterns (when pre_validate = true)
+		#destructure_calls
+
+		// Call the original function
+		#original_fn_name(#(#extractor_args,)* #(#inject_args),*).await
+	};
+
+	// Wrap handler body in RESOLVE_CTX.scope() when DI is active
+	let scoped_handler_body = if !inject_params.is_empty() {
+		quote! {
+			#di_crate::resolve_context::RESOLVE_CTX.scope(__resolve_ctx, async {
+				#handler_body
+			}).await
+		}
+	} else {
+		handler_body
+	};
+
 	// Generate code
 	(
 		quote! {
@@ -395,20 +583,8 @@ fn generate_wrapper_with_both(
 			// Extract DI context (if needed)
 			#di_context_extraction
 
-			// Resolve injected dependencies
-			#(#injection_calls)*
-
-			// Extract request parameters
-			#(#extractor_calls)*
-
-			// Validate extracted parameters (when pre_validate = true)
-			#validation_calls
-
-			// Destructure into original patterns (when pre_validate = true)
-			#destructure_calls
-
-			// Call the original function
-			#original_fn_name(#(#extractor_args,)* #(#inject_args),*).await
+			// Execute handler within resolve context scope
+			#scoped_handler_body
 		},
 	)
 }
@@ -460,6 +636,11 @@ fn generate_view_type(
 		.map(|(ty, ct)| (quote!(Some(#ty)), quote!(Some(#ct))))
 		.unwrap_or((quote!(None), quote!(None)));
 
+	// Detect auth protection level from parameter types
+	let auth_detection = detect_auth_protection(extractors, inject_params);
+	let (auth_protection_ts, guard_description_ts) =
+		auth_detection_to_tokens(&auth_detection, &core_crate);
+
 	let inventory_crate = crate::crate_paths::get_inventory_crate();
 	let metadata_submission = quote! {
 		#inventory_crate::submit! {
@@ -475,9 +656,14 @@ fn generate_view_type(
 				responses: &[],
 				headers: &[],
 				security: &[],
+				auth_protection: #auth_protection_ts,
+				guard_description: #guard_description_ts,
 			}
 		}
 	};
+
+	let url_resolver_tokens =
+		generate_url_resolver_tokens(&options.name, &fn_name.to_string(), path, &reinhardt_crate);
 
 	Ok(quote! {
 		// Submit endpoint metadata to global inventory
@@ -524,7 +710,174 @@ fn generate_view_type(
 		#fn_vis fn #fn_name() -> #view_type_name {
 			#view_type_name
 		}
+
+		#url_resolver_tokens
 	})
+}
+
+/// Convert a snake_case route name to a PascalCase trait name with "Resolve" prefix.
+///
+/// `auth_login` → `ResolveAuthLogin`
+/// `cluster_retrieve` → `ResolveClusterRetrieve`
+fn to_resolver_trait_name(route_name: &str) -> String {
+	let mut result = String::from("Resolve");
+	for segment in route_name.split('_') {
+		let mut chars = segment.chars();
+		if let Some(first) = chars.next() {
+			result.push(first.to_ascii_uppercase());
+			result.extend(chars);
+		}
+	}
+	result
+}
+
+/// Extract parameter names from a URL path pattern.
+///
+/// Handles both simple params `{id}` and typed params `{<int:id>}`.
+/// Skips wildcard `{*}` patterns.
+fn extract_url_params(path: &str) -> Vec<String> {
+	let mut params = Vec::new();
+	let mut chars = path.chars().peekable();
+	while let Some(ch) = chars.next() {
+		if ch == '{' {
+			let content: String = chars.by_ref().take_while(|&c| c != '}').collect();
+			if content == "*" {
+				continue;
+			}
+			// Handle typed params: `<type:name>` → extract `name`
+			let param_name = if content.starts_with('<') {
+				content
+					.split(':')
+					.nth(1)
+					.map(|s| s.trim_end_matches('>'))
+					.unwrap_or(&content)
+			} else {
+				&content
+			};
+			params.push(param_name.to_string());
+		}
+	}
+	params
+}
+
+/// Generate URL resolver extension trait and per-endpoint resolver module tokens.
+///
+/// Each endpoint gets a uniquely named `__url_resolver_<fn_name>` module to avoid
+/// name collisions when multiple routes are declared in the same Rust module.
+/// The `#[url_patterns]` macro references these modules by deriving the module name
+/// from the last segment of the endpoint path.
+///
+/// Returns empty tokens if:
+/// - No route name is set
+/// - The path contains a wildcard
+fn generate_url_resolver_tokens(
+	route_name: &Option<String>,
+	fn_name: &str,
+	path: &str,
+	reinhardt_crate: &TokenStream,
+) -> TokenStream {
+	let Some(name) = route_name.as_ref() else {
+		return quote! {};
+	};
+
+	// Skip wildcard routes
+	if path.contains('*') {
+		return quote! {};
+	}
+
+	// Validate that the route name is a valid Rust identifier before creating
+	// Ident values. `syn::Ident::new` panics on invalid identifiers, so we
+	// catch that early and emit a readable compile error instead.
+	if syn::parse_str::<syn::Ident>(name).is_err() {
+		let msg = format!(
+			"Route name `{name}` is not a valid Rust identifier. \
+			 Route names used with url-resolver must be valid identifiers \
+			 (no hyphens, dots, or leading digits)."
+		);
+		return quote! { ::core::compile_error!(#msg); };
+	}
+
+	let trait_name_str = to_resolver_trait_name(name);
+	let trait_ident = syn::Ident::new(&trait_name_str, Span::call_site());
+	let method_ident = syn::Ident::new(name, Span::call_site());
+	let resolver_mod_ident =
+		syn::Ident::new(&format!("__url_resolver_{fn_name}"), Span::call_site());
+	let meta_macro_ident =
+		syn::Ident::new(&format!("__url_resolver_meta_{fn_name}"), Span::call_site());
+	let params = extract_url_params(path);
+	let doc_str = format!("Resolve URL for route `{}` (pattern: `{}`).", name, path);
+	let depr_note = format!("use namespaced URL resolvers instead: `urls.<app>().{name}()`");
+	let param_strs: Vec<&str> = params.iter().map(|s| s.as_str()).collect();
+
+	// Gate with raw platform check (not `native` alias) because this code
+	// expands in consuming crates that do not have cfg_aliases.
+	if params.is_empty() {
+		quote! {
+			#[doc(hidden)]
+			pub mod #resolver_mod_ident {
+				// Metadata macro for per-app resolver struct generation (Issue #3526).
+				// Consumed by __for_each_url_resolver! → __build_namespaced_resolvers!
+				#[cfg(not(all(target_family = "wasm", target_os = "unknown")))]
+				macro_rules! #meta_macro_ident {
+					($callback:ident, $app:ident) => {
+						$callback!($app, #method_ident, #name, );
+					};
+				}
+				#[cfg(not(all(target_family = "wasm", target_os = "unknown")))]
+				pub(crate) use #meta_macro_ident;
+
+				#[cfg(not(all(target_family = "wasm", target_os = "unknown")))]
+				#[deprecated(since = "0.1.0-rc.16", note = #depr_note)]
+				#[doc = #doc_str]
+				pub trait #trait_ident: #reinhardt_crate::UrlResolver {
+					#[doc = #doc_str]
+					fn #method_ident(&self) -> String {
+						self.resolve_url(#name, &[])
+					}
+				}
+				#[cfg(not(all(target_family = "wasm", target_os = "unknown")))]
+				#[allow(deprecated)]
+				impl<T: #reinhardt_crate::UrlResolver> #trait_ident for T {}
+			}
+			#[doc(hidden)]
+			pub use #resolver_mod_ident::*;
+		}
+	} else {
+		let param_idents: Vec<syn::Ident> = params
+			.iter()
+			.map(|p| syn::Ident::new(p, Span::call_site()))
+			.collect();
+
+		quote! {
+			#[doc(hidden)]
+			pub mod #resolver_mod_ident {
+				// Metadata macro for per-app resolver struct generation (Issue #3526).
+				#[cfg(not(all(target_family = "wasm", target_os = "unknown")))]
+				macro_rules! #meta_macro_ident {
+					($callback:ident, $app:ident) => {
+						$callback!($app, #method_ident, #name, #(#param_strs),* );
+					};
+				}
+				#[cfg(not(all(target_family = "wasm", target_os = "unknown")))]
+				pub(crate) use #meta_macro_ident;
+
+				#[cfg(not(all(target_family = "wasm", target_os = "unknown")))]
+				#[deprecated(since = "0.1.0-rc.16", note = #depr_note)]
+				#[doc = #doc_str]
+				pub trait #trait_ident: #reinhardt_crate::UrlResolver {
+					#[doc = #doc_str]
+					fn #method_ident(&self, #(#param_idents: &str),*) -> String {
+						self.resolve_url(#name, &[#((#param_strs, #param_idents)),*])
+					}
+				}
+				#[cfg(not(all(target_family = "wasm", target_os = "unknown")))]
+				#[allow(deprecated)]
+				impl<T: #reinhardt_crate::UrlResolver> #trait_ident for T {}
+			}
+			#[doc(hidden)]
+			pub use #resolver_mod_ident::*;
+		}
+	}
 }
 
 fn route_impl(method: &str, args: TokenStream, input: ItemFn) -> Result<TokenStream> {
@@ -746,6 +1099,11 @@ fn route_impl(method: &str, args: TokenStream, input: ItemFn) -> Result<TokenStr
 		.map(|(ty, ct)| (quote!(Some(#ty)), quote!(Some(#ct))))
 		.unwrap_or((quote!(None), quote!(None)));
 
+	// Detect auth protection level from all function parameter types
+	let auth_detection = detect_auth_protection_from_inputs(&input.sig.inputs);
+	let (auth_protection_ts, guard_description_ts) =
+		auth_detection_to_tokens(&auth_detection, &core_crate);
+
 	let inventory_crate = crate::crate_paths::get_inventory_crate();
 	let metadata_submission = quote! {
 		#inventory_crate::submit! {
@@ -761,9 +1119,18 @@ fn route_impl(method: &str, args: TokenStream, input: ItemFn) -> Result<TokenStr
 				responses: &[],
 				headers: &[],
 				security: &[],
+				auth_protection: #auth_protection_ts,
+				guard_description: #guard_description_ts,
 			}
 		}
 	};
+
+	let url_resolver_tokens = generate_url_resolver_tokens(
+		&options.name,
+		&fn_name.to_string(),
+		&path_str,
+		&reinhardt_crate,
+	);
 
 	Ok(quote! {
 		// Submit endpoint metadata to global inventory
@@ -814,6 +1181,8 @@ fn route_impl(method: &str, args: TokenStream, input: ItemFn) -> Result<TokenStr
 		#fn_vis fn #fn_name() -> #view_type_name {
 			#view_type_name
 		}
+
+		#url_resolver_tokens
 	})
 }
 
@@ -840,4 +1209,52 @@ pub(crate) fn patch_impl(args: TokenStream, input: ItemFn) -> Result<TokenStream
 /// Implementation of DELETE route macro
 pub(crate) fn delete_impl(args: TokenStream, input: ItemFn) -> Result<TokenStream> {
 	route_impl("DELETE", args, input)
+}
+
+#[cfg(test)]
+mod url_resolver_tests {
+	use super::*;
+
+	#[test]
+	fn route_name_to_trait_name() {
+		assert_eq!(to_resolver_trait_name("auth_login"), "ResolveAuthLogin");
+		assert_eq!(
+			to_resolver_trait_name("cluster_retrieve"),
+			"ResolveClusterRetrieve"
+		);
+		assert_eq!(to_resolver_trait_name("home"), "ResolveHome");
+		assert_eq!(
+			to_resolver_trait_name("deployment_logs"),
+			"ResolveDeploymentLogs"
+		);
+	}
+
+	#[test]
+	fn extract_path_params_none() {
+		assert_eq!(extract_url_params("/login/"), Vec::<String>::new());
+	}
+
+	#[test]
+	fn extract_path_params_single() {
+		assert_eq!(extract_url_params("/{id}/"), vec!["id"]);
+	}
+
+	#[test]
+	fn extract_path_params_multiple() {
+		assert_eq!(
+			extract_url_params("/{user_id}/posts/{post_id}/"),
+			vec!["user_id", "post_id"]
+		);
+	}
+
+	#[test]
+	fn extract_path_params_with_type_specifier() {
+		assert_eq!(extract_url_params("/{<int:id>}/"), vec!["id"]);
+		assert_eq!(extract_url_params("/{<uuid:item_id>}/"), vec!["item_id"]);
+	}
+
+	#[test]
+	fn extract_path_params_wildcard_skipped() {
+		assert_eq!(extract_url_params("/static/{*}"), Vec::<String>::new());
+	}
 }

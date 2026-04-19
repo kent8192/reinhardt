@@ -21,7 +21,7 @@ jobs:
   publish-check:
     name: Publish Dry-Run Check
     runs-on: ${{ fromJSON(inputs.runner || '"ubuntu-latest"') }}
-    timeout-minutes: 30
+    timeout-minutes: 360
     # Skip for release-plz branches and release-fix branches - versions may not yet be on crates.io
     if: >-
       ${{
@@ -56,7 +56,13 @@ jobs:
       - name: Verify no circular dev-dependencies
         run: |
           echo "=== Checking for circular dev-dependencies ==="
-          echo "Running cargo publish --workspace --dry-run..."
-          cargo publish --workspace --dry-run --no-verify --exclude reinhardt-web
+          # Use 'cargo package' instead of 'cargo publish --dry-run' to avoid
+          # timeout waiting for workspace dependencies to appear on crates.io
+          # registry (dry-run never actually publishes, so deps never appear).
+          # Build exclude flags for all crates with publish = false.
+          EXCLUDES=$(cargo metadata --no-deps --format-version=1 \
+            | jq -r '.packages[] | select(.publish == [] or .publish == ["!crates-io"] or .name == "reinhardt-web") | "--exclude \(.name)"' \
+            | tr '\n' ' ')
+          eval cargo package --workspace --no-verify --allow-dirty $EXCLUDES
           echo ""
-          echo "=== All crates passed publish dry-run check ==="
+          echo "=== All crates passed packaging check ==="

@@ -9,7 +9,7 @@ use std::path::PathBuf;
 
 /// Main application settings
 #[deprecated(
-	since = "0.2.0",
+	since = "0.1.0-rc.16",
 	note = "use individual fragments (CacheSettings, SessionSettings, etc.) with ProjectSettings instead"
 )]
 #[non_exhaustive]

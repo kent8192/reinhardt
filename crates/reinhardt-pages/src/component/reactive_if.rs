@@ -3,30 +3,30 @@
 //! This module provides the `ReactiveIfNode` which manages DOM updates
 //! for conditional rendering based on Signal changes.
 
-#[cfg(target_arch = "wasm32")]
+#[cfg(wasm)]
 use crate::component::into_page::PageExt;
-#[cfg(target_arch = "wasm32")]
+#[cfg(wasm)]
 use crate::reactive::effect::Effect;
-#[cfg(target_arch = "wasm32")]
+#[cfg(wasm)]
 use crate::reactive::runtime::EffectTiming;
-#[cfg(target_arch = "wasm32")]
+#[cfg(wasm)]
 use reinhardt_core::types::page::{BOOLEAN_ATTRS, Page, is_boolean_attr_truthy};
-#[cfg(target_arch = "wasm32")]
+#[cfg(wasm)]
 use std::cell::RefCell;
-#[cfg(target_arch = "wasm32")]
+#[cfg(wasm)]
 use std::rc::Rc;
 
 // Thread-local storage for reactive nodes to prevent them from being dropped.
 //
 // When a ReactiveIfNode is created during view mounting, it must be kept alive
 // for the lifetime of the DOM element. This storage prevents premature cleanup.
-#[cfg(target_arch = "wasm32")]
+#[cfg(wasm)]
 thread_local! {
 	static REACTIVE_NODES: RefCell<Vec<Box<dyn std::any::Any>>> = RefCell::new(Vec::new());
 }
 
 /// Stores a reactive node to keep it alive.
-#[cfg(target_arch = "wasm32")]
+#[cfg(wasm)]
 pub fn store_reactive_node<T: 'static>(node: T) {
 	REACTIVE_NODES.with(|nodes| {
 		nodes.borrow_mut().push(Box::new(node));
@@ -37,7 +37,7 @@ pub fn store_reactive_node<T: 'static>(node: T) {
 ///
 /// This should be called when the application is being torn down or
 /// when a complete re-render is needed.
-#[cfg(target_arch = "wasm32")]
+#[cfg(wasm)]
 pub fn cleanup_reactive_nodes() {
 	REACTIVE_NODES.with(|nodes| {
 		nodes.borrow_mut().clear();
@@ -49,7 +49,7 @@ pub fn cleanup_reactive_nodes() {
 /// ReactiveIfNode creates a comment node as a marker in the DOM, and uses
 /// an Effect to monitor condition changes. When the condition changes,
 /// it removes the old DOM nodes and mounts new ones.
-#[cfg(target_arch = "wasm32")]
+#[cfg(wasm)]
 pub struct ReactiveIfNode {
 	/// Marker comment node in DOM (used as insertion point reference)
 	#[allow(dead_code)] // Kept for potential future use
@@ -65,7 +65,7 @@ pub struct ReactiveIfNode {
 	effect: Effect,
 }
 
-#[cfg(target_arch = "wasm32")]
+#[cfg(wasm)]
 impl ReactiveIfNode {
 	/// Creates a new ReactiveIfNode and mounts it with reactive updates.
 	///
@@ -159,7 +159,7 @@ impl ReactiveIfNode {
 /// ReactiveNode is similar to ReactiveIfNode but handles a single render
 /// closure rather than conditional branches. It creates a comment node as
 /// a marker and uses an Effect to monitor Signal changes.
-#[cfg(target_arch = "wasm32")]
+#[cfg(wasm)]
 pub struct ReactiveNode {
 	/// Marker comment node in DOM (used as insertion point reference)
 	#[allow(dead_code)] // Kept for potential future use
@@ -172,7 +172,7 @@ pub struct ReactiveNode {
 	effect: Effect,
 }
 
-#[cfg(target_arch = "wasm32")]
+#[cfg(wasm)]
 impl ReactiveNode {
 	/// Creates a new ReactiveNode and mounts it with reactive updates.
 	///
@@ -237,7 +237,7 @@ impl ReactiveNode {
 ///
 /// This function recursively mounts the view tree and inserts all created
 /// nodes before the marker comment node.
-#[cfg(target_arch = "wasm32")]
+#[cfg(wasm)]
 fn mount_before_marker(marker: &web_sys::Comment, view: Page) -> Vec<web_sys::Node> {
 	use wasm_bindgen::JsCast;
 

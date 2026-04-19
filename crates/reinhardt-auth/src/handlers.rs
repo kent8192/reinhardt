@@ -46,7 +46,7 @@ pub const SESSION_COOKIE_NAME: &str = "sessionid";
 ///
 /// # Examples
 ///
-/// ```rust,ignore
+/// ```ignore
 /// use reinhardt_auth::handlers::LoginHandler;
 /// use reinhardt_auth::session::InMemorySessionStore;
 /// use reinhardt_auth::core::backend::AuthenticationBackend;
@@ -268,7 +268,7 @@ mod tests {
 	async fn test_login_handler_success() {
 		let session_store = Arc::new(InMemorySessionStore::new());
 		let test_user = SimpleUser {
-			id: Uuid::new_v4(),
+			id: Uuid::now_v7(),
 			username: "testuser".to_string(),
 			email: "test@example.com".to_string(),
 			is_active: true,
@@ -382,7 +382,7 @@ mod tests {
 	async fn test_login_handler_session_contains_user_id() {
 		// Arrange
 		let session_store = Arc::new(InMemorySessionStore::new());
-		let user_id = Uuid::new_v4();
+		let user_id = Uuid::now_v7();
 		let test_user = SimpleUser {
 			id: user_id,
 			username: "session_user".to_string(),
@@ -434,7 +434,7 @@ mod tests {
 		// Arrange
 		let session_store = Arc::new(InMemorySessionStore::new());
 		let test_user = SimpleUser {
-			id: Uuid::new_v4(),
+			id: Uuid::now_v7(),
 			username: "cookie_user".to_string(),
 			email: "cookie@example.com".to_string(),
 			is_active: true,
@@ -514,7 +514,7 @@ mod tests {
 		// Arrange
 		let session_store = Arc::new(InMemorySessionStore::new());
 		let test_user = SimpleUser {
-			id: Uuid::new_v4(),
+			id: Uuid::now_v7(),
 			username: "body_user".to_string(),
 			email: "body@example.com".to_string(),
 			is_active: true,
@@ -582,7 +582,7 @@ mod tests {
 		session_store.save(&old_session_id, &old_session).await;
 
 		let test_user = SimpleUser {
-			id: Uuid::new_v4(),
+			id: Uuid::now_v7(),
 			username: "new_user".to_string(),
 			email: "new@example.com".to_string(),
 			is_active: true,

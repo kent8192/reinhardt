@@ -44,7 +44,7 @@ use async_trait::async_trait;
 use std::sync::Arc;
 
 #[cfg(feature = "di")]
-use reinhardt_di::{Injectable, Injected, InjectionContext};
+use reinhardt_di::{Depends, Injectable, InjectionContext};
 
 /// Consumer context containing connection and message information
 ///
@@ -206,7 +206,7 @@ impl ConsumerContext {
 			.as_ref()
 			.ok_or_else(|| WebSocketError::Internal("DI context not available".to_string()))?;
 
-		Injected::<T>::resolve(ctx)
+		Depends::<T>::resolve(ctx, true)
 			.await
 			.map(|injected| injected.into_inner())
 			.map_err(|_| WebSocketError::Internal("dependency resolution failed".to_string()))
@@ -238,7 +238,7 @@ impl ConsumerContext {
 			.as_ref()
 			.ok_or_else(|| WebSocketError::Internal("DI context not available".to_string()))?;
 
-		Injected::<T>::resolve_uncached(ctx)
+		Depends::<T>::resolve(ctx, false)
 			.await
 			.map(|injected| injected.into_inner())
 			.map_err(|_| WebSocketError::Internal("dependency resolution failed".to_string()))
@@ -265,7 +265,7 @@ impl ConsumerContext {
 	{
 		let ctx = self.di_context.as_ref()?;
 
-		Injected::<T>::resolve(ctx)
+		Depends::<T>::resolve(ctx, true)
 			.await
 			.ok()
 			.map(|injected| injected.into_inner())

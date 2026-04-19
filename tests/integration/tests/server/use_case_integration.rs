@@ -908,7 +908,7 @@ impl SessionStore {
 	}
 
 	fn create_session(&self, user_id: String, username: String) -> String {
-		let session_id = uuid::Uuid::new_v4().to_string();
+		let session_id = uuid::Uuid::now_v7().to_string();
 		let session = UserSession {
 			user_id,
 			username,

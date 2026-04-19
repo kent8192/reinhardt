@@ -283,6 +283,100 @@ let handler_with_custom = ModelViewSetHandler::<Snippet>::new()
     .add_permission(Arc::new(IsOwnerOrReadOnly));
 ```
 
+## Group-Based Permissions
+
+Reinhardt supports group-based permission management through `GroupManager`.
+Users can be assigned to groups, and each group can have its own set of permissions.
+
+### Setting Up GroupManager
+
+Register a global `GroupManager` at application startup:
+
+```rust
+use reinhardt_auth::{GroupManager, register_group_manager};
+use reinhardt_auth::group_management::CreateGroupData;
+use std::sync::Arc;
+
+async fn setup_groups() {
+    let mut manager = GroupManager::new();
+
+    // Create groups
+    let editors = manager.create_group(CreateGroupData {
+        name: "editors".to_string(),
+        description: Some("Content editors".to_string()),
+    }).await.unwrap();
+
+    // Assign permissions to groups
+    manager.add_group_permission(
+        &editors.id.to_string(), "blog.add_post"
+    ).await.unwrap();
+    manager.add_group_permission(
+        &editors.id.to_string(), "blog.edit_post"
+    ).await.unwrap();
+
+    // Register globally — PermissionsMixin will use this automatically
+    register_group_manager(Arc::new(manager));
+}
+```
+
+### How Group Permissions Work
+
+Once a `GroupManager` is registered, `PermissionsMixin::get_group_permissions()`
+automatically resolves permissions for the user's groups:
+
+```rust
+use reinhardt_auth::PermissionsMixin;
+
+// User belongs to "editors" group
+let user = get_current_user().await;
+
+// Automatically includes group permissions
+assert!(user.has_perm("blog.add_post"));    // from "editors" group
+assert!(user.has_perm("blog.edit_post"));   // from "editors" group
+
+// get_all_permissions() merges direct + group permissions
+let all = user.get_all_permissions();
+```
+
+The resolution flow:
+1. `has_perm()` calls `get_all_permissions()`
+2. `get_all_permissions()` merges `get_user_permissions()` (direct) and `get_group_permissions()` (from groups)
+3. `get_group_permissions()` looks up the global `GroupManager` and resolves permissions for each group name
+4. Superusers bypass all checks and always return `true`
+
+## User Model with Database Integration
+
+When combining `#[user]` with `#[model]`, the user macro automatically injects
+`ManyToManyField` relationships for structured database queries:
+
+```rust
+use reinhardt::prelude::*;
+use reinhardt_auth::Argon2Hasher;
+
+// What you write:
+#[user(hasher = Argon2Hasher, username_field = "username", full = true)]
+#[model(app_label = "auth", table_name = "auth_user")]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct User {
+    #[field(primary_key = true)]
+    pub id: Uuid,
+    #[field(max_length = 150, unique = true)]
+    pub username: String,
+    // ... other fields ...
+    pub user_permissions: Vec<String>,  // PermissionsMixin cache
+    pub groups: Vec<String>,            // PermissionsMixin cache
+}
+
+// The macro automatically:
+// 1. Marks Vec<String> fields with #[field(skip = true)] (excluded from DB)
+// 2. Injects ManyToManyField<User, AuthPermission> for permission relationships
+// 3. Injects ManyToManyField<User, Group> for group relationships
+// 4. Generates BaseUser, FullUser, PermissionsMixin, AuthIdentity impls
+```
+
+The `Vec<String>` fields serve as in-memory caches for `PermissionsMixin`,
+while `ManyToManyField` relationships handle structured ORM queries.
+
 ## Summary
 
 In this tutorial, you learned:
@@ -294,5 +388,7 @@ In this tutorial, you learned:
 5. Object-level permissions
 6. Combining multiple permissions
 7. Applying permissions to ViewSets
+8. Group-based permissions with `GroupManager`
+9. Database-backed user models with `#[user]` + `#[model]`
 
 Next tutorial: [Tutorial 5: Relationships and Hyperlinked APIs](../5-relationships-and-hyperlinked-apis/)

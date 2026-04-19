@@ -265,7 +265,12 @@ impl<B: SessionBackend + 'static> Middleware for SessionMiddleware<B> {
 		request.extensions.insert(shared_session.clone());
 
 		// Process the request
-		let mut response = next.handle(request).await?;
+		// Convert errors to responses so post-processing (e.g., security headers)
+		// always runs, even when invoked outside MiddlewareChain. (#3244)
+		let mut response = match next.handle(request).await {
+			Ok(resp) => resp,
+			Err(e) => Response::from(e),
+		};
 
 		// Save session if modified
 		// Acquire read lock to check if modified

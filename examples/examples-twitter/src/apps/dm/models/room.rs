@@ -1,9 +1,9 @@
 //! DMRoom model for direct messaging
 
 use chrono::{DateTime, Utc};
-use reinhardt::core::serde::{Deserialize, Serialize};
 use reinhardt::db::associations::ManyToManyField;
 use reinhardt::model;
+use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 // Used by #[model] macro for type inference in ManyToManyField<DMRoom, User> relationship field.
@@ -13,7 +13,7 @@ use uuid::Uuid;
 use crate::apps::auth::models::User;
 
 // Test-only dependency for sqlx::FromRow (server-side only)
-#[cfg(all(test, server))]
+#[cfg(all(test, native))]
 use sqlx::FromRow;
 
 /// DMRoom model representing a chat room for direct messaging
@@ -22,29 +22,29 @@ use sqlx::FromRow;
 /// Room members are managed via the members ManyToManyField.
 #[model(app_label = "dm", table_name = "dm_room")]
 #[derive(Serialize, Deserialize)]
-#[cfg_attr(all(test, server), derive(FromRow))]
+#[cfg_attr(all(test, native), derive(FromRow))]
 pub struct DMRoom {
 	#[field(primary_key = true)]
-	id: Uuid,
+	pub id: Uuid,
 
 	/// Room name (optional, used for group chats)
 	#[field(max_length = 100)]
-	name: Option<String>,
+	pub name: Option<String>,
 
 	/// Is this a group chat (more than 2 members)
 	#[field(default = false)]
-	is_group: bool,
+	pub is_group: bool,
 
 	/// Room members via ManyToMany relationship
 	/// Intermediate table: dm_room_members
 	#[serde(skip, default)]
-	#[cfg_attr(all(test, server), sqlx(skip))]
+	#[cfg_attr(all(test, native), sqlx(skip))]
 	#[rel(many_to_many, related_name = "rooms")]
-	members: ManyToManyField<DMRoom, User>,
+	pub members: ManyToManyField<DMRoom, User>,
 
 	#[field(auto_now_add = true)]
-	created_at: DateTime<Utc>,
+	pub created_at: DateTime<Utc>,
 
 	#[field(auto_now = true)]
-	updated_at: DateTime<Utc>,
+	pub updated_at: DateTime<Utc>,
 }

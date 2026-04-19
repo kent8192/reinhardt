@@ -92,6 +92,24 @@ impl Parse for MacroArgs {
 	}
 }
 
+/// Extract the inner type `T` from `Depends<T>`.
+///
+/// Returns `Some(T)` if the type is `Depends<T>` (or a fully qualified path ending in `Depends`),
+/// `None` otherwise.
+pub(crate) fn extract_depends_inner_type(ty: &syn::Type) -> Option<&syn::Type> {
+	if let syn::Type::Path(type_path) = ty {
+		let last_segment = type_path.path.segments.last()?;
+		if last_segment.ident == "Depends"
+			&& let syn::PathArguments::AngleBracketed(args) = &last_segment.arguments
+			&& args.args.len() == 1
+			&& let syn::GenericArgument::Type(inner) = args.args.first()?
+		{
+			return Some(inner);
+		}
+	}
+	None
+}
+
 /// Extract scope from macro arguments
 pub(crate) fn extract_scope_from_args(args: TokenStream) -> Result<Scope> {
 	if args.is_empty() {

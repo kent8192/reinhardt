@@ -31,6 +31,26 @@ use crate::reactive::Signal;
 use std::cell::RefCell;
 use std::collections::HashSet;
 
+/// Deserializes a user ID that may be either a JSON string or a JSON number.
+///
+/// This provides backward compatibility: existing clients that send `"user_id": 42`
+/// (integer) will have it converted to `Some("42")`, while new clients sending
+/// `"user_id": "550e8400-..."` (UUID string) work directly.
+fn deserialize_user_id<'de, D>(deserializer: D) -> Result<Option<String>, D::Error>
+where
+	D: serde::Deserializer<'de>,
+{
+	use serde::Deserialize;
+	let value = Option::<serde_json::Value>::deserialize(deserializer)?;
+	Ok(value.and_then(|v| match v {
+		serde_json::Value::String(s) if s.is_empty() => None,
+		serde_json::Value::String(s) => Some(s),
+		serde_json::Value::Number(n) => Some(n.to_string()),
+		serde_json::Value::Null => None,
+		_ => None,
+	}))
+}
+
 /// Session key for user ID (matches reinhardt-auth).
 pub const SESSION_KEY_USER_ID: &str = "_auth_user_id";
 
@@ -68,8 +88,8 @@ pub fn auth_state() -> AuthState {
 pub struct AuthState {
 	/// Whether the user is authenticated.
 	is_authenticated: Signal<bool>,
-	/// The authenticated user's ID.
-	user_id: Signal<Option<i64>>,
+	/// The authenticated user's ID (string to support both integer and UUID PKs).
+	user_id: Signal<Option<String>>,
 	/// The authenticated user's username.
 	username: Signal<Option<String>>,
 	/// The authenticated user's email.
@@ -124,7 +144,7 @@ impl AuthState {
 	}
 
 	/// Returns the authenticated user's ID.
-	pub fn user_id(&self) -> Option<i64> {
+	pub fn user_id(&self) -> Option<String> {
 		self.user_id.get()
 	}
 
@@ -156,7 +176,7 @@ impl AuthState {
 	}
 
 	/// Returns the Signal for user ID.
-	pub fn user_id_signal(&self) -> Signal<Option<i64>> {
+	pub fn user_id_signal(&self) -> Signal<Option<String>> {
 		self.user_id.clone()
 	}
 
@@ -198,9 +218,9 @@ impl AuthState {
 	///
 	/// Resets `email`, `is_staff`, `is_superuser`, and `permissions` to defaults
 	/// to prevent stale data from a previous session.
-	pub fn login(&self, user_id: i64, username: impl Into<String>) {
+	pub fn login(&self, user_id: impl Into<String>, username: impl Into<String>) {
 		self.is_authenticated.set(true);
-		self.user_id.set(Some(user_id));
+		self.user_id.set(Some(user_id.into()));
 		self.username.set(Some(username.into()));
 		self.email.set(None);
 		self.is_staff.set(false);
@@ -211,14 +231,14 @@ impl AuthState {
 	/// Sets the state to authenticated with full user data.
 	pub fn login_full(
 		&self,
-		user_id: i64,
+		user_id: impl Into<String>,
 		username: impl Into<String>,
 		email: Option<String>,
 		is_staff: bool,
 		is_superuser: bool,
 	) {
 		self.is_authenticated.set(true);
-		self.user_id.set(Some(user_id));
+		self.user_id.set(Some(user_id.into()));
 		self.username.set(Some(username.into()));
 		self.email.set(email);
 		self.is_staff.set(is_staff);
@@ -287,16 +307,17 @@ impl AuthState {
 	/// Fetches permissions from the server and updates the cache.
 	///
 	/// Default endpoint: `/api/auth/permissions`
-	#[cfg(target_arch = "wasm32")]
+	#[cfg(wasm)]
 	pub async fn fetch_permissions(&self, endpoint: Option<&str>) -> Result<(), AuthError> {
 		use crate::csrf::csrf_headers;
-		use gloo_net::http::Request;
+		use reqwest::Client;
 
 		let endpoint = endpoint.unwrap_or("/api/auth/permissions");
-		let mut request = Request::get(endpoint);
+		let client = Client::new();
+		let mut request = client.get(endpoint);
 
 		if let Some((header_name, header_value)) = csrf_headers() {
-			request = request.header(header_name, &header_value);
+			request = request.header(header_name, header_value);
 		}
 
 		let response = request
@@ -304,10 +325,14 @@ impl AuthState {
 			.await
 			.map_err(|e| AuthError::Network(e.to_string()))?;
 
-		if !response.ok() {
+		if !response.status().is_success() {
 			return Err(AuthError::Server {
-				status: response.status(),
-				message: response.status_text(),
+				status: response.status().as_u16(),
+				message: response
+					.status()
+					.canonical_reason()
+					.unwrap_or("Unknown")
+					.to_string(),
 			});
 		}
 
@@ -321,7 +346,7 @@ impl AuthState {
 	}
 
 	/// Fetches permissions from the server (non-WASM stub).
-	#[cfg(not(target_arch = "wasm32"))]
+	#[cfg(native)]
 	pub async fn fetch_permissions(&self, _endpoint: Option<&str>) -> Result<(), AuthError> {
 		Ok(())
 	}
@@ -330,7 +355,7 @@ impl AuthState {
 	///
 	/// This looks for a `<script id="auth-data">` element containing
 	/// JSON-encoded authentication data.
-	#[cfg(target_arch = "wasm32")]
+	#[cfg(wasm)]
 	pub fn init_from_page(&self) {
 		use web_sys::window;
 
@@ -354,7 +379,7 @@ impl AuthState {
 	}
 
 	/// Initializes the auth state (non-WASM stub).
-	#[cfg(not(target_arch = "wasm32"))]
+	#[cfg(native)]
 	pub fn init_from_page(&self) {
 		// No-op on non-WASM targets
 	}
@@ -363,16 +388,17 @@ impl AuthState {
 	///
 	/// This makes an AJAX request to the auth status endpoint
 	/// and updates the state with the response.
-	#[cfg(target_arch = "wasm32")]
+	#[cfg(wasm)]
 	pub async fn fetch_from_server(&self, endpoint: &str) -> Result<(), AuthError> {
 		use crate::csrf::csrf_headers;
-		use gloo_net::http::Request;
+		use reqwest::Client;
 
-		let mut request = Request::get(endpoint);
+		let client = Client::new();
+		let mut request = client.get(endpoint);
 
 		// Add CSRF header if available
 		if let Some((header_name, header_value)) = csrf_headers() {
-			request = request.header(header_name, &header_value);
+			request = request.header(header_name, header_value);
 		}
 
 		let response = request
@@ -380,10 +406,14 @@ impl AuthState {
 			.await
 			.map_err(|e| AuthError::Network(e.to_string()))?;
 
-		if !response.ok() {
+		if !response.status().is_success() {
 			return Err(AuthError::Server {
-				status: response.status(),
-				message: response.status_text(),
+				status: response.status().as_u16(),
+				message: response
+					.status()
+					.canonical_reason()
+					.unwrap_or("Unknown")
+					.to_string(),
 			});
 		}
 
@@ -397,7 +427,7 @@ impl AuthState {
 	}
 
 	/// Fetches the current auth state (non-WASM stub).
-	#[cfg(not(target_arch = "wasm32"))]
+	#[cfg(native)]
 	pub async fn fetch_from_server(&self, _endpoint: &str) -> Result<(), AuthError> {
 		Ok(())
 	}
@@ -413,9 +443,9 @@ impl AuthState {
 pub struct AuthData {
 	/// Whether the user is authenticated.
 	pub is_authenticated: bool,
-	/// The authenticated user's ID.
-	#[serde(default)]
-	pub user_id: Option<i64>,
+	/// The authenticated user's ID (string to support both integer and UUID PKs).
+	#[serde(default, deserialize_with = "deserialize_user_id")]
+	pub user_id: Option<String>,
 	/// The authenticated user's username.
 	#[serde(default)]
 	pub username: Option<String>,
@@ -440,10 +470,10 @@ impl AuthData {
 	}
 
 	/// Creates authenticated auth data with minimal info.
-	pub fn authenticated(user_id: i64, username: impl Into<String>) -> Self {
+	pub fn authenticated(user_id: impl Into<String>, username: impl Into<String>) -> Self {
 		Self {
 			is_authenticated: true,
-			user_id: Some(user_id),
+			user_id: Some(user_id.into()),
 			username: Some(username.into()),
 			..Default::default()
 		}
@@ -451,7 +481,7 @@ impl AuthData {
 
 	/// Creates authenticated auth data with full info.
 	pub fn full(
-		user_id: i64,
+		user_id: impl Into<String>,
 		username: impl Into<String>,
 		email: Option<String>,
 		is_staff: bool,
@@ -459,7 +489,7 @@ impl AuthData {
 	) -> Self {
 		Self {
 			is_authenticated: true,
-			user_id: Some(user_id),
+			user_id: Some(user_id.into()),
 			username: Some(username.into()),
 			email,
 			is_staff,
@@ -499,6 +529,98 @@ impl std::fmt::Display for AuthError {
 
 impl std::error::Error for AuthError {}
 
+// ============================================================================
+// JWT Token Management for Client-side WASM
+// ============================================================================
+
+/// The HTTP header name for JWT Bearer token authentication.
+pub const AUTH_HEADER_NAME: &str = "Authorization";
+
+/// The sessionStorage key for the admin JWT token.
+///
+/// sessionStorage is preferred over localStorage for admin panels because:
+/// - Tokens are scoped per tab and cleared when the tab closes
+/// - Reduces exposure from XSS attacks on other tabs
+pub const JWT_STORAGE_KEY: &str = "__admin_jwt";
+
+/// Creates HTTP headers with JWT Bearer token for authenticated requests.
+///
+/// Returns a tuple of (header_name, header_value) if a JWT token is available
+/// in sessionStorage. This follows the same pattern as [`crate::csrf::csrf_headers`].
+///
+/// # Example
+///
+/// ```ignore
+/// use reinhardt_pages::auth::auth_headers;
+///
+/// if let Some((header_name, header_value)) = auth_headers() {
+///     // header_name = "Authorization"
+///     // header_value = "Bearer eyJhbGciOi..."
+/// }
+/// ```
+#[cfg(wasm)]
+pub fn auth_headers() -> Option<(&'static str, String)> {
+	get_jwt_token().map(|token| (AUTH_HEADER_NAME, format!("Bearer {}", token)))
+}
+
+/// Creates HTTP headers with JWT Bearer token (non-WASM stub).
+#[cfg(native)]
+pub fn auth_headers() -> Option<(&'static str, String)> {
+	None
+}
+
+/// Retrieves the JWT token from sessionStorage.
+///
+/// Returns `None` if no token is stored or if sessionStorage is unavailable.
+#[cfg(wasm)]
+pub fn get_jwt_token() -> Option<String> {
+	let window = web_sys::window()?;
+	let storage = window.session_storage().ok()??;
+	storage.get_item(JWT_STORAGE_KEY).ok()?
+}
+
+/// Retrieves the JWT token (non-WASM stub).
+#[cfg(native)]
+pub fn get_jwt_token() -> Option<String> {
+	None
+}
+
+/// Stores a JWT token in sessionStorage.
+///
+/// The token persists for the lifetime of the browser tab.
+#[cfg(wasm)]
+pub fn set_jwt_token(token: &str) {
+	if let Some(window) = web_sys::window() {
+		if let Ok(Some(storage)) = window.session_storage() {
+			let _ = storage.set_item(JWT_STORAGE_KEY, token);
+		}
+	}
+}
+
+/// Stores a JWT token (non-WASM stub).
+#[cfg(native)]
+pub fn set_jwt_token(_token: &str) {
+	// No-op on non-WASM targets
+}
+
+/// Removes the JWT token from sessionStorage.
+///
+/// This should be called on logout or when a 401 response is received.
+#[cfg(wasm)]
+pub fn clear_jwt_token() {
+	if let Some(window) = web_sys::window() {
+		if let Ok(Some(storage)) = window.session_storage() {
+			let _ = storage.remove_item(JWT_STORAGE_KEY);
+		}
+	}
+}
+
+/// Removes the JWT token (non-WASM stub).
+#[cfg(native)]
+pub fn clear_jwt_token() {
+	// No-op on non-WASM targets
+}
+
 #[cfg(test)]
 mod tests {
 	use super::*;
@@ -514,17 +636,17 @@ mod tests {
 	#[test]
 	fn test_auth_state_login() {
 		let state = AuthState::new();
-		state.login(42, "testuser");
+		state.login("42", "testuser");
 
 		assert!(state.is_authenticated());
-		assert_eq!(state.user_id(), Some(42));
+		assert_eq!(state.user_id(), Some("42".to_string()));
 		assert_eq!(state.username(), Some("testuser".to_string()));
 	}
 
 	#[test]
 	fn test_auth_state_logout() {
 		let state = AuthState::new();
-		state.login(42, "testuser");
+		state.login("42", "testuser");
 		state.logout();
 
 		assert!(!state.is_authenticated());
@@ -535,7 +657,7 @@ mod tests {
 	#[test]
 	fn test_auth_state_from_server_data() {
 		let data = AuthData::full(
-			1,
+			"1",
 			"admin",
 			Some("admin@example.com".to_string()),
 			true,
@@ -544,7 +666,7 @@ mod tests {
 		let state = AuthState::from_server_data(data);
 
 		assert!(state.is_authenticated());
-		assert_eq!(state.user_id(), Some(1));
+		assert_eq!(state.user_id(), Some("1".to_string()));
 		assert_eq!(state.username(), Some("admin".to_string()));
 		assert_eq!(state.email(), Some("admin@example.com".to_string()));
 		assert!(state.is_staff());
@@ -560,20 +682,20 @@ mod tests {
 
 	#[test]
 	fn test_auth_data_authenticated() {
-		let data = AuthData::authenticated(1, "user");
+		let data = AuthData::authenticated("1", "user");
 		assert!(data.is_authenticated);
-		assert_eq!(data.user_id, Some(1));
+		assert_eq!(data.user_id, Some("1".to_string()));
 		assert_eq!(data.username, Some("user".to_string()));
 	}
 
 	#[test]
 	fn test_auth_state_update() {
 		let state = AuthState::new();
-		let data = AuthData::authenticated(99, "updated");
+		let data = AuthData::authenticated("99", "updated");
 		state.update(data);
 
 		assert!(state.is_authenticated());
-		assert_eq!(state.user_id(), Some(99));
+		assert_eq!(state.user_id(), Some("99".to_string()));
 		assert_eq!(state.username(), Some("updated".to_string()));
 	}
 
@@ -582,7 +704,7 @@ mod tests {
 		let state1 = auth_state();
 		let state2 = auth_state();
 
-		state1.login(1, "test");
+		state1.login("1", "test");
 		assert!(state2.is_authenticated());
 	}
 
@@ -616,7 +738,7 @@ mod tests {
 	#[test]
 	fn test_superuser_has_all_permissions() {
 		let state = AuthState::new();
-		state.login_full(1, "admin", None, true, true);
+		state.login_full("1", "admin", None, true, true);
 
 		assert!(state.has_permission("any.permission"));
 		assert!(state.has_permission("another.permission"));
@@ -651,7 +773,7 @@ mod tests {
 		let mut perms = HashSet::new();
 		perms.insert("blog.add_post".to_string());
 		state.set_permissions(perms);
-		state.login(1, "user");
+		state.login("1", "user");
 
 		state.logout();
 
@@ -663,7 +785,7 @@ mod tests {
 	fn test_permissions_from_auth_data() {
 		let data = AuthData {
 			is_authenticated: true,
-			user_id: Some(1),
+			user_id: Some("1".to_string()),
 			username: Some("user".to_string()),
 			email: None,
 			is_staff: false,
@@ -680,11 +802,11 @@ mod tests {
 	#[test]
 	fn test_permissions_update() {
 		let state = AuthState::new();
-		state.login(1, "user");
+		state.login("1", "user");
 
 		let data = AuthData {
 			is_authenticated: true,
-			user_id: Some(1),
+			user_id: Some("1".to_string()),
 			username: Some("user".to_string()),
 			email: None,
 			is_staff: false,
@@ -695,5 +817,35 @@ mod tests {
 
 		assert!(state.has_permission("blog.view"));
 		assert!(!state.has_permission("blog.edit"));
+	}
+
+	#[test]
+	fn test_auth_headers_non_wasm() {
+		// On non-WASM targets, auth_headers always returns None
+		assert!(auth_headers().is_none());
+	}
+
+	#[test]
+	fn test_get_jwt_token_non_wasm() {
+		// On non-WASM targets, get_jwt_token always returns None
+		assert!(get_jwt_token().is_none());
+	}
+
+	#[test]
+	fn test_set_jwt_token_non_wasm() {
+		// On non-WASM targets, set_jwt_token is a no-op (should not panic)
+		set_jwt_token("test-token");
+	}
+
+	#[test]
+	fn test_clear_jwt_token_non_wasm() {
+		// On non-WASM targets, clear_jwt_token is a no-op (should not panic)
+		clear_jwt_token();
+	}
+
+	#[test]
+	fn test_jwt_constants() {
+		assert_eq!(AUTH_HEADER_NAME, "Authorization");
+		assert_eq!(JWT_STORAGE_KEY, "__admin_jwt");
 	}
 }

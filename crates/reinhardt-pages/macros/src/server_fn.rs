@@ -23,6 +23,27 @@ use crate::crate_paths::{
 	get_reinhardt_pages_crate, get_reinhardt_pages_crate_info,
 };
 
+/// Extract the inner type `T` from `Depends<T>`.
+///
+/// Returns `Some(T)` if the type is `Depends<T>`, `None` otherwise.
+/// Mirrors the helper in `crates/reinhardt-core/macros/src/routes_registration.rs`.
+/// Keep this implementation in sync with that file; the two proc-macro crates
+/// cannot share code directly without introducing a new non-proc-macro helper
+/// crate, and the helper is small enough that duplication is preferred.
+fn extract_depends_inner_type(ty: &syn::Type) -> Option<&syn::Type> {
+	if let syn::Type::Path(type_path) = ty {
+		let last_segment = type_path.path.segments.last()?;
+		if last_segment.ident == "Depends"
+			&& let syn::PathArguments::AngleBracketed(args) = &last_segment.arguments
+			&& args.args.len() == 1
+			&& let syn::GenericArgument::Type(inner) = args.args.first()?
+		{
+			return Some(inner);
+		}
+	}
+	None
+}
+
 /// Convert snake_case identifier to UpperCamelCase for struct naming
 ///
 /// # Examples
@@ -411,7 +432,7 @@ fn generate_server_fn(info: &ServerFnInfo) -> proc_macro2::TokenStream {
 	// Emit deprecation warning if use_inject = true is enabled
 	let deprecation_warning = if info.use_inject_enabled() {
 		quote! {
-			#[cfg(not(target_arch = "wasm32"))]
+			#[cfg(not(all(target_family = "wasm", target_os = "unknown")))]
 			const _: () = {
 				#[deprecated(
 					note = "use_inject = true is deprecated. #[inject] parameters are now auto-detected. Remove `use_inject = true` from #[server_fn] attribute."
@@ -441,7 +462,7 @@ fn generate_server_fn(info: &ServerFnInfo) -> proc_macro2::TokenStream {
 		#deprecation_warning
 
 		// Server-side: Original function (with #[inject] attributes removed)
-		#[cfg(not(target_arch = "wasm32"))]
+		#[cfg(not(all(target_family = "wasm", target_os = "unknown")))]
 		#clean_func
 
 		// Client-side: HTTP request stub
@@ -472,8 +493,8 @@ fn generate_server_fn(info: &ServerFnInfo) -> proc_macro2::TokenStream {
 ///
 ///     let url = "/api/server_fn/get_user";
 ///     let args = Args { id };
-///     let response = gloo_net::http::Request::post(url)
-///         .json(&args)?
+///     let response = reqwest::Client::new().post(url)
+///         .json(&args)
 ///         .send()
 ///         .await?;
 ///     response.json().await
@@ -548,6 +569,18 @@ fn generate_client_stub(
 		}
 	};
 
+	// Generate JWT auth header injection code (always enabled).
+	// If a JWT token exists in sessionStorage, it is attached as
+	// an Authorization: Bearer header. When no token is stored, this
+	// is a no-op — backward compatible with unauthenticated calls.
+	let auth_injection_code = quote! {
+		// Inject Authorization header if JWT token is available
+		use #pages_crate::auth::auth_headers;
+		if let Some((__auth_header_name, __auth_header_value)) = auth_headers() {
+			__request_builder = __request_builder.header(__auth_header_name, &__auth_header_value);
+		}
+	};
+
 	// Generate codec-specific serialization and deserialization code
 	let (content_type, serialize_code, deserialize_code) = match codec {
 		"json" => (
@@ -604,7 +637,7 @@ fn generate_client_stub(
 	};
 
 	quote! {
-		#[cfg(target_arch = "wasm32")]
+		#[cfg(all(target_family = "wasm", target_os = "unknown"))]
 		#vis #client_sig {
 			use ::serde::{Serialize, Deserialize};
 
@@ -617,7 +650,7 @@ fn generate_client_stub(
 				#(#param_names: #param_types),*
 			}
 
-			let __endpoint = #endpoint;
+			let __endpoint = #pages_crate::server_fn::resolve_endpoint(#endpoint);
 			let __args = #args_struct_name {
 				#(#param_names),*
 			};
@@ -625,23 +658,36 @@ fn generate_client_stub(
 			// Serialize arguments based on codec
 			#serialize_code
 
-			// Build HTTP POST request with headers
-			let mut __request_builder = ::gloo_net::http::Request::post(__endpoint)
+			// Build HTTP client and POST request.
+			// WASM: fetch_credentials_include() sends browser cookies via
+			// the Fetch API's credentials: "include" mode, which is
+			// required for CSRF double-submit cookie validation.
+			let __client = #pages_crate::__private::reqwest::Client::builder()
+				.build()
+				.expect("Failed to build reqwest client");
+
+			let mut __request_builder = __client.post(&__endpoint)
 				.header("Content-Type", #content_type);
 
+			// WASM: include browser cookies (CSRF, auth session) via Fetch API
+			#[cfg(target_arch = "wasm32")]
+			{
+				__request_builder = __request_builder.fetch_credentials_include();
+			}
+
 			#csrf_injection_code
+			#auth_injection_code
 
 			// Send request
 			let __response = __request_builder
 				.body(__body)
-				.map_err(|e| #pages_crate::server_fn::ServerFnError::network(e.to_string()))?
 				.send()
 				.await
 				.map_err(|e| #pages_crate::server_fn::ServerFnError::network(e.to_string()))?;
 
 			// Check HTTP status
-			if !__response.ok() {
-				let __status = __response.status();
+			if !__response.status().is_success() {
+				let __status = __response.status().as_u16();
 				let __message = __response.text().await.unwrap_or_else(|_| "Unknown error".to_string());
 				return Err(#pages_crate::server_fn::ServerFnError::server(__status, __message));
 			}
@@ -713,9 +759,8 @@ fn generate_server_handler(
 	let regular_param_names: Vec<_> = regular_params.iter().map(|p| &p.pat).collect();
 	let regular_param_types: Vec<_> = regular_params.iter().map(|p| &p.ty).collect();
 
-	// Extract inject parameter names and types
+	// Extract inject parameter names (types handled per-param in di_resolution below)
 	let inject_param_names: Vec<_> = inject_params.iter().map(|p| &p.pat).collect();
-	let inject_param_types: Vec<_> = inject_params.iter().map(|p| &p.ty).collect();
 
 	// Generate unique names to avoid conflicts
 	let handler_name = quote::format_ident!("__server_fn_handler_{}", name);
@@ -737,10 +782,80 @@ fn generate_server_handler(
 	};
 
 	// Generate DI resolution code
-	// Pattern copied from reinhardt-core/crates/macros/src/use_inject.rs
+	//
+	// For `Depends<T>` parameters we resolve via `resolve_from_registry()`, which
+	// has no `T: Injectable` trait bound. This allows factory-produced types
+	// (registered via `#[injectable_factory]`) to be injected without manually
+	// implementing `Injectable`. This mirrors the fix applied to `#[routes]` in
+	// commit `98adb15b9`.
 	let di_resolution = if !inject_params.is_empty() {
 		// Dynamically resolve crate paths
 		let di_crate = get_reinhardt_di_crate();
+		let pages_crate_for_di = get_reinhardt_pages_crate();
+
+		let param_resolutions: Vec<_> = inject_params
+			.iter()
+			.map(|p| {
+				let pat = &p.pat;
+				let ty = &p.ty;
+				if let Some(inner_ty) = extract_depends_inner_type(&p.ty) {
+					quote! {
+						let #pat: #ty =
+							#di_crate::Depends::<#inner_ty>::resolve_from_registry(&__di_ctx, true)
+								.await
+								.map_err(|e| {
+									// Auth errors (401/403) expose framework-provided user-facing
+									// messages. Any other DI failure is treated as an internal
+									// error: the detailed cause is logged server-side, and the
+									// client receives a generic message to avoid leaking internals.
+									let (status, msg) = match &e {
+										#di_crate::DiError::Authentication(m) => (401u16, m.clone()),
+										#di_crate::DiError::Authorization(m) => (403u16, m.clone()),
+										other => {
+											#pages_crate_for_di::__private::tracing::error!(
+												error = ?other,
+												param = stringify!(#ty),
+												"Dependency injection failed",
+											);
+											(500u16, "Internal server error".to_string())
+										}
+									};
+									let server_err = #pages_crate_for_di::server_fn::ServerFnError::server(status, msg);
+									::serde_json::to_string(&server_err)
+										.unwrap_or_else(|_| "Internal server error".to_string())
+								})?;
+					}
+				} else {
+					quote! {
+						let #pat: #ty =
+							#di_crate::Depends::<#ty>::resolve(&__di_ctx, true)
+								.await
+								.map_err(|e| {
+									// Auth errors (401/403) expose framework-provided user-facing
+									// messages. Any other DI failure is treated as an internal
+									// error: the detailed cause is logged server-side, and the
+									// client receives a generic message to avoid leaking internals.
+									let (status, msg) = match &e {
+										#di_crate::DiError::Authentication(m) => (401u16, m.clone()),
+										#di_crate::DiError::Authorization(m) => (403u16, m.clone()),
+										other => {
+											#pages_crate_for_di::__private::tracing::error!(
+												error = ?other,
+												param = stringify!(#ty),
+												"Dependency injection failed",
+											);
+											(500u16, "Internal server error".to_string())
+										}
+									};
+									let server_err = #pages_crate_for_di::server_fn::ServerFnError::server(status, msg);
+									::serde_json::to_string(&server_err)
+										.unwrap_or_else(|_| "Internal server error".to_string())
+								})?
+								.into_inner();
+					}
+				}
+			})
+			.collect();
 
 		quote! {
 			// Get DI context from request and fork for per-request isolation
@@ -751,14 +866,8 @@ fn generate_server_handler(
 				::std::sync::Arc::new((*__shared_ctx).fork_for_request(__di_request))
 			};
 
-			// Resolve each #[inject] parameter using reinhardt_di::Injected<T>
-			#(
-				let #inject_param_names: #inject_param_types =
-					#di_crate::Injected::<#inject_param_types>::resolve(&__di_ctx)
-						.await
-						.map_err(|e| format!("Dependency injection failed for {}: {:?}", stringify!(#inject_param_types), e))?
-						.into_inner();
-			)*
+			// Resolve each #[inject] parameter
+			#(#param_resolutions)*
 		}
 	} else {
 		quote! {}
@@ -917,8 +1026,90 @@ fn generate_server_handler(
 	// and a `use` item with the same name in the same module.
 	let marker_module_name = name.clone();
 
+	// MSW: Generate MockableServerFn impl only when BOTH conditions are met:
+	// 1. The macro crate was compiled with `msw` feature (compile-time guard)
+	// 2. The consuming crate has `msw` feature enabled (proc-macro expansion-time env var check)
+	//
+	// The compile-time guard (`cfg!`) avoids the MSW branch during proc-macro expansion
+	// when the macro crate is built without `msw`, preventing any possibility of
+	// env var leakage from the dependency graph. The env var check handles the
+	// case where the macro crate has `msw` but the consuming crate does not.
+	// This avoids emitting `#[cfg(feature = "msw")]` in generated code, which
+	// would trigger unexpected_cfgs warnings in consuming crates. (Issue #3673, #3700)
+	let msw_enabled = cfg!(feature = "msw") && std::env::var("CARGO_FEATURE_MSW").is_ok();
+
+	// MSW: Extract the Ok type from Result<T, ServerFnError> for MockableServerFn::Response
+	let response_type = extract_result_ok_type(return_type);
+
+	// Convert inject param names to string literals for INJECTED_PARAMS const
+	let inject_param_name_strs: Vec<String> = inject_params
+		.iter()
+		.map(|p| {
+			if let syn::Pat::Ident(pat_ident) = &*p.pat {
+				pat_ident.ident.to_string()
+			} else {
+				"_".to_string()
+			}
+		})
+		.collect();
+
+	// MSW: Generate server-side MockableServerFn tokens only when msw feature is enabled
+	let msw_server_tokens = if msw_enabled {
+		quote! {
+			mod __msw {
+				use ::serde::{Serialize, Deserialize};
+
+				/// Public Args struct for MSW type-safe mocking.
+				#[derive(Serialize, Deserialize)]
+				pub struct Args {
+					#(pub #regular_param_names: #regular_param_types),*
+				}
+			}
+
+			pub use __msw::Args;
+
+			impl #pages_crate::server_fn::MockableServerFn for marker {
+				type Args = Args;
+				type Response = #response_type;
+				const INJECTED_PARAMS: &'static [&'static str] = &[#(#inject_param_name_strs),*];
+			}
+		}
+	} else {
+		quote! {}
+	};
+
+	// MSW: Generate WASM-side marker module only when msw feature is enabled
+	let msw_wasm_tokens = if msw_enabled {
+		quote! {
+			#[cfg(all(target_family = "wasm", target_os = "unknown"))]
+			#vis mod #marker_module_name {
+				use ::serde::{Serialize, Deserialize};
+
+				#[doc = concat!("Marker struct for server function `", #name_str, "` (WASM MSW mock target)")]
+				pub struct marker;
+
+				/// Public Args struct for MSW type-safe mocking.
+				#[derive(Serialize, Deserialize)]
+				pub struct Args {
+					#(pub #regular_param_names: #regular_param_types),*
+				}
+
+				impl #pages_crate::server_fn::MockableServerFn for marker {
+					type Args = Args;
+					type Response = #response_type;
+					const PATH: &'static str = #endpoint;
+					const NAME: &'static str = #name_str;
+					const CODEC: &'static str = #codec;
+					const INJECTED_PARAMS: &'static [&'static str] = &[];
+				}
+			}
+		}
+	} else {
+		quote! {}
+	};
+
 	quote! {
-		#[cfg(not(target_arch = "wasm32"))]
+		#[cfg(not(all(target_family = "wasm", target_os = "unknown")))]
 		/// Server-side handler function
 		///
 		/// This function is called by the router when the endpoint receives a request.
@@ -961,7 +1152,7 @@ fn generate_server_handler(
 			}
 		}
 
-		#[cfg(not(target_arch = "wasm32"))]
+		#[cfg(not(all(target_family = "wasm", target_os = "unknown")))]
 		/// Register this server function with a router
 		///
 		/// This function should be called during application startup to register
@@ -969,11 +1160,12 @@ fn generate_server_handler(
 		///
 		/// # Example
 		///
-		/// ```ignore
-		/// use axum::{Router, routing::post};
+		/// ```text
+		/// use reinhardt_pages::server_fn::ServerFnRouterExt;
+		/// use reinhardt_urls::routers::ServerRouter;
 		///
-		/// let app = Router::new()
-		///     .route("/api/server_fn/get_user", post(register_server_fn_get_user));
+		/// let router = ServerRouter::new()
+		///     .server_fn(get_user);
 		/// ```
 		pub fn #register_fn_name() -> &'static str {
 			#endpoint
@@ -981,7 +1173,7 @@ fn generate_server_handler(
 
 		// Static wrapper function for explicit registration
 		// This is used by ServerFnRegistration::handler() to provide a function pointer.
-		#[cfg(not(target_arch = "wasm32"))]
+		#[cfg(not(all(target_family = "wasm", target_os = "unknown")))]
 		fn #static_wrapper_name(
 			req: #http_crate_for_wrapper::Request
 		) -> ::std::pin::Pin<::std::boxed::Box<dyn ::std::future::Future<Output = ::std::result::Result<::std::string::String, ::std::string::String>> + ::std::marker::Send>> {
@@ -1014,8 +1206,10 @@ fn generate_server_handler(
 		// use crate::server_fn::auth::login;  // Function (snake_case)
 		// login(email, password).await;
 		// ```
-		#[cfg(not(target_arch = "wasm32"))]
+		#[cfg(not(all(target_family = "wasm", target_os = "unknown")))]
 		#vis mod #marker_module_name {
+			use super::*;
+
 			#[doc = concat!("Marker struct for server function `", #name_str, "` (use with `.server_fn()`)")]
 			pub struct marker;
 
@@ -1029,8 +1223,31 @@ fn generate_server_handler(
 					super::#static_wrapper_name
 				}
 			}
+
+			// MSW: server-side MockableServerFn (conditionally generated; Issue #3673)
+			#msw_server_tokens
 		}
+
+		// MSW: WASM-side marker module (conditionally generated; Issue #3673)
+		#msw_wasm_tokens
 	}
+}
+
+/// Extracts the first generic argument `T` from `Result<T, E>`.
+///
+/// Given `Result<User, ServerFnError>`, returns the token stream for `User`.
+/// Falls back to the full return type if it cannot be parsed as `Result<T, E>`.
+fn extract_result_ok_type(return_type: &syn::Type) -> proc_macro2::TokenStream {
+	if let syn::Type::Path(type_path) = return_type
+		&& let Some(segment) = type_path.path.segments.last()
+		&& segment.ident == "Result"
+		&& let syn::PathArguments::AngleBracketed(args) = &segment.arguments
+		&& let Some(syn::GenericArgument::Type(ok_type)) = args.args.first()
+	{
+		return quote! { #ok_type };
+	}
+	// Fallback: use the full type
+	quote! { #return_type }
 }
 
 #[cfg(test)]
@@ -1040,7 +1257,7 @@ mod tests {
 	#[test]
 	fn test_server_fn_options_default() {
 		let options = ServerFnOptions::default();
-		assert_eq!(options.use_inject, false);
+		assert!(!options.use_inject);
 		assert_eq!(options.endpoint, None);
 		assert_eq!(options.codec, "json");
 	}
@@ -1060,7 +1277,7 @@ mod tests {
 			.collect();
 		let options = ServerFnOptions::from_list(&nested).unwrap();
 
-		assert_eq!(options.use_inject, false);
+		assert!(!options.use_inject);
 		assert_eq!(options.endpoint, Some("/custom".to_string()));
 		assert_eq!(options.codec, "json");
 	}
@@ -1081,7 +1298,7 @@ mod tests {
 			.collect();
 		let options = ServerFnOptions::from_list(&nested).unwrap();
 
-		assert_eq!(options.use_inject, true);
+		assert!(options.use_inject);
 		assert_eq!(options.endpoint, Some("/custom".to_string()));
 		assert_eq!(options.codec, "json");
 	}

@@ -1,0 +1,231 @@
+name: Announce Breaking Change
+
+on:
+  pull_request:
+    types: [closed]
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: 'Backfill mode'
+        type: choice
+        options: ['by-pr-number', 'all']
+        default: 'by-pr-number'
+      pr-numbers:
+        description: 'Comma-separated PR numbers (for by-pr-number mode)'
+        required: false
+        default: ''
+
+jobs:
+  announce:
+    name: Announce Breaking Change
+    if: >-
+      github.event_name == 'pull_request' &&
+      github.event.pull_request.merged == true &&
+      (
+        contains(github.event.pull_request.labels.*.name, 'breaking-change')
+        || contains(github.event.pull_request.title, '!:')
+      )
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+      - uses: ./.github/actions/announce-breaking-change
+        with:
+          source-repo: reinhardt-web
+          pr-number: ${{ github.event.pull_request.number }}
+          pr-title: ${{ github.event.pull_request.title }}
+          pr-url: ${{ github.event.pull_request.html_url }}
+          pr-body: ${{ github.event.pull_request.body }}
+          merged-at: ${{ github.event.pull_request.merged_at }}
+          github-token: ${{ secrets.DISCUSSION_PAT }}
+
+  backfill:
+    name: Backfill Breaking Change Announcements
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ secrets.DISCUSSION_PAT }}
+      SOURCE_REPO: reinhardt-web
+      TARGET_REPO: kent8192/reinhardt-web
+      INPUT_MODE: ${{ inputs.mode }}
+      INPUT_PR_NUMBERS: ${{ inputs.pr-numbers }}
+    steps:
+      - name: Run backfill
+        run: |
+          set -euo pipefail
+
+          if [ -z "${GH_TOKEN:-}" ]; then
+            echo "::error::GH_TOKEN is not set. Ensure the DISCUSSION_PAT secret is configured."
+            exit 1
+          fi
+
+          failed=0
+          processed=0
+
+          # Resolve repository node ID and "Breaking Changes" category ID once (#3547).
+          # The `gh discussion` CLI subcommand is unavailable on ubuntu-latest runners,
+          # so all Discussion operations use the GraphQL API instead.
+          repo_data=$(gh api graphql -f query='
+            {
+              repository(owner: "kent8192", name: "reinhardt-web") {
+                id
+                discussionCategories(first: 30) {
+                  nodes { id name }
+                }
+              }
+            }
+          ')
+          REPO_ID=$(echo "$repo_data" | jq -r '.data.repository.id')
+          CATEGORY_ID=$(echo "$repo_data" | jq -r '.data.repository.discussionCategories.nodes[] | select(.name == "Breaking Changes") | .id')
+
+          if [ -z "$REPO_ID" ] || [ -z "$CATEGORY_ID" ]; then
+            echo "::error::Failed to resolve repository ID or 'Breaking Changes' category ID"
+            exit 1
+          fi
+          echo "Resolved REPO_ID=${REPO_ID}, CATEGORY_ID=${CATEGORY_ID}"
+
+          process_pr() {
+            local pr_number="$1"
+            echo "--- Processing PR #${pr_number} ---"
+
+            local pr_data
+            pr_data=$(gh pr view "$pr_number" --repo "$TARGET_REPO" \
+              --json title,body,url,mergedAt 2>&1) || {
+              echo "::warning::Failed to fetch PR #${pr_number}: ${pr_data}"
+              return 1
+            }
+
+            local pr_title pr_url merged_at
+            pr_title=$(echo "$pr_data" | jq -r '.title')
+            pr_url=$(echo "$pr_data" | jq -r '.url')
+            merged_at=$(echo "$pr_data" | jq -r '.mergedAt')
+
+            local search_key="[${SOURCE_REPO}#${pr_number}]"
+            local count
+            count=$(gh api graphql -f query="
+              {
+                search(type: DISCUSSION, query: \"repo:kent8192/reinhardt-web in:title \\\"${search_key}\\\"\", first: 1) {
+                  discussionCount
+                }
+              }
+            " --jq '.data.search.discussionCount')
+
+            if [ "$count" -gt 0 ]; then
+              echo "SKIP: Discussion already exists for ${search_key}"
+              return 0
+            fi
+
+            local pr_body
+            pr_body=$(echo "$pr_data" | jq -r '.body // ""')
+
+            local details
+            details=$(printf '%s' "$pr_body" | awk '
+              /^## Breaking Changes/ { found=1; next }
+              /^## / { if (found) exit }
+              found { print }
+            ')
+            details=$(echo "$details" | sed '/./,$!d' | sed -e :a -e '/^\n*$/{$d;N;ba;}')
+
+            if [ -z "$details" ]; then
+              details=$(printf '%s' "$pr_body" | awk '
+                /^BREAKING CHANGE:/ { found=1 }
+                found { print }
+              ')
+            fi
+
+            if [ -z "$details" ]; then
+              details=$(printf '%s' "$pr_body" | head -100)
+            fi
+
+            local merged_date="${merged_at%%T*}"
+            local disc_title="${search_key} ${pr_title}"
+
+            {
+              echo "## Breaking Change: ${SOURCE_REPO}"
+              echo ""
+              echo "**PR**: ${SOURCE_REPO}#${pr_number} — ${pr_title}"
+              echo "**Merged**: ${merged_date}"
+              echo "**Link**: ${pr_url}"
+              echo ""
+              echo "### Details"
+              echo ""
+              printf '%s\n' "${details}"
+            } > /tmp/discussion-body.md
+
+            # Create discussion via GraphQL mutation (#3547).
+            # Explicit error checking is required because process_pr is called
+            # inside `if`, which disables `set -e` per POSIX errexit semantics.
+            local body
+            body=$(cat /tmp/discussion-body.md)
+
+            local result
+            result=$(gh api graphql \
+              -f repositoryId="$REPO_ID" \
+              -f categoryId="$CATEGORY_ID" \
+              -f title="$disc_title" \
+              -f body="$body" \
+              -f query='
+                mutation($repositoryId: ID!, $categoryId: ID!, $title: String!, $body: String!) {
+                  createDiscussion(input: {repositoryId: $repositoryId, categoryId: $categoryId, title: $title, body: $body}) {
+                    discussion { url }
+                  }
+                }
+              ') || {
+              echo "::warning::Failed to create discussion: ${disc_title}"
+              return 1
+            }
+
+            local url
+            url=$(echo "$result" | jq -r '.data.createDiscussion.discussion.url // empty')
+            if [ -z "$url" ]; then
+              echo "::warning::GraphQL mutation returned no URL for: ${disc_title}"
+              echo "$result" >&2
+              return 1
+            fi
+
+            echo "CREATED: ${disc_title} -> ${url}"
+            sleep 2
+          }
+
+          if [ "$INPUT_MODE" = "by-pr-number" ]; then
+            if [ -z "$INPUT_PR_NUMBERS" ]; then
+              echo "::error::pr-numbers is required for by-pr-number mode"
+              exit 1
+            fi
+            IFS=',' read -ra NUMBERS <<< "$INPUT_PR_NUMBERS"
+            for num in "${NUMBERS[@]}"; do
+              num=$(echo "$num" | xargs)
+              if process_pr "$num"; then
+                processed=$((processed + 1))
+              else
+                failed=$((failed + 1))
+              fi
+            done
+
+          elif [ "$INPUT_MODE" = "all" ]; then
+            echo "Scanning all merged PRs for breaking changes..."
+            pr_numbers=$(gh api --paginate "repos/${TARGET_REPO}/pulls?state=closed&per_page=100" \
+              | jq -sr 'add
+                | map(select(.merged_at != null))
+                | map(select(
+                    ([.labels[].name] | any(. == "breaking-change")) or
+                    (.title | test("!:")) or
+                    (.body | test("\\[x\\] Breaking change"; "i"))
+                  ))
+                | sort_by(.number)
+                | .[].number')
+
+            while read -r num; do
+              [ -z "$num" ] && continue
+              if process_pr "$num"; then
+                processed=$((processed + 1))
+              else
+                failed=$((failed + 1))
+              fi
+            done <<< "$pr_numbers"
+          fi
+
+          echo "Backfill complete. Processed: ${processed}, Failed: ${failed}"
+          if [ "$failed" -gt 0 ]; then
+            echo "::warning::${failed} PR(s) failed to process"
+          fi

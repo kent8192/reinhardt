@@ -19,7 +19,7 @@ fn main() {
 	use reinhardt_auth::{AuthIdentity, BaseUser};
 
 	let mut user = MinimalUser {
-		id: Uuid::new_v4(),
+		id: Uuid::now_v7(),
 		email: "test@example.com".to_string(),
 		password_hash: None,
 		last_login: None,

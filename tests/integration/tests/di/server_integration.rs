@@ -71,7 +71,7 @@ impl Injectable for RequestContext {
 		}
 
 		let request_ctx = RequestContext {
-			request_id: uuid::Uuid::new_v4().to_string(),
+			request_id: uuid::Uuid::now_v7().to_string(),
 		};
 
 		ctx.set_request(request_ctx.clone());

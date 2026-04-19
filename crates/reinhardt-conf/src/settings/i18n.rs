@@ -2,12 +2,13 @@
 //!
 //! Django compatibility fields for i18n/l10n configuration.
 
-use super::fragment::{HasSettings, SettingsFragment};
+use reinhardt_core::macros::settings;
 use serde::{Deserialize, Serialize};
 
 /// Internationalization and localization settings.
 ///
 /// Django compatibility fields. Currently reserved for future i18n support.
+#[settings(fragment = true, section = "i18n")]
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct I18nSettings {
 	/// Language code (e.g., `"en-us"`).
@@ -44,26 +45,6 @@ impl Default for I18nSettings {
 			use_i18n: true,
 			use_tz: true,
 		}
-	}
-}
-
-impl SettingsFragment for I18nSettings {
-	type Accessor = dyn HasI18nSettings;
-
-	fn section() -> &'static str {
-		"i18n"
-	}
-}
-
-/// Trait for accessing [`I18nSettings`] from a composed settings type.
-pub trait HasI18nSettings {
-	/// Get a reference to the i18n settings.
-	fn i18n(&self) -> &I18nSettings;
-}
-
-impl<T: HasSettings<I18nSettings>> HasI18nSettings for T {
-	fn i18n(&self) -> &I18nSettings {
-		self.get_settings()
 	}
 }
 

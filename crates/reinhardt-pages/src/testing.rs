@@ -47,6 +47,7 @@ pub mod mock_fetch;
 pub mod mock_http;
 
 pub use mock_fetch::fetch_with_mock;
+#[allow(deprecated)]
 pub use mock_http::{
 	MockCall, MockResponse, assert_server_fn_call_count, assert_server_fn_called,
 	assert_server_fn_called_with, assert_server_fn_not_called, clear_mocks, get_call_history,
@@ -61,22 +62,22 @@ pub use e2e::{
 	set_e2e_server_url,
 };
 
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(native)]
 pub use e2e::E2ETestEnv;
 
-#[cfg(target_arch = "wasm32")]
+#[cfg(wasm)]
 pub use e2e::e2e_fetch;
 
 // Server-side testing utilities (Layer 1)
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(native)]
 pub mod server_fn_test;
 
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(native)]
 pub use server_fn_test::*;
 
 // WASM DOM testing utilities (Layer 2 and 3)
-#[cfg(target_arch = "wasm32")]
+#[cfg(wasm)]
 pub mod wasm;
 
-#[cfg(target_arch = "wasm32")]
+#[cfg(wasm)]
 pub use wasm::*;

@@ -1,25 +1,52 @@
 //! CORS settings fragment
 //!
-//! Provides composable CORS configuration as a [`SettingsFragment`].
+//! Provides composable CORS configuration as a [`SettingsFragment`](crate::settings::fragment::SettingsFragment).
 
-use super::fragment::{HasSettings, SettingsFragment};
+use reinhardt_core::macros::settings;
 use serde::{Deserialize, Serialize};
+
+fn default_allow_origins() -> Vec<String> {
+	vec!["*".to_string()]
+}
+
+fn default_allow_methods() -> Vec<String> {
+	vec![
+		"GET".to_string(),
+		"POST".to_string(),
+		"PUT".to_string(),
+		"PATCH".to_string(),
+		"DELETE".to_string(),
+	]
+}
+
+fn default_allow_headers() -> Vec<String> {
+	vec!["*".to_string()]
+}
+
+fn default_max_age() -> u64 {
+	3600
+}
 
 /// CORS configuration fragment.
 ///
 /// Controls cross-origin resource sharing policy.
+#[settings(fragment = true, section = "cors")]
 #[non_exhaustive]
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct CorsSettings {
 	/// Allowed origin domains (use `"*"` for any origin).
+	#[serde(default = "default_allow_origins")]
 	pub allow_origins: Vec<String>,
 	/// Allowed HTTP methods.
+	#[serde(default = "default_allow_methods")]
 	pub allow_methods: Vec<String>,
 	/// Allowed HTTP request headers.
+	#[serde(default = "default_allow_headers")]
 	pub allow_headers: Vec<String>,
 	/// Whether to allow credentials (cookies, authorization headers).
 	pub allow_credentials: bool,
 	/// Maximum age (in seconds) for preflight response caching.
+	#[serde(default = "default_max_age")]
 	pub max_age: u64,
 }
 
@@ -41,29 +68,10 @@ impl Default for CorsSettings {
 	}
 }
 
-impl SettingsFragment for CorsSettings {
-	type Accessor = dyn HasCorsSettings;
-
-	fn section() -> &'static str {
-		"cors"
-	}
-}
-
-/// Trait for settings containers that include CORS configuration.
-pub trait HasCorsSettings {
-	/// Returns a reference to the CORS settings.
-	fn cors(&self) -> &CorsSettings;
-}
-
-impl<T: HasSettings<CorsSettings>> HasCorsSettings for T {
-	fn cors(&self) -> &CorsSettings {
-		self.get_settings()
-	}
-}
-
 #[cfg(test)]
 mod tests {
 	use super::*;
+	use crate::settings::fragment::SettingsFragment;
 	use rstest::rstest;
 
 	#[rstest]

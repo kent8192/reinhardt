@@ -93,7 +93,7 @@ fn test_api_queryset_field_selection() {
 /// Tests that non-WASM environment returns proper error for all() method
 #[rstest]
 #[tokio::test]
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(native)]
 async fn test_api_queryset_all_non_wasm_error() {
 	let queryset: ApiQuerySet<TestModel> = ApiQuerySet::new("/api/posts/");
 
@@ -108,7 +108,7 @@ async fn test_api_queryset_all_non_wasm_error() {
 /// Tests that non-WASM environment returns proper error for create() method
 #[rstest]
 #[tokio::test]
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(native)]
 async fn test_api_queryset_create_non_wasm_error(test_model: TestModel) {
 	let queryset: ApiQuerySet<TestModel> = ApiQuerySet::new("/api/posts/");
 
@@ -123,7 +123,7 @@ async fn test_api_queryset_create_non_wasm_error(test_model: TestModel) {
 /// Tests that non-WASM environment returns proper error for get() method
 #[rstest]
 #[tokio::test]
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(native)]
 async fn test_api_queryset_get_non_wasm_error() {
 	let queryset: ApiQuerySet<TestModel> = ApiQuerySet::new("/api/posts/");
 
@@ -138,7 +138,7 @@ async fn test_api_queryset_get_non_wasm_error() {
 /// Tests that non-WASM environment returns proper error for delete() method
 #[rstest]
 #[tokio::test]
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(native)]
 async fn test_api_queryset_delete_non_wasm_error() {
 	let queryset: ApiQuerySet<TestModel> = ApiQuerySet::new("/api/posts/");
 

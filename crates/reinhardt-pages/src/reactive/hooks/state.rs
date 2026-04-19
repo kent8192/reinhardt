@@ -48,7 +48,7 @@ pub type Dispatch<A> = Rc<dyn Fn(A)>;
 ///
 /// # Example
 ///
-/// ```ignore
+/// ```no_run
 /// use reinhardt_pages::reactive::hooks::use_state;
 ///
 /// let (count, set_count) = use_state(0);
@@ -92,7 +92,7 @@ pub fn use_state<T: Clone + 'static>(initial: T) -> (Signal<T>, SetState<T>) {
 ///
 /// # Example
 ///
-/// ```ignore
+/// ```no_run
 /// use reinhardt_pages::reactive::hooks::use_reducer;
 ///
 /// #[derive(Clone)]
@@ -173,7 +173,7 @@ impl<T: 'static> SharedSignal<T> {
 	///
 	/// # Example
 	///
-	/// ```ignore
+	/// ```no_run
 	/// use reinhardt_pages::reactive::hooks::SharedSignal;
 	///
 	/// let count = SharedSignal::new(0);
@@ -201,7 +201,7 @@ impl<T: 'static> SharedSignal<T> {
 	///
 	/// # Example
 	///
-	/// ```ignore
+	/// ```no_run
 	/// use reinhardt_pages::reactive::hooks::SharedSignal;
 	///
 	/// let count = SharedSignal::new(42);
@@ -229,7 +229,7 @@ impl<T: 'static> SharedSignal<T> {
 	///
 	/// # Example
 	///
-	/// ```ignore
+	/// ```no_run
 	/// use reinhardt_pages::reactive::hooks::SharedSignal;
 	///
 	/// let count = SharedSignal::new(42);
@@ -260,7 +260,7 @@ impl<T: 'static> SharedSignal<T> {
 	///
 	/// # Example
 	///
-	/// ```ignore
+	/// ```no_run
 	/// use reinhardt_pages::reactive::hooks::SharedSignal;
 	///
 	/// let count = SharedSignal::new(0);
@@ -287,7 +287,7 @@ impl<T: 'static> SharedSignal<T> {
 	///
 	/// # Example
 	///
-	/// ```ignore
+	/// ```no_run
 	/// use reinhardt_pages::reactive::hooks::SharedSignal;
 	///
 	/// let count = SharedSignal::new(0);
@@ -332,7 +332,7 @@ impl<T: 'static> SharedSignal<T> {
 ///
 /// # Example
 ///
-/// ```ignore
+/// ```no_run
 /// use reinhardt_pages::reactive::hooks::use_shared_state;
 ///
 /// let (count, set_count) = use_shared_state(0);
@@ -346,7 +346,7 @@ impl<T: 'static> SharedSignal<T> {
 /// // Clone and use in event handler
 /// let handler = {
 ///     let set_count = set_count.clone();
-///     move |_| set_count(42)
+///     move |_: ()| set_count(42)
 /// };
 /// ```
 pub fn use_shared_state<T>(initial: T) -> (SharedSignal<T>, SharedSetState<T>)

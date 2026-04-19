@@ -70,6 +70,16 @@ async fn test_nested_injection() {
 
 #[tokio::test]
 async fn test_depends_wrapper() {
+	// Register Database in the global registry for Depends<T> resolution
+	reinhardt_di::global_registry().register_async::<Database, _, _>(
+		reinhardt_di::DependencyScope::Request,
+		|_ctx| async {
+			Ok(Database {
+				connection_string: "postgres://localhost/test".to_string(),
+			})
+		},
+	);
+
 	let singleton = Arc::new(SingletonScope::new());
 	let ctx = InjectionContext::builder(singleton).build();
 
@@ -151,6 +161,16 @@ async fn test_concurrent_request_scopes() {
 
 #[tokio::test]
 async fn test_di_integration_depends_clone() {
+	// Register Database in the global registry for Depends<T> resolution
+	reinhardt_di::global_registry().register_async::<Database, _, _>(
+		reinhardt_di::DependencyScope::Request,
+		|_ctx| async {
+			Ok(Database {
+				connection_string: "postgres://localhost/test".to_string(),
+			})
+		},
+	);
+
 	let singleton = Arc::new(SingletonScope::new());
 	let ctx = InjectionContext::builder(singleton).build();
 

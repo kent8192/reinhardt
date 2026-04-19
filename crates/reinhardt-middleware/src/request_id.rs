@@ -170,7 +170,7 @@ impl RequestIdMiddleware {
 
 	/// Generate a new request ID
 	fn generate_id(&self) -> String {
-		Uuid::new_v4().to_string()
+		Uuid::now_v7().to_string()
 	}
 
 	/// Get or generate request ID from request
@@ -218,8 +218,12 @@ impl Middleware for RequestIdMiddleware {
 			request.headers.insert(header_name, header_value);
 		}
 
-		// Call the handler
-		let mut response = handler.handle(request).await?;
+		// Convert errors to responses so post-processing always runs,
+		// even when invoked outside MiddlewareChain. (#3244)
+		let mut response = match handler.handle(request).await {
+			Ok(resp) => resp,
+			Err(e) => Response::from(e),
+		};
 
 		// Add request ID to response headers
 		if !request_id.is_empty()

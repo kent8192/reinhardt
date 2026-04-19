@@ -208,6 +208,18 @@ where
 #[cfg(feature = "validation")]
 impl<T> super::validation::WithValidation for Query<T> {}
 
+impl<T> super::has_inner::HasInner for Query<T> {
+	type Inner = T;
+
+	fn inner_ref(&self) -> &T {
+		&self.0
+	}
+
+	fn into_inner(self) -> T {
+		self.0
+	}
+}
+
 #[cfg(test)]
 mod tests {
 	use super::*;

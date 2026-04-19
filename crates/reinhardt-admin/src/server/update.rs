@@ -2,20 +2,22 @@
 //!
 //! Provides update operations for admin models.
 
-use super::user::AdminDefaultUser;
+#[cfg(server)]
+use super::admin_auth::AdminAuthenticatedUser;
 use crate::adapters::{AdminDatabase, AdminRecord, AdminSite};
 use crate::types::{MutationRequest, MutationResponse};
-use reinhardt_auth::AuthUser;
-use reinhardt_pages::server_fn::{ServerFnError, ServerFnRequest, server_fn};
-use std::sync::Arc;
+use reinhardt_di::Depends;
+#[cfg(server)]
+use reinhardt_pages::server_fn::ServerFnRequest;
+use reinhardt_pages::server_fn::{ServerFnError, server_fn};
 
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(server)]
 use super::audit;
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(server)]
 use super::error::{AdminAuth, MapServerFnError, ModelPermission};
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(server)]
 use super::security::{require_csrf_token, sanitize_mutation_values};
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(server)]
 use super::validation::validate_mutation_data;
 
 /// Update an existing model instance
@@ -52,10 +54,10 @@ pub async fn update_record(
 	model_name: String,
 	id: String,
 	request: MutationRequest,
-	#[inject] site: Arc<AdminSite>,
-	#[inject] db: Arc<AdminDatabase>,
+	#[inject] site: Depends<AdminSite>,
+	#[inject] db: Depends<AdminDatabase>,
 	#[inject] http_request: ServerFnRequest,
-	#[inject] AuthUser(user): AuthUser<AdminDefaultUser>,
+	#[inject] AdminAuthenticatedUser(user): AdminAuthenticatedUser,
 ) -> Result<MutationResponse, ServerFnError> {
 	// CSRF token validation (double-submit cookie pattern)
 	require_csrf_token(&request.csrf_token, &http_request.inner().headers)?;
@@ -63,12 +65,8 @@ pub async fn update_record(
 	// Authentication and authorization check
 	let auth = AdminAuth::from_request(&http_request);
 	let model_admin = site.get_model_admin(&model_name).map_server_fn_error()?;
-	auth.require_model_permission(
-		model_admin.as_ref(),
-		&user as &dyn crate::core::AdminUser,
-		ModelPermission::Change,
-	)
-	.await?;
+	auth.require_model_permission(model_admin.as_ref(), user.as_ref(), ModelPermission::Change)
+		.await?;
 
 	let table_name = model_admin.table_name();
 	let pk_field = model_admin.pk_field();
@@ -79,6 +77,9 @@ pub async fn update_record(
 	// Sanitize string values to prevent stored XSS
 	let mut sanitized_data = request.data;
 	sanitize_mutation_values(&mut sanitized_data);
+
+	// Inject current timestamp for auto_now fields (updated on every save)
+	super::create::inject_auto_now_timestamps(&mut sanitized_data, table_name);
 
 	let user_id = auth.user_id().unwrap_or("unknown").to_string();
 

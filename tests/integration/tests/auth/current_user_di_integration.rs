@@ -224,7 +224,7 @@ async fn sanity_database_user_load(
 ) {
 	let (_container, pool, _port, _url) = db_with_auth_table.await;
 
-	let user_id = Uuid::new_v4();
+	let user_id = Uuid::now_v7();
 	let username = "test_user";
 	let email = "test@example.com";
 

@@ -765,10 +765,7 @@ mod tests {
 		let result = should_rotate_token(token_timestamp, current_timestamp, Some(interval));
 
 		// Assert
-		assert_eq!(
-			result, true,
-			"Token older than interval should trigger rotation"
-		);
+		assert!(result, "Token older than interval should trigger rotation");
 	}
 
 	#[rstest]
@@ -782,10 +779,7 @@ mod tests {
 		let result = should_rotate_token(token_timestamp, current_timestamp, Some(interval));
 
 		// Assert
-		assert_eq!(
-			result, false,
-			"Future-dated token should not trigger rotation"
-		);
+		assert!(!result, "Future-dated token should not trigger rotation");
 	}
 
 	#[rstest]
@@ -798,8 +792,8 @@ mod tests {
 		let result = should_rotate_token(timestamp, timestamp, Some(interval));
 
 		// Assert
-		assert_eq!(
-			result, false,
+		assert!(
+			!result,
 			"Equal timestamps (0 elapsed) should not trigger rotation"
 		);
 	}

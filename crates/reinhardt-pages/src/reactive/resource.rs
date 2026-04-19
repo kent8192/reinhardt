@@ -10,8 +10,8 @@ use std::cell::RefCell;
 use std::fmt;
 use std::rc::Rc;
 
-#[cfg(target_arch = "wasm32")]
-use crate::spawn::spawn_task;
+#[cfg(wasm)]
+use crate::spawn::{defer_yield, spawn_task};
 
 /// Type alias for the refetch callback function
 ///
@@ -175,7 +175,7 @@ impl<T: Clone + 'static, E: Clone + 'static> Resource<T, E> {
 ///     fetch_user_from_api(42).await
 /// });
 /// ```
-#[cfg(target_arch = "wasm32")]
+#[cfg(wasm)]
 pub fn create_resource<T, E, F, Fut>(fetcher: F) -> Resource<T, E>
 where
 	T: Clone + 'static,
@@ -190,11 +190,14 @@ where
 	let fetcher_for_initial = Rc::new(fetcher);
 	let fetcher_for_refetch = Rc::clone(&fetcher_for_initial);
 
-	// Initial fetch
+	// Defer initial fetch to the next microtask so the JS event loop can tick first.
+	// Without this, JsFuture from fetch/Response.text() hangs when spawned during
+	// WASM initialization (inside main()) before the event loop is running. (#3316)
 	spawn_task({
 		let state = state_for_fetch.clone();
 		let fetcher = Rc::clone(&fetcher_for_initial);
 		async move {
+			defer_yield().await;
 			match fetcher().await {
 				Ok(data) => state.set(ResourceState::Success(data)),
 				Err(err) => state.set(ResourceState::Error(err)),
@@ -249,7 +252,7 @@ where
 /// // When user_id changes, the resource automatically refetches
 /// user_id.set(100);
 /// ```
-#[cfg(target_arch = "wasm32")]
+#[cfg(wasm)]
 pub fn create_resource_with_deps<T, E, D, F, Fut>(deps: Signal<D>, fetcher: F) -> Resource<T, E>
 where
 	T: Clone + 'static,

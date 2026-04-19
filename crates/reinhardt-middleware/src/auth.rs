@@ -8,7 +8,9 @@ use async_trait::async_trait;
 use std::sync::Arc;
 
 #[cfg(feature = "sessions")]
-use reinhardt_http::{Handler, Middleware, Request, Response, Result};
+use reinhardt_http::{
+	Handler, IsActive, IsAdmin, IsAuthenticated, Middleware, Request, Response, Result,
+};
 
 #[cfg(feature = "sessions")]
 use reinhardt_auth::session::{SESSION_KEY_USER_ID, SessionStore};
@@ -55,7 +57,7 @@ use reinhardt_auth::{AnonymousUser, AuthenticationBackend, User};
 /// # impl AuthenticationBackend for TestAuthBackend {
 /// #     async fn authenticate(&self, _request: &Request) -> std::result::Result<Option<Box<dyn User>>, AuthenticationError> {
 /// #         Ok(Some(Box::new(SimpleUser {
-/// #             id: Uuid::new_v4(),
+/// #             id: Uuid::now_v7(),
 /// #             username: "testuser".to_string(),
 /// #             email: "test@example.com".to_string(),
 /// #             is_active: true,
@@ -138,7 +140,7 @@ impl<S: SessionStore, A: AuthenticationBackend> AuthenticationMiddleware<S, A> {
 	/// # impl AuthenticationBackend for TestAuthBackend {
 	/// #     async fn authenticate(&self, _request: &Request) -> std::result::Result<Option<Box<dyn User>>, AuthenticationError> {
 	/// #         Ok(Some(Box::new(SimpleUser {
-	/// #             id: Uuid::new_v4(),
+	/// #             id: Uuid::now_v7(),
 	/// #             username: "testuser".to_string(),
 	/// #             email: "test@example.com".to_string(),
 	/// #             is_active: true,
@@ -232,9 +234,9 @@ impl<S: SessionStore + 'static, A: AuthenticationBackend + 'static> Middleware
 
 		// Insert individual values for backward compatibility
 		request.extensions.insert(user_id.clone());
-		request.extensions.insert(is_authenticated);
-		request.extensions.insert(is_admin);
-		request.extensions.insert(is_active);
+		request.extensions.insert(IsAuthenticated(is_authenticated));
+		request.extensions.insert(IsAdmin(is_admin));
+		request.extensions.insert(IsActive(is_active));
 
 		// Insert AuthState object for CurrentUser and new code
 		let auth_state = if is_authenticated {
@@ -268,11 +270,15 @@ mod tests {
 	impl Handler for TestHandler {
 		async fn handle(&self, request: Request) -> Result<Response> {
 			let user_id: Option<String> = request.extensions.get();
-			let is_authenticated: Option<bool> = request.extensions.get();
+			let is_authenticated = request
+				.extensions
+				.get::<IsAuthenticated>()
+				.map(|v| v.0)
+				.unwrap_or(false);
 
 			Ok(Response::ok().with_json(&serde_json::json!({
 				"user_id": user_id.unwrap_or_default(),
-				"is_authenticated": is_authenticated.unwrap_or(false)
+				"is_authenticated": is_authenticated
 			}))?)
 		}
 	}
@@ -308,7 +314,7 @@ mod tests {
 	async fn test_auth_middleware_with_valid_session() {
 		let session_store = Arc::new(InMemorySessionStore::new());
 		let user = SimpleUser {
-			id: Uuid::new_v4(),
+			id: Uuid::now_v7(),
 			username: "testuser".to_string(),
 			email: "test@example.com".to_string(),
 			is_active: true,
@@ -373,7 +379,7 @@ mod tests {
 	fn test_auth_state_from_extensions() {
 		let extensions = reinhardt_http::Extensions::new();
 		extensions.insert("user123".to_string());
-		extensions.insert(true);
+		extensions.insert(IsAuthenticated(true));
 
 		let auth_state = AuthState::from_extensions(&extensions);
 		assert!(auth_state.is_some());

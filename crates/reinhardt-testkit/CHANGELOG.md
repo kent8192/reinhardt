@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.0-rc.15](https://github.com/kent8192/reinhardt-web/compare/reinhardt-testkit@v0.1.0-rc.14...reinhardt-testkit@v0.1.0-rc.15) - 2026-03-29
+
+### Fixed
+
+- *(testkit)* use multi-thread runtime and install any drivers in fixture tests
+
+### Maintenance
+
+- update rust toolchain to 1.94.1 and set MSRV 1.94.0
+
+### Testing
+
+- *(testkit)* add comprehensive tests for core utility modules
+- *(testkit)* add tests for fixture modules (server, testcontainers, resources, validator)
+
 ## [0.1.0-rc.14](https://github.com/kent8192/reinhardt-web/compare/reinhardt-testkit@v0.1.0-rc.13...reinhardt-testkit@v0.1.0-rc.14) - 2026-03-24
 
 ### Fixed

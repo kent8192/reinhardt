@@ -7,7 +7,7 @@ use reinhardt::pages::server_fn::{ServerFnError, server_fn};
 use uuid::Uuid;
 
 // Server-only imports
-#[cfg(server)]
+#[cfg(native)]
 use {
 	crate::apps::auth::models::User,
 	crate::apps::tweet::models::Tweet,

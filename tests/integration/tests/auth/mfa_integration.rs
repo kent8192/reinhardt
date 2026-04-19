@@ -32,7 +32,7 @@ fn mfa_manager() -> MfaManager {
 #[fixture]
 fn test_user() -> TestUser {
 	TestUser {
-		id: uuid::Uuid::new_v4(),
+		id: uuid::Uuid::now_v7(),
 		username: "testuser".to_string(),
 		email: "test@example.com".to_string(),
 		is_active: true,

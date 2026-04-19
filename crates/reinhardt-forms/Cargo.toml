@@ -1,8 +1,9 @@
 [package]
 name = "reinhardt-forms"
-version = "0.1.0-rc.14"
+version = "0.1.0-rc.15"
 description = "Form handling and validation"
 edition.workspace = true
+rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 authors.workspace = true
@@ -41,4 +42,8 @@ tokio-test = "0.4"
 rstest = { workspace = true }
 proptest = { workspace = true }
 tempfile = "3"
+# Workaround for KI-2 (rust-lang/cargo#4242, rust-lang/cargo#15151):
+# Path-only dev-dep (no version) is stripped from published manifest by cargo,
+# avoiding dev-dependency version resolution failure during `cargo publish`.
+# When upstream cargo resolves these issues, replace with `workspace = true`.
 reinhardt-test = { path = "../reinhardt-test" }

@@ -48,21 +48,21 @@
 //! form.submit().await?;
 //! ```
 
-#[cfg(target_arch = "wasm32")]
+#[cfg(wasm)]
 use super::validators::ValidatorRegistry;
-#[cfg(target_arch = "wasm32")]
+#[cfg(wasm)]
 use crate::dom::{Document, Element};
-#[cfg(target_arch = "wasm32")]
+#[cfg(wasm)]
 use crate::reactive::Effect;
 use crate::reactive::Signal;
-#[cfg(target_arch = "wasm32")]
+#[cfg(wasm)]
 use crate::spawn::spawn_task;
-#[cfg(target_arch = "wasm32")]
+#[cfg(wasm)]
 use js_sys::Function;
-#[cfg(target_arch = "wasm32")]
+#[cfg(wasm)]
 use reinhardt_forms::wasm_compat::ValidationRule;
 use std::collections::HashMap;
-#[cfg(target_arch = "wasm32")]
+#[cfg(wasm)]
 use wasm_bindgen::JsValue;
 
 /// Form Component for client-side rendering (Week 5 Day 3)
@@ -89,11 +89,11 @@ pub struct FormComponent {
 	errors: Signal<HashMap<String, Vec<String>>>,
 
 	/// Form submission URL (used in WASM render() method)
-	#[allow(dead_code)] // Field read by WASM render() via cfg(target_arch = "wasm32")
+	#[allow(dead_code)] // Field read by WASM render() via cfg(wasm)
 	action: String,
 
 	/// HTTP method (GET or POST, used in WASM render() method)
-	#[allow(dead_code)] // Field read by WASM render() via cfg(target_arch = "wasm32")
+	#[allow(dead_code)] // Field read by WASM render() via cfg(wasm)
 	method: String,
 }
 
@@ -294,7 +294,7 @@ const DANGEROUS_JS_PATTERNS: &[(&str, &str, bool)] = &[
 ///
 /// # Examples
 ///
-/// ```ignore
+/// ```no_run
 /// use reinhardt_pages::form::component::validate_js_expression;
 ///
 /// // Safe expressions
@@ -457,7 +457,7 @@ impl FormComponent {
 	/// let form_element = form_component.render();
 	/// document.body().append_child(&form_element)?;
 	/// ```
-	#[cfg(target_arch = "wasm32")]
+	#[cfg(wasm)]
 	pub fn render(&self) -> web_sys::Element {
 		use crate::builder::html;
 
@@ -516,7 +516,7 @@ impl FormComponent {
 	}
 
 	/// Render a single field (WASM only)
-	#[cfg(target_arch = "wasm32")]
+	#[cfg(wasm)]
 	fn render_field(
 		&self,
 		field_meta: &reinhardt_forms::wasm_compat::FieldMetadata,
@@ -609,7 +609,7 @@ impl FormComponent {
 	}
 
 	/// Render widget based on type (WASM only)
-	#[cfg(target_arch = "wasm32")]
+	#[cfg(wasm)]
 	fn render_widget(&self, widget: &reinhardt_forms::Widget, name: &str) -> web_sys::Element {
 		use reinhardt_forms::Widget;
 
@@ -671,7 +671,7 @@ impl FormComponent {
 	}
 
 	/// Attach submit event listener (WASM only)
-	#[cfg(target_arch = "wasm32")]
+	#[cfg(wasm)]
 	fn attach_submit_listener(&self, form: &web_sys::Element) {
 		use wasm_bindgen::JsCast;
 		use wasm_bindgen::prelude::*;
@@ -735,7 +735,7 @@ impl FormComponent {
 	///
 	/// This method evaluates JavaScript code in a sandboxed context. The expression
 	/// should only contain simple validation logic and must not access external APIs.
-	#[cfg(target_arch = "wasm32")]
+	#[cfg(wasm)]
 	fn evaluate_js_expression(&self, field_name: &str, expression: &str) -> Result<bool, String> {
 		// Validate expression against allowlist before evaluation
 		validate_js_expression(expression)?;
@@ -785,7 +785,7 @@ impl FormComponent {
 	///
 	/// This method evaluates JavaScript code in a sandboxed context. The expression
 	/// should only contain simple validation logic and must not access external APIs.
-	#[cfg(target_arch = "wasm32")]
+	#[cfg(wasm)]
 	fn evaluate_cross_field_expression(
 		&self,
 		field_names: &[String],
@@ -868,7 +868,7 @@ impl FormComponent {
 
 		// Step 2: Process validation rules (Phase 2-A)
 		// WASM-only: JavaScript expression evaluation
-		#[cfg(target_arch = "wasm32")]
+		#[cfg(wasm)]
 		{
 			for rule in &self.metadata.validation_rules {
 				match rule {
@@ -968,7 +968,7 @@ impl FormComponent {
 
 		// Non-WASM: Skip ValidationRule processing
 		// Client-side validation is for UX only, server-side validation is mandatory
-		#[cfg(not(target_arch = "wasm32"))]
+		#[cfg(native)]
 		{
 			// In non-WASM environments, we can't evaluate JavaScript expressions
 			// Just skip validation rules (they're for UX enhancement only)
@@ -997,9 +997,8 @@ impl FormComponent {
 	/// ```ignore
 	/// form_component.submit().await?;
 	/// ```
-	#[cfg(target_arch = "wasm32")]
+	#[cfg(wasm)]
 	pub async fn submit(&self) -> Result<(), String> {
-		use gloo_net::http::Request;
 		use serde_json::json;
 
 		// Collect form data
@@ -1016,18 +1015,21 @@ impl FormComponent {
 		}
 
 		// Send POST request
-		let response = Request::post(&self.action)
+		let response = reqwest::Client::new()
+			.post(&self.action)
 			.header("Content-Type", "application/json")
 			.json(&data)
-			.map_err(|e| format!("Failed to create request: {:?}", e))?
 			.send()
 			.await
 			.map_err(|e| format!("Failed to send request: {:?}", e))?;
 
-		if response.ok() {
+		if response.status().is_success() {
 			Ok(())
 		} else {
-			Err(format!("Submit failed with status: {}", response.status()))
+			Err(format!(
+				"Submit failed with status: {}",
+				response.status().as_u16()
+			))
 		}
 	}
 

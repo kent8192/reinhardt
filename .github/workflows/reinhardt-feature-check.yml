@@ -1,0 +1,225 @@
+name: Feature Check
+
+on:
+  workflow_call:
+    inputs:
+      runner:
+        description: 'Runner label JSON'
+        type: string
+        default: '"ubuntu-latest"'
+      cargo-build-jobs:
+        description: "Parallel cargo build jobs"
+        type: string
+        default: "1"
+  # Seed feature-check cache on main so release-plz PRs get cache hits.
+  # GitHub Actions branch scoping: PR branches can only restore caches
+  # from the default branch (main). This trigger runs a single
+  # --all-features check on main to populate the shared cache that all
+  # 25 feature-check matrix entries restore from.
+  push:
+    branches: [main]
+    paths:
+      - 'Cargo.lock'
+      - 'Cargo.toml'
+      - 'crates/*/Cargo.toml'
+      - 'crates/*/src/**'
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+  CARGO_TARGET_DIR: /tmp/cargo_target
+  CARGO_INCREMENTAL: 0
+
+jobs:
+  # Cache seeding: runs ONE --all-features check on main push to populate
+  # the shared cache. Uses the same self-hosted runner architecture
+  # (aarch64) as release-plz PRs so cache artifacts are compatible.
+  # All feature-check jobs share a single cache via shared-key, keeping
+  # total cache usage at ~1-2 GB instead of 25 × ~300 MB = ~7.5 GB.
+  cache-seed:
+    name: Cache Seed (all-features)
+    if: github.event_name == 'push'
+    runs-on: [self-hosted, linux, arm64, reinhardt-ci]
+    timeout-minutes: 360
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+
+      - name: Setup Rust
+        uses: ./.github/actions/setup-rust
+        with:
+          cache: 'false'
+
+      - name: Cache Rust dependencies (shared)
+        uses: Swatinem/rust-cache@v2
+        with:
+          # shared-key replaces the automatic job-based key, allowing
+          # all feature-check matrix entries to restore from this cache.
+          shared-key: "feature-check"
+          cache-targets: "false"
+          cache-directories: /tmp/cargo_target
+          cache-on-failure: "true"
+
+      - name: Setup protoc
+        uses: arduino/setup-protoc@v3
+        with:
+          version: "28.x"
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Seed cache with all-features check
+        run: |
+          cargo check \
+            --workspace \
+            --all-features \
+            --quiet
+
+  # Validate representative feature combinations compile correctly.
+  # Catches issues where feature subsets (minimal, api-only, etc.) break
+  # while --all-features still passes. Each entry targets only the affected
+  # crate (-p) to minimize compilation scope and CI time.
+  # Runs only on release PRs (release-plz branches via workflow_call from
+  # ci.yml) and manual workflow_dispatch.
+  feature-check:
+    name: Feature Check (${{ matrix.combo.name }})
+    if: github.event_name != 'push'
+    runs-on: ${{ fromJSON(inputs.runner || '"ubuntu-latest"') }}
+    timeout-minutes: 360
+    env:
+      CARGO_BUILD_JOBS: ${{ inputs.cargo-build-jobs || '1' }}
+    strategy:
+      fail-fast: false
+      matrix:
+        combo:
+          # --- Facade crate presets ---
+          - { name: "no-default",        pkg: "reinhardt-web",  features: "",                    no_default: "true"  }
+          - { name: "minimal",           pkg: "reinhardt-web",  features: "minimal",             no_default: "true"  }
+          - { name: "standard",          pkg: "reinhardt-web",  features: "",                    no_default: "false" }
+          - { name: "full",              pkg: "reinhardt-web",  features: "full",                no_default: "true"  }
+          - { name: "api-only",          pkg: "reinhardt-web",  features: "api-only",            no_default: "true"  }
+          - { name: "graphql-server",    pkg: "reinhardt-web",  features: "graphql-server",      no_default: "true"  }
+          - { name: "websocket-server",  pkg: "reinhardt-web",  features: "websocket-server",    no_default: "true"  }
+          - { name: "cli-tools",         pkg: "reinhardt-web",  features: "cli-tools",           no_default: "true"  }
+          # --- Database backend variants ---
+          - { name: "standard+mysql",    pkg: "reinhardt-web",  features: "standard,db-mysql",   no_default: "true"  }
+          - { name: "standard+sqlite",   pkg: "reinhardt-web",  features: "standard,db-sqlite",  no_default: "true"  }
+          - { name: "db-cockroachdb",    pkg: "reinhardt-web",  features: "minimal,db-cockroachdb", no_default: "true" }
+          # --- Cross-cutting feature combinations ---
+          - { name: "auth-variants",     pkg: "reinhardt-web",  features: "minimal,auth-jwt,auth-session,auth-oauth,auth-token", no_default: "true" }
+          - { name: "middleware-all",     pkg: "reinhardt-web",  features: "minimal,middleware-cors,middleware-compression,middleware-security,middleware-rate-limit", no_default: "true" }
+          - { name: "pages-graphql-ws",  pkg: "reinhardt-web",  features: "minimal,pages,graphql,websockets,database,db-postgres", no_default: "true" }
+          - { name: "admin-forms",       pkg: "reinhardt-web",  features: "minimal,admin,database,db-postgres,auth", no_default: "true" }
+          - { name: "plugins",           pkg: "reinhardt-web",  features: "minimal,dentdelion,deeplink,dispatch,grpc", no_default: "true" }
+          - { name: "openapi-router",    pkg: "reinhardt-web",  features: "minimal,openapi-router,database,db-postgres", no_default: "true" }
+          # --- Key sub-crate extremes (no-default and full) ---
+          - { name: "core-minimal",      pkg: "reinhardt-core", features: "",                    no_default: "true"  }
+          - { name: "core-full",         pkg: "reinhardt-core", features: "core-full",           no_default: "true"  }
+          - { name: "db-minimal",        pkg: "reinhardt-db",   features: "",                    no_default: "true"  }
+          - { name: "db-full",           pkg: "reinhardt-db",   features: "database-full",       no_default: "true"  }
+          - { name: "auth-minimal",      pkg: "reinhardt-auth", features: "",                    no_default: "true"  }
+          - { name: "auth-full",         pkg: "reinhardt-auth", features: "auth-full",           no_default: "true"  }
+          - { name: "rest-minimal",      pkg: "reinhardt-rest", features: "",                    no_default: "true"  }
+          - { name: "rest-full",         pkg: "reinhardt-rest", features: "rest-full",           no_default: "true"  }
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+
+      - name: Setup Rust
+        uses: ./.github/actions/setup-rust
+        with:
+          cache: 'false'
+
+      - name: Cache Rust dependencies (shared)
+        uses: Swatinem/rust-cache@v2
+        with:
+          # shared-key replaces the automatic job-based key so all matrix
+          # entries restore from the single cache seeded on main push.
+          # This keeps total cache usage at ~1-2 GB (one entry) instead
+          # of 25 × ~300 MB with per-entry keys.
+          shared-key: "feature-check"
+          cache-targets: "false"
+          cache-directories: /tmp/cargo_target
+          cache-on-failure: "true"
+          # Don't save on PR branches - restore from main's cache only.
+          # Avoids 25 matrix entries competing to save the same key.
+          save-if: "false"
+
+      - name: Setup protoc
+        uses: arduino/setup-protoc@v3
+        with:
+          version: "28.x"
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Run feature check (${{ matrix.combo.name }})
+        env:
+          # All values are workflow-defined constants from matrix (not user input).
+          PKG: ${{ matrix.combo.pkg }}
+          FEATURES: ${{ matrix.combo.features }}
+          NO_DEFAULT: ${{ matrix.combo.no_default }}
+        run: |
+          FLAGS="-p ${PKG}"
+          if [ "${NO_DEFAULT}" = "true" ]; then
+            FLAGS="${FLAGS} --no-default-features"
+          fi
+          if [ -n "${FEATURES}" ]; then
+            FLAGS="${FLAGS} -F ${FEATURES}"
+          fi
+          cargo check ${FLAGS} --quiet
+
+  # Run cargo test for critical feature combinations to catch runtime
+  # errors that cargo check alone cannot detect (conditional compilation
+  # logic errors, feature-gated test failures, etc.).
+  feature-test:
+    name: Feature Test (${{ matrix.combo.name }})
+    if: github.event_name != 'push'
+    runs-on: ${{ fromJSON(inputs.runner || '"ubuntu-latest"') }}
+    timeout-minutes: 360
+    env:
+      CARGO_BUILD_JOBS: ${{ inputs.cargo-build-jobs || '1' }}
+    strategy:
+      fail-fast: false
+      matrix:
+        combo:
+          - { name: "standard",    pkg: "reinhardt-web", features: "",                                               no_default: "false" }
+          - { name: "full",        pkg: "reinhardt-web", features: "full",                                           no_default: "true"  }
+          - { name: "api-only",    pkg: "reinhardt-web", features: "api-only",                                       no_default: "true"  }
+          - { name: "admin-forms", pkg: "reinhardt-web", features: "minimal,admin,database,db-postgres,auth",        no_default: "true"  }
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+
+      - name: Setup Rust
+        uses: ./.github/actions/setup-rust
+        with:
+          cache: 'false'
+
+      - name: Cache Rust dependencies (shared)
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: "feature-check"
+          cache-targets: "false"
+          cache-directories: /tmp/cargo_target
+          cache-on-failure: "true"
+          save-if: "false"
+
+      - name: Setup protoc
+        uses: arduino/setup-protoc@v3
+        with:
+          version: "28.x"
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Run feature test (${{ matrix.combo.name }})
+        env:
+          # All values are workflow-defined constants from matrix (not user input).
+          PKG: ${{ matrix.combo.pkg }}
+          FEATURES: ${{ matrix.combo.features }}
+          NO_DEFAULT: ${{ matrix.combo.no_default }}
+        run: |
+          FLAGS="-p ${PKG}"
+          if [ "${NO_DEFAULT}" = "true" ]; then
+            FLAGS="${FLAGS} --no-default-features"
+          fi
+          if [ -n "${FEATURES}" ]; then
+            FLAGS="${FLAGS} -F ${FEATURES}"
+          fi
+          cargo test ${FLAGS} --lib --quiet

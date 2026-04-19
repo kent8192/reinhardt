@@ -1,7 +1,8 @@
 //! WASM entry point for Reinhardt Admin Panel
 
 use crate::pages::router;
-use reinhardt_pages::Effect;
+use reinhardt_pages::component::PageExt;
+use reinhardt_pages::{Effect, Element, cleanup_reactive_nodes};
 use wasm_bindgen::JsCast;
 use wasm_bindgen::prelude::*;
 use web_sys::{Event, HtmlElement, window};
@@ -26,27 +27,50 @@ pub fn main() -> Result<(), JsValue> {
 		.get_element_by_id("app")
 		.ok_or_else(|| JsValue::from_str("No #app element found"))?;
 
+	// Initialize reactive scheduler for WASM (required for Effect re-execution
+	// when signals change from async contexts like spawn_task).
+	reinhardt_pages::reactive::runtime::set_scheduler(|task| {
+		wasm_bindgen_futures::spawn_local(async move { task() });
+	});
+
 	// Initialize global router
 	router::init_global_router();
 
-	// Initial render
-	// SAFETY(XSS): render_to_string() HTML-escapes all dynamic text content
-	// and attribute values via html_escape(), preventing XSS injection.
+	// Auth gate: if no JWT token is stored, redirect to login page.
+	// Uses AdminUrls default since dashboard data has not been fetched yet.
+	if reinhardt_pages::auth::get_jwt_token().is_none() {
+		let login_url = crate::pages::router::get_login_url();
+		router::with_router(|r| {
+			let _ = r.push(&login_url);
+		});
+	}
+
+	// Initial render — mount to DOM so event handlers (form submit, etc.) are attached.
 	let view = router::with_router(|r| r.render_current());
-	app_element.set_inner_html(&view.render_to_string());
+	let app_wrapper = Element::new(app_element.clone());
+	app_element.set_inner_html(""); // clear before mount
+	view.mount(&app_wrapper)
+		.map_err(|e| JsValue::from_str(&format!("Mount failed: {:?}", e)))?;
 
 	// Set up reactive effect for route changes
-	// Effect will automatically re-render when route changes
 	let app_clone = app_element.clone();
 	let _effect = Effect::new(move || {
-		// SAFETY(XSS): render_to_string() HTML-escapes all dynamic text content
-		// and attribute values via html_escape(), preventing XSS injection.
 		let view = router::with_router(|r| {
-			// Subscribe to current_params to trigger re-render on route change
+			// Subscribe to both current_path and current_params to trigger re-render.
+			// current_params alone is insufficient: /admin/login/ → /admin/
+			// both have empty params, so the signal would not trigger.
+			let _ = r.current_path().get();
 			let _ = r.current_params().get();
 			r.render_current()
 		});
-		app_clone.set_inner_html(&view.render_to_string());
+		// Clean up previous reactive nodes before re-mounting to prevent
+		// stale Effects from operating on detached DOM nodes.
+		cleanup_reactive_nodes();
+		app_clone.set_inner_html("");
+		let wrapper = Element::new(app_clone.clone());
+		if let Err(e) = view.mount(&wrapper) {
+			web_sys::console::error_1(&format!("Re-mount failed: {:?}", e).into());
+		}
 	});
 	// Intentional memory leak: WASM entry points run for the entire application
 	// lifetime and never terminate. The Effect must persist to keep reactive

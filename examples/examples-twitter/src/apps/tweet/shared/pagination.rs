@@ -3,7 +3,7 @@
 //! Provides standardized pagination response format following
 //! the cookbook patterns (docs/cookbook/pagination.en.md).
 
-use reinhardt::core::serde::{Deserialize, Serialize};
+use serde::{Deserialize, Serialize};
 
 /// Paginated response wrapper
 ///

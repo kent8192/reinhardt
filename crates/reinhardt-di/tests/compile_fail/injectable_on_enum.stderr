@@ -1,0 +1,5 @@
+error: #[injectable] can only be applied to structs
+ --> tests/compile_fail/injectable_on_enum.rs:5:6
+  |
+5 | enum ServiceKind {
+  |      ^^^^^^^^^^^

@@ -360,8 +360,9 @@ impl QueryFieldCompiler {
 	///
 	/// # Examples
 	///
-	/// ```ignore
+	/// ```no_run
 	/// use reinhardt_db::orm::query_fields::comparison::*;
+	/// use reinhardt_db::orm::query_fields::compiler::QueryFieldCompiler;
 	///
 	/// // u1.id < u2.id
 	/// let comparison = FieldComparison::new(
@@ -417,8 +418,9 @@ impl QueryFieldCompiler {
 	///
 	/// # Examples
 	///
-	/// ```ignore
+	/// ```no_run
 	/// use reinhardt_db::orm::query_fields::aggregate::*;
+	/// use reinhardt_db::orm::query_fields::compiler::QueryFieldCompiler;
 	///
 	/// // COUNT(*) > 5
 	/// let expr = AggregateExpr::count("*").gt(5);

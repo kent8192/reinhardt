@@ -104,9 +104,9 @@ pub async fn create_user(
     let args = CreateUserArgs { username, email };
     let body = serde_json::to_string(&args)?;
 
-    let response = gloo_net::http::Request::post(endpoint)
+    let response = reqwest::Client::new().post(endpoint)
         .header("Content-Type", "application/json")
-        .body(body)?
+        .body(body)
         .send()
         .await?;
 
@@ -323,7 +323,7 @@ use {
 use crate::shared::types::UserInfo;
 ```
 
-### Issue: "failed to resolve: could not find `gloo_net`"
+### Issue: "failed to resolve: could not find `reqwest`"
 
 **Cause**: Missing WASM dependency.
 
@@ -331,7 +331,7 @@ use crate::shared::types::UserInfo;
 
 ```toml
 [target.'cfg(target_arch = "wasm32")'.dependencies]
-gloo-net = "0.6"
+reqwest = { version = "0.12", features = ["json"] }
 ```
 
 ### Issue: Function signature mismatch between server and client

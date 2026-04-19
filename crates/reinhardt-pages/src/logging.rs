@@ -41,7 +41,7 @@
 /// debug_log!("Debug value: {:?}", value);
 /// ```
 #[macro_export]
-#[cfg(all(debug_assertions, feature = "debug-hooks", target_arch = "wasm32"))]
+#[cfg(all(debug_assertions, feature = "debug-hooks", wasm))]
 macro_rules! debug_log {
 	($($arg:tt)*) => {{
 		web_sys::console::debug_1(&format!($($arg)*).into());
@@ -50,7 +50,7 @@ macro_rules! debug_log {
 
 /// Logs a debug message (requires `debug-hooks` feature + `debug_assertions`)
 #[macro_export]
-#[cfg(all(debug_assertions, feature = "debug-hooks", not(target_arch = "wasm32")))]
+#[cfg(all(debug_assertions, feature = "debug-hooks", native))]
 macro_rules! debug_log {
 	($($arg:tt)*) => {{
 		eprintln!("[DEBUG] {}", format!($($arg)*));
@@ -75,11 +75,11 @@ macro_rules! debug_log {
 ///
 /// # Example
 ///
-/// ```ignore
+/// ```no_run
 /// info_log!("Form submitted successfully");
 /// ```
 #[macro_export]
-#[cfg(all(debug_assertions, target_arch = "wasm32"))]
+#[cfg(all(debug_assertions, wasm))]
 macro_rules! info_log {
 	($($arg:tt)*) => {{
 		web_sys::console::info_1(&format!($($arg)*).into());
@@ -88,7 +88,7 @@ macro_rules! info_log {
 
 /// Logs an info message (requires `debug_assertions`)
 #[macro_export]
-#[cfg(all(debug_assertions, not(target_arch = "wasm32")))]
+#[cfg(all(debug_assertions, native))]
 macro_rules! info_log {
 	($($arg:tt)*) => {{
 		eprintln!("[INFO] {}", format!($($arg)*));
@@ -113,11 +113,11 @@ macro_rules! info_log {
 ///
 /// # Example
 ///
-/// ```ignore
+/// ```no_run
 /// warn_log!("Performance warning: slow render");
 /// ```
 #[macro_export]
-#[cfg(all(debug_assertions, target_arch = "wasm32"))]
+#[cfg(all(debug_assertions, wasm))]
 macro_rules! warn_log {
 	($($arg:tt)*) => {{
 		web_sys::console::warn_1(&format!($($arg)*).into());
@@ -126,7 +126,7 @@ macro_rules! warn_log {
 
 /// Logs a warning message (requires `debug_assertions`)
 #[macro_export]
-#[cfg(all(debug_assertions, not(target_arch = "wasm32")))]
+#[cfg(all(debug_assertions, native))]
 macro_rules! warn_log {
 	($($arg:tt)*) => {{
 		eprintln!("[WARN] {}", format!($($arg)*));
@@ -155,7 +155,7 @@ macro_rules! warn_log {
 /// error_log!("Submit failed: {:?}", error);
 /// ```
 #[macro_export]
-#[cfg(all(debug_assertions, target_arch = "wasm32"))]
+#[cfg(all(debug_assertions, wasm))]
 macro_rules! error_log {
 	($($arg:tt)*) => {{
 		web_sys::console::error_1(&format!($($arg)*).into());
@@ -164,7 +164,7 @@ macro_rules! error_log {
 
 /// Logs an error message (requires `debug_assertions`)
 #[macro_export]
-#[cfg(all(debug_assertions, not(target_arch = "wasm32")))]
+#[cfg(all(debug_assertions, native))]
 macro_rules! error_log {
 	($($arg:tt)*) => {{
 		eprintln!("[ERROR] {}", format!($($arg)*));
@@ -181,6 +181,7 @@ macro_rules! error_log {
 #[cfg(test)]
 mod tests {
 	// Import macros from crate root
+	#[allow(unused_imports)]
 	use crate::{debug_log, error_log, info_log, warn_log};
 
 	#[test]

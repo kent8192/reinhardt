@@ -4,23 +4,32 @@
 
 use crate::prelude::*;
 use async_graphql::{EmptySubscription, Schema};
-use reinhardt_graphql::{Mutation, Query, create_schema};
+use reinhardt_graphql::{Mutation, Query, QueryLimits, UserStorage};
 use std::sync::Arc;
 
 /// Creates a GraphQL schema connected to a test database.
 ///
 /// This fixture wraps the generic `postgres_container` fixture from `reinhardt-test`
-/// and creates a GraphQL schema with a real PostgreSQL database connection.
+/// and creates a GraphQL schema with a real PostgreSQL database connection. The
+/// returned tuple carries both the schema and the pool so dependent fixtures can
+/// seed test data through the same container instance.
 #[fixture]
 async fn graphql_schema_fixture(
 	#[future] postgres_container: (ContainerAsync<GenericImage>, Arc<PgPool>, u16, String),
-) -> Schema<Query, Mutation, EmptySubscription> {
+) -> (Schema<Query, Mutation, EmptySubscription>, Arc<PgPool>) {
 	let (_container, pool, _port, _url) = postgres_container.await;
 
-	// Create schema with database connection
-	// Note: In a real implementation, we would configure the schema to use the database pool
-	// For now, we'll use the default in-memory storage
-	create_schema()
+	// Build the schema with the in-memory `UserStorage` (current resolver backend)
+	// and attach the real `PgPool` as schema data so future resolvers can use it.
+	let limits = QueryLimits::default();
+	let schema = Schema::build(Query, Mutation, EmptySubscription)
+		.data(UserStorage::new())
+		.data(pool.clone())
+		.limit_depth(limits.max_depth)
+		.limit_complexity(limits.max_complexity)
+		.finish();
+
+	(schema, pool)
 }
 
 /// Creates a GraphQL schema with DI context.

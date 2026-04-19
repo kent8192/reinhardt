@@ -29,11 +29,11 @@
 //! ## Quick Start
 //!
 //! ```rust,ignore
-//! use reinhardt_apps::{ApplicationBuilder, AppConfig, Settings};
+//! use reinhardt_apps::{ApplicationBuilder, AppConfig};
 //!
 //! // Build an application with multiple apps
 //! let app = ApplicationBuilder::new()
-//!     .settings(Settings::default())
+//!     .add_setting("DEBUG", "true")
 //!     .add_app(AppConfig::new("users", "myproject.users"))
 //!     .add_app(AppConfig::new("blog", "myproject.blog"))
 //!     .build()
@@ -110,7 +110,7 @@ pub use inventory;
 
 // Re-export from apps module
 pub use apps::{
-	AppCommandConfig, AppConfig, AppError, AppLocaleConfig, AppMediaConfig, AppResult,
+	AppCommandConfig, AppConfig, AppError, AppLabel, AppLocaleConfig, AppMediaConfig, AppResult,
 	AppStaticFilesConfig, Apps, BaseCommand, LocaleProvider, MediaProvider, StaticFilesProvider,
 	get_app_commands, get_app_locales, get_app_media, get_app_static_files,
 };

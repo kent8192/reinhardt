@@ -527,3 +527,141 @@ async fn test_cache_does_not_cache_post_requests(cache_middleware: Arc<CacheMidd
 }
 
 use reinhardt_middleware::cache::CacheMiddleware;
+
+// ============================================================================
+// Middleware Chain Error-to-Response Tests (Issue #3230)
+// ============================================================================
+
+/// Handler that returns an error, used to verify middleware post-processing.
+struct ErrorReturningHandler {
+	error_variant: ErrorVariant,
+}
+
+enum ErrorVariant {
+	NotFound,
+	Unauthorized,
+	BadRequest,
+}
+
+#[async_trait::async_trait]
+impl reinhardt_http::Handler for ErrorReturningHandler {
+	async fn handle(
+		&self,
+		_request: Request,
+	) -> reinhardt_core::exception::Result<reinhardt_http::Response> {
+		match self.error_variant {
+			ErrorVariant::NotFound => Err(reinhardt_core::exception::Error::NotFound(
+				"not found".into(),
+			)),
+			ErrorVariant::Unauthorized => Err(reinhardt_core::exception::Error::Authentication(
+				"unauthorized".into(),
+			)),
+			ErrorVariant::BadRequest => {
+				Err(reinhardt_core::exception::Error::Http("bad request".into()))
+			}
+		}
+	}
+}
+
+/// Test: SecurityMiddleware headers are applied to error responses
+/// when using MiddlewareChain
+#[rstest]
+#[tokio::test]
+#[serial(security_error_chain)]
+async fn test_security_headers_present_on_error_response() {
+	use reinhardt_http::middleware::MiddlewareChain;
+	use reinhardt_middleware::security_middleware::SecurityMiddleware;
+
+	// Arrange: SecurityMiddleware wrapping a handler that returns 401
+	let handler = Arc::new(ErrorReturningHandler {
+		error_variant: ErrorVariant::Unauthorized,
+	});
+	let mut chain = MiddlewareChain::new(handler);
+	chain.add_middleware(Arc::new(SecurityMiddleware::new()));
+
+	// Act
+	let request = create_test_request("GET", "/api/protected");
+	let response = reinhardt_http::Handler::handle(&chain, request)
+		.await
+		.unwrap();
+
+	// Assert: error response has security headers
+	assert_eq!(response.status, hyper::StatusCode::UNAUTHORIZED);
+	assert!(
+		response.headers.contains_key("X-Content-Type-Options"),
+		"Error response should have X-Content-Type-Options header"
+	);
+}
+
+/// Test: XFrameOptions header is applied to error responses
+#[rstest]
+#[tokio::test]
+#[serial(xframe_error_chain)]
+async fn test_xframe_header_present_on_error_response() {
+	use reinhardt_http::middleware::MiddlewareChain;
+	use reinhardt_middleware::xframe::{XFrameOptions, XFrameOptionsMiddleware};
+
+	// Arrange: XFrameOptionsMiddleware wrapping a handler that returns 404
+	let handler = Arc::new(ErrorReturningHandler {
+		error_variant: ErrorVariant::NotFound,
+	});
+	let mut chain = MiddlewareChain::new(handler);
+	chain.add_middleware(Arc::new(XFrameOptionsMiddleware::new(XFrameOptions::Deny)));
+
+	// Act
+	let request = create_test_request("GET", "/api/missing");
+	let response = reinhardt_http::Handler::handle(&chain, request)
+		.await
+		.unwrap();
+
+	// Assert: 404 error response has X-Frame-Options header
+	assert_eq!(response.status, hyper::StatusCode::NOT_FOUND);
+	assert_eq!(
+		response
+			.headers
+			.get("X-Frame-Options")
+			.map(|v| v.to_str().unwrap()),
+		Some("DENY"),
+		"Error response should have X-Frame-Options: DENY header"
+	);
+}
+
+/// Test: Multiple middleware post-processing runs on error responses
+#[rstest]
+#[tokio::test]
+#[serial(multi_middleware_error_chain)]
+async fn test_multiple_middleware_headers_on_error_response() {
+	use reinhardt_http::middleware::MiddlewareChain;
+	use reinhardt_middleware::security_middleware::SecurityMiddleware;
+	use reinhardt_middleware::xframe::{XFrameOptions, XFrameOptionsMiddleware};
+
+	// Arrange: stack SecurityMiddleware + XFrameOptionsMiddleware
+	let handler = Arc::new(ErrorReturningHandler {
+		error_variant: ErrorVariant::BadRequest,
+	});
+	let mut chain = MiddlewareChain::new(handler);
+	// First added = outermost
+	chain.add_middleware(Arc::new(SecurityMiddleware::new()));
+	chain.add_middleware(Arc::new(XFrameOptionsMiddleware::new(XFrameOptions::Deny)));
+
+	// Act
+	let request = create_test_request("GET", "/api/invalid");
+	let response = reinhardt_http::Handler::handle(&chain, request)
+		.await
+		.unwrap();
+
+	// Assert: both middleware headers present on 400 error response
+	assert_eq!(response.status, hyper::StatusCode::BAD_REQUEST);
+	assert!(
+		response.headers.contains_key("X-Content-Type-Options"),
+		"Error response should have X-Content-Type-Options from SecurityMiddleware"
+	);
+	assert_eq!(
+		response
+			.headers
+			.get("X-Frame-Options")
+			.map(|v| v.to_str().unwrap()),
+		Some("DENY"),
+		"Error response should have X-Frame-Options from XFrameOptionsMiddleware"
+	);
+}

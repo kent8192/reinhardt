@@ -13,7 +13,7 @@
 //! 5. Swagger UI / Redoc UI HTML Verification
 //! 6. End-to-End Integration Verification
 
-use reinhardt_core::endpoint::EndpointMetadata;
+use reinhardt_core::endpoint::{AuthProtection, EndpointMetadata};
 use reinhardt_openapi_macros::Schema as DeriveSchema;
 use reinhardt_rest::openapi::param_metadata::{
 	CookieParam, HeaderParam, ParameterMetadata, PathParam, QueryParam,
@@ -437,6 +437,8 @@ fn test_endpoint_metadata_supports_form_content_type() {
 		responses: &[],
 		headers: &[],
 		security: &[],
+		auth_protection: AuthProtection::None,
+		guard_description: None,
 	};
 
 	// Act & Assert

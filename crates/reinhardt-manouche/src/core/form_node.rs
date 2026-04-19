@@ -33,11 +33,9 @@
 //!         username: [
 //!             |v| !v.trim().is_empty() => "Username cannot be empty",
 //!         ],
-//!     },
-//!
-//!     client_validators: {
 //!         password: [
-//!             "value.length >= 8" => "Password must be at least 8 characters",
+//!             #[client(on = input)]
+//!             |v| v.len() >= 8 => "Password must be at least 8 characters",
 //!         ],
 //!     },
 //! }
@@ -93,10 +91,9 @@ pub struct FormMacro {
 	pub slots: Option<FormSlots>,
 	/// Field definitions (can include field groups)
 	pub fields: Vec<FormFieldEntry>,
-	/// Server-side validators
+	/// Unified validators. Each rule carries an optional scope annotation
+	/// (`#[server]` / `#[client(on = ...)]`) that controls where it executes.
 	pub validators: Vec<FormValidator>,
-	/// Client-side validators (JavaScript expressions)
-	pub client_validators: Vec<ClientValidator>,
 	/// Span for error reporting
 	pub span: Span,
 }
@@ -126,6 +123,8 @@ pub enum FormFieldEntry {
 	Field(FormFieldDef),
 	/// A group of related fields
 	Group(FormFieldGroup),
+	/// A submit button (not a data field — generates no Signal)
+	SubmitButton(FormSubmitButtonDef),
 }
 
 impl FormFieldEntry {
@@ -139,11 +138,17 @@ impl FormFieldEntry {
 		matches!(self, FormFieldEntry::Field(_))
 	}
 
+	/// Returns true if this is a submit button.
+	pub fn is_submit_button(&self) -> bool {
+		matches!(self, FormFieldEntry::SubmitButton(_))
+	}
+
 	/// Returns the name of the entry (field name or group name).
 	pub fn name(&self) -> &Ident {
 		match self {
 			FormFieldEntry::Field(f) => &f.name,
 			FormFieldEntry::Group(g) => &g.name,
+			FormFieldEntry::SubmitButton(b) => &b.name,
 		}
 	}
 
@@ -152,6 +157,7 @@ impl FormFieldEntry {
 		match self {
 			FormFieldEntry::Field(f) => f.span,
 			FormFieldEntry::Group(g) => g.span,
+			FormFieldEntry::SubmitButton(b) => b.span,
 		}
 	}
 
@@ -159,15 +165,23 @@ impl FormFieldEntry {
 	pub fn as_field(&self) -> Option<&FormFieldDef> {
 		match self {
 			FormFieldEntry::Field(f) => Some(f),
-			FormFieldEntry::Group(_) => None,
+			_ => None,
 		}
 	}
 
 	/// Returns a reference to the inner group if this is a Group variant.
 	pub fn as_group(&self) -> Option<&FormFieldGroup> {
 		match self {
-			FormFieldEntry::Field(_) => None,
 			FormFieldEntry::Group(g) => Some(g),
+			_ => None,
+		}
+	}
+
+	/// Returns a reference to the inner submit button if this is a SubmitButton variant.
+	pub fn as_submit_button(&self) -> Option<&FormSubmitButtonDef> {
+		match self {
+			FormFieldEntry::SubmitButton(b) => Some(b),
+			_ => None,
 		}
 	}
 }
@@ -191,6 +205,25 @@ pub struct FormFieldDef {
 	/// Field type identifier (e.g., CharField, EmailField)
 	pub field_type: Ident,
 	/// Field properties (validation and styling)
+	pub properties: Vec<FormFieldProperty>,
+	/// Span for error reporting
+	pub span: Span,
+}
+
+/// A submit button definition in the form macro.
+///
+/// Example:
+/// ```text
+/// submit: SubmitButton {
+///     label: "Sign in",
+///     class: "btn-primary",
+/// }
+/// ```
+#[derive(Debug, Clone)]
+pub struct FormSubmitButtonDef {
+	/// Button name identifier
+	pub name: Ident,
+	/// Button properties (label, class, id, disabled)
 	pub properties: Vec<FormFieldProperty>,
 	/// Span for error reporting
 	pub span: Span,
@@ -592,7 +625,64 @@ impl FormFieldProperty {
 	}
 }
 
-/// Server-side validator definition.
+/// Client-side validation trigger event.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ClientTrigger {
+	/// Fire on form submit (default for `Both` scope).
+	Submit,
+	/// Fire on input event (real-time as user types).
+	Input,
+	/// Fire on blur event (when field loses focus).
+	Blur,
+}
+
+/// Validator execution scope.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ValidatorScope {
+	/// Runs on both server (`.validate()`) and client (submit). Default.
+	Both,
+	/// Server-side only (`.validate()`).
+	Server,
+	/// Client-side only, with specified trigger.
+	Client {
+		/// Client-side trigger event.
+		trigger: ClientTrigger,
+	},
+	/// Both server and client, with specified client trigger.
+	ServerAndClient {
+		/// Client-side trigger event.
+		trigger: ClientTrigger,
+	},
+}
+
+impl ValidatorScope {
+	/// Returns `true` if this scope includes server-side execution.
+	pub fn includes_server(&self) -> bool {
+		matches!(
+			self,
+			Self::Both | Self::Server | Self::ServerAndClient { .. }
+		)
+	}
+
+	/// Returns `true` if this scope includes client-side execution.
+	pub fn includes_client(&self) -> bool {
+		matches!(
+			self,
+			Self::Both | Self::Client { .. } | Self::ServerAndClient { .. }
+		)
+	}
+
+	/// Returns the client trigger, if any.
+	pub fn client_trigger(&self) -> Option<&ClientTrigger> {
+		match self {
+			Self::Both => Some(&ClientTrigger::Submit),
+			Self::Client { trigger } | Self::ServerAndClient { trigger } => Some(trigger),
+			Self::Server => None,
+		}
+	}
+}
+
+/// Validator definition (unified server+client with scope annotations).
 #[derive(Debug, Clone)]
 pub enum FormValidator {
 	/// Field-level validator: `username: [|v| ... => "error"]`
@@ -613,33 +703,13 @@ pub enum FormValidator {
 	},
 }
 
-/// A single validation rule with closure and error message.
+/// A single validation rule with closure, error message, and execution scope.
 #[derive(Debug, Clone)]
 pub struct ValidatorRule {
+	/// Execution scope (default: `Both`). See `ValidatorScope`.
+	pub scope: ValidatorScope,
 	/// Validation closure expression
 	pub expr: ExprClosure,
-	/// Error message when validation fails
-	pub message: LitStr,
-	/// Span for error reporting
-	pub span: Span,
-}
-
-/// Client-side validator definition (JavaScript expressions).
-#[derive(Debug, Clone)]
-pub struct ClientValidator {
-	/// Field name to validate
-	pub field_name: Ident,
-	/// Validation rules
-	pub rules: Vec<ClientValidatorRule>,
-	/// Span for error reporting
-	pub span: Span,
-}
-
-/// A single client-side validation rule.
-#[derive(Debug, Clone)]
-pub struct ClientValidatorRule {
-	/// JavaScript expression for validation
-	pub js_expr: LitStr,
 	/// Error message when validation fails
 	pub message: LitStr,
 	/// Span for error reporting
@@ -977,7 +1047,6 @@ impl FormMacro {
 			slots: None,
 			fields: Vec::new(),
 			validators: Vec::new(),
-			client_validators: Vec::new(),
 			span,
 		}
 	}

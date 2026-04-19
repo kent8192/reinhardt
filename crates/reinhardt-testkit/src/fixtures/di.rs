@@ -98,8 +98,10 @@
 //! }
 //! ```
 
+use reinhardt_di::resolve_context::{RESOLVE_CTX, ResolveContext};
 use reinhardt_di::{InjectionContext, SingletonScope};
 use rstest::*;
+use std::future::Future;
 use std::sync::Arc;
 
 /// Fixture providing a singleton scope for dependency injection.
@@ -445,6 +447,61 @@ pub async fn injection_context_with_database(database_url: &str) -> InjectionCon
 	InjectionContext::builder(singleton_scope).build()
 }
 
+/// Runs an async test body with an isolated DI context.
+///
+/// Creates a fresh [`SingletonScope`] and [`InjectionContext`] for each call,
+/// sets the task-local `RESOLVE_CTX` so that
+/// [`get_di_context`](reinhardt_di::resolve_context::get_di_context) works
+/// both in factory execution and in the test body, and returns the
+/// closure's result.
+///
+/// # Parallel Safety
+///
+/// Each invocation creates its own `SingletonScope` and `InjectionContext`.
+/// The `RESOLVE_CTX` is task-local (`tokio::task_local!`), so parallel
+/// test tasks do not interfere with each other.
+///
+/// # Examples
+///
+/// ```rust,no_run
+/// use reinhardt_testkit::fixtures::with_test_di_context;
+/// use reinhardt_di::resolve_context::{get_di_context, ContextLevel};
+/// use rstest::*;
+/// use std::sync::Arc;
+///
+/// #[rstest]
+/// #[tokio::test]
+/// async fn test_with_di_context() {
+///     let result = with_test_di_context(
+///         |scope| {
+///             scope.set("test_value".to_string());
+///         },
+///         |di_ctx| async move {
+///             // get_di_context works here
+///             let root = get_di_context(ContextLevel::Root);
+///             assert!(Arc::ptr_eq(&root, &di_ctx));
+///             42
+///         },
+///     ).await;
+///
+///     assert_eq!(result, 42);
+/// }
+/// ```
+pub async fn with_test_di_context<F, Fut, T>(setup: impl FnOnce(&SingletonScope), f: F) -> T
+where
+	F: FnOnce(Arc<InjectionContext>) -> Fut,
+	Fut: Future<Output = T>,
+{
+	let scope = Arc::new(SingletonScope::new());
+	setup(&scope);
+	let ctx = Arc::new(InjectionContext::builder(scope).build());
+	let resolve_ctx = ResolveContext {
+		root: Arc::clone(&ctx),
+		current: Arc::clone(&ctx),
+	};
+	RESOLVE_CTX.scope(resolve_ctx, f(ctx)).await
+}
+
 #[cfg(test)]
 mod tests {
 	use super::*;
@@ -515,6 +572,17 @@ mod tests {
 	#[rstest]
 	#[tokio::test]
 	async fn test_depends_with_fixtures(injection_context: InjectionContext) {
+		// Register TestConfig in the global registry so Depends<T> can resolve it
+		let registry = reinhardt_di::global_registry();
+		registry.register_async::<TestConfig, _, _>(
+			reinhardt_di::DependencyScope::Request,
+			|_ctx| async {
+				Ok(TestConfig {
+					value: "test_config".to_string(),
+				})
+			},
+		);
+
 		// Test Depends<T> integration with fixtures
 		let config = Depends::<TestConfig>::builder()
 			.resolve(&injection_context)
@@ -665,5 +733,101 @@ mod tests {
 			.unwrap();
 
 		assert_eq!(db.url, "test://database");
+	}
+
+	// Tests for with_test_di_context
+
+	#[rstest]
+	#[tokio::test]
+	async fn test_with_test_di_context_unique_per_call() {
+		// Act
+		let ctx1 = with_test_di_context(|_| {}, |ctx| async move { ctx }).await;
+		let ctx2 = with_test_di_context(|_| {}, |ctx| async move { ctx }).await;
+
+		// Assert
+		assert!(!Arc::ptr_eq(&ctx1, &ctx2));
+	}
+
+	#[rstest]
+	#[tokio::test]
+	async fn test_with_test_di_context_get_di_context_root() {
+		use reinhardt_di::resolve_context::{ContextLevel, get_di_context};
+
+		// Act & Assert
+		with_test_di_context(
+			|_| {},
+			|ctx| async move {
+				let root = get_di_context(ContextLevel::Root);
+				assert!(Arc::ptr_eq(&root, &ctx));
+			},
+		)
+		.await;
+	}
+
+	#[rstest]
+	#[tokio::test]
+	async fn test_with_test_di_context_get_di_context_current() {
+		use reinhardt_di::resolve_context::{ContextLevel, get_di_context};
+
+		// Act & Assert
+		with_test_di_context(
+			|_| {},
+			|ctx| async move {
+				let current = get_di_context(ContextLevel::Current);
+				assert!(Arc::ptr_eq(&current, &ctx));
+			},
+		)
+		.await;
+	}
+
+	#[rstest]
+	#[tokio::test]
+	async fn test_with_test_di_context_setup_registers_singletons() {
+		// Arrange & Act
+		let result = with_test_di_context(
+			|scope| {
+				scope.set(TestConfig {
+					value: "from_setup".to_string(),
+				});
+			},
+			|ctx| async move {
+				// Assert
+				let config: Option<Arc<TestConfig>> = ctx.get_singleton();
+				config.unwrap().value.clone()
+			},
+		)
+		.await;
+
+		assert_eq!(result, "from_setup");
+	}
+
+	#[rstest]
+	#[tokio::test]
+	async fn test_with_test_di_context_parallel_safety() {
+		// Act
+		let (val1, val2) = tokio::join!(
+			with_test_di_context(
+				|scope| {
+					scope.set("task_1".to_string());
+				},
+				|ctx| async move {
+					let v: Option<Arc<String>> = ctx.get_singleton();
+					v.unwrap().as_str().to_owned()
+				},
+			),
+			with_test_di_context(
+				|scope| {
+					scope.set("task_2".to_string());
+				},
+				|ctx| async move {
+					let v: Option<Arc<String>> = ctx.get_singleton();
+					v.unwrap().as_str().to_owned()
+				},
+			),
+		);
+
+		// Assert
+		assert_eq!(val1, "task_1");
+		assert_eq!(val2, "task_2");
 	}
 }

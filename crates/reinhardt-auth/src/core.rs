@@ -23,7 +23,7 @@
 //! use uuid::Uuid;
 //!
 //! let user = SimpleUser {
-//!     id: Uuid::new_v4(),
+//!     id: Uuid::now_v7(),
 //!     username: "alice".to_string(),
 //!     email: "alice@example.com".to_string(),
 //!     is_active: true,
@@ -72,7 +72,7 @@
 //! # #[cfg(feature = "argon2-hasher")]
 //! # {
 //! let mut user = MyUser {
-//!     id: Uuid::new_v4(),
+//!     id: Uuid::now_v7(),
 //!     email: "user@example.com".to_string(),
 //!     password_hash: None,
 //!     last_login: None,
@@ -142,6 +142,9 @@ pub mod permission_operators;
 /// Mixin for adding permission fields to user models.
 #[path = "core/permissions_mixin.rs"]
 pub mod permissions_mixin;
+/// Superuser creation support for management commands.
+#[path = "core/superuser_creator.rs"]
+pub mod superuser_creator;
 /// Core user types (SimpleUser, AnonymousUser).
 #[path = "core/user.rs"]
 pub mod user;
@@ -157,6 +160,11 @@ pub use permission::{
 	PermissionContext,
 };
 pub use permissions_mixin::PermissionsMixin;
+pub use superuser_creator::{
+	SuperuserCreator, SuperuserCreatorRegistration, SuperuserInit, TypedSuperuserCreator,
+	auto_register_superuser_creator, get_superuser_creator, register_superuser_creator,
+	superuser_creator_for,
+};
 pub use user::{AnonymousUser, SimpleUser, User};
 
 // Re-export Argon2Hasher when feature is enabled

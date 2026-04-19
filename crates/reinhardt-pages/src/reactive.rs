@@ -105,7 +105,7 @@ pub mod resource;
 
 // Re-export resource types
 pub use resource::{Resource, ResourceState};
-#[cfg(target_arch = "wasm32")]
+#[cfg(wasm)]
 pub use resource::{create_resource, create_resource_with_deps};
 
 // Re-export hooks

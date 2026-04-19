@@ -351,10 +351,7 @@ impl UnifiedRouter {
 	/// Registrations are stored on the router for Phase 3 worker startup.
 	/// Consumer worker startup is deferred to a later server startup phase.
 	#[cfg(feature = "streaming")]
-	pub fn mount_streaming(
-		mut self,
-		router: reinhardt_streaming::StreamingRouter,
-	) -> Self {
+	pub fn mount_streaming(mut self, router: reinhardt_streaming::StreamingRouter) -> Self {
 		self.streaming_handlers.extend(router.into_handlers());
 		self
 	}
@@ -573,10 +570,7 @@ impl UnifiedRouter {
 
 	/// Mount streaming handlers on this router.
 	#[cfg(feature = "streaming")]
-	pub fn mount_streaming(
-		mut self,
-		router: reinhardt_streaming::StreamingRouter,
-	) -> Self {
+	pub fn mount_streaming(mut self, router: reinhardt_streaming::StreamingRouter) -> Self {
 		self.streaming_handlers.extend(router.into_handlers());
 		self
 	}
@@ -727,10 +721,7 @@ impl UnifiedRouter {
 
 	/// No-op on WASM: streaming is only available on native targets.
 	#[cfg(feature = "streaming")]
-	pub fn mount_streaming(
-		self,
-		_router: reinhardt_streaming::StreamingRouter,
-	) -> Self {
+	pub fn mount_streaming(self, _router: reinhardt_streaming::StreamingRouter) -> Self {
 		self
 	}
 

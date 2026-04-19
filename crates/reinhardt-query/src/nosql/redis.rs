@@ -3,26 +3,26 @@
 //! Provides type-safe builders for Redis commands that output
 //! client-agnostic RESP3 byte sequences via [`RespCommand`].
 
-/// Redis command output type.
-pub mod resp;
 /// Core builder trait.
 pub mod command;
-/// Key type for Redis keys.
-pub mod key;
-/// Value serialization to Redis bytes.
-pub mod value;
-/// String data structure commands.
-pub mod string;
 /// Hash data structure commands.
 pub mod hash;
+/// Key type for Redis keys.
+pub mod key;
 /// List data structure commands.
 pub mod list;
+/// Redis command output type.
+pub mod resp;
 /// Set data structure commands.
 pub mod set;
-/// Sorted set data structure commands.
-pub mod zset;
+/// String data structure commands.
+pub mod string;
 /// Transaction and scripting commands.
 pub mod transaction;
+/// Value serialization to Redis bytes.
+pub mod value;
+/// Sorted set data structure commands.
+pub mod zset;
 
 pub use command::CommandStatementBuilder;
 pub use hash::HashCommand;

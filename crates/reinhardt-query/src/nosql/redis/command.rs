@@ -9,6 +9,6 @@ use super::resp::RespCommand;
 /// Analogous to `QueryStatementBuilder` for SQL statements.
 /// All Redis command builders implement this trait.
 pub trait CommandStatementBuilder: Debug {
-    /// Build this command into a [`RespCommand`] ready for RESP3 serialization.
-    fn build(&self) -> RespCommand;
+	/// Build this command into a [`RespCommand`] ready for RESP3 serialization.
+	fn build(&self) -> RespCommand;
 }

@@ -812,7 +812,7 @@ fn generate_server_handler(
 										#di_crate::DiError::Authentication(m) => (401u16, m.clone()),
 										#di_crate::DiError::Authorization(m) => (403u16, m.clone()),
 										other => {
-											::tracing::error!(
+											#pages_crate_for_di::__private::tracing::error!(
 												error = ?other,
 												param = stringify!(#ty),
 												"Dependency injection failed",
@@ -839,7 +839,7 @@ fn generate_server_handler(
 										#di_crate::DiError::Authentication(m) => (401u16, m.clone()),
 										#di_crate::DiError::Authorization(m) => (403u16, m.clone()),
 										other => {
-											::tracing::error!(
+											#pages_crate_for_di::__private::tracing::error!(
 												error = ?other,
 												param = stringify!(#ty),
 												"Dependency injection failed",

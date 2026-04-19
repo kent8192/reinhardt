@@ -46,6 +46,10 @@
 //!   - Replays applied migrations to reconstruct schema state
 //!   - Enables accurate change detection without database introspection
 //!   - Used internally by `makemigrations` command
+//! - **Composite Primary Key Detection**: Autodetector emits `CreateCompositePrimaryKey`
+//!   when a model adds a `primary_key` constraint covering 2+ columns
+//! - **Sequence Reset Detection**: Autodetector emits `SetAutoIncrementValue`
+//!   when a model adds or changes the `sequence_reset` option
 //!
 //! ## Available Database Backends
 //!

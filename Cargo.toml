@@ -473,7 +473,7 @@ reinhardt-openapi-macros = { path = "crates/reinhardt-rest/openapi-macros", vers
 reinhardt-routers-macros = { path = "crates/reinhardt-urls/routers-macros", version = "0.1.0-rc.15" }
 
 # Web framework
-tokio = { version = "1.51.0", features = ["full"] }
+tokio = { version = "1.51.0", features = ["rt-multi-thread", "sync", "time", "macros", "net", "io-util"] }
 tokio-stream = "0.1.18"
 futures = "0.3.32"
 futures-util = "0.3.32"
@@ -624,3 +624,9 @@ aquamarine = "0.6.0"
 # Fixed in: num-bigint-dig v0.9.0+
 # Action: Upgrade when rsa or sqlx upgrades their dependencies
 # (private vec macro issue, see https://github.com/rust-lang/rust/issues/120192)
+
+[profile.dev]
+debug = 1
+
+[profile.test]
+debug = 1

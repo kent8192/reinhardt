@@ -172,6 +172,7 @@ hyper = { workspace = true }
 async-trait = "0.1"
 uuid = { version = "1.7", features = ["v4", "v7"] }
 tokio = { workspace = true }
+tracing = { workspace = true }
 
 [build-dependencies]
 cfg_aliases = "0.2"

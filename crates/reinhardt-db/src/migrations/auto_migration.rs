@@ -278,7 +278,9 @@ impl AutoMigrationGenerator {
 				| Operation::CreateSchema { .. }
 				| Operation::DropSchema { .. }
 				| Operation::CreateExtension { .. }
-				| Operation::BulkLoad { .. } => None, // Cannot rollback - data loading is not reversible
+				| Operation::BulkLoad { .. }
+				| Operation::SetAutoIncrementValue { .. }
+				| Operation::CreateCompositePrimaryKey { .. } => None, // Cannot rollback - data loading / counter / constraint ops are not auto-reversible
 			})
 			.collect()
 	}

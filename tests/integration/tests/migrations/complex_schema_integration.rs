@@ -1328,26 +1328,69 @@ async fn test_composite_primary_key_creation(
 	// Execute: Create table with composite primary key
 	// ============================================================================
 
-	// Create OrderItems table with composite PK (order_id, line_number)
-	// Note: reinhardt doesn't have native Operation for composite PK yet,
-	// so we use RunSQL for now
+	// Create OrderItems table with composite PK (order_id, line_number).
+	// Build it in three operations so every schema change flows through a
+	// native `Operation` variant: CREATE TABLE, then attach the composite PK,
+	// then add the FK constraint.
 	let create_order_items_migration = create_test_migration(
 		"commerce",
 		"0002_create_order_items",
-		vec![Operation::RunSQL {
-			sql: leak_str(
-				"CREATE TABLE order_items (
-					order_id INTEGER NOT NULL,
-					line_number INTEGER NOT NULL,
-					product_name VARCHAR(200) NOT NULL,
-					quantity INTEGER NOT NULL,
-					price DECIMAL(10, 2) NOT NULL,
-					PRIMARY KEY (order_id, line_number),
-					FOREIGN KEY (order_id) REFERENCES orders(id) ON DELETE CASCADE
-				)",
-			),
-			reverse_sql: Some("DROP TABLE order_items"),
-		}],
+		vec![
+			Operation::CreateTable {
+				name: leak_str("order_items").to_string(),
+				columns: vec![
+					ColumnDefinition {
+						name: "order_id".to_string(),
+						type_definition: FieldType::Integer,
+						not_null: true,
+						unique: false,
+						primary_key: false,
+						auto_increment: false,
+						default: None,
+					},
+					ColumnDefinition {
+						name: "line_number".to_string(),
+						type_definition: FieldType::Integer,
+						not_null: true,
+						unique: false,
+						primary_key: false,
+						auto_increment: false,
+						default: None,
+					},
+					create_basic_column("product_name", FieldType::VarChar(Some(200))),
+					ColumnDefinition {
+						name: "quantity".to_string(),
+						type_definition: FieldType::Integer,
+						not_null: true,
+						unique: false,
+						primary_key: false,
+						auto_increment: false,
+						default: None,
+					},
+					ColumnDefinition {
+						name: "price".to_string(),
+						type_definition: FieldType::Custom("DECIMAL(10, 2)".to_string()),
+						not_null: true,
+						unique: false,
+						primary_key: false,
+						auto_increment: false,
+						default: None,
+					},
+				],
+			},
+			Operation::CreateCompositePrimaryKey {
+				table: "order_items".to_string(),
+				columns: vec!["order_id".to_string(), "line_number".to_string()],
+				constraint_name: None,
+			},
+			Operation::AddConstraint {
+				table: "order_items".to_string(),
+				constraint_sql:
+					"CONSTRAINT order_items_order_id_fkey FOREIGN KEY (order_id) \
+					 REFERENCES orders(id) ON DELETE CASCADE"
+						.to_string(),
+			},
+		],
 	);
 
 	executor

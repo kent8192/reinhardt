@@ -40,6 +40,7 @@ pub fn format_date(date: &DateTime<Utc>, format: &str) -> String {
 /// let negative = format_number(-123456.78, 2);
 /// assert_eq!(negative, "-123,456.78");
 /// ```
+#[deprecated(note = "use `reinhardt_utils::utils_core::text::floatcomma` instead")]
 pub fn format_number(number: f64, decimal_places: usize) -> String {
 	// Handle IEEE 754 special values explicitly
 	if number.is_nan() {

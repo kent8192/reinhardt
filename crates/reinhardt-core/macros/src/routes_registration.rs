@@ -141,7 +141,10 @@ fn is_inject_attr(attr: &syn::Attribute) -> bool {
 /// Extract the inner type `T` from `Depends<T>`.
 ///
 /// Returns `Some(T)` if the type is `Depends<T>`, `None` otherwise.
-fn extract_depends_inner_type(ty: &syn::Type) -> Option<&syn::Type> {
+/// A sibling copy lives in `crates/reinhardt-pages/macros/src/server_fn.rs`;
+/// the two proc-macro crates cannot share code directly, so keep both copies
+/// in sync.
+pub(crate) fn extract_depends_inner_type(ty: &syn::Type) -> Option<&syn::Type> {
 	if let syn::Type::Path(type_path) = ty {
 		let last_segment = type_path.path.segments.last()?;
 		if last_segment.ident == "Depends"
@@ -546,7 +549,7 @@ pub(crate) fn routes_impl(args: TokenStream, input: ItemFn) -> Result<TokenStrea
 				.collect();
 
 			// Generate per-app client URL resolver structs.
-			// When #[url_patterns(client = true, app = "...")] is used,
+			// When #[url_patterns(InstalledApp::<variant>, mode = client)] is used,
 			// typed methods are generated via __for_each_client_url_resolver
 			// (same pattern as server-side). A fallback resolve() method is
 			// always available for runtime string-based resolution.
@@ -606,7 +609,8 @@ pub(crate) fn routes_impl(args: TokenStream, input: ItemFn) -> Result<TokenStrea
 
 						// Invoke __for_each_client_url_resolver to populate typed methods.
 						// This is a no-op if the app has no client_url_resolvers module
-						// (i.e., does not use #[url_patterns(client = true)]).
+						// (i.e., does not use #[url_patterns(..., mode = client)] or
+						// #[url_patterns(..., mode = unified)]).
 						crate::apps::#app::urls::client_url_resolvers::__for_each_client_url_resolver!(
 							#gen_client_method_macro, #app,
 							crate::apps::#app::urls::client_url_resolvers

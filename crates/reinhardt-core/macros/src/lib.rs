@@ -17,7 +17,7 @@ use syn::{ItemFn, ItemStruct, parse_macro_input};
 mod action;
 mod admin;
 mod api_view;
-// client_routes module removed: superseded by #[url_patterns(client = true)]
+// client_routes module removed: superseded by #[url_patterns(InstalledApp::<variant>, mode = client)]
 mod app_config_attribute;
 mod app_config_derive;
 mod apply_update_attribute;

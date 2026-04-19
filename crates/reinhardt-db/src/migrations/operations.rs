@@ -53,7 +53,7 @@ pub use special::{RunCode, RunSQL, StateOperation};
 // Legacy types for backward compatibility
 // These are maintained from the original operations.rs
 use super::{FieldState, FieldType, ModelState, ProjectState};
-use pg_escape::quote_identifier;
+use pg_escape::{quote_identifier, quote_literal};
 use reinhardt_query::prelude::{
 	Alias, AlterTableStatement, ColumnDef, CreateIndexStatement, CreateTableStatement,
 	DropIndexStatement, DropTableStatement, Query, SimpleExpr, Value,
@@ -1113,6 +1113,51 @@ pub enum Operation {
 		#[serde(default)]
 		options: BulkLoadOptions,
 	},
+	/// Reset the auto-increment counter for a table
+	///
+	/// Sets the next value produced by the table's auto-increment mechanism.
+	/// Typical uses include seeding IDs after a bulk import or shifting the
+	/// sequence above a range reserved for historical data.
+	///
+	/// # Backend Behavior
+	///
+	/// - **PostgreSQL / CockroachDB**: `SELECT setval(pg_get_serial_sequence('{table}', '{column}'), {value}, false)`
+	///   (resolves the sequence dynamically so both default `SERIAL` conventions
+	///   and user-defined sequence names work; `false` makes the NEXT generated
+	///   value equal `{value}`).
+	/// - **MySQL**: `ALTER TABLE {table} AUTO_INCREMENT = {value}`.
+	/// - **SQLite**: `INSERT OR REPLACE INTO sqlite_sequence(name, seq) VALUES (...)`
+	///   (robust against tables that have not yet inserted any rows, where a
+	///   simple `UPDATE` would silently no-op).
+	SetAutoIncrementValue {
+		/// The table whose auto-increment counter should be set.
+		table: String,
+		/// The auto-increment column (used to resolve the backing sequence
+		/// on PostgreSQL / CockroachDB).
+		column: String,
+		/// The next value the counter should produce.
+		value: i64,
+	},
+	/// Create a composite (multi-column) PRIMARY KEY constraint on an existing table
+	///
+	/// Emits `ALTER TABLE {table} ADD CONSTRAINT {name} PRIMARY KEY ({cols})`
+	/// on every supported backend. When `constraint_name` is `None` the name
+	/// defaults to `{table}_pkey`, matching PostgreSQL's conventional
+	/// auto-generated identifier.
+	///
+	/// `columns` must be non-empty; emitting an empty column list would
+	/// produce invalid SQL and is rejected as an `InvalidMigration` error at
+	/// SQL generation time.
+	CreateCompositePrimaryKey {
+		/// The table to add the composite primary key to.
+		table: String,
+		/// The ordered list of columns participating in the primary key.
+		columns: Vec<String>,
+		/// Optional explicit constraint name. Defaults to `{table}_pkey`
+		/// when `None`.
+		#[serde(default, skip_serializing_if = "Option::is_none")]
+		constraint_name: Option<String>,
+	},
 }
 
 /// Default value provider for serde (returns true)
@@ -1232,7 +1277,12 @@ impl Operation {
 			| Operation::RunRust { .. }
 			| Operation::AlterTableComment { .. }
 			| Operation::AlterUniqueTogether { .. }
-			| Operation::AlterModelOptions { .. } => {}
+			| Operation::AlterModelOptions { .. }
+			| Operation::SetAutoIncrementValue { .. }
+			| Operation::CreateCompositePrimaryKey { .. } => {
+				// Counter/constraint-level ops do not affect ProjectState
+				// (they track model-level structure only).
+			}
 			Operation::MoveModel {
 				model_name,
 				from_app,
@@ -1960,7 +2010,115 @@ impl Operation {
 				format,
 				options,
 			} => Self::bulk_load_to_sql(table, source, format, options, dialect),
+			Operation::SetAutoIncrementValue {
+				table,
+				column,
+				value,
+			} => Self::set_auto_increment_to_sql(table, column, *value, dialect),
+			Operation::CreateCompositePrimaryKey {
+				table,
+				columns,
+				constraint_name,
+			} => Self::create_composite_pk_to_sql(table, columns, constraint_name.as_deref()),
 		}
+	}
+
+	/// Generate `SetAutoIncrementValue` SQL for each dialect
+	///
+	/// PostgreSQL / CockroachDB resolve the backing sequence via
+	/// `pg_get_serial_sequence(...)` so that both the default
+	/// `{table}_{column}_seq` naming and user-customized sequences work without
+	/// the caller having to know the sequence name.
+	fn set_auto_increment_to_sql(
+		table: &str,
+		column: &str,
+		value: i64,
+		dialect: &SqlDialect,
+	) -> String {
+		match dialect {
+			SqlDialect::Postgres | SqlDialect::Cockroachdb => {
+				// pg_get_serial_sequence takes a regclass literal for the table
+				// and a text literal for the column. `setval(..., value, false)`
+				// makes the NEXT generated value equal `value`, matching the
+				// intent of "set the auto-increment to <value>".
+				format!(
+					"SELECT setval(pg_get_serial_sequence({}, {}), {}, false);",
+					quote_literal(table),
+					quote_literal(column),
+					value
+				)
+			}
+			SqlDialect::Mysql => {
+				format!(
+					"ALTER TABLE {} AUTO_INCREMENT = {};",
+					quote_identifier(table),
+					value
+				)
+			}
+			SqlDialect::Sqlite => {
+				// INSERT OR REPLACE so the statement works whether or not a
+				// sqlite_sequence row already exists for the table. UPDATE
+				// would silently no-op on fresh tables that have never had
+				// a row inserted.
+				format!(
+					"INSERT OR REPLACE INTO sqlite_sequence(name, seq) VALUES ({}, {});",
+					quote_literal(table),
+					value
+				)
+			}
+		}
+	}
+
+	/// Generate `CreateCompositePrimaryKey` SQL
+	///
+	/// Produces `ALTER TABLE ... ADD CONSTRAINT ... PRIMARY KEY (...)` for
+	/// every supported backend. Emits guaranteed-fail SQL if the column list
+	/// is empty so the migration aborts at execution time instead of silently
+	/// succeeding.
+	///
+	/// NOTE: The infallible `String` return type is shared with every other
+	/// `to_sql` arm; converting the entire pipeline to `Result` would cascade
+	/// through dozens of call sites. Emitting syntactically invalid SQL
+	/// (containing a `RAISE` via `SELECT 1/0`) guarantees the database rejects
+	/// the statement, which surfaces the error through the existing execution
+	/// error path. Ideal implementation would change the signature to
+	/// `Result<String, MigrationError>`.
+	fn create_composite_pk_to_sql(
+		table: &str,
+		columns: &[String],
+		constraint_name: Option<&str>,
+	) -> String {
+		if columns.is_empty() {
+			// Guaranteed-fail SQL: every supported backend evaluates `1/0` as a
+			// division-by-zero runtime error, halting the migration with a
+			// visible message rather than silently succeeding on a comment.
+			return format!(
+				"SELECT 1/0 AS \"CreateCompositePrimaryKey on {} requires at least one column\";",
+				table.replace('"', "\"\"")
+			);
+		}
+
+		let default_name;
+		let name: &str = match constraint_name {
+			Some(n) => n,
+			None => {
+				default_name = format!("{}_pkey", table);
+				&default_name
+			}
+		};
+
+		let quoted_columns = columns
+			.iter()
+			.map(|c| quote_identifier(c).to_string())
+			.collect::<Vec<_>>()
+			.join(", ");
+
+		format!(
+			"ALTER TABLE {} ADD CONSTRAINT {} PRIMARY KEY ({});",
+			quote_identifier(table),
+			quote_identifier(name),
+			quoted_columns
+		)
 	}
 
 	/// Generate bulk load SQL for different dialects
@@ -3491,6 +3649,32 @@ impl Operation {
 					table, source, format, options,
 				))
 			}
+			Operation::SetAutoIncrementValue { table, .. } => {
+				// `to_statement` has no dialect context, but `SetAutoIncrementValue`
+				// renders fundamentally different SQL per backend (PostgreSQL
+				// `setval`, MySQL `ALTER TABLE AUTO_INCREMENT`, SQLite
+				// `sqlite_sequence` upsert). Silently emitting PostgreSQL-only
+				// SQL here would break MySQL/SQLite migrations.
+				//
+				// Emit guaranteed-fail SQL that aborts execution with a visible
+				// diagnostic pointing callers at the dialect-aware `to_sql`
+				// path. Converting the signature to
+				// `Result<OperationStatement, MigrationError>` would cascade
+				// through dozens of call sites.
+				OperationStatement::RawSql(format!(
+					"SELECT 1/0 AS \"SetAutoIncrementValue on {} requires dialect-aware rendering; call Operation::to_sql(&dialect) instead of to_statement()\";",
+					table.replace('"', "\"\"")
+				))
+			}
+			Operation::CreateCompositePrimaryKey {
+				table,
+				columns,
+				constraint_name,
+			} => OperationStatement::RawSql(Self::create_composite_pk_to_sql(
+				table,
+				columns,
+				constraint_name.as_deref(),
+			)),
 		}
 	}
 
@@ -3966,6 +4150,14 @@ impl MigrationOperation for Operation {
 			Operation::BulkLoad { table, .. } => {
 				Some(format!("bulk_load_{}", table.to_lowercase()))
 			}
+			Operation::SetAutoIncrementValue { table, column, .. } => Some(format!(
+				"set_auto_increment_{}_{}",
+				table.to_lowercase(),
+				column.to_lowercase()
+			)),
+			Operation::CreateCompositePrimaryKey { table, .. } => {
+				Some(format!("composite_pk_{}", table.to_lowercase()))
+			}
 		}
 	}
 
@@ -4054,6 +4246,16 @@ impl MigrationOperation for Operation {
 				};
 				format!("Bulk load data into {} from {}", table, source_desc)
 			}
+			Operation::SetAutoIncrementValue {
+				table,
+				column,
+				value,
+			} => format!("Set auto-increment of {}.{} to {}", table, column, value),
+			Operation::CreateCompositePrimaryKey { table, columns, .. } => format!(
+				"Create composite primary key on {} ({})",
+				table,
+				columns.join(", ")
+			),
 		}
 	}
 
@@ -5658,6 +5860,179 @@ mod tests {
 		assert_eq!(
 			sql, "TRUNCATE TABLE \"user-data\";",
 			"Table name must be quoted"
+		);
+	}
+
+	// ========================================================================
+	// SetAutoIncrementValue — per-backend SQL rendering
+	// ========================================================================
+
+	#[rstest]
+	#[case::postgres(SqlDialect::Postgres)]
+	#[case::cockroachdb(SqlDialect::Cockroachdb)]
+	fn test_set_auto_increment_postgres_uses_setval(#[case] dialect: SqlDialect) {
+		// Arrange
+		let op = Operation::SetAutoIncrementValue {
+			table: "users".to_string(),
+			column: "id".to_string(),
+			value: 1000,
+		};
+
+		// Act
+		let sql = op.to_sql(&dialect);
+
+		// Assert
+		assert_eq!(
+			sql,
+			"SELECT setval(pg_get_serial_sequence('users', 'id'), 1000, false);"
+		);
+	}
+
+	#[test]
+	fn test_set_auto_increment_mysql_alters_table() {
+		// Arrange
+		let op = Operation::SetAutoIncrementValue {
+			table: "users".to_string(),
+			column: "id".to_string(),
+			value: 1000,
+		};
+
+		// Act
+		let sql = op.to_sql(&SqlDialect::Mysql);
+
+		// Assert: identifier quoting uses pg_escape's `quote_identifier`
+		// uniformly across dialects (matches convention used elsewhere in
+		// this module, e.g. AlterTableComment). pg_escape omits quotes when
+		// the identifier needs no escaping.
+		assert_eq!(sql, "ALTER TABLE users AUTO_INCREMENT = 1000;");
+	}
+
+	#[test]
+	fn test_set_auto_increment_sqlite_upserts_sqlite_sequence() {
+		// Arrange
+		let op = Operation::SetAutoIncrementValue {
+			table: "users".to_string(),
+			column: "id".to_string(),
+			value: 1000,
+		};
+
+		// Act
+		let sql = op.to_sql(&SqlDialect::Sqlite);
+
+		// Assert: INSERT OR REPLACE is robust vs. UPDATE which no-ops when
+		// the sqlite_sequence row does not yet exist.
+		assert_eq!(
+			sql,
+			"INSERT OR REPLACE INTO sqlite_sequence(name, seq) VALUES ('users', 1000);"
+		);
+	}
+
+	#[test]
+	fn test_set_auto_increment_postgres_escapes_literals() {
+		// Arrange: embedded single quote must be doubled to avoid injection.
+		let op = Operation::SetAutoIncrementValue {
+			table: "user's".to_string(),
+			column: "id".to_string(),
+			value: 42,
+		};
+
+		// Act
+		let sql = op.to_sql(&SqlDialect::Postgres);
+
+		// Assert
+		assert!(
+			sql.contains("'user''s'"),
+			"single quote in table name must be escaped: {}",
+			sql
+		);
+	}
+
+	// ========================================================================
+	// CreateCompositePrimaryKey — SQL rendering and edge cases
+	// ========================================================================
+
+	#[rstest]
+	#[case::postgres(SqlDialect::Postgres)]
+	#[case::mysql(SqlDialect::Mysql)]
+	#[case::sqlite(SqlDialect::Sqlite)]
+	#[case::cockroachdb(SqlDialect::Cockroachdb)]
+	fn test_composite_pk_default_name(#[case] dialect: SqlDialect) {
+		// Arrange
+		let op = Operation::CreateCompositePrimaryKey {
+			table: "order_items".to_string(),
+			columns: vec!["order_id".to_string(), "line_number".to_string()],
+			constraint_name: None,
+		};
+
+		// Act
+		let sql = op.to_sql(&dialect);
+
+		// Assert
+		assert!(
+			sql.contains("ALTER TABLE"),
+			"SQL should use ALTER TABLE: {}",
+			sql
+		);
+		assert!(
+			sql.contains("ADD CONSTRAINT"),
+			"SQL should add a named constraint: {}",
+			sql
+		);
+		assert!(
+			sql.contains("PRIMARY KEY"),
+			"SQL should add PRIMARY KEY: {}",
+			sql
+		);
+		assert!(
+			sql.contains("order_items_pkey"),
+			"Default constraint name should be table_pkey: {}",
+			sql
+		);
+		assert!(
+			sql.contains("order_id") && sql.contains("line_number"),
+			"Both PK columns must appear: {}",
+			sql
+		);
+	}
+
+	#[test]
+	fn test_composite_pk_custom_name_and_quoting() {
+		// Arrange
+		let op = Operation::CreateCompositePrimaryKey {
+			table: "tbl".to_string(),
+			columns: vec!["a".to_string(), "b".to_string()],
+			constraint_name: Some("my_pk".to_string()),
+		};
+
+		// Act
+		let sql = op.to_sql(&SqlDialect::Postgres);
+
+		// Assert: pg_escape omits quotes for identifiers that need no escaping.
+		assert_eq!(
+			sql,
+			"ALTER TABLE tbl ADD CONSTRAINT my_pk PRIMARY KEY (a, b);"
+		);
+	}
+
+	#[test]
+	fn test_composite_pk_empty_columns_produces_failing_sql() {
+		// Arrange: empty column list is invalid SQL; we emit guaranteed-fail
+		// SQL (`SELECT 1/0`) rather than a silent comment so the migration
+		// aborts at execution time with a visible error.
+		let op = Operation::CreateCompositePrimaryKey {
+			table: "tbl".to_string(),
+			columns: vec![],
+			constraint_name: None,
+		};
+
+		// Act
+		let sql = op.to_sql(&SqlDialect::Postgres);
+
+		// Assert
+		assert!(
+			sql.contains("1/0") && sql.contains("requires at least one column"),
+			"Empty column list must emit guaranteed-fail SQL with diagnostic: {}",
+			sql
 		);
 	}
 }

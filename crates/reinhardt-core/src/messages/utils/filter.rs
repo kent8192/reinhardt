@@ -5,6 +5,43 @@
 use crate::messages::levels::Level;
 use crate::messages::message::Message;
 
+/// Filter messages with a custom predicate
+///
+/// Generic filter function that replaces the specific `filter_by_min_level`,
+/// `filter_by_max_level`, and `filter_by_level` functions.
+///
+/// # Examples
+///
+/// ```
+/// use reinhardt_core::messages::utils::filter::filter_messages;
+/// use reinhardt_core::messages::{Message, Level};
+///
+/// let messages = vec![
+///     Message::debug("Debug message"),
+///     Message::info("Info message"),
+///     Message::warning("Warning message"),
+///     Message::error("Error message"),
+/// ];
+///
+/// // Filter by minimum level
+/// let filtered = filter_messages(&messages, |msg| msg.level >= Level::Info);
+/// assert_eq!(filtered.len(), 3);
+///
+/// // Filter by exact level
+/// let warnings = filter_messages(&messages, |msg| msg.level == Level::Warning);
+/// assert_eq!(warnings.len(), 1);
+/// ```
+pub fn filter_messages(
+	messages: &[Message],
+	mut predicate: impl FnMut(&Message) -> bool,
+) -> Vec<Message> {
+	messages
+		.iter()
+		.filter(|msg| predicate(msg))
+		.cloned()
+		.collect()
+}
+
 /// Filter messages by minimum level
 ///
 /// Returns only messages that have a level greater than or equal to the specified minimum level.
@@ -26,6 +63,7 @@ use crate::messages::message::Message;
 /// // Only Info, Warning, and Error messages are included
 /// assert_eq!(filtered.len(), 3);
 /// ```
+#[deprecated(note = "use `filter_messages` with a closure instead")]
 pub fn filter_by_min_level(messages: &[Message], min_level: Level) -> Vec<Message> {
 	messages
 		.iter()
@@ -55,6 +93,7 @@ pub fn filter_by_min_level(messages: &[Message], min_level: Level) -> Vec<Messag
 /// assert_eq!(filtered.len(), 1);
 /// assert_eq!(filtered[0].text, "Warning message");
 /// ```
+#[deprecated(note = "use `filter_messages` with a closure instead")]
 pub fn filter_by_level(messages: &[Message], level: Level) -> Vec<Message> {
 	messages
 		.iter()
@@ -84,6 +123,7 @@ pub fn filter_by_level(messages: &[Message], level: Level) -> Vec<Message> {
 /// // Only Debug and Info messages are included
 /// assert_eq!(filtered.len(), 2);
 /// ```
+#[deprecated(note = "use `filter_messages` with a closure instead")]
 pub fn filter_by_max_level(messages: &[Message], max_level: Level) -> Vec<Message> {
 	messages
 		.iter()
@@ -153,6 +193,7 @@ pub fn filter_by_tag(messages: &[Message], tag: &str) -> Vec<Message> {
 }
 
 #[cfg(test)]
+#[allow(deprecated)] // tests exercise deprecated functions for backward-compat coverage
 mod tests {
 	use super::*;
 

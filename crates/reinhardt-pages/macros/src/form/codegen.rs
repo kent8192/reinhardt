@@ -1424,12 +1424,15 @@ fn generate_bind_listener(
 	}
 }
 
-/// Generates the validate method.
+/// Generates the validate method (server-side).
+///
+/// Only rules whose scope includes server-side execution are emitted; rules
+/// scoped strictly to the client (`#[client(on = ...)]`) are excluded.
 fn generate_validate_method(macro_ast: &TypedFormMacro, _pages_crate: &TokenStream) -> TokenStream {
 	let validators: Vec<TokenStream> = macro_ast
 		.validators
 		.iter()
-		.flat_map(|v| generate_validator_rules(&v.field_name, &v.rules))
+		.flat_map(|v| generate_server_validator_rules(&v.field_name, &v.rules))
 		.collect();
 
 	if validators.is_empty() {
@@ -1453,13 +1456,17 @@ fn generate_validate_method(macro_ast: &TypedFormMacro, _pages_crate: &TokenStre
 	}
 }
 
-/// Generates validator rule checks.
-fn generate_validator_rules(
+/// Generates server-side validation code for rules that include server scope.
+///
+/// Rules with scope `Both`, `Server`, or `ServerAndClient { .. }` are included;
+/// rules with scope `Client { .. }` are excluded (they fire only on the client).
+fn generate_server_validator_rules(
 	field_name: &syn::Ident,
 	rules: &[TypedValidatorRule],
 ) -> Vec<TokenStream> {
 	rules
 		.iter()
+		.filter(|rule| rule.scope.includes_server())
 		.map(|rule| {
 			let condition = &rule.condition;
 			let message = &rule.message;

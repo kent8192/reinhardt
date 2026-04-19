@@ -27,6 +27,8 @@ jobs:
       )
     runs-on: ubuntu-latest
     steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
       - uses: ./.github/actions/announce-breaking-change
         with:
           source-repo: reinhardt-web

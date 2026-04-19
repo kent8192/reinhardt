@@ -840,17 +840,19 @@ pub fn head(input: TokenStream) -> TokenStream {
 ///         },
 ///     },
 ///
-///     validators: {               // Optional server-side validators
+///     validators: {               // Optional unified validation rules
 ///         field_name: [
-///             |v| !v.is_empty() => "Error message",
+///             |v| !v.is_empty() => "Error message",                  // both (default)
+///             #[server]
+///             |v| !is_reserved(v) => "Reserved value",                // server only
+///             #[client(on = input)]
+///             |v| v.len() <= 100 => "Too long",                       // client only (on input)
 ///         ],
 ///     },
-///
-///     client_validators: {        // Optional client-side validators
-///         field_name: [
-///             "value.length > 0" => "Error message",
-///         ],
-///     },
+///     // NOTE: `.validate()` currently executes only rules scoped to the
+///     // server (the default `[server, client]` scope and `#[server]`).
+///     // `#[client(...)]`-only rules are parsed and validated at compile
+///     // time but are not emitted to client-side code yet.
 /// }
 /// ```
 ///
@@ -1133,7 +1135,10 @@ pub fn head(input: TokenStream) -> TokenStream {
 ///
 /// ## Client-Side Validators
 ///
-/// Client-side validators run in the browser using JavaScript expressions.
+/// Client-side validators are written as Rust closures annotated with
+/// `#[client(on = input)]` or `#[client(on = blur)]`. They share the same
+/// `validators:` block as server-side rules; the `#[client(...)]` attribute
+/// marks the rule as intended to run in the browser on the given DOM event.
 ///
 /// ```ignore
 /// form! {
@@ -1141,14 +1146,22 @@ pub fn head(input: TokenStream) -> TokenStream {
 ///     action: "/api/submit",
 ///     fields: { email: EmailField { required } },
 ///
-///     client_validators: {
+///     validators: {
 ///         email: [
-///             "value.length > 0" => "Email is required",
-///             "value.includes('@')" => "Invalid email format",
+///             #[client(on = input)]
+///             |v| !v.is_empty() => "Email is required",
+///             #[client(on = blur)]
+///             |v| v.contains('@') => "Invalid email format",
 ///         ],
 ///     },
 /// }
 /// ```
+///
+/// **Current runtime behavior (0.1.0-rc series):** `#[client(...)]`-only
+/// rules are parsed and checked at compile time but are not yet executed
+/// in the browser. The server-side `.validate()` entry point intentionally
+/// filters them out so that client-only rules do not silently run on the
+/// server. Browser-side emission will land in a follow-up.
 ///
 /// # Examples
 ///
@@ -1186,11 +1199,9 @@ pub fn head(input: TokenStream) -> TokenStream {
 ///         username: [
 ///             |v| !v.trim().is_empty() => "Username is required",
 ///         ],
-///     },
-///
-///     client_validators: {
 ///         password: [
-///             "value.length >= 8" => "Password must be at least 8 characters",
+///             // Unscoped rule: runs on both server and client.
+///             |v| v.len() >= 8 => "Password must be at least 8 characters",
 ///         ],
 ///     },
 /// };

@@ -69,6 +69,12 @@ fn test_injectable_compile_pass_cases() {
 
 	// Test: #[injectable_factory] with #[inject] parameters (T and Arc<T>)
 	t.pass("tests/di/ui/pass/injectable_factory_inject_params.rs");
+
+	// Test: Depends<FactoryType> in #[get] route macro (regression guard for #3723)
+	t.pass("tests/di/ui/pass/factory_depends_in_route_macro.rs");
+
+	// Test: Depends<FactoryType> in #[server_fn] (regression guard for #3723)
+	t.pass("tests/di/ui/pass/factory_depends_in_server_fn.rs");
 }
 
 // Note: Compile-pass tests for #[injectable_factory] are NOT possible via trybuild

@@ -836,9 +836,57 @@ mod tests {
 ///     const LABEL: &'static str = "auth";
 /// }
 /// ```
+///
+/// # Enum-Style Implementors
+///
+/// `AppLabel` can also be implemented on enums where each variant maps
+/// to a different label. In that case, declare [`LABEL`](AppLabel::LABEL)
+/// as `""` explicitly (the trait intentionally has no default, so the
+/// compiler enforces that you make a choice) and override
+/// [`path`](AppLabel::path) to dispatch on `self`. The `installed_apps!`
+/// macro uses this pattern for the generated `InstalledApp` enum.
+///
+/// ```
+/// use reinhardt_apps::apps::AppLabel;
+///
+/// #[derive(Clone, Copy)]
+/// enum MyApps {
+///     Auth,
+///     Blog,
+/// }
+///
+/// impl AppLabel for MyApps {
+///     const LABEL: &'static str = "";
+///
+///     fn path(&self) -> &'static str {
+///         match self {
+///             MyApps::Auth => "auth",
+///             MyApps::Blog => "blog",
+///         }
+///     }
+/// }
+///
+/// assert_eq!(MyApps::Auth.path(), "auth");
+/// assert_eq!(MyApps::Blog.path(), "blog");
+/// ```
 pub trait AppLabel {
-	/// The unique label for this application
+	/// The unique label for this application when the implementor is a
+	/// type-level marker (unit struct). Enum-style implementors that
+	/// dispatch on `self` via [`path`](AppLabel::path) should still
+	/// declare `const LABEL: &'static str = "";` explicitly; the trait
+	/// intentionally has no default so that forgetting both `LABEL` *and*
+	/// a `path()` override fails at compile time rather than silently
+	/// producing an empty label at runtime.
 	const LABEL: &'static str;
+
+	/// Returns the registered path/label string for this specific value.
+	///
+	/// Default implementation returns [`LABEL`](AppLabel::LABEL), which
+	/// is the correct behavior for type-level marker implementors. Enum
+	/// implementors must override this method to dispatch on `self`.
+	fn path(&self) -> &'static str {
+		Self::LABEL
+	}
 }
 
 impl Apps {

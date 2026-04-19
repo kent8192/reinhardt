@@ -824,6 +824,37 @@ impl ToTokens for Operation {
 					}
 				});
 			}
+			Operation::SetAutoIncrementValue {
+				table,
+				column,
+				value,
+			} => {
+				tokens.extend(quote! {
+					Operation::SetAutoIncrementValue {
+						table: #table.to_string(),
+						column: #column.to_string(),
+						value: #value,
+					}
+				});
+			}
+			Operation::CreateCompositePrimaryKey {
+				table,
+				columns,
+				constraint_name,
+			} => {
+				let columns_iter = columns.iter();
+				let constraint_token = match constraint_name {
+					Some(n) => quote! { Some(#n.to_string()) },
+					None => quote! { None },
+				};
+				tokens.extend(quote! {
+					Operation::CreateCompositePrimaryKey {
+						table: #table.to_string(),
+						columns: vec![#(#columns_iter.to_string()),*],
+						constraint_name: #constraint_token,
+					}
+				});
+			}
 		}
 	}
 }

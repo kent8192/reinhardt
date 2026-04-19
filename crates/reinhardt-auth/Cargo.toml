@@ -137,3 +137,6 @@ filetime = "0.2"
 reinhardt-query = { workspace = true }
 reinhardt-db = {workspace = true, features = ["orm"]}
 reinhardt-macros = { workspace = true }
+wiremock = "0.6"
+rsa = { version = "0.9", features = ["sha2"] }
+rand_core = { version = "0.6", features = ["std", "getrandom"] }

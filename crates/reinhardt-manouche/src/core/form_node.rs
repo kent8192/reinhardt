@@ -33,11 +33,9 @@
 //!         username: [
 //!             |v| !v.trim().is_empty() => "Username cannot be empty",
 //!         ],
-//!     },
-//!
-//!     client_validators: {
 //!         password: [
-//!             "value.length >= 8" => "Password must be at least 8 characters",
+//!             #[client(on = input)]
+//!             |v| v.len() >= 8 => "Password must be at least 8 characters",
 //!         ],
 //!     },
 //! }
@@ -93,10 +91,9 @@ pub struct FormMacro {
 	pub slots: Option<FormSlots>,
 	/// Field definitions (can include field groups)
 	pub fields: Vec<FormFieldEntry>,
-	/// Server-side validators
+	/// Unified validators. Each rule carries an optional scope annotation
+	/// (`#[server]` / `#[client(on = ...)]`) that controls where it executes.
 	pub validators: Vec<FormValidator>,
-	/// Client-side validators (JavaScript expressions)
-	pub client_validators: Vec<ClientValidator>,
 	/// Span for error reporting
 	pub span: Span,
 }
@@ -628,7 +625,64 @@ impl FormFieldProperty {
 	}
 }
 
-/// Server-side validator definition.
+/// Client-side validation trigger event.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ClientTrigger {
+	/// Fire on form submit (default for `Both` scope).
+	Submit,
+	/// Fire on input event (real-time as user types).
+	Input,
+	/// Fire on blur event (when field loses focus).
+	Blur,
+}
+
+/// Validator execution scope.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ValidatorScope {
+	/// Runs on both server (`.validate()`) and client (submit). Default.
+	Both,
+	/// Server-side only (`.validate()`).
+	Server,
+	/// Client-side only, with specified trigger.
+	Client {
+		/// Client-side trigger event.
+		trigger: ClientTrigger,
+	},
+	/// Both server and client, with specified client trigger.
+	ServerAndClient {
+		/// Client-side trigger event.
+		trigger: ClientTrigger,
+	},
+}
+
+impl ValidatorScope {
+	/// Returns `true` if this scope includes server-side execution.
+	pub fn includes_server(&self) -> bool {
+		matches!(
+			self,
+			Self::Both | Self::Server | Self::ServerAndClient { .. }
+		)
+	}
+
+	/// Returns `true` if this scope includes client-side execution.
+	pub fn includes_client(&self) -> bool {
+		matches!(
+			self,
+			Self::Both | Self::Client { .. } | Self::ServerAndClient { .. }
+		)
+	}
+
+	/// Returns the client trigger, if any.
+	pub fn client_trigger(&self) -> Option<&ClientTrigger> {
+		match self {
+			Self::Both => Some(&ClientTrigger::Submit),
+			Self::Client { trigger } | Self::ServerAndClient { trigger } => Some(trigger),
+			Self::Server => None,
+		}
+	}
+}
+
+/// Validator definition (unified server+client with scope annotations).
 #[derive(Debug, Clone)]
 pub enum FormValidator {
 	/// Field-level validator: `username: [|v| ... => "error"]`
@@ -649,33 +703,13 @@ pub enum FormValidator {
 	},
 }
 
-/// A single validation rule with closure and error message.
+/// A single validation rule with closure, error message, and execution scope.
 #[derive(Debug, Clone)]
 pub struct ValidatorRule {
+	/// Execution scope (default: `Both`). See `ValidatorScope`.
+	pub scope: ValidatorScope,
 	/// Validation closure expression
 	pub expr: ExprClosure,
-	/// Error message when validation fails
-	pub message: LitStr,
-	/// Span for error reporting
-	pub span: Span,
-}
-
-/// Client-side validator definition (JavaScript expressions).
-#[derive(Debug, Clone)]
-pub struct ClientValidator {
-	/// Field name to validate
-	pub field_name: Ident,
-	/// Validation rules
-	pub rules: Vec<ClientValidatorRule>,
-	/// Span for error reporting
-	pub span: Span,
-}
-
-/// A single client-side validation rule.
-#[derive(Debug, Clone)]
-pub struct ClientValidatorRule {
-	/// JavaScript expression for validation
-	pub js_expr: LitStr,
 	/// Error message when validation fails
 	pub message: LitStr,
 	/// Span for error reporting
@@ -1013,7 +1047,6 @@ impl FormMacro {
 			slots: None,
 			fields: Vec::new(),
 			validators: Vec::new(),
-			client_validators: Vec::new(),
 			span,
 		}
 	}

@@ -17,16 +17,15 @@ use std::collections::HashSet;
 use syn::{Error, Result};
 
 use crate::core::{
-	ClientValidator, ClientValidatorRule, FormAction, FormCallbacks, FormDerived, FormFieldDef,
-	FormFieldEntry, FormFieldGroup, FormFieldProperty, FormMacro, FormMethod, FormSlots, FormState,
-	FormSubmitButtonDef, FormValidator, FormWatch, IconAttr, IconChild, IconPosition,
-	TypedChoicesConfig, TypedClientValidator, TypedClientValidatorRule, TypedCustomAttr,
-	TypedDerivedItem, TypedFieldDisplay, TypedFieldStyling, TypedFieldType, TypedFieldValidation,
-	TypedFormAction, TypedFormCallbacks, TypedFormDerived, TypedFormFieldDef, TypedFormFieldEntry,
-	TypedFormFieldGroup, TypedFormMacro, TypedFormSlots, TypedFormState, TypedFormStyling,
-	TypedFormValidator, TypedFormWatch, TypedFormWatchItem, TypedIcon, TypedIconAttr,
-	TypedIconChild, TypedIconPosition, TypedSubmitButtonDef, TypedValidatorRule, TypedWidget,
-	TypedWrapper, TypedWrapperAttr, ValidatorRule,
+	FormAction, FormCallbacks, FormDerived, FormFieldDef, FormFieldEntry, FormFieldGroup,
+	FormFieldProperty, FormMacro, FormMethod, FormSlots, FormState, FormSubmitButtonDef,
+	FormValidator, FormWatch, IconAttr, IconChild, IconPosition, TypedChoicesConfig,
+	TypedCustomAttr, TypedDerivedItem, TypedFieldDisplay, TypedFieldStyling, TypedFieldType,
+	TypedFieldValidation, TypedFormAction, TypedFormCallbacks, TypedFormDerived, TypedFormFieldDef,
+	TypedFormFieldEntry, TypedFormFieldGroup, TypedFormMacro, TypedFormSlots, TypedFormState,
+	TypedFormStyling, TypedFormValidator, TypedFormWatch, TypedFormWatchItem, TypedIcon,
+	TypedIconAttr, TypedIconChild, TypedIconPosition, TypedSubmitButtonDef, TypedValidatorRule,
+	TypedWidget, TypedWrapper, TypedWrapperAttr, ValidatorRule,
 };
 
 /// Validates and transforms the FormMacro AST into a typed AST.
@@ -76,11 +75,8 @@ pub fn validate_form(ast: &FormMacro) -> Result<TypedFormMacro> {
 	// Transform fields
 	let fields = transform_fields(&ast.fields)?;
 
-	// Transform server-side validators
+	// Transform unified validators (scope filtering happens at codegen)
 	let validators = transform_validators(&ast.validators, &ast.fields)?;
-
-	// Transform client-side validators
-	let client_validators = transform_client_validators(&ast.client_validators, &ast.fields)?;
 
 	// The parser guarantees that `name` is Some after successful parsing.
 	let name = ast
@@ -103,7 +99,6 @@ pub fn validate_form(ast: &FormMacro) -> Result<TypedFormMacro> {
 		slots,
 		fields,
 		validators,
-		client_validators,
 		span: ast.span,
 	})
 }
@@ -1242,7 +1237,7 @@ fn transform_validators(
 	Ok(result)
 }
 
-/// Transforms a validator rule.
+/// Transforms a validator rule, propagating its execution scope.
 ///
 /// Converts the closure expression to a regular expression for code generation.
 fn transform_validator_rule(rule: &ValidatorRule) -> Result<TypedValidatorRule> {
@@ -1250,140 +1245,11 @@ fn transform_validator_rule(rule: &ValidatorRule) -> Result<TypedValidatorRule> 
 	let condition: syn::Expr = (*rule.expr.body).clone();
 
 	Ok(TypedValidatorRule {
+		scope: rule.scope.clone(),
 		condition,
 		message: rule.message.value(),
 		span: rule.span,
 	})
-}
-
-/// Transforms client-side validators.
-fn transform_client_validators(
-	validators: &[ClientValidator],
-	fields: &[FormFieldEntry],
-) -> Result<Vec<TypedClientValidator>> {
-	validators
-		.iter()
-		.map(|v| transform_client_validator(v, fields))
-		.collect()
-}
-
-/// Transforms a single client-side validator.
-fn transform_client_validator(
-	validator: &ClientValidator,
-	fields: &[FormFieldEntry],
-) -> Result<TypedClientValidator> {
-	// Validate that field exists (including in groups)
-	if !field_exists(fields, &validator.field_name) {
-		return Err(Error::new(
-			validator.field_name.span(),
-			format!(
-				"client validator references unknown field: '{}'",
-				validator.field_name
-			),
-		));
-	}
-
-	let rules = validator
-		.rules
-		.iter()
-		.map(transform_client_validator_rule)
-		.collect::<Result<Vec<_>>>()?;
-
-	Ok(TypedClientValidator {
-		field_name: validator.field_name.clone(),
-		rules,
-		span: validator.span,
-	})
-}
-
-/// Transforms a client validator rule.
-fn transform_client_validator_rule(rule: &ClientValidatorRule) -> Result<TypedClientValidatorRule> {
-	let js_condition = rule.js_expr.value();
-	validate_js_condition(&js_condition, rule.span)?;
-
-	Ok(TypedClientValidatorRule {
-		js_condition,
-		message: rule.message.value(),
-		span: rule.span,
-	})
-}
-
-/// Validates a JavaScript condition string for potential injection attacks.
-///
-/// This function checks for dangerous patterns that could be used for XSS attacks
-/// or arbitrary code execution when the condition is embedded in client-side code.
-///
-/// # Security Checks
-///
-/// - Dangerous global objects: `window`, `document`, `globalThis`
-/// - Code execution functions: code evaluation via `Function` constructor, timers
-/// - Network functions: `fetch`, `XMLHttpRequest`, `WebSocket`
-/// - Module system: `import`, `require`
-/// - Event handlers: `onerror`, `onload`, `onclick` (when used as property assignment)
-/// - Script injection: `<script>`, `javascript:` protocol
-fn validate_js_condition(js_condition: &str, span: Span) -> Result<()> {
-	/// Dangerous patterns that could lead to XSS or code injection
-	const DANGEROUS_PATTERNS: &[(&str, &str)] = &[
-		// Global objects that provide access to DOM or sensitive APIs
-		("window", "access to window object"),
-		("document", "access to document object"),
-		("globalThis", "access to global object"),
-		("self.", "access to self/global scope"),
-		// Code execution functions
-		("eval", "code evaluation"),
-		("Function", "dynamic function creation"),
-		("setTimeout", "delayed code execution"),
-		("setInterval", "repeated code execution"),
-		("requestAnimationFrame", "animation frame callback"),
-		// Network and I/O
-		("fetch", "network request"),
-		("XMLHttpRequest", "HTTP request"),
-		("WebSocket", "WebSocket connection"),
-		// Module system
-		("import", "module import"),
-		("require", "module require"),
-		// Storage APIs
-		("localStorage", "local storage access"),
-		("sessionStorage", "session storage access"),
-		("indexedDB", "indexedDB access"),
-		// Cookie access
-		("cookie", "cookie access"),
-		// Script injection patterns
-		("<script", "script tag injection"),
-		("javascript:", "javascript protocol"),
-		// Sensitive attributes
-		("onerror", "event handler"),
-		("onload", "event handler"),
-		("onclick", "event handler"),
-		// Prototype manipulation
-		("__proto__", "prototype manipulation"),
-		("prototype", "prototype manipulation"),
-		// Constructor access
-		("constructor", "constructor access"),
-	];
-
-	let js_lower = js_condition.to_lowercase();
-
-	for (pattern, description) in DANGEROUS_PATTERNS {
-		let pattern_str = if pattern.contains(' ') {
-			// Join split patterns
-			pattern.replace(' ', "")
-		} else {
-			pattern.to_string()
-		};
-		if js_lower.contains(&pattern_str) {
-			return Err(Error::new(
-				span,
-				format!(
-					"js_condition contains forbidden pattern '{}': {}. \
-					 Use simple value comparisons like 'value.length > 0' instead.",
-					pattern_str, description
-				),
-			));
-		}
-	}
-
-	Ok(())
 }
 
 /// Extracts an integer value from an expression.

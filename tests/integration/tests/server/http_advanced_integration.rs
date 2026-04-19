@@ -116,16 +116,51 @@ impl Handler for MultipartHandler {
 			.unwrap_or("");
 
 		if content_type.starts_with("multipart/form-data") {
-			// For now, just confirm we received multipart data
+			// Extract boundary from the Content-Type header.
+			let boundary = multer::parse_boundary(content_type)
+				.map_err(|e| reinhardt_core::exception::Error::Http(e.to_string()))?;
+
 			let body = request.read_body()?;
-			let response_body = format!(
-				"Received multipart data: {} bytes, content-type: {}",
-				body.len(),
-				content_type
-			);
+			let body_bytes = bytes::Bytes::copy_from_slice(&body);
+			let stream = futures_util::stream::once(async move {
+				Ok::<bytes::Bytes, std::io::Error>(body_bytes)
+			});
+			let mut multipart = multer::Multipart::new(stream, boundary);
+
+			// Parse each field and serialize it into the response body as a
+			// structured summary the test can assert on.
+			let mut report = Vec::new();
+			while let Some(field) = multipart
+				.next_field()
+				.await
+				.map_err(|e| reinhardt_core::exception::Error::Http(e.to_string()))?
+			{
+				let name = field.name().unwrap_or("").to_string();
+				let file_name = field.file_name().map(|s| s.to_string());
+				let field_ct = field.content_type().map(|m| m.to_string());
+				let bytes = field
+					.bytes()
+					.await
+					.map_err(|e| reinhardt_core::exception::Error::Http(e.to_string()))?;
+				report.push(format!(
+					"name={};filename={};content_type={};len={};body={}",
+					name,
+					file_name.unwrap_or_default(),
+					field_ct.unwrap_or_default(),
+					bytes.len(),
+					String::from_utf8_lossy(&bytes),
+				));
+			}
+
+			let count_str = report.len().to_string();
+			// Use ASCII Record Separator (0x1E) as an unambiguous delimiter
+			// between field summaries. Field bodies may contain arbitrary bytes
+			// including `\n`, so line-based parsing on the client would be
+			// ambiguous.
 			Ok(Response::ok()
 				.with_header("X-Multipart-Processed", "true")
-				.with_body(response_body))
+				.with_header("X-Multipart-Field-Count", &count_str)
+				.with_body(report.join("\x1e")))
 		} else {
 			Ok(Response::bad_request().with_body("Expected multipart/form-data"))
 		}
@@ -390,13 +425,41 @@ async fn test_multipart_form_data(http_client: reqwest::Client) {
 		"Multipart should be processed"
 	);
 
+	// Assert: the handler parsed exactly 3 fields (field1, field2, file).
+	let field_count_header = response
+		.headers()
+		.get("X-Multipart-Field-Count")
+		.expect("X-Multipart-Field-Count header missing")
+		.to_str()
+		.unwrap()
+		.to_string();
+	assert_eq!(field_count_header, "3");
+
 	let response_body = response.text().await.expect("Failed to read response body");
-	assert!(
-		response_body.contains("Received multipart data"),
-		"Response should confirm multipart data received"
-	);
-	assert!(
-		response_body.contains("multipart/form-data"),
-		"Response should mention content type"
-	);
+	// Fields are separated by ASCII Record Separator (0x1E); field bodies may
+	// contain `\n`, so we MUST NOT use line-based splitting here.
+	let entries: Vec<&str> = response_body.split('\x1e').collect();
+	assert_eq!(entries.len(), 3, "expected exactly 3 parsed fields");
+
+	// Each entry is a structured summary: name=...;filename=...;content_type=...;len=...;body=...
+	let field1 = entries
+		.iter()
+		.find(|l| l.starts_with("name=field1;"))
+		.expect("field1 missing");
+	assert!(field1.contains("body=value1"));
+	assert!(field1.contains("filename=;"));
+
+	let field2 = entries
+		.iter()
+		.find(|l| l.starts_with("name=field2;"))
+		.expect("field2 missing");
+	assert!(field2.contains("body=value2"));
+
+	let file_part = entries
+		.iter()
+		.find(|l| l.starts_with("name=file;"))
+		.expect("file part missing");
+	assert!(file_part.contains("filename=test.txt;"));
+	assert!(file_part.contains("content_type=text/plain;"));
+	assert!(file_part.contains("body=file content"));
 }

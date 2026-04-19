@@ -11,10 +11,11 @@ use syn::{
 };
 
 use crate::{
-	ClientValidator, ClientValidatorRule, CustomAttr, FormAction, FormDerived, FormDerivedItem,
-	FormFieldDef, FormFieldEntry, FormFieldGroup, FormFieldProperty, FormMacro, FormSlots,
-	FormState, FormStateField, FormSubmitButtonDef, FormValidator, FormWatch, FormWatchItem,
-	IconAttr, IconChild, IconElement, IconPosition, ValidatorRule, WrapperAttr, WrapperElement,
+	ClientTrigger, CustomAttr, FormAction, FormDerived, FormDerivedItem, FormFieldDef,
+	FormFieldEntry, FormFieldGroup, FormFieldProperty, FormMacro, FormSlots, FormState,
+	FormStateField, FormSubmitButtonDef, FormValidator, FormWatch, FormWatchItem, IconAttr,
+	IconChild, IconElement, IconPosition, ValidatorRule, ValidatorScope, WrapperAttr,
+	WrapperElement,
 };
 
 /// Parses a `form!` macro invocation into an untyped AST.
@@ -31,7 +32,7 @@ impl Parse for FormMacro {
 		let span = input.span();
 		let mut form = FormMacro::new(None, span);
 
-		// Parse key-value pairs until we hit fields, validators, or client_validators
+		// Parse key-value pairs until we hit fields or validators
 		while !input.is_empty() {
 			let key: Ident = input.parse()?;
 			input.parse::<Token![:]>()?;
@@ -141,16 +142,13 @@ impl Parse for FormMacro {
 					parse_optional_comma(input)?;
 				}
 				"client_validators" => {
-					let content;
-					braced!(content in input);
-					form.client_validators = parse_client_validators(&content)?;
-					parse_optional_comma(input)?;
+					return Err(reject_client_validators_with_guidance(&key));
 				}
 				_ => {
 					return Err(syn::Error::new(
 						key.span(),
 						format!(
-							"Unknown form property: '{}'. Expected: name, action, server_fn, method, class, state, on_submit, on_success, on_error, on_loading, watch, redirect_on_success, initial_loader, choices_loader, slots, fields, validators, client_validators",
+							"Unknown form property: '{}'. Expected: name, action, server_fn, method, class, state, on_submit, on_success, on_error, on_loading, watch, redirect_on_success, initial_loader, choices_loader, slots, fields, validators",
 							key
 						),
 					));
@@ -608,7 +606,95 @@ fn parse_validators(input: ParseStream) -> Result<Vec<FormValidator>> {
 	Ok(validators)
 }
 
-/// Parses validator rules: [ |v| condition => "message", ... ]
+/// Parses optional scope annotations before a validator rule.
+///
+/// Supported annotations:
+/// - `#[server]` — server-side only
+/// - `#[client(on = submit|input|blur)]` — client-side only with trigger
+///
+/// Multiple annotations combine: `#[server]` + `#[client(on = blur)]` =
+/// `ServerAndClient { trigger: Blur }`. No annotation = `Both` (server + client submit).
+fn parse_validator_scope(input: ParseStream) -> Result<ValidatorScope> {
+	let mut has_server = false;
+	let mut client_trigger: Option<ClientTrigger> = None;
+
+	while input.peek(Token![#]) {
+		input.parse::<Token![#]>()?;
+
+		let attr_content;
+		syn::bracketed!(attr_content in input);
+
+		let attr_name: Ident = attr_content.parse()?;
+		match attr_name.to_string().as_str() {
+			"server" => {
+				if has_server {
+					return Err(syn::Error::new(
+						attr_name.span(),
+						"duplicate `#[server]` annotation",
+					));
+				}
+				has_server = true;
+			}
+			"client" => {
+				if client_trigger.is_some() {
+					return Err(syn::Error::new(
+						attr_name.span(),
+						"duplicate `#[client(...)]` annotation",
+					));
+				}
+
+				let inner;
+				syn::parenthesized!(inner in attr_content);
+
+				let on_ident: Ident = inner.parse()?;
+				if on_ident != "on" {
+					return Err(syn::Error::new(
+						on_ident.span(),
+						format!("expected `on`, found `{}`", on_ident),
+					));
+				}
+
+				inner.parse::<Token![=]>()?;
+
+				let trigger_ident: Ident = inner.parse()?;
+				let trigger = match trigger_ident.to_string().as_str() {
+					"submit" => ClientTrigger::Submit,
+					"input" => ClientTrigger::Input,
+					"blur" => ClientTrigger::Blur,
+					other => {
+						return Err(syn::Error::new(
+							trigger_ident.span(),
+							format!(
+								"unknown trigger `{}`, expected one of: submit, input, blur",
+								other
+							),
+						));
+					}
+				};
+
+				client_trigger = Some(trigger);
+			}
+			other => {
+				return Err(syn::Error::new(
+					attr_name.span(),
+					format!(
+						"unknown validator attribute `{}`, expected `server` or `client`",
+						other
+					),
+				));
+			}
+		}
+	}
+
+	Ok(match (has_server, client_trigger) {
+		(false, None) => ValidatorScope::Both,
+		(true, None) => ValidatorScope::Server,
+		(false, Some(trigger)) => ValidatorScope::Client { trigger },
+		(true, Some(trigger)) => ValidatorScope::ServerAndClient { trigger },
+	})
+}
+
+/// Parses validator rules: [ #[scope]? |v| condition => "message", ... ]
 fn parse_validator_rules(input: ParseStream) -> Result<Vec<ValidatorRule>> {
 	let content;
 	syn::bracketed!(content in input);
@@ -617,6 +703,9 @@ fn parse_validator_rules(input: ParseStream) -> Result<Vec<ValidatorRule>> {
 
 	while !content.is_empty() {
 		let span = content.span();
+
+		// Parse optional scope annotations
+		let scope = parse_validator_scope(&content)?;
 
 		// Parse closure: |v| condition
 		let expr: ExprClosure = content.parse()?;
@@ -628,6 +717,7 @@ fn parse_validator_rules(input: ParseStream) -> Result<Vec<ValidatorRule>> {
 		let message: LitStr = content.parse()?;
 
 		rules.push(ValidatorRule {
+			scope,
 			expr,
 			message,
 			span,
@@ -639,58 +729,48 @@ fn parse_validator_rules(input: ParseStream) -> Result<Vec<ValidatorRule>> {
 	Ok(rules)
 }
 
-/// Parses client-side validators inside the `client_validators: { ... }` block.
-fn parse_client_validators(input: ParseStream) -> Result<Vec<ClientValidator>> {
-	let mut validators = Vec::new();
+/// Rejects the legacy `client_validators: { ... }` block with a customized
+/// compile error pointing users to the unified `validators:` block syntax.
+///
+/// The feature was never wired to code generation in any released version;
+/// no runtime behavior is lost by this error. The identifier is retained
+/// through 0.1.x so users upgrading from earlier RCs see actionable guidance
+/// rather than a generic `unknown property` error. It will be removed from
+/// the parser entirely in 0.2.0.
+///
+/// Tracked by: kent8192/reinhardt-web#3654
+fn reject_client_validators_with_guidance(ident: &Ident) -> syn::Error {
+	syn::Error::new(
+		ident.span(),
+		"\
+`client_validators:` was never wired to code generation in any released version \
+of reinhardt-web; removing it loses no runtime behavior.
 
-	while !input.is_empty() {
-		let span = input.span();
-		let field_name: Ident = input.parse()?;
-		input.parse::<Token![:]>()?;
+Migrate to the unified `validators:` block with `#[client(on = submit|input|blur)]` \
+annotations:
 
-		// Parse rules array
-		let rules = parse_client_validator_rules(input)?;
-		validators.push(ClientValidator {
-			field_name,
-			rules,
-			span,
-		});
+    // Before (no longer supported):
+    client_validators: {
+        username: [ \"value.length >= 3\" => \"Too short\" ],
+    }
 
-		parse_optional_comma(input)?;
-	}
+    // After:
+    validators: {
+        username: [
+            #[client(on = input)]
+            |v| v.len() >= 3 => \"Too short\",
+        ],
+    }
 
-	Ok(validators)
-}
+See: docs/migration/0.2.0-client-validators-removal.md
 
-/// Parses client validator rules: [ "js_condition" => "message", ... ]
-fn parse_client_validator_rules(input: ParseStream) -> Result<Vec<ClientValidatorRule>> {
-	let content;
-	syn::bracketed!(content in input);
+This custom error is retained through the 0.1.x series. In 0.2.0, the \
+`client_validators` identifier will be removed from the parser and using it \
+will produce a generic `unknown property` error instead.
 
-	let mut rules = Vec::new();
-
-	while !content.is_empty() {
-		let span = content.span();
-
-		// Parse JavaScript condition string
-		let js_expr: LitStr = content.parse()?;
-
-		// Parse arrow
-		content.parse::<Token![=>]>()?;
-
-		// Parse error message
-		let message: LitStr = content.parse()?;
-
-		rules.push(ClientValidatorRule {
-			js_expr,
-			message,
-			span,
-		});
-
-		parse_optional_comma(&content)?;
-	}
-
-	Ok(rules)
+Tracked by: kent8192/reinhardt-web#3654\
+",
+	)
 }
 
 /// Parses the form state configuration: `state: { loading, error, success }`.
@@ -3367,5 +3447,82 @@ mod tests {
 		assert_eq!(form.fields.len(), 2);
 		let btn = form.fields[1].as_submit_button().unwrap();
 		assert_eq!(btn.properties.len(), 0);
+	}
+}
+
+#[cfg(test)]
+mod scope_tests {
+	use super::*;
+	use crate::core::{ClientTrigger, ValidatorRule, ValidatorScope};
+	use rstest::*;
+
+	/// Wrapper that parses `[ ... ]` as a rules list via `parse_validator_rules`.
+	#[derive(Debug)]
+	struct ValidatorRulesWrapper(Vec<ValidatorRule>);
+
+	impl Parse for ValidatorRulesWrapper {
+		fn parse(input: ParseStream) -> Result<Self> {
+			parse_validator_rules(input).map(ValidatorRulesWrapper)
+		}
+	}
+
+	#[rstest]
+	#[case("[ |v| v.len() > 0 => \"err\" ]", ValidatorScope::Both)]
+	#[case("[ #[server] |v| v.len() > 0 => \"err\" ]", ValidatorScope::Server)]
+	#[case(
+		"[ #[client(on = submit)] |v| v.len() > 0 => \"err\" ]",
+		ValidatorScope::Client {
+			trigger: ClientTrigger::Submit,
+		}
+	)]
+	#[case(
+		"[ #[client(on = input)] |v| v.len() > 0 => \"err\" ]",
+		ValidatorScope::Client {
+			trigger: ClientTrigger::Input,
+		}
+	)]
+	#[case(
+		"[ #[client(on = blur)] |v| v.len() > 0 => \"err\" ]",
+		ValidatorScope::Client {
+			trigger: ClientTrigger::Blur,
+		}
+	)]
+	#[case(
+		"[ #[server] #[client(on = blur)] |v| v.len() > 0 => \"err\" ]",
+		ValidatorScope::ServerAndClient {
+			trigger: ClientTrigger::Blur,
+		}
+	)]
+	fn test_scope_parsing(#[case] input: &str, #[case] expected_scope: ValidatorScope) {
+		// Act
+		let wrapper: ValidatorRulesWrapper = syn::parse_str(input).unwrap();
+
+		// Assert
+		assert_eq!(wrapper.0.len(), 1);
+		assert_eq!(wrapper.0[0].scope, expected_scope);
+	}
+
+	#[rstest]
+	#[case(
+		"[ #[client(on = hover)] |v| v.len() > 0 => \"err\" ]",
+		"unknown trigger"
+	)]
+	#[case(
+		"[ #[unknown] |v| v.len() > 0 => \"err\" ]",
+		"unknown validator attribute"
+	)]
+	#[case("[ #[server] #[server] |v| v.len() > 0 => \"err\" ]", "duplicate")]
+	fn test_scope_parsing_errors(#[case] input: &str, #[case] expected_fragment: &str) {
+		// Act
+		let result: Result<ValidatorRulesWrapper> = syn::parse_str(input);
+
+		// Assert
+		let err = result.expect_err("expected parse error");
+		assert!(
+			err.to_string().contains(expected_fragment),
+			"Expected error containing '{}', got: {}",
+			expected_fragment,
+			err
+		);
 	}
 }

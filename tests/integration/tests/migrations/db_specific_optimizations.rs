@@ -1296,14 +1296,13 @@ async fn test_mysql_auto_increment_initial_value(
 		.await
 		.expect("Failed to create table");
 
-	// TODO: Add Operation::SetAutoIncrementValue
-	// For now, we can use RunSQL as a workaround
 	let set_auto_increment = create_test_migration(
 		"testapp",
 		"0002_set_auto_increment",
-		vec![Operation::RunSQL {
-			sql: leak_str("ALTER TABLE users AUTO_INCREMENT = 1000").to_string(),
-			reverse_sql: None,
+		vec![Operation::SetAutoIncrementValue {
+			table: "users".to_string(),
+			column: "id".to_string(),
+			value: 1000,
 		}],
 	);
 

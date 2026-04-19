@@ -32,6 +32,9 @@ pub mod global;
 #[cfg(feature = "kafka")]
 pub use global::{global_producer, set_global_producer};
 
+pub mod router;
+pub use router::{ConsumerFactory, StreamingHandlerKind, StreamingHandlerRegistration, StreamingRouter};
+
 pub use backend::StreamingBackend;
 pub use error::StreamingError;
 pub use in_memory::InMemoryStreamingBackend;

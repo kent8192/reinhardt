@@ -4458,9 +4458,8 @@ impl MigrationAutodetector {
 				if constraint.constraint_type != "primary_key" || constraint.fields.len() < 2 {
 					continue;
 				}
-				let from_pk = from_model.and_then(|m| {
-					m.constraints.iter().find(|c| c.name == constraint.name)
-				});
+				let from_pk = from_model
+					.and_then(|m| m.constraints.iter().find(|c| c.name == constraint.name));
 				match from_pk {
 					Some(existing) if existing.fields == constraint.fields => {
 						// Unchanged — no operation needed

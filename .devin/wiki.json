@@ -60,37 +60,37 @@
   "pages": [
     {
       "title": "Architecture Overview",
-      "purpose": "Explain the polylithic architecture philosophy, how crates are organized in layers (Foundation, Data, REST, Auth, Advanced), the request/response flow through the framework, and the develop/0.2.0 roadmap for upcoming crates (payment, cms, deploy, social, taggit, etc.).",
+      "purpose": "Explain the polylithic architecture philosophy, how crates are organized in layers (Foundation, Data, REST, Auth, Advanced), the request/response flow through the framework, and the roadmap for upcoming crates.",
       "parent": null
     },
     {
       "title": "Core Foundation",
-      "purpose": "Document reinhardt-core (types, exceptions, validators, signals), reinhardt-http (request/response types), reinhardt-server (Hyper-based server with RunserverHook for concurrent startup and pre-listen validation), and reinhardt-macros.",
+      "purpose": "Document reinhardt-core (types, exceptions, validators, signals), reinhardt-http (request/response types), reinhardt-server (Hyper-based server with lifecycle hooks), and reinhardt-macros.",
       "parent": "Architecture Overview"
     },
     {
       "title": "Dependency Injection",
-      "purpose": "Document reinhardt-di: FastAPI-inspired type-safe async DI system. Key API (current): Depends<T> (preferred wrapper), #[injectable] macro (does NOT auto-derive Clone — add explicitly), #[inject] macro (parameter type is Depends<T>, NOT Arc<T>), DependencyRegistration with fn pointer fields (const-compatible for Rust 2024), Validated<T> extractor (auto-calls validate() during extraction), with_test_di_context() for isolated parallel-safe test DI contexts, startup registry sanity check, pseudo orphan rule (cannot register framework-managed types — use newtype wrapper), FrameworkTypeOverride validation, try_unwrap() for non-Clone ownership transfer. Deprecated: Injected<T>, OptionalInjected<T> (since 0.1.0-rc.16) — use Depends<T>.",
+      "purpose": "Document reinhardt-di: FastAPI-inspired type-safe async DI system with scoped/singleton/request-scope support, injectable types and macros, validation extractors, startup registry sanity checks, pseudo orphan rule for framework type safety, and test isolation utilities.",
       "parent": "Architecture Overview"
     },
     {
       "title": "URL Routing",
-      "purpose": "Document reinhardt-urls: Typed URL pattern matching with #[url_patterns(InstalledApp::Variant, mode = server|client|unified)] (string literal syntax removed). Conventional function naming examples: server_url_patterns()/client_url_patterns()/unified_url_patterns(), but #[url_patterns] does not require specific function names. #[viewset] macro for ViewSet registration (ViewSet route names use get_basename()). #[routes] macro (supports async functions), per-app namespaced URL resolver structs (urls.app_name().route_name() instead of deprecated urls.app_name_route_name()). Multi-file view module organization. ClientUrlReverser for client-side type-safe URL resolution. URL resolution is always available on native targets — url-resolver feature flag removed.",
+      "purpose": "Document reinhardt-urls: typed URL pattern matching with mode-aware route registration (server/client/unified), per-app namespaced URL resolvers, ViewSet and route macros, client-side type-safe URL resolution, and multi-file view module organization.",
       "parent": "Architecture Overview"
     },
     {
       "title": "App Registry",
-      "purpose": "Document reinhardt-apps: AppLabel trait (now requires explicit LABEL const — breaking), path() method for enum-style AppLabel implementors, installed_apps! macro with ApplicationBuilder (Settings.installed_apps field, add_app(), and with_validated_apps() are deprecated). The startapp command auto-appends entries to the installed_apps! block.",
+      "purpose": "Document reinhardt-apps: application registry and discovery, AppLabel trait, installed_apps! macro with ApplicationBuilder, and the startapp command.",
       "parent": "Architecture Overview"
     },
     {
       "title": "Configuration",
-      "purpose": "Document reinhardt-conf: #[settings] macro for Settings struct definitions. SettingsFragment trait defines validate(). Per-test settings override for TestContainers integration. REINHARDT_SETTINGS_MODULE env var support.",
+      "purpose": "Document reinhardt-conf: settings struct macros, SettingsFragment trait, per-test settings override, and environment variable configuration.",
       "parent": "Architecture Overview"
     },
     {
       "title": "Database Layer",
-      "purpose": "Document reinhardt-db: ORM with Model definitions, QuerySet API (filter, exclude, annotate, aggregate), migrations system including SetAutoIncrementValue and CreateCompositePrimaryKey ops (added since rc.15), relationships (ForeignKey, ManyToMany), supported backends (PostgreSQL, MySQL, SQLite, CockroachDB). Silent PostgreSQL fallbacks now cause hard failures. BatchUpdateBuilder.add_update() and build_sql() removed (SQL injection surface — use parameterized equivalents). Use reinhardt-query for SQL construction.",
+      "purpose": "Document reinhardt-db: ORM with Model definitions, QuerySet API, migrations system, relationships (ForeignKey, ManyToMany), and supported backends (PostgreSQL, MySQL, SQLite, CockroachDB). Use reinhardt-query for SQL construction.",
       "parent": null
     },
     {
@@ -105,7 +105,7 @@
     },
     {
       "title": "Authentication System",
-      "purpose": "Document reinhardt-auth: Current API: AuthIdentity + BaseUser/FullUser + PermissionsMixin traits, #[user(hasher = ..., username_field = ..., full = ...)] attribute proc macro. Deprecated (since 0.1.0-rc.15): User trait, DefaultUser struct. Authentication backends (JWT — JwtAuth methods now return Result<_, JwtError>, expired tokens rejected by default), Token, Session, OAuth2, Basic. Permission system (DjangoModelPermissions, object-level). #[user] attribute macro for auth trait generation. Social auth (GitHub, Google, Apple, Microsoft OIDC) is in develop/0.2.0.",
+      "purpose": "Document reinhardt-auth: user identity traits and macros, authentication backends (JWT, Token, Session, OAuth2, Basic), and permission system (DjangoModelPermissions, object-level).",
       "parent": null
     },
     {
@@ -115,12 +115,12 @@
     },
     {
       "title": "Forms",
-      "purpose": "Document reinhardt-forms: Django-style form processing with 20+ field types, form! macro with unified validators (ValidatorScope with #[client(on = submit|input|blur)] scope annotations), SubmitButton field type, autocomplete attribute support, auto-pass CSRF token to server_fn on non-GET forms. Deprecated: client_validators block (compile error — migrate to unified validators). ModelForms, FormSets, FormWizards. See docs/migration/0.2.0-client-validators-removal.md.",
+      "purpose": "Document reinhardt-forms: Django-style form processing with multiple field types, form! macro with unified client/server validation, ModelForms, FormSets, and FormWizards.",
       "parent": null
     },
     {
       "title": "Frontend Framework",
-      "purpose": "Document reinhardt-pages: WASM-based frontend with fine-grained reactivity, SSR, hydration, and JSX-like macros (page!, head!). MSW-style network interception via MockableServerFn trait (msw feature) — MockFetch and mock_server_fn are deprecated in favor of MSW. Multi-file view module organization.",
+      "purpose": "Document reinhardt-pages: WASM-based frontend with fine-grained reactivity, SSR, hydration, JSX-like macros, network interception for testing, and multi-file view module organization.",
       "parent": null
     },
     {
@@ -130,22 +130,22 @@
     },
     {
       "title": "Background Tasks",
-      "purpose": "Document reinhardt-tasks: Celery-inspired task queue with scheduling, retries, DAG execution with edge rollback, worker load balancing, and integration with the framework. TaskLock trait API: acquire() returns Option<LockToken> (was bool); release(task_id, &token) and extend(task_id, &token, ttl) require LockToken for ownership verification (atomic lock acquisition).",
+      "purpose": "Document reinhardt-tasks: Celery-inspired task queue with scheduling, retries, DAG execution with edge rollback, worker load balancing, distributed lock primitives, and framework integration.",
       "parent": null
     },
     {
       "title": "Admin Panel",
-      "purpose": "Document reinhardt-admin: Admin interface generation. API: admin_routes_with_di(site) is the sole entry point (admin_routes() removed since rc.16, AdminRouter deprecated). ModelAdmin permission methods accept &dyn AdminUser (not &dyn Any). FormFieldSpec enum for preserving field choices (field_type_to_html_input_type removed). TextArea/Select/MultiSelect render as proper HTML elements. JWT authentication flow for WASM SPA (sessionStorage token management). is_active DB check enforced in dashboard. BaseUser-only model support. reinhardt-admin-cli (AST-based page! detection, missing page! is a no-op).",
+      "purpose": "Document reinhardt-admin: auto-generated admin interface, model registration, permission system, form field rendering, JWT authentication for WASM SPA, and reinhardt-admin-cli for code generation.",
       "parent": null
     },
     {
       "title": "Utilities",
-      "purpose": "Document reinhardt-utils (timezone, caching, storage, static files), reinhardt-i18n (internationalization), reinhardt-mail (email backends). UUID generation: v7 used across the codebase for standard IDs; v4 retained for security-sensitive tokens.",
+      "purpose": "Document reinhardt-utils (timezone, caching, storage, static files), reinhardt-i18n (internationalization), and reinhardt-mail (email backends).",
       "parent": null
     },
     {
       "title": "Feature Flags Guide",
-      "purpose": "Explain the three-level feature hierarchy (minimal/standard/full), module-level features, database backends, auth variants, and how to optimize binary size. Note: url-resolver feature has been REMOVED — URL resolution is now always available on native targets without any feature flag.",
+      "purpose": "Explain the three-level feature hierarchy (minimal/standard/full), module-level features, database backends, auth variants, and how to optimize binary size.",
       "parent": null
     },
     {
@@ -155,17 +155,17 @@
     },
     {
       "title": "Testing Guide",
-      "purpose": "Document reinhardt-test (TestContainers integration, test fixtures) and reinhardt-testkit (builder-based auth testing API, with_test_di_context() for isolated parallel-safe test DI contexts, per-test settings override for TestContainers). Testing best practices: use rstest, AAA pattern, reinhardt-testkit for auth scenarios, with_test_di_context() for DI isolation in parallel tests.",
+      "purpose": "Document reinhardt-test (TestContainers integration, test fixtures) and reinhardt-testkit (auth testing utilities, DI context isolation for parallel tests, per-test settings override). Testing best practices: rstest, AAA pattern.",
       "parent": null
     },
     {
       "title": "Security Hardening",
-      "purpose": "Document security improvements: (1) DI resolution errors redacted from server_fn 500 responses. (2) UUID v7 migration (v4 retained for CSRF/session tokens). (3) Empty user_id rejection as unauthenticated. (4) is_active DB check in admin dashboard. (5) BatchUpdateBuilder SQL injection surface removed. (6) JwtAuth now rejects expired tokens by default. (7) Pseudo orphan rule preventing framework type overrides in DI registry.",
+      "purpose": "Document security hardening across the framework: error response sanitization, UUID generation strategy, authentication strictness, admin access controls, SQL injection surface reduction, and DI registry type safety.",
       "parent": null
     },
     {
       "title": "Migration Guide: rc.15 → rc.16",
-      "purpose": "Step-by-step migration for the rc.16 breaking changes: (1) DI: replace Injected<T> with Depends<T>, change #[inject] Arc<T> to Depends<T>, add #[derive(Clone)] to #[injectable] types, update DependencyRegistration to fn pointer API. (2) URLs: update #[url_patterns] to typed InstalledApp::Variant syntax, rename url_patterns() to server/client/unified_url_patterns(), update URL resolver access to namespaced style, remove url-resolver feature from Cargo.toml. (3) Auth: replace User/DefaultUser with AuthIdentity/BaseUser/FullUser/#[user] macro, update JwtAuth error handling to JwtError. (4) Admin: replace admin_routes() with admin_routes_with_di(site), update ModelAdmin permission methods to &dyn AdminUser. (5) Conf: impl SettingsValidation for custom SettingsFragment types, migrate from Settings.installed_apps to installed_apps! macro. (6) Tasks: update TaskLock usage to LockToken pattern. (7) Forms: migrate client_validators to unified validators with #[client(on=...)] scope.",
+      "purpose": "Step-by-step migration guide for rc.16 breaking changes covering: DI system, URL routing, authentication, admin interface, configuration, background tasks, and forms.",
       "parent": null
     }
   ]

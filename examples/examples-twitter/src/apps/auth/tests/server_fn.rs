@@ -149,7 +149,10 @@ async fn test_login_server_fn_success(#[future] twitter_db_pool: (PgPool, String
 	// Act
 	let request = make_request(
 		"/api/server_fn/login",
-		json!({ "email": test_user.email, "password": test_user.password }),
+		// `_csrf_token` is auto-appended by the form! macro on production clients
+		// (#3825 / 0fd5bf1e1); these HTTP tests pass an empty token because no CSRF
+		// middleware is wired in `build_auth_router`.
+		json!({ "email": test_user.email, "password": test_user.password, "_csrf_token": "" }),
 		None,
 	);
 	let response = router
@@ -187,7 +190,7 @@ async fn test_login_server_fn_invalid_credentials(#[future] twitter_db_pool: (Pg
 	// Act
 	let request = make_request(
 		"/api/server_fn/login",
-		json!({ "email": test_user.email, "password": "WrongPassword456" }),
+		json!({ "email": test_user.email, "password": "WrongPassword456", "_csrf_token": "" }),
 		None,
 	);
 	let response = router
@@ -217,7 +220,7 @@ async fn test_login_server_fn_nonexistent_user(#[future] twitter_db_pool: (PgPoo
 	// Act
 	let request = make_request(
 		"/api/server_fn/login",
-		json!({ "email": "nonexistent@example.com", "password": "SomePassword123" }),
+		json!({ "email": "nonexistent@example.com", "password": "SomePassword123", "_csrf_token": "" }),
 		None,
 	);
 	let response = router
@@ -256,7 +259,10 @@ async fn test_login_server_fn_inactive_user(#[future] twitter_db_pool: (PgPool, 
 	// Act
 	let request = make_request(
 		"/api/server_fn/login",
-		json!({ "email": test_user.email, "password": test_user.password }),
+		// `_csrf_token` is auto-appended by the form! macro on production clients
+		// (#3825 / 0fd5bf1e1); these HTTP tests pass an empty token because no CSRF
+		// middleware is wired in `build_auth_router`.
+		json!({ "email": test_user.email, "password": test_user.password, "_csrf_token": "" }),
 		None,
 	);
 	let response = router
@@ -433,7 +439,10 @@ async fn test_login_persists_session_data(#[future] twitter_db_pool: (PgPool, St
 	// Act
 	let request = make_request(
 		"/api/server_fn/login",
-		json!({ "email": test_user.email, "password": test_user.password }),
+		// `_csrf_token` is auto-appended by the form! macro on production clients
+		// (#3825 / 0fd5bf1e1); these HTTP tests pass an empty token because no CSRF
+		// middleware is wired in `build_auth_router`.
+		json!({ "email": test_user.email, "password": test_user.password, "_csrf_token": "" }),
 		Some(&old_session_id),
 	);
 	let response = router
@@ -476,7 +485,10 @@ async fn test_auth_flow_login_then_current_user(#[future] twitter_db_pool: (PgPo
 	// Step 1: Login
 	let request = make_request(
 		"/api/server_fn/login",
-		json!({ "email": test_user.email, "password": test_user.password }),
+		// `_csrf_token` is auto-appended by the form! macro on production clients
+		// (#3825 / 0fd5bf1e1); these HTTP tests pass an empty token because no CSRF
+		// middleware is wired in `build_auth_router`.
+		json!({ "email": test_user.email, "password": test_user.password, "_csrf_token": "" }),
 		None,
 	);
 	let login_response = router

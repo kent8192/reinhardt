@@ -35,22 +35,17 @@ impl SessionIdentity {
 		ttl: std::time::Duration,
 	) -> reinhardt_middleware::session::SessionData {
 		use std::collections::HashMap;
-		use std::time::SystemTime;
 
 		use serde_json::json;
 
-		let now = SystemTime::now();
-		reinhardt_middleware::session::SessionData {
-			id: session_id.to_string(),
-			data: HashMap::from([
-				("user_id".into(), json!(self.user_id)),
-				("is_staff".into(), json!(self.is_staff)),
-				("is_superuser".into(), json!(self.is_superuser)),
-			]),
-			created_at: now,
-			last_accessed: now,
-			expires_at: now + ttl,
-		}
+		let mut session = reinhardt_middleware::session::SessionData::new(ttl);
+		session.id = session_id.to_string();
+		session.data = HashMap::from([
+			("user_id".into(), json!(self.user_id)),
+			("is_staff".into(), json!(self.is_staff)),
+			("is_superuser".into(), json!(self.is_superuser)),
+		]);
+		session
 	}
 }
 

@@ -25,7 +25,7 @@
       "author": "Architect"
     },
     {
-      "content": "Macros migration (breaking): #[export_endpoints] attribute macro removed — use a function-like proc macro for stable Rust support.",
+      "content": "Macros migration (breaking): #[export_endpoints] attribute macro removed — multi-file view module organization is now supported through stable alternatives.",
       "author": "Maintainer"
     },
     {
@@ -65,7 +65,7 @@
     },
     {
       "title": "Core Foundation",
-      "purpose": "Document reinhardt-core (types, exceptions, validators, signals), reinhardt-http (request/response types), reinhardt-server (Hyper-based server with RunserverHook for concurrent startup and pre-listen validation), and reinhardt-macros (including the macro replacing deprecated #[export_endpoints]).",
+      "purpose": "Document reinhardt-core (types, exceptions, validators, signals), reinhardt-http (request/response types), reinhardt-server (Hyper-based server with RunserverHook for concurrent startup and pre-listen validation), and reinhardt-macros.",
       "parent": "Architecture Overview"
     },
     {
@@ -75,7 +75,7 @@
     },
     {
       "title": "URL Routing",
-      "purpose": "Document reinhardt-urls: Typed URL pattern matching with #[url_patterns(InstalledApp::Variant, mode = server|client|unified)] (string literal syntax removed). Conventional function naming examples: server_url_patterns()/client_url_patterns()/unified_url_patterns(), but #[url_patterns] does not require specific function names. #[viewset] macro for ViewSet registration (ViewSet route names use get_basename()). #[routes] macro (supports async functions), per-app namespaced URL resolver structs (urls.app_name().route_name() instead of deprecated urls.app_name_route_name()). Multi-file view module support (replaces removed #[export_endpoints]). ClientUrlReverser for client-side type-safe URL resolution. URL resolution is always available on native targets — url-resolver feature flag removed.",
+      "purpose": "Document reinhardt-urls: Typed URL pattern matching with #[url_patterns(InstalledApp::Variant, mode = server|client|unified)] (string literal syntax removed). Conventional function naming examples: server_url_patterns()/client_url_patterns()/unified_url_patterns(), but #[url_patterns] does not require specific function names. #[viewset] macro for ViewSet registration (ViewSet route names use get_basename()). #[routes] macro (supports async functions), per-app namespaced URL resolver structs (urls.app_name().route_name() instead of deprecated urls.app_name_route_name()). Multi-file view module organization. ClientUrlReverser for client-side type-safe URL resolution. URL resolution is always available on native targets — url-resolver feature flag removed.",
       "parent": "Architecture Overview"
     },
     {
@@ -120,7 +120,7 @@
     },
     {
       "title": "Frontend Framework",
-      "purpose": "Document reinhardt-pages: WASM-based frontend with fine-grained reactivity, SSR, hydration, and JSX-like macros (page!, head!). MSW-style network interception via MockableServerFn trait (msw feature) — MockFetch and mock_server_fn are deprecated in favor of MSW. Multi-file view module support (stable Rust, replaces #[export_endpoints]).",
+      "purpose": "Document reinhardt-pages: WASM-based frontend with fine-grained reactivity, SSR, hydration, and JSX-like macros (page!, head!). MSW-style network interception via MockableServerFn trait (msw feature) — MockFetch and mock_server_fn are deprecated in favor of MSW. Multi-file view module organization.",
       "parent": null
     },
     {

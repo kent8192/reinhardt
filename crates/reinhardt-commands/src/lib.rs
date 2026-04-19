@@ -176,6 +176,8 @@ pub mod runserver_hooks;
 pub mod start_commands;
 /// Template-based code generation utilities.
 pub mod template;
+/// Template source abstraction over embedded and filesystem assets.
+pub mod template_source;
 /// WASM build tooling for client-side compilation.
 pub mod wasm_builder;
 /// Development server welcome page.

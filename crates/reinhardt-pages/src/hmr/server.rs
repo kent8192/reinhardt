@@ -185,16 +185,25 @@ impl HmrServer {
 		loop {
 			tokio::select! {
 				Some(event) = watcher.rx.recv() => {
-					let path_str = event.path.display().to_string();
+					// Compute a relative URL path by stripping the watch root prefix and
+					// normalizing path separators to `/`. This prevents leaking absolute
+					// filesystem paths (including Windows backslashes) to the browser.
+					let watch_root = watcher.config().watch_paths.first()
+						.map(|p| p.as_path());
+					let relative_path = watch_root
+						.and_then(|root| event.path.strip_prefix(root).ok())
+						.unwrap_or(&event.path)
+						.to_string_lossy()
+						.replace('\\', "/");
 
 					// Skip if we recently sent this path
-					if recent_paths.contains(&path_str) {
+					if recent_paths.contains(&relative_path) {
 						continue;
 					}
-					recent_paths.insert(path_str.clone());
+					recent_paths.insert(relative_path.clone());
 
 					let msg = match event.kind {
-						ChangeKind::Css => HmrMessage::CssUpdate { path: path_str },
+						ChangeKind::Css => HmrMessage::CssUpdate { path: relative_path },
 						ChangeKind::Rust => HmrMessage::FullReload {
 							reason: format!("Rust source changed: {}", event.path.display()),
 						},

@@ -24,7 +24,7 @@ mod apply_update_attribute;
 mod apply_update_derive;
 mod collect_migrations;
 mod crate_paths;
-mod define_views;
+mod flatten_imports;
 mod hook;
 mod injectable_common;
 mod injectable_fn;
@@ -999,9 +999,9 @@ pub fn settings(args: TokenStream, input: TokenStream) -> TokenStream {
 ///
 /// ```rust,ignore
 /// // views.rs (multi-file pattern)
-/// use reinhardt::define_views;
+/// use reinhardt::flatten_imports;
 ///
-/// define_views! {
+/// flatten_imports! {
 ///     pub mod login;
 ///     pub mod register;
 /// }
@@ -1016,8 +1016,8 @@ pub fn settings(args: TokenStream, input: TokenStream) -> TokenStream {
 /// For single-file views where all functions are defined directly in
 /// `views.rs`, this macro is not needed.
 #[proc_macro]
-pub fn define_views(input: TokenStream) -> TokenStream {
-	define_views::define_views_impl(input.into())
+pub fn flatten_imports(input: TokenStream) -> TokenStream {
+	flatten_imports::flatten_imports_impl(input.into())
 		.unwrap_or_else(|e| e.to_compile_error())
 		.into()
 }

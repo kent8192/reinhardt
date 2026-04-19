@@ -1,4 +1,4 @@
-//! `define_views!` function-like proc macro for multi-file view modules.
+//! `flatten_imports!` function-like proc macro for multi-file view modules.
 //!
 //! When used in a view module that uses per-file endpoint organization,
 //! this macro generates `pub use submod::*;` for each `pub mod` declaration.
@@ -10,9 +10,9 @@
 //!
 //! ```rust,ignore
 //! // views.rs
-//! use reinhardt::define_views;
+//! use reinhardt::flatten_imports;
 //!
-//! define_views! {
+//! flatten_imports! {
 //!     pub mod login;
 //!     pub mod register;
 //! }
@@ -28,16 +28,16 @@ use proc_macro2::TokenStream;
 use quote::quote;
 use syn::{Item, parse2};
 
-/// Implementation for the `define_views!` proc macro.
+/// Implementation for the `flatten_imports!` proc macro.
 ///
 /// Scans the macro input for `pub mod name;` declarations and appends
 /// `pub use name::*;` for each one. This brings endpoint functions and their
 /// generated `__url_resolver_*` modules into the parent module scope, enabling
 /// `#[url_patterns]` to resolve them with the standard path convention.
-pub(crate) fn define_views_impl(input: TokenStream) -> syn::Result<TokenStream> {
+pub(crate) fn flatten_imports_impl(input: TokenStream) -> syn::Result<TokenStream> {
 	let items: Vec<Item> = {
 		let file: syn::File = parse2(input.clone())
-			.map_err(|e| syn::Error::new(e.span(), format!("define_views: {e}")))?;
+			.map_err(|e| syn::Error::new(e.span(), format!("flatten_imports: {e}")))?;
 		file.items
 	};
 

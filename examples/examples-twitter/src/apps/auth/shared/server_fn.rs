@@ -18,10 +18,15 @@ use {
 };
 
 /// Login user, persist session, and return user info
+///
+/// `_csrf_token` is auto-appended by the `form!` macro for non-GET forms
+/// (commit 0fd5bf1e1 / #3337). CSRF is enforced by middleware, so we accept
+/// and ignore it here. See #3825.
 #[server_fn]
 pub async fn login(
 	email: String,
 	password: String,
+	_csrf_token: String,
 	#[inject] _db: DatabaseConnection,
 	#[inject] session: SessionData,
 	#[inject] store: SessionStoreRef,
@@ -63,9 +68,12 @@ pub async fn login(
 		return Err(ServerFnError::server(403, "User account is inactive"));
 	}
 
-	// Session fixation prevention: regenerate session ID
-	let old_id = session.id.clone();
-	session.id = Uuid::now_v7().to_string();
+	// Session fixation prevention: regenerate session ID. Using
+	// `SessionData::regenerate_id` keeps the middleware's `Set-Cookie` header
+	// in sync with the new ID via the request-scoped `ActiveSessionId` holder
+	// (#3827); raw `session.id = ...` would leave the cookie pointing at a
+	// stale store entry.
+	let old_id = session.regenerate_id();
 
 	// Persist user ID in session
 	session
@@ -80,12 +88,15 @@ pub async fn login(
 }
 
 /// Register new user
+///
+/// `_csrf_token` is auto-appended by the `form!` macro; see [`login`] for details.
 #[server_fn]
 pub async fn register(
 	username: String,
 	email: String,
 	password: String,
 	password_confirmation: String,
+	_csrf_token: String,
 	#[inject] db: DatabaseConnection,
 ) -> std::result::Result<(), ServerFnError> {
 	// Construct request from parameters

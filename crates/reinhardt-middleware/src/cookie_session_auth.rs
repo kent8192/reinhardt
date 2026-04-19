@@ -363,6 +363,7 @@ mod tests {
 			created_at: now,
 			last_accessed: now,
 			expires_at: now + Duration::from_secs(3600),
+			id_holder: None,
 		}
 	}
 

@@ -122,6 +122,8 @@ pub struct WebSocketRouter {
 	names: Arc<RwLock<HashMap<String, String>>>,
 	/// Build-time consumer registrations (added by `consumer()` builder).
 	pending_consumers: Vec<WebSocketRoute>,
+	/// Optional namespace (app label) for this router.
+	namespace: Option<String>,
 }
 
 impl WebSocketRouter {
@@ -131,7 +133,27 @@ impl WebSocketRouter {
 			routes: Arc::new(RwLock::new(HashMap::new())),
 			names: Arc::new(RwLock::new(HashMap::new())),
 			pending_consumers: Vec::new(),
+			namespace: None,
 		}
+	}
+
+	/// Set the namespace for this router.
+	///
+	/// Parallel to `ServerRouter::with_namespace`, emitted by
+	/// `#[url_patterns(mode = ws)]` to pass the `AppLabel::path(...)`.
+	/// WebSocket route paths are absolute today and are not rewritten
+	/// with this namespace; the value is stored for parity with other
+	/// routers and future use. See reinhardt-web#3829.
+	pub fn with_namespace(mut self, namespace: impl Into<String>) -> Self {
+		self.namespace = Some(namespace.into());
+		self
+	}
+
+	/// Returns the namespace set via [`with_namespace`], if any.
+	///
+	/// [`with_namespace`]: Self::with_namespace
+	pub fn namespace(&self) -> Option<&str> {
+		self.namespace.as_deref()
 	}
 
 	/// Register a WebSocket consumer by its factory function.
@@ -303,6 +325,18 @@ mod tests {
 		let route = router.find_pending("chat_ws");
 		assert!(route.is_some());
 		assert_eq!(route.unwrap().path(), "/ws/chat/{room_id}/");
+	}
+
+	#[rstest]
+	fn test_with_namespace_stores_value_without_rewriting_paths() {
+		let router = WebSocketRouter::new()
+			.with_namespace("auth")
+			.consumer(|| TestConsumer);
+		assert_eq!(router.namespace(), Some("auth"));
+		assert_eq!(
+			router.find_pending("chat_ws").unwrap().path(),
+			"/ws/chat/{room_id}/"
+		);
 	}
 
 	#[rstest]

@@ -538,8 +538,12 @@ pub(crate) fn routes_impl(args: TokenStream, input: ItemFn) -> Result<TokenStrea
 							crate::apps::#app::urls::url_resolvers
 						);
 
-						// Accessor method on ResolvedUrls
+						// Deprecated 2-level accessor (use urls.server().#app() instead)
 						impl ResolvedUrls {
+							#[deprecated(
+								since = "0.1.0-rc.16",
+								note = "use `urls.server().#app()` instead"
+							)]
 							pub fn #app(&self) -> #urls_struct<'_> {
 								#urls_struct { resolver: self }
 							}
@@ -616,8 +620,12 @@ pub(crate) fn routes_impl(args: TokenStream, input: ItemFn) -> Result<TokenStrea
 							crate::apps::#app::urls::client_url_resolvers
 						);
 
-						// Accessor method on ResolvedUrls
+						// Deprecated 2-level accessor (use urls.client().#app() instead)
 						impl ResolvedUrls {
+							#[deprecated(
+								since = "0.1.0-rc.16",
+								note = "use `urls.client().#app()` instead"
+							)]
 							pub fn #accessor_method(&self) -> #client_urls_struct<'_> {
 								#client_urls_struct { resolver: self }
 							}
@@ -700,6 +708,45 @@ pub(crate) fn routes_impl(args: TokenStream, input: ItemFn) -> Result<TokenStrea
 				})
 				.collect();
 
+			// ServerUrls gateway: urls.server().<app>().<handler>()
+			// Delegates to the existing XxxUrls structs (no new struct needed).
+			let server_app_accessors: Vec<_> = app_idents
+				.iter()
+				.map(|app| {
+					let urls_struct_name =
+						crate::pascal_case::to_pascal_case_with_suffix(&app.to_string(), "Urls");
+					let urls_struct = proc_macro2::Ident::new(
+						&urls_struct_name,
+						proc_macro2::Span::call_site(),
+					);
+					quote! {
+						pub fn #app(&self) -> #urls_struct<'_> {
+							#urls_struct { resolver: self.resolver }
+						}
+					}
+				})
+				.collect();
+
+			// ClientUrls gateway: urls.client().<app>().<handler>()
+			let client_app_accessors: Vec<_> = app_idents
+				.iter()
+				.map(|app| {
+					let client_urls_struct_name = crate::pascal_case::to_pascal_case_with_suffix(
+						&app.to_string(),
+						"ClientUrls",
+					);
+					let client_urls_struct = proc_macro2::Ident::new(
+						&client_urls_struct_name,
+						proc_macro2::Span::call_site(),
+					);
+					quote! {
+						pub fn #app(&self) -> #client_urls_struct<'_> {
+							#client_urls_struct { resolver: self.resolver }
+						}
+					}
+				})
+				.collect();
+
 			// WsUrls gateway: urls.ws().<app>().<handler>()
 			let ws_app_accessors: Vec<_> = app_idents
 				.iter()
@@ -732,10 +779,26 @@ pub(crate) fn routes_impl(args: TokenStream, input: ItemFn) -> Result<TokenStrea
 				#[cfg(not(all(target_family = "wasm", target_os = "unknown")))]
 				#[doc(hidden)]
 				mod __namespaced_resolvers {
-					#![allow(unexpected_cfgs)]
+					#![allow(unexpected_cfgs, deprecated)]
 					pub use super::ResolvedUrls;
 
 					#(#per_app_code)*
+
+					/// HTTP URL gateway. Access via `urls.server().<app>().<route>()`.
+					pub struct ServerUrls<'a> {
+						resolver: &'a ResolvedUrls,
+					}
+
+					impl ServerUrls<'_> {
+						#(#server_app_accessors)*
+					}
+
+					impl ResolvedUrls {
+						/// Access HTTP URL resolvers via `urls.server().<app>().<route>()`.
+						pub fn server(&self) -> ServerUrls<'_> {
+							ServerUrls { resolver: self }
+						}
+					}
 
 					/// Prelude module re-exporting URL resolver types.
 					pub mod url_prelude {
@@ -792,7 +855,7 @@ pub(crate) fn routes_impl(args: TokenStream, input: ItemFn) -> Result<TokenStrea
 				// Client-side per-app resolvers are cross-platform (native + WASM).
 				#[doc(hidden)]
 				mod __client_router_gate {
-					#![allow(unexpected_cfgs)]
+					#![allow(unexpected_cfgs, deprecated)]
 
 					#[cfg(feature = "client-router")]
 					#[doc(hidden)]
@@ -800,6 +863,22 @@ pub(crate) fn routes_impl(args: TokenStream, input: ItemFn) -> Result<TokenStrea
 						pub use super::super::ResolvedUrls;
 
 						#(#per_app_client_code)*
+
+						/// Client URL gateway. Access via `urls.client().<app>().<route>()`.
+						pub struct ClientUrls<'a> {
+							resolver: &'a ResolvedUrls,
+						}
+
+						impl ClientUrls<'_> {
+							#(#client_app_accessors)*
+						}
+
+						impl ResolvedUrls {
+							/// Access client URL resolvers via `urls.client().<app>().<route>()`.
+							pub fn client(&self) -> ClientUrls<'_> {
+								ClientUrls { resolver: self }
+							}
+						}
 					}
 					#[cfg(feature = "client-router")]
 					pub use __namespaced_client_resolvers::*;

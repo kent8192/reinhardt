@@ -1128,7 +1128,7 @@ impl KafkaContainer {
 
 		let host_port = reserve_free_port();
 
-		let image = GenericImage::new("bitnami/kafka", "3.7")
+		let image = GenericImage::new("bitnami/kafka", "3.9")
 			.with_exposed_port(9092.tcp())
 			.with_wait_for(WaitFor::message_on_stdout("Kafka Server started"))
 			.with_env_var("KAFKA_CFG_NODE_ID", "0")

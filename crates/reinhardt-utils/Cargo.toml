@@ -18,7 +18,7 @@ async-trait = { workspace = true }
 reinhardt-core = { workspace = true, features = ["exception", "security", "types"] }
 reinhardt-http = { workspace = true }
 serde_json = { workspace = true }
-tokio = { workspace = true }
+tokio = { workspace = true, features = ["fs"] }
 hyper = { workspace = true }
 bytes = { workspace = true }
 futures = { workspace = true }

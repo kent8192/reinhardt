@@ -765,7 +765,13 @@ fn build_ws_resolvers(body_tokens: &[proc_macro2::TokenTree]) -> TokenStream {
 		.map(|path| {
 			let parsed: syn::Path = match syn::parse2(path.clone()) {
 				Ok(p) => p,
-				Err(_) => return quote! {},
+				Err(_) => {
+					return syn::Error::new_spanned(
+						path,
+						"`.consumer(...)` argument must be a path to a handler function",
+					)
+					.to_compile_error();
+				}
 			};
 			if parsed.segments.is_empty() {
 				return quote! {};

@@ -172,16 +172,10 @@ pub(crate) fn websocket_impl(args: TokenStream, mut input: ItemFn) -> Result<Tok
         syn::Ident::new(&format!("{}_original", fn_name_str), Span::call_site());
     input.sig.ident = original_fn_ident.clone();
 
-    // Strip #[inject] attrs from parameters in the original fn
-    for arg in input.sig.inputs.iter_mut() {
-        if let FnArg::Typed(pt) = arg {
-            pt.attrs
-                .retain(|a| !crate::injectable_common::is_inject_attr(a));
-        }
-    }
-
-    // Separate non-inject params (context + message)
-    let non_inject_params: Vec<&FnArg> = input
+    // Separate non-inject params (context + message) BEFORE stripping
+    // #[inject] attributes — otherwise the filter below matches nothing and
+    // injected params leak into the generated WebSocketConsumer trait impl.
+    let non_inject_params: Vec<FnArg> = input
         .sig
         .inputs
         .iter()
@@ -194,7 +188,16 @@ pub(crate) fn websocket_impl(args: TokenStream, mut input: ItemFn) -> Result<Tok
                 true
             }
         })
+        .cloned()
         .collect();
+
+    // Strip #[inject] attrs from parameters in the original fn
+    for arg in input.sig.inputs.iter_mut() {
+        if let FnArg::Typed(pt) = arg {
+            pt.attrs
+                .retain(|a| !crate::injectable_common::is_inject_attr(a));
+        }
+    }
 
     let non_inject_arg_pats: Vec<&Pat> = non_inject_params
         .iter()

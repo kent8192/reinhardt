@@ -1,0 +1,123 @@
+rules:
+  - id: rust-stub-impl
+    patterns:
+      # (?m)^[ \t]*// anchors to lines that START with a comment, preventing matches
+      # inside string literals or URLs containing "//stub" sequences.
+      - pattern-regex: "(?im)^[ \\t]*//[/!]?[^\\n]*\\bstub(?:\\s*:(?!:)|\\s+impl(?:ementation)?\\b|bed(?:\\s+out)?\\b)"
+      - pattern-not-regex: "//[/!]"
+      # Exclude platform-conditional stubs (e.g. "Non-WASM stub:") — these are intentional
+      # no-ops, not incomplete work.
+      - pattern-not-regex: "(?i)\\bnon-?wasm\\s+stub|\\bwasm(?:\\d+)?\\s+stub|\\bplatform\\s+stub"
+    message: >-
+      Stub implementation marker detected. Replace with a real implementation
+      before merging, or remove the marker if the code is already complete.
+    languages: [generic]
+    severity: ERROR
+    paths: &standard-paths
+      include:
+        - "**/*.rs"
+      exclude:
+        - "**/tests/**"
+        - "**/benches/**"
+        - "**/*_test.rs"
+        - "**/*_tests.rs"
+        - "**/test_*.rs"
+        - "**/reinhardt-test/**"
+        - "**/reinhardt-testkit/**"
+
+  - id: rust-mock-impl
+    patterns:
+      - pattern-regex: "(?im)^[ \\t]*//[/!]?[^\\n]*\\bmock(?:\\s*:(?!:)|\\s+impl(?:ementation)?\\b|ed(?:\\s+for\\s+now)?\\b)"
+      - pattern-not-regex: "//[/!]"
+      # Exclude mockito/test-server setup comments: "// Mock: GET /path" — these document HTTP
+      # mock expectations in tests, not placeholder implementations.
+      - pattern-not-regex: "(?i)\\bmock\\s*:\\s*(?:GET|POST|PUT|DELETE|PATCH|HEAD|OPTIONS)\\b"
+    message: >-
+      Mock implementation marker detected in production code. Mocks belong
+      in tests only; replace with a real implementation before merging.
+    languages: [generic]
+    severity: ERROR
+    paths: *standard-paths
+
+  - id: rust-placeholder-impl
+    patterns:
+      - pattern-regex: "(?im)^[ \\t]*//[/!]?[^\\n]*\\b(?:placeholder(?:\\s*:(?!:)|\\s+impl(?:ementation)?\\b)|stand-?in\\s+impl(?:ementation)?\\b)"
+      - pattern-not-regex: "//[/!]"
+    message: >-
+      Placeholder implementation marker detected. Replace with the real
+      implementation before merging.
+    languages: [generic]
+    severity: ERROR
+    paths: *standard-paths
+
+  - id: rust-note-action-required
+    # Intentionally narrow: only "action required" and "revisit" trigger this rule.
+    # "must"/"should"/"need to" were removed because they are common in constraint
+    # documentation and expected-behavior comments (FP rate was ~78%).
+    patterns:
+      - pattern-regex: "(?im)^[ \\t]*//[/!]?[^\\n]*\\bnote\\s*:(?!:)[^\\n]*\\b(?:action\\s+required|revisit)\\b"
+      - pattern-not-regex: "//[/!]"
+    message: >-
+      Action-required NOTE comment detected (action required / revisit marker).
+      Resolve the noted concern before merging.
+    languages: [generic]
+    severity: ERROR
+    paths: *standard-paths
+
+  - id: rust-not-real-impl
+    patterns:
+      - pattern-regex: "(?im)^[ \\t]*//[/!]?[^\\n]*\\bnot\\s+(?:a\\s+)?real\\s+impl(?:ementation)?\\b"
+      - pattern-not-regex: "//[/!]"
+    message: >-
+      Non-real-implementation disclaimer detected. Promote the code to a
+      real implementation, or remove the comment if inaccurate.
+    languages: [generic]
+    severity: ERROR
+    paths: *standard-paths
+
+  - id: rust-for-now-impl
+    patterns:
+      # Negative lookahead (?!\s*\() excludes SQL NOW() function: "for NOW(" would otherwise
+      # match "for now\b" under case-insensitive mode.
+      - pattern-regex: "(?im)^[ \\t]*//[/!]?[^\\n]*\\bfor\\s+now\\b(?!\\s*\\()"
+      - pattern-not-regex: "//[/!]"
+    message: >-
+      "For now" marker detected — a temporary proxy implementation is
+      likely present. Replace with the final implementation before merging.
+    languages: [generic]
+    severity: ERROR
+    paths: *standard-paths
+
+  - id: rust-commented-out-code
+    patterns:
+      # [ \t]* (zero-or-more) catches both "// let" and "//let" styles.
+      - pattern-regex: "(?m)^[ \\t]*//[ \\t]*(?:let(?:\\s+mut)?\\s+[A-Za-z_]|fn\\s+[A-Za-z_]\\w*\\s*[(<]|pub(?:\\s*\\([^)]*\\))?\\s+fn\\s+[A-Za-z_]|impl(?:\\s*<|\\s+[A-Za-z_])|use\\s+(?:crate|super|self|[A-Za-z_]\\w*)::|if\\s+[A-Za-z_(]|match\\s+[A-Za-z_(]|return(?:\\s+[^\\n]*)?;|struct\\s+[A-Za-z_]\\w*\\s*[{<(]|enum\\s+[A-Za-z_]\\w*\\s*[{<]|println!\\s*\\(|eprintln!\\s*\\(|dbg!\\s*\\(|assert(?:_eq|_ne)?!\\s*\\()"
+      # Exclude "Ideal implementation (without workaround):" code blocks: those comments
+      # use 3+ spaces of indentation after // and are mandated by COMMON_CODE_STYLE.md.
+      - pattern-not-regex: "^[ \\t]*//[ \\t]{3,}"
+    message: >-
+      Commented-out code detected. Remove dead code before merging; use
+      git history to recover it later if needed.
+    languages: [generic]
+    severity: ERROR
+    paths:
+      include:
+        - "**/*.rs"
+      exclude:
+        - "**/tests/**"
+        - "**/benches/**"
+        - "**/*_test.rs"
+        - "**/*_tests.rs"
+        - "**/test_*.rs"
+        - "**/reinhardt-test/**"
+        - "**/reinhardt-testkit/**"
+        # Systematic FP: proxy doc blocks mix /// and // for code examples,
+        # making // let/fn lines indistinguishable from commented-out code at the regex level.
+        - "**/reinhardt-urls/src/proxy/**"
+        # Systematic FP: main lib.rs facade file contains many // ```rust,no_run doc code blocks
+        # where each example line starts with "// let/use" — indistinguishable from dead code
+        # at the regex level without multi-line context (not available in generic mode).
+        - "src/lib.rs"
+        # Systematic FP: tutorial/example code intentionally uses commented code to show
+        # planned API usage patterns.
+        - "examples/**"

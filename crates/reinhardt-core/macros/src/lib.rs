@@ -44,6 +44,8 @@ mod rel;
 mod routes;
 mod routes_registration;
 mod schema;
+mod streaming;
+mod streaming_patterns;
 mod settings_compose;
 mod settings_fragment;
 pub(crate) mod settings_parser;
@@ -146,6 +148,82 @@ pub fn delete(args: TokenStream, input: TokenStream) -> TokenStream {
 	delete_impl(args.into(), input)
 		.unwrap_or_else(|e| e.to_compile_error())
 		.into()
+}
+
+/// Producer handler decorator — auto-publishes return value to a Kafka topic.
+///
+/// # Arguments
+///
+/// - `topic` — Kafka topic to publish to
+/// - `name` — identifier used in `ResolvedUrls::streaming().<app>().<name>()`
+///
+/// # Example
+///
+/// ```rust,ignore
+/// #[producer(topic = "orders", name = "create_order")]
+/// pub async fn create_order(cmd: CreateOrderCommand) -> Result<Order, StreamingError> {
+///     Ok(Order::from(cmd))
+/// }
+/// ```
+#[proc_macro_attribute]
+pub fn producer(args: TokenStream, input: TokenStream) -> TokenStream {
+    let input = parse_macro_input!(input as ItemFn);
+    streaming::producer_impl(args.into(), input)
+        .unwrap_or_else(|e| e.to_compile_error())
+        .into()
+}
+
+/// Consumer handler decorator — receives messages from a Kafka topic.
+///
+/// # Arguments
+///
+/// - `topic` — Kafka topic to consume from
+/// - `group` — Consumer group id
+/// - `name` — identifier used in `ResolvedUrls::streaming().<app>().<name>()`
+///
+/// # Example
+///
+/// ```rust,ignore
+/// #[consumer(topic = "orders", group = "order-processor", name = "handle_order")]
+/// pub async fn handle_order(msg: Message<Order>) -> Result<(), StreamingError> {
+///     Ok(())
+/// }
+/// ```
+#[proc_macro_attribute]
+pub fn consumer(args: TokenStream, input: TokenStream) -> TokenStream {
+    let input = parse_macro_input!(input as ItemFn);
+    streaming::consumer_impl(args.into(), input)
+        .unwrap_or_else(|e| e.to_compile_error())
+        .into()
+}
+
+/// Streaming patterns attribute — generates typed per-app streaming URL accessors.
+///
+/// Apply to the function that builds and returns the app's `StreamingRouter`.
+/// The function body must contain `streaming_routes![handler1, handler2, ...]`.
+///
+/// # Arguments
+///
+/// - First positional arg: `InstalledApp::<Variant>` — the app's label (or any path/ident)
+///
+/// # Example
+///
+/// ```rust,ignore
+/// #[streaming_patterns(InstalledApp::Orders)]
+/// pub fn streaming_routes() -> reinhardt_streaming::StreamingRouter {
+///     streaming_routes![create_order, handle_order]
+/// }
+/// ```
+///
+/// After this macro expands:
+/// - `OrdersStreamingUrls` struct is generated with `.create_order()` and `.handle_order()` methods
+/// - `urls.streaming().orders()` returns `OrdersStreamingUrls<'_>` (requires `#[routes]` in same crate)
+/// - Each method returns the Kafka topic name as `&'static str`
+#[proc_macro_attribute]
+pub fn streaming_patterns(args: TokenStream, input: TokenStream) -> TokenStream {
+    streaming_patterns::streaming_patterns_impl(args.into(), input.into())
+        .unwrap_or_else(|e| e.to_compile_error())
+        .into()
 }
 
 /// Permission required decorator

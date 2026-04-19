@@ -9,7 +9,10 @@ pub const HMR_CLIENT_SCRIPT: &str = r#"
   "use strict";
 
   var HMR_WS_PORT = __HMR_WS_PORT__;
-  var wsUrl = "ws://" + window.location.hostname + ":" + HMR_WS_PORT + "/hmr";
+  // Mirror the page protocol: wss under HTTPS, plain ws under HTTP.
+  // location.protocol is "https:" or "http:", replacing "http" with "ws" gives the correct scheme.
+  var wsProtocol = window.location.protocol.replace("http", "ws");
+  var wsUrl = wsProtocol + "//" + window.location.hostname + ":" + HMR_WS_PORT + "/hmr";
   var reconnectDelay = 1000;
   var maxReconnectDelay = 30000;
   var ws;

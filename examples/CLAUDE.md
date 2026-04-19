@@ -348,6 +348,19 @@ mod tests {
 }
 ```
 
+### TS-3 (SHOULD): Direct Invocation for `#[server_fn]` Tests
+
+When testing `#[server_fn]` functions in example projects, prefer **direct
+invocation** (call the function as a regular `async fn` and pass injected
+dependencies positionally) over routing JSON requests through
+`ServerRouter::handle()`. The `#[inject]` attributes are stripped at expansion
+time, so server functions are normal Rust functions on the server side.
+
+Reserve HTTP routing for tests whose stated purpose is to verify the
+HTTP/DI/middleware pipeline itself (document the rationale in the module
+header). See `instructions/TESTING_STANDARDS.md` § TI-7 for the full
+convention and #3826 for context.
+
 ---
 
 ## Quick Reference

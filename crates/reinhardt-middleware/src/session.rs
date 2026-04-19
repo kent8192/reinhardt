@@ -109,6 +109,7 @@ impl SessionCookieName {
 
 /// Session data
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct SessionData {
 	/// Session ID
 	pub id: String,

@@ -88,17 +88,25 @@ pub(crate) fn producer_impl(args: TokenStream, input: ItemFn) -> syn::Result<Tok
         })
         .collect();
 
-    // Build inner function signature without #[inject] attrs on params
+    // Build inner function signature: drop #[inject] parameters entirely so
+    // the inner fn's arity matches `call_args` (which also filters them out).
+    // Without this, the wrapper would call `inner(ctx, msg)` against a fn that
+    // expects `(ctx, svc, msg)`, producing an arity mismatch.
     let inner_inputs: Vec<_> = input
         .sig
         .inputs
         .iter()
-        .map(|arg| {
-            if let FnArg::Typed(mut pt) = arg.clone() {
+        .filter_map(|arg| {
+            if let FnArg::Typed(pt) = arg {
+                let is_inject = pt.attrs.iter().any(|a| a.path().is_ident("inject"));
+                if is_inject {
+                    return None;
+                }
+                let mut pt = pt.clone();
                 pt.attrs.retain(|a| !a.path().is_ident("inject"));
-                FnArg::Typed(pt)
+                Some(FnArg::Typed(pt))
             } else {
-                arg.clone()
+                Some(arg.clone())
             }
         })
         .collect();

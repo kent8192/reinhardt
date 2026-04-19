@@ -179,8 +179,10 @@ async fn test_e2e_url_resolution_then_connect() {
     let resolved = router.reverse("echo_ws", &[]).unwrap();
     assert_eq!(resolved, "/ws/echo/");
 
-    // Connect to the actual server
-    let (mut ws, _) = connect_async(&server_url).await.unwrap();
+    // Connect to the actual server using the resolved URL path so that this
+    // test actually exercises the resolver (not just the server root).
+    let connect_url = format!("{}{}", server_url, resolved);
+    let (mut ws, _) = connect_async(&connect_url).await.unwrap();
     ws.send(TMsg::Text("hello".into())).await.unwrap();
 
     // Assert: consumer's on_message echoed back

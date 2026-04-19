@@ -1,6 +1,9 @@
 use proc_macro2::{Span, TokenStream};
 use quote::quote;
-use syn::{FnArg, ItemFn, Pat, PatType, Result, punctuated::Punctuated, token::Comma};
+use syn::{
+    FnArg, ItemFn, LitStr, Pat, PatType, Result, Token,
+    parse::{Parse, ParseStream, Parser},
+};
 
 use crate::crate_paths::get_reinhardt_crate;
 use crate::routes::{InjectInfo, detect_inject_params, extract_url_params, to_resolver_trait_name};
@@ -10,35 +13,42 @@ pub(crate) struct WebSocketArgs {
     pub name: Option<String>,
 }
 
-impl WebSocketArgs {
-    pub(crate) fn parse(args: TokenStream) -> Result<Self> {
-        use proc_macro2::TokenTree;
+impl Parse for WebSocketArgs {
+    fn parse(input: ParseStream) -> Result<Self> {
+        // First argument: the path string literal (supports raw strings and escapes).
+        let path_lit: LitStr = input.parse().map_err(|e| {
+            syn::Error::new(
+                e.span(),
+                "#[websocket] expects a string path as first argument",
+            )
+        })?;
+        let path = path_lit.value();
 
-        let mut iter = args.into_iter().peekable();
-        let path = match iter.next() {
-            Some(TokenTree::Literal(lit)) => lit.to_string().trim_matches('"').to_string(),
-            other => {
-                return Err(syn::Error::new(
-                    Span::call_site(),
-                    format!(
-                        "#[websocket] expects a string path as first argument, got {:?}",
-                        other.map(|t| t.to_string())
-                    ),
-                ))
+        let mut name: Option<String> = None;
+        while !input.is_empty() {
+            input.parse::<Token![,]>()?;
+            if input.is_empty() {
+                break;
             }
-        };
-        let mut name = None;
-        while let Some(tt) = iter.next() {
-            if let TokenTree::Ident(ident) = tt {
-                if ident == "name" {
-                    iter.next(); // consume `=`
-                    if let Some(TokenTree::Literal(lit)) = iter.next() {
-                        name = Some(lit.to_string().trim_matches('"').to_string());
-                    }
-                }
+            let ident: syn::Ident = input.parse()?;
+            input.parse::<Token![=]>()?;
+            if ident == "name" {
+                let lit: LitStr = input.parse()?;
+                name = Some(lit.value());
+            } else {
+                return Err(syn::Error::new(
+                    ident.span(),
+                    format!("unknown #[websocket] argument `{}`", ident),
+                ));
             }
         }
         Ok(Self { path, name })
+    }
+}
+
+impl WebSocketArgs {
+    pub(crate) fn parse(args: TokenStream) -> Result<Self> {
+        <Self as Parse>::parse.parse2(args)
     }
 }
 
@@ -148,6 +158,14 @@ pub(crate) fn generate_ws_url_resolver_tokens(
 /// Main implementation for `#[websocket]` proc macro.
 /// Parallel to `route_impl()` in routes.rs.
 pub(crate) fn websocket_impl(args: TokenStream, mut input: ItemFn) -> Result<TokenStream> {
+    // Handlers must be `async fn`; otherwise the generated `.await` in the
+    // WebSocketConsumer impl produces a confusing type error.
+    if input.sig.asyncness.is_none() {
+        return Err(syn::Error::new_spanned(
+            &input.sig.fn_token,
+            "`#[websocket]` handlers must be `async fn`",
+        ));
+    }
     let reinhardt_crate = get_reinhardt_crate();
     let ws_crate = crate::crate_paths::get_reinhardt_websockets_crate();
     let ws_args = WebSocketArgs::parse(args)?;
@@ -172,16 +190,10 @@ pub(crate) fn websocket_impl(args: TokenStream, mut input: ItemFn) -> Result<Tok
         syn::Ident::new(&format!("{}_original", fn_name_str), Span::call_site());
     input.sig.ident = original_fn_ident.clone();
 
-    // Strip #[inject] attrs from parameters in the original fn
-    for arg in input.sig.inputs.iter_mut() {
-        if let FnArg::Typed(pt) = arg {
-            pt.attrs
-                .retain(|a| !crate::injectable_common::is_inject_attr(a));
-        }
-    }
-
-    // Separate non-inject params (context + message)
-    let non_inject_params: Vec<&FnArg> = input
+    // Separate non-inject params (context + message) BEFORE stripping
+    // #[inject] attributes — otherwise the filter below matches nothing and
+    // injected params leak into the generated WebSocketConsumer trait impl.
+    let non_inject_params: Vec<FnArg> = input
         .sig
         .inputs
         .iter()
@@ -194,7 +206,16 @@ pub(crate) fn websocket_impl(args: TokenStream, mut input: ItemFn) -> Result<Tok
                 true
             }
         })
+        .cloned()
         .collect();
+
+    // Strip #[inject] attrs from parameters in the original fn
+    for arg in input.sig.inputs.iter_mut() {
+        if let FnArg::Typed(pt) = arg {
+            pt.attrs
+                .retain(|a| !crate::injectable_common::is_inject_attr(a));
+        }
+    }
 
     let non_inject_arg_pats: Vec<&Pat> = non_inject_params
         .iter()

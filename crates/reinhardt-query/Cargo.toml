@@ -38,6 +38,9 @@ with-json = ["dep:serde_json"]
 with-rust_decimal = ["dep:rust_decimal"]
 with-bigdecimal = ["dep:bigdecimal"]
 
+# NoSQL Redis command builder
+nosql-redis = []
+
 # All optional features
 full = [
 	"derive",
@@ -46,6 +49,7 @@ full = [
 	"with-json",
 	"with-rust_decimal",
 	"with-bigdecimal",
+	"nosql-redis",
 ]
 
 [dev-dependencies]
@@ -61,7 +65,8 @@ tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }
 # Database testing (for DDL tests)
 sqlx = { workspace = true, features = ["runtime-tokio", "postgres", "mysql", "chrono", "uuid", "json"] }
 testcontainers = { workspace = true }
-testcontainers-modules = { workspace = true, features = ["postgres"] }
+testcontainers-modules = { workspace = true, features = ["postgres", "redis"] }
+trybuild = { workspace = true }
 
 # Additional dependencies (for DDL test fixtures)
 uuid = { workspace = true }

@@ -339,6 +339,10 @@ pub mod dcl;
 // Backend implementations
 pub mod backend;
 
+/// NoSQL command builders (Redis, etc.).
+#[cfg(feature = "nosql-redis")]
+pub mod nosql;
+
 /// Prelude module for convenient imports.
 ///
 /// Import everything from this module to get started quickly:

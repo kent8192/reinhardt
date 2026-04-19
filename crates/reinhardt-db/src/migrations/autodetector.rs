@@ -4491,11 +4491,7 @@ impl MigrationAutodetector {
 			let column = to_model
 				.fields
 				.iter()
-				.find(|(_, f)| {
-					f.params
-						.get("auto_increment")
-						.is_some_and(|v| v == "true")
-				})
+				.find(|(_, f)| f.params.get("auto_increment").is_some_and(|v| v == "true"))
 				.map(|(name, _)| name.clone())
 				.unwrap_or_else(|| "id".to_string());
 			changes.auto_increment_resets.push((
@@ -6174,10 +6170,8 @@ mod tests {
 	#[rstest]
 	fn detect_composite_pk_added_emits_create_composite_primary_key() {
 		// Arrange
-		let id_field =
-			FieldState::new("id", super::super::FieldType::Integer, false);
-		let tenant_id_field =
-			FieldState::new("tenant_id", super::super::FieldType::Integer, false);
+		let id_field = FieldState::new("id", super::super::FieldType::Integer, false);
+		let tenant_id_field = FieldState::new("tenant_id", super::super::FieldType::Integer, false);
 
 		let from_model = build_model_state(
 			"billing",
@@ -6201,10 +6195,14 @@ mod tests {
 			vec![composite_pk],
 		);
 
-		let from_state =
-			build_project_state(vec![(("billing".to_string(), "Invoice".to_string()), from_model)]);
-		let to_state =
-			build_project_state(vec![(("billing".to_string(), "Invoice".to_string()), to_model)]);
+		let from_state = build_project_state(vec![(
+			("billing".to_string(), "Invoice".to_string()),
+			from_model,
+		)]);
+		let to_state = build_project_state(vec![(
+			("billing".to_string(), "Invoice".to_string()),
+			to_model,
+		)]);
 		let detector = MigrationAutodetector::new(from_state, to_state);
 
 		// Act
@@ -6258,10 +6256,14 @@ mod tests {
 			vec![composite_pk],
 		);
 
-		let from_state =
-			build_project_state(vec![(("billing".to_string(), "Invoice".to_string()), from_model)]);
-		let to_state =
-			build_project_state(vec![(("billing".to_string(), "Invoice".to_string()), to_model)]);
+		let from_state = build_project_state(vec![(
+			("billing".to_string(), "Invoice".to_string()),
+			from_model,
+		)]);
+		let to_state = build_project_state(vec![(
+			("billing".to_string(), "Invoice".to_string()),
+			to_model,
+		)]);
 		let detector = MigrationAutodetector::new(from_state, to_state);
 
 		// Act
@@ -6279,7 +6281,9 @@ mod tests {
 	fn detect_sequence_reset_emits_set_auto_increment_value() {
 		// Arrange
 		let mut id_field = FieldState::new("id", super::super::FieldType::BigInteger, false);
-		id_field.params.insert("auto_increment".to_string(), "true".to_string());
+		id_field
+			.params
+			.insert("auto_increment".to_string(), "true".to_string());
 
 		let from_model = build_model_state(
 			"shop",
@@ -6288,17 +6292,16 @@ mod tests {
 			Vec::new(),
 			Vec::new(),
 		);
-		let mut to_model = build_model_state(
-			"shop",
-			"Order",
-			vec![id_field],
-			Vec::new(),
-			Vec::new(),
-		);
-		to_model.options.insert("sequence_reset".to_string(), "1000".to_string());
+		let mut to_model =
+			build_model_state("shop", "Order", vec![id_field], Vec::new(), Vec::new());
+		to_model
+			.options
+			.insert("sequence_reset".to_string(), "1000".to_string());
 
-		let from_state =
-			build_project_state(vec![(("shop".to_string(), "Order".to_string()), from_model)]);
+		let from_state = build_project_state(vec![(
+			("shop".to_string(), "Order".to_string()),
+			from_model,
+		)]);
 		let to_state =
 			build_project_state(vec![(("shop".to_string(), "Order".to_string()), to_model)]);
 		let detector = MigrationAutodetector::new(from_state, to_state);

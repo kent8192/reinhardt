@@ -116,6 +116,9 @@ pub mod types;
 /// Field and data validators.
 #[cfg(feature = "validators")]
 pub mod validators;
+/// WebSocket routing primitives shared across reinhardt crates.
+#[cfg(native)]
+pub mod ws;
 
 // Re-export Page types when page feature is enabled
 // This provides Page, PageElement, IntoPage, Head, EventType, etc.

@@ -86,6 +86,8 @@ use std::sync::Arc;
 pub struct UnifiedRouter {
 	server: ServerRouter,
 	client: ClientRouter,
+	/// WebSocket router for `urls.ws().<app>().<handler>()` URL resolution.
+	pub websocket: reinhardt_core::ws::WebSocketRouter,
 	di_registrations: reinhardt_di::DiRegistrationList,
 }
 
@@ -96,6 +98,7 @@ impl UnifiedRouter {
 		Self {
 			server: ServerRouter::new(),
 			client: ClientRouter::new(),
+			websocket: reinhardt_core::ws::WebSocketRouter::new(),
 			di_registrations: reinhardt_di::DiRegistrationList::new(),
 		}
 	}
@@ -158,6 +161,32 @@ impl UnifiedRouter {
 	/// Returns a mutable reference to the client router.
 	pub fn client_mut(&mut self) -> &mut ClientRouter {
 		&mut self.client
+	}
+
+	/// Configure WebSocket routing with a closure.
+	///
+	/// Parallel to `server()` and `client()`. The registered consumers are
+	/// available via `urls.ws().<app>().<handler>()` in `ResolvedUrls`.
+	///
+	/// # Example
+	///
+	/// ```rust,ignore
+	/// let router = UnifiedRouter::new()
+	///     .websocket(|ws| ws
+	///         .consumer(chat_ws)
+	///         .consumer(notif_ws));
+	/// ```
+	pub fn websocket<F>(mut self, f: F) -> Self
+	where
+		F: FnOnce(reinhardt_core::ws::WebSocketRouter) -> reinhardt_core::ws::WebSocketRouter,
+	{
+		self.websocket = f(self.websocket);
+		self
+	}
+
+	/// Returns a reference to the WebSocket router.
+	pub fn websocket_ref(&self) -> &reinhardt_core::ws::WebSocketRouter {
+		&self.websocket
 	}
 
 	/// Apply or stash deferred DI registrations.

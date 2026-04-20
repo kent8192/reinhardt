@@ -14,12 +14,15 @@
 //! pub struct User {
 //!     #[field(primary_key = true)]
 //!     pub id: uuid::Uuid,
-//!     #[field(max_length = 254)]
+//!     #[field(max_length = 255, unique = true)]
 //!     pub email: String,
 //!     #[field(max_length = 255)]
 //!     pub password_hash: Option<String>,
+//!     #[field(include_in_new = false)]
 //!     pub last_login: Option<chrono::DateTime<chrono::Utc>>,
+//!     #[field(default = true)]
 //!     pub is_active: bool,
+//!     #[field(default = false)]
 //!     pub is_superuser: bool,
 //! }
 //! ```

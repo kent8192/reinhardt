@@ -14,10 +14,11 @@
 //! ## Usage
 //!
 //! ```bash
-//! reinhardt-admin startproject myproject
-//! reinhardt-admin startapp myapp
+//! reinhardt-admin startproject myproject --with-rest
+//! reinhardt-admin startproject myproject --with-pages
+//! reinhardt-admin startapp myapp --with-rest
 //! reinhardt-admin fmt src/
-//! reinhardt-admin help
+//! reinhardt-admin --help
 //! ```
 
 mod ast_formatter;

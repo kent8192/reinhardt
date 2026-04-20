@@ -18,11 +18,13 @@
 //!     pub email: String,
 //!     #[field(max_length = 255)]
 //!     pub password_hash: Option<String>,
-//!     #[field(include_in_new = false)]
+//!     #[field]
 //!     pub last_login: Option<chrono::DateTime<chrono::Utc>>,
 //!     #[field(default = true)]
 //!     pub is_active: bool,
 //!     #[field(default = false)]
 //!     pub is_superuser: bool,
+//!     #[field(auto_now_add = true)]
+//!     pub created_at: chrono::DateTime<chrono::Utc>,
 //! }
 //! ```

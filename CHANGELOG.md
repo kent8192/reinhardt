@@ -7,6 +7,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.0-rc.17](https://github.com/kent8192/reinhardt-web/compare/reinhardt-web@v0.1.0-rc.16...reinhardt-web@v0.1.0-rc.17) - 2026-04-20
+
+### Changed
+
+- *(commands)* use typed TokenQuery struct instead of HashMap for Query extractor
+
+### Documentation
+
+- *(commands)* note auto-detection of #[inject] in server_fn.rs.tpl files
+- *(commands)* clarify WASM auto-injection in index.html.tpl
+- *(commands)* add JwtError handling example to views.rs.tpl
+
+### Fixed
+
+- *(commands)* update templates to reflect rc.13-rc.15 API changes
+- *(commands)* correct #[user] macro usage in all models.rs.tpl variants
+- *(commands)* add missing #[field] attributes to #[user] model examples
+- *(commands)* correct JwtError example in views.rs.tpl
+- *(commands)* use AuthUser<U> extractor in views.rs.tpl example
+- *(commands)* remove unnecessary #[use_inject] from views.rs.tpl example
+- *(commands)* add correct #[field] constraints to user model example in templates
+- *(commands)* replace include_in_new with auto_now_add in user model template example
+
+### Styling
+
+- *(admin-cli)* apply rustfmt formatting to main.rs
+
 ## [0.1.0-rc.16](https://github.com/kent8192/reinhardt-web/compare/reinhardt-web@v0.1.0-rc.15...reinhardt-web@v0.1.0-rc.16) - 2026-04-20
 
 ### Added

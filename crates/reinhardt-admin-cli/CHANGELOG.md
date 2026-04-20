@@ -7,6 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.0-rc.17](https://github.com/kent8192/reinhardt-web/compare/reinhardt-admin-cli@v0.1.0-rc.16...reinhardt-admin-cli@v0.1.0-rc.17) - 2026-04-20
+
+### Documentation
+
+- *(admin-cli)* fix outdated --help reference and update README for new flags
+
+### Fixed
+
+- *(admin-cli)* replace --template-type with --template/--with-pages/--with-rest ArgGroup
+
+### Styling
+
+- *(admin-cli)* apply rustfmt formatting to main.rs
+
+### Testing
+
+- *(admin-cli)* update e2e tests to use --with-rest/--with-pages flags
+- *(admin-cli)* add unit tests for resolve_project_type
+
 ## [0.1.0-rc.16](https://github.com/kent8192/reinhardt-web/compare/reinhardt-admin-cli@v0.1.0-rc.15...reinhardt-admin-cli@v0.1.0-rc.16) - 2026-04-20
 
 ### Added

@@ -10,12 +10,12 @@
 // Example of an authenticated endpoint using `AuthUser<U>` (rc.15+):
 // `AuthUser<U>` resolves the authenticated user via DI — JWT verification
 // is handled automatically by the auth middleware.
+// `#[get]` auto-enables DI when `#[inject]` parameters are present.
 //
 // use crate::models::User; // replace with your user model
-// use reinhardt::{get, use_inject, AuthUser, Response, StatusCode};
+// use reinhardt::{get, AuthUser, Response, StatusCode};
 // use reinhardt::http::ViewResult;
 //
-// #[use_inject]
 // #[get("/me/", name = "{{ app_name }}_me")]
 // pub async fn me(
 //     #[inject] AuthUser(user): AuthUser<User>,

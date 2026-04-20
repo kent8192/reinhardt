@@ -1,1 +1,22 @@
 //! Models module for {{ app_name }} app
+//!
+//! Use the `#[user]` macro to auto-generate `BaseUser`, `FullUser`,
+//! `PermissionsMixin`, and `AuthIdentity` trait implementations for user models.
+//!
+//! # Example
+//!
+//! ```rust,ignore
+//! use reinhardt::macros::user;
+//! use reinhardt::Argon2Hasher;
+//!
+//! #[user(hasher = Argon2Hasher, username_field = "email")]
+//! #[model(table_name = "users")]
+//! pub struct User {
+//!     pub id: uuid::Uuid,
+//!     pub email: String,
+//!     pub password_hash: Option<String>,
+//!     pub last_login: Option<chrono::DateTime<chrono::Utc>>,
+//!     pub is_active: bool,
+//!     pub is_superuser: bool,
+//! }
+//! ```

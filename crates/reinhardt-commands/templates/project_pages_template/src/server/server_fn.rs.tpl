@@ -2,6 +2,8 @@
 //!
 //! Server functions that can be called from the WASM client.
 //! These functions are automatically converted to HTTP endpoints.
+//!
+//! Since rc.14, `#[inject]` parameters are auto-detected — no `use_inject = true` needed.
 
 // Example server function:
 //

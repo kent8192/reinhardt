@@ -1,3 +1,5 @@
+<!-- WASM initialization is handled automatically by StaticFilesMiddleware (rc.15+).
+     Do not add manual wasm-bindgen init scripts here. -->
 <!DOCTYPE html>
 <html lang="en">
 <head>

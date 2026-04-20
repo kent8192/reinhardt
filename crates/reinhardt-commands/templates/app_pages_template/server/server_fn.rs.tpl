@@ -1,6 +1,8 @@
 //! {{ app_name }} - Server functions
 //!
 //! Server functions that can be called from the WASM client.
+//!
+//! Since rc.14, `#[inject]` parameters are auto-detected — no `use_inject = true` needed.
 
 // Example server function:
 //

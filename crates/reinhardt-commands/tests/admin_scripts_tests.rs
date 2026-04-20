@@ -928,10 +928,11 @@ async fn test_template_rendering() {
 	let template_cmd = TemplateCommand::new();
 	let ctx = CommandContext::new(vec![]);
 
+	let source = reinhardt_commands::template_source::FilesystemSource::new(&template_dir).unwrap();
 	let _result = template_cmd.handle(
 		"test_output",
 		Some(env.path().as_ref()),
-		&template_dir,
+		&source,
 		context,
 		&ctx,
 	);

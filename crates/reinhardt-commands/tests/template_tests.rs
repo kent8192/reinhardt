@@ -462,7 +462,7 @@ fn test_example_override_produces_different_content() {
 	cmd.handle(
 		"test",
 		Some(output_dir.path()),
-		template_dir.path(),
+		&reinhardt_commands::template_source::FilesystemSource::new(template_dir.path()).unwrap(),
 		context,
 		&ctx,
 	)
@@ -523,7 +523,7 @@ fn test_example_override_multiple_keys() {
 	cmd.handle(
 		"test",
 		Some(output_dir.path()),
-		template_dir.path(),
+		&reinhardt_commands::template_source::FilesystemSource::new(template_dir.path()).unwrap(),
 		context,
 		&ctx,
 	)
@@ -574,7 +574,7 @@ fn test_example_override_does_not_affect_regular_files() {
 	cmd.handle(
 		"test",
 		Some(output_dir.path()),
-		template_dir.path(),
+		&reinhardt_commands::template_source::FilesystemSource::new(template_dir.path()).unwrap(),
 		context,
 		&ctx,
 	)
@@ -621,7 +621,7 @@ fn test_example_override_empty_produces_identical_content() {
 	cmd.handle(
 		"test",
 		Some(output_dir.path()),
-		template_dir.path(),
+		&reinhardt_commands::template_source::FilesystemSource::new(template_dir.path()).unwrap(),
 		context,
 		&ctx,
 	)
@@ -674,7 +674,7 @@ fn test_secret_key_startproject_flow() {
 	cmd.handle(
 		"test",
 		Some(output_dir.path()),
-		template_dir.path(),
+		&reinhardt_commands::template_source::FilesystemSource::new(template_dir.path()).unwrap(),
 		context,
 		&ctx,
 	)
@@ -741,7 +741,7 @@ fn test_example_override_partial_keys() {
 	cmd.handle(
 		"test",
 		Some(output_dir.path()),
-		template_dir.path(),
+		&reinhardt_commands::template_source::FilesystemSource::new(template_dir.path()).unwrap(),
 		context,
 		&ctx,
 	)

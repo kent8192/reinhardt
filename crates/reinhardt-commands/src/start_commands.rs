@@ -6,6 +6,7 @@
 //! - django/core/management/commands/startproject.py
 //! - django/core/management/commands/startapp.py
 
+use crate::template_source::{EmbeddedSource, FilesystemSource, MergedSource, TemplateSource};
 use crate::{
 	BaseCommand, CommandArgument, CommandContext, CommandError, CommandOption, CommandResult,
 	TemplateCommand, TemplateContext, generate_secret_key, to_camel_case,
@@ -58,6 +59,11 @@ impl BaseCommand for StartProjectCommand {
 	fn options(&self) -> Vec<CommandOption> {
 		vec![
 			CommandOption::option(None, "template", "The path to load the template from"),
+			CommandOption::option(
+				None,
+				"template-dir",
+				"Root directory whose sub-templates override embedded defaults (also reads REINHARDT_TEMPLATE_DIR)",
+			),
 			CommandOption::option(
 				Some('e'),
 				"extension",
@@ -129,12 +135,13 @@ impl BaseCommand for StartProjectCommand {
 		context.insert("is_restful", if !with_pages { "true" } else { "false" })?;
 		context.insert("with_pages", if with_pages { "true" } else { "false" })?;
 
-		// Determine template directory
-		let template_dir = if let Some(template_path) = ctx.option("template") {
-			PathBuf::from(template_path)
+		// Determine template source (--template > --template-dir/env > embedded)
+		let subdir = format!("project_{}_template", template_key);
+		let source: Box<dyn TemplateSource> = if let Some(template_path) = ctx.option("template") {
+			Box::new(FilesystemSource::new(template_path)?)
 		} else {
-			// Use built-in template based on project type
-			get_project_template_dir(template_key)?
+			let override_root = effective_template_dir_override(ctx);
+			resolve_source(override_root.as_deref(), &subdir)?
 		};
 
 		// Create project using TemplateCommand
@@ -142,7 +149,7 @@ impl BaseCommand for StartProjectCommand {
 		template_cmd.handle(
 			&project_name,
 			target.as_deref(),
-			&template_dir,
+			source.as_ref(),
 			context,
 			ctx,
 		)?;
@@ -192,6 +199,11 @@ impl BaseCommand for StartAppCommand {
 	fn options(&self) -> Vec<CommandOption> {
 		vec![
 			CommandOption::option(None, "template", "The path to load the template from"),
+			CommandOption::option(
+				None,
+				"template-dir",
+				"Root directory whose sub-templates override embedded defaults (also reads REINHARDT_TEMPLATE_DIR)",
+			),
 			CommandOption::option(
 				Some('e'),
 				"extension",
@@ -296,20 +308,22 @@ impl BaseCommand for StartAppCommand {
 			context.insert("is_restful", if !with_pages { "true" } else { "false" })?;
 			context.insert("with_pages", if with_pages { "true" } else { "false" })?;
 
-			// Determine template directory
-			let template_dir = if let Some(template_path) = ctx.option("template") {
-				PathBuf::from(template_path)
-			} else {
-				// Use built-in template based on app type
-				get_app_template_dir(template_key)?
-			};
+			// Determine template source (--template > --template-dir/env > embedded)
+			let subdir = format!("app_{}_template", template_key);
+			let source: Box<dyn TemplateSource> =
+				if let Some(template_path) = ctx.option("template") {
+					Box::new(FilesystemSource::new(template_path)?)
+				} else {
+					let override_root = effective_template_dir_override(ctx);
+					resolve_source(override_root.as_deref(), &subdir)?
+				};
 
 			// Create app using TemplateCommand
 			let template_cmd = TemplateCommand::new();
 			template_cmd.handle(
 				&app_name,
 				app_target.as_deref(),
-				&template_dir,
+				source.as_ref(),
 				context,
 				ctx,
 			)?;
@@ -364,40 +378,48 @@ impl BaseCommand for StartAppCommand {
 	}
 }
 
-/// Get the path to the built-in project template directory
-fn get_project_template_dir(template_type: &str) -> CommandResult<PathBuf> {
-	// template_type: "mvc" or "restful"
-	let manifest_dir = env!("CARGO_MANIFEST_DIR");
-	let template_dir = PathBuf::from(manifest_dir)
-		.join("templates")
-		.join(format!("project_{}_template", template_type));
-
-	if !template_dir.exists() {
-		return Err(CommandError::ExecutionError(format!(
-			"Project template directory not found at {}. Falling back to default template.",
-			template_dir.display()
-		)));
+/// Resolve a `TemplateSource` for a given template subdirectory key.
+///
+/// Priority (highest first):
+/// 1. `--template` CLI flag (handled by each command directly — full replacement via `FilesystemSource`)
+/// 2. `--template-dir` CLI flag or `REINHARDT_TEMPLATE_DIR` env — `MergedSource` with embedded fallback
+/// 3. Embedded-only (`EmbeddedSource`)
+fn resolve_source(
+	override_root: Option<&Path>,
+	subdir: &str,
+) -> CommandResult<Box<dyn TemplateSource>> {
+	if let Some(root) = override_root {
+		if !root.exists() || !root.is_dir() {
+			return Err(CommandError::ExecutionError(format!(
+				"template override root does not exist or is not a directory: {}",
+				root.display()
+			)));
+		}
+		let subdir_path = root.join(subdir);
+		if subdir_path.exists() {
+			let primary = FilesystemSource::new(&subdir_path)?;
+			return Ok(Box::new(MergedSource {
+				primary,
+				fallback: EmbeddedSource::new(subdir),
+			}));
+		}
+		// Override root exists but has no subdir for this template type;
+		// fall through to embedded-only so partial override trees are still valid.
 	}
-
-	Ok(template_dir)
+	Ok(Box::new(EmbeddedSource::new(subdir)))
 }
 
-/// Get the path to the built-in app template directory
-fn get_app_template_dir(template_type: &str) -> CommandResult<PathBuf> {
-	// template_type: "mvc" or "restful"
-	let manifest_dir = env!("CARGO_MANIFEST_DIR");
-	let template_dir = PathBuf::from(manifest_dir)
-		.join("templates")
-		.join(format!("app_{}_template", template_type));
-
-	if !template_dir.exists() {
-		return Err(CommandError::ExecutionError(format!(
-			"App template directory not found at {}. Falling back to default template.",
-			template_dir.display()
-		)));
+fn effective_template_dir_override(ctx: &CommandContext) -> Option<PathBuf> {
+	if let Some(v) = ctx.option("template-dir").filter(|v| !v.trim().is_empty()) {
+		return Some(PathBuf::from(v));
 	}
-
-	Ok(template_dir)
+	if let Some(v) = env::var("REINHARDT_TEMPLATE_DIR")
+		.ok()
+		.filter(|v| !v.is_empty())
+	{
+		return Some(PathBuf::from(v));
+	}
+	None
 }
 
 /// Create a workspace-based app
@@ -440,36 +462,19 @@ async fn create_workspace_app(
 		.unwrap_or_else(|| "project".to_string());
 	context.insert("project_crate_name", &project_crate_name)?;
 
-	// Determine template directory for workspace apps
+	// Determine template source via embedded fallback
 	let template_key = if with_pages { "pages" } else { "restful" };
-	let template_dir = get_app_workspace_template_dir(template_key)?;
+	let subdir = format!("app_{}_workspace_template", template_key);
+	let source = resolve_source(effective_template_dir_override(ctx).as_deref(), &subdir)?;
 
 	// Create app using TemplateCommand
 	let template_cmd = TemplateCommand::new();
-	template_cmd.handle(app_name, Some(&app_target), &template_dir, context, ctx)?;
+	template_cmd.handle(app_name, Some(&app_target), source.as_ref(), context, ctx)?;
 
 	// Update workspace Cargo.toml
 	update_workspace_members(app_name)?;
 
 	Ok(())
-}
-
-/// Get the path to the built-in workspace app template directory
-fn get_app_workspace_template_dir(template_type: &str) -> CommandResult<PathBuf> {
-	// template_type: "mvc" or "restful"
-	let manifest_dir = env!("CARGO_MANIFEST_DIR");
-	let template_dir = PathBuf::from(manifest_dir)
-		.join("templates")
-		.join(format!("app_{}_workspace_template", template_type));
-
-	if !template_dir.exists() {
-		return Err(CommandError::ExecutionError(format!(
-			"Workspace app template directory not found at {}.",
-			template_dir.display()
-		)));
-	}
-
-	Ok(template_dir)
 }
 
 /// Update workspace Cargo.toml to add new app as a member
@@ -808,15 +813,10 @@ mod tests {
 		let cmd = TemplateCommand::new();
 		let context = crate::template::TemplateContext::new();
 		let ctx = crate::CommandContext::new(vec![]);
+		let source = crate::template_source::FilesystemSource::new(template_dir.path()).unwrap();
 
-		cmd.handle(
-			"test",
-			Some(output_dir.path()),
-			template_dir.path(),
-			context,
-			&ctx,
-		)
-		.unwrap();
+		cmd.handle("test", Some(output_dir.path()), &source, context, &ctx)
+			.unwrap();
 
 		// Verify that both files exist
 		let output_file_with_example = output_dir.path().join("settings").join("base.example.toml");
@@ -856,14 +856,9 @@ mod tests {
 		context.insert("debug_value", "false").unwrap();
 		let ctx = crate::CommandContext::new(vec![]);
 
-		cmd.handle(
-			"test",
-			Some(output_dir.path()),
-			template_dir.path(),
-			context,
-			&ctx,
-		)
-		.unwrap();
+		let source = crate::template_source::FilesystemSource::new(template_dir.path()).unwrap();
+		cmd.handle("test", Some(output_dir.path()), &source, context, &ctx)
+			.unwrap();
 
 		// Verify that both files exist (without .tpl but with/without .example)
 		let output_file_with_example = output_dir.path().join("settings").join("base.example.toml");

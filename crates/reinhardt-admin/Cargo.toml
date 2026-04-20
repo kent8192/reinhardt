@@ -105,11 +105,11 @@ console_error_panic_hook = ["dep:console_error_panic_hook"]
 [target.'cfg(not(all(target_family = "wasm", target_os = "unknown")))'.dev-dependencies]
 insta = { workspace = true }
 reinhardt-db = { workspace = true, features = ["orm", "backends"] }
-reinhardt-test = { workspace = true, features = ["e2e-cdp", "testcontainers"] }
+reinhardt-test = { path = "../reinhardt-test", features = ["e2e-cdp", "testcontainers"] }
 reinhardt-pages = { workspace = true, features = ["testing"] }
 reinhardt-server = { workspace = true }
 reinhardt-di = { workspace = true }
-reinhardt-testkit = { workspace = true }
+reinhardt-testkit = { path = "../reinhardt-testkit" }
 tokio = { workspace = true, features = ["full"] }
 tokio-test = { workspace = true }
 rstest = { workspace = true }
@@ -124,7 +124,7 @@ toml = { workspace = true }
 # WASM-only dev-dependencies
 [target.'cfg(all(target_family = "wasm", target_os = "unknown"))'.dev-dependencies]
 wasm-bindgen-test = "0.3.56"
-reinhardt-test = { workspace = true, features = ["wasm"] }
+reinhardt-test = { path = "../reinhardt-test", features = ["wasm"] }
 
 
 [build-dependencies]

@@ -1697,6 +1697,61 @@ impl Drop for FormatLockGuard {
 }
 
 #[cfg(test)]
+mod resolve_project_type_tests {
+	use super::*;
+
+	#[test]
+	fn with_pages_bool_resolves_to_pages() {
+		assert!(matches!(
+			resolve_project_type(None, true, false),
+			ResolvedProjectType::Pages
+		));
+	}
+
+	#[test]
+	fn with_rest_bool_resolves_to_rest() {
+		assert!(matches!(
+			resolve_project_type(None, false, true),
+			ResolvedProjectType::Rest
+		));
+	}
+
+	#[test]
+	fn template_pages_resolves_to_pages() {
+		assert!(matches!(
+			resolve_project_type(Some(TemplateType::Pages), false, false),
+			ResolvedProjectType::Pages
+		));
+	}
+
+	#[test]
+	fn template_rest_resolves_to_rest() {
+		assert!(matches!(
+			resolve_project_type(Some(TemplateType::Rest), false, false),
+			ResolvedProjectType::Rest
+		));
+	}
+
+	#[test]
+	fn template_pages_with_bool_false_resolves_to_pages() {
+		// --template pages takes precedence, both bools false
+		assert!(matches!(
+			resolve_project_type(Some(TemplateType::Pages), false, false),
+			ResolvedProjectType::Pages
+		));
+	}
+
+	#[test]
+	fn template_rest_with_bool_false_resolves_to_rest() {
+		// --template rest takes precedence, both bools false
+		assert!(matches!(
+			resolve_project_type(Some(TemplateType::Rest), false, false),
+			ResolvedProjectType::Rest
+		));
+	}
+}
+
+#[cfg(test)]
 mod arg_group_tests {
 	use super::*;
 	use clap::error::ErrorKind;

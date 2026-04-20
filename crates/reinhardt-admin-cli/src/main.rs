@@ -85,6 +85,11 @@ enum Commands {
 		/// Project template type: mtv (Model-Template-View) or restful (RESTful API)
 		#[arg(short = 't', long, value_enum, default_value = "restful")]
 		template_type: TemplateType,
+
+		/// Root directory whose sub-templates override embedded defaults.
+		/// Also reads the REINHARDT_TEMPLATE_DIR environment variable.
+		#[arg(long, value_name = "DIR")]
+		template_dir: Option<String>,
 	},
 
 	/// Create a new Reinhardt app
@@ -100,6 +105,11 @@ enum Commands {
 		/// App template type: mtv or restful
 		#[arg(short = 't', long, value_enum, default_value = "restful")]
 		template_type: TemplateType,
+
+		/// Root directory whose sub-templates override embedded defaults.
+		/// Also reads the REINHARDT_TEMPLATE_DIR environment variable.
+		#[arg(long, value_name = "DIR")]
+		template_dir: Option<String>,
 	},
 
 	/// Manage Reinhardt plugins (Dentdelion)
@@ -328,12 +338,14 @@ async fn main() {
 			name,
 			directory,
 			template_type,
-		} => run_startproject(name, directory, template_type, cli.verbosity).await,
+			template_dir,
+		} => run_startproject(name, directory, template_type, template_dir, cli.verbosity).await,
 		Commands::Startapp {
 			name,
 			directory,
 			template_type,
-		} => run_startapp(name, directory, template_type, cli.verbosity).await,
+			template_dir,
+		} => run_startapp(name, directory, template_type, template_dir, cli.verbosity).await,
 		Commands::Plugin { subcommand } => run_plugin(subcommand, cli.verbosity).await,
 		Commands::Fmt {
 			path,
@@ -387,6 +399,7 @@ async fn run_startproject(
 	name: String,
 	directory: Option<String>,
 	template_type: TemplateType,
+	template_dir: Option<String>,
 	verbosity: u8,
 ) -> CommandResult<()> {
 	let mut ctx = CommandContext::default();
@@ -396,6 +409,9 @@ async fn run_startproject(
 		ctx.add_arg(dir);
 	}
 	ctx.set_option("type".to_string(), template_type.to_string());
+	if let Some(td) = template_dir {
+		ctx.set_option("template-dir".to_string(), td);
+	}
 
 	let cmd = StartProjectCommand;
 	cmd.execute(&ctx).await
@@ -405,6 +421,7 @@ async fn run_startapp(
 	name: String,
 	directory: Option<String>,
 	template_type: TemplateType,
+	template_dir: Option<String>,
 	verbosity: u8,
 ) -> CommandResult<()> {
 	let mut ctx = CommandContext::default();
@@ -414,6 +431,9 @@ async fn run_startapp(
 		ctx.add_arg(dir);
 	}
 	ctx.set_option("type".to_string(), template_type.to_string());
+	if let Some(td) = template_dir {
+		ctx.set_option("template-dir".to_string(), td);
+	}
 
 	let cmd = StartAppCommand;
 	cmd.execute(&ctx).await

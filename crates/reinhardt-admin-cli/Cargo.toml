@@ -31,6 +31,7 @@ zeroize = "1.8"
 [dev-dependencies]
 tempfile = "3.8"
 rstest = { workspace = true }
+walkdir = "2.5"
 
 [features]
 full = []

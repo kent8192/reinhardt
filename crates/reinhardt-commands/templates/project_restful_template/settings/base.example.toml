@@ -9,21 +9,28 @@
 # IMPORTANT: Copy this file to base.toml and update the values.
 # The base.toml file is gitignored and should not be committed.
 
-# Django-style settings
+[core]
 debug = false
 secret_key = "CHANGE_THIS_IN_PRODUCTION_MUST_BE_KEPT_SECRET"
+allowed_hosts = []
 language_code = "en-us"
 time_zone = "UTC"
 use_i18n = true
 use_tz = true
+default_auto_field = "BigAutoField"
+middleware = []
+root_urlconf = ""
+
+[core.security]
+session_cookie_secure = false
+csrf_cookie_secure = false
+secure_ssl_redirect = false
+secure_hsts_seconds = 0
+secure_hsts_include_subdomains = false
+secure_hsts_preload = false
 append_slash = true
-default_auto_field = "reinhardt.db.models.BigAutoField"
 
-# Allowed hosts (empty list allows all hosts in debug mode)
-allowed_hosts = []
-
-# Database configuration
-[database]
+[core.databases.default]
 engine = "postgresql"
 host = "localhost"
 port = 5432
@@ -31,21 +38,6 @@ name = "{{ project_name }}_db"
 user = "postgres"
 password = "CHANGE_THIS"
 
-# Static files
 [static]
 url = "/static/"
 root = "staticfiles"
-
-# Media files
-[media]
-url = "/media/"
-root = "media"
-
-# Security settings
-[security]
-session_cookie_secure = false
-csrf_cookie_secure = false
-secure_ssl_redirect = false
-secure_hsts_seconds = 0
-secure_hsts_include_subdomains = false
-secure_hsts_preload = false

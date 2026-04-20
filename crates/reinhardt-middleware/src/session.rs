@@ -56,6 +56,37 @@ impl std::fmt::Display for SessionId {
 	}
 }
 
+/// Shared, mutable handle to the session ID that the middleware will write
+/// to the response `Set-Cookie` header.
+///
+/// Stored in request extensions by `SessionMiddleware`. Handlers that rotate
+/// the session ID (e.g., for session-fixation prevention on login) MUST
+/// either call `SessionData::regenerate_id` (which updates this holder
+/// transparently) or write to it directly via `set`. Otherwise the cookie
+/// returned to the client points at a session ID that no longer exists in
+/// the store. See #3827.
+#[derive(Debug, Clone)]
+pub struct ActiveSessionId(Arc<RwLock<String>>);
+
+impl ActiveSessionId {
+	/// Create an `ActiveSessionId` initialised to `id`.
+	pub fn new(id: String) -> Self {
+		Self(Arc::new(RwLock::new(id)))
+	}
+
+	/// Read the current session ID.
+	pub fn get(&self) -> String {
+		self.0.read().unwrap_or_else(|e| e.into_inner()).clone()
+	}
+
+	/// Replace the session ID. Call after rotating the underlying
+	/// `SessionData::id` so the middleware's `Set-Cookie` matches the
+	/// store entry.
+	pub fn set(&self, id: String) {
+		*self.0.write().unwrap_or_else(|e| e.into_inner()) = id;
+	}
+}
+
 /// Newtype wrapper for the configured session cookie name.
 ///
 /// Stored in request extensions by `SessionMiddleware` so that
@@ -78,6 +109,7 @@ impl SessionCookieName {
 
 /// Session data
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct SessionData {
 	/// Session ID
 	pub id: String,
@@ -89,6 +121,18 @@ pub struct SessionData {
 	pub last_accessed: SystemTime,
 	/// Expiration timestamp
 	pub expires_at: SystemTime,
+	/// Back-reference to the request-scoped active session ID holder.
+	///
+	/// Populated by `SessionData::inject` from the request extensions; used by
+	/// `regenerate_id` to keep the middleware's `Set-Cookie` value in sync
+	/// with the rotated session ID. Never serialized — sessions persisted to a
+	/// store carry only the data they own. See #3827.
+	///
+	/// Defaults to `None`; callers constructing `SessionData` literally outside
+	/// the middleware (tests, fixtures) can leave it `None` because rotation
+	/// only matters when the session is actively wired into a live request.
+	#[serde(skip)]
+	pub id_holder: Option<ActiveSessionId>,
 }
 
 impl SessionData {
@@ -101,7 +145,25 @@ impl SessionData {
 			created_at: now,
 			last_accessed: now,
 			expires_at: now + ttl,
+			id_holder: None,
 		}
+	}
+
+	/// Rotate the session ID (e.g., after authentication, to prevent session
+	/// fixation). Updates both `self.id` and the request-scoped
+	/// [`ActiveSessionId`] so that `SessionMiddleware` writes the new ID to
+	/// the response cookie.
+	///
+	/// Returns the previous ID so callers can delete the stale entry from
+	/// the store.
+	///
+	/// See #3827.
+	pub fn regenerate_id(&mut self) -> String {
+		let old_id = std::mem::replace(&mut self.id, Uuid::now_v7().to_string());
+		if let Some(holder) = &self.id_holder {
+			holder.set(self.id.clone());
+		}
+		old_id
 	}
 
 	/// Check if session is valid
@@ -628,6 +690,10 @@ impl Middleware for SessionMiddleware {
 		request
 			.extensions
 			.insert(SessionCookieName::new(self.config.cookie_name.clone()));
+		// Shared, mutable holder so handlers that rotate the session ID
+		// (`SessionData::regenerate_id`) keep `Set-Cookie` in sync. See #3827.
+		let active_id = ActiveSessionId::new(session.id.clone());
+		request.extensions.insert(active_id.clone());
 
 		// Call the handler
 		// Convert errors to responses so post-processing (e.g., security headers)
@@ -637,8 +703,12 @@ impl Middleware for SessionMiddleware {
 			Err(e) => Response::from(e),
 		};
 
-		// Append Set-Cookie header (use append to preserve existing Set-Cookie headers)
-		let cookie = self.build_cookie_header(&session.id);
+		// Append Set-Cookie header (use append to preserve existing Set-Cookie headers).
+		// Read the final session ID from the shared holder rather than the
+		// local `session` clone, since handlers may have rotated the ID via
+		// `SessionData::regenerate_id`. See #3827.
+		let final_id = active_id.get();
+		let cookie = self.build_cookie_header(&final_id);
 		response.headers.append(
 			hyper::header::SET_COOKIE,
 			hyper::header::HeaderValue::from_str(&cookie).map_err(|e| {
@@ -1222,6 +1292,91 @@ mod tests {
 		assert_eq!(session_id.as_str(), original_session_id);
 	}
 
+	/// Handler that rotates the session ID via `SessionData::regenerate_id`,
+	/// emulating session-fixation prevention on login. Replays #3827.
+	struct RotatingHandler {
+		store: Arc<SessionStore>,
+	}
+
+	#[async_trait]
+	impl Handler for RotatingHandler {
+		async fn handle(&self, request: Request) -> Result<Response> {
+			let active_id = request
+				.extensions
+				.get::<ActiveSessionId>()
+				.expect("ActiveSessionId should be present");
+			let original_id = active_id.get();
+
+			let mut session = self
+				.store
+				.get(&original_id)
+				.expect("session created by middleware should be present");
+			session.id_holder = Some(active_id);
+
+			let old_id = session.regenerate_id();
+			session
+				.set("user_id".to_string(), "user-42".to_string())
+				.unwrap();
+			self.store.delete(&old_id);
+			self.store.save(session);
+
+			Ok(Response::new(StatusCode::OK).with_body(Bytes::from("OK")))
+		}
+	}
+
+	/// Regression test for #3827: a handler that rotates the session ID for
+	/// session-fixation prevention must end up with the new ID in the
+	/// response `Set-Cookie`, and that cookie must point at a stored session.
+	#[tokio::test]
+	async fn test_handler_id_rotation_propagates_to_cookie() {
+		// Arrange
+		let config = SessionConfig::new("sessionid".to_string(), Duration::from_secs(3600));
+		let store = Arc::new(SessionStore::new());
+		let middleware = SessionMiddleware::from_arc(config, Arc::clone(&store));
+		let handler = Arc::new(RotatingHandler {
+			store: Arc::clone(&store),
+		});
+		let request = Request::builder()
+			.method(Method::POST)
+			.uri("/login")
+			.version(Version::HTTP_11)
+			.headers(HeaderMap::new())
+			.body(Bytes::new())
+			.build()
+			.unwrap();
+
+		// Act
+		let response = middleware.process(request, handler).await.unwrap();
+
+		// Assert: extract the session ID the client will receive…
+		let cookie = response
+			.headers
+			.get("set-cookie")
+			.expect("Set-Cookie should be set")
+			.to_str()
+			.unwrap();
+		let cookie_session_id = cookie
+			.split(';')
+			.next()
+			.unwrap()
+			.split('=')
+			.nth(1)
+			.unwrap()
+			.to_string();
+
+		// …and verify the store contains exactly that session, with the user_id
+		// the handler wrote during rotation.
+		let stored = store
+			.get(&cookie_session_id)
+			.expect("Session referenced by Set-Cookie must exist in store");
+		assert_eq!(stored.id, cookie_session_id);
+		assert_eq!(
+			stored.get::<String>("user_id").as_deref(),
+			Some("user-42"),
+			"Rotated session must carry the data written by the handler"
+		);
+	}
+
 	/// Handler that captures the cookie name from request extensions
 	struct CookieNameCapturingHandler {
 		captured: Arc<RwLock<Option<SessionCookieName>>>,
@@ -1409,13 +1564,18 @@ impl Injectable for SessionData {
 			extract_session_id_from_request(&request, cookie_name)?
 		};
 
-		// Load SessionData from store
-		store
+		// Load SessionData from store, attaching the request-scoped active session
+		// ID holder so `SessionData::regenerate_id` can keep the middleware's
+		// `Set-Cookie` value in sync with rotations. See #3827.
+		let id_holder = request.extensions.get::<ActiveSessionId>();
+		let mut session = store
 			.get(&session_id)
 			.filter(|s| s.is_valid())
 			.ok_or_else(|| {
 				DiError::NotFound("Valid session not found. Session may have expired.".to_string())
-			})
+			})?;
+		session.id_holder = id_holder;
+		Ok(session)
 	}
 }
 

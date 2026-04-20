@@ -101,13 +101,16 @@ pub async fn update_profile(
 /// and converts them to UpdateProfileRequest. Returns `Result<(), ServerFnError>`
 /// as expected by form! macro's submit() method.
 ///
-/// The argument order matches form! macro's field order: avatar_url, bio, location, website
+/// The argument order matches form! macro's field order: avatar_url, bio, location, website,
+/// followed by `_csrf_token` which the macro auto-appends for non-GET forms (#3825).
+/// CSRF is enforced by middleware, so we accept and ignore it here.
 #[server_fn]
 pub async fn update_profile_form(
 	avatar_url: String,
 	bio: String,
 	location: String,
 	website: String,
+	_csrf_token: String,
 	#[inject] db: DatabaseConnection,
 	#[inject] AuthUser(user): AuthUser<User>,
 ) -> std::result::Result<(), ServerFnError> {

@@ -50,9 +50,9 @@ fn startproject_restful_renders_all_variables() {
 	let tmp = TempDir::new().expect("tempdir");
 	let project_name = "e2e_restful_proj";
 
-	// Act: invoke the real binary with no --template / --template-dir flags
+	// Act: invoke the real binary with --with-rest
 	let output = Command::new(REINHARDT_ADMIN)
-		.args(["startproject", project_name])
+		.args(["startproject", project_name, "--with-rest"])
 		.current_dir(tmp.path())
 		.output()
 		.expect("failed to spawn reinhardt-admin");
@@ -133,9 +133,9 @@ fn startproject_pages_renders_all_variables() {
 	let tmp = TempDir::new().expect("tempdir");
 	let project_name = "e2e_pages_proj";
 
-	// Act: use `-t mtv` to select the pages (WASM + SSR) template
+	// Act: use --with-pages to select the pages (WASM + SSR) template
 	let output = Command::new(REINHARDT_ADMIN)
-		.args(["startproject", project_name, "-t", "mtv"])
+		.args(["startproject", project_name, "--with-pages"])
 		.current_dir(tmp.path())
 		.output()
 		.expect("failed to spawn reinhardt-admin");
@@ -190,7 +190,7 @@ fn startapp_renders_all_variables() {
 
 	// Create the project first
 	let proj_output = Command::new(REINHARDT_ADMIN)
-		.args(["startproject", project_name])
+		.args(["startproject", project_name, "--with-rest"])
 		.current_dir(tmp.path())
 		.output()
 		.expect("failed to spawn reinhardt-admin for startproject");
@@ -204,7 +204,7 @@ fn startapp_renders_all_variables() {
 
 	// Act: run startapp inside the generated project directory
 	let app_output = Command::new(REINHARDT_ADMIN)
-		.args(["startapp", app_name])
+		.args(["startapp", app_name, "--with-rest"])
 		.current_dir(&project_dir)
 		.output()
 		.expect("failed to spawn reinhardt-admin for startapp");
@@ -263,6 +263,7 @@ fn startproject_template_dir_override_wins_for_overridden_file() {
 		.args([
 			"startproject",
 			project_name,
+			"--with-rest",
 			"--template-dir",
 			tmp.path().join("my_templates").to_str().unwrap(),
 		])

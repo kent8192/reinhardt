@@ -16,8 +16,12 @@
 //! ```bash
 //! reinhardt-admin startproject myproject
 //! reinhardt-admin startapp myapp
+//! reinhardt-admin run runserver
+//! reinhardt-admin run runserver 0.0.0.0:8080
 //! reinhardt-admin fmt src/
-//! reinhardt-admin help
+//! reinhardt-admin fmt-all
+//! reinhardt-admin plugin list
+//! reinhardt-admin --help
 //! ```
 
 mod ast_formatter;
@@ -159,6 +163,32 @@ enum Commands {
 		/// Backup any modified files
 		#[arg(long)]
 		backup: bool,
+	},
+
+	/// Run a management command in the current Reinhardt project
+	///
+	/// Delegates to `cargo run --bin manage -- [ARGS...]` in the current directory.
+	/// Passes all arguments through without requiring a `--` separator.
+	///
+	/// # Examples
+	///
+	/// ```bash
+	/// # Run the development server
+	/// reinhardt-admin run runserver
+	///
+	/// # Run with address argument (no -- needed)
+	/// reinhardt-admin run runserver 0.0.0.0:8080
+	///
+	/// # Run migrations
+	/// reinhardt-admin run migrate
+	///
+	/// # Run with option flags (no -- needed)
+	/// reinhardt-admin run runserver --noreload
+	/// ```
+	Run {
+		/// Management command and its arguments to pass to `cargo run --bin manage`
+		#[arg(trailing_var_arg = true, allow_hyphen_values = true, value_name = "ARGS")]
+		args: Vec<String>,
 	},
 
 	/// Format all code: Rust (via rustfmt) + page! DSL (via reinhardt-fmt)
@@ -387,6 +417,7 @@ async fn main() {
 			backup,
 			cli.verbosity,
 		),
+		Commands::Run { args } => run_manage(args),
 	};
 
 	if let Err(e) = result {
@@ -1265,6 +1296,30 @@ fn run_fmt_all(
 			"{} files had formatting errors",
 			error_count
 		)));
+	}
+
+	Ok(())
+}
+
+/// Invoke a management command in the current Reinhardt project.
+///
+/// Runs `cargo run --bin manage -- [args...]` in the current directory,
+/// forwarding all arguments to the project's management binary.
+fn run_manage(args: Vec<String>) -> CommandResult<()> {
+	use std::process::Command;
+
+	let mut cmd = Command::new("cargo");
+	cmd.args(["run", "--bin", "manage", "--"]);
+	cmd.args(&args);
+
+	let status = cmd.status().map_err(|e| {
+		reinhardt_commands::CommandError::ExecutionError(format!("Failed to execute cargo: {e}"))
+	})?;
+
+	if !status.success() {
+		let code = status.code().unwrap_or(1);
+		eprintln!("{}", format!("Command exited with status {code}").red());
+		std::process::exit(code);
 	}
 
 	Ok(())

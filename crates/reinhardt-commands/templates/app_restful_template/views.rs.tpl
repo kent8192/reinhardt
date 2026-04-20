@@ -7,18 +7,27 @@
 //     pub mod example;
 // }
 //
-// Example of a JWT-protected endpoint using `JwtError` (rc.15+):
+// Example of a JWT-protected endpoint using typed `JwtError` (rc.15+):
 //
-// use reinhardt::{get, JwtAuth, JwtError};
-// use reinhardt::http::Request;
+// use reinhardt::{get, JwtAuth, JwtError, Response, StatusCode};
+// use reinhardt::http::ViewResult;
+// use axum::extract::Query;
+// use std::collections::HashMap;
 //
-// #[get("/protected")]
-// pub async fn protected_view(req: Request) -> Result<String, String> {
-//     let auth = JwtAuth::from_request(&req)?;
-//     match auth.verify() {
-//         Ok(claims) => Ok(format!("Hello, {}!", claims.username)),
-//         Err(JwtError::TokenExpired) => Err("Token has expired".to_string()),
-//         Err(JwtError::InvalidSignature(_)) => Err("Invalid token signature".to_string()),
-//         Err(e) => Err(format!("Authentication error: {}", e)),
+// #[get("/protected/", name = "{{ app_name }}_protected")]
+// pub async fn protected(
+//     Query(params): Query<HashMap<String, String>>,
+// ) -> ViewResult<Response> {
+//     let token = params.get("token").ok_or("missing token")?;
+//     let jwt = JwtAuth::new(b"your_secret"); // load from settings in practice
+//     match jwt.verify_token(token) {
+//         Ok(claims) => Ok(Response::new(StatusCode::OK).with_body(claims.username)),
+//         Err(JwtError::TokenExpired) => {
+//             Ok(Response::new(StatusCode::UNAUTHORIZED).with_body("Token expired"))
+//         }
+//         Err(JwtError::InvalidSignature(_)) => {
+//             Ok(Response::new(StatusCode::UNAUTHORIZED).with_body("Invalid signature"))
+//         }
+//         Err(e) => Ok(Response::new(StatusCode::INTERNAL_SERVER_ERROR).with_body(e.to_string())),
 //     }
 // }

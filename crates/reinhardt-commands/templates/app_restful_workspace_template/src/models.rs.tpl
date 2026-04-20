@@ -12,8 +12,11 @@
 //! #[user(hasher = Argon2Hasher, username_field = "email")]
 //! #[model(table_name = "users")]
 //! pub struct User {
+//!     #[field(primary_key = true)]
 //!     pub id: uuid::Uuid,
+//!     #[field(max_length = 254)]
 //!     pub email: String,
+//!     #[field(max_length = 255)]
 //!     pub password_hash: Option<String>,
 //!     pub last_login: Option<chrono::DateTime<chrono::Utc>>,
 //!     pub is_active: bool,

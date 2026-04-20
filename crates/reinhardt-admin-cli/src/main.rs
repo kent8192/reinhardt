@@ -383,7 +383,16 @@ async fn main() {
 			with_rest,
 			template_dir,
 		} => {
-			run_startproject(name, directory, template, with_pages, with_rest, template_dir, cli.verbosity).await
+			run_startproject(
+				name,
+				directory,
+				template,
+				with_pages,
+				with_rest,
+				template_dir,
+				cli.verbosity,
+			)
+			.await
 		}
 		Commands::Startapp {
 			name,
@@ -393,7 +402,16 @@ async fn main() {
 			with_rest,
 			template_dir,
 		} => {
-			run_startapp(name, directory, template, with_pages, with_rest, template_dir, cli.verbosity).await
+			run_startapp(
+				name,
+				directory,
+				template,
+				with_pages,
+				with_rest,
+				template_dir,
+				cli.verbosity,
+			)
+			.await
 		}
 		Commands::Plugin { subcommand } => run_plugin(subcommand, cli.verbosity).await,
 		Commands::Fmt {
@@ -1779,8 +1797,14 @@ mod arg_group_tests {
 	#[test]
 	fn startproject_template_pages_accepted() {
 		assert!(
-			try_parse(&["reinhardt-admin", "startproject", "myproj", "--template", "pages"])
-				.is_ok(),
+			try_parse(&[
+				"reinhardt-admin",
+				"startproject",
+				"myproj",
+				"--template",
+				"pages"
+			])
+			.is_ok(),
 			"--template pages should be accepted"
 		);
 	}
@@ -1788,7 +1812,14 @@ mod arg_group_tests {
 	#[test]
 	fn startproject_template_rest_accepted() {
 		assert!(
-			try_parse(&["reinhardt-admin", "startproject", "myproj", "--template", "rest"]).is_ok(),
+			try_parse(&[
+				"reinhardt-admin",
+				"startproject",
+				"myproj",
+				"--template",
+				"rest"
+			])
+			.is_ok(),
 			"--template rest should be accepted"
 		);
 	}
@@ -1797,7 +1828,10 @@ mod arg_group_tests {
 	fn startproject_missing_type_is_error() {
 		let result = try_parse(&["reinhardt-admin", "startproject", "myproj"]);
 		assert!(result.is_err(), "expected Err when type flag omitted");
-		assert_eq!(result.err().unwrap().kind(), ErrorKind::MissingRequiredArgument);
+		assert_eq!(
+			result.err().unwrap().kind(),
+			ErrorKind::MissingRequiredArgument
+		);
 	}
 
 	#[test]
@@ -1843,6 +1877,9 @@ mod arg_group_tests {
 	fn startapp_missing_type_is_error() {
 		let result = try_parse(&["reinhardt-admin", "startapp", "myapp"]);
 		assert!(result.is_err(), "expected Err when type flag omitted");
-		assert_eq!(result.err().unwrap().kind(), ErrorKind::MissingRequiredArgument);
+		assert_eq!(
+			result.err().unwrap().kind(),
+			ErrorKind::MissingRequiredArgument
+		);
 	}
 }

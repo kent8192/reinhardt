@@ -14,10 +14,11 @@
 //! ## Usage
 //!
 //! ```bash
-//! reinhardt-admin startproject myproject
-//! reinhardt-admin startapp myapp
+//! reinhardt-admin startproject myproject --with-rest
+//! reinhardt-admin startproject myproject --with-pages
+//! reinhardt-admin startapp myapp --with-rest
 //! reinhardt-admin fmt src/
-//! reinhardt-admin help
+//! reinhardt-admin --help
 //! ```
 
 mod ast_formatter;
@@ -36,24 +37,38 @@ use reinhardt_commands::{
 use std::process;
 use zeroize::Zeroize;
 
-/// Valid project and app template types.
-///
-/// Restricts the `--template-type` argument to known values,
-/// preventing typos and providing helpful error messages.
+/// Project/app architecture type used with `--template`.
 #[derive(Clone, Debug, ValueEnum)]
 enum TemplateType {
-	/// RESTful API project structure
-	Restful,
-	/// Model-Template-View project structure
-	Mtv,
+	/// RESTful API project/app structure
+	Rest,
+	/// Pages (WASM + SSR) project/app structure
+	Pages,
 }
 
-impl std::fmt::Display for TemplateType {
-	fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-		match self {
-			TemplateType::Restful => write!(f, "restful"),
-			TemplateType::Mtv => write!(f, "mtv"),
-		}
+/// The resolved project architecture, after alias expansion.
+enum ResolvedProjectType {
+	Pages,
+	Rest,
+}
+
+/// Resolves the mutually-exclusive `--template`/`--with-pages`/`--with-rest` group
+/// into a single `ResolvedProjectType`.
+///
+/// # Panics
+///
+/// Unreachable in practice — clap's `ArgGroup` with `required = true` guarantees
+/// that exactly one of the three args is set.
+fn resolve_project_type(
+	template: Option<TemplateType>,
+	with_pages: bool,
+	with_rest: bool,
+) -> ResolvedProjectType {
+	match (template, with_pages, with_rest) {
+		(Some(TemplateType::Pages), _, _) | (_, true, _) => ResolvedProjectType::Pages,
+		(Some(TemplateType::Rest), _, _) | (_, _, true) => ResolvedProjectType::Rest,
+		// ArgGroup required=true guarantees one branch above is taken (#3842)
+		_ => unreachable!(),
 	}
 }
 
@@ -73,6 +88,11 @@ struct Cli {
 #[derive(Subcommand)]
 enum Commands {
 	/// Create a new Reinhardt project
+	#[command(group(
+		clap::ArgGroup::new("project_type")
+			.required(true)
+			.args(["template", "with_pages", "with_rest"])
+	))]
 	Startproject {
 		/// Name of the project
 		#[arg(value_name = "PROJECT_NAME")]
@@ -82,9 +102,17 @@ enum Commands {
 		#[arg(value_name = "DIRECTORY")]
 		directory: Option<String>,
 
-		/// Project template type: mtv (Model-Template-View) or restful (RESTful API)
-		#[arg(short = 't', long, value_enum, default_value = "restful")]
-		template_type: TemplateType,
+		/// Project architecture type: rest (RESTful API) or pages (WASM + SSR)
+		#[arg(long, value_name = "TYPE", value_enum, group = "project_type")]
+		template: Option<TemplateType>,
+
+		/// Create a project with reinhardt-pages (WASM + SSR). Alias for --template pages.
+		#[arg(long, group = "project_type")]
+		with_pages: bool,
+
+		/// Create a RESTful API project. Alias for --template rest.
+		#[arg(long, group = "project_type")]
+		with_rest: bool,
 
 		/// Root directory whose sub-templates override embedded defaults.
 		/// Also reads the REINHARDT_TEMPLATE_DIR environment variable.
@@ -93,6 +121,11 @@ enum Commands {
 	},
 
 	/// Create a new Reinhardt app
+	#[command(group(
+		clap::ArgGroup::new("app_type")
+			.required(true)
+			.args(["template", "with_pages", "with_rest"])
+	))]
 	Startapp {
 		/// Name of the app
 		#[arg(value_name = "APP_NAME")]
@@ -102,9 +135,17 @@ enum Commands {
 		#[arg(value_name = "DIRECTORY")]
 		directory: Option<String>,
 
-		/// App template type: mtv or restful
-		#[arg(short = 't', long, value_enum, default_value = "restful")]
-		template_type: TemplateType,
+		/// App architecture type: rest (RESTful API) or pages (WASM + SSR)
+		#[arg(long, value_name = "TYPE", value_enum, group = "app_type")]
+		template: Option<TemplateType>,
+
+		/// Create an app with reinhardt-pages (WASM + SSR). Alias for --template pages.
+		#[arg(long, group = "app_type")]
+		with_pages: bool,
+
+		/// Create a RESTful API app. Alias for --template rest.
+		#[arg(long, group = "app_type")]
+		with_rest: bool,
 
 		/// Root directory whose sub-templates override embedded defaults.
 		/// Also reads the REINHARDT_TEMPLATE_DIR environment variable.
@@ -337,15 +378,23 @@ async fn main() {
 		Commands::Startproject {
 			name,
 			directory,
-			template_type,
+			template,
+			with_pages,
+			with_rest,
 			template_dir,
-		} => run_startproject(name, directory, template_type, template_dir, cli.verbosity).await,
+		} => {
+			run_startproject(name, directory, template, with_pages, with_rest, template_dir, cli.verbosity).await
+		}
 		Commands::Startapp {
 			name,
 			directory,
-			template_type,
+			template,
+			with_pages,
+			with_rest,
 			template_dir,
-		} => run_startapp(name, directory, template_type, template_dir, cli.verbosity).await,
+		} => {
+			run_startapp(name, directory, template, with_pages, with_rest, template_dir, cli.verbosity).await
+		}
 		Commands::Plugin { subcommand } => run_plugin(subcommand, cli.verbosity).await,
 		Commands::Fmt {
 			path,
@@ -398,7 +447,9 @@ async fn main() {
 async fn run_startproject(
 	name: String,
 	directory: Option<String>,
-	template_type: TemplateType,
+	template: Option<TemplateType>,
+	with_pages: bool,
+	with_rest: bool,
 	template_dir: Option<String>,
 	verbosity: u8,
 ) -> CommandResult<()> {
@@ -408,7 +459,10 @@ async fn run_startproject(
 	if let Some(dir) = directory {
 		ctx.add_arg(dir);
 	}
-	ctx.set_option("type".to_string(), template_type.to_string());
+	match resolve_project_type(template, with_pages, with_rest) {
+		ResolvedProjectType::Pages => ctx.set_option("with-pages".to_string(), "true".to_string()),
+		ResolvedProjectType::Rest => ctx.set_option("restful".to_string(), "true".to_string()),
+	}
 	if let Some(td) = template_dir {
 		ctx.set_option("template-dir".to_string(), td);
 	}
@@ -420,7 +474,9 @@ async fn run_startproject(
 async fn run_startapp(
 	name: String,
 	directory: Option<String>,
-	template_type: TemplateType,
+	template: Option<TemplateType>,
+	with_pages: bool,
+	with_rest: bool,
 	template_dir: Option<String>,
 	verbosity: u8,
 ) -> CommandResult<()> {
@@ -430,7 +486,10 @@ async fn run_startapp(
 	if let Some(dir) = directory {
 		ctx.add_arg(dir);
 	}
-	ctx.set_option("type".to_string(), template_type.to_string());
+	match resolve_project_type(template, with_pages, with_rest) {
+		ResolvedProjectType::Pages => ctx.set_option("with-pages".to_string(), "true".to_string()),
+		ResolvedProjectType::Rest => ctx.set_option("restful".to_string(), "true".to_string()),
+	}
 	if let Some(td) = template_dir {
 		ctx.set_option("template-dir".to_string(), td);
 	}
@@ -1634,5 +1693,156 @@ struct FormatLockGuard {
 impl Drop for FormatLockGuard {
 	fn drop(&mut self) {
 		let _ = std::fs::remove_file(&self.path);
+	}
+}
+
+#[cfg(test)]
+mod resolve_project_type_tests {
+	use super::*;
+
+	#[test]
+	fn with_pages_bool_resolves_to_pages() {
+		assert!(matches!(
+			resolve_project_type(None, true, false),
+			ResolvedProjectType::Pages
+		));
+	}
+
+	#[test]
+	fn with_rest_bool_resolves_to_rest() {
+		assert!(matches!(
+			resolve_project_type(None, false, true),
+			ResolvedProjectType::Rest
+		));
+	}
+
+	#[test]
+	fn template_pages_resolves_to_pages() {
+		assert!(matches!(
+			resolve_project_type(Some(TemplateType::Pages), false, false),
+			ResolvedProjectType::Pages
+		));
+	}
+
+	#[test]
+	fn template_rest_resolves_to_rest() {
+		assert!(matches!(
+			resolve_project_type(Some(TemplateType::Rest), false, false),
+			ResolvedProjectType::Rest
+		));
+	}
+
+	#[test]
+	fn template_pages_with_bool_false_resolves_to_pages() {
+		// --template pages takes precedence, both bools false
+		assert!(matches!(
+			resolve_project_type(Some(TemplateType::Pages), false, false),
+			ResolvedProjectType::Pages
+		));
+	}
+
+	#[test]
+	fn template_rest_with_bool_false_resolves_to_rest() {
+		// --template rest takes precedence, both bools false
+		assert!(matches!(
+			resolve_project_type(Some(TemplateType::Rest), false, false),
+			ResolvedProjectType::Rest
+		));
+	}
+}
+
+#[cfg(test)]
+mod arg_group_tests {
+	use super::*;
+	use clap::error::ErrorKind;
+
+	fn try_parse(args: &[&str]) -> Result<Cli, clap::Error> {
+		Cli::try_parse_from(args)
+	}
+
+	#[test]
+	fn startproject_with_pages_flag_accepted() {
+		assert!(
+			try_parse(&["reinhardt-admin", "startproject", "myproj", "--with-pages"]).is_ok(),
+			"--with-pages should be accepted"
+		);
+	}
+
+	#[test]
+	fn startproject_with_rest_flag_accepted() {
+		assert!(
+			try_parse(&["reinhardt-admin", "startproject", "myproj", "--with-rest"]).is_ok(),
+			"--with-rest should be accepted"
+		);
+	}
+
+	#[test]
+	fn startproject_template_pages_accepted() {
+		assert!(
+			try_parse(&["reinhardt-admin", "startproject", "myproj", "--template", "pages"])
+				.is_ok(),
+			"--template pages should be accepted"
+		);
+	}
+
+	#[test]
+	fn startproject_template_rest_accepted() {
+		assert!(
+			try_parse(&["reinhardt-admin", "startproject", "myproj", "--template", "rest"]).is_ok(),
+			"--template rest should be accepted"
+		);
+	}
+
+	#[test]
+	fn startproject_missing_type_is_error() {
+		let result = try_parse(&["reinhardt-admin", "startproject", "myproj"]);
+		assert!(result.is_err(), "expected Err when type flag omitted");
+		assert_eq!(result.err().unwrap().kind(), ErrorKind::MissingRequiredArgument);
+	}
+
+	#[test]
+	fn startproject_duplicate_flags_are_error() {
+		assert!(
+			try_parse(&[
+				"reinhardt-admin",
+				"startproject",
+				"myproj",
+				"--with-pages",
+				"--with-rest",
+			])
+			.is_err(),
+			"duplicate type flags should be rejected"
+		);
+	}
+
+	#[test]
+	fn startproject_template_and_alias_together_are_error() {
+		assert!(
+			try_parse(&[
+				"reinhardt-admin",
+				"startproject",
+				"myproj",
+				"--template",
+				"pages",
+				"--with-pages",
+			])
+			.is_err(),
+			"--template + --with-pages should be rejected"
+		);
+	}
+
+	#[test]
+	fn startapp_with_pages_flag_accepted() {
+		assert!(
+			try_parse(&["reinhardt-admin", "startapp", "myapp", "--with-pages"]).is_ok(),
+			"--with-pages should be accepted for startapp"
+		);
+	}
+
+	#[test]
+	fn startapp_missing_type_is_error() {
+		let result = try_parse(&["reinhardt-admin", "startapp", "myapp"]);
+		assert!(result.is_err(), "expected Err when type flag omitted");
+		assert_eq!(result.err().unwrap().kind(), ErrorKind::MissingRequiredArgument);
 	}
 }

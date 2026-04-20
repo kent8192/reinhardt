@@ -7,6 +7,88 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.0-rc.16](https://github.com/kent8192/reinhardt-web/compare/reinhardt-pages@v0.1.0-rc.15...reinhardt-pages@v0.1.0-rc.16) - 2026-04-20
+
+### Added
+
+- *(pages)* add JWT token management and auth header injection for WASM SPA
+- add SubmitButton support to form! macro fields
+- *(pages)* add MockableServerFn trait and macro generation under msw feature
+- *(forms)* propagate scope in pages-macros transform, drop client transforms
+- *(forms)* filter .validate() codegen by server scope
+- *(pages)* add hot module replacement support
+
+### Deprecated
+
+- *(test)* mark MockFetch and mock_server_fn as deprecated in favor of MSW
+
+### Documentation
+
+- *(http)* address Copilot review on [[#3417](https://github.com/kent8192/reinhardt-web/issues/3417)](https://github.com/kent8192/reinhardt-web/issues/3417)
+- *(forms)* update form! macro examples to unified validators syntax
+- *(pages,forms)* clarify unified validators scope and runtime status
+
+### Fixed
+
+- *(pages)* add web-sys Storage feature for sessionStorage access
+- *(pages)* resolve server_fn endpoint URL with mount prefix in WASM
+- *(docs)* resolve broken intra-doc links and incorrect test assertion
+- *(pages)* add reference to endpoint variable for gloo-net Request::post
+- *(pages-macros)* inline is_safe_url to remove reinhardt-core dependency
+- *(pages)* preserve HTTP status codes for DI auth errors in server_fn
+- *(pages)* cfg-gate @event handler compilation to wasm32 only
+- *(pages)* inline @event closure capture to fix move semantics
+- auto-pass CSRF token as server_fn argument in form! macro
+- suppress unused_variables warnings in form! macro codegen
+- resolve merge conflicts with main and fix CI failures
+- *(admin)* switch WASM SPA to mount() rendering with scheduler init
+- WASM SPA server_fn cookie credentials, absolute URL, and CSRF fallback
+- *(ci)* add CHROMEDRIVER to WASM integration tests and fix cfg assertion
+- *(server_fn)* use SharedResponseCookies for reliable cookie delivery
+- *(pages-macros)* resolve clippy len_zero and bool_assert_comparison warnings
+- *(ci)* add #[allow(deprecated)] to re-exports and tests using deprecated mock APIs
+- *(test)* address Copilot review feedback on MSW module
+- *(pages)* add compile-time guard for msw cfg and re-export export_endpoints
+- *(pages)* clarify msw guard comment wording
+- *(pages)* re-export tracing via __private to avoid forced user dependency
+- *(pages)* add cfg comment and fix indentation in __private module
+- *(pages)* remove duplicate __private module causing E0428 compile error
+- *(hmr)* broaden file watcher filter to all EventKind::Modify variants
+- *(hmr)* add backoff and tracing on accept() errors to prevent busy-loop
+- *(hmr)* handle WebSocket Close/Ping frames for deterministic teardown
+- *(hmr)* replace eprintln! with tracing macros for consistent structured logging
+- *(hmr)* derive dedup interval from config.debounce_ms instead of hardcoded 100ms
+- *(hmr)* normalize CssUpdate path to relative URL (strip watch root, forward slashes)
+- *(hmr)* select ws:// or wss:// based on window.location.protocol
+- *(pages)* use backtick for ResourceState::Loading in suspense doc comment
+- *(pages)* add feature = "hmr" cfg gate to hmr integration test file
+- *(pages,testkit)* add hmr feature gate to e2e tests and migrate Kafka image to apache/kafka
+
+### Maintenance
+
+- *(merge)* merge main into feature/pages-suspense
+
+### Other
+
+- Change AuthState user_id from i64 to String for UUID support
+
+### Styling
+
+- apply auto-fix formatting
+- apply rustfmt formatting via cargo make auto-fix
+- apply rustfmt formatting
+- apply cargo fmt --all
+- *(pages)* apply rustfmt to HMR source files and tests
+
+### Testing
+
+- add SubmitButton rendering regression tests
+- *(pages)* add FileField and ImageField coverage for typed form macro
+- *(forms)* add transform test for validator scope propagation
+- *(forms)* add trybuild fixture pinning client_validators rejection
+- *(pages/hmr)* add boundary, edge-case, and integration unit tests for HMR modules
+- *(pages/hmr)* add WebSocket integration and E2E tests for HMR server
+
 ## [0.1.0-rc.15](https://github.com/kent8192/reinhardt-web/compare/reinhardt-pages@v0.1.0-rc.14...reinhardt-pages@v0.1.0-rc.15) - 2026-03-29
 
 ### Added

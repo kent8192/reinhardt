@@ -7,6 +7,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.0-rc.16](https://github.com/kent8192/reinhardt-web/compare/reinhardt-admin-cli@v0.1.0-rc.15...reinhardt-admin-cli@v0.1.0-rc.16) - 2026-04-20
+
+### Added
+
+- *(admin-cli)* expose --template-dir flag on startproject and startapp
+
+### Changed
+
+- *(admin-cli)* drop unused SkipReason::NoPageMacro variant
+
+### Fixed
+
+- *(admin-cli)* treat missing page! as no-op, not skip
+
+### Styling
+
+- apply rustfmt and page! macro formatting
+- *(commands)* apply rustfmt to e2e_embedded_templates.rs
+
+### Testing
+
+- *(admin-cli)* add skip status validation to AST formatter tests
+- *(admin-cli)* extend skip status validation to remaining formatter tests
+- *(commands)* add E2E binary tests for embedded template rendering
+
 ## [0.1.0-rc.15](https://github.com/kent8192/reinhardt-web/compare/reinhardt-admin-cli@v0.1.0-rc.14...reinhardt-admin-cli@v0.1.0-rc.15) - 2026-03-29
 
 ### Documentation

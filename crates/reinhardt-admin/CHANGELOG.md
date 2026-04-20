@@ -8,6 +8,118 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 <!-- release-plz-separator -->
 <!-- Entries below this line were created before release-plz adoption -->
 
+## [0.1.0-rc.16](https://github.com/kent8192/reinhardt-web/compare/reinhardt-admin@v0.1.0-rc.15...reinhardt-admin@v0.1.0-rc.16) - 2026-04-20
+
+### Added
+
+- *(admin)* add login server function with JWT authentication
+- *(admin)* add login page, auth gate, and 401 redirect for WASM SPA
+- *(admin)* add UnoCSS runtime and Google Fonts CDN for admin panel styling
+- *(admin)* add reinhardt-conf and tracing dependencies
+- *(admin)* add AdminSettings type definitions with defaults
+- *(admin)* expose settings module from lib.rs
+- *(admin)* implement SettingsFragment for AdminSettings
+- *(admin)* add CSP and security header validation warnings
+- *(admin)* add from_str parsing for FrameOptions and ReferrerPolicy
+- *(admin)* add SecurityHeaders conversion from AdminSettings
+- *(admin)* route admin_spa_handler through AdminSettings
+- *(admin)* wire admin_spa_handler to use configurable AdminSettings
+- *(admin)* integrate UnoCSS generation into collectstatic
+- *(admin)* add UnoCSS runtime as CDN-downloaded vendor asset
+- add CDP-based E2E browser testing infrastructure and WASM SPA fixes
+- *(di)* [**breaking**] unify #[inject] parameter type from Arc<T> to Depends<T>
+- *(admin)* support BaseUser-only models in set_user_type
+- *(admin)* add FormFieldSpec enum preserving field choices
+
+### Changed
+
+- *(admin)* [**breaking**] mark AdminRoute as non_exhaustive and reorder Login variant
+- *(admin)* migrate page components to page! macro and Tailwind classes
+- *(admin)* update workaround comments for page! @event closure capture limitation
+- *(admin)* add issue refs to workaround comments and autocomplete to form inputs
+- replace login form page! HTML with form! macro
+- migrate login form to form! macro with server_fn
+- remove CSRF workaround now that [[#3337](https://github.com/kent8192/reinhardt-web/issues/3337)](https://github.com/kent8192/reinhardt-web/issues/3337) is fixed
+- *(admin)* [**breaking**] consolidate admin route builders into admin_routes_with_di
+- *(admin)* [**breaking**] remove AdminRouter struct and deprecated AdminSite methods
+
+### Documentation
+
+- *(admin)* fix broken intra-doc link to CspMiddleware
+
+### Fixed
+
+- *(admin)* use path_params instead of full URI in static file handler
+- *(admin)* call WASM init() in SPA HTML for web target output
+- *(admin)* support HEAD requests for static file handler
+- *(admin)* remove broken presetWind() global function call for UnoCSS v66+
+- *(admin)* initialize UnoCSS runtime with v66+ API for preset-wind
+- *(admin)* correct catch-all route count assertion for GET + HEAD
+- *(admin)* replace CDN references with local vendor paths
+- *(admin)* correct UnoCSS runtime CDN URL and font filename references
+- *(admin)* rename from_str to parse_or_default to satisfy clippy should_implement_trait
+- *(merge)* resolve conflicts with main adopting FromStr trait implementation
+- *(di)* add Authentication variant to DiError for proper 401 responses
+- *(admin)* make WASM JS reference test dynamic based on build state
+- *(admin)* use explicit headers and string conversion for CSV/TSV export
+- *(admin)* correct static route assertion to match catch-all pattern
+- *(admin)* use write_record for CSV/TSV export to support map-based records
+- *(admin)* handle UUID primary keys in create RETURNING clause
+- *(admin)* ensure vendor assets are available during development
+- *(auth)* add is_staff and is_superuser fields to JWT Claims
+- *(admin)* embed staff status in JWT token during admin login
+- *(pages)* migrate WASM HTTP client from gloo-net to reqwest
+- *(pages)* replace gloo-net with reqwest and fix server_fn JSON deserialization
+- *(pages)* inline @event closure capture to fix move semantics
+- *(admin)* prefix page! event params with underscore to suppress non-WASM warnings
+- remove vendor fonts from git tracking to resolve release-plz conflict
+- resolve merge conflicts with main and fix CI failures
+- resolve merge conflicts with main, migrate login to form! macro
+- *(admin)* switch WASM SPA to mount() rendering with scheduler init
+- *(admin)* make AdminSite registry lookups case-insensitive
+- align E2E tests with upstream WASM SPA fixes from PR [[#3350](https://github.com/kent8192/reinhardt-web/issues/3350)](https://github.com/kent8192/reinhardt-web/issues/3350)/[[#3351](https://github.com/kent8192/reinhardt-web/issues/3351)](https://github.com/kent8192/reinhardt-web/issues/3351)/[[#3352](https://github.com/kent8192/reinhardt-web/issues/3352)](https://github.com/kent8192/reinhardt-web/issues/3352)
+- gate WASM-only imports with #[cfg(client)] to suppress unused warnings
+- *(admin)* suppress deprecated warnings in AdminRouter impl and fix formatting
+- *(admin)* add missing SingletonScope import and fix formatting
+- *(http)* use newtype wrappers for bool extension values to prevent TypeId collision
+- update integration tests and docs for Depends<T> unification
+- *(di)* register Injectable types in global registry for Depends resolution
+- *(admin)* suppress unexpected check-cfg warning for msw feature
+- *(pages)* resolve unexpected cfg(feature = "msw") warnings in consuming crates
+- *(admin)* render TextArea/Select/MultiSelect with correct HTML elements
+- *(admin)* [**breaking**] harden FormFieldSpec and MultiSelect rendering
+
+### Other
+
+- resolve conflict with main (deduplicate tests)
+- resolve conflict with main in security tests
+- Fix CSP blocking admin WASM SPA init script
+- Change AuthState user_id from i64 to String for UUID support
+- Auto-inject timestamps for auto_now/auto_now_add fields in admin CRUD
+- Fix admin CRUD type coercion for timestamptz and uuid columns
+
+### Security
+
+- *(admin)* enforce is_active DB check in get_dashboard
+
+### Styling
+
+- *(admin)* add Open Props and Animate.css CDN, refactor style.css with design tokens
+- *(admin)* add Animate.css entrance animations to page components
+- *(admin)* apply rustfmt to test assertion in router module
+- *(admin)* fix formatting in settings, security, and router
+- apply rustfmt formatting fixes
+- apply rustfmt formatting via cargo make auto-fix
+- apply rustfmt formatting
+- apply rustfmt to site.rs
+- *(admin)* apply cargo make auto-fix formatting
+- *(admin)* apply rustfmt to site.rs
+- apply cargo fmt
+
+### Testing
+
+- *(admin)* cover TextArea/Select/MultiSelect form field rendering
+
 ## [0.1.0-rc.15](https://github.com/kent8192/reinhardt-web/compare/reinhardt-admin@v0.1.0-rc.14...reinhardt-admin@v0.1.0-rc.15) - 2026-03-29
 
 ### Changed

@@ -7,6 +7,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.0-rc.16](https://github.com/kent8192/reinhardt-web/compare/reinhardt-websockets@v0.1.0-rc.15...reinhardt-websockets@v0.1.0-rc.16) - 2026-04-20
+
+### Added
+
+- *(di)* [**breaking**] deprecate Injected<T> in favor of Depends<T> and remove auto-Clone
+- *(websockets)* add WebSocketEndpointInfo, WebSocketEndpointMetadata, substitute_ws_params
+- *(websockets)* add WebSocketRouter::consumer() builder and reverse() method
+
+### Changed
+
+- *(ws)* move WebSocketRoute/Router/EndpointInfo to reinhardt-core; add UnifiedRouter::websocket()
+
+### Fixed
+
+- *(ws/tests)* connect to resolved URL in e2e resolver test
+- *(ws/tests)* normalize server_url/resolved before joining
+
+### Maintenance
+
+- upgrade workspace dependencies to latest versions
+
+### Styling
+
+- *(pages)* apply rustfmt to merged files from main
+
+### Testing
+
+- *(websockets)* add URL resolver integration tests for WebSocketEndpointInfo and reverse()
+- *(websockets)* add E2E tests for WebSocket URL resolver with real tcp connection
+
 ## [0.1.0-rc.15](https://github.com/kent8192/reinhardt-web/compare/reinhardt-websockets@v0.1.0-rc.14...reinhardt-websockets@v0.1.0-rc.15) - 2026-03-29
 
 ### Maintenance

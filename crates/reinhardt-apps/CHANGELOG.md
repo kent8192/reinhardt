@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.0-rc.16](https://github.com/kent8192/reinhardt-web/compare/reinhardt-apps@v0.1.0-rc.15...reinhardt-apps@v0.1.0-rc.16) - 2026-04-20
+
+### Added
+
+- *(apps)* extend AppLabel with path() method for enum-style implementors
+- *(apps)* [**breaking**] require explicit LABEL on AppLabel implementors
+
+### Fixed
+
+- *(commands)* inject project_crate_name in workspace app context and update AppLabel doctest
+
+### Maintenance
+
+- upgrade workspace dependencies to latest versions
+
 ## [0.1.0-rc.15](https://github.com/kent8192/reinhardt-web/compare/reinhardt-apps@v0.1.0-rc.14...reinhardt-apps@v0.1.0-rc.15) - 2026-03-29
 
 ### Added

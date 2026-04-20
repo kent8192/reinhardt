@@ -7,6 +7,67 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.0-rc.16](https://github.com/kent8192/reinhardt-web/compare/reinhardt-di@v0.1.0-rc.15...reinhardt-di@v0.1.0-rc.16) - 2026-04-20
+
+### Added
+
+- *(di)* add DiError::Authorization variant for 403 responses
+- *(di)* [**breaking**] unify #[inject] parameter type from Arc<T> to Depends<T>
+- *(di)* auto-derive Clone in #[injectable] macro
+- *(di)* add qualified_type_names map to DependencyRegistry
+- *(di)* add is_framework_type() with 40 unit tests
+- *(di)* register qualified type names from macros
+- *(di)* add FrameworkTypeOverride validation to RegistryValidator
+- *(di)* [**breaking**] deprecate Injected<T> in favor of Depends<T> and remove auto-Clone
+- *(di)* add Validated<T> auto-validating extractor wrapper
+
+### Changed
+
+- *(di)* remove dead use_cache branch and avoid Arc rewrap in Depends
+- *(di)* remove unnecessary Clone bound from Depends<T> and Injected<T>
+- *(di)* address Copilot review feedback on orphan rule validation
+
+### Documentation
+
+- *(di)* document attribute ordering requirement and add compile-fail tests
+
+### Fixed
+
+- *(di)* add Authentication variant to DiError for proper 401 responses
+- *(di)* add #[non_exhaustive] to DiError enum
+- *(auth)* use DiError::Authentication for unauthenticated user errors
+- *(di)* resolve `#[inject]` type mismatch in `#[injectable_factory]` macro
+- *(di)* wrap injectable_factory body in cycle detection scope
+- update integration tests and docs for Depends<T> unification
+- *(di)* generate `Injectable` impl in `#[injectable_factory]` for `Depends<T>` support
+- *(di)* add scope fallback in resolve for pre-seeded types
+- *(di)* register Injectable types in global registry for Depends resolution
+- *(di)* resolve clippy warnings in tests, benchmarks, and override_registry
+- *(di)* fall back to Injectable::inject() when type is not in registry
+- *(di)* remove Injectable bound from Depends::resolve() for factory types
+- *(di)* use resolve_from_registry() in injectable_factory macro only
+- *(docs)* add Injectable impl to module-level doc example in depends.rs
+- *(di)* add #[non_exhaustive] to ParamError and fix formatting
+- *(di)* use Debug format for ValidationFailed instead of JSON serialization
+
+### Other
+
+- resolve conflict with main in di.rs ui module registration
+- resolve conflict in registration.rs with main
+
+### Styling
+
+- *(di)* apply auto-fix formatting
+- *(di)* apply rustfmt formatting
+- apply rustfmt formatting fixes
+- apply rustfmt to clippy-fixed files
+
+### Testing
+
+- *(di)* add edge-case tests for injectable auto-derive Clone
+- *(di)* register test types in global registry for Depends resolution
+- *(di)* add type_name format regression tests
+
 ## [0.1.0-rc.15](https://github.com/kent8192/reinhardt-web/compare/reinhardt-di@v0.1.0-rc.14...reinhardt-di@v0.1.0-rc.15) - 2026-03-29
 
 ### Fixed

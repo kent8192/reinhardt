@@ -7,6 +7,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.0-rc.16](https://github.com/kent8192/reinhardt-web/compare/reinhardt-manouche@v0.1.0-rc.15...reinhardt-manouche@v0.1.0-rc.16) - 2026-04-20
+
+### Added
+
+- *(pages)* add autocomplete attribute support to form! macro
+- add SubmitButton support to form! macro fields
+- *(forms)* add ValidatorScope and ClientTrigger, remove client validator AST types
+- *(forms)* parse scope annotations; reject client_validators with migration error
+- *(forms)* add scope to TypedValidatorRule, drop typed client validator types
+- *(forms)* propagate scope in manouche transform, drop client transforms and js validator
+
+### Styling
+
+- apply auto-fix formatting
+- apply rustfmt formatting
+- *(forms)* apply rustfmt to scope_tests module
+
+### Testing
+
+- *(pages)* add FileField and ImageField coverage for typed form macro
+- *(forms)* add parser tests for validator scope annotations
+
 ## [0.1.0-rc.15](https://github.com/kent8192/reinhardt-web/compare/reinhardt-manouche@v0.1.0-rc.14...reinhardt-manouche@v0.1.0-rc.15) - 2026-03-29
 
 ### Maintenance

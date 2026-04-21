@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.0-rc.18](https://github.com/kent8192/reinhardt-web/compare/reinhardt-pages-macros@v0.1.0-rc.17...reinhardt-pages-macros@v0.1.0-rc.18) - 2026-04-21
+
+### Added
+
+- *(macros)* support FromRequest extractors as #[server_fn] parameters
+
+### Styling
+
+- apply cargo fmt auto-fix
+
 ## [0.1.0-rc.16](https://github.com/kent8192/reinhardt-web/compare/reinhardt-pages-macros@v0.1.0-rc.15...reinhardt-pages-macros@v0.1.0-rc.16) - 2026-04-20
 
 ### Added

@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.0-rc.18](https://github.com/kent8192/reinhardt-web/compare/reinhardt-commands@v0.1.0-rc.17...reinhardt-commands@v0.1.0-rc.18) - 2026-04-21
+
+### Added
+
+- *(commands)* add bootstrap.rs.tpl, fix client.rs.tpl, update router.rs.tpl for ClientLauncher
+
+### Fixed
+
+- *(commands)* allow .gitignore.tpl to pass hidden-file filter in template processor
+
+### Styling
+
+- apply cargo fmt and clippy auto-fix
+
 ## [0.1.0-rc.17](https://github.com/kent8192/reinhardt-web/compare/reinhardt-commands@v0.1.0-rc.16...reinhardt-commands@v0.1.0-rc.17) - 2026-04-20
 
 ### Changed

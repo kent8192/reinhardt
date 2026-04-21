@@ -217,3 +217,8 @@ required-features = []
 name = "server_fn_wasm_test"
 path = "tests/wasm/server_fn_wasm_test.rs"
 required-features = []
+
+[[test]]
+name = "suspense_boundary_wasm_test"
+path = "tests/wasm/suspense_boundary_wasm_test.rs"
+required-features = []

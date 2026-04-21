@@ -230,11 +230,11 @@ const KNOWN_EXTRACTOR_TYPES: &[&str] = &[
 /// Returns `true` if the outermost type segment matches one of the
 /// known extractor names from `reinhardt_di::params`.
 fn is_extractor_type(ty: &syn::Type) -> bool {
-	if let syn::Type::Path(type_path) = ty {
-		if let Some(last_seg) = type_path.path.segments.last() {
-			let name = last_seg.ident.to_string();
-			return KNOWN_EXTRACTOR_TYPES.contains(&name.as_str());
-		}
+	if let syn::Type::Path(type_path) = ty
+		&& let Some(last_seg) = type_path.path.segments.last()
+	{
+		let name = last_seg.ident.to_string();
+		return KNOWN_EXTRACTOR_TYPES.contains(&name.as_str());
 	}
 	false
 }
@@ -546,7 +546,8 @@ fn generate_server_fn(info: &ServerFnInfo) -> proc_macro2::TokenStream {
 	let pages_crate_info = get_reinhardt_pages_crate_info();
 
 	// Generate client stub (with DI and extractor parameter filtering)
-	let client_stub = generate_client_stub(info, &inject_params, &extractor_params, &pages_crate_info);
+	let client_stub =
+		generate_client_stub(info, &inject_params, &extractor_params, &pages_crate_info);
 
 	// Generate server handler (with DI and extractor resolution)
 	let server_handler = generate_server_handler(info, &inject_params, &extractor_params);
@@ -597,7 +598,7 @@ fn generate_server_fn(info: &ServerFnInfo) -> proc_macro2::TokenStream {
 fn generate_client_stub(
 	info: &ServerFnInfo,
 	_inject_params: &[InjectInfo],
-	extractor_params: &[ExtractorInfo],
+	_extractor_params: &[ExtractorInfo],
 	pages_crate_info: &CratePathInfo,
 ) -> proc_macro2::TokenStream {
 	// Extract crate path info components
@@ -1657,13 +1658,18 @@ mod tests {
 		assert_eq!(extractor_params.len(), 2);
 
 		// No regular params should remain (simulating generate_server_handler logic)
-		let regular_count = func.sig.inputs.iter().filter(|arg| {
-			if let syn::FnArg::Typed(pt) = arg {
-				!is_extractor_type(&pt.ty)
-			} else {
-				false
-			}
-		}).count();
+		let regular_count = func
+			.sig
+			.inputs
+			.iter()
+			.filter(|arg| {
+				if let syn::FnArg::Typed(pt) = arg {
+					!is_extractor_type(&pt.ty)
+				} else {
+					false
+				}
+			})
+			.count();
 		assert_eq!(regular_count, 0, "All params should be extractors");
 	}
 }

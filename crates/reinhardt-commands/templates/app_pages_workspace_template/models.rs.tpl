@@ -8,7 +8,9 @@
 //! ```rust,ignore
 //! use reinhardt::macros::user;
 //! use reinhardt::Argon2Hasher;
+//! use serde::{Deserialize, Serialize};
 //!
+//! #[derive(Serialize, Deserialize)]
 //! #[user(hasher = Argon2Hasher, username_field = "email")]
 //! #[model(table_name = "users")]
 //! pub struct User {

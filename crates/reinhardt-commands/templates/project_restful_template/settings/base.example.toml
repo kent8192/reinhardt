@@ -11,7 +11,7 @@
 
 [core]
 debug = false
-# secret_key = "replace-with-a-long-random-string"
+# secret_key = "uncomment-this-line-and-replace-with-a-long-random-string"
 allowed_hosts = []
 language_code = "en-us"
 time_zone = "UTC"
@@ -36,7 +36,7 @@ host = "localhost"
 port = 5432
 name = "{{ project_name }}_db"
 user = "postgres"
-# password = "replace-with-db-password"
+# password = "uncomment-this-line-and-replace-with-db-password"
 
 [static]
 url = "/static/"

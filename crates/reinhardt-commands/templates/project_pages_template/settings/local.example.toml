@@ -5,8 +5,9 @@
 #
 # Uncomment and adjust the settings below as needed.
 
+# [core]
 # debug = true
-# secret_key = "replace-with-a-long-random-string"
+# secret_key = "uncomment-this-line-and-replace-with-a-long-random-string"
 # allowed_hosts = ["localhost", "127.0.0.1"]
 
 # [database]
@@ -22,7 +23,7 @@
 # engine = "sqlite"
 # name = "db.sqlite3"
 
-# [security]
+# [core.security]
 # session_cookie_secure = false
 # csrf_cookie_secure = false
 # secure_ssl_redirect = false

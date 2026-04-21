@@ -5,8 +5,9 @@
 #
 # Uncomment and adjust the settings below as needed.
 
+# [core]
 # debug = false
-# secret_key = "replace-with-a-long-random-string"
+# secret_key = "uncomment-this-line-and-replace-with-a-long-random-string"
 # allowed_hosts = ["example.com", "www.example.com"]
 
 # [database]
@@ -15,7 +16,7 @@
 # port = 5432
 # name = "{{ project_name }}_prod"
 # user = "{{ project_name }}_user"
-# password = "replace-with-db-password"
+# password = "uncomment-this-line-and-replace-with-db-password"
 
 # [static]
 # url = "https://cdn.example.com/static/"
@@ -25,7 +26,7 @@
 # url = "https://cdn.example.com/media/"
 # root = "/var/www/{{ project_name }}/media"
 
-# [security]
+# [core.security]
 # session_cookie_secure = true
 # csrf_cookie_secure = true
 # secure_ssl_redirect = true

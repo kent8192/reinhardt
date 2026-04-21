@@ -33,7 +33,8 @@ use reinhardt::conf::settings::sources::{DefaultSource, LowPriorityEnvSource, To
 use reinhardt::settings;
 use std::env;
 
-#[settings(/* add fragments here, e.g.: cache: CacheSettings | session: SessionSettings */)]
+// Add fragments to extend settings: e.g. `#[settings(core: CoreSettings | cache: CacheSettings)]`
+#[settings(core: CoreSettings)]
 pub struct ProjectSettings;
 
 /// Get settings based on environment variable

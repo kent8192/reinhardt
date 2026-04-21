@@ -147,8 +147,13 @@ impl TemplateCommand {
 				.map(|s| s.to_string_lossy().into_owned())
 				.unwrap_or_default();
 
-			// Skip hidden files and __pycache__, but keep .gitkeep and .gitignore
-			if (file_name.starts_with('.') && file_name != ".gitkeep" && file_name != ".gitignore")
+			// Skip hidden files and __pycache__, but keep .gitkeep and .gitignore(.tpl).
+			// Strip the .tpl extension before comparing so that `.gitignore.tpl` is also
+			// recognized as the allowed dotfile `.gitignore`.
+			let base_name = file_name.strip_suffix(".tpl").unwrap_or(&file_name);
+			if (file_name.starts_with('.')
+				&& base_name != ".gitkeep"
+				&& base_name != ".gitignore")
 				|| file_name == "__pycache__"
 			{
 				continue;

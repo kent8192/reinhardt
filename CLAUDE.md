@@ -559,6 +559,8 @@ Before submitting code:
 - Create upstream issue before implementing any workaround for external dependency bugs (WP-2)
 - Include the ideal implementation as a comment when introducing workaround code (WP-3)
 - Create a tracking issue in reinhardt-web for every upstream dependency issue with `upstream-tracking` label (UR-4)
+- Apply `good first issue` only when all GFI-1 criteria are met (single crate, ≤3 files, unambiguous fix)
+- Ensure issue description has file paths, expected behavior, and verification steps before applying `good first issue` (GFI-4)
 
 ### ❌ NEVER DO
 - Use `mod.rs` files (deprecated pattern)
@@ -634,6 +636,8 @@ Before submitting code:
 - Implement workarounds for upstream dependency issues without creating an upstream issue first (WP-2)
 - Introduce workaround code without an ideal implementation comment (WP-3)
 - Create upstream issues without corresponding reinhardt-web tracking issues (UR-4)
+- Apply `good first issue` to security, breaking-change, agent-suspect, or high/critical priority issues (GFI-2)
+- Apply `good first issue` without verifying issue description has sufficient guidance for new contributors (GFI-4)
 
 ### 📚 Detailed Standards
 
@@ -647,6 +651,7 @@ For comprehensive guidelines, see:
 - **Stability Policy**: instructions/STABILITY_POLICY.md (includes DB-1 ~ DB-7 develop branch strategy)
 - **Agent Bug Discovery**: instructions/STABILITY_POLICY.md (SC-2a)
 - **Issues**: instructions/ISSUE_GUIDELINES.md
+- **Good First Issue Policy**: instructions/ISSUE_GUIDELINES.md (GFI-1 ~ GFI-5)
 - **Issue Handling**: instructions/ISSUE_HANDLING.md
 - **Upstream Issue Reporting**: instructions/UPSTREAM_ISSUE_REPORTING.md
 - **GitHub Interactions**: instructions/GITHUB_INTERACTION.md

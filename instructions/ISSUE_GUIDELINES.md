@@ -407,6 +407,82 @@ Questions posted as Issues may be redirected to Discussions.
 
 ---
 
+## Good First Issue Policy
+
+### GFI-1 (MUST): Eligibility Criteria
+
+Apply the `good first issue` label ONLY when ALL of the following are true:
+
+**Scope Constraints:**
+- The fix or change is confined to a **single crate** (no cross-crate impact)
+- The change touches **3 or fewer files**
+- The estimated implementation is **under 50 lines** of Rust code
+
+**Complexity Constraints:**
+- Does NOT require understanding of Reinhardt's internal macro system (`#[model]`, `#[inject]`, etc.)
+- Does NOT require changes to public API signatures
+- Does NOT involve async runtime, database schema, or authentication logic
+- Does NOT require TestContainers or integration test infrastructure changes
+- The correct fix/approach is **unambiguous** (one clearly correct solution)
+
+**Documentation Constraints:**
+- The issue description provides **sufficient context** to start without maintainer guidance
+- Includes a clear **expected outcome** the contributor can verify
+
+### GFI-2 (MUST): Disqualification Criteria
+
+NEVER apply `good first issue` when any of the following apply:
+
+- Security-related issues (any `security` label)
+- API-breaking changes (any `breaking-change` or `rc-migration` label)
+- Issues requiring deep knowledge of SeaQuery internals
+- Cross-crate refactoring
+- Issues with `agent-suspect` label (unverified — may not be a real issue)
+- Issues with `needs more info` label (insufficient specification)
+- Issues with `critical` or `high` priority (too risky for new contributors)
+- Issues that require coordinated changes with a pending upstream fix
+
+### GFI-3 (SHOULD): Label Application Timing
+
+- Apply `good first issue` during **triage** (LC-1 step 3), not at issue creation
+- Re-evaluate and remove the label if the issue grows in scope during discussion
+- Remove the label once someone is actively working on it (assign + comment)
+
+### GFI-4 (MUST): Issue Description Requirements
+
+Before applying `good first issue`, the issue description MUST include:
+
+1. **Exact file(s) to modify** (repository-relative paths)
+2. **Specific behavior to change** (before/after)
+3. **How to verify the fix** (which test to run or what output to expect)
+4. **Relevant code pointers** (function name, line range, or struct name)
+
+If the issue lacks any of these, add them before applying the label (or use `needs more info` label first).
+
+**Example of a well-formed `good first issue` description:**
+
+> **File:** `crates/reinhardt-core/src/config/loader.rs` — `ConfigLoader::from_env()`
+>
+> **Problem:** When the `APP_PORT` environment variable is missing, the function panics
+> instead of returning an error.
+>
+> **Expected:** Return `Err(ConfigError::MissingEnvVar("APP_PORT"))` instead of panicking.
+>
+> **Verification:** Run `cargo nextest run -p reinhardt-core config::loader`.
+>
+> **Hint:** Look at how `from_file()` handles missing keys in the same file.
+
+### GFI-5 (SHOULD): Contributor Guidance
+
+When a new contributor comments on a `good first issue` to claim it:
+
+- Maintainer SHOULD reply within **48 hours** to confirm assignment
+- Provide a worktree setup hint: `git worktree add /tmp/<branch> -b fix/issue-XXXX-<desc>`
+- Point to `instructions/TESTING_STANDARDS.md` and `CLAUDE.md` Quick Reference
+- Set expectation: PR within **14 days** or the issue is unassigned for others
+
+---
+
 ## Security Issues
 
 ### SEC-1 (MUST): Private Disclosure

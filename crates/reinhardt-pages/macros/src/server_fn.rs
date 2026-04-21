@@ -187,6 +187,97 @@ struct InjectInfo {
 	ty: Box<syn::Type>,
 }
 
+/// Information about `FromRequest` extractor parameters
+///
+/// This struct holds metadata about parameters that should be resolved
+/// via `FromRequest::from_request(&req, &ctx)` on the server side.
+/// These are excluded from the Args struct (like `#[inject]` params).
+#[derive(Debug, Clone)]
+struct ExtractorInfo {
+	/// Parameter pattern (e.g., `form`, `header`)
+	pat: Box<syn::Pat>,
+	/// Parameter type (e.g., `Validated<Form<LoginRequest>>`, `Header<String>`)
+	ty: Box<syn::Type>,
+}
+
+/// Known `FromRequest` extractor type names.
+///
+/// When a parameter's outermost type matches one of these names, it is
+/// treated as an extractor and resolved via `FromRequest::from_request`.
+const KNOWN_EXTRACTOR_TYPES: &[&str] = &[
+	"Validated",
+	"Json",
+	"Form",
+	"Header",
+	"HeaderNamed",
+	"HeaderStruct",
+	"Cookie",
+	"CookieNamed",
+	"CookieStruct",
+	"Path",
+	"PathStruct",
+	"Query",
+	"Body",
+	"Multipart",
+	"Authorization",
+	"ContentType",
+	"SessionId",
+	"CsrfToken",
+];
+
+/// Check if a type is a known `FromRequest` extractor.
+///
+/// Returns `true` if the outermost type segment matches one of the
+/// known extractor names from `reinhardt_di::params`.
+fn is_extractor_type(ty: &syn::Type) -> bool {
+	if let syn::Type::Path(type_path) = ty {
+		if let Some(last_seg) = type_path.path.segments.last() {
+			let name = last_seg.ident.to_string();
+			return KNOWN_EXTRACTOR_TYPES.contains(&name.as_str());
+		}
+	}
+	false
+}
+
+/// Detect parameters that implement `FromRequest` (extractors).
+///
+/// Scans function parameters and identifies those whose type matches a known
+/// extractor. These parameters are excluded from the Args struct on the client
+/// side and resolved via `FromRequest::from_request` on the server side.
+///
+/// # Examples
+///
+/// ```ignore
+/// async fn handler(
+///     name: String,                             // Regular (Args)
+///     form: Validated<Form<LoginRequest>>,      // Extractor
+///     auth: Header<String>,                     // Extractor
+///     #[inject] db: Database,                   // DI (handled separately)
+/// ) -> Result<(), ServerFnError>
+/// ```
+fn detect_extractor_params(inputs: &Punctuated<FnArg, Token![,]>) -> Vec<ExtractorInfo> {
+	let mut extractor_params = Vec::new();
+
+	for input in inputs {
+		if let FnArg::Typed(pat_type) = input {
+			// Skip #[inject] params — those are handled by DI, not FromRequest
+			let has_inject_attr = pat_type.attrs.iter().any(is_inject_attr);
+			if has_inject_attr {
+				continue;
+			}
+
+			if is_extractor_type(&pat_type.ty) {
+				extractor_params.push(ExtractorInfo {
+					pat: pat_type.pat.clone(),
+					ty: pat_type.ty.clone(),
+				});
+			}
+		}
+	}
+
+	extractor_params
+}
+
 /// Check if an attribute is `#[inject]` or #[reinhardt::inject]
 ///
 /// # Examples
@@ -421,6 +512,9 @@ fn generate_server_fn(info: &ServerFnInfo) -> proc_macro2::TokenStream {
 	// Auto-detect #[inject] parameters unconditionally
 	let inject_params = detect_inject_params(&func.sig.inputs);
 
+	// Auto-detect FromRequest extractor parameters
+	let extractor_params = detect_extractor_params(&func.sig.inputs);
+
 	// Remove #[inject] attributes from original function
 	// This ensures the server-side code compiles without unknown attributes
 	let clean_func = if !inject_params.is_empty() {
@@ -451,11 +545,11 @@ fn generate_server_fn(info: &ServerFnInfo) -> proc_macro2::TokenStream {
 	// Dynamically resolve reinhardt_pages crate path for client stub
 	let pages_crate_info = get_reinhardt_pages_crate_info();
 
-	// Generate client stub (with DI parameter filtering)
-	let client_stub = generate_client_stub(info, &inject_params, &pages_crate_info);
+	// Generate client stub (with DI and extractor parameter filtering)
+	let client_stub = generate_client_stub(info, &inject_params, &extractor_params, &pages_crate_info);
 
-	// Generate server handler (with DI resolution)
-	let server_handler = generate_server_handler(info, &inject_params);
+	// Generate server handler (with DI and extractor resolution)
+	let server_handler = generate_server_handler(info, &inject_params, &extractor_params);
 
 	quote! {
 		// Deprecation warning for use_inject = true (if specified)
@@ -503,6 +597,7 @@ fn generate_server_fn(info: &ServerFnInfo) -> proc_macro2::TokenStream {
 fn generate_client_stub(
 	info: &ServerFnInfo,
 	_inject_params: &[InjectInfo],
+	extractor_params: &[ExtractorInfo],
 	pages_crate_info: &CratePathInfo,
 ) -> proc_macro2::TokenStream {
 	// Extract crate path info components
@@ -515,8 +610,8 @@ fn generate_client_stub(
 	let func = &info.func;
 	let sig = &func.sig;
 
-	// Extract function parameters, excluding #[inject] parameters
-	// Client-side doesn't need DI parameters - they're resolved on the server
+	// Extract function parameters, excluding #[inject] and extractor parameters.
+	// Client-side doesn't need DI or extractor parameters - they're resolved on the server.
 	let params: Vec<_> = sig
 		.inputs
 		.iter()
@@ -524,7 +619,14 @@ fn generate_client_stub(
 			if let syn::FnArg::Typed(pat_type) = arg {
 				// Skip #[inject] parameters
 				let has_inject = pat_type.attrs.iter().any(is_inject_attr);
-				if !has_inject { Some(pat_type) } else { None }
+				if has_inject {
+					return None;
+				}
+				// Skip FromRequest extractor parameters
+				if is_extractor_type(&pat_type.ty) {
+					return None;
+				}
+				Some(pat_type)
 			} else {
 				None
 			}
@@ -734,6 +836,7 @@ fn generate_client_stub(
 fn generate_server_handler(
 	info: &ServerFnInfo,
 	inject_params: &[InjectInfo],
+	extractor_params: &[ExtractorInfo],
 ) -> proc_macro2::TokenStream {
 	let name = info.name();
 	let endpoint = info.endpoint();
@@ -742,14 +845,24 @@ fn generate_server_handler(
 	let func = &info.func;
 	let sig = &func.sig;
 
-	// Extract function parameters, separating regular and #[inject] parameters
+	// Extract function parameters, separating regular, #[inject], and extractor parameters.
+	// Regular params go into the Args deserialization struct.
+	// #[inject] params are resolved via DI.
+	// Extractor params are resolved via FromRequest::from_request.
 	let regular_params: Vec<_> = sig
 		.inputs
 		.iter()
 		.filter_map(|arg| {
 			if let syn::FnArg::Typed(pat_type) = arg {
 				let has_inject = pat_type.attrs.iter().any(is_inject_attr);
-				if !has_inject { Some(pat_type) } else { None }
+				if has_inject {
+					return None;
+				}
+				// Extractor params are excluded from Args struct
+				if is_extractor_type(&pat_type.ty) {
+					return None;
+				}
+				Some(pat_type)
 			} else {
 				None
 			}
@@ -761,6 +874,9 @@ fn generate_server_handler(
 
 	// Extract inject parameter names (types handled per-param in di_resolution below)
 	let inject_param_names: Vec<_> = inject_params.iter().map(|p| &p.pat).collect();
+
+	// Extract extractor parameter names
+	let extractor_param_names: Vec<_> = extractor_params.iter().map(|p| &p.pat).collect();
 
 	// Generate unique names to avoid conflicts
 	let handler_name = quote::format_ident!("__server_fn_handler_{}", name);
@@ -873,15 +989,69 @@ fn generate_server_handler(
 		quote! {}
 	};
 
-	// Build function call with both regular and inject parameters
-	let function_call_params = if inject_params.is_empty() {
+	// Generate FromRequest extractor resolution code.
+	//
+	// For server functions that have extractor params, we need access to the
+	// request object (__req). The handler signature already uses Request when
+	// inject_params is non-empty; when only extractor_params are present, we
+	// still need to ensure the handler receives a Request.
+	let extractor_resolution = if !extractor_params.is_empty() {
+		let di_crate = get_reinhardt_di_crate();
+		let pages_crate_for_ext = get_reinhardt_pages_crate();
+
+		let ext_resolutions: Vec<_> = extractor_params
+			.iter()
+			.map(|p| {
+				let pat = &p.pat;
+				let ty = &p.ty;
+				quote! {
+					let #pat: #ty = <#ty as #di_crate::params::FromRequest>::from_request(&__req, &__param_ctx)
+						.await
+						.map_err(|e| {
+							#pages_crate_for_ext::__private::tracing::error!(
+								error = ?e,
+								param = stringify!(#ty),
+								"FromRequest extractor failed",
+							);
+							let server_err = #pages_crate_for_ext::server_fn::ServerFnError::server(
+								400u16,
+								format!("Parameter extraction failed: {}", e),
+							);
+							::serde_json::to_string(&server_err)
+								.unwrap_or_else(|_| "Parameter extraction failed".to_string())
+						})?;
+				}
+			})
+			.collect();
+
+		quote! {
+			// Build an empty ParamContext for extractor resolution
+			let __param_ctx = #di_crate::params::ParamContext::new();
+
+			// Resolve each FromRequest extractor parameter
+			#(#ext_resolutions)*
+		}
+	} else {
+		quote! {}
+	};
+
+	// Build function call with regular, inject, and extractor parameters
+	let has_inject_or_extractor = !inject_params.is_empty() || !extractor_params.is_empty();
+	let function_call_params = if !has_inject_or_extractor {
 		quote! {
 			#(args.#regular_param_names),*
+		}
+	} else if regular_params.is_empty() {
+		// No regular params from Args
+		quote! {
+			#(#inject_param_names,)*
+			#(#extractor_param_names),*
 		}
 	} else {
 		quote! {
 			#(args.#regular_param_names,)*
-			#(#inject_param_names),*
+			#(#inject_param_names,)*
+			#(#extractor_param_names),*
 		}
 	};
 
@@ -911,6 +1081,17 @@ fn generate_server_handler(
 			);
 			return quote! { compile_error!(#msg); };
 		}
+	};
+
+	// When there are no regular params (all params are extractors), skip deserialization.
+	// The Args struct will still be emitted (empty) but we don't need to deserialize it.
+	let deserialize_code = if regular_params.is_empty() {
+		quote! {
+			// No regular params — skip Args deserialization; all params are extractors or injected.
+			let args = #args_struct_name {};
+		}
+	} else {
+		deserialize_code
 	};
 
 	// Generate pre_validate validation code
@@ -955,18 +1136,19 @@ fn generate_server_handler(
 	// Dynamically resolve crate paths for body extraction and registration
 	let pages_crate = get_reinhardt_pages_crate();
 
-	// Generate handler signature based on whether DI is needed
+	// Generate handler signature based on whether DI or extractors are needed.
+	// Both DI (#[inject]) and FromRequest extractor params require access to the
+	// raw Request object, so the handler signature uses Request in both cases.
+	let needs_request = !inject_params.is_empty() || !extractor_params.is_empty();
 	let (handler_signature, handler_body_extraction, wrapper_body_extraction, wrapper_call_args) =
-		if !inject_params.is_empty() {
+		if needs_request {
 			// Dynamically resolve reinhardt_http crate path
 			let http_crate = get_reinhardt_http_crate();
 
-			// When we have inject params, handler receives Request to extract DI context
-			(
-				quote! {
-					pub async fn #handler_name(__req: #http_crate::Request) -> ::std::result::Result<::std::string::String, ::std::string::String>
-				},
-				// Handler body extraction (from __req parameter) with Content-Type negotiation
+			// When we have inject or extractor params, handler receives Request.
+			// Body reading is only needed when regular (Args-deserialized) params exist.
+			// If all params are extractors, the extractors themselves read the body.
+			let body_extraction = if !regular_params.is_empty() {
 				quote! {
 					let __content_type = __req.get_header("content-type").unwrap_or_default();
 					let body = __req.read_body()
@@ -974,15 +1156,24 @@ fn generate_server_handler(
 					let body = ::std::string::String::from_utf8(body.to_vec())
 						.map_err(|e| format!("Body is not valid UTF-8: {}", e))?;
 					let body = #pages_crate::server_fn::convert_body_for_codec(body, &__content_type, #codec)?;
+				}
+			} else {
+				quote! {}
+			};
+
+			(
+				quote! {
+					pub async fn #handler_name(__req: #http_crate::Request) -> ::std::result::Result<::std::string::String, ::std::string::String>
 				},
-				// Wrapper doesn't extract body when DI is enabled; passes Request directly
+				body_extraction,
+				// Wrapper doesn't extract body when DI/extractors are enabled; passes Request directly
 				quote! {
 					// Pass Request directly to handler (which will read the body)
 				},
 				vec![quote! { req }],
 			)
 		} else {
-			// No DI needed, handler receives body directly
+			// No DI or extractors needed, handler receives body directly
 			(
 				quote! {
 					pub async fn #handler_name(body: ::std::string::String) -> ::std::result::Result<::std::string::String, ::std::string::String>
@@ -1123,10 +1314,12 @@ fn generate_server_handler(
 				#(#regular_param_names: #regular_param_types),*
 			}
 
-			// Extract body if needed (when using DI)
+			// Extract body and deserialize Args only when there are regular (non-extractor) params.
+			// When all params are extractors, skip body reading to avoid consuming the body
+			// before extractor resolution.
 			#handler_body_extraction
 
-			// Deserialize request body based on codec
+			// Deserialize request body based on codec (skipped when no regular params)
 			#deserialize_code
 
 			// Validate deserialized arguments (when pre_validate = true)
@@ -1135,7 +1328,10 @@ fn generate_server_handler(
 			// Resolve #[inject] parameters via DI
 			#di_resolution
 
-			// Call the original server function with both regular and injected parameters
+			// Resolve FromRequest extractor parameters
+			#extractor_resolution
+
+			// Call the original server function with regular, injected, and extractor parameters
 			let result: #return_type = #name(#function_call_params).await;
 
 			// Handle Result and serialize
@@ -1351,5 +1547,123 @@ mod tests {
 		assert!(result.is_err());
 		let err = result.unwrap_err().to_string();
 		assert!(err.contains("fragment identifiers"));
+	}
+
+	/// Tests for `is_extractor_type` — verifies known extractor type detection.
+	#[test]
+	fn test_is_extractor_type_known_types() {
+		use syn::parse_quote;
+
+		// Known extractor types should return true
+		let ty: syn::Type = parse_quote!(Validated<Form<LoginRequest>>);
+		assert!(is_extractor_type(&ty), "Validated should be an extractor");
+
+		let ty: syn::Type = parse_quote!(Header<String>);
+		assert!(is_extractor_type(&ty), "Header should be an extractor");
+
+		let ty: syn::Type = parse_quote!(Json<UserRequest>);
+		assert!(is_extractor_type(&ty), "Json should be an extractor");
+
+		let ty: syn::Type = parse_quote!(Form<CreateUser>);
+		assert!(is_extractor_type(&ty), "Form should be an extractor");
+
+		let ty: syn::Type = parse_quote!(Query<PaginationParams>);
+		assert!(is_extractor_type(&ty), "Query should be an extractor");
+
+		let ty: syn::Type = parse_quote!(Path<u32>);
+		assert!(is_extractor_type(&ty), "Path should be an extractor");
+
+		let ty: syn::Type = parse_quote!(Cookie<String>);
+		assert!(is_extractor_type(&ty), "Cookie should be an extractor");
+
+		let ty: syn::Type = parse_quote!(Body);
+		assert!(is_extractor_type(&ty), "Body should be an extractor");
+	}
+
+	/// Tests for `is_extractor_type` — verifies that non-extractor types return false.
+	#[test]
+	fn test_is_extractor_type_non_extractors() {
+		use syn::parse_quote;
+
+		let ty: syn::Type = parse_quote!(u32);
+		assert!(!is_extractor_type(&ty), "u32 should not be an extractor");
+
+		let ty: syn::Type = parse_quote!(String);
+		assert!(!is_extractor_type(&ty), "String should not be an extractor");
+
+		let ty: syn::Type = parse_quote!(Database);
+		assert!(
+			!is_extractor_type(&ty),
+			"Database should not be an extractor"
+		);
+
+		let ty: syn::Type = parse_quote!(Arc<Database>);
+		assert!(
+			!is_extractor_type(&ty),
+			"Arc<Database> should not be an extractor"
+		);
+
+		let ty: syn::Type = parse_quote!(Vec<String>);
+		assert!(
+			!is_extractor_type(&ty),
+			"Vec<String> should not be an extractor"
+		);
+	}
+
+	/// Tests that `detect_extractor_params` correctly identifies extractor parameters
+	/// and skips #[inject] params.
+	#[test]
+	fn test_detect_extractor_params_basic() {
+		use syn::parse_quote;
+
+		// Parse a function with mixed param types
+		let func: syn::ItemFn = parse_quote! {
+			async fn login(
+				form: Validated<Form<LoginRequest>>,
+				auth_header: Header<String>,
+				name: String,
+				#[reinhardt::inject] db: Database,
+			) -> Result<(), ServerFnError> {}
+		};
+
+		let extractor_params = detect_extractor_params(&func.sig.inputs);
+
+		// Should detect 2 extractor params (form + auth_header), not name or db
+		assert_eq!(
+			extractor_params.len(),
+			2,
+			"Expected 2 extractor params, got: {:#?}",
+			extractor_params
+				.iter()
+				.map(|p| format!("{:?}", p.pat))
+				.collect::<Vec<_>>()
+		);
+	}
+
+	/// Tests that extractor params are not included in regular params
+	#[test]
+	fn test_extractor_params_excluded_from_regular() {
+		use syn::parse_quote;
+
+		// All params are extractors
+		let func: syn::ItemFn = parse_quote! {
+			async fn handler(
+				form: Form<CreateUser>,
+				hdr: Header<String>,
+			) -> Result<(), ServerFnError> {}
+		};
+
+		let extractor_params = detect_extractor_params(&func.sig.inputs);
+		assert_eq!(extractor_params.len(), 2);
+
+		// No regular params should remain (simulating generate_server_handler logic)
+		let regular_count = func.sig.inputs.iter().filter(|arg| {
+			if let syn::FnArg::Typed(pt) = arg {
+				!is_extractor_type(&pt.ty)
+			} else {
+				false
+			}
+		}).count();
+		assert_eq!(regular_count, 0, "All params should be extractors");
 	}
 }

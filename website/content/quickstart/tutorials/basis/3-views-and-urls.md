@@ -260,13 +260,7 @@ impl From<crate::apps::polls::models::Choice> for ChoiceInfo {
 
 ## Implementing Server Functions
 
-Create `src/server_fn.rs`:
-
-```rust
-pub mod polls;
-```
-
-Create `src/server_fn/polls.rs`:
+Create `src/apps/polls/server/server_fn.rs`:
 
 ```rust
 use crate::shared::types::{ChoiceInfo, QuestionInfo, VoteRequest};

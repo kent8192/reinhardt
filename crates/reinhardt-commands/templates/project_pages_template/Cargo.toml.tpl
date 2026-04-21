@@ -8,7 +8,7 @@ default-run = "{{ project_name }}"
 crate-type = ["cdylib", "rlib"]  # cdylib for WASM, rlib for server
 
 [[bin]]
-name = "{{ project_name }}"
+name = "manage"
 path = "src/bin/manage.rs"
 
 [dependencies]

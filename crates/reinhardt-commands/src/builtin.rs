@@ -816,8 +816,16 @@ impl BaseCommand for MakeMigrationsCommand {
 			let mut results: Vec<MigrationResult> = Vec::new();
 
 			// Build from_state based on strategy (default: TestContainers)
+			//
+			// #3871: Check --force-empty-state before any TestContainers or DB call.
+			// postgres_container() panics when Docker is unavailable, so the flag must
+			// be respected before attempting container startup, not as a fallback.
 			let from_db_flag = ctx.has_option("from-db");
-			let from_state = if from_db_flag {
+			let from_state = if ctx.has_option("force-empty-state") {
+				ctx.warning("⚠️  Using empty state as requested (--force-empty-state)");
+				ctx.warning("This may create duplicate migrations!");
+				ProjectState::new()
+			} else if from_db_flag {
 				// When --from-db flag is specified: prioritize database history
 				match build_from_state_from_db(&migrations_dir, &database_url).await {
 					Ok(state) => {
@@ -862,15 +870,7 @@ impl BaseCommand for MakeMigrationsCommand {
 										);
 										ctx.error("");
 
-										if ctx.has_option("force-empty-state") {
-											ctx.warning(
-												"⚠️  Using empty state as requested (--force-empty-state)",
-											);
-											ctx.warning("This may create duplicate migrations!");
-											ProjectState::new()
-										} else {
-											return Err("from_state construction failed. Please fix TestContainers, use --from-db, or use --force-empty-state to continue anyway.".to_string().into());
-										}
+										return Err("from_state construction failed. Please fix TestContainers, use --from-db, or use --force-empty-state to continue anyway.".to_string().into());
 									}
 								}
 							}
@@ -922,15 +922,7 @@ impl BaseCommand for MakeMigrationsCommand {
 										);
 										ctx.error("");
 
-										if ctx.has_option("force-empty-state") {
-											ctx.warning(
-												"⚠️  Using empty state as requested (--force-empty-state)",
-											);
-											ctx.warning("This may create duplicate migrations!");
-											ProjectState::new()
-										} else {
-											return Err("from_state construction failed. Please fix database connection, remove --from-db, or use --force-empty-state to continue anyway.".to_string().into());
-										}
+										return Err("from_state construction failed. Please fix database connection, remove --from-db, or use --force-empty-state to continue anyway.".to_string().into());
 									}
 								}
 							}

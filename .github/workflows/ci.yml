@@ -260,16 +260,6 @@ jobs:
       }}
     uses: ./.github/workflows/terraform-check.yml
 
-  semver-check:
-    name: SemVer Check
-    needs: [determine-runner, check-branch-status]
-    if: needs.check-branch-status.outputs.has-conflicts != 'true'
-    uses: ./.github/workflows/semver-check.yml
-    with:
-      runner: ${{ needs.determine-runner.outputs.runner }}
-      cargo-build-jobs: ${{ needs.determine-runner.outputs.cargo-build-jobs }}
-      has-breaking-change-label: ${{ contains(github.event.pull_request.labels.*.name, 'breaking-change') && 'true' || 'false' }}
-
   release-dry-run:
     name: Release Dry-Run
     needs: [determine-runner, check-branch-status]
@@ -403,7 +393,6 @@ jobs:
       - feature-check
       - security-audit
       - terraform-check
-      - semver-check
       - release-dry-run
       - unit-test
       - intra-crate-integration-test
@@ -433,7 +422,6 @@ jobs:
             "wasm-check:${{ needs.wasm-check.result }}"
             "todo-check:${{ needs.todo-check.result }}"
             "security-audit:${{ needs.security-audit.result }}"
-            "semver-check:${{ needs.semver-check.result }}"
             "docs-rs-check:${{ needs.docs-rs-check.result }}"
             "cross-platform-check:${{ needs.cross-platform-check.result }}"
           )

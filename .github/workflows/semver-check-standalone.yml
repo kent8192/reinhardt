@@ -1,0 +1,26 @@
+name: SemVer Check (Standalone)
+
+on:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pull-requests: write
+
+concurrency:
+  group: semver-check-${{ github.event.pull_request.number || github.run_id }}
+  # Use false to prevent the long-running SemVer check (up to 6 hours) from being
+  # cancelled by new pushes. With false, a new run queues behind the current one
+  # and intermediate pushes are replaced by the latest, ensuring at least one
+  # run always completes.
+  cancel-in-progress: false
+
+jobs:
+  semver-check:
+    name: SemVer Check
+    uses: ./.github/workflows/semver-check.yml
+    with:
+      runner: '"ubuntu-latest"'
+      cargo-build-jobs: '1'
+      has-breaking-change-label: ${{ contains(github.event.pull_request.labels.*.name, 'breaking-change') && 'true' || 'false' }}

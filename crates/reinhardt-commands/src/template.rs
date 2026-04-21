@@ -151,9 +151,7 @@ impl TemplateCommand {
 			// Strip the .tpl extension before comparing so that `.gitignore.tpl` is also
 			// recognized as the allowed dotfile `.gitignore`.
 			let base_name = file_name.strip_suffix(".tpl").unwrap_or(&file_name);
-			if (file_name.starts_with('.')
-				&& base_name != ".gitkeep"
-				&& base_name != ".gitignore")
+			if (file_name.starts_with('.') && base_name != ".gitkeep" && base_name != ".gitignore")
 				|| file_name == "__pycache__"
 			{
 				continue;

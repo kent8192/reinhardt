@@ -234,6 +234,7 @@ pub use reactive::{
 	Context, ContextGuard, create_context, get_context, provide_context, remove_context,
 };
 // Re-export Hooks API
+pub use app::{ClientLauncher, with_router};
 pub use reactive::{Action, ActionPhase, use_action};
 #[allow(deprecated)] // Intentional: re-exporting deprecated items for backward compatibility
 pub use reactive::{
@@ -248,7 +249,6 @@ pub use reinhardt_forms::{
 	Widget,
 	wasm_compat::{FieldMetadata, FormMetadata},
 };
-pub use app::{ClientLauncher, with_router};
 pub use router::{Link, PathPattern, Route, Router, RouterOutlet};
 pub use server_fn::{ServerFn, ServerFnError};
 pub use ssr::{SsrOptions, SsrRenderer, SsrState};

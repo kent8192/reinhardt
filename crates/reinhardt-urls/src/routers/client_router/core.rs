@@ -585,17 +585,10 @@ impl ClientRouter {
 
 			match route_match.route.handler.handle(&ctx) {
 				Ok(view) => view,
-				Err(_err) => self
-					.not_found
-					.as_ref()
-					.map(|f| f())
-					.unwrap_or(Page::Empty),
+				Err(_err) => self.not_found.as_ref().map(|f| f()).unwrap_or(Page::Empty),
 			}
 		} else {
-			self.not_found
-				.as_ref()
-				.map(|f| f())
-				.unwrap_or(Page::Empty)
+			self.not_found.as_ref().map(|f| f()).unwrap_or(Page::Empty)
 		}
 	}
 

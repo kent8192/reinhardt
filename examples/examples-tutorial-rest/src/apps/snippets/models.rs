@@ -70,15 +70,14 @@ mod tests {
 	/// Test that Snippet can be created with valid data
 	#[rstest]
 	fn test_snippet_creation() {
-		let snippet = Snippet {
-			id: 1,
-			title: "Hello World".to_string(),
-			code: "fn main() { println!(\"Hello!\"); }".to_string(),
-			language: "rust".to_string(),
-			created_at: Utc::now(),
-		};
+		// Arrange / Act
+		let snippet = Snippet::new(
+			"Hello World".to_string(),
+			"fn main() { println!(\"Hello!\"); }".to_string(),
+			"rust".to_string(),
+		);
 
-		assert_eq!(snippet.id, 1);
+		// Assert
 		assert_eq!(snippet.title, "Hello World");
 		assert_eq!(snippet.language, "rust");
 	}
@@ -86,13 +85,11 @@ mod tests {
 	/// Test highlighted() method produces HTML with syntax highlighting for Rust
 	#[rstest]
 	fn test_highlighted_rust_code() {
-		let snippet = Snippet {
-			id: 1,
-			title: "Rust Example".to_string(),
-			code: "fn main() { println!(\"Hello!\"); }".to_string(),
-			language: "rust".to_string(),
-			created_at: Utc::now(),
-		};
+		let snippet = Snippet::new(
+			"Rust Example".to_string(),
+			"fn main() { println!(\"Hello!\"); }".to_string(),
+			"rust".to_string(),
+		);
 
 		let html = snippet.highlighted();
 
@@ -109,13 +106,11 @@ mod tests {
 	/// Test highlighted() method works for Python language
 	#[rstest]
 	fn test_highlighted_python_code() {
-		let snippet = Snippet {
-			id: 2,
-			title: "Python Example".to_string(),
-			code: "def hello():\n    print('Hello!')".to_string(),
-			language: "python".to_string(),
-			created_at: Utc::now(),
-		};
+		let snippet = Snippet::new(
+			"Python Example".to_string(),
+			"def hello():\n    print('Hello!')".to_string(),
+			"python".to_string(),
+		);
 
 		let html = snippet.highlighted();
 
@@ -130,13 +125,11 @@ mod tests {
 	/// Test highlighted() method falls back to plain text for unknown languages
 	#[rstest]
 	fn test_highlighted_unknown_language() {
-		let snippet = Snippet {
-			id: 3,
-			title: "Unknown Language".to_string(),
-			code: "some unknown syntax here".to_string(),
-			language: "unknown_lang_xyz".to_string(),
-			created_at: Utc::now(),
-		};
+		let snippet = Snippet::new(
+			"Unknown Language".to_string(),
+			"some unknown syntax here".to_string(),
+			"unknown_lang_xyz".to_string(),
+		);
 
 		let html = snippet.highlighted();
 
@@ -154,13 +147,7 @@ mod tests {
 	/// Test highlighted() method handles empty code gracefully
 	#[rstest]
 	fn test_highlighted_empty_code() {
-		let snippet = Snippet {
-			id: 4,
-			title: "Empty Code".to_string(),
-			code: String::new(),
-			language: "rust".to_string(),
-			created_at: Utc::now(),
-		};
+		let snippet = Snippet::new("Empty Code".to_string(), String::new(), "rust".to_string());
 
 		let html = snippet.highlighted();
 
@@ -173,17 +160,15 @@ mod tests {
 	/// Test highlighted() method handles multiline code correctly
 	#[rstest]
 	fn test_highlighted_multiline_code() {
-		let snippet = Snippet {
-			id: 5,
-			title: "Multiline Rust".to_string(),
-			code: r#"fn main() {
+		let snippet = Snippet::new(
+			"Multiline Rust".to_string(),
+			r#"fn main() {
     let x = 42;
     println!("{}", x);
 }"#
 			.to_string(),
-			language: "rust".to_string(),
-			created_at: Utc::now(),
-		};
+			"rust".to_string(),
+		);
 
 		let html = snippet.highlighted();
 

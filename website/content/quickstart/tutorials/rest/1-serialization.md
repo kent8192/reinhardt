@@ -36,8 +36,8 @@ use reinhardt::prelude::*;
 use serde::{Serialize, Deserialize};
 
 /// Snippet model representing a code snippet
-#[derive(Serialize, Deserialize)]
 #[model(app_label = "snippets", table_name = "snippets")]
+#[derive(Serialize, Deserialize)]
 pub struct Snippet {
 	#[field(primary_key = true)]
 	pub id: i64,
@@ -160,12 +160,14 @@ use reinhardt::prelude::*;
 let serializer = JsonSerializer::<Snippet>::new();
 
 // Serialize to JSON
-let snippet = Snippet {
-    id: 1,
-    title: "Hello World".to_string(),
-    code: "print('hello')".to_string(),
-    language: "python".to_string(),
-};
+// #[model] generates Snippet::new(title, code, language) — primary key and
+// auto_now_add fields are populated automatically and omitted from the
+// constructor signature.
+let snippet = Snippet::new(
+    "Hello World".to_string(),
+    "print('hello')".to_string(),
+    "python".to_string(),
+);
 
 let json_bytes = serializer.serialize(&snippet).unwrap();
 let json_str = String::from_utf8(json_bytes).unwrap();
@@ -519,14 +521,14 @@ async fn create_snippet(
     // 2. Save to database (using Reinhardt ORM)
     // let snippet = Manager::<Snippet>::new().create(...).await?;
 
-    // Demo mode: Create a mock snippet with a sample ID
-    let snippet = Snippet {
-        id: 4,
-        title: serializer.title.clone(),
-        code: serializer.code.clone(),
-        language: serializer.language.clone(),
-        created_at: Utc::now(),
-    };
+    // Demo mode: construct a mock snippet via the macro-generated
+    // constructor. In production the record would be created through
+    // Manager::<Snippet>::new().create(...).
+    let snippet = Snippet::new(
+        serializer.title.clone(),
+        serializer.code.clone(),
+        serializer.language.clone(),
+    );
 
     // 3. Return response with created status
     let response_data = json!({

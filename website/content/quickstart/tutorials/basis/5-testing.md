@@ -306,7 +306,7 @@ For projects without migrations (like examples-tutorial-basis), you can use SQLi
 
 ```rust
 use rstest::*;
-use reinhardt_testkit::fixtures::testcontainers::sqlite_with_models;
+use reinhardt_testkit::fixtures::testcontainers::sqlite_with_all_migrations;
 use reinhardt::db::backends::DatabaseConnection;
 use std::sync::Arc;
 use chrono::Utc;
@@ -315,9 +315,9 @@ use crate::models::{Question, Choice};
 // Create custom fixture for polls app
 #[fixture]
 async fn polls_sqlite(
-    #[future] sqlite_with_models: Arc<DatabaseConnection>
+    #[future] sqlite_with_all_migrations: Arc<DatabaseConnection>
 ) -> Arc<DatabaseConnection> {
-    sqlite_with_models.await
+    sqlite_with_all_migrations.await
 }
 
 #[rstest]

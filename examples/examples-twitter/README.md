@@ -262,7 +262,7 @@ cargo run --bin manage makemigrations
 cargo run --bin manage migrate
 
 # Create new app
-cargo run --bin manage startapp myapp --template-type restful
+cargo run --bin manage startapp myapp --restful
 
 # Development server
 cargo run --bin manage runserver

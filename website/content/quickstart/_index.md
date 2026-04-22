@@ -25,7 +25,7 @@ cd my-api
 ## 3. Create your first app
 
 ```bash
-reinhardt-admin startapp hello --template-type restful
+reinhardt-admin startapp hello --template rest
 ```
 
 Edit `hello/views.rs`:

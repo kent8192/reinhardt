@@ -24,7 +24,7 @@ Create a new Reinhardt project called tutorial:
 
 ```bash
 # Create RESTful API project
-reinhardt-admin startproject tutorial --template-type restful
+reinhardt-admin startproject tutorial --template rest
 cd tutorial
 ```
 
@@ -136,7 +136,7 @@ pub async fn create_user(
 First, create a users app:
 
 ```bash
-reinhardt-admin startapp users --template-type restful
+reinhardt-admin startapp users --template rest
 ```
 
 ### Define Models and Serializers

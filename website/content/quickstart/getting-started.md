@@ -72,7 +72,7 @@ For a modern WASM-based frontend with SSR:
 
 ```bash
 # Create a reinhardt-pages project
-reinhardt-admin startproject my-app --template-type mtv
+reinhardt-admin startproject my-app --template pages
 cd my-app
 
 # Build WASM and start development server
@@ -198,7 +198,7 @@ message.
 Create an app and add a simple endpoint:
 
 ```bash
-reinhardt-admin startapp hello --template-type restful
+reinhardt-admin startapp hello --template rest
 ```
 
 Edit `hello/views.rs`:
@@ -233,7 +233,7 @@ Test: `curl http://127.0.0.1:8000/hello`
 Create a CRUD API using ViewSets:
 
 ```bash
-reinhardt-admin startapp todos --template-type restful
+reinhardt-admin startapp todos --template rest
 ```
 
 Define model (`todos/models.rs`), serializer (`todos/serializers.rs`), and
@@ -300,7 +300,7 @@ commands.
 
 ```bash
 # Create a new app
-reinhardt-admin startapp myapp --template-type restful
+reinhardt-admin startapp myapp --template rest
 
 # Development server
 cargo make runserver

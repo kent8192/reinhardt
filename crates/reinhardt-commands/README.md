@@ -379,13 +379,13 @@ impl BaseCommand for PluginInstallCommand {
 - **RESTful** - API-first applications
 
 ```bash
-reinhardt-admin startproject myproject --template-type restful
+reinhardt-admin startproject myproject --template rest
 ```
 
 ### App Templates
 
 ```bash
-reinhardt-admin startapp myapp --template-type restful
+reinhardt-admin startapp myapp --template rest
 ```
 
 Templates are embedded in the binary using `rust-embed` for fast,

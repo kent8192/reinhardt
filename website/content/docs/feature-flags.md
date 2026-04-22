@@ -382,10 +382,10 @@ WASM-based reactive frontend framework with server-side rendering (SSR) support.
 
 ```bash
 # Create a pages-based project
-reinhardt-admin startproject myapp --template-type mtv
+reinhardt-admin startproject myapp --template pages
 
 # Create a pages-based app
-reinhardt-admin startapp myfeature --template-type mtv
+reinhardt-admin startapp myfeature --template pages
 ```
 
 **Architecture:**
@@ -438,13 +438,13 @@ cargo make build-release
 
 ```bash
 # Start server with WASM frontend
-cargo run --bin manage runserver --template-type mtv
+cargo run --bin manage runserver --with-pages
 
 # Custom static directory
-cargo run --bin manage runserver --template-type mtv --static-dir build
+cargo run --bin manage runserver --with-pages --static-dir build
 
 # Disable SPA mode (no index.html fallback)
-cargo run --bin manage runserver --template-type mtv --no-spa
+cargo run --bin manage runserver --with-pages --no-spa
 ```
 
 See [examples/examples-twitter](https://github.com/kent8192/reinhardt-web/tree/main/examples/examples-twitter) for a complete implementation.

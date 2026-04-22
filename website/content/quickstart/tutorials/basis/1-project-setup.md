@@ -67,7 +67,7 @@ For a modern WASM-based frontend with SSR:
 
 ```bash
 # Create a pages project
-reinhardt-admin startproject my-app --template-type mtv
+reinhardt-admin startproject my-app --template pages
 cd my-app
 
 # Build WASM and start development server
@@ -530,7 +530,7 @@ Clicking the link triggers client-side navigation (no page reload).
 | **URL Parameters** | `Request.path_params` | `Router::current_params()` |
 | **Handler** | `async fn(Request) -> Response` | `fn() -> Page` |
 
-**Note**: Reinhardt projects generated with `--template-type mtv` already include client routing configuration. You don't need to manually create routing files for development.
+**Note**: Reinhardt projects generated with `--template pages` already include client routing configuration. You don't need to manually create routing files for development.
 
 ## Running the Development Server
 

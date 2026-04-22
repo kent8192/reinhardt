@@ -106,10 +106,15 @@ module "github_runner" {
   # Without this, queued jobs can deadlock when the initial SQS message is
   # consumed but the runner terminates before the job starts (e.g. when
   # runners_maximum_count is reached or spot interruption occurs).
+  #
+  # max_attempts=10 covers ~2.5h of retry at 15-min intervals. Raised from
+  # 5 after 8 jobs were stranded on PR #3901 when retries exhausted in
+  # ~75min while JIT runners silently failed to pick up assignments.
+  # See kent8192/reinhardt-web#3902.
   job_retry = {
     enable           = true
     delay_in_seconds = 120
-    max_attempts     = 5
+    max_attempts     = 10
   }
 
   # Spot termination watcher: cancel and re-queue GitHub jobs on EC2 Spot

@@ -16,6 +16,15 @@ struct LoginRequest {
 	password: String,
 }
 
+// `Validated<Form<LoginRequest>>` requires the inner type to implement
+// `reinhardt_core::validators::Validate`. A minimal no-op impl is enough
+// to satisfy the trait bound for this compile-only fixture.
+impl reinhardt_core::validators::Validate for LoginRequest {
+	fn validate(&self) -> Result<(), reinhardt_core::validators::ValidationErrors> {
+		Ok(())
+	}
+}
+
 #[derive(Serialize, Deserialize)]
 struct User {
 	id: u32,

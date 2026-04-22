@@ -1,0 +1,39 @@
+{
+  "name": "reinhardt-ci-orphan-detector",
+  "version": "1.0.0",
+  "description": "Scheduled Lambda scanning for stranded GitHub Actions jobs (Issue #3903)",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "build": "node esbuild.config.mjs",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:coverage": "vitest run --coverage",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@aws-sdk/client-cloudwatch": "^3.600.0",
+    "@aws-sdk/client-sns": "^3.600.0",
+    "@aws-sdk/client-ssm": "^3.600.0",
+    "@octokit/auth-app": "^7.1.0",
+    "@octokit/plugin-retry": "^7.1.0",
+    "@octokit/plugin-throttling": "^9.3.0",
+    "@octokit/rest": "^21.0.0",
+    "p-map": "^7.0.0",
+    "pino": "^9.3.0",
+    "undici": "^6.19.0"
+  },
+  "devDependencies": {
+    "@aws-sdk/types": "^3.600.0",
+    "@types/aws-lambda": "^8.10.140",
+    "@types/node": "^20.14.0",
+    "@vitest/coverage-v8": "^2.0.0",
+    "esbuild": "^0.23.0",
+    "msw": "^2.3.0",
+    "typescript": "^5.5.0",
+    "vitest": "^2.0.0"
+  }
+}

@@ -157,3 +157,8 @@ infra/**/*.tfvars
 !infra/**/*.examples.tfvars
 infra/**/backend.tfvars
 infra/github-runners/lambdas/*.zip
+
+# Orphan detector Lambda build artifacts (Issue #3903)
+infra/github-runners/lambda-src/*/node_modules/
+infra/github-runners/lambda-src/*/dist/
+infra/github-runners/lambda-src/*/coverage/

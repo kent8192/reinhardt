@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.0-rc.19](https://github.com/kent8192/reinhardt-web/compare/reinhardt-web@v0.1.0-rc.18...reinhardt-web@v0.1.0-rc.19) - 2026-04-22
+
+### Fixed
+
+- *(commands)* return WebSocketRouter from ws_urls scaffold template
+
 ## [0.1.0-rc.18](https://github.com/kent8192/reinhardt-web/compare/reinhardt-web@v0.1.0-rc.17...reinhardt-web@v0.1.0-rc.18) - 2026-04-22
 
 ### Fixed

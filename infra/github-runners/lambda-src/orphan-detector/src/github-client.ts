@@ -34,6 +34,8 @@ export async function buildAppOctokit(args: {
 }
 
 export interface QueuedJobExtended extends WorkflowJob {
+	// Narrow status to the literal 'queued' since listQueuedJobs filters on it.
+	status: "queued";
 	workflow_name: string;
 	name: string;
 }

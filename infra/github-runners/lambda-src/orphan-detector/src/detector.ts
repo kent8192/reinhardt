@@ -6,12 +6,14 @@ export interface WorkflowJob {
 	labels: string[];
 }
 
-export function filterOrphans(
-	jobs: readonly WorkflowJob[],
+// Generic over the job type so callers with richer types (e.g. QueuedJobExtended
+// in github-client.ts) retain their extra fields through the filter.
+export function filterOrphans<J extends WorkflowJob>(
+	jobs: readonly J[],
 	nowMs: number,
 	stalenessMin: number,
 	processed: ReadonlyMap<number, number>,
-): WorkflowJob[] {
+): J[] {
 	const cutoffMs = nowMs - stalenessMin * 60_000;
 	return jobs.filter((job) => {
 		if (job.status !== "queued") return false;

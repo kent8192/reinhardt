@@ -2,7 +2,7 @@ import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import { http, HttpResponse } from "msw";
 import { setupServer } from "msw/node";
 import { Octokit } from "@octokit/rest";
-import { listQueuedJobs } from "../src/github-client.js";
+import { getRateLimitRemaining, listQueuedJobs } from "../src/github-client.js";
 
 const server = setupServer();
 
@@ -62,6 +62,28 @@ describe("listQueuedJobs", () => {
 		const octokit = new Octokit({ auth: "test-token" });
 		const jobs = await listQueuedJobs(octokit, "o", "r");
 		expect(jobs.map((j) => j.id)).toEqual([1]); // only queued, not in_progress
+	});
+
+	it("getRateLimitRemaining returns remaining count", async () => {
+		server.use(
+			http.get("https://api.github.com/rate_limit", () =>
+				HttpResponse.json({ rate: { limit: 5000, remaining: 4321, reset: 123 } }),
+			),
+		);
+		const octokit = new Octokit({ auth: "test-token" });
+		const remaining = await getRateLimitRemaining(octokit);
+		expect(remaining).toBe(4321);
+	});
+
+	it("getRateLimitRemaining returns -1 on error", async () => {
+		server.use(
+			http.get("https://api.github.com/rate_limit", () =>
+				HttpResponse.error(),
+			),
+		);
+		const octokit = new Octokit({ auth: "test-token" });
+		const remaining = await getRateLimitRemaining(octokit);
+		expect(remaining).toBe(-1);
 	});
 
 	it("handles pagination via Link header", async () => {

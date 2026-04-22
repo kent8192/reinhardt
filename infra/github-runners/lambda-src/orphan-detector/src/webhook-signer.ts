@@ -40,6 +40,7 @@ export async function postSignedWebhook(args: {
 
 	const maxAttempts = 3;
 	let lastErr: unknown;
+	let lastStatus = 0; // Retain final 5xx status for final return
 
 	for (let attempt = 1; attempt <= maxAttempts; attempt++) {
 		try {
@@ -63,6 +64,7 @@ export async function postSignedWebhook(args: {
 				return { ok: false, status, jobId };
 			}
 			// 5xx: retry
+			lastStatus = status;
 			logger.warn({ msg: "webhook.5xx_retry", jobId, status, attempt });
 		} catch (err) {
 			lastErr = err;
@@ -72,8 +74,8 @@ export async function postSignedWebhook(args: {
 			await sleep(100 * 2 ** (attempt - 1)); // 100ms, 200ms
 		}
 	}
-	logger.error({ msg: "webhook.giving_up", jobId, err: String(lastErr) });
-	return { ok: false, status: 0, jobId };
+	logger.error({ msg: "webhook.giving_up", jobId, status: lastStatus, err: String(lastErr) });
+	return { ok: false, status: lastStatus, jobId };
 }
 
 function sleep(ms: number): Promise<void> {

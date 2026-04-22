@@ -697,10 +697,11 @@ pub(crate) fn routes_impl(args: TokenStream, input: ItemFn) -> Result<TokenStrea
 						}
 
 						// Invoke __for_each_ws_url_resolver to populate methods.
-						// This is a no-op if the app has no ws_url_resolvers module.
-						crate::apps::#app::ws_urls::ws_url_resolvers::__for_each_ws_url_resolver!(
+						// This is a no-op if the app has no urls/ws_urls.rs module.
+						// #3914: ws resolver was hoisted under `urls/` in rc.19 (breaking change).
+						crate::apps::#app::urls::ws_urls::ws_url_resolvers::__for_each_ws_url_resolver!(
 							#gen_ws_method_macro, #app,
-							crate::apps::#app::ws_urls::ws_url_resolvers
+							crate::apps::#app::urls::ws_urls::ws_url_resolvers
 						);
 					}
 				})

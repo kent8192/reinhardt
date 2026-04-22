@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.0-rc.18](https://github.com/kent8192/reinhardt-web/compare/reinhardt-conf@v0.1.0-rc.17...reinhardt-conf@v0.1.0-rc.18) - 2026-04-22
+
+### Fixed
+
+- *(reinhardt-conf)* warn on flat-key settings outside [core] section
+
+### Styling
+
+- apply cargo fmt auto-fix
+
 ## [0.1.0-rc.16](https://github.com/kent8192/reinhardt-web/compare/reinhardt-conf@v0.1.0-rc.15...reinhardt-conf@v0.1.0-rc.16) - 2026-04-20
 
 ### Added

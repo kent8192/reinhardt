@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.0-rc.18](https://github.com/kent8192/reinhardt-web/compare/reinhardt-urls@v0.1.0-rc.17...reinhardt-urls@v0.1.0-rc.18) - 2026-04-22
+
+### Added
+
+- *(urls)* change ClientRouter::render_current() to return Page
+
+### Styling
+
+- apply cargo fmt and clippy auto-fix
+
 ## [0.1.0-rc.16](https://github.com/kent8192/reinhardt-web/compare/reinhardt-urls@v0.1.0-rc.15...reinhardt-urls@v0.1.0-rc.16) - 2026-04-20
 
 ### Added

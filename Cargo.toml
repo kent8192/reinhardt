@@ -436,12 +436,12 @@ reinhardt-forms = { path = "crates/reinhardt-forms", version = "0.1.0-rc.18" }
 reinhardt-testkit = { path = "crates/reinhardt-testkit", version = "0.1.0-rc.18" }
 reinhardt-test = { path = "crates/reinhardt-test", version = "0.1.0-rc.18" }
 reinhardt-tasks = { path = "crates/reinhardt-tasks", version = "0.1.0-rc.18" }
-reinhardt-streaming = { path = "crates/reinhardt-streaming", version = "0.1.0-alpha.1" }
+reinhardt-streaming = { path = "crates/reinhardt-streaming", version = "0.1.0-rc.18" }
 reinhardt-utils = { path = "crates/reinhardt-utils", version = "0.1.0-rc.18" }
 reinhardt-rest = { path = "crates/reinhardt-rest", version = "0.1.0-rc.18" }
 reinhardt-throttling = { path = "crates/reinhardt-throttling", version = "0.1.0-rc.18" }
 reinhardt-auth = { path = "crates/reinhardt-auth", version = "0.1.0-rc.18" }
-reinhardt-auth-macros = { path = "crates/reinhardt-auth/macros", version = "0.1.0-rc.16" }
+reinhardt-auth-macros = { path = "crates/reinhardt-auth/macros", version = "0.1.0-rc.18" }
 reinhardt-admin = { path = "crates/reinhardt-admin", version = "0.1.0-rc.18" }
 reinhardt-admin-cli = { path = "crates/reinhardt-admin-cli", version = "0.1.0-rc.18" }
 reinhardt-grpc = { path = "crates/reinhardt-grpc", version = "0.1.0-rc.18" }

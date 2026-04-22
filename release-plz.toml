@@ -64,6 +64,10 @@ name = "reinhardt-auth"
 version_group = "reinhardt"
 
 [[package]]
+name = "reinhardt-auth-macros"
+version_group = "reinhardt"
+
+[[package]]
 name = "reinhardt-commands"
 version_group = "reinhardt"
 
@@ -189,6 +193,10 @@ version_group = "reinhardt"
 
 [[package]]
 name = "reinhardt-shortcuts"
+version_group = "reinhardt"
+
+[[package]]
+name = "reinhardt-streaming"
 version_group = "reinhardt"
 
 [[package]]

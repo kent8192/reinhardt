@@ -63,6 +63,26 @@
 //! For sync functions, a sync `RouterFactory::Sync` is registered.
 //! For async functions, an async `RouterFactory::Async` is registered,
 //! which returns a `Pin<Box<dyn Future>>` wrapping the async call.
+//!
+//! # Migration from rc.18 (breaking change in rc.19)
+//!
+//! The WebSocket resolver location moved from
+//! `crate::apps::<app>::ws_urls::ws_url_resolvers` to
+//! `crate::apps::<app>::urls::ws_urls::ws_url_resolvers`. To migrate:
+//!
+//! ```bash
+//! mkdir -p src/apps/<app>/urls
+//! git mv src/apps/<app>/ws_urls.rs src/apps/<app>/urls/ws_urls.rs
+//! ```
+//!
+//! Then declare the submodule in `urls.rs`:
+//!
+//! ```rust,ignore
+//! #[cfg(server)]
+//! pub mod ws_urls;
+//! ```
+//!
+//! See <https://github.com/kent8192/reinhardt-web/issues/3914>.
 
 use crate::crate_paths::{get_reinhardt_crate, get_reinhardt_di_crate};
 use proc_macro2::TokenStream;
@@ -697,10 +717,11 @@ pub(crate) fn routes_impl(args: TokenStream, input: ItemFn) -> Result<TokenStrea
 						}
 
 						// Invoke __for_each_ws_url_resolver to populate methods.
-						// This is a no-op if the app has no ws_url_resolvers module.
-						crate::apps::#app::ws_urls::ws_url_resolvers::__for_each_ws_url_resolver!(
+						// This is a no-op if the app has no urls/ws_urls.rs module.
+						// #3914: ws resolver was hoisted under `urls/` in rc.19 (breaking change).
+						crate::apps::#app::urls::ws_urls::ws_url_resolvers::__for_each_ws_url_resolver!(
 							#gen_ws_method_macro, #app,
-							crate::apps::#app::ws_urls::ws_url_resolvers
+							crate::apps::#app::urls::ws_urls::ws_url_resolvers
 						);
 					}
 				})

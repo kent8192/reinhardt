@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.0-rc.18](https://github.com/kent8192/reinhardt-web/compare/reinhardt-admin-cli@v0.1.0-rc.17...reinhardt-admin-cli@v0.1.0-rc.18) - 2026-04-22
+
+### Fixed
+
+- *(admin-cli)* align e2e test with current local.example.toml placeholder
+
 ## [0.1.0-rc.17](https://github.com/kent8192/reinhardt-web/compare/reinhardt-admin-cli@v0.1.0-rc.16...reinhardt-admin-cli@v0.1.0-rc.17) - 2026-04-20
 
 ### Documentation

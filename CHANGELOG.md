@@ -7,6 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.0-rc.18](https://github.com/kent8192/reinhardt-web/compare/reinhardt-web@v0.1.0-rc.17...reinhardt-web@v0.1.0-rc.18) - 2026-04-22
+
+### Fixed
+
+- *(commands)* allow .gitignore.tpl to pass hidden-file filter in template processor
+- *(docs)* resolve broken intra-doc link and dead_code in reinhardt-pages
+- *(infra)* add spot interruption handler to prevent CI job loss
+- *(ci)* add termination-watcher.zip to terraform workflow lambda downloads
+- *(admin-cli)* align e2e test with current local.example.toml placeholder
+
+### Styling
+
+- apply cargo fmt auto-fix
+
+### Testing
+
+- *(pages)* add wasm-bindgen-test coverage for SuspenseBoundary render_fallback
+
 ## [0.1.0-rc.17](https://github.com/kent8192/reinhardt-web/compare/reinhardt-web@v0.1.0-rc.16...reinhardt-web@v0.1.0-rc.17) - 2026-04-20
 
 ### Changed

@@ -190,11 +190,6 @@ cfg_aliases = "0.2"
 [dev-dependencies]
 insta = { workspace = true }
 reinhardt-forms = { workspace = true }
-# Enable `validation` feature for trybuild UI tests that exercise
-# `Validated<Form<T>>` extractors in `tests/ui/server_fn/with_extractors.rs`
-# (Issue #3858). The non-dev target dependency intentionally leaves this
-# feature off for slimmer default builds.
-reinhardt-di = { workspace = true, features = ["validation"] }
 wasm-bindgen-test = "0.3.56"
 serial_test = "3"
 trybuild = "1.0"
@@ -209,6 +204,13 @@ http-body-util = { workspace = true }
 bytes = { workspace = true }
 tokio-tungstenite = "0.26"
 futures-util = "0.3"
+# Enable `validation` feature for trybuild UI tests that exercise
+# `Validated<Form<T>>` extractors in `tests/ui/server_fn/with_extractors.rs`
+# (Issue #3858). Scoped to non-wasm targets because `validation` pulls in
+# `reinhardt-core/validators`, which transitively drags in `tokio/net` and
+# cannot build for `wasm32-unknown-unknown`. The trybuild harness itself is
+# already gated with `#![cfg(not(target_arch = "wasm32"))]`.
+reinhardt-di = { workspace = true, features = ["validation"] }
 
 [lib]
 crate-type = ["rlib"]

@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.0-rc.19](https://github.com/kent8192/reinhardt-web/compare/reinhardt-commands@v0.1.0-rc.18...reinhardt-commands@v0.1.0-rc.19) - 2026-04-22
+
+### Added
+
+- *(commands)* add urls/server_urls.rs.tpl to pages templates
+- *(commands)* add urls/client_urls.rs.tpl to pages templates
+- *(commands)* rewrite urls.rs.tpl as mount + unified entry
+
+### Changed
+
+- *(commands)* move ws_urls.rs.tpl under urls/ (both pages templates)
+
+### Fixed
+
+- *(commands)* return WebSocketRouter from ws_urls scaffold template
+
 ## [0.1.0-rc.18](https://github.com/kent8192/reinhardt-web/compare/reinhardt-commands@v0.1.0-rc.17...reinhardt-commands@v0.1.0-rc.18) - 2026-04-22
 
 ### Added

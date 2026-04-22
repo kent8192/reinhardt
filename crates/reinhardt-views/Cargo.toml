@@ -1,6 +1,6 @@
 [package]
 name = "reinhardt-views"
-version = "0.1.0-rc.18"
+version = "0.1.0-rc.19"
 description = "View layer aggregator for viewsets and views-core"
 edition.workspace = true
 rust-version.workspace = true

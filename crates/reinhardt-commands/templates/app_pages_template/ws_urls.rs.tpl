@@ -10,20 +10,24 @@
 //!
 //! ```rust,ignore
 //! use reinhardt::url_patterns;
+//! use reinhardt::WebSocketRouter;
 //! use crate::config::apps::InstalledApp;
 //!
 //! #[url_patterns(InstalledApp::{{ app_name }}, mode = ws)]
-//! pub fn ws_url_patterns() {
-//!     // Register consumers via .consumer("path/", handler)
+//! pub fn ws_url_patterns() -> WebSocketRouter {
+//!     WebSocketRouter::new()
+//!     // Register consumers via .consumer(handler)
 //! }
 //! ```
 
 use reinhardt::url_patterns;
+use reinhardt::WebSocketRouter;
 
 use crate::config::apps::InstalledApp;
 
 #[url_patterns(InstalledApp::{{ app_name }}, mode = ws)]
-pub fn ws_url_patterns() {
+pub fn ws_url_patterns() -> WebSocketRouter {
+    WebSocketRouter::new()
     // Register WebSocket consumers here.
-    // Example: .consumer("chat/", chat_consumer)
+    // Example: .consumer(chat_consumer)
 }

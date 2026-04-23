@@ -7,6 +7,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.0-rc.20](https://github.com/kent8192/reinhardt-web/compare/reinhardt-web@v0.1.0-rc.19...reinhardt-web@v0.1.0-rc.20) - 2026-04-23
+
+### Documentation
+
+- *(admin)* fix critical API inaccuracies in README
+- *(core)* fix API inaccuracies in core infrastructure crate READMEs
+- *(db)* fix ConnectionPool API and import path inaccuracies in README
+- fix stale versions, wrong crate names, and missing label definition
+- add upstream-tracking label, fix workspace version and spec method name
+- *(admin)* fix routing example to use routes() function pattern
+- *(auth)* add #[user] macro docs and fix OAuth2 code example signatures
+- *(openapi)* fix code example to use routes() function pattern
+- *(core)* fix dispatch middleware example with explicit struct definitions
+- *(openapi)* correct OpenApiRouter usage — wrap applied at server level, not inside routes()
+- fix filter() API usage — takes Filter struct not 3 args
+- use type-safe field reference pattern User::field_id().eq(val) for ORM filters
+
+### Maintenance
+
+- *(release-plz)* size retry backoff to crates.io rate limits and crate count
+- add docs/specs/ to .gitignore and remove tracked spec files
+
+### Reverted
+
+- *(docs)* remove duplicate crate docs from repo-docs PR (canonical: PRs [[#3940](https://github.com/kent8192/reinhardt-web/issues/3940)](https://github.com/kent8192/reinhardt-web/issues/3940)-3947)
+- *(openapi)* remove accidental openapi files from repo-docs PR (canonical: PR [[#3944](https://github.com/kent8192/reinhardt-web/issues/3944)](https://github.com/kent8192/reinhardt-web/issues/3944))
+
 ## [0.1.0-rc.19](https://github.com/kent8192/reinhardt-web/compare/reinhardt-web@v0.1.0-rc.18...reinhardt-web@v0.1.0-rc.19) - 2026-04-22
 
 ### Added

@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.0-rc.20](https://github.com/kent8192/reinhardt-web/compare/reinhardt-db-macros@v0.1.0-rc.19...reinhardt-db-macros@v0.1.0-rc.20) - 2026-04-23
+
+### Documentation
+
+- *(db)* fix ConnectionPool API and import path inaccuracies in README
+
 ## [0.1.0-rc.16](https://github.com/kent8192/reinhardt-web/compare/reinhardt-db-macros@v0.1.0-rc.15...reinhardt-db-macros@v0.1.0-rc.16) - 2026-04-20
 
 ### Maintenance

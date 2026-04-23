@@ -8,6 +8,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 <!-- release-plz-separator -->
 <!-- Entries below this line were created before release-plz adoption -->
 
+## [0.1.0-rc.20](https://github.com/kent8192/reinhardt-web/compare/reinhardt-admin@v0.1.0-rc.19...reinhardt-admin@v0.1.0-rc.20) - 2026-04-23
+
+### Documentation
+
+- *(admin)* fix critical API inaccuracies in README
+- *(admin)* fix routing example to use routes() function pattern
+- *(admin)* fix routes() example — use #[routes] not standalone
+- *(admin)* use #[admin] macro pattern — auto-implements ModelAdmin
+
 ## [0.1.0-rc.16](https://github.com/kent8192/reinhardt-web/compare/reinhardt-admin@v0.1.0-rc.15...reinhardt-admin@v0.1.0-rc.16) - 2026-04-20
 
 ### Added

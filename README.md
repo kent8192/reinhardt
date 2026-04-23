@@ -777,7 +777,7 @@ Combine HTTP method decorators with `#[inject]` for automatic dependency injecti
 use reinhardt::{get, Response, StatusCode, ViewResult};
 use reinhardt::extractors::Path;
 use reinhardt::di::Depends;
-use reinhardt::db::{DatabaseConnection, Filter, FilterOperator, FilterValue};
+use reinhardt::db::DatabaseConnection;
 use crate::models::User;
 
 #[get("/users/{id}/", name = "get_user")]
@@ -787,7 +787,7 @@ pub async fn get_user(
 ) -> ViewResult<Response> {
 	// Path extractor parses and validates the {id} segment automatically
 	let user = User::objects()
-		.filter(Filter::new("id", FilterOperator::Eq, FilterValue::from(id)))
+		.filter(User::field_id().eq(id))
 		.get()
 		.await?;
 
@@ -819,7 +819,7 @@ In your app's `views/user.rs`:
 use reinhardt::{Response, StatusCode, ViewResult, get};
 use reinhardt::extractors::{Path, Query};
 use reinhardt::di::Depends;
-use reinhardt::db::{DatabaseConnection, Filter, FilterOperator, FilterValue};
+use reinhardt::db::DatabaseConnection;
 use crate::models::User;
 use serde::Deserialize;
 
@@ -835,7 +835,7 @@ pub async fn get_user(
 	#[inject] db: Depends<DatabaseConnection>,
 ) -> ViewResult<Response> {
 	let user = User::objects()
-		.filter(Filter::new("id", FilterOperator::Eq, FilterValue::from(id)))
+		.filter(User::field_id().eq(id))
 		.get()
 		.await?;
 

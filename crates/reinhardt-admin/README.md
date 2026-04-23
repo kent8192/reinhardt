@@ -65,7 +65,7 @@ fn configure_admin() -> AdminSite {
 ### Mounting Admin Routes
 
 Admin routes are registered inside the `routes()` function decorated with
-`#[routes(standalone)]`. Use `admin_routes_with_di()` to mount the admin
+`#[routes]`. Use `admin_routes_with_di()` to mount the admin
 panel with deferred DI registration:
 
 ```rust
@@ -74,7 +74,7 @@ use reinhardt::admin::{admin_routes_with_di, admin_static_routes};
 use reinhardt::routes;
 use std::sync::Arc;
 
-#[cfg_attr(native, routes(standalone))]
+#[routes]
 pub fn routes() -> UnifiedRouter {
 	// Configure admin site (registration only, no DB needed yet)
 	#[cfg(native)]

@@ -31,10 +31,6 @@
 //! - **`websockets`**: Enable WebSocket testing utilities
 //! - **`graphql`**: Enable GraphQL testing utilities
 //! - **`property-based`**: Enable property-based testing with proptest
-//! - **`viewsets`**: Enable viewset testing utilities
-//! - **`admin`**: Enable admin panel testing utilities
-//! - **`messages`**: Enable message framework testing utilities
-//! - **`full`**: Enable all features above
 #![warn(missing_docs)]
 
 /// Assertion helpers for common test patterns.

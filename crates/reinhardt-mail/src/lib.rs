@@ -183,7 +183,6 @@
 //! let sent_count = pool.send_bulk(messages).await?;
 //! # Ok(())
 //! # }
-//! ```
 
 /// Email sending backends (SMTP, console, file, in-memory).
 pub mod backends;

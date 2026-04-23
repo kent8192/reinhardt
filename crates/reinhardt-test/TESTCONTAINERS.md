@@ -23,7 +23,7 @@ Add to your `Cargo.toml`:
 
 ```toml
 [dev-dependencies]
-reinhardt-test = { version = "0.1.0-rc.19", features = ["testcontainers"] }
+reinhardt-test = { version = "0.1.0-alpha.1", features = ["testcontainers"] }
 ```
 
 ### 2. Basic Usage
@@ -32,10 +32,9 @@ reinhardt-test = { version = "0.1.0-rc.19", features = ["testcontainers"] }
 
 ```rust
 use reinhardt_test::containers::with_postgres;
-use rstest::rstest;
 
-#[rstest]
 #[tokio::test]
+#[ignore] // Requires Docker
 async fn test_with_postgres() {
     with_postgres(|db| async move {
         let url = db.connection_url();
@@ -50,10 +49,9 @@ async fn test_with_postgres() {
 
 ```rust
 use reinhardt_test::containers::with_mysql;
-use rstest::rstest;
 
-#[rstest]
 #[tokio::test]
+#[ignore] // Requires Docker
 async fn test_with_mysql() {
     with_mysql(|db| async move {
         let url = db.connection_url();
@@ -68,10 +66,9 @@ async fn test_with_mysql() {
 
 ```rust
 use reinhardt_test::containers::with_redis;
-use rstest::rstest;
 
-#[rstest]
 #[tokio::test]
+#[ignore] // Requires Docker
 async fn test_with_redis() {
     with_redis(|redis| async move {
         let url = redis.connection_url();
@@ -88,10 +85,9 @@ async fn test_with_redis() {
 use reinhardt_test::prelude::*;
 use reinhardt_test::containers::with_postgres;
 use reinhardt_test::resource::AsyncTestResource;
-use rstest::rstest;
 
-#[rstest]
 #[tokio::test]
+#[ignore] // Requires Docker
 async fn test_api_with_database() {
     with_postgres(|db| async move {
         // Create APITestCase and set database URL
@@ -150,10 +146,9 @@ The macro automatically:
 
 ```rust
 use reinhardt_test::containers::PostgresContainer;
-use rstest::rstest;
 
-#[rstest]
 #[tokio::test]
+#[ignore] // Requires Docker
 async fn test_custom_postgres() {
     let container = PostgresContainer::with_credentials(
         "my_user",
@@ -249,22 +244,20 @@ Error: Port 5432 already in use
 
 ### Slow tests
 
-Container startup can take 2-5 seconds. Use `cargo nextest run --features testcontainers` to run TestContainers tests selectively:
+Container startup can take 2-5 seconds. Use `#[ignore]` to skip in normal test runs:
 
 ```rust
-use rstest::rstest;
-
-#[rstest]
 #[tokio::test]
+#[ignore] // Requires Docker
 async fn slow_integration_test() {
     // ...
 }
 ```
 
-Then run with the feature flag enabled:
+Then run explicitly:
 
 ```bash
-cargo nextest run --features testcontainers
+cargo test -- --ignored
 ```
 
 ## Examples

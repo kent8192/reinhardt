@@ -4,10 +4,15 @@ Django-style admin panel functionality for Reinhardt framework.
 
 ## Overview
 
-This crate provides a web-based admin interface for managing database models,
-built as a WASM single-page application served by a Reinhardt server.
+This crate provides two main components:
+
+- **Panel**: Web-based admin interface for managing database models
+- **CLI**: Command-line tool for project management (available as
+  `reinhardt-admin-cli`)
 
 ## Features
+
+### Admin Panel (`reinhardt-admin`)
 
 - ✅ **Model Management Interface**: Web-based CRUD operations for database
   models
@@ -19,6 +24,8 @@ built as a WASM single-page application served by a Reinhardt server.
 - ✅ **Permissions Integration**: Role-based access control for admin operations
 - ✅ **Change Logging**: Audit trail for all admin actions
 - ✅ **Inline Editing**: Edit related models inline
+- ✅ **Drag-and-Drop Reordering**: Reorder model instances with transaction-safe
+  operations
 - ✅ **Responsive Design**: Mobile-friendly admin interface with customizable
   templates
 
@@ -33,10 +40,11 @@ Add `reinhardt` to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-reinhardt = { version = "0.1.0-rc.19", features = ["admin"] }
+reinhardt = { version = "0.1.0-rc.13", features = ["admin"] }
 
 # Or use a preset:
-# reinhardt = { version = "0.1.0-rc.19", features = ["full"] }  # All features
+# reinhardt = { version = "0.1.0-rc.13", features = ["standard"] }  # Recommended
+# reinhardt = { version = "0.1.0-rc.13", features = ["full"] }      # All features
 ```
 
 Then import admin features:
@@ -46,27 +54,24 @@ use reinhardt::admin::{AdminSite, ModelAdmin};
 use reinhardt::admin::types::{ListQueryParams, AdminError};
 ```
 
+**Note:** Admin features are included in the `standard` and `full` feature presets.
+
 ## Quick Start
 
 ### Using the Admin Panel
 
 ```rust
-use reinhardt_admin::core::{AdminSite, admin_routes_with_di, admin_static_routes};
-use reinhardt_urls::routers::UnifiedRouter;
-use std::sync::Arc;
+use reinhardt::admin::{AdminSite, ModelAdmin};
 
 #[tokio::main]
 async fn main() {
-	let site = Arc::new(AdminSite::new("My Admin"));
-	let (admin_router, admin_di) = admin_routes_with_di(site);
-	let assets = admin_static_routes();
+    let mut admin = AdminSite::new("My Admin");
 
-	let router = UnifiedRouter::new()
-		.mount("/admin/", admin_router)
-		.mount("/static/admin/", assets)
-		.with_di_registrations(admin_di);
+    // Register your models
+    admin.register::<User>(UserAdmin::default()).await;
 
-	// Attach `router` to your application server
+    // Start admin server
+    admin.serve("127.0.0.1:8001").await.unwrap();
 }
 ```
 
@@ -76,23 +81,23 @@ async fn main() {
 use reinhardt::admin::ModelAdmin;
 
 struct UserAdmin {
-	list_display: Vec<String>,
-	list_filter: Vec<String>,
-	search_fields: Vec<String>,
+    list_display: Vec<String>,
+    list_filter: Vec<String>,
+    search_fields: Vec<String>,
 }
 
 impl Default for UserAdmin {
-	fn default() -> Self {
-		Self {
-			list_display: vec!["username".to_string(), "email".to_string(), "is_active".to_string()],
-			list_filter: vec!["is_active".to_string()],
-			search_fields: vec!["username".to_string(), "email".to_string()],
-		}
-	}
+    fn default() -> Self {
+        Self {
+            list_display: vec!["username".to_string(), "email".to_string(), "is_active".to_string()],
+            list_filter: vec!["is_active".to_string()],
+            search_fields: vec!["username".to_string(), "email".to_string()],
+        }
+    }
 }
 ```
 
-## Architecture
+## Panel Architecture
 
 The admin panel is built on several key components:
 
@@ -106,81 +111,130 @@ Advanced filtering and query building with reinhardt-query integration:
 
 For detailed database layer documentation, see the [`core::database`](src/core/database.rs) module.
 
-### Server Functions
+### Handlers
 
-All CRUD operations are implemented as reinhardt-pages server functions in
-individual modules under `src/server/`:
+HTTP request handlers for all CRUD operations:
 
-- `get_dashboard` — admin dashboard data
-- `get_list` — model list view with pagination
-- `get_detail` — detail view for a single record
-- `get_fields` — field metadata for a model
-- `create_record` — create a new record
-- `update_record` — update an existing record
-- `delete_record` — delete a single record
-- `bulk_delete_records` — bulk delete operations
-- `export_data` — export data (CSV, JSON, XML)
-- `import_data` — import data
-- `admin_login` — admin authentication
-- `admin_logout` — admin session termination
+- `AdminHandlers::dashboard()` - Admin dashboard
+- `AdminHandlers::list()` - Model list view with pagination
+- `AdminHandlers::detail()` - Detail view
+- `AdminHandlers::create()` - Create new instance
+- `AdminHandlers::update()` - Update instance
+- `AdminHandlers::delete()` - Delete instance
+- `AdminHandlers::bulk_delete()` - Bulk delete operations
+- `AdminHandlers::export()` - Export data (CSV, JSON, XML)
+- `AdminHandlers::import()` - Import data
 
 ### Routing
 
-Route registration uses two free functions from `core::router`:
+Automatic route registration for models:
 
 ```rust
-use reinhardt_admin::core::{AdminSite, admin_routes_with_di, admin_static_routes};
-use reinhardt_urls::routers::UnifiedRouter;
-use std::sync::Arc;
+use reinhardt::admin::router::AdminRouter;
 
-// Default: uses AdminDefaultUser (table "auth_user")
-let site = Arc::new(AdminSite::new("My Admin"));
-let (admin_router, admin_di) = admin_routes_with_di(site);
-let assets = admin_static_routes();
+let router = AdminRouter::new(site, db)
+    .with_favicon("static/favicon.ico")
+    .build();
 
-let router = UnifiedRouter::new()
-	.mount("/admin/", admin_router)
-	.mount("/static/admin/", assets)
-	.with_di_registrations(admin_di);
-
-// Routes registered under /admin/:
-// POST   /admin/api/server_fn/get_dashboard
-// POST   /admin/api/server_fn/get_list
-// POST   /admin/api/server_fn/get_detail
-// POST   /admin/api/server_fn/get_fields
-// POST   /admin/api/server_fn/create_record
-// POST   /admin/api/server_fn/update_record
-// POST   /admin/api/server_fn/delete_record
-// POST   /admin/api/server_fn/bulk_delete_records
-// POST   /admin/api/server_fn/export_data
-// POST   /admin/api/server_fn/import_data
-// POST   /admin/api/server_fn/admin_login
-// POST   /admin/api/server_fn/admin_logout
-// GET    /admin/              (SPA shell)
-// GET    /admin/{*tail}       (SPA client-side routing)
-
-// Static assets registered under /static/admin/:
-// GET    /static/admin/{*path}
-// HEAD   /static/admin/{*path}
+// Automatically creates routes:
+// GET    /admin/<model>/
+// GET    /admin/<model>/{id}/
+// POST   /admin/<model>/
+// PUT    /admin/<model>/{id}/
+// DELETE /admin/<model>/{id}/
+// DELETE /admin/<model>/bulk/
+// GET    /admin/<model>/export/
+// POST   /admin/<model>/import/
+router.register_model_routes::<User>("/admin/user/")?;
 ```
 
-For comprehensive routing documentation, see the [`core::router`](src/core/router.rs) module.
+For comprehensive panel documentation, see the [`core`](src/core/) module.
+
+## Advanced Features
+
+### Drag-and-Drop Reordering
+
+Enable drag-and-drop reordering for your models with transaction-safe
+operations:
+
+```rust
+use reinhardt::admin::{DragDropConfig, ReorderableModel, ReorderHandler};
+use async_trait::async_trait;
+
+// 1. Configure drag-and-drop
+let config = DragDropConfig {
+	order_field: "display_order".to_string(),
+	enabled: true,
+	custom_js: None,  // Or provide custom JavaScript for client-side handling
+};
+
+// 2. Implement ReorderableModel for your model
+#[async_trait]
+impl ReorderableModel for MenuItem {
+	async fn get_order(&self) -> i32 {
+		self.display_order
+	}
+
+	async fn set_order(&mut self, new_order: i32) {
+		self.display_order = new_order;
+	}
+
+	fn get_id(&self) -> String {
+		self.id.to_string()
+	}
+}
+
+// 3. Create a reorder handler
+let handler = ReorderHandler::new(
+	config,
+	connection.clone(),
+	"menu_items",  // table name
+	"id",          // primary key field
+);
+
+// 4. Process reorder requests
+let reorder_items = vec![
+	("item_1".to_string(), 0),
+	("item_2".to_string(), 1),
+	("item_3".to_string(), 2),
+];
+
+match handler.process_reorder(reorder_items).await {
+	result if result.is_success() => {
+		println!("Reordered {} items successfully", result.items_updated);
+	}
+	result => {
+		eprintln!("Reorder failed: {}", result.message);
+	}
+}
+```
+
+**Key Features:**
+
+- **Validation**: Ensures order values are sequential, non-negative, and unique
+- **Transaction Safety**: All updates are executed within a database transaction
+- **Error Handling**: Detailed error messages for validation and database
+  failures
+- **Bulk Updates**: Efficient handling of multiple items in a single transaction
+
+**Implementation Details:**
+
+The `ReorderHandler` validates reorder operations by:
+
+1. Checking for negative order values
+2. Detecting duplicate order values
+3. Ensuring order values are sequential (0, 1, 2, ...)
+
+All database updates are performed using reinhardt-query within a
+transaction, ensuring atomicity.
+
+For a complete implementation example, see the [`core::database`](src/core/database.rs) module.
 
 ## Feature Flags
 
-| Feature | Description |
-|---------|-------------|
-| `adapters` | Adapter layer utilities |
-| `core` | Core admin functionality |
-| `pages` | Page rendering support |
-| `server` | Server-side request handling |
-| `types` | Shared type definitions |
-| `all` | All of the above (`adapters`, `core`, `pages`, `server`, `types`) |
-| `file-uploads` | File upload support |
-| `admin` | Admin feature marker |
-| `full` | All features including `file-uploads` |
-
-By default, no features are enabled (`default = []`).
+- `panel` (default): Web admin panel
+- `cli`: Command-line interface
+- `all`: All admin functionality
 
 ## Documentation
 

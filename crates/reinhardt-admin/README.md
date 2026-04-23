@@ -48,29 +48,61 @@ use reinhardt::admin::types::{ListQueryParams, AdminError};
 
 ## Quick Start
 
-### Using the Admin Panel
+### Configuring Admin Models
+
+Register models with `AdminSite` in a dedicated configuration function:
 
 ```rust
-use reinhardt_admin::core::{AdminSite, admin_routes_with_di, admin_static_routes};
-use reinhardt_urls::routers::UnifiedRouter;
-use std::sync::Arc;
+use reinhardt::admin::{AdminSite, ModelAdmin};
 
-#[tokio::main]
-async fn main() {
-	let site = Arc::new(AdminSite::new("My Admin"));
-	let (admin_router, admin_di) = admin_routes_with_di(site);
-	let assets = admin_static_routes();
-
-	let router = UnifiedRouter::new()
-		.mount("/admin/", admin_router)
-		.mount("/static/admin/", assets)
-		.with_di_registrations(admin_di);
-
-	// Attach `router` to your application server
+fn configure_admin() -> AdminSite {
+	let mut site = AdminSite::new("My Admin");
+	site.register::<User>(UserAdmin::default());
+	site
 }
 ```
 
+### Mounting Admin Routes
+
+Admin routes are registered inside the `routes()` function decorated with
+`#[routes(standalone)]`. Use `admin_routes_with_di()` to mount the admin
+panel with deferred DI registration:
+
+```rust
+use reinhardt::UnifiedRouter;
+use reinhardt::admin::{admin_routes_with_di, admin_static_routes};
+use reinhardt::routes;
+use std::sync::Arc;
+
+#[cfg_attr(native, routes(standalone))]
+pub fn routes() -> UnifiedRouter {
+	// Configure admin site (registration only, no DB needed yet)
+	#[cfg(native)]
+	let admin_site = Arc::new(configure_admin());
+
+	let router = UnifiedRouter::new()
+		// Mount your app routes here
+		;
+
+	// Mount admin panel routes and static assets (server-only)
+	#[cfg(native)]
+	let router = {
+		let (admin_router, admin_di) = admin_routes_with_di(admin_site);
+		router
+			.mount("/admin/", admin_router)
+			.mount("/static/admin/", admin_static_routes())
+			.with_di_registrations(admin_di)
+	};
+	router
+}
+```
+
+The `AdminDatabase` is lazily constructed from `DatabaseConnection` at the
+first request, so no database connection is needed during route setup.
+
 ### Customizing the Admin
+
+Implement `ModelAdmin` for your admin structs using the trait-based approach:
 
 ```rust
 use reinhardt::admin::ModelAdmin;
@@ -89,6 +121,10 @@ impl Default for UserAdmin {
 			search_fields: vec!["username".to_string(), "email".to_string()],
 		}
 	}
+}
+
+impl ModelAdmin for UserAdmin {
+	// Customize admin behavior by overriding trait methods
 }
 ```
 

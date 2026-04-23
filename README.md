@@ -387,33 +387,23 @@ Settings are automatically loaded in `src/config/settings.rs`:
 // src/config/settings.rs
 use reinhardt::prelude::*;
 
-// Compose built-in settings groups with | and add project-specific fields
+// Compose built-in settings fragments with | — field names are inferred from type names
+// (e.g., CoreSettings → core, AuthSettings → auth, DatabaseSettings → database)
 #[settings(CoreSettings | AuthSettings | DatabaseSettings)]
-pub struct ProjectSettings {
-	// Add any project-specific settings here
-}
+pub struct ProjectSettings;
 ```
 
-The `|` syntax merges the fields of each named settings group into `ProjectSettings`:
+The `|` syntax composes settings fragments into `ProjectSettings`. Each type must be a `#[settings(fragment = true, ...)]` struct. Built-in fragments:
 - **`CoreSettings`** — `debug`, `secret_key`, `language_code`, `time_zone`, `allowed_hosts`
 - **`AuthSettings`** — `jwt_secret`, `token_expiry`, `password_hashers`
 - **`DatabaseSettings`** — `engine`, `host`, `port`, `name`, `user`, `password`
 
-The `#[settings]` macro automatically:
-- Detects the active profile from `REINHARDT_ENV` (default: `local`)
-- Loads `settings/base.toml`, then `settings/{profile}.toml`
-- Applies environment variable overrides with the `REINHARDT_` prefix (TOML files take precedence by default)
-
-To override this priority — for example in production where environment variables should win:
+Add project-specific fragments with explicit field names using `key: Type` syntax:
 
 ```rust
-#[settings(CoreSettings | AuthSettings | DatabaseSettings, env_priority = "high")]
-pub struct ProjectSettings {}
+#[settings(CoreSettings | AuthSettings | DatabaseSettings | mail: MailSettings)]
+pub struct ProjectSettings;
 ```
-
-**Priority Order**:
-- Default (`env_priority = "low"`): `{profile}.toml` > `base.toml` > Environment Variables > Defaults
-- High priority (`env_priority = "high"`): Environment Variables > `{profile}.toml` > `base.toml` > Defaults
 
 See [Settings Documentation](https://reinhardt-web.dev/docs/settings/) for more details.
 
@@ -426,7 +416,6 @@ Reinhardt provides a ready-to-use `DefaultUser` implementation (requires `argon2
 use reinhardt::prelude::*;
 
 // Alias DefaultUser as your app's User type
-#[user]
 pub type User = DefaultUser;
 
 // DefaultUser includes:
@@ -451,13 +440,14 @@ pub type User = DefaultUser;
 
 **Defining Custom User Models:**
 
-If you need custom fields, define your own model using `#[user]` + `#[model]`:
+If you need custom fields, define your own model using `#[user(...)]` + `#[model]`:
 
 ```rust
 // users/models.rs
 use reinhardt::prelude::*;
+use reinhardt::auth::Argon2Hasher;
 
-#[user]
+#[user(hasher = Argon2Hasher, username_field = "username", full = true)]
 #[model(app_label = "users", table_name = "users")]
 pub struct CustomUser {
 	#[field(primary_key = true)]
@@ -481,7 +471,10 @@ pub struct CustomUser {
 }
 ```
 
-The `#[user]` macro automatically implements `BaseUser`, `FullUser`, and `PermissionsMixin`.
+`#[user]` arguments:
+- `hasher` (required) — password hasher type (e.g., `Argon2Hasher`)
+- `username_field` (required) — name of the field used as the username
+- `full = true` (optional) — also implement `FullUser` (email, first_name, last_name, is_staff, date_joined)
 
 **Model Attribute Macro:**
 
@@ -673,13 +666,14 @@ pub type User = DefaultUser;
 
 **For Custom User Models:**
 
-If you need additional fields beyond DefaultUser, define your own using `#[user]` + `#[model]`:
+If you need additional fields beyond DefaultUser, define your own using `#[user(...)]` + `#[model]`:
 
 ```rust
 // users/models.rs
 use reinhardt::prelude::*;
+use reinhardt::auth::Argon2Hasher;
 
-#[user]
+#[user(hasher = Argon2Hasher, username_field = "username", full = true)]
 #[model(app_label = "users", table_name = "users")]
 pub struct CustomUser {
 	#[field(primary_key = true)]
@@ -719,26 +713,27 @@ pub struct CustomUser {
 }
 ```
 
-The `#[user]` macro automatically implements `BaseUser`, `FullUser`, and `PermissionsMixin` based on the standard field names. Override individual methods by implementing the traits manually when non-standard behavior is needed.
+`#[user]` automatically implements `BaseUser`, `PermissionsMixin`, and `AuthIdentity`. With `full = true`, it also implements `FullUser` and `SuperuserInit`. Override individual methods by implementing the traits manually when non-standard behavior is needed.
 
 Use JWT authentication in your app's `views/profile.rs`:
 
 ```rust
 // users/views/profile.rs
-use reinhardt::auth::JwtAuth;
 use reinhardt::{Response, StatusCode, ViewResult, get};
+use reinhardt::auth::{IsAuthenticated, User};
+use reinhardt::di::Depends;
 use reinhardt::db::DatabaseConnection;
-use std::sync::Arc;
-use crate::models::User;
+use crate::models::User as AppUser;
 
+// JwtAuthMiddleware must be registered in urls.rs for this view
 #[get("/profile", name = "get_profile")]
 pub async fn get_profile(
-	JwtAuth(claims): JwtAuth,
-	#[inject] db: Arc<DatabaseConnection>,
+	IsAuthenticated(user_id): IsAuthenticated,
+	#[inject] db: Depends<DatabaseConnection>,
 ) -> ViewResult<Response> {
-	// JwtAuth extractor validates the Bearer token and extracts claims
-	let user = User::objects()
-		.get(User::field_id().eq(claims.user_id))
+	// IsAuthenticated extractor is populated by JwtAuthMiddleware
+	let user = AppUser::objects()
+		.get(AppUser::field_id().eq(user_id))
 		.await?;
 
 	if !user.is_active() {
@@ -787,14 +782,14 @@ Combine HTTP method decorators with `#[inject]` for automatic dependency injecti
 ```rust
 use reinhardt::{get, Response, StatusCode, ViewResult};
 use reinhardt::extractors::Path;
+use reinhardt::di::Depends;
 use reinhardt::db::DatabaseConnection;
-use std::sync::Arc;
 use crate::models::User;
 
 #[get("/users/{id}/", name = "get_user")]
 pub async fn get_user(
 	Path(id): Path<i64>,
-	#[inject] db: Arc<DatabaseConnection>,
+	#[inject] db: Depends<DatabaseConnection>,
 ) -> ViewResult<Response> {
 	// Path extractor parses and validates the {id} segment automatically
 	let user = User::objects()
@@ -828,9 +823,9 @@ In your app's `views/user.rs`:
 // users/views/user.rs
 use reinhardt::{Response, StatusCode, ViewResult, get};
 use reinhardt::extractors::{Path, Query};
+use reinhardt::di::Depends;
 use reinhardt::db::DatabaseConnection;
 use crate::models::User;
-use std::sync::Arc;
 use serde::Deserialize;
 
 #[derive(Deserialize)]
@@ -842,7 +837,7 @@ pub struct GetUserParams {
 pub async fn get_user(
 	Path(id): Path<i64>,
 	Query(params): Query<GetUserParams>,
-	#[inject] db: Arc<DatabaseConnection>,
+	#[inject] db: Depends<DatabaseConnection>,
 ) -> ViewResult<Response> {
 	let user = User::objects()
 		.get(User::field_id().eq(id))
@@ -917,17 +912,18 @@ In your app's `views/user.rs`:
 use reinhardt::{Response, StatusCode, ViewResult, post};
 use reinhardt::extractors::Json;
 use reinhardt::validation::Validated;
+use reinhardt::di::Depends;
 use reinhardt::db::DatabaseConnection;
 use crate::models::User;
 use crate::serializers::{CreateUserRequest, UserResponse};
-use std::sync::Arc;
 
 #[post("/users", name = "create_user")]
 pub async fn create_user(
-	Json(Validated(create_req)): Json<Validated<CreateUserRequest>>,
-	#[inject] db: Arc<DatabaseConnection>,
+	Json(body): Json<CreateUserRequest>,
+	Validated(create_req): Validated<CreateUserRequest>,
+	#[inject] db: Depends<DatabaseConnection>,
 ) -> ViewResult<Response> {
-	// Validated<T> extractor automatically validates before the handler runs
+	// Json<T> deserializes the body; Validated<T> runs #[validate] rules and yields the validated value
 
 	// Create user using the auto-generated new() function from #[user] + #[model]
 	let mut user = User::new(create_req.username, create_req.email);

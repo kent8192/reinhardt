@@ -88,13 +88,19 @@ FNR == 1 {
 		}
 		next
 	}
-	# ARMED
+	# ARMED: skip fences, blanks, and non-version lines that precede the version
+	# (handles both legacy in-fence markers and new outside-fence markers where
+	# the opening ```, comment-only lines, and section headers appear first)
 	if ($0 ~ fence_re || $0 ~ blank_re) next
 	if (match($0, version_re)) {
 		armed_count--
 		if (armed_count <= 0) state = "SCANNING"
 		next
 	}
+	# Non-version, non-fence, non-blank line while ARMED.
+	# If we are inside a code block, continue scanning (the version may be on a later line).
+	if (in_code_block) next
+	# Outside a code block and no version found: orphan marker.
 	printf("ORPHAN_MARKER %s:%d: no version follows marker\n", FILENAME, marker_line) > "/dev/stderr"
 	findings++
 	state = "SCANNING"

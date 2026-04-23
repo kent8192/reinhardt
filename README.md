@@ -119,11 +119,11 @@ Reinhardt is a modular framework. Choose your starting point:
 
 Get a well-balanced feature set with zero configuration:
 
+<!-- reinhardt-version-sync -->
 ```toml
 [dependencies]
 # Import as 'reinhardt', published as 'reinhardt-web'
 # Default enables the "standard" preset (balanced feature set)
-# reinhardt-version-sync
 reinhardt = { version = "0.1.0-rc.17", package = "reinhardt-web" }
 ```
 
@@ -141,9 +141,9 @@ use reinhardt::{Request, Response, StatusCode};
 
 For projects that need every available component:
 
+<!-- reinhardt-version-sync -->
 ```toml
 [dependencies]
-# reinhardt-version-sync
 reinhardt = { version = "0.1.0-rc.17", package = "reinhardt-web", default-features = false, features = ["full"] }
 ```
 
@@ -155,9 +155,9 @@ reinhardt = { version = "0.1.0-rc.17", package = "reinhardt-web", default-featur
 
 Lightweight and fast, perfect for simple APIs:
 
+<!-- reinhardt-version-sync -->
 ```toml
 [dependencies]
-# reinhardt-version-sync
 reinhardt = { version = "0.1.0-rc.17", package = "reinhardt-web", default-features = false, features = ["minimal"] }
 ```
 
@@ -169,34 +169,27 @@ reinhardt = { version = "0.1.0-rc.17", package = "reinhardt-web", default-featur
 
 Install only the components you need:
 
+<!-- reinhardt-version-sync:8 -->
 ```toml
 [dependencies]
 # Core components
-# reinhardt-version-sync
 reinhardt-http = "0.1.0-rc.17"
-# reinhardt-version-sync
 reinhardt-urls = "0.1.0-rc.17"
 
 # Optional: Database
-# reinhardt-version-sync
 reinhardt-db = "0.1.0-rc.17"
 
 # Optional: Authentication
-# reinhardt-version-sync
 reinhardt-auth = "0.1.0-rc.17"
 
 # Optional: REST API features
-# reinhardt-version-sync
 reinhardt-rest = "0.1.0-rc.17"
 
 # Optional: Admin panel
-# reinhardt-version-sync
 reinhardt-admin = "0.1.0-rc.17"
 
 # Optional: Advanced features
-# reinhardt-version-sync
 reinhardt-graphql = "0.1.0-rc.17"
-# reinhardt-version-sync
 reinhardt-websockets = "0.1.0-rc.17"
 ```
 

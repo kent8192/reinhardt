@@ -33,9 +33,9 @@ Each `examples-*` directory is an independent Cargo project demonstrating specif
 
 By default, examples use published versions from crates.io:
 
+<!-- reinhardt-version-sync -->
 ```toml
 [dependencies]
-# reinhardt-version-sync
 reinhardt = { version = "0.1.0-rc.17", package = "reinhardt-web", features = ["standard"] }
 ```
 
@@ -66,10 +66,10 @@ rm -f .cargo/config.toml
 
 #### ✅ CORRECT Pattern
 
+<!-- reinhardt-version-sync -->
 ```toml
 [dependencies]
 # ✅ Main reinhardt crate only
-# reinhardt-version-sync
 reinhardt = { version = "0.1.0-rc.17", package = "reinhardt-web", features = ["core", "database"] }
 
 # ✅ External crates are fine
@@ -83,9 +83,9 @@ rstest = "0.26.1"
 
 #### ❌ INCORRECT Pattern
 
+<!-- reinhardt-version-sync -->
 ```toml
 [dependencies]
-# reinhardt-version-sync
 reinhardt = { version = "0.1.0-rc.17", package = "reinhardt-web", features = ["core"] }
 reinhardt-http = { path = "../../../crates/reinhardt-http" }      # ❌ NEVER
 reinhardt-routers = { path = "../../../crates/reinhardt-urls/crates/routers" }  # ❌ NEVER

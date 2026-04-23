@@ -87,11 +87,15 @@ BEGIN {
 	version_re     = "[0-9]+\\.[0-9]+\\.[0-9]+(-[a-zA-Z0-9.]+)?"
 	fence_re       = "^[[:space:]]*```"
 	blank_re       = "^[[:space:]]*$"
-	state       = "SCANNING"
-	armed_count = 0
-	orphans     = 0
+	state        = "SCANNING"
+	armed_count  = 0
+	in_code_block = 0
+	orphans      = 0
 }
 {
+	# Track fenced code block state (used in ARMED to skip non-version block content)
+	if ($0 ~ fence_re) in_code_block = !in_code_block
+
 	if (state == "SCANNING") {
 		print
 		if ($0 ~ marker_re || $0 ~ marker_html_re) {
@@ -120,7 +124,10 @@ BEGIN {
 		if (armed_count <= 0) state = "SCANNING"
 		next
 	}
-	# Marker with no version on the next eligible line.
+	# Non-version, non-fence, non-blank line while ARMED.
+	# If inside a code block, pass through and keep scanning (more lines to come).
+	if (in_code_block) { print; next }
+	# Outside any code block and no version found: report orphan.
 	printf("ORPHAN_MARKER %s:%d: next line has no version: %s\n", FILENAME, NR, $0) > "/dev/stderr"
 	print
 	orphans++

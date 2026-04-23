@@ -10,7 +10,6 @@ pub mod models;
 pub mod serializers;
 pub mod urls;
 pub mod views;
-pub mod ws_urls;
 
 // Client-side modules
 #[cfg(client)]

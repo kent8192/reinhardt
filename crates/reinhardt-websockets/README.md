@@ -12,18 +12,18 @@ Add `reinhardt` to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-reinhardt = { version = "0.1.0-rc.13", features = ["websockets"] }
+reinhardt = { version = "0.1.0-rc.19", features = ["websockets"] }
 
 # Or use a preset:
-# reinhardt = { version = "0.1.0-rc.13", features = ["standard"] }  # Recommended
-# reinhardt = { version = "0.1.0-rc.13", features = ["full"] }      # All features
+# reinhardt = { version = "0.1.0-rc.19", features = ["standard"] }  # Recommended
+# reinhardt = { version = "0.1.0-rc.19", features = ["full"] }      # All features
 ```
 
 Then import WebSocket features:
 
 ```rust
 use reinhardt::websockets::{WebSocketConnection, WebSocketHandler, Message};
-use reinhardt::websockets::{RoomManager, WebSocketMessage};
+use reinhardt_websockets::message::WebSocketMessage;
 ```
 
 **Note:** WebSocket features are included in the `standard` and `full` feature presets.

@@ -162,3 +162,6 @@ infra/github-runners/lambdas/*.zip
 infra/github-runners/lambda-src/*/node_modules/
 infra/github-runners/lambda-src/*/dist/
 infra/github-runners/lambda-src/*/coverage/
+
+# Design spec documents (internal planning, not for release)
+docs/specs/

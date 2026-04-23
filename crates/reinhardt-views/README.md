@@ -16,11 +16,11 @@ Add `reinhardt` to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-reinhardt = { version = "0.1.0-rc.13", features = ["views"] }
+reinhardt = { version = "0.1.0-rc.19", features = ["views"] }
 
 # Or use a preset:
-# reinhardt = { version = "0.1.0-rc.13", features = ["standard"] }  # Recommended
-# reinhardt = { version = "0.1.0-rc.13", features = ["full"] }      # All features
+# reinhardt = { version = "0.1.0-rc.19", features = ["standard"] }  # Recommended
+# reinhardt = { version = "0.1.0-rc.19", features = ["full"] }      # All features
 ```
 
 Then import view features:

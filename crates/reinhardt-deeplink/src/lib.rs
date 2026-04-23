@@ -37,7 +37,8 @@
 //! use reinhardt_deeplink::DeeplinkRouterExt;
 //!
 //! let router = UnifiedRouter::new()
-//!     .with_deeplinks(config);
+//!     .with_deeplinks(config)
+//!     .unwrap();
 //! ```
 
 pub mod config;

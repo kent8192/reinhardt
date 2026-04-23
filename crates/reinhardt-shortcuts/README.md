@@ -12,11 +12,11 @@ Add `reinhardt` to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-reinhardt = { version = "0.1.0-rc.13", features = ["shortcuts"] }
+reinhardt = { version = "0.1.0-rc.19", features = ["shortcuts"] }
 
 # Or use a preset:
-# reinhardt = { version = "0.1.0-rc.13", features = ["standard"] }  # Recommended
-# reinhardt = { version = "0.1.0-rc.13", features = ["full"] }      # All features
+# reinhardt = { version = "0.1.0-rc.19", features = ["standard"] }  # Recommended
+# reinhardt = { version = "0.1.0-rc.19", features = ["full"] }      # All features
 ```
 
 Then import shortcuts features:
@@ -301,7 +301,7 @@ async fn get_user_handler(user_id: i64) -> Response {
     let result = database::find_user(user_id).await;
 
     match get_or_404_response(result) {
-        Ok(user) => render_json(&user),
+        Ok(user) => render_json(&user).unwrap(),
         Err(not_found_response) => not_found_response,
     }
 }
@@ -311,14 +311,17 @@ async fn get_user_handler(user_id: i64) -> Response {
 
 ```rust
 use reinhardt::shortcuts::{redirect, redirect_permanent};
+use std::collections::HashSet;
 
 async fn create_user_handler(user_data: UserData) -> Response {
+    let allowed: HashSet<String> = HashSet::new();
     database::create_user(user_data).await;
-    redirect("/users/")
+    redirect("/users/", &allowed).unwrap()
 }
 
 async fn old_url_handler() -> Response {
-    redirect_permanent("/new-url/")
+    let allowed: HashSet<String> = HashSet::new();
+    redirect_permanent("/new-url/", &allowed).unwrap()
 }
 ```
 

@@ -158,6 +158,11 @@
   color: 2cbe4e
   description: GitHub Actions workflow files
 
+# Upstream Tracking Labels
+- name: upstream-tracking
+  color: "0075ca"
+  description: "Tracking issue for upstream dependency bug"
+
 # Agent Labels
 - name: agent-suspect
   color: "d4c5f9"

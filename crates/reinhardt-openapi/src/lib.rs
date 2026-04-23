@@ -12,22 +12,25 @@
 //!
 //! ## Example
 //!
+//! Apply `OpenApiRouter::wrap` inside the `#[routes]` function to expose OpenAPI
+//! documentation alongside your application routes:
+//!
 //! ```rust,ignore
+//! use reinhardt::routes;
 //! use reinhardt_openapi::OpenApiRouter;
-//! use reinhardt_urls::routers::BasicRouter;
+//! use reinhardt_urls::routers::UnifiedRouter;
 //!
-//! fn main() -> Result<(), Box<dyn std::error::Error>> {
-//!     // Create your existing router
-//!     let router = BasicRouter::new();
+//! #[routes]
+//! pub fn routes() -> OpenApiRouter<UnifiedRouter> {
+//!     let router = UnifiedRouter::new()
+//!         // Mount your application routes here
+//!         .mount("/", some_app::urls::routes());
 //!
-//!     // Wrap with OpenAPI endpoints
-//!     let wrapped = OpenApiRouter::wrap(router)?;
-//!
-//!     // The wrapped router now serves:
+//!     // Wrap with OpenAPI endpoints — served at:
 //!     // - /api/openapi.json (OpenAPI spec)
 //!     // - /api/docs (Swagger UI)
 //!     // - /api/redoc (Redoc UI)
-//!     Ok(())
+//!     OpenApiRouter::wrap(router).expect("Failed to wrap router with OpenAPI")
 //! }
 //! ```
 //!

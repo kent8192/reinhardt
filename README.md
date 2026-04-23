@@ -98,7 +98,7 @@ Reinhardt follows a **three-phase lifecycle** for every crate:
 | **RC** (`0.x.0-rc.N`) | API frozen. Bug fixes only. Safe to build against. |
 | **Stable** (`0.x.0`) | Full SemVer 2.0 guarantees. |
 
-**Current status:** All crates are at `0.1.0-rc.17` (Release Candidate).
+**Current status:** All crates are at `0.1.0-rc.19` (Release Candidate).
 
 **What this means for you:**
 - Public APIs will only change to fix critical bugs -- no new features or additions
@@ -119,11 +119,12 @@ Reinhardt is a modular framework. Choose your starting point:
 
 Get a well-balanced feature set with zero configuration:
 
+<!-- reinhardt-version-sync -->
 ```toml
 [dependencies]
 # Import as 'reinhardt', published as 'reinhardt-web'
 # Default enables the "standard" preset (balanced feature set)
-reinhardt = { version = "0.1.0-rc.17", package = "reinhardt-web" }
+reinhardt = { version = "0.1.0-rc.19", package = "reinhardt-web" }
 ```
 
 **Includes:** Core, Database (PostgreSQL), REST API (serializers, parsers, pagination, filters, throttling, versioning, metadata, content negotiation), Auth, Middleware (sessions), Pages (WASM Frontend with SSR), Signals
@@ -140,9 +141,10 @@ use reinhardt::{Request, Response, StatusCode};
 
 For projects that need every available component:
 
+<!-- reinhardt-version-sync -->
 ```toml
 [dependencies]
-reinhardt = { version = "0.1.0-rc.17", package = "reinhardt-web", default-features = false, features = ["full"] }
+reinhardt = { version = "0.1.0-rc.19", package = "reinhardt-web", default-features = false, features = ["full"] }
 ```
 
 **Includes:** Everything in Standard, plus Admin, GraphQL, WebSockets, Cache, i18n, Mail, Static Files, Storage, and more
@@ -153,9 +155,10 @@ reinhardt = { version = "0.1.0-rc.17", package = "reinhardt-web", default-featur
 
 Lightweight and fast, perfect for simple APIs:
 
+<!-- reinhardt-version-sync -->
 ```toml
 [dependencies]
-reinhardt = { version = "0.1.0-rc.17", package = "reinhardt-web", default-features = false, features = ["minimal"] }
+reinhardt = { version = "0.1.0-rc.19", package = "reinhardt-web", default-features = false, features = ["minimal"] }
 ```
 
 **Includes:** HTTP, routing, DI, parameter extraction, server
@@ -166,27 +169,28 @@ reinhardt = { version = "0.1.0-rc.17", package = "reinhardt-web", default-featur
 
 Install only the components you need:
 
+<!-- reinhardt-version-sync:8 -->
 ```toml
 [dependencies]
 # Core components
-reinhardt-http = "0.1.0-rc.17"
-reinhardt-urls = "0.1.0-rc.17"
+reinhardt-http = "0.1.0-rc.19"
+reinhardt-urls = "0.1.0-rc.19"
 
 # Optional: Database
-reinhardt-db = "0.1.0-rc.17"
+reinhardt-db = "0.1.0-rc.19"
 
 # Optional: Authentication
-reinhardt-auth = "0.1.0-rc.17"
+reinhardt-auth = "0.1.0-rc.19"
 
 # Optional: REST API features
-reinhardt-rest = "0.1.0-rc.17"
+reinhardt-rest = "0.1.0-rc.19"
 
 # Optional: Admin panel
-reinhardt-admin = "0.1.0-rc.17"
+reinhardt-admin = "0.1.0-rc.19"
 
 # Optional: Advanced features
-reinhardt-graphql = "0.1.0-rc.17"
-reinhardt-websockets = "0.1.0-rc.17"
+reinhardt-graphql = "0.1.0-rc.19"
+reinhardt-websockets = "0.1.0-rc.19"
 ```
 
 **Note on Crate Naming:**
@@ -985,6 +989,7 @@ Reinhardt offers modular components you can mix and match:
 | Middleware          | `reinhardt-middleware`    | HTTP middleware components, CORS, security  |
 | **Testing**         |                           |                                             |
 | Test Utilities      | `reinhardt-test`          | Testing helpers, fixtures, TestContainers   |
+| Test Kit            | `reinhardt-testkit`       | Higher-level test abstractions and utilities|
 
 **For detailed feature flags within each crate, see the [Feature Flags Guide](https://reinhardt-web.dev/docs/feature-flags/).**
 

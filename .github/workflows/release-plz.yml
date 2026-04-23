@@ -144,8 +144,11 @@ jobs:
       - name: Wait for crates.io rate limit reset (attempt 1)
         if: steps.release-attempt-1.outcome == 'failure'
         run: |
-          echo "First publish attempt failed. Waiting 120s for crates.io rate limit reset..."
-          sleep 120
+          # crates.io PublishUpdate: burst 30, 1 token / 60s.
+          # Workspace has 47 publishable crates -> overflow = 47 - 30 = 17 tokens.
+          # Wait 1200s (20min) to refill the overflow with margin before retrying.
+          echo "First publish attempt failed. Waiting 1200s (20min) to refill PublishUpdate overflow (47 - 30 = 17 tokens, with margin)..."
+          sleep 1200
 
       - name: Clear registry index for retry (attempt 1)
         if: steps.release-attempt-1.outcome == 'failure'
@@ -165,8 +168,10 @@ jobs:
       - name: Wait for crates.io rate limit reset (attempt 2)
         if: steps.release-attempt-1.outcome == 'failure' && steps.release-attempt-2.outcome == 'failure'
         run: |
-          echo "Second publish attempt failed. Waiting 120s for crates.io rate limit reset..."
-          sleep 120
+          # crates.io PublishUpdate: burst 30, 1 token / 60s.
+          # Wait 30 * 60 = 1800s (30min) to fully refill the burst (covers all 47 crates).
+          echo "Second publish attempt failed. Waiting 1800s (30min) to fully refill PublishUpdate burst (30 tokens)..."
+          sleep 1800
 
       - name: Clear registry index for retry (attempt 2)
         if: steps.release-attempt-1.outcome == 'failure' && steps.release-attempt-2.outcome == 'failure'

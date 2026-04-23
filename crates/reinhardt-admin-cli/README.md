@@ -80,7 +80,7 @@ reinhardt-admin plugin info auth-delion --remote
 
 # Install a plugin
 reinhardt-admin plugin install auth-delion
-reinhardt-admin plugin install auth-delion --version 0.2.0
+reinhardt-admin plugin install auth-delion --version 0.1.0-rc.21
 
 # Remove a plugin
 reinhardt-admin plugin remove auth-delion

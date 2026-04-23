@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.0-rc.21](https://github.com/kent8192/reinhardt-web/compare/reinhardt-web@v0.1.0-rc.20...reinhardt-web@v0.1.0-rc.21) - 2026-04-23
+
+### Documentation
+
+- add release announcement(s)
+
+### Fixed
+
+- *(commands)* remove stray `pub mod ws_urls` from app-root template
+
 ## [0.1.0-rc.20](https://github.com/kent8192/reinhardt-web/compare/reinhardt-web@v0.1.0-rc.19...reinhardt-web@v0.1.0-rc.20) - 2026-04-23
 
 ### Documentation

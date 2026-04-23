@@ -1,6 +1,6 @@
 [package]
 name = "reinhardt-forms"
-version = "0.1.0-rc.20"
+version = "0.1.0-rc.21"
 description = "Form handling and validation"
 edition.workspace = true
 rust-version.workspace = true

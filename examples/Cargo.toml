@@ -18,7 +18,7 @@ members = [
 [workspace.dependencies]
 # Reinhardt framework (crates.io published versions)
 # reinhardt-version-sync
-reinhardt = { version = "0.1.0-rc.9", package = "reinhardt-web" }
+reinhardt = { version = "0.1.0-rc.21", package = "reinhardt-web" }
 
 # Testing
 testcontainers = { version = "0.27.2", features = ["blocking"] }

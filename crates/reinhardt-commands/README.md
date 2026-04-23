@@ -15,11 +15,11 @@ Add `reinhardt` to your `Cargo.toml`:
 <!-- reinhardt-version-sync:3 -->
 ```toml
 [dependencies]
-reinhardt = { version = "0.1.0-rc.19", features = ["commands"] }
+reinhardt = { version = "0.1.0-rc.21", features = ["commands"] }
 
 # Or use a preset:
-# reinhardt = { version = "0.1.0-rc.19", features = ["standard"] }  # Recommended
-# reinhardt = { version = "0.1.0-rc.19", features = ["full"] }      # All features
+# reinhardt = { version = "0.1.0-rc.21", features = ["standard"] }  # Recommended
+# reinhardt = { version = "0.1.0-rc.21", features = ["full"] }      # All features
 ```
 
 Then import command features:
@@ -125,7 +125,7 @@ use reinhardt::commands::TemplateContext;
 
 let mut context = TemplateContext::new();
 context.insert("project_name", "my_project");
-context.insert("version", "1.0.0");
+context.insert("version", "0.1.0-rc.21");
 context.insert("features", vec!["auth", "admin"]);  // Any Serialize type
 ```
 
@@ -230,7 +230,7 @@ Projects using `collect_migrations!` must add `linkme` as a dependency:
 <!-- reinhardt-version-sync -->
 ```toml
 [dependencies]
-reinhardt = { version = "0.1.0-rc.19", features = ["standard"] }
+reinhardt = { version = "0.1.0-rc.21", features = ["standard"] }
 linkme = "0.3"
 ```
 

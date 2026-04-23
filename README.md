@@ -124,7 +124,7 @@ Get a well-balanced feature set with zero configuration:
 [dependencies]
 # Import as 'reinhardt', published as 'reinhardt-web'
 # Default enables the "standard" preset (balanced feature set)
-reinhardt = { version = "0.1.0-rc.19", package = "reinhardt-web" }
+reinhardt = { version = "0.1.0-rc.21", package = "reinhardt-web" }
 ```
 
 **Includes:** Core, Database (PostgreSQL), REST API (serializers, parsers, pagination, filters, throttling, versioning, metadata, content negotiation), Auth, Middleware (sessions), Pages (WASM Frontend with SSR), Signals
@@ -144,7 +144,7 @@ For projects that need every available component:
 <!-- reinhardt-version-sync -->
 ```toml
 [dependencies]
-reinhardt = { version = "0.1.0-rc.19", package = "reinhardt-web", default-features = false, features = ["full"] }
+reinhardt = { version = "0.1.0-rc.21", package = "reinhardt-web", default-features = false, features = ["full"] }
 ```
 
 **Includes:** Everything in Standard, plus Admin, GraphQL, WebSockets, Cache, i18n, Mail, Static Files, Storage, and more
@@ -158,7 +158,7 @@ Lightweight and fast, perfect for simple APIs:
 <!-- reinhardt-version-sync -->
 ```toml
 [dependencies]
-reinhardt = { version = "0.1.0-rc.19", package = "reinhardt-web", default-features = false, features = ["minimal"] }
+reinhardt = { version = "0.1.0-rc.21", package = "reinhardt-web", default-features = false, features = ["minimal"] }
 ```
 
 **Includes:** HTTP, routing, DI, parameter extraction, server
@@ -173,24 +173,24 @@ Install only the components you need:
 ```toml
 [dependencies]
 # Core components
-reinhardt-http = "0.1.0-rc.19"
-reinhardt-urls = "0.1.0-rc.19"
+reinhardt-http = "0.1.0-rc.21"
+reinhardt-urls = "0.1.0-rc.21"
 
 # Optional: Database
-reinhardt-db = "0.1.0-rc.19"
+reinhardt-db = "0.1.0-rc.21"
 
 # Optional: Authentication
-reinhardt-auth = "0.1.0-rc.19"
+reinhardt-auth = "0.1.0-rc.21"
 
 # Optional: REST API features
-reinhardt-rest = "0.1.0-rc.19"
+reinhardt-rest = "0.1.0-rc.21"
 
 # Optional: Admin panel
-reinhardt-admin = "0.1.0-rc.19"
+reinhardt-admin = "0.1.0-rc.21"
 
 # Optional: Advanced features
-reinhardt-graphql = "0.1.0-rc.19"
-reinhardt-websockets = "0.1.0-rc.19"
+reinhardt-graphql = "0.1.0-rc.21"
+reinhardt-websockets = "0.1.0-rc.21"
 ```
 
 **Note on Crate Naming:**

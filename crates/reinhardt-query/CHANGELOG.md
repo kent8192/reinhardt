@@ -5,6 +5,12 @@ All notable changes to `reinhardt-query` will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.0-rc.21](https://github.com/kent8192/reinhardt-web/compare/reinhardt-query@v0.1.0-rc.20...reinhardt-query@v0.1.0-rc.21) - 2026-04-23
+
+### Documentation
+
+- add reinhardt-version-sync markers to all crate READMEs
+
 ## [0.1.0-rc.16](https://github.com/kent8192/reinhardt-web/compare/reinhardt-query@v0.1.0-rc.15...reinhardt-query@v0.1.0-rc.16) - 2026-04-20
 
 ### Added

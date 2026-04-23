@@ -1,6 +1,6 @@
 [package]
 name = "reinhardt-manouche"
-version = "0.1.0-rc.20"
+version = "0.1.0-rc.21"
 edition.workspace = true
 rust-version.workspace = true
 authors.workspace = true

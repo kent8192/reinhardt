@@ -82,6 +82,10 @@ jobs:
           GITHUB_TOKEN: ${{ steps.generate-token.outputs.token }}
           REPO: ${{ github.repository }}
         run: |
+          if [ -z "$HEAD_BRANCH" ]; then
+            echo "No release PR created (HEAD_BRANCH is empty); skipping."
+            exit 0
+          fi
           git config user.name  "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git remote set-url origin "https://x-access-token:${GITHUB_TOKEN}@github.com/${REPO}.git"

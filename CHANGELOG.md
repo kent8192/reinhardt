@@ -7,6 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.0-rc.20](https://github.com/kent8192/reinhardt-web/compare/reinhardt-web@v0.1.0-rc.19...reinhardt-web@v0.1.0-rc.20) - 2026-04-23
+
+### Documentation
+
+- *(admin)* fix critical API inaccuracies in README
+- *(admin)* fix routing example to use routes() function pattern
+- *(admin)* fix routes() example — use #[routes] not standalone
+- *(admin)* use #[admin] macro pattern — auto-implements ModelAdmin
+- *(readme)* update code examples to use current API patterns
+- *(readme)* use #[settings(CoreSettings | AuthSettings)] composition syntax
+- *(readme)* fix #[user] and #[settings] macro argument syntax
+- *(readme)* replace IsAuthenticated with AuthUser<U> extractor in profile view
+- *(readme)* fix ORM query pattern — filter().get() not get(predicate)
+- *(readme)* use Model::field_id().eq(val) for ORM filter pattern
+
+### Maintenance
+
+- *(release-plz)* size retry backoff to crates.io rate limits and crate count
+- resolve merge conflict with main — keep AuthUser<U> and Query extractor patterns
+
 ## [0.1.0-rc.19](https://github.com/kent8192/reinhardt-web/compare/reinhardt-web@v0.1.0-rc.18...reinhardt-web@v0.1.0-rc.19) - 2026-04-22
 
 ### Added

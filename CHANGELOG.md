@@ -7,6 +7,42 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.0-rc.20](https://github.com/kent8192/reinhardt-web/compare/reinhardt-web@v0.1.0-rc.19...reinhardt-web@v0.1.0-rc.20) - 2026-04-23
+
+### Added
+
+- *(scripts)* add validate-version-markers.sh lint
+- *(scripts)* teach update-version-refs.sh the <!-- :N --> counter marker
+- *(scripts)* detect markers left inside Markdown code blocks
+
+### Changed
+
+- *(scripts)* rewrite update-version-refs.sh with marker-based awk
+
+### Documentation
+
+- *(website)* add reinhardt-version-sync marker to config
+- *(examples)* add reinhardt-version-sync marker to workspace deps
+- *(examples)* add reinhardt-version-sync markers to CLAUDE.md
+- *(readme)* add reinhardt-version-sync markers to 11 version refs
+- *(examples)* add missing marker to CLAUDE.md line 86
+- move Markdown markers outside code blocks
+
+### Maintenance
+
+- *(release-plz)* size retry backoff to crates.io rate limits and crate count
+- add version-markers lint job
+
+### Testing
+
+- scaffold shell-script test runner for version-sync scripts
+- add failing fixture for marker-based TOML replacement
+- cover marker inside Markdown toml fenced block
+- cover multi-version Markdown code block
+- assert orphan marker triggers exit 2 and stderr message
+- add failing tests for validate-version-markers.sh
+- cover counter markers and marker-in-code-block detection
+
 ## [0.1.0-rc.19](https://github.com/kent8192/reinhardt-web/compare/reinhardt-web@v0.1.0-rc.18...reinhardt-web@v0.1.0-rc.19) - 2026-04-22
 
 ### Added

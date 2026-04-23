@@ -387,15 +387,17 @@ Settings are automatically loaded in `src/config/settings.rs`:
 // src/config/settings.rs
 use reinhardt::prelude::*;
 
-#[settings]
+// Compose built-in settings groups with | and add project-specific fields
+#[settings(CoreSettings | AuthSettings | DatabaseSettings)]
 pub struct ProjectSettings {
-	pub debug: bool,
-	pub secret_key: String,
-	pub language_code: String,
-	pub time_zone: String,
-	pub database: DatabaseSettings,
+	// Add any project-specific settings here
 }
 ```
+
+The `|` syntax merges the fields of each named settings group into `ProjectSettings`:
+- **`CoreSettings`** — `debug`, `secret_key`, `language_code`, `time_zone`, `allowed_hosts`
+- **`AuthSettings`** — `jwt_secret`, `token_expiry`, `password_hashers`
+- **`DatabaseSettings`** — `engine`, `host`, `port`, `name`, `user`, `password`
 
 The `#[settings]` macro automatically:
 - Detects the active profile from `REINHARDT_ENV` (default: `local`)
@@ -405,8 +407,8 @@ The `#[settings]` macro automatically:
 To override this priority — for example in production where environment variables should win:
 
 ```rust
-#[settings(env_priority = "high")]
-pub struct ProjectSettings { ... }
+#[settings(CoreSettings | AuthSettings | DatabaseSettings, env_priority = "high")]
+pub struct ProjectSettings {}
 ```
 
 **Priority Order**:

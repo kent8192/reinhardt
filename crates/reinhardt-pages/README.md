@@ -93,13 +93,13 @@ use reinhardt_pages::prelude::*;
 // This works on both WASM and native targets!
 // On WASM: Event handlers are bound to DOM events
 // On native: Event handlers are automatically ignored
-fn my_button(on_click: Signal<bool>) -> Page {
+fn my_button(on_click: Signal<bool>) -> View {
     page!(|| {
         button {
             @click: move |_| { on_click.set(true); },
             "Click me"
         }
-    })()
+    })
 }
 ```
 
@@ -172,7 +172,7 @@ For reactive UIs, pass Signals directly to the `page!` macro instead of extracti
 ```rust
 use reinhardt_pages::prelude::*;
 
-fn error_display() -> Page {
+fn error_display() -> View {
     let (error, set_error) = use_state(None::<String>);
 
     // Pass the Signal directly (not the extracted value)
@@ -229,7 +229,7 @@ This framework consists of several key modules:
 - **`reactive`**: Fine-grained reactivity system (Signal, Effect, Memo)
 - **`dom`**: DOM abstraction layer
 - **`builder`**: HTML element builder API
-- **`component`**: Component system with `IntoPage` trait
+- **`component`**: Component system with IntoView trait
 - **`form`**: Django Form integration (native only)
 - **`csrf`**: CSRF protection
 - **`auth`**: Authentication integration
@@ -256,7 +256,7 @@ The prelude includes:
 - `use_optimistic`, `use_action_state`, `use_shared_state`, `use_sync_external_store`
 
 ### Component System
-- `Component`, `PageElement`, `IntoPage`, `Page`, `Props`, `PageEventHandler`
+- `Component`, `ElementView`, `IntoView`, `View`, `Props`, `ViewEventHandler`
 
 ### Events and Callbacks
 - `Callback`, `IntoEventHandler`, `into_event_handler`
@@ -297,7 +297,7 @@ The prelude includes:
 ```rust
 use reinhardt_pages::prelude::*;
 
-fn counter() -> Page {
+fn counter() -> View {
     let (count, set_count) = use_state(|| 0);
 
     page!(|| {
@@ -308,7 +308,7 @@ fn counter() -> Page {
                 "Increment"
             }
         }
-    })()
+    })
 }
 ```
 

@@ -1,8 +1,9 @@
 name: Update Version References
 
 on:
-  release:
-    types: [published]
+  # Automatic version-ref updates now run inside the Release PR via
+  # release-plz.yml ('Update version references in release branch' step).
+  # Use this workflow manually to backfill if the automated step failed.
   workflow_dispatch:
     inputs:
       version:
@@ -18,25 +19,15 @@ jobs:
   update-version-refs:
     name: Update docs/examples version references
     timeout-minutes: 360
-    # Only trigger for reinhardt-web releases (release-plz creates GitHub Release for reinhardt-web only)
-    if: >
-      github.event_name == 'workflow_dispatch' ||
-      startsWith(github.event.release.tag_name, 'reinhardt-web@v')
+    if: github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     steps:
-      - name: Extract version from tag or input
+      - name: Validate version input
         id: version
         env:
-          EVENT_NAME: ${{ github.event_name }}
           INPUT_VERSION: ${{ inputs.version }}
-          RELEASE_TAG: ${{ github.event.release.tag_name }}
         run: |
-          if [ "$EVENT_NAME" = "workflow_dispatch" ]; then
-            VERSION="$INPUT_VERSION"
-          else
-            # Extract version from tag: reinhardt-web@v0.1.0-rc.8 → 0.1.0-rc.8
-            VERSION="${RELEASE_TAG#reinhardt-web@v}"
-          fi
+          VERSION="$INPUT_VERSION"
 
           # Validate version format
           if ! echo "$VERSION" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+(-[a-zA-Z0-9.]+)?$'; then
@@ -45,43 +36,7 @@ jobs:
           fi
 
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
-          echo "Extracted version: $VERSION"
-
-      - name: Verify crate is published on crates.io
-        if: github.event_name != 'workflow_dispatch'
-        run: |
-          VERSION="${{ steps.version.outputs.version }}"
-          MAX_RETRIES=3
-          RETRY_INTERVAL=30
-
-          for i in $(seq 1 $MAX_RETRIES); do
-            echo "Attempt $i/$MAX_RETRIES: Checking crates.io for reinhardt-web@$VERSION..."
-
-            HTTP_CODE=$(curl -s -o /tmp/crate-response.json -w "%{http_code}" \
-              -H "User-Agent: reinhardt-ci (github.com/kent8192/reinhardt)" \
-              "https://crates.io/api/v1/crates/reinhardt-web/$VERSION")
-
-            if [ "$HTTP_CODE" = "200" ]; then
-              YANKED=$(jq -r '.version.yanked' /tmp/crate-response.json)
-              if [ "$YANKED" = "false" ]; then
-                echo "reinhardt-web@$VERSION is published and not yanked"
-                exit 0
-              else
-                echo "::error::reinhardt-web@$VERSION is yanked. Aborting."
-                exit 1
-              fi
-            fi
-
-            echo "crates.io returned HTTP $HTTP_CODE"
-
-            if [ "$i" -lt "$MAX_RETRIES" ]; then
-              echo "Waiting ${RETRY_INTERVAL}s before retry..."
-              sleep $RETRY_INTERVAL
-            fi
-          done
-
-          echo "::error::Failed to verify reinhardt-web@$VERSION on crates.io after $MAX_RETRIES attempts"
-          exit 1
+          echo "Version: $VERSION"
 
       - name: Generate GitHub token
         uses: actions/create-github-app-token@v3
@@ -96,9 +51,11 @@ jobs:
           token: ${{ steps.generate-token.outputs.token }}
 
       - name: Run version update script
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
         run: |
           chmod +x scripts/update-version-refs.sh
-          ./scripts/update-version-refs.sh "${{ steps.version.outputs.version }}"
+          ./scripts/update-version-refs.sh "$VERSION"
 
       - name: Create Pull Request
         uses: peter-evans/create-pull-request@v8
@@ -111,31 +68,20 @@ jobs:
           body: |
             ## Summary
 
-            Automatically update hardcoded version references in documentation and examples to v${{ steps.version.outputs.version }} after the release was published on crates.io.
+            Manually triggered backfill of version references to v${{ steps.version.outputs.version }}.
 
-            **Updated files:**
-            - `examples/Cargo.toml` — workspace dependency version
-            - `website/config.toml` — template variable `reinhardt_version`
-            - `README.md` — umbrella crate and individual crate version references
-            - `examples/CLAUDE.md` — example dependency version references
+            This workflow is a manual fallback. Under normal circumstances, version references
+            are updated automatically inside the Release PR by the
+            `Update version references in release branch` step in `release-plz.yml`.
 
             ## Type of Change
 
             - [x] Documentation update
 
-            ## Motivation and Context
-
-            After release-plz publishes a new version to crates.io and creates a GitHub Release, documentation and examples still reference older versions. This automated PR ensures version consistency across all user-facing references.
-
-            ## How Was This Tested?
-
-            - [x] Script executed successfully (`scripts/update-version-refs.sh`)
-            - [x] `git diff` confirms only version strings were changed
-
             ## Checklist
 
-            - [x] I have updated the documentation (if applicable)
-            - [x] My changes generate no new warnings
+            - [x] Documentation updated
+            - [x] No new warnings
 
             ---
 

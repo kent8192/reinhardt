@@ -85,6 +85,7 @@ rstest = "0.26.1"
 
 ```toml
 [dependencies]
+# reinhardt-version-sync
 reinhardt = { version = "0.1.0-rc.17", package = "reinhardt-web", features = ["core"] }
 reinhardt-http = { path = "../../../crates/reinhardt-http" }      # ❌ NEVER
 reinhardt-routers = { path = "../../../crates/reinhardt-urls/crates/routers" }  # ❌ NEVER

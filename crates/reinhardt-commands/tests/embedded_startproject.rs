@@ -6,7 +6,30 @@ use reinhardt_commands::{BaseCommand, CommandContext};
 use rstest::*;
 use serial_test::serial;
 use std::collections::HashMap;
+use std::path::Path;
+use std::process::Command;
 use tempfile::TempDir;
+
+// Assert that Cargo can fully parse the generated manifest.
+//
+// Uses `cargo metadata --no-deps` so no registry access is required; the
+// command still exercises the same manifest-parsing step that rejects
+// misconfigurations (e.g. a `default-run` pointing at a nonexistent bin)
+// which would break the scaffold for a real user on `cargo run`.
+fn assert_manifest_parses(manifest: &Path) {
+	let output = Command::new(env!("CARGO"))
+		.args(["metadata", "--no-deps", "--format-version", "1"])
+		.arg("--manifest-path")
+		.arg(manifest)
+		.output()
+		.expect("cargo metadata command spawns");
+	assert!(
+		output.status.success(),
+		"generated manifest failed to parse: {}\nstderr:\n{}",
+		manifest.display(),
+		String::from_utf8_lossy(&output.stderr),
+	);
+}
 
 #[rstest]
 #[tokio::test]
@@ -37,6 +60,7 @@ async fn startproject_restful_from_embedded_only() {
 		generated.join("src").is_dir(),
 		"src/ directory must be generated"
 	);
+	assert_manifest_parses(&generated.join("Cargo.toml"));
 }
 
 #[rstest]
@@ -68,4 +92,5 @@ async fn startproject_pages_from_embedded_only() {
 		generated.join("src").is_dir(),
 		"src/ directory must be generated"
 	);
+	assert_manifest_parses(&generated.join("Cargo.toml"));
 }

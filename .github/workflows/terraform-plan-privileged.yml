@@ -223,10 +223,27 @@ jobs:
           echo "Downloading Lambda zips for v${MODULE_VERSION}..."
           mkdir -p lambdas
           BASE_URL="https://github.com/github-aws-runners/terraform-aws-github-runner/releases/download/v${MODULE_VERSION}"
-          for name in webhook runners runner-binaries-syncer; do
+          for name in webhook runners runner-binaries-syncer termination-watcher ami-housekeeper; do
             curl -fsSL -o "lambdas/${name}.zip" "${BASE_URL}/${name}.zip"
             echo "  Downloaded ${name}.zip"
           done
+
+      # Issue #3903: orphan-detector Lambda build (required by archive_file).
+      - name: Setup Node.js (for orphan-detector Lambda)
+        if: env.SKIP_PLAN != 'true' && matrix.module == 'github-runners'
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+          cache-dependency-path: infra/github-runners/lambda-src/orphan-detector/package-lock.json
+
+      - name: Build orphan-detector Lambda
+        if: env.SKIP_PLAN != 'true' && matrix.module == 'github-runners'
+        working-directory: infra/github-runners/lambda-src/orphan-detector
+        run: |
+          npm ci --no-audit --no-fund
+          npm run build
+          test -f dist/index.mjs || { echo "dist/index.mjs missing"; exit 1; }
 
       - name: Terraform Plan
         if: env.SKIP_PLAN != 'true'

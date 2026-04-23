@@ -357,6 +357,30 @@ cargo make placeholder-check
 cargo nextest run --package reinhardt-integration-tests
 ```
 
+**Orphan Detector (CI Infrastructure, Issue #3903):**
+```bash
+# Unit tests (requires Node.js 20+)
+cd infra/github-runners/lambda-src/orphan-detector
+npm ci
+npm test                     # 55 unit tests (vitest)
+npm run test:coverage        # with coverage thresholds (90% line, 85% branch)
+
+# Build Lambda bundle locally
+npm run build                # bundles src/index.ts -> dist/index.mjs
+
+# Dry-run invoke against CI sub-account (after deploy)
+aws lambda invoke \
+  --function-name reinhardt-ci-orphan-detector \
+  --payload '{"dryRun":true}' \
+  /tmp/resp.json
+
+# Tail CloudWatch logs
+aws logs tail /aws/lambda/reinhardt-ci-orphan-detector --follow
+```
+
+See `infra/github-runners/README.md` for architecture, configuration
+reference, and runbook.
+
 **Container Runtime:**
 ```bash
 # Verify Docker status

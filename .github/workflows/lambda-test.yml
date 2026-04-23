@@ -1,0 +1,68 @@
+name: Lambda Tests
+
+on:
+  pull_request:
+    paths:
+      - "infra/github-runners/lambda-src/**"
+      - ".github/workflows/lambda-test.yml"
+  push:
+    branches:
+      - main
+    paths:
+      - "infra/github-runners/lambda-src/**"
+      - ".github/workflows/lambda-test.yml"
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: ${{ matrix.lambda }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        lambda:
+          - orphan-detector
+    defaults:
+      run:
+        working-directory: infra/github-runners/lambda-src/${{ matrix.lambda }}
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+          cache-dependency-path: infra/github-runners/lambda-src/${{ matrix.lambda }}/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci --no-audit --no-fund
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Test with coverage
+        run: npm run test:coverage
+
+      - name: Build bundle
+        run: |
+          npm run build
+          test -f dist/index.mjs || { echo "dist/index.mjs missing"; exit 1; }
+          size=$(stat -c %s dist/index.mjs)
+          echo "Bundle size: $(( size / 1024 )) KB"
+          if [ "$size" -gt 10485760 ]; then
+            echo "Bundle exceeds 10 MB -- investigate unexpected deps"
+            exit 1
+          fi
+
+      - name: Upload coverage report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-${{ matrix.lambda }}
+          path: infra/github-runners/lambda-src/${{ matrix.lambda }}/coverage/
+          retention-days: 7
+          if-no-files-found: warn

@@ -120,3 +120,43 @@ variable "organizations_account_email" {
   description = "Email address for the CI sub-account (used by organizations module in terraform-plan CI)"
   type        = string
 }
+
+# ===== Orphan Detector (Issue #3903) =====
+
+variable "orphan_detector_enabled" {
+  description = "Enable the orphan job detector Lambda. Set to false to disable the scheduled scan."
+  type        = bool
+  default     = true
+}
+
+variable "orphan_detector_staleness_min" {
+  description = "Jobs in queued state longer than this threshold (minutes) are considered orphaned. Default 60."
+  type        = number
+  default     = 60
+  validation {
+    condition     = var.orphan_detector_staleness_min > 0
+    error_message = "orphan_detector_staleness_min must be a positive integer."
+  }
+}
+
+variable "orphan_detector_circuit_breaker_margin" {
+  description = "Circuit breaker fires when orphan count exceeds runner_max_count + this margin. Default 15."
+  type        = number
+  default     = 15
+  validation {
+    condition     = var.orphan_detector_circuit_breaker_margin >= 0
+    error_message = "orphan_detector_circuit_breaker_margin must be non-negative."
+  }
+}
+
+variable "orphan_detector_schedule_expression" {
+  description = "EventBridge schedule expression for the orphan detector scan interval. Default every 10 minutes."
+  type        = string
+  default     = "rate(10 minutes)"
+}
+
+variable "orphan_detector_alert_email" {
+  description = "Email for orphan detector circuit breaker alerts. Defaults to budget_alert_email if empty."
+  type        = string
+  default     = ""
+}

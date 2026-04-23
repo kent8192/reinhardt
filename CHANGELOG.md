@@ -7,6 +7,43 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.0-rc.19](https://github.com/kent8192/reinhardt-web/compare/reinhardt-web@v0.1.0-rc.18...reinhardt-web@v0.1.0-rc.19) - 2026-04-22
+
+### Added
+
+- *(ci)* add orphan detector pino logger with secret redaction ([[#3903](https://github.com/kent8192/reinhardt-web/issues/3903)](https://github.com/kent8192/reinhardt-web/issues/3903))
+- *(ci)* add orphan detector filter logic ([[#3903](https://github.com/kent8192/reinhardt-web/issues/3903)](https://github.com/kent8192/reinhardt-web/issues/3903))
+- *(ci)* add orphan detector circuit breaker ([[#3903](https://github.com/kent8192/reinhardt-web/issues/3903)](https://github.com/kent8192/reinhardt-web/issues/3903))
+- *(ci)* add orphan detector config loader ([[#3903](https://github.com/kent8192/reinhardt-web/issues/3903)](https://github.com/kent8192/reinhardt-web/issues/3903))
+- *(ci)* add orphan detector dedup state ([[#3903](https://github.com/kent8192/reinhardt-web/issues/3903)](https://github.com/kent8192/reinhardt-web/issues/3903))
+- *(ci)* add orphan detector synthetic webhook payload builder ([[#3903](https://github.com/kent8192/reinhardt-web/issues/3903)](https://github.com/kent8192/reinhardt-web/issues/3903))
+- *(ci)* add orphan detector HMAC signer and webhook POST ([[#3903](https://github.com/kent8192/reinhardt-web/issues/3903)](https://github.com/kent8192/reinhardt-web/issues/3903))
+- *(ci)* add orphan detector GitHub API client ([[#3903](https://github.com/kent8192/reinhardt-web/issues/3903)](https://github.com/kent8192/reinhardt-web/issues/3903))
+- *(ci)* add orphan detector CloudWatch metrics and SNS alert ([[#3903](https://github.com/kent8192/reinhardt-web/issues/3903)](https://github.com/kent8192/reinhardt-web/issues/3903))
+- *(ci)* wire orphan detector Lambda handler ([[#3903](https://github.com/kent8192/reinhardt-web/issues/3903)](https://github.com/kent8192/reinhardt-web/issues/3903))
+- *(ci)* expose orphan detector tunables as Terraform variables ([[#3903](https://github.com/kent8192/reinhardt-web/issues/3903)](https://github.com/kent8192/reinhardt-web/issues/3903))
+- *(ci)* wire orphan detector Lambda via Terraform ([[#3903](https://github.com/kent8192/reinhardt-web/issues/3903)](https://github.com/kent8192/reinhardt-web/issues/3903))
+
+### Changed
+
+- *(ci)* reuse shared ci_alerts SNS topic ([[#3903](https://github.com/kent8192/reinhardt-web/issues/3903)](https://github.com/kent8192/reinhardt-web/issues/3903))
+
+### Documentation
+
+- *(ci)* document orphan detector architecture and runbook ([[#3903](https://github.com/kent8192/reinhardt-web/issues/3903)](https://github.com/kent8192/reinhardt-web/issues/3903))
+
+### Fixed
+
+- *(commands)* return WebSocketRouter from ws_urls scaffold template
+
+### Maintenance
+
+- *(ci)* bootstrap orphan-detector Lambda project ([[#3903](https://github.com/kent8192/reinhardt-web/issues/3903)](https://github.com/kent8192/reinhardt-web/issues/3903))
+- *(ci)* verify Node.js and close Lambda download gap in init.sh ([[#3903](https://github.com/kent8192/reinhardt-web/issues/3903)](https://github.com/kent8192/reinhardt-web/issues/3903))
+- *(ci)* add hashicorp/archive provider to terraform lock ([[#3903](https://github.com/kent8192/reinhardt-web/issues/3903)](https://github.com/kent8192/reinhardt-web/issues/3903))
+- build orphan-detector Lambda before terraform plan/apply ([[#3903](https://github.com/kent8192/reinhardt-web/issues/3903)](https://github.com/kent8192/reinhardt-web/issues/3903))
+- add Lambda test workflow for orphan-detector ([[#3903](https://github.com/kent8192/reinhardt-web/issues/3903)](https://github.com/kent8192/reinhardt-web/issues/3903))
+
 ## [0.1.0-rc.18](https://github.com/kent8192/reinhardt-web/compare/reinhardt-web@v0.1.0-rc.17...reinhardt-web@v0.1.0-rc.18) - 2026-04-22
 
 ### Fixed

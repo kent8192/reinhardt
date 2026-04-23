@@ -73,4 +73,37 @@ run_case "01 plain TOML single marker" \
 	"0.1.0-rc.99" \
 	"demo.toml"
 
+# Fixture 02: Markdown with toml fenced block, marker inside the block
+cat > "$fx_dir/02-input.md" <<'MD_EOF'
+# Demo
+
+Install it:
+
+```toml
+# reinhardt-version-sync
+reinhardt = { version = "0.1.0-rc.17", package = "reinhardt-web" }
+```
+
+Done.
+MD_EOF
+
+cat > "$fx_dir/02-expected.md" <<'MD_EOF'
+# Demo
+
+Install it:
+
+```toml
+# reinhardt-version-sync
+reinhardt = { version = "0.1.0-rc.99", package = "reinhardt-web" }
+```
+
+Done.
+MD_EOF
+
+run_case "02 markdown toml block single marker" \
+	"$fx_dir/02-input.md" \
+	"$fx_dir/02-expected.md" \
+	"0.1.0-rc.99" \
+	"demo.md"
+
 exit "$FAIL"

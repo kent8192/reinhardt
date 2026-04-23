@@ -28,11 +28,11 @@ Add `reinhardt` to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-reinhardt = { version = "0.1.0-rc.13", features = ["conf"] }
+reinhardt = { version = "0.1.0-rc.19", features = ["conf"] }
 
 # Or use a preset:
-# reinhardt = { version = "0.1.0-rc.13", features = ["standard"] }  # Recommended
-# reinhardt = { version = "0.1.0-rc.13", features = ["full"] }      # All features
+# reinhardt = { version = "0.1.0-rc.19", features = ["standard"] }  # Recommended
+# reinhardt = { version = "0.1.0-rc.19", features = ["full"] }      # All features
 ```
 
 Then import configuration features:
@@ -50,26 +50,26 @@ Enable specific features based on your needs:
 
 ```toml
 # With async support
-reinhardt = { version = "0.1.0-rc.13", features = ["conf", "conf-settings-async"] }
+reinhardt = { version = "0.1.0-rc.19", features = ["conf", "async"] }
 
 # With encryption
-reinhardt = { version = "0.1.0-rc.13", features = ["conf", "conf-settings-encryption"] }
+reinhardt = { version = "0.1.0-rc.19", features = ["conf", "encryption"] }
 
 # With Vault integration
-reinhardt = { version = "0.1.0-rc.13", features = ["conf", "conf-settings-vault"] }
+reinhardt = { version = "0.1.0-rc.19", features = ["conf", "vault"] }
 ```
 
 Available features:
 
-- `conf-settings` (default): Core settings functionality
-- `conf-settings-async`: Asynchronous settings operations
-- `conf-settings-dynamic-redis`: Redis-backed dynamic settings
-- `conf-settings-dynamic-database`: Database-backed dynamic settings
-- `conf-settings-vault`: HashiCorp Vault integration
-- `conf-settings-aws-secrets`: AWS Secrets Manager integration
-- `conf-settings-azure-keyvault`: Azure Key Vault integration
-- `conf-settings-secret-rotation`: Automatic secret rotation
-- `conf-settings-encryption`: Built-in encryption for sensitive settings
+- `settings` (default): Core settings functionality
+- `async`: Asynchronous settings operations
+- `dynamic-redis`: Redis-backed dynamic settings
+- `dynamic-database`: Database-backed dynamic settings
+- `vault`: HashiCorp Vault integration
+- `aws-secrets`: AWS Secrets Manager integration
+- `azure-keyvault`: Azure Key Vault integration
+- `secret-rotation`: Automatic secret rotation
+- `encryption`: Built-in encryption for sensitive settings
 
 ## Usage
 

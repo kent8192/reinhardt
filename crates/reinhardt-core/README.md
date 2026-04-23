@@ -80,10 +80,8 @@ This crate provides the following modules:
   - Language negotiation (Accept-Language)
   - Encoding negotiation (Accept-Encoding)
 
-- **Dependency Injection**: FastAPI-style DI system
-  - Automatic dependency resolution
-  - Parameter injection
-  - Cache control
+- **Dependency Injection**: Provided by the separate `reinhardt-di` crate
+  - See `reinhardt-di` for automatic dependency resolution, parameter injection, and cache control
 
 ## Installation
 
@@ -91,7 +89,7 @@ Add this to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-reinhardt-core = "0.1.0-rc.13"
+reinhardt-core = "0.1.0-rc.19"
 ```
 
 ### Optional Features
@@ -100,7 +98,7 @@ Enable specific modules based on your needs:
 
 ```toml
 [dependencies]
-reinhardt-core = { version = "0.1.0-rc.13", features = ["signals", "macros", "security"] }
+reinhardt-core = { version = "0.1.0-rc.19", features = ["signals", "macros", "security"] }
 ```
 
 Available features:

@@ -12,11 +12,11 @@ Add `reinhardt` to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-reinhardt = { version = "0.1.0-rc.13", features = ["dispatch"] }
+reinhardt = { version = "0.1.0-rc.19", features = ["dispatch"] }
 
 # Or use a preset:
-# reinhardt = { version = "0.1.0-rc.13", features = ["standard"] }  # Recommended
-# reinhardt = { version = "0.1.0-rc.13", features = ["full"] }      # All features
+# reinhardt = { version = "0.1.0-rc.19", features = ["standard"] }  # Recommended
+# reinhardt = { version = "0.1.0-rc.19", features = ["full"] }      # All features
 ```
 
 Then import dispatch features:
@@ -65,19 +65,20 @@ use reinhardt::dispatch::{BaseHandler, MiddlewareChain};
 use reinhardt_http::{Handler, Middleware};
 use std::sync::Arc;
 
-async fn setup_handler() -> Arc<dyn Handler> {
+async fn setup_handler() -> Result<Arc<dyn Handler>, Box<dyn std::error::Error>> {
     let handler = Arc::new(BaseHandler::new());
 
-    MiddlewareChain::new(handler)
-        .add_middleware(Arc::new(LoggingMiddleware))
-        .add_middleware(Arc::new(AuthMiddleware))
-        .build()
+    let chain = MiddlewareChain::new(handler)
+        .add_middleware(Arc::new(LoggingMiddleware))?
+        .add_middleware(Arc::new(AuthMiddleware))?
+        .build();
+    Ok(chain)
 }
 ```
 
 ### Exception Handling
 
-The `DefaultExceptionHandler` automatically converts errors into HTTP responses:
+The exception handler automatically converts errors into HTTP responses:
 
 - `DispatchError::View` → 500 Internal Server Error
 - `DispatchError::UrlResolution` → 404 Not Found
@@ -102,8 +103,8 @@ Composes multiple middleware components into a processing pipeline:
 
 ```rust
 let chain = MiddlewareChain::new(handler)
-    .add_middleware(middleware1)
-    .add_middleware(middleware2)
+    .add_middleware(middleware1)?
+    .add_middleware(middleware2)?
     .build();
 ```
 
@@ -125,7 +126,6 @@ let response = dispatcher.dispatch(request).await?;
 The exception module provides:
 
 - `ExceptionHandler` trait for custom exception handling
-- `DefaultExceptionHandler` for standard error responses
 - `convert_exception_to_response` helper function
 - `IntoResponse` trait for converting types to HTTP responses
 

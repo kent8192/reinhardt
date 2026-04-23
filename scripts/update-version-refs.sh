@@ -81,27 +81,43 @@ echo "Updating version references to $NEW_VER in $REPO_ROOT"
 
 AWK_PROG='
 BEGIN {
-	marker_re  = "^[[:space:]]*(#|//)[[:space:]]*reinhardt-version-sync[[:space:]]*$"
-	marker_re2 = "^[[:space:]]*<!--[[:space:]]*reinhardt-version-sync[[:space:]]*-->[[:space:]]*$"
-	version_re = "[0-9]+\\.[0-9]+\\.[0-9]+(-[a-zA-Z0-9.]+)?"
-	fence_re   = "^[[:space:]]*```"
-	blank_re   = "^[[:space:]]*$"
-	state = "SCANNING"
-	orphans = 0
+	marker_re      = "^[[:space:]]*(#|//)[[:space:]]*reinhardt-version-sync[[:space:]]*$"
+	marker_html_re = "^[[:space:]]*<!--[[:space:]]*reinhardt-version-sync[[:space:]]*-->[[:space:]]*$"
+	marker_html_n  = "^[[:space:]]*<!--[[:space:]]*reinhardt-version-sync:[0-9]+[[:space:]]*-->[[:space:]]*$"
+	version_re     = "[0-9]+\\.[0-9]+\\.[0-9]+(-[a-zA-Z0-9.]+)?"
+	fence_re       = "^[[:space:]]*```"
+	blank_re       = "^[[:space:]]*$"
+	state       = "SCANNING"
+	armed_count = 0
+	orphans     = 0
 }
 {
 	if (state == "SCANNING") {
 		print
-		if ($0 ~ marker_re || $0 ~ marker_re2) state = "ARMED"
+		if ($0 ~ marker_re || $0 ~ marker_html_re) {
+			armed_count = 1
+			state = "ARMED"
+		} else if ($0 ~ marker_html_n) {
+			# Extract the integer N from <!-- reinhardt-version-sync:N -->
+			tmp = $0
+			if (match(tmp, ":[0-9]+")) {
+				armed_count = int(substr(tmp, RSTART + 1, RLENGTH - 1))
+			} else {
+				armed_count = 1
+			}
+			if (armed_count < 1) armed_count = 1
+			state = "ARMED"
+		}
 		next
 	}
-	# ARMED
+	# ARMED: pass fence and blank lines through without consuming count
 	if ($0 ~ fence_re || $0 ~ blank_re) { print; next }
 	if (match($0, version_re)) {
 		prefix = substr($0, 1, RSTART - 1)
 		suffix = substr($0, RSTART + RLENGTH)
 		print prefix new_ver suffix
-		state = "SCANNING"
+		armed_count--
+		if (armed_count <= 0) state = "SCANNING"
 		next
 	}
 	# Marker with no version on the next eligible line.

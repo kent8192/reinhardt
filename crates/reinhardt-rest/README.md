@@ -149,9 +149,6 @@ use reinhardt::rest::{
     // Pagination
     PaginatedResponse,
 };
-// Routing types live in reinhardt-urls, not reinhardt-rest
-use reinhardt::urls::routers::{UnifiedRouter, Router};
-
 // Create a successful response
 let user = SimpleUser::new(1, "Alice");
 let response = ApiResponse::success(user);

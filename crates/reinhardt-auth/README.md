@@ -14,11 +14,11 @@ Add `reinhardt` to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-reinhardt = { version = "0.1.0-rc.13", features = ["auth"] }
+reinhardt = { version = "0.1.0-rc.19", features = ["auth"] }
 
 # Or use a preset:
-# reinhardt = { version = "0.1.0-rc.13", features = ["standard"] }  # Recommended
-# reinhardt = { version = "0.1.0-rc.13", features = ["full"] }      # All features
+# reinhardt = { version = "0.1.0-rc.19", features = ["standard"] }  # Recommended
+# reinhardt = { version = "0.1.0-rc.19", features = ["full"] }      # All features
 ```
 
 Then import authentication features:
@@ -72,12 +72,17 @@ let result = auth.authenticate(&request).unwrap();
 
 ### User Management
 
-#### User Trait
+#### User Trait (Deprecated)
+
+> **Deprecated since `0.1.0-rc.15`**: The `User` trait is deprecated. Use
+> `AuthIdentity` + `BaseUser`/`FullUser` + `PermissionsMixin` instead.
+> The trait remains available for backward compatibility but will be removed
+> in a future release.
 
 - **Core User Interface**: Unified trait for authenticated and anonymous users
 - **User Identification**: `id()`, `username()`, `get_username()` methods
-- **Authentication Status**: `is_authenticated()`, `is_active()`, `is_admin()`
-  checks
+- **Authentication Status**: `is_authenticated()`, `is_active()`, `is_admin()`,
+  `is_staff()`, `is_superuser()` checks
 - **Django Compatibility**: Methods compatible with Django's user interface
 
 #### User Implementations
@@ -97,6 +102,8 @@ let user = SimpleUser {
     email: "john@example.com".to_string(),
     is_active: true,
     is_admin: false,
+    is_staff: false,
+    is_superuser: false,
 };
 
 assert!(user.is_authenticated());
@@ -302,6 +309,63 @@ assert!(admin.is_superuser);
 - **Demonstration Purpose**: For testing and prototyping (use ORM-based manager
   in production)
 
+#### `#[user]` Macro
+
+The `#[user]` attribute macro generates the full user model implementation from
+a plain struct definition. It is the recommended approach for defining custom
+user models in reinhardt-web applications.
+
+**Parameters:**
+
+- `hasher`: Password hasher type (e.g., `Argon2Hasher`)
+- `username_field`: Name of the field used as the login identifier (e.g.,
+  `"username"`, `"email"`)
+- `full`: When `true`, generates the complete user interface including
+  `FullUser` and `PermissionsMixin` implementations
+
+**Notes:**
+
+- `#[user]` does NOT auto-derive `Serialize`, `Deserialize`, or `Default`;
+  add `#[derive(...)]` explicitly for those traits
+- `#[model]` is still required for database integration; `app_label` and
+  `table_name` are configured there
+- Each field uses `#[field(...)]` attributes to declare constraints such as
+  `primary_key`, `unique`, `max_length`, `default`, and `include_in_new`
+
+```rust
+use reinhardt::Argon2Hasher;
+use reinhardt::macros::user;
+use reinhardt::prelude::*;
+use serde::{Deserialize, Serialize};
+use uuid::Uuid;
+
+#[user(hasher = Argon2Hasher, username_field = "username", full = true)]
+#[derive(Default, Serialize, Deserialize)]
+#[model(app_label = "auth", table_name = "users")]
+pub struct User {
+	#[field(primary_key = true, include_in_new = false)]
+	pub id: Uuid,
+
+	#[field(max_length = 150, unique = true)]
+	pub username: String,
+
+	#[field(max_length = 254, unique = true)]
+	pub email: String,
+
+	#[field(max_length = 512)]
+	pub password_hash: Option<String>,
+
+	#[field(default = true)]
+	pub is_active: bool,
+
+	#[field(default = false)]
+	pub is_staff: bool,
+
+	#[field(default = false)]
+	pub is_superuser: bool,
+}
+```
+
 ### Password Security
 
 #### Password Hashing
@@ -409,6 +473,8 @@ assert!(permission.has_permission(&context).await);
 use reinhardt::auth::{SessionAuthentication, AuthenticationBackend};
 use reinhardt::auth::sessions::backends::InMemorySessionBackend;
 
+// SessionAuthentication is generic over B: SessionBackend.
+// Pass the backend to new(), or use Default when B: Default.
 let session_backend = InMemorySessionBackend::new();
 let auth = SessionAuthentication::new(session_backend);
 
@@ -464,18 +530,19 @@ assert!(mfa.verify_code("alice", code).await?);
 - **InMemoryTokenStore**: Built-in in-memory token storage
 
 ```rust
-use reinhardt::auth::{OAuth2Authentication, GrantType, InMemoryOAuth2Store};
+use reinhardt::auth::{OAuth2Authentication, OAuth2Application, GrantType};
 
-let store = InMemoryOAuth2Store::new();
-let oauth2 = OAuth2Authentication::new(store);
+// OAuth2Authentication::new() takes no arguments; use ::with_repository() for custom storage.
+let oauth2 = OAuth2Authentication::new();
 
-// Register OAuth2 application
-oauth2.register_application(
-    "client123",
-    "secret456",
-    "https://example.com/callback",
-    vec![GrantType::AuthorizationCode]
-).await?;
+// Register an OAuth2 application by passing an OAuth2Application struct.
+let app = OAuth2Application {
+    client_id: "client123".to_string(),
+    client_secret: "secret456".to_string(),
+    redirect_uris: vec!["https://example.com/callback".to_string()],
+    grant_types: vec![GrantType::AuthorizationCode],
+};
+oauth2.register_application(app).await;
 
 // Authorization code flow
 let code = oauth2.generate_authorization_code("client123", "user123", vec!["read", "write"]).await?;
@@ -495,7 +562,7 @@ let claims = oauth2.verify_token(&token.access_token).await?;
   - `Compromised`: Security incident
   - `ManualRevoke`: Admin revocation
   - `Rotated`: Automatic token rotation
-- **InMemoryBlacklist**: Built-in in-memory blacklist storage
+- **InMemoryTokenBlacklist**: Built-in in-memory blacklist storage
 - **Cleanup**: Automatic removal of expired blacklist entries
 - **Statistics**: Usage tracking and monitoring
 
@@ -505,23 +572,23 @@ let claims = oauth2.verify_token(&token.access_token).await?;
 - **RefreshTokenStore Trait**: Persistent refresh token storage
 - **Rotation Flow**: Invalidate old token when issuing new one
 - **Security**: Prevents refresh token reuse attacks
-- **InMemoryRefreshStore**: Built-in in-memory refresh token storage
+- **InMemoryRefreshTokenStore**: Built-in in-memory refresh token storage
 
 ```rust
 use reinhardt::auth::{
-    TokenBlacklist, InMemoryBlacklist, BlacklistReason,
-    TokenRotationManager, InMemoryRefreshStore
+    TokenBlacklist, InMemoryTokenBlacklist, BlacklistReason,
+    TokenRotationManager, InMemoryRefreshTokenStore
 };
 
 // Token blacklist
-let blacklist = InMemoryBlacklist::new();
+let blacklist = InMemoryTokenBlacklist::new();
 use chrono::{Utc, Duration};
 let expires_at = Utc::now() + Duration::hours(24);
 blacklist.blacklist("old_token", expires_at, BlacklistReason::Logout).await?;
 assert!(blacklist.is_blacklisted("old_token").await?);
 
 // Token rotation
-let refresh_store = InMemoryRefreshStore::new();
+let refresh_store = InMemoryRefreshTokenStore::new();
 let rotation_manager = TokenRotationManager::new(blacklist, refresh_store);
 
 let new_token = rotation_manager.rotate_token("old_refresh_token", "user123").await?;

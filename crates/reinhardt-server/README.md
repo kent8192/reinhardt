@@ -43,17 +43,17 @@ Add `reinhardt` to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-reinhardt = { version = "0.1.0-rc.13", features = ["server"] }
+reinhardt = { version = "0.1.0-rc.19", features = ["server"] }
 
 # For WebSocket support:
-# reinhardt = { version = "0.1.0-rc.13", features = ["server", "server-websocket"] }
+# reinhardt = { version = "0.1.0-rc.19", features = ["server", "websocket"] }
 
 # For GraphQL support:
-# reinhardt = { version = "0.1.0-rc.13", features = ["server", "server-graphql"] }
+# reinhardt = { version = "0.1.0-rc.19", features = ["server", "graphql"] }
 
 # Or use a preset:
-# reinhardt = { version = "0.1.0-rc.13", features = ["standard"] }  # Recommended
-# reinhardt = { version = "0.1.0-rc.13", features = ["full"] }      # All features
+# reinhardt = { version = "0.1.0-rc.19", features = ["standard"] }  # Recommended
+# reinhardt = { version = "0.1.0-rc.19", features = ["full"] }      # All features
 ```
 
 Then import server features:
@@ -77,7 +77,7 @@ use reinhardt::core::exception::Error;
 use std::sync::Arc;
 
 async fn my_handler(req: Request) -> Result<Response, Error> {
-    Response::ok().with_body("Hello, world!")
+    Ok(Response::ok().with_body("Hello, world!"))
 }
 
 #[tokio::main]

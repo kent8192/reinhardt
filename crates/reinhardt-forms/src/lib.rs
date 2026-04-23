@@ -28,19 +28,17 @@
 //! ```rust,ignore
 //! use reinhardt_forms::{Form, CharField, EmailField, IntegerField};
 //!
-//! #[derive(Form)]
-//! struct ContactForm {
-//!     name: CharField,
-//!     email: EmailField,
-//!     age: IntegerField,
-//!     message: CharField,
-//! }
+//! // Build a form imperatively using add_field()
+//! let mut form = Form::new();
+//! form.add_field(Box::new(CharField::new("name")));
+//! form.add_field(Box::new(EmailField::new("email")));
+//! form.add_field(Box::new(IntegerField::new("age")));
+//! form.add_field(Box::new(CharField::new("message")));
 //!
 //! // Validate form data
-//! let form = ContactForm::from_data(&request_data);
+//! form.bind(&request_data);
 //! if form.is_valid() {
-//!     let name = form.cleaned_data.name;
-//!     // Process the form...
+//!     // Process the validated form...
 //! } else {
 //!     let errors = form.errors();
 //! }
@@ -53,8 +51,8 @@
 //!
 //! // Auto-generate form from User model
 //! let form = ModelFormBuilder::<User>::new()
-//!     .fields(&["username", "email", "bio"])
-//!     .exclude(&["password"])
+//!     .fields(vec!["username".to_string(), "email".to_string(), "bio".to_string()])
+//!     .exclude(vec!["password".to_string()])
 //!     .build();
 //! ```
 //!

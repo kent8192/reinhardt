@@ -225,6 +225,22 @@ jobs:
       runner: ${{ needs.determine-runner.outputs.runner }}
       cargo-build-jobs: ${{ needs.determine-runner.outputs.cargo-build-jobs }}
 
+  version-markers:
+    name: Version Markers Lint
+    needs: [check-branch-status]
+    if: needs.check-branch-status.outputs.has-conflicts != 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+
+      - name: Run shell-script tests
+        run: bash scripts/tests/run-all.sh
+
+      - name: Validate version-sync markers across repo
+        run: ./scripts/validate-version-markers.sh
+
   # Feature flag combination check - release PRs only.
   # Verifies that all documented feature presets compile correctly
   # before publishing to crates.io. Only runs on release-plz branches

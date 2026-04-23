@@ -14,17 +14,17 @@ Add `reinhardt` to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-reinhardt = { version = "0.1.0-rc.13", features = ["commands"] }
+reinhardt = { version = "0.1.0-rc.19", features = ["commands"] }
 
 # Or use a preset:
-# reinhardt = { version = "0.1.0-rc.13", features = ["standard"] }  # Recommended
-# reinhardt = { version = "0.1.0-rc.13", features = ["full"] }      # All features
+# reinhardt = { version = "0.1.0-rc.19", features = ["standard"] }  # Recommended
+# reinhardt = { version = "0.1.0-rc.19", features = ["full"] }      # All features
 ```
 
 Then import command features:
 
 ```rust
-use reinhardt::commands::{Command, CommandRegistry, execute_from_command_line};
+use reinhardt::commands::{BaseCommand, CommandRegistry};
 ```
 
 **Note:** Command features are included in the `standard` and `full` feature presets.
@@ -227,7 +227,7 @@ Projects using `collect_migrations!` must add `linkme` as a dependency:
 
 ```toml
 [dependencies]
-reinhardt = { version = "0.1.0-rc.13", features = ["standard"] }
+reinhardt = { version = "0.1.0-rc.19", features = ["standard"] }
 linkme = "0.3"
 ```
 

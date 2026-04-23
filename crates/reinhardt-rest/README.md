@@ -151,7 +151,6 @@ use reinhardt::rest::{
 };
 // Routing types live in reinhardt-urls, not reinhardt-rest
 use reinhardt::urls::routers::{UnifiedRouter, Router};
-use reinhardt::urls::Route;
 
 // Create a successful response
 let user = SimpleUser::new(1, "Alice");

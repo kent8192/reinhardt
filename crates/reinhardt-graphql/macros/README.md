@@ -13,11 +13,11 @@ Derive macros for GraphQL-gRPC integration in Reinhardt framework
 ```toml
 # ✅ Correct - use the reinhardt parent crate
 [dependencies]
-reinhardt = { version = "0.1.0-rc.13", features = ["graphql"] }
+reinhardt = { version = "0.1.0-rc.19", features = ["graphql"] }
 
 # Or use a preset:
-# reinhardt = { version = "0.1.0-rc.13", features = ["standard"] }  # Recommended
-# reinhardt = { version = "0.1.0-rc.13", features = ["full"] }      # All features
+# reinhardt = { version = "0.1.0-rc.19", features = ["standard"] }  # Recommended
+# reinhardt = { version = "0.1.0-rc.19", features = ["full"] }      # All features
 
 # ❌ Incorrect - don't depend on this crate directly
 [dependencies]
@@ -40,7 +40,6 @@ use reinhardt::graphql::macros::{GrpcGraphQLConvert, GrpcSubscription};
 
 - **GrpcGraphQLConvert** - Automatic type conversion between Protobuf and GraphQL types
   - Derives `From<proto::T> for T` and `From<T> for proto::T`
-  - Field renaming with `#[graphql(rename_all = "camelCase")]`
   - Conditional field inclusion with `#[graphql(skip_if = "...")]`
   - Custom protobuf type mapping with `#[proto(...)]` attributes
 
@@ -58,7 +57,6 @@ use reinhardt::graphql::macros::{GrpcGraphQLConvert, GrpcSubscription};
 use reinhardt::graphql::GrpcGraphQLConvert;
 
 #[derive(GrpcGraphQLConvert)]
-#[graphql(rename_all = "camelCase")]
 struct User {
     id: String,
     name: String,
@@ -94,7 +92,6 @@ This automatically generates a GraphQL subscription implementation that:
 
 ### GrpcGraphQLConvert Attributes
 
-- `#[graphql(rename_all = "...")]` - Rename all fields (camelCase, snake_case, PascalCase)
 - `#[graphql(skip_if = "...")]` - Skip field if predicate is true
 - `#[proto(type = "...")]` - Specify custom protobuf type
 - `#[proto(rename = "...")]` - Rename field in protobuf

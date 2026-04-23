@@ -6,7 +6,7 @@ rust-version.workspace = true
 license.workspace = true
 authors.workspace = true
 repository.workspace = true
-description = "Procedural macros for Reinhardt database layer (ORM and NoSQL ODM)"
+description = "Procedural macros for Reinhardt database layer (NoSQL ODM)"
 
 [lib]
 proc-macro = true

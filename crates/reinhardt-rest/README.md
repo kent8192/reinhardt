@@ -4,7 +4,7 @@
 
 ## Overview
 
-This crate serves as a **convenience layer** that combines multiple Reinhardt crates into a single import. It does not contain its own implementation or tests - all functionality is provided by the underlying specialized crates.
+This crate serves as a **convenience layer** that combines multiple Reinhardt crates into a single import. Core functionality is provided by the underlying specialized crates, though this crate also contains its own implementations for browsable API, filters, metadata, serializers, throttling, versioning, authentication, response handling, schema generation, and OpenAPI support.
 
 ## Installation
 
@@ -12,11 +12,11 @@ Add `reinhardt` to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-reinhardt = { version = "0.1.0-rc.13", features = ["rest"] }
+reinhardt = { version = "0.1.0-rc.19", features = ["rest"] }
 
 # Or use a preset:
-# reinhardt = { version = "0.1.0-rc.13", features = ["standard"] }  # Recommended
-# reinhardt = { version = "0.1.0-rc.13", features = ["full"] }      # All features
+# reinhardt = { version = "0.1.0-rc.19", features = ["standard"] }  # Recommended
+# reinhardt = { version = "0.1.0-rc.19", features = ["full"] }      # All features
 ```
 
 Then import REST features:
@@ -24,7 +24,7 @@ Then import REST features:
 ```rust
 use reinhardt::rest::{ApiResponse, ResponseBuilder, IntoApiResponse};
 use reinhardt::rest::{JwtAuth, IsAuthenticated, AllowAny, User, SimpleUser};
-use reinhardt::rest::{DefaultRouter, Router, Route};
+use reinhardt::urls::routers::UnifiedRouter;
 use reinhardt::rest::{PaginatedResponse};
 ```
 
@@ -34,8 +34,8 @@ use reinhardt::rest::{PaginatedResponse};
 
 - **Unified Interface**: Single import point for REST API functionality
 - **Re-export Layer**: Combines authentication, routing, browsable API, and response handling
-- **No Implementation**: Pure export/aggregation crate
-- **No Tests**: All functionality is tested in specialized crates
+- **Own Implementations**: Contains browsable API, filters, metadata, serializers, throttling, versioning, authentication, response handling, schema generation, and OpenAPI support
+- **Tested Locally**: Core modules have tests; additional coverage in specialized crates
 
 ## Features
 
@@ -142,16 +142,12 @@ use reinhardt::rest::{
     // Authentication
     JwtAuth, IsAuthenticated, AllowAny, User, SimpleUser,
 
-    // Routing
-    DefaultRouter, Router, Route,
-
     // Response handling
     ApiResponse, ResponseBuilder, IntoApiResponse,
 
     // Pagination
     PaginatedResponse,
 };
-
 // Create a successful response
 let user = SimpleUser::new(1, "Alice");
 let response = ApiResponse::success(user);

@@ -119,6 +119,7 @@
 //! | `sessions` | disabled | Session-based authentication middleware |
 //! | `auth-jwt` | disabled | JWT Bearer token authentication middleware |
 //! | `sqlx` | disabled | Database-backed session storage via SQLx |
+//! | `session-redis` | disabled | Redis-backed session storage |
 //! | `full` | disabled | Enables all middleware features |
 //!
 //! ## Middleware Ordering

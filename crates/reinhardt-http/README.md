@@ -78,7 +78,7 @@ Core HTTP abstractions for the Reinhardt framework. Provides comprehensive reque
 
 #### Error Integration
 
-- Re-exports `reinhardt_exception::Error` and `Result` for consistent error handling
+- Re-exports `reinhardt_core::exception::Error` and `Result` for consistent error handling
 
 ## Installation
 
@@ -86,11 +86,11 @@ Add `reinhardt` to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-reinhardt = "0.1.0-rc.13"
+reinhardt = "0.1.0-rc.19"
 
 # Or use a preset with parsers support:
-# reinhardt = { version = "0.1.0-rc.13", features = ["standard"] }  # Recommended
-# reinhardt = { version = "0.1.0-rc.13", features = ["full"] }      # All features
+# reinhardt = { version = "0.1.0-rc.19", features = ["standard"] }  # Recommended
+# reinhardt = { version = "0.1.0-rc.19", features = ["full"] }      # All features
 ```
 
 **Note:** HTTP types are available through the main `reinhardt` crate, which provides a unified interface to all framework components.
@@ -130,7 +130,7 @@ let mut request = Request::builder()
 	.unwrap();
 
 // Access query parameters
-assert_eq!(request.query_params.get("sort"), Some(&"sort".to_string()));
+assert_eq!(request.query_params.get("sort"), Some(&"name".to_string()));
 assert_eq!(request.query_params.get("order"), Some(&"asc".to_string()));
 
 // Add path parameters (typically done by router)

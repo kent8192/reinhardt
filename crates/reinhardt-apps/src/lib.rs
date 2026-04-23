@@ -75,9 +75,9 @@
 //!
 //! - From `reinhardt-http`: [`Request`], [`Response`], [`StreamBody`]
 //! - From `reinhardt-conf`: [`Settings`], [`DatabaseConfig`], [`MiddlewareConfig`]
-//! - From `reinhardt-exception`: [`Error`], [`Result`]
+//! - From `reinhardt-core::exception`: [`Error`], [`Result`]
 //! - From `reinhardt-server`: [`HttpServer`], [`serve`]
-//! - From `reinhardt-types`: [`Handler`], [`Middleware`], [`MiddlewareChain`]
+//! - From `reinhardt-http`: [`Handler`], [`Middleware`], [`MiddlewareChain`]
 
 #![warn(missing_docs)]
 
@@ -96,13 +96,13 @@ pub use reinhardt_http::{Request, Response, StreamBody, StreamingResponse};
 #[allow(deprecated)]
 pub use reinhardt_conf::settings::{DatabaseConfig, MiddlewareConfig, Settings, TemplateConfig};
 
-// Re-export from reinhardt-exception
+// Re-export from reinhardt-core::exception
 pub use reinhardt_core::exception::{Error, Result};
 
 // Re-export from reinhardt-server
 pub use reinhardt_server::{HttpServer, serve};
 
-// Re-export from reinhardt-types
+// Re-export from reinhardt-http
 pub use reinhardt_http::{Handler, Middleware, MiddlewareChain};
 
 // Re-export inventory for macro usage

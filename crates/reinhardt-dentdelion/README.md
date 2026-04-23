@@ -21,11 +21,11 @@ Add `reinhardt` to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-reinhardt = { version = "0.1.0-rc.13", features = ["dentdelion"] }
+reinhardt = { version = "0.1.0-rc.19", features = ["dentdelion"] }
 
 # Or use a preset:
-# reinhardt = { version = "0.1.0-rc.13", features = ["standard"] }  # Recommended
-# reinhardt = { version = "0.1.0-rc.13", features = ["full"] }      # All features
+# reinhardt = { version = "0.1.0-rc.19", features = ["standard"] }  # Recommended
+# reinhardt = { version = "0.1.0-rc.19", features = ["full"] }      # All features
 ```
 
 Then import dentdelion features:
@@ -41,9 +41,10 @@ use reinhardt::dentdelion::prelude::*;
 | Feature | Description |
 |---------|-------------|
 | `default` | Core plugin system only |
-| `wasm` | WebAssembly plugin support (requires wasmtime) |
+| `wasm` | WebAssembly plugin support (requires wasmtime 36.x) |
+| `ts` | TypeScript/JavaScript SSR support via boa_engine (pure-Rust ECMAScript engine); also enables `wasm` |
 | `cli` | CLI support for crates.io integration |
-| `full` | All features enabled |
+| `full` | wasm + cli (note: `ts` is NOT included in `full`) |
 
 ## Quick Start
 

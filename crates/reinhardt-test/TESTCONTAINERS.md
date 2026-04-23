@@ -23,87 +23,97 @@ Add to your `Cargo.toml`:
 
 ```toml
 [dev-dependencies]
-reinhardt-test = { version = "0.1.0-alpha.1", features = ["testcontainers"] }
+reinhardt-test = { version = "0.1.0-rc.19", features = ["testcontainers"] }
 ```
 
 ### 2. Basic Usage
 
+Container fixtures are provided by `reinhardt-test` using the `#[fixture]` macro from `rstest`.
+Inject them as function parameters and use `#[future]` for async fixtures.
+
 #### PostgreSQL
 
 ```rust
-use reinhardt_test::containers::with_postgres;
+use reinhardt_test::postgres_container;
+use rstest::*;
+use std::sync::Arc;
+use testcontainers::{ContainerAsync, GenericImage};
 
+#[rstest]
 #[tokio::test]
-#[ignore] // Requires Docker
-async fn test_with_postgres() {
-    with_postgres(|db| async move {
-        let url = db.connection_url();
-        // Use the database connection URL...
-
-        Ok(())
-    }).await.unwrap();
+async fn test_with_postgres(
+    #[future] postgres_container: (ContainerAsync<GenericImage>, Arc<sqlx::PgPool>, u16, String),
+) {
+    let (_container, pool, _port, database_url) = postgres_container.await;
+    // Use pool or database_url...
 }
 ```
 
 #### MySQL
 
 ```rust
-use reinhardt_test::containers::with_mysql;
+use reinhardt_test::fixtures::resources::{MySqlSuiteResource, mysql_suite};
+use reinhardt_testkit::resource::SuiteGuard;
+use rstest::*;
 
+#[rstest]
 #[tokio::test]
-#[ignore] // Requires Docker
-async fn test_with_mysql() {
-    with_mysql(|db| async move {
-        let url = db.connection_url();
-        // Use the database connection URL...
-
-        Ok(())
-    }).await.unwrap();
+async fn test_with_mysql(mysql_suite: SuiteGuard<MySqlSuiteResource>) {
+    let pool = &mysql_suite.pool;
+    let database_url = &mysql_suite.database_url;
+    // Use pool or database_url...
 }
 ```
 
 #### Redis
 
 ```rust
-use reinhardt_test::containers::with_redis;
+use reinhardt_test::redis_container;
+use rstest::*;
+use testcontainers::{ContainerAsync, GenericImage};
 
+#[rstest]
 #[tokio::test]
-#[ignore] // Requires Docker
-async fn test_with_redis() {
-    with_redis(|redis| async move {
-        let url = redis.connection_url();
-        // Use the Redis connection URL...
-
-        Ok(())
-    }).await.unwrap();
+async fn test_with_redis(
+    #[future] redis_container: (ContainerAsync<GenericImage>, u16, String),
+) {
+    let (_container, _port, url) = redis_container.await;
+    // Use url...
 }
 ```
 
 ### 3. Using with APITestCase
 
+Combine the `postgres_container` fixture with `AsyncTeardownGuard<APITestCase>` via a custom
+`#[fixture]` function:
+
 ```rust
-use reinhardt_test::prelude::*;
-use reinhardt_test::containers::with_postgres;
-use reinhardt_test::resource::AsyncTestResource;
+use reinhardt_test::postgres_container;
+use reinhardt_testkit::resource::{AsyncTeardownGuard, AsyncTestResource};
+use reinhardt_testkit::testcase::APITestCase;
+use rstest::*;
+use std::sync::Arc;
+use testcontainers::{ContainerAsync, GenericImage};
 
+#[fixture]
+async fn api_test_with_db(
+    #[future] postgres_container: (ContainerAsync<GenericImage>, Arc<sqlx::PgPool>, u16, String),
+) -> (AsyncTeardownGuard<APITestCase>, ContainerAsync<GenericImage>) {
+    let (container, _pool, _port, database_url) = postgres_container.await;
+    let case = AsyncTeardownGuard::<APITestCase>::new().await;
+    case.set_database_url(database_url).await;
+    (case, container)
+}
+
+#[rstest]
 #[tokio::test]
-#[ignore] // Requires Docker
-async fn test_api_with_database() {
-    with_postgres(|db| async move {
-        // Create APITestCase and set database URL
-        let test_case = APITestCase::setup().await;
-        test_case.set_database_url(db.connection_url()).await;
-
-        // Get the database URL
-        let db_url = test_case.database_url().await.unwrap();
-
-        // Run your API tests...
-        let client = test_case.client().await;
-        let response = client.get("/api/users/").await.unwrap();
-
-        test_case.teardown().await;
-        Ok(())
-    }).await.unwrap();
+async fn test_api_with_database(
+    #[future] api_test_with_db: (AsyncTeardownGuard<APITestCase>, ContainerAsync<GenericImage>),
+) {
+    let (case, _container) = api_test_with_db.await;
+    let client = case.client().await;
+    let response = client.get("/api/users/").await.unwrap();
+    response.assert_ok();
 }
 ```
 
@@ -146,9 +156,10 @@ The macro automatically:
 
 ```rust
 use reinhardt_test::containers::PostgresContainer;
+use rstest::rstest;
 
+#[rstest]
 #[tokio::test]
-#[ignore] // Requires Docker
 async fn test_custom_postgres() {
     let container = PostgresContainer::with_credentials(
         "my_user",
@@ -244,20 +255,22 @@ Error: Port 5432 already in use
 
 ### Slow tests
 
-Container startup can take 2-5 seconds. Use `#[ignore]` to skip in normal test runs:
+Container startup can take 2-5 seconds. Use `cargo nextest run --features testcontainers` to run TestContainers tests selectively:
 
 ```rust
+use rstest::rstest;
+
+#[rstest]
 #[tokio::test]
-#[ignore] // Requires Docker
 async fn slow_integration_test() {
     // ...
 }
 ```
 
-Then run explicitly:
+Then run with the feature flag enabled:
 
 ```bash
-cargo test -- --ignored
+cargo nextest run --features testcontainers
 ```
 
 ## Examples

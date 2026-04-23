@@ -14,11 +14,11 @@ Add `reinhardt` to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-reinhardt = { version = "0.1.0-rc.13", features = ["utils"] }
+reinhardt = { version = "0.1.0-rc.19", features = ["utils"] }
 
 # Or use a preset:
-# reinhardt = { version = "0.1.0-rc.13", features = ["standard"] }  # Recommended
-# reinhardt = { version = "0.1.0-rc.13", features = ["full"] }      # All features
+# reinhardt = { version = "0.1.0-rc.19", features = ["standard"] }  # Recommended
+# reinhardt = { version = "0.1.0-rc.19", features = ["full"] }      # All features
 ```
 
 Then import utility features:
@@ -117,7 +117,7 @@ use reinhardt::utils::core::html::{escape, unescape};
 - **Timezone Conversion**
   - `to_local()`: UTC to local timezone conversion
   - `to_utc()`: Local to UTC conversion
-  - `to_timezone()`: Timezone conversion by IANA name (currently UTC only)
+  - `to_timezone()`: Timezone conversion by full IANA name (e.g., `America/New_York`, `Asia/Tokyo`) via `chrono-tz`
 - **Naive/Aware Conversion**
   - `make_aware_utc()`: Convert naive datetime to UTC timezone-aware
   - `make_aware_local()`: Convert naive datetime to local timezone-aware

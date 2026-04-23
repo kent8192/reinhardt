@@ -12,19 +12,19 @@ Add `reinhardt` to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-reinhardt = { version = "0.1.0-rc.13", features = ["middleware"] }
+reinhardt = { version = "0.1.0-rc.19", features = ["middleware"] }
 
 # Or use a preset:
-# reinhardt = { version = "0.1.0-rc.13", features = ["standard"] }  # Recommended
-# reinhardt = { version = "0.1.0-rc.13", features = ["full"] }      # All features
+# reinhardt = { version = "0.1.0-rc.19", features = ["standard"] }  # Recommended
+# reinhardt = { version = "0.1.0-rc.19", features = ["full"] }      # All features
 ```
 
 Then import middleware features:
 
 ```rust
-use reinhardt::middleware::{CsrfMiddleware, CorsMiddleware, GzipMiddleware};
+use reinhardt::middleware::{CsrfMiddleware, CorsMiddleware, GZipMiddleware};
 use reinhardt::middleware::{LoggingMiddleware, AuthenticationMiddleware};
-use reinhardt::middleware::{SecurityHeadersMiddleware, HttpsRedirectMiddleware};
+use reinhardt::middleware::{SecurityMiddleware, HttpsRedirectMiddleware};
 ```
 
 **Note:** Middleware features are included in the `standard` and `full` feature presets.

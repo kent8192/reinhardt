@@ -98,7 +98,7 @@ Reinhardt follows a **three-phase lifecycle** for every crate:
 | **RC** (`0.x.0-rc.N`) | API frozen. Bug fixes only. Safe to build against. |
 | **Stable** (`0.x.0`) | Full SemVer 2.0 guarantees. |
 
-**Current status:** All crates are at `0.1.0-rc.17` (Release Candidate).
+**Current status:** All crates are at `0.1.0-rc.19` (Release Candidate).
 
 **What this means for you:**
 - Public APIs will only change to fix critical bugs -- no new features or additions
@@ -123,7 +123,7 @@ Get a well-balanced feature set with zero configuration:
 [dependencies]
 # Import as 'reinhardt', published as 'reinhardt-web'
 # Default enables the "standard" preset (balanced feature set)
-reinhardt = { version = "0.1.0-rc.17", package = "reinhardt-web" }
+reinhardt = { version = "0.1.0-rc.19", package = "reinhardt-web" }
 ```
 
 **Includes:** Core, Database (PostgreSQL), REST API (serializers, parsers, pagination, filters, throttling, versioning, metadata, content negotiation), Auth, Middleware (sessions), Pages (WASM Frontend with SSR), Signals
@@ -142,7 +142,7 @@ For projects that need every available component:
 
 ```toml
 [dependencies]
-reinhardt = { version = "0.1.0-rc.17", package = "reinhardt-web", default-features = false, features = ["full"] }
+reinhardt = { version = "0.1.0-rc.19", package = "reinhardt-web", default-features = false, features = ["full"] }
 ```
 
 **Includes:** Everything in Standard, plus Admin, GraphQL, WebSockets, Cache, i18n, Mail, Static Files, Storage, and more
@@ -155,7 +155,7 @@ Lightweight and fast, perfect for simple APIs:
 
 ```toml
 [dependencies]
-reinhardt = { version = "0.1.0-rc.17", package = "reinhardt-web", default-features = false, features = ["minimal"] }
+reinhardt = { version = "0.1.0-rc.19", package = "reinhardt-web", default-features = false, features = ["minimal"] }
 ```
 
 **Includes:** HTTP, routing, DI, parameter extraction, server
@@ -169,24 +169,24 @@ Install only the components you need:
 ```toml
 [dependencies]
 # Core components
-reinhardt-http = "0.1.0-rc.17"
-reinhardt-urls = "0.1.0-rc.17"
+reinhardt-http = "0.1.0-rc.19"
+reinhardt-urls = "0.1.0-rc.19"
 
 # Optional: Database
-reinhardt-db = "0.1.0-rc.17"
+reinhardt-db = "0.1.0-rc.19"
 
 # Optional: Authentication
-reinhardt-auth = "0.1.0-rc.17"
+reinhardt-auth = "0.1.0-rc.19"
 
 # Optional: REST API features
-reinhardt-rest = "0.1.0-rc.17"
+reinhardt-rest = "0.1.0-rc.19"
 
 # Optional: Admin panel
-reinhardt-admin = "0.1.0-rc.17"
+reinhardt-admin = "0.1.0-rc.19"
 
 # Optional: Advanced features
-reinhardt-graphql = "0.1.0-rc.17"
-reinhardt-websockets = "0.1.0-rc.17"
+reinhardt-graphql = "0.1.0-rc.19"
+reinhardt-websockets = "0.1.0-rc.19"
 ```
 
 **Note on Crate Naming:**
@@ -795,7 +795,11 @@ pub async fn get_profile(
 	let claims = jwt_auth.verify_token(token)?;
 
 	// Load user from database using claims.user_id
-	let user = User::find_by_id(&db, &claims.user_id).await?;
+	let user = User::objects()
+		.filter("id", reinhardt_db::orm::FilterOperator::Eq, reinhardt_db::orm::FilterValue::String(claims.user_id.clone()))
+		.first_with_db(&db)
+		.await?
+		.ok_or("User not found")?;
 
 	// Check if user is active
 	if !user.is_active() {
@@ -911,7 +915,11 @@ pub async fn get_user(
 		.unwrap_or(false);
 
 	// Fetch user from database using injected connection
-	let user = User::find_by_id(&db, id).await?;
+	let user = User::objects()
+		.filter("id", reinhardt_db::orm::FilterOperator::Eq, reinhardt_db::orm::FilterValue::Int(id))
+		.first_with_db(&db)
+		.await?
+		.ok_or("User not found")?;
 
 	// Check active status if needed
 	if !include_inactive && !user.is_active {
@@ -1074,6 +1082,7 @@ Reinhardt offers modular components you can mix and match:
 | Middleware          | `reinhardt-middleware`    | HTTP middleware components, CORS, security  |
 | **Testing**         |                           |                                             |
 | Test Utilities      | `reinhardt-test`          | Testing helpers, fixtures, TestContainers   |
+| Test Kit            | `reinhardt-testkit`       | Higher-level test abstractions and utilities|
 
 **For detailed feature flags within each crate, see the [Feature Flags Guide](https://reinhardt-web.dev/docs/feature-flags/).**
 

@@ -236,7 +236,7 @@ This project uses [release-plz](https://release-plz.ieni.dev/) for automated rel
 
 **Tagging Strategy (Per-Crate Tagging):**
 - Format: `[crate-name]@v[version]`
-  - Examples: `reinhardt-core@v0.2.0`, `reinhardt-orm@v0.1.1`
+  - Examples: `reinhardt-core@v0.2.0`, `reinhardt-db@v0.1.1`
 - Tags are created automatically by release-plz upon Release PR merge
 - **NEVER** create release tags manually
 
@@ -459,8 +459,8 @@ cat .testcontainers.properties
 ## Database Operations
 
 **Layer Selection:**
-- **Basic CRUD**: Use `reinhardt-orm` for table-level operations
-- **Low-Level**: Use `reinhardt-database` for schema management, raw queries, DB-specific operations
+- **Basic CRUD**: Use `reinhardt-db` for table-level operations
+- **Low-Level**: Use `reinhardt-db` for schema management, raw queries, DB-specific operations
 
 ---
 

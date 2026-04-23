@@ -14,9 +14,7 @@ This is a facade crate that re-exports functionality from the following modules:
 
 ```
 reinhardt-graphql/              (facade crate - public API)
-├── crates/
-│   ├── core/                   (core GraphQL implementation)
-│   └── macros/                 (procedural macros)
+└── macros/                     (procedural macros)
 ```
 
 Users should depend on `` `reinhardt-graphql` `` (this facade crate) for all GraphQL functionality.
@@ -108,11 +106,11 @@ Add `reinhardt` to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-reinhardt = { version = "0.1.0-rc.13", features = ["graphql"] }
+reinhardt = { version = "0.1.0-rc.19", features = ["graphql"] }
 
 # Or use a preset:
-# reinhardt = { version = "0.1.0-rc.13", features = ["standard"] }  # Recommended
-# reinhardt = { version = "0.1.0-rc.13", features = ["full"] }      # All features
+# reinhardt = { version = "0.1.0-rc.19", features = ["standard"] }  # Recommended
+# reinhardt = { version = "0.1.0-rc.19", features = ["full"] }      # All features
 ```
 
 Then import GraphQL features:
@@ -128,10 +126,10 @@ use reinhardt::graphql::types::{UserStorage, UserEvent};
 
 ```toml
 # With dependency injection
-reinhardt = { version = "0.1.0-rc.13", features = ["graphql", "di"] }
+reinhardt = { version = "0.1.0-rc.19", features = ["graphql", "di"] }
 
 # With gRPC transport
-reinhardt = { version = "0.1.0-rc.13", features = ["graphql", "grpc"] }
+reinhardt = { version = "0.1.0-rc.19", features = ["graphql", "grpc"] }
 ```
 
 ## Examples

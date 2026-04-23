@@ -62,7 +62,7 @@ use reinhardt::i18n::{activate, deactivate, MessageCatalog};
 - **Locale activation** (`activate`): Set active locale with associated catalog
 - **Locale deactivation** (`deactivate`): Revert to default English locale
 - **Locale query** (`get_locale`): Retrieve currently active locale
-- **Thread-safe state**: Global translation state with RwLock synchronization
+- **Thread-local state**: Per-thread translation state using `thread_local!` with `RefCell` (not a global `RwLock`; each OS thread maintains its own active locale independently)
 
 #### Lazy Evaluation
 

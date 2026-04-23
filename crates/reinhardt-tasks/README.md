@@ -14,11 +14,11 @@ Add `reinhardt` to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-reinhardt = { version = "0.1.0-rc.13", features = ["tasks"] }
+reinhardt = { version = "0.1.0-rc.19", features = ["tasks"] }
 
 # Or use a preset:
-# reinhardt = { version = "0.1.0-rc.13", features = ["standard"] }  # Recommended
-# reinhardt = { version = "0.1.0-rc.13", features = ["full"] }      # All features
+# reinhardt = { version = "0.1.0-rc.19", features = ["standard"] }  # Recommended
+# reinhardt = { version = "0.1.0-rc.19", features = ["full"] }      # All features
 ```
 
 Then import task features:
@@ -155,7 +155,7 @@ use reinhardt::tasks::backend::{TaskBackend, RedisTaskBackend};
   - Execution failure (`ExecutionFailed`)
   - Task not found (`TaskNotFound`)
   - Queue error (`QueueError`)
-  - Serialization failure (`SerializationFailed`)
+  - Serialization failure (`SerializationError`)
   - Timeout (`Timeout`)
   - Max retries exceeded (`MaxRetriesExceeded`)
 - **TaskExecutionError**: Backend execution errors

@@ -15,17 +15,23 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 
-DEFAULT_TARGETS=(
-	"README.md"
-	"examples/Cargo.toml"
-	"examples/CLAUDE.md"
-	"website/config.toml"
-)
-
 if [ -n "${REINHARDT_VERSION_SYNC_TARGETS:-}" ]; then
 	read -r -a TARGETS <<< "$REINHARDT_VERSION_SYNC_TARGETS"
 else
-	TARGETS=("${DEFAULT_TARGETS[@]}")
+	TARGETS=(
+		"README.md"
+		"examples/Cargo.toml"
+		"examples/CLAUDE.md"
+		"website/config.toml"
+	)
+	while IFS= read -r f; do
+		TARGETS+=("$f")
+	done < <(find "$REPO_ROOT/crates" -name "README.md" -maxdepth 2 | sort | \
+	          sed "s|$REPO_ROOT/||")
+	while IFS= read -r f; do
+		TARGETS+=("$f")
+	done < <(find "$REPO_ROOT/docs" -name "*.md" | sort | \
+	          sed "s|$REPO_ROOT/||")
 fi
 
 AWK_PROG='

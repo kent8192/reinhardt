@@ -31,6 +31,7 @@ For project management commands (`startproject`, `startapp`), please use
 
 Add `reinhardt` to your `Cargo.toml`:
 
+<!-- reinhardt-version-sync:2 -->
 ```toml
 [dependencies]
 reinhardt = { version = "0.1.0-rc.19", features = ["admin"] }

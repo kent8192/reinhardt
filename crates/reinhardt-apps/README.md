@@ -16,6 +16,7 @@ Application configuration and registry for Reinhardt framework.
 
 Add `reinhardt` to your `Cargo.toml`:
 
+<!-- reinhardt-version-sync:3 -->
 ```toml
 [dependencies]
 reinhardt = { version = "0.1.0-rc.13", package = "reinhardt-web", features = ["apps"] }
@@ -48,6 +49,7 @@ installed_apps! {
 
 **For built-in framework features, use Cargo feature flags:**
 
+<!-- reinhardt-version-sync -->
 ```toml
 [dependencies]
 reinhardt = {
@@ -142,6 +144,7 @@ pub fn get_installed_apps() -> Vec<String> {
 
 **Framework features are enabled separately via Cargo.toml:**
 
+<!-- reinhardt-version-sync -->
 ```toml
 [dependencies]
 reinhardt = {
@@ -232,6 +235,7 @@ pub fn get_installed_apps() -> Vec<String> {
 }
 ```
 
+<!-- reinhardt-version-sync -->
 ```toml
 # Cargo.toml
 [dependencies]
@@ -292,6 +296,7 @@ INSTALLED_APPS = [
 ```
 
 **Reinhardt (Rust):**
+<!-- reinhardt-version-sync -->
 ```toml
 # Cargo.toml
 [dependencies]

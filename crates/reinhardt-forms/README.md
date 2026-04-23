@@ -12,6 +12,7 @@ This crate is designed to be **WASM-compatible**, providing a pure form processi
 
 Add `reinhardt` to your `Cargo.toml`:
 
+<!-- reinhardt-version-sync:3 -->
 ```toml
 [dependencies]
 reinhardt = { version = "0.1.0-rc.13", features = ["forms"] }

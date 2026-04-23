@@ -51,20 +51,24 @@ fi
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 
-# Default in-scope files for PR-1. PR-2 will extend this list via a
-# follow-up commit. Tests override via the env var below.
-DEFAULT_TARGETS=(
-	"README.md"
-	"examples/Cargo.toml"
-	"examples/CLAUDE.md"
-	"website/config.toml"
-)
-
 if [ -n "${REINHARDT_VERSION_SYNC_TARGETS:-}" ]; then
 	# Space-separated override (for tests only)
 	read -r -a TARGETS <<< "$REINHARDT_VERSION_SYNC_TARGETS"
 else
-	TARGETS=("${DEFAULT_TARGETS[@]}")
+	TARGETS=(
+		"README.md"
+		"examples/Cargo.toml"
+		"examples/CLAUDE.md"
+		"website/config.toml"
+	)
+	while IFS= read -r f; do
+		TARGETS+=("$f")
+	done < <(find "$REPO_ROOT/crates" -name "README.md" -maxdepth 2 | sort | \
+	          sed "s|$REPO_ROOT/||")
+	while IFS= read -r f; do
+		TARGETS+=("$f")
+	done < <(find "$REPO_ROOT/docs" -name "*.md" | sort | \
+	          sed "s|$REPO_ROOT/||")
 fi
 
 echo "Updating version references to $NEW_VER in $REPO_ROOT"

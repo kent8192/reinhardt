@@ -84,6 +84,7 @@ Core HTTP abstractions for the Reinhardt framework. Provides comprehensive reque
 
 Add `reinhardt` to your `Cargo.toml`:
 
+<!-- reinhardt-version-sync:3 -->
 ```toml
 [dependencies]
 reinhardt = "0.1.0-rc.19"

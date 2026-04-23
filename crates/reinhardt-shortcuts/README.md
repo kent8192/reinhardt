@@ -10,6 +10,7 @@ Convenient shortcut functions for common HTTP operations, inspired by Django's `
 
 Add `reinhardt` to your `Cargo.toml`:
 
+<!-- reinhardt-version-sync:3 -->
 ```toml
 [dependencies]
 reinhardt = { version = "0.1.0-rc.19", features = ["shortcuts"] }

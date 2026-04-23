@@ -12,6 +12,7 @@ Includes date/time utilities, string manipulation, encoding/decoding, and other 
 
 Add `reinhardt` to your `Cargo.toml`:
 
+<!-- reinhardt-version-sync:3 -->
 ```toml
 [dependencies]
 reinhardt = { version = "0.1.0-rc.19", features = ["utils"] }
@@ -305,6 +306,7 @@ use reinhardt::utils::core::html::{escape, unescape};
 
 **Usage Example**:
 
+<!-- reinhardt-version-sync -->
 ```rust
 use reinhardt::utils::logging::security::{SecurityLogger, SecurityError};
 

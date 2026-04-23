@@ -19,6 +19,7 @@ Plugin system for the Reinhardt framework - easy to create, distribute, and inst
 
 Add `reinhardt` to your `Cargo.toml`:
 
+<!-- reinhardt-version-sync:3 -->
 ```toml
 [dependencies]
 reinhardt = { version = "0.1.0-rc.19", features = ["dentdelion"] }
@@ -50,6 +51,7 @@ use reinhardt::dentdelion::prelude::*;
 
 ### Creating a Static Plugin
 
+<!-- reinhardt-version-sync -->
 ```rust
 use reinhardt::dentdelion::prelude::*;
 
@@ -221,6 +223,7 @@ timeout_seconds = 30
 
 Dentdelion uses the WebAssembly Interface Types (WIT) standard for plugin interfaces. The complete interface is defined in `wit/dentdelion.wit`:
 
+<!-- reinhardt-version-sync -->
 ```wit
 package reinhardt:dentdelion@0.1.0;
 

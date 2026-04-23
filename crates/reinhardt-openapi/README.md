@@ -15,23 +15,24 @@ This crate provides a router wrapper that automatically adds OpenAPI documentati
 
 ## Usage
 
+Apply `OpenApiRouter::wrap` inside the `#[routes]` function:
+
 ```rust
+use reinhardt::routes;
 use reinhardt_openapi::OpenApiRouter;
 use reinhardt_urls::routers::UnifiedRouter;
 
-fn main() -> Result<(), Box<dyn std::error::Error>> {
-    // Create your existing router
-    let router = UnifiedRouter::new();
+#[routes]
+pub fn routes() -> OpenApiRouter<UnifiedRouter> {
+    let router = UnifiedRouter::new()
+        // Mount your application routes here
+        .mount("/", some_app::urls::routes());
 
-    // Wrap with OpenAPI endpoints
-    // OpenApiRouter::wrap returns Result<Self, SchemaError>
-    let wrapped = OpenApiRouter::wrap(router)?;
-
-    // The wrapped router now serves:
+    // Wrap with OpenAPI endpoints — served at:
     // - /api/openapi.json (OpenAPI spec)
     // - /api/docs (Swagger UI)
     // - /api/redoc (Redoc UI)
-    Ok(())
+    OpenApiRouter::wrap(router).expect("Failed to wrap router with OpenAPI")
 }
 ```
 

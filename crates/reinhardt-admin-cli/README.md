@@ -66,6 +66,7 @@ reinhardt-admin --version
 
 Manage Reinhardt plugins (Dentdelion):
 
+<!-- reinhardt-version-sync -->
 ```bash
 # List installed plugins
 reinhardt-admin plugin list

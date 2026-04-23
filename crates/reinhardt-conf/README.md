@@ -26,6 +26,7 @@ This crate provides the following modules:
 
 Add `reinhardt` to your `Cargo.toml`:
 
+<!-- reinhardt-version-sync:3 -->
 ```toml
 [dependencies]
 reinhardt = { version = "0.1.0-rc.19", features = ["conf"] }
@@ -48,6 +49,7 @@ use reinhardt::conf::settings::sources::ConfigSource;
 
 Enable specific features based on your needs:
 
+<!-- reinhardt-version-sync:3 -->
 ```toml
 # With async support
 reinhardt = { version = "0.1.0-rc.19", features = ["conf", "async"] }

@@ -50,6 +50,7 @@ This crate provides the following modules:
 
 Add `reinhardt` to your `Cargo.toml`:
 
+<!-- reinhardt-version-sync:4 -->
 ```toml
 [dependencies]
 reinhardt = { version = "0.1.0-rc.13", features = ["urls"] }

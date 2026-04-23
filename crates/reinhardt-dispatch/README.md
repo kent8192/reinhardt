@@ -10,6 +10,7 @@ HTTP request dispatching and handler system for the Reinhardt framework.
 
 Add `reinhardt` to your `Cargo.toml`:
 
+<!-- reinhardt-version-sync:3 -->
 ```toml
 [dependencies]
 reinhardt = { version = "0.1.0-rc.19", features = ["dispatch"] }

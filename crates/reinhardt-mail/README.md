@@ -10,6 +10,7 @@ Email framework for sending emails with support for HTML and plain text, attachm
 
 Add `reinhardt` to your `Cargo.toml`:
 
+<!-- reinhardt-version-sync:3 -->
 ```toml
 [dependencies]
 reinhardt = { version = "0.1.0-rc.13", features = ["mail"] }

@@ -10,6 +10,7 @@ WebSocket protocol support for real-time bidirectional communication. Includes c
 
 Add `reinhardt` to your `Cargo.toml`:
 
+<!-- reinhardt-version-sync:3 -->
 ```toml
 [dependencies]
 reinhardt = { version = "0.1.0-rc.19", features = ["websockets"] }

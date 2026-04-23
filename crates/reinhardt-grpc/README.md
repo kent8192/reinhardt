@@ -12,6 +12,7 @@ with domain-specific implementations left to users.
 
 Add `reinhardt` to your `Cargo.toml`:
 
+<!-- reinhardt-version-sync:3 -->
 ```toml
 [dependencies]
 reinhardt = { version = "0.1.0-rc.19", features = ["grpc"] }
@@ -156,6 +157,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 3. Add dependencies to `Cargo.toml`
 
+<!-- reinhardt-version-sync -->
 ```toml
 [dependencies]
 reinhardt-grpc = "0.1.0-rc.19"
@@ -188,6 +190,7 @@ use reinhardt::grpc::proto::common::{Empty, Timestamp, PageInfo};
 
 Enable the `di` feature to use dependency injection in gRPC handlers:
 
+<!-- reinhardt-version-sync:2 -->
 ```toml
 [dependencies]
 reinhardt-grpc = { version = "0.1.0-rc.13", features = ["di"] }

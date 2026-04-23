@@ -41,6 +41,7 @@ This crate provides the following features:
 
 Add `reinhardt` to your `Cargo.toml`:
 
+<!-- reinhardt-version-sync:5 -->
 ```toml
 [dependencies]
 reinhardt = { version = "0.1.0-rc.19", features = ["server"] }
@@ -70,6 +71,7 @@ use reinhardt::server::graphql_handler;  // GraphQL
 
 ### Basic HTTP Server
 
+<!-- reinhardt-version-sync -->
 ```rust
 use reinhardt::server::{serve, HttpServer};
 use reinhardt::http::{Request, Response};
@@ -90,6 +92,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 ### HTTP Server with Middleware
 
+<!-- reinhardt-version-sync -->
 ```rust
 use reinhardt::server::HttpServer;
 use reinhardt::http::{Handler, Middleware, Request, Response};
@@ -132,6 +135,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 ### WebSocket Server
 
+<!-- reinhardt-version-sync -->
 ```rust
 use reinhardt::server::{WebSocketServer, WebSocketHandler};
 use std::sync::Arc;
@@ -164,6 +168,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 ### WebSocket Server with Broadcast
 
+<!-- reinhardt-version-sync -->
 ```rust
 use reinhardt::server::{WebSocketServer, WebSocketHandler};
 use std::sync::Arc;
@@ -201,6 +206,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 ### GraphQL Server
 
+<!-- reinhardt-version-sync -->
 ```rust
 use reinhardt::server::graphql_handler;
 use async_graphql::{Object, Schema, EmptyMutation, EmptySubscription};

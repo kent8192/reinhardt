@@ -104,6 +104,7 @@ Users should depend on `` `reinhardt-graphql` `` (this facade crate) for all Gra
 
 Add `reinhardt` to your `Cargo.toml`:
 
+<!-- reinhardt-version-sync:3 -->
 ```toml
 [dependencies]
 reinhardt = { version = "0.1.0-rc.19", features = ["graphql"] }
@@ -124,6 +125,7 @@ use reinhardt::graphql::types::{UserStorage, UserEvent};
 
 ### Optional Features
 
+<!-- reinhardt-version-sync:2 -->
 ```toml
 # With dependency injection
 reinhardt = { version = "0.1.0-rc.19", features = ["graphql", "di"] }
@@ -248,6 +250,7 @@ async fn handler(
 
 ### GraphQL over gRPC Server
 
+<!-- reinhardt-version-sync -->
 ```rust
 use async_graphql::{EmptySubscription, Schema};
 use reinhardt::graphql::grpc_service::GraphQLGrpcService;
@@ -276,6 +279,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 ### GraphQL over gRPC Client
 
+<!-- reinhardt-version-sync -->
 ```rust
 use reinhardt::grpc::proto::graphql::{
     graph_ql_service_client::GraphQlServiceClient,

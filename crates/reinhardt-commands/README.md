@@ -12,6 +12,7 @@ migrations, static file collection, development server, and more.
 
 Add `reinhardt` to your `Cargo.toml`:
 
+<!-- reinhardt-version-sync:3 -->
 ```toml
 [dependencies]
 reinhardt = { version = "0.1.0-rc.19", features = ["commands"] }
@@ -118,6 +119,7 @@ When rendering templates, the following variables are available:
 
 You can pass custom variables to templates programmatically:
 
+<!-- reinhardt-version-sync -->
 ```rust
 use reinhardt::commands::TemplateContext;
 
@@ -225,6 +227,7 @@ for compile-time distributed slice registration.
 
 Projects using `collect_migrations!` must add `linkme` as a dependency:
 
+<!-- reinhardt-version-sync -->
 ```toml
 [dependencies]
 reinhardt = { version = "0.1.0-rc.19", features = ["standard"] }

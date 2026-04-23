@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.0-rc.20](https://github.com/kent8192/reinhardt-web/compare/reinhardt-rest@v0.1.0-rc.19...reinhardt-rest@v0.1.0-rc.20) - 2026-04-23
+
+### Documentation
+
+- *(http)* fix type name and API inaccuracies across HTTP crate READMEs
+- *(rest)* replace DefaultRouter with UnifiedRouter in README example
+- *(rest)* remove unused Route import from README example
+- *(rest)* remove unused routing imports from Usage example
+- *(rest)* fix Route import path — use urls::routers::Route not urls::Route
+- *(rest)* remove Router trait and Route from import example — UnifiedRouter is user-facing
+
 ## [0.1.0-rc.16](https://github.com/kent8192/reinhardt-web/compare/reinhardt-rest@v0.1.0-rc.15...reinhardt-rest@v0.1.0-rc.16) - 2026-04-20
 
 ### Added

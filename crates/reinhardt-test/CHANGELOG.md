@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.0-rc.20](https://github.com/kent8192/reinhardt-web/compare/reinhardt-test@v0.1.0-rc.19...reinhardt-test@v0.1.0-rc.20) - 2026-04-23
+
+### Documentation
+
+- *(mail)* fix unclosed code fence, wrong thread-safety claim, and stale versions
+- *(test)* replace callback-based container patterns with #[fixture] rstest pattern
+
 ## [0.1.0-rc.16](https://github.com/kent8192/reinhardt-web/compare/reinhardt-test@v0.1.0-rc.15...reinhardt-test@v0.1.0-rc.16) - 2026-04-20
 
 ### Added

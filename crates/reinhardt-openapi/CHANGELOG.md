@@ -8,6 +8,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 <!-- release-plz-separator -->
 <!-- Entries below this line were created before release-plz adoption -->
 
+## [0.1.0-rc.20](https://github.com/kent8192/reinhardt-web/compare/reinhardt-openapi@v0.1.0-rc.19...reinhardt-openapi@v0.1.0-rc.20) - 2026-04-23
+
+### Documentation
+
+- *(http)* fix type name and API inaccuracies across HTTP crate READMEs
+- *(openapi)* place OpenApiRouter::wrap inside #[routes] function
+
 ## [0.1.0-rc.16](https://github.com/kent8192/reinhardt-web/compare/reinhardt-openapi@v0.1.0-rc.15...reinhardt-openapi@v0.1.0-rc.16) - 2026-04-20
 
 ### Maintenance

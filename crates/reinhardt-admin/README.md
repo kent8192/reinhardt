@@ -48,49 +48,82 @@ use reinhardt::admin::types::{ListQueryParams, AdminError};
 
 ## Quick Start
 
-### Using the Admin Panel
+### Configuring Admin Models
+
+Register models with `AdminSite` in a dedicated configuration function:
 
 ```rust
-use reinhardt_admin::core::{AdminSite, admin_routes_with_di, admin_static_routes};
-use reinhardt_urls::routers::UnifiedRouter;
-use std::sync::Arc;
+use reinhardt::admin::{AdminSite, ModelAdmin};
 
-#[tokio::main]
-async fn main() {
-	let site = Arc::new(AdminSite::new("My Admin"));
-	let (admin_router, admin_di) = admin_routes_with_di(site);
-	let assets = admin_static_routes();
-
-	let router = UnifiedRouter::new()
-		.mount("/admin/", admin_router)
-		.mount("/static/admin/", assets)
-		.with_di_registrations(admin_di);
-
-	// Attach `router` to your application server
+fn configure_admin() -> AdminSite {
+	let mut site = AdminSite::new("My Admin");
+	site.register::<User>(UserAdmin::default());
+	site
 }
 ```
+
+### Mounting Admin Routes
+
+Admin routes are registered inside the `routes()` function decorated with
+`#[routes]`. Use `admin_routes_with_di()` to mount the admin
+panel with deferred DI registration:
+
+```rust
+use reinhardt::UnifiedRouter;
+use reinhardt::admin::{admin_routes_with_di, admin_static_routes};
+use reinhardt::routes;
+use std::sync::Arc;
+
+#[routes]
+pub fn routes() -> UnifiedRouter {
+	// Configure admin site (registration only, no DB needed yet)
+	#[cfg(native)]
+	let admin_site = Arc::new(configure_admin());
+
+	let router = UnifiedRouter::new()
+		// Mount your app routes here
+		;
+
+	// Mount admin panel routes and static assets (server-only)
+	#[cfg(native)]
+	let router = {
+		let (admin_router, admin_di) = admin_routes_with_di(admin_site);
+		router
+			.mount("/admin/", admin_router)
+			.mount("/static/admin/", admin_static_routes())
+			.with_di_registrations(admin_di)
+	};
+	router
+}
+```
+
+The `AdminDatabase` is lazily constructed from `DatabaseConnection` at the
+first request, so no database connection is needed during route setup.
 
 ### Customizing the Admin
 
+Use the `#[admin]` proc macro to register a model with the admin panel. The macro
+automatically implements `ModelAdmin` — no manual `impl` block is needed:
+
 ```rust
-use reinhardt::admin::ModelAdmin;
+use reinhardt::admin;
+use crate::models::User;
 
-struct UserAdmin {
-	list_display: Vec<String>,
-	list_filter: Vec<String>,
-	search_fields: Vec<String>,
-}
-
-impl Default for UserAdmin {
-	fn default() -> Self {
-		Self {
-			list_display: vec!["username".to_string(), "email".to_string(), "is_active".to_string()],
-			list_filter: vec!["is_active".to_string()],
-			search_fields: vec!["username".to_string(), "email".to_string()],
-		}
-	}
-}
+#[admin(model,
+	for = User,
+	name = "User",
+	list_display = [username, email, is_active],
+	list_filter = [is_active],
+	search_fields = [username, email],
+	ordering = [(date_joined, desc)],
+	list_per_page = 25,
+)]
+pub struct UserAdmin;
 ```
+
+The `#[admin(model, ...)]` attribute expands to a full `ModelAdmin` implementation
+at compile time, so you never need to write boilerplate field structs or
+`impl Default` blocks.
 
 ## Architecture
 

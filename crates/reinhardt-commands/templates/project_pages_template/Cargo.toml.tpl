@@ -2,7 +2,7 @@
 name = "{{ project_name }}"
 version = "0.1.0"
 edition = "2024"
-default-run = "{{ project_name }}"
+default-run = "manage"
 
 [lib]
 crate-type = ["cdylib", "rlib"]  # cdylib for WASM, rlib for server

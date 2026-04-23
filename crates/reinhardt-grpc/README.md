@@ -14,18 +14,18 @@ Add `reinhardt` to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-reinhardt = { version = "0.1.0-rc.13", features = ["grpc"] }
+reinhardt = { version = "0.1.0-rc.19", features = ["grpc"] }
 
 # Or use a preset:
-# reinhardt = { version = "0.1.0-rc.13", features = ["standard"] }  # Recommended
-# reinhardt = { version = "0.1.0-rc.13", features = ["full"] }      # All features
+# reinhardt = { version = "0.1.0-rc.19", features = ["standard"] }  # Recommended
+# reinhardt = { version = "0.1.0-rc.19", features = ["full"] }      # All features
 ```
 
 Then import gRPC features:
 
 ```rust
-use reinhardt::grpc::{Empty, Timestamp, Error, PageInfo};
-use reinhardt::grpc::adapter::{GrpcServiceAdapter, ServiceContext};
+use reinhardt::grpc::{GrpcServiceAdapter, GrpcSubscriptionAdapter};
+use reinhardt::grpc::proto::common::{Empty, Timestamp, PageInfo};
 ```
 
 **Note:** gRPC features are included in the `standard` and `full` feature presets.
@@ -158,7 +158,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 ```toml
 [dependencies]
-reinhardt-grpc = "0.1.0-rc.13"
+reinhardt-grpc = "0.1.0-rc.19"
 tonic = "0.12"
 prost = "0.13"
 
@@ -191,7 +191,7 @@ Enable the `di` feature to use dependency injection in gRPC handlers:
 ```toml
 [dependencies]
 reinhardt-grpc = { version = "0.1.0-rc.13", features = ["di"] }
-reinhardt-di = "0.1.0-rc.13"
+reinhardt-di = "0.1.0-rc.19"
 ```
 
 #### Basic Usage

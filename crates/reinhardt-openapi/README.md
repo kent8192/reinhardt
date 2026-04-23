@@ -15,18 +15,29 @@ This crate provides a router wrapper that automatically adds OpenAPI documentati
 
 ## Usage
 
+Define your application routes in a `routes()` function, then wrap the router with `OpenApiRouter` during server setup:
+
 ```rust
 use reinhardt_openapi::OpenApiRouter;
 use reinhardt_urls::routers::BasicRouter;
 
-fn main() {
-    // Create your existing router
-    let router = BasicRouter::new();
+// Define routes using the project-standard routes() function.
+// The #[cfg_attr(native, routes(standalone))] attribute registers
+// this function as the application entry point in native builds.
+#[cfg_attr(native, routes(standalone))]
+pub fn routes() -> BasicRouter {
+    BasicRouter::new()
+    // ... mount app routes here ...
+}
+
+// In server setup, wrap the routes() output with OpenApiRouter:
+fn start_server() {
+    let router = routes();
 
     // Wrap with OpenAPI endpoints
-    let wrapped = OpenApiRouter::wrap(router);
+    let api_router = OpenApiRouter::wrap(router);
 
-    // The wrapped router now serves:
+    // api_router now serves:
     // - /api/openapi.json (OpenAPI spec)
     // - /api/docs (Swagger UI)
     // - /api/redoc (Redoc UI)

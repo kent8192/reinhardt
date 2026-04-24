@@ -12,16 +12,56 @@ In this tutorial, we'll create a modern WASM-based frontend using reinhardt-page
 
 ## Understanding reinhardt-pages Architecture
 
-reinhardt-pages provides a reactive frontend framework with three layers:
+reinhardt-pages provides a reactive frontend framework with three layers. These layers correspond 1:1 to directories in the pages template (and to [`examples/examples-tutorial-basis/src/`](https://github.com/kent8192/reinhardt-web/tree/main/examples/examples-tutorial-basis/src)):
 
-- **`client/`**: WASM UI components that run in the browser
-- **`server/`**: Server functions that run on the server
-- **`shared/`**: Common types used by both client and server
+- **`src/client/`** — WASM UI components that run in the browser (`#[cfg(wasm)]`)
+- **`src/server_fn/`** — server functions that run on the server (bodies are `#[cfg(native)]`, but the function signatures compile for both targets so the client sees a typed stub)
+- **`src/shared/`** — DTOs and forms used by both client and server
+
+### "Views" ≡ Server Functions in the Pages Architecture
+
+In a classic Django-style stack, a *view* is a function that receives an HTTP request and returns a response. In the pages architecture, the same role is played by **server functions** declared with `#[server_fn]`:
+
+- They are `async fn` with typed parameters and a typed return `Result<T, ServerFnError>`.
+- The server implementation runs natively (database access, business logic).
+- The WASM client receives a **typed client stub** that performs the RPC over HTTP.
+- There is no hand-written URL + serializer + HTTP client boilerplate — the macro generates it.
+
+The data flow for one user interaction looks like this:
+
+```mermaid
+sequenceDiagram
+    participant U as User
+    participant C as client/ (WASM)
+    participant S as server_fn/ (#[server_fn])
+    participant M as apps/*/models.rs
+    participant DB as Database
+
+    U->>C: Click "Vote"
+    C->>C: use_action(|req| submit_vote(req))
+    C->>S: RPC: submit_vote(req)     (typed stub)
+    S->>M: Choice::objects().get(id)
+    M->>DB: SELECT ... WHERE id = ?
+    DB-->>M: row
+    M-->>S: Choice
+    S->>M: Choice::update(&updated)
+    M->>DB: UPDATE ...
+    DB-->>M: ok
+    S-->>C: Result<VoteResult, ServerFnError>
+    C->>U: watch { ... } rerenders
+```
+
+Three takeaways:
+
+1. The client never constructs URLs or parses JSON by hand — it calls `submit_vote(...).await`.
+2. The function signature is shared between client and server, so renaming a field in `shared/types.rs` fails to compile on both sides simultaneously (a *fail-early* win, per the Reinhardt design philosophy).
+3. DTOs in `src/shared/types.rs` are the *only* types that cross the WASM/native boundary.
 
 This architecture enables:
-- **Type-safe RPC**: Server functions are called from WASM like regular async functions
-- **SSR support**: Components can be pre-rendered on the server
-- **Reactive UI**: State management with `use_action()` hooks
+
+- **Type-safe RPC**: server functions are called from WASM like regular async functions
+- **SSR support**: components can be pre-rendered on the server
+- **Reactive UI**: state management with `use_action()` hooks and `watch { ... }` blocks
 
 ## Project Setup
 
@@ -29,8 +69,8 @@ This architecture enables:
 
 Starting from Rust 2024 edition, Reinhardt supports simplified conditional compilation attributes for WASM/server targets. Instead of verbose `#[cfg(target_arch = "wasm32")]`, you can use shorter aliases:
 
-- **`#[cfg(client)]`** - Code runs only in WASM (browser)
-- **`#[cfg(server)]`** - Code runs only on native (server)
+- **`#[cfg(wasm)]`** - Code runs only in WASM (browser)
+- **`#[cfg(native)]`** - Code runs only on native (server)
 
 This is configured in your `build.rs` using the `cfg_aliases` crate:
 
@@ -39,25 +79,27 @@ use cfg_aliases::cfg_aliases;
 
 fn main() {
 	// Rust 2024 edition requires explicit check-cfg declarations
-	println!("cargo::rustc-check-cfg=cfg(client)");
-	println!("cargo::rustc-check-cfg=cfg(server)");
+	println!("cargo::rustc-check-cfg=cfg(wasm)");
+	println!("cargo::rustc-check-cfg=cfg(native)");
 
 	cfg_aliases! {
-		// Platform aliases for simpler conditional compilation
-		// Use `#[cfg(client)]` instead of `#[cfg(target_arch = "wasm32")]`
-		client: { target_arch = "wasm32" },
-		// Use `#[cfg(server)]` instead of `#[cfg(not(target_arch = "wasm32"))]`
-		server: { not(target_arch = "wasm32") },
+		// Platform aliases for simpler conditional compilation.
+		// Use `#[cfg(wasm)]` for browser-only code.
+		wasm: { all(target_family = "wasm", target_os = "unknown") },
+		// Use `#[cfg(native)]` for server / CLI code.
+		native: { not(all(target_family = "wasm", target_os = "unknown")) },
 	}
+
+	println!("cargo:rerun-if-changed=build.rs");
 }
 ```
 
 **Benefits:**
-- **Shorter code**: `#[cfg(client)]` vs `#[cfg(target_arch = "wasm32")]`
-- **Clearer intent**: `client` and `server` are more semantic than architecture names
+- **Shorter code**: `#[cfg(wasm)]` vs `#[cfg(all(target_family = "wasm", target_os = "unknown"))]`
+- **Clearer intent**: `wasm` and `native` name exactly what differs (the target family), matching the reference example
 - **Easier maintenance**: Less typing, less visual noise
 
-Throughout this tutorial, we use the simplified `#[cfg(client)]` and `#[cfg(server)]` syntax. If you see `#[cfg(target_arch = "wasm32")]` in older code, they are equivalent when the build.rs configuration is in place.
+Throughout this tutorial, we use the simplified `#[cfg(wasm)]` and `#[cfg(native)]` syntax. If you see `#[cfg(target_arch = "wasm32")]` in older code, they are equivalent when the build.rs configuration is in place.
 
 ### 1. Update Cargo.toml
 
@@ -67,20 +109,29 @@ Add WASM support and reinhardt-pages dependency:
 [lib]
 crate-type = ["cdylib", "rlib"]  # cdylib for WASM, rlib for server
 
-# WASM-specific dependencies (using simplified cfg)
-[target.'cfg(client)'.dependencies]
-reinhardt-pages = { workspace = true }
+# WASM-specific dependencies
+# (We select the target by family/os because Cargo does not yet resolve custom
+# `cfg_aliases` on the left-hand side of `[target.'cfg(...)'...]` headers.)
+[target.'cfg(all(target_family = "wasm", target_os = "unknown"))'.dependencies]
+reinhardt = { workspace = true, features = ["pages", "client-router"] }
 wasm-bindgen = "0.2"
 web-sys = { version = "0.3", features = [
 	"Window", "Document", "Element",
 ] }
 console_error_panic_hook = "0.1"
 
-# Server-specific dependencies (using simplified cfg)
-[target.'cfg(server)'.dependencies]
-reinhardt = { workspace = true, features = ["full", "pages"] }
+# Server-specific dependencies
+[target.'cfg(not(all(target_family = "wasm", target_os = "unknown")))'.dependencies]
+reinhardt = { workspace = true, features = [
+	"full", "pages", "conf", "commands", "db-sqlite", "forms", "client-router",
+] }
 tokio = { version = "1", features = ["full"] }
 ```
+
+> These `[target.'cfg(...)'...]` headers must use the raw `target_family` /
+> `target_os` predicates (not the `wasm` / `native` aliases), because Cargo
+> evaluates them before `build.rs` registers the aliases. Inside your source
+> files, however, you freely use `#[cfg(wasm)]` / `#[cfg(native)]`.
 
 ### 2. Create Build Configuration
 
@@ -165,7 +216,7 @@ Update `src/lib.rs`:
 
 ```rust
 // Server-only re-exports for macro-generated code
-#[cfg(server)]
+#[cfg(native)]
 mod server_only {
 	pub use reinhardt::core::async_trait;
 	pub use reinhardt::reinhardt_apps;
@@ -173,18 +224,18 @@ mod server_only {
 	pub use reinhardt::reinhardt_di::params;
 	pub use reinhardt::reinhardt_http;
 }
-#[cfg(server)]
+#[cfg(native)]
 pub use server_only::*;
 
 // Applications (server-only, polls uses ServerRouter)
-#[cfg(server)]
+#[cfg(native)]
 pub mod apps;
 
 // Configuration (urls unconditional, rest server-only)
 pub mod config;
 
 // Client-only modules (WASM)
-#[cfg(client)]
+#[cfg(wasm)]
 pub mod client;
 
 // Shared modules (both WASM and server)
@@ -192,7 +243,7 @@ pub mod server_fn;
 pub mod shared;
 
 // Re-exports
-#[cfg(server)]
+#[cfg(native)]
 pub use config::settings::get_settings;
 ```
 
@@ -201,7 +252,7 @@ pub use config::settings::get_settings;
 Create `src/shared.rs`:
 
 ```rust
-#[cfg(server)]
+#[cfg(native)]
 pub mod forms;
 pub mod types;
 ```
@@ -234,7 +285,7 @@ pub struct VoteRequest {
 }
 
 // Server-side conversions (not available in WASM)
-#[cfg(server)]
+#[cfg(native)]
 impl From<crate::apps::polls::models::Question> for QuestionInfo {
 	fn from(question: crate::apps::polls::models::Question) -> Self {
 		QuestionInfo {
@@ -245,7 +296,7 @@ impl From<crate::apps::polls::models::Question> for QuestionInfo {
 	}
 }
 
-#[cfg(server)]
+#[cfg(native)]
 impl From<crate::apps::polls::models::Choice> for ChoiceInfo {
 	fn from(choice: crate::apps::polls::models::Choice) -> Self {
 		ChoiceInfo {
@@ -267,7 +318,7 @@ use crate::shared::types::{ChoiceInfo, QuestionInfo, VoteRequest};
 use reinhardt::pages::server_fn::{ServerFnError, server_fn};
 
 // Server-only imports
-#[cfg(server)]
+#[cfg(native)]
 use {
 	crate::shared::forms::create_vote_form,
 	reinhardt::forms::wasm_compat::{FormExt, FormMetadata},
@@ -391,7 +442,7 @@ pub async fn vote(
 /// Get vote form metadata for WASM client rendering
 ///
 /// Returns form metadata with CSRF token for the voting form.
-#[cfg(server)]
+#[cfg(native)]
 #[server_fn]
 pub async fn get_vote_form_metadata() -> std::result::Result<FormMetadata, ServerFnError> {
 	let form = create_vote_form();
@@ -425,7 +476,7 @@ pub async fn submit_vote(
 }
 
 /// Internal vote implementation (shared between vote and submit_vote)
-#[cfg(server)]
+#[cfg(native)]
 async fn vote_internal(
 	request: VoteRequest,
 	db: reinhardt::DatabaseConnection,

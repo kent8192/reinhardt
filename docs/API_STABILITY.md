@@ -121,6 +121,27 @@ The deprecated alias must survive until the next major version.
 For the full stability policy with approval processes and timelines, see
 [Stability Policy](../instructions/STABILITY_POLICY.md).
 
+### 0.x Series Exception
+
+During the pre-1.0 (`0.x.y`) series, the RC rules above are applied strictly
+as the *default*, but Reinhardt reserves the right to grant an explicit
+exception when a blocking design issue is discovered. Specifically, while
+Reinhardt is on a `0.x.y` version:
+
+- **RC API-freeze** — may be waived to ship a necessary breaking change
+  without the full SP-6 / API Change Proposal process, provided a migration
+  guide is included and the change is recorded in the affected crate's
+  `CHANGELOG.md`.
+- **2-week stability window** — may be shortened or waived when a new RC is
+  cut that fixes a blocking issue.
+
+Both exceptions **end at `1.0.0`**. From `1.0.0` onward the RC rules are
+applied without exception and full SemVer 2.0 guarantees hold.
+
+Exceptions must be documented in the relevant `CHANGELOG.md` under the
+`Changed` (breaking) or `Fixed` (timer-waiver) section with a link to the
+originating Issue / PR so downstream users can audit them.
+
 ---
 
 ## Breaking Change Policy

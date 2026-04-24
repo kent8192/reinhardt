@@ -12,31 +12,34 @@ In this tutorial, we'll implement form handling in reinhardt-pages using client-
 
 ## Understanding Form Handling in reinhardt-pages
 
-Unlike traditional server-rendered forms (using templates like Tera), reinhardt-pages handles forms on the client side with WASM components that communicate with server functions.
+Unlike traditional server-rendered forms (templating engines like Tera), the reinhardt-pages stack handles forms on the client side with WASM components that call server functions. The tutorial uses **exactly one recommended path**: the `form!` macro.
 
-> **📌 Recommended Approach**: This tutorial primarily demonstrates the **`form!` macro** for declarative form handling with automatic features:
-> 
-> **Why `form!` Macro is Recommended:**
-> - ✅ **Automatic CSRF Protection**: Built-in token injection for POST/PUT/PATCH/DELETE
-> - ✅ **Reactive State Management**: `watch` blocks automatically update UI when form state changes
-> - ✅ **Dynamic Choices**: Runtime population of select/radio options
-> - ✅ **Zero Boilerplate**: Loading states, error handling, and validation built-in
-> - ✅ **Type-Safe**: Compiler ensures field names match form definition
-> - ✅ **Declarative**: Focus on what the form does, not how it works
-> 
-> **Alternative: Manual Form Handling**
-> 
-> Manual form handling (using `use_state()` directly) is documented later in this tutorial for advanced use cases requiring fine-grained control. However, for 90% of forms, the `form!` macro provides everything you need with less code.
-> 
-> **Complete Example**: See `src/client/components/polls.rs` for the `form!` macro pattern with dynamic choices and reactive watch blocks.
+> **📌 The `form!` macro is the single recommended path for forms in this tutorial.**
+>
+> Why:
+> - ✅ **Automatic CSRF protection** — built-in token injection for POST/PUT/PATCH/DELETE
+> - ✅ **Reactive state management** — `watch` blocks update the UI when form state changes
+> - ✅ **Dynamic choices** — runtime population of select/radio options
+> - ✅ **Zero boilerplate** — loading states, error handling, validation out of the box
+> - ✅ **Type-safe** — the compiler checks that every field name matches the form definition
+> - ✅ **Declarative** — you describe what the form does, not how it works
+>
+> The **reference implementation** of this section lives in
+> [`examples/examples-tutorial-basis/src/shared/forms.rs`](https://github.com/kent8192/reinhardt-web/tree/main/examples/examples-tutorial-basis/src/shared/forms.rs)
+> (server-side `Form` definition used to emit `FormMetadata` / CSRF tokens)
+> and
+> [`examples/examples-tutorial-basis/src/client/components/polls.rs`](https://github.com/kent8192/reinhardt-web/tree/main/examples/examples-tutorial-basis/src/client/components/polls.rs)
+> (the `form!` macro + dynamic choices + `watch` blocks). Read them alongside the snippets below — they are the authoritative answer key.
+>
+> Low-level `use_state()` form handling is covered at the very end of this chapter under "Appendix: When You Need to Drop Below `form!`". Do not reach for it unless the `form!` macro cannot express your requirement — 90%+ of forms do not need it.
 
 **Key Concepts:**
 
-1. **Declarative Forms**: Use `form!` macro for automatic state management and CSRF protection
-2. **Manual Forms**: Use `use_state()` to manually manage form data when needed
-3. **Server Functions**: Call server functions for data persistence and validation
-4. **Error Handling**: Display validation errors and server errors to users
-5. **Navigation**: Client-side navigation after successful form submission
+1. **One form type declared twice**: server-side `Form` in `src/shared/forms.rs` (produces `FormMetadata` and CSRF tokens) + client-side `form!` macro in `src/client/components/polls.rs` (produces the UI + action dispatch).
+2. **`form!` macro as the primary API** — declarative fields, automatic state, reactive `watch` blocks.
+3. **Server functions as form targets** — every submission lands on a `#[server_fn]` for persistence and validation.
+4. **Error handling via `watch`** — validation errors and server errors display reactively.
+5. **Navigation after success** — the `success_navigation` `watch` pattern redirects on successful submission.
 
 ## Example: Declarative Forms with form! Macro (Recommended)
 
@@ -471,51 +474,36 @@ form! {
 - ✅ **@-handlers**: Buttons, modals, navigation, custom UI interactions (non-form)
 - ✅ **form! watch**: Input validation, field-dependent UI, form state management
 
-## Choosing Your Approach: form! vs Manual Form Handling
+## Appendix: When You Need to Drop Below `form!`
 
-While the `form!` macro is recommended for most use cases, manual form handling provides fine-grained control when you need it.
+Everything above — and the reference `examples-tutorial-basis` voting form — is built with the `form!` macro. That is the path we recommend for the entire tutorial and for nearly all production forms. This appendix documents the lower-level `use_state()` path **only** so that you recognize it when you see it in older code or in the `examples/` directory; it is *not* part of the main tutorial build.
 
-### When to Use Manual Form Handling
+### When `form!` Is Insufficient
 
-Use manual form handling when you need:
-- Custom state management beyond what `form!` macro provides
-- Integration with external state management libraries
-- Very complex validation logic not supported by standard validators
-- Fine-grained control over every aspect of form behavior
-- Learning how forms work under the hood
+Drop below `form!` only when you need:
+- Multi-step wizard logic with complex branching that the macro cannot express
+- Real-time collaborative editing with external CRDT libraries
+- Drag-and-drop form builders where the field set itself is runtime-defined
+- Integration with a third-party state management library the macro cannot plug into
+- Highly unusual validation sequencing beyond `#[validate(...)]` and server-side validation
 
-### Comparison: form! Macro vs Manual Handling
+For a login form, CRUD create/update, search with filters, or the voting form in this tutorial, **use `form!`**.
 
-| Aspect | form! Macro | Manual Handling |
-|--------|-------------|-----------------|
-| **CSRF Protection** | Automatic (POST/PUT/PATCH/DELETE) | Manual implementation required |
-| **State Management** | Built-in `watch` blocks, reactive Signals | Manual `use_state()` for each field |
+### Quick Comparison
+
+| Aspect | `form!` Macro | Manual `use_state()` |
+|--------|---------------|-----------------------|
+| **CSRF Protection** | Automatic (POST/PUT/PATCH/DELETE) | You must fetch and attach the token yourself |
+| **State Management** | Built-in `watch` blocks, reactive Signals | One `use_state()` per field |
 | **Boilerplate** | Minimal (declarative) | Extensive (imperative) |
-| **Error Handling** | Built-in `form.error()` Signal | Manual error state management |
-| **Loading States** | Built-in `form.loading()` Signal | Manual loading state tracking |
-| **Validation** | Integrated with server_fn validation | Manual validation implementation |
-| **Type Safety** | Compiler-enforced field names | Manual typing |
-| **Reactivity** | Automatic UI updates | Manual Signal updates |
-| **Recommended for** | Most forms (90% of use cases) | Advanced customization (10% of use cases) |
+| **Error Handling** | Built-in `form.error()` Signal | Your own error state |
+| **Loading States** | Built-in `form.loading()` Signal | Your own loading state |
+| **Validation** | Integrated with server_fn validation | Hand-written |
+| **Type Safety** | Compiler-enforced field names | Whatever you write yourself |
+| **Reactivity** | Automatic | Manual Signal updates |
+| **Use it for** | The entire tutorial (100% of forms) | Only escape hatches from the list above |
 
-### Example Use Cases
-
-✅ **Use form! macro for:**
-- Login/registration forms
-- CRUD operations (create, update, delete)
-- Search forms with filters
-- Survey/poll forms
-- Contact forms
-- Any form with standard validation
-
-⚠️ **Consider manual handling for:**
-- Multi-step wizards with complex branching logic
-- Forms with real-time collaborative editing
-- Custom drag-and-drop form builders
-- Forms requiring third-party state management integration
-- Very unusual validation requirements
-
-**For this tutorial, we use the `form!` macro approach**, as it provides the best balance of simplicity and power for most forms. Manual form handling examples are available in the examples directory for advanced use cases.
+Manual form code can be found in the Reinhardt repository under `examples/` for advanced scenarios; it is outside the scope of this tutorial.
 
 ## Server-Side Validation and Processing
 
@@ -527,7 +515,7 @@ use crate::shared::types::{ChoiceInfo, VoteRequest};
 use reinhardt::pages::server_fn::{server_fn, ServerFnError};
 
 // Server-only imports
-#[cfg(server)]
+#[cfg(native)]
 use reinhardt::atomic;
 
 /// Vote for a choice

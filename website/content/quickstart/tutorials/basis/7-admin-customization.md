@@ -10,6 +10,19 @@ sidebar_weight = 70
 
 In this tutorial, we'll explore the Reinhardt admin interface and learn how to customize it for managing poll data.
 
+## How Admin Fits into the Pages Architecture
+
+Before enabling the admin, it helps to understand that in the reinhardt-pages stack the admin is **not** a separate server-rendered Django-style panel. It is assembled from two halves, each of which lives in a directory you already know from earlier chapters:
+
+| Half | Where | What it does |
+|------|-------|--------------|
+| **Server-side registration** | `src/apps/<app>/admin.rs` (per app) or a shared `src/admin.rs` — this is the `#[admin(...)]` / `impl ModelAdmin for ...` code | Declares list columns, search fields, permissions, and form layout for each model. Compiled under `#[cfg(native)]`. |
+| **Client-side UI mount** | `src/client/` — a WASM component that calls admin server functions and renders tables, search, and change forms | Displays the actual admin UI inside the same pages runtime that powers the rest of the app. Compiled under `#[cfg(wasm)]`. |
+
+The flow matches the one introduced in [Part 3](../3-views-and-urls/): the client component issues typed RPC calls through server functions, and the server side executes them against your models. The admin ships with a pre-built set of components plus a standard set of server functions — you only have to supply the `ModelAdmin` configuration.
+
+You do **not** write HTML templates, ship a separate admin binary, or mount a second router. Everything runs in the same pages application, with the admin UI mounted at `/admin/` through the pages `Router` alongside your public pages.
+
 ## Activating the Admin
 
 The Reinhardt admin is a powerful, automatically-generated interface for managing your application's data. Let's enable it for our polls application.

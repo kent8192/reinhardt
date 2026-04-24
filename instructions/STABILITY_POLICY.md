@@ -83,6 +83,40 @@ APIs deprecated during alpha **MAY** be removed when transitioning to RC. Deprec
 
 The RC phase is a stabilization period. The primary goal is to validate the API surface and fix bugs before the stable release.
 
+### SP-0 (MUST): 0.x Series Exception Clause
+
+While Reinhardt is on a `0.x.y` version, the RC rules defined below (SP-1
+through SP-7) and the stable-release timer described in [RC to Stable
+Criteria](#rc-to-stable-criteria) are applied as the **default**, but may be
+waived when a blocking design issue is discovered. Specifically, during the
+pre-1.0 period:
+
+- A breaking RC API change may ship **without** the full SP-3 / SP-6 /
+  API Change Proposal workflow if the maintainer determines that deferring
+  the fix would block the `0.1.0` stable release or compromise framework
+  correctness. A migration guide is still required.
+- The 2-week stability window before `0.1.0` (see SC-2) may be shortened or
+  reset outside the normal reset triggers when a new RC is cut to fix a
+  blocking issue.
+
+Both waivers **end at `1.0.0`**. From `1.0.0` onward, SP-1 through SP-7 and the
+stability timer are enforced without exception, and full SemVer 2.0 applies.
+
+Any SP-0 waiver MUST be:
+
+1. Recorded in the affected crate's `CHANGELOG.md` under the appropriate
+   section (`Changed` for breaking, `Fixed` for timer resets) with a link to
+   the triggering Issue / PR.
+2. Announced in the PR description with the `stability-waiver` label (or an
+   equivalent marker if the label is not yet defined).
+3. Consistent with [Design Philosophy](DESIGN_PHILOSOPHY.md) — the waiver
+   exists to ship *correct* design, not to skip review of convenient changes.
+
+SP-0 does **not** override SP-2 (bug-fix-only default posture) or SP-4
+(deprecation policy); it only relaxes the blocking conditions on SP-1 / SP-3 /
+SP-6 and the stable-release timer. Routine RC work still follows SP-1 through
+SP-7.
+
 ### SP-1 (MUST): API Freeze
 
 During the RC phase (`0.1.0-rc.N`):

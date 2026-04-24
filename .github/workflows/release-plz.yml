@@ -76,7 +76,15 @@ jobs:
           CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
 
       - name: Update version references in release branch
-        if: steps.release-plz-pr.outputs.pr != ''
+        # Guard against no-op release-pr runs: when release-plz/action@v0.5
+        # finds nothing to release it sets outputs.pr to "{}" (not empty),
+        # which makes `outputs.pr != ''` truthy. Without the extra checks,
+        # fromJson('{}').head_branch becomes null -> HEAD_BRANCH empty ->
+        # `git fetch origin ""` fails with exit 128. See run 24864402077.
+        if: >-
+          steps.release-plz-pr.outputs.pr != ''
+          && steps.release-plz-pr.outputs.pr != '{}'
+          && fromJson(steps.release-plz-pr.outputs.pr).head_branch != null
         env:
           HEAD_BRANCH: ${{ fromJson(steps.release-plz-pr.outputs.pr).head_branch }}
           GITHUB_TOKEN: ${{ steps.generate-token.outputs.token }}

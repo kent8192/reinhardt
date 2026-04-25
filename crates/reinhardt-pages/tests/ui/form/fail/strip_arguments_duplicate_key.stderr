@@ -1,0 +1,5 @@
+error: duplicate strip_arguments entry 'csrf_token': each server_fn argument may only appear once
+  --> tests/ui/form/fail/strip_arguments_duplicate_key.rs:18:4
+   |
+18 |             csrf_token: String::from("again"),
+   |             ^^^^^^^^^^

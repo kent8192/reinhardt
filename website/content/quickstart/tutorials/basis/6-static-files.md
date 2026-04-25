@@ -12,7 +12,26 @@ In this tutorial, we'll add CSS stylesheets and images to make our polls applica
 
 ## Understanding Static Files in reinhardt-pages
 
-Static files are assets like CSS, JavaScript, images, and fonts that don't change during runtime. In reinhardt-pages applications, static files are managed differently from traditional server-rendered frameworks:
+Static files are CSS, JavaScript, WASM, images, and fonts that don't change during runtime. The reinhardt-pages template stores them in **two distinct tiers** that merge into one served directory at deploy time:
+
+| Tier | Directory | Populated by | Purpose |
+|------|-----------|--------------|---------|
+| WASM build output | `dist-wasm/` | `wasm-bindgen` / `wasm-pack` during `cargo make wasm-build-*` | Compiled client bundle: `<project>.js` glue + `<project>_bg.wasm` |
+| Final served tree | `staticfiles/` | `cargo make collectstatic` | Flat tree served at `/static/` — contains `dist-wasm/` output **plus** any app `static/` directories and workspace `staticfiles_dirs` |
+
+This matches the layout of
+[`examples/examples-tutorial-basis/`](https://github.com/kent8192/reinhardt-web/tree/main/examples/examples-tutorial-basis):
+`dist-wasm/` and `staticfiles/` both live at the project root and are both git-ignored build artifacts.
+
+`src/config/wasm.rs` is what connects the two tiers — it registers `dist-wasm/` with the `collectstatic` inventory so that running `cargo make collectstatic` copies the WASM output into `staticfiles/` alongside everything else.
+
+```mermaid
+flowchart LR
+    A["wasm-bindgen build<br/>(cargo make wasm-build-release)"] --> B["dist-wasm/<br/>- project.js<br/>- project_bg.wasm"]
+    C["app static/ dirs<br/>(per-app assets)"] --> D
+    B --> D["cargo make collectstatic"]
+    D --> E["staticfiles/<br/>served at /static/"]
+```
 
 **Traditional Approach (Server-Side Rendering):**
 ```html
@@ -21,9 +40,10 @@ Static files are assets like CSS, JavaScript, images, and fonts that don't chang
 ```
 
 **reinhardt-pages Approach (WASM):**
-1. **CDN Resources**: External libraries loaded from CDNs
-2. **Local Assets**: Static files copied to `dist/` during build
-3. **Direct References**: Files referenced using one of three methods (see below)
+1. **WASM build output** — `dist-wasm/` (produced by the WASM build), registered for collection in `src/config/wasm.rs`.
+2. **Per-app `static/` directories** — optional; app-local assets collected by `collectstatic`.
+3. **Final `staticfiles/` directory** — what is actually served at `/static/` in production.
+4. **Direct references** from client code — use one of three methods (see below).
 
 ## Static File Reference Methods
 

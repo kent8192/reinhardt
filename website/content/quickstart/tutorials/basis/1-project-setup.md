@@ -24,95 +24,98 @@ You should see version information for both commands. If not, visit
 
 ## Installing Reinhardt Admin CLI
 
-First, install the global tool for project generation:
+First, install the global tool for project generation. During the RC phase,
+only release-candidate versions are published to crates.io, so
+`cargo install` requires an explicit `--version`. The version below is
+auto-bumped by release-plz on each release. Once a stable release ships, the
+bare `cargo install reinhardt-admin-cli` will also work.
 
+<!-- reinhardt-version-sync -->
 ```bash
-cargo install reinhardt-admin-cli
+cargo install reinhardt-admin-cli --version "0.1.0-rc.21"
 ```
 
 ## Creating a Project
 
-Navigate to a directory where you'd like to store your code, then run:
+This tutorial uses the **reinhardt-pages template** — a WASM client + server functions + shared types layout. Generate the project from that template:
 
 ```bash
-reinhardt-admin startproject polls_project
+# Create a pages-backed project named polls_project
+reinhardt-admin startproject polls_project --template pages
 cd polls_project
 ```
 
-This creates a `polls_project` directory with the following structure:
+The generated tree matches the reference implementation in [`examples/examples-tutorial-basis/`](https://github.com/kent8192/reinhardt-web/tree/main/examples/examples-tutorial-basis):
 
-```
+```text
 polls_project/
-├── Cargo.toml
+├── Cargo.toml                 # cdylib + rlib; reinhardt with "pages" + "client-router" features
+├── Makefile.toml              # cargo make runserver / migrate / test / collectstatic / ...
+├── build.rs                   # cfg_aliases: `native` vs `wasm`
 ├── README.md
 ├── settings/
 │   ├── base.toml
-│   ├── local.toml
-│   ├── staging.toml
-│   └── production.toml
+│   ├── ci.toml
+│   └── local.example.toml
 └── src/
-    ├── config.rs
-    ├── apps.rs
+    ├── lib.rs                 # Entry: #[cfg(native)] server side, #[cfg(wasm)] client side
+    ├── bin/
+    │   └── manage.rs          # CLI binary (Django's manage.py equivalent)
     ├── config/
-    │   ├── settings.rs
-    │   ├── urls.rs
-    │   └── apps.rs
-    └── bin/
-        └── manage.rs
+    │   ├── settings.rs        # SettingsBuilder with profiles
+    │   ├── apps.rs            # installed_apps!{ ... }
+    │   ├── urls.rs            # UnifiedRouter + server_fn registration
+    │   └── wasm.rs            # dist-wasm/ registered for collectstatic
+    ├── apps/                  # (filled in Part 2 onward) — server-only Reinhardt apps
+    ├── server_fn/             # (filled in Part 3) — #[server_fn] async fns
+    ├── shared/                # DTOs + forms shared between client and server
+    │   ├── types.rs
+    │   └── forms.rs
+    └── client/                # (filled in Part 3) — WASM UI layer
+        ├── lib.rs             # #[wasm_bindgen(start)]
+        ├── router.rs
+        ├── pages.rs
+        └── components/
 ```
 
-### Alternative: Create a reinhardt-pages Project (WASM + SSR)
+**Why this layout?** Three rules keep it predictable:
 
-For a modern WASM-based frontend with SSR:
+1. **`#[cfg(native)]` vs `#[cfg(wasm)]`** — server-only code (`apps/`, `server_fn/` bodies) is gated on `native`; browser-only code (`client/`) on `wasm`. `shared/` compiles for both so DTOs stay in sync.
+2. **Server functions are the bridge** — the WASM client never touches the database directly. Every request goes through a `#[server_fn]` defined in `src/server_fn/` and returns a DTO from `src/shared/types.rs`.
+3. **Reactivity via `page!` + `watch` + `use_action`** — UI updates are declarative WASM components. There is no HTML templating engine.
 
-```bash
-# Create a pages project
-reinhardt-admin startproject my-app --template pages
-cd my-app
+**Available `cargo make` tasks (defined in `Makefile.toml`):**
 
-# Build WASM and start development server
-cargo make dev
-# Visit http://127.0.0.1:8000/
-```
+| Task | Purpose |
+|------|---------|
+| `cargo make runserver` | Start the development server |
+| `cargo make makemigrations` | Generate migrations from model changes |
+| `cargo make migrate` | Apply migrations to the configured database |
+| `cargo make collectstatic` | Collect static assets (including `dist-wasm/`) into `staticfiles/` |
+| `cargo make test` | `cargo nextest run --all-features` |
+| `cargo make showurls` | Print every registered URL pattern |
+| `cargo make check` | Project self-check (Django-style `check`) |
 
-This generates a project with 3-layer architecture:
-
-```
-my-app/
-├── Cargo.toml
-├── Makefile.toml
-├── index.html
-├── src/
-│   ├── client/       # WASM UI (runs in browser)
-│   ├── server/       # Server functions (runs on server)
-│   ├── shared/       # Shared types (used by both)
-│   └── ...
-```
-
-**Available commands:**
-- `cargo make dev` - Build WASM and start development server
-- `cargo make dev-watch` - Watch mode with auto-rebuild
-- `cargo make build-release` - Production binary build
-- `cargo make wasm-build-dev` - Build WASM only (debug)
-- `cargo make wasm-build-release` - Build WASM only (release, with wasm-opt)
-
-See [examples/examples-twitter](https://github.com/kent8192/reinhardt-web/tree/main/examples/examples-twitter) for a complete implementation.
-
-**Note**: This tutorial focuses on the **reinhardt-pages (WASM + SSR)** architecture with server functions. For building RESTful APIs instead, see the [REST API Tutorial](../rest/0-http-macros/).
+> **Note**: This tutorial targets the **reinhardt-pages** architecture end-to-end. If you are instead building a pure JSON backend consumed by an external SPA or mobile client, start with the [REST Tutorial](../rest/0-http-macros/).
 
 ## Understanding the Project Structure
 
-Let's understand the key elements of the generated project:
+Each generated file has a specific role. Walking top-down:
 
-- `Cargo.toml` - Configuration file for your project and its dependencies
-- `settings/` - Environment-specific settings files (base, local, staging,
-  production)
-- `src/config/` - Project configuration
-  - `settings.rs` - Settings loader
-  - `urls.rs` - URL routing configuration
-  - `apps.rs` - Installed apps registration
-- `src/bin/` - Executable files
-  - `manage.rs` - Management commands (equivalent to Django's `manage.py`), includes `runserver` command for the development server
+- `Cargo.toml` — declares `crate-type = ["cdylib", "rlib"]` (cdylib for WASM, rlib for the server binary) and pulls in `reinhardt` with the `pages` + `client-router` features for WASM, plus `full`, `conf`, `commands`, `db-sqlite`, `forms` for the server target.
+- `build.rs` — uses `cfg_aliases` to create `native` and `wasm` cfgs you will see throughout the source.
+- `settings/` — TOML settings files loaded by `SettingsBuilder`. `base.toml` is always loaded; `local.toml` / `ci.toml` / `production.toml` layer on top depending on `REINHARDT_ENV`.
+- `src/lib.rs` — the crate root. It `#[cfg(native)]`-gates server-only modules (`apps`, server pieces of `config`, `shared::forms`) and `#[cfg(wasm)]`-gates `client`. `server_fn` and `shared::types` compile for both targets.
+- `src/bin/manage.rs` — the server-side binary. It sets `REINHARDT_SETTINGS_MODULE` and calls `reinhardt::commands::execute_from_command_line()`. This is the Django `manage.py` equivalent.
+- `src/config/`
+  - `settings.rs` — `#[settings(core: CoreSettings)]` + `SettingsBuilder` that resolves the active profile and loads TOML files.
+  - `apps.rs` — `installed_apps!{ polls: "polls" }` macro declaring which apps are active.
+  - `urls.rs` — defines `routes() -> UnifiedRouter`, registers `#[server_fn]` entries, and mounts server-side `ServerRouter`s.
+  - `wasm.rs` — an `inventory::submit!` entry that registers `dist-wasm/` with `collectstatic` so WASM build artifacts end up in `staticfiles/`.
+- `src/apps/` — server-only Reinhardt apps (filled in starting from Part 2). Each app owns its models, views, serializers, and a `ServerRouter`.
+- `src/server_fn/` — `#[server_fn]` async functions. A single function compiles to both a server implementation and a client stub, giving you type-safe RPC.
+- `src/shared/` — code used by both targets. `types.rs` holds DTOs (`QuestionInfo`, `ChoiceInfo`, ...) with `Serialize + Deserialize`; `forms.rs` defines `Form`s used by the `form!` macro (server-only because it imports server-side field types).
+- `src/client/` — WASM-only UI. `lib.rs` is the `#[wasm_bindgen(start)]` entry, `router.rs` holds the `reinhardt::pages::router::Router`, `pages.rs` exposes page factories, and `components/` contains the `page!` components that render the UI.
 
 ### Architecture: WASM + SSR (reinhardt-pages)
 

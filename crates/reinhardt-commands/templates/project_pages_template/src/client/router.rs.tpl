@@ -1,19 +1,71 @@
-//! Client-side routing for {{ project_name }}
+//! Client-side router for {{ project_name }}.
 //!
-//! Add routes inside `init_router()` using `.route(path, handler)`.
-//! Use `with_router(|r| r.push("/path/"))` to navigate from components.
+//! The router is built once at startup by [`init_global_router`]. Use
+//! [`with_router`] from any component to inspect routing state.
 
+use reinhardt::pages::component::Page;
+use reinhardt::pages::page;
 use reinhardt::pages::router::Router;
+use std::cell::RefCell;
 
-/// Re-export for ergonomic access within this module and sub-modules.
-pub use reinhardt::pages::with_router;
+// Global Router instance
+thread_local! {
+	static ROUTER: RefCell<Option<Router>> = const { RefCell::new(None) };
+}
+
+/// Initialize the global router instance.
+///
+/// Must be called once at application startup before any routing operations.
+pub fn init_global_router() {
+	ROUTER.with(|r| {
+		*r.borrow_mut() = Some(init_router());
+	});
+}
+
+/// Provides access to the global router instance.
+///
+/// # Panics
+///
+/// Panics if the router has not been initialized via [`init_global_router`].
+pub fn with_router<F, R>(f: F) -> R
+where
+	F: FnOnce(&Router) -> R,
+{
+	ROUTER.with(|r| {
+		f(r.borrow()
+			.as_ref()
+			.expect("Router not initialized. Call init_global_router() first."))
+	})
+}
 
 /// Build the application router.
 ///
-/// Called once by [`super::bootstrap`] via `ClientLauncher::router(init_router)`.
-pub fn init_router() -> Router {
+/// Add new routes here, e.g.:
+///
+/// ```rust,ignore
+/// .route("/", || crate::client::pages::index_page())
+/// ```
+fn init_router() -> Router {
 	Router::new()
-		// Add routes here, e.g.:
-		// .route("/", || home_page())
-		// .route("/about/", || about_page())
+		// Add routes here
+		.not_found(|| not_found_page("Page not found"))
+}
+
+/// Default 404 / error page used by `init_router`.
+fn not_found_page(message: &str) -> Page {
+	let message = message.to_string();
+	page!(|message: String| {
+		div {
+			class: "container mt-5",
+			div {
+				class: "alert alert-danger",
+				{ message }
+			}
+			a {
+				href: "/",
+				class: "btn btn-primary",
+				"Back to Home"
+			}
+		}
+	})(message)
 }

@@ -1,27 +1,17 @@
-//! URL configuration for {{ app_name }} app.
+//! URL routing for the {{ app_name }} app.
 //!
-//! Routes can be registered in either of two ways (they merge):
-//! 1. Inline here, via `unified_url_patterns` below.
-//! 2. In submodules under `urls/` (`server_urls`, `client_urls`, `ws_urls`).
+//! The `routes` function is mounted from the project-level `config/urls.rs`
+//! via `.mount("/{{ app_name }}/", crate::apps::{{ app_name }}::urls::routes())`.
+//! Do not annotate this function with `#[routes]` directly — that would
+//! register it without the mount prefix.
 
-#[cfg(server)]
-pub mod server_urls;
+use reinhardt::ServerRouter;
 
-#[cfg(client)]
-pub mod client_urls;
+#[allow(unused_imports)] // `views` will be used once endpoints are added.
+use super::views;
 
-#[cfg(server)]
-pub mod ws_urls;
-
-use reinhardt::url_patterns;
-use reinhardt::UnifiedRouter;
-
-use crate::config::apps::InstalledApp;
-
-#[url_patterns(InstalledApp::{{ app_name }}, mode = unified)]
-pub fn unified_url_patterns() -> UnifiedRouter {
-    UnifiedRouter::new()
-    // Example:
-    //     .server(|s| s.endpoint(views::index))
-    //     .client(|c| c.named_route("home", "/", || {}))
+pub fn routes() -> ServerRouter {
+	ServerRouter::new()
+	// Register endpoints here, e.g.:
+	//     .endpoint(views::index)
 }

@@ -1,5 +1,9 @@
-//! Configuration module for {{ project_name }}
+//! Configuration module for {{ project_name }}.
 
+#[cfg(server)]
 pub mod apps;
-pub mod urls;
+#[cfg(server)]
 pub mod settings;
+pub mod urls;
+#[cfg(server)]
+pub mod wasm;

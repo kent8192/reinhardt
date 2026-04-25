@@ -1,8 +1,14 @@
-//! WASM client for {{ project_name }}
+//! Client-side (WASM) modules for {{ project_name }}.
+//!
+//! - `lib`        — `#[wasm_bindgen(start)]` entry point
+//! - `router`     — client-side router definition
+//! - `pages`      — top-level page components
+//! - `components` — reusable UI components grouped per app
 
-mod bootstrap;
-mod router;
-mod state;
+pub mod lib;
 
-pub use router::with_router;
-pub use state::*;
+pub mod router;
+
+pub mod pages;
+
+pub mod components;

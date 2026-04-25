@@ -12,10 +12,15 @@ Create a simple API for administrators to view and edit users and groups in the 
 
 ## Project Setup
 
-First, install the global tool:
+First, install the global tool. During the RC phase, only release-candidate
+versions are published to crates.io, so `cargo install` requires an explicit
+`--version`. The version below is auto-bumped by release-plz on each release.
+Once a stable release ships, the bare `cargo install reinhardt-admin-cli`
+will also work.
 
+<!-- reinhardt-version-sync -->
 ```bash
-cargo install reinhardt-admin-cli
+cargo install reinhardt-admin-cli --version "0.1.0-rc.21"
 ```
 
 **Note:** After installation, the command is `reinhardt-admin`, not `reinhardt-admin-cli`.

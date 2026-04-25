@@ -90,7 +90,7 @@ Add this to your `Cargo.toml`:
 <!-- reinhardt-version-sync -->
 ```toml
 [dependencies]
-reinhardt-core = "0.1.0-rc.21"
+reinhardt-core = "0.1.0-rc.22"
 ```
 
 ### Optional Features
@@ -100,7 +100,7 @@ Enable specific modules based on your needs:
 <!-- reinhardt-version-sync -->
 ```toml
 [dependencies]
-reinhardt-core = { version = "0.1.0-rc.21", features = ["signals", "macros", "security"] }
+reinhardt-core = { version = "0.1.0-rc.22", features = ["signals", "macros", "security"] }
 ```
 
 Available features:

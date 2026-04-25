@@ -13,7 +13,7 @@
 //!
 //! <!-- reinhardt-version-sync -->
 //! ```bash
-//! cargo install reinhardt-admin-cli --version "0.1.0-rc.21"
+//! cargo install reinhardt-admin-cli --version "0.1.0-rc.22"
 //! ```
 //!
 //! ## Usage

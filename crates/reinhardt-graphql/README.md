@@ -107,11 +107,11 @@ Add `reinhardt` to your `Cargo.toml`:
 <!-- reinhardt-version-sync:3 -->
 ```toml
 [dependencies]
-reinhardt = { version = "0.1.0-rc.21", features = ["graphql"] }
+reinhardt = { version = "0.1.0-rc.22", features = ["graphql"] }
 
 # Or use a preset:
-# reinhardt = { version = "0.1.0-rc.21", features = ["standard"] }  # Recommended
-# reinhardt = { version = "0.1.0-rc.21", features = ["full"] }      # All features
+# reinhardt = { version = "0.1.0-rc.22", features = ["standard"] }  # Recommended
+# reinhardt = { version = "0.1.0-rc.22", features = ["full"] }      # All features
 ```
 
 Then import GraphQL features:
@@ -128,10 +128,10 @@ use reinhardt::graphql::types::{UserStorage, UserEvent};
 <!-- reinhardt-version-sync:2 -->
 ```toml
 # With dependency injection
-reinhardt = { version = "0.1.0-rc.21", features = ["graphql", "di"] }
+reinhardt = { version = "0.1.0-rc.22", features = ["graphql", "di"] }
 
 # With gRPC transport
-reinhardt = { version = "0.1.0-rc.21", features = ["graphql", "grpc"] }
+reinhardt = { version = "0.1.0-rc.22", features = ["graphql", "grpc"] }
 ```
 
 ## Examples
@@ -270,7 +270,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     Server::builder()
         .add_service(grpc_service)
-        .serve("0.1.0-rc.21.1:50051".parse()?)
+        .serve("0.1.0-rc.22:50051".parse()?)
         .await?;
 
     Ok(())
@@ -288,7 +288,7 @@ use reinhardt::grpc::proto::graphql::{
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let mut client = GraphQlServiceClient::connect("http://0.1.0-rc.21.1:50051").await?;
+    let mut client = GraphQlServiceClient::connect("http://0.1.0-rc.22:50051").await?;
 
     let request = tonic::Request::new(GraphQlRequest {
         query: r#"{ hello(name: "gRPC") }"#.to_string(),

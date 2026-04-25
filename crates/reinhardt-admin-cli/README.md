@@ -15,7 +15,7 @@ release. After a stable release ships, the bare command will also work.
 
 <!-- reinhardt-version-sync -->
 ```bash
-cargo install reinhardt-admin-cli --version "0.1.0-rc.21"
+cargo install reinhardt-admin-cli --version "0.1.0-rc.22"
 ```
 
 This installs the `reinhardt-admin` command.
@@ -84,7 +84,7 @@ reinhardt-admin plugin info auth-delion --remote
 
 # Install a plugin
 reinhardt-admin plugin install auth-delion
-reinhardt-admin plugin install auth-delion --version 0.1.0-rc.21
+reinhardt-admin plugin install auth-delion --version 0.1.0-rc.22
 
 # Remove a plugin
 reinhardt-admin plugin remove auth-delion

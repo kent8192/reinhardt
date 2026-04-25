@@ -13,11 +13,11 @@ Add `reinhardt` to your `Cargo.toml`:
 <!-- reinhardt-version-sync:3 -->
 ```toml
 [dependencies]
-reinhardt = { version = "0.1.0-rc.21", features = ["shortcuts"] }
+reinhardt = { version = "0.1.0-rc.22", features = ["shortcuts"] }
 
 # Or use a preset:
-# reinhardt = { version = "0.1.0-rc.21", features = ["standard"] }  # Recommended
-# reinhardt = { version = "0.1.0-rc.21", features = ["full"] }      # All features
+# reinhardt = { version = "0.1.0-rc.22", features = ["standard"] }  # Recommended
+# reinhardt = { version = "0.1.0-rc.22", features = ["full"] }      # All features
 ```
 
 Then import shortcuts features:

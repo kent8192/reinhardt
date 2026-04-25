@@ -19,13 +19,13 @@ use syn::{Error, Result};
 use crate::core::{
 	FormAction, FormCallbacks, FormDerived, FormFieldDef, FormFieldEntry, FormFieldGroup,
 	FormFieldProperty, FormMacro, FormMethod, FormSlots, FormState, FormSubmitButtonDef,
-	FormValidator, FormWatch, IconAttr, IconChild, IconPosition, TypedChoicesConfig,
+	FormValidator, FormWatch, IconAttr, IconChild, IconPosition, StripArgument, TypedChoicesConfig,
 	TypedCustomAttr, TypedDerivedItem, TypedFieldDisplay, TypedFieldStyling, TypedFieldType,
 	TypedFieldValidation, TypedFormAction, TypedFormCallbacks, TypedFormDerived, TypedFormFieldDef,
 	TypedFormFieldEntry, TypedFormFieldGroup, TypedFormMacro, TypedFormSlots, TypedFormState,
 	TypedFormStyling, TypedFormValidator, TypedFormWatch, TypedFormWatchItem, TypedIcon,
-	TypedIconAttr, TypedIconChild, TypedIconPosition, TypedSubmitButtonDef, TypedValidatorRule,
-	TypedWidget, TypedWrapper, TypedWrapperAttr, ValidatorRule,
+	TypedIconAttr, TypedIconChild, TypedIconPosition, TypedStripArgument, TypedSubmitButtonDef,
+	TypedValidatorRule, TypedWidget, TypedWrapper, TypedWrapperAttr, ValidatorRule,
 };
 
 /// Validates and transforms the FormMacro AST into a typed AST.
@@ -78,6 +78,9 @@ pub fn validate_form(ast: &FormMacro) -> Result<TypedFormMacro> {
 	// Transform unified validators (scope filtering happens at codegen)
 	let validators = transform_validators(&ast.validators, &ast.fields)?;
 
+	// Transform stripped server_fn arguments (reinhardt-web#3971).
+	let strip_arguments = transform_strip_arguments(&ast.strip_arguments, &ast.fields)?;
+
 	// The parser guarantees that `name` is Some after successful parsing.
 	let name = ast
 		.name
@@ -99,6 +102,7 @@ pub fn validate_form(ast: &FormMacro) -> Result<TypedFormMacro> {
 		slots,
 		fields,
 		validators,
+		strip_arguments,
 		span: ast.span,
 	})
 }
@@ -1166,6 +1170,51 @@ fn extract_choices_config(properties: &[FormFieldProperty]) -> Option<TypedChoic
 			span,
 		)
 	})
+}
+
+/// Transforms `strip_arguments` entries into their typed form.
+///
+/// Validates two constraints:
+/// 1. No duplicate argument names (each server_fn parameter may only be supplied once).
+/// 2. No collision with declared form field names (would shadow a real input).
+///
+/// Tracked under reinhardt-web#3971.
+fn transform_strip_arguments(
+	args: &[StripArgument],
+	fields: &[FormFieldEntry],
+) -> Result<Vec<TypedStripArgument>> {
+	let mut seen = HashSet::new();
+	let mut typed = Vec::with_capacity(args.len());
+
+	for arg in args {
+		let name_str = arg.name.to_string();
+
+		if !seen.insert(name_str.clone()) {
+			return Err(Error::new(
+				arg.span,
+				format!(
+					"duplicate strip_arguments entry '{name_str}': each server_fn argument may only appear once"
+				),
+			));
+		}
+
+		if field_exists(fields, &arg.name) {
+			return Err(Error::new(
+				arg.span,
+				format!(
+					"strip_arguments key '{name_str}' collides with a declared form field; either rename the field or remove this strip entry"
+				),
+			));
+		}
+
+		typed.push(TypedStripArgument {
+			name: arg.name.clone(),
+			value: arg.value.clone(),
+			span: arg.span,
+		});
+	}
+
+	Ok(typed)
 }
 
 /// Checks if a field with the given name exists in the field entries.

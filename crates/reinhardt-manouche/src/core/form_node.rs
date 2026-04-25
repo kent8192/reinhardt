@@ -94,6 +94,15 @@ pub struct FormMacro {
 	/// Unified validators. Each rule carries an optional scope annotation
 	/// (`#[server]` / `#[client(on = ...)]`) that controls where it executes.
 	pub validators: Vec<FormValidator>,
+	/// Arguments appended positionally to the server_fn call but never exposed
+	/// as user-facing form fields. Each entry maps a server_fn argument name to
+	/// the expression evaluated at submit time.
+	///
+	/// Order in the source matches the order in which arguments are appended
+	/// after the regular form-field arguments.
+	///
+	/// See `StripArgument` for details. Tracked under reinhardt-web#3971.
+	pub strip_arguments: Vec<StripArgument>,
 	/// Span for error reporting
 	pub span: Span,
 }
@@ -716,6 +725,53 @@ pub struct ValidatorRule {
 	pub span: Span,
 }
 
+/// Argument stripped from the surface form fields and instead passed directly
+/// to the underlying server_fn at submit time.
+///
+/// Useful for values like CSRF tokens or other ambient context that should not
+/// be exposed as user-editable form fields, but must appear in the server_fn
+/// signature.
+///
+/// ## Behavior
+///
+/// - The expression is evaluated **on the client side at submit time** and
+///   appended positionally to the server_fn call after all regular form-field
+///   arguments.
+/// - The argument **does not** appear in the form struct, the rendered HTML,
+///   or the validation pipeline.
+/// - The corresponding server_fn argument **must** exist in the server_fn
+///   signature; otherwise the build fails with a standard arity mismatch.
+///
+/// ## Relationship to CSRF auto-injection
+///
+/// Prior to reinhardt-web#3971 the `form!` macro silently appended a
+/// `__csrf_token: String` argument to every `method != Get` server_fn call.
+/// `strip_arguments` makes that injection explicit and generalizes it to any
+/// argument the user wants to supply outside the form's field surface.
+///
+/// ## Example DSL
+///
+/// ```ignore
+/// form! {
+///     server_fn: submit_vote,
+///     method: Post,
+///     strip_arguments: {
+///         csrf_token: ::reinhardt::reinhardt_pages::csrf::get_csrf_token()
+///             .unwrap_or_default(),
+///     },
+///     fields: { ... }
+/// }
+/// ```
+#[derive(Debug, Clone)]
+pub struct StripArgument {
+	/// Argument name as it appears in the server_fn signature.
+	pub name: Ident,
+	/// Expression evaluated at submit time to supply the argument's value.
+	pub value: Expr,
+	/// Span for error reporting.
+	pub span: Span,
+}
+
 /// Form submission callbacks configuration.
 ///
 /// Allows defining custom behavior at different stages of form submission:
@@ -1047,6 +1103,7 @@ impl FormMacro {
 			slots: None,
 			fields: Vec::new(),
 			validators: Vec::new(),
+			strip_arguments: Vec::new(),
 			span,
 		}
 	}

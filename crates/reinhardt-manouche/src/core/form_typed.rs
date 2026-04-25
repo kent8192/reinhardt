@@ -117,6 +117,12 @@ pub struct TypedFormMacro {
 	/// Validated unified validators. Each rule carries a `ValidatorScope`
 	/// controlling whether it executes on server, client, or both.
 	pub validators: Vec<TypedFormValidator>,
+	/// Validated arguments stripped from the form-field surface and appended
+	/// positionally to the server_fn call at submit time.
+	///
+	/// Keys must not collide with declared form field names. See
+	/// `TypedStripArgument` for details. Tracked under reinhardt-web#3971.
+	pub strip_arguments: Vec<TypedStripArgument>,
 	/// Span for error reporting
 	pub span: Span,
 }
@@ -1024,6 +1030,21 @@ pub struct TypedValidatorRule {
 	pub span: Span,
 }
 
+/// Typed argument stripped from the surface form fields and appended to the
+/// server_fn call at submit time.
+///
+/// See `crate::core::form_node::StripArgument` for the source AST and
+/// rationale. Tracked under reinhardt-web#3971.
+#[derive(Debug)]
+pub struct TypedStripArgument {
+	/// Argument name as it appears in the server_fn signature.
+	pub name: Ident,
+	/// Expression evaluated at submit time to supply the argument's value.
+	pub value: syn::Expr,
+	/// Span for error reporting.
+	pub span: Span,
+}
+
 /// A validated wrapper element definition for custom field containers.
 ///
 /// Wrappers allow specifying custom HTML elements to wrap around form fields,
@@ -1293,6 +1314,7 @@ impl TypedFormMacro {
 			slots: None,
 			fields: Vec::new(),
 			validators: Vec::new(),
+			strip_arguments: Vec::new(),
 			span,
 		}
 	}

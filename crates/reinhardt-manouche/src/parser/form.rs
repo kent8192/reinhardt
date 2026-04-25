@@ -14,8 +14,8 @@ use crate::{
 	ClientTrigger, CustomAttr, FormAction, FormDerived, FormDerivedItem, FormFieldDef,
 	FormFieldEntry, FormFieldGroup, FormFieldProperty, FormMacro, FormSlots, FormState,
 	FormStateField, FormSubmitButtonDef, FormValidator, FormWatch, FormWatchItem, IconAttr,
-	IconChild, IconElement, IconPosition, ValidatorRule, ValidatorScope, WrapperAttr,
-	WrapperElement,
+	IconChild, IconElement, IconPosition, StripArgument, ValidatorRule, ValidatorScope,
+	WrapperAttr, WrapperElement,
 };
 
 /// Parses a `form!` macro invocation into an untyped AST.
@@ -144,11 +144,17 @@ impl Parse for FormMacro {
 				"client_validators" => {
 					return Err(reject_client_validators_with_guidance(&key));
 				}
+				"strip_arguments" => {
+					let content;
+					braced!(content in input);
+					form.strip_arguments = parse_strip_arguments(&content)?;
+					parse_optional_comma(input)?;
+				}
 				_ => {
 					return Err(syn::Error::new(
 						key.span(),
 						format!(
-							"Unknown form property: '{}'. Expected: name, action, server_fn, method, class, state, on_submit, on_success, on_error, on_loading, watch, redirect_on_success, initial_loader, choices_loader, slots, fields, validators",
+							"Unknown form property: '{}'. Expected: name, action, server_fn, method, class, state, on_submit, on_success, on_error, on_loading, watch, redirect_on_success, initial_loader, choices_loader, slots, fields, validators, strip_arguments",
 							key
 						),
 					));
@@ -562,6 +568,29 @@ fn parse_icon_child(tag: Ident, input: ParseStream, span: Span) -> Result<IconCh
 		children,
 		span,
 	})
+}
+
+/// Parses strip_arguments inside the `strip_arguments: { ... }` block.
+///
+/// Format: `arg_name: <expression>,` repeated. Each entry binds one
+/// server_fn argument name to an expression evaluated at submit time on the
+/// client; the resulting value is appended positionally to the server_fn
+/// call after all regular form-field arguments.
+///
+/// Tracked under reinhardt-web#3971.
+fn parse_strip_arguments(input: ParseStream) -> Result<Vec<StripArgument>> {
+	let mut args = Vec::new();
+
+	while !input.is_empty() {
+		let span = input.span();
+		let name: Ident = input.parse()?;
+		input.parse::<Token![:]>()?;
+		let value: Expr = input.parse()?;
+		args.push(StripArgument { name, value, span });
+		parse_optional_comma(input)?;
+	}
+
+	Ok(args)
 }
 
 /// Parses server-side validators inside the `validators: { ... }` block.

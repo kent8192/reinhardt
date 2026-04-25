@@ -7,6 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.0-rc.22](https://github.com/kent8192/reinhardt-web/compare/reinhardt-web@v0.1.0-rc.21...reinhardt-web@v0.1.0-rc.22) - 2026-04-25
+
+### Added
+
+- *(pages-macros)* add strip_arguments to form! macro
+
+### Changed
+
+- *(pages-macros)* route strip_arguments through server_fn submit
+
+### Fixed
+
+- *(examples-tutorial-basis)* pass csrf_token via strip_arguments
+
+### Testing
+
+- *(pages-macros)* cover strip_arguments pass and fail cases
+- *(pages-macros)* add strip_arguments fail-test stderr fixtures
+
 ## [0.1.0-rc.21](https://github.com/kent8192/reinhardt-web/compare/reinhardt-web@v0.1.0-rc.20...reinhardt-web@v0.1.0-rc.21) - 2026-04-23
 
 ### Documentation

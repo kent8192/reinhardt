@@ -8,7 +8,27 @@ sidebar_weight = 50
 
 # Part 5: Testing
 
-In this tutorial, we'll write automated tests using modern Rust testing tools: **rstest** for fixtures and **TestContainers** for database isolation.
+In this chapter you write automated tests using modern Rust tooling: **rstest** for fixtures + parametrization, **reinhardt-test** for framework-aware fixtures, and **TestContainers** when you need real Postgres/MySQL in a container.
+
+> **Reference implementation:** the finished tests for this tutorial live at
+> [`examples/examples-tutorial-basis/tests/integration.rs`](https://github.com/kent8192/reinhardt-web/tree/main/examples/examples-tutorial-basis/tests/integration.rs).
+> That file shows two complementary approaches side by side:
+>
+> 1. **Manual SQLite setup** — raw `sqlx` + `tempfile`, full control over the schema.
+> 2. **`reinhardt-test` fixtures** — automatic table creation from your `#[model]` structs, recommended for new tests.
+>
+> Prefer the second approach whenever possible.
+
+**Conventions used in every test below (and required by `instructions/TESTING_STANDARDS.md`):**
+
+- Use `#[rstest]` (never plain `#[test]`).
+- Follow the **Arrange / Act / Assert** pattern with explicit `// Arrange`, `// Act`, `// Assert` comments separating the three phases (may be omitted for tests of 5 lines or fewer).
+- Every test MUST exercise at least one component from the `reinhardt` crate (model, server function, shared DTO, ...).
+- Use strict assertions (`assert_eq!`) over loose matching (`contains(...)`).
+- Tests that mutate global state go in `#[serial(group_name)]`.
+- Clean up all artifacts — temp files and containers are auto-cleaned via `Drop` when you use the fixtures correctly.
+
+Where snippets below omit the `// Arrange / // Act / // Assert` labels for space, assume they are present in the committed `tests/integration.rs` — compare each snippet against the reference file to see the exact comment placement.
 
 ## Why Testing Matters
 

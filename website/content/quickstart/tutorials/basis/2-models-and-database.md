@@ -144,7 +144,15 @@ Let's create two models for our polls application:
 - **Question** - Stores poll questions with their publication date
 - **Choice** - Stores choices for each question with their vote counts
 
-Create `polls/models.rs`:
+Models live under the `polls` app inside the project. Following the reinhardt-pages layout established in Part 1 and matching [`examples/examples-tutorial-basis/src/apps/polls/models.rs`](https://github.com/kent8192/reinhardt-web/tree/main/examples/examples-tutorial-basis/src/apps/polls/models.rs), create the file at:
+
+```text
+src/apps/polls/models.rs
+```
+
+and register the app (once) from `src/apps.rs` with `pub mod polls;`, then from `src/apps/polls.rs` with `pub mod models;`. The app is already declared in `src/config/apps.rs` via `installed_apps!{ polls: "polls" }`.
+
+File contents:
 
 ```rust
 use serde::{Deserialize, Serialize};
@@ -327,15 +335,22 @@ with full type safety.
 ## Creating the Database Schema with Migrations
 
 Instead of manually creating SQL files, Reinhardt provides Django-style
-automatic migration generation:
+automatic migration generation. Run the commands **from the project root**
+(the directory containing `Makefile.toml`); do not run them from any other
+location:
 
 ```bash
 cargo make makemigrations
 ```
 
-This command analyzes your models and automatically generates migration files in
-`migrations/polls/`. The generated migration will create tables with proper
-schema.
+Under the hood, `cargo make makemigrations` invokes
+`cargo run --bin <your-project-name> makemigrations` using the project's own
+management binary (`src/bin/manage.rs`), so everything is scoped to the
+current project.
+
+This command analyzes your models and automatically generates migration files
+in `migrations/polls/`. The generated migration creates the tables with the
+proper schema.
 
 To apply the migrations:
 

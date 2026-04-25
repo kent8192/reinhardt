@@ -44,8 +44,13 @@ If you have written `ModelSerializer` or `Depends()` before, Reinhardt will feel
 
 ## Quick Start
 
+<!-- reinhardt-version-sync -->
 ```bash
-cargo install reinhardt-admin-cli
+# During the RC phase, `cargo install` requires an explicit `--version`
+# because pre-releases are not selected by default. Once a stable release
+# ships, `cargo install reinhardt-admin-cli` (no flag) will also work.
+cargo install reinhardt-admin-cli --version "0.1.0-rc.21"
+
 reinhardt-admin startproject my-api && cd my-api
 cargo run --bin manage runserver  # Visit http://127.0.0.1:8000
 ```
@@ -214,8 +219,14 @@ The main Reinhardt crate is published on crates.io as `reinhardt-web`, but you i
 
 ### 1. Install Reinhardt Admin Tool
 
+During the RC phase, only release-candidate versions are published to
+crates.io, so `cargo install` requires an explicit `--version`. The version
+shown below is auto-bumped by release-plz on each release. After a stable
+release ships, `cargo install reinhardt-admin-cli` (no flag) will also work.
+
+<!-- reinhardt-version-sync -->
 ```bash
-cargo install reinhardt-admin-cli
+cargo install reinhardt-admin-cli --version "0.1.0-rc.21"
 ```
 
 ### 2. Create a New Project

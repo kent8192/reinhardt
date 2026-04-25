@@ -60,6 +60,7 @@ else
 		"examples/Cargo.toml"
 		"examples/CLAUDE.md"
 		"website/config.toml"
+		"crates/reinhardt-admin-cli/src/main.rs"
 	)
 	while IFS= read -r f; do
 		TARGETS+=("$f")
@@ -68,6 +69,11 @@ else
 	while IFS= read -r f; do
 		TARGETS+=("$f")
 	done < <(find "$REPO_ROOT/docs" -name "*.md" | sort | \
+	          sed "s|$REPO_ROOT/||")
+	# Quickstart and tutorial pages (Hugo content, not under docs/)
+	while IFS= read -r f; do
+		TARGETS+=("$f")
+	done < <(find "$REPO_ROOT/website/content" -name "*.md" 2>/dev/null | sort | \
 	          sed "s|$REPO_ROOT/||")
 fi
 
@@ -85,12 +91,19 @@ echo "Updating version references to $NEW_VER in $REPO_ROOT"
 
 AWK_PROG='
 BEGIN {
+	# Marker forms accepted:
+	#   # reinhardt-version-sync                    (TOML / shell / Python)
+	#   // reinhardt-version-sync                   (Rust / TypeScript regular comment)
+	#   <!-- reinhardt-version-sync -->             (Markdown / HTML)
+	#   //! <!-- reinhardt-version-sync -->         (Rust rustdoc inner-comment block)
+	#   <!-- reinhardt-version-sync:N --> + variant Rustdoc form (count = N)
 	marker_re      = "^[[:space:]]*(#|//)[[:space:]]*reinhardt-version-sync[[:space:]]*$"
-	marker_html_re = "^[[:space:]]*<!--[[:space:]]*reinhardt-version-sync[[:space:]]*-->[[:space:]]*$"
-	marker_html_n  = "^[[:space:]]*<!--[[:space:]]*reinhardt-version-sync:[0-9]+[[:space:]]*-->[[:space:]]*$"
+	marker_html_re = "^[[:space:]]*(//![[:space:]]+)?<!--[[:space:]]*reinhardt-version-sync[[:space:]]*-->[[:space:]]*$"
+	marker_html_n  = "^[[:space:]]*(//![[:space:]]+)?<!--[[:space:]]*reinhardt-version-sync:[0-9]+[[:space:]]*-->[[:space:]]*$"
 	version_re     = "[0-9]+\\.[0-9]+\\.[0-9]+(-[a-zA-Z0-9.]+)?"
-	fence_re       = "^[[:space:]]*```"
-	blank_re       = "^[[:space:]]*$"
+	# Code fence with optional rustdoc inner-comment prefix `//! `
+	fence_re       = "^[[:space:]]*(//![[:space:]]+)?```"
+	blank_re       = "^[[:space:]]*(//![[:space:]]*)?$"
 	state        = "SCANNING"
 	armed_count  = 0
 	in_code_block = 0

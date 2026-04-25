@@ -24,10 +24,15 @@ You should see version information for both commands. If not, visit
 
 ## Installing Reinhardt Admin CLI
 
-First, install the global tool for project generation:
+First, install the global tool for project generation. During the RC phase,
+only release-candidate versions are published to crates.io, so
+`cargo install` requires an explicit `--version`. The version below is
+auto-bumped by release-plz on each release. Once a stable release ships, the
+bare `cargo install reinhardt-admin-cli` will also work.
 
+<!-- reinhardt-version-sync -->
 ```bash
-cargo install reinhardt-admin-cli
+cargo install reinhardt-admin-cli --version "0.1.0-rc.21"
 ```
 
 ## Creating a Project

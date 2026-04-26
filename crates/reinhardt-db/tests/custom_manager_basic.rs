@@ -385,3 +385,108 @@ fn get_or_create_sql_via_trait_matches_inherent_method() {
 	assert_eq!(inherent_select, trait_select);
 	assert_eq!(inherent_insert, trait_insert);
 }
+
+#[rstest]
+#[case::postgres(DatabaseBackend::Postgres)]
+#[case::mysql(DatabaseBackend::MySql)]
+#[case::sqlite(DatabaseBackend::Sqlite)]
+fn bulk_create_sql_parity_across_backends(#[case] backend: DatabaseBackend) {
+	// Arrange
+	let manager = Manager::<Article>::new();
+	let models = vec![Article {
+		id: None,
+		title: "parity".into(),
+		is_archived: false,
+	}];
+
+	// Act
+	let inherent_sql = manager.bulk_create_sql(&models, backend);
+	let trait_sql = CustomManager::bulk_create_sql(&manager, &models, backend);
+
+	// Assert: trait path matches inherent path on every supported backend.
+	assert_eq!(inherent_sql, trait_sql);
+}
+
+#[rstest]
+fn get_or_create_sql_parity_with_defaults() {
+	// Arrange
+	let manager = Manager::<Article>::new();
+	let mut lookup = HashMap::new();
+	lookup.insert("title".into(), "Reinhardt Custom Managers".into());
+	let mut defaults = HashMap::new();
+	defaults.insert("is_archived".into(), "false".into());
+
+	// Act
+	let (inherent_select, inherent_insert) =
+		manager.get_or_create_sql(&lookup, &defaults, DatabaseBackend::Postgres);
+	let (trait_select, trait_insert) = CustomManager::get_or_create_sql(
+		&manager,
+		&lookup,
+		&defaults,
+		DatabaseBackend::Postgres,
+	);
+
+	// Assert: defaults map is preserved through trait dispatch.
+	assert_eq!(inherent_select, trait_select);
+	assert_eq!(inherent_insert, trait_insert);
+}
+
+#[rstest]
+fn delete_queryset_sql_via_trait_matches_inherent_method() {
+	// Arrange
+	let manager = Manager::<Article>::new();
+	let qs = manager.filter(
+		"is_archived",
+		FilterOperator::Eq,
+		FilterValue::Boolean(true),
+	);
+
+	// Act
+	let (inherent_sql, inherent_params) = manager.delete_queryset(&qs);
+	let (trait_sql, trait_params) = CustomManager::delete_queryset(&manager, &qs);
+
+	// Assert
+	assert_eq!(inherent_sql, trait_sql);
+	assert_eq!(inherent_params, trait_params);
+}
+
+#[rstest]
+fn update_queryset_sql_via_trait_matches_inherent_method() {
+	// Arrange
+	let manager = Manager::<Article>::new();
+	let qs = manager.filter(
+		"is_archived",
+		FilterOperator::Eq,
+		FilterValue::Boolean(false),
+	);
+	let updates: &[(&str, &str)] = &[("title", "renamed")];
+
+	// Act
+	let (inherent_sql, inherent_params) = manager.update_queryset(&qs, updates);
+	let (trait_sql, trait_params) = CustomManager::update_queryset(&manager, &qs, updates);
+
+	// Assert
+	assert_eq!(inherent_sql, trait_sql);
+	assert_eq!(inherent_params, trait_params);
+}
+
+#[rstest]
+fn user_defined_manager_inherits_sql_builders_via_default_impl() {
+	// Arrange: ActiveArticleManager only overrides `all()` and inherits
+	// every other method from the trait's default implementation. Verify the
+	// default impl reaches the same Manager<M>-backed SQL builder.
+	let active = ActiveArticleManager::default();
+	let manager = Manager::<Article>::new();
+	let models = vec![Article {
+		id: None,
+		title: "via custom".into(),
+		is_archived: false,
+	}];
+
+	// Act
+	let custom_sql = active.bulk_create_sql(&models, DatabaseBackend::Postgres);
+	let canonical_sql = manager.bulk_create_sql(&models, DatabaseBackend::Postgres);
+
+	// Assert: bit-exact SQL output regardless of dispatch path.
+	assert_eq!(custom_sql, canonical_sql);
+}

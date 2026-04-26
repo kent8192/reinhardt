@@ -334,11 +334,7 @@ pub trait CustomManager: Sized + Send + Sync {
 	where
 		Self::Model: Clone + serde::de::DeserializeOwned,
 	{
-		async move {
-			Manager::<Self::Model>::new()
-				.get_composite(pk_values)
-				.await
-		}
+		async move { Manager::<Self::Model>::new().get_composite(pk_values).await }
 	}
 
 	/// Insert a new record.
@@ -424,8 +420,7 @@ pub trait CustomManager: Sized + Send + Sync {
 		&'a self,
 		lookup_fields: HashMap<String, String>,
 		defaults: Option<HashMap<String, String>>,
-	) -> impl Future<Output = reinhardt_core::exception::Result<(Self::Model, bool)>> + Send + 'a
-	{
+	) -> impl Future<Output = reinhardt_core::exception::Result<(Self::Model, bool)>> + Send + 'a {
 		async move {
 			Manager::<Self::Model>::new()
 				.get_or_create(lookup_fields, defaults)

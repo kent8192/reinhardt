@@ -354,8 +354,7 @@ fn bulk_create_sql_via_trait_matches_inherent_method() {
 
 	// Act
 	let inherent_sql = manager.bulk_create_sql(&models, DatabaseBackend::Postgres);
-	let trait_sql =
-		CustomManager::bulk_create_sql(&manager, &models, DatabaseBackend::Postgres);
+	let trait_sql = CustomManager::bulk_create_sql(&manager, &models, DatabaseBackend::Postgres);
 
 	// Assert
 	assert_eq!(inherent_sql, trait_sql);
@@ -374,12 +373,8 @@ fn get_or_create_sql_via_trait_matches_inherent_method() {
 	// Act
 	let (inherent_select, inherent_insert) =
 		manager.get_or_create_sql(&lookup, &defaults, DatabaseBackend::Postgres);
-	let (trait_select, trait_insert) = CustomManager::get_or_create_sql(
-		&manager,
-		&lookup,
-		&defaults,
-		DatabaseBackend::Postgres,
-	);
+	let (trait_select, trait_insert) =
+		CustomManager::get_or_create_sql(&manager, &lookup, &defaults, DatabaseBackend::Postgres);
 
 	// Assert: trait dispatch produces identical SQL to the inherent path.
 	assert_eq!(inherent_select, trait_select);
@@ -419,12 +414,8 @@ fn get_or_create_sql_parity_with_defaults() {
 	// Act
 	let (inherent_select, inherent_insert) =
 		manager.get_or_create_sql(&lookup, &defaults, DatabaseBackend::Postgres);
-	let (trait_select, trait_insert) = CustomManager::get_or_create_sql(
-		&manager,
-		&lookup,
-		&defaults,
-		DatabaseBackend::Postgres,
-	);
+	let (trait_select, trait_insert) =
+		CustomManager::get_or_create_sql(&manager, &lookup, &defaults, DatabaseBackend::Postgres);
 
 	// Assert: defaults map is preserved through trait dispatch.
 	assert_eq!(inherent_select, trait_select);

@@ -54,6 +54,8 @@ struct ModelAttributesParsed {
 	table_name: Option<String>,
 	constraints: Option<Vec<ConstraintSpec>>,
 	unique_together: Vec<Vec<String>>, // Multiple Django-style unique_together constraints
+	/// Optional custom manager path: `manager = MyManager` (Issue #3980).
+	manager: Option<syn::Path>,
 }
 
 /// Validate a raw SQL expression to reject dangerous patterns.
@@ -125,6 +127,11 @@ struct ModelConfig {
 	app_label: String,
 	table_name: String,
 	constraints: Vec<ConstraintSpec>,
+	/// Custom manager type path from `manager = MyManager` (Issue #3980).
+	///
+	/// When `Some`, the macro emits an `impl HasCustomManager for Self`
+	/// that wires the model to the user-supplied manager type.
+	manager: Option<syn::Path>,
 }
 
 impl ModelConfig {
@@ -133,6 +140,7 @@ impl ModelConfig {
 		let mut app_label = None;
 		let mut table_name = None;
 		let mut constraints = Vec::new();
+		let mut manager: Option<syn::Path> = None;
 
 		for attr in attrs {
 			// Accept both #[model(...)] and #[model_config(...)] helper attributes
@@ -166,6 +174,15 @@ impl ModelConfig {
 			if let Some(tn) = model_attr.table_name {
 				table_name = Some(tn);
 			}
+			if let Some(m) = model_attr.manager {
+				if manager.is_some() {
+					return Err(syn::Error::new_spanned(
+						struct_name,
+						"#[model(manager = ...)] specified more than once",
+					));
+				}
+				manager = Some(m);
+			}
 		}
 
 		let table_name = table_name.ok_or_else(|| {
@@ -179,6 +196,7 @@ impl ModelConfig {
 			app_label: app_label.unwrap_or_else(|| "default".to_string()),
 			table_name,
 			constraints,
+			manager,
 		})
 	}
 
@@ -190,6 +208,7 @@ impl ModelConfig {
 		let mut table_name = None;
 		let mut constraints = None;
 		let mut unique_together = Vec::new();
+		let mut manager: Option<syn::Path> = None;
 
 		while !input.is_empty() {
 			let ident: Ident = input.parse()?;
@@ -201,6 +220,10 @@ impl ModelConfig {
 			} else if ident == "table_name" {
 				let value: LitStr = input.parse()?;
 				table_name = Some(value.value());
+			} else if ident == "manager" {
+				// Custom object manager type: `manager = MyManager` (Issue #3980).
+				let path: syn::Path = input.parse()?;
+				manager = Some(path);
 			} else if ident == "unique_together" {
 				// Tuple syntax: unique_together = ("field1", "field2")
 				use syn::punctuated::Punctuated;
@@ -245,6 +268,7 @@ impl ModelConfig {
 			table_name,
 			constraints,
 			unique_together,
+			manager,
 		})
 	}
 
@@ -2041,6 +2065,19 @@ pub(crate) fn model_derive_impl(mut input: DeriveInput) -> Result<TokenStream> {
 		syn::Ident::new(&format!("{}Fields", struct_name), struct_name.span());
 	let field_selector_struct = generate_field_selector_struct(struct_name, &field_infos);
 
+	// Conditionally emit `impl HasCustomManager for ...` when the model
+	// requested a custom manager via `#[model(manager = ...)]` (Issue #3980).
+	// Without this attribute we emit nothing, preserving complete backward
+	// compatibility with existing models.
+	let custom_manager_impl = match &model_config.manager {
+		Some(path) => quote! {
+			impl #generics #orm_crate::HasCustomManager for #struct_name #generics #where_clause {
+				type Manager = #path;
+			}
+		},
+		None => quote! {},
+	};
+
 	// Generate the Model implementation
 	let expanded = quote! {
 		// Generate composite PK type definition if needed
@@ -2135,6 +2172,10 @@ pub(crate) fn model_derive_impl(mut input: DeriveInput) -> Result<TokenStream> {
 
 			#relationship_metadata
 		}
+
+		// Conditional `impl HasCustomManager` (Issue #3980) — empty when the
+		// model did not opt in to a custom manager.
+		#custom_manager_impl
 
 		#registration_code
 

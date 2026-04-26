@@ -297,6 +297,83 @@ let pool = ConnectionPool::new_postgres("postgres://user:pass@localhost/db", con
 let conn = pool.acquire().await?;
 ```
 
+## Custom Object Managers
+
+Reinhardt supports Django-style customizable object managers via the
+`CustomManager` and `HasCustomManager` traits (see `orm::custom_manager`).
+Use them when you want to inject default filters, audit hooks, or access
+control before queries reach the database — without touching the existing
+`Model::objects()` API.
+
+The blanket `impl<M: Model> CustomManager for Manager<M>` ensures every
+existing manager already satisfies the trait, so adopting custom managers
+is fully opt-in and backward compatible.
+
+```rust,ignore
+use reinhardt_db::orm::custom_manager::CustomManager;
+use reinhardt_core::exception::Result;
+
+#[derive(Default)]
+struct ActiveUserManager;
+
+impl CustomManager for ActiveUserManager {
+    type Model = User;
+    fn new() -> Self { Self }
+
+    // Default filter: only return active users by default.
+    fn all(&self) -> reinhardt_db::orm::query::QuerySet<User> {
+        use reinhardt_db::orm::query::{Filter, FilterOperator, FilterValue};
+        reinhardt_db::orm::manager::Manager::<User>::new()
+            .all()
+            .filter(Filter::new(
+                "is_active".to_string(),
+                FilterOperator::Eq,
+                FilterValue::Boolean(true),
+            ))
+    }
+
+    // Veto saves with empty usernames.
+    fn before_save(&self, user: &mut User) -> Result<()> {
+        if user.username.is_empty() {
+            return Err(reinhardt_core::exception::Error::Database(
+                "username must not be empty".into(),
+            ));
+        }
+        Ok(())
+    }
+}
+
+#[reinhardt_macros::model(table_name = "users", manager = ActiveUserManager)]
+struct User {
+    #[field]
+    pub id: Option<i64>,
+    #[field]
+    pub username: String,
+    #[field]
+    pub is_active: bool,
+}
+
+// Use the configured manager:
+let active_users = User::custom_manager().all().fetch().await?;
+
+// The original API is unchanged:
+let all_users = User::objects().all().fetch().await?;
+```
+
+### Available Hooks
+
+| Hook | Trigger | Purpose |
+|------|---------|---------|
+| `before_save` | `create` / `update` | Validate / mutate model before insert |
+| `before_delete` | `delete` | Block destructive operations |
+| `before_bulk_update` | `bulk_update` | Validate / rewrite a batch |
+
+Each hook returns `Result<()>`; returning `Err(_)` vetoes the operation.
+
+See `crates/reinhardt-db/src/orm/custom_manager.rs` for the full trait
+surface and the related issue at
+<https://github.com/kent8192/reinhardt-web/issues/3980>.
+
 ## Module Organization
 
 `` `reinhardt-db` `` is organized into the following modules:

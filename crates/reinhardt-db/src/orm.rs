@@ -183,9 +183,13 @@ pub mod types;
 /// Manager module.
 pub mod manager;
 
+/// Custom object manager support (Issue #3980).
+pub mod custom_manager;
+
 // Unified query interface facade
 pub mod query;
 
+pub use custom_manager::{CustomManager, HasCustomManager};
 pub use manager::{
 	get_connection, init_database, init_database_with_pool_size, reinitialize_database,
 };

@@ -516,6 +516,14 @@ where
 		self
 	}
 
+	/// Returns the filters that have been applied to this `QuerySet`.
+	///
+	/// Useful for inspection in tests and for custom managers that need to
+	/// observe or assert on the active filter chain (Issue #3980).
+	pub fn filters(&self) -> &[Filter] {
+		&self.filters
+	}
+
 	/// Create a QuerySet from a subquery (FROM clause subquery / derived table)
 	///
 	/// This method creates a new QuerySet that uses a subquery as its data source

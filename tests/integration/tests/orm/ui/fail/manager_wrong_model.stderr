@@ -1,0 +1,16 @@
+error[E0271]: type mismatch resolving `<OtherManager as CustomManager>::Model == User`
+  --> tests/orm/ui/fail/manager_wrong_model.rs:30:61
+   |
+30 | #[model(app_label = "test", table_name = "users", manager = OtherManager)]
+   |                                                             ^^^^^^^^^^^^ type mismatch resolving `<OtherManager as CustomManager>::Model == User`
+   |
+note: expected this to be `User`
+  --> tests/orm/ui/fail/manager_wrong_model.rs:20:15
+   |
+20 |     type Model = Other;
+   |                  ^^^^^
+note: required by a bound in `reinhardt_db::orm::HasCustomManager::Manager`
+  --> $WORKSPACE/crates/reinhardt-db/src/orm/custom_manager.rs
+   |
+   |     type Manager: CustomManager<Model = Self> + Default;
+   |                                 ^^^^^^^^^^^^ required by this bound in `HasCustomManager::Manager`

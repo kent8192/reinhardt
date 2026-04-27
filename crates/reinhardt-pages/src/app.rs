@@ -56,6 +56,8 @@ pub struct ClientLauncher {
 	#[cfg_attr(not(wasm), allow(dead_code))]
 	root_selector: &'static str,
 	router_init: Option<Box<dyn FnOnce() -> Router>>,
+	#[cfg_attr(not(wasm), allow(dead_code))]
+	intercept_links: bool,
 }
 
 impl ClientLauncher {
@@ -64,6 +66,7 @@ impl ClientLauncher {
 		Self {
 			root_selector,
 			router_init: None,
+			intercept_links: true,
 		}
 	}
 
@@ -72,6 +75,29 @@ impl ClientLauncher {
 	/// The function is called once during `launch()` before the first render.
 	pub fn router<F: FnOnce() -> Router + 'static>(mut self, f: F) -> Self {
 		self.router_init = Some(Box::new(f));
+		self
+	}
+
+	/// Toggle built-in SPA link interception.
+	///
+	/// When enabled (the default), `launch()` installs a document-level
+	/// `click` listener that converts clicks on internal `<a href="/...">`
+	/// anchors into `Router::push` navigations, so a full page reload is
+	/// avoided.
+	///
+	/// The listener intentionally skips:
+	/// - external URLs (`href` not starting with `/`)
+	/// - `target="_blank"`
+	/// - `download` attribute
+	/// - `rel="external"` (whitespace-split, case-insensitive)
+	/// - clicks with Ctrl/Cmd/Shift modifier keys (so users can still
+	///   open links in a new tab/window)
+	///
+	/// Pass `false` to opt out — applications that already install their
+	/// own document-level link handler should disable this to avoid
+	/// double-handling.
+	pub fn intercept_links(mut self, enabled: bool) -> Self {
+		self.intercept_links = enabled;
 		self
 	}
 }
@@ -86,8 +112,10 @@ impl ClientLauncher {
 	/// 3. Initialises the router and stores it in the global thread-local
 	/// 4. Registers the `popstate` history listener (browser back/forward)
 	/// 5. Queries the DOM for `root_selector`; returns `Err` if not found
-	/// 6. Initial render: `render_current()` → `cleanup_reactive_nodes()` → `mount()`
-	/// 7. Creates a reactive `Effect` that re-renders on route changes; leaks it
+	/// 6. Installs the SPA link-interception listener on `document`
+	///    (when `intercept_links` is `true`, the default)
+	/// 7. Initial render: `render_current()` → `cleanup_reactive_nodes()` → `mount()`
+	/// 8. Creates a reactive `Effect` that re-renders on route changes; leaks it
 	///    intentionally so it persists for the application lifetime
 	pub fn launch(self) -> Result<(), wasm_bindgen::JsValue> {
 		#[cfg(feature = "console_error_panic_hook")]
@@ -109,6 +137,11 @@ impl ClientLauncher {
 		let document = window
 			.document()
 			.ok_or_else(|| wasm_bindgen::JsValue::from_str("no document on window"))?;
+
+		if self.intercept_links {
+			install_link_interceptor(&document)?;
+		}
+
 		let root_el = document
 			.query_selector(self.root_selector)
 			.map_err(|e| e)?
@@ -152,6 +185,106 @@ impl ClientLauncher {
 	}
 }
 
+/// Anchor attributes relevant to the link interceptor decision.
+///
+/// Extracted into a plain struct so the decision logic in
+/// [`should_intercept`] stays a pure function and can be unit-tested on
+/// the host without a real DOM.
+#[cfg_attr(not(any(wasm, test)), allow(dead_code))]
+struct AnchorAttrs<'a> {
+	has_modifier_key: bool,
+	href: Option<&'a str>,
+	target: Option<&'a str>,
+	has_download: bool,
+	rel: Option<&'a str>,
+}
+
+/// Decide whether the link interceptor should hijack a click.
+///
+/// Returns `Some(href)` if the click should be turned into a SPA push,
+/// or `None` to let the browser handle the click normally.
+#[cfg_attr(not(any(wasm, test)), allow(dead_code))]
+fn should_intercept<'a>(attrs: &AnchorAttrs<'a>) -> Option<&'a str> {
+	if attrs.has_modifier_key {
+		return None;
+	}
+	let href = attrs.href?;
+	// Internal link: starts with `/` but not `//` (protocol-relative URLs are
+	// treated as external by the browser).
+	if !href.starts_with('/') || href.starts_with("//") {
+		return None;
+	}
+	if attrs.target == Some("_blank") {
+		return None;
+	}
+	if attrs.has_download {
+		return None;
+	}
+	if let Some(rel) = attrs.rel
+		&& rel
+			.split_ascii_whitespace()
+			.any(|w| w.eq_ignore_ascii_case("external"))
+	{
+		return None;
+	}
+	Some(href)
+}
+
+/// Install a document-level click listener that converts clicks on internal
+/// `<a href="/...">` anchors into `Router::push` navigations.
+///
+/// Skips external links, `target="_blank"`, `download`, `rel="external"`,
+/// and modifier-key clicks (so the user can still open in a new tab).
+///
+/// The closure is leaked via `closure.forget()` so the listener lives for
+/// the entire WASM module lifetime — same posture as `setup_popstate_listener`.
+#[cfg(wasm)]
+fn install_link_interceptor(document: &web_sys::Document) -> Result<(), wasm_bindgen::JsValue> {
+	use wasm_bindgen::JsCast;
+	use wasm_bindgen::closure::Closure;
+
+	let closure = Closure::wrap(Box::new(move |event: web_sys::MouseEvent| {
+		// Walk up the DOM looking for the closest <a> ancestor.
+		let Some(target) = event.target() else {
+			return;
+		};
+		let mut el: Option<web_sys::Element> = target.dyn_ref::<web_sys::Element>().cloned();
+		while let Some(ref e) = el {
+			if e.tag_name().eq_ignore_ascii_case("A") {
+				break;
+			}
+			el = e.parent_element();
+		}
+		let Some(anchor) = el else {
+			return;
+		};
+
+		let href = anchor.get_attribute("href");
+		let target_attr = anchor.get_attribute("target");
+		let rel_attr = anchor.get_attribute("rel");
+		let attrs = AnchorAttrs {
+			has_modifier_key: event.ctrl_key() || event.meta_key() || event.shift_key(),
+			href: href.as_deref(),
+			target: target_attr.as_deref(),
+			has_download: anchor.has_attribute("download"),
+			rel: rel_attr.as_deref(),
+		};
+
+		let Some(href) = should_intercept(&attrs) else {
+			return;
+		};
+
+		event.prevent_default();
+		with_router(|r| {
+			let _ = r.push(href);
+		});
+	}) as Box<dyn FnMut(_)>);
+
+	document.add_event_listener_with_callback("click", closure.as_ref().unchecked_ref())?;
+	closure.forget();
+	Ok(())
+}
+
 #[cfg(test)]
 mod tests {
 	use super::*;
@@ -179,5 +312,149 @@ mod tests {
 		let result = std::panic::catch_unwind(|| with_router(|_r| ()));
 
 		assert!(result.is_err());
+	}
+
+	#[rstest]
+	fn test_client_launcher_intercept_links_default_true() {
+		// Arrange / Act
+		let launcher = ClientLauncher::new("#root");
+
+		// Assert
+		assert!(launcher.intercept_links);
+	}
+
+	#[rstest]
+	fn test_client_launcher_intercept_links_false_overrides_default() {
+		// Arrange / Act
+		let launcher = ClientLauncher::new("#root").intercept_links(false);
+
+		// Assert
+		assert!(!launcher.intercept_links);
+	}
+
+	// --- should_intercept pure-function tests ---
+
+	fn attrs(href: Option<&str>) -> AnchorAttrs<'_> {
+		AnchorAttrs {
+			has_modifier_key: false,
+			href,
+			target: None,
+			has_download: false,
+			rel: None,
+		}
+	}
+
+	#[rstest]
+	fn test_should_intercept_internal_root_relative_link() {
+		// Arrange
+		let a = attrs(Some("/users/"));
+		// Act
+		let result = should_intercept(&a);
+		// Assert
+		assert_eq!(result, Some("/users/"));
+	}
+
+	#[rstest]
+	fn test_should_intercept_skips_external_url() {
+		// Arrange
+		let a = attrs(Some("https://example.com/page"));
+		// Act / Assert
+		assert_eq!(should_intercept(&a), None);
+	}
+
+	#[rstest]
+	fn test_should_intercept_skips_protocol_relative_url() {
+		// Arrange
+		let a = attrs(Some("//example.com/page"));
+		// Act / Assert
+		assert_eq!(should_intercept(&a), None);
+	}
+
+	#[rstest]
+	fn test_should_intercept_skips_anchor_without_href() {
+		// Arrange
+		let a = attrs(None);
+		// Act / Assert
+		assert_eq!(should_intercept(&a), None);
+	}
+
+	#[rstest]
+	fn test_should_intercept_skips_relative_link() {
+		// Arrange
+		let a = attrs(Some("relative/path"));
+		// Act / Assert
+		assert_eq!(should_intercept(&a), None);
+	}
+
+	#[rstest]
+	fn test_should_intercept_skips_target_blank() {
+		// Arrange
+		let mut a = attrs(Some("/users/"));
+		a.target = Some("_blank");
+		// Act / Assert
+		assert_eq!(should_intercept(&a), None);
+	}
+
+	#[rstest]
+	fn test_should_intercept_allows_target_self() {
+		// Arrange
+		let mut a = attrs(Some("/users/"));
+		a.target = Some("_self");
+		// Act / Assert
+		assert_eq!(should_intercept(&a), Some("/users/"));
+	}
+
+	#[rstest]
+	fn test_should_intercept_skips_download_attribute() {
+		// Arrange
+		let mut a = attrs(Some("/files/report.pdf"));
+		a.has_download = true;
+		// Act / Assert
+		assert_eq!(should_intercept(&a), None);
+	}
+
+	#[rstest]
+	fn test_should_intercept_skips_rel_external() {
+		// Arrange
+		let mut a = attrs(Some("/users/"));
+		a.rel = Some("external");
+		// Act / Assert
+		assert_eq!(should_intercept(&a), None);
+	}
+
+	#[rstest]
+	fn test_should_intercept_skips_compound_rel_with_external() {
+		// Arrange
+		let mut a = attrs(Some("/users/"));
+		a.rel = Some("noopener external");
+		// Act / Assert
+		assert_eq!(should_intercept(&a), None);
+	}
+
+	#[rstest]
+	fn test_should_intercept_is_case_insensitive_for_rel() {
+		// Arrange
+		let mut a = attrs(Some("/users/"));
+		a.rel = Some("EXTERNAL");
+		// Act / Assert
+		assert_eq!(should_intercept(&a), None);
+	}
+
+	#[rstest]
+	fn test_should_intercept_allows_other_rel_values() {
+		// Arrange
+		let mut a = attrs(Some("/users/"));
+		a.rel = Some("noopener noreferrer");
+		// Act / Assert
+		assert_eq!(should_intercept(&a), Some("/users/"));
+	}
+
+	#[rstest]
+	fn test_should_intercept_skips_modifier_key_click() {
+		// Arrange
+		let mut a = attrs(Some("/users/"));
+		a.has_modifier_key = true;
+		// Act / Assert
+		assert_eq!(should_intercept(&a), None);
 	}
 }

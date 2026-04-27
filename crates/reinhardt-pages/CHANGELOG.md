@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- *(pages)* `ClientLauncher::intercept_links(bool)` for built-in SPA link
+  interception (default: `true`). Skips external URLs, `target="_blank"`,
+  `download`, `rel="external"`, and modifier-key clicks. Closes #3994.
+
+### Changed
+
+- *(pages)* `ClientLauncher::launch()` now installs a document-level click
+  listener by default. Apps with hand-rolled SPA link interception should
+  call `.intercept_links(false)` to opt out.
+
 ## [0.1.0-rc.22](https://github.com/kent8192/reinhardt-web/compare/reinhardt-pages@v0.1.0-rc.21...reinhardt-pages@v0.1.0-rc.22) - 2026-04-25
 
 ### Testing

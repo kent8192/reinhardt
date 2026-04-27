@@ -28,12 +28,64 @@ use reinhardt_db::backends::connection::DatabaseConnection as BackendsConnection
 use reinhardt_db::backends::dialect::PostgresBackend;
 use reinhardt_db::orm::connection::{DatabaseBackend, DatabaseConnection};
 use reinhardt_di::{InjectionContext, SingletonScope};
+use reinhardt_query::prelude::{
+	ColumnDef, Expr, OnConflict, PostgresQueryBuilder, Query, QueryBuilder, Value,
+};
 use reinhardt_test::fixtures::shared_postgres::shared_db_pool;
 use reinhardt_test::fixtures::wasm::e2e_cdp::*;
 use rstest::*;
-use sqlx::Executor;
 use std::net::SocketAddr;
 use std::sync::Arc;
+
+// ============================================================================
+// SeaQuery <-> sqlx bridge helpers
+// ============================================================================
+//
+// `reinhardt-query` produces a `(sql, Values)` pair from `build_*` calls;
+// sqlx requires each value to be bound individually via `.bind()`. The two
+// helpers below wrap that boilerplate so fixture code can express its DDL
+// and DML through SeaQuery (per project convention) without sprinkling
+// `.bind()` chains in every call site.
+
+/// Bind a single SeaQuery `Value` to a sqlx Postgres query.
+///
+/// Pattern-matches the `Value` variants used by this fixture (Bool, String,
+/// Uuid). Other variants are not currently used and trigger a panic; extend
+/// the match arms when new types become necessary.
+fn bind_pg_value<'q>(
+	query: sqlx::query::Query<'q, sqlx::Postgres, sqlx::postgres::PgArguments>,
+	value: Value,
+) -> sqlx::query::Query<'q, sqlx::Postgres, sqlx::postgres::PgArguments> {
+	match value {
+		Value::Bool(v) => query.bind(v),
+		Value::String(v) => query.bind(v.map(|b| *b)),
+		Value::Uuid(v) => query.bind(v.map(|b| *b)),
+		other => panic!("bind_pg_value: unsupported Value variant {:?}", other),
+	}
+}
+
+/// Execute a SeaQuery DML statement (e.g., INSERT) against a Postgres pool.
+///
+/// Binds all values from `Values` to the prepared statement in order.
+async fn execute_dml(pool: &sqlx::PgPool, sql: &str, values: Vec<Value>, context: &str) {
+	let mut q = sqlx::query(sql);
+	for v in values {
+		q = bind_pg_value(q, v);
+	}
+	q.execute(pool)
+		.await
+		.unwrap_or_else(|e| panic!("Failed to execute DML ({}): {}", context, e));
+}
+
+/// Execute a SeaQuery DDL statement (CREATE/DROP/TRUNCATE) against a Postgres pool.
+///
+/// DDL statements have no bind parameters; the generated SQL is executed verbatim.
+async fn execute_ddl(pool: &sqlx::PgPool, sql: &str, context: &str) {
+	sqlx::query(sql)
+		.execute(pool)
+		.await
+		.unwrap_or_else(|e| panic!("Failed to execute DDL ({}): {}", context, e));
+}
 
 // ============================================================================
 // Constants
@@ -228,88 +280,183 @@ async fn build_e2e_context<F>(
 where
 	F: FnOnce(&Arc<AdminSite>),
 {
+	let builder = PostgresQueryBuilder::new();
+
 	// ---- Database setup ----
 
-	pool.execute(
-		"CREATE TABLE IF NOT EXISTS test_models (
-			id SERIAL PRIMARY KEY,
-			name VARCHAR(255) NOT NULL,
-			status VARCHAR(50) DEFAULT 'active',
-			description TEXT,
-			created_at TIMESTAMPTZ DEFAULT NOW()
-		)",
-	)
-	.await
-	.expect("Failed to create test_models table");
+	// CREATE TABLE IF NOT EXISTS test_models (...)
+	let mut create_test_models = Query::create_table();
+	create_test_models
+		.table("test_models")
+		.if_not_exists()
+		.col(
+			ColumnDef::new("id")
+				.integer()
+				.primary_key(true)
+				.auto_increment(true)
+				.not_null(true),
+		)
+		.col(ColumnDef::new("name").string_len(255).not_null(true))
+		.col(
+			ColumnDef::new("status")
+				.string_len(50)
+				.default(Expr::val("active").into()),
+		)
+		.col(ColumnDef::new("description").text())
+		.col(
+			ColumnDef::new("created_at")
+				.timestamp_with_time_zone()
+				.default(Expr::current_timestamp().into()),
+		);
+	let (sql, _) = builder.build_create_table(&create_test_models);
+	execute_ddl(&pool, &sql, "create test_models").await;
 
-	pool.execute("TRUNCATE TABLE test_models RESTART IDENTITY CASCADE")
-		.await
-		.expect("Failed to truncate test_models");
+	// TRUNCATE TABLE test_models RESTART IDENTITY CASCADE
+	let mut truncate_test_models = Query::truncate_table();
+	truncate_test_models
+		.table("test_models")
+		.restart_identity()
+		.cascade();
+	let (sql, _) = builder.build_truncate_table(&truncate_test_models);
+	execute_ddl(&pool, &sql, "truncate test_models").await;
 
-	pool.execute(
-		"INSERT INTO test_models (name, status) VALUES
-		 ('Alice', 'active'),
-		 ('Bob', 'inactive'),
-		 ('Charlie', 'active')",
-	)
-	.await
-	.expect("Failed to insert test data");
+	// Seed test_models with three rows.
+	let mut seed_test_models = Query::insert();
+	seed_test_models
+		.into_table("test_models")
+		.columns(["name", "status"])
+		.values_panic(["Alice", "active"])
+		.values_panic(["Bob", "inactive"])
+		.values_panic(["Charlie", "active"]);
+	let (sql, values) = builder.build_insert(&seed_test_models);
+	execute_dml(&pool, &sql, values.0, "seed test_models").await;
 
-	// Second table for `e2e_multi_models`. Created unconditionally because
-	// CREATE TABLE IF NOT EXISTS is harmless for fixtures that ignore it.
-	pool.execute(
-		"CREATE TABLE IF NOT EXISTS test_models_b (
-			id SERIAL PRIMARY KEY,
-			name VARCHAR(255) NOT NULL
-		)",
-	)
-	.await
-	.expect("Failed to create test_models_b table");
+	// CREATE TABLE IF NOT EXISTS test_models_b (...)
+	// Created unconditionally because IF NOT EXISTS is harmless for fixtures
+	// that don't register a TestModelB.
+	let mut create_test_models_b = Query::create_table();
+	create_test_models_b
+		.table("test_models_b")
+		.if_not_exists()
+		.col(
+			ColumnDef::new("id")
+				.integer()
+				.primary_key(true)
+				.auto_increment(true)
+				.not_null(true),
+		)
+		.col(ColumnDef::new("name").string_len(255).not_null(true));
+	let (sql, _) = builder.build_create_table(&create_test_models_b);
+	execute_ddl(&pool, &sql, "create test_models_b").await;
 
-	pool.execute("TRUNCATE TABLE test_models_b RESTART IDENTITY CASCADE")
-		.await
-		.expect("Failed to truncate test_models_b");
+	let mut truncate_test_models_b = Query::truncate_table();
+	truncate_test_models_b
+		.table("test_models_b")
+		.restart_identity()
+		.cascade();
+	let (sql, _) = builder.build_truncate_table(&truncate_test_models_b);
+	execute_ddl(&pool, &sql, "truncate test_models_b").await;
 
-	pool.execute("DROP TABLE IF EXISTS auth_user CASCADE")
-		.await
-		.expect("Failed to drop auth_user");
+	// DROP TABLE IF EXISTS auth_user CASCADE
+	let mut drop_auth_user = Query::drop_table();
+	drop_auth_user.table("auth_user").if_exists().cascade();
+	let (sql, _) = builder.build_drop_table(&drop_auth_user);
+	execute_ddl(&pool, &sql, "drop auth_user").await;
 
-	pool.execute(
-		"CREATE TABLE auth_user (
-			id UUID PRIMARY KEY,
-			username VARCHAR(150) NOT NULL,
-			email VARCHAR(254) NOT NULL DEFAULT '',
-			first_name VARCHAR(150) NOT NULL DEFAULT '',
-			last_name VARCHAR(150) NOT NULL DEFAULT '',
-			password_hash TEXT,
-			last_login TIMESTAMPTZ,
-			is_active BOOLEAN NOT NULL DEFAULT true,
-			is_staff BOOLEAN NOT NULL DEFAULT false,
-			is_superuser BOOLEAN NOT NULL DEFAULT false,
-			date_joined TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-			user_permissions TEXT NOT NULL DEFAULT '[]',
-			groups TEXT NOT NULL DEFAULT '[]'
-		)",
-	)
-	.await
-	.expect("Failed to create auth_user table");
+	// CREATE TABLE auth_user (...)
+	let mut create_auth_user = Query::create_table();
+	create_auth_user
+		.table("auth_user")
+		.col(ColumnDef::new("id").uuid().primary_key(true).not_null(true))
+		.col(ColumnDef::new("username").string_len(150).not_null(true))
+		.col(
+			ColumnDef::new("email")
+				.string_len(254)
+				.not_null(true)
+				.default(Expr::val("").into()),
+		)
+		.col(
+			ColumnDef::new("first_name")
+				.string_len(150)
+				.not_null(true)
+				.default(Expr::val("").into()),
+		)
+		.col(
+			ColumnDef::new("last_name")
+				.string_len(150)
+				.not_null(true)
+				.default(Expr::val("").into()),
+		)
+		.col(ColumnDef::new("password_hash").text())
+		.col(ColumnDef::new("last_login").timestamp_with_time_zone())
+		.col(
+			ColumnDef::new("is_active")
+				.boolean()
+				.not_null(true)
+				.default(Expr::val(true).into()),
+		)
+		.col(
+			ColumnDef::new("is_staff")
+				.boolean()
+				.not_null(true)
+				.default(Expr::val(false).into()),
+		)
+		.col(
+			ColumnDef::new("is_superuser")
+				.boolean()
+				.not_null(true)
+				.default(Expr::val(false).into()),
+		)
+		.col(
+			ColumnDef::new("date_joined")
+				.timestamp_with_time_zone()
+				.not_null(true)
+				.default(Expr::current_timestamp().into()),
+		)
+		.col(
+			ColumnDef::new("user_permissions")
+				.text()
+				.not_null(true)
+				.default(Expr::val("[]").into()),
+		)
+		.col(
+			ColumnDef::new("groups")
+				.text()
+				.not_null(true)
+				.default(Expr::val("[]").into()),
+		);
+	let (sql, _) = builder.build_create_table(&create_auth_user);
+	execute_ddl(&pool, &sql, "create auth_user").await;
 
 	let hasher = Argon2Hasher::new();
 	let password_hash = hasher
 		.hash(TEST_PASSWORD)
 		.expect("Failed to hash test password");
 
-	sqlx::query(
-		"INSERT INTO auth_user (id, username, password_hash, is_active, is_staff, date_joined)
-		 VALUES ($1, $2, $3, true, true, NOW())
-		 ON CONFLICT (id) DO UPDATE SET password_hash = $3, is_staff = true, is_active = true",
-	)
-	.bind(uuid::Uuid::parse_str(TEST_USER_UUID).unwrap())
-	.bind(TEST_USERNAME)
-	.bind(&password_hash)
-	.execute(&pool)
-	.await
-	.expect("Failed to insert test staff user");
+	// INSERT staff user; ON CONFLICT (id) refresh password_hash/is_staff/is_active
+	// from the EXCLUDED row (which carries the values we just attempted to insert).
+	// `date_joined` is omitted so the column DEFAULT (CURRENT_TIMESTAMP) applies.
+	let mut insert_staff = Query::insert();
+	insert_staff
+		.into_table("auth_user")
+		.columns(["id", "username", "password_hash", "is_active", "is_staff"])
+		.values(vec![
+			Value::Uuid(Some(Box::new(
+				uuid::Uuid::parse_str(TEST_USER_UUID).expect("valid TEST_USER_UUID"),
+			))),
+			Value::String(Some(Box::new(TEST_USERNAME.to_string()))),
+			Value::String(Some(Box::new(password_hash.clone()))),
+			Value::Bool(Some(true)),
+			Value::Bool(Some(true)),
+		])
+		.expect("staff user value count matches column count")
+		.on_conflict(
+			OnConflict::column("id")
+				.update_columns(["password_hash", "is_staff", "is_active"])
+				.to_owned(),
+		);
+	let (sql, values) = builder.build_insert(&insert_staff);
+	execute_dml(&pool, &sql, values.0, "insert staff user").await;
 
 	// ---- Build router ----
 
@@ -580,17 +727,28 @@ async fn create_non_staff_user(pool: &sqlx::PgPool, username: &str, password: &s
 		.hash(password)
 		.expect("Failed to hash non-staff password");
 
-	sqlx::query(
-		"INSERT INTO auth_user (id, username, password_hash, is_active, is_staff, date_joined)
-		 VALUES ($1, $2, $3, true, false, NOW())
-		 ON CONFLICT (id) DO UPDATE SET password_hash = $3, is_staff = false, is_active = true",
-	)
-	.bind(uuid::Uuid::parse_str(NON_STAFF_UUID).unwrap())
-	.bind(username)
-	.bind(&password_hash)
-	.execute(pool)
-	.await
-	.expect("Failed to insert non-staff user");
+	let builder = PostgresQueryBuilder::new();
+
+	let mut stmt = Query::insert();
+	stmt.into_table("auth_user")
+		.columns(["id", "username", "password_hash", "is_active", "is_staff"])
+		.values(vec![
+			Value::Uuid(Some(Box::new(
+				uuid::Uuid::parse_str(NON_STAFF_UUID).expect("valid NON_STAFF_UUID"),
+			))),
+			Value::String(Some(Box::new(username.to_string()))),
+			Value::String(Some(Box::new(password_hash))),
+			Value::Bool(Some(true)),
+			Value::Bool(Some(false)),
+		])
+		.expect("non-staff user value count matches column count")
+		.on_conflict(
+			OnConflict::column("id")
+				.update_columns(["password_hash", "is_staff", "is_active"])
+				.to_owned(),
+		);
+	let (sql, values) = builder.build_insert(&stmt);
+	execute_dml(pool, &sql, values.0, "insert non-staff user").await;
 }
 
 // ============================================================================

@@ -1,7 +1,8 @@
 //! WASM client application launcher.
 
-use crate::router::Router;
+use crate::router::{PathPattern, Router};
 use std::cell::RefCell;
+use std::collections::HashMap;
 
 #[cfg(wasm)]
 use crate::component::PageExt as _;
@@ -62,6 +63,8 @@ pub struct ClientLauncher {
 	before_launch_hooks: Vec<BeforeLaunchHook>,
 	#[cfg_attr(not(wasm), allow(dead_code))]
 	after_launch_hooks: Vec<AfterLaunchHook>,
+	#[cfg_attr(not(wasm), allow(dead_code))]
+	path_subscriptions: Vec<PathSubscription>,
 }
 
 /// Context passed to [`ClientLauncher::after_launch`] callbacks.
@@ -101,6 +104,108 @@ type BeforeLaunchHook = Box<dyn FnOnce()>;
 /// borrow of the launcher's [`LaunchCtx`].
 type AfterLaunchHook = Box<dyn FnOnce(&LaunchCtx<'_>)>;
 
+/// Path parameters extracted from a route match.
+///
+/// Re-exposed as a type alias so the public API does not leak the
+/// `HashMap` constructor at call sites; users can write
+/// `fn handle(ctx: &PathCtx) { let id = ctx.params().get("id"); }`.
+pub type PathParams = HashMap<String, String>;
+
+/// Context passed to [`ClientLauncher::on_path`] /
+/// [`ClientLauncher::on_path_pattern`] callbacks.
+///
+/// Borrows the current `document`, the matched path string, and the
+/// extracted path parameters; never owns them.
+pub struct PathCtx<'a> {
+	#[cfg_attr(not(wasm), allow(dead_code))]
+	document: &'a web_sys::Document,
+	path: &'a str,
+	params: &'a PathParams,
+}
+
+impl<'a> PathCtx<'a> {
+	/// The current `document`. Only useful in WASM builds; on the host
+	/// the underlying type is still defined but no real DOM exists.
+	pub fn document(&self) -> &web_sys::Document {
+		self.document
+	}
+
+	/// The currently active path (e.g. `"/orgs/foo/"`).
+	pub fn path(&self) -> &str {
+		self.path
+	}
+
+	/// Path parameters extracted by the matched pattern (e.g. `{ "slug": "foo" }`).
+	///
+	/// For exact-match `on_path` registrations this is always empty.
+	pub fn params(&self) -> &PathParams {
+		self.params
+	}
+
+	/// Idempotent body-level mount.
+	///
+	/// If `document.getElementById(id)` already returns an element,
+	/// this is a no-op. Otherwise renders `factory()` and appends the
+	/// resulting root element to `document.body`.
+	///
+	/// Useful for installing app-level overlays (toast containers,
+	/// modals) in `on_path` callbacks without hand-rolling the
+	/// "mount once" guard.
+	#[cfg(wasm)]
+	pub fn ensure_portal<F>(&self, id: &str, factory: F)
+	where
+		F: FnOnce() -> crate::component::Page,
+	{
+		if self.document.get_element_by_id(id).is_some() {
+			return;
+		}
+
+		let page = factory();
+		let html = page.render_to_string();
+
+		let Some(body) = self.document.body() else {
+			return;
+		};
+		let Ok(wrapper) = self.document.create_element("div") else {
+			return;
+		};
+		wrapper.set_inner_html(&html);
+
+		// Convention: factory output is a single root element. Append the
+		// first element child if present so the caller's `id` lands on the
+		// outermost element they wrote; fall back to the wrapper otherwise
+		// so something is always inserted.
+		if let Some(child) = wrapper.first_element_child() {
+			let _ = body.append_child(&child);
+		} else {
+			let _ = body.append_child(&wrapper);
+		}
+	}
+
+	/// Host-side stub for `ensure_portal`. No DOM exists, so the call
+	/// is a no-op.
+	#[cfg(not(wasm))]
+	pub fn ensure_portal<F>(&self, _id: &str, _factory: F)
+	where
+		F: FnOnce() -> crate::component::Page,
+	{
+	}
+}
+
+/// Internal record produced by every `.on_path` / `.on_path_pattern` call.
+///
+/// `last_params` tracks the previous match state so the Effect can
+/// detect transitions (entering a match, or a parameter-set change
+/// inside the same pattern) without re-firing on every render.
+struct PathSubscription {
+	#[cfg_attr(not(wasm), allow(dead_code))]
+	pattern: PathPattern,
+	#[cfg_attr(not(wasm), allow(dead_code))]
+	callback: Box<dyn Fn(&PathCtx<'_>) + 'static>,
+	#[cfg_attr(not(wasm), allow(dead_code))]
+	last_params: RefCell<Option<HashMap<String, String>>>,
+}
+
 impl ClientLauncher {
 	/// Create a new launcher targeting the given CSS selector (e.g. `"#root"`).
 	pub fn new(root_selector: &'static str) -> Self {
@@ -110,6 +215,7 @@ impl ClientLauncher {
 			intercept_links: true,
 			before_launch_hooks: Vec::new(),
 			after_launch_hooks: Vec::new(),
+			path_subscriptions: Vec::new(),
 		}
 	}
 
@@ -176,6 +282,52 @@ impl ClientLauncher {
 		self.after_launch_hooks.push(Box::new(hook));
 		self
 	}
+
+	/// Register a side effect that fires on transitions into `path` (exact match).
+	///
+	/// The callback receives a [`PathCtx`] with the current document and
+	/// path; for exact-match registrations, `params()` is always empty.
+	///
+	/// Internally each registration becomes a leaked reactive `Effect`,
+	/// so callers never write `std::mem::forget` themselves. The Effect
+	/// fires when the application enters the matching path; it does
+	/// **not** fire on every render of the same path. Leaving the path
+	/// does not fire the callback either — register a separate
+	/// `on_path` for the destination if you need exit cleanup.
+	pub fn on_path<F>(mut self, path: &'static str, callback: F) -> Self
+	where
+		F: Fn(&PathCtx<'_>) + 'static,
+	{
+		self.path_subscriptions.push(PathSubscription {
+			pattern: PathPattern::new(path),
+			callback: Box::new(callback),
+			last_params: RefCell::new(None),
+		});
+		self
+	}
+
+	/// Register a side effect that fires on transitions into any path
+	/// matching `pattern`.
+	///
+	/// The pattern syntax is the same as `Router::route` (e.g.
+	/// `"/orgs/{slug}/"` or `"/static/{path:*}/"`). The callback fires
+	/// when:
+	/// - the app enters a path that matches the pattern, OR
+	/// - the path still matches but the extracted parameters changed
+	///   (e.g. `/orgs/foo/` → `/orgs/bar/`).
+	///
+	/// Re-renders that do not change the path leave the callback dormant.
+	pub fn on_path_pattern<F>(mut self, pattern: &'static str, callback: F) -> Self
+	where
+		F: Fn(&PathCtx<'_>) + 'static,
+	{
+		self.path_subscriptions.push(PathSubscription {
+			pattern: PathPattern::new(pattern),
+			callback: Box::new(callback),
+			last_params: RefCell::new(None),
+		});
+		self
+	}
 }
 
 #[cfg(wasm)]
@@ -197,6 +349,9 @@ impl ClientLauncher {
 	///    and the root element
 	/// 10. Creates a reactive `Effect` that re-renders on route changes;
 	///    leaks it intentionally so it persists for the application lifetime
+	/// 11. Registers one leaked reactive `Effect` per `on_path` /
+	///    `on_path_pattern` subscription; each fires only on transitions
+	///    into a matching path (not on every render)
 	pub fn launch(mut self) -> Result<(), wasm_bindgen::JsValue> {
 		#[cfg(feature = "console_error_panic_hook")]
 		console_error_panic_hook::set_once();
@@ -278,6 +433,53 @@ impl ClientLauncher {
 		// Intentional leak: Effect must persist for the entire application lifetime.
 		// WASM modules never terminate, so there is no destructor to run.
 		std::mem::forget(_effect);
+
+		// Step 11: register one leaked Effect per path subscription. Each
+		// Effect re-reads the router's `current_path` Signal, so the
+		// reactive system wakes them on navigation.
+		for sub in self.path_subscriptions.into_iter() {
+			let PathSubscription {
+				pattern,
+				callback,
+				last_params,
+			} = sub;
+			let document_for_effect = document.clone();
+
+			let sub_effect = crate::reactive::Effect::new(move || {
+				// Subscribe to the path Signal — Signal::get() registers
+				// this Effect as a dependent.
+				let path_string: String = with_router(|r| r.current_path().get());
+
+				let new_match: Option<HashMap<String, String>> =
+					pattern.matches(&path_string).map(|(p, _)| p);
+
+				// Compare against the previous match state to detect
+				// transitions; release the borrow before invoking user code.
+				let should_fire = {
+					let mut prev = last_params.borrow_mut();
+					let fire = match (&*prev, &new_match) {
+						(None, Some(_)) => true,
+						(Some(_), None) => false,
+						(Some(a), Some(b)) => a != b,
+						(None, None) => false,
+					};
+					*prev = new_match.clone();
+					fire
+				};
+
+				if should_fire
+					&& let Some(params) = new_match
+				{
+					let ctx = PathCtx {
+						document: &document_for_effect,
+						path: &path_string,
+						params: &params,
+					};
+					callback(&ctx);
+				}
+			});
+			std::mem::forget(sub_effect);
+		}
 
 		Ok(())
 	}
@@ -593,6 +795,114 @@ mod tests {
 			.after_launch(|_ctx: &LaunchCtx<'_>| { /* hook 2 */ });
 		// Assert
 		assert_eq!(launcher.after_launch_hooks.len(), 2);
+	}
+
+	// --- on_path / on_path_pattern builder tests ---
+
+	#[rstest]
+	fn test_path_subscriptions_start_empty() {
+		// Arrange / Act
+		let launcher = ClientLauncher::new("#root");
+		// Assert
+		assert!(launcher.path_subscriptions.is_empty());
+	}
+
+	#[rstest]
+	fn test_on_path_appends_exact_subscription() {
+		// Arrange / Act
+		let launcher = ClientLauncher::new("#root")
+			.on_path("/", |_ctx: &PathCtx<'_>| {})
+			.on_path("/users/", |_ctx: &PathCtx<'_>| {});
+		// Assert
+		assert_eq!(launcher.path_subscriptions.len(), 2);
+		assert!(launcher.path_subscriptions[0].pattern.is_exact());
+		assert_eq!(launcher.path_subscriptions[0].pattern.pattern(), "/");
+		assert!(launcher.path_subscriptions[1].pattern.is_exact());
+		assert_eq!(launcher.path_subscriptions[1].pattern.pattern(), "/users/");
+	}
+
+	#[rstest]
+	fn test_on_path_pattern_appends_pattern_subscription() {
+		// Arrange / Act
+		let launcher =
+			ClientLauncher::new("#root").on_path_pattern("/orgs/{slug}/", |_ctx: &PathCtx<'_>| {});
+		// Assert
+		assert_eq!(launcher.path_subscriptions.len(), 1);
+		let sub = &launcher.path_subscriptions[0];
+		assert!(!sub.pattern.is_exact());
+		assert!(sub.pattern.matches("/orgs/foo/").is_some());
+		assert!(sub.pattern.matches("/orgs/").is_none());
+	}
+
+	#[rstest]
+	fn test_on_path_subscriptions_start_with_no_recorded_match() {
+		// Arrange / Act
+		let launcher =
+			ClientLauncher::new("#root").on_path("/", |_ctx: &PathCtx<'_>| {});
+		// Assert: last_params is None at registration time so the very
+		// first Effect run will be detected as a `None -> Some(_)` transition.
+		assert!(launcher.path_subscriptions[0].last_params.borrow().is_none());
+	}
+
+	// --- transition logic regression test ---
+
+	/// Mirrors the per-subscription transition decision used inside
+	/// `launch()` so we can exercise the `Cell<bool>` -> `RefCell<HashMap>`
+	/// upgrade rationale on the host (where no router exists).
+	fn fire_decision(
+		prev: &Option<HashMap<String, String>>,
+		new: &Option<HashMap<String, String>>,
+	) -> bool {
+		match (prev, new) {
+			(None, Some(_)) => true,
+			(Some(_), None) => false,
+			(Some(a), Some(b)) => a != b,
+			(None, None) => false,
+		}
+	}
+
+	#[rstest]
+	fn test_transition_logic_fires_on_initial_match() {
+		// Arrange
+		let prev = None;
+		let new = Some(HashMap::new());
+		// Act / Assert
+		assert!(fire_decision(&prev, &new));
+	}
+
+	#[rstest]
+	fn test_transition_logic_skips_re_render_at_same_path() {
+		// Arrange
+		let mut params = HashMap::new();
+		params.insert("slug".into(), "foo".into());
+		let prev = Some(params.clone());
+		let new = Some(params);
+		// Act / Assert
+		assert!(!fire_decision(&prev, &new));
+	}
+
+	#[rstest]
+	fn test_transition_logic_fires_when_pattern_params_change() {
+		// Arrange
+		let mut a = HashMap::new();
+		a.insert("slug".into(), "foo".into());
+		let mut b = HashMap::new();
+		b.insert("slug".into(), "bar".into());
+		let prev = Some(a);
+		let new = Some(b);
+		// Act / Assert
+		assert!(fire_decision(&prev, &new));
+	}
+
+	#[rstest]
+	fn test_transition_logic_does_not_fire_when_leaving_match() {
+		// Arrange
+		let mut params = HashMap::new();
+		params.insert("slug".into(), "foo".into());
+		let prev = Some(params);
+		let new = None;
+		// Act / Assert
+		assert!(!fire_decision(&prev, &new));
 	}
 
 	#[rstest]

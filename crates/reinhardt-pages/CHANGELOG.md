@@ -17,6 +17,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   init; `after_launch` runs after the first DOM mount and receives a
   `LaunchCtx` with borrows of `window`, `document`, and the root element.
   Multiple hooks accumulate in registration order. Closes #3996.
+- *(pages)* `ClientLauncher::on_path` and `on_path_pattern` for
+  declarative path-driven side effects. Each registration becomes a
+  leaked reactive `Effect` that fires only on transitions into the
+  matching path (entering a match or pattern-internal parameter
+  changes); same-path re-renders do not re-fire. Callbacks receive a
+  `PathCtx` with the current `document`, path, and extracted params,
+  plus `PathCtx::ensure_portal(id, factory)` for idempotent body-level
+  mounts. Closes #3995.
 
 ### Changed
 

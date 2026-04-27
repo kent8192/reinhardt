@@ -183,6 +183,31 @@ impl std::fmt::Display for ViewError {
 
 impl std::error::Error for ViewError {}
 
+/// Convert `ViewError` into the framework-wide `reinhardt_core::exception::Error`.
+///
+/// Mapping preserves HTTP status codes via `Error::status_code()`:
+///
+/// | `ViewError`        | `Error`         | Status |
+/// |--------------------|-----------------|--------|
+/// | `Serialization`    | `Serialization` | 400    |
+/// | `Permission`       | `Authorization` | 403    |
+/// | `NotFound`         | `NotFound`      | 404    |
+/// | `BadRequest`       | `Http`          | 400    |
+/// | `Internal`         | `Internal`      | 500    |
+/// | `DatabaseError`    | `Database`      | 500    |
+impl From<ViewError> for reinhardt_core::exception::Error {
+	fn from(value: ViewError) -> Self {
+		match value {
+			ViewError::Serialization(m) => Self::Serialization(m),
+			ViewError::Permission(m) => Self::Authorization(m),
+			ViewError::NotFound(m) => Self::NotFound(m),
+			ViewError::BadRequest(m) => Self::Http(m),
+			ViewError::Internal(m) => Self::Internal(m),
+			ViewError::DatabaseError(m) => Self::Database(m),
+		}
+	}
+}
+
 /// Django REST Framework-style ViewSet handler for models
 ///
 /// Provides automatic CRUD operations with permission checks, filtering,

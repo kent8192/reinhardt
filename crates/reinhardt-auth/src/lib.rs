@@ -205,9 +205,9 @@ pub use permission::AuthPermission;
 pub use permission_operators::{AndPermission, NotPermission, OrPermission};
 #[cfg(feature = "social")]
 pub use social::{
-	AppleProvider, GitHubProvider, GoogleProvider, IdToken, MicrosoftProvider, OAuthProvider,
-	OAuthToken, PkceFlow, ProviderConfig, SocialAuthBackend, SocialAuthError, StandardClaims,
-	StateStore, TokenResponse,
+	AppleProvider, GenericOidcConfig, GenericOidcProvider, GitHubProvider, GoogleProvider, IdToken,
+	MicrosoftProvider, OAuthProvider, OAuthToken, PkceFlow, ProviderConfig, SocialAuthBackend,
+	SocialAuthError, StandardClaims, StateStore, TokenResponse, UserInfoMapper,
 };
 
 #[cfg(feature = "rate-limit")]

@@ -27,3 +27,9 @@ mod pagination_viewsets_integration;
 
 #[path = "viewsets/filtering_viewsets_integration.rs"]
 mod filtering_viewsets_integration;
+
+#[path = "viewsets/model_viewset_crud_e2e.rs"]
+mod model_viewset_crud_e2e;
+
+#[path = "viewsets/generic_viewset_e2e.rs"]
+mod generic_viewset_e2e;

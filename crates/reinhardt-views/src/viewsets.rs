@@ -250,14 +250,43 @@ mod tests {
 	use super::*;
 	use bytes::Bytes;
 	use hyper::{HeaderMap, Method, StatusCode, Version};
+	use reinhardt_db::orm::{FieldSelector, Model};
 	use reinhardt_http::Request;
+	use serde::{Deserialize, Serialize};
+	use std::collections::HashMap;
 
 	// Allow dead_code: test model used as type parameter for ModelViewSet, fields not read directly
 	#[allow(dead_code)]
-	#[derive(Debug, Clone)]
+	#[derive(Debug, Clone, Serialize, Deserialize)]
 	struct TestModel {
-		id: i64,
+		id: Option<i64>,
 		name: String,
+	}
+
+	#[derive(Clone)]
+	struct TestModelFields;
+
+	impl FieldSelector for TestModelFields {
+		fn with_alias(self, _alias: &str) -> Self {
+			self
+		}
+	}
+
+	impl Model for TestModel {
+		type PrimaryKey = i64;
+		type Fields = TestModelFields;
+		fn table_name() -> &'static str {
+			"test_models"
+		}
+		fn primary_key(&self) -> Option<Self::PrimaryKey> {
+			self.id
+		}
+		fn set_primary_key(&mut self, value: Self::PrimaryKey) {
+			self.id = Some(value);
+		}
+		fn new_fields() -> Self::Fields {
+			TestModelFields
+		}
 	}
 
 	#[derive(Debug, Clone)]
@@ -289,13 +318,23 @@ mod tests {
 
 	#[tokio::test]
 	async fn test_model_viewset_retrieve_action() {
-		let viewset: ModelViewSet<TestModel, TestSerializer> = ModelViewSet::new("users");
+		// Provide an in-memory queryset and populate path_params so dispatch
+		// resolves through the embedded ModelViewSetHandler. This guards against
+		// the placeholder regression behind issue #3985.
+		let viewset: ModelViewSet<TestModel, TestSerializer> = ModelViewSet::new("users")
+			.with_queryset(vec![TestModel {
+				id: Some(1),
+				name: "alpha".into(),
+			}]);
+		let mut path_params = HashMap::new();
+		path_params.insert("id".to_string(), "1".to_string());
 		let request = Request::builder()
 			.method(Method::GET)
 			.uri("/users/1/")
 			.version(Version::HTTP_11)
 			.headers(HeaderMap::new())
 			.body(Bytes::new())
+			.path_params(path_params)
 			.build()
 			.unwrap();
 		let action = Action::retrieve();
@@ -303,6 +342,10 @@ mod tests {
 		let response = viewset.dispatch(request, action).await.unwrap();
 
 		assert_eq!(response.status, StatusCode::OK);
+		assert!(
+			!response.body.is_empty(),
+			"retrieve must not return an empty placeholder"
+		);
 	}
 
 	#[tokio::test]
@@ -325,13 +368,20 @@ mod tests {
 
 	#[tokio::test]
 	async fn test_model_viewset_update_action() {
-		let viewset: ModelViewSet<TestModel, TestSerializer> = ModelViewSet::new("users");
+		let viewset: ModelViewSet<TestModel, TestSerializer> = ModelViewSet::new("users")
+			.with_queryset(vec![TestModel {
+				id: Some(1),
+				name: "alpha".into(),
+			}]);
+		let mut path_params = HashMap::new();
+		path_params.insert("id".to_string(), "1".to_string());
 		let request = Request::builder()
 			.method(Method::PUT)
 			.uri("/users/1/")
 			.version(Version::HTTP_11)
 			.headers(HeaderMap::new())
-			.body(Bytes::from(r#"{"name": "updated"}"#))
+			.body(Bytes::from(r#"{"id": 1, "name": "updated"}"#))
+			.path_params(path_params)
 			.build()
 			.unwrap();
 		let action = Action::update();
@@ -343,13 +393,20 @@ mod tests {
 
 	#[tokio::test]
 	async fn test_model_viewset_destroy_action() {
-		let viewset: ModelViewSet<TestModel, TestSerializer> = ModelViewSet::new("users");
+		let viewset: ModelViewSet<TestModel, TestSerializer> = ModelViewSet::new("users")
+			.with_queryset(vec![TestModel {
+				id: Some(1),
+				name: "alpha".into(),
+			}]);
+		let mut path_params = HashMap::new();
+		path_params.insert("id".to_string(), "1".to_string());
 		let request = Request::builder()
 			.method(Method::DELETE)
 			.uri("/users/1/")
 			.version(Version::HTTP_11)
 			.headers(HeaderMap::new())
 			.body(Bytes::new())
+			.path_params(path_params)
 			.build()
 			.unwrap();
 		let action = Action::destroy();
@@ -381,13 +438,19 @@ mod tests {
 	#[tokio::test]
 	async fn test_readonly_viewset_retrieve_allowed() {
 		let viewset: ReadOnlyModelViewSet<TestModel, TestSerializer> =
-			ReadOnlyModelViewSet::new("posts");
+			ReadOnlyModelViewSet::new("posts").with_queryset(vec![TestModel {
+				id: Some(1),
+				name: "alpha".into(),
+			}]);
+		let mut path_params = HashMap::new();
+		path_params.insert("id".to_string(), "1".to_string());
 		let request = Request::builder()
 			.method(Method::GET)
 			.uri("/posts/1/")
 			.version(Version::HTTP_11)
 			.headers(HeaderMap::new())
 			.body(Bytes::new())
+			.path_params(path_params)
 			.build()
 			.unwrap();
 		let action = Action::retrieve();
@@ -395,6 +458,10 @@ mod tests {
 		let response = viewset.dispatch(request, action).await.unwrap();
 
 		assert_eq!(response.status, StatusCode::OK);
+		assert!(
+			!response.body.is_empty(),
+			"retrieve must not return an empty placeholder"
+		);
 	}
 
 	#[tokio::test]

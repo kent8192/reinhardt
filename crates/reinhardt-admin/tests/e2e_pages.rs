@@ -971,3 +971,322 @@ async fn test_edit_form_renders_with_values(#[future] e2e: E2eContext) {
 		"Should have pre-filled values"
 	);
 }
+// ===== Dashboard tests (extended) =====
+//
+// The following tests target display branches in `dashboard()`
+// (crates/reinhardt-admin/src/pages/components/features.rs) that are not
+// covered by the basic dashboard tests above. They follow the AAA pattern
+// and use `cdp_browser` for parallel-safe isolation.
+
+/// Verify that the dashboard h1 renders the configured site_header
+/// (sourced from `AdminSettings::default()`), not just a hard-coded string.
+#[rstest]
+#[tokio::test]
+async fn test_dashboard_renders_site_header(#[future] e2e: E2eContext) {
+	// Arrange
+	let ctx = e2e.await;
+	let page = ctx
+		.browser
+		.new_page(&format!("{}/admin/login/", ctx.server_url))
+		.await
+		.expect("Failed to open page");
+	tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+	let source = page.content().await.unwrap();
+	require_wasm!(&source);
+	inject_auth_token(&page, &ctx.server_url).await;
+	wait_for_dashboard_loaded(&page).await;
+
+	// Act
+	let h1 = page
+		.get_text(".dashboard-container h1")
+		.await
+		.expect("Failed to read dashboard h1")
+		.unwrap_or_default();
+
+	// Assert
+	assert!(
+		h1.contains(&ctx.site_header),
+		"h1 should contain site_header `{}`, got `{}`",
+		ctx.site_header,
+		h1,
+	);
+	assert!(
+		h1.contains("Dashboard"),
+		"h1 should contain `Dashboard`, got `{}`",
+		h1,
+	);
+}
+
+/// Verify that the dashboard renders the empty-state alert when no
+/// models are registered with the AdminSite.
+#[rstest]
+#[tokio::test]
+async fn test_dashboard_empty_state_shows_alert(#[future] e2e_no_models: E2eContext) {
+	// Arrange
+	let ctx = e2e_no_models.await;
+	let page = ctx
+		.browser
+		.new_page(&format!("{}/admin/login/", ctx.server_url))
+		.await
+		.expect("Failed to open page");
+	tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+	let source = page.content().await.unwrap();
+	require_wasm!(&source);
+	inject_auth_token(&page, &ctx.server_url).await;
+	wait_for_dashboard_loaded(&page).await;
+
+	// Act
+	let alert_text = page
+		.get_text(".dashboard-container .admin-alert-info")
+		.await
+		.expect("Failed to read empty-state alert")
+		.unwrap_or_default();
+	let card_count = page
+		.execute_js("document.querySelectorAll('.dashboard-container .admin-card').length")
+		.await
+		.expect("Failed to count cards");
+
+	// Assert
+	assert!(
+		alert_text.contains("No models registered"),
+		"Expected empty-state alert text, got `{}`",
+		alert_text,
+	);
+	assert_eq!(
+		card_count.as_u64().unwrap_or(u64::MAX),
+		0,
+		"Expected zero `.admin-card` elements when no models are registered"
+	);
+}
+
+/// Verify that each registered model gets its own `.admin-card` on the dashboard.
+#[rstest]
+#[tokio::test]
+async fn test_dashboard_renders_card_per_model(#[future] e2e_multi_models: E2eContext) {
+	// Arrange
+	let ctx = e2e_multi_models.await;
+	let page = ctx
+		.browser
+		.new_page(&format!("{}/admin/login/", ctx.server_url))
+		.await
+		.expect("Failed to open page");
+	tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+	let source = page.content().await.unwrap();
+	require_wasm!(&source);
+	inject_auth_token(&page, &ctx.server_url).await;
+	wait_for_dashboard_loaded(&page).await;
+
+	// Act
+	let card_count = page
+		.execute_js("document.querySelectorAll('.dashboard-container .admin-card').length")
+		.await
+		.expect("Failed to count cards");
+	let names_json = page
+		.execute_js(
+			"JSON.stringify(Array.from(document.querySelectorAll('.dashboard-container .admin-card h3')).map(e => e.textContent.trim()))",
+		)
+		.await
+		.expect("Failed to read card names");
+	let names: Vec<String> = match names_json {
+		serde_json::Value::String(s) => serde_json::from_str(&s).unwrap_or_default(),
+		serde_json::Value::Array(_) => serde_json::from_value(names_json).unwrap_or_default(),
+		_ => Vec::new(),
+	};
+	let names_set: std::collections::HashSet<&str> = names.iter().map(String::as_str).collect();
+
+	// Assert
+	assert_eq!(
+		card_count.as_u64().unwrap_or(u64::MAX),
+		2,
+		"Expected exactly 2 `.admin-card` elements for 2 registered models"
+	);
+	assert!(
+		names_set.contains("TestModel") && names_set.contains("TestModelB"),
+		"Expected card names to include both `TestModel` and `TestModelB`, got {:?}",
+		names_set,
+	);
+}
+
+/// Verify that a single dashboard card contains the full expected structure:
+/// model name in `<h3>`, "Manage X records" description, and a `View X` button
+/// with the correct `href` to the list view.
+#[rstest]
+#[tokio::test]
+async fn test_dashboard_card_structure(#[future] e2e: E2eContext) {
+	// Arrange
+	let ctx = e2e.await;
+	let page = ctx
+		.browser
+		.new_page(&format!("{}/admin/login/", ctx.server_url))
+		.await
+		.expect("Failed to open page");
+	tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+	let source = page.content().await.unwrap();
+	require_wasm!(&source);
+	inject_auth_token(&page, &ctx.server_url).await;
+	wait_for_dashboard_loaded(&page).await;
+
+	// Act
+	let h3_text = page
+		.get_text(".dashboard-container .admin-card h3")
+		.await
+		.expect("Failed to read card h3")
+		.unwrap_or_default();
+	let description_text = page
+		.get_text(".dashboard-container .admin-card p")
+		.await
+		.expect("Failed to read card description")
+		.unwrap_or_default();
+	let button_text = page
+		.get_text(".dashboard-container .admin-card a.admin-btn-primary")
+		.await
+		.expect("Failed to read card button")
+		.unwrap_or_default();
+	let button_href = page
+		.get_attribute(
+			".dashboard-container .admin-card a.admin-btn-primary",
+			"href",
+		)
+		.await
+		.expect("Failed to read button href")
+		.unwrap_or_default();
+
+	// Assert
+	assert_eq!(h3_text.trim(), "TestModel", "card h3 should be model name");
+	assert!(
+		description_text.contains("Manage TestModel records"),
+		"card description mismatch: `{}`",
+		description_text,
+	);
+	assert!(
+		button_text.contains("View TestModel"),
+		"card button label mismatch: `{}`",
+		button_text,
+	);
+	assert!(
+		button_href.ends_with("/testmodel/"),
+		"card button href should target lowercased model list URL, got `{}`",
+		button_href,
+	);
+}
+
+/// Verify that an active but non-staff user cannot view the dashboard.
+///
+/// The expected behavior is either a redirect back to `/login` (auth gate)
+/// or an error alert rendered in place of the cards. Both outcomes indicate
+/// the dashboard correctly blocks unauthorized users.
+#[rstest]
+#[tokio::test]
+async fn test_dashboard_non_staff_user_blocked(#[future] e2e: E2eContext) {
+	// Arrange
+	let ctx = e2e.await;
+	create_non_staff_user(&ctx.pool, NON_STAFF_USERNAME, NON_STAFF_PASSWORD).await;
+
+	let page = ctx
+		.browser
+		.new_page(&format!("{}/admin/login/", ctx.server_url))
+		.await
+		.expect("Failed to open page");
+	tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+	let source = page.content().await.unwrap();
+	require_wasm!(&source);
+
+	// Login as the non-staff user. The login server function may succeed
+	// (issuing a JWT) but `get_dashboard()` requires `is_staff=true`.
+	login_via_form_as(
+		&page,
+		&ctx.server_url,
+		NON_STAFF_USERNAME,
+		NON_STAFF_PASSWORD,
+	)
+	.await;
+	tokio::time::sleep(std::time::Duration::from_secs(3)).await;
+
+	// Act
+	let url = page.url().await.unwrap().unwrap_or_default();
+	let card_count = page
+		.execute_js("document.querySelectorAll('.dashboard-container .admin-card').length")
+		.await
+		.expect("Failed to count cards");
+	let danger_present = page
+		.execute_js(
+			"document.querySelector('.admin-alert-danger, .dashboard-container [class*=error]') !== null",
+		)
+		.await
+		.expect("Failed to check error alert")
+		.as_bool()
+		.unwrap_or(false);
+
+	// Assert
+	assert_eq!(
+		card_count.as_u64().unwrap_or(u64::MAX),
+		0,
+		"Non-staff user must not see any model cards on the dashboard"
+	);
+	assert!(
+		url.contains("/login") || danger_present,
+		"Non-staff user should be redirected to login or shown an error alert; \
+		 url=`{}`, danger_present={}",
+		url,
+		danger_present,
+	);
+}
+
+/// Verify that navigating away from the dashboard and back via `history.back()`
+/// re-renders the model cards. Exercises the SPA router's resource re-fetch path.
+#[rstest]
+#[tokio::test]
+async fn test_dashboard_back_navigation_rerenders(#[future] e2e: E2eContext) {
+	// Arrange
+	let ctx = e2e.await;
+	let page = ctx
+		.browser
+		.new_page(&format!("{}/admin/login/", ctx.server_url))
+		.await
+		.expect("Failed to open page");
+	tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+	let source = page.content().await.unwrap();
+	require_wasm!(&source);
+	inject_auth_token(&page, &ctx.server_url).await;
+	wait_for_dashboard_loaded(&page).await;
+
+	// Confirm dashboard is loaded before navigating away.
+	let initial_card_count = page
+		.execute_js("document.querySelectorAll('.dashboard-container .admin-card').length")
+		.await
+		.expect("Failed to count initial cards")
+		.as_u64()
+		.unwrap_or(0);
+	assert!(
+		initial_card_count >= 1,
+		"Dashboard should render at least one card before navigation"
+	);
+
+	// Act: navigate to list view, then back to dashboard.
+	spa_navigate(&page, "/admin/TestModel/").await;
+	let _ = page
+		.execute_js("window.history.back(); window.dispatchEvent(new PopStateEvent('popstate'));")
+		.await;
+	tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+	wait_for_dashboard_loaded(&page).await;
+
+	// Assert
+	let url = page.url().await.unwrap().unwrap_or_default();
+	let final_card_count = page
+		.execute_js("document.querySelectorAll('.dashboard-container .admin-card').length")
+		.await
+		.expect("Failed to count cards after back navigation")
+		.as_u64()
+		.unwrap_or(0);
+
+	assert!(
+		url.ends_with("/admin/") || url.ends_with("/admin"),
+		"Should be back on dashboard URL after history.back(), got `{}`",
+		url,
+	);
+	assert!(
+		final_card_count >= 1,
+		"Dashboard cards should re-render after back navigation, got {} cards",
+		final_card_count,
+	);
+}

@@ -6,13 +6,14 @@
 use super::introspection::{FieldInfo, FieldIntrospector};
 use super::meta::MetaConfig;
 use super::nested_config::{NestedFieldConfig, NestedSerializerConfig};
-use super::validator_config::ValidatorConfig;
+use super::validator_config::{ModelLevelValidator, ValidatorConfig};
 use super::validators::{UniqueTogetherValidator, UniqueValidator};
 use super::{Serializer, SerializerError, ValidatorError};
 use reinhardt_db::backends::DatabaseConnection;
 use reinhardt_db::orm::Model;
 use std::collections::HashMap;
 use std::marker::PhantomData;
+use std::sync::Arc;
 
 /// ModelSerializer provides automatic serialization for ORM models
 ///
@@ -406,6 +407,20 @@ where
 		self
 	}
 
+	/// Add an object-level synchronous validator.
+	///
+	/// Synchronous validators run inside [`Self::validate`] and at the start
+	/// of [`Self::validate_async`]. They never touch the database — pair
+	/// them with [`Self::with_unique_validator`] for DB-backed checks.
+	pub fn with_model_validator<V>(mut self, validator: V) -> Self
+	where
+		V: ModelLevelValidator<M> + 'static,
+	{
+		self.validator_config
+			.add_sync_model_validator(Arc::new(validator));
+		self
+	}
+
 	/// Get the validator configuration
 	///
 	/// # Examples
@@ -424,9 +439,16 @@ where
 		&self.validator_config
 	}
 
-	/// Validate a model instance
+	/// Run synchronous validators against `instance`.
 	///
-	/// This method can be extended to support custom validators.
+	/// Executes every [`ModelLevelValidator`] registered via
+	/// [`Self::with_model_validator`] in registration order, returning the
+	/// first failure as `SerializerError::Validation`. With no synchronous
+	/// validators registered the call is a cheap `Ok(())`, preserving the
+	/// behavior of the prior placeholder implementation.
+	///
+	/// Database-backed checks (unique constraints) belong in
+	/// [`Self::validate_async`].
 	///
 	/// # Examples
 	///
@@ -443,10 +465,10 @@ where
 	/// };
 	/// assert!(serializer.validate(&user).is_ok());
 	/// ```
-	pub fn validate(&self, _instance: &M) -> Result<(), SerializerError> {
-		// Base synchronous validation - for non-database validators
-		// For database-level validation (unique constraints), use validate_async()
-		Ok(())
+	pub fn validate(&self, instance: &M) -> Result<(), SerializerError> {
+		self.validator_config
+			.validate(instance)
+			.map_err(SerializerError::Validation)
 	}
 
 	/// Validate a model instance asynchronously with database checks
@@ -496,6 +518,10 @@ where
 	where
 		M::PrimaryKey: std::fmt::Display,
 	{
+		// Run synchronous validators first to fail-early without touching
+		// the database when the issue is detectable in-process.
+		self.validate(instance)?;
+
 		// Convert instance to JSON for field extraction
 		let json_value = serde_json::to_value(instance).map_err(|e| SerializerError::Serde {
 			message: format!("Failed to serialize instance for validation: {}", e),
@@ -565,6 +591,60 @@ where
 	}
 }
 
+// Direction of a meta-driven field filter pass.
+//
+// `Output` is used during `serialize` (model -> JSON): excluded keys and
+// write-only keys are stripped, because write-only fields must never leak
+// to API responses.
+//
+// `Input` is used during `deserialize` (JSON -> model): excluded keys and
+// read-only keys are stripped, because read-only fields are server-controlled
+// and must not be accepted from clients.
+#[derive(Copy, Clone, Eq, PartialEq, Debug)]
+enum FilterDirection {
+	Output,
+	Input,
+}
+
+// Mutate `value` in place, removing every key that is filtered out by `meta`
+// for the given direction. No-op when `value` is not a JSON object (defensive;
+// `Model` derive-`Serialize` always produces an object).
+//
+// The introspector field-name slice acts as the implicit allowlist when
+// `meta.fields()` is `None` AND the slice is non-empty. An explicit empty
+// `Vec` from the user via `with_fields(vec![])` still means "include nothing".
+fn apply_meta_filter(
+	value: &mut serde_json::Value,
+	meta: &MetaConfig,
+	introspector_field_names: Option<&[String]>,
+	direction: FilterDirection,
+) {
+	let serde_json::Value::Object(map) = value else {
+		return;
+	};
+
+	let implicit_allowlist: Option<&[String]> = match (meta.fields(), introspector_field_names) {
+		(Some(_), _) => None,
+		(None, Some(names)) if !names.is_empty() => Some(names),
+		_ => None,
+	};
+
+	map.retain(|key, _| {
+		if !meta.is_field_included(key) {
+			return false;
+		}
+		if let Some(allowed) = implicit_allowlist
+			&& !allowed.iter().any(|n| n == key)
+		{
+			return false;
+		}
+		match direction {
+			FilterDirection::Output => !meta.is_write_only(key),
+			FilterDirection::Input => !meta.is_read_only(key),
+		}
+	});
+}
+
 impl<M> Serializer for ModelSerializer<M>
 where
 	M: Model,
@@ -573,13 +653,46 @@ where
 	type Output = String;
 
 	fn serialize(&self, input: &Self::Input) -> Result<Self::Output, SerializerError> {
-		serde_json::to_string(input).map_err(|e| SerializerError::Serde {
+		// Convert to a JSON Value first so `MetaConfig` filters (fields /
+		// exclude / write_only) can be applied before emitting the final
+		// string. Backward compatible: an unconfigured serializer retains
+		// every key because `MetaConfig::default()` excludes nothing.
+		let mut value = serde_json::to_value(input).map_err(|e| SerializerError::Serde {
+			message: format!("Serialization error: {}", e),
+		})?;
+
+		let introspector_names = self.introspector.as_ref().map(|i| i.field_names());
+		apply_meta_filter(
+			&mut value,
+			&self.meta,
+			introspector_names.as_deref(),
+			FilterDirection::Output,
+		);
+
+		serde_json::to_string(&value).map_err(|e| SerializerError::Serde {
 			message: format!("Serialization error: {}", e),
 		})
 	}
 
 	fn deserialize(&self, output: &Self::Output) -> Result<Self::Input, SerializerError> {
-		serde_json::from_str(output).map_err(|e| SerializerError::Serde {
+		// Parse to a JSON Value, strip excluded / read_only keys, then
+		// reconstruct `M`. Stripping a read-only field that `M` requires
+		// surfaces as `SerializerError::Serde` (missing-field), matching
+		// the behavior callers already see for malformed input.
+		let mut value: serde_json::Value =
+			serde_json::from_str(output).map_err(|e| SerializerError::Serde {
+				message: format!("Deserialization error: {}", e),
+			})?;
+
+		let introspector_names = self.introspector.as_ref().map(|i| i.field_names());
+		apply_meta_filter(
+			&mut value,
+			&self.meta,
+			introspector_names.as_deref(),
+			FilterDirection::Input,
+		);
+
+		serde_json::from_value(value).map_err(|e| SerializerError::Serde {
 			message: format!("Deserialization error: {}", e),
 		})
 	}

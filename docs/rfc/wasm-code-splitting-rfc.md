@@ -4,10 +4,12 @@
 |---|---|
 | Issue | [#1858](https://github.com/kent8192/reinhardt-web/issues/1858) |
 | Phase | 0 of N (feasibility spike) |
-| Status | Final |
-| Date | 2026-04-26 |
+| Status | Final (§1–§8) + Addendum (§9–§10, 2026-04-27) |
+| Date | 2026-04-26 (original) / 2026-04-27 (addendum) |
 | Source spec | `docs/superpowers/specs/2026-04-26-wasm-code-splitting-phase0-design.md` (gitignored, local-only — see Appendix A for re-creation) |
 | Source POC branch | `feature/issue-1858-wasm-code-splitting-phase0-spike` (POC tree under `crates/reinhardt-pages/wip/issue-1858-wasm-split-poc/`, gitignored) |
+
+> **Addendum note (2026-04-27)**: §1–§8 are preserved as-is from the Final 2026-04-26 RFC. §9 adds cross-ecosystem prior art (Blazor, Flutter, Emscripten, Go/TinyGo, Kotlin/Wasm, Pyodide, SwiftWasm) discovered in follow-up research, including new findings F11 / F12 and open question O12. §10 narrows Phase 1 scope into a Tier 2 MVP whose only proposed API surface (`Router::route_lazy`) is a literal extraction of the verified POC pattern in §5.2 (d), so its implementability is already established by Phase 0.
 
 ---
 
@@ -290,3 +292,173 @@ The design spec at `docs/superpowers/specs/2026-04-26-wasm-code-splitting-phase0
 ### 8.D Recreating the implementation plan
 
 Similarly, the implementation plan at `docs/superpowers/plans/2026-04-26-wasm-code-splitting-phase0.md` is gitignored. It contains the bite-sized task breakdown that was executed during this Phase 0 spike. The plan's structure (8 Phases + Cascade Gate + Time-box Enforcement) is documented here for future reference; readers wishing to re-execute Phase 0 should re-derive the plan via `/superpowers:writing-plans` against this RFC.
+
+---
+
+## 9. Addendum (2026-04-27) — Cross-ecosystem prior art
+
+Follow-up research surveyed how comparable language ecosystems implement WASM code splitting (or comparable lazy-loading mechanisms). The full research transcripts live in agent task outputs; this section condenses the results into the form needed by Phase 1+ planning.
+
+### 9.1 Comparison matrix
+
+| Ecosystem | Split granularity | Mechanism | Build-time cost | Maturity | Suspense equivalent |
+|---|---|---|---|---|---|
+| **Rust (Dioxus `wasm-split`)** ← Path D | function | post-link, relocation-driven | `--emit-relocs` + CLI | experimental, working | none (POC: `Signal<bool>` + `Rc<RefCell>`) |
+| **Blazor WebAssembly** | assembly (Razor Class Library) | DLL/Webcil dynamic load into shared mono-WASM runtime | `<BlazorWebAssemblyLazyLoad>` MSBuild item | **GA / stable** | `Router` `<Navigating>` render fragment |
+| **Flutter Web (dart2js)** | library (loading unit) | static reachability analysis → `*.part.js` | transparent (`flutter build web --release`) | **GA / stable** | `FutureBuilder` (user-land) |
+| **Flutter Web (dart2wasm)** | library | per-loading-unit `.wasm` modules | `--enable-deferred-loading` (experimental, requires `-O0`) | **experimental** | same as dart2js |
+| **Emscripten (`MAIN_MODULE`/`SIDE_MODULE`)** | module (`.so`-equivalent) | static PIC + `dlopen` emulation | `-fPIC` per side module | mature | `Module.monitorRunDependencies` + default HTML shell |
+| **Emscripten (`-sSPLIT_MODULE`)** | function (profile-driven) | Binaryen `wasm-split` post-link | profile capture run | prototype, primary+secondary only | same |
+| **Go / TinyGo** | ❌ none | n/a | n/a | **unsupported (structurally hard)** | n/a |
+| **Kotlin/Wasm** | ❌ none | (DCE only) | n/a | **unsupported (WasmGC backend may unblock later)** | Compose `LoadingScreen` (user-land) |
+| **Pyodide** | package (wheel) | `pyodide.loadPackage` / `micropip.install` | wheel packaging | mature (package-grain) | custom `<py-splashscreen>` |
+| **SwiftWasm** | ❌ none | n/a | n/a | **unsupported (no dynamic frameworks on wasm32)** | n/a |
+
+Sources cited inline in the agent transcripts; the canonical references are: Microsoft Learn (Blazor lazy-load assemblies), `dart.dev/language/libraries`, `docs.flutter.dev/perf/deferred-components`, `dart-lang/sdk#56952` (dart2wasm deferred loading), `emscripten.org/docs/compiling/Dynamic-Linking.html`, `emscripten.org/docs/optimizing/Module-Splitting.html`, `WebAssembly/tool-conventions DynamicLinking.md`, `WebAssembly/design#1166` (Go single-bundle constraint), KotlinConf 2025 "State of Kotlin/Wasm" deck, `pyodide.org/.../loading-packages.html`, `book.swiftwasm.org`.
+
+### 9.2 New findings carried back to §5.3
+
+The cross-ecosystem survey surfaced three patterns that are independent of which Phase 0 path was selected and apply equally to Path D and a hypothetical Path B independent splitter. They are recorded here so Phase 1+ plans incorporate them up-front.
+
+| ID | Finding | Implication for Phase 1+ |
+|---|---|---|
+| **F11** | **Cache-skew hazard.** Flutter production deployments (Faabul / Lukas Nevosad write-up) report `DeferredLoadException` when `main.wasm`/`main.js` is updated mid-session and the browser still requests an older `*.part.wasm` for an in-flight navigation. The proven mitigation is versioned per-build subdirectories (`/v123/main.wasm`, `/v123/chunk_0.wasm`) with N-1 retained for active sessions. | Phase 1+ build integration (sub-issue #1858-4) MUST emit content-hashed or versioned chunk URLs and the static-asset prefix layer (`reinhardt-utils::staticfiles`) MUST keep the previous build resolvable for a configurable grace window. |
+| **F12** | **Many-small-chunks penalty.** Flutter production apps routinely produce 300+ `*.part.js` chunks ([flutter/flutter#127859](https://github.com/flutter/flutter/issues/127859)); even with HTTP/2 multiplexing, head-of-line blocking and TLS handshakes per origin become a measurable LCP regression. Function-grain splitting (Dioxus `wasm-split`, Phase 0 Path D) is more vulnerable to this than library/assembly-grain splitting (Blazor, Flutter). | Phase 1+ MUST adopt a minimum-chunk-size threshold (e.g., 4 KB) or merge sibling lazy boundaries that fall below it. Sub-issue #1858-4 owns the policy; defaults SHOULD be conservative (target ≤ 50 chunks for typical apps). |
+
+### 9.3 New open question carried back to §7
+
+| ID | Question | Why it matters |
+|---|---|---|
+| **O12** | **Industry-wide confirmation that "data does not split with code" requires application-level data extraction (not toolchain fix).** Emscripten's per-module data section, Dioxus `wasm-split`'s code-only split (RFC F5), and Flutter's loading-unit hoisting of shared types all converge on the same conclusion: heavyweight static data must be lifted out of WASM (e.g., fetched as JSON/binary asset on demand) rather than expected to follow the code that references it. | This validates Phase 0's Open Question O9 with cross-language evidence. Phase 1+ documentation (sub-issue #1858-7) MUST present "extract data, then split code" as the canonical pattern, not as a Reinhardt-specific workaround. |
+
+### 9.4 Findings that **do not** change the Path D recommendation
+
+The survey strengthened, rather than weakened, the §4 recommendation to adopt Path D (use Dioxus `wasm-split` tooling without depending on `dioxus-core`):
+
+- **Blazor's RCL-grain split is too coarse for Reinhardt's design goals** (function-level granularity is desirable for matching the `#[lazy_component]` Phase 1+ proposal in sub-issue #1858-5).
+- **Emscripten `MAIN_MODULE`/`SIDE_MODULE` carries a PIC/GOT overhead** that historically *increases* total bytes for small apps (ammo.js mailing-list report); a relocation-aware post-link splitter avoids this entirely.
+- **Binaryen `wasm-split` (the C++ tool, distinct from Dioxus's Rust crate) is profile-driven and only supports a single primary/secondary cut**; it cannot serve as a drop-in replacement for the annotation-driven, multi-chunk Dioxus tool.
+- **No comparable post-link, function-grain, multi-chunk, annotation-driven splitter exists outside the Dioxus codebase**, which makes Path D's pinning to a specific upstream commit (Appendix B) the lowest-risk path to the Minimum Goal.
+
+### 9.5 Reference implementations for a hypothetical independent splitter (Path B revival)
+
+If Path D's upstream becomes unmaintained or breaks compatibility (Open Question O7), Path B's "independent splitter" fallback should be informed by the following prior art ranked by usefulness:
+
+| Rank | Project | Role | Why |
+|---|---|---|---|
+| ★★★ | [`jbms/wasm-split-prototype`](https://github.com/jbms/wasm-split-prototype) | Algorithmic blueprint | The original research prototype that Dioxus's `wasm-split` is derived from; cited in §3 Path B and provides the relocation-driven, function-grain splitting algorithm in its purest form. MIT. |
+| ★★ | DioxusLabs/dioxus `wasm-split-cli` source | Validation oracle | A complete, working implementation; useful as a reference for cross-checking outputs of an independent reimplementation. MIT/Apache-2.0. |
+| ★ | Binaryen `wasm-split` (C++) | Profile-driven mode reference | If profile-driven splitting is later wanted alongside annotation-driven, this is the only mature implementation. Apache-2.0. |
+| (foundation) | [`walrus`](https://github.com/rustwasm/walrus) (Rust) | Implementation library | wasm-bindgen already uses walrus internally, making it the natural choice for any independent Rust-side splitter; relocation-section APIs are present. |
+| (foundation) | `wasm-tools` (`wasmparser` + `wasm-encoder`) | Lower-level alternative to walrus | Tracks newest WASM proposals (GC, threads, multi-memory) faster than walrus; trade-off is more boilerplate. |
+
+Independent-implementation work is **not** in scope for the Tier 2 MVP defined in §10; this table exists solely so a future Phase 2 escalation has a starting point.
+
+---
+
+## 10. Addendum (2026-04-27) — Phase 1 MVP scope reduction
+
+The original §6 Phase 1+ scope (#1858-1 through #1858-7) totals 8–14 weeks of engineering across seven sub-issues. To reach the Minimum Goal — *"reduce initial bundle size for at least one common case, in production, with no regression on non-split cases"* — most of that scope can be deferred. This section defines the Tier 2 MVP that supersedes §6 for Phase 1 planning purposes; the original §6 table remains the long-term roadmap.
+
+### 10.1 MVP tiers considered
+
+| Tier | Scope | Estimated effort | Recommendation |
+|---|---|---|---|
+| Tier 1 — Bare Minimum | sub-issue #1858-4 only (build pipeline) + documented manual user pattern (the §5.2 (d) closure, copy-pasted into user code) | 2–3 weeks | Not recommended — no API surface, low marketing value |
+| **Tier 2 — Recommended Minimum** ★ | #1858-4 (build) + #1858-2 minimal (`Router::route_lazy`) + #1858-3 minimal (auto-`SuspenseBoundary`) + #1858-7 minimal (one-page guide + one example) | **4–5 weeks** | **Recommended** — see §10.5 for rationale |
+| Tier 3 — Full Phase 1 | All seven sub-issues from §6 | 8–14 weeks | Defer to Phase 2; risk of scope creep |
+
+### 10.2 Tier 2 inclusion list (Must-have)
+
+1. **Sub-issue #1858-4 — Build integration (unchanged from §6)**. Resolves F4, F8, F9, F10. A `cargo make` recipe orchestrates `cargo build --release --target wasm32 -- -C link-arg=--emit-relocs` → `wasm-bindgen --out-name main` → `wasm-split-cli split` → post-process `__wasm_split.js` URLs → flat `dist/`. Adds versioned subdirectory output (F11) and minimum-chunk-size policy (F12).
+2. **Sub-issue #1858-2 minimal — `Router::route_lazy`**. A thin wrapper around the verified §5.2 (d) closure. See §10.4 for the API and implementability proof.
+3. **Sub-issue #1858-3 minimal — `SuspenseBoundary` interlock**. `Router::route_lazy` automatically constructs the `SuspenseBoundary` with the user-supplied fallback; the interlock with `Signal<bool>` is internal to the router method.
+4. **Sub-issue #1858-7 minimal — Documentation**. One `docs/code-splitting.md` page covering: how to enable, one worked example, the F5 (data does not split) warning per O12, the F11 (cache skew) operational guidance.
+
+### 10.3 Tier 2 exclusion list (Defer to Phase 2)
+
+| Sub-issue | Why deferred |
+|---|---|
+| #1858-1 (general adapter layer in `crates/reinhardt-pages/src/code_splitting/`) | The Tier 2 `Router::route_lazy` covers the only consumer that exists in Phase 1; a general adapter layer can wait until a second consumer (e.g., `#[lazy_component]`) actually needs it. |
+| #1858-5 (`#[lazy_component]` macro) | Most complex sub-issue. Component-grain splitting can be done by Tier 2 users via direct `#[wasm_split]` annotation per F1/F2 documented patterns. Macro-driven ergonomics is a Phase 2 enhancement. |
+| #1858-6 (prefetching strategies) | Flutter production case studies (Wild.codes: dashboard 6 MB → 2.8 MB, LCP −40%) achieve the Minimum Goal *without* prefetching. Pure win for Phase 2. |
+| Path B independent splitter | The §9.4 cross-ecosystem comparison strengthens Path D; no immediate need to escalate to Path B. |
+
+### 10.4 Tier 2 API surface (only one entry point)
+
+The proposed Tier 2 API is **a single method** on the existing `Router` type. Its body is a literal extraction of the closure on lines 27–73 of `crates/reinhardt-pages/wip/issue-1858-wasm-split-poc/src/router.rs` (POC source, branch-only); no behavior is invented.
+
+```rust
+// Proposed signature (additive to existing `Router::route`):
+impl Router {
+    /// Register a lazily-loaded route whose handler is fetched as a
+    /// separate WASM chunk on first navigation.
+    ///
+    /// `loader` MUST be a function returning a future that resolves to a
+    /// `Page`. The function MUST be annotated upstream with
+    /// `#[wasm_split(<chunk_name>)]` (per F1) and exposed via a public
+    /// async wrapper (per F2). `fallback` is rendered while the chunk
+    /// downloads; it is the SuspenseBoundary's fallback content.
+    pub fn route_lazy<F, Fut, Fb>(self, path: &str, loader: F, fallback: Fb) -> Self
+    where
+        F: Fn() -> Fut + 'static,
+        Fut: std::future::Future<Output = Page> + 'static,
+        Fb: Fn() -> Page + 'static + Clone,
+    { /* internally: §5.2 (d) closure, parameterized over loader + fallback */ }
+}
+```
+
+User-side usage collapses to:
+
+```rust
+Router::new()
+    .route("/", || home_view())
+    .route_lazy("/about", about_view, || page!(|| { p { "Loading About..." } })())
+```
+
+where `about_view` is the same `pub async fn about_view() -> Page { about_view_impl().await }` wrapper proven in POC (`src/about.rs`).
+
+#### 10.4.1 Implementability proof (mandatory)
+
+The Tier 2 API surface MUST work in production; the following evidence supports that requirement:
+
+| Claim | Evidence |
+|---|---|
+| The closure body required by `route_lazy` already exists and runs in WASM | §5.2 (a)/(b)/(d) structural verification of the POC; `crates/reinhardt-pages/wip/issue-1858-wasm-split-poc/src/router.rs` lines 27–73. |
+| All three captured types (`Signal<bool>`, `Rc<RefCell<Option<Page>>>`, `spawn_local`) are already in `reinhardt_pages::prelude` | POC `use` statements: `use reinhardt_pages::prelude::*;` resolves each one. |
+| `SuspenseBoundary::new().fallback(...).content(...).into_page()` chain is supported by the existing `reinhardt-pages` API | POC compiles and runs against current `crates/reinhardt-pages` HEAD without modifications to the framework. |
+| `cfg(target_arch = "wasm32")` gating preserves SSR coexistence (RFC §5.2 (f)) | POC `examples/ssr_smoke.rs` succeeds on native target. |
+
+Verification command for Phase 1 implementation: the Tier 2 `Router::route_lazy` lands behind a single test that (a) compiles the POC's `init_router()` body re-expressed via `route_lazy`, and (b) `cargo nextest run` against the existing `reinhardt-pages` test suite to confirm no regression. No new framework primitives are required.
+
+### 10.5 Why Tier 2 is the recommended MVP
+
+1. **Risk-adjusted return.** Tier 1 ships a build pipeline with no API and is invisible to users. Tier 3 blocks unrelated reinhardt-web work for 8–14 weeks. Tier 2's single `Router::route_lazy` is sufficient to demonstrate the feature in marketing material and one example, while keeping the scope bounded.
+2. **Industry parity.** Blazor's GA (production-shipping) lazy-loading API is similarly route-grain; component-grain (`#[lazy_component]` Phase 2 equivalent) does not exist in Blazor at all. Tier 2 reaches functional parity with the most mature competitor in 4–5 weeks.
+3. **Failure mode is bounded.** If Tier 2 fails its exit criteria (§10.6), the failure is detectable in 4–5 weeks rather than 14, and the only thrown-away work is one router method plus one build recipe.
+4. **No invented APIs.** Per §10.4.1, the only proposed API surface is a literal extraction of an already-running POC pattern. The MVP cannot be blocked by unforeseen API design issues.
+
+### 10.6 Tier 2 exit criteria
+
+The Tier 2 MVP is "done" when **all** of the following hold; failure on any criterion blocks completion.
+
+- Phase 0 RFC §5.2 criteria (a), (b), (d), (f) continue to hold using `Router::route_lazy` (not the open-coded POC closure).
+- One example under `examples/` exercises `Router::route_lazy` with at least one route serving ≥ 5 KB of code-only logic.
+- Initial bundle byte-size reduction ≥ 20 % on that example (modest target acknowledging F5 / O12).
+- `cargo nextest run` against `reinhardt-pages` (workspace) passes with no regression on existing tests.
+- `docs/code-splitting.md` covers: (i) one worked example, (ii) F5 / O12 data extraction guidance, (iii) F11 cache-skew operational note, (iv) F12 chunk-count guidance.
+- The Tier 2 build recipe completes end-to-end on a clean checkout in CI without manual intervention.
+
+### 10.7 Re-mapping §6 sub-issues to Phase 1 vs Phase 2
+
+| Original sub-issue | Phase 1 (Tier 2 MVP) | Phase 2 (post-MVP) |
+|---|---|---|
+| #1858-1 (adapter layer) | — | ✅ |
+| #1858-2 (`Router::route_lazy` minimal) | ✅ Must-have | (extended forms in Phase 2) |
+| #1858-3 (`SuspenseBoundary` interlock minimal) | ✅ Must-have | (advanced interlocks in Phase 2) |
+| #1858-4 (build integration) | ✅ Must-have | (incremental rebuild optimization in Phase 2) |
+| #1858-5 (`#[lazy_component]` macro) | — | ✅ |
+| #1858-6 (prefetching) | — | ✅ |
+| #1858-7 (documentation minimal) | ✅ Must-have | (advanced patterns guide in Phase 2) |
+
+Phase 1 (Tier 2) total: 4–5 weeks across four must-have sub-issues. Phase 2 total: 4–9 weeks across the deferred sub-issues, scheduled only after Phase 1 ships and the Minimum Goal is empirically demonstrated.

@@ -37,19 +37,43 @@ fn store_router(router: Router) {
 /// WASM client application launcher.
 ///
 /// Encapsulates all client-side startup boilerplate: panic hook, reactive
-/// scheduler, DOM mounting, reactive `Effect` for route changes, and
-/// history listener.
+/// scheduler, DOM mounting, reactive `Effect` for route changes,
+/// history listener, and built-in SPA link interception. Optional
+/// lifecycle hooks (`before_launch`, `after_launch`) and path-driven
+/// side effects (`on_path`, `on_path_pattern`) plug into the builder
+/// chain so app-level wiring stays declarative.
 ///
 /// # Example
 ///
 /// ```ignore
-/// use reinhardt::pages::ClientLauncher;
+/// use reinhardt::pages::{ClientLauncher, LaunchCtx, PathCtx};
 /// use wasm_bindgen::prelude::*;
 ///
 /// #[wasm_bindgen(start)]
 /// pub fn main() -> Result<(), JsValue> {
 ///     ClientLauncher::new("#root")
+///         .before_launch(|| {
+///             // Runs after the panic hook + reactive scheduler are
+///             // configured but BEFORE the router is initialised.
+///             my_app::state::init_app_state();
+///         })
 ///         .router(router::init_router)
+///         .after_launch(|ctx: &LaunchCtx<'_>| {
+///             // Runs after the first DOM mount; router is live here.
+///             my_app::analytics::report_boot(ctx.document());
+///         })
+///         .on_path("/", |ctx: &PathCtx<'_>| {
+///             // Idempotent body-level mount + side effect on entering "/".
+///             ctx.ensure_portal("toast-container", components::toast::container);
+///             my_app::ws::connect_notifications();
+///         })
+///         .on_path_pattern("/orgs/{slug}/", |ctx| {
+///             // Re-fires when {slug} changes within the same pattern.
+///             my_app::analytics::track_view(ctx.params());
+///         })
+///         // SPA link interception is enabled by default. Pass false to
+///         // opt out if your app installs its own document click handler:
+///         // .intercept_links(false)
 ///         .launch()
 /// }
 /// ```

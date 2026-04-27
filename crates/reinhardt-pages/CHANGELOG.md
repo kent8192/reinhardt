@@ -12,6 +12,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - *(pages)* `ClientLauncher::intercept_links(bool)` for built-in SPA link
   interception (default: `true`). Skips external URLs, `target="_blank"`,
   `download`, `rel="external"`, and modifier-key clicks. Closes #3994.
+- *(pages)* `ClientLauncher::before_launch` and `after_launch` lifecycle
+  hooks. `before_launch` runs after scheduler setup but before router
+  init; `after_launch` runs after the first DOM mount and receives a
+  `LaunchCtx` with borrows of `window`, `document`, and the root element.
+  Multiple hooks accumulate in registration order. Closes #3996.
 
 ### Changed
 

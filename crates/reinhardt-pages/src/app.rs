@@ -58,7 +58,48 @@ pub struct ClientLauncher {
 	router_init: Option<Box<dyn FnOnce() -> Router>>,
 	#[cfg_attr(not(wasm), allow(dead_code))]
 	intercept_links: bool,
+	#[cfg_attr(not(wasm), allow(dead_code))]
+	before_launch_hooks: Vec<BeforeLaunchHook>,
+	#[cfg_attr(not(wasm), allow(dead_code))]
+	after_launch_hooks: Vec<AfterLaunchHook>,
 }
+
+/// Context passed to [`ClientLauncher::after_launch`] callbacks.
+///
+/// Borrows the resources [`ClientLauncher::launch`] already owns
+/// (`window`, `document`, root element); never owns them.
+pub struct LaunchCtx<'a> {
+	#[cfg_attr(not(wasm), allow(dead_code))]
+	window: &'a web_sys::Window,
+	#[cfg_attr(not(wasm), allow(dead_code))]
+	document: &'a web_sys::Document,
+	#[cfg_attr(not(wasm), allow(dead_code))]
+	root_element: &'a web_sys::Element,
+}
+
+impl<'a> LaunchCtx<'a> {
+	/// The browser `window` object.
+	pub fn window(&self) -> &web_sys::Window {
+		self.window
+	}
+
+	/// The current `document`.
+	pub fn document(&self) -> &web_sys::Document {
+		self.document
+	}
+
+	/// The element matched by the launcher's root selector (e.g. `#root`).
+	pub fn root_element(&self) -> &web_sys::Element {
+		self.root_element
+	}
+}
+
+/// A one-shot callback invoked before the router is initialised.
+type BeforeLaunchHook = Box<dyn FnOnce()>;
+
+/// A one-shot callback invoked after the first DOM mount, receiving a
+/// borrow of the launcher's [`LaunchCtx`].
+type AfterLaunchHook = Box<dyn FnOnce(&LaunchCtx<'_>)>;
 
 impl ClientLauncher {
 	/// Create a new launcher targeting the given CSS selector (e.g. `"#root"`).
@@ -67,6 +108,8 @@ impl ClientLauncher {
 			root_selector,
 			router_init: None,
 			intercept_links: true,
+			before_launch_hooks: Vec::new(),
+			after_launch_hooks: Vec::new(),
 		}
 	}
 
@@ -100,6 +143,39 @@ impl ClientLauncher {
 		self.intercept_links = enabled;
 		self
 	}
+
+	/// Register a callback to run **before** the router is initialised.
+	///
+	/// `before_launch` callbacks fire after the panic hook and reactive
+	/// scheduler are configured but before `router_init` is called, so
+	/// they are the right place for state initialisation that components
+	/// will read during their first render.
+	///
+	/// Multiple calls accumulate in registration order.
+	pub fn before_launch<F>(mut self, hook: F) -> Self
+	where
+		F: FnOnce() + 'static,
+	{
+		self.before_launch_hooks.push(Box::new(hook));
+		self
+	}
+
+	/// Register a callback to run **after** the first DOM mount.
+	///
+	/// `after_launch` callbacks fire after the initial render has been
+	/// mounted to the root element. The callback receives a [`LaunchCtx`]
+	/// with borrows of the `window`, `document`, and root element that
+	/// `launch()` already owns. The router is fully initialised at this
+	/// point, so [`with_router`] is safe to call.
+	///
+	/// Multiple calls accumulate in registration order.
+	pub fn after_launch<F>(mut self, hook: F) -> Self
+	where
+		F: FnOnce(&LaunchCtx<'_>) + 'static,
+	{
+		self.after_launch_hooks.push(Box::new(hook));
+		self
+	}
 }
 
 #[cfg(wasm)]
@@ -109,21 +185,30 @@ impl ClientLauncher {
 	/// Performs in order:
 	/// 1. Sets up the panic hook for readable console errors
 	/// 2. Configures the reactive scheduler for async contexts
-	/// 3. Initialises the router and stores it in the global thread-local
-	/// 4. Registers the `popstate` history listener (browser back/forward)
-	/// 5. Queries the DOM for `root_selector`; returns `Err` if not found
-	/// 6. Installs the SPA link-interception listener on `document`
+	/// 3. Runs registered `before_launch` callbacks in registration order
+	/// 4. Initialises the router and stores it in the global thread-local
+	/// 5. Registers the `popstate` history listener (browser back/forward)
+	/// 6. Queries the DOM for `root_selector`; returns `Err` if not found
+	/// 7. Installs the SPA link-interception listener on `document`
 	///    (when `intercept_links` is `true`, the default)
-	/// 7. Initial render: `render_current()` → `cleanup_reactive_nodes()` → `mount()`
-	/// 8. Creates a reactive `Effect` that re-renders on route changes; leaks it
-	///    intentionally so it persists for the application lifetime
-	pub fn launch(self) -> Result<(), wasm_bindgen::JsValue> {
+	/// 8. Initial render: `render_current()` → `cleanup_reactive_nodes()` → `mount()`
+	/// 9. Runs registered `after_launch` callbacks in registration order,
+	///    each receiving a [`LaunchCtx`] borrowing `window`, `document`,
+	///    and the root element
+	/// 10. Creates a reactive `Effect` that re-renders on route changes;
+	///    leaks it intentionally so it persists for the application lifetime
+	pub fn launch(mut self) -> Result<(), wasm_bindgen::JsValue> {
 		#[cfg(feature = "console_error_panic_hook")]
 		console_error_panic_hook::set_once();
 
 		crate::reactive::runtime::set_scheduler(|task| {
 			wasm_bindgen_futures::spawn_local(async move { task() });
 		});
+
+		// Step 3: drain before_launch callbacks before any router or DOM work.
+		for hook in self.before_launch_hooks.drain(..) {
+			hook();
+		}
 
 		let router = self
 			.router_init
@@ -162,6 +247,19 @@ impl ClientLauncher {
 		let wrapper = crate::dom::Element::new(root_el.clone());
 		view.mount(&wrapper)
 			.map_err(|e| wasm_bindgen::JsValue::from_str(&format!("mount failed: {e:?}")))?;
+
+		// Step 9: drain after_launch callbacks now that the router is live and
+		// the first DOM mount has completed.
+		if !self.after_launch_hooks.is_empty() {
+			let ctx = LaunchCtx {
+				window: &window,
+				document: &document,
+				root_element: &root_el,
+			};
+			for hook in self.after_launch_hooks.drain(..) {
+				hook(&ctx);
+			}
+		}
 
 		let root_clone = root_el.clone();
 		let _effect = crate::reactive::Effect::new(move || {
@@ -456,5 +554,70 @@ mod tests {
 		a.has_modifier_key = true;
 		// Act / Assert
 		assert_eq!(should_intercept(&a), None);
+	}
+
+	// --- before_launch / after_launch builder tests ---
+
+	#[rstest]
+	fn test_before_launch_starts_empty() {
+		// Arrange / Act
+		let launcher = ClientLauncher::new("#root");
+		// Assert
+		assert!(launcher.before_launch_hooks.is_empty());
+	}
+
+	#[rstest]
+	fn test_before_launch_accumulates_in_registration_order() {
+		// Arrange / Act
+		let launcher = ClientLauncher::new("#root")
+			.before_launch(|| { /* hook 1 */ })
+			.before_launch(|| { /* hook 2 */ })
+			.before_launch(|| { /* hook 3 */ });
+		// Assert
+		assert_eq!(launcher.before_launch_hooks.len(), 3);
+	}
+
+	#[rstest]
+	fn test_after_launch_starts_empty() {
+		// Arrange / Act
+		let launcher = ClientLauncher::new("#root");
+		// Assert
+		assert!(launcher.after_launch_hooks.is_empty());
+	}
+
+	#[rstest]
+	fn test_after_launch_accumulates_in_registration_order() {
+		// Arrange / Act
+		let launcher = ClientLauncher::new("#root")
+			.after_launch(|_ctx: &LaunchCtx<'_>| { /* hook 1 */ })
+			.after_launch(|_ctx: &LaunchCtx<'_>| { /* hook 2 */ });
+		// Assert
+		assert_eq!(launcher.after_launch_hooks.len(), 2);
+	}
+
+	#[rstest]
+	fn test_lifecycle_hooks_observe_registration_order() {
+		// Arrange: shared counter that records the call order.
+		let trace = std::rc::Rc::new(std::cell::RefCell::new(Vec::<u32>::new()));
+
+		let t = trace.clone();
+		let h1 = move || t.borrow_mut().push(1);
+		let t = trace.clone();
+		let h2 = move || t.borrow_mut().push(2);
+
+		// Act
+		let launcher = ClientLauncher::new("#root")
+			.before_launch(h1)
+			.before_launch(h2);
+
+		// Drain the recorded hooks like `launch()` would, on the host.
+		// We can read the field directly because the test lives in the same
+		// module.
+		for hook in launcher.before_launch_hooks {
+			hook();
+		}
+
+		// Assert
+		assert_eq!(*trace.borrow(), vec![1, 2]);
 	}
 }

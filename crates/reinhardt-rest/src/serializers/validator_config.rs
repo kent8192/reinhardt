@@ -325,6 +325,16 @@ impl<M: Model> Default for ValidatorConfig<M> {
 	}
 }
 
+// Manually re-assert the `UnwindSafe` / `RefUnwindSafe` auto traits that the
+// new `Vec<Arc<dyn ModelLevelValidator<M>>>` field would otherwise strip.
+// Trait objects do not propagate these markers, so the previously
+// auto-derived impls disappeared, triggering cargo-semver-checks
+// `auto_trait_impl_removed` under the RC phase's no-breaking-change policy.
+// The trait objects are only reached via `&self` accessors and `Arc::clone`,
+// so panic-safety guarantees match the pre-PR public contract.
+impl<M: Model> std::panic::UnwindSafe for ValidatorConfig<M> {}
+impl<M: Model> std::panic::RefUnwindSafe for ValidatorConfig<M> {}
+
 #[cfg(test)]
 mod tests {
 	use super::*;

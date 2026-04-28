@@ -23,11 +23,24 @@ use utoipa::openapi::schema::{ObjectBuilder, SchemaType, Type};
 /// ```rust,no_run
 /// # use reinhardt_views::openapi_inspector::ViewSetInspector;
 /// # use reinhardt_views::viewsets::ModelViewSet;
+/// # use reinhardt_db::orm::{FieldSelector, Model};
+/// # use serde::{Deserialize, Serialize};
 /// #
-/// # #[derive(Debug, Clone)]
+/// # #[derive(Debug, Clone, Serialize, Deserialize)]
 /// # struct User {
-/// #     id: i64,
+/// #     id: Option<i64>,
 /// #     username: String,
+/// # }
+/// #
+/// # #[derive(Clone)] struct UserFields;
+/// # impl FieldSelector for UserFields { fn with_alias(self, _: &str) -> Self { self } }
+/// # impl Model for User {
+/// #     type PrimaryKey = i64;
+/// #     type Fields = UserFields;
+/// #     fn table_name() -> &'static str { "users" }
+/// #     fn primary_key(&self) -> Option<i64> { self.id }
+/// #     fn set_primary_key(&mut self, v: i64) { self.id = Some(v); }
+/// #     fn new_fields() -> Self::Fields { UserFields }
 /// # }
 /// #
 /// # #[derive(Debug, Clone)]
@@ -107,9 +120,21 @@ impl ViewSetInspector {
 	/// ```rust,no_run
 	/// # use reinhardt_views::openapi_inspector::ViewSetInspector;
 	/// # use reinhardt_views::viewsets::ModelViewSet;
+	/// # use reinhardt_db::orm::{FieldSelector, Model};
+	/// # use serde::{Deserialize, Serialize};
 	/// #
-	/// # #[derive(Debug, Clone)]
-	/// # struct User { id: i64, username: String }
+	/// # #[derive(Debug, Clone, Serialize, Deserialize)]
+	/// # struct User { id: Option<i64>, username: String }
+	/// # #[derive(Clone)] struct UserFields;
+	/// # impl FieldSelector for UserFields { fn with_alias(self, _: &str) -> Self { self } }
+	/// # impl Model for User {
+	/// #     type PrimaryKey = i64;
+	/// #     type Fields = UserFields;
+	/// #     fn table_name() -> &'static str { "users" }
+	/// #     fn primary_key(&self) -> Option<i64> { self.id }
+	/// #     fn set_primary_key(&mut self, v: i64) { self.id = Some(v); }
+	/// #     fn new_fields() -> Self::Fields { UserFields }
+	/// # }
 	/// # #[derive(Debug, Clone)]
 	/// # struct UserSerializer;
 	/// #
@@ -232,9 +257,21 @@ impl ViewSetInspector {
 	/// ```rust,no_run
 	/// # use reinhardt_views::openapi_inspector::ViewSetInspector;
 	/// # use reinhardt_views::viewsets::ModelViewSet;
+	/// # use reinhardt_db::orm::{FieldSelector, Model};
+	/// # use serde::{Deserialize, Serialize};
 	/// #
-	/// # #[derive(Debug, Clone)]
-	/// # struct User { id: i64 }
+	/// # #[derive(Debug, Clone, Serialize, Deserialize)]
+	/// # struct User { id: Option<i64> }
+	/// # #[derive(Clone)] struct UserFields;
+	/// # impl FieldSelector for UserFields { fn with_alias(self, _: &str) -> Self { self } }
+	/// # impl Model for User {
+	/// #     type PrimaryKey = i64;
+	/// #     type Fields = UserFields;
+	/// #     fn table_name() -> &'static str { "users" }
+	/// #     fn primary_key(&self) -> Option<i64> { self.id }
+	/// #     fn set_primary_key(&mut self, v: i64) { self.id = Some(v); }
+	/// #     fn new_fields() -> Self::Fields { UserFields }
+	/// # }
 	/// # #[derive(Debug, Clone)]
 	/// # struct UserSerializer;
 	/// #
@@ -685,13 +722,41 @@ impl Default for ViewSetInspector {
 mod tests {
 	use super::*;
 	use crate::viewsets::ModelViewSet;
+	use reinhardt_db::orm::{FieldSelector, Model};
+	use serde::{Deserialize, Serialize};
 
-	#[derive(Debug, Clone)]
 	// Allow dead_code: test model used as type parameter for ModelViewSet, fields not read directly
 	#[allow(dead_code)]
+	#[derive(Debug, Clone, Serialize, Deserialize)]
 	struct TestModel {
-		id: i64,
+		id: Option<i64>,
 		name: String,
+	}
+
+	#[derive(Clone)]
+	struct TestModelFields;
+
+	impl FieldSelector for TestModelFields {
+		fn with_alias(self, _alias: &str) -> Self {
+			self
+		}
+	}
+
+	impl Model for TestModel {
+		type PrimaryKey = i64;
+		type Fields = TestModelFields;
+		fn table_name() -> &'static str {
+			"test_models"
+		}
+		fn primary_key(&self) -> Option<Self::PrimaryKey> {
+			self.id
+		}
+		fn set_primary_key(&mut self, value: Self::PrimaryKey) {
+			self.id = Some(value);
+		}
+		fn new_fields() -> Self::Fields {
+			TestModelFields
+		}
 	}
 
 	#[derive(Debug, Clone)]

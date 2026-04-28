@@ -3,11 +3,28 @@
 //! This module provides configuration structures for managing validators
 //! in ModelSerializer instances.
 
+use super::ValidatorError;
 use super::validators::{DatabaseValidatorError, UniqueTogetherValidator, UniqueValidator};
 use reinhardt_db::backends::DatabaseConnection;
 use reinhardt_db::orm::Model;
 use serde::Serialize;
 use std::marker::PhantomData;
+use std::sync::Arc;
+
+/// Object-level synchronous validator that operates directly on a model
+/// instance.
+///
+/// Implementors typically check cross-field invariants that do not require
+/// database access (e.g., `start_date < end_date`, `password == password_confirm`).
+/// Database-backed checks belong in [`UniqueValidator`] / [`UniqueTogetherValidator`]
+/// and run via [`ValidatorConfig::validate_async`].
+///
+/// `Debug` is required as a supertrait so that [`ValidatorConfig`] retains its
+/// derived `Debug` impl.
+pub trait ModelLevelValidator<M>: Send + Sync + std::fmt::Debug {
+	/// Validate `instance`, returning `Err` to halt validation with a reason.
+	fn validate(&self, instance: &M) -> Result<(), ValidatorError>;
+}
 
 /// Configuration for field validators
 #[non_exhaustive]
@@ -15,6 +32,7 @@ use std::marker::PhantomData;
 pub struct ValidatorConfig<M: Model> {
 	unique_validators: Vec<UniqueValidator<M>>,
 	unique_together_validators: Vec<UniqueTogetherValidator<M>>,
+	sync_model_validators: Vec<Arc<dyn ModelLevelValidator<M>>>,
 	_phantom: PhantomData<M>,
 }
 
@@ -54,6 +72,7 @@ impl<M: Model> ValidatorConfig<M> {
 		Self {
 			unique_validators: Vec::new(),
 			unique_together_validators: Vec::new(),
+			sync_model_validators: Vec::new(),
 			_phantom: PhantomData,
 		}
 	}
@@ -135,6 +154,15 @@ impl<M: Model> ValidatorConfig<M> {
 		self.unique_together_validators.push(validator);
 	}
 
+	/// Add an object-level synchronous validator.
+	///
+	/// Synchronous validators run inside [`Self::validate`] and at the start of
+	/// [`Self::validate_async`]. They never touch the database; for unique-style
+	/// checks use [`Self::add_unique_validator`] instead.
+	pub fn add_sync_model_validator(&mut self, validator: Arc<dyn ModelLevelValidator<M>>) {
+		self.sync_model_validators.push(validator);
+	}
+
 	/// Get all unique validators
 	pub fn unique_validators(&self) -> &[UniqueValidator<M>] {
 		&self.unique_validators
@@ -143,6 +171,11 @@ impl<M: Model> ValidatorConfig<M> {
 	/// Get all unique together validators
 	pub fn unique_together_validators(&self) -> &[UniqueTogetherValidator<M>] {
 		&self.unique_together_validators
+	}
+
+	/// Get all object-level synchronous validators
+	pub fn sync_model_validators(&self) -> &[Arc<dyn ModelLevelValidator<M>>] {
+		&self.sync_model_validators
 	}
 
 	/// Check if any validators are configured
@@ -182,7 +215,21 @@ impl<M: Model> ValidatorConfig<M> {
 	/// assert!(config.has_validators());
 	/// ```
 	pub fn has_validators(&self) -> bool {
-		!self.unique_validators.is_empty() || !self.unique_together_validators.is_empty()
+		!self.unique_validators.is_empty()
+			|| !self.unique_together_validators.is_empty()
+			|| !self.sync_model_validators.is_empty()
+	}
+
+	/// Run only synchronous validators against `instance`.
+	///
+	/// Returns the first failure as an `Err`. No-op (returns `Ok(())`) when no
+	/// synchronous validators are registered, preserving backward compatibility
+	/// for callers that rely on [`Self::has_validators`] being false.
+	pub fn validate(&self, instance: &M) -> Result<(), ValidatorError> {
+		for validator in &self.sync_model_validators {
+			validator.validate(instance)?;
+		}
+		Ok(())
 	}
 
 	/// Validate model instance asynchronously against configured validators
@@ -277,6 +324,16 @@ impl<M: Model> Default for ValidatorConfig<M> {
 		Self::new()
 	}
 }
+
+// Manually re-assert the `UnwindSafe` / `RefUnwindSafe` auto traits that the
+// new `Vec<Arc<dyn ModelLevelValidator<M>>>` field would otherwise strip.
+// Trait objects do not propagate these markers, so the previously
+// auto-derived impls disappeared, triggering cargo-semver-checks
+// `auto_trait_impl_removed` under the RC phase's no-breaking-change policy.
+// The trait objects are only reached via `&self` accessors and `Arc::clone`,
+// so panic-safety guarantees match the pre-PR public contract.
+impl<M: Model> std::panic::UnwindSafe for ValidatorConfig<M> {}
+impl<M: Model> std::panic::RefUnwindSafe for ValidatorConfig<M> {}
 
 #[cfg(test)]
 mod tests {

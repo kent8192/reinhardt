@@ -31,11 +31,49 @@
 //!
 //! This design avoids the N+1 query problem and gives developers explicit control
 //! over when and how relationships are loaded.
+//!
+//! ## Limitations of the synchronous trait API
+//!
+//! The [`Serializer`] trait is synchronous, so the [`Serializer::serialize`]
+//! and [`Serializer::deserialize`] implementations on [`NestedSerializer`] and
+//! [`WritableNestedSerializer`] cannot reach the database:
+//!
+//! - `serialize` emits whatever was preloaded and never lazy-loads. A null
+//!   `relationship_field` stays null in the output.
+//! - `WritableNestedSerializer::deserialize` validates structure and
+//!   permissions but returns only the parent model. To act on nested writes,
+//!   pair it with [`WritableNestedSerializer::extract_nested_data`] and
+//!   dispatch the result to your ORM inside a transaction.
+//! - `depth` controls how deeply the arena re-walks already-loaded data; it
+//!   does not trigger additional loads.
 
 use super::{SerializationArena, Serializer, SerializerError};
 use reinhardt_db::orm::Model;
 use serde_json::Value;
 use std::marker::PhantomData;
+
+// Module-private helper used by both `NestedSerializer` and
+// `WritableNestedSerializer` to emit the parent model's JSON. The arena path
+// honors prefetched relationship data already present in the serialized form;
+// it never triggers ORM lazy loading.
+fn serialize_via_arena_or_plain<M: Model>(
+	input: &M,
+	depth: usize,
+	use_arena: bool,
+) -> Result<String, SerializerError> {
+	if use_arena {
+		let arena = SerializationArena::new();
+		let serialized = arena.serialize_model(input, depth);
+		let json_value = arena.to_json(serialized);
+		serde_json::to_string(&json_value).map_err(|e| SerializerError::Other {
+			message: format!("Serialization error: {}", e),
+		})
+	} else {
+		serde_json::to_string(input).map_err(|e| SerializerError::Other {
+			message: format!("Serialization error: {}", e),
+		})
+	}
+}
 
 /// NestedSerializer - Serialize related models inline
 ///
@@ -278,17 +316,20 @@ impl<M: Model, R: Model> Serializer for NestedSerializer<M, R> {
 	type Input = M;
 	type Output = String;
 
+	/// Serialize the parent model honoring already-loaded relationships.
+	///
+	/// This method does **not** trigger ORM lazy loading. If the
+	/// `relationship_field` is null in the parent JSON, it stays null in the
+	/// output — no additional query is issued. To preload relationships, use
+	/// `QuerySet::select_related` / `prefetch_related` in the view layer
+	/// before calling [`Self::serialize`].
 	fn serialize(&self, input: &Self::Input) -> Result<Self::Output, SerializerError> {
 		if self.use_arena {
-			// Arena-based serialization
-			let arena = SerializationArena::new();
-			let serialized = arena.serialize_model(input, self.depth);
-			let json_value = arena.to_json(serialized);
-			serde_json::to_string(&json_value).map_err(|e| SerializerError::Other {
-				message: format!("Serialization error: {}", e),
-			})
+			serialize_via_arena_or_plain(input, self.depth, true)
 		} else {
-			// Traditional heap-based serialization (backward compatibility)
+			// `serialize_without_arena` keeps a depth > 0 sentinel that
+			// inspects the relationship field for prefetched data; the bare
+			// arena path does not need that branch.
 			self.serialize_without_arena(input)
 		}
 	}
@@ -666,14 +707,27 @@ impl<M: Model, R: Model> Serializer for WritableNestedSerializer<M, R> {
 	type Input = M;
 	type Output = String;
 
+	/// Serialize the parent model honoring already-loaded relationships.
+	///
+	/// Mirrors [`NestedSerializer::serialize`] (depth `1`, arena enabled): it
+	/// emits whatever relationship data was preloaded by the ORM and never
+	/// triggers lazy loading. For relationships you need to materialize at
+	/// response time, preload them via `select_related` /
+	/// `prefetch_related` in the view layer.
 	fn serialize(&self, input: &Self::Input) -> Result<Self::Output, SerializerError> {
-		// Same as NestedSerializer - requires ORM relationship loading
-		// See NestedSerializer::serialize for implementation roadmap
-		serde_json::to_string(input).map_err(|e| SerializerError::Other {
-			message: format!("Serialization error: {}", e),
-		})
+		serialize_via_arena_or_plain(input, 1, true)
 	}
 
+	/// Validate the parent JSON structure and nested-write permissions.
+	///
+	/// Returns the parent model only. Nested data is **not** materialized
+	/// into the returned `M` — call [`Self::extract_nested_data`] on the
+	/// same JSON to obtain the related-object payload, then perform the
+	/// create / update via the ORM in your view code.
+	///
+	/// Permission flags are enforced here: nested writes that violate
+	/// `allow_create` or `allow_update` cause this method to return
+	/// `SerializerError::Other`.
 	fn deserialize(&self, output: &Self::Output) -> Result<Self::Input, SerializerError> {
 		// Parse JSON to validate structure
 		let value: Value = serde_json::from_str(output).map_err(|e| SerializerError::Other {

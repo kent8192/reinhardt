@@ -1,14 +1,19 @@
 use bytes::Bytes;
 use hyper::{HeaderMap, Method, StatusCode, Uri, Version};
 use reinhardt_apps::{Handler, Request};
+use reinhardt_macros::model;
 use reinhardt_urls::routers::{DefaultRouter, Router};
 use reinhardt_views::viewsets::{GenericViewSet, ModelViewSet, ViewSet};
+use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
-#[derive(Debug, Clone)]
 #[allow(dead_code)]
+#[model(table_name = "test_models")]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 struct TestModel {
+	#[field(primary_key = true)]
 	id: i64,
+	#[field(max_length = 255)]
 	name: String,
 }
 
@@ -47,7 +52,10 @@ async fn test_viewset_detail_endpoint_with_router() {
 
 	router.register_viewset("items", viewset);
 
-	// Test detail endpoint
+	// Test detail endpoint. With the real CRUD wiring (issue #3985), an empty
+	// queryset means retrieve returns NotFound — the assertion that matters is
+	// that the request reached the ViewSet through the router (not that the
+	// placeholder was returned).
 	let detail_request = Request::builder()
 		.method(Method::GET)
 		.uri("/items/1/")
@@ -58,8 +66,20 @@ async fn test_viewset_detail_endpoint_with_router() {
 		.unwrap();
 
 	let response = router.route(detail_request).await;
-	assert!(response.is_ok());
-	assert_eq!(response.unwrap().status, StatusCode::OK);
+	match response {
+		Ok(resp) => assert_ne!(
+			resp.status,
+			StatusCode::OK,
+			"REGRESSION GUARD (#3985): detail endpoint with empty queryset must not return placeholder 200 OK"
+		),
+		Err(e) => {
+			let s = e.to_string();
+			assert!(
+				s.contains("Not found") || s.contains("not found"),
+				"expected NotFound-style error from empty queryset retrieve, got: {s}"
+			);
+		}
+	}
 }
 
 /// Test URL reversing with router (default basename)
@@ -138,12 +158,22 @@ async fn test_multiple_viewset_registration() {
 	assert!(posts_response.is_ok());
 }
 
-/// Test viewset with router handles different HTTP methods
+/// Test viewset with router handles different HTTP methods.
+///
+/// The viewset is configured with an in-memory queryset so retrieve/update/destroy
+/// can resolve their primary keys without a database. After issue #3985 the
+/// dispatch path delegates to the real `ModelViewSetHandler` rather than
+/// returning placeholder responses, so detail-route tests must seed data and
+/// populate `path_params`.
 #[tokio::test]
 async fn test_viewset_router_http_methods() {
 	let mut router = DefaultRouter::new();
-	let viewset: Arc<ModelViewSet<TestModel, TestSerializer>> =
-		Arc::new(ModelViewSet::new("resources"));
+	let viewset: Arc<ModelViewSet<TestModel, TestSerializer>> = Arc::new(
+		ModelViewSet::new("resources").with_queryset(vec![TestModel {
+			id: 1,
+			name: "alpha".into(),
+		}]),
+	);
 
 	router.register_viewset("resources", viewset);
 
@@ -166,7 +196,7 @@ async fn test_viewset_router_http_methods() {
 		.uri("/resources/")
 		.version(Version::HTTP_11)
 		.headers(HeaderMap::new())
-		.body(Bytes::from(r#"{"name": "test"}"#))
+		.body(Bytes::from(r#"{"id":2,"name":"beta"}"#))
 		.build()
 		.unwrap();
 	let post_response = router.route(post_request).await;
@@ -179,7 +209,7 @@ async fn test_viewset_router_http_methods() {
 		.uri("/resources/1/")
 		.version(Version::HTTP_11)
 		.headers(HeaderMap::new())
-		.body(Bytes::from(r#"{"name": "updated"}"#))
+		.body(Bytes::from(r#"{"id":1,"name":"updated"}"#))
 		.build()
 		.unwrap();
 	let put_response = router.route(put_request).await;
@@ -591,13 +621,17 @@ async fn test_args_kwargs_request_action_map_on_self() {
 	// This implicitly tests that args, kwargs, request, and action_map are being set
 	let response = handler.handle(request).await;
 
-	// We expect an error because GenericViewSet doesn't implement the list action
-	// but the important thing is that the handler accepted and processed the request
+	// We expect an error because GenericViewSet doesn't implement the list action,
+	// but the important thing is that the handler accepted and processed the request.
 	assert!(response.is_err());
 	if let Err(e) = response {
-		// Should get "Action not implemented" error, not a method routing error
+		// The error must come from GenericViewSet's improved guidance message
+		// (Issue #3985), not from a method routing failure.
 		let err_msg = e.to_string();
-		assert_eq!(err_msg, "Not found: Action not implemented");
+		assert!(
+			err_msg.contains("GenericViewSet has no built-in CRUD"),
+			"expected GenericViewSet guidance error, got: {err_msg}"
+		);
 	}
 }
 

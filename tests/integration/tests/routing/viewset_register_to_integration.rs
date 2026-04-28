@@ -1,13 +1,18 @@
 //! ViewSet as_view → register_to_router integration tests
 
 use hyper::Method;
+use reinhardt_macros::model;
 use reinhardt_urls::routers::ServerRouter;
 use reinhardt_views::viewsets::ModelViewSet;
 use serde::{Deserialize, Serialize};
 
+#[allow(dead_code)]
+#[model(table_name = "users")]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct TestUser {
+	#[field(primary_key = true)]
 	id: i64,
+	#[field(max_length = 255)]
 	name: String,
 }
 

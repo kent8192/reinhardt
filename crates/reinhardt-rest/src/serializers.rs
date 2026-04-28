@@ -18,6 +18,20 @@
 //! - **Performance**: Query caching, N+1 detection, batch validation
 //! - **Content Negotiation**: JSON, XML, and custom parsers
 //!
+//! ## Validation Strategies
+//!
+//! [`ModelSerializer`] runs three validator layers, ordered by latency:
+//!
+//! | Layer | Where it runs | Use case |
+//! |-------|---------------|----------|
+//! | Object-sync | [`ModelSerializer::validate`] (called first by `validate_async`) | Cross-field invariants, no DB (e.g. `start < end`) |
+//! | Field-async (unique) | [`ModelSerializer::validate_async`] | Per-field DB checks (UNIQUE constraints) |
+//! | Composite-async (unique-together) | [`ModelSerializer::validate_async`] | Multi-field DB checks |
+//!
+//! Register synchronous validators with [`ModelSerializer::with_model_validator`].
+//! Register database-backed validators with [`ModelSerializer::with_unique_validator`]
+//! and [`ModelSerializer::with_unique_together_validator`].
+//!
 //! ## Quick Start
 //!
 //! ### Basic Serializer
@@ -259,5 +273,5 @@ pub use relations::{
 	HyperlinkedRelatedField, IdentityField, ManyRelatedField, PrimaryKeyRelatedField,
 	RelationField, SlugRelatedField, StringRelatedField,
 };
-pub use validator_config::ValidatorConfig;
+pub use validator_config::{ModelLevelValidator, ValidatorConfig};
 pub use validators::{DatabaseValidatorError, UniqueTogetherValidator, UniqueValidator};

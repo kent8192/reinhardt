@@ -5,8 +5,20 @@
 
 use hyper::{HeaderMap, Method, Uri, Version};
 use reinhardt_http::Request;
+use reinhardt_macros::model;
 use reinhardt_views::viewsets::viewset::ModelViewSet;
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+
+#[allow(dead_code)]
+#[model(table_name = "test_models")]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct TestModel {
+	#[field(primary_key = true)]
+	id: i64,
+	#[field(max_length = 255)]
+	name: String,
+}
 
 // Helper function to create a test request
 fn create_test_request(method: Method, path: &str) -> Request {
@@ -24,9 +36,21 @@ fn create_test_request(method: Method, path: &str) -> Request {
 		.unwrap()
 }
 
+fn create_test_request_with_body(method: Method, path: &str, body: &'static str) -> Request {
+	let uri: Uri = path.parse().unwrap();
+	Request::builder()
+		.method(method)
+		.uri(uri)
+		.version(Version::HTTP_11)
+		.headers(HeaderMap::new())
+		.body(hyper::body::Bytes::from(body))
+		.build()
+		.unwrap()
+}
+
 #[tokio::test]
 async fn test_viewset_handler_attribute_tracking() {
-	let viewset = ModelViewSet::<(), ()>::new("test");
+	let viewset = ModelViewSet::<TestModel, ()>::new("test");
 	let mut actions = HashMap::new();
 	actions.insert(Method::GET, "list".to_string());
 
@@ -43,7 +67,7 @@ async fn test_viewset_handler_attribute_tracking() {
 
 #[tokio::test]
 async fn test_viewset_handler_action_mapping() {
-	let viewset = ModelViewSet::<(), ()>::new("test");
+	let viewset = ModelViewSet::<TestModel, ()>::new("test");
 	let mut actions = HashMap::new();
 	actions.insert(Method::GET, "list".to_string());
 	actions.insert(Method::POST, "create".to_string());
@@ -56,10 +80,20 @@ async fn test_viewset_handler_action_mapping() {
 	let response = handler.handle(get_request).await;
 	assert!(response.is_ok());
 
-	// Test POST request maps to create action
-	let post_request = create_test_request(Method::POST, "http://example.com/test/");
+	// Test POST request maps to create action.
+	// Provide a valid JSON body so the real CRUD handler succeeds end-to-end
+	// against the in-memory queryset (no database pool configured).
+	let post_request = create_test_request_with_body(
+		Method::POST,
+		"http://example.com/test/",
+		r#"{"id":1,"name":"alpha"}"#,
+	);
 	let response = handler.handle(post_request).await;
-	assert!(response.is_ok());
+	assert!(
+		response.is_ok(),
+		"POST should map to create and succeed; response = {:?}",
+		response
+	);
 
 	// Test unsupported method returns 405 Method Not Allowed with Allow header
 	let put_request = create_test_request(Method::PUT, "http://example.com/test/");

@@ -230,3 +230,22 @@ where
 		vec!["POST", "OPTIONS"]
 	}
 }
+
+// Manually re-assert `UnwindSafe` / `RefUnwindSafe`. `CreateAPIView` holds an
+// `Option<ValidatorConfig<M>>`, whose auto-trait state was lost when
+// `Vec<Arc<dyn ModelLevelValidator<M>>>` was added to `ValidatorConfig`.
+// Without these impls, cargo-semver-checks reports `auto_trait_impl_removed`
+// during the RC phase. See the matching block in viewset.rs for soundness
+// rationale.
+impl<M, S> std::panic::UnwindSafe for CreateAPIView<M, S>
+where
+	M: Model + Serialize + for<'de> Deserialize<'de> + Send + Sync + Clone,
+	S: Serializer<Input = M, Output = String> + Send + Sync,
+{
+}
+impl<M, S> std::panic::RefUnwindSafe for CreateAPIView<M, S>
+where
+	M: Model + Serialize + for<'de> Deserialize<'de> + Send + Sync + Clone,
+	S: Serializer<Input = M, Output = String> + Send + Sync,
+{
+}

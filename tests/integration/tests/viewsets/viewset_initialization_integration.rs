@@ -1,14 +1,19 @@
 use bytes::Bytes;
 use hyper::{HeaderMap, Method, StatusCode, Version};
 use reinhardt_http::Request;
+use reinhardt_macros::model;
 use reinhardt_views::viewsets::{
 	Action, GenericViewSet, ModelViewSet, ReadOnlyModelViewSet, ViewSet,
 };
+use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone)]
 #[allow(dead_code)]
+#[model(table_name = "test_models")]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 struct TestModel {
+	#[field(primary_key = true)]
 	id: i64,
+	#[field(max_length = 255)]
 	name: String,
 }
 
@@ -95,10 +100,19 @@ async fn test_viewset_get_basename() {
 	assert_eq!(readonly_viewset.get_basename(), "comments");
 }
 
-/// Test different action types
+/// Test different action types.
+///
+/// Provides an in-memory queryset and populates `path_params` so detail-route
+/// actions resolve correctly through the embedded `ModelViewSetHandler`
+/// (issue #3985).
 #[tokio::test]
 async fn test_viewset_action_types() {
-	let viewset: ModelViewSet<TestModel, TestSerializer> = ModelViewSet::new("items");
+	use std::collections::HashMap;
+	let viewset: ModelViewSet<TestModel, TestSerializer> = ModelViewSet::new("items")
+		.with_queryset(vec![TestModel {
+			id: 1,
+			name: "alpha".into(),
+		}]);
 
 	// Test list action
 	let list_request = Request::builder()
@@ -128,12 +142,15 @@ async fn test_viewset_action_types() {
 	);
 
 	// Test retrieve action
+	let mut params = HashMap::new();
+	params.insert("id".to_string(), "1".to_string());
 	let retrieve_request = Request::builder()
 		.method(Method::GET)
 		.uri("/items/1/")
 		.version(Version::HTTP_11)
 		.headers(HeaderMap::new())
 		.body(Bytes::new())
+		.path_params(params.clone())
 		.build()
 		.unwrap();
 	let retrieve_response = viewset.dispatch(retrieve_request, Action::retrieve()).await;
@@ -160,7 +177,7 @@ async fn test_viewset_action_types() {
 		.uri("/items/")
 		.version(Version::HTTP_11)
 		.headers(HeaderMap::new())
-		.body(Bytes::from(r#"{"name": "test"}"#))
+		.body(Bytes::from(r#"{"id": 2, "name": "test"}"#))
 		.build()
 		.unwrap();
 	let create_response = viewset.dispatch(create_request, Action::create()).await;
@@ -187,7 +204,8 @@ async fn test_viewset_action_types() {
 		.uri("/items/1/")
 		.version(Version::HTTP_11)
 		.headers(HeaderMap::new())
-		.body(Bytes::from(r#"{"name": "updated"}"#))
+		.body(Bytes::from(r#"{"id": 1, "name": "updated"}"#))
+		.path_params(params.clone())
 		.build()
 		.unwrap();
 	let update_response = viewset.dispatch(update_request, Action::update()).await;
@@ -215,6 +233,7 @@ async fn test_viewset_action_types() {
 		.version(Version::HTTP_11)
 		.headers(HeaderMap::new())
 		.body(Bytes::new())
+		.path_params(params)
 		.build()
 		.unwrap();
 	let destroy_response = viewset.dispatch(destroy_request, Action::destroy()).await;
@@ -235,11 +254,19 @@ async fn test_viewset_action_types() {
 	);
 }
 
-/// Test readonly viewset restrictions
+/// Test readonly viewset restrictions.
+///
+/// Provides an in-memory queryset and populates `path_params` so that
+/// retrieve actually resolves to a row (issue #3985: dispatch now flows
+/// through the real `ModelViewSetHandler`).
 #[tokio::test]
 async fn test_readonly_viewset_restrictions() {
+	use std::collections::HashMap;
 	let viewset: ReadOnlyModelViewSet<TestModel, TestSerializer> =
-		ReadOnlyModelViewSet::new("readonly");
+		ReadOnlyModelViewSet::new("readonly").with_queryset(vec![TestModel {
+			id: 1,
+			name: "alpha".into(),
+		}]);
 
 	// List should work
 	let list_request = Request::builder()
@@ -271,13 +298,16 @@ async fn test_readonly_viewset_restrictions() {
 		json_value
 	);
 
-	// Retrieve should work
+	// Retrieve should work — must populate path_params so dispatch can resolve pk.
+	let mut path_params = HashMap::new();
+	path_params.insert("id".to_string(), "1".to_string());
 	let retrieve_request = Request::builder()
 		.method(Method::GET)
 		.uri("/readonly/1/")
 		.version(Version::HTTP_11)
 		.headers(HeaderMap::new())
 		.body(Bytes::new())
+		.path_params(path_params)
 		.build()
 		.unwrap();
 	let retrieve_response = viewset.dispatch(retrieve_request, Action::retrieve()).await;

@@ -14,6 +14,7 @@
 //! 6. End-to-End Integration Verification
 
 use reinhardt_core::endpoint::{AuthProtection, EndpointMetadata};
+use reinhardt_macros::model;
 use reinhardt_openapi_macros::Schema as DeriveSchema;
 use reinhardt_rest::openapi::param_metadata::{
 	CookieParam, HeaderParam, ParameterMetadata, PathParam, QueryParam,
@@ -35,10 +36,15 @@ use utoipa::openapi::{PathsBuilder, Required};
 // ============================================================================
 
 /// Dummy model for ViewSet-based tests
+#[allow(dead_code)]
+#[model(table_name = "users")]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct TestUser {
+	#[field(primary_key = true)]
 	id: i64,
+	#[field(max_length = 255)]
 	username: String,
+	#[field(max_length = 255)]
 	email: String,
 	is_active: bool,
 }

@@ -3,15 +3,21 @@
 use bytes::Bytes;
 use hyper::{HeaderMap, Method, StatusCode, Version};
 use reinhardt_http::{Request, Response};
+use reinhardt_macros::model;
 use reinhardt_views::viewsets::ReadOnlyModelViewSet;
 use serde::{Deserialize, Serialize};
 use std::sync::{Arc, Mutex};
 
+#[allow(dead_code)]
+#[model(table_name = "products")]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct Product {
+	#[field(primary_key = true)]
 	id: i64,
+	#[field(max_length = 255)]
 	name: String,
 	price: f64,
+	#[field(max_length = 100)]
 	category: String,
 }
 

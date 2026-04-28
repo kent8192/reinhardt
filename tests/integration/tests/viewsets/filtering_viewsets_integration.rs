@@ -21,6 +21,7 @@
 use bytes::Bytes;
 use hyper::{HeaderMap, Method, Version};
 use reinhardt_http::Request;
+use reinhardt_macros::model;
 use reinhardt_rest::filters::{
 	DatabaseDialect, FilterBackend, FuzzyAlgorithm, FuzzySearchFilter, RangeFilter,
 	SimpleOrderingBackend, SimpleSearchBackend,
@@ -39,11 +40,17 @@ use std::sync::Arc;
 // Test Models
 // ========================================================================
 
+#[allow(dead_code)]
+#[model(table_name = "test_models")]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct TestModel {
+	#[field(primary_key = true)]
 	id: i64,
+	#[field(max_length = 255)]
 	name: String,
+	#[field(max_length = 50)]
 	status: String,
+	#[field(max_length = 50)]
 	category: String,
 	created_at: i64,
 }

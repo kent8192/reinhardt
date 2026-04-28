@@ -1,19 +1,28 @@
 //! Nested router implementation tests
 
+use reinhardt_macros::model;
 use reinhardt_urls::routers::ServerRouter;
 use reinhardt_views::viewsets::{ModelViewSet, NestedResource, NestedViewSet, nested_url};
 use serde::{Deserialize, Serialize};
 
+#[allow(dead_code)]
+#[model(table_name = "users")]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct User {
+	#[field(primary_key = true)]
 	id: i64,
+	#[field(max_length = 255)]
 	name: String,
 }
 
+#[allow(dead_code)]
+#[model(table_name = "posts")]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct Post {
+	#[field(primary_key = true)]
 	id: i64,
 	user_id: i64,
+	#[field(max_length = 255)]
 	title: String,
 }
 

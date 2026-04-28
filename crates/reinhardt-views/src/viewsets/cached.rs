@@ -142,12 +142,25 @@ impl CachedResponse {
 /// ```
 /// use reinhardt_views::viewsets::{CachedViewSet, CacheConfig, ModelViewSet};
 /// use reinhardt_utils::cache::InMemoryCache;
+/// use reinhardt_db::orm::{FieldSelector, Model};
 /// use std::time::Duration;
 ///
 /// #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 /// struct User {
-///     id: i64,
+///     id: Option<i64>,
 ///     name: String,
+/// }
+///
+/// #[derive(Clone)]
+/// struct UserFields;
+/// impl FieldSelector for UserFields { fn with_alias(self, _: &str) -> Self { self } }
+/// impl Model for User {
+///     type PrimaryKey = i64;
+///     type Fields = UserFields;
+///     fn table_name() -> &'static str { "users" }
+///     fn primary_key(&self) -> Option<i64> { self.id }
+///     fn set_primary_key(&mut self, v: i64) { self.id = Some(v); }
+///     fn new_fields() -> Self::Fields { UserFields }
 /// }
 ///
 /// #[derive(Debug, Clone)]

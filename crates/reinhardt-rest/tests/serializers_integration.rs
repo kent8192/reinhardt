@@ -14,9 +14,10 @@
 use reinhardt_db::orm::{FieldSelector, Model};
 use reinhardt_rest::serializers::{
 	BooleanField, CharField, EmailField, FieldError, FloatField, HyperlinkedRelatedField,
-	IntegerField, JsonSerializer, ManyRelatedField, ModelSerializer, PrimaryKeyRelatedField,
-	RelationField, Serializer, SerializerError, SerializerMethodField, SlugRelatedField,
-	StringRelatedField, URLField, UniqueTogetherValidator, UniqueValidator, ValidationError,
+	IntegerField, JsonSerializer, ManyRelatedField, ModelLevelValidator, ModelSerializer,
+	PrimaryKeyRelatedField, RelationField, Serializer, SerializerError, SerializerMethodField,
+	SlugRelatedField, StringRelatedField, URLField, UniqueTogetherValidator, UniqueValidator,
+	ValidationError, ValidatorError, WritableNestedSerializer,
 	introspection::{FieldInfo, FieldIntrospector},
 	meta::{DefaultMeta, MetaConfig, SerializerMeta},
 	method_field::{MethodFieldError, MethodFieldRegistry},
@@ -26,7 +27,7 @@ use reinhardt_rest::serializers::{
 use rstest::rstest;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
 
 // ============================================================
 // Helper types for tests
@@ -1168,4 +1169,380 @@ fn validation_error_multiple() {
 	// Assert
 	let error_str = format!("{}", combined);
 	assert!(!error_str.is_empty());
+}
+
+// ============================================================
+// Issue #3992 — ModelSerializer / NestedSerializer honesty
+// ============================================================
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+struct TestAuthor {
+	id: Option<i64>,
+	name: String,
+}
+
+#[derive(Debug, Clone)]
+struct TestAuthorFields;
+
+impl FieldSelector for TestAuthorFields {
+	fn with_alias(self, _alias: &str) -> Self {
+		self
+	}
+}
+
+impl Model for TestAuthor {
+	type PrimaryKey = i64;
+	type Fields = TestAuthorFields;
+
+	fn table_name() -> &'static str {
+		"test_authors"
+	}
+
+	fn new_fields() -> Self::Fields {
+		TestAuthorFields
+	}
+
+	fn primary_key(&self) -> Option<Self::PrimaryKey> {
+		self.id
+	}
+
+	fn set_primary_key(&mut self, value: Self::PrimaryKey) {
+		self.id = Some(value);
+	}
+}
+
+fn sample_user() -> TestUser {
+	TestUser {
+		id: Some(7),
+		username: "alice".to_string(),
+		email: "alice@example.com".to_string(),
+	}
+}
+
+// ---- Track 1: MetaConfig is applied during serialize/deserialize ----
+
+#[rstest]
+fn model_serializer_serialize_with_no_meta_keeps_all_fields() {
+	// Arrange
+	let serializer = ModelSerializer::<TestUser>::new();
+	let user = sample_user();
+
+	// Act
+	let json = serializer.serialize(&user).unwrap();
+	let parsed: Value = serde_json::from_str(&json).unwrap();
+
+	// Assert: backward compatibility — empty MetaConfig keeps every field
+	assert_eq!(parsed["id"], 7);
+	assert_eq!(parsed["username"], "alice");
+	assert_eq!(parsed["email"], "alice@example.com");
+}
+
+#[rstest]
+fn model_serializer_deserialize_with_no_meta_round_trips() {
+	// Arrange
+	let serializer = ModelSerializer::<TestUser>::new();
+	let json = r#"{"id":7,"username":"alice","email":"alice@example.com"}"#.to_string();
+
+	// Act
+	let restored = serializer.deserialize(&json).unwrap();
+
+	// Assert
+	assert_eq!(restored, sample_user());
+}
+
+#[rstest]
+fn model_serializer_serialize_with_fields_allowlist_drops_others() {
+	// Arrange
+	let serializer = ModelSerializer::<TestUser>::new()
+		.with_fields(vec!["id".to_string(), "username".to_string()]);
+	let user = sample_user();
+
+	// Act
+	let parsed: Value = serde_json::from_str(&serializer.serialize(&user).unwrap()).unwrap();
+
+	// Assert
+	assert_eq!(parsed["id"], 7);
+	assert_eq!(parsed["username"], "alice");
+	assert!(parsed.get("email").is_none(), "email must be filtered out");
+}
+
+#[rstest]
+fn model_serializer_serialize_with_exclude_drops_listed_field() {
+	// Arrange
+	let serializer = ModelSerializer::<TestUser>::new().with_exclude(vec!["email".to_string()]);
+	let user = sample_user();
+
+	// Act
+	let parsed: Value = serde_json::from_str(&serializer.serialize(&user).unwrap()).unwrap();
+
+	// Assert
+	assert!(parsed.get("email").is_none());
+	assert_eq!(parsed["username"], "alice");
+}
+
+#[rstest]
+fn model_serializer_serialize_strips_write_only_fields() {
+	// Arrange: write-only fields must never leak to API responses.
+	let serializer =
+		ModelSerializer::<TestUser>::new().with_write_only_fields(vec!["email".to_string()]);
+	let user = sample_user();
+
+	// Act
+	let parsed: Value = serde_json::from_str(&serializer.serialize(&user).unwrap()).unwrap();
+
+	// Assert
+	assert!(parsed.get("email").is_none());
+	assert_eq!(parsed["id"], 7);
+}
+
+#[rstest]
+fn model_serializer_deserialize_keeps_write_only_fields() {
+	// Arrange: write_only blocks output only; input is unaffected.
+	let serializer =
+		ModelSerializer::<TestUser>::new().with_write_only_fields(vec!["email".to_string()]);
+	let json = r#"{"id":7,"username":"alice","email":"alice@example.com"}"#.to_string();
+
+	// Act
+	let restored = serializer.deserialize(&json).unwrap();
+
+	// Assert
+	assert_eq!(restored.email, "alice@example.com");
+}
+
+#[rstest]
+fn model_serializer_deserialize_strips_read_only_fields() {
+	// Arrange: server-set fields must not be accepted from clients.
+	let serializer =
+		ModelSerializer::<TestUser>::new().with_read_only_fields(vec!["id".to_string()]);
+	let json = r#"{"id":999,"username":"alice","email":"alice@example.com"}"#.to_string();
+
+	// Act
+	let restored = serializer.deserialize(&json).unwrap();
+
+	// Assert: incoming "id":999 was dropped before deserialization
+	assert_eq!(restored.id, None);
+	assert_eq!(restored.username, "alice");
+	assert_eq!(restored.email, "alice@example.com");
+}
+
+#[rstest]
+fn model_serializer_serialize_keeps_read_only_fields() {
+	// Arrange
+	let serializer =
+		ModelSerializer::<TestUser>::new().with_read_only_fields(vec!["id".to_string()]);
+	let user = sample_user();
+
+	// Act
+	let parsed: Value = serde_json::from_str(&serializer.serialize(&user).unwrap()).unwrap();
+
+	// Assert: read-only fields are still present in the response
+	assert_eq!(parsed["id"], 7);
+}
+
+#[rstest]
+fn model_serializer_combined_meta_serialize_filters_correctly() {
+	// Arrange: fields allowlist limits to id+username+email; exclude drops
+	// email; write_only drops username from output -> only id remains.
+	let serializer = ModelSerializer::<TestUser>::new()
+		.with_fields(vec!["id".into(), "username".into(), "email".into()])
+		.with_exclude(vec!["email".into()])
+		.with_write_only_fields(vec!["username".into()]);
+	let user = sample_user();
+
+	// Act
+	let parsed: Value = serde_json::from_str(&serializer.serialize(&user).unwrap()).unwrap();
+
+	// Assert
+	assert_eq!(parsed["id"], 7);
+	assert!(parsed.get("username").is_none());
+	assert!(parsed.get("email").is_none());
+}
+
+#[rstest]
+#[case::no_config(
+	ModelSerializer::<TestUser>::new(),
+	BTreeSet::from(["id".to_string(), "username".to_string(), "email".to_string()]),
+)]
+#[case::fields_only(
+	ModelSerializer::<TestUser>::new()
+		.with_fields(vec!["id".to_string(), "username".to_string()]),
+	BTreeSet::from(["id".to_string(), "username".to_string()]),
+)]
+#[case::exclude_only(
+	ModelSerializer::<TestUser>::new().with_exclude(vec!["email".to_string()]),
+	BTreeSet::from(["id".to_string(), "username".to_string()]),
+)]
+#[case::write_only_drops_field(
+	ModelSerializer::<TestUser>::new()
+		.with_write_only_fields(vec!["email".to_string()]),
+	BTreeSet::from(["id".to_string(), "username".to_string()]),
+)]
+#[case::fields_overrides_default(
+	ModelSerializer::<TestUser>::new().with_fields(vec!["id".to_string()]),
+	BTreeSet::from(["id".to_string()]),
+)]
+fn model_serializer_serialize_keys_match_expected(
+	#[case] serializer: ModelSerializer<TestUser>,
+	#[case] expected: BTreeSet<String>,
+) {
+	// Arrange
+	let user = sample_user();
+
+	// Act
+	let parsed: Value = serde_json::from_str(&serializer.serialize(&user).unwrap()).unwrap();
+	let actual: BTreeSet<String> = parsed.as_object().unwrap().keys().cloned().collect();
+
+	// Assert: exact key set, no extras and no missing
+	assert_eq!(actual, expected);
+}
+
+#[rstest]
+fn model_serializer_serialize_uses_introspector_when_fields_unset() {
+	// Arrange: introspector defines only id+username; email is unknown.
+	let mut introspector = FieldIntrospector::new();
+	introspector.register_field(FieldInfo::new("id", "i64").primary_key());
+	introspector.register_field(FieldInfo::new("username", "String"));
+
+	let serializer = ModelSerializer::<TestUser>::new().with_introspector(introspector);
+	let user = sample_user();
+
+	// Act
+	let parsed: Value = serde_json::from_str(&serializer.serialize(&user).unwrap()).unwrap();
+
+	// Assert: email is dropped because it is not in the introspector allowlist
+	assert_eq!(parsed["id"], 7);
+	assert_eq!(parsed["username"], "alice");
+	assert!(parsed.get("email").is_none());
+}
+
+// ---- Track 2: ModelSerializer::validate runs registered sync validators ----
+
+#[derive(Debug)]
+struct UsernameNonEmpty;
+
+impl ModelLevelValidator<TestUser> for UsernameNonEmpty {
+	fn validate(&self, instance: &TestUser) -> Result<(), ValidatorError> {
+		if instance.username.is_empty() {
+			Err(ValidatorError::Custom {
+				message: "username must not be empty".to_string(),
+			})
+		} else {
+			Ok(())
+		}
+	}
+}
+
+#[rstest]
+fn model_serializer_validate_with_no_validators_is_ok() {
+	// Arrange: empty config preserves the historical behavior of validate.
+	let serializer = ModelSerializer::<TestUser>::new();
+	let user = sample_user();
+
+	// Act
+	let result = serializer.validate(&user);
+
+	// Assert
+	assert!(result.is_ok());
+}
+
+#[rstest]
+fn model_serializer_validate_runs_registered_model_validator_pass() {
+	// Arrange: validator passes because username is non-empty.
+	let serializer = ModelSerializer::<TestUser>::new().with_model_validator(UsernameNonEmpty);
+	let user = sample_user();
+
+	// Act
+	let result = serializer.validate(&user);
+
+	// Assert
+	assert!(result.is_ok());
+}
+
+#[rstest]
+fn model_serializer_validate_runs_registered_model_validator_fail() {
+	// Arrange: validator should reject an empty username.
+	let serializer = ModelSerializer::<TestUser>::new().with_model_validator(UsernameNonEmpty);
+	let user = TestUser {
+		id: Some(1),
+		username: String::new(),
+		email: "ghost@example.com".to_string(),
+	};
+
+	// Act
+	let result = serializer.validate(&user);
+
+	// Assert: error must be wrapped as `SerializerError::Validation`
+	let err = result.expect_err("expected sync validator failure");
+	match err {
+		SerializerError::Validation(ValidatorError::Custom { ref message }) => {
+			assert_eq!(message, "username must not be empty");
+		}
+		other => panic!("unexpected error variant: {:?}", other),
+	}
+}
+
+#[rstest]
+fn validator_config_has_validators_includes_sync_model() {
+	// Arrange: empty config is empty; adding a sync model validator flips it.
+	let bare = ModelSerializer::<TestUser>::new();
+	let configured = ModelSerializer::<TestUser>::new().with_model_validator(UsernameNonEmpty);
+
+	// Act + Assert
+	assert!(!bare.validators().has_validators());
+	assert!(configured.validators().has_validators());
+}
+
+// ---- Track 3: WritableNestedSerializer is honest ----
+
+#[rstest]
+fn writable_nested_serializer_serialize_emits_full_parent_object() {
+	// Arrange: with the no-op gone, serialize must still produce a complete
+	// parent JSON object regardless of relationship loading state.
+	let serializer = WritableNestedSerializer::<TestPost, TestAuthor>::new("author");
+	let post = TestPost {
+		id: Some(42),
+		title: "hello".to_string(),
+		author_id: 7,
+	};
+
+	// Act
+	let json = serializer.serialize(&post).expect("serialize must succeed");
+	let parsed: Value = serde_json::from_str(&json).unwrap();
+
+	// Assert
+	assert_eq!(parsed["id"], 42);
+	assert_eq!(parsed["title"], "hello");
+	assert_eq!(parsed["author_id"], 7);
+}
+
+#[rstest]
+fn writable_nested_serializer_extract_nested_data_after_deserialize() {
+	// Arrange: trait method returns only the parent; the helper exposes
+	// nested data for the caller to dispatch to the ORM.
+	let serializer = WritableNestedSerializer::<TestPost, TestAuthor>::new("author")
+		.allow_create(true)
+		.allow_update(true);
+	let json = json!({
+		"id": 1,
+		"title": "post",
+		"author_id": 9,
+		"author": { "id": null, "name": "Alice" }
+	})
+	.to_string();
+
+	// Act
+	let parent = serializer
+		.deserialize(&json)
+		.expect("deserialize must validate structure");
+	let nested = serializer
+		.extract_nested_data(&json)
+		.expect("extract_nested_data must succeed");
+
+	// Assert: the trait method is honest about returning only the parent,
+	// while the helper surfaces the nested payload for ORM dispatch.
+	assert_eq!(parent.id, Some(1));
+	assert_eq!(parent.title, "post");
+	let nested = nested.expect("nested data must be present in JSON");
+	assert_eq!(nested["name"], "Alice");
+	assert!(nested["id"].is_null());
 }

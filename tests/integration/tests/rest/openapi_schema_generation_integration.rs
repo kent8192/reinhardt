@@ -18,15 +18,21 @@
 use rstest::*;
 use serde::{Deserialize, Serialize};
 
+use reinhardt_macros::model;
 use reinhardt_rest::openapi::SchemaGenerator;
 use reinhardt_views::openapi_inspector::{InspectorConfig, ViewSetInspector};
 use reinhardt_views::viewsets::{ModelViewSet, ReadOnlyModelViewSet};
 
 /// User model for testing
+#[allow(dead_code)]
+#[model(table_name = "users")]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct User {
+	#[field(primary_key = true)]
 	id: i64,
+	#[field(max_length = 255)]
 	username: String,
+	#[field(max_length = 255)]
 	email: String,
 	is_active: bool,
 }
@@ -34,6 +40,13 @@ struct User {
 /// User serializer for testing
 #[derive(Debug, Clone)]
 struct UserSerializer;
+
+// Note: tests below that need a "second" model reuse `User` with a different
+// basename rather than introducing a separate `Post` struct. The `#[model]`
+// macro currently fails to generate `impl Model` for a second `#[model]`
+// struct in the same module — see Reinhardt #3985 follow-up. Reusing `User`
+// with `ModelViewSet::<User, UserSerializer>::new("posts")` is enough to
+// exercise multi-viewset path generation.
 
 /// Fixture: ViewSetInspector
 #[fixture]
@@ -360,18 +373,10 @@ fn test_multiple_viewsets_path_generation(inspector: ViewSetInspector) {
 	let user_viewset = ModelViewSet::<User, UserSerializer>::new("users");
 	let user_paths = inspector.extract_paths(&user_viewset, "/api/users");
 
-	// Assume Post ViewSet (test with same structure as User)
-	#[derive(Debug, Clone, Serialize, Deserialize)]
-	struct Post {
-		id: i64,
-		title: String,
-		content: String,
-	}
-
-	#[derive(Debug, Clone)]
-	struct PostSerializer;
-
-	let post_viewset = ModelViewSet::<Post, PostSerializer>::new("posts");
+	// Reuse the User model with a different basename — see file-top note about
+	// the macro limitation that prevents introducing a second `#[model]` struct
+	// in this module.
+	let post_viewset = ModelViewSet::<User, UserSerializer>::new("posts");
 	let post_paths = inspector.extract_paths(&post_viewset, "/api/posts");
 
 	// User paths

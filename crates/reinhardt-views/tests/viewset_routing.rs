@@ -4,6 +4,7 @@
 
 use bytes::Bytes;
 use hyper::{HeaderMap, Method, StatusCode, Version};
+use reinhardt_db::orm::{FieldSelector, Model};
 use reinhardt_http::Request;
 use reinhardt_views::viewset_actions;
 use reinhardt_views::viewsets::{
@@ -13,6 +14,7 @@ use reinhardt_views::viewsets::{
 	register_action,
 };
 use rstest::rstest;
+use serde::{Deserialize, Serialize};
 use serial_test::serial;
 use std::collections::HashMap;
 
@@ -20,11 +22,37 @@ use std::collections::HashMap;
 // Helper types
 // ---------------------------------------------------------------------------
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[allow(dead_code)] // test helper struct with derived traits
 struct TestModel {
-	id: i64,
+	id: Option<i64>,
 	name: String,
+}
+
+#[derive(Clone)]
+struct TestModelFields;
+
+impl FieldSelector for TestModelFields {
+	fn with_alias(self, _alias: &str) -> Self {
+		self
+	}
+}
+
+impl Model for TestModel {
+	type PrimaryKey = i64;
+	type Fields = TestModelFields;
+	fn table_name() -> &'static str {
+		"test_models"
+	}
+	fn primary_key(&self) -> Option<Self::PrimaryKey> {
+		self.id
+	}
+	fn set_primary_key(&mut self, value: Self::PrimaryKey) {
+		self.id = Some(value);
+	}
+	fn new_fields() -> Self::Fields {
+		TestModelFields
+	}
 }
 
 #[derive(Debug, Clone)]
@@ -50,6 +78,51 @@ fn make_request_with_body(method: Method, uri: &str, body: &'static str) -> Requ
 		.body(Bytes::from(body))
 		.build()
 		.unwrap()
+}
+
+/// Build a detail-route request with `id` already populated in `path_params`.
+/// `ModelViewSet::dispatch` extracts the primary key from `path_params` for
+/// retrieve/update/destroy, so detail-route tests must pre-populate it.
+fn make_detail_request(method: Method, uri: &str, id: &str) -> Request {
+	let mut params = HashMap::new();
+	params.insert("id".to_string(), id.to_string());
+	Request::builder()
+		.method(method)
+		.uri(uri)
+		.version(Version::HTTP_11)
+		.headers(HeaderMap::new())
+		.body(Bytes::new())
+		.path_params(params)
+		.build()
+		.unwrap()
+}
+
+fn make_detail_request_with_body(
+	method: Method,
+	uri: &str,
+	id: &str,
+	body: &'static str,
+) -> Request {
+	let mut params = HashMap::new();
+	params.insert("id".to_string(), id.to_string());
+	Request::builder()
+		.method(method)
+		.uri(uri)
+		.version(Version::HTTP_11)
+		.headers(HeaderMap::new())
+		.body(Bytes::from(body))
+		.path_params(params)
+		.build()
+		.unwrap()
+}
+
+/// Build a `ModelViewSet` pre-loaded with one in-memory item so that
+/// retrieve/update/destroy can resolve the primary key without a database.
+fn make_viewset_with_item() -> ModelViewSet<TestModel, TestSerializer> {
+	ModelViewSet::new("users").with_queryset(vec![TestModel {
+		id: Some(1),
+		name: "alpha".into(),
+	}])
 }
 
 // ===========================================================================
@@ -231,8 +304,8 @@ async fn model_viewset_list_returns_ok() {
 #[tokio::test]
 async fn model_viewset_retrieve_returns_ok() {
 	// Arrange
-	let viewset: ModelViewSet<TestModel, TestSerializer> = ModelViewSet::new("users");
-	let request = make_request(Method::GET, "/users/42/");
+	let viewset = make_viewset_with_item();
+	let request = make_detail_request(Method::GET, "/users/1/", "1");
 
 	// Act
 	let response = viewset.dispatch(request, Action::retrieve()).await.unwrap();
@@ -267,8 +340,9 @@ async fn model_viewset_create_returns_created() {
 #[tokio::test]
 async fn model_viewset_update_returns_ok() {
 	// Arrange
-	let viewset: ModelViewSet<TestModel, TestSerializer> = ModelViewSet::new("users");
-	let request = make_request_with_body(Method::PUT, "/users/1/", r#"{"name":"Bob"}"#);
+	let viewset = make_viewset_with_item();
+	let request =
+		make_detail_request_with_body(Method::PUT, "/users/1/", "1", r#"{"id":1,"name":"Bob"}"#);
 
 	// Act
 	let response = viewset.dispatch(request, Action::update()).await.unwrap();
@@ -285,8 +359,9 @@ async fn model_viewset_update_returns_ok() {
 #[tokio::test]
 async fn model_viewset_partial_update_returns_ok() {
 	// Arrange
-	let viewset: ModelViewSet<TestModel, TestSerializer> = ModelViewSet::new("users");
-	let request = make_request_with_body(Method::PATCH, "/users/1/", r#"{"name":"Carol"}"#);
+	let viewset = make_viewset_with_item();
+	let request =
+		make_detail_request_with_body(Method::PATCH, "/users/1/", "1", r#"{"name":"Carol"}"#);
 
 	// Act
 	let response = viewset
@@ -306,8 +381,8 @@ async fn model_viewset_partial_update_returns_ok() {
 #[tokio::test]
 async fn model_viewset_destroy_returns_no_content() {
 	// Arrange
-	let viewset: ModelViewSet<TestModel, TestSerializer> = ModelViewSet::new("users");
-	let request = make_request(Method::DELETE, "/users/1/");
+	let viewset = make_viewset_with_item();
+	let request = make_detail_request(Method::DELETE, "/users/1/", "1");
 
 	// Act
 	let response = viewset.dispatch(request, Action::destroy()).await.unwrap();
@@ -363,14 +438,21 @@ async fn readonly_viewset_list_allowed() {
 async fn readonly_viewset_retrieve_allowed() {
 	// Arrange
 	let viewset: ReadOnlyModelViewSet<TestModel, TestSerializer> =
-		ReadOnlyModelViewSet::new("posts");
-	let request = make_request(Method::GET, "/posts/7/");
+		ReadOnlyModelViewSet::new("posts").with_queryset(vec![TestModel {
+			id: Some(7),
+			name: "alpha".into(),
+		}]);
+	let request = make_detail_request(Method::GET, "/posts/7/", "7");
 
 	// Act
 	let response = viewset.dispatch(request, Action::retrieve()).await.unwrap();
 
 	// Assert
 	assert_eq!(response.status, StatusCode::OK);
+	assert!(
+		!response.body.is_empty(),
+		"retrieve should not return a placeholder empty body"
+	);
 }
 
 #[rstest]

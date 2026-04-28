@@ -4887,6 +4887,57 @@ impl MigrationAutodetector {
 			}
 		}
 
+		// Emit DropConstraint for non-PK constraints removed from existing tables.
+		//
+		// Composite primary keys (constraint_type == "primary_key" with 2+ fields)
+		// are handled by `removed_composite_primary_keys` above and must be skipped
+		// here to avoid emitting a duplicate DropConstraint.
+		for (app_label, model_name, constraint_name) in &changes.removed_constraints {
+			let Some(from_model) = self.from_state.get_model(app_label, model_name) else {
+				continue;
+			};
+			let is_composite_pk = from_model
+				.constraints
+				.iter()
+				.find(|c| &c.name == constraint_name)
+				.is_some_and(|c| c.constraint_type == "primary_key" && c.fields.len() >= 2);
+			if is_composite_pk {
+				continue;
+			}
+			operations.push(super::Operation::DropConstraint {
+				table: from_model.table_name.clone(),
+				constraint_name: constraint_name.clone(),
+			});
+		}
+
+		// Emit AddConstraint for non-PK constraints added to existing tables.
+		//
+		// This covers `unique_together`, `Check`, `ForeignKey`, and `OneToOne`
+		// constraints declared on a model that already exists in `from_state`.
+		// Composite primary keys are emitted via `added_composite_primary_keys`
+		// using `CreateCompositePrimaryKey` and must be skipped here to avoid
+		// duplicate emission.
+		//
+		// The constraint SQL is rendered through the existing
+		// `ConstraintDefinition::to_constraint()` -> `Constraint: Display` path,
+		// which mirrors the SQL produced for the same constraint when emitted as
+		// part of a `CreateTable` operation. This keeps the on-disk schema for a
+		// "create + add later" sequence equivalent to a single "create with
+		// constraint" sequence.
+		for (app_label, model_name, constraint) in &changes.added_constraints {
+			if constraint.constraint_type == "primary_key" && constraint.fields.len() >= 2 {
+				continue;
+			}
+			let Some(to_model) = self.to_state.get_model(app_label, model_name) else {
+				continue;
+			};
+			let constraint_sql = constraint.to_constraint().to_string();
+			operations.push(super::Operation::AddConstraint {
+				table: to_model.table_name.clone(),
+				constraint_sql,
+			});
+		}
+
 		// Emit SetAutoIncrementValue for detected sequence resets
 		for (app_label, model_name, column, value) in &changes.auto_increment_resets {
 			if let Some(model) = self.to_state.get_model(app_label, model_name) {
@@ -6443,6 +6494,216 @@ mod tests {
 				} if table == "shop_order" && column == "id" && *value == 1000
 			),
 			"expected SetAutoIncrementValue, got: {:?}",
+			operations
+		);
+	}
+
+	#[rstest]
+	fn detect_added_unique_together_emits_add_constraint() {
+		// Arrange — same model in both states, but to_state adds a UNIQUE
+		// constraint over (organization_id, name). This mirrors the
+		// `unique_together = ("organization_id", "name")` macro form.
+		let id_field = FieldState::new("id", super::super::FieldType::Integer, false);
+		let org_field = FieldState::new("organization_id", super::super::FieldType::Integer, false);
+		let name_field = FieldState::new("name", super::super::FieldType::VarChar(255), false);
+
+		let from_model = build_model_state(
+			"clusters",
+			"Cluster",
+			vec![id_field.clone(), org_field.clone(), name_field.clone()],
+			Vec::new(),
+			Vec::new(),
+		);
+		let unique_constraint = ConstraintDefinition {
+			name: "clusters_cluster_organization_id_name_uniq".to_string(),
+			constraint_type: "unique".to_string(),
+			fields: vec!["organization_id".to_string(), "name".to_string()],
+			expression: None,
+			foreign_key_info: None,
+		};
+		let to_model = build_model_state(
+			"clusters",
+			"Cluster",
+			vec![id_field, org_field, name_field],
+			Vec::new(),
+			vec![unique_constraint],
+		);
+
+		let from_state = build_project_state(vec![(
+			("clusters".to_string(), "Cluster".to_string()),
+			from_model,
+		)]);
+		let to_state = build_project_state(vec![(
+			("clusters".to_string(), "Cluster".to_string()),
+			to_model,
+		)]);
+		let detector = MigrationAutodetector::new(from_state, to_state);
+
+		// Act
+		let operations = detector.generate_operations();
+
+		// Assert — exactly one AddConstraint targeting the cluster table
+		// with SQL referencing both columns of the composite UNIQUE.
+		assert_eq!(
+			operations.len(),
+			1,
+			"expected exactly one AddConstraint operation, got: {:?}",
+			operations
+		);
+		let super::super::Operation::AddConstraint {
+			table,
+			constraint_sql,
+		} = &operations[0]
+		else {
+			panic!(
+				"expected Operation::AddConstraint, got: {:?}",
+				operations[0]
+			);
+		};
+		assert_eq!(table, "clusters_cluster");
+		assert!(
+			constraint_sql.contains("UNIQUE"),
+			"constraint SQL should declare UNIQUE, got: {}",
+			constraint_sql
+		);
+		assert!(
+			constraint_sql.contains("organization_id"),
+			"constraint SQL should reference organization_id, got: {}",
+			constraint_sql
+		);
+		assert!(
+			constraint_sql.contains("name"),
+			"constraint SQL should reference name, got: {}",
+			constraint_sql
+		);
+		assert!(
+			constraint_sql.contains("clusters_cluster_organization_id_name_uniq"),
+			"constraint SQL should carry the constraint name, got: {}",
+			constraint_sql
+		);
+	}
+
+	#[rstest]
+	fn detect_removed_unique_together_emits_drop_constraint() {
+		// Arrange — symmetric reverse: from_state has the UNIQUE, to_state
+		// drops it. The autodetector must emit a DropConstraint so the DB
+		// is brought back in sync.
+		let id_field = FieldState::new("id", super::super::FieldType::Integer, false);
+		let org_field = FieldState::new("organization_id", super::super::FieldType::Integer, false);
+		let name_field = FieldState::new("name", super::super::FieldType::VarChar(255), false);
+
+		let unique_constraint = ConstraintDefinition {
+			name: "clusters_cluster_organization_id_name_uniq".to_string(),
+			constraint_type: "unique".to_string(),
+			fields: vec!["organization_id".to_string(), "name".to_string()],
+			expression: None,
+			foreign_key_info: None,
+		};
+		let from_model = build_model_state(
+			"clusters",
+			"Cluster",
+			vec![id_field.clone(), org_field.clone(), name_field.clone()],
+			Vec::new(),
+			vec![unique_constraint],
+		);
+		let to_model = build_model_state(
+			"clusters",
+			"Cluster",
+			vec![id_field, org_field, name_field],
+			Vec::new(),
+			Vec::new(),
+		);
+
+		let from_state = build_project_state(vec![(
+			("clusters".to_string(), "Cluster".to_string()),
+			from_model,
+		)]);
+		let to_state = build_project_state(vec![(
+			("clusters".to_string(), "Cluster".to_string()),
+			to_model,
+		)]);
+		let detector = MigrationAutodetector::new(from_state, to_state);
+
+		// Act
+		let operations = detector.generate_operations();
+
+		// Assert
+		assert_eq!(
+			operations.len(),
+			1,
+			"expected exactly one DropConstraint operation, got: {:?}",
+			operations
+		);
+		let super::super::Operation::DropConstraint {
+			table,
+			constraint_name,
+		} = &operations[0]
+		else {
+			panic!(
+				"expected Operation::DropConstraint, got: {:?}",
+				operations[0]
+			);
+		};
+		assert_eq!(table, "clusters_cluster");
+		assert_eq!(
+			constraint_name,
+			"clusters_cluster_organization_id_name_uniq"
+		);
+	}
+
+	#[rstest]
+	fn detect_added_composite_pk_does_not_double_emit_add_constraint() {
+		// Arrange — adding a composite PK should be emitted by the
+		// `CreateCompositePrimaryKey` path only. The new
+		// `added_constraints` emitter must skip composite PKs to avoid
+		// emitting a redundant AddConstraint alongside it.
+		let id_field = FieldState::new("id", super::super::FieldType::Integer, false);
+		let tenant_field = FieldState::new("tenant_id", super::super::FieldType::Integer, false);
+
+		let from_model = build_model_state(
+			"billing",
+			"Invoice",
+			vec![id_field.clone(), tenant_field.clone()],
+			Vec::new(),
+			Vec::new(),
+		);
+		let composite_pk = ConstraintDefinition {
+			name: "billing_invoice_pkey".to_string(),
+			constraint_type: "primary_key".to_string(),
+			fields: vec!["id".to_string(), "tenant_id".to_string()],
+			expression: None,
+			foreign_key_info: None,
+		};
+		let to_model = build_model_state(
+			"billing",
+			"Invoice",
+			vec![id_field, tenant_field],
+			Vec::new(),
+			vec![composite_pk],
+		);
+		let from_state = build_project_state(vec![(
+			("billing".to_string(), "Invoice".to_string()),
+			from_model,
+		)]);
+		let to_state = build_project_state(vec![(
+			("billing".to_string(), "Invoice".to_string()),
+			to_model,
+		)]);
+		let detector = MigrationAutodetector::new(from_state, to_state);
+
+		// Act
+		let operations = detector.generate_operations();
+
+		// Assert — exactly one operation, and it must be the composite PK
+		// path, not a duplicate AddConstraint.
+		assert_eq!(operations.len(), 1, "got: {:?}", operations);
+		assert!(
+			matches!(
+				&operations[0],
+				super::super::Operation::CreateCompositePrimaryKey { columns, .. }
+					if columns == &["id".to_string(), "tenant_id".to_string()]
+			),
+			"expected only CreateCompositePrimaryKey, got: {:?}",
 			operations
 		);
 	}

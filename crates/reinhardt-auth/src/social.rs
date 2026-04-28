@@ -67,7 +67,10 @@ pub use oidc::{
 };
 
 // Re-export providers
-pub use providers::{AppleProvider, GitHubProvider, GoogleProvider, MicrosoftProvider};
+pub use providers::{
+	AppleProvider, GenericOidcConfig, GenericOidcProvider, GitHubProvider, GoogleProvider,
+	MicrosoftProvider, UserInfoMapper,
+};
 
 // Re-export backend
 pub use backend::{AuthorizationResult, CallbackResult, SocialAuthBackend};

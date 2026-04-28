@@ -29,7 +29,8 @@ use reinhardt_db::backends::dialect::PostgresBackend;
 use reinhardt_db::orm::connection::{DatabaseBackend, DatabaseConnection};
 use reinhardt_di::{InjectionContext, SingletonScope};
 use reinhardt_query::prelude::{
-	ColumnDef, Expr, OnConflict, PostgresQueryBuilder, Query, QueryBuilder, Value,
+	ColumnDef, Expr, OnConflict, PostgresQueryBuilder, Query, QueryBuilder, QueryStatementBuilder,
+	Value,
 };
 use reinhardt_test::fixtures::shared_postgres::shared_db_pool;
 use reinhardt_test::fixtures::wasm::e2e_cdp::*;
@@ -308,7 +309,7 @@ where
 				.timestamp_with_time_zone()
 				.default(Expr::current_timestamp().into()),
 		);
-	let (sql, _) = builder.build_create_table(&create_test_models);
+	let sql = create_test_models.to_string(PostgresQueryBuilder);
 	execute_ddl(&pool, &sql, "create test_models").await;
 
 	// TRUNCATE TABLE test_models RESTART IDENTITY CASCADE
@@ -317,7 +318,7 @@ where
 		.table("test_models")
 		.restart_identity()
 		.cascade();
-	let (sql, _) = builder.build_truncate_table(&truncate_test_models);
+	let sql = truncate_test_models.to_string(PostgresQueryBuilder);
 	execute_ddl(&pool, &sql, "truncate test_models").await;
 
 	// Seed test_models with three rows.
@@ -346,7 +347,7 @@ where
 				.not_null(true),
 		)
 		.col(ColumnDef::new("name").string_len(255).not_null(true));
-	let (sql, _) = builder.build_create_table(&create_test_models_b);
+	let sql = create_test_models_b.to_string(PostgresQueryBuilder);
 	execute_ddl(&pool, &sql, "create test_models_b").await;
 
 	let mut truncate_test_models_b = Query::truncate_table();
@@ -354,13 +355,13 @@ where
 		.table("test_models_b")
 		.restart_identity()
 		.cascade();
-	let (sql, _) = builder.build_truncate_table(&truncate_test_models_b);
+	let sql = truncate_test_models_b.to_string(PostgresQueryBuilder);
 	execute_ddl(&pool, &sql, "truncate test_models_b").await;
 
 	// DROP TABLE IF EXISTS auth_user CASCADE
 	let mut drop_auth_user = Query::drop_table();
 	drop_auth_user.table("auth_user").if_exists().cascade();
-	let (sql, _) = builder.build_drop_table(&drop_auth_user);
+	let sql = drop_auth_user.to_string(PostgresQueryBuilder);
 	execute_ddl(&pool, &sql, "drop auth_user").await;
 
 	// CREATE TABLE auth_user (...)
@@ -425,7 +426,7 @@ where
 				.not_null(true)
 				.default(Expr::val("[]").into()),
 		);
-	let (sql, _) = builder.build_create_table(&create_auth_user);
+	let sql = create_auth_user.to_string(PostgresQueryBuilder);
 	execute_ddl(&pool, &sql, "create auth_user").await;
 
 	let hasher = Argon2Hasher::new();

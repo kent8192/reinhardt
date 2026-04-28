@@ -36,7 +36,7 @@ By default, examples use published versions from crates.io:
 <!-- reinhardt-version-sync -->
 ```toml
 [dependencies]
-reinhardt = { version = "0.1.0-rc.22", package = "reinhardt-web", features = ["standard"] }
+reinhardt = { version = "0.1.0-rc.23", package = "reinhardt-web", features = ["standard"] }
 ```
 
 ### Local Development Mode
@@ -70,7 +70,7 @@ rm -f .cargo/config.toml
 ```toml
 [dependencies]
 # ✅ Main reinhardt crate only
-reinhardt = { version = "0.1.0-rc.22", package = "reinhardt-web", features = ["core", "database"] }
+reinhardt = { version = "0.1.0-rc.23", package = "reinhardt-web", features = ["core", "database"] }
 
 # ✅ External crates are fine
 tokio = { workspace = true }
@@ -86,7 +86,7 @@ rstest = "0.26.1"
 <!-- reinhardt-version-sync -->
 ```toml
 [dependencies]
-reinhardt = { version = "0.1.0-rc.22", package = "reinhardt-web", features = ["core"] }
+reinhardt = { version = "0.1.0-rc.23", package = "reinhardt-web", features = ["core"] }
 reinhardt-http = { path = "../../../crates/reinhardt-http" }      # ❌ NEVER
 reinhardt-routers = { path = "../../../crates/reinhardt-urls/crates/routers" }  # ❌ NEVER
 reinhardt-di = { path = "../../../crates/reinhardt-di" }          # ❌ NEVER

@@ -18,7 +18,7 @@ ships, the bare `cargo install reinhardt-admin-cli` will also work.
 
 <!-- reinhardt-version-sync -->
 ```bash
-cargo install reinhardt-admin-cli --version "0.1.0-rc.22"
+cargo install reinhardt-admin-cli --version "0.1.0-rc.23"
 ```
 
 ## 2. Create your project

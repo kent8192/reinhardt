@@ -93,7 +93,7 @@ pub struct ClientLauncher {
 
 /// Context passed to [`ClientLauncher::after_launch`] callbacks.
 ///
-/// Borrows the resources [`ClientLauncher::launch`] already owns
+/// Borrows the resources `ClientLauncher::launch` already owns
 /// (`window`, `document`, root element); never owns them.
 pub struct LaunchCtx<'a> {
 	#[cfg_attr(not(wasm), allow(dead_code))]

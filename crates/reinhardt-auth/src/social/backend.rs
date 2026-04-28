@@ -133,17 +133,34 @@ impl SocialAuthBackend {
 					.await?;
 				Some(StandardClaims::from(id_token))
 			} else {
-				// Fall back to UserInfo endpoint
+				// Fall back to UserInfo endpoint. UserInfo failures are non-fatal:
+				// log them so operators can diagnose silent claim losses (issue #4001).
 				provider
 					.get_user_info(&token_response.access_token)
 					.await
+					.inspect_err(|e| {
+						tracing::warn!(
+							provider = %provider_name,
+							error = %e,
+							"Failed to fetch user info from OIDC UserInfo fallback; claims will be None",
+						)
+					})
 					.ok()
 			}
 		} else {
-			// For OAuth2-only providers, use UserInfo endpoint
+			// For OAuth2-only providers, use UserInfo endpoint. UserInfo failures
+			// are non-fatal: log them so operators can diagnose silent claim
+			// losses (issue #4001).
 			provider
 				.get_user_info(&token_response.access_token)
 				.await
+				.inspect_err(|e| {
+					tracing::warn!(
+						provider = %provider_name,
+						error = %e,
+						"Failed to fetch user info from OAuth2 provider; claims will be None",
+					)
+				})
 				.ok()
 		};
 

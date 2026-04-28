@@ -12,7 +12,19 @@ mod helpers;
 #[tokio::test]
 async fn test_complete_github_oauth2_flow() {
 	// Arrange
-	let server = MockOAuth2Server::new().await;
+	let mut server = MockOAuth2Server::new().await;
+	// GitHub's `/user` endpoint returns a non-OIDC schema (numeric `id`,
+	// `login`, `avatar_url`, ...). Inject a realistic raw payload so the
+	// GitHub provider exercises its claim-mapping code path (issue #4001).
+	server.set_raw_userinfo_response(
+		r#"{
+			"id": 12345,
+			"login": "octotest",
+			"email": "octo@example.com",
+			"name": "Octo Test",
+			"avatar_url": "https://avatars.githubusercontent.com/u/12345"
+		}"#,
+	);
 	let config = ProviderConfig {
 		name: "github".to_string(),
 		client_id: "test_client_id".to_string(),
@@ -48,13 +60,19 @@ async fn test_complete_github_oauth2_flow() {
 	assert_eq!(token_response.access_token, "test_access_token");
 	assert_eq!(token_response.token_type, "Bearer");
 
-	// Step 4: Retrieve user info
+	// Step 4: Retrieve user info — verify GitHub's `id` is mapped to `sub`
+	// and `avatar_url` is mapped to `picture`.
 	let claims = provider
 		.get_user_info(&token_response.access_token)
 		.await
 		.unwrap();
-	assert_eq!(claims.sub, "test_user");
-	assert_eq!(claims.email, Some("test@example.com".to_string()));
+	assert_eq!(claims.sub, "12345");
+	assert_eq!(claims.email, Some("octo@example.com".to_string()));
+	assert_eq!(claims.name, Some("Octo Test".to_string()));
+	assert_eq!(
+		claims.picture,
+		Some("https://avatars.githubusercontent.com/u/12345".to_string())
+	);
 
 	// Step 5: Verify state retrieval
 	let retrieved_state = state_store.retrieve(state).await.unwrap();

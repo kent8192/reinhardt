@@ -129,14 +129,33 @@ pub(crate) struct RouteMatch {
 	/// Matched handler
 	pub handler: Arc<dyn Handler>,
 
-	/// Extracted path parameters
-	pub params: HashMap<String, String>,
+	/// Extracted path parameters in URL pattern declaration order.
+	///
+	/// Stored as an ordered `Vec<(name, value)>` so downstream extractors such
+	/// as `Path<(T1, T2)>` can rely on URL declaration order. See issue #4013.
+	pub params: Vec<(String, String)>,
 
 	/// Middleware stack to apply (parent → child order)
 	pub middleware_stack: Vec<Arc<dyn Middleware>>,
 
 	/// DI context
 	pub di_context: Option<Arc<InjectionContext>>,
+}
+
+impl RouteMatch {
+	/// Look up a path parameter by name.
+	///
+	/// `params` is stored as an ordered `Vec` (see issue #4013) so this helper
+	/// performs a linear scan. Path parameter sets are tiny in practice
+	/// (typically 1–3 entries), so the cost is negligible compared to a
+	/// `HashMap` lookup.
+	#[cfg(test)]
+	pub(crate) fn param(&self, name: &str) -> Option<&str> {
+		self.params
+			.iter()
+			.find(|(k, _)| k == name)
+			.map(|(_, v)| v.as_str())
+	}
 }
 
 /// Unified router with hierarchical routing support
@@ -289,6 +308,16 @@ impl ServerRouter {
 	///     .mount("", ServerRouter::new());
 	/// ```
 	fn validate_prefix(prefix: &str) {
+		// Prefix must not contain path parameter placeholders.
+		// Mount prefixes are matched as literal strings, so a placeholder like
+		// `{org}` would never match an actual path segment and all child routes
+		// would silently 404. Fail early at construction time instead.
+		if prefix.contains('{') || prefix.contains('}') {
+			panic!(
+				"`mount()` prefix `{prefix}` contains a path parameter placeholder (`{{...}}`); this is not supported.\nUse `route()` with the full path on the child router instead, or mount at a literal prefix."
+			);
+		}
+
 		// Prefix must end with "/"
 		if !prefix.ends_with('/') {
 			if prefix.is_empty() {
@@ -489,6 +518,12 @@ impl ServerRouter {
 	///
 	/// Panics if the prefix is non-empty, not "/" and doesn't end with "/".
 	/// This follows Django's URL configuration conventions.
+	///
+	/// Also panics if the prefix contains a path parameter placeholder
+	/// (e.g. `/orgs/{org}/`). Mount prefixes are matched as literal strings,
+	/// so placeholders would silently cause all child routes to return 404.
+	/// Use `route()` with the full path on the child router instead, or
+	/// mount at a literal prefix.
 	///
 	/// # Examples
 	///
@@ -1861,8 +1896,11 @@ impl ServerRouter {
 			if let Ok(matched) = router.at(&try_path) {
 				let route_handler = matched.value;
 
-				// Extract parameters from matchit
-				let params: HashMap<String, String> = matched
+				// Extract parameters from matchit. matchit's `Params` iterator
+				// yields parameters in URL pattern declaration order, so we
+				// collect into a `Vec` to preserve that ordering all the way
+				// down to the tuple extractor (see issue #4013).
+				let params: Vec<(String, String)> = matched
 					.params
 					.iter()
 					.map(|(k, v)| (k.to_string(), v.to_string()))
@@ -2100,6 +2138,20 @@ mod tests {
 
 		// Assert
 		assert_eq!(router.children_count(), 1);
+	}
+
+	#[rstest]
+	#[should_panic(expected = "path parameter placeholder")]
+	fn test_mount_panics_on_param_prefix() {
+		// Arrange
+		let child = ServerRouter::new();
+
+		// Act
+		// Mounting with a `{param}` placeholder in the prefix is not supported
+		// and must panic at construction time.
+		let _ = ServerRouter::new().mount("/orgs/{org}/clusters/", child);
+
+		// Assert: handled by `#[should_panic]`.
 	}
 
 	#[rstest]
@@ -2356,22 +2408,67 @@ mod tests {
 		// Act & Assert - exact path matching
 		let result = router.match_own_routes("/users/123", &Method::GET);
 		assert!(result.is_some());
-		assert_eq!(result.unwrap().params.get("id"), Some(&"123".to_string()));
+		assert_eq!(result.unwrap().param("id"), Some("123"));
 
 		// Act & Assert - nested path matching
 		let result = router.match_own_routes("/users/456/posts", &Method::GET);
 		assert!(result.is_some());
-		assert_eq!(result.unwrap().params.get("id"), Some(&"456".to_string()));
+		assert_eq!(result.unwrap().param("id"), Some("456"));
 
-		// Act & Assert - multiple parameters
-		let result = router.match_own_routes("/posts/789/comments/101", &Method::GET);
-		let params = result.unwrap().params;
-		assert_eq!(params.get("post_id"), Some(&"789".to_string()));
-		assert_eq!(params.get("comment_id"), Some(&"101".to_string()));
+		// Act & Assert - multiple parameters; verify both values AND
+		// declaration order (post_id appears before comment_id in the URL).
+		let route_match = router.match_own_routes("/posts/789/comments/101", &Method::GET);
+		let route_match = route_match.unwrap();
+		assert_eq!(route_match.param("post_id"), Some("789"));
+		assert_eq!(route_match.param("comment_id"), Some("101"));
+		assert_eq!(
+			route_match.params,
+			vec![
+				("post_id".to_string(), "789".to_string()),
+				("comment_id".to_string(), "101".to_string()),
+			],
+			"path params must be stored in URL pattern declaration order (issue #4013)"
+		);
 
 		// Act & Assert - non-matching route
 		let result = router.match_own_routes("/nonexistent", &Method::GET);
 		assert!(result.is_none());
+	}
+
+	#[tokio::test]
+	async fn test_route_matching_preserves_url_pattern_order_issue_4013() {
+		// Regression test for issue #4013: path parameters must be exposed in
+		// URL pattern declaration order (not alphabetical), so that tuple
+		// extractors `Path<(T1, T2)>` populate fields by position.
+		use hyper::Method;
+
+		async fn dummy_handler(_req: Request) -> Result<Response> {
+			Ok(Response::ok())
+		}
+
+		// Arrange: alphabetical order would put `cluster_id` before `org`,
+		// but URL declaration order is `org` first, `cluster_id` second.
+		let router = ServerRouter::new().function(
+			"/orgs/{org}/clusters/{cluster_id}/",
+			Method::GET,
+			dummy_handler,
+		);
+		router.compile_routes();
+
+		// Act
+		let route_match = router
+			.match_own_routes("/orgs/myslug/clusters/5/", &Method::GET)
+			.expect("route should match");
+
+		// Assert
+		assert_eq!(
+			route_match.params,
+			vec![
+				("org".to_string(), "myslug".to_string()),
+				("cluster_id".to_string(), "5".to_string()),
+			],
+			"matched params must follow URL declaration order (issue #4013)"
+		);
 	}
 
 	#[tokio::test]

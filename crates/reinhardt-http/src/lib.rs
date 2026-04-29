@@ -91,6 +91,8 @@ pub mod extensions;
 pub mod messages_middleware;
 /// Middleware trait and handler chain.
 pub mod middleware;
+/// Ordered path parameter storage (`PathParams`).
+pub mod path_params;
 /// HTTP request type and builder.
 pub mod request;
 /// HTTP response type and builder.
@@ -109,6 +111,7 @@ pub use extensions::{Extensions, IsActive, IsAdmin, IsAuthenticated};
 #[cfg(feature = "messages")]
 pub use messages_middleware::MessagesMiddleware;
 pub use middleware::{ExcludeMiddleware, Handler, Middleware, MiddlewareChain};
+pub use path_params::PathParams;
 pub use request::{Request, RequestBuilder, TrustedProxies};
 pub use response::{Response, SafeErrorResponse, StreamBody, StreamingResponse};
 pub use response_cookies::{ResponseCookies, SharedResponseCookies};

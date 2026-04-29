@@ -95,7 +95,7 @@ impl Request {
 	/// assert_eq!(request.path_params.get("id"), Some(&"123".to_string()));
 	/// ```
 	pub fn set_path_param(&mut self, key: impl Into<String>, value: impl Into<String>) {
-		self.path_params.insert(key.into(), value.into());
+		self.path_params.insert(key, value);
 	}
 
 	/// Parse Accept-Language header and return ordered list of language codes

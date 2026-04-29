@@ -12,7 +12,37 @@ use super::{
 	ParamContext, ParamError, ParamErrorContext, ParamResult, ParamType, extract::FromRequest,
 };
 
-/// Extract a single value from the URL path
+/// Extract typed values from URL path parameters.
+///
+/// # Single-parameter extraction
+///
+/// `Path<T>` for a primitive type (e.g. `Path<i64>`, `Path<String>`) requires
+/// the URL pattern to declare exactly one path parameter. Extraction returns
+/// HTTP 400 if the pattern declares zero or more than one parameter.
+///
+/// # Tuple extraction and parameter order
+///
+/// For tuple extractors `Path<(T1, T2, ...)>`, tuple elements are populated in
+/// **URL pattern declaration order** — i.e. the order in which `{...}`
+/// placeholders appear in the route pattern, **not** alphabetical order of
+/// parameter names.
+///
+/// ```text
+/// // Route:    /orgs/{org}/clusters/{cluster_id}/
+/// // Tuple:    Path<(String, i64)>
+/// //                  ^^^^^^  ^^^
+/// //                  org     cluster_id
+/// ```
+///
+/// Prior to issue #4013, parameters were sorted alphabetically by name before
+/// being assigned to tuple fields, which silently produced HTTP 400 when the
+/// tuple type order did not match alphabetical name order. Tuple extraction
+/// now follows URL pattern order, matching common conventions in other Rust
+/// web frameworks.
+///
+/// For unambiguous extraction with many parameters, prefer
+/// [`PathStruct<T>`](super::PathStruct) (named struct deserialization), which
+/// matches by parameter name rather than position.
 ///
 /// # Example
 ///
@@ -133,11 +163,11 @@ macro_rules! impl_path_tuple2_from_str {
                         )));
                     }
 
-                    // Sort by key name to ensure deterministic extraction order
-                    // regardless of HashMap iteration order
-                    let mut sorted_params: Vec<_> = ctx.path_params.iter().collect();
-                    sorted_params.sort_by_key(|(k, _)| k.clone());
-                    let values: Vec<_> = sorted_params.into_iter().map(|(_, v)| v).collect();
+                    // Iterate path parameters in URL pattern declaration order
+                    // (preserved end-to-end from matchit through `PathParams`).
+                    // Tuple element `T_n` is populated from the n-th parameter
+                    // declared in the route pattern. See issue #4013.
+                    let values: Vec<&String> = ctx.path_params.iter().map(|(_, v)| v).collect();
                     if values.len() != 2 {
                         return Err(ParamError::InvalidParameter(Box::new(
                             ParamErrorContext::new(
@@ -303,9 +333,11 @@ where
 	T: DeserializeOwned + Send,
 {
 	async fn from_request(_req: &Request, ctx: &ParamContext) -> ParamResult<Self> {
-		// Convert path params HashMap to URL-encoded format for deserialization
-		// This enables proper type coercion from strings (e.g., "42" -> 42)
-		let encoded = serde_urlencoded::to_string(&ctx.path_params).map_err(|e| {
+		// Convert path params to URL-encoded format for deserialization.
+		// This enables proper type coercion from strings (e.g., "42" -> 42).
+		// `serde_urlencoded` accepts a slice of `(K, V)` pairs, matching the
+		// internal representation of `PathParams`.
+		let encoded = serde_urlencoded::to_string(ctx.path_params.as_slice()).map_err(|e| {
 			ParamError::ParseError(Box::new(
 				ParamErrorContext::new(
 					ParamType::Path,
@@ -487,5 +519,81 @@ mod tests {
 		let params = result.unwrap();
 		assert_eq!(params.user_id, 123);
 		assert_eq!(params.post_id, 456);
+	}
+
+	// =====================================================================
+	// Tuple extraction order tests (issue #4013)
+	//
+	// These tests verify that `Path<(T1, T2)>` populates tuple fields in URL
+	// pattern declaration order, NOT alphabetical order of parameter names.
+	// =====================================================================
+
+	#[tokio::test]
+	async fn test_path_tuple_uses_url_pattern_order_not_alphabetical() {
+		use bytes::Bytes;
+		use hyper::{HeaderMap, Method, Version};
+		use reinhardt_http::PathParams;
+
+		// Arrange: simulate the route `/orgs/{org}/clusters/{cluster_id}/`.
+		// URL declaration order: `org` first, `cluster_id` second.
+		// Alphabetical order would put `cluster_id` first — this is the bug
+		// from issue #4013 that we are guarding against.
+		let mut params = PathParams::new();
+		params.insert("org", "myslug");
+		params.insert("cluster_id", "5");
+
+		let ctx = ParamContext::with_path_params(params);
+		let req = Request::builder()
+			.method(Method::GET)
+			.uri("/orgs/myslug/clusters/5/")
+			.version(Version::HTTP_11)
+			.headers(HeaderMap::new())
+			.body(Bytes::new())
+			.build()
+			.unwrap();
+
+		// Act
+		let result = Path::<(String, i64)>::from_request(&req, &ctx).await;
+
+		// Assert: must follow URL pattern order — `org` (String) first,
+		// `cluster_id` (i64) second. Pre-fix, alphabetical sort would put
+		// "5" at position 0 and "myslug" at position 1, causing the i64
+		// parse of "myslug" to fail with HTTP 400.
+		let Path((org, cluster_id)) =
+			result.expect("tuple extraction must follow URL pattern order");
+		assert_eq!(org, "myslug");
+		assert_eq!(cluster_id, 5);
+	}
+
+	#[tokio::test]
+	async fn test_path_tuple_reverse_alphabetical_order() {
+		use bytes::Bytes;
+		use hyper::{HeaderMap, Method, Version};
+		use reinhardt_http::PathParams;
+
+		// Arrange: insertion order `z`, `a` — reverse of alphabetical.
+		let mut params = PathParams::new();
+		params.insert("z", "first");
+		params.insert("a", "second");
+
+		let ctx = ParamContext::with_path_params(params);
+		let req = Request::builder()
+			.method(Method::GET)
+			.uri("/test")
+			.version(Version::HTTP_11)
+			.headers(HeaderMap::new())
+			.body(Bytes::new())
+			.build()
+			.unwrap();
+
+		// Act
+		let result = Path::<(String, String)>::from_request(&req, &ctx).await;
+
+		// Assert: tuple is populated in insertion order `(z, a)`, which
+		// happens to be the reverse of alphabetical order. This proves the
+		// extractor follows declaration order rather than sorting.
+		let Path((first, second)) = result.expect("tuple extraction must follow insertion order");
+		assert_eq!(first, "first");
+		assert_eq!(second, "second");
 	}
 }

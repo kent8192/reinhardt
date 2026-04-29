@@ -85,7 +85,12 @@ pub fn create_request_with_path_params(
 	body: Option<Bytes>,
 ) -> Request {
 	let mut request = create_request(method, path, query_params, headers, body);
-	request.path_params = path_params;
+	// Convert via `Into` since `Request.path_params` is a `PathParams` that
+	// preserves URL declaration order. `HashMap` ordering is non-deterministic
+	// — callers that rely on tuple-extractor ordering should use
+	// `Request::builder().path_params(...)` with a `Vec<(String, String)>`
+	// or `PathParams` directly.
+	request.path_params = path_params.into();
 	request
 }
 

@@ -3,6 +3,7 @@ mod methods;
 mod params;
 
 use crate::extensions::Extensions;
+use crate::path_params::PathParams;
 use bytes::Bytes;
 use hyper::{HeaderMap, Method, Uri, Version};
 #[cfg(feature = "parsers")]
@@ -63,7 +64,9 @@ pub struct Request {
 	pub headers: HeaderMap,
 	body: Bytes,
 	/// Path parameters extracted from the URL pattern.
-	pub path_params: HashMap<String, String>,
+	///
+	/// Stored in URL pattern declaration order (see [`PathParams`]).
+	pub path_params: PathParams,
 	/// Query string parameters parsed from the URI.
 	pub query_params: HashMap<String, String>,
 	/// Indicates if this request came over HTTPS
@@ -110,7 +113,7 @@ pub struct RequestBuilder {
 	body: Bytes,
 	is_secure: bool,
 	remote_addr: Option<SocketAddr>,
-	path_params: HashMap<String, String>,
+	path_params: PathParams,
 	/// Captured error from invalid URI
 	uri_error: Option<String>,
 	/// Captured error from invalid header value
@@ -129,7 +132,7 @@ impl Default for RequestBuilder {
 			body: Bytes::new(),
 			is_secure: false,
 			remote_addr: None,
-			path_params: HashMap::new(),
+			path_params: PathParams::new(),
 			uri_error: None,
 			header_error: None,
 			#[cfg(feature = "parsers")]
@@ -383,7 +386,11 @@ impl RequestBuilder {
 	/// Set path parameters (used for testing views without router).
 	///
 	/// This is primarily useful in test environments where you need to simulate
-	/// path parameters that would normally be extracted by the router.
+	/// path parameters that would normally be extracted by the router. Accepts
+	/// any value that can be converted into [`PathParams`], including a
+	/// `HashMap<String, String>` (note: converting from a `HashMap` does not
+	/// preserve ordering — pass a `Vec<(String, String)>` or [`PathParams`]
+	/// directly when ordering matters).
 	///
 	/// # Examples
 	///
@@ -404,8 +411,8 @@ impl RequestBuilder {
 	///
 	/// assert_eq!(request.path_params.get("id"), Some(&"42".to_string()));
 	/// ```
-	pub fn path_params(mut self, params: HashMap<String, String>) -> Self {
-		self.path_params = params;
+	pub fn path_params(mut self, params: impl Into<PathParams>) -> Self {
+		self.path_params = params.into();
 		self
 	}
 

@@ -231,8 +231,12 @@ pub type ParamResult<T> = std::result::Result<T, ParamError>;
 
 /// Context for parameter extraction
 pub struct ParamContext {
-	/// Path parameters extracted from the URL
-	pub path_params: std::collections::HashMap<String, String>,
+	/// Path parameters extracted from the URL.
+	///
+	/// Stored in URL pattern declaration order so that tuple extractors such
+	/// as `Path<(T1, T2)>` can rely on positional ordering matching the URL
+	/// pattern. See issue #4013.
+	pub path_params: reinhardt_http::PathParams,
 	/// Header name registry keyed by value type
 	header_names: HashMap<TypeId, &'static str>,
 	/// Cookie name registry keyed by value type
@@ -252,30 +256,36 @@ impl ParamContext {
 	/// ```
 	pub fn new() -> Self {
 		Self {
-			path_params: std::collections::HashMap::new(),
+			path_params: reinhardt_http::PathParams::new(),
 			header_names: HashMap::new(),
 			cookie_names: HashMap::new(),
 		}
 	}
-	/// Create a ParamContext with pre-populated path parameters
+	/// Create a ParamContext with pre-populated path parameters.
+	///
+	/// Accepts anything convertible into [`reinhardt_http::PathParams`],
+	/// including a `HashMap<String, String>` (note: converting from a
+	/// `HashMap` does not preserve ordering — supply a
+	/// `Vec<(String, String)>` or a `PathParams` directly when ordering
+	/// matters, as it does for tuple extractors). See issue #4013.
 	///
 	/// # Examples
 	///
 	/// ```
 	/// use reinhardt_di::params::ParamContext;
-	/// use std::collections::HashMap;
+	/// use reinhardt_http::PathParams;
 	///
-	/// let mut params = HashMap::new();
-	/// params.insert("id".to_string(), "42".to_string());
-	/// params.insert("name".to_string(), "test".to_string());
+	/// let mut params = PathParams::new();
+	/// params.insert("id", "42");
+	/// params.insert("name", "test");
 	///
 	/// let ctx = ParamContext::with_path_params(params);
 	/// assert_eq!(ctx.get_path_param("id"), Some("42"));
 	/// assert_eq!(ctx.get_path_param("name"), Some("test"));
 	/// ```
-	pub fn with_path_params(path_params: std::collections::HashMap<String, String>) -> Self {
+	pub fn with_path_params(path_params: impl Into<reinhardt_http::PathParams>) -> Self {
 		Self {
-			path_params,
+			path_params: path_params.into(),
 			header_names: HashMap::new(),
 			cookie_names: HashMap::new(),
 		}

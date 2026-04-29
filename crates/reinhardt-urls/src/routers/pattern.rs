@@ -1,6 +1,7 @@
 use aho_corasick::AhoCorasick;
 use matchit::Router as MatchitRouter;
 use regex::Regex;
+use reinhardt_http::PathParams;
 use std::collections::{HashMap, HashSet};
 
 /// Maximum allowed length for a URL pattern string in bytes.
@@ -688,7 +689,7 @@ impl PathMatcher {
 	/// assert_eq!(handler_id, "users_detail");
 	/// assert_eq!(params.get("id"), Some(&"123".to_string()));
 	/// ```
-	pub fn match_path(&self, path: &str) -> Option<(String, HashMap<String, String>)> {
+	pub fn match_path(&self, path: &str) -> Option<(String, PathParams)> {
 		match self.mode {
 			MatchingMode::RadixTree => {
 				// Use radix tree for O(m) matching
@@ -699,7 +700,7 @@ impl PathMatcher {
 					if let Some((pattern, _)) =
 						self.patterns.iter().find(|(_, id)| *id == handler_id)
 					{
-						for (name, value) in &params {
+						for (name, value) in params.iter() {
 							if pattern.path_type_params.contains(name)
 								&& !validate_path_param(value)
 							{
@@ -722,10 +723,13 @@ impl PathMatcher {
 	}
 
 	/// Linear pattern matching (O(n))
-	fn match_path_linear(&self, path: &str) -> Option<(String, HashMap<String, String>)> {
+	fn match_path_linear(&self, path: &str) -> Option<(String, PathParams)> {
 		'outer: for (pattern, handler_id) in &self.patterns {
 			if let Some(captures) = pattern.regex.captures(path) {
-				let mut params = HashMap::new();
+				// Use ordered `PathParams` so tuple extractors see params in
+				// URL pattern declaration order (issue #4013). `param_names()`
+				// already yields names in the order they appear in the pattern.
+				let mut params = PathParams::new();
 
 				for name in pattern.param_names() {
 					if let Some(value) = captures.name(name) {
@@ -880,11 +884,14 @@ impl RadixRouter {
 	/// assert_eq!(params.get("id"), Some(&"123".to_string()));
 	/// assert_eq!(params.get("post_id"), Some(&"456".to_string()));
 	/// ```
-	pub fn match_path(&self, path: &str) -> Option<(String, HashMap<String, String>)> {
+	pub fn match_path(&self, path: &str) -> Option<(String, PathParams)> {
 		match self.router.at(path) {
 			Ok(matched) => {
 				let handler_id = matched.value.clone();
-				let params: HashMap<String, String> = matched
+				// matchit's `Params` iterator yields parameters in URL pattern
+				// declaration order; collect into `PathParams` to preserve it
+				// (issue #4013).
+				let params: PathParams = matched
 					.params
 					.iter()
 					.map(|(k, v)| (k.to_string(), v.to_string()))

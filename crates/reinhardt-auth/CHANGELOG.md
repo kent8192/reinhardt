@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.0-rc.23](https://github.com/kent8192/reinhardt-web/compare/reinhardt-auth@v0.1.0-rc.22...reinhardt-auth@v0.1.0-rc.23) - 2026-04-29
+
+### Added
+
+- *(auth)* add GenericOidcProvider for arbitrary OIDC IdPs
+
+### Changed
+
+- *(auth)* extract GitHub userinfo fetch into dedicated method
+
+### Fixed
+
+- *(auth)* transform GitHub /user response into StandardClaims
+- *(auth)* enforce HTTPS on GitHub UserInfo endpoint before sending bearer token
+
 ## [0.1.0-rc.21](https://github.com/kent8192/reinhardt-web/compare/reinhardt-auth@v0.1.0-rc.20...reinhardt-auth@v0.1.0-rc.21) - 2026-04-23
 
 ### Documentation

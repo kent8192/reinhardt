@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.0-rc.23](https://github.com/kent8192/reinhardt-web/compare/reinhardt-views@v0.1.0-rc.22...reinhardt-views@v0.1.0-rc.23) - 2026-04-29
+
+### Changed
+
+- *(views)* add From<ViewError> for core exception Error
+
+### Fixed
+
+- *(views)* wire ModelViewSet dispatch through real CRUD handler ([[#3985](https://github.com/kent8192/reinhardt-web/issues/3985)](https://github.com/kent8192/reinhardt-web/issues/3985))
+- *(views)* preserve UnwindSafe auto traits on viewset/generic public types
+
+### Testing
+
+- *(views)* update doctests and lib tests to use Model-implementing types
+
 ## [0.1.0-rc.21](https://github.com/kent8192/reinhardt-web/compare/reinhardt-views@v0.1.0-rc.20...reinhardt-views@v0.1.0-rc.21) - 2026-04-23
 
 ### Documentation

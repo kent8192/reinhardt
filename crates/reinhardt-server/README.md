@@ -44,17 +44,17 @@ Add `reinhardt` to your `Cargo.toml`:
 <!-- reinhardt-version-sync:5 -->
 ```toml
 [dependencies]
-reinhardt = { version = "0.1.0-rc.22", features = ["server"] }
+reinhardt = { version = "0.1.0-rc.23", features = ["server"] }
 
 # For WebSocket support:
-# reinhardt = { version = "0.1.0-rc.22", features = ["server", "websocket"] }
+# reinhardt = { version = "0.1.0-rc.23", features = ["server", "websocket"] }
 
 # For GraphQL support:
-# reinhardt = { version = "0.1.0-rc.22", features = ["server", "graphql"] }
+# reinhardt = { version = "0.1.0-rc.23", features = ["server", "graphql"] }
 
 # Or use a preset:
-# reinhardt = { version = "0.1.0-rc.22", features = ["standard"] }  # Recommended
-# reinhardt = { version = "0.1.0-rc.22", features = ["full"] }      # All features
+# reinhardt = { version = "0.1.0-rc.23", features = ["standard"] }  # Recommended
+# reinhardt = { version = "0.1.0-rc.23", features = ["full"] }      # All features
 ```
 
 Then import server features:
@@ -85,7 +85,7 @@ async fn my_handler(req: Request) -> Result<Response, Error> {
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let handler = Arc::new(my_handler);
-    serve("0.1.0-rc.22:8000", handler).await?;
+    serve("0.1.0-rc.23:8000", handler).await?;
     Ok(())
 }
 ```
@@ -128,7 +128,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let server = HttpServer::new(handler)
         .with_middleware(middleware);
 
-    server.listen("0.1.0-rc.22:8000".parse()?).await?;
+    server.listen("0.1.0-rc.23:8000".parse()?).await?;
     Ok(())
 }
 ```
@@ -161,7 +161,7 @@ impl WebSocketHandler for EchoHandler {
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let handler = Arc::new(EchoHandler);
     let server = WebSocketServer::new(handler);
-    server.listen("0.1.0-rc.22:9001".parse()?).await?;
+    server.listen("0.1.0-rc.23:9001".parse()?).await?;
     Ok(())
 }
 ```
@@ -199,7 +199,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     });
 
-    server.listen("0.1.0-rc.22:9001".parse()?).await?;
+    server.listen("0.1.0-rc.23:9001".parse()?).await?;
     Ok(())
 }
 ```
@@ -226,7 +226,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .finish();
 
     let handler = graphql_handler(schema);
-    serve("0.1.0-rc.22:8000", handler).await?;
+    serve("0.1.0-rc.23:8000", handler).await?;
     Ok(())
 }
 ```

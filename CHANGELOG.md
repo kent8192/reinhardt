@@ -7,6 +7,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.0-rc.23](https://github.com/kent8192/reinhardt-web/compare/reinhardt-web@v0.1.0-rc.22...reinhardt-web@v0.1.0-rc.23) - 2026-04-29
+
+### Added
+
+- *(auth)* add GenericOidcProvider for arbitrary OIDC IdPs
+
+### Changed
+
+- *(auth)* extract GitHub userinfo fetch into dedicated method
+
+### Documentation
+
+- add release announcement(s)
+- *(pages)* add Phase 0 RFC for WASM code splitting
+- *(pages)* move WASM code splitting RFC to docs/rfc/
+- *(rfc)* add prior-art and Tier 2 MVP addendum to wasm-code-splitting RFC
+- *(pages)* use code formatting for cfg(wasm)-gated ClientLauncher::launch
+
+### Fixed
+
+- *(test)* inline DDL literals in dashboard E2E fixture via to_string
+- *(auth)* enforce HTTPS on GitHub UserInfo endpoint before sending bearer token
+
 ## [0.1.0-rc.22](https://github.com/kent8192/reinhardt-web/compare/reinhardt-web@v0.1.0-rc.21...reinhardt-web@v0.1.0-rc.22) - 2026-04-25
 
 ### Added

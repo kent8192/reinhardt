@@ -289,6 +289,16 @@ impl ServerRouter {
 	///     .mount("", ServerRouter::new());
 	/// ```
 	fn validate_prefix(prefix: &str) {
+		// Prefix must not contain path parameter placeholders.
+		// Mount prefixes are matched as literal strings, so a placeholder like
+		// `{org}` would never match an actual path segment and all child routes
+		// would silently 404. Fail early at construction time instead.
+		if prefix.contains('{') || prefix.contains('}') {
+			panic!(
+				"`mount()` prefix `{prefix}` contains a path parameter placeholder (`{{...}}`); this is not supported.\nUse `route()` with the full path on the child router instead, or mount at a literal prefix."
+			);
+		}
+
 		// Prefix must end with "/"
 		if !prefix.ends_with('/') {
 			if prefix.is_empty() {
@@ -489,6 +499,12 @@ impl ServerRouter {
 	///
 	/// Panics if the prefix is non-empty, not "/" and doesn't end with "/".
 	/// This follows Django's URL configuration conventions.
+	///
+	/// Also panics if the prefix contains a path parameter placeholder
+	/// (e.g. `/orgs/{org}/`). Mount prefixes are matched as literal strings,
+	/// so placeholders would silently cause all child routes to return 404.
+	/// Use `route()` with the full path on the child router instead, or
+	/// mount at a literal prefix.
 	///
 	/// # Examples
 	///
@@ -2100,6 +2116,20 @@ mod tests {
 
 		// Assert
 		assert_eq!(router.children_count(), 1);
+	}
+
+	#[rstest]
+	#[should_panic(expected = "path parameter placeholder")]
+	fn test_mount_panics_on_param_prefix() {
+		// Arrange
+		let child = ServerRouter::new();
+
+		// Act
+		// Mounting with a `{param}` placeholder in the prefix is not supported
+		// and must panic at construction time.
+		let _ = ServerRouter::new().mount("/orgs/{org}/clusters/", child);
+
+		// Assert: handled by `#[should_panic]`.
 	}
 
 	#[rstest]

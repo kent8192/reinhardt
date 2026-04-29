@@ -1891,6 +1891,15 @@ pub(crate) fn model_derive_impl(mut input: DeriveInput) -> Result<TokenStream> {
 		})
 		.collect();
 
+	// Token streams that register each model-level UNIQUE constraint
+	// (e.g., from `unique_together`) into ModelMetadata.constraints so the
+	// migration autodetector can emit AddConstraint operations.
+	// See reinhardt-web#4022.
+	let unique_constraint_field_lists: Vec<Vec<String>> = unique_constraints
+		.iter()
+		.map(|(fields, _, _)| fields.clone())
+		.collect();
+
 	// Define composite_pk_type_def and holder for code generation
 	let composite_pk_type_def: Option<TokenStream>;
 	// Note: composite_pk_type_holder is only assigned in the composite PK branch,
@@ -1939,6 +1948,8 @@ pub(crate) fn model_derive_impl(mut input: DeriveInput) -> Result<TokenStream> {
 		table_name,
 		&field_infos,
 		&fk_field_infos,
+		&unique_constraint_names,
+		&unique_constraint_field_lists,
 	)?;
 
 	// Generate relationship registration code for RELATIONSHIPS registry
@@ -2560,6 +2571,8 @@ fn generate_registration_code(
 	table_name: &str,
 	field_infos: &[FieldInfo],
 	fk_field_infos: &[ForeignKeyFieldInfo],
+	unique_constraint_names: &[String],
+	unique_constraint_field_lists: &[Vec<String>],
 ) -> Result<TokenStream> {
 	let migrations_crate = get_reinhardt_migrations_crate();
 	let orm_crate = get_reinhardt_orm_crate();
@@ -2826,6 +2839,29 @@ fn generate_registration_code(
 	// Generate type path for global model registry
 	let type_path = quote! { #struct_name }.to_string();
 
+	// Build per-constraint registration blocks for ModelMetadata.
+	// We walk three parallel vectors (names + field lists) and emit one
+	// `metadata.add_constraint(...)` call per declared `unique_together`.
+	// See reinhardt-web#4022.
+	let constraint_registrations: Vec<TokenStream> = unique_constraint_names
+		.iter()
+		.zip(unique_constraint_field_lists.iter())
+		.map(|(name, fields)| {
+			let field_lits = fields.iter().map(|f| quote! { #f.to_string() });
+			quote! {
+				metadata.add_constraint(
+					#migrations_crate::ConstraintDefinition {
+						name: #name.to_string(),
+						constraint_type: "unique".to_string(),
+						fields: vec![ #(#field_lits),* ],
+						expression: None,
+						foreign_key_info: None,
+					}
+				);
+			}
+		})
+		.collect();
+
 	let code = quote! {
 		#[::ctor::ctor]
 		fn #register_fn_name() {
@@ -2841,6 +2877,7 @@ fn generate_registration_code(
 			#(#field_registrations)*
 			#(#fk_id_registrations)*
 			#(#m2m_registrations)*
+			#(#constraint_registrations)*
 
 			#migrations_crate::model_registry::global_registry().register_model(metadata);
 

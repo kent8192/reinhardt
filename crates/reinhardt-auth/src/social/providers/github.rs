@@ -11,6 +11,7 @@ use crate::social::core::{
 };
 use crate::social::flow::pkce::{CodeChallenge, CodeVerifier};
 use crate::social::flow::{AuthorizationFlow, RefreshFlow, TokenExchangeFlow};
+use crate::social::url_validation::validate_endpoint_url;
 use async_trait::async_trait;
 use serde::Deserialize;
 use std::collections::HashMap;
@@ -172,6 +173,12 @@ impl OAuthProvider for GitHubProvider {
 		let userinfo_endpoint = oauth2_config.userinfo_endpoint.as_ref().ok_or_else(|| {
 			SocialAuthError::InvalidConfiguration("Missing UserInfo endpoint".into())
 		})?;
+
+		// Enforce HTTPS (or loopback HTTP) before transmitting the bearer token.
+		// Mirrors the validation performed by `UserInfoClient` and by
+		// `GenericOidcProvider::get_user_info` so the bearer token is never sent
+		// to an arbitrary scheme.
+		validate_endpoint_url(userinfo_endpoint)?;
 
 		// GitHub requires a User-Agent header on `/user` requests, and returns
 		// a non-OIDC payload, so we do not delegate to `UserInfoClient` here.

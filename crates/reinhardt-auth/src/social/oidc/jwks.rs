@@ -66,10 +66,23 @@ impl Jwk {
 					.map_err(|e| SocialAuthError::InvalidJwk(e.to_string()))
 			}
 			"EC" => {
-				// EC key support could be added here if needed
-				Err(SocialAuthError::InvalidJwk(
-					"EC keys not yet supported".to_string(),
-				))
+				let crv = self.crv.as_ref().ok_or_else(|| {
+					SocialAuthError::InvalidJwk("Missing EC curve (crv)".to_string())
+				})?;
+				let x = self.x.as_ref().ok_or_else(|| {
+					SocialAuthError::InvalidJwk("Missing EC x coordinate".to_string())
+				})?;
+				let y = self.y.as_ref().ok_or_else(|| {
+					SocialAuthError::InvalidJwk("Missing EC y coordinate".to_string())
+				})?;
+				match crv.as_str() {
+					"P-256" | "P-384" | "P-521" => DecodingKey::from_ec_components(x, y)
+						.map_err(|e| SocialAuthError::InvalidJwk(e.to_string())),
+					other => Err(SocialAuthError::InvalidJwk(format!(
+						"Unsupported EC curve: {}",
+						other
+					))),
+				}
 			}
 			other => Err(SocialAuthError::InvalidJwk(format!(
 				"Unsupported key type: {}",
@@ -215,7 +228,142 @@ impl JwksCache {
 
 #[cfg(test)]
 mod tests {
+	use rstest::rstest;
+
 	use super::*;
+
+	/// Builds a minimally-populated EC [`Jwk`] for use in tests.
+	fn ec_jwk(crv: Option<&str>, x: Option<&str>, y: Option<&str>) -> Jwk {
+		Jwk {
+			kty: "EC".to_string(),
+			kid: Some("ec-test".to_string()),
+			use_: Some("sig".to_string()),
+			alg: None,
+			n: None,
+			e: None,
+			crv: crv.map(str::to_string),
+			x: x.map(str::to_string),
+			y: y.map(str::to_string),
+		}
+	}
+
+	// Real EC public-key coordinates (Base64URL, no padding) generated via
+	// `openssl ecparam -name <curve> -genkey` and the uncompressed point
+	// encoding `0x04 || X || Y`. Using genuine on-curve points lets
+	// `DecodingKey::from_ec_components` validate the byte layout end-to-end.
+	const P256_X: &str = "3El72Z5v8sF_yAFl4X-oBwzdqNo2fSUGgnF9Op3jW_Y";
+	const P256_Y: &str = "ShFzmdJhPvr4CTie59tn5yi6TB4CeyQtu52iZ5QiG2Y";
+	const P384_X: &str = "biuKLTSSYW309rbLeZq2c1jcH5FG5DOpaabLO5sHZMMt8RmXPpP8kYOkpY85Sc9r";
+	const P384_Y: &str = "r3zcUmyzZtfrU8CHuSJFa-NPyLdbSJXJq7HRjpgjHSG6c1MLSDh2UZrFnqTSketK";
+	const P521_X: &str =
+		"AHRnYq_KUnouQZLJDcZY-e5fhMq1YvkvjQPClW2NdxlQWaRbs9VVahJ9i2jDarxyFb4gPHZfACMiBxh31-hXQ4ca";
+	const P521_Y: &str =
+		"AUHo3s3341w1Vl8-3qMz1qXm5-G5NrOZWqzXC63naeOZVRVzo6nW5Xa4nwVBA5FCZu8uZIbQYw24AdINRnb7RBM7";
+
+	#[rstest]
+	#[case::p256("P-256", P256_X, P256_Y)]
+	#[case::p384("P-384", P384_X, P384_Y)]
+	#[case::p521("P-521", P521_X, P521_Y)]
+	fn ec_jwk_to_decoding_key_succeeds_for_supported_curves(
+		#[case] crv: &str,
+		#[case] x: &str,
+		#[case] y: &str,
+	) {
+		// Arrange
+		let jwk = ec_jwk(Some(crv), Some(x), Some(y));
+
+		// Act
+		let result = jwk.to_decoding_key();
+
+		// Assert
+		assert!(
+			result.is_ok(),
+			"expected EC JWK on curve {crv} to convert successfully, got {:?}",
+			result.err()
+		);
+	}
+
+	#[rstest]
+	fn ec_jwk_missing_crv_returns_invalid_jwk_error() {
+		// Arrange
+		let jwk = ec_jwk(None, Some(P256_X), Some(P256_Y));
+
+		// Act
+		let err = jwk
+			.to_decoding_key()
+			.expect_err("expected InvalidJwk error");
+
+		// Assert
+		match err {
+			SocialAuthError::InvalidJwk(msg) => assert!(
+				msg.contains("crv"),
+				"expected error message to mention 'crv', got: {msg}"
+			),
+			other => panic!("expected SocialAuthError::InvalidJwk, got {other:?}"),
+		}
+	}
+
+	#[rstest]
+	fn ec_jwk_missing_x_returns_invalid_jwk_error() {
+		// Arrange
+		let jwk = ec_jwk(Some("P-256"), None, Some(P256_Y));
+
+		// Act
+		let err = jwk
+			.to_decoding_key()
+			.expect_err("expected InvalidJwk error");
+
+		// Assert
+		match err {
+			SocialAuthError::InvalidJwk(msg) => assert!(
+				msg.contains("x coordinate"),
+				"expected error message to mention 'x coordinate', got: {msg}"
+			),
+			other => panic!("expected SocialAuthError::InvalidJwk, got {other:?}"),
+		}
+	}
+
+	#[rstest]
+	fn ec_jwk_missing_y_returns_invalid_jwk_error() {
+		// Arrange
+		let jwk = ec_jwk(Some("P-256"), Some(P256_X), None);
+
+		// Act
+		let err = jwk
+			.to_decoding_key()
+			.expect_err("expected InvalidJwk error");
+
+		// Assert
+		match err {
+			SocialAuthError::InvalidJwk(msg) => assert!(
+				msg.contains("y coordinate"),
+				"expected error message to mention 'y coordinate', got: {msg}"
+			),
+			other => panic!("expected SocialAuthError::InvalidJwk, got {other:?}"),
+		}
+	}
+
+	#[rstest]
+	fn ec_jwk_unsupported_curve_returns_invalid_jwk_error() {
+		// Arrange
+		// secp256k1 is the Bitcoin curve; not part of the JOSE family
+		// this provider supports.
+		let jwk = ec_jwk(Some("secp256k1"), Some(P256_X), Some(P256_Y));
+
+		// Act
+		let err = jwk
+			.to_decoding_key()
+			.expect_err("expected InvalidJwk error");
+
+		// Assert
+		match err {
+			SocialAuthError::InvalidJwk(msg) => assert!(
+				msg.contains("Unsupported EC curve"),
+				"expected error message to mention 'Unsupported EC curve', got: {msg}"
+			),
+			other => panic!("expected SocialAuthError::InvalidJwk, got {other:?}"),
+		}
+	}
 
 	#[test]
 	fn test_jwk_set_find_key() {

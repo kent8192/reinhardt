@@ -65,6 +65,9 @@ struct MockServerState {
 	auth_code: Option<String>,
 	token_response: Option<TokenResponse>,
 	userinfo_response: Option<StandardClaims>,
+	/// Raw userinfo JSON body. When set, takes precedence over `userinfo_response`.
+	/// Used to test providers (like GitHub) whose userinfo schema does not match `StandardClaims`.
+	raw_userinfo_response: Option<String>,
 	#[allow(dead_code)] // test fixture for multiple provider scenarios
 	id_token: Option<IdToken>,
 	discovery_response: Option<String>,
@@ -94,6 +97,7 @@ impl MockOAuth2Server {
 			auth_code: None,
 			token_response: None,
 			userinfo_response: None,
+			raw_userinfo_response: None,
 			id_token: None,
 			discovery_response: None,
 			jwks_response: None,
@@ -189,6 +193,16 @@ impl MockOAuth2Server {
 	pub(crate) fn set_userinfo_response(&mut self, claims: StandardClaims) {
 		let mut state = self.state.lock().unwrap();
 		state.userinfo_response = Some(claims);
+	}
+
+	/// Set a raw JSON userinfo response.
+	///
+	/// Use this when the provider expects a non-OIDC schema (for example GitHub's
+	/// `/user` endpoint, which returns `id` instead of `sub`).
+	#[allow(dead_code)] // test fixture for multiple provider scenarios
+	pub(crate) fn set_raw_userinfo_response(&mut self, json: impl Into<String>) {
+		let mut state = self.state.lock().unwrap();
+		state.raw_userinfo_response = Some(json.into());
 	}
 
 	/// Set discovery document (OIDC)
@@ -352,23 +366,28 @@ async fn handle_request(
 					.unwrap());
 			}
 
-			let userinfo =
-				state_guard
-					.userinfo_response
-					.clone()
-					.unwrap_or_else(|| StandardClaims {
-						sub: "test_user".to_string(),
-						email: Some("test@example.com".to_string()),
-						email_verified: Some(true),
-						name: Some("Test User".to_string()),
-						given_name: Some("Test".to_string()),
-						family_name: Some("User".to_string()),
-						picture: None,
-						locale: None,
-						additional_claims: HashMap::new(),
-					});
-
-			let json = serde_json::to_string(&userinfo).unwrap();
+			// Raw JSON override takes precedence so non-OIDC providers
+			// (for example GitHub) can supply their native payload shape.
+			let json = if let Some(raw) = state_guard.raw_userinfo_response.clone() {
+				raw
+			} else {
+				let userinfo =
+					state_guard
+						.userinfo_response
+						.clone()
+						.unwrap_or_else(|| StandardClaims {
+							sub: "test_user".to_string(),
+							email: Some("test@example.com".to_string()),
+							email_verified: Some(true),
+							name: Some("Test User".to_string()),
+							given_name: Some("Test".to_string()),
+							family_name: Some("User".to_string()),
+							picture: None,
+							locale: None,
+							additional_claims: HashMap::new(),
+						});
+				serde_json::to_string(&userinfo).unwrap()
+			};
 			Ok(Response::builder()
 				.status(StatusCode::OK)
 				.header("Content-Type", "application/json")

@@ -80,18 +80,20 @@ async fn test_nested_url_helpers() {
 
 #[tokio::test]
 async fn test_deeply_nested_router() {
-	// Create deeply nested router structure:
-	// /api/v1/orgs/{org_id}/teams/{team_id}/members/
+	// Create deeply nested router structure with literal mount prefixes.
+	// Path parameters ({org_id}, {team_id}) belong on child routes, not on
+	// mount() prefixes — see ServerRouter::validate_prefix (Fixes #4025).
+	// Effective shape: /api/v1/orgs/teams/members/
 
 	let members_router = ServerRouter::new().with_namespace("members");
 
 	let teams_router = ServerRouter::new()
 		.with_namespace("teams")
-		.mount("/{team_id}/members/", members_router);
+		.mount("/members/", members_router);
 
 	let orgs_router = ServerRouter::new()
 		.with_namespace("orgs")
-		.mount("/{org_id}/teams/", teams_router);
+		.mount("/teams/", teams_router);
 
 	let api_router = ServerRouter::new()
 		.with_prefix("/api/v1")

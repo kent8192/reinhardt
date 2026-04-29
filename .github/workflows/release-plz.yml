@@ -81,6 +81,12 @@ jobs:
         # which makes `outputs.pr != ''` truthy. Without the extra checks,
         # fromJson('{}').head_branch becomes null -> HEAD_BRANCH empty ->
         # `git fetch origin ""` fails with exit 128. See run 24864402077.
+        #
+        # Identity must match the release-plz GitHub App that authenticates
+        # the push. Using "github-actions[bot]" here causes GitHub to suppress
+        # the pull_request: synchronize event (treated as GITHUB_TOKEN origin),
+        # which leaves the Release PR head SHA without any Actions check-runs.
+        # See #4029.
         if: >-
           steps.release-plz-pr.outputs.pr != ''
           && steps.release-plz-pr.outputs.pr != '{}'
@@ -94,8 +100,8 @@ jobs:
             echo "No release PR created (HEAD_BRANCH is empty); skipping."
             exit 0
           fi
-          git config user.name  "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git config user.name  "reinhardt-release-plz[bot]"
+          git config user.email "258855725+reinhardt-release-plz[bot]@users.noreply.github.com"
           git remote set-url origin "https://x-access-token:${GITHUB_TOKEN}@github.com/${REPO}.git"
           git fetch origin "$HEAD_BRANCH"
           git checkout "$HEAD_BRANCH"

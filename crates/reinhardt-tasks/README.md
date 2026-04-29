@@ -15,11 +15,11 @@ Add `reinhardt` to your `Cargo.toml`:
 <!-- reinhardt-version-sync:3 -->
 ```toml
 [dependencies]
-reinhardt = { version = "0.1.0-rc.23", features = ["tasks"] }
+reinhardt = { version = "0.1.0-rc.24", features = ["tasks"] }
 
 # Or use a preset:
-# reinhardt = { version = "0.1.0-rc.23", features = ["standard"] }  # Recommended
-# reinhardt = { version = "0.1.0-rc.23", features = ["full"] }      # All features
+# reinhardt = { version = "0.1.0-rc.24", features = ["standard"] }  # Recommended
+# reinhardt = { version = "0.1.0-rc.24", features = ["full"] }      # All features
 ```
 
 Then import task features:

@@ -4770,37 +4770,20 @@ impl MigrationAutodetector {
 	/// Performs the generate operations operation.
 	pub fn generate_operations(&self) -> Vec<super::Operation> {
 		let changes = self.detect_changes();
-		let mut operations = Vec::new();
+		let mut by_app: std::collections::BTreeMap<String, Vec<super::Operation>> =
+			std::collections::BTreeMap::new();
 
-		// Generate CreateTable operations for new models
-		for (app_label, model_name) in &changes.created_models {
-			if let Some(model) = self.to_state.get_model(app_label, model_name) {
-				let mut columns = Vec::new();
-				for (field_name, field_state) in &model.fields {
-					let col_def =
-						super::ColumnDefinition::from_field_state(field_name.clone(), field_state);
-					columns.push(col_def);
-				}
+		// Shared per-app emissions (CreateTable, column ops, constraint ops,
+		// auto-increment resets). This is the single source of truth shared
+		// with `generate_migrations()` so the two paths cannot diverge again
+		// (issue #4040).
+		self.emit_shared_per_app_operations(&changes, &mut by_app);
 
-				// Convert model constraints to operation constraints
-				let constraints: Vec<_> = model
-					.constraints
-					.iter()
-					.map(|c| c.to_constraint())
-					.collect();
-
-				operations.push(super::Operation::CreateTable {
-					name: model.table_name.clone(),
-					columns,
-					constraints,
-					without_rowid: None,
-					interleave_in_parent: None,
-					partition: None,
-				});
-			}
-		}
-
-		// Generate intermediate tables for ManyToMany fields in new models
+		// `generate_operations()`-specific extra: walk ManyToMany fields on
+		// new and added models and emit intermediate `CreateTable`s via
+		// `generate_intermediate_table`. This complements the shared
+		// emissions above. (`generate_migrations()` covers the same
+		// ground via `created_many_to_many` with PK-type-resolved logic.)
 		for (app_label, model_name) in &changes.created_models {
 			if let Some(model) = self.to_state.get_model(app_label, model_name) {
 				for (field_name, field_state) in &model.fields {
@@ -4808,26 +4791,11 @@ impl MigrationAutodetector {
 						&& let Some(operation) = self.generate_intermediate_table(
 							app_label, model_name, field_name, to, through,
 						) {
-						operations.push(operation);
+						by_app.entry(app_label.clone()).or_default().push(operation);
 					}
 				}
 			}
 		}
-
-		// Generate AddColumn operations for new fields
-		for (app_label, model_name, field_name) in &changes.added_fields {
-			if let Some(model) = self.to_state.get_model(app_label, model_name)
-				&& let Some(field) = model.get_field(field_name)
-			{
-				operations.push(super::Operation::AddColumn {
-					table: model.name.clone(),
-					column: super::ColumnDefinition::from_field_state(field_name.clone(), field),
-					mysql_options: None,
-				});
-			}
-		}
-
-		// Generate intermediate tables for ManyToMany fields being added
 		for (app_label, model_name, field_name) in &changes.added_fields {
 			if let Some(model) = self.to_state.get_model(app_label, model_name)
 				&& let Some(field) = model.get_field(field_name)
@@ -4835,77 +4803,171 @@ impl MigrationAutodetector {
 				&& let Some(operation) =
 					self.generate_intermediate_table(app_label, model_name, field_name, to, through)
 			{
-				operations.push(operation);
+				by_app.entry(app_label.clone()).or_default().push(operation);
 			}
 		}
 
-		// Generate AlterColumn operations for changed fields
+		// Note: MoveModel and RenameTable operations are intentionally only
+		// emitted by `generate_migrations()` (not here). Direct callers of
+		// `generate_operations()` historically did not see them; preserve
+		// that contract to avoid behavioral surprises.
+
+		// Flatten and sort by dependency to ensure correct execution order.
+		let operations: Vec<super::Operation> = by_app.into_values().flatten().collect();
+		self.sort_operations_by_dependency(operations)
+	}
+
+	/// Emit per-app operations shared by `generate_operations()` and
+	/// `generate_migrations()`.
+	///
+	/// This is the single source of truth for emissions that previously had
+	/// to be duplicated between the two methods. Issue #4040 was caused by
+	/// PR #3998 updating only `generate_operations()` while
+	/// `generate_migrations()` (the CLI entry point) was left silently
+	/// divergent. Centralizing the shared emissions here makes that class of
+	/// drift impossible.
+	///
+	/// Method-specific extras (M2M field-walking for `generate_operations()`;
+	/// `created_many_to_many` / `renamed_models` / `moved_models` for
+	/// `generate_migrations()`) are added by the callers after this helper
+	/// returns.
+	fn emit_shared_per_app_operations(
+		&self,
+		changes: &DetectedChanges,
+		by_app: &mut std::collections::BTreeMap<String, Vec<super::Operation>>,
+	) {
+		// CreateTable for new models.
+		for (app_label, model_name) in &changes.created_models {
+			if let Some(model) = self.to_state.get_model(app_label, model_name) {
+				let mut columns = Vec::new();
+				for (field_name, field_state) in &model.fields {
+					columns.push(super::ColumnDefinition::from_field_state(
+						field_name.clone(),
+						field_state,
+					));
+				}
+
+				let constraints: Vec<super::operations::Constraint> = model
+					.constraints
+					.iter()
+					.map(|c| c.to_constraint())
+					.collect();
+
+				by_app
+					.entry(app_label.clone())
+					.or_default()
+					.push(super::Operation::CreateTable {
+						name: model.table_name.clone(),
+						columns,
+						constraints,
+						without_rowid: None,
+						interleave_in_parent: None,
+						partition: None,
+					});
+			}
+		}
+
+		// AddColumn for new fields.
+		//
+		// Use `model.table_name` (not `model.name`) so the executor's
+		// `find_model_by_table_mut(table)` path resolves correctly. The
+		// previous `generate_operations()` body used `model.name` here, which
+		// was a latent bug that did not surface because that path was rarely
+		// exercised against table-name-keyed state.
+		for (app_label, model_name, field_name) in &changes.added_fields {
+			if let Some(model) = self.to_state.get_model(app_label, model_name)
+				&& let Some(field) = model.get_field(field_name)
+			{
+				by_app
+					.entry(app_label.clone())
+					.or_default()
+					.push(super::Operation::AddColumn {
+						table: model.table_name.clone(),
+						column: super::ColumnDefinition::from_field_state(
+							field_name.clone(),
+							field,
+						),
+						mysql_options: None,
+					});
+			}
+		}
+
+		// AlterColumn for changed fields.
 		for (app_label, model_name, field_name) in &changes.altered_fields {
 			if let Some(model) = self.to_state.get_model(app_label, model_name)
 				&& let Some(field) = model.get_field(field_name)
 			{
-				operations.push(super::Operation::AlterColumn {
-					table: model.name.clone(),
-					old_definition: None,
-					column: field_name.clone(),
-					new_definition: super::ColumnDefinition::from_field_state(
-						field_name.clone(),
-						field,
-					),
-					mysql_options: None,
-				});
+				by_app
+					.entry(app_label.clone())
+					.or_default()
+					.push(super::Operation::AlterColumn {
+						table: model.table_name.clone(),
+						old_definition: None,
+						column: field_name.clone(),
+						new_definition: super::ColumnDefinition::from_field_state(
+							field_name.clone(),
+							field,
+						),
+						mysql_options: None,
+					});
 			}
 		}
 
-		// Generate DropColumn operations for removed fields
+		// DropColumn for removed fields.
 		for (app_label, model_name, field_name) in &changes.removed_fields {
 			if let Some(model) = self.from_state.get_model(app_label, model_name) {
-				operations.push(super::Operation::DropColumn {
-					table: model.name.clone(),
-					column: field_name.clone(),
-				});
+				by_app
+					.entry(app_label.clone())
+					.or_default()
+					.push(super::Operation::DropColumn {
+						table: model.table_name.clone(),
+						column: field_name.clone(),
+					});
 			}
 		}
 
-		// Generate DropTable operations for deleted models
+		// DropTable for deleted models.
 		for (app_label, model_name) in &changes.deleted_models {
 			if let Some(model) = self.from_state.get_model(app_label, model_name) {
-				operations.push(super::Operation::DropTable {
-					name: model.table_name.clone(),
-				});
+				by_app
+					.entry(app_label.clone())
+					.or_default()
+					.push(super::Operation::DropTable {
+						name: model.table_name.clone(),
+					});
 			}
 		}
 
-		// Note: MoveModel operations for cross-app moves are detected in moved_models
-		// and handled in generate_migrations() using Operation::MoveModel variant.
-		// The MoveModel variant was added to the Operation enum to support this use case.
-
-		// Emit DropConstraint for modified composite PKs (drop before recreate)
+		// DropConstraint for modified composite PKs (drop before recreate).
 		for (app_label, model_name, constraint_name) in &changes.removed_composite_primary_keys {
 			if let Some(model) = self.from_state.get_model(app_label, model_name) {
-				operations.push(super::Operation::DropConstraint {
-					table: model.table_name.clone(),
-					constraint_name: constraint_name.clone(),
-				});
+				by_app.entry(app_label.clone()).or_default().push(
+					super::Operation::DropConstraint {
+						table: model.table_name.clone(),
+						constraint_name: constraint_name.clone(),
+					},
+				);
 			}
 		}
 
-		// Emit CreateCompositePrimaryKey for detected composite PK additions
+		// CreateCompositePrimaryKey for composite PK additions.
 		for (app_label, model_name, constraint) in &changes.added_composite_primary_keys {
 			if let Some(model) = self.to_state.get_model(app_label, model_name) {
-				operations.push(super::Operation::CreateCompositePrimaryKey {
-					table: model.table_name.clone(),
-					columns: constraint.fields.clone(),
-					constraint_name: Some(constraint.name.clone()),
-				});
+				by_app.entry(app_label.clone()).or_default().push(
+					super::Operation::CreateCompositePrimaryKey {
+						table: model.table_name.clone(),
+						columns: constraint.fields.clone(),
+						constraint_name: Some(constraint.name.clone()),
+					},
+				);
 			}
 		}
 
-		// Emit DropConstraint for non-PK constraints removed from existing tables.
+		// DropConstraint for non-PK constraints removed from existing tables.
 		//
-		// Composite primary keys (constraint_type == "primary_key" with 2+ fields)
-		// are handled by `removed_composite_primary_keys` above and must be skipped
-		// here to avoid emitting a duplicate DropConstraint.
+		// Composite primary keys (constraint_type == "primary_key" with 2+
+		// fields) are handled by `removed_composite_primary_keys` above and
+		// must be skipped here to avoid emitting a duplicate DropConstraint.
 		for (app_label, model_name, constraint_name) in &changes.removed_constraints {
 			let Some(from_model) = self.from_state.get_model(app_label, model_name) else {
 				continue;
@@ -4918,26 +4980,28 @@ impl MigrationAutodetector {
 			if is_composite_pk {
 				continue;
 			}
-			operations.push(super::Operation::DropConstraint {
-				table: from_model.table_name.clone(),
-				constraint_name: constraint_name.clone(),
-			});
+			by_app
+				.entry(app_label.clone())
+				.or_default()
+				.push(super::Operation::DropConstraint {
+					table: from_model.table_name.clone(),
+					constraint_name: constraint_name.clone(),
+				});
 		}
 
-		// Emit AddConstraint for non-PK constraints added to existing tables.
+		// AddConstraint for non-PK constraints added to existing tables.
 		//
-		// This covers `unique_together`, `Check`, `ForeignKey`, and `OneToOne`
-		// constraints declared on a model that already exists in `from_state`.
-		// Composite primary keys are emitted via `added_composite_primary_keys`
-		// using `CreateCompositePrimaryKey` and must be skipped here to avoid
-		// duplicate emission.
-		//
-		// The constraint SQL is rendered through the existing
-		// `ConstraintDefinition::to_constraint()` -> `Constraint: Display` path,
-		// which mirrors the SQL produced for the same constraint when emitted as
-		// part of a `CreateTable` operation. This keeps the on-disk schema for a
-		// "create + add later" sequence equivalent to a single "create with
-		// constraint" sequence.
+		// Covers `unique_together`, `Check`, `ForeignKey`, and `OneToOne`
+		// constraints declared on a model that already exists in
+		// `from_state`. Composite primary keys are emitted via
+		// `added_composite_primary_keys` using `CreateCompositePrimaryKey`
+		// and must be skipped here to avoid duplicate emission. The
+		// constraint SQL is rendered through the existing
+		// `ConstraintDefinition::to_constraint()` -> `Constraint: Display`
+		// path, which mirrors the SQL produced for the same constraint when
+		// emitted as part of a `CreateTable` operation, so the on-disk
+		// schema for a "create + add later" sequence stays equivalent to a
+		// "create with constraint" sequence.
 		for (app_label, model_name, constraint) in &changes.added_constraints {
 			if constraint.constraint_type == "primary_key" && constraint.fields.len() >= 2 {
 				continue;
@@ -4946,26 +5010,27 @@ impl MigrationAutodetector {
 				continue;
 			};
 			let constraint_sql = constraint.to_constraint().to_string();
-			operations.push(super::Operation::AddConstraint {
-				table: to_model.table_name.clone(),
-				constraint_sql,
-			});
+			by_app
+				.entry(app_label.clone())
+				.or_default()
+				.push(super::Operation::AddConstraint {
+					table: to_model.table_name.clone(),
+					constraint_sql,
+				});
 		}
 
-		// Emit SetAutoIncrementValue for detected sequence resets
+		// SetAutoIncrementValue for detected sequence resets.
 		for (app_label, model_name, column, value) in &changes.auto_increment_resets {
 			if let Some(model) = self.to_state.get_model(app_label, model_name) {
-				operations.push(super::Operation::SetAutoIncrementValue {
-					table: model.table_name.clone(),
-					column: column.clone(),
-					value: *value,
-				});
+				by_app.entry(app_label.clone()).or_default().push(
+					super::Operation::SetAutoIncrementValue {
+						table: model.table_name.clone(),
+						column: column.clone(),
+						value: *value,
+					},
+				);
 			}
 		}
-
-		// Sort operations by dependency to ensure correct execution order
-
-		self.sort_operations_by_dependency(operations)
 	}
 
 	/// Generate migrations from detected changes
@@ -5014,210 +5079,11 @@ impl MigrationAutodetector {
 		let mut migrations_by_app: std::collections::BTreeMap<String, Vec<super::Operation>> =
 			std::collections::BTreeMap::new();
 
-		// Group created models by app
-		for (app_label, model_name) in &changes.created_models {
-			if let Some(model) = self.to_state.get_model(app_label, model_name) {
-				let mut columns = Vec::new();
-				for (field_name, field_state) in &model.fields {
-					columns.push(super::ColumnDefinition::from_field_state(
-						field_name.clone(),
-						field_state,
-					));
-				}
-
-				// Convert ConstraintDefinition to operations::Constraint
-				let constraints: Vec<super::operations::Constraint> = model
-					.constraints
-					.iter()
-					.map(|c| c.to_constraint())
-					.collect();
-
-				migrations_by_app
-					.entry(app_label.clone())
-					.or_default()
-					.push(super::Operation::CreateTable {
-						name: model.table_name.clone(),
-						columns,
-						constraints,
-						without_rowid: None,
-						interleave_in_parent: None,
-						partition: None,
-					});
-			}
-		}
-
-		// Group added fields by app
-		for (app_label, model_name, field_name) in &changes.added_fields {
-			if let Some(model) = self.to_state.get_model(app_label, model_name)
-				&& let Some(field) = model.get_field(field_name)
-			{
-				migrations_by_app
-					.entry(app_label.clone())
-					.or_default()
-					.push(super::Operation::AddColumn {
-						table: model.table_name.clone(),
-						column: super::ColumnDefinition::from_field_state(
-							field_name.clone(),
-							field,
-						),
-						mysql_options: None,
-					});
-			}
-		}
-
-		// Group altered fields by app
-		for (app_label, model_name, field_name) in &changes.altered_fields {
-			if let Some(model) = self.to_state.get_model(app_label, model_name)
-				&& let Some(field) = model.get_field(field_name)
-			{
-				migrations_by_app
-					.entry(app_label.clone())
-					.or_default()
-					.push(super::Operation::AlterColumn {
-						table: model.table_name.clone(),
-						column: field_name.clone(),
-						old_definition: None,
-						new_definition: super::ColumnDefinition::from_field_state(
-							field_name.clone(),
-							field,
-						),
-						mysql_options: None,
-					});
-			}
-		}
-
-		// Group removed fields by app
-		for (app_label, model_name, field_name) in &changes.removed_fields {
-			if let Some(model) = self.from_state.get_model(app_label, model_name) {
-				migrations_by_app
-					.entry(app_label.clone())
-					.or_default()
-					.push(super::Operation::DropColumn {
-						table: model.table_name.clone(),
-						column: field_name.clone(),
-					});
-			}
-		}
-
-		// Group deleted models by app
-		for (app_label, model_name) in &changes.deleted_models {
-			if let Some(model) = self.from_state.get_model(app_label, model_name) {
-				migrations_by_app
-					.entry(app_label.clone())
-					.or_default()
-					.push(super::Operation::DropTable {
-						name: model.table_name.clone(),
-					});
-			}
-		}
-
-		// Group composite primary key removals (from modifications) by app
-		for (app_label, model_name, constraint_name) in &changes.removed_composite_primary_keys {
-			if let Some(model) = self.from_state.get_model(app_label, model_name) {
-				migrations_by_app
-					.entry(app_label.clone())
-					.or_default()
-					.push(super::Operation::DropConstraint {
-						table: model.table_name.clone(),
-						constraint_name: constraint_name.clone(),
-					});
-			}
-		}
-
-		// Group composite primary key additions by app
-		for (app_label, model_name, constraint) in &changes.added_composite_primary_keys {
-			if let Some(model) = self.to_state.get_model(app_label, model_name) {
-				migrations_by_app
-					.entry(app_label.clone())
-					.or_default()
-					.push(super::Operation::CreateCompositePrimaryKey {
-						table: model.table_name.clone(),
-						columns: constraint.fields.clone(),
-						constraint_name: Some(constraint.name.clone()),
-					});
-			}
-		}
-
-		// Group DropConstraint for non-PK constraints removed from existing tables.
-		//
-		// Composite primary keys (constraint_type == "primary_key" with 2+ fields)
-		// are handled by `removed_composite_primary_keys` above and must be skipped
-		// here to avoid emitting a duplicate DropConstraint.
-		//
-		// Mirrors the parallel block in `generate_operations()`. See issue #4040 —
-		// previously this loop was missing here, so `cargo make makemigrations`
-		// silently dropped `Operation::DropConstraint` for non-PK constraint
-		// removals (e.g. `unique_together`).
-		for (app_label, model_name, constraint_name) in &changes.removed_constraints {
-			let Some(from_model) = self.from_state.get_model(app_label, model_name) else {
-				continue;
-			};
-			let is_composite_pk = from_model
-				.constraints
-				.iter()
-				.find(|c| &c.name == constraint_name)
-				.is_some_and(|c| c.constraint_type == "primary_key" && c.fields.len() >= 2);
-			if is_composite_pk {
-				continue;
-			}
-			migrations_by_app
-				.entry(app_label.clone())
-				.or_default()
-				.push(super::Operation::DropConstraint {
-					table: from_model.table_name.clone(),
-					constraint_name: constraint_name.clone(),
-				});
-		}
-
-		// Group AddConstraint for non-PK constraints added to existing tables.
-		//
-		// This covers `unique_together`, `Check`, `ForeignKey`, and `OneToOne`
-		// constraints declared on a model that already exists in `from_state`.
-		// Composite primary keys are emitted via `added_composite_primary_keys`
-		// using `CreateCompositePrimaryKey` and must be skipped here to avoid
-		// duplicate emission.
-		//
-		// The constraint SQL is rendered through the existing
-		// `ConstraintDefinition::to_constraint()` -> `Constraint: Display` path,
-		// which mirrors the SQL produced for the same constraint when emitted as
-		// part of a `CreateTable` operation. This keeps the on-disk schema for a
-		// "create + add later" sequence equivalent to a single "create with
-		// constraint" sequence.
-		//
-		// Mirrors the parallel block in `generate_operations()`. See issue #4040 —
-		// previously this loop was missing here, so `cargo make makemigrations`
-		// silently dropped `Operation::AddConstraint` for non-PK constraint
-		// additions (e.g. `unique_together`).
-		for (app_label, model_name, constraint) in &changes.added_constraints {
-			if constraint.constraint_type == "primary_key" && constraint.fields.len() >= 2 {
-				continue;
-			}
-			let Some(to_model) = self.to_state.get_model(app_label, model_name) else {
-				continue;
-			};
-			let constraint_sql = constraint.to_constraint().to_string();
-			migrations_by_app
-				.entry(app_label.clone())
-				.or_default()
-				.push(super::Operation::AddConstraint {
-					table: to_model.table_name.clone(),
-					constraint_sql,
-				});
-		}
-
-		// Group auto-increment sequence resets by app
-		for (app_label, model_name, column, value) in &changes.auto_increment_resets {
-			if let Some(model) = self.to_state.get_model(app_label, model_name) {
-				migrations_by_app
-					.entry(app_label.clone())
-					.or_default()
-					.push(super::Operation::SetAutoIncrementValue {
-						table: model.table_name.clone(),
-						column: column.clone(),
-						value: *value,
-					});
-			}
-		}
+		// Shared per-app emissions (CreateTable, column ops, constraint ops,
+		// auto-increment resets). Single source of truth shared with
+		// `generate_operations()` — see `emit_shared_per_app_operations` and
+		// issue #4040.
+		self.emit_shared_per_app_operations(&changes, &mut migrations_by_app);
 
 		// Generate intermediate tables for ManyToMany relationships
 		for (app_label, model_name, through_table, m2m) in &changes.created_many_to_many {
@@ -7059,6 +6925,102 @@ mod tests {
 			constraint_name,
 			"clusters_cluster_organization_id_name_uniq"
 		);
+	}
+
+	#[rstest]
+	fn shared_per_app_emissions_are_consistent_between_generate_paths() {
+		// Arrange — regression for issue #4040 (structural).
+		//
+		// Issue #4040 was caused by `generate_operations()` and
+		// `generate_migrations()` carrying parallel-but-divergent
+		// per-change-set emission loops; PR #3998 updated only the former.
+		// After the structural fix both methods route through
+		// `emit_shared_per_app_operations()`, so the shared subset of ops
+		// (CreateTable / column ops / constraint ops / auto-increment
+		// resets) MUST always agree.
+		//
+		// This test exercises a representative scenario: an existing model
+		// gains a unique constraint AND a new column. Both emissions must
+		// appear identically in both methods. M2M / rename / move
+		// divergences are intentionally not exercised here because they
+		// remain method-specific by design.
+		let id_field = FieldState::new("id", super::super::FieldType::Integer, false);
+		let org_field = FieldState::new("organization_id", super::super::FieldType::Integer, false);
+		let name_field = FieldState::new("name", super::super::FieldType::VarChar(255), false);
+		let new_col = FieldState::new("region", super::super::FieldType::VarChar(64), false);
+
+		let mut from_model = build_model_state(
+			"clusters",
+			"Cluster",
+			vec![id_field.clone(), org_field.clone(), name_field.clone()],
+			Vec::new(),
+			Vec::new(),
+		);
+		from_model.table_name = "clusters_cluster".to_string();
+
+		let unique_constraint = ConstraintDefinition {
+			name: "clusters_cluster_organization_id_name_uniq".to_string(),
+			constraint_type: "unique".to_string(),
+			fields: vec!["organization_id".to_string(), "name".to_string()],
+			expression: None,
+			foreign_key_info: None,
+		};
+		let mut to_model = build_model_state(
+			"clusters",
+			"Cluster",
+			vec![id_field, org_field, name_field, new_col],
+			Vec::new(),
+			vec![unique_constraint],
+		);
+		to_model.table_name = "clusters_cluster".to_string();
+
+		let from_state = build_project_state(vec![(
+			("clusters".to_string(), "Cluster".to_string()),
+			from_model,
+		)]);
+		let to_state = build_project_state(vec![(
+			("clusters".to_string(), "Cluster".to_string()),
+			to_model,
+		)]);
+		let detector = MigrationAutodetector::new(from_state, to_state);
+
+		// Act
+		let ops = detector.generate_operations();
+		let migrations = detector.generate_migrations();
+
+		// Assert — flatten migrations into the same shape as `ops` and
+		// compare as multisets (order is determined by per-app dependency
+		// sort, which is the same algorithm but called with a different
+		// scope, so we compare unordered).
+		let mig_ops: Vec<&super::super::Operation> = migrations
+			.iter()
+			.flat_map(|m| m.operations.iter())
+			.collect();
+
+		assert_eq!(
+			ops.len(),
+			mig_ops.len(),
+			"shared per-app emissions diverged between generate_operations() ({:?}) and generate_migrations() ({:?})",
+			ops,
+			mig_ops
+		);
+		// Every op produced by generate_operations() must also appear in
+		// generate_migrations() output.
+		for op in &ops {
+			assert!(
+				mig_ops.iter().any(|m| *m == op),
+				"generate_operations() produced {:?} but generate_migrations() did not",
+				op
+			);
+		}
+		// And vice versa.
+		for op in &mig_ops {
+			assert!(
+				ops.iter().any(|o| o == *op),
+				"generate_migrations() produced {:?} but generate_operations() did not",
+				op
+			);
+		}
 	}
 
 	#[rstest]

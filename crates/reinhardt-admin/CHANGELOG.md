@@ -8,6 +8,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 <!-- release-plz-separator -->
 <!-- Entries below this line were created before release-plz adoption -->
 
+## [0.1.0-rc.23](https://github.com/kent8192/reinhardt-web/compare/reinhardt-admin@v0.1.0-rc.22...reinhardt-admin@v0.1.0-rc.23) - 2026-04-29
+
+### Changed
+
+- *(test)* replace raw SQL in dashboard E2E fixture with SeaQuery
+
+### Fixed
+
+- *(test)* inline DDL literals in dashboard E2E fixture via to_string
+
+### Testing
+
+- *(admin)* refactor e2e fixture and add dashboard test infrastructure
+- *(admin)* add 6 dashboard frontend E2E tests
+
 ## [0.1.0-rc.21](https://github.com/kent8192/reinhardt-web/compare/reinhardt-admin@v0.1.0-rc.20...reinhardt-admin@v0.1.0-rc.21) - 2026-04-23
 
 ### Documentation

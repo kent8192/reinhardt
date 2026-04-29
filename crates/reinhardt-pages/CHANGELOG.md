@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.0-rc.23](https://github.com/kent8192/reinhardt-web/compare/reinhardt-pages@v0.1.0-rc.22...reinhardt-pages@v0.1.0-rc.23) - 2026-04-29
+
+### Added
+
+- *(pages)* add intercept_links builder to ClientLauncher
+- *(pages)* add before_launch and after_launch lifecycle hooks
+- *(pages)* add on_path subscription hooks with PathCtx
+
+### Documentation
+
+- *(pages)* rewrite ClientLauncher example with new builder API
+- *(pages)* use code formatting for cfg(wasm)-gated ClientLauncher::launch
+
+### Styling
+
+- *(pages)* apply rustfmt to ClientLauncher hook implementation
+
 ### Added
 
 - *(pages)* `ClientLauncher::intercept_links(bool)` for built-in SPA link

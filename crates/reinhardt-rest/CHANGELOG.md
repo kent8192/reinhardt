@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.0-rc.23](https://github.com/kent8192/reinhardt-web/compare/reinhardt-rest@v0.1.0-rc.22...reinhardt-rest@v0.1.0-rc.23) - 2026-04-29
+
+### Fixed
+
+- *(rest)* honor MetaConfig and run sync validators in ModelSerializer
+- *(rest)* make WritableNestedSerializer honest about prefetch contract
+- *(rest)* preserve UnwindSafe auto traits on ValidatorConfig
+
+### Testing
+
+- *(rest)* cover serializer builder configuration round-trip behaviors
+
 ## [0.1.0-rc.21](https://github.com/kent8192/reinhardt-web/compare/reinhardt-rest@v0.1.0-rc.20...reinhardt-rest@v0.1.0-rc.21) - 2026-04-23
 
 ### Documentation

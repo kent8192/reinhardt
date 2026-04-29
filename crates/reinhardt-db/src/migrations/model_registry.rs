@@ -11,6 +11,7 @@
 //!
 //! See [`ModelMetadata`] for the architecture comparison diagram.
 
+use super::ConstraintDefinition;
 use super::autodetector::{FieldState, ModelState};
 use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
@@ -55,6 +56,15 @@ pub struct ModelMetadata {
 	pub options: HashMap<String, String>,
 	/// ManyToMany relationship definitions
 	pub many_to_many_fields: Vec<ManyToManyMetadata>,
+	/// Model-level constraints declared via `#[model(unique_together = ...)]`
+	/// and other peer-constraint attributes. Field-level `unique = true` is
+	/// still synthesized inside `to_model_state()` and not stored here, to
+	/// preserve the existing single-field UNIQUE behavior.
+	///
+	/// Kept private so that adding the field to a previously
+	/// externally-constructible struct does not break the public API.
+	/// Read via [`Self::constraints`]; write via [`Self::add_constraint`].
+	constraints: Vec<ConstraintDefinition>,
 }
 
 impl ModelMetadata {
@@ -71,6 +81,7 @@ impl ModelMetadata {
 			fields: HashMap::new(),
 			options: HashMap::new(),
 			many_to_many_fields: Vec::new(),
+			constraints: Vec::new(),
 		}
 	}
 
@@ -87,6 +98,21 @@ impl ModelMetadata {
 	/// Adds many to many.
 	pub fn add_many_to_many(&mut self, m2m: ManyToManyMetadata) {
 		self.many_to_many_fields.push(m2m);
+	}
+
+	/// Adds a model-level constraint declared via macro attributes
+	/// (e.g., `#[model(unique_together = ...)]`).
+	pub fn add_constraint(&mut self, constraint: ConstraintDefinition) {
+		self.constraints.push(constraint);
+	}
+
+	/// Returns model-level constraints registered by the `#[model(...)]`
+	/// macro (currently composite UNIQUE from `unique_together`).
+	///
+	/// Field-level `unique = true` is not included here; it is synthesized
+	/// inside [`Self::to_model_state`] from `FieldMetadata` parameters.
+	pub fn constraints(&self) -> &[ConstraintDefinition] {
+		&self.constraints
 	}
 
 	/// Convert to ModelState for migrations
@@ -156,7 +182,6 @@ impl ModelMetadata {
 		// Generate Unique constraints from field params
 		for (field_name, field_meta) in &self.fields {
 			if field_meta.params.get("unique").map(String::as_str) == Some("true") {
-				use super::ConstraintDefinition;
 				let constraint = ConstraintDefinition {
 					name: format!(
 						"{}_{}_{}_uniq",
@@ -172,6 +197,13 @@ impl ModelMetadata {
 				model_state.constraints.push(constraint);
 			}
 		}
+
+		// Copy model-level constraints declared via #[model(unique_together = ...)]
+		// (and other peer-constraint attributes). These are populated by the
+		// derive macro at registration time. See reinhardt-web#4022.
+		model_state
+			.constraints
+			.extend(self.constraints.iter().cloned());
 
 		model_state
 	}

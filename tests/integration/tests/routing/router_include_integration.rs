@@ -56,12 +56,14 @@ async fn test_router_mount_multiple() {
 
 #[tokio::test]
 async fn test_router_mount_nested() {
-	// Create deeply nested router structure
+	// Create deeply nested router structure with literal mount prefixes.
+	// Path parameters ({id}) belong on child routes, not on mount() prefixes —
+	// see ServerRouter::validate_prefix (Fixes #4025).
 	let detail_router = ServerRouter::new().with_namespace("user_detail");
 
 	let users_router = ServerRouter::new()
 		.with_namespace("users")
-		.mount("/{id}/", detail_router);
+		.mount("/detail/", detail_router);
 
 	let api_router = ServerRouter::new()
 		.with_prefix("/api")

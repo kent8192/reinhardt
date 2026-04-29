@@ -7,6 +7,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.0-rc.23](https://github.com/kent8192/reinhardt-web/compare/reinhardt-db@v0.1.0-rc.22...reinhardt-db@v0.1.0-rc.23) - 2026-04-29
+
+### Added
+
+- *(db)* add CustomManager and HasCustomManager traits
+- *(db)* expose QuerySet::filters accessor
+
+### Documentation
+
+- *(db)* add runnable doctest and Quick Start to CustomManager
+- *(db)* document custom object managers in README
+
+### Fixed
+
+- *(ci)* silence clippy::type_complexity on bulk_update_sql_detailed
+- *(db)* emit add/drop constraint operations from autodetector
+
+### Styling
+
+- apply rustfmt formatting from cargo make auto-fix
+
+### Testing
+
+- *(db)* add CustomManager smoke tests
+- *(db)* broaden CustomManager SQL parity coverage
+- *(db)* construct unit-struct managers directly to satisfy clippy
+
 ## [0.1.0-rc.21](https://github.com/kent8192/reinhardt-web/compare/reinhardt-db@v0.1.0-rc.20...reinhardt-db@v0.1.0-rc.21) - 2026-04-23
 
 ### Documentation

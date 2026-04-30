@@ -27,4 +27,4 @@ docs_rs     = "https://docs.rs/reinhardt-web"
 changelog   = "https://github.com/kent8192/reinhardt-web/blob/main/CHANGELOG.md"
 deepwiki    = "https://deepwiki.com/kent8192/reinhardt-web"
 # reinhardt-version-sync
-reinhardt_version = "0.1.0-rc.24"
+reinhardt_version = "0.1.0-rc.25"

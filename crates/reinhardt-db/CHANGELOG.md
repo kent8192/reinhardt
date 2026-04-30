@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.0-rc.24](https://github.com/kent8192/reinhardt-web/compare/reinhardt-db@v0.1.0-rc.23...reinhardt-db@v0.1.0-rc.24) - 2026-04-30
+
+### Added
+
+- *(db)* add constraints field to ModelMetadata
+
+### Fixed
+
+- *(db)* keep ModelMetadata.constraints private to preserve semver
+- *(db)* use table-name lookup in constraint and index diffs
+
+### Testing
+
+- *(migrations)* cover constraint diff via offline-reconstructed from_state
+
 ## [0.1.0-rc.23](https://github.com/kent8192/reinhardt-web/compare/reinhardt-db@v0.1.0-rc.22...reinhardt-db@v0.1.0-rc.23) - 2026-04-29
 
 ### Added

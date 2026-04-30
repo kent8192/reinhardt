@@ -32,13 +32,55 @@
 //! assert_eq!(count.get(), 43);
 //! ```
 
-use core::cell::RefCell;
 use core::fmt;
 
+#[cfg(target_arch = "wasm32")]
+use core::cell::RefCell;
+#[cfg(target_arch = "wasm32")]
 extern crate alloc;
+#[cfg(target_arch = "wasm32")]
 use alloc::rc::Rc;
 
+#[cfg(not(target_arch = "wasm32"))]
+use std::sync::{Arc, RwLock};
+
 use super::runtime::{NodeId, try_with_runtime, with_runtime};
+
+// Inner storage for `Signal<T>`.
+//
+// On native targets, `Arc<RwLock<T>>` makes `Signal<T>: Send + Sync`, which is
+// required by DI containers that bound resolved types on `Send + Sync + 'static`
+// (see issues #4065 / #4067). The reactive runtime itself is `thread_local!`,
+// so cross-thread mutation will not notify subscribers registered on another
+// thread; this is acceptable for server-side consumers (e.g., `ClientUrlReverser`
+// in `reinhardt-urls`) that hold `Signal`s only as route metadata and never
+// subscribe.
+//
+// On `wasm32`, the JS event loop is single-threaded and `Send`/`Sync` are not
+// required, so `Rc<RefCell<T>>` is kept to preserve the zero-cost reactive hot
+// path.
+#[cfg(not(target_arch = "wasm32"))]
+type SignalInner<T> = Arc<RwLock<T>>;
+#[cfg(target_arch = "wasm32")]
+type SignalInner<T> = Rc<RefCell<T>>;
+
+#[cfg(not(target_arch = "wasm32"))]
+fn new_inner<T>(value: T) -> SignalInner<T> {
+	Arc::new(RwLock::new(value))
+}
+#[cfg(target_arch = "wasm32")]
+fn new_inner<T>(value: T) -> SignalInner<T> {
+	Rc::new(RefCell::new(value))
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn strong_count<T>(inner: &SignalInner<T>) -> usize {
+	Arc::strong_count(inner)
+}
+#[cfg(target_arch = "wasm32")]
+fn strong_count<T>(inner: &SignalInner<T>) -> usize {
+	Rc::strong_count(inner)
+}
 
 /// A reactive signal that holds a value and tracks dependencies
 ///
@@ -52,14 +94,16 @@ use super::runtime::{NodeId, try_with_runtime, with_runtime};
 ///
 /// ## Cloning
 ///
-/// `Signal<T>` implements `Clone` and shares the value via `Rc<RefCell<T>>`.
+/// `Signal<T>` implements `Clone` and shares the value via reference counting.
+/// On native targets the inner storage is `Arc<RwLock<T>>` so `Signal<T>` is
+/// `Send + Sync`; on `wasm32` it is `Rc<RefCell<T>>` for zero-cost reactivity.
 /// All clones of the same Signal share the same underlying value and reference count.
 #[derive(Clone)]
 pub struct Signal<T: 'static> {
 	/// Unique identifier for this signal
 	id: NodeId,
 	/// The actual value, shared via reference counting
-	value: Rc<RefCell<T>>,
+	value: SignalInner<T>,
 }
 
 impl<T: 'static> Signal<T> {
@@ -80,7 +124,7 @@ impl<T: 'static> Signal<T> {
 	pub fn new(value: T) -> Self {
 		Self {
 			id: NodeId::new(),
-			value: Rc::new(RefCell::new(value)),
+			value: new_inner(value),
 		}
 	}
 
@@ -125,7 +169,14 @@ impl<T: 'static> Signal<T> {
 	where
 		T: Clone,
 	{
-		self.value.borrow().clone()
+		#[cfg(not(target_arch = "wasm32"))]
+		{
+			self.value.read().expect("Signal lock poisoned").clone()
+		}
+		#[cfg(target_arch = "wasm32")]
+		{
+			self.value.borrow().clone()
+		}
 	}
 
 	/// Applies a function to the current value without cloning or tracking dependencies.
@@ -143,7 +194,14 @@ impl<T: 'static> Signal<T> {
 	/// assert!(is_positive);
 	/// ```
 	pub fn with_untracked<R>(&self, f: impl FnOnce(&T) -> R) -> R {
-		f(&self.value.borrow())
+		#[cfg(not(target_arch = "wasm32"))]
+		{
+			f(&self.value.read().expect("Signal lock poisoned"))
+		}
+		#[cfg(target_arch = "wasm32")]
+		{
+			f(&self.value.borrow())
+		}
 	}
 
 	/// Set the signal to a new value
@@ -164,7 +222,14 @@ impl<T: 'static> Signal<T> {
 	/// assert_eq!(count.get(), 42);
 	/// ```
 	pub fn set(&self, value: T) {
-		*self.value.borrow_mut() = value;
+		#[cfg(not(target_arch = "wasm32"))]
+		{
+			*self.value.write().expect("Signal lock poisoned") = value;
+		}
+		#[cfg(target_arch = "wasm32")]
+		{
+			*self.value.borrow_mut() = value;
+		}
 		with_runtime(|rt| rt.notify_signal_change(self.id));
 	}
 
@@ -190,7 +255,14 @@ impl<T: 'static> Signal<T> {
 	where
 		F: FnOnce(&mut T),
 	{
-		f(&mut *self.value.borrow_mut());
+		#[cfg(not(target_arch = "wasm32"))]
+		{
+			f(&mut self.value.write().expect("Signal lock poisoned"));
+		}
+		#[cfg(target_arch = "wasm32")]
+		{
+			f(&mut self.value.borrow_mut());
+		}
 		with_runtime(|rt| rt.notify_signal_change(self.id));
 	}
 
@@ -205,11 +277,11 @@ impl<T: 'static> Signal<T> {
 impl<T: 'static> Drop for Signal<T> {
 	fn drop(&mut self) {
 		// Only cleanup Runtime when this is the last Signal clone
-		// (Rc::strong_count() == 1 means we're the only remaining reference)
-		if Rc::strong_count(&self.value) == 1 {
+		// (strong_count == 1 means we're the only remaining reference)
+		if strong_count(&self.value) == 1 {
 			let _ = try_with_runtime(|rt| rt.remove_node(self.id));
 		}
-		// The Rc<RefCell<T>> will be automatically deallocated when refcount reaches 0
+		// The inner storage is automatically deallocated when refcount reaches 0
 	}
 }
 
@@ -227,6 +299,15 @@ mod tests {
 	use super::*;
 	use crate::reactive::runtime::NodeType;
 	use serial_test::serial;
+
+	#[cfg(not(target_arch = "wasm32"))]
+	#[test]
+	fn signal_is_send_sync_on_native() {
+		fn assert_send_sync<T: Send + Sync>() {}
+		assert_send_sync::<Signal<String>>();
+		assert_send_sync::<Signal<Option<String>>>();
+		assert_send_sync::<Signal<i32>>();
+	}
 
 	#[test]
 	#[serial]

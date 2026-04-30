@@ -418,8 +418,10 @@ impl Default for UnifiedRouter {
 	}
 }
 
-// Note: Handler is NOT implemented for UnifiedRouter when client-router is enabled
-// because ClientRouter contains non-Sync types (Rc<RefCell>).
+// Note: Handler is not yet implemented for UnifiedRouter when client-router is enabled.
+// As of #4065 / #4067, ClientRouter is Send + Sync on native targets (Signal<T> is backed
+// by Arc<RwLock<T>>), so the previous Sync blocker no longer applies. A Handler impl can
+// be added in a follow-up PR.
 // For server-side HTTP handling, use ServerRouter directly or extract it via into_parts().
 
 // ============================================================================

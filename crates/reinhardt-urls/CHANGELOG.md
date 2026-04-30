@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.0-rc.25](https://github.com/kent8192/reinhardt-web/compare/reinhardt-urls@v0.1.0-rc.24...reinhardt-urls@v0.1.0-rc.25) - 2026-04-30
+
+### Documentation
+
+- *(urls)* note Sync resolution in unified_router comment
+
 ## [0.1.0-rc.24](https://github.com/kent8192/reinhardt-web/compare/reinhardt-urls@v0.1.0-rc.23...reinhardt-urls@v0.1.0-rc.24) - 2026-04-30
 
 ### Fixed

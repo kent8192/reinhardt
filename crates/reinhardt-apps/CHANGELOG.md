@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.0-rc.25](https://github.com/kent8192/reinhardt-web/compare/reinhardt-apps@v0.1.0-rc.24...reinhardt-apps@v0.1.0-rc.25) - 2026-04-30
+
+### Fixed
+
+- *(apps)* validate database url scheme at ApplicationBuilder::build
+
 ## [0.1.0-rc.21](https://github.com/kent8192/reinhardt-web/compare/reinhardt-apps@v0.1.0-rc.20...reinhardt-apps@v0.1.0-rc.21) - 2026-04-23
 
 ### Documentation

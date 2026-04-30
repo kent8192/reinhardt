@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.0-rc.25](https://github.com/kent8192/reinhardt-web/compare/reinhardt-commands@v0.1.0-rc.24...reinhardt-commands@v0.1.0-rc.25) - 2026-04-30
+
+### Added
+
+- *(commands)* make auto_register_router public for non-CLI entrypoints
+- *(commands)* add start_server helper for container entrypoints
+
+### Fixed
+
+- *(commands)* remove redundant explicit link targets in cli.rs
+
+### Testing
+
+- *(commands)* cover non-CLI server entrypoint public API
+
 ## [0.1.0-rc.22](https://github.com/kent8192/reinhardt-web/compare/reinhardt-commands@v0.1.0-rc.21...reinhardt-commands@v0.1.0-rc.22) - 2026-04-25
 
 ### Changed

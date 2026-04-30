@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.0-rc.25](https://github.com/kent8192/reinhardt-web/compare/reinhardt-core@v0.1.0-rc.24...reinhardt-core@v0.1.0-rc.25) - 2026-04-30
+
+### Fixed
+
+- *(reactive)* make Signal<T> Sync on native via Arc<RwLock<T>>
+
 ## [0.1.0-rc.21](https://github.com/kent8192/reinhardt-web/compare/reinhardt-core@v0.1.0-rc.20...reinhardt-core@v0.1.0-rc.21) - 2026-04-23
 
 ### Documentation

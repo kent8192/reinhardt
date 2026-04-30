@@ -3870,7 +3870,7 @@ impl MigrationAutodetector {
 				for (field_name, to_field) in &to_model.fields {
 					if let Some(from_field) = from_model.fields.get(field_name) {
 						// Check if field definition has changed
-						if self.has_field_changed(from_field, to_field) {
+						if self.has_field_changed(field_name, from_field, to_field) {
 							changes.altered_fields.push((
 								app_label.clone(),
 								model_name.clone(),
@@ -3883,33 +3883,52 @@ impl MigrationAutodetector {
 		}
 	}
 
-	/// Check if a field has changed
+	/// Check if a field has changed.
 	///
-	/// Compares only schema-affecting parameters to avoid false positives
-	/// from asymmetric param populations between migration-replayed from_state
-	/// and code-registry to_state.
-	fn has_field_changed(&self, from_field: &FieldState, to_field: &FieldState) -> bool {
-		// Check if field type changed
+	/// Field type and nullability are compared directly against `FieldState`,
+	/// then the rest of the schema-affecting attributes are funneled through
+	/// `ColumnDefinition::from_field_state` so that the migration-replayed
+	/// `from_state` and the code-registry `to_state` collapse to the same
+	/// canonical `ColumnDefinition` regardless of how their `params`
+	/// HashMaps were populated.
+	///
+	/// `from_state` (built via `ProjectState::apply_migration_operations` ->
+	/// `column_def_to_field_state`) only inserts `primary_key`,
+	/// `auto_increment`, `unique`, and `default` keys when the corresponding
+	/// `ColumnDefinition` field is true / `Some`. `to_state` (built via the
+	/// `#[model]` macro and `ModelMetadata::to_model_state`) explicitly
+	/// inserts boolean strings such as `not_null = "true"`, `null = "false"`,
+	/// and `unique = "false"` for every field. A raw HashMap-key comparison
+	/// surfaces this asymmetry as a fictitious change even when the
+	/// underlying schema is identical, producing spurious `AlterColumn`
+	/// operations under offline file-based state reconstruction.
+	///
+	/// See reinhardt-web#4049 for the regression that motivated this
+	/// canonicalization.
+	fn has_field_changed(
+		&self,
+		field_name: &str,
+		from_field: &FieldState,
+		to_field: &FieldState,
+	) -> bool {
+		// Field type and nullability are compared directly because the
+		// `nullable` bit on `FieldState` carries the authoritative NOT NULL
+		// status (the `not_null` / `null` params are advisory only).
 		if from_field.field_type != to_field.field_type {
 			return true;
 		}
-
-		// Check if nullable changed
 		if from_field.nullable != to_field.nullable {
 			return true;
 		}
 
-		// Compare only schema-affecting params to avoid false positives
-		// from_state (migration replay) populates: primary_key, auto_increment, unique, default
-		// to_state (code registry) populates all params including non-schema ones like max_length
-		const SCHEMA_PARAMS: &[&str] = &["primary_key", "auto_increment", "unique", "default"];
-		for key in SCHEMA_PARAMS {
-			if from_field.params.get(*key) != to_field.params.get(*key) {
-				return true;
-			}
-		}
-
-		false
+		// Schema-affecting bits are compared via the canonical
+		// `ColumnDefinition` form to absorb asymmetric param populations.
+		let from_def = super::ColumnDefinition::from_field_state(field_name, from_field);
+		let to_def = super::ColumnDefinition::from_field_state(field_name, to_field);
+		from_def.primary_key != to_def.primary_key
+			|| from_def.auto_increment != to_def.auto_increment
+			|| from_def.unique != to_def.unique
+			|| from_def.default != to_def.default
 	}
 
 	/// Detect renamed models
@@ -6177,7 +6196,7 @@ mod tests {
 		let detector = MigrationAutodetector::new(ProjectState::new(), ProjectState::new());
 
 		// Act
-		let changed = detector.has_field_changed(&from_field, &to_field);
+		let changed = detector.has_field_changed("email", &from_field, &to_field);
 
 		// Assert: should NOT be detected as changed
 		assert!(
@@ -6751,6 +6770,177 @@ mod tests {
 		assert_eq!(
 			constraint_name,
 			"clusters_cluster_organization_id_name_uniq"
+		);
+	}
+
+	#[rstest]
+	fn has_field_changed_ignores_param_population_skew() {
+		// Arrange — regression for issue #4049.
+		//
+		// `from_state` is rebuilt from migration files via
+		// `column_def_to_field_state`, which only inserts schema-affecting
+		// params (`primary_key`, `auto_increment`, `unique`, `default`) when
+		// their value is true/Some. `to_state` is rebuilt from the macro
+		// registry, which inserts explicit "true"/"false" strings for
+		// `not_null`, `null`, etc. on every field.
+		//
+		// The two `FieldState` HashMaps are therefore asymmetric even when
+		// the underlying schema is identical, and `has_field_changed` must
+		// not treat that asymmetry as a real change.
+		let mut from_params = std::collections::HashMap::new();
+		from_params.insert("primary_key".to_string(), "true".to_string());
+		from_params.insert("auto_increment".to_string(), "true".to_string());
+		let from_field = FieldState {
+			name: "id".to_string(),
+			field_type: super::super::FieldType::BigInteger,
+			nullable: false,
+			params: from_params,
+			foreign_key: None,
+		};
+
+		// to_field carries the macro-registry-style asymmetric params. In
+		// particular, schema-affecting keys like `unique` and `default` may be
+		// populated explicitly with their false/empty value on the to side
+		// while the migration-replay from side simply omits the key. The raw
+		// HashMap comparison previously surfaced this as a difference; the
+		// canonical ColumnDefinition collapses None and "false" to the same
+		// `false`, so the field is correctly seen as unchanged.
+		let mut to_params = std::collections::HashMap::new();
+		to_params.insert("primary_key".to_string(), "true".to_string());
+		to_params.insert("auto_increment".to_string(), "true".to_string());
+		to_params.insert("not_null".to_string(), "true".to_string());
+		to_params.insert("null".to_string(), "false".to_string());
+		to_params.insert("unique".to_string(), "false".to_string());
+		let to_field = FieldState {
+			name: "id".to_string(),
+			field_type: super::super::FieldType::BigInteger,
+			nullable: false,
+			params: to_params,
+			foreign_key: None,
+		};
+
+		let detector = MigrationAutodetector::new(ProjectState::new(), ProjectState::new());
+
+		// Act
+		let changed = detector.has_field_changed("id", &from_field, &to_field);
+
+		// Assert — schema is identical (BigInteger PK NOT NULL auto_increment,
+		// not unique). Asymmetric param maps must not surface as a change.
+		assert!(
+			!changed,
+			"identical schema with asymmetric param populations between migration replay and macro registry must not be detected as changed"
+		);
+	}
+
+	#[rstest]
+	fn generate_operations_no_spurious_altercolumn_for_pk_via_offline_reconstructed_state() {
+		// Arrange — regression for issue #4049.
+		//
+		// When `makemigrations` runs offline (no live DB), `from_state` is
+		// reconstructed from migration files and keyed by the PascalCase form
+		// of the table name (e.g. table `"clusters"` -> key `"Clusters"`),
+		// while `to_state` is keyed by the registered struct name (`"Cluster"`).
+		// On top of that, the two states populate `FieldState.params`
+		// asymmetrically: migration replay only inserts schema-affecting params
+		// when their value is true/Some, whereas the macro registry inserts
+		// explicit "true"/"false" strings for `not_null`, `null`, etc.
+		//
+		// The diff must NOT emit a no-op `Operation::AlterColumn` for the
+		// unchanged `id` primary key, even though the params HashMap differs.
+		let mut from_id_params = std::collections::HashMap::new();
+		from_id_params.insert("primary_key".to_string(), "true".to_string());
+		from_id_params.insert("auto_increment".to_string(), "true".to_string());
+		let from_id_field = FieldState {
+			name: "id".to_string(),
+			field_type: super::super::FieldType::BigInteger,
+			nullable: false,
+			params: from_id_params,
+			foreign_key: None,
+		};
+		let org_field = FieldState::new("organization_id", super::super::FieldType::Integer, false);
+		let name_field = FieldState::new("name", super::super::FieldType::VarChar(255), false);
+
+		// from_state: keyed by table-derived name "Clusters", no constraints,
+		// migration-replay-style sparse params on the PK column.
+		let mut from_model = build_model_state(
+			"clusters",
+			"Clusters",
+			vec![from_id_field, org_field.clone(), name_field.clone()],
+			Vec::new(),
+			Vec::new(),
+		);
+		from_model.table_name = "clusters_cluster".to_string();
+
+		// to_state: keyed by struct name "Cluster", carries an added
+		// unique_together constraint, macro-registry-style dense params on the
+		// PK column (`not_null`, `null`, `unique` explicitly populated even
+		// when their value is the default false). The from side omits these
+		// keys entirely, which previously surfaced as a fictitious
+		// difference in `has_field_changed`'s raw HashMap comparison.
+		let mut to_id_params = std::collections::HashMap::new();
+		to_id_params.insert("primary_key".to_string(), "true".to_string());
+		to_id_params.insert("auto_increment".to_string(), "true".to_string());
+		to_id_params.insert("not_null".to_string(), "true".to_string());
+		to_id_params.insert("null".to_string(), "false".to_string());
+		to_id_params.insert("unique".to_string(), "false".to_string());
+		let to_id_field = FieldState {
+			name: "id".to_string(),
+			field_type: super::super::FieldType::BigInteger,
+			nullable: false,
+			params: to_id_params,
+			foreign_key: None,
+		};
+		let unique_constraint = ConstraintDefinition {
+			name: "clusters_cluster_organization_id_name_uniq".to_string(),
+			constraint_type: "unique".to_string(),
+			fields: vec!["organization_id".to_string(), "name".to_string()],
+			expression: None,
+			foreign_key_info: None,
+		};
+		let to_model = build_model_state(
+			"clusters",
+			"Cluster",
+			vec![to_id_field, org_field, name_field],
+			Vec::new(),
+			vec![unique_constraint],
+		);
+
+		let from_state = build_project_state(vec![(
+			("clusters".to_string(), "Clusters".to_string()),
+			from_model,
+		)]);
+		let to_state = build_project_state(vec![(
+			("clusters".to_string(), "Cluster".to_string()),
+			to_model,
+		)]);
+		let detector = MigrationAutodetector::new(from_state, to_state);
+
+		// Act
+		let operations = detector.generate_operations();
+
+		// Assert — exactly one AddConstraint and no spurious AlterColumn for
+		// the unchanged PK. The asymmetric param populations must collapse to
+		// the same canonical `ColumnDefinition` and never surface as a diff.
+		assert!(
+			!operations
+				.iter()
+				.any(|op| matches!(op, super::super::Operation::AlterColumn { .. })),
+			"no AlterColumn must be emitted for unchanged PK under offline state reconstruction, got: {:?}",
+			operations
+		);
+		assert_eq!(
+			operations.len(),
+			1,
+			"expected exactly one AddConstraint operation, got: {:?}",
+			operations
+		);
+		assert!(
+			matches!(
+				&operations[0],
+				super::super::Operation::AddConstraint { .. }
+			),
+			"expected the single operation to be AddConstraint, got: {:?}",
+			operations[0]
 		);
 	}
 

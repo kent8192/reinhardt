@@ -1149,18 +1149,52 @@ async fn execute_generateopenapi(
 // Automatic Router Registration
 // ============================================================================
 
-/// Automatically discover and register URL pattern functions
+/// Automatically discover and register URL pattern functions.
 ///
 /// This function uses the `inventory` crate to discover URL pattern functions
-/// that were registered at compile time using the `#[routes]` attribute macro.
+/// that were registered at compile time using the `#[routes]` attribute macro,
+/// then installs the resulting router into the global router slot consumed by
+/// [`RunServerCommand`](crate::RunServerCommand).
+///
+/// [`execute_from_command_line`] calls this internally for HTTP-serving
+/// subcommands, so most applications never need to invoke it directly. It is
+/// exposed as a public building block for **non-CLI server entrypoints** —
+/// for example, a container entrypoint binary that calls
+/// [`RunServerCommand::execute`](crate::RunServerCommand) directly without
+/// going through clap argument parsing.
+///
+/// For the common "just start the HTTP server" case, prefer the higher-level
+/// [`start_server`] helper which wraps this function and `RunServerCommand`.
 ///
 /// # Returns
 ///
 /// Returns `Ok(())` on success, or an error if:
-/// - No URL patterns were registered
-/// - Multiple `#[routes]` functions were detected (should normally be caught at link time)
+/// - No URL patterns were registered (no `#[routes]` function was reachable
+///   from the linked binary)
+/// - Multiple `#[routes]` functions were detected (should normally be caught
+///   at link time)
+///
+/// # Examples
+///
+/// Compose with [`RunServerCommand`](crate::RunServerCommand) directly when
+/// you need control beyond what [`start_server`] offers:
+///
+/// ```rust,no_run
+/// use reinhardt_commands::{auto_register_router, BaseCommand, CommandContext, RunServerCommand};
+///
+/// #[tokio::main]
+/// async fn main() -> Result<(), Box<dyn std::error::Error>> {
+///     auto_register_router().await?;
+///
+///     let mut ctx = CommandContext::new(vec!["0.0.0.0:8080".to_string()]);
+///     ctx.set_option("noreload".to_string(), "true".to_string());
+///
+///     RunServerCommand.execute(&ctx).await?;
+///     Ok(())
+/// }
+/// ```
 #[cfg(feature = "routers")]
-async fn auto_register_router() -> Result<(), Box<dyn std::error::Error>> {
+pub async fn auto_register_router() -> Result<(), Box<dyn std::error::Error>> {
 	use reinhardt_urls::routers::{UrlPatternsRegistration, register_router_arc};
 
 	// Collect all registrations for validation
@@ -1219,11 +1253,59 @@ async fn auto_register_router() -> Result<(), Box<dyn std::error::Error>> {
 	Ok(())
 }
 
-/// No-op implementation when routers feature is disabled
+/// No-op implementation when the `routers` feature is disabled.
+///
+/// Kept public to preserve API stability across feature-flag toggles: callers
+/// of [`auto_register_router`] should compile regardless of whether `routers`
+/// is enabled in the consuming crate.
 #[cfg(not(feature = "routers"))]
-async fn auto_register_router() -> Result<(), Box<dyn std::error::Error>> {
+pub async fn auto_register_router() -> Result<(), Box<dyn std::error::Error>> {
 	// No router registration needed when routers feature is disabled
 	Ok(())
+}
+
+/// Start the HTTP server bound to `addr`, performing automatic route
+/// registration via [`auto_register_router`] beforehand.
+///
+/// This is a one-call convenience wrapper around the
+/// [`auto_register_router`] + [`RunServerCommand`](crate::RunServerCommand)
+/// composition. It is intended for **non-CLI server entrypoints** — for
+/// example, a container entrypoint binary that should expose only an HTTP
+/// server without the full `manage` clap surface.
+///
+/// All [`RunServerCommand`](crate::RunServerCommand) options other than the
+/// bind address use their built-in defaults (autoreload enabled, no WASM
+/// frontend, `dist` static directory, etc.). Callers needing finer control
+/// should compose with [`auto_register_router`] and
+/// [`RunServerCommand`](crate::RunServerCommand) directly.
+///
+/// Use [`execute_from_command_line`] instead when you want full clap argument
+/// parsing for the `manage` subcommand surface.
+///
+/// # Arguments
+///
+/// * `addr` - Bind address in `host:port` form (e.g. `"0.0.0.0:8080"`).
+///
+/// # Returns
+///
+/// Returns `Ok(())` on graceful shutdown, or an error if route registration
+/// or the server itself fails.
+///
+/// # Examples
+///
+/// ```rust,no_run
+/// use reinhardt_commands::start_server;
+///
+/// #[tokio::main]
+/// async fn main() -> Result<(), Box<dyn std::error::Error>> {
+///     start_server("0.0.0.0:8080").await
+/// }
+/// ```
+#[cfg(feature = "server")]
+pub async fn start_server(addr: &str) -> Result<(), Box<dyn std::error::Error>> {
+	auto_register_router().await?;
+	let ctx = CommandContext::new(vec![addr.to_string()]);
+	RunServerCommand.execute(&ctx).await.map_err(Into::into)
 }
 
 /// Generate a cryptographically random secret key for fallback use.

@@ -192,8 +192,8 @@ pub use builtin::MakeMigrationsCommand;
 pub use builtin::ShowUrlsCommand;
 pub use builtin::{CheckCommand, CheckDiCommand, MigrateCommand, RunServerCommand, ShellCommand};
 pub use cli::{
-	Cli, Commands, execute_from_command_line, execute_from_command_line_with_registry, run_command,
-	run_command_with_registry,
+	Cli, Commands, auto_register_router, execute_from_command_line,
+	execute_from_command_line_with_registry, run_command, run_command_with_registry,
 };
 pub use collectstatic::{CollectStaticCommand, CollectStaticOptions, CollectStaticStats};
 pub use context::CommandContext;

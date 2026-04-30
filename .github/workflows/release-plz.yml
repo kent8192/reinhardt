@@ -123,19 +123,22 @@ jobs:
           fi
 
           # Build additions/deletions arrays for the GraphQL mutation.
-          # `additions` need base64-encoded contents; `deletions` need only path.
-          ADDITIONS='[]'
-          DELETIONS='[]'
+          # Stream entries to NDJSON files so each `jq` invocation has a
+          # tiny argv -- accumulating the JSON via `--argjson` would exceed
+          # the kernel's ARG_MAX once base64-encoded contents pile up.
+          # See #4045.
+          ADDITIONS_FILE=$(mktemp)
+          DELETIONS_FILE=$(mktemp)
+          trap 'rm -f "$ADDITIONS_FILE" "$DELETIONS_FILE"' EXIT
           while IFS=$'\t' read -r status path; do
             case "$status" in
               M|A)
-                content_b64=$(base64 -w0 < "$path")
-                ADDITIONS=$(jq --arg p "$path" --arg c "$content_b64" \
-                  '. + [{path: $p, contents: $c}]' <<< "$ADDITIONS")
+                base64 -w0 < "$path" \
+                  | jq -ncR --arg p "$path" '{path: $p, contents: input}' \
+                  >> "$ADDITIONS_FILE"
                 ;;
               D)
-                DELETIONS=$(jq --arg p "$path" \
-                  '. + [{path: $p}]' <<< "$DELETIONS")
+                jq -nc --arg p "$path" '{path: $p}' >> "$DELETIONS_FILE"
                 ;;
               *)
                 echo "::warning::Unsupported diff status '$status' for path '$path'; skipping."
@@ -143,14 +146,17 @@ jobs:
             esac
           done < <(git diff --name-status HEAD)
 
-          PAYLOAD=$(jq -n \
+          # `--slurpfile` reads each file as an array of its JSON values, so
+          # the large base64 payload never crosses the command line.
+          PAYLOAD_FILE=$(mktemp)
+          jq -n \
             --arg query 'mutation($input: CreateCommitOnBranchInput!) { createCommitOnBranch(input: $input) { commit { url oid } } }' \
             --arg repo "$REPO" \
             --arg branch "$HEAD_BRANCH" \
             --arg msg "docs: update version references to v${VERSION}" \
             --arg oid "$HEAD_OID" \
-            --argjson adds "$ADDITIONS" \
-            --argjson dels "$DELETIONS" \
+            --slurpfile adds "$ADDITIONS_FILE" \
+            --slurpfile dels "$DELETIONS_FILE" \
             '{
               query: $query,
               variables: {
@@ -161,13 +167,14 @@ jobs:
                   fileChanges: { additions: $adds, deletions: $dels }
                 }
               }
-            }')
+            }' > "$PAYLOAD_FILE"
 
-          # `gh api graphql --input -` posts the assembled body. Authentication
+          # `gh api graphql --input` posts the assembled body. Authentication
           # uses GITHUB_TOKEN (the release-plz App installation token); this
           # works because GraphQL accepts the same App token that already had
           # contents:write permission for the previous git push path.
-          RESPONSE=$(echo "$PAYLOAD" | gh api graphql --input -)
+          RESPONSE=$(gh api graphql --input "$PAYLOAD_FILE")
+          rm -f "$PAYLOAD_FILE"
 
           NEW_OID=$(jq -r '.data.createCommitOnBranch.commit.oid' <<< "$RESPONSE")
           NEW_URL=$(jq -r '.data.createCommitOnBranch.commit.url' <<< "$RESPONSE")

@@ -34,10 +34,10 @@ Add `reinhardt` to your `Cargo.toml`:
 <!-- reinhardt-version-sync:2 -->
 ```toml
 [dependencies]
-reinhardt = { version = "0.1.0-rc.24", features = ["admin"] }
+reinhardt = { version = "0.1.0-rc.25", features = ["admin"] }
 
 # Or use a preset:
-# reinhardt = { version = "0.1.0-rc.24", features = ["full"] }  # All features
+# reinhardt = { version = "0.1.0-rc.25", features = ["full"] }  # All features
 ```
 
 Then import admin features:

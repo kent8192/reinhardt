@@ -1154,7 +1154,7 @@ async fn execute_generateopenapi(
 /// This function uses the `inventory` crate to discover URL pattern functions
 /// that were registered at compile time using the `#[routes]` attribute macro,
 /// then installs the resulting router into the global router slot consumed by
-/// [`RunServerCommand`](crate::RunServerCommand).
+/// [`RunServerCommand`].
 ///
 /// [`execute_from_command_line`] calls this internally for HTTP-serving
 /// subcommands, so most applications never need to invoke it directly. It is
@@ -1176,7 +1176,7 @@ async fn execute_generateopenapi(
 ///
 /// # Examples
 ///
-/// Compose with [`RunServerCommand`](crate::RunServerCommand) directly when
+/// Compose with [`RunServerCommand`] directly when
 /// you need control beyond what [`start_server`] offers:
 ///
 /// ```rust,no_run
@@ -1268,16 +1268,16 @@ pub async fn auto_register_router() -> Result<(), Box<dyn std::error::Error>> {
 /// registration via [`auto_register_router`] beforehand.
 ///
 /// This is a one-call convenience wrapper around the
-/// [`auto_register_router`] + [`RunServerCommand`](crate::RunServerCommand)
+/// [`auto_register_router`] + [`RunServerCommand`]
 /// composition. It is intended for **non-CLI server entrypoints** — for
 /// example, a container entrypoint binary that should expose only an HTTP
 /// server without the full `manage` clap surface.
 ///
-/// All [`RunServerCommand`](crate::RunServerCommand) options other than the
+/// All [`RunServerCommand`] options other than the
 /// bind address use their built-in defaults (autoreload enabled, no WASM
 /// frontend, `dist` static directory, etc.). Callers needing finer control
 /// should compose with [`auto_register_router`] and
-/// [`RunServerCommand`](crate::RunServerCommand) directly.
+/// [`RunServerCommand`] directly.
 ///
 /// Use [`execute_from_command_line`] instead when you want full clap argument
 /// parsing for the `manage` subcommand surface.

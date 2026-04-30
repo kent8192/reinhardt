@@ -144,7 +144,19 @@ pub struct ApplicationDatabaseConfig {
 }
 
 impl ApplicationDatabaseConfig {
-	/// Create a new database configuration
+	/// Create a new database configuration.
+	///
+	/// The URL is stored as-is at this stage; scheme validation is performed
+	/// later by [`ApplicationBuilder::build`] so that
+	/// [`ApplicationDatabaseConfig`] remains a plain data carrier. Build-time
+	/// validation rejects unrecognized schemes (see issue
+	/// [#485](https://github.com/kent8192/reinhardt-web/issues/485)) before any
+	/// connection attempt is made.
+	///
+	/// A future major release may move this validation into the constructor
+	/// itself; see issue
+	/// [#4056](https://github.com/kent8192/reinhardt-web/issues/4056) for the
+	/// breaking-change proposal.
 	///
 	/// # Examples
 	///
@@ -446,6 +458,14 @@ impl ApplicationBuilder {
 					full_name
 				)));
 			}
+		}
+
+		// Validate the database URL scheme at build time so that obviously
+		// malformed URLs surface as a clear configuration error rather than
+		// later as an opaque connection failure (issue #485).
+		if let Some(db_config) = &self.database_config {
+			reinhardt_conf::settings::database_config::validate_database_url_scheme(&db_config.url)
+				.map_err(BuildError::DatabaseError)?;
 		}
 
 		Ok(())
@@ -950,6 +970,67 @@ mod tests {
 		assert_eq!(db_config.pool_size, None);
 		assert_eq!(db_config.max_overflow, None);
 		assert_eq!(db_config.timeout, None);
+	}
+
+	// Issue #485: build-time validation of the database URL scheme. The
+	// constructor stays infallible (data-carrier role); rejection happens
+	// once, at build() time.
+
+	#[rstest::rstest]
+	#[case::postgres("postgres://localhost/db")]
+	#[case::postgresql("postgresql://user:pass@localhost:5432/db")]
+	#[case::sqlite_memory("sqlite::memory:")]
+	#[case::sqlite_absolute("sqlite:///var/data/db.sqlite3")]
+	#[case::sqlite_relative("sqlite:db.sqlite3")]
+	#[case::mysql("mysql://root@localhost/db")]
+	#[case::mariadb("mariadb://root@localhost/db")]
+	#[serial(apps_registry)]
+	fn test_application_builder_accepts_valid_database_url_scheme(#[case] url: &str) {
+		// Arrange
+		crate::registry::reset_global_registry();
+		let db_config = ApplicationDatabaseConfig::new(url);
+
+		// Act
+		let result = ApplicationBuilder::new().database(db_config).build();
+
+		// Assert
+		assert!(
+			result.is_ok(),
+			"expected URL {:?} to be accepted but got {:?}",
+			url,
+			result.err()
+		);
+	}
+
+	#[rstest::rstest]
+	#[case::empty("")]
+	#[case::not_a_url("not a url")]
+	#[case::http("http://localhost/db")]
+	#[case::ftp("ftp://localhost/db")]
+	#[case::redis("redis://localhost")]
+	#[case::missing_scheme("localhost/db")]
+	fn test_application_builder_rejects_invalid_database_url_scheme(#[case] url: &str) {
+		// Arrange
+		let db_config = ApplicationDatabaseConfig::new(url);
+
+		// Act
+		// `Application` does not implement `Debug`, so we cannot use
+		// `expect_err()` here (it would require `T: Debug`). Match instead.
+		let result = ApplicationBuilder::new().database(db_config).build();
+
+		// Assert
+		match result {
+			Err(BuildError::DatabaseError(msg)) => {
+				assert!(
+					msg.contains("Invalid database URL"),
+					"unexpected error message for {:?}: {}",
+					url,
+					msg
+				);
+			}
+			Err(other) => panic!("expected BuildError::DatabaseError, got {:?}", other),
+			Ok(_) => panic!("expected build to fail for invalid URL: {:?}", url),
+		}
 	}
 
 	#[test]

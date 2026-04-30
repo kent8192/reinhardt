@@ -82,11 +82,13 @@ jobs:
         # fromJson('{}').head_branch becomes null -> HEAD_BRANCH empty ->
         # `git fetch origin ""` fails with exit 128. See run 24864402077.
         #
-        # Identity must match the release-plz GitHub App that authenticates
-        # the push. Using "github-actions[bot]" here causes GitHub to suppress
-        # the pull_request: synchronize event (treated as GITHUB_TOKEN origin),
-        # which leaves the Release PR head SHA without any Actions check-runs.
-        # See #4029.
+        # Use GraphQL createCommitOnBranch (NOT git push) so the new commit's
+        # committer is `web-flow`, the only identity that reliably triggers
+        # `pull_request: synchronize`. Pushing via `git push` from a workflow
+        # runner preserves the workflow-configured `[bot]` committer, which
+        # GitHub treats as bot-origin and suppresses the synchronize event,
+        # leaving the Release PR head SHA without any Actions check-runs.
+        # See #4042 (this fix), #4029, #4031 (incomplete fix).
         if: >-
           steps.release-plz-pr.outputs.pr != ''
           && steps.release-plz-pr.outputs.pr != '{}'
@@ -96,23 +98,85 @@ jobs:
           GITHUB_TOKEN: ${{ steps.generate-token.outputs.token }}
           REPO: ${{ github.repository }}
         run: |
+          set -euo pipefail
           if [ -z "$HEAD_BRANCH" ]; then
             echo "No release PR created (HEAD_BRANCH is empty); skipping."
             exit 0
           fi
-          git config user.name  "reinhardt-release-plz[bot]"
-          git config user.email "258855725+reinhardt-release-plz[bot]@users.noreply.github.com"
-          git remote set-url origin "https://x-access-token:${GITHUB_TOKEN}@github.com/${REPO}.git"
+
+          # Sync the working tree to the release branch HEAD (created by
+          # release-plz/action) so update-version-refs.sh edits the right
+          # snapshot. We do NOT need a local commit -- the GraphQL mutation
+          # below creates the remote commit directly.
           git fetch origin "$HEAD_BRANCH"
           git checkout "$HEAD_BRANCH"
+          HEAD_OID=$(git rev-parse HEAD)
+
           VERSION=$(grep '^version = ' Cargo.toml | head -1 | \
                     sed 's/version = "\(.*\)"/\1/')
+
           ./scripts/update-version-refs.sh "$VERSION"
-          if ! git diff --quiet; then
-            git add -A
-            git commit -m "docs: update version references to v${VERSION}"
-            git push origin "$HEAD_BRANCH"
+
+          if git diff --quiet; then
+            echo "update-version-refs.sh produced no changes; skipping commit."
+            exit 0
           fi
+
+          # Build additions/deletions arrays for the GraphQL mutation.
+          # `additions` need base64-encoded contents; `deletions` need only path.
+          ADDITIONS='[]'
+          DELETIONS='[]'
+          while IFS=$'\t' read -r status path; do
+            case "$status" in
+              M|A)
+                content_b64=$(base64 -w0 < "$path")
+                ADDITIONS=$(jq --arg p "$path" --arg c "$content_b64" \
+                  '. + [{path: $p, contents: $c}]' <<< "$ADDITIONS")
+                ;;
+              D)
+                DELETIONS=$(jq --arg p "$path" \
+                  '. + [{path: $p}]' <<< "$DELETIONS")
+                ;;
+              *)
+                echo "::warning::Unsupported diff status '$status' for path '$path'; skipping."
+                ;;
+            esac
+          done < <(git diff --name-status HEAD)
+
+          PAYLOAD=$(jq -n \
+            --arg query 'mutation($input: CreateCommitOnBranchInput!) { createCommitOnBranch(input: $input) { commit { url oid } } }' \
+            --arg repo "$REPO" \
+            --arg branch "$HEAD_BRANCH" \
+            --arg msg "docs: update version references to v${VERSION}" \
+            --arg oid "$HEAD_OID" \
+            --argjson adds "$ADDITIONS" \
+            --argjson dels "$DELETIONS" \
+            '{
+              query: $query,
+              variables: {
+                input: {
+                  branch: { repositoryNameWithOwner: $repo, branchName: $branch },
+                  message: { headline: $msg },
+                  expectedHeadOid: $oid,
+                  fileChanges: { additions: $adds, deletions: $dels }
+                }
+              }
+            }')
+
+          # `gh api graphql --input -` posts the assembled body. Authentication
+          # uses GITHUB_TOKEN (the release-plz App installation token); this
+          # works because GraphQL accepts the same App token that already had
+          # contents:write permission for the previous git push path.
+          RESPONSE=$(echo "$PAYLOAD" | gh api graphql --input -)
+
+          NEW_OID=$(jq -r '.data.createCommitOnBranch.commit.oid' <<< "$RESPONSE")
+          NEW_URL=$(jq -r '.data.createCommitOnBranch.commit.url' <<< "$RESPONSE")
+          if [ -z "$NEW_OID" ] || [ "$NEW_OID" = "null" ]; then
+            echo "::error::createCommitOnBranch did not return a commit oid"
+            echo "$RESPONSE"
+            exit 1
+          fi
+          echo "Created version-refs commit $NEW_OID via GraphQL: $NEW_URL"
 
   release-plz-release:
     name: Release

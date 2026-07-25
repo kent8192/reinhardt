@@ -112,23 +112,18 @@ async fn generated_model_form_creates_and_queries_article() {
 async fn generated_model_form_updates_title_and_preserves_omitted_values() {
 	// Arrange
 	let mut fixture = sqlite_fixture().await;
-	let mut create_form = ModelForm::<Article, ArticleFormPolicy>::from_payload(article_payload(
-		"Original article",
-		73,
-	));
-	let created = create_form
-		.save(&mut fixture.connection)
-		.await
-		.expect("generated model form should create the original article");
 	let original = Article::objects()
-		.get(
-			created
-				.id
-				.expect("original article should have an identifier"),
+		.create_with_conn(
+			&mut fixture.connection,
+			&Article {
+				id: None,
+				title: "Original article".to_owned(),
+				owner_id: 73,
+				audit_token: "preexisting-audit-token".to_owned(),
+			},
 		)
-		.get_with_db(&mut fixture.connection)
 		.await
-		.expect("original article should be queried before update");
+		.expect("preexisting article should be persisted through the ORM");
 	let mut update_payload = ArticleModelFormData::<ArticleFormPolicy>::empty();
 	update_payload.set_title("Updated article".to_owned());
 	let mut update_form = ModelForm::<Article, ArticleFormPolicy>::from_payload_and_instance(
@@ -158,7 +153,7 @@ async fn generated_model_form_updates_title_and_preserves_omitted_values() {
 			id: updated.id,
 			title: "Updated article".to_owned(),
 			owner_id: 73,
-			audit_token: DEFAULT_AUDIT_TOKEN.to_owned(),
+			audit_token: "preexisting-audit-token".to_owned(),
 		}
 	);
 }

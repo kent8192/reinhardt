@@ -34,6 +34,7 @@ where
 	}
 
 	/// Stores a control value after validating it against the generated schema.
+	/// An empty string removes a previously stored value for an optional field.
 	///
 	/// # Errors
 	///
@@ -54,6 +55,12 @@ where
 			return Err(ModelFormPayloadError::ForbiddenField {
 				field: field.to_owned(),
 			});
+		}
+		if !descriptor.required
+			&& matches!(&value, serde_json::Value::String(text) if text.is_empty())
+		{
+			self.values.remove(descriptor.name);
+			return Ok(());
 		}
 
 		let converted = convert_control_value(descriptor, value)?;
@@ -124,32 +131,66 @@ fn convert_control_value(
 			Ok(serde_json::Value::String(text))
 		}
 		ModelFormFieldKind::Integer { min, max } => {
-			let integer = match value {
-				serde_json::Value::Number(number) => number
-					.as_i64()
-					.ok_or_else(|| invalid_value(descriptor.name, "expected a signed integer"))?,
-				serde_json::Value::String(text) => text.parse::<i64>().map_err(|error| {
-					invalid_value(descriptor.name, format!("invalid integer: {error}"))
-				})?,
+			let number = match value {
+				serde_json::Value::Number(number)
+					if number.as_i64().is_some() || number.as_u64().is_some() =>
+				{
+					number
+				}
+				serde_json::Value::Number(_) => {
+					return Err(invalid_value(descriptor.name, "expected an integer"));
+				}
+				serde_json::Value::String(text) => match text.parse::<i64>() {
+					Ok(integer) => serde_json::Number::from(integer),
+					Err(signed_error) => match text.parse::<u64>() {
+						Ok(integer) => serde_json::Number::from(integer),
+						Err(_) => {
+							return Err(invalid_value(
+								descriptor.name,
+								format!("invalid integer: {signed_error}"),
+							));
+						}
+					},
+				},
 				_ => return Err(invalid_value(descriptor.name, "expected an integer")),
 			};
-			if let Some(min) = min
-				&& integer < min
-			{
-				return Err(invalid_value(
-					descriptor.name,
-					format!("must be greater than or equal to {min}"),
-				));
+
+			if let Some(integer) = number.as_i64() {
+				if let Some(min) = min
+					&& integer < min
+				{
+					return Err(invalid_value(
+						descriptor.name,
+						format!("must be greater than or equal to {min}"),
+					));
+				}
+				if let Some(max) = max
+					&& integer > max
+				{
+					return Err(invalid_value(
+						descriptor.name,
+						format!("must be less than or equal to {max}"),
+					));
+				}
+			} else if let Some(integer) = number.as_u64() {
+				if let Some(min) = min
+					&& min >= 0 && integer < min as u64
+				{
+					return Err(invalid_value(
+						descriptor.name,
+						format!("must be greater than or equal to {min}"),
+					));
+				}
+				if let Some(max) = max
+					&& (max < 0 || integer > max as u64)
+				{
+					return Err(invalid_value(
+						descriptor.name,
+						format!("must be less than or equal to {max}"),
+					));
+				}
 			}
-			if let Some(max) = max
-				&& integer > max
-			{
-				return Err(invalid_value(
-					descriptor.name,
-					format!("must be less than or equal to {max}"),
-				));
-			}
-			Ok(serde_json::Value::from(integer))
+			Ok(serde_json::Value::Number(number))
 		}
 		ModelFormFieldKind::Float => {
 			let float = match value {

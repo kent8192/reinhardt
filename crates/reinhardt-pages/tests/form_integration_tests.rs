@@ -151,6 +151,151 @@ fn model_form_builds_one_policy_safe_payload() {
 	assert_eq!(payload.get_json("owner_id"), None);
 }
 
+struct ModelFormNumeric;
+
+struct ModelFormNumericSchema;
+
+const MODEL_FORM_NUMERIC_FIELDS: [ModelFormFieldDescriptor; 2] = [
+	ModelFormFieldDescriptor {
+		name: "bounded",
+		kind: ModelFormFieldKind::Integer {
+			min: Some(-2),
+			max: Some(2),
+		},
+		required: true,
+		has_default: false,
+		editable: true,
+		generated_relation_id: false,
+	},
+	ModelFormFieldDescriptor {
+		name: "unsigned",
+		kind: ModelFormFieldKind::Integer {
+			min: Some(0),
+			max: None,
+		},
+		required: false,
+		has_default: false,
+		editable: true,
+		generated_relation_id: false,
+	},
+];
+
+impl ModelFormSchema for ModelFormNumericSchema {
+	type Model = ModelFormNumeric;
+
+	fn fields() -> &'static [ModelFormFieldDescriptor] {
+		&MODEL_FORM_NUMERIC_FIELDS
+	}
+}
+
+struct ModelFormAllNumericFields;
+
+impl ModelFormPolicy for ModelFormAllNumericFields {
+	fn allows(field: &str) -> bool {
+		matches!(field, "bounded" | "unsigned")
+	}
+}
+
+#[derive(Default)]
+struct ModelFormNumericData {
+	values: HashMap<&'static str, serde_json::Value>,
+}
+
+impl ModelFormPayload<ModelFormAllNumericFields> for ModelFormNumericData {
+	fn supplied_fields(&self) -> Vec<&'static str> {
+		self.values.keys().copied().collect()
+	}
+
+	fn forbidden_fields(&self) -> &[&'static str] {
+		&[]
+	}
+
+	fn get_json(&self, field: &str) -> Option<serde_json::Value> {
+		self.values.get(field).cloned()
+	}
+
+	fn set_json(
+		&mut self,
+		field: &str,
+		value: serde_json::Value,
+	) -> Result<(), ModelFormPayloadError> {
+		let field = match field {
+			"bounded" => "bounded",
+			"unsigned" => "unsigned",
+			_ => {
+				return Err(ModelFormPayloadError::UnknownField {
+					field: field.to_owned(),
+				});
+			}
+		};
+		self.values.insert(field, value);
+		Ok(())
+	}
+}
+
+#[test]
+fn model_form_integer_conversion_preserves_signed_and_unsigned_boundaries() {
+	let mut state = ModelFormState::<ModelFormNumericSchema, ModelFormAllNumericFields>::new();
+
+	state
+		.set_value("bounded", serde_json::json!(-2))
+		.expect("inclusive signed minimum should be accepted");
+	assert_eq!(state.value("bounded"), Some(&serde_json::json!(-2)));
+	state
+		.set_value("bounded", serde_json::json!(2))
+		.expect("inclusive signed maximum should be accepted");
+	assert_eq!(state.value("bounded"), Some(&serde_json::json!(2)));
+	assert!(matches!(
+		state.set_value("bounded", serde_json::json!(-3)),
+		Err(ModelFormPayloadError::InvalidValue { .. })
+	));
+	assert!(matches!(
+		state.set_value("bounded", serde_json::json!(3)),
+		Err(ModelFormPayloadError::InvalidValue { .. })
+	));
+	assert!(matches!(
+		state.set_value("bounded", serde_json::json!(u64::MAX)),
+		Err(ModelFormPayloadError::InvalidValue { .. })
+	));
+
+	let above_i64_max = i64::MAX as u64 + 1;
+	state
+		.set_value("unsigned", serde_json::json!(above_i64_max))
+		.expect("an unsigned JSON integer above i64::MAX should be accepted");
+	assert_eq!(
+		state.value("unsigned"),
+		Some(&serde_json::json!(above_i64_max))
+	);
+	state
+		.set_value("unsigned", serde_json::json!(u64::MAX.to_string()))
+		.expect("an unsigned integer string above i64::MAX should be accepted");
+	let payload = state
+		.build_payload::<ModelFormNumericData>()
+		.expect("signed and unsigned integer values should build one payload");
+	assert_eq!(
+		payload.get_json("unsigned"),
+		Some(serde_json::json!(u64::MAX))
+	);
+}
+
+#[test]
+fn model_form_clearing_optional_control_removes_previous_payload_value() {
+	let mut state = ModelFormState::<ModelFormNumericSchema, ModelFormAllNumericFields>::new();
+	state
+		.set_value("unsigned", serde_json::json!(42_u64))
+		.expect("optional integer should accept a value");
+	state
+		.set_value("unsigned", serde_json::json!(""))
+		.expect("empty optional input should unset the control");
+
+	assert_eq!(state.value("unsigned"), None);
+	let payload = state
+		.build_payload::<ModelFormNumericData>()
+		.expect("cleared optional input should build a payload");
+	assert_eq!(payload.get_json("unsigned"), None);
+	assert!(payload.supplied_fields().is_empty());
+}
+
 // ============================================================================
 // Category 1: Form Creation and Metadata (8 tests)
 // ============================================================================

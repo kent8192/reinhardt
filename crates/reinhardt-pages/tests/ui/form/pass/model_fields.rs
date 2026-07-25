@@ -3,8 +3,8 @@
 use std::marker::PhantomData;
 
 use reinhardt_core::model_form::{
-	AllEditableModelFields, ModelFormFieldDescriptor, ModelFormFieldKind, ModelFormPayload,
-	ModelFormPayloadError, ModelFormPolicy, ModelFormSchema,
+	ModelFormFieldDescriptor, ModelFormFieldKind, ModelFormPayload, ModelFormPayloadError,
+	ModelFormPolicy, ModelFormSchema,
 };
 use reinhardt_pages::form;
 
@@ -69,14 +69,6 @@ impl<P: ModelFormPolicy> QuestionModelFormData<P> {
 			_policy: PhantomData,
 		}
 	}
-
-	fn title(&self) -> Option<&String> {
-		self.title.as_ref()
-	}
-
-	fn set_title(&mut self, value: String) {
-		self.title = Some(value);
-	}
 }
 
 impl<P: ModelFormPolicy> ModelFormPayload<P> for QuestionModelFormData<P> {
@@ -140,8 +132,6 @@ impl<P: ModelFormPolicy> ModelFormPayload<P> for QuestionModelFormData<P> {
 	}
 }
 
-type QuestionFormData = QuestionModelFormData<AllEditableModelFields>;
-
 async fn save_question<P: ModelFormPolicy>(
 	_payload: QuestionModelFormData<P>,
 ) -> Result<(), reinhardt_pages::ServerFnError> {
@@ -149,10 +139,6 @@ async fn save_question<P: ModelFormPolicy>(
 }
 
 fn main() {
-	let mut data = QuestionFormData::empty();
-	data.set_title("Typed".to_owned());
-	let _: Option<&String> = data.title();
-
 	reinhardt_core::reactive::ReactiveScope::run(|| {
 		let _form = form! {
 			name: QuestionForm,

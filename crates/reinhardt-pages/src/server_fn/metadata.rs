@@ -37,6 +37,12 @@
 /// }
 /// ```
 pub trait ServerFnMetadata: 'static {
+	/// Rust module path containing the generated server function.
+	///
+	/// Generated server functions override this value with their defining module.
+	/// The default keeps manually implemented registrations compatible.
+	const MODULE_PATH: &'static str = "<manual-server-fn>";
+
 	/// The HTTP path for this server function.
 	///
 	/// Default format: `/api/server_fn/{function_name}`. Customizable via

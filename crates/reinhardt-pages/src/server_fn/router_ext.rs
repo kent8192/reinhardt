@@ -17,6 +17,7 @@
 //! }
 //! ```
 
+use super::auto_registration::{collect_auto_server_fns, duplicate_server_fn_path_error};
 use super::registration::ServerFnRegistration;
 use super::set::ServerFnSetRegistration;
 use hyper::header::{CONTENT_TYPE, HeaderValue};
@@ -24,6 +25,7 @@ use hyper::{Method, StatusCode};
 use reinhardt_core::endpoint::EndpointInfo;
 use reinhardt_http::{Handler, Request, Response, Result, SharedResponseCookies};
 use reinhardt_urls::routers::ServerRouter;
+use reinhardt_urls::routers::server_router::RouteOrigin;
 use std::marker::PhantomData;
 
 /// Extension trait for registering server functions with `ServerRouter`.
@@ -74,13 +76,48 @@ pub trait ServerFnRouterExt {
 	/// ```
 	fn server_fn<S: ServerFnRegistration + 'static>(self, marker: S) -> Self;
 
+	/// Registers every inventory-linked server function owned by the caller's application.
+	///
+	/// Pass `module_path!()` from the application's router construction module so
+	/// ownership is resolved before routes are mounted.
+	///
+	/// # Example
+	///
+	/// ```ignore
+	/// let router = ServerRouter::new().auto_server_fns(module_path!());
+	/// ```
+	fn auto_server_fns(self, caller_module: &'static str) -> Self;
+
 	/// Register every member of a named server function set.
 	fn server_fnset<S: ServerFnSetRegistration>(self, set: S) -> Self;
 }
 
 impl ServerFnRouterExt for ServerRouter {
 	fn server_fn<S: ServerFnRegistration + 'static>(self, _marker: S) -> Self {
-		self.endpoint(|| ServerFnEndpoint::<S>(PhantomData))
+		if let Some(existing) = self
+			.registered_endpoints()
+			.into_iter()
+			.find(|endpoint| endpoint.method == Method::POST && endpoint.path == S::PATH)
+		{
+			return self.with_configuration_error(duplicate_server_fn_path_error(
+				S::PATH,
+				[
+					S::MODULE_PATH,
+					existing
+						.origin
+						.map_or("<manual-server-fn>", |origin| origin.module_path),
+				],
+			));
+		}
+
+		self.endpoint_with_origin(
+			|| ServerFnEndpoint::<S>(PhantomData),
+			RouteOrigin::generated(S::MODULE_PATH),
+		)
+	}
+
+	fn auto_server_fns(self, caller_module: &'static str) -> Self {
+		collect_auto_server_fns(self, caller_module)
 	}
 
 	fn server_fnset<S: ServerFnSetRegistration>(self, set: S) -> Self {

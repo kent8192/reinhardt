@@ -290,6 +290,7 @@ reinhardt-urls = { workspace = true, default-features = false, features = ["clie
 # Server-side only dependencies (DI, HTTP, Forms, Server Function Registry)
 [target.'cfg(not(all(target_family = "wasm", target_os = "unknown")))'.dependencies]
 reinhardt-db = { workspace = true, optional = true, features = ["orm"] }
+reinhardt-apps = { workspace = true }
 reinhardt-forms = { workspace = true }
 reinhardt-di = { workspace = true }
 reinhardt-http = { workspace = true }

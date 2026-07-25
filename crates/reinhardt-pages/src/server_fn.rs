@@ -71,6 +71,8 @@
 //! }
 //! ```
 
+#[cfg(native)]
+pub mod auto_registration;
 pub mod codec;
 #[cfg(native)]
 pub mod injectable;
@@ -90,6 +92,10 @@ pub mod server_fn_trait;
 pub mod set;
 
 // Re-exports
+#[cfg(native)]
+pub use auto_registration::{
+	ServerFnInventoryEntry, ServerFnInventoryError, ServerFnRegister, validate_server_fn_inventory,
+};
 #[cfg(feature = "msgpack")]
 pub use codec::MessagePackCodec;
 pub use codec::{Codec, JsonCodec, UrlCodec};

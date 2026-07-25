@@ -367,7 +367,7 @@ pub trait CustomManager: Sized + Send + Sync {
 		model: &'a Self::Model,
 	) -> impl Future<Output = reinhardt_core::exception::Result<Self::Model>> + Send + 'a
 	where
-		E: OrmExecutor + 'a,
+		E: OrmExecutor + ?Sized + 'a,
 	{
 		async move {
 			let mut model = model.clone();
@@ -397,7 +397,7 @@ pub trait CustomManager: Sized + Send + Sync {
 		model: &'a Self::Model,
 	) -> impl Future<Output = reinhardt_core::exception::Result<Self::Model>> + Send + 'a
 	where
-		E: OrmExecutor + 'a,
+		E: OrmExecutor + ?Sized + 'a,
 	{
 		async move {
 			let mut model = model.clone();

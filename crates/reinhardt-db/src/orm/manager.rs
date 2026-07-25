@@ -1236,7 +1236,7 @@ impl<M: Model> Manager<M> {
 		model: &M,
 	) -> reinhardt_core::exception::Result<M>
 	where
-		E: OrmExecutor,
+		E: OrmExecutor + ?Sized,
 	{
 		let obj = model.encode_database_fields().map_err(field_codec_error)?;
 		let mut stmt =
@@ -1709,7 +1709,7 @@ impl<M: Model> Manager<M> {
 		model: &M,
 	) -> reinhardt_core::exception::Result<M>
 	where
-		E: OrmExecutor,
+		E: OrmExecutor + ?Sized,
 	{
 		model.primary_key().ok_or_else(|| {
 			Error::from(DatabaseError::new(

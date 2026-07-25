@@ -907,20 +907,15 @@ use crate::shared::types::UserInfo;
 
 ### Issue: "failed to resolve: could not find `fetch`"
 
-**Cause**: Generated client code is compiled without the `reinhardt-pages`
-runtime crate path in scope.
+**Cause**: The Pages runtime dependency is unavailable to the browser target.
 
-**Solution**: Import the runtime crate under its canonical name, alias your
-custom re-export to the same name before using `#[server_fn]`, or set the macro
-crate path when using custom re-exports:
-
-```rust
-use reinhardt_pages as reinhardt_pages;
-```
-
-```rust
-use my_framework::pages as reinhardt_pages;
-```
+**Solution**: Keep either the direct `reinhardt-pages` dependency or the
+`reinhardt` facade dependency available to the target compiling the client
+stub. The macro resolves a renamed direct `reinhardt-pages` dependency and a
+renamed `reinhardt` facade automatically. No source-level framework crate
+alias, macro crate-path option, `inventory` dependency, or custom cfg alias is
+required. If the error remains, verify that the selected target dependency and
+its Pages client features have not been disabled.
 
 ### Issue: Function signature mismatch between server and client
 

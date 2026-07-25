@@ -241,17 +241,18 @@ async fn startproject_pages_from_embedded_only() {
 		"generated pages project must include WASM post-build scripts"
 	);
 	let build_rs = std::fs::read_to_string(generated.join("build.rs")).unwrap();
-	for cfg in ["with_reinhardt", "client", "server", "wasm", "native"] {
+	for cfg in ["with_reinhardt", "client", "server"] {
 		assert!(
 			build_rs.contains(&format!("cargo::rustc-check-cfg=cfg({cfg})")),
 			"generated pages build.rs must declare cfg({cfg}) for Rust 2024 check-cfg:\n{build_rs}"
 		);
 	}
-	assert!(
-		build_rs.contains("wasm: { target_arch = \"wasm32\" }")
-			&& build_rs.contains("native: { not(target_arch = \"wasm32\") }"),
-		"generated pages build.rs must keep wasm/native compatibility aliases:\n{build_rs}"
-	);
+	for removed_cfg in ["wasm", "native"] {
+		assert!(
+			!build_rs.contains(&format!("cfg({removed_cfg})")),
+			"generated pages build.rs must not declare the removed cfg({removed_cfg}) alias:\n{build_rs}"
+		);
+	}
 	assert!(
 		cargo_toml.contains("[workspace]") && cargo_toml.contains("members = ["),
 		"generated pages Cargo.toml must be a nested-workspace-safe root:\n{cargo_toml}"

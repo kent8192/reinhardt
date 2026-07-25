@@ -608,8 +608,6 @@ fn generate_workspace_build_rs(app_name: &str, app_dir: &Path) -> CommandResult<
 		 \t// Rust 2024 edition requires explicit check-cfg declarations\n\
 		 \tprintln!(\"cargo::rustc-check-cfg=cfg(client)\");\n\
 		 \tprintln!(\"cargo::rustc-check-cfg=cfg(server)\");\n\
-		 \tprintln!(\"cargo::rustc-check-cfg=cfg(wasm)\");\n\
-		 \tprintln!(\"cargo::rustc-check-cfg=cfg(native)\");\n\
 		 \n\
 		 \tcfg_aliases! {{\n\
 		 \t\t// Platform aliases for simpler conditional compilation\n\
@@ -617,9 +615,6 @@ fn generate_workspace_build_rs(app_name: &str, app_dir: &Path) -> CommandResult<
 		 \t\tclient: {{ target_arch = \"wasm32\" }},\n\
 		 \t\t// Use `#[cfg(server)]` instead of `#[cfg(not(target_arch = \"wasm32\"))]`\n\
 		 \t\tserver: {{ not(target_arch = \"wasm32\") }},\n\
-		 \t\t// Compatibility aliases used by framework macro expansions.\n\
-		 \t\twasm: {{ target_arch = \"wasm32\" }},\n\
-		 \t\tnative: {{ not(target_arch = \"wasm32\") }},\n\
 		 \t}}\n\
 		 }}\n"
 	);

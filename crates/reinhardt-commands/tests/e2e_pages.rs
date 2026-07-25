@@ -250,11 +250,11 @@ async fn project_pages_layout_matches_tutorial() {
 		"src/client/state.rs must not be generated"
 	);
 
-	// 4. lib.rs declares the server-only re-export shim and un-gates apps.
+	// 4. lib.rs keeps the application module surface free of macro compatibility shims.
 	let lib_rs = fs::read_to_string(src.join("lib.rs")).expect("read lib.rs");
 	assert!(
-		lib_rs.contains("mod server_only"),
-		"src/lib.rs must declare the `mod server_only` re-export shim:\n{lib_rs}"
+		!lib_rs.contains("mod server_only"),
+		"src/lib.rs must not declare the removed `mod server_only` re-export shim:\n{lib_rs}"
 	);
 	assert!(
 		!lib_rs.contains("pub mod server_fn;"),
@@ -645,24 +645,20 @@ async fn startapp_pages_layout_has_target_gated_route_surface() {
 		"client_router.rs reverse helper must include the generated app name in panic context:\n{client_contents}"
 	);
 
-	// Server-only router wiring defines its url_patterns function with an
-	//    empty body. The body is isolated from the module doc-comment (which
-	//    may quote an example) by slicing the file at the `pub fn` definition
-	//    before searching for example calls.
+	// Server-only router wiring collects the current app's server functions.
 	let server_contents = fs::read_to_string(&server_router).expect("read server_router.rs");
 	assert_eq!(
 		server_contents.matches("#[url_patterns").count(),
 		0,
 		"server_router.rs must NOT carry the removed #[url_patterns] attribute:\n{server_contents}"
 	);
-	let server_body_start = server_contents
-		.find("pub fn server_url_patterns")
-		.expect("server_router.rs must define `pub fn server_url_patterns`");
-	let server_body = &server_contents[server_body_start..];
-	assert_eq!(
-		server_body.matches(".endpoint(views::").count(),
-		0,
-		"server_router.rs function body must not embed example route calls:\n{server_body}"
+	assert!(
+		server_contents.contains("use reinhardt::pages::server_fn::ServerFnRouterExt;"),
+		"server_router.rs must import ServerFnRouterExt:\n{server_contents}"
+	);
+	assert!(
+		server_contents.contains("ServerRouter::new().auto_server_fns(module_path!())"),
+		"server_router.rs must automatically collect the app server functions:\n{server_contents}"
 	);
 
 	// 5. Per-app aggregator `apps/foo.rs` declares cfg-gated facades and
@@ -740,17 +736,18 @@ async fn workspace_app_pages_uses_unified_template() {
 		"apps/bar/build.rs must exist for pages workspace crate"
 	);
 	let build_rs = fs::read_to_string(app_dir.join("build.rs")).expect("read workspace build.rs");
-	for cfg in ["client", "server", "wasm", "native"] {
+	for cfg in ["client", "server"] {
 		assert!(
 			build_rs.contains(&format!("cargo::rustc-check-cfg=cfg({cfg})")),
 			"workspace app build.rs must declare cfg({cfg}) for Rust 2024 check-cfg:\n{build_rs}"
 		);
 	}
-	assert!(
-		build_rs.contains("wasm: { target_arch = \"wasm32\" }")
-			&& build_rs.contains("native: { not(target_arch = \"wasm32\") }"),
-		"workspace app build.rs must keep wasm/native compatibility aliases:\n{build_rs}"
-	);
+	for removed_cfg in ["wasm", "native"] {
+		assert!(
+			!build_rs.contains(&format!("cfg({removed_cfg})")),
+			"workspace app build.rs must not declare the removed cfg({removed_cfg}) alias:\n{build_rs}"
+		);
+	}
 
 	// 2. Source files live under apps/<name>/src/
 	let src = app_dir.join("src");
@@ -884,6 +881,10 @@ async fn workspace_app_pages_uses_unified_template() {
 	let project_import = format!("use {}::config::apps::InstalledApp;", project_name);
 	let server_urls = fs::read_to_string(src.join("urls").join("server_router.rs"))
 		.expect("read server_router.rs");
+	assert!(
+		server_urls.contains("ServerRouter::new().auto_server_fns(module_path!())"),
+		"workspace server_router.rs must automatically collect the app server functions:\n{server_urls}"
+	);
 	assert!(
 		!server_urls
 			.lines()

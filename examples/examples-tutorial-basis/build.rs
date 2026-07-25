@@ -9,8 +9,6 @@ fn main() {
 	println!("cargo::rustc-check-cfg=cfg(with_reinhardt)");
 	println!("cargo::rustc-check-cfg=cfg(client)");
 	println!("cargo::rustc-check-cfg=cfg(server)");
-	println!("cargo::rustc-check-cfg=cfg(wasm)");
-	println!("cargo::rustc-check-cfg=cfg(native)");
 
 	cfg_aliases! {
 		// Platform aliases for simpler conditional compilation
@@ -18,8 +16,5 @@ fn main() {
 		client: { target_arch = "wasm32" },
 		// Use `#[cfg(server)]` instead of `#[cfg(not(target_arch = "wasm32"))]`
 		server: { not(target_arch = "wasm32") },
-		// Compatibility aliases used by framework macro expansions.
-		wasm: { target_arch = "wasm32" },
-		native: { not(target_arch = "wasm32") },
 	};
 }

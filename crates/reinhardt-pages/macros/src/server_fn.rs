@@ -156,10 +156,18 @@ pub(crate) struct ServerFnOptions {
 	/// }
 	/// ```
 	pub pre_validate: bool,
+
+	/// Register this function through its owning app's automatic collector.
+	#[darling(default = "default_auto_register")]
+	pub auto_register: bool,
 }
 
 fn default_codec() -> String {
 	"json".to_string()
+}
+
+fn default_auto_register() -> bool {
+	true
 }
 
 impl Default for ServerFnOptions {
@@ -170,6 +178,7 @@ impl Default for ServerFnOptions {
 			codec: default_codec(),
 			no_csrf: false,
 			pre_validate: false,
+			auto_register: default_auto_register(),
 		}
 	}
 }
@@ -1586,6 +1595,7 @@ fn generate_server_handler(
 	// the function because Rust's value namespace doesn't allow both a function
 	// and a `use` item with the same name in the same module.
 	let marker_module_name = name.clone();
+	let auto_register_fn_name = quote::format_ident!("__reinhardt_auto_register_{}", name.unraw());
 	let metadata_alias_prefix = name.unraw().to_string().to_case(Case::Pascal);
 	let response_alias = quote::format_ident!("__ServerFn{}Response", metadata_alias_prefix);
 	let error_alias = quote::format_ident!("__ServerFn{}Error", metadata_alias_prefix);
@@ -2044,6 +2054,7 @@ fn generate_server_handler(
 			#marker_struct_vis struct marker;
 
 			impl #pages_crate::server_fn::ServerFnMetadata for marker {
+				const MODULE_PATH: &'static str = module_path!();
 				const PATH: &'static str = #endpoint;
 				const NAME: &'static str = #name_str;
 				const CODEC: &'static str = #codec;
@@ -2060,6 +2071,31 @@ fn generate_server_handler(
 
 			#msw_wasm_inner_tokens
 		}
+	};
+	let auto_registration_tokens = if info.options.auto_register {
+		quote! {
+			#[cfg(not(all(target_family = "wasm", target_os = "unknown")))]
+			fn #auto_register_fn_name(
+				router: #pages_crate::__private::reinhardt_urls::routers::ServerRouter,
+			) -> #pages_crate::__private::reinhardt_urls::routers::ServerRouter {
+				#pages_crate::server_fn::ServerFnRouterExt::server_fn(
+					router,
+					#marker_module_name::marker,
+				)
+			}
+
+			#[cfg(not(all(target_family = "wasm", target_os = "unknown")))]
+			#pages_crate::__private::inventory::submit! {
+				#pages_crate::server_fn::ServerFnInventoryEntry::new(
+					module_path!(),
+					#endpoint,
+					#name_str,
+					#auto_register_fn_name,
+				)
+			}
+		}
+	} else {
+		quote! {}
 	};
 
 	quote! {
@@ -2180,6 +2216,7 @@ fn generate_server_handler(
 			// MockableServerFn (msw) via supertrait, keeping a single source
 			// of truth for PATH / NAME / CODEC across targets.
 			impl #pages_crate::server_fn::ServerFnMetadata for marker {
+				const MODULE_PATH: &'static str = module_path!();
 				const PATH: &'static str = #endpoint;
 				const NAME: &'static str = #name_str;
 				const CODEC: &'static str = #codec;
@@ -2217,6 +2254,8 @@ fn generate_server_handler(
 		// WASM-side marker module — always emitted on wasm (#4711); the
 		// optional MSW Args / MockableServerFn impl is gated inside.
 		#wasm_marker_tokens
+
+		#auto_registration_tokens
 	}
 }
 
@@ -2282,6 +2321,75 @@ mod tests {
 		assert!(!options.use_inject);
 		assert_eq!(options.endpoint, None);
 		assert_eq!(options.codec, "json");
+	}
+
+	#[test]
+	fn auto_register_defaults_to_true() {
+		assert!(ServerFnOptions::default().auto_register);
+	}
+
+	#[test]
+	fn parses_auto_register_false() {
+		let nested = NestedMeta::parse_meta_list(quote!(auto_register = false))
+			.expect("attribute should parse");
+		let options = ServerFnOptions::from_list(&nested).expect("option should be accepted");
+
+		assert!(!options.auto_register);
+	}
+
+	#[test]
+	fn auto_register_default_emits_native_inventory_metadata() {
+		use syn::parse_quote;
+
+		let info = ServerFnInfo {
+			func: parse_quote! {
+				async fn vote() -> Result<(), ServerFnError> {
+					Ok(())
+				}
+			},
+			options: ServerFnOptions::default(),
+			metadata_name: None,
+			endpoint_tokens: None,
+			metadata_name_tokens: None,
+			detail: false,
+			transactional: false,
+			structured_error: false,
+		};
+
+		let generated = generate_server_fn(&info).to_string();
+
+		assert!(generated.contains("ServerFnInventoryEntry"));
+		assert!(generated.contains("module_path !"));
+		assert!(generated.contains("MODULE_PATH"));
+		assert!(generated.contains("__reinhardt_auto_register_vote"));
+	}
+
+	#[test]
+	fn auto_register_opt_out_omits_native_inventory_metadata() {
+		use syn::parse_quote;
+
+		let info = ServerFnInfo {
+			func: parse_quote! {
+				async fn vote() -> Result<(), ServerFnError> {
+					Ok(())
+				}
+			},
+			options: ServerFnOptions {
+				auto_register: false,
+				..ServerFnOptions::default()
+			},
+			metadata_name: None,
+			endpoint_tokens: None,
+			metadata_name_tokens: None,
+			detail: false,
+			transactional: false,
+			structured_error: false,
+		};
+
+		let generated = generate_server_fn(&info).to_string();
+
+		assert!(!generated.contains("ServerFnInventoryEntry"));
+		assert!(!generated.contains("__reinhardt_auto_register_vote"));
 	}
 
 	#[test]

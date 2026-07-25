@@ -14,7 +14,7 @@ categories = ["wasm", "web-programming"]
 i18n = ["dep:reinhardt-i18n"]
 default = []
 console_error_panic_hook = ["dep:console_error_panic_hook"]
-msgpack = ["dep:rmp-serde"]
+msgpack = []
 testing = []
 # Exposes MockableServerFn trait for MSW-style testing
 msw = ["reinhardt-pages-macros/msw"]
@@ -157,12 +157,13 @@ js-sys = "0.3.83"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 serde_urlencoded = "0.7"
+base64 = { workspace = true }
 # serde-wasm-bindgen: serialize HistoryState directly to a JS object so
 # `history.state.field` works for external consumers. Replaces the
 # JSON-string-in-JsValue convention that surfaced as the SPA navigation
 # regression class (#4075 / #4088 / #4122 / #4203).
 serde-wasm-bindgen = "0.6"
-rmp-serde = { version = "1.3", optional = true }
+rmp-serde = "1.3"
 urlencoding = "2.1"
 
 # Error handling
@@ -324,7 +325,6 @@ tempfile = { workspace = true }
 # `chrono::Naive*` paths, so trybuild fixtures exercising those fields need
 # `chrono` resolvable in the generated fixture binary.
 chrono = { workspace = true }
-base64 = { workspace = true }
 
 [target.'cfg(all(target_family = "wasm", target_os = "unknown"))'.dev-dependencies]
 # Used by tests/wasm/client_launcher_navigation_test.rs (Refs #4075) to
@@ -374,6 +374,11 @@ required-features = ["testing"]
 [[test]]
 name = "server_fn_wasm_test"
 path = "tests/wasm/server_fn_wasm_test.rs"
+required-features = ["testing"]
+
+[[test]]
+name = "server_fn_hygiene_wasm_compile_test"
+path = "tests/wasm/server_fn_hygiene_wasm_compile_test.rs"
 required-features = ["testing"]
 
 [[test]]

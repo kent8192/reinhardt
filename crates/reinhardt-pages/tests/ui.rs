@@ -55,20 +55,28 @@ fn test_server_fn_macro_ui() {
 	t.pass("tests/ui/server_fn/query_key_injected_no_msw.rs");
 	#[cfg(feature = "model-server-fnset")]
 	t.pass("tests/ui/server_fn/injected_database_connection_copy.rs");
-	// Codec tests
+	// These fixtures use application-specific errors without the conversion
+	// required by native component-test mocks.
+	#[cfg(not(feature = "msw"))]
 	t.pass("tests/ui/server_fn/codec_json.rs");
+	#[cfg(not(feature = "msw"))]
 	t.pass("tests/ui/server_fn/codec_url.rs");
 	// Fixes #3666: verify server_fn compiles without msw feature (no check-cfg errors)
+	#[cfg(not(feature = "msw"))]
 	t.pass("tests/ui/server_fn/no_msw_feature.rs");
 	// Verify injected server_fn params do not leave regular args unused in generated helpers.
 	t.pass("tests/ui/server_fn/inject_query_key_no_unused.rs");
 	t.pass("tests/ui/server_fn/result_alias_query_key.rs");
+	// This fixture includes the same application-specific error contract.
+	#[cfg(not(feature = "msw"))]
 	t.pass("tests/ui/server_fn/response_metadata.rs");
 	t.pass("tests/ui/server_fn/result_alias.rs");
 	t.pass("tests/ui/server_fn/structured_error_public_api.rs");
 	t.pass("tests/ui/server_fn/auto_register_default.rs");
 	t.pass("tests/ui/server_fn/auto_register_opt_out.rs");
 	t.pass("tests/ui/server_fn/auto_register_name_collision.rs");
+	t.pass("tests/ui/server_fn/short_imported_request.rs");
+	t.pass("tests/ui/server_fn/no_cfg_aliases.rs");
 	// Issue #3858: verify FromRequest extractor params work in #[server_fn]
 	t.pass("tests/ui/server_fn/with_extractors.rs");
 }

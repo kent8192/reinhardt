@@ -773,14 +773,23 @@ pub mod __private {
 			FetchCredentials, FetchResponse, request, request_with_credentials,
 		};
 	}
+	pub use base64;
 	pub use bon;
 	pub use bytes;
 	#[cfg(native)]
 	pub use hyper;
 	pub use inventory;
+	#[cfg(native)]
+	pub use reinhardt_core as core;
+	#[cfg(native)]
+	pub use reinhardt_di as di;
+	#[cfg(native)]
+	pub use reinhardt_http as http;
 	pub use reinhardt_urls;
+	pub use rmp_serde;
 	pub use serde;
 	pub use serde_json;
+	pub use serde_urlencoded;
 
 	// `tracing` is enabled for all targets *except* browser wasm (wasm32-unknown-unknown).
 	// Browser wasm uses a different logging mechanism, so tracing is intentionally excluded there.

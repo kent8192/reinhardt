@@ -19,10 +19,7 @@ use syn::punctuated::Punctuated;
 use syn::{FnArg, ItemFn, Meta, Token, parse_macro_input};
 
 // Import crate path helpers for dynamic resolution
-use crate::crate_paths::{
-	CratePathInfo, get_reinhardt_core_crate, get_reinhardt_di_crate, get_reinhardt_http_crate,
-	get_reinhardt_pages_crate, get_reinhardt_pages_crate_info,
-};
+use crate::crate_paths::{CratePathInfo, get_reinhardt_pages_crate_info_with_alias};
 
 fn generate_inject_resolver_expr(
 	di_crate: &proc_macro2::TokenStream,
@@ -705,18 +702,20 @@ fn add_native_mock_probe(
 	}
 
 	let mut func = clean_func.clone();
-	let pages_use_statement = &pages_crate_info.use_statement;
 	let pages_crate = &pages_crate_info.ident;
 	let name = info.name();
 	let original_block = func.block;
-	let native_mock_probe = if cfg!(feature = "msw") {
+	let native_mock_probe = if cfg!(feature = "msw") && info.emits_typed_response_metadata() {
 		quote! {
 			{
 				// Generated server functions may expand into consumer crates that do not
 				// declare an `msw` feature, even when the dependency feature is active.
 				#![allow(unexpected_cfgs)]
 
-				#[cfg(all(native, feature = "msw"))]
+				#[cfg(all(
+					not(all(target_family = "wasm", target_os = "unknown")),
+					feature = "msw"
+				))]
 				{
 					if #pages_crate::server_fn::has_active_server_fn_mock_scope() {
 						let __args = #name::Args {
@@ -739,7 +738,6 @@ fn add_native_mock_probe(
 		quote! {}
 	};
 	func.block = Box::new(syn::parse_quote!({
-		#pages_use_statement
 		#native_mock_probe
 		#original_block
 	}));
@@ -788,7 +786,10 @@ fn generate_server_fn(info: &ServerFnInfo) -> proc_macro2::TokenStream {
 	};
 
 	// Dynamically resolve reinhardt_pages crate path for client stub
-	let pages_crate_info = get_reinhardt_pages_crate_info();
+	let pages_alias =
+		quote::format_ident!("__reinhardt_pages_for_server_fn_{}", info.name().unraw(),);
+	let pages_crate_info = get_reinhardt_pages_crate_info_with_alias(&pages_alias);
+	let pages_use_statement = &pages_crate_info.use_statement;
 	let regular_params = regular_server_fn_params(&func.sig.inputs);
 	let native_clean_func =
 		match add_native_mock_probe(info, &clean_func, &regular_params, &pages_crate_info) {
@@ -801,9 +802,12 @@ fn generate_server_fn(info: &ServerFnInfo) -> proc_macro2::TokenStream {
 		generate_client_stub(info, &inject_params, &extractor_params, &pages_crate_info);
 
 	// Generate server handler (with DI and extractor resolution)
-	let server_handler = generate_server_handler(info, &inject_params, &extractor_params);
+	let server_handler =
+		generate_server_handler(info, &inject_params, &extractor_params, &pages_crate_info);
 
 	quote! {
+		#pages_use_statement
+
 		// Deprecation warning for use_inject = true (if specified)
 		#deprecation_warning
 
@@ -858,7 +862,6 @@ fn generate_client_stub(
 	pages_crate_info: &CratePathInfo,
 ) -> proc_macro2::TokenStream {
 	// Extract crate path info components
-	let pages_use_statement = &pages_crate_info.use_statement;
 	let pages_crate = &pages_crate_info.ident;
 	let name = info.name();
 	let vis = info.vis();
@@ -960,7 +963,7 @@ fn generate_client_stub(
 		"json" => (
 			"application/json",
 			quote! {
-				let __body = ::serde_json::to_string(&__args)
+				let __body = #pages_crate::__private::serde_json::to_string(&__args)
 					.map_err(|e| #pages_crate::server_fn::ServerFnError::serialization(e.to_string()))?;
 			},
 			quote! {
@@ -971,28 +974,34 @@ fn generate_client_stub(
 		"url" => (
 			"application/x-www-form-urlencoded",
 			quote! {
-				let __body = ::serde_urlencoded::to_string(&__args)
+				let __body = #pages_crate::__private::serde_urlencoded::to_string(&__args)
 					.map_err(|e| #pages_crate::server_fn::ServerFnError::serialization(e.to_string()))?;
 			},
 			quote! {
 				let __text = __response.into_text();
-				::serde_json::from_str(&__text)
+				#pages_crate::__private::serde_json::from_str(&__text)
 					.map_err(|e| #pages_crate::server_fn::ServerFnError::deserialization(e.to_string()))
 			},
 		),
 		"msgpack" => (
 			"application/msgpack",
 			quote! {
-				let __body_bytes = ::rmp_serde::to_vec(&__args)
+				let __body_bytes = #pages_crate::__private::rmp_serde::to_vec(&__args)
 					.map_err(|e| #pages_crate::server_fn::ServerFnError::serialization(e.to_string()))?;
 				// Convert to base64 for transport over HTTP text body
-				let __body = ::base64::Engine::encode(&::base64::engine::general_purpose::STANDARD, &__body_bytes);
+				let __body = #pages_crate::__private::base64::Engine::encode(
+					&#pages_crate::__private::base64::engine::general_purpose::STANDARD,
+					&__body_bytes,
+				);
 			},
 			quote! {
 				let __text = __response.into_text();
-				let __bytes = ::base64::Engine::decode(&::base64::engine::general_purpose::STANDARD, &__text)
+				let __bytes = #pages_crate::__private::base64::Engine::decode(
+					&#pages_crate::__private::base64::engine::general_purpose::STANDARD,
+					&__text,
+				)
 					.map_err(|e| #pages_crate::server_fn::ServerFnError::deserialization(e.to_string()))?;
-				::rmp_serde::from_slice(&__bytes)
+				#pages_crate::__private::rmp_serde::from_slice(&__bytes)
 					.map_err(|e| #pages_crate::server_fn::ServerFnError::deserialization(e.to_string()))
 			},
 		),
@@ -1009,13 +1018,8 @@ fn generate_client_stub(
 	quote! {
 		#[cfg(all(target_family = "wasm", target_os = "unknown"))]
 		#vis #client_sig {
-			use ::serde::Serialize;
-
-			// Conditional crate path resolution for WASM/server compatibility
-			#pages_use_statement
-
 			// Argument struct for serialization
-			#[derive(Serialize)]
+			#[derive(#pages_crate::__private::serde::Serialize)]
 			struct #args_struct_name {
 				#(#param_names: #param_types),*
 			}
@@ -1098,7 +1102,9 @@ fn generate_server_handler(
 	info: &ServerFnInfo,
 	inject_params: &[InjectInfo],
 	extractor_params: &[ExtractorInfo],
+	pages_crate_info: &CratePathInfo,
 ) -> proc_macro2::TokenStream {
+	let pages_crate = &pages_crate_info.ident;
 	let name = info.name();
 	let endpoint = info.endpoint();
 	let codec = info.codec();
@@ -1171,9 +1177,7 @@ fn generate_server_handler(
 	// `InjectableType` wrappers from the registry and falls back to normal
 	// `Injectable` values for non-wrapper parameters.
 	let di_resolution = if !inject_params.is_empty() {
-		// Dynamically resolve crate paths
-		let di_crate = get_reinhardt_di_crate();
-		let pages_crate_for_di = get_reinhardt_pages_crate();
+		let di_crate = quote!(#pages_crate::__private::di);
 
 		let param_resolutions: Vec<_> = inject_params
 			.iter()
@@ -1194,7 +1198,7 @@ fn generate_server_handler(
 									#di_crate::DiError::Authentication(m) => (401u16, m.clone()),
 									#di_crate::DiError::Authorization(m) => (403u16, m.clone()),
 									other => {
-										#pages_crate_for_di::__private::tracing::error!(
+										#pages_crate::__private::tracing::error!(
 											error = ?other,
 											param = stringify!(#ty),
 											"Dependency injection failed",
@@ -1202,8 +1206,8 @@ fn generate_server_handler(
 										(500u16, "Internal server error".to_string())
 									}
 								};
-								let server_err = #pages_crate_for_di::server_fn::ServerFnError::server(status, msg);
-								::serde_json::to_string(&server_err)
+								let server_err = #pages_crate::server_fn::ServerFnError::server(status, msg);
+								#pages_crate::__private::serde_json::to_string(&server_err)
 									.unwrap_or_else(|_| "Internal server error".to_string())
 							})?;
 				}
@@ -1233,36 +1237,35 @@ fn generate_server_handler(
 	// inject_params is non-empty; when only extractor_params are present, we
 	// still need to ensure the handler receives a Request.
 	let extractor_resolution = if !extractor_params.is_empty() {
-		let di_crate = get_reinhardt_di_crate();
-		let pages_crate_for_ext = get_reinhardt_pages_crate();
+		let di_crate = quote!(#pages_crate::__private::di);
 		let extractor_error = if info.structured_error {
 			quote! {
 				match e {
 					#di_crate::params::ParamError::Authentication(_) =>
-						::serde_json::to_string(
-							&#pages_crate_for_ext::server_fn::ServerFnSetError::Unauthenticated,
+						#pages_crate::__private::serde_json::to_string(
+							&#pages_crate::server_fn::ServerFnSetError::Unauthenticated,
 						)
 						.unwrap_or_else(|_| "\"Unauthenticated\"".to_string()),
 					#di_crate::params::ParamError::Internal(detail) => {
-						#pages_crate_for_ext::__private::tracing::error!(
+						#pages_crate::__private::tracing::error!(
 							error = %detail,
 							"FromRequest extractor failed internally",
 						);
-						::serde_json::to_string(
-							&#pages_crate_for_ext::server_fn::ServerFnSetError::Internal,
+						#pages_crate::__private::serde_json::to_string(
+							&#pages_crate::server_fn::ServerFnSetError::Internal,
 						)
 						.unwrap_or_else(|_| "\"Internal\"".to_string())
 					}
 					other => {
-						#pages_crate_for_ext::__private::tracing::error!(
+						#pages_crate::__private::tracing::error!(
 							error = %other,
 							"FromRequest extractor failed",
 						);
-						let server_err = #pages_crate_for_ext::server_fn::ServerFnError::server(
+						let server_err = #pages_crate::server_fn::ServerFnError::server(
 							400u16,
 							"Parameter extraction failed",
 						);
-						::serde_json::to_string(&server_err)
+						#pages_crate::__private::serde_json::to_string(&server_err)
 							.unwrap_or_else(|_| "Parameter extraction failed".to_string())
 					}
 				}
@@ -1271,35 +1274,35 @@ fn generate_server_handler(
 			quote! {
 					match e {
 						#di_crate::params::ParamError::Authentication(_) => {
-							let server_err = #pages_crate_for_ext::server_fn::ServerFnError::auth(
+							let server_err = #pages_crate::server_fn::ServerFnError::auth(
 								401u16,
 								"Authentication required",
 						);
-						::serde_json::to_string(&server_err)
+						#pages_crate::__private::serde_json::to_string(&server_err)
 							.unwrap_or_else(|_| "Authentication required".to_string())
 					}
 					#di_crate::params::ParamError::Internal(detail) => {
-						#pages_crate_for_ext::__private::tracing::error!(
+						#pages_crate::__private::tracing::error!(
 							error = %detail,
 							"FromRequest extractor failed internally",
 						);
-						let server_err = #pages_crate_for_ext::server_fn::ServerFnError::server(
+						let server_err = #pages_crate::server_fn::ServerFnError::server(
 							500u16,
 							"Internal server error",
 						);
-						::serde_json::to_string(&server_err)
+						#pages_crate::__private::serde_json::to_string(&server_err)
 							.unwrap_or_else(|_| "Internal server error".to_string())
 					}
 					other => {
-						#pages_crate_for_ext::__private::tracing::error!(
+						#pages_crate::__private::tracing::error!(
 							error = %other,
 							"FromRequest extractor failed",
 						);
-						let server_err = #pages_crate_for_ext::server_fn::ServerFnError::server(
+						let server_err = #pages_crate::server_fn::ServerFnError::server(
 							400u16,
 							"Parameter extraction failed",
 						);
-						::serde_json::to_string(&server_err)
+						#pages_crate::__private::serde_json::to_string(&server_err)
 							.unwrap_or_else(|_| "Parameter extraction failed".to_string())
 					}
 				}
@@ -1360,19 +1363,22 @@ fn generate_server_handler(
 	// Generate codec-specific deserialization code for server
 	let deserialize_code = match codec {
 		"json" => quote! {
-			let args: #args_struct_name = ::serde_json::from_slice(body)
+			let args: #args_struct_name = #pages_crate::__private::serde_json::from_slice(body)
 				.map_err(|_| __invalid_request_error())?;
 		},
 		"url" => quote! {
-			let args: #args_struct_name = ::serde_urlencoded::from_str(&body)
+			let args: #args_struct_name = #pages_crate::__private::serde_urlencoded::from_str(&body)
 				.map_err(|_| __invalid_request_error())?;
 		},
 		"msgpack" => quote! {
 			// Decode base64 to bytes
-			let bytes = ::base64::Engine::decode(&::base64::engine::general_purpose::STANDARD, &body)
+			let bytes = #pages_crate::__private::base64::Engine::decode(
+				&#pages_crate::__private::base64::engine::general_purpose::STANDARD,
+				&body,
+			)
 				.map_err(|_| __invalid_request_error())?;
 			// Deserialize from msgpack bytes
-			let args: #args_struct_name = ::rmp_serde::from_slice(&bytes)
+			let args: #args_struct_name = #pages_crate::__private::rmp_serde::from_slice(&bytes)
 				.map_err(|_| __invalid_request_error())?;
 		},
 		// Fixes #843: emit compile error for unknown codec instead of silent fallback
@@ -1396,17 +1402,13 @@ fn generate_server_handler(
 		deserialize_code
 	};
 
-	// Dynamically resolve crate paths for body extraction, serialization, and registration
-	let pages_crate = get_reinhardt_pages_crate();
-
 	// Generate pre_validate validation code
 	let validation_code = if pre_validate {
-		let core_crate = get_reinhardt_core_crate();
 		let validation_statements = regular_param_names.iter().map(|param_name| {
 			quote! {
-				if let Err(error) = #core_crate::validators::Validate::validate(&args.#param_name) {
+				if let Err(error) = #pages_crate::__private::core::validators::Validate::validate(&args.#param_name) {
 					let error = #pages_crate::server_fn::ServerFnError::from(error);
-					let error_body = ::serde_json::to_vec(&error)
+					let error_body = #pages_crate::__private::serde_json::to_vec(&error)
 						.map(#pages_crate::__private::bytes::Bytes::from)
 						.unwrap_or_else(|_| #pages_crate::__private::bytes::Bytes::from_static(
 							br#"{"version":1,"kind":"server","status":500,"message":"Internal server error","field_errors":[]}"#,
@@ -1425,7 +1427,7 @@ fn generate_server_handler(
 	// Generate codec-specific serialization code for server response
 	let serialize_response_code = match codec {
 		"json" => quote! {
-			::serde_json::to_vec(&value)
+			#pages_crate::__private::serde_json::to_vec(&value)
 				.map(#pages_crate::__private::bytes::Bytes::from)
 				.map_err(|e| #pages_crate::__private::bytes::Bytes::from(
 					format!("Failed to serialize response: {}", e)
@@ -1433,7 +1435,7 @@ fn generate_server_handler(
 		},
 		"url" => quote! {
 			// For URL-encoded codec, response is still JSON
-			::serde_json::to_vec(&value)
+			#pages_crate::__private::serde_json::to_vec(&value)
 				.map(#pages_crate::__private::bytes::Bytes::from)
 				.map_err(|e| #pages_crate::__private::bytes::Bytes::from(
 					format!("Failed to serialize response: {}", e)
@@ -1441,13 +1443,16 @@ fn generate_server_handler(
 		},
 		"msgpack" => quote! {
 			// Serialize to msgpack bytes
-			let bytes = ::rmp_serde::to_vec(&value)
+			let bytes = #pages_crate::__private::rmp_serde::to_vec(&value)
 				.map_err(|e| #pages_crate::__private::bytes::Bytes::from(
 					format!("Failed to serialize response: {}", e)
 				))?;
 			// Encode as base64 for HTTP transport
 			Ok(#pages_crate::__private::bytes::Bytes::from(
-				::base64::Engine::encode(&::base64::engine::general_purpose::STANDARD, &bytes)
+				#pages_crate::__private::base64::Engine::encode(
+					&#pages_crate::__private::base64::engine::general_purpose::STANDARD,
+					&bytes,
+				)
 			))
 		},
 		// Fixes #843: emit compile error for unknown codec instead of silent fallback
@@ -1464,9 +1469,8 @@ fn generate_server_handler(
 	// The handler receives Request in every native configuration. This keeps body
 	// handling in one place and lets JSON decode directly from Bytes when content
 	// negotiation is not needed.
-	let http_crate = get_reinhardt_http_crate();
 	let handler_signature = quote! {
-		pub async fn #handler_name(__req: #http_crate::Request) -> ::std::result::Result<#pages_crate::__private::bytes::Bytes, #pages_crate::__private::bytes::Bytes>
+		pub async fn #handler_name(__req: #pages_crate::__private::http::Request) -> ::std::result::Result<#pages_crate::__private::bytes::Bytes, #pages_crate::__private::bytes::Bytes>
 	};
 	let handler_body_extraction = if regular_params.is_empty() {
 		quote! {}
@@ -1559,7 +1563,7 @@ fn generate_server_handler(
 					"Invalid server function request",
 				);
 				#pages_crate::__private::bytes::Bytes::from(
-					::serde_json::to_string(&error)
+					#pages_crate::__private::serde_json::to_string(&error)
 						.expect("ServerFnError must serialize into its versioned error envelope"),
 				)
 			};
@@ -1574,11 +1578,6 @@ fn generate_server_handler(
 	let detail = info.detail;
 	let transactional = info.transactional;
 	let is_json_codec = codec == "json";
-
-	// Note: pages_crate is already resolved above for body extraction.
-	// http_crate is resolved above when inject_params is not empty,
-	// but we need it for the static wrapper regardless
-	let http_crate_for_wrapper = get_reinhardt_http_crate();
 
 	// Get visibility for marker struct (same as original function)
 	let vis = info.vis();
@@ -1686,29 +1685,29 @@ fn generate_server_handler(
 	};
 	let serialize_error = if info.structured_error {
 		quote! {
-			let error_json = ::serde_json::to_string(&e)
+			let error_json = #pages_crate::__private::serde_json::to_string(&e)
 				.map_err(|e| #pages_crate::__private::bytes::Bytes::from(
 					format!("Failed to serialize error: {}", e)
 				))?;
 		}
 	} else {
 		quote! {
-			let serialized_error = ::serde_json::to_value(&e)
+			let serialized_error = #pages_crate::__private::serde_json::to_value(&e)
 				.map_err(|e| #pages_crate::__private::bytes::Bytes::from(
 					format!("Failed to serialize error: {}", e)
 				))?;
 			let error_message = match &serialized_error {
-				::serde_json::Value::String(message) => message.clone(),
-				::serde_json::Value::Object(fields) => fields
+				#pages_crate::__private::serde_json::Value::String(message) => message.clone(),
+				#pages_crate::__private::serde_json::Value::Object(fields) => fields
 					.clone()
 					.remove("message")
 					.and_then(|value| value.as_str().map(::std::string::String::from))
 					.unwrap_or_else(|| "Server function failed".to_string()),
 				_ => "Server function failed".to_string(),
 			};
-			let error = ::serde_json::from_value::<#pages_crate::server_fn::ServerFnError>(serialized_error)
+			let error = #pages_crate::__private::serde_json::from_value::<#pages_crate::server_fn::ServerFnError>(serialized_error)
 				.unwrap_or_else(|_| #pages_crate::server_fn::ServerFnError::application_with_status(500u16, error_message));
-			let error_json = ::serde_json::to_string(&error)
+			let error_json = #pages_crate::__private::serde_json::to_string(&error)
 				.map_err(|e| #pages_crate::__private::bytes::Bytes::from(
 					format!("Failed to serialize error: {}", e)
 				))?;
@@ -1719,7 +1718,7 @@ fn generate_server_handler(
 	} else {
 		quote! {
 			.map_err(|error_body| {
-				if ::serde_json::from_slice::<#pages_crate::server_fn::ServerFnError>(&error_body).is_ok() {
+				if #pages_crate::__private::serde_json::from_slice::<#pages_crate::server_fn::ServerFnError>(&error_body).is_ok() {
 					error_body
 				} else {
 					let error = #pages_crate::server_fn::ServerFnError::server(
@@ -1727,7 +1726,7 @@ fn generate_server_handler(
 						"Internal server error",
 					);
 					#pages_crate::__private::bytes::Bytes::from(
-						::serde_json::to_string(&error)
+						#pages_crate::__private::serde_json::to_string(&error)
 							.expect("ServerFnError must serialize into its versioned error envelope"),
 					)
 				}
@@ -1950,10 +1949,12 @@ fn generate_server_handler(
 				// Import signature-local aliases and private types from the server function.
 				#[allow(unused_imports)]
 				use super::super::*;
-				use ::serde::{Serialize, Deserialize};
 
 				/// Public Args struct for MSW type-safe mocking.
-				#[derive(Serialize, Deserialize)]
+				#[derive(
+					#pages_crate::__private::serde::Serialize,
+					#pages_crate::__private::serde::Deserialize,
+				)]
 				pub struct Args {
 					#(pub #regular_param_names: #regular_param_types),*
 				}
@@ -1995,10 +1996,12 @@ fn generate_server_handler(
 					// original server function signature.
 					#[allow(unused_imports)]
 					use super::super::super::*;
-					use ::serde::{Serialize, Deserialize};
 
 					/// Public Args struct for MSW type-safe mocking.
-					#[derive(Serialize, Deserialize)]
+					#[derive(
+						#pages_crate::__private::serde::Serialize,
+						#pages_crate::__private::serde::Deserialize,
+					)]
 					pub struct Args {
 						#(pub #regular_param_names: #regular_param_types),*
 					}
@@ -2106,12 +2109,11 @@ fn generate_server_handler(
 		/// This function is called by the router when the endpoint receives a request.
 		/// It deserializes the request body, calls the server function, and serializes the response.
 		#handler_signature {
-			use ::serde::Deserialize;
 			let __handler_result = async {
 			#invalid_request_error
 
 			// Argument struct for deserialization (only regular parameters)
-			#[derive(Deserialize)]
+			#[derive(#pages_crate::__private::serde::Deserialize)]
 			struct #args_struct_name {
 				#(#regular_param_names: #regular_param_types),*
 			}
@@ -2177,7 +2179,7 @@ fn generate_server_handler(
 		// This is used by ServerFnRegistration::handler() to provide a function pointer.
 		#[cfg(not(all(target_family = "wasm", target_os = "unknown")))]
 		fn #static_wrapper_name(
-			req: #http_crate_for_wrapper::Request
+			req: #pages_crate::__private::http::Request
 		) -> ::std::pin::Pin<::std::boxed::Box<dyn ::std::future::Future<Output = ::std::result::Result<#pages_crate::__private::bytes::Bytes, #pages_crate::__private::bytes::Bytes>> + ::std::marker::Send>> {
 			::std::boxed::Box::pin(async move {
 				// When DI is enabled, pass Request directly
@@ -2240,7 +2242,7 @@ fn generate_server_handler(
 				}
 
 				fn handle(
-					req: #http_crate_for_wrapper::Request
+					req: #pages_crate::__private::http::Request
 				) -> impl ::std::future::Future<Output = ::std::result::Result<#pages_crate::__private::bytes::Bytes, #pages_crate::__private::bytes::Bytes>> + ::std::marker::Send {
 					#handle_call
 				}
@@ -2363,6 +2365,44 @@ mod tests {
 		assert!(generated.contains("module_path !"));
 		assert!(generated.contains("MODULE_PATH"));
 		assert!(generated.contains("__reinhardt_auto_register_vote"));
+	}
+
+	#[test]
+	fn generated_server_fn_uses_only_pages_private_paths() {
+		use syn::parse_quote;
+
+		let info = ServerFnInfo {
+			func: parse_quote! {
+				async fn vote(
+					request: VoteRequest,
+					#[inject] service: VoteService,
+					header: Header<String>,
+				) -> Result<i64, ServerFnError> {
+					service.vote(request, header).await
+				}
+			},
+			options: ServerFnOptions {
+				pre_validate: true,
+				..ServerFnOptions::default()
+			},
+			metadata_name: None,
+			endpoint_tokens: None,
+			metadata_name_tokens: None,
+			detail: false,
+			transactional: false,
+			structured_error: false,
+		};
+
+		let tokens = generate_server_fn(&info).to_string();
+
+		assert!(!tokens.contains("cfg ( native )"));
+		assert!(!tokens.contains("cfg ( wasm )"));
+		assert!(!tokens.contains(":: reinhardt_di"));
+		assert!(!tokens.contains(":: reinhardt_http"));
+		assert!(!tokens.contains(":: reinhardt_core"));
+		assert!(tokens.contains("__private"));
+		assert!(tokens.contains("target_family = \"wasm\""));
+		assert!(tokens.contains("target_os = \"unknown\""));
 	}
 
 	#[test]
@@ -2794,7 +2834,11 @@ mod tests {
 		};
 		let inject = detect_inject_params(&info.func.sig.inputs);
 		let extractors = detect_extractor_params(&info.func.sig.inputs);
-		let generated = generate_server_handler(&info, &inject, &extractors).to_string();
+		let pages_crate_info = get_reinhardt_pages_crate_info_with_alias(&parse_quote!(
+			__reinhardt_pages_for_server_fn_handler
+		));
+		let generated =
+			generate_server_handler(&info, &inject, &extractors, &pages_crate_info).to_string();
 		assert!(
 			generated.contains(
 				"handler (args . first , __server_fn_inject_0 , Json (last) , __server_fn_inject_1)"

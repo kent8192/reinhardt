@@ -6,6 +6,11 @@
 use proc_macro2::TokenStream;
 use quote::quote;
 
+fn named_crate_path(name: String) -> TokenStream {
+	let ident = syn::Ident::new(&name, proc_macro2::Span::call_site());
+	quote!(::#ident)
+}
+
 /// Information about how to reference the reinhardt_pages crate.
 pub(crate) struct CratePathInfo {
 	/// Whether conditional compilation is needed (both reinhardt and reinhardt-pages are dependencies)
@@ -32,6 +37,13 @@ pub(crate) struct CratePathInfo {
 /// 4. Only `reinhardt`: Use `::reinhardt::pages`
 /// 5. Fallback: Use `::reinhardt_pages`
 pub(crate) fn get_reinhardt_pages_crate_info() -> CratePathInfo {
+	get_reinhardt_pages_crate_info_with_alias(&syn::Ident::new(
+		"__reinhardt_pages",
+		proc_macro2::Span::call_site(),
+	))
+}
+
+pub(crate) fn get_reinhardt_pages_crate_info_with_alias(alias: &syn::Ident) -> CratePathInfo {
 	use proc_macro_crate::{FoundCrate, crate_name};
 
 	// Check for internal crate usage first.
@@ -46,50 +58,51 @@ pub(crate) fn get_reinhardt_pages_crate_info() -> CratePathInfo {
 		};
 	}
 
-	// Check what crates are available as dependencies
-	let has_reinhardt_pages = matches!(crate_name("reinhardt-pages"), Ok(FoundCrate::Name(_)));
-	let has_reinhardt = matches!(crate_name("reinhardt"), Ok(FoundCrate::Name(_)));
-	let has_reinhardt_web = matches!(crate_name("reinhardt-web"), Ok(FoundCrate::Name(_)));
+	let direct_pages = match crate_name("reinhardt-pages") {
+		Ok(FoundCrate::Itself) => Some(quote!(::reinhardt_pages)),
+		Ok(FoundCrate::Name(name)) => Some(named_crate_path(name)),
+		Err(_) => None,
+	};
+	let facade = match crate_name("reinhardt") {
+		Ok(FoundCrate::Itself) => Some(quote!(::reinhardt)),
+		Ok(FoundCrate::Name(name)) => Some(named_crate_path(name)),
+		Err(_) => match crate_name("reinhardt-web") {
+			Ok(FoundCrate::Itself) => Some(quote!(::reinhardt)),
+			Ok(FoundCrate::Name(name)) => Some(named_crate_path(name)),
+			Err(_) => None,
+		},
+	};
 
 	// If both reinhardt-pages and reinhardt are available, use conditional compilation
 	// This handles the case where the project has both as dependencies for dual-target builds
-	if has_reinhardt_pages && (has_reinhardt || has_reinhardt_web) {
+	if let (Some(direct_pages), Some(facade)) = (&direct_pages, &facade) {
 		return CratePathInfo {
 			needs_conditional: true,
 			use_statement: quote! {
 				#[cfg(all(target_family = "wasm", target_os = "unknown"))]
-				use ::reinhardt_pages as __reinhardt_pages;
+				use #direct_pages as #alias;
 				#[cfg(not(all(target_family = "wasm", target_os = "unknown")))]
-				use ::reinhardt::pages as __reinhardt_pages;
+				use #facade::pages as #alias;
 			},
-			ident: quote!(__reinhardt_pages),
+			ident: quote!(#alias),
 		};
 	}
 
 	// Only reinhardt-pages is available
-	if has_reinhardt_pages {
+	if let Some(direct_pages) = direct_pages {
 		return CratePathInfo {
 			needs_conditional: false,
 			use_statement: quote!(),
-			ident: quote!(::reinhardt_pages),
+			ident: direct_pages,
 		};
 	}
 
-	// Only reinhardt is available (via facade crate)
-	if has_reinhardt {
+	// Only the facade is available.
+	if let Some(facade) = facade {
 		return CratePathInfo {
 			needs_conditional: false,
 			use_statement: quote!(),
-			ident: quote!(::reinhardt::pages),
-		};
-	}
-
-	// Only reinhardt-web is available (published package name)
-	if has_reinhardt_web {
-		return CratePathInfo {
-			needs_conditional: false,
-			use_statement: quote!(),
-			ident: quote!(::reinhardt::pages),
+			ident: quote!(#facade::pages),
 		};
 	}
 
@@ -112,124 +125,4 @@ pub(crate) fn get_reinhardt_pages_crate() -> TokenStream {
 	} else {
 		info.ident
 	}
-}
-
-/// Resolves the path to the reinhardt_di crate dynamically.
-///
-/// Uses the same strategy order as [`get_reinhardt_pages_crate`] to avoid
-/// conditional dependency resolution issues.
-pub(crate) fn get_reinhardt_di_crate() -> TokenStream {
-	use proc_macro_crate::{FoundCrate, crate_name};
-
-	// Try via reinhardt crate first (prioritized to avoid conditional dependency issues)
-	match crate_name("reinhardt") {
-		Ok(FoundCrate::Itself) => return quote!(::reinhardt::reinhardt_di),
-		Ok(FoundCrate::Name(name)) => {
-			let ident = syn::Ident::new(&name, proc_macro2::Span::call_site());
-			return quote!(::#ident::reinhardt_di);
-		}
-		Err(_) => {}
-	}
-
-	// Try via reinhardt-web (published package name)
-	match crate_name("reinhardt-web") {
-		Ok(FoundCrate::Itself) => return quote!(::reinhardt::reinhardt_di),
-		Ok(FoundCrate::Name(name)) => {
-			let ident = syn::Ident::new(&name, proc_macro2::Span::call_site());
-			return quote!(::#ident::reinhardt_di);
-		}
-		Err(_) => {}
-	}
-
-	// Try direct crate (for internal usage within reinhardt-di crate)
-	match crate_name("reinhardt-di") {
-		Ok(FoundCrate::Itself) => return quote!(::reinhardt_di),
-		Ok(FoundCrate::Name(name)) => {
-			let ident = syn::Ident::new(&name, proc_macro2::Span::call_site());
-			return quote!(::#ident);
-		}
-		Err(_) => {}
-	}
-
-	// Final fallback - use reinhardt facade crate (re-exported module)
-	quote!(::reinhardt::reinhardt_di)
-}
-
-/// Resolves the path to the reinhardt_http crate dynamically.
-///
-/// Uses the same strategy order as [`get_reinhardt_pages_crate`] to avoid
-/// conditional dependency resolution issues.
-pub(crate) fn get_reinhardt_http_crate() -> TokenStream {
-	use proc_macro_crate::{FoundCrate, crate_name};
-
-	// Try via reinhardt crate first (prioritized to avoid conditional dependency issues)
-	match crate_name("reinhardt") {
-		Ok(FoundCrate::Itself) => return quote!(::reinhardt::reinhardt_http),
-		Ok(FoundCrate::Name(name)) => {
-			let ident = syn::Ident::new(&name, proc_macro2::Span::call_site());
-			return quote!(::#ident::reinhardt_http);
-		}
-		Err(_) => {}
-	}
-
-	// Try via reinhardt-web (published package name)
-	match crate_name("reinhardt-web") {
-		Ok(FoundCrate::Itself) => return quote!(::reinhardt::reinhardt_http),
-		Ok(FoundCrate::Name(name)) => {
-			let ident = syn::Ident::new(&name, proc_macro2::Span::call_site());
-			return quote!(::#ident::reinhardt_http);
-		}
-		Err(_) => {}
-	}
-
-	// Try direct crate (for internal usage within reinhardt-http crate)
-	match crate_name("reinhardt-http") {
-		Ok(FoundCrate::Itself) => return quote!(::reinhardt_http),
-		Ok(FoundCrate::Name(name)) => {
-			let ident = syn::Ident::new(&name, proc_macro2::Span::call_site());
-			return quote!(::#ident);
-		}
-		Err(_) => {}
-	}
-
-	// Final fallback - use reinhardt facade crate (re-exported module)
-	quote!(::reinhardt::reinhardt_http)
-}
-
-/// Resolves the path to the reinhardt_core crate dynamically.
-pub(crate) fn get_reinhardt_core_crate() -> TokenStream {
-	use proc_macro_crate::{FoundCrate, crate_name};
-
-	// Try via reinhardt crate first
-	match crate_name("reinhardt") {
-		Ok(FoundCrate::Itself) => return quote!(::reinhardt::reinhardt_core),
-		Ok(FoundCrate::Name(name)) => {
-			let ident = syn::Ident::new(&name, proc_macro2::Span::call_site());
-			return quote!(::#ident::reinhardt_core);
-		}
-		Err(_) => {}
-	}
-
-	// Try via reinhardt-web (published package name)
-	match crate_name("reinhardt-web") {
-		Ok(FoundCrate::Itself) => return quote!(::reinhardt::reinhardt_core),
-		Ok(FoundCrate::Name(name)) => {
-			let ident = syn::Ident::new(&name, proc_macro2::Span::call_site());
-			return quote!(::#ident::reinhardt_core);
-		}
-		Err(_) => {}
-	}
-
-	// Try direct crate
-	match crate_name("reinhardt-core") {
-		Ok(FoundCrate::Itself) => return quote!(::reinhardt_core),
-		Ok(FoundCrate::Name(name)) => {
-			let ident = syn::Ident::new(&name, proc_macro2::Span::call_site());
-			return quote!(::#ident);
-		}
-		Err(_) => {}
-	}
-
-	// Final fallback
-	quote!(::reinhardt_core)
 }

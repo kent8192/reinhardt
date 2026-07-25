@@ -18,8 +18,8 @@ use crate::{
 	FormDatalistDef, FormDerived, FormDerivedItem, FormFieldCollection, FormFieldDef,
 	FormFieldEntry, FormFieldGroup, FormFieldProperty, FormMacro, FormSlots, FormState,
 	FormStateField, FormSubmitButtonDef, FormValidator, FormWatch, FormWatchItem, FormWidgetSpec,
-	IconAttr, IconChild, IconElement, IconPosition, StripArgument, ValidatorRule, ValidatorScope,
-	WrapperAttr, WrapperElement,
+	IconAttr, IconChild, IconElement, IconPosition, ModelFieldOverride, ModelFieldSelection,
+	ModelFormSource, StripArgument, ValidatorRule, ValidatorScope, WrapperAttr, WrapperElement,
 };
 
 /// Parses a `form!` macro invocation into an untyped AST.
@@ -88,6 +88,11 @@ impl Parse for FormMacro {
 		let span = input.span();
 		let mut form = FormMacro::new(None, span);
 		let mut ambient_arguments_clause: Option<&'static str> = None;
+		let mut model: Option<Path> = None;
+		let mut model_selection: Option<ModelFieldSelection> = None;
+		let mut overrides = Vec::new();
+		let mut has_overrides = false;
+		let mut has_explicit_fields = false;
 
 		// Parse key-value pairs until we hit fields or validators
 		while !input.is_empty() {
@@ -115,6 +120,13 @@ impl Parse for FormMacro {
 				}
 				"class" => {
 					form.class = Some(input.parse()?);
+					parse_optional_comma(input)?;
+				}
+				"model" => {
+					if model.is_some() {
+						return Err(syn::Error::new(key.span(), "duplicate `model` property"));
+					}
+					model = Some(input.parse()?);
 					parse_optional_comma(input)?;
 				}
 				"state" => {
@@ -199,9 +211,43 @@ impl Parse for FormMacro {
 				}
 
 				"fields" => {
+					if input.peek(token::Bracket) {
+						let content;
+						bracketed!(content in input);
+						set_model_selection(
+							&mut model_selection,
+							ModelFieldSelection::Fields(parse_model_field_list(&content)?),
+							key.span(),
+						)?;
+					} else {
+						let content;
+						braced!(content in input);
+						form.fields = parse_field_definitions(&content)?;
+						has_explicit_fields = true;
+					}
+					parse_optional_comma(input)?;
+				}
+				"exclude" => {
+					let content;
+					bracketed!(content in input);
+					set_model_selection(
+						&mut model_selection,
+						ModelFieldSelection::Exclude(parse_model_field_list(&content)?),
+						key.span(),
+					)?;
+					parse_optional_comma(input)?;
+				}
+				"overrides" => {
+					if has_overrides {
+						return Err(syn::Error::new(
+							key.span(),
+							"duplicate `overrides` property",
+						));
+					}
 					let content;
 					braced!(content in input);
-					form.fields = parse_field_definitions(&content)?;
+					overrides = parse_model_field_overrides(&content)?;
+					has_overrides = true;
 					parse_optional_comma(input)?;
 				}
 				"validators" => {
@@ -271,6 +317,42 @@ impl Parse for FormMacro {
 			}
 		}
 
+		match model {
+			Some(model) => {
+				if has_explicit_fields {
+					return Err(syn::Error::new(
+						span,
+						"model-backed form! cannot use braced `fields`; use `fields: [...]` or `exclude: [...]`",
+					));
+				}
+				let selection = model_selection.ok_or_else(|| {
+					syn::Error::new(
+						span,
+						"model-backed form! requires exactly one of `fields: [...]` or `exclude: [...]`",
+					)
+				})?;
+				form.model_source = Some(ModelFormSource {
+					model,
+					selection,
+					overrides,
+				});
+			}
+			None => {
+				if model_selection.is_some() {
+					return Err(syn::Error::new(
+						span,
+						"`fields: [...]` and `exclude` are only valid with `model`",
+					));
+				}
+				if has_overrides {
+					return Err(syn::Error::new(
+						span,
+						"`overrides` is only valid with `model`",
+					));
+				}
+			}
+		}
+
 		// Validate required fields
 		if form.name.is_none() {
 			return Err(syn::Error::new(
@@ -281,6 +363,93 @@ impl Parse for FormMacro {
 
 		Ok(form)
 	}
+}
+
+fn set_model_selection(
+	selection: &mut Option<ModelFieldSelection>,
+	value: ModelFieldSelection,
+	span: Span,
+) -> Result<()> {
+	if selection.is_some() {
+		return Err(syn::Error::new(
+			span,
+			"model-backed form! requires exactly one of `fields: [...]` or `exclude: [...]`",
+		));
+	}
+	*selection = Some(value);
+	Ok(())
+}
+
+fn parse_model_field_list(input: ParseStream) -> Result<Vec<Ident>> {
+	let fields = syn::punctuated::Punctuated::<Ident, Token![,]>::parse_terminated(input)?;
+	Ok(fields.into_iter().collect())
+}
+
+fn parse_model_field_overrides(input: ParseStream) -> Result<Vec<ModelFieldOverride>> {
+	let mut overrides = Vec::new();
+
+	while !input.is_empty() {
+		let field: Ident = input.parse()?;
+		input.parse::<Token![:]>()?;
+		let content;
+		braced!(content in input);
+
+		let mut widget = None;
+		let mut label = None;
+		let mut help_text = None;
+		while !content.is_empty() {
+			let property: Ident = content.parse()?;
+			content.parse::<Token![:]>()?;
+			match property.to_string().as_str() {
+				"widget" => {
+					if widget.is_some() {
+						return Err(syn::Error::new(
+							property.span(),
+							"duplicate `widget` override",
+						));
+					}
+					widget = Some(content.parse()?);
+				}
+				"label" => {
+					if label.is_some() {
+						return Err(syn::Error::new(
+							property.span(),
+							"duplicate `label` override",
+						));
+					}
+					label = Some(content.parse()?);
+				}
+				"help_text" => {
+					if help_text.is_some() {
+						return Err(syn::Error::new(
+							property.span(),
+							"duplicate `help_text` override",
+						));
+					}
+					help_text = Some(content.parse()?);
+				}
+				_ => {
+					return Err(syn::Error::new(
+						property.span(),
+						format!(
+							"unknown `overrides` property: `{property}`; expected widget, label, or help_text"
+						),
+					));
+				}
+			}
+			parse_optional_comma(&content)?;
+		}
+
+		overrides.push(ModelFieldOverride {
+			field,
+			widget,
+			label,
+			help_text,
+		});
+		parse_optional_comma(input)?;
+	}
+
+	Ok(overrides)
 }
 
 /// Parses an optional trailing comma.
@@ -1434,6 +1603,77 @@ mod tests {
 		assert!(result.is_ok());
 		let form = result.unwrap();
 		assert!(matches!(form.action, FormAction::ServerFn(_)));
+	}
+
+	#[rstest]
+	fn test_parse_model_form_with_selected_fields_and_overrides() {
+		// Arrange
+		let input = quote! {
+			name: QuestionForm,
+			model: Question,
+			fields: [title, published_at],
+			server_fn: save_question,
+			overrides: {
+				title: {
+					widget: TextArea,
+					label: "Question",
+					help_text: "Enter the question",
+				},
+			},
+		};
+
+		// Act
+		let form: FormMacro = syn::parse2(input).expect("model form should parse");
+
+		// Assert
+		assert!(form.fields.is_empty());
+		let source = form
+			.model_source
+			.expect("model source should be recorded for model forms");
+		assert_eq!(source.model.segments.last().unwrap().ident, "Question");
+		let ModelFieldSelection::Fields(fields) = source.selection else {
+			panic!("model form should select explicit fields");
+		};
+		assert_eq!(
+			fields.iter().map(ToString::to_string).collect::<Vec<_>>(),
+			["title", "published_at"]
+		);
+		assert_eq!(source.overrides.len(), 1);
+		let override_ = &source.overrides[0];
+		assert_eq!(override_.field, "title");
+		assert_eq!(override_.widget.as_ref().unwrap(), "TextArea");
+		assert_eq!(override_.label.as_ref().unwrap().value(), "Question");
+		assert_eq!(
+			override_.help_text.as_ref().unwrap().value(),
+			"Enter the question"
+		);
+	}
+
+	#[rstest]
+	fn test_parse_model_form_with_excluded_fields() {
+		// Arrange
+		let input = quote! {
+			name: QuestionForm,
+			model: Question,
+			exclude: [owner_id],
+			server_fn: save_question,
+		};
+
+		// Act
+		let form: FormMacro = syn::parse2(input).expect("model form should parse");
+
+		// Assert
+		assert!(form.fields.is_empty());
+		let source = form
+			.model_source
+			.expect("model source should be recorded for model forms");
+		let ModelFieldSelection::Exclude(fields) = source.selection else {
+			panic!("model form should exclude fields");
+		};
+		assert_eq!(
+			fields.iter().map(ToString::to_string).collect::<Vec<_>>(),
+			["owner_id"]
+		);
 	}
 
 	#[rstest]

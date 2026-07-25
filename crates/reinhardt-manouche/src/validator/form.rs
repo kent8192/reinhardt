@@ -21,16 +21,18 @@ use crate::core::{
 	FormControlEntryKind, FormCustomWidgetSpec, FormDatalistDef, FormDerived, FormFieldCollection,
 	FormFieldDef, FormFieldEntry, FormFieldGroup, FormFieldProperty, FormMacro, FormMethod,
 	FormSlots, FormState, FormSubmitButtonDef, FormValidator, FormWatch, FormWidgetSpec, IconAttr,
-	IconChild, IconPosition, StripArgument, TypedButtonControlDef, TypedButtonKind,
-	TypedChoiceGroup, TypedChoiceItem, TypedChoiceOption, TypedChoicesConfig, TypedCustomAttr,
-	TypedCustomWidget, TypedDatalistDef, TypedDerivedItem, TypedFieldDisplay,
-	TypedFieldNativeAttrs, TypedFieldStyling, TypedFieldType, TypedFieldValidation,
-	TypedFormAction, TypedFormCallbacks, TypedFormDerived, TypedFormFieldCollection,
-	TypedFormFieldDef, TypedFormFieldEntry, TypedFormFieldGroup, TypedFormMacro, TypedFormSlots,
-	TypedFormState, TypedFormStyling, TypedFormValidator, TypedFormWatch, TypedFormWatchItem,
-	TypedIcon, TypedIconAttr, TypedIconChild, TypedIconPosition, TypedImageInputDef, TypedMeterDef,
-	TypedOutputDef, TypedProgressDef, TypedStripArgument, TypedSubmitButtonDef, TypedValidatorRule,
-	TypedWidget, TypedWrapper, TypedWrapperAttr, ValidatorRule,
+	IconChild, IconPosition, ModelFieldSelection, ModelFormSource, StripArgument,
+	TypedButtonControlDef, TypedButtonKind, TypedChoiceGroup, TypedChoiceItem, TypedChoiceOption,
+	TypedChoicesConfig, TypedCustomAttr, TypedCustomWidget, TypedDatalistDef, TypedDerivedItem,
+	TypedFieldDisplay, TypedFieldNativeAttrs, TypedFieldStyling, TypedFieldType,
+	TypedFieldValidation, TypedFormAction, TypedFormCallbacks, TypedFormDerived,
+	TypedFormFieldCollection, TypedFormFieldDef, TypedFormFieldEntry, TypedFormFieldGroup,
+	TypedFormMacro, TypedFormSlots, TypedFormState, TypedFormStyling, TypedFormValidator,
+	TypedFormWatch, TypedFormWatchItem, TypedIcon, TypedIconAttr, TypedIconChild,
+	TypedIconPosition, TypedImageInputDef, TypedMeterDef, TypedModelFieldOverride,
+	TypedModelFieldSelection, TypedModelFormSource, TypedOutputDef, TypedProgressDef,
+	TypedStripArgument, TypedSubmitButtonDef, TypedValidatorRule, TypedWidget, TypedWrapper,
+	TypedWrapperAttr, ValidatorRule,
 };
 
 /// Validates and transforms the FormMacro AST into a typed AST.
@@ -104,6 +106,7 @@ pub fn validate_form_with_ambient_arguments_source(
 	// Transform fields
 	let fields = transform_fields(&ast.fields)?;
 	validate_list_references(&fields)?;
+	let model_source = transform_model_source(&ast.model_source)?;
 
 	// Transform unified validators (scope filtering happens at codegen)
 	let validators = transform_validators(&ast.validators, &ast.fields)?;
@@ -133,10 +136,77 @@ pub fn validate_form_with_ambient_arguments_source(
 		choices_loader,
 		slots,
 		fields,
+		model_source,
 		validators,
 		strip_arguments,
 		span: ast.span,
 	})
+}
+
+fn transform_model_source(
+	source: &Option<ModelFormSource>,
+) -> Result<Option<TypedModelFormSource>> {
+	let Some(source) = source else {
+		return Ok(None);
+	};
+
+	let selection = match &source.selection {
+		ModelFieldSelection::Fields(fields) => {
+			validate_unique_model_field_names(fields, "fields")?;
+			TypedModelFieldSelection::Fields(fields.clone())
+		}
+		ModelFieldSelection::Exclude(fields) => {
+			validate_unique_model_field_names(fields, "exclude")?;
+			TypedModelFieldSelection::Exclude(fields.clone())
+		}
+	};
+
+	let mut seen_overrides = HashSet::new();
+	let overrides = source
+		.overrides
+		.iter()
+		.map(|override_| {
+			let field = override_.field.to_string();
+			if !seen_overrides.insert(field.clone()) {
+				return Err(Error::new(
+					override_.field.span(),
+					format!("duplicate `overrides` entry for field '{field}'"),
+				));
+			}
+
+			let widget = override_
+				.widget
+				.as_ref()
+				.map(parse_model_widget)
+				.transpose()?;
+			Ok(TypedModelFieldOverride {
+				field: override_.field.clone(),
+				widget,
+				label: override_.label.as_ref().map(syn::LitStr::value),
+				help_text: override_.help_text.as_ref().map(syn::LitStr::value),
+			})
+		})
+		.collect::<Result<Vec<_>>>()?;
+
+	Ok(Some(TypedModelFormSource {
+		model: source.model.clone(),
+		selection,
+		overrides,
+	}))
+}
+
+fn validate_unique_model_field_names(fields: &[syn::Ident], clause: &str) -> Result<()> {
+	let mut seen = HashSet::new();
+	for field in fields {
+		let name = field.to_string();
+		if !seen.insert(name.clone()) {
+			return Err(Error::new(
+				field.span(),
+				format!("duplicate `{clause}` identifier: '{name}'"),
+			));
+		}
+	}
+	Ok(())
 }
 
 /// Validates that all field names are unique.
@@ -2009,6 +2079,13 @@ fn parse_widget(ident: &syn::Ident) -> Result<TypedWidget> {
 	}
 }
 
+fn parse_model_widget(ident: &syn::Ident) -> Result<TypedWidget> {
+	if ident == "TextArea" {
+		return Ok(TypedWidget::Textarea);
+	}
+	parse_widget(ident)
+}
+
 #[derive(Default)]
 struct NativeAttrSpans {
 	min: Option<Span>,
@@ -2972,6 +3049,128 @@ mod tests {
 		assert!(result.is_ok());
 		let typed = result.unwrap();
 		assert!(matches!(typed.action, TypedFormAction::ServerFn(_)));
+	}
+
+	#[rstest]
+	fn test_validate_model_form_transforms_source() {
+		// Arrange
+		let input = quote! {
+			name: QuestionForm,
+			model: Question,
+			fields: [title, published_at],
+			server_fn: save_question,
+			overrides: {
+				title: {
+					widget: TextArea,
+					label: "Question",
+					help_text: "Enter the question",
+				},
+			},
+		};
+
+		// Act
+		let typed = parse_and_validate(input).expect("model form should validate");
+
+		// Assert
+		assert!(typed.fields.is_empty());
+		let source = typed
+			.model_source
+			.expect("typed model source should be present");
+		assert_eq!(source.model.segments.last().unwrap().ident, "Question");
+		assert!(matches!(
+			source.selection,
+			TypedModelFieldSelection::Fields(_)
+		));
+		assert_eq!(source.overrides.len(), 1);
+		assert_eq!(source.overrides[0].widget, Some(TypedWidget::Textarea));
+		assert_eq!(source.overrides[0].label.as_deref(), Some("Question"));
+		assert_eq!(
+			source.overrides[0].help_text.as_deref(),
+			Some("Enter the question")
+		);
+	}
+
+	#[rstest]
+	#[case(
+		quote! {
+			name: QuestionForm,
+			model: Question,
+			fields: [title],
+			exclude: [owner_id],
+		},
+		"fields"
+	)]
+	#[case(
+		quote! {
+			name: QuestionForm,
+			model: Question,
+		},
+		"model"
+	)]
+	#[case(
+		quote! {
+			name: QuestionForm,
+			model: Question,
+			fields: [title, title],
+		},
+		"fields"
+	)]
+	#[case(
+		quote! {
+			name: QuestionForm,
+			model: Question,
+			fields: [title],
+			overrides: {
+				title: { label: "Question" },
+				title: { help_text: "Enter the question" },
+			},
+		},
+		"overrides"
+	)]
+	#[case(
+		quote! {
+			name: QuestionForm,
+			model: Question,
+			fields: [title],
+			overrides: {
+				title: { placeholder: "Question" },
+			},
+		},
+		"placeholder"
+	)]
+	#[case(
+		quote! {
+			name: QuestionForm,
+			model: Question,
+			fields: {
+				title: CharField {},
+			},
+		},
+		"fields"
+	)]
+	#[case(
+		quote! {
+			name: QuestionForm,
+			overrides: {
+				title: { label: "Question" },
+			},
+		},
+		"overrides"
+	)]
+	fn test_validate_model_form_rejects_invalid_clauses(
+		#[case] input: proc_macro2::TokenStream,
+		#[case] expected_clause: &str,
+	) {
+		// Act
+		let error = parse_and_validate(input)
+			.expect_err("invalid model form should be rejected")
+			.to_string();
+
+		// Assert
+		assert!(
+			error.contains(expected_clause),
+			"expected diagnostic to name `{expected_clause}`, got: {error}"
+		);
 	}
 
 	#[rstest]

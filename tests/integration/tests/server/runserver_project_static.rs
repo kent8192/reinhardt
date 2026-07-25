@@ -49,6 +49,12 @@ fn build_runserver_cascade(
 	project_static_dir: std::path::PathBuf,
 	dist_dir: std::path::PathBuf,
 ) -> Arc<dyn Handler> {
+	let manifest_aliases = std::fs::read_to_string(dist_dir.join("manifest.json"))
+		.ok()
+		.and_then(|content| serde_json::from_str::<serde_json::Value>(&content).ok())
+		.and_then(|manifest| manifest.get("paths").cloned())
+		.and_then(|paths| serde_json::from_value(paths).ok())
+		.unwrap_or_default();
 	let project_static = Arc::new(StaticFilesMiddleware::new(
 		StaticMiddlewareConfig::new(project_static_dir)
 			.url_prefix("/static/")
@@ -60,7 +66,8 @@ fn build_runserver_cascade(
 		StaticMiddlewareConfig::new(dist_dir.clone())
 			.url_prefix("/static/")
 			.spa_mode(false)
-			.auto_inject_wasm(false),
+			.auto_inject_wasm(false)
+			.manifest_aliases(manifest_aliases),
 	));
 	let dist_spa = Arc::new(StaticFilesMiddleware::new(
 		StaticMiddlewareConfig::new(dist_dir)
@@ -214,11 +221,16 @@ async fn test_collected_dist_assets_are_served_under_static_url() {
 		"export const runtime = true;",
 	)
 	.unwrap();
+	std::fs::write(
+		dist.join("manifest.json"),
+		r#"{"version":"1.0","paths":{"vendor/unocss-runtime.js":"vendor/unocss-runtime.1234.js"}}"#,
+	)
+	.unwrap();
 	std::fs::write(dist.join("index.html"), "<html><body>spa</body></html>").unwrap();
 
 	let handler = build_runserver_cascade(project_static, dist);
 	let (url, server_handle) = spawn_test_server(handler).await;
-	let response = reqwest::get(format!("{}/static/vendor/unocss-runtime.1234.js", url))
+	let response = reqwest::get(format!("{}/static/vendor/unocss-runtime.js", url))
 		.await
 		.expect("request failed");
 

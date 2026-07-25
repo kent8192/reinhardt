@@ -2005,6 +2005,40 @@ fn normalize_static_url_prefix(static_url: &str) -> String {
 }
 
 #[cfg(feature = "server")]
+async fn load_static_manifest(
+	static_root: &std::path::Path,
+) -> Result<std::collections::HashMap<String, String>, String> {
+	let manifest_path = static_root.join("manifest.json");
+	if !manifest_path.is_file() {
+		return Ok(std::collections::HashMap::new());
+	}
+
+	let content = tokio::fs::read_to_string(&manifest_path)
+		.await
+		.map_err(|error| format!("failed to read {}: {error}", manifest_path.display()))?;
+	let manifest: serde_json::Value = serde_json::from_str(&content)
+		.map_err(|error| format!("failed to parse {}: {error}", manifest_path.display()))?;
+	let paths = manifest
+		.get("paths")
+		.and_then(serde_json::Value::as_object)
+		.ok_or_else(|| {
+			format!(
+				"{} does not contain a paths object",
+				manifest_path.display()
+			)
+		})?;
+
+	Ok(paths
+		.iter()
+		.filter_map(|(source, collected)| {
+			collected
+				.as_str()
+				.map(|collected| (source.replace('\\', "/"), collected.replace('\\', "/")))
+		})
+		.collect())
+}
+
+#[cfg(feature = "server")]
 fn spa_excluded_prefixes(generated_style_url: &str) -> Vec<String> {
 	let configured_admin_prefix = format!("{}/admin/", generated_style_url.trim_end_matches('/'));
 	let mut prefixes = vec![
@@ -2900,6 +2934,20 @@ impl RunServerCommand {
 				|| resolved_static_dir.clone(),
 				|settings| settings.static_root.clone(),
 			);
+			let manifest_aliases = match load_static_manifest(&collected_static_dir).await {
+				Ok(aliases) => aliases,
+				Err(error) => {
+					ctx.warning(&format!(
+						"Failed to load collectstatic manifest aliases: {error}"
+					));
+					std::collections::HashMap::new()
+				}
+			};
+			let root_static_dir = if generated_style_url == "/" {
+				collected_static_dir.clone()
+			} else {
+				resolved_static_dir.clone()
+			};
 
 			// Collected assets use the configured STATIC_URL, while the root mount
 			// below remains responsible for SPA routes and legacy bundle URLs.
@@ -2907,7 +2955,8 @@ impl RunServerCommand {
 				let mut collected_static_config = StaticFilesConfig::new(collected_static_dir)
 					.url_prefix(generated_style_url.clone())
 					.spa_mode(false)
-					.auto_inject_wasm(false);
+					.auto_inject_wasm(false)
+					.manifest_aliases(manifest_aliases.clone());
 				#[cfg(debug_assertions)]
 				{
 					collected_static_config =
@@ -2917,9 +2966,14 @@ impl RunServerCommand {
 					server.with_middleware(StaticFilesMiddleware::new(collected_static_config));
 			}
 
-			let mut static_config = StaticFilesConfig::new(resolved_static_dir.clone())
+			let mut static_config = StaticFilesConfig::new(root_static_dir)
 				.url_prefix("/")
 				.spa_mode(!no_spa)
+				.manifest_aliases(if generated_style_url == "/" {
+					manifest_aliases
+				} else {
+					std::collections::HashMap::new()
+				})
 				.template_static_config(TemplateStaticConfig::new(generated_style_url.clone()))
 				// Exclude framework-managed route prefixes from SPA fallback
 				// so that API endpoints and admin panel are handled by the
@@ -5164,6 +5218,46 @@ mod tests {
 		let settings = configured_static_assets(directory.path()).expect("resolve static settings");
 
 		assert_eq!(settings.static_root, directory.path().join("collected"));
+	}
+
+	#[cfg(feature = "server")]
+	#[tokio::test]
+	async fn collected_asset_manifest_exposes_unhashed_aliases() {
+		let directory = tempfile::tempdir().expect("create static root");
+		std::fs::write(
+			directory.path().join("manifest.json"),
+			r#"{"version":"1.0","paths":{"vendor/runtime.js":"vendor/runtime.1234.js"}}"#,
+		)
+		.expect("write collectstatic manifest");
+
+		let aliases = load_static_manifest(directory.path())
+			.await
+			.expect("load collectstatic manifest");
+
+		assert_eq!(
+			aliases.get("vendor/runtime.js").map(String::as_str),
+			Some("vendor/runtime.1234.js")
+		);
+	}
+
+	#[cfg(feature = "server")]
+	#[tokio::test]
+	async fn collected_asset_manifest_normalizes_windows_paths() {
+		let directory = tempfile::tempdir().expect("create static root");
+		std::fs::write(
+			directory.path().join("manifest.json"),
+			r#"{"version":"1.0","paths":{"vendor\\runtime.js":"vendor\\runtime.1234.js"}}"#,
+		)
+		.expect("write collectstatic manifest");
+
+		let aliases = load_static_manifest(directory.path())
+			.await
+			.expect("load collectstatic manifest");
+
+		assert_eq!(
+			aliases.get("vendor/runtime.js").map(String::as_str),
+			Some("vendor/runtime.1234.js")
+		);
 	}
 
 	#[cfg(feature = "server")]

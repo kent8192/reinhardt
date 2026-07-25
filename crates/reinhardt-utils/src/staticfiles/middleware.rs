@@ -12,7 +12,7 @@ use reinhardt_core::exception::Result;
 use reinhardt_http::{Handler, Middleware};
 use reinhardt_http::{Request, Response};
 
-use super::caching::CacheControlConfig;
+use super::caching::{CacheControlConfig, CachePolicy};
 use super::handler::{StaticError, StaticFileHandler};
 use super::template_integration::TemplateStaticConfig;
 
@@ -81,6 +81,8 @@ pub struct StaticFilesConfig {
 	pub wasm_entry: Option<String>,
 	/// Manifest mapping original filenames to hashed filenames
 	pub wasm_manifest: Option<HashMap<String, String>>,
+	/// Manifest aliases used to serve unhashed request paths from hashed files.
+	pub manifest_aliases: HashMap<String, String>,
 	/// Static URL resolver applied to `{{ static_url("...") }}` in SPA HTML responses.
 	///
 	/// This preserves source templates for production collection while allowing
@@ -108,6 +110,7 @@ impl Default for StaticFilesConfig {
 			auto_inject_wasm: true,
 			wasm_entry: None,
 			wasm_manifest: None,
+			manifest_aliases: HashMap::new(),
 			template_static_config: None,
 			trusted_html_injections: Vec::new(),
 		}
@@ -243,6 +246,12 @@ impl StaticFilesConfig {
 	/// Set the WASM manifest for filename resolution (e.g., hashed filenames).
 	pub fn wasm_manifest(mut self, manifest: HashMap<String, String>) -> Self {
 		self.wasm_manifest = Some(manifest);
+		self
+	}
+
+	/// Set manifest aliases used while resolving static file requests.
+	pub fn manifest_aliases(mut self, aliases: HashMap<String, String>) -> Self {
+		self.manifest_aliases = aliases;
 		self
 	}
 
@@ -578,7 +587,12 @@ impl StaticFilesMiddleware {
 
 	/// Try to serve a static file.
 	async fn try_serve(&self, path: &str) -> Option<Response> {
-		match self.handler.serve(path).await {
+		let manifest_alias = self
+			.config
+			.manifest_aliases
+			.get(path.trim_start_matches('/'));
+		let resolved_path = manifest_alias.map_or(path, String::as_str);
+		match self.handler.serve(resolved_path).await {
 			Ok(file) => {
 				// Refs #5186: directory index responses must receive the same
 				// WASM bootstrap as SPA fallback responses.
@@ -597,13 +611,18 @@ impl StaticFilesMiddleware {
 
 				// Only set cache headers when caching is enabled
 				if self.config.cache_config.enabled {
-					let policy = self.config.cache_config.get_policy(path);
-					let cache_value = policy.to_header_value();
+					let (cache_value, vary) = if manifest_alias.is_some() {
+						let policy = CachePolicy::short_term();
+						(policy.to_header_value(), policy.vary)
+					} else {
+						let policy = self.config.cache_config.get_policy(path);
+						(policy.to_header_value(), policy.vary.clone())
+					};
 					response = response.with_header("Cache-Control", &cache_value);
 
 					// Apply Vary header if specified in the policy
-					if let Some(vary) = &policy.vary {
-						response = response.with_header("Vary", vary);
+					if let Some(vary) = vary {
+						response = response.with_header("Vary", &vary);
 					}
 				}
 
@@ -1283,6 +1302,37 @@ mod tests {
 		assert!(
 			!js_response.headers.contains_key("Cache-Control"),
 			"js response should not carry Cache-Control when cache is disabled",
+		);
+	}
+
+	#[tokio::test]
+	async fn test_manifest_alias_uses_revalidating_cache_policy() {
+		// Arrange
+		let dir = tempfile::tempdir().unwrap();
+		std::fs::write(
+			dir.path().join("app.12345678.js"),
+			b"export const version = 1;",
+		)
+		.unwrap();
+		let config = StaticFilesConfig::new(dir.path()).manifest_aliases(HashMap::from([(
+			"app.js".to_string(),
+			"app.12345678.js".to_string(),
+		)]));
+		let middleware = StaticFilesMiddleware::new(config);
+
+		// Act
+		let response = middleware
+			.try_serve("app.js")
+			.await
+			.expect("manifest alias should be served");
+
+		// Assert
+		assert_eq!(
+			response
+				.headers
+				.get("Cache-Control")
+				.and_then(|value| value.to_str().ok()),
+			Some("public, must-revalidate, max-age=300")
 		);
 	}
 

@@ -18,6 +18,15 @@ use serde_json::Value;
 use std::collections::HashMap;
 use std::marker::PhantomData;
 
+/// Explicit persistence operation used for an already validated model candidate.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ModelFormPersistenceMode {
+	/// Insert a candidate created from a form payload.
+	Create,
+	/// Update a candidate built from an existing model instance.
+	Update,
+}
+
 /// Native bridge generated for models that opt in to model-backed forms.
 // The native model form contract intentionally exposes an async persistence method.
 #[allow(async_fn_in_trait)]
@@ -37,8 +46,27 @@ pub trait FormModel: Model + Clone + Send + Sync {
 		data: &Self::Data<P>,
 	) -> Result<(), ModelFormError>;
 
+	/// Persists this candidate using an explicit create or update operation.
+	async fn save_with_mode(
+		&mut self,
+		executor: &mut dyn OrmExecutor,
+		mode: ModelFormPersistenceMode,
+	) -> Result<(), ModelFormError>;
+
 	/// Persists this candidate using the caller-owned ORM executor.
-	async fn save(&mut self, executor: &mut dyn OrmExecutor) -> Result<(), ModelFormError>;
+	async fn save(&mut self, executor: &mut dyn OrmExecutor) -> Result<(), ModelFormError> {
+		let primary_key = self.primary_key();
+		let uses_zero_sentinel = Self::primary_key_uses_zero_sentinel()
+			&& primary_key
+				.as_ref()
+				.is_some_and(|value| value.to_string() == "0");
+		let mode = if primary_key.is_some() && !uses_zero_sentinel {
+			ModelFormPersistenceMode::Update
+		} else {
+			ModelFormPersistenceMode::Create
+		};
+		self.save_with_mode(executor, mode).await
+	}
 
 	/// Convert model instance to a choice label for display in forms
 	///
@@ -94,6 +122,8 @@ where
 	data: T::Data<P>,
 	supplied_fields: Vec<&'static str>,
 	instance: Option<T>,
+	validated_candidate: Option<T>,
+	persistence_mode: ModelFormPersistenceMode,
 	model_validator: Option<Box<ModelValidator<T>>>,
 	_policy: PhantomData<P>,
 }
@@ -103,7 +133,11 @@ where
 	T: FormModel,
 	P: ModelFormPolicy,
 {
-	fn initialize(data: T::Data<P>, instance: Option<T>) -> Self {
+	fn initialize(
+		data: T::Data<P>,
+		instance: Option<T>,
+		persistence_mode: ModelFormPersistenceMode,
+	) -> Self {
 		let supplied_fields = data.supplied_fields();
 		let mut form = Form::new();
 		let mut form_data = HashMap::new();
@@ -126,6 +160,8 @@ where
 			data,
 			supplied_fields,
 			instance,
+			validated_candidate: None,
+			persistence_mode,
 			model_validator: None,
 			_policy: PhantomData,
 		}
@@ -133,12 +169,12 @@ where
 
 	/// Creates a model form for a new instance.
 	pub fn from_payload(data: T::Data<P>) -> Self {
-		Self::initialize(data, None)
+		Self::initialize(data, None, ModelFormPersistenceMode::Create)
 	}
 
 	/// Creates a model form that applies a payload to an existing instance.
 	pub fn from_payload_and_instance(data: T::Data<P>, instance: T) -> Self {
-		Self::initialize(data, Some(instance))
+		Self::initialize(data, Some(instance), ModelFormPersistenceMode::Update)
 	}
 
 	/// Installs a model-level validator that runs after cleaned values are applied.
@@ -147,6 +183,7 @@ where
 		validator: impl Fn(&T) -> Result<(), Vec<String>> + Send + Sync + 'static,
 	) -> Self {
 		self.model_validator = Some(Box::new(validator));
+		self.validated_candidate = None;
 		self
 	}
 	fn clean_payload(&mut self) -> Result<(), ModelFormError> {
@@ -183,6 +220,10 @@ where
 
 	/// Validates the payload and builds a model candidate without database access.
 	pub fn build_instance(&mut self) -> Result<T, ModelFormError> {
+		if let Some(candidate) = &self.validated_candidate {
+			return Ok(candidate.clone());
+		}
+
 		self.clean_payload()?;
 		let mut candidate = match &self.instance {
 			Some(instance) => instance.clone(),
@@ -194,6 +235,7 @@ where
 			validator(&candidate).map_err(|errors| ModelFormError::ModelValidation { errors })?;
 		}
 
+		self.validated_candidate = Some(candidate.clone());
 		Ok(candidate)
 	}
 
@@ -204,10 +246,19 @@ where
 
 	/// Persists a validated candidate through the caller-owned executor.
 	pub async fn save(&mut self, executor: &mut dyn OrmExecutor) -> Result<T, ModelFormError> {
-		let mut candidate = self.build_instance()?;
-		FormModel::save(&mut candidate, executor).await?;
-		self.instance = Some(candidate.clone());
-		Ok(candidate)
+		if self.validated_candidate.is_none() {
+			self.build_instance()?;
+		}
+
+		let candidate = self
+			.validated_candidate
+			.as_mut()
+			.expect("build_instance caches a validated candidate");
+		FormModel::save_with_mode(candidate, executor, self.persistence_mode).await?;
+		let saved = candidate.clone();
+		self.instance = Some(saved.clone());
+		self.persistence_mode = ModelFormPersistenceMode::Update;
+		Ok(saved)
 	}
 
 	/// Replaces one payload field, primarily for inline foreign-key assignment.
@@ -240,6 +291,7 @@ where
 				},
 			}
 		})?;
+		self.validated_candidate = None;
 		if !self.supplied_fields.contains(&field_name) {
 			self.supplied_fields.push(field_name);
 		}
@@ -252,6 +304,7 @@ where
 	}
 	/// Returns a mutable reference to the underlying form.
 	pub fn form_mut(&mut self) -> &mut Form {
+		self.validated_candidate = None;
 		&mut self.form
 	}
 	/// Returns a reference to the model instance, if one exists.
@@ -264,6 +317,8 @@ where
 mod tests {
 	use super::*;
 	use std::collections::VecDeque;
+	use std::sync::Arc;
+	use std::sync::atomic::{AtomicUsize, Ordering};
 
 	use reinhardt_core::exception::{DatabaseError, DatabaseErrorKind, Error};
 	use reinhardt_core::model_form::{
@@ -293,6 +348,64 @@ mod tests {
 		published: bool,
 	}
 
+	#[model(
+		app_label = "forms",
+		table_name = "model_form_uuid_records",
+		form = true,
+		info = false
+	)]
+	#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+	struct UuidRecord {
+		#[field(primary_key = true)]
+		id: uuid::Uuid,
+		#[field(max_length = 200)]
+		title: String,
+	}
+
+	#[model(
+		app_label = "forms",
+		table_name = "model_form_optional_uuid_records",
+		form = true,
+		info = false
+	)]
+	#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+	struct OptionalUuidRecord {
+		#[field(primary_key = true)]
+		id: Option<uuid::Uuid>,
+		#[field(max_length = 200)]
+		title: String,
+	}
+
+	#[model(
+		app_label = "forms",
+		table_name = "model_form_zero_sentinel_records",
+		form = true,
+		info = false
+	)]
+	#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+	struct ZeroSentinelRecord {
+		#[field(primary_key = true)]
+		id: i32,
+		#[field(max_length = 200)]
+		title: String,
+	}
+
+	#[model(
+		app_label = "forms",
+		table_name = "model_form_hidden_required_records",
+		form = true,
+		info = false
+	)]
+	#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+	struct HiddenRequiredRecord {
+		#[field(primary_key = true)]
+		id: Option<i64>,
+		#[field(max_length = 200)]
+		title: String,
+		#[field(max_length = 200, editable = false)]
+		audit_actor: String,
+	}
+
 	struct QuestionPolicy;
 
 	impl ModelFormPolicy for QuestionPolicy {
@@ -313,6 +426,7 @@ mod tests {
 	struct RetryExecutor {
 		rows: VecDeque<Result<Row, Error>>,
 		fetch_one_calls: usize,
+		queries: Vec<String>,
 	}
 
 	impl RetryExecutor {
@@ -320,6 +434,7 @@ mod tests {
 			Self {
 				rows: rows.into_iter().collect(),
 				fetch_one_calls: 0,
+				queries: Vec::new(),
 			}
 		}
 	}
@@ -338,8 +453,9 @@ mod tests {
 			Err(DatabaseError::new(DatabaseErrorKind::Query, "unexpected execute call").into())
 		}
 
-		async fn fetch_one(&mut self, _sql: &str, _params: Vec<QueryValue>) -> Result<Row, Error> {
+		async fn fetch_one(&mut self, sql: &str, _params: Vec<QueryValue>) -> Result<Row, Error> {
 			self.fetch_one_calls += 1;
+			self.queries.push(sql.to_owned());
 			self.rows.pop_front().unwrap_or_else(|| {
 				Err(DatabaseError::new(DatabaseErrorKind::Query, "missing queued row").into())
 			})
@@ -379,6 +495,24 @@ mod tests {
 		data.set_title(title.to_owned());
 		data.set_owner_id(owner_id);
 		data
+	}
+
+	fn uuid_record_row(id: uuid::Uuid, title: &str) -> Row {
+		let mut row = Row::new();
+		row.insert("id".to_owned(), QueryValue::Uuid(id));
+		row.insert("title".to_owned(), QueryValue::String(title.to_owned()));
+		row
+	}
+
+	fn optional_uuid_record_row(id: uuid::Uuid, title: &str) -> Row {
+		uuid_record_row(id, title)
+	}
+
+	fn zero_sentinel_record_row(title: &str) -> Row {
+		let mut row = Row::new();
+		row.insert("id".to_owned(), QueryValue::Int(0));
+		row.insert("title".to_owned(), QueryValue::String(title.to_owned()));
+		row
 	}
 
 	#[test]
@@ -439,6 +573,22 @@ mod tests {
 	}
 
 	#[test]
+	fn generated_model_form_reports_unresolved_required_non_editable_field() {
+		let mut data = HiddenRequiredRecordModelFormData::<AllEditableModelFields>::empty();
+		data.set_title("Missing audit actor".to_owned());
+
+		let mut form = ModelForm::<HiddenRequiredRecord>::from_payload(data);
+		let error = form.build_instance().unwrap_err();
+
+		assert!(matches!(
+			error,
+			ModelFormError::MissingModelField {
+				field: "audit_actor"
+			}
+		));
+	}
+
+	#[test]
 	fn generated_model_form_applies_cleaned_values_before_model_validation() {
 		let data = question_payload("  cleaned title  ", 5);
 		let mut form = ModelForm::<Question, QuestionPolicy>::from_payload(data)
@@ -482,17 +632,31 @@ mod tests {
 	}
 
 	#[test]
-	fn generated_model_form_retries_after_persistence_failure() {
+	fn generated_model_form_reuses_non_idempotently_cleaned_candidate_across_retry() {
 		let data = question_payload("Retryable", 17);
+		let cleaner_calls = Arc::new(AtomicUsize::new(0));
 		let mut executor = RetryExecutor::new([
 			Err(Error::database_with_source(
 				DatabaseErrorKind::Timeout,
 				"temporary database timeout",
 				std::io::Error::new(std::io::ErrorKind::TimedOut, "driver timeout"),
 			)),
-			Ok(question_row(23, "Retryable", 17, true)),
+			Ok(question_row(23, "Retryable-1", 17, true)),
 		]);
 		let mut form = ModelForm::<Question, QuestionPolicy>::from_payload(data);
+		let cleaner_calls_for_field = Arc::clone(&cleaner_calls);
+		form.form_mut()
+			.add_field_clean_function("title", move |value| {
+				let call = cleaner_calls_for_field.fetch_add(1, Ordering::SeqCst) + 1;
+				Ok(json!(format!(
+					"{}-{call}",
+					value.as_str().expect("title cleaner receives text")
+				)))
+			});
+
+		let built = form.build_instance().unwrap();
+		assert_eq!(built.title, "Retryable-1");
+		assert_eq!(cleaner_calls.load(Ordering::SeqCst), 1);
 
 		let first_error = tokio_test::block_on(form.save(&mut executor)).unwrap_err();
 		assert_eq!(
@@ -500,11 +664,85 @@ mod tests {
 			Some(DatabaseErrorKind::Timeout)
 		);
 		assert!(form.instance().is_none());
+		assert_eq!(form.build_instance().unwrap(), built);
+		assert_eq!(cleaner_calls.load(Ordering::SeqCst), 1);
 
 		let saved = tokio_test::block_on(form.save(&mut executor)).unwrap();
 		assert_eq!(saved.id, Some(23));
+		assert_eq!(saved.title, "Retryable-1");
 		assert_eq!(form.instance(), Some(&saved));
 		assert_eq!(executor.fetch_one_calls, 2);
+		assert_eq!(cleaner_calls.load(Ordering::SeqCst), 1);
+	}
+
+	#[test]
+	fn generated_uuid_model_form_retries_create_with_same_dynamic_default() {
+		let mut data = UuidRecordModelFormData::<AllEditableModelFields>::empty();
+		data.set_title("UUID create".to_owned());
+		let mut form = ModelForm::<UuidRecord>::from_payload(data);
+		let built = form.build_instance().unwrap();
+		let generated_id = built.id;
+		let mut executor = RetryExecutor::new([
+			Err(DatabaseError::new(DatabaseErrorKind::Timeout, "retry UUID create").into()),
+			Ok(uuid_record_row(generated_id, "UUID create")),
+		]);
+
+		let first_error = tokio_test::block_on(form.save(&mut executor)).unwrap_err();
+		assert_eq!(
+			first_error.database_error().map(DatabaseError::kind),
+			Some(DatabaseErrorKind::Timeout)
+		);
+		assert_eq!(form.build_instance().unwrap().id, generated_id);
+
+		let saved = tokio_test::block_on(form.save(&mut executor)).unwrap();
+
+		assert_eq!(saved.id, generated_id);
+		assert_eq!(executor.fetch_one_calls, 2);
+		assert!(
+			executor
+				.queries
+				.iter()
+				.all(|query| query.trim_start().starts_with("INSERT"))
+		);
+	}
+
+	#[test]
+	fn generated_optional_uuid_model_form_uses_create_path() {
+		let mut data = OptionalUuidRecordModelFormData::<AllEditableModelFields>::empty();
+		data.set_title("Optional UUID create".to_owned());
+		let mut form = ModelForm::<OptionalUuidRecord>::from_payload(data);
+		let built = form.build_instance().unwrap();
+		let generated_id = built.id.expect("optional UUID primary key is generated");
+		let mut executor = RetryExecutor::new([Ok(optional_uuid_record_row(
+			generated_id,
+			"Optional UUID create",
+		))]);
+
+		let saved = tokio_test::block_on(form.save(&mut executor)).unwrap();
+
+		assert_eq!(saved.id, Some(generated_id));
+		assert_eq!(executor.fetch_one_calls, 1);
+		assert!(executor.queries[0].trim_start().starts_with("INSERT"));
+	}
+
+	#[test]
+	fn generated_existing_zero_sentinel_model_form_uses_update_path() {
+		let mut data = ZeroSentinelRecordModelFormData::<AllEditableModelFields>::empty();
+		data.set_title("Existing zero sentinel".to_owned());
+		let instance = ZeroSentinelRecord {
+			id: 0,
+			title: "Original".to_owned(),
+		};
+		let mut form = ModelForm::<ZeroSentinelRecord>::from_payload_and_instance(data, instance);
+		let mut executor =
+			RetryExecutor::new([Ok(zero_sentinel_record_row("Existing zero sentinel"))]);
+
+		let saved = tokio_test::block_on(form.save(&mut executor)).unwrap();
+
+		assert_eq!(saved.id, 0);
+		assert_eq!(saved.title, "Existing zero sentinel");
+		assert_eq!(executor.fetch_one_calls, 1);
+		assert!(executor.queries[0].trim_start().starts_with("UPDATE"));
 	}
 
 	#[test]

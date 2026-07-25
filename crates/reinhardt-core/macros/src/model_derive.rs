@@ -2098,6 +2098,13 @@ fn model_form_declared_default(field: &FieldInfo) -> Option<TokenStream> {
 	})
 }
 
+fn model_form_has_automatic_value(field: &FieldInfo) -> bool {
+	is_auto_generated_field(field)
+		&& !field.config.skip
+		&& field.config.include_in_new != Some(false)
+		&& !field.is_fk_id_field
+}
+
 fn generate_model_form_support(
 	struct_name: &Ident,
 	struct_vis: &syn::Visibility,
@@ -2299,38 +2306,86 @@ fn generate_model_form_support(
 			|field_ty| quote!(#field_ty: #serde_crate::Serialize + #serde_crate::de::DeserializeOwned),
 		)
 		.collect();
-	let build_assignments = field_infos.iter().map(|field| {
-		let field_name = &field.name;
-		let field_literal = LitStr::new(&field.name.to_string(), field.name.span());
-		if is_model_form_editable(field) {
+	let missing_noneditable_field = field_infos
+		.iter()
+		.find(|field| {
+			if is_model_form_editable(field)
+				|| model_form_declared_default(field).is_some()
+				|| model_form_has_automatic_value(field)
+			{
+				return false;
+			}
 			let (is_optional, _) = extract_option_type(&field.ty);
-			let required =
-				!is_optional && field.config.blank != Some(true) && field.config.default.is_none();
-			let unresolved = if let Some(default) = model_form_declared_default(field) {
-				default
-			} else if required {
+			!is_optional && field.config.blank != Some(true)
+		})
+		.map(|field| LitStr::new(&field.name.to_string(), field.name.span()));
+	let build_assignments: Vec<_> = field_infos
+		.iter()
+		.map(|field| {
+			let field_name = &field.name;
+			let field_literal = LitStr::new(&field.name.to_string(), field.name.span());
+			if is_model_form_editable(field) {
+				let (is_optional, _) = extract_option_type(&field.ty);
+				let required = !is_optional
+					&& field.config.blank != Some(true)
+					&& field.config.default.is_none();
+				let unresolved = if let Some(default) = model_form_declared_default(field) {
+					default
+				} else if required {
+					quote! {
+						return ::core::result::Result::Err(
+							#forms_crate::model_form::ModelFormError::MissingModelField {
+								field: #field_literal,
+							},
+						)
+					}
+				} else {
+					quote!(::std::default::Default::default())
+				};
 				quote! {
-					return ::core::result::Result::Err(
-						#forms_crate::model_form::ModelFormError::MissingModelField {
-							field: #field_literal,
-						},
-					)
+					#field_name: match data.#field_name.as_ref() {
+						::core::option::Option::Some(value) => value.clone(),
+						::core::option::Option::None => #unresolved,
+					}
 				}
 			} else {
-				quote!(::std::default::Default::default())
-			};
-			quote! {
-				#field_name: match data.#field_name.as_ref() {
-					::core::option::Option::Some(value) => value.clone(),
-					::core::option::Option::None => #unresolved,
-				}
+				let (is_optional, _) = extract_option_type(&field.ty);
+				let required = !is_optional && field.config.blank != Some(true);
+				let default = if let Some(default) = model_form_declared_default(field) {
+					default
+				} else if model_form_has_automatic_value(field) {
+					get_auto_field_default_value(field)
+				} else if required {
+					quote! {
+						return ::core::result::Result::Err(
+							#forms_crate::model_form::ModelFormError::MissingModelField {
+								field: #field_literal,
+							},
+						)
+					}
+				} else {
+					quote!(::std::default::Default::default())
+				};
+				quote!(#field_name: #default)
 			}
-		} else {
-			let default = model_form_declared_default(field)
-				.unwrap_or_else(|| get_auto_field_default_value(field));
-			quote!(#field_name: #default)
+		})
+		.collect();
+	let build_from_payload_body = if let Some(field) = missing_noneditable_field {
+		quote! {
+			let _ = data;
+			::core::result::Result::Err(
+				#forms_crate::model_form::ModelFormError::MissingModelField {
+					field: #field,
+				},
+			)
 		}
-	});
+	} else {
+		quote! {
+			::core::result::Result::Ok(Self {
+				#(#build_assignments,)*
+			})
+		}
+	};
 	let apply_payload_fields = editable_fields.iter().map(|field| {
 		let field_name = &field.name;
 		quote! {
@@ -2492,9 +2547,7 @@ fn generate_model_form_support(
 			fn build_from_payload<P: #core_crate::model_form::ModelFormPolicy>(
 				data: &Self::Data<P>,
 			) -> ::core::result::Result<Self, #forms_crate::model_form::ModelFormError> {
-				::core::result::Result::Ok(Self {
-					#(#build_assignments,)*
-				})
+				#build_from_payload_body
 			}
 
 			fn apply_payload<P: #core_crate::model_form::ModelFormPolicy>(
@@ -2505,30 +2558,29 @@ fn generate_model_form_support(
 				::core::result::Result::Ok(())
 			}
 
-			async fn save(
+			async fn save_with_mode(
 				&mut self,
 				executor: &mut dyn #orm_crate::connection::OrmExecutor,
+				mode: #forms_crate::model_form::ModelFormPersistenceMode,
 			) -> ::core::result::Result<(), #forms_crate::model_form::ModelFormError> {
 				let manager = <Self as #orm_crate::Model>::objects();
-				let primary_key = <Self as #orm_crate::Model>::primary_key(self);
-				let uses_zero_sentinel = <Self as #orm_crate::Model>::primary_key_uses_zero_sentinel()
-					&& primary_key
-						.as_ref()
-						.is_some_and(|value| value.to_string() == "0");
-				let result = if primary_key.is_some() && !uses_zero_sentinel {
-					#orm_crate::custom_manager::CustomManager::update_with_conn(
-						&manager,
-						executor,
-						self,
-					)
-					.await
-				} else {
-					#orm_crate::custom_manager::CustomManager::create_with_conn(
-						&manager,
-						executor,
-						self,
-					)
-					.await
+				let result = match mode {
+					#forms_crate::model_form::ModelFormPersistenceMode::Create => {
+						#orm_crate::custom_manager::CustomManager::create_with_conn(
+							&manager,
+							executor,
+							self,
+						)
+						.await
+					}
+					#forms_crate::model_form::ModelFormPersistenceMode::Update => {
+						#orm_crate::custom_manager::CustomManager::update_with_conn(
+							&manager,
+							executor,
+							self,
+						)
+						.await
+					}
 				};
 
 				match result {

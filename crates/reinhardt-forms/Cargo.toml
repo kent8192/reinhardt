@@ -49,3 +49,4 @@ tempfile = "3"
 reinhardt-test = { path = "../reinhardt-test" }
 reinhardt-macros = { path = "../reinhardt-core/macros" }
 ctor = { workspace = true }
+uuid = { workspace = true }

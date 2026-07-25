@@ -168,7 +168,7 @@ pub use formsets::{
 	InlineFormSet,
 	ModelFormSet as AdvancedModelFormSet, // Renamed to avoid conflict
 };
-pub use model_form::{FormModel, ModelForm, ModelFormError};
+pub use model_form::{FormModel, ModelForm, ModelFormError, ModelFormPersistenceMode};
 pub use model_formset::{ModelFormSet, ModelFormSetBuilder, ModelFormSetConfig};
 pub use validators::{SlugValidator, UrlValidator};
 pub use wizard::{FormWizard, WizardStep};

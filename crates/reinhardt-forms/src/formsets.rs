@@ -224,8 +224,6 @@ where
 
 	/// Validate all forms in the formset
 	pub fn is_valid(&mut self) -> bool {
-		self.errors.clear();
-
 		let mut all_valid = true;
 		for form in &mut self.forms {
 			if !form.is_valid() {
@@ -233,23 +231,31 @@ where
 			}
 		}
 
-		// Check minimum number
+		self.validate_cardinality().is_ok() && all_valid
+	}
+
+	fn validate_cardinality(&mut self) -> Result<(), ModelFormError> {
+		self.errors.clear();
+
 		if self.forms.len() < self.min_num {
 			self.errors
 				.push(format!("Please submit at least {} forms", self.min_num));
-			all_valid = false;
 		}
 
-		// Check maximum number
 		if let Some(max) = self.max_num
 			&& self.forms.len() > max
 		{
 			self.errors
 				.push(format!("Please submit no more than {} forms", max));
-			all_valid = false;
 		}
 
-		all_valid
+		if self.errors.is_empty() {
+			Ok(())
+		} else {
+			Err(ModelFormError::ModelValidation {
+				errors: self.errors.clone(),
+			})
+		}
 	}
 
 	/// Get validation errors
@@ -259,6 +265,7 @@ where
 
 	/// Save all forms in the formset
 	pub async fn save(&mut self, executor: &mut dyn OrmExecutor) -> Result<Vec<T>, ModelFormError> {
+		self.validate_cardinality()?;
 		for form in &mut self.forms {
 			form.build_instance()?;
 		}
@@ -483,6 +490,8 @@ impl FormSetFactory {
 mod tests {
 	use super::*;
 	use std::collections::VecDeque;
+	use std::sync::Arc;
+	use std::sync::atomic::{AtomicUsize, Ordering};
 
 	use reinhardt_core::exception::{DatabaseError, DatabaseErrorKind, Error};
 	use reinhardt_db::orm::connection::{
@@ -490,6 +499,7 @@ mod tests {
 	};
 	use reinhardt_macros::model;
 	use serde::{Deserialize, Serialize};
+	use serde_json::json;
 
 	// Test model implementation
 	#[model(
@@ -768,6 +778,71 @@ mod tests {
 			Some(DatabaseErrorKind::Timeout)
 		);
 		assert_eq!(executor.fetch_one_calls, 2);
+	}
+
+	#[test]
+	fn test_model_formset_save_reuses_preflight_candidate() {
+		let mut data = TestModelModelFormData::<AllEditableModelFields>::empty();
+		data.set_name("candidate".to_owned());
+		data.set_email("candidate@example.com".to_owned());
+		let cleaner_calls = Arc::new(AtomicUsize::new(0));
+		let cleaner_calls_for_field = Arc::clone(&cleaner_calls);
+		let mut form = ModelForm::<TestModel>::from_payload(data);
+		form.form_mut()
+			.add_field_clean_function("name", move |value| {
+				let call = cleaner_calls_for_field.fetch_add(1, Ordering::SeqCst) + 1;
+				Ok(json!(format!(
+					"{}-{call}",
+					value.as_str().expect("name cleaner receives text")
+				)))
+			});
+		let mut formset = ModelFormSet::<TestModel>::new("test".to_owned());
+		formset.add_form(form).unwrap();
+		let mut executor = FormsetExecutor::new([Ok(test_model_row(1, "candidate-1"))]);
+
+		let saved = tokio_test::block_on(formset.save(&mut executor)).unwrap();
+
+		assert_eq!(saved[0].name, "candidate-1");
+		assert_eq!(cleaner_calls.load(Ordering::SeqCst), 1);
+		assert_eq!(executor.fetch_one_calls, 1);
+	}
+
+	#[test]
+	fn test_model_formset_save_rejects_below_minimum_before_persistence() {
+		let mut formset = ModelFormSet::<TestModel>::new("test".to_owned()).with_min_num(2);
+		formset.add_form(model_form(test_model(1, "only"))).unwrap();
+		let mut executor = FormsetExecutor::new([Ok(test_model_row(1, "only"))]);
+
+		let error = tokio_test::block_on(formset.save(&mut executor)).unwrap_err();
+
+		assert!(matches!(
+			error,
+			ModelFormError::ModelValidation { errors }
+				if errors == ["Please submit at least 2 forms"]
+		));
+		assert_eq!(executor.fetch_one_calls, 0);
+	}
+
+	#[test]
+	fn test_model_formset_save_rejects_above_maximum_before_persistence() {
+		let mut formset = ModelFormSet::<TestModel>::new("test".to_owned()).with_max_num(Some(1));
+		formset.forms_mut().push(model_form(test_model(1, "first")));
+		formset
+			.forms_mut()
+			.push(model_form(test_model(2, "second")));
+		let mut executor = FormsetExecutor::new([
+			Ok(test_model_row(1, "first")),
+			Ok(test_model_row(2, "second")),
+		]);
+
+		let error = tokio_test::block_on(formset.save(&mut executor)).unwrap_err();
+
+		assert!(matches!(
+			error,
+			ModelFormError::ModelValidation { errors }
+				if errors == ["Please submit no more than 1 forms"]
+		));
+		assert_eq!(executor.fetch_one_calls, 0);
 	}
 
 	#[test]

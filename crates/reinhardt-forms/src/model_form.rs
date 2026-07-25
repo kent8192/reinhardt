@@ -356,7 +356,7 @@ mod tests {
 	)]
 	#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
 	struct UuidRecord {
-		#[field(primary_key = true)]
+		#[field(primary_key = true, include_in_new = false)]
 		id: uuid::Uuid,
 		#[field(max_length = 200)]
 		title: String,
@@ -404,6 +404,38 @@ mod tests {
 		title: String,
 		#[field(max_length = 200, editable = false)]
 		audit_actor: String,
+	}
+
+	#[model(
+		app_label = "forms",
+		table_name = "model_form_skipped_default_records",
+		form = true,
+		info = false
+	)]
+	#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+	struct SkippedDefaultRecord {
+		#[field(primary_key = true)]
+		id: Option<i64>,
+		#[field(max_length = 200)]
+		title: String,
+		#[field(max_length = 200, skip = true)]
+		system_value: String,
+	}
+
+	#[model(
+		app_label = "forms",
+		table_name = "model_form_excluded_from_new_records",
+		form = true,
+		info = false
+	)]
+	#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+	struct ExcludedFromNewRecord {
+		#[field(primary_key = true)]
+		id: Option<i64>,
+		#[field(max_length = 200)]
+		title: String,
+		#[field(max_length = 200, include_in_new = false)]
+		system_value: String,
 	}
 
 	struct QuestionPolicy;
@@ -589,6 +621,30 @@ mod tests {
 	}
 
 	#[test]
+	fn generated_model_form_default_initializes_skipped_field() {
+		let mut data = SkippedDefaultRecordModelFormData::<AllEditableModelFields>::empty();
+		data.set_title("Skipped default".to_owned());
+
+		let mut form = ModelForm::<SkippedDefaultRecord>::from_payload(data);
+		let built = form.build_instance().unwrap();
+
+		assert_eq!(built.title, "Skipped default");
+		assert_eq!(built.system_value, "");
+	}
+
+	#[test]
+	fn generated_model_form_default_initializes_field_excluded_from_new() {
+		let mut data = ExcludedFromNewRecordModelFormData::<AllEditableModelFields>::empty();
+		data.set_title("Excluded default".to_owned());
+
+		let mut form = ModelForm::<ExcludedFromNewRecord>::from_payload(data);
+		let built = form.build_instance().unwrap();
+
+		assert_eq!(built.title, "Excluded default");
+		assert_eq!(built.system_value, "");
+	}
+
+	#[test]
 	fn generated_model_form_applies_cleaned_values_before_model_validation() {
 		let data = question_payload("  cleaned title  ", 5);
 		let mut form = ModelForm::<Question, QuestionPolicy>::from_payload(data)
@@ -676,7 +732,7 @@ mod tests {
 	}
 
 	#[test]
-	fn generated_uuid_model_form_retries_create_with_same_dynamic_default() {
+	fn generated_uuid_model_form_include_in_new_false_retries_create_with_same_dynamic_default() {
 		let mut data = UuidRecordModelFormData::<AllEditableModelFields>::empty();
 		data.set_title("UUID create".to_owned());
 		let mut form = ModelForm::<UuidRecord>::from_payload(data);

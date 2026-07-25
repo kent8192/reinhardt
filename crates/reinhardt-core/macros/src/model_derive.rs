@@ -2098,13 +2098,6 @@ fn model_form_declared_default(field: &FieldInfo) -> Option<TokenStream> {
 	})
 }
 
-fn model_form_has_automatic_value(field: &FieldInfo) -> bool {
-	is_auto_generated_field(field)
-		&& !field.config.skip
-		&& field.config.include_in_new != Some(false)
-		&& !field.is_fk_id_field
-}
-
 fn generate_model_form_support(
 	struct_name: &Ident,
 	struct_vis: &syn::Visibility,
@@ -2311,7 +2304,7 @@ fn generate_model_form_support(
 		.find(|field| {
 			if is_model_form_editable(field)
 				|| model_form_declared_default(field).is_some()
-				|| model_form_has_automatic_value(field)
+				|| is_auto_generated_field(field)
 			{
 				return false;
 			}
@@ -2331,6 +2324,8 @@ fn generate_model_form_support(
 					&& field.config.default.is_none();
 				let unresolved = if let Some(default) = model_form_declared_default(field) {
 					default
+				} else if is_auto_generated_field(field) {
+					get_auto_field_default_value(field)
 				} else if required {
 					quote! {
 						return ::core::result::Result::Err(
@@ -2353,7 +2348,7 @@ fn generate_model_form_support(
 				let required = !is_optional && field.config.blank != Some(true);
 				let default = if let Some(default) = model_form_declared_default(field) {
 					default
-				} else if model_form_has_automatic_value(field) {
+				} else if is_auto_generated_field(field) {
 					get_auto_field_default_value(field)
 				} else if required {
 					quote! {

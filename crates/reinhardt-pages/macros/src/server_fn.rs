@@ -524,6 +524,7 @@ pub(crate) fn generate_internal_server_fn(
 		func,
 		options: ServerFnOptions {
 			endpoint: Some(endpoint),
+			auto_register: false,
 			..ServerFnOptions::default()
 		},
 		metadata_name: Some(metadata_name),
@@ -546,7 +547,10 @@ pub(crate) fn generate_internal_server_fn_with_tokens(
 ) -> proc_macro2::TokenStream {
 	let info = ServerFnInfo {
 		func,
-		options: ServerFnOptions::default(),
+		options: ServerFnOptions {
+			auto_register: false,
+			..ServerFnOptions::default()
+		},
 		metadata_name: None,
 		endpoint_tokens: Some(endpoint),
 		metadata_name_tokens: Some(metadata_name),
@@ -2377,6 +2381,41 @@ mod tests {
 		assert!(generated.contains("module_path !"));
 		assert!(generated.contains("MODULE_PATH"));
 		assert!(generated.contains("__reinhardt_auto_register_vote"));
+	}
+
+	#[test]
+	fn internal_server_fn_generators_omit_native_auto_registration() {
+		use syn::parse_quote;
+
+		let generated = generate_internal_server_fn(
+			parse_quote! {
+				async fn list() -> Result<(), ServerFnError> {
+					Ok(())
+				}
+			},
+			"/api/server_fn/articles/list".to_string(),
+			"articles-list".to_string(),
+			false,
+			false,
+		)
+		.to_string();
+		let generated_with_tokens = generate_internal_server_fn_with_tokens(
+			parse_quote! {
+				async fn create() -> Result<(), ServerFnError> {
+					Ok(())
+				}
+			},
+			quote!("/api/server_fn/articles/create"),
+			quote!("articles-create"),
+			false,
+			true,
+		)
+		.to_string();
+
+		for generated in [generated, generated_with_tokens] {
+			assert!(!generated.contains("ServerFnInventoryEntry"));
+			assert!(!generated.contains("__reinhardt_auto_register_"));
+		}
 	}
 
 	#[test]

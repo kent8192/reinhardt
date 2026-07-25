@@ -1,13 +1,13 @@
-error[E0277]: the trait bound `i32: reinhardt_core::reactive::deps::Trackable` is not satisfied
+error[E0277]: the trait bound `i32: reinhardt_pages::__private::reinhardt_core::reactive::deps::Trackable` is not satisfied
  --> tests/ui/hooks/fail/non_trackable_dep.rs:9:3
   |
 9 |         deps![42_i32],
   |         ^^^^^^^^^^^^^
   |         |
-  |         the trait `reinhardt_core::reactive::deps::Trackable` is not implemented for `i32`
+  |         the trait `reinhardt_pages::__private::reinhardt_core::reactive::deps::Trackable` is not implemented for `i32`
   |         required by a bound introduced by this call
   |
-  = help: the following other types implement trait `reinhardt_core::reactive::deps::Trackable`:
+  = help: the following other types implement trait `reinhardt_pages::__private::reinhardt_core::reactive::deps::Trackable`:
             &T
             Action<T, E>
             AuthSignal<T>

@@ -6,4 +6,6 @@ mod schema;
 pub use policy::{
 	AllEditableModelFields, ModelFormPayload, ModelFormPayloadError, ModelFormPolicy,
 };
-pub use schema::{ModelFormFieldDescriptor, ModelFormFieldKind, ModelFormSchema};
+pub use schema::{
+	ModelFormFieldDescriptor, ModelFormFieldKind, ModelFormPrimaryKey, ModelFormSchema,
+};

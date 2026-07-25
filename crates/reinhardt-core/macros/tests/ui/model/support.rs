@@ -104,6 +104,68 @@ pub mod model_info {
 	}
 }
 
+pub mod model_form {
+	pub trait ModelFormPolicy: Send + Sync + 'static {
+		fn allows(field: &str) -> bool;
+	}
+
+	pub struct AllEditableModelFields;
+
+	impl ModelFormPolicy for AllEditableModelFields {
+		fn allows(_field: &str) -> bool {
+			true
+		}
+	}
+
+	pub trait ModelFormSchema {
+		type Model;
+		fn fields() -> &'static [ModelFormFieldDescriptor];
+	}
+
+	pub trait ModelFormPayload<P: ModelFormPolicy>: Sized {
+		fn supplied_fields(&self) -> Vec<&'static str>;
+		fn forbidden_fields(&self) -> &[&'static str];
+		fn get_json(&self, field: &str) -> Option<serde_json::Value>;
+		fn set_json(&mut self, field: &str, value: serde_json::Value) -> Result<(), ModelFormPayloadError>;
+	}
+	#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+	pub enum ModelFormFieldKind {
+		Text { max_length: Option<usize>, multiline: bool },
+		Email { max_length: Option<usize> },
+		Url { max_length: Option<usize> },
+		Integer { min: Option<i64>, max: Option<i64> },
+		Float,
+		Decimal,
+		Boolean,
+		Date,
+		Time,
+		DateTime,
+		Uuid,
+		Json,
+	}
+
+	pub trait ModelFormPrimaryKey {
+		const FIELD_KIND: ModelFormFieldKind;
+	}
+
+	#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+	pub struct ModelFormFieldDescriptor {
+		pub name: &'static str,
+		pub kind: ModelFormFieldKind,
+		pub required: bool,
+		pub has_default: bool,
+		pub editable: bool,
+		pub generated_relation_id: bool,
+	}
+
+	#[derive(Debug, Clone, PartialEq, Eq)]
+	pub enum ModelFormPayloadError {
+		UnknownField { field: String },
+		ForbiddenField { field: String },
+		InvalidValue { field: String, message: String },
+	}
+}
+
 pub mod db {
 	pub mod m2m_naming {
 		pub fn default_through_table(source_table: &str, field_name: &str) -> String {

@@ -71,9 +71,27 @@ pub trait ModelFormSchema {
 	fn fields() -> &'static [ModelFormFieldDescriptor];
 }
 
+/// Supplies the target-neutral form kind for a model primary key.
+///
+/// This allows generated foreign-key identifiers to use their target model's
+/// actual scalar input kind without importing ORM metadata on shared targets.
+pub trait ModelFormPrimaryKey {
+	/// The target-neutral input kind for this model's primary key.
+	const FIELD_KIND: ModelFormFieldKind;
+}
+
 #[cfg(test)]
 mod tests {
-	use crate::model_form::{ModelFormFieldDescriptor, ModelFormFieldKind};
+	use crate::model_form::{ModelFormFieldDescriptor, ModelFormFieldKind, ModelFormPrimaryKey};
+
+	struct TextPrimaryKey;
+
+	impl ModelFormPrimaryKey for TextPrimaryKey {
+		const FIELD_KIND: ModelFormFieldKind = ModelFormFieldKind::Text {
+			max_length: Some(64),
+			multiline: false,
+		};
+	}
 
 	#[test]
 	fn descriptor_keeps_required_and_default_independent() {
@@ -91,5 +109,16 @@ mod tests {
 
 		assert!(descriptor.required);
 		assert!(!descriptor.has_default);
+	}
+
+	#[test]
+	fn primary_key_kind_is_available_without_orm_metadata() {
+		assert_eq!(
+			TextPrimaryKey::FIELD_KIND,
+			ModelFormFieldKind::Text {
+				max_length: Some(64),
+				multiline: false,
+			}
+		);
 	}
 }

@@ -1560,8 +1560,8 @@ fn map_type_to_field_type(ty: &Type, config: &FieldConfig) -> Result<TokenStream
 		return map_explicit_field_type(explicit_type, &migrations_crate);
 	}
 
-	// Extract the inner type if it's Option<T>
-	let (_is_option, inner_ty) = extract_option_type(ty);
+	// Extract the innermost type when the field uses nested Option wrappers.
+	let inner_ty = extract_nested_option_type(ty);
 
 	let field_type = match inner_ty {
 		Type::Path(type_path) => {
@@ -1650,7 +1650,7 @@ fn map_type_to_field_type(ty: &Type, config: &FieldConfig) -> Result<TokenStream
 }
 
 fn is_builtin_model_field_type(ty: &Type) -> bool {
-	let (_is_option, inner_ty) = extract_option_type(ty);
+	let inner_ty = extract_nested_option_type(ty);
 	let Type::Path(type_path) = inner_ty else {
 		return false;
 	};
@@ -1673,7 +1673,7 @@ fn is_builtin_model_field_type(ty: &Type) -> bool {
 }
 
 fn builtin_storage_kind(ty: &Type, orm_crate: &TokenStream) -> Option<TokenStream> {
-	let (_is_option, inner_ty) = extract_option_type(ty);
+	let inner_ty = extract_nested_option_type(ty);
 	let Type::Path(type_path) = inner_ty else {
 		return None;
 	};
@@ -1954,6 +1954,13 @@ fn extract_option_type(ty: &Type) -> (bool, &Type) {
 	(false, ty)
 }
 
+fn extract_nested_option_type(mut ty: &Type) -> &Type {
+	while let (true, inner_ty) = extract_option_type(ty) {
+		ty = inner_ty;
+	}
+	ty
+}
+
 fn is_model_form_editable(field: &FieldInfo) -> bool {
 	if field.config.skip || field.config.primary_key || field.config.editable == Some(false) {
 		return false;
@@ -1969,7 +1976,7 @@ fn is_model_form_editable(field: &FieldInfo) -> bool {
 
 fn model_form_kind(field: &FieldInfo) -> Result<TokenStream> {
 	let core_crate = get_reinhardt_core_crate();
-	let (_, inner_ty) = extract_option_type(&field.ty);
+	let inner_ty = extract_nested_option_type(&field.ty);
 	let unsupported = || {
 		Err(syn::Error::new_spanned(
 			&field.name,
@@ -2036,13 +2043,35 @@ fn model_form_kind(field: &FieldInfo) -> Result<TokenStream> {
 		}
 		"Uuid" => quote!(#core_crate::model_form::ModelFormFieldKind::Uuid),
 		"Json" | "Value" | "HashMap" => quote!(#core_crate::model_form::ModelFormFieldKind::Json),
-		"PrimaryKey" if field.is_fk_id_field => {
-			quote!(#core_crate::model_form::ModelFormFieldKind::Integer { min: ::core::option::Option::None, max: ::core::option::Option::None })
-		}
 		_ => return unsupported(),
 	};
 
 	Ok(kind)
+}
+
+fn model_form_relation_id_kind(
+	field: &FieldInfo,
+	field_infos: &[FieldInfo],
+) -> Result<TokenStream> {
+	let core_crate = get_reinhardt_core_crate();
+	let field_name = field.name.to_string();
+	let relation_name = field_name.strip_suffix("_id").ok_or_else(|| {
+		syn::Error::new_spanned(
+			&field.name,
+			"generated relation id field must end with `_id`",
+		)
+	})?;
+	let relation = field_infos
+		.iter()
+		.find(|candidate| candidate.name == relation_name)
+		.and_then(|candidate| extract_fk_target_type(&candidate.ty))
+		.ok_or_else(|| {
+			syn::Error::new_spanned(
+				&field.name,
+				"generated relation id field has no foreign-key target",
+			)
+		})?;
+	Ok(quote!(<#relation as #core_crate::model_form::ModelFormPrimaryKey>::FIELD_KIND))
 }
 
 fn generate_model_form_support(
@@ -2070,9 +2099,33 @@ fn generate_model_form_support(
 	let field_count = editable_fields.len();
 	let field_kinds: Vec<_> = editable_fields
 		.iter()
-		.map(|field| model_form_kind(field))
+		.map(|field| {
+			if field.is_fk_id_field {
+				model_form_relation_id_kind(field, field_infos)
+			} else {
+				model_form_kind(field)
+			}
+		})
 		.collect::<Result<_>>()?;
 	let field_names: Vec<_> = editable_fields.iter().map(|field| &field.name).collect();
+	let field_name_strings: HashSet<_> = editable_fields
+		.iter()
+		.map(|field| field.name.to_string())
+		.collect();
+	for field in &editable_fields {
+		let field_name = field.name.to_string();
+		if matches!(
+			field_name.as_str(),
+			"empty" | "forbidden_fields" | "_policy"
+		) || (field_name.starts_with("set_")
+			&& field_name_strings.contains(field_name.trim_start_matches("set_")))
+		{
+			return Err(syn::Error::new_spanned(
+				&field.name,
+				"editable model field name collides with generated model-form API; rename the field or set editable = false",
+			));
+		}
+	}
 	let field_types: Vec<_> = editable_fields.iter().map(|field| &field.ty).collect();
 	let field_literals: Vec<_> = editable_fields
 		.iter()
@@ -3214,6 +3267,7 @@ fn generate_setter_methods(struct_name: &syn::Ident, field_infos: &[FieldInfo]) 
 pub(crate) fn model_derive_impl(mut input: DeriveInput) -> Result<TokenStream> {
 	// Get the dynamically resolved crate paths
 	let reinhardt = get_reinhardt_crate();
+	let core_crate = get_reinhardt_core_crate();
 	let orm_crate = get_reinhardt_orm_crate();
 
 	// Make all fields module-local (non-pub)
@@ -3677,6 +3731,17 @@ pub(crate) fn model_derive_impl(mut input: DeriveInput) -> Result<TokenStream> {
 	let field_selector_struct = generate_field_selector_struct(struct_name, &field_infos);
 
 	let (info_impl_generics, info_ty_generics, info_where_clause) = generics.split_for_impl();
+	let model_form_primary_key_impl = if is_composite_pk {
+		quote! {}
+	} else if let Ok(kind) = model_form_kind(pk_fields[0]) {
+		quote! {
+			impl #info_impl_generics #core_crate::model_form::ModelFormPrimaryKey for #struct_name #info_ty_generics #info_where_clause {
+				const FIELD_KIND: #core_crate::model_form::ModelFormFieldKind = #kind;
+			}
+		}
+	} else {
+		quote! {}
+	};
 	let info_model_impl = if model_config.server_only {
 		quote! {
 			#[cfg(not(all(target_family = "wasm", target_os = "unknown")))]
@@ -3710,6 +3775,7 @@ pub(crate) fn model_derive_impl(mut input: DeriveInput) -> Result<TokenStream> {
 	};
 	let shared_info_output = quote! {
 		#info_model_impl
+		#model_form_primary_key_impl
 		#info_struct
 	};
 

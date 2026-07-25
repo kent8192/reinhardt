@@ -137,10 +137,15 @@ setter to supply an excluded editable value from a trusted source.
 - **ModelFormSet**: Formset for model instances
   - Generated payload and policy integration
   - Asynchronous ordered persistence through a caller-owned executor
-  - Full cardinality and candidate preflight before the first write
+  - Full candidate preflight before the first write
+  - Persistence stops at the first error
   - Inline formset support
   - Configuration via `ModelFormSetConfig`
   - Builder pattern API via `ModelFormSetBuilder`
+
+- **AdvancedModelFormSet**: Cardinality-aware model formset
+  - `min_num` and `max_num` validation before candidate preflight
+  - Asynchronous ordered persistence through a caller-owned executor
 
 ### Advanced Features
 

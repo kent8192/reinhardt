@@ -224,11 +224,14 @@ reapply model defaults over excluded data.
 ## Formsets
 
 `ModelFormSet::save(executor).await` uses the same caller-owned executor and
-returns saved models in form order. Before the first write it enforces
-`min_num` and `max_num`, validates every form, and builds every candidate.
-Persistence stops at the first error. This preflight prevents a later invalid
-form or cardinality failure from following earlier writes; use a transaction
-when the complete multi-row operation must be atomic.
+returns saved models in form order. It builds every candidate before the first
+write and stops persistence at the first error.
+
+Use `AdvancedModelFormSet` when the save operation must also enforce `min_num`
+and `max_num`. It checks cardinality first, then validates and builds every
+candidate before persistence. This preflight prevents a later invalid form or
+cardinality failure from following earlier writes; use a transaction when the
+complete multi-row operation must be atomic.
 
 Inline formsets also save asynchronously. They save the parent first, apply
 the saved parent key to child payloads through the trusted construction path,

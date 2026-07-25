@@ -19,6 +19,8 @@
 //! facade and its prelude exports:
 //!
 //! ```rust,no_run
+//! # #[cfg(feature = "forms")]
+//! # mod generated_model_form_facade {
 //! use reinhardt::forms::{
 //!     FormModel,
 //!     ModelForm,
@@ -38,6 +40,8 @@
 //!     let _ = std::any::type_name::<ModelForm<T, P>>();
 //!     let _ = std::any::type_name::<ModelFormError>();
 //! }
+//! # }
+//! # fn main() {}
 //! ```
 //!
 //! ## Feature Flags

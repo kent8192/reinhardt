@@ -309,6 +309,53 @@ fn test_collectstatic_basic_copy(collectstatic_command: (TempDir, CollectStaticC
 	assert!(stats.copied > 0, "Should have copied at least one file");
 }
 
+#[rstest]
+fn test_collectstatic_without_hashing_removes_stale_manifest(
+	temp_with_static_files: (TempDir, PathBuf, PathBuf),
+) {
+	// Arrange
+	let (_temp_dir, source_dir, dest_dir) = temp_with_static_files;
+	let config = StaticFilesConfig {
+		static_url: "/static/".to_string(),
+		static_root: dest_dir.clone(),
+		staticfiles_dirs: vec![source_dir],
+		media_url: None,
+	};
+	let mut hashed_command = CollectStaticCommand::new(
+		config.clone(),
+		CollectStaticOptions {
+			enable_hashing: true,
+			verbosity: 0,
+			..Default::default()
+		},
+	);
+	hashed_command
+		.execute()
+		.expect("hashed collection succeeds");
+	assert!(dest_dir.join("manifest.json").is_file());
+
+	let mut unhashed_command = CollectStaticCommand::new(
+		config,
+		CollectStaticOptions {
+			enable_hashing: false,
+			verbosity: 0,
+			..Default::default()
+		},
+	);
+
+	// Act
+	unhashed_command
+		.execute()
+		.expect("unhashed collection succeeds");
+
+	// Assert
+	assert!(!dest_dir.join("manifest.json").exists());
+	assert_eq!(
+		fs::read(dest_dir.join("app.js")).expect("unhashed asset exists"),
+		b"console.log('app');"
+	);
+}
+
 /// Test: CollectStaticCommand dry run mode
 ///
 /// Category: Happy Path

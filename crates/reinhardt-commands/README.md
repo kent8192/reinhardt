@@ -93,7 +93,10 @@ while ensuring manifest-resolved `collectstatic` assets use the same URLs that
 application router instead of receiving the SPA index fallback.
 Unhashed source paths under `STATIC_URL` are resolved through
 `manifest.json`, allowing source HTML to reference stable asset names while
-the collected files retain fingerprinted names.
+the collected files retain fingerprinted names. This also applies when
+`STATIC_URL` is `/`; stable alias responses use a revalidating cache policy.
+Running collection with hashing disabled removes an older manifest so stale
+fingerprinted aliases cannot override the newly collected files.
 
 Patch application is gated by each mounted template's key and dynamic ABI.
 Patches for unloaded routes or branches are retained until their descriptor

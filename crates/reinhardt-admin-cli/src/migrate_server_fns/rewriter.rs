@@ -160,7 +160,7 @@ fn rewrite_module_items(
 			continue;
 		};
 		let original = item_use.clone();
-		if prune_use_tree(&mut item_use.tree, &removable).is_none() {
+		if prune_use_tree(&mut item_use.tree, &mut Vec::new(), &removable).is_none() {
 			edits.push(TextEdit::remove_item(&original));
 			continue;
 		}
@@ -272,6 +272,12 @@ impl<'ast> Visit<'ast> for FunctionAnalyzer<'_> {
 					self.server_fns,
 					self.imports,
 				));
+				for method in &methods {
+					for argument in &method.args {
+						self.visit_expr(argument);
+					}
+				}
+				self.visit_expr(methods[0].receiver.as_ref());
 				return;
 			}
 		}
@@ -468,12 +474,23 @@ impl VisitMut for ChainTransformer {
 			return;
 		}
 
+		visit_chain_children(method, self);
 		let original = std::mem::replace(expression, parse_quote!(()));
 		let cleaned = remove_server_fn_calls(original);
 		let mut automatic: ExprMethodCall =
 			parse_quote!(__reinhardt_router.auto_server_fns(module_path!()));
 		automatic.receiver = Box::new(cleaned);
 		*expression = Expr::MethodCall(automatic);
+	}
+}
+
+fn visit_chain_children(method: &mut ExprMethodCall, transformer: &mut ChainTransformer) {
+	for argument in &mut method.args {
+		transformer.visit_expr_mut(argument);
+	}
+	match method.receiver.as_mut() {
+		Expr::MethodCall(receiver) => visit_chain_children(receiver, transformer),
+		receiver => transformer.visit_expr_mut(receiver),
 	}
 }
 
@@ -615,11 +632,41 @@ fn used_bindings(items: &[Item], candidates: &BTreeSet<String>) -> BTreeSet<Stri
 		used: BTreeSet::new(),
 	};
 	for item in items {
-		if !matches!(item, Item::Use(_)) {
+		if let Item::Use(item_use) = item {
+			collect_use_tree_binding_uses(&item_use.tree, candidates, &mut visitor.used);
+		} else {
 			visitor.visit_item(item);
 		}
 	}
 	visitor.used
+}
+
+fn collect_use_tree_binding_uses(
+	tree: &UseTree,
+	candidates: &BTreeSet<String>,
+	used: &mut BTreeSet<String>,
+) {
+	let mut leaves = Vec::new();
+	let mut has_glob = false;
+	flatten_use_tree(tree, &mut Vec::new(), &mut leaves, &mut has_glob);
+	for leaf in leaves {
+		let Some(referenced) = use_tree_local_reference(&leaf.path) else {
+			continue;
+		};
+		let defines_same_binding =
+			leaf.binding == *referenced && leaf.path.last().is_some_and(|last| last == referenced);
+		if candidates.contains(referenced) && !defines_same_binding {
+			used.insert(referenced.clone());
+		}
+	}
+}
+
+fn use_tree_local_reference(path: &[String]) -> Option<&String> {
+	match path.first().map(String::as_str) {
+		Some("crate" | "super") | None => None,
+		Some("self") => path.get(1),
+		Some(_) => path.first(),
+	}
 }
 
 struct BindingUseVisitor<'a> {
@@ -641,16 +688,33 @@ impl<'ast> Visit<'ast> for BindingUseVisitor<'_> {
 	fn visit_item_use(&mut self, _item_use: &'ast ItemUse) {}
 }
 
-fn prune_use_tree(tree: &mut UseTree, removable: &BTreeSet<String>) -> Option<()> {
+fn prune_use_tree(
+	tree: &mut UseTree,
+	prefix: &mut Vec<String>,
+	removable: &BTreeSet<String>,
+) -> Option<()> {
 	match tree {
-		UseTree::Path(path) => prune_use_tree(&mut path.tree, removable),
-		UseTree::Name(name) => (!removable.contains(&name.ident.to_string())).then_some(()),
+		UseTree::Path(path) => {
+			prefix.push(path.ident.to_string());
+			let retained = prune_use_tree(&mut path.tree, prefix, removable);
+			prefix.pop();
+			retained
+		}
+		UseTree::Name(name) => {
+			let name = name.ident.to_string();
+			let binding = if name == "self" {
+				prefix.last().unwrap_or(&name)
+			} else {
+				&name
+			};
+			(!removable.contains(binding)).then_some(())
+		}
 		UseTree::Rename(rename) => (!removable.contains(&rename.rename.to_string())).then_some(()),
 		UseTree::Glob(_) => Some(()),
 		UseTree::Group(group) => {
 			let mut retained = syn::punctuated::Punctuated::new();
 			for mut item in std::mem::take(&mut group.items) {
-				if prune_use_tree(&mut item, removable).is_some() {
+				if prune_use_tree(&mut item, prefix, removable).is_some() {
 					retained.push(item);
 				}
 			}

@@ -5,6 +5,9 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 use tempfile::TempDir;
 
+#[cfg(unix)]
+use std::os::unix::fs::PermissionsExt;
+
 const REINHARDT_ADMIN: &str = env!("CARGO_BIN_EXE_reinhardt-admin");
 const FIXTURES: &str = concat!(
 	env!("CARGO_MANIFEST_DIR"),
@@ -45,6 +48,29 @@ fn router_path(root: &Path) -> PathBuf {
 	root.join("src/apps/polls/urls/server_router.rs")
 }
 
+fn write_file(root: &Path, relative: &str, contents: &str) {
+	let path = root.join(relative);
+	if let Some(parent) = path.parent() {
+		fs::create_dir_all(parent).expect("create source directory");
+	}
+	fs::write(path, contents).expect("write project file");
+}
+
+fn prepare_project(name: &str, manifest_targets: &str, files: &[(&str, &str)]) -> TempDir {
+	let temp = TempDir::new().expect("create temporary project");
+	write_file(
+		temp.path(),
+		"Cargo.toml",
+		&format!(
+			"[package]\nname = \"{name}\"\nversion = \"0.1.0\"\nedition = \"2024\"\n\n{manifest_targets}"
+		),
+	);
+	for (path, contents) in files {
+		write_file(temp.path(), path, contents);
+	}
+	temp
+}
+
 fn run_migrate(root: &Path, write: bool) -> Output {
 	let mut command = Command::new(REINHARDT_ADMIN);
 	command.arg("migrate-server-fns").arg(root);
@@ -66,8 +92,21 @@ fn assert_success(output: &Output) {
 	);
 }
 
+fn assert_failure(output: &Output) {
+	assert!(
+		!output.status.success(),
+		"command unexpectedly succeeded\nstdout:\n{}\nstderr:\n{}",
+		String::from_utf8_lossy(&output.stdout),
+		String::from_utf8_lossy(&output.stderr)
+	);
+}
+
 fn stdout(output: &Output) -> String {
 	String::from_utf8(output.stdout.clone()).expect("stdout is UTF-8")
+}
+
+fn stderr(output: &Output) -> String {
+	String::from_utf8(output.stderr.clone()).expect("stderr is UTF-8")
 }
 
 #[test]
@@ -155,5 +194,539 @@ fn write_is_idempotent() {
 	assert_eq!(
 		fs::read(router).expect("read router after second rewrite"),
 		after_first
+	);
+}
+
+#[test]
+fn resolves_alias_self_and_repeated_super_markers() {
+	let fixture = prepare_fixture("safe");
+	let router = router_path(fixture.path());
+	write_file(
+		fixture.path(),
+		"src/apps/polls/urls/server_router.rs",
+		r#"use crate::apps::polls::server_fn::get_questions as questions;
+use reinhardt::pages::server_fn::ServerFnRouterExt;
+use reinhardt::server_fn;
+use reinhardt::ServerRouter;
+
+#[server_fn]
+async fn local_status() {}
+
+pub fn server_url_patterns() -> ServerRouter {
+	ServerRouter::new()
+		.server_fn(questions::marker)
+		.server_fn(self::local_status::marker)
+		.server_fn(super::super::server_fn::vote::marker)
+}
+"#,
+	);
+
+	let output = run_migrate(fixture.path(), true);
+
+	assert_success(&output);
+	assert_eq!(
+		stdout(&output),
+		"rewrote: src/apps/polls/urls/server_router.rs\n"
+	);
+	assert_eq!(
+		fs::read_to_string(router).expect("read rewritten router"),
+		r#"use reinhardt::pages::server_fn::ServerFnRouterExt;
+use reinhardt::server_fn;
+use reinhardt::ServerRouter;
+
+#[server_fn]
+async fn local_status() {}
+
+pub fn server_url_patterns() -> ServerRouter {
+	ServerRouter::new()
+		.auto_server_fns(module_path!())
+}
+"#
+	);
+}
+
+#[test]
+fn glob_import_is_reported_as_unresolved_and_left_byte_identical() {
+	let fixture = prepare_fixture("safe");
+	let router = router_path(fixture.path());
+	write_file(
+		fixture.path(),
+		"src/apps/polls/urls/server_router.rs",
+		r#"use crate::apps::polls::server_fn::*;
+use reinhardt::pages::server_fn::ServerFnRouterExt;
+use reinhardt::ServerRouter;
+
+pub fn server_url_patterns() -> ServerRouter {
+	ServerRouter::new()
+		.server_fn(get_questions::marker)
+}
+"#,
+	);
+	let before = fs::read(&router).expect("read glob router");
+
+	let output = run_migrate(fixture.path(), false);
+
+	assert_success(&output);
+	assert_eq!(
+		stdout(&output),
+		"skipped unresolved marker `get_questions`: src/apps/polls/urls/server_router.rs:7\n"
+	);
+	assert_eq!(fs::read(router).expect("read skipped router"), before);
+}
+
+#[test]
+fn root_escape_is_reported_as_unresolved_and_left_byte_identical() {
+	let fixture = prepare_project(
+		"root_escape",
+		"[lib]\npath = \"src/lib.rs\"\n",
+		&[(
+			"src/lib.rs",
+			r#"pub fn server_url_patterns() {
+	router()
+		.server_fn(super::missing::marker)
+}
+"#,
+		)],
+	);
+	let source = fixture.path().join("src/lib.rs");
+	let before = fs::read(&source).expect("read root escape source");
+
+	let output = run_migrate(fixture.path(), true);
+
+	assert_success(&output);
+	assert_eq!(
+		stdout(&output),
+		"skipped unresolved marker `missing`: src/lib.rs:3\n"
+	);
+	assert_eq!(fs::read(source).expect("read skipped source"), before);
+}
+
+#[test]
+fn ambiguous_server_function_is_reported_and_left_byte_identical() {
+	let fixture = prepare_project(
+		"ambiguous",
+		"[lib]\npath = \"src/lib.rs\"\n",
+		&[(
+			"src/lib.rs",
+			r#"#[server_fn]
+#[cfg(feature = "first")]
+async fn duplicated() {}
+
+#[server_fn]
+#[cfg(not(feature = "first"))]
+async fn duplicated() {}
+
+pub fn server_url_patterns() {
+	router()
+		.server_fn(duplicated::marker)
+}
+"#,
+		)],
+	);
+	let source = fixture.path().join("src/lib.rs");
+	let before = fs::read(&source).expect("read ambiguous source");
+
+	let output = run_migrate(fixture.path(), true);
+
+	assert_success(&output);
+	assert_eq!(
+		stdout(&output),
+		"skipped unresolved marker `duplicated`: src/lib.rs:11\n"
+	);
+	assert_eq!(fs::read(source).expect("read skipped source"), before);
+}
+
+#[test]
+fn server_fnset_chain_is_reported_as_mixed_and_left_byte_identical() {
+	let fixture = prepare_project(
+		"server_fnset",
+		"[lib]\npath = \"src/lib.rs\"\n",
+		&[(
+			"src/lib.rs",
+			r#"pub fn server_url_patterns() {
+	router()
+		.server_fnset(manual_set())
+}
+"#,
+		)],
+	);
+	let source = fixture.path().join("src/lib.rs");
+	let before = fs::read(&source).expect("read server_fnset source");
+
+	let output = run_migrate(fixture.path(), true);
+
+	assert_success(&output);
+	assert_eq!(
+		stdout(&output),
+		"skipped mixed registration: src/lib.rs:3\n"
+	);
+	assert_eq!(fs::read(source).expect("read skipped source"), before);
+}
+
+#[test]
+fn pre_existing_automatic_chain_is_silent_and_left_byte_identical() {
+	let fixture = prepare_project(
+		"already_automatic",
+		"[lib]\npath = \"src/lib.rs\"\n",
+		&[(
+			"src/lib.rs",
+			r#"#[server_fn]
+async fn ready() {}
+
+pub fn server_url_patterns() {
+	router()
+		.server_fn(ready::marker)
+		.auto_server_fns(module_path!())
+}
+"#,
+		)],
+	);
+	let source = fixture.path().join("src/lib.rs");
+	let before = fs::read(&source).expect("read automatic source");
+
+	let output = run_migrate(fixture.path(), true);
+
+	assert_success(&output);
+	assert_eq!(stdout(&output), "");
+	assert_eq!(fs::read(source).expect("read unchanged source"), before);
+}
+
+#[test]
+fn import_used_by_pub_use_is_preserved_after_marker_removal() {
+	let fixture = prepare_fixture("safe");
+	let router = router_path(fixture.path());
+	write_file(
+		fixture.path(),
+		"src/apps/polls/urls/server_router.rs",
+		r#"use crate::apps::polls::server_fn::get_questions;
+pub use self::get_questions::marker as QuestionsMarker;
+use reinhardt::pages::server_fn::ServerFnRouterExt;
+use reinhardt::ServerRouter;
+
+pub fn server_url_patterns() -> ServerRouter {
+	ServerRouter::new()
+		.server_fn(get_questions::marker)
+}
+"#,
+	);
+
+	let output = run_migrate(fixture.path(), true);
+
+	assert_success(&output);
+	assert_eq!(
+		fs::read_to_string(router).expect("read rewritten router"),
+		r#"use crate::apps::polls::server_fn::get_questions;
+pub use self::get_questions::marker as QuestionsMarker;
+use reinhardt::pages::server_fn::ServerFnRouterExt;
+use reinhardt::ServerRouter;
+
+pub fn server_url_patterns() -> ServerRouter {
+	ServerRouter::new()
+		.auto_server_fns(module_path!())
+}
+"#
+	);
+}
+
+#[test]
+fn nested_opted_out_chain_skips_the_whole_router_function() {
+	let fixture = prepare_fixture("mixed");
+	let router = router_path(fixture.path());
+	write_file(
+		fixture.path(),
+		"src/apps/polls/urls/server_router.rs",
+		r#"use crate::apps::polls::server_fn::{automatic, manual};
+use reinhardt::pages::server_fn::ServerFnRouterExt;
+use reinhardt::ServerRouter;
+
+pub fn server_url_patterns() -> ServerRouter {
+	ServerRouter::new()
+		.mount("/nested", ServerRouter::new().server_fn(manual::marker))
+		.server_fn(automatic::marker)
+}
+"#,
+	);
+	let before = fs::read(&router).expect("read nested mixed router");
+
+	let output = run_migrate(fixture.path(), true);
+
+	assert_success(&output);
+	assert_eq!(
+		stdout(&output),
+		"skipped mixed registration: src/apps/polls/urls/server_router.rs:7\n"
+	);
+	assert_eq!(fs::read(router).expect("read skipped router"), before);
+}
+
+#[test]
+fn nested_unresolved_chain_skips_the_whole_router_function() {
+	let fixture = prepare_fixture("safe");
+	let router = router_path(fixture.path());
+	write_file(
+		fixture.path(),
+		"src/apps/polls/urls/server_router.rs",
+		r#"use crate::apps::polls::server_fn::automatic;
+use reinhardt::pages::server_fn::ServerFnRouterExt;
+use reinhardt::ServerRouter;
+
+pub fn server_url_patterns() -> ServerRouter {
+	ServerRouter::new()
+		.mount("/nested", ServerRouter::new().server_fn(missing::marker))
+		.server_fn(automatic::marker)
+}
+"#,
+	);
+	write_file(
+		fixture.path(),
+		"src/apps/polls/server_fn.rs",
+		r#"use reinhardt::server_fn;
+
+#[server_fn]
+pub async fn automatic() {}
+"#,
+	);
+	let before = fs::read(&router).expect("read nested unresolved router");
+
+	let output = run_migrate(fixture.path(), true);
+
+	assert_success(&output);
+	assert_eq!(
+		stdout(&output),
+		"skipped unresolved marker `missing`: src/apps/polls/urls/server_router.rs:7\n"
+	);
+	assert_eq!(fs::read(router).expect("read skipped router"), before);
+}
+
+#[test]
+fn nested_safe_chains_are_each_rewritten_once() {
+	let fixture = prepare_fixture("safe");
+	let router = router_path(fixture.path());
+	write_file(
+		fixture.path(),
+		"src/apps/polls/urls/server_router.rs",
+		r#"use crate::apps::polls::server_fn::{get_questions, vote};
+use reinhardt::pages::server_fn::ServerFnRouterExt;
+use reinhardt::ServerRouter;
+
+pub fn server_url_patterns() -> ServerRouter {
+	ServerRouter::new()
+		.mount(
+			"/nested",
+			ServerRouter::new().server_fn(get_questions::marker),
+		)
+		.server_fn(vote::marker)
+}
+"#,
+	);
+
+	let output = run_migrate(fixture.path(), true);
+
+	assert_success(&output);
+	assert_eq!(
+		fs::read_to_string(router).expect("read rewritten router"),
+		r#"use reinhardt::pages::server_fn::ServerFnRouterExt;
+use reinhardt::ServerRouter;
+
+pub fn server_url_patterns() -> ServerRouter {
+	ServerRouter::new()
+		.mount(
+			"/nested",
+			ServerRouter::new().auto_server_fns(module_path!()),
+		)
+		.auto_server_fns(module_path!())
+}
+"#
+	);
+}
+
+#[test]
+fn grouped_self_import_is_removed_with_its_effective_binding() {
+	let fixture = prepare_fixture("safe");
+	let router = router_path(fixture.path());
+	write_file(
+		fixture.path(),
+		"src/apps/polls/urls/server_router.rs",
+		r#"use crate::apps::polls::server_fn::{self};
+use reinhardt::pages::server_fn::ServerFnRouterExt;
+use reinhardt::ServerRouter;
+
+pub fn server_url_patterns() -> ServerRouter {
+	ServerRouter::new()
+		.server_fn(server_fn::get_questions::marker)
+}
+"#,
+	);
+
+	let output = run_migrate(fixture.path(), true);
+
+	assert_success(&output);
+	assert_eq!(
+		fs::read_to_string(router).expect("read rewritten router"),
+		r#"use reinhardt::pages::server_fn::ServerFnRouterExt;
+use reinhardt::ServerRouter;
+
+pub fn server_url_patterns() -> ServerRouter {
+	ServerRouter::new()
+		.auto_server_fns(module_path!())
+}
+"#
+	);
+}
+
+#[test]
+fn nonstandard_target_root_resolves_child_module_from_target_parent() {
+	let fixture = prepare_project(
+		"nonstandard_target",
+		"[[test]]\nname = \"social\"\npath = \"tests/social.rs\"\n",
+		&[
+			("src/lib.rs", ""),
+			(
+				"tests/social.rs",
+				r#"#[path = "support/child.rs"]
+mod child;
+
+pub fn server_url_patterns() {
+	router()
+		.server_fn(child::status::marker)
+}
+"#,
+			),
+			(
+				"tests/support/child.rs",
+				r#"#[server_fn]
+pub async fn status() {}
+"#,
+			),
+		],
+	);
+	let source = fixture.path().join("tests/social.rs");
+
+	let output = run_migrate(fixture.path(), true);
+
+	assert_success(&output);
+	assert_eq!(stdout(&output), "rewrote: tests/social.rs\n");
+	assert_eq!(
+		fs::read_to_string(source).expect("read rewritten target"),
+		r#"#[path = "support/child.rs"]
+mod child;
+
+pub fn server_url_patterns() {
+	router()
+		.auto_server_fns(module_path!())
+}
+"#
+	);
+}
+
+#[test]
+fn path_module_named_lib_uses_non_root_child_directory_rules() {
+	let fixture = prepare_project(
+		"path_module_lib",
+		"[[test]]\nname = \"social\"\npath = \"tests/social.rs\"\n",
+		&[
+			("src/lib.rs", ""),
+			(
+				"tests/social.rs",
+				r#"#[path = "support/lib.rs"]
+mod support;
+
+pub fn server_url_patterns() {
+	router()
+		.server_fn(support::child::status::marker)
+}
+"#,
+			),
+			("tests/support/lib.rs", "pub mod child;\n"),
+			(
+				"tests/support/lib/child.rs",
+				r#"#[server_fn]
+pub async fn status() {}
+"#,
+			),
+		],
+	);
+	let source = fixture.path().join("tests/social.rs");
+
+	let output = run_migrate(fixture.path(), true);
+
+	assert_success(&output);
+	assert_eq!(stdout(&output), "rewrote: tests/social.rs\n");
+	assert_eq!(
+		fs::read_to_string(source).expect("read rewritten target"),
+		r#"#[path = "support/lib.rs"]
+mod support;
+
+pub fn server_url_patterns() {
+	router()
+		.auto_server_fns(module_path!())
+}
+"#
+	);
+}
+
+#[test]
+fn metadata_failure_exits_nonzero() {
+	let missing_manifest = TempDir::new().expect("create metadata failure directory");
+	let metadata_output = run_migrate(missing_manifest.path(), false);
+	assert_failure(&metadata_output);
+	assert!(
+		stderr(&metadata_output).starts_with("error: failed to load Cargo metadata:"),
+		"unexpected metadata error: {}",
+		stderr(&metadata_output)
+	);
+}
+
+#[test]
+fn parse_failure_exits_nonzero() {
+	let invalid_source = prepare_project(
+		"invalid_source",
+		"[lib]\npath = \"src/lib.rs\"\n",
+		&[("src/lib.rs", "pub fn broken( {\n")],
+	);
+	let parse_output = run_migrate(invalid_source.path(), false);
+	assert_failure(&parse_output);
+	assert!(
+		stderr(&parse_output).starts_with("error: failed to parse `"),
+		"unexpected parse error: {}",
+		stderr(&parse_output)
+	);
+}
+
+#[cfg(unix)]
+#[test]
+fn write_io_failure_exits_nonzero() {
+	struct RestorePermissions {
+		path: PathBuf,
+		permissions: fs::Permissions,
+	}
+
+	impl Drop for RestorePermissions {
+		fn drop(&mut self) {
+			fs::set_permissions(&self.path, self.permissions.clone())
+				.expect("restore router permissions");
+		}
+	}
+
+	let fixture = prepare_fixture("safe");
+	let router = router_path(fixture.path());
+	let permissions = fs::metadata(&router)
+		.expect("read router metadata")
+		.permissions();
+	let _restore = RestorePermissions {
+		path: router.clone(),
+		permissions: permissions.clone(),
+	};
+	let mut read_only = permissions;
+	read_only.set_mode(0o444);
+	fs::set_permissions(&router, read_only).expect("make router read-only");
+
+	let output = run_migrate(fixture.path(), true);
+
+	assert_failure(&output);
+	assert_eq!(stdout(&output), "");
+	assert!(
+		stderr(&output).starts_with("error: failed to access `"),
+		"unexpected IO error: {}",
+		stderr(&output)
 	);
 }

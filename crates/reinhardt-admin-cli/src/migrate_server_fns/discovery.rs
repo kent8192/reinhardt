@@ -61,7 +61,7 @@ impl ProjectIndex {
 					continue;
 				}
 				let target_key = format!("{}::{}::{}", package.id, target.name, source.display());
-				scanner.scan_external_module(target_key, Vec::new(), source.to_path_buf())?;
+				scanner.scan_external_module(target_key, Vec::new(), source.to_path_buf(), true)?;
 			}
 		}
 
@@ -91,6 +91,7 @@ impl Scanner {
 		target: TargetKey,
 		module: ModulePath,
 		path: PathBuf,
+		is_target_root: bool,
 	) -> Result<()> {
 		let path = path
 			.canonicalize()
@@ -125,7 +126,7 @@ impl Scanner {
 			path: path.clone(),
 			relative_path,
 		});
-		let module_directory = child_module_directory(&path);
+		let module_directory = child_module_directory(&path, is_target_root);
 		self.scan_items(&target, &module, &module_directory, &parsed.items)
 	}
 
@@ -178,14 +179,17 @@ impl Scanner {
 		let Some(path) = find_external_module(module_directory, item_mod) else {
 			return Ok(());
 		};
-		self.scan_external_module(target.clone(), child_module, path)
+		self.scan_external_module(target.clone(), child_module, path, false)
 	}
 }
 
-fn child_module_directory(path: &Path) -> PathBuf {
+fn child_module_directory(path: &Path, is_target_root: bool) -> PathBuf {
 	let parent = path.parent().unwrap_or(Path::new(""));
+	if is_target_root {
+		return parent.to_path_buf();
+	}
 	match path.file_name().and_then(|name| name.to_str()) {
-		Some("lib.rs" | "main.rs" | "mod.rs") => parent.to_path_buf(),
+		Some("mod.rs") => parent.to_path_buf(),
 		_ => parent.join(path.file_stem().unwrap_or_default()),
 	}
 }

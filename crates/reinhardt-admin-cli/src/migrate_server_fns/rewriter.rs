@@ -2,13 +2,14 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 use std::path::PathBuf;
 
-use proc_macro2::{LineColumn, Span};
+use proc_macro2::{LineColumn, Span, TokenStream, TokenTree};
 use quote::ToTokens;
 use syn::spanned::Spanned;
 use syn::visit::{self, Visit};
 use syn::visit_mut::{self, VisitMut};
 use syn::{
-	Expr, ExprMethodCall, ExprPath, File, Item, ItemFn, ItemUse, Path, UseTree, parse_quote,
+	Attribute, Expr, ExprMethodCall, ExprPath, File, Item, ItemFn, ItemUse, Macro, Path, Stmt,
+	UseTree, parse_quote,
 };
 
 use super::discovery::{ModulePath, ServerFnIndex, ServerFnKey, TargetKey};
@@ -200,39 +201,59 @@ fn rewrite_router_function(
 		return FunctionOutcome::Unchanged;
 	}
 
-	let mut removable_bindings = BTreeSet::new();
-	let mut edits = Vec::new();
-	for chain in &analyzer.chains {
-		match chain {
-			ChainOutcome::AlreadyAutomatic => return FunctionOutcome::Unchanged,
-			ChainOutcome::Mixed(line) => {
-				return FunctionOutcome::Skipped(Skipped {
-					line: *line,
-					kind: ReportKind::MixedRegistration,
-				});
-			}
-			ChainOutcome::Unresolved { name, line } => {
-				return FunctionOutcome::Skipped(Skipped {
-					line: *line,
-					kind: ReportKind::UnresolvedMarker(name.clone()),
-				});
-			}
-			ChainOutcome::Safe {
-				bindings,
-				edits: chain_edits,
-			} => {
-				removable_bindings.extend(bindings.iter().cloned());
-				edits.extend(chain_edits.iter().cloned());
-			}
-		}
+	if analyzer.chains.len() != 1 {
+		let line = analyzer.chains.get(1).unwrap_or(&analyzer.chains[0]).line;
+		return FunctionOutcome::Skipped(Skipped {
+			line,
+			kind: ReportKind::MixedRegistration,
+		});
 	}
 
+	let analyzed = analyzer.chains.pop().expect("one chain was analyzed");
+	if tail_registration_chain(&function.block) != Some(analyzed.location) {
+		return FunctionOutcome::Skipped(Skipped {
+			line: analyzed.line,
+			kind: ReportKind::MixedRegistration,
+		});
+	}
+	let (removable_bindings, edits) = match analyzed.outcome {
+		ChainOutcome::AlreadyAutomatic => return FunctionOutcome::Unchanged,
+		ChainOutcome::Mixed(line) => {
+			return FunctionOutcome::Skipped(Skipped {
+				line,
+				kind: ReportKind::MixedRegistration,
+			});
+		}
+		ChainOutcome::Unresolved { name, line } => {
+			return FunctionOutcome::Skipped(Skipped {
+				line,
+				kind: ReportKind::UnresolvedMarker(name),
+			});
+		}
+		ChainOutcome::Safe { bindings, edits } => (bindings, edits),
+	};
+
 	let mut transformer = ChainTransformer;
-	transformer.visit_block_mut(&mut function.block);
+	let Stmt::Expr(tail, None) = function
+		.block
+		.stmts
+		.last_mut()
+		.expect("the analyzed tail chain exists")
+	else {
+		unreachable!("the analyzed chain was verified as the tail expression");
+	};
+	transformer.visit_expr_mut(tail);
 	FunctionOutcome::Rewritten {
 		bindings: removable_bindings,
 		edits,
 	}
+}
+
+fn tail_registration_chain(block: &syn::Block) -> Option<LineColumn> {
+	let Stmt::Expr(Expr::MethodCall(method), None) = block.stmts.last()? else {
+		return None;
+	};
+	is_registration_chain(method).then(|| method.method.span().start())
 }
 
 enum ChainOutcome {
@@ -253,25 +274,31 @@ struct FunctionAnalyzer<'a> {
 	module: &'a ModulePath,
 	server_fns: &'a ServerFnIndex,
 	imports: &'a ImportIndex,
-	chains: Vec<ChainOutcome>,
+	chains: Vec<AnalyzedChain>,
+}
+
+struct AnalyzedChain {
+	outcome: ChainOutcome,
+	line: usize,
+	location: LineColumn,
 }
 
 impl<'ast> Visit<'ast> for FunctionAnalyzer<'_> {
 	fn visit_expr(&mut self, expression: &'ast Expr) {
 		if let Expr::MethodCall(method) = expression {
 			let methods = receiver_chain(method);
-			if methods.iter().any(|call| {
-				call.method == "server_fn"
-					|| call.method == "server_fnset"
-					|| call.method == "auto_server_fns"
-			}) {
-				self.chains.push(analyze_chain(
-					&methods,
-					self.target,
-					self.module,
-					self.server_fns,
-					self.imports,
-				));
+			if is_registration_chain(method) {
+				self.chains.push(AnalyzedChain {
+					outcome: analyze_chain(
+						&methods,
+						self.target,
+						self.module,
+						self.server_fns,
+						self.imports,
+					),
+					line: span_line(method.method.span()),
+					location: method.method.span().start(),
+				});
 				for method in &methods {
 					for argument in &method.args {
 						self.visit_expr(argument);
@@ -283,6 +310,14 @@ impl<'ast> Visit<'ast> for FunctionAnalyzer<'_> {
 		}
 		visit::visit_expr(self, expression);
 	}
+}
+
+fn is_registration_chain(method: &ExprMethodCall) -> bool {
+	receiver_chain(method).iter().any(|call| {
+		call.method == "server_fn"
+			|| call.method == "server_fnset"
+			|| call.method == "auto_server_fns"
+	})
 }
 
 fn receiver_chain(method: &ExprMethodCall) -> Vec<&ExprMethodCall> {
@@ -685,7 +720,42 @@ impl<'ast> Visit<'ast> for BindingUseVisitor<'_> {
 		visit::visit_path(self, path);
 	}
 
+	fn visit_macro(&mut self, mac: &'ast Macro) {
+		collect_token_binding_uses(mac.tokens.clone(), self.candidates, &mut self.used);
+		visit::visit_macro(self, mac);
+	}
+
+	fn visit_attribute(&mut self, attribute: &'ast Attribute) {
+		collect_token_binding_uses(
+			attribute.meta.to_token_stream(),
+			self.candidates,
+			&mut self.used,
+		);
+		visit::visit_attribute(self, attribute);
+	}
+
 	fn visit_item_use(&mut self, _item_use: &'ast ItemUse) {}
+}
+
+fn collect_token_binding_uses(
+	tokens: TokenStream,
+	candidates: &BTreeSet<String>,
+	used: &mut BTreeSet<String>,
+) {
+	for token in tokens {
+		match token {
+			TokenTree::Group(group) => {
+				collect_token_binding_uses(group.stream(), candidates, used);
+			}
+			TokenTree::Ident(ident) => {
+				let binding = ident.to_string();
+				if candidates.contains(&binding) {
+					used.insert(binding);
+				}
+			}
+			TokenTree::Literal(_) | TokenTree::Punct(_) => {}
+		}
+	}
 }
 
 fn prune_use_tree(

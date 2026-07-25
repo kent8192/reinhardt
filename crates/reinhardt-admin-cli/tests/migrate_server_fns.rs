@@ -492,13 +492,13 @@ pub async fn automatic() {}
 	assert_success(&output);
 	assert_eq!(
 		stdout(&output),
-		"skipped unresolved marker `missing`: src/apps/polls/urls/server_router.rs:7\n"
+		"skipped mixed registration: src/apps/polls/urls/server_router.rs:7\n"
 	);
 	assert_eq!(fs::read(router).expect("read skipped router"), before);
 }
 
 #[test]
-fn nested_safe_chains_are_each_rewritten_once() {
+fn nested_safe_chains_are_skipped_to_preserve_mount_topology() {
 	let fixture = prepare_fixture("safe");
 	let router = router_path(fixture.path());
 	write_file(
@@ -518,21 +518,163 @@ pub fn server_url_patterns() -> ServerRouter {
 }
 "#,
 	);
+	let before = fs::read(&router).expect("read nested safe router");
+
+	let output = run_migrate(fixture.path(), true);
+
+	assert_success(&output);
+	assert_eq!(
+		stdout(&output),
+		"skipped mixed registration: src/apps/polls/urls/server_router.rs:9\n"
+	);
+	assert_eq!(fs::read(router).expect("read skipped router"), before);
+}
+
+#[test]
+fn multiple_router_values_are_skipped_byte_identical() {
+	let fixture = prepare_fixture("safe");
+	let router = router_path(fixture.path());
+	write_file(
+		fixture.path(),
+		"src/apps/polls/urls/server_router.rs",
+		r#"use crate::apps::polls::server_fn::{get_questions, vote};
+use reinhardt::pages::server_fn::ServerFnRouterExt;
+use reinhardt::ServerRouter;
+
+pub fn server_url_patterns() -> ServerRouter {
+	let first = ServerRouter::new()
+		.server_fn(get_questions::marker);
+	ServerRouter::new()
+		.server_fn(vote::marker)
+}
+"#,
+	);
+	let before = fs::read(&router).expect("read multiple router values");
+
+	let output = run_migrate(fixture.path(), true);
+
+	assert_success(&output);
+	assert_eq!(
+		stdout(&output),
+		"skipped mixed registration: src/apps/polls/urls/server_router.rs:9\n"
+	);
+	assert_eq!(fs::read(router).expect("read skipped router"), before);
+}
+
+#[test]
+fn branch_router_values_are_skipped_byte_identical() {
+	let fixture = prepare_fixture("safe");
+	let router = router_path(fixture.path());
+	write_file(
+		fixture.path(),
+		"src/apps/polls/urls/server_router.rs",
+		r#"use crate::apps::polls::server_fn::{get_questions, vote};
+use reinhardt::pages::server_fn::ServerFnRouterExt;
+use reinhardt::ServerRouter;
+
+pub fn server_url_patterns(condition: bool) -> ServerRouter {
+	if condition {
+		ServerRouter::new()
+			.server_fn(get_questions::marker)
+	} else {
+		ServerRouter::new()
+			.server_fn(vote::marker)
+	}
+}
+"#,
+	);
+	let before = fs::read(&router).expect("read branch router values");
+
+	let output = run_migrate(fixture.path(), true);
+
+	assert_success(&output);
+	assert_eq!(
+		stdout(&output),
+		"skipped mixed registration: src/apps/polls/urls/server_router.rs:11\n"
+	);
+	assert_eq!(fs::read(router).expect("read skipped router"), before);
+}
+
+#[test]
+fn macro_token_use_preserves_import_after_marker_removal() {
+	let fixture = prepare_fixture("safe");
+	let router = router_path(fixture.path());
+	write_file(
+		fixture.path(),
+		"src/apps/polls/urls/server_router.rs",
+		r#"use crate::apps::polls::server_fn::vote;
+use reinhardt::pages::server_fn::ServerFnRouterExt;
+use reinhardt::ServerRouter;
+
+macro_rules! keep_marker {
+	($marker:path) => {};
+}
+
+pub fn server_url_patterns() -> ServerRouter {
+	keep_marker!(vote::marker);
+	ServerRouter::new()
+		.server_fn(vote::marker)
+}
+"#,
+	);
 
 	let output = run_migrate(fixture.path(), true);
 
 	assert_success(&output);
 	assert_eq!(
 		fs::read_to_string(router).expect("read rewritten router"),
-		r#"use reinhardt::pages::server_fn::ServerFnRouterExt;
+		r#"use crate::apps::polls::server_fn::vote;
+use reinhardt::pages::server_fn::ServerFnRouterExt;
 use reinhardt::ServerRouter;
+
+macro_rules! keep_marker {
+	($marker:path) => {};
+}
+
+pub fn server_url_patterns() -> ServerRouter {
+	keep_marker!(vote::marker);
+	ServerRouter::new()
+		.auto_server_fns(module_path!())
+}
+"#
+	);
+}
+
+#[test]
+fn attribute_token_use_preserves_import_after_marker_removal() {
+	let fixture = prepare_fixture("safe");
+	let router = router_path(fixture.path());
+	write_file(
+		fixture.path(),
+		"src/apps/polls/urls/server_router.rs",
+		r#"use crate::apps::polls::server_fn::vote;
+use reinhardt::pages::server_fn::ServerFnRouterExt;
+use reinhardt::ServerRouter;
+
+#[keep_marker(vote::marker)]
+fn retained_attribute() {}
 
 pub fn server_url_patterns() -> ServerRouter {
 	ServerRouter::new()
-		.mount(
-			"/nested",
-			ServerRouter::new().auto_server_fns(module_path!()),
-		)
+		.server_fn(vote::marker)
+}
+"#,
+	);
+
+	let output = run_migrate(fixture.path(), true);
+
+	assert_success(&output);
+	assert_eq!(
+		fs::read_to_string(router).expect("read rewritten router"),
+		r#"use crate::apps::polls::server_fn::vote;
+use reinhardt::pages::server_fn::ServerFnRouterExt;
+use reinhardt::ServerRouter;
+
+#[keep_marker(vote::marker)]
+fn retained_attribute() {}
+
+pub fn server_url_patterns() -> ServerRouter {
+	ServerRouter::new()
 		.auto_server_fns(module_path!())
 }
 "#

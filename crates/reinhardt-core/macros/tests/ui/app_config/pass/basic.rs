@@ -2,6 +2,12 @@
 
 use reinhardt_macros::app_config;
 
+extern crate self as reinhardt_core;
+
+pub mod macros {
+	pub use reinhardt_macros::AppConfig;
+}
+
 mod basic_app {
 	use super::*;
 

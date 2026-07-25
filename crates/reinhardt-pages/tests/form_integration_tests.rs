@@ -147,6 +147,7 @@ fn model_form_builds_one_policy_safe_payload() {
 	let payload = state
 		.build_payload::<ModelFormQuestionData>()
 		.expect("selected control values should build one payload");
+	assert_eq!(payload.supplied_fields(), ["title"]);
 	assert_eq!(payload.get_json("title"), Some(serde_json::json!("Typed")));
 	assert_eq!(payload.get_json("owner_id"), None);
 }

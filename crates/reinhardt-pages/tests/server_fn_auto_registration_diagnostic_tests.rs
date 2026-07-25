@@ -59,8 +59,7 @@ mod orphan {
 #[test]
 fn inventory_diagnostics_are_exact_and_deterministically_sorted() {
 	let crate_module = module_path!();
-	let errors = validate_server_fn_inventory()
-		.expect_err("invalid inventory should return deterministic diagnostics");
+	let errors = validate_server_fn_inventory();
 	let actual = errors.iter().map(ToString::to_string).collect::<Vec<_>>();
 
 	assert_eq!(

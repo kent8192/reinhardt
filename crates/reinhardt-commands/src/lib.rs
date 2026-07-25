@@ -169,6 +169,9 @@ pub mod registry;
 /// Runserver lifecycle hooks for concurrent services and pre-listen validation.
 #[cfg(feature = "server")]
 pub mod runserver_hooks;
+/// System checks for native server function inventory configuration.
+#[cfg(not(all(target_family = "wasm", target_os = "unknown")))]
+pub mod server_fn_checks;
 /// Hot-reload server rebuild pipeline (cargo build + child process swap).
 #[cfg(feature = "autoreload")]
 #[doc(hidden)]

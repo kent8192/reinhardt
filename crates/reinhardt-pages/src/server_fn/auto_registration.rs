@@ -126,13 +126,13 @@ impl Display for ServerFnInventoryError {
 	}
 }
 
-/// Validates every native server function inventory entry linked into the binary.
-pub fn validate_server_fn_inventory() -> Result<(), Vec<ServerFnInventoryError>> {
+/// Returns every native server function inventory error linked into the binary.
+pub fn validate_server_fn_inventory() -> Vec<ServerFnInventoryError> {
 	let apps = iter_app_module_registrations().copied().collect::<Vec<_>>();
 	let entries = inventory::iter::<ServerFnInventoryEntry>()
 		.copied()
 		.collect::<Vec<_>>();
-	validate_entries(&apps, &entries)
+	validate_entries(&apps, &entries).err().unwrap_or_default()
 }
 
 /// Registers native inventory entries owned by the application containing `caller_module`.

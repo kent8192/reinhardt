@@ -118,6 +118,9 @@ pub trait BaseCommand: Send + Sync {
 	async fn run(&self, ctx: &CommandContext) -> CommandResult<()> {
 		// Run system checks if required and not skipped
 		if self.requires_system_checks() && !ctx.should_skip_checks() {
+			#[cfg(not(all(target_family = "wasm", target_os = "unknown")))]
+			crate::server_fn_checks::ensure_builtin_checks_registered();
+
 			let registry = CheckRegistry::global();
 			let registry_guard = registry.lock().unwrap_or_else(|poisoned| {
 				// Recover the inner value from a poisoned mutex.

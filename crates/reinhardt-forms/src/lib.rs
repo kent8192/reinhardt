@@ -47,13 +47,15 @@
 //! ### Model Form
 //!
 //! ```rust,ignore
-//! use reinhardt_forms::{ModelForm, ModelFormBuilder};
+//! use reinhardt_core::model_form::AllEditableModelFields;
+//! use reinhardt_forms::ModelForm;
 //!
-//! // Auto-generate form from User model
-//! let form = ModelFormBuilder::<User>::new()
-//!     .fields(vec!["username".to_string(), "email".to_string(), "bio".to_string()])
-//!     .exclude(vec!["password".to_string()])
-//!     .build();
+//! let mut data = UserModelFormData::<AllEditableModelFields>::empty();
+//! data.set_username("alice".to_owned());
+//! data.set_email("alice@example.com".to_owned());
+//!
+//! let mut form = ModelForm::<User>::from_payload(data);
+//! let candidate = form.build_instance()?;
 //! ```
 //!
 //! ## Available Field Types
@@ -166,7 +168,7 @@ pub use formsets::{
 	InlineFormSet,
 	ModelFormSet as AdvancedModelFormSet, // Renamed to avoid conflict
 };
-pub use model_form::{FieldType, FormModel, ModelForm, ModelFormBuilder, ModelFormConfig};
+pub use model_form::{FormModel, ModelForm, ModelFormError};
 pub use model_formset::{ModelFormSet, ModelFormSetBuilder, ModelFormSetConfig};
 pub use validators::{SlugValidator, UrlValidator};
 pub use wizard::{FormWizard, WizardStep};

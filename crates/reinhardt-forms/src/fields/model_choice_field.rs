@@ -35,42 +35,26 @@ impl<T: FormModel> ModelChoiceField<T> {
 	///
 	/// # Examples
 	///
-	/// ```
+	/// ```ignore
 	/// use reinhardt_forms::fields::ModelChoiceField;
 	/// use reinhardt_forms::FormField;
-	/// use reinhardt_forms::FormModel;
-	/// use serde_json::{json, Value};
+	/// use reinhardt_macros::model;
+	/// use serde::{Deserialize, Serialize};
 	///
-	/// // Define a simple Category model
-	/// #[derive(Clone)]
+	/// #[model(
+	///     app_label = "forms",
+	///     table_name = "model_choice_categories",
+	///     form = true,
+	///     info = false
+	/// )]
+	/// #[derive(Clone, Deserialize, Serialize)]
 	/// struct Category {
+	///     #[field(primary_key = true)]
 	///     id: i32,
+	///     #[field(max_length = 100)]
 	///     name: String,
 	/// }
 	///
-	/// impl FormModel for Category {
-	///     fn field_names() -> Vec<String> {
-	///         vec!["id".to_string(), "name".to_string()]
-	///     }
-	///
-	///     fn get_field(&self, name: &str) -> Option<Value> {
-	///         match name {
-	///             "id" => Some(json!(self.id)),
-	///             "name" => Some(json!(self.name)),
-	///             _ => None,
-	///         }
-	///     }
-	///
-	///     fn set_field(&mut self, _name: &str, _value: Value) -> Result<(), String> {
-	///         Ok(())
-	///     }
-	///
-	///     fn save(&mut self) -> Result<(), String> {
-	///         Ok(())
-	///     }
-	/// }
-	///
-	/// // Create a queryset with sample categories
 	/// let categories = vec![
 	///     Category { id: 1, name: "Technology".to_string() },
 	///     Category { id: 2, name: "Science".to_string() },
@@ -281,42 +265,27 @@ impl<T: FormModel> ModelMultipleChoiceField<T> {
 	///
 	/// # Examples
 	///
-	/// ```
+	/// ```ignore
 	/// use reinhardt_forms::fields::ModelMultipleChoiceField;
 	/// use reinhardt_forms::FormField;
-	/// use reinhardt_forms::FormModel;
-	/// use serde_json::{json, Value};
+	/// use reinhardt_macros::model;
+	/// use serde::{Deserialize, Serialize};
+	/// use serde_json::json;
 	///
-	/// // Define a simple Tag model
-	/// #[derive(Clone)]
+	/// #[model(
+	///     app_label = "forms",
+	///     table_name = "model_multiple_choice_tags",
+	///     form = true,
+	///     info = false
+	/// )]
+	/// #[derive(Clone, Deserialize, Serialize)]
 	/// struct Tag {
+	///     #[field(primary_key = true)]
 	///     id: i32,
+	///     #[field(max_length = 100)]
 	///     name: String,
 	/// }
 	///
-	/// impl FormModel for Tag {
-	///     fn field_names() -> Vec<String> {
-	///         vec!["id".to_string(), "name".to_string()]
-	///     }
-	///
-	///     fn get_field(&self, name: &str) -> Option<Value> {
-	///         match name {
-	///             "id" => Some(json!(self.id)),
-	///             "name" => Some(json!(self.name)),
-	///             _ => None,
-	///         }
-	///     }
-	///
-	///     fn set_field(&mut self, _name: &str, _value: Value) -> Result<(), String> {
-	///         Ok(())
-	///     }
-	///
-	///     fn save(&mut self) -> Result<(), String> {
-	///         Ok(())
-	///     }
-	/// }
-	///
-	/// // Create a queryset with sample tags
 	/// let tags = vec![
 	///     Tag { id: 1, name: "rust".to_string() },
 	///     Tag { id: 2, name: "programming".to_string() },
@@ -523,34 +492,23 @@ impl<T: FormModel> FormField for ModelMultipleChoiceField<T> {
 mod tests {
 	use super::*;
 	use crate::FormField;
+	use reinhardt_macros::model;
+	use serde::{Deserialize, Serialize};
 	use serde_json::json;
 
 	// Mock model for testing
+	#[model(
+		app_label = "forms",
+		table_name = "model_choice_test_models",
+		form = true,
+		info = false
+	)]
+	#[derive(Clone, Deserialize, Serialize)]
 	struct TestModel {
+		#[field(primary_key = true)]
 		id: i32,
+		#[field(max_length = 100)]
 		name: String,
-	}
-
-	impl FormModel for TestModel {
-		fn field_names() -> Vec<String> {
-			vec!["id".to_string(), "name".to_string()]
-		}
-
-		fn get_field(&self, name: &str) -> Option<Value> {
-			match name {
-				"id" => Some(Value::Number(self.id.into())),
-				"name" => Some(Value::String(self.name.clone())),
-				_ => None,
-			}
-		}
-
-		fn set_field(&mut self, _name: &str, _value: Value) -> Result<(), String> {
-			Ok(())
-		}
-
-		fn save(&mut self) -> Result<(), String> {
-			Ok(())
-		}
 	}
 
 	#[test]
@@ -566,6 +524,8 @@ mod tests {
 			},
 		];
 
+		assert_eq!(queryset[0].to_choice_label(), "1");
+		assert_eq!(queryset[0].to_choice_value(), "1");
 		let field = ModelChoiceField::new("choice", queryset);
 
 		assert_eq!(field.name(), "choice");

@@ -3,17 +3,16 @@
 //! ModelFormSets allow editing multiple model instances at once, handling
 //! creation, updates, and deletion in a single form submission.
 
-use crate::FormError;
 use crate::formset::FormSet;
-use crate::model_form::{FormModel, ModelForm, ModelFormConfig};
+use crate::model_form::{FormModel, ModelForm, ModelFormError};
+use reinhardt_core::model_form::{AllEditableModelFields, ModelFormPolicy};
+use reinhardt_db::orm::OrmExecutor;
 use std::collections::HashMap;
 use std::marker::PhantomData;
 
 /// Configuration for ModelFormSet
 #[derive(Debug, Clone)]
 pub struct ModelFormSetConfig {
-	/// Configuration for individual model forms
-	pub form_config: ModelFormConfig,
 	/// Allow deletion of instances
 	pub can_delete: bool,
 	/// Allow ordering of instances
@@ -29,7 +28,6 @@ pub struct ModelFormSetConfig {
 impl Default for ModelFormSetConfig {
 	fn default() -> Self {
 		Self {
-			form_config: ModelFormConfig::default(),
 			can_delete: false,
 			can_order: false,
 			extra: 1,
@@ -124,32 +122,25 @@ impl ModelFormSetConfig {
 		self.min_num = min_num;
 		self
 	}
-	/// Set the form configuration
-	///
-	/// # Examples
-	///
-	/// ```
-	/// use reinhardt_forms::{ModelFormSetConfig, ModelFormConfig};
-	///
-	/// let form_config = ModelFormConfig::new()
-	///     .fields(vec!["name".to_string(), "email".to_string()]);
-	/// let config = ModelFormSetConfig::new().with_form_config(form_config);
-	/// assert!(config.form_config.fields.is_some());
-	/// ```
-	pub fn with_form_config(mut self, form_config: ModelFormConfig) -> Self {
-		self.form_config = form_config;
-		self
-	}
 }
 
 /// A formset for managing multiple model instances
-pub struct ModelFormSet<T: FormModel> {
-	model_forms: Vec<ModelForm<T>>,
+pub struct ModelFormSet<T, P = AllEditableModelFields>
+where
+	T: FormModel,
+	P: ModelFormPolicy,
+{
+	model_forms: Vec<ModelForm<T, P>>,
 	formset: FormSet,
-	_phantom: PhantomData<T>,
+	_phantom: PhantomData<(T, P)>,
 }
 
-impl<T: FormModel> ModelFormSet<T> {
+impl<T, P> ModelFormSet<T, P>
+where
+	T: FormModel,
+	P: ModelFormPolicy,
+	T::Data<P>: Default,
+{
 	/// Create a new ModelFormSet with instances
 	///
 	/// # Examples
@@ -167,13 +158,14 @@ impl<T: FormModel> ModelFormSet<T> {
 
 		// Create ModelForm for each instance
 		for instance in instances {
-			let model_form = ModelForm::new(Some(instance), config.form_config.clone());
+			let model_form =
+				ModelForm::from_payload_and_instance(T::Data::<P>::default(), instance);
 			model_forms.push(model_form);
 		}
 
 		// Add extra empty forms
 		for _ in 0..config.extra {
-			let model_form = ModelForm::empty(config.form_config.clone());
+			let model_form = ModelForm::from_payload(T::Data::<P>::default());
 			model_forms.push(model_form);
 		}
 
@@ -269,23 +261,15 @@ impl<T: FormModel> ModelFormSet<T> {
 	/// let mut formset = ModelFormSet::<MyModel>::empty("formset".to_string(), config);
 	/// let result = formset.save();
 	/// ```
-	pub fn save(&mut self) -> Result<Vec<T>, FormError> {
-		if !self.is_valid() {
-			return Err(FormError::Validation("Formset is not valid".to_string()));
-		}
-
-		let mut saved_instances = Vec::new();
-
-		// Iterate through each ModelForm and save if it has changes
+	pub async fn save(&mut self, executor: &mut dyn OrmExecutor) -> Result<Vec<T>, ModelFormError> {
 		for model_form in &mut self.model_forms {
-			// Check if form has an instance (skip empty forms)
-			if model_form.instance().is_some() {
-				// Save the instance
-				let instance = model_form.save()?;
-				saved_instances.push(instance);
-			}
+			model_form.build_instance()?;
 		}
 
+		let mut saved_instances = Vec::with_capacity(self.model_forms.len());
+		for model_form in &mut self.model_forms {
+			saved_instances.push(model_form.save(executor).await?);
+		}
 		Ok(saved_instances)
 	}
 	/// Get management form data for HTML rendering
@@ -308,12 +292,21 @@ impl<T: FormModel> ModelFormSet<T> {
 }
 
 /// Builder for creating ModelFormSet instances
-pub struct ModelFormSetBuilder<T: FormModel> {
+pub struct ModelFormSetBuilder<T, P = AllEditableModelFields>
+where
+	T: FormModel,
+	P: ModelFormPolicy,
+{
 	config: ModelFormSetConfig,
-	_phantom: PhantomData<T>,
+	_phantom: PhantomData<(T, P)>,
 }
 
-impl<T: FormModel> ModelFormSetBuilder<T> {
+impl<T, P> ModelFormSetBuilder<T, P>
+where
+	T: FormModel,
+	P: ModelFormPolicy,
+	T::Data<P>: Default,
+{
 	/// Create a new builder
 	///
 	/// # Examples
@@ -405,7 +398,7 @@ impl<T: FormModel> ModelFormSetBuilder<T> {
 	/// let builder = ModelFormSetBuilder::<MyModel>::new();
 	/// let formset = builder.build("formset".to_string(), instances);
 	/// ```
-	pub fn build(self, prefix: String, instances: Vec<T>) -> ModelFormSet<T> {
+	pub fn build(self, prefix: String, instances: Vec<T>) -> ModelFormSet<T, P> {
 		ModelFormSet::new(prefix, instances, self.config)
 	}
 	/// Build an empty formset
@@ -418,12 +411,17 @@ impl<T: FormModel> ModelFormSetBuilder<T> {
 	/// let builder = ModelFormSetBuilder::<MyModel>::new().extra(3);
 	/// let formset = builder.build_empty("formset".to_string());
 	/// ```
-	pub fn build_empty(self, prefix: String) -> ModelFormSet<T> {
+	pub fn build_empty(self, prefix: String) -> ModelFormSet<T, P> {
 		ModelFormSet::empty(prefix, self.config)
 	}
 }
 
-impl<T: FormModel> Default for ModelFormSetBuilder<T> {
+impl<T, P> Default for ModelFormSetBuilder<T, P>
+where
+	T: FormModel,
+	P: ModelFormPolicy,
+	T::Data<P>: Default,
+{
 	fn default() -> Self {
 		Self::new()
 	}
@@ -432,63 +430,24 @@ impl<T: FormModel> Default for ModelFormSetBuilder<T> {
 #[cfg(test)]
 mod tests {
 	use super::*;
-	use serde_json::Value;
+	use reinhardt_macros::model;
+	use serde::{Deserialize, Serialize};
 
 	// Mock model for testing
+	#[model(
+		app_label = "forms",
+		table_name = "model_formset_articles",
+		form = true,
+		info = false
+	)]
+	#[derive(Clone, Deserialize, Serialize)]
 	struct Article {
+		#[field(primary_key = true)]
 		id: i32,
+		#[field(max_length = 200)]
 		title: String,
+		#[field(max_length = 2_000)]
 		content: String,
-	}
-
-	impl FormModel for Article {
-		fn field_names() -> Vec<String> {
-			vec!["id".to_string(), "title".to_string(), "content".to_string()]
-		}
-
-		fn get_field(&self, name: &str) -> Option<Value> {
-			match name {
-				"id" => Some(Value::Number(self.id.into())),
-				"title" => Some(Value::String(self.title.clone())),
-				"content" => Some(Value::String(self.content.clone())),
-				_ => None,
-			}
-		}
-
-		fn set_field(&mut self, name: &str, value: Value) -> Result<(), String> {
-			match name {
-				"id" => {
-					if let Value::Number(n) = value {
-						self.id = n.as_i64().unwrap() as i32;
-						Ok(())
-					} else {
-						Err("Invalid type for id".to_string())
-					}
-				}
-				"title" => {
-					if let Value::String(s) = value {
-						self.title = s;
-						Ok(())
-					} else {
-						Err("Invalid type for title".to_string())
-					}
-				}
-				"content" => {
-					if let Value::String(s) = value {
-						self.content = s;
-						Ok(())
-					} else {
-						Err("Invalid type for content".to_string())
-					}
-				}
-				_ => Err(format!("Unknown field: {}", name)),
-			}
-		}
-
-		fn save(&mut self) -> Result<(), String> {
-			// Mock save
-			Ok(())
-		}
 	}
 
 	#[test]
@@ -531,7 +490,7 @@ mod tests {
 		];
 
 		let config = ModelFormSetConfig::new();
-		let formset = ModelFormSet::new("article".to_string(), instances, config);
+		let formset = ModelFormSet::<Article>::new("article".to_string(), instances, config);
 
 		assert_eq!(formset.instances().len(), 2);
 		assert_eq!(formset.form_count(), 2);

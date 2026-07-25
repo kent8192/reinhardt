@@ -35,7 +35,8 @@ use syn::{Ident, LitBool, LitStr, bracketed, parenthesized};
 
 use crate::crate_paths::{
 	get_linkme_crate, get_reinhardt_core_crate, get_reinhardt_crate, get_reinhardt_db_crate,
-	get_reinhardt_migrations_crate, get_reinhardt_orm_crate, get_serde_crate, get_serde_json_crate,
+	get_reinhardt_forms_crate, get_reinhardt_migrations_crate, get_reinhardt_orm_crate,
+	get_serde_crate, get_serde_json_crate,
 };
 use crate::identifier_case::to_snake_case;
 use crate::rel::RelAttribute;
@@ -2074,12 +2075,43 @@ fn model_form_relation_id_kind(
 	Ok(quote!(<#relation as #core_crate::model_form::ModelFormPrimaryKey>::FIELD_KIND))
 }
 
+fn model_form_declared_default(field: &FieldInfo) -> Option<TokenStream> {
+	let expression = field.config.default.as_ref()?;
+	let (is_optional, inner_ty) = extract_option_type(&field.ty);
+	let value = if is_string_type(inner_ty)
+		&& matches!(
+			expression,
+			syn::Expr::Lit(syn::ExprLit {
+				lit: syn::Lit::Str(_),
+				..
+			})
+		) {
+		quote!((#expression).to_owned())
+	} else {
+		quote!(#expression)
+	};
+
+	Some(if is_optional {
+		quote!(::core::option::Option::Some(#value))
+	} else {
+		value
+	})
+}
+
 fn generate_model_form_support(
 	struct_name: &Ident,
 	struct_vis: &syn::Visibility,
 	field_infos: &[FieldInfo],
 ) -> Result<TokenStream> {
 	let core_crate = get_reinhardt_core_crate();
+	let forms_crate = get_reinhardt_forms_crate();
+	let native_form_cfg = if forms_crate.is_some() {
+		quote!(#[cfg(not(all(target_family = "wasm", target_os = "unknown")))])
+	} else {
+		quote!(#[cfg(any())])
+	};
+	let forms_crate = forms_crate.unwrap_or_else(|| quote!(::reinhardt_forms));
+	let orm_crate = get_reinhardt_orm_crate();
 	let serde_crate = get_serde_crate();
 	let serde_json_crate = get_serde_json_crate();
 	let schema_name = Ident::new(&format!("{}FormSchema", struct_name), struct_name.span());
@@ -2267,6 +2299,46 @@ fn generate_model_form_support(
 			|field_ty| quote!(#field_ty: #serde_crate::Serialize + #serde_crate::de::DeserializeOwned),
 		)
 		.collect();
+	let build_assignments = field_infos.iter().map(|field| {
+		let field_name = &field.name;
+		let field_literal = LitStr::new(&field.name.to_string(), field.name.span());
+		if is_model_form_editable(field) {
+			let (is_optional, _) = extract_option_type(&field.ty);
+			let required =
+				!is_optional && field.config.blank != Some(true) && field.config.default.is_none();
+			let unresolved = if let Some(default) = model_form_declared_default(field) {
+				default
+			} else if required {
+				quote! {
+					return ::core::result::Result::Err(
+						#forms_crate::model_form::ModelFormError::MissingModelField {
+							field: #field_literal,
+						},
+					)
+				}
+			} else {
+				quote!(::std::default::Default::default())
+			};
+			quote! {
+				#field_name: match data.#field_name.as_ref() {
+					::core::option::Option::Some(value) => value.clone(),
+					::core::option::Option::None => #unresolved,
+				}
+			}
+		} else {
+			let default = model_form_declared_default(field)
+				.unwrap_or_else(|| get_auto_field_default_value(field));
+			quote!(#field_name: #default)
+		}
+	});
+	let apply_payload_fields = editable_fields.iter().map(|field| {
+		let field_name = &field.name;
+		quote! {
+			if let ::core::option::Option::Some(value) = data.#field_name.as_ref() {
+				self.#field_name = value.clone();
+			}
+		}
+	});
 
 	Ok(quote! {
 		#struct_vis struct #schema_name;
@@ -2304,6 +2376,12 @@ fn generate_model_form_support(
 
 			#(#getters)*
 			#(#setters)*
+		}
+
+		impl<P: #core_crate::model_form::ModelFormPolicy> ::std::default::Default for #payload_name<P> {
+			fn default() -> Self {
+				Self::empty()
+			}
 		}
 
 		impl<P> #core_crate::model_form::ModelFormPayload<P> for #payload_name<P>
@@ -2403,6 +2481,78 @@ fn generate_model_form_support(
 					deserializer,
 					#visitor_name(::core::marker::PhantomData),
 				)
+			}
+		}
+
+		#native_form_cfg
+		impl #forms_crate::model_form::FormModel for #struct_name {
+			type Schema = #schema_name;
+			type Data<P: #core_crate::model_form::ModelFormPolicy> = #payload_name<P>;
+
+			fn build_from_payload<P: #core_crate::model_form::ModelFormPolicy>(
+				data: &Self::Data<P>,
+			) -> ::core::result::Result<Self, #forms_crate::model_form::ModelFormError> {
+				::core::result::Result::Ok(Self {
+					#(#build_assignments,)*
+				})
+			}
+
+			fn apply_payload<P: #core_crate::model_form::ModelFormPolicy>(
+				&mut self,
+				data: &Self::Data<P>,
+			) -> ::core::result::Result<(), #forms_crate::model_form::ModelFormError> {
+				#(#apply_payload_fields)*
+				::core::result::Result::Ok(())
+			}
+
+			async fn save(
+				&mut self,
+				executor: &mut dyn #orm_crate::connection::OrmExecutor,
+			) -> ::core::result::Result<(), #forms_crate::model_form::ModelFormError> {
+				let manager = <Self as #orm_crate::Model>::objects();
+				let primary_key = <Self as #orm_crate::Model>::primary_key(self);
+				let uses_zero_sentinel = <Self as #orm_crate::Model>::primary_key_uses_zero_sentinel()
+					&& primary_key
+						.as_ref()
+						.is_some_and(|value| value.to_string() == "0");
+				let result = if primary_key.is_some() && !uses_zero_sentinel {
+					#orm_crate::custom_manager::CustomManager::update_with_conn(
+						&manager,
+						executor,
+						self,
+					)
+					.await
+				} else {
+					#orm_crate::custom_manager::CustomManager::create_with_conn(
+						&manager,
+						executor,
+						self,
+					)
+					.await
+				};
+
+				match result {
+					::core::result::Result::Ok(saved) => {
+						*self = saved;
+						::core::result::Result::Ok(())
+					}
+					::core::result::Result::Err(error) => {
+						let source = match error {
+							#core_crate::exception::Error::Database(source) => source,
+							#core_crate::exception::Error::DatabaseWithSource {
+								database_error,
+								..
+							} => database_error,
+							other => #core_crate::exception::DatabaseError::new(
+								#core_crate::exception::DatabaseErrorKind::Query,
+								other.to_string(),
+							),
+						};
+						::core::result::Result::Err(
+							#forms_crate::model_form::ModelFormError::Persistence { source },
+						)
+					}
+				}
 			}
 		}
 	})

@@ -3,9 +3,11 @@
 //! This module provides advanced FormSet features including inline formsets,
 //! model-based formsets, and dynamic formset generation.
 
-use crate::FormError;
 use crate::formset::FormSet;
-use crate::model_form::{FormModel, ModelForm};
+use crate::model_form::{FormModel, ModelForm, ModelFormError};
+use reinhardt_core::model_form::{AllEditableModelFields, ModelFormPolicy};
+use reinhardt_db::orm::OrmExecutor;
+use serde::Serialize;
 use std::marker::PhantomData;
 
 /// InlineFormSet for managing forms related to a parent model
@@ -16,7 +18,7 @@ pub struct InlineFormSet<P: FormModel, C: FormModel> {
 	parent: P,
 	_formset: FormSet,
 	fk_field: String,
-	child_forms: Vec<ModelForm<C>>,
+	child_forms: Vec<ModelForm<C, AllEditableModelFields>>,
 	_phantom_parent: PhantomData<P>,
 	_phantom_child: PhantomData<C>,
 }
@@ -47,7 +49,7 @@ impl<P: FormModel, C: FormModel> InlineFormSet<P, C> {
 	}
 
 	/// Add a child form to the formset
-	pub fn add_child_form(&mut self, form: ModelForm<C>) {
+	pub fn add_child_form(&mut self, form: ModelForm<C, AllEditableModelFields>) {
 		self.child_forms.push(form);
 	}
 
@@ -62,7 +64,7 @@ impl<P: FormModel, C: FormModel> InlineFormSet<P, C> {
 	}
 
 	/// Get all child forms
-	pub fn child_forms(&self) -> &[ModelForm<C>] {
+	pub fn child_forms(&self) -> &[ModelForm<C, AllEditableModelFields>] {
 		&self.child_forms
 	}
 
@@ -74,27 +76,32 @@ impl<P: FormModel, C: FormModel> InlineFormSet<P, C> {
 	/// # Errors
 	///
 	/// Returns an error if any save operation fails or if the parent model
-	/// does not have an `id` field after saving.
-	pub fn save(&mut self) -> Result<(), FormError> {
-		// Save parent first
-		self.parent
-			.save()
-			.map_err(|e| FormError::Validation(format!("Failed to save parent: {}", e)))?;
-
-		// Get parent ID to set as foreign key on child instances
-		let parent_id = self.parent.get_field("id").ok_or_else(|| {
-			FormError::Validation("Parent model does not have an 'id' field".to_string())
-		})?;
+	/// does not expose a primary key after saving.
+	pub async fn save(&mut self, executor: &mut dyn OrmExecutor) -> Result<(), ModelFormError>
+	where
+		P::PrimaryKey: Serialize,
+	{
+		FormModel::save(&mut self.parent, executor).await?;
+		let parent_id = self
+			.parent
+			.primary_key()
+			.ok_or(ModelFormError::MissingModelField {
+				field: P::primary_key_field(),
+			})?;
+		let parent_id =
+			serde_json::to_value(parent_id).map_err(|error| ModelFormError::FieldValidation {
+				errors: std::collections::HashMap::from([(
+					self.fk_field.clone(),
+					vec![error.to_string()],
+				)]),
+			})?;
 
 		// Save each child with the foreign key set to the parent ID
 		let fk_field = self.fk_field.clone();
 		for child_form in &mut self.child_forms {
 			// Set the foreign key on the child instance before saving
-			child_form.set_field_value(&fk_field, parent_id.clone());
-
-			child_form
-				.save()
-				.map_err(|e| FormError::Validation(format!("Failed to save child: {}", e)))?;
+			child_form.set_field_value(&fk_field, parent_id.clone())?;
+			child_form.save(executor).await?;
 		}
 
 		Ok(())
@@ -117,8 +124,12 @@ impl<P: FormModel, C: FormModel> InlineFormSet<P, C> {
 /// ModelFormSet for managing multiple model instances
 ///
 /// This is similar to the base FormSet but specifically designed for model instances.
-pub struct ModelFormSet<T: FormModel> {
-	forms: Vec<ModelForm<T>>,
+pub struct ModelFormSet<T, P = AllEditableModelFields>
+where
+	T: FormModel,
+	P: ModelFormPolicy,
+{
+	forms: Vec<ModelForm<T, P>>,
 	prefix: String,
 	can_delete: bool,
 	can_order: bool,
@@ -126,10 +137,14 @@ pub struct ModelFormSet<T: FormModel> {
 	max_num: Option<usize>,
 	min_num: usize,
 	errors: Vec<String>,
-	_phantom: PhantomData<T>,
+	_phantom: PhantomData<(T, P)>,
 }
 
-impl<T: FormModel> ModelFormSet<T> {
+impl<T, P> ModelFormSet<T, P>
+where
+	T: FormModel,
+	P: ModelFormPolicy,
+{
 	/// Create a new ModelFormSet
 	///
 	/// # Examples
@@ -184,7 +199,7 @@ impl<T: FormModel> ModelFormSet<T> {
 	/// Add a model form to the formset.
 	///
 	/// Returns an error if adding the form would exceed `max_num`.
-	pub fn add_form(&mut self, form: ModelForm<T>) -> Result<(), String> {
+	pub fn add_form(&mut self, form: ModelForm<T, P>) -> Result<(), String> {
 		if let Some(max) = self.max_num
 			&& self.forms.len() >= max
 		{
@@ -198,12 +213,12 @@ impl<T: FormModel> ModelFormSet<T> {
 	}
 
 	/// Get all forms
-	pub fn forms(&self) -> &[ModelForm<T>] {
+	pub fn forms(&self) -> &[ModelForm<T, P>] {
 		&self.forms
 	}
 
 	/// Get mutable access to forms
-	pub fn forms_mut(&mut self) -> &mut Vec<ModelForm<T>> {
+	pub fn forms_mut(&mut self) -> &mut Vec<ModelForm<T, P>> {
 		&mut self.forms
 	}
 
@@ -243,19 +258,16 @@ impl<T: FormModel> ModelFormSet<T> {
 	}
 
 	/// Save all forms in the formset
-	pub fn save(&mut self) -> Result<(), FormError> {
-		if !self.is_valid() {
-			return Err(FormError::Validation(
-				"Cannot save invalid formset".to_string(),
-			));
-		}
-
+	pub async fn save(&mut self, executor: &mut dyn OrmExecutor) -> Result<Vec<T>, ModelFormError> {
 		for form in &mut self.forms {
-			form.save()
-				.map_err(|e| FormError::Validation(format!("Failed to save form: {}", e)))?;
+			form.build_instance()?;
+		}
+		let mut saved = Vec::with_capacity(self.forms.len());
+		for form in &mut self.forms {
+			saved.push(form.save(executor).await?);
 		}
 
-		Ok(())
+		Ok(saved)
 	}
 
 	/// Get the formset prefix
@@ -440,7 +452,24 @@ impl FormSetFactory {
 	///
 	/// let formset = factory.create_model_formset::<User>();
 	/// ```
-	pub fn create_model_formset<T: FormModel>(&self) -> ModelFormSet<T> {
+	pub fn create_model_formset<T>(&self) -> ModelFormSet<T, AllEditableModelFields>
+	where
+		T: FormModel,
+	{
+		ModelFormSet::new(self.prefix.clone())
+			.with_extra(self.extra)
+			.with_can_delete(self.can_delete)
+			.with_can_order(self.can_order)
+			.with_max_num(self.max_num)
+			.with_min_num(self.min_num)
+	}
+
+	/// Creates a model formset using an explicit generated field policy.
+	pub fn create_model_formset_with_policy<T, P>(&self) -> ModelFormSet<T, P>
+	where
+		T: FormModel,
+		P: ModelFormPolicy,
+	{
 		ModelFormSet::new(self.prefix.clone())
 			.with_extra(self.extra)
 			.with_can_delete(self.can_delete)
@@ -453,136 +482,136 @@ impl FormSetFactory {
 #[cfg(test)]
 mod tests {
 	use super::*;
-	use crate::ModelFormConfig;
-	use crate::model_form::FieldType;
-	use serde_json::Value;
+	use std::collections::VecDeque;
+
+	use reinhardt_core::exception::{DatabaseError, DatabaseErrorKind, Error};
+	use reinhardt_db::orm::connection::{
+		DatabaseBackend, OrmExecutor, QueryResult, QueryValue, Row,
+	};
+	use reinhardt_macros::model;
+	use serde::{Deserialize, Serialize};
 
 	// Test model implementation
-	#[derive(Clone)]
+	#[model(
+		app_label = "forms",
+		table_name = "advanced_formset_test_models",
+		form = true,
+		info = false
+	)]
+	#[derive(Clone, Deserialize, Serialize)]
 	struct TestModel {
+		#[field(primary_key = true)]
 		id: Option<i64>,
+		#[field(max_length = 100)]
 		name: String,
+		#[field(max_length = 254)]
 		email: String,
 	}
 
-	impl FormModel for TestModel {
-		fn field_names() -> Vec<String> {
-			vec!["id".to_string(), "name".to_string(), "email".to_string()]
-		}
-
-		fn field_type(name: &str) -> Option<FieldType> {
-			match name {
-				"id" => Some(FieldType::Integer),
-				"name" => Some(FieldType::Char {
-					max_length: Some(100),
-				}),
-				"email" => Some(FieldType::Email),
-				_ => None,
-			}
-		}
-
-		fn get_field(&self, name: &str) -> Option<Value> {
-			match name {
-				"id" => self.id.map(|id| Value::Number(id.into())),
-				"name" => Some(Value::String(self.name.clone())),
-				"email" => Some(Value::String(self.email.clone())),
-				_ => None,
-			}
-		}
-
-		fn set_field(&mut self, name: &str, value: Value) -> Result<(), String> {
-			match name {
-				"id" => {
-					self.id = value.as_i64();
-					Ok(())
-				}
-				"name" => {
-					self.name = value
-						.as_str()
-						.ok_or("Expected string for name")?
-						.to_string();
-					Ok(())
-				}
-				"email" => {
-					self.email = value
-						.as_str()
-						.ok_or("Expected string for email")?
-						.to_string();
-					Ok(())
-				}
-				_ => Err(format!("Unknown field: {}", name)),
-			}
-		}
-
-		fn save(&mut self) -> Result<(), String> {
-			if self.id.is_none() {
-				self.id = Some(1);
-			}
-			Ok(())
-		}
-	}
-
 	// Test child model
-	#[derive(Clone)]
+	#[model(
+		app_label = "forms",
+		table_name = "advanced_formset_child_models",
+		form = true,
+		info = false
+	)]
+	#[derive(Clone, Deserialize, Serialize)]
 	struct ChildModel {
+		#[field(primary_key = true)]
 		id: Option<i64>,
 		parent_id: Option<i64>,
+		#[field(max_length = 1_000)]
 		content: String,
 	}
 
-	impl FormModel for ChildModel {
-		fn field_names() -> Vec<String> {
-			vec![
-				"id".to_string(),
-				"parent_id".to_string(),
-				"content".to_string(),
-			]
-		}
+	#[derive(Debug)]
+	struct FormsetExecutor {
+		rows: VecDeque<Result<Row, Error>>,
+		fetch_one_calls: usize,
+	}
 
-		fn field_type(name: &str) -> Option<FieldType> {
-			match name {
-				"id" | "parent_id" => Some(FieldType::Integer),
-				"content" => Some(FieldType::Text),
-				_ => None,
+	impl FormsetExecutor {
+		fn new(rows: impl IntoIterator<Item = Result<Row, Error>>) -> Self {
+			Self {
+				rows: rows.into_iter().collect(),
+				fetch_one_calls: 0,
 			}
 		}
+	}
 
-		fn get_field(&self, name: &str) -> Option<Value> {
-			match name {
-				"id" => self.id.map(|id| Value::Number(id.into())),
-				"parent_id" => self.parent_id.map(|id| Value::Number(id.into())),
-				"content" => Some(Value::String(self.content.clone())),
-				_ => None,
-			}
+	#[reinhardt_core::async_trait]
+	impl OrmExecutor for FormsetExecutor {
+		fn backend(&self) -> DatabaseBackend {
+			DatabaseBackend::Postgres
 		}
 
-		fn set_field(&mut self, name: &str, value: Value) -> Result<(), String> {
-			match name {
-				"id" => {
-					self.id = value.as_i64();
-					Ok(())
-				}
-				"parent_id" => {
-					self.parent_id = value.as_i64();
-					Ok(())
-				}
-				"content" => {
-					self.content = value
-						.as_str()
-						.ok_or("Expected string for content")?
-						.to_string();
-					Ok(())
-				}
-				_ => Err(format!("Unknown field: {}", name)),
-			}
+		async fn execute(
+			&mut self,
+			_sql: &str,
+			_params: Vec<QueryValue>,
+		) -> Result<QueryResult, Error> {
+			Err(DatabaseError::new(DatabaseErrorKind::Query, "unexpected execute call").into())
 		}
 
-		fn save(&mut self) -> Result<(), String> {
-			if self.id.is_none() {
-				self.id = Some(1);
-			}
-			Ok(())
+		async fn fetch_one(&mut self, _sql: &str, _params: Vec<QueryValue>) -> Result<Row, Error> {
+			self.fetch_one_calls += 1;
+			self.rows.pop_front().unwrap_or_else(|| {
+				Err(DatabaseError::new(DatabaseErrorKind::Query, "missing queued row").into())
+			})
 		}
+
+		async fn fetch_all(
+			&mut self,
+			_sql: &str,
+			_params: Vec<QueryValue>,
+		) -> Result<Vec<Row>, Error> {
+			Err(DatabaseError::new(DatabaseErrorKind::Query, "unexpected fetch_all call").into())
+		}
+
+		async fn fetch_optional(
+			&mut self,
+			_sql: &str,
+			_params: Vec<QueryValue>,
+		) -> Result<Option<Row>, Error> {
+			Err(
+				DatabaseError::new(DatabaseErrorKind::Query, "unexpected fetch_optional call")
+					.into(),
+			)
+		}
+	}
+
+	fn test_model(id: i64, name: &str) -> TestModel {
+		TestModel {
+			id: Some(id),
+			name: name.to_owned(),
+			email: format!("{name}@example.com"),
+		}
+	}
+
+	fn test_model_row(id: i64, name: &str) -> Row {
+		let mut row = Row::new();
+		row.insert("id".to_owned(), QueryValue::Int(id));
+		row.insert("name".to_owned(), QueryValue::String(name.to_owned()));
+		row.insert(
+			"email".to_owned(),
+			QueryValue::String(format!("{name}@example.com")),
+		);
+		row
+	}
+
+	fn child_model_row(id: i64, parent_id: i64, content: &str) -> Row {
+		let mut row = Row::new();
+		row.insert("id".to_owned(), QueryValue::Int(id));
+		row.insert("parent_id".to_owned(), QueryValue::Int(parent_id));
+		row.insert("content".to_owned(), QueryValue::String(content.to_owned()));
+		row
+	}
+
+	fn model_form(instance: TestModel) -> ModelForm<TestModel> {
+		ModelForm::from_payload_and_instance(
+			TestModelModelFormData::<AllEditableModelFields>::empty(),
+			instance,
+		)
 	}
 
 	#[test]
@@ -616,33 +645,33 @@ mod tests {
 			parent_id: None,
 			content: "Child content".to_string(),
 		};
-		let child_form = ModelForm::new(Some(child), ModelFormConfig::new());
+		let child_form = ModelForm::from_payload_and_instance(
+			ChildModelModelFormData::<AllEditableModelFields>::empty(),
+			child,
+		);
 		formset.add_child_form(child_form);
 
 		assert_eq!(formset.child_forms().len(), 1);
 	}
 
 	#[test]
-	fn test_inline_formset_save() {
-		let parent = TestModel {
-			id: Some(1),
-			name: "Parent".to_string(),
-			email: "parent@example.com".to_string(),
-		};
-
+	fn test_inline_formset_save_assigns_parent_primary_key() {
+		let parent = test_model(1, "parent");
 		let mut formset =
-			InlineFormSet::<TestModel, ChildModel>::new(parent, "parent_id".to_string());
+			InlineFormSet::<TestModel, ChildModel>::new(parent, "parent_id".to_owned());
+		let mut data = ChildModelModelFormData::<AllEditableModelFields>::empty();
+		data.set_content("Child content".to_owned());
+		formset.add_child_form(ModelForm::from_payload(data));
+		let mut executor = FormsetExecutor::new([
+			Ok(test_model_row(1, "parent")),
+			Ok(child_model_row(2, 1, "Child content")),
+		]);
 
-		let child = ChildModel {
-			id: None,
-			parent_id: None,
-			content: "Child content".to_string(),
-		};
-		let child_form = ModelForm::new(Some(child), ModelFormConfig::new());
-		formset.add_child_form(child_form);
+		tokio_test::block_on(formset.save(&mut executor)).unwrap();
 
-		let result = formset.save();
-		assert!(result.is_ok());
+		let saved_child = formset.child_forms()[0].instance().unwrap();
+		assert_eq!(saved_child.parent_id, Some(1));
+		assert_eq!(executor.fetch_one_calls, 2);
 	}
 
 	#[test]
@@ -664,7 +693,10 @@ mod tests {
 			name: "Test".to_string(),
 			email: "test@example.com".to_string(),
 		};
-		let form = ModelForm::new(Some(instance), ModelFormConfig::new());
+		let form = ModelForm::from_payload_and_instance(
+			TestModelModelFormData::<AllEditableModelFields>::empty(),
+			instance,
+		);
 		formset.add_form(form).unwrap();
 
 		assert_eq!(formset.forms().len(), 1);
@@ -681,11 +713,61 @@ mod tests {
 			name: "Test".to_string(),
 			email: "test@example.com".to_string(),
 		};
-		let form = ModelForm::new(Some(instance), ModelFormConfig::new());
+		let form = ModelForm::from_payload_and_instance(
+			TestModelModelFormData::<AllEditableModelFields>::empty(),
+			instance,
+		);
 		formset.add_form(form).unwrap();
 
 		assert!(!formset.is_valid());
 		assert!(!formset.errors().is_empty());
+	}
+
+	#[test]
+	fn test_model_formset_save_preserves_form_order() {
+		let mut formset = ModelFormSet::<TestModel>::new("test".to_owned());
+		formset
+			.add_form(model_form(test_model(1, "first")))
+			.unwrap();
+		formset
+			.add_form(model_form(test_model(2, "second")))
+			.unwrap();
+		let mut executor = FormsetExecutor::new([
+			Ok(test_model_row(1, "first")),
+			Ok(test_model_row(2, "second")),
+		]);
+
+		let saved = tokio_test::block_on(formset.save(&mut executor)).unwrap();
+
+		assert_eq!(
+			saved
+				.iter()
+				.map(|model| model.name.as_str())
+				.collect::<Vec<_>>(),
+			vec!["first", "second"]
+		);
+		assert_eq!(executor.fetch_one_calls, 2);
+	}
+
+	#[test]
+	fn test_model_formset_save_stops_after_first_persistence_error() {
+		let mut formset = ModelFormSet::<TestModel>::new("test".to_owned());
+		for (id, name) in [(1, "first"), (2, "second"), (3, "third")] {
+			formset.add_form(model_form(test_model(id, name))).unwrap();
+		}
+		let mut executor = FormsetExecutor::new([
+			Ok(test_model_row(1, "first")),
+			Err(DatabaseError::new(DatabaseErrorKind::Timeout, "write timed out").into()),
+			Ok(test_model_row(3, "third")),
+		]);
+
+		let error = tokio_test::block_on(formset.save(&mut executor)).unwrap_err();
+
+		assert_eq!(
+			error.database_error().map(DatabaseError::kind),
+			Some(DatabaseErrorKind::Timeout)
+		);
+		assert_eq!(executor.fetch_one_calls, 2);
 	}
 
 	#[test]

@@ -14,6 +14,7 @@ aquamarine = { workspace = true }
 
 # Internal dependencies
 reinhardt-core = { workspace = true, features = ["validators"] }
+reinhardt-db = { workspace = true, features = ["orm"] }
 
 # Serialization
 serde = { workspace = true }
@@ -46,3 +47,5 @@ tempfile = "3"
 # avoiding dev-dependency version resolution failure during `cargo publish`.
 # When upstream cargo resolves these issues, replace with `workspace = true`.
 reinhardt-test = { path = "../reinhardt-test" }
+reinhardt-macros = { path = "../reinhardt-core/macros" }
+ctor = { workspace = true }

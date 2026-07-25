@@ -1,5 +1,6 @@
 #![allow(unexpected_cfgs)]
 
+use chrono::{DateTime, NaiveDate, Utc};
 use reinhardt_macros::model;
 use serde::{Deserialize, Serialize};
 
@@ -34,6 +35,15 @@ struct StringKeyChild {
 	id: i64,
 	#[rel(foreign_key)]
 	target: db::associations::ForeignKeyField<StringKeyTarget>,
+}
+
+#[model(app_label = "forms", form = true)]
+#[derive(Clone, Deserialize, Serialize)]
+struct TemporalDocument {
+	#[field(primary_key = true)]
+	id: i64,
+	aware_at: DateTime<Utc>,
+	naive_at: chrono::NaiveDateTime,
 }
 
 struct TitleOnly;
@@ -84,10 +94,12 @@ fn generated_schema_exposes_descriptors_and_target_primary_key_kinds() {
 			},
 			required: true,
 			has_default: false,
+			nullable: false,
 			editable: true,
 			generated_relation_id: false,
 		}
 	);
+	assert!(FormDocumentFormSchema::nullable().nullable);
 	assert_eq!(
 		StringKeyChildFormSchema::target_id().kind,
 		ModelFormFieldKind::Text {
@@ -101,4 +113,44 @@ fn generated_schema_exposes_descriptors_and_target_primary_key_kinds() {
 		.set_json("title", serde_json::json!("updated"))
 		.expect("known editable field");
 	assert_eq!(payload.supplied_fields(), ["title"]);
+}
+
+#[test]
+fn generated_datetime_schema_and_payload_distinguish_aware_from_naive_values() {
+	assert_eq!(
+		TemporalDocumentFormSchema::aware_at().kind,
+		ModelFormFieldKind::DateTime
+	);
+	assert_eq!(
+		TemporalDocumentFormSchema::naive_at().kind,
+		ModelFormFieldKind::NaiveDateTime
+	);
+
+	let mut payload = TemporalDocumentModelFormData::<AllEditableModelFields>::empty();
+	payload
+		.set_json("aware_at", serde_json::json!("2026-07-25T14:30:00Z"))
+		.expect("UTC datetime should deserialize into generated payload");
+	payload
+		.set_json("naive_at", serde_json::json!("2026-07-25T14:30:00"))
+		.expect("naive datetime should deserialize into generated payload");
+
+	assert_eq!(
+		payload.aware_at(),
+		Some(&DateTime::from_naive_utc_and_offset(
+			NaiveDate::from_ymd_opt(2026, 7, 25)
+				.expect("valid date")
+				.and_hms_opt(14, 30, 0)
+				.expect("valid time"),
+			Utc,
+		))
+	);
+	assert_eq!(
+		payload.naive_at(),
+		Some(
+			&NaiveDate::from_ymd_opt(2026, 7, 25)
+				.expect("valid date")
+				.and_hms_opt(14, 30, 0)
+				.expect("valid time")
+		)
+	);
 }

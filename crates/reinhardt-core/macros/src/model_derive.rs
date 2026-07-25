@@ -1591,6 +1591,9 @@ fn map_type_to_field_type(ty: &Type, config: &FieldConfig) -> Result<TokenStream
 				"DateTime" => {
 					quote! { #migrations_crate::FieldType::TimestampTz }
 				}
+				"NaiveDateTime" => {
+					quote! { #migrations_crate::FieldType::DateTime }
+				}
 				"Date" => {
 					quote! { #migrations_crate::FieldType::Date }
 				}
@@ -1665,6 +1668,7 @@ fn is_builtin_model_field_type(ty: &Type) -> bool {
 			| "i64" | "String"
 			| "bool" | "f32"
 			| "f64" | "DateTime"
+			| "NaiveDateTime"
 			| "Date" | "Time"
 			| "Decimal"
 			| "Uuid" | "Vec"
@@ -1707,7 +1711,7 @@ fn builtin_storage_kind(ty: &Type, orm_crate: &TokenStream) -> Option<TokenStrea
 		"Uuid" => quote! { #orm_crate::DatabaseStorageKind::Uuid },
 		"Date" => quote! { #orm_crate::DatabaseStorageKind::Date },
 		"Time" => quote! { #orm_crate::DatabaseStorageKind::Time },
-		"DateTime" => quote! { #orm_crate::DatabaseStorageKind::DateTime },
+		"DateTime" | "NaiveDateTime" => quote! { #orm_crate::DatabaseStorageKind::DateTime },
 		_ => return None,
 	};
 
@@ -2039,9 +2043,8 @@ fn model_form_kind(field: &FieldInfo) -> Result<TokenStream> {
 		"bool" => quote!(#core_crate::model_form::ModelFormFieldKind::Boolean),
 		"Date" | "NaiveDate" => quote!(#core_crate::model_form::ModelFormFieldKind::Date),
 		"Time" | "NaiveTime" => quote!(#core_crate::model_form::ModelFormFieldKind::Time),
-		"DateTime" | "NaiveDateTime" => {
-			quote!(#core_crate::model_form::ModelFormFieldKind::DateTime)
-		}
+		"DateTime" => quote!(#core_crate::model_form::ModelFormFieldKind::DateTime),
+		"NaiveDateTime" => quote!(#core_crate::model_form::ModelFormFieldKind::NaiveDateTime),
 		"Uuid" => quote!(#core_crate::model_form::ModelFormFieldKind::Uuid),
 		"Json" | "Value" | "HashMap" => quote!(#core_crate::model_form::ModelFormFieldKind::Json),
 		_ => return unsupported(),
@@ -2171,6 +2174,7 @@ fn generate_model_form_support(
 			let required =
 				!is_optional && field.config.blank != Some(true) && field.config.default.is_none();
 			let has_default = field.config.default.is_some();
+			let nullable = is_optional;
 			let generated_relation_id = field.is_fk_id_field;
 			quote! {
 				#core_crate::model_form::ModelFormFieldDescriptor {
@@ -2178,6 +2182,7 @@ fn generate_model_form_support(
 					kind: #kind,
 					required: #required,
 					has_default: #has_default,
+					nullable: #nullable,
 					editable: true,
 					generated_relation_id: #generated_relation_id,
 				}

@@ -131,6 +131,27 @@ value after authentication or authorization has selected it. In contrast,
 generic `set_json()` respects the active policy and rejected wire input remains
 recorded even if the server later supplies a trusted value.
 
+## Empty values and datetimes
+
+Generated descriptors preserve model nullability separately from whether a
+control is required. Clearing a nullable control supplies JSON `null`, so an
+update changes the database column to `NULL`. Clearing a non-nullable control
+that is optional because it is blank or has a default removes that value from
+the payload; create defaults and existing update values therefore remain
+available.
+
+`DateTime<Utc>` and `NaiveDateTime` use distinct schema kinds. Both render as
+`datetime-local` controls, whose browser value has no timezone offset. Reinhardt
+uses the following explicit convention:
+
+- A browser value for `DateTime<Utc>` is interpreted as UTC and serialized as
+  RFC 3339 with `Z`.
+- A browser value for `NaiveDateTime` remains offset-free and is serialized as
+  `YYYY-MM-DDTHH:MM:SS`.
+
+Applications that need a user or venue timezone should convert that context
+before setting the model-form control instead of relying on the UTC convention.
+
 ## Native create and update
 
 Native model forms use the model-generated payload and the same policy type:
@@ -233,6 +254,17 @@ candidate before persistence. This preflight prevents a later invalid form or
 cardinality failure from following earlier writes; use a transaction when the
 complete multi-row operation must be atomic.
 
+Untouched create-mode extra forms are excluded from cardinality, candidate
+preflight, and persistence. An existing instance, supplied field, or forbidden
+wire field marks a form as submitted. This prevents default-only models from
+creating phantom rows while still preserving server-side forbidden-input
+rejection.
+
 Inline formsets also save asynchronously. They save the parent first, apply
 the saved parent key to child payloads through the trusted construction path,
-and then persist children with the same executor.
+and then persist children with the same executor. Use
+`InlineFormSet::for_create(parent, fk_field)` for a new parent, including one
+with an assigned UUID, and `InlineFormSet::for_update(parent, fk_field)` for an
+existing parent. The legacy `InlineFormSet::new` uses primary-key presence and
+the numeric zero sentinel; it cannot distinguish an assigned primary key from
+an existing row and therefore must not be used for assigned-key creation.

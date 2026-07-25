@@ -16,6 +16,7 @@ const QUESTION_FIELDS: [ModelFormFieldDescriptor; 1] = [ModelFormFieldDescriptor
 	},
 	required: true,
 	has_default: false,
+	nullable: false,
 	editable: true,
 	generated_relation_id: false,
 }];

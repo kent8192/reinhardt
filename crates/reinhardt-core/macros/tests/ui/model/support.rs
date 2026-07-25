@@ -140,6 +140,7 @@ pub mod model_form {
 		Date,
 		Time,
 		DateTime,
+		NaiveDateTime,
 		Uuid,
 		Json,
 	}
@@ -154,6 +155,7 @@ pub mod model_form {
 		pub kind: ModelFormFieldKind,
 		pub required: bool,
 		pub has_default: bool,
+		pub nullable: bool,
 		pub editable: bool,
 		pub generated_relation_id: bool,
 	}
@@ -842,6 +844,8 @@ pub mod db {
 		scalar_codec!(i32, I32);
 		scalar_codec!(i64, I64);
 		scalar_codec!(String, String);
+		scalar_codec!(chrono::DateTime<chrono::Utc>, DateTime);
+		scalar_codec!(chrono::NaiveDateTime, DateTime);
 
 		impl<S: DatabaseScalar> DatabaseScalar for Option<S> {
 			const STORAGE_KIND: DatabaseStorageKind = S::STORAGE_KIND;
@@ -913,6 +917,16 @@ pub mod db {
 			use super::fields::FieldKwarg;
 			use super::{DatabaseStorageKind, FieldDomain};
 			use std::collections::HashMap;
+
+			pub fn database_storage_field_type(
+				storage_kind: DatabaseStorageKind,
+				_max_length: Option<u32>,
+			) -> crate::db::migrations::FieldType {
+				match storage_kind {
+					DatabaseStorageKind::DateTime => crate::db::migrations::FieldType::TimestampTz,
+					_ => crate::db::migrations::FieldType::Json,
+				}
+			}
 
 			pub fn database_field_type_path(storage_kind: DatabaseStorageKind) -> &'static str {
 				match storage_kind {
@@ -1040,6 +1054,7 @@ pub mod db {
 			VarChar(u32),
 			Boolean,
 			TimestampTz,
+			DateTime,
 			Date,
 			Time,
 			Float,

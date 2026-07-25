@@ -521,6 +521,21 @@ impl_scalar_field!(chrono::NaiveDate, Date, Date);
 impl_scalar_field!(chrono::NaiveTime, Time, Time);
 impl_scalar_field!(chrono::DateTime<chrono::Utc>, DateTime, DateTime);
 
+impl DatabaseField for chrono::NaiveDateTime {
+	type Storage = chrono::DateTime<chrono::Utc>;
+
+	fn encode_database(&self) -> Result<Self::Storage, FieldCodecError> {
+		Ok(self.and_utc())
+	}
+
+	fn decode_database(
+		value: Self::Storage,
+		_context: &FieldCodecContext,
+	) -> Result<Self, FieldCodecError> {
+		Ok(value.naive_utc())
+	}
+}
+
 impl<S: DatabaseScalar> private::Sealed for Option<S> {}
 
 impl<S: DatabaseScalar> DatabaseScalar for Option<S> {
@@ -715,6 +730,16 @@ mod tests {
 			.unwrap(),
 			None
 		);
+	}
+
+	#[test]
+	fn naive_datetime_database_field_round_trips_without_an_offset() {
+		let value = chrono::NaiveDate::from_ymd_opt(2026, 7, 25)
+			.expect("valid date")
+			.and_hms_opt(14, 30, 0)
+			.expect("valid time");
+
+		assert_database_field_round_trip(value);
 	}
 
 	#[test]

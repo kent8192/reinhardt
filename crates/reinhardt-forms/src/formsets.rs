@@ -4,7 +4,7 @@
 //! model-based formsets, and dynamic formset generation.
 
 use crate::formset::FormSet;
-use crate::model_form::{FormModel, ModelForm, ModelFormError};
+use crate::model_form::{FormModel, ModelForm, ModelFormError, ModelFormPersistenceMode};
 use reinhardt_core::model_form::{AllEditableModelFields, ModelFormPolicy};
 use reinhardt_db::orm::OrmExecutor;
 use serde::Serialize;
@@ -16,6 +16,7 @@ use std::marker::PhantomData;
 /// similar to Django's inline formsets for admin.
 pub struct InlineFormSet<P: FormModel, C: FormModel> {
 	parent: P,
+	parent_persistence_mode: ModelFormPersistenceMode,
 	_formset: FormSet,
 	fk_field: String,
 	child_forms: Vec<ModelForm<C, AllEditableModelFields>>,
@@ -24,7 +25,12 @@ pub struct InlineFormSet<P: FormModel, C: FormModel> {
 }
 
 impl<P: FormModel, C: FormModel> InlineFormSet<P, C> {
-	/// Create a new InlineFormSet
+	/// Creates an inline formset using the legacy primary-key heuristic.
+	///
+	/// A missing primary key or numeric zero sentinel selects create; any other
+	/// primary key selects update. Models with assigned primary keys, including
+	/// UUIDs, must use [`Self::for_create`] because this constructor cannot
+	/// distinguish a new assigned identifier from an existing row.
 	///
 	/// # Arguments
 	///
@@ -38,8 +44,37 @@ impl<P: FormModel, C: FormModel> InlineFormSet<P, C> {
 	/// let formset = InlineFormSet::new(parent, "author_id".to_string());
 	/// ```
 	pub fn new(parent: P, fk_field: String) -> Self {
+		let primary_key = parent.primary_key();
+		let uses_zero_sentinel = P::primary_key_uses_zero_sentinel()
+			&& primary_key
+				.as_ref()
+				.is_some_and(|value| value.to_string() == "0");
+		let mode = if primary_key.is_some() && !uses_zero_sentinel {
+			ModelFormPersistenceMode::Update
+		} else {
+			ModelFormPersistenceMode::Create
+		};
+		Self::with_parent_mode(parent, fk_field, mode)
+	}
+
+	/// Creates an inline formset that inserts the parent before saving children.
+	pub fn for_create(parent: P, fk_field: String) -> Self {
+		Self::with_parent_mode(parent, fk_field, ModelFormPersistenceMode::Create)
+	}
+
+	/// Creates an inline formset that updates the parent before saving children.
+	pub fn for_update(parent: P, fk_field: String) -> Self {
+		Self::with_parent_mode(parent, fk_field, ModelFormPersistenceMode::Update)
+	}
+
+	fn with_parent_mode(
+		parent: P,
+		fk_field: String,
+		parent_persistence_mode: ModelFormPersistenceMode,
+	) -> Self {
 		Self {
 			parent,
+			parent_persistence_mode,
 			_formset: FormSet::new("inline".to_string()),
 			fk_field,
 			child_forms: Vec::new(),
@@ -81,7 +116,8 @@ impl<P: FormModel, C: FormModel> InlineFormSet<P, C> {
 	where
 		P::PrimaryKey: Serialize,
 	{
-		FormModel::save(&mut self.parent, executor).await?;
+		FormModel::save_with_mode(&mut self.parent, executor, self.parent_persistence_mode).await?;
+		self.parent_persistence_mode = ModelFormPersistenceMode::Update;
 		let parent_id = self
 			.parent
 			.primary_key()
@@ -226,7 +262,7 @@ where
 	pub fn is_valid(&mut self) -> bool {
 		let mut all_valid = true;
 		for form in &mut self.forms {
-			if !form.is_valid() {
+			if form.is_submission_candidate() && !form.is_valid() {
 				all_valid = false;
 			}
 		}
@@ -236,14 +272,19 @@ where
 
 	fn validate_cardinality(&mut self) -> Result<(), ModelFormError> {
 		self.errors.clear();
+		let candidate_count = self
+			.forms
+			.iter()
+			.filter(|form| form.is_submission_candidate())
+			.count();
 
-		if self.forms.len() < self.min_num {
+		if candidate_count < self.min_num {
 			self.errors
 				.push(format!("Please submit at least {} forms", self.min_num));
 		}
 
 		if let Some(max) = self.max_num
-			&& self.forms.len() > max
+			&& candidate_count > max
 		{
 			self.errors
 				.push(format!("Please submit no more than {} forms", max));
@@ -267,11 +308,20 @@ where
 	pub async fn save(&mut self, executor: &mut dyn OrmExecutor) -> Result<Vec<T>, ModelFormError> {
 		self.validate_cardinality()?;
 		for form in &mut self.forms {
-			form.build_instance()?;
+			if form.is_submission_candidate() {
+				form.build_instance()?;
+			}
 		}
-		let mut saved = Vec::with_capacity(self.forms.len());
+		let mut saved = Vec::with_capacity(
+			self.forms
+				.iter()
+				.filter(|form| form.is_submission_candidate())
+				.count(),
+		);
 		for form in &mut self.forms {
-			saved.push(form.save(executor).await?);
+			if form.is_submission_candidate() {
+				saved.push(form.save(executor).await?);
+			}
 		}
 
 		Ok(saved)
@@ -518,6 +568,22 @@ mod tests {
 		email: String,
 	}
 
+	#[model(
+		app_label = "forms",
+		table_name = "advanced_formset_default_models",
+		form = true,
+		info = false
+	)]
+	#[derive(Clone, Deserialize, Serialize)]
+	struct AllDefaultModel {
+		#[field(primary_key = true)]
+		id: Option<i64>,
+		#[field(max_length = 100, default = "generated")]
+		name: String,
+		#[field(default = true)]
+		enabled: bool,
+	}
+
 	// Test child model
 	#[model(
 		app_label = "forms",
@@ -534,10 +600,40 @@ mod tests {
 		content: String,
 	}
 
+	#[model(
+		app_label = "forms",
+		table_name = "advanced_formset_uuid_parents",
+		form = true,
+		info = false
+	)]
+	#[derive(Clone, Deserialize, Serialize)]
+	struct UuidParent {
+		#[field(primary_key = true, include_in_new = false)]
+		id: uuid::Uuid,
+		#[field(max_length = 100)]
+		name: String,
+	}
+
+	#[model(
+		app_label = "forms",
+		table_name = "advanced_formset_uuid_children",
+		form = true,
+		info = false
+	)]
+	#[derive(Clone, Deserialize, Serialize)]
+	struct UuidChild {
+		#[field(primary_key = true)]
+		id: Option<i64>,
+		parent_id: Option<uuid::Uuid>,
+		#[field(max_length = 1_000)]
+		content: String,
+	}
+
 	#[derive(Debug)]
 	struct FormsetExecutor {
 		rows: VecDeque<Result<Row, Error>>,
 		fetch_one_calls: usize,
+		queries: Vec<String>,
 	}
 
 	impl FormsetExecutor {
@@ -545,6 +641,7 @@ mod tests {
 			Self {
 				rows: rows.into_iter().collect(),
 				fetch_one_calls: 0,
+				queries: Vec::new(),
 			}
 		}
 	}
@@ -563,8 +660,9 @@ mod tests {
 			Err(DatabaseError::new(DatabaseErrorKind::Query, "unexpected execute call").into())
 		}
 
-		async fn fetch_one(&mut self, _sql: &str, _params: Vec<QueryValue>) -> Result<Row, Error> {
+		async fn fetch_one(&mut self, sql: &str, _params: Vec<QueryValue>) -> Result<Row, Error> {
 			self.fetch_one_calls += 1;
+			self.queries.push(sql.to_owned());
 			self.rows.pop_front().unwrap_or_else(|| {
 				Err(DatabaseError::new(DatabaseErrorKind::Query, "missing queued row").into())
 			})
@@ -613,6 +711,21 @@ mod tests {
 		let mut row = Row::new();
 		row.insert("id".to_owned(), QueryValue::Int(id));
 		row.insert("parent_id".to_owned(), QueryValue::Int(parent_id));
+		row.insert("content".to_owned(), QueryValue::String(content.to_owned()));
+		row
+	}
+
+	fn uuid_parent_row(id: uuid::Uuid, name: &str) -> Row {
+		let mut row = Row::new();
+		row.insert("id".to_owned(), QueryValue::Uuid(id));
+		row.insert("name".to_owned(), QueryValue::String(name.to_owned()));
+		row
+	}
+
+	fn uuid_child_row(id: i64, parent_id: uuid::Uuid, content: &str) -> Row {
+		let mut row = Row::new();
+		row.insert("id".to_owned(), QueryValue::Int(id));
+		row.insert("parent_id".to_owned(), QueryValue::Uuid(parent_id));
 		row.insert("content".to_owned(), QueryValue::String(content.to_owned()));
 		row
 	}
@@ -682,6 +795,53 @@ mod tests {
 		let saved_child = formset.child_forms()[0].instance().unwrap();
 		assert_eq!(saved_child.parent_id, Some(1));
 		assert_eq!(executor.fetch_one_calls, 2);
+	}
+
+	#[test]
+	fn test_inline_formset_assigned_uuid_parent_create_uses_insert_intent() {
+		let parent_id = uuid::Uuid::from_u128(0x019c_1234_5678_7abc_8def_0123_4567_89ab);
+		let parent = UuidParent {
+			id: parent_id,
+			name: "assigned".to_owned(),
+		};
+		let mut formset =
+			InlineFormSet::<UuidParent, UuidChild>::for_create(parent, "parent_id".to_owned());
+		let mut data = UuidChildModelFormData::<AllEditableModelFields>::empty();
+		data.set_content("created child".to_owned());
+		formset.add_child_form(ModelForm::from_payload(data));
+		let mut executor = FormsetExecutor::new([
+			Ok(uuid_parent_row(parent_id, "assigned")),
+			Ok(uuid_child_row(4, parent_id, "created child")),
+		]);
+
+		tokio_test::block_on(formset.save(&mut executor))
+			.expect("assigned UUID parent should be created without an existence query");
+
+		assert_eq!(
+			executor.queries[0].split_whitespace().next(),
+			Some("INSERT")
+		);
+		assert_eq!(
+			formset.child_forms()[0].instance().unwrap().parent_id,
+			Some(parent_id)
+		);
+	}
+
+	#[test]
+	fn test_inline_formset_existing_parent_update_uses_update_intent() {
+		let parent = test_model(11, "existing");
+		let mut formset =
+			InlineFormSet::<TestModel, ChildModel>::for_update(parent, "parent_id".to_owned());
+		let mut executor = FormsetExecutor::new([Ok(test_model_row(11, "existing"))]);
+
+		tokio_test::block_on(formset.save(&mut executor))
+			.expect("existing parent should be updated with explicit intent");
+
+		assert_eq!(
+			executor.queries[0].split_whitespace().next(),
+			Some("UPDATE")
+		);
+		assert_eq!(executor.fetch_one_calls, 1);
 	}
 
 	#[test]
@@ -757,6 +917,63 @@ mod tests {
 			vec!["first", "second"]
 		);
 		assert_eq!(executor.fetch_one_calls, 2);
+	}
+
+	#[test]
+	fn test_model_formset_default_extra_does_not_block_existing_only_save() {
+		let mut formset = ModelFormSet::<TestModel>::new("test".to_owned());
+		formset
+			.add_form(model_form(test_model(1, "existing")))
+			.unwrap();
+		formset
+			.add_form(ModelForm::from_payload(TestModelModelFormData::<
+				AllEditableModelFields,
+			>::empty()))
+			.unwrap();
+		let mut executor = FormsetExecutor::new([Ok(test_model_row(1, "existing"))]);
+
+		let saved = tokio_test::block_on(formset.save(&mut executor))
+			.expect("untouched default extra should be excluded");
+
+		assert_eq!(saved.len(), 1);
+		assert_eq!(saved[0].name, "existing");
+		assert_eq!(executor.fetch_one_calls, 1);
+	}
+
+	#[test]
+	fn test_model_formset_untouched_all_default_extra_does_not_create_phantom_row() {
+		let mut formset = ModelFormSet::<AllDefaultModel>::new("defaults".to_owned());
+		formset
+			.add_form(ModelForm::from_payload(AllDefaultModelModelFormData::<
+				AllEditableModelFields,
+			>::empty()))
+			.unwrap();
+		assert!(formset.forms_mut()[0].is_valid());
+		let mut executor = FormsetExecutor::new(Vec::<Result<Row, Error>>::new());
+
+		let saved = tokio_test::block_on(formset.save(&mut executor))
+			.expect("untouched all-default extra should be excluded");
+
+		assert!(saved.is_empty());
+		assert_eq!(executor.fetch_one_calls, 0);
+	}
+
+	#[test]
+	fn test_model_formset_submitted_extra_is_persisted() {
+		let mut data = TestModelModelFormData::<AllEditableModelFields>::empty();
+		data.set_name("submitted".to_owned());
+		data.set_email("submitted@example.com".to_owned());
+		let mut formset = ModelFormSet::<TestModel>::new("test".to_owned());
+		formset.add_form(ModelForm::from_payload(data)).unwrap();
+		let mut executor = FormsetExecutor::new([Ok(test_model_row(7, "submitted"))]);
+
+		let saved = tokio_test::block_on(formset.save(&mut executor))
+			.expect("submitted extra should be persisted");
+
+		assert_eq!(saved.len(), 1);
+		assert_eq!(saved[0].id, Some(7));
+		assert_eq!(saved[0].name, "submitted");
+		assert_eq!(executor.fetch_one_calls, 1);
 	}
 
 	#[test]

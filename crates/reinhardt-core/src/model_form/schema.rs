@@ -37,8 +37,10 @@ pub enum ModelFormFieldKind {
 	Date,
 	/// A time-of-day input.
 	Time,
-	/// A date-and-time input.
+	/// A timezone-aware date-and-time input.
 	DateTime,
+	/// A timezone-naive date-and-time input.
+	NaiveDateTime,
 	/// A UUID input.
 	Uuid,
 	/// A JSON input.
@@ -56,6 +58,8 @@ pub struct ModelFormFieldDescriptor {
 	pub required: bool,
 	/// Whether the model provides a value when input omits this field.
 	pub has_default: bool,
+	/// Whether an explicit empty control value clears the model field to null.
+	pub nullable: bool,
 	/// Whether the field is editable through a form.
 	pub editable: bool,
 	/// Whether the field is a generated relationship identifier.
@@ -103,6 +107,7 @@ mod tests {
 			},
 			required: true,
 			has_default: false,
+			nullable: false,
 			editable: true,
 			generated_relation_id: false,
 		};

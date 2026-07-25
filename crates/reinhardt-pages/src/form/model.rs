@@ -34,7 +34,7 @@ where
 	}
 
 	/// Stores a control value after validating it against the generated schema.
-	/// An empty string removes a previously stored value for an optional field.
+	/// An empty string clears a nullable field and removes other optional values.
 	///
 	/// # Errors
 	///
@@ -59,7 +59,11 @@ where
 		if !descriptor.required
 			&& matches!(&value, serde_json::Value::String(text) if text.is_empty())
 		{
-			self.values.remove(descriptor.name);
+			if descriptor.nullable {
+				self.values.insert(descriptor.name, serde_json::Value::Null);
+			} else {
+				self.values.remove(descriptor.name);
+			}
 			return Ok(());
 		}
 
@@ -242,18 +246,16 @@ fn convert_control_value(
 			}
 			Ok(serde_json::Value::String(text))
 		}
-		ModelFormFieldKind::DateTime => {
+		ModelFormFieldKind::DateTime | ModelFormFieldKind::NaiveDateTime => {
 			let text = expect_string(descriptor.name, value)?;
-			let Some((date, time)) = text.split_once('T').or_else(|| text.split_once(' ')) else {
-				return Err(invalid_value(descriptor.name, "expected a date and time"));
-			};
-			if !is_date(date) || !is_time(time) {
-				return Err(invalid_value(
-					descriptor.name,
-					"expected YYYY-MM-DDTHH:MM[:SS]",
-				));
-			}
-			Ok(serde_json::Value::String(text))
+			normalize_datetime_local(
+				&text,
+				matches!(descriptor.kind, ModelFormFieldKind::DateTime),
+			)
+			.map(serde_json::Value::String)
+			.ok_or_else(|| {
+				invalid_value(descriptor.name, "expected YYYY-MM-DDTHH:MM[:SS[.fraction]]")
+			})
 		}
 		ModelFormFieldKind::Uuid => {
 			let text = expect_string(descriptor.name, value)?;
@@ -286,13 +288,35 @@ fn invalid_value(field: &str, message: impl Into<String>) -> ModelFormPayloadErr
 
 fn is_date(value: &str) -> bool {
 	let bytes = value.as_bytes();
-	bytes.len() == 10
+	if !(bytes.len() == 10
 		&& bytes[4] == b'-'
 		&& bytes[7] == b'-'
 		&& bytes
 			.iter()
 			.enumerate()
-			.all(|(index, byte)| matches!(index, 4 | 7) || byte.is_ascii_digit())
+			.all(|(index, byte)| matches!(index, 4 | 7) || byte.is_ascii_digit()))
+	{
+		return false;
+	}
+	let Some(year) = value[0..4].parse::<u32>().ok() else {
+		return false;
+	};
+	let Some(month) = value[5..7].parse::<u32>().ok() else {
+		return false;
+	};
+	let Some(day) = value[8..10].parse::<u32>().ok() else {
+		return false;
+	};
+	let max_day = match month {
+		1 | 3 | 5 | 7 | 8 | 10 | 12 => 31,
+		4 | 6 | 9 | 11 => 30,
+		2 if year.is_multiple_of(400) || (year.is_multiple_of(4) && !year.is_multiple_of(100)) => {
+			29
+		}
+		2 => 28,
+		_ => return false,
+	};
+	(1..=max_day).contains(&day)
 }
 
 fn is_time(value: &str) -> bool {
@@ -309,4 +333,43 @@ fn is_time(value: &str) -> bool {
 			.iter()
 			.enumerate()
 			.all(|(index, byte)| matches!(index, 2 | 5) || *byte == b'.' || byte.is_ascii_digit())
+}
+
+fn normalize_datetime_local(value: &str, aware: bool) -> Option<String> {
+	let (date, time) = value.split_once('T').or_else(|| value.split_once(' '))?;
+	if !is_date(date) {
+		return None;
+	}
+	let time = if aware {
+		time.strip_suffix('Z').unwrap_or(time)
+	} else if time.ends_with('Z') {
+		return None;
+	} else {
+		time
+	};
+	if time.contains(['+', '-']) {
+		return None;
+	}
+	let (whole_time, fraction) = time
+		.split_once('.')
+		.map_or((time, None), |(whole, fraction)| (whole, Some(fraction)));
+	if fraction.is_some_and(|fraction| {
+		fraction.is_empty() || !fraction.bytes().all(|byte| byte.is_ascii_digit())
+	}) {
+		return None;
+	}
+	let mut parts = whole_time.split(':');
+	let hour = parts.next()?.parse::<u32>().ok()?;
+	let minute = parts.next()?.parse::<u32>().ok()?;
+	let second = parts
+		.next()
+		.map_or(Some(0), |second| second.parse::<u32>().ok())?;
+	if parts.next().is_some() || hour > 23 || minute > 59 || second > 59 {
+		return None;
+	}
+	let fraction = fraction.map_or_else(String::new, |fraction| format!(".{fraction}"));
+	let timezone = if aware { "Z" } else { "" };
+	Some(format!(
+		"{date}T{hour:02}:{minute:02}:{second:02}{fraction}{timezone}"
+	))
 }

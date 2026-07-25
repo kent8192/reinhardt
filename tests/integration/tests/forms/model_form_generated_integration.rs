@@ -6,6 +6,7 @@ use reinhardt_core::model_form::{ModelFormPayload, ModelFormPolicy};
 use reinhardt_db::backends::DatabaseConnection as BackendsConnection;
 use reinhardt_db::orm::{DatabaseConnection, DatabaseConnectionLease, Model};
 use reinhardt_forms::{ModelForm, ModelFormError};
+use reinhardt_pages::form::ModelFormState;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use tempfile::TempDir;
@@ -19,6 +20,8 @@ struct Article {
 	id: Option<i64>,
 	#[field(max_length = 120, unique = true)]
 	title: String,
+	#[field(max_length = 240)]
+	nullable_note: Option<String>,
 	owner_id: i64,
 	#[field(max_length = 64, editable = false, default = "model-form-created")]
 	audit_token: String,
@@ -28,7 +31,7 @@ struct ArticleFormPolicy;
 
 impl ModelFormPolicy for ArticleFormPolicy {
 	fn allows(field: &str) -> bool {
-		field == "title"
+		matches!(field, "title" | "nullable_note")
 	}
 }
 
@@ -56,6 +59,7 @@ async fn sqlite_fixture() -> SqliteFixture {
 			"CREATE TABLE forms_test_article (
 				id INTEGER PRIMARY KEY AUTOINCREMENT,
 				title TEXT NOT NULL UNIQUE,
+				nullable_note TEXT,
 				owner_id INTEGER NOT NULL,
 				audit_token TEXT NOT NULL
 			)",
@@ -102,6 +106,7 @@ async fn generated_model_form_creates_and_queries_article() {
 		Article {
 			id: saved.id,
 			title: "Created article".to_owned(),
+			nullable_note: None,
 			owner_id: 41,
 			audit_token: DEFAULT_AUDIT_TOKEN.to_owned(),
 		}
@@ -118,6 +123,7 @@ async fn generated_model_form_updates_title_and_preserves_omitted_values() {
 			&Article {
 				id: None,
 				title: "Original article".to_owned(),
+				nullable_note: None,
 				owner_id: 73,
 				audit_token: "preexisting-audit-token".to_owned(),
 			},
@@ -152,10 +158,60 @@ async fn generated_model_form_updates_title_and_preserves_omitted_values() {
 		Article {
 			id: updated.id,
 			title: "Updated article".to_owned(),
+			nullable_note: None,
 			owner_id: 73,
 			audit_token: "preexisting-audit-token".to_owned(),
 		}
 	);
+}
+
+#[tokio::test]
+async fn generated_model_form_pages_clear_updates_nullable_column_to_null() {
+	// Arrange
+	let mut fixture = sqlite_fixture().await;
+	let original = Article::objects()
+		.create_with_conn(
+			&mut fixture.connection,
+			&Article {
+				id: None,
+				title: "Nullable article".to_owned(),
+				nullable_note: Some("remove this note".to_owned()),
+				owner_id: 91,
+				audit_token: "nullable-audit-token".to_owned(),
+			},
+		)
+		.await
+		.expect("article with nullable text should be persisted");
+	let mut state = ModelFormState::<ArticleFormSchema, ArticleFormPolicy>::new();
+	state
+		.set_value("nullable_note", json!(""))
+		.expect("empty nullable control should be accepted");
+	let payload = state
+		.build_payload::<ArticleModelFormData<ArticleFormPolicy>>()
+		.expect("nullable clear should assemble a generated payload");
+	let mut form =
+		ModelForm::<Article, ArticleFormPolicy>::from_payload_and_instance(payload, original);
+
+	// Act
+	let updated = form
+		.save(&mut fixture.connection)
+		.await
+		.expect("nullable clear should update the article");
+	let persisted = Article::objects()
+		.get(
+			updated
+				.id
+				.expect("updated article should keep its identifier"),
+		)
+		.get_with_db(&mut fixture.connection)
+		.await
+		.expect("updated article should be queried back");
+
+	// Assert
+	assert_eq!(updated.nullable_note, None);
+	assert_eq!(persisted.nullable_note, None);
+	assert_eq!(persisted.owner_id, 91);
+	assert_eq!(persisted.audit_token, "nullable-audit-token");
 }
 
 #[test]

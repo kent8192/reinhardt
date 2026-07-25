@@ -2190,7 +2190,8 @@ fn generate_model_form(
 									("input", "date"),
 								#pages_crate::form::ModelFormFieldKind::Time =>
 									("input", "time"),
-								#pages_crate::form::ModelFormFieldKind::DateTime =>
+								#pages_crate::form::ModelFormFieldKind::DateTime
+								| #pages_crate::form::ModelFormFieldKind::NaiveDateTime =>
 									("input", "datetime-local"),
 								#pages_crate::form::ModelFormFieldKind::Text { .. }
 								| #pages_crate::form::ModelFormFieldKind::Uuid =>

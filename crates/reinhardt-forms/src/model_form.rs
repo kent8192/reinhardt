@@ -147,6 +147,13 @@ where
 				&& P::allows(descriptor.name)
 				&& supplied_fields.contains(&descriptor.name)
 			{
+				let explicit_null = descriptor.nullable
+					&& data
+						.get_json(descriptor.name)
+						.is_some_and(|value| value.is_null());
+				if explicit_null {
+					continue;
+				}
 				form.add_field(field_factory::create_form_field(descriptor));
 				if let Some(value) = data.get_json(descriptor.name) {
 					form_data.insert(descriptor.name.to_owned(), value);
@@ -311,11 +318,18 @@ where
 	pub fn instance(&self) -> Option<&T> {
 		self.instance.as_ref()
 	}
+
+	pub(crate) fn is_submission_candidate(&self) -> bool {
+		self.instance.is_some()
+			|| !self.supplied_fields.is_empty()
+			|| !self.data.forbidden_fields().is_empty()
+	}
 }
 
 #[cfg(test)]
 mod tests {
 	use super::*;
+	use chrono::{DateTime, NaiveDate, Utc};
 	use std::collections::VecDeque;
 	use std::sync::Arc;
 	use std::sync::atomic::{AtomicUsize, Ordering};
@@ -388,6 +402,21 @@ mod tests {
 		id: i32,
 		#[field(max_length = 200)]
 		title: String,
+	}
+
+	#[model(
+		app_label = "forms",
+		table_name = "model_form_temporal_records",
+		form = true,
+		info = false
+	)]
+	#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+	struct TemporalRecord {
+		#[field(primary_key = true)]
+		id: Option<i64>,
+		aware_at: DateTime<Utc>,
+		naive_at: chrono::NaiveDateTime,
+		nullable_naive_at: Option<chrono::NaiveDateTime>,
 	}
 
 	#[model(
@@ -588,6 +617,49 @@ mod tests {
 		let built = form.build_instance().unwrap();
 
 		assert!(built.published);
+	}
+
+	#[test]
+	fn generated_model_form_round_trips_aware_and_naive_datetimes_through_native_fields() {
+		let mut data = TemporalRecordModelFormData::<AllEditableModelFields>::empty();
+		data.set_json("aware_at", json!("2026-07-25T14:30:00Z"))
+			.expect("aware datetime should deserialize");
+		data.set_json("naive_at", json!("2026-07-25T14:30:00"))
+			.expect("naive datetime should deserialize");
+		let mut form = ModelForm::<TemporalRecord>::from_payload(data);
+
+		let built = form
+			.build_instance()
+			.expect("native field cleaning should preserve both datetime types");
+
+		let expected = NaiveDate::from_ymd_opt(2026, 7, 25)
+			.expect("valid date")
+			.and_hms_opt(14, 30, 0)
+			.expect("valid time");
+		assert_eq!(
+			built.aware_at,
+			DateTime::<Utc>::from_naive_utc_and_offset(expected, Utc)
+		);
+		assert_eq!(built.naive_at, expected);
+		assert_eq!(built.nullable_naive_at, None);
+	}
+
+	#[test]
+	fn generated_model_form_accepts_explicit_null_for_nullable_non_text_field() {
+		let mut data = TemporalRecordModelFormData::<AllEditableModelFields>::empty();
+		data.set_json("aware_at", json!("2026-07-25T14:30:00Z"))
+			.expect("aware datetime should deserialize");
+		data.set_json("naive_at", json!("2026-07-25T14:30:00"))
+			.expect("naive datetime should deserialize");
+		data.set_json("nullable_naive_at", Value::Null)
+			.expect("nullable datetime should accept an explicit clear");
+		let mut form = ModelForm::<TemporalRecord>::from_payload(data);
+
+		let built = form
+			.build_instance()
+			.expect("explicit null should bypass non-null field conversion");
+
+		assert_eq!(built.nullable_naive_at, None);
 	}
 
 	#[test]
@@ -849,6 +921,7 @@ mod tests {
 				kind,
 				required: true,
 				has_default: false,
+				nullable: false,
 				editable: true,
 				generated_relation_id: false,
 			};
@@ -873,6 +946,7 @@ mod tests {
 			},
 			required: false,
 			has_default: false,
+			nullable: false,
 			editable: true,
 			generated_relation_id: false,
 		});
@@ -884,6 +958,7 @@ mod tests {
 			},
 			required: true,
 			has_default: false,
+			nullable: false,
 			editable: true,
 			generated_relation_id: false,
 		});

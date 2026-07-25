@@ -43,6 +43,7 @@ const MODEL_FORM_QUESTION_FIELDS: [ModelFormFieldDescriptor; 2] = [
 		},
 		required: true,
 		has_default: false,
+		nullable: false,
 		editable: true,
 		generated_relation_id: false,
 	},
@@ -54,6 +55,7 @@ const MODEL_FORM_QUESTION_FIELDS: [ModelFormFieldDescriptor; 2] = [
 		},
 		required: true,
 		has_default: false,
+		nullable: false,
 		editable: true,
 		generated_relation_id: true,
 	},
@@ -165,6 +167,7 @@ const MODEL_FORM_NUMERIC_FIELDS: [ModelFormFieldDescriptor; 2] = [
 		},
 		required: true,
 		has_default: false,
+		nullable: false,
 		editable: true,
 		generated_relation_id: false,
 	},
@@ -176,6 +179,7 @@ const MODEL_FORM_NUMERIC_FIELDS: [ModelFormFieldDescriptor; 2] = [
 		},
 		required: false,
 		has_default: false,
+		nullable: false,
 		editable: true,
 		generated_relation_id: false,
 	},
@@ -295,6 +299,241 @@ fn model_form_clearing_optional_control_removes_previous_payload_value() {
 		.expect("cleared optional input should build a payload");
 	assert_eq!(payload.get_json("unsigned"), None);
 	assert!(payload.supplied_fields().is_empty());
+}
+
+struct ModelFormEmptyValues;
+
+struct ModelFormEmptyValuesSchema;
+
+const MODEL_FORM_EMPTY_VALUE_FIELDS: [ModelFormFieldDescriptor; 3] = [
+	ModelFormFieldDescriptor {
+		name: "nullable_note",
+		kind: ModelFormFieldKind::Text {
+			max_length: Some(200),
+			multiline: false,
+		},
+		required: false,
+		has_default: false,
+		nullable: true,
+		editable: true,
+		generated_relation_id: false,
+	},
+	ModelFormFieldDescriptor {
+		name: "defaulted_label",
+		kind: ModelFormFieldKind::Text {
+			max_length: Some(200),
+			multiline: false,
+		},
+		required: false,
+		has_default: true,
+		nullable: false,
+		editable: true,
+		generated_relation_id: false,
+	},
+	ModelFormFieldDescriptor {
+		name: "blank_label",
+		kind: ModelFormFieldKind::Text {
+			max_length: Some(200),
+			multiline: false,
+		},
+		required: false,
+		has_default: false,
+		nullable: false,
+		editable: true,
+		generated_relation_id: false,
+	},
+];
+
+impl ModelFormSchema for ModelFormEmptyValuesSchema {
+	type Model = ModelFormEmptyValues;
+
+	fn fields() -> &'static [ModelFormFieldDescriptor] {
+		&MODEL_FORM_EMPTY_VALUE_FIELDS
+	}
+}
+
+struct ModelFormAllEmptyValueFields;
+
+impl ModelFormPolicy for ModelFormAllEmptyValueFields {
+	fn allows(field: &str) -> bool {
+		matches!(field, "nullable_note" | "defaulted_label" | "blank_label")
+	}
+}
+
+#[derive(Default)]
+struct ModelFormEmptyValueData {
+	values: HashMap<&'static str, serde_json::Value>,
+}
+
+impl ModelFormPayload<ModelFormAllEmptyValueFields> for ModelFormEmptyValueData {
+	fn supplied_fields(&self) -> Vec<&'static str> {
+		MODEL_FORM_EMPTY_VALUE_FIELDS
+			.iter()
+			.filter(|descriptor| self.values.contains_key(descriptor.name))
+			.map(|descriptor| descriptor.name)
+			.collect()
+	}
+
+	fn forbidden_fields(&self) -> &[&'static str] {
+		&[]
+	}
+
+	fn get_json(&self, field: &str) -> Option<serde_json::Value> {
+		self.values.get(field).cloned()
+	}
+
+	fn set_json(
+		&mut self,
+		field: &str,
+		value: serde_json::Value,
+	) -> Result<(), ModelFormPayloadError> {
+		let field = MODEL_FORM_EMPTY_VALUE_FIELDS
+			.iter()
+			.find(|descriptor| descriptor.name == field)
+			.map(|descriptor| descriptor.name)
+			.ok_or_else(|| ModelFormPayloadError::UnknownField {
+				field: field.to_owned(),
+			})?;
+		self.values.insert(field, value);
+		Ok(())
+	}
+}
+
+#[test]
+fn model_form_empty_nullable_control_clears_while_other_optional_inputs_are_absent() {
+	let mut state =
+		ModelFormState::<ModelFormEmptyValuesSchema, ModelFormAllEmptyValueFields>::new();
+	for field in ["nullable_note", "defaulted_label", "blank_label"] {
+		state
+			.set_value(field, serde_json::json!("present"))
+			.expect("initial text value should be accepted");
+		state
+			.set_value(field, serde_json::json!(""))
+			.expect("empty optional control should be accepted");
+	}
+
+	assert_eq!(state.value("nullable_note"), Some(&serde_json::Value::Null));
+	assert_eq!(state.value("defaulted_label"), None);
+	assert_eq!(state.value("blank_label"), None);
+	let payload = state
+		.build_payload::<ModelFormEmptyValueData>()
+		.expect("empty controls should assemble a typed payload");
+	assert_eq!(payload.supplied_fields(), ["nullable_note"]);
+	assert_eq!(
+		payload.get_json("nullable_note"),
+		Some(serde_json::Value::Null)
+	);
+}
+
+struct ModelFormDateTimes;
+
+struct ModelFormDateTimesSchema;
+
+const MODEL_FORM_DATETIME_FIELDS: [ModelFormFieldDescriptor; 2] = [
+	ModelFormFieldDescriptor {
+		name: "aware_at",
+		kind: ModelFormFieldKind::DateTime,
+		required: true,
+		has_default: false,
+		nullable: false,
+		editable: true,
+		generated_relation_id: false,
+	},
+	ModelFormFieldDescriptor {
+		name: "naive_at",
+		kind: ModelFormFieldKind::NaiveDateTime,
+		required: true,
+		has_default: false,
+		nullable: false,
+		editable: true,
+		generated_relation_id: false,
+	},
+];
+
+impl ModelFormSchema for ModelFormDateTimesSchema {
+	type Model = ModelFormDateTimes;
+
+	fn fields() -> &'static [ModelFormFieldDescriptor] {
+		&MODEL_FORM_DATETIME_FIELDS
+	}
+}
+
+struct ModelFormAllDateTimeFields;
+
+impl ModelFormPolicy for ModelFormAllDateTimeFields {
+	fn allows(field: &str) -> bool {
+		matches!(field, "aware_at" | "naive_at")
+	}
+}
+
+#[derive(Default)]
+struct ModelFormDateTimeData {
+	values: HashMap<&'static str, serde_json::Value>,
+}
+
+impl ModelFormPayload<ModelFormAllDateTimeFields> for ModelFormDateTimeData {
+	fn supplied_fields(&self) -> Vec<&'static str> {
+		MODEL_FORM_DATETIME_FIELDS
+			.iter()
+			.filter(|descriptor| self.values.contains_key(descriptor.name))
+			.map(|descriptor| descriptor.name)
+			.collect()
+	}
+
+	fn forbidden_fields(&self) -> &[&'static str] {
+		&[]
+	}
+
+	fn get_json(&self, field: &str) -> Option<serde_json::Value> {
+		self.values.get(field).cloned()
+	}
+
+	fn set_json(
+		&mut self,
+		field: &str,
+		value: serde_json::Value,
+	) -> Result<(), ModelFormPayloadError> {
+		let field = MODEL_FORM_DATETIME_FIELDS
+			.iter()
+			.find(|descriptor| descriptor.name == field)
+			.map(|descriptor| descriptor.name)
+			.ok_or_else(|| ModelFormPayloadError::UnknownField {
+				field: field.to_owned(),
+			})?;
+		self.values.insert(field, value);
+		Ok(())
+	}
+}
+
+#[test]
+fn model_form_datetime_local_values_normalize_for_aware_and_naive_payloads() {
+	let mut state = ModelFormState::<ModelFormDateTimesSchema, ModelFormAllDateTimeFields>::new();
+	state
+		.set_value("aware_at", serde_json::json!("2026-07-25T14:30"))
+		.expect("browser local datetime should map to the documented UTC convention");
+	state
+		.set_value("naive_at", serde_json::json!("2026-07-25T14:30"))
+		.expect("browser local datetime should map to a naive ISO value");
+
+	assert_eq!(
+		state.value("aware_at"),
+		Some(&serde_json::json!("2026-07-25T14:30:00Z"))
+	);
+	assert_eq!(
+		state.value("naive_at"),
+		Some(&serde_json::json!("2026-07-25T14:30:00"))
+	);
+	let payload = state
+		.build_payload::<ModelFormDateTimeData>()
+		.expect("normalized datetimes should build a payload");
+	assert_eq!(
+		payload.get_json("aware_at"),
+		Some(serde_json::json!("2026-07-25T14:30:00Z"))
+	);
+	assert_eq!(
+		payload.get_json("naive_at"),
+		Some(serde_json::json!("2026-07-25T14:30:00"))
+	);
 }
 
 // ============================================================================

@@ -28,6 +28,7 @@ publish = false
 [dependencies]
 reinhardt = {{ path = "{}", package = "reinhardt-web", default-features = false }}
 reinhardt-core = {{ path = "{}" }}
+chrono = {{ version = "0.4", features = ["serde"] }}
 serde = {{ version = "1.0", features = ["derive"] }}
 serde_json = "1.0"
 "#,

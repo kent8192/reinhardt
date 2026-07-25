@@ -1,7 +1,9 @@
 #![deny(unexpected_cfgs)]
 
 use reinhardt::model;
-use reinhardt_core::model_form::{AllEditableModelFields, ModelFormFieldKind, ModelFormSchema};
+use reinhardt_core::model_form::{
+	AllEditableModelFields, ModelFormFieldKind, ModelFormPayload, ModelFormSchema,
+};
 use serde::{Deserialize, Serialize};
 
 #[model(app_label = "projects", table_name = "projects", info = false)]
@@ -35,6 +37,10 @@ pub struct FormProject {
 
 	#[field(max_length = 120)]
 	pub title: String,
+
+	pub aware_at: chrono::DateTime<chrono::Utc>,
+
+	pub naive_at: chrono::NaiveDateTime,
 }
 
 pub fn retry_preserves_project(job: &Job, retry: &Job) -> bool {
@@ -63,4 +69,28 @@ pub fn model_form_payload_has_title() -> bool {
 	let mut payload = FormProjectModelFormData::<AllEditableModelFields>::empty();
 	payload.set_title("draft".to_owned());
 	payload.title().is_some_and(|title| title == "draft")
+}
+
+pub fn model_form_datetime_payload_round_trips() -> bool {
+	if FormProjectFormSchema::aware_at().kind != ModelFormFieldKind::DateTime
+		|| FormProjectFormSchema::naive_at().kind != ModelFormFieldKind::NaiveDateTime
+	{
+		return false;
+	}
+	let mut payload = FormProjectModelFormData::<AllEditableModelFields>::empty();
+	if payload
+		.set_json("aware_at", serde_json::json!("2026-07-25T14:30:00Z"))
+		.is_err()
+		|| payload
+			.set_json("naive_at", serde_json::json!("2026-07-25T14:30:00"))
+			.is_err()
+	{
+		return false;
+	}
+	matches!(
+		(payload.aware_at(), payload.naive_at()),
+		(Some(aware), Some(naive))
+			if aware.to_rfc3339() == "2026-07-25T14:30:00+00:00"
+				&& naive.to_string() == "2026-07-25 14:30:00"
+	)
 }

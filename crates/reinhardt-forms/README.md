@@ -146,6 +146,10 @@ setter to supply an excluded editable value from a trusted source.
 - **AdvancedModelFormSet**: Cardinality-aware model formset
   - `min_num` and `max_num` validation before candidate preflight
   - Asynchronous ordered persistence through a caller-owned executor
+  - Untouched create-mode extra forms are excluded from cardinality, preflight,
+    and persistence; supplied or forbidden input marks an extra as submitted
+  - Inline parent persistence uses explicit `InlineFormSet::for_create` or
+    `InlineFormSet::for_update` intent
 
 ### Advanced Features
 

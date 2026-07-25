@@ -2108,18 +2108,17 @@ fn generate_model_form_support(
 		})
 		.collect::<Result<_>>()?;
 	let field_names: Vec<_> = editable_fields.iter().map(|field| &field.name).collect();
-	let field_name_strings: HashSet<_> = editable_fields
-		.iter()
-		.map(|field| field.name.to_string())
-		.collect();
+	let mut generated_method_names = HashSet::new();
 	for field in &editable_fields {
 		let field_name = field.name.to_string();
-		if matches!(
+		let setter_name = format!("set_{field_name}");
+		let collides_with_reserved_api = matches!(
 			field_name.as_str(),
 			"empty" | "forbidden_fields" | "_policy"
-		) || (field_name.starts_with("set_")
-			&& field_name_strings.contains(field_name.trim_start_matches("set_")))
-		{
+		);
+		let collides_with_generated_method = !generated_method_names.insert(field_name)
+			|| !generated_method_names.insert(setter_name);
+		if collides_with_reserved_api || collides_with_generated_method {
 			return Err(syn::Error::new_spanned(
 				&field.name,
 				"editable model field name collides with generated model-form API; rename the field or set editable = false",

@@ -74,7 +74,7 @@ fn build_columns(model_admin: &Arc<dyn ModelAdmin>) -> Vec<ColumnInfo> {
 ///
 /// # Server Function
 ///
-/// This function is automatically exposed as an HTTP endpoint by the `#[server_fn]` macro.
+/// The admin router explicitly exposes this function as an HTTP endpoint.
 /// AdminSite and AdminDatabase dependencies are automatically injected via the DI system.
 ///
 /// # Authentication
@@ -99,7 +99,7 @@ fn build_columns(model_admin: &Arc<dyn ModelAdmin>) -> Vec<ColumnInfo> {
 /// let response = get_list("User".to_string(), params).await?;
 /// println!("Found {} users", response.count);
 /// ```
-#[server_fn]
+#[server_fn(auto_register = false)]
 pub async fn get_list(
 	model_name: String,
 	params: crate::adapters::ListQueryParams,

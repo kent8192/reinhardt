@@ -24,7 +24,7 @@ use super::security::{build_csrf_cookie, generate_csrf_token};
 ///
 /// # Server Function
 ///
-/// This function is automatically exposed as an HTTP endpoint by the `#[server_fn]` macro.
+/// The admin router explicitly exposes this function as an HTTP endpoint.
 /// The AdminSite dependency is automatically injected via the DI system.
 ///
 /// # Authentication
@@ -40,7 +40,7 @@ use super::security::{build_csrf_cookie, generate_csrf_token};
 /// let dashboard = get_dashboard().await?;
 /// println!("Site: {}", dashboard.site_name);
 /// ```
-#[server_fn]
+#[server_fn(auto_register = false)]
 pub async fn get_dashboard(
 	#[inject] site: KeyedDepends<AdminSiteKey, AdminSite>,
 	#[inject] http_request: ServerFnRequest,

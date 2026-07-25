@@ -30,7 +30,7 @@ use super::validation::validate_mutation_data;
 ///
 /// # Server Function
 ///
-/// This function is automatically exposed as an HTTP endpoint by the `#[server_fn]` macro.
+/// The admin router explicitly exposes this function as an HTTP endpoint.
 /// AdminSite and AdminDatabase dependencies are automatically injected via the DI system.
 ///
 /// # Authentication
@@ -53,7 +53,7 @@ use super::validation::validate_mutation_data;
 /// let response = create_record("User".to_string(), request).await?;
 /// println!("Created: {}", response.message);
 /// ```
-#[server_fn]
+#[server_fn(auto_register = false)]
 pub async fn create_record(
 	model_name: String,
 	request: crate::types::MutationRequest,

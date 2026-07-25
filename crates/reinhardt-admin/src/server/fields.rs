@@ -28,7 +28,7 @@ use reinhardt_utils::utils_core::text::humanize_field_name;
 ///
 /// # Server Function
 ///
-/// This function is automatically exposed as an HTTP endpoint by the `#[server_fn]` macro.
+/// The admin router explicitly exposes this function as an HTTP endpoint.
 /// AdminSite and AdminDatabase dependencies are automatically injected via the DI system.
 ///
 /// # Example
@@ -44,7 +44,7 @@ use reinhardt_utils::utils_core::text::humanize_field_name;
 /// let response = get_fields("User".to_string(), Some("42".to_string())).await?;
 /// println!("Existing values: {:?}", response.values);
 /// ```
-#[server_fn]
+#[server_fn(auto_register = false)]
 pub async fn get_fields(
 	model_name: String,
 	id: Option<String>,

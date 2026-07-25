@@ -82,7 +82,7 @@ fn serialize_delimited(
 ///
 /// # Server Function
 ///
-/// This function is automatically exposed as an HTTP endpoint by the `#[server_fn]` macro.
+/// The admin router explicitly exposes this function as an HTTP endpoint.
 /// AdminSite and AdminDatabase dependencies are automatically injected via the DI system.
 ///
 /// # Authentication
@@ -99,7 +99,7 @@ fn serialize_delimited(
 /// let response = export_data("User".to_string(), ExportFormat::JSON).await?;
 /// println!("Downloaded {}", response.filename);
 /// ```
-#[server_fn]
+#[server_fn(auto_register = false)]
 pub async fn export_data(
 	model_name: String,
 	format: crate::adapters::ExportFormat,

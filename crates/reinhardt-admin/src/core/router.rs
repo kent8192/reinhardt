@@ -413,8 +413,8 @@ fn build_admin_router(
 	};
 
 	// Register all admin server functions on server-side targets.
-	// #[server_fn] generates marker structs but does not auto-register routes;
-	// explicit .server_fn(marker) calls are required.
+	// These functions opt out of automatic inventory registration because this
+	// router explicitly owns their endpoint registration.
 	#[cfg(server)]
 	let router = {
 		use crate::server::{
@@ -527,6 +527,7 @@ pub fn admin_routes_with_di(
 #[cfg(all(test, server))]
 mod tests {
 	use super::*;
+	use reinhardt_pages::server_fn::validate_server_fn_inventory;
 	use rstest::rstest;
 
 	/// Embedded admin JavaScript file for test assertions.
@@ -619,6 +620,10 @@ mod tests {
 				paths
 			);
 		}
+		assert!(
+			validate_server_fn_inventory().is_empty(),
+			"explicitly mounted admin server functions must be omitted from automatic inventory"
+		);
 	}
 
 	#[rstest]

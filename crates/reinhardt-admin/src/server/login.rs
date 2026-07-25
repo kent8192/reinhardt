@@ -30,6 +30,7 @@ use reinhardt_pages::server_fn::ServerFnRequest;
 /// database and, on success, sets the JWT token as an HTTP-Only cookie.
 /// The browser automatically attaches this cookie to subsequent requests,
 /// eliminating the need for sessionStorage token management.
+/// The admin router explicitly exposes this function as an HTTP endpoint.
 ///
 /// # Authentication Flow
 ///
@@ -62,7 +63,7 @@ use reinhardt_pages::server_fn::ServerFnRequest;
 /// ).await?;
 /// // No need to store token — browser handles it via cookie
 /// ```
-#[server_fn]
+#[server_fn(auto_register = false)]
 pub async fn admin_login(
 	username: String,
 	password: String,
@@ -79,7 +80,8 @@ pub async fn admin_login(
 }
 
 /// Authenticate an admin user using CSRF supplied through `X-CSRFToken`.
-#[server_fn]
+/// The admin router explicitly exposes this function as an HTTP endpoint.
+#[server_fn(auto_register = false)]
 pub async fn admin_login_with_header(
 	username: String,
 	password: String,

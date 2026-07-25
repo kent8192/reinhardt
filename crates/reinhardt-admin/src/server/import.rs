@@ -27,7 +27,7 @@ use super::limits::{MAX_IMPORT_FILE_SIZE, MAX_IMPORT_RECORDS};
 ///
 /// # Server Function
 ///
-/// This function is automatically exposed as an HTTP endpoint by the `#[server_fn]` macro.
+/// The admin router explicitly exposes this function as an HTTP endpoint.
 /// AdminSite and AdminDatabase dependencies are automatically injected via the DI system.
 ///
 /// # Authentication
@@ -49,7 +49,7 @@ use super::limits::{MAX_IMPORT_FILE_SIZE, MAX_IMPORT_RECORDS};
 /// ).await?;
 /// println!("Imported {} records", response.imported);
 /// ```
-#[server_fn]
+#[server_fn(auto_register = false)]
 pub async fn import_data(
 	model_name: String,
 	format: crate::adapters::ImportFormat,

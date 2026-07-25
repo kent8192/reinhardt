@@ -23,7 +23,7 @@ use super::error::{AdminAuth, MapServerFnError, ModelPermission};
 ///
 /// # Server Function
 ///
-/// This function is automatically exposed as an HTTP endpoint by the `#[server_fn]` macro.
+/// The admin router explicitly exposes this function as an HTTP endpoint.
 /// AdminSite and AdminDatabase dependencies are automatically injected via the DI system.
 ///
 /// # Authentication
@@ -39,7 +39,7 @@ use super::error::{AdminAuth, MapServerFnError, ModelPermission};
 /// let response = get_detail("User".to_string(), "42".to_string()).await?;
 /// println!("User data: {:?}", response.data);
 /// ```
-#[server_fn]
+#[server_fn(auto_register = false)]
 pub async fn get_detail(
 	model_name: String,
 	id: String,

@@ -13,6 +13,7 @@ use reinhardt_pages::server_fn::ServerFnRequest;
 ///
 /// Sets a `Max-Age=0` cookie to instruct the browser to delete the
 /// `reinhardt_admin_token` cookie.
+/// The admin router explicitly exposes this function as an HTTP endpoint.
 ///
 /// # Example
 ///
@@ -22,7 +23,7 @@ use reinhardt_pages::server_fn::ServerFnRequest;
 /// admin_logout().await?;
 /// // Browser deletes the auth cookie, subsequent requests are unauthenticated
 /// ```
-#[server_fn]
+#[server_fn(auto_register = false)]
 pub async fn admin_logout(#[inject] http_request: ServerFnRequest) -> Result<(), ServerFnError> {
 	let cookie = build_admin_auth_cookie_clear();
 	http_request.add_response_cookie(cookie);

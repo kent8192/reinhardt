@@ -44,8 +44,8 @@ fn create_session_middleware() -> SessionMiddleware {
 pub fn routes() -> UnifiedRouter {
 	let router = UnifiedRouter::new();
 
-	// Each app owns its server-function marker registration in its own
-	// `urls` module. The project router only aggregates app routers.
+	// Each app collects its own server-function inventory in its `urls` module.
+	// The project router only aggregates app routers.
 	#[cfg(server)]
 	let router = router.server(|s| {
 		s.mount("/", polls_urls::server_url_patterns())

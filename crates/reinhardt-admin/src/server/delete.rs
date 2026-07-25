@@ -30,7 +30,7 @@ use super::security::require_csrf_token;
 ///
 /// # Server Function
 ///
-/// This function is automatically exposed as an HTTP endpoint by the `#[server_fn]` macro.
+/// The admin router explicitly exposes this function as an HTTP endpoint.
 /// AdminSite and AdminDatabase dependencies are automatically injected via the DI system.
 ///
 /// # Authentication
@@ -46,7 +46,7 @@ use super::security::require_csrf_token;
 /// let response = delete_record("User".to_string(), "42".to_string(), "token".to_string()).await?;
 /// println!("Deleted: {}", response.message);
 /// ```
-#[server_fn]
+#[server_fn(auto_register = false)]
 pub async fn delete_record(
 	model_name: String,
 	id: String,
@@ -111,7 +111,7 @@ pub async fn delete_record(
 ///
 /// # Server Function
 ///
-/// This function is automatically exposed as an HTTP endpoint by the `#[server_fn]` macro.
+/// The admin router explicitly exposes this function as an HTTP endpoint.
 /// AdminSite and AdminDatabase dependencies are automatically injected via the DI system.
 ///
 /// # Authentication
@@ -132,7 +132,7 @@ pub async fn delete_record(
 /// let response = bulk_delete_records("User".to_string(), request).await?;
 /// println!("Deleted {} items", response.deleted);
 /// ```
-#[server_fn]
+#[server_fn(auto_register = false)]
 pub async fn bulk_delete_records(
 	model_name: String,
 	request: crate::adapters::BulkDeleteRequest,

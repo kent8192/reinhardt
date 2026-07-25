@@ -35,7 +35,7 @@ use syn::{Ident, LitBool, LitStr, bracketed, parenthesized};
 
 use crate::crate_paths::{
 	get_linkme_crate, get_reinhardt_core_crate, get_reinhardt_crate, get_reinhardt_db_crate,
-	get_reinhardt_migrations_crate, get_reinhardt_orm_crate,
+	get_reinhardt_migrations_crate, get_reinhardt_orm_crate, get_serde_crate, get_serde_json_crate,
 };
 use crate::identifier_case::to_snake_case;
 use crate::rel::RelAttribute;
@@ -64,6 +64,8 @@ struct ModelAttributesParsed {
 	info: Option<bool>,
 	/// Whether this model is only available on the native/server side.
 	server_only: bool,
+	/// Whether to generate target-neutral model-form schema and payload types.
+	form: bool,
 	/// Whether the original model has `#[derive(serde::Serialize)]`.
 	/// Passed from the attribute macro since derive macros cannot see `#[derive()]`.
 	serde_serialize: bool,
@@ -392,6 +394,8 @@ struct ModelConfig {
 	info: bool,
 	/// Whether this model should skip shared data/info output.
 	server_only: bool,
+	/// Whether to generate target-neutral model-form schema and payload types.
+	form: bool,
 	/// Whether the original model derives `serde::Serialize`.
 	serde_serialize: bool,
 	/// Whether the original model derives `serde::Deserialize`.
@@ -407,6 +411,7 @@ impl ModelConfig {
 		let mut manager: Option<syn::Path> = None;
 		let mut info: Option<bool> = None;
 		let mut server_only = false;
+		let mut form = false;
 		let mut serde_serialize = false;
 		let mut serde_deserialize = false;
 
@@ -457,6 +462,9 @@ impl ModelConfig {
 			if model_attr.server_only {
 				server_only = true;
 			}
+			if model_attr.form {
+				form = true;
+			}
 			if model_attr.serde_serialize {
 				serde_serialize = true;
 			}
@@ -482,6 +490,7 @@ impl ModelConfig {
 			manager,
 			info: info.unwrap_or(true),
 			server_only,
+			form,
 			serde_serialize,
 			serde_deserialize,
 		})
@@ -498,6 +507,7 @@ impl ModelConfig {
 		let mut manager: Option<syn::Path> = None;
 		let mut info: Option<bool> = None;
 		let mut server_only = false;
+		let mut form = false;
 		let mut serde_serialize = false;
 		let mut serde_deserialize = false;
 
@@ -546,6 +556,9 @@ impl ModelConfig {
 			} else if ident == "info" {
 				let value: LitBool = input.parse()?;
 				info = Some(value.value());
+			} else if ident == "form" {
+				let value: LitBool = input.parse()?;
+				form = value.value();
 			} else if ident == "unique_together" {
 				// Tuple syntax: unique_together = ("field1", "field2")
 				use syn::punctuated::Punctuated;
@@ -593,6 +606,7 @@ impl ModelConfig {
 			manager,
 			info,
 			server_only,
+			form,
 			serde_serialize,
 			serde_deserialize,
 		})
@@ -1938,6 +1952,408 @@ fn extract_option_type(ty: &Type) -> (bool, &Type) {
 		return (true, inner_ty);
 	}
 	(false, ty)
+}
+
+fn is_model_form_editable(field: &FieldInfo) -> bool {
+	if field.config.skip || field.config.primary_key || field.config.editable == Some(false) {
+		return false;
+	}
+
+	if field.is_fk_id_field {
+		return true;
+	}
+
+	field.config.editable == Some(true)
+		|| (!is_relationship_field_type(&field.ty) && field.rel.is_none())
+}
+
+fn model_form_kind(field: &FieldInfo) -> Result<TokenStream> {
+	let core_crate = get_reinhardt_core_crate();
+	let (_, inner_ty) = extract_option_type(&field.ty);
+	let unsupported = || {
+		Err(syn::Error::new_spanned(
+			&field.name,
+			format!(
+				"editable model field `{}` has no supported model-form mapping; set editable = false or use an explicit non-model form",
+				field.name
+			),
+		))
+	};
+
+	if is_many_to_many_field_type(inner_ty)
+		|| is_relationship_field_type(inner_ty)
+		|| field.rel.as_ref().is_some_and(|relation| {
+			!matches!(
+				relation.rel_type,
+				crate::rel::RelationType::ForeignKey | crate::rel::RelationType::OneToOne
+			)
+		}) {
+		return unsupported();
+	}
+
+	let Type::Path(type_path) = inner_ty else {
+		return unsupported();
+	};
+	let Some(segment) = type_path.path.segments.last() else {
+		return unsupported();
+	};
+
+	let kind = match segment.ident.to_string().as_str() {
+		"String" => {
+			let max_length = field
+				.config
+				.max_length
+				.map(|value| quote!(::core::option::Option::Some(#value as usize)))
+				.unwrap_or_else(|| quote!(::core::option::Option::None));
+			if field.config.email == Some(true) {
+				quote!(#core_crate::model_form::ModelFormFieldKind::Email { max_length: #max_length })
+			} else if field.config.url == Some(true) {
+				quote!(#core_crate::model_form::ModelFormFieldKind::Url { max_length: #max_length })
+			} else {
+				quote!(#core_crate::model_form::ModelFormFieldKind::Text { max_length: #max_length, multiline: false })
+			}
+		}
+		"i8" | "i16" | "i32" | "i64" | "isize" | "u8" | "u16" | "u32" | "u64" | "usize" => {
+			let min = field
+				.config
+				.min_value
+				.map(|value| quote!(::core::option::Option::Some(#value)))
+				.unwrap_or_else(|| quote!(::core::option::Option::None));
+			let max = field
+				.config
+				.max_value
+				.map(|value| quote!(::core::option::Option::Some(#value)))
+				.unwrap_or_else(|| quote!(::core::option::Option::None));
+			quote!(#core_crate::model_form::ModelFormFieldKind::Integer { min: #min, max: #max })
+		}
+		"f32" | "f64" => quote!(#core_crate::model_form::ModelFormFieldKind::Float),
+		"Decimal" => quote!(#core_crate::model_form::ModelFormFieldKind::Decimal),
+		"bool" => quote!(#core_crate::model_form::ModelFormFieldKind::Boolean),
+		"Date" | "NaiveDate" => quote!(#core_crate::model_form::ModelFormFieldKind::Date),
+		"Time" | "NaiveTime" => quote!(#core_crate::model_form::ModelFormFieldKind::Time),
+		"DateTime" | "NaiveDateTime" => {
+			quote!(#core_crate::model_form::ModelFormFieldKind::DateTime)
+		}
+		"Uuid" => quote!(#core_crate::model_form::ModelFormFieldKind::Uuid),
+		"Json" | "Value" | "HashMap" => quote!(#core_crate::model_form::ModelFormFieldKind::Json),
+		"PrimaryKey" if field.is_fk_id_field => {
+			quote!(#core_crate::model_form::ModelFormFieldKind::Integer { min: ::core::option::Option::None, max: ::core::option::Option::None })
+		}
+		_ => return unsupported(),
+	};
+
+	Ok(kind)
+}
+
+fn generate_model_form_support(
+	struct_name: &Ident,
+	struct_vis: &syn::Visibility,
+	field_infos: &[FieldInfo],
+) -> Result<TokenStream> {
+	let core_crate = get_reinhardt_core_crate();
+	let serde_crate = get_serde_crate();
+	let serde_json_crate = get_serde_json_crate();
+	let schema_name = Ident::new(&format!("{}FormSchema", struct_name), struct_name.span());
+	let payload_name = Ident::new(&format!("{}ModelFormData", struct_name), struct_name.span());
+	let visitor_name = Ident::new(
+		&format!("{}ModelFormDataVisitor", struct_name),
+		struct_name.span(),
+	);
+	let field_const_name = Ident::new(
+		&format!("{}_FORM_FIELDS", struct_name.to_string().to_uppercase()),
+		struct_name.span(),
+	);
+	let editable_fields: Vec<_> = field_infos
+		.iter()
+		.filter(|field| is_model_form_editable(field))
+		.collect();
+	let field_count = editable_fields.len();
+	let field_kinds: Vec<_> = editable_fields
+		.iter()
+		.map(|field| model_form_kind(field))
+		.collect::<Result<_>>()?;
+	let field_names: Vec<_> = editable_fields.iter().map(|field| &field.name).collect();
+	let field_types: Vec<_> = editable_fields.iter().map(|field| &field.ty).collect();
+	let field_literals: Vec<_> = editable_fields
+		.iter()
+		.map(|field| LitStr::new(&field.name.to_string(), field.name.span()))
+		.collect();
+	let descriptor_entries = editable_fields
+		.iter()
+		.zip(&field_kinds)
+		.map(|(field, kind)| {
+			let name = LitStr::new(&field.name.to_string(), field.name.span());
+			let (is_optional, _) = extract_option_type(&field.ty);
+			let required =
+				!is_optional && field.config.blank != Some(true) && field.config.default.is_none();
+			let has_default = field.config.default.is_some();
+			let generated_relation_id = field.is_fk_id_field;
+			quote! {
+				#core_crate::model_form::ModelFormFieldDescriptor {
+					name: #name,
+					kind: #kind,
+					required: #required,
+					has_default: #has_default,
+					editable: true,
+					generated_relation_id: #generated_relation_id,
+				}
+			}
+		});
+	let descriptor_accessors = field_names.iter().enumerate().map(|(index, field_name)| {
+		quote! {
+			pub fn #field_name() -> &'static #core_crate::model_form::ModelFormFieldDescriptor {
+				&#field_const_name[#index]
+			}
+		}
+	});
+	let getters = field_names
+		.iter()
+		.zip(&field_types)
+		.map(|(field_name, field_ty)| {
+			quote! {
+				pub fn #field_name(&self) -> ::core::option::Option<&#field_ty> {
+					self.#field_name.as_ref()
+				}
+			}
+		});
+	let setters = field_names
+		.iter()
+		.zip(&field_types)
+		.map(|(field_name, field_ty)| {
+			let setter_name = Ident::new(&format!("set_{}", field_name), field_name.span());
+			quote! {
+				pub fn #setter_name(&mut self, value: #field_ty) {
+					self.#field_name = ::core::option::Option::Some(value);
+				}
+			}
+		});
+	let empty_fields = field_names
+		.iter()
+		.map(|field_name| quote!(#field_name: ::core::option::Option::None));
+	let supplied_fields =
+		field_names
+			.iter()
+			.zip(&field_literals)
+			.map(|(field_name, field_literal)| {
+				quote! {
+					if self.#field_name.is_some() {
+						fields.push(#field_literal);
+					}
+				}
+			});
+	let get_json_arms = field_names.iter().zip(&field_literals).map(|(field_name, field_literal)| {
+		quote! {
+			#field_literal => self.#field_name.as_ref().and_then(|value| #serde_json_crate::to_value(value).ok()),
+		}
+	});
+	let set_json_arms = field_names.iter().zip(&field_literals).zip(&field_types).map(
+		|((field_name, field_literal), field_ty)| {
+			quote! {
+				#field_literal => {
+					if !<P as #core_crate::model_form::ModelFormPolicy>::allows(#field_literal) {
+						return ::core::result::Result::Err(#core_crate::model_form::ModelFormPayloadError::ForbiddenField {
+							field: #field_literal.to_owned(),
+						});
+					}
+					let parsed = #serde_json_crate::from_value::<#field_ty>(value).map_err(|error| {
+						#core_crate::model_form::ModelFormPayloadError::InvalidValue {
+							field: #field_literal.to_owned(),
+							message: error.to_string(),
+						}
+					})?;
+					self.#field_name = ::core::option::Option::Some(parsed);
+					::core::result::Result::Ok(())
+				}
+			}
+		},
+	);
+	let serialize_entries =
+		field_names
+			.iter()
+			.zip(&field_literals)
+			.map(|(field_name, field_literal)| {
+				quote! {
+					if <P as #core_crate::model_form::ModelFormPolicy>::allows(#field_literal) {
+						if let ::core::option::Option::Some(value) = &self.#field_name {
+							#serde_crate::ser::SerializeMap::serialize_entry(&mut map, #field_literal, value)?;
+						}
+					}
+				}
+			});
+	let deserialize_arms =
+		field_names
+			.iter()
+			.zip(&field_literals)
+			.map(|(field_name, field_literal)| {
+				quote! {
+					#field_literal => {
+						if <P as #core_crate::model_form::ModelFormPolicy>::allows(#field_literal) {
+							#field_name = ::core::option::Option::Some(map.next_value()?);
+						} else {
+							let _: #serde_crate::de::IgnoredAny = map.next_value()?;
+							if !forbidden_fields.contains(&#field_literal) {
+								forbidden_fields.push(#field_literal);
+							}
+						}
+					}
+				}
+			});
+	let deserialize_initializers = field_names
+		.iter()
+		.map(|field_name| quote!(let mut #field_name = ::core::option::Option::None;));
+	let serialize_bounds: Vec<_> = field_types
+		.iter()
+		.map(|field_ty| quote!(#field_ty: #serde_crate::Serialize))
+		.collect();
+	let deserialize_bounds: Vec<_> = field_types
+		.iter()
+		.map(|field_ty| quote!(#field_ty: #serde_crate::Deserialize<'de>))
+		.collect();
+	let payload_bounds: Vec<_> = field_types
+		.iter()
+		.map(
+			|field_ty| quote!(#field_ty: #serde_crate::Serialize + #serde_crate::de::DeserializeOwned),
+		)
+		.collect();
+
+	Ok(quote! {
+		#struct_vis struct #schema_name;
+
+		const #field_const_name: [#core_crate::model_form::ModelFormFieldDescriptor; #field_count] = [
+			#(#descriptor_entries),*
+		];
+
+		impl #core_crate::model_form::ModelFormSchema for #schema_name {
+			type Model = #struct_name;
+
+			fn fields() -> &'static [#core_crate::model_form::ModelFormFieldDescriptor] {
+				&#field_const_name
+			}
+		}
+
+		impl #schema_name {
+			#(#descriptor_accessors)*
+		}
+
+		#struct_vis struct #payload_name<P: #core_crate::model_form::ModelFormPolicy> {
+			#(#field_names: ::core::option::Option<#field_types>,)*
+			forbidden_fields: ::std::vec::Vec<&'static str>,
+			_policy: ::core::marker::PhantomData<P>,
+		}
+
+		impl<P: #core_crate::model_form::ModelFormPolicy> #payload_name<P> {
+			pub fn empty() -> Self {
+				Self {
+					#(#empty_fields,)*
+					forbidden_fields: ::std::vec::Vec::new(),
+					_policy: ::core::marker::PhantomData,
+				}
+			}
+
+			#(#getters)*
+			#(#setters)*
+		}
+
+		impl<P> #core_crate::model_form::ModelFormPayload<P> for #payload_name<P>
+		where
+			P: #core_crate::model_form::ModelFormPolicy,
+			#(#payload_bounds,)*
+		{
+			fn supplied_fields(&self) -> ::std::vec::Vec<&'static str> {
+				let mut fields = ::std::vec::Vec::new();
+				#(#supplied_fields)*
+				fields
+			}
+
+			fn forbidden_fields(&self) -> &[&'static str] {
+				&self.forbidden_fields
+			}
+
+			fn get_json(&self, field: &str) -> ::core::option::Option<#serde_json_crate::Value> {
+				match field {
+					#(#get_json_arms)*
+					_ => ::core::option::Option::None,
+				}
+			}
+
+			fn set_json(
+				&mut self,
+				field: &str,
+				value: #serde_json_crate::Value,
+			) -> ::core::result::Result<(), #core_crate::model_form::ModelFormPayloadError> {
+				match field {
+					#(#set_json_arms,)*
+					_ => ::core::result::Result::Err(#core_crate::model_form::ModelFormPayloadError::UnknownField {
+						field: field.to_owned(),
+					}),
+				}
+			}
+		}
+
+		impl<P> #serde_crate::Serialize for #payload_name<P>
+		where
+			P: #core_crate::model_form::ModelFormPolicy,
+			#(#serialize_bounds,)*
+		{
+			fn serialize<S>(&self, serializer: S) -> ::core::result::Result<S::Ok, S::Error>
+			where
+				S: #serde_crate::Serializer,
+			{
+				let mut map = #serde_crate::Serializer::serialize_map(serializer, ::core::option::Option::None)?;
+				#(#serialize_entries)*
+				#serde_crate::ser::SerializeMap::end(map)
+			}
+		}
+
+		struct #visitor_name<P: #core_crate::model_form::ModelFormPolicy>(::core::marker::PhantomData<P>);
+
+		impl<'de, P> #serde_crate::de::Visitor<'de> for #visitor_name<P>
+		where
+			P: #core_crate::model_form::ModelFormPolicy,
+			#(#deserialize_bounds,)*
+		{
+			type Value = #payload_name<P>;
+
+			fn expecting(&self, formatter: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+				formatter.write_str("a model form payload object")
+			}
+
+			fn visit_map<A>(self, mut map: A) -> ::core::result::Result<Self::Value, A::Error>
+			where
+				A: #serde_crate::de::MapAccess<'de>,
+			{
+				#(#deserialize_initializers)*
+				let mut forbidden_fields = ::std::vec::Vec::new();
+				while let ::core::option::Option::Some(field) = map.next_key::<::std::string::String>()? {
+					match field.as_str() {
+						#(#deserialize_arms,)*
+						_ => return ::core::result::Result::Err(<A::Error as #serde_crate::de::Error>::unknown_field(&field, &[#(#field_literals),*])),
+					}
+				}
+				::core::result::Result::Ok(#payload_name {
+					#(#field_names,)*
+					forbidden_fields,
+					_policy: ::core::marker::PhantomData,
+				})
+			}
+		}
+
+		impl<'de, P> #serde_crate::Deserialize<'de> for #payload_name<P>
+		where
+			P: #core_crate::model_form::ModelFormPolicy,
+			#(#deserialize_bounds,)*
+		{
+			fn deserialize<D>(deserializer: D) -> ::core::result::Result<Self, D::Error>
+			where
+				D: #serde_crate::Deserializer<'de>,
+			{
+				#serde_crate::Deserializer::deserialize_map(
+					deserializer,
+					#visitor_name(::core::marker::PhantomData),
+				)
+			}
+		}
+	})
 }
 
 /// Generate field accessor methods that return FieldRef<M, T>
@@ -3366,6 +3782,11 @@ pub(crate) fn model_derive_impl(mut input: DeriveInput) -> Result<TokenStream> {
 	});
 	let fixture_validation =
 		generate_fixture_validation(struct_name, generics, &field_infos, &fk_field_infos);
+	let model_form_output = if model_config.form {
+		generate_model_form_support(struct_name, struct_vis, &field_infos)?
+	} else {
+		quote! {}
+	};
 
 	// Generate the Model implementation
 	let expanded = quote! {
@@ -3373,6 +3794,8 @@ pub(crate) fn model_derive_impl(mut input: DeriveInput) -> Result<TokenStream> {
 			#composite_pk_type_def
 
 			#shared_info_output
+
+			#model_form_output
 
 			#(
 				#database_field_validations

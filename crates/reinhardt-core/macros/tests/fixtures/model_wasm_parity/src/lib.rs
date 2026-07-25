@@ -1,6 +1,7 @@
 #![deny(unexpected_cfgs)]
 
 use reinhardt::model;
+use reinhardt_core::model_form::{AllEditableModelFields, ModelFormSchema};
 use serde::{Deserialize, Serialize};
 
 #[model(app_label = "projects", table_name = "projects", info = false)]
@@ -26,10 +27,30 @@ pub struct Job {
 	pub job_type: String,
 }
 
+#[model(app_label = "forms", table_name = "forms", form = true, info = false)]
+#[derive(Default, Clone, Serialize, Deserialize)]
+pub struct FormProject {
+	#[field(primary_key = true)]
+	pub id: i64,
+
+	#[field(max_length = 120)]
+	pub title: String,
+}
+
 pub fn retry_preserves_project(job: &Job, retry: &Job) -> bool {
 	job.project_id() == retry.project_id()
 }
 
 pub fn accepts_foreign_key_id(job: &Job) -> i64 {
 	job.project_id()
+}
+
+pub fn model_form_schema_fields() -> usize {
+	FormProjectFormSchema::fields().len()
+}
+
+pub fn model_form_payload_has_title() -> bool {
+	let mut payload = FormProjectModelFormData::<AllEditableModelFields>::empty();
+	payload.set_title("draft".to_owned());
+	payload.title().is_some_and(|title| title == "draft")
 }

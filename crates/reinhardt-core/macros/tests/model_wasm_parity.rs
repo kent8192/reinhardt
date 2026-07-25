@@ -27,9 +27,12 @@ publish = false
 
 [dependencies]
 reinhardt = {{ path = "{}", package = "reinhardt-web", default-features = false }}
+reinhardt-core = {{ path = "{}" }}
 serde = {{ version = "1.0", features = ["derive"] }}
+serde_json = "1.0"
 "#,
-			repo_root.display()
+			repo_root.display(),
+			repo_root.join("crates/reinhardt-core").display()
 		),
 	)
 	.expect("write fixture manifest");

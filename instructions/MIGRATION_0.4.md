@@ -3,6 +3,67 @@
 This guide covers the breaking Reinhardt Pages event API and closure-scoped ORM
 transaction API introduced for 0.4.
 
+## Automatic server-function registration
+
+Ordinary `#[server_fn]` declarations now register through the native inventory
+by default. Keep each declaration and its `server_url_patterns` function below
+one application's `#[app_config]` module, then replace explicit marker chains
+with the fixed collector call.
+
+```rust,ignore
+// Before
+use reinhardt::pages::server_fn::ServerFnRouterExt;
+
+pub fn server_url_patterns() -> ServerRouter {
+    ServerRouter::new()
+        .server_fn(create_post::marker)
+        .server_fn(delete_post::marker)
+}
+
+// After
+use reinhardt::pages::server_fn::ServerFnRouterExt;
+
+pub fn server_url_patterns() -> ServerRouter {
+    ServerRouter::new().auto_server_fns(module_path!())
+}
+```
+
+Preview the safe source migration first. The first command is a dry run and
+does not change files; add `--write` only after reviewing its output.
+
+```bash
+reinhardt-admin migrate-server-fns .
+reinhardt-admin migrate-server-fns . --write
+```
+
+The migration rewrites only fully resolved chains of ordinary, automatically
+registered markers. It safely skips mixed chains, `server_fnset` registrations,
+markers that cannot be resolved uniquely, glob-derived imports, already
+automatic routers, and functions declared with `auto_register = false`.
+Complete skipped mixed or set registrations manually, preserving their
+intentional explicit mounting. For a developer-authored function kept in an
+explicit router or set, add `auto_register = false` to that function. Model-
+generated server-function sets stay explicitly mounted with
+`.server_fnset(...)`. Also remove obsolete application crate aliases, custom
+cfg aliases, and build-script configuration that existed only to support the
+old registration pattern.
+
+For framework-owned or other deliberately explicit routers, retain the marker
+and opt out of inventory registration:
+
+```rust,ignore
+#[server_fn(auto_register = false)]
+async fn internal_health() -> Result<(), ServerFnError> {
+    Ok(())
+}
+
+let router = ServerRouter::new().server_fn(internal_health::marker);
+```
+
+Do not combine the automatic collector with an explicit registration of the
+same endpoint. Native system checks report deterministic ownership and
+duplicate errors before command execution.
+
 ## Structured server-function errors
 
 `ServerFnError` is now a structured type with `kind()`, `status()`,

@@ -50,12 +50,18 @@ selector whitespace.
 - **Action State Helpers**: `use_action_state` and `Action::dispatching*` reduce async mutation boilerplate
 - **Headless UI Primitives**: `reinhardt_pages::ui::{ActionButton, ActionResultPanel, ResourcePanel}` compose typed action and resource states without imposing visual styles
 - **Controlled Form Elements**: `bind:` synchronizes typed signals with text, checkbox, radio, numeric, and select controls
+- **Automatic Server Function Registration**: native app routers collect their
+  own ordinary `#[server_fn]` endpoints with `auto_server_fns(module_path!())`
 
 For a React concept mapping, see
 [Reinhardt Pages for React developers](docs/react_to_reinhardt.md).
 
 For route-level loaders, prepare/commit navigation, prefetch, cancellation, and
 SSR hydration, see [Route-level data loaders](docs/route_loaders.md).
+
+For native server-function ownership, automatic registration, explicit router
+boundaries, and WASM hygiene, see the
+[Server Function Macro Guide](docs/server_fn_macro.md#automatic-native-registration).
 
 ## Headless UI primitives
 
@@ -661,8 +667,11 @@ fn error_display() -> View {
 
 `#[server_fnset]` groups existing `#[server_fn]` markers into a named, typed
 registration chain. Members retain their individual codecs, CSRF behavior,
-extractors, injected parameters, metadata, and mock identity. Registration stays
-explicit:
+extractors, injected parameters, metadata, and mock identity. A
+developer-authored function mounted through a set must declare
+`auto_register = false`; otherwise the automatic collector owns it. Do not
+mount the same function through both `auto_server_fns(module_path!())` and the
+set:
 
 ```rust,ignore
 #[server_fnset(name = "admin")]
@@ -674,6 +683,10 @@ pub fn admin_fns() -> impl ServerFnSetRegistration {
 
 let router = ServerRouter::new().server_fnset(admin_fns());
 ```
+
+Model-generated `#[server_fnset]` action functions are internally opted out of
+automatic registration. Mount a model set with `.server_fnset(...)`; its typed
+set registration is the native routing boundary.
 
 The opt-in `model-server-fnset` feature generates exactly six typed POST RPCs
 for a resource: `list`, `retrieve`, `create`, `update`, `partial_update`, and

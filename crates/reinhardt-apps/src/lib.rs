@@ -16,6 +16,8 @@
 //! - **Model Discovery**: Automatic model and migration discovery via [`discovery`] module
 //! - **Signals**: Application lifecycle signals via [`signals`] module
 //! - **Validation**: Registry validation for circular dependencies and duplicates
+//! - **Native Module Ownership**: `#[app_config]` records the owning module for
+//!   native inventory consumers such as server-function route collection
 //!
 //! ## Modules
 //!
@@ -25,6 +27,14 @@
 //! - [`registry`]: Global model and relationship registry ([`MODELS`], [`RELATIONSHIPS`])
 //! - [`signals`]: Application lifecycle signals
 //! - [`validation`]: Registry validation utilities
+//!
+//! ## Native Module Ownership
+//!
+//! On native targets, `#[app_config]` contributes an [`AppModuleRegistration`]
+//! for its defining module. Inventory-backed features use that registration to
+//! select declarations owned by one application. The related
+//! [`iter_app_module_registrations`] and [`resolve_app_module_owner`] APIs are
+//! native-only because browser WASM does not link inventory constructors.
 //!
 //! ## Quick Start
 //!

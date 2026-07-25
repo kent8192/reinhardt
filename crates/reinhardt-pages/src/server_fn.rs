@@ -13,6 +13,31 @@
 //!
 //! The macro performs conditional compilation to ensure code separation.
 //!
+//! ## Automatic Native Registration
+//!
+//! On native targets, an ordinary `#[server_fn]` submits its route metadata to
+//! the linked inventory by default. Define each application's router beneath
+//! the module that contains its `#[app_config]`, then collect only that
+//! application's functions at its router boundary:
+//!
+//! ```ignore
+//! use reinhardt::pages::server_fn::ServerFnRouterExt;
+//! use reinhardt::ServerRouter;
+//!
+//! pub fn server_url_patterns() -> ServerRouter {
+//!     ServerRouter::new().auto_server_fns(module_path!())
+//! }
+//! ```
+//!
+//! `auto_server_fns` is native-only. Its inventory metadata and route handlers
+//! are not emitted for browser WASM, while generated markers and client stubs
+//! remain available to shared client code. Applications do not need an
+//! `inventory` dependency, a framework crate alias, or a custom cfg alias.
+//!
+//! Use `#[server_fn(auto_register = false)]` when a framework-owned or
+//! deliberately explicit router must mount the marker with `.server_fn(...)`.
+//! Do not combine automatic and explicit registration for the same endpoint.
+//!
 //! ## Example
 //!
 //! ```ignore

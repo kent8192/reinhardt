@@ -55,6 +55,15 @@
 //! - Proper execution order: global → group → route → handler
 //!
 //! See `reinhardt-routers` crate documentation for detailed usage and examples.
+//!
+//! ## Server Function Routers
+//!
+//! [`routers::ServerRouter`] is the native route builder used by Pages server
+//! functions. Import `ServerFnRouterExt` from `reinhardt_pages::server_fn` to
+//! collect an application's inventory-backed server functions with
+//! `ServerRouter::new().auto_server_fns(module_path!())`. The extension trait
+//! and native route registration are unavailable to browser WASM; the WASM
+//! `ServerRouter` remains a no-op builder for cross-target router declarations.
 
 #![warn(missing_docs)]
 #![cfg_attr(docsrs, feature(doc_cfg))]

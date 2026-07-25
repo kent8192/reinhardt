@@ -6,7 +6,7 @@ The `server_fn` macro in `reinhardt-pages` provides a seamless way to define ser
 
 1. Server-side implementation with dependency injection
 2. Client-side HTTP request stub (for WASM)
-3. Route registration for automatic endpoint discovery
+3. Native inventory metadata for automatic endpoint discovery
 
 ## Key Features
 
@@ -66,6 +66,83 @@ async fn fetch_data() {
     }
 }
 ```
+
+## Automatic Native Registration
+
+Ordinary `#[server_fn]` declarations automatically submit native inventory
+metadata. Each application owns the declarations below the module containing
+its `#[app_config]`; a router built inside that application collects only its
+own entries. The project root still mounts each application router explicitly.
+
+```rust,ignore
+use reinhardt::pages::server_fn::ServerFnRouterExt;
+use reinhardt::ServerRouter;
+
+pub fn server_url_patterns() -> ServerRouter {
+    ServerRouter::new().auto_server_fns(module_path!())
+}
+```
+
+The fixed `module_path!()` argument is required. It identifies the router
+construction module so the collector can resolve its `#[app_config]` owner.
+The collector sorts selected entries before mounting them, making registration
+and validation deterministic.
+
+### Explicit and Framework-Owned Routes
+
+Use `auto_register = false` when a router must own a function explicitly, such
+as a framework router or an endpoint mounted at a deliberate boundary. The
+option retains the generated marker and client stub, but omits the native
+inventory entry:
+
+```rust,ignore
+use reinhardt::pages::server_fn::{ServerFnError, ServerFnRouterExt, server_fn};
+use reinhardt::ServerRouter;
+
+#[server_fn(auto_register = false)]
+async fn internal_health() -> Result<(), ServerFnError> {
+    Ok(())
+}
+
+fn framework_router() -> ServerRouter {
+    ServerRouter::new().server_fn(internal_health::marker)
+}
+```
+
+Choose one registration path per endpoint. Registering a default function both
+explicitly and through `auto_server_fns` leaves one endpoint mounted and records
+a router configuration error. Explicit duplicate markers likewise report a
+configuration error instead of replacing the earlier endpoint.
+
+### Ownership and Validation Errors
+
+Native inventory validation is also part of the command system checks. Errors
+are deterministic, sorted diagnostics with these identifiers:
+
+- `pages.server_fn.E001`: the router construction module has no owning
+  `#[app_config]` module.
+- `pages.server_fn.E002`: an automatically registered server function has no
+  owning application module.
+- `pages.server_fn.E003`: more than one application owns a module at the same
+  specificity.
+- `pages.server_fn.E004`: two automatically registered functions in one
+  application use the same endpoint path.
+- `pages.server_fn.E005`: two automatically registered functions in one
+  application use the same route name.
+
+Move application code under exactly one `#[app_config]` module, choose unique
+paths and names, or opt out and mount the marker explicitly where that is the
+intended ownership boundary.
+
+### Cross-Target Hygiene
+
+Inventory entries, the collector, and native route handlers are excluded from
+browser WASM. Generated markers, metadata, client stubs, and wire DTOs remain
+cross-target. Keep request and response DTOs in a module available to both
+targets, and keep imports used only by a server implementation in that
+application's native-only import block. The macro uses its resolved framework
+paths internally, so application crates do not need a framework crate alias,
+an `inventory` dependency, or a custom cfg alias.
 
 ## Structured errors (version 1)
 
@@ -329,8 +406,11 @@ same argument and return types.
 
 `#[server_fnset]` groups existing server functions without changing their
 markers, codecs, CSRF behavior, extractors, injected parameters, or mock
-identity. A set is registered explicitly; there is no global discovery step.
-Members may use different codecs:
+identity. A developer-authored function that is explicitly mounted through a
+set must declare `auto_register = false`; otherwise its default inventory
+registration is collected automatically. Do not mount the same function through
+both `.auto_server_fns(module_path!())` and `.server_fnset(...)`. Members may
+use different codecs:
 
 ```rust,no_run
 use reinhardt_pages::server_fn::{
@@ -339,12 +419,12 @@ use reinhardt_pages::server_fn::{
 };
 use reinhardt_urls::routers::ServerRouter;
 
-#[server_fn(codec = "json")]
+#[server_fn(codec = "json", auto_register = false)]
 async fn dashboard() -> Result<String, ServerFnError> {
     Ok(String::new())
 }
 
-#[server_fn(codec = "url")]
+#[server_fn(codec = "url", auto_register = false)]
 async fn export_data(format: String) -> Result<Vec<u8>, ServerFnError> {
     let _ = format;
     Ok(Vec::new())
@@ -369,6 +449,10 @@ fn main() {
 The set name must be nonempty and contain only ASCII letters, digits, hyphens,
 or underscores. Slashes, dots, percent escapes, whitespace, non-ASCII text, and
 URL delimiter characters are rejected, so a name remains one safe path segment.
+
+Model-generated `#[server_fnset]` action functions are internally opted out of
+automatic registration. Mount a model set with `.server_fnset(...)`; its typed
+set registration is the single native routing boundary.
 
 ### Model-backed CRUD
 

@@ -84,6 +84,14 @@ impl ServerRouter {
 		self.compiled_routes.take();
 	}
 
+	fn collect_configuration_errors_recursive(&self) -> Vec<String> {
+		let mut errors = self.configuration_errors.clone();
+		for child in &self.children {
+			errors.extend(child.collect_configuration_errors_recursive());
+		}
+		errors
+	}
+
 	fn compile_routes_once(&self) -> CompiledRoutes {
 		let mut compiled = CompiledRoutes::default();
 
@@ -331,7 +339,8 @@ impl ServerRouter {
 	/// assert!(router.validate_routes().is_ok());
 	/// ```
 	pub fn validate_routes(&self) -> std::result::Result<(), Vec<String>> {
-		let mut errors = self.compile_routes();
+		let mut errors = self.collect_configuration_errors_recursive();
+		errors.extend(self.compile_routes());
 		if let Err(name_errors) = self.validate_route_names() {
 			errors.extend(name_errors);
 		}

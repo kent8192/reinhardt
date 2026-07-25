@@ -44,6 +44,38 @@ pub struct MiddlewareInfo {
 /// Route information tuple: (path, name, namespace, methods)
 pub type RouteInfo = Vec<(String, Option<String>, Option<String>, Vec<Method>)>;
 
+/// Provenance for a route registered by generated code.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RouteOrigin {
+	/// The origin category used to register the route.
+	pub kind: &'static str,
+	/// The generated module that registered the route.
+	pub module_path: &'static str,
+}
+
+impl RouteOrigin {
+	/// Create provenance metadata for a generated route.
+	pub const fn generated(module_path: &'static str) -> Self {
+		Self {
+			kind: "generated",
+			module_path,
+		}
+	}
+}
+
+/// Read-only metadata for an endpoint registered with a router.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RegisteredEndpoint {
+	/// The endpoint's registered path.
+	pub path: String,
+	/// The HTTP method accepted by the endpoint.
+	pub method: Method,
+	/// The optional endpoint name used for URL reversal.
+	pub name: Option<String>,
+	/// The optional provenance supplied during registration.
+	pub origin: Option<RouteOrigin>,
+}
+
 /// Immutable method-indexed route table built from registered routes.
 ///
 /// `ServerRouter` stores this behind `OnceLock` so route compilation remains
@@ -285,6 +317,7 @@ pub(crate) struct FunctionRoute {
 	pub sync_handler: Option<Arc<dyn SyncHandler>>,
 	pub requestless_sync_handler: Option<Arc<dyn RequestlessSyncHandler>>,
 	pub name: Option<String>,
+	pub origin: Option<RouteOrigin>,
 	/// Middleware stack for this route
 	pub middleware: Vec<Arc<dyn Middleware>>,
 }

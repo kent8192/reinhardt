@@ -86,6 +86,7 @@ impl ServerRouter {
 			#[cfg(feature = "viewsets")]
 			viewsets: HashMap::new(),
 			functions: Vec::new(),
+			configuration_errors: Vec::new(),
 			views: Vec::new(),
 			children: Vec::new(),
 			di_context: None,
@@ -96,6 +97,13 @@ impl ServerRouter {
 			reverser: UrlReverser::new(),
 			compiled_routes: OnceLock::new(),
 		}
+	}
+
+	#[doc(hidden)]
+	pub fn with_configuration_error(mut self, error: impl Into<String>) -> Self {
+		self.invalidate_compiled_routes();
+		self.configuration_errors.push(error.into());
+		self
 	}
 
 	/// Set the prefix for this router

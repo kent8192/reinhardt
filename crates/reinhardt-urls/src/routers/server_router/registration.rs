@@ -4,7 +4,7 @@
 //! method-agnostic handlers, and per-route middleware attachment.
 
 use super::ServerRouter;
-use super::types::{FunctionRoute, ViewRoute};
+use super::types::{FunctionRoute, RouteOrigin, ViewRoute};
 use crate::routers::Route;
 use reinhardt_core::endpoint::EndpointInfo;
 use reinhardt_http::{
@@ -120,13 +120,34 @@ impl ServerRouter {
 	/// let router = ServerRouter::new()
 	///     .endpoint(list_users);
 	/// ```
-	pub fn endpoint<F, E>(mut self, f: F) -> Self
+	pub fn endpoint<F, E>(self, factory: F) -> Self
+	where
+		F: FnOnce() -> E,
+		E: EndpointInfo + Handler + 'static,
+	{
+		self.endpoint_with_optional_origin(factory, None)
+	}
+
+	#[doc(hidden)]
+	pub fn endpoint_with_origin<F, E>(self, factory: F, origin: RouteOrigin) -> Self
+	where
+		F: FnOnce() -> E,
+		E: EndpointInfo + Handler + 'static,
+	{
+		self.endpoint_with_optional_origin(factory, Some(origin))
+	}
+
+	fn endpoint_with_optional_origin<F, E>(
+		mut self,
+		factory: F,
+		origin: Option<RouteOrigin>,
+	) -> Self
 	where
 		F: FnOnce() -> E,
 		E: EndpointInfo + Handler + 'static,
 	{
 		self.invalidate_compiled_routes();
-		let view = f();
+		let view = factory();
 		let path = E::path().to_string();
 		let method = E::method();
 		let name = E::name().to_string();
@@ -138,6 +159,7 @@ impl ServerRouter {
 			sync_handler: None,
 			requestless_sync_handler: None,
 			name: Some(name),
+			origin,
 			middleware: Vec::new(),
 		});
 		self
@@ -168,6 +190,7 @@ impl ServerRouter {
 			sync_handler: Some(sync_handler),
 			requestless_sync_handler: None,
 			name: Some(name),
+			origin: None,
 			middleware: Vec::new(),
 		});
 		self
@@ -202,6 +225,7 @@ impl ServerRouter {
 			sync_handler: Some(sync_handler),
 			requestless_sync_handler: Some(requestless_handler),
 			name: Some(name),
+			origin: None,
 			middleware: Vec::new(),
 		});
 		self

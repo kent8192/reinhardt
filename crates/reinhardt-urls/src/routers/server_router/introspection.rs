@@ -4,7 +4,7 @@
 //! recursive route enumeration, and namespace-aware URL reversal.
 
 use super::ServerRouter;
-use super::types::{MiddlewareInfo, RouteInfo, join_path};
+use super::types::{MiddlewareInfo, RegisteredEndpoint, RouteInfo, join_path};
 #[cfg(feature = "viewsets")]
 use hyper::Method;
 
@@ -45,6 +45,19 @@ impl ServerRouter {
 		let mut seen = std::collections::HashSet::new();
 		all.retain(|info| seen.insert(info.type_name.clone()));
 		all
+	}
+
+	/// Return read-only metadata for endpoints registered on this router.
+	pub fn registered_endpoints(&self) -> Vec<RegisteredEndpoint> {
+		self.functions
+			.iter()
+			.map(|route| RegisteredEndpoint {
+				path: route.path.clone(),
+				method: route.method.clone(),
+				name: route.name.clone(),
+				origin: route.origin,
+			})
+			.collect()
 	}
 
 	/// Get all routes from this router and its children

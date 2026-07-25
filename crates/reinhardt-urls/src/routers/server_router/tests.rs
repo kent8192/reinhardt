@@ -559,6 +559,55 @@ fn test_validate_routes_success() {
 	assert!(result.is_ok());
 }
 
+#[test]
+fn validate_routes_includes_configuration_errors() {
+	let router =
+		ServerRouter::new().with_configuration_error("pages.server_fn.E001: orphan endpoint");
+
+	let errors = router
+		.validate_routes()
+		.expect_err("configuration errors must fail validation");
+
+	assert_eq!(
+		errors,
+		["pages.server_fn.E001: orphan endpoint".to_string()]
+	);
+}
+
+#[test]
+fn validate_routes_includes_mounted_child_configuration_errors() {
+	let child =
+		ServerRouter::new().with_configuration_error("pages.server_fn.E002: duplicate endpoint");
+	let router = ServerRouter::new().mount("/polls/", child);
+
+	let errors = router
+		.validate_routes()
+		.expect_err("child errors must fail root validation");
+
+	assert_eq!(
+		errors,
+		["pages.server_fn.E002: duplicate endpoint".to_string()]
+	);
+}
+
+#[test]
+fn registered_endpoints_preserve_origin() {
+	let router = ServerRouter::new().endpoint_with_origin(
+		|| TestEndpoint::<11>,
+		RouteOrigin::generated("polls::server_functions"),
+	);
+
+	assert_eq!(
+		router.registered_endpoints(),
+		[RegisteredEndpoint {
+			path: "/api/server_fn/test".to_string(),
+			method: Method::POST,
+			name: Some("server-fn-test".to_string()),
+			origin: Some(RouteOrigin::generated("polls::server_functions")),
+		}]
+	);
+}
+
 #[rstest]
 fn test_compile_routes_returns_errors_for_duplicate_routes() {
 	// Arrange - register duplicate paths for the same method

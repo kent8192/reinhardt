@@ -92,6 +92,24 @@
 #![warn(missing_docs)]
 #![cfg_attr(docsrs, feature(doc_cfg))]
 
+// Keep macro-generated absolute facade paths valid inside this crate.
+extern crate self as reinhardt;
+
+#[cfg(all(test, feature = "pages"))]
+mod server_fn_facade_self_compile_tests {
+	use crate::pages::server_fn::{ServerFnError, server_fn};
+
+	#[server_fn(auto_register = false)]
+	async fn facade_self(value: u32) -> Result<u32, ServerFnError> {
+		Ok(value)
+	}
+
+	#[test]
+	fn server_fn_expands_inside_the_facade_crate() {
+		let _marker = facade_self::marker;
+	}
+}
+
 // ============================================================================
 // Macro-support modules (D1: must stay at crate root for path stability)
 //

@@ -61,6 +61,12 @@ fn to_pascal_case_ident(ident: &proc_macro2::Ident) -> proc_macro2::Ident {
 	quote::format_ident!("{}", pascal_name)
 }
 
+fn serde_crate_path(pages_crate: &proc_macro2::TokenStream) -> syn::LitStr {
+	let mut path = quote!(#pages_crate::__private::serde).to_string();
+	path.retain(|character| !character.is_whitespace());
+	syn::LitStr::new(&path, proc_macro2::Span::call_site())
+}
+
 /// Options for `#[server_fn]` macro
 ///
 /// These options are parsed from the attribute arguments.
@@ -863,6 +869,7 @@ fn generate_client_stub(
 ) -> proc_macro2::TokenStream {
 	// Extract crate path info components
 	let pages_crate = &pages_crate_info.ident;
+	let serde_crate_path = serde_crate_path(pages_crate);
 	let name = info.name();
 	let vis = info.vis();
 	let endpoint = info.endpoint();
@@ -1020,6 +1027,7 @@ fn generate_client_stub(
 		#vis #client_sig {
 			// Argument struct for serialization
 			#[derive(#pages_crate::__private::serde::Serialize)]
+			#[serde(crate = #serde_crate_path)]
 			struct #args_struct_name {
 				#(#param_names: #param_types),*
 			}
@@ -1105,6 +1113,7 @@ fn generate_server_handler(
 	pages_crate_info: &CratePathInfo,
 ) -> proc_macro2::TokenStream {
 	let pages_crate = &pages_crate_info.ident;
+	let serde_crate_path = serde_crate_path(pages_crate);
 	let name = info.name();
 	let endpoint = info.endpoint();
 	let codec = info.codec();
@@ -1955,6 +1964,7 @@ fn generate_server_handler(
 					#pages_crate::__private::serde::Serialize,
 					#pages_crate::__private::serde::Deserialize,
 				)]
+				#[serde(crate = #serde_crate_path)]
 				pub struct Args {
 					#(pub #regular_param_names: #regular_param_types),*
 				}
@@ -2002,6 +2012,7 @@ fn generate_server_handler(
 						#pages_crate::__private::serde::Serialize,
 						#pages_crate::__private::serde::Deserialize,
 					)]
+					#[serde(crate = #serde_crate_path)]
 					pub struct Args {
 						#(pub #regular_param_names: #regular_param_types),*
 					}
@@ -2114,6 +2125,7 @@ fn generate_server_handler(
 
 			// Argument struct for deserialization (only regular parameters)
 			#[derive(#pages_crate::__private::serde::Deserialize)]
+			#[serde(crate = #serde_crate_path)]
 			struct #args_struct_name {
 				#(#regular_param_names: #regular_param_types),*
 			}

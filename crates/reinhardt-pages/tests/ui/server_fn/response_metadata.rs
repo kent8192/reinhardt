@@ -20,6 +20,12 @@ impl std::fmt::Display for ServerFnError {
 
 impl std::error::Error for ServerFnError {}
 
+impl From<reinhardt_pages::server_fn::ServerFnError> for ServerFnError {
+	fn from(err: reinhardt_pages::server_fn::ServerFnError) -> Self {
+		ServerFnError(format!("Client error: {}", err))
+	}
+}
+
 impl From<serde_json::Error> for ServerFnError {
 	fn from(err: serde_json::Error) -> Self {
 		ServerFnError(format!("Serialization error: {}", err))

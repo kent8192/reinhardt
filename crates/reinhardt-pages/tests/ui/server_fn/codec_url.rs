@@ -25,8 +25,7 @@ impl std::fmt::Display for ServerFnError {
 
 impl std::error::Error for ServerFnError {}
 
-// Required for client-side error conversion (WASM only)
-#[cfg(target_family = "wasm")]
+// Required for client-side and MSW error conversion.
 impl From<reinhardt_pages::server_fn::ServerFnError> for ServerFnError {
 	fn from(err: reinhardt_pages::server_fn::ServerFnError) -> Self {
 		ServerFnError(format!("Client error: {}", err))

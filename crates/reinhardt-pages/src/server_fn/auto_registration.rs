@@ -141,7 +141,16 @@ pub(crate) fn collect_auto_server_fns(router: ServerRouter, caller_module: &str)
 	let entries = inventory::iter::<ServerFnInventoryEntry>()
 		.copied()
 		.collect::<Vec<_>>();
-	let selected = match select_entries_for_app(&apps, &entries, caller_module) {
+	collect_auto_server_fns_from_entries(router, &apps, &entries, caller_module)
+}
+
+fn collect_auto_server_fns_from_entries(
+	router: ServerRouter,
+	apps: &[AppModuleRegistration],
+	entries: &[ServerFnInventoryEntry],
+	caller_module: &str,
+) -> ServerRouter {
+	let selected = match select_entries_for_app(apps, entries, caller_module) {
 		Ok(entries) => entries,
 		Err(errors) => {
 			return errors.into_iter().fold(router, |router, error| {
@@ -323,9 +332,19 @@ fn sort_entries(entries: &mut Vec<&ServerFnInventoryEntry>) {
 #[cfg(test)]
 mod tests {
 	use super::{
-		ServerFnInventoryEntry, ServerFnInventoryError, select_entries_for_app, sort_entries,
+		ServerFnInventoryEntry, ServerFnInventoryError, collect_auto_server_fns_from_entries,
+		select_entries_for_app, sort_entries,
 	};
+	use bytes::Bytes;
 	use reinhardt_apps::AppModuleRegistration;
+	use reinhardt_http::Request;
+	use reinhardt_urls::routers::ServerRouter;
+	use std::future::Future;
+	use std::pin::Pin;
+
+	use crate::server_fn::{
+		ServerFnHandler, ServerFnMetadata, ServerFnRegistration, ServerFnRouterExt,
+	};
 
 	fn test_entry(
 		module_path: &'static str,
@@ -339,6 +358,31 @@ mod tests {
 		router: reinhardt_urls::routers::ServerRouter,
 	) -> reinhardt_urls::routers::ServerRouter {
 		router
+	}
+
+	struct RuntimeMarker;
+
+	impl ServerFnMetadata for RuntimeMarker {
+		const MODULE_PATH: &'static str = "demo::apps::polls::server_fn";
+		const PATH: &'static str = "/api/polls/runtime";
+		const NAME: &'static str = "runtime";
+		const IS_JSON_CODEC: bool = true;
+	}
+
+	impl ServerFnRegistration for RuntimeMarker {
+		fn handler() -> ServerFnHandler {
+			runtime_handler
+		}
+	}
+
+	fn runtime_handler(
+		_request: Request,
+	) -> Pin<Box<dyn Future<Output = Result<Bytes, Bytes>> + Send>> {
+		Box::pin(async { Ok(Bytes::new()) })
+	}
+
+	fn register_runtime_marker(router: ServerRouter) -> ServerRouter {
+		router.server_fn(RuntimeMarker)
 	}
 
 	#[test]
@@ -529,5 +573,59 @@ mod tests {
 				],
 			}]
 		);
+	}
+
+	#[test]
+	fn runtime_conflict_permutations_keep_one_endpoint_and_one_error() {
+		let apps = [AppModuleRegistration::new("polls", "demo::apps::polls")];
+		let entries = [ServerFnInventoryEntry::new(
+			RuntimeMarker::MODULE_PATH,
+			RuntimeMarker::PATH,
+			RuntimeMarker::NAME,
+			register_runtime_marker,
+		)];
+		let caller_module = "demo::apps::polls::urls::server_router";
+
+		let explicit_then_auto = collect_auto_server_fns_from_entries(
+			ServerRouter::new().server_fn(RuntimeMarker),
+			&apps,
+			&entries,
+			caller_module,
+		);
+		let auto_then_explicit = collect_auto_server_fns_from_entries(
+			ServerRouter::new(),
+			&apps,
+			&entries,
+			caller_module,
+		)
+		.server_fn(RuntimeMarker);
+		let auto_then_auto = collect_auto_server_fns_from_entries(
+			collect_auto_server_fns_from_entries(
+				ServerRouter::new(),
+				&apps,
+				&entries,
+				caller_module,
+			),
+			&apps,
+			&entries,
+			caller_module,
+		);
+
+		let explicit_then_auto_errors = runtime_conflict_errors(explicit_then_auto);
+		let auto_then_explicit_errors = runtime_conflict_errors(auto_then_explicit);
+		let auto_then_auto_errors = runtime_conflict_errors(auto_then_auto);
+
+		assert_eq!(explicit_then_auto_errors, auto_then_explicit_errors);
+		assert_eq!(explicit_then_auto_errors, auto_then_auto_errors);
+	}
+
+	fn runtime_conflict_errors(router: ServerRouter) -> Vec<String> {
+		assert_eq!(router.registered_endpoints().len(), 1);
+		assert_eq!(router.registered_endpoints()[0].path, RuntimeMarker::PATH,);
+		let errors = router
+			.validate_routes()
+			.expect_err("each duplicate registration sequence must fail at startup");
+		assert_eq!(errors.len(), 1);
+		errors
 	}
 }

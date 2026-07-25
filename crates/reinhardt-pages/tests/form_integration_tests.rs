@@ -24,6 +24,133 @@
 use reinhardt_pages::{FieldMetadata, FormComponent, FormMetadata, Widget};
 use std::collections::HashMap;
 
+use reinhardt_core::model_form::{
+	ModelFormFieldDescriptor, ModelFormFieldKind, ModelFormPayload, ModelFormPayloadError,
+	ModelFormPolicy, ModelFormSchema,
+};
+use reinhardt_pages::form::ModelFormState;
+
+struct ModelFormQuestion;
+
+struct ModelFormQuestionSchema;
+
+const MODEL_FORM_QUESTION_FIELDS: [ModelFormFieldDescriptor; 2] = [
+	ModelFormFieldDescriptor {
+		name: "title",
+		kind: ModelFormFieldKind::Text {
+			max_length: Some(200),
+			multiline: false,
+		},
+		required: true,
+		has_default: false,
+		editable: true,
+		generated_relation_id: false,
+	},
+	ModelFormFieldDescriptor {
+		name: "owner_id",
+		kind: ModelFormFieldKind::Integer {
+			min: Some(1),
+			max: None,
+		},
+		required: true,
+		has_default: false,
+		editable: true,
+		generated_relation_id: true,
+	},
+];
+
+impl ModelFormSchema for ModelFormQuestionSchema {
+	type Model = ModelFormQuestion;
+
+	fn fields() -> &'static [ModelFormFieldDescriptor] {
+		&MODEL_FORM_QUESTION_FIELDS
+	}
+}
+
+struct ModelFormTitleOnly;
+
+impl ModelFormPolicy for ModelFormTitleOnly {
+	fn allows(field: &str) -> bool {
+		field == "title"
+	}
+}
+
+#[derive(Default)]
+struct ModelFormQuestionData {
+	title: Option<String>,
+}
+
+impl ModelFormPayload<ModelFormTitleOnly> for ModelFormQuestionData {
+	fn supplied_fields(&self) -> Vec<&'static str> {
+		if self.title.is_some() {
+			vec!["title"]
+		} else {
+			Vec::new()
+		}
+	}
+
+	fn forbidden_fields(&self) -> &[&'static str] {
+		&[]
+	}
+
+	fn get_json(&self, field: &str) -> Option<serde_json::Value> {
+		match field {
+			"title" => self.title.clone().map(serde_json::Value::String),
+			_ => None,
+		}
+	}
+
+	fn set_json(
+		&mut self,
+		field: &str,
+		value: serde_json::Value,
+	) -> Result<(), ModelFormPayloadError> {
+		if !ModelFormTitleOnly::allows(field) {
+			return Err(ModelFormPayloadError::ForbiddenField {
+				field: field.to_owned(),
+			});
+		}
+		match field {
+			"title" => {
+				self.title = serde_json::from_value(value).map_err(|error| {
+					ModelFormPayloadError::InvalidValue {
+						field: field.to_owned(),
+						message: error.to_string(),
+					}
+				})?;
+				Ok(())
+			}
+			_ => Err(ModelFormPayloadError::UnknownField {
+				field: field.to_owned(),
+			}),
+		}
+	}
+}
+
+#[test]
+fn model_form_builds_one_policy_safe_payload() {
+	let mut state = ModelFormState::<ModelFormQuestionSchema, ModelFormTitleOnly>::new();
+	state
+		.set_value("title", serde_json::json!("Typed"))
+		.expect("selected title should be accepted");
+
+	let owner_error = state
+		.set_value("owner_id", serde_json::json!("42"))
+		.expect_err("excluded owner identifier must be forbidden");
+	assert_eq!(
+		owner_error,
+		ModelFormPayloadError::ForbiddenField {
+			field: "owner_id".to_owned(),
+		}
+	);
+
+	let payload = state
+		.build_payload::<ModelFormQuestionData>()
+		.expect("selected control values should build one payload");
+	assert_eq!(payload.get_json("title"), Some(serde_json::json!("Typed")));
+	assert_eq!(payload.get_json("owner_id"), None);
+}
+
 // ============================================================================
 // Category 1: Form Creation and Metadata (8 tests)
 // ============================================================================

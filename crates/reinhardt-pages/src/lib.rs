@@ -601,9 +601,8 @@ pub mod form_generated;
 pub mod form_state;
 // Runtime support for DTO-derived client forms.
 pub mod client_form;
-// FormComponent requires reinhardt-forms which is not WASM-compatible yet.
-// Client-side forms use PageElement.
-#[cfg(native)]
+// Model-backed form state is target-neutral. Legacy FormComponent support is
+// gated inside the module because it still depends on reinhardt-forms.
 pub mod form;
 
 // API and communication

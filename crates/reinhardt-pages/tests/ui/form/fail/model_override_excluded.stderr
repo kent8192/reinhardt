@@ -1,0 +1,5 @@
+error: override field 'owner_id' is present in `exclude`
+  --> tests/ui/form/fail/model_override_excluded.rs:11:4
+   |
+11 |             owner_id: {
+   |             ^^^^^^^^

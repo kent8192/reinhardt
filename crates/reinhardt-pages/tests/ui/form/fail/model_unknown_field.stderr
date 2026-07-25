@@ -1,0 +1,12 @@
+error[E0599]: no associated function or constant named `missing` found for struct `QuestionFormSchema` in the current scope
+  --> tests/ui/form/fail/model_unknown_field.rs:79:12
+   |
+ 9 |   struct QuestionFormSchema;
+   |   ------------------------- associated function or constant `missing` not found for this struct
+...
+78 |           model: Question,
+   |  ________________-
+79 | |         fields: [missing],
+   | |                 -^^^^^^^ associated function or constant not found in `QuestionFormSchema`
+   | |_________________|
+   |

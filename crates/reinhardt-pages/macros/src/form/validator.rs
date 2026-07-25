@@ -21,14 +21,15 @@ use reinhardt_manouche::core::{
 	FormControlEntryKind, FormCustomWidgetSpec, FormDatalistDef, FormDerived, FormFieldCollection,
 	FormFieldDef, FormFieldEntry, FormFieldGroup, FormFieldProperty, FormMacro, FormMethod,
 	FormSlots, FormState, FormSubmitButtonDef, FormValidator, FormWatch, FormWidgetSpec,
-	IconPosition, StripArgument, TypedButtonControlDef, TypedButtonKind, TypedChoiceGroup,
-	TypedChoiceItem, TypedChoiceOption, TypedChoicesConfig, TypedCustomAttr, TypedCustomWidget,
-	TypedDatalistDef, TypedDerivedItem, TypedFieldDisplay, TypedFieldNativeAttrs,
-	TypedFieldStyling, TypedFieldType, TypedFieldValidation, TypedFormAction, TypedFormCallbacks,
-	TypedFormDerived, TypedFormFieldCollection, TypedFormFieldDef, TypedFormFieldEntry,
-	TypedFormFieldGroup, TypedFormMacro, TypedFormSlots, TypedFormState, TypedFormStyling,
-	TypedFormValidator, TypedFormWatch, TypedFormWatchItem, TypedIcon, TypedIconAttr,
-	TypedIconChild, TypedIconPosition, TypedImageInputDef, TypedMeterDef, TypedOutputDef,
+	IconPosition, ModelFieldSelection, ModelFormSource, StripArgument, TypedButtonControlDef,
+	TypedButtonKind, TypedChoiceGroup, TypedChoiceItem, TypedChoiceOption, TypedChoicesConfig,
+	TypedCustomAttr, TypedCustomWidget, TypedDatalistDef, TypedDerivedItem, TypedFieldDisplay,
+	TypedFieldNativeAttrs, TypedFieldStyling, TypedFieldType, TypedFieldValidation,
+	TypedFormAction, TypedFormCallbacks, TypedFormDerived, TypedFormFieldCollection,
+	TypedFormFieldDef, TypedFormFieldEntry, TypedFormFieldGroup, TypedFormMacro, TypedFormSlots,
+	TypedFormState, TypedFormStyling, TypedFormValidator, TypedFormWatch, TypedFormWatchItem,
+	TypedIcon, TypedIconAttr, TypedIconChild, TypedIconPosition, TypedImageInputDef, TypedMeterDef,
+	TypedModelFieldOverride, TypedModelFieldSelection, TypedModelFormSource, TypedOutputDef,
 	TypedProgressDef, TypedStripArgument, TypedSubmitButtonDef, TypedValidatorRule, TypedWidget,
 	TypedWrapper, TypedWrapperAttr, ValidatorRule,
 };
@@ -184,6 +185,14 @@ pub(super) fn validate(
 	// Transform fields
 	let fields = transform_fields(&ast.fields)?;
 	validate_list_references(&fields)?;
+	let model_source = transform_model_source(&ast.model_source)?;
+
+	if model_source.is_some() && !matches!(action, TypedFormAction::ServerFn(_)) {
+		return Err(Error::new(
+			ast.span,
+			"model-backed form! requires an explicit `server_fn`",
+		));
+	}
 
 	// Transform unified validators (scope filtering happens at codegen)
 	let validators = transform_validators(&ast.validators, &ast.fields)?;
@@ -220,10 +229,108 @@ pub(super) fn validate(
 	typed.choices_loader = choices_loader;
 	typed.slots = slots;
 	typed.fields = fields;
+	typed.model_source = model_source;
 	typed.validators = validators;
 	typed.strip_arguments = strip_arguments;
 
 	Ok(typed)
+}
+
+fn transform_model_source(
+	source: &Option<ModelFormSource>,
+) -> Result<Option<TypedModelFormSource>> {
+	let Some(source) = source else {
+		return Ok(None);
+	};
+
+	let selection = match &source.selection {
+		ModelFieldSelection::Fields(fields) => {
+			validate_unique_model_field_names(fields, "fields")?;
+			TypedModelFieldSelection::Fields(fields.clone())
+		}
+		ModelFieldSelection::Exclude(fields) => {
+			validate_unique_model_field_names(fields, "exclude")?;
+			TypedModelFieldSelection::Exclude(fields.clone())
+		}
+	};
+
+	let selected_names = match &selection {
+		TypedModelFieldSelection::Fields(fields) => Some(
+			fields
+				.iter()
+				.map(ToString::to_string)
+				.collect::<HashSet<_>>(),
+		),
+		TypedModelFieldSelection::Exclude(_) => None,
+	};
+	let excluded_names = match &selection {
+		TypedModelFieldSelection::Exclude(fields) => fields
+			.iter()
+			.map(ToString::to_string)
+			.collect::<HashSet<_>>(),
+		TypedModelFieldSelection::Fields(_) => HashSet::new(),
+	};
+
+	let mut seen_overrides = HashSet::new();
+	let overrides = source
+		.overrides
+		.iter()
+		.map(|override_| {
+			let field = override_.field.to_string();
+			if !seen_overrides.insert(field.clone()) {
+				return Err(Error::new(
+					override_.field.span(),
+					format!("duplicate `overrides` entry for field '{field}'"),
+				));
+			}
+			if excluded_names.contains(&field) {
+				return Err(Error::new(
+					override_.field.span(),
+					format!("override field '{field}' is present in `exclude`"),
+				));
+			}
+			if let Some(selected_names) = &selected_names
+				&& !selected_names.contains(&field)
+			{
+				return Err(Error::new(
+					override_.field.span(),
+					format!("override field '{field}' is not present in `fields`"),
+				));
+			}
+
+			let widget = override_
+				.widget
+				.as_ref()
+				.map(parse_model_widget)
+				.transpose()?;
+			Ok(TypedModelFieldOverride {
+				field: override_.field.clone(),
+				widget,
+				label: override_.label.as_ref().map(syn::LitStr::value),
+				help_text: override_.help_text.as_ref().map(syn::LitStr::value),
+			})
+		})
+		.collect::<Result<Vec<_>>>()?;
+
+	Ok(Some(TypedModelFormSource {
+		model: source.model.clone(),
+		selection,
+		overrides,
+	}))
+}
+
+fn validate_unique_model_field_names(fields: &[syn::Ident], clause: &str) -> Result<()> {
+	let mut seen = HashSet::new();
+	for field in fields {
+		let name = field.to_string();
+		if !seen.insert(name.clone()) {
+			return Err(Error::new(
+				field.span(),
+				format!("duplicate `{clause}` identifier: '{name}'"),
+			));
+		}
+	}
+	Ok(())
 }
 
 fn first_field_array_entry(entries: &[FormFieldEntry]) -> Option<&FormFieldCollection> {
@@ -2140,6 +2247,13 @@ fn parse_widget(ident: &syn::Ident) -> Result<TypedWidget> {
 			),
 		)),
 	}
+}
+
+fn parse_model_widget(ident: &syn::Ident) -> Result<TypedWidget> {
+	if ident == "TextArea" {
+		return Ok(TypedWidget::Textarea);
+	}
+	parse_widget(ident)
 }
 
 #[derive(Default)]

@@ -53,8 +53,9 @@ use reinhardt_manouche::core::{
 	TypedFormAction, TypedFormCallbacks, TypedFormDerived, TypedFormFieldCollection,
 	TypedFormFieldDef, TypedFormFieldEntry, TypedFormFieldGroup, TypedFormMacro, TypedFormSlots,
 	TypedFormState, TypedFormWatch, TypedIcon, TypedIconChild, TypedIconPosition,
-	TypedImageInputDef, TypedMeterDef, TypedOutputDef, TypedProgressDef, TypedSubmitButtonDef,
-	TypedValidatorRule, TypedWidget, TypedWrapper,
+	TypedImageInputDef, TypedMeterDef, TypedModelFieldSelection, TypedModelFormSource,
+	TypedOutputDef, TypedProgressDef, TypedSubmitButtonDef, TypedValidatorRule, TypedWidget,
+	TypedWrapper,
 };
 
 /// Collects scalar fields from field entries, flattening groups.
@@ -1901,6 +1902,421 @@ fn is_basic_form_value_type(ty: &syn::Type) -> bool {
 	)
 }
 
+fn generated_model_support_path(model: &syn::Path, suffix: &str) -> syn::Path {
+	let mut path = model.clone();
+	let segment = path
+		.segments
+		.last_mut()
+		.expect("validated model path must contain a segment");
+	segment.ident = format_ident!("{}{}", segment.ident, suffix, span = segment.ident.span());
+	segment.arguments = syn::PathArguments::None;
+	path
+}
+
+fn generate_model_form(
+	macro_ast: &TypedFormMacro,
+	model_source: &TypedModelFormSource,
+	pages_crate: &TokenStream,
+	use_statement: &TokenStream,
+) -> TokenStream {
+	let form_ident = &macro_ast.name;
+	let policy_ident = format_ident!("{}Policy", form_ident);
+	let data_ident = format_ident!("{}Data", form_ident);
+	let schema_path = generated_model_support_path(&model_source.model, "FormSchema");
+	let payload_path = generated_model_support_path(&model_source.model, "ModelFormData");
+	let server_fn = match &macro_ast.action {
+		TypedFormAction::ServerFn(server_fn) => server_fn,
+		_ => unreachable!("model-backed forms require a server_fn after validation"),
+	};
+
+	let selected_idents: Vec<&syn::Ident> = match &model_source.selection {
+		TypedModelFieldSelection::Fields(fields) | TypedModelFieldSelection::Exclude(fields) => {
+			fields.iter().collect()
+		}
+	};
+	let override_idents = model_source
+		.overrides
+		.iter()
+		.map(|override_| &override_.field);
+	let descriptor_guards = selected_idents
+		.into_iter()
+		.chain(override_idents)
+		.map(|field| {
+			quote! {
+				let _: &#pages_crate::form::ModelFormFieldDescriptor = #schema_path::#field();
+			}
+		});
+
+	let policy_body = match &model_source.selection {
+		TypedModelFieldSelection::Fields(fields) if fields.is_empty() => quote! { false },
+		TypedModelFieldSelection::Fields(fields) => {
+			let names = fields.iter().map(ToString::to_string);
+			quote! { ::core::matches!(field, #(#names)|*) }
+		}
+		TypedModelFieldSelection::Exclude(fields) if fields.is_empty() => quote! { true },
+		TypedModelFieldSelection::Exclude(fields) => {
+			let names = fields.iter().map(ToString::to_string);
+			quote! { !::core::matches!(field, #(#names)|*) }
+		}
+	};
+
+	let override_arms = model_source.overrides.iter().map(|override_| {
+		let name = override_.field.to_string();
+		let widget = override_
+			.widget
+			.as_ref()
+			.map(widget_to_string)
+			.map(|widget| quote!(::core::option::Option::Some(#widget)))
+			.unwrap_or_else(|| quote!(::core::option::Option::None));
+		let label = override_
+			.label
+			.as_deref()
+			.map(|label| quote!(::core::option::Option::Some(#label)))
+			.unwrap_or_else(|| quote!(::core::option::Option::None));
+		let help_text = override_
+			.help_text
+			.as_deref()
+			.map(|help_text| quote!(::core::option::Option::Some(#help_text)))
+			.unwrap_or_else(|| quote!(::core::option::Option::None));
+		quote! {
+			#name => (#widget, #label, #help_text),
+		}
+	});
+
+	let form_id = form_id_kebab_case(form_ident);
+	let method = match macro_ast.method {
+		FormMethod::Get => "get",
+		FormMethod::Post => "post",
+		FormMethod::Put | FormMethod::Patch | FormMethod::Delete => "post",
+	};
+
+	quote! {
+		{
+			#use_statement
+
+			pub struct #policy_ident;
+
+			impl #pages_crate::form::ModelFormPolicy for #policy_ident {
+				fn allows(field: &str) -> bool {
+					#policy_body
+				}
+			}
+
+			pub type #data_ident = #payload_path<#policy_ident>;
+
+			impl ::core::default::Default for #data_ident {
+				fn default() -> Self {
+					Self::empty()
+				}
+			}
+
+			#(#descriptor_guards)*
+
+			#[derive(Clone)]
+			struct #form_ident {
+				__model_state: ::std::rc::Rc<
+					::std::cell::RefCell<
+						#pages_crate::form::ModelFormState<#schema_path, #policy_ident>
+					>
+				>,
+				loading: #pages_crate::Signal<bool>,
+				error: #pages_crate::Signal<::core::option::Option<::std::string::String>>,
+				success: #pages_crate::Signal<bool>,
+			}
+
+			impl #form_ident {
+				fn new() -> Self {
+					Self {
+						__model_state: ::std::rc::Rc::new(
+							::std::cell::RefCell::new(
+								#pages_crate::form::ModelFormState::new()
+							),
+						),
+						loading: #pages_crate::Signal::new(false),
+						error: #pages_crate::Signal::new(::core::option::Option::None),
+						success: #pages_crate::Signal::new(false),
+					}
+				}
+
+				pub fn set_value(
+					&self,
+					field: &str,
+					value: #pages_crate::__private::serde_json::Value,
+				) -> ::core::result::Result<
+					(),
+					#pages_crate::form::ModelFormPayloadError,
+				> {
+					self.__model_state.borrow_mut().set_value(field, value)
+				}
+
+				pub fn value(
+					&self,
+					field: &str,
+				) -> ::core::option::Option<
+					#pages_crate::__private::serde_json::Value
+				> {
+					self.__model_state.borrow().value(field).cloned()
+				}
+
+				pub fn data(
+					&self,
+				) -> ::core::result::Result<
+					#data_ident,
+					#pages_crate::form::ModelFormPayloadError,
+				> {
+					self.__model_state.borrow().build_payload::<#data_ident>()
+				}
+
+				pub fn loading(&self) -> &#pages_crate::Signal<bool> {
+					&self.loading
+				}
+
+				pub fn error(
+					&self,
+				) -> &#pages_crate::Signal<
+					::core::option::Option<::std::string::String>
+				> {
+					&self.error
+				}
+
+				pub fn success(&self) -> &#pages_crate::Signal<bool> {
+					&self.success
+				}
+
+				pub async fn submit(
+					&self,
+				) -> ::core::result::Result<(), #pages_crate::ServerFnError> {
+					let payload = self.data().map_err(|error| {
+						#pages_crate::ServerFnError::validation_with_message(
+							error.to_string(),
+							::core::iter::empty::<(&str, &str)>(),
+						)
+					})?;
+
+					#[cfg(all(target_family = "wasm", target_os = "unknown"))]
+					{
+						self.loading.set(true);
+						self.error.set(::core::option::Option::None);
+						self.success.set(false);
+						let result = #server_fn(payload).await;
+						self.loading.set(false);
+						match result {
+							::core::result::Result::Ok(_) => {
+								self.success.set(true);
+								::core::result::Result::Ok(())
+							}
+							::core::result::Result::Err(error) => {
+								self.error.set(::core::option::Option::Some(error.to_string()));
+								::core::result::Result::Err(error)
+							}
+						}
+					}
+					#[cfg(not(all(target_family = "wasm", target_os = "unknown")))]
+					{
+						let _ = payload;
+						::core::result::Result::Ok(())
+					}
+				}
+
+				pub fn into_page(self) -> #pages_crate::Page {
+					let mut controls = ::std::vec::Vec::new();
+					for descriptor in self.__model_state.borrow().selected_descriptors() {
+						let (
+							widget_override,
+							label_override,
+							help_text,
+						): (
+							::core::option::Option<&'static str>,
+							::core::option::Option<&'static str>,
+							::core::option::Option<&'static str>,
+						) =
+							match descriptor.name {
+								#(#override_arms)*
+								_ => (
+									::core::option::Option::None,
+									::core::option::Option::None,
+									::core::option::Option::None,
+								),
+							};
+						let label = label_override.unwrap_or(descriptor.name);
+						let (tag, input_type) = match widget_override {
+							::core::option::Option::Some("Textarea" | "TextArea") =>
+								("textarea", "text"),
+							::core::option::Option::Some("PasswordInput") =>
+								("input", "password"),
+							::core::option::Option::Some("EmailInput") =>
+								("input", "email"),
+							::core::option::Option::Some("NumberInput") =>
+								("input", "number"),
+							::core::option::Option::Some("CheckboxInput") =>
+								("input", "checkbox"),
+							::core::option::Option::Some("DateInput") =>
+								("input", "date"),
+							::core::option::Option::Some("TimeInput") =>
+								("input", "time"),
+							::core::option::Option::Some("DateTimeInput") =>
+								("input", "datetime-local"),
+							::core::option::Option::Some("UrlInput") =>
+								("input", "url"),
+							::core::option::Option::Some("HiddenInput") =>
+								("input", "hidden"),
+							::core::option::Option::Some("ColorInput") =>
+								("input", "color"),
+							::core::option::Option::Some("RangeInput") =>
+								("input", "range"),
+							::core::option::Option::Some("TelInput") =>
+								("input", "tel"),
+							::core::option::Option::Some("SearchInput") =>
+								("input", "search"),
+							::core::option::Option::Some(_) => ("input", "text"),
+							::core::option::Option::None => match descriptor.kind {
+								#pages_crate::form::ModelFormFieldKind::Text {
+									multiline: true,
+									..
+								}
+								| #pages_crate::form::ModelFormFieldKind::Json =>
+									("textarea", "text"),
+								#pages_crate::form::ModelFormFieldKind::Email { .. } =>
+									("input", "email"),
+								#pages_crate::form::ModelFormFieldKind::Url { .. } =>
+									("input", "url"),
+								#pages_crate::form::ModelFormFieldKind::Integer { .. }
+								| #pages_crate::form::ModelFormFieldKind::Float
+								| #pages_crate::form::ModelFormFieldKind::Decimal =>
+									("input", "number"),
+								#pages_crate::form::ModelFormFieldKind::Boolean =>
+									("input", "checkbox"),
+								#pages_crate::form::ModelFormFieldKind::Date =>
+									("input", "date"),
+								#pages_crate::form::ModelFormFieldKind::Time =>
+									("input", "time"),
+								#pages_crate::form::ModelFormFieldKind::DateTime =>
+									("input", "datetime-local"),
+								#pages_crate::form::ModelFormFieldKind::Text { .. }
+								| #pages_crate::form::ModelFormFieldKind::Uuid =>
+									("input", "text"),
+							},
+						};
+
+						let field_name = descriptor.name;
+						let mut control = #pages_crate::PageElement::new(tag)
+							.attr("name", field_name)
+							.attr("id", field_name)
+							.attr("type", input_type)
+							.bool_attr("required", descriptor.required);
+						if input_type == "checkbox" {
+							control = control.on(
+								#pages_crate::event::KnownEvent::Change,
+								{
+									let state = ::std::rc::Rc::clone(&self.__model_state);
+									#pages_crate::typed_event_handler::<
+										#pages_crate::event::ChangeEvent,
+										_,
+									>(move |event: #pages_crate::event::ChangeEvent| {
+										if let ::core::result::Result::Ok(value) = event.checked() {
+											if let ::core::result::Result::Err(error) =
+												state.borrow_mut().set_value(
+													field_name,
+													#pages_crate::__private::serde_json::Value::Bool(value),
+												)
+											{
+												#pages_crate::warn_log!(
+													"model form field `{}` rejected input: {}",
+													field_name,
+													error,
+												);
+											}
+										}
+									})
+								},
+							);
+						} else {
+							control = control.on(
+								#pages_crate::event::KnownEvent::Input,
+								{
+									let state = ::std::rc::Rc::clone(&self.__model_state);
+									#pages_crate::typed_event_handler::<
+										#pages_crate::event::InputEvent,
+										_,
+									>(move |event: #pages_crate::event::InputEvent| {
+										if let ::core::result::Result::Ok(value) = event.value() {
+											if let ::core::result::Result::Err(error) =
+												state.borrow_mut().set_value(
+													field_name,
+													#pages_crate::__private::serde_json::Value::String(value),
+												)
+											{
+												#pages_crate::warn_log!(
+													"model form field `{}` rejected input: {}",
+													field_name,
+													error,
+												);
+											}
+										}
+									})
+								},
+							);
+						}
+
+						let mut wrapper = #pages_crate::PageElement::new("div")
+							.attr("class", "reinhardt-form-field")
+							.child(
+								#pages_crate::PageElement::new("label")
+									.attr("for", field_name)
+									.child(label.to_owned())
+							)
+							.child(control);
+						if let ::core::option::Option::Some(help_text) = help_text {
+							wrapper = wrapper.child(
+								#pages_crate::PageElement::new("small")
+									.attr("class", "reinhardt-form-help")
+									.child(help_text.to_owned())
+							);
+						}
+						controls.push(wrapper);
+					}
+
+					let submit_form = self.clone();
+					#pages_crate::IntoPage::into_page(
+						#pages_crate::PageElement::new("form")
+						.attr("id", #form_id)
+						.attr("method", #method)
+						.children(controls)
+						.child(
+							#pages_crate::PageElement::new("button")
+								.attr("type", "submit")
+								.child("Submit")
+						)
+						.on(
+							#pages_crate::event::KnownEvent::Submit,
+							#pages_crate::typed_event_handler::<
+								#pages_crate::event::SubmitEvent,
+								_,
+							>(move |event: #pages_crate::event::SubmitEvent| {
+								event.prevent_default();
+								#[cfg(all(target_family = "wasm", target_os = "unknown"))]
+								{
+									let form = submit_form.clone();
+									#pages_crate::platform::spawn_task(async move {
+										let _ = form.submit().await;
+									});
+								}
+								#[cfg(not(all(target_family = "wasm", target_os = "unknown")))]
+								{
+									let _ = &submit_form;
+								}
+							}),
+						)
+					)
+				}
+			}
+
+			let __reinhardt_form = #form_ident::new();
+			__reinhardt_form
+		}
+	}
+}
+
 /// Generates the complete code for a form! macro invocation.
 ///
 /// This function generates conditional code that works for both WASM and server builds.
@@ -1911,6 +2327,9 @@ pub(super) fn generate(
 	let crate_info = get_reinhardt_pages_crate_info();
 	let use_statement = &crate_info.use_statement;
 	let pages_crate = &crate_info.ident;
+	if let Some(model_source) = &macro_ast.model_source {
+		return generate_model_form(macro_ast, model_source, pages_crate, use_statement);
+	}
 
 	let struct_name = &macro_ast.name;
 	let ambient_argument_deprecation_markers =

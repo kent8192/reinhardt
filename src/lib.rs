@@ -13,6 +13,33 @@
 //! - **Zero-Cost Abstractions**: High-level ergonomics without runtime overhead
 //! - **Async-First**: Built on tokio and async/await from the ground up
 //!
+//! ## Generated Model Form Facade
+//!
+//! Enable the `forms` feature to use generated model-backed forms through the
+//! facade and its prelude exports:
+//!
+//! ```rust,no_run
+//! use reinhardt::forms::{
+//!     FormModel,
+//!     ModelForm,
+//!     ModelFormError,
+//! };
+//! use reinhardt::core::model_form::{
+//!     ModelFormPolicy,
+//!     ModelFormSchema,
+//! };
+//!
+//! fn accepts_generated_model_form<T, P>()
+//! where
+//!     T: FormModel,
+//!     P: ModelFormPolicy,
+//!     T::Schema: ModelFormSchema<Model = T>,
+//! {
+//!     let _ = std::any::type_name::<ModelForm<T, P>>();
+//!     let _ = std::any::type_name::<ModelFormError>();
+//! }
+//! ```
+//!
 //! ## Feature Flags
 //!
 //! Reinhardt provides flexible feature flags to control compilation and reduce binary size.

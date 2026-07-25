@@ -197,13 +197,17 @@ Provides compile-time code generation for common patterns.
   - Cleaner syntax without explicit `#[derive(Model)]`
   - Same attributes as `#[derive(Model)]`
   - Requires an explicit `app_label`
+  - Enables generated model-form schema and generic payload types only with the
+    explicit `form = true` opt-in
   - Defaults `table_name` to the app label plus struct name in snake_case without pluralization
-  - Example: `#[model(app_label = "auth")]` (`HTTPRoute` uses `auth_http_route`)
+  - Example: `#[model(app_label = "polls", form = true)]` generates
+    `QuestionFormSchema` and `QuestionModelFormData<P>` for a `Question` model
+  - Models without `form = true` generate no model-form symbols
 
 - **`#[derive(Model)]`** - Derive macro for automatic Model implementation
   - Implements `Model` trait
   - Registers model with global ModelRegistry for migrations
-  - Model attributes: `app_label`, `table_name`, `constraints`
+  - Model attributes: `app_label`, `table_name`, `constraints`, `form`
   - Field attributes: `primary_key`, `max_length`, `null`, `blank`, `unique`, `default`, `db_column`, `editable`
   - Supported types: `i32`, `i64`, `String`, `bool`, `DateTime<Utc>`, `Date`, `Time`, `f32`, `f64`, `Option<T>`
   - Requires: Named fields, `Serialize`/`Deserialize`, exactly one `primary_key`, `max_length` for String fields

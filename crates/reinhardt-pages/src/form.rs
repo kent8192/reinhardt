@@ -33,9 +33,10 @@
 //!
 //! A `form!` declaration with `model` and exactly one of `fields` or `exclude`
 //! uses the target-neutral schema emitted by `#[model(form = true)]`. The macro
-//! generates a form-specific policy and payload alias, renders controls from
-//! [`ModelFormFieldKind`], and sends one generated payload to the explicit
-//! `server_fn`. Field overrides affect presentation only.
+//! renders controls from [`ModelFormFieldKind`] and sends one model-generated
+//! generic payload to the explicit `server_fn`. Its form-specific policy and
+//! data alias are internal implementation items scoped to the `form!`
+//! expression. Field overrides affect presentation only.
 //!
 //! ## Example
 //!

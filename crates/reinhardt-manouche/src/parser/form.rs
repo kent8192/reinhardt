@@ -309,7 +309,7 @@ impl Parse for FormMacro {
 					return Err(syn::Error::new(
 						key.span(),
 						format!(
-							"Unknown form property: '{}'. Expected: name, action, server_fn, method, class, state, on_submit, on_success, on_success_ref, on_error, on_loading, watch, redirect_on_success, success_url, initial_loader, choices_loader, slots, fields, validators, derived, ambient_arguments, strip_arguments",
+							"Unknown form property: '{}'. Expected: name, action, server_fn, method, class, model, state, on_submit, on_success, on_success_ref, on_error, on_loading, watch, redirect_on_success, success_url, initial_loader, choices_loader, slots, fields, exclude, overrides, validators, derived, ambient_arguments, strip_arguments",
 							key
 						),
 					));
@@ -1674,6 +1674,26 @@ mod tests {
 			fields.iter().map(ToString::to_string).collect::<Vec<_>>(),
 			["owner_id"]
 		);
+	}
+
+	#[rstest]
+	fn test_unknown_form_property_lists_model_form_clauses() {
+		// Arrange
+		let input = quote! {
+			name: QuestionForm,
+			unknown_clause: true,
+			fields: {},
+		};
+
+		// Act
+		let error =
+			syn::parse2::<FormMacro>(input).expect_err("unknown form property should be rejected");
+
+		// Assert
+		let message = error.to_string();
+		assert!(message.contains("model"));
+		assert!(message.contains("exclude"));
+		assert!(message.contains("overrides"));
 	}
 
 	#[rstest]

@@ -35,11 +35,14 @@ impl<T: FormModel> ModelChoiceField<T> {
 	///
 	/// # Examples
 	///
-	/// ```ignore
+	/// ```rust
 	/// use reinhardt_forms::fields::ModelChoiceField;
 	/// use reinhardt_forms::FormField;
 	/// use reinhardt_macros::model;
 	/// use serde::{Deserialize, Serialize};
+	/// # mod model_form {
+	/// #     pub use reinhardt_forms::model_form::*;
+	/// # }
 	///
 	/// #[model(
 	///     app_label = "forms",
@@ -55,6 +58,7 @@ impl<T: FormModel> ModelChoiceField<T> {
 	///     name: String,
 	/// }
 	///
+	/// # fn main() {
 	/// let categories = vec![
 	///     Category { id: 1, name: "Technology".to_string() },
 	///     Category { id: 2, name: "Science".to_string() },
@@ -63,6 +67,7 @@ impl<T: FormModel> ModelChoiceField<T> {
 	/// let field = ModelChoiceField::new("category", categories);
 	/// assert_eq!(field.name(), "category");
 	/// assert!(FormField::required(&field));
+	/// # }
 	/// ```
 	pub fn new(name: impl Into<String>, queryset: Vec<T>) -> Self {
 		let mut error_messages = HashMap::new();
@@ -265,12 +270,15 @@ impl<T: FormModel> ModelMultipleChoiceField<T> {
 	///
 	/// # Examples
 	///
-	/// ```ignore
+	/// ```rust
 	/// use reinhardt_forms::fields::ModelMultipleChoiceField;
 	/// use reinhardt_forms::FormField;
 	/// use reinhardt_macros::model;
 	/// use serde::{Deserialize, Serialize};
 	/// use serde_json::json;
+	/// # mod model_form {
+	/// #     pub use reinhardt_forms::model_form::*;
+	/// # }
 	///
 	/// #[model(
 	///     app_label = "forms",
@@ -286,6 +294,7 @@ impl<T: FormModel> ModelMultipleChoiceField<T> {
 	///     name: String,
 	/// }
 	///
+	/// # fn main() {
 	/// let tags = vec![
 	///     Tag { id: 1, name: "rust".to_string() },
 	///     Tag { id: 2, name: "programming".to_string() },
@@ -299,6 +308,7 @@ impl<T: FormModel> ModelMultipleChoiceField<T> {
 	/// // Test with multiple selections
 	/// let result = field.clean(Some(&json!(["1", "2"])));
 	/// assert!(result.is_ok());
+	/// # }
 	/// ```
 	pub fn new(name: impl Into<String>, queryset: Vec<T>) -> Self {
 		let mut error_messages = HashMap::new();

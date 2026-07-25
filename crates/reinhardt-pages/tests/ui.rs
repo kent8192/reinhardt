@@ -68,6 +68,7 @@ fn test_server_fn_macro_ui() {
 	t.pass("tests/ui/server_fn/structured_error_public_api.rs");
 	t.pass("tests/ui/server_fn/auto_register_default.rs");
 	t.pass("tests/ui/server_fn/auto_register_opt_out.rs");
+	t.pass("tests/ui/server_fn/auto_register_name_collision.rs");
 	// Issue #3858: verify FromRequest extractor params work in #[server_fn]
 	t.pass("tests/ui/server_fn/with_extractors.rs");
 }

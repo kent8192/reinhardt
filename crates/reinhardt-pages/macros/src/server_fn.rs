@@ -2075,24 +2075,25 @@ fn generate_server_handler(
 	let auto_registration_tokens = if info.options.auto_register {
 		quote! {
 			#[cfg(not(all(target_family = "wasm", target_os = "unknown")))]
-			fn #auto_register_fn_name(
-				router: #pages_crate::__private::reinhardt_urls::routers::ServerRouter,
-			) -> #pages_crate::__private::reinhardt_urls::routers::ServerRouter {
-				#pages_crate::server_fn::ServerFnRouterExt::server_fn(
-					router,
-					#marker_module_name::marker,
-				)
-			}
+			const _: () = {
+				fn #auto_register_fn_name(
+					router: #pages_crate::__private::reinhardt_urls::routers::ServerRouter,
+				) -> #pages_crate::__private::reinhardt_urls::routers::ServerRouter {
+					#pages_crate::server_fn::ServerFnRouterExt::server_fn(
+						router,
+						#marker_module_name::marker,
+					)
+				}
 
-			#[cfg(not(all(target_family = "wasm", target_os = "unknown")))]
-			#pages_crate::__private::inventory::submit! {
-				#pages_crate::server_fn::ServerFnInventoryEntry::new(
-					module_path!(),
-					#endpoint,
-					#name_str,
-					#auto_register_fn_name,
-				)
-			}
+				#pages_crate::__private::inventory::submit! {
+					#pages_crate::server_fn::ServerFnInventoryEntry::new(
+						module_path!(),
+						#endpoint,
+						#name_str,
+						#auto_register_fn_name,
+					)
+				}
+			};
 		}
 	} else {
 		quote! {}

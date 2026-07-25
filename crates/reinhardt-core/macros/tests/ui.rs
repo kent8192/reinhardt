@@ -124,6 +124,12 @@ fn test_admin_fail() {
 // ===== AppConfig =====
 
 #[test]
+fn test_app_config_pass() {
+	let t = trybuild::TestCases::new();
+	t.pass("tests/ui/app_config/pass/*.rs");
+}
+
+#[test]
 fn test_app_config_fail() {
 	let t = trybuild::TestCases::new();
 	t.compile_fail("tests/ui/app_config/fail/*.rs");

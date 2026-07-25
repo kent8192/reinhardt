@@ -186,6 +186,11 @@ fn derive_impl(input: DeriveInput) -> Result<TokenStream> {
 
 		// Vendor asset registrations (one inventory::submit! per declared asset).
 		#( #vendor_submissions )*
+
+		#[cfg(not(all(target_family = "wasm", target_os = "unknown")))]
+		#apps_crate::inventory::submit! {
+			#apps_crate::AppModuleRegistration::new(#label, module_path!())
+		}
 	};
 
 	Ok(expanded)

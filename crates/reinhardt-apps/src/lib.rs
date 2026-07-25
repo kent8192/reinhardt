@@ -140,8 +140,10 @@ pub use inventory;
 // native-only.
 #[cfg(native)]
 pub use apps::{
-	AppCommandConfig, AppLocaleConfig, AppMediaConfig, AppStaticFilesConfig, AppVendorAsset,
-	BaseCommand, get_app_commands, get_app_locales, get_app_media, get_app_static_files,
+	AppCommandConfig, AppLocaleConfig, AppMediaConfig, AppModuleRegistration,
+	AppModuleResolutionError, AppStaticFilesConfig, AppVendorAsset, BaseCommand, get_app_commands,
+	get_app_locales, get_app_media, get_app_static_files, iter_app_module_registrations,
+	resolve_app_module_owner,
 };
 pub use apps::{
 	AppConfig, AppError, AppLabel, AppResult, Apps, LocaleProvider, MediaProvider,

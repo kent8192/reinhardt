@@ -830,6 +830,51 @@ mod tests {
 			"expected control char error for path, got: {err}"
 		);
 	}
+
+	#[rstest]
+	#[case("demo::apps::polls::server_fn::vote", "polls")]
+	#[case("demo::apps::polls::nested::server_fn::save", "nested")]
+	fn resolves_the_longest_component_bounded_app_owner(
+		#[case] module_path: &str,
+		#[case] expected_label: &str,
+	) {
+		let registrations = [
+			AppModuleRegistration::new("polls", "demo::apps::polls"),
+			AppModuleRegistration::new("nested", "demo::apps::polls::nested"),
+			AppModuleRegistration::new("barista", "demo::apps::barista"),
+		];
+
+		let owner = resolve_app_module_owner(registrations.iter(), module_path)
+			.expect("module should have one owner");
+
+		assert_eq!(owner.app_label, expected_label);
+	}
+
+	#[test]
+	fn does_not_treat_partial_component_prefix_as_ownership() {
+		let registrations = [AppModuleRegistration::new("bar", "demo::apps::bar")];
+
+		let owner =
+			resolve_app_module_owner(registrations.iter(), "demo::apps::barista::server_fn");
+
+		assert_eq!(owner, Err(AppModuleResolutionError::Orphan));
+	}
+
+	#[test]
+	fn returns_sorted_labels_when_module_ownership_is_ambiguous() {
+		let registrations = [
+			AppModuleRegistration::new("zeta", "demo::apps::polls"),
+			AppModuleRegistration::new("alpha", "demo::apps::polls"),
+		];
+
+		let owner =
+			resolve_app_module_owner(registrations.iter(), "demo::apps::polls::server_fn::vote");
+
+		assert_eq!(
+			owner,
+			Err(AppModuleResolutionError::Ambiguous(vec!["alpha", "zeta"]))
+		);
+	}
 }
 
 // ============================================================================
@@ -1026,6 +1071,95 @@ mod typed_tests {
 // none of which are meaningful on the wasm client target, so they are
 // `#[cfg(native)]`-gated individually.
 // ============================================================================
+
+/// Compile-time registration linking an application label to its Rust module.
+///
+/// `#[app_config]` submits one registration for every application configuration
+/// so server-side discovery can determine which application owns a module.
+#[cfg(native)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct AppModuleRegistration {
+	/// Application label declared by `#[app_config]`.
+	pub app_label: &'static str,
+	/// Rust module path containing the application configuration.
+	pub module_path: &'static str,
+}
+
+#[cfg(native)]
+impl AppModuleRegistration {
+	/// Creates an application module registration.
+	pub const fn new(app_label: &'static str, module_path: &'static str) -> Self {
+		Self {
+			app_label,
+			module_path,
+		}
+	}
+}
+
+/// Errors returned while resolving a Rust module to its owning application.
+#[cfg(native)]
+#[derive(Debug, Clone, PartialEq, Eq, ThisError)]
+pub enum AppModuleResolutionError {
+	/// No registered application module is an ancestor of the requested module.
+	#[error("No application module owns the requested module")]
+	Orphan,
+
+	/// Multiple application registrations have the same most-specific module path.
+	#[error("Multiple application modules own the requested module: {0:?}")]
+	Ambiguous(Vec<&'static str>),
+}
+
+#[cfg(native)]
+inventory::collect!(AppModuleRegistration);
+
+/// Iterates over application module registrations linked into the binary.
+#[cfg(native)]
+pub fn iter_app_module_registrations() -> impl Iterator<Item = &'static AppModuleRegistration> {
+	inventory::iter::<AppModuleRegistration>()
+}
+
+/// Resolves the most-specific registered application module that owns a module.
+#[cfg(native)]
+pub fn resolve_app_module_owner<'a>(
+	registrations: impl IntoIterator<Item = &'a AppModuleRegistration>,
+	module_path: &str,
+) -> Result<&'a AppModuleRegistration, AppModuleResolutionError> {
+	let matching_registrations = registrations
+		.into_iter()
+		.filter(|registration| is_module_ancestor(registration.module_path, module_path))
+		.collect::<Vec<_>>();
+
+	let longest_path_length = matching_registrations
+		.iter()
+		.map(|registration| registration.module_path.split("::").count())
+		.max()
+		.ok_or(AppModuleResolutionError::Orphan)?;
+
+	let mut owners = matching_registrations
+		.into_iter()
+		.filter(|registration| registration.module_path.split("::").count() == longest_path_length)
+		.collect::<Vec<_>>();
+	owners.sort_unstable_by_key(|registration| registration.app_label);
+
+	if owners.len() > 1 {
+		return Err(AppModuleResolutionError::Ambiguous(
+			owners
+				.into_iter()
+				.map(|registration| registration.app_label)
+				.collect(),
+		));
+	}
+
+	Ok(owners[0])
+}
+
+#[cfg(native)]
+fn is_module_ancestor(ancestor: &str, descendant: &str) -> bool {
+	descendant == ancestor
+		|| descendant
+			.strip_prefix(ancestor)
+			.is_some_and(|suffix| suffix.starts_with("::"))
+}
 
 /// Base trait for custom management commands
 ///

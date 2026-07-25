@@ -1,0 +1,270 @@
+use std::collections::{BTreeMap, BTreeSet};
+use std::fs;
+use std::path::{Path, PathBuf};
+
+use cargo_metadata::{MetadataCommand, PackageId};
+use syn::{Attribute, Expr, ExprLit, Item, ItemMod, Lit, Meta, Token};
+
+use super::{MigrateServerFnsError, Result};
+
+pub(crate) type ModulePath = Vec<String>;
+pub(crate) type TargetKey = String;
+
+#[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
+pub(crate) struct ServerFnKey {
+	pub(crate) target: TargetKey,
+	pub(crate) module: ModulePath,
+	pub(crate) function: String,
+}
+
+#[derive(Clone, Debug)]
+pub(crate) struct ServerFn {
+	pub(crate) auto_register: bool,
+}
+
+pub(crate) type ServerFnIndex = BTreeMap<ServerFnKey, Vec<ServerFn>>;
+
+#[derive(Clone, Debug)]
+pub(crate) struct SourceModule {
+	pub(crate) target: TargetKey,
+	pub(crate) module: ModulePath,
+	pub(crate) path: PathBuf,
+	pub(crate) relative_path: PathBuf,
+}
+
+#[derive(Debug)]
+pub(crate) struct ProjectIndex {
+	pub(crate) server_fns: ServerFnIndex,
+	pub(crate) source_modules: Vec<SourceModule>,
+}
+
+impl ProjectIndex {
+	pub(crate) fn discover(path: &Path) -> Result<Self> {
+		let metadata = MetadataCommand::new().no_deps().current_dir(path).exec()?;
+		let workspace_root = metadata.workspace_root.as_std_path().to_path_buf();
+		let workspace_members: BTreeSet<&PackageId> = metadata.workspace_members.iter().collect();
+		let mut scanner = Scanner {
+			workspace_root,
+			server_fns: BTreeMap::new(),
+			source_modules: Vec::new(),
+			visited: BTreeSet::new(),
+		};
+
+		for package in metadata
+			.packages
+			.iter()
+			.filter(|package| workspace_members.contains(&package.id))
+		{
+			for target in &package.targets {
+				let source = target.src_path.as_std_path();
+				if !source.is_file() {
+					continue;
+				}
+				let target_key = format!("{}::{}::{}", package.id, target.name, source.display());
+				scanner.scan_external_module(target_key, Vec::new(), source.to_path_buf())?;
+			}
+		}
+
+		scanner
+			.source_modules
+			.sort_by(|left, right| left.relative_path.cmp(&right.relative_path));
+		scanner.source_modules.dedup_by(|left, right| {
+			left.path == right.path && left.target == right.target && left.module == right.module
+		});
+		Ok(Self {
+			server_fns: scanner.server_fns,
+			source_modules: scanner.source_modules,
+		})
+	}
+}
+
+struct Scanner {
+	workspace_root: PathBuf,
+	server_fns: ServerFnIndex,
+	source_modules: Vec<SourceModule>,
+	visited: BTreeSet<(TargetKey, ModulePath, PathBuf)>,
+}
+
+impl Scanner {
+	fn scan_external_module(
+		&mut self,
+		target: TargetKey,
+		module: ModulePath,
+		path: PathBuf,
+	) -> Result<()> {
+		let path = path
+			.canonicalize()
+			.map_err(|source| MigrateServerFnsError::Io {
+				path: path.clone(),
+				source,
+			})?;
+		if !self
+			.visited
+			.insert((target.clone(), module.clone(), path.clone()))
+		{
+			return Ok(());
+		}
+		let relative_path = path
+			.strip_prefix(&self.workspace_root)
+			.map_err(|_| MigrateServerFnsError::TargetOutsideWorkspace {
+				path: path.clone(),
+				root: self.workspace_root.clone(),
+			})?
+			.to_path_buf();
+		let source = fs::read_to_string(&path).map_err(|source| MigrateServerFnsError::Io {
+			path: path.clone(),
+			source,
+		})?;
+		let parsed = syn::parse_file(&source).map_err(|source| MigrateServerFnsError::Parse {
+			path: path.clone(),
+			source,
+		})?;
+		self.source_modules.push(SourceModule {
+			target: target.clone(),
+			module: module.clone(),
+			path: path.clone(),
+			relative_path,
+		});
+		let module_directory = child_module_directory(&path);
+		self.scan_items(&target, &module, &module_directory, &parsed.items)
+	}
+
+	fn scan_items(
+		&mut self,
+		target: &TargetKey,
+		module: &ModulePath,
+		module_directory: &Path,
+		items: &[Item],
+	) -> Result<()> {
+		for item in items {
+			match item {
+				Item::Fn(function) if is_server_fn(&function.attrs) => {
+					let key = ServerFnKey {
+						target: target.clone(),
+						module: module.clone(),
+						function: function.sig.ident.to_string(),
+					};
+					self.server_fns.entry(key).or_default().push(ServerFn {
+						auto_register: server_fn_auto_registers(&function.attrs),
+					});
+				}
+				Item::Mod(item_mod) => {
+					self.scan_module(target, module, module_directory, item_mod)?;
+				}
+				_ => {}
+			}
+		}
+		Ok(())
+	}
+
+	fn scan_module(
+		&mut self,
+		target: &TargetKey,
+		module: &ModulePath,
+		module_directory: &Path,
+		item_mod: &ItemMod,
+	) -> Result<()> {
+		let mut child_module = module.clone();
+		child_module.push(item_mod.ident.to_string());
+		if let Some((_, items)) = &item_mod.content {
+			return self.scan_items(
+				target,
+				&child_module,
+				&module_directory.join(item_mod.ident.to_string()),
+				items,
+			);
+		}
+
+		let Some(path) = find_external_module(module_directory, item_mod) else {
+			return Ok(());
+		};
+		self.scan_external_module(target.clone(), child_module, path)
+	}
+}
+
+fn child_module_directory(path: &Path) -> PathBuf {
+	let parent = path.parent().unwrap_or(Path::new(""));
+	match path.file_name().and_then(|name| name.to_str()) {
+		Some("lib.rs" | "main.rs" | "mod.rs") => parent.to_path_buf(),
+		_ => parent.join(path.file_stem().unwrap_or_default()),
+	}
+}
+
+fn find_external_module(module_directory: &Path, item_mod: &ItemMod) -> Option<PathBuf> {
+	if let Some(explicit) = path_attribute(&item_mod.attrs) {
+		let candidate = module_directory.join(explicit);
+		return candidate.is_file().then_some(candidate);
+	}
+
+	let name = item_mod.ident.to_string();
+	let flat = module_directory.join(format!("{name}.rs"));
+	if flat.is_file() {
+		return Some(flat);
+	}
+	let legacy = module_directory.join(name).join("mod.rs");
+	legacy.is_file().then_some(legacy)
+}
+
+fn path_attribute(attributes: &[Attribute]) -> Option<PathBuf> {
+	attributes.iter().find_map(|attribute| {
+		if !attribute.path().is_ident("path") {
+			return None;
+		}
+		let Meta::NameValue(name_value) = &attribute.meta else {
+			return None;
+		};
+		let Expr::Lit(ExprLit {
+			lit: Lit::Str(path),
+			..
+		}) = &name_value.value
+		else {
+			return None;
+		};
+		Some(PathBuf::from(path.value()))
+	})
+}
+
+fn is_server_fn(attributes: &[Attribute]) -> bool {
+	attributes.iter().any(|attribute| {
+		attribute
+			.path()
+			.segments
+			.last()
+			.is_some_and(|segment| segment.ident == "server_fn")
+	})
+}
+
+fn server_fn_auto_registers(attributes: &[Attribute]) -> bool {
+	let Some(attribute) = attributes.iter().find(|attribute| {
+		attribute
+			.path()
+			.segments
+			.last()
+			.is_some_and(|segment| segment.ident == "server_fn")
+	}) else {
+		return true;
+	};
+	let Meta::List(list) = &attribute.meta else {
+		return true;
+	};
+	let Ok(arguments) =
+		list.parse_args_with(syn::punctuated::Punctuated::<Meta, Token![,]>::parse_terminated)
+	else {
+		return true;
+	};
+	!arguments.iter().any(|argument| {
+		let Meta::NameValue(name_value) = argument else {
+			return false;
+		};
+		if !name_value.path.is_ident("auto_register") {
+			return false;
+		}
+		matches!(
+			&name_value.value,
+			Expr::Lit(ExprLit {
+				lit: Lit::Bool(value),
+				..
+			}) if !value.value
+		)
+	})
+}

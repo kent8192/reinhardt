@@ -27,7 +27,7 @@
 //! reinhardt-admin --help
 //! ```
 
-use reinhardt_admin_cli::migrate_v2;
+use reinhardt_admin_cli::{migrate_server_fns, migrate_v2};
 
 use std::path::PathBuf;
 
@@ -297,6 +297,9 @@ enum Commands {
 
 	/// Migrate Manouche v1 source files to v2 grammar (spec §6.1 + §6.2).
 	MigrateManoucheV2(migrate_v2::MigrateV2Args),
+
+	/// Migrate explicit server-function markers to automatic registration.
+	MigrateServerFns(migrate_server_fns::MigrateServerFnsArgs),
 }
 
 #[derive(Debug)]
@@ -562,6 +565,13 @@ async fn main() {
 		),
 		Commands::MigrateManoucheV2(args) => {
 			if let Err(e) = migrate_v2::run(args) {
+				eprintln!("{}", format!("error: {e}").red());
+				process::exit(1);
+			}
+			Ok(())
+		}
+		Commands::MigrateServerFns(args) => {
+			if let Err(e) = migrate_server_fns::run(args) {
 				eprintln!("{}", format!("error: {e}").red());
 				process::exit(1);
 			}

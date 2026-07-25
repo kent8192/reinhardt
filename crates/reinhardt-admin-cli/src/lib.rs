@@ -6,4 +6,5 @@
 
 #![warn(missing_docs)]
 
+pub mod migrate_server_fns;
 pub mod migrate_v2;

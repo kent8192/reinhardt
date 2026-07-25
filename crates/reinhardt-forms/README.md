@@ -136,8 +136,12 @@ setter to supply an excluded editable value from a trusted source.
 
 - **ModelFormSet**: Formset for model instances
   - Generated payload and policy integration
+  - Candidate-based `min_num` and `max_num` validation
   - Asynchronous ordered persistence through a caller-owned executor
   - Full candidate preflight before the first write
+  - Untouched create-mode extra forms are excluded from cardinality, preflight,
+    and persistence
+  - Mutable extra-form access through `forms_mut` for submitted payloads
   - Persistence stops at the first error
   - Inline formset support
   - Configuration via `ModelFormSetConfig`
@@ -145,6 +149,7 @@ setter to supply an excluded editable value from a trusted source.
 
 - **AdvancedModelFormSet**: Cardinality-aware model formset
   - `min_num` and `max_num` validation before candidate preflight
+  - Incremental form insertion through `add_form`
   - Asynchronous ordered persistence through a caller-owned executor
   - Untouched create-mode extra forms are excluded from cardinality, preflight,
     and persistence; supplied or forbidden input marks an extra as submitted

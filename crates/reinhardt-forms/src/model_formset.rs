@@ -132,6 +132,9 @@ where
 {
 	model_forms: Vec<ModelForm<T, P>>,
 	formset: FormSet,
+	max_num: Option<usize>,
+	min_num: usize,
+	errors: Vec<String>,
 	_phantom: PhantomData<(T, P)>,
 }
 
@@ -155,6 +158,8 @@ where
 	/// ```
 	pub fn new(prefix: String, instances: Vec<T>, config: ModelFormSetConfig) -> Self {
 		let mut model_forms = Vec::new();
+		let max_num = config.max_num;
+		let min_num = config.min_num;
 
 		// Create ModelForm for each instance
 		for instance in instances {
@@ -180,6 +185,9 @@ where
 		Self {
 			model_forms,
 			formset,
+			max_num,
+			min_num,
+			errors: Vec::new(),
 			_phantom: PhantomData,
 		}
 	}
@@ -221,6 +229,13 @@ where
 		// Return total number of forms including extras
 		self.model_forms.len()
 	}
+	/// Returns mutable access to existing and extra model forms.
+	///
+	/// Use [`ModelForm::set_field_value`] or replace an extra with
+	/// [`ModelForm::from_payload`] to mark it as genuinely submitted.
+	pub fn forms_mut(&mut self) -> &mut [ModelForm<T, P>] {
+		&mut self.model_forms
+	}
 	/// Validate all forms in the formset
 	///
 	/// # Examples
@@ -233,23 +248,57 @@ where
 	/// let is_valid = formset.is_valid();
 	/// ```
 	pub fn is_valid(&mut self) -> bool {
-		// Validate all model forms
-		self.model_forms.iter_mut().all(|form| form.is_valid())
+		let mut all_valid = true;
+		for form in &mut self.model_forms {
+			if form.is_submission_candidate() && !form.is_valid() {
+				all_valid = false;
+			}
+		}
+
+		self.validate_cardinality().is_ok() && all_valid
 	}
 	/// Collects and returns all validation errors from every form in the set.
 	pub fn errors(&self) -> Vec<String> {
-		// Collect errors from all model forms
-		self.model_forms
-			.iter()
-			.flat_map(|model_form| {
-				model_form
-					.form()
-					.errors()
-					.values()
-					.flat_map(|errors| errors.iter().cloned())
-			})
-			.collect()
+		let mut errors = self.errors.clone();
+		errors.extend(self.model_forms.iter().flat_map(|model_form| {
+			model_form
+				.form()
+				.errors()
+				.values()
+				.flat_map(|errors| errors.iter().cloned())
+		}));
+		errors
 	}
+
+	fn validate_cardinality(&mut self) -> Result<(), ModelFormError> {
+		self.errors.clear();
+		let candidate_count = self
+			.model_forms
+			.iter()
+			.filter(|form| form.is_submission_candidate())
+			.count();
+
+		if candidate_count < self.min_num {
+			self.errors
+				.push(format!("Please submit at least {} forms", self.min_num));
+		}
+
+		if let Some(max) = self.max_num
+			&& candidate_count > max
+		{
+			self.errors
+				.push(format!("Please submit no more than {} forms", max));
+		}
+
+		if self.errors.is_empty() {
+			Ok(())
+		} else {
+			Err(ModelFormError::ModelValidation {
+				errors: self.errors.clone(),
+			})
+		}
+	}
+
 	/// Save all valid forms to the database
 	///
 	/// # Examples
@@ -262,13 +311,23 @@ where
 	/// let result = formset.save();
 	/// ```
 	pub async fn save(&mut self, executor: &mut dyn OrmExecutor) -> Result<Vec<T>, ModelFormError> {
+		self.validate_cardinality()?;
 		for model_form in &mut self.model_forms {
-			model_form.build_instance()?;
+			if model_form.is_submission_candidate() {
+				model_form.build_instance()?;
+			}
 		}
 
-		let mut saved_instances = Vec::with_capacity(self.model_forms.len());
+		let mut saved_instances = Vec::with_capacity(
+			self.model_forms
+				.iter()
+				.filter(|form| form.is_submission_candidate())
+				.count(),
+		);
 		for model_form in &mut self.model_forms {
-			saved_instances.push(model_form.save(executor).await?);
+			if model_form.is_submission_candidate() {
+				saved_instances.push(model_form.save(executor).await?);
+			}
 		}
 		Ok(saved_instances)
 	}
@@ -430,10 +489,17 @@ where
 #[cfg(test)]
 mod tests {
 	use super::*;
+	use std::collections::VecDeque;
+
+	use reinhardt_core::exception::{DatabaseError, DatabaseErrorKind, Error};
+	use reinhardt_core::model_form::ModelFormPolicy;
+	use reinhardt_db::orm::connection::{
+		DatabaseBackend, OrmExecutor, QueryResult, QueryValue, Row,
+	};
 	use reinhardt_macros::model;
 	use serde::{Deserialize, Serialize};
+	use serde_json::json;
 
-	// Mock model for testing
 	#[model(
 		app_label = "forms",
 		table_name = "model_formset_articles",
@@ -443,11 +509,110 @@ mod tests {
 	#[derive(Clone, Deserialize, Serialize)]
 	struct Article {
 		#[field(primary_key = true)]
-		id: i32,
+		id: Option<i64>,
 		#[field(max_length = 200)]
 		title: String,
 		#[field(max_length = 2_000)]
 		content: String,
+	}
+
+	#[model(
+		app_label = "forms",
+		table_name = "model_formset_default_articles",
+		form = true,
+		info = false
+	)]
+	#[derive(Clone, Deserialize, Serialize)]
+	struct DefaultArticle {
+		#[field(primary_key = true)]
+		id: Option<i64>,
+		#[field(max_length = 200, default = "generated")]
+		title: String,
+		#[field(default = true)]
+		published: bool,
+	}
+
+	struct TitleOnly;
+
+	impl ModelFormPolicy for TitleOnly {
+		fn allows(field: &str) -> bool {
+			field == "title"
+		}
+	}
+
+	#[derive(Debug)]
+	struct FormsetExecutor {
+		rows: VecDeque<Result<Row, Error>>,
+		fetch_one_calls: usize,
+	}
+
+	impl FormsetExecutor {
+		fn new(rows: impl IntoIterator<Item = Result<Row, Error>>) -> Self {
+			Self {
+				rows: rows.into_iter().collect(),
+				fetch_one_calls: 0,
+			}
+		}
+	}
+
+	#[reinhardt_core::async_trait]
+	impl OrmExecutor for FormsetExecutor {
+		fn backend(&self) -> DatabaseBackend {
+			DatabaseBackend::Postgres
+		}
+
+		async fn execute(
+			&mut self,
+			_sql: &str,
+			_params: Vec<QueryValue>,
+		) -> Result<QueryResult, Error> {
+			Err(DatabaseError::new(DatabaseErrorKind::Query, "unexpected execute call").into())
+		}
+
+		async fn fetch_one(&mut self, _sql: &str, _params: Vec<QueryValue>) -> Result<Row, Error> {
+			self.fetch_one_calls += 1;
+			self.rows.pop_front().unwrap_or_else(|| {
+				Err(DatabaseError::new(DatabaseErrorKind::Query, "missing queued row").into())
+			})
+		}
+
+		async fn fetch_all(
+			&mut self,
+			_sql: &str,
+			_params: Vec<QueryValue>,
+		) -> Result<Vec<Row>, Error> {
+			Err(DatabaseError::new(DatabaseErrorKind::Query, "unexpected fetch_all call").into())
+		}
+
+		async fn fetch_optional(
+			&mut self,
+			_sql: &str,
+			_params: Vec<QueryValue>,
+		) -> Result<Option<Row>, Error> {
+			Err(
+				DatabaseError::new(DatabaseErrorKind::Query, "unexpected fetch_optional call")
+					.into(),
+			)
+		}
+	}
+
+	fn article(id: i64, title: &str) -> Article {
+		Article {
+			id: Some(id),
+			title: title.to_owned(),
+			content: format!("{title} content"),
+		}
+	}
+
+	fn article_row(id: i64, title: &str) -> Row {
+		let mut row = Row::new();
+		row.insert("id".to_owned(), QueryValue::Int(id));
+		row.insert("title".to_owned(), QueryValue::String(title.to_owned()));
+		row.insert(
+			"content".to_owned(),
+			QueryValue::String(format!("{title} content")),
+		);
+		row
 	}
 
 	#[test]
@@ -478,12 +643,12 @@ mod tests {
 	fn test_model_formset_with_instances() {
 		let instances = vec![
 			Article {
-				id: 1,
+				id: Some(1),
 				title: "First Article".to_string(),
 				content: "Content 1".to_string(),
 			},
 			Article {
-				id: 2,
+				id: Some(2),
 				title: "Second Article".to_string(),
 				content: "Content 2".to_string(),
 			},
@@ -523,5 +688,85 @@ mod tests {
 			mgmt_data.get("article-MIN_NUM_FORMS"),
 			Some(&"1".to_string())
 		);
+	}
+
+	#[test]
+	fn public_model_formset_existing_instance_ignores_untouched_default_extra() {
+		let config = ModelFormSetConfig::new()
+			.with_extra(1)
+			.with_min_num(1)
+			.with_max_num(Some(1));
+		let mut formset = ModelFormSet::<Article>::new(
+			"article".to_owned(),
+			vec![article(1, "existing")],
+			config,
+		);
+		let mut executor = FormsetExecutor::new([Ok(article_row(1, "existing"))]);
+
+		assert!(formset.is_valid());
+		let saved = tokio_test::block_on(formset.save(&mut executor))
+			.expect("untouched extra should not block existing-only persistence");
+
+		assert_eq!(saved.len(), 1);
+		assert_eq!(saved[0].id, Some(1));
+		assert_eq!(saved[0].title, "existing");
+		assert_eq!(executor.fetch_one_calls, 1);
+	}
+
+	#[test]
+	fn public_model_formset_all_default_extra_does_not_create_phantom_row() {
+		let config = ModelFormSetConfig::new()
+			.with_extra(1)
+			.with_max_num(Some(0));
+		let mut formset = ModelFormSet::<DefaultArticle>::empty("article".to_owned(), config);
+		let mut executor = FormsetExecutor::new(Vec::<Result<Row, Error>>::new());
+
+		assert!(formset.is_valid());
+		let saved = tokio_test::block_on(formset.save(&mut executor))
+			.expect("untouched all-default extra should be ignored");
+
+		assert!(saved.is_empty());
+		assert_eq!(executor.fetch_one_calls, 0);
+	}
+
+	#[test]
+	fn public_model_formset_submitted_extra_is_persisted() {
+		let config = ModelFormSetConfig::new().with_extra(1);
+		let mut formset = ModelFormSet::<Article>::empty("article".to_owned(), config);
+		formset.forms_mut()[0]
+			.set_field_value("title", json!("submitted"))
+			.expect("title should be accepted");
+		formset.forms_mut()[0]
+			.set_field_value("content", json!("submitted content"))
+			.expect("content should be accepted");
+		let mut executor = FormsetExecutor::new([Ok(article_row(7, "submitted"))]);
+
+		assert!(formset.is_valid());
+		let saved = tokio_test::block_on(formset.save(&mut executor))
+			.expect("submitted extra should be persisted");
+
+		assert_eq!(saved.len(), 1);
+		assert_eq!(saved[0].id, Some(7));
+		assert_eq!(saved[0].title, "submitted");
+		assert_eq!(executor.fetch_one_calls, 1);
+	}
+
+	#[test]
+	fn public_model_formset_forbidden_extra_is_not_silently_discarded() {
+		let payload: ArticleModelFormData<TitleOnly> = serde_json::from_value(json!({
+			"content": "forbidden content"
+		}))
+		.expect("forbidden wire field should be recorded in the payload");
+		let config = ModelFormSetConfig::new().with_extra(1);
+		let mut formset = ModelFormSet::<Article, TitleOnly>::empty("article".to_owned(), config);
+		formset.forms_mut()[0] = ModelForm::from_payload(payload);
+		let mut executor = FormsetExecutor::new(Vec::<Result<Row, Error>>::new());
+
+		assert!(!formset.is_valid());
+		let error = tokio_test::block_on(formset.save(&mut executor))
+			.expect_err("forbidden submitted extra must not be discarded");
+
+		assert_eq!(error, ModelFormError::ForbiddenInput { field: "content" });
+		assert_eq!(executor.fetch_one_calls, 0);
 	}
 }

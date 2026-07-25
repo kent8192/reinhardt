@@ -246,13 +246,16 @@ reapply model defaults over excluded data.
 
 `ModelFormSet::save(executor).await` uses the same caller-owned executor and
 returns saved models in form order. It builds every candidate before the first
-write and stops persistence at the first error.
+write and stops persistence at the first error. `ModelFormSetConfig::min_num`
+and `max_num` count only submission candidates. Populate generated extra forms
+through `forms_mut` with `ModelForm::set_field_value`, or replace their data
+with a payload created by `ModelForm::from_payload`.
 
-Use `AdvancedModelFormSet` when the save operation must also enforce `min_num`
-and `max_num`. It checks cardinality first, then validates and builds every
-candidate before persistence. This preflight prevents a later invalid form or
-cardinality failure from following earlier writes; use a transaction when the
-complete multi-row operation must be atomic.
+Use `AdvancedModelFormSet` when forms must be added incrementally with
+`add_form`. Both formset types check candidate-based cardinality first, then
+validate and build every candidate before persistence. This preflight prevents
+a later invalid form or cardinality failure from following earlier writes; use
+a transaction when the complete multi-row operation must be atomic.
 
 Untouched create-mode extra forms are excluded from cardinality, candidate
 preflight, and persistence. An existing instance, supplied field, or forbidden

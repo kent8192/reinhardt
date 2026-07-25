@@ -94,3 +94,44 @@ pub fn model_form_datetime_payload_round_trips() -> bool {
 				&& naive.to_string() == "2026-07-25 14:30:00"
 	)
 }
+
+#[cfg(test)]
+mod tests {
+	use super::*;
+	use wasm_bindgen_test::wasm_bindgen_test;
+
+	#[wasm_bindgen_test]
+	fn generated_datetime_payload_round_trips_in_wasm_runtime() {
+		assert_eq!(
+			FormProjectFormSchema::aware_at().kind,
+			ModelFormFieldKind::DateTime
+		);
+		assert_eq!(
+			FormProjectFormSchema::naive_at().kind,
+			ModelFormFieldKind::NaiveDateTime
+		);
+
+		let mut payload = FormProjectModelFormData::<AllEditableModelFields>::empty();
+		payload
+			.set_json("aware_at", serde_json::json!("2026-07-25T14:30:00Z"))
+			.expect("aware datetime should deserialize in WASM");
+		payload
+			.set_json("naive_at", serde_json::json!("2026-07-25T14:30:00"))
+			.expect("naive datetime should deserialize in WASM");
+
+		assert_eq!(
+			payload
+				.aware_at()
+				.expect("aware datetime should be present")
+				.to_rfc3339(),
+			"2026-07-25T14:30:00+00:00"
+		);
+		assert_eq!(
+			payload
+				.naive_at()
+				.expect("naive datetime should be present")
+				.to_string(),
+			"2026-07-25 14:30:00"
+		);
+	}
+}

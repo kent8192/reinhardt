@@ -37,14 +37,62 @@ pub trait DatabaseBackend: Send + Sync {
 	/// Executes a query that modifies the database
 	async fn execute(&self, sql: &str, params: Vec<QueryValue>) -> Result<QueryResult>;
 
+	/// Executes a query with structural pgvector operation context.
+	async fn execute_with_context(
+		&self,
+		sql: &str,
+		params: Vec<QueryValue>,
+		context: Option<super::error::PgvectorOperationKind>,
+	) -> Result<QueryResult> {
+		self.execute(sql, params)
+			.await
+			.map_err(|error| super::error::decorate_error_with_pgvector_context(error, context))
+	}
+
 	/// Fetches a single row from the database
 	async fn fetch_one(&self, sql: &str, params: Vec<QueryValue>) -> Result<Row>;
+
+	/// Fetches one row with structural pgvector operation context.
+	async fn fetch_one_with_context(
+		&self,
+		sql: &str,
+		params: Vec<QueryValue>,
+		context: Option<super::error::PgvectorOperationKind>,
+	) -> Result<Row> {
+		self.fetch_one(sql, params)
+			.await
+			.map_err(|error| super::error::decorate_error_with_pgvector_context(error, context))
+	}
 
 	/// Fetches all matching rows from the database
 	async fn fetch_all(&self, sql: &str, params: Vec<QueryValue>) -> Result<Vec<Row>>;
 
+	/// Fetches rows with structural pgvector operation context.
+	async fn fetch_all_with_context(
+		&self,
+		sql: &str,
+		params: Vec<QueryValue>,
+		context: Option<super::error::PgvectorOperationKind>,
+	) -> Result<Vec<Row>> {
+		self.fetch_all(sql, params)
+			.await
+			.map_err(|error| super::error::decorate_error_with_pgvector_context(error, context))
+	}
+
 	/// Fetches an optional single row from the database
 	async fn fetch_optional(&self, sql: &str, params: Vec<QueryValue>) -> Result<Option<Row>>;
+
+	/// Fetches an optional row with structural pgvector operation context.
+	async fn fetch_optional_with_context(
+		&self,
+		sql: &str,
+		params: Vec<QueryValue>,
+		context: Option<super::error::PgvectorOperationKind>,
+	) -> Result<Option<Row>> {
+		self.fetch_optional(sql, params)
+			.await
+			.map_err(|error| super::error::decorate_error_with_pgvector_context(error, context))
+	}
 
 	/// Begin a database transaction and return a dedicated executor
 	///

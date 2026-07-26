@@ -40,12 +40,7 @@ fn executor_field_codec_error(error: FieldCodecError) -> crate::backends::error:
 }
 
 fn executor_error(error: Error) -> crate::backends::error::DatabaseError {
-	error.database_error().cloned().unwrap_or_else(|| {
-		crate::backends::error::DatabaseError::new(
-			crate::backends::error::DatabaseErrorKind::Query,
-			error.to_string(),
-		)
-	})
+	crate::backends::error::into_database_error(error)
 }
 
 /// Build SQL with values from an INSERT statement based on database backend

@@ -43,7 +43,18 @@ pub enum PgvectorFeature {
 
 /// Returns the first pgvector feature found in a select AST.
 pub fn select_pgvector_feature(statement: &SelectStatement) -> Option<PgvectorFeature> {
-	match validate_select_for_backend(statement, "feature inspection") {
+	pgvector_feature_from_validation(validate_select_for_backend(statement, "feature inspection"))
+}
+
+/// Returns the first pgvector feature found in an update AST.
+pub fn update_pgvector_feature(statement: &UpdateStatement) -> Option<PgvectorFeature> {
+	pgvector_feature_from_validation(validate_update_for_backend(statement, "feature inspection"))
+}
+
+fn pgvector_feature_from_validation(
+	result: Result<(), QueryBuildError>,
+) -> Option<PgvectorFeature> {
+	match result {
 		Err(QueryBuildError::UnsupportedBackendFeature { feature, .. }) => match feature {
 			"pgvector column types" => Some(PgvectorFeature::ColumnType),
 			"pgvector distance operators" => Some(PgvectorFeature::DistanceOperator),

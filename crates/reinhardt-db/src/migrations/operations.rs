@@ -1568,6 +1568,7 @@ impl Operation {
 				Some(PgvectorOperationKind::ColumnType)
 			}
 			Self::DropNamedIndex { index_type, .. }
+			| Self::RestoreIndexOnRollback { index_type, .. }
 				if index_type.is_some_and(IndexType::is_approximate_vector) =>
 			{
 				Some(PgvectorOperationKind::ApproximateIndex)
@@ -10085,6 +10086,21 @@ mod tests {
 		};
 		let restore_vector_index =
 			named_vector_index_drop(Some(IndexType::Ivfflat { lists: Some(100) }));
+		let rollback_restore_vector_index = Operation::RestoreIndexOnRollback {
+			table: "source".to_string(),
+			name: Some("source_embedding_hnsw".to_string()),
+			columns: vec!["embedding".to_string()],
+			unique: false,
+			index_type: Some(IndexType::Hnsw {
+				m: Some(16),
+				ef_construction: Some(64),
+			}),
+			where_clause: None,
+			concurrently: false,
+			expressions: None,
+			mysql_options: None,
+			operator_class: Some("vector_cosine_ops".to_string()),
+		};
 
 		assert_eq!(
 			vector_column.pgvector_operation_kind(),
@@ -10103,6 +10119,14 @@ mod tests {
 		assert_eq!(restore_vector_index.pgvector_operation_kind(), None);
 		assert_eq!(
 			restore_vector_index.pgvector_reverse_operation_kind(),
+			Some(crate::backends::error::PgvectorOperationKind::ApproximateIndex)
+		);
+		assert_eq!(
+			rollback_restore_vector_index.pgvector_operation_kind(),
+			None
+		);
+		assert_eq!(
+			rollback_restore_vector_index.pgvector_reverse_operation_kind(),
 			Some(crate::backends::error::PgvectorOperationKind::ApproximateIndex)
 		);
 	}

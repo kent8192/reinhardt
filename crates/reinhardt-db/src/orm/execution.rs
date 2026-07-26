@@ -250,10 +250,22 @@ fn build_select_for_backend(
 pub(crate) fn pgvector_context_for_select(
 	stmt: &SelectStatement,
 ) -> Option<crate::backends::error::PgvectorOperationKind> {
+	pgvector_context_from_feature(reinhardt_query::error::select_pgvector_feature(stmt))
+}
+
+pub(crate) fn pgvector_context_for_update(
+	stmt: &reinhardt_query::prelude::UpdateStatement,
+) -> Option<crate::backends::error::PgvectorOperationKind> {
+	pgvector_context_from_feature(reinhardt_query::error::update_pgvector_feature(stmt))
+}
+
+fn pgvector_context_from_feature(
+	feature: Option<reinhardt_query::error::PgvectorFeature>,
+) -> Option<crate::backends::error::PgvectorOperationKind> {
 	use crate::backends::error::PgvectorOperationKind;
 	use reinhardt_query::error::PgvectorFeature;
 
-	match reinhardt_query::error::select_pgvector_feature(stmt) {
+	match feature {
 		Some(PgvectorFeature::ColumnType) => Some(PgvectorOperationKind::ColumnType),
 		Some(PgvectorFeature::DistanceOperator) => Some(PgvectorOperationKind::DistanceOperator),
 		Some(PgvectorFeature::ApproximateIndex) => Some(PgvectorOperationKind::ApproximateIndex),
@@ -527,11 +539,12 @@ where
 		E: OrmExecutor,
 	{
 		let stmt = self.get(pk);
+		let context = pgvector_context_for_select(&stmt);
 		let (sql, values) = build_select_for_backend(&stmt, db.backend())?;
 
 		let query_values = convert_values(values);
 		let row = db
-			.fetch_one_with_context(&sql, query_values, pgvector_context_for_select(&stmt))
+			.fetch_one_with_context(&sql, query_values, context)
 			.await?;
 		Ok(QueryRow::from_backend_row(row).deserialize_model::<T>()?)
 	}
@@ -542,11 +555,12 @@ where
 		E: OrmExecutor,
 	{
 		let stmt = self.all();
+		let context = pgvector_context_for_select(&stmt);
 		let (sql, values) = build_select_for_backend(&stmt, db.backend())?;
 
 		let query_values = convert_values(values);
 		let rows = db
-			.fetch_all_with_context(&sql, query_values, pgvector_context_for_select(&stmt))
+			.fetch_all_with_context(&sql, query_values, context)
 			.await?;
 		let mut results = Vec::with_capacity(rows.len());
 		for row in rows {
@@ -561,13 +575,14 @@ where
 		E: OrmExecutor,
 	{
 		let stmt = self.first();
+		let context = pgvector_context_for_select(&stmt);
 		let (sql, values) = build_select_for_backend(&stmt, db.backend())?;
 
 		let query_values = convert_values(values);
-		let rows = db
-			.fetch_all_with_context(&sql, query_values, pgvector_context_for_select(&stmt))
-			.await?;
-		match rows.into_iter().next() {
+		match db
+			.fetch_optional_with_context(&sql, query_values, context)
+			.await?
+		{
 			Some(row) => Ok(Some(
 				QueryRow::from_backend_row(row).deserialize_model::<T>()?,
 			)),
@@ -581,11 +596,12 @@ where
 		E: OrmExecutor,
 	{
 		let stmt = self.one();
+		let context = pgvector_context_for_select(&stmt);
 		let (sql, values) = build_select_for_backend(&stmt, db.backend())?;
 
 		let query_values = convert_values(values);
 		let rows = db
-			.fetch_all_with_context(&sql, query_values, pgvector_context_for_select(&stmt))
+			.fetch_all_with_context(&sql, query_values, context)
 			.await?;
 		match rows.len() {
 			0 => Err(ExecutionError::NoResultFound),
@@ -603,11 +619,12 @@ where
 		E: OrmExecutor,
 	{
 		let stmt = self.one_or_none();
+		let context = pgvector_context_for_select(&stmt);
 		let (sql, values) = build_select_for_backend(&stmt, db.backend())?;
 
 		let query_values = convert_values(values);
 		let rows = db
-			.fetch_all_with_context(&sql, query_values, pgvector_context_for_select(&stmt))
+			.fetch_all_with_context(&sql, query_values, context)
 			.await?;
 		match rows.len() {
 			0 => Ok(None),
@@ -625,10 +642,13 @@ where
 		E: OrmExecutor,
 	{
 		let stmt = self.scalar();
+		let context = pgvector_context_for_select(&stmt);
 		let (sql, values) = build_select_for_backend(&stmt, db.backend())?;
 
 		let query_values = convert_values(values);
-		let rows = db.fetch_all(&sql, query_values).await?;
+		let rows = db
+			.fetch_all_with_context(&sql, query_values, context)
+			.await?;
 		match rows.into_iter().next() {
 			Some(row) => {
 				// Get the first column value
@@ -650,10 +670,14 @@ where
 		E: OrmExecutor,
 	{
 		let stmt = self.count();
+		let context = pgvector_context_for_select(&stmt);
 		let (sql, values) = build_select_for_backend(&stmt, db.backend())?;
 
 		let query_values = convert_values(values);
-		let query_row = QueryRow::from_backend_row(db.fetch_one(&sql, query_values).await?);
+		let query_row = QueryRow::from_backend_row(
+			db.fetch_one_with_context(&sql, query_values, context)
+				.await?,
+		);
 
 		// Extract count from the result (usually the first column)
 		if let Some(obj) = query_row.data.as_object()
@@ -673,10 +697,14 @@ where
 		E: OrmExecutor,
 	{
 		let stmt = self.exists();
+		let context = pgvector_context_for_select(&stmt);
 		let (sql, values) = build_select_for_backend(&stmt, db.backend())?;
 
 		let query_values = convert_values(values);
-		let query_row = QueryRow::from_backend_row(db.fetch_one(&sql, query_values).await?);
+		let query_row = QueryRow::from_backend_row(
+			db.fetch_one_with_context(&sql, query_values, context)
+				.await?,
+		);
 
 		// Extract exists from the result (usually the first column)
 		if let Some(obj) = query_row.data.as_object()
@@ -854,6 +882,57 @@ mod tests {
 	#[derive(Default)]
 	struct PostgresContextRecordingExecutor {
 		context: Option<crate::backends::error::PgvectorOperationKind>,
+		method: Option<&'static str>,
+	}
+
+	#[cfg(feature = "pgvector")]
+	struct DefaultContextErrorExecutor;
+
+	#[cfg(feature = "pgvector")]
+	#[async_trait::async_trait]
+	impl OrmExecutor for DefaultContextErrorExecutor {
+		fn backend(&self) -> DatabaseBackend {
+			DatabaseBackend::Postgres
+		}
+
+		async fn execute(
+			&mut self,
+			_sql: &str,
+			_params: Vec<QueryValue>,
+		) -> reinhardt_core::exception::Result<crate::orm::QueryResult> {
+			panic!("SELECT test executor does not execute mutations")
+		}
+
+		async fn fetch_one(
+			&mut self,
+			_sql: &str,
+			_params: Vec<QueryValue>,
+		) -> reinhardt_core::exception::Result<crate::orm::Row> {
+			panic!("all_async test executor does not fetch one row")
+		}
+
+		async fn fetch_all(
+			&mut self,
+			_sql: &str,
+			_params: Vec<QueryValue>,
+		) -> reinhardt_core::exception::Result<Vec<crate::orm::Row>> {
+			Err(reinhardt_core::exception::Error::from(
+				reinhardt_core::exception::DatabaseError::new(
+					reinhardt_core::exception::DatabaseErrorKind::Query,
+					"operator does not exist: vector <=> vector",
+				)
+				.with_code("42883")
+				.with_source(std::io::Error::other("postgres driver failure")),
+			))
+		}
+
+		async fn fetch_optional(
+			&mut self,
+			_sql: &str,
+			_params: Vec<QueryValue>,
+		) -> reinhardt_core::exception::Result<Option<crate::orm::Row>> {
+			panic!("all_async test executor does not fetch an optional row")
+		}
 	}
 
 	#[cfg(feature = "pgvector")]
@@ -879,6 +958,22 @@ mod tests {
 			panic!("all_async must not call fetch_one")
 		}
 
+		async fn fetch_one_with_context(
+			&mut self,
+			sql: &str,
+			_params: Vec<QueryValue>,
+			context: Option<crate::backends::error::PgvectorOperationKind>,
+		) -> reinhardt_core::exception::Result<crate::orm::Row> {
+			self.context = context;
+			self.method = Some("fetch_one");
+			let data = if sql.contains("EXISTS") {
+				std::collections::HashMap::from([("exists".to_string(), QueryValue::Bool(false))])
+			} else {
+				std::collections::HashMap::from([("count".to_string(), QueryValue::Int(0))])
+			};
+			Ok(crate::orm::Row { data })
+		}
+
 		async fn fetch_all(
 			&mut self,
 			_sql: &str,
@@ -894,6 +989,7 @@ mod tests {
 			context: Option<crate::backends::error::PgvectorOperationKind>,
 		) -> reinhardt_core::exception::Result<Vec<crate::orm::Row>> {
 			self.context = context;
+			self.method = Some("fetch_all");
 			Ok(Vec::new())
 		}
 
@@ -903,6 +999,17 @@ mod tests {
 			_params: Vec<QueryValue>,
 		) -> reinhardt_core::exception::Result<Option<crate::orm::Row>> {
 			panic!("all_async must not call fetch_optional")
+		}
+
+		async fn fetch_optional_with_context(
+			&mut self,
+			_sql: &str,
+			_params: Vec<QueryValue>,
+			context: Option<crate::backends::error::PgvectorOperationKind>,
+		) -> reinhardt_core::exception::Result<Option<crate::orm::Row>> {
+			self.context = context;
+			self.method = Some("fetch_optional");
+			Ok(None)
 		}
 	}
 
@@ -1053,6 +1160,7 @@ mod tests {
 			executor.context,
 			Some(crate::backends::error::PgvectorOperationKind::DistanceOperator)
 		);
+		assert_eq!(executor.method, Some("fetch_all"));
 	}
 
 	#[cfg(feature = "pgvector")]
@@ -1072,6 +1180,145 @@ mod tests {
 
 		assert!(rows.is_empty());
 		assert_eq!(executor.context, None);
+		assert_eq!(executor.method, Some("fetch_all"));
+	}
+
+	#[cfg(feature = "pgvector")]
+	fn distance_execution() -> SelectExecution<User> {
+		use reinhardt_query::prelude::{BinOper, SimpleExpr};
+		use reinhardt_query::types::PgBinOper;
+
+		let distance = SimpleExpr::Binary(
+			Box::new(Expr::col(Alias::new("embedding")).into_simple_expr()),
+			BinOper::PgOperator(PgBinOper::CosineDistance),
+			Box::new(SimpleExpr::Value(SV::Vector(Some(Box::new(vec![
+				1.0, 2.0, 3.0,
+			]))))),
+		);
+		let stmt = Query::select()
+			.expr(distance)
+			.from(Alias::new("users"))
+			.to_owned();
+		SelectExecution::new(stmt)
+	}
+
+	#[cfg(feature = "pgvector")]
+	#[tokio::test]
+	async fn pgvector_scalar_uses_contextual_fetch_all() {
+		let execution = distance_execution();
+		let mut executor = PostgresContextRecordingExecutor::default();
+
+		let scalar = execution
+			.scalar_async::<f64, _>(&mut executor)
+			.await
+			.expect("empty recording result should produce no scalar");
+
+		assert_eq!(scalar, None);
+		assert_eq!(executor.method, Some("fetch_all"));
+		assert_eq!(
+			executor.context,
+			Some(crate::backends::error::PgvectorOperationKind::DistanceOperator)
+		);
+	}
+
+	#[cfg(feature = "pgvector")]
+	#[tokio::test]
+	async fn pgvector_first_uses_contextual_fetch_optional() {
+		let execution = distance_execution();
+		let mut executor = PostgresContextRecordingExecutor::default();
+
+		let first = execution
+			.first_async(&mut executor)
+			.await
+			.expect("empty recording result should produce no first row");
+
+		assert!(first.is_none());
+		assert_eq!(executor.method, Some("fetch_optional"));
+		assert_eq!(
+			executor.context,
+			Some(crate::backends::error::PgvectorOperationKind::DistanceOperator)
+		);
+	}
+
+	#[cfg(feature = "pgvector")]
+	#[tokio::test]
+	async fn pgvector_count_finds_context_in_nested_subquery() {
+		let execution = distance_execution();
+		let mut executor = PostgresContextRecordingExecutor::default();
+
+		let count = execution
+			.count_async(&mut executor)
+			.await
+			.expect("recording count result should decode");
+
+		assert_eq!(count, 0);
+		assert_eq!(executor.method, Some("fetch_one"));
+		assert_eq!(
+			executor.context,
+			Some(crate::backends::error::PgvectorOperationKind::DistanceOperator)
+		);
+	}
+
+	#[cfg(feature = "pgvector")]
+	#[tokio::test]
+	async fn pgvector_exists_finds_context_in_nested_subquery() {
+		let execution = distance_execution();
+		let mut executor = PostgresContextRecordingExecutor::default();
+
+		let exists = execution
+			.exists_async(&mut executor)
+			.await
+			.expect("recording exists result should decode");
+
+		assert!(!exists);
+		assert_eq!(executor.method, Some("fetch_one"));
+		assert_eq!(
+			executor.context,
+			Some(crate::backends::error::PgvectorOperationKind::DistanceOperator)
+		);
+	}
+
+	#[cfg(feature = "pgvector")]
+	#[tokio::test]
+	async fn pgvector_error_hint_default_executor_preserves_code_and_source() {
+		use reinhardt_query::prelude::{BinOper, SimpleExpr};
+		use reinhardt_query::types::PgBinOper;
+
+		let distance = SimpleExpr::Binary(
+			Box::new(Expr::col(Alias::new("embedding")).into_simple_expr()),
+			BinOper::PgOperator(PgBinOper::CosineDistance),
+			Box::new(SimpleExpr::Value(SV::Vector(Some(Box::new(vec![
+				1.0, 2.0, 3.0,
+			]))))),
+		);
+		let stmt = Query::select()
+			.expr(distance)
+			.from(Alias::new("users"))
+			.to_owned();
+		let execution = SelectExecution::<User>::new(stmt);
+		let mut executor = DefaultContextErrorExecutor;
+
+		let error = execution.all_async(&mut executor).await.unwrap_err();
+
+		let ExecutionError::Framework(error) = error else {
+			panic!("expected framework database error");
+		};
+		assert_eq!(
+			error.database_error().and_then(|error| error.code()),
+			Some("42883")
+		);
+		assert!(
+			error
+				.to_string()
+				.contains("CreateExtension::new(\"vector\")")
+		);
+		assert!(
+			error
+				.database_error()
+				.and_then(std::error::Error::source)
+				.and_then(|source| source.downcast_ref::<std::io::Error>())
+				.is_some()
+		);
 	}
 
 	#[test]

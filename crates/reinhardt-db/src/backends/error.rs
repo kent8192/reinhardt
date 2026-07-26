@@ -22,6 +22,65 @@ pub enum PgvectorOperationKind {
 	VectorValue,
 }
 
+fn pgvector_hint_applies(context: Option<PgvectorOperationKind>, code: Option<&str>) -> bool {
+	matches!(
+		(context, code),
+		(
+			Some(PgvectorOperationKind::ColumnType | PgvectorOperationKind::ApproximateIndex),
+			Some(POSTGRES_UNDEFINED_OBJECT),
+		) | (
+			Some(PgvectorOperationKind::DistanceOperator),
+			Some(POSTGRES_UNDEFINED_FUNCTION),
+		)
+	)
+}
+
+fn decorate_database_error(database_error: DatabaseError) -> DatabaseError {
+	let message = format!(
+		"{}. Install the pgvector extension explicitly with \
+		 CreateExtension::new(\"vector\") before this operation",
+		database_error.message()
+	);
+	database_error.with_message(message)
+}
+
+pub(crate) fn decorate_error_with_pgvector_context(
+	error: reinhardt_core::exception::Error,
+	context: Option<PgvectorOperationKind>,
+) -> reinhardt_core::exception::Error {
+	if !pgvector_hint_applies(
+		context,
+		error.database_error().and_then(DatabaseError::code),
+	) {
+		return error;
+	}
+
+	match error {
+		reinhardt_core::exception::Error::Database(database_error) => {
+			reinhardt_core::exception::Error::Database(decorate_database_error(database_error))
+		}
+		reinhardt_core::exception::Error::DatabaseWithSource {
+			database_error,
+			source,
+		} => reinhardt_core::exception::Error::DatabaseWithSource {
+			database_error: decorate_database_error(database_error),
+			source,
+		},
+		error => error,
+	}
+}
+
+pub(crate) fn into_database_error(error: reinhardt_core::exception::Error) -> DatabaseError {
+	match error {
+		reinhardt_core::exception::Error::Database(database_error) => database_error,
+		reinhardt_core::exception::Error::DatabaseWithSource {
+			database_error,
+			source,
+		} => database_error.with_boxed_source(source),
+		error => DatabaseError::new(DatabaseErrorKind::Query, error.to_string()).with_source(error),
+	}
+}
+
 fn map_sqlx_database_error(error: &(dyn sqlx::error::DatabaseError + 'static)) -> DatabaseError {
 	use sqlx::error::ErrorKind;
 
@@ -112,15 +171,8 @@ pub(crate) fn map_sqlx_error_with_pgvector_context(
 	error: sqlx::Error,
 	context: Option<PgvectorOperationKind>,
 ) -> reinhardt_core::exception::Error {
-	let should_add_hint = context.is_some()
-		&& matches!(
-			&error,
-			sqlx::Error::Database(database_error)
-				if matches!(
-					database_error.code().as_deref(),
-					Some(POSTGRES_UNDEFINED_OBJECT | POSTGRES_UNDEFINED_FUNCTION)
-				)
-		);
+	let should_add_hint = matches!(&error, sqlx::Error::Database(database_error)
+		if pgvector_hint_applies(context, database_error.code().as_deref()));
 
 	if !should_add_hint {
 		return map_sqlx_error(error).into();
@@ -130,20 +182,13 @@ pub(crate) fn map_sqlx_error_with_pgvector_context(
 		sqlx::Error::Database(database_error) => map_sqlx_database_error(database_error.as_ref()),
 		_ => unreachable!("pgvector hints require a PostgreSQL database error"),
 	};
-	let message = format!(
-		"{}. Install the pgvector extension explicitly with \
-		 CreateExtension::new(\"vector\") before this operation",
-		database_error.message()
-	);
-	let decorated_error = match database_error.code() {
-		Some(code) => DatabaseError::new(database_error.kind(), message).with_code(code),
-		None => DatabaseError::new(database_error.kind(), message),
-	};
-
-	reinhardt_core::exception::Error::DatabaseWithSource {
-		database_error: decorated_error,
-		source: Box::new(error),
-	}
+	decorate_error_with_pgvector_context(
+		reinhardt_core::exception::Error::DatabaseWithSource {
+			database_error,
+			source: Box::new(error),
+		},
+		context,
+	)
 }
 
 #[cfg(test)]
@@ -442,6 +487,25 @@ mod tests {
 		assert_eq!(
 			error.database_error().and_then(DatabaseError::code),
 			Some("23505")
+		);
+		assert!(!error.to_string().contains("CreateExtension::new"));
+	}
+
+	#[rstest]
+	#[case(PgvectorOperationKind::ColumnType, "42883")]
+	#[case(PgvectorOperationKind::DistanceOperator, "42704")]
+	#[case(PgvectorOperationKind::ApproximateIndex, "42883")]
+	fn pgvector_error_hint_requires_matching_operation_and_postgres_classification(
+		#[case] context: PgvectorOperationKind,
+		#[case] code: &'static str,
+	) {
+		let error = postgres_database_error(code, "unrelated database object is missing");
+
+		let error = map_sqlx_error_with_pgvector_context(error, Some(context));
+
+		assert_eq!(
+			error.database_error().and_then(DatabaseError::code),
+			Some(code)
 		);
 		assert!(!error.to_string().contains("CreateExtension::new"));
 	}

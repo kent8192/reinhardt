@@ -182,16 +182,52 @@ impl DatabaseBackend for PostgresBackend {
 		self.execute_with_context(sql, params, None).await
 	}
 
+	async fn execute_with_context(
+		&self,
+		sql: &str,
+		params: Vec<QueryValue>,
+		context: Option<PgvectorOperationKind>,
+	) -> Result<QueryResult> {
+		PostgresBackend::execute_with_context(self, sql, params, context).await
+	}
+
 	async fn fetch_one(&self, sql: &str, params: Vec<QueryValue>) -> Result<Row> {
 		self.fetch_one_with_context(sql, params, None).await
+	}
+
+	async fn fetch_one_with_context(
+		&self,
+		sql: &str,
+		params: Vec<QueryValue>,
+		context: Option<PgvectorOperationKind>,
+	) -> Result<Row> {
+		PostgresBackend::fetch_one_with_context(self, sql, params, context).await
 	}
 
 	async fn fetch_all(&self, sql: &str, params: Vec<QueryValue>) -> Result<Vec<Row>> {
 		self.fetch_all_with_context(sql, params, None).await
 	}
 
+	async fn fetch_all_with_context(
+		&self,
+		sql: &str,
+		params: Vec<QueryValue>,
+		context: Option<PgvectorOperationKind>,
+	) -> Result<Vec<Row>> {
+		PostgresBackend::fetch_all_with_context(self, sql, params, context).await
+	}
+
 	async fn fetch_optional(&self, sql: &str, params: Vec<QueryValue>) -> Result<Option<Row>> {
 		self.fetch_optional_with_context(sql, params, None).await
+	}
+
+	async fn fetch_optional_with_context(
+		&self,
+		sql: &str,
+		params: Vec<QueryValue>,
+		context: Option<PgvectorOperationKind>,
+	) -> Result<Option<Row>> {
+		PostgresBackend::fetch_optional_with_context(self, sql, params, context).await
 	}
 
 	async fn begin(&self) -> Result<Box<dyn TransactionExecutor>> {

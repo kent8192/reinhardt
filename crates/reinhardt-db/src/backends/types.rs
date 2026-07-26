@@ -530,9 +530,11 @@ pub trait TransactionExecutor: Send + Sync {
 		&mut self,
 		sql: &str,
 		params: Vec<QueryValue>,
-		_context: Option<super::error::PgvectorOperationKind>,
+		context: Option<super::error::PgvectorOperationKind>,
 	) -> super::error::Result<QueryResult> {
-		self.execute(sql, params).await
+		self.execute(sql, params)
+			.await
+			.map_err(|error| super::error::decorate_error_with_pgvector_context(error, context))
 	}
 
 	/// Fetch a single row within the transaction
@@ -543,9 +545,11 @@ pub trait TransactionExecutor: Send + Sync {
 		&mut self,
 		sql: &str,
 		params: Vec<QueryValue>,
-		_context: Option<super::error::PgvectorOperationKind>,
+		context: Option<super::error::PgvectorOperationKind>,
 	) -> super::error::Result<Row> {
-		self.fetch_one(sql, params).await
+		self.fetch_one(sql, params)
+			.await
+			.map_err(|error| super::error::decorate_error_with_pgvector_context(error, context))
 	}
 
 	/// Fetch all matching rows within the transaction
@@ -560,9 +564,11 @@ pub trait TransactionExecutor: Send + Sync {
 		&mut self,
 		sql: &str,
 		params: Vec<QueryValue>,
-		_context: Option<super::error::PgvectorOperationKind>,
+		context: Option<super::error::PgvectorOperationKind>,
 	) -> super::error::Result<Vec<Row>> {
-		self.fetch_all(sql, params).await
+		self.fetch_all(sql, params)
+			.await
+			.map_err(|error| super::error::decorate_error_with_pgvector_context(error, context))
 	}
 
 	/// Fetch an optional single row within the transaction
@@ -577,9 +583,11 @@ pub trait TransactionExecutor: Send + Sync {
 		&mut self,
 		sql: &str,
 		params: Vec<QueryValue>,
-		_context: Option<super::error::PgvectorOperationKind>,
+		context: Option<super::error::PgvectorOperationKind>,
 	) -> super::error::Result<Option<Row>> {
-		self.fetch_optional(sql, params).await
+		self.fetch_optional(sql, params)
+			.await
+			.map_err(|error| super::error::decorate_error_with_pgvector_context(error, context))
 	}
 
 	/// Commit the transaction

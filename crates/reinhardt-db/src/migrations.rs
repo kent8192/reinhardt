@@ -312,6 +312,10 @@ impl From<reinhardt_core::exception::Error> for MigrationError {
 			reinhardt_core::exception::Error::Database(database_error) => {
 				Self::DatabaseError(database_error)
 			}
+			reinhardt_core::exception::Error::DatabaseWithSource {
+				database_error,
+				source,
+			} => Self::DatabaseError(database_error.with_boxed_source(source)),
 			error => Self::FrameworkError(error),
 		}
 	}
@@ -323,6 +327,7 @@ pub type Result<T> = std::result::Result<T, MigrationError>;
 #[cfg(test)]
 mod tests {
 	use std::error::Error as _;
+	use std::io;
 
 	use reinhardt_core::exception::{
 		DatabaseError, DatabaseErrorKind, Error as FrameworkError, ErrorKind,
@@ -371,6 +376,31 @@ mod tests {
 				.and_then(|source| source.downcast_ref::<FrameworkError>())
 				.map(FrameworkError::kind),
 			Some(ErrorKind::Validation)
+		);
+	}
+
+	#[test]
+	fn sourced_framework_database_error_remains_a_database_migration_error() {
+		let database_error =
+			DatabaseError::new(DatabaseErrorKind::Query, "type \"vector\" does not exist")
+				.with_code("42704");
+		let framework_error = FrameworkError::DatabaseWithSource {
+			database_error,
+			source: Box::new(io::Error::other("postgres driver failure")),
+		};
+
+		let migration_error = MigrationError::from(framework_error);
+
+		let MigrationError::DatabaseError(database_error) = &migration_error else {
+			panic!("expected sourced database migration error, got {migration_error:?}");
+		};
+		assert_eq!(database_error.kind(), DatabaseErrorKind::Query);
+		assert_eq!(database_error.code(), Some("42704"));
+		assert!(
+			database_error
+				.source()
+				.and_then(|source| source.downcast_ref::<io::Error>())
+				.is_some()
 		);
 	}
 

@@ -985,7 +985,107 @@ fn merge_foreign_key_scope_results<T>(
 
 #[cfg(test)]
 mod tests {
+	#[cfg(all(feature = "pgvector", feature = "sqlite"))]
+	use std::borrow::Cow;
+	#[cfg(all(feature = "pgvector", feature = "sqlite"))]
+	use std::fmt;
+
 	use super::*;
+
+	#[cfg(all(feature = "pgvector", feature = "sqlite"))]
+	#[derive(Debug)]
+	struct MissingVectorTypeError;
+
+	#[cfg(all(feature = "pgvector", feature = "sqlite"))]
+	impl fmt::Display for MissingVectorTypeError {
+		fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+			formatter.write_str("type \"vector\" does not exist")
+		}
+	}
+
+	#[cfg(all(feature = "pgvector", feature = "sqlite"))]
+	impl std::error::Error for MissingVectorTypeError {}
+
+	#[cfg(all(feature = "pgvector", feature = "sqlite"))]
+	impl sqlx::error::DatabaseError for MissingVectorTypeError {
+		fn message(&self) -> &str {
+			"type \"vector\" does not exist"
+		}
+
+		fn code(&self) -> Option<Cow<'_, str>> {
+			Some(Cow::Borrowed("42704"))
+		}
+
+		fn as_error(&self) -> &(dyn std::error::Error + Send + Sync + 'static) {
+			self
+		}
+
+		fn as_error_mut(&mut self) -> &mut (dyn std::error::Error + Send + Sync + 'static) {
+			self
+		}
+
+		fn into_error(self: Box<Self>) -> Box<dyn std::error::Error + Send + Sync + 'static> {
+			self
+		}
+
+		fn kind(&self) -> sqlx::error::ErrorKind {
+			sqlx::error::ErrorKind::Other
+		}
+	}
+
+	#[cfg(all(feature = "pgvector", feature = "sqlite"))]
+	struct SourcedFailingTransaction;
+
+	#[cfg(all(feature = "pgvector", feature = "sqlite"))]
+	#[async_trait::async_trait]
+	impl TransactionExecutor for SourcedFailingTransaction {
+		async fn execute(
+			&mut self,
+			_sql: &str,
+			_params: Vec<crate::backends::types::QueryValue>,
+		) -> crate::backends::error::Result<crate::backends::types::QueryResult> {
+			Err(reinhardt_core::exception::Error::DatabaseWithSource {
+				database_error: reinhardt_core::exception::DatabaseError::new(
+					reinhardt_core::exception::DatabaseErrorKind::Query,
+					"type \"vector\" does not exist",
+				)
+				.with_code("42704"),
+				source: Box::new(sqlx::Error::Database(Box::new(MissingVectorTypeError))),
+			})
+		}
+
+		async fn fetch_one(
+			&mut self,
+			_sql: &str,
+			_params: Vec<crate::backends::types::QueryValue>,
+		) -> crate::backends::error::Result<crate::backends::types::Row> {
+			panic!("migration error test does not fetch rows")
+		}
+
+		async fn fetch_all(
+			&mut self,
+			_sql: &str,
+			_params: Vec<crate::backends::types::QueryValue>,
+		) -> crate::backends::error::Result<Vec<crate::backends::types::Row>> {
+			panic!("migration error test does not fetch rows")
+		}
+
+		async fn fetch_optional(
+			&mut self,
+			_sql: &str,
+			_params: Vec<crate::backends::types::QueryValue>,
+		) -> crate::backends::error::Result<Option<crate::backends::types::Row>> {
+			panic!("migration error test does not fetch rows")
+		}
+
+		async fn commit(self: Box<Self>) -> crate::backends::error::Result<()> {
+			Ok(())
+		}
+
+		async fn rollback(self: Box<Self>) -> crate::backends::error::Result<()> {
+			Ok(())
+		}
+	}
 
 	#[cfg(all(feature = "pgvector", feature = "sqlite"))]
 	struct ContextRecordingTransaction {
@@ -1100,6 +1200,21 @@ mod tests {
 			mysql_options: None,
 			operator_class: Some("vector_l2_ops".to_string()),
 		};
+		let rollback_restore_operation = Operation::RestoreIndexOnRollback {
+			table: "source".to_string(),
+			name: Some("source_embedding_hnsw".to_string()),
+			columns: vec!["embedding".to_string()],
+			unique: false,
+			index_type: Some(IndexType::Hnsw {
+				m: Some(16),
+				ef_construction: Some(64),
+			}),
+			where_clause: None,
+			concurrently: false,
+			expressions: None,
+			mysql_options: None,
+			operator_class: Some("vector_cosine_ops".to_string()),
+		};
 
 		editor
 			.execute_with_context(
@@ -1115,6 +1230,22 @@ mod tests {
 			)
 			.await
 			.expect("record vector index context");
+		for sql in rollback_restore_operation
+			.to_reverse_sql(
+				&crate::migrations::operations::SqlDialect::Postgres,
+				&crate::migrations::ProjectState::default(),
+			)
+			.expect("rollback restore SQL should build")
+			.expect("rollback restore should emit SQL")
+		{
+			editor
+				.execute_with_context(
+					&sql,
+					rollback_restore_operation.pgvector_reverse_operation_kind(),
+				)
+				.await
+				.expect("record rollback vector index context");
+		}
 
 		assert_eq!(
 			*contexts
@@ -1123,7 +1254,58 @@ mod tests {
 			vec![
 				Some(crate::backends::error::PgvectorOperationKind::ColumnType),
 				Some(crate::backends::error::PgvectorOperationKind::ApproximateIndex),
+				Some(crate::backends::error::PgvectorOperationKind::ApproximateIndex),
 			]
+		);
+	}
+
+	#[cfg(all(feature = "pgvector", feature = "sqlite"))]
+	#[tokio::test]
+	async fn pgvector_migration_error_preserves_database_category_code_and_sqlx_source() {
+		use std::error::Error as _;
+
+		let connection = DatabaseConnection::connect_sqlite("sqlite::memory:")
+			.await
+			.expect("connect to in-memory SQLite");
+		let mut editor = SchemaEditor {
+			connection,
+			executor: Some(Box::new(SourcedFailingTransaction)),
+			atomic: true,
+			db_type: DatabaseType::Postgres,
+			deferred_sql: Vec::new(),
+			sqlite_recreation_session: None,
+		};
+
+		let error = editor
+			.execute_with_context(
+				"ALTER TABLE source ADD COLUMN embedding vector(3)",
+				Some(crate::backends::error::PgvectorOperationKind::ColumnType),
+			)
+			.await
+			.unwrap_err();
+
+		let MigrationError::DatabaseError(database_error) = &error else {
+			panic!("expected migration database error, got {error:?}");
+		};
+		assert_eq!(
+			database_error.kind(),
+			reinhardt_core::exception::DatabaseErrorKind::Query
+		);
+		assert_eq!(database_error.code(), Some("42704"));
+		assert!(
+			database_error
+				.to_string()
+				.contains("CreateExtension::new(\"vector\")")
+		);
+		let sqlx_error = database_error
+			.source()
+			.and_then(|source| source.downcast_ref::<sqlx::Error>())
+			.expect("migration error should retain the original SQLx error");
+		assert!(
+			sqlx_error
+				.as_database_error()
+				.and_then(|source| source.as_error().downcast_ref::<MissingVectorTypeError>())
+				.is_some()
 		);
 	}
 

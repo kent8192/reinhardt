@@ -229,6 +229,12 @@ pub(super) fn validate(
 			"model-backed form! does not support `watch` or `derived` clauses",
 		));
 	}
+	if model_source.is_some() && callbacks.has_any() {
+		return Err(Error::new(
+			ast.span,
+			"model-backed form! does not support callback clauses; configure submission lifecycle through `use_form(&form)`",
+		));
+	}
 
 	// Transform unified validators (scope filtering happens at codegen)
 	let validators = transform_validators(&ast.validators, &ast.fields)?;

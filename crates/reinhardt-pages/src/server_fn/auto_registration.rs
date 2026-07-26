@@ -202,7 +202,7 @@ fn select_entries_for_app<'a>(
 	let mut owned_entries = Vec::new();
 	for entry in entries {
 		match resolve_app_module_owner(apps.iter(), entry.module_path) {
-			Ok(owner) => owned_entries.push((entry, owner.app_label)),
+			Ok(owner) => owned_entries.push((entry, owner)),
 			Err(error) => errors.push(resolution_error(
 				entry.module_path,
 				Some(entry.path),
@@ -222,7 +222,9 @@ fn select_entries_for_app<'a>(
 		.expect("caller ownership was validated before selection");
 	let mut selected = owned_entries
 		.into_iter()
-		.filter_map(|(entry, app_label)| (app_label == caller_owner.app_label).then_some(entry))
+		.filter_map(|(entry, owner)| {
+			(owner.module_path == caller_owner.module_path).then_some(entry)
+		})
 		.collect::<Vec<_>>();
 	sort_entries(&mut selected);
 	Ok(selected)
@@ -282,23 +284,23 @@ fn resolution_error(
 }
 
 fn duplicate_errors(
-	owned_entries: &[(&ServerFnInventoryEntry, &'static str)],
+	owned_entries: &[(&ServerFnInventoryEntry, &AppModuleRegistration)],
 ) -> Vec<ServerFnInventoryError> {
-	let mut paths = BTreeMap::<(&str, &str), Vec<&str>>::new();
-	let mut names = BTreeMap::<(&str, &str), Vec<&str>>::new();
-	for (entry, app_label) in owned_entries {
+	let mut paths = BTreeMap::<(&str, &str, &str), Vec<&str>>::new();
+	let mut names = BTreeMap::<(&str, &str, &str), Vec<&str>>::new();
+	for (entry, owner) in owned_entries {
 		paths
-			.entry((app_label, entry.path))
+			.entry((owner.module_path, owner.app_label, entry.path))
 			.or_default()
 			.push(entry.module_path);
 		names
-			.entry((app_label, entry.name))
+			.entry((owner.module_path, owner.app_label, entry.name))
 			.or_default()
 			.push(entry.module_path);
 	}
 
 	let mut errors = Vec::new();
-	for ((app_label, path), mut modules) in paths {
+	for ((_module_path, app_label, path), mut modules) in paths {
 		if modules.len() > 1 {
 			modules.sort_unstable();
 			errors.push(ServerFnInventoryError::DuplicatePath {
@@ -308,7 +310,7 @@ fn duplicate_errors(
 			});
 		}
 	}
-	for ((app_label, name), mut modules) in names {
+	for ((_module_path, app_label, name), mut modules) in names {
 		if modules.len() > 1 {
 			modules.sort_unstable();
 			errors.push(ServerFnInventoryError::DuplicateName {
@@ -403,6 +405,27 @@ mod tests {
 		assert_eq!(
 			selected.iter().map(|entry| entry.path).collect::<Vec<_>>(),
 			["/api/polls"]
+		);
+	}
+
+	#[test]
+	fn does_not_select_entries_from_another_owner_with_the_same_label() {
+		let apps = [
+			AppModuleRegistration::new("shared", "demo::apps::first"),
+			AppModuleRegistration::new("shared", "demo::apps::second"),
+		];
+		let entries = [
+			test_entry("demo::apps::first::server_fn", "/api/first", "first"),
+			test_entry("demo::apps::second::server_fn", "/api/second", "second"),
+		];
+
+		let selected =
+			select_entries_for_app(&apps, &entries, "demo::apps::first::urls::server_router")
+				.expect("first caller should resolve");
+
+		assert_eq!(
+			selected.iter().map(|entry| entry.path).collect::<Vec<_>>(),
+			["/api/first"]
 		);
 	}
 

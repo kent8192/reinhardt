@@ -2183,6 +2183,9 @@ impl RunServerCommand {
 			.server_router_async()
 			.await
 			.map_err(|e| format!("Failed to create router from #[routes] function: {e}"))?;
+		router
+			.validate_routes()
+			.map_err(|errors| format!("Invalid server routes:\n{}", errors.join("\n")))?;
 		register_router_arc(router);
 		Ok(())
 	}
@@ -2279,6 +2282,10 @@ impl BaseCommand for RunServerCommand {
 	}
 
 	async fn execute(&self, ctx: &CommandContext) -> CommandResult<()> {
+		#[cfg(not(all(target_family = "wasm", target_os = "unknown")))]
+		crate::server_fn_checks::validate_server_fn_inventory_for_startup()
+			.map_err(crate::CommandError::ExecutionError)?;
+
 		// Explicit HTTP route registration (Refs #4453 DP-1):
 		// the inventory consumption used to be hidden inside the dispatch
 		// chain (cli.rs's `auto_register_router()` called before this body).

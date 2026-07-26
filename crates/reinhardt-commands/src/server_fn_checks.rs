@@ -32,6 +32,28 @@ pub fn ensure_builtin_checks_registered() {
 	});
 }
 
+/// Rejects startup when linked server function inventory is invalid.
+///
+/// This is separate from the command check registry because non-CLI callers
+/// can invoke [`crate::RunServerCommand::execute`] directly.
+pub fn validate_server_fn_inventory_for_startup() -> Result<(), String> {
+	let errors = validate_server_fn_inventory();
+	if errors.is_empty() {
+		Ok(())
+	} else {
+		Err(format_inventory_errors(errors))
+	}
+}
+
+fn format_inventory_errors(errors: impl IntoIterator<Item = ServerFnInventoryError>) -> String {
+	let mut errors = errors
+		.into_iter()
+		.map(|error| error.to_string())
+		.collect::<Vec<_>>();
+	errors.sort_unstable();
+	errors.join("\n")
+}
+
 /// Converts deterministic inventory diagnostics into error-level system-check messages.
 pub fn messages_for_errors(
 	errors: impl IntoIterator<Item = ServerFnInventoryError>,
@@ -75,5 +97,35 @@ fn error_id_and_hint(error: &ServerFnInventoryError) -> (&'static str, &'static 
 			"pages.server_fn.E005",
 			"Use a unique route name for each server function in the application.",
 		),
+	}
+}
+
+#[cfg(test)]
+mod tests {
+	use super::format_inventory_errors;
+	use reinhardt_pages::server_fn::ServerFnInventoryError;
+
+	#[test]
+	fn startup_inventory_errors_are_sorted_deterministically() {
+		// Arrange
+		let errors = [
+			ServerFnInventoryError::OrphanFunction {
+				module_path: "demo::outside::server_fn".to_string(),
+				path: "/api/outside".to_string(),
+			},
+			ServerFnInventoryError::OrphanCaller {
+				module_path: "demo::outside::urls".to_string(),
+			},
+		];
+
+		// Act
+		let actual = format_inventory_errors(errors);
+
+		// Assert
+		assert_eq!(
+			actual,
+			"pages.server_fn.E001: no application owns caller module `demo::outside::urls`\n\
+			 pages.server_fn.E002: no application owns server function `demo::outside::server_fn` at `/api/outside`"
+		);
 	}
 }

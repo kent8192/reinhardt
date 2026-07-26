@@ -506,7 +506,7 @@ fn analyze_chain(
 		edits.push(TextEdit::method_suffix(
 			method,
 			if is_outer {
-				Some(".auto_server_fns(module_path!())")
+				Some(".auto_server_fns_in_crate(module_path!(), concat!(env!(\"CARGO_PKG_NAME\"), \"@\", env!(\"CARGO_PKG_VERSION\")))")
 			} else {
 				None
 			},
@@ -515,7 +515,7 @@ fn analyze_chain(
 	if outer.method != "server_fn" {
 		edits.push(TextEdit::insert_after_call(
 			outer,
-			".auto_server_fns(module_path!())",
+			".auto_server_fns_in_crate(module_path!(), concat!(env!(\"CARGO_PKG_NAME\"), \"@\", env!(\"CARGO_PKG_VERSION\")))",
 		));
 	}
 	ChainOutcome::Safe { bindings, edits }

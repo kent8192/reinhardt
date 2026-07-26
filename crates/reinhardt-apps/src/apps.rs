@@ -1083,15 +1083,27 @@ pub struct AppModuleRegistration {
 	pub app_label: &'static str,
 	/// Rust module path containing the application configuration.
 	pub module_path: &'static str,
+	/// Crate instance that contributed this registration.
+	pub crate_id: &'static str,
 }
 
 #[cfg(native)]
 impl AppModuleRegistration {
 	/// Creates an application module registration.
 	pub const fn new(app_label: &'static str, module_path: &'static str) -> Self {
+		Self::new_in_crate(app_label, module_path, "")
+	}
+
+	/// Creates an application registration with a crate-instance identity.
+	pub const fn new_in_crate(
+		app_label: &'static str,
+		module_path: &'static str,
+		crate_id: &'static str,
+	) -> Self {
 		Self {
 			app_label,
 			module_path,
+			crate_id,
 		}
 	}
 }
@@ -1151,6 +1163,21 @@ pub fn resolve_app_module_owner<'a>(
 	}
 
 	Ok(owners[0])
+}
+
+/// Resolves an owning application within one crate instance.
+#[cfg(native)]
+pub fn resolve_app_module_owner_in_crate<'a>(
+	registrations: impl IntoIterator<Item = &'a AppModuleRegistration>,
+	module_path: &str,
+	crate_id: &str,
+) -> Result<&'a AppModuleRegistration, AppModuleResolutionError> {
+	resolve_app_module_owner(
+		registrations
+			.into_iter()
+			.filter(|registration| registration.crate_id == crate_id),
+		module_path,
+	)
 }
 
 #[cfg(native)]

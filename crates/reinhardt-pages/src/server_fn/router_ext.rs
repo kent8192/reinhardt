@@ -88,6 +88,13 @@ pub trait ServerFnRouterExt {
 	/// ```
 	fn auto_server_fns(self, caller_module: &'static str) -> Self;
 
+	/// Registers inventory-linked server functions owned by one crate instance.
+	fn auto_server_fns_in_crate(
+		self,
+		caller_module: &'static str,
+		caller_crate: &'static str,
+	) -> Self;
+
 	/// Register every member of a named server function set.
 	fn server_fnset<S: ServerFnSetRegistration>(self, set: S) -> Self;
 }
@@ -118,6 +125,18 @@ impl ServerFnRouterExt for ServerRouter {
 
 	fn auto_server_fns(self, caller_module: &'static str) -> Self {
 		collect_auto_server_fns(self, caller_module)
+	}
+
+	fn auto_server_fns_in_crate(
+		self,
+		caller_module: &'static str,
+		caller_crate: &'static str,
+	) -> Self {
+		crate::server_fn::auto_registration::collect_auto_server_fns_in_crate(
+			self,
+			caller_module,
+			caller_crate,
+		)
 	}
 
 	fn server_fnset<S: ServerFnSetRegistration>(self, set: S) -> Self {

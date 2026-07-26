@@ -16,6 +16,8 @@ pub type ServerFnRegister = fn(ServerRouter) -> ServerRouter;
 pub struct ServerFnInventoryEntry {
 	/// Rust module defining this server function.
 	pub module_path: &'static str,
+	/// Crate instance defining this server function.
+	pub crate_id: &'static str,
 	/// HTTP endpoint path.
 	pub path: &'static str,
 	/// Route name.
@@ -32,8 +34,20 @@ impl ServerFnInventoryEntry {
 		name: &'static str,
 		register: ServerFnRegister,
 	) -> Self {
+		Self::new_in_crate(module_path, "", path, name, register)
+	}
+
+	/// Creates a server function inventory entry with a crate-instance identity.
+	pub const fn new_in_crate(
+		module_path: &'static str,
+		crate_id: &'static str,
+		path: &'static str,
+		name: &'static str,
+		register: ServerFnRegister,
+	) -> Self {
 		Self {
 			module_path,
+			crate_id,
 			path,
 			name,
 			register,
@@ -142,6 +156,66 @@ pub(crate) fn collect_auto_server_fns(router: ServerRouter, caller_module: &str)
 		.copied()
 		.collect::<Vec<_>>();
 	collect_auto_server_fns_from_entries(router, &apps, &entries, caller_module)
+}
+
+/// Registers inventory entries owned by one crate instance.
+pub(crate) fn collect_auto_server_fns_in_crate(
+	router: ServerRouter,
+	caller_module: &str,
+	caller_crate: &str,
+) -> ServerRouter {
+	let apps = iter_app_module_registrations().copied().collect::<Vec<_>>();
+	let entries = inventory::iter::<ServerFnInventoryEntry>()
+		.copied()
+		.collect::<Vec<_>>();
+	let selected =
+		match select_entries_for_app_in_crate(&apps, &entries, caller_module, caller_crate) {
+			Ok(entries) => entries,
+			Err(errors) => {
+				return errors.into_iter().fold(router, |router, error| {
+					router.with_configuration_error(error.to_string())
+				});
+			}
+		};
+	selected
+		.into_iter()
+		.fold(router, |router, entry| (entry.register)(router))
+}
+
+fn select_entries_for_app_in_crate<'a>(
+	apps: &[AppModuleRegistration],
+	entries: &'a [ServerFnInventoryEntry],
+	caller_module: &str,
+	caller_crate: &str,
+) -> Result<Vec<&'a ServerFnInventoryEntry>, Vec<ServerFnInventoryError>> {
+	let caller =
+		reinhardt_apps::resolve_app_module_owner_in_crate(apps.iter(), caller_module, caller_crate)
+			.map_err(|error| vec![resolution_error(caller_module, None, error, true)])?;
+	let mut selected = Vec::new();
+	for entry in entries {
+		match reinhardt_apps::resolve_app_module_owner_in_crate(
+			apps.iter(),
+			entry.module_path,
+			entry.crate_id,
+		) {
+			Ok(owner)
+				if owner.module_path == caller.module_path && owner.crate_id == caller.crate_id =>
+			{
+				selected.push(entry)
+			}
+			Ok(_) => {}
+			Err(error) => {
+				return Err(vec![resolution_error(
+					entry.module_path,
+					Some(entry.path),
+					error,
+					false,
+				)]);
+			}
+		}
+	}
+	sort_entries(&mut selected);
+	Ok(selected)
 }
 
 fn collect_auto_server_fns_from_entries(

@@ -189,7 +189,11 @@ fn derive_impl(input: DeriveInput) -> Result<TokenStream> {
 
 		#[cfg(not(all(target_family = "wasm", target_os = "unknown")))]
 		#apps_crate::inventory::submit! {
-			#apps_crate::AppModuleRegistration::new(#label, module_path!())
+			#apps_crate::AppModuleRegistration::new_in_crate(
+				#label,
+				module_path!(),
+				concat!(env!("CARGO_PKG_NAME"), "@", env!("CARGO_PKG_VERSION")),
+			)
 		}
 	};
 

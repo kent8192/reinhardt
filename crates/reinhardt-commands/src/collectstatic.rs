@@ -170,6 +170,12 @@ impl CollectStaticCommand {
 		// Create destination directory if it doesn't exist
 		if !self.options.dry_run {
 			fs::create_dir_all(&self.config.static_root)?;
+			if !self.options.enable_hashing {
+				let manifest_path = self.config.static_root.join("manifest.json");
+				if manifest_path.is_file() {
+					fs::remove_file(manifest_path)?;
+				}
+			}
 		}
 
 		// Download vendor assets across all registered apps before collecting

@@ -208,7 +208,10 @@ impl Scanner {
 				{
 					self.record_incomplete_server_fn_coverage(target, module);
 				}
-				Item::Mod(item_mod) if is_conditionally_compiled(&item_mod.attrs) => {
+				Item::Mod(item_mod)
+					if is_conditionally_compiled(&item_mod.attrs)
+						|| has_unresolved_module_attribute(&item_mod.attrs) =>
+				{
 					// A conditionally compiled module can contribute server functions in a
 					// configuration the migration cannot inspect.
 					self.record_incomplete_server_fn_coverage(target, module);
@@ -459,18 +462,21 @@ fn record_inherited_attribute_alias(
 		return;
 	};
 	let parent = &path[..path.len() - 1];
-	if parent.is_empty()
-		|| (!parent.iter().all(|segment| segment == "super") && parent[0] != "crate")
-	{
+	if parent == ["super"] {
+		aliases.insert(
+			binding,
+			inherited
+				.get(source)
+				.cloned()
+				.unwrap_or_else(|| "__reinhardt_unknown_server_fn__".to_owned()),
+		);
 		return;
 	}
-	aliases.insert(
-		binding,
-		inherited
-			.get(source)
-			.cloned()
-			.unwrap_or_else(|| "__reinhardt_unknown_server_fn__".to_owned()),
-	);
+	if parent.iter().all(|segment| segment == "super")
+		|| parent.first().is_some_and(|part| part == "crate")
+	{
+		aliases.insert(binding, "__reinhardt_unknown_server_fn__".to_owned());
+	}
 }
 
 fn collect_reinhardt_attribute_aliases(
@@ -535,6 +541,19 @@ fn is_conditionally_compiled(attributes: &[Attribute]) -> bool {
 	attributes
 		.iter()
 		.any(|attribute| attribute.path().is_ident("cfg") || attribute.path().is_ident("cfg_attr"))
+}
+
+fn has_unresolved_module_attribute(attributes: &[Attribute]) -> bool {
+	attributes.iter().any(|attribute| {
+		!matches!(
+			attribute
+				.path()
+				.get_ident()
+				.map(|ident| ident.to_string())
+				.as_deref(),
+			Some("cfg" | "cfg_attr" | "path" | "doc" | "allow" | "warn" | "deny" | "forbid")
+		)
+	})
 }
 
 fn has_cfg_attr_server_fn(attributes: &[Attribute], aliases: &BTreeMap<String, String>) -> bool {

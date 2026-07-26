@@ -379,8 +379,9 @@ fn resolve_app_module_owner_in_crate_compat<'a>(
 	) {
 		Ok(owner) => Ok(owner),
 		Err(AppModuleResolutionError::Orphan) => resolve_app_module_owner(
-			apps.iter()
-				.filter(|app| app.crate_id.is_empty() && app.target_id.is_none()),
+			apps.iter().filter(|app| {
+				app.target_id.is_none() && (app.crate_id.is_empty() || app.crate_id == crate_id)
+			}),
 			module_path,
 		),
 		Err(error) => Err(error),
@@ -392,7 +393,8 @@ fn compatible_owner_identity(
 	caller: &AppModuleRegistration,
 ) -> bool {
 	owner.crate_id.is_empty()
-		|| (owner.crate_id == caller.crate_id && owner.target_id == caller.target_id)
+		|| (owner.crate_id == caller.crate_id
+			&& (owner.target_id.is_none() || owner.target_id == caller.target_id))
 }
 
 fn resolution_error(

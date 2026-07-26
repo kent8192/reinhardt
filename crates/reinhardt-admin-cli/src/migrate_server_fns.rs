@@ -106,16 +106,15 @@ pub fn run(args: MigrateServerFnsArgs) -> Result<()> {
 				});
 				continue;
 			}
+			let Some(rewritten_source) = rewriter::apply_text_edits(&source, &outcome.edits) else {
+				reports.push(Report {
+					path: source_module.relative_path.clone(),
+					line: 0,
+					kind: ReportKind::TextEditsCouldNotBeApplied,
+				});
+				continue;
+			};
 			if args.write {
-				let Some(rewritten_source) = rewriter::apply_text_edits(&source, &outcome.edits)
-				else {
-					reports.push(Report {
-						path: source_module.relative_path.clone(),
-						line: 0,
-						kind: ReportKind::TextEditsCouldNotBeApplied,
-					});
-					continue;
-				};
 				write_source(&source_module.path, &rewritten_source)?;
 				reports.push(Report {
 					path: source_module.relative_path.clone(),

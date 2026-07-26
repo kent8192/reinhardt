@@ -185,6 +185,12 @@ impl Scanner {
 						.or_default()
 						.push(module.clone());
 				}
+				Item::Struct(item_struct)
+					if is_app_config(&item_struct.attrs, &attribute_aliases)
+						&& is_conditionally_compiled(&item_struct.attrs) =>
+				{
+					self.record_incomplete_server_fn_coverage(target, module);
+				}
 				Item::Fn(function) if is_server_fn(&function.attrs, &attribute_aliases) => {
 					if is_conditionally_compiled(&function.attrs) {
 						self.record_incomplete_server_fn_coverage(target, module);

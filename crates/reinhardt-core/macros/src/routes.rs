@@ -78,6 +78,9 @@ fn detect_extractors(inputs: &Punctuated<FnArg, Token![,]>) -> Vec<ExtractorInfo
 
 	for input in inputs {
 		if let FnArg::Typed(pat_type) = input {
+			if is_raw_request_parameter(pat_type) {
+				continue;
+			}
 			// Skip parameters with #[inject] attribute
 			if pat_type.attrs.iter().any(is_inject_attr) {
 				continue;
@@ -141,6 +144,17 @@ fn is_raw_request_parameter(pat_type: &syn::PatType) -> bool {
 	}
 
 	if is_request_type(&pat_type.ty) {
+		return true;
+	}
+	if let (Pat::Ident(pattern), Type::Path(type_path)) = (&*pat_type.pat, &*pat_type.ty)
+		&& pattern.ident.to_string().contains("request")
+		&& type_path.path.segments.len() == 1
+		&& type_path
+			.path
+			.segments
+			.last()
+			.is_some_and(|segment| segment.ident == "Body" && segment.arguments.is_none())
+	{
 		return true;
 	}
 
@@ -1530,6 +1544,28 @@ mod url_resolver_tests {
 		assert_eq!(
 			&call[..call_end],
 			"handler_original (__reinhardt_request , __reinhardt_extractor_0 , __reinhardt_extractor_1) . await"
+		);
+	}
+
+	#[rstest]
+	fn route_call_treats_request_named_body_alias_as_a_raw_request() {
+		let input: ItemFn = syn::parse_quote! {
+			async fn handler(request: Body, Json(payload): Json<Payload>) -> String { String::new() }
+		};
+		let extractors = detect_extractors(&input.sig.inputs);
+		let inject_params = detect_inject_params(&input.sig.inputs);
+
+		assert_eq!(extractors.len(), 1);
+		let (_, wrapper) = generate_wrapper_with_both(
+			&input,
+			&extractors,
+			&inject_params,
+			&RouteOptions::default(),
+		);
+		assert!(
+			wrapper
+				.to_string()
+				.contains("handler_original (__reinhardt_request , __reinhardt_extractor_0)")
 		);
 	}
 

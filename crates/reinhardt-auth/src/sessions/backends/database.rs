@@ -48,7 +48,7 @@ use reinhardt_core::macros::model;
 use reinhardt_db::DatabaseConnection;
 use reinhardt_db::orm::{DatabaseBackend, Filter, FilterOperator, FilterValue, Model};
 use reinhardt_query::prelude::{
-	Alias, ColumnDef, CreateIndexStatement, Expr, ExprTrait, IntoValue, MySqlQueryBuilder,
+	Alias, ColumnDef, CreateIndexStatement, Expr, ExprTrait, Func, IntoValue, MySqlQueryBuilder,
 	OnConflict, PostgresQueryBuilder, Query, QueryStatementBuilder, SqliteQueryBuilder,
 };
 use serde::{Deserialize, Serialize};
@@ -552,21 +552,27 @@ impl CleanupableBackend for DatabaseSessionBackend {
 	}
 
 	async fn count_keys_with_prefix(&self, prefix: &str) -> Result<usize, SessionError> {
-		// Use ORM to count session keys with prefix
-		let count = Session::objects()
-			.filter(Filter::new(
-				"session_key".to_string(),
-				FilterOperator::StartsWith,
-				FilterValue::String(prefix.to_string()),
-			))
-			.all_with_db(self.connection.as_ref())
+		// Count matching keys in the database without loading session payloads.
+		let pattern = format!("{}%", prefix);
+		let stmt = Query::select()
+			.from(Alias::new("sessions"))
+			.expr_as(Func::count(Expr::asterisk().into()), Alias::new("count"))
+			.and_where(Expr::col(Alias::new("session_key")).like(pattern.as_str()))
+			.to_owned();
+		let sql = self.build_sql(stmt);
+		let count: i64 = self
+			.connection
+			.query_one(&sql, vec![])
 			.await
-			.map(|sessions| sessions.len())
-			.map_err(|e| {
-				SessionError::CacheError(format!("Failed to count session keys: {}", e))
+			.map_err(|e| SessionError::CacheError(format!("Failed to count session keys: {}", e)))?
+			.get("count")
+			.ok_or_else(|| {
+				SessionError::CacheError("Failed to read session key count".to_string())
 			})?;
 
-		Ok(count)
+		usize::try_from(count).map_err(|e| {
+			SessionError::CacheError(format!("Failed to convert session key count: {}", e))
+		})
 	}
 
 	async fn delete_keys_with_prefix(&self, prefix: &str) -> Result<usize, SessionError> {
@@ -757,5 +763,23 @@ mod tests {
 		backend.delete(session_key).await.unwrap();
 
 		assert!(!backend.exists(session_key).await.unwrap());
+	}
+
+	#[tokio::test]
+	async fn injected_connection_counts_prefix_in_database() {
+		let connection = DatabaseConnection::connect("sqlite::memory:")
+			.await
+			.unwrap();
+		let backend = DatabaseSessionBackend::from_connection(Arc::new(connection));
+		backend.create_table().await.unwrap();
+
+		for key in ["tenant:one", "tenant:two", "tenant:three", "other:one"] {
+			backend
+				.save(key, &serde_json::json!({}), Some(60))
+				.await
+				.unwrap();
+		}
+
+		assert_eq!(backend.count_keys_with_prefix("tenant:").await.unwrap(), 3);
 	}
 }

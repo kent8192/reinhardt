@@ -1085,7 +1085,7 @@ pub struct AppModuleRegistration {
 	pub module_path: &'static str,
 	/// Crate instance that contributed this registration.
 	pub crate_id: &'static str,
-	/// Binary target identity, when this registration is compiled for a binary target.
+	/// Compiled Cargo target identity for this registration.
 	pub target_id: Option<&'static str>,
 }
 
@@ -1105,7 +1105,7 @@ impl AppModuleRegistration {
 		Self::new_in_target(app_label, module_path, crate_id, None)
 	}
 
-	/// Creates an application registration for one compiled target instance.
+	/// Creates an application registration for one compiled Cargo target instance.
 	pub const fn new_in_target(
 		app_label: &'static str,
 		module_path: &'static str,

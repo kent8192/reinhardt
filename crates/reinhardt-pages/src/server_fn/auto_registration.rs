@@ -18,7 +18,7 @@ pub struct ServerFnInventoryEntry {
 	pub module_path: &'static str,
 	/// Crate instance defining this server function.
 	pub crate_id: &'static str,
-	/// Binary target identity, when this entry is compiled for a binary target.
+	/// Compiled Cargo target identity for this entry.
 	pub target_id: Option<&'static str>,
 	/// HTTP endpoint path.
 	pub path: &'static str,

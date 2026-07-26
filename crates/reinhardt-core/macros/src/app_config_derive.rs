@@ -193,7 +193,7 @@ fn derive_impl(input: DeriveInput) -> Result<TokenStream> {
 				#label,
 				module_path!(),
 				concat!(env!("CARGO_MANIFEST_DIR"), "@", env!("CARGO_PKG_NAME"), "@", env!("CARGO_PKG_VERSION")),
-				option_env!("CARGO_BIN_NAME"),
+				Some(env!("CARGO_CRATE_NAME")),
 			)
 		}
 	};

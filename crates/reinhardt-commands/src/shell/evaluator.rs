@@ -102,6 +102,8 @@ impl EvcxrEvaluator {
 		outputs: EvalContextOutputs,
 		owns_process_group: bool,
 	) -> Result<(Self, Vec<String>), EvaluationFailure> {
+		let mut process_guard =
+			EvaluatorProcessGuard::new(eval.process_handle(), owns_process_group);
 		let mut state = eval.state();
 		let dependency = path_dependency(config)?;
 		state
@@ -131,6 +133,7 @@ impl EvcxrEvaluator {
 			evaluator_id: NEXT_EVALUATOR_ID.fetch_add(1, Ordering::Relaxed),
 			evaluation_sequence: 0,
 		};
+		process_guard.disarm();
 		for import in import_plan.imports() {
 			match evaluator.evaluate(import) {
 				Ok(_) => {}
@@ -147,6 +150,37 @@ impl EvcxrEvaluator {
 		}
 		warnings.sort();
 		Ok((evaluator, warnings))
+	}
+}
+
+struct EvaluatorProcessGuard {
+	process_handle: Arc<Mutex<Child>>,
+	owns_process_group: bool,
+	armed: bool,
+}
+
+impl EvaluatorProcessGuard {
+	fn new(process_handle: Arc<Mutex<Child>>, owns_process_group: bool) -> Self {
+		Self {
+			process_handle,
+			owns_process_group,
+			armed: true,
+		}
+	}
+
+	fn disarm(&mut self) {
+		self.armed = false;
+	}
+}
+
+impl Drop for EvaluatorProcessGuard {
+	fn drop(&mut self) {
+		if self.armed
+			&& let Ok(mut process) = self.process_handle.lock()
+		{
+			let _ = terminate_evaluator_process(&mut process, self.owns_process_group);
+			let _ = process.wait();
+		}
 	}
 }
 
@@ -171,9 +205,8 @@ impl BlockingShellEvaluator for EvcxrEvaluator {
 			self.evaluator_id, self.evaluation_sequence
 		);
 		let (pending_stdout, pending_stderr) = self.output_drainers.begin(&marker);
-		let result = self.context.execute(&format!(
-			"let {sentinel}: ::std::string::String = ::std::string::String::new();\n{source}"
-		));
+		let source = source_with_commit_sentinel(source, &sentinel);
+		let result = self.context.execute(&source);
 		let committed = result.is_ok()
 			&& self
 				.context
@@ -425,7 +458,21 @@ fn evaluation_command_error(failure: EvaluationFailure) -> CommandError {
 		| EvaluationFailure::Panic(message)
 		| EvaluationFailure::ProcessExited(message)
 		| EvaluationFailure::ContextReset(message) => message,
-		EvaluationFailure::Output { failure, .. } => return evaluation_command_error(*failure),
+		EvaluationFailure::Output { failure, output } => {
+			let failure_message = evaluation_command_error(*failure).to_string();
+			let mut message = String::new();
+			if !output.stdout.is_empty() {
+				message.push_str(&output.stdout);
+			}
+			if !output.stderr.is_empty() {
+				message.push_str(&output.stderr);
+			}
+			if !message.is_empty() && !message.ends_with('\n') {
+				message.push('\n');
+			}
+			message.push_str(&failure_message);
+			return CommandError::ExecutionError(message);
+		}
 		EvaluationFailure::Interrupted => "Evaluation was interrupted.".to_string(),
 	};
 	CommandError::ExecutionError(message)
@@ -528,6 +575,23 @@ fn terminate_evaluator_process(
 	process
 		.kill()
 		.map_err(|error| EvaluationFailure::ProcessExited(error.to_string()))
+}
+
+fn source_with_commit_sentinel(source: &str, sentinel: &str) -> String {
+	let mut prefix_end = 0;
+	for line in source.split_inclusive('\n') {
+		let trimmed = line.trim_start();
+		if trimmed.starts_with("#![") || trimmed.starts_with("//!") {
+			prefix_end += line.len();
+		} else {
+			break;
+		}
+	}
+	format!(
+		"{}let {sentinel}: ::std::string::String = ::std::string::String::new();\n{}",
+		&source[..prefix_end],
+		&source[prefix_end..]
+	)
 }
 
 fn classify_startup_error(error: Error) -> EvaluationFailure {

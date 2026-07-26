@@ -181,6 +181,27 @@ fn raw_request_parameter_ident(inputs: &Punctuated<FnArg, Token![,]>) -> Option<
 	})
 }
 
+fn is_wrapper_attribute(attr: &syn::Attribute) -> bool {
+	if attr.path().is_ident("cfg") {
+		return true;
+	}
+	let Meta::List(list) = &attr.meta else {
+		return false;
+	};
+	if !attr.path().is_ident("cfg_attr") {
+		return false;
+	}
+	let Ok(attributes) =
+		Punctuated::<Meta, Token![,]>::parse_terminated.parse2(list.tokens.clone())
+	else {
+		return false;
+	};
+	attributes
+		.iter()
+		.skip(1)
+		.all(|nested| nested.path().is_ident("cfg"))
+}
+
 /// Extract request body information from function parameters
 ///
 /// Detects body-consuming extractors (Json<T>, Form<T>, Body<T>) and extracts:
@@ -738,7 +759,7 @@ fn generate_view_type(
 	let wrapper_attrs: Vec<_> = fn_attrs
 		.iter()
 		.copied()
-		.filter(|attr| attr.path().is_ident("cfg") || attr.path().is_ident("cfg_attr"))
+		.filter(|attr| is_wrapper_attribute(attr))
 		.collect();
 	let output = &input.sig.output;
 	let asyncness = &input.sig.asyncness;
@@ -1667,6 +1688,19 @@ mod url_resolver_tests {
 		.to_string();
 
 		assert_eq!(generated.matches("tracing :: instrument").count(), 1);
+	}
+
+	#[rstest]
+	fn wrapper_attributes_keep_only_conditional_compilation() {
+		let cfg: syn::Attribute = syn::parse_quote!(#[cfg(feature = "trace")]);
+		let conditional_cfg: syn::Attribute =
+			syn::parse_quote!(#[cfg_attr(feature = "wasm", cfg(wasm))]);
+		let conditional_tracing: syn::Attribute =
+			syn::parse_quote!(#[cfg_attr(feature = "trace", tracing::instrument)]);
+
+		assert!(is_wrapper_attribute(&cfg));
+		assert!(is_wrapper_attribute(&conditional_cfg));
+		assert!(!is_wrapper_attribute(&conditional_tracing));
 	}
 
 	#[rstest]

@@ -7,9 +7,7 @@
 use crate::backends::types::QueryValue;
 use crate::orm::Model;
 use crate::orm::connection::{DatabaseBackend, OrmExecutor, QueryRow};
-use reinhardt_query::prelude::{
-	Alias, ColumnRef, Expr, ExprTrait, Func, Query, QueryBuilder, SelectStatement,
-};
+use reinhardt_query::prelude::{Alias, ColumnRef, Expr, ExprTrait, Func, Query, SelectStatement};
 use reinhardt_query::value::Value as SV;
 use rust_decimal::prelude::ToPrimitive;
 use std::marker::PhantomData;
@@ -234,14 +232,19 @@ fn query_value_to_json(value: &SV) -> serde_json::Value {
 fn build_select_for_backend(
 	stmt: &SelectStatement,
 	backend: DatabaseBackend,
-) -> (String, reinhardt_query::prelude::Values) {
-	match backend {
+) -> Result<(String, reinhardt_query::prelude::Values), ExecutionError> {
+	let result = match backend {
 		DatabaseBackend::Postgres => {
-			reinhardt_query::prelude::PostgresQueryBuilder.build_select(stmt)
+			reinhardt_query::prelude::PostgresQueryBuilder.build_select_checked(stmt)
 		}
-		DatabaseBackend::MySql => reinhardt_query::prelude::MySqlQueryBuilder.build_select(stmt),
-		DatabaseBackend::Sqlite => reinhardt_query::prelude::SqliteQueryBuilder.build_select(stmt),
-	}
+		DatabaseBackend::MySql => {
+			reinhardt_query::prelude::MySqlQueryBuilder.build_select_checked(stmt)
+		}
+		DatabaseBackend::Sqlite => {
+			reinhardt_query::prelude::SqliteQueryBuilder.build_select_checked(stmt)
+		}
+	};
+	result.map_err(|error| ExecutionError::QueryBuild(error.to_string()))
 }
 
 /// Query execution methods with both sync builders and async execution
@@ -509,7 +512,7 @@ where
 		E: OrmExecutor,
 	{
 		let stmt = self.get(pk);
-		let (sql, values) = build_select_for_backend(&stmt, db.backend());
+		let (sql, values) = build_select_for_backend(&stmt, db.backend())?;
 
 		let query_values = convert_values(values);
 		let row = db.fetch_one(&sql, query_values).await?;
@@ -522,7 +525,7 @@ where
 		E: OrmExecutor,
 	{
 		let stmt = self.all();
-		let (sql, values) = build_select_for_backend(&stmt, db.backend());
+		let (sql, values) = build_select_for_backend(&stmt, db.backend())?;
 
 		let query_values = convert_values(values);
 		let rows = db.fetch_all(&sql, query_values).await?;
@@ -539,7 +542,7 @@ where
 		E: OrmExecutor,
 	{
 		let stmt = self.first();
-		let (sql, values) = build_select_for_backend(&stmt, db.backend());
+		let (sql, values) = build_select_for_backend(&stmt, db.backend())?;
 
 		let query_values = convert_values(values);
 		let rows = db.fetch_all(&sql, query_values).await?;
@@ -557,7 +560,7 @@ where
 		E: OrmExecutor,
 	{
 		let stmt = self.one();
-		let (sql, values) = build_select_for_backend(&stmt, db.backend());
+		let (sql, values) = build_select_for_backend(&stmt, db.backend())?;
 
 		let query_values = convert_values(values);
 		let rows = db.fetch_all(&sql, query_values).await?;
@@ -577,7 +580,7 @@ where
 		E: OrmExecutor,
 	{
 		let stmt = self.one_or_none();
-		let (sql, values) = build_select_for_backend(&stmt, db.backend());
+		let (sql, values) = build_select_for_backend(&stmt, db.backend())?;
 
 		let query_values = convert_values(values);
 		let rows = db.fetch_all(&sql, query_values).await?;
@@ -597,7 +600,7 @@ where
 		E: OrmExecutor,
 	{
 		let stmt = self.scalar();
-		let (sql, values) = build_select_for_backend(&stmt, db.backend());
+		let (sql, values) = build_select_for_backend(&stmt, db.backend())?;
 
 		let query_values = convert_values(values);
 		let rows = db.fetch_all(&sql, query_values).await?;
@@ -622,7 +625,7 @@ where
 		E: OrmExecutor,
 	{
 		let stmt = self.count();
-		let (sql, values) = build_select_for_backend(&stmt, db.backend());
+		let (sql, values) = build_select_for_backend(&stmt, db.backend())?;
 
 		let query_values = convert_values(values);
 		let query_row = QueryRow::from_backend_row(db.fetch_one(&sql, query_values).await?);
@@ -645,7 +648,7 @@ where
 		E: OrmExecutor,
 	{
 		let stmt = self.exists();
-		let (sql, values) = build_select_for_backend(&stmt, db.backend());
+		let (sql, values) = build_select_for_backend(&stmt, db.backend())?;
 
 		let query_values = convert_values(values);
 		let query_row = QueryRow::from_backend_row(db.fetch_one(&sql, query_values).await?);
@@ -816,6 +819,61 @@ mod tests {
 	use rstest::rstest;
 	use serde::{Deserialize, Serialize};
 
+	#[cfg(feature = "pgvector")]
+	#[derive(Default)]
+	struct SqliteRecordingExecutor {
+		called: bool,
+	}
+
+	#[cfg(feature = "pgvector")]
+	#[async_trait::async_trait]
+	impl OrmExecutor for SqliteRecordingExecutor {
+		fn backend(&self) -> DatabaseBackend {
+			DatabaseBackend::Sqlite
+		}
+
+		async fn execute(
+			&mut self,
+			_sql: &str,
+			_params: Vec<QueryValue>,
+		) -> reinhardt_core::exception::Result<crate::orm::QueryResult> {
+			self.called = true;
+			Ok(crate::orm::QueryResult {
+				rows_affected: 0,
+				last_insert_id: None,
+			})
+		}
+
+		async fn fetch_one(
+			&mut self,
+			_sql: &str,
+			_params: Vec<QueryValue>,
+		) -> reinhardt_core::exception::Result<crate::orm::Row> {
+			self.called = true;
+			Ok(crate::orm::Row {
+				data: std::collections::HashMap::new(),
+			})
+		}
+
+		async fn fetch_all(
+			&mut self,
+			_sql: &str,
+			_params: Vec<QueryValue>,
+		) -> reinhardt_core::exception::Result<Vec<crate::orm::Row>> {
+			self.called = true;
+			Ok(Vec::new())
+		}
+
+		async fn fetch_optional(
+			&mut self,
+			_sql: &str,
+			_params: Vec<QueryValue>,
+		) -> reinhardt_core::exception::Result<Option<crate::orm::Row>> {
+			self.called = true;
+			Ok(None)
+		}
+	}
+
 	#[derive(Debug, Clone, Serialize, Deserialize)]
 	struct User {
 		id: Option<i64>,
@@ -852,6 +910,36 @@ mod tests {
 		fn set_primary_key(&mut self, value: Self::PrimaryKey) {
 			self.id = Some(value);
 		}
+	}
+
+	#[cfg(feature = "pgvector")]
+	#[tokio::test]
+	async fn typed_vector_execution_rejects_sqlite_before_executor_call() {
+		use reinhardt_query::prelude::{BinOper, SimpleExpr};
+		use reinhardt_query::types::PgBinOper;
+
+		let distance = SimpleExpr::Binary(
+			Box::new(Expr::col(Alias::new("embedding")).into_simple_expr()),
+			BinOper::PgOperator(PgBinOper::CosineDistance),
+			Box::new(SimpleExpr::Value(SV::Vector(Some(Box::new(vec![
+				1.0, 2.0, 3.0,
+			]))))),
+		);
+		let stmt = Query::select()
+			.expr(distance)
+			.from(Alias::new("users"))
+			.to_owned();
+		let execution = SelectExecution::<User>::new(stmt);
+		let mut executor = SqliteRecordingExecutor::default();
+
+		let error = execution.all_async(&mut executor).await.unwrap_err();
+
+		assert!(matches!(
+			error,
+			ExecutionError::QueryBuild(ref message)
+				if message == "pgvector distance operators is not supported by the SQLite backend"
+		));
+		assert!(!executor.called);
 	}
 
 	#[test]

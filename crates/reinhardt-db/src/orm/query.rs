@@ -9,10 +9,10 @@ use super::field_codec::{
 };
 use super::{FieldSelector, Model};
 use crate::naming::to_snake_case;
-use crate::orm::query_fields::GroupByFields;
 use crate::orm::query_fields::aggregate::{AggregateExpr, ComparisonExpr};
 use crate::orm::query_fields::comparison::FieldComparison;
 use crate::orm::query_fields::compiler::QueryFieldCompiler;
+use crate::orm::query_fields::{GroupByFields, OrderedExpression, TypedExpression};
 use crate::orm::relations::{RelationJoinGraph, RelationJoinKind, RelationPathLike, RelationStep};
 use reinhardt_core::exception::{DatabaseError, DatabaseErrorKind, Error};
 use reinhardt_query::prelude::{
@@ -148,6 +148,7 @@ pub enum FilterValue {
 enum FilterField {
 	Column,
 	Expression(String),
+	TypedPredicate(Box<SimpleExpr>),
 }
 
 #[derive(Debug, Clone)]
@@ -285,6 +286,17 @@ impl Filter {
 			field_type: None,
 			operator,
 			value,
+		}
+	}
+
+	pub(crate) fn typed_predicate(expr: SimpleExpr) -> Self {
+		Self {
+			field: String::new(),
+			field_source: FilterField::TypedPredicate(Box::new(expr)),
+			relation: None,
+			field_type: None,
+			operator: FilterOperator::Eq,
+			value: FilterValue::Boolean(true),
 		}
 	}
 
@@ -952,6 +964,54 @@ where
 	fn apply_prefetch_related(self, queryset: &mut QuerySet<T>);
 }
 
+/// Input accepted by [`QuerySet::order_by`].
+pub trait IntoOrderBy<M>
+where
+	M: super::Model,
+{
+	/// Replace the active ordering with this input.
+	fn apply(self, queryset: &mut QuerySet<M>);
+}
+
+impl<M> IntoOrderBy<M> for &[&str]
+where
+	M: super::Model,
+{
+	fn apply(self, queryset: &mut QuerySet<M>) {
+		queryset.order_by_fields = self.iter().map(|field| (*field).to_owned()).collect();
+		queryset.order_by_expressions.clear();
+	}
+}
+
+impl<M, const N: usize> IntoOrderBy<M> for &[&str; N]
+where
+	M: super::Model,
+{
+	fn apply(self, queryset: &mut QuerySet<M>) {
+		self.as_slice().apply(queryset);
+	}
+}
+
+impl<M> IntoOrderBy<M> for &Vec<&str>
+where
+	M: super::Model,
+{
+	fn apply(self, queryset: &mut QuerySet<M>) {
+		self.as_slice().apply(queryset);
+	}
+}
+
+impl<M> IntoOrderBy<M> for OrderedExpression<M>
+where
+	M: super::Model,
+{
+	fn apply(self, queryset: &mut QuerySet<M>) {
+		queryset.order_by_fields.clear();
+		queryset.order_by_expressions.clear();
+		queryset.order_by_expressions.push(self);
+	}
+}
+
 impl<T> RelationLoadInput<T> for &[&str]
 where
 	T: super::Model,
@@ -1191,10 +1251,13 @@ where
 	typed_prefetch_related: Vec<TypedPrefetchRelation>,
 	relation_joins: RelationJoinGraph,
 	order_by_fields: Vec<String>,
+	order_by_expressions: Vec<OrderedExpression<T>>,
 	distinct_enabled: bool,
 	selected_fields: Option<Vec<String>>,
+	selected_expressions: Vec<(String, SimpleExpr)>,
 	deferred_fields: Vec<String>,
 	annotations: Vec<super::annotation::Annotation>,
+	typed_annotations: Vec<(String, SimpleExpr)>,
 	manager: Option<std::sync::Arc<super::manager::Manager<T>>>,
 	limit: Option<usize>,
 	offset: Option<usize>,
@@ -1226,10 +1289,13 @@ where
 			typed_prefetch_related: Vec::new(),
 			relation_joins: RelationJoinGraph::new(T::table_name()),
 			order_by_fields: Vec::new(),
+			order_by_expressions: Vec::new(),
 			distinct_enabled: false,
 			selected_fields: None,
+			selected_expressions: Vec::new(),
 			deferred_fields: Vec::new(),
 			annotations: Vec::new(),
+			typed_annotations: Vec::new(),
 			manager: None,
 			limit: None,
 			offset: None,
@@ -1284,20 +1350,14 @@ where
 		} else {
 			self.add_default_select_columns(&mut stmt);
 		}
+		self.apply_typed_select_expressions(&mut stmt);
 		self.apply_relation_joins(&mut stmt);
 		self.apply_manual_joins(&mut stmt);
 
 		if let Some(condition) = self.build_where_condition()? {
 			stmt.cond_where(condition);
 		}
-		for order_field in &self.order_by_fields {
-			let (field, order) = order_field
-				.strip_prefix('-')
-				.map_or((order_field.as_str(), Order::Asc), |field| {
-					(field, Order::Desc)
-				});
-			stmt.order_by_expr(Expr::col(self.root_column_reference(field)), order);
-		}
+		self.apply_ordering(&mut stmt);
 		if let Some(limit) = self.limit {
 			stmt.limit(limit as u64);
 		}
@@ -1336,10 +1396,13 @@ where
 			typed_prefetch_related: Vec::new(),
 			relation_joins: RelationJoinGraph::new(T::table_name()),
 			order_by_fields: Vec::new(),
+			order_by_expressions: Vec::new(),
 			distinct_enabled: false,
 			selected_fields: None,
+			selected_expressions: Vec::new(),
 			deferred_fields: Vec::new(),
 			annotations: Vec::new(),
+			typed_annotations: Vec::new(),
 			manager: Some(manager),
 			limit: None,
 			offset: None,
@@ -1549,10 +1612,13 @@ where
 			typed_prefetch_related: Vec::new(),
 			relation_joins: RelationJoinGraph::new(alias),
 			order_by_fields: Vec::new(),
+			order_by_expressions: Vec::new(),
 			distinct_enabled: false,
 			selected_fields: None,
+			selected_expressions: Vec::new(),
 			deferred_fields: Vec::new(),
 			annotations: Vec::new(),
+			typed_annotations: Vec::new(),
 			manager: None,
 			limit: None,
 			offset: None,
@@ -3826,6 +3892,29 @@ where
 		}
 	}
 
+	fn apply_typed_select_expressions(&self, stmt: &mut SelectStatement) {
+		for (alias, expression) in &self.selected_expressions {
+			stmt.expr_as(expression.clone(), Alias::new(alias));
+		}
+		for (alias, expression) in &self.typed_annotations {
+			stmt.expr_as(expression.clone(), Alias::new(alias));
+		}
+	}
+
+	fn apply_ordering(&self, stmt: &mut SelectStatement) {
+		for order_field in &self.order_by_fields {
+			let (field, order) = order_field
+				.strip_prefix('-')
+				.map_or((order_field.as_str(), Order::Asc), |field| {
+					(field, Order::Desc)
+				});
+			stmt.order_by_expr(Expr::col(self.root_column_reference(field)), order);
+		}
+		for ordering in &self.order_by_expressions {
+			stmt.order_by_expr(ordering.expr.clone(), ordering.order);
+		}
+	}
+
 	fn apply_relation_join_graph(stmt: &mut SelectStatement, graph: &RelationJoinGraph) {
 		for join in graph.joins() {
 			let sea_join_type = match join.join_kind {
@@ -3857,6 +3946,11 @@ where
 		let mut added = false;
 
 		for filter in &self.filters {
+			if let FilterField::TypedPredicate(expr) = &filter.field_source {
+				cond = cond.add(expr.as_ref().clone());
+				added = true;
+				continue;
+			}
 			let col = self.filter_lhs_expr(filter);
 
 			let expr = match (&filter.operator, &filter.value) {
@@ -5228,6 +5322,7 @@ where
 
 		// Add main table columns while preserving explicit projections.
 		self.add_select_related_root_columns(&mut stmt);
+		self.apply_typed_select_expressions(&mut stmt);
 
 		// Add LEFT JOIN for each legacy related field that is not already covered
 		// by a typed join. The typed graph owns its aliases and join order.
@@ -5370,22 +5465,7 @@ where
 			}
 		}
 
-		// Apply ORDER BY
-		for order_field in &self.order_by_fields {
-			let (field, is_desc) = if let Some(stripped) = order_field.strip_prefix('-') {
-				(stripped, true)
-			} else {
-				(order_field.as_str(), false)
-			};
-
-			let col_ref = self.root_column_reference(field);
-			let expr = Expr::col(col_ref);
-			if is_desc {
-				stmt.order_by_expr(expr, Order::Desc);
-			} else {
-				stmt.order_by_expr(expr, Order::Asc);
-			}
-		}
+		self.apply_ordering(&mut stmt);
 
 		// Apply LIMIT/OFFSET
 		if let Some(limit) = self.limit {
@@ -5954,81 +6034,22 @@ where
 		T: serde::de::DeserializeOwned,
 		E: OrmExecutor,
 	{
-		let stmt = if !self.has_select_related() {
-			let mut stmt = Query::select();
-			self.apply_model_from(&mut stmt);
-
-			// Column selection considering selected_fields and deferred_fields
-			if let Some(ref fields) = self.selected_fields {
-				for field in fields {
-					// Detect raw SQL expressions (like COUNT(*), AVG(price), etc.)
-					if field.contains('(') && field.contains(')') {
-						// Use expr() for raw SQL expressions - clone to satisfy lifetime
-						stmt.expr(Expr::cust(field.clone()));
-					} else {
-						// Regular column reference
-						let col_ref = self.root_column_reference(field);
-						stmt.column(col_ref);
-					}
-				}
-			} else if !self.deferred_fields.is_empty() {
-				let all_fields = T::field_metadata();
-				for field in all_fields {
-					if !self.deferred_fields.contains(&field.name) {
-						let col_ref = self.root_column_reference(&field.name);
-						stmt.column(col_ref);
-					}
-				}
-			} else {
-				self.add_default_select_columns(&mut stmt);
-			}
-
-			self.apply_relation_joins(&mut stmt);
-
-			if let Some(cond) = self.build_where_condition()? {
-				stmt.cond_where(cond);
-			}
-
-			// Apply ORDER BY clause
-			for order_field in &self.order_by_fields {
-				let (field, is_desc) = if let Some(stripped) = order_field.strip_prefix('-') {
-					(stripped, true)
-				} else {
-					(order_field.as_str(), false)
-				};
-
-				let col_ref = self.root_column_reference(field);
-				let expr = Expr::col(col_ref);
-				if is_desc {
-					stmt.order_by_expr(expr, Order::Desc);
-				} else {
-					stmt.order_by_expr(expr, Order::Asc);
-				}
-			}
-
-			// Apply LIMIT/OFFSET
-			if let Some(limit) = self.limit {
-				stmt.limit(limit as u64);
-			}
-			if let Some(offset) = self.offset {
-				stmt.offset(offset as u64);
-			}
-
-			stmt.to_owned()
-		} else {
-			self.select_related_query()?
-		};
-
-		let sql = render_select_statement(&stmt, conn.backend());
+		let stmt = self.build_select_statement()?;
+		let (sql, values) = Self::build_select_for_backend(&stmt, conn.backend())?;
+		let param_samples = values
+			.iter()
+			.map(|value| value.to_sql_literal())
+			.collect::<Vec<_>>();
+		let params = super::execution::convert_values(values);
 
 		let started_at = Instant::now();
-		let query_result = conn.fetch_all(&sql, vec![]).await;
+		let query_result = conn.fetch_all(&sql, params).await;
 		let duration = started_at.elapsed();
 
 		let rows = match query_result {
 			Ok(rows) => {
 				super::instrumentation::instrumentation()
-					.orm_query_end_with_params(&sql, &[], duration)
+					.orm_query_end_with_params(&sql, &param_samples, duration)
 					.await;
 				rows
 			}
@@ -6062,7 +6083,8 @@ where
 		T: serde::de::DeserializeOwned,
 	{
 		let stmt = self.build_select_statement().map_err(executor_error)?;
-		let (sql, values) = Self::build_select_for_backend(&stmt, Self::executor_backend(executor));
+		let (sql, values) =
+			Self::build_select_for_backend(&stmt, Self::executor_backend(executor))?;
 		let param_samples = values
 			.iter()
 			.map(|value| value.to_sql_literal())
@@ -6097,7 +6119,8 @@ where
 		executor: &mut dyn super::connection::TransactionExecutor,
 	) -> Result<usize, crate::backends::error::DatabaseError> {
 		let stmt = self.count_select_query().map_err(executor_error)?;
-		let (sql, values) = Self::build_select_for_backend(&stmt, Self::executor_backend(executor));
+		let (sql, values) =
+			Self::build_select_for_backend(&stmt, Self::executor_backend(executor))?;
 		let params = super::execution::convert_values(values);
 		let row = executor
 			.fetch_one(&sql, params)
@@ -6283,7 +6306,7 @@ where
 		E: OrmExecutor,
 	{
 		let stmt = self.count_select_query()?;
-		let (sql, values) = Self::build_select_for_backend(&stmt, conn.backend());
+		let (sql, values) = Self::build_select_for_backend(&stmt, conn.backend())?;
 		let param_samples = values
 			.iter()
 			.map(|value| value.to_sql_literal())
@@ -6687,12 +6710,21 @@ where
 	fn build_select_for_backend(
 		stmt: &SelectStatement,
 		backend: super::connection::DatabaseBackend,
-	) -> (String, reinhardt_query::prelude::Values) {
-		match backend {
-			super::connection::DatabaseBackend::Postgres => PostgresQueryBuilder.build_select(stmt),
-			super::connection::DatabaseBackend::MySql => MySqlQueryBuilder.build_select(stmt),
-			super::connection::DatabaseBackend::Sqlite => SqliteQueryBuilder.build_select(stmt),
-		}
+	) -> Result<(String, reinhardt_query::prelude::Values), reinhardt_core::exception::DatabaseError>
+	{
+		let result = match backend {
+			super::connection::DatabaseBackend::Postgres => {
+				PostgresQueryBuilder.build_select_checked(stmt)
+			}
+			super::connection::DatabaseBackend::MySql => {
+				MySqlQueryBuilder.build_select_checked(stmt)
+			}
+			super::connection::DatabaseBackend::Sqlite => {
+				SqliteQueryBuilder.build_select_checked(stmt)
+			}
+		};
+		result
+			.map_err(|error| DatabaseError::new(DatabaseErrorKind::Unsupported, error.to_string()))
 	}
 
 	fn update_value_to_query_expr(value: &UpdateValue) -> reinhardt_core::exception::Result<Expr> {
@@ -7017,7 +7049,7 @@ where
 			}
 		}
 
-		let (sql, values) = Self::build_select_for_backend(&query, conn.backend());
+		let (sql, values) = Self::build_select_for_backend(&query, conn.backend())?;
 		let param_samples = values
 			.iter()
 			.map(|value| value.to_sql_literal())
@@ -7114,6 +7146,16 @@ where
 	/// ```
 	pub fn annotate(mut self, annotation: super::annotation::Annotation) -> Self {
 		self.annotations.push(annotation);
+		self
+	}
+
+	/// Add a model-rooted expression to the selected columns under an alias.
+	pub fn annotate_expr<R>(
+		mut self,
+		alias: impl Into<String>,
+		expression: TypedExpression<T, R>,
+	) -> Self {
+		self.typed_annotations.push((alias.into(), expression.expr));
 		self
 	}
 
@@ -7325,6 +7367,7 @@ where
 			} else {
 				self.add_default_select_columns(&mut stmt);
 			}
+			self.apply_typed_select_expressions(&mut stmt);
 
 			self.apply_relation_joins(&mut stmt);
 
@@ -7421,22 +7464,7 @@ where
 				}
 			}
 
-			// Apply ORDER BY
-			for order_field in &self.order_by_fields {
-				let (field, is_desc) = if let Some(stripped) = order_field.strip_prefix('-') {
-					(stripped, true)
-				} else {
-					(order_field.as_str(), false)
-				};
-
-				let col_ref = self.root_column_reference(field);
-				let expr = Expr::col(col_ref);
-				if is_desc {
-					stmt.order_by_expr(expr, Order::Desc);
-				} else {
-					stmt.order_by_expr(expr, Order::Asc);
-				}
-			}
+			self.apply_ordering(&mut stmt);
 
 			// Apply LIMIT/OFFSET
 			if let Some(limit) = self.limit {
@@ -7563,6 +7591,17 @@ where
 		self
 	}
 
+	/// Select a model-rooted expression under an identifier-safe alias.
+	pub fn select_expr<R>(
+		mut self,
+		alias: impl Into<String>,
+		expression: TypedExpression<T, R>,
+	) -> Self {
+		self.selected_expressions
+			.push((alias.into(), expression.expr));
+		self
+	}
+
 	/// Select specific values as a list
 	///
 	/// Alias for `values()` - returns tuple-like results with specified fields.
@@ -7637,8 +7676,11 @@ where
 	/// User::objects().order_by(&["department", "-salary"]);
 	/// # }
 	/// ```
-	pub fn order_by(mut self, fields: &[&str]) -> Self {
-		self.order_by_fields = fields.iter().map(|s| s.to_string()).collect();
+	pub fn order_by<I>(mut self, ordering: I) -> Self
+	where
+		I: IntoOrderBy<T>,
+	{
+		ordering.apply(&mut self);
 		self
 	}
 
@@ -8261,6 +8303,7 @@ fn filter_lhs_expr(filter: &Filter) -> Expr {
 		FilterField::Column => Expr::col(parse_column_reference(&filter.field)),
 		FilterField::Expression(sql) if filter.field == *sql => Expr::cust(sql.clone()),
 		FilterField::Expression(_) => Expr::col(parse_column_reference(&filter.field)),
+		FilterField::TypedPredicate(_) => Expr::cust("TRUE"),
 	}
 }
 
@@ -8273,6 +8316,7 @@ fn filter_lhs_sql(filter: &Filter) -> String {
 		FilterField::Column => quote_identifier(&filter.field),
 		FilterField::Expression(sql) if filter.field == *sql => sql.clone(),
 		FilterField::Expression(_) => quote_identifier(&filter.field),
+		FilterField::TypedPredicate(_) => "TRUE".to_owned(),
 	}
 }
 
@@ -8356,28 +8400,17 @@ fn escape_like_pattern(value: &str) -> String {
 	escaped
 }
 
-fn render_select_statement(
-	statement: &SelectStatement,
-	backend: super::connection::DatabaseBackend,
-) -> String {
-	match backend {
-		super::connection::DatabaseBackend::Postgres => statement.to_string(PostgresQueryBuilder),
-		super::connection::DatabaseBackend::MySql => statement.to_string(MySqlQueryBuilder),
-		super::connection::DatabaseBackend::Sqlite => statement.to_string(SqliteQueryBuilder),
-	}
-}
-
 #[cfg(test)]
 mod tests {
 	use super::{
 		AggregateFunc, AggregateValue, ComparisonOp, FilterCondition, HavingCondition,
-		MAX_FILTER_CONDITION_DEPTH, QueryFilterInput, render_select_statement,
+		MAX_FILTER_CONDITION_DEPTH, QueryFilterInput,
 	};
 	use crate::orm::connection::DatabaseBackend;
 	use crate::orm::query::{FieldAssignment, UpdateValue};
 	use crate::orm::{
-		DatabaseValue, FieldCodecError, FilterOperator, FilterValue, Manager, Model, QuerySet,
-		query::Filter,
+		DatabaseValue, Field, FieldCodecError, FilterOperator, FilterValue, Manager, Model,
+		QuerySet, query::Filter,
 	};
 	use reinhardt_query::{
 		QueryBuilder,
@@ -8387,8 +8420,235 @@ mod tests {
 	use serde::{Deserialize, Serialize};
 	use std::collections::HashMap;
 
+	#[cfg(feature = "pgvector")]
+	#[derive(Default)]
+	struct RecordingExecutor {
+		calls: Vec<(String, Vec<crate::orm::QueryValue>)>,
+	}
+
+	#[cfg(feature = "pgvector")]
+	#[async_trait::async_trait]
+	impl crate::orm::OrmExecutor for RecordingExecutor {
+		fn backend(&self) -> DatabaseBackend {
+			DatabaseBackend::Postgres
+		}
+
+		async fn execute(
+			&mut self,
+			sql: &str,
+			params: Vec<crate::orm::QueryValue>,
+		) -> reinhardt_core::exception::Result<crate::orm::QueryResult> {
+			self.calls.push((sql.to_owned(), params));
+			Ok(crate::orm::QueryResult {
+				rows_affected: 0,
+				last_insert_id: None,
+			})
+		}
+
+		async fn fetch_one(
+			&mut self,
+			sql: &str,
+			params: Vec<crate::orm::QueryValue>,
+		) -> reinhardt_core::exception::Result<crate::orm::Row> {
+			self.calls.push((sql.to_owned(), params));
+			Ok(crate::orm::Row {
+				data: HashMap::from([("count".to_owned(), crate::orm::QueryValue::Int(0))]),
+			})
+		}
+
+		async fn fetch_all(
+			&mut self,
+			sql: &str,
+			params: Vec<crate::orm::QueryValue>,
+		) -> reinhardt_core::exception::Result<Vec<crate::orm::Row>> {
+			self.calls.push((sql.to_owned(), params));
+			Ok(Vec::new())
+		}
+
+		async fn fetch_optional(
+			&mut self,
+			sql: &str,
+			params: Vec<crate::orm::QueryValue>,
+		) -> reinhardt_core::exception::Result<Option<crate::orm::Row>> {
+			self.calls.push((sql.to_owned(), params));
+			Ok(None)
+		}
+	}
+
+	#[cfg(feature = "pgvector")]
+	fn typed_vector_target(values: &[f32]) -> crate::orm::Vector<3> {
+		crate::orm::Vector::try_from_slice(values).unwrap()
+	}
+
+	#[cfg(feature = "pgvector")]
+	fn typed_vector_sql_and_params(
+		queryset: &QuerySet<TestUser>,
+	) -> (String, Vec<crate::orm::QueryValue>) {
+		let statement = queryset
+			.build_select_statement()
+			.expect("typed vector query should build");
+		let (sql, values) = PostgresQueryBuilder.build_select(&statement);
+		(sql, crate::orm::execution::convert_values(values))
+	}
+
+	#[cfg(feature = "pgvector")]
 	#[test]
-	fn render_select_statement_uses_mysql_identifier_quoting() {
+	fn typed_vector_l2_distance_uses_postgres_operator_and_bound_value() {
+		let field = Field::<TestUser, crate::orm::Vector<3>>::new(vec!["embedding"]);
+		let queryset = QuerySet::<TestUser>::new().values(&["id"]).select_expr(
+			"distance",
+			field.l2_distance(typed_vector_target(&[1.0, 2.0, 3.0])),
+		);
+
+		let (sql, params) = typed_vector_sql_and_params(&queryset);
+
+		assert_eq!(
+			sql,
+			r#"SELECT "id", "embedding" <-> $1 AS "distance" FROM "test_users""#
+		);
+		assert_eq!(
+			params,
+			vec![crate::orm::QueryValue::Vector(vec![1.0, 2.0, 3.0])]
+		);
+	}
+
+	#[cfg(feature = "pgvector")]
+	#[test]
+	fn typed_vector_negative_inner_product_uses_postgres_operator_and_bound_value() {
+		let field = Field::<TestUser, crate::orm::Vector<3>>::new(vec!["embedding"]);
+		let queryset = QuerySet::<TestUser>::new().values(&["id"]).select_expr(
+			"distance",
+			field.negative_inner_product(typed_vector_target(&[3.0, 2.0, 1.0])),
+		);
+
+		let (sql, params) = typed_vector_sql_and_params(&queryset);
+
+		assert_eq!(
+			sql,
+			r#"SELECT "id", "embedding" <#> $1 AS "distance" FROM "test_users""#
+		);
+		assert_eq!(
+			params,
+			vec![crate::orm::QueryValue::Vector(vec![3.0, 2.0, 1.0])]
+		);
+	}
+
+	#[cfg(feature = "pgvector")]
+	#[test]
+	fn typed_vector_cosine_distance_uses_postgres_operator_and_bound_value() {
+		let field = Field::<TestUser, crate::orm::Vector<3>>::new(vec!["embedding"]);
+		let queryset = QuerySet::<TestUser>::new().values(&["id"]).select_expr(
+			"distance",
+			field.cosine_distance(typed_vector_target(&[0.5, 1.5, 2.5])),
+		);
+
+		let (sql, params) = typed_vector_sql_and_params(&queryset);
+
+		assert_eq!(
+			sql,
+			r#"SELECT "id", "embedding" <=> $1 AS "distance" FROM "test_users""#
+		);
+		assert_eq!(
+			params,
+			vec![crate::orm::QueryValue::Vector(vec![0.5, 1.5, 2.5])]
+		);
+	}
+
+	#[cfg(feature = "pgvector")]
+	#[test]
+	fn typed_vector_predicate_and_ordering_keep_separate_monotonic_bindings() {
+		let field = Field::<TestUser, crate::orm::Vector<3>>::new(vec!["embedding"]);
+		let queryset = QuerySet::<TestUser>::new()
+			.values(&["id"])
+			.filter(
+				field
+					.clone()
+					.cosine_distance(typed_vector_target(&[1.0, 2.0, 3.0]))
+					.lt(0.25),
+			)
+			.order_by(
+				field
+					.l2_distance(typed_vector_target(&[4.0, 5.0, 6.0]))
+					.asc(),
+			);
+
+		let (sql, params) = typed_vector_sql_and_params(&queryset);
+
+		assert_eq!(
+			sql,
+			r#"SELECT "id" FROM "test_users" WHERE "embedding" <=> $1 < $2 ORDER BY "embedding" <-> $3 ASC"#
+		);
+		assert_eq!(
+			params,
+			vec![
+				crate::orm::QueryValue::Vector(vec![1.0, 2.0, 3.0]),
+				crate::orm::QueryValue::Float(0.25),
+				crate::orm::QueryValue::Vector(vec![4.0, 5.0, 6.0]),
+			]
+		);
+	}
+
+	#[cfg(feature = "pgvector")]
+	#[test]
+	fn typed_vector_query_rejects_sqlite_before_execution() {
+		let field = Field::<TestUser, crate::orm::Vector<3>>::new(vec!["embedding"]);
+		let queryset = QuerySet::<TestUser>::new().filter(
+			field
+				.cosine_distance(typed_vector_target(&[1.0, 2.0, 3.0]))
+				.lt(0.25),
+		);
+		let statement = queryset
+			.build_select_statement()
+			.expect("typed vector statement should build");
+
+		let error =
+			QuerySet::<TestUser>::build_select_for_backend(&statement, DatabaseBackend::Sqlite)
+				.expect_err("SQLite must reject PostgreSQL vector distance operators");
+
+		assert_eq!(
+			error.kind(),
+			reinhardt_core::exception::DatabaseErrorKind::Unsupported
+		);
+		assert_eq!(
+			error.to_string(),
+			"pgvector distance operators is not supported by the SQLite backend"
+		);
+	}
+
+	#[cfg(feature = "pgvector")]
+	#[tokio::test]
+	async fn typed_vector_all_with_db_passes_every_bound_value_to_executor() {
+		let field = Field::<TestUser, crate::orm::Vector<3>>::new(vec!["embedding"]);
+		let queryset = QuerySet::<TestUser>::new()
+			.filter(
+				field
+					.clone()
+					.cosine_distance(typed_vector_target(&[1.0, 2.0, 3.0]))
+					.lt(0.25),
+			)
+			.order_by(
+				field
+					.l2_distance(typed_vector_target(&[4.0, 5.0, 6.0]))
+					.asc(),
+			);
+		let mut executor = RecordingExecutor::default();
+
+		let rows = queryset.all_with_db(&mut executor).await.unwrap();
+
+		assert_eq!(rows, Vec::<TestUser>::new());
+		assert_eq!(executor.calls.len(), 1);
+		assert_eq!(
+			executor.calls[0].1,
+			vec![
+				crate::orm::QueryValue::Vector(vec![1.0, 2.0, 3.0]),
+				crate::orm::QueryValue::Float(0.25),
+				crate::orm::QueryValue::Vector(vec![4.0, 5.0, 6.0]),
+			]
+		);
+	}
+
+	#[test]
+	fn checked_select_builder_uses_mysql_identifier_quoting() {
 		// Arrange
 		let mut statement = reinhardt_query::prelude::Query::select();
 		statement
@@ -8396,10 +8656,13 @@ mod tests {
 			.from(reinhardt_query::prelude::Alias::new("articles"));
 
 		// Act
-		let sql = render_select_statement(&statement, DatabaseBackend::MySql);
+		let (sql, values) =
+			QuerySet::<TestUser>::build_select_for_backend(&statement, DatabaseBackend::MySql)
+				.expect("MySQL select should build");
 
 		// Assert
 		assert_eq!(sql, "SELECT `id` FROM `articles`");
+		assert!(values.0.is_empty());
 	}
 
 	#[test]

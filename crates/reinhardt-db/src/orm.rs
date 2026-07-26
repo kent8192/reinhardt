@@ -195,7 +195,7 @@ pub use model::{
 };
 pub use query_fields::{
 	Comparable, DateTimeType, Field, GroupByFields, Lookup, LookupType, LookupValue, NumericType,
-	QueryFieldCompiler, StringType,
+	OrderedExpression, QueryFieldCompiler, StringType, TypedExpression, TypedPredicate,
 };
 #[doc(hidden)]
 pub use serde;
@@ -292,8 +292,8 @@ pub use reverse_accessor::ReverseAccessor;
 pub use manager::Manager;
 // Query types are always available
 pub use query::{
-	FieldAssignment, Filter, FilterCondition, FilterOperator, FilterValue, OrmQuery, QuerySet,
-	UpdateValue,
+	FieldAssignment, Filter, FilterCondition, FilterOperator, FilterValue, IntoOrderBy, OrmQuery,
+	QuerySet, UpdateValue,
 };
 
 // Advanced ORM features

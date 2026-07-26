@@ -121,6 +121,37 @@ fn is_request_type(ty: &Type) -> bool {
 		.is_some_and(|segment| segment.ident == "Request" && segment.arguments.is_none())
 }
 
+fn is_raw_request_parameter(pat_type: &syn::PatType) -> bool {
+	if pat_type.attrs.iter().any(is_inject_attr) {
+		return false;
+	}
+
+	if is_request_type(&pat_type.ty) {
+		return true;
+	}
+
+	let Type::Path(type_path) = &*pat_type.ty else {
+		return true;
+	};
+	let Some(segment) = type_path.path.segments.last() else {
+		return true;
+	};
+	!matches!(
+		segment.ident.to_string().as_str(),
+		"Path"
+			| "Json" | "Query"
+			| "Header"
+			| "Cookie"
+			| "Form" | "Body"
+			| "HeaderNamed"
+			| "CookieNamed"
+			| "CookieStruct"
+			| "SessionValue"
+			| "OptionalSessionValue"
+			| "SessionValueNamed"
+	)
+}
+
 /// Extract request body information from function parameters
 ///
 /// Detects body-consuming extractors (Json<T>, Form<T>, Body<T>) and extracts:
@@ -411,11 +442,11 @@ fn generate_wrapper_with_both(
 	// Generate DI context extraction
 	let di_context_extraction = if !inject_params.is_empty() {
 		quote! {
-			let __shared_ctx = req.get_di_context::<::std::sync::Arc<#di_crate::InjectionContext>>()
+			let __shared_ctx = __reinhardt_request.get_di_context::<::std::sync::Arc<#di_crate::InjectionContext>>()
 				.ok_or_else(|| #core_crate::exception::Error::Internal(
 					"DI context not set. Ensure the router is configured with .with_di_context()".to_string()
 				))?;
-			let __di_request = req.clone_for_di();
+			let __di_request = __reinhardt_request.clone_for_di();
 			let __di_ctx = ::std::sync::Arc::new((*__shared_ctx).fork_for_request(__di_request));
 			let __resolve_ctx = #di_crate::resolve_context::ResolveContext {
 				root: ::std::sync::Arc::clone(&__shared_ctx),
@@ -544,7 +575,7 @@ fn generate_wrapper_with_both(
 		.sig
 		.inputs
 		.iter()
-		.any(|arg| matches!(arg, FnArg::Typed(pat_type) if is_request_type(&pat_type.ty)));
+		.any(|arg| matches!(arg, FnArg::Typed(pat_type) if is_raw_request_parameter(pat_type)));
 	let ordered_call_args = if has_request_param {
 		let mut inject_args = inject_params.iter();
 		let mut extractor_args = extractor_args.iter();
@@ -563,7 +594,7 @@ fn generate_wrapper_with_both(
 							.expect("each injected argument must have detected metadata")
 							.pat;
 						Some(quote! { #pat })
-					} else if is_request_type(&pat_type.ty) {
+					} else if is_raw_request_parameter(pat_type) {
 						Some(quote! { __reinhardt_request })
 					} else {
 						let pat = extractor_args
@@ -627,7 +658,7 @@ fn generate_wrapper_with_both(
 		},
 		quote! {
 			// Build ParamContext for extractors
-			let ctx = #params_crate::ParamContext::with_path_params(req.path_params.clone());
+		let ctx = #params_crate::ParamContext::with_path_params(__reinhardt_request.path_params.clone());
 
 			// Extract DI context (if needed)
 			#di_context_extraction

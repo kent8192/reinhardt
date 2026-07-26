@@ -2176,8 +2176,12 @@ fn generate_model_form(
 				}
 
 				pub fn into_page(self) -> #pages_crate::Page {
+					let _ = self.__state_version.get();
 					let mut controls = ::std::vec::Vec::new();
 					for descriptor in self.__model_state.borrow().selected_descriptors() {
+						if !<#policy_path as #pages_crate::form::ModelFormPolicy>::allows(descriptor.name) {
+							continue;
+						}
 						let (
 							widget_override,
 							label_override,
@@ -2527,6 +2531,11 @@ fn generate_model_form(
 											.borrow()
 											.selected_descriptors()
 											.iter()
+											.filter(|descriptor| {
+												<#policy_path as #pages_crate::form::ModelFormPolicy>::allows(
+													descriptor.name,
+												)
+											})
 											.map(|descriptor| (
 												descriptor.name,
 												matches!(
@@ -2604,6 +2613,9 @@ fn generate_model_form(
 							.selected_descriptors()
 							.iter()
 							.filter_map(|descriptor| {
+								if !<#policy_path as #pages_crate::form::ModelFormPolicy>::allows(descriptor.name) {
+									return ::core::option::Option::None;
+								}
 								state.value(descriptor.name).cloned().map(|value| {
 									(descriptor.name.to_owned(), value)
 								})
@@ -7682,7 +7694,9 @@ mod tests {
 		assert!(output_str.contains("__reinhardt_checkbox_"));
 		assert!(output_str.contains("__reinhardt_color_"));
 		assert!(output_str.contains("let changed = previous != state . value (field) . cloned ()"));
-		assert!(output_str.contains("__state_version"));
+		assert!(output_str.contains("let _ = self . __state_version . get ()"));
+		assert!(output_str.contains("ModelFormPolicy"));
+		assert!(output_str.contains("selected_descriptors () . iter () . filter (| descriptor |"));
 		assert!(output_str.contains("__ReinhardtModelFormField :: State"));
 		assert!(output_str.contains("FormRuntimeSource for TemporalControlsForm"));
 	}

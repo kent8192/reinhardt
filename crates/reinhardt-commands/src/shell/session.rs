@@ -41,6 +41,10 @@ pub(crate) trait EvaluatorFactory {
 	fn take_warnings(&mut self) -> Vec<String> {
 		Vec::new()
 	}
+
+	fn take_startup_output(&mut self) -> Vec<EvaluationOutput> {
+		Vec::new()
+	}
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -93,6 +97,17 @@ where
 		let evaluator = factory.start()?;
 		for warning in factory.take_warnings() {
 			output.warning(&warning)?;
+		}
+		for startup_output in factory.take_startup_output() {
+			if !startup_output.stdout.is_empty() {
+				output.stdout(&startup_output.stdout)?;
+			}
+			if !startup_output.stderr.is_empty() {
+				output.stderr(&startup_output.stderr)?;
+			}
+			if let Some(value) = startup_output.value {
+				output.value(&value)?;
+			}
 		}
 		Ok(Self {
 			factory: Some(factory),

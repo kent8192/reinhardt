@@ -216,7 +216,14 @@ impl EvcxrEvaluator {
 				.map_err(|error| startup_prelude_error(error, &warnings))?;
 			append_startup_output(&mut warnings, output);
 		}
+		let mut startup_output = warnings
+			.iter()
+			.filter(|entry| entry.starts_with('\u{1}'))
+			.cloned()
+			.collect::<Vec<_>>();
+		warnings.retain(|entry| !entry.starts_with('\u{1}'));
 		warnings.sort();
+		warnings.append(&mut startup_output);
 		Ok((evaluator, warnings))
 	}
 }
@@ -464,6 +471,7 @@ pub(crate) struct EvaluatorWorker {
 pub(crate) struct EvcxrEvaluatorFactory {
 	config: ValidatedShellConfig,
 	warnings: Vec<String>,
+	startup_output: Vec<EvaluationOutput>,
 	startup_interrupt: StartupInterrupt,
 }
 
@@ -472,6 +480,7 @@ impl EvcxrEvaluatorFactory {
 		Self {
 			config,
 			warnings: Vec::new(),
+			startup_output: Vec::new(),
 			startup_interrupt: StartupInterrupt::default(),
 		}
 	}
@@ -491,7 +500,9 @@ impl EvaluatorFactory for EvcxrEvaluatorFactory {
 		})
 		.map_err(evaluation_command_error)?;
 		self.startup_interrupt.clear();
+		let (warnings, startup_output) = split_startup_output(warnings);
 		self.warnings = warnings;
+		self.startup_output = startup_output;
 		Ok(Box::new(evaluator))
 	}
 
@@ -501,6 +512,10 @@ impl EvaluatorFactory for EvcxrEvaluatorFactory {
 
 	fn take_warnings(&mut self) -> Vec<String> {
 		std::mem::take(&mut self.warnings)
+	}
+
+	fn take_startup_output(&mut self) -> Vec<EvaluationOutput> {
+		std::mem::take(&mut self.startup_output)
 	}
 }
 
@@ -788,11 +803,32 @@ fn source_with_commit_sentinel(source: &str, sentinel: &str) -> String {
 
 fn append_startup_output(warnings: &mut Vec<String>, output: EvaluationOutput) {
 	if !output.stdout.is_empty() {
-		warnings.push(output.stdout);
+		warnings.push(format!("\u{1}stdout:{}", output.stdout));
 	}
 	if !output.stderr.is_empty() {
-		warnings.push(output.stderr);
+		warnings.push(format!("\u{1}stderr:{}", output.stderr));
 	}
+}
+
+fn split_startup_output(entries: Vec<String>) -> (Vec<String>, Vec<EvaluationOutput>) {
+	let mut warnings = Vec::new();
+	let mut output = Vec::new();
+	for entry in entries {
+		if let Some(stdout) = entry.strip_prefix("\u{1}stdout:") {
+			output.push(EvaluationOutput {
+				stdout: stdout.to_owned(),
+				..Default::default()
+			});
+		} else if let Some(stderr) = entry.strip_prefix("\u{1}stderr:") {
+			output.push(EvaluationOutput {
+				stderr: stderr.to_owned(),
+				..Default::default()
+			});
+		} else {
+			warnings.push(entry);
+		}
+	}
+	(warnings, output)
 }
 
 fn complete_inner_block_doc(source: &str) -> Option<usize> {

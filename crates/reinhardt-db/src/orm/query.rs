@@ -6050,7 +6050,13 @@ where
 		let params = super::execution::convert_values(values);
 
 		let started_at = Instant::now();
-		let query_result = conn.fetch_all(&sql, params).await;
+		let query_result = conn
+			.fetch_all_with_context(
+				&sql,
+				params,
+				super::execution::pgvector_context_for_select(&stmt),
+			)
+			.await;
 		let duration = started_at.elapsed();
 
 		let rows = match query_result {
@@ -6099,7 +6105,11 @@ where
 		let params = super::execution::convert_values(values);
 		let started = Instant::now();
 		let result = executor
-			.fetch_all(&sql, params)
+			.fetch_all_with_context(
+				&sql,
+				params,
+				super::execution::pgvector_context_for_select(&stmt),
+			)
 			.await
 			.map_err(executor_error);
 		let duration = started.elapsed();
@@ -7077,7 +7087,13 @@ where
 		let params = super::execution::convert_values(values);
 
 		let started_at = Instant::now();
-		let query_result = conn.fetch_all(&sql, params).await;
+		let query_result = conn
+			.fetch_all_with_context(
+				&sql,
+				params,
+				super::execution::pgvector_context_for_select(&query),
+			)
+			.await;
 		let duration = started_at.elapsed();
 		let rows = match query_result {
 			Ok(rows) => {

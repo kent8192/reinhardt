@@ -737,12 +737,34 @@ impl OrmExecutor for AtomicTransaction {
 		self.executor_mut()?.execute(sql, params).await
 	}
 
+	async fn execute_with_context(
+		&mut self,
+		sql: &str,
+		params: Vec<QueryValue>,
+		context: Option<crate::backends::error::PgvectorOperationKind>,
+	) -> reinhardt_core::exception::Result<QueryResult> {
+		self.executor_mut()?
+			.execute_with_context(sql, params, context)
+			.await
+	}
+
 	async fn fetch_one(
 		&mut self,
 		sql: &str,
 		params: Vec<QueryValue>,
 	) -> reinhardt_core::exception::Result<Row> {
 		self.executor_mut()?.fetch_one(sql, params).await
+	}
+
+	async fn fetch_one_with_context(
+		&mut self,
+		sql: &str,
+		params: Vec<QueryValue>,
+		context: Option<crate::backends::error::PgvectorOperationKind>,
+	) -> reinhardt_core::exception::Result<Row> {
+		self.executor_mut()?
+			.fetch_one_with_context(sql, params, context)
+			.await
 	}
 
 	async fn fetch_all(
@@ -753,12 +775,34 @@ impl OrmExecutor for AtomicTransaction {
 		self.executor_mut()?.fetch_all(sql, params).await
 	}
 
+	async fn fetch_all_with_context(
+		&mut self,
+		sql: &str,
+		params: Vec<QueryValue>,
+		context: Option<crate::backends::error::PgvectorOperationKind>,
+	) -> reinhardt_core::exception::Result<Vec<Row>> {
+		self.executor_mut()?
+			.fetch_all_with_context(sql, params, context)
+			.await
+	}
+
 	async fn fetch_optional(
 		&mut self,
 		sql: &str,
 		params: Vec<QueryValue>,
 	) -> reinhardt_core::exception::Result<Option<Row>> {
 		self.executor_mut()?.fetch_optional(sql, params).await
+	}
+
+	async fn fetch_optional_with_context(
+		&mut self,
+		sql: &str,
+		params: Vec<QueryValue>,
+		context: Option<crate::backends::error::PgvectorOperationKind>,
+	) -> reinhardt_core::exception::Result<Option<Row>> {
+		self.executor_mut()?
+			.fetch_optional_with_context(sql, params, context)
+			.await
 	}
 }
 
@@ -782,12 +826,34 @@ impl TransactionExecutor for AtomicTransaction {
 		self.executor_mut()?.execute(sql, params).await
 	}
 
+	async fn execute_with_context(
+		&mut self,
+		sql: &str,
+		params: Vec<QueryValue>,
+		context: Option<crate::backends::error::PgvectorOperationKind>,
+	) -> reinhardt_core::exception::Result<QueryResult> {
+		self.executor_mut()?
+			.execute_with_context(sql, params, context)
+			.await
+	}
+
 	async fn fetch_one(
 		&mut self,
 		sql: &str,
 		params: Vec<QueryValue>,
 	) -> reinhardt_core::exception::Result<Row> {
 		self.executor_mut()?.fetch_one(sql, params).await
+	}
+
+	async fn fetch_one_with_context(
+		&mut self,
+		sql: &str,
+		params: Vec<QueryValue>,
+		context: Option<crate::backends::error::PgvectorOperationKind>,
+	) -> reinhardt_core::exception::Result<Row> {
+		self.executor_mut()?
+			.fetch_one_with_context(sql, params, context)
+			.await
 	}
 
 	async fn fetch_all(
@@ -798,12 +864,34 @@ impl TransactionExecutor for AtomicTransaction {
 		self.executor_mut()?.fetch_all(sql, params).await
 	}
 
+	async fn fetch_all_with_context(
+		&mut self,
+		sql: &str,
+		params: Vec<QueryValue>,
+		context: Option<crate::backends::error::PgvectorOperationKind>,
+	) -> reinhardt_core::exception::Result<Vec<Row>> {
+		self.executor_mut()?
+			.fetch_all_with_context(sql, params, context)
+			.await
+	}
+
 	async fn fetch_optional(
 		&mut self,
 		sql: &str,
 		params: Vec<QueryValue>,
 	) -> reinhardt_core::exception::Result<Option<Row>> {
 		self.executor_mut()?.fetch_optional(sql, params).await
+	}
+
+	async fn fetch_optional_with_context(
+		&mut self,
+		sql: &str,
+		params: Vec<QueryValue>,
+		context: Option<crate::backends::error::PgvectorOperationKind>,
+	) -> reinhardt_core::exception::Result<Option<Row>> {
+		self.executor_mut()?
+			.fetch_optional_with_context(sql, params, context)
+			.await
 	}
 
 	async fn commit(self: Box<Self>) -> reinhardt_core::exception::Result<()> {

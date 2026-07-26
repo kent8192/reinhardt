@@ -652,12 +652,38 @@ impl DatabaseConnection {
 		self.backend.execute(sql, params).await
 	}
 
+	pub(crate) async fn execute_with_context(
+		&self,
+		sql: &str,
+		params: Vec<super::types::QueryValue>,
+		context: Option<super::error::PgvectorOperationKind>,
+	) -> Result<super::types::QueryResult> {
+		#[cfg(feature = "postgres")]
+		if let Some(backend) = self.backend.as_any().downcast_ref::<PostgresBackend>() {
+			return backend.execute_with_context(sql, params, context).await;
+		}
+		self.backend.execute(sql, params).await
+	}
+
 	/// Fetches one.
 	pub async fn fetch_one(
 		&self,
 		sql: &str,
 		params: Vec<super::types::QueryValue>,
 	) -> Result<super::types::Row> {
+		self.backend.fetch_one(sql, params).await
+	}
+
+	pub(crate) async fn fetch_one_with_context(
+		&self,
+		sql: &str,
+		params: Vec<super::types::QueryValue>,
+		context: Option<super::error::PgvectorOperationKind>,
+	) -> Result<super::types::Row> {
+		#[cfg(feature = "postgres")]
+		if let Some(backend) = self.backend.as_any().downcast_ref::<PostgresBackend>() {
+			return backend.fetch_one_with_context(sql, params, context).await;
+		}
 		self.backend.fetch_one(sql, params).await
 	}
 
@@ -670,12 +696,40 @@ impl DatabaseConnection {
 		self.backend.fetch_all(sql, params).await
 	}
 
+	pub(crate) async fn fetch_all_with_context(
+		&self,
+		sql: &str,
+		params: Vec<super::types::QueryValue>,
+		context: Option<super::error::PgvectorOperationKind>,
+	) -> Result<Vec<super::types::Row>> {
+		#[cfg(feature = "postgres")]
+		if let Some(backend) = self.backend.as_any().downcast_ref::<PostgresBackend>() {
+			return backend.fetch_all_with_context(sql, params, context).await;
+		}
+		self.backend.fetch_all(sql, params).await
+	}
+
 	/// Fetches optional.
 	pub async fn fetch_optional(
 		&self,
 		sql: &str,
 		params: Vec<super::types::QueryValue>,
 	) -> Result<Option<super::types::Row>> {
+		self.backend.fetch_optional(sql, params).await
+	}
+
+	pub(crate) async fn fetch_optional_with_context(
+		&self,
+		sql: &str,
+		params: Vec<super::types::QueryValue>,
+		context: Option<super::error::PgvectorOperationKind>,
+	) -> Result<Option<super::types::Row>> {
+		#[cfg(feature = "postgres")]
+		if let Some(backend) = self.backend.as_any().downcast_ref::<PostgresBackend>() {
+			return backend
+				.fetch_optional_with_context(sql, params, context)
+				.await;
+		}
 		self.backend.fetch_optional(sql, params).await
 	}
 

@@ -307,6 +307,14 @@ impl SchemaEditor {
 	///
 	/// * `sql` - SQL statement to execute
 	pub async fn execute(&mut self, sql: &str) -> Result<()> {
+		self.execute_with_context(sql, None).await
+	}
+
+	pub(crate) async fn execute_with_context(
+		&mut self,
+		sql: &str,
+		context: Option<crate::backends::error::PgvectorOperationKind>,
+	) -> Result<()> {
 		#[cfg(feature = "sqlite")]
 		if let Some(session) = self.sqlite_recreation_session.as_mut() {
 			sqlx::query(sql)
@@ -316,14 +324,16 @@ impl SchemaEditor {
 		}
 
 		if let Some(ref mut tx) = self.executor {
-			tx.execute(sql, vec![]).await?;
+			tx.execute_with_context(sql, vec![], context).await?;
 			// SQLite requires a schema cache refresh after DDL within a transaction
 			// to prevent SQLITE_SCHEMA (code 262) errors on subsequent DDL statements.
 			if self.db_type == DatabaseType::Sqlite {
 				tx.execute("SELECT 1", vec![]).await?;
 			}
 		} else {
-			self.connection.execute(sql, vec![]).await?;
+			self.connection
+				.execute_with_context(sql, vec![], context)
+				.await?;
 		}
 
 		Ok(())
@@ -977,11 +987,144 @@ fn merge_foreign_key_scope_results<T>(
 mod tests {
 	use super::*;
 
+	#[cfg(all(feature = "pgvector", feature = "sqlite"))]
+	struct ContextRecordingTransaction {
+		contexts: std::sync::Arc<
+			std::sync::Mutex<Vec<Option<crate::backends::error::PgvectorOperationKind>>>,
+		>,
+	}
+
+	#[cfg(all(feature = "pgvector", feature = "sqlite"))]
+	#[async_trait::async_trait]
+	impl TransactionExecutor for ContextRecordingTransaction {
+		async fn execute(
+			&mut self,
+			_sql: &str,
+			_params: Vec<crate::backends::types::QueryValue>,
+		) -> crate::backends::error::Result<crate::backends::types::QueryResult> {
+			panic!("contextual migration execution must use execute_with_context")
+		}
+
+		async fn execute_with_context(
+			&mut self,
+			_sql: &str,
+			_params: Vec<crate::backends::types::QueryValue>,
+			context: Option<crate::backends::error::PgvectorOperationKind>,
+		) -> crate::backends::error::Result<crate::backends::types::QueryResult> {
+			self.contexts
+				.lock()
+				.expect("context recording mutex should not be poisoned")
+				.push(context);
+			Ok(crate::backends::types::QueryResult {
+				rows_affected: 0,
+				last_insert_id: None,
+			})
+		}
+
+		async fn fetch_one(
+			&mut self,
+			_sql: &str,
+			_params: Vec<crate::backends::types::QueryValue>,
+		) -> crate::backends::error::Result<crate::backends::types::Row> {
+			panic!("migration execution must not fetch rows")
+		}
+
+		async fn fetch_all(
+			&mut self,
+			_sql: &str,
+			_params: Vec<crate::backends::types::QueryValue>,
+		) -> crate::backends::error::Result<Vec<crate::backends::types::Row>> {
+			panic!("migration execution must not fetch rows")
+		}
+
+		async fn fetch_optional(
+			&mut self,
+			_sql: &str,
+			_params: Vec<crate::backends::types::QueryValue>,
+		) -> crate::backends::error::Result<Option<crate::backends::types::Row>> {
+			panic!("migration execution must not fetch rows")
+		}
+
+		async fn commit(self: Box<Self>) -> crate::backends::error::Result<()> {
+			Ok(())
+		}
+
+		async fn rollback(self: Box<Self>) -> crate::backends::error::Result<()> {
+			Ok(())
+		}
+	}
+
 	#[test]
 	fn test_database_type_transactional_ddl() {
 		assert!(DatabaseType::Postgres.supports_transactional_ddl());
 		assert!(DatabaseType::Sqlite.supports_transactional_ddl());
 		assert!(!DatabaseType::Mysql.supports_transactional_ddl());
+	}
+
+	#[cfg(all(feature = "pgvector", feature = "sqlite"))]
+	#[tokio::test]
+	async fn pgvector_error_hint_forwards_migration_ddl_and_index_contexts() {
+		use crate::migrations::FieldType;
+		use crate::migrations::operations::{ColumnDefinition, IndexType, Operation};
+
+		let connection = DatabaseConnection::connect_sqlite("sqlite::memory:")
+			.await
+			.expect("connect to in-memory SQLite");
+		let contexts = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+		let mut editor = SchemaEditor {
+			connection,
+			executor: Some(Box::new(ContextRecordingTransaction {
+				contexts: contexts.clone(),
+			})),
+			atomic: true,
+			db_type: DatabaseType::Postgres,
+			deferred_sql: Vec::new(),
+			sqlite_recreation_session: None,
+		};
+		let column_operation = Operation::AddColumn {
+			table: "source".to_string(),
+			column: ColumnDefinition::new("embedding", FieldType::Vector { dimensions: 3 }),
+			mysql_options: None,
+		};
+		let index_operation = Operation::CreateIndex {
+			table: "source".to_string(),
+			columns: vec!["embedding".to_string()],
+			unique: false,
+			index_type: Some(IndexType::Hnsw {
+				m: None,
+				ef_construction: None,
+			}),
+			where_clause: None,
+			concurrently: false,
+			expressions: None,
+			mysql_options: None,
+			operator_class: Some("vector_l2_ops".to_string()),
+		};
+
+		editor
+			.execute_with_context(
+				"ALTER TABLE source ADD COLUMN embedding vector(3)",
+				column_operation.pgvector_operation_kind(),
+			)
+			.await
+			.expect("record vector column context");
+		editor
+			.execute_with_context(
+				"CREATE INDEX source_embedding_hnsw ON source USING hnsw (embedding vector_l2_ops)",
+				index_operation.pgvector_operation_kind(),
+			)
+			.await
+			.expect("record vector index context");
+
+		assert_eq!(
+			*contexts
+				.lock()
+				.expect("context recording mutex should not be poisoned"),
+			vec![
+				Some(crate::backends::error::PgvectorOperationKind::ColumnType),
+				Some(crate::backends::error::PgvectorOperationKind::ApproximateIndex),
+			]
+		);
 	}
 
 	#[cfg(feature = "sqlite")]

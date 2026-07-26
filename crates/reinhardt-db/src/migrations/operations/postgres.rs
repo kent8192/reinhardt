@@ -411,6 +411,19 @@ mod tests {
 
 	#[cfg(feature = "postgres")]
 	#[test]
+	fn create_vector_extension_emits_explicit_setup_sql() {
+		use crate::backends::schema::test_utils::MockSchemaEditor;
+
+		let editor = MockSchemaEditor::new();
+
+		assert_eq!(
+			CreateExtension::new("vector").database_forwards(&editor),
+			vec!["CREATE EXTENSION IF NOT EXISTS \"vector\";"]
+		);
+	}
+
+	#[cfg(feature = "postgres")]
+	#[test]
 	fn test_create_extension_with_schema_sql() {
 		use crate::backends::schema::test_utils::MockSchemaEditor;
 

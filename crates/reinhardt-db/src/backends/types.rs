@@ -525,8 +525,28 @@ pub trait TransactionExecutor: Send + Sync {
 		params: Vec<QueryValue>,
 	) -> super::error::Result<QueryResult>;
 
+	/// Execute with structural pgvector operation context.
+	async fn execute_with_context(
+		&mut self,
+		sql: &str,
+		params: Vec<QueryValue>,
+		_context: Option<super::error::PgvectorOperationKind>,
+	) -> super::error::Result<QueryResult> {
+		self.execute(sql, params).await
+	}
+
 	/// Fetch a single row within the transaction
 	async fn fetch_one(&mut self, sql: &str, params: Vec<QueryValue>) -> super::error::Result<Row>;
+
+	/// Fetch one row with structural pgvector operation context.
+	async fn fetch_one_with_context(
+		&mut self,
+		sql: &str,
+		params: Vec<QueryValue>,
+		_context: Option<super::error::PgvectorOperationKind>,
+	) -> super::error::Result<Row> {
+		self.fetch_one(sql, params).await
+	}
 
 	/// Fetch all matching rows within the transaction
 	async fn fetch_all(
@@ -535,12 +555,32 @@ pub trait TransactionExecutor: Send + Sync {
 		params: Vec<QueryValue>,
 	) -> super::error::Result<Vec<Row>>;
 
+	/// Fetch rows with structural pgvector operation context.
+	async fn fetch_all_with_context(
+		&mut self,
+		sql: &str,
+		params: Vec<QueryValue>,
+		_context: Option<super::error::PgvectorOperationKind>,
+	) -> super::error::Result<Vec<Row>> {
+		self.fetch_all(sql, params).await
+	}
+
 	/// Fetch an optional single row within the transaction
 	async fn fetch_optional(
 		&mut self,
 		sql: &str,
 		params: Vec<QueryValue>,
 	) -> super::error::Result<Option<Row>>;
+
+	/// Fetch an optional row with structural pgvector operation context.
+	async fn fetch_optional_with_context(
+		&mut self,
+		sql: &str,
+		params: Vec<QueryValue>,
+		_context: Option<super::error::PgvectorOperationKind>,
+	) -> super::error::Result<Option<Row>> {
+		self.fetch_optional(sql, params).await
+	}
 
 	/// Commit the transaction
 	async fn commit(self: Box<Self>) -> super::error::Result<()>;

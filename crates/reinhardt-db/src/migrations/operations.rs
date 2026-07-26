@@ -1520,6 +1520,62 @@ const fn default_true() -> bool {
 }
 
 impl Operation {
+	pub(crate) fn pgvector_operation_kind(
+		&self,
+	) -> Option<crate::backends::error::PgvectorOperationKind> {
+		use crate::backends::error::PgvectorOperationKind;
+
+		match self {
+			Self::CreateTable { columns, .. } | Self::CreateInheritedTable { columns, .. }
+				if columns
+					.iter()
+					.any(|column| matches!(column.type_definition, FieldType::Vector { .. })) =>
+			{
+				Some(PgvectorOperationKind::ColumnType)
+			}
+			Self::AddColumn { column, .. }
+			| Self::AlterColumn {
+				new_definition: column,
+				..
+			} if matches!(column.type_definition, FieldType::Vector { .. }) => {
+				Some(PgvectorOperationKind::ColumnType)
+			}
+			Self::CreateIndex { index_type, .. }
+			| Self::CreateNamedIndex { index_type, .. }
+			| Self::CreateIndexRepair { index_type, .. }
+				if index_type.is_some_and(IndexType::is_approximate_vector) =>
+			{
+				Some(PgvectorOperationKind::ApproximateIndex)
+			}
+			_ => None,
+		}
+	}
+
+	pub(crate) fn pgvector_reverse_operation_kind(
+		&self,
+	) -> Option<crate::backends::error::PgvectorOperationKind> {
+		use crate::backends::error::PgvectorOperationKind;
+
+		match self {
+			Self::DropColumn {
+				old_definition: Some(column),
+				..
+			}
+			| Self::AlterColumn {
+				old_definition: Some(column),
+				..
+			} if matches!(column.type_definition, FieldType::Vector { .. }) => {
+				Some(PgvectorOperationKind::ColumnType)
+			}
+			Self::DropNamedIndex { index_type, .. }
+				if index_type.is_some_and(IndexType::is_approximate_vector) =>
+			{
+				Some(PgvectorOperationKind::ApproximateIndex)
+			}
+			_ => None,
+		}
+	}
+
 	fn order_model_fields_by_generated_dependencies(
 		model: &ModelState,
 	) -> Vec<(&String, &FieldState)> {
@@ -9998,6 +10054,57 @@ mod tests {
 		);
 		assert_eq!(statement_sql, forward_sql);
 		assert_eq!(backward_sql, vec!["DROP INDEX idx_source_embedding;"]);
+	}
+
+	#[test]
+	fn pgvector_error_hint_derives_context_from_migration_operations() {
+		let vector_column = Operation::CreateTable {
+			name: "source".to_string(),
+			columns: vec![ColumnDefinition::new(
+				"embedding",
+				FieldType::Vector { dimensions: 3 },
+			)],
+			constraints: Vec::new(),
+			without_rowid: None,
+			interleave_in_parent: None,
+			partition: None,
+		};
+		let vector_index = vector_index_operation(IndexType::Hnsw {
+			m: Some(16),
+			ef_construction: Some(64),
+		});
+		let restore_vector_column = Operation::AlterColumn {
+			table: "source".to_string(),
+			column: "embedding".to_string(),
+			old_definition: Some(ColumnDefinition::new(
+				"embedding",
+				FieldType::Vector { dimensions: 3 },
+			)),
+			new_definition: ColumnDefinition::new("embedding", FieldType::Text),
+			mysql_options: None,
+		};
+		let restore_vector_index =
+			named_vector_index_drop(Some(IndexType::Ivfflat { lists: Some(100) }));
+
+		assert_eq!(
+			vector_column.pgvector_operation_kind(),
+			Some(crate::backends::error::PgvectorOperationKind::ColumnType)
+		);
+		assert_eq!(
+			vector_index.pgvector_operation_kind(),
+			Some(crate::backends::error::PgvectorOperationKind::ApproximateIndex)
+		);
+		assert_eq!(vector_index.pgvector_reverse_operation_kind(), None);
+		assert_eq!(restore_vector_column.pgvector_operation_kind(), None);
+		assert_eq!(
+			restore_vector_column.pgvector_reverse_operation_kind(),
+			Some(crate::backends::error::PgvectorOperationKind::ColumnType)
+		);
+		assert_eq!(restore_vector_index.pgvector_operation_kind(), None);
+		assert_eq!(
+			restore_vector_index.pgvector_reverse_operation_kind(),
+			Some(crate::backends::error::PgvectorOperationKind::ApproximateIndex)
+		);
 	}
 
 	#[rstest]

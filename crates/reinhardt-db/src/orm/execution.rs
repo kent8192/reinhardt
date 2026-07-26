@@ -247,6 +247,21 @@ fn build_select_for_backend(
 	result.map_err(|error| ExecutionError::QueryBuild(error.to_string()))
 }
 
+pub(crate) fn pgvector_context_for_select(
+	stmt: &SelectStatement,
+) -> Option<crate::backends::error::PgvectorOperationKind> {
+	use crate::backends::error::PgvectorOperationKind;
+	use reinhardt_query::error::PgvectorFeature;
+
+	match reinhardt_query::error::select_pgvector_feature(stmt) {
+		Some(PgvectorFeature::ColumnType) => Some(PgvectorOperationKind::ColumnType),
+		Some(PgvectorFeature::DistanceOperator) => Some(PgvectorOperationKind::DistanceOperator),
+		Some(PgvectorFeature::ApproximateIndex) => Some(PgvectorOperationKind::ApproximateIndex),
+		Some(PgvectorFeature::VectorValue) => Some(PgvectorOperationKind::VectorValue),
+		None | Some(_) => None,
+	}
+}
+
 /// Query execution methods with both sync builders and async execution
 #[async_trait::async_trait]
 pub trait QueryExecution<T: Model>
@@ -515,7 +530,9 @@ where
 		let (sql, values) = build_select_for_backend(&stmt, db.backend())?;
 
 		let query_values = convert_values(values);
-		let row = db.fetch_one(&sql, query_values).await?;
+		let row = db
+			.fetch_one_with_context(&sql, query_values, pgvector_context_for_select(&stmt))
+			.await?;
 		Ok(QueryRow::from_backend_row(row).deserialize_model::<T>()?)
 	}
 
@@ -528,7 +545,9 @@ where
 		let (sql, values) = build_select_for_backend(&stmt, db.backend())?;
 
 		let query_values = convert_values(values);
-		let rows = db.fetch_all(&sql, query_values).await?;
+		let rows = db
+			.fetch_all_with_context(&sql, query_values, pgvector_context_for_select(&stmt))
+			.await?;
 		let mut results = Vec::with_capacity(rows.len());
 		for row in rows {
 			results.push(QueryRow::from_backend_row(row).deserialize_model::<T>()?);
@@ -545,7 +564,9 @@ where
 		let (sql, values) = build_select_for_backend(&stmt, db.backend())?;
 
 		let query_values = convert_values(values);
-		let rows = db.fetch_all(&sql, query_values).await?;
+		let rows = db
+			.fetch_all_with_context(&sql, query_values, pgvector_context_for_select(&stmt))
+			.await?;
 		match rows.into_iter().next() {
 			Some(row) => Ok(Some(
 				QueryRow::from_backend_row(row).deserialize_model::<T>()?,
@@ -563,7 +584,9 @@ where
 		let (sql, values) = build_select_for_backend(&stmt, db.backend())?;
 
 		let query_values = convert_values(values);
-		let rows = db.fetch_all(&sql, query_values).await?;
+		let rows = db
+			.fetch_all_with_context(&sql, query_values, pgvector_context_for_select(&stmt))
+			.await?;
 		match rows.len() {
 			0 => Err(ExecutionError::NoResultFound),
 			1 => Ok(QueryRow::from_backend_row(
@@ -583,7 +606,9 @@ where
 		let (sql, values) = build_select_for_backend(&stmt, db.backend())?;
 
 		let query_values = convert_values(values);
-		let rows = db.fetch_all(&sql, query_values).await?;
+		let rows = db
+			.fetch_all_with_context(&sql, query_values, pgvector_context_for_select(&stmt))
+			.await?;
 		match rows.len() {
 			0 => Ok(None),
 			1 => Ok(Some(
@@ -826,6 +851,62 @@ mod tests {
 	}
 
 	#[cfg(feature = "pgvector")]
+	#[derive(Default)]
+	struct PostgresContextRecordingExecutor {
+		context: Option<crate::backends::error::PgvectorOperationKind>,
+	}
+
+	#[cfg(feature = "pgvector")]
+	#[async_trait::async_trait]
+	impl OrmExecutor for PostgresContextRecordingExecutor {
+		fn backend(&self) -> DatabaseBackend {
+			DatabaseBackend::Postgres
+		}
+
+		async fn execute(
+			&mut self,
+			_sql: &str,
+			_params: Vec<QueryValue>,
+		) -> reinhardt_core::exception::Result<crate::orm::QueryResult> {
+			panic!("SELECT execution must not call execute")
+		}
+
+		async fn fetch_one(
+			&mut self,
+			_sql: &str,
+			_params: Vec<QueryValue>,
+		) -> reinhardt_core::exception::Result<crate::orm::Row> {
+			panic!("all_async must not call fetch_one")
+		}
+
+		async fn fetch_all(
+			&mut self,
+			_sql: &str,
+			_params: Vec<QueryValue>,
+		) -> reinhardt_core::exception::Result<Vec<crate::orm::Row>> {
+			panic!("vector AST context must use the contextual execution seam")
+		}
+
+		async fn fetch_all_with_context(
+			&mut self,
+			_sql: &str,
+			_params: Vec<QueryValue>,
+			context: Option<crate::backends::error::PgvectorOperationKind>,
+		) -> reinhardt_core::exception::Result<Vec<crate::orm::Row>> {
+			self.context = context;
+			Ok(Vec::new())
+		}
+
+		async fn fetch_optional(
+			&mut self,
+			_sql: &str,
+			_params: Vec<QueryValue>,
+		) -> reinhardt_core::exception::Result<Option<crate::orm::Row>> {
+			panic!("all_async must not call fetch_optional")
+		}
+	}
+
+	#[cfg(feature = "pgvector")]
 	#[async_trait::async_trait]
 	impl OrmExecutor for SqliteRecordingExecutor {
 		fn backend(&self) -> DatabaseBackend {
@@ -940,6 +1021,57 @@ mod tests {
 				if message == "pgvector distance operators is not supported by the SQLite backend"
 		));
 		assert!(!executor.called);
+	}
+
+	#[cfg(feature = "pgvector")]
+	#[tokio::test]
+	async fn pgvector_error_hint_uses_distance_operator_ast_context() {
+		use reinhardt_query::prelude::{BinOper, SimpleExpr};
+		use reinhardt_query::types::PgBinOper;
+
+		let distance = SimpleExpr::Binary(
+			Box::new(Expr::col(Alias::new("embedding")).into_simple_expr()),
+			BinOper::PgOperator(PgBinOper::CosineDistance),
+			Box::new(SimpleExpr::Value(SV::Vector(Some(Box::new(vec![
+				1.0, 2.0, 3.0,
+			]))))),
+		);
+		let stmt = Query::select()
+			.expr(distance)
+			.from(Alias::new("users"))
+			.to_owned();
+		let execution = SelectExecution::<User>::new(stmt);
+		let mut executor = PostgresContextRecordingExecutor::default();
+
+		let rows = execution
+			.all_async(&mut executor)
+			.await
+			.expect("recording executor should return an empty result");
+
+		assert!(rows.is_empty());
+		assert_eq!(
+			executor.context,
+			Some(crate::backends::error::PgvectorOperationKind::DistanceOperator)
+		);
+	}
+
+	#[cfg(feature = "pgvector")]
+	#[tokio::test]
+	async fn pgvector_error_hint_ignores_vector_words_in_custom_sql() {
+		let stmt = Query::select()
+			.expr(Expr::cust("'vector hnsw <=> words'"))
+			.from(Alias::new("users"))
+			.to_owned();
+		let execution = SelectExecution::<User>::new(stmt);
+		let mut executor = PostgresContextRecordingExecutor::default();
+
+		let rows = execution
+			.all_async(&mut executor)
+			.await
+			.expect("recording executor should return an empty result");
+
+		assert!(rows.is_empty());
+		assert_eq!(executor.context, None);
 	}
 
 	#[test]

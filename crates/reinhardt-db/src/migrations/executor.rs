@@ -469,7 +469,9 @@ impl DatabaseMigrationExecutor {
 				// splits type reversion and NOT NULL restoration).
 				for sql in &statements {
 					tracing::debug!("{}", sql);
-					editor.execute(sql).await?;
+					editor
+						.execute_with_context(sql, operation.pgvector_reverse_operation_kind())
+						.await?;
 				}
 
 				tracing::debug!("✅ Reverse operation executed successfully");
@@ -603,14 +605,17 @@ impl DatabaseMigrationExecutor {
 						&statement[..statement.len().min(100)]
 					);
 
-					editor.execute(statement).await.map_err(|e| {
-						tracing::error!(
-							"Migration operation failed: {}. SQL: {}",
-							e,
-							&statement[..statement.len().min(200)]
-						);
-						e
-					})?;
+					editor
+						.execute_with_context(statement, operation.pgvector_operation_kind())
+						.await
+						.map_err(|e| {
+							tracing::error!(
+								"Migration operation failed: {}. SQL: {}",
+								e,
+								&statement[..statement.len().min(200)]
+							);
+							e
+						})?;
 
 					tracing::debug!("Statement {} executed successfully", i + 1);
 				}

@@ -180,14 +180,54 @@ pub trait OrmExecutor: Send {
 	/// Executes a SQL statement and preserves backend-specific result metadata.
 	async fn execute(&mut self, sql: &str, params: Vec<QueryValue>) -> Result<QueryResult>;
 
+	/// Executes a SQL statement with structural pgvector operation context.
+	async fn execute_with_context(
+		&mut self,
+		sql: &str,
+		params: Vec<QueryValue>,
+		_context: Option<crate::backends::error::PgvectorOperationKind>,
+	) -> Result<QueryResult> {
+		self.execute(sql, params).await
+	}
+
 	/// Fetches one row.
 	async fn fetch_one(&mut self, sql: &str, params: Vec<QueryValue>) -> Result<Row>;
+
+	/// Fetches one row with structural pgvector operation context.
+	async fn fetch_one_with_context(
+		&mut self,
+		sql: &str,
+		params: Vec<QueryValue>,
+		_context: Option<crate::backends::error::PgvectorOperationKind>,
+	) -> Result<Row> {
+		self.fetch_one(sql, params).await
+	}
 
 	/// Fetches all matching rows.
 	async fn fetch_all(&mut self, sql: &str, params: Vec<QueryValue>) -> Result<Vec<Row>>;
 
+	/// Fetches all matching rows with structural pgvector operation context.
+	async fn fetch_all_with_context(
+		&mut self,
+		sql: &str,
+		params: Vec<QueryValue>,
+		_context: Option<crate::backends::error::PgvectorOperationKind>,
+	) -> Result<Vec<Row>> {
+		self.fetch_all(sql, params).await
+	}
+
 	/// Fetches an optional row without swallowing backend failures.
 	async fn fetch_optional(&mut self, sql: &str, params: Vec<QueryValue>) -> Result<Option<Row>>;
+
+	/// Fetches an optional row with structural pgvector operation context.
+	async fn fetch_optional_with_context(
+		&mut self,
+		sql: &str,
+		params: Vec<QueryValue>,
+		_context: Option<crate::backends::error::PgvectorOperationKind>,
+	) -> Result<Option<Row>> {
+		self.fetch_optional(sql, params).await
+	}
 }
 
 /// Copyable capability for an ORM database connection.
@@ -337,9 +377,29 @@ impl OrmExecutor for DatabaseConnection {
 		owner.execute(sql, params).await
 	}
 
+	async fn execute_with_context(
+		&mut self,
+		sql: &str,
+		params: Vec<QueryValue>,
+		context: Option<crate::backends::error::PgvectorOperationKind>,
+	) -> Result<QueryResult> {
+		let owner = self.resolve()?;
+		owner.execute_with_context(sql, params, context).await
+	}
+
 	async fn fetch_one(&mut self, sql: &str, params: Vec<QueryValue>) -> Result<Row> {
 		let owner = self.resolve()?;
 		owner.fetch_one(sql, params).await
+	}
+
+	async fn fetch_one_with_context(
+		&mut self,
+		sql: &str,
+		params: Vec<QueryValue>,
+		context: Option<crate::backends::error::PgvectorOperationKind>,
+	) -> Result<Row> {
+		let owner = self.resolve()?;
+		owner.fetch_one_with_context(sql, params, context).await
 	}
 
 	async fn fetch_all(&mut self, sql: &str, params: Vec<QueryValue>) -> Result<Vec<Row>> {
@@ -347,9 +407,31 @@ impl OrmExecutor for DatabaseConnection {
 		owner.fetch_all(sql, params).await
 	}
 
+	async fn fetch_all_with_context(
+		&mut self,
+		sql: &str,
+		params: Vec<QueryValue>,
+		context: Option<crate::backends::error::PgvectorOperationKind>,
+	) -> Result<Vec<Row>> {
+		let owner = self.resolve()?;
+		owner.fetch_all_with_context(sql, params, context).await
+	}
+
 	async fn fetch_optional(&mut self, sql: &str, params: Vec<QueryValue>) -> Result<Option<Row>> {
 		let owner = self.resolve()?;
 		owner.fetch_optional(sql, params).await
+	}
+
+	async fn fetch_optional_with_context(
+		&mut self,
+		sql: &str,
+		params: Vec<QueryValue>,
+		context: Option<crate::backends::error::PgvectorOperationKind>,
+	) -> Result<Option<Row>> {
+		let owner = self.resolve()?;
+		owner
+			.fetch_optional_with_context(sql, params, context)
+			.await
 	}
 }
 

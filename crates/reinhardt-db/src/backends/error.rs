@@ -5,6 +5,46 @@ pub use reinhardt_core::exception::{DatabaseError, DatabaseErrorKind};
 /// Result type for database operations
 pub type Result<T> = reinhardt_core::exception::Result<T>;
 
+const POSTGRES_UNDEFINED_OBJECT: &str = "42704";
+const POSTGRES_UNDEFINED_FUNCTION: &str = "42883";
+
+/// Structural pgvector feature associated with a database operation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum PgvectorOperationKind {
+	/// A schema operation that defines a vector column type.
+	ColumnType,
+	/// A DML operation that evaluates a vector distance operator.
+	DistanceOperator,
+	/// A schema operation that defines an HNSW or IVFFlat index.
+	ApproximateIndex,
+	/// A DML operation that binds a native vector value.
+	VectorValue,
+}
+
+fn map_sqlx_database_error(error: &(dyn sqlx::error::DatabaseError + 'static)) -> DatabaseError {
+	use sqlx::error::ErrorKind;
+
+	let code = error.code().map(|code| code.into_owned());
+	let kind = match code.as_deref() {
+		Some("40001") => DatabaseErrorKind::Serialization,
+		Some("42601") => DatabaseErrorKind::Syntax,
+		_ => match error.kind() {
+			ErrorKind::UniqueViolation => DatabaseErrorKind::UniqueViolation,
+			ErrorKind::ForeignKeyViolation => DatabaseErrorKind::ForeignKeyViolation,
+			ErrorKind::NotNullViolation => DatabaseErrorKind::NotNullViolation,
+			ErrorKind::CheckViolation => DatabaseErrorKind::CheckViolation,
+			ErrorKind::Other => DatabaseErrorKind::Query,
+			_ => DatabaseErrorKind::Query,
+		},
+	};
+	let database_error = DatabaseError::new(kind, error.message());
+	match code {
+		Some(code) => database_error.with_code(code),
+		None => database_error,
+	}
+}
+
 #[cfg(any(
 	feature = "orm",
 	feature = "postgres",
@@ -13,29 +53,8 @@ pub type Result<T> = reinhardt_core::exception::Result<T>;
 	test
 ))]
 pub(crate) fn map_sqlx_error(error: sqlx::Error) -> DatabaseError {
-	use sqlx::error::ErrorKind;
-
 	match error {
-		sqlx::Error::Database(error) => {
-			let code = error.code().map(|code| code.into_owned());
-			let kind = match code.as_deref() {
-				Some("40001") => DatabaseErrorKind::Serialization,
-				Some("42601") => DatabaseErrorKind::Syntax,
-				_ => match error.kind() {
-					ErrorKind::UniqueViolation => DatabaseErrorKind::UniqueViolation,
-					ErrorKind::ForeignKeyViolation => DatabaseErrorKind::ForeignKeyViolation,
-					ErrorKind::NotNullViolation => DatabaseErrorKind::NotNullViolation,
-					ErrorKind::CheckViolation => DatabaseErrorKind::CheckViolation,
-					ErrorKind::Other => DatabaseErrorKind::Query,
-					_ => DatabaseErrorKind::Query,
-				},
-			};
-			let database_error = DatabaseError::new(kind, error.message());
-			match code {
-				Some(code) => database_error.with_code(code),
-				None => database_error,
-			}
-		}
+		sqlx::Error::Database(error) => map_sqlx_database_error(error.as_ref()),
 		sqlx::Error::PoolTimedOut => {
 			DatabaseError::new(DatabaseErrorKind::Timeout, "Pool timed out")
 		}
@@ -89,16 +108,58 @@ pub(crate) fn map_sqlx_error(error: sqlx::Error) -> DatabaseError {
 	}
 }
 
+pub(crate) fn map_sqlx_error_with_pgvector_context(
+	error: sqlx::Error,
+	context: Option<PgvectorOperationKind>,
+) -> reinhardt_core::exception::Error {
+	let should_add_hint = context.is_some()
+		&& matches!(
+			&error,
+			sqlx::Error::Database(database_error)
+				if matches!(
+					database_error.code().as_deref(),
+					Some(POSTGRES_UNDEFINED_OBJECT | POSTGRES_UNDEFINED_FUNCTION)
+				)
+		);
+
+	if !should_add_hint {
+		return map_sqlx_error(error).into();
+	}
+
+	let database_error = match &error {
+		sqlx::Error::Database(database_error) => map_sqlx_database_error(database_error.as_ref()),
+		_ => unreachable!("pgvector hints require a PostgreSQL database error"),
+	};
+	let message = format!(
+		"{}. Install the pgvector extension explicitly with \
+		 CreateExtension::new(\"vector\") before this operation",
+		database_error.message()
+	);
+	let decorated_error = match database_error.code() {
+		Some(code) => DatabaseError::new(database_error.kind(), message).with_code(code),
+		None => DatabaseError::new(database_error.kind(), message),
+	};
+
+	reinhardt_core::exception::Error::DatabaseWithSource {
+		database_error: decorated_error,
+		source: Box::new(error),
+	}
+}
+
 #[cfg(test)]
 mod tests {
 	use std::borrow::Cow;
+	use std::error::Error as _;
 	use std::fmt;
 	use std::io;
 
 	use rstest::rstest;
 	use sqlx::error::{DatabaseError as SqlxDatabaseError, ErrorKind};
 
-	use super::{DatabaseError, DatabaseErrorKind, map_sqlx_error};
+	use super::{
+		DatabaseError, DatabaseErrorKind, PgvectorOperationKind, map_sqlx_error,
+		map_sqlx_error_with_pgvector_context,
+	};
 
 	const DATABASE_MESSAGE: &str = "database operation failed";
 	const DATABASE_CODE: &str = "VENDOR-CODE";
@@ -109,6 +170,7 @@ mod tests {
 	struct TestSqlxDatabaseError {
 		kind: fn() -> ErrorKind,
 		code: &'static str,
+		message: &'static str,
 	}
 
 	fn unique_violation() -> ErrorKind {
@@ -133,7 +195,7 @@ mod tests {
 
 	impl fmt::Display for TestSqlxDatabaseError {
 		fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-			formatter.write_str(DATABASE_MESSAGE)
+			formatter.write_str(self.message)
 		}
 	}
 
@@ -141,7 +203,7 @@ mod tests {
 
 	impl SqlxDatabaseError for TestSqlxDatabaseError {
 		fn message(&self) -> &str {
-			DATABASE_MESSAGE
+			self.message
 		}
 
 		fn code(&self) -> Option<Cow<'_, str>> {
@@ -187,6 +249,7 @@ mod tests {
 		let error = sqlx::Error::Database(Box::new(TestSqlxDatabaseError {
 			kind: sqlx_kind,
 			code: DATABASE_CODE,
+			message: DATABASE_MESSAGE,
 		}));
 
 		// Act
@@ -208,6 +271,7 @@ mod tests {
 		let error = sqlx::Error::Database(Box::new(TestSqlxDatabaseError {
 			kind: other_database_error,
 			code: "40001",
+			message: DATABASE_MESSAGE,
 		}));
 
 		// Act
@@ -224,6 +288,7 @@ mod tests {
 		let error = sqlx::Error::Database(Box::new(TestSqlxDatabaseError {
 			kind: other_database_error,
 			code: "42601",
+			message: DATABASE_MESSAGE,
 		}));
 
 		// Act
@@ -279,5 +344,105 @@ mod tests {
 		// Assert
 		assert_eq!(error.kind(), expected_kind);
 		assert_eq!(error.code(), None);
+	}
+
+	fn postgres_database_error(code: &'static str, message: &'static str) -> sqlx::Error {
+		sqlx::Error::Database(Box::new(TestSqlxDatabaseError {
+			kind: other_database_error,
+			code,
+			message,
+		}))
+	}
+
+	#[rstest]
+	#[case(
+		PgvectorOperationKind::ColumnType,
+		"42704",
+		"type \"vector\" does not exist"
+	)]
+	#[case(
+		PgvectorOperationKind::DistanceOperator,
+		"42883",
+		"operator does not exist: vector <=> vector"
+	)]
+	#[case(
+		PgvectorOperationKind::ApproximateIndex,
+		"42704",
+		"access method \"hnsw\" does not exist"
+	)]
+	fn pgvector_error_hint_preserves_postgres_code_and_source(
+		#[case] context: PgvectorOperationKind,
+		#[case] code: &'static str,
+		#[case] message: &'static str,
+	) {
+		let error = postgres_database_error(code, message);
+
+		let error = map_sqlx_error_with_pgvector_context(error, Some(context));
+
+		assert_eq!(error.database_kind(), Some(DatabaseErrorKind::Query));
+		assert_eq!(
+			error.database_error().and_then(DatabaseError::code),
+			Some(code)
+		);
+		assert!(
+			error
+				.to_string()
+				.contains("CreateExtension::new(\"vector\")")
+		);
+		let sqlx_source = error
+			.source()
+			.expect("decorated error should retain the SQLx source");
+		let sqlx_source = sqlx_source
+			.downcast_ref::<sqlx::Error>()
+			.expect("decorated source should be the original SQLx error");
+		let database_source = sqlx_source
+			.as_database_error()
+			.expect("SQLx error should retain the database source")
+			.as_error();
+		assert!(
+			database_source
+				.downcast_ref::<TestSqlxDatabaseError>()
+				.is_some()
+		);
+	}
+
+	#[test]
+	fn pgvector_error_hint_requires_structural_operation_context() {
+		let error = postgres_database_error(
+			"42704",
+			"type \"vector\" does not exist while handling a vector-shaped message",
+		);
+
+		let error = map_sqlx_error_with_pgvector_context(error, None);
+
+		assert_eq!(
+			error.database_error().and_then(DatabaseError::code),
+			Some("42704")
+		);
+		assert!(!error.to_string().contains("CreateExtension::new"));
+	}
+
+	#[test]
+	fn pgvector_error_hint_ignores_unrelated_postgres_classification() {
+		let error = sqlx::Error::Database(Box::new(TestSqlxDatabaseError {
+			kind: unique_violation,
+			code: "23505",
+			message: "duplicate key value violates constraint",
+		}));
+
+		let error = map_sqlx_error_with_pgvector_context(
+			error,
+			Some(PgvectorOperationKind::DistanceOperator),
+		);
+
+		assert_eq!(
+			error.database_kind(),
+			Some(DatabaseErrorKind::UniqueViolation)
+		);
+		assert_eq!(
+			error.database_error().and_then(DatabaseError::code),
+			Some("23505")
+		);
+		assert!(!error.to_string().contains("CreateExtension::new"));
 	}
 }

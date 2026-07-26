@@ -27,6 +27,34 @@ pub enum QueryBuildError {
 	},
 }
 
+/// A pgvector feature found through structural query inspection.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum PgvectorFeature {
+	/// A PostgreSQL vector column type.
+	ColumnType,
+	/// A PostgreSQL vector distance operator.
+	DistanceOperator,
+	/// An HNSW or IVFFlat index definition.
+	ApproximateIndex,
+	/// A bound PostgreSQL vector value.
+	VectorValue,
+}
+
+/// Returns the first pgvector feature found in a select AST.
+pub fn select_pgvector_feature(statement: &SelectStatement) -> Option<PgvectorFeature> {
+	match validate_select_for_backend(statement, "feature inspection") {
+		Err(QueryBuildError::UnsupportedBackendFeature { feature, .. }) => match feature {
+			"pgvector column types" => Some(PgvectorFeature::ColumnType),
+			"pgvector distance operators" => Some(PgvectorFeature::DistanceOperator),
+			"approximate vector indexes" => Some(PgvectorFeature::ApproximateIndex),
+			"pgvector values" => Some(PgvectorFeature::VectorValue),
+			_ => None,
+		},
+		Ok(()) => None,
+	}
+}
+
 pub(crate) fn validate_select_for_backend(
 	statement: &SelectStatement,
 	backend: &'static str,

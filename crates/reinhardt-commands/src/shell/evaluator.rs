@@ -131,11 +131,6 @@ impl EvcxrEvaluator {
 			evaluator_id: NEXT_EVALUATOR_ID.fetch_add(1, Ordering::Relaxed),
 			evaluation_sequence: 0,
 		};
-		for statement in prelude {
-			evaluator
-				.evaluate(&statement)
-				.map_err(|error| startup_prelude_error(error, &warnings))?;
-		}
 		for import in import_plan.imports() {
 			match evaluator.evaluate(import) {
 				Ok(_) => {}
@@ -144,6 +139,11 @@ impl EvcxrEvaluator {
 				)),
 				Err(error) => return Err(startup_prelude_error(error, &warnings)),
 			}
+		}
+		for statement in prelude {
+			evaluator
+				.evaluate(&statement)
+				.map_err(|error| startup_prelude_error(error, &warnings))?;
 		}
 		warnings.sort();
 		Ok((evaluator, warnings))

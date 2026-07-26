@@ -198,7 +198,20 @@ where
 			signal = signal => {
 				interrupt.interrupt()?;
 				match signal {
-					Ok(()) => Err(EvaluationFailure::Interrupted),
+					Ok(()) => {
+						let output = match response.await {
+							Ok(output) => output,
+							Err(failure) => failure.output().cloned().unwrap_or_default(),
+						};
+						if output.stdout.is_empty() && output.stderr.is_empty() {
+							Err(EvaluationFailure::Interrupted)
+						} else {
+							Err(EvaluationFailure::Output {
+								failure: Box::new(EvaluationFailure::Interrupted),
+								output,
+							})
+						}
+					}
 					Err(error) => Err(EvaluationFailure::ProcessExited(format!(
 						"failed to listen for evaluation interruption: {error}"
 					))),

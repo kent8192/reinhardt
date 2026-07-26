@@ -146,6 +146,17 @@ fn is_raw_request_parameter(pat_type: &syn::PatType) -> bool {
 	if is_request_type(&pat_type.ty) {
 		return true;
 	}
+	if let (Pat::Ident(pattern), Type::Path(type_path)) = (&*pat_type.pat, &*pat_type.ty)
+		&& pattern.ident == "req"
+		&& type_path.path.segments.len() == 1
+		&& type_path
+			.path
+			.segments
+			.last()
+			.is_some_and(|segment| segment.ident == "Body" && segment.arguments.is_none())
+	{
+		return true;
+	}
 	let Type::Path(type_path) = &*pat_type.ty else {
 		return true;
 	};
@@ -724,6 +735,11 @@ fn generate_view_type(
 		.iter()
 		.filter(|attr| !attr.path().is_ident("inject"))
 		.collect();
+	let wrapper_attrs: Vec<_> = fn_attrs
+		.iter()
+		.copied()
+		.filter(|attr| attr.path().is_ident("cfg") || attr.path().is_ident("cfg_attr"))
+		.collect();
 	let output = &input.sig.output;
 	let asyncness = &input.sig.asyncness;
 
@@ -835,7 +851,7 @@ fn generate_view_type(
 
 		impl #view_type_name {
 			/// Handler function for this view
-			#(#fn_attrs)*
+			#(#wrapper_attrs)*
 			#fn_vis #asyncness fn #fn_name(#wrapper_request_binding: #http_crate::Request) #output {
 				#wrapper_body
 			}
@@ -1599,6 +1615,58 @@ mod url_resolver_tests {
 			&call[..call_end],
 			"handler_original (__reinhardt_extractor_0 , __reinhardt_extractor_1 ,) . await"
 		);
+	}
+
+	#[rstest]
+	fn route_call_preserves_body_named_raw_request_alias() {
+		let input: ItemFn = syn::parse_quote! {
+			async fn handler(req: Body, Json(payload): Json<Payload>) -> String { String::new() }
+		};
+		let extractors = detect_extractors(&input.sig.inputs);
+		let inject_params = detect_inject_params(&input.sig.inputs);
+
+		assert_eq!(extractors.len(), 1);
+		let (_, wrapper) = generate_wrapper_with_both(
+			&input,
+			&extractors,
+			&inject_params,
+			&RouteOptions::default(),
+		);
+		let generated = wrapper.to_string();
+		let call_start = generated
+			.find("handler_original")
+			.expect("generated wrapper should call the renamed handler");
+		let call = &generated[call_start..];
+		let call_end = call
+			.find(") . await")
+			.expect("generated handler call should be awaited")
+			+ ") . await".len();
+		assert_eq!(
+			&call[..call_end],
+			"handler_original (__reinhardt_request , __reinhardt_extractor_0) . await"
+		);
+	}
+
+	#[rstest]
+	fn route_wrapper_does_not_copy_parameter_sensitive_attributes() {
+		let input: ItemFn = syn::parse_quote! {
+			#[tracing::instrument(skip(payload))]
+			async fn handler(req: reinhardt_http::Request, Json(payload): Json<Payload>) -> String { String::new() }
+		};
+		let extractors = detect_extractors(&input.sig.inputs);
+		let inject_params = detect_inject_params(&input.sig.inputs);
+		let generated = generate_view_type(
+			&input,
+			"GET",
+			"/handler",
+			&extractors,
+			&inject_params,
+			&RouteOptions::default(),
+		)
+		.expect("route generation should succeed")
+		.to_string();
+
+		assert_eq!(generated.matches("tracing :: instrument").count(), 1);
 	}
 
 	#[rstest]

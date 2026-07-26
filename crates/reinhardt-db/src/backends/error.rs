@@ -95,11 +95,15 @@ fn split_once_ascii_case<'a>(value: &'a str, delimiter: &str) -> Option<(&'a str
 }
 
 fn postgres_unquoted_identifier_start(character: char) -> bool {
-	character == '_' || character.is_alphabetic()
+	matches!(character, 'a'..='z' | '_')
 }
 
 fn postgres_unquoted_identifier_continue(character: char) -> bool {
-	postgres_unquoted_identifier_start(character) || character == '$' || character.is_alphanumeric()
+	matches!(character, 'a'..='z' | '0'..='9' | '_')
+}
+
+fn postgres_unquoted_identifier_is_canonical(identifier: &str) -> bool {
+	!identifier.is_empty() && pg_escape::quote_identifier(identifier).as_ref() == identifier
 }
 
 fn parse_postgres_qualified_identifier(identifier: &str) -> Option<Vec<String>> {
@@ -138,6 +142,9 @@ fn parse_postgres_qualified_identifier(identifier: &str) -> Option<Vec<String>> 
 				.is_some_and(|character| postgres_unquoted_identifier_continue(*character))
 			{
 				segment.push(characters.next().expect("peeked identifier character"));
+			}
+			if !postgres_unquoted_identifier_is_canonical(&segment) {
+				return None;
 			}
 		}
 		segments.push(segment);
@@ -181,11 +188,13 @@ fn qualified_operator_is(operator: &str, expected: &str) -> bool {
 	if operator == expected {
 		return true;
 	}
+	// NameListToString has already discarded the operator schema's original quoting.
+	// Only an identifier that quote_identifier would emit unchanged remains
+	// unambiguous enough to use as installation evidence.
 	operator
 		.strip_suffix(expected)
 		.and_then(|prefix| prefix.strip_suffix('.'))
-		.and_then(parse_postgres_qualified_identifier)
-		.is_some_and(|segments| segments.len() == 1)
+		.is_some_and(postgres_unquoted_identifier_is_canonical)
 }
 
 fn split_distance_signature(signature: &str) -> Option<(&str, &str, &str)> {
@@ -870,11 +879,8 @@ mod tests {
 	#[case("operator does not exist: \"my-schema\".vector <=> \"my-schema\".vector")]
 	#[case("operator does not exist: \"schema.with.dot\".vector <=> \"schema.with.dot\".vector")]
 	#[case("operator does not exist: \"schema\"\"quote\".vector <=> \"schema\"\"quote\".vector")]
-	#[case("operator does not exist: 拡張.vector <=> 拡張.vector")]
-	#[case("operator does not exist: public.vector \"my schema\".<=> public.vector")]
-	#[case("operator does not exist: public.vector \"schema.with.dot\".<=> public.vector")]
-	#[case("operator does not exist: public.vector \"schema\"\"quote\".<=> public.vector")]
-	fn pgvector_error_hint_accepts_postgres_sql_qualified_distance_signatures(
+	#[case("operator does not exist: \"拡張\".vector <=> \"拡張\".vector")]
+	fn pgvector_error_hint_accepts_postgres_sql_qualified_operand_types(
 		#[case] message: &'static str,
 	) {
 		let error = postgres_database_error("42883", message);
@@ -902,6 +908,78 @@ mod tests {
 				.source()
 				.and_then(|source| source.downcast_ref::<sqlx::Error>())
 				.is_some()
+		);
+	}
+
+	#[rstest]
+	#[case("operator does not exist: vector my schema.<=> vector")]
+	#[case("operator does not exist: vector my-schema.<=> vector")]
+	#[case("operator does not exist: vector schema.with.dot.<=> vector")]
+	#[case("operator does not exist: vector schema\"quote.<=> vector")]
+	#[case("operator does not exist: vector 名前.<=> vector")]
+	#[case("operator does not exist: vector select.<=> vector")]
+	#[case("operator does not exist: vector Extensions.<=> vector")]
+	#[case("operator does not exist: vector \"my schema\".<=> vector")]
+	#[case("operator does not exist: vector \"schema.with.dot\".<=> vector")]
+	#[case("operator does not exist: vector \"schema\"\"quote\".<=> vector")]
+	fn pgvector_error_hint_rejects_ambiguous_postgres_operator_diagnostics(
+		#[case] message: &'static str,
+	) {
+		let error = postgres_database_error("42883", message);
+
+		let error = map_sqlx_error_with_pgvector_context(
+			error,
+			Some(PgvectorOperationKind::DistanceOperator),
+		);
+
+		assert_eq!(
+			error.database_error().and_then(DatabaseError::code),
+			Some("42883")
+		);
+		assert_eq!(
+			error.database_error().map(DatabaseError::kind),
+			Some(DatabaseErrorKind::Query)
+		);
+		assert!(!error.to_string().contains("CreateExtension::new"));
+		assert!(
+			error
+				.source()
+				.and_then(|source| source.downcast_ref::<sqlx::Error>())
+				.is_some(),
+			"ambiguous operator evidence must retain its original SQLx source"
+		);
+	}
+
+	#[rstest]
+	#[case("operator does not exist: Extensions.vector <=> Extensions.vector")]
+	#[case("operator does not exist: 拡張.vector <=> 拡張.vector")]
+	#[case("operator does not exist: select.vector <=> select.vector")]
+	#[case("operator does not exist: my$schema.vector <=> my$schema.vector")]
+	fn pgvector_error_hint_rejects_noncanonical_unquoted_operand_types(
+		#[case] message: &'static str,
+	) {
+		let error = postgres_database_error("42883", message);
+
+		let error = map_sqlx_error_with_pgvector_context(
+			error,
+			Some(PgvectorOperationKind::DistanceOperator),
+		);
+
+		assert_eq!(
+			error.database_error().and_then(DatabaseError::code),
+			Some("42883")
+		);
+		assert_eq!(
+			error.database_error().map(DatabaseError::kind),
+			Some(DatabaseErrorKind::Query)
+		);
+		assert!(!error.to_string().contains("CreateExtension::new"));
+		assert!(
+			error
+				.source()
+				.and_then(|source| source.downcast_ref::<sqlx::Error>())
+				.is_some(),
+			"noncanonical operand evidence must retain its original SQLx source"
 		);
 	}
 

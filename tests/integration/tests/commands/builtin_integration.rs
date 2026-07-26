@@ -187,7 +187,7 @@ fn test_runserver_invalid_address_format() {
 /// Verifies that ShellCommand has correct metadata.
 #[rstest]
 fn test_shell_command_metadata() {
-	let command = ShellCommand;
+	let command = ShellCommand::default();
 
 	assert_eq!(command.name(), "shell", "Command name should be 'shell'");
 	assert!(
@@ -196,45 +196,19 @@ fn test_shell_command_metadata() {
 	);
 }
 
-/// Test: ShellCommand with command option
-///
-/// Category: Happy Path
-/// Verifies that -c option is set correctly.
-#[rstest]
-fn test_shell_command_with_command_option() {
-	let mut ctx = CommandContext::default();
-	ctx.set_option("command".to_string(), "println!(\"Hello\")".to_string());
+/// Test: registry construction fails explicitly when shell configuration is absent.
+#[tokio::test]
+async fn test_shell_command_without_config_returns_actionable_error() {
+	let error = ShellCommand::default()
+		.execute(&CommandContext::default())
+		.await
+		.expect_err("missing project shell configuration must fail");
 
 	assert_eq!(
-		ctx.option("command").map(String::as_str),
-		Some("println!(\"Hello\")")
+		error.to_string(),
+		"Execution error: Shell configuration is missing. Use \
+		 `execute_from_command_line_with_settings_and_shell` from the generated manage.rs."
 	);
-}
-
-/// Test: ShellCommand without command (interactive mode)
-///
-/// Category: Happy Path
-/// Verifies interactive mode setup.
-#[rstest]
-fn test_shell_command_interactive_mode() {
-	let ctx = CommandContext::default();
-
-	assert!(
-		ctx.option("command").is_none(),
-		"Should have no command for interactive mode"
-	);
-}
-
-/// Test: ShellCommand error expression
-///
-/// Category: Error Path
-/// Verifies handling of invalid expression.
-#[rstest]
-fn test_shell_command_error_expression() {
-	let mut ctx = CommandContext::default();
-	ctx.set_option("command".to_string(), "this is not valid rust".to_string());
-
-	assert!(ctx.has_option("command"), "Should have command option");
 }
 
 // ============================================================================
@@ -429,7 +403,7 @@ fn test_builtin_commands_sanity() {
 	let commands: Vec<(&str, Box<dyn BaseCommand>)> = vec![
 		("check", Box::new(CheckCommand)),
 		("runserver", Box::new(RunServerCommand)),
-		("shell", Box::new(ShellCommand)),
+		("shell", Box::new(ShellCommand::default())),
 	];
 
 	for (expected_name, command) in commands {

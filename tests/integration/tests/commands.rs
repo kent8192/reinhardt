@@ -39,6 +39,14 @@ mod workflow_integration;
 #[path = "commands/plugin_integration.rs"]
 mod plugin_integration;
 
+// Management shell end-to-end tests
+#[cfg(any(
+	target_os = "macos",
+	all(target_os = "linux", not(target_env = "uclibc"))
+))]
+#[path = "commands/shell_e2e.rs"]
+mod shell_e2e;
+
 // Edge case E2E tests for makemigrations command
 #[path = "commands/makemigrations_e2e_edge_cases.rs"]
 mod makemigrations_e2e_edge_cases;

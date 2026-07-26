@@ -85,16 +85,7 @@ fn detect_extractors(inputs: &Punctuated<FnArg, Token![,]>) -> Vec<ExtractorInfo
 				&& let Some(segment) = type_path.path.segments.last()
 			{
 				let type_name = segment.ident.to_string();
-				if matches!(
-					type_name.as_str(),
-					"Path"
-						| "Json" | "Query" | "Header"
-						| "Cookie" | "Form"
-						| "Body" | "HeaderNamed"
-						| "CookieNamed" | "CookieStruct"
-						| "SessionValue" | "OptionalSessionValue"
-						| "SessionValueNamed"
-				) {
+				if is_extractor_type_name(&type_name) {
 					extractors.push(ExtractorInfo {
 						pat: pat_type.pat.clone(),
 						ty: pat_type.ty.clone(),
@@ -108,6 +99,23 @@ fn detect_extractors(inputs: &Punctuated<FnArg, Token![,]>) -> Vec<ExtractorInfo
 	extractors
 }
 
+fn is_extractor_type_name(type_name: &str) -> bool {
+	matches!(
+		type_name,
+		"Path"
+			| "Json" | "Query"
+			| "Header"
+			| "Cookie"
+			| "Form" | "Body"
+			| "HeaderNamed"
+			| "CookieNamed"
+			| "CookieStruct"
+			| "SessionValue"
+			| "OptionalSessionValue"
+			| "SessionValueNamed"
+	)
+}
+
 /// Check whether a type is a raw HTTP `Request`.
 fn is_request_type(ty: &Type) -> bool {
 	let Type::Path(type_path) = ty else {
@@ -119,6 +127,29 @@ fn is_request_type(ty: &Type) -> bool {
 		.segments
 		.last()
 		.is_some_and(|segment| segment.ident == "Request" && segment.arguments.is_none())
+}
+
+/// A non-injected parameter that is not a framework extractor is the raw request.
+///
+/// Type aliases are resolved by the Rust compiler after macro expansion, so aliases
+/// of `Request` cannot be recognized by their syntactic final identifier here.
+fn is_raw_request_parameter(pat_type: &syn::PatType) -> bool {
+	if pat_type.attrs.iter().any(is_inject_attr) {
+		return false;
+	}
+
+	if is_request_type(&pat_type.ty) {
+		return true;
+	}
+
+	match &*pat_type.ty {
+		Type::Path(type_path) => type_path
+			.path
+			.segments
+			.last()
+			.is_none_or(|segment| !is_extractor_type_name(&segment.ident.to_string())),
+		_ => true,
+	}
 }
 
 /// Extract request body information from function parameters
@@ -552,7 +583,7 @@ fn generate_wrapper_with_both(
 					.expect("each injected argument must have detected metadata")
 					.resolved_ident;
 				Some(quote! { #ident })
-			} else if is_request_type(&pat_type.ty) {
+			} else if is_raw_request_parameter(pat_type) {
 				Some(quote! { req })
 			} else {
 				let pat = extractor_args
@@ -1397,7 +1428,7 @@ mod url_resolver_tests {
 	#[test]
 	fn route_call_passes_raw_request_with_extractors_in_original_order() {
 		let input: ItemFn = syn::parse_quote! {
-			async fn handler(req: reinhardt_http::Request, Path(id): Path<String>, Json(body): Json<Payload>) -> String { String::new() }
+			async fn handler(request: HttpRequest, Path(id): Path<String>, Json(body): Json<Payload>) -> String { String::new() }
 		};
 		let extractors = detect_extractors(&input.sig.inputs);
 		let inject_params = detect_inject_params(&input.sig.inputs);

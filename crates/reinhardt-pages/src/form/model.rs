@@ -456,6 +456,9 @@ fn is_date(value: &str) -> bool {
 	let Some(year) = value[0..4].parse::<u32>().ok() else {
 		return false;
 	};
+	if !(1_000..=9_999).contains(&year) {
+		return false;
+	}
 	let Some(month) = value[5..7].parse::<u32>().ok() else {
 		return false;
 	};
@@ -561,7 +564,7 @@ fn normalize_datetime_local(value: &str, aware: bool) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
-	use super::ModelFormState;
+	use super::{ModelFormState, is_date};
 	use reinhardt_core::model_form::{
 		AllEditableModelFields, ModelFormFieldDescriptor, ModelFormFieldKind, ModelFormSchema,
 	};
@@ -675,5 +678,13 @@ mod tests {
 				Some(&serde_json::Value::String(String::new()))
 			);
 		}
+	}
+
+	#[test]
+	fn date_validation_rejects_years_outside_html_date_range() {
+		assert!(!is_date("0000-01-01"));
+		assert!(!is_date("0999-12-31"));
+		assert!(is_date("1000-01-01"));
+		assert!(is_date("9999-12-31"));
 	}
 }

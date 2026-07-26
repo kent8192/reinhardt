@@ -2295,7 +2295,8 @@ fn generate_model_form(
 								#pages_crate::form::ModelFormFieldKind::Integer { min, max } => {
 									let min = min.unwrap_or(0);
 									let max = max.unwrap_or(100);
-									::core::option::Option::Some((min + (max - min) / 2).to_string())
+									let span = max - min;
+									::core::option::Option::Some((min + span / 2 + span.rem_euclid(2)).to_string())
 								}
 								#pages_crate::form::ModelFormFieldKind::Float { min, max } => {
 									let min = min.unwrap_or(0.0);
@@ -2333,6 +2334,12 @@ fn generate_model_form(
 									)
 								) || (stored_value.is_none() && default_true),
 							);
+							if descriptor.nullable && stored_value.is_none() && !default_true {
+								let checkbox_edit_script = format!(
+									"this.form.elements['{checkbox_sentinel}'].disabled=false"
+								);
+								control = control.attr("onchange", checkbox_edit_script);
+							}
 						} else if input_type != "password"
 							&& let ::core::option::Option::Some(value) = stored_value
 						{
@@ -2454,13 +2461,15 @@ fn generate_model_form(
 								},
 							);
 						}
-						let checkbox_sentinel = (is_checkbox
-							&& (!descriptor.has_default || stored_value.is_some() || default_true))
-							.then(|| {
+						let checkbox_sentinel = is_checkbox.then(|| {
 							#pages_crate::PageElement::new("input")
 								.attr("type", "hidden")
 								.attr("name", checkbox_sentinel)
 								.attr("value", "false")
+								.bool_attr(
+									"disabled",
+									descriptor.nullable && stored_value.is_none() && !default_true,
+								)
 						});
 						let color_sentinel = (input_type == "color").then(|| {
 							#pages_crate::PageElement::new("input")

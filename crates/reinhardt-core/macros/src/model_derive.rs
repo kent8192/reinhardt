@@ -2525,11 +2525,15 @@ fn generate_model_form_support(
 					quote!(::std::default::Default::default())
 				} else if required {
 					quote! {
-						return ::core::result::Result::Err(
-							#forms_crate::model_form::ModelFormError::MissingModelField {
-								field: #field_literal,
-							},
-						)
+						if deferred_field == #field_literal {
+							::std::default::Default::default()
+						} else {
+							return ::core::result::Result::Err(
+								#forms_crate::model_form::ModelFormError::MissingModelField {
+									field: #field_literal,
+								},
+							)
+						}
 					}
 				} else {
 					quote!(::std::default::Default::default())
@@ -2617,23 +2621,11 @@ fn generate_model_form_support(
 			})
 		}
 	};
-	let build_from_payload_with_deferred_field_body =
-		if let Some(field) = &missing_noneditable_field {
-			quote! {
-				let _ = (data, deferred_field);
-				::core::result::Result::Err(
-					#forms_crate::model_form::ModelFormError::MissingModelField {
-						field: #field,
-					},
-				)
-			}
-		} else {
-			quote! {
-				::core::result::Result::Ok(Self {
-					#(#deferred_build_assignments,)*
-				})
-			}
-		};
+	let build_from_payload_with_deferred_field_body = quote! {
+		::core::result::Result::Ok(Self {
+			#(#deferred_build_assignments,)*
+		})
+	};
 	let apply_payload_fields = editable_fields
 		.iter()
 		.filter(|field| !field.config.primary_key)

@@ -457,7 +457,9 @@ where
 			return self.set_field_value(field_name, value);
 		}
 		if self.validated_candidate.is_none() {
-			self.build_instance()?;
+			self.validated_candidate = Some(T::build_from_payload_with_deferred_required_field(
+				&self.data, field_name,
+			)?);
 		}
 		T::set_trusted_field_json(
 			self.validated_candidate
@@ -960,6 +962,21 @@ mod tests {
 				field: "audit_actor"
 			}
 		));
+	}
+
+	#[test]
+	fn trusted_non_editable_field_builds_a_deferred_candidate() {
+		let mut data = HiddenRequiredRecordModelFormData::<AllEditableModelFields>::empty();
+		data.set_title("Trusted relation".to_owned());
+		let mut form = ModelForm::<HiddenRequiredRecord>::from_payload(data);
+
+		form.set_trusted_field_value("audit_actor", json!("system"))
+			.expect("a trusted non-editable field should satisfy model construction");
+		let built = form
+			.build_instance()
+			.expect("the trusted value should be retained in the candidate");
+
+		assert_eq!(built.audit_actor, "system");
 	}
 
 	#[test]

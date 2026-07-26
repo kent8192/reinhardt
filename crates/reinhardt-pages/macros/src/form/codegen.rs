@@ -2182,7 +2182,7 @@ fn generate_model_form(
 									("input", "url"),
 								#pages_crate::form::ModelFormFieldKind::Integer { .. }
 								| #pages_crate::form::ModelFormFieldKind::Float { .. }
-								| #pages_crate::form::ModelFormFieldKind::Decimal =>
+								| #pages_crate::form::ModelFormFieldKind::Decimal { .. } =>
 									("input", "number"),
 								#pages_crate::form::ModelFormFieldKind::Boolean =>
 									("input", "checkbox"),
@@ -2202,7 +2202,7 @@ fn generate_model_form(
 						let permits_subminute_precision = matches!(
 							descriptor.kind,
 							#pages_crate::form::ModelFormFieldKind::Float { .. }
-								| #pages_crate::form::ModelFormFieldKind::Decimal
+								| #pages_crate::form::ModelFormFieldKind::Decimal { .. }
 								| #pages_crate::form::ModelFormFieldKind::Time
 								| #pages_crate::form::ModelFormFieldKind::DateTime
 								| #pages_crate::form::ModelFormFieldKind::NaiveDateTime

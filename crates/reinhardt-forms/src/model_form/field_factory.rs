@@ -94,9 +94,11 @@ struct ModelDecimalField {
 }
 
 impl ModelDecimalField {
-	fn new(name: String, required: bool) -> Self {
+	fn new(name: String, required: bool, min: Option<f64>, max: Option<f64>) -> Self {
 		let mut inner = DecimalField::new(name);
 		inner.required = required;
+		inner.min_value = min;
+		inner.max_value = max;
 		Self { inner }
 	}
 }
@@ -189,7 +191,9 @@ impl FormField for ModelJsonField {
 				value @ (serde_json::Value::Array(_)
 				| serde_json::Value::Object(_)
 				| serde_json::Value::Bool(_)
-				| serde_json::Value::Number(_)),
+				| serde_json::Value::Number(_)
+				| serde_json::Value::String(_)
+				| serde_json::Value::Null),
 			) => {
 				let serialized = serde_json::to_string(value)
 					.map_err(|error| FieldError::Validation(error.to_string()))?;
@@ -324,7 +328,9 @@ pub(super) fn create_form_field(descriptor: &ModelFormFieldDescriptor) -> Box<dy
 			field.max_value = max;
 			Box::new(field)
 		}
-		ModelFormFieldKind::Decimal => Box::new(ModelDecimalField::new(name, descriptor.required)),
+		ModelFormFieldKind::Decimal { min, max } => {
+			Box::new(ModelDecimalField::new(name, descriptor.required, min, max))
+		}
 		ModelFormFieldKind::Boolean => {
 			let mut field = BooleanField::new(name);
 			field.required = descriptor.required;

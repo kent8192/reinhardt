@@ -36,8 +36,13 @@ pub enum ModelFormFieldKind {
 		/// The inclusive maximum value, when constrained.
 		max: Option<f64>,
 	},
-	/// A decimal input.
-	Decimal,
+	/// A decimal input with optional inclusive bounds.
+	Decimal {
+		/// The inclusive minimum value, when constrained.
+		min: Option<f64>,
+		/// The inclusive maximum value, when constrained.
+		max: Option<f64>,
+	},
 	/// A boolean input.
 	Boolean,
 	/// A calendar-date input.

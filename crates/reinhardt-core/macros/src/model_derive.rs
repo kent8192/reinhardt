@@ -1711,7 +1711,8 @@ fn builtin_storage_kind(ty: &Type, orm_crate: &TokenStream) -> Option<TokenStrea
 		"Uuid" => quote! { #orm_crate::DatabaseStorageKind::Uuid },
 		"Date" => quote! { #orm_crate::DatabaseStorageKind::Date },
 		"Time" => quote! { #orm_crate::DatabaseStorageKind::Time },
-		"DateTime" | "NaiveDateTime" => quote! { #orm_crate::DatabaseStorageKind::DateTime },
+		"DateTime" => quote! { #orm_crate::DatabaseStorageKind::DateTime },
+		"NaiveDateTime" => quote! { #orm_crate::DatabaseStorageKind::NaiveDateTime },
 		_ => return None,
 	};
 
@@ -2067,7 +2068,19 @@ fn model_form_kind(field: &FieldInfo) -> Result<TokenStream> {
 				.unwrap_or_else(|| quote!(::core::option::Option::None));
 			quote!(#core_crate::model_form::ModelFormFieldKind::Float { min: #min, max: #max })
 		}
-		"Decimal" => quote!(#core_crate::model_form::ModelFormFieldKind::Decimal),
+		"Decimal" => {
+			let min = field
+				.config
+				.min_value
+				.map(|value| quote!(::core::option::Option::Some(#value as f64)))
+				.unwrap_or_else(|| quote!(::core::option::Option::None));
+			let max = field
+				.config
+				.max_value
+				.map(|value| quote!(::core::option::Option::Some(#value as f64)))
+				.unwrap_or_else(|| quote!(::core::option::Option::None));
+			quote!(#core_crate::model_form::ModelFormFieldKind::Decimal { min: #min, max: #max })
+		}
 		"bool" => quote!(#core_crate::model_form::ModelFormFieldKind::Boolean),
 		"Date" | "NaiveDate" => quote!(#core_crate::model_form::ModelFormFieldKind::Date),
 		"Time" | "NaiveTime" => quote!(#core_crate::model_form::ModelFormFieldKind::Time),
@@ -2336,6 +2349,7 @@ fn generate_model_form_support(
 		.iter()
 		.find(|field| {
 			if is_model_form_editable(field)
+				|| is_relationship_field_type(&field.ty)
 				|| model_form_declared_default(field).is_some()
 				|| is_auto_generated_field(field)
 			{
@@ -2383,6 +2397,8 @@ fn generate_model_form_support(
 					default
 				} else if is_auto_generated_field(field) {
 					get_auto_field_default_value(field)
+				} else if is_relationship_field_type(&field.ty) {
+					quote!(::std::default::Default::default())
 				} else if required {
 					quote! {
 						return ::core::result::Result::Err(
@@ -2414,14 +2430,17 @@ fn generate_model_form_support(
 			})
 		}
 	};
-	let apply_payload_fields = editable_fields.iter().map(|field| {
-		let field_name = &field.name;
-		quote! {
-			if let ::core::option::Option::Some(value) = data.#field_name.as_ref() {
-				self.#field_name = value.clone();
+	let apply_payload_fields = editable_fields
+		.iter()
+		.filter(|field| !field.config.primary_key)
+		.map(|field| {
+			let field_name = &field.name;
+			quote! {
+				if let ::core::option::Option::Some(value) = data.#field_name.as_ref() {
+					self.#field_name = value.clone();
+				}
 			}
-		}
-	});
+		});
 
 	Ok(quote! {
 		#struct_vis struct #schema_name;

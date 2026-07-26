@@ -255,19 +255,34 @@ fn convert_control_value(
 			}
 			Ok(serde_json::Value::Number(number))
 		}
-		ModelFormFieldKind::Decimal => match value {
-			serde_json::Value::Number(number) => Ok(serde_json::Value::Number(number)),
-			serde_json::Value::String(text) => {
-				let parsed = serde_json::from_str::<serde_json::Value>(&text).map_err(|error| {
+		ModelFormFieldKind::Decimal { min, max } => {
+			let decimal = match &value {
+				serde_json::Value::Number(number) => number
+					.as_f64()
+					.ok_or_else(|| invalid_value(descriptor.name, "expected a finite decimal"))?,
+				serde_json::Value::String(text) => text.parse::<f64>().map_err(|error| {
 					invalid_value(descriptor.name, format!("invalid decimal: {error}"))
-				})?;
-				if !parsed.is_number() {
-					return Err(invalid_value(descriptor.name, "expected a decimal number"));
-				}
-				Ok(serde_json::Value::String(text))
+				})?,
+				_ => return Err(invalid_value(descriptor.name, "expected a decimal number")),
+			};
+			if let Some(min) = min
+				&& decimal < min
+			{
+				return Err(invalid_value(
+					descriptor.name,
+					format!("must be greater than or equal to {min}"),
+				));
 			}
-			_ => Err(invalid_value(descriptor.name, "expected a decimal number")),
-		},
+			if let Some(max) = max
+				&& decimal > max
+			{
+				return Err(invalid_value(
+					descriptor.name,
+					format!("must be less than or equal to {max}"),
+				));
+			}
+			Ok(value)
+		}
 		ModelFormFieldKind::Boolean => match value {
 			serde_json::Value::Bool(value) => Ok(serde_json::Value::Bool(value)),
 			serde_json::Value::String(text) => match text.as_str() {

@@ -184,6 +184,10 @@ impl DatabaseSessionBackend {
 
 	/// Create a new backend from an existing database connection
 	///
+	/// Session loads, saves, deletions, and existence checks all use the
+	/// injected connection. The global ORM connection does not need to be
+	/// initialized.
+	///
 	/// # Examples
 	///
 	/// ```rust,no_run
@@ -347,17 +351,16 @@ impl SessionBackend for DatabaseSessionBackend {
 	where
 		T: for<'de> Deserialize<'de> + Send,
 	{
-		// Use ORM to load session
+		// Use ORM to load the session through the backend's injected connection.
 		let session = Session::objects()
 			.filter(Filter::new(
 				"session_key".to_string(),
 				FilterOperator::Eq,
 				FilterValue::String(session_key.to_string()),
 			))
-			.first()
+			.first_with_db(self.connection.as_ref())
 			.await
-			.ok()
-			.flatten();
+			.map_err(|e| SessionError::CacheError(format!("Failed to load session: {}", e)))?;
 
 		match session {
 			Some(session) => {
@@ -459,7 +462,7 @@ impl SessionBackend for DatabaseSessionBackend {
 	async fn exists(&self, session_key: &str) -> Result<bool, SessionError> {
 		let now_timestamp = Utc::now().timestamp_millis();
 
-		// Use ORM to check if session exists and is not expired
+		// Use ORM to check the backend's injected connection.
 		let session = Session::objects()
 			.filter(Filter::new(
 				"session_key".to_string(),
@@ -471,10 +474,11 @@ impl SessionBackend for DatabaseSessionBackend {
 				FilterOperator::Gt,
 				FilterValue::Integer(now_timestamp),
 			))
-			.first()
+			.first_with_db(self.connection.as_ref())
 			.await
-			.ok()
-			.flatten();
+			.map_err(|e| {
+				SessionError::CacheError(format!("Failed to check session existence: {}", e))
+			})?;
 
 		Ok(session.is_some())
 	}
@@ -728,5 +732,29 @@ mod tests {
 		// We can't test this without a real connection, but we can verify the trait is implemented
 		fn assert_clone<T: Clone>() {}
 		assert_clone::<DatabaseSessionBackend>();
+	}
+
+	#[tokio::test]
+	async fn injected_connection_handles_session_lifecycle_without_global_orm_connection() {
+		let connection = DatabaseConnection::connect("sqlite::memory:")
+			.await
+			.unwrap();
+		let backend = DatabaseSessionBackend::from_connection(Arc::new(connection));
+		let session_key = "injected-connection";
+		let session_data = serde_json::json!({"user_id": 42});
+
+		backend.create_table().await.unwrap();
+		backend
+			.save(session_key, &session_data, Some(60))
+			.await
+			.unwrap();
+
+		let loaded: Option<serde_json::Value> = backend.load(session_key).await.unwrap();
+		assert_eq!(loaded, Some(session_data));
+		assert!(backend.exists(session_key).await.unwrap());
+
+		backend.delete(session_key).await.unwrap();
+
+		assert!(!backend.exists(session_key).await.unwrap());
 	}
 }

@@ -775,6 +775,8 @@ fn source_with_commit_sentinel(source: &str, sentinel: &str) -> String {
 				.or(Some(candidate.len()))
 		} else if candidate.starts_with("/*!") {
 			complete_inner_block_doc(candidate)
+		} else if candidate.starts_with("//") || candidate.starts_with("/*") {
+			ordinary_comment_before_inner_prefix(candidate)
 		} else {
 			None
 		};
@@ -792,6 +794,21 @@ fn source_with_commit_sentinel(source: &str, sentinel: &str) -> String {
 		&source[..prefix_end],
 		&source[prefix_end..]
 	)
+}
+
+fn ordinary_comment_before_inner_prefix(source: &str) -> Option<usize> {
+	let comment_end = if source.starts_with("//") {
+		source.find('\n').map(|end| end + 1).unwrap_or(source.len())
+	} else if source.starts_with("/*") {
+		source.find("*/").map(|end| end + 2)?
+	} else {
+		return None;
+	};
+	let following = &source[comment_end..];
+	let whitespace = following.len() - following.trim_start_matches([' ', '\t', '\r', '\n']).len();
+	let next = &following[whitespace..];
+	(next.starts_with("#![") || next.starts_with("//!") || next.starts_with("/*!"))
+		.then_some(comment_end)
 }
 
 fn append_startup_output(warnings: &mut Vec<String>, output: EvaluationOutput) {
@@ -997,6 +1014,10 @@ fn startup_prelude_error(error: EvaluationFailure, warnings: &[String]) -> Evalu
 		EvaluationFailure::ContextReset(message) => EvaluationFailure::ContextReset(format!(
 			"shell bootstrap failed{warning_suffix}: {message}"
 		)),
+		EvaluationFailure::Output { failure, output } => EvaluationFailure::Output {
+			failure: Box::new(startup_prelude_error(*failure, warnings)),
+			output,
+		},
 		other => other,
 	}
 }
@@ -1167,11 +1188,25 @@ impl StreamCapture {
 			.state
 			.lock()
 			.unwrap_or_else(std::sync::PoisonError::into_inner);
+		let deadline = Instant::now() + OUTPUT_DISCONNECT_TIMEOUT;
 		while !state.marker_observed && !state.disconnected {
-			state = self
+			let Some(remaining) = deadline.checked_duration_since(Instant::now()) else {
+				state.pending_marker = None;
+				return Err(EvaluationFailure::ProcessExited(format!(
+					"timed out waiting for evaluator output boundary `{marker}`"
+				)));
+			};
+			let (next_state, timeout) = self
 				.changed
-				.wait(state)
+				.wait_timeout(state, remaining)
 				.unwrap_or_else(std::sync::PoisonError::into_inner);
+			state = next_state;
+			if timeout.timed_out() && !state.marker_observed {
+				state.pending_marker = None;
+				return Err(EvaluationFailure::ProcessExited(format!(
+					"timed out waiting for evaluator output boundary `{marker}`"
+				)));
+			}
 		}
 		if !state.marker_observed {
 			return Err(EvaluationFailure::ProcessExited(format!(

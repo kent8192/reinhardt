@@ -829,7 +829,7 @@ fn ordinary_comment_before_inner_prefix(source: &str) -> Option<usize> {
 				.map(|end| end + 1)
 				.unwrap_or(remaining.len())
 		} else if remaining.starts_with("/*") {
-			remaining.find("*/").map(|end| end + 2)?
+			complete_nested_block_comment(remaining)?
 		} else {
 			return None;
 		};
@@ -846,6 +846,28 @@ fn ordinary_comment_before_inner_prefix(source: &str) -> Option<usize> {
 		}
 		consumed += whitespace;
 	}
+}
+
+fn complete_nested_block_comment(source: &str) -> Option<usize> {
+	let mut depth = 0;
+	let mut index = 0;
+	while index + 1 < source.len() {
+		match &source[index..index + 2] {
+			"/*" => {
+				depth += 1;
+				index += 2;
+			}
+			"*/" => {
+				depth -= 1;
+				index += 2;
+				if depth == 0 {
+					return Some(index);
+				}
+			}
+			_ => index += 1,
+		}
+	}
+	None
 }
 
 fn append_startup_output(warnings: &mut Vec<String>, output: EvaluationOutput) {
@@ -1408,6 +1430,17 @@ mod tests {
 		assert_eq!(
 			rendered,
 			"let __commit: ::std::string::String = ::std::string::String::new();\n/* note */let value = 1;\n/// documentation\nstruct Value;"
+		);
+	}
+
+	#[test]
+	fn commit_sentinel_follows_nested_ordinary_comments_before_inner_attributes() {
+		let source = "/* outer /* nested */ tail */\n#![allow(unused)]\nlet value = 1;";
+		let rendered = source_with_commit_sentinel(source, "__commit");
+
+		assert_eq!(
+			rendered,
+			"/* outer /* nested */ tail */\n#![allow(unused)]\nlet __commit: ::std::string::String = ::std::string::String::new();\nlet value = 1;"
 		);
 	}
 

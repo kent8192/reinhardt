@@ -1888,7 +1888,10 @@ impl BaseCommand for ShellCommand {
 		{
 			let _ = (&self.config, ctx);
 			Err(crate::CommandError::FeatureDisabled(
-				"The shell command requires the `commands-shell` feature.".to_string(),
+				"The shell command requires the `shell` feature when using \
+				 `reinhardt-commands` directly, or `commands-shell` through the \
+				 `reinhardt` facade."
+					.to_string(),
 			))
 		}
 	}

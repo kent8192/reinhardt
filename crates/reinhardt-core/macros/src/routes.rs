@@ -36,6 +36,9 @@ struct RouteOptions {
 #[derive(Clone)]
 struct ExtractorInfo {
 	ty: Box<Type>,
+	// Allow dead_code: production validation derives body classification from the extractor type;
+	// the name remains available for focused extractor-detection regression tests.
+	#[allow(dead_code)]
 	extractor_name: String,
 }
 
@@ -197,6 +200,9 @@ fn extract_body_info_from_type(ty: &Type) -> Option<(String, String)> {
 		return None;
 	};
 	let segment = type_path.path.segments.last()?;
+	if segment.ident == "Multipart" && matches!(segment.arguments, syn::PathArguments::None) {
+		return Some(("Multipart".to_string(), "multipart/form-data".to_string()));
+	}
 	let syn::PathArguments::AngleBracketed(args) = &segment.arguments else {
 		return None;
 	};
@@ -217,6 +223,28 @@ fn extract_body_info_from_type(ty: &Type) -> Option<(String, String)> {
 	};
 
 	Some((quote!(#inner_type).to_string(), content_type.to_string()))
+}
+
+fn body_consuming_extractor_name(ty: &Type) -> Option<String> {
+	let Type::Path(type_path) = ty else {
+		return None;
+	};
+	let segment = type_path.path.segments.last()?;
+	if segment.ident == "Validated" {
+		let syn::PathArguments::AngleBracketed(args) = &segment.arguments else {
+			return None;
+		};
+		let inner = args.args.iter().find_map(|argument| match argument {
+			syn::GenericArgument::Type(ty) => Some(ty),
+			_ => None,
+		})?;
+		return body_consuming_extractor_name(inner);
+	}
+	matches!(
+		segment.ident.to_string().as_str(),
+		"Json" | "Form" | "Body" | "Multipart"
+	)
+	.then(|| segment.ident.to_string())
 }
 
 /// Detect parameters with `#[inject]` attribute
@@ -243,17 +271,13 @@ pub(crate) fn detect_inject_params(inputs: &Punctuated<FnArg, Token![,]>) -> Vec
 
 /// Validate duplication of body-consuming extractors
 fn validate_extractors(extractors: &[ExtractorInfo]) -> Result<()> {
-	let body_consuming_types = ["Json", "Form", "Body", "Multipart"];
 	let body_extractors: Vec<_> = extractors
 		.iter()
-		.filter(|ext| body_consuming_types.contains(&ext.extractor_name.as_str()))
+		.filter_map(|ext| body_consuming_extractor_name(&ext.ty))
 		.collect();
 
 	if body_extractors.len() > 1 {
-		let names: Vec<_> = body_extractors
-			.iter()
-			.map(|e| e.extractor_name.as_str())
-			.collect();
+		let names: Vec<_> = body_extractors.iter().map(String::as_str).collect();
 		return Err(Error::new(
 			Span::call_site(),
 			format!(
@@ -1512,6 +1536,22 @@ mod url_resolver_tests {
 	}
 
 	#[rstest]
+	fn validate_extractors_rejects_validated_body_extractor_with_body() {
+		let inputs: syn::punctuated::Punctuated<FnArg, Token![,]> = syn::parse_quote! {
+			payload: Validated<Json<LoginRequest>>,
+			body: Body
+		};
+
+		let error = validate_extractors(&detect_extractors(&inputs))
+			.expect_err("Validated<Json<_>> and Body must not share a request body");
+
+		assert_eq!(
+			error.to_string(),
+			"Cannot use multiple body-consuming extractors: Json, Body. Request body can only be read once."
+		);
+	}
+
+	#[rstest]
 	fn extract_request_body_info_preserves_validated_form_metadata() {
 		let inputs: syn::punctuated::Punctuated<FnArg, Token![,]> = syn::parse_quote! {
 			Validated(payload): Validated<Form<LoginRequest>>
@@ -1523,6 +1563,18 @@ mod url_resolver_tests {
 				"LoginRequest".to_string(),
 				"application/x-www-form-urlencoded".to_string(),
 			))
+		);
+	}
+
+	#[rstest]
+	fn extract_request_body_info_records_multipart_metadata() {
+		let inputs: syn::punctuated::Punctuated<FnArg, Token![,]> = syn::parse_quote! {
+			multipart: Multipart
+		};
+
+		assert_eq!(
+			extract_request_body_info(&inputs),
+			Some(("Multipart".to_string(), "multipart/form-data".to_string()))
 		);
 	}
 

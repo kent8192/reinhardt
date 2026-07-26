@@ -77,6 +77,7 @@ pub fn run(args: MigrateServerFnsArgs) -> Result<()> {
 			parsed,
 			&source_module.target,
 			&source_module.module,
+			&project.app_modules,
 			&project.server_fns,
 		);
 

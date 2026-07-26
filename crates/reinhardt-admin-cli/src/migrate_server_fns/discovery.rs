@@ -23,6 +23,7 @@ pub(crate) struct ServerFn {
 }
 
 pub(crate) type ServerFnIndex = BTreeMap<ServerFnKey, Vec<ServerFn>>;
+pub(crate) type AppModuleIndex = BTreeMap<TargetKey, Vec<ModulePath>>;
 
 #[derive(Clone, Debug)]
 pub(crate) struct SourceModule {
@@ -34,6 +35,7 @@ pub(crate) struct SourceModule {
 
 #[derive(Debug)]
 pub(crate) struct ProjectIndex {
+	pub(crate) app_modules: AppModuleIndex,
 	pub(crate) server_fns: ServerFnIndex,
 	pub(crate) source_modules: Vec<SourceModule>,
 }
@@ -45,6 +47,7 @@ impl ProjectIndex {
 		let workspace_members: BTreeSet<&PackageId> = metadata.workspace_members.iter().collect();
 		let mut scanner = Scanner {
 			workspace_root,
+			app_modules: BTreeMap::new(),
 			server_fns: BTreeMap::new(),
 			source_modules: Vec::new(),
 			visited: BTreeSet::new(),
@@ -72,6 +75,7 @@ impl ProjectIndex {
 			left.path == right.path && left.target == right.target && left.module == right.module
 		});
 		Ok(Self {
+			app_modules: scanner.app_modules,
 			server_fns: scanner.server_fns,
 			source_modules: scanner.source_modules,
 		})
@@ -80,6 +84,7 @@ impl ProjectIndex {
 
 struct Scanner {
 	workspace_root: PathBuf,
+	app_modules: AppModuleIndex,
 	server_fns: ServerFnIndex,
 	source_modules: Vec<SourceModule>,
 	visited: BTreeSet<(TargetKey, ModulePath, PathBuf)>,
@@ -139,6 +144,12 @@ impl Scanner {
 	) -> Result<()> {
 		for item in items {
 			match item {
+				Item::Struct(item_struct) if is_app_config(&item_struct.attrs) => {
+					self.app_modules
+						.entry(target.clone())
+						.or_default()
+						.push(module.clone());
+				}
 				Item::Fn(function) if is_server_fn(&function.attrs) => {
 					let key = ServerFnKey {
 						target: target.clone(),
@@ -235,6 +246,16 @@ fn is_server_fn(attributes: &[Attribute]) -> bool {
 			.segments
 			.last()
 			.is_some_and(|segment| segment.ident == "server_fn")
+	})
+}
+
+fn is_app_config(attributes: &[Attribute]) -> bool {
+	attributes.iter().any(|attribute| {
+		attribute
+			.path()
+			.segments
+			.last()
+			.is_some_and(|segment| segment.ident == "app_config")
 	})
 }
 

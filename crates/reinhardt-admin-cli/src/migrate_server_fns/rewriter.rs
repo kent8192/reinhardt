@@ -12,13 +12,14 @@ use syn::{
 	UseTree, parse_quote,
 };
 
-use super::discovery::{ModulePath, ServerFnIndex, ServerFnKey, TargetKey};
+use super::discovery::{AppModuleIndex, ModulePath, ServerFnIndex, ServerFnKey, TargetKey};
 
 #[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub(crate) enum ReportKind {
 	WouldRewrite,
 	Rewrote,
 	MixedRegistration,
+	IncompatibleAppOwnership,
 	UnresolvedMarker(String),
 }
 
@@ -57,6 +58,12 @@ impl fmt::Display for Report {
 				self.path.display(),
 				self.line
 			),
+			ReportKind::IncompatibleAppOwnership => write!(
+				formatter,
+				"skipped incompatible app ownership: {}:{}",
+				self.path.display(),
+				self.line
+			),
 			ReportKind::UnresolvedMarker(name) => write!(
 				formatter,
 				"skipped unresolved marker `{name}`: {}:{}",
@@ -82,6 +89,7 @@ pub(crate) fn rewrite(
 	mut file: File,
 	target: &TargetKey,
 	module: &ModulePath,
+	app_modules: &AppModuleIndex,
 	server_fns: &ServerFnIndex,
 ) -> RewriteOutcome {
 	let original = file.clone();
@@ -91,6 +99,7 @@ pub(crate) fn rewrite(
 		&mut file.items,
 		target,
 		module,
+		app_modules,
 		server_fns,
 		&mut skipped,
 		&mut edits,
@@ -106,6 +115,7 @@ fn rewrite_module_items(
 	items: &mut Vec<Item>,
 	target: &TargetKey,
 	module: &ModulePath,
+	app_modules: &AppModuleIndex,
 	server_fns: &ServerFnIndex,
 	skipped: &mut Vec<Skipped>,
 	edits: &mut Vec<TextEdit>,
@@ -116,7 +126,14 @@ fn rewrite_module_items(
 	for item in items.iter_mut() {
 		match item {
 			Item::Fn(function) if function.sig.ident == "server_url_patterns" => {
-				match rewrite_router_function(function, target, module, server_fns, &imports) {
+				match rewrite_router_function(
+					function,
+					target,
+					module,
+					app_modules,
+					server_fns,
+					&imports,
+				) {
 					FunctionOutcome::Rewritten {
 						bindings,
 						edits: function_edits,
@@ -136,6 +153,7 @@ fn rewrite_module_items(
 						child_items,
 						target,
 						&child_module,
+						app_modules,
 						server_fns,
 						skipped,
 						edits,
@@ -186,12 +204,14 @@ fn rewrite_router_function(
 	function: &mut ItemFn,
 	target: &TargetKey,
 	module: &ModulePath,
+	app_modules: &AppModuleIndex,
 	server_fns: &ServerFnIndex,
 	imports: &ImportIndex,
 ) -> FunctionOutcome {
 	let mut analyzer = FunctionAnalyzer {
 		target,
 		module,
+		app_modules,
 		server_fns,
 		imports,
 		chains: Vec::new(),
@@ -222,6 +242,12 @@ fn rewrite_router_function(
 			return FunctionOutcome::Skipped(Skipped {
 				line,
 				kind: ReportKind::MixedRegistration,
+			});
+		}
+		ChainOutcome::IncompatibleOwnership(line) => {
+			return FunctionOutcome::Skipped(Skipped {
+				line,
+				kind: ReportKind::IncompatibleAppOwnership,
 			});
 		}
 		ChainOutcome::Unresolved { name, line } => {
@@ -262,6 +288,7 @@ enum ChainOutcome {
 		edits: Vec<TextEdit>,
 	},
 	Mixed(usize),
+	IncompatibleOwnership(usize),
 	Unresolved {
 		name: String,
 		line: usize,
@@ -272,6 +299,7 @@ enum ChainOutcome {
 struct FunctionAnalyzer<'a> {
 	target: &'a TargetKey,
 	module: &'a ModulePath,
+	app_modules: &'a AppModuleIndex,
 	server_fns: &'a ServerFnIndex,
 	imports: &'a ImportIndex,
 	chains: Vec<AnalyzedChain>,
@@ -293,6 +321,7 @@ impl<'ast> Visit<'ast> for FunctionAnalyzer<'_> {
 						&methods,
 						self.target,
 						self.module,
+						self.app_modules,
 						self.server_fns,
 						self.imports,
 					),
@@ -335,6 +364,7 @@ fn analyze_chain(
 	methods: &[&ExprMethodCall],
 	target: &TargetKey,
 	module: &ModulePath,
+	app_modules: &AppModuleIndex,
 	server_fns: &ServerFnIndex,
 	imports: &ImportIndex,
 ) -> ChainOutcome {
@@ -352,6 +382,9 @@ fn analyze_chain(
 	}
 
 	let mut bindings = BTreeSet::new();
+	let Some(caller_owner) = resolve_app_module_owner(app_modules, target, module) else {
+		return ChainOutcome::IncompatibleOwnership(span_line(methods[0].method.span()));
+	};
 	let server_methods: Vec<_> = methods
 		.iter()
 		.copied()
@@ -370,6 +403,11 @@ fn analyze_chain(
 				line: span_line(method.method.span()),
 			};
 		};
+		if resolve_app_module_owner(app_modules, target, &resolved.module)
+			.is_none_or(|owner| owner != caller_owner)
+		{
+			return ChainOutcome::IncompatibleOwnership(span_line(method.method.span()));
+		}
 		if !resolved.auto_register {
 			return ChainOutcome::Mixed(span_line(method.method.span()));
 		}
@@ -435,6 +473,7 @@ fn marker_name(argument: Option<&Expr>) -> String {
 struct ResolvedMarker {
 	auto_register: bool,
 	import_binding: Option<String>,
+	module: ModulePath,
 }
 
 fn resolve_marker(
@@ -483,16 +522,35 @@ fn resolve_marker(
 			function,
 		};
 		if let Some(entries) = server_fns.get(&key) {
-			resolved.extend(entries);
+			resolved.extend(entries.iter().map(|entry| (key.module.clone(), entry)));
 		}
 	}
 	if resolved.len() != 1 {
 		return None;
 	}
 	Some(ResolvedMarker {
-		auto_register: resolved[0].auto_register,
+		auto_register: resolved[0].1.auto_register,
 		import_binding,
+		module: resolved[0].0.clone(),
 	})
+}
+
+fn resolve_app_module_owner<'a>(
+	app_modules: &'a AppModuleIndex,
+	target: &TargetKey,
+	module: &ModulePath,
+) -> Option<&'a ModulePath> {
+	let owners = app_modules.get(target)?;
+	let longest = owners
+		.iter()
+		.filter(|owner| module.starts_with(owner))
+		.map(Vec::len)
+		.max()?;
+	let mut matching = owners
+		.iter()
+		.filter(|owner| owner.len() == longest && module.starts_with(owner));
+	let owner = matching.next()?;
+	matching.next().is_none().then_some(owner)
 }
 
 struct ChainTransformer;

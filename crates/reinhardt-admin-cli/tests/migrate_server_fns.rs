@@ -716,6 +716,80 @@ pub fn server_url_patterns() -> ServerRouter {
 }
 
 #[test]
+fn router_without_app_config_is_skipped_without_changing_bytes() {
+	// Arrange
+	let fixture = prepare_project(
+		"unowned_router",
+		"[lib]\npath = \"src/lib.rs\"\n",
+		&[(
+			"src/lib.rs",
+			r#"#[server_fn]
+pub async fn status() {}
+
+pub fn server_url_patterns() {
+	router()
+		.server_fn(status::marker)
+}
+"#,
+		)],
+	);
+	let source = fixture.path().join("src/lib.rs");
+	let before = fs::read(&source).expect("read unowned router");
+
+	// Act
+	let output = run_migrate(fixture.path(), true);
+
+	// Assert
+	assert_success(&output);
+	assert_eq!(
+		stdout(&output),
+		"skipped incompatible app ownership: src/lib.rs:6\n"
+	);
+	assert_eq!(fs::read(source).expect("read skipped router"), before);
+}
+
+#[test]
+fn router_is_skipped_when_the_server_function_has_another_app_owner() {
+	// Arrange
+	let fixture = prepare_project(
+		"incompatible_owner",
+		"[lib]\npath = \"src/lib.rs\"\n",
+		&[(
+			"src/lib.rs",
+			r#"#[app_config(name = "root", label = "root")]
+pub struct RootConfig;
+
+pub mod other {
+	#[app_config(name = "other", label = "other")]
+	pub struct OtherConfig;
+
+	#[server_fn]
+	pub async fn status() {}
+}
+
+pub fn server_url_patterns() {
+	router()
+		.server_fn(other::status::marker)
+}
+"#,
+		)],
+	);
+	let source = fixture.path().join("src/lib.rs");
+	let before = fs::read(&source).expect("read incompatible router");
+
+	// Act
+	let output = run_migrate(fixture.path(), true);
+
+	// Assert
+	assert_success(&output);
+	assert_eq!(
+		stdout(&output),
+		"skipped incompatible app ownership: src/lib.rs:14\n"
+	);
+	assert_eq!(fs::read(source).expect("read skipped router"), before);
+}
+
+#[test]
 fn nonstandard_target_root_resolves_child_module_from_target_parent() {
 	let fixture = prepare_project(
 		"nonstandard_target",
@@ -724,7 +798,10 @@ fn nonstandard_target_root_resolves_child_module_from_target_parent() {
 			("src/lib.rs", ""),
 			(
 				"tests/social.rs",
-				r#"#[path = "support/child.rs"]
+				r#"#[app_config(name = "social", label = "social")]
+pub struct SocialConfig;
+
+#[path = "support/child.rs"]
 mod child;
 
 pub fn server_url_patterns() {
@@ -749,7 +826,10 @@ pub async fn status() {}
 	assert_eq!(stdout(&output), "rewrote: tests/social.rs\n");
 	assert_eq!(
 		fs::read_to_string(source).expect("read rewritten target"),
-		r#"#[path = "support/child.rs"]
+		r#"#[app_config(name = "social", label = "social")]
+pub struct SocialConfig;
+
+#[path = "support/child.rs"]
 mod child;
 
 pub fn server_url_patterns() {
@@ -769,7 +849,10 @@ fn path_module_named_lib_uses_non_root_child_directory_rules() {
 			("src/lib.rs", ""),
 			(
 				"tests/social.rs",
-				r#"#[path = "support/lib.rs"]
+				r#"#[app_config(name = "social", label = "social")]
+pub struct SocialConfig;
+
+#[path = "support/lib.rs"]
 mod support;
 
 pub fn server_url_patterns() {
@@ -795,7 +878,10 @@ pub async fn status() {}
 	assert_eq!(stdout(&output), "rewrote: tests/social.rs\n");
 	assert_eq!(
 		fs::read_to_string(source).expect("read rewritten target"),
-		r#"#[path = "support/lib.rs"]
+		r#"#[app_config(name = "social", label = "social")]
+pub struct SocialConfig;
+
+#[path = "support/lib.rs"]
 mod support;
 
 pub fn server_url_patterns() {

@@ -67,7 +67,8 @@ The command rewrites only fully resolved chains containing ordinary
 automatically registered `#[server_fn]` markers. It reports and safely skips
 mixed registrations, `server_fnset` chains, opted-out functions, unresolved or
 ambiguous markers, glob imports, and routers that already use
-`auto_server_fns`. Complete those cases manually and remove obsolete aliases
+`auto_server_fns`. It also skips routers whose module and resolved functions
+do not share one `#[app_config]` owner. Complete those cases manually and remove obsolete aliases
 or build-script cfg setup only after the resulting router has been reviewed.
 For a developer-authored function kept in an explicit router or set, add
 `auto_register = false` to that function. Generated model sets remain

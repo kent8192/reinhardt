@@ -97,8 +97,11 @@
 //! # mod orm { pub use reinhardt_db::orm::*; }
 //! use reinhardt_core::macros::model;
 //! use reinhardt_db::{
-//!     migrations::operations::postgres::CreateExtension,
-//!     orm::{Model, QuerySet, Vector, VectorError},
+//!     migrations::{
+//!         MigrationAutodetector, Operation, ProjectState, model_registry::global_registry,
+//!         operations::postgres::CreateExtension,
+//!     },
+//!     orm::{Model, QuerySet, Vector},
 //! };
 //! use serde::{Deserialize, Serialize};
 //!
@@ -124,8 +127,30 @@
 //!     summary: Vector<3>,
 //! }
 //!
-//! fn main() -> Result<(), VectorError> {
-//!     let extension = CreateExtension::new("vector");
+//! fn main() -> Result<(), Box<dyn std::error::Error>> {
+//!     let metadata = global_registry()
+//!         .get_model("search", "Document")
+//!         .ok_or("Document metadata was not registered")?;
+//!     let mut target_state = ProjectState::new();
+//!     target_state.add_model(metadata.to_model_state());
+//!     let mut generated = MigrationAutodetector::new(ProjectState::new(), target_state)
+//!         .try_generate_migrations()?;
+//!     let mut migration = generated.pop().ok_or("Document migration was not generated")?;
+//!     migration.operations.insert(
+//!         0,
+//!         CreateExtension::new("vector").into_operation()?,
+//!     );
+//!     assert!(matches!(
+//!         migration.operations.first(),
+//!         Some(Operation::CreateExtension { name, .. }) if name == "vector"
+//!     ));
+//!     assert!(migration.operations[1..]
+//!         .iter()
+//!         .any(|operation| matches!(operation, Operation::CreateTable { .. })));
+//!     assert!(migration.operations[1..]
+//!         .iter()
+//!         .any(|operation| matches!(operation, Operation::CreateNamedIndex { .. })));
+//!
 //!     let target = Vector::<3>::try_from(vec![1.0, 0.0, 0.0])?;
 //!     let fields = Document::new_fields();
 //!     let nearest = QuerySet::<Document>::new()
@@ -157,11 +182,15 @@
 //!         )
 //!         .limit(10);
 //!
-//!     assert_eq!(extension.name, "vector");
 //!     let _ = nearest;
 //!     Ok(())
 //! }
 //! ```
+//!
+//! `DatabaseMigrationExecutor` applies these operations in vector order.
+//! Rolling this migration back removes the model schema and indexes but
+//! deliberately leaves the database-level extension installed, because other
+//! applications or schemas may share it.
 //!
 //! The distance methods map directly to PostgreSQL operators:
 //!

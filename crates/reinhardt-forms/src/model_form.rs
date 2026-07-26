@@ -954,6 +954,7 @@ mod tests {
 		let cases = [
 			(
 				ModelFormFieldKind::Text {
+					min_length: None,
 					max_length: Some(20),
 					multiline: false,
 				},
@@ -978,7 +979,13 @@ mod tests {
 				},
 				json!(5),
 			),
-			(ModelFormFieldKind::Float, json!(1.5)),
+			(
+				ModelFormFieldKind::Float {
+					min: None,
+					max: None,
+				},
+				json!(1.5),
+			),
 			(ModelFormFieldKind::Decimal, json!("1.25")),
 			(ModelFormFieldKind::Boolean, json!(true)),
 			(ModelFormFieldKind::Date, json!("2026-07-25")),
@@ -1017,6 +1024,7 @@ mod tests {
 		let text = field_factory::create_form_field(&ModelFormFieldDescriptor {
 			name: "short",
 			kind: ModelFormFieldKind::Text {
+				min_length: Some(2),
 				max_length: Some(3),
 				multiline: true,
 			},
@@ -1040,6 +1048,7 @@ mod tests {
 		});
 
 		assert!(!text.required());
+		assert!(text.clean(Some(&json!("a"))).is_err());
 		assert!(text.clean(Some(&json!("four"))).is_err());
 		assert!(integer.clean(Some(&json!(1))).is_err());
 		assert!(integer.clean(Some(&json!(5))).is_err());

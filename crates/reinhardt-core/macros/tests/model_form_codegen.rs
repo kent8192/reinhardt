@@ -13,7 +13,7 @@ use model_form::{AllEditableModelFields, ModelFormFieldKind, ModelFormPayload, M
 struct FormDocument {
 	#[field(primary_key = true)]
 	id: i64,
-	#[field(max_length = 200)]
+	#[field(min_length = 3, max_length = 200)]
 	title: String,
 	#[field(max_length = 64)]
 	secret: String,
@@ -89,6 +89,7 @@ fn generated_schema_exposes_descriptors_and_target_primary_key_kinds() {
 		&model_form::ModelFormFieldDescriptor {
 			name: "title",
 			kind: ModelFormFieldKind::Text {
+				min_length: Some(3),
 				max_length: Some(200),
 				multiline: false,
 			},
@@ -103,6 +104,7 @@ fn generated_schema_exposes_descriptors_and_target_primary_key_kinds() {
 	assert_eq!(
 		StringKeyChildFormSchema::target_id().kind,
 		ModelFormFieldKind::Text {
+			min_length: None,
 			max_length: Some(64),
 			multiline: false,
 		}

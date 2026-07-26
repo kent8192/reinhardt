@@ -55,6 +55,7 @@ pub fn foreign_key_form_kind_is_text() -> bool {
 	matches!(
 		JobFormSchema::project_id().kind,
 		ModelFormFieldKind::Text {
+			min_length: None,
 			max_length: Some(64),
 			multiline: false,
 		}

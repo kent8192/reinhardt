@@ -2181,7 +2181,7 @@ fn generate_model_form(
 								#pages_crate::form::ModelFormFieldKind::Url { .. } =>
 									("input", "url"),
 								#pages_crate::form::ModelFormFieldKind::Integer { .. }
-								| #pages_crate::form::ModelFormFieldKind::Float
+								| #pages_crate::form::ModelFormFieldKind::Float { .. }
 								| #pages_crate::form::ModelFormFieldKind::Decimal =>
 									("input", "number"),
 								#pages_crate::form::ModelFormFieldKind::Boolean =>
@@ -2201,7 +2201,7 @@ fn generate_model_form(
 						let is_checkbox = input_type == "checkbox";
 						let permits_fraction = matches!(
 							descriptor.kind,
-							#pages_crate::form::ModelFormFieldKind::Float
+							#pages_crate::form::ModelFormFieldKind::Float { .. }
 								| #pages_crate::form::ModelFormFieldKind::Decimal
 						);
 

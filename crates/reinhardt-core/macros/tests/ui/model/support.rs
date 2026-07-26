@@ -126,15 +126,33 @@ pub mod model_form {
 		fn supplied_fields(&self) -> Vec<&'static str>;
 		fn forbidden_fields(&self) -> &[&'static str];
 		fn get_json(&self, field: &str) -> Option<serde_json::Value>;
-		fn set_json(&mut self, field: &str, value: serde_json::Value) -> Result<(), ModelFormPayloadError>;
+		fn set_json(
+			&mut self,
+			field: &str,
+			value: serde_json::Value,
+		) -> Result<(), ModelFormPayloadError>;
 	}
-	#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+	#[derive(Debug, Clone, Copy, PartialEq)]
 	pub enum ModelFormFieldKind {
-		Text { max_length: Option<usize>, multiline: bool },
-		Email { max_length: Option<usize> },
-		Url { max_length: Option<usize> },
-		Integer { min: Option<i64>, max: Option<i64> },
-		Float,
+		Text {
+			min_length: Option<usize>,
+			max_length: Option<usize>,
+			multiline: bool,
+		},
+		Email {
+			max_length: Option<usize>,
+		},
+		Url {
+			max_length: Option<usize>,
+		},
+		Integer {
+			min: Option<i64>,
+			max: Option<i64>,
+		},
+		Float {
+			min: Option<f64>,
+			max: Option<f64>,
+		},
 		Decimal,
 		Boolean,
 		Date,
@@ -149,7 +167,7 @@ pub mod model_form {
 		const FIELD_KIND: ModelFormFieldKind;
 	}
 
-	#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+	#[derive(Debug, Clone, Copy, PartialEq)]
 	pub struct ModelFormFieldDescriptor {
 		pub name: &'static str,
 		pub kind: ModelFormFieldKind,
@@ -171,7 +189,11 @@ pub mod model_form {
 pub mod db {
 	pub mod m2m_naming {
 		pub fn default_through_table(source_table: &str, field_name: &str) -> String {
-			format!("{}_{}", source_table.to_lowercase(), field_name.to_lowercase())
+			format!(
+				"{}_{}",
+				source_table.to_lowercase(),
+				field_name.to_lowercase()
+			)
 		}
 
 		pub fn default_m2m_columns(source_table: &str, target_table: &str) -> (String, String) {
@@ -243,13 +265,7 @@ pub mod db {
 		#[derive(Debug, Clone, Copy)]
 		pub struct OneToOneField<T>(core::marker::PhantomData<T>);
 
-		#[derive(
-			Debug,
-			Clone,
-			Copy,
-			serde::Serialize,
-			serde::Deserialize,
-		)]
+		#[derive(Debug, Clone, Copy, serde::Serialize, serde::Deserialize)]
 		#[serde(bound = "")]
 		pub struct ManyToManyField<Source, Target>(core::marker::PhantomData<(Source, Target)>);
 
@@ -305,8 +321,8 @@ pub mod db {
 	}
 
 	pub mod orm {
-		pub use serde;
 		pub use super::associations::ManyToManyAccessor;
+		pub use serde;
 
 		pub type FixtureFields = serde_json::Map<String, serde_json::Value>;
 		pub type FixtureValue = serde_json::Value;
@@ -324,10 +340,7 @@ pub mod db {
 				self
 			}
 
-			pub async fn first_with_db<E>(
-				self,
-				_db: &mut E,
-			) -> crate::exception::Result<Option<T>>
+			pub async fn first_with_db<E>(self, _db: &mut E) -> crate::exception::Result<Option<T>>
 			where
 				E: connection::OrmExecutor,
 			{
@@ -654,7 +667,9 @@ pub mod db {
 			pub trait RelationTarget: Model {
 				type Path<Root: Model>: RelationPathLike<Root = Root, Target = Self>;
 
-				fn wrap_relation_path<Root: Model>(path: RelationPath<Root, Self>) -> Self::Path<Root>
+				fn wrap_relation_path<Root: Model>(
+					path: RelationPath<Root, Self>,
+				) -> Self::Path<Root>
 				where
 					Self: Sized;
 			}
@@ -870,7 +885,9 @@ pub mod db {
 			type Storage = Option<T::Storage>;
 
 			fn encode_database(&self) -> Result<Self::Storage, FieldCodecError> {
-				self.as_ref().map(DatabaseField::encode_database).transpose()
+				self.as_ref()
+					.map(DatabaseField::encode_database)
+					.transpose()
 			}
 
 			fn decode_database(

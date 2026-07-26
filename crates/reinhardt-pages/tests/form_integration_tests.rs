@@ -38,6 +38,7 @@ const MODEL_FORM_QUESTION_FIELDS: [ModelFormFieldDescriptor; 2] = [
 	ModelFormFieldDescriptor {
 		name: "title",
 		kind: ModelFormFieldKind::Text {
+			min_length: Some(3),
 			max_length: Some(200),
 			multiline: false,
 		},
@@ -154,11 +155,25 @@ fn model_form_builds_one_policy_safe_payload() {
 	assert_eq!(payload.get_json("owner_id"), None);
 }
 
+#[test]
+fn model_form_text_conversion_enforces_the_descriptor_minimum_length() {
+	let mut state = ModelFormState::<ModelFormQuestionSchema, ModelFormTitleOnly>::new();
+
+	assert!(matches!(
+		state.set_value("title", serde_json::json!("no")),
+		Err(ModelFormPayloadError::InvalidValue { .. })
+	));
+	state
+		.set_value("title", serde_json::json!("valid"))
+		.expect("text at the inclusive minimum length should be accepted");
+	assert_eq!(state.value("title"), Some(&serde_json::json!("valid")));
+}
+
 struct ModelFormNumeric;
 
 struct ModelFormNumericSchema;
 
-const MODEL_FORM_NUMERIC_FIELDS: [ModelFormFieldDescriptor; 2] = [
+const MODEL_FORM_NUMERIC_FIELDS: [ModelFormFieldDescriptor; 3] = [
 	ModelFormFieldDescriptor {
 		name: "bounded",
 		kind: ModelFormFieldKind::Integer {
@@ -183,6 +198,18 @@ const MODEL_FORM_NUMERIC_FIELDS: [ModelFormFieldDescriptor; 2] = [
 		editable: true,
 		generated_relation_id: false,
 	},
+	ModelFormFieldDescriptor {
+		name: "ratio",
+		kind: ModelFormFieldKind::Float {
+			min: Some(1.5),
+			max: Some(2.5),
+		},
+		required: true,
+		has_default: false,
+		nullable: false,
+		editable: true,
+		generated_relation_id: false,
+	},
 ];
 
 impl ModelFormSchema for ModelFormNumericSchema {
@@ -197,7 +224,7 @@ struct ModelFormAllNumericFields;
 
 impl ModelFormPolicy for ModelFormAllNumericFields {
 	fn allows(field: &str) -> bool {
-		matches!(field, "bounded" | "unsigned")
+		matches!(field, "bounded" | "unsigned" | "ratio")
 	}
 }
 
@@ -289,6 +316,23 @@ fn model_form_integer_conversion_preserves_signed_and_unsigned_boundaries() {
 }
 
 #[test]
+fn model_form_float_conversion_enforces_descriptor_bounds() {
+	let mut state = ModelFormState::<ModelFormNumericSchema, ModelFormAllNumericFields>::new();
+
+	assert!(matches!(
+		state.set_value("ratio", serde_json::json!(1.4)),
+		Err(ModelFormPayloadError::InvalidValue { .. })
+	));
+	state
+		.set_value("ratio", serde_json::json!(2.5))
+		.expect("the inclusive float maximum should be accepted");
+	assert!(matches!(
+		state.set_value("ratio", serde_json::json!(2.6)),
+		Err(ModelFormPayloadError::InvalidValue { .. })
+	));
+}
+
+#[test]
 fn model_form_clearing_optional_control_removes_previous_payload_value() {
 	let mut state = ModelFormState::<ModelFormNumericSchema, ModelFormAllNumericFields>::new();
 	state
@@ -314,6 +358,7 @@ const MODEL_FORM_EMPTY_VALUE_FIELDS: [ModelFormFieldDescriptor; 3] = [
 	ModelFormFieldDescriptor {
 		name: "nullable_note",
 		kind: ModelFormFieldKind::Text {
+			min_length: None,
 			max_length: Some(200),
 			multiline: false,
 		},
@@ -326,6 +371,7 @@ const MODEL_FORM_EMPTY_VALUE_FIELDS: [ModelFormFieldDescriptor; 3] = [
 	ModelFormFieldDescriptor {
 		name: "defaulted_label",
 		kind: ModelFormFieldKind::Text {
+			min_length: None,
 			max_length: Some(200),
 			multiline: false,
 		},
@@ -338,6 +384,7 @@ const MODEL_FORM_EMPTY_VALUE_FIELDS: [ModelFormFieldDescriptor; 3] = [
 	ModelFormFieldDescriptor {
 		name: "blank_label",
 		kind: ModelFormFieldKind::Text {
+			min_length: None,
 			max_length: Some(200),
 			multiline: false,
 		},

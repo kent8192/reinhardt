@@ -289,11 +289,13 @@ pub(super) fn create_form_field(descriptor: &ModelFormFieldDescriptor) -> Box<dy
 
 	match descriptor.kind {
 		ModelFormFieldKind::Text {
+			min_length,
 			max_length,
 			multiline,
 		} => {
 			let mut field = CharField::new(name);
 			field.required = descriptor.required;
+			field.min_length = min_length;
 			field.max_length = max_length;
 			if multiline {
 				field.widget = Widget::TextArea;
@@ -315,9 +317,11 @@ pub(super) fn create_form_field(descriptor: &ModelFormFieldDescriptor) -> Box<dy
 		ModelFormFieldKind::Integer { min, max } => {
 			Box::new(ModelIntegerField::new(name, descriptor.required, min, max))
 		}
-		ModelFormFieldKind::Float => {
+		ModelFormFieldKind::Float { min, max } => {
 			let mut field = FloatField::new(name);
 			field.required = descriptor.required;
+			field.min_value = min;
+			field.max_value = max;
 			Box::new(field)
 		}
 		ModelFormFieldKind::Decimal => Box::new(ModelDecimalField::new(name, descriptor.required)),

@@ -127,9 +127,31 @@ fn convert_control_value(
 	value: serde_json::Value,
 ) -> Result<serde_json::Value, ModelFormPayloadError> {
 	match descriptor.kind {
-		ModelFormFieldKind::Text { max_length, .. }
-		| ModelFormFieldKind::Email { max_length }
-		| ModelFormFieldKind::Url { max_length } => {
+		ModelFormFieldKind::Text {
+			min_length,
+			max_length,
+			..
+		} => {
+			let text = expect_string(descriptor.name, value)?;
+			if let Some(min_length) = min_length
+				&& text.chars().count() < min_length
+			{
+				return Err(invalid_value(
+					descriptor.name,
+					format!("must contain at least {min_length} characters"),
+				));
+			}
+			if let Some(max_length) = max_length
+				&& text.chars().count() > max_length
+			{
+				return Err(invalid_value(
+					descriptor.name,
+					format!("must contain at most {max_length} characters"),
+				));
+			}
+			Ok(serde_json::Value::String(text))
+		}
+		ModelFormFieldKind::Email { max_length } | ModelFormFieldKind::Url { max_length } => {
 			let text = expect_string(descriptor.name, value)?;
 			if let Some(max_length) = max_length
 				&& text.chars().count() > max_length
@@ -203,7 +225,7 @@ fn convert_control_value(
 			}
 			Ok(serde_json::Value::Number(number))
 		}
-		ModelFormFieldKind::Float => {
+		ModelFormFieldKind::Float { min, max } => {
 			let float = match value {
 				serde_json::Value::Number(number) => number
 					.as_f64()
@@ -215,6 +237,22 @@ fn convert_control_value(
 			};
 			let number = serde_json::Number::from_f64(float)
 				.ok_or_else(|| invalid_value(descriptor.name, "expected a finite number"))?;
+			if let Some(min) = min
+				&& float < min
+			{
+				return Err(invalid_value(
+					descriptor.name,
+					format!("must be greater than or equal to {min}"),
+				));
+			}
+			if let Some(max) = max
+				&& float > max
+			{
+				return Err(invalid_value(
+					descriptor.name,
+					format!("must be less than or equal to {max}"),
+				));
+			}
 			Ok(serde_json::Value::Number(number))
 		}
 		ModelFormFieldKind::Decimal => match value {

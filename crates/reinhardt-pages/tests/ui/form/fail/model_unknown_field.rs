@@ -11,6 +11,7 @@ struct QuestionFormSchema;
 const QUESTION_FIELDS: [ModelFormFieldDescriptor; 1] = [ModelFormFieldDescriptor {
 	name: "title",
 	kind: ModelFormFieldKind::Text {
+		min_length: None,
 		max_length: None,
 		multiline: false,
 	},

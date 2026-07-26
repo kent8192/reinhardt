@@ -1,10 +1,12 @@
 //! Schema contracts describing fields available to model-backed forms.
 
 /// The target-neutral input kind for a model-backed form field.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub enum ModelFormFieldKind {
-	/// A text input with an optional maximum length and multiline mode.
+	/// A text input with optional length bounds and multiline mode.
 	Text {
+		/// The minimum permitted string length, when constrained.
+		min_length: Option<usize>,
 		/// The maximum permitted string length, when constrained.
 		max_length: Option<usize>,
 		/// Whether the field accepts multiple lines.
@@ -27,8 +29,13 @@ pub enum ModelFormFieldKind {
 		/// The inclusive maximum value, when constrained.
 		max: Option<i64>,
 	},
-	/// A floating-point input.
-	Float,
+	/// A floating-point input with optional inclusive bounds.
+	Float {
+		/// The inclusive minimum value, when constrained.
+		min: Option<f64>,
+		/// The inclusive maximum value, when constrained.
+		max: Option<f64>,
+	},
 	/// A decimal input.
 	Decimal,
 	/// A boolean input.
@@ -48,7 +55,7 @@ pub enum ModelFormFieldKind {
 }
 
 /// Compile-time metadata for a field exposed by a model-backed form.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub struct ModelFormFieldDescriptor {
 	/// The model field name.
 	pub name: &'static str,
@@ -92,6 +99,7 @@ mod tests {
 
 	impl ModelFormPrimaryKey for TextPrimaryKey {
 		const FIELD_KIND: ModelFormFieldKind = ModelFormFieldKind::Text {
+			min_length: None,
 			max_length: Some(64),
 			multiline: false,
 		};
@@ -102,6 +110,7 @@ mod tests {
 		let descriptor = ModelFormFieldDescriptor {
 			name: "title",
 			kind: ModelFormFieldKind::Text {
+				min_length: None,
 				max_length: Some(200),
 				multiline: false,
 			},
@@ -121,6 +130,7 @@ mod tests {
 		assert_eq!(
 			TextPrimaryKey::FIELD_KIND,
 			ModelFormFieldKind::Text {
+				min_length: None,
 				max_length: Some(64),
 				multiline: false,
 			}

@@ -2020,6 +2020,11 @@ fn model_form_kind(field: &FieldInfo) -> Result<TokenStream> {
 
 	let kind = match segment.ident.to_string().as_str() {
 		"String" => {
+			let min_length = field
+				.config
+				.min_length
+				.map(|value| quote!(::core::option::Option::Some(#value as usize)))
+				.unwrap_or_else(|| quote!(::core::option::Option::None));
 			let max_length = field
 				.config
 				.max_length
@@ -2030,7 +2035,7 @@ fn model_form_kind(field: &FieldInfo) -> Result<TokenStream> {
 			} else if field.config.url == Some(true) {
 				quote!(#core_crate::model_form::ModelFormFieldKind::Url { max_length: #max_length })
 			} else {
-				quote!(#core_crate::model_form::ModelFormFieldKind::Text { max_length: #max_length, multiline: false })
+				quote!(#core_crate::model_form::ModelFormFieldKind::Text { min_length: #min_length, max_length: #max_length, multiline: false })
 			}
 		}
 		"i8" | "i16" | "i32" | "i64" | "isize" | "u8" | "u16" | "u32" | "u64" | "usize" => {
@@ -2046,7 +2051,19 @@ fn model_form_kind(field: &FieldInfo) -> Result<TokenStream> {
 				.unwrap_or_else(|| quote!(::core::option::Option::None));
 			quote!(#core_crate::model_form::ModelFormFieldKind::Integer { min: #min, max: #max })
 		}
-		"f32" | "f64" => quote!(#core_crate::model_form::ModelFormFieldKind::Float),
+		"f32" | "f64" => {
+			let min = field
+				.config
+				.min_value
+				.map(|value| quote!(::core::option::Option::Some(#value as f64)))
+				.unwrap_or_else(|| quote!(::core::option::Option::None));
+			let max = field
+				.config
+				.max_value
+				.map(|value| quote!(::core::option::Option::Some(#value as f64)))
+				.unwrap_or_else(|| quote!(::core::option::Option::None));
+			quote!(#core_crate::model_form::ModelFormFieldKind::Float { min: #min, max: #max })
+		}
 		"Decimal" => quote!(#core_crate::model_form::ModelFormFieldKind::Decimal),
 		"bool" => quote!(#core_crate::model_form::ModelFormFieldKind::Boolean),
 		"Date" | "NaiveDate" => quote!(#core_crate::model_form::ModelFormFieldKind::Date),

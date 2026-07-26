@@ -15,6 +15,7 @@ const QUESTION_FIELDS: [ModelFormFieldDescriptor; 2] = [
 	ModelFormFieldDescriptor {
 		name: "title",
 		kind: ModelFormFieldKind::Text {
+			min_length: None,
 			max_length: Some(200),
 			multiline: false,
 		},

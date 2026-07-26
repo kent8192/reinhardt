@@ -599,6 +599,9 @@ fn resolve_marker(
 	server_fns: &ServerFnIndex,
 	imports: &ImportIndex,
 ) -> Option<ResolvedMarker> {
+	if marker.path.leading_colon.is_some() {
+		return None;
+	}
 	let mut components: Vec<String> = marker
 		.path
 		.segments
@@ -1080,7 +1083,7 @@ pub(crate) fn apply_text_edits(source: &str, edits: &[TextEdit]) -> Option<Strin
 					.get(start..end)
 					.is_some_and(|item| item.contains("//") || item.contains("/*"))
 				{
-					continue;
+					return None;
 				}
 			}
 			TextEditKind::MethodSuffix => {

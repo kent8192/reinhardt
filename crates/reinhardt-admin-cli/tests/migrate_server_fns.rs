@@ -146,6 +146,26 @@ fn write_replaces_explicit_markers_and_preserves_unrelated_builder_calls() {
 	assert_eq!(fs::read(router).expect("read rewritten router"), expected);
 }
 
+#[cfg(unix)]
+#[test]
+fn write_preserves_source_permissions() {
+	let fixture = prepare_fixture("safe");
+	let router = router_path(fixture.path());
+	fs::set_permissions(&router, fs::Permissions::from_mode(0o640))
+		.expect("set source permissions");
+
+	let output = run_migrate(fixture.path(), true);
+
+	assert_success(&output);
+	assert_eq!(
+		fs::metadata(router)
+			.expect("read rewritten source metadata")
+			.permissions()
+			.mode() & 0o777,
+		0o640
+	);
+}
+
 #[test]
 fn mixed_opted_out_router_is_skipped_without_changing_bytes() {
 	let fixture = prepare_fixture("mixed");
@@ -239,6 +259,50 @@ pub fn server_url_patterns() -> ServerRouter {
 }
 "#
 	);
+}
+
+#[test]
+fn inherited_server_function_alias_makes_nested_coverage_complete() {
+	let fixture = prepare_project(
+		"inherited_server_fn_alias",
+		"[lib]\npath = \"src/lib.rs\"\n",
+		&[(
+			"src/lib.rs",
+			r#"use reinhardt::{app_config, server_fn, ServerRouter};
+use reinhardt::pages::server_fn as sf;
+
+#[app_config(name = "root", label = "root")]
+pub struct RootConfig;
+
+#[server_fn]
+pub async fn status() {}
+
+mod child {
+	use super::sf;
+
+	#[sf]
+	pub async fn hidden() {}
+}
+
+pub fn server_url_patterns() -> ServerRouter {
+	router()
+		.server_fn(status::marker)
+}
+"#,
+		)],
+	);
+	let source = fixture.path().join("src/lib.rs");
+	let before = fs::read(&source).expect("read source");
+
+	let output = run_migrate(fixture.path(), true);
+
+	assert_success(&output);
+	assert!(
+		stdout(&output).starts_with("skipped mixed registration: src/lib.rs:"),
+		"inherited server_fn aliases must make coverage incomplete when unregistered: {}",
+		stdout(&output)
+	);
+	assert_eq!(fs::read(&source).expect("read skipped source"), before);
 }
 
 #[test]
@@ -1023,6 +1087,78 @@ pub fn server_url_patterns() -> ServerRouter {
 		before,
 		"a text-edit failure must not fall back to a comment-dropping formatter"
 	);
+}
+
+#[test]
+fn import_pruning_with_comments_skips_the_entire_migration() {
+	let fixture = prepare_fixture("safe");
+	let router = router_path(fixture.path());
+	write_file(
+		fixture.path(),
+		"src/apps/polls/urls/server_router.rs",
+		r#"use crate::apps::polls::server_fn::{get_questions, vote, /* Keep this import comment. */ retained};
+use reinhardt::pages::server_fn::ServerFnRouterExt;
+use reinhardt::ServerRouter;
+
+pub fn server_url_patterns() -> ServerRouter {
+	ServerRouter::new()
+		.server_fn(get_questions::marker)
+		.server_fn(vote::marker)
+}
+"#,
+	);
+	let before = fs::read(&router).expect("read router with an import comment");
+
+	let output = run_migrate(fixture.path(), true);
+
+	assert_success(&output);
+	assert_eq!(
+		stdout(&output),
+		"skipped migration because text edits could not be applied: src/apps/polls/urls/server_router.rs\n"
+	);
+	assert_eq!(fs::read(&router).expect("read skipped router"), before);
+}
+
+#[test]
+fn absolute_marker_path_is_left_unresolved() {
+	let fixture = prepare_project(
+		"absolute_marker_path",
+		"[lib]\npath = \"src/lib.rs\"\n",
+		&[(
+			"src/lib.rs",
+			r#"use reinhardt::{app_config, server_fn, ServerRouter};
+
+#[app_config(name = "root", label = "root")]
+pub struct RootConfig;
+
+pub mod dependency {
+	pub mod vote {
+		use super::super::server_fn;
+
+		#[server_fn]
+		pub async fn endpoint() {}
+	}
+}
+
+pub fn server_url_patterns() -> ServerRouter {
+	router()
+		.server_fn(::dependency::vote::marker)
+}
+"#,
+		)],
+	);
+	let source = fixture.path().join("src/lib.rs");
+	let before = fs::read(&source).expect("read source");
+
+	let output = run_migrate(fixture.path(), true);
+
+	assert_success(&output);
+	assert!(
+		stdout(&output).starts_with("skipped unresolved marker `vote`: src/lib.rs:"),
+		"absolute marker paths must not be mistaken for local markers: {}",
+		stdout(&output)
+	);
+	assert_eq!(fs::read(&source).expect("read skipped source"), before);
 }
 
 #[test]

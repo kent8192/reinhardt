@@ -163,6 +163,19 @@ fn write_source(path: &Path, source: &str) -> Result<()> {
 			path: path.to_path_buf(),
 			source,
 		})?;
+	let permissions = fs::metadata(path)
+		.map_err(|source| MigrateServerFnsError::Io {
+			path: path.to_path_buf(),
+			source,
+		})?
+		.permissions();
+	temporary
+		.as_file()
+		.set_permissions(permissions)
+		.map_err(|source| MigrateServerFnsError::Io {
+			path: path.to_path_buf(),
+			source,
+		})?;
 	temporary
 		.persist(path)
 		.map_err(|source| MigrateServerFnsError::Io {

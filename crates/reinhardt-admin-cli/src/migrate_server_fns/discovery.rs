@@ -64,7 +64,13 @@ impl ProjectIndex {
 					continue;
 				}
 				let target_key = format!("{}::{}::{}", package.id, target.name, source.display());
-				scanner.scan_external_module(target_key, Vec::new(), source.to_path_buf(), true)?;
+				scanner.scan_external_module(
+					target_key,
+					Vec::new(),
+					source.to_path_buf(),
+					true,
+					&BTreeMap::new(),
+				)?;
 			}
 		}
 
@@ -97,6 +103,7 @@ impl Scanner {
 		module: ModulePath,
 		path: PathBuf,
 		is_target_root: bool,
+		inherited_attribute_aliases: &BTreeMap<String, String>,
 	) -> Result<()> {
 		let path = path
 			.canonicalize()
@@ -139,6 +146,7 @@ impl Scanner {
 			&module_directory,
 			declaring_directory,
 			&parsed.items,
+			inherited_attribute_aliases,
 		)
 	}
 
@@ -149,8 +157,9 @@ impl Scanner {
 		module_directory: &Path,
 		declaring_directory: &Path,
 		items: &[Item],
+		inherited_attribute_aliases: &BTreeMap<String, String>,
 	) -> Result<()> {
-		let attribute_aliases = reinhardt_attribute_aliases(items);
+		let attribute_aliases = reinhardt_attribute_aliases(items, inherited_attribute_aliases);
 		for item in items {
 			match item {
 				Item::Macro(item_macro) if !item_macro.mac.path.is_ident("macro_rules") => {
@@ -208,6 +217,7 @@ impl Scanner {
 						module_directory,
 						declaring_directory,
 						item_mod,
+						&attribute_aliases,
 					)?;
 				}
 				_ => {}
@@ -234,6 +244,7 @@ impl Scanner {
 		module_directory: &Path,
 		declaring_directory: &Path,
 		item_mod: &ItemMod,
+		inherited_attribute_aliases: &BTreeMap<String, String>,
 	) -> Result<()> {
 		let mut child_module = module.clone();
 		child_module.push(item_mod.ident.to_string());
@@ -248,6 +259,7 @@ impl Scanner {
 				&child_directory,
 				&child_directory,
 				items,
+				inherited_attribute_aliases,
 			);
 		}
 
@@ -255,7 +267,13 @@ impl Scanner {
 		else {
 			return Ok(());
 		};
-		self.scan_external_module(target.clone(), child_module, path, false)
+		self.scan_external_module(
+			target.clone(),
+			child_module,
+			path,
+			false,
+			inherited_attribute_aliases,
+		)
 	}
 }
 
@@ -362,15 +380,91 @@ fn is_reinhardt_attribute(
 		})
 }
 
-fn reinhardt_attribute_aliases(items: &[Item]) -> BTreeMap<String, String> {
+fn reinhardt_attribute_aliases(
+	items: &[Item],
+	inherited: &BTreeMap<String, String>,
+) -> BTreeMap<String, String> {
 	let mut aliases = BTreeMap::new();
 	for item in items {
 		let Item::Use(item_use) = item else {
 			continue;
 		};
 		collect_reinhardt_attribute_aliases(&item_use.tree, &mut Vec::new(), &mut aliases);
+		collect_inherited_attribute_aliases(
+			&item_use.tree,
+			&mut Vec::new(),
+			inherited,
+			&mut aliases,
+		);
 	}
 	aliases
+}
+
+fn collect_inherited_attribute_aliases(
+	tree: &UseTree,
+	prefix: &mut Vec<String>,
+	inherited: &BTreeMap<String, String>,
+	aliases: &mut BTreeMap<String, String>,
+) {
+	match tree {
+		UseTree::Path(path) => {
+			prefix.push(path.ident.to_string());
+			collect_inherited_attribute_aliases(&path.tree, prefix, inherited, aliases);
+			prefix.pop();
+		}
+		UseTree::Name(name) => {
+			let mut path = prefix.clone();
+			if name.ident != "self" {
+				path.push(name.ident.to_string());
+			}
+			let binding = if name.ident == "self" {
+				prefix.last().cloned()
+			} else {
+				Some(name.ident.to_string())
+			};
+			if let Some(binding) = binding {
+				record_inherited_attribute_alias(&path, binding, inherited, aliases);
+			}
+		}
+		UseTree::Rename(rename) => {
+			let mut path = prefix.clone();
+			if rename.ident != "self" {
+				path.push(rename.ident.to_string());
+			}
+			record_inherited_attribute_alias(&path, rename.rename.to_string(), inherited, aliases);
+		}
+		UseTree::Glob(_) => {
+			if prefix.as_slice() == ["super"] {
+				aliases.extend(inherited.clone());
+			}
+		}
+		UseTree::Group(group) => {
+			for item in &group.items {
+				collect_inherited_attribute_aliases(item, prefix, inherited, aliases);
+			}
+		}
+	}
+}
+
+fn record_inherited_attribute_alias(
+	path: &[String],
+	binding: String,
+	inherited: &BTreeMap<String, String>,
+	aliases: &mut BTreeMap<String, String>,
+) {
+	let [parent, source] = path else {
+		return;
+	};
+	if parent != "super" {
+		return;
+	}
+	aliases.insert(
+		binding,
+		inherited
+			.get(source)
+			.cloned()
+			.unwrap_or_else(|| "__reinhardt_unknown_server_fn__".to_owned()),
+	);
 }
 
 fn collect_reinhardt_attribute_aliases(

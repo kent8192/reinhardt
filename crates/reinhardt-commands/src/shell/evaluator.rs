@@ -1,5 +1,5 @@
 use std::process::{Child, Command};
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Condvar, Mutex, mpsc};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
@@ -856,6 +856,7 @@ fn classify_boundary_error(error: Error, stderr: &str) -> EvaluationFailure {
 struct OutputDrainers {
 	stdout: Arc<StreamCapture>,
 	stderr: Arc<StreamCapture>,
+	running: Arc<AtomicBool>,
 	stdout_worker: Option<JoinHandle<()>>,
 	stderr_worker: Option<JoinHandle<()>>,
 }
@@ -864,21 +865,32 @@ impl OutputDrainers {
 	fn new(outputs: EvalContextOutputs) -> Self {
 		let stdout = Arc::new(StreamCapture::default());
 		let stderr = Arc::new(StreamCapture::default());
+		let running = Arc::new(AtomicBool::new(true));
 
 		let stdout_receiver = outputs.stdout;
 		let stdout_buffer = Arc::clone(&stdout);
+		let stdout_running = Arc::clone(&running);
 		let stdout_worker = thread::spawn(move || {
-			while let Ok(line) = stdout_receiver.recv() {
-				stdout_buffer.push(line);
+			while stdout_running.load(Ordering::Acquire) {
+				match stdout_receiver.recv_timeout(Duration::from_millis(50)) {
+					Ok(line) => stdout_buffer.push(line),
+					Err(crossbeam_channel::RecvTimeoutError::Timeout) => {}
+					Err(crossbeam_channel::RecvTimeoutError::Disconnected) => break,
+				}
 			}
 			stdout_buffer.disconnect();
 		});
 
 		let stderr_receiver = outputs.stderr;
 		let stderr_buffer = Arc::clone(&stderr);
+		let stderr_running = Arc::clone(&running);
 		let stderr_worker = thread::spawn(move || {
-			while let Ok(line) = stderr_receiver.recv() {
-				stderr_buffer.push(line);
+			while stderr_running.load(Ordering::Acquire) {
+				match stderr_receiver.recv_timeout(Duration::from_millis(50)) {
+					Ok(line) => stderr_buffer.push(line),
+					Err(crossbeam_channel::RecvTimeoutError::Timeout) => {}
+					Err(crossbeam_channel::RecvTimeoutError::Disconnected) => break,
+				}
 			}
 			stderr_buffer.disconnect();
 		});
@@ -886,6 +898,7 @@ impl OutputDrainers {
 		Self {
 			stdout,
 			stderr,
+			running,
 			stdout_worker: Some(stdout_worker),
 			stderr_worker: Some(stderr_worker),
 		}
@@ -911,6 +924,10 @@ impl OutputDrainers {
 
 impl Drop for OutputDrainers {
 	fn drop(&mut self) {
+		// An evaluated program can deliberately detach from the evaluator's
+		// process group while retaining an inherited capture pipe. Stop reader
+		// threads independently so shutdown never waits for that foreign child.
+		self.running.store(false, Ordering::Release);
 		if let Some(worker) = self.stdout_worker.take() {
 			let _ = worker.join();
 		}

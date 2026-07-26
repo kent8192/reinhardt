@@ -19,6 +19,7 @@ path = "examples/page_hot_patch_bench.rs"
 required-features = ["pages"]
 
 [dependencies]
+crossbeam-channel = "0.5"
 reinhardt-apps = { workspace = true }
 reinhardt-mail = { workspace = true }
 reinhardt-conf = { workspace = true }

@@ -60,13 +60,34 @@ pub(crate) async fn run(config: &ShellConfig, command: Option<String>) -> crate:
 	let output = ConsoleOutput;
 	match command {
 		Some(source) => {
-			ShellSession::new(factory, output)?
+			start_session(factory, output)
+				.await?
 				.execute_once(&source)
 				.await
 		}
 		None => {
 			let mut input = TerminalInput::new(&project_identifier)?;
-			run_session(None, factory, output, &mut input).await
+			let mut session = start_session(factory, output).await?;
+			session.run_interactive(&mut input).await
+		}
+	}
+}
+
+async fn start_session(
+	factory: EvcxrEvaluatorFactory,
+	output: ConsoleOutput,
+) -> crate::CommandResult<ShellSession<EvcxrEvaluatorFactory, ConsoleOutput>> {
+	let mut startup = tokio::task::spawn_blocking(move || ShellSession::new(factory, output));
+	tokio::select! {
+		result = &mut startup => result.map_err(|error| crate::CommandError::ExecutionError(error.to_string()))?,
+		result = tokio::signal::ctrl_c() => {
+			result.map_err(|error| crate::CommandError::ExecutionError(error.to_string()))?;
+			tokio::spawn(async move {
+				if let Ok(Ok(session)) = startup.await {
+					drop(session);
+				}
+			});
+			Err(crate::CommandError::ExecutionError("Shell startup was interrupted.".to_string()))
 		}
 	}
 }

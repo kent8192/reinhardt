@@ -86,6 +86,13 @@ pub(crate) fn model_attribute_impl(
 		})
 	}
 
+	fn relation_is_nullable(attrs: &[Attribute]) -> bool {
+		attrs.iter().any(|attr| {
+			attr.path().is_ident("rel")
+				&& matches!(&attr.meta, syn::Meta::List(meta_list) if meta_list.tokens.to_string().contains("null = true"))
+		})
+	}
+
 	// Collect existing field names to avoid duplicates
 	let existing_field_names: std::collections::HashSet<String> =
 		if let syn::Fields::Named(ref fields) = input.fields {
@@ -143,9 +150,16 @@ pub(crate) fn model_attribute_impl(
 					// Generate _id field with the target model's primary-key type.
 					// `InfoModel` is target-neutral, so generated DTO companions can
 					// compile on WASM without the native ORM surface.
-					let new_field: Field = syn::parse_quote! {
-						#[serde(default)]
-						#id_field_name: <#target_ty as #reinhardt::model_info::InfoModel>::PrimaryKey
+					let new_field: Field = if relation_is_nullable(&field.attrs) {
+						syn::parse_quote! {
+							#[serde(default)]
+							#id_field_name: ::core::option::Option<<#target_ty as #reinhardt::model_info::InfoModel>::PrimaryKey>
+						}
+					} else {
+						syn::parse_quote! {
+							#[serde(default)]
+							#id_field_name: <#target_ty as #reinhardt::model_info::InfoModel>::PrimaryKey
+						}
 					};
 
 					fk_id_fields.push(new_field);

@@ -2094,8 +2094,6 @@ pub(crate) fn model_derive_impl(mut input: DeriveInput) -> Result<TokenStream> {
 				| "u64" | "usize"
 				| "i128" | "u128"
 				| "bool" | "f64"
-				| "String" | "uuid::Uuid"
-				| "Uuid" | "chrono::DateTime<chrono::Utc>"
 		))
 	.then(|| {
 		quote! {

@@ -809,7 +809,10 @@ fn source_with_commit_sentinel(source: &str, sentinel: &str) -> String {
 	let mut found_inner_prefix = false;
 	loop {
 		let rest = &source[prefix_end..];
-		let whitespace = rest.len() - rest.trim_start_matches([' ', '\t', '\r', '\n']).len();
+		let whitespace = rest.len()
+			- rest
+				.trim_start_matches([' ', '\t', '\n', '\u{000B}', '\u{000C}', '\r'])
+				.len();
 		let candidate = &rest[whitespace..];
 		let item_end = if candidate.starts_with("#![") {
 			complete_inner_attribute(candidate)
@@ -1442,6 +1445,17 @@ mod tests {
 		assert_eq!(
 			rendered,
 			"#![\nallow(unused)\n]\n/*! shell documentation */\nlet __commit: ::std::string::String = ::std::string::String::new();\nlet value = 1;"
+		);
+	}
+
+	#[test]
+	fn commit_sentinel_follows_inner_attributes_after_ascii_control_whitespace() {
+		let rendered =
+			source_with_commit_sentinel("\u{000C}#![allow(dead_code)]\nlet value = 1;", "__commit");
+
+		assert_eq!(
+			rendered,
+			"\u{000C}#![allow(dead_code)]\nlet __commit: ::std::string::String = ::std::string::String::new();\nlet value = 1;"
 		);
 	}
 

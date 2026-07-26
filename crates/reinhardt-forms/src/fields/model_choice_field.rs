@@ -25,7 +25,7 @@ pub struct ModelChoiceField<T: FormModel> {
 	/// Optional initial (default) value for the field.
 	pub initial: Option<Value>,
 	/// The list of model instances to choose from.
-	pub queryset: Vec<T>,
+	queryset: Vec<T>,
 	/// Label for the empty/default option (e.g., "Select one...").
 	pub empty_label: Option<String>,
 	choice_label: Option<Arc<dyn Fn(&T) -> String + Send + Sync>>,
@@ -129,6 +129,17 @@ impl<T: FormModel> ModelChoiceField<T> {
 		self.choice_label = Some(Arc::new(label));
 		self.refresh_widget_choices();
 		self
+	}
+
+	/// Returns the current queryset.
+	pub fn queryset(&self) -> &[T] {
+		&self.queryset
+	}
+
+	/// Replaces the queryset and synchronizes the rendered choices.
+	pub fn set_queryset(&mut self, queryset: Vec<T>) {
+		self.queryset = queryset;
+		self.refresh_widget_choices();
 	}
 
 	fn refresh_widget_choices(&mut self) {
@@ -284,7 +295,7 @@ pub struct ModelMultipleChoiceField<T: FormModel> {
 	/// Optional initial (default) value for the field.
 	pub initial: Option<Value>,
 	/// The list of model instances to choose from.
-	pub queryset: Vec<T>,
+	queryset: Vec<T>,
 	choice_label: Option<Arc<dyn Fn(&T) -> String + Send + Sync>>,
 	_phantom: PhantomData<T>,
 }
@@ -389,6 +400,17 @@ impl<T: FormModel> ModelMultipleChoiceField<T> {
 		self.choice_label = Some(Arc::new(label));
 		self.refresh_widget_choices();
 		self
+	}
+
+	/// Returns the current queryset.
+	pub fn queryset(&self) -> &[T] {
+		&self.queryset
+	}
+
+	/// Replaces the queryset and synchronizes the rendered choices.
+	pub fn set_queryset(&mut self, queryset: Vec<T>) {
+		self.queryset = queryset;
+		self.refresh_widget_choices();
 	}
 
 	fn refresh_widget_choices(&mut self) {

@@ -175,6 +175,11 @@ pub trait OrmExecutor: Send {
 	/// Returns the backend used to generate SQL for this executor.
 	fn backend(&self) -> DatabaseBackend;
 
+	/// Whether propagating an operation failure rolls back the current work.
+	fn rolls_back_on_error(&self) -> bool {
+		false
+	}
+
 	/// Executes a SQL statement and preserves backend-specific result metadata.
 	async fn execute(&mut self, sql: &str, params: Vec<QueryValue>) -> Result<QueryResult>;
 

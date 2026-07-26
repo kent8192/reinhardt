@@ -27,7 +27,7 @@
 use std::collections::{HashMap, HashSet};
 
 use proc_macro2::TokenStream;
-use quote::quote;
+use quote::{ToTokens, quote};
 use syn::Token;
 use syn::punctuated::Punctuated;
 use syn::{Data, DeriveInput, Fields, GenericArgument, PathArguments, Result, Type, parse_quote};
@@ -2291,6 +2291,21 @@ fn generate_model_form_support(
 				}
 			}
 		});
+	let default_true_boolean_names: Vec<_> = editable_fields
+		.iter()
+		.filter(|field| {
+			field.ty.to_token_stream().to_string() == "bool"
+				&& field.config.default.as_ref().is_some_and(|default| {
+					matches!(default, syn::Expr::Lit(literal) if matches!(&literal.lit, syn::Lit::Bool(value) if value.value))
+				})
+		})
+		.map(|field| LitStr::new(&field.name.to_string(), field.name.span()))
+		.collect();
+	let default_true_boolean_body = if default_true_boolean_names.is_empty() {
+		quote!(false)
+	} else {
+		quote!(::core::matches!(field, #(#default_true_boolean_names)|*))
+	};
 	let descriptor_accessors = field_names.iter().enumerate().map(|(index, field_name)| {
 		quote! {
 			pub fn #field_name() -> &'static #core_crate::model_form::ModelFormFieldDescriptor {
@@ -2624,6 +2639,10 @@ fn generate_model_form_support(
 
 			fn fields() -> &'static [#core_crate::model_form::ModelFormFieldDescriptor] {
 				&#field_const_name
+			}
+
+			fn default_boolean_is_true(field: &str) -> bool {
+				#default_true_boolean_body
 			}
 		}
 

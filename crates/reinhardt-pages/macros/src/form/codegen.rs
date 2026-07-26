@@ -2309,6 +2309,10 @@ fn generate_model_form(
 							.attr("type", input_type)
 							.bool_attr("required", descriptor.required && !is_checkbox);
 						let stored_value = self.__model_state.borrow().value(field_name).cloned();
+						let default_true = matches!(
+							descriptor.kind,
+							#pages_crate::form::ModelFormFieldKind::Boolean
+						) && <#schema_path as #pages_crate::form::ModelFormSchema>::default_boolean_is_true(field_name);
 						let color_is_unset = input_type == "color" && stored_value.is_none();
 						if is_checkbox {
 							control = control.bool_attr(
@@ -2318,7 +2322,7 @@ fn generate_model_form(
 									::core::option::Option::Some(
 										#pages_crate::__private::serde_json::Value::Bool(true)
 									)
-								),
+								) || (stored_value.is_none() && default_true),
 							);
 						} else if input_type != "password"
 							&& let ::core::option::Option::Some(value) = stored_value
@@ -2442,7 +2446,7 @@ fn generate_model_form(
 							);
 						}
 						let checkbox_sentinel = (is_checkbox
-							&& (!descriptor.has_default || stored_value.is_some())
+							&& (!descriptor.has_default || stored_value.is_some() || default_true)
 							&& (!descriptor.nullable || stored_value.is_some()))
 							.then(|| {
 							#pages_crate::PageElement::new("input")

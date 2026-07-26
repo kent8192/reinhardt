@@ -89,6 +89,11 @@ pub trait ModelFormSchema {
 
 	/// Returns the model fields known to this form schema.
 	fn fields() -> &'static [ModelFormFieldDescriptor];
+
+	/// Returns whether an omitted boolean field defaults to `true`.
+	fn default_boolean_is_true(_field: &str) -> bool {
+		false
+	}
 }
 
 /// Supplies the target-neutral form kind for a model primary key.

@@ -729,6 +729,10 @@ impl OrmExecutor for AtomicTransaction {
 		self.backend
 	}
 
+	fn rolls_back_on_error(&self) -> bool {
+		true
+	}
+
 	async fn execute(
 		&mut self,
 		sql: &str,

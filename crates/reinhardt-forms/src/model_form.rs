@@ -320,7 +320,9 @@ where
 		if let Err(error) =
 			FormModel::save_with_mode(candidate, executor, self.persistence_mode).await
 		{
-			if matches!(error, ModelFormError::PersistenceAfterCreate { .. }) {
+			if matches!(error, ModelFormError::PersistenceAfterCreate { .. })
+				&& !executor.rolls_back_on_error()
+			{
 				self.persistence_mode = ModelFormPersistenceMode::Update;
 			}
 			return Err(error);

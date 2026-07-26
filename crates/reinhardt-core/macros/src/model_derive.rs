@@ -5590,11 +5590,16 @@ mod tests {
 		};
 
 		let output = model_derive_impl(syn::parse2(input).unwrap()).unwrap();
+		let orm_crate = get_reinhardt_orm_crate();
 
-		assert!(
-			output
-				.to_string()
-				.contains("FilterValue :: String (pk . to_string ())")
+		assert_eq!(
+			generated_primary_key_filter_value(&output),
+			quote! {
+				fn primary_key_filter_value(pk: Self::PrimaryKey) -> #orm_crate::query::FilterValue {
+					#orm_crate::query::FilterValue::String(pk.to_string())
+				}
+			}
+			.to_string()
 		);
 	}
 

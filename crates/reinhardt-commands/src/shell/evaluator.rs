@@ -765,6 +765,13 @@ fn source_with_commit_sentinel(source: &str, sentinel: &str) -> String {
 				.or(Some(candidate.len()))
 		} else if candidate.starts_with("/*!") {
 			complete_inner_block_doc(candidate)
+		} else if candidate.starts_with("//") {
+			candidate
+				.find('\n')
+				.map(|end| end + 1)
+				.or(Some(candidate.len()))
+		} else if candidate.starts_with("/*") {
+			complete_inner_block_doc(&format!("/*!{}", &candidate[2..]))
 		} else {
 			None
 		};
@@ -891,20 +898,20 @@ fn complete_inner_attribute(source: &str) -> Option<usize> {
 			continue;
 		}
 		if bytes[index] == b'\'' {
-			index += 1;
-			let mut escaped = false;
-			while index < bytes.len() {
-				if !escaped && bytes[index] == b'\'' {
-					index += 1;
-					break;
-				}
-				escaped = !escaped && bytes[index] == b'\\';
-				if bytes[index] != b'\\' {
-					escaped = false;
-				}
-				index += 1;
+			let character_end = if bytes.get(index + 1) == Some(&b'\\') {
+				bytes[index + 2..]
+					.iter()
+					.position(|byte| *byte == b'\'')
+					.map(|offset| index + offset + 3)
+			} else if bytes.get(index + 2) == Some(&b'\'') {
+				Some(index + 3)
+			} else {
+				None
+			};
+			if let Some(end) = character_end {
+				index = end;
+				continue;
 			}
-			continue;
 		}
 
 		match bytes[index] {

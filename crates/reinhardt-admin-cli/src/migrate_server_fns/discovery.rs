@@ -387,10 +387,9 @@ fn is_reinhardt_attribute(
 	};
 	if segments.len() == 1 {
 		if expected == "app_config" {
-			return last.ident == expected
-				|| aliases
-					.get(&last.ident.to_string())
-					.is_some_and(|resolved| resolved == expected);
+			return aliases
+				.get(&last.ident.to_string())
+				.map_or(last.ident == expected, |resolved| resolved == expected);
 		}
 		return aliases
 			.get(&last.ident.to_string())

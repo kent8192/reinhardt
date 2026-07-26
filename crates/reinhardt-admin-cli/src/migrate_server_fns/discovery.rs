@@ -43,7 +43,14 @@ pub(crate) struct ProjectIndex {
 impl ProjectIndex {
 	pub(crate) fn discover(path: &Path) -> Result<Self> {
 		let metadata = MetadataCommand::new().no_deps().current_dir(path).exec()?;
-		let workspace_root = metadata.workspace_root.as_std_path().to_path_buf();
+		let workspace_root = metadata
+			.workspace_root
+			.as_std_path()
+			.canonicalize()
+			.map_err(|source| MigrateServerFnsError::Io {
+				path: metadata.workspace_root.as_std_path().to_path_buf(),
+				source,
+			})?;
 		let workspace_members: BTreeSet<&PackageId> = metadata.workspace_members.iter().collect();
 		let mut scanner = Scanner {
 			workspace_root,
@@ -413,6 +420,10 @@ fn reinhardt_attribute_aliases(
 		let Item::Use(item_use) = item else {
 			continue;
 		};
+		if is_conditionally_compiled(&item_use.attrs) {
+			collect_conditional_attribute_aliases(&item_use.tree, &mut aliases);
+			continue;
+		}
 		collect_reinhardt_attribute_aliases(&item_use.tree, &mut Vec::new(), &mut aliases);
 		collect_inherited_attribute_aliases(
 			&item_use.tree,
@@ -422,6 +433,32 @@ fn reinhardt_attribute_aliases(
 		);
 	}
 	aliases
+}
+
+fn collect_conditional_attribute_aliases(tree: &UseTree, aliases: &mut BTreeMap<String, String>) {
+	match tree {
+		UseTree::Path(path) => collect_conditional_attribute_aliases(&path.tree, aliases),
+		UseTree::Name(name) => {
+			if name.ident != "self" {
+				aliases.insert(
+					name.ident.to_string(),
+					"__reinhardt_unknown_attribute__".to_owned(),
+				);
+			}
+		}
+		UseTree::Rename(rename) => {
+			aliases.insert(
+				rename.rename.to_string(),
+				"__reinhardt_unknown_attribute__".to_owned(),
+			);
+		}
+		UseTree::Group(group) => {
+			for item in &group.items {
+				collect_conditional_attribute_aliases(item, aliases);
+			}
+		}
+		UseTree::Glob(_) => {}
+	}
 }
 
 fn collect_inherited_attribute_aliases(

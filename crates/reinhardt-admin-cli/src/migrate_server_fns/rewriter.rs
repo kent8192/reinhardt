@@ -491,6 +491,9 @@ fn analyze_chain(
 	if !server_methods.is_empty() && !imports.has_reinhardt_server_fn_router_ext() {
 		return ChainOutcome::Mixed(span_line(server_methods[0].method.span()));
 	}
+	if !server_methods.is_empty() && !starts_from_known_router(methods) {
+		return ChainOutcome::Mixed(span_line(server_methods[0].method.span()));
+	}
 	let mut resolved_markers = Vec::with_capacity(server_methods.len());
 	for method in &server_methods {
 		let Some(argument) = single_marker_argument(method) else {
@@ -558,6 +561,22 @@ fn analyze_chain(
 		));
 	}
 	ChainOutcome::Safe { bindings, edits }
+}
+
+fn starts_from_known_router(methods: &[&ExprMethodCall]) -> bool {
+	let Expr::Call(call) = methods[0].receiver.as_ref() else {
+		return false;
+	};
+	let Expr::Path(path) = call.func.as_ref() else {
+		return false;
+	};
+	let segments = path.path.segments.iter().collect::<Vec<_>>();
+	segments
+		.last()
+		.is_some_and(|segment| segment.ident == "router")
+		|| segments
+			.iter()
+			.any(|segment| segment.ident == "ServerRouter")
 }
 
 fn single_marker_argument(method: &ExprMethodCall) -> Option<&ExprPath> {

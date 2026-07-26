@@ -2309,21 +2309,26 @@ fn generate_model_form_support(
 				}
 			}
 		});
-	let default_true_boolean_names: Vec<_> = editable_fields
+	let default_true_boolean_arms: Vec<_> = editable_fields
 		.iter()
 		.filter(|field| {
 			let (_, value_type) = extract_option_type(&field.ty);
-			value_type.to_token_stream().to_string() == "bool"
-				&& field.config.default.as_ref().is_some_and(|default| {
-					matches!(default, syn::Expr::Lit(literal) if matches!(&literal.lit, syn::Lit::Bool(value) if value.value))
-				})
+			value_type.to_token_stream().to_string() == "bool" && field.config.default.is_some()
 		})
-		.map(|field| LitStr::new(&field.name.to_string(), field.name.span()))
+		.map(|field| {
+			let name = LitStr::new(&field.name.to_string(), field.name.span());
+			let default = field
+				.config
+				.default
+				.as_ref()
+				.expect("boolean default fields always have a default expression");
+			quote!(#name => #default)
+		})
 		.collect();
-	let default_true_boolean_body = if default_true_boolean_names.is_empty() {
+	let default_true_boolean_body = if default_true_boolean_arms.is_empty() {
 		quote!(false)
 	} else {
-		quote!(::core::matches!(field, #(#default_true_boolean_names)|*))
+		quote!(match field { #(#default_true_boolean_arms,)* _ => false })
 	};
 	let descriptor_accessors = field_names.iter().enumerate().map(|(index, field_name)| {
 		quote! {

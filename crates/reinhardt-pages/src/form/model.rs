@@ -190,6 +190,9 @@ fn convert_control_value(
 			if text.is_empty() && !descriptor.required {
 				return Ok(serde_json::Value::String(text));
 			}
+			if text.is_empty() {
+				return Err(invalid_value(descriptor.name, "must not be empty"));
+			}
 			if let Some(min_length) = min_length
 				&& text.chars().count() < min_length
 			{
@@ -437,8 +440,11 @@ fn is_email(value: &str) -> bool {
 }
 
 fn is_url(value: &str) -> bool {
-	url::Url::parse(value)
-		.is_ok_and(|url| matches!(url.scheme(), "http" | "https") && url.host_str().is_some())
+	static URL_REGEX: LazyLock<Regex> = LazyLock::new(|| {
+		Regex::new(r"^https?://(?:(?:[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?\.)+[a-zA-Z]{2,}|localhost|\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})(?::\d+)?(?:/[^\s]*)?$")
+			.expect("native URL validation pattern is valid")
+	});
+	URL_REGEX.is_match(value)
 }
 
 fn is_date(value: &str) -> bool {

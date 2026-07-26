@@ -119,8 +119,14 @@ pub enum TransactionState {
 }
 
 /// Observable terminal state for a closure-scoped atomic transaction.
+#[derive(Debug)]
+struct AtomicTransactionOutcomeInner {
+	state: AtomicU8,
+	parent: Option<Arc<AtomicTransactionOutcomeInner>>,
+}
+
 #[derive(Debug, Clone)]
-pub struct AtomicTransactionOutcome(Arc<AtomicU8>);
+pub struct AtomicTransactionOutcome(Arc<AtomicTransactionOutcomeInner>);
 
 impl AtomicTransactionOutcome {
 	const PENDING: u8 = 0;
@@ -129,37 +135,61 @@ impl AtomicTransactionOutcome {
 	const UNKNOWN: u8 = 3;
 
 	fn pending() -> Self {
-		Self(Arc::new(AtomicU8::new(Self::PENDING)))
+		Self(Arc::new(AtomicTransactionOutcomeInner {
+			state: AtomicU8::new(Self::PENDING),
+			parent: None,
+		}))
+	}
+
+	fn pending_with_parent(parent: &Self) -> Self {
+		Self(Arc::new(AtomicTransactionOutcomeInner {
+			state: AtomicU8::new(Self::PENDING),
+			parent: Some(parent.0.clone()),
+		}))
 	}
 
 	fn set_committed(&self) {
-		self.0.store(Self::COMMITTED, Ordering::Release);
+		self.0.state.store(Self::COMMITTED, Ordering::Release);
 	}
 
 	fn set_rolled_back(&self) {
-		self.0.store(Self::ROLLED_BACK, Ordering::Release);
+		self.0.state.store(Self::ROLLED_BACK, Ordering::Release);
 	}
 
 	fn set_unknown(&self) {
-		self.0.store(Self::UNKNOWN, Ordering::Release);
+		self.0.state.store(Self::UNKNOWN, Ordering::Release);
 	}
 
 	/// Returns whether the transaction has committed.
 	pub fn is_committed(&self) -> bool {
-		self.0.load(Ordering::Acquire) == Self::COMMITTED
+		self.0.state.load(Ordering::Acquire) == Self::COMMITTED
+			&& self
+				.0
+				.parent
+				.as_ref()
+				.is_none_or(|parent| AtomicTransactionOutcome(parent.clone()).is_committed())
 	}
 
 	/// Returns whether the transaction has rolled back.
 	pub fn is_rolled_back(&self) -> bool {
-		self.0.load(Ordering::Acquire) == Self::ROLLED_BACK
+		self.0.state.load(Ordering::Acquire) == Self::ROLLED_BACK
+			|| self
+				.0
+				.parent
+				.as_ref()
+				.is_some_and(|parent| AtomicTransactionOutcome(parent.clone()).is_rolled_back())
 	}
 
 	/// Returns whether the transaction outcome is not safely known yet.
 	pub fn is_pending_or_unknown(&self) -> bool {
 		matches!(
-			self.0.load(Ordering::Acquire),
+			self.0.state.load(Ordering::Acquire),
 			Self::PENDING | Self::UNKNOWN
-		)
+		) || self
+			.0
+			.parent
+			.as_ref()
+			.is_some_and(|parent| AtomicTransactionOutcome(parent.clone()).is_pending_or_unknown())
 	}
 }
 
@@ -734,7 +764,7 @@ impl AtomicTransaction {
 			.savepoint(&savepoint_name)
 			.await
 			.map_err(E::from)?;
-		let outcome = AtomicTransactionOutcome::pending();
+		let outcome = AtomicTransactionOutcome::pending_with_parent(&self.outcome());
 		self.savepoint_outcomes.push(outcome.clone());
 
 		let result = match std::panic::AssertUnwindSafe(f(self)).catch_unwind().await {

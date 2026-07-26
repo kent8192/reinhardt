@@ -153,6 +153,7 @@ where
 	supplied_fields: Vec<&'static str>,
 	instance: Option<T>,
 	validated_candidate: Option<T>,
+	trusted_field_values: HashMap<String, Value>,
 	persistence_mode: ModelFormPersistenceMode,
 	pending_transaction_save: Option<PendingTransactionSave<T>>,
 	model_validator: Option<Box<ModelValidator<T>>>,
@@ -199,6 +200,7 @@ where
 			supplied_fields,
 			instance,
 			validated_candidate: None,
+			trusted_field_values: HashMap::new(),
 			persistence_mode,
 			pending_transaction_save: None,
 			model_validator: None,
@@ -276,9 +278,17 @@ where
 		self.clean_payload()?;
 		let mut candidate = match &self.instance {
 			Some(instance) => instance.clone(),
-			None => T::build_from_payload(&self.data)?,
+			None => match self.trusted_field_values.keys().next() {
+				Some(field) => {
+					T::build_from_payload_with_deferred_required_field(&self.data, field)?
+				}
+				None => T::build_from_payload(&self.data)?,
+			},
 		};
 		candidate.apply_payload(&self.data)?;
+		for (field, value) in &self.trusted_field_values {
+			T::set_trusted_field_json(&mut candidate, field, value.clone())?;
+		}
 
 		if let Some(validator) = &self.model_validator {
 			validator(&candidate).map_err(|errors| ModelFormError::ModelValidation { errors })?;
@@ -456,18 +466,10 @@ where
 		{
 			return self.set_field_value(field_name, value);
 		}
-		if self.validated_candidate.is_none() {
-			self.validated_candidate = Some(T::build_from_payload_with_deferred_required_field(
-				&self.data, field_name,
-			)?);
-		}
-		T::set_trusted_field_json(
-			self.validated_candidate
-				.as_mut()
-				.expect("build_instance initializes the trusted candidate"),
-			field_name,
-			value,
-		)
+		self.trusted_field_values
+			.insert(field_name.to_owned(), value);
+		self.validated_candidate = None;
+		Ok(())
 	}
 
 	/// Returns a reference to the underlying form.

@@ -1120,7 +1120,9 @@ impl<M: Model> Manager<M> {
 				.filter(|value| {
 					!matches!(
 						value,
-						DatabaseValue::Null | DatabaseValue::I32(0) | DatabaseValue::I64(0)
+						DatabaseValue::Null
+							| DatabaseValue::I32(0)
+							| DatabaseValue::I64(0) if M::primary_key_uses_zero_sentinel()
 					)
 				})
 				.cloned();
@@ -1283,10 +1285,9 @@ impl<M: Model> Manager<M> {
 			let explicit_primary_key = obj
 				.get(M::primary_key_field())
 				.filter(|value| {
-					!matches!(
-						value,
-						DatabaseValue::Null | DatabaseValue::I32(0) | DatabaseValue::I64(0)
-					)
+					!matches!(value, DatabaseValue::Null)
+						&& (!matches!(value, DatabaseValue::I32(0) | DatabaseValue::I64(0))
+							|| !M::primary_key_uses_zero_sentinel())
 				})
 				.cloned();
 			let result = match conn.execute(&sql, params).await {
@@ -1357,7 +1358,12 @@ impl<M: Model> Manager<M> {
 		let row = match conn.fetch_one(&sql, params).await {
 			Ok(row) => row,
 			Err(error) => {
-				return super::custom_manager::CreateWithConnOutcome::FailedAfterInsert(error);
+				return match error.database_error().map(DatabaseError::kind) {
+					Some(DatabaseErrorKind::Connection | DatabaseErrorKind::Timeout) => {
+						super::custom_manager::CreateWithConnOutcome::FailedAfterInsert(error)
+					}
+					_ => super::custom_manager::CreateWithConnOutcome::FailedBeforeInsert(error),
+				};
 			}
 		};
 		match QueryRow::from_backend_row(row)

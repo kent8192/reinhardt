@@ -228,17 +228,7 @@ impl<M: Model> Manager<M> {
 	/// Returns a QuerySet filtered by the primary key field
 	pub fn get(&self, pk: M::PrimaryKey) -> QuerySet<M> {
 		let pk_field = M::primary_key_field();
-		let pk_str = pk.to_string();
-
-		// Preserve typed bindings for common primary keys so PostgreSQL does not
-		// compare UUID columns to text parameters.
-		let pk_value = if let Ok(int_value) = pk_str.parse::<i64>() {
-			super::query::FilterValue::Integer(int_value)
-		} else if let Ok(uuid) = Uuid::parse_str(&pk_str) {
-			super::query::FilterValue::Uuid(uuid)
-		} else {
-			super::query::FilterValue::String(pk_str)
-		};
+		let pk_value = pk.into();
 
 		let filter = super::query::Filter::new(
 			pk_field.to_string(),

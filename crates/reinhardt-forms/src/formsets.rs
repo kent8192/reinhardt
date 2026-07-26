@@ -231,7 +231,7 @@ impl<P: FormModel, C: FormModel> InlineFormSet<P, C> {
 			.iter()
 			.find(|descriptor| descriptor.name == self.fk_field)
 			.map(|descriptor| descriptor.kind)
-			.or_else(|| C::trusted_field_kind(&self.fk_field));
+			.or_else(|| C::trusted_relation_field_kind(&self.fk_field));
 		let Some(child) = child else {
 			return Err(ModelFormError::FieldValidation {
 				errors: std::collections::HashMap::from([(

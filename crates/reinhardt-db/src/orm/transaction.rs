@@ -50,7 +50,7 @@
 
 use futures::FutureExt;
 use reinhardt_core::exception::{DatabaseError, DatabaseErrorKind};
-use std::sync::atomic::{AtomicU8, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 use std::sync::{Arc, Mutex};
 
 use super::connection::{
@@ -127,6 +127,32 @@ struct AtomicTransactionOutcomeInner {
 
 #[derive(Debug, Clone)]
 pub struct AtomicTransactionOutcome(Arc<AtomicTransactionOutcomeInner>);
+
+struct NestedAtomicCancellationGuard {
+	poisoned: Arc<AtomicBool>,
+	armed: bool,
+}
+
+impl NestedAtomicCancellationGuard {
+	fn new(poisoned: Arc<AtomicBool>) -> Self {
+		Self {
+			poisoned,
+			armed: true,
+		}
+	}
+
+	fn disarm(&mut self) {
+		self.armed = false;
+	}
+}
+
+impl Drop for NestedAtomicCancellationGuard {
+	fn drop(&mut self) {
+		if self.armed {
+			self.poisoned.store(true, Ordering::Release);
+		}
+	}
+}
 
 impl AtomicTransactionOutcome {
 	const PENDING: u8 = 0;
@@ -624,6 +650,7 @@ pub struct AtomicTransaction {
 	savepoint_sequence: u64,
 	outcome: AtomicTransactionOutcome,
 	savepoint_outcomes: Vec<AtomicTransactionOutcome>,
+	poisoned: Arc<AtomicBool>,
 }
 
 impl AtomicTransaction {
@@ -635,6 +662,7 @@ impl AtomicTransaction {
 			savepoint_sequence: 0,
 			outcome: AtomicTransactionOutcome::pending(),
 			savepoint_outcomes: Vec::new(),
+			poisoned: Arc::new(AtomicBool::new(false)),
 		}
 	}
 
@@ -652,6 +680,13 @@ impl AtomicTransaction {
 	fn executor_mut<'transaction>(
 		&'transaction mut self,
 	) -> reinhardt_core::exception::Result<&'transaction mut (dyn TransactionExecutor + 'static)> {
+		if self.poisoned.load(Ordering::Acquire) {
+			return Err(DatabaseError::new(
+				DatabaseErrorKind::Transaction,
+				"Nested atomic operation was cancelled",
+			)
+			.into());
+		}
 		self.executor
 			.as_deref_mut()
 			.ok_or_else(transaction_consumed_error)
@@ -709,6 +744,22 @@ impl AtomicTransaction {
 			) -> std::result::Result<T, E>,
 		E: std::error::Error + From<reinhardt_core::exception::Error>,
 	{
+		if self.poisoned.load(Ordering::Acquire) {
+			let cancellation_error = DatabaseError::new(
+				DatabaseErrorKind::Transaction,
+				"Nested atomic operation was cancelled",
+			);
+			return match self.rollback().await {
+				Ok(()) => {
+					self.outcome.set_rolled_back();
+					Err(E::from(cancellation_error.into()))
+				}
+				Err(error) => {
+					self.outcome.set_unknown();
+					Err(E::from(error))
+				}
+			};
+		}
 		match std::panic::AssertUnwindSafe(f(&mut self))
 			.catch_unwind()
 			.await
@@ -766,8 +817,11 @@ impl AtomicTransaction {
 			.map_err(E::from)?;
 		let outcome = AtomicTransactionOutcome::pending_with_parent(&self.outcome());
 		self.savepoint_outcomes.push(outcome.clone());
+		let mut cancellation_guard = NestedAtomicCancellationGuard::new(self.poisoned.clone());
 
-		let result = match std::panic::AssertUnwindSafe(f(self)).catch_unwind().await {
+		let callback_result = std::panic::AssertUnwindSafe(f(self)).catch_unwind().await;
+		cancellation_guard.disarm();
+		let result = match callback_result {
 			Ok(Ok(value)) => {
 				let release_result = match self.executor_mut() {
 					Ok(executor) => executor.release_savepoint(&savepoint_name).await,

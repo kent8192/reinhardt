@@ -410,9 +410,38 @@ fn convert_control_value(
 		}
 		ModelFormFieldKind::Json => match value {
 			serde_json::Value::String(text) => serde_json::from_str(&text)
-				.map_err(|error| invalid_value(descriptor.name, format!("invalid JSON: {error}"))),
-			value => Ok(value),
+				.map_err(|error| invalid_value(descriptor.name, format!("invalid JSON: {error}")))
+				.and_then(|value| validate_json_depth(descriptor.name, value)),
+			value => validate_json_depth(descriptor.name, value),
 		},
+	}
+}
+
+fn validate_json_depth(
+	field: &str,
+	value: serde_json::Value,
+) -> Result<serde_json::Value, ModelFormPayloadError> {
+	fn within_limit(value: &serde_json::Value, depth: usize) -> bool {
+		if depth > 64 {
+			return false;
+		}
+		match value {
+			serde_json::Value::Array(values) => {
+				values.iter().all(|value| within_limit(value, depth + 1))
+			}
+			serde_json::Value::Object(values) => {
+				values.values().all(|value| within_limit(value, depth + 1))
+			}
+			_ => true,
+		}
+	}
+	if within_limit(&value, 0) {
+		Ok(value)
+	} else {
+		Err(invalid_value(
+			field,
+			"JSON exceeds maximum nesting depth of 64",
+		))
 	}
 }
 

@@ -2299,18 +2299,23 @@ fn generate_model_form(
 								#pages_crate::form::ModelFormFieldKind::Integer { min, max } => {
 									let min = min.unwrap_or(0);
 									let max = max.unwrap_or(100);
-									let span = max - min;
-									::core::option::Option::Some((min + span / 2 + span.rem_euclid(2)).to_string())
+									let default = if max < min {
+										min
+									} else {
+										let span = max - min;
+										min + span / 2 + span.rem_euclid(2)
+									};
+									::core::option::Option::Some(default.to_string())
 								}
 								#pages_crate::form::ModelFormFieldKind::Float { min, max } => {
 									let min = min.unwrap_or(0.0);
 									let max = max.unwrap_or(100.0);
-									::core::option::Option::Some((min + (max - min) / 2.0).to_string())
+									::core::option::Option::Some(if max < min { min } else { min + (max - min) / 2.0 }.to_string())
 								}
 								#pages_crate::form::ModelFormFieldKind::Decimal { min, max } => {
 									let min = min.unwrap_or("0").parse::<f64>().unwrap_or(0.0);
 									let max = max.unwrap_or("100").parse::<f64>().unwrap_or(100.0);
-									::core::option::Option::Some((min + (max - min) / 2.0).to_string())
+									::core::option::Option::Some(if max < min { min } else { min + (max - min) / 2.0 }.to_string())
 								}
 								_ => ::core::option::Option::None,
 							}

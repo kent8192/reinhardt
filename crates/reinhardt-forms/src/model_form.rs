@@ -72,8 +72,8 @@ pub trait FormModel: Model + Clone + Send + Sync {
 		})
 	}
 
-	/// Returns the input kind accepted by a server-trusted field.
-	fn trusted_field_kind(_field: &str) -> Option<ModelFormFieldKind> {
+	/// Returns the input kind accepted by a server-trusted relationship field.
+	fn trusted_relation_field_kind(_field: &str) -> Option<ModelFormFieldKind> {
 		None
 	}
 
@@ -445,7 +445,7 @@ where
 				},
 			}
 		})?;
-		let mut bound_values = self.form.cleaned_data().clone();
+		let mut bound_values = self.form.bound_data().clone();
 		if self
 			.form
 			.fields()

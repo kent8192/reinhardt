@@ -2262,12 +2262,11 @@ fn generate_model_form_support(
 	let field_types: Vec<_> = editable_fields.iter().map(|field| &field.ty).collect();
 	let trusted_field_kinds: Vec<_> = field_infos
 		.iter()
+		.filter(|field| field.is_fk_id_field)
 		.map(|field| {
 			let name = LitStr::new(&field.name.to_string(), field.name.span());
 			let kind = if field.is_fk_id_field {
 				model_form_relation_id_kind(field, field_infos)
-			} else if is_relationship_field_type(&field.ty) {
-				return Ok(quote!(#name => ::core::option::Option::None));
 			} else {
 				model_form_kind(field)
 			}?;
@@ -2858,7 +2857,7 @@ fn generate_model_form_support(
 				}
 			}
 
-			fn trusted_field_kind(
+			fn trusted_relation_field_kind(
 				field: &str,
 			) -> ::core::option::Option<#core_crate::model_form::ModelFormFieldKind> {
 				match field {

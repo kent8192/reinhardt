@@ -1715,6 +1715,14 @@ mod tests {
 	}
 
 	#[test]
+	fn test_get_preserves_numeric_fallback_primary_key_binding() {
+		let query = TestUser::objects().get(42);
+
+		assert_eq!(query.filters().len(), 1);
+		assert!(matches!(query.filters()[0].value, FilterValue::Integer(42)));
+	}
+
+	#[test]
 	fn test_get_or_create_sql() {
 		let manager = TestUser::objects();
 		let mut lookup = HashMap::new();

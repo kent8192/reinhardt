@@ -174,7 +174,9 @@
 //! `Vector<N>` accepts dimensions from 1 through 2000, requires exactly `N`
 //! finite `f32` values, and represents only pgvector's dense `vector(N)` type.
 //! `halfvec`, `bit`, `sparsevec`, binary quantization, and session tuning APIs
-//! are outside this feature.
+//! are outside this feature. An all-zero vector passes Reinhardt's finite-value
+//! validation, but PostgreSQL pgvector does not index zero vectors for cosine
+//! distance.
 //!
 //! Vector columns, values, distance expressions, and approximate indexes are
 //! PostgreSQL-only. Checked construction for MySQL and SQLite returns structured

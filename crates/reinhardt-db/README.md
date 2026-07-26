@@ -302,7 +302,7 @@ struct Document {
 
 fn main() -> Result<(), VectorError> {
     let extension = CreateExtension::new("vector");
-    let target = Vector::<1536>::try_from(vec![0.0; 1536])?;
+    let target = Vector::<1536>::try_from(vec![1.0; 1536])?;
     let fields = Document::new_fields();
     let nearest = QuerySet::<Document>::new()
         .filter(
@@ -351,7 +351,8 @@ The typed distance methods map directly to PostgreSQL:
 deserialization, pgvector conversion, and database decoding require exactly
 `N` finite `f32` elements. This feature supports only dense `vector(N)`;
 `halfvec`, `bit`, `sparsevec`, binary quantization, and session tuning APIs are
-not included.
+not included. An all-zero vector passes Reinhardt's finite-value validation,
+but PostgreSQL pgvector does not index zero vectors for cosine distance.
 
 Vector columns, values, distance expressions, and approximate indexes are
 PostgreSQL-only. Checked construction for MySQL and SQLite returns structured

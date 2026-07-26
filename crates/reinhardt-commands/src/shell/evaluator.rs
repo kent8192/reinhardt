@@ -1,4 +1,3 @@
-use std::path::Path;
 use std::process::{Child, Command};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Condvar, Mutex, mpsc};
@@ -91,7 +90,7 @@ impl EvcxrEvaluator {
 
 	fn bootstrap_with_context(
 		config: &ValidatedShellConfig,
-		mut eval: EvalContext,
+		eval: EvalContext,
 		outputs: EvalContextOutputs,
 	) -> Result<(Self, Vec<String>), EvaluationFailure> {
 		Self::bootstrap_with_context_and_process_group(config, eval, outputs, false)

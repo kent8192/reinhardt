@@ -91,6 +91,9 @@ pub(crate) fn validate_create_index_for_backend(
 	statement: &CreateIndexStatement,
 	backend: &'static str,
 ) -> Result<(), QueryBuildError> {
+	if let Some(table) = &statement.table {
+		validate_table_ref(table, backend)?;
+	}
 	if let Some(condition) = &statement.r#where {
 		validate_simple_expr(condition, backend)?;
 	}
@@ -101,6 +104,9 @@ pub(crate) fn validate_insert_for_backend(
 	statement: &InsertStatement,
 	backend: &'static str,
 ) -> Result<(), QueryBuildError> {
+	if let Some(table) = &statement.table {
+		validate_table_ref(table, backend)?;
+	}
 	match &statement.source {
 		InsertSource::Values(rows) => {
 			for row in rows {
@@ -123,6 +129,9 @@ pub(crate) fn validate_update_for_backend(
 	statement: &UpdateStatement,
 	backend: &'static str,
 ) -> Result<(), QueryBuildError> {
+	if let Some(table) = &statement.table {
+		validate_table_ref(table, backend)?;
+	}
 	for (_, expression) in &statement.values {
 		validate_simple_expr(expression, backend)?;
 	}
@@ -139,6 +148,9 @@ pub(crate) fn validate_delete_for_backend(
 	statement: &DeleteStatement,
 	backend: &'static str,
 ) -> Result<(), QueryBuildError> {
+	if let Some(table) = &statement.table {
+		validate_table_ref(table, backend)?;
+	}
 	validate_condition_holder(&statement.r#where, backend)?;
 	if let Some(expressions) = &statement.returning_exprs {
 		for expression in expressions {

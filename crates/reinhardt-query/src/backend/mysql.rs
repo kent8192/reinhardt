@@ -3524,9 +3524,37 @@ mod tests {
 		QueryBuildError, Value,
 		expr::{Expr, ExprTrait},
 		query::Query,
-		types::{Alias, BinOper, IntoIden, PgBinOper},
+		types::{Alias, BinOper, IntoIden, PgBinOper, TableRef, WindowStatement},
+		value::ArrayType,
 	};
 	use rstest::rstest;
+
+	fn vector_value() -> Value {
+		Value::Vector(Some(Box::new(vec![1.0, 2.0, 3.0])))
+	}
+
+	fn vector_subquery_table() -> TableRef {
+		let mut vector_select = Query::select();
+		vector_select
+			.expr(crate::expr::SimpleExpr::Value(vector_value()))
+			.from("vector_source");
+		TableRef::SubQuery(
+			Box::new(vector_select),
+			Alias::new("vector_source").into_iden(),
+		)
+	}
+
+	fn assert_mysql_vector_value_rejection(
+		result: Result<(String, crate::value::Values), QueryBuildError>,
+	) {
+		assert_eq!(
+			result,
+			Err(QueryBuildError::UnsupportedBackendFeature {
+				feature: "pgvector values",
+				backend: "MySQL",
+			})
+		);
+	}
 
 	#[test]
 	fn test_escape_identifier() {
@@ -8008,19 +8036,98 @@ mod tests {
 	fn checked_build_rejects_pgvector_values() {
 		let mut statement = Query::select();
 		statement
-			.expr(crate::expr::SimpleExpr::Value(Value::Vector(Some(
-				Box::new(vec![1.0, 2.0, 3.0]),
-			))))
+			.expr(crate::expr::SimpleExpr::Value(vector_value()))
 			.from("documents");
 
-		let result = MySqlQueryBuilder::new().build_select_checked(&statement);
+		assert_mysql_vector_value_rejection(
+			MySqlQueryBuilder::new().build_select_checked(&statement),
+		);
+	}
 
-		assert_eq!(
-			result,
-			Err(QueryBuildError::UnsupportedBackendFeature {
-				feature: "pgvector values",
-				backend: "MySQL",
-			})
+	#[test]
+	fn checked_dml_builds_reject_vector_subquery_tables() {
+		let mut insert = Query::insert();
+		insert
+			.into_table(vector_subquery_table())
+			.column("embedding")
+			.values_panic([1_i32]);
+		let mut update = Query::update();
+		update
+			.table(vector_subquery_table())
+			.value("embedding", 1_i32);
+		let mut delete = Query::delete();
+		delete.from_table(vector_subquery_table());
+
+		let builder = MySqlQueryBuilder::new();
+		let results = [
+			builder.build_insert_checked(&insert),
+			builder.build_update_checked(&update),
+			builder.build_delete_checked(&delete),
+		];
+
+		for result in results {
+			assert_mysql_vector_value_rejection(result);
+		}
+	}
+
+	#[test]
+	fn checked_create_index_rejects_vector_subquery_table() {
+		let mut statement = Query::create_index();
+		statement
+			.name("idx_embedding")
+			.table(vector_subquery_table())
+			.col("embedding");
+
+		assert_mysql_vector_value_rejection(
+			MySqlQueryBuilder::new().build_create_index_checked(&statement),
+		);
+	}
+
+	#[test]
+	fn checked_select_rejects_vector_values_in_ctes() {
+		let mut cte = Query::select();
+		cte.expr(crate::expr::SimpleExpr::Value(vector_value()))
+			.from("vector_source");
+		let mut statement = Query::select();
+		statement
+			.with_cte("vectors", cte)
+			.column("id")
+			.from("documents");
+
+		assert_mysql_vector_value_rejection(
+			MySqlQueryBuilder::new().build_select_checked(&statement),
+		);
+	}
+
+	#[test]
+	fn checked_select_rejects_vector_values_in_windows() {
+		let window = WindowStatement {
+			partition_by: vec![crate::expr::SimpleExpr::Value(vector_value())],
+			order_by: Vec::new(),
+			frame: None,
+		};
+		let mut statement = Query::select();
+		statement
+			.column("id")
+			.from("documents")
+			.window_as("vector_window", window);
+
+		assert_mysql_vector_value_rejection(
+			MySqlQueryBuilder::new().build_select_checked(&statement),
+		);
+	}
+
+	#[test]
+	fn checked_select_rejects_vector_values_nested_in_arrays() {
+		let nested_vector_array =
+			Value::Array(ArrayType::Float, Some(Box::new(vec![vector_value()])));
+		let mut statement = Query::select();
+		statement
+			.expr(crate::expr::SimpleExpr::Value(nested_vector_array))
+			.from("documents");
+
+		assert_mysql_vector_value_rejection(
+			MySqlQueryBuilder::new().build_select_checked(&statement),
 		);
 	}
 }

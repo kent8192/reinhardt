@@ -2125,12 +2125,39 @@ impl crate::query::QueryBuilderTrait for SqliteQueryBuilder {
 mod tests {
 	use super::*;
 	use crate::{
-		QueryBuildError,
+		QueryBuildError, Value,
 		expr::{Expr, ExprTrait},
 		query::Query,
-		types::{Alias, ColumnDef, IntoIden},
+		types::{Alias, ColumnDef, IntoIden, SchemaExpr, TableRef},
 	};
 	use rstest::rstest;
+
+	fn vector_value() -> Value {
+		Value::Vector(Some(Box::new(vec![1.0, 2.0, 3.0])))
+	}
+
+	fn vector_subquery_table() -> TableRef {
+		let mut vector_select = Query::select();
+		vector_select
+			.expr(crate::expr::SimpleExpr::Value(vector_value()))
+			.from("vector_source");
+		TableRef::SubQuery(
+			Box::new(vector_select),
+			Alias::new("vector_source").into_iden(),
+		)
+	}
+
+	fn assert_sqlite_vector_value_rejection(
+		result: Result<(String, crate::value::Values), QueryBuildError>,
+	) {
+		assert_eq!(
+			result,
+			Err(QueryBuildError::UnsupportedBackendFeature {
+				feature: "pgvector values",
+				backend: "SQLite",
+			})
+		);
+	}
 
 	#[test]
 	fn test_escape_identifier() {
@@ -5666,6 +5693,46 @@ mod tests {
 				feature: "pgvector column types",
 				backend: "SQLite",
 			})
+		);
+	}
+
+	#[test]
+	fn checked_dml_builds_reject_vector_subquery_tables() {
+		let mut insert = Query::insert();
+		insert
+			.into_table(vector_subquery_table())
+			.column("embedding")
+			.values_panic([1_i32]);
+		let mut update = Query::update();
+		update
+			.table(vector_subquery_table())
+			.value("embedding", 1_i32);
+		let mut delete = Query::delete();
+		delete.from_table(vector_subquery_table());
+
+		let builder = SqliteQueryBuilder::new();
+		let results = [
+			builder.build_insert_checked(&insert),
+			builder.build_update_checked(&update),
+			builder.build_delete_checked(&delete),
+		];
+
+		for result in results {
+			assert_sqlite_vector_value_rejection(result);
+		}
+	}
+
+	#[test]
+	fn checked_alter_table_rejects_vector_generated_expressions() {
+		let mut statement = Query::alter_table();
+		statement.table("documents").add_column(
+			ColumnDef::new("embedding_copy")
+				.integer()
+				.generated_stored(SchemaExpr::val(vector_value())),
+		);
+
+		assert_sqlite_vector_value_rejection(
+			SqliteQueryBuilder::new().build_alter_table_checked(&statement),
 		);
 	}
 }

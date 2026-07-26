@@ -1000,9 +1000,12 @@ pub(crate) fn apply_text_edits(source: &str, edits: &[TextEdit]) -> Option<Strin
 				}
 			}
 			TextEditKind::WholeLine => {
-				start = line_start_byte(source, start);
-				if source.as_bytes().get(end) == Some(&b'\n') {
-					end += 1;
+				let line_start = line_start_byte(source, start);
+				if source[line_start..start].trim().is_empty() {
+					start = line_start;
+					if source.as_bytes().get(end) == Some(&b'\n') {
+						end += 1;
+					}
 				}
 			}
 		}

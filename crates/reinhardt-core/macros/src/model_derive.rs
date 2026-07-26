@@ -1967,7 +1967,7 @@ fn extract_nested_option_type(mut ty: &Type) -> &Type {
 	ty
 }
 
-fn is_model_form_editable(field: &FieldInfo) -> bool {
+fn is_model_form_editable(field: &FieldInfo, field_infos: &[FieldInfo]) -> bool {
 	if field.config.skip || field.config.editable == Some(false) {
 		return false;
 	}
@@ -1984,7 +1984,14 @@ fn is_model_form_editable(field: &FieldInfo) -> bool {
 	}
 
 	if field.is_fk_id_field {
-		return true;
+		let relation_name = field.name.to_string();
+		return relation_name
+			.strip_suffix("_id")
+			.and_then(|name| field_infos.iter().find(|candidate| candidate.name == name))
+			.is_some_and(|relation| {
+				relation.config.editable != Some(false)
+					&& relation.config.include_in_new != Some(false)
+			});
 	}
 
 	field.config.editable == Some(true)
@@ -2189,7 +2196,7 @@ fn generate_model_form_support(
 	);
 	let editable_fields: Vec<_> = field_infos
 		.iter()
-		.filter(|field| is_model_form_editable(field))
+		.filter(|field| is_model_form_editable(field, field_infos))
 		.collect();
 	let field_count = editable_fields.len();
 	let field_kinds: Vec<_> = editable_fields
@@ -2368,7 +2375,7 @@ fn generate_model_form_support(
 	let missing_noneditable_field = field_infos
 		.iter()
 		.find(|field| {
-			if is_model_form_editable(field)
+			if is_model_form_editable(field, field_infos)
 				|| field.config.skip
 				|| is_relationship_field_type(&field.ty)
 				|| model_form_declared_default(field).is_some()
@@ -2385,7 +2392,7 @@ fn generate_model_form_support(
 		.map(|field| {
 			let field_name = &field.name;
 			let field_literal = LitStr::new(&field.name.to_string(), field.name.span());
-			if is_model_form_editable(field) {
+			if is_model_form_editable(field, field_infos) {
 				let (is_optional, _) = extract_option_type(&field.ty);
 				let required = !is_optional
 					&& field.config.blank != Some(true)

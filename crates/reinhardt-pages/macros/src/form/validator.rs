@@ -205,6 +205,18 @@ pub(super) fn validate(
 			"model-backed form! does not support `initial_loader`; initialize values through the generated form state",
 		));
 	}
+	if model_source.is_some() && choices_loader.is_some() {
+		return Err(Error::new(
+			ast.span,
+			"model-backed form! does not support `choices_loader`; configure static choices through the generated model schema",
+		));
+	}
+	if model_source.is_some() && !matches!(method, FormMethod::Post) {
+		return Err(Error::new(
+			ast.span,
+			"model-backed form! requires `method: Post` for its server_fn action",
+		));
+	}
 	if model_source.is_some() && slots.is_some() {
 		return Err(Error::new(
 			ast.span,

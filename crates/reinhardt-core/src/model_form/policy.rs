@@ -122,7 +122,7 @@ where
 				.and_then(serde_json::Number::from_f64)
 				.map(serde_json::Value::Number),
 			ModelFormFieldKind::Json => Some(serde_json::from_str(text)?),
-			ModelFormFieldKind::DateTime
+			ModelFormFieldKind::DateTime | ModelFormFieldKind::NaiveDateTime
 				if text.split_once('T').is_some_and(|(_, time)| {
 					!time.ends_with('Z') && !time.contains(['+', '-'])
 				}) =>
@@ -143,7 +143,10 @@ where
 						}
 					},
 				);
-				Some(serde_json::Value::String(format!("{normalized}Z")))
+				let timezone = matches!(descriptor.kind, ModelFormFieldKind::DateTime)
+					.then_some("Z")
+					.unwrap_or_default();
+				Some(serde_json::Value::String(format!("{normalized}{timezone}")))
 			}
 			_ => None,
 		};

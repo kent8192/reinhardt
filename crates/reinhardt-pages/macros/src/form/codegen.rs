@@ -2442,6 +2442,8 @@ fn generate_model_form(
 								#pages_crate::event::SubmitEvent,
 								_,
 							>(move |event: #pages_crate::event::SubmitEvent| {
+								#[allow(unused_mut)]
+								let mut snapshot_valid = true;
 								#[cfg(all(target_family = "wasm", target_os = "unknown"))]
 								{
 									use #pages_crate::__private::wasm_bindgen::JsCast;
@@ -2464,30 +2466,34 @@ fn generate_model_form(
 													descriptor.kind,
 													#pages_crate::form::ModelFormFieldKind::Boolean
 												),
+												descriptor.nullable,
 											))
 											.collect::<::std::vec::Vec<_>>();
 										let mut state = submit_form.__model_state.borrow_mut();
-										for (field, is_checkbox) in fields {
+										for (field, is_checkbox, nullable) in fields {
 											if let Some(value) = values.get(field).as_string() {
 												let value = if is_checkbox {
 													#pages_crate::__private::serde_json::Value::Bool(true)
 												} else {
 													#pages_crate::__private::serde_json::Value::String(value)
 												};
-												let _ = state.set_value(
+												if let ::core::result::Result::Err(error) = state.set_value(
 													field,
 													value,
-												);
-											} else if is_checkbox {
-												let _ = state.set_value(
-													field,
-													#pages_crate::__private::serde_json::Value::Bool(false),
-												);
+												) {
+													snapshot_valid = false;
+													submit_form.error.set(::core::option::Option::Some(error.to_string()));
+												}
+											} else if is_checkbox && !nullable {
+												let _ = state.set_value(field, #pages_crate::__private::serde_json::Value::Bool(false));
 											}
 										}
 									}
 								}
 								event.prevent_default();
+								if !snapshot_valid {
+									return;
+								}
 								#[cfg(all(target_family = "wasm", target_os = "unknown"))]
 								{
 									let form = submit_form.clone();

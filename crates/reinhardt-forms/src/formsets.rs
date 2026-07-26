@@ -116,6 +116,11 @@ impl<P: FormModel, C: FormModel> InlineFormSet<P, C> {
 	where
 		P::PrimaryKey: Serialize,
 	{
+		if !self.is_valid() {
+			return Err(ModelFormError::ModelValidation {
+				errors: vec!["inline formset contains invalid child fields".to_string()],
+			});
+		}
 		FormModel::save_with_mode(&mut self.parent, executor, self.parent_persistence_mode).await?;
 		self.parent_persistence_mode = ModelFormPersistenceMode::Update;
 		let parent_id = self

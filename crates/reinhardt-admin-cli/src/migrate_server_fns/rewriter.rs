@@ -220,6 +220,12 @@ fn rewrite_router_function(
 			kind: ReportKind::MixedRegistration,
 		});
 	}
+	if !returns_server_router(function) {
+		return FunctionOutcome::Skipped(Skipped {
+			line: span_line(function.sig.ident.span()),
+			kind: ReportKind::MixedRegistration,
+		});
+	}
 	if function_contains_local_use(function) {
 		return FunctionOutcome::Skipped(Skipped {
 			line: span_line(function.sig.ident.span()),
@@ -291,6 +297,19 @@ fn rewrite_router_function(
 		bindings: removable_bindings,
 		edits,
 	}
+}
+
+fn returns_server_router(function: &ItemFn) -> bool {
+	let syn::ReturnType::Type(_, ty) = &function.sig.output else {
+		return false;
+	};
+	let syn::Type::Path(path) = ty.as_ref() else {
+		return false;
+	};
+	path.path
+		.segments
+		.last()
+		.is_some_and(|segment| segment.ident == "ServerRouter")
 }
 
 fn function_contains_local_use(function: &ItemFn) -> bool {

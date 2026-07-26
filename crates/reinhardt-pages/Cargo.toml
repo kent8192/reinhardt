@@ -313,7 +313,6 @@ cfg_aliases = "0.2"
 
 [dev-dependencies]
 insta = { workspace = true }
-reinhardt-forms = { workspace = true }
 wasm-bindgen-test = "0.3.56"
 serial_test = "3"
 trybuild = "1.0"
@@ -331,6 +330,7 @@ base64 = { workspace = true }
 gloo-timers = { version = "0.3", features = ["futures"] }
 
 [target.'cfg(not(all(target_family = "wasm", target_os = "unknown")))'.dev-dependencies]
+reinhardt-forms = { workspace = true }
 criterion = { workspace = true }
 proptest = { workspace = true }
 hyper-util = { workspace = true }

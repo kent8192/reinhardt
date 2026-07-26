@@ -1984,7 +1984,13 @@ fn generate_model_form(
 	});
 
 	let form_id = form_id_kebab_case(form_ident);
-	let native_action = format!("/api/{}", server_fn.to_token_stream());
+	let server_fn_name = server_fn
+		.segments
+		.last()
+		.expect("validated server function path contains an identifier")
+		.ident
+		.to_string();
+	let native_action = format!("/api/server_fn/{server_fn_name}");
 	let method = match macro_ast.method {
 		FormMethod::Get => "get",
 		FormMethod::Post => "post",
@@ -2003,13 +2009,7 @@ fn generate_model_form(
 				}
 			}
 
-			pub type #data_ident = #payload_path<#policy_ident>;
-
-			impl ::core::default::Default for #data_ident {
-				fn default() -> Self {
-					Self::empty()
-				}
-			}
+			pub type #data_ident = #payload_path<#pages_crate::form::AllEditableModelFields>;
 
 			#(#descriptor_guards)*
 
@@ -2065,7 +2065,10 @@ fn generate_model_form(
 					#data_ident,
 					#pages_crate::form::ModelFormPayloadError,
 				> {
-					self.__model_state.borrow().build_payload::<#data_ident>()
+					self.__model_state.borrow().build_payload_for::<
+						#data_ident,
+						#pages_crate::form::AllEditableModelFields,
+					>()
 				}
 
 				pub fn loading(&self) -> &#pages_crate::Signal<bool> {
@@ -2234,12 +2237,42 @@ fn generate_model_form(
 						);
 
 						let field_name = descriptor.name;
+						let range_default = if input_type == "range" {
+							match descriptor.kind {
+								#pages_crate::form::ModelFormFieldKind::Integer { min, .. } =>
+									::core::option::Option::Some(min.unwrap_or(0).to_string()),
+								#pages_crate::form::ModelFormFieldKind::Float { min, .. } =>
+									::core::option::Option::Some(min.unwrap_or(0.0).to_string()),
+								#pages_crate::form::ModelFormFieldKind::Decimal { min, .. } =>
+									::core::option::Option::Some(min.unwrap_or("0").to_owned()),
+								_ => ::core::option::Option::None,
+							}
+						} else {
+							::core::option::Option::None
+						};
 						let mut control = #pages_crate::PageElement::new(tag)
 							.attr("name", field_name)
 							.attr("id", field_name)
 							.attr("type", input_type)
 							.bool_attr("required", descriptor.required && !is_checkbox);
-						let stored_value = self.__model_state.borrow().value(field_name).cloned();
+						let stored_value = {
+							let mut state = self.__model_state.borrow_mut();
+							if state.value(field_name).is_none()
+								&& let ::core::option::Option::Some(default) = &range_default
+							{
+								if let ::core::result::Result::Err(error) = state.set_value(
+									field_name,
+									#pages_crate::__private::serde_json::Value::String(default.clone()),
+								) {
+									#pages_crate::warn_log!(
+										"model form range field `{}` rejected its rendered default: {}",
+										field_name,
+										error,
+									);
+								}
+							}
+							state.value(field_name).cloned()
+						};
 						if is_checkbox {
 							control = control.bool_attr(
 								"checked",
@@ -2273,6 +2306,35 @@ fn generate_model_form(
 						}
 						if permits_subminute_precision {
 							control = control.attr("step", "any");
+						}
+						if input_type == "range" {
+							match descriptor.kind {
+								#pages_crate::form::ModelFormFieldKind::Integer { min, max } => {
+									if let ::core::option::Option::Some(min) = min {
+										control = control.attr("min", min.to_string());
+									}
+									if let ::core::option::Option::Some(max) = max {
+										control = control.attr("max", max.to_string());
+									}
+								}
+								#pages_crate::form::ModelFormFieldKind::Float { min, max } => {
+									if let ::core::option::Option::Some(min) = min {
+										control = control.attr("min", min.to_string());
+									}
+									if let ::core::option::Option::Some(max) = max {
+										control = control.attr("max", max.to_string());
+									}
+								}
+								#pages_crate::form::ModelFormFieldKind::Decimal { min, max } => {
+									if let ::core::option::Option::Some(min) = min {
+										control = control.attr("min", min);
+									}
+									if let ::core::option::Option::Some(max) = max {
+										control = control.attr("max", max);
+									}
+								}
+								_ => {}
+							}
 						}
 						if is_checkbox {
 							control = control.on(
@@ -7389,6 +7451,8 @@ mod tests {
 		assert!(output_str.contains("ModelFormFieldKind :: NaiveDateTime"));
 		assert!(output_str.contains("control = control . attr (\"step\" , \"any\")"));
 		assert!(output_str.contains("value . strip_suffix ('Z')"));
+		assert!(output_str.contains("AllEditableModelFields"));
+		assert!(output_str.contains("/api/server_fn/save_temporal_document"));
 	}
 
 	#[rstest::rstest]

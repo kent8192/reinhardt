@@ -343,7 +343,10 @@ pub(super) fn create_form_field(descriptor: &ModelFormFieldDescriptor) -> Box<dy
 		}
 		ModelFormFieldKind::Boolean => {
 			let mut field = BooleanField::new(name);
-			field.required = descriptor.required;
+			// A model boolean is a value field: `false` is valid even when the
+			// model field itself is required. BooleanField::required is reserved
+			// for explicit consent checkboxes that must be true.
+			field.required = false;
 			Box::new(field)
 		}
 		ModelFormFieldKind::Date => {

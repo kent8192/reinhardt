@@ -2328,9 +2328,19 @@ fn generate_model_form_support(
 					}
 				}
 			});
-	let deserialize_initializers = field_names
-		.iter()
-		.map(|field_name| quote!(let mut #field_name = ::core::option::Option::None;));
+	let deserialize_initializers = editable_fields.iter().map(|field| {
+		let field_name = &field.name;
+		let is_boolean = matches!(
+			&field.ty,
+			syn::Type::Path(path)
+				if path.path.segments.last().is_some_and(|segment| segment.ident == "bool")
+		);
+		if is_boolean {
+			quote!(let mut #field_name = ::core::option::Option::Some(false);)
+		} else {
+			quote!(let mut #field_name = ::core::option::Option::None;)
+		}
+	});
 	let serialize_bounds: Vec<_> = field_types
 		.iter()
 		.map(|field_ty| quote!(#field_ty: #serde_crate::Serialize))

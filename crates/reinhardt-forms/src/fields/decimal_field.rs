@@ -245,6 +245,25 @@ impl FormField for DecimalField {
 					)));
 				}
 
+				let exact = Decimal::from_str(&str_repr)
+					.map_err(|_| FieldError::Validation("Enter a number".to_string()))?;
+				if let Some(max) = self.max_decimal_value
+					&& exact > max
+				{
+					return Err(FieldError::Validation(format!(
+						"Ensure this value is less than or equal to {}",
+						max
+					)));
+				}
+				if let Some(min) = self.min_decimal_value
+					&& exact < min
+				{
+					return Err(FieldError::Validation(format!(
+						"Ensure this value is greater than or equal to {}",
+						min
+					)));
+				}
+
 				Ok(serde_json::json!(num))
 			}
 		}
@@ -300,6 +319,22 @@ mod tests {
 		));
 		assert!(matches!(
 			field.clean(Some(&serde_json::json!(101.0))),
+			Err(FieldError::Validation(_))
+		));
+	}
+
+	#[test]
+	fn test_decimalfield_exact_range_preserves_large_integer_bounds() {
+		let mut field = DecimalField::new("amount".to_string());
+		field.max_decimal_value = Some(Decimal::from_str("9007199254740992").unwrap());
+
+		assert!(
+			field
+				.clean(Some(&serde_json::json!("9007199254740992")))
+				.is_ok()
+		);
+		assert!(matches!(
+			field.clean(Some(&serde_json::json!("9007199254740993"))),
 			Err(FieldError::Validation(_))
 		));
 	}

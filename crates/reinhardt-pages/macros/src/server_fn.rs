@@ -1348,11 +1348,29 @@ fn generate_server_handler(
 		})
 		.collect();
 
+	// Native model-backed forms submit URL-encoded controls without JavaScript.
+	// A single `payload` argument is the generated form contract, so decode that
+	// flat control map into the same concrete payload used by JSON RPC clients.
+	let native_model_form_fallback = match regular_params.as_slice() {
+		[parameter] if matches!(parameter.pat.as_ref(), syn::Pat::Ident(ident) if ident.ident == "payload") =>
+		{
+			let payload_type = &parameter.ty;
+			quote! {
+				let payload: #payload_type = ::serde_urlencoded::from_bytes(body)
+					.map_err(|_| __invalid_request_error())?;
+				#args_struct_name { payload }
+			}
+		}
+		_ => quote! { return Err(__invalid_request_error()); },
+	};
+
 	// Generate codec-specific deserialization code for server
 	let deserialize_code = match codec {
 		"json" => quote! {
-			let args: #args_struct_name = ::serde_json::from_slice(body)
-				.map_err(|_| __invalid_request_error())?;
+			let args: #args_struct_name = match ::serde_json::from_slice(body) {
+				::core::result::Result::Ok(args) => args,
+				::core::result::Result::Err(_) => #native_model_form_fallback,
+			};
 		},
 		"url" => quote! {
 			let args: #args_struct_name = ::serde_urlencoded::from_str(&body)
@@ -2691,6 +2709,32 @@ mod tests {
 				"handler (args . first , __server_fn_inject_0 , Json (last) , __server_fn_inject_1)"
 			),
 			"{generated}"
+		);
+	}
+
+	#[test]
+	fn server_handler_accepts_url_encoded_model_payload_fallback() {
+		use syn::parse_quote;
+
+		let func: ItemFn = parse_quote! {
+			async fn save(payload: QuestionModelFormData<AllEditableModelFields>) -> Result<(), ServerFnError> { Ok(()) }
+		};
+		let info = ServerFnInfo {
+			func,
+			options: ServerFnOptions::default(),
+			metadata_name: None,
+			endpoint_tokens: None,
+			metadata_name_tokens: None,
+			detail: false,
+			transactional: false,
+			structured_error: false,
+		};
+
+		let generated = generate_server_handler(&info, &[], &[]).to_string();
+
+		assert!(
+			generated.contains("serde_urlencoded :: from_bytes (body)"),
+			"single payload handlers must accept progressive-enhancement form posts: {generated}"
 		);
 	}
 }

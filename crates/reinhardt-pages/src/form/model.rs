@@ -28,8 +28,17 @@ where
 {
 	/// Creates empty model-form control state.
 	pub fn new() -> Self {
+		let mut values = HashMap::new();
+		for descriptor in S::fields() {
+			if descriptor.editable
+				&& P::allows(descriptor.name)
+				&& matches!(descriptor.kind, ModelFormFieldKind::Boolean)
+			{
+				values.insert(descriptor.name, serde_json::Value::Bool(false));
+			}
+		}
 		Self {
-			values: HashMap::new(),
+			values,
 			_schema: PhantomData,
 			_policy: PhantomData,
 		}
@@ -103,6 +112,22 @@ where
 	pub fn build_payload<D>(&self) -> Result<D, ModelFormPayloadError>
 	where
 		D: Default + ModelFormPayload<P>,
+	{
+		let mut payload = D::default();
+		for descriptor in self.selected_descriptors() {
+			if let Some(value) = self.values.get(descriptor.name) {
+				payload.set_json(descriptor.name, value.clone())?;
+			}
+		}
+		Ok(payload)
+	}
+
+	/// Builds a payload using a nameable policy while retaining this form's
+	/// field-selection policy for the values copied into it.
+	pub fn build_payload_for<D, Q>(&self) -> Result<D, ModelFormPayloadError>
+	where
+		D: Default + ModelFormPayload<Q>,
+		Q: ModelFormPolicy,
 	{
 		let mut payload = D::default();
 		for descriptor in self.selected_descriptors() {

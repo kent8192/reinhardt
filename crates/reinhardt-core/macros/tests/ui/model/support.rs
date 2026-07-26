@@ -724,6 +724,7 @@ pub mod db {
 			Date,
 			Time,
 			DateTime,
+			NaiveDateTime,
 		}
 
 		#[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -941,6 +942,7 @@ pub mod db {
 			) -> crate::db::migrations::FieldType {
 				match storage_kind {
 					DatabaseStorageKind::DateTime => crate::db::migrations::FieldType::TimestampTz,
+					DatabaseStorageKind::NaiveDateTime => crate::db::migrations::FieldType::DateTime,
 					_ => crate::db::migrations::FieldType::Json,
 				}
 			}
@@ -960,7 +962,9 @@ pub mod db {
 					DatabaseStorageKind::Uuid => "reinhardt.orm.models.UuidField",
 					DatabaseStorageKind::Date => "reinhardt.orm.models.DateField",
 					DatabaseStorageKind::Time => "reinhardt.orm.models.TimeField",
-					DatabaseStorageKind::DateTime => "reinhardt.orm.models.DateTimeField",
+					DatabaseStorageKind::DateTime | DatabaseStorageKind::NaiveDateTime => {
+						"reinhardt.orm.models.DateTimeField"
+					}
 				}
 			}
 

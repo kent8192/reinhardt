@@ -199,6 +199,12 @@ pub(super) fn validate(
 			"model-backed form! does not support `redirect_on_success` or `success_url`; configure submission lifecycle through `use_form(&form)`",
 		));
 	}
+	if model_source.is_some() && initial_loader.is_some() {
+		return Err(Error::new(
+			ast.span,
+			"model-backed form! does not support `initial_loader`; initialize values through the generated form state",
+		));
+	}
 
 	// Transform unified validators (scope filtering happens at codegen)
 	let validators = transform_validators(&ast.validators, &ast.fields)?;

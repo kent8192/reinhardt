@@ -1367,15 +1367,18 @@ fn generate_server_handler(
 	}
 	let native_model_form_fallback = if info.options.model_form {
 		match regular_params.as_slice() {
-			[parameter] if matches!(parameter.pat.as_ref(), syn::Pat::Ident(ident) if ident.ident == "payload") =>
-			{
+			[parameter] => {
+				let syn::Pat::Ident(parameter_name) = parameter.pat.as_ref() else {
+					return quote! { compile_error!("server_fn(model_form = true) requires one identifier parameter"); };
+				};
+				let parameter_name = &parameter_name.ident;
 				let payload_type = &parameter.ty;
 				quote! {
 					let native_value = ::serde_json::from_slice(body)
 						.map_err(|_| __invalid_request_error())?;
 					let payload: #payload_type = <#payload_type as #pages_crate_for_model_form::form::NativeModelFormPayload>::from_native_form_value(native_value)
 						.map_err(|_| __invalid_request_error())?;
-					#args_struct_name { payload }
+					#args_struct_name { #parameter_name }
 				}
 			}
 			_ => quote! { return Err(__invalid_request_error()); },

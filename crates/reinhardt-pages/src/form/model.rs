@@ -347,6 +347,11 @@ fn convert_control_value(
 			if !is_time(&text) {
 				return Err(invalid_value(descriptor.name, "expected HH:MM[:SS]"));
 			}
+			let text = if text.len() == 5 {
+				format!("{text}:00")
+			} else {
+				text
+			};
 			Ok(serde_json::Value::String(text))
 		}
 		ModelFormFieldKind::DateTime | ModelFormFieldKind::NaiveDateTime => {

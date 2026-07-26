@@ -106,7 +106,12 @@ where
 			ModelFormFieldKind::Integer { .. } => text
 				.parse::<i64>()
 				.ok()
-				.map(|number| serde_json::Value::Number(number.into())),
+				.map(|number| serde_json::Value::Number(number.into()))
+				.or_else(|| {
+					text.parse::<u64>()
+						.ok()
+						.map(|number| serde_json::Value::Number(number.into()))
+				}),
 			ModelFormFieldKind::Float { .. } => text
 				.parse::<f64>()
 				.ok()

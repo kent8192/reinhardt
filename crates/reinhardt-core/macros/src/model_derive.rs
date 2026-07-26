@@ -2119,6 +2119,25 @@ fn model_form_relation_id_kind(
 	Ok(quote!(<#relation as #core_crate::model_form::ModelFormPrimaryKey>::FIELD_KIND))
 }
 
+fn model_form_relation_id_is_nullable(field: &FieldInfo, field_infos: &[FieldInfo]) -> bool {
+	if !field.is_fk_id_field {
+		return false;
+	}
+
+	let field_name = field.name.to_string();
+	let Some(relation_name) = field_name.strip_suffix("_id") else {
+		return false;
+	};
+
+	field_infos.iter().any(|candidate| {
+		candidate.name == relation_name
+			&& candidate
+				.rel
+				.as_ref()
+				.is_some_and(|relation| relation.null == Some(true))
+	})
+}
+
 fn model_form_declared_default(field: &FieldInfo) -> Option<TokenStream> {
 	let expression = field.config.default.as_ref()?;
 	let (is_optional, inner_ty) = extract_option_type(&field.ty);
@@ -2212,10 +2231,11 @@ fn generate_model_form_support(
 		.map(|(field, kind)| {
 			let name = LitStr::new(&field.name.to_string(), field.name.span());
 			let (is_optional, _) = extract_option_type(&field.ty);
+			let relation_is_nullable = model_form_relation_id_is_nullable(field, field_infos);
+			let nullable = is_optional || relation_is_nullable;
 			let required =
-				!is_optional && field.config.blank != Some(true) && field.config.default.is_none();
+				!nullable && field.config.blank != Some(true) && field.config.default.is_none();
 			let has_default = field.config.default.is_some();
-			let nullable = is_optional;
 			let generated_relation_id = field.is_fk_id_field;
 			quote! {
 				#core_crate::model_form::ModelFormFieldDescriptor {
@@ -8805,6 +8825,30 @@ mod tests {
 				"default , deserialize_with = \"__reinhardt_validate_nullable_fixture_foreign_key\""
 			),
 			"nullable foreign keys must permit omitted fixture relation values"
+		);
+	}
+
+	#[test]
+	fn test_model_form_nullable_relation_id_descriptor_is_not_required() {
+		let input = quote! {
+			#[model(app_label = "fixture_tests", table_name = "fixture_models", form = true)]
+			struct FixtureModel {
+				#[field(primary_key = true)]
+				id: i64,
+				#[rel(foreign_key, null = true)]
+				author: ForeignKeyField<Author>,
+				#[serde(default)]
+				author_id: <Author as InfoModel>::PrimaryKey,
+			}
+		};
+
+		let output = model_derive_impl(syn::parse2(input).unwrap())
+			.expect("fixture model must generate")
+			.to_string();
+
+		assert!(
+			output.contains("required : false") && output.contains("nullable : true"),
+			"nullable relation ID descriptors must accept an omitted relation value"
 		);
 	}
 

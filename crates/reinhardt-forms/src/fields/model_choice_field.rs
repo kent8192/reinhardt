@@ -82,7 +82,7 @@ impl<T: FormModel> ModelChoiceField<T> {
 			"Select a valid choice.".to_string(),
 		);
 
-		Self {
+		let mut field = Self {
 			name: name.into(),
 			required: true,
 			error_messages,
@@ -95,7 +95,9 @@ impl<T: FormModel> ModelChoiceField<T> {
 			empty_label: Some("--------".to_string()),
 			choice_label: None,
 			_phantom: PhantomData,
-		}
+		};
+		field.refresh_widget_choices();
+		field
 	}
 	/// Sets whether a selection is required.
 	pub fn required(mut self, required: bool) -> Self {
@@ -123,7 +125,14 @@ impl<T: FormModel> ModelChoiceField<T> {
 	/// implementations without requiring a conflicting trait implementation.
 	pub fn choice_label(mut self, label: impl Fn(&T) -> String + Send + Sync + 'static) -> Self {
 		self.choice_label = Some(Arc::new(label));
+		self.refresh_widget_choices();
 		self
+	}
+
+	fn refresh_widget_choices(&mut self) {
+		self.widget = Widget::Select {
+			choices: self.get_choices(),
+		};
 	}
 	/// Overrides the error message for a specific error type.
 	pub fn error_message(
@@ -340,7 +349,7 @@ impl<T: FormModel> ModelMultipleChoiceField<T> {
 			"Enter a list of values.".to_string(),
 		);
 
-		Self {
+		let mut field = Self {
 			name: name.into(),
 			required: true,
 			error_messages,
@@ -352,7 +361,9 @@ impl<T: FormModel> ModelMultipleChoiceField<T> {
 			queryset,
 			choice_label: None,
 			_phantom: PhantomData,
-		}
+		};
+		field.refresh_widget_choices();
+		field
 	}
 	/// Sets whether at least one selection is required.
 	pub fn required(mut self, required: bool) -> Self {
@@ -375,7 +386,14 @@ impl<T: FormModel> ModelMultipleChoiceField<T> {
 	/// implementations without requiring a conflicting trait implementation.
 	pub fn choice_label(mut self, label: impl Fn(&T) -> String + Send + Sync + 'static) -> Self {
 		self.choice_label = Some(Arc::new(label));
+		self.refresh_widget_choices();
 		self
+	}
+
+	fn refresh_widget_choices(&mut self) {
+		self.widget = Widget::Select {
+			choices: self.get_choices(),
+		};
 	}
 	/// Overrides the error message for a specific error type.
 	pub fn error_message(

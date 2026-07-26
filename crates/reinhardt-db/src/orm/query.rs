@@ -8520,8 +8520,67 @@ mod tests {
 	struct SourcedErrorTransactionExecutor;
 
 	#[cfg(feature = "pgvector")]
+	struct PgvectorUpdateErrorExecutor {
+		code: &'static str,
+		message: &'static str,
+	}
+
+	#[cfg(feature = "pgvector")]
+	#[async_trait::async_trait]
+	impl crate::orm::OrmExecutor for PgvectorUpdateErrorExecutor {
+		fn backend(&self) -> DatabaseBackend {
+			DatabaseBackend::Postgres
+		}
+
+		fn supports_pgvector_error_hints(&self) -> bool {
+			true
+		}
+
+		async fn execute(
+			&mut self,
+			_sql: &str,
+			_params: Vec<crate::orm::QueryValue>,
+		) -> reinhardt_core::exception::Result<crate::orm::QueryResult> {
+			Err(reinhardt_core::exception::DatabaseError::new(
+				reinhardt_core::exception::DatabaseErrorKind::Query,
+				self.message,
+			)
+			.with_code(self.code)
+			.into())
+		}
+
+		async fn fetch_one(
+			&mut self,
+			_sql: &str,
+			_params: Vec<crate::orm::QueryValue>,
+		) -> reinhardt_core::exception::Result<crate::orm::Row> {
+			panic!("pgvector update error executor does not fetch rows")
+		}
+
+		async fn fetch_all(
+			&mut self,
+			_sql: &str,
+			_params: Vec<crate::orm::QueryValue>,
+		) -> reinhardt_core::exception::Result<Vec<crate::orm::Row>> {
+			panic!("pgvector update error executor does not fetch rows")
+		}
+
+		async fn fetch_optional(
+			&mut self,
+			_sql: &str,
+			_params: Vec<crate::orm::QueryValue>,
+		) -> reinhardt_core::exception::Result<Option<crate::orm::Row>> {
+			panic!("pgvector update error executor does not fetch rows")
+		}
+	}
+
+	#[cfg(feature = "pgvector")]
 	#[async_trait::async_trait]
 	impl crate::orm::connection::TransactionExecutor for SourcedErrorTransactionExecutor {
+		fn supports_pgvector_error_hints(&self) -> bool {
+			true
+		}
+
 		async fn execute(
 			&mut self,
 			_sql: &str,
@@ -9145,6 +9204,44 @@ mod tests {
 			vec![Some(
 				crate::backends::error::PgvectorOperationKind::DistanceOperator
 			)]
+		);
+	}
+
+	#[cfg(feature = "pgvector")]
+	#[rstest]
+	#[case("42883", "operator does not exist: vector <=> vector")]
+	#[case("42704", "type \"vector\" does not exist")]
+	#[tokio::test]
+	async fn typed_vector_update_aggregates_assignment_and_distance_context(
+		#[case] code: &'static str,
+		#[case] message: &'static str,
+	) {
+		let field = Field::<TestUser, crate::orm::Vector<3>>::new(vec!["embedding"]);
+		let queryset = QuerySet::<TestUser>::new().filter(
+			field
+				.cosine_distance(typed_vector_target(&[1.0, 2.0, 3.0]))
+				.lt(0.25),
+		);
+		let assignment_field =
+			crate::orm::expressions::FieldRef::<TestUser, crate::orm::Vector<3>>::new("embedding");
+		let mut executor = PgvectorUpdateErrorExecutor { code, message };
+
+		let error = queryset
+			.update_fields_with_conn(
+				&mut executor,
+				[(assignment_field, typed_vector_target(&[4.0, 5.0, 6.0]))],
+			)
+			.await
+			.unwrap_err();
+
+		assert_eq!(
+			error.database_error().and_then(|error| error.code()),
+			Some(code)
+		);
+		assert!(
+			error
+				.to_string()
+				.contains("CreateExtension::new(\"vector\")")
 		);
 	}
 

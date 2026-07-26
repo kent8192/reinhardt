@@ -20,19 +20,90 @@ pub enum PgvectorOperationKind {
 	ApproximateIndex,
 	/// A DML operation that binds a native vector value.
 	VectorValue,
+	/// Multiple pgvector features used by one database operation.
+	Multiple(PgvectorOperationSet),
 }
 
-fn pgvector_hint_applies(context: Option<PgvectorOperationKind>, code: Option<&str>) -> bool {
-	matches!(
-		(context, code),
-		(
-			Some(PgvectorOperationKind::ColumnType | PgvectorOperationKind::ApproximateIndex),
-			Some(POSTGRES_UNDEFINED_OBJECT),
-		) | (
-			Some(PgvectorOperationKind::DistanceOperator),
-			Some(POSTGRES_UNDEFINED_FUNCTION),
+/// Compact set of structural pgvector operation kinds.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PgvectorOperationSet(u8);
+
+impl PgvectorOperationSet {
+	const COLUMN_TYPE: u8 = 1 << 0;
+	const DISTANCE_OPERATOR: u8 = 1 << 1;
+	const APPROXIMATE_INDEX: u8 = 1 << 2;
+	const VECTOR_VALUE: u8 = 1 << 3;
+
+	const fn from_kind(kind: PgvectorOperationKind) -> Self {
+		Self(match kind {
+			PgvectorOperationKind::ColumnType => Self::COLUMN_TYPE,
+			PgvectorOperationKind::DistanceOperator => Self::DISTANCE_OPERATOR,
+			PgvectorOperationKind::ApproximateIndex => Self::APPROXIMATE_INDEX,
+			PgvectorOperationKind::VectorValue => Self::VECTOR_VALUE,
+			PgvectorOperationKind::Multiple(set) => set.0,
+		})
+	}
+
+	const fn into_kind(self) -> PgvectorOperationKind {
+		match self.0 {
+			Self::COLUMN_TYPE => PgvectorOperationKind::ColumnType,
+			Self::DISTANCE_OPERATOR => PgvectorOperationKind::DistanceOperator,
+			Self::APPROXIMATE_INDEX => PgvectorOperationKind::ApproximateIndex,
+			Self::VECTOR_VALUE => PgvectorOperationKind::VectorValue,
+			_ => PgvectorOperationKind::Multiple(self),
+		}
+	}
+}
+
+impl PgvectorOperationKind {
+	/// Returns the union of two structural pgvector contexts.
+	pub const fn union(self, other: Self) -> Self {
+		PgvectorOperationSet(
+			PgvectorOperationSet::from_kind(self).0 | PgvectorOperationSet::from_kind(other).0,
 		)
-	)
+		.into_kind()
+	}
+
+	/// Returns whether this context contains an operation kind.
+	pub const fn contains(self, kind: Self) -> bool {
+		let current = PgvectorOperationSet::from_kind(self).0;
+		let expected = PgvectorOperationSet::from_kind(kind).0;
+		current & expected == expected
+	}
+}
+
+fn pgvector_hint_applies(
+	context: Option<PgvectorOperationKind>,
+	code: Option<&str>,
+	message: &str,
+) -> bool {
+	let Some(context) = context else {
+		return false;
+	};
+	match code {
+		Some(POSTGRES_UNDEFINED_OBJECT) => {
+			((context.contains(PgvectorOperationKind::ColumnType)
+				|| context.contains(PgvectorOperationKind::VectorValue))
+				&& message.contains("type \"vector\" does not exist"))
+				|| (context.contains(PgvectorOperationKind::ApproximateIndex)
+					&& (message.contains("access method \"hnsw\" does not exist")
+						|| message.contains("access method \"ivfflat\" does not exist")
+						|| (message.contains("operator class \"vector_")
+							&& message.contains("_ops\" does not exist"))))
+		}
+		Some(POSTGRES_UNDEFINED_FUNCTION) => {
+			context.contains(PgvectorOperationKind::DistanceOperator)
+				&& message.contains("operator does not exist:")
+				&& [
+					"vector <-> vector",
+					"vector <#> vector",
+					"vector <=> vector",
+				]
+				.iter()
+				.any(|evidence| message.contains(evidence))
+		}
+		_ => false,
+	}
 }
 
 fn decorate_database_error(database_error: DatabaseError) -> DatabaseError {
@@ -51,6 +122,7 @@ pub(crate) fn decorate_error_with_pgvector_context(
 	if !pgvector_hint_applies(
 		context,
 		error.database_error().and_then(DatabaseError::code),
+		error.database_error().map_or("", DatabaseError::message),
 	) {
 		return error;
 	}
@@ -172,7 +244,11 @@ pub(crate) fn map_sqlx_error_with_pgvector_context(
 	context: Option<PgvectorOperationKind>,
 ) -> reinhardt_core::exception::Error {
 	let should_add_hint = matches!(&error, sqlx::Error::Database(database_error)
-		if pgvector_hint_applies(context, database_error.code().as_deref()));
+	if pgvector_hint_applies(
+		context,
+		database_error.code().as_deref(),
+		database_error.message(),
+	));
 
 	if !should_add_hint {
 		return map_sqlx_error(error).into();
@@ -500,6 +576,48 @@ mod tests {
 		#[case] code: &'static str,
 	) {
 		let error = postgres_database_error(code, "unrelated database object is missing");
+
+		let error = map_sqlx_error_with_pgvector_context(error, Some(context));
+
+		assert_eq!(
+			error.database_error().and_then(DatabaseError::code),
+			Some(code)
+		);
+		assert!(!error.to_string().contains("CreateExtension::new"));
+	}
+
+	#[rstest]
+	#[case(
+		PgvectorOperationKind::ColumnType,
+		"42704",
+		"type \"geography\" does not exist"
+	)]
+	#[case(
+		PgvectorOperationKind::ApproximateIndex,
+		"42704",
+		"access method \"brin\" does not exist"
+	)]
+	#[case(
+		PgvectorOperationKind::ApproximateIndex,
+		"42704",
+		"operator class \"jsonb_path_ops\" does not exist for access method \"gin\""
+	)]
+	#[case(
+		PgvectorOperationKind::DistanceOperator,
+		"42883",
+		"function cosine_distance(vector, vector) does not exist"
+	)]
+	#[case(
+		PgvectorOperationKind::DistanceOperator,
+		"42883",
+		"operator does not exist: integer <=> integer"
+	)]
+	fn pgvector_error_hint_requires_specific_missing_pgvector_evidence(
+		#[case] context: PgvectorOperationKind,
+		#[case] code: &'static str,
+		#[case] message: &'static str,
+	) {
+		let error = postgres_database_error(code, message);
 
 		let error = map_sqlx_error_with_pgvector_context(error, Some(context));
 

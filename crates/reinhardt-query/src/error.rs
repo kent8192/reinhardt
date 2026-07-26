@@ -41,14 +41,59 @@ pub enum PgvectorFeature {
 	VectorValue,
 }
 
+/// Set of pgvector features found through structural query inspection.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct PgvectorFeatureSet(u8);
+
+impl PgvectorFeatureSet {
+	const COLUMN_TYPE: u8 = 1 << 0;
+	const DISTANCE_OPERATOR: u8 = 1 << 1;
+	const APPROXIMATE_INDEX: u8 = 1 << 2;
+	const VECTOR_VALUE: u8 = 1 << 3;
+
+	/// Returns whether the set contains a feature.
+	pub const fn contains(self, feature: PgvectorFeature) -> bool {
+		let flag = match feature {
+			PgvectorFeature::ColumnType => Self::COLUMN_TYPE,
+			PgvectorFeature::DistanceOperator => Self::DISTANCE_OPERATOR,
+			PgvectorFeature::ApproximateIndex => Self::APPROXIMATE_INDEX,
+			PgvectorFeature::VectorValue => Self::VECTOR_VALUE,
+		};
+		self.0 & flag != 0
+	}
+
+	fn insert(&mut self, feature: PgvectorFeature) {
+		self.0 |= match feature {
+			PgvectorFeature::ColumnType => Self::COLUMN_TYPE,
+			PgvectorFeature::DistanceOperator => Self::DISTANCE_OPERATOR,
+			PgvectorFeature::ApproximateIndex => Self::APPROXIMATE_INDEX,
+			PgvectorFeature::VectorValue => Self::VECTOR_VALUE,
+		};
+	}
+}
+
 /// Returns the first pgvector feature found in a select AST.
 pub fn select_pgvector_feature(statement: &SelectStatement) -> Option<PgvectorFeature> {
 	pgvector_feature_from_validation(validate_select_for_backend(statement, "feature inspection"))
 }
 
+/// Returns every pgvector feature found in a select AST.
+pub fn select_pgvector_features(statement: &SelectStatement) -> PgvectorFeatureSet {
+	let mut features = PgvectorFeatureSet::default();
+	collect_select_pgvector_features(statement, &mut features);
+	features
+}
+
 /// Returns the first pgvector feature found in an update AST.
 pub fn update_pgvector_feature(statement: &UpdateStatement) -> Option<PgvectorFeature> {
 	pgvector_feature_from_validation(validate_update_for_backend(statement, "feature inspection"))
+}
+
+/// Returns every pgvector feature found in an update AST.
+pub fn update_pgvector_features(statement: &UpdateStatement) -> PgvectorFeatureSet {
+	let mut features = PgvectorFeatureSet::default();
+	collect_update_pgvector_features(statement, &mut features);
+	features
 }
 
 fn pgvector_feature_from_validation(
@@ -400,4 +445,235 @@ fn validate_window(window: &WindowStatement, backend: &'static str) -> Result<()
 		validate_order_expr(order, backend)?;
 	}
 	Ok(())
+}
+
+fn collect_select_pgvector_features(
+	statement: &SelectStatement,
+	features: &mut PgvectorFeatureSet,
+) {
+	for cte in &statement.ctes {
+		collect_select_pgvector_features(&cte.query, features);
+	}
+	for select in &statement.selects {
+		collect_simple_expr_pgvector_features(&select.expr, features);
+	}
+	for table in &statement.from {
+		collect_table_ref_pgvector_features(table, features);
+	}
+	for join in &statement.join {
+		collect_table_ref_pgvector_features(&join.table, features);
+		if let Some(crate::types::JoinOn::Condition(condition)) = &join.on {
+			collect_condition_pgvector_features(condition, features);
+		}
+	}
+	collect_condition_holder_pgvector_features(&statement.r#where, features);
+	for group in &statement.groups {
+		collect_simple_expr_pgvector_features(group, features);
+	}
+	collect_condition_holder_pgvector_features(&statement.having, features);
+	for (_, union) in &statement.unions {
+		collect_select_pgvector_features(union, features);
+	}
+	for order in &statement.orders {
+		if let OrderExprKind::Expr(expr) = &order.expr {
+			collect_simple_expr_pgvector_features(expr, features);
+		}
+	}
+	if let Some(limit) = &statement.limit {
+		collect_value_pgvector_features(limit, features);
+	}
+	if let Some(offset) = &statement.offset {
+		collect_value_pgvector_features(offset, features);
+	}
+	for (_, window) in &statement.windows {
+		collect_window_pgvector_features(window, features);
+	}
+}
+
+fn collect_update_pgvector_features(
+	statement: &UpdateStatement,
+	features: &mut PgvectorFeatureSet,
+) {
+	if let Some(table) = &statement.table {
+		collect_table_ref_pgvector_features(table, features);
+	}
+	for (_, expression) in &statement.values {
+		collect_simple_expr_pgvector_features(expression, features);
+	}
+	collect_condition_holder_pgvector_features(&statement.r#where, features);
+	if let Some(expressions) = &statement.returning_exprs {
+		for expression in expressions {
+			collect_simple_expr_pgvector_features(expression, features);
+		}
+	}
+}
+
+fn collect_condition_holder_pgvector_features(
+	holder: &ConditionHolder,
+	features: &mut PgvectorFeatureSet,
+) {
+	for condition in &holder.conditions {
+		collect_condition_expression_pgvector_features(condition, features);
+	}
+}
+
+fn collect_condition_pgvector_features(condition: &Condition, features: &mut PgvectorFeatureSet) {
+	for expression in &condition.conditions {
+		collect_condition_expression_pgvector_features(expression, features);
+	}
+}
+
+fn collect_condition_expression_pgvector_features(
+	expression: &ConditionExpression,
+	features: &mut PgvectorFeatureSet,
+) {
+	match expression {
+		ConditionExpression::SimpleExpr(expr) => {
+			collect_simple_expr_pgvector_features(expr, features);
+		}
+		ConditionExpression::Condition(condition) => {
+			collect_condition_pgvector_features(condition, features);
+		}
+	}
+}
+
+fn collect_simple_expr_pgvector_features(expr: &SimpleExpr, features: &mut PgvectorFeatureSet) {
+	collect_simple_expr_pgvector_features_with_values(expr, features, true);
+}
+
+fn collect_simple_expr_pgvector_features_with_values(
+	expr: &SimpleExpr,
+	features: &mut PgvectorFeatureSet,
+	collect_vector_values: bool,
+) {
+	match expr {
+		SimpleExpr::Column(_)
+		| SimpleExpr::TableColumn(_, _)
+		| SimpleExpr::Custom(_)
+		| SimpleExpr::Constant(_)
+		| SimpleExpr::Asterisk => {}
+		SimpleExpr::Value(value) => {
+			if collect_vector_values {
+				collect_value_pgvector_features(value, features);
+			}
+		}
+		SimpleExpr::Unary(_, expression)
+		| SimpleExpr::AsEnum(_, expression)
+		| SimpleExpr::ExprAlias(expression, _)
+		| SimpleExpr::Cast(expression, _) => {
+			collect_simple_expr_pgvector_features_with_values(
+				expression,
+				features,
+				collect_vector_values,
+			);
+		}
+		SimpleExpr::Binary(left, operator, right) => {
+			let is_distance_operator = matches!(
+				operator,
+				BinOper::PgOperator(
+					PgBinOper::L2Distance
+						| PgBinOper::NegativeInnerProduct
+						| PgBinOper::CosineDistance
+				)
+			);
+			if is_distance_operator {
+				features.insert(PgvectorFeature::DistanceOperator);
+			}
+			let collect_operand_values = collect_vector_values && !is_distance_operator;
+			collect_simple_expr_pgvector_features_with_values(
+				left,
+				features,
+				collect_operand_values,
+			);
+			collect_simple_expr_pgvector_features_with_values(
+				right,
+				features,
+				collect_operand_values,
+			);
+		}
+		SimpleExpr::FunctionCall(_, args) | SimpleExpr::Tuple(args) => {
+			for arg in args {
+				collect_simple_expr_pgvector_features_with_values(
+					arg,
+					features,
+					collect_vector_values,
+				);
+			}
+		}
+		SimpleExpr::SubQuery(_, query) => collect_select_pgvector_features(query, features),
+		SimpleExpr::CustomWithExpr(_, expressions) => {
+			for expression in expressions {
+				collect_simple_expr_pgvector_features_with_values(
+					expression,
+					features,
+					collect_vector_values,
+				);
+			}
+		}
+		SimpleExpr::Case(case) => {
+			for (condition, result) in &case.when_clauses {
+				collect_simple_expr_pgvector_features_with_values(
+					condition,
+					features,
+					collect_vector_values,
+				);
+				collect_simple_expr_pgvector_features_with_values(
+					result,
+					features,
+					collect_vector_values,
+				);
+			}
+			if let Some(result) = &case.else_clause {
+				collect_simple_expr_pgvector_features_with_values(
+					result,
+					features,
+					collect_vector_values,
+				);
+			}
+		}
+		SimpleExpr::Window { func, window } => {
+			collect_simple_expr_pgvector_features_with_values(
+				func,
+				features,
+				collect_vector_values,
+			);
+			collect_window_pgvector_features(window, features);
+		}
+		SimpleExpr::WindowNamed { func, .. } => {
+			collect_simple_expr_pgvector_features_with_values(
+				func,
+				features,
+				collect_vector_values,
+			);
+		}
+	}
+}
+
+fn collect_value_pgvector_features(value: &Value, features: &mut PgvectorFeatureSet) {
+	match value {
+		Value::Vector(_) => features.insert(PgvectorFeature::VectorValue),
+		Value::Array(_, Some(values)) => {
+			for value in values.iter() {
+				collect_value_pgvector_features(value, features);
+			}
+		}
+		_ => {}
+	}
+}
+
+fn collect_table_ref_pgvector_features(table: &TableRef, features: &mut PgvectorFeatureSet) {
+	if let TableRef::SubQuery(query, _) = table {
+		collect_select_pgvector_features(query, features);
+	}
+}
+
+fn collect_window_pgvector_features(window: &WindowStatement, features: &mut PgvectorFeatureSet) {
+	for partition in &window.partition_by {
+		collect_simple_expr_pgvector_features(partition, features);
+	}
+	for order in &window.order_by {
+		if let OrderExprKind::Expr(expr) = &order.expr {
+			collect_simple_expr_pgvector_features(expr, features);
+		}
+	}
 }

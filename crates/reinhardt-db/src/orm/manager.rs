@@ -1635,6 +1635,7 @@ impl<M: Model> Manager<M> {
 			backend != DatabaseBackend::MySql,
 		)
 		.map_err(executor_field_codec_error)?;
+		let context = super::execution::pgvector_context_for_update(&stmt);
 		let (sql, values) = build_update_sql(&stmt, backend);
 		let params = values
 			.0
@@ -1644,7 +1645,7 @@ impl<M: Model> Manager<M> {
 
 		if backend == DatabaseBackend::MySql {
 			executor
-				.execute(&sql, params)
+				.execute_with_context(&sql, params, context)
 				.await
 				.map_err(executor_error)?;
 			let mut select = Query::select();
@@ -1669,7 +1670,7 @@ impl<M: Model> Manager<M> {
 		}
 
 		let row = executor
-			.fetch_one(&sql, params)
+			.fetch_one_with_context(&sql, params, context)
 			.await
 			.map_err(executor_error)?;
 		Self::decode_executor_row(row)
@@ -1725,6 +1726,7 @@ impl<M: Model> Manager<M> {
 		}
 		.map_err(field_codec_error)?;
 
+		let context = super::execution::pgvector_context_for_update(&stmt);
 		let (sql, values) = build_update_sql(&stmt, backend);
 		let values: Vec<_> = values
 			.0
@@ -1739,7 +1741,7 @@ impl<M: Model> Manager<M> {
 			))
 		})?;
 		if backend == DatabaseBackend::MySql {
-			conn.execute(&sql, values).await?;
+			conn.execute_with_context(&sql, values, context).await?;
 			let field_metadata = M::field_metadata();
 			let primary_key_column = Self::field_column(&field_metadata, M::primary_key_field());
 			let mut select = Query::select();
@@ -1762,7 +1764,7 @@ impl<M: Model> Manager<M> {
 				.map_err(field_codec_error);
 		}
 
-		let row = conn.fetch_one(&sql, values).await?;
+		let row = conn.fetch_one_with_context(&sql, values, context).await?;
 		QueryRow::from_backend_row(row)
 			.deserialize_model::<M>()
 			.map_err(field_codec_error)
@@ -2745,6 +2747,240 @@ mod tests {
 	use serde::{Deserialize, Serialize};
 	use std::collections::HashMap;
 
+	#[cfg(feature = "pgvector")]
+	#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+	struct VectorManagerModel {
+		id: Option<i64>,
+		embedding: crate::orm::Vector<3>,
+	}
+
+	#[cfg(feature = "pgvector")]
+	#[derive(Debug, Clone)]
+	struct VectorManagerModelFields;
+
+	#[cfg(feature = "pgvector")]
+	impl FieldSelector for VectorManagerModelFields {
+		fn with_alias(self, _alias: &str) -> Self {
+			self
+		}
+	}
+
+	#[cfg(feature = "pgvector")]
+	impl Model for VectorManagerModel {
+		type PrimaryKey = i64;
+		type Fields = VectorManagerModelFields;
+		type Objects = Manager<Self>;
+
+		fn table_name() -> &'static str {
+			"vector_manager_models"
+		}
+
+		fn primary_key(&self) -> Option<Self::PrimaryKey> {
+			self.id
+		}
+
+		fn set_primary_key(&mut self, value: Self::PrimaryKey) {
+			self.id = Some(value);
+		}
+
+		fn new_fields() -> Self::Fields {
+			VectorManagerModelFields
+		}
+
+		fn encode_database_fields(
+			&self,
+		) -> Result<std::collections::BTreeMap<String, crate::orm::DatabaseValue>, FieldCodecError>
+		{
+			Ok(std::collections::BTreeMap::from([
+				(
+					"id".to_owned(),
+					self.id
+						.map(crate::orm::DatabaseValue::I64)
+						.unwrap_or(crate::orm::DatabaseValue::Null),
+				),
+				(
+					"embedding".to_owned(),
+					crate::orm::DatabaseValue::Vector(self.embedding.as_slice().to_vec()),
+				),
+			]))
+		}
+	}
+
+	#[cfg(feature = "pgvector")]
+	fn vector_manager_row() -> crate::orm::Row {
+		crate::orm::Row {
+			data: HashMap::from([
+				("id".to_owned(), QueryValue::Int(7)),
+				(
+					"embedding".to_owned(),
+					QueryValue::Vector(vec![1.0, 2.0, 3.0]),
+				),
+			]),
+		}
+	}
+
+	#[cfg(feature = "pgvector")]
+	struct VectorManagerOrmExecutor {
+		backend: DatabaseBackend,
+		calls: Vec<(
+			&'static str,
+			Option<crate::backends::error::PgvectorOperationKind>,
+		)>,
+	}
+
+	#[cfg(feature = "pgvector")]
+	#[async_trait::async_trait]
+	impl crate::orm::OrmExecutor for VectorManagerOrmExecutor {
+		fn backend(&self) -> DatabaseBackend {
+			self.backend
+		}
+
+		async fn execute(
+			&mut self,
+			_sql: &str,
+			_params: Vec<QueryValue>,
+		) -> reinhardt_core::exception::Result<crate::orm::QueryResult> {
+			self.calls.push(("execute", None));
+			Ok(crate::orm::QueryResult {
+				rows_affected: 1,
+				last_insert_id: None,
+			})
+		}
+
+		async fn execute_with_context(
+			&mut self,
+			_sql: &str,
+			_params: Vec<QueryValue>,
+			context: Option<crate::backends::error::PgvectorOperationKind>,
+		) -> reinhardt_core::exception::Result<crate::orm::QueryResult> {
+			self.calls.push(("execute_with_context", context));
+			Ok(crate::orm::QueryResult {
+				rows_affected: 1,
+				last_insert_id: None,
+			})
+		}
+
+		async fn fetch_one(
+			&mut self,
+			_sql: &str,
+			_params: Vec<QueryValue>,
+		) -> reinhardt_core::exception::Result<crate::orm::Row> {
+			self.calls.push(("fetch_one", None));
+			Ok(vector_manager_row())
+		}
+
+		async fn fetch_one_with_context(
+			&mut self,
+			_sql: &str,
+			_params: Vec<QueryValue>,
+			context: Option<crate::backends::error::PgvectorOperationKind>,
+		) -> reinhardt_core::exception::Result<crate::orm::Row> {
+			self.calls.push(("fetch_one_with_context", context));
+			Ok(vector_manager_row())
+		}
+
+		async fn fetch_all(
+			&mut self,
+			_sql: &str,
+			_params: Vec<QueryValue>,
+		) -> reinhardt_core::exception::Result<Vec<crate::orm::Row>> {
+			panic!("vector manager update test does not fetch multiple rows")
+		}
+
+		async fn fetch_optional(
+			&mut self,
+			_sql: &str,
+			_params: Vec<QueryValue>,
+		) -> reinhardt_core::exception::Result<Option<crate::orm::Row>> {
+			panic!("vector manager update test does not fetch optional rows")
+		}
+	}
+
+	#[cfg(feature = "pgvector")]
+	struct VectorManagerTransaction {
+		backend: crate::backends::types::DatabaseType,
+		calls: Vec<(
+			&'static str,
+			Option<crate::backends::error::PgvectorOperationKind>,
+		)>,
+	}
+
+	#[cfg(feature = "pgvector")]
+	#[async_trait::async_trait]
+	impl crate::orm::connection::TransactionExecutor for VectorManagerTransaction {
+		fn backend(&self) -> crate::backends::types::DatabaseType {
+			self.backend
+		}
+
+		async fn execute(
+			&mut self,
+			_sql: &str,
+			_params: Vec<QueryValue>,
+		) -> crate::backends::error::Result<crate::orm::QueryResult> {
+			self.calls.push(("execute", None));
+			Ok(crate::orm::QueryResult {
+				rows_affected: 1,
+				last_insert_id: None,
+			})
+		}
+
+		async fn execute_with_context(
+			&mut self,
+			_sql: &str,
+			_params: Vec<QueryValue>,
+			context: Option<crate::backends::error::PgvectorOperationKind>,
+		) -> crate::backends::error::Result<crate::orm::QueryResult> {
+			self.calls.push(("execute_with_context", context));
+			Ok(crate::orm::QueryResult {
+				rows_affected: 1,
+				last_insert_id: None,
+			})
+		}
+
+		async fn fetch_one(
+			&mut self,
+			_sql: &str,
+			_params: Vec<QueryValue>,
+		) -> crate::backends::error::Result<crate::orm::Row> {
+			self.calls.push(("fetch_one", None));
+			Ok(vector_manager_row())
+		}
+
+		async fn fetch_one_with_context(
+			&mut self,
+			_sql: &str,
+			_params: Vec<QueryValue>,
+			context: Option<crate::backends::error::PgvectorOperationKind>,
+		) -> crate::backends::error::Result<crate::orm::Row> {
+			self.calls.push(("fetch_one_with_context", context));
+			Ok(vector_manager_row())
+		}
+
+		async fn fetch_all(
+			&mut self,
+			_sql: &str,
+			_params: Vec<QueryValue>,
+		) -> crate::backends::error::Result<Vec<crate::orm::Row>> {
+			panic!("vector manager update test does not fetch multiple rows")
+		}
+
+		async fn fetch_optional(
+			&mut self,
+			_sql: &str,
+			_params: Vec<QueryValue>,
+		) -> crate::backends::error::Result<Option<crate::orm::Row>> {
+			panic!("vector manager update test does not fetch optional rows")
+		}
+
+		async fn commit(self: Box<Self>) -> crate::backends::error::Result<()> {
+			Ok(())
+		}
+
+		async fn rollback(self: Box<Self>) -> crate::backends::error::Result<()> {
+			Ok(())
+		}
+	}
+
 	#[test]
 	fn test_field_codec_error_preserves_typed_source() {
 		let error = field_codec_error(FieldCodecError::Serialization(
@@ -2774,6 +3010,75 @@ mod tests {
 		assert_eq!(
 			value,
 			reinhardt_query::value::Value::Vector(Some(Box::new(vec![1.0, 2.0, 3.0])))
+		);
+	}
+
+	#[cfg(feature = "pgvector")]
+	#[rstest::rstest]
+	#[case(DatabaseBackend::Postgres, "fetch_one_with_context")]
+	#[case(DatabaseBackend::MySql, "execute_with_context")]
+	#[tokio::test]
+	async fn manager_update_with_conn_propagates_vector_statement_context(
+		#[case] backend: DatabaseBackend,
+		#[case] expected_method: &'static str,
+	) {
+		let model = VectorManagerModel {
+			id: Some(7),
+			embedding: crate::orm::Vector::try_from(vec![1.0, 2.0, 3.0]).unwrap(),
+		};
+		let mut executor = VectorManagerOrmExecutor {
+			backend,
+			calls: Vec::new(),
+		};
+
+		let updated = Manager::<VectorManagerModel>::new()
+			.update_with_conn(&mut executor, &model)
+			.await
+			.expect("vector manager update should decode the returned model");
+
+		assert_eq!(updated, model);
+		assert_eq!(
+			executor.calls.first(),
+			Some(&(
+				expected_method,
+				Some(crate::backends::error::PgvectorOperationKind::VectorValue)
+			))
+		);
+	}
+
+	#[cfg(feature = "pgvector")]
+	#[rstest::rstest]
+	#[case(
+		crate::backends::types::DatabaseType::Postgres,
+		"fetch_one_with_context"
+	)]
+	#[case(crate::backends::types::DatabaseType::Mysql, "execute_with_context")]
+	#[tokio::test]
+	async fn manager_update_with_transaction_propagates_vector_statement_context(
+		#[case] backend: crate::backends::types::DatabaseType,
+		#[case] expected_method: &'static str,
+	) {
+		let model = VectorManagerModel {
+			id: Some(7),
+			embedding: crate::orm::Vector::try_from(vec![1.0, 2.0, 3.0]).unwrap(),
+		};
+		let mut executor = VectorManagerTransaction {
+			backend,
+			calls: Vec::new(),
+		};
+
+		let updated = Manager::<VectorManagerModel>::new()
+			.save_with_executor(&mut executor, &model)
+			.await
+			.expect("vector manager transaction update should decode the returned model");
+
+		assert_eq!(updated, model);
+		assert_eq!(
+			executor.calls.first(),
+			Some(&(
+				expected_method,
+				Some(crate::backends::error::PgvectorOperationKind::VectorValue)
+			))
 		);
 	}
 

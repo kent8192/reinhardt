@@ -177,6 +177,11 @@ pub trait OrmExecutor: Send {
 	/// Returns the backend used to generate SQL for this executor.
 	fn backend(&self) -> DatabaseBackend;
 
+	/// Returns whether contextual pgvector error hints are supported.
+	fn supports_pgvector_error_hints(&self) -> bool {
+		false
+	}
+
 	/// Executes a SQL statement and preserves backend-specific result metadata.
 	async fn execute(&mut self, sql: &str, params: Vec<QueryValue>) -> Result<QueryResult>;
 
@@ -187,9 +192,14 @@ pub trait OrmExecutor: Send {
 		params: Vec<QueryValue>,
 		context: Option<crate::backends::error::PgvectorOperationKind>,
 	) -> Result<QueryResult> {
-		self.execute(sql, params).await.map_err(|error| {
-			crate::backends::error::decorate_error_with_pgvector_context(error, context)
-		})
+		let result = self.execute(sql, params).await;
+		if self.supports_pgvector_error_hints() {
+			result.map_err(|error| {
+				crate::backends::error::decorate_error_with_pgvector_context(error, context)
+			})
+		} else {
+			result
+		}
 	}
 
 	/// Fetches one row.
@@ -202,9 +212,14 @@ pub trait OrmExecutor: Send {
 		params: Vec<QueryValue>,
 		context: Option<crate::backends::error::PgvectorOperationKind>,
 	) -> Result<Row> {
-		self.fetch_one(sql, params).await.map_err(|error| {
-			crate::backends::error::decorate_error_with_pgvector_context(error, context)
-		})
+		let result = self.fetch_one(sql, params).await;
+		if self.supports_pgvector_error_hints() {
+			result.map_err(|error| {
+				crate::backends::error::decorate_error_with_pgvector_context(error, context)
+			})
+		} else {
+			result
+		}
 	}
 
 	/// Fetches all matching rows.
@@ -217,9 +232,14 @@ pub trait OrmExecutor: Send {
 		params: Vec<QueryValue>,
 		context: Option<crate::backends::error::PgvectorOperationKind>,
 	) -> Result<Vec<Row>> {
-		self.fetch_all(sql, params).await.map_err(|error| {
-			crate::backends::error::decorate_error_with_pgvector_context(error, context)
-		})
+		let result = self.fetch_all(sql, params).await;
+		if self.supports_pgvector_error_hints() {
+			result.map_err(|error| {
+				crate::backends::error::decorate_error_with_pgvector_context(error, context)
+			})
+		} else {
+			result
+		}
 	}
 
 	/// Fetches an optional row without swallowing backend failures.
@@ -232,9 +252,14 @@ pub trait OrmExecutor: Send {
 		params: Vec<QueryValue>,
 		context: Option<crate::backends::error::PgvectorOperationKind>,
 	) -> Result<Option<Row>> {
-		self.fetch_optional(sql, params).await.map_err(|error| {
-			crate::backends::error::decorate_error_with_pgvector_context(error, context)
-		})
+		let result = self.fetch_optional(sql, params).await;
+		if self.supports_pgvector_error_hints() {
+			result.map_err(|error| {
+				crate::backends::error::decorate_error_with_pgvector_context(error, context)
+			})
+		} else {
+			result
+		}
 	}
 }
 

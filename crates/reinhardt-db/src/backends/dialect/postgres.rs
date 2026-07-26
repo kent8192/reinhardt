@@ -166,6 +166,10 @@ impl DatabaseBackend for PostgresBackend {
 		DatabaseType::Postgres
 	}
 
+	fn supports_pgvector_error_hints(&self) -> bool {
+		true
+	}
+
 	fn placeholder(&self, index: usize) -> String {
 		format!("${}", index)
 	}
@@ -502,6 +506,10 @@ impl PostgresBackend {
 impl TransactionExecutor for PgTransactionExecutor {
 	fn backend(&self) -> DatabaseType {
 		DatabaseType::Postgres
+	}
+
+	fn supports_pgvector_error_hints(&self) -> bool {
+		true
 	}
 
 	async fn execute(&mut self, sql: &str, params: Vec<QueryValue>) -> Result<QueryResult> {

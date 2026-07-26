@@ -822,6 +822,10 @@ mod tests {
 			super::super::types::DatabaseType::Postgres
 		}
 
+		fn supports_pgvector_error_hints(&self) -> bool {
+			true
+		}
+
 		fn placeholder(&self, index: usize) -> String {
 			format!("${index}")
 		}

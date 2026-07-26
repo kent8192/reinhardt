@@ -1039,6 +1039,10 @@ mod tests {
 	#[cfg(all(feature = "pgvector", feature = "sqlite"))]
 	#[async_trait::async_trait]
 	impl TransactionExecutor for SourcedFailingTransaction {
+		fn supports_pgvector_error_hints(&self) -> bool {
+			true
+		}
+
 		async fn execute(
 			&mut self,
 			_sql: &str,

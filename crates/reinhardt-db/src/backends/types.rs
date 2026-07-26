@@ -518,6 +518,11 @@ pub trait TransactionExecutor: Send + Sync {
 		DatabaseType::Postgres
 	}
 
+	/// Returns whether contextual pgvector error hints are supported.
+	fn supports_pgvector_error_hints(&self) -> bool {
+		false
+	}
+
 	/// Execute a query that modifies the database within the transaction
 	async fn execute(
 		&mut self,
@@ -532,9 +537,13 @@ pub trait TransactionExecutor: Send + Sync {
 		params: Vec<QueryValue>,
 		context: Option<super::error::PgvectorOperationKind>,
 	) -> super::error::Result<QueryResult> {
-		self.execute(sql, params)
-			.await
-			.map_err(|error| super::error::decorate_error_with_pgvector_context(error, context))
+		let result = self.execute(sql, params).await;
+		if self.supports_pgvector_error_hints() {
+			result
+				.map_err(|error| super::error::decorate_error_with_pgvector_context(error, context))
+		} else {
+			result
+		}
 	}
 
 	/// Fetch a single row within the transaction
@@ -547,9 +556,13 @@ pub trait TransactionExecutor: Send + Sync {
 		params: Vec<QueryValue>,
 		context: Option<super::error::PgvectorOperationKind>,
 	) -> super::error::Result<Row> {
-		self.fetch_one(sql, params)
-			.await
-			.map_err(|error| super::error::decorate_error_with_pgvector_context(error, context))
+		let result = self.fetch_one(sql, params).await;
+		if self.supports_pgvector_error_hints() {
+			result
+				.map_err(|error| super::error::decorate_error_with_pgvector_context(error, context))
+		} else {
+			result
+		}
 	}
 
 	/// Fetch all matching rows within the transaction
@@ -566,9 +579,13 @@ pub trait TransactionExecutor: Send + Sync {
 		params: Vec<QueryValue>,
 		context: Option<super::error::PgvectorOperationKind>,
 	) -> super::error::Result<Vec<Row>> {
-		self.fetch_all(sql, params)
-			.await
-			.map_err(|error| super::error::decorate_error_with_pgvector_context(error, context))
+		let result = self.fetch_all(sql, params).await;
+		if self.supports_pgvector_error_hints() {
+			result
+				.map_err(|error| super::error::decorate_error_with_pgvector_context(error, context))
+		} else {
+			result
+		}
 	}
 
 	/// Fetch an optional single row within the transaction
@@ -585,9 +602,13 @@ pub trait TransactionExecutor: Send + Sync {
 		params: Vec<QueryValue>,
 		context: Option<super::error::PgvectorOperationKind>,
 	) -> super::error::Result<Option<Row>> {
-		self.fetch_optional(sql, params)
-			.await
-			.map_err(|error| super::error::decorate_error_with_pgvector_context(error, context))
+		let result = self.fetch_optional(sql, params).await;
+		if self.supports_pgvector_error_hints() {
+			result
+				.map_err(|error| super::error::decorate_error_with_pgvector_context(error, context))
+		} else {
+			result
+		}
 	}
 
 	/// Commit the transaction
@@ -668,6 +689,62 @@ mod tests {
 
 	struct LegacyExecutor;
 
+	struct ContextErrorTransactionWithoutCapability {
+		backend: DatabaseType,
+	}
+
+	#[async_trait::async_trait]
+	impl TransactionExecutor for ContextErrorTransactionWithoutCapability {
+		fn backend(&self) -> DatabaseType {
+			self.backend
+		}
+
+		async fn execute(
+			&mut self,
+			_sql: &str,
+			_params: Vec<QueryValue>,
+		) -> super::super::error::Result<QueryResult> {
+			Err(super::super::error::DatabaseError::new(
+				DatabaseErrorKind::Query,
+				"operator does not exist: vector <=> vector",
+			)
+			.with_code("42883")
+			.into())
+		}
+
+		async fn fetch_one(
+			&mut self,
+			_sql: &str,
+			_params: Vec<QueryValue>,
+		) -> super::super::error::Result<Row> {
+			panic!("context default transaction test does not fetch rows")
+		}
+
+		async fn fetch_all(
+			&mut self,
+			_sql: &str,
+			_params: Vec<QueryValue>,
+		) -> super::super::error::Result<Vec<Row>> {
+			panic!("context default transaction test does not fetch rows")
+		}
+
+		async fn fetch_optional(
+			&mut self,
+			_sql: &str,
+			_params: Vec<QueryValue>,
+		) -> super::super::error::Result<Option<Row>> {
+			panic!("context default transaction test does not fetch rows")
+		}
+
+		async fn commit(self: Box<Self>) -> super::super::error::Result<()> {
+			Ok(())
+		}
+
+		async fn rollback(self: Box<Self>) -> super::super::error::Result<()> {
+			Ok(())
+		}
+	}
+
 	#[async_trait::async_trait]
 	impl TransactionExecutor for LegacyExecutor {
 		async fn execute(
@@ -732,6 +809,32 @@ mod tests {
 		let executor = LegacyExecutor;
 
 		assert_eq!(executor.backend(), DatabaseType::Postgres);
+	}
+
+	#[rstest]
+	#[case(DatabaseType::Mysql)]
+	#[case(DatabaseType::Sqlite)]
+	#[case(DatabaseType::Postgres)]
+	#[tokio::test]
+	async fn transaction_default_without_capability_does_not_decorate_pgvector_shaped_error(
+		#[case] backend: DatabaseType,
+	) {
+		let mut executor = ContextErrorTransactionWithoutCapability { backend };
+
+		let error = executor
+			.execute_with_context(
+				"SELECT embedding <=> ? FROM users",
+				Vec::new(),
+				Some(super::super::error::PgvectorOperationKind::DistanceOperator),
+			)
+			.await
+			.unwrap_err();
+
+		assert_eq!(
+			error.database_error().and_then(|error| error.code()),
+			Some("42883")
+		);
+		assert!(!error.to_string().contains("CreateExtension::new"));
 	}
 
 	// ==================== Savepoint name validation tests ====================

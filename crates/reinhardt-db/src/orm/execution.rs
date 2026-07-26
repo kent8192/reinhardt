@@ -250,28 +250,48 @@ fn build_select_for_backend(
 pub(crate) fn pgvector_context_for_select(
 	stmt: &SelectStatement,
 ) -> Option<crate::backends::error::PgvectorOperationKind> {
-	pgvector_context_from_feature(reinhardt_query::error::select_pgvector_feature(stmt))
+	pgvector_context_from_features(reinhardt_query::error::select_pgvector_features(stmt))
 }
 
 pub(crate) fn pgvector_context_for_update(
 	stmt: &reinhardt_query::prelude::UpdateStatement,
 ) -> Option<crate::backends::error::PgvectorOperationKind> {
-	pgvector_context_from_feature(reinhardt_query::error::update_pgvector_feature(stmt))
+	pgvector_context_from_features(reinhardt_query::error::update_pgvector_features(stmt))
 }
 
-fn pgvector_context_from_feature(
-	feature: Option<reinhardt_query::error::PgvectorFeature>,
+fn pgvector_context_from_features(
+	features: reinhardt_query::error::PgvectorFeatureSet,
 ) -> Option<crate::backends::error::PgvectorOperationKind> {
 	use crate::backends::error::PgvectorOperationKind;
 	use reinhardt_query::error::PgvectorFeature;
 
-	match feature {
-		Some(PgvectorFeature::ColumnType) => Some(PgvectorOperationKind::ColumnType),
-		Some(PgvectorFeature::DistanceOperator) => Some(PgvectorOperationKind::DistanceOperator),
-		Some(PgvectorFeature::ApproximateIndex) => Some(PgvectorOperationKind::ApproximateIndex),
-		Some(PgvectorFeature::VectorValue) => Some(PgvectorOperationKind::VectorValue),
-		None | Some(_) => None,
+	let mut context = None;
+	for (feature, operation_kind) in [
+		(
+			PgvectorFeature::ColumnType,
+			PgvectorOperationKind::ColumnType,
+		),
+		(
+			PgvectorFeature::DistanceOperator,
+			PgvectorOperationKind::DistanceOperator,
+		),
+		(
+			PgvectorFeature::ApproximateIndex,
+			PgvectorOperationKind::ApproximateIndex,
+		),
+		(
+			PgvectorFeature::VectorValue,
+			PgvectorOperationKind::VectorValue,
+		),
+	] {
+		if features.contains(feature) {
+			context = Some(match context {
+				Some(existing) => PgvectorOperationKind::union(existing, operation_kind),
+				None => operation_kind,
+			});
+		}
 	}
+	context
 }
 
 /// Query execution methods with both sync builders and async execution
@@ -886,13 +906,20 @@ mod tests {
 	}
 
 	#[cfg(feature = "pgvector")]
-	struct DefaultContextErrorExecutor;
+	struct DefaultContextErrorExecutor {
+		backend: DatabaseBackend,
+		supports_pgvector_error_hints: bool,
+	}
 
 	#[cfg(feature = "pgvector")]
 	#[async_trait::async_trait]
 	impl OrmExecutor for DefaultContextErrorExecutor {
 		fn backend(&self) -> DatabaseBackend {
-			DatabaseBackend::Postgres
+			self.backend
+		}
+
+		fn supports_pgvector_error_hints(&self) -> bool {
+			self.supports_pgvector_error_hints
 		}
 
 		async fn execute(
@@ -1184,7 +1211,7 @@ mod tests {
 	}
 
 	#[cfg(feature = "pgvector")]
-	fn distance_execution() -> SelectExecution<User> {
+	fn distance_statement() -> SelectStatement {
 		use reinhardt_query::prelude::{BinOper, SimpleExpr};
 		use reinhardt_query::types::PgBinOper;
 
@@ -1195,11 +1222,15 @@ mod tests {
 				1.0, 2.0, 3.0,
 			]))))),
 		);
-		let stmt = Query::select()
+		Query::select()
 			.expr(distance)
 			.from(Alias::new("users"))
-			.to_owned();
-		SelectExecution::new(stmt)
+			.to_owned()
+	}
+
+	#[cfg(feature = "pgvector")]
+	fn distance_execution() -> SelectExecution<User> {
+		SelectExecution::new(distance_statement())
 	}
 
 	#[cfg(feature = "pgvector")]
@@ -1296,7 +1327,10 @@ mod tests {
 			.from(Alias::new("users"))
 			.to_owned();
 		let execution = SelectExecution::<User>::new(stmt);
-		let mut executor = DefaultContextErrorExecutor;
+		let mut executor = DefaultContextErrorExecutor {
+			backend: DatabaseBackend::Postgres,
+			supports_pgvector_error_hints: true,
+		};
 
 		let error = execution.all_async(&mut executor).await.unwrap_err();
 
@@ -1319,6 +1353,67 @@ mod tests {
 				.and_then(|source| source.downcast_ref::<std::io::Error>())
 				.is_some()
 		);
+	}
+
+	#[cfg(feature = "pgvector")]
+	#[tokio::test]
+	async fn pgvector_select_context_unions_vector_value_and_nested_distance() {
+		let stmt = Query::select()
+			.expr(reinhardt_query::prelude::SimpleExpr::Value(SV::Vector(
+				Some(Box::new(vec![1.0, 2.0, 3.0])),
+			)))
+			.from_subquery(distance_statement(), Alias::new("distances"))
+			.to_owned();
+		let execution = SelectExecution::<User>::new(stmt);
+		let mut executor = DefaultContextErrorExecutor {
+			backend: DatabaseBackend::Postgres,
+			supports_pgvector_error_hints: true,
+		};
+
+		let error = execution.all_async(&mut executor).await.unwrap_err();
+
+		let ExecutionError::Framework(error) = error else {
+			panic!("expected framework database error");
+		};
+		assert_eq!(
+			error.database_error().and_then(|error| error.code()),
+			Some("42883")
+		);
+		assert!(
+			error
+				.to_string()
+				.contains("CreateExtension::new(\"vector\")")
+		);
+	}
+
+	#[cfg(feature = "pgvector")]
+	#[rstest]
+	#[case(DatabaseBackend::MySql)]
+	#[case(DatabaseBackend::Sqlite)]
+	#[case(DatabaseBackend::Postgres)]
+	#[tokio::test]
+	async fn default_executor_without_capability_does_not_decorate_pgvector_shaped_error(
+		#[case] backend: DatabaseBackend,
+	) {
+		let mut executor = DefaultContextErrorExecutor {
+			backend,
+			supports_pgvector_error_hints: false,
+		};
+
+		let error = OrmExecutor::fetch_all_with_context(
+			&mut executor,
+			"SELECT embedding <=> ? FROM users",
+			Vec::new(),
+			Some(crate::backends::error::PgvectorOperationKind::DistanceOperator),
+		)
+		.await
+		.unwrap_err();
+
+		assert_eq!(
+			error.database_error().and_then(|error| error.code()),
+			Some("42883")
+		);
+		assert!(!error.to_string().contains("CreateExtension::new"));
 	}
 
 	#[test]

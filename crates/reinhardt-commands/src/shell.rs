@@ -82,11 +82,9 @@ async fn start_session(
 		result = &mut startup => result.map_err(|error| crate::CommandError::ExecutionError(error.to_string()))?,
 		result = tokio::signal::ctrl_c() => {
 			result.map_err(|error| crate::CommandError::ExecutionError(error.to_string()))?;
-			tokio::spawn(async move {
-				if let Ok(Ok(session)) = startup.await {
-					drop(session);
-				}
-			});
+			if let Ok(Ok(session)) = startup.await {
+				drop(session);
+			}
 			Err(crate::CommandError::ExecutionError("Shell startup was interrupted.".to_string()))
 		}
 	}

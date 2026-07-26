@@ -727,7 +727,7 @@ println!("qualified={}", std::any::type_name::<project_crate::apps::alpha::neste
 	let invalid_stdout = String::from_utf8_lossy(&invalid.stdout);
 	let invalid_stderr = String::from_utf8_lossy(&invalid.stderr);
 	assert!(
-		invalid_stderr.contains("error") || invalid_stderr.contains("expected"),
+		invalid_stderr.contains("expected expression"),
 		"invalid Rust should report a compiler diagnostic:\n{invalid_stderr}"
 	);
 	assert!(

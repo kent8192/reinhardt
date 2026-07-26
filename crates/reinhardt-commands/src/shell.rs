@@ -111,66 +111,6 @@ where
 #[cfg(feature = "shell")]
 pub fn shell_runtime_hook() {
 	evcxr::runtime_hook();
-	configure_shell_build_dir(std::env::args_os());
-}
-
-#[cfg(feature = "shell")]
-fn configure_shell_build_dir<I, S>(arguments: I)
-where
-	I: IntoIterator<Item = S>,
-	S: AsRef<std::ffi::OsStr>,
-{
-	if is_shell_subcommand(arguments) && std::env::var_os("CARGO_BUILD_BUILD_DIR").is_none() {
-		// Workaround for evcxr/evcxr#487 (tracked in reinhardt-web#5817).
-		// Remove this workaround when evcxr supports Cargo's separate build.build-dir.
-		//
-		// Ideal implementation (without workaround):
-		//   let (context, outputs) = evcxr::EvalContext::new()?;
-		//
-		// SAFETY: Generated management binaries call this entry hook before starting Tokio or
-		// any other threads, so no concurrent environment readers exist during this mutation.
-		unsafe {
-			std::env::set_var("CARGO_BUILD_BUILD_DIR", "target");
-		}
-	}
-}
-
-#[cfg(feature = "shell")]
-fn is_shell_subcommand<I, S>(arguments: I) -> bool
-where
-	I: IntoIterator<Item = S>,
-	S: AsRef<std::ffi::OsStr>,
-{
-	for argument in arguments.into_iter().skip(1) {
-		let argument = argument.as_ref();
-		if argument == "--verbosity"
-			|| is_short_verbosity(argument)
-			|| is_numeric_verbosity(argument)
-		{
-			continue;
-		}
-		return argument == "shell";
-	}
-	false
-}
-
-#[cfg(feature = "shell")]
-fn is_numeric_verbosity(argument: &std::ffi::OsStr) -> bool {
-	// The hook runs before `cli::normalize_count_style_verbosity_args`, so it
-	// recognizes the same `u8` value domain without exposing that driver helper.
-	argument
-		.to_str()
-		.and_then(|argument| argument.strip_prefix("--verbosity="))
-		.is_some_and(|value| value.parse::<u8>().is_ok())
-}
-
-#[cfg(feature = "shell")]
-fn is_short_verbosity(argument: &std::ffi::OsStr) -> bool {
-	argument.to_str().is_some_and(|argument| {
-		argument
-			.strip_prefix('-')
-			.is_some_and(|suffix| !suffix.is_empty() && suffix.bytes().all(|byte| byte == b'v'))
-	})
 }
 
 /// Performs no runtime setup when shell support is disabled.
@@ -180,7 +120,6 @@ pub fn shell_runtime_hook() {}
 #[cfg(all(test, feature = "shell"))]
 mod tests {
 	use std::collections::VecDeque;
-	use std::process::{Command, Output};
 	use std::sync::{Arc, Mutex};
 
 	use async_trait::async_trait;
@@ -193,8 +132,6 @@ mod tests {
 		EvaluationInterrupt, EvaluatorClient, EvaluatorFactory, InputEvent, ShellInput, ShellOutput,
 	};
 	use crate::{CommandError, CommandResult};
-
-	const PROBE_TEST: &str = "shell::tests::runtime_hook_subprocess_probe";
 
 	#[test]
 	fn raw_clap_parser_requires_driver_normalization_for_numeric_verbosity() {
@@ -386,120 +323,5 @@ mod tests {
 		.expect_err("invalid one-shot Rust must fail");
 
 		assert_eq!(error.to_string(), "Execution error: expected expression");
-	}
-
-	fn run_probe(hook_arguments: &[&str], build_dir: Option<&str>) -> Output {
-		let mut command =
-			Command::new(std::env::current_exe().expect("current test executable should resolve"));
-		command
-			.arg("--ignored")
-			.arg("--exact")
-			.arg(PROBE_TEST)
-			.arg("--no-capture")
-			.env(
-				"REINHARDT_SHELL_HOOK_PROBE_ARGS",
-				hook_arguments.join("\u{1f}"),
-			)
-			.env_remove("CARGO_BUILD_BUILD_DIR");
-		if let Some(build_dir) = build_dir {
-			command.env("CARGO_BUILD_BUILD_DIR", build_dir);
-		}
-		command.output().expect("hook probe should run")
-	}
-
-	#[ignore = "subprocess-only hook probe"]
-	#[test]
-	fn runtime_hook_subprocess_probe() {
-		let arguments = std::env::var("REINHARDT_SHELL_HOOK_PROBE_ARGS")
-			.expect("hook probe arguments should be present");
-		super::configure_shell_build_dir(arguments.split('\u{1f}'));
-		println!(
-			"HOOK_BUILD_DIR={}",
-			std::env::var("CARGO_BUILD_BUILD_DIR").unwrap_or_else(|_| "<unset>".to_string())
-		);
-	}
-
-	#[test]
-	fn runtime_hook_handles_leading_verbosity_without_misreading_option_values() {
-		let verbose_shell = run_probe(&["manage", "-vv", "shell"], None);
-		let numeric_verbose_shell = run_probe(&["manage", "--verbosity=2", "shell"], None);
-		let invalid_numeric_verbosity = run_probe(&["manage", "--verbosity=256", "shell"], None);
-		let unrelated_option_value = run_probe(&["manage", "--settings", "shell"], None);
-		let non_shell = run_probe(&["manage", "-v", "runserver"], None);
-		let explicit = run_probe(
-			&["manage", "--verbosity", "shell"],
-			Some("/caller/build-dir"),
-		);
-
-		assert!(verbose_shell.status.success());
-		assert!(
-			String::from_utf8_lossy(&verbose_shell.stdout).contains("HOOK_BUILD_DIR=target"),
-			"unexpected verbose-shell probe output: {}",
-			String::from_utf8_lossy(&verbose_shell.stdout)
-		);
-		assert!(numeric_verbose_shell.status.success());
-		assert!(
-			String::from_utf8_lossy(&numeric_verbose_shell.stdout)
-				.contains("HOOK_BUILD_DIR=target"),
-			"unexpected numeric-verbosity probe output: {}",
-			String::from_utf8_lossy(&numeric_verbose_shell.stdout)
-		);
-		assert!(invalid_numeric_verbosity.status.success());
-		assert!(
-			String::from_utf8_lossy(&invalid_numeric_verbosity.stdout)
-				.contains("HOOK_BUILD_DIR=<unset>"),
-			"unexpected invalid-numeric-verbosity probe output: {}",
-			String::from_utf8_lossy(&invalid_numeric_verbosity.stdout)
-		);
-		assert!(unrelated_option_value.status.success());
-		assert!(
-			String::from_utf8_lossy(&unrelated_option_value.stdout)
-				.contains("HOOK_BUILD_DIR=<unset>"),
-			"unexpected option-value probe output: {}",
-			String::from_utf8_lossy(&unrelated_option_value.stdout)
-		);
-		assert!(non_shell.status.success());
-		assert!(
-			String::from_utf8_lossy(&non_shell.stdout).contains("HOOK_BUILD_DIR=<unset>"),
-			"unexpected non-shell probe output: {}",
-			String::from_utf8_lossy(&non_shell.stdout)
-		);
-		assert!(explicit.status.success());
-		assert!(
-			String::from_utf8_lossy(&explicit.stdout).contains("HOOK_BUILD_DIR=/caller/build-dir"),
-			"unexpected explicit-env probe output: {}",
-			String::from_utf8_lossy(&explicit.stdout)
-		);
-	}
-
-	#[test]
-	fn shell_subcommand_must_occupy_the_subcommand_position() {
-		assert!(super::is_shell_subcommand(["manage", "shell"]));
-		assert!(super::is_shell_subcommand(["manage", "-v", "shell"]));
-		assert!(super::is_shell_subcommand(["manage", "-vv", "shell"]));
-		assert!(super::is_shell_subcommand([
-			"manage",
-			"--verbosity",
-			"shell"
-		]));
-		assert!(super::is_shell_subcommand([
-			"manage",
-			"--verbosity=2",
-			"shell"
-		]));
-		for invalid in [
-			"--verbosity=",
-			"--verbosity=two",
-			"--verbosity=256",
-			"--verbosity=-1",
-		] {
-			assert!(!super::is_shell_subcommand(["manage", invalid, "shell"]));
-		}
-		assert!(!super::is_shell_subcommand([
-			"manage",
-			"--settings",
-			"shell"
-		]));
-		assert!(!super::is_shell_subcommand(["manage", "runserver"]));
 	}
 }

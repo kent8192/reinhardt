@@ -85,6 +85,7 @@ impl EvcxrEvaluator {
 			std::env::current_exe()
 				.map_err(|error| EvaluationFailure::ProcessExited(error.to_string()))?,
 		);
+		configure_evaluator_build_dir(&mut command);
 		configure_evaluator_process_group(&mut command)?;
 		let (eval, outputs) =
 			EvalContext::with_subprocess_command(command).map_err(classify_startup_error)?;
@@ -365,10 +366,7 @@ impl BlockingShellEvaluator for EvcxrEvaluator {
 			.with_output(output)),
 			Err(Error::SubprocessTerminated(message)) => {
 				if is_panic_output(&output.stderr) {
-					Err(
-						EvaluationFailure::Panic(combine_diagnostic(&message, &output.stderr))
-							.with_output(output),
-					)
+					Err(EvaluationFailure::Panic(message).with_output(output))
 				} else {
 					Err(EvaluationFailure::ProcessExited(combine_diagnostic(
 						&message,
@@ -607,6 +605,7 @@ fn bootstrap_prelude(config: &ValidatedShellConfig) -> Vec<String> {
 	vec![
 		format!(
 			"use {crate_name}::config::shell::framework;\n\
+			 use {crate_name}::config::shell::framework::prelude::*;\n\
 			 use {crate_name} as project_crate;"
 		),
 		format!(
@@ -650,6 +649,24 @@ fn configure_evaluator_process_group(_command: &mut Command) -> Result<(), Evalu
 	Ok(())
 }
 
+fn configure_evaluator_build_dir(command: &mut Command) {
+	configure_evaluator_build_dir_from(command, std::env::var_os("CARGO_BUILD_BUILD_DIR"));
+}
+
+fn configure_evaluator_build_dir_from(
+	command: &mut Command,
+	build_dir: Option<std::ffi::OsString>,
+) {
+	if build_dir.is_none() {
+		// Workaround for evcxr/evcxr#487 (tracked in reinhardt-web#5817).
+		// Remove this workaround when evcxr supports Cargo's separate build.build-dir.
+		//
+		// Ideal implementation (without workaround):
+		//   let (context, outputs) = evcxr::EvalContext::new()?;
+		command.env("CARGO_BUILD_BUILD_DIR", "target");
+	}
+}
+
 fn terminate_evaluator_process(
 	process: &mut Child,
 	owns_process_group: bool,
@@ -690,7 +707,7 @@ fn source_with_commit_sentinel(source: &str, sentinel: &str) -> String {
 				.map(|end| end + 1)
 				.or(Some(candidate.len()))
 		} else if candidate.starts_with("/*!") {
-			candidate.find("*/").map(|end| end + 2)
+			complete_inner_block_doc(candidate)
 		} else {
 			None
 		};
@@ -708,6 +725,29 @@ fn source_with_commit_sentinel(source: &str, sentinel: &str) -> String {
 		&source[..prefix_end],
 		&source[prefix_end..]
 	)
+}
+
+fn complete_inner_block_doc(source: &str) -> Option<usize> {
+	let bytes = source.as_bytes();
+	let mut depth = 1usize;
+	let mut index = 3usize;
+	while index + 1 < bytes.len() {
+		match (bytes[index], bytes[index + 1]) {
+			(b'/', b'*') => {
+				depth += 1;
+				index += 2;
+			}
+			(b'*', b'/') => {
+				depth -= 1;
+				index += 2;
+				if depth == 0 {
+					return Some(index);
+				}
+			}
+			_ => index += 1,
+		}
+	}
+	None
 }
 
 fn complete_inner_attribute(source: &str) -> Option<usize> {
@@ -804,7 +844,7 @@ fn nonempty_diagnostic(stderr: &str, fallback: &str) -> String {
 fn classify_boundary_error(error: Error, stderr: &str) -> EvaluationFailure {
 	match classify_startup_error(error) {
 		EvaluationFailure::ProcessExited(message) if is_panic_output(stderr) => {
-			EvaluationFailure::Panic(combine_diagnostic(&message, stderr))
+			EvaluationFailure::Panic(message)
 		}
 		EvaluationFailure::ProcessExited(message) => {
 			EvaluationFailure::ProcessExited(combine_diagnostic(&message, stderr))
@@ -993,7 +1033,8 @@ mod tests {
 
 	use super::{
 		BlockingShellEvaluator, EvaluationFailure, EvaluationOutput, EvaluatorWorker,
-		EvcxrEvaluator, StreamCapture, path_dependency, source_with_commit_sentinel,
+		EvcxrEvaluator, StreamCapture, bootstrap_prelude, configure_evaluator_build_dir_from,
+		evaluation_command_error, path_dependency, source_with_commit_sentinel,
 	};
 	use crate::ShellConfig;
 	use crate::shell::session::{EvaluationInterrupt, EvaluatorClient};
@@ -1059,6 +1100,43 @@ mod tests {
 	}
 
 	#[test]
+	fn commit_sentinel_follows_nested_inner_block_docs() {
+		let source = "/*! outer /* nested */ still outer */\nlet value = 1;";
+		let rendered = source_with_commit_sentinel(source, "__commit");
+
+		assert_eq!(
+			rendered,
+			"/*! outer /* nested */ still outer */\nlet __commit: ::std::string::String = ::std::string::String::new();\nlet value = 1;"
+		);
+	}
+
+	#[test]
+	fn panic_output_is_not_repeated_in_the_command_error() {
+		let error = evaluation_command_error(
+			EvaluationFailure::Panic("panic payload".to_string()).with_output(EvaluationOutput {
+				stdout: String::new(),
+				stderr: "panic payload\n".to_string(),
+				value: None,
+			}),
+		);
+
+		assert_eq!(error.to_string().matches("panic payload").count(), 1);
+	}
+
+	#[test]
+	fn evaluator_child_uses_the_build_dir_workaround_without_mutating_process_environment() {
+		let mut command = Command::new("shell-evaluator-child");
+		configure_evaluator_build_dir_from(&mut command, None);
+
+		let configured = command
+			.get_envs()
+			.find(|(key, _)| *key == "CARGO_BUILD_BUILD_DIR")
+			.and_then(|(_, value)| value)
+			.expect("child command should receive a build directory");
+		assert_eq!(configured, "target");
+	}
+
+	#[test]
 	fn project_path_dependency_enables_commands_shell_feature() {
 		let directory = Builder::new()
 			.prefix("shell-dependency")
@@ -1082,6 +1160,8 @@ mod tests {
 		.without_default_features()
 		.validate()
 		.expect("shell configuration should validate");
+		let prelude = bootstrap_prelude(&config);
+		assert!(prelude[0].contains("use shell_project::config::shell::framework::prelude::*;"));
 		let dependency = path_dependency(&config).expect("path dependency should render");
 		let manifest = format!("[dependencies]\nshell_project = {dependency}\n");
 		let document = manifest

@@ -138,7 +138,10 @@ where
 	pub(crate) async fn execute_once(&mut self, source: &str) -> CommandResult<()> {
 		match self.evaluate(source).await {
 			Ok(output) => self.forward(output),
-			Err(failure) => Err(command_error(failure)),
+			Err(failure) => {
+				self.forward_failure_output(&failure)?;
+				Err(command_error(failure))
+			}
 		}
 	}
 
@@ -159,10 +162,12 @@ where
 					match self.evaluate(&source).await {
 						Ok(output) => self.forward(output)?,
 						Err(failure) if failure_is_fatal(&failure) => {
+							self.forward_failure_output(&failure)?;
 							self.output.warning(failure_message(&failure))?;
 							self.recover()?;
 						}
 						Err(failure) => {
+							self.forward_failure_output(&failure)?;
 							self.output.warning(failure_message(&failure))?;
 						}
 					}
@@ -215,6 +220,13 @@ where
 		Ok(())
 	}
 
+	fn forward_failure_output(&mut self, failure: &EvaluationFailure) -> CommandResult<()> {
+		if let Some(output) = failure.output() {
+			self.forward(output.clone())?;
+		}
+		Ok(())
+	}
+
 	fn recover(&mut self) -> CommandResult<()> {
 		let replacement = self.factory.start()?;
 		self.evaluator = replacement;
@@ -227,12 +239,14 @@ where
 }
 
 fn failure_is_fatal(failure: &EvaluationFailure) -> bool {
-	matches!(
-		failure,
+	match failure {
 		EvaluationFailure::Panic(_)
-			| EvaluationFailure::ProcessExited(_)
-			| EvaluationFailure::Interrupted
-	)
+		| EvaluationFailure::ProcessExited(_)
+		| EvaluationFailure::ContextReset(_)
+		| EvaluationFailure::Interrupted => true,
+		EvaluationFailure::Output { failure, .. } => failure_is_fatal(failure),
+		EvaluationFailure::Compilation(_) | EvaluationFailure::Runtime(_) => false,
+	}
 }
 
 fn failure_message(failure: &EvaluationFailure) -> &str {
@@ -240,7 +254,9 @@ fn failure_message(failure: &EvaluationFailure) -> &str {
 		EvaluationFailure::Compilation(message)
 		| EvaluationFailure::Runtime(message)
 		| EvaluationFailure::Panic(message)
-		| EvaluationFailure::ProcessExited(message) => message,
+		| EvaluationFailure::ProcessExited(message)
+		| EvaluationFailure::ContextReset(message) => message,
+		EvaluationFailure::Output { failure, .. } => failure_message(failure),
 		EvaluationFailure::Interrupted => "Evaluation was interrupted.",
 	}
 }
@@ -492,6 +508,26 @@ mod tests {
 	}
 
 	#[tokio::test]
+	async fn execute_once_forwards_output_captured_before_a_failure() {
+		let failure = EvaluationFailure::Output {
+			failure: Box::new(EvaluationFailure::Runtime("query failed".to_string())),
+			output: output("before failure\n", "diagnostic\n", None),
+		};
+		let (factory, _) = FakeFactory::new([outcomes([Err(failure)])]);
+		let mut session = ShellSession::with_signal(factory, FakeOutput::default(), NeverInterrupt)
+			.expect("session should start");
+
+		let error = session
+			.execute_once("println!(\"before failure\"); query()?;")
+			.await
+			.expect_err("evaluation should fail after forwarding output");
+
+		assert_eq!(error.to_string(), "Execution error: query failed");
+		assert_eq!(session.output().stdout, ["before failure\n"]);
+		assert_eq!(session.output().stderr, ["diagnostic\n"]);
+	}
+
+	#[tokio::test]
 	async fn interactive_nonfatal_failure_preserves_context_and_fatal_failure_replaces_it() {
 		let first = outcomes([
 			Ok(output("", "", Some("1"))),
@@ -531,6 +567,43 @@ mod tests {
 			[
 				"query failed",
 				"child panicked",
+				"Shell state was reset and the project prelude was reloaded."
+			]
+		);
+	}
+
+	#[tokio::test]
+	async fn interactive_context_reset_failure_replaces_the_evaluator() {
+		let first = outcomes([Err(EvaluationFailure::ContextReset(
+			"evaluation changed stored variable types: value".to_string(),
+		))]);
+		let second = outcomes([Ok(output("", "", Some("2")))]);
+		let (factory, state) = FakeFactory::new([first, second]);
+		let mut session = ShellSession::with_signal(factory, FakeOutput::default(), NeverInterrupt)
+			.expect("session should start");
+		let mut input = FakeInput {
+			events: [
+				Ok(InputEvent::Source("let value = 1;".to_string())),
+				Ok(InputEvent::Source("1 + 1".to_string())),
+				Ok(InputEvent::Eof),
+			]
+			.into_iter()
+			.collect(),
+		};
+
+		session
+			.run_interactive(&mut input)
+			.await
+			.expect("context reset should recover the session");
+
+		let state = state.lock().expect("fake state lock");
+		assert_eq!(state.starts, 2);
+		assert_eq!(state.sources, ["let value = 1;", "1 + 1"]);
+		assert_eq!(session.output().values, ["2"]);
+		assert_eq!(
+			session.output().warnings,
+			[
+				"evaluation changed stored variable types: value",
 				"Shell state was reset and the project prelude was reloaded."
 			]
 		);

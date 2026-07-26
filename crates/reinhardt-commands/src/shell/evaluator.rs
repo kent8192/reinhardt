@@ -20,6 +20,11 @@ pub(crate) enum EvaluationFailure {
 	Runtime(String),
 	Panic(String),
 	ProcessExited(String),
+	ContextReset(String),
+	Output {
+		failure: Box<EvaluationFailure>,
+		output: EvaluationOutput,
+	},
 	// Task 5 constructs this variant when its cancellation branch wins.
 	#[allow(dead_code)]
 	Interrupted,
@@ -30,6 +35,26 @@ pub(crate) struct EvaluationOutput {
 	pub(crate) stdout: String,
 	pub(crate) stderr: String,
 	pub(crate) value: Option<String>,
+}
+
+impl EvaluationFailure {
+	fn with_output(self, output: EvaluationOutput) -> Self {
+		if output.stdout.is_empty() && output.stderr.is_empty() {
+			self
+		} else {
+			Self::Output {
+				failure: Box::new(self),
+				output,
+			}
+		}
+	}
+
+	pub(crate) fn output(&self) -> Option<&EvaluationOutput> {
+		match self {
+			Self::Output { output, .. } => Some(output),
+			_ => None,
+		}
+	}
 }
 
 pub(crate) trait BlockingShellEvaluator: Send {
@@ -137,7 +162,7 @@ impl BlockingShellEvaluator for EvcxrEvaluator {
 			"__REINHARDT_SHELL_OUTPUT_BOUNDARY_{}_{}__",
 			self.evaluator_id, self.evaluation_sequence
 		);
-		self.output_drainers.begin(&marker);
+		let (pending_stdout, pending_stderr) = self.output_drainers.begin(&marker);
 		let result = self.context.execute(&format!(
 			"let {sentinel}: ::std::string::String = ::std::string::String::new();\n{source}"
 		));
@@ -162,18 +187,33 @@ impl BlockingShellEvaluator for EvcxrEvaluator {
 		};
 		let (stdout, stderr) = match boundary_result {
 			Some(Ok(_)) => self.output_drainers.finish(&marker)?,
-			Some(Err(error)) => return Err(classify_boundary_error(error, "")),
+			Some(Err(error)) => {
+				let (stdout, stderr) = self.output_drainers.finish_after_disconnect();
+				return Err(classify_boundary_error(error, &stderr).with_output(
+					EvaluationOutput {
+						stdout: format!("{pending_stdout}{stdout}"),
+						stderr: format!("{pending_stderr}{stderr}"),
+						value: None,
+					},
+				));
+			}
 			None => self.output_drainers.finish_after_disconnect(),
+		};
+		let output = EvaluationOutput {
+			stdout: format!("{pending_stdout}{stdout}"),
+			stderr: format!("{pending_stderr}{stderr}"),
+			value: None,
 		};
 
 		match result {
 			Ok(_) if !committed => Err(EvaluationFailure::Runtime(nonempty_diagnostic(
-				&stderr,
+				&output.stderr,
 				"evaluation failed before committing state",
-			))),
+			))
+			.with_output(output)),
 			Ok(outputs) => Ok(EvaluationOutput {
-				stdout,
-				stderr,
+				stdout: output.stdout,
+				stderr: output.stderr,
 				value: outputs.get("text/plain").map(str::to_owned),
 			}),
 			Err(Error::CompilationErrors(errors)) => Err(EvaluationFailure::Compilation(
@@ -182,25 +222,32 @@ impl BlockingShellEvaluator for EvcxrEvaluator {
 					.map(|error| error.message())
 					.collect::<Vec<_>>()
 					.join("\n"),
-			)),
+			)
+			.with_output(output)),
 			Err(Error::SubprocessTerminated(message)) => {
-				if is_panic_output(&stderr) {
-					Err(EvaluationFailure::Panic(combine_diagnostic(
-						&message, &stderr,
-					)))
+				if is_panic_output(&output.stderr) {
+					Err(
+						EvaluationFailure::Panic(combine_diagnostic(&message, &output.stderr))
+							.with_output(output),
+					)
 				} else {
 					Err(EvaluationFailure::ProcessExited(combine_diagnostic(
-						&message, &stderr,
-					)))
+						&message,
+						&output.stderr,
+					))
+					.with_output(output))
 				}
 			}
 			Err(Error::TypeRedefinedVariablesLost(variables)) => {
-				Err(EvaluationFailure::Runtime(format!(
+				Err(EvaluationFailure::ContextReset(format!(
 					"evaluation changed stored variable types: {}",
 					variables.join(", ")
-				)))
+				))
+				.with_output(output))
 			}
-			Err(Error::Message(message)) => Err(EvaluationFailure::Runtime(message)),
+			Err(Error::Message(message)) => {
+				Err(EvaluationFailure::Runtime(message).with_output(output))
+			}
 		}
 	}
 
@@ -368,14 +415,15 @@ fn evaluation_command_error(failure: EvaluationFailure) -> CommandError {
 		EvaluationFailure::Compilation(message)
 		| EvaluationFailure::Runtime(message)
 		| EvaluationFailure::Panic(message)
-		| EvaluationFailure::ProcessExited(message) => message,
+		| EvaluationFailure::ProcessExited(message)
+		| EvaluationFailure::ContextReset(message) => message,
+		EvaluationFailure::Output { failure, .. } => return evaluation_command_error(*failure),
 		EvaluationFailure::Interrupted => "Evaluation was interrupted.".to_string(),
 	};
 	CommandError::ExecutionError(message)
 }
 
 static NEXT_EVALUATOR_ID: AtomicU64 = AtomicU64::new(1);
-const OUTPUT_BOUNDARY_TIMEOUT: Duration = Duration::from_secs(2);
 const OUTPUT_DISCONNECT_TIMEOUT: Duration = Duration::from_secs(2);
 
 fn path_dependency(config: &ValidatedShellConfig) -> Result<String, EvaluationFailure> {
@@ -484,7 +532,7 @@ fn classify_startup_error(error: Error) -> EvaluationFailure {
 				.join("\n"),
 		),
 		Error::SubprocessTerminated(message) => EvaluationFailure::ProcessExited(message),
-		Error::TypeRedefinedVariablesLost(variables) => EvaluationFailure::Runtime(format!(
+		Error::TypeRedefinedVariablesLost(variables) => EvaluationFailure::ContextReset(format!(
 			"startup changed stored variable types: {}",
 			variables.join(", ")
 		)),
@@ -505,6 +553,9 @@ fn startup_prelude_error(error: EvaluationFailure, warnings: &[String]) -> Evalu
 		EvaluationFailure::Runtime(message) => {
 			EvaluationFailure::Runtime(format!("shell bootstrap failed{warning_suffix}: {message}"))
 		}
+		EvaluationFailure::ContextReset(message) => EvaluationFailure::ContextReset(format!(
+			"shell bootstrap failed{warning_suffix}: {message}"
+		)),
 		other => other,
 	}
 }
@@ -582,15 +633,13 @@ impl OutputDrainers {
 		}
 	}
 
-	fn begin(&self, marker: &str) {
-		self.stdout.begin(marker);
-		self.stderr.begin(marker);
+	fn begin(&self, marker: &str) -> (String, String) {
+		(self.stdout.begin(marker), self.stderr.begin(marker))
 	}
 
 	fn finish(&self, marker: &str) -> Result<(String, String), EvaluationFailure> {
-		let deadline = Instant::now() + OUTPUT_BOUNDARY_TIMEOUT;
-		let stdout = self.stdout.take_at_boundary(marker, deadline)?;
-		let stderr = self.stderr.take_at_boundary(marker, deadline)?;
+		let stdout = self.stdout.take_at_boundary(marker)?;
+		let stderr = self.stderr.take_at_boundary(marker)?;
 		Ok((stdout, stderr))
 	}
 
@@ -628,14 +677,15 @@ struct StreamCaptureState {
 }
 
 impl StreamCapture {
-	fn begin(&self, marker: &str) {
+	fn begin(&self, marker: &str) -> String {
 		let mut state = self
 			.state
 			.lock()
 			.unwrap_or_else(std::sync::PoisonError::into_inner);
-		state.buffer.clear();
+		let pending = std::mem::take(&mut state.buffer);
 		state.pending_marker = Some(marker.to_string());
 		state.marker_observed = false;
+		pending
 	}
 
 	fn push(&self, line: String) {
@@ -664,27 +714,16 @@ impl StreamCapture {
 		self.changed.notify_all();
 	}
 
-	fn take_at_boundary(
-		&self,
-		marker: &str,
-		deadline: Instant,
-	) -> Result<String, EvaluationFailure> {
+	fn take_at_boundary(&self, marker: &str) -> Result<String, EvaluationFailure> {
 		let mut state = self
 			.state
 			.lock()
 			.unwrap_or_else(std::sync::PoisonError::into_inner);
 		while !state.marker_observed && !state.disconnected {
-			let Some(remaining) = deadline.checked_duration_since(Instant::now()) else {
-				break;
-			};
-			let (next_state, timeout) = self
+			state = self
 				.changed
-				.wait_timeout(state, remaining)
+				.wait(state)
 				.unwrap_or_else(std::sync::PoisonError::into_inner);
-			state = next_state;
-			if timeout.timed_out() {
-				break;
-			}
 		}
 		if !state.marker_observed {
 			return Err(EvaluationFailure::ProcessExited(format!(
@@ -859,15 +898,65 @@ mod tests {
 	fn stream_capture_preserves_partial_output_before_boundary() {
 		let capture = StreamCapture::default();
 		let marker = "__REINHARDT_SHELL_OUTPUT_BOUNDARY_1_1__";
-		capture.begin(marker);
+		assert_eq!(capture.begin(marker), "");
 		capture.push(format!("partial output{marker}"));
 
 		assert_eq!(
 			capture
-				.take_at_boundary(marker, Instant::now())
+				.take_at_boundary(marker)
 				.expect("partial-output boundary should be recognized"),
 			"partial output"
 		);
+	}
+
+	#[test]
+	fn stream_capture_returns_output_arriving_after_the_previous_boundary() {
+		let capture = StreamCapture::default();
+		let first_marker = "__REINHARDT_SHELL_OUTPUT_BOUNDARY_1_1__";
+		let second_marker = "__REINHARDT_SHELL_OUTPUT_BOUNDARY_1_2__";
+		assert_eq!(capture.begin(first_marker), "");
+		capture.push(first_marker.to_string());
+		assert_eq!(
+			capture
+				.take_at_boundary(first_marker)
+				.expect("first boundary should be recognized"),
+			""
+		);
+		capture.push("detached output".to_string());
+
+		assert_eq!(capture.begin(second_marker), "detached output\n");
+		capture.push(second_marker.to_string());
+		assert_eq!(
+			capture
+				.take_at_boundary(second_marker)
+				.expect("second boundary should be recognized"),
+			""
+		);
+	}
+
+	#[test]
+	fn stream_capture_waits_for_a_delayed_boundary_while_connected() {
+		let capture = Arc::new(StreamCapture::default());
+		let marker = "__REINHARDT_SHELL_OUTPUT_BOUNDARY_1_1__";
+		assert_eq!(capture.begin(marker), "");
+		let producer = {
+			let capture = Arc::clone(&capture);
+			let marker = marker.to_string();
+			thread::spawn(move || {
+				thread::sleep(Duration::from_millis(20));
+				capture.push(marker);
+			})
+		};
+
+		assert_eq!(
+			capture
+				.take_at_boundary(marker)
+				.expect("delayed boundary should be recognized"),
+			""
+		);
+		producer
+			.join()
+			.expect("delayed boundary producer should join");
 	}
 
 	#[tokio::test]

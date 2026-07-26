@@ -14,6 +14,20 @@ installed_apps! {
 	another: "custom.another",
 }
 
+mod raw_identifier_label {
+	use reinhardt_macros::installed_apps;
+
+	installed_apps! {
+		r#type: "myproject.type",
+	}
+
+	#[test]
+	fn all_labels_uses_the_unraw_identifier_spelling() {
+		assert_eq!(InstalledApp::all_labels(), &["type"]);
+		assert_eq!(InstalledApp::r#type.path(), "myproject.type");
+	}
+}
+
 #[test]
 fn test_installed_apps_empty() {
 	installed_apps! {}

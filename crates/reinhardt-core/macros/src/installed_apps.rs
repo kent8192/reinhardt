@@ -365,6 +365,7 @@ use proc_macro2::TokenStream;
 use quote::quote;
 use syn::{
 	Ident, LitStr, Result, Token,
+	ext::IdentExt,
 	parse::{Parse, ParseStream},
 	punctuated::Punctuated,
 };
@@ -568,7 +569,14 @@ pub(crate) fn installed_apps_impl(input: TokenStream) -> Result<TokenStream> {
 	// Write app labels to state file for cross-macro communication with #[routes].
 	// This replaces the __reinhardt_for_each_app #[macro_export] callback pattern
 	// that triggers macro_expanded_macro_exports_accessed_by_absolute_paths on Rust 1.96+.
-	let label_strings: Vec<String> = labels.iter().map(|l| l.to_string()).collect();
+	let label_strings: Vec<String> = labels
+		.iter()
+		.map(|label| label.unraw().to_string())
+		.collect();
+	let label_literals: Vec<_> = label_strings
+		.iter()
+		.map(|label| LitStr::new(label, proc_macro2::Span::call_site()))
+		.collect();
 	if let Err(err) = crate::macro_state::write_installed_apps(&label_strings) {
 		return Err(syn::Error::new(
 			proc_macro2::Span::call_site(),
@@ -674,10 +682,10 @@ pub(crate) fn installed_apps_impl(input: TokenStream) -> Result<TokenStream> {
 				]
 			}
 
-			/// Get all installed app declaration labels without allocating.
-			pub const fn all_labels() -> &'static [&'static str] {
-				&[#(stringify!(#labels)),*]
-			}
+				/// Get all installed app declaration labels without allocating.
+				pub const fn all_labels() -> &'static [&'static str] {
+					&[#(#label_literals),*]
+				}
 			/// Get the path for this app
 			///
 			pub fn path(&self) -> &'static str {

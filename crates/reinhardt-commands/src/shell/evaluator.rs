@@ -133,13 +133,21 @@ impl EvcxrEvaluator {
 			EvalContext::with_subprocess_command(command).map_err(classify_startup_error)?;
 		let process_handle = eval.process_handle();
 		let owns_process_group = cfg!(unix);
+		let process_guard =
+			EvaluatorProcessGuard::new(Arc::clone(&process_handle), owns_process_group)?;
 		startup_interrupt.register(EvaluationInterrupt::new(move || {
 			let mut process = process_handle.lock().map_err(|_| {
 				EvaluationFailure::ProcessExited("evaluator process lock is poisoned".to_string())
 			})?;
 			terminate_evaluator_process(&mut process, owns_process_group)
 		}))?;
-		Self::bootstrap_with_context_and_process_group(config, eval, outputs, cfg!(unix))
+		Self::bootstrap_with_context_and_process_guard(
+			config,
+			eval,
+			outputs,
+			owns_process_group,
+			process_guard,
+		)
 	}
 
 	fn bootstrap_with_context(
@@ -156,8 +164,23 @@ impl EvcxrEvaluator {
 		outputs: EvalContextOutputs,
 		owns_process_group: bool,
 	) -> Result<(Self, Vec<String>), EvaluationFailure> {
-		let mut process_guard =
-			EvaluatorProcessGuard::new(eval.process_handle(), owns_process_group)?;
+		let process_guard = EvaluatorProcessGuard::new(eval.process_handle(), owns_process_group)?;
+		Self::bootstrap_with_context_and_process_guard(
+			config,
+			eval,
+			outputs,
+			owns_process_group,
+			process_guard,
+		)
+	}
+
+	fn bootstrap_with_context_and_process_guard(
+		config: &ValidatedShellConfig,
+		mut eval: EvalContext,
+		outputs: EvalContextOutputs,
+		owns_process_group: bool,
+		mut process_guard: EvaluatorProcessGuard,
+	) -> Result<(Self, Vec<String>), EvaluationFailure> {
 		let mut state = eval.state();
 		let dependency = path_dependency(config)?;
 		let cargo_dependency_name = config

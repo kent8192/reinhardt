@@ -12,13 +12,17 @@ pub enum ModelFormFieldKind {
 		/// Whether the field accepts multiple lines.
 		multiline: bool,
 	},
-	/// An email input with an optional maximum length.
+	/// An email input with optional length bounds.
 	Email {
+		/// The minimum permitted string length, when constrained.
+		min_length: Option<usize>,
 		/// The maximum permitted string length, when constrained.
 		max_length: Option<usize>,
 	},
-	/// A URL input with an optional maximum length.
+	/// A URL input with optional length bounds.
 	Url {
+		/// The minimum permitted string length, when constrained.
+		min_length: Option<usize>,
 		/// The maximum permitted string length, when constrained.
 		max_length: Option<usize>,
 	},

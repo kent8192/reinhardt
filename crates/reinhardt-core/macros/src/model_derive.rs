@@ -2035,9 +2035,9 @@ fn model_form_kind(field: &FieldInfo) -> Result<TokenStream> {
 				.map(|value| quote!(::core::option::Option::Some(#value as usize)))
 				.unwrap_or_else(|| quote!(::core::option::Option::None));
 			if field.config.email == Some(true) {
-				quote!(#core_crate::model_form::ModelFormFieldKind::Email { max_length: #max_length })
+				quote!(#core_crate::model_form::ModelFormFieldKind::Email { min_length: #min_length, max_length: #max_length })
 			} else if field.config.url == Some(true) {
-				quote!(#core_crate::model_form::ModelFormFieldKind::Url { max_length: #max_length })
+				quote!(#core_crate::model_form::ModelFormFieldKind::Url { min_length: #min_length, max_length: #max_length })
 			} else {
 				quote!(#core_crate::model_form::ModelFormFieldKind::Text { min_length: #min_length, max_length: #max_length, multiline: false })
 			}

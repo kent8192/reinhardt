@@ -962,12 +962,14 @@ mod tests {
 			),
 			(
 				ModelFormFieldKind::Email {
+					min_length: Some(3),
 					max_length: Some(50),
 				},
 				json!("person@example.com"),
 			),
 			(
 				ModelFormFieldKind::Url {
+					min_length: Some(8),
 					max_length: Some(80),
 				},
 				json!("https://example.com"),
@@ -986,7 +988,13 @@ mod tests {
 				},
 				json!(1.5),
 			),
-			(ModelFormFieldKind::Decimal, json!("1.25")),
+			(
+				ModelFormFieldKind::Decimal {
+					min: None,
+					max: None,
+				},
+				json!("1.25"),
+			),
 			(ModelFormFieldKind::Boolean, json!(true)),
 			(ModelFormFieldKind::Date, json!("2026-07-25")),
 			(ModelFormFieldKind::Time, json!("14:30:00")),
@@ -1093,7 +1101,10 @@ mod tests {
 	fn descriptor_factory_preserves_exact_decimal_text() {
 		let field = field_factory::create_form_field(&ModelFormFieldDescriptor {
 			name: "amount",
-			kind: ModelFormFieldKind::Decimal,
+			kind: ModelFormFieldKind::Decimal {
+				min: None,
+				max: None,
+			},
 			required: true,
 			has_default: false,
 			nullable: false,

@@ -306,15 +306,23 @@ pub(super) fn create_form_field(descriptor: &ModelFormFieldDescriptor) -> Box<dy
 			}
 			Box::new(field)
 		}
-		ModelFormFieldKind::Email { max_length } => {
+		ModelFormFieldKind::Email {
+			min_length,
+			max_length,
+		} => {
 			let mut field = EmailField::new(name);
 			field.required = descriptor.required;
+			field.min_length = min_length;
 			field.max_length = max_length;
 			Box::new(field)
 		}
-		ModelFormFieldKind::Url { max_length } => {
+		ModelFormFieldKind::Url {
+			min_length,
+			max_length,
+		} => {
 			let mut field = URLField::new(name);
 			field.required = descriptor.required;
+			field.min_length = min_length;
 			field.max_length = max_length;
 			Box::new(field)
 		}

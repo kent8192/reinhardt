@@ -151,8 +151,23 @@ fn convert_control_value(
 			}
 			Ok(serde_json::Value::String(text))
 		}
-		ModelFormFieldKind::Email { max_length } | ModelFormFieldKind::Url { max_length } => {
+		ModelFormFieldKind::Email {
+			min_length,
+			max_length,
+		}
+		| ModelFormFieldKind::Url {
+			min_length,
+			max_length,
+		} => {
 			let text = expect_string(descriptor.name, value)?;
+			if let Some(min_length) = min_length
+				&& text.chars().count() < min_length
+			{
+				return Err(invalid_value(
+					descriptor.name,
+					format!("must contain at least {min_length} characters"),
+				));
+			}
 			if let Some(max_length) = max_length
 				&& text.chars().count() > max_length
 			{
@@ -385,14 +400,19 @@ fn is_time(value: &str) -> bool {
 		.unwrap_or(value)
 		.split_once(['+', '-'])
 		.map_or(value, |(time, _)| time);
-	let bytes = value.as_bytes();
-	matches!(bytes.len(), 5 | 8 | 12)
-		&& bytes.get(2) == Some(&b':')
-		&& (bytes.len() == 5 || bytes.get(5) == Some(&b':'))
-		&& bytes
+	let (time, fraction) = value.split_once('.').unwrap_or((value, ""));
+	if value.contains('.')
+		&& (fraction.is_empty()
+			|| !(1..=9).contains(&fraction.len())
+			|| !fraction.bytes().all(|byte| byte.is_ascii_digit()))
+	{
+		return false;
+	}
+	let parts: Vec<_> = time.split(':').collect();
+	(matches!(parts.len(), 2 | 3))
+		&& parts
 			.iter()
-			.enumerate()
-			.all(|(index, byte)| matches!(index, 2 | 5) || *byte == b'.' || byte.is_ascii_digit())
+			.all(|part| part.len() == 2 && part.bytes().all(|byte| byte.is_ascii_digit()))
 }
 
 fn normalize_datetime_local(value: &str, aware: bool) -> Option<String> {

@@ -558,6 +558,12 @@ impl From<usize> for FilterValue {
 	}
 }
 
+impl From<isize> for FilterValue {
+	fn from(value: isize) -> Self {
+		Self::Integer(value as i64)
+	}
+}
+
 impl From<i128> for FilterValue {
 	fn from(value: i128) -> Self {
 		value

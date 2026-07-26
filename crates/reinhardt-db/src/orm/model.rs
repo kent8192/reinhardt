@@ -60,6 +60,14 @@ pub trait Model: Serialize + for<'de> Deserialize<'de> + Send + Sync + Clone {
 		"id"
 	}
 
+	/// Converts a primary key into a query filter value.
+	///
+	/// Custom primary-key types retain the historical display-string fallback.
+	/// Generated models override this for scalar key types with typed bindings.
+	fn primary_key_filter_value(pk: Self::PrimaryKey) -> super::query::FilterValue {
+		super::query::FilterValue::String(pk.to_string())
+	}
+
 	/// Get the primary key value
 	///
 	/// Returns an owned copy of the primary key. For composite primary keys,

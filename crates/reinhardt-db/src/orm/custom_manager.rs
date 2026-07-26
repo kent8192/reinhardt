@@ -120,7 +120,7 @@ use super::connection::{DatabaseBackend, DatabaseConnection};
 use super::cte::CTE;
 use super::manager::Manager;
 use super::model::Model;
-use super::query::{FilterCondition, FilterValue, QuerySet};
+use super::query::{FilterCondition, QuerySet};
 
 /// Trait that exposes the full surface area of an object manager and provides
 /// extension hooks for custom behavior.
@@ -172,10 +172,7 @@ pub trait CustomManager: Sized + Send + Sync {
 	}
 
 	/// Get a single record by primary key (returns a `QuerySet` for chaining).
-	fn get(&self, pk: <Self::Model as Model>::PrimaryKey) -> QuerySet<Self::Model>
-	where
-		<Self::Model as Model>::PrimaryKey: Into<FilterValue>,
-	{
+	fn get(&self, pk: <Self::Model as Model>::PrimaryKey) -> QuerySet<Self::Model> {
 		Manager::<Self::Model>::new().get(pk)
 	}
 
@@ -387,10 +384,7 @@ pub trait CustomManager: Sized + Send + Sync {
 	fn delete<'a>(
 		&'a self,
 		pk: <Self::Model as Model>::PrimaryKey,
-	) -> impl Future<Output = reinhardt_core::exception::Result<()>> + Send + 'a
-	where
-		<Self::Model as Model>::PrimaryKey: Into<FilterValue>,
-	{
+	) -> impl Future<Output = reinhardt_core::exception::Result<()>> + Send + 'a {
 		async move {
 			let conn = super::manager::get_connection().await?;
 			self.delete_with_conn(&conn, pk).await
@@ -402,10 +396,7 @@ pub trait CustomManager: Sized + Send + Sync {
 		&'a self,
 		conn: &'a DatabaseConnection,
 		pk: <Self::Model as Model>::PrimaryKey,
-	) -> impl Future<Output = reinhardt_core::exception::Result<()>> + Send + 'a
-	where
-		<Self::Model as Model>::PrimaryKey: Into<FilterValue>,
-	{
+	) -> impl Future<Output = reinhardt_core::exception::Result<()>> + Send + 'a {
 		async move {
 			let manager = Manager::<Self::Model>::new();
 			if let Some(model) = manager.get(pk.clone()).first_with_db(conn).await? {

@@ -226,12 +226,9 @@ impl<M: Model> Manager<M> {
 
 	/// Get a single record by primary key
 	/// Returns a QuerySet filtered by the primary key field
-	pub fn get(&self, pk: M::PrimaryKey) -> QuerySet<M>
-	where
-		M::PrimaryKey: Into<super::query::FilterValue>,
-	{
+	pub fn get(&self, pk: M::PrimaryKey) -> QuerySet<M> {
 		let pk_field = M::primary_key_field();
-		let pk_value = pk.into();
+		let pk_value = M::primary_key_filter_value(pk);
 
 		let filter = super::query::Filter::new(
 			pk_field.to_string(),
@@ -1684,6 +1681,10 @@ mod tests {
 
 		fn primary_key(&self) -> Option<Self::PrimaryKey> {
 			Some(self.id)
+		}
+
+		fn primary_key_filter_value(pk: Self::PrimaryKey) -> FilterValue {
+			FilterValue::Uuid(pk)
 		}
 
 		fn set_primary_key(&mut self, value: Self::PrimaryKey) {

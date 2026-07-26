@@ -68,6 +68,8 @@ pub struct IndexInfo {
 	pub expressions: Option<Vec<String>>,
 	/// PostgreSQL operator class for the indexed target
 	pub operator_class: Option<String>,
+	/// Whether PostgreSQL reports the operator class as the access method default
+	pub operator_class_is_default: bool,
 }
 
 fn parse_postgres_index_type(
@@ -633,7 +635,8 @@ impl PostgresIntrospector {
 				am.amname AS access_method,
 				i.reloptions AS index_options,
 				pg_get_expr(ix.indexprs, ix.indrelid) AS index_expressions,
-				(array_agg(opc.opcname ORDER BY key.position))[1] AS operator_class
+				(array_agg(opc.opcname ORDER BY key.position))[1] AS operator_class,
+				bool_and(opc.opcdefault) AS operator_class_is_default
 			FROM
 				pg_class t
 				JOIN pg_index ix ON t.oid = ix.indrelid
@@ -700,6 +703,15 @@ impl PostgresIntrospector {
 			let operator_class: Option<String> = row.try_get("operator_class").map_err(|e| {
 				MigrationError::IntrospectionError(format!("Failed to get operator_class: {}", e))
 			})?;
+			let operator_class_is_default: bool = row
+				.try_get::<Option<bool>, _>("operator_class_is_default")
+				.map_err(|e| {
+					MigrationError::IntrospectionError(format!(
+						"Failed to get operator_class_is_default: {}",
+						e
+					))
+				})?
+				.unwrap_or(false);
 			let index_type =
 				parse_postgres_index_type(&access_method, index_options.as_deref().unwrap_or(&[]))?;
 
@@ -713,6 +725,7 @@ impl PostgresIntrospector {
 					index_type,
 					expressions: index_expression.map(|expression| vec![expression]),
 					operator_class,
+					operator_class_is_default,
 				},
 			);
 		}
@@ -1029,6 +1042,7 @@ impl MySQLIntrospector {
 					index_type: None,
 					expressions: None,
 					operator_class: None,
+					operator_class_is_default: false,
 				},
 			);
 
@@ -1437,6 +1451,7 @@ impl SQLiteIntrospector {
 					index_type: None,
 					expressions: None,
 					operator_class: None,
+					operator_class_is_default: false,
 				},
 			);
 		}

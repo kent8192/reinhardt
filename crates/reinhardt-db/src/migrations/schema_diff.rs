@@ -60,7 +60,16 @@ impl From<introspection::DatabaseSchema> for DatabaseSchema {
 					access_method: idx.access_method.clone(),
 					index_type: idx.index_type,
 					expressions: idx.expressions.clone(),
-					operator_class: idx.operator_class.clone(),
+					operator_class: if idx.operator_class_is_default
+						&& idx
+							.access_method
+							.as_deref()
+							.is_some_and(|method| method.eq_ignore_ascii_case("btree"))
+					{
+						None
+					} else {
+						idx.operator_class.clone()
+					},
 				})
 				.collect();
 
@@ -327,6 +336,47 @@ impl SchemaDiff {
 		}
 	}
 
+	fn indexes_equal(&self, current: &IndexSchema, target: &IndexSchema) -> bool {
+		current.name == target.name
+			&& current.columns == target.columns
+			&& current.unique == target.unique
+			&& current.expressions == target.expressions
+			&& current.operator_class == target.operator_class
+			&& Self::effective_index_method(current)
+				.eq_ignore_ascii_case(Self::effective_index_method(target))
+			&& Self::approximate_index_options_equal(current, target)
+	}
+
+	fn effective_index_method(index: &IndexSchema) -> &str {
+		match index.index_type {
+			Some(IndexType::Hash) => "hash",
+			Some(IndexType::Gin) => "gin",
+			Some(IndexType::Gist) => "gist",
+			Some(IndexType::Brin) => "brin",
+			Some(IndexType::Fulltext) => "fulltext",
+			Some(IndexType::Spatial) => "spatial",
+			Some(IndexType::Hnsw { .. }) => "hnsw",
+			Some(IndexType::Ivfflat { .. }) => "ivfflat",
+			Some(IndexType::BTree) | None => index.access_method.as_deref().unwrap_or("btree"),
+		}
+	}
+
+	fn approximate_index_options_equal(current: &IndexSchema, target: &IndexSchema) -> bool {
+		let current_is_approximate = matches!(
+			current.index_type,
+			Some(IndexType::Hnsw { .. } | IndexType::Ivfflat { .. })
+		);
+		let target_is_approximate = matches!(
+			target.index_type,
+			Some(IndexType::Hnsw { .. } | IndexType::Ivfflat { .. })
+		);
+		if current_is_approximate || target_is_approximate {
+			current.index_type == target.index_type
+		} else {
+			true
+		}
+	}
+
 	fn is_typed_to_raw_generated_comparison(
 		current: &super::GeneratedColumnDefinition,
 		target: &super::GeneratedColumnDefinition,
@@ -462,7 +512,7 @@ impl SchemaDiff {
 				&& current_table
 					.indexes
 					.iter()
-					.any(|current_index| current_index == *index)
+					.any(|current_index| self.indexes_equal(current_index, index))
 		}) {
 			operations.push(Operation::CreateIndexRepair {
 				table: table_name.to_string(),
@@ -510,7 +560,7 @@ impl SchemaDiff {
 				&& target_table
 					.indexes
 					.iter()
-					.any(|target_index| target_index == *index)
+					.any(|target_index| self.indexes_equal(index, target_index))
 		}) {
 			operations.push(Operation::RestoreIndexOnRollback {
 				table: table_name.to_string(),
@@ -925,7 +975,11 @@ impl SchemaDiff {
 
 				// Index changes
 				for target_index in &target_table.indexes {
-					if !current_table.indexes.contains(target_index) {
+					if !current_table
+						.indexes
+						.iter()
+						.any(|current_index| self.indexes_equal(current_index, target_index))
+					{
 						result
 							.indexes_to_add
 							.push((table_name_owned.clone(), target_index.clone()));
@@ -933,7 +987,11 @@ impl SchemaDiff {
 				}
 
 				for current_index in &current_table.indexes {
-					if !target_table.indexes.contains(current_index) {
+					if !target_table
+						.indexes
+						.iter()
+						.any(|target_index| self.indexes_equal(current_index, target_index))
+					{
 						result
 							.indexes_to_remove
 							.push((table_name_owned.clone(), current_index.clone()));
@@ -1610,6 +1668,7 @@ mod tests {
 				}),
 				expressions: None,
 				operator_class: Some("vector_cosine_ops".to_string()),
+				operator_class_is_default: true,
 			},
 		);
 		let mut intro_tables = std::collections::HashMap::new();
@@ -1647,6 +1706,46 @@ mod tests {
 				operator_class: Some("vector_cosine_ops".to_string()),
 			}]
 		);
+	}
+
+	#[test]
+	fn postgres_default_btree_operator_class_is_normalized_during_conversion() {
+		// Arrange
+		let mut intro_indexes = std::collections::HashMap::new();
+		intro_indexes.insert(
+			"idx_events_sequence".to_string(),
+			introspection::IndexInfo {
+				name: "idx_events_sequence".to_string(),
+				columns: vec!["sequence".to_string()],
+				unique: false,
+				access_method: Some("btree".to_string()),
+				index_type: Some(IndexType::BTree),
+				expressions: None,
+				operator_class: Some("int4_ops".to_string()),
+				operator_class_is_default: true,
+			},
+		);
+		let mut intro_tables = std::collections::HashMap::new();
+		intro_tables.insert(
+			"events".to_string(),
+			introspection::TableInfo {
+				name: "events".to_string(),
+				columns: std::collections::HashMap::new(),
+				indexes: intro_indexes,
+				primary_key: Vec::new(),
+				foreign_keys: Vec::new(),
+				unique_constraints: Vec::new(),
+				check_constraints: Vec::new(),
+			},
+		);
+
+		// Act
+		let schema = DatabaseSchema::from(introspection::DatabaseSchema {
+			tables: intro_tables,
+		});
+
+		// Assert
+		assert_eq!(schema.tables["events"].indexes[0].operator_class, None);
 	}
 
 	#[test]
@@ -2985,6 +3084,172 @@ mod tests {
 				Operation::DropIndex { .. }
 			]
 		));
+	}
+
+	#[test]
+	fn legacy_postgres_default_btree_index_matches_introspected_metadata() {
+		// Arrange
+		let mut current_table = table_with_cols(
+			"events",
+			vec![("sequence", col("sequence", FieldType::Integer, false))],
+		);
+		current_table.indexes.push(IndexSchema {
+			name: "idx_events_sequence".to_string(),
+			columns: vec!["sequence".to_string()],
+			unique: false,
+			access_method: Some("btree".to_string()),
+			index_type: Some(IndexType::BTree),
+			expressions: None,
+			operator_class: None,
+		});
+		let mut target_table = current_table.clone();
+		target_table.indexes[0].access_method = None;
+		target_table.indexes[0].index_type = None;
+		let mut current = DatabaseSchema::default();
+		current.tables.insert("events".to_string(), current_table);
+		let mut target = DatabaseSchema::default();
+		target.tables.insert("events".to_string(), target_table);
+
+		// Act
+		let result = SchemaDiff::with_dialect(current, target, SqlDialect::Postgres).detect();
+
+		// Assert
+		assert!(result.indexes_to_add.is_empty());
+		assert!(result.indexes_to_remove.is_empty());
+	}
+
+	#[test]
+	fn legacy_mysql_default_index_matches_introspected_metadata() {
+		// Arrange
+		let mut current_table = table_with_cols(
+			"events",
+			vec![("sequence", col("sequence", FieldType::Integer, false))],
+		);
+		current_table.indexes.push(IndexSchema {
+			name: "idx_events_sequence".to_string(),
+			columns: vec!["sequence".to_string()],
+			unique: false,
+			access_method: Some("BTREE".to_string()),
+			index_type: None,
+			expressions: None,
+			operator_class: None,
+		});
+		let mut target_table = current_table.clone();
+		target_table.indexes[0].access_method = None;
+		let mut current = DatabaseSchema::default();
+		current.tables.insert("events".to_string(), current_table);
+		let mut target = DatabaseSchema::default();
+		target.tables.insert("events".to_string(), target_table);
+
+		// Act
+		let result = SchemaDiff::with_dialect(current, target, SqlDialect::Mysql).detect();
+
+		// Assert
+		assert!(result.indexes_to_add.is_empty());
+		assert!(result.indexes_to_remove.is_empty());
+	}
+
+	#[test]
+	fn custom_postgres_access_method_remains_significant() {
+		// Arrange
+		let mut current_table = table_with_cols(
+			"events",
+			vec![("payload", col("payload", FieldType::Json, false))],
+		);
+		current_table.indexes.push(IndexSchema {
+			name: "idx_events_payload".to_string(),
+			columns: vec!["payload".to_string()],
+			unique: false,
+			access_method: Some("gin".to_string()),
+			index_type: Some(IndexType::Gin),
+			expressions: None,
+			operator_class: None,
+		});
+		let mut target_table = current_table.clone();
+		target_table.indexes[0].access_method = None;
+		target_table.indexes[0].index_type = None;
+		let mut current = DatabaseSchema::default();
+		current.tables.insert("events".to_string(), current_table);
+		let mut target = DatabaseSchema::default();
+		target.tables.insert("events".to_string(), target_table);
+
+		// Act
+		let result = SchemaDiff::with_dialect(current, target, SqlDialect::Postgres).detect();
+
+		// Assert
+		assert_eq!(result.indexes_to_add.len(), 1);
+		assert_eq!(result.indexes_to_remove.len(), 1);
+	}
+
+	#[test]
+	fn custom_postgres_operator_class_remains_significant() {
+		// Arrange
+		let mut current_table = table_with_cols(
+			"events",
+			vec![("sequence", col("sequence", FieldType::Integer, false))],
+		);
+		current_table.indexes.push(IndexSchema {
+			name: "idx_events_sequence".to_string(),
+			columns: vec!["sequence".to_string()],
+			unique: false,
+			access_method: Some("btree".to_string()),
+			index_type: Some(IndexType::BTree),
+			expressions: None,
+			operator_class: Some("custom_int4_ops".to_string()),
+		});
+		let mut target_table = current_table.clone();
+		target_table.indexes[0].access_method = None;
+		target_table.indexes[0].index_type = None;
+		target_table.indexes[0].operator_class = None;
+		let mut current = DatabaseSchema::default();
+		current.tables.insert("events".to_string(), current_table);
+		let mut target = DatabaseSchema::default();
+		target.tables.insert("events".to_string(), target_table);
+
+		// Act
+		let result = SchemaDiff::with_dialect(current, target, SqlDialect::Postgres).detect();
+
+		// Assert
+		assert_eq!(result.indexes_to_add.len(), 1);
+		assert_eq!(result.indexes_to_remove.len(), 1);
+	}
+
+	#[test]
+	fn hnsw_and_ivfflat_access_methods_remain_distinct() {
+		// Arrange
+		let mut current_table = table_with_cols(
+			"source",
+			vec![(
+				"embedding",
+				col("embedding", FieldType::Vector { dimensions: 3 }, false),
+			)],
+		);
+		current_table.indexes.push(IndexSchema {
+			name: "source_embedding_approximate".to_string(),
+			columns: vec!["embedding".to_string()],
+			unique: false,
+			access_method: Some("hnsw".to_string()),
+			index_type: Some(IndexType::Hnsw {
+				m: Some(16),
+				ef_construction: Some(64),
+			}),
+			expressions: None,
+			operator_class: Some("vector_l2_ops".to_string()),
+		});
+		let mut target_table = current_table.clone();
+		target_table.indexes[0].access_method = Some("ivfflat".to_string());
+		target_table.indexes[0].index_type = Some(IndexType::Ivfflat { lists: Some(100) });
+		let mut current = DatabaseSchema::default();
+		current.tables.insert("source".to_string(), current_table);
+		let mut target = DatabaseSchema::default();
+		target.tables.insert("source".to_string(), target_table);
+
+		// Act
+		let result = SchemaDiff::with_dialect(current, target, SqlDialect::Postgres).detect();
+
+		// Assert
+		assert_eq!(result.indexes_to_add.len(), 1);
+		assert_eq!(result.indexes_to_remove.len(), 1);
 	}
 
 	#[test]

@@ -275,7 +275,11 @@ fn select_entries_for_app<'a>(
 
 	let mut owned_entries = Vec::new();
 	for entry in entries {
-		match resolve_app_module_owner(apps.iter(), entry.module_path) {
+		match reinhardt_apps::resolve_app_module_owner_in_crate(
+			apps.iter(),
+			entry.module_path,
+			entry.crate_id,
+		) {
 			Ok(owner) => owned_entries.push((entry, owner)),
 			Err(error) => errors.push(resolution_error(
 				entry.module_path,
@@ -360,21 +364,31 @@ fn resolution_error(
 fn duplicate_errors(
 	owned_entries: &[(&ServerFnInventoryEntry, &AppModuleRegistration)],
 ) -> Vec<ServerFnInventoryError> {
-	let mut paths = BTreeMap::<(&str, &str, &str), Vec<&str>>::new();
-	let mut names = BTreeMap::<(&str, &str, &str), Vec<&str>>::new();
+	let mut paths = BTreeMap::<(&str, &str, &str, &str), Vec<&str>>::new();
+	let mut names = BTreeMap::<(&str, &str, &str, &str), Vec<&str>>::new();
 	for (entry, owner) in owned_entries {
 		paths
-			.entry((owner.module_path, owner.app_label, entry.path))
+			.entry((
+				owner.module_path,
+				owner.crate_id,
+				owner.app_label,
+				entry.path,
+			))
 			.or_default()
 			.push(entry.module_path);
 		names
-			.entry((owner.module_path, owner.app_label, entry.name))
+			.entry((
+				owner.module_path,
+				owner.crate_id,
+				owner.app_label,
+				entry.name,
+			))
 			.or_default()
 			.push(entry.module_path);
 	}
 
 	let mut errors = Vec::new();
-	for ((_module_path, app_label, path), mut modules) in paths {
+	for ((_module_path, _crate_id, app_label, path), mut modules) in paths {
 		if modules.len() > 1 {
 			modules.sort_unstable();
 			errors.push(ServerFnInventoryError::DuplicatePath {
@@ -384,7 +398,7 @@ fn duplicate_errors(
 			});
 		}
 	}
-	for ((_module_path, app_label, name), mut modules) in names {
+	for ((_module_path, _crate_id, app_label, name), mut modules) in names {
 		if modules.len() > 1 {
 			modules.sort_unstable();
 			errors.push(ServerFnInventoryError::DuplicateName {

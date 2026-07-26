@@ -1984,6 +1984,7 @@ fn generate_model_form(
 	});
 
 	let form_id = form_id_kebab_case(form_ident);
+	let native_action = format!("/api/{}", server_fn.to_token_stream());
 	let method = match macro_ast.method {
 		FormMethod::Get => "get",
 		FormMethod::Post => "post",
@@ -2086,12 +2087,24 @@ fn generate_model_form(
 				pub async fn submit(
 					&self,
 				) -> ::core::result::Result<(), #pages_crate::ServerFnError> {
-					let payload = self.data().map_err(|error| {
-						#pages_crate::ServerFnError::validation_with_message(
-							error.to_string(),
-							::core::iter::empty::<(&str, &str)>(),
-						)
-					})?;
+					#[cfg(all(target_family = "wasm", target_os = "unknown"))]
+					{
+						self.loading.set(false);
+						self.error.set(::core::option::Option::None);
+						self.success.set(false);
+					}
+					let payload = match self.data() {
+						::core::result::Result::Ok(payload) => payload,
+						::core::result::Result::Err(error) => {
+							let error = #pages_crate::ServerFnError::validation_with_message(
+								error.to_string(),
+								::core::iter::empty::<(&str, &str)>(),
+							);
+							#[cfg(all(target_family = "wasm", target_os = "unknown"))]
+							self.error.set(::core::option::Option::Some(error.to_string()));
+							return ::core::result::Result::Err(error);
+						}
+					};
 
 					#[cfg(all(target_family = "wasm", target_os = "unknown"))]
 					{
@@ -2326,7 +2339,15 @@ fn generate_model_form(
 						#pages_crate::PageElement::new("form")
 						.attr("id", #form_id)
 						.attr("method", #method)
+						.attr("action", #native_action)
 						.children(controls)
+						.child({
+							let csrf_token = #pages_crate::csrf::get_csrf_token().unwrap_or_default();
+							#pages_crate::PageElement::new("input")
+								.attr("type", "hidden")
+								.attr("name", #pages_crate::csrf::CSRF_FORM_FIELD)
+								.attr("value", csrf_token)
+						})
 						.child(
 							#pages_crate::PageElement::new("button")
 								.attr("type", "submit")

@@ -2192,18 +2192,21 @@ fn generate_model_form(
 								),
 							};
 						let label = label_override.unwrap_or(descriptor.name);
-						let widget_override = widget_override.filter(|widget| match (*widget, descriptor.kind) {
-							("CheckboxInput", #pages_crate::form::ModelFormFieldKind::Boolean) => true,
-							("DateInput", #pages_crate::form::ModelFormFieldKind::Date) => true,
-							("TimeInput", #pages_crate::form::ModelFormFieldKind::Time) => true,
-							("DateTimeInput", #pages_crate::form::ModelFormFieldKind::DateTime | #pages_crate::form::ModelFormFieldKind::NaiveDateTime) => true,
-							("EmailInput", #pages_crate::form::ModelFormFieldKind::Email { .. }) => true,
-							("UrlInput", #pages_crate::form::ModelFormFieldKind::Url { .. }) => true,
-							("NumberInput" | "RangeInput", #pages_crate::form::ModelFormFieldKind::Integer { .. } | #pages_crate::form::ModelFormFieldKind::Float { .. } | #pages_crate::form::ModelFormFieldKind::Decimal { .. }) => true,
-							("Textarea" | "TextArea", #pages_crate::form::ModelFormFieldKind::Text { .. } | #pages_crate::form::ModelFormFieldKind::Json) => true,
-							("PasswordInput" | "HiddenInput" | "ColorInput" | "TelInput" | "SearchInput", #pages_crate::form::ModelFormFieldKind::Text { .. }) => true,
-							_ => false,
-						});
+						let widget_override = match widget_override {
+							::core::option::Option::Some(widget) => match (widget, descriptor.kind) {
+								("CheckboxInput", #pages_crate::form::ModelFormFieldKind::Boolean)
+								| ("DateInput", #pages_crate::form::ModelFormFieldKind::Date)
+								| ("TimeInput", #pages_crate::form::ModelFormFieldKind::Time)
+								| ("DateTimeInput", #pages_crate::form::ModelFormFieldKind::DateTime | #pages_crate::form::ModelFormFieldKind::NaiveDateTime)
+								| ("EmailInput", #pages_crate::form::ModelFormFieldKind::Email { .. })
+								| ("UrlInput", #pages_crate::form::ModelFormFieldKind::Url { .. })
+								| ("NumberInput" | "RangeInput", #pages_crate::form::ModelFormFieldKind::Integer { .. } | #pages_crate::form::ModelFormFieldKind::Float { .. } | #pages_crate::form::ModelFormFieldKind::Decimal { .. })
+								| ("Textarea" | "TextArea", #pages_crate::form::ModelFormFieldKind::Text { .. } | #pages_crate::form::ModelFormFieldKind::Json)
+								| ("PasswordInput" | "HiddenInput" | "ColorInput" | "TelInput" | "SearchInput", #pages_crate::form::ModelFormFieldKind::Text { .. }) => ::core::option::Option::Some(widget),
+								_ => panic!("model form widget override `{widget}` is incompatible with `{}`", descriptor.name),
+							},
+							::core::option::Option::None => ::core::option::Option::None,
+						};
 						let (tag, input_type) = match widget_override {
 							::core::option::Option::Some("Textarea" | "TextArea") =>
 								("textarea", "text"),
@@ -2276,6 +2279,7 @@ fn generate_model_form(
 						let field_name = descriptor.name;
 						let checkbox_sentinel = format!("__reinhardt_checkbox_{field_name}");
 						let color_sentinel = format!("__reinhardt_color_{field_name}");
+						let default_clear_sentinel = format!("__reinhardt_defaulted_{field_name}");
 						let control_id = format!("{}-{}", #form_id, field_name);
 						let range_default = if input_type == "range" {
 							match descriptor.kind {
@@ -2443,11 +2447,21 @@ fn generate_model_form(
 								.attr("name", color_sentinel)
 								.attr("value", if color_is_unset { "false" } else { "true" })
 						});
+						let default_clear_sentinel = (descriptor.nullable
+							&& descriptor.has_default
+							&& stored_value.is_some())
+							.then(|| {
+								#pages_crate::PageElement::new("input")
+									.attr("type", "hidden")
+									.attr("name", default_clear_sentinel)
+									.attr("value", "true")
+							});
 
 						let mut wrapper = #pages_crate::PageElement::new("div")
 							.attr("class", "reinhardt-form-field")
 							.children(checkbox_sentinel)
 							.children(color_sentinel)
+							.children(default_clear_sentinel)
 							.child(
 								#pages_crate::PageElement::new("label")
 									.attr("for", control_id)
@@ -7686,6 +7700,8 @@ mod tests {
 		assert!(output.contains("let fields = submit_form"));
 		assert!(output.contains("matches ! (descriptor . name , \"accent\")"));
 		assert!(output.contains("! descriptor . nullable || stored_value . is_some ()"));
+		assert!(output.contains("__reinhardt_defaulted_"));
+		assert!(output.contains("widget override `{widget}` is incompatible"));
 	}
 
 	#[rstest::rstest]

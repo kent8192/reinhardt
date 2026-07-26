@@ -2225,6 +2225,7 @@ fn generate_model_form_support(
 		let setter_name = format!("set_{field_name}");
 		let trusted_setter_name = format!("set_trusted_{field_name}");
 		let collides_with_reserved_api = [
+			"default",
 			"empty",
 			"forbidden_fields",
 			"supplied_fields",
@@ -2446,9 +2447,13 @@ fn generate_model_form_support(
 			let field_literal = LitStr::new(&field.name.to_string(), field.name.span());
 			if is_model_form_editable(field, field_infos) {
 				let (is_optional, _) = extract_option_type(&field.ty);
-				let required = !is_optional
-					&& field.config.blank != Some(true)
-					&& field.config.default.is_none();
+				let relation_is_nullable = model_form_relation_id_is_nullable(field, field_infos);
+				let nullable = field
+					.config
+					.null
+					.unwrap_or(is_optional || relation_is_nullable);
+				let required =
+					!nullable && field.config.blank != Some(true) && field.config.default.is_none();
 				let unresolved = if let Some(default) = model_form_declared_default(field) {
 					default
 				} else if is_auto_generated_field(field) {
@@ -8931,14 +8936,15 @@ mod tests {
 		assert!(
 			output.contains("name : \"name\"")
 				&& output.contains("nullable : false")
-				&& output.contains("required : true"),
+				&& output.contains("required : true")
+				&& output.contains("MissingModelField"),
 			"an explicit null = false annotation must control the generated descriptor: {output}"
 		);
 	}
 
 	#[test]
 	fn test_model_form_rejects_payload_api_accessor_collisions() {
-		for field_name in ["json", "get_json", "set_json", "supplied_fields"] {
+		for field_name in ["default", "json", "get_json", "set_json", "supplied_fields"] {
 			let field_name = Ident::new(field_name, proc_macro2::Span::call_site());
 			let input = quote! {
 				#[model(app_label = "fixture_tests", table_name = "fixture_models", form = true)]

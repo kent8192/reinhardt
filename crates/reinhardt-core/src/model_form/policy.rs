@@ -86,6 +86,8 @@ where
 		let color_was_edited = values
 			.remove(&color_sentinel)
 			.map(|value| value == serde_json::Value::String("true".to_owned()));
+		let default_clear_sentinel = format!("__reinhardt_defaulted_{}", descriptor.name);
+		let had_defaulted_value = values.remove(&default_clear_sentinel).is_some();
 		let Some(control) = values.get_mut(descriptor.name) else {
 			if matches!(descriptor.kind, ModelFormFieldKind::Boolean)
 				&& (has_checkbox_sentinel || (!descriptor.nullable && !descriptor.has_default))
@@ -113,7 +115,7 @@ where
 						| ModelFormFieldKind::Url { .. }
 				));
 		if text.is_empty() && !descriptor.required && descriptor.nullable {
-			if descriptor.has_default {
+			if descriptor.has_default && !had_defaulted_value {
 				values.remove(descriptor.name);
 			} else {
 				*control = serde_json::Value::Null;
@@ -409,6 +411,22 @@ mod tests {
 		.expect("native form value should normalize");
 
 		assert_eq!(value, serde_json::json!({ "enabled": false }));
+	}
+
+	#[test]
+	fn native_normalization_preserves_explicit_nullable_default_clears() {
+		let value = normalize_native_model_form_value::<TestSchema, AllEditableModelFields>(
+			serde_json::json!({
+				"summary": "",
+				"__reinhardt_defaulted_summary": "true",
+			}),
+		)
+		.expect("native form value should normalize");
+
+		assert_eq!(
+			value,
+			serde_json::json!({ "enabled": false, "summary": null })
+		);
 	}
 
 	#[test]

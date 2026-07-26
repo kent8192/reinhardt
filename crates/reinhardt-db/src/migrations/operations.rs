@@ -62,6 +62,10 @@ use reinhardt_query::prelude::{
 };
 use serde::{Deserialize, Serialize, ser::SerializeStruct};
 
+pub(super) fn named_index_has_target(columns: &[String], expressions: Option<&[String]>) -> bool {
+	!columns.is_empty() || expressions.is_some_and(|expressions| !expressions.is_empty())
+}
+
 /// Index type for database indexes
 ///
 /// Specifies the type of index to create. Different index types have different
@@ -1275,6 +1279,30 @@ pub enum Operation {
 		table: String,
 		/// Explicit physical index name.
 		name: String,
+		/// Indexed columns from the removed definition.
+		#[serde(default)]
+		columns: Vec<String>,
+		/// Whether the removed index is unique.
+		#[serde(default)]
+		unique: bool,
+		/// Typed method and options from the removed definition.
+		#[serde(default, skip_serializing_if = "Option::is_none")]
+		index_type: Option<IndexType>,
+		/// Partial index condition from the removed definition.
+		#[serde(default, skip_serializing_if = "Option::is_none")]
+		where_clause: Option<String>,
+		/// Whether the removed index was created concurrently.
+		#[serde(default)]
+		concurrently: bool,
+		/// Expressions from the removed definition.
+		#[serde(default, skip_serializing_if = "Option::is_none")]
+		expressions: Option<Vec<String>>,
+		/// MySQL options from the removed definition.
+		#[serde(default, skip_serializing_if = "Option::is_none")]
+		mysql_options: Option<AlterTableOptions>,
+		/// PostgreSQL operator class from the removed definition.
+		#[serde(default, skip_serializing_if = "Option::is_none")]
+		operator_class: Option<String>,
 	},
 	/// RunSQL variant.
 	RunSQL {
@@ -1809,7 +1837,7 @@ impl Operation {
 					});
 				}
 			}
-			Operation::DropNamedIndex { table, name } => {
+			Operation::DropNamedIndex { table, name, .. } => {
 				if let Some(model) = state.find_model_by_table_mut(table) {
 					model.indexes.retain(|index| index.name != *name);
 				}
@@ -2885,7 +2913,7 @@ impl Operation {
 					}
 				}
 			}
-			Operation::DropNamedIndex { table, name } => match dialect {
+			Operation::DropNamedIndex { table, name, .. } => match dialect {
 				SqlDialect::Mysql => format!(
 					"DROP INDEX {} ON {};",
 					quote_identifier(name),
@@ -3155,6 +3183,19 @@ impl Operation {
 
 	/// Validates every field definition rendered by this operation.
 	pub fn validate_for_dialect(&self, dialect: &SqlDialect) -> super::Result<()> {
+		if let Self::CreateNamedIndex { name, .. } | Self::DropNamedIndex { name, .. } = self {
+			if name.is_empty() {
+				return Err(super::MigrationError::InvalidMigration(
+					"physical index name must not be empty".to_string(),
+				));
+			}
+			if name.contains('\0') {
+				return Err(super::MigrationError::InvalidMigration(
+					"physical index name must not contain NUL".to_string(),
+				));
+			}
+		}
+
 		match self {
 			Self::CreateTable { columns, .. } => {
 				for column in columns {
@@ -3820,6 +3861,37 @@ impl Operation {
 					columns_list
 				)]))
 			}
+			Operation::DropNamedIndex {
+				table,
+				name,
+				columns,
+				unique,
+				index_type,
+				where_clause,
+				concurrently,
+				expressions,
+				mysql_options,
+				operator_class,
+			} => {
+				if !named_index_has_target(columns, expressions.as_deref()) {
+					return Ok(None);
+				}
+				Ok(Some(vec![
+					Operation::CreateNamedIndex {
+						table: table.clone(),
+						name: name.clone(),
+						columns: columns.clone(),
+						unique: *unique,
+						index_type: *index_type,
+						where_clause: where_clause.clone(),
+						concurrently: *concurrently,
+						expressions: expressions.clone(),
+						mysql_options: *mysql_options,
+						operator_class: operator_class.clone(),
+					}
+					.try_to_sql(dialect)?,
+				]))
+			}
 			Operation::DropConstraint {
 				table,
 				constraint_name,
@@ -4001,6 +4073,36 @@ impl Operation {
 						}
 						model.constraints.push(definition);
 					}
+				}
+			}
+			Operation::CreateNamedIndex { table, name, .. } => {
+				if let Some(model) = state.find_model_by_table_mut(table) {
+					model.indexes.retain(|index| index.name != *name);
+				}
+			}
+			Operation::DropNamedIndex {
+				table,
+				name,
+				columns,
+				unique,
+				index_type,
+				expressions,
+				operator_class,
+				..
+			} => {
+				if !named_index_has_target(columns, expressions.as_deref()) {
+					return;
+				}
+				if let Some(model) = state.find_model_by_table_mut(table) {
+					model.indexes.retain(|index| index.name != *name);
+					model.indexes.push(IndexDefinition {
+						name: name.clone(),
+						fields: columns.clone(),
+						unique: *unique,
+						index_type: *index_type,
+						operator_class: operator_class.clone(),
+						expressions: expressions.clone(),
+					});
 				}
 			}
 			_ => {
@@ -5476,12 +5578,29 @@ impl Operation {
 				table: table.clone(),
 				columns: columns.clone(),
 			})),
-			Operation::CreateNamedIndex { table, name, .. } => {
-				Ok(Some(Operation::DropNamedIndex {
-					table: table.clone(),
-					name: name.clone(),
-				}))
-			}
+			Operation::CreateNamedIndex {
+				table,
+				name,
+				columns,
+				unique,
+				index_type,
+				where_clause,
+				concurrently,
+				expressions,
+				mysql_options,
+				operator_class,
+			} => Ok(Some(Operation::DropNamedIndex {
+				table: table.clone(),
+				name: name.clone(),
+				columns: columns.clone(),
+				unique: *unique,
+				index_type: *index_type,
+				where_clause: where_clause.clone(),
+				concurrently: *concurrently,
+				expressions: expressions.clone(),
+				mysql_options: *mysql_options,
+				operator_class: operator_class.clone(),
+			})),
 			Operation::CreateIndexRepair { .. } | Operation::RestoreIndexOnRollback { .. } => {
 				Ok(None)
 			}
@@ -5500,7 +5619,34 @@ impl Operation {
 					operator_class: None,
 				}))
 			}
-			Operation::DropNamedIndex { .. } => Ok(None),
+			Operation::DropNamedIndex {
+				table,
+				name,
+				columns,
+				unique,
+				index_type,
+				where_clause,
+				concurrently,
+				expressions,
+				mysql_options,
+				operator_class,
+			} => {
+				if !named_index_has_target(columns, expressions.as_deref()) {
+					return Ok(None);
+				}
+				Ok(Some(Operation::CreateNamedIndex {
+					table: table.clone(),
+					name: name.clone(),
+					columns: columns.clone(),
+					unique: *unique,
+					index_type: *index_type,
+					where_clause: where_clause.clone(),
+					concurrently: *concurrently,
+					expressions: expressions.clone(),
+					mysql_options: *mysql_options,
+					operator_class: operator_class.clone(),
+				}))
+			}
 			// Operations that are not reversible as Operations
 			Operation::RunSQL { .. } | Operation::RunRust { .. } | Operation::BulkLoad { .. } => {
 				Ok(None)
@@ -6558,7 +6704,7 @@ impl MigrationOperation for Operation {
 				}
 			}
 			Operation::DropIndex { table, .. } => format!("Drop index on {}", table),
-			Operation::DropNamedIndex { table, name } => {
+			Operation::DropNamedIndex { table, name, .. } => {
 				format!("Drop index {} on {}", name, table)
 			}
 			Operation::RunSQL { sql, .. } => {
@@ -6723,10 +6869,33 @@ impl MigrationOperation for Operation {
 					columns: sorted_columns,
 				}
 			}
-			Operation::DropNamedIndex { table, name } => Operation::DropNamedIndex {
-				table: table.clone(),
-				name: name.clone(),
-			},
+			Operation::DropNamedIndex {
+				table,
+				name,
+				columns,
+				unique,
+				index_type,
+				where_clause,
+				concurrently,
+				expressions,
+				mysql_options,
+				operator_class,
+			} => {
+				let mut sorted_columns = columns.clone();
+				sorted_columns.sort();
+				Operation::DropNamedIndex {
+					table: table.clone(),
+					name: name.clone(),
+					columns: sorted_columns,
+					unique: *unique,
+					index_type: *index_type,
+					where_clause: where_clause.clone(),
+					concurrently: *concurrently,
+					expressions: expressions.clone(),
+					mysql_options: *mysql_options,
+					operator_class: operator_class.clone(),
+				}
+			}
 			// AlterUniqueTogether: Sort field lists and sort within each list
 			Operation::AlterUniqueTogether {
 				table,
@@ -7427,6 +7596,44 @@ mod tests {
 				table: "jobs".to_string(),
 				constraint_name: "jobs_status_check".to_string(),
 			}
+		);
+	}
+
+	#[test]
+	fn drop_named_index_deserializes_legacy_shape_without_false_reverse_definition() {
+		let operation: Operation = serde_json::from_str(
+			r#"{
+				"type": "DropNamedIndex",
+				"table": "documents",
+				"name": "documents_embedding_ann"
+			}"#,
+		)
+		.expect("legacy DropNamedIndex JSON should remain readable");
+
+		assert!(matches!(
+			&operation,
+			Operation::DropNamedIndex {
+				table,
+				name,
+				columns,
+				index_type: None,
+				expressions: None,
+				..
+			} if table == "documents"
+				&& name == "documents_embedding_ann"
+				&& columns.is_empty()
+		));
+		assert_eq!(
+			operation
+				.to_reverse_sql(&SqlDialect::Postgres, &ProjectState::new())
+				.expect("legacy reverse SQL decision"),
+			None
+		);
+		assert_eq!(
+			operation
+				.to_reverse_operation(&ProjectState::new())
+				.expect("legacy reverse operation decision"),
+			None
 		);
 	}
 
@@ -9862,6 +10069,64 @@ mod tests {
 				backend: actual_backend,
 			}) if actual_backend == backend
 		));
+	}
+
+	#[rstest]
+	#[case("", "must not be empty")]
+	#[case("documents\0embedding", "must not contain NUL")]
+	fn named_vector_index_migration_rejects_unsafe_physical_name(
+		#[case] name: &str,
+		#[case] expected: &str,
+	) {
+		// Arrange
+		let operation = Operation::CreateNamedIndex {
+			table: "source".to_string(),
+			name: name.to_string(),
+			columns: vec!["embedding".to_string()],
+			unique: false,
+			index_type: Some(IndexType::Hnsw {
+				m: Some(16),
+				ef_construction: Some(64),
+			}),
+			where_clause: None,
+			concurrently: false,
+			expressions: None,
+			mysql_options: None,
+			operator_class: Some("vector_cosine_ops".to_string()),
+		};
+
+		// Act
+		let result = operation.try_to_sql(&SqlDialect::Postgres);
+
+		// Assert
+		assert!(matches!(
+			result,
+			Err(crate::migrations::MigrationError::InvalidMigration(message))
+				if message.contains(expected)
+		));
+	}
+
+	#[test]
+	fn named_vector_index_migration_quotes_unusual_physical_name() {
+		let operation = Operation::CreateNamedIndex {
+			table: "source".to_string(),
+			name: "select embedding-ann".to_string(),
+			columns: vec!["embedding".to_string()],
+			unique: false,
+			index_type: Some(IndexType::Ivfflat { lists: Some(100) }),
+			where_clause: None,
+			concurrently: false,
+			expressions: None,
+			mysql_options: None,
+			operator_class: Some("vector_l2_ops".to_string()),
+		};
+
+		assert_eq!(
+			operation
+				.try_to_sql(&SqlDialect::Postgres)
+				.expect("unusual names must be identifier-quoted"),
+			"CREATE INDEX \"select embedding-ann\" ON source USING ivfflat (embedding vector_l2_ops) WITH (lists = 100);"
+		);
 	}
 
 	#[rstest]

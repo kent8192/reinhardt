@@ -749,11 +749,74 @@ impl ToTokens for Operation {
 					}
 				});
 			}
-			Operation::DropNamedIndex { table, name } => {
+			Operation::DropNamedIndex {
+				table,
+				name,
+				columns,
+				unique,
+				index_type,
+				where_clause,
+				concurrently,
+				expressions,
+				mysql_options,
+				operator_class,
+			} => {
+				let columns_iter = columns.iter();
+				let index_type_token = match index_type {
+					Some(IndexType::Hnsw { m, ef_construction }) => {
+						let m = optional_u16_to_tokens(*m);
+						let ef_construction = optional_u16_to_tokens(*ef_construction);
+						quote! {
+							Some(IndexType::Hnsw {
+								m: #m,
+								ef_construction: #ef_construction,
+							})
+						}
+					}
+					Some(IndexType::Ivfflat { lists }) => {
+						let lists = optional_u32_to_tokens(*lists);
+						quote! { Some(IndexType::Ivfflat { lists: #lists }) }
+					}
+					Some(IndexType::BTree) => quote! { Some(IndexType::BTree) },
+					Some(IndexType::Hash) => quote! { Some(IndexType::Hash) },
+					Some(IndexType::Gin) => quote! { Some(IndexType::Gin) },
+					Some(IndexType::Gist) => quote! { Some(IndexType::Gist) },
+					Some(IndexType::Brin) => quote! { Some(IndexType::Brin) },
+					Some(IndexType::Fulltext) => quote! { Some(IndexType::Fulltext) },
+					Some(IndexType::Spatial) => quote! { Some(IndexType::Spatial) },
+					None => quote! { None },
+				};
+				let where_clause_token = match where_clause {
+					Some(value) => quote! { Some(#value.to_string()) },
+					None => quote! { None },
+				};
+				let expressions_token = match expressions {
+					Some(values) => {
+						let values = values.iter();
+						quote! { Some(vec![#(#values.to_string()),*]) }
+					}
+					None => quote! { None },
+				};
+				let mysql_options_token = match mysql_options {
+					Some(value) => quote! { Some(#value) },
+					None => quote! { None },
+				};
+				let operator_class_token = match operator_class {
+					Some(value) => quote! { Some(#value.to_string()) },
+					None => quote! { None },
+				};
 				tokens.extend(quote! {
 					Operation::DropNamedIndex {
 						table: #table.to_string(),
 						name: #name.to_string(),
+						columns: vec![#(#columns_iter.to_string()),*],
+						unique: #unique,
+						index_type: #index_type_token,
+						where_clause: #where_clause_token,
+						concurrently: #concurrently,
+						expressions: #expressions_token,
+						mysql_options: #mysql_options_token,
+						operator_class: #operator_class_token,
 					}
 				});
 			}

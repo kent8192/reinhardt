@@ -1851,6 +1851,7 @@ impl OperationOptimizer {
 						Operation::DropNamedIndex {
 							table: t2,
 							name: n2,
+							..
 						},
 					) if t1 == t2 && n1 == n2 => true,
 					// AddConstraint + DropConstraint

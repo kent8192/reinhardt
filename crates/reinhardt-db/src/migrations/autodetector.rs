@@ -588,6 +588,36 @@ impl Default for ProjectState {
 }
 
 impl ProjectState {
+	/// Validates that physical index names are safe and unique in the schema namespace.
+	pub fn validate_physical_index_names(&self) -> super::Result<()> {
+		let mut owners = HashMap::new();
+		for model in self.models.values() {
+			for index in &model.indexes {
+				if index.name.is_empty() {
+					return Err(super::MigrationError::InvalidMigration(format!(
+						"physical index name on table `{}` must not be empty",
+						model.table_name
+					)));
+				}
+				if index.name.contains('\0') {
+					return Err(super::MigrationError::InvalidMigration(format!(
+						"physical index name on table `{}` must not contain NUL",
+						model.table_name
+					)));
+				}
+				if let Some(previous_table) =
+					owners.insert(index.name.clone(), model.table_name.clone())
+				{
+					return Err(super::MigrationError::InvalidMigration(format!(
+						"physical index name `{}` is declared by both `{}` and `{}`",
+						index.name, previous_table, model.table_name
+					)));
+				}
+			}
+		}
+		Ok(())
+	}
+
 	/// Converts to database schema.
 	pub fn to_database_schema(&self) -> super::schema_diff::DatabaseSchema {
 		let mut tables = BTreeMap::new();
@@ -1528,7 +1558,7 @@ impl ProjectState {
 						});
 					}
 				}
-				Operation::DropNamedIndex { table, name } => {
+				Operation::DropNamedIndex { table, name, .. } => {
 					if let Some(model) = self.find_model_by_table_mut(table) {
 						model.indexes.retain(|index| index.name != *name);
 					}
@@ -4323,6 +4353,7 @@ impl MigrationAutodetector {
 	/// must either emit `RenameColumn` for one-to-one compatible pairs or stop
 	/// instead of silently generating destructive add/drop operations.
 	pub fn try_detect_changes(&self) -> super::Result<DetectedChanges> {
+		self.to_state.validate_physical_index_names()?;
 		self.detect_changes_internal(true)
 	}
 
@@ -7100,6 +7131,14 @@ impl MigrationAutodetector {
 				.push(super::Operation::DropNamedIndex {
 					table: model.table_name.clone(),
 					name: index.name.clone(),
+					columns: index.fields.clone(),
+					unique: index.unique,
+					index_type: index.index_type,
+					where_clause: None,
+					concurrently: false,
+					expressions: index.expressions.clone(),
+					mysql_options: None,
+					operator_class: index.operator_class.clone(),
 				});
 		}
 		for (app_label, model_name, index) in &altered_index_replacements {
@@ -7112,6 +7151,14 @@ impl MigrationAutodetector {
 				.push(super::Operation::DropNamedIndex {
 					table: model.table_name.clone(),
 					name: index.name.clone(),
+					columns: index.fields.clone(),
+					unique: index.unique,
+					index_type: index.index_type,
+					where_clause: None,
+					concurrently: false,
+					expressions: index.expressions.clone(),
+					mysql_options: None,
+					operator_class: index.operator_class.clone(),
 				});
 		}
 
@@ -8763,6 +8810,56 @@ mod tests {
 	}
 
 	#[rstest]
+	fn vector_index_duplicate_physical_names_across_models_are_rejected_before_sql() {
+		// Arrange
+		let first = vector_model(
+			1536,
+			vec![vector_index(
+				crate::migrations::operations::IndexType::Hnsw {
+					m: Some(16),
+					ef_construction: Some(64),
+				},
+				"vector_cosine_ops",
+			)],
+		);
+		let second = build_model_state(
+			"billing",
+			"Invoice",
+			vec![FieldState::new(
+				"embedding",
+				super::super::FieldType::Vector { dimensions: 1536 },
+				false,
+			)],
+			vec![vector_index(
+				crate::migrations::operations::IndexType::Ivfflat { lists: Some(100) },
+				"vector_l2_ops",
+			)],
+			Vec::new(),
+		);
+		let detector = MigrationAutodetector::new(
+			ProjectState::new(),
+			build_project_state(vec![
+				(("search".to_string(), "Document".to_string()), first),
+				(("billing".to_string(), "Invoice".to_string()), second),
+			]),
+		);
+
+		// Act
+		let error = detector
+			.try_generate_operations()
+			.expect_err("duplicate physical index names must fail before SQL generation");
+
+		// Assert
+		assert!(matches!(
+			error,
+			super::super::MigrationError::InvalidMigration(message)
+				if message.contains("documents_embedding_ann")
+					&& message.contains("search_document")
+					&& message.contains("billing_invoice")
+		));
+	}
+
+	#[rstest]
 	fn vector_index_addition_emits_one_create_operation() {
 		// Arrange
 		let index = vector_index(
@@ -8849,7 +8946,7 @@ mod tests {
 		assert_eq!(operations.len(), 1);
 		assert!(matches!(
 			&operations[0],
-			super::super::Operation::DropNamedIndex { table, name }
+			super::super::Operation::DropNamedIndex { table, name, .. }
 				if table == "search_document"
 					&& name == "documents_embedding_ann"
 		));

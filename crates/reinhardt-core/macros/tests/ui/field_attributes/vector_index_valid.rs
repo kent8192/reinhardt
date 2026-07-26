@@ -37,7 +37,7 @@ struct Document {
 	))]
 	embedding: Vector<1536>,
 	#[field(index(
-		name = "documents_summary_l2_ivfflat",
+		name = "select embedding-ann",
 		method = "ivfflat",
 		opclass = "vector_l2_ops",
 		lists = 100
@@ -52,5 +52,5 @@ fn main() {
 	assert_eq!(indexes.len(), 3);
 	assert_eq!(indexes[0].name, "documents_title_idx");
 	assert_eq!(indexes[1].name, "documents_embedding_cosine_hnsw");
-	assert_eq!(indexes[2].name, "documents_summary_l2_ivfflat");
+	assert_eq!(indexes[2].name, "select embedding-ann");
 }

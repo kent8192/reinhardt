@@ -584,6 +584,43 @@ impl ModelRegistry {
 		}
 	}
 
+	/// Validates physical index names across all registered models.
+	///
+	/// PostgreSQL index names share a schema-level namespace, so two models
+	/// cannot safely declare the same physical name even when their tables
+	/// differ.
+	pub fn validate_physical_index_names(&self) -> super::Result<()> {
+		let models = self.models.read().map_err(|_| {
+			super::MigrationError::InvalidMigration("model registry lock is poisoned".to_string())
+		})?;
+		let mut owners = HashMap::new();
+		for metadata in models.values() {
+			for index in metadata.indexes() {
+				if index.name.is_empty() {
+					return Err(super::MigrationError::InvalidMigration(format!(
+						"physical index name on table `{}` must not be empty",
+						metadata.table_name
+					)));
+				}
+				if index.name.contains('\0') {
+					return Err(super::MigrationError::InvalidMigration(format!(
+						"physical index name on table `{}` must not contain NUL",
+						metadata.table_name
+					)));
+				}
+				if let Some(previous_table) =
+					owners.insert(index.name.clone(), metadata.table_name.clone())
+				{
+					return Err(super::MigrationError::InvalidMigration(format!(
+						"physical index name `{}` is declared by both `{}` and `{}`",
+						index.name, previous_table, metadata.table_name
+					)));
+				}
+			}
+		}
+		Ok(())
+	}
+
 	/// Get all registered models
 	///
 	/// Returns a freshly-cloned `Vec<ModelMetadata>`. For hot paths that
@@ -777,6 +814,49 @@ mod tests {
 		let metadata = ModelMetadata::new("blog", "Post", "blog_post");
 		registry.register_model(metadata);
 		assert_eq!(registry.count(), 1);
+	}
+
+	#[test]
+	fn duplicate_physical_index_names_are_rejected_by_registry_validation() {
+		// Arrange
+		let registry = ModelRegistry::new();
+		let mut document = ModelMetadata::new("search", "Document", "search_document");
+		document.add_index(IndexDefinition {
+			name: "shared_embedding_ann".to_string(),
+			fields: vec!["embedding".to_string()],
+			unique: false,
+			index_type: Some(super::super::operations::IndexType::Hnsw {
+				m: Some(16),
+				ef_construction: Some(64),
+			}),
+			operator_class: Some("vector_cosine_ops".to_string()),
+			expressions: None,
+		});
+		let mut invoice = ModelMetadata::new("billing", "Invoice", "billing_invoice");
+		invoice.add_index(IndexDefinition {
+			name: "shared_embedding_ann".to_string(),
+			fields: vec!["embedding".to_string()],
+			unique: false,
+			index_type: Some(super::super::operations::IndexType::Ivfflat { lists: Some(100) }),
+			operator_class: Some("vector_l2_ops".to_string()),
+			expressions: None,
+		});
+		registry.register_model(document);
+		registry.register_model(invoice);
+
+		// Act
+		let error = registry
+			.validate_physical_index_names()
+			.expect_err("duplicate physical index names must fail validation");
+
+		// Assert
+		assert!(matches!(
+			error,
+			super::super::MigrationError::InvalidMigration(message)
+				if message.contains("shared_embedding_ann")
+					&& message.contains("search_document")
+					&& message.contains("billing_invoice")
+		));
 	}
 
 	#[test]

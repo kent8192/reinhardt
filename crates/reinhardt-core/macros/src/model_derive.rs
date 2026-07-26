@@ -26,7 +26,7 @@
 
 use std::collections::{HashMap, HashSet};
 
-use proc_macro2::TokenStream;
+use proc_macro2::{Span, TokenStream};
 use quote::quote;
 use syn::Token;
 use syn::punctuated::Punctuated;
@@ -720,6 +720,7 @@ enum StructuredIndexMethod {
 #[derive(Debug, Clone)]
 struct StructuredIndexConfig {
 	name: String,
+	name_span: Span,
 	method: StructuredIndexMethod,
 	opclass: String,
 	m: Option<u16>,
@@ -755,7 +756,21 @@ impl StructuredIndexConfig {
 				if name.is_some() {
 					return Err(nested.error("duplicate vector index key `name`"));
 				}
-				name = Some(nested.value()?.parse::<syn::LitStr>()?.value());
+				let value = nested.value()?.parse::<syn::LitStr>()?;
+				let parsed = value.value();
+				if parsed.is_empty() {
+					return Err(syn::Error::new(
+						value.span(),
+						"vector index name must not be empty",
+					));
+				}
+				if parsed.contains('\0') {
+					return Err(syn::Error::new(
+						value.span(),
+						"vector index name must not contain NUL",
+					));
+				}
+				name = Some((parsed, value.span()));
 			} else if nested.path.is_ident("method") {
 				if method.is_some() {
 					return Err(nested.error("duplicate vector index key `method`"));
@@ -832,7 +847,7 @@ impl StructuredIndexConfig {
 			Ok(())
 		})?;
 
-		let name = name.ok_or_else(|| meta.error("vector index requires `name`"))?;
+		let (name, name_span) = name.ok_or_else(|| meta.error("vector index requires `name`"))?;
 		let method = method.ok_or_else(|| meta.error("vector index requires `method`"))?;
 		let opclass = opclass.ok_or_else(|| meta.error("vector index requires `opclass`"))?;
 		match method {
@@ -849,6 +864,7 @@ impl StructuredIndexConfig {
 
 		Ok(Self {
 			name,
+			name_span,
 			method,
 			opclass,
 			m,
@@ -3133,6 +3149,25 @@ pub(crate) fn model_derive_impl(mut input: DeriveInput) -> Result<TokenStream> {
 			rel,
 			is_fk_id_field,
 		});
+	}
+
+	let mut structured_index_names = HashMap::new();
+	for field in &field_infos {
+		let Some(config) = field.config.structured_index.as_ref() else {
+			continue;
+		};
+		if structured_index_names
+			.insert(config.name.as_str(), config.name_span)
+			.is_some()
+		{
+			return Err(syn::Error::new(
+				config.name_span,
+				format!(
+					"duplicate structured index name `{}` within model",
+					config.name
+				),
+			));
+		}
 	}
 
 	// Extract ForeignKeyField and OneToOneField information

@@ -519,6 +519,12 @@ pub async fn install_scoped_database(
 pub async fn replace_database_connection_for_testing(
 	lease: Option<DatabaseConnectionLease>,
 ) -> Option<DatabaseConnectionLease> {
+	replace_database_connection_for_testing_sync(lease)
+}
+
+fn replace_database_connection_for_testing_sync(
+	lease: Option<DatabaseConnectionLease>,
+) -> Option<DatabaseConnectionLease> {
 	let database = lease.map(|lease| DefaultDatabase {
 		handle: lease.handle(),
 		lease,
@@ -2970,6 +2976,26 @@ mod tests {
 	use serde::{Deserialize, Serialize};
 	use std::collections::HashMap;
 
+	struct DatabaseStateRestoreGuard {
+		previous: Option<crate::orm::connection::DatabaseConnectionLease>,
+	}
+
+	impl DatabaseStateRestoreGuard {
+		fn replace(lease: Option<crate::orm::connection::DatabaseConnectionLease>) -> Self {
+			Self {
+				previous: super::replace_database_connection_for_testing_sync(lease),
+			}
+		}
+	}
+
+	impl Drop for DatabaseStateRestoreGuard {
+		fn drop(&mut self) {
+			let replaced =
+				super::replace_database_connection_for_testing_sync(self.previous.take());
+			drop(replaced);
+		}
+	}
+
 	#[test]
 	fn test_field_codec_error_preserves_typed_source() {
 		let error = field_codec_error(FieldCodecError::Serialization(
@@ -2996,14 +3022,12 @@ mod tests {
 			.await
 			.unwrap();
 		let lease = crate::orm::connection::DatabaseConnectionLease::register(owner).unwrap();
-		let previous = super::replace_database_connection_for_testing(Some(lease)).await;
+		let _database_state = DatabaseStateRestoreGuard::replace(Some(lease));
 
 		let result = super::init_database("unsupported://must-not-connect").await;
 		let backend = super::get_connection()
 			.await
 			.map(|connection| connection.backend());
-
-		super::replace_database_connection_for_testing(previous).await;
 
 		result.expect("repeated initialization should not reconnect");
 		assert_eq!(backend.unwrap(), DatabaseBackend::Sqlite);
@@ -3012,7 +3036,7 @@ mod tests {
 	#[serial_test::serial(sqlx_drivers)]
 	#[tokio::test]
 	async fn init_database_installs_a_baseline_beneath_an_existing_scope() {
-		let previous = super::replace_database_connection_for_testing(None).await;
+		let _database_state = DatabaseStateRestoreGuard::replace(None);
 		let scope = super::install_scoped_database("sqlite::memory:")
 			.await
 			.expect("scope installation should succeed");
@@ -3026,9 +3050,6 @@ mod tests {
 			.await
 			.expect("dropping the scope should restore the new baseline")
 			.backend();
-		let baseline = super::replace_database_connection_for_testing(previous).await;
-		drop(baseline);
-
 		assert_eq!(backend, DatabaseBackend::Sqlite);
 	}
 

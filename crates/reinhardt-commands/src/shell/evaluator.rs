@@ -792,8 +792,7 @@ fn terminate_evaluator_process(
 		if owns_process_group {
 			let process_group = Pid::from_raw(process.id() as i32);
 			match killpg(process_group, Signal::SIGKILL) {
-				Ok(()) => return Ok(()),
-				Err(nix::errno::Errno::ESRCH) => return Ok(()),
+				Ok(()) | Err(nix::errno::Errno::ESRCH) => {}
 				Err(_) => {}
 			}
 		}
@@ -1096,11 +1095,17 @@ fn startup_prelude_error(error: EvaluationFailure, warnings: &[String]) -> Evalu
 		EvaluationFailure::ContextReset(message) => EvaluationFailure::ContextReset(format!(
 			"shell bootstrap failed{warning_suffix}: {message}"
 		)),
+		EvaluationFailure::Panic(message) => {
+			EvaluationFailure::Panic(format!("shell bootstrap failed{warning_suffix}: {message}"))
+		}
+		EvaluationFailure::ProcessExited(message) => EvaluationFailure::ProcessExited(format!(
+			"shell bootstrap failed{warning_suffix}: {message}"
+		)),
 		EvaluationFailure::Output { failure, output } => EvaluationFailure::Output {
 			failure: Box::new(startup_prelude_error(*failure, warnings)),
 			output,
 		},
-		other => other,
+		EvaluationFailure::Interrupted => EvaluationFailure::Interrupted,
 	}
 }
 
@@ -1354,7 +1359,7 @@ mod tests {
 	use std::future::Future;
 	use std::io::Read;
 	use std::path::{Path, PathBuf};
-	use std::process::{Child, Command, Output};
+	use std::process::{Child, Command, Output, Stdio};
 	use std::sync::{Arc, Condvar, Mutex};
 	use std::task::Poll;
 	use std::thread::{self, JoinHandle};
@@ -1369,7 +1374,7 @@ mod tests {
 		BlockingShellEvaluator, EvaluationFailure, EvaluationOutput, EvaluatorWorker,
 		EvcxrEvaluator, StartupInterrupt, StreamCapture, bootstrap_prelude,
 		configure_evaluator_build_dir_from, evaluation_command_error, path_dependency,
-		source_with_commit_sentinel,
+		source_with_commit_sentinel, startup_prelude_error, terminate_evaluator_process,
 	};
 	use crate::ShellConfig;
 	use crate::shell::session::{EvaluationInterrupt, EvaluatorClient};
@@ -1519,6 +1524,51 @@ mod tests {
 		);
 
 		assert_eq!(error.to_string().matches("panic payload").count(), 1);
+	}
+
+	#[test]
+	fn startup_prelude_error_contextualizes_fatal_failures() {
+		let warnings = ["ignored optional app".to_string()];
+
+		assert_eq!(
+			startup_prelude_error(
+				EvaluationFailure::Panic("bootstrap panic".to_string()),
+				&warnings
+			),
+			EvaluationFailure::Panic(
+				"shell bootstrap failed; import warnings: ignored optional app: bootstrap panic"
+					.to_string()
+			)
+		);
+		assert_eq!(
+			startup_prelude_error(
+				EvaluationFailure::ProcessExited("bootstrap exited".to_string()),
+				&warnings,
+			),
+			EvaluationFailure::ProcessExited(
+				"shell bootstrap failed; import warnings: ignored optional app: bootstrap exited"
+					.to_string()
+			)
+		);
+	}
+
+	#[cfg(unix)]
+	#[test]
+	fn terminate_evaluator_process_kills_the_direct_child_after_a_missing_group() {
+		let mut command = Command::new("sleep");
+		command
+			.arg("30")
+			.stdout(Stdio::piped())
+			.stderr(Stdio::piped());
+		let mut process = ProbeChild::spawn(&mut command);
+
+		terminate_evaluator_process(&mut process.child, true)
+			.expect("the direct child should be terminated after its group is missing");
+		let output = process
+			.wait_with_output("direct-child-kill", Duration::from_secs(5))
+			.expect("terminated direct child should be reaped");
+
+		assert!(!output.status.success());
 	}
 
 	#[test]

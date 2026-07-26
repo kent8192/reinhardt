@@ -608,7 +608,7 @@ mod tests {
 	#[test]
 	fn failed_startup_forwards_captured_output_before_returning_its_error() {
 		let shared = Arc::new(Mutex::new(FakeOutput::default()));
-		let output = SharedOutput(Arc::clone(&shared));
+		let shared_output = SharedOutput(Arc::clone(&shared));
 		let factory = FailedStartupFactory {
 			output: vec![output(
 				"prelude output\n",
@@ -617,7 +617,7 @@ mod tests {
 			)],
 		};
 
-		let error = match ShellSession::with_signal(factory, output, NeverInterrupt) {
+		let error = match ShellSession::with_signal(factory, shared_output, NeverInterrupt) {
 			Ok(_) => panic!("failed bootstrap should return its error"),
 			Err(error) => error,
 		};

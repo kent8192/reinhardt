@@ -1970,6 +1970,14 @@ fn is_model_form_editable(field: &FieldInfo) -> bool {
 	if field.config.skip || field.config.primary_key || field.config.editable == Some(false) {
 		return false;
 	}
+	if field.config.auto_now == Some(true)
+		|| field.config.auto_now_add == Some(true)
+		|| field.config.generated.is_some()
+		|| field.config.generated_sql.is_some()
+		|| field.config.include_in_new == Some(false)
+	{
+		return false;
+	}
 
 	if field.is_fk_id_field {
 		return true;

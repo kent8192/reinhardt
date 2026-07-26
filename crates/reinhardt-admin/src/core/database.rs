@@ -190,11 +190,13 @@ fn parse_pk_values(table_name: &str, pk_field: &str, ids: &[String]) -> Vec<Valu
 		.collect()
 }
 
-/// Convert FilterValue to Value
+/// Convert `FilterValue` to `Value`, preserving typed timestamp and UUID values.
 #[doc(hidden)]
 pub fn filter_value_to_sea_value(v: &FilterValue) -> Value {
 	match v {
 		FilterValue::String(s) => s.clone().into(),
+		FilterValue::Timestamp(value) => (*value).into(),
+		FilterValue::Uuid(value) => (*value).into(),
 		FilterValue::Integer(i) | FilterValue::Int(i) => (*i).into(),
 		FilterValue::Float(f) => (*f).into(),
 		FilterValue::Boolean(b) | FilterValue::Bool(b) => (*b).into(),
@@ -1938,6 +1940,37 @@ mod tests {
 			query,
 			r#"SELECT * FROM "users" WHERE EXTRACT(YEAR FROM "created_at") BETWEEN 2024 AND 2026"#
 		);
+	}
+
+	#[test]
+	fn test_filter_value_to_sea_value_preserves_timestamp() {
+		// Arrange
+		let timestamp = chrono::DateTime::parse_from_rfc3339("2026-07-26T00:00:00Z")
+			.unwrap()
+			.with_timezone(&chrono::Utc);
+		let value = FilterValue::Timestamp(timestamp);
+
+		// Act
+		let sea_value = filter_value_to_sea_value(&value);
+
+		// Assert
+		assert_eq!(
+			sea_value,
+			Value::ChronoDateTimeUtc(Some(Box::new(timestamp)))
+		);
+	}
+
+	#[test]
+	fn test_filter_value_to_sea_value_preserves_uuid() {
+		// Arrange
+		let uuid = uuid::Uuid::parse_str("f4d95b59-b868-4f78-8f63-240aa6bca90f").unwrap();
+		let value = FilterValue::Uuid(uuid);
+
+		// Act
+		let sea_value = filter_value_to_sea_value(&value);
+
+		// Assert
+		assert_eq!(sea_value, Value::Uuid(Some(Box::new(uuid))));
 	}
 
 	#[test]

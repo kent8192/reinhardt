@@ -2249,24 +2249,7 @@ fn generate_model_form(
 							.attr("id", control_id.clone())
 							.attr("type", input_type)
 							.bool_attr("required", descriptor.required && !is_checkbox);
-						let stored_value = {
-							let mut state = self.__model_state.borrow_mut();
-							if state.value(field_name).is_none()
-								&& let ::core::option::Option::Some(default) = &range_default
-							{
-								if let ::core::result::Result::Err(error) = state.set_value(
-									field_name,
-									#pages_crate::__private::serde_json::Value::String(default.clone()),
-								) {
-									#pages_crate::warn_log!(
-										"model form range field `{}` rejected its rendered default: {}",
-										field_name,
-										error,
-									);
-								}
-							}
-							state.value(field_name).cloned()
-						};
+						let stored_value = self.__model_state.borrow().value(field_name).cloned();
 						if is_checkbox {
 							control = control.bool_attr(
 								"checked",

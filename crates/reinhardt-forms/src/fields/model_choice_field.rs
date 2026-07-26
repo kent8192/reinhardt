@@ -102,6 +102,7 @@ impl<T: FormModel> ModelChoiceField<T> {
 	/// Sets whether a selection is required.
 	pub fn required(mut self, required: bool) -> Self {
 		self.required = required;
+		self.refresh_widget_choices();
 		self
 	}
 	/// Sets the help text displayed alongside the field.
@@ -117,6 +118,7 @@ impl<T: FormModel> ModelChoiceField<T> {
 	/// Sets the label for the empty/default option.
 	pub fn empty_label(mut self, label: Option<String>) -> Self {
 		self.empty_label = label;
+		self.refresh_widget_choices();
 		self
 	}
 	/// Uses the supplied function to render each model choice label.
@@ -147,8 +149,6 @@ impl<T: FormModel> ModelChoiceField<T> {
 
 	/// Get choices from queryset
 	/// Converts model instances to (value, label) pairs for display in select widget
-	// Allow dead_code: API reserved for future widget rendering integration
-	#[allow(dead_code)]
 	fn get_choices(&self) -> Vec<(String, String)> {
 		let mut choices = Vec::new();
 
@@ -368,6 +368,7 @@ impl<T: FormModel> ModelMultipleChoiceField<T> {
 	/// Sets whether at least one selection is required.
 	pub fn required(mut self, required: bool) -> Self {
 		self.required = required;
+		self.refresh_widget_choices();
 		self
 	}
 	/// Sets the help text displayed alongside the field.
@@ -407,8 +408,6 @@ impl<T: FormModel> ModelMultipleChoiceField<T> {
 	}
 
 	/// Get choices from queryset
-	// Allow dead_code: API reserved for future widget rendering integration
-	#[allow(dead_code)]
 	fn get_choices(&self) -> Vec<(String, String)> {
 		let mut choices = Vec::new();
 

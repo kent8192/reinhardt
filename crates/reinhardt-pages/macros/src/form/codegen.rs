@@ -2479,12 +2479,13 @@ fn generate_model_form(
 													#pages_crate::form::ModelFormFieldKind::Boolean
 												),
 												descriptor.nullable,
+												descriptor.required,
 												#is_range_override,
 											))
 											.collect::<::std::vec::Vec<_>>();
 										let mut state = submit_form.__model_state.borrow_mut();
-										for (field, is_checkbox, nullable, is_range) in fields {
-											if is_range && state.value(field).is_none() {
+										for (field, is_checkbox, nullable, required, is_range) in fields {
+											if is_range && !required && state.value(field).is_none() {
 												continue;
 											}
 											if let Some(value) = values.get(field).as_string() {

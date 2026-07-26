@@ -85,6 +85,10 @@ where
 				self.values.remove(descriptor.name);
 				return Ok(());
 			}
+			if descriptor.has_default {
+				self.values.remove(descriptor.name);
+				return Ok(());
+			}
 		}
 
 		match convert_control_value(descriptor, value) {

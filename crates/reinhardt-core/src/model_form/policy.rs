@@ -95,12 +95,13 @@ where
 		let remove_empty = text.is_empty()
 			&& !descriptor.required
 			&& !descriptor.nullable
-			&& !matches!(
-				descriptor.kind,
-				ModelFormFieldKind::Text { .. }
-					| ModelFormFieldKind::Email { .. }
-					| ModelFormFieldKind::Url { .. }
-			);
+			&& (descriptor.has_default
+				|| !matches!(
+					descriptor.kind,
+					ModelFormFieldKind::Text { .. }
+						| ModelFormFieldKind::Email { .. }
+						| ModelFormFieldKind::Url { .. }
+				));
 		if text.is_empty() && !descriptor.required && descriptor.nullable {
 			*control = serde_json::Value::Null;
 			continue;
@@ -129,6 +130,9 @@ where
 				.ok()
 				.and_then(serde_json::Number::from_f64)
 				.map(serde_json::Value::Number),
+			ModelFormFieldKind::Time if text.len() == 5 && text.as_bytes()[2] == b':' => {
+				Some(serde_json::Value::String(format!("{text}:00")))
+			}
 			ModelFormFieldKind::Json => Some(serde_json::from_str(text)?),
 			ModelFormFieldKind::DateTime | ModelFormFieldKind::NaiveDateTime
 				if text.split_once('T').is_some_and(|(_, time)| {

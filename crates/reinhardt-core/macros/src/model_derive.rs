@@ -2260,6 +2260,24 @@ fn generate_model_form_support(
 		}
 	}
 	let field_types: Vec<_> = editable_fields.iter().map(|field| &field.ty).collect();
+	let trusted_field_assignments = field_infos.iter().map(|field| {
+		let name = LitStr::new(&field.name.to_string(), field.name.span());
+		let ident = Ident::new(&field.name.to_string(), field.name.span());
+		let ty = &field.ty;
+		quote! {
+			#name => {
+				self.#ident = #serde_crate::from_value::<#ty>(value).map_err(|error| {
+					#forms_crate::model_form::ModelFormError::FieldValidation {
+						errors: ::std::collections::HashMap::from([(
+							field.to_owned(),
+							vec![error.to_string()],
+						)]),
+					}
+				})?;
+				::core::result::Result::Ok(())
+			}
+		}
+	});
 	let field_literals: Vec<_> = editable_fields
 		.iter()
 		.map(|field| LitStr::new(&field.name.to_string(), field.name.span()))
@@ -2814,6 +2832,19 @@ fn generate_model_form_support(
 			) -> ::core::result::Result<(), #forms_crate::model_form::ModelFormError> {
 				#(#apply_payload_fields)*
 				::core::result::Result::Ok(())
+			}
+
+			fn set_trusted_field_json(
+				&mut self,
+				field: &str,
+				value: #serde_crate::Value,
+			) -> ::core::result::Result<(), #forms_crate::model_form::ModelFormError> {
+				match field {
+					#(#trusted_field_assignments,)*
+					_ => ::core::result::Result::Err(#forms_crate::model_form::ModelFormError::FieldValidation {
+						errors: ::std::collections::HashMap::from([(field.to_owned(), vec!["unknown trusted model field".to_owned()])]),
+					}),
+				}
 			}
 
 			async fn save_with_mode(

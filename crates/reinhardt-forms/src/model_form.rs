@@ -61,6 +61,17 @@ pub trait FormModel: Model + Clone + Send + Sync {
 		data: &Self::Data<P>,
 	) -> Result<(), ModelFormError>;
 
+	/// Applies a server-trusted relationship value excluded from public payloads.
+	fn set_trusted_field_json(&mut self, field: &str, value: Value) -> Result<(), ModelFormError> {
+		let _ = value;
+		Err(ModelFormError::FieldValidation {
+			errors: HashMap::from([(
+				field.to_owned(),
+				vec!["unknown trusted model field".to_owned()],
+			)]),
+		})
+	}
+
 	/// Persists this candidate using an explicit create or update operation.
 	async fn save_with_mode(
 		&mut self,
@@ -432,6 +443,29 @@ where
 			self.supplied_fields.push(field_name);
 		}
 		Ok(())
+	}
+
+	pub(crate) fn set_trusted_field_value(
+		&mut self,
+		field_name: &str,
+		value: Value,
+	) -> Result<(), ModelFormError> {
+		if T::Schema::fields()
+			.iter()
+			.any(|descriptor| descriptor.name == field_name)
+		{
+			return self.set_field_value(field_name, value);
+		}
+		if self.validated_candidate.is_none() {
+			self.build_instance()?;
+		}
+		T::set_trusted_field_json(
+			self.validated_candidate
+				.as_mut()
+				.expect("build_instance initializes the trusted candidate"),
+			field_name,
+			value,
+		)
 	}
 
 	/// Returns a reference to the underlying form.

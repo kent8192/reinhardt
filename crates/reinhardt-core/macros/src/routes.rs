@@ -418,6 +418,7 @@ fn generate_wrapper_with_both(
 
 	let fn_name = &original_fn.sig.ident;
 	let original_fn_name = quote::format_ident!("{}_original", fn_name);
+	let request_ident = Ident::new("__reinhardt_request", Span::mixed_site());
 	let fn_attrs: Vec<_> = original_fn
 		.attrs
 		.iter()
@@ -446,11 +447,11 @@ fn generate_wrapper_with_both(
 	// Generate DI context extraction
 	let di_context_extraction = if !inject_params.is_empty() {
 		quote! {
-			let __shared_ctx = __reinhardt_request.get_di_context::<::std::sync::Arc<#di_crate::InjectionContext>>()
+			let __shared_ctx = #request_ident.get_di_context::<::std::sync::Arc<#di_crate::InjectionContext>>()
 				.ok_or_else(|| #core_crate::exception::Error::Internal(
 					"DI context not set. Ensure the router is configured with .with_di_context()".to_string()
 				))?;
-			let __di_request = __reinhardt_request.clone_for_di();
+			let __di_request = #request_ident.clone_for_di();
 			let __di_ctx = ::std::sync::Arc::new((*__shared_ctx).fork_for_request(__di_request));
 			let __resolve_ctx = #di_crate::resolve_context::ResolveContext {
 				root: ::std::sync::Arc::clone(&__shared_ctx),
@@ -507,7 +508,7 @@ fn generate_wrapper_with_both(
 				// reach the response, instead of being flattened into 400 via
 				// `Error::Validation`. See #4446.
 				quote! {
-					let #temp = <#ty as #params_crate::FromRequest>::from_request(&__reinhardt_request, &ctx)
+					let #temp = <#ty as #params_crate::FromRequest>::from_request(&#request_ident, &ctx)
 						.await
 						.map_err(#core_crate::exception::Error::from)?;
 				}
@@ -555,7 +556,7 @@ fn generate_wrapper_with_both(
 				let pat = &ext.pat;
 				let ty = &ext.ty;
 				quote! {
-					let #pat = <#ty as #params_crate::FromRequest>::from_request(&__reinhardt_request, &ctx)
+					let #pat = <#ty as #params_crate::FromRequest>::from_request(&#request_ident, &ctx)
 						.await
 						.map_err(#core_crate::exception::Error::from)?;
 				}
@@ -584,7 +585,7 @@ fn generate_wrapper_with_both(
 					.resolved_ident;
 				Some(quote! { #ident })
 			} else if is_raw_request_parameter(pat_type) {
-				Some(quote! { __reinhardt_request })
+				Some(quote! { #request_ident })
 			} else {
 				let pat = extractor_args
 					.next()
@@ -634,7 +635,7 @@ fn generate_wrapper_with_both(
 		},
 		quote! {
 			// Build ParamContext for extractors
-		let ctx = #params_crate::ParamContext::with_path_params(__reinhardt_request.path_params.clone());
+		let ctx = #params_crate::ParamContext::with_path_params(#request_ident.path_params.clone());
 
 			// Extract DI context (if needed)
 			#di_context_extraction
@@ -758,15 +759,15 @@ fn generate_view_type(
 
 		#[#async_trait_crate::async_trait]
 		impl #http_crate::Handler for #view_type_name {
-			async fn handle(&self, __reinhardt_request: #http_crate::Request) -> #http_crate::Result<#http_crate::Response> {
-				#view_type_name::#fn_name(__reinhardt_request).await
+			async fn handle(&self, #request_ident: #http_crate::Request) -> #http_crate::Result<#http_crate::Response> {
+				#view_type_name::#fn_name(#request_ident).await
 			}
 		}
 
 		impl #view_type_name {
 			/// Handler function for this view
 			#(#fn_attrs)*
-			#fn_vis #asyncness fn #fn_name(__reinhardt_request: #http_crate::Request) #output {
+			#fn_vis #asyncness fn #fn_name(#request_ident: #http_crate::Request) #output {
 				#wrapper_body
 			}
 		}
@@ -1440,7 +1441,7 @@ mod url_resolver_tests {
 		);
 		let generated = wrapper.to_string();
 		assert!(
-			generated.contains("handler_original (req , Path (id) , Json (body))"),
+			generated.contains("handler_original (__reinhardt_request , Path (id) , Json (body))"),
 			"{generated}"
 		);
 	}

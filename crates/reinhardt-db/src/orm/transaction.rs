@@ -593,6 +593,7 @@ pub struct AtomicTransaction {
 	backend: DatabaseBackend,
 	savepoint_sequence: u64,
 	outcome: AtomicTransactionOutcome,
+	savepoint_outcomes: Vec<AtomicTransactionOutcome>,
 }
 
 impl AtomicTransaction {
@@ -603,12 +604,19 @@ impl AtomicTransaction {
 			backend,
 			savepoint_sequence: 0,
 			outcome: AtomicTransactionOutcome::pending(),
+			savepoint_outcomes: Vec::new(),
 		}
 	}
 
-	/// Returns the outcome that will be finalized when the outer callback exits.
+	/// Returns the outcome for the currently active atomic scope.
+	///
+	/// During a nested [`Self::atomic`] callback this is the savepoint outcome;
+	/// otherwise it is the outer transaction outcome.
 	pub fn outcome(&self) -> AtomicTransactionOutcome {
-		self.outcome.clone()
+		self.savepoint_outcomes
+			.last()
+			.cloned()
+			.unwrap_or_else(|| self.outcome.clone())
 	}
 
 	fn executor_mut<'transaction>(
@@ -726,20 +734,36 @@ impl AtomicTransaction {
 			.savepoint(&savepoint_name)
 			.await
 			.map_err(E::from)?;
+		let outcome = AtomicTransactionOutcome::pending();
+		self.savepoint_outcomes.push(outcome.clone());
 
-		match std::panic::AssertUnwindSafe(f(self)).catch_unwind().await {
-			Ok(Ok(value)) => self
-				.executor_mut()?
-				.release_savepoint(&savepoint_name)
-				.await
-				.map(|()| value)
-				.map_err(E::from),
+		let result = match std::panic::AssertUnwindSafe(f(self)).catch_unwind().await {
+			Ok(Ok(value)) => {
+				let release_result = match self.executor_mut() {
+					Ok(executor) => executor.release_savepoint(&savepoint_name).await,
+					Err(error) => Err(error),
+				};
+				match release_result {
+					Ok(()) => {
+						outcome.set_committed();
+						Ok(value)
+					}
+					Err(error) => {
+						outcome.set_unknown();
+						Err(E::from(error))
+					}
+				}
+			}
 			Ok(Err(operation_error)) => {
 				let (rollback_result, release_result) =
 					self.cleanup_savepoint(&savepoint_name).await;
 				match (rollback_result, release_result) {
-					(Ok(()), Ok(())) => Err(operation_error),
+					(Ok(()), Ok(())) => {
+						outcome.set_rolled_back();
+						Err(operation_error)
+					}
 					(Err(rollback_error), Ok(())) => {
+						outcome.set_unknown();
 						tracing::error!(
 							operation_error = %operation_error,
 							rollback_to_savepoint_error = %rollback_error,
@@ -748,6 +772,7 @@ impl AtomicTransaction {
 						Err(E::from(rollback_error))
 					}
 					(Ok(()), Err(release_error)) => {
+						outcome.set_unknown();
 						tracing::error!(
 							operation_error = %operation_error,
 							release_savepoint_error = %release_error,
@@ -756,6 +781,7 @@ impl AtomicTransaction {
 						Err(E::from(release_error))
 					}
 					(Err(rollback_error), Err(release_error)) => {
+						outcome.set_unknown();
 						tracing::error!(
 							operation_error = %operation_error,
 							rollback_to_savepoint_error = %rollback_error,
@@ -769,6 +795,11 @@ impl AtomicTransaction {
 			Err(panic_payload) => {
 				let (rollback_result, release_result) =
 					self.cleanup_savepoint(&savepoint_name).await;
+				if rollback_result.is_ok() && release_result.is_ok() {
+					outcome.set_rolled_back();
+				} else {
+					outcome.set_unknown();
+				}
 				if let Err(rollback_error) = rollback_result {
 					tracing::error!(
 						rollback_to_savepoint_error = %rollback_error,
@@ -781,9 +812,12 @@ impl AtomicTransaction {
 						"Nested atomic release-savepoint failed while resuming callback panic"
 					);
 				}
+				self.savepoint_outcomes.pop();
 				std::panic::resume_unwind(panic_payload)
 			}
-		}
+		};
+		self.savepoint_outcomes.pop();
+		result
 	}
 }
 

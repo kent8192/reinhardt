@@ -166,36 +166,44 @@ fn extract_request_body_info(inputs: &Punctuated<FnArg, Token![,]>) -> Option<(S
 				continue;
 			}
 
-			if let Type::Path(type_path) = &*pat_type.ty
-				&& let Some(segment) = type_path.path.segments.last()
-			{
-				let type_name = segment.ident.to_string();
-
-				// Check for body-consuming extractors
-				if matches!(type_name.as_str(), "Json" | "Form" | "Body") {
-					// Extract generic argument T
-					if let syn::PathArguments::AngleBracketed(args) = &segment.arguments
-						&& let Some(syn::GenericArgument::Type(inner_type)) = args.args.first()
-					{
-						// Convert inner type to string
-						let body_type_str = quote!(#inner_type).to_string();
-
-						// Determine content type based on extractor
-						let content_type = match type_name.as_str() {
-							"Json" => "application/json",
-							"Form" => "application/x-www-form-urlencoded",
-							"Body" => "application/octet-stream",
-							_ => "application/octet-stream",
-						};
-
-						return Some((body_type_str, content_type.to_string()));
-					}
-				}
+			if let Some(body_info) = extract_body_info_from_type(&pat_type.ty) {
+				return Some(body_info);
 			}
 		}
 	}
 
 	None
+}
+
+/// Derive body metadata from a body-consuming extractor type.
+///
+/// `Validated<T>` delegates extraction to `T`, so it preserves the body schema
+/// and content type of wrapped `Json<T>`, `Form<T>`, or `Body<T>` extractors.
+fn extract_body_info_from_type(ty: &Type) -> Option<(String, String)> {
+	let Type::Path(type_path) = ty else {
+		return None;
+	};
+	let segment = type_path.path.segments.last()?;
+	let syn::PathArguments::AngleBracketed(args) = &segment.arguments else {
+		return None;
+	};
+	let inner_type = args.args.iter().find_map(|argument| match argument {
+		syn::GenericArgument::Type(ty) => Some(ty),
+		_ => None,
+	})?;
+
+	if segment.ident == "Validated" {
+		return extract_body_info_from_type(inner_type);
+	}
+
+	let content_type = match segment.ident.to_string().as_str() {
+		"Json" => "application/json",
+		"Form" => "application/x-www-form-urlencoded",
+		"Body" => "application/octet-stream",
+		_ => return None,
+	};
+
+	Some((quote!(#inner_type).to_string(), content_type.to_string()))
 }
 
 /// Detect parameters with `#[inject]` attribute
@@ -222,7 +230,7 @@ pub(crate) fn detect_inject_params(inputs: &Punctuated<FnArg, Token![,]>) -> Vec
 
 /// Validate duplication of body-consuming extractors
 fn validate_extractors(extractors: &[ExtractorInfo]) -> Result<()> {
-	let body_consuming_types = ["Json", "Form", "Body"];
+	let body_consuming_types = ["Json", "Form", "Body", "Multipart"];
 	let body_extractors: Vec<_> = extractors
 		.iter()
 		.filter(|ext| body_consuming_types.contains(&ext.extractor_name.as_str()))
@@ -413,6 +421,7 @@ fn generate_wrapper_with_both(
 
 	let fn_name = &original_fn.sig.ident;
 	let original_fn_name = quote::format_ident!("{}_original", fn_name);
+	let request_binding = syn::Ident::new("__reinhardt_request", Span::mixed_site());
 	let fn_attrs: Vec<_> = original_fn
 		.attrs
 		.iter()
@@ -441,11 +450,11 @@ fn generate_wrapper_with_both(
 	// Generate DI context extraction
 	let di_context_extraction = if !inject_params.is_empty() {
 		quote! {
-			let __shared_ctx = __reinhardt_request.get_di_context::<::std::sync::Arc<#di_crate::InjectionContext>>()
+			let __shared_ctx = #request_binding.get_di_context::<::std::sync::Arc<#di_crate::InjectionContext>>()
 				.ok_or_else(|| #core_crate::exception::Error::Internal(
 					"DI context not set. Ensure the router is configured with .with_di_context()".to_string()
 				))?;
-			let __di_request = __reinhardt_request.clone_for_di();
+			let __di_request = #request_binding.clone_for_di();
 			let __di_ctx = ::std::sync::Arc::new((*__shared_ctx).fork_for_request(__di_request));
 			let __resolve_ctx = #di_crate::resolve_context::ResolveContext {
 				root: ::std::sync::Arc::clone(&__shared_ctx),
@@ -474,27 +483,27 @@ fn generate_wrapper_with_both(
 		})
 		.collect();
 
-	// Generate extractor calls and validation differently based on pre_validate.
-	// When pre_validate = true and a destructuring pattern like `Json(body)` is used,
-	// extracting directly into the pattern would consume the wrapper, making it
-	// impossible to validate via Deref on the original extractor type.
-	// The 3-step approach (extract to temp -> validate temp -> destructure) avoids this.
-	let (extractor_calls, validation_calls, destructure_calls, extractor_args): (
+	// Extract into hygienic temporaries so handler parameter patterns are evaluated
+	// only by the renamed original function. This also permits mutable and
+	// destructuring extractor patterns without interpolating patterns as expressions.
+	let extractor_temps: Vec<syn::Ident> = extractors
+		.iter()
+		.enumerate()
+		.map(|(index, _)| {
+			syn::Ident::new(
+				&format!("__reinhardt_extractor_{index}"),
+				Span::mixed_site(),
+			)
+		})
+		.collect();
+	let (extractor_calls, validation_calls, extractor_args): (
 		Vec<_>,
 		proc_macro2::TokenStream,
-		proc_macro2::TokenStream,
-		Vec<Box<Pat>>,
+		Vec<syn::Ident>,
 	) = if options.pre_validate {
-		// Step 1: Extract into temporary variables
-		let temp_names: Vec<syn::Ident> = extractors
-			.iter()
-			.enumerate()
-			.map(|(i, _)| syn::Ident::new(&format!("__ext_{}", i), Span::call_site()))
-			.collect();
-
 		let calls: Vec<_> = extractors
 			.iter()
-			.zip(temp_names.iter())
+			.zip(extractor_temps.iter())
 			.map(|(ext, temp)| {
 				let ty = &ext.ty;
 				// Route `ParamError` through `From<ParamError> for Error` so
@@ -503,7 +512,7 @@ fn generate_wrapper_with_both(
 				// `Error::Validation`. See #4446.
 				quote! {
 					let #temp = <#ty as #params_crate::FromRequest>::from_request(
-						&__reinhardt_request,
+						&#request_binding,
 						&ctx,
 					)
 						.await
@@ -513,7 +522,7 @@ fn generate_wrapper_with_both(
 			.collect();
 
 		// Step 2: Validate using temp variables (Deref on the extractor type)
-		let validate_calls: Vec<_> = temp_names
+		let validate_calls: Vec<_> = extractor_temps
 			.iter()
 			.map(|temp| {
 				quote! {
@@ -525,26 +534,9 @@ fn generate_wrapper_with_both(
 			})
 			.collect();
 
-		// Step 3: Destructure temp variables into original patterns
-		let destructure: Vec<_> = extractors
-			.iter()
-			.zip(temp_names.iter())
-			.map(|(ext, temp)| {
-				let pat = &ext.pat;
-				quote! { let #pat = #temp; }
-			})
-			.collect();
-
-		let args: Vec<Box<Pat>> = extractors.iter().map(|ext| ext.pat.clone()).collect();
-
-		(
-			calls,
-			quote! { #(#validate_calls)* },
-			quote! { #(#destructure)* },
-			args,
-		)
+		(calls, quote! { #(#validate_calls)* }, extractor_temps)
 	} else {
-		// Without pre_validate: extract directly into the original pattern.
+		// Without pre_validate: extract directly into the hygienic temporary.
 		// Route ParamError through `From<ParamError> for Error` so variant-specific
 		// status mappings (e.g. `Authentication` -> 401) reach the response. #4446
 		let calls: Vec<_> = extractors
@@ -554,7 +546,7 @@ fn generate_wrapper_with_both(
 				let ty = &ext.ty;
 				quote! {
 					let #pat = <#ty as #params_crate::FromRequest>::from_request(
-						&__reinhardt_request,
+						&#request_binding,
 						&ctx,
 					)
 						.await
@@ -563,9 +555,7 @@ fn generate_wrapper_with_both(
 			})
 			.collect();
 
-		let args: Vec<Box<Pat>> = extractors.iter().map(|ext| ext.pat.clone()).collect();
-
-		(calls, quote! {}, quote! {}, args)
+		(calls, quote! {}, extractor_temps)
 	};
 
 	// A raw Request is forwarded without extraction and must retain its position
@@ -594,7 +584,7 @@ fn generate_wrapper_with_both(
 							.pat;
 						Some(quote! { #pat })
 					} else if is_raw_request_parameter(pat_type) {
-						Some(quote! { __reinhardt_request })
+						Some(quote! { #request_binding })
 					} else {
 						let pat = extractor_args
 							.next()
@@ -628,9 +618,6 @@ fn generate_wrapper_with_both(
 		// Validate extracted parameters (when pre_validate = true)
 		#validation_calls
 
-		// Destructure into original patterns (when pre_validate = true)
-		#destructure_calls
-
 		// Call the original function
 		#handler_call
 	};
@@ -657,7 +644,7 @@ fn generate_wrapper_with_both(
 		},
 		quote! {
 			// Build ParamContext for extractors
-		let ctx = #params_crate::ParamContext::with_path_params(__reinhardt_request.path_params.clone());
+		let ctx = #params_crate::ParamContext::with_path_params(#request_binding.path_params.clone());
 
 			// Extract DI context (if needed)
 			#di_context_extraction
@@ -694,6 +681,7 @@ fn generate_view_type(
 
 	let view_type_name =
 		syn::Ident::new(&fn_name_to_view_type(&fn_name.to_string()), fn_name.span());
+	let request_binding = syn::Ident::new("__reinhardt_request", Span::mixed_site());
 	let method_ident = syn::Ident::new(method, Span::call_site());
 
 	// Generate wrapper parts
@@ -781,15 +769,15 @@ fn generate_view_type(
 
 		#[#async_trait_crate::async_trait]
 		impl #http_crate::Handler for #view_type_name {
-			async fn handle(&self, __reinhardt_request: #http_crate::Request) -> #http_crate::Result<#http_crate::Response> {
-				#view_type_name::#fn_name(__reinhardt_request).await
+			async fn handle(&self, #request_binding: #http_crate::Request) -> #http_crate::Result<#http_crate::Response> {
+				#view_type_name::#fn_name(#request_binding).await
 			}
 		}
 
 		impl #view_type_name {
 			/// Handler function for this view
 			#(#fn_attrs)*
-			#fn_vis #asyncness fn #fn_name(__reinhardt_request: #http_crate::Request) #output {
+			#fn_vis #asyncness fn #fn_name(#request_binding: #http_crate::Request) #output {
 				#wrapper_body
 			}
 		}
@@ -1299,6 +1287,7 @@ pub(crate) fn delete_impl(args: TokenStream, input: ItemFn) -> Result<TokenStrea
 #[cfg(test)]
 mod url_resolver_tests {
 	use super::*;
+	use rstest::rstest;
 
 	#[test]
 	fn extract_path_params_none() {
@@ -1431,7 +1420,7 @@ mod url_resolver_tests {
 		assert_eq!(names, vec!["CookieStruct", "Query"]);
 	}
 
-	#[test]
+	#[rstest]
 	fn detect_extractors_includes_supported_structured_extractors() {
 		use syn::parse_quote;
 
@@ -1442,7 +1431,8 @@ mod url_resolver_tests {
 			multipart: Multipart
 		};
 
-		let names: Vec<_> = detect_extractors(&inputs)
+		let extractors = detect_extractors(&inputs);
+		let names: Vec<_> = extractors
 			.iter()
 			.map(|extractor| extractor.extractor_name.as_str())
 			.collect();
@@ -1453,7 +1443,7 @@ mod url_resolver_tests {
 		);
 	}
 
-	#[test]
+	#[rstest]
 	fn route_call_passes_raw_request_with_extractors_in_original_order() {
 		let input: ItemFn = syn::parse_quote! {
 			async fn handler(request: reinhardt_http::Request, Path(req): Path<String>, Json(body): Json<Payload>) -> String { String::new() }
@@ -1467,9 +1457,76 @@ mod url_resolver_tests {
 			&RouteOptions::default(),
 		);
 		let generated = wrapper.to_string();
-		assert!(
-			generated.contains("handler_original (__reinhardt_request , Path (req) , Json (body))"),
-			"{generated}"
+		let call_start = generated
+			.find("handler_original")
+			.expect("generated wrapper should call the renamed handler");
+		let call = &generated[call_start..];
+		let call_end = call
+			.find(") . await")
+			.expect("generated handler call should be awaited")
+			+ ") . await".len();
+		assert_eq!(
+			&call[..call_end],
+			"handler_original (__reinhardt_request , __reinhardt_extractor_0 , __reinhardt_extractor_1) . await"
+		);
+	}
+
+	#[rstest]
+	fn validate_extractors_rejects_multipart_with_another_body_extractor() {
+		let inputs: syn::punctuated::Punctuated<FnArg, Token![,]> = syn::parse_quote! {
+			multipart: Multipart,
+			body: Body
+		};
+
+		let error = validate_extractors(&detect_extractors(&inputs))
+			.expect_err("Multipart and Body must not be extracted from one request");
+
+		assert_eq!(
+			error.to_string(),
+			"Cannot use multiple body-consuming extractors: Multipart, Body. Request body can only be read once."
+		);
+	}
+
+	#[rstest]
+	fn extract_request_body_info_preserves_validated_form_metadata() {
+		let inputs: syn::punctuated::Punctuated<FnArg, Token![,]> = syn::parse_quote! {
+			Validated(payload): Validated<Form<LoginRequest>>
+		};
+
+		assert_eq!(
+			extract_request_body_info(&inputs),
+			Some((
+				"LoginRequest".to_string(),
+				"application/x-www-form-urlencoded".to_string(),
+			))
+		);
+	}
+
+	#[rstest]
+	fn route_call_forwards_mutable_extractor_as_a_value() {
+		let input: ItemFn = syn::parse_quote! {
+			async fn handler(request: reinhardt_http::Request, mut multipart: Multipart) -> String { String::new() }
+		};
+		let extractors = detect_extractors(&input.sig.inputs);
+		let inject_params = detect_inject_params(&input.sig.inputs);
+		let (_, wrapper) = generate_wrapper_with_both(
+			&input,
+			&extractors,
+			&inject_params,
+			&RouteOptions::default(),
+		);
+		let generated = wrapper.to_string();
+		let call_start = generated
+			.find("handler_original")
+			.expect("generated wrapper should call the renamed handler");
+		let call = &generated[call_start..];
+		let call_end = call
+			.find(") . await")
+			.expect("generated handler call should be awaited")
+			+ ") . await".len();
+		assert_eq!(
+			&call[..call_end],
+			"handler_original (__reinhardt_request , __reinhardt_extractor_0) . await"
 		);
 	}
 

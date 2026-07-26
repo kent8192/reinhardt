@@ -2764,14 +2764,16 @@ mod tests {
 
 	#[cfg(not(feature = "shell"))]
 	#[tokio::test]
-	async fn shell_without_feature_returns_the_commands_shell_feature_error() {
+	async fn shell_without_feature_returns_the_direct_and_facade_feature_error() {
 		let error = execute_shell(None, 0, None)
 			.await
 			.expect_err("disabled shell support must return a nonzero error");
 
 		assert_eq!(
 			error.to_string(),
-			"The shell command requires the `commands-shell` feature."
+			"The shell command requires the `shell` feature when using \
+			 `reinhardt-commands` directly, or `commands-shell` through the \
+			 `reinhardt` facade."
 		);
 	}
 

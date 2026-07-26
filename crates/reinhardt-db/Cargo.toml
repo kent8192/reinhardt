@@ -183,7 +183,7 @@ database-full = [
 
 # Database-specific features
 postgres = ["db-deps", "sqlx/postgres"]
-pgvector = ["postgres", "orm", "migrations", "dep:pgvector"]
+pgvector = ["postgres", "orm", "migrations", "dep:pgvector", "reinhardt-query/pgvector"]
 sqlite = ["db-deps", "sqlx/sqlite"]
 mysql = ["db-deps", "sqlx/mysql"]
 

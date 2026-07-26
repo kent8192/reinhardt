@@ -58,17 +58,8 @@ impl PostgresBackend {
 			QueryValue::Timestamp(dt) => query.bind(dt),
 			QueryValue::Uuid(u) => query.bind(u),
 			QueryValue::Json(value) => query.bind(value.as_deref().cloned().map(sqlx::types::Json)),
-			QueryValue::Vector(values) => {
-				#[cfg(feature = "pgvector")]
-				{
-					query.bind(PgVectorValue::new(values.clone()))
-				}
-				#[cfg(not(feature = "pgvector"))]
-				{
-					let _ = values;
-					return Err(vector_support_disabled_error().into());
-				}
-			}
+			#[cfg(feature = "pgvector")]
+			QueryValue::Vector(values) => query.bind(PgVectorValue::new(values.clone())),
 			QueryValue::StringArray(values) => query.bind(values),
 			QueryValue::IntArray(values) => query.bind(values),
 			QueryValue::BigIntArray(values) => query.bind(values),
@@ -292,17 +283,8 @@ impl PgTransactionExecutor {
 			QueryValue::Timestamp(dt) => query.bind(dt),
 			QueryValue::Uuid(u) => query.bind(u),
 			QueryValue::Json(value) => query.bind(value.as_deref().cloned().map(sqlx::types::Json)),
-			QueryValue::Vector(values) => {
-				#[cfg(feature = "pgvector")]
-				{
-					query.bind(PgVectorValue::new(values.clone()))
-				}
-				#[cfg(not(feature = "pgvector"))]
-				{
-					let _ = values;
-					return Err(vector_support_disabled_error().into());
-				}
-			}
+			#[cfg(feature = "pgvector")]
+			QueryValue::Vector(values) => query.bind(PgVectorValue::new(values.clone())),
 			QueryValue::StringArray(values) => query.bind(values),
 			QueryValue::IntArray(values) => query.bind(values),
 			QueryValue::BigIntArray(values) => query.bind(values),

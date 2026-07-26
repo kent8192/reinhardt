@@ -3312,6 +3312,7 @@ impl MySqlQueryBuilder {
 			Json => "JSON".to_string(),
 			JsonBinary => "JSON".to_string(), // MySQL JSON is binary
 			Array(_) => "JSON".to_string(),   // MySQL doesn't have ARRAY, use JSON
+			#[cfg(feature = "pgvector")]
 			Vector(_) => "JSON".to_string(),
 			Custom(name) => name.clone(),
 		}
@@ -3338,7 +3339,9 @@ impl MySqlQueryBuilder {
 			Binary(None) | Blob => "BINARY".to_string(),
 			VarBinary(len) => format!("BINARY({len})"),
 			Uuid => "CHAR(36)".to_string(),
-			Json | JsonBinary | Array(_) | Vector(_) => "JSON".to_string(),
+			Json | JsonBinary | Array(_) => "JSON".to_string(),
+			#[cfg(feature = "pgvector")]
+			Vector(_) => "JSON".to_string(),
 			Custom(name) => name.clone(),
 		}
 	}
@@ -3522,19 +3525,25 @@ impl crate::query::QueryBuilderTrait for MySqlQueryBuilder {
 #[cfg(test)]
 mod tests {
 	use super::*;
+	#[cfg(feature = "pgvector")]
 	use crate::{
 		QueryBuildError, Value,
+		types::{BinOper, PgBinOper, TableRef, WindowStatement},
+		value::ArrayType,
+	};
+	use crate::{
 		expr::{Expr, ExprTrait},
 		query::Query,
-		types::{Alias, BinOper, IntoIden, PgBinOper, TableRef, WindowStatement},
-		value::ArrayType,
+		types::{Alias, IntoIden},
 	};
 	use rstest::rstest;
 
+	#[cfg(feature = "pgvector")]
 	fn vector_value() -> Value {
 		Value::Vector(Some(Box::new(vec![1.0, 2.0, 3.0])))
 	}
 
+	#[cfg(feature = "pgvector")]
 	fn vector_subquery_table() -> TableRef {
 		let mut vector_select = Query::select();
 		vector_select
@@ -3546,6 +3555,7 @@ mod tests {
 		)
 	}
 
+	#[cfg(feature = "pgvector")]
 	fn assert_mysql_vector_value_rejection(
 		result: Result<(String, crate::value::Values), QueryBuildError>,
 	) {
@@ -8017,6 +8027,7 @@ mod tests {
 		assert_eq!(result, "'admin'@'host''; DROP USER root; --'");
 	}
 
+	#[cfg(feature = "pgvector")]
 	#[test]
 	fn checked_build_rejects_pgvector_distance_expressions() {
 		// Rendering a pgvector operator on MySQL is invalid, so checked building must stop first.
@@ -8042,6 +8053,7 @@ mod tests {
 		);
 	}
 
+	#[cfg(feature = "pgvector")]
 	#[test]
 	fn checked_build_rejects_pgvector_values() {
 		let mut statement = Query::select();
@@ -8054,6 +8066,7 @@ mod tests {
 		);
 	}
 
+	#[cfg(feature = "pgvector")]
 	#[test]
 	fn checked_dml_builds_reject_vector_subquery_tables() {
 		let mut insert = Query::insert();
@@ -8080,6 +8093,7 @@ mod tests {
 		}
 	}
 
+	#[cfg(feature = "pgvector")]
 	#[test]
 	fn checked_create_index_rejects_vector_subquery_table() {
 		let mut statement = Query::create_index();
@@ -8093,6 +8107,7 @@ mod tests {
 		);
 	}
 
+	#[cfg(feature = "pgvector")]
 	#[test]
 	fn checked_select_rejects_vector_values_in_ctes() {
 		let mut cte = Query::select();
@@ -8109,6 +8124,7 @@ mod tests {
 		);
 	}
 
+	#[cfg(feature = "pgvector")]
 	#[test]
 	fn checked_select_rejects_vector_values_in_windows() {
 		let window = WindowStatement {
@@ -8127,6 +8143,7 @@ mod tests {
 		);
 	}
 
+	#[cfg(feature = "pgvector")]
 	#[test]
 	fn checked_select_rejects_vector_values_nested_in_arrays() {
 		let nested_vector_array =

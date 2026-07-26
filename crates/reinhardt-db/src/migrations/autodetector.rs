@@ -232,11 +232,49 @@ pub struct IndexDefinition {
 	/// Whether this is a unique index
 	pub unique: bool,
 	/// Typed index method and options.
+	#[cfg(feature = "pgvector")]
 	pub index_type: Option<super::operations::IndexType>,
 	/// PostgreSQL operator class.
+	#[cfg(feature = "pgvector")]
 	pub operator_class: Option<String>,
 	/// Index expressions.
+	#[cfg(feature = "pgvector")]
 	pub expressions: Option<Vec<String>>,
+}
+
+impl IndexDefinition {
+	pub(crate) fn index_type(&self) -> Option<super::operations::IndexType> {
+		#[cfg(feature = "pgvector")]
+		{
+			self.index_type
+		}
+		#[cfg(not(feature = "pgvector"))]
+		{
+			None
+		}
+	}
+
+	pub(crate) fn operator_class(&self) -> Option<&String> {
+		#[cfg(feature = "pgvector")]
+		{
+			self.operator_class.as_ref()
+		}
+		#[cfg(not(feature = "pgvector"))]
+		{
+			None
+		}
+	}
+
+	pub(crate) fn expressions(&self) -> Option<&Vec<String>> {
+		#[cfg(feature = "pgvector")]
+		{
+			self.expressions.as_ref()
+		}
+		#[cfg(not(feature = "pgvector"))]
+		{
+			None
+		}
+	}
 }
 
 /// Constraint definition for a model
@@ -674,9 +712,9 @@ impl ProjectState {
 					columns: idx.fields.clone(),
 					unique: idx.unique,
 					access_method: None,
-					index_type: idx.index_type,
-					expressions: idx.expressions.clone(),
-					operator_class: idx.operator_class.clone(),
+					index_type: idx.index_type(),
+					expressions: idx.expressions().cloned(),
+					operator_class: idx.operator_class().cloned(),
 				})
 				.collect();
 
@@ -767,9 +805,9 @@ impl ProjectState {
 						columns: idx.fields.clone(),
 						unique: idx.unique,
 						access_method: None,
-						index_type: idx.index_type,
-						expressions: idx.expressions.clone(),
-						operator_class: idx.operator_class.clone(),
+						index_type: idx.index_type(),
+						expressions: idx.expressions().cloned(),
+						operator_class: idx.operator_class().cloned(),
 					})
 					.collect();
 
@@ -1547,13 +1585,18 @@ impl ProjectState {
 					..
 				} => {
 					if let Some(model) = self.find_model_by_table_mut(table) {
+						#[cfg(not(feature = "pgvector"))]
+						let _ = (index_type, expressions, operator_class);
 						model.indexes.retain(|index| index.name != *name);
 						model.indexes.push(IndexDefinition {
 							name: name.clone(),
 							fields: columns.clone(),
 							unique: *unique,
+							#[cfg(feature = "pgvector")]
 							index_type: *index_type,
+							#[cfg(feature = "pgvector")]
 							operator_class: operator_class.clone(),
+							#[cfg(feature = "pgvector")]
 							expressions: expressions.clone(),
 						});
 					}
@@ -4819,12 +4862,12 @@ impl MigrationAutodetector {
 				name: Some(index.name.clone()),
 				columns: index.fields.clone(),
 				unique: index.unique,
-				index_type: index.index_type,
+				index_type: index.index_type(),
 				where_clause: None,
 				concurrently: false,
-				expressions: index.expressions.clone(),
+				expressions: index.expressions().cloned(),
 				mysql_options: None,
-				operator_class: index.operator_class.clone(),
+				operator_class: index.operator_class().cloned(),
 			});
 		}
 
@@ -4860,12 +4903,12 @@ impl MigrationAutodetector {
 				name: Some(index.name.clone()),
 				columns: index.fields.clone(),
 				unique: index.unique,
-				index_type: index.index_type,
+				index_type: index.index_type(),
 				where_clause: None,
 				concurrently: false,
-				expressions: index.expressions.clone(),
+				expressions: index.expressions().cloned(),
 				mysql_options: None,
-				operator_class: index.operator_class.clone(),
+				operator_class: index.operator_class().cloned(),
 			});
 		}
 
@@ -7073,8 +7116,13 @@ impl MigrationAutodetector {
 			}
 		}
 
-		let mut altered_index_replacements = Vec::new();
+		#[cfg(feature = "pgvector")]
+		let mut altered_index_replacements: Vec<(String, String, IndexDefinition)> = Vec::new();
+		#[cfg(not(feature = "pgvector"))]
+		let altered_index_replacements: Vec<(String, String, IndexDefinition)> = Vec::new();
+		#[cfg(feature = "pgvector")]
 		let mut replacement_index_keys = BTreeSet::new();
+		#[cfg(feature = "pgvector")]
 		for (app_label, model_name, field_name) in &changes.altered_fields {
 			let Some(from_model) = self.from_state.get_model(app_label, model_name) else {
 				continue;
@@ -7101,7 +7149,7 @@ impl MigrationAutodetector {
 			}
 			for index in &from_model.indexes {
 				let is_approximate = matches!(
-					index.index_type,
+					index.index_type(),
 					Some(
 						super::operations::IndexType::Hnsw { .. }
 							| super::operations::IndexType::Ivfflat { .. }
@@ -7139,12 +7187,12 @@ impl MigrationAutodetector {
 					name: index.name.clone(),
 					columns: index.fields.clone(),
 					unique: index.unique,
-					index_type: index.index_type,
+					index_type: index.index_type(),
 					where_clause: None,
 					concurrently: false,
-					expressions: index.expressions.clone(),
+					expressions: index.expressions().cloned(),
 					mysql_options: None,
-					operator_class: index.operator_class.clone(),
+					operator_class: index.operator_class().cloned(),
 				});
 		}
 		for (app_label, model_name, index) in &altered_index_replacements {
@@ -7159,12 +7207,12 @@ impl MigrationAutodetector {
 					name: index.name.clone(),
 					columns: index.fields.clone(),
 					unique: index.unique,
-					index_type: index.index_type,
+					index_type: index.index_type(),
 					where_clause: None,
 					concurrently: false,
-					expressions: index.expressions.clone(),
+					expressions: index.expressions().cloned(),
 					mysql_options: None,
-					operator_class: index.operator_class.clone(),
+					operator_class: index.operator_class().cloned(),
 				});
 		}
 
@@ -7585,12 +7633,12 @@ impl MigrationAutodetector {
 					name: index.name.clone(),
 					columns: index.fields.clone(),
 					unique: index.unique,
-					index_type: index.index_type,
+					index_type: index.index_type(),
 					where_clause: None,
 					concurrently: false,
-					expressions: index.expressions.clone(),
+					expressions: index.expressions().cloned(),
 					mysql_options: None,
-					operator_class: index.operator_class.clone(),
+					operator_class: index.operator_class().cloned(),
 				});
 		}
 		for (app_label, model_name, index) in &altered_index_replacements {
@@ -7605,12 +7653,12 @@ impl MigrationAutodetector {
 					name: index.name.clone(),
 					columns: index.fields.clone(),
 					unique: index.unique,
-					index_type: index.index_type,
+					index_type: index.index_type(),
 					where_clause: None,
 					concurrently: false,
-					expressions: index.expressions.clone(),
+					expressions: index.expressions().cloned(),
 					mysql_options: None,
-					operator_class: index.operator_class.clone(),
+					operator_class: index.operator_class().cloned(),
 				});
 		}
 		for (app_label, model_name) in &changes.created_models {
@@ -7624,12 +7672,12 @@ impl MigrationAutodetector {
 						name: index.name.clone(),
 						columns: index.fields.clone(),
 						unique: index.unique,
-						index_type: index.index_type,
+						index_type: index.index_type(),
 						where_clause: None,
 						concurrently: false,
-						expressions: index.expressions.clone(),
+						expressions: index.expressions().cloned(),
 						mysql_options: None,
-						operator_class: index.operator_class.clone(),
+						operator_class: index.operator_class().cloned(),
 					},
 				);
 			}
@@ -8791,6 +8839,7 @@ mod tests {
 		}
 	}
 
+	#[cfg(feature = "pgvector")]
 	fn vector_index(
 		index_type: crate::migrations::operations::IndexType,
 		operator_class: &str,
@@ -8805,6 +8854,7 @@ mod tests {
 		}
 	}
 
+	#[cfg(feature = "pgvector")]
 	fn vector_model(dimensions: usize, indexes: Vec<IndexDefinition>) -> ModelState {
 		build_model_state(
 			"search",
@@ -8819,6 +8869,7 @@ mod tests {
 		)
 	}
 
+	#[cfg(feature = "pgvector")]
 	fn vector_project_state(model: ModelState) -> ProjectState {
 		build_project_state(vec![(
 			("search".to_string(), "Document".to_string()),
@@ -8826,6 +8877,7 @@ mod tests {
 		)])
 	}
 
+	#[cfg(feature = "pgvector")]
 	fn duplicate_vector_index_detector() -> MigrationAutodetector {
 		let first = vector_model(
 			1536,
@@ -8860,6 +8912,7 @@ mod tests {
 		)
 	}
 
+	#[cfg(feature = "pgvector")]
 	#[rstest]
 	fn vector_index_duplicate_physical_names_across_models_are_rejected_before_sql() {
 		// Arrange
@@ -8880,24 +8933,28 @@ mod tests {
 		));
 	}
 
+	#[cfg(feature = "pgvector")]
 	#[test]
 	#[should_panic(expected = "use try_generate_operations()")]
 	fn infallible_generate_operations_cannot_emit_duplicate_physical_names() {
 		duplicate_vector_index_detector().generate_operations();
 	}
 
+	#[cfg(feature = "pgvector")]
 	#[test]
 	#[should_panic(expected = "use try_generate_migrations()")]
 	fn infallible_generate_migrations_cannot_emit_duplicate_physical_names() {
 		duplicate_vector_index_detector().generate_migrations();
 	}
 
+	#[cfg(feature = "pgvector")]
 	#[test]
 	#[should_panic(expected = "use try_generate_migrations_with_warnings()")]
 	fn infallible_generate_migrations_with_warnings_cannot_emit_duplicate_physical_names() {
 		duplicate_vector_index_detector().generate_migrations_with_warnings();
 	}
 
+	#[cfg(feature = "pgvector")]
 	#[test]
 	fn checked_generate_migrations_rejects_duplicate_physical_names() {
 		let error = duplicate_vector_index_detector()
@@ -8913,6 +8970,7 @@ mod tests {
 		));
 	}
 
+	#[cfg(feature = "pgvector")]
 	#[rstest]
 	fn vector_index_addition_emits_one_create_operation() {
 		// Arrange
@@ -8981,6 +9039,7 @@ mod tests {
 		);
 	}
 
+	#[cfg(feature = "pgvector")]
 	#[rstest]
 	fn vector_index_removal_emits_one_drop_operation() {
 		// Arrange
@@ -9010,6 +9069,7 @@ mod tests {
 		assert_eq!(sql, "DROP INDEX documents_embedding_ann;");
 	}
 
+	#[cfg(feature = "pgvector")]
 	#[rstest]
 	#[case(
 		crate::migrations::operations::IndexType::Hnsw {
@@ -9096,6 +9156,7 @@ mod tests {
 		));
 	}
 
+	#[cfg(feature = "pgvector")]
 	#[rstest]
 	fn vector_index_identical_metadata_emits_no_operation() {
 		// Arrange
@@ -9118,6 +9179,7 @@ mod tests {
 		assert!(operations.is_empty());
 	}
 
+	#[cfg(feature = "pgvector")]
 	#[rstest]
 	fn vector_index_dimension_change_replaces_index_around_alter_column() {
 		// Arrange
@@ -10190,16 +10252,22 @@ mod tests {
 				name: "idx_title".to_string(),
 				fields: vec!["title".to_string()],
 				unique: false,
+				#[cfg(feature = "pgvector")]
 				index_type: None,
+				#[cfg(feature = "pgvector")]
 				operator_class: None,
+				#[cfg(feature = "pgvector")]
 				expressions: None,
 			},
 			IndexDefinition {
 				name: "idx_slug_unique".to_string(),
 				fields: vec!["slug".to_string()],
 				unique: true,
+				#[cfg(feature = "pgvector")]
 				index_type: None,
+				#[cfg(feature = "pgvector")]
 				operator_class: None,
+				#[cfg(feature = "pgvector")]
 				expressions: None,
 			},
 		];
@@ -10359,8 +10427,11 @@ mod tests {
 			name: "idx_created".to_string(),
 			fields: vec!["created_at".to_string()],
 			unique: false,
+			#[cfg(feature = "pgvector")]
 			index_type: None,
+			#[cfg(feature = "pgvector")]
 			operator_class: None,
+			#[cfg(feature = "pgvector")]
 			expressions: None,
 		}];
 		let constraints = vec![ConstraintDefinition {
@@ -12863,6 +12934,7 @@ mod tests {
 		));
 	}
 
+	#[cfg(feature = "pgvector")]
 	#[rstest]
 	fn generated_column_replacement_recreates_dependent_indexes_and_constraints() {
 		// Arrange

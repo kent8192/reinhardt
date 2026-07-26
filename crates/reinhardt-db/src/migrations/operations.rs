@@ -134,6 +134,7 @@ pub enum IndexType {
 	/// HNSW approximate vector index
 	///
 	/// Supported by: PostgreSQL with pgvector
+	#[cfg(feature = "pgvector")]
 	Hnsw {
 		/// Maximum number of connections per layer.
 		m: Option<u16>,
@@ -144,6 +145,7 @@ pub enum IndexType {
 	/// IVFFlat approximate vector index
 	///
 	/// Supported by: PostgreSQL with pgvector
+	#[cfg(feature = "pgvector")]
 	Ivfflat {
 		/// Number of inverted lists.
 		lists: Option<u32>,
@@ -160,7 +162,9 @@ impl std::fmt::Display for IndexType {
 			IndexType::Brin => write!(f, "brin"),
 			IndexType::Fulltext => write!(f, "fulltext"),
 			IndexType::Spatial => write!(f, "spatial"),
+			#[cfg(feature = "pgvector")]
 			IndexType::Hnsw { .. } => write!(f, "hnsw"),
+			#[cfg(feature = "pgvector")]
 			IndexType::Ivfflat { .. } => write!(f, "ivfflat"),
 		}
 	}
@@ -168,11 +172,20 @@ impl std::fmt::Display for IndexType {
 
 impl IndexType {
 	fn is_approximate_vector(self) -> bool {
-		matches!(self, Self::Hnsw { .. } | Self::Ivfflat { .. })
+		#[cfg(feature = "pgvector")]
+		{
+			return matches!(self, Self::Hnsw { .. } | Self::Ivfflat { .. });
+		}
+		#[cfg(not(feature = "pgvector"))]
+		{
+			let _ = self;
+			false
+		}
 	}
 
 	fn options_sql(self) -> Option<String> {
 		match self {
+			#[cfg(feature = "pgvector")]
 			Self::Hnsw { m, ef_construction } => {
 				let mut options = Vec::new();
 				if let Some(m) = m {
@@ -183,6 +196,7 @@ impl IndexType {
 				}
 				(!options.is_empty()).then(|| format!(" WITH ({})", options.join(", ")))
 			}
+			#[cfg(feature = "pgvector")]
 			Self::Ivfflat { lists } => lists.map(|lists| format!(" WITH (lists = {lists})")),
 			_ => None,
 		}
@@ -1520,6 +1534,7 @@ const fn default_true() -> bool {
 }
 
 impl Operation {
+	#[cfg(feature = "pgvector")]
 	pub(crate) fn pgvector_operation_kind(
 		&self,
 	) -> Option<crate::backends::error::PgvectorOperationKind> {
@@ -1551,6 +1566,14 @@ impl Operation {
 		}
 	}
 
+	#[cfg(not(feature = "pgvector"))]
+	pub(crate) fn pgvector_operation_kind(
+		&self,
+	) -> Option<crate::backends::error::PgvectorOperationKind> {
+		None
+	}
+
+	#[cfg(feature = "pgvector")]
 	pub(crate) fn pgvector_reverse_operation_kind(
 		&self,
 	) -> Option<crate::backends::error::PgvectorOperationKind> {
@@ -1575,6 +1598,13 @@ impl Operation {
 			}
 			_ => None,
 		}
+	}
+
+	#[cfg(not(feature = "pgvector"))]
+	pub(crate) fn pgvector_reverse_operation_kind(
+		&self,
+	) -> Option<crate::backends::error::PgvectorOperationKind> {
+		None
 	}
 
 	fn order_model_fields_by_generated_dependencies(
@@ -1883,13 +1913,18 @@ impl Operation {
 				..
 			} => {
 				if let Some(model) = state.find_model_by_table_mut(table) {
+					#[cfg(not(feature = "pgvector"))]
+					let _ = (index_type, expressions, operator_class);
 					model.indexes.retain(|index| index.name != *name);
 					model.indexes.push(IndexDefinition {
 						name: name.clone(),
 						fields: columns.clone(),
 						unique: *unique,
+						#[cfg(feature = "pgvector")]
 						index_type: *index_type,
+						#[cfg(feature = "pgvector")]
 						operator_class: operator_class.clone(),
+						#[cfg(feature = "pgvector")]
 						expressions: expressions.clone(),
 					});
 				}
@@ -3176,7 +3211,7 @@ impl Operation {
 		operator_class: Option<&str>,
 		dialect: &SqlDialect,
 	) -> super::Result<()> {
-		let Some(index_type) = index_type.filter(|index_type| index_type.is_approximate_vector())
+		let Some(_index_type) = index_type.filter(|index_type| index_type.is_approximate_vector())
 		else {
 			return Ok(());
 		};
@@ -3220,7 +3255,8 @@ impl Operation {
 			));
 		}
 
-		let zero_option = match index_type {
+		#[cfg(feature = "pgvector")]
+		let zero_option = match _index_type {
 			IndexType::Hnsw { m: Some(0), .. } => Some("m"),
 			IndexType::Hnsw {
 				ef_construction: Some(0),
@@ -3229,6 +3265,7 @@ impl Operation {
 			IndexType::Ivfflat { lists: Some(0) } => Some("lists"),
 			_ => None,
 		};
+		#[cfg(feature = "pgvector")]
 		if let Some(option) = zero_option {
 			return Err(super::MigrationError::InvalidMigration(format!(
 				"{option} must be greater than zero for approximate vector indexes"
@@ -4159,13 +4196,18 @@ impl Operation {
 					return;
 				}
 				if let Some(model) = state.find_model_by_table_mut(table) {
+					#[cfg(not(feature = "pgvector"))]
+					let _ = (index_type, operator_class);
 					model.indexes.retain(|index| index.name != *name);
 					model.indexes.push(IndexDefinition {
 						name: name.clone(),
 						fields: columns.clone(),
 						unique: *unique,
+						#[cfg(feature = "pgvector")]
 						index_type: *index_type,
+						#[cfg(feature = "pgvector")]
 						operator_class: operator_class.clone(),
+						#[cfg(feature = "pgvector")]
 						expressions: expressions.clone(),
 					});
 				}
@@ -6474,6 +6516,7 @@ impl Operation {
 			FieldType::TsTzRange => col_def.custom(Alias::new("TSTZRANGE")),
 			FieldType::TsVector => col_def.custom(Alias::new("TSVECTOR")),
 			FieldType::TsQuery => col_def.custom(Alias::new("TSQUERY")),
+			#[cfg(feature = "pgvector")]
 			FieldType::Vector { dimensions } => {
 				if !(1..=2_000).contains(dimensions) {
 					panic!(
@@ -8269,6 +8312,7 @@ mod tests {
 		);
 	}
 
+	#[cfg(feature = "pgvector")]
 	#[test]
 	fn checked_vector_create_and_alter_sql_preserve_dimensions() {
 		let vector_column = ColumnDefinition::new("embedding", FieldType::Vector { dimensions: 3 });
@@ -8302,6 +8346,7 @@ mod tests {
 		);
 	}
 
+	#[cfg(feature = "pgvector")]
 	#[test]
 	fn checked_vector_ddl_rejects_unsupported_backends() {
 		let operation = Operation::AddColumn {
@@ -8325,6 +8370,7 @@ mod tests {
 		}
 	}
 
+	#[cfg(feature = "pgvector")]
 	#[test]
 	fn legacy_vector_operation_sql_fails_fast_on_unsupported_backends() {
 		let operation = Operation::AddColumn {
@@ -8348,6 +8394,7 @@ mod tests {
 		}
 	}
 
+	#[cfg(feature = "pgvector")]
 	#[test]
 	fn checked_inherited_table_vector_ddl_rejects_unsupported_backends() {
 		let operation = Operation::CreateInheritedTable {
@@ -8375,6 +8422,7 @@ mod tests {
 		}
 	}
 
+	#[cfg(feature = "pgvector")]
 	#[test]
 	fn checked_vector_statement_rendering_rejects_unsupported_backends() {
 		let operation = Operation::CreateTable {
@@ -8404,6 +8452,7 @@ mod tests {
 		}
 	}
 
+	#[cfg(feature = "pgvector")]
 	#[test]
 	fn legacy_vector_statement_rendering_fails_fast_on_unsupported_backends() {
 		let operation = Operation::CreateTable {
@@ -8438,6 +8487,7 @@ mod tests {
 		}
 	}
 
+	#[cfg(feature = "pgvector")]
 	#[test]
 	fn checked_vector_statement_construction_rejects_invalid_dimensions() {
 		for dimensions in [0, 2_001, usize::MAX] {
@@ -8463,6 +8513,7 @@ mod tests {
 		}
 	}
 
+	#[cfg(feature = "pgvector")]
 	#[test]
 	fn legacy_vector_statement_construction_rejects_invalid_dimensions_before_conversion() {
 		for dimensions in [0, 2_001, usize::MAX] {
@@ -9995,6 +10046,7 @@ mod tests {
 		// Internal state cannot be easily asserted with reinhardt_query's ColumnDef API
 	}
 
+	#[cfg(feature = "pgvector")]
 	fn vector_index_operation(index_type: IndexType) -> Operation {
 		Operation::CreateIndex {
 			table: "source".to_string(),
@@ -10009,6 +10061,7 @@ mod tests {
 		}
 	}
 
+	#[cfg(feature = "pgvector")]
 	#[rstest]
 	#[case(IndexType::BTree)]
 	#[case(IndexType::Hnsw {
@@ -10027,6 +10080,7 @@ mod tests {
 		assert_eq!(reparsed, index_type);
 	}
 
+	#[cfg(feature = "pgvector")]
 	#[rstest]
 	fn vector_index_hnsw_migration_renders_forward_and_backward_sql() {
 		// Arrange
@@ -10057,6 +10111,7 @@ mod tests {
 		assert_eq!(backward_sql, vec!["DROP INDEX idx_source_embedding;"]);
 	}
 
+	#[cfg(feature = "pgvector")]
 	#[test]
 	fn pgvector_error_hint_derives_context_from_migration_operations() {
 		let vector_column = Operation::CreateTable {
@@ -10131,6 +10186,7 @@ mod tests {
 		);
 	}
 
+	#[cfg(feature = "pgvector")]
 	#[rstest]
 	fn vector_index_ivfflat_migration_renders_exact_sql() {
 		// Arrange
@@ -10149,6 +10205,7 @@ mod tests {
 		);
 	}
 
+	#[cfg(feature = "pgvector")]
 	#[rstest]
 	fn vector_index_restore_preserves_hnsw_metadata() {
 		// Arrange
@@ -10184,6 +10241,7 @@ mod tests {
 		);
 	}
 
+	#[cfg(feature = "pgvector")]
 	#[rstest]
 	#[case(SqlDialect::Mysql, "mysql")]
 	#[case(SqlDialect::Sqlite, "sqlite")]
@@ -10210,6 +10268,7 @@ mod tests {
 		));
 	}
 
+	#[cfg(feature = "pgvector")]
 	#[rstest]
 	#[case("", "must not be empty")]
 	#[case("documents\0embedding", "must not contain NUL")]
@@ -10245,6 +10304,7 @@ mod tests {
 		));
 	}
 
+	#[cfg(feature = "pgvector")]
 	#[test]
 	fn named_vector_index_migration_quotes_unusual_physical_name() {
 		let operation = Operation::CreateNamedIndex {
@@ -10283,6 +10343,7 @@ mod tests {
 		}
 	}
 
+	#[cfg(feature = "pgvector")]
 	#[rstest]
 	#[case(SqlDialect::Mysql, "mysql")]
 	#[case(SqlDialect::Sqlite, "sqlite")]
@@ -10309,6 +10370,7 @@ mod tests {
 		));
 	}
 
+	#[cfg(feature = "pgvector")]
 	#[test]
 	fn named_vector_index_drop_renders_exact_postgres_sql() {
 		let operation = named_vector_index_drop(Some(IndexType::Ivfflat { lists: Some(100) }));
@@ -10338,6 +10400,7 @@ mod tests {
 		);
 	}
 
+	#[cfg(feature = "pgvector")]
 	#[rstest]
 	#[case(
 		IndexType::Hnsw {
@@ -10372,6 +10435,7 @@ mod tests {
 		));
 	}
 
+	#[cfg(feature = "pgvector")]
 	#[rstest]
 	#[case(true, vec!["embedding".to_string()], None, Some("vector_l2_ops".to_string()), "approximate vector indexes cannot be unique")]
 	#[case(false, vec!["embedding".to_string(), "tenant_id".to_string()], None, Some("vector_l2_ops".to_string()), "approximate vector indexes require exactly one column or expression")]
@@ -10409,6 +10473,7 @@ mod tests {
 		));
 	}
 
+	#[cfg(feature = "pgvector")]
 	#[rstest]
 	fn vector_index_migration_rejects_column_and_expression_together() {
 		// Arrange
@@ -10438,6 +10503,7 @@ mod tests {
 		));
 	}
 
+	#[cfg(feature = "pgvector")]
 	#[rstest]
 	fn vector_index_migration_rejects_empty_target() {
 		// Arrange
@@ -10464,6 +10530,7 @@ mod tests {
 		));
 	}
 
+	#[cfg(feature = "pgvector")]
 	#[rstest]
 	fn vector_index_migration_rejects_multiple_columns_individually() {
 		// Arrange
@@ -10483,6 +10550,7 @@ mod tests {
 		));
 	}
 
+	#[cfg(feature = "pgvector")]
 	#[rstest]
 	fn vector_index_migration_rejects_multiple_expressions_individually() {
 		// Arrange
@@ -10515,6 +10583,7 @@ mod tests {
 		));
 	}
 
+	#[cfg(feature = "pgvector")]
 	#[rstest]
 	fn vector_index_expression_migration_renders_operator_class() {
 		// Arrange

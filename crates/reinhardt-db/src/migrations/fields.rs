@@ -104,6 +104,7 @@ pub enum FieldType {
 	/// PostgreSQL tsquery for full-text search queries
 	TsQuery,
 	/// PostgreSQL pgvector dense vector with fixed dimensions.
+	#[cfg(feature = "pgvector")]
 	Vector {
 		/// Number of vector elements.
 		dimensions: usize,
@@ -257,6 +258,7 @@ impl FieldType {
 				SqlDialect::Postgres | SqlDialect::Cockroachdb => "TSQUERY".to_string(),
 				SqlDialect::Mysql | SqlDialect::Sqlite => "TEXT".to_string(),
 			},
+			#[cfg(feature = "pgvector")]
 			FieldType::Vector { dimensions } => match dialect {
 				SqlDialect::Postgres => format!("VECTOR({dimensions})"),
 				SqlDialect::Mysql | SqlDialect::Sqlite | SqlDialect::Cockroachdb => {
@@ -289,6 +291,7 @@ impl FieldType {
 		&self,
 		dialect: &super::operations::SqlDialect,
 	) -> Result<String, super::MigrationError> {
+		#[cfg(feature = "pgvector")]
 		if let Self::Vector { dimensions } = self {
 			if !(1..=2_000).contains(dimensions) {
 				return Err(super::MigrationError::InvalidMigration(format!(
@@ -366,6 +369,7 @@ impl FieldType {
 			FieldType::TsTzRange => "TSTZRANGE".to_string(),
 			FieldType::TsVector => "TSVECTOR".to_string(),
 			FieldType::TsQuery => "TSQUERY".to_string(),
+			#[cfg(feature = "pgvector")]
 			FieldType::Vector { dimensions } => format!("VECTOR({dimensions})"),
 			FieldType::Uuid => "UUID".to_string(),
 			FieldType::Year => "YEAR".to_string(),
@@ -643,6 +647,7 @@ mod tests {
 	}
 
 	#[test]
+	#[cfg(feature = "pgvector")]
 	fn vector_sql_is_native_only_on_postgresql() {
 		let field_type = FieldType::Vector { dimensions: 3 };
 
@@ -668,6 +673,7 @@ mod tests {
 	}
 
 	#[test]
+	#[cfg(feature = "pgvector")]
 	fn vector_sql_rejects_dimensions_outside_pgvector_limits() {
 		for dimensions in [0, 2_001] {
 			assert!(matches!(
@@ -682,6 +688,7 @@ mod tests {
 	}
 
 	#[test]
+	#[cfg(feature = "pgvector")]
 	fn legacy_vector_sql_fails_fast_instead_of_returning_postgresql_sql() {
 		for dialect in [SqlDialect::Mysql, SqlDialect::Sqlite] {
 			let result = std::panic::catch_unwind(|| {

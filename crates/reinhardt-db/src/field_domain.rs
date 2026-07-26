@@ -25,6 +25,7 @@ pub enum DatabaseStorageKind {
 	/// Native JSON storage.
 	Json,
 	/// Native PostgreSQL dense-vector storage with a fixed dimension.
+	#[cfg(feature = "pgvector")]
 	Vector(usize),
 	/// UUID storage.
 	Uuid,

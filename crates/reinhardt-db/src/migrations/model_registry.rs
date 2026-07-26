@@ -817,6 +817,7 @@ mod tests {
 	}
 
 	#[test]
+	#[cfg(feature = "pgvector")]
 	fn duplicate_physical_index_names_are_rejected_by_registry_validation() {
 		// Arrange
 		let registry = ModelRegistry::new();

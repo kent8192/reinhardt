@@ -160,6 +160,7 @@ impl TypeMapper {
 			}
 			FieldType::TsVector => quote! { String },
 			FieldType::TsQuery => quote! { String },
+			#[cfg(feature = "pgvector")]
 			FieldType::Vector { dimensions } => {
 				quote! { reinhardt_db::orm::Vector<#dimensions> }
 			}
@@ -228,6 +229,7 @@ impl TypeMapper {
 			FieldType::HStore => "std::collections::HashMap<String, String>",
 			FieldType::CIText => "String",
 			FieldType::TsVector | FieldType::TsQuery => "String",
+			#[cfg(feature = "pgvector")]
 			FieldType::Vector { dimensions } => {
 				return Ok(if nullable && !auto_increment {
 					format!("Option<reinhardt_db::orm::Vector<{dimensions}>>")

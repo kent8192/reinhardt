@@ -103,6 +103,7 @@ pub enum Value {
 	/// Binary data (boxed)
 	Bytes(Option<Box<Vec<u8>>>),
 	/// pgvector dense vector data (boxed)
+	#[cfg(feature = "pgvector")]
 	Vector(Option<Box<Vec<f32>>>),
 
 	// -------------------------------------------------------------------------
@@ -187,6 +188,7 @@ impl Value {
 			Self::Char(v) => v.is_none(),
 			Self::String(v) => v.is_none(),
 			Self::Bytes(v) => v.is_none(),
+			#[cfg(feature = "pgvector")]
 			Self::Vector(v) => v.is_none(),
 			#[cfg(feature = "with-chrono")]
 			Self::ChronoDate(v) => v.is_none(),
@@ -287,10 +289,12 @@ impl Value {
 				format!("X'{}'", hex)
 			}
 			Self::Bytes(None) => "NULL".to_string(),
+			#[cfg(feature = "pgvector")]
 			Self::Vector(Some(values)) => {
 				let values = values.iter().map(ToString::to_string).collect::<Vec<_>>();
 				format!("'[{}]'", values.join(","))
 			}
+			#[cfg(feature = "pgvector")]
 			Self::Vector(None) => "NULL".to_string(),
 			#[cfg(feature = "with-chrono")]
 			Self::ChronoDate(Some(v)) => format!("'{}'", v),
@@ -351,7 +355,7 @@ impl Default for Value {
 	}
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "pgvector"))]
 mod tests {
 	use super::Value;
 

@@ -138,10 +138,13 @@ pub enum PgBinOper {
 	/// Get JSON path as text (#>>)
 	JsonGetPathAsText,
 	/// L2 distance (<->)
+	#[cfg(feature = "pgvector")]
 	L2Distance,
 	/// Negative inner product (<#>)
+	#[cfg(feature = "pgvector")]
 	NegativeInnerProduct,
 	/// Cosine distance (<=>)
+	#[cfg(feature = "pgvector")]
 	CosineDistance,
 }
 
@@ -242,8 +245,11 @@ impl PgBinOper {
 			Self::JsonGetAsText => "->>",
 			Self::JsonGetPath => "#>",
 			Self::JsonGetPathAsText => "#>>",
+			#[cfg(feature = "pgvector")]
 			Self::L2Distance => "<->",
+			#[cfg(feature = "pgvector")]
 			Self::NegativeInnerProduct => "<#>",
+			#[cfg(feature = "pgvector")]
 			Self::CosineDistance => "<=>",
 		}
 	}
@@ -360,8 +366,11 @@ mod tests {
 		assert_eq!(PgBinOper::Contains.as_str(), "@>");
 		assert_eq!(PgBinOper::Contained.as_str(), "<@");
 		assert_eq!(PgBinOper::JsonGetAsText.as_str(), "->>");
-		assert_eq!(PgBinOper::L2Distance.as_str(), "<->");
-		assert_eq!(PgBinOper::NegativeInnerProduct.as_str(), "<#>");
-		assert_eq!(PgBinOper::CosineDistance.as_str(), "<=>");
+		#[cfg(feature = "pgvector")]
+		{
+			assert_eq!(PgBinOper::L2Distance.as_str(), "<->");
+			assert_eq!(PgBinOper::NegativeInnerProduct.as_str(), "<#>");
+			assert_eq!(PgBinOper::CosineDistance.as_str(), "<=>");
+		}
 	}
 }

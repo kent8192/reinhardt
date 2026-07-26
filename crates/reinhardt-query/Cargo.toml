@@ -41,6 +41,9 @@ with-bigdecimal = ["dep:bigdecimal"]
 # NoSQL Redis command builder
 nosql-redis = []
 
+# PostgreSQL pgvector primitives
+pgvector = []
+
 # All optional features
 full = [
 	"derive",

@@ -1,5 +1,7 @@
 //! Errors and validation for checked query building.
 
+#[cfg(feature = "pgvector")]
+use crate::types::{BinOper, PgBinOper};
 use crate::{
 	expr::{Condition, ConditionExpression, ConditionHolder, SimpleExpr},
 	query::{
@@ -7,8 +9,8 @@ use crate::{
 		DeleteStatement, InsertSource, InsertStatement, SelectStatement, UpdateStatement,
 	},
 	types::{
-		BinOper, ColumnDef, ColumnType, OrderExpr, OrderExprKind, PgBinOper, SchemaExpr,
-		TableConstraint, TableRef, WindowStatement,
+		ColumnDef, ColumnType, OrderExpr, OrderExprKind, SchemaExpr, TableConstraint, TableRef,
+		WindowStatement,
 	},
 	value::Value,
 };
@@ -274,6 +276,7 @@ pub(crate) fn validate_alter_table_for_backend(
 	Ok(())
 }
 
+#[cfg(feature = "pgvector")]
 fn unsupported(feature: &'static str, backend: &'static str) -> QueryBuildError {
 	QueryBuildError::UnsupportedBackendFeature { feature, backend }
 }
@@ -288,21 +291,22 @@ fn validate_column_def(column: &ColumnDef, backend: &'static str) -> Result<(), 
 	if let Some(check) = &column.check {
 		validate_simple_expr(check, backend)?;
 	}
-	if let Some(generated) = &column.generated {
-		if let Some(expr) = &generated.expr {
-			validate_schema_expr(expr, backend)?;
-		}
+	if let Some(generated) = &column.generated
+		&& let Some(expr) = &generated.expr
+	{
+		validate_schema_expr(expr, backend)?;
 	}
 	Ok(())
 }
 
 fn validate_column_type(
 	column_type: &ColumnType,
-	backend: &'static str,
+	_backend: &'static str,
 ) -> Result<(), QueryBuildError> {
 	match column_type {
-		ColumnType::Vector(_) => Err(unsupported("pgvector column types", backend)),
-		ColumnType::Array(element_type) => validate_column_type(element_type, backend),
+		#[cfg(feature = "pgvector")]
+		ColumnType::Vector(_) => Err(unsupported("pgvector column types", _backend)),
+		ColumnType::Array(element_type) => validate_column_type(element_type, _backend),
 		_ => Ok(()),
 	}
 }
@@ -377,9 +381,10 @@ fn validate_simple_expr(expr: &SimpleExpr, backend: &'static str) -> Result<(), 
 		| SimpleExpr::AsEnum(_, expression)
 		| SimpleExpr::ExprAlias(expression, _)
 		| SimpleExpr::Cast(expression, _) => validate_simple_expr(expression, backend),
-		SimpleExpr::Binary(left, operator, right) => {
+		SimpleExpr::Binary(left, _operator, right) => {
+			#[cfg(feature = "pgvector")]
 			if matches!(
-				operator,
+				_operator,
 				BinOper::PgOperator(
 					PgBinOper::L2Distance
 						| PgBinOper::NegativeInnerProduct
@@ -422,12 +427,13 @@ fn validate_simple_expr(expr: &SimpleExpr, backend: &'static str) -> Result<(), 
 	}
 }
 
-fn validate_value(value: &Value, backend: &'static str) -> Result<(), QueryBuildError> {
+fn validate_value(value: &Value, _backend: &'static str) -> Result<(), QueryBuildError> {
 	match value {
-		Value::Vector(_) => Err(unsupported("pgvector values", backend)),
+		#[cfg(feature = "pgvector")]
+		Value::Vector(_) => Err(unsupported("pgvector values", _backend)),
 		Value::Array(_, Some(values)) => {
 			for value in values.iter() {
-				validate_value(value, backend)?;
+				validate_value(value, _backend)?;
 			}
 			Ok(())
 		}
@@ -603,15 +609,18 @@ fn collect_simple_expr_pgvector_features_with_values(
 				collect_vector_values,
 			);
 		}
-		SimpleExpr::Binary(left, operator, right) => {
+		SimpleExpr::Binary(left, _operator, right) => {
+			#[cfg(feature = "pgvector")]
 			let is_distance_operator = matches!(
-				operator,
+				_operator,
 				BinOper::PgOperator(
 					PgBinOper::L2Distance
 						| PgBinOper::NegativeInnerProduct
 						| PgBinOper::CosineDistance
 				)
 			);
+			#[cfg(not(feature = "pgvector"))]
+			let is_distance_operator = false;
 			if is_distance_operator {
 				features.insert(PgvectorFeature::DistanceOperator);
 			}
@@ -684,12 +693,13 @@ fn collect_simple_expr_pgvector_features_with_values(
 	}
 }
 
-fn collect_value_pgvector_features(value: &Value, features: &mut PgvectorFeatureSet) {
+fn collect_value_pgvector_features(value: &Value, _features: &mut PgvectorFeatureSet) {
 	match value {
-		Value::Vector(_) => features.insert(PgvectorFeature::VectorValue),
+		#[cfg(feature = "pgvector")]
+		Value::Vector(_) => _features.insert(PgvectorFeature::VectorValue),
 		Value::Array(_, Some(values)) => {
 			for value in values.iter() {
-				collect_value_pgvector_features(value, features);
+				collect_value_pgvector_features(value, _features);
 			}
 		}
 		_ => {}
@@ -713,7 +723,7 @@ fn collect_window_pgvector_features(window: &WindowStatement, features: &mut Pgv
 	}
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "pgvector"))]
 mod pgvector_feature_tests {
 	use crate::prelude::{Alias, BinOper, Expr, Query, SimpleExpr};
 	use crate::types::PgBinOper;

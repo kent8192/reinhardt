@@ -21,6 +21,7 @@ fn transaction_consumed_error() -> DatabaseError {
 	)
 }
 
+#[cfg(feature = "pgvector")]
 fn vector_unsupported_error() -> DatabaseError {
 	DatabaseError::new(
 		DatabaseErrorKind::Type,
@@ -109,6 +110,7 @@ impl MySqlBackend {
 			// MySQL stores UUIDs as BINARY(16) or CHAR(36); we bind as string
 			QueryValue::Uuid(u) => query.bind(u.to_string()),
 			QueryValue::Json(value) => query.bind(value.as_deref().cloned().map(sqlx::types::Json)),
+			#[cfg(feature = "pgvector")]
 			QueryValue::Vector(_) => return Err(vector_unsupported_error().into()),
 			QueryValue::StringArray(values) => {
 				query.bind(serde_json::to_string(values).expect("string arrays serialize"))
@@ -353,6 +355,7 @@ impl MySqlTransactionExecutor {
 			// MySQL stores UUIDs as BINARY(16) or CHAR(36); we bind as string
 			QueryValue::Uuid(u) => query.bind(u.to_string()),
 			QueryValue::Json(value) => query.bind(value.as_deref().cloned().map(sqlx::types::Json)),
+			#[cfg(feature = "pgvector")]
 			QueryValue::Vector(_) => return Err(vector_unsupported_error().into()),
 			QueryValue::StringArray(values) => {
 				query.bind(serde_json::to_string(values).expect("string arrays serialize"))

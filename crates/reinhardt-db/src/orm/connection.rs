@@ -99,6 +99,7 @@ impl QueryRow {
 					native_json_fields.insert(key.clone());
 					serde_json::Value::Null
 				}
+				#[cfg(feature = "pgvector")]
 				QueryValue::Vector(values) => serde_json::Value::Array(
 					values.into_iter().map(serde_json::Value::from).collect(),
 				),
@@ -540,6 +541,7 @@ mod tests {
 	struct TestBackend;
 
 	#[test]
+	#[cfg(feature = "pgvector")]
 	fn backend_vector_rows_preserve_numeric_json_arrays() {
 		let mut row = Row::new();
 		row.insert(

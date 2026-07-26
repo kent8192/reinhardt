@@ -3795,15 +3795,12 @@ pub(crate) fn model_derive_impl(mut input: DeriveInput) -> Result<TokenStream> {
 			fn index_metadata() -> Vec<#orm_crate::inspection::IndexInfo> {
 				vec![
 					#(
-						#orm_crate::inspection::IndexInfo {
-							name: format!("{}_{}_idx", <Self as #orm_crate::Model>::table_name(), #indexed_fields),
-							fields: vec![#indexed_fields.to_string()],
-							unique: false,
-							condition: None,
-							index_type: None,
-							operator_class: None,
-							expressions: None,
-						},
+						#orm_crate::inspection::IndexInfo::new(
+							format!("{}_{}_idx", <Self as #orm_crate::Model>::table_name(), #indexed_fields),
+							vec![#indexed_fields.to_string()],
+							false,
+							None,
+						),
 					)*
 					#(
 						#structured_index_metadata_items,

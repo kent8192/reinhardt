@@ -20,6 +20,7 @@ fn transaction_consumed_error() -> DatabaseError {
 	)
 }
 
+#[cfg(feature = "pgvector")]
 fn vector_unsupported_error() -> DatabaseError {
 	DatabaseError::new(
 		DatabaseErrorKind::Type,
@@ -60,6 +61,7 @@ impl SqliteBackend {
 			// SQLite stores UUIDs as strings
 			QueryValue::Uuid(u) => query.bind(u.to_string()),
 			QueryValue::Json(value) => query.bind(value.as_deref().cloned().map(sqlx::types::Json)),
+			#[cfg(feature = "pgvector")]
 			QueryValue::Vector(_) => return Err(vector_unsupported_error().into()),
 			QueryValue::StringArray(values) => {
 				query.bind(serde_json::to_string(values).expect("string arrays serialize"))
@@ -335,6 +337,7 @@ impl SqliteTransactionExecutor {
 			// SQLite doesn't have native UUID type; bind as string
 			QueryValue::Uuid(u) => query.bind(u.to_string()),
 			QueryValue::Json(value) => query.bind(value.as_deref().cloned().map(sqlx::types::Json)),
+			#[cfg(feature = "pgvector")]
 			QueryValue::Vector(_) => return Err(vector_unsupported_error().into()),
 			QueryValue::StringArray(values) => {
 				query.bind(serde_json::to_string(values).expect("string arrays serialize"))
@@ -559,6 +562,7 @@ mod tests {
 	}
 
 	#[test]
+	#[cfg(feature = "pgvector")]
 	fn sqlite_rejects_vector_parameters_without_a_fallback_encoding() {
 		let error = SqliteBackend::bind_value(
 			sqlx::query("SELECT ?"),

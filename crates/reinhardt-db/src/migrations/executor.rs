@@ -3611,6 +3611,7 @@ mod rollback_orchestration_tests {
 
 	#[rstest]
 	#[tokio::test]
+	#[cfg(feature = "pgvector")]
 	async fn sqlite_vector_alter_column_recreation_returns_a_structured_error() {
 		let mut initial = Migration::new("0001_initial", "vector_recreation");
 		initial.operations.push(Operation::CreateTable {

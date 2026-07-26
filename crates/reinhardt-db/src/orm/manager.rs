@@ -1456,9 +1456,9 @@ impl<M: Model> Manager<M> {
 
 			// JSON types - serialize to string
 			reinhardt_query::value::Value::Json(json) => QueryValue::Json(json),
-			reinhardt_query::value::Value::Vector(Some(values)) => {
-				QueryValue::Vector((*values).clone())
-			}
+			#[cfg(feature = "pgvector")]
+			reinhardt_query::value::Value::Vector(Some(values)) => QueryValue::Vector((*values).clone()),
+			#[cfg(feature = "pgvector")]
 			reinhardt_query::value::Value::Vector(None) => QueryValue::Null,
 			reinhardt_query::value::Value::Array(array_type, Some(values)) => {
 				use reinhardt_query::value::Value as SeaValue;
@@ -1555,9 +1555,8 @@ impl<M: Model> Manager<M> {
 			}
 			QueryValue::Uuid(value) => reinhardt_query::value::Value::Uuid(Some(Box::new(value))),
 			QueryValue::Json(value) => reinhardt_query::value::Value::Json(value),
-			QueryValue::Vector(values) => {
-				reinhardt_query::value::Value::Vector(Some(Box::new(values)))
-			}
+			#[cfg(feature = "pgvector")]
+			QueryValue::Vector(values) => reinhardt_query::value::Value::Vector(Some(Box::new(values))),
 			QueryValue::StringArray(values) => {
 				reinhardt_query::value::Value::Json(Some(Box::new(serde_json::Value::Array(
 					values.into_iter().map(serde_json::Value::String).collect(),
@@ -3034,6 +3033,7 @@ mod tests {
 	}
 
 	#[test]
+	#[cfg(feature = "pgvector")]
 	fn manager_preserves_vector_query_values() {
 		let value =
 			Manager::<JsonManagerModel>::query_value_to_sea_value(QueryValue::Vector(vec![
@@ -3047,6 +3047,7 @@ mod tests {
 	}
 
 	#[test]
+	#[cfg(feature = "pgvector")]
 	fn manager_binds_vector_values_natively() {
 		let value = Manager::<JsonManagerModel>::sea_value_to_query_value(
 			reinhardt_query::value::Value::Vector(Some(Box::new(vec![1.0, 2.0, 3.0]))),

@@ -729,6 +729,7 @@ fn extract_index_type_field(
 					Expr::Struct(variant) => {
 						let variant_name = variant.path.segments.last()?.ident.to_string();
 						return match variant_name.as_str() {
+							#[cfg(feature = "pgvector")]
 							"Hnsw" => Some(IndexType::Hnsw {
 								m: extract_optional_integer_field(&variant.fields, "m")
 									.and_then(|value| u16::try_from(value).ok()),
@@ -738,6 +739,7 @@ fn extract_index_type_field(
 								)
 								.and_then(|value| u16::try_from(value).ok()),
 							}),
+							#[cfg(feature = "pgvector")]
 							"Ivfflat" => Some(IndexType::Ivfflat {
 								lists: extract_optional_integer_field(&variant.fields, "lists")
 									.and_then(|value| u32::try_from(value).ok()),
@@ -753,6 +755,7 @@ fn extract_index_type_field(
 	None
 }
 
+#[cfg(feature = "pgvector")]
 fn extract_optional_integer_field(
 	fields: &syn::punctuated::Punctuated<syn::FieldValue, syn::token::Comma>,
 	field_name: &str,
@@ -1789,6 +1792,7 @@ mod tests {
 	};
 
 	#[test]
+	#[cfg(feature = "pgvector")]
 	fn vector_index_tokens_reparse_data_bearing_index_types() {
 		let operations = [
 			Operation::CreateIndex {

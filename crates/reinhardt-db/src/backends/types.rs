@@ -63,6 +63,7 @@ pub enum QueryValue {
 	/// JSON value, preserving the distinction between JSON null and SQL NULL.
 	Json(Option<Box<serde_json::Value>>),
 	/// Native PostgreSQL dense-vector parameter.
+	#[cfg(feature = "pgvector")]
 	Vector(Vec<f32>),
 	/// PostgreSQL-compatible string array parameter.
 	StringArray(Vec<String>),

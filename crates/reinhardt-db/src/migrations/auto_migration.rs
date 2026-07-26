@@ -514,6 +514,7 @@ mod tests {
 		}
 	}
 
+	#[cfg(feature = "pgvector")]
 	fn vector_index(index_type: IndexType, operator_class: &str) -> IndexDefinition {
 		IndexDefinition {
 			name: "documents_embedding_ann".to_string(),
@@ -525,6 +526,7 @@ mod tests {
 		}
 	}
 
+	#[cfg(feature = "pgvector")]
 	fn vector_state(dimensions: usize, indexes: Vec<IndexDefinition>) -> ProjectState {
 		let mut model = ModelState::new("search", "Document");
 		model.table_name = "search_document".to_string();
@@ -600,6 +602,7 @@ mod tests {
 	}
 
 	#[test]
+	#[cfg(feature = "pgvector")]
 	fn vector_index_column_rollback_retains_column_identity() {
 		// Arrange
 		let generator = AutoMigrationGenerator::new(
@@ -629,6 +632,7 @@ mod tests {
 	}
 
 	#[test]
+	#[cfg(feature = "pgvector")]
 	fn vector_index_expression_rollback_retains_expression_identity() {
 		// Arrange
 		let generator = AutoMigrationGenerator::new(
@@ -658,6 +662,7 @@ mod tests {
 	}
 
 	#[test]
+	#[cfg(feature = "pgvector")]
 	fn named_vector_index_removal_rollback_restores_old_definition() {
 		// Arrange
 		let old_index = vector_index(
@@ -709,6 +714,7 @@ mod tests {
 	}
 
 	#[test]
+	#[cfg(feature = "pgvector")]
 	fn named_vector_index_property_change_rollback_restores_old_definition() {
 		// Arrange
 		let old_index = vector_index(
@@ -767,6 +773,7 @@ mod tests {
 	}
 
 	#[test]
+	#[cfg(feature = "pgvector")]
 	fn named_vector_index_dimension_change_rollback_restores_old_definition() {
 		// Arrange
 		let old_index = vector_index(

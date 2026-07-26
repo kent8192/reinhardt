@@ -2,6 +2,7 @@
 
 use super::model::Model;
 use super::{DatabaseStorageKind, DatabaseValue, FieldCodecError};
+#[cfg(feature = "pgvector")]
 use crate::field_domain::MAX_DENSE_VECTOR_DIMENSIONS;
 use base64::Engine;
 use serde::de::value::{MapDeserializer, StringDeserializer};
@@ -238,6 +239,7 @@ pub(crate) fn database_value_from_json(
 	match storage_kind {
 		Some(DatabaseStorageKind::Json) => Ok(DatabaseValue::Json(value)),
 		_ if value.is_null() => Ok(DatabaseValue::Null),
+		#[cfg(feature = "pgvector")]
 		Some(DatabaseStorageKind::Vector(dimensions)) => {
 			if dimensions == 0 || dimensions > MAX_DENSE_VECTOR_DIMENSIONS {
 				return Err(FieldCodecError::Serialization(format!(
@@ -512,6 +514,7 @@ mod tests {
 	}
 
 	#[test]
+	#[cfg(feature = "pgvector")]
 	fn vector_storage_decodes_numeric_json_arrays() {
 		let value =
 			database_value_from_json(json!([1.0, 2.0, 3.0]), Some(DatabaseStorageKind::Vector(3)))
@@ -521,6 +524,7 @@ mod tests {
 	}
 
 	#[test]
+	#[cfg(feature = "pgvector")]
 	fn vector_storage_rejects_runtime_dimension_mismatches() {
 		let error =
 			database_value_from_json(json!([1.0, 2.0]), Some(DatabaseStorageKind::Vector(3)))
@@ -533,6 +537,7 @@ mod tests {
 	}
 
 	#[test]
+	#[cfg(feature = "pgvector")]
 	fn vector_storage_rejects_unsupported_declared_dimensions() {
 		for (dimensions, value) in [(0, json!([])), (2_001, json!(vec![0.0; 2_001]))] {
 			let error =

@@ -67,6 +67,7 @@ pub enum ColumnType {
 	/// ARRAY - Array type (PostgreSQL)
 	Array(Box<ColumnType>),
 	/// VECTOR(n) - pgvector dense vector type (PostgreSQL)
+	#[cfg(feature = "pgvector")]
 	Vector(u32),
 	/// Custom type - for database-specific types
 	///
@@ -361,6 +362,7 @@ impl ColumnDef {
 	}
 
 	/// Set column type to a pgvector dense vector with the given dimensions.
+	#[cfg(feature = "pgvector")]
 	pub fn vector(self, dimensions: u32) -> Self {
 		self.column_type(ColumnType::Vector(dimensions))
 	}
@@ -619,6 +621,7 @@ mod tests {
 		);
 	}
 
+	#[cfg(feature = "pgvector")]
 	#[rstest]
 	fn vector_column_preserves_its_dimension() {
 		// A missing vector type or an incorrect convenience builder would make this fail.

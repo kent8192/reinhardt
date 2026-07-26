@@ -1995,6 +1995,7 @@ impl SqliteQueryBuilder {
 			Json => "TEXT".to_string(), // SQLite JSON1 extension stores JSON as TEXT
 			JsonBinary => "TEXT".to_string(),
 			Array(_) => "TEXT".to_string(), // SQLite doesn't have ARRAY, use TEXT (JSON)
+			#[cfg(feature = "pgvector")]
 			Vector(_) => "TEXT".to_string(),
 			Custom(name) => name.clone(),
 		}
@@ -2125,18 +2126,24 @@ impl crate::query::QueryBuilderTrait for SqliteQueryBuilder {
 #[cfg(test)]
 mod tests {
 	use super::*;
+	#[cfg(feature = "pgvector")]
 	use crate::{
 		QueryBuildError, Value,
+		types::{ColumnDef, SchemaExpr, TableRef},
+	};
+	use crate::{
 		expr::{Expr, ExprTrait},
 		query::Query,
-		types::{Alias, ColumnDef, IntoIden, SchemaExpr, TableRef},
+		types::{Alias, IntoIden},
 	};
 	use rstest::rstest;
 
+	#[cfg(feature = "pgvector")]
 	fn vector_value() -> Value {
 		Value::Vector(Some(Box::new(vec![1.0, 2.0, 3.0])))
 	}
 
+	#[cfg(feature = "pgvector")]
 	fn vector_subquery_table() -> TableRef {
 		let mut vector_select = Query::select();
 		vector_select
@@ -2148,6 +2155,7 @@ mod tests {
 		)
 	}
 
+	#[cfg(feature = "pgvector")]
 	fn assert_sqlite_vector_value_rejection(
 		result: Result<(String, crate::value::Values), QueryBuildError>,
 	) {
@@ -5685,6 +5693,7 @@ mod tests {
 		assert!(sql.contains("WHERE"));
 	}
 
+	#[cfg(feature = "pgvector")]
 	#[test]
 	fn checked_build_rejects_pgvector_columns() {
 		// SQLite has no pgvector column type, so checked building must not fall back to TEXT.
@@ -5704,6 +5713,7 @@ mod tests {
 		);
 	}
 
+	#[cfg(feature = "pgvector")]
 	#[test]
 	fn checked_dml_builds_reject_vector_subquery_tables() {
 		let mut insert = Query::insert();
@@ -5730,6 +5740,7 @@ mod tests {
 		}
 	}
 
+	#[cfg(feature = "pgvector")]
 	#[test]
 	fn checked_alter_table_rejects_vector_generated_expressions() {
 		let mut statement = Query::alter_table();

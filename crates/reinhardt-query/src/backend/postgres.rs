@@ -4553,6 +4553,7 @@ impl PostgresQueryBuilder {
 			ColumnType::Array(inner_type) => {
 				format!("{}[]", self.column_type_to_sql(inner_type))
 			}
+			#[cfg(feature = "pgvector")]
 			ColumnType::Vector(dimensions) => format!("vector({dimensions})"),
 			ColumnType::Custom(name) => name.clone(),
 		}
@@ -4816,10 +4817,12 @@ impl crate::query::QueryBuilderTrait for PostgresQueryBuilder {
 #[cfg(test)]
 mod tests {
 	use super::*;
+	#[cfg(feature = "pgvector")]
+	use crate::types::{BinOper, ColumnDef, PgBinOper};
 	use crate::{
 		expr::{Expr, ExprTrait},
 		query::Query,
-		types::{Alias, BinOper, ColumnDef, IntoIden, PgBinOper},
+		types::{Alias, IntoIden},
 		value::Value,
 	};
 	use rstest::rstest;
@@ -10287,6 +10290,7 @@ mod tests {
 		);
 	}
 
+	#[cfg(feature = "pgvector")]
 	#[test]
 	fn vector_columns_and_distance_values_render_for_postgres() {
 		// A missing pgvector SQL representation or an inlined value would make this fail.

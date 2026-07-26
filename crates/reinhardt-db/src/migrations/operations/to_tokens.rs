@@ -103,6 +103,7 @@ fn field_type_to_tokens(field_type: &FieldType) -> TokenStream {
 		FieldType::TsTzRange => quote! { FieldType::TsTzRange },
 		FieldType::TsVector => quote! { FieldType::TsVector },
 		FieldType::TsQuery => quote! { FieldType::TsQuery },
+		#[cfg(feature = "pgvector")]
 		FieldType::Vector { dimensions } => {
 			quote! { FieldType::Vector { dimensions: #dimensions } }
 		}
@@ -687,6 +688,7 @@ impl ToTokens for Operation {
 							IndexType::Brin => quote! { IndexType::Brin },
 							IndexType::Fulltext => quote! { IndexType::Fulltext },
 							IndexType::Spatial => quote! { IndexType::Spatial },
+							#[cfg(feature = "pgvector")]
 							IndexType::Hnsw { m, ef_construction } => {
 								let m = optional_u16_to_tokens(*m);
 								let ef_construction = optional_u16_to_tokens(*ef_construction);
@@ -697,6 +699,7 @@ impl ToTokens for Operation {
 									}
 								}
 							}
+							#[cfg(feature = "pgvector")]
 							IndexType::Ivfflat { lists } => {
 								let lists = optional_u32_to_tokens(*lists);
 								quote! { IndexType::Ivfflat { lists: #lists } }
@@ -763,6 +766,7 @@ impl ToTokens for Operation {
 			} => {
 				let columns_iter = columns.iter();
 				let index_type_token = match index_type {
+					#[cfg(feature = "pgvector")]
 					Some(IndexType::Hnsw { m, ef_construction }) => {
 						let m = optional_u16_to_tokens(*m);
 						let ef_construction = optional_u16_to_tokens(*ef_construction);
@@ -773,6 +777,7 @@ impl ToTokens for Operation {
 							})
 						}
 					}
+					#[cfg(feature = "pgvector")]
 					Some(IndexType::Ivfflat { lists }) => {
 						let lists = optional_u32_to_tokens(*lists);
 						quote! { Some(IndexType::Ivfflat { lists: #lists }) }
@@ -1180,6 +1185,7 @@ impl ToTokens for ColumnDefinition {
 			FieldType::TsTzRange => quote! { FieldType::TsTzRange },
 			FieldType::TsVector => quote! { FieldType::TsVector },
 			FieldType::TsQuery => quote! { FieldType::TsQuery },
+			#[cfg(feature = "pgvector")]
 			FieldType::Vector { dimensions } => {
 				quote! { FieldType::Vector { dimensions: #dimensions } }
 			}
@@ -1425,6 +1431,7 @@ fn optional_u32_to_tokens(value: Option<u32>) -> TokenStream {
 	}
 }
 
+#[cfg(feature = "pgvector")]
 fn optional_u16_to_tokens(value: Option<u16>) -> TokenStream {
 	match value {
 		Some(value) => quote! { Some(#value) },

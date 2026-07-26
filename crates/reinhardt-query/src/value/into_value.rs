@@ -243,18 +243,21 @@ impl IntoValue for &[u8] {
 	}
 }
 
+#[cfg(feature = "pgvector")]
 impl IntoValue for Vec<f32> {
 	fn into_value(self) -> Value {
 		Value::Vector(Some(Box::new(self)))
 	}
 }
 
+#[cfg(feature = "pgvector")]
 impl IntoValue for Option<Vec<f32>> {
 	fn into_value(self) -> Value {
 		Value::Vector(self.map(Box::new))
 	}
 }
 
+#[cfg(feature = "pgvector")]
 impl IntoValue for &[f32] {
 	fn into_value(self) -> Value {
 		Value::Vector(Some(Box::new(self.to_vec())))
@@ -371,12 +374,14 @@ impl From<&[u8]> for Value {
 	}
 }
 
+#[cfg(feature = "pgvector")]
 impl From<Vec<f32>> for Value {
 	fn from(v: Vec<f32>) -> Self {
 		v.into_value()
 	}
 }
 
+#[cfg(feature = "pgvector")]
 impl From<&[f32]> for Value {
 	fn from(v: &[f32]) -> Self {
 		v.into_value()

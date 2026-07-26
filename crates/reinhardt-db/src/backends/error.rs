@@ -435,6 +435,7 @@ fn map_sqlx_error_ref(error: &sqlx::Error) -> DatabaseError {
 	}
 }
 
+#[cfg(any(feature = "pgvector", test))]
 pub(crate) fn map_sqlx_error_with_pgvector_context(
 	error: sqlx::Error,
 	context: Option<PgvectorOperationKind>,

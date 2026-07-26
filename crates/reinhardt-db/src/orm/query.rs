@@ -4949,6 +4949,7 @@ where
 			DatabaseValue::String(value) => value.clone(),
 			DatabaseValue::Bytes(value) => String::from_utf8_lossy(value).into_owned(),
 			DatabaseValue::Json(value) => value.to_string(),
+			#[cfg(feature = "pgvector")]
 			DatabaseValue::Vector(values) => serde_json::Value::Array(
 				values
 					.iter()
@@ -6892,9 +6893,11 @@ where
 			Value::Bytes(Some(b)) => String::from_utf8_lossy(b).to_string(),
 			Value::ChronoDateTimeUtc(Some(dt)) => dt.to_rfc3339(),
 			Value::Uuid(Some(uuid)) => uuid.to_string(),
+			#[cfg(feature = "pgvector")]
 			Value::Vector(Some(values)) => {
 				Self::database_value_to_string(&DatabaseValue::Vector(values.as_ref().clone()))
 			}
+			#[cfg(feature = "pgvector")]
 			Value::Vector(None) => String::new(),
 			_ => String::new(),
 		}
@@ -8474,11 +8477,13 @@ mod tests {
 		AggregateFunc, AggregateValue, ComparisonOp, FilterCondition, HavingCondition,
 		MAX_FILTER_CONDITION_DEPTH, QueryFilterInput,
 	};
+	#[cfg(feature = "pgvector")]
+	use crate::orm::Field;
 	use crate::orm::connection::DatabaseBackend;
 	use crate::orm::query::{FieldAssignment, UpdateValue};
 	use crate::orm::{
-		DatabaseValue, Field, FieldCodecError, FilterOperator, FilterValue, Manager, Model,
-		QuerySet, query::Filter,
+		DatabaseValue, FieldCodecError, FilterOperator, FilterValue, Manager, Model, QuerySet,
+		query::Filter,
 	};
 	use reinhardt_query::{
 		QueryBuilder,
@@ -9410,6 +9415,7 @@ mod tests {
 	}
 
 	#[test]
+	#[cfg(feature = "pgvector")]
 	fn vector_database_value_diagnostics_use_json_array_syntax() {
 		let rendered =
 			QuerySet::<TestUser>::database_value_to_string(&DatabaseValue::Vector(vec![

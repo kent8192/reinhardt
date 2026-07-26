@@ -143,6 +143,7 @@ pub enum DatabaseValue {
 	/// Native JSON value.
 	Json(serde_json::Value),
 	/// Native PostgreSQL dense-vector value.
+	#[cfg(feature = "pgvector")]
 	Vector(Vec<f32>),
 	/// Native SQL array values with their element type.
 	Array {
@@ -199,6 +200,7 @@ impl DatabaseValue {
 			Self::Bytes(value) => serde_json::to_value(value)
 				.map_err(|error| FieldCodecError::Serialization(error.to_string())),
 			Self::Json(value) => Ok(value),
+			#[cfg(feature = "pgvector")]
 			Self::Vector(values) => serde_json::to_value(values)
 				.map_err(|error| FieldCodecError::Serialization(error.to_string())),
 			Self::Array { values, .. } => values
@@ -229,6 +231,7 @@ pub fn database_value_to_query_value(value: DatabaseValue) -> reinhardt_query::v
 		DatabaseValue::String(value) => Value::String(Some(Box::new(value))),
 		DatabaseValue::Bytes(value) => Value::Bytes(Some(Box::new(value))),
 		DatabaseValue::Json(value) => Value::Json(Some(Box::new(value))),
+		#[cfg(feature = "pgvector")]
 		DatabaseValue::Vector(values) => Value::Vector(Some(Box::new(values))),
 		DatabaseValue::Array {
 			element_type,
@@ -719,6 +722,7 @@ mod tests {
 		DatabaseField, DatabaseScalar, DatabaseStorageKind, DatabaseValue, FieldCodecContext,
 		FieldCodecError, IntoFieldValue, ModelEnumRepr, ModelEnumValue,
 	};
+	#[cfg(feature = "pgvector")]
 	use crate::orm::Vector;
 	use std::collections::HashMap;
 
@@ -874,6 +878,7 @@ mod tests {
 	}
 
 	#[test]
+	#[cfg(feature = "pgvector")]
 	fn fixed_dimension_vectors_round_trip_through_the_database_carrier() {
 		let vector = Vector::<3>::try_from(vec![1.0, 2.0, 3.0]).unwrap();
 
@@ -892,6 +897,7 @@ mod tests {
 	}
 
 	#[test]
+	#[cfg(feature = "pgvector")]
 	fn fixed_dimension_vectors_reject_mismatched_database_values() {
 		let error =
 			Vector::<3>::from_database_value(DatabaseValue::Vector(vec![1.0, 2.0])).unwrap_err();

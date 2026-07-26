@@ -53,23 +53,40 @@ impl From<introspection::DatabaseSchema> for DatabaseSchema {
 			let indexes: Vec<IndexSchema> = intro_table
 				.indexes
 				.values()
-				.map(|idx| IndexSchema {
-					name: idx.name.clone(),
-					columns: idx.columns.clone(),
-					unique: idx.unique,
-					access_method: idx.access_method.clone(),
-					index_type: idx.index_type,
-					expressions: idx.expressions.clone(),
-					operator_class: if idx.operator_class_is_default
-						&& idx
-							.access_method
-							.as_deref()
-							.is_some_and(|method| method.eq_ignore_ascii_case("btree"))
+				.map(|idx| {
+					#[cfg(feature = "pgvector")]
 					{
-						None
-					} else {
-						idx.operator_class.clone()
-					},
+						IndexSchema {
+							name: idx.name.clone(),
+							columns: idx.columns.clone(),
+							unique: idx.unique,
+							access_method: idx.access_method.clone(),
+							index_type: idx.index_type,
+							expressions: idx.expressions.clone(),
+							operator_class: if idx.operator_class_is_default
+								&& idx
+									.access_method
+									.as_deref()
+									.is_some_and(|method| method.eq_ignore_ascii_case("btree"))
+							{
+								None
+							} else {
+								idx.operator_class.clone()
+							},
+						}
+					}
+					#[cfg(not(feature = "pgvector"))]
+					{
+						IndexSchema {
+							name: idx.name.clone(),
+							columns: idx.columns.clone(),
+							unique: idx.unique,
+							access_method: idx.index_type.clone(),
+							index_type: None,
+							expressions: None,
+							operator_class: None,
+						}
+					}
 				})
 				.collect();
 
@@ -355,21 +372,29 @@ impl SchemaDiff {
 			Some(IndexType::Brin) => "brin",
 			Some(IndexType::Fulltext) => "fulltext",
 			Some(IndexType::Spatial) => "spatial",
+			#[cfg(feature = "pgvector")]
 			Some(IndexType::Hnsw { .. }) => "hnsw",
+			#[cfg(feature = "pgvector")]
 			Some(IndexType::Ivfflat { .. }) => "ivfflat",
 			Some(IndexType::BTree) | None => index.access_method.as_deref().unwrap_or("btree"),
 		}
 	}
 
 	fn approximate_index_options_equal(current: &IndexSchema, target: &IndexSchema) -> bool {
+		#[cfg(feature = "pgvector")]
 		let current_is_approximate = matches!(
 			current.index_type,
 			Some(IndexType::Hnsw { .. } | IndexType::Ivfflat { .. })
 		);
+		#[cfg(not(feature = "pgvector"))]
+		let current_is_approximate = false;
+		#[cfg(feature = "pgvector")]
 		let target_is_approximate = matches!(
 			target.index_type,
 			Some(IndexType::Hnsw { .. } | IndexType::Ivfflat { .. })
 		);
+		#[cfg(not(feature = "pgvector"))]
+		let target_is_approximate = false;
 		if current_is_approximate || target_is_approximate {
 			current.index_type == target.index_type
 		} else {
@@ -1651,6 +1676,7 @@ mod tests {
 		);
 	}
 
+	#[cfg(feature = "pgvector")]
 	#[test]
 	fn vector_index_introspection_conversion_preserves_all_metadata() {
 		// Arrange
@@ -1708,6 +1734,7 @@ mod tests {
 		);
 	}
 
+	#[cfg(feature = "pgvector")]
 	#[test]
 	fn postgres_default_btree_operator_class_is_normalized_during_conversion() {
 		// Arrange
@@ -2718,6 +2745,7 @@ mod tests {
 		));
 	}
 
+	#[cfg(feature = "pgvector")]
 	#[test]
 	fn vector_index_generated_column_repair_and_restore_preserve_expression_metadata() {
 		// Arrange
@@ -2975,6 +3003,7 @@ mod tests {
 		}
 	}
 
+	#[cfg(feature = "pgvector")]
 	#[test]
 	fn vector_index_schema_diff_preserves_metadata_in_create_operation() {
 		// Arrange
@@ -3031,6 +3060,7 @@ mod tests {
 		);
 	}
 
+	#[cfg(feature = "pgvector")]
 	#[test]
 	fn vector_index_schema_diff_observes_typed_option_changes() {
 		// Arrange
@@ -3118,6 +3148,7 @@ mod tests {
 		assert!(result.indexes_to_remove.is_empty());
 	}
 
+	#[cfg(feature = "pgvector")]
 	#[test]
 	fn legacy_postgres_multi_column_default_index_matches_introspected_metadata() {
 		// Arrange
@@ -3260,6 +3291,7 @@ mod tests {
 		assert_eq!(result.indexes_to_remove.len(), 1);
 	}
 
+	#[cfg(feature = "pgvector")]
 	#[test]
 	fn hnsw_and_ivfflat_access_methods_remain_distinct() {
 		// Arrange

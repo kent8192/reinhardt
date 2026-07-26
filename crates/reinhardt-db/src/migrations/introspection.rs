@@ -61,17 +61,26 @@ pub struct IndexInfo {
 	/// Whether the index is unique
 	pub unique: bool,
 	/// Raw database access method (e.g., btree, hash, hnsw)
+	#[cfg(feature = "pgvector")]
 	pub access_method: Option<String>,
 	/// Typed migration index method and options when representable
+	#[cfg(feature = "pgvector")]
 	pub index_type: Option<super::IndexType>,
+	/// Raw database index method (e.g., BTREE, HASH).
+	#[cfg(not(feature = "pgvector"))]
+	pub index_type: Option<String>,
 	/// Index expressions, when the index does not target plain columns
+	#[cfg(feature = "pgvector")]
 	pub expressions: Option<Vec<String>>,
 	/// PostgreSQL operator class for the indexed target
+	#[cfg(feature = "pgvector")]
 	pub operator_class: Option<String>,
 	/// Whether PostgreSQL reports the operator class as the access method default
+	#[cfg(feature = "pgvector")]
 	pub operator_class_is_default: bool,
 }
 
+#[cfg(feature = "pgvector")]
 fn parse_postgres_index_type(
 	access_method: &str,
 	reloptions: &[String],
@@ -142,6 +151,7 @@ fn parse_postgres_index_type(
 	}
 }
 
+#[cfg(feature = "pgvector")]
 fn resolve_postgres_operator_class(
 	index_name: &str,
 	index_type: Option<super::IndexType>,
@@ -730,19 +740,22 @@ impl PostgresIntrospector {
 			let access_method: String = row.try_get("access_method").map_err(|e| {
 				MigrationError::IntrospectionError(format!("Failed to get access_method: {}", e))
 			})?;
+			#[cfg(feature = "pgvector")]
 			let index_options: Option<Vec<String>> = row.try_get("index_options").map_err(|e| {
 				MigrationError::IntrospectionError(format!("Failed to get index_options: {}", e))
 			})?;
-			let index_expression: Option<String> =
-				row.try_get("index_expressions").map_err(|e| {
-					MigrationError::IntrospectionError(format!(
-						"Failed to get index_expressions: {}",
-						e
-					))
-				})?;
+			#[cfg(feature = "pgvector")]
+			let index_expression: Option<String> = row.try_get("index_expressions").map_err(|e| {
+				MigrationError::IntrospectionError(format!(
+					"Failed to get index_expressions: {}",
+					e
+				))
+			})?;
+			#[cfg(feature = "pgvector")]
 			let operator_classes: Vec<String> = row.try_get("operator_classes").map_err(|e| {
 				MigrationError::IntrospectionError(format!("Failed to get operator_classes: {}", e))
 			})?;
+			#[cfg(feature = "pgvector")]
 			let operator_class_defaults: Vec<bool> =
 				row.try_get("operator_class_defaults").map_err(|e| {
 					MigrationError::IntrospectionError(format!(
@@ -750,8 +763,10 @@ impl PostgresIntrospector {
 						e
 					))
 				})?;
+			#[cfg(feature = "pgvector")]
 			let index_type =
 				parse_postgres_index_type(&access_method, index_options.as_deref().unwrap_or(&[]))?;
+			#[cfg(feature = "pgvector")]
 			let (operator_class, operator_class_is_default) = resolve_postgres_operator_class(
 				&index_name,
 				index_type,
@@ -765,10 +780,17 @@ impl PostgresIntrospector {
 					name: index_name,
 					columns: column_names,
 					unique: is_unique,
+					#[cfg(feature = "pgvector")]
 					access_method: Some(access_method),
+					#[cfg(feature = "pgvector")]
 					index_type,
+					#[cfg(not(feature = "pgvector"))]
+					index_type: Some(access_method),
+					#[cfg(feature = "pgvector")]
 					expressions: index_expression.map(|expression| vec![expression]),
+					#[cfg(feature = "pgvector")]
 					operator_class,
+					#[cfg(feature = "pgvector")]
 					operator_class_is_default,
 				},
 			);
@@ -1082,10 +1104,17 @@ impl MySQLIntrospector {
 					name: name.clone(),
 					columns: cols.clone(),
 					unique: *is_unique,
+					#[cfg(feature = "pgvector")]
 					access_method: Some(idx_type.clone()),
+					#[cfg(feature = "pgvector")]
 					index_type: None,
+					#[cfg(not(feature = "pgvector"))]
+					index_type: Some(idx_type.clone()),
+					#[cfg(feature = "pgvector")]
 					expressions: None,
+					#[cfg(feature = "pgvector")]
 					operator_class: None,
+					#[cfg(feature = "pgvector")]
 					operator_class_is_default: false,
 				},
 			);
@@ -1491,10 +1520,14 @@ impl SQLiteIntrospector {
 					name: index_row.name,
 					columns,
 					unique: index_row.unique != 0,
+					#[cfg(feature = "pgvector")]
 					access_method: None,
 					index_type: None,
+					#[cfg(feature = "pgvector")]
 					expressions: None,
+					#[cfg(feature = "pgvector")]
 					operator_class: None,
+					#[cfg(feature = "pgvector")]
 					operator_class_is_default: false,
 				},
 			);
@@ -1914,7 +1947,7 @@ impl DatabaseIntrospector for SQLiteIntrospector {
 	}
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "pgvector"))]
 mod postgres_index_metadata_tests {
 	use super::*;
 	use crate::migrations::IndexType;

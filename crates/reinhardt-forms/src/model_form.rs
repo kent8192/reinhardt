@@ -11,8 +11,8 @@ pub use error::ModelFormError;
 use crate::Form;
 use crate::form::ALL_FIELDS_KEY;
 use reinhardt_core::model_form::{
-	AllEditableModelFields, ModelFormPayload, ModelFormPayloadError, ModelFormPolicy,
-	ModelFormSchema,
+	AllEditableModelFields, ModelFormFieldKind, ModelFormPayload, ModelFormPayloadError,
+	ModelFormPolicy, ModelFormSchema,
 };
 use reinhardt_db::orm::transaction::AtomicTransactionOutcome;
 use reinhardt_db::orm::{Model, OrmExecutor};
@@ -70,6 +70,11 @@ pub trait FormModel: Model + Clone + Send + Sync {
 				vec!["unknown trusted model field".to_owned()],
 			)]),
 		})
+	}
+
+	/// Returns the input kind accepted by a server-trusted field.
+	fn trusted_field_kind(_field: &str) -> Option<ModelFormFieldKind> {
+		None
 	}
 
 	/// Persists this candidate using an explicit create or update operation.
@@ -403,6 +408,10 @@ where
 		}
 		self.pending_transaction_save = Some(pending);
 		Err(ModelFormError::TransactionOutcomePending)
+	}
+
+	pub(crate) fn finalize_transaction(&mut self) -> Result<(), ModelFormError> {
+		self.finalize_transaction_save()
 	}
 
 	/// Replaces one payload field, primarily for inline foreign-key assignment.

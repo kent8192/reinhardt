@@ -1947,7 +1947,7 @@ fn generate_model_form(
 				let _: &#pages_crate::form::ModelFormFieldDescriptor = #schema_path::#field();
 			}
 		});
-	let policy_body = match &model_source.selection {
+	let selection_policy_body = match &model_source.selection {
 		TypedModelFieldSelection::Fields(fields) if fields.is_empty() => quote! { false },
 		TypedModelFieldSelection::Fields(fields) => {
 			let names = fields.iter().map(ToString::to_string);
@@ -1958,6 +1958,10 @@ fn generate_model_form(
 			let names = fields.iter().map(ToString::to_string);
 			quote! { !::core::matches!(field, #(#names)|*) }
 		}
+	};
+	let policy_body = quote! {
+		<#policy_path as #pages_crate::form::ModelFormPolicy>::allows(field)
+			&& (#selection_policy_body)
 	};
 
 	let override_arms = model_source.overrides.iter().map(|override_| {
@@ -2030,7 +2034,7 @@ fn generate_model_form(
 				}
 			}
 
-			pub type #data_ident = #payload_path<#policy_path>;
+			pub type #data_ident = #payload_path<#policy_ident>;
 
 			#[derive(Clone, PartialEq)]
 			struct __ReinhardtModelFormValues(
@@ -2108,7 +2112,7 @@ fn generate_model_form(
 				> {
 					self.__model_state.borrow().build_payload_for::<
 						#data_ident,
-						#policy_path,
+						#policy_ident,
 					>()
 				}
 
@@ -2179,7 +2183,7 @@ fn generate_model_form(
 					let _ = self.__state_version.get();
 					let mut controls = ::std::vec::Vec::new();
 					for descriptor in self.__model_state.borrow().selected_descriptors() {
-						if !<#policy_path as #pages_crate::form::ModelFormPolicy>::allows(descriptor.name) {
+						if !<#policy_ident as #pages_crate::form::ModelFormPolicy>::allows(descriptor.name) {
 							continue;
 						}
 						let (
@@ -2564,7 +2568,7 @@ fn generate_model_form(
 											.selected_descriptors()
 											.iter()
 											.filter(|descriptor| {
-												<#policy_path as #pages_crate::form::ModelFormPolicy>::allows(
+											<#policy_ident as #pages_crate::form::ModelFormPolicy>::allows(
 													descriptor.name,
 												)
 											})
@@ -2645,7 +2649,7 @@ fn generate_model_form(
 							.selected_descriptors()
 							.iter()
 							.filter_map(|descriptor| {
-								if !<#policy_path as #pages_crate::form::ModelFormPolicy>::allows(descriptor.name) {
+								if !<#policy_ident as #pages_crate::form::ModelFormPolicy>::allows(descriptor.name) {
 									return ::core::option::Option::None;
 								}
 								state.value(descriptor.name).cloned().map(|value| {

@@ -126,6 +126,9 @@ impl<P: FormModel, C: FormModel> InlineFormSet<P, C> {
 	{
 		self.finalize_parent_transaction()?;
 		self.validate_foreign_key_kind()?;
+		for child_form in &mut self.child_forms {
+			child_form.finalize_transaction()?;
+		}
 		// A known parent key is trusted formset context, so child validators must
 		// observe it before validation rather than a deferred placeholder.
 		let parent_id_is_zero_sentinel = P::primary_key_uses_zero_sentinel()
@@ -226,10 +229,18 @@ impl<P: FormModel, C: FormModel> InlineFormSet<P, C> {
 	{
 		let child = C::Schema::fields()
 			.iter()
-			.find(|descriptor| descriptor.name == self.fk_field);
-		if let Some(child) = child
-			&& !foreign_key_kinds_are_compatible(P::FIELD_KIND, child.kind)
-		{
+			.find(|descriptor| descriptor.name == self.fk_field)
+			.map(|descriptor| descriptor.kind)
+			.or_else(|| C::trusted_field_kind(&self.fk_field));
+		let Some(child) = child else {
+			return Err(ModelFormError::FieldValidation {
+				errors: std::collections::HashMap::from([(
+					self.fk_field.clone(),
+					vec!["unknown trusted foreign key field".to_owned()],
+				)]),
+			});
+		};
+		if !foreign_key_kinds_are_compatible(P::FIELD_KIND, child) {
 			return Err(ModelFormError::FieldValidation {
 				errors: std::collections::HashMap::from([(
 					self.fk_field.clone(),

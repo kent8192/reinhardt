@@ -2260,6 +2260,20 @@ fn generate_model_form_support(
 		}
 	}
 	let field_types: Vec<_> = editable_fields.iter().map(|field| &field.ty).collect();
+	let trusted_field_kinds: Vec<_> = field_infos
+		.iter()
+		.map(|field| {
+			let name = LitStr::new(&field.name.to_string(), field.name.span());
+			let kind = if field.is_fk_id_field {
+				model_form_relation_id_kind(field, field_infos)
+			} else if is_relationship_field_type(&field.ty) {
+				return Ok(quote!(#name => ::core::option::Option::None));
+			} else {
+				model_form_kind(field)
+			}?;
+			Ok(quote!(#name => ::core::option::Option::Some(#kind)))
+		})
+		.collect::<Result<Vec<_>>>()?;
 	let trusted_field_assignments = field_infos.iter().map(|field| {
 		let name = LitStr::new(&field.name.to_string(), field.name.span());
 		let ident = Ident::new(&field.name.to_string(), field.name.span());
@@ -2841,6 +2855,15 @@ fn generate_model_form_support(
 					_ => ::core::result::Result::Err(#forms_crate::model_form::ModelFormError::FieldValidation {
 						errors: ::std::collections::HashMap::from([(field.to_owned(), vec!["unknown trusted model field".to_owned()])]),
 					}),
+				}
+			}
+
+			fn trusted_field_kind(
+				field: &str,
+			) -> ::core::option::Option<#core_crate::model_form::ModelFormFieldKind> {
+				match field {
+					#(#trusted_field_kinds,)*
+					_ => ::core::option::Option::None,
 				}
 			}
 

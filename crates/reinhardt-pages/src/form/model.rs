@@ -1,7 +1,9 @@
 //! Target-neutral runtime state for model-backed forms.
 
+use rust_decimal::Decimal;
 use std::collections::HashMap;
 use std::marker::PhantomData;
+use std::str::FromStr;
 
 use reinhardt_core::model_form::{
 	ModelFormFieldDescriptor, ModelFormFieldKind, ModelFormPayload, ModelFormPayloadError,
@@ -271,17 +273,16 @@ fn convert_control_value(
 			Ok(serde_json::Value::Number(number))
 		}
 		ModelFormFieldKind::Decimal { min, max } => {
-			let decimal = match &value {
-				serde_json::Value::Number(number) => number
-					.as_f64()
-					.ok_or_else(|| invalid_value(descriptor.name, "expected a finite decimal"))?,
-				serde_json::Value::String(text) => text.parse::<f64>().map_err(|error| {
-					invalid_value(descriptor.name, format!("invalid decimal: {error}"))
-				})?,
+			let decimal_text = match &value {
+				serde_json::Value::Number(number) => number.to_string(),
+				serde_json::Value::String(text) => text.clone(),
 				_ => return Err(invalid_value(descriptor.name, "expected a decimal number")),
 			};
+			let decimal = Decimal::from_str(&decimal_text).map_err(|error| {
+				invalid_value(descriptor.name, format!("invalid decimal: {error}"))
+			})?;
 			if let Some(min) = min
-				&& decimal < min
+				&& decimal < Decimal::from_str(min).expect("generated decimal minimum is valid")
 			{
 				return Err(invalid_value(
 					descriptor.name,
@@ -289,7 +290,7 @@ fn convert_control_value(
 				));
 			}
 			if let Some(max) = max
-				&& decimal > max
+				&& decimal > Decimal::from_str(max).expect("generated decimal maximum is valid")
 			{
 				return Err(invalid_value(
 					descriptor.name,

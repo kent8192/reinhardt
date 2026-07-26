@@ -2,6 +2,8 @@
 
 use chrono::{DateTime, NaiveDateTime, SecondsFormat, Utc};
 use reinhardt_core::model_form::{ModelFormFieldDescriptor, ModelFormFieldKind};
+use rust_decimal::Decimal;
+use std::str::FromStr;
 
 use crate::{
 	BooleanField, CharField, DateField, DateTimeField, DecimalField, EmailField, FieldError,
@@ -94,11 +96,11 @@ struct ModelDecimalField {
 }
 
 impl ModelDecimalField {
-	fn new(name: String, required: bool, min: Option<f64>, max: Option<f64>) -> Self {
+	fn new(name: String, required: bool, min: Option<&str>, max: Option<&str>) -> Self {
 		let mut inner = DecimalField::new(name);
 		inner.required = required;
-		inner.min_value = min;
-		inner.max_value = max;
+		inner.min_decimal_value = min.and_then(|value| Decimal::from_str(value).ok());
+		inner.max_decimal_value = max.and_then(|value| Decimal::from_str(value).ok());
 		Self { inner }
 	}
 }

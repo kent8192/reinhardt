@@ -2072,12 +2072,12 @@ fn model_form_kind(field: &FieldInfo) -> Result<TokenStream> {
 			let min = field
 				.config
 				.min_value
-				.map(|value| quote!(::core::option::Option::Some(#value as f64)))
+				.map(|value| quote!(::core::option::Option::Some(::core::stringify!(#value))))
 				.unwrap_or_else(|| quote!(::core::option::Option::None));
 			let max = field
 				.config
 				.max_value
-				.map(|value| quote!(::core::option::Option::Some(#value as f64)))
+				.map(|value| quote!(::core::option::Option::Some(::core::stringify!(#value))))
 				.unwrap_or_else(|| quote!(::core::option::Option::None));
 			quote!(#core_crate::model_form::ModelFormFieldKind::Decimal { min: #min, max: #max })
 		}

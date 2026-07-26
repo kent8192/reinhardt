@@ -126,6 +126,7 @@ web-sys-full = [
 ]
 
 [dependencies]
+rust_decimal = { workspace = true }
 # Builder generator for `Component { ... }` invocation form (spec §3.5.2).
 # Used as a runtime dep so user code can `#[derive(bon::Builder)]` on
 # component prop structs. Staged for removal under spec §10.

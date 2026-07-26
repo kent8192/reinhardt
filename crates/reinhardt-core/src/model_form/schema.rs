@@ -43,9 +43,9 @@ pub enum ModelFormFieldKind {
 	/// A decimal input with optional inclusive bounds.
 	Decimal {
 		/// The inclusive minimum value, when constrained.
-		min: Option<f64>,
+		min: Option<&'static str>,
 		/// The inclusive maximum value, when constrained.
-		max: Option<f64>,
+		max: Option<&'static str>,
 	},
 	/// A boolean input.
 	Boolean,

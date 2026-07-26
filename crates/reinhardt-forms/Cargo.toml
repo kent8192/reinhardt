@@ -32,6 +32,7 @@ regex = "1.10"
 
 # Date/Time
 chrono = { version = "0.4", features = ["serde"] }
+rust_decimal = { workspace = true }
 
 [features]
 full = []

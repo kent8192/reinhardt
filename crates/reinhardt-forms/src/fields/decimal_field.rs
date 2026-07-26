@@ -1,4 +1,5 @@
 use crate::field::{FieldError, FieldResult, FormField, Widget};
+use rust_decimal::Decimal;
 use std::str::FromStr;
 
 /// DecimalField for decimal number input with digit and precision validation.
@@ -31,6 +32,10 @@ pub struct DecimalField {
 	pub max_value: Option<f64>,
 	/// Minimum allowed value.
 	pub min_value: Option<f64>,
+	/// Exact maximum bound used when precision must be preserved.
+	pub max_decimal_value: Option<Decimal>,
+	/// Exact minimum bound used when precision must be preserved.
+	pub min_decimal_value: Option<Decimal>,
 	/// Maximum total number of digits allowed.
 	pub max_digits: Option<usize>,
 	/// Maximum number of digits after the decimal point.
@@ -65,6 +70,8 @@ impl DecimalField {
 			initial: None,
 			max_value: None,
 			min_value: None,
+			max_decimal_value: None,
+			min_decimal_value: None,
 			max_digits: None,
 			decimal_places: None,
 			localize: false,

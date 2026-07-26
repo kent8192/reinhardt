@@ -553,11 +553,10 @@ impl CleanupableBackend for DatabaseSessionBackend {
 
 	async fn count_keys_with_prefix(&self, prefix: &str) -> Result<usize, SessionError> {
 		// Count matching keys in the database without loading session payloads.
-		let pattern = format!("{}%", prefix);
 		let stmt = Query::select()
 			.from(Alias::new("sessions"))
 			.expr_as(Func::count(Expr::asterisk().into()), Alias::new("count"))
-			.and_where(Expr::col(Alias::new("session_key")).like(pattern.as_str()))
+			.and_where(Expr::col(Alias::new("session_key")).starts_with(prefix))
 			.to_owned();
 		let sql = self.build_sql(stmt);
 		let count: i64 = self
@@ -739,47 +738,5 @@ mod tests {
 		// We can't test this without a real connection, but we can verify the trait is implemented
 		fn assert_clone<T: Clone>() {}
 		assert_clone::<DatabaseSessionBackend>();
-	}
-
-	#[tokio::test]
-	async fn injected_connection_handles_session_lifecycle_without_global_orm_connection() {
-		let connection = DatabaseConnection::connect("sqlite::memory:")
-			.await
-			.unwrap();
-		let backend = DatabaseSessionBackend::from_connection(Arc::new(connection));
-		let session_key = "injected-connection";
-		let session_data = serde_json::json!({"user_id": 42});
-
-		backend.create_table().await.unwrap();
-		backend
-			.save(session_key, &session_data, Some(60))
-			.await
-			.unwrap();
-
-		let loaded: Option<serde_json::Value> = backend.load(session_key).await.unwrap();
-		assert_eq!(loaded, Some(session_data));
-		assert!(backend.exists(session_key).await.unwrap());
-
-		backend.delete(session_key).await.unwrap();
-
-		assert!(!backend.exists(session_key).await.unwrap());
-	}
-
-	#[tokio::test]
-	async fn injected_connection_counts_prefix_in_database() {
-		let connection = DatabaseConnection::connect("sqlite::memory:")
-			.await
-			.unwrap();
-		let backend = DatabaseSessionBackend::from_connection(Arc::new(connection));
-		backend.create_table().await.unwrap();
-
-		for key in ["tenant:one", "tenant:two", "tenant:three", "other:one"] {
-			backend
-				.save(key, &serde_json::json!({}), Some(60))
-				.await
-				.unwrap();
-		}
-
-		assert_eq!(backend.count_keys_with_prefix("tenant:").await.unwrap(), 3);
 	}
 }

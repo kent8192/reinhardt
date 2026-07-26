@@ -243,6 +243,24 @@ impl IntoValue for &[u8] {
 	}
 }
 
+impl IntoValue for Vec<f32> {
+	fn into_value(self) -> Value {
+		Value::Vector(Some(Box::new(self)))
+	}
+}
+
+impl IntoValue for Option<Vec<f32>> {
+	fn into_value(self) -> Value {
+		Value::Vector(self.map(Box::new))
+	}
+}
+
+impl IntoValue for &[f32] {
+	fn into_value(self) -> Value {
+		Value::Vector(Some(Box::new(self.to_vec())))
+	}
+}
+
 // =============================================================================
 // Implementation for Value itself (identity)
 // =============================================================================
@@ -349,6 +367,18 @@ impl From<Vec<u8>> for Value {
 
 impl From<&[u8]> for Value {
 	fn from(v: &[u8]) -> Self {
+		v.into_value()
+	}
+}
+
+impl From<Vec<f32>> for Value {
+	fn from(v: Vec<f32>) -> Self {
+		v.into_value()
+	}
+}
+
+impl From<&[f32]> for Value {
+	fn from(v: &[f32]) -> Self {
 		v.into_value()
 	}
 }

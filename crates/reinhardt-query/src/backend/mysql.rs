@@ -92,6 +92,69 @@ impl MySqlQueryBuilder {
 		Self
 	}
 
+	/// Build a SELECT statement after rejecting PostgreSQL-only vector features.
+	pub fn build_select_checked(
+		&self,
+		stmt: &SelectStatement,
+	) -> Result<(String, Values), crate::QueryBuildError> {
+		crate::error::validate_select_for_backend(stmt, "MySQL")?;
+		Ok(self.build_select(stmt))
+	}
+
+	/// Build a CREATE TABLE statement after rejecting PostgreSQL-only vector features.
+	pub fn build_create_table_checked(
+		&self,
+		stmt: &CreateTableStatement,
+	) -> Result<(String, Values), crate::QueryBuildError> {
+		crate::error::validate_create_table_for_backend(stmt, "MySQL")?;
+		Ok(self.build_create_table(stmt))
+	}
+
+	/// Build a CREATE INDEX statement after rejecting PostgreSQL-only vector features.
+	pub fn build_create_index_checked(
+		&self,
+		stmt: &CreateIndexStatement,
+	) -> Result<(String, Values), crate::QueryBuildError> {
+		crate::error::validate_create_index_for_backend(stmt, "MySQL")?;
+		Ok(self.build_create_index(stmt))
+	}
+
+	/// Build an INSERT statement after rejecting PostgreSQL-only vector features.
+	pub fn build_insert_checked(
+		&self,
+		stmt: &InsertStatement,
+	) -> Result<(String, Values), crate::QueryBuildError> {
+		crate::error::validate_insert_for_backend(stmt, "MySQL")?;
+		Ok(self.build_insert(stmt))
+	}
+
+	/// Build an UPDATE statement after rejecting PostgreSQL-only vector features.
+	pub fn build_update_checked(
+		&self,
+		stmt: &UpdateStatement,
+	) -> Result<(String, Values), crate::QueryBuildError> {
+		crate::error::validate_update_for_backend(stmt, "MySQL")?;
+		Ok(self.build_update(stmt))
+	}
+
+	/// Build a DELETE statement after rejecting PostgreSQL-only vector features.
+	pub fn build_delete_checked(
+		&self,
+		stmt: &DeleteStatement,
+	) -> Result<(String, Values), crate::QueryBuildError> {
+		crate::error::validate_delete_for_backend(stmt, "MySQL")?;
+		Ok(self.build_delete(stmt))
+	}
+
+	/// Build an ALTER TABLE statement after rejecting PostgreSQL-only vector features.
+	pub fn build_alter_table_checked(
+		&self,
+		stmt: &AlterTableStatement,
+	) -> Result<(String, Values), crate::QueryBuildError> {
+		crate::error::validate_alter_table_for_backend(stmt, "MySQL")?;
+		Ok(self.build_alter_table(stmt))
+	}
+
 	/// Escape an identifier for MySQL
 	///
 	/// MySQL uses backticks for identifiers.
@@ -3248,6 +3311,7 @@ impl MySqlQueryBuilder {
 			Json => "JSON".to_string(),
 			JsonBinary => "JSON".to_string(), // MySQL JSON is binary
 			Array(_) => "JSON".to_string(),   // MySQL doesn't have ARRAY, use JSON
+			Vector(_) => "JSON".to_string(),
 			Custom(name) => name.clone(),
 		}
 	}
@@ -3273,7 +3337,7 @@ impl MySqlQueryBuilder {
 			Binary(None) | Blob => "BINARY".to_string(),
 			VarBinary(len) => format!("BINARY({len})"),
 			Uuid => "CHAR(36)".to_string(),
-			Json | JsonBinary | Array(_) => "JSON".to_string(),
+			Json | JsonBinary | Array(_) | Vector(_) => "JSON".to_string(),
 			Custom(name) => name.clone(),
 		}
 	}
@@ -3457,9 +3521,10 @@ impl crate::query::QueryBuilderTrait for MySqlQueryBuilder {
 mod tests {
 	use super::*;
 	use crate::{
+		QueryBuildError, Value,
 		expr::{Expr, ExprTrait},
 		query::Query,
-		types::{Alias, IntoIden},
+		types::{Alias, BinOper, IntoIden, PgBinOper},
 	};
 	use rstest::rstest;
 
@@ -7912,5 +7977,50 @@ mod tests {
 
 		// Assert - single quotes in host must be escaped by doubling
 		assert_eq!(result, "'admin'@'host''; DROP USER root; --'");
+	}
+
+	#[test]
+	fn checked_build_rejects_pgvector_distance_expressions() {
+		// Rendering a pgvector operator on MySQL is invalid, so checked building must stop first.
+		let mut statement = Query::select();
+		statement
+			.expr(crate::expr::SimpleExpr::Binary(
+				Box::new(Expr::col("embedding").into()),
+				BinOper::PgOperator(PgBinOper::CosineDistance),
+				Box::new(crate::expr::SimpleExpr::Value(Value::Vector(Some(
+					Box::new(vec![1.0, 2.0, 3.0]),
+				)))),
+			))
+			.from("documents");
+
+		let result = MySqlQueryBuilder::new().build_select_checked(&statement);
+
+		assert_eq!(
+			result,
+			Err(QueryBuildError::UnsupportedBackendFeature {
+				feature: "pgvector distance operators",
+				backend: "MySQL",
+			})
+		);
+	}
+
+	#[test]
+	fn checked_build_rejects_pgvector_values() {
+		let mut statement = Query::select();
+		statement
+			.expr(crate::expr::SimpleExpr::Value(Value::Vector(Some(
+				Box::new(vec![1.0, 2.0, 3.0]),
+			))))
+			.from("documents");
+
+		let result = MySqlQueryBuilder::new().build_select_checked(&statement);
+
+		assert_eq!(
+			result,
+			Err(QueryBuildError::UnsupportedBackendFeature {
+				feature: "pgvector values",
+				backend: "MySQL",
+			})
+		);
 	}
 }

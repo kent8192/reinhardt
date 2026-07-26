@@ -88,6 +88,71 @@ impl PostgresQueryBuilder {
 		Self
 	}
 
+	/// Build a SELECT statement through the checked query-building API.
+	pub fn build_select_checked(
+		&self,
+		stmt: &SelectStatement,
+	) -> Result<(String, Values), crate::QueryBuildError> {
+		Ok(self.build_select(stmt))
+	}
+
+	/// Build a CREATE TABLE statement through the checked query-building API.
+	pub fn build_create_table_checked(
+		&self,
+		stmt: &CreateTableStatement,
+	) -> Result<(String, Values), crate::QueryBuildError> {
+		Ok(self.build_create_table(stmt))
+	}
+
+	/// Build an INSERT statement through the checked query-building API.
+	pub fn build_insert_checked(
+		&self,
+		stmt: &InsertStatement,
+	) -> Result<(String, Values), crate::QueryBuildError> {
+		Ok(self.build_insert(stmt))
+	}
+
+	/// Build an UPDATE statement through the checked query-building API.
+	pub fn build_update_checked(
+		&self,
+		stmt: &UpdateStatement,
+	) -> Result<(String, Values), crate::QueryBuildError> {
+		Ok(self.build_update(stmt))
+	}
+
+	/// Build a DELETE statement through the checked query-building API.
+	pub fn build_delete_checked(
+		&self,
+		stmt: &DeleteStatement,
+	) -> Result<(String, Values), crate::QueryBuildError> {
+		Ok(self.build_delete(stmt))
+	}
+
+	/// Build an ALTER TABLE statement through the checked query-building API.
+	pub fn build_alter_table_checked(
+		&self,
+		stmt: &AlterTableStatement,
+	) -> Result<(String, Values), crate::QueryBuildError> {
+		Ok(self.build_alter_table(stmt))
+	}
+
+	/// Build a CREATE INDEX statement through the checked query-building API.
+	pub fn build_create_index_checked(
+		&self,
+		stmt: &CreateIndexStatement,
+	) -> Result<(String, Values), crate::QueryBuildError> {
+		Ok(self.build_create_index(stmt))
+	}
+
+	pub(crate) fn column_def_to_sql(&self, column: &ColumnDef) -> String {
+		let mut sql = self.escape_iden(&column.name.to_string());
+		if let Some(column_type) = &column.column_type {
+			sql.push(' ');
+			sql.push_str(&self.column_type_to_sql(column_type));
+		}
+		sql
+	}
+
 	/// Escape an identifier for PostgreSQL
 	///
 	/// PostgreSQL uses double quotes for identifiers.
@@ -4455,6 +4520,7 @@ impl PostgresQueryBuilder {
 			ColumnType::Array(inner_type) => {
 				format!("{}[]", self.column_type_to_sql(inner_type))
 			}
+			ColumnType::Vector(dimensions) => format!("vector({dimensions})"),
 			ColumnType::Custom(name) => name.clone(),
 		}
 	}
@@ -4718,7 +4784,7 @@ mod tests {
 	use crate::{
 		expr::{Expr, ExprTrait},
 		query::Query,
-		types::{Alias, IntoIden},
+		types::{Alias, BinOper, ColumnDef, IntoIden, PgBinOper},
 		value::Value,
 	};
 	use rstest::rstest;
@@ -10174,6 +10240,33 @@ mod tests {
 			!sql.contains("::\"display_name\""),
 			"Should NOT contain type cast syntax, got: {}",
 			sql
+		);
+	}
+
+	#[test]
+	fn vector_columns_and_distance_values_render_for_postgres() {
+		// A missing pgvector SQL representation or an inlined value would make this fail.
+		let column_sql = ColumnDef::new("embedding")
+			.vector(1536)
+			.to_string(PostgresQueryBuilder);
+		let mut statement = Query::select();
+		statement
+			.expr(crate::expr::SimpleExpr::Binary(
+				Box::new(Expr::col("embedding").into()),
+				BinOper::PgOperator(PgBinOper::CosineDistance),
+				Box::new(crate::expr::SimpleExpr::Value(Value::Vector(Some(
+					Box::new(vec![1.0, 2.0, 3.0]),
+				)))),
+			))
+			.from("documents");
+
+		let (sql, values) = PostgresQueryBuilder::new().build_select(&statement);
+
+		assert_eq!(column_sql, "\"embedding\" vector(1536)");
+		assert_eq!(sql, "SELECT \"embedding\" <=> $1 FROM \"documents\"");
+		assert_eq!(
+			values,
+			vec![Value::Vector(Some(Box::new(vec![1.0, 2.0, 3.0])))].into()
 		);
 	}
 }

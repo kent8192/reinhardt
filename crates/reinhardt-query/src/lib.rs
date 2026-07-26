@@ -340,6 +340,11 @@ pub mod dcl;
 // Backend implementations
 pub mod backend;
 
+/// Checked query-building errors.
+pub mod error;
+
+pub use error::QueryBuildError;
+
 /// NoSQL command builders (Redis, etc.).
 #[cfg(feature = "nosql-redis")]
 pub mod nosql;

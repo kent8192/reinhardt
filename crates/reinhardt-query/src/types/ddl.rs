@@ -66,6 +66,8 @@ pub enum ColumnType {
 	JsonBinary,
 	/// ARRAY - Array type (PostgreSQL)
 	Array(Box<ColumnType>),
+	/// VECTOR(n) - pgvector dense vector type (PostgreSQL)
+	Vector(u32),
 	/// Custom type - for database-specific types
 	///
 	/// # Security Note
@@ -357,6 +359,17 @@ impl ColumnDef {
 	pub fn array(self, element_type: ColumnType) -> Self {
 		self.column_type(ColumnType::Array(Box::new(element_type)))
 	}
+
+	/// Set column type to a pgvector dense vector with the given dimensions.
+	pub fn vector(self, dimensions: u32) -> Self {
+		self.column_type(ColumnType::Vector(dimensions))
+	}
+
+	/// Render this column definition for PostgreSQL.
+	#[must_use]
+	pub fn to_string(&self, query_builder: crate::backend::PostgresQueryBuilder) -> String {
+		query_builder.column_def_to_sql(self)
+	}
 }
 
 /// Table constraint
@@ -604,6 +617,14 @@ mod tests {
 			col.column_type,
 			Some(ColumnType::Custom("CITEXT".to_string()))
 		);
+	}
+
+	#[rstest]
+	fn vector_column_preserves_its_dimension() {
+		// A missing vector type or an incorrect convenience builder would make this fail.
+		let column = ColumnDef::new("embedding").vector(1536);
+
+		assert_eq!(column.column_type, Some(ColumnType::Vector(1536)));
 	}
 
 	#[test]

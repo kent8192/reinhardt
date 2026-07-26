@@ -55,6 +55,69 @@ impl SqliteQueryBuilder {
 		Self
 	}
 
+	/// Build a SELECT statement after rejecting PostgreSQL-only vector features.
+	pub fn build_select_checked(
+		&self,
+		stmt: &SelectStatement,
+	) -> Result<(String, Values), crate::QueryBuildError> {
+		crate::error::validate_select_for_backend(stmt, "SQLite")?;
+		Ok(self.build_select(stmt))
+	}
+
+	/// Build a CREATE TABLE statement after rejecting PostgreSQL-only vector features.
+	pub fn build_create_table_checked(
+		&self,
+		stmt: &CreateTableStatement,
+	) -> Result<(String, Values), crate::QueryBuildError> {
+		crate::error::validate_create_table_for_backend(stmt, "SQLite")?;
+		Ok(self.build_create_table(stmt))
+	}
+
+	/// Build a CREATE INDEX statement after rejecting PostgreSQL-only vector features.
+	pub fn build_create_index_checked(
+		&self,
+		stmt: &CreateIndexStatement,
+	) -> Result<(String, Values), crate::QueryBuildError> {
+		crate::error::validate_create_index_for_backend(stmt, "SQLite")?;
+		Ok(self.build_create_index(stmt))
+	}
+
+	/// Build an INSERT statement after rejecting PostgreSQL-only vector features.
+	pub fn build_insert_checked(
+		&self,
+		stmt: &InsertStatement,
+	) -> Result<(String, Values), crate::QueryBuildError> {
+		crate::error::validate_insert_for_backend(stmt, "SQLite")?;
+		Ok(self.build_insert(stmt))
+	}
+
+	/// Build an UPDATE statement after rejecting PostgreSQL-only vector features.
+	pub fn build_update_checked(
+		&self,
+		stmt: &UpdateStatement,
+	) -> Result<(String, Values), crate::QueryBuildError> {
+		crate::error::validate_update_for_backend(stmt, "SQLite")?;
+		Ok(self.build_update(stmt))
+	}
+
+	/// Build a DELETE statement after rejecting PostgreSQL-only vector features.
+	pub fn build_delete_checked(
+		&self,
+		stmt: &DeleteStatement,
+	) -> Result<(String, Values), crate::QueryBuildError> {
+		crate::error::validate_delete_for_backend(stmt, "SQLite")?;
+		Ok(self.build_delete(stmt))
+	}
+
+	/// Build an ALTER TABLE statement after rejecting PostgreSQL-only vector features.
+	pub fn build_alter_table_checked(
+		&self,
+		stmt: &AlterTableStatement,
+	) -> Result<(String, Values), crate::QueryBuildError> {
+		crate::error::validate_alter_table_for_backend(stmt, "SQLite")?;
+		Ok(self.build_alter_table(stmt))
+	}
+
 	/// Escape an identifier for SQLite
 	///
 	/// SQLite uses double quotes for identifiers.
@@ -1931,6 +1994,7 @@ impl SqliteQueryBuilder {
 			Json => "TEXT".to_string(), // SQLite JSON1 extension stores JSON as TEXT
 			JsonBinary => "TEXT".to_string(),
 			Array(_) => "TEXT".to_string(), // SQLite doesn't have ARRAY, use TEXT (JSON)
+			Vector(_) => "TEXT".to_string(),
 			Custom(name) => name.clone(),
 		}
 	}
@@ -2061,9 +2125,10 @@ impl crate::query::QueryBuilderTrait for SqliteQueryBuilder {
 mod tests {
 	use super::*;
 	use crate::{
+		QueryBuildError,
 		expr::{Expr, ExprTrait},
 		query::Query,
-		types::{Alias, IntoIden},
+		types::{Alias, ColumnDef, IntoIden},
 	};
 	use rstest::rstest;
 
@@ -5583,5 +5648,24 @@ mod tests {
 		// Assert
 		assert!(sql.contains("\"orders\".\"status\""));
 		assert!(sql.contains("WHERE"));
+	}
+
+	#[test]
+	fn checked_build_rejects_pgvector_columns() {
+		// SQLite has no pgvector column type, so checked building must not fall back to TEXT.
+		let mut statement = Query::create_table();
+		statement
+			.table("documents")
+			.col(ColumnDef::new("embedding").vector(1536));
+
+		let result = SqliteQueryBuilder::new().build_create_table_checked(&statement);
+
+		assert_eq!(
+			result,
+			Err(QueryBuildError::UnsupportedBackendFeature {
+				feature: "pgvector column types",
+				backend: "SQLite",
+			})
+		);
 	}
 }

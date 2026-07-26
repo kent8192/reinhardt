@@ -137,6 +137,12 @@ pub enum PgBinOper {
 	JsonGetPath,
 	/// Get JSON path as text (#>>)
 	JsonGetPathAsText,
+	/// L2 distance (<->)
+	L2Distance,
+	/// Negative inner product (<#>)
+	NegativeInnerProduct,
+	/// Cosine distance (<=>)
+	CosineDistance,
 }
 
 impl BinOper {
@@ -236,6 +242,9 @@ impl PgBinOper {
 			Self::JsonGetAsText => "->>",
 			Self::JsonGetPath => "#>",
 			Self::JsonGetPathAsText => "#>>",
+			Self::L2Distance => "<->",
+			Self::NegativeInnerProduct => "<#>",
+			Self::CosineDistance => "<=>",
 		}
 	}
 }
@@ -351,5 +360,8 @@ mod tests {
 		assert_eq!(PgBinOper::Contains.as_str(), "@>");
 		assert_eq!(PgBinOper::Contained.as_str(), "<@");
 		assert_eq!(PgBinOper::JsonGetAsText.as_str(), "->>");
+		assert_eq!(PgBinOper::L2Distance.as_str(), "<->");
+		assert_eq!(PgBinOper::NegativeInnerProduct.as_str(), "<#>");
+		assert_eq!(PgBinOper::CosineDistance.as_str(), "<=>");
 	}
 }

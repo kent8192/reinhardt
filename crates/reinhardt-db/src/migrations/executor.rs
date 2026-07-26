@@ -16,6 +16,17 @@ use std::collections::HashSet;
 #[cfg(feature = "sqlite")]
 use super::introspection::SQLiteIntrospector;
 
+fn validate_and_advance_migration_state(
+	migration: &Migration,
+	state: &mut super::ProjectState,
+) -> Result<()> {
+	for operation in &migration.operations {
+		operation.validate_for_state(state)?;
+		operation.state_forwards(&migration.app_label, state);
+	}
+	Ok(())
+}
+
 /// Split SQL string into individual statements while handling:
 /// - String literals (single/double quotes)
 /// - Comments (line and block)
@@ -250,6 +261,7 @@ impl DatabaseMigrationExecutor {
 		migrations: &[Migration],
 	) -> Result<ExecutionResult> {
 		let mut applied = Vec::new();
+		let mut validation_state = super::ProjectState::new();
 
 		// Build MigrationGraph for dependency resolution
 		let mut graph = super::graph::MigrationGraph::new();
@@ -280,6 +292,7 @@ impl DatabaseMigrationExecutor {
 				.ok_or_else(|| {
 					MigrationError::DependencyError(format!("Migration not found: {}", key.id()))
 				})?;
+			validate_and_advance_migration_state(migration, &mut validation_state)?;
 
 			// Check if already applied
 			if self
@@ -520,7 +533,6 @@ impl DatabaseMigrationExecutor {
 				.operations
 				.iter()
 				.any(Operation::requires_sqlite_recreation);
-		let mut project_state = super::ProjectState::from_global_registry();
 
 		// Create schema editor with atomic support based on migration's atomic flag
 		let mut editor = SchemaEditor::new_for_migration(
@@ -549,16 +561,12 @@ impl DatabaseMigrationExecutor {
 		// Execute operations through schema editor
 		for operation in &migration.operations {
 			operation.validate_for_dialect(&dialect)?;
-			operation.validate_for_state(&project_state)?;
 
 			// Handle SQLite table recreation for incompatible operations
 			#[cfg(feature = "sqlite")]
 			if matches!(dialect, SqlDialect::Sqlite) && operation.requires_sqlite_recreation() {
 				self.handle_sqlite_recreation(operation, &mut editor)
 					.await?;
-				if !migration.database_only {
-					operation.state_forwards(&migration.app_label, &mut project_state);
-				}
 				continue;
 			}
 
@@ -580,9 +588,6 @@ impl DatabaseMigrationExecutor {
 						"Table '{}' already exists, skipping CREATE TABLE operation",
 						name
 					);
-					if !migration.database_only {
-						operation.state_forwards(&migration.app_label, &mut project_state);
-					}
 					continue;
 				}
 			}
@@ -624,10 +629,6 @@ impl DatabaseMigrationExecutor {
 
 					tracing::debug!("Statement {} executed successfully", i + 1);
 				}
-			}
-
-			if !migration.database_only {
-				operation.state_forwards(&migration.app_label, &mut project_state);
 			}
 		}
 
@@ -679,8 +680,11 @@ impl DatabaseMigrationExecutor {
 
 	async fn apply_after_schema_table(&mut self, plan: &MigrationPlan) -> Result<ExecutionResult> {
 		let mut applied = Vec::new();
+		let mut validation_state = super::ProjectState::new();
 
 		for migration in &plan.migrations {
+			validate_and_advance_migration_state(migration, &mut validation_state)?;
+
 			// Check if already applied
 			if self
 				.recorder
@@ -1515,6 +1519,16 @@ impl DatabaseMigrationExecutor {
 		service: &MigrationService,
 	) -> Result<()> {
 		let migration = service.load_migration(app_label, migration_name).await?;
+		let mut validation_state = super::ProjectState::new();
+		for historical_migration in service.build_dependency_graph().await? {
+			if historical_migration.app_label == migration.app_label
+				&& historical_migration.name == migration.name
+			{
+				break;
+			}
+			validate_and_advance_migration_state(&historical_migration, &mut validation_state)?;
+		}
+		validate_and_advance_migration_state(&migration, &mut validation_state)?;
 
 		#[cfg(feature = "postgres")]
 		if self.connection.is_cockroachdb() {
@@ -3569,6 +3583,84 @@ CREATE UNIQUE INDEX "idx_products_id" ON "products" ("id");"###;
 				"Third statement should be CREATE UNIQUE INDEX"
 			);
 		}
+	}
+}
+
+#[cfg(all(test, feature = "pgvector"))]
+mod vector_index_validation_state_tests {
+	use super::*;
+	use crate::migrations::{ColumnDefinition, FieldType, Migration};
+
+	fn vector_index(table: &str) -> Operation {
+		Operation::CreateIndex {
+			table: table.to_string(),
+			columns: vec!["embedding".to_string()],
+			unique: false,
+			index_type: Some(crate::migrations::operations::IndexType::Hnsw {
+				m: Some(16),
+				ef_construction: Some(64),
+			}),
+			where_clause: None,
+			concurrently: false,
+			expressions: None,
+			mysql_options: None,
+			operator_class: Some("vector_cosine_ops".to_string()),
+		}
+	}
+
+	#[test]
+	fn validation_state_carries_vector_columns_across_ordered_migrations() {
+		// Arrange
+		let mut create_table = Migration::new("0001_initial", "search");
+		create_table.operations.push(Operation::CreateTable {
+			name: "documents".to_string(),
+			columns: vec![ColumnDefinition::new(
+				"embedding",
+				FieldType::Vector { dimensions: 1536 },
+			)],
+			constraints: Vec::new(),
+			without_rowid: None,
+			interleave_in_parent: None,
+			partition: None,
+		});
+		let mut create_index = Migration::new("0002_embedding_index", "search");
+		create_index.operations.push(vector_index("documents"));
+		let mut state = crate::migrations::ProjectState::new();
+
+		// Act
+		validate_and_advance_migration_state(&create_table, &mut state).unwrap();
+		let result = validate_and_advance_migration_state(&create_index, &mut state);
+
+		// Assert
+		result.unwrap();
+	}
+
+	#[test]
+	fn database_only_migration_advances_transient_vector_validation_state() {
+		// Arrange
+		let mut migration = Migration::new("0001_database_only", "search");
+		migration.database_only = true;
+		migration.operations.push(Operation::CreateTable {
+			name: "documents".to_string(),
+			columns: vec![ColumnDefinition::new("id", FieldType::Integer)],
+			constraints: Vec::new(),
+			without_rowid: None,
+			interleave_in_parent: None,
+			partition: None,
+		});
+		migration.operations.push(Operation::AddColumn {
+			table: "documents".to_string(),
+			column: ColumnDefinition::new("embedding", FieldType::Vector { dimensions: 1536 }),
+			mysql_options: None,
+		});
+		migration.operations.push(vector_index("documents"));
+		let mut state = crate::migrations::ProjectState::new();
+
+		// Act
+		let result = validate_and_advance_migration_state(&migration, &mut state);
+
+		// Assert
+		result.unwrap();
 	}
 }
 

@@ -79,7 +79,10 @@ where
 		}
 
 		let Some(control) = values.get_mut(descriptor.name) else {
-			if matches!(descriptor.kind, ModelFormFieldKind::Boolean) && !descriptor.nullable {
+			if matches!(descriptor.kind, ModelFormFieldKind::Boolean)
+				&& !descriptor.nullable
+				&& !descriptor.has_default
+			{
 				values.insert(descriptor.name.to_owned(), serde_json::Value::Bool(false));
 			}
 			continue;

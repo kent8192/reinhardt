@@ -119,6 +119,12 @@ pub fn validate_form_with_ambient_arguments_source(
 			"model-backed form! does not support `initial_loader`; initialize values through the generated form state",
 		));
 	}
+	if model_source.is_some() && slots.is_some() {
+		return Err(Error::new(
+			ast.span,
+			"model-backed form! does not support `slots`; compose surrounding page content outside the generated form",
+		));
+	}
 
 	// Transform unified validators (scope filtering happens at codegen)
 	let validators = transform_validators(&ast.validators, &ast.fields)?;

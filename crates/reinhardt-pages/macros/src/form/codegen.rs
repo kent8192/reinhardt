@@ -2277,7 +2277,9 @@ fn generate_model_form(
 									)
 								),
 							);
-						} else if let ::core::option::Option::Some(value) = stored_value {
+						} else if input_type != "password"
+							&& let ::core::option::Option::Some(value) = stored_value
+						{
 							let value = if matches!(
 								descriptor.kind,
 								#pages_crate::form::ModelFormFieldKind::Json

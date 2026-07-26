@@ -396,10 +396,9 @@ impl BlockingShellEvaluator for EvcxrEvaluator {
 		};
 
 		match result {
-			Ok(_) if !committed => Err(EvaluationFailure::Runtime(nonempty_diagnostic(
-				&output.stderr,
-				"evaluation failed before committing state",
-			))
+			Ok(_) if !committed => Err(EvaluationFailure::Runtime(
+				"evaluation failed before committing state".to_string(),
+			)
 			.with_output(output)),
 			Ok(outputs) => Ok(EvaluationOutput {
 				stdout: output.stdout,
@@ -862,6 +861,50 @@ fn complete_inner_attribute(source: &str) -> Option<usize> {
 					continue;
 				}
 			}
+		}
+		if bytes[index] == b'/' && bytes.get(index + 1) == Some(&b'/') {
+			index = bytes[index..]
+				.iter()
+				.position(|byte| *byte == b'\n')
+				.map_or(bytes.len(), |offset| index + offset + 1);
+			continue;
+		}
+		if bytes[index] == b'/' && bytes.get(index + 1) == Some(&b'*') {
+			let mut comment_depth = 1usize;
+			index += 2;
+			while index + 1 < bytes.len() && comment_depth > 0 {
+				match (bytes[index], bytes[index + 1]) {
+					(b'/', b'*') => {
+						comment_depth += 1;
+						index += 2;
+					}
+					(b'*', b'/') => {
+						comment_depth -= 1;
+						index += 2;
+					}
+					_ => index += 1,
+				}
+			}
+			if comment_depth != 0 {
+				return None;
+			}
+			continue;
+		}
+		if bytes[index] == b'\'' {
+			index += 1;
+			let mut escaped = false;
+			while index < bytes.len() {
+				if !escaped && bytes[index] == b'\'' {
+					index += 1;
+					break;
+				}
+				escaped = !escaped && bytes[index] == b'\\';
+				if bytes[index] != b'\\' {
+					escaped = false;
+				}
+				index += 1;
+			}
+			continue;
 		}
 
 		match bytes[index] {

@@ -132,6 +132,19 @@ impl<P: FormModel, C: FormModel> InlineFormSet<P, C> {
 				)]),
 			});
 		}
+		if let Some(parent_id) = self.parent.primary_key() {
+			let parent_id = serde_json::to_value(parent_id).map_err(|error| {
+				ModelFormError::FieldValidation {
+					errors: std::collections::HashMap::from([(
+						self.fk_field.clone(),
+						vec![error.to_string()],
+					)]),
+				}
+			})?;
+			for child_form in &mut self.child_forms {
+				child_form.set_field_value(&self.fk_field, parent_id.clone())?;
+			}
+		}
 		FormModel::save_with_mode(&mut self.parent, executor, self.parent_persistence_mode).await?;
 		self.parent_persistence_mode = ModelFormPersistenceMode::Update;
 		let parent_id = self

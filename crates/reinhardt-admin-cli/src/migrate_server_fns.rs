@@ -3,6 +3,7 @@
 mod discovery;
 mod rewriter;
 
+use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -66,6 +67,12 @@ pub type Result<T> = std::result::Result<T, MigrateServerFnsError>;
 pub fn run(args: MigrateServerFnsArgs) -> Result<()> {
 	let project = ProjectIndex::discover(&args.path)?;
 	let mut reports = Vec::new();
+	let mut module_contexts = BTreeMap::<PathBuf, usize>::new();
+	for source_module in &project.source_modules {
+		*module_contexts
+			.entry(source_module.path.clone())
+			.or_default() += 1;
+	}
 
 	for source_module in &project.source_modules {
 		let source = read_source(&source_module.path)?;
@@ -90,6 +97,14 @@ pub fn run(args: MigrateServerFnsArgs) -> Result<()> {
 		}
 
 		if outcome.rewritten.is_some() {
+			if args.write && module_contexts[&source_module.path] > 1 {
+				reports.push(Report {
+					path: source_module.relative_path.clone(),
+					line: 0,
+					kind: ReportKind::IncompatibleAppOwnership,
+				});
+				continue;
+			}
 			if args.write {
 				let Some(rewritten_source) = rewriter::apply_text_edits(&source, &outcome.edits)
 				else {

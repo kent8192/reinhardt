@@ -33,6 +33,7 @@ where
 			if descriptor.editable
 				&& P::allows(descriptor.name)
 				&& !descriptor.nullable
+				&& !descriptor.has_default
 				&& matches!(descriptor.kind, ModelFormFieldKind::Boolean)
 			{
 				values.insert(descriptor.name, serde_json::Value::Bool(false));

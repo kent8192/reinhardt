@@ -2349,6 +2349,7 @@ fn generate_model_form_support(
 		.iter()
 		.find(|field| {
 			if is_model_form_editable(field)
+				|| field.config.skip
 				|| is_relationship_field_type(&field.ty)
 				|| model_form_declared_default(field).is_some()
 				|| is_auto_generated_field(field)

@@ -151,7 +151,11 @@ impl<P: FormModel, C: FormModel> InlineFormSet<P, C> {
 			match child_form.build_instance() {
 				Ok(_) => {}
 				Err(ModelFormError::MissingModelField { field }) if field == self.fk_field => {
-					// The trusted parent key is assigned after the create parent has been saved.
+					// The trusted parent key is assigned after the create parent has been saved,
+					// but every other required child field must still be validated first.
+					if !child_form.is_valid_with_deferred_required_field(&self.fk_field) {
+						all_valid = false;
+					}
 				}
 				Err(_) => {
 					child_form.is_valid();

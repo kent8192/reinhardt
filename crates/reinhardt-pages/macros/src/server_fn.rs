@@ -1360,6 +1360,11 @@ fn generate_server_handler(
 	// option enables the payload-specific fallback without changing ordinary
 	// JSON endpoints that happen to use the same parameter name.
 	let pages_crate_for_model_form = get_reinhardt_pages_crate();
+	if info.options.model_form && codec != "json" {
+		return quote! {
+			compile_error!("server_fn(model_form = true) requires codec = \"json\" because native model-form controls use the JSON payload fallback");
+		};
+	}
 	let native_model_form_fallback = if info.options.model_form {
 		match regular_params.as_slice() {
 			[parameter] if matches!(parameter.pat.as_ref(), syn::Pat::Ident(ident) if ident.ident == "payload") =>

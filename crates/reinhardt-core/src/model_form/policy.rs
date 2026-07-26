@@ -88,8 +88,13 @@ where
 			continue;
 		};
 
-		if text.is_empty() && descriptor.nullable {
+		let remove_empty = text.is_empty() && !descriptor.required && !descriptor.nullable;
+		if text.is_empty() && !descriptor.required && descriptor.nullable {
 			*control = serde_json::Value::Null;
+			continue;
+		}
+		if remove_empty {
+			values.remove(descriptor.name);
 			continue;
 		}
 		let normalized = match descriptor.kind {
@@ -108,6 +113,13 @@ where
 				.and_then(serde_json::Number::from_f64)
 				.map(serde_json::Value::Number),
 			ModelFormFieldKind::Json => Some(serde_json::from_str(text)?),
+			ModelFormFieldKind::DateTime
+				if text.split_once('T').is_some_and(|(_, time)| {
+					!time.ends_with('Z') && !time.contains(['+', '-'])
+				}) =>
+			{
+				Some(serde_json::Value::String(format!("{text}Z")))
+			}
 			_ => None,
 		};
 		if let Some(normalized) = normalized {

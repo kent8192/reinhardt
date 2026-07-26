@@ -307,10 +307,9 @@ where
 		field_name: &str,
 		value: Value,
 	) -> Result<(), ModelFormError> {
-		let Some(field_name) = T::Schema::fields()
+		let Some(descriptor) = T::Schema::fields()
 			.iter()
 			.find(|descriptor| descriptor.name == field_name)
-			.map(|descriptor| descriptor.name)
 		else {
 			return Err(ModelFormError::FieldValidation {
 				errors: HashMap::from([(
@@ -319,6 +318,7 @@ where
 				)]),
 			});
 		};
+		let field_name = descriptor.name;
 		let form_value = value.clone();
 		self.data.set_json(field_name, value).map_err(|error| {
 			let message = error.to_string();
@@ -333,6 +333,15 @@ where
 			}
 		})?;
 		let mut bound_values = self.form.cleaned_data().clone();
+		if self
+			.form
+			.fields()
+			.iter()
+			.all(|field| field.name() != field_name)
+		{
+			self.form
+				.add_field(field_factory::create_form_field(descriptor));
+		}
 		bound_values.insert(field_name.to_owned(), form_value);
 		self.form.bind(bound_values);
 		self.validated_candidate = None;
@@ -360,6 +369,23 @@ where
 		self.instance.is_some()
 			|| !self.supplied_fields.is_empty()
 			|| !self.data.forbidden_fields().is_empty()
+	}
+
+	pub(crate) fn is_valid_with_deferred_required_field(&mut self, deferred_field: &str) -> bool {
+		let mut valid = self.form.is_valid();
+		for descriptor in T::Schema::fields() {
+			if descriptor.name == deferred_field
+				|| !descriptor.editable
+				|| !descriptor.required
+				|| self.supplied_fields.contains(&descriptor.name)
+			{
+				continue;
+			}
+			self.form
+				.add_error(descriptor.name, "This field is required.");
+			valid = false;
+		}
+		valid
 	}
 }
 

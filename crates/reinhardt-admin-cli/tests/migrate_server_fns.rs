@@ -952,7 +952,8 @@ fn nonstandard_target_root_resolves_child_module_from_target_parent() {
 			("src/lib.rs", ""),
 			(
 				"tests/social.rs",
-				r#"use reinhardt::ServerRouter;
+				r#"use reinhardt::pages::server_fn::ServerFnRouterExt;
+use reinhardt::ServerRouter;
 
 #[app_config(name = "social", label = "social")]
 pub struct SocialConfig;
@@ -982,7 +983,8 @@ pub async fn status() {}
 	assert_eq!(stdout(&output), "rewrote: tests/social.rs\n");
 	assert_eq!(
 		fs::read_to_string(source).expect("read rewritten target"),
-		r#"use reinhardt::ServerRouter;
+		r#"use reinhardt::pages::server_fn::ServerFnRouterExt;
+use reinhardt::ServerRouter;
 
 #[app_config(name = "social", label = "social")]
 pub struct SocialConfig;
@@ -1007,7 +1009,8 @@ fn path_module_named_lib_uses_non_root_child_directory_rules() {
 			("src/lib.rs", ""),
 			(
 				"tests/social.rs",
-				r#"use reinhardt::ServerRouter;
+				r#"use reinhardt::pages::server_fn::ServerFnRouterExt;
+use reinhardt::ServerRouter;
 
 #[app_config(name = "social", label = "social")]
 pub struct SocialConfig;
@@ -1038,7 +1041,8 @@ pub async fn status() {}
 	assert_eq!(stdout(&output), "rewrote: tests/social.rs\n");
 	assert_eq!(
 		fs::read_to_string(source).expect("read rewritten target"),
-		r#"use reinhardt::ServerRouter;
+		r#"use reinhardt::pages::server_fn::ServerFnRouterExt;
+use reinhardt::ServerRouter;
 
 #[app_config(name = "social", label = "social")]
 pub struct SocialConfig;
@@ -1126,7 +1130,8 @@ fn absolute_marker_path_is_left_unresolved() {
 		"[lib]\npath = \"src/lib.rs\"\n",
 		&[(
 			"src/lib.rs",
-			r#"use reinhardt::{app_config, server_fn, ServerRouter};
+			r#"use reinhardt::pages::server_fn::ServerFnRouterExt;
+use reinhardt::{app_config, server_fn, ServerRouter};
 
 #[app_config(name = "root", label = "root")]
 pub struct RootConfig;

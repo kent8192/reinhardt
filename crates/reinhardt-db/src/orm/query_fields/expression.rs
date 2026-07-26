@@ -4,8 +4,6 @@ use crate::orm::Model;
 use reinhardt_query::prelude::{Alias, ColumnRef, ExprTrait, IntoIden, Order, SimpleExpr};
 use std::marker::PhantomData;
 
-pub(crate) const TYPED_MODEL_ROOT_ALIAS: &str = "__reinhardt_typed_model_root__";
-
 pub(crate) fn qualify_model_root(expr: &SimpleExpr, root_alias: &str) -> SimpleExpr {
 	let mut qualified = expr.clone();
 	qualify_model_root_in_place(&mut qualified, root_alias);
@@ -13,13 +11,16 @@ pub(crate) fn qualify_model_root(expr: &SimpleExpr, root_alias: &str) -> SimpleE
 }
 
 fn qualify_model_root_in_place(expr: &mut SimpleExpr, root_alias: &str) {
+	if let SimpleExpr::Column(ColumnRef::Column(column)) = expr {
+		let column = column.clone();
+		*expr = SimpleExpr::Column(ColumnRef::TableColumn(
+			Alias::new(root_alias).into_iden(),
+			column,
+		));
+		return;
+	}
+
 	match expr {
-		SimpleExpr::Column(ColumnRef::TableColumn(table, _))
-		| SimpleExpr::TableColumn(table, _)
-			if table.to_string() == TYPED_MODEL_ROOT_ALIAS =>
-		{
-			*table = Alias::new(root_alias).into_iden();
-		}
 		SimpleExpr::Unary(_, expression)
 		| SimpleExpr::AsEnum(_, expression)
 		| SimpleExpr::ExprAlias(expression, _)
@@ -31,9 +32,7 @@ fn qualify_model_root_in_place(expr: &mut SimpleExpr, root_alias: &str) {
 			qualify_model_root_in_place(left, root_alias);
 			qualify_model_root_in_place(right, root_alias);
 		}
-		SimpleExpr::FunctionCall(_, expressions)
-		| SimpleExpr::Tuple(expressions)
-		| SimpleExpr::CustomWithExpr(_, expressions) => {
+		SimpleExpr::FunctionCall(_, expressions) | SimpleExpr::Tuple(expressions) => {
 			for expression in expressions {
 				qualify_model_root_in_place(expression, root_alias);
 			}

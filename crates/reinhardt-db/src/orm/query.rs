@@ -6845,6 +6845,10 @@ where
 			Value::Bytes(Some(b)) => String::from_utf8_lossy(b).to_string(),
 			Value::ChronoDateTimeUtc(Some(dt)) => dt.to_rfc3339(),
 			Value::Uuid(Some(uuid)) => uuid.to_string(),
+			Value::Vector(Some(values)) => {
+				Self::database_value_to_string(&DatabaseValue::Vector(values.as_ref().clone()))
+			}
+			Value::Vector(None) => String::new(),
 			_ => String::new(),
 		}
 	}
@@ -8802,6 +8806,99 @@ mod tests {
 					crate::orm::QueryValue::Float(0.25),
 				],
 			)]
+		);
+	}
+
+	#[cfg(feature = "pgvector")]
+	#[test]
+	fn typed_vector_update_fields_sql_reports_assignment_and_predicate_params() {
+		let field = Field::<TestUser, crate::orm::Vector<3>>::new(vec!["embedding"]);
+		let queryset = QuerySet::<TestUser>::new().filter(
+			field
+				.cosine_distance(typed_vector_target(&[1.0, 2.0, 3.0]))
+				.lt(0.25),
+		);
+		let assignment_field =
+			crate::orm::expressions::FieldRef::<TestUser, crate::orm::Vector<3>>::new("embedding");
+
+		let (sql, params) = queryset
+			.update_fields_sql([(assignment_field, typed_vector_target(&[4.0, 5.0, 6.0]))])
+			.expect("typed vector update fields SQL should build");
+
+		assert_eq!(
+			sql,
+			r#"UPDATE "test_users" SET "embedding" = $1 WHERE "test_users"."embedding" <=> $2 < $3"#
+		);
+		assert_eq!(params, vec!["[4.0,5.0,6.0]", "[1.0,2.0,3.0]", "0.25"]);
+	}
+
+	#[cfg(feature = "pgvector")]
+	#[test]
+	fn typed_vector_update_sql_reports_assignment_and_predicate_params() {
+		let field = Field::<TestUser, crate::orm::Vector<3>>::new(vec!["embedding"]);
+		let queryset = QuerySet::<TestUser>::new().filter(
+			field
+				.cosine_distance(typed_vector_target(&[1.0, 2.0, 3.0]))
+				.lt(0.25),
+		);
+		let updates = HashMap::from([(
+			"embedding".to_owned(),
+			UpdateValue::Typed(Ok(DatabaseValue::Vector(vec![4.0, 5.0, 6.0]))),
+		)]);
+
+		let (sql, params) = queryset
+			.update_sql(&updates)
+			.expect("typed vector update SQL should build");
+
+		assert_eq!(
+			sql,
+			r#"UPDATE "test_users" SET "embedding" = $1 WHERE "test_users"."embedding" <=> $2 < $3"#
+		);
+		assert_eq!(params, vec!["[4.0,5.0,6.0]", "[1.0,2.0,3.0]", "0.25"]);
+	}
+
+	#[cfg(feature = "pgvector")]
+	#[test]
+	fn typed_vector_delete_sql_reports_predicate_params() {
+		let field = Field::<TestUser, crate::orm::Vector<3>>::new(vec!["embedding"]);
+		let queryset = QuerySet::<TestUser>::new().filter(
+			field
+				.cosine_distance(typed_vector_target(&[1.0, 2.0, 3.0]))
+				.lt(0.25),
+		);
+
+		let (sql, params) = queryset
+			.delete_sql()
+			.expect("typed vector delete SQL should build");
+
+		assert_eq!(
+			sql,
+			r#"DELETE FROM "test_users" WHERE "test_users"."embedding" <=> $1 < $2"#
+		);
+		assert_eq!(params, vec!["[1.0,2.0,3.0]", "0.25"]);
+	}
+
+	#[cfg(feature = "pgvector")]
+	#[test]
+	fn typed_vector_explicit_former_root_marker_alias_is_preserved() {
+		let field = Field::<TestUser, crate::orm::Vector<3>>::new(vec!["embedding"])
+			.with_alias("__reinhardt_typed_model_root__");
+		let queryset = QuerySet::<TestUser>::new()
+			.from_as("root_users")
+			.select_expr(
+				"distance",
+				field.l2_distance(typed_vector_target(&[1.0, 2.0, 3.0])),
+			);
+
+		let (sql, params) = typed_vector_sql_and_params(&queryset);
+
+		assert_eq!(
+			sql,
+			r#"SELECT *, "__reinhardt_typed_model_root__"."embedding" <-> $1 AS "distance" FROM "test_users" AS "root_users""#
+		);
+		assert_eq!(
+			params,
+			vec![crate::orm::QueryValue::Vector(vec![1.0, 2.0, 3.0])]
 		);
 	}
 

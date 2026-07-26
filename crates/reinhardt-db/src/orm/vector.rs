@@ -57,7 +57,7 @@ impl<const N: usize> Vector<N> {
 	}
 
 	fn validate(values: &[f32]) -> Result<(), VectorError> {
-		if N > MAX_DENSE_VECTOR_DIMENSIONS {
+		if N == 0 || N > MAX_DENSE_VECTOR_DIMENSIONS {
 			return Err(VectorError::UnsupportedDimensions {
 				dimensions: N,
 				max: MAX_DENSE_VECTOR_DIMENSIONS,
@@ -151,6 +151,17 @@ mod tests {
 			Vector::<2001>::try_from(vec![0.0; 2001]),
 			Err(VectorError::UnsupportedDimensions {
 				dimensions: 2001,
+				max: 2000
+			})
+		));
+	}
+
+	#[test]
+	fn rejects_a_vector_with_zero_dimensions() {
+		assert!(matches!(
+			Vector::<0>::try_from(Vec::new()),
+			Err(VectorError::UnsupportedDimensions {
+				dimensions: 0,
 				max: 2000
 			})
 		));

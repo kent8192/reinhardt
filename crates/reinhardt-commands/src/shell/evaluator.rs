@@ -975,14 +975,6 @@ fn is_panic_output(stderr: &str) -> bool {
 	})
 }
 
-fn combine_diagnostic(message: &str, stderr: &str) -> String {
-	if stderr.is_empty() {
-		message.to_string()
-	} else {
-		format!("{message}\n{stderr}")
-	}
-}
-
 fn nonempty_diagnostic(stderr: &str, fallback: &str) -> String {
 	if stderr.trim().is_empty() {
 		fallback.to_string()
@@ -996,9 +988,7 @@ fn classify_boundary_error(error: Error, stderr: &str) -> EvaluationFailure {
 		EvaluationFailure::ProcessExited(message) if is_panic_output(stderr) => {
 			EvaluationFailure::Panic(message)
 		}
-		EvaluationFailure::ProcessExited(message) => {
-			EvaluationFailure::ProcessExited(combine_diagnostic(&message, stderr))
-		}
+		EvaluationFailure::ProcessExited(message) => EvaluationFailure::ProcessExited(message),
 		other => other,
 	}
 }

@@ -135,6 +135,26 @@ Provides compile-time code generation for common patterns.
     }
     ```
 
+  A raw `Request` can be combined with typed extractors when a handler needs
+  direct access to headers or other request metadata:
+
+  ```rust
+  use reinhardt::extractors::Path;
+  use reinhardt::http::{Request, Response, ViewResult};
+  use reinhardt::views::get;
+  use uuid::Uuid;
+
+  #[get("/books/import/{job_id}")]
+  async fn get_job(
+      req: Request,
+      Path(job_id): Path<Uuid>,
+  ) -> ViewResult<Response> {
+      let cookie = req.get_header("cookie");
+      // Use `cookie` and `job_id` to authorize and load the import job.
+      Ok(Response::ok())
+  }
+  ```
+
   Injected parameters may use mutable bindings and destructuring patterns:
 
   ```rust,ignore

@@ -108,6 +108,19 @@ fn detect_extractors(inputs: &Punctuated<FnArg, Token![,]>) -> Vec<ExtractorInfo
 	extractors
 }
 
+/// Check whether a type is a raw HTTP `Request`.
+fn is_request_type(ty: &Type) -> bool {
+	let Type::Path(type_path) = ty else {
+		return false;
+	};
+
+	type_path
+		.path
+		.segments
+		.last()
+		.is_some_and(|segment| segment.ident == "Request" && segment.arguments.is_none())
+}
+
 /// Extract request body information from function parameters
 ///
 /// Detects body-consuming extractors (Json<T>, Form<T>, Body<T>) and extracts:
@@ -539,6 +552,8 @@ fn generate_wrapper_with_both(
 					.expect("each injected argument must have detected metadata")
 					.resolved_ident;
 				Some(quote! { #ident })
+			} else if is_request_type(&pat_type.ty) {
+				Some(quote! { req })
 			} else {
 				let pat = extractor_args
 					.next()
@@ -1377,6 +1392,26 @@ mod url_resolver_tests {
 		);
 		let generated = wrapper.to_string();
 		assert!(generated.contains("handler_original (Json (first) , __reinhardt_injected_0 , Query (last) , __reinhardt_injected_1)"), "{generated}");
+	}
+
+	#[test]
+	fn route_call_passes_raw_request_with_extractors_in_original_order() {
+		let input: ItemFn = syn::parse_quote! {
+			async fn handler(req: reinhardt_http::Request, Path(id): Path<String>, Json(body): Json<Payload>) -> String { String::new() }
+		};
+		let extractors = detect_extractors(&input.sig.inputs);
+		let inject_params = detect_inject_params(&input.sig.inputs);
+		let (_, wrapper) = generate_wrapper_with_both(
+			&input,
+			&extractors,
+			&inject_params,
+			&RouteOptions::default(),
+		);
+		let generated = wrapper.to_string();
+		assert!(
+			generated.contains("handler_original (req , Path (id) , Json (body))"),
+			"{generated}"
+		);
 	}
 
 	#[test]

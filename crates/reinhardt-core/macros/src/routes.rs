@@ -108,6 +108,19 @@ fn detect_extractors(inputs: &Punctuated<FnArg, Token![,]>) -> Vec<ExtractorInfo
 	extractors
 }
 
+/// Check whether a type is a raw HTTP `Request`.
+fn is_request_type(ty: &Type) -> bool {
+	let Type::Path(type_path) = ty else {
+		return false;
+	};
+
+	type_path
+		.path
+		.segments
+		.last()
+		.is_some_and(|segment| segment.ident == "Request" && segment.arguments.is_none())
+}
+
 /// Extract request body information from function parameters
 ///
 /// Detects body-consuming extractors (Json<T>, Form<T>, Body<T>) and extracts:
@@ -431,9 +444,6 @@ fn generate_wrapper_with_both(
 		})
 		.collect();
 
-	// Build call arguments for inject params (shared between both paths)
-	let inject_args: Vec<_> = inject_params.iter().map(|param| &param.pat).collect();
-
 	// Generate extractor calls and validation differently based on pre_validate.
 	// When pre_validate = true and a destructuring pattern like `Json(body)` is used,
 	// extracting directly into the pattern would consume the wrapper, making it
@@ -522,6 +532,55 @@ fn generate_wrapper_with_both(
 		(calls, quote! {}, quote! {}, args)
 	};
 
+	// A raw Request is forwarded without extraction and must retain its position
+	// relative to typed extractors and injected parameters.
+	let has_request_param = original_fn
+		.sig
+		.inputs
+		.iter()
+		.any(|arg| matches!(arg, FnArg::Typed(pat_type) if is_request_type(&pat_type.ty)));
+	let ordered_call_args = if has_request_param {
+		let mut inject_args = inject_params.iter();
+		let mut extractor_args = extractor_args.iter();
+		Some(
+			original_fn
+				.sig
+				.inputs
+				.iter()
+				.filter_map(|arg| {
+					let FnArg::Typed(pat_type) = arg else {
+						return None;
+					};
+					if pat_type.attrs.iter().any(is_inject_attr) {
+						let pat = &inject_args
+							.next()
+							.expect("each injected argument must have detected metadata")
+							.pat;
+						Some(quote! { #pat })
+					} else if is_request_type(&pat_type.ty) {
+						Some(quote! { req })
+					} else {
+						let pat = extractor_args
+							.next()
+							.expect("each route argument must have extractor metadata");
+						Some(quote! { #pat })
+					}
+				})
+				.collect::<Vec<_>>(),
+		)
+	} else {
+		None
+	};
+
+	// Preserve the established extractor-then-injection order when no raw
+	// Request is present.
+	let inject_args: Vec<_> = inject_params.iter().map(|param| &param.pat).collect();
+	let handler_call = if let Some(call_args) = ordered_call_args {
+		quote! { #original_fn_name(#(#call_args),*).await }
+	} else {
+		quote! { #original_fn_name(#(#extractor_args,)* #(#inject_args),*).await }
+	};
+
 	// Generate the handler body (injection + extraction + call)
 	let handler_body = quote! {
 		// Resolve injected dependencies
@@ -537,7 +596,7 @@ fn generate_wrapper_with_both(
 		#destructure_calls
 
 		// Call the original function
-		#original_fn_name(#(#extractor_args,)* #(#inject_args),*).await
+		#handler_call
 	};
 
 	// Wrap handler body in RESOLVE_CTX.scope() when DI is active
@@ -1334,6 +1393,26 @@ mod url_resolver_tests {
 			.collect();
 
 		assert_eq!(names, vec!["CookieStruct", "Query"]);
+	}
+
+	#[test]
+	fn route_call_passes_raw_request_with_extractors_in_original_order() {
+		let input: ItemFn = syn::parse_quote! {
+			async fn handler(req: reinhardt_http::Request, Path(id): Path<String>, Json(body): Json<Payload>) -> String { String::new() }
+		};
+		let extractors = detect_extractors(&input.sig.inputs);
+		let inject_params = detect_inject_params(&input.sig.inputs);
+		let (_, wrapper) = generate_wrapper_with_both(
+			&input,
+			&extractors,
+			&inject_params,
+			&RouteOptions::default(),
+		);
+		let generated = wrapper.to_string();
+		assert!(
+			generated.contains("handler_original (req , Path (id) , Json (body))"),
+			"{generated}"
+		);
 	}
 
 	#[test]

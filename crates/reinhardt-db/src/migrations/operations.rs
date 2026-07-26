@@ -2932,6 +2932,12 @@ impl Operation {
 
 	/// Generates forward SQL after validating backend-specific field support.
 	pub fn try_to_sql(&self, dialect: &SqlDialect) -> super::Result<String> {
+		self.validate_for_dialect(dialect)?;
+		Ok(self.to_sql(dialect))
+	}
+
+	/// Validates every field definition rendered by this operation.
+	pub fn validate_for_dialect(&self, dialect: &SqlDialect) -> super::Result<()> {
 		match self {
 			Self::CreateTable { columns, .. } => {
 				for column in columns {
@@ -2946,9 +2952,14 @@ impl Operation {
 					.type_definition
 					.try_to_sql_for_dialect(dialect)?;
 			}
+			Self::CreateInheritedTable { columns, .. } => {
+				for column in columns {
+					column.type_definition.try_to_sql_for_dialect(dialect)?;
+				}
+			}
 			_ => {}
 		}
-		Ok(self.to_sql(dialect))
+		Ok(())
 	}
 
 	/// Generate `SetAutoIncrementValue` SQL for each dialect
@@ -4792,6 +4803,24 @@ impl SqliteTableRecreation {
 
 	/// Generate the SQL statements for table recreation and dependent object restoration.
 	pub fn to_sql_statements(&self) -> Vec<String> {
+		self.try_to_sql_statements().unwrap_or_else(|error| {
+			panic!(
+				"SQLite recreation requires checked SQL rendering; use try_to_sql_statements: {error}"
+			)
+		})
+	}
+
+	/// Generates table-recreation SQL after validating every replacement column.
+	pub fn try_to_sql_statements(&self) -> super::Result<Vec<String>> {
+		for column in &self.new_columns {
+			column
+				.type_definition
+				.try_to_sql_for_dialect(&SqlDialect::Sqlite)?;
+		}
+		Ok(self.render_sql_statements())
+	}
+
+	fn render_sql_statements(&self) -> Vec<String> {
 		let temp_table = format!("{}_new", self.table_name);
 		let quote =
 			|identifier: &str| Operation::quote_dialect_identifier(identifier, &SqlDialect::Sqlite);
@@ -5222,44 +5251,90 @@ impl OperationStatement {
 	where
 		E: sqlx::Executor<'c, Database = sqlx::Postgres>,
 	{
-		use crate::backends::sql_build_helpers;
 		use crate::backends::types::DatabaseType;
-		let db_type = DatabaseType::Postgres;
+		let sql = self
+			.try_to_sql_string(DatabaseType::Postgres)
+			.map_err(|error| sqlx::Error::Protocol(error.to_string()))?;
+		sqlx::query(&sql).execute(executor).await?;
+		Ok(())
+	}
+
+	/// Converts to SQL while preserving checked backend feature errors.
+	pub fn try_to_sql_string(
+		&self,
+		db_type: crate::backends::types::DatabaseType,
+	) -> super::Result<String> {
+		use crate::backends::sql_build_helpers;
+
+		let map_query_error = |error: reinhardt_query::QueryBuildError| match error {
+			reinhardt_query::QueryBuildError::UnsupportedBackendFeature { feature, .. } => {
+				super::MigrationError::UnsupportedBackendFeature {
+					feature,
+					backend: match db_type {
+						crate::backends::types::DatabaseType::Postgres => "postgres",
+						crate::backends::types::DatabaseType::Mysql => "mysql",
+						crate::backends::types::DatabaseType::Sqlite => "sqlite",
+					},
+				}
+			}
+			_ => super::MigrationError::InvalidMigration(error.to_string()),
+		};
+
 		match self {
-			OperationStatement::TableCreate(stmt) => {
-				let sql = sql_build_helpers::build_create_table_sql(db_type, stmt);
-				sqlx::query(&sql).execute(executor).await?;
-			}
-			OperationStatement::TableDrop(stmt) => {
-				let sql = sql_build_helpers::build_drop_table_sql(db_type, stmt);
-				sqlx::query(&sql).execute(executor).await?;
-			}
-			OperationStatement::TableAlter(stmt) => {
-				let sql = sql_build_helpers::build_alter_table_sql(db_type, stmt);
-				sqlx::query(&sql).execute(executor).await?;
-			}
-			OperationStatement::TableRename(stmt) => {
-				let sql = sql_build_helpers::build_alter_table_sql(db_type, stmt);
-				sqlx::query(&sql).execute(executor).await?;
-			}
-			OperationStatement::IndexCreate(stmt) => {
-				let sql = sql_build_helpers::build_create_index_sql(db_type, stmt);
-				sqlx::query(&sql).execute(executor).await?;
-			}
-			OperationStatement::IndexDrop(stmt) => {
-				let sql = sql_build_helpers::build_drop_index_sql(db_type, stmt);
-				sqlx::query(&sql).execute(executor).await?;
-			}
-			OperationStatement::RawSql(sql) => {
-				// Already sanitized with pg_escape::quote_identifier
-				sqlx::query(sql).execute(executor).await?;
-			}
-			OperationStatement::DialectOperation(operation) => {
-				let sql = operation.to_sql(&SqlDialect::Postgres);
-				sqlx::query(&sql).execute(executor).await?;
+			Self::TableCreate(stmt) => match db_type {
+				crate::backends::types::DatabaseType::Postgres => PostgresQueryBuilder
+					.build_create_table_checked(stmt)
+					.map(|(sql, _)| sql)
+					.map_err(map_query_error),
+				crate::backends::types::DatabaseType::Mysql => MySqlQueryBuilder
+					.build_create_table_checked(stmt)
+					.map(|(sql, _)| sql)
+					.map_err(map_query_error),
+				crate::backends::types::DatabaseType::Sqlite => SqliteQueryBuilder
+					.build_create_table_checked(stmt)
+					.map(|(sql, _)| sql)
+					.map_err(map_query_error),
+			},
+			Self::TableDrop(stmt) => Ok(sql_build_helpers::build_drop_table_sql(db_type, stmt)),
+			Self::TableAlter(stmt) | Self::TableRename(stmt) => match db_type {
+				crate::backends::types::DatabaseType::Postgres => PostgresQueryBuilder
+					.build_alter_table_checked(stmt)
+					.map(|(sql, _)| sql)
+					.map_err(map_query_error),
+				crate::backends::types::DatabaseType::Mysql => MySqlQueryBuilder
+					.build_alter_table_checked(stmt)
+					.map(|(sql, _)| sql)
+					.map_err(map_query_error),
+				crate::backends::types::DatabaseType::Sqlite => SqliteQueryBuilder
+					.build_alter_table_checked(stmt)
+					.map(|(sql, _)| sql)
+					.map_err(map_query_error),
+			},
+			Self::IndexCreate(stmt) => match db_type {
+				crate::backends::types::DatabaseType::Postgres => PostgresQueryBuilder
+					.build_create_index_checked(stmt)
+					.map(|(sql, _)| sql)
+					.map_err(map_query_error),
+				crate::backends::types::DatabaseType::Mysql => MySqlQueryBuilder
+					.build_create_index_checked(stmt)
+					.map(|(sql, _)| sql)
+					.map_err(map_query_error),
+				crate::backends::types::DatabaseType::Sqlite => SqliteQueryBuilder
+					.build_create_index_checked(stmt)
+					.map(|(sql, _)| sql)
+					.map_err(map_query_error),
+			},
+			Self::IndexDrop(stmt) => Ok(sql_build_helpers::build_drop_index_sql(db_type, stmt)),
+			Self::RawSql(sql) => Ok(sql.clone()),
+			Self::DialectOperation(operation) => {
+				let dialect = match db_type {
+					crate::backends::types::DatabaseType::Postgres => SqlDialect::Postgres,
+					crate::backends::types::DatabaseType::Mysql => SqlDialect::Mysql,
+					crate::backends::types::DatabaseType::Sqlite => SqlDialect::Sqlite,
+				};
+				operation.try_to_sql(&dialect)
 			}
 		}
-		Ok(())
 	}
 
 	/// Convert to SQL string for logging/debugging
@@ -5268,41 +5343,21 @@ impl OperationStatement {
 	///
 	/// * `db_type` - Database type to generate SQL for (PostgreSQL, MySQL, SQLite)
 	pub fn to_sql_string(&self, db_type: crate::backends::types::DatabaseType) -> String {
-		use crate::backends::sql_build_helpers;
-
-		match self {
-			OperationStatement::TableCreate(stmt) => {
-				sql_build_helpers::build_create_table_sql(db_type, stmt)
-			}
-			OperationStatement::TableDrop(stmt) => {
-				sql_build_helpers::build_drop_table_sql(db_type, stmt)
-			}
-			OperationStatement::TableAlter(stmt) => {
-				sql_build_helpers::build_alter_table_sql(db_type, stmt)
-			}
-			OperationStatement::TableRename(stmt) => {
-				sql_build_helpers::build_alter_table_sql(db_type, stmt)
-			}
-			OperationStatement::IndexCreate(stmt) => {
-				sql_build_helpers::build_create_index_sql(db_type, stmt)
-			}
-			OperationStatement::IndexDrop(stmt) => {
-				sql_build_helpers::build_drop_index_sql(db_type, stmt)
-			}
-			OperationStatement::RawSql(sql) => sql.clone(),
-			OperationStatement::DialectOperation(operation) => {
-				let dialect = match db_type {
-					crate::backends::types::DatabaseType::Postgres => SqlDialect::Postgres,
-					crate::backends::types::DatabaseType::Mysql => SqlDialect::Mysql,
-					crate::backends::types::DatabaseType::Sqlite => SqlDialect::Sqlite,
-				};
-				operation.to_sql(&dialect)
-			}
-		}
+		self.try_to_sql_string(db_type).unwrap_or_else(|error| {
+			panic!(
+				"operation statement requires checked SQL rendering; use try_to_sql_string: {error}"
+			)
+		})
 	}
 }
 
 impl Operation {
+	/// Converts to a query statement after validating the selected dialect.
+	pub fn try_to_statement(&self, dialect: &SqlDialect) -> super::Result<OperationStatement> {
+		self.validate_for_dialect(dialect)?;
+		Ok(self.to_statement())
+	}
+
 	/// Convert Operation to reinhardt-query statement or sanitized raw SQL
 	pub fn to_statement(&self) -> OperationStatement {
 		match self {
@@ -5901,7 +5956,19 @@ impl Operation {
 			FieldType::TsTzRange => col_def.custom(Alias::new("TSTZRANGE")),
 			FieldType::TsVector => col_def.custom(Alias::new("TSVECTOR")),
 			FieldType::TsQuery => col_def.custom(Alias::new("TSQUERY")),
-			FieldType::Vector { dimensions } => col_def.vector(*dimensions as u32),
+			FieldType::Vector { dimensions } => {
+				if !(1..=2_000).contains(dimensions) {
+					panic!(
+						"vector fields require checked statement construction; use try_to_statement"
+					);
+				}
+				let dimensions = u32::try_from(*dimensions).unwrap_or_else(|_| {
+					panic!(
+						"vector fields require checked statement construction; use try_to_statement"
+					)
+				});
+				col_def.vector(dimensions)
+			}
 			FieldType::Custom(custom_type) => col_def.custom(Alias::new(custom_type)),
 		}
 	}
@@ -7659,6 +7726,151 @@ mod tests {
 				.or_else(|| payload.downcast_ref::<&str>().copied())
 				.unwrap();
 			assert!(message.contains("try_to_sql"));
+		}
+	}
+
+	#[test]
+	fn checked_inherited_table_vector_ddl_rejects_unsupported_backends() {
+		let operation = Operation::CreateInheritedTable {
+			name: "child_documents".to_owned(),
+			columns: vec![ColumnDefinition::new(
+				"embedding",
+				FieldType::Vector { dimensions: 3 },
+			)],
+			base_table: "documents".to_owned(),
+			join_column: "document_id".to_owned(),
+		};
+
+		for (dialect, backend) in [
+			(SqlDialect::Mysql, "mysql"),
+			(SqlDialect::Sqlite, "sqlite"),
+			(SqlDialect::Cockroachdb, "cockroachdb"),
+		] {
+			assert!(matches!(
+				operation.try_to_sql(&dialect),
+				Err(crate::migrations::MigrationError::UnsupportedBackendFeature {
+					feature: "vector field",
+					backend: actual_backend,
+				}) if actual_backend == backend
+			));
+		}
+	}
+
+	#[test]
+	fn checked_vector_statement_rendering_rejects_unsupported_backends() {
+		let operation = Operation::CreateTable {
+			name: "documents".to_owned(),
+			columns: vec![ColumnDefinition::new(
+				"embedding",
+				FieldType::Vector { dimensions: 3 },
+			)],
+			constraints: vec![],
+			without_rowid: None,
+			partition: None,
+			interleave_in_parent: None,
+		};
+		let statement = operation.try_to_statement(&SqlDialect::Postgres).unwrap();
+
+		for (database_type, backend) in [
+			(crate::backends::types::DatabaseType::Mysql, "mysql"),
+			(crate::backends::types::DatabaseType::Sqlite, "sqlite"),
+		] {
+			assert!(matches!(
+				statement.try_to_sql_string(database_type),
+				Err(crate::migrations::MigrationError::UnsupportedBackendFeature {
+					feature: "pgvector column types",
+					backend: actual_backend,
+				}) if actual_backend == backend
+			));
+		}
+	}
+
+	#[test]
+	fn legacy_vector_statement_rendering_fails_fast_on_unsupported_backends() {
+		let operation = Operation::CreateTable {
+			name: "documents".to_owned(),
+			columns: vec![ColumnDefinition::new(
+				"embedding",
+				FieldType::Vector { dimensions: 3 },
+			)],
+			constraints: vec![],
+			without_rowid: None,
+			partition: None,
+			interleave_in_parent: None,
+		};
+		let statement = operation.to_statement();
+
+		for database_type in [
+			crate::backends::types::DatabaseType::Mysql,
+			crate::backends::types::DatabaseType::Sqlite,
+		] {
+			let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+				statement.to_sql_string(database_type)
+			}));
+
+			let payload =
+				result.expect_err("legacy statement rendering must not return vector SQL");
+			let message = payload
+				.downcast_ref::<String>()
+				.map(String::as_str)
+				.or_else(|| payload.downcast_ref::<&str>().copied())
+				.unwrap();
+			assert!(message.contains("try_to_sql_string"));
+		}
+	}
+
+	#[test]
+	fn checked_vector_statement_construction_rejects_invalid_dimensions() {
+		for dimensions in [0, 2_001, usize::MAX] {
+			let operation = Operation::CreateTable {
+				name: "documents".to_owned(),
+				columns: vec![ColumnDefinition::new(
+					"embedding",
+					FieldType::Vector { dimensions },
+				)],
+				constraints: vec![],
+				without_rowid: None,
+				partition: None,
+				interleave_in_parent: None,
+			};
+
+			assert!(matches!(
+				operation.try_to_statement(&SqlDialect::Postgres),
+				Err(crate::migrations::MigrationError::InvalidMigration(message))
+					if message == format!(
+						"vector dimensions must be between 1 and 2000, got {dimensions}"
+					)
+			));
+		}
+	}
+
+	#[test]
+	fn legacy_vector_statement_construction_rejects_invalid_dimensions_before_conversion() {
+		for dimensions in [0, 2_001, usize::MAX] {
+			let operation = Operation::CreateTable {
+				name: "documents".to_owned(),
+				columns: vec![ColumnDefinition::new(
+					"embedding",
+					FieldType::Vector { dimensions },
+				)],
+				constraints: vec![],
+				without_rowid: None,
+				partition: None,
+				interleave_in_parent: None,
+			};
+			let result =
+				std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| operation.to_statement()));
+
+			let payload = match result {
+				Err(payload) => payload,
+				Ok(_) => panic!("legacy statement construction must reject invalid dimensions"),
+			};
+			let message = payload
+				.downcast_ref::<String>()
+				.map(String::as_str)
+				.or_else(|| payload.downcast_ref::<&str>().copied())
+				.unwrap();
+			assert!(message.contains("try_to_statement"));
 		}
 	}
 

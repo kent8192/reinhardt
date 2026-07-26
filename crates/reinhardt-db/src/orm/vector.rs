@@ -6,8 +6,7 @@ use sqlx::{
 	postgres::{PgArgumentBuffer, PgTypeInfo, PgValueFormat, PgValueRef},
 };
 
-/// Maximum number of dimensions supported by pgvector dense vectors.
-pub const MAX_DENSE_VECTOR_DIMENSIONS: usize = 2_000;
+pub use crate::field_domain::MAX_DENSE_VECTOR_DIMENSIONS;
 
 /// Errors returned when constructing a validated dense vector.
 #[derive(Debug, Clone, PartialEq, thiserror::Error)]
@@ -45,8 +44,6 @@ pub struct Vector<const N: usize> {
 
 #[derive(Debug, PartialEq, thiserror::Error)]
 enum PgVectorCodecError {
-	#[error("pgvector dimensions must fit in a signed 16-bit integer, got {0}")]
-	DimensionsOutOfRange(usize),
 	#[error("invalid pgvector payload: missing the 4-byte header")]
 	MissingHeader,
 	#[error("invalid pgvector dimension {0}")]
@@ -59,9 +56,36 @@ enum PgVectorCodecError {
 	InvalidVector(#[from] VectorError),
 }
 
+pub(crate) fn validate_vector_dimensions(dimensions: usize) -> Result<(), VectorError> {
+	if dimensions == 0 || dimensions > MAX_DENSE_VECTOR_DIMENSIONS {
+		return Err(VectorError::UnsupportedDimensions {
+			dimensions,
+			max: MAX_DENSE_VECTOR_DIMENSIONS,
+		});
+	}
+	Ok(())
+}
+
+pub(crate) fn validate_vector_elements(values: &[f32]) -> Result<(), VectorError> {
+	if let Some((index, _)) = values
+		.iter()
+		.enumerate()
+		.find(|(_, value)| !value.is_finite())
+	{
+		return Err(VectorError::NonFiniteElement { index });
+	}
+	Ok(())
+}
+
+fn validate_dynamic_vector(values: &[f32]) -> Result<(), VectorError> {
+	validate_vector_dimensions(values.len())?;
+	validate_vector_elements(values)
+}
+
 fn encode_pgvector_binary(values: &[f32]) -> Result<Vec<u8>, PgVectorCodecError> {
+	validate_dynamic_vector(values)?;
 	let dimensions = i16::try_from(values.len())
-		.map_err(|_| PgVectorCodecError::DimensionsOutOfRange(values.len()))?;
+		.expect("validated pgvector dimensions always fit in a signed 16-bit integer");
 	let mut bytes = Vec::with_capacity(4 + values.len() * size_of::<f32>());
 	bytes.extend_from_slice(&dimensions.to_be_bytes());
 	bytes.extend_from_slice(&0_i16.to_be_bytes());
@@ -74,7 +98,7 @@ fn encode_pgvector_binary(values: &[f32]) -> Result<Vec<u8>, PgVectorCodecError>
 fn decode_pgvector_values(bytes: &[u8]) -> Result<Vec<f32>, PgVectorCodecError> {
 	let header = bytes.get(..4).ok_or(PgVectorCodecError::MissingHeader)?;
 	let dimensions = i16::from_be_bytes([header[0], header[1]]);
-	if dimensions <= 0 {
+	if dimensions < 0 {
 		return Err(PgVectorCodecError::InvalidWireDimensions(dimensions));
 	}
 	let reserved = i16::from_be_bytes([header[2], header[3]]);
@@ -82,6 +106,7 @@ fn decode_pgvector_values(bytes: &[u8]) -> Result<Vec<f32>, PgVectorCodecError> 
 		return Err(PgVectorCodecError::InvalidReserved(reserved));
 	}
 	let dimensions = dimensions as usize;
+	validate_vector_dimensions(dimensions)?;
 	let expected = 4 + dimensions * size_of::<f32>();
 	if bytes.len() != expected {
 		return Err(PgVectorCodecError::InvalidPayloadLength {
@@ -89,10 +114,12 @@ fn decode_pgvector_values(bytes: &[u8]) -> Result<Vec<f32>, PgVectorCodecError> 
 			actual: bytes.len(),
 		});
 	}
-	Ok(bytes[4..]
+	let values: Vec<f32> = bytes[4..]
 		.chunks_exact(size_of::<f32>())
 		.map(|chunk| f32::from_be_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]))
-		.collect())
+		.collect();
+	validate_vector_elements(&values)?;
+	Ok(values)
 }
 
 fn decode_pgvector_binary<const N: usize>(bytes: &[u8]) -> Result<Vector<N>, PgVectorCodecError> {
@@ -210,26 +237,14 @@ impl<const N: usize> Vector<N> {
 	}
 
 	fn validate(values: &[f32]) -> Result<(), VectorError> {
-		if N == 0 || N > MAX_DENSE_VECTOR_DIMENSIONS {
-			return Err(VectorError::UnsupportedDimensions {
-				dimensions: N,
-				max: MAX_DENSE_VECTOR_DIMENSIONS,
-			});
-		}
+		validate_vector_dimensions(N)?;
 		if values.len() != N {
 			return Err(VectorError::InvalidDimensions {
 				expected: N,
 				actual: values.len(),
 			});
 		}
-		if let Some((index, _)) = values
-			.iter()
-			.enumerate()
-			.find(|(_, value)| !value.is_finite())
-		{
-			return Err(VectorError::NonFiniteElement { index });
-		}
-		Ok(())
+		validate_vector_elements(values)
 	}
 }
 
@@ -278,8 +293,21 @@ impl<const N: usize> TryFrom<pgvector::Vector> for Vector<N> {
 
 #[cfg(test)]
 mod tests {
-	use super::{Vector, VectorError, decode_pgvector_binary, encode_pgvector_binary};
+	use super::{
+		PgVectorCodecError, Vector, VectorError, decode_pgvector_binary, decode_pgvector_values,
+		encode_pgvector_binary,
+	};
 	use sqlx::{Postgres, Type, TypeInfo, postgres::PgTypeInfo};
+
+	fn raw_pgvector_payload(values: &[f32]) -> Vec<u8> {
+		let mut payload = Vec::with_capacity(4 + values.len() * size_of::<f32>());
+		payload.extend_from_slice(&(values.len() as i16).to_be_bytes());
+		payload.extend_from_slice(&0_i16.to_be_bytes());
+		for value in values {
+			payload.extend_from_slice(&value.to_be_bytes());
+		}
+		payload
+	}
 
 	#[test]
 	fn accepts_a_vector_with_the_declared_dimension() {
@@ -389,5 +417,59 @@ mod tests {
 
 		assert_eq!(<Vector<3> as Type<Postgres>>::type_info().name(), "vector");
 		assert!(<Vector<3> as Type<Postgres>>::compatible(&type_info));
+	}
+
+	#[test]
+	fn dynamic_pgvector_encoding_rejects_unsupported_dimensions() {
+		for (values, expected_dimensions) in [(vec![], 0), (vec![0.0; 2_001], 2_001)] {
+			assert_eq!(
+				encode_pgvector_binary(&values),
+				Err(PgVectorCodecError::InvalidVector(
+					VectorError::UnsupportedDimensions {
+						dimensions: expected_dimensions,
+						max: 2_000,
+					}
+				))
+			);
+		}
+	}
+
+	#[test]
+	fn dynamic_pgvector_encoding_rejects_every_non_finite_value() {
+		for value in [f32::NAN, f32::INFINITY, f32::NEG_INFINITY] {
+			assert_eq!(
+				encode_pgvector_binary(&[value]),
+				Err(PgVectorCodecError::InvalidVector(
+					VectorError::NonFiniteElement { index: 0 }
+				))
+			);
+		}
+	}
+
+	#[test]
+	fn dynamic_pgvector_decoding_rejects_unsupported_dimensions() {
+		for (values, expected_dimensions) in [(vec![], 0), (vec![0.0; 2_001], 2_001)] {
+			assert_eq!(
+				decode_pgvector_values(&raw_pgvector_payload(&values)),
+				Err(PgVectorCodecError::InvalidVector(
+					VectorError::UnsupportedDimensions {
+						dimensions: expected_dimensions,
+						max: 2_000,
+					}
+				))
+			);
+		}
+	}
+
+	#[test]
+	fn dynamic_pgvector_decoding_rejects_every_non_finite_value() {
+		for value in [f32::NAN, f32::INFINITY, f32::NEG_INFINITY] {
+			assert_eq!(
+				decode_pgvector_values(&raw_pgvector_payload(&[value])),
+				Err(PgVectorCodecError::InvalidVector(
+					VectorError::NonFiniteElement { index: 0 }
+				))
+			);
+		}
 	}
 }

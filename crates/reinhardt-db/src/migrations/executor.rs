@@ -426,13 +426,18 @@ impl DatabaseMigrationExecutor {
 		let project_state = super::ProjectState::default();
 
 		for operation in migration.operations.iter().rev() {
+			let reverse_operation = operation.to_reverse_operation(&project_state)?;
+			if let Some(reverse_operation) = &reverse_operation {
+				reverse_operation.validate_for_dialect(&dialect)?;
+			}
+
 			// Check if SQLite and reverse operation requires recreation
 			#[cfg(feature = "sqlite")]
 			if matches!(dialect, SqlDialect::Sqlite)
 				&& operation.reverse_requires_sqlite_recreation()
 			{
 				// Get the reverse operation and use table recreation
-				if let Some(reverse_op) = operation.to_reverse_operation(&project_state)? {
+				if let Some(reverse_op) = reverse_operation {
 					tracing::debug!("=== SQLite Recreation for reverse of {:?} ===", operation);
 					self.handle_sqlite_recreation(&reverse_op, &mut editor)
 						.await?;
@@ -543,6 +548,8 @@ impl DatabaseMigrationExecutor {
 
 		// Execute operations through schema editor
 		for operation in &migration.operations {
+			operation.validate_for_dialect(&dialect)?;
+
 			// Handle SQLite table recreation for incompatible operations
 			#[cfg(feature = "sqlite")]
 			if matches!(dialect, SqlDialect::Sqlite) && operation.requires_sqlite_recreation() {
@@ -1208,6 +1215,8 @@ impl DatabaseMigrationExecutor {
 	) -> Result<()> {
 		use super::operations::SqliteTableRecreation;
 
+		operation.validate_for_dialect(&SqlDialect::Sqlite)?;
+
 		// Build the recreation plan based on operation type.
 		//
 		// Critical: introspection must run via the editor's open transaction so
@@ -1443,7 +1452,7 @@ impl DatabaseMigrationExecutor {
 			}
 		};
 
-		let statements = recreation.to_sql_statements();
+		let statements = recreation.try_to_sql_statements()?;
 		editor
 			.with_foreign_keys_disabled(move |editor| {
 				Box::pin(async move {
@@ -3580,6 +3589,49 @@ mod rollback_orchestration_tests {
 			.await
 			.expect("failed to open sqlite :memory: connection");
 		DatabaseMigrationExecutor::new(connection)
+	}
+
+	#[rstest]
+	#[tokio::test]
+	async fn sqlite_vector_alter_column_recreation_returns_a_structured_error() {
+		let mut initial = Migration::new("0001_initial", "vector_recreation");
+		initial.operations.push(Operation::CreateTable {
+			name: "documents".to_owned(),
+			columns: vec![ColumnDefinition::new("embedding", FieldType::Text)],
+			constraints: vec![],
+			without_rowid: None,
+			interleave_in_parent: None,
+			partition: None,
+		});
+		let mut alter = Migration::new("0002_vector", "vector_recreation");
+		alter
+			.dependencies
+			.push(("vector_recreation".to_owned(), "0001_initial".to_owned()));
+		alter.operations.push(Operation::AlterColumn {
+			table: "documents".to_owned(),
+			column: "embedding".to_owned(),
+			old_definition: Some(ColumnDefinition::new("embedding", FieldType::Text)),
+			new_definition: ColumnDefinition::new("embedding", FieldType::Vector { dimensions: 3 }),
+			mysql_options: None,
+		});
+		let mut executor = make_executor().await;
+		executor
+			.apply_migrations(std::slice::from_ref(&initial))
+			.await
+			.unwrap();
+
+		let error = executor
+			.apply_migrations(std::slice::from_ref(&alter))
+			.await
+			.unwrap_err();
+
+		assert!(matches!(
+			error,
+			MigrationError::UnsupportedBackendFeature {
+				feature: "vector field",
+				backend: "sqlite",
+			}
+		));
 	}
 
 	/// Build a single-operation `CreateTable` migration with one integer

@@ -2,6 +2,7 @@
 
 use super::model::Model;
 use super::{DatabaseStorageKind, DatabaseValue, FieldCodecError};
+use crate::field_domain::MAX_DENSE_VECTOR_DIMENSIONS;
 use base64::Engine;
 use serde::de::value::{MapDeserializer, StringDeserializer};
 use serde::de::{IntoDeserializer, Visitor};
@@ -238,6 +239,11 @@ pub(crate) fn database_value_from_json(
 		Some(DatabaseStorageKind::Json) => Ok(DatabaseValue::Json(value)),
 		_ if value.is_null() => Ok(DatabaseValue::Null),
 		Some(DatabaseStorageKind::Vector(dimensions)) => {
+			if dimensions == 0 || dimensions > MAX_DENSE_VECTOR_DIMENSIONS {
+				return Err(FieldCodecError::Serialization(format!(
+					"vector dimension {dimensions} exceeds maximum {MAX_DENSE_VECTOR_DIMENSIONS}"
+				)));
+			}
 			let values = serde_json::from_value::<Vec<f32>>(value)
 				.map_err(|error| FieldCodecError::Serialization(error.to_string()))?;
 			if values.len() != dimensions {
@@ -524,6 +530,22 @@ mod tests {
 			error.to_string(),
 			"field serialization failed: vector dimension mismatch: expected 3, got 2"
 		);
+	}
+
+	#[test]
+	fn vector_storage_rejects_unsupported_declared_dimensions() {
+		for (dimensions, value) in [(0, json!([])), (2_001, json!(vec![0.0; 2_001]))] {
+			let error =
+				database_value_from_json(value, Some(DatabaseStorageKind::Vector(dimensions)))
+					.unwrap_err();
+
+			assert_eq!(
+				error.to_string(),
+				format!(
+					"field serialization failed: vector dimension {dimensions} exceeds maximum 2000"
+				)
+			);
+		}
 	}
 
 	#[test]

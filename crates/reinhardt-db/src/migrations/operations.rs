@@ -3374,6 +3374,20 @@ impl Operation {
 					column.type_definition.try_to_sql_for_dialect(dialect)?;
 				}
 			}
+			Self::CreateExtension { .. } => {
+				let backend = match dialect {
+					SqlDialect::Postgres => None,
+					SqlDialect::Mysql => Some("mysql"),
+					SqlDialect::Sqlite => Some("sqlite"),
+					SqlDialect::Cockroachdb => Some("cockroachdb"),
+				};
+				if let Some(backend) = backend {
+					return Err(super::MigrationError::UnsupportedBackendFeature {
+						feature: "PostgreSQL extensions",
+						backend,
+					});
+				}
+			}
 			Self::CreateIndex {
 				columns,
 				unique,
@@ -10458,6 +10472,53 @@ mod tests {
 				backend: actual_backend,
 			}) if actual_backend == backend
 		));
+	}
+
+	#[rstest]
+	#[case(SqlDialect::Mysql, "mysql")]
+	#[case(SqlDialect::Sqlite, "sqlite")]
+	#[case(SqlDialect::Cockroachdb, "cockroachdb")]
+	fn create_extension_migration_rejects_non_postgres_backends(
+		#[case] dialect: SqlDialect,
+		#[case] backend: &'static str,
+	) {
+		let operation = Operation::CreateExtension {
+			name: "vector".to_string(),
+			if_not_exists: true,
+			schema: None,
+		};
+
+		let result = operation.try_to_sql(&dialect);
+
+		assert!(matches!(
+			result,
+			Err(crate::migrations::MigrationError::UnsupportedBackendFeature {
+				feature: "PostgreSQL extensions",
+				backend: actual_backend,
+			}) if actual_backend == backend
+		));
+	}
+
+	#[test]
+	fn create_extension_migration_quotes_identifiers_and_does_not_auto_drop_on_reverse() {
+		let operation = Operation::CreateExtension {
+			name: "vector\"; DROP TABLE documents; --".to_string(),
+			if_not_exists: true,
+			schema: Some("extension\"schema".to_string()),
+		};
+
+		assert_eq!(
+			operation
+				.try_to_sql(&SqlDialect::Postgres)
+				.expect("PostgreSQL supports extension migrations"),
+			"CREATE EXTENSION IF NOT EXISTS \"vector\"\"; DROP TABLE documents; --\" SCHEMA \"extension\"\"schema\";"
+		);
+		assert_eq!(
+			operation
+				.to_reverse_sql(&SqlDialect::Postgres, &ProjectState::new())
+				.expect("reverse SQL generation should succeed"),
+			None
+		);
 	}
 
 	#[cfg(feature = "pgvector")]

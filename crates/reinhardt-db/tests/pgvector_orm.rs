@@ -6,10 +6,7 @@ use std::error::Error as _;
 
 use reinhardt_core::macros::model;
 use reinhardt_db::{
-	backends::{
-		DatabaseConnection as BackendsConnection, error::DatabaseErrorKind,
-		schema::BaseDatabaseSchemaEditor,
-	},
+	backends::{DatabaseConnection as BackendsConnection, error::DatabaseErrorKind},
 	migrations::{
 		DatabaseMigrationExecutor, Migration, MigrationAutodetector, MigrationError, ProjectState,
 		model_registry::global_registry, operations::postgres::CreateExtension,
@@ -74,34 +71,28 @@ fn model_migrations() -> Vec<Migration> {
 		.expect("registered model metadata should generate a migration")
 }
 
-async fn install_vector_extension(database_url: &str) {
-	let pool = sqlx::PgPool::connect(database_url)
-		.await
-		.expect("extension schema editor should connect");
-	let mut editor =
-		reinhardt_db::backends::drivers::postgresql::schema::PostgreSQLSchemaEditor::new(pool);
-	let operation = CreateExtension::new("vector");
-	let statements = operation.database_forwards(&editor);
-	assert_eq!(
-		statements,
-		vec!["CREATE EXTENSION IF NOT EXISTS \"vector\";"]
-	);
-	for statement in statements {
-		editor
-			.execute(&statement)
-			.await
-			.expect("the explicit vector extension operation should execute");
-	}
-}
-
 async fn create_model_schema(owner: BackendsConnection) {
-	let migrations = model_migrations();
+	let mut migrations = model_migrations();
 	assert_eq!(migrations.len(), 1);
+	let mut migration = migrations
+		.pop()
+		.expect("the pgvector model should produce one migration");
+	migration.operations.insert(
+		0,
+		CreateExtension::new("vector")
+			.into_operation()
+			.expect("the extension should convert into a migration operation"),
+	);
+	assert!(matches!(
+		migration.operations.first(),
+		Some(reinhardt_db::migrations::Operation::CreateExtension { name, .. })
+			if name == "vector"
+	));
 	let mut executor = DatabaseMigrationExecutor::new(owner);
 	executor
-		.apply_migrations(&migrations)
+		.apply_migrations(&[migration])
 		.await
-		.expect("the generated pgvector migration should apply");
+		.expect("the ordered pgvector migration should apply");
 }
 
 fn by_id(id: i64) -> QuerySet<PgvectorDocument> {
@@ -127,8 +118,6 @@ async fn native_pgvector_workflow_round_trips_models_and_typed_distance_queries(
 		.expect("pgvector PostgreSQL port should be exposed");
 	let database_url =
 		format!("postgres://postgres:task9@localhost:{port}/task9_pgvector?sslmode=disable");
-
-	install_vector_extension(&database_url).await;
 
 	let owner = BackendsConnection::connect_postgres(&database_url)
 		.await

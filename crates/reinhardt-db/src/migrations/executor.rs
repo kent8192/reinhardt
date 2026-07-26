@@ -27,6 +27,18 @@ fn validate_and_advance_migration_state(
 	Ok(())
 }
 
+fn migration_sql_dialect(connection: &DatabaseConnection) -> SqlDialect {
+	if connection.is_cockroachdb() {
+		return SqlDialect::Cockroachdb;
+	}
+
+	match connection.database_type() {
+		DatabaseType::Postgres => SqlDialect::Postgres,
+		DatabaseType::Mysql => SqlDialect::Mysql,
+		DatabaseType::Sqlite => SqlDialect::Sqlite,
+	}
+}
+
 /// Split SQL string into individual statements while handling:
 /// - String literals (single/double quotes)
 /// - Comments (line and block)
@@ -413,12 +425,7 @@ impl DatabaseMigrationExecutor {
 			return Ok(());
 		}
 
-		// Determine SQL dialect
-		let dialect = match self.connection.database_type() {
-			crate::backends::types::DatabaseType::Postgres => SqlDialect::Postgres,
-			crate::backends::types::DatabaseType::Mysql => SqlDialect::Mysql,
-			crate::backends::types::DatabaseType::Sqlite => SqlDialect::Sqlite,
-		};
+		let dialect = migration_sql_dialect(&self.connection);
 
 		let requires_sqlite_recreation = matches!(dialect, SqlDialect::Sqlite)
 			&& migration
@@ -439,6 +446,7 @@ impl DatabaseMigrationExecutor {
 		let project_state = super::ProjectState::default();
 
 		for operation in migration.operations.iter().rev() {
+			operation.validate_for_dialect(&dialect)?;
 			let reverse_operation = operation.to_reverse_operation(&project_state)?;
 			if let Some(reverse_operation) = &reverse_operation {
 				reverse_operation.validate_for_dialect(&dialect)?;
@@ -522,11 +530,7 @@ impl DatabaseMigrationExecutor {
 			return Ok(());
 		}
 
-		let dialect = match self.db_type {
-			DatabaseType::Postgres => SqlDialect::Postgres,
-			DatabaseType::Sqlite => SqlDialect::Sqlite,
-			DatabaseType::Mysql => SqlDialect::Mysql,
-		};
+		let dialect = migration_sql_dialect(&self.connection);
 
 		let requires_sqlite_recreation = matches!(dialect, SqlDialect::Sqlite)
 			&& migration
@@ -3816,6 +3820,93 @@ mod vector_index_validation_state_tests {
 			Err(MigrationError::InvalidMigration(message))
 				if message == "approximate vector index on table `scalar_documents` targets non-vector column `embedding`"
 		));
+	}
+}
+
+#[cfg(all(test, feature = "pgvector", feature = "sqlite"))]
+mod cockroachdb_executor_dialect_tests {
+	use super::*;
+	use crate::migrations::{ColumnDefinition, FieldType};
+
+	async fn cockroachdb_flavored_executor() -> DatabaseMigrationExecutor {
+		let sqlite = DatabaseConnection::connect_sqlite("sqlite::memory:")
+			.await
+			.expect("the test SQLite backend should connect");
+		let connection = DatabaseConnection::new_with_flavor(sqlite.backend(), true);
+		DatabaseMigrationExecutor::new(connection)
+	}
+
+	fn create_extension_migration() -> Migration {
+		let mut migration = Migration::new("0001_vector_extension", "search");
+		migration.operations.push(Operation::CreateExtension {
+			name: "vector".to_string(),
+			if_not_exists: true,
+			schema: None,
+		});
+		migration
+	}
+
+	#[tokio::test]
+	async fn apply_path_rejects_extension_for_cockroachdb_flavor() {
+		let executor = cockroachdb_flavored_executor().await;
+
+		let result = executor
+			.apply_migration(&create_extension_migration())
+			.await;
+
+		assert!(matches!(
+			result,
+			Err(MigrationError::UnsupportedBackendFeature {
+				feature: "PostgreSQL extensions",
+				backend: "cockroachdb",
+			})
+		));
+	}
+
+	#[tokio::test]
+	async fn rollback_path_rejects_extension_for_cockroachdb_flavor() {
+		let mut executor = cockroachdb_flavored_executor().await;
+
+		let result = executor
+			.rollback_migration(&create_extension_migration())
+			.await;
+
+		assert!(matches!(
+			result,
+			Err(MigrationError::UnsupportedBackendFeature {
+				feature: "PostgreSQL extensions",
+				backend: "cockroachdb",
+			})
+		));
+	}
+
+	#[tokio::test]
+	async fn ordinary_cockroachdb_migration_still_executes() {
+		let executor = cockroachdb_flavored_executor().await;
+		let mut migration = Migration::new("0001_documents", "search");
+		migration.operations.push(Operation::CreateTable {
+			name: "documents".to_string(),
+			columns: vec![ColumnDefinition::new("id", FieldType::Integer)],
+			constraints: Vec::new(),
+			without_rowid: None,
+			interleave_in_parent: None,
+			partition: None,
+		});
+
+		executor
+			.apply_migration(&migration)
+			.await
+			.expect("ordinary CockroachDB migrations should remain executable");
+
+		let table = executor
+			.connection()
+			.fetch_optional(
+				"SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?",
+				vec!["documents".into()],
+			)
+			.await
+			.expect("the test backend should inspect its schema");
+		assert!(table.is_some());
 	}
 }
 

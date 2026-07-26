@@ -50,6 +50,7 @@
 
 use futures::FutureExt;
 use reinhardt_core::exception::{DatabaseError, DatabaseErrorKind};
+use std::sync::atomic::{AtomicU8, Ordering};
 use std::sync::{Arc, Mutex};
 
 use super::connection::{
@@ -115,6 +116,51 @@ pub enum TransactionState {
 	Committed,
 	/// RolledBack variant.
 	RolledBack,
+}
+
+/// Observable terminal state for a closure-scoped atomic transaction.
+#[derive(Debug, Clone)]
+pub struct AtomicTransactionOutcome(Arc<AtomicU8>);
+
+impl AtomicTransactionOutcome {
+	const PENDING: u8 = 0;
+	const COMMITTED: u8 = 1;
+	const ROLLED_BACK: u8 = 2;
+	const UNKNOWN: u8 = 3;
+
+	fn pending() -> Self {
+		Self(Arc::new(AtomicU8::new(Self::PENDING)))
+	}
+
+	fn set_committed(&self) {
+		self.0.store(Self::COMMITTED, Ordering::Release);
+	}
+
+	fn set_rolled_back(&self) {
+		self.0.store(Self::ROLLED_BACK, Ordering::Release);
+	}
+
+	fn set_unknown(&self) {
+		self.0.store(Self::UNKNOWN, Ordering::Release);
+	}
+
+	/// Returns whether the transaction has committed.
+	pub fn is_committed(&self) -> bool {
+		self.0.load(Ordering::Acquire) == Self::COMMITTED
+	}
+
+	/// Returns whether the transaction has rolled back.
+	pub fn is_rolled_back(&self) -> bool {
+		self.0.load(Ordering::Acquire) == Self::ROLLED_BACK
+	}
+
+	/// Returns whether the transaction outcome is not safely known yet.
+	pub fn is_pending_or_unknown(&self) -> bool {
+		matches!(
+			self.0.load(Ordering::Acquire),
+			Self::PENDING | Self::UNKNOWN
+		)
+	}
 }
 
 /// Savepoint for nested transactions
@@ -546,6 +592,7 @@ pub struct AtomicTransaction {
 	executor: Option<Box<dyn TransactionExecutor>>,
 	backend: DatabaseBackend,
 	savepoint_sequence: u64,
+	outcome: AtomicTransactionOutcome,
 }
 
 impl AtomicTransaction {
@@ -555,7 +602,13 @@ impl AtomicTransaction {
 			executor: Some(executor),
 			backend,
 			savepoint_sequence: 0,
+			outcome: AtomicTransactionOutcome::pending(),
 		}
+	}
+
+	/// Returns the outcome that will be finalized when the outer callback exits.
+	pub fn outcome(&self) -> AtomicTransactionOutcome {
+		self.outcome.clone()
 	}
 
 	fn executor_mut<'transaction>(
@@ -623,12 +676,20 @@ impl AtomicTransaction {
 			.await
 		{
 			Ok(Ok(value)) => {
-				self.commit().await.map_err(E::from)?;
+				if let Err(error) = self.commit().await {
+					self.outcome.set_unknown();
+					return Err(E::from(error));
+				}
+				self.outcome.set_committed();
 				Ok(value)
 			}
 			Ok(Err(operation_error)) => match self.rollback().await {
-				Ok(()) => Err(operation_error),
+				Ok(()) => {
+					self.outcome.set_rolled_back();
+					Err(operation_error)
+				}
 				Err(rollback_error) => {
+					self.outcome.set_unknown();
 					tracing::error!(
 						operation_error = %operation_error,
 						rollback_error = %rollback_error,
@@ -639,10 +700,13 @@ impl AtomicTransaction {
 			},
 			Err(panic_payload) => {
 				if let Err(rollback_error) = self.rollback().await {
+					self.outcome.set_unknown();
 					tracing::error!(
 						rollback_error = %rollback_error,
 						"Atomic transaction rollback failed while resuming callback panic"
 					);
+				} else {
+					self.outcome.set_rolled_back();
 				}
 				std::panic::resume_unwind(panic_payload)
 			}
@@ -731,6 +795,10 @@ impl OrmExecutor for AtomicTransaction {
 
 	fn rolls_back_on_error(&self) -> bool {
 		true
+	}
+
+	fn transaction_outcome(&self) -> Option<AtomicTransactionOutcome> {
+		Some(self.outcome())
 	}
 
 	async fn execute(

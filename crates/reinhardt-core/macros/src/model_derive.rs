@@ -2294,7 +2294,8 @@ fn generate_model_form_support(
 	let default_true_boolean_names: Vec<_> = editable_fields
 		.iter()
 		.filter(|field| {
-			field.ty.to_token_stream().to_string() == "bool"
+			let (_, value_type) = extract_option_type(&field.ty);
+			value_type.to_token_stream().to_string() == "bool"
 				&& field.config.default.as_ref().is_some_and(|default| {
 					matches!(default, syn::Expr::Lit(literal) if matches!(&literal.lit, syn::Lit::Bool(value) if value.value))
 				})

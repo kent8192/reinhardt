@@ -14,6 +14,7 @@ use reinhardt_core::model_form::{
 	AllEditableModelFields, ModelFormPayload, ModelFormPayloadError, ModelFormPolicy,
 	ModelFormSchema,
 };
+use reinhardt_db::orm::transaction::AtomicTransactionOutcome;
 use reinhardt_db::orm::{Model, OrmExecutor};
 use serde_json::Value;
 use std::collections::HashMap;
@@ -123,6 +124,11 @@ pub trait FormModel: Model + Clone + Send + Sync {
 
 type ModelValidator<T> = dyn Fn(&T) -> Result<(), Vec<String>> + Send + Sync;
 
+struct PendingTransactionSave<T> {
+	outcome: AtomicTransactionOutcome,
+	candidate_before_save: T,
+}
+
 /// A native form that validates a generated payload and persists model candidates.
 pub struct ModelForm<T, P = AllEditableModelFields>
 where
@@ -135,6 +141,7 @@ where
 	instance: Option<T>,
 	validated_candidate: Option<T>,
 	persistence_mode: ModelFormPersistenceMode,
+	pending_transaction_save: Option<PendingTransactionSave<T>>,
 	model_validator: Option<Box<ModelValidator<T>>>,
 	_policy: PhantomData<P>,
 }
@@ -180,6 +187,7 @@ where
 			instance,
 			validated_candidate: None,
 			persistence_mode,
+			pending_transaction_save: None,
 			model_validator: None,
 			_policy: PhantomData,
 		}
@@ -303,12 +311,15 @@ where
 					self.form.add_error(ALL_FIELDS_KEY, message);
 				}
 			}
-			ModelFormError::Persistence { .. } | ModelFormError::PersistenceAfterCreate { .. } => {}
+			ModelFormError::Persistence { .. }
+			| ModelFormError::PersistenceAfterCreate { .. }
+			| ModelFormError::TransactionOutcomePending => {}
 		}
 	}
 
 	/// Persists a validated candidate through the caller-owned executor.
 	pub async fn save(&mut self, executor: &mut dyn OrmExecutor) -> Result<T, ModelFormError> {
+		self.finalize_transaction_save()?;
 		if self.validated_candidate.is_none() {
 			self.build_instance()?;
 		}
@@ -317,20 +328,52 @@ where
 			.validated_candidate
 			.as_mut()
 			.expect("build_instance caches a validated candidate");
+		let candidate_before_save = candidate.clone();
+		let transaction_outcome = executor.transaction_outcome();
 		if let Err(error) =
 			FormModel::save_with_mode(candidate, executor, self.persistence_mode).await
 		{
-			if matches!(error, ModelFormError::PersistenceAfterCreate { .. })
-				&& !executor.rolls_back_on_error()
-			{
-				self.persistence_mode = ModelFormPersistenceMode::Update;
+			if matches!(error, ModelFormError::PersistenceAfterCreate { .. }) {
+				if let Some(outcome) = transaction_outcome {
+					self.pending_transaction_save = Some(PendingTransactionSave {
+						outcome,
+						candidate_before_save,
+					});
+				} else {
+					self.persistence_mode = ModelFormPersistenceMode::Update;
+				}
 			}
 			return Err(error);
 		}
 		let saved = candidate.clone();
 		self.instance = Some(saved.clone());
-		self.persistence_mode = ModelFormPersistenceMode::Update;
+		if let Some(outcome) = transaction_outcome {
+			self.pending_transaction_save = Some(PendingTransactionSave {
+				outcome,
+				candidate_before_save,
+			});
+		} else {
+			self.persistence_mode = ModelFormPersistenceMode::Update;
+		}
 		Ok(saved)
+	}
+
+	fn finalize_transaction_save(&mut self) -> Result<(), ModelFormError> {
+		let Some(pending) = self.pending_transaction_save.take() else {
+			return Ok(());
+		};
+		if pending.outcome.is_committed() {
+			self.persistence_mode = ModelFormPersistenceMode::Update;
+			return Ok(());
+		}
+		if pending.outcome.is_rolled_back() {
+			self.instance = None;
+			self.validated_candidate = Some(pending.candidate_before_save);
+			self.persistence_mode = ModelFormPersistenceMode::Create;
+			return Ok(());
+		}
+		self.pending_transaction_save = Some(pending);
+		Err(ModelFormError::TransactionOutcomePending)
 	}
 
 	/// Replaces one payload field, primarily for inline foreign-key assignment.

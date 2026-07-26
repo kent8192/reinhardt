@@ -1,9 +1,11 @@
 //! Target-neutral runtime state for model-backed forms.
 
+use regex::Regex;
 use rust_decimal::Decimal;
 use std::collections::HashMap;
 use std::marker::PhantomData;
 use std::str::FromStr;
+use std::sync::LazyLock;
 
 use reinhardt_core::model_form::{
 	ModelFormFieldDescriptor, ModelFormFieldKind, ModelFormPayload, ModelFormPayloadError,
@@ -184,7 +186,7 @@ fn convert_control_value(
 			max_length,
 			..
 		} => {
-			let text = expect_string(descriptor.name, value)?;
+			let text = expect_string(descriptor.name, value)?.trim().to_owned();
 			if text.is_empty() && !descriptor.required {
 				return Ok(serde_json::Value::String(text));
 			}
@@ -214,7 +216,7 @@ fn convert_control_value(
 			min_length,
 			max_length,
 		} => {
-			let text = expect_string(descriptor.name, value)?;
+			let text = expect_string(descriptor.name, value)?.trim().to_owned();
 			if text.is_empty() && !descriptor.required {
 				return Ok(serde_json::Value::String(text));
 			}
@@ -381,15 +383,9 @@ fn convert_control_value(
 		}
 		ModelFormFieldKind::Time => {
 			let text = expect_string(descriptor.name, value)?;
-			if !is_time(&text) {
-				return Err(invalid_value(descriptor.name, "expected HH:MM[:SS]"));
-			}
-			let text = if text.len() == 5 {
-				format!("{text}:00")
-			} else {
-				text
-			};
-			Ok(serde_json::Value::String(text))
+			normalize_time(&text)
+				.map(serde_json::Value::String)
+				.ok_or_else(|| invalid_value(descriptor.name, "expected HH:MM[:SS]"))
 		}
 		ModelFormFieldKind::DateTime | ModelFormFieldKind::NaiveDateTime => {
 			let text = expect_string(descriptor.name, value)?;
@@ -431,16 +427,13 @@ fn invalid_value(field: &str, message: impl Into<String>) -> ModelFormPayloadErr
 	}
 }
 
+static EMAIL_REGEX: LazyLock<Regex> = LazyLock::new(|| {
+	Regex::new(r"^[a-zA-Z0-9.!#$%&'*+/=?^_`{|}~-]+@[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?(?:\.[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?)*$")
+		.expect("native email validation pattern is valid")
+});
+
 fn is_email(value: &str) -> bool {
-	let mut parts = value.split('@');
-	let (Some(local), Some(domain), None) = (parts.next(), parts.next(), parts.next()) else {
-		return false;
-	};
-	!local.is_empty()
-		&& !domain.is_empty()
-		&& !value.chars().any(char::is_whitespace)
-		&& !domain.starts_with('.')
-		&& !domain.ends_with('.')
+	EMAIL_REGEX.is_match(value)
 }
 
 fn is_url(value: &str) -> bool {
@@ -481,25 +474,50 @@ fn is_date(value: &str) -> bool {
 	(1..=max_day).contains(&day)
 }
 
-fn is_time(value: &str) -> bool {
-	let value = value
-		.strip_suffix('Z')
-		.unwrap_or(value)
-		.split_once(['+', '-'])
-		.map_or(value, |(time, _)| time);
-	let (time, fraction) = value.split_once('.').unwrap_or((value, ""));
-	if value.contains('.')
-		&& (fraction.is_empty()
+fn normalize_time(value: &str) -> Option<String> {
+	let value = value.trim();
+	let (time, meridiem) = match value.rsplit_once(' ') {
+		Some((time, meridiem @ ("AM" | "PM"))) => (time, Some(meridiem)),
+		Some(_) => return None,
+		None => (value, None),
+	};
+	let (time, fraction) = time
+		.split_once('.')
+		.map_or((time, None), |(time, fraction)| (time, Some(fraction)));
+	if fraction.is_some_and(|fraction| {
+		fraction.is_empty()
 			|| !(1..=9).contains(&fraction.len())
-			|| !fraction.bytes().all(|byte| byte.is_ascii_digit()))
-	{
-		return false;
+			|| !fraction.bytes().all(|byte| byte.is_ascii_digit())
+	}) {
+		return None;
 	}
 	let parts: Vec<_> = time.split(':').collect();
-	(matches!(parts.len(), 2 | 3))
-		&& parts
+	if !matches!(parts.len(), 2 | 3)
+		|| !parts
 			.iter()
 			.all(|part| part.len() == 2 && part.bytes().all(|byte| byte.is_ascii_digit()))
+	{
+		return None;
+	}
+	let mut hour = parts[0].parse::<u32>().ok()?;
+	let minute = parts[1].parse::<u32>().ok()?;
+	let second = parts
+		.get(2)
+		.map_or(Some(0), |part| part.parse::<u32>().ok())?;
+	if minute > 59 || second > 59 {
+		return None;
+	}
+	match meridiem {
+		Some("AM") if (1..=12).contains(&hour) => hour %= 12,
+		Some("PM") if (1..=12).contains(&hour) => hour = (hour % 12) + 12,
+		Some(_) => return None,
+		None if hour > 23 => return None,
+		None => {}
+	}
+	Some(match fraction {
+		Some(fraction) => format!("{hour:02}:{minute:02}:{second:02}.{fraction}"),
+		None => format!("{hour:02}:{minute:02}:{second:02}"),
+	})
 }
 
 fn normalize_datetime_local(value: &str, aware: bool) -> Option<String> {

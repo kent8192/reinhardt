@@ -180,6 +180,11 @@ pub trait OrmExecutor: Send {
 		false
 	}
 
+	/// Returns the pending outcome for a closure-scoped atomic transaction.
+	fn transaction_outcome(&self) -> Option<super::transaction::AtomicTransactionOutcome> {
+		None
+	}
+
 	/// Executes a SQL statement and preserves backend-specific result metadata.
 	async fn execute(&mut self, sql: &str, params: Vec<QueryValue>) -> Result<QueryResult>;
 

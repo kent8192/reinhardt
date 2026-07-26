@@ -47,6 +47,9 @@ pub enum ModelFormError {
 		/// The structured database failure.
 		source: DatabaseError,
 	},
+	/// A caller-owned transaction has not finalized a prior form write yet.
+	#[error("model form persistence is waiting for its transaction outcome")]
+	TransactionOutcomePending,
 }
 
 impl ModelFormError {
@@ -54,6 +57,7 @@ impl ModelFormError {
 	pub fn database_error(&self) -> Option<&DatabaseError> {
 		match self {
 			Self::Persistence { source } | Self::PersistenceAfterCreate { source } => Some(source),
+			Self::TransactionOutcomePending => None,
 			_ => None,
 		}
 	}

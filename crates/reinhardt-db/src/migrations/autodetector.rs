@@ -6818,10 +6818,16 @@ impl MigrationAutodetector {
 		}
 	}
 
-	/// Performs the generate operations operation.
+	/// Generates operations, failing fast when migration metadata is invalid.
+	///
+	/// # Panics
+	///
+	/// Panics when checked autodetection fails. Use
+	/// [`Self::try_generate_operations`] to handle validation errors.
 	pub fn generate_operations(&self) -> Vec<super::Operation> {
-		let changes = self.detect_changes();
-		self.generate_operations_from_changes(&changes)
+		self.try_generate_operations().expect(
+			"migration operation generation failed; use try_generate_operations() to handle invalid metadata or ambiguous renames",
+		)
 	}
 
 	/// Performs operation generation and fails on ambiguous rename-like changes.
@@ -7684,17 +7690,28 @@ impl MigrationAutodetector {
 	/// assert_eq!(migrations[0].app_label, "blog");
 	/// assert!(!migrations[0].operations.is_empty());
 	/// ```
+	///
+	/// # Panics
+	///
+	/// Panics when checked autodetection fails. Use
+	/// [`Self::try_generate_migrations`] to handle validation errors.
 	pub fn generate_migrations(&self) -> Vec<super::Migration> {
-		self.generate_migrations_with_warnings().migrations
+		self.try_generate_migrations().expect(
+			"migration generation failed; use try_generate_migrations() to handle invalid metadata or ambiguous renames",
+		)
 	}
 
 	/// Generate migrations together with actionable schema-change warnings.
+	///
+	/// # Panics
+	///
+	/// Panics when checked autodetection fails. Use
+	/// [`Self::try_generate_migrations_with_warnings`] to handle validation
+	/// errors.
 	pub fn generate_migrations_with_warnings(&self) -> GeneratedMigrations {
-		let changes = self.detect_changes();
-		GeneratedMigrations {
-			migrations: self.generate_migrations_from_changes(&changes),
-			warnings: changes.warnings,
-		}
+		self.try_generate_migrations_with_warnings().expect(
+			"migration generation failed; use try_generate_migrations_with_warnings() to handle invalid metadata or ambiguous renames",
+		)
 	}
 
 	/// Generate migrations and fail on ambiguous rename-like changes.
@@ -8809,9 +8826,7 @@ mod tests {
 		)])
 	}
 
-	#[rstest]
-	fn vector_index_duplicate_physical_names_across_models_are_rejected_before_sql() {
-		// Arrange
+	fn duplicate_vector_index_detector() -> MigrationAutodetector {
 		let first = vector_model(
 			1536,
 			vec![vector_index(
@@ -8836,13 +8851,19 @@ mod tests {
 			)],
 			Vec::new(),
 		);
-		let detector = MigrationAutodetector::new(
+		MigrationAutodetector::new(
 			ProjectState::new(),
 			build_project_state(vec![
 				(("search".to_string(), "Document".to_string()), first),
 				(("billing".to_string(), "Invoice".to_string()), second),
 			]),
-		);
+		)
+	}
+
+	#[rstest]
+	fn vector_index_duplicate_physical_names_across_models_are_rejected_before_sql() {
+		// Arrange
+		let detector = duplicate_vector_index_detector();
 
 		// Act
 		let error = detector
@@ -8850,6 +8871,39 @@ mod tests {
 			.expect_err("duplicate physical index names must fail before SQL generation");
 
 		// Assert
+		assert!(matches!(
+			error,
+			super::super::MigrationError::InvalidMigration(message)
+				if message.contains("documents_embedding_ann")
+					&& message.contains("search_document")
+					&& message.contains("billing_invoice")
+		));
+	}
+
+	#[test]
+	#[should_panic(expected = "use try_generate_operations()")]
+	fn infallible_generate_operations_cannot_emit_duplicate_physical_names() {
+		duplicate_vector_index_detector().generate_operations();
+	}
+
+	#[test]
+	#[should_panic(expected = "use try_generate_migrations()")]
+	fn infallible_generate_migrations_cannot_emit_duplicate_physical_names() {
+		duplicate_vector_index_detector().generate_migrations();
+	}
+
+	#[test]
+	#[should_panic(expected = "use try_generate_migrations_with_warnings()")]
+	fn infallible_generate_migrations_with_warnings_cannot_emit_duplicate_physical_names() {
+		duplicate_vector_index_detector().generate_migrations_with_warnings();
+	}
+
+	#[test]
+	fn checked_generate_migrations_rejects_duplicate_physical_names() {
+		let error = duplicate_vector_index_detector()
+			.try_generate_migrations_with_warnings()
+			.expect_err("checked migration generation must reject duplicate physical names");
+
 		assert!(matches!(
 			error,
 			super::super::MigrationError::InvalidMigration(message)

@@ -3246,6 +3246,14 @@ impl Operation {
 				expressions,
 				operator_class,
 				..
+			}
+			| Self::DropNamedIndex {
+				columns,
+				unique,
+				index_type,
+				expressions,
+				operator_class,
+				..
 			} => Self::validate_approximate_vector_index(
 				*index_type,
 				*unique,
@@ -10126,6 +10134,76 @@ mod tests {
 				.try_to_sql(&SqlDialect::Postgres)
 				.expect("unusual names must be identifier-quoted"),
 			"CREATE INDEX \"select embedding-ann\" ON source USING ivfflat (embedding vector_l2_ops) WITH (lists = 100);"
+		);
+	}
+
+	fn named_vector_index_drop(index_type: Option<IndexType>) -> Operation {
+		Operation::DropNamedIndex {
+			table: "source".to_string(),
+			name: "source_embedding_ann".to_string(),
+			columns: vec!["embedding".to_string()],
+			unique: false,
+			index_type,
+			where_clause: None,
+			concurrently: false,
+			expressions: None,
+			mysql_options: None,
+			operator_class: Some("vector_cosine_ops".to_string()),
+		}
+	}
+
+	#[rstest]
+	#[case(SqlDialect::Mysql, "mysql")]
+	#[case(SqlDialect::Sqlite, "sqlite")]
+	fn named_vector_index_drop_rejects_unsupported_backends(
+		#[case] dialect: SqlDialect,
+		#[case] backend: &'static str,
+	) {
+		// Arrange
+		let operation = named_vector_index_drop(Some(IndexType::Hnsw {
+			m: Some(16),
+			ef_construction: Some(64),
+		}));
+
+		// Act
+		let result = operation.try_to_sql(&dialect);
+
+		// Assert
+		assert!(matches!(
+			result,
+			Err(crate::migrations::MigrationError::UnsupportedBackendFeature {
+				feature: "approximate vector indexes",
+				backend: actual_backend,
+			}) if actual_backend == backend
+		));
+	}
+
+	#[test]
+	fn named_vector_index_drop_renders_exact_postgres_sql() {
+		let operation = named_vector_index_drop(Some(IndexType::Ivfflat { lists: Some(100) }));
+
+		assert_eq!(
+			operation
+				.try_to_sql(&SqlDialect::Postgres)
+				.expect("PostgreSQL supports approximate vector indexes"),
+			"DROP INDEX source_embedding_ann;"
+		);
+	}
+
+	#[rstest]
+	#[case(SqlDialect::Mysql, "DROP INDEX source_embedding_ann ON source;")]
+	#[case(SqlDialect::Sqlite, "DROP INDEX source_embedding_ann;")]
+	fn legacy_named_index_drop_without_type_remains_backend_agnostic(
+		#[case] dialect: SqlDialect,
+		#[case] expected: &str,
+	) {
+		let operation = named_vector_index_drop(None);
+
+		assert_eq!(
+			operation
+				.try_to_sql(&dialect)
+				.expect("legacy named index drops do not identify a vector index"),
+			expected
 		);
 	}
 

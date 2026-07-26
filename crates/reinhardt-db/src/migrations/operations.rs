@@ -3275,6 +3275,55 @@ impl Operation {
 		Ok(())
 	}
 
+	/// Validates operation invariants that require the migration project state.
+	///
+	/// Expression index result types cannot be inferred from [`ProjectState`],
+	/// so PostgreSQL remains responsible for validating expression targets.
+	pub fn validate_for_state(&self, state: &ProjectState) -> super::Result<()> {
+		#[cfg(feature = "pgvector")]
+		if let Self::CreateIndex {
+			table,
+			columns,
+			index_type,
+			expressions,
+			..
+		}
+		| Self::CreateNamedIndex {
+			table,
+			columns,
+			index_type,
+			expressions,
+			..
+		} = self && index_type.is_some_and(IndexType::is_approximate_vector)
+			&& expressions
+				.as_ref()
+				.is_none_or(|expressions| expressions.is_empty())
+			&& columns.len() == 1
+		{
+			let column = &columns[0];
+			let model = state.find_model_by_table(table).ok_or_else(|| {
+				super::MigrationError::InvalidMigration(format!(
+					"approximate vector index targets unknown table `{table}`"
+				))
+			})?;
+			let field = model.fields.get(column).ok_or_else(|| {
+				super::MigrationError::InvalidMigration(format!(
+					"approximate vector index on table `{table}` targets unknown column `{column}`"
+				))
+			})?;
+			if !matches!(field.field_type, FieldType::Vector { .. }) {
+				return Err(super::MigrationError::InvalidMigration(format!(
+					"approximate vector index on table `{table}` targets non-vector column `{column}`"
+				)));
+			}
+		}
+
+		#[cfg(not(feature = "pgvector"))]
+		let _ = state;
+
+		Ok(())
+	}
+
 	/// Validates every field definition rendered by this operation.
 	pub fn validate_for_dialect(&self, dialect: &SqlDialect) -> super::Result<()> {
 		if let Self::CreateNamedIndex { name, .. } | Self::DropNamedIndex { name, .. } = self {
@@ -10059,6 +10108,133 @@ mod tests {
 			mysql_options: None,
 			operator_class: Some("vector_cosine_ops".to_string()),
 		}
+	}
+
+	#[cfg(feature = "pgvector")]
+	fn vector_index_project_state(field_type: FieldType) -> ProjectState {
+		let mut state = ProjectState::new();
+		let mut model = ModelState::new("search", "Source");
+		model.table_name = "source".to_string();
+		model.add_field(FieldState::new("embedding", field_type, false));
+		state.add_model(model);
+		state
+	}
+
+	#[cfg(feature = "pgvector")]
+	#[test]
+	fn explicit_vector_index_rejects_scalar_column_in_project_state() {
+		// Arrange
+		let operation = vector_index_operation(IndexType::Hnsw {
+			m: Some(16),
+			ef_construction: Some(64),
+		});
+		let state = vector_index_project_state(FieldType::Text);
+
+		// Act
+		let result = operation.validate_for_state(&state);
+
+		// Assert
+		assert!(matches!(
+			result,
+			Err(crate::migrations::MigrationError::InvalidMigration(message))
+				if message == "approximate vector index on table `source` targets non-vector column `embedding`"
+		));
+	}
+
+	#[cfg(feature = "pgvector")]
+	#[test]
+	fn explicit_named_vector_index_rejects_scalar_column_in_project_state() {
+		// Arrange
+		let operation = Operation::CreateNamedIndex {
+			table: "source".to_string(),
+			name: "source_embedding_ann".to_string(),
+			columns: vec!["embedding".to_string()],
+			unique: false,
+			index_type: Some(IndexType::Ivfflat { lists: Some(100) }),
+			where_clause: None,
+			concurrently: false,
+			expressions: None,
+			mysql_options: None,
+			operator_class: Some("vector_l2_ops".to_string()),
+		};
+		let state = vector_index_project_state(FieldType::Integer);
+
+		// Act
+		let result = operation.validate_for_state(&state);
+
+		// Assert
+		assert!(matches!(
+			result,
+			Err(crate::migrations::MigrationError::InvalidMigration(message))
+				if message == "approximate vector index on table `source` targets non-vector column `embedding`"
+		));
+	}
+
+	#[cfg(feature = "pgvector")]
+	#[test]
+	fn explicit_vector_index_accepts_vector_column_in_project_state() {
+		// Arrange
+		let operation = vector_index_operation(IndexType::Hnsw {
+			m: Some(16),
+			ef_construction: Some(64),
+		});
+		let state = vector_index_project_state(FieldType::Vector { dimensions: 1536 });
+
+		// Act
+		let result = operation.validate_for_state(&state);
+
+		// Assert
+		result.unwrap();
+	}
+
+	#[cfg(feature = "pgvector")]
+	#[test]
+	fn explicit_vector_index_rejects_unknown_column_in_project_state() {
+		// Arrange
+		let operation = vector_index_operation(IndexType::Ivfflat { lists: Some(100) });
+		let mut state = vector_index_project_state(FieldType::Vector { dimensions: 1536 });
+		state
+			.find_model_by_table_mut("source")
+			.unwrap()
+			.fields
+			.remove("embedding");
+
+		// Act
+		let result = operation.validate_for_state(&state);
+
+		// Assert
+		assert!(matches!(
+			result,
+			Err(crate::migrations::MigrationError::InvalidMigration(message))
+				if message == "approximate vector index on table `source` targets unknown column `embedding`"
+		));
+	}
+
+	#[cfg(feature = "pgvector")]
+	#[test]
+	fn explicit_vector_expression_index_defers_result_type_validation_to_postgres() {
+		// Arrange
+		let operation = Operation::CreateIndex {
+			table: "source".to_string(),
+			columns: Vec::new(),
+			unique: false,
+			index_type: Some(IndexType::Hnsw {
+				m: Some(16),
+				ef_construction: Some(64),
+			}),
+			where_clause: None,
+			concurrently: false,
+			expressions: Some(vec!["normalize(embedding)".to_string()]),
+			mysql_options: None,
+			operator_class: Some("vector_cosine_ops".to_string()),
+		};
+		let state = vector_index_project_state(FieldType::Text);
+
+		// Act
+		let result = operation.validate_for_state(&state);
+
+		// Assert
+		result.unwrap();
 	}
 
 	#[cfg(feature = "pgvector")]

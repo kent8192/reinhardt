@@ -520,6 +520,7 @@ impl DatabaseMigrationExecutor {
 				.operations
 				.iter()
 				.any(Operation::requires_sqlite_recreation);
+		let mut project_state = super::ProjectState::from_global_registry();
 
 		// Create schema editor with atomic support based on migration's atomic flag
 		let mut editor = SchemaEditor::new_for_migration(
@@ -531,9 +532,6 @@ impl DatabaseMigrationExecutor {
 		.await?;
 
 		// Log if database_only flag is set
-		// Note: ProjectState tracking during migration execution is a planned enhancement.
-		// Currently, state is not tracked during apply_migration. For rollback operations,
-		// use to_reverse_sql with a pre-operation ProjectState snapshot.
 		if migration.database_only {
 			tracing::debug!(
 				"Skipping ProjectState updates for migration '{}' (database_only=true)",
@@ -551,12 +549,16 @@ impl DatabaseMigrationExecutor {
 		// Execute operations through schema editor
 		for operation in &migration.operations {
 			operation.validate_for_dialect(&dialect)?;
+			operation.validate_for_state(&project_state)?;
 
 			// Handle SQLite table recreation for incompatible operations
 			#[cfg(feature = "sqlite")]
 			if matches!(dialect, SqlDialect::Sqlite) && operation.requires_sqlite_recreation() {
 				self.handle_sqlite_recreation(operation, &mut editor)
 					.await?;
+				if !migration.database_only {
+					operation.state_forwards(&migration.app_label, &mut project_state);
+				}
 				continue;
 			}
 
@@ -578,6 +580,9 @@ impl DatabaseMigrationExecutor {
 						"Table '{}' already exists, skipping CREATE TABLE operation",
 						name
 					);
+					if !migration.database_only {
+						operation.state_forwards(&migration.app_label, &mut project_state);
+					}
 					continue;
 				}
 			}
@@ -619,6 +624,10 @@ impl DatabaseMigrationExecutor {
 
 					tracing::debug!("Statement {} executed successfully", i + 1);
 				}
+			}
+
+			if !migration.database_only {
+				operation.state_forwards(&migration.app_label, &mut project_state);
 			}
 		}
 

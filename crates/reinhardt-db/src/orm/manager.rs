@@ -13,8 +13,11 @@ use reinhardt_query::prelude::{
 };
 use std::collections::HashMap;
 use std::marker::PhantomData;
-use std::sync::Arc;
-use tokio::sync::RwLock;
+use std::sync::{
+	Arc, RwLock as StdRwLock, RwLockReadGuard as StdRwLockReadGuard,
+	RwLockWriteGuard as StdRwLockWriteGuard,
+	atomic::{AtomicBool, Ordering},
+};
 use uuid::Uuid;
 
 fn find_field_info<'a>(field_metadata: &'a [FieldInfo], field_name: &str) -> Option<&'a FieldInfo> {
@@ -134,14 +137,65 @@ fn quote_identifier(identifier: &str, backend: DatabaseBackend) -> String {
 	format!("{quote}{identifier}{quote}")
 }
 
+#[derive(Clone)]
 struct DefaultDatabase {
 	lease: DatabaseConnectionLease,
 	handle: DatabaseConnection,
+	scope: Option<Arc<ScopedRegistrationNode>>,
+}
+
+impl DefaultDatabase {
+	fn from_scope(scope: Arc<ScopedRegistrationNode>) -> Self {
+		Self {
+			lease: scope.lease.clone(),
+			handle: scope.handle,
+			scope: Some(scope),
+		}
+	}
+}
+
+enum ScopedRegistrationPredecessor {
+	Scope(Arc<ScopedRegistrationNode>),
+	Baseline(DefaultDatabase),
+}
+
+struct ScopedRegistrationNode {
+	handle: DatabaseConnection,
+	lease: DatabaseConnectionLease,
+	previous: Option<ScopedRegistrationPredecessor>,
+	active: AtomicBool,
 }
 
 /// Global database connection state
-static DB: once_cell::sync::OnceCell<Arc<RwLock<Option<DefaultDatabase>>>> =
+static DB: once_cell::sync::OnceCell<Arc<StdRwLock<Option<DefaultDatabase>>>> =
 	once_cell::sync::OnceCell::new();
+
+fn database_lock_error() -> Error {
+	Error::from(DatabaseError::new(
+		DatabaseErrorKind::Configuration,
+		"database registry lock is poisoned",
+	))
+}
+
+fn database_state()
+-> reinhardt_core::exception::Result<StdRwLockWriteGuard<'static, Option<DefaultDatabase>>> {
+	DB.get_or_init(|| Arc::new(StdRwLock::new(None)))
+		.write()
+		.map_err(|_| database_lock_error())
+}
+
+fn initialized_database_state()
+-> reinhardt_core::exception::Result<StdRwLockReadGuard<'static, Option<DefaultDatabase>>> {
+	DB.get()
+		.ok_or_else(|| {
+			Error::from(DatabaseError::new(
+				DatabaseErrorKind::Configuration,
+				"Database not initialized",
+			))
+		})?
+		.read()
+		.map_err(|_| database_lock_error())
+}
 
 /// Initialize the global database connection
 ///
@@ -188,9 +242,7 @@ pub async fn init_database_with_pool_size(
 	url: &str,
 	pool_size: Option<u32>,
 ) -> reinhardt_core::exception::Result<()> {
-	if let Some(db_cell) = DB.get()
-		&& db_cell.read().await.is_some()
-	{
+	if DB.get().is_some() && initialized_database_state()?.is_some() {
 		return Ok(());
 	}
 
@@ -199,15 +251,12 @@ pub async fn init_database_with_pool_size(
 	let database = DefaultDatabase {
 		handle: lease.handle(),
 		lease,
+		scope: None,
 	};
 
-	if let Some(db_cell) = DB.get() {
-		let mut guard = db_cell.write().await;
-		if guard.is_none() {
-			*guard = Some(database);
-		}
-	} else {
-		DB.get_or_init(|| Arc::new(RwLock::new(Some(database))));
+	let mut guard = database_state()?;
+	if guard.is_none() {
+		*guard = Some(database);
 	}
 
 	Ok(())
@@ -263,18 +312,136 @@ pub async fn reinitialize_database_with_pool_size(
 	let database = DefaultDatabase {
 		handle: lease.handle(),
 		lease,
+		scope: None,
 	};
 
-	if let Some(db_cell) = DB.get() {
-		// Replace existing connection
-		let mut guard = db_cell.write().await;
-		*guard = Some(database);
-	} else {
-		// First time initialization
-		DB.get_or_init(|| Arc::new(RwLock::new(Some(database))));
-	}
+	let mut guard = database_state()?;
+	*guard = Some(database);
 
 	Ok(())
+}
+
+/// A scoped owner for a temporary global ORM database registration.
+///
+/// The previous registration is restored when this guard drops, provided no
+/// other owner has replaced the scoped registration.
+#[must_use = "dropping the guard restores the previous database registration"]
+pub struct ScopedDatabaseRegistration {
+	node: Arc<ScopedRegistrationNode>,
+}
+
+impl ScopedDatabaseRegistration {
+	/// Returns the copyable handle for the scoped database.
+	pub fn connection(&self) -> DatabaseConnection {
+		self.node.handle
+	}
+
+	/// Returns a lease that keeps the scoped database connection alive.
+	///
+	/// The lease does not guarantee that this registration remains installed
+	/// globally if another owner replaces it.
+	pub fn lease(&self) -> DatabaseConnectionLease {
+		self.node.lease.clone()
+	}
+}
+
+impl Drop for ScopedDatabaseRegistration {
+	fn drop(&mut self) {
+		if !self.node.active.swap(false, Ordering::AcqRel) {
+			return;
+		}
+		restore_if_current(&self.node);
+	}
+}
+
+fn restore_if_current(node: &Arc<ScopedRegistrationNode>) {
+	match database_state() {
+		Ok(mut state) => {
+			if state.as_ref().is_some_and(|database| {
+				database
+					.scope
+					.as_ref()
+					.is_some_and(|current| Arc::ptr_eq(current, node))
+			}) {
+				*state = nearest_active_predecessor(node);
+			} else if !state.as_ref().is_some_and(|database| {
+				database
+					.scope
+					.as_ref()
+					.is_some_and(|current| scope_descends_from(current, node))
+			}) {
+				tracing::warn!(
+					"Scoped database registration was externally replaced; previous registration will not be restored"
+				);
+			}
+		}
+		Err(error) => {
+			tracing::warn!(
+				error = %error,
+				"Scoped database registration could not restore the previous registration"
+			);
+		}
+	}
+}
+
+fn scope_descends_from(
+	current: &ScopedRegistrationNode,
+	ancestor: &Arc<ScopedRegistrationNode>,
+) -> bool {
+	let mut previous = current.previous.as_ref();
+	while let Some(ScopedRegistrationPredecessor::Scope(scope)) = previous {
+		if Arc::ptr_eq(scope, ancestor) {
+			return true;
+		}
+		previous = scope.previous.as_ref();
+	}
+	false
+}
+
+fn nearest_active_predecessor(node: &ScopedRegistrationNode) -> Option<DefaultDatabase> {
+	let mut previous = node.previous.as_ref();
+	loop {
+		match previous {
+			Some(ScopedRegistrationPredecessor::Scope(scope)) => {
+				if scope.active.load(Ordering::Acquire) {
+					return Some(DefaultDatabase::from_scope(scope.clone()));
+				}
+				previous = scope.previous.as_ref();
+			}
+			Some(ScopedRegistrationPredecessor::Baseline(database)) => {
+				return Some(database.clone());
+			}
+			None => return None,
+		}
+	}
+}
+
+/// Installs a temporary global ORM database registration.
+///
+/// The backend connection is created before the global registry is locked.
+pub async fn install_scoped_database(
+	database_url: &str,
+) -> reinhardt_core::exception::Result<ScopedDatabaseRegistration> {
+	let owner = super::engine::connect_backend_with_pool_size(database_url, None).await?;
+	let installed_lease = DatabaseConnectionLease::register(owner)?;
+	let installed_handle = installed_lease.handle();
+	let node = {
+		let mut state = database_state()?;
+		let previous = state.take().map(|database| match database.scope.clone() {
+			Some(scope) => ScopedRegistrationPredecessor::Scope(scope),
+			None => ScopedRegistrationPredecessor::Baseline(database),
+		});
+		let node = Arc::new(ScopedRegistrationNode {
+			handle: installed_handle,
+			lease: installed_lease,
+			previous,
+			active: AtomicBool::new(true),
+		});
+		*state = Some(DefaultDatabase::from_scope(node.clone()));
+		node
+	};
+
+	Ok(ScopedDatabaseRegistration { node })
 }
 
 /// Replace the global ORM database connection and return the previous value.
@@ -285,24 +452,26 @@ pub async fn reinitialize_database_with_pool_size(
 pub async fn replace_database_connection_for_testing(
 	lease: Option<DatabaseConnectionLease>,
 ) -> Option<DatabaseConnectionLease> {
-	let db = DB.get_or_init(|| Arc::new(RwLock::new(None)));
-	let mut guard = db.write().await;
 	let database = lease.map(|lease| DefaultDatabase {
 		handle: lease.handle(),
 		lease,
+		scope: None,
 	});
-	std::mem::replace(&mut *guard, database).map(|database| database.lease)
+	match database_state() {
+		Ok(mut state) => std::mem::replace(&mut *state, database).map(|database| database.lease),
+		Err(error) => {
+			tracing::warn!(
+				error = %error,
+				"Test database registration could not be replaced"
+			);
+			None
+		}
+	}
 }
 
 /// Get a reference to the global database connection
 pub async fn get_connection() -> reinhardt_core::exception::Result<DatabaseConnection> {
-	let db = DB.get().ok_or_else(|| {
-		Error::from(DatabaseError::new(
-			DatabaseErrorKind::Configuration,
-			"Database not initialized",
-		))
-	})?;
-	let guard = db.read().await;
+	let guard = initialized_database_state()?;
 	guard
 		.as_ref()
 		.map(|database| database.handle)
@@ -317,13 +486,7 @@ pub async fn get_connection() -> reinhardt_core::exception::Result<DatabaseConne
 /// Returns a lease that retains the global ORM database registration.
 #[doc(hidden)]
 pub async fn get_connection_lease() -> reinhardt_core::exception::Result<DatabaseConnectionLease> {
-	let db = DB.get().ok_or_else(|| {
-		Error::from(DatabaseError::new(
-			DatabaseErrorKind::Configuration,
-			"Database not initialized",
-		))
-	})?;
-	let guard = db.read().await;
+	let guard = initialized_database_state()?;
 	guard
 		.as_ref()
 		.map(|database| database.lease.clone())
@@ -339,13 +502,7 @@ pub async fn get_connection_lease() -> reinhardt_core::exception::Result<Databas
 #[doc(hidden)]
 pub async fn get_connection_registration()
 -> reinhardt_core::exception::Result<(DatabaseConnectionLease, DatabaseConnection)> {
-	let db = DB.get().ok_or_else(|| {
-		Error::from(DatabaseError::new(
-			DatabaseErrorKind::Configuration,
-			"Database not initialized",
-		))
-	})?;
-	let guard = db.read().await;
+	let guard = initialized_database_state()?;
 	guard
 		.as_ref()
 		.map(|database| (database.lease.clone(), database.handle))

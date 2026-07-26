@@ -2205,10 +2205,10 @@ pub(crate) fn model_derive_impl(mut input: DeriveInput) -> Result<TokenStream> {
 				#orm_crate::query::FilterValue::Timestamp(pk)
 			}
 		}
-	} else if !is_composite_pk && is_fully_qualified_string_type(pk_type) {
+	} else if !is_composite_pk && is_string_type(pk_type) {
 		quote! {
 			fn primary_key_filter_value(pk: Self::PrimaryKey) -> #orm_crate::query::FilterValue {
-				#orm_crate::query::FilterValue::String(pk)
+				#orm_crate::query::FilterValue::String(pk.to_string())
 			}
 		}
 	} else {
@@ -3699,27 +3699,6 @@ fn is_string_type(ty: &Type) -> bool {
 		return last_segment.ident == "String";
 	}
 	false
-}
-
-/// Check whether a type is explicitly `std::string::String`.
-///
-/// Primary-key filter conversion requires the concrete standard-library string
-/// type because imported aliases may use the `String` spelling for a domain key.
-fn is_fully_qualified_string_type(ty: &Type) -> bool {
-	let (_, inner_ty) = extract_option_type(ty);
-	let Type::Path(type_path) = inner_ty else {
-		return false;
-	};
-	matches!(
-		type_path
-			.path
-			.segments
-			.iter()
-			.map(|segment| segment.ident.to_string())
-			.collect::<Vec<_>>()
-			.as_slice(),
-		[std, string, string_type] if std == "std" && string == "string" && string_type == "String"
-	)
 }
 
 /// Check if a type is an integer type suitable for auto-increment primary key
@@ -5582,7 +5561,7 @@ mod tests {
 			#[model(app_label = "test", table_name = "string_models")]
 			pub struct StringModel {
 				#[field(primary_key = true, max_length = 255)]
-				pub id: std::string::String,
+				pub id: String,
 			}
 		};
 
@@ -5593,10 +5572,29 @@ mod tests {
 			generated_primary_key_filter_value(&output),
 			quote! {
 				fn primary_key_filter_value(pk: Self::PrimaryKey) -> #orm_crate::query::FilterValue {
-					#orm_crate::query::FilterValue::String(pk)
+					#orm_crate::query::FilterValue::String(pk.to_string())
 				}
 			}
 			.to_string()
+		);
+	}
+
+	#[rstest]
+	fn string_named_custom_primary_key_uses_display_string_filter_value() {
+		let input = quote! {
+			#[model(app_label = "test", table_name = "custom_string_models")]
+			pub struct CustomStringModel {
+				#[field(primary_key = true, max_length = 255)]
+				pub id: String,
+			}
+		};
+
+		let output = model_derive_impl(syn::parse2(input).unwrap()).unwrap();
+
+		assert!(
+			output
+				.to_string()
+				.contains("FilterValue :: String (pk . to_string ())")
 		);
 	}
 

@@ -2557,7 +2557,7 @@ fn generate_model_form_support(
 							#forms_crate::model_form::ModelFormError::MissingModelField {
 								field: #field_literal,
 							},
-						);
+						)
 					}
 				} else {
 					quote!(::std::default::Default::default())
@@ -2566,7 +2566,7 @@ fn generate_model_form_support(
 			}
 		})
 		.collect();
-	let build_from_payload_body = if let Some(field) = missing_noneditable_field {
+	let build_from_payload_body = if let Some(field) = &missing_noneditable_field {
 		quote! {
 			let _ = data;
 			::core::result::Result::Err(
@@ -2582,6 +2582,23 @@ fn generate_model_form_support(
 			})
 		}
 	};
+	let build_from_payload_with_deferred_field_body =
+		if let Some(field) = &missing_noneditable_field {
+			quote! {
+				let _ = (data, deferred_field);
+				::core::result::Result::Err(
+					#forms_crate::model_form::ModelFormError::MissingModelField {
+						field: #field,
+					},
+				)
+			}
+		} else {
+			quote! {
+				::core::result::Result::Ok(Self {
+					#(#deferred_build_assignments,)*
+				})
+			}
+		};
 	let apply_payload_fields = editable_fields
 		.iter()
 		.filter(|field| !field.config.primary_key)
@@ -2767,9 +2784,7 @@ fn generate_model_form_support(
 				data: &Self::Data<P>,
 				deferred_field: &str,
 			) -> ::core::result::Result<Self, #forms_crate::model_form::ModelFormError> {
-				::core::result::Result::Ok(Self {
-					#(#deferred_build_assignments,)*
-				})
+				#build_from_payload_with_deferred_field_body
 			}
 
 			fn apply_payload<P: #core_crate::model_form::ModelFormPolicy>(
@@ -2788,12 +2803,19 @@ fn generate_model_form_support(
 				let manager = <Self as #orm_crate::Model>::objects();
 				let result = match mode {
 					#forms_crate::model_form::ModelFormPersistenceMode::Create => {
-						#orm_crate::custom_manager::CustomManager::create_with_conn(
+						match #orm_crate::custom_manager::CustomManager::create_with_conn_outcome(
 							&manager,
 							executor,
 							self,
 						)
-						.await
+						.await {
+							#orm_crate::custom_manager::CreateWithConnOutcome::Created(saved) =>
+								::core::result::Result::Ok(saved),
+							#orm_crate::custom_manager::CreateWithConnOutcome::FailedBeforeInsert(error) =>
+								::core::result::Result::Err((error, false)),
+							#orm_crate::custom_manager::CreateWithConnOutcome::FailedAfterInsert(error) =>
+								::core::result::Result::Err((error, true)),
+						}
 					}
 					#forms_crate::model_form::ModelFormPersistenceMode::Update => {
 						#orm_crate::custom_manager::CustomManager::update_with_conn(
@@ -2802,6 +2824,7 @@ fn generate_model_form_support(
 							self,
 						)
 						.await
+						.map_err(|error| (error, false))
 					}
 				};
 
@@ -2810,7 +2833,7 @@ fn generate_model_form_support(
 						*self = saved;
 						::core::result::Result::Ok(())
 					}
-					::core::result::Result::Err(error) => {
+					::core::result::Result::Err((error, persisted_create)) => {
 						let source = match error {
 							#core_crate::exception::Error::Database(source) => source,
 							#core_crate::exception::Error::DatabaseWithSource {
@@ -2822,9 +2845,15 @@ fn generate_model_form_support(
 								other.to_string(),
 							),
 						};
-						::core::result::Result::Err(
-							#forms_crate::model_form::ModelFormError::Persistence { source },
-						)
+						if persisted_create {
+							::core::result::Result::Err(
+								#forms_crate::model_form::ModelFormError::PersistenceAfterCreate { source },
+							)
+						} else {
+							::core::result::Result::Err(
+								#forms_crate::model_form::ModelFormError::Persistence { source },
+							)
+						}
 					}
 				}
 			}

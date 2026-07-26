@@ -293,7 +293,7 @@ where
 					self.form.add_error(ALL_FIELDS_KEY, message);
 				}
 			}
-			ModelFormError::Persistence { .. } => {}
+			ModelFormError::Persistence { .. } | ModelFormError::PersistenceAfterCreate { .. } => {}
 		}
 	}
 
@@ -307,7 +307,14 @@ where
 			.validated_candidate
 			.as_mut()
 			.expect("build_instance caches a validated candidate");
-		FormModel::save_with_mode(candidate, executor, self.persistence_mode).await?;
+		if let Err(error) =
+			FormModel::save_with_mode(candidate, executor, self.persistence_mode).await
+		{
+			if matches!(error, ModelFormError::PersistenceAfterCreate { .. }) {
+				self.persistence_mode = ModelFormPersistenceMode::Update;
+			}
+			return Err(error);
+		}
 		let saved = candidate.clone();
 		self.instance = Some(saved.clone());
 		self.persistence_mode = ModelFormPersistenceMode::Update;
@@ -648,6 +655,66 @@ mod tests {
 		}
 	}
 
+	#[derive(Debug)]
+	struct MySqlHydrationRetryExecutor {
+		fetch_rows: VecDeque<Result<Row, Error>>,
+		queries: Vec<String>,
+	}
+
+	impl MySqlHydrationRetryExecutor {
+		fn new(fetch_rows: impl IntoIterator<Item = Result<Row, Error>>) -> Self {
+			Self {
+				fetch_rows: fetch_rows.into_iter().collect(),
+				queries: Vec::new(),
+			}
+		}
+	}
+
+	#[reinhardt_core::async_trait]
+	impl OrmExecutor for MySqlHydrationRetryExecutor {
+		fn backend(&self) -> DatabaseBackend {
+			DatabaseBackend::MySql
+		}
+
+		async fn execute(
+			&mut self,
+			sql: &str,
+			_params: Vec<QueryValue>,
+		) -> Result<QueryResult, Error> {
+			self.queries.push(sql.to_owned());
+			Ok(QueryResult {
+				rows_affected: 1,
+				last_insert_id: Some(23),
+			})
+		}
+
+		async fn fetch_one(&mut self, sql: &str, _params: Vec<QueryValue>) -> Result<Row, Error> {
+			self.queries.push(sql.to_owned());
+			self.fetch_rows.pop_front().unwrap_or_else(|| {
+				Err(DatabaseError::new(DatabaseErrorKind::Query, "missing queued row").into())
+			})
+		}
+
+		async fn fetch_all(
+			&mut self,
+			_sql: &str,
+			_params: Vec<QueryValue>,
+		) -> Result<Vec<Row>, Error> {
+			Err(DatabaseError::new(DatabaseErrorKind::Query, "unexpected fetch_all call").into())
+		}
+
+		async fn fetch_optional(
+			&mut self,
+			_sql: &str,
+			_params: Vec<QueryValue>,
+		) -> Result<Option<Row>, Error> {
+			Err(
+				DatabaseError::new(DatabaseErrorKind::Query, "unexpected fetch_optional call")
+					.into(),
+			)
+		}
+	}
+
 	fn question_row(id: i64, title: &str, owner_id: i64, published: bool) -> Row {
 		let mut row = Row::new();
 		row.insert("id".to_owned(), QueryValue::Int(id));
@@ -935,6 +1002,33 @@ mod tests {
 		assert_eq!(form.instance(), Some(&saved));
 		assert_eq!(executor.fetch_one_calls, 2);
 		assert_eq!(cleaner_calls.load(Ordering::SeqCst), 1);
+	}
+
+	#[test]
+	fn mysql_hydration_failure_never_retries_the_insert() {
+		let data = question_payload("Persisted before hydration", 17);
+		let mut executor = MySqlHydrationRetryExecutor::new([
+			Err(DatabaseError::new(DatabaseErrorKind::Query, "MySQL reload failed").into()),
+			Ok(question_row(23, "Persisted before hydration", 17, true)),
+		]);
+		let mut form = ModelForm::<Question, QuestionPolicy>::from_payload(data);
+
+		let error = tokio_test::block_on(form.save(&mut executor)).unwrap_err();
+		assert!(matches!(
+			error,
+			ModelFormError::PersistenceAfterCreate { .. }
+		));
+
+		let retry_error = tokio_test::block_on(form.save(&mut executor)).unwrap_err();
+		assert!(matches!(retry_error, ModelFormError::Persistence { .. }));
+		assert_eq!(
+			executor
+				.queries
+				.iter()
+				.filter(|query| query.trim_start().starts_with("INSERT"))
+				.count(),
+			1
+		);
 	}
 
 	#[test]

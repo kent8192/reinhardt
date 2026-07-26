@@ -38,13 +38,22 @@ pub enum ModelFormError {
 		/// The structured database failure.
 		source: DatabaseError,
 	},
+	/// The database inserted the record, but Reinhardt could not hydrate it.
+	///
+	/// Retrying the same create would duplicate the row. Reload the persisted
+	/// record before attempting a subsequent update.
+	#[error("model form create persisted but hydration failed: {source}")]
+	PersistenceAfterCreate {
+		/// The structured database failure.
+		source: DatabaseError,
+	},
 }
 
 impl ModelFormError {
 	/// Returns the structured database failure retained by a persistence error.
 	pub fn database_error(&self) -> Option<&DatabaseError> {
 		match self {
-			Self::Persistence { source } => Some(source),
+			Self::Persistence { source } | Self::PersistenceAfterCreate { source } => Some(source),
 			_ => None,
 		}
 	}

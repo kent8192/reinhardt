@@ -124,6 +124,20 @@ use super::manager::Manager;
 use super::model::Model;
 use super::query::{QueryFilterInput, QuerySet, RelationLoadInput};
 
+/// The result of an insert whose database write and model hydration are separate.
+///
+/// MySQL does not support `RETURNING`, so an insert succeeds before Reinhardt
+/// reloads the stored row. Consumers that need retry-safe semantics can use
+/// this outcome to avoid repeating an insert after that reload fails.
+pub enum CreateWithConnOutcome<M> {
+	/// The row was inserted and hydrated successfully.
+	Created(M),
+	/// The insert did not complete.
+	FailedBeforeInsert(reinhardt_core::exception::Error),
+	/// The insert completed, but reloading the stored row failed.
+	FailedAfterInsert(reinhardt_core::exception::Error),
+}
+
 /// Trait that exposes the full surface area of an object manager and provides
 /// extension hooks for custom behavior.
 ///
@@ -375,6 +389,26 @@ pub trait CustomManager: Sized + Send + Sync {
 			Manager::<Self::Model>::new()
 				.create_with_conn(conn, &model)
 				.await
+		}
+	}
+
+	/// Inserts a new record and reports whether a failure occurred after the write.
+	///
+	/// Custom managers that perform a multi-step insert should override this
+	/// method when they can distinguish a failed write from a failed hydration.
+	fn create_with_conn_outcome<'a, E>(
+		&'a self,
+		conn: &'a mut E,
+		model: &'a Self::Model,
+	) -> impl Future<Output = CreateWithConnOutcome<Self::Model>> + Send + 'a
+	where
+		E: OrmExecutor + ?Sized + 'a,
+	{
+		async move {
+			match self.create_with_conn(conn, model).await {
+				Ok(model) => CreateWithConnOutcome::Created(model),
+				Err(error) => CreateWithConnOutcome::FailedBeforeInsert(error),
+			}
 		}
 	}
 
@@ -726,5 +760,16 @@ impl<M: Model> CustomManager for Manager<M> {
 
 	fn new() -> Self {
 		Manager::new()
+	}
+
+	fn create_with_conn_outcome<'a, E>(
+		&'a self,
+		conn: &'a mut E,
+		model: &'a Self::Model,
+	) -> impl Future<Output = CreateWithConnOutcome<Self::Model>> + Send + 'a
+	where
+		E: OrmExecutor + ?Sized + 'a,
+	{
+		Manager::create_with_conn_outcome(self, conn, model)
 	}
 }

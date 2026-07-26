@@ -1238,9 +1238,36 @@ impl<M: Model> Manager<M> {
 	where
 		E: OrmExecutor + ?Sized,
 	{
-		let obj = model.encode_database_fields().map_err(field_codec_error)?;
-		let mut stmt =
-			Self::build_insert_statement_from_object(&obj, |field| model.field_is_none(field))?;
+		match self.create_with_conn_outcome(conn, model).await {
+			super::custom_manager::CreateWithConnOutcome::Created(model) => Ok(model),
+			super::custom_manager::CreateWithConnOutcome::FailedBeforeInsert(error)
+			| super::custom_manager::CreateWithConnOutcome::FailedAfterInsert(error) => Err(error),
+		}
+	}
+
+	/// Inserts a record and reports whether a later hydration failure happened after the write.
+	pub async fn create_with_conn_outcome<E>(
+		&self,
+		conn: &mut E,
+		model: &M,
+	) -> super::custom_manager::CreateWithConnOutcome<M>
+	where
+		E: OrmExecutor + ?Sized,
+	{
+		let obj = match model.encode_database_fields().map_err(field_codec_error) {
+			Ok(obj) => obj,
+			Err(error) => {
+				return super::custom_manager::CreateWithConnOutcome::FailedBeforeInsert(error);
+			}
+		};
+		let mut stmt = match Self::build_insert_statement_from_object(&obj, |field| {
+			model.field_is_none(field)
+		}) {
+			Ok(statement) => statement,
+			Err(error) => {
+				return super::custom_manager::CreateWithConnOutcome::FailedBeforeInsert(error);
+			}
+		};
 		let backend = conn.backend();
 		if backend != DatabaseBackend::MySql {
 			stmt.returning(Self::returning_columns_from_object(&obj));
@@ -1262,7 +1289,12 @@ impl<M: Model> Manager<M> {
 					)
 				})
 				.cloned();
-			let result = conn.execute(&sql, params).await?;
+			let result = match conn.execute(&sql, params).await {
+				Ok(result) => result,
+				Err(error) => {
+					return super::custom_manager::CreateWithConnOutcome::FailedBeforeInsert(error);
+				}
+			};
 			let primary_key = explicit_primary_key
 				.map(database_value_to_query_value)
 				.or_else(|| {
@@ -1277,7 +1309,13 @@ impl<M: Model> Manager<M> {
 						DatabaseErrorKind::Unsupported,
 						"MySQL insert did not return a generated primary key",
 					))
-				})?;
+				});
+			let primary_key = match primary_key {
+				Ok(primary_key) => primary_key,
+				Err(error) => {
+					return super::custom_manager::CreateWithConnOutcome::FailedAfterInsert(error);
+				}
+			};
 			let field_metadata = M::field_metadata();
 			let primary_key_column = Self::field_column(&field_metadata, M::primary_key_field());
 			let mut select = Query::select();
@@ -1291,16 +1329,36 @@ impl<M: Model> Manager<M> {
 				.into_iter()
 				.map(Self::sea_value_to_query_value)
 				.collect();
-			let row = conn.fetch_one(&select_sql, select_params).await?;
-			return QueryRow::from_backend_row(row)
+			let row = match conn.fetch_one(&select_sql, select_params).await {
+				Ok(row) => row,
+				Err(error) => {
+					return super::custom_manager::CreateWithConnOutcome::FailedAfterInsert(error);
+				}
+			};
+			return match QueryRow::from_backend_row(row)
 				.deserialize_model::<M>()
-				.map_err(field_codec_error);
+				.map_err(field_codec_error)
+			{
+				Ok(model) => super::custom_manager::CreateWithConnOutcome::Created(model),
+				Err(error) => {
+					super::custom_manager::CreateWithConnOutcome::FailedAfterInsert(error)
+				}
+			};
 		}
 
-		let row = conn.fetch_one(&sql, params).await?;
-		QueryRow::from_backend_row(row)
+		let row = match conn.fetch_one(&sql, params).await {
+			Ok(row) => row,
+			Err(error) => {
+				return super::custom_manager::CreateWithConnOutcome::FailedBeforeInsert(error);
+			}
+		};
+		match QueryRow::from_backend_row(row)
 			.deserialize_model::<M>()
 			.map_err(field_codec_error)
+		{
+			Ok(model) => super::custom_manager::CreateWithConnOutcome::Created(model),
+			Err(error) => super::custom_manager::CreateWithConnOutcome::FailedBeforeInsert(error),
+		}
 	}
 
 	pub(crate) fn json_to_sea_value_for_field(

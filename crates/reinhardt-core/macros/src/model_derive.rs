@@ -2193,6 +2193,21 @@ pub(crate) fn model_derive_impl(mut input: DeriveInput) -> Result<TokenStream> {
 
 		(pk_getter, pk_setter, quote! {})
 	};
+	let pk_filter_value_impl = if !is_composite_pk && is_uuid_type(pk_type) {
+		quote! {
+			fn primary_key_filter_value(pk: Self::PrimaryKey) -> #orm_crate::query::FilterValue {
+				#orm_crate::query::FilterValue::Uuid(pk)
+			}
+		}
+	} else if !is_composite_pk && is_datetime_utc_type(pk_type) {
+		quote! {
+			fn primary_key_filter_value(pk: Self::PrimaryKey) -> #orm_crate::query::FilterValue {
+				#orm_crate::query::FilterValue::Timestamp(pk)
+			}
+		}
+	} else {
+		quote! {}
+	};
 
 	// Generate field accessor methods
 	let field_accessors = generate_field_accessors(struct_name, &field_infos);
@@ -2335,6 +2350,8 @@ pub(crate) fn model_derive_impl(mut input: DeriveInput) -> Result<TokenStream> {
 			#pk_impl
 
 			#set_pk_impl
+
+			#pk_filter_value_impl
 
 			#composite_pk_impl
 
@@ -5289,6 +5306,19 @@ fn generate_info_builder(
 mod tests {
 	use super::*;
 
+	fn generated_primary_key_filter_value(output: &TokenStream) -> String {
+		let output = output.to_string();
+		let start = output
+			.find("fn primary_key_filter_value")
+			.expect("UUID and timestamp primary keys should override the filter conversion");
+		let function = &output[start..];
+		let end = function
+			.find('}')
+			.expect("generated filter conversion should have a function body")
+			+ 1;
+		function[..end].to_string()
+	}
+
 	#[test]
 	fn test_fields_are_private() {
 		let input = quote! {
@@ -5438,5 +5468,53 @@ mod tests {
 		);
 		assert!(!output_str.contains("pub fn set_id"));
 		assert!(!output_str.contains("pub fn set_created_at"));
+	}
+
+	#[test]
+	fn uuid_primary_key_uses_uuid_filter_value() {
+		let input = quote! {
+			#[model(app_label = "test", table_name = "uuid_models")]
+			pub struct UuidModel {
+				#[field(primary_key = true)]
+				pub id: uuid::Uuid,
+			}
+		};
+
+		let output = model_derive_impl(syn::parse2(input).unwrap()).unwrap();
+		let orm_crate = get_reinhardt_orm_crate();
+
+		assert_eq!(
+			generated_primary_key_filter_value(&output),
+			quote! {
+				fn primary_key_filter_value(pk: Self::PrimaryKey) -> #orm_crate::query::FilterValue {
+					#orm_crate::query::FilterValue::Uuid(pk)
+				}
+			}
+			.to_string()
+		);
+	}
+
+	#[test]
+	fn timestamp_primary_key_uses_timestamp_filter_value() {
+		let input = quote! {
+			#[model(app_label = "test", table_name = "timestamp_models")]
+			pub struct TimestampModel {
+				#[field(primary_key = true)]
+				pub id: chrono::DateTime<chrono::Utc>,
+			}
+		};
+
+		let output = model_derive_impl(syn::parse2(input).unwrap()).unwrap();
+		let orm_crate = get_reinhardt_orm_crate();
+
+		assert_eq!(
+			generated_primary_key_filter_value(&output),
+			quote! {
+				fn primary_key_filter_value(pk: Self::PrimaryKey) -> #orm_crate::query::FilterValue {
+					#orm_crate::query::FilterValue::Timestamp(pk)
+				}
+			}
+			.to_string()
+		);
 	}
 }

@@ -239,6 +239,11 @@ name = "vector_expression"
 path = "tests/vector_expression.rs"
 required-features = ["pgvector"]
 
+[[test]]
+name = "pgvector_orm"
+path = "tests/pgvector_orm.rs"
+required-features = ["pgvector"]
+
 [target.'cfg(not(all(target_family = "wasm", target_os = "unknown")))'.dev-dependencies]
 tokio-test = "0.4"
 sqlx = { workspace = true, features = ["runtime-tokio", "postgres"] }

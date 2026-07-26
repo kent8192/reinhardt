@@ -1456,6 +1456,10 @@ impl<M: Model> Manager<M> {
 
 			// JSON types - serialize to string
 			reinhardt_query::value::Value::Json(json) => QueryValue::Json(json),
+			reinhardt_query::value::Value::Vector(Some(values)) => {
+				QueryValue::Vector((*values).clone())
+			}
+			reinhardt_query::value::Value::Vector(None) => QueryValue::Null,
 			reinhardt_query::value::Value::Array(array_type, Some(values)) => {
 				use reinhardt_query::value::Value as SeaValue;
 
@@ -3040,6 +3044,19 @@ mod tests {
 			value,
 			reinhardt_query::value::Value::Vector(Some(Box::new(vec![1.0, 2.0, 3.0])))
 		);
+	}
+
+	#[test]
+	fn manager_binds_vector_values_natively() {
+		let value = Manager::<JsonManagerModel>::sea_value_to_query_value(
+			reinhardt_query::value::Value::Vector(Some(Box::new(vec![1.0, 2.0, 3.0]))),
+		);
+		let null_value = Manager::<JsonManagerModel>::sea_value_to_query_value(
+			reinhardt_query::value::Value::Vector(None),
+		);
+
+		assert_eq!(value, QueryValue::Vector(vec![1.0, 2.0, 3.0]));
+		assert_eq!(null_value, QueryValue::Null);
 	}
 
 	#[cfg(feature = "pgvector")]

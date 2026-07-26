@@ -6079,6 +6079,48 @@ where
 			.collect()
 	}
 
+	/// Execute the queryset with an explicit database connection and return rows
+	/// without deserializing them into the model.
+	///
+	/// This preserves selected and annotated expression values that are not model
+	/// fields while retaining the same backend validation, bound parameters, and
+	/// structural error context as [`Self::all_with_db`].
+	pub async fn rows_with_db<E>(
+		&self,
+		conn: &mut E,
+	) -> reinhardt_core::exception::Result<Vec<QueryRow>>
+	where
+		E: OrmExecutor,
+	{
+		let stmt = self.build_select_statement()?;
+		let context = super::execution::pgvector_context_for_select(&stmt);
+		let (sql, values) = Self::build_select_for_backend(&stmt, conn.backend())?;
+		let param_samples = values
+			.iter()
+			.map(|value| value.to_sql_literal())
+			.collect::<Vec<_>>();
+		let params = super::execution::convert_values(values);
+
+		let started_at = Instant::now();
+		let query_result = conn.fetch_all_with_context(&sql, params, context).await;
+		let duration = started_at.elapsed();
+
+		match query_result {
+			Ok(rows) => {
+				super::instrumentation::instrumentation()
+					.orm_query_end_with_params(&sql, &param_samples, duration)
+					.await;
+				Ok(rows.into_iter().map(QueryRow::from_backend_row).collect())
+			}
+			Err(error) => {
+				super::instrumentation::instrumentation()
+					.orm_query_error(&sql, &format!("{error:?}"))
+					.await;
+				Err(error)
+			}
+		}
+	}
+
 	/// Execute the queryset through an active transaction executor and return all records.
 	pub async fn all_with_executor(
 		&self,
@@ -8455,6 +8497,7 @@ mod tests {
 		backend: DatabaseBackend,
 		calls: Vec<(String, Vec<crate::orm::QueryValue>)>,
 		contexts: Vec<Option<crate::backends::error::PgvectorOperationKind>>,
+		rows: Vec<crate::orm::Row>,
 	}
 
 	#[cfg(feature = "pgvector")]
@@ -8464,6 +8507,7 @@ mod tests {
 				backend,
 				calls: Vec::new(),
 				contexts: Vec::new(),
+				rows: Vec::new(),
 			}
 		}
 	}
@@ -8685,7 +8729,7 @@ mod tests {
 			params: Vec<crate::orm::QueryValue>,
 		) -> reinhardt_core::exception::Result<Vec<crate::orm::Row>> {
 			self.calls.push((sql.to_owned(), params));
-			Ok(Vec::new())
+			Ok(std::mem::take(&mut self.rows))
 		}
 
 		async fn fetch_all_with_context(
@@ -9058,6 +9102,34 @@ mod tests {
 				crate::orm::QueryValue::Float(0.25),
 				crate::orm::QueryValue::Vector(vec![4.0, 5.0, 6.0]),
 			]
+		);
+		assert_eq!(executor.contexts, vec![Some(distance_and_vector_context())]);
+	}
+
+	#[cfg(feature = "pgvector")]
+	#[tokio::test]
+	async fn typed_vector_rows_with_db_preserves_projected_values_and_bound_context() {
+		let field = Field::<TestUser, crate::orm::Vector<3>>::new(vec!["embedding"]);
+		let queryset = QuerySet::<TestUser>::new().values(&["id"]).select_expr(
+			"distance",
+			field.cosine_distance(typed_vector_target(&[1.0, 2.0, 3.0])),
+		);
+		let mut executor = RecordingExecutor::default();
+		executor.rows.push(crate::orm::Row {
+			data: HashMap::from([
+				("id".to_owned(), crate::orm::QueryValue::Int(7)),
+				("distance".to_owned(), crate::orm::QueryValue::Float(0.25)),
+			]),
+		});
+
+		let rows = queryset.rows_with_db(&mut executor).await.unwrap();
+
+		assert_eq!(rows.len(), 1);
+		assert_eq!(rows[0].get::<i64>("id"), Some(7));
+		assert_eq!(rows[0].get::<f64>("distance"), Some(0.25));
+		assert_eq!(
+			executor.calls[0].1,
+			vec![crate::orm::QueryValue::Vector(vec![1.0, 2.0, 3.0])]
 		);
 		assert_eq!(executor.contexts, vec![Some(distance_and_vector_context())]);
 	}

@@ -3280,6 +3280,19 @@ impl Operation {
 	/// Expression index result types cannot be inferred from [`ProjectState`],
 	/// so PostgreSQL remains responsible for validating expression targets.
 	pub fn validate_for_state(&self, state: &ProjectState) -> super::Result<()> {
+		self.validate_for_state_with_unknown_table_policy(state, false)
+	}
+
+	/// Validates known migration state while deferring targets whose table history is absent.
+	pub(crate) fn validate_for_partial_state(&self, state: &ProjectState) -> super::Result<()> {
+		self.validate_for_state_with_unknown_table_policy(state, true)
+	}
+
+	fn validate_for_state_with_unknown_table_policy(
+		&self,
+		state: &ProjectState,
+		allow_unknown_table: bool,
+	) -> super::Result<()> {
 		#[cfg(feature = "pgvector")]
 		if let Self::CreateIndex {
 			table,
@@ -3301,11 +3314,14 @@ impl Operation {
 			&& columns.len() == 1
 		{
 			let column = &columns[0];
-			let model = state.find_model_by_table(table).ok_or_else(|| {
-				super::MigrationError::InvalidMigration(format!(
+			let Some(model) = state.find_model_by_table(table) else {
+				if allow_unknown_table {
+					return Ok(());
+				}
+				return Err(super::MigrationError::InvalidMigration(format!(
 					"approximate vector index targets unknown table `{table}`"
-				))
-			})?;
+				)));
+			};
 			let field = model.fields.get(column).ok_or_else(|| {
 				super::MigrationError::InvalidMigration(format!(
 					"approximate vector index on table `{table}` targets unknown column `{column}`"
@@ -3319,7 +3335,7 @@ impl Operation {
 		}
 
 		#[cfg(not(feature = "pgvector"))]
-		let _ = state;
+		let _ = (state, allow_unknown_table);
 
 		Ok(())
 	}

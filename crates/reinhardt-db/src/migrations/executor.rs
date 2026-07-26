@@ -21,7 +21,7 @@ fn validate_and_advance_migration_state(
 	state: &mut super::ProjectState,
 ) -> Result<()> {
 	for operation in &migration.operations {
-		operation.validate_for_state(state)?;
+		operation.validate_for_partial_state(state)?;
 		operation.state_forwards(&migration.app_label, state);
 	}
 	Ok(())
@@ -3661,6 +3661,161 @@ mod vector_index_validation_state_tests {
 
 		// Assert
 		result.unwrap();
+	}
+
+	#[cfg(feature = "sqlite")]
+	async fn sqlite_executor() -> DatabaseMigrationExecutor {
+		let connection = DatabaseConnection::connect_sqlite("sqlite::memory:")
+			.await
+			.unwrap();
+		DatabaseMigrationExecutor::new(connection)
+	}
+
+	#[cfg(feature = "sqlite")]
+	#[tokio::test]
+	async fn incremental_apply_defers_unknown_vector_index_table_to_backend() {
+		// Arrange
+		let mut create_table = Migration::new("0001_initial", "search_partial");
+		create_table.state_only = true;
+		create_table.operations.push(Operation::CreateTable {
+			name: "partial_documents".to_string(),
+			columns: vec![ColumnDefinition::new(
+				"embedding",
+				FieldType::Vector { dimensions: 1536 },
+			)],
+			constraints: Vec::new(),
+			without_rowid: None,
+			interleave_in_parent: None,
+			partition: None,
+		});
+		let mut create_index = Migration::new("0002_embedding_index", "search_partial");
+		create_index
+			.operations
+			.push(vector_index("partial_documents"));
+		let mut executor = sqlite_executor().await;
+		executor
+			.apply_migrations(std::slice::from_ref(&create_table))
+			.await
+			.unwrap();
+
+		// Act
+		let result = executor
+			.apply_migrations(std::slice::from_ref(&create_index))
+			.await;
+
+		// Assert
+		assert!(matches!(
+			result,
+			Err(MigrationError::UnsupportedBackendFeature {
+				feature: "approximate vector indexes",
+				backend: "sqlite",
+			})
+		));
+	}
+
+	#[cfg(feature = "sqlite")]
+	#[tokio::test]
+	async fn incremental_plan_defers_unknown_vector_index_table_to_backend() {
+		// Arrange
+		let mut create_table = Migration::new("0001_initial", "search_partial_plan");
+		create_table.state_only = true;
+		create_table.operations.push(Operation::CreateTable {
+			name: "partial_plan_documents".to_string(),
+			columns: vec![ColumnDefinition::new(
+				"embedding",
+				FieldType::Vector { dimensions: 1536 },
+			)],
+			constraints: Vec::new(),
+			without_rowid: None,
+			interleave_in_parent: None,
+			partition: None,
+		});
+		let mut create_index = Migration::new("0002_embedding_index", "search_partial_plan");
+		create_index
+			.operations
+			.push(vector_index("partial_plan_documents"));
+		let initial_plan = MigrationPlan::new().with_migration(create_table);
+		let incremental_plan = MigrationPlan::new().with_migration(create_index);
+		let mut executor = sqlite_executor().await;
+		executor.apply(&initial_plan).await.unwrap();
+
+		// Act
+		let result = executor.apply(&incremental_plan).await;
+
+		// Assert
+		assert!(matches!(
+			result,
+			Err(MigrationError::UnsupportedBackendFeature {
+				feature: "approximate vector indexes",
+				backend: "sqlite",
+			})
+		));
+	}
+
+	#[cfg(feature = "sqlite")]
+	#[tokio::test]
+	async fn apply_rejects_missing_vector_index_column_when_table_is_known() {
+		// Arrange
+		let mut create_table = Migration::new("0001_initial", "search_known");
+		create_table.state_only = true;
+		create_table.operations.push(Operation::CreateTable {
+			name: "known_documents".to_string(),
+			columns: vec![ColumnDefinition::new("id", FieldType::Integer)],
+			constraints: Vec::new(),
+			without_rowid: None,
+			interleave_in_parent: None,
+			partition: None,
+		});
+		let mut create_index = Migration::new("0002_embedding_index", "search_known");
+		create_index
+			.operations
+			.push(vector_index("known_documents"));
+		let mut executor = sqlite_executor().await;
+
+		// Act
+		let result = executor
+			.apply_migrations(&[create_table, create_index])
+			.await;
+
+		// Assert
+		assert!(matches!(
+			result,
+			Err(MigrationError::InvalidMigration(message))
+				if message == "approximate vector index on table `known_documents` targets unknown column `embedding`"
+		));
+	}
+
+	#[cfg(feature = "sqlite")]
+	#[tokio::test]
+	async fn apply_rejects_scalar_vector_index_column_when_table_is_known() {
+		// Arrange
+		let mut create_table = Migration::new("0001_initial", "search_scalar");
+		create_table.state_only = true;
+		create_table.operations.push(Operation::CreateTable {
+			name: "scalar_documents".to_string(),
+			columns: vec![ColumnDefinition::new("embedding", FieldType::Text)],
+			constraints: Vec::new(),
+			without_rowid: None,
+			interleave_in_parent: None,
+			partition: None,
+		});
+		let mut create_index = Migration::new("0002_embedding_index", "search_scalar");
+		create_index
+			.operations
+			.push(vector_index("scalar_documents"));
+		let mut executor = sqlite_executor().await;
+
+		// Act
+		let result = executor
+			.apply_migrations(&[create_table, create_index])
+			.await;
+
+		// Assert
+		assert!(matches!(
+			result,
+			Err(MigrationError::InvalidMigration(message))
+				if message == "approximate vector index on table `scalar_documents` targets non-vector column `embedding`"
+		));
 	}
 }
 

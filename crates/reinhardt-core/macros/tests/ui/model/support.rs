@@ -641,6 +641,7 @@ pub mod db {
 			String,
 			Bytes,
 			Json,
+			Vector(usize),
 			Uuid,
 			Date,
 			Time,
@@ -864,6 +865,7 @@ pub mod db {
 					DatabaseStorageKind::String => "reinhardt.orm.models.CharField",
 					DatabaseStorageKind::Bytes => "reinhardt.orm.models.BinaryField",
 					DatabaseStorageKind::Json => "reinhardt.orm.models.JsonField",
+					DatabaseStorageKind::Vector(_) => "reinhardt.orm.models.VectorField",
 					DatabaseStorageKind::Uuid => "reinhardt.orm.models.UuidField",
 					DatabaseStorageKind::Date => "reinhardt.orm.models.DateField",
 					DatabaseStorageKind::Time => "reinhardt.orm.models.TimeField",
@@ -985,6 +987,9 @@ pub mod db {
 			Uuid,
 			Json,
 			JsonBinary,
+			Vector {
+				dimensions: usize,
+			},
 		}
 
 		#[derive(Debug, Clone, PartialEq)]

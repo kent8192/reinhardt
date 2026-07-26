@@ -1411,6 +1411,9 @@ struct ForeignKeyFieldInfo {
 /// Generate field metadata string from Rust type
 fn field_type_to_metadata_string(ty: &Type, _config: &FieldConfig) -> Result<TokenStream> {
 	let orm_crate = get_reinhardt_orm_crate();
+	if vector_dimensions(ty)?.is_some() {
+		return Ok(quote! { "reinhardt.orm.models.VectorField" });
+	}
 	let (_is_option, inner_ty) = extract_option_type(ty);
 
 	match inner_ty {
@@ -1546,6 +1549,14 @@ fn map_type_to_field_type(ty: &Type, config: &FieldConfig) -> Result<TokenStream
 		return map_explicit_field_type(explicit_type, &migrations_crate);
 	}
 
+	if let Some(dimensions) = vector_dimensions(ty)? {
+		return Ok(quote! {
+			#migrations_crate::FieldType::Vector {
+				dimensions: #dimensions,
+			}
+		});
+	}
+
 	// Extract the inner type if it's Option<T>
 	let (_is_option, inner_ty) = extract_option_type(ty);
 
@@ -1635,7 +1646,56 @@ fn map_type_to_field_type(ty: &Type, config: &FieldConfig) -> Result<TokenStream
 	Ok(field_type)
 }
 
+fn vector_dimensions(ty: &Type) -> Result<Option<usize>> {
+	let (_is_option, inner_ty) = extract_option_type(ty);
+	let Type::Path(type_path) = inner_ty else {
+		return Ok(None);
+	};
+	let Some(segment) = type_path.path.segments.last() else {
+		return Ok(None);
+	};
+	if segment.ident != "Vector" {
+		return Ok(None);
+	}
+
+	let PathArguments::AngleBracketed(arguments) = &segment.arguments else {
+		return Err(syn::Error::new_spanned(
+			ty,
+			"Vector fields require exactly one integer-literal dimension, for example Vector<1536>",
+		));
+	};
+	if arguments.args.len() != 1 {
+		return Err(syn::Error::new_spanned(
+			arguments,
+			"Vector fields require exactly one integer-literal dimension, for example Vector<1536>",
+		));
+	}
+	let Some(GenericArgument::Const(syn::Expr::Lit(literal))) = arguments.args.first() else {
+		return Err(syn::Error::new_spanned(
+			arguments,
+			"Vector dimensions must be an integer literal, for example Vector<1536>",
+		));
+	};
+	let syn::Lit::Int(dimensions) = &literal.lit else {
+		return Err(syn::Error::new_spanned(
+			literal,
+			"Vector dimensions must be an integer literal, for example Vector<1536>",
+		));
+	};
+	let dimensions = dimensions.base10_parse::<usize>().map_err(|_| {
+		syn::Error::new_spanned(
+			dimensions,
+			"Vector dimensions must be an integer literal representable as usize",
+		)
+	})?;
+
+	Ok(Some(dimensions))
+}
+
 fn is_builtin_model_field_type(ty: &Type) -> bool {
+	if vector_dimensions(ty).ok().flatten().is_some() {
+		return true;
+	}
 	let (_is_option, inner_ty) = extract_option_type(ty);
 	let Type::Path(type_path) = inner_ty else {
 		return false;
@@ -1659,6 +1719,11 @@ fn is_builtin_model_field_type(ty: &Type) -> bool {
 }
 
 fn builtin_storage_kind(ty: &Type, orm_crate: &TokenStream) -> Option<TokenStream> {
+	if let Some(dimensions) = vector_dimensions(ty).ok().flatten() {
+		return Some(quote! {
+			#orm_crate::DatabaseStorageKind::Vector(#dimensions)
+		});
+	}
 	let (_is_option, inner_ty) = extract_option_type(ty);
 	let Type::Path(type_path) = inner_ty else {
 		return None;

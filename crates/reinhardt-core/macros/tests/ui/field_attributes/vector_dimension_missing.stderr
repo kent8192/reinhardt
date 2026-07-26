@@ -1,0 +1,5 @@
+error: Vector fields require exactly one integer-literal dimension, for example Vector<1536>
+  --> tests/ui/field_attributes/vector_dimension_missing.rs:31:13
+   |
+31 |     embedding: Vector,
+   |                ^^^^^^

@@ -373,6 +373,55 @@ mod tests {
 			Some(ErrorKind::Validation)
 		);
 	}
+
+	#[cfg(feature = "pgvector")]
+	mod vector_model_metadata {
+		use reinhardt_core::macros::model;
+		use serde::{Deserialize, Serialize};
+
+		use crate::migrations::{FieldType, model_registry::global_registry};
+		use crate::orm::{DatabaseStorageKind, Model, Vector, query_fields::Field as QueryField};
+
+		#[model(
+			app_label = "migration_vector_metadata",
+			table_name = "vector_documents"
+		)]
+		#[derive(Clone, Debug, Serialize, Deserialize)]
+		struct VectorDocument {
+			#[field(primary_key = true)]
+			id: i64,
+			embedding: Vector<1536>,
+		}
+
+		fn assert_embedding_selector(_field: QueryField<VectorDocument, Vector<1536>>) {}
+
+		#[test]
+		fn model_vector_dimension_reaches_selector_inspection_and_migration_metadata() {
+			assert_embedding_selector(VectorDocument::new_fields().embedding);
+
+			let embedding = VectorDocument::field_metadata()
+				.into_iter()
+				.find(|field| field.name == "embedding")
+				.expect("generated embedding inspection metadata");
+			assert_eq!(
+				embedding.storage_kind,
+				Some(DatabaseStorageKind::Vector(1536))
+			);
+			assert_eq!(embedding.field_type, "reinhardt.orm.models.VectorField");
+
+			let model = global_registry()
+				.get_model("migration_vector_metadata", "VectorDocument")
+				.expect("generated vector model registration");
+			assert_eq!(
+				model
+					.fields
+					.get("embedding")
+					.expect("registered embedding migration field")
+					.field_type,
+				FieldType::Vector { dimensions: 1536 }
+			);
+		}
+	}
 }
 
 // Prelude for migrations

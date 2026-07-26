@@ -797,18 +797,32 @@ fn source_with_commit_sentinel(source: &str, sentinel: &str) -> String {
 }
 
 fn ordinary_comment_before_inner_prefix(source: &str) -> Option<usize> {
-	let comment_end = if source.starts_with("//") {
-		source.find('\n').map(|end| end + 1).unwrap_or(source.len())
-	} else if source.starts_with("/*") {
-		source.find("*/").map(|end| end + 2)?
-	} else {
-		return None;
-	};
-	let following = &source[comment_end..];
-	let whitespace = following.len() - following.trim_start_matches([' ', '\t', '\r', '\n']).len();
-	let next = &following[whitespace..];
-	(next.starts_with("#![") || next.starts_with("//!") || next.starts_with("/*!"))
-		.then_some(comment_end)
+	let mut consumed = 0;
+	loop {
+		let remaining = &source[consumed..];
+		let comment_end = if remaining.starts_with("//") {
+			remaining
+				.find('\n')
+				.map(|end| end + 1)
+				.unwrap_or(remaining.len())
+		} else if remaining.starts_with("/*") {
+			remaining.find("*/").map(|end| end + 2)?
+		} else {
+			return None;
+		};
+		consumed += comment_end;
+		let following = &source[consumed..];
+		let whitespace =
+			following.len() - following.trim_start_matches([' ', '\t', '\r', '\n']).len();
+		let next = &following[whitespace..];
+		if next.starts_with("#![") || next.starts_with("//!") || next.starts_with("/*!") {
+			return Some(consumed);
+		}
+		if !next.starts_with("//") && !next.starts_with("/*") {
+			return None;
+		}
+		consumed += whitespace;
+	}
 }
 
 fn append_startup_output(warnings: &mut Vec<String>, output: EvaluationOutput) {
@@ -1103,8 +1117,26 @@ impl OutputDrainers {
 	}
 
 	fn finish(&self, marker: &str) -> Result<(String, String), EvaluationFailure> {
-		let stdout = self.stdout.take_at_boundary(marker)?;
-		let stderr = self.stderr.take_at_boundary(marker)?;
+		let stdout = match self.stdout.take_at_boundary(marker) {
+			Ok(stdout) => stdout,
+			Err(error) => {
+				return Err(error.with_output(EvaluationOutput {
+					stdout: self.stdout.take_pending(),
+					stderr: self.stderr.take_pending(),
+					value: None,
+				}));
+			}
+		};
+		let stderr = match self.stderr.take_at_boundary(marker) {
+			Ok(stderr) => stderr,
+			Err(error) => {
+				return Err(error.with_output(EvaluationOutput {
+					stdout,
+					stderr: self.stderr.take_pending(),
+					value: None,
+				}));
+			}
+		};
 		Ok((stdout, stderr))
 	}
 
@@ -1181,6 +1213,15 @@ impl StreamCapture {
 			.unwrap_or_else(std::sync::PoisonError::into_inner);
 		state.disconnected = true;
 		self.changed.notify_all();
+	}
+
+	fn take_pending(&self) -> String {
+		let mut state = self
+			.state
+			.lock()
+			.unwrap_or_else(std::sync::PoisonError::into_inner);
+		state.pending_marker = None;
+		std::mem::take(&mut state.buffer)
 	}
 
 	fn take_at_boundary(&self, marker: &str) -> Result<String, EvaluationFailure> {

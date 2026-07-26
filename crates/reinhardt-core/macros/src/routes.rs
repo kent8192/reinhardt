@@ -183,11 +183,7 @@ fn wrapper_attribute(attr: &syn::Attribute) -> Option<syn::Attribute> {
 		return None;
 	};
 	let condition = attributes.first()?;
-	let wrapper_attributes: Vec<_> = attributes
-		.iter()
-		.skip(1)
-		.filter(|nested| !is_parameter_sensitive_attribute_path(nested.path()))
-		.collect();
+	let wrapper_attributes: Vec<_> = attributes.iter().skip(1).filter_map(wrapper_meta).collect();
 	if wrapper_attributes.is_empty() {
 		return None;
 	}
@@ -199,6 +195,30 @@ fn wrapper_attribute(attr: &syn::Attribute) -> Option<syn::Attribute> {
 		.ok()?
 		.into_iter()
 		.next()
+}
+
+fn wrapper_meta(meta: &Meta) -> Option<Meta> {
+	if is_parameter_sensitive_attribute_path(meta.path()) {
+		return None;
+	}
+	let Meta::List(list) = meta else {
+		return Some(meta.clone());
+	};
+	if !list.path.is_ident("cfg_attr") {
+		return Some(meta.clone());
+	}
+	let attributes = Punctuated::<Meta, Token![,]>::parse_terminated
+		.parse2(list.tokens.clone())
+		.ok()?;
+	let condition = attributes.first()?;
+	let nested_attributes: Vec<_> = attributes.iter().skip(1).filter_map(wrapper_meta).collect();
+	if nested_attributes.is_empty() {
+		return None;
+	}
+	syn::parse2(quote! {
+		cfg_attr(#condition, #(#nested_attributes),*)
+	})
+	.ok()
 }
 
 fn is_parameter_sensitive_attribute_path(path: &syn::Path) -> bool {
@@ -1727,6 +1747,15 @@ mod url_resolver_tests {
 			quote!(#wrapper).to_string(),
 			"# [cfg_attr (feature = \"trace\" , cfg (unix))]"
 		);
+	}
+
+	#[rstest]
+	fn wrapper_attributes_filter_nested_conditional_instrumentation() {
+		let nested: syn::Attribute = syn::parse_quote!(
+			#[cfg_attr(feature = "outer", cfg_attr(feature = "trace", tracing::instrument(skip(payload))))]
+		);
+
+		assert!(wrapper_attribute(&nested).is_none());
 	}
 
 	#[rstest]

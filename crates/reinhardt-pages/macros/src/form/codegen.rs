@@ -2080,8 +2080,12 @@ fn generate_model_form(
 					(),
 					#pages_crate::form::ModelFormPayloadError,
 				> {
-					let result = self.__model_state.borrow_mut().set_value(field, value);
-					if result.is_ok() {
+					let mut state = self.__model_state.borrow_mut();
+					let previous = state.value(field).cloned();
+					let result = state.set_value(field, value);
+					let changed = previous != state.value(field).cloned();
+					drop(state);
+					if changed {
 						self.__state_version.update(|version| *version = version.wrapping_add(1));
 					}
 					result
@@ -7677,6 +7681,7 @@ mod tests {
 		assert!(output_str.contains("temporal-form"));
 		assert!(output_str.contains("__reinhardt_checkbox_"));
 		assert!(output_str.contains("__reinhardt_color_"));
+		assert!(output_str.contains("let changed = previous != state . value (field) . cloned ()"));
 		assert!(output_str.contains("__state_version"));
 		assert!(output_str.contains("__ReinhardtModelFormField :: State"));
 		assert!(output_str.contains("FormRuntimeSource for TemporalControlsForm"));

@@ -2227,6 +2227,7 @@ fn generate_model_form_support(
 		let collides_with_reserved_api = [
 			"default",
 			"empty",
+			"fields",
 			"forbidden_fields",
 			"supplied_fields",
 			"get_json",
@@ -2235,6 +2236,9 @@ fn generate_model_form_support(
 			"_policy",
 		]
 		.contains(&field_name.as_str())
+			|| field_name.starts_with("__reinhardt_checkbox_")
+			|| field_name.starts_with("__reinhardt_color_")
+			|| field_name.starts_with("__reinhardt_defaulted_")
 			|| [
 				"empty",
 				"forbidden_fields",
@@ -8944,7 +8948,17 @@ mod tests {
 
 	#[test]
 	fn test_model_form_rejects_payload_api_accessor_collisions() {
-		for field_name in ["default", "json", "get_json", "set_json", "supplied_fields"] {
+		for field_name in [
+			"default",
+			"fields",
+			"json",
+			"get_json",
+			"set_json",
+			"supplied_fields",
+			"__reinhardt_checkbox_enabled",
+			"__reinhardt_color_accent",
+			"__reinhardt_defaulted_summary",
+		] {
 			let field_name = Ident::new(field_name, proc_macro2::Span::call_site());
 			let input = quote! {
 				#[model(app_label = "fixture_tests", table_name = "fixture_models", form = true)]

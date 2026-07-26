@@ -2198,14 +2198,23 @@ fn generate_model_form(
 									("input", "text"),
 							},
 						};
+						let is_checkbox = input_type == "checkbox";
+						let permits_fraction = matches!(
+							descriptor.kind,
+							#pages_crate::form::ModelFormFieldKind::Float
+								| #pages_crate::form::ModelFormFieldKind::Decimal
+						);
 
 						let field_name = descriptor.name;
 						let mut control = #pages_crate::PageElement::new(tag)
 							.attr("name", field_name)
 							.attr("id", field_name)
 							.attr("type", input_type)
-							.bool_attr("required", descriptor.required);
-						if input_type == "checkbox" {
+							.bool_attr("required", descriptor.required && !is_checkbox);
+						if permits_fraction {
+							control = control.attr("step", "any");
+						}
+						if is_checkbox {
 							control = control.on(
 								#pages_crate::event::KnownEvent::Change,
 								{

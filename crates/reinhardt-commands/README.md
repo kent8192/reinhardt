@@ -76,6 +76,8 @@ details.
 - `reinhardt-db` - Enable database-backed management commands such as
   `dumpdata`, `loaddata`, and `seed`
 - `routers` - Enable URL-related commands (requires `reinhardt-urls`)
+- `shell` - Enable the stateful Rust management shell. The facade exposes this
+  as the project-facing `commands-shell` feature.
 
 ### Pages template hot reload
 
@@ -210,6 +212,159 @@ cargo run --bin manage makemigrations
 cargo run --bin manage migrate
 cargo run --bin manage runserver
 ```
+
+### Rust Management Shell
+
+The shell is an opt-in Rust evaluator. In a generated project, enable the local
+feature explicitly:
+
+```bash
+cargo run --bin manage --features commands-shell -- shell
+cargo run --bin manage --features commands-shell -- shell -c \
+  'println!("{}", settings.core.debug)'
+```
+
+`commands-shell` is intentionally absent from generated default features. The
+project feature forwards to `reinhardt/commands-shell`, `config::shell` defines
+the aliases used by the evaluator, and `get_shell_config()` identifies the
+package, crate, settings factory, installed apps, and optional project prelude.
+The complete native startup shape is:
+
+```rust,ignore
+#[cfg(not(target_arch = "wasm32"))]
+mod native {
+    // Force-link the parent library so its `#[routes]` / `#[model]`
+    // `inventory::submit!` registrations survive dead-code elimination.
+    // Referencing `get_settings` alone does not guarantee the whole crate
+    // (and thus every inventory entry) is linked.
+    use my_project as _;
+    #[cfg(feature = "commands-shell")]
+    use my_project::config::shell::get_shell_config;
+    use my_project::config::settings::get_settings;
+    #[cfg(not(feature = "commands-shell"))]
+    use reinhardt::commands::execute_from_command_line_with_settings;
+    #[cfg(feature = "commands-shell")]
+    use reinhardt::commands::execute_from_command_line_with_settings_and_shell;
+
+    #[tokio::main]
+    pub(super) async fn main() {
+        // Preserve the project's existing settings-module initialization.
+        // SAFETY: Called at program start before any spawned tasks.
+        unsafe {
+            std::env::set_var(
+                "REINHARDT_SETTINGS_MODULE",
+                "my_project.config.settings",
+            );
+        }
+
+        #[cfg(feature = "commands-shell")]
+        let result =
+            execute_from_command_line_with_settings_and_shell(
+                get_settings(),
+                get_shell_config(),
+            )
+            .await;
+        #[cfg(not(feature = "commands-shell"))]
+        let result = execute_from_command_line_with_settings(get_settings()).await;
+
+        if let Err(error) = result {
+            eprintln!("Error: {error}");
+            std::process::exit(1);
+        }
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn main() {
+    reinhardt::commands::shell_runtime_hook();
+    native::main();
+}
+
+#[cfg(target_arch = "wasm32")]
+fn main() {}
+```
+
+The `use my_project as _;` import is intentional. Merely calling the settings
+factory does not guarantee that the linker retains every project module, while
+the shell discovers models and DI providers through their inventory
+registrations. Force-linking the project crate preserves those registrations.
+Preserve the existing `REINHARDT_SETTINGS_MODULE` initialization and substitute
+the project's actual module string for `my_project.config.settings`; the shell
+migration does not replace or remove that startup setting.
+The outer `main` call is required before `#[tokio::main]` constructs the Tokio
+runtime. With `commands-shell` disabled, the hook is a no-op and the existing
+settings-only entry point remains compatible for non-shell commands.
+
+After bootstrap, normal Rust expressions can use the settings, database, DI,
+and model bindings directly. In this example, `User` has a unique short name;
+the colliding `Record` model is named through its project-qualified path:
+
+```rust,ignore
+println!("{}", settings.core.debug);
+println!("{:?}", db.backend());
+println!(
+    "{}",
+    di.get_singleton::<framework::db::orm::DatabaseConnection>()
+        .is_some()
+);
+println!("{}", std::any::type_name::<User>());
+println!(
+    "{}",
+    std::any::type_name::<project_crate::apps::billing::models::Record>()
+);
+```
+
+- `settings` is the concrete project settings value.
+- `db` is the copyable ORM `DatabaseConnection` backed by the shell-owned
+  database lease.
+- `di` is the application's `Arc<InjectionContext>` and contains the database
+  lease and connection in addition to registered providers.
+- `framework` is the generated stable alias for `reinhardt`.
+
+Installed models with unique Rust type names are imported automatically.
+Colliding names are not imported; one deterministic startup warning lists
+their concrete registered crate paths, such as
+`my_project::apps::billing::models::Record`. Inside the evaluator, the stable
+`project_crate` alias can reference the same type as
+`project_crate::apps::billing::models::Record`.
+`ShellConfig::with_prelude(...)` adds project-defined Rust after the standard
+bindings.
+
+Interactive input is stateful and supports top-level `.await`. The primary
+prompt is `>>> `; unmatched brackets continue at `... ` and the complete block
+is evaluated as one snippet. Ctrl+C while editing discards the pending input.
+Ctrl+C during evaluation, a user-code panic, or evaluator process exit replaces
+the evaluator, clears user-defined state, and reloads settings, ORM/DI bindings,
+model imports, and the project prelude.
+
+`shell -c SOURCE` uses the same bootstrap and evaluates exactly one snippet.
+Successful evaluation exits zero; compilation, bootstrap, evaluation, panic,
+or process-exit failures return a command error and the generated management
+binary exits non-zero. Reinhardt does not echo the raw `SOURCE` in its own
+framework diagnostics. Arbitrary Rust, compiler diagnostics, panics, and user
+code can still print source literals or other sensitive values; the shell is
+not a secrecy boundary or sandbox.
+
+History is stored best-effort at
+`<platform local data directory>/reinhardt/shell/<package-name>.history`
+(for example, under `~/Library/Application Support` on macOS). A missing file
+is the silent, normal first-run case. An unreadable file, unwritable directory
+or file, or unavailable platform data directory produces a warning, disables
+only the affected history operation, and does not prevent shell startup.
+
+The first cold start may compile the project crate and evaluator support.
+Subsequent warm starts reuse normal Cargo artifacts when inputs are unchanged.
+
+#### Migration from the Rhai shell
+
+- `shell-rhai` was removed; there is no compatibility alias.
+- `shell` now means the Rust `evcxr` evaluator, and old Rhai snippets are not
+  supported syntax.
+- Existing settings-only command entry points continue to work for non-shell
+  commands.
+- Projects enabling `commands-shell` must add `config::shell::get_shell_config`,
+  the pre-Tokio runtime hook, and the settings-and-shell dispatcher.
+- Generated projects keep `commands-shell` outside their default feature set.
 
 ### Model Fixture Commands
 

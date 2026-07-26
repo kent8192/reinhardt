@@ -131,6 +131,9 @@ pub fn infer_admin_field_type(db_type: &DbFieldType) -> AdminFieldType {
 		// CIText (case-insensitive text) → Text input
 		DbFieldType::CIText => AdminFieldType::Text,
 
+		// Vectors → TextArea for structured multi-value editing
+		DbFieldType::Vector { .. } => AdminFieldType::TextArea,
+
 		// Range types → TextArea for range editing (e.g., "[1,10)" format)
 		DbFieldType::Int4Range
 		| DbFieldType::Int8Range
@@ -834,6 +837,14 @@ mod tests {
 		assert_eq!(
 			infer_admin_field_type(&DbFieldType::CIText),
 			AdminFieldType::Text
+		);
+	}
+
+	#[test]
+	fn test_infer_admin_field_type_postgres_vector() {
+		assert_eq!(
+			infer_admin_field_type(&DbFieldType::Vector { dimensions: 1536 }),
+			AdminFieldType::TextArea
 		);
 	}
 

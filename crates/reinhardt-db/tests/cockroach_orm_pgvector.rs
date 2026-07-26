@@ -18,6 +18,7 @@ use reinhardt_db::{
 	},
 	orm::{
 		DatabaseConnectionLease, DatabaseValue, Model, Vector,
+		manager::replace_database_connection_for_testing,
 		query::{FieldAssignment, Filter, FilterOperator, FilterValue, QuerySet, UpdateValue},
 		transaction::IsolationLevel,
 	},
@@ -196,6 +197,17 @@ fn assert_cockroach_pgvector_error(error: &Error) {
 	);
 }
 
+fn assert_cockroach_pgvector_value_error(error: &Error) {
+	let database_error = error
+		.database_error()
+		.expect("query-build failure should retain structured database context");
+	assert_eq!(database_error.kind(), DatabaseErrorKind::Unsupported);
+	assert_eq!(
+		database_error.message(),
+		"pgvector values is not supported by the CockroachDB backend"
+	);
+}
+
 fn connection_with_flavor(
 	is_cockroachdb: bool,
 	recorder: Arc<Recorder>,
@@ -319,6 +331,38 @@ async fn cockroach_flavor_survives_atomic_executor_construction() {
 }
 
 #[tokio::test]
+async fn cockroach_flavor_survives_atomic_legacy_transaction_executor_dispatch() {
+	let recorder = Arc::new(Recorder::default());
+	let lease = connection_with_flavor(true, recorder.clone());
+	let connection = lease.handle();
+
+	connection
+		.atomic(async |transaction| {
+			let error = vector_query()
+				.all_with_executor(transaction)
+				.await
+				.expect_err("legacy transaction dispatch should reject CockroachDB vectors");
+			assert_eq!(
+				error.kind(),
+				reinhardt_db::backends::error::DatabaseErrorKind::Unsupported
+			);
+			assert_eq!(
+				error.message(),
+				"pgvector distance operators is not supported by the CockroachDB backend"
+			);
+			Ok::<_, Error>(())
+		})
+		.await
+		.expect("the handled query-build error should allow the transaction to commit");
+
+	assert_eq!(
+		recorder.statements(),
+		Vec::<String>::new(),
+		"legacy transaction vector statements must fail before reaching the backend"
+	);
+}
+
+#[tokio::test]
 async fn cockroach_flavor_survives_public_transaction_executor_construction() {
 	let recorder = Arc::new(Recorder::default());
 	let owner = owner_with_flavor(true, recorder.clone());
@@ -382,4 +426,82 @@ async fn registry_slot_reuse_does_not_leak_cockroach_flavor() {
 		.expect("a reused registry slot must use its new PostgreSQL flavor");
 	assert!(rows.is_empty());
 	assert_eq!(postgres_recorder.statements().len(), 1);
+}
+
+#[tokio::test]
+async fn cockroach_bulk_update_with_conn_rejects_vector_values_before_execution() {
+	let recorder = Arc::new(Recorder::default());
+	let lease = connection_with_flavor(true, recorder.clone());
+	let mut connection = lease.handle();
+
+	let error = CockroachDocument::objects()
+		.bulk_update_with_conn(
+			&mut connection,
+			vec![document(Some(7))],
+			vec!["embedding".to_owned()],
+			None,
+		)
+		.await
+		.expect_err("CockroachDB should reject vector bulk updates");
+	assert_cockroach_pgvector_value_error(&error);
+	assert_eq!(recorder.statements(), Vec::<String>::new());
+}
+
+#[tokio::test]
+#[serial_test::serial(cockroach_orm_database)]
+async fn cockroach_global_bulk_update_rejects_vector_values_before_execution() {
+	let recorder = Arc::new(Recorder::default());
+	let lease = connection_with_flavor(true, recorder.clone());
+	let previous = replace_database_connection_for_testing(Some(lease)).await;
+
+	let result = CockroachDocument::objects()
+		.bulk_update(vec![document(Some(7))], vec!["embedding".to_owned()], None)
+		.await;
+
+	let installed = replace_database_connection_for_testing(previous).await;
+	drop(installed);
+
+	let error = result.expect_err("CockroachDB should reject global vector bulk updates");
+	assert_cockroach_pgvector_value_error(&error);
+	assert_eq!(recorder.statements(), Vec::<String>::new());
+}
+
+#[tokio::test]
+async fn cockroach_bulk_update_keeps_non_vector_fields_working() {
+	let recorder = Arc::new(Recorder::default());
+	let lease = connection_with_flavor(true, recorder.clone());
+	let mut connection = lease.handle();
+
+	let updated = CockroachDocument::objects()
+		.bulk_update_with_conn(
+			&mut connection,
+			vec![document(Some(7))],
+			vec!["name".to_owned()],
+			None,
+		)
+		.await
+		.expect("ordinary CockroachDB bulk updates should remain supported");
+
+	assert_eq!(updated, 1);
+	assert_eq!(recorder.statements().len(), 1);
+}
+
+#[tokio::test]
+async fn postgres_bulk_update_keeps_vector_values_working() {
+	let recorder = Arc::new(Recorder::default());
+	let lease = connection_with_flavor(false, recorder.clone());
+	let mut connection = lease.handle();
+
+	let updated = CockroachDocument::objects()
+		.bulk_update_with_conn(
+			&mut connection,
+			vec![document(Some(7))],
+			vec!["embedding".to_owned()],
+			None,
+		)
+		.await
+		.expect("PostgreSQL should retain vector bulk update support");
+
+	assert_eq!(updated, 1);
+	assert_eq!(recorder.statements().len(), 1);
 }

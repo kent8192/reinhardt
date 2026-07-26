@@ -846,6 +846,12 @@ impl TransactionExecutor for AtomicTransaction {
 			.is_some_and(TransactionExecutor::supports_pgvector_error_hints)
 	}
 
+	fn is_cockroachdb(&self) -> bool {
+		self.executor_ref()
+			.map(TransactionExecutor::is_cockroachdb)
+			.unwrap_or(self.is_cockroachdb)
+	}
+
 	async fn execute(
 		&mut self,
 		sql: &str,

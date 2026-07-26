@@ -93,6 +93,39 @@ fn checked_query_build_error(error: reinhardt_query::QueryBuildError) -> Error {
 	DatabaseError::new(DatabaseErrorKind::Unsupported, error.to_string()).into()
 }
 
+#[cfg(feature = "pgvector")]
+fn database_value_uses_pgvector(value: &DatabaseValue) -> bool {
+	match value {
+		DatabaseValue::Vector(_) => true,
+		DatabaseValue::Array { values, .. } => values.iter().any(database_value_uses_pgvector),
+		_ => false,
+	}
+}
+
+fn validate_bulk_update_values_for_backend(
+	updates: &[(DatabaseValue, HashMap<String, DatabaseValue>)],
+	is_cockroachdb: bool,
+) -> reinhardt_core::exception::Result<()> {
+	#[cfg(feature = "pgvector")]
+	if is_cockroachdb
+		&& updates.iter().any(|(primary_key, fields)| {
+			database_value_uses_pgvector(primary_key)
+				|| fields.values().any(database_value_uses_pgvector)
+		}) {
+		return Err(checked_query_build_error(
+			reinhardt_query::QueryBuildError::UnsupportedBackendFeature {
+				feature: "pgvector values",
+				backend: "CockroachDB",
+			},
+		));
+	}
+
+	#[cfg(not(feature = "pgvector"))]
+	let _ = (updates, is_cockroachdb);
+
+	Ok(())
+}
+
 fn build_select_sql_checked(
 	stmt: &SelectStatement,
 	backend: DatabaseBackend,
@@ -2466,6 +2499,7 @@ impl<M: Model> Manager<M> {
 				.collect::<reinhardt_core::exception::Result<_>>()?;
 
 			if !updates.is_empty() {
+				validate_bulk_update_values_for_backend(&updates, conn.is_cockroachdb())?;
 				let sql = self
 					.bulk_update_database_values_sql_detailed(&updates, &fields, conn.backend())
 					.map_err(field_codec_error)?;
@@ -2535,6 +2569,7 @@ impl<M: Model> Manager<M> {
 			if updates.is_empty() {
 				continue;
 			}
+			validate_bulk_update_values_for_backend(&updates, conn.is_cockroachdb())?;
 			let sql = self
 				.bulk_update_database_values_sql_detailed(&updates, &fields, conn.backend())
 				.map_err(field_codec_error)?;

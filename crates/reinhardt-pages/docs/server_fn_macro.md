@@ -88,6 +88,10 @@ construction module so the collector can resolve its `#[app_config]` owner.
 The collector sorts selected entries before mounting them, making registration
 and validation deterministic.
 
+`RunServerCommand` validates both inventory-built routers and routers that an
+application pre-registers manually before startup. Manual registration is an
+opt-out from inventory construction, not a way to bypass route validation.
+
 ### Explicit and Framework-Owned Routes
 
 Use `auto_register = false` when a router must own a function explicitly, such

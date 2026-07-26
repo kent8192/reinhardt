@@ -89,20 +89,29 @@ pub fn run(args: MigrateServerFnsArgs) -> Result<()> {
 			});
 		}
 
-		if let Some(rewritten) = outcome.rewritten {
-			reports.push(Report {
-				path: source_module.relative_path.clone(),
-				line: 0,
-				kind: if args.write {
-					ReportKind::Rewrote
-				} else {
-					ReportKind::WouldRewrite
-				},
-			});
+		if outcome.rewritten.is_some() {
 			if args.write {
-				let rewritten_source = rewriter::apply_text_edits(&source, &outcome.edits)
-					.unwrap_or_else(|| prettyplease::unparse(&rewritten));
+				let Some(rewritten_source) = rewriter::apply_text_edits(&source, &outcome.edits)
+				else {
+					reports.push(Report {
+						path: source_module.relative_path.clone(),
+						line: 0,
+						kind: ReportKind::TextEditsCouldNotBeApplied,
+					});
+					continue;
+				};
 				write_source(&source_module.path, &rewritten_source)?;
+				reports.push(Report {
+					path: source_module.relative_path.clone(),
+					line: 0,
+					kind: ReportKind::Rewrote,
+				});
+			} else {
+				reports.push(Report {
+					path: source_module.relative_path.clone(),
+					line: 0,
+					kind: ReportKind::WouldRewrite,
+				});
 			}
 		}
 	}

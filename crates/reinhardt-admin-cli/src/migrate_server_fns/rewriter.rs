@@ -21,6 +21,7 @@ pub(crate) enum ReportKind {
 	MixedRegistration,
 	IncompatibleAppOwnership,
 	UnresolvedMarker(String),
+	TextEditsCouldNotBeApplied,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -69,6 +70,11 @@ impl fmt::Display for Report {
 				"skipped unresolved marker `{name}`: {}:{}",
 				self.path.display(),
 				self.line
+			),
+			ReportKind::TextEditsCouldNotBeApplied => write!(
+				formatter,
+				"skipped migration because text edits could not be applied: {}",
+				self.path.display()
 			),
 		}
 	}
@@ -145,7 +151,7 @@ fn rewrite_module_items(
 					FunctionOutcome::Unchanged => {}
 				}
 			}
-			Item::Mod(item_mod) => {
+			Item::Mod(item_mod) if !is_conditionally_compiled(&item_mod.attrs) => {
 				if let Some((_, child_items)) = &mut item_mod.content {
 					let mut child_module = module.clone();
 					child_module.push(item_mod.ident.to_string());
@@ -208,6 +214,12 @@ fn rewrite_router_function(
 	server_fns: &ServerFnIndex,
 	imports: &ImportIndex,
 ) -> FunctionOutcome {
+	if is_conditionally_compiled(&function.attrs) {
+		return FunctionOutcome::Skipped(Skipped {
+			line: span_line(function.sig.ident.span()),
+			kind: ReportKind::MixedRegistration,
+		});
+	}
 	let mut analyzer = FunctionAnalyzer {
 		target,
 		module,
@@ -380,6 +392,14 @@ fn analyze_chain(
 	{
 		return ChainOutcome::Mixed(span_line(method.method.span()));
 	}
+	if let Some((_, method)) = methods.iter().enumerate().find(|(index, method)| {
+		method.method == "with_route_middleware"
+			&& methods[..*index]
+				.iter()
+				.any(|candidate| candidate.method == "server_fn")
+	}) {
+		return ChainOutcome::Mixed(span_line(method.method.span()));
+	}
 
 	let server_methods: Vec<_> = methods
 		.iter()
@@ -465,6 +485,12 @@ fn single_marker_argument(method: &ExprMethodCall) -> Option<&ExprPath> {
 		.last()
 		.is_some_and(|segment| segment.ident == "marker")
 		.then_some(path)
+}
+
+fn is_conditionally_compiled(attributes: &[Attribute]) -> bool {
+	attributes
+		.iter()
+		.any(|attribute| attribute.path().is_ident("cfg") || attribute.path().is_ident("cfg_attr"))
 }
 
 fn marker_name(argument: Option<&Expr>) -> String {

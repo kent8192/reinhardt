@@ -980,6 +980,106 @@ pub fn server_url_patterns() {
 }
 
 #[test]
+fn unavailable_text_edits_preserve_comments_and_skip_the_migration() {
+	let fixture = prepare_fixture("safe");
+	let router = router_path(fixture.path());
+	write_file(
+		fixture.path(),
+		"src/apps/polls/urls/server_router.rs",
+		r#"use crate::apps::polls::server_fn::{get_questions, vote};
+use reinhardt::pages::server_fn::ServerFnRouterExt;
+use reinhardt::ServerRouter;
+
+pub fn server_url_patterns() -> ServerRouter {
+	ServerRouter::new()
+		. // Keep this registration comment
+		server_fn(get_questions::marker)
+		.server_fn(vote::marker)
+}
+"#,
+	);
+	let before = fs::read(&router).expect("read router with a comment");
+
+	let output = run_migrate(fixture.path(), true);
+
+	assert_success(&output);
+	assert_eq!(
+		stdout(&output),
+		"skipped migration because text edits could not be applied: src/apps/polls/urls/server_router.rs\n"
+	);
+	assert_eq!(
+		fs::read(&router).expect("read skipped router"),
+		before,
+		"a text-edit failure must not fall back to a comment-dropping formatter"
+	);
+}
+
+#[test]
+fn cfg_gated_app_ownership_skips_the_migration() {
+	let fixture = prepare_project(
+		"cfg_gated_ownership",
+		"[lib]\npath = \"src/lib.rs\"\n",
+		&[(
+			"src/lib.rs",
+			r#"#[cfg(feature = "pages")]
+#[app_config(name = "root", label = "root")]
+pub struct RootConfig;
+
+#[server_fn]
+pub async fn status() {}
+
+pub fn server_url_patterns() {
+	router()
+		.server_fn(status::marker)
+}
+"#,
+		)],
+	);
+	let source = fixture.path().join("src/lib.rs");
+	let before = fs::read(&source).expect("read cfg-gated router");
+
+	let output = run_migrate(fixture.path(), true);
+
+	assert_success(&output);
+	assert_eq!(
+		stdout(&output),
+		"skipped incompatible app ownership: src/lib.rs:10\n"
+	);
+	assert_eq!(fs::read(source).expect("read skipped router"), before);
+}
+
+#[test]
+fn route_middleware_after_a_marker_skips_the_migration() {
+	let fixture = prepare_fixture("safe");
+	let router = router_path(fixture.path());
+	write_file(
+		fixture.path(),
+		"src/apps/polls/urls/server_router.rs",
+		r#"use crate::apps::polls::server_fn::{get_questions, vote};
+use reinhardt::pages::server_fn::ServerFnRouterExt;
+use reinhardt::ServerRouter;
+
+pub fn server_url_patterns() -> ServerRouter {
+	ServerRouter::new()
+		.server_fn(get_questions::marker)
+		.server_fn(vote::marker)
+		.with_route_middleware(Auth)
+}
+"#,
+	);
+	let before = fs::read(&router).expect("read middleware router");
+
+	let output = run_migrate(fixture.path(), true);
+
+	assert_success(&output);
+	assert_eq!(
+		stdout(&output),
+		"skipped mixed registration: src/apps/polls/urls/server_router.rs:9\n"
+	);
+	assert_eq!(fs::read(router).expect("read skipped router"), before);
+}
+
+#[test]
 fn metadata_failure_exits_nonzero() {
 	let missing_manifest = TempDir::new().expect("create metadata failure directory");
 	let metadata_output = run_migrate(missing_manifest.path(), false);

@@ -144,13 +144,19 @@ impl Scanner {
 	) -> Result<()> {
 		for item in items {
 			match item {
-				Item::Struct(item_struct) if is_app_config(&item_struct.attrs) => {
+				Item::Struct(item_struct)
+					if is_app_config(&item_struct.attrs)
+						&& !is_conditionally_compiled(&item_struct.attrs) =>
+				{
 					self.app_modules
 						.entry(target.clone())
 						.or_default()
 						.push(module.clone());
 				}
-				Item::Fn(function) if is_server_fn(&function.attrs) => {
+				Item::Fn(function)
+					if is_server_fn(&function.attrs)
+						&& !is_conditionally_compiled(&function.attrs) =>
+				{
 					let key = ServerFnKey {
 						target: target.clone(),
 						module: module.clone(),
@@ -160,7 +166,7 @@ impl Scanner {
 						auto_register: server_fn_auto_registers(&function.attrs),
 					});
 				}
-				Item::Mod(item_mod) => {
+				Item::Mod(item_mod) if !is_conditionally_compiled(&item_mod.attrs) => {
 					self.scan_module(target, module, module_directory, item_mod)?;
 				}
 				_ => {}
@@ -257,6 +263,17 @@ fn is_app_config(attributes: &[Attribute]) -> bool {
 			.last()
 			.is_some_and(|segment| segment.ident == "app_config")
 	})
+}
+
+/// Returns whether an item is subject to conditional compilation.
+///
+/// The migration command cannot evaluate the target application's feature and
+/// target configuration. Treating these items as unavailable is conservative:
+/// it prevents a rewrite that would only be valid in one configuration.
+fn is_conditionally_compiled(attributes: &[Attribute]) -> bool {
+	attributes
+		.iter()
+		.any(|attribute| attribute.path().is_ident("cfg") || attribute.path().is_ident("cfg_attr"))
 }
 
 fn server_fn_auto_registers(attributes: &[Attribute]) -> bool {

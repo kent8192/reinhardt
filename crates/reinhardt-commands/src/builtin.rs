@@ -2075,6 +2075,25 @@ fn should_prepare_component_styles(with_pages: bool, has_inherited_style_root: b
 }
 
 impl RunServerCommand {
+	/// Validate the manually registered router before startup.
+	///
+	/// Manual registration is an opt-out from inventory construction, not from
+	/// startup validation. In particular, this catches router-local server
+	/// function configuration errors and endpoint collisions that the global
+	/// inventory validation cannot observe.
+	#[cfg(feature = "routers")]
+	fn validate_pre_registered_http_routes() -> Result<(), Box<dyn std::error::Error>> {
+		let router = reinhardt_urls::routers::get_router()
+			.ok_or("ServerRouter disappeared before startup validation.")?;
+		router.validate_routes().map_err(|errors| {
+			format!(
+				"Invalid pre-registered server routes:\n{}",
+				errors.join("\n")
+			)
+		})?;
+		Ok(())
+	}
+
 	#[cfg(any(feature = "pages", all(feature = "server", feature = "autoreload")))]
 	fn style_feature_selection_from_context(ctx: &CommandContext) -> crate::StyleFeatureSelection {
 		if ctx.has_option("all-features") {
@@ -2305,9 +2324,11 @@ impl BaseCommand for RunServerCommand {
 					.await
 					.map_err(|e| crate::CommandError::ExecutionError(e.to_string()))?;
 			} else {
+				Self::validate_pre_registered_http_routes()
+					.map_err(|error| crate::CommandError::ExecutionError(error.to_string()))?;
 				ctx.verbose(
 					"ServerRouter already registered before RunServerCommand::execute; \
-					 skipping inventory pull (manual setter opt-out path).",
+					 validated manual router and skipped inventory pull (manual setter opt-out path).",
 				);
 			}
 		}
@@ -5683,6 +5704,36 @@ name = "db.sqlite3"
 		assert!(
 			msg.contains("mutually exclusive"),
 			"error must state the two paths are mutually exclusive; got: {msg}"
+		);
+	}
+
+	#[cfg(all(feature = "routers", feature = "server"))]
+	#[test]
+	#[serial_test::serial(runserver)]
+	fn pre_registered_router_is_validated_before_startup() {
+		use reinhardt_urls::routers::ServerRouter;
+
+		struct RouterCleanupGuard;
+		impl Drop for RouterCleanupGuard {
+			fn drop(&mut self) {
+				reinhardt_urls::routers::clear_router();
+			}
+		}
+
+		reinhardt_urls::routers::register_router(
+			ServerRouter::new()
+				.with_configuration_error("pages.server_fn.E001: orphan auto_server_fns caller"),
+		);
+		let _cleanup_guard = RouterCleanupGuard;
+
+		let error = RunServerCommand::validate_pre_registered_http_routes()
+			.expect_err("manual routers with configuration errors must not start");
+
+		assert!(
+			error
+				.to_string()
+				.contains("pages.server_fn.E001: orphan auto_server_fns caller"),
+			"validation error must preserve the router-local configuration error"
 		);
 	}
 

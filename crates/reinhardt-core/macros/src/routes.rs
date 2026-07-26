@@ -181,25 +181,38 @@ fn raw_request_parameter_ident(inputs: &Punctuated<FnArg, Token![,]>) -> Option<
 	})
 }
 
-fn is_wrapper_attribute(attr: &syn::Attribute) -> bool {
+fn wrapper_attribute(attr: &syn::Attribute) -> Option<syn::Attribute> {
 	if attr.path().is_ident("cfg") {
-		return true;
+		return Some(attr.clone());
 	}
 	let Meta::List(list) = &attr.meta else {
-		return false;
+		return None;
 	};
 	if !attr.path().is_ident("cfg_attr") {
-		return false;
+		return None;
 	}
 	let Ok(attributes) =
 		Punctuated::<Meta, Token![,]>::parse_terminated.parse2(list.tokens.clone())
 	else {
-		return false;
+		return None;
 	};
-	attributes
+	let condition = attributes.first()?;
+	let cfg_attributes: Vec<_> = attributes
 		.iter()
 		.skip(1)
-		.all(|nested| nested.path().is_ident("cfg"))
+		.filter(|nested| nested.path().is_ident("cfg"))
+		.collect();
+	if cfg_attributes.is_empty() {
+		return None;
+	}
+	let tokens = quote! {
+		#[cfg_attr(#condition, #(#cfg_attributes),*)]
+	};
+	syn::Attribute::parse_outer
+		.parse2(tokens)
+		.ok()?
+		.into_iter()
+		.next()
 }
 
 /// Extract request body information from function parameters
@@ -604,7 +617,9 @@ fn generate_wrapper_with_both(
 		let validate_calls: Vec<_> = extractors
 			.iter()
 			.zip(extractor_temps.iter())
-			.filter(|(ext, _)| ext.extractor_name != "Validated")
+			.filter(|(ext, _)| {
+				ext.extractor_name != "Validated" && ext.extractor_name != "Multipart"
+			})
 			.map(|(_, temp)| {
 				quote! {
 					#core_crate::validators::Validate::validate(&*#temp)
@@ -758,8 +773,7 @@ fn generate_view_type(
 		.collect();
 	let wrapper_attrs: Vec<_> = fn_attrs
 		.iter()
-		.copied()
-		.filter(|attr| is_wrapper_attribute(attr))
+		.filter_map(|attr| wrapper_attribute(attr))
 		.collect();
 	let output = &input.sig.output;
 	let asyncness = &input.sig.asyncness;
@@ -1698,9 +1712,42 @@ mod url_resolver_tests {
 		let conditional_tracing: syn::Attribute =
 			syn::parse_quote!(#[cfg_attr(feature = "trace", tracing::instrument)]);
 
-		assert!(is_wrapper_attribute(&cfg));
-		assert!(is_wrapper_attribute(&conditional_cfg));
-		assert!(!is_wrapper_attribute(&conditional_tracing));
+		assert!(wrapper_attribute(&cfg).is_some());
+		assert!(wrapper_attribute(&conditional_cfg).is_some());
+		assert!(wrapper_attribute(&conditional_tracing).is_none());
+	}
+
+	#[rstest]
+	fn wrapper_attributes_preserve_cfg_from_mixed_cfg_attr() {
+		let mixed: syn::Attribute = syn::parse_quote!(
+			#[cfg_attr(feature = "trace", cfg(unix), tracing::instrument)]
+		);
+
+		let wrapper =
+			wrapper_attribute(&mixed).expect("a mixed cfg_attr should retain its nested cfg gate");
+		assert_eq!(
+			quote!(#wrapper).to_string(),
+			"# [cfg_attr (feature = \"trace\" , cfg (unix))]"
+		);
+	}
+
+	#[rstest]
+	fn route_pre_validation_skips_multipart() {
+		let input: ItemFn = syn::parse_quote! {
+			async fn handler(multipart: Multipart) -> String { String::new() }
+		};
+		let extractors = detect_extractors(&input.sig.inputs);
+		let (_, wrapper) = generate_wrapper_with_both(
+			&input,
+			&extractors,
+			&[],
+			&RouteOptions {
+				pre_validate: true,
+				..RouteOptions::default()
+			},
+		);
+
+		assert!(!wrapper.to_string().contains("Validate :: validate"));
 	}
 
 	#[rstest]

@@ -405,10 +405,13 @@ pub trait CustomManager: Sized + Send + Sync {
 		E: OrmExecutor + ?Sized + 'a,
 	{
 		async move {
-			match self.create_with_conn(conn, model).await {
-				Ok(model) => CreateWithConnOutcome::Created(model),
-				Err(error) => CreateWithConnOutcome::FailedBeforeInsert(error),
+			let mut model = model.clone();
+			if let Err(error) = self.before_save(&mut model) {
+				return CreateWithConnOutcome::FailedBeforeInsert(error);
 			}
+			Manager::<Self::Model>::new()
+				.create_with_conn_outcome(conn, &model)
+				.await
 		}
 	}
 

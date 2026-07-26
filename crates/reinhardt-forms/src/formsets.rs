@@ -158,7 +158,20 @@ impl<P: FormModel, C: FormModel> InlineFormSet<P, C> {
 		}
 		let parent_before_save = self.parent.clone();
 		let parent_mode_before_save = self.parent_persistence_mode;
-		FormModel::save_with_mode(&mut self.parent, executor, self.parent_persistence_mode).await?;
+		if let Err(error) =
+			FormModel::save_with_mode(&mut self.parent, executor, self.parent_persistence_mode)
+				.await
+		{
+			if matches!(error, ModelFormError::PersistenceAfterCreate { .. }) {
+				if let Some(outcome) = executor.transaction_outcome() {
+					self.pending_parent_save =
+						Some((outcome, parent_before_save, parent_mode_before_save));
+				} else {
+					self.parent_persistence_mode = ModelFormPersistenceMode::Update;
+				}
+			}
+			return Err(error);
+		}
 		if let Some(outcome) = executor.transaction_outcome() {
 			self.pending_parent_save = Some((outcome, parent_before_save, parent_mode_before_save));
 		} else {

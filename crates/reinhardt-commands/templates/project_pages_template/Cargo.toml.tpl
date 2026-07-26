@@ -60,6 +60,7 @@ cfg_aliases = "0.2"
 [features]
 default = ["with-reinhardt", "client-router"]
 client-router = []
+commands-shell = ["reinhardt/commands-shell"]
 with-reinhardt = []
 msw = ["reinhardt/msw"]
 

@@ -83,6 +83,39 @@ cargo make runserver
 
 The server will start at `http://127.0.0.1:8000/`.
 
+### Explore the ORM in the Rust Shell
+
+This example declares `commands-shell` as an opt-in feature, not a default:
+
+```bash
+cargo run --bin manage --features commands-shell -- shell
+cargo run --bin manage --features commands-shell -- shell -c \
+  'println!("{:?}", db.backend())'
+```
+
+The feature-gated `config::shell::get_shell_config()` and generated-style
+`manage` wiring load the concrete settings, ORM `db` handle, application `di`
+context, `framework` alias, and `Snippet` short import. If installed apps
+declare the same model name, the short import is skipped and a deterministic
+warning lists the concrete registered crate paths; the evaluator's
+`project_crate` alias can reference those same types. Projects can add a final
+Rust prelude through `ShellConfig::with_prelude(...)`.
+
+Interactive input preserves successful definitions, supports top-level
+`.await`, and continues unmatched brackets from `>>> ` at `... `. Ctrl+C
+during evaluation, a panic, or evaluator exit clears user state and reloads
+settings, database/DI bindings, model imports, and the project prelude.
+`shell -c` evaluates once, exits zero only on success, returns non-zero on
+failure, and Reinhardt's own diagnostics do not repeat the raw source.
+Arbitrary Rust, compiler output, panics, and user code can still print literals;
+the shell is not a sandbox.
+
+History is best-effort at
+`<platform local data directory>/reinhardt/shell/examples-tutorial-rest.history`;
+a missing file is a silent first run, while directory-resolution, read, or
+write failures warn without preventing startup. `shell-rhai` was removed, and
+the `shell` feature now selects Rust rather than the old Rhai syntax.
+
 ### API Examples
 
 ```bash
@@ -182,6 +215,7 @@ examples-tutorial-rest/
 │   │   └── manage.rs
 │   ├── config/
 │   │   ├── apps.rs
+│   │   ├── shell.rs
 │   │   ├── settings.rs
 │   │   └── urls.rs
 │   ├── config.rs

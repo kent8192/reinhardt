@@ -22,7 +22,12 @@ mod native {
 	// Referencing `get_settings` alone does not guarantee the whole crate
 	// (and thus every inventory entry) is linked.
 	use {{ crate_name }} as _;
+	#[cfg(feature = "commands-shell")]
+	use {{ crate_name }}::config::shell::get_shell_config;
 	use {{ crate_name }}::config::settings::get_settings;
+	#[cfg(feature = "commands-shell")]
+	use reinhardt::commands::execute_from_command_line_with_settings_and_shell;
+	#[cfg(not(feature = "commands-shell"))]
 	use reinhardt::commands::execute_from_command_line_with_settings;
 	use std::process;
 
@@ -40,7 +45,14 @@ mod native {
 		// (`[core.databases.default]`) without requiring DATABASE_URL.
 		// Router registration still happens automatically inside the runtime
 		// via the #[routes] attribute macro in src/config/urls.rs.
-		if let Err(e) = execute_from_command_line_with_settings(get_settings()).await {
+		#[cfg(feature = "commands-shell")]
+		let result =
+			execute_from_command_line_with_settings_and_shell(get_settings(), get_shell_config())
+				.await;
+		#[cfg(not(feature = "commands-shell"))]
+		let result = execute_from_command_line_with_settings(get_settings()).await;
+
+		if let Err(e) = result {
 			eprintln!("Error: {}", e);
 			process::exit(1);
 		}
@@ -49,6 +61,7 @@ mod native {
 
 #[cfg(not(target_arch = "wasm32"))]
 fn main() {
+	reinhardt::commands::shell_runtime_hook();
 	native::main();
 }
 

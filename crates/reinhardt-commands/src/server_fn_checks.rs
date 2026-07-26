@@ -35,7 +35,7 @@ pub fn ensure_builtin_checks_registered() {
 /// Rejects startup when linked server function inventory is invalid.
 ///
 /// This is separate from the command check registry because non-CLI callers
-/// can invoke [`crate::RunServerCommand::execute`] directly.
+/// can invoke [`crate::BaseCommand::execute`] on [`crate::RunServerCommand`] directly.
 pub fn validate_server_fn_inventory_for_startup() -> Result<(), String> {
 	let errors = validate_server_fn_inventory();
 	if errors.is_empty() {

@@ -1392,6 +1392,43 @@ pub fn server_url_patterns() {
 }
 
 #[test]
+fn foreign_unqualified_app_config_attribute_skips_the_migration() {
+	let fixture = prepare_project(
+		"foreign_app_config",
+		"[lib]\npath = \"src/lib.rs\"\n",
+		&[(
+			"src/lib.rs",
+			r#"use other_framework::app_config;
+use reinhardt::server_fn;
+
+#[app_config(name = "root", label = "root")]
+pub struct ForeignConfig;
+
+#[server_fn]
+pub async fn status() {}
+
+pub fn server_url_patterns() {
+	router()
+		.server_fn(status::marker)
+}
+"#,
+		)],
+	);
+	let source = fixture.path().join("src/lib.rs");
+	let before = fs::read(&source).expect("read foreign app_config source");
+
+	let output = run_migrate(fixture.path(), true);
+
+	assert_success(&output);
+	assert!(
+		stdout(&output).starts_with("skipped mixed registration: src/lib.rs:"),
+		"foreign app_config attributes must make coverage incomplete: {}",
+		stdout(&output)
+	);
+	assert_eq!(fs::read(source).expect("read skipped source"), before);
+}
+
+#[test]
 fn arbitrary_function_attribute_skips_the_migration() {
 	let fixture = prepare_project(
 		"unexpanded_function_attribute",

@@ -536,6 +536,11 @@ fn record_attribute_alias(path: &[String], binding: &str, aliases: &mut BTreeMap
 			binding.to_owned(),
 			"__reinhardt_unknown_server_fn__".to_owned(),
 		);
+	} else if path.last().is_some_and(|segment| segment == "app_config") {
+		aliases.insert(
+			binding.to_owned(),
+			"__reinhardt_unknown_app_config__".to_owned(),
+		);
 	}
 }
 

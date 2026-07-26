@@ -150,6 +150,15 @@ impl EvcxrEvaluator {
 	}
 }
 
+impl Drop for EvcxrEvaluator {
+	fn drop(&mut self) {
+		if let Ok(mut process) = self.process_handle.lock() {
+			let _ = terminate_evaluator_process(&mut process, self.owns_process_group);
+			let _ = process.wait();
+		}
+	}
+}
+
 impl BlockingShellEvaluator for EvcxrEvaluator {
 	fn evaluate(&mut self, source: &str) -> Result<EvaluationOutput, EvaluationFailure> {
 		self.evaluation_sequence += 1;

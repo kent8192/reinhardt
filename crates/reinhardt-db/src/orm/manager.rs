@@ -14,7 +14,7 @@ use reinhardt_query::prelude::{
 use std::collections::HashMap;
 use std::marker::PhantomData;
 use std::sync::{
-	Arc, RwLock as StdRwLock, RwLockReadGuard as StdRwLockReadGuard,
+	Arc, Mutex, RwLock as StdRwLock, RwLockReadGuard as StdRwLockReadGuard,
 	RwLockWriteGuard as StdRwLockWriteGuard,
 	atomic::{AtomicBool, Ordering},
 };
@@ -154,6 +154,7 @@ impl DefaultDatabase {
 	}
 }
 
+#[derive(Clone)]
 enum ScopedRegistrationPredecessor {
 	Scope(Arc<ScopedRegistrationNode>),
 	Baseline(DefaultDatabase),
@@ -162,7 +163,7 @@ enum ScopedRegistrationPredecessor {
 struct ScopedRegistrationNode {
 	handle: DatabaseConnection,
 	lease: DatabaseConnectionLease,
-	previous: Option<ScopedRegistrationPredecessor>,
+	previous: Mutex<Option<ScopedRegistrationPredecessor>>,
 	active: AtomicBool,
 }
 
@@ -364,12 +365,13 @@ fn restore_if_current(node: &Arc<ScopedRegistrationNode>) {
 					.is_some_and(|current| Arc::ptr_eq(current, node))
 			}) {
 				*state = nearest_active_predecessor(node);
-			} else if !state.as_ref().is_some_and(|database| {
-				database
-					.scope
-					.as_ref()
-					.is_some_and(|current| scope_descends_from(current, node))
-			}) {
+			} else if let Some(current) = state
+				.as_ref()
+				.and_then(|database| database.scope.as_ref())
+				.filter(|current| scope_descends_from(current, node))
+			{
+				unlink_inactive_ancestor(current, node);
+			} else {
 				tracing::warn!(
 					"Scoped database registration was externally replaced; previous registration will not be restored"
 				);
@@ -388,31 +390,59 @@ fn scope_descends_from(
 	current: &ScopedRegistrationNode,
 	ancestor: &Arc<ScopedRegistrationNode>,
 ) -> bool {
-	let mut previous = current.previous.as_ref();
+	let mut previous = scoped_predecessor(current);
 	while let Some(ScopedRegistrationPredecessor::Scope(scope)) = previous {
-		if Arc::ptr_eq(scope, ancestor) {
+		if Arc::ptr_eq(&scope, ancestor) {
 			return true;
 		}
-		previous = scope.previous.as_ref();
+		previous = scoped_predecessor(&scope);
 	}
 	false
 }
 
 fn nearest_active_predecessor(node: &ScopedRegistrationNode) -> Option<DefaultDatabase> {
-	let mut previous = node.previous.as_ref();
+	let mut previous = scoped_predecessor(node);
 	loop {
 		match previous {
 			Some(ScopedRegistrationPredecessor::Scope(scope)) => {
 				if scope.active.load(Ordering::Acquire) {
-					return Some(DefaultDatabase::from_scope(scope.clone()));
+					return Some(DefaultDatabase::from_scope(scope));
 				}
-				previous = scope.previous.as_ref();
+				previous = scoped_predecessor(&scope);
 			}
 			Some(ScopedRegistrationPredecessor::Baseline(database)) => {
 				return Some(database.clone());
 			}
 			None => return None,
 		}
+	}
+}
+
+fn scoped_predecessor(node: &ScopedRegistrationNode) -> Option<ScopedRegistrationPredecessor> {
+	node.previous
+		.lock()
+		.unwrap_or_else(|poisoned| poisoned.into_inner())
+		.clone()
+}
+
+fn unlink_inactive_ancestor(
+	current: &Arc<ScopedRegistrationNode>,
+	target: &Arc<ScopedRegistrationNode>,
+) {
+	let mut previous = current
+		.previous
+		.lock()
+		.unwrap_or_else(|poisoned| poisoned.into_inner());
+	match previous.as_ref() {
+		Some(ScopedRegistrationPredecessor::Scope(scope)) if Arc::ptr_eq(scope, target) => {
+			*previous = scoped_predecessor(target);
+		}
+		Some(ScopedRegistrationPredecessor::Scope(scope)) => {
+			let scope = Arc::clone(scope);
+			drop(previous);
+			unlink_inactive_ancestor(&scope, target);
+		}
+		Some(ScopedRegistrationPredecessor::Baseline(_)) | None => {}
 	}
 }
 
@@ -434,7 +464,7 @@ pub async fn install_scoped_database(
 		let node = Arc::new(ScopedRegistrationNode {
 			handle: installed_handle,
 			lease: installed_lease,
-			previous,
+			previous: Mutex::new(previous),
 			active: AtomicBool::new(true),
 		});
 		*state = Some(DefaultDatabase::from_scope(node.clone()));

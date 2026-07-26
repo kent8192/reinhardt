@@ -973,7 +973,7 @@ mod tests {
 	}
 
 	#[test]
-	fn generated_model_form_reuses_non_idempotently_cleaned_candidate_across_retry() {
+	fn generated_model_form_keeps_non_idempotently_cleaned_candidate_after_uncertain_create() {
 		let data = question_payload("Retryable", 17);
 		let cleaner_calls = Arc::new(AtomicUsize::new(0));
 		let mut executor = RetryExecutor::new([
@@ -1000,6 +1000,10 @@ mod tests {
 		assert_eq!(cleaner_calls.load(Ordering::SeqCst), 1);
 
 		let first_error = tokio_test::block_on(form.save(&mut executor)).unwrap_err();
+		assert!(matches!(
+			first_error,
+			ModelFormError::PersistenceAfterCreate { .. }
+		));
 		assert_eq!(
 			first_error.database_error().map(DatabaseError::kind),
 			Some(DatabaseErrorKind::Timeout)
@@ -1007,12 +1011,7 @@ mod tests {
 		assert!(form.instance().is_none());
 		assert_eq!(form.build_instance().unwrap(), built);
 		assert_eq!(cleaner_calls.load(Ordering::SeqCst), 1);
-
-		let saved = tokio_test::block_on(form.save(&mut executor)).unwrap();
-		assert_eq!(saved.id, Some(23));
-		assert_eq!(saved.title, "Retryable-1");
-		assert_eq!(form.instance(), Some(&saved));
-		assert_eq!(executor.fetch_one_calls, 2);
+		assert_eq!(executor.fetch_one_calls, 1);
 		assert_eq!(cleaner_calls.load(Ordering::SeqCst), 1);
 	}
 
@@ -1044,7 +1043,7 @@ mod tests {
 	}
 
 	#[test]
-	fn generated_uuid_model_form_include_in_new_false_retries_create_with_same_dynamic_default() {
+	fn generated_uuid_model_form_reuses_dynamic_default_for_update_after_uncertain_insert() {
 		let mut data = UuidRecordModelFormData::<AllEditableModelFields>::empty();
 		data.set_title("UUID create".to_owned());
 		let mut form = ModelForm::<UuidRecord>::from_payload(data);
@@ -1056,6 +1055,10 @@ mod tests {
 		]);
 
 		let first_error = tokio_test::block_on(form.save(&mut executor)).unwrap_err();
+		assert!(matches!(
+			first_error,
+			ModelFormError::PersistenceAfterCreate { .. }
+		));
 		assert_eq!(
 			first_error.database_error().map(DatabaseError::kind),
 			Some(DatabaseErrorKind::Timeout)
@@ -1066,12 +1069,8 @@ mod tests {
 
 		assert_eq!(saved.id, generated_id);
 		assert_eq!(executor.fetch_one_calls, 2);
-		assert!(
-			executor
-				.queries
-				.iter()
-				.all(|query| query.trim_start().starts_with("INSERT"))
-		);
+		assert!(executor.queries[0].trim_start().starts_with("INSERT"));
+		assert!(executor.queries[1].trim_start().starts_with("UPDATE"));
 	}
 
 	#[test]
@@ -1197,7 +1196,11 @@ mod tests {
 			let field = field_factory::create_form_field(&descriptor);
 
 			assert_eq!(field.name(), "value");
-			assert!(field.required());
+			if matches!(kind, ModelFormFieldKind::Boolean) {
+				assert!(!field.required());
+			} else {
+				assert!(field.required());
+			}
 			assert!(
 				field.clean(Some(&value)).is_ok(),
 				"descriptor kind {kind:?} must accept its native value"

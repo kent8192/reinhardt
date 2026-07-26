@@ -62,9 +62,9 @@ pub trait Model: Serialize + for<'de> Deserialize<'de> + Send + Sync + Clone {
 
 	/// Converts a primary key into a query filter value.
 	///
-	/// Primary-key types retain the historical numeric-or-string fallback.
-	/// This avoids assuming that a type spelling in a derive input is a primitive:
-	/// aliases and imports may shadow Rust primitive names.
+	/// Custom primary-key types retain the historical numeric-or-string fallback.
+	/// Derived models override this conversion for declared primary-key types with
+	/// a dedicated database binding, such as strings, UUIDs, and timestamps.
 	fn primary_key_filter_value(pk: Self::PrimaryKey) -> super::query::FilterValue {
 		let value = pk.to_string();
 		value

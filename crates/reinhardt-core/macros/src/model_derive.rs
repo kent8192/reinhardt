@@ -2205,6 +2205,12 @@ pub(crate) fn model_derive_impl(mut input: DeriveInput) -> Result<TokenStream> {
 				#orm_crate::query::FilterValue::Timestamp(pk)
 			}
 		}
+	} else if !is_composite_pk && is_string_type(pk_type) {
+		quote! {
+			fn primary_key_filter_value(pk: Self::PrimaryKey) -> #orm_crate::query::FilterValue {
+				#orm_crate::query::FilterValue::String(pk)
+			}
+		}
 	} else {
 		quote! {}
 	};
@@ -5543,6 +5549,30 @@ mod tests {
 			quote! {
 				fn primary_key_filter_value(pk: Self::PrimaryKey) -> #orm_crate::query::FilterValue {
 					#orm_crate::query::FilterValue::Timestamp(pk)
+				}
+			}
+			.to_string()
+		);
+	}
+
+	#[rstest]
+	fn string_primary_key_uses_string_filter_value() {
+		let input = quote! {
+			#[model(app_label = "test", table_name = "string_models")]
+			pub struct StringModel {
+				#[field(primary_key = true, max_length = 255)]
+				pub id: String,
+			}
+		};
+
+		let output = model_derive_impl(syn::parse2(input).unwrap()).unwrap();
+		let orm_crate = get_reinhardt_orm_crate();
+
+		assert_eq!(
+			generated_primary_key_filter_value(&output),
+			quote! {
+				fn primary_key_filter_value(pk: Self::PrimaryKey) -> #orm_crate::query::FilterValue {
+					#orm_crate::query::FilterValue::String(pk)
 				}
 			}
 			.to_string()

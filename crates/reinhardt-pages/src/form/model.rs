@@ -116,6 +116,15 @@ where
 			.collect()
 	}
 
+	/// Clears every value that belongs to the active form policy.
+	pub fn clear_selected_values(&mut self) {
+		self.values.retain(|field, _| {
+			!S::fields().iter().any(|descriptor| {
+				descriptor.name == *field && descriptor.editable && P::allows(field)
+			})
+		});
+	}
+
 	/// Builds the one typed payload sent to the configured server function.
 	///
 	/// # Errors
@@ -173,6 +182,9 @@ fn convert_control_value(
 			..
 		} => {
 			let text = expect_string(descriptor.name, value)?;
+			if text.is_empty() && !descriptor.required {
+				return Ok(serde_json::Value::String(text));
+			}
 			if let Some(min_length) = min_length
 				&& text.chars().count() < min_length
 			{

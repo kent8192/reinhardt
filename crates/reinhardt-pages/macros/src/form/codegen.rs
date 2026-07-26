@@ -2578,6 +2578,7 @@ fn generate_model_form(
 
 				fn runtime_apply_values(&self, values: &Self::Values) {
 					let mut state = self.__model_state.borrow_mut();
+					state.clear_selected_values();
 					for (field, value) in &values.0 {
 						let _ = state.set_value(field, value.clone());
 					}

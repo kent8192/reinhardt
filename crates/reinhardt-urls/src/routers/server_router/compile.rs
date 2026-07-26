@@ -480,12 +480,20 @@ fn mounted_paths_overlap(left: &str, right: &str) -> bool {
 		.filter(|segment| !segment.is_empty());
 	let left = left.collect::<Vec<_>>();
 	let right = right.collect::<Vec<_>>();
+	for (left, right) in left.iter().zip(&right) {
+		if left.starts_with("{*") && left.ends_with('}')
+			|| right.starts_with("{*") && right.ends_with('}')
+		{
+			return true;
+		}
+		if !(left.starts_with('{') && left.ends_with('}')
+			|| right.starts_with('{') && right.ends_with('}')
+			|| left == right)
+		{
+			return false;
+		}
+	}
 	left.len() == right.len()
-		&& left.iter().zip(right).all(|(left, right)| {
-			left.starts_with('{') && left.ends_with('}')
-				|| right.starts_with('{') && right.ends_with('}')
-				|| left == &right
-		})
 }
 
 #[cfg(test)]

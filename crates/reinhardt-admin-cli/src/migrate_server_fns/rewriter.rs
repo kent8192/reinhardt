@@ -1152,6 +1152,12 @@ pub(crate) fn apply_text_edits(source: &str, edits: &[TextEdit]) -> Option<Strin
 				}
 			}
 			TextEditKind::WholeLine => {
+				if source
+					.get(start..end)
+					.is_some_and(|item| item.contains("//") || item.contains("/*"))
+				{
+					return None;
+				}
 				let line_start = line_start_byte(source, start);
 				if source[line_start..start].trim().is_empty() {
 					start = line_start;

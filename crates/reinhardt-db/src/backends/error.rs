@@ -435,7 +435,9 @@ fn map_sqlx_error_ref(error: &sqlx::Error) -> DatabaseError {
 	}
 }
 
-#[cfg(any(feature = "pgvector", test))]
+// PostgreSQL uses this mapper in ordinary builds, while backend-only feature
+// combinations retain the same internal error boundary without calling it.
+#[cfg_attr(not(any(feature = "postgres", test)), allow(dead_code))]
 pub(crate) fn map_sqlx_error_with_pgvector_context(
 	error: sqlx::Error,
 	context: Option<PgvectorOperationKind>,

@@ -2152,6 +2152,18 @@ fn generate_model_form(
 								),
 							};
 						let label = label_override.unwrap_or(descriptor.name);
+						let widget_override = widget_override.filter(|widget| match (*widget, descriptor.kind) {
+							("CheckboxInput", #pages_crate::form::ModelFormFieldKind::Boolean) => true,
+							("DateInput", #pages_crate::form::ModelFormFieldKind::Date) => true,
+							("TimeInput", #pages_crate::form::ModelFormFieldKind::Time) => true,
+							("DateTimeInput", #pages_crate::form::ModelFormFieldKind::DateTime | #pages_crate::form::ModelFormFieldKind::NaiveDateTime) => true,
+							("EmailInput", #pages_crate::form::ModelFormFieldKind::Email { .. }) => true,
+							("UrlInput", #pages_crate::form::ModelFormFieldKind::Url { .. }) => true,
+							("NumberInput" | "RangeInput", #pages_crate::form::ModelFormFieldKind::Integer { .. } | #pages_crate::form::ModelFormFieldKind::Float { .. } | #pages_crate::form::ModelFormFieldKind::Decimal { .. }) => true,
+							("Textarea" | "TextArea", #pages_crate::form::ModelFormFieldKind::Text { .. } | #pages_crate::form::ModelFormFieldKind::Json) => true,
+							("PasswordInput" | "HiddenInput" | "ColorInput" | "TelInput" | "SearchInput", #pages_crate::form::ModelFormFieldKind::Text { .. }) => true,
+							_ => false,
+						});
 						let (tag, input_type) = match widget_override {
 							::core::option::Option::Some("Textarea" | "TextArea") =>
 								("textarea", "text"),

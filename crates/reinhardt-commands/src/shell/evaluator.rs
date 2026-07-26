@@ -197,12 +197,13 @@ impl EvcxrEvaluator {
 			evaluation_sequence: 0,
 		};
 		process_guard.disarm();
-		evaluator
+		let output = evaluator
 			.evaluate(aliases)
 			.map_err(|error| startup_prelude_error(error, &warnings))?;
+		append_startup_output(&mut warnings, output);
 		for import in import_plan.imports() {
 			match evaluator.evaluate(import) {
-				Ok(_) => {}
+				Ok(output) => append_startup_output(&mut warnings, output),
 				Err(EvaluationFailure::Compilation(error)) => warnings.push(format!(
 					"Model import is unavailable to the evaluator and was skipped: {import}: {error}"
 				)),
@@ -210,9 +211,10 @@ impl EvcxrEvaluator {
 			}
 		}
 		for statement in project_prelude {
-			evaluator
+			let output = evaluator
 				.evaluate(&statement)
 				.map_err(|error| startup_prelude_error(error, &warnings))?;
+			append_startup_output(&mut warnings, output);
 		}
 		warnings.sort();
 		Ok((evaluator, warnings))
@@ -765,13 +767,6 @@ fn source_with_commit_sentinel(source: &str, sentinel: &str) -> String {
 				.or(Some(candidate.len()))
 		} else if candidate.starts_with("/*!") {
 			complete_inner_block_doc(candidate)
-		} else if candidate.starts_with("//") {
-			candidate
-				.find('\n')
-				.map(|end| end + 1)
-				.or(Some(candidate.len()))
-		} else if candidate.starts_with("/*") {
-			complete_inner_block_doc(&format!("/*!{}", &candidate[2..]))
 		} else {
 			None
 		};
@@ -789,6 +784,15 @@ fn source_with_commit_sentinel(source: &str, sentinel: &str) -> String {
 		&source[..prefix_end],
 		&source[prefix_end..]
 	)
+}
+
+fn append_startup_output(warnings: &mut Vec<String>, output: EvaluationOutput) {
+	if !output.stdout.is_empty() {
+		warnings.push(output.stdout);
+	}
+	if !output.stderr.is_empty() {
+		warnings.push(output.stderr);
+	}
 }
 
 fn complete_inner_block_doc(source: &str) -> Option<usize> {
@@ -1265,6 +1269,17 @@ mod tests {
 		assert_eq!(
 			rendered,
 			"/*! outer /* nested */ still outer */\nlet __commit: ::std::string::String = ::std::string::String::new();\nlet value = 1;"
+		);
+	}
+
+	#[test]
+	fn commit_sentinel_keeps_outer_and_ordinary_comments_with_the_submitted_item() {
+		let source = "/* note */let value = 1;\n/// documentation\nstruct Value;";
+		let rendered = source_with_commit_sentinel(source, "__commit");
+
+		assert_eq!(
+			rendered,
+			"let __commit: ::std::string::String = ::std::string::String::new();\n/* note */let value = 1;\n/// documentation\nstruct Value;"
 		);
 	}
 

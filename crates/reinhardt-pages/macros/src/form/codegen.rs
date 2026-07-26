@@ -2564,6 +2564,14 @@ fn generate_model_form(
 					match field {}
 				}
 
+				fn runtime_values_are_dirty(
+					&self,
+					current: &Self::Values,
+					defaults: &Self::Values,
+				) -> bool {
+					current != defaults
+				}
+
 				fn runtime_apply_field_value(&self, field: Self::Field, _values: &Self::Values) {
 					match field {}
 				}

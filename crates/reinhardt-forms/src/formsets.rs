@@ -5,7 +5,7 @@
 
 use crate::formset::FormSet;
 use crate::model_form::{FormModel, ModelForm, ModelFormError, ModelFormPersistenceMode};
-use reinhardt_core::model_form::{AllEditableModelFields, ModelFormPolicy};
+use reinhardt_core::model_form::{AllEditableModelFields, ModelFormPolicy, ModelFormSchema};
 use reinhardt_db::orm::OrmExecutor;
 use serde::Serialize;
 use std::marker::PhantomData;
@@ -119,6 +119,17 @@ impl<P: FormModel, C: FormModel> InlineFormSet<P, C> {
 		if !self.is_valid() {
 			return Err(ModelFormError::ModelValidation {
 				errors: vec!["inline formset contains invalid child fields".to_string()],
+			});
+		}
+		if !C::Schema::fields()
+			.iter()
+			.any(|descriptor| descriptor.name == self.fk_field)
+		{
+			return Err(ModelFormError::FieldValidation {
+				errors: std::collections::HashMap::from([(
+					self.fk_field.clone(),
+					vec!["unknown model form field".to_owned()],
+				)]),
 			});
 		}
 		FormModel::save_with_mode(&mut self.parent, executor, self.parent_persistence_mode).await?;

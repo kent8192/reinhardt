@@ -149,6 +149,21 @@ fn is_raw_request_parameter(pat_type: &syn::PatType) -> bool {
 	!is_supported_extractor_type_name(&segment.ident.to_string())
 }
 
+fn raw_request_parameter_ident(inputs: &Punctuated<FnArg, Token![,]>) -> Option<syn::Ident> {
+	inputs.iter().find_map(|input| {
+		let FnArg::Typed(pat_type) = input else {
+			return None;
+		};
+		if !is_raw_request_parameter(pat_type) {
+			return None;
+		}
+		let Pat::Ident(pat_ident) = &*pat_type.pat else {
+			return None;
+		};
+		Some(pat_ident.ident.clone())
+	})
+}
+
 /// Extract request body information from function parameters
 ///
 /// Detects body-consuming extractors (Json<T>, Form<T>, Body<T>) and extracts:
@@ -680,11 +695,22 @@ fn generate_view_type(
 	let view_type_name =
 		syn::Ident::new(&fn_name_to_view_type(&fn_name.to_string()), fn_name.span());
 	let request_binding = syn::Ident::new("__reinhardt_request", Span::mixed_site());
+	let wrapper_request_param = raw_request_parameter_ident(&input.sig.inputs);
+	let wrapper_request_binding = wrapper_request_param.as_ref().unwrap_or(&request_binding);
+	let request_binding_initialization = wrapper_request_param.as_ref().map(|wrapper_param| {
+		quote! {
+			let #request_binding = #wrapper_param;
+		}
+	});
 	let method_ident = syn::Ident::new(method, Span::call_site());
 
 	// Generate wrapper parts
 	let (original_fn, wrapper_body) =
 		generate_wrapper_with_both(input, extractors, inject_params, options);
+	let wrapper_body = quote! {
+		#request_binding_initialization
+		#wrapper_body
+	};
 
 	let route_doc = format!("Route: {} {}", method, path);
 
@@ -775,7 +801,7 @@ fn generate_view_type(
 		impl #view_type_name {
 			/// Handler function for this view
 			#(#fn_attrs)*
-			#fn_vis #asyncness fn #fn_name(#request_binding: #http_crate::Request) #output {
+			#fn_vis #asyncness fn #fn_name(#wrapper_request_binding: #http_crate::Request) #output {
 				#wrapper_body
 			}
 		}

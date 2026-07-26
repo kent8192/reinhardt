@@ -42,13 +42,16 @@ impl<const ID: u8> EndpointInfo for TestEndpoint<ID> {
 			28 => "/profile",
 			29 => "/trace",
 			30 => "/webdav",
+			31 => "/items/{id}",
+			32 => "/items/{name}",
+			33 => "/api/server_fn/test",
 			_ => unreachable!("unsupported test endpoint"),
 		}
 	}
 
 	fn method() -> Method {
 		match ID {
-			8 | 11 | 12 | 13 | 14 | 18 | 27 => Method::POST,
+			8 | 11 | 12 | 13 | 14 | 18 | 27 | 33 => Method::POST,
 			21 => Method::PUT,
 			29 => Method::TRACE,
 			30 => Method::from_bytes(b"PROPFIND").unwrap(),
@@ -88,6 +91,9 @@ impl<const ID: u8> EndpointInfo for TestEndpoint<ID> {
 			28 => "!profile_detail",
 			29 => "trace",
 			30 => "webdav",
+			31 => "items-by-id",
+			32 => "items-by-name",
+			33 => "server-fn-test-users",
 			_ => unreachable!("unsupported test endpoint"),
 		}
 	}
@@ -588,6 +594,35 @@ fn validate_routes_includes_mounted_child_configuration_errors() {
 		errors,
 		["pages.server_fn.E002: duplicate endpoint".to_string()]
 	);
+}
+
+#[test]
+fn validate_routes_distinguishes_mounted_server_function_paths() {
+	let router = ServerRouter::new()
+		.mount(
+			"/polls/",
+			ServerRouter::new().endpoint(|| TestEndpoint::<11>),
+		)
+		.mount(
+			"/users/",
+			ServerRouter::new().endpoint(|| TestEndpoint::<33>),
+		);
+
+	assert!(router.validate_routes().is_ok());
+}
+
+#[test]
+fn validate_routes_rejects_equivalent_mounted_server_function_patterns() {
+	let router = ServerRouter::new()
+		.mount("/", ServerRouter::new().endpoint(|| TestEndpoint::<31>))
+		.mount("/", ServerRouter::new().endpoint(|| TestEndpoint::<32>));
+
+	let errors = router
+		.validate_routes()
+		.expect_err("equivalent mounted endpoint patterns must fail");
+
+	assert_eq!(errors.len(), 1);
+	assert!(errors[0].contains("Failed to compile mounted route"));
 }
 
 #[test]

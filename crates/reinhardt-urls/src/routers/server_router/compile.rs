@@ -63,6 +63,13 @@ fn insert_compiled_route(
 	Ok(())
 }
 
+struct MountedFunctionRoute {
+	origin: usize,
+	path: String,
+	method: Method,
+	handler: RouteHandler,
+}
+
 impl ServerRouter {
 	/// Compile all routes into matchit routers.
 	///
@@ -97,7 +104,80 @@ impl ServerRouter {
 		for child in &self.children {
 			errors.extend(child.compile_routes_recursive());
 		}
+		errors.extend(self.compile_mounted_function_route_conflicts());
 		errors
+	}
+
+	fn compile_mounted_function_route_conflicts(&self) -> Vec<String> {
+		let mut routes = Vec::new();
+		let mut next_origin = 0;
+		self.collect_mounted_function_routes("", &mut next_origin, &mut routes);
+
+		let mut errors = Vec::new();
+		for current_index in 0..routes.len() {
+			let current = &routes[current_index];
+			for previous in &routes[..current_index] {
+				if current.origin == previous.origin || current.method != previous.method {
+					continue;
+				}
+				let mut compiled = CompiledRoutes::default();
+				if insert_compiled_route(
+					&mut compiled,
+					&previous.method,
+					&previous.path,
+					previous.handler.clone(),
+				)
+				.is_err()
+				{
+					continue;
+				}
+				if let Err(error) = insert_compiled_route(
+					&mut compiled,
+					&current.method,
+					&current.path,
+					current.handler.clone(),
+				) {
+					errors.push(format!(
+						"Failed to compile mounted route '{}' ({}): {error}",
+						current.path, current.method
+					));
+					break;
+				}
+			}
+		}
+		errors
+	}
+
+	fn collect_mounted_function_routes(
+		&self,
+		parent_prefix: &str,
+		next_origin: &mut usize,
+		routes: &mut Vec<MountedFunctionRoute>,
+	) {
+		let current_prefix =
+			crate::routers::path_utils::join_prefix_path(parent_prefix, &self.prefix);
+		let origin = *next_origin;
+		*next_origin += 1;
+		for func_route in &self.functions {
+			routes.push(MountedFunctionRoute {
+				origin,
+				path: crate::routers::path_utils::join_prefix_path(
+					&current_prefix,
+					&func_route.path,
+				),
+				method: func_route.method.clone(),
+				handler: RouteHandler {
+					handler: func_route.handler.clone(),
+					sync_handler: func_route.sync_handler.clone(),
+					requestless_sync_handler: func_route.requestless_sync_handler.clone(),
+					middleware: func_route.middleware.clone(),
+					param_names: extract_path_param_names(&func_route.path),
+				},
+			});
+		}
+		for child in &self.children {
+			child.collect_mounted_function_routes(&current_prefix, next_origin, routes);
+		}
 	}
 
 	fn compile_routes_once(&self) -> CompiledRoutes {

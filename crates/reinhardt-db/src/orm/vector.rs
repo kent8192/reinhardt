@@ -86,7 +86,7 @@ fn encode_pgvector_binary(values: &[f32]) -> Result<Vec<u8>, PgVectorCodecError>
 	validate_dynamic_vector(values)?;
 	let dimensions = i16::try_from(values.len())
 		.expect("validated pgvector dimensions always fit in a signed 16-bit integer");
-	let mut bytes = Vec::with_capacity(4 + values.len() * size_of::<f32>());
+	let mut bytes = Vec::with_capacity(4 + size_of_val(values));
 	bytes.extend_from_slice(&dimensions.to_be_bytes());
 	bytes.extend_from_slice(&0_i16.to_be_bytes());
 	for value in values {

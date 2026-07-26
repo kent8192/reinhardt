@@ -177,7 +177,7 @@ impl IndexType {
 	fn is_approximate_vector(self) -> bool {
 		#[cfg(feature = "pgvector")]
 		{
-			return matches!(self, Self::Hnsw { .. } | Self::Ivfflat { .. });
+			matches!(self, Self::Hnsw { .. } | Self::Ivfflat { .. })
 		}
 		#[cfg(not(feature = "pgvector"))]
 		{

@@ -192,7 +192,7 @@ fn derive_impl(input: DeriveInput) -> Result<TokenStream> {
 			#apps_crate::AppModuleRegistration::new_in_crate(
 				#label,
 				module_path!(),
-				concat!(env!("CARGO_PKG_NAME"), "@", env!("CARGO_PKG_VERSION")),
+				concat!(env!("CARGO_MANIFEST_DIR"), "@", env!("CARGO_PKG_NAME"), "@", env!("CARGO_PKG_VERSION")),
 			)
 		}
 	};

@@ -184,6 +184,10 @@ fn rewrite_module_items(
 			retained.push(item);
 			continue;
 		};
+		if !matches!(item_use.vis, syn::Visibility::Inherited) {
+			retained.push(item);
+			continue;
+		}
 		let original = item_use.clone();
 		if prune_use_tree(&mut item_use.tree, &mut Vec::new(), &removable).is_none() {
 			edits.push(TextEdit::remove_item(&original));
@@ -506,7 +510,7 @@ fn analyze_chain(
 		edits.push(TextEdit::method_suffix(
 			method,
 			if is_outer {
-				Some(".auto_server_fns_in_crate(module_path!(), concat!(env!(\"CARGO_PKG_NAME\"), \"@\", env!(\"CARGO_PKG_VERSION\")))")
+				Some(".auto_server_fns_in_crate(module_path!(), concat!(env!(\"CARGO_MANIFEST_DIR\"), \"@\", env!(\"CARGO_PKG_NAME\"), \"@\", env!(\"CARGO_PKG_VERSION\")))")
 			} else {
 				None
 			},
@@ -515,7 +519,7 @@ fn analyze_chain(
 	if outer.method != "server_fn" {
 		edits.push(TextEdit::insert_after_call(
 			outer,
-			".auto_server_fns_in_crate(module_path!(), concat!(env!(\"CARGO_PKG_NAME\"), \"@\", env!(\"CARGO_PKG_VERSION\")))",
+			".auto_server_fns_in_crate(module_path!(), concat!(env!(\"CARGO_MANIFEST_DIR\"), \"@\", env!(\"CARGO_PKG_NAME\"), \"@\", env!(\"CARGO_PKG_VERSION\")))",
 		));
 	}
 	ChainOutcome::Safe { bindings, edits }

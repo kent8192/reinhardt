@@ -19,4 +19,5 @@ pub fn get_shell_config() -> ShellConfig {
 		"examples_tutorial_basis::config::settings::get_settings",
 		InstalledApp::all_labels().iter().copied(),
 	)
+	.with_dependency_features(["commands-shell"])
 }

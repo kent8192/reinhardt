@@ -491,7 +491,7 @@ impl CleanupableBackend for DatabaseSessionBackend {
 		// Manager::all() returns QuerySet, QuerySet::all() executes and returns Vec<T>
 		let sessions = Session::objects()
 			.all()
-			.all()
+			.all_with_db(self.connection.as_ref())
 			.await
 			.map_err(|e| SessionError::CacheError(format!("Failed to get all keys: {}", e)))?;
 
@@ -511,7 +511,7 @@ impl CleanupableBackend for DatabaseSessionBackend {
 				FilterOperator::Eq,
 				FilterValue::String(session_key.to_string()),
 			))
-			.first()
+			.first_with_db(self.connection.as_ref())
 			.await
 			.ok()
 			.flatten();
@@ -542,7 +542,7 @@ impl CleanupableBackend for DatabaseSessionBackend {
 				FilterOperator::StartsWith,
 				FilterValue::String(prefix.to_string()),
 			))
-			.all()
+			.all_with_db(self.connection.as_ref())
 			.await
 			.map_err(|e| SessionError::CacheError(format!("Failed to list session keys: {}", e)))?;
 
@@ -559,8 +559,9 @@ impl CleanupableBackend for DatabaseSessionBackend {
 				FilterOperator::StartsWith,
 				FilterValue::String(prefix.to_string()),
 			))
-			.count()
+			.all_with_db(self.connection.as_ref())
 			.await
+			.map(|sessions| sessions.len())
 			.map_err(|e| {
 				SessionError::CacheError(format!("Failed to count session keys: {}", e))
 			})?;

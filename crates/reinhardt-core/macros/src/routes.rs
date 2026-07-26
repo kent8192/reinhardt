@@ -1550,10 +1550,18 @@ mod url_resolver_tests {
 			&inject_params,
 			&RouteOptions::default(),
 		);
-		assert!(
-			wrapper
-				.to_string()
-				.contains("handler_original (__reinhardt_extractor_0 , __reinhardt_extractor_1 ,)")
+		let generated = wrapper.to_string();
+		let call_start = generated
+			.find("handler_original")
+			.expect("generated wrapper should call the renamed handler");
+		let call = &generated[call_start..];
+		let call_end = call
+			.find(") . await")
+			.expect("generated handler call should be awaited")
+			+ ") . await".len();
+		assert_eq!(
+			&call[..call_end],
+			"handler_original (__reinhardt_extractor_0 , __reinhardt_extractor_1 ,) . await"
 		);
 	}
 

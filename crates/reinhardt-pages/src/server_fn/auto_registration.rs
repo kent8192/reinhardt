@@ -94,9 +94,9 @@ pub enum ServerFnInventoryError {
 		/// Sorted labels of equally specific owning applications.
 		labels: Vec<String>,
 	},
-	/// Mounted applications contain more than one server function for one path.
+	/// An application contains more than one server function for one path.
 	DuplicatePath {
-		/// Applications containing the conflicting entries.
+		/// Application containing the conflicting entries.
 		app_label: String,
 		/// Duplicate endpoint path.
 		path: String,
@@ -139,7 +139,7 @@ impl Display for ServerFnInventoryError {
 				modules,
 			} => write!(
 				formatter,
-				"pages.server_fn.E004: application(s) `{app_label}` have duplicate server function path `{path}`: {}",
+				"pages.server_fn.E004: application `{app_label}` has duplicate server function path `{path}`: {}",
 				modules.join(", ")
 			),
 			Self::DuplicateName {
@@ -380,7 +380,10 @@ fn resolve_app_module_owner_in_crate_compat<'a>(
 		Ok(owner) => Ok(owner),
 		Err(AppModuleResolutionError::Orphan) => resolve_app_module_owner(
 			apps.iter().filter(|app| {
-				app.target_id.is_none() && (app.crate_id.is_empty() || app.crate_id == crate_id)
+				(app.crate_id.is_empty() || app.crate_id == crate_id)
+					&& (target_id.is_none()
+						|| app.target_id.is_none()
+						|| app.target_id == target_id)
 			}),
 			module_path,
 		),
@@ -427,13 +430,19 @@ fn resolution_error(
 fn duplicate_errors(
 	owned_entries: &[(&ServerFnInventoryEntry, &AppModuleRegistration)],
 ) -> Vec<ServerFnInventoryError> {
-	let mut paths = BTreeMap::<(&str, Option<&str>, &str), Vec<(&str, &str)>>::new();
+	let mut paths = BTreeMap::<(&str, &str, Option<&str>, &str, &str), Vec<&str>>::new();
 	let mut names = BTreeMap::<(&str, &str, Option<&str>, &str, &str), Vec<&str>>::new();
 	for (entry, owner) in owned_entries {
 		paths
-			.entry((owner.crate_id, owner.target_id, entry.path))
+			.entry((
+				owner.module_path,
+				owner.crate_id,
+				owner.target_id,
+				owner.app_label,
+				entry.path,
+			))
 			.or_default()
-			.push((owner.app_label, entry.module_path));
+			.push(entry.module_path);
 		names
 			.entry((
 				owner.module_path,
@@ -447,22 +456,13 @@ fn duplicate_errors(
 	}
 
 	let mut errors = Vec::new();
-	for ((_crate_id, _target_id, path), mut entries) in paths {
-		if entries.len() > 1 {
-			entries.sort_unstable();
-			let app_label = entries
-				.iter()
-				.map(|(app_label, _)| *app_label)
-				.collect::<Vec<_>>();
-			let mut app_label = app_label;
-			app_label.dedup();
+	for ((_module_path, _crate_id, _target_id, app_label, path), mut modules) in paths {
+		if modules.len() > 1 {
+			modules.sort_unstable();
 			errors.push(ServerFnInventoryError::DuplicatePath {
-				app_label: app_label.join(", "),
+				app_label: app_label.to_string(),
 				path: path.to_string(),
-				modules: entries
-					.into_iter()
-					.map(|(_, module)| module.to_string())
-					.collect(),
+				modules: modules.into_iter().map(str::to_string).collect(),
 			});
 		}
 	}
@@ -643,6 +643,37 @@ mod tests {
 	}
 
 	#[test]
+	fn selects_targetless_entries_for_a_target_aware_app_owner() {
+		let apps = [AppModuleRegistration::new_in_target(
+			"polls",
+			"demo::apps::polls",
+			"demo-crate",
+			Some("demo@lib"),
+		)];
+		let entries = [ServerFnInventoryEntry::new_in_crate(
+			"demo::apps::polls::server_fn",
+			"demo-crate",
+			"/api/legacy",
+			"legacy",
+			passthrough,
+		)];
+
+		let selected = select_entries_for_app_in_crate(
+			&apps,
+			&entries,
+			"demo::apps::polls::urls::server_router",
+			"demo-crate",
+			Some("demo@lib"),
+		)
+		.expect("the target-aware owner should select a targetless entry");
+
+		assert_eq!(
+			selected.iter().map(|entry| entry.path).collect::<Vec<_>>(),
+			["/api/legacy"]
+		);
+	}
+
+	#[test]
 	fn accepts_legacy_crate_agnostic_inventory_entries() {
 		let apps = [AppModuleRegistration::new_in_target(
 			"polls",
@@ -788,32 +819,6 @@ mod tests {
 				modules: vec![
 					"demo::apps::polls::a".to_string(),
 					"demo::apps::polls::z".to_string(),
-				],
-			}]
-		);
-	}
-
-	#[test]
-	fn reports_duplicate_path_across_mounted_app_owners() {
-		let apps = [
-			AppModuleRegistration::new("polls", "demo::apps::polls"),
-			AppModuleRegistration::new("users", "demo::apps::users"),
-		];
-		let entries = [
-			test_entry("demo::apps::polls::server_fn", "/api/shared", "polls"),
-			test_entry("demo::apps::users::server_fn", "/api/shared", "users"),
-		];
-
-		let error = validate_entries(&apps, &entries).expect_err("duplicate paths must fail");
-
-		assert_eq!(
-			error,
-			vec![ServerFnInventoryError::DuplicatePath {
-				app_label: "polls, users".to_string(),
-				path: "/api/shared".to_string(),
-				modules: vec![
-					"demo::apps::polls::server_fn".to_string(),
-					"demo::apps::users::server_fn".to_string(),
 				],
 			}]
 		);

@@ -397,6 +397,15 @@ fn import_used_by_pub_use_is_preserved_after_marker_removal() {
 	let router = router_path(fixture.path());
 	write_file(
 		fixture.path(),
+		"src/apps/polls/server_fn.rs",
+		r#"use reinhardt::server_fn;
+
+#[server_fn]
+pub async fn get_questions() {}
+"#,
+	);
+	write_file(
+		fixture.path(),
 		"src/apps/polls/urls/server_router.rs",
 		r#"use crate::apps::polls::server_fn::get_questions;
 pub use self::get_questions::marker as QuestionsMarker;
@@ -601,6 +610,15 @@ fn macro_token_use_preserves_import_after_marker_removal() {
 	let router = router_path(fixture.path());
 	write_file(
 		fixture.path(),
+		"src/apps/polls/server_fn.rs",
+		r#"use reinhardt::server_fn;
+
+#[server_fn]
+pub async fn vote() {}
+"#,
+	);
+	write_file(
+		fixture.path(),
 		"src/apps/polls/urls/server_router.rs",
 		r#"use crate::apps::polls::server_fn::vote;
 use reinhardt::pages::server_fn::ServerFnRouterExt;
@@ -646,6 +664,15 @@ fn attribute_token_use_preserves_import_after_marker_removal() {
 	let router = router_path(fixture.path());
 	write_file(
 		fixture.path(),
+		"src/apps/polls/server_fn.rs",
+		r#"use reinhardt::server_fn;
+
+#[server_fn]
+pub async fn vote() {}
+"#,
+	);
+	write_file(
+		fixture.path(),
 		"src/apps/polls/urls/server_router.rs",
 		r#"use crate::apps::polls::server_fn::vote;
 use reinhardt::pages::server_fn::ServerFnRouterExt;
@@ -685,6 +712,15 @@ pub fn server_url_patterns() -> ServerRouter {
 fn grouped_self_import_is_removed_with_its_effective_binding() {
 	let fixture = prepare_fixture("safe");
 	let router = router_path(fixture.path());
+	write_file(
+		fixture.path(),
+		"src/apps/polls/server_fn.rs",
+		r#"use reinhardt::server_fn;
+
+#[server_fn]
+pub async fn get_questions() {}
+"#,
+	);
 	write_file(
 		fixture.path(),
 		"src/apps/polls/urls/server_router.rs",
@@ -787,6 +823,57 @@ pub fn server_url_patterns() {
 		"skipped incompatible app ownership: src/lib.rs:14\n"
 	);
 	assert_eq!(fs::read(source).expect("read skipped router"), before);
+}
+
+#[test]
+fn partial_router_chains_for_one_app_are_skipped_byte_identical() {
+	// Arrange
+	let fixture = prepare_project(
+		"partial_router_chains",
+		"[lib]\npath = \"src/lib.rs\"\n",
+		&[(
+			"src/lib.rs",
+			r#"#[app_config(name = "root", label = "root")]
+pub struct RootConfig;
+
+mod public {
+	#[server_fn]
+	pub async fn status() {}
+
+	pub fn server_url_patterns() {
+		router()
+			.server_fn(status::marker)
+	}
+}
+
+mod admin {
+	#[server_fn]
+	pub async fn metrics() {}
+
+	pub fn server_url_patterns() {
+		router()
+			.server_fn(metrics::marker)
+	}
+}
+"#,
+		)],
+	);
+	let source = fixture.path().join("src/lib.rs");
+	let before = fs::read(&source).expect("read partial router chains");
+
+	// Act
+	let output = run_migrate(fixture.path(), true);
+
+	// Assert
+	assert_success(&output);
+	assert_eq!(
+		stdout(&output),
+		"skipped mixed registration: src/lib.rs:10\nskipped mixed registration: src/lib.rs:20\n"
+	);
+	assert_eq!(
+		fs::read(source).expect("read skipped router chains"),
+		before
+	);
 }
 
 #[test]

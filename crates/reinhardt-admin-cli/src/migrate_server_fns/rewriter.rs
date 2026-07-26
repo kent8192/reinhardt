@@ -409,13 +409,24 @@ fn analyze_chain(
 	let Some(caller_owner) = resolve_app_module_owner(app_modules, target, module) else {
 		return ChainOutcome::IncompatibleOwnership(span_line(methods[0].method.span()));
 	};
-	let mut bindings = BTreeSet::new();
-	for (method, resolved) in resolved_markers {
+	for (method, resolved) in &resolved_markers {
 		if resolve_app_module_owner(app_modules, target, &resolved.module)
 			.is_none_or(|owner| owner != caller_owner)
 		{
 			return ChainOutcome::IncompatibleOwnership(span_line(method.method.span()));
 		}
+	}
+	let registered: BTreeSet<_> = resolved_markers
+		.iter()
+		.map(|(_, resolved)| resolved.key.clone())
+		.collect();
+	if registered
+		!= automatically_registered_server_functions(app_modules, server_fns, target, caller_owner)
+	{
+		return ChainOutcome::Mixed(span_line(resolved_markers[0].0.method.span()));
+	}
+	let mut bindings = BTreeSet::new();
+	for (_, resolved) in resolved_markers {
 		if let Some(binding) = resolved.import_binding {
 			bindings.insert(binding);
 		}
@@ -478,6 +489,7 @@ fn marker_name(argument: Option<&Expr>) -> String {
 struct ResolvedMarker {
 	auto_register: bool,
 	import_binding: Option<String>,
+	key: ServerFnKey,
 	module: ModulePath,
 }
 
@@ -527,7 +539,7 @@ fn resolve_marker(
 			function,
 		};
 		if let Some(entries) = server_fns.get(&key) {
-			resolved.extend(entries.iter().map(|entry| (key.module.clone(), entry)));
+			resolved.extend(entries.iter().map(|entry| (key.clone(), entry)));
 		}
 	}
 	if resolved.len() != 1 {
@@ -536,8 +548,26 @@ fn resolve_marker(
 	Some(ResolvedMarker {
 		auto_register: resolved[0].1.auto_register,
 		import_binding,
-		module: resolved[0].0.clone(),
+		key: resolved[0].0.clone(),
+		module: resolved[0].0.module.clone(),
 	})
+}
+
+fn automatically_registered_server_functions(
+	app_modules: &AppModuleIndex,
+	server_fns: &ServerFnIndex,
+	target: &TargetKey,
+	owner: &ModulePath,
+) -> BTreeSet<ServerFnKey> {
+	server_fns
+		.iter()
+		.filter(|(key, entries)| {
+			&key.target == target
+				&& entries.iter().any(|entry| entry.auto_register)
+				&& resolve_app_module_owner(app_modules, target, &key.module) == Some(owner)
+		})
+		.map(|(key, _)| key.clone())
+		.collect()
 }
 
 fn resolve_app_module_owner<'a>(

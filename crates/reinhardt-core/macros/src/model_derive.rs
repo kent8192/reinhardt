@@ -2083,27 +2083,6 @@ pub(crate) fn model_derive_impl(mut input: DeriveInput) -> Result<TokenStream> {
 			composite_pk_type_ref,
 		)
 	};
-	let pk_type_name = quote!(#pk_type).to_string().replace(' ', "");
-	let pk_filter_value_impl = (!is_composite_pk
-		&& matches!(
-			pk_type_name.as_str(),
-			"i8" | "i16"
-				| "i32" | "i64"
-				| "isize" | "u8"
-				| "u16" | "u32"
-				| "u64" | "usize"
-				| "i128" | "u128"
-				| "bool" | "f64"
-		))
-	.then(|| {
-		quote! {
-			fn primary_key_filter_value(pk: Self::PrimaryKey) -> #orm_crate::query::FilterValue {
-				pk.into()
-			}
-		}
-	})
-	.unwrap_or_default();
-
 	// Generate field_metadata implementation
 	let field_metadata_items = generate_field_metadata(&field_infos, &fk_field_infos)?;
 
@@ -2352,7 +2331,6 @@ pub(crate) fn model_derive_impl(mut input: DeriveInput) -> Result<TokenStream> {
 				stringify!(#pk_name)
 			}
 
-			#pk_filter_value_impl
 
 			#pk_impl
 

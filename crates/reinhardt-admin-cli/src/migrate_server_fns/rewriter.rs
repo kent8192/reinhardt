@@ -236,6 +236,12 @@ fn rewrite_router_function(
 			kind: ReportKind::MixedRegistration,
 		});
 	}
+	if !function.sig.generics.params.is_empty() {
+		return FunctionOutcome::Skipped(Skipped {
+			line: span_line(function.sig.ident.span()),
+			kind: ReportKind::MixedRegistration,
+		});
+	}
 	let mut analyzer = FunctionAnalyzer {
 		target,
 		module,
@@ -501,10 +507,12 @@ fn analyze_chain(
 			return ChainOutcome::IncompatibleOwnership(span_line(method.method.span()));
 		}
 	}
-	let registered: BTreeSet<_> = resolved_markers
-		.iter()
-		.map(|(_, resolved)| resolved.key.clone())
-		.collect();
+	let mut registered = BTreeSet::new();
+	for (method, resolved) in &resolved_markers {
+		if !registered.insert(resolved.key.clone()) {
+			return ChainOutcome::Mixed(span_line(method.method.span()));
+		}
+	}
 	if registered
 		!= automatically_registered_server_functions(app_modules, server_fns, target, caller_owner)
 	{

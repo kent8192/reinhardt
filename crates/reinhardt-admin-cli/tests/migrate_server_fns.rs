@@ -1103,6 +1103,67 @@ fn metadata_failure_exits_nonzero() {
 }
 
 #[test]
+fn generic_router_function_is_skipped_without_changing_bytes() {
+	let fixture = prepare_project(
+		"generic_router",
+		"[lib]\npath = \"src/lib.rs\"\n",
+		&[(
+			"src/lib.rs",
+			r#"#[app_config(name = "root", label = "root")]
+pub struct RootConfig;
+
+#[server_fn]
+pub async fn status() {}
+
+pub fn server_url_patterns<T: MarkerProvider>() -> ServerRouter {
+	router()
+		.server_fn(status::marker)
+}
+"#,
+		)],
+	);
+	let source = fixture.path().join("src/lib.rs");
+	let before = fs::read(&source).expect("read generic router");
+
+	let output = run_migrate(fixture.path(), true);
+
+	assert_success(&output);
+	assert!(stdout(&output).starts_with("skipped mixed registration:"));
+	assert_eq!(fs::read(source).expect("read skipped router"), before);
+}
+
+#[test]
+fn duplicate_server_function_marker_is_skipped_without_changing_bytes() {
+	let fixture = prepare_project(
+		"duplicate_marker",
+		"[lib]\npath = \"src/lib.rs\"\n",
+		&[(
+			"src/lib.rs",
+			r#"#[app_config(name = "root", label = "root")]
+pub struct RootConfig;
+
+#[server_fn]
+pub async fn status() {}
+
+pub fn server_url_patterns() -> ServerRouter {
+	router()
+		.server_fn(status::marker)
+		.server_fn(status::marker)
+}
+"#,
+		)],
+	);
+	let source = fixture.path().join("src/lib.rs");
+	let before = fs::read(&source).expect("read duplicate router");
+
+	let output = run_migrate(fixture.path(), true);
+
+	assert_success(&output);
+	assert!(stdout(&output).starts_with("skipped mixed registration:"));
+	assert_eq!(fs::read(source).expect("read skipped router"), before);
+}
+
+#[test]
 fn parse_failure_exits_nonzero() {
 	let invalid_source = prepare_project(
 		"invalid_source",

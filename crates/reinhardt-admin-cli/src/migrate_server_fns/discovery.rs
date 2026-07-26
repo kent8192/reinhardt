@@ -152,6 +152,18 @@ impl Scanner {
 	) -> Result<()> {
 		for item in items {
 			match item {
+				Item::Macro(item_macro) if !item_macro.mac.path.is_ident("macro_rules") => {
+					// An item macro may expand to an automatically registered server function.
+					// Keep the migration conservative until expansion can be inspected.
+					let key = ServerFnKey {
+						target: target.clone(),
+						module: module.clone(),
+						function: "__reinhardt_unexpanded_item_macro__".to_owned(),
+					};
+					self.server_fns.entry(key).or_default().push(ServerFn {
+						auto_register: true,
+					});
+				}
 				Item::Struct(item_struct)
 					if is_app_config(&item_struct.attrs)
 						&& !is_conditionally_compiled(&item_struct.attrs) =>
@@ -200,11 +212,12 @@ impl Scanner {
 		let mut child_module = module.clone();
 		child_module.push(item_mod.ident.to_string());
 		if let Some((_, items)) = &item_mod.content {
+			let child_directory = module_directory.join(item_mod.ident.to_string());
 			return self.scan_items(
 				target,
 				&child_module,
-				&module_directory.join(item_mod.ident.to_string()),
-				declaring_directory,
+				&child_directory,
+				&child_directory,
 				items,
 			);
 		}
@@ -267,23 +280,32 @@ fn path_attribute(attributes: &[Attribute]) -> Option<PathBuf> {
 }
 
 fn is_server_fn(attributes: &[Attribute]) -> bool {
-	attributes.iter().any(|attribute| {
-		attribute
-			.path()
-			.segments
-			.last()
-			.is_some_and(|segment| segment.ident == "server_fn")
-	})
+	attributes
+		.iter()
+		.any(|attribute| is_reinhardt_attribute(attribute, "server_fn"))
 }
 
 fn is_app_config(attributes: &[Attribute]) -> bool {
-	attributes.iter().any(|attribute| {
-		attribute
-			.path()
-			.segments
-			.last()
-			.is_some_and(|segment| segment.ident == "app_config")
-	})
+	attributes
+		.iter()
+		.any(|attribute| is_reinhardt_attribute(attribute, "app_config"))
+}
+
+fn is_reinhardt_attribute(attribute: &Attribute, expected: &str) -> bool {
+	let segments = &attribute.path().segments;
+	let Some(last) = segments.last() else {
+		return false;
+	};
+	if last.ident != expected {
+		return false;
+	}
+	segments.len() == 1
+		|| segments.first().is_some_and(|segment| {
+			matches!(
+				segment.ident.to_string().as_str(),
+				"reinhardt" | "reinhardt_pages"
+			)
+		})
 }
 
 /// Returns whether an item is subject to conditional compilation.

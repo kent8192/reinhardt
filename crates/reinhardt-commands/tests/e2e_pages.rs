@@ -659,7 +659,10 @@ async fn startapp_pages_layout_has_target_gated_route_surface() {
 	assert!(
 		server_contents.contains("ServerRouter::new().auto_server_fns_in_crate(")
 			&& server_contents.contains("module_path!()")
-			&& server_contents.contains("env!(\"CARGO_MANIFEST_DIR\")"),
+			&& server_contents.contains("env!(\"CARGO_MANIFEST_DIR\")")
+			&& server_contents.contains("env!(\"CARGO_CRATE_NAME\")")
+			&& server_contents.contains("@test")
+			&& server_contents.contains("@lib"),
 		"server_router.rs must automatically collect this crate's app server functions:\n{server_contents}"
 	);
 
@@ -893,7 +896,10 @@ async fn workspace_app_pages_uses_unified_template() {
 	assert!(
 		server_urls.contains("ServerRouter::new().auto_server_fns_in_crate(")
 			&& server_urls.contains("module_path!()")
-			&& server_urls.contains("env!(\"CARGO_MANIFEST_DIR\")"),
+			&& server_urls.contains("env!(\"CARGO_MANIFEST_DIR\")")
+			&& server_urls.contains("env!(\"CARGO_CRATE_NAME\")")
+			&& server_urls.contains("@test")
+			&& server_urls.contains("@lib"),
 		"workspace server_router.rs must automatically collect this crate's app server functions:\n{server_urls}"
 	);
 	assert!(

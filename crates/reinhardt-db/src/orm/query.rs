@@ -16,9 +16,10 @@ use crate::orm::query_fields::{GroupByFields, OrderedExpression, TypedExpression
 use crate::orm::relations::{RelationJoinGraph, RelationJoinKind, RelationPathLike, RelationStep};
 use reinhardt_core::exception::{DatabaseError, DatabaseErrorKind, Error};
 use reinhardt_query::prelude::{
-	Alias, BinOper, ColumnRef, Condition, Expr, ExprTrait, Func, JoinType as SeaJoinType,
-	MySqlQueryBuilder, Order, PostgresQueryBuilder, Query, QueryBuilder, QueryStatementBuilder,
-	SelectStatement, SimpleExpr, SqliteQueryBuilder, TableRef, UpdateStatement,
+	Alias, BinOper, CockroachDBQueryBuilder, ColumnRef, Condition, Expr, ExprTrait, Func,
+	JoinType as SeaJoinType, MySqlQueryBuilder, Order, PostgresQueryBuilder, Query, QueryBuilder,
+	QueryStatementBuilder, SelectStatement, SimpleExpr, SqliteQueryBuilder, TableRef,
+	UpdateStatement,
 };
 use reinhardt_query::types::PgBinOper;
 use serde::{Deserialize, Serialize};
@@ -6041,7 +6042,8 @@ where
 	{
 		let stmt = self.build_select_statement()?;
 		let context = super::execution::pgvector_context_for_select(&stmt);
-		let (sql, values) = Self::build_select_for_backend(&stmt, conn.backend())?;
+		let (sql, values) =
+			Self::build_select_for_backend(&stmt, conn.backend(), conn.is_cockroachdb())?;
 		let param_samples = values
 			.iter()
 			.map(|value| value.to_sql_literal())
@@ -6095,7 +6097,8 @@ where
 	{
 		let stmt = self.build_select_statement()?;
 		let context = super::execution::pgvector_context_for_select(&stmt);
-		let (sql, values) = Self::build_select_for_backend(&stmt, conn.backend())?;
+		let (sql, values) =
+			Self::build_select_for_backend(&stmt, conn.backend(), conn.is_cockroachdb())?;
 		let param_samples = values
 			.iter()
 			.map(|value| value.to_sql_literal())
@@ -6132,8 +6135,11 @@ where
 	{
 		let stmt = self.build_select_statement().map_err(executor_error)?;
 		let context = super::execution::pgvector_context_for_select(&stmt);
-		let (sql, values) =
-			Self::build_select_for_backend(&stmt, Self::executor_backend(executor))?;
+		let (sql, values) = Self::build_select_for_backend(
+			&stmt,
+			Self::executor_backend(executor),
+			executor.is_cockroachdb(),
+		)?;
 		let param_samples = values
 			.iter()
 			.map(|value| value.to_sql_literal())
@@ -6169,8 +6175,11 @@ where
 	) -> Result<usize, crate::backends::error::DatabaseError> {
 		let stmt = self.count_select_query().map_err(executor_error)?;
 		let context = super::execution::pgvector_context_for_select(&stmt);
-		let (sql, values) =
-			Self::build_select_for_backend(&stmt, Self::executor_backend(executor))?;
+		let (sql, values) = Self::build_select_for_backend(
+			&stmt,
+			Self::executor_backend(executor),
+			executor.is_cockroachdb(),
+		)?;
 		let params = super::execution::convert_values(values);
 		let row = executor
 			.fetch_one_with_context(&sql, params, context)
@@ -6357,7 +6366,8 @@ where
 	{
 		let stmt = self.count_select_query()?;
 		let context = super::execution::pgvector_context_for_select(&stmt);
-		let (sql, values) = Self::build_select_for_backend(&stmt, conn.backend())?;
+		let (sql, values) =
+			Self::build_select_for_backend(&stmt, conn.backend(), conn.is_cockroachdb())?;
 		let param_samples = values
 			.iter()
 			.map(|value| value.to_sql_literal())
@@ -6661,7 +6671,8 @@ where
 	{
 		let stmt = self.update_fields_query(values)?;
 		let context = super::execution::pgvector_context_for_update(&stmt);
-		let (sql, values) = Self::build_update_for_backend(&stmt, conn.backend())?;
+		let (sql, values) =
+			Self::build_update_for_backend(&stmt, conn.backend(), conn.is_cockroachdb())?;
 		let params = super::execution::convert_values(values);
 
 		Ok(conn
@@ -6754,17 +6765,22 @@ where
 	fn build_update_for_backend(
 		stmt: &UpdateStatement,
 		backend: super::connection::DatabaseBackend,
+		is_cockroachdb: bool,
 	) -> Result<(String, reinhardt_query::prelude::Values), reinhardt_core::exception::DatabaseError>
 	{
-		let result = match backend {
-			super::connection::DatabaseBackend::Postgres => {
-				PostgresQueryBuilder.build_update_checked(stmt)
-			}
-			super::connection::DatabaseBackend::MySql => {
-				MySqlQueryBuilder.build_update_checked(stmt)
-			}
-			super::connection::DatabaseBackend::Sqlite => {
-				SqliteQueryBuilder.build_update_checked(stmt)
+		let result = if is_cockroachdb {
+			CockroachDBQueryBuilder::new().build_update_checked(stmt)
+		} else {
+			match backend {
+				super::connection::DatabaseBackend::Postgres => {
+					PostgresQueryBuilder.build_update_checked(stmt)
+				}
+				super::connection::DatabaseBackend::MySql => {
+					MySqlQueryBuilder.build_update_checked(stmt)
+				}
+				super::connection::DatabaseBackend::Sqlite => {
+					SqliteQueryBuilder.build_update_checked(stmt)
+				}
 			}
 		};
 		result
@@ -6774,17 +6790,22 @@ where
 	fn build_select_for_backend(
 		stmt: &SelectStatement,
 		backend: super::connection::DatabaseBackend,
+		is_cockroachdb: bool,
 	) -> Result<(String, reinhardt_query::prelude::Values), reinhardt_core::exception::DatabaseError>
 	{
-		let result = match backend {
-			super::connection::DatabaseBackend::Postgres => {
-				PostgresQueryBuilder.build_select_checked(stmt)
-			}
-			super::connection::DatabaseBackend::MySql => {
-				MySqlQueryBuilder.build_select_checked(stmt)
-			}
-			super::connection::DatabaseBackend::Sqlite => {
-				SqliteQueryBuilder.build_select_checked(stmt)
+		let result = if is_cockroachdb {
+			CockroachDBQueryBuilder::new().build_select_checked(stmt)
+		} else {
+			match backend {
+				super::connection::DatabaseBackend::Postgres => {
+					PostgresQueryBuilder.build_select_checked(stmt)
+				}
+				super::connection::DatabaseBackend::MySql => {
+					MySqlQueryBuilder.build_select_checked(stmt)
+				}
+				super::connection::DatabaseBackend::Sqlite => {
+					SqliteQueryBuilder.build_select_checked(stmt)
+				}
 			}
 		};
 		result
@@ -7120,7 +7141,8 @@ where
 		}
 
 		let context = super::execution::pgvector_context_for_select(&query);
-		let (sql, values) = Self::build_select_for_backend(&query, conn.backend())?;
+		let (sql, values) =
+			Self::build_select_for_backend(&query, conn.backend(), conn.is_cockroachdb())?;
 		let param_samples = values
 			.iter()
 			.map(|value| value.to_sql_literal())
@@ -9064,9 +9086,12 @@ mod tests {
 			.build_select_statement()
 			.expect("typed vector statement should build");
 
-		let error =
-			QuerySet::<TestUser>::build_select_for_backend(&statement, DatabaseBackend::Sqlite)
-				.expect_err("SQLite must reject PostgreSQL vector distance operators");
+		let error = QuerySet::<TestUser>::build_select_for_backend(
+			&statement,
+			DatabaseBackend::Sqlite,
+			false,
+		)
+		.expect_err("SQLite must reject PostgreSQL vector distance operators");
 
 		assert_eq!(
 			error.kind(),
@@ -9405,9 +9430,12 @@ mod tests {
 			.from(reinhardt_query::prelude::Alias::new("articles"));
 
 		// Act
-		let (sql, values) =
-			QuerySet::<TestUser>::build_select_for_backend(&statement, DatabaseBackend::MySql)
-				.expect("MySQL select should build");
+		let (sql, values) = QuerySet::<TestUser>::build_select_for_backend(
+			&statement,
+			DatabaseBackend::MySql,
+			false,
+		)
+		.expect("MySQL select should build");
 
 		// Assert
 		assert_eq!(sql, "SELECT `id` FROM `articles`");

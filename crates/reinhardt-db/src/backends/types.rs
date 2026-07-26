@@ -519,6 +519,11 @@ pub trait TransactionExecutor: Send + Sync {
 		DatabaseType::Postgres
 	}
 
+	/// Returns whether this PostgreSQL-protocol executor targets CockroachDB.
+	fn is_cockroachdb(&self) -> bool {
+		false
+	}
+
 	/// Returns whether contextual pgvector error hints are supported.
 	fn supports_pgvector_error_hints(&self) -> bool {
 		false

@@ -6,6 +6,7 @@ use super::{
 	backend::DatabaseBackend,
 	error::Result,
 	query_builder::{DeleteBuilder, InsertBuilder, SelectBuilder, UpdateBuilder},
+	types::{DatabaseType, QueryResult, QueryValue, Row, TransactionExecutor},
 };
 
 #[cfg(any(feature = "postgres", feature = "sqlite", feature = "mysql"))]
@@ -49,6 +50,104 @@ pub struct DatabaseConnection {
 	/// differently. This flag is set at connection time via a `SELECT version()`
 	/// probe and is `false` for any non-Postgres backend.
 	is_cockroachdb: bool,
+}
+
+struct FlavoredTransactionExecutor {
+	inner: Box<dyn TransactionExecutor>,
+	is_cockroachdb: bool,
+}
+
+#[async_trait::async_trait]
+impl TransactionExecutor for FlavoredTransactionExecutor {
+	fn backend(&self) -> DatabaseType {
+		self.inner.backend()
+	}
+
+	fn is_cockroachdb(&self) -> bool {
+		self.is_cockroachdb
+	}
+
+	fn supports_pgvector_error_hints(&self) -> bool {
+		self.inner.supports_pgvector_error_hints()
+	}
+
+	async fn execute(&mut self, sql: &str, params: Vec<QueryValue>) -> Result<QueryResult> {
+		self.inner.execute(sql, params).await
+	}
+
+	async fn execute_with_context(
+		&mut self,
+		sql: &str,
+		params: Vec<QueryValue>,
+		context: Option<super::error::PgvectorOperationKind>,
+	) -> Result<QueryResult> {
+		self.inner.execute_with_context(sql, params, context).await
+	}
+
+	async fn fetch_one(&mut self, sql: &str, params: Vec<QueryValue>) -> Result<Row> {
+		self.inner.fetch_one(sql, params).await
+	}
+
+	async fn fetch_one_with_context(
+		&mut self,
+		sql: &str,
+		params: Vec<QueryValue>,
+		context: Option<super::error::PgvectorOperationKind>,
+	) -> Result<Row> {
+		self.inner
+			.fetch_one_with_context(sql, params, context)
+			.await
+	}
+
+	async fn fetch_all(&mut self, sql: &str, params: Vec<QueryValue>) -> Result<Vec<Row>> {
+		self.inner.fetch_all(sql, params).await
+	}
+
+	async fn fetch_all_with_context(
+		&mut self,
+		sql: &str,
+		params: Vec<QueryValue>,
+		context: Option<super::error::PgvectorOperationKind>,
+	) -> Result<Vec<Row>> {
+		self.inner
+			.fetch_all_with_context(sql, params, context)
+			.await
+	}
+
+	async fn fetch_optional(&mut self, sql: &str, params: Vec<QueryValue>) -> Result<Option<Row>> {
+		self.inner.fetch_optional(sql, params).await
+	}
+
+	async fn fetch_optional_with_context(
+		&mut self,
+		sql: &str,
+		params: Vec<QueryValue>,
+		context: Option<super::error::PgvectorOperationKind>,
+	) -> Result<Option<Row>> {
+		self.inner
+			.fetch_optional_with_context(sql, params, context)
+			.await
+	}
+
+	async fn commit(self: Box<Self>) -> Result<()> {
+		self.inner.commit().await
+	}
+
+	async fn rollback(self: Box<Self>) -> Result<()> {
+		self.inner.rollback().await
+	}
+
+	async fn savepoint(&mut self, name: &str) -> Result<()> {
+		self.inner.savepoint(name).await
+	}
+
+	async fn release_savepoint(&mut self, name: &str) -> Result<()> {
+		self.inner.release_savepoint(name).await
+	}
+
+	async fn rollback_to_savepoint(&mut self, name: &str) -> Result<()> {
+		self.inner.rollback_to_savepoint(name).await
+	}
 }
 
 /// Injectable implementation for DatabaseConnection
@@ -755,7 +854,11 @@ impl DatabaseConnection {
 	/// # }
 	/// ```
 	pub async fn begin(&self) -> Result<Box<dyn super::types::TransactionExecutor>> {
-		self.backend.begin().await
+		let inner = self.backend.begin().await?;
+		Ok(Box::new(FlavoredTransactionExecutor {
+			inner,
+			is_cockroachdb: self.is_cockroachdb,
+		}))
 	}
 
 	/// Begin a transaction with a specific isolation level
@@ -779,7 +882,11 @@ impl DatabaseConnection {
 		&self,
 		level: super::types::IsolationLevel,
 	) -> Result<Box<dyn super::types::TransactionExecutor>> {
-		self.backend.begin_with_isolation(level).await
+		let inner = self.backend.begin_with_isolation(level).await?;
+		Ok(Box::new(FlavoredTransactionExecutor {
+			inner,
+			is_cockroachdb: self.is_cockroachdb,
+		}))
 	}
 
 	#[cfg(feature = "postgres")]

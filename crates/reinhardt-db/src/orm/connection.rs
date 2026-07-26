@@ -183,6 +183,11 @@ pub trait OrmExecutor: Send {
 		false
 	}
 
+	/// Returns whether PostgreSQL-compatible SQL targets CockroachDB.
+	fn is_cockroachdb(&self) -> bool {
+		false
+	}
+
 	/// Executes a SQL statement and preserves backend-specific result metadata.
 	async fn execute(&mut self, sql: &str, params: Vec<QueryValue>) -> Result<QueryResult>;
 
@@ -411,6 +416,10 @@ impl OrmExecutor for DatabaseConnection {
 	fn supports_pgvector_error_hints(&self) -> bool {
 		self.resolve()
 			.is_ok_and(|owner| owner.supports_pgvector_error_hints())
+	}
+
+	fn is_cockroachdb(&self) -> bool {
+		self.resolve().is_ok_and(|owner| owner.is_cockroachdb())
 	}
 
 	async fn execute(&mut self, sql: &str, params: Vec<QueryValue>) -> Result<QueryResult> {

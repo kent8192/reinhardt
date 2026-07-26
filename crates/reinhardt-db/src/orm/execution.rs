@@ -237,16 +237,21 @@ fn query_value_to_json(value: &SV) -> serde_json::Value {
 fn build_select_for_backend(
 	stmt: &SelectStatement,
 	backend: DatabaseBackend,
+	is_cockroachdb: bool,
 ) -> Result<(String, reinhardt_query::prelude::Values), ExecutionError> {
-	let result = match backend {
-		DatabaseBackend::Postgres => {
-			reinhardt_query::prelude::PostgresQueryBuilder.build_select_checked(stmt)
-		}
-		DatabaseBackend::MySql => {
-			reinhardt_query::prelude::MySqlQueryBuilder.build_select_checked(stmt)
-		}
-		DatabaseBackend::Sqlite => {
-			reinhardt_query::prelude::SqliteQueryBuilder.build_select_checked(stmt)
+	let result = if is_cockroachdb {
+		reinhardt_query::prelude::CockroachDBQueryBuilder::new().build_select_checked(stmt)
+	} else {
+		match backend {
+			DatabaseBackend::Postgres => {
+				reinhardt_query::prelude::PostgresQueryBuilder.build_select_checked(stmt)
+			}
+			DatabaseBackend::MySql => {
+				reinhardt_query::prelude::MySqlQueryBuilder.build_select_checked(stmt)
+			}
+			DatabaseBackend::Sqlite => {
+				reinhardt_query::prelude::SqliteQueryBuilder.build_select_checked(stmt)
+			}
 		}
 	};
 	result.map_err(|error| ExecutionError::QueryBuild(error.to_string()))
@@ -255,16 +260,21 @@ fn build_select_for_backend(
 fn build_insert_for_backend(
 	stmt: &InsertStatement,
 	backend: DatabaseBackend,
+	is_cockroachdb: bool,
 ) -> Result<(String, reinhardt_query::prelude::Values), ExecutionError> {
-	let result = match backend {
-		DatabaseBackend::Postgres => {
-			reinhardt_query::prelude::PostgresQueryBuilder.build_insert_checked(stmt)
-		}
-		DatabaseBackend::MySql => {
-			reinhardt_query::prelude::MySqlQueryBuilder.build_insert_checked(stmt)
-		}
-		DatabaseBackend::Sqlite => {
-			reinhardt_query::prelude::SqliteQueryBuilder.build_insert_checked(stmt)
+	let result = if is_cockroachdb {
+		reinhardt_query::prelude::CockroachDBQueryBuilder::new().build_insert_checked(stmt)
+	} else {
+		match backend {
+			DatabaseBackend::Postgres => {
+				reinhardt_query::prelude::PostgresQueryBuilder.build_insert_checked(stmt)
+			}
+			DatabaseBackend::MySql => {
+				reinhardt_query::prelude::MySqlQueryBuilder.build_insert_checked(stmt)
+			}
+			DatabaseBackend::Sqlite => {
+				reinhardt_query::prelude::SqliteQueryBuilder.build_insert_checked(stmt)
+			}
 		}
 	};
 	result.map_err(|error| ExecutionError::QueryBuild(error.to_string()))
@@ -313,7 +323,8 @@ impl InsertExecution {
 		E: OrmExecutor,
 	{
 		let context = pgvector_context_for_insert(&self.stmt);
-		let (sql, values) = build_insert_for_backend(&self.stmt, db.backend())?;
+		let (sql, values) =
+			build_insert_for_backend(&self.stmt, db.backend(), db.is_cockroachdb())?;
 		Ok(db
 			.execute_with_context(&sql, convert_values(values), context)
 			.await?)
@@ -325,7 +336,8 @@ impl InsertExecution {
 		E: OrmExecutor,
 	{
 		let context = pgvector_context_for_insert(&self.stmt);
-		let (sql, values) = build_insert_for_backend(&self.stmt, db.backend())?;
+		let (sql, values) =
+			build_insert_for_backend(&self.stmt, db.backend(), db.is_cockroachdb())?;
 		let row = db
 			.fetch_one_with_context(&sql, convert_values(values), context)
 			.await?;
@@ -634,7 +646,7 @@ where
 	{
 		let stmt = self.get(pk);
 		let context = pgvector_context_for_select(&stmt);
-		let (sql, values) = build_select_for_backend(&stmt, db.backend())?;
+		let (sql, values) = build_select_for_backend(&stmt, db.backend(), db.is_cockroachdb())?;
 
 		let query_values = convert_values(values);
 		let row = db
@@ -650,7 +662,7 @@ where
 	{
 		let stmt = self.all();
 		let context = pgvector_context_for_select(&stmt);
-		let (sql, values) = build_select_for_backend(&stmt, db.backend())?;
+		let (sql, values) = build_select_for_backend(&stmt, db.backend(), db.is_cockroachdb())?;
 
 		let query_values = convert_values(values);
 		let rows = db
@@ -670,7 +682,7 @@ where
 	{
 		let stmt = self.first();
 		let context = pgvector_context_for_select(&stmt);
-		let (sql, values) = build_select_for_backend(&stmt, db.backend())?;
+		let (sql, values) = build_select_for_backend(&stmt, db.backend(), db.is_cockroachdb())?;
 
 		let query_values = convert_values(values);
 		match db
@@ -691,7 +703,7 @@ where
 	{
 		let stmt = self.one();
 		let context = pgvector_context_for_select(&stmt);
-		let (sql, values) = build_select_for_backend(&stmt, db.backend())?;
+		let (sql, values) = build_select_for_backend(&stmt, db.backend(), db.is_cockroachdb())?;
 
 		let query_values = convert_values(values);
 		let rows = db
@@ -714,7 +726,7 @@ where
 	{
 		let stmt = self.one_or_none();
 		let context = pgvector_context_for_select(&stmt);
-		let (sql, values) = build_select_for_backend(&stmt, db.backend())?;
+		let (sql, values) = build_select_for_backend(&stmt, db.backend(), db.is_cockroachdb())?;
 
 		let query_values = convert_values(values);
 		let rows = db
@@ -737,7 +749,7 @@ where
 	{
 		let stmt = self.scalar();
 		let context = pgvector_context_for_select(&stmt);
-		let (sql, values) = build_select_for_backend(&stmt, db.backend())?;
+		let (sql, values) = build_select_for_backend(&stmt, db.backend(), db.is_cockroachdb())?;
 
 		let query_values = convert_values(values);
 		let rows = db
@@ -765,7 +777,7 @@ where
 	{
 		let stmt = self.count();
 		let context = pgvector_context_for_select(&stmt);
-		let (sql, values) = build_select_for_backend(&stmt, db.backend())?;
+		let (sql, values) = build_select_for_backend(&stmt, db.backend(), db.is_cockroachdb())?;
 
 		let query_values = convert_values(values);
 		let query_row = QueryRow::from_backend_row(
@@ -792,7 +804,7 @@ where
 	{
 		let stmt = self.exists();
 		let context = pgvector_context_for_select(&stmt);
-		let (sql, values) = build_select_for_backend(&stmt, db.backend())?;
+		let (sql, values) = build_select_for_backend(&stmt, db.backend(), db.is_cockroachdb())?;
 
 		let query_values = convert_values(values);
 		let query_row = QueryRow::from_backend_row(

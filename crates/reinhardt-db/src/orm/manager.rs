@@ -7,9 +7,9 @@ use super::query::RelationLoadInput;
 use super::{DatabaseValue, FieldCodecError, Model, QuerySet};
 use reinhardt_core::exception::{DatabaseError, DatabaseErrorKind, Error};
 use reinhardt_query::prelude::{
-	Alias, ColumnRef, DeleteStatement, Expr, ExprTrait, Func, InsertStatement, MySqlQueryBuilder,
-	PostgresQueryBuilder, Query, QueryBuilder, SelectStatement, SqliteQueryBuilder,
-	UpdateStatement, Values,
+	Alias, CockroachDBQueryBuilder, ColumnRef, DeleteStatement, Expr, ExprTrait, Func,
+	InsertStatement, MySqlQueryBuilder, PostgresQueryBuilder, Query, QueryBuilder, SelectStatement,
+	SqliteQueryBuilder, UpdateStatement, Values,
 };
 use std::collections::HashMap;
 use std::marker::PhantomData;
@@ -86,6 +86,66 @@ fn build_delete_sql(stmt: &DeleteStatement, backend: DatabaseBackend) -> (String
 		DatabaseBackend::Postgres => PostgresQueryBuilder.build_delete(stmt),
 		DatabaseBackend::MySql => MySqlQueryBuilder.build_delete(stmt),
 		DatabaseBackend::Sqlite => SqliteQueryBuilder.build_delete(stmt),
+	}
+}
+
+fn checked_query_build_error(error: reinhardt_query::QueryBuildError) -> Error {
+	DatabaseError::new(DatabaseErrorKind::Unsupported, error.to_string()).into()
+}
+
+fn build_select_sql_checked(
+	stmt: &SelectStatement,
+	backend: DatabaseBackend,
+	is_cockroachdb: bool,
+) -> reinhardt_core::exception::Result<(String, Values)> {
+	if is_cockroachdb {
+		CockroachDBQueryBuilder::new()
+			.build_select_checked(stmt)
+			.map_err(checked_query_build_error)
+	} else {
+		Ok(build_select_sql(stmt, backend))
+	}
+}
+
+fn build_insert_sql_checked(
+	stmt: &InsertStatement,
+	backend: DatabaseBackend,
+	is_cockroachdb: bool,
+) -> reinhardt_core::exception::Result<(String, Values)> {
+	if is_cockroachdb {
+		CockroachDBQueryBuilder::new()
+			.build_insert_checked(stmt)
+			.map_err(checked_query_build_error)
+	} else {
+		Ok(build_insert_sql(stmt, backend))
+	}
+}
+
+fn build_update_sql_checked(
+	stmt: &UpdateStatement,
+	backend: DatabaseBackend,
+	is_cockroachdb: bool,
+) -> reinhardt_core::exception::Result<(String, Values)> {
+	if is_cockroachdb {
+		CockroachDBQueryBuilder::new()
+			.build_update_checked(stmt)
+			.map_err(checked_query_build_error)
+	} else {
+		Ok(build_update_sql(stmt, backend))
+	}
+}
+
+fn build_delete_sql_checked(
+	stmt: &DeleteStatement,
+	backend: DatabaseBackend,
+	is_cockroachdb: bool,
+) -> reinhardt_core::exception::Result<(String, Values)> {
+	if is_cockroachdb {
+		CockroachDBQueryBuilder::new()
+			.build_delete_checked(stmt)
+			.map_err(checked_query_build_error)
+	} else {
+		Ok(build_delete_sql(stmt, backend))
 	}
 }
 
@@ -1103,7 +1163,8 @@ impl<M: Model> Manager<M> {
 			stmt.returning(Self::returning_columns_from_object(&obj));
 		}
 		let context = super::execution::pgvector_context_for_insert(&stmt);
-		let (sql, values) = build_insert_sql(&stmt, backend);
+		let (sql, values) = build_insert_sql_checked(&stmt, backend, executor.is_cockroachdb())
+			.map_err(executor_error)?;
 		let params = values
 			.0
 			.into_iter()
@@ -1157,7 +1218,9 @@ impl<M: Model> Manager<M> {
 			let field_metadata = M::field_metadata();
 			let primary_key_column = Self::field_column(&field_metadata, M::primary_key_field());
 			select.and_where(Expr::col(Alias::new(primary_key_column)).eq(primary_key_value));
-			let (select_sql, select_values) = build_select_sql(&select, backend);
+			let (select_sql, select_values) =
+				build_select_sql_checked(&select, backend, executor.is_cockroachdb())
+					.map_err(executor_error)?;
 			let select_params = select_values
 				.0
 				.into_iter()
@@ -1242,7 +1305,7 @@ impl<M: Model> Manager<M> {
 			stmt.returning(Self::returning_columns_from_object(&obj));
 		}
 		let context = super::execution::pgvector_context_for_insert(&stmt);
-		let (sql, values) = build_insert_sql(&stmt, backend);
+		let (sql, values) = build_insert_sql_checked(&stmt, backend, conn.is_cockroachdb())?;
 		let params = values
 			.0
 			.into_iter()
@@ -1282,7 +1345,8 @@ impl<M: Model> Manager<M> {
 				.from(Alias::new(M::table_name()))
 				.column(ColumnRef::Asterisk)
 				.and_where(Expr::col(Alias::new(primary_key_column)).eq(primary_key));
-			let (select_sql, select_values) = build_select_sql(&select, backend);
+			let (select_sql, select_values) =
+				build_select_sql_checked(&select, backend, conn.is_cockroachdb())?;
 			let select_params = select_values
 				.0
 				.into_iter()
@@ -1641,7 +1705,8 @@ impl<M: Model> Manager<M> {
 		)
 		.map_err(executor_field_codec_error)?;
 		let context = super::execution::pgvector_context_for_update(&stmt);
-		let (sql, values) = build_update_sql(&stmt, backend);
+		let (sql, values) = build_update_sql_checked(&stmt, backend, executor.is_cockroachdb())
+			.map_err(executor_error)?;
 		let params = values
 			.0
 			.into_iter()
@@ -1661,7 +1726,9 @@ impl<M: Model> Manager<M> {
 			select.and_where(
 				Expr::col(Alias::new(primary_key_column)).eq(Self::primary_key_query_value(&pk)),
 			);
-			let (select_sql, select_values) = build_select_sql(&select, backend);
+			let (select_sql, select_values) =
+				build_select_sql_checked(&select, backend, executor.is_cockroachdb())
+					.map_err(executor_error)?;
 			let select_params = select_values
 				.0
 				.into_iter()
@@ -1732,7 +1799,7 @@ impl<M: Model> Manager<M> {
 		.map_err(field_codec_error)?;
 
 		let context = super::execution::pgvector_context_for_update(&stmt);
-		let (sql, values) = build_update_sql(&stmt, backend);
+		let (sql, values) = build_update_sql_checked(&stmt, backend, conn.is_cockroachdb())?;
 		let values: Vec<_> = values
 			.0
 			.into_iter()
@@ -1757,7 +1824,8 @@ impl<M: Model> Manager<M> {
 					Expr::col(Alias::new(primary_key_column))
 						.eq(Self::primary_key_query_value(&pk)),
 				);
-			let (select_sql, select_values) = build_select_sql(&select, backend);
+			let (select_sql, select_values) =
+				build_select_sql_checked(&select, backend, conn.is_cockroachdb())?;
 			let select_params = select_values
 				.0
 				.into_iter()
@@ -1793,7 +1861,12 @@ impl<M: Model> Manager<M> {
 		stmt.from_table(Alias::new(M::table_name())).and_where(
 			Expr::col(Alias::new(primary_key_column)).eq(Self::primary_key_query_value(&pk)),
 		);
-		let (sql, values) = build_delete_sql(&stmt, Self::executor_backend(executor));
+		let (sql, values) = build_delete_sql_checked(
+			&stmt,
+			Self::executor_backend(executor),
+			executor.is_cockroachdb(),
+		)
+		.map_err(executor_error)?;
 		let params = values
 			.0
 			.into_iter()
@@ -1849,7 +1922,7 @@ impl<M: Model> Manager<M> {
 		stmt.from_table(Alias::new(M::table_name()))
 			.and_where(Expr::col(Alias::new(primary_key_column)).eq(pk_value));
 
-		let (sql, values) = build_delete_sql(&stmt, conn.backend());
+		let (sql, values) = build_delete_sql_checked(&stmt, conn.backend(), conn.is_cockroachdb())?;
 		let values: Vec<_> = values
 			.0
 			.into_iter()
@@ -1899,7 +1972,7 @@ impl<M: Model> Manager<M> {
 			.expr_as(Func::count(Expr::asterisk().into()), Alias::new("count"))
 			.to_owned();
 
-		let (sql, values) = build_select_sql(&stmt, conn.backend());
+		let (sql, values) = build_select_sql_checked(&stmt, conn.backend(), conn.is_cockroachdb())?;
 		let values: Vec<_> = values
 			.0
 			.into_iter()
@@ -2095,7 +2168,8 @@ impl<M: Model> Manager<M> {
 		insert_fields.extend(defaults.clone());
 		let (select_stmt, mut insert_stmt) =
 			self.get_or_create_queries_from_normalized_fields(&lookup_fields, &defaults);
-		let (select_sql, select_values) = build_select_sql(&select_stmt, conn.backend());
+		let (select_sql, select_values) =
+			build_select_sql_checked(&select_stmt, conn.backend(), conn.is_cockroachdb())?;
 		let select_params = select_values
 			.0
 			.into_iter()
@@ -2119,7 +2193,8 @@ impl<M: Model> Manager<M> {
 			));
 		}
 		let insert_context = super::execution::pgvector_context_for_insert(&insert_stmt);
-		let (insert_sql, insert_values) = build_insert_sql(&insert_stmt, backend);
+		let (insert_sql, insert_values) =
+			build_insert_sql_checked(&insert_stmt, backend, conn.is_cockroachdb())?;
 		let insert_params = insert_values
 			.0
 			.into_iter()
@@ -2155,7 +2230,8 @@ impl<M: Model> Manager<M> {
 					Expr::col(Alias::new(primary_key_column))
 						.eq(Self::query_value_to_sea_value(primary_key)),
 				);
-			let (reload_sql, reload_values) = build_select_sql(&reload, backend);
+			let (reload_sql, reload_values) =
+				build_select_sql_checked(&reload, backend, conn.is_cockroachdb())?;
 			let reload_params = reload_values
 				.0
 				.into_iter()
@@ -2218,7 +2294,8 @@ impl<M: Model> Manager<M> {
 				statement.returning_all();
 			}
 			let context = super::execution::pgvector_context_for_insert(&statement);
-			let (sql, values) = build_insert_sql(&statement, conn.backend());
+			let (sql, values) =
+				build_insert_sql_checked(&statement, conn.backend(), conn.is_cockroachdb())?;
 			let sql = if ignore_conflicts {
 				match conn.backend() {
 					DatabaseBackend::Postgres => format!("{sql} ON CONFLICT DO NOTHING"),
@@ -2285,7 +2362,8 @@ impl<M: Model> Manager<M> {
 				statement.returning_all();
 			}
 			let context = super::execution::pgvector_context_for_insert(&statement);
-			let (sql, values) = build_insert_sql(&statement, backend);
+			let (sql, values) =
+				build_insert_sql_checked(&statement, backend, conn.is_cockroachdb())?;
 			let sql = if ignore_conflicts {
 				match backend {
 					DatabaseBackend::Postgres => format!("{sql} ON CONFLICT DO NOTHING"),

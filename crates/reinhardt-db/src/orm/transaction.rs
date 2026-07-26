@@ -545,15 +545,18 @@ impl Default for Transaction {
 pub struct AtomicTransaction {
 	executor: Option<Box<dyn TransactionExecutor>>,
 	backend: DatabaseBackend,
+	is_cockroachdb: bool,
 	savepoint_sequence: u64,
 }
 
 impl AtomicTransaction {
 	pub(crate) fn new(executor: Box<dyn TransactionExecutor>) -> Self {
 		let backend = DatabaseBackend::from(executor.backend());
+		let is_cockroachdb = executor.is_cockroachdb();
 		Self {
 			executor: Some(executor),
 			backend,
+			is_cockroachdb,
 			savepoint_sequence: 0,
 		}
 	}
@@ -738,6 +741,12 @@ impl OrmExecutor for AtomicTransaction {
 	fn supports_pgvector_error_hints(&self) -> bool {
 		self.executor_ref()
 			.is_some_and(TransactionExecutor::supports_pgvector_error_hints)
+	}
+
+	fn is_cockroachdb(&self) -> bool {
+		self.executor_ref()
+			.map(TransactionExecutor::is_cockroachdb)
+			.unwrap_or(self.is_cockroachdb)
 	}
 
 	async fn execute(

@@ -1043,6 +1043,7 @@ pub fn server_url_patterns() {
 	router()
 		.server_fn(status::marker)
 }
+
 "#,
 		)],
 	);
@@ -1059,6 +1060,138 @@ pub fn server_url_patterns() {
 	assert_eq!(fs::read(source).expect("read skipped router"), before);
 }
 
+#[test]
+fn cfg_gated_server_function_skips_the_migration() {
+	let fixture = prepare_project(
+		"cfg_gated_server_function",
+		"[lib]\npath = \"src/lib.rs\"\n",
+		&[(
+			"src/lib.rs",
+			r#"#[app_config(name = "root", label = "root")]
+pub struct RootConfig;
+
+#[server_fn]
+pub async fn status() {}
+
+#[cfg(feature = "extra")]
+#[server_fn]
+pub async fn extra() {}
+
+pub fn server_url_patterns() {
+	router()
+		.server_fn(status::marker)
+}
+"#,
+		)],
+	);
+	let source = fixture.path().join("src/lib.rs");
+	let before = fs::read(&source).expect("read cfg-gated server function source");
+
+	let output = run_migrate(fixture.path(), true);
+
+	assert_success(&output);
+	assert!(
+		stdout(&output).starts_with("skipped mixed registration: src/lib.rs:"),
+		"conditionally compiled server functions must make coverage incomplete: {}",
+		stdout(&output)
+	);
+	assert_eq!(fs::read(source).expect("read skipped source"), before);
+}
+
+#[test]
+fn unknown_qualified_server_function_attribute_skips_the_migration() {
+	let fixture = prepare_project(
+		"renamed_reinhardt_dependency",
+		"[lib]\npath = \"src/lib.rs\"\n",
+		&[(
+			"src/lib.rs",
+			r#"#[app_config(name = "root", label = "root")]
+pub struct RootConfig;
+
+#[server_fn]
+pub async fn status() {}
+
+#[rh::pages::server_fn]
+pub async fn hidden() {}
+
+pub fn server_url_patterns() {
+	router()
+		.server_fn(status::marker)
+}
+"#,
+		)],
+	);
+	let source = fixture.path().join("src/lib.rs");
+	let before = fs::read(&source).expect("read renamed dependency source");
+
+	let output = run_migrate(fixture.path(), true);
+
+	assert_success(&output);
+	assert!(
+		stdout(&output).starts_with("skipped mixed registration: src/lib.rs:"),
+		"unknown qualified server_fn paths must keep migration coverage incomplete: {}",
+		stdout(&output)
+	);
+	assert_eq!(fs::read(source).expect("read skipped source"), before);
+}
+
+#[test]
+fn shared_source_is_skipped_during_dry_runs_and_writes() {
+	let fixture = prepare_project(
+		"shared_source",
+		"[lib]\npath = \"src/lib.rs\"\n\n[[bin]]\nname = \"shared-source\"\npath = \"src/lib.rs\"\n",
+		&[
+			("src/lib.rs", "pub mod apps { pub mod polls; }\n"),
+			(
+				"src/apps/polls.rs",
+				r#"pub mod server_fn;
+
+#[app_config(name = "polls", label = "polls")]
+pub struct PollsConfig;
+
+pub mod urls {
+	pub mod server_router;
+}
+"#,
+			),
+			(
+				"src/apps/polls/server_fn.rs",
+				r#"use reinhardt::server_fn;
+
+#[server_fn]
+pub async fn status() {}
+"#,
+			),
+			(
+				"src/apps/polls/urls/server_router.rs",
+				r#"use crate::apps::polls::server_fn::status;
+use reinhardt::pages::server_fn::ServerFnRouterExt;
+use reinhardt::ServerRouter;
+
+pub fn server_url_patterns() -> ServerRouter {
+	ServerRouter::new().server_fn(status::marker)
+}
+"#,
+			),
+		],
+	);
+	let source = fixture.path().join("src/apps/polls/urls/server_router.rs");
+	let before = fs::read(&source).expect("read shared source");
+	let expected = "skipped incompatible app ownership: src/apps/polls/urls/server_router.rs:0\n";
+
+	let dry_run = run_migrate(fixture.path(), false);
+	assert_success(&dry_run);
+	assert_eq!(stdout(&dry_run), expected);
+	assert_eq!(
+		fs::read(&source).expect("read source after dry-run"),
+		before
+	);
+
+	let write = run_migrate(fixture.path(), true);
+	assert_success(&write);
+	assert_eq!(stdout(&write), expected);
+	assert_eq!(fs::read(source).expect("read source after write"), before);
+}
 #[test]
 fn route_middleware_after_a_marker_skips_the_migration() {
 	let fixture = prepare_fixture("safe");

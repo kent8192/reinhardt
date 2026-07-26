@@ -174,21 +174,30 @@ impl Scanner {
 						.or_default()
 						.push(module.clone());
 				}
+				Item::Fn(function) if is_server_fn(&function.attrs, &attribute_aliases) => {
+					if is_conditionally_compiled(&function.attrs) {
+						self.record_incomplete_server_fn_coverage(target, module);
+					} else {
+						let key = ServerFnKey {
+							target: target.clone(),
+							module: module.clone(),
+							function: function.sig.ident.to_string(),
+						};
+						self.server_fns.entry(key).or_default().push(ServerFn {
+							auto_register: server_fn_auto_registers(
+								&function.attrs,
+								&attribute_aliases,
+							),
+						});
+					}
+				}
 				Item::Fn(function)
-					if is_server_fn(&function.attrs, &attribute_aliases)
-						&& !is_conditionally_compiled(&function.attrs) =>
+					if has_unknown_qualified_server_fn_attribute(
+						&function.attrs,
+						&attribute_aliases,
+					) =>
 				{
-					let key = ServerFnKey {
-						target: target.clone(),
-						module: module.clone(),
-						function: function.sig.ident.to_string(),
-					};
-					self.server_fns.entry(key).or_default().push(ServerFn {
-						auto_register: server_fn_auto_registers(
-							&function.attrs,
-							&attribute_aliases,
-						),
-					});
+					self.record_incomplete_server_fn_coverage(target, module);
 				}
 				Item::Mod(item_mod) if !is_conditionally_compiled(&item_mod.attrs) => {
 					self.scan_module(
@@ -203,6 +212,17 @@ impl Scanner {
 			}
 		}
 		Ok(())
+	}
+
+	fn record_incomplete_server_fn_coverage(&mut self, target: &TargetKey, module: &ModulePath) {
+		let key = ServerFnKey {
+			target: target.clone(),
+			module: module.clone(),
+			function: "__reinhardt_incomplete_server_fn_coverage__".to_owned(),
+		};
+		self.server_fns.entry(key).or_default().push(ServerFn {
+			auto_register: true,
+		});
 	}
 
 	fn scan_module(
@@ -296,6 +316,21 @@ fn is_app_config(attributes: &[Attribute], aliases: &BTreeMap<String, String>) -
 	attributes
 		.iter()
 		.any(|attribute| is_reinhardt_attribute(attribute, "app_config", aliases))
+}
+
+fn has_unknown_qualified_server_fn_attribute(
+	attributes: &[Attribute],
+	aliases: &BTreeMap<String, String>,
+) -> bool {
+	attributes.iter().any(|attribute| {
+		attribute.path().segments.len() > 1
+			&& attribute
+				.path()
+				.segments
+				.last()
+				.is_some_and(|segment| segment.ident == "server_fn")
+			&& !is_reinhardt_attribute(attribute, "server_fn", aliases)
+	})
 }
 
 fn is_reinhardt_attribute(

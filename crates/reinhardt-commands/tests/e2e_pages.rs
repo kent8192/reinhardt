@@ -426,9 +426,9 @@ async fn app_pages_layout_matches_tutorial() {
 		fs::read_to_string(polls_dir.join("server_fn").join("placeholder.rs"))
 			.expect("read apps/polls/server_fn/placeholder.rs");
 	assert!(
-		server_fn_placeholder.contains("#[server_fn]")
+		server_fn_placeholder.contains("#[server_fn(auto_register = false)]")
 			&& server_fn_placeholder.contains("pub async fn placeholder"),
-		"apps/polls/server_fn/placeholder.rs must contain the #[server_fn]-annotated placeholder:\n{server_fn_placeholder}"
+		"apps/polls/server_fn/placeholder.rs must contain the opt-out server function placeholder:\n{server_fn_placeholder}"
 	);
 	assert!(
 		polls_dir.join("services.rs").exists(),

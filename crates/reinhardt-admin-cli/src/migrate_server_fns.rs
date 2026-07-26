@@ -97,7 +97,7 @@ pub fn run(args: MigrateServerFnsArgs) -> Result<()> {
 		}
 
 		if outcome.rewritten.is_some() {
-			if args.write && module_contexts[&source_module.path] > 1 {
+			if module_contexts[&source_module.path] > 1 {
 				reports.push(Report {
 					path: source_module.relative_path.clone(),
 					line: 0,

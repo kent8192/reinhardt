@@ -174,7 +174,7 @@ impl EvcxrEvaluator {
 
 	fn bootstrap_with_context_and_process_group(
 		config: &ValidatedShellConfig,
-		mut eval: EvalContext,
+		eval: EvalContext,
 		outputs: EvalContextOutputs,
 		owns_process_group: bool,
 	) -> Result<(Self, Vec<String>), EvaluationFailure> {
@@ -249,7 +249,7 @@ impl EvcxrEvaluator {
 		}
 		for statement in project_prelude {
 			let output = evaluator
-				.evaluate(&statement)
+				.evaluate(statement)
 				.map_err(|error| startup_prelude_error(error, &warnings))?;
 			append_startup_output(&mut warnings, output);
 		}

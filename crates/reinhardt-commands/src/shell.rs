@@ -99,7 +99,7 @@ async fn run_session<F, W, I>(
 	input: &mut I,
 ) -> crate::CommandResult<()>
 where
-	F: EvaluatorFactory,
+	F: EvaluatorFactory + Send + 'static,
 	W: ShellOutput,
 	I: ShellInput,
 {
@@ -119,7 +119,7 @@ async fn run_with_components<F, W, I>(
 	input: &mut I,
 ) -> crate::CommandResult<()>
 where
-	F: EvaluatorFactory,
+	F: EvaluatorFactory + Send + 'static,
 	W: ShellOutput,
 	I: ShellInput,
 {

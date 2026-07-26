@@ -84,11 +84,12 @@ impl StartupInterrupt {
 	}
 
 	fn register(&self, handle: EvaluationInterrupt) -> Result<(), EvaluationFailure> {
-		let requested = self.requested.load(Ordering::Acquire);
-		*self.handle.lock().map_err(|_| {
+		let mut registered = self.handle.lock().map_err(|_| {
 			EvaluationFailure::ProcessExited("startup interrupt lock is poisoned".to_string())
-		})? = Some(handle.clone());
-		if requested {
+		})?;
+		*registered = Some(handle.clone());
+		if self.requested.load(Ordering::Acquire) {
+			drop(registered);
 			handle.interrupt()?;
 		}
 		Ok(())
@@ -491,6 +492,10 @@ impl EvaluatorFactory for EvcxrEvaluatorFactory {
 		self.startup_interrupt.clear();
 		self.warnings = warnings;
 		Ok(Box::new(evaluator))
+	}
+
+	fn startup_interrupt(&self) -> Option<StartupInterrupt> {
+		Some(self.startup_interrupt())
 	}
 
 	fn take_warnings(&mut self) -> Vec<String> {

@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 
-use super::evaluator::{EvaluationFailure, EvaluationOutput};
+use super::evaluator::{EvaluationFailure, EvaluationOutput, StartupInterrupt};
 use crate::{CommandError, CommandResult};
 
 #[derive(Clone)]
@@ -33,6 +33,10 @@ pub(crate) trait EvaluatorClient: Send {
 
 pub(crate) trait EvaluatorFactory {
 	fn start(&mut self) -> CommandResult<Box<dyn EvaluatorClient>>;
+
+	fn startup_interrupt(&self) -> Option<StartupInterrupt> {
+		None
+	}
 
 	fn take_warnings(&mut self) -> Vec<String> {
 		Vec::new()
@@ -74,7 +78,7 @@ impl InterruptSignal for CtrlCSignal {
 }
 
 pub(crate) struct ShellSession<F, W> {
-	factory: F,
+	factory: Option<F>,
 	evaluator: Box<dyn EvaluatorClient>,
 	output: W,
 	signal: Box<dyn InterruptSignal>,
@@ -91,7 +95,7 @@ where
 			output.warning(&warning)?;
 		}
 		Ok(Self {
-			factory,
+			factory: Some(factory),
 			evaluator,
 			output,
 			signal: Box::new(CtrlCSignal),
@@ -123,7 +127,7 @@ where
 		S: InterruptSignal + 'static,
 	{
 		Self {
-			factory,
+			factory: Some(factory),
 			evaluator,
 			output,
 			signal: Box::new(signal),
@@ -147,6 +151,7 @@ where
 
 	pub(crate) async fn run_interactive<I>(&mut self, input: &mut I) -> CommandResult<()>
 	where
+		F: Send + 'static,
 		I: ShellInput,
 	{
 		loop {
@@ -164,7 +169,7 @@ where
 						Err(failure) if failure_is_fatal(&failure) => {
 							self.forward_failure_output(&failure)?;
 							self.output.warning(failure_message(&failure))?;
-							self.recover()?;
+							self.recover().await?;
 						}
 						Err(failure) => {
 							self.forward_failure_output(&failure)?;
@@ -240,14 +245,43 @@ where
 		Ok(())
 	}
 
-	fn recover(&mut self) -> CommandResult<()> {
-		let replacement = self.factory.start()?;
-		self.evaluator = replacement;
-		for warning in self.factory.take_warnings() {
-			self.output.warning(&warning)?;
+	async fn recover(&mut self) -> CommandResult<()>
+	where
+		F: Send + 'static,
+	{
+		let startup_interrupt = self
+			.factory
+			.as_ref()
+			.and_then(EvaluatorFactory::startup_interrupt);
+		let factory = self.factory.take().expect("shell factory is available");
+		let mut startup = tokio::task::spawn_blocking(move || {
+			let mut factory = factory;
+			let replacement = factory.start();
+			let warnings = factory.take_warnings();
+			(factory, replacement, warnings)
+		});
+		let signal = tokio::signal::ctrl_c();
+		tokio::pin!(signal);
+		tokio::select! {
+			result = &mut startup => {
+				let (factory, replacement, warnings) = result
+					.map_err(|error| CommandError::ExecutionError(error.to_string()))?;
+				self.factory = Some(factory);
+				self.evaluator = replacement?;
+				for warning in warnings {
+					self.output.warning(&warning)?;
+				}
+				self.output.warning("Shell state was reset and the project prelude was reloaded.")
+			}
+			result = &mut signal => {
+				result.map_err(|error| CommandError::ExecutionError(error.to_string()))?;
+				if let Some(interrupt) = startup_interrupt {
+					let _ = interrupt.interrupt();
+				}
+				drop(startup);
+				Err(CommandError::ExecutionError("Shell recovery was interrupted.".to_string()))
+			}
 		}
-		self.output
-			.warning("Shell state was reset and the project prelude was reloaded.")
 	}
 }
 

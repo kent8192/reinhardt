@@ -1920,10 +1920,11 @@ fn generate_model_form(
 	use_statement: &TokenStream,
 ) -> TokenStream {
 	let form_ident = &macro_ast.name;
-	let policy_ident = format_ident!("{}Policy", form_ident);
+	let policy_ident = format_ident!("{}SelectionPolicy", form_ident);
 	let data_ident = format_ident!("{}Data", form_ident);
 	let schema_path = generated_model_support_path(&model_source.model, "FormSchema");
 	let payload_path = generated_model_support_path(&model_source.model, "ModelFormData");
+	let policy_path = &model_source.policy;
 	let server_fn = match &macro_ast.action {
 		TypedFormAction::ServerFn(server_fn) => server_fn,
 		_ => unreachable!("model-backed forms require a server_fn after validation"),
@@ -1946,7 +1947,6 @@ fn generate_model_form(
 				let _: &#pages_crate::form::ModelFormFieldDescriptor = #schema_path::#field();
 			}
 		});
-
 	let policy_body = match &model_source.selection {
 		TypedModelFieldSelection::Fields(fields) if fields.is_empty() => quote! { false },
 		TypedModelFieldSelection::Fields(fields) => {
@@ -1984,24 +1984,17 @@ fn generate_model_form(
 	});
 
 	let form_id = form_id_kebab_case(form_ident);
-	let server_fn_name = server_fn
-		.segments
-		.last()
-		.expect("validated server function path contains an identifier")
-		.ident
-		.to_string();
-	let native_action = format!("/api/server_fn/{server_fn_name}");
-	let method = match macro_ast.method {
-		FormMethod::Get => "get",
-		FormMethod::Post => "post",
-		FormMethod::Put | FormMethod::Patch | FormMethod::Delete => "post",
-	};
+	let native_action = quote!(
+		<#server_fn::marker as #pages_crate::server_fn::ServerFnMetadata>::PATH
+	);
+	// Server-function endpoints are registered exclusively for POST.
+	let method = "post";
 
 	quote! {
 		{
 			#use_statement
 
-			pub struct #policy_ident;
+			struct #policy_ident;
 
 			impl #pages_crate::form::ModelFormPolicy for #policy_ident {
 				fn allows(field: &str) -> bool {
@@ -2009,7 +2002,7 @@ fn generate_model_form(
 				}
 			}
 
-			pub type #data_ident = #payload_path<#pages_crate::form::AllEditableModelFields>;
+			pub type #data_ident = #payload_path<#policy_path>;
 
 			#(#descriptor_guards)*
 
@@ -2030,7 +2023,7 @@ fn generate_model_form(
 					Self {
 						__model_state: ::std::rc::Rc::new(
 							::std::cell::RefCell::new(
-								#pages_crate::form::ModelFormState::new()
+						#pages_crate::form::ModelFormState::new()
 							),
 						),
 						loading: #pages_crate::Signal::new(false),
@@ -2067,7 +2060,7 @@ fn generate_model_form(
 				> {
 					self.__model_state.borrow().build_payload_for::<
 						#data_ident,
-						#pages_crate::form::AllEditableModelFields,
+						#policy_path,
 					>()
 				}
 
@@ -2237,6 +2230,7 @@ fn generate_model_form(
 						);
 
 						let field_name = descriptor.name;
+						let control_id = format!("{}-{}", #form_id, field_name);
 						let range_default = if input_type == "range" {
 							match descriptor.kind {
 								#pages_crate::form::ModelFormFieldKind::Integer { min, .. } =>
@@ -2252,7 +2246,7 @@ fn generate_model_form(
 						};
 						let mut control = #pages_crate::PageElement::new(tag)
 							.attr("name", field_name)
-							.attr("id", field_name)
+							.attr("id", control_id.clone())
 							.attr("type", input_type)
 							.bool_attr("required", descriptor.required && !is_checkbox);
 						let stored_value = {
@@ -2394,7 +2388,7 @@ fn generate_model_form(
 							.attr("class", "reinhardt-form-field")
 							.child(
 								#pages_crate::PageElement::new("label")
-									.attr("for", field_name)
+									.attr("for", control_id)
 									.child(label.to_owned())
 							)
 							.child(control);
@@ -7439,6 +7433,7 @@ mod tests {
 		let input = quote! {
 			name: TemporalControlsForm,
 			model: TemporalDocument,
+			policy: TemporalDocumentFields,
 			fields: [aware_at, naive_at, starts_at],
 			server_fn: save_temporal_document,
 		};
@@ -7451,8 +7446,9 @@ mod tests {
 		assert!(output_str.contains("ModelFormFieldKind :: NaiveDateTime"));
 		assert!(output_str.contains("control = control . attr (\"step\" , \"any\")"));
 		assert!(output_str.contains("value . strip_suffix ('Z')"));
-		assert!(output_str.contains("AllEditableModelFields"));
-		assert!(output_str.contains("/api/server_fn/save_temporal_document"));
+		assert!(output_str.contains("TemporalDocumentFields"));
+		assert!(output_str.contains("ServerFnMetadata"));
+		assert!(output_str.contains(":: PATH"));
 	}
 
 	#[rstest::rstest]

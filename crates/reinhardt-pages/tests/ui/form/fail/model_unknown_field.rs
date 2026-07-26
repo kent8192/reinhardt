@@ -78,6 +78,7 @@ fn main() {
 	let _form = form! {
 		name: QuestionForm,
 		model: Question,
+		policy: QuestionFields,
 		fields: [missing],
 		server_fn: save_question,
 	};

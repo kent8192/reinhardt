@@ -122,6 +122,8 @@ pub struct FormMacro {
 pub struct ModelFormSource {
 	/// Model type used to generate form fields.
 	pub model: Path,
+	/// Nameable policy enforced by the server-function payload.
+	pub policy: Path,
 	/// Fields selected from the model.
 	pub selection: ModelFieldSelection,
 	/// Presentation overrides for selected model fields.

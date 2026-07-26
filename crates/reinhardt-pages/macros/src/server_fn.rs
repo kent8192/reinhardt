@@ -1348,15 +1348,18 @@ fn generate_server_handler(
 		})
 		.collect();
 
-	// Native model-backed forms submit URL-encoded controls without JavaScript.
-	// A single `payload` argument is the generated form contract, so decode that
-	// flat control map into the same concrete payload used by JSON RPC clients.
+	// Native form extraction normalizes URL-encoded controls into a flat JSON
+	// object before invoking the generated handler. A single `payload` argument
+	// can therefore deserialize that object directly without losing the body.
+	let pages_crate_for_model_form = get_reinhardt_pages_crate();
 	let native_model_form_fallback = match regular_params.as_slice() {
 		[parameter] if matches!(parameter.pat.as_ref(), syn::Pat::Ident(ident) if ident.ident == "payload") =>
 		{
 			let payload_type = &parameter.ty;
 			quote! {
-				let payload: #payload_type = ::serde_urlencoded::from_bytes(body)
+				let native_value = ::serde_json::from_slice(body)
+					.map_err(|_| __invalid_request_error())?;
+				let payload: #payload_type = <#payload_type as #pages_crate_for_model_form::form::NativeModelFormPayload>::from_native_form_value(native_value)
 					.map_err(|_| __invalid_request_error())?;
 				#args_struct_name { payload }
 			}
@@ -2733,7 +2736,8 @@ mod tests {
 		let generated = generate_server_handler(&info, &[], &[]).to_string();
 
 		assert!(
-			generated.contains("serde_urlencoded :: from_bytes (body)"),
+			generated.contains("NativeModelFormPayload")
+				&& generated.contains("from_native_form_value"),
 			"single payload handlers must accept progressive-enhancement form posts: {generated}"
 		);
 	}

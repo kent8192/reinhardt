@@ -6,6 +6,7 @@ fn main() {
 	let _form = form! {
 		name: QuestionForm,
 		model: Question,
+		policy: QuestionFields,
 		exclude: [owner_id],
 		overrides: {
 			owner_id: {

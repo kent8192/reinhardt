@@ -193,6 +193,12 @@ pub(super) fn validate(
 			"model-backed form! requires an explicit `server_fn`",
 		));
 	}
+	if model_source.is_some() && (redirect_on_success.is_some() || success_url.is_some()) {
+		return Err(Error::new(
+			ast.span,
+			"model-backed form! does not support `redirect_on_success` or `success_url`; use `on_success` to handle a successful model submission explicitly",
+		));
+	}
 
 	// Transform unified validators (scope filtering happens at codegen)
 	let validators = transform_validators(&ast.validators, &ast.fields)?;
@@ -314,6 +320,7 @@ fn transform_model_source(
 
 	Ok(Some(TypedModelFormSource {
 		model: source.model.clone(),
+		policy: source.policy.clone(),
 		selection,
 		overrides,
 	}))
@@ -6168,6 +6175,27 @@ mod tests {
 		assert_eq!(
 			error.to_string(),
 			"this widget is not supported by model-backed forms; use a supported scalar widget or an explicit non-model form"
+		);
+	}
+
+	#[rstest::rstest]
+	fn test_model_form_rejects_implicit_redirects() {
+		let input = quote! {
+			name: QuestionForm,
+			model: Question,
+			policy: QuestionFields,
+			fields: [title],
+			server_fn: save_question,
+			redirect_on_success: "/questions",
+		};
+
+		let error = parse_and_validate(input)
+			.expect_err("model forms must reject redirects they cannot execute");
+
+		assert!(
+			error
+				.to_string()
+				.contains("does not support `redirect_on_success`")
 		);
 	}
 }

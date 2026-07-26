@@ -89,6 +89,7 @@ impl Parse for FormMacro {
 		let mut form = FormMacro::new(None, span);
 		let mut ambient_arguments_clause: Option<&'static str> = None;
 		let mut model: Option<Path> = None;
+		let mut model_policy: Option<Path> = None;
 		let mut model_selection: Option<ModelFieldSelection> = None;
 		let mut overrides = Vec::new();
 		let mut has_overrides = false;
@@ -127,6 +128,13 @@ impl Parse for FormMacro {
 						return Err(syn::Error::new(key.span(), "duplicate `model` property"));
 					}
 					model = Some(input.parse()?);
+					parse_optional_comma(input)?;
+				}
+				"policy" => {
+					if model_policy.is_some() {
+						return Err(syn::Error::new(key.span(), "duplicate `policy` property"));
+					}
+					model_policy = Some(input.parse()?);
 					parse_optional_comma(input)?;
 				}
 				"state" => {
@@ -309,7 +317,7 @@ impl Parse for FormMacro {
 					return Err(syn::Error::new(
 						key.span(),
 						format!(
-							"Unknown form property: '{}'. Expected: name, action, server_fn, method, class, model, state, on_submit, on_success, on_success_ref, on_error, on_loading, watch, redirect_on_success, success_url, initial_loader, choices_loader, slots, fields, exclude, overrides, validators, derived, ambient_arguments, strip_arguments",
+							"Unknown form property: '{}'. Expected: name, action, server_fn, method, class, model, policy, state, on_submit, on_success, on_success_ref, on_error, on_loading, watch, redirect_on_success, success_url, initial_loader, choices_loader, slots, fields, exclude, overrides, validators, derived, ambient_arguments, strip_arguments",
 							key
 						),
 					));
@@ -331,13 +339,23 @@ impl Parse for FormMacro {
 						"model-backed form! requires exactly one of `fields: [...]` or `exclude: [...]`",
 					)
 				})?;
+				let policy = model_policy.ok_or_else(|| {
+					syn::Error::new(
+						span,
+						"model-backed form! requires `policy: YourPolicy` so the server function can enforce the selected fields",
+					)
+				})?;
 				form.model_source = Some(ModelFormSource {
 					model,
+					policy,
 					selection,
 					overrides,
 				});
 			}
 			None => {
+				if model_policy.is_some() {
+					return Err(syn::Error::new(span, "`policy` is only valid with `model`"));
+				}
 				if model_selection.is_some() {
 					return Err(syn::Error::new(
 						span,
@@ -1611,6 +1629,7 @@ mod tests {
 		let input = quote! {
 			name: QuestionForm,
 			model: Question,
+			policy: QuestionFields,
 			fields: [title, published_at],
 			server_fn: save_question,
 			overrides: {
@@ -1631,6 +1650,10 @@ mod tests {
 			.model_source
 			.expect("model source should be recorded for model forms");
 		assert_eq!(source.model.segments.last().unwrap().ident, "Question");
+		assert_eq!(
+			source.policy.segments.last().unwrap().ident,
+			"QuestionFields"
+		);
 		let ModelFieldSelection::Fields(fields) = source.selection else {
 			panic!("model form should select explicit fields");
 		};
@@ -1655,6 +1678,7 @@ mod tests {
 		let input = quote! {
 			name: QuestionForm,
 			model: Question,
+			policy: QuestionFields,
 			exclude: [owner_id],
 			server_fn: save_question,
 		};
@@ -1692,6 +1716,7 @@ mod tests {
 		// Assert
 		let message = error.to_string();
 		assert!(message.contains("model"));
+		assert!(message.contains("policy"));
 		assert!(message.contains("exclude"));
 		assert!(message.contains("overrides"));
 	}

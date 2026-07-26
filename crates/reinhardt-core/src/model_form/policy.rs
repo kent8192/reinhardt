@@ -40,6 +40,15 @@ pub trait ModelFormPayload<P: ModelFormPolicy>: Sized {
 	) -> Result<(), ModelFormPayloadError>;
 }
 
+/// Converts an already-normalized native HTML form object into a model-form payload.
+///
+/// Native checkboxes omit an unchecked non-optional boolean control. Implementations
+/// may apply that HTML-specific convention without changing ordinary JSON decoding.
+pub trait NativeModelFormPayload: Sized {
+	/// Builds the payload from the native form object's JSON representation.
+	fn from_native_form_value(value: serde_json::Value) -> Result<Self, serde_json::Error>;
+}
+
 /// An error returned while reading or updating a model form payload.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ModelFormPayloadError {

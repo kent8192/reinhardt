@@ -2206,6 +2206,24 @@ fn generate_model_form_support(
 		.iter()
 		.map(|field| LitStr::new(&field.name.to_string(), field.name.span()))
 		.collect();
+	let native_boolean_field_literals: Vec<_> = editable_fields
+		.iter()
+		.filter_map(|field| {
+			let (is_optional, inner_ty) = extract_option_type(&field.ty);
+			if is_optional {
+				return None;
+			}
+			let Type::Path(type_path) = inner_ty else {
+				return None;
+			};
+			let is_boolean = type_path
+				.path
+				.segments
+				.last()
+				.is_some_and(|segment| segment.ident == "bool");
+			is_boolean.then(|| LitStr::new(&field.name.to_string(), field.name.span()))
+		})
+		.collect();
 	let descriptor_entries = editable_fields
 		.iter()
 		.zip(&field_kinds)
@@ -2328,19 +2346,9 @@ fn generate_model_form_support(
 					}
 				}
 			});
-	let deserialize_initializers = editable_fields.iter().map(|field| {
-		let field_name = &field.name;
-		let is_boolean = matches!(
-			&field.ty,
-			syn::Type::Path(path)
-				if path.path.segments.last().is_some_and(|segment| segment.ident == "bool")
-		);
-		if is_boolean {
-			quote!(let mut #field_name = ::core::option::Option::Some(false);)
-		} else {
-			quote!(let mut #field_name = ::core::option::Option::None;)
-		}
-	});
+	let deserialize_initializers = field_names
+		.iter()
+		.map(|field_name| quote!(let mut #field_name = ::core::option::Option::None;));
 	let serialize_bounds: Vec<_> = field_types
 		.iter()
 		.map(|field_ty| quote!(#field_ty: #serde_crate::Serialize))
@@ -2529,6 +2537,42 @@ fn generate_model_form_support(
 						field: field.to_owned(),
 					}),
 				}
+			}
+		}
+
+		impl<P> #core_crate::model_form::NativeModelFormPayload for #payload_name<P>
+		where
+			P: #core_crate::model_form::ModelFormPolicy,
+			#(#payload_bounds,)*
+		{
+			fn from_native_form_value(
+				mut value: #serde_json_crate::Value,
+			) -> ::core::result::Result<Self, #serde_json_crate::Error> {
+				if let #serde_json_crate::Value::Object(values) = &mut value {
+					#(
+					if <P as #core_crate::model_form::ModelFormPolicy>::allows(#native_boolean_field_literals) {
+						match values.get_mut(#native_boolean_field_literals) {
+							::core::option::Option::Some(value) => {
+								let parsed = match value.as_str() {
+									::core::option::Option::Some("true") => ::core::option::Option::Some(true),
+									::core::option::Option::Some("false") => ::core::option::Option::Some(false),
+									_ => ::core::option::Option::None,
+								};
+								if let ::core::option::Option::Some(parsed) = parsed {
+									*value = #serde_json_crate::Value::Bool(parsed);
+								}
+							}
+							::core::option::Option::None => {
+								values.insert(
+									#native_boolean_field_literals.to_owned(),
+									#serde_json_crate::Value::Bool(false),
+								);
+							}
+						}
+					}
+					)*
+				}
+				#serde_json_crate::from_value(value)
 			}
 		}
 

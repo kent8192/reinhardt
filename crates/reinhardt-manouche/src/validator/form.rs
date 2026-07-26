@@ -107,6 +107,12 @@ pub fn validate_form_with_ambient_arguments_source(
 	let fields = transform_fields(&ast.fields)?;
 	validate_list_references(&fields)?;
 	let model_source = transform_model_source(&ast.model_source)?;
+	if model_source.is_some() && (redirect_on_success.is_some() || success_url.is_some()) {
+		return Err(Error::new(
+			ast.span,
+			"model-backed form! does not support `redirect_on_success` or `success_url`; use `on_success` to handle a successful model submission explicitly",
+		));
+	}
 
 	// Transform unified validators (scope filtering happens at codegen)
 	let validators = transform_validators(&ast.validators, &ast.fields)?;
@@ -190,6 +196,7 @@ fn transform_model_source(
 
 	Ok(Some(TypedModelFormSource {
 		model: source.model.clone(),
+		policy: source.policy.clone(),
 		selection,
 		overrides,
 	}))
@@ -3057,6 +3064,7 @@ mod tests {
 		let input = quote! {
 			name: QuestionForm,
 			model: Question,
+			policy: QuestionFields,
 			fields: [title, published_at],
 			server_fn: save_question,
 			overrides: {
@@ -3077,6 +3085,10 @@ mod tests {
 			.model_source
 			.expect("typed model source should be present");
 		assert_eq!(source.model.segments.last().unwrap().ident, "Question");
+		assert_eq!(
+			source.policy.segments.last().unwrap().ident,
+			"QuestionFields"
+		);
 		assert!(matches!(
 			source.selection,
 			TypedModelFieldSelection::Fields(_)
@@ -3119,6 +3131,7 @@ mod tests {
 		quote! {
 			name: QuestionForm,
 			model: Question,
+			policy: QuestionFields,
 			fields: [title],
 			overrides: {
 				title: { label: "Question" },
@@ -3131,6 +3144,7 @@ mod tests {
 		quote! {
 			name: QuestionForm,
 			model: Question,
+			policy: QuestionFields,
 			fields: [title],
 			overrides: {
 				title: { placeholder: "Question" },

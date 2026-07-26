@@ -6,7 +6,10 @@ use serde::{Deserialize, Serialize};
 
 include!("ui/model/support.rs");
 
-use model_form::{AllEditableModelFields, ModelFormFieldKind, ModelFormPayload, ModelFormPolicy};
+use model_form::{
+	AllEditableModelFields, ModelFormFieldKind, ModelFormPayload, ModelFormPolicy,
+	NativeModelFormPayload,
+};
 
 #[model(app_label = "forms", form = true)]
 #[derive(Clone, Deserialize, Serialize)]
@@ -55,12 +58,41 @@ struct AssignedKeyDocument {
 	title: String,
 }
 
+#[model(app_label = "forms", form = true)]
+#[derive(Clone, Deserialize, Serialize)]
+struct BooleanDocument {
+	#[field(primary_key = true)]
+	id: i64,
+	published: bool,
+}
+
 struct TitleOnly;
 
 impl ModelFormPolicy for TitleOnly {
 	fn allows(field: &str) -> bool {
 		matches!(field, "title" | "nullable")
 	}
+}
+
+struct PublishedOnly;
+
+impl ModelFormPolicy for PublishedOnly {
+	fn allows(field: &str) -> bool {
+		field == "published"
+	}
+}
+
+#[test]
+fn native_form_payload_defaults_an_omitted_boolean_without_changing_json_deserialization() {
+	let native = <BooleanDocumentModelFormData<PublishedOnly> as NativeModelFormPayload>::from_native_form_value(
+		serde_json::json!({}),
+	)
+	.expect("native form payload should decode");
+	assert_eq!(native.published(), Some(&false));
+
+	let json: BooleanDocumentModelFormData<PublishedOnly> =
+		serde_json::from_value(serde_json::json!({})).expect("JSON payload should decode");
+	assert_eq!(json.published(), None);
 }
 
 #[test]

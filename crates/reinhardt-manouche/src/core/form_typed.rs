@@ -141,6 +141,8 @@ pub struct TypedFormMacro {
 pub struct TypedModelFormSource {
 	/// Model type used to generate form fields.
 	pub model: Path,
+	/// Nameable policy enforced by the server-function payload.
+	pub policy: Path,
 	/// Validated field selection policy.
 	pub selection: TypedModelFieldSelection,
 	/// Validated presentation overrides for selected fields.

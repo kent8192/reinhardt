@@ -4,11 +4,19 @@ use std::marker::PhantomData;
 
 use reinhardt_core::model_form::{
 	ModelFormFieldDescriptor, ModelFormFieldKind, ModelFormPayload, ModelFormPayloadError,
-	ModelFormPolicy, ModelFormSchema,
+	ModelFormPolicy, ModelFormSchema, NativeModelFormPayload,
 };
 use reinhardt_pages::form;
 
 struct Question;
+
+struct QuestionFields;
+
+impl ModelFormPolicy for QuestionFields {
+	fn allows(field: &str) -> bool {
+		matches!(field, "title" | "owner_id")
+	}
+}
 
 struct QuestionFormSchema;
 
@@ -135,6 +143,12 @@ impl<P: ModelFormPolicy> ModelFormPayload<P> for QuestionModelFormData<P> {
 	}
 }
 
+impl<P: ModelFormPolicy> NativeModelFormPayload for QuestionModelFormData<P> {
+	fn from_native_form_value(_value: serde_json::Value) -> Result<Self, serde_json::Error> {
+		Ok(Self::empty())
+	}
+}
+
 async fn save_question<P: ModelFormPolicy>(
 	_payload: QuestionModelFormData<P>,
 ) -> Result<(), reinhardt_pages::ServerFnError> {
@@ -146,6 +160,7 @@ fn main() {
 		let _form = form! {
 			name: QuestionForm,
 			model: Question,
+			policy: QuestionFields,
 			fields: [title],
 			server_fn: save_question,
 			overrides: {

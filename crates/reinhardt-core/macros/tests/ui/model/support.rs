@@ -132,6 +132,10 @@ pub mod model_form {
 			value: serde_json::Value,
 		) -> Result<(), ModelFormPayloadError>;
 	}
+
+	pub trait NativeModelFormPayload: Sized {
+		fn from_native_form_value(value: serde_json::Value) -> Result<Self, serde_json::Error>;
+	}
 	#[derive(Debug, Clone, Copy, PartialEq)]
 	pub enum ModelFormFieldKind {
 		Text {

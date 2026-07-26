@@ -31,12 +31,12 @@
 //!
 //! ## Model-backed forms
 //!
-//! A `form!` declaration with `model` and exactly one of `fields` or `exclude`
-//! uses the target-neutral schema emitted by `#[model(form = true)]`. The macro
-//! renders controls from [`ModelFormFieldKind`] and sends one model-generated
-//! generic payload to the explicit `server_fn`. Its form-specific policy and
-//! data alias are internal implementation items scoped to the `form!`
-//! expression. Field overrides affect presentation only.
+//! A `form!` declaration with `model`, `policy`, and exactly one of `fields` or
+//! `exclude` uses the target-neutral schema emitted by `#[model(form = true)]`.
+//! The named policy must implement [`ModelFormPolicy`] and be the same policy
+//! used by the explicit `server_fn` payload; it is the authoritative
+//! server-side field allowlist. The `fields` or `exclude` clause controls
+//! rendered controls, while field overrides affect presentation only.
 //!
 //! ## Example
 //!
@@ -81,6 +81,7 @@ pub use model::ModelFormState;
 pub use reinhardt_core::model_form::{
 	AllEditableModelFields, ModelFormFieldDescriptor, ModelFormFieldKind, ModelFormPayload,
 	ModelFormPayloadError, ModelFormPolicy, ModelFormPrimaryKey, ModelFormSchema,
+	NativeModelFormPayload,
 };
 pub use validators::{ClientValidator, ValidatorRegistry};
 

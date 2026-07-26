@@ -226,7 +226,10 @@ impl<M: Model> Manager<M> {
 
 	/// Get a single record by primary key
 	/// Returns a QuerySet filtered by the primary key field
-	pub fn get(&self, pk: M::PrimaryKey) -> QuerySet<M> {
+	pub fn get(&self, pk: M::PrimaryKey) -> QuerySet<M>
+	where
+		M::PrimaryKey: Into<super::query::FilterValue>,
+	{
 		let pk_field = M::primary_key_field();
 		let pk_value = pk.into();
 
@@ -1597,6 +1600,7 @@ mod tests {
 	use crate::orm::Model;
 	use crate::orm::connection::DatabaseBackend;
 	use crate::orm::query::FilterValue;
+	use rstest::rstest;
 	use serde::{Deserialize, Serialize};
 	use std::collections::HashMap;
 	use uuid::Uuid;
@@ -1695,7 +1699,7 @@ mod tests {
 		}
 	}
 
-	#[test]
+	#[rstest]
 	fn test_get_preserves_uuid_primary_key_binding() {
 		// Arrange
 		let id = Uuid::parse_str("123e4567-e89b-12d3-a456-426614174000")

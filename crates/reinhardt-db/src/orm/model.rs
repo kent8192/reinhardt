@@ -22,7 +22,7 @@ pub trait FieldSelector: Clone {
 /// When using the `#[model(...)]` macro, this implementation is automatically generated.
 pub trait Model: Serialize + for<'de> Deserialize<'de> + Send + Sync + Clone {
 	/// The primary key type
-	type PrimaryKey: Send + Sync + Clone + std::fmt::Display + Into<super::query::FilterValue>;
+	type PrimaryKey: Send + Sync + Clone + std::fmt::Display;
 
 	/// Type-safe field selector
 	///

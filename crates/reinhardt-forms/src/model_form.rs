@@ -208,6 +208,16 @@ where
 		if let Some(field) = self.data.forbidden_fields().first() {
 			return Err(ModelFormError::ForbiddenInput { field });
 		}
+		if self.persistence_mode == ModelFormPersistenceMode::Update
+			&& self.supplied_fields.contains(&T::primary_key_field())
+		{
+			return Err(ModelFormError::FieldValidation {
+				errors: HashMap::from([(
+					T::primary_key_field().to_owned(),
+					vec!["model form primary keys cannot be updated".to_owned()],
+				)]),
+			});
+		}
 
 		if !self.form.is_valid() {
 			return Err(ModelFormError::FieldValidation {

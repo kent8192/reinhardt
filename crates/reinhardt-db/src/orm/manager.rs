@@ -1357,7 +1357,7 @@ impl<M: Model> Manager<M> {
 			.map_err(field_codec_error)
 		{
 			Ok(model) => super::custom_manager::CreateWithConnOutcome::Created(model),
-			Err(error) => super::custom_manager::CreateWithConnOutcome::FailedBeforeInsert(error),
+			Err(error) => super::custom_manager::CreateWithConnOutcome::FailedAfterInsert(error),
 		}
 	}
 

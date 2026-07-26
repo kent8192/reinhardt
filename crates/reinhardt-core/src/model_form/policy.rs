@@ -92,9 +92,7 @@ where
 		let default_clear_sentinel = format!("__reinhardt_defaulted_{}", descriptor.name);
 		let had_defaulted_value = values.remove(&default_clear_sentinel).is_some();
 		let Some(control) = values.get_mut(descriptor.name) else {
-			if matches!(descriptor.kind, ModelFormFieldKind::Boolean)
-				&& (has_checkbox_sentinel || (!descriptor.nullable && !descriptor.has_default))
-			{
+			if matches!(descriptor.kind, ModelFormFieldKind::Boolean) && has_checkbox_sentinel {
 				values.insert(descriptor.name.to_owned(), serde_json::Value::Bool(false));
 			}
 			continue;

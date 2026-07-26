@@ -57,17 +57,18 @@ pub(crate) async fn run(config: &ShellConfig, command: Option<String>) -> crate:
 	let validated = config.validate()?;
 	let project_identifier = validated.package_name().to_string();
 	let factory = EvcxrEvaluatorFactory::new(validated);
+	let startup_interrupt = factory.startup_interrupt();
 	let output = ConsoleOutput;
 	match command {
 		Some(source) => {
-			start_session(factory, output)
+			start_session(factory, startup_interrupt, output)
 				.await?
 				.execute_once(&source)
 				.await
 		}
 		None => {
 			let mut input = TerminalInput::new(&project_identifier)?;
-			let mut session = start_session(factory, output).await?;
+			let mut session = start_session(factory, startup_interrupt, output).await?;
 			session.run_interactive(&mut input).await
 		}
 	}
@@ -75,6 +76,7 @@ pub(crate) async fn run(config: &ShellConfig, command: Option<String>) -> crate:
 
 async fn start_session(
 	factory: EvcxrEvaluatorFactory,
+	startup_interrupt: evaluator::StartupInterrupt,
 	output: ConsoleOutput,
 ) -> crate::CommandResult<ShellSession<EvcxrEvaluatorFactory, ConsoleOutput>> {
 	let mut startup = tokio::task::spawn_blocking(move || ShellSession::new(factory, output));
@@ -82,9 +84,8 @@ async fn start_session(
 		result = &mut startup => result.map_err(|error| crate::CommandError::ExecutionError(error.to_string()))?,
 		result = tokio::signal::ctrl_c() => {
 			result.map_err(|error| crate::CommandError::ExecutionError(error.to_string()))?;
-			if let Ok(Ok(session)) = startup.await {
-				drop(session);
-			}
+			let _ = startup_interrupt.interrupt();
+			drop(startup);
 			Err(crate::CommandError::ExecutionError("Shell startup was interrupted.".to_string()))
 		}
 	}

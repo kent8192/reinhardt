@@ -61,6 +61,46 @@ pub(crate) trait BlockingShellEvaluator: Send {
 	fn interrupt_handle(&self) -> EvaluationInterrupt;
 }
 
+#[derive(Clone, Default)]
+pub(crate) struct StartupInterrupt {
+	requested: Arc<AtomicBool>,
+	handle: Arc<Mutex<Option<EvaluationInterrupt>>>,
+}
+
+impl StartupInterrupt {
+	pub(crate) fn interrupt(&self) -> Result<(), EvaluationFailure> {
+		self.requested.store(true, Ordering::Release);
+		let handle = self
+			.handle
+			.lock()
+			.map_err(|_| {
+				EvaluationFailure::ProcessExited("startup interrupt lock is poisoned".to_string())
+			})?
+			.clone();
+		if let Some(handle) = handle {
+			handle.interrupt()?;
+		}
+		Ok(())
+	}
+
+	fn register(&self, handle: EvaluationInterrupt) -> Result<(), EvaluationFailure> {
+		let requested = self.requested.load(Ordering::Acquire);
+		*self.handle.lock().map_err(|_| {
+			EvaluationFailure::ProcessExited("startup interrupt lock is poisoned".to_string())
+		})? = Some(handle.clone());
+		if requested {
+			handle.interrupt()?;
+		}
+		Ok(())
+	}
+
+	fn clear(&self) {
+		if let Ok(mut handle) = self.handle.lock() {
+			*handle = None;
+		}
+	}
+}
+
 // Task 5 constructs this adapter inside its blocking evaluator worker.
 #[allow(dead_code)]
 pub(crate) struct EvcxrEvaluator {
@@ -80,6 +120,7 @@ impl EvcxrEvaluator {
 	#[allow(dead_code)]
 	pub(crate) fn bootstrap(
 		config: &ValidatedShellConfig,
+		startup_interrupt: &StartupInterrupt,
 	) -> Result<(Self, Vec<String>), EvaluationFailure> {
 		let mut command = Command::new(
 			std::env::current_exe()
@@ -89,6 +130,14 @@ impl EvcxrEvaluator {
 		configure_evaluator_process_group(&mut command)?;
 		let (eval, outputs) =
 			EvalContext::with_subprocess_command(command).map_err(classify_startup_error)?;
+		let process_handle = eval.process_handle();
+		let owns_process_group = cfg!(unix);
+		startup_interrupt.register(EvaluationInterrupt::new(move || {
+			let mut process = process_handle.lock().map_err(|_| {
+				EvaluationFailure::ProcessExited("evaluator process lock is poisoned".to_string())
+			})?;
+			terminate_evaluator_process(&mut process, owns_process_group)
+		}))?;
 		Self::bootstrap_with_context_and_process_group(config, eval, outputs, cfg!(unix))
 	}
 
@@ -368,11 +417,7 @@ impl BlockingShellEvaluator for EvcxrEvaluator {
 				if is_panic_output(&output.stderr) {
 					Err(EvaluationFailure::Panic(message).with_output(output))
 				} else {
-					Err(EvaluationFailure::ProcessExited(combine_diagnostic(
-						&message,
-						&output.stderr,
-					))
-					.with_output(output))
+					Err(EvaluationFailure::ProcessExited(message).with_output(output))
 				}
 			}
 			Err(Error::TypeRedefinedVariablesLost(variables)) => {
@@ -417,6 +462,7 @@ pub(crate) struct EvaluatorWorker {
 pub(crate) struct EvcxrEvaluatorFactory {
 	config: ValidatedShellConfig,
 	warnings: Vec<String>,
+	startup_interrupt: StartupInterrupt,
 }
 
 impl EvcxrEvaluatorFactory {
@@ -424,18 +470,25 @@ impl EvcxrEvaluatorFactory {
 		Self {
 			config,
 			warnings: Vec::new(),
+			startup_interrupt: StartupInterrupt::default(),
 		}
+	}
+
+	pub(crate) fn startup_interrupt(&self) -> StartupInterrupt {
+		self.startup_interrupt.clone()
 	}
 }
 
 impl EvaluatorFactory for EvcxrEvaluatorFactory {
 	fn start(&mut self) -> CommandResult<Box<dyn EvaluatorClient>> {
 		let config = self.config.clone();
+		let startup_interrupt = self.startup_interrupt.clone();
 		let (evaluator, warnings) = EvaluatorWorker::start_with(move || {
-			let (evaluator, warnings) = EvcxrEvaluator::bootstrap(&config)?;
+			let (evaluator, warnings) = EvcxrEvaluator::bootstrap(&config, &startup_interrupt)?;
 			Ok((Box::new(evaluator), warnings))
 		})
 		.map_err(evaluation_command_error)?;
+		self.startup_interrupt.clear();
 		self.warnings = warnings;
 		Ok(Box::new(evaluator))
 	}
@@ -751,31 +804,73 @@ fn complete_inner_block_doc(source: &str) -> Option<usize> {
 }
 
 fn complete_inner_attribute(source: &str) -> Option<usize> {
+	enum StringState {
+		Quoted { escaped: bool },
+		Raw { hashes: usize },
+	}
+
+	let bytes = source.as_bytes();
 	let mut depth = 0usize;
-	let mut escaped = false;
-	let mut quoted = false;
-	for (index, ch) in source.char_indices() {
-		if quoted {
-			if escaped {
-				escaped = false;
-			} else if ch == '\\' {
-				escaped = true;
-			} else if ch == '"' {
-				quoted = false;
+	let mut index = 0usize;
+	let mut string = None;
+	while index < bytes.len() {
+		if let Some(state) = &mut string {
+			match state {
+				StringState::Quoted { escaped } => {
+					if *escaped {
+						*escaped = false;
+					} else if bytes[index] == b'\\' {
+						*escaped = true;
+					} else if bytes[index] == b'"' {
+						string = None;
+					}
+					index += 1;
+				}
+				StringState::Raw { hashes } => {
+					let closing = bytes[index] == b'"'
+						&& bytes
+							.get(index + 1..index + 1 + *hashes)
+							.is_some_and(|suffix| suffix.iter().all(|byte| *byte == b'#'));
+					if closing {
+						index += 1 + *hashes;
+						string = None;
+					} else {
+						index += 1;
+					}
+				}
 			}
 			continue;
 		}
-		match ch {
-			'"' => quoted = true,
-			'[' => depth += 1,
-			']' => {
+
+		if matches!(bytes[index], b'r' | b'b') {
+			let mut quote = index + usize::from(bytes[index] == b'b');
+			if bytes.get(quote) == Some(&b'r') {
+				quote += 1;
+				let hashes = bytes[quote..]
+					.iter()
+					.take_while(|byte| **byte == b'#')
+					.count();
+				quote += hashes;
+				if bytes.get(quote) == Some(&b'"') {
+					string = Some(StringState::Raw { hashes });
+					index = quote + 1;
+					continue;
+				}
+			}
+		}
+
+		match bytes[index] {
+			b'"' => string = Some(StringState::Quoted { escaped: false }),
+			b'[' => depth += 1,
+			b']' => {
 				depth = depth.checked_sub(1)?;
 				if depth == 0 {
-					return Some(index + ch.len_utf8());
+					return Some(index + 1);
 				}
 			}
 			_ => {}
 		}
+		index += 1;
 	}
 	None
 }
@@ -1050,8 +1145,9 @@ mod tests {
 
 	use super::{
 		BlockingShellEvaluator, EvaluationFailure, EvaluationOutput, EvaluatorWorker,
-		EvcxrEvaluator, StreamCapture, bootstrap_prelude, configure_evaluator_build_dir_from,
-		evaluation_command_error, path_dependency, source_with_commit_sentinel,
+		EvcxrEvaluator, StartupInterrupt, StreamCapture, bootstrap_prelude,
+		configure_evaluator_build_dir_from, evaluation_command_error, path_dependency,
+		source_with_commit_sentinel,
 	};
 	use crate::ShellConfig;
 	use crate::shell::session::{EvaluationInterrupt, EvaluatorClient};
@@ -1125,6 +1221,36 @@ mod tests {
 			rendered,
 			"/*! outer /* nested */ still outer */\nlet __commit: ::std::string::String = ::std::string::String::new();\nlet value = 1;"
 		);
+	}
+
+	#[test]
+	fn commit_sentinel_ignores_brackets_in_raw_inner_attribute_literals() {
+		let source = "#![doc = r##\"a ] bracket\"##]\nlet value = 1;";
+		let rendered = source_with_commit_sentinel(source, "__commit");
+
+		assert_eq!(
+			rendered,
+			"#![doc = r##\"a ] bracket\"##]\nlet __commit: ::std::string::String = ::std::string::String::new();\nlet value = 1;"
+		);
+	}
+
+	#[test]
+	fn startup_interrupt_terminates_a_process_registered_after_the_signal() {
+		let startup_interrupt = StartupInterrupt::default();
+		let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+
+		startup_interrupt
+			.interrupt()
+			.expect("interrupt before process startup should be recorded");
+		let interrupt_calls = Arc::clone(&calls);
+		startup_interrupt
+			.register(EvaluationInterrupt::new(move || {
+				interrupt_calls.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+				Ok(())
+			}))
+			.expect("registered process should observe the pending interrupt");
+
+		assert_eq!(calls.load(std::sync::atomic::Ordering::Relaxed), 1);
 	}
 
 	#[test]
@@ -1884,12 +2010,14 @@ pub mod models {
 		let panic = evaluator
 			.evaluate(r#"panic!("panic-classification-probe")"#)
 			.expect_err("panic should make the evaluator unusable");
-		match panic {
-			EvaluationFailure::Panic(message) => {
-				assert!(message.contains("panic-classification-probe"));
-			}
-			other => panic!("expected panic classification, got {other:?}"),
-		}
+		let EvaluationFailure::Output { failure, output } = panic else {
+			panic!("expected panic output, got {panic:?}");
+		};
+		let EvaluationFailure::Panic(message) = *failure else {
+			panic!("expected panic classification");
+		};
+		assert!(message.contains("panic-classification-probe"));
+		assert!(output.stderr.contains("panic-classification-probe"));
 	}
 
 	#[ignore = "subprocess-only process exit probe"]

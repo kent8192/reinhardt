@@ -2417,7 +2417,9 @@ fn generate_model_form(
 								},
 							);
 						}
-						let checkbox_sentinel = is_checkbox.then(|| {
+						let checkbox_sentinel = (is_checkbox
+							&& (!descriptor.has_default || stored_value.is_some()))
+							.then(|| {
 							#pages_crate::PageElement::new("input")
 								.attr("type", "hidden")
 								.attr("name", checkbox_sentinel)
@@ -2503,12 +2505,13 @@ fn generate_model_form(
 												),
 													descriptor.nullable,
 													descriptor.required,
+													descriptor.has_default,
 													#is_range_override,
 													input_type == "color",
 											))
 											.collect::<::std::vec::Vec<_>>();
 										let mut state = submit_form.__model_state.borrow_mut();
-										for (field, is_checkbox, nullable, required, is_range, is_color) in fields {
+										for (field, is_checkbox, nullable, required, has_default, is_range, is_color) in fields {
 											if (is_range || is_color) && !required && state.value(field).is_none() {
 												continue;
 											}
@@ -2525,7 +2528,10 @@ fn generate_model_form(
 													snapshot_valid = false;
 													submit_form.error.set(::core::option::Option::Some(error.to_string()));
 												}
-											} else if is_checkbox && !nullable {
+											} else if is_checkbox
+												&& !nullable
+												&& !(has_default && state.value(field).is_none())
+											{
 												let _ = state.set_value(field, #pages_crate::__private::serde_json::Value::Bool(false));
 											}
 										}

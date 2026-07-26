@@ -559,7 +559,15 @@ pub async fn restore_database_connection_for_testing(snapshot: DatabaseRegistrat
 fn restore_database_connection_for_testing_sync(snapshot: DatabaseRegistrationSnapshot) {
 	match database_state() {
 		Ok(mut state) => {
-			let replaced = std::mem::replace(&mut *state, snapshot.database);
+			let restored = snapshot
+				.database
+				.and_then(|database| match database.scope.as_ref() {
+					Some(scope) if !scope.active.load(Ordering::Acquire) => {
+						nearest_active_predecessor(scope)
+					}
+					Some(_) | None => Some(database),
+				});
+			let replaced = std::mem::replace(&mut *state, restored);
 			drop(replaced);
 		}
 		Err(error) => {
@@ -3078,6 +3086,26 @@ mod tests {
 			.expect("dropping the scope should restore the new baseline")
 			.backend();
 		assert_eq!(backend, DatabaseBackend::Sqlite);
+	}
+
+	#[serial_test::serial(sqlx_drivers)]
+	#[tokio::test]
+	async fn restoring_a_snapshot_skips_a_scope_dropped_during_replacement() {
+		let _database_state = DatabaseStateRestoreGuard::replace(None);
+		let scope = super::install_scoped_database("sqlite::memory:")
+			.await
+			.expect("scope installation should succeed");
+		let owner = crate::orm::connection::BackendsConnection::connect("sqlite::memory:")
+			.await
+			.expect("test replacement connection should succeed");
+		let replacement = crate::orm::connection::DatabaseConnectionLease::register(owner)
+			.expect("test replacement lease should register");
+		let snapshot = super::replace_database_connection_for_testing_sync(Some(replacement));
+
+		drop(scope);
+		super::restore_database_connection_for_testing_sync(snapshot);
+
+		assert!(super::get_connection().await.is_err());
 	}
 
 	#[derive(Debug, Clone, Serialize, Deserialize)]

@@ -4851,6 +4851,14 @@ where
 			DatabaseValue::String(value) => value.clone(),
 			DatabaseValue::Bytes(value) => String::from_utf8_lossy(value).into_owned(),
 			DatabaseValue::Json(value) => value.to_string(),
+			DatabaseValue::Vector(values) => serde_json::Value::Array(
+				values
+					.iter()
+					.copied()
+					.map(serde_json::Value::from)
+					.collect(),
+			)
+			.to_string(),
 			DatabaseValue::Array { values, .. } => serde_json::Value::Array(
 				values
 					.iter()
@@ -8392,6 +8400,16 @@ mod tests {
 
 		// Assert
 		assert_eq!(sql, "SELECT `id` FROM `articles`");
+	}
+
+	#[test]
+	fn vector_database_value_diagnostics_use_json_array_syntax() {
+		let rendered =
+			QuerySet::<TestUser>::database_value_to_string(&DatabaseValue::Vector(vec![
+				1.0, 2.0, 3.0,
+			]));
+
+		assert_eq!(rendered, "[1.0,2.0,3.0]");
 	}
 
 	fn test_field_info(

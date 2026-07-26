@@ -272,6 +272,15 @@ pub enum MigrationError {
 	#[error("Unsupported database: {0}")]
 	UnsupportedDatabase(String),
 
+	/// A migration feature is not available on the selected backend.
+	#[error("{feature} is not supported by the {backend} backend")]
+	UnsupportedBackendFeature {
+		/// The unsupported migration feature.
+		feature: &'static str,
+		/// The selected backend.
+		backend: &'static str,
+	},
+
 	/// Duplicate operations detected
 	///
 	/// This error occurs when a new migration has identical operations

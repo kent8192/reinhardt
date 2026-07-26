@@ -1554,6 +1554,9 @@ impl<M: Model> Manager<M> {
 			}
 			QueryValue::Uuid(value) => reinhardt_query::value::Value::Uuid(Some(Box::new(value))),
 			QueryValue::Json(value) => reinhardt_query::value::Value::Json(value),
+			QueryValue::Vector(values) => {
+				reinhardt_query::value::Value::Vector(Some(Box::new(values)))
+			}
 			QueryValue::StringArray(values) => {
 				reinhardt_query::value::Value::Json(Some(Box::new(serde_json::Value::Array(
 					values.into_iter().map(serde_json::Value::String).collect(),
@@ -2738,6 +2741,7 @@ impl<M: Model> Default for Manager<M> {
 #[cfg(test)]
 mod tests {
 	use super::{Manager, field_codec_error};
+	use crate::backends::types::QueryValue;
 	use crate::orm::Json;
 	use crate::orm::Model;
 	use crate::orm::connection::DatabaseBackend;
@@ -2763,6 +2767,19 @@ mod tests {
 		let source = std::error::Error::source(&error)
 			.expect("manager codec error should preserve its typed source");
 		assert!(source.downcast_ref::<FieldCodecError>().is_some());
+	}
+
+	#[test]
+	fn manager_preserves_vector_query_values() {
+		let value =
+			Manager::<JsonManagerModel>::query_value_to_sea_value(QueryValue::Vector(vec![
+				1.0, 2.0, 3.0,
+			]));
+
+		assert_eq!(
+			value,
+			reinhardt_query::value::Value::Vector(Some(Box::new(vec![1.0, 2.0, 3.0])))
+		);
 	}
 
 	#[serial_test::serial(sqlx_drivers)]

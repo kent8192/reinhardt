@@ -103,6 +103,9 @@ fn field_type_to_tokens(field_type: &FieldType) -> TokenStream {
 		FieldType::TsTzRange => quote! { FieldType::TsTzRange },
 		FieldType::TsVector => quote! { FieldType::TsVector },
 		FieldType::TsQuery => quote! { FieldType::TsQuery },
+		FieldType::Vector { dimensions } => {
+			quote! { FieldType::Vector { dimensions: #dimensions } }
+		}
 
 		// UUID and Year
 		FieldType::Uuid => quote! { FieldType::Uuid },
@@ -1076,6 +1079,9 @@ impl ToTokens for ColumnDefinition {
 			FieldType::TsTzRange => quote! { FieldType::TsTzRange },
 			FieldType::TsVector => quote! { FieldType::TsVector },
 			FieldType::TsQuery => quote! { FieldType::TsQuery },
+			FieldType::Vector { dimensions } => {
+				quote! { FieldType::Vector { dimensions: #dimensions } }
+			}
 
 			// UUID and Year
 			FieldType::Uuid => quote! { FieldType::Uuid },

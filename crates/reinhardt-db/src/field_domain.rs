@@ -21,6 +21,8 @@ pub enum DatabaseStorageKind {
 	Bytes,
 	/// Native JSON storage.
 	Json,
+	/// Native PostgreSQL dense-vector storage with a fixed dimension.
+	Vector(usize),
 	/// UUID storage.
 	Uuid,
 	/// Calendar date storage.

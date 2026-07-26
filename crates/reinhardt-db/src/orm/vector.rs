@@ -1,4 +1,10 @@
 use serde::{Deserialize, Deserializer, Serialize, Serializer, de::Error as _};
+use sqlx::{
+	Decode, Encode, Postgres, Type, TypeInfo,
+	encode::IsNull,
+	error::BoxDynError,
+	postgres::{PgArgumentBuffer, PgTypeInfo, PgValueFormat, PgValueRef},
+};
 
 /// Maximum number of dimensions supported by pgvector dense vectors.
 pub const MAX_DENSE_VECTOR_DIMENSIONS: usize = 2_000;
@@ -35,6 +41,153 @@ pub enum VectorError {
 #[derive(Debug, Clone, PartialEq)]
 pub struct Vector<const N: usize> {
 	values: Vec<f32>,
+}
+
+#[derive(Debug, PartialEq, thiserror::Error)]
+enum PgVectorCodecError {
+	#[error("pgvector dimensions must fit in a signed 16-bit integer, got {0}")]
+	DimensionsOutOfRange(usize),
+	#[error("invalid pgvector payload: missing the 4-byte header")]
+	MissingHeader,
+	#[error("invalid pgvector dimension {0}")]
+	InvalidWireDimensions(i16),
+	#[error("invalid pgvector reserved value: expected 0, got {0}")]
+	InvalidReserved(i16),
+	#[error("invalid pgvector payload length: expected {expected} bytes, got {actual}")]
+	InvalidPayloadLength { expected: usize, actual: usize },
+	#[error(transparent)]
+	InvalidVector(#[from] VectorError),
+}
+
+fn encode_pgvector_binary(values: &[f32]) -> Result<Vec<u8>, PgVectorCodecError> {
+	let dimensions = i16::try_from(values.len())
+		.map_err(|_| PgVectorCodecError::DimensionsOutOfRange(values.len()))?;
+	let mut bytes = Vec::with_capacity(4 + values.len() * size_of::<f32>());
+	bytes.extend_from_slice(&dimensions.to_be_bytes());
+	bytes.extend_from_slice(&0_i16.to_be_bytes());
+	for value in values {
+		bytes.extend_from_slice(&value.to_be_bytes());
+	}
+	Ok(bytes)
+}
+
+fn decode_pgvector_values(bytes: &[u8]) -> Result<Vec<f32>, PgVectorCodecError> {
+	let header = bytes.get(..4).ok_or(PgVectorCodecError::MissingHeader)?;
+	let dimensions = i16::from_be_bytes([header[0], header[1]]);
+	if dimensions <= 0 {
+		return Err(PgVectorCodecError::InvalidWireDimensions(dimensions));
+	}
+	let reserved = i16::from_be_bytes([header[2], header[3]]);
+	if reserved != 0 {
+		return Err(PgVectorCodecError::InvalidReserved(reserved));
+	}
+	let dimensions = dimensions as usize;
+	let expected = 4 + dimensions * size_of::<f32>();
+	if bytes.len() != expected {
+		return Err(PgVectorCodecError::InvalidPayloadLength {
+			expected,
+			actual: bytes.len(),
+		});
+	}
+	Ok(bytes[4..]
+		.chunks_exact(size_of::<f32>())
+		.map(|chunk| f32::from_be_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]))
+		.collect())
+}
+
+fn decode_pgvector_binary<const N: usize>(bytes: &[u8]) -> Result<Vector<N>, PgVectorCodecError> {
+	decode_pgvector_values(bytes)?
+		.try_into()
+		.map_err(Into::into)
+}
+
+fn pgvector_type_info() -> PgTypeInfo {
+	PgTypeInfo::with_name("vector")
+}
+
+fn pgvector_type_compatible(type_info: &PgTypeInfo) -> bool {
+	type_info.name().eq_ignore_ascii_case("vector")
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct PgVectorValue(Vec<f32>);
+
+impl PgVectorValue {
+	pub(crate) fn new(values: Vec<f32>) -> Self {
+		Self(values)
+	}
+
+	pub(crate) fn into_vec(self) -> Vec<f32> {
+		self.0
+	}
+}
+
+impl Type<Postgres> for PgVectorValue {
+	fn type_info() -> PgTypeInfo {
+		pgvector_type_info()
+	}
+
+	fn compatible(type_info: &PgTypeInfo) -> bool {
+		pgvector_type_compatible(type_info)
+	}
+}
+
+impl<'query> Encode<'query, Postgres> for PgVectorValue {
+	fn produces(&self) -> Option<PgTypeInfo> {
+		Some(pgvector_type_info())
+	}
+
+	fn encode_by_ref(&self, buffer: &mut PgArgumentBuffer) -> Result<IsNull, BoxDynError> {
+		buffer.extend_from_slice(&encode_pgvector_binary(&self.0)?);
+		Ok(IsNull::No)
+	}
+
+	fn size_hint(&self) -> usize {
+		4 + self.0.len() * size_of::<f32>()
+	}
+}
+
+impl<'row> Decode<'row, Postgres> for PgVectorValue {
+	fn decode(value: PgValueRef<'row>) -> Result<Self, BoxDynError> {
+		if value.format() != PgValueFormat::Binary {
+			return Err("pgvector values must use PostgreSQL binary format".into());
+		}
+		Ok(Self(decode_pgvector_values(value.as_bytes()?)?))
+	}
+}
+
+impl<const N: usize> Type<Postgres> for Vector<N> {
+	fn type_info() -> PgTypeInfo {
+		pgvector_type_info()
+	}
+
+	fn compatible(type_info: &PgTypeInfo) -> bool {
+		pgvector_type_compatible(type_info)
+	}
+}
+
+impl<'query, const N: usize> Encode<'query, Postgres> for Vector<N> {
+	fn produces(&self) -> Option<PgTypeInfo> {
+		Some(pgvector_type_info())
+	}
+
+	fn encode_by_ref(&self, buffer: &mut PgArgumentBuffer) -> Result<IsNull, BoxDynError> {
+		buffer.extend_from_slice(&encode_pgvector_binary(self.as_slice())?);
+		Ok(IsNull::No)
+	}
+
+	fn size_hint(&self) -> usize {
+		4 + N * size_of::<f32>()
+	}
+}
+
+impl<'row, const N: usize> Decode<'row, Postgres> for Vector<N> {
+	fn decode(value: PgValueRef<'row>) -> Result<Self, BoxDynError> {
+		if value.format() != PgValueFormat::Binary {
+			return Err("pgvector values must use PostgreSQL binary format".into());
+		}
+		decode_pgvector_binary(value.as_bytes()?).map_err(Into::into)
+	}
 }
 
 impl<const N: usize> Vector<N> {
@@ -125,7 +278,8 @@ impl<const N: usize> TryFrom<pgvector::Vector> for Vector<N> {
 
 #[cfg(test)]
 mod tests {
-	use super::{Vector, VectorError};
+	use super::{Vector, VectorError, decode_pgvector_binary, encode_pgvector_binary};
+	use sqlx::{Postgres, Type, TypeInfo, postgres::PgTypeInfo};
 
 	#[test]
 	fn accepts_a_vector_with_the_declared_dimension() {
@@ -189,5 +343,51 @@ mod tests {
 		let round_trip = Vector::<3>::try_from(pgvector).unwrap();
 
 		assert_eq!(round_trip, vector);
+	}
+
+	#[test]
+	fn pgvector_binary_encoding_uses_the_postgresql_wire_layout() {
+		let encoded = encode_pgvector_binary(&[1.0, -2.5, 3.0]).unwrap();
+
+		assert_eq!(
+			encoded,
+			vec![
+				0x00, 0x03, 0x00, 0x00, 0x3f, 0x80, 0x00, 0x00, 0xc0, 0x20, 0x00, 0x00, 0x40, 0x40,
+				0x00, 0x00,
+			]
+		);
+	}
+
+	#[test]
+	fn pgvector_binary_decoding_rejects_malformed_payload_lengths() {
+		let error = decode_pgvector_binary::<3>(&[0x00, 0x03, 0x00, 0x00, 0x3f, 0x80, 0x00, 0x00])
+			.unwrap_err();
+
+		assert_eq!(
+			error.to_string(),
+			"invalid pgvector payload length: expected 16 bytes, got 8"
+		);
+	}
+
+	#[test]
+	fn pgvector_binary_decoding_applies_the_public_dimension_invariant() {
+		let encoded = encode_pgvector_binary(&[1.0, 2.0]).unwrap();
+		let error = decode_pgvector_binary::<3>(&encoded).unwrap_err();
+
+		assert!(matches!(
+			error,
+			super::PgVectorCodecError::InvalidVector(VectorError::InvalidDimensions {
+				expected: 3,
+				actual: 2,
+			})
+		));
+	}
+
+	#[test]
+	fn sqlx_type_compatibility_accepts_the_vector_type_name() {
+		let type_info = PgTypeInfo::with_name("vector");
+
+		assert_eq!(<Vector<3> as Type<Postgres>>::type_info().name(), "vector");
+		assert!(<Vector<3> as Type<Postgres>>::compatible(&type_info));
 	}
 }

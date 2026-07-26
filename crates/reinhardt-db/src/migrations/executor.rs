@@ -573,7 +573,7 @@ impl DatabaseMigrationExecutor {
 				}
 			}
 
-			let sql = operation.to_sql(&dialect);
+			let sql = operation.try_to_sql(&dialect)?;
 
 			tracing::debug!(
 				"Executing migration SQL (length={}, semicolons={})",
@@ -1437,7 +1437,7 @@ impl DatabaseMigrationExecutor {
 					std::mem::discriminant(operation)
 				);
 				// No scoped foreign-key state has been changed at this point.
-				let sql = operation.to_sql(&super::operations::SqlDialect::Sqlite);
+				let sql = operation.try_to_sql(&super::operations::SqlDialect::Sqlite)?;
 				editor.execute(&sql).await?;
 				return Ok(());
 			}

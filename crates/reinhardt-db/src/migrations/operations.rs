@@ -2930,6 +2930,27 @@ impl Operation {
 		}
 	}
 
+	/// Generates forward SQL after validating backend-specific field support.
+	pub fn try_to_sql(&self, dialect: &SqlDialect) -> super::Result<String> {
+		match self {
+			Self::CreateTable { columns, .. } => {
+				for column in columns {
+					column.type_definition.try_to_sql_for_dialect(dialect)?;
+				}
+			}
+			Self::AddColumn { column, .. } => {
+				column.type_definition.try_to_sql_for_dialect(dialect)?;
+			}
+			Self::AlterColumn { new_definition, .. } => {
+				new_definition
+					.type_definition
+					.try_to_sql_for_dialect(dialect)?;
+			}
+			_ => {}
+		}
+		Ok(self.to_sql(dialect))
+	}
+
 	/// Generate `SetAutoIncrementValue` SQL for each dialect
 	///
 	/// PostgreSQL / CockroachDB resolve the backing sequence via
@@ -5880,6 +5901,7 @@ impl Operation {
 			FieldType::TsTzRange => col_def.custom(Alias::new("TSTZRANGE")),
 			FieldType::TsVector => col_def.custom(Alias::new("TSVECTOR")),
 			FieldType::TsQuery => col_def.custom(Alias::new("TSQUERY")),
+			FieldType::Vector { dimensions } => col_def.vector(*dimensions as u32),
 			FieldType::Custom(custom_type) => col_def.custom(Alias::new(custom_type)),
 		}
 	}
@@ -7559,6 +7581,85 @@ mod tests {
 			model.fields.contains_key("name"),
 			"Model should contain 'name' field"
 		);
+	}
+
+	#[test]
+	fn checked_vector_create_and_alter_sql_preserve_dimensions() {
+		let vector_column = ColumnDefinition::new("embedding", FieldType::Vector { dimensions: 3 });
+		let create = Operation::CreateTable {
+			name: "documents".to_owned(),
+			columns: vec![vector_column.clone()],
+			constraints: vec![],
+			without_rowid: None,
+			partition: None,
+			interleave_in_parent: None,
+		};
+		let alter = Operation::AlterColumn {
+			table: "documents".to_owned(),
+			column: "embedding".to_owned(),
+			old_definition: None,
+			new_definition: vector_column,
+			mysql_options: None,
+		};
+
+		assert!(
+			create
+				.try_to_sql(&SqlDialect::Postgres)
+				.unwrap()
+				.contains("VECTOR(3)")
+		);
+		assert!(
+			alter
+				.try_to_sql(&SqlDialect::Postgres)
+				.unwrap()
+				.contains("TYPE VECTOR(3)")
+		);
+	}
+
+	#[test]
+	fn checked_vector_ddl_rejects_unsupported_backends() {
+		let operation = Operation::AddColumn {
+			table: "documents".to_owned(),
+			column: ColumnDefinition::new("embedding", FieldType::Vector { dimensions: 3 }),
+			mysql_options: None,
+		};
+
+		for (dialect, backend) in [
+			(SqlDialect::Mysql, "mysql"),
+			(SqlDialect::Sqlite, "sqlite"),
+			(SqlDialect::Cockroachdb, "cockroachdb"),
+		] {
+			assert!(matches!(
+				operation.try_to_sql(&dialect),
+				Err(crate::migrations::MigrationError::UnsupportedBackendFeature {
+					feature: "vector field",
+					backend: actual_backend,
+				}) if actual_backend == backend
+			));
+		}
+	}
+
+	#[test]
+	fn legacy_vector_operation_sql_fails_fast_on_unsupported_backends() {
+		let operation = Operation::AddColumn {
+			table: "documents".to_owned(),
+			column: ColumnDefinition::new("embedding", FieldType::Vector { dimensions: 3 }),
+			mysql_options: None,
+		};
+
+		for dialect in [SqlDialect::Mysql, SqlDialect::Sqlite] {
+			let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+				operation.to_sql(&dialect)
+			}));
+
+			let payload = result.expect_err("legacy rendering must not return vector SQL");
+			let message = payload
+				.downcast_ref::<String>()
+				.map(String::as_str)
+				.or_else(|| payload.downcast_ref::<&str>().copied())
+				.unwrap();
+			assert!(message.contains("try_to_sql"));
+		}
 	}
 
 	#[test]

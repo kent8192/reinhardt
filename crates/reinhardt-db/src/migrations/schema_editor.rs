@@ -341,7 +341,7 @@ impl SchemaEditor {
 		if let Some(session) = self.sqlite_recreation_session.as_mut() {
 			let mut query = sqlx::query(sql);
 			for param in &params {
-				query = SqliteBackend::bind_value(query, param);
+				query = SqliteBackend::bind_value(query, param)?;
 			}
 			let rows = query.fetch_all(&mut **session.connection_mut()).await?;
 			return rows
@@ -370,7 +370,7 @@ impl SchemaEditor {
 		if let Some(session) = self.sqlite_recreation_session.as_mut() {
 			let mut query = sqlx::query(sql);
 			for param in &params {
-				query = SqliteBackend::bind_value(query, param);
+				query = SqliteBackend::bind_value(query, param)?;
 			}
 			let row = query
 				.fetch_optional(&mut **session.connection_mut())

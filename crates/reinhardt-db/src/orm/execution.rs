@@ -87,7 +87,8 @@ fn convert_value_to_query_value(value: reinhardt_query::value::Value) -> QueryVa
 		| SV::Json(None)
 		| SV::Decimal(None)
 		| SV::BigDecimal(None)
-		| SV::Uuid(None) => QueryValue::Null,
+		| SV::Uuid(None)
+		| SV::Vector(None) => QueryValue::Null,
 
 		// Boolean
 		SV::Bool(Some(b)) => QueryValue::Bool(b),
@@ -167,6 +168,9 @@ fn convert_value_to_query_value(value: reinhardt_query::value::Value) -> QueryVa
 		// UUID
 		SV::Uuid(Some(u)) => QueryValue::Uuid(*u),
 
+		// Native PostgreSQL dense vectors.
+		SV::Vector(Some(values)) => QueryValue::Vector(*values),
+
 		// Arrays - convert to string
 		// For reinhardt-query 1.0.0-rc.29+: Array(ArrayType, Option<Box<Vec<Value>>>)
 		SV::Array(_, arr) => QueryValue::String(format!("{:?}", arr)),
@@ -220,6 +224,7 @@ fn query_value_to_json(value: &SV) -> serde_json::Value {
 		SV::Json(value) => value.as_deref().cloned().unwrap_or(serde_json::Value::Null),
 		SV::Decimal(value) => serde_json::json!(value.as_deref().map(ToString::to_string)),
 		SV::BigDecimal(value) => serde_json::json!(value.as_deref().map(ToString::to_string)),
+		SV::Vector(value) => serde_json::json!(value),
 		SV::Array(_, value) => value.as_deref().map_or(serde_json::Value::Null, |values| {
 			array_values_to_json(values)
 		}),
@@ -990,5 +995,31 @@ mod tests {
 
 		// Assert
 		assert!(matches!(result, QueryValue::Null));
+	}
+
+	#[test]
+	fn vector_query_values_reach_parameter_binding_unchanged() {
+		let value = reinhardt_query::value::Value::Vector(Some(Box::new(vec![1.0, 2.0, 3.0])));
+
+		let result = convert_value_to_query_value(value);
+
+		assert_eq!(result, QueryValue::Vector(vec![1.0, 2.0, 3.0]));
+	}
+
+	#[test]
+	fn null_vector_query_values_remain_sql_null() {
+		let result = convert_value_to_query_value(reinhardt_query::value::Value::Vector(None));
+
+		assert_eq!(result, QueryValue::Null);
+	}
+
+	#[test]
+	fn vector_query_values_have_array_shaped_json_diagnostics() {
+		let value = reinhardt_query::value::Value::Vector(Some(Box::new(vec![1.0, 2.0, 3.0])));
+
+		assert_eq!(
+			query_value_to_json(&value),
+			serde_json::json!([1.0, 2.0, 3.0])
+		);
 	}
 }

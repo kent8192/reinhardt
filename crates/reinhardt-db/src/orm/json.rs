@@ -237,6 +237,26 @@ pub(crate) fn database_value_from_json(
 	match storage_kind {
 		Some(DatabaseStorageKind::Json) => Ok(DatabaseValue::Json(value)),
 		_ if value.is_null() => Ok(DatabaseValue::Null),
+		Some(DatabaseStorageKind::Vector(dimensions)) => {
+			let values = serde_json::from_value::<Vec<f32>>(value)
+				.map_err(|error| FieldCodecError::Serialization(error.to_string()))?;
+			if values.len() != dimensions {
+				return Err(FieldCodecError::Serialization(format!(
+					"vector dimension mismatch: expected {dimensions}, got {}",
+					values.len()
+				)));
+			}
+			if let Some((index, _)) = values
+				.iter()
+				.enumerate()
+				.find(|(_, value)| !value.is_finite())
+			{
+				return Err(FieldCodecError::Serialization(format!(
+					"vector element at index {index} is not finite"
+				)));
+			}
+			Ok(DatabaseValue::Vector(values))
+		}
 		Some(DatabaseStorageKind::Bool) => serde_json::from_value(value)
 			.map(DatabaseValue::Bool)
 			.map_err(|error| FieldCodecError::Serialization(error.to_string())),
@@ -483,6 +503,27 @@ mod tests {
 			.expect("JSON null should decode");
 
 		assert_eq!(value, DatabaseValue::Json(json!(null)));
+	}
+
+	#[test]
+	fn vector_storage_decodes_numeric_json_arrays() {
+		let value =
+			database_value_from_json(json!([1.0, 2.0, 3.0]), Some(DatabaseStorageKind::Vector(3)))
+				.unwrap();
+
+		assert_eq!(value, DatabaseValue::Vector(vec![1.0, 2.0, 3.0]));
+	}
+
+	#[test]
+	fn vector_storage_rejects_runtime_dimension_mismatches() {
+		let error =
+			database_value_from_json(json!([1.0, 2.0]), Some(DatabaseStorageKind::Vector(3)))
+				.unwrap_err();
+
+		assert_eq!(
+			error.to_string(),
+			"field serialization failed: vector dimension mismatch: expected 3, got 2"
+		);
 	}
 
 	#[test]

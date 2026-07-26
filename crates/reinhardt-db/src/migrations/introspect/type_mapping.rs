@@ -160,6 +160,9 @@ impl TypeMapper {
 			}
 			FieldType::TsVector => quote! { String },
 			FieldType::TsQuery => quote! { String },
+			FieldType::Vector { dimensions } => {
+				quote! { reinhardt_db::orm::Vector<#dimensions> }
+			}
 
 			// UUID
 			FieldType::Uuid => quote! { uuid::Uuid },
@@ -225,6 +228,13 @@ impl TypeMapper {
 			FieldType::HStore => "std::collections::HashMap<String, String>",
 			FieldType::CIText => "String",
 			FieldType::TsVector | FieldType::TsQuery => "String",
+			FieldType::Vector { dimensions } => {
+				return Ok(if nullable && !auto_increment {
+					format!("Option<reinhardt_db::orm::Vector<{dimensions}>>")
+				} else {
+					format!("reinhardt_db::orm::Vector<{dimensions}>")
+				});
+			}
 			FieldType::ForeignKey { .. } | FieldType::OneToOne { .. } => "i64",
 			FieldType::Array(_) => "Vec<_>",
 			FieldType::Enum { .. } => "String",

@@ -231,10 +231,12 @@ pub mod reinhardt_core {
 	pub use reinhardt_core::*;
 }
 
-#[cfg(all(feature = "core", not(native)))]
+#[cfg(not(native))]
 #[doc(hidden)]
 pub mod reinhardt_core {
+	pub use reinhardt_core::model_form;
 	pub use reinhardt_core::model_info;
+	#[cfg(feature = "core")]
 	pub use reinhardt_core::validators;
 }
 

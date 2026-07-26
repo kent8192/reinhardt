@@ -88,6 +88,9 @@ pub mod transaction;
 pub mod typed_join;
 /// Validators module.
 pub mod validators;
+/// Validated pgvector value types.
+#[cfg(feature = "pgvector")]
+pub mod vector;
 /// Window module.
 pub mod window;
 
@@ -160,6 +163,8 @@ pub use manager::{
 	get_connection, get_connection_lease, get_connection_registration, init_database,
 	init_database_with_pool_size, reinitialize_database,
 };
+#[cfg(feature = "pgvector")]
+pub use vector::{MAX_DENSE_VECTOR_DIMENSIONS, Vector, VectorError};
 
 // Re-export paste for macro usage
 #[doc(hidden)]

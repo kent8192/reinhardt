@@ -41,6 +41,7 @@
 //!
 //! #### Database Backends ✅
 //! - `db-postgres` - PostgreSQL support
+//! - `db-pgvector` - pgvector support
 //! - `db-mysql` - MySQL support
 //! - `db-sqlite` - SQLite support
 //! - `db-cockroachdb` - CockroachDB support (distributed transactions)
@@ -466,6 +467,12 @@ pub mod db {
 	pub use reinhardt_db::DatabaseError as Error;
 	pub use reinhardt_db::Json;
 
+	/// Validated pgvector value types.
+	#[cfg(feature = "db-pgvector")]
+	pub mod pgvector {
+		pub use reinhardt_db::orm::{MAX_DENSE_VECTOR_DIMENSIONS, Vector, VectorError};
+	}
+
 	/// Low-level backend connections used to register ORM connection leases.
 	pub mod backends {
 		pub use reinhardt_db::backends::*;
@@ -504,6 +511,14 @@ pub mod db {
 
 	#[cfg(test)]
 	mod tests {
+		#[cfg(feature = "db-pgvector")]
+		#[test]
+		fn pgvector_types_are_available_through_the_facade() {
+			let vector = super::pgvector::Vector::<2>::try_from(vec![1.0, 2.0]).unwrap();
+
+			assert_eq!(vector.as_slice(), &[1.0, 2.0]);
+		}
+
 		#[test]
 		fn m2m_naming_helpers_are_available_through_facade() {
 			assert_eq!(

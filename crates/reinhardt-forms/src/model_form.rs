@@ -54,19 +54,13 @@ pub trait FormModel: Model + Clone + Send + Sync {
 		mode: ModelFormPersistenceMode,
 	) -> Result<(), ModelFormError>;
 
-	/// Persists this candidate using the caller-owned ORM executor.
+	/// Inserts this candidate using the caller-owned ORM executor.
+	///
+	/// Call [`Self::save_with_mode`] with [`ModelFormPersistenceMode::Update`]
+	/// when persisting a known existing model.
 	async fn save(&mut self, executor: &mut dyn OrmExecutor) -> Result<(), ModelFormError> {
-		let primary_key = self.primary_key();
-		let uses_zero_sentinel = Self::primary_key_uses_zero_sentinel()
-			&& primary_key
-				.as_ref()
-				.is_some_and(|value| value.to_string() == "0");
-		let mode = if primary_key.is_some() && !uses_zero_sentinel {
-			ModelFormPersistenceMode::Update
-		} else {
-			ModelFormPersistenceMode::Create
-		};
-		self.save_with_mode(executor, mode).await
+		self.save_with_mode(executor, ModelFormPersistenceMode::Create)
+			.await
 	}
 
 	/// Convert model instance to a choice label for display in forms
@@ -922,6 +916,20 @@ mod tests {
 	}
 
 	#[test]
+	fn direct_form_model_save_inserts_assigned_primary_keys() {
+		let id = uuid::Uuid::from_u128(0x019c_1234_5678_7abc_8def_0123_4567_89ab);
+		let mut record = UuidRecord {
+			id,
+			title: "Assigned primary key".to_owned(),
+		};
+		let mut executor = RetryExecutor::new([Ok(uuid_record_row(id, "Assigned primary key"))]);
+
+		tokio_test::block_on(FormModel::save(&mut record, &mut executor)).unwrap();
+
+		assert!(executor.queries[0].trim_start().starts_with("INSERT"));
+	}
+
+	#[test]
 	fn generated_existing_zero_sentinel_model_form_uses_update_path() {
 		let mut data = ZeroSentinelRecordModelFormData::<AllEditableModelFields>::empty();
 		data.set_title("Existing zero sentinel".to_owned());
@@ -1035,5 +1043,56 @@ mod tests {
 		assert!(text.clean(Some(&json!("four"))).is_err());
 		assert!(integer.clean(Some(&json!(1))).is_err());
 		assert!(integer.clean(Some(&json!(5))).is_err());
+	}
+
+	#[test]
+	fn descriptor_factory_preserves_unsigned_integer_values() {
+		let field = field_factory::create_form_field(&ModelFormFieldDescriptor {
+			name: "identifier",
+			kind: ModelFormFieldKind::Integer {
+				min: None,
+				max: None,
+			},
+			required: true,
+			has_default: false,
+			nullable: false,
+			editable: true,
+			generated_relation_id: false,
+		});
+		let value = json!(u64::MAX);
+
+		assert_eq!(field.clean(Some(&value)).unwrap(), value);
+	}
+
+	#[test]
+	fn descriptor_factory_accepts_structured_json_values() {
+		let field = field_factory::create_form_field(&ModelFormFieldDescriptor {
+			name: "metadata",
+			kind: ModelFormFieldKind::Json,
+			required: true,
+			has_default: false,
+			nullable: false,
+			editable: true,
+			generated_relation_id: false,
+		});
+		let value = json!({"nested": [true, {"count": 2}]});
+
+		assert_eq!(field.clean(Some(&value)).unwrap(), value);
+	}
+
+	#[test]
+	fn descriptor_factory_preserves_exact_decimal_text() {
+		let field = field_factory::create_form_field(&ModelFormFieldDescriptor {
+			name: "amount",
+			kind: ModelFormFieldKind::Decimal,
+			required: true,
+			has_default: false,
+			nullable: false,
+			editable: true,
+			generated_relation_id: false,
+		});
+		let value = json!("12345678901234567890.12345678");
+
+		assert_eq!(field.clean(Some(&value)).unwrap(), value);
 	}
 }

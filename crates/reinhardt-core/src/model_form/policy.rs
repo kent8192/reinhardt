@@ -92,7 +92,15 @@ where
 			continue;
 		};
 
-		let remove_empty = text.is_empty() && !descriptor.required && !descriptor.nullable;
+		let remove_empty = text.is_empty()
+			&& !descriptor.required
+			&& !descriptor.nullable
+			&& !matches!(
+				descriptor.kind,
+				ModelFormFieldKind::Text { .. }
+					| ModelFormFieldKind::Email { .. }
+					| ModelFormFieldKind::Url { .. }
+			);
 		if text.is_empty() && !descriptor.required && descriptor.nullable {
 			*control = serde_json::Value::Null;
 			continue;
@@ -222,7 +230,7 @@ mod tests {
 		type Model = ();
 
 		fn fields() -> &'static [ModelFormFieldDescriptor] {
-			const FIELDS: [ModelFormFieldDescriptor; 5] = [
+			const FIELDS: [ModelFormFieldDescriptor; 6] = [
 				ModelFormFieldDescriptor {
 					name: "enabled",
 					kind: ModelFormFieldKind::Boolean,
@@ -257,6 +265,19 @@ mod tests {
 					name: "created_at",
 					kind: ModelFormFieldKind::DateTime,
 					required: true,
+					has_default: false,
+					nullable: false,
+					editable: true,
+					generated_relation_id: false,
+				},
+				ModelFormFieldDescriptor {
+					name: "title",
+					kind: ModelFormFieldKind::Text {
+						min_length: None,
+						max_length: None,
+						multiline: false,
+					},
+					required: false,
 					has_default: false,
 					nullable: false,
 					editable: true,
@@ -324,5 +345,15 @@ mod tests {
 				"created_at": "2026-07-26T09:30:00Z",
 			}),
 		);
+	}
+
+	#[test]
+	fn native_normalization_keeps_blank_optional_text() {
+		let value = normalize_native_model_form_value::<TestSchema, AllEditableModelFields>(
+			serde_json::json!({ "title": "" }),
+		)
+		.expect("native form value should normalize");
+
+		assert_eq!(value, serde_json::json!({ "enabled": false, "title": "" }));
 	}
 }

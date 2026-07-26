@@ -1982,6 +1982,17 @@ fn generate_model_form(
 			#name => (#widget, #label, #help_text),
 		}
 	});
+	let range_override_names: Vec<String> = model_source
+		.overrides
+		.iter()
+		.filter(|override_| matches!(override_.widget, Some(TypedWidget::RangeInput)))
+		.map(|override_| override_.field.to_string())
+		.collect();
+	let is_range_override = if range_override_names.is_empty() {
+		quote!(false)
+	} else {
+		quote!(::core::matches!(descriptor.name, #(#range_override_names)|*))
+	};
 
 	let form_id = form_id_kebab_case(form_ident);
 	let form_class_attribute = macro_ast
@@ -2442,6 +2453,7 @@ fn generate_model_form(
 								#pages_crate::event::SubmitEvent,
 								_,
 							>(move |event: #pages_crate::event::SubmitEvent| {
+								// This is mutated only by the WASM submit snapshot below.
 								#[allow(unused_mut)]
 								let mut snapshot_valid = true;
 								#[cfg(all(target_family = "wasm", target_os = "unknown"))]
@@ -2467,10 +2479,14 @@ fn generate_model_form(
 													#pages_crate::form::ModelFormFieldKind::Boolean
 												),
 												descriptor.nullable,
+												#is_range_override,
 											))
 											.collect::<::std::vec::Vec<_>>();
 										let mut state = submit_form.__model_state.borrow_mut();
-										for (field, is_checkbox, nullable) in fields {
+										for (field, is_checkbox, nullable, is_range) in fields {
+											if is_range && state.value(field).is_none() {
+												continue;
+											}
 											if let Some(value) = values.get(field).as_string() {
 												let value = if is_checkbox {
 													#pages_crate::__private::serde_json::Value::Bool(true)

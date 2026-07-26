@@ -113,6 +113,12 @@ pub fn validate_form_with_ambient_arguments_source(
 			"model-backed form! requires an explicit `server_fn`",
 		));
 	}
+	if model_source.is_some() && !matches!(method, FormMethod::Post) {
+		return Err(Error::new(
+			ast.span,
+			"model-backed form! supports only method: Post",
+		));
+	}
 	if model_source.is_some() && (redirect_on_success.is_some() || success_url.is_some()) {
 		return Err(Error::new(
 			ast.span,

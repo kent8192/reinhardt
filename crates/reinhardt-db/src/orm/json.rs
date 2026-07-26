@@ -313,6 +313,13 @@ pub(crate) fn database_value_from_json(
 					.map(|value| DatabaseValue::DateTime(value.with_timezone(&chrono::Utc)))
 					.map_err(|error| FieldCodecError::Serialization(error.to_string()))
 			}),
+		Some(DatabaseStorageKind::NaiveDateTime) => serde_json::from_value::<String>(value)
+			.map_err(|error| FieldCodecError::Serialization(error.to_string()))
+			.and_then(|value| {
+				chrono::NaiveDateTime::parse_from_str(&value, "%Y-%m-%d %H:%M:%S%.f")
+					.map(DatabaseValue::NaiveDateTime)
+					.map_err(|error| FieldCodecError::Serialization(error.to_string()))
+			}),
 		None => DatabaseValue::try_from_json_value(value),
 	}
 }

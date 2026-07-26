@@ -1967,7 +1967,10 @@ fn extract_nested_option_type(mut ty: &Type) -> &Type {
 }
 
 fn is_model_form_editable(field: &FieldInfo) -> bool {
-	if field.config.skip || field.config.primary_key || field.config.editable == Some(false) {
+	if field.config.skip || field.config.editable == Some(false) {
+		return false;
+	}
+	if field.config.primary_key && is_auto_generated_field(field) {
 		return false;
 	}
 	if field.config.auto_now == Some(true)

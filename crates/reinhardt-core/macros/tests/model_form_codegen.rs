@@ -46,6 +46,15 @@ struct TemporalDocument {
 	naive_at: chrono::NaiveDateTime,
 }
 
+#[model(app_label = "forms", form = true)]
+#[derive(Clone, Deserialize, Serialize)]
+struct AssignedKeyDocument {
+	#[field(primary_key = true, editable = true, max_length = 64)]
+	id: String,
+	#[field(max_length = 200)]
+	title: String,
+}
+
 struct TitleOnly;
 
 impl ModelFormPolicy for TitleOnly {
@@ -155,4 +164,22 @@ fn generated_datetime_schema_and_payload_distinguish_aware_from_naive_values() {
 				.expect("valid time")
 		)
 	);
+}
+
+#[test]
+fn generated_model_forms_include_editable_assigned_primary_keys() {
+	assert_eq!(
+		AssignedKeyDocumentFormSchema::id().kind,
+		ModelFormFieldKind::Text {
+			min_length: None,
+			max_length: Some(64),
+			multiline: false,
+		}
+	);
+	assert!(AssignedKeyDocumentFormSchema::id().required);
+
+	let mut payload = AssignedKeyDocumentModelFormData::<AllEditableModelFields>::empty();
+	payload.set_id("external-key".to_owned());
+	assert_eq!(payload.id(), Some(&"external-key".to_owned()));
+	assert_eq!(payload.supplied_fields(), ["id"]);
 }

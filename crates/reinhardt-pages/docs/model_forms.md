@@ -149,8 +149,17 @@ uses the following explicit convention:
 - A browser value for `NaiveDateTime` remains offset-free and is serialized as
   `YYYY-MM-DDTHH:MM:SS`.
 
+Preloaded UTC values render without the transport-only `Z`, because
+`datetime-local` controls accept offset-free values only. Time and datetime
+controls use `step="any"`, preserving seconds and fractional seconds supported
+by the model fields.
+
 Applications that need a user or venue timezone should convert that context
 before setting the model-form control instead of relying on the UTC convention.
+
+Editable assigned primary keys, such as natural string keys or integer keys
+with `auto_increment = false`, are included in generated create-form schemas.
+Database-generated primary keys remain excluded.
 
 ## Native create and update
 

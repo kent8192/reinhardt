@@ -2199,10 +2199,13 @@ fn generate_model_form(
 							},
 						};
 						let is_checkbox = input_type == "checkbox";
-						let permits_fraction = matches!(
+						let permits_subminute_precision = matches!(
 							descriptor.kind,
 							#pages_crate::form::ModelFormFieldKind::Float { .. }
 								| #pages_crate::form::ModelFormFieldKind::Decimal
+								| #pages_crate::form::ModelFormFieldKind::Time
+								| #pages_crate::form::ModelFormFieldKind::DateTime
+								| #pages_crate::form::ModelFormFieldKind::NaiveDateTime
 						);
 
 						let field_name = descriptor.name;
@@ -2227,13 +2230,23 @@ fn generate_model_form(
 								#pages_crate::__private::serde_json::Value::String(value) => value,
 								value => value.to_string(),
 							};
+							let value = if input_type == "datetime-local"
+								&& matches!(
+									descriptor.kind,
+									#pages_crate::form::ModelFormFieldKind::DateTime
+								)
+							{
+								value.strip_suffix('Z').unwrap_or(&value).to_owned()
+							} else {
+								value
+							};
 							if tag == "textarea" {
 								control = control.child(value);
 							} else {
 								control = control.attr("value", value);
 							}
 						}
-						if permits_fraction {
+						if permits_subminute_precision {
 							control = control.attr("step", "any");
 						}
 						if is_checkbox {
@@ -7324,6 +7337,25 @@ mod tests {
 
 		// Check action
 		assert!(output_str.contains("/api/login"));
+	}
+
+	#[rstest::rstest]
+	fn test_generate_model_temporal_controls_preserve_html_precision_and_local_values() {
+		let input = quote! {
+			name: TemporalControlsForm,
+			model: TemporalDocument,
+			fields: [aware_at, naive_at, starts_at],
+			server_fn: save_temporal_document,
+		};
+
+		let output = parse_validate_generate(input);
+		let output_str = output.to_string();
+
+		assert!(output_str.contains("ModelFormFieldKind :: Time"));
+		assert!(output_str.contains("ModelFormFieldKind :: DateTime"));
+		assert!(output_str.contains("ModelFormFieldKind :: NaiveDateTime"));
+		assert!(output_str.contains("control = control . attr (\"step\" , \"any\")"));
+		assert!(output_str.contains("value . strip_suffix ('Z')"));
 	}
 
 	#[rstest::rstest]

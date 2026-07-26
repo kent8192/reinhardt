@@ -2198,6 +2198,15 @@ fn generate_model_form_support(
 		.iter()
 		.filter(|field| is_model_form_editable(field, field_infos))
 		.collect();
+	if let Some(field) = editable_fields
+		.iter()
+		.find(|field| field.name == "csrfmiddlewaretoken")
+	{
+		return Err(syn::Error::new_spanned(
+			&field.name,
+			"model-backed forms reserve `csrfmiddlewaretoken` for the CSRF control",
+		));
+	}
 	let field_count = editable_fields.len();
 	let field_kinds: Vec<_> = editable_fields
 		.iter()

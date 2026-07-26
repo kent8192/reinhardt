@@ -84,6 +84,18 @@ pub fn select_pgvector_features(statement: &SelectStatement) -> PgvectorFeatureS
 	features
 }
 
+/// Returns the first pgvector feature found in an insert AST.
+pub fn insert_pgvector_feature(statement: &InsertStatement) -> Option<PgvectorFeature> {
+	pgvector_feature_from_validation(validate_insert_for_backend(statement, "feature inspection"))
+}
+
+/// Returns every pgvector feature found in an insert AST.
+pub fn insert_pgvector_features(statement: &InsertStatement) -> PgvectorFeatureSet {
+	let mut features = PgvectorFeatureSet::default();
+	collect_insert_pgvector_features(statement, &mut features);
+	features
+}
+
 /// Returns the first pgvector feature found in an update AST.
 pub fn update_pgvector_feature(statement: &UpdateStatement) -> Option<PgvectorFeature> {
 	pgvector_feature_from_validation(validate_update_for_backend(statement, "feature inspection"))
@@ -508,6 +520,30 @@ fn collect_update_pgvector_features(
 	}
 }
 
+fn collect_insert_pgvector_features(
+	statement: &InsertStatement,
+	features: &mut PgvectorFeatureSet,
+) {
+	if let Some(table) = &statement.table {
+		collect_table_ref_pgvector_features(table, features);
+	}
+	match &statement.source {
+		InsertSource::Values(rows) => {
+			for row in rows {
+				for value in row {
+					collect_value_pgvector_features(value, features);
+				}
+			}
+		}
+		InsertSource::Subquery(query) => collect_select_pgvector_features(query, features),
+	}
+	if let Some(expressions) = &statement.returning_exprs {
+		for expression in expressions {
+			collect_simple_expr_pgvector_features(expression, features);
+		}
+	}
+}
+
 fn collect_condition_holder_pgvector_features(
 	holder: &ConditionHolder,
 	features: &mut PgvectorFeatureSet,
@@ -579,16 +615,15 @@ fn collect_simple_expr_pgvector_features_with_values(
 			if is_distance_operator {
 				features.insert(PgvectorFeature::DistanceOperator);
 			}
-			let collect_operand_values = collect_vector_values && !is_distance_operator;
 			collect_simple_expr_pgvector_features_with_values(
 				left,
 				features,
-				collect_operand_values,
+				collect_vector_values,
 			);
 			collect_simple_expr_pgvector_features_with_values(
 				right,
 				features,
-				collect_operand_values,
+				collect_vector_values,
 			);
 		}
 		SimpleExpr::FunctionCall(_, args) | SimpleExpr::Tuple(args) => {
@@ -675,5 +710,69 @@ fn collect_window_pgvector_features(window: &WindowStatement, features: &mut Pgv
 		if let OrderExprKind::Expr(expr) = &order.expr {
 			collect_simple_expr_pgvector_features(expr, features);
 		}
+	}
+}
+
+#[cfg(test)]
+mod pgvector_feature_tests {
+	use crate::prelude::{Alias, BinOper, Expr, Query, SimpleExpr};
+	use crate::types::PgBinOper;
+	use crate::value::Value;
+
+	use super::{PgvectorFeature, insert_pgvector_features};
+
+	fn vector_value(values: &[f32]) -> Value {
+		Value::Vector(Some(Box::new(values.to_vec())))
+	}
+
+	#[test]
+	fn insert_feature_set_collects_vector_values_from_rows() {
+		let statement = Query::insert()
+			.into_table(Alias::new("items"))
+			.columns([Alias::new("embedding")])
+			.values_panic([vector_value(&[1.0, 2.0, 3.0])])
+			.to_owned();
+
+		let features = insert_pgvector_features(&statement);
+
+		assert!(features.contains(PgvectorFeature::VectorValue));
+		assert!(!features.contains(PgvectorFeature::DistanceOperator));
+	}
+
+	#[test]
+	fn insert_feature_set_collects_nested_insert_select_features() {
+		let distance = SimpleExpr::Binary(
+			Box::new(Expr::col(Alias::new("embedding")).into_simple_expr()),
+			BinOper::PgOperator(PgBinOper::CosineDistance),
+			Box::new(SimpleExpr::Value(vector_value(&[1.0, 2.0, 3.0]))),
+		);
+		let select = Query::select()
+			.expr(distance)
+			.from(Alias::new("source_items"))
+			.to_owned();
+		let statement = Query::insert()
+			.into_table(Alias::new("distances"))
+			.columns([Alias::new("distance")])
+			.from_subquery(select)
+			.to_owned();
+
+		let features = insert_pgvector_features(&statement);
+
+		assert!(features.contains(PgvectorFeature::DistanceOperator));
+		assert!(features.contains(PgvectorFeature::VectorValue));
+	}
+
+	#[test]
+	fn insert_feature_set_collects_returning_expressions() {
+		let statement = Query::insert()
+			.into_table(Alias::new("items"))
+			.columns([Alias::new("name")])
+			.values_panic([Value::String(Some(Box::new("item".to_owned())))])
+			.returning_exprs([SimpleExpr::Value(vector_value(&[1.0, 2.0, 3.0]))])
+			.to_owned();
+
+		let features = insert_pgvector_features(&statement);
+
+		assert!(features.contains(PgvectorFeature::VectorValue));
 	}
 }

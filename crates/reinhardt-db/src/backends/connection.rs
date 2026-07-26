@@ -549,6 +549,11 @@ impl DatabaseConnection {
 		self.backend.database_type()
 	}
 
+	/// Returns whether the inner backend supports contextual pgvector hints.
+	pub fn supports_pgvector_error_hints(&self) -> bool {
+		self.backend.supports_pgvector_error_hints()
+	}
+
 	/// Returns true when the underlying server is CockroachDB.
 	///
 	/// CockroachDB is wire-compatible with PostgreSQL and uses the same
@@ -905,6 +910,12 @@ mod tests {
 			super::DatabaseConnection::new(std::sync::Arc::new(WrappedPostgresBackend {
 				context: context.clone(),
 			}));
+
+		assert_eq!(
+			connection.database_type(),
+			super::super::types::DatabaseType::Postgres
+		);
+		assert!(connection.supports_pgvector_error_hints());
 
 		let result = connection
 			.execute_with_context(

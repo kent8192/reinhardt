@@ -7,7 +7,9 @@
 use crate::backends::types::QueryValue;
 use crate::orm::Model;
 use crate::orm::connection::{DatabaseBackend, OrmExecutor, QueryRow};
-use reinhardt_query::prelude::{Alias, ColumnRef, Expr, ExprTrait, Func, Query, SelectStatement};
+use reinhardt_query::prelude::{
+	Alias, ColumnRef, Expr, ExprTrait, Func, InsertStatement, Query, SelectStatement,
+};
 use reinhardt_query::value::Value as SV;
 use rust_decimal::prelude::ToPrimitive;
 use std::marker::PhantomData;
@@ -247,16 +249,85 @@ fn build_select_for_backend(
 	result.map_err(|error| ExecutionError::QueryBuild(error.to_string()))
 }
 
+fn build_insert_for_backend(
+	stmt: &InsertStatement,
+	backend: DatabaseBackend,
+) -> Result<(String, reinhardt_query::prelude::Values), ExecutionError> {
+	let result = match backend {
+		DatabaseBackend::Postgres => {
+			reinhardt_query::prelude::PostgresQueryBuilder.build_insert_checked(stmt)
+		}
+		DatabaseBackend::MySql => {
+			reinhardt_query::prelude::MySqlQueryBuilder.build_insert_checked(stmt)
+		}
+		DatabaseBackend::Sqlite => {
+			reinhardt_query::prelude::SqliteQueryBuilder.build_insert_checked(stmt)
+		}
+	};
+	result.map_err(|error| ExecutionError::QueryBuild(error.to_string()))
+}
+
 pub(crate) fn pgvector_context_for_select(
 	stmt: &SelectStatement,
 ) -> Option<crate::backends::error::PgvectorOperationKind> {
 	pgvector_context_from_features(reinhardt_query::error::select_pgvector_features(stmt))
 }
 
+pub(crate) fn pgvector_context_for_insert(
+	stmt: &reinhardt_query::prelude::InsertStatement,
+) -> Option<crate::backends::error::PgvectorOperationKind> {
+	pgvector_context_from_features(reinhardt_query::error::insert_pgvector_features(stmt))
+}
+
 pub(crate) fn pgvector_context_for_update(
 	stmt: &reinhardt_query::prelude::UpdateStatement,
 ) -> Option<crate::backends::error::PgvectorOperationKind> {
 	pgvector_context_from_features(reinhardt_query::error::update_pgvector_features(stmt))
+}
+
+/// Execution context for a typed INSERT statement.
+pub struct InsertExecution {
+	stmt: InsertStatement,
+}
+
+impl InsertExecution {
+	/// Creates an INSERT execution context.
+	pub fn new(stmt: InsertStatement) -> Self {
+		Self { stmt }
+	}
+
+	/// Returns the underlying typed INSERT statement.
+	pub fn statement(&self) -> &InsertStatement {
+		&self.stmt
+	}
+
+	/// Executes an INSERT that does not return a row.
+	pub async fn execute_async<E>(
+		&self,
+		db: &mut E,
+	) -> Result<crate::orm::QueryResult, ExecutionError>
+	where
+		E: OrmExecutor,
+	{
+		let context = pgvector_context_for_insert(&self.stmt);
+		let (sql, values) = build_insert_for_backend(&self.stmt, db.backend())?;
+		Ok(db
+			.execute_with_context(&sql, convert_values(values), context)
+			.await?)
+	}
+
+	/// Executes an INSERT with a RETURNING clause and fetches its row.
+	pub async fn fetch_one_async<E>(&self, db: &mut E) -> Result<QueryRow, ExecutionError>
+	where
+		E: OrmExecutor,
+	{
+		let context = pgvector_context_for_insert(&self.stmt);
+		let (sql, values) = build_insert_for_backend(&self.stmt, db.backend())?;
+		let row = db
+			.fetch_one_with_context(&sql, convert_values(values), context)
+			.await?;
+		Ok(QueryRow::from_backend_row(row))
+	}
 }
 
 fn pgvector_context_from_features(
@@ -912,6 +983,18 @@ mod tests {
 	}
 
 	#[cfg(feature = "pgvector")]
+	struct DistanceEvidenceErrorExecutor {
+		code: &'static str,
+		message: &'static str,
+	}
+
+	#[cfg(feature = "pgvector")]
+	struct InsertEvidenceErrorExecutor {
+		backend: DatabaseBackend,
+		method: Option<&'static str>,
+	}
+
+	#[cfg(feature = "pgvector")]
 	#[async_trait::async_trait]
 	impl OrmExecutor for DefaultContextErrorExecutor {
 		fn backend(&self) -> DatabaseBackend {
@@ -959,6 +1042,117 @@ mod tests {
 			_params: Vec<QueryValue>,
 		) -> reinhardt_core::exception::Result<Option<crate::orm::Row>> {
 			panic!("all_async test executor does not fetch an optional row")
+		}
+	}
+
+	#[cfg(feature = "pgvector")]
+	#[async_trait::async_trait]
+	impl OrmExecutor for DistanceEvidenceErrorExecutor {
+		fn backend(&self) -> DatabaseBackend {
+			DatabaseBackend::Postgres
+		}
+
+		fn supports_pgvector_error_hints(&self) -> bool {
+			true
+		}
+
+		async fn execute(
+			&mut self,
+			_sql: &str,
+			_params: Vec<QueryValue>,
+		) -> reinhardt_core::exception::Result<crate::orm::QueryResult> {
+			panic!("distance SELECT test executor does not execute mutations")
+		}
+
+		async fn fetch_one(
+			&mut self,
+			_sql: &str,
+			_params: Vec<QueryValue>,
+		) -> reinhardt_core::exception::Result<crate::orm::Row> {
+			panic!("distance SELECT test executor does not fetch one row")
+		}
+
+		async fn fetch_all(
+			&mut self,
+			_sql: &str,
+			_params: Vec<QueryValue>,
+		) -> reinhardt_core::exception::Result<Vec<crate::orm::Row>> {
+			Err(reinhardt_core::exception::Error::from(
+				reinhardt_core::exception::DatabaseError::new(
+					reinhardt_core::exception::DatabaseErrorKind::Query,
+					self.message,
+				)
+				.with_code(self.code)
+				.with_source(std::io::Error::other("postgres driver failure")),
+			))
+		}
+
+		async fn fetch_optional(
+			&mut self,
+			_sql: &str,
+			_params: Vec<QueryValue>,
+		) -> reinhardt_core::exception::Result<Option<crate::orm::Row>> {
+			panic!("distance SELECT test executor does not fetch an optional row")
+		}
+	}
+
+	#[cfg(feature = "pgvector")]
+	#[async_trait::async_trait]
+	impl OrmExecutor for InsertEvidenceErrorExecutor {
+		fn backend(&self) -> DatabaseBackend {
+			self.backend
+		}
+
+		fn supports_pgvector_error_hints(&self) -> bool {
+			true
+		}
+
+		async fn execute(
+			&mut self,
+			_sql: &str,
+			_params: Vec<QueryValue>,
+		) -> reinhardt_core::exception::Result<crate::orm::QueryResult> {
+			self.method = Some("execute");
+			Err(reinhardt_core::exception::Error::from(
+				reinhardt_core::exception::DatabaseError::new(
+					reinhardt_core::exception::DatabaseErrorKind::Query,
+					"type \"vector\" does not exist",
+				)
+				.with_code("42704")
+				.with_source(std::io::Error::other("postgres insert driver failure")),
+			))
+		}
+
+		async fn fetch_one(
+			&mut self,
+			_sql: &str,
+			_params: Vec<QueryValue>,
+		) -> reinhardt_core::exception::Result<crate::orm::Row> {
+			self.method = Some("fetch_one");
+			Err(reinhardt_core::exception::Error::from(
+				reinhardt_core::exception::DatabaseError::new(
+					reinhardt_core::exception::DatabaseErrorKind::Query,
+					"type \"vector\" does not exist",
+				)
+				.with_code("42704")
+				.with_source(std::io::Error::other("postgres insert driver failure")),
+			))
+		}
+
+		async fn fetch_all(
+			&mut self,
+			_sql: &str,
+			_params: Vec<QueryValue>,
+		) -> reinhardt_core::exception::Result<Vec<crate::orm::Row>> {
+			panic!("generic INSERT test executor does not fetch multiple rows")
+		}
+
+		async fn fetch_optional(
+			&mut self,
+			_sql: &str,
+			_params: Vec<QueryValue>,
+		) -> reinhardt_core::exception::Result<Option<crate::orm::Row>> {
+			panic!("generic INSERT test executor does not fetch optional rows")
 		}
 	}
 
@@ -1183,10 +1377,7 @@ mod tests {
 			.expect("recording executor should return an empty result");
 
 		assert!(rows.is_empty());
-		assert_eq!(
-			executor.context,
-			Some(crate::backends::error::PgvectorOperationKind::DistanceOperator)
-		);
+		assert_eq!(executor.context, Some(distance_and_vector_context()));
 		assert_eq!(executor.method, Some("fetch_all"));
 	}
 
@@ -1234,6 +1425,155 @@ mod tests {
 	}
 
 	#[cfg(feature = "pgvector")]
+	fn distance_and_vector_context() -> crate::backends::error::PgvectorOperationKind {
+		crate::backends::error::PgvectorOperationKind::DistanceOperator
+			.union(crate::backends::error::PgvectorOperationKind::VectorValue)
+	}
+
+	#[cfg(feature = "pgvector")]
+	fn vector_insert_statement() -> reinhardt_query::prelude::InsertStatement {
+		Query::insert()
+			.into_table(Alias::new("users"))
+			.columns([Alias::new("embedding")])
+			.values_panic([SV::Vector(Some(Box::new(vec![1.0, 2.0, 3.0])))])
+			.to_owned()
+	}
+
+	#[cfg(feature = "pgvector")]
+	#[rstest]
+	#[case(false, "execute")]
+	#[case(true, "fetch_one")]
+	#[tokio::test]
+	async fn generic_pgvector_insert_execution_preserves_source_and_adds_hint(
+		#[case] returning: bool,
+		#[case] expected_method: &'static str,
+	) {
+		let mut statement = vector_insert_statement();
+		if returning {
+			statement.returning_all();
+		}
+		let execution = InsertExecution::new(statement);
+		let mut executor = InsertEvidenceErrorExecutor {
+			backend: DatabaseBackend::Postgres,
+			method: None,
+		};
+
+		let error = if returning {
+			match execution.fetch_one_async(&mut executor).await {
+				Err(ExecutionError::Framework(error)) => error,
+				Err(error) => panic!("expected framework database error, got {error}"),
+				Ok(_) => panic!("expected generic returning INSERT to fail"),
+			}
+		} else {
+			match execution.execute_async(&mut executor).await {
+				Err(ExecutionError::Framework(error)) => error,
+				Err(error) => panic!("expected framework database error, got {error}"),
+				Ok(_) => panic!("expected generic INSERT to fail"),
+			}
+		};
+
+		assert_eq!(executor.method, Some(expected_method));
+		assert_eq!(
+			error.database_error().and_then(|error| error.code()),
+			Some("42704")
+		);
+		assert!(
+			error
+				.to_string()
+				.contains("CreateExtension::new(\"vector\")")
+		);
+		assert!(
+			error
+				.database_error()
+				.and_then(std::error::Error::source)
+				.and_then(|source| source.downcast_ref::<std::io::Error>())
+				.is_some()
+		);
+	}
+
+	#[cfg(feature = "pgvector")]
+	#[rstest]
+	#[case(DatabaseBackend::MySql)]
+	#[case(DatabaseBackend::Sqlite)]
+	#[tokio::test]
+	async fn generic_insert_context_does_not_hint_on_non_postgres_backend(
+		#[case] backend: DatabaseBackend,
+	) {
+		let mut executor = InsertEvidenceErrorExecutor {
+			backend,
+			method: None,
+		};
+
+		let error = OrmExecutor::execute_with_context(
+			&mut executor,
+			"INSERT INTO users (embedding) VALUES (?)",
+			Vec::new(),
+			Some(crate::backends::error::PgvectorOperationKind::VectorValue),
+		)
+		.await
+		.unwrap_err();
+
+		assert_eq!(executor.method, Some("execute"));
+		assert_eq!(
+			error.database_error().and_then(|error| error.code()),
+			Some("42704")
+		);
+		assert!(!error.to_string().contains("CreateExtension::new"));
+		assert!(
+			error
+				.database_error()
+				.and_then(std::error::Error::source)
+				.and_then(|source| source.downcast_ref::<std::io::Error>())
+				.is_some()
+		);
+	}
+
+	#[cfg(feature = "pgvector")]
+	#[test]
+	fn pgvector_distance_context_includes_vector_operand() {
+		let context = pgvector_context_for_select(&distance_statement())
+			.expect("distance query with a vector operand must carry pgvector context");
+
+		assert!(context.contains(crate::backends::error::PgvectorOperationKind::DistanceOperator));
+		assert!(context.contains(crate::backends::error::PgvectorOperationKind::VectorValue));
+	}
+
+	#[cfg(feature = "pgvector")]
+	#[rstest]
+	#[case("42883", "operator does not exist: vector <=> vector")]
+	#[case("42704", "type \"vector\" does not exist")]
+	#[tokio::test]
+	async fn pgvector_distance_execution_maps_matching_operator_and_type_evidence(
+		#[case] code: &'static str,
+		#[case] message: &'static str,
+	) {
+		let execution = distance_execution();
+		let mut executor = DistanceEvidenceErrorExecutor { code, message };
+
+		let error = execution.all_async(&mut executor).await.unwrap_err();
+
+		let ExecutionError::Framework(error) = error else {
+			panic!("expected framework database error");
+		};
+		assert_eq!(
+			error.database_error().and_then(|error| error.code()),
+			Some(code)
+		);
+		assert!(
+			error
+				.to_string()
+				.contains("CreateExtension::new(\"vector\")")
+		);
+		assert!(
+			error
+				.database_error()
+				.and_then(std::error::Error::source)
+				.and_then(|source| source.downcast_ref::<std::io::Error>())
+				.is_some()
+		);
+	}
+
+	#[cfg(feature = "pgvector")]
 	#[tokio::test]
 	async fn pgvector_scalar_uses_contextual_fetch_all() {
 		let execution = distance_execution();
@@ -1246,10 +1586,7 @@ mod tests {
 
 		assert_eq!(scalar, None);
 		assert_eq!(executor.method, Some("fetch_all"));
-		assert_eq!(
-			executor.context,
-			Some(crate::backends::error::PgvectorOperationKind::DistanceOperator)
-		);
+		assert_eq!(executor.context, Some(distance_and_vector_context()));
 	}
 
 	#[cfg(feature = "pgvector")]
@@ -1265,10 +1602,7 @@ mod tests {
 
 		assert!(first.is_none());
 		assert_eq!(executor.method, Some("fetch_optional"));
-		assert_eq!(
-			executor.context,
-			Some(crate::backends::error::PgvectorOperationKind::DistanceOperator)
-		);
+		assert_eq!(executor.context, Some(distance_and_vector_context()));
 	}
 
 	#[cfg(feature = "pgvector")]
@@ -1284,10 +1618,7 @@ mod tests {
 
 		assert_eq!(count, 0);
 		assert_eq!(executor.method, Some("fetch_one"));
-		assert_eq!(
-			executor.context,
-			Some(crate::backends::error::PgvectorOperationKind::DistanceOperator)
-		);
+		assert_eq!(executor.context, Some(distance_and_vector_context()));
 	}
 
 	#[cfg(feature = "pgvector")]
@@ -1303,10 +1634,7 @@ mod tests {
 
 		assert!(!exists);
 		assert_eq!(executor.method, Some("fetch_one"));
-		assert_eq!(
-			executor.context,
-			Some(crate::backends::error::PgvectorOperationKind::DistanceOperator)
-		);
+		assert_eq!(executor.context, Some(distance_and_vector_context()));
 	}
 
 	#[cfg(feature = "pgvector")]
@@ -1398,6 +1726,35 @@ mod tests {
 		let mut executor = DefaultContextErrorExecutor {
 			backend,
 			supports_pgvector_error_hints: false,
+		};
+
+		let error = OrmExecutor::fetch_all_with_context(
+			&mut executor,
+			"SELECT embedding <=> ? FROM users",
+			Vec::new(),
+			Some(crate::backends::error::PgvectorOperationKind::DistanceOperator),
+		)
+		.await
+		.unwrap_err();
+
+		assert_eq!(
+			error.database_error().and_then(|error| error.code()),
+			Some("42883")
+		);
+		assert!(!error.to_string().contains("CreateExtension::new"));
+	}
+
+	#[cfg(feature = "pgvector")]
+	#[rstest]
+	#[case(DatabaseBackend::MySql)]
+	#[case(DatabaseBackend::Sqlite)]
+	#[tokio::test]
+	async fn default_executor_requires_postgres_even_when_capability_is_enabled(
+		#[case] backend: DatabaseBackend,
+	) {
+		let mut executor = DefaultContextErrorExecutor {
+			backend,
+			supports_pgvector_error_hints: true,
 		};
 
 		let error = OrmExecutor::fetch_all_with_context(

@@ -8795,6 +8795,12 @@ mod tests {
 	}
 
 	#[cfg(feature = "pgvector")]
+	fn distance_and_vector_context() -> crate::backends::error::PgvectorOperationKind {
+		crate::backends::error::PgvectorOperationKind::DistanceOperator
+			.union(crate::backends::error::PgvectorOperationKind::VectorValue)
+	}
+
+	#[cfg(feature = "pgvector")]
 	fn typed_vector_sql_and_params(
 		queryset: &QuerySet<TestUser>,
 	) -> (String, Vec<crate::orm::QueryValue>) {
@@ -9053,12 +9059,7 @@ mod tests {
 				crate::orm::QueryValue::Vector(vec![4.0, 5.0, 6.0]),
 			]
 		);
-		assert_eq!(
-			executor.contexts,
-			vec![Some(
-				crate::backends::error::PgvectorOperationKind::DistanceOperator
-			)]
-		);
+		assert_eq!(executor.contexts, vec![Some(distance_and_vector_context())]);
 	}
 
 	#[cfg(feature = "pgvector")]
@@ -9083,12 +9084,7 @@ mod tests {
 			.expect("recording count should decode");
 
 		assert_eq!(count, 0);
-		assert_eq!(
-			executor.contexts,
-			vec![Some(
-				crate::backends::error::PgvectorOperationKind::DistanceOperator
-			)]
-		);
+		assert_eq!(executor.contexts, vec![Some(distance_and_vector_context())]);
 	}
 
 	#[cfg(feature = "pgvector")]
@@ -9103,12 +9099,7 @@ mod tests {
 			.expect("recording exists should decode");
 
 		assert!(!exists);
-		assert_eq!(
-			executor.contexts,
-			vec![Some(
-				crate::backends::error::PgvectorOperationKind::DistanceOperator
-			)]
-		);
+		assert_eq!(executor.contexts, vec![Some(distance_and_vector_context())]);
 	}
 
 	#[cfg(feature = "pgvector")]
@@ -9123,12 +9114,7 @@ mod tests {
 			.expect("recording transaction count should decode");
 
 		assert_eq!(count, 0);
-		assert_eq!(
-			executor.contexts,
-			vec![Some(
-				crate::backends::error::PgvectorOperationKind::DistanceOperator
-			)]
-		);
+		assert_eq!(executor.contexts, vec![Some(distance_and_vector_context())]);
 	}
 
 	#[cfg(feature = "pgvector")]
@@ -9199,12 +9185,7 @@ mod tests {
 				],
 			)]
 		);
-		assert_eq!(
-			executor.contexts,
-			vec![Some(
-				crate::backends::error::PgvectorOperationKind::DistanceOperator
-			)]
-		);
+		assert_eq!(executor.contexts, vec![Some(distance_and_vector_context())]);
 	}
 
 	#[cfg(feature = "pgvector")]

@@ -50,7 +50,7 @@ pub trait DatabaseBackend: Send + Sync {
 		context: Option<super::error::PgvectorOperationKind>,
 	) -> Result<QueryResult> {
 		let result = self.execute(sql, params).await;
-		if self.supports_pgvector_error_hints() {
+		if self.database_type() == DatabaseType::Postgres && self.supports_pgvector_error_hints() {
 			result
 				.map_err(|error| super::error::decorate_error_with_pgvector_context(error, context))
 		} else {
@@ -69,7 +69,7 @@ pub trait DatabaseBackend: Send + Sync {
 		context: Option<super::error::PgvectorOperationKind>,
 	) -> Result<Row> {
 		let result = self.fetch_one(sql, params).await;
-		if self.supports_pgvector_error_hints() {
+		if self.database_type() == DatabaseType::Postgres && self.supports_pgvector_error_hints() {
 			result
 				.map_err(|error| super::error::decorate_error_with_pgvector_context(error, context))
 		} else {
@@ -88,7 +88,7 @@ pub trait DatabaseBackend: Send + Sync {
 		context: Option<super::error::PgvectorOperationKind>,
 	) -> Result<Vec<Row>> {
 		let result = self.fetch_all(sql, params).await;
-		if self.supports_pgvector_error_hints() {
+		if self.database_type() == DatabaseType::Postgres && self.supports_pgvector_error_hints() {
 			result
 				.map_err(|error| super::error::decorate_error_with_pgvector_context(error, context))
 		} else {
@@ -107,7 +107,7 @@ pub trait DatabaseBackend: Send + Sync {
 		context: Option<super::error::PgvectorOperationKind>,
 	) -> Result<Option<Row>> {
 		let result = self.fetch_optional(sql, params).await;
-		if self.supports_pgvector_error_hints() {
+		if self.database_type() == DatabaseType::Postgres && self.supports_pgvector_error_hints() {
 			result
 				.map_err(|error| super::error::decorate_error_with_pgvector_context(error, context))
 		} else {
@@ -166,12 +166,17 @@ mod tests {
 
 	struct ContextErrorBackendWithoutCapability {
 		database_type: DatabaseType,
+		supports_pgvector_error_hints: bool,
 	}
 
 	#[async_trait]
 	impl DatabaseBackend for ContextErrorBackendWithoutCapability {
 		fn database_type(&self) -> DatabaseType {
 			self.database_type
+		}
+
+		fn supports_pgvector_error_hints(&self) -> bool {
+			self.supports_pgvector_error_hints
 		}
 
 		fn placeholder(&self, _index: usize) -> String {
@@ -228,7 +233,38 @@ mod tests {
 	async fn backend_default_without_capability_does_not_decorate_pgvector_shaped_error(
 		#[case] database_type: DatabaseType,
 	) {
-		let backend = ContextErrorBackendWithoutCapability { database_type };
+		let backend = ContextErrorBackendWithoutCapability {
+			database_type,
+			supports_pgvector_error_hints: false,
+		};
+
+		let error = backend
+			.execute_with_context(
+				"SELECT embedding <=> ? FROM users",
+				Vec::new(),
+				Some(super::super::error::PgvectorOperationKind::DistanceOperator),
+			)
+			.await
+			.unwrap_err();
+
+		assert_eq!(
+			error.database_error().and_then(|error| error.code()),
+			Some("42883")
+		);
+		assert!(!error.to_string().contains("CreateExtension::new"));
+	}
+
+	#[rstest::rstest]
+	#[case(DatabaseType::Mysql)]
+	#[case(DatabaseType::Sqlite)]
+	#[tokio::test]
+	async fn backend_default_requires_postgres_even_when_capability_is_enabled(
+		#[case] database_type: DatabaseType,
+	) {
+		let backend = ContextErrorBackendWithoutCapability {
+			database_type,
+			supports_pgvector_error_hints: true,
+		};
 
 		let error = backend
 			.execute_with_context(

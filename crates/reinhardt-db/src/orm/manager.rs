@@ -1102,6 +1102,7 @@ impl<M: Model> Manager<M> {
 		if backend != DatabaseBackend::MySql {
 			stmt.returning(Self::returning_columns_from_object(&obj));
 		}
+		let context = super::execution::pgvector_context_for_insert(&stmt);
 		let (sql, values) = build_insert_sql(&stmt, backend);
 		let params = values
 			.0
@@ -1126,7 +1127,7 @@ impl<M: Model> Manager<M> {
 					.map_err(executor_error)?;
 			}
 			executor
-				.execute(&sql, params)
+				.execute_with_context(&sql, params, context)
 				.await
 				.map_err(executor_error)?;
 
@@ -1170,7 +1171,7 @@ impl<M: Model> Manager<M> {
 		}
 
 		let row = executor
-			.fetch_one(&sql, params)
+			.fetch_one_with_context(&sql, params, context)
 			.await
 			.map_err(executor_error)?;
 		Self::decode_executor_row(row)
@@ -1240,6 +1241,7 @@ impl<M: Model> Manager<M> {
 		if backend != DatabaseBackend::MySql {
 			stmt.returning(Self::returning_columns_from_object(&obj));
 		}
+		let context = super::execution::pgvector_context_for_insert(&stmt);
 		let (sql, values) = build_insert_sql(&stmt, backend);
 		let params = values
 			.0
@@ -1257,7 +1259,7 @@ impl<M: Model> Manager<M> {
 					)
 				})
 				.cloned();
-			let result = conn.execute(&sql, params).await?;
+			let result = conn.execute_with_context(&sql, params, context).await?;
 			let primary_key = explicit_primary_key
 				.map(database_value_to_query_value)
 				.or_else(|| {
@@ -1292,7 +1294,7 @@ impl<M: Model> Manager<M> {
 				.map_err(field_codec_error);
 		}
 
-		let row = conn.fetch_one(&sql, params).await?;
+		let row = conn.fetch_one_with_context(&sql, params, context).await?;
 		QueryRow::from_backend_row(row)
 			.deserialize_model::<M>()
 			.map_err(field_codec_error)
@@ -2113,6 +2115,7 @@ impl<M: Model> Manager<M> {
 					.collect(),
 			));
 		}
+		let insert_context = super::execution::pgvector_context_for_insert(&insert_stmt);
 		let (insert_sql, insert_values) = build_insert_sql(&insert_stmt, backend);
 		let insert_params = insert_values
 			.0
@@ -2121,7 +2124,9 @@ impl<M: Model> Manager<M> {
 			.collect();
 
 		if backend == DatabaseBackend::MySql {
-			let result = conn.execute(&insert_sql, insert_params).await?;
+			let result = conn
+				.execute_with_context(&insert_sql, insert_params, insert_context)
+				.await?;
 			let primary_key = insert_fields
 				.get(M::primary_key_field())
 				.map(|value| QueryValue::String(value.clone()))
@@ -2160,7 +2165,9 @@ impl<M: Model> Manager<M> {
 			return Ok((model, true));
 		}
 
-		let row = conn.fetch_one(&insert_sql, insert_params).await?;
+		let row = conn
+			.fetch_one_with_context(&insert_sql, insert_params, insert_context)
+			.await?;
 		let model = QueryRow::from_backend_row(row)
 			.deserialize_model::<M>()
 			.map_err(field_codec_error)?;
@@ -2193,7 +2200,7 @@ impl<M: Model> Manager<M> {
 			return Ok(vec![]);
 		}
 
-		let conn = get_connection().await?;
+		let mut conn = get_connection().await?;
 		let batch_size = batch_size.unwrap_or(models.len());
 		let mut results = Vec::new();
 
@@ -2207,6 +2214,7 @@ impl<M: Model> Manager<M> {
 			if !ignore_conflicts {
 				statement.returning_all();
 			}
+			let context = super::execution::pgvector_context_for_insert(&statement);
 			let (sql, values) = build_insert_sql(&statement, conn.backend());
 			let sql = if ignore_conflicts {
 				match conn.backend() {
@@ -2226,13 +2234,16 @@ impl<M: Model> Manager<M> {
 				.collect();
 
 			if ignore_conflicts {
-				conn.execute(&sql, values).await?;
+				OrmExecutor::execute_with_context(&mut conn, &sql, values, context).await?;
 				// Note: Can't get RETURNING with DO NOTHING, skip results
 				// Return empty vec for ignored conflicts
 			} else {
-				let rows = conn.query(&sql, values).await?;
+				let rows =
+					OrmExecutor::fetch_all_with_context(&mut conn, &sql, values, context).await?;
 				for row in rows {
-					let model: M = row.deserialize_model().map_err(field_codec_error)?;
+					let model: M = QueryRow::from_backend_row(row)
+						.deserialize_model()
+						.map_err(field_codec_error)?;
 					results.push(model);
 				}
 			}
@@ -2270,6 +2281,7 @@ impl<M: Model> Manager<M> {
 			if !ignore_conflicts && backend != DatabaseBackend::MySql {
 				statement.returning_all();
 			}
+			let context = super::execution::pgvector_context_for_insert(&statement);
 			let (sql, values) = build_insert_sql(&statement, backend);
 			let sql = if ignore_conflicts {
 				match backend {
@@ -2289,14 +2301,14 @@ impl<M: Model> Manager<M> {
 				.collect();
 
 			if ignore_conflicts || backend == DatabaseBackend::MySql {
-				conn.execute(&sql, values).await?;
+				conn.execute_with_context(&sql, values, context).await?;
 				if !ignore_conflicts {
 					results.extend(chunk.iter().cloned());
 				}
 				continue;
 			}
 
-			for row in conn.fetch_all(&sql, values).await? {
+			for row in conn.fetch_all_with_context(&sql, values, context).await? {
 				results.push(
 					QueryRow::from_backend_row(row)
 						.deserialize_model::<M>()
@@ -2843,7 +2855,7 @@ mod tests {
 			self.calls.push(("execute", None));
 			Ok(crate::orm::QueryResult {
 				rows_affected: 1,
-				last_insert_id: None,
+				last_insert_id: Some(7),
 			})
 		}
 
@@ -2856,7 +2868,7 @@ mod tests {
 			self.calls.push(("execute_with_context", context));
 			Ok(crate::orm::QueryResult {
 				rows_affected: 1,
-				last_insert_id: None,
+				last_insert_id: Some(7),
 			})
 		}
 
@@ -2884,7 +2896,18 @@ mod tests {
 			_sql: &str,
 			_params: Vec<QueryValue>,
 		) -> reinhardt_core::exception::Result<Vec<crate::orm::Row>> {
-			panic!("vector manager update test does not fetch multiple rows")
+			self.calls.push(("fetch_all", None));
+			Ok(vec![vector_manager_row()])
+		}
+
+		async fn fetch_all_with_context(
+			&mut self,
+			_sql: &str,
+			_params: Vec<QueryValue>,
+			context: Option<crate::backends::error::PgvectorOperationKind>,
+		) -> reinhardt_core::exception::Result<Vec<crate::orm::Row>> {
+			self.calls.push(("fetch_all_with_context", context));
+			Ok(vec![vector_manager_row()])
 		}
 
 		async fn fetch_optional(
@@ -2920,7 +2943,7 @@ mod tests {
 			self.calls.push(("execute", None));
 			Ok(crate::orm::QueryResult {
 				rows_affected: 1,
-				last_insert_id: None,
+				last_insert_id: Some(7),
 			})
 		}
 
@@ -2933,17 +2956,23 @@ mod tests {
 			self.calls.push(("execute_with_context", context));
 			Ok(crate::orm::QueryResult {
 				rows_affected: 1,
-				last_insert_id: None,
+				last_insert_id: Some(7),
 			})
 		}
 
 		async fn fetch_one(
 			&mut self,
-			_sql: &str,
+			sql: &str,
 			_params: Vec<QueryValue>,
 		) -> crate::backends::error::Result<crate::orm::Row> {
 			self.calls.push(("fetch_one", None));
-			Ok(vector_manager_row())
+			if sql.contains("generated_id") {
+				Ok(crate::orm::Row {
+					data: HashMap::from([("generated_id".to_owned(), QueryValue::Int(7))]),
+				})
+			} else {
+				Ok(vector_manager_row())
+			}
 		}
 
 		async fn fetch_one_with_context(
@@ -3073,6 +3102,119 @@ mod tests {
 			.expect("vector manager transaction update should decode the returned model");
 
 		assert_eq!(updated, model);
+		assert_eq!(
+			executor.calls.first(),
+			Some(&(
+				expected_method,
+				Some(crate::backends::error::PgvectorOperationKind::VectorValue)
+			))
+		);
+	}
+
+	#[cfg(feature = "pgvector")]
+	#[rstest::rstest]
+	#[case(DatabaseBackend::Postgres, "fetch_one_with_context")]
+	#[case(DatabaseBackend::MySql, "execute_with_context")]
+	#[tokio::test]
+	async fn manager_create_with_conn_propagates_vector_statement_context(
+		#[case] backend: DatabaseBackend,
+		#[case] expected_method: &'static str,
+	) {
+		let model = VectorManagerModel {
+			id: None,
+			embedding: crate::orm::Vector::try_from(vec![1.0, 2.0, 3.0]).unwrap(),
+		};
+		let mut executor = VectorManagerOrmExecutor {
+			backend,
+			calls: Vec::new(),
+		};
+
+		let created = Manager::<VectorManagerModel>::new()
+			.create_with_conn(&mut executor, &model)
+			.await
+			.expect("vector manager create should decode the returned model");
+
+		assert_eq!(created.id, Some(7));
+		assert_eq!(created.embedding, model.embedding);
+		assert_eq!(
+			executor.calls.first(),
+			Some(&(
+				expected_method,
+				Some(crate::backends::error::PgvectorOperationKind::VectorValue)
+			))
+		);
+	}
+
+	#[cfg(feature = "pgvector")]
+	#[rstest::rstest]
+	#[case(
+		crate::backends::types::DatabaseType::Postgres,
+		"fetch_one_with_context"
+	)]
+	#[case(crate::backends::types::DatabaseType::Mysql, "execute_with_context")]
+	#[tokio::test]
+	async fn manager_save_new_with_transaction_propagates_vector_statement_context(
+		#[case] backend: crate::backends::types::DatabaseType,
+		#[case] expected_method: &'static str,
+	) {
+		let model = VectorManagerModel {
+			id: None,
+			embedding: crate::orm::Vector::try_from(vec![1.0, 2.0, 3.0]).unwrap(),
+		};
+		let mut executor = VectorManagerTransaction {
+			backend,
+			calls: Vec::new(),
+		};
+
+		let created = Manager::<VectorManagerModel>::new()
+			.save_with_executor(&mut executor, &model)
+			.await
+			.expect("vector manager transaction create should decode the returned model");
+
+		assert_eq!(created.id, Some(7));
+		assert_eq!(created.embedding, model.embedding);
+		assert!(executor.calls.contains(&(
+			expected_method,
+			Some(crate::backends::error::PgvectorOperationKind::VectorValue)
+		)));
+	}
+
+	#[cfg(feature = "pgvector")]
+	#[rstest::rstest]
+	#[case(DatabaseBackend::Postgres, false, "fetch_all_with_context")]
+	#[case(DatabaseBackend::Postgres, true, "execute_with_context")]
+	#[case(DatabaseBackend::MySql, false, "execute_with_context")]
+	#[tokio::test]
+	async fn manager_bulk_create_with_conn_propagates_vector_statement_context(
+		#[case] backend: DatabaseBackend,
+		#[case] ignore_conflicts: bool,
+		#[case] expected_method: &'static str,
+	) {
+		let model = VectorManagerModel {
+			id: Some(7),
+			embedding: crate::orm::Vector::try_from(vec![1.0, 2.0, 3.0]).unwrap(),
+		};
+		let mut executor = VectorManagerOrmExecutor {
+			backend,
+			calls: Vec::new(),
+		};
+
+		let created = Manager::<VectorManagerModel>::new()
+			.bulk_create_with_conn(
+				&mut executor,
+				vec![model.clone()],
+				None,
+				ignore_conflicts,
+				false,
+			)
+			.await
+			.expect("vector manager bulk create should execute");
+
+		if ignore_conflicts {
+			assert!(created.is_empty());
+		} else {
+			assert_eq!(created, vec![model]);
+		}
 		assert_eq!(
 			executor.calls.first(),
 			Some(&(

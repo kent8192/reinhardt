@@ -566,6 +566,10 @@ impl AtomicTransaction {
 			.ok_or_else(transaction_consumed_error)
 	}
 
+	fn executor_ref(&self) -> Option<&(dyn TransactionExecutor + 'static)> {
+		self.executor.as_deref()
+	}
+
 	async fn commit(&mut self) -> reinhardt_core::exception::Result<()> {
 		let executor = self
 			.executor
@@ -726,7 +730,14 @@ impl AtomicTransaction {
 #[async_trait::async_trait]
 impl OrmExecutor for AtomicTransaction {
 	fn backend(&self) -> DatabaseBackend {
-		self.backend
+		self.executor_ref()
+			.map(|executor| DatabaseBackend::from(executor.backend()))
+			.unwrap_or(self.backend)
+	}
+
+	fn supports_pgvector_error_hints(&self) -> bool {
+		self.executor_ref()
+			.is_some_and(TransactionExecutor::supports_pgvector_error_hints)
 	}
 
 	async fn execute(
@@ -811,11 +822,19 @@ impl OrmExecutor for AtomicTransaction {
 #[async_trait::async_trait]
 impl TransactionExecutor for AtomicTransaction {
 	fn backend(&self) -> DatabaseType {
-		match self.backend {
-			DatabaseBackend::Postgres => DatabaseType::Postgres,
-			DatabaseBackend::MySql => DatabaseType::Mysql,
-			DatabaseBackend::Sqlite => DatabaseType::Sqlite,
-		}
+		self.executor_ref().map_or_else(
+			|| match self.backend {
+				DatabaseBackend::Postgres => DatabaseType::Postgres,
+				DatabaseBackend::MySql => DatabaseType::Mysql,
+				DatabaseBackend::Sqlite => DatabaseType::Sqlite,
+			},
+			TransactionExecutor::backend,
+		)
+	}
+
+	fn supports_pgvector_error_hints(&self) -> bool {
+		self.executor_ref()
+			.is_some_and(TransactionExecutor::supports_pgvector_error_hints)
 	}
 
 	async fn execute(
@@ -1002,6 +1021,10 @@ mod tests {
 			DatabaseType::Postgres
 		}
 
+		fn supports_pgvector_error_hints(&self) -> bool {
+			true
+		}
+
 		async fn execute(&mut self, _sql: &str, _params: Vec<QueryValue>) -> Result<QueryResult> {
 			self.calls.lock().unwrap().push("execute".to_string());
 			Ok(QueryResult {
@@ -1076,6 +1099,27 @@ mod tests {
 				Ok(())
 			}
 		}
+	}
+
+	#[test]
+	fn atomic_transaction_reports_inner_backend_and_pgvector_capability() {
+		let transaction = AtomicTransaction::new(Box::new(MockTransactionExecutor {
+			failure_plan: FailurePlan::default(),
+			calls: Arc::new(Mutex::new(Vec::new())),
+		}));
+
+		assert_eq!(
+			OrmExecutor::backend(&transaction),
+			DatabaseBackend::Postgres
+		);
+		assert!(OrmExecutor::supports_pgvector_error_hints(&transaction));
+		assert_eq!(
+			TransactionExecutor::backend(&transaction),
+			DatabaseType::Postgres
+		);
+		assert!(TransactionExecutor::supports_pgvector_error_hints(
+			&transaction
+		));
 	}
 
 	/// A test executor that deliberately uses the trait's default unsupported

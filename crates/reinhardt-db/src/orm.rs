@@ -243,7 +243,7 @@ pub use events::{
 	InstanceEvents, MapperEvents, SessionEvents, get_active_registry, set_active_registry,
 	with_event_registry,
 };
-pub use execution::{ExecutionResult, QueryExecution, SelectExecution};
+pub use execution::{ExecutionResult, InsertExecution, QueryExecution, SelectExecution};
 pub use field_codec::*;
 // Re-export from reinhardt-hybrid
 pub use crate::hybrid::{

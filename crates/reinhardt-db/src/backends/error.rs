@@ -72,6 +72,151 @@ impl PgvectorOperationKind {
 	}
 }
 
+fn strip_ascii_case_prefix<'a>(value: &'a str, prefix: &str) -> Option<&'a str> {
+	let candidate = value.get(..prefix.len())?;
+	candidate
+		.eq_ignore_ascii_case(prefix)
+		.then(|| &value[prefix.len()..])
+}
+
+fn strip_ascii_case_suffix<'a>(value: &'a str, suffix: &str) -> Option<&'a str> {
+	let start = value.len().checked_sub(suffix.len())?;
+	value[start..]
+		.eq_ignore_ascii_case(suffix)
+		.then(|| &value[..start])
+}
+
+fn split_once_ascii_case<'a>(value: &'a str, delimiter: &str) -> Option<(&'a str, &'a str)> {
+	value
+		.as_bytes()
+		.windows(delimiter.len())
+		.position(|candidate| candidate.eq_ignore_ascii_case(delimiter.as_bytes()))
+		.map(|index| (&value[..index], &value[index + delimiter.len()..]))
+}
+
+fn postgres_primary_message(message: &str) -> &str {
+	let line = message.lines().next().unwrap_or_default().trim();
+	strip_ascii_case_prefix(line, "ERROR:")
+		.map(str::trim_start)
+		.unwrap_or(line)
+}
+
+fn identifier_final_segment(identifier: &str) -> Option<(String, bool)> {
+	let bytes = identifier.as_bytes();
+	let mut index = 0;
+	let mut final_segment = None;
+	while index < bytes.len() {
+		let (segment, quoted) = if bytes[index] == b'"' {
+			index += 1;
+			let mut segment = String::new();
+			let mut closed = false;
+			while index < bytes.len() {
+				if bytes[index] == b'"' {
+					if bytes.get(index + 1) == Some(&b'"') {
+						segment.push('"');
+						index += 2;
+					} else {
+						index += 1;
+						closed = true;
+						break;
+					}
+				} else {
+					segment.push(bytes[index] as char);
+					index += 1;
+				}
+			}
+			if !closed {
+				return None;
+			}
+			(segment, true)
+		} else {
+			let start = index;
+			while index < bytes.len() && bytes[index] != b'.' {
+				if !(bytes[index].is_ascii_alphanumeric() || matches!(bytes[index], b'_' | b'$')) {
+					return None;
+				}
+				index += 1;
+			}
+			if start == index {
+				return None;
+			}
+			(identifier[start..index].to_owned(), false)
+		};
+		final_segment = Some((segment, quoted));
+		if index == bytes.len() {
+			break;
+		}
+		if bytes[index] != b'.' {
+			return None;
+		}
+		index += 1;
+		if index == bytes.len() {
+			return None;
+		}
+	}
+	final_segment
+}
+
+fn identifier_final_segment_is(identifier: &str, expected: &str) -> bool {
+	identifier_final_segment(identifier).is_some_and(|(segment, quoted)| {
+		if quoted {
+			segment == expected
+		} else {
+			segment.eq_ignore_ascii_case(expected)
+		}
+	})
+}
+
+fn missing_vector_type(message: &str) -> bool {
+	let message = postgres_primary_message(message);
+	strip_ascii_case_prefix(message, "type ")
+		.and_then(|identifier| strip_ascii_case_suffix(identifier, " does not exist"))
+		.is_some_and(|identifier| identifier_final_segment_is(identifier, "vector"))
+}
+
+fn missing_vector_access_method(message: &str) -> bool {
+	let message = postgres_primary_message(message);
+	strip_ascii_case_prefix(message, "access method ")
+		.and_then(|identifier| strip_ascii_case_suffix(identifier, " does not exist"))
+		.is_some_and(|identifier| {
+			identifier_final_segment_is(identifier, "hnsw")
+				|| identifier_final_segment_is(identifier, "ivfflat")
+		})
+}
+
+fn missing_vector_operator_class(message: &str) -> bool {
+	let message = postgres_primary_message(message);
+	let Some(message) = strip_ascii_case_prefix(message, "operator class ") else {
+		return false;
+	};
+	let Some((operator_class, access_method)) =
+		split_once_ascii_case(message, " does not exist for access method ")
+	else {
+		return false;
+	};
+	["vector_l2_ops", "vector_ip_ops", "vector_cosine_ops"]
+		.iter()
+		.any(|expected| identifier_final_segment_is(operator_class, expected))
+		&& (identifier_final_segment_is(access_method, "hnsw")
+			|| identifier_final_segment_is(access_method, "ivfflat"))
+}
+
+fn missing_vector_distance_operator(message: &str) -> bool {
+	let message = postgres_primary_message(message);
+	let Some(signature) = strip_ascii_case_prefix(message, "operator does not exist: ") else {
+		return false;
+	};
+	let mut parts = signature.split_ascii_whitespace();
+	let (Some(left), Some(operator), Some(right), None) =
+		(parts.next(), parts.next(), parts.next(), parts.next())
+	else {
+		return false;
+	};
+	identifier_final_segment_is(left, "vector")
+		&& matches!(operator, "<->" | "<#>" | "<=>")
+		&& identifier_final_segment_is(right, "vector")
+}
+
 fn pgvector_hint_applies(
 	context: Option<PgvectorOperationKind>,
 	code: Option<&str>,
@@ -84,23 +229,14 @@ fn pgvector_hint_applies(
 		Some(POSTGRES_UNDEFINED_OBJECT) => {
 			((context.contains(PgvectorOperationKind::ColumnType)
 				|| context.contains(PgvectorOperationKind::VectorValue))
-				&& message.contains("type \"vector\" does not exist"))
+				&& missing_vector_type(message))
 				|| (context.contains(PgvectorOperationKind::ApproximateIndex)
-					&& (message.contains("access method \"hnsw\" does not exist")
-						|| message.contains("access method \"ivfflat\" does not exist")
-						|| (message.contains("operator class \"vector_")
-							&& message.contains("_ops\" does not exist"))))
+					&& (missing_vector_access_method(message)
+						|| missing_vector_operator_class(message)))
 		}
 		Some(POSTGRES_UNDEFINED_FUNCTION) => {
 			context.contains(PgvectorOperationKind::DistanceOperator)
-				&& message.contains("operator does not exist:")
-				&& [
-					"vector <-> vector",
-					"vector <#> vector",
-					"vector <=> vector",
-				]
-				.iter()
-				.any(|evidence| message.contains(evidence))
+				&& missing_vector_distance_operator(message)
 		}
 		_ => false,
 	}
@@ -184,6 +320,10 @@ fn map_sqlx_database_error(error: &(dyn sqlx::error::DatabaseError + 'static)) -
 	test
 ))]
 pub(crate) fn map_sqlx_error(error: sqlx::Error) -> DatabaseError {
+	map_sqlx_error_ref(&error)
+}
+
+fn map_sqlx_error_ref(error: &sqlx::Error) -> DatabaseError {
 	match error {
 		sqlx::Error::Database(error) => map_sqlx_database_error(error.as_ref()),
 		sqlx::Error::PoolTimedOut => {
@@ -250,21 +390,15 @@ pub(crate) fn map_sqlx_error_with_pgvector_context(
 		database_error.message(),
 	));
 
-	if !should_add_hint {
-		return map_sqlx_error(error).into();
-	}
-
-	let database_error = match &error {
-		sqlx::Error::Database(database_error) => map_sqlx_database_error(database_error.as_ref()),
-		_ => unreachable!("pgvector hints require a PostgreSQL database error"),
+	let mapped = reinhardt_core::exception::Error::DatabaseWithSource {
+		database_error: map_sqlx_error_ref(&error),
+		source: Box::new(error),
 	};
-	decorate_error_with_pgvector_context(
-		reinhardt_core::exception::Error::DatabaseWithSource {
-			database_error,
-			source: Box::new(error),
-		},
-		context,
-	)
+	if should_add_hint {
+		decorate_error_with_pgvector_context(mapped, context)
+	} else {
+		mapped
+	}
 }
 
 #[cfg(test)]
@@ -583,6 +717,10 @@ mod tests {
 			error.database_error().and_then(DatabaseError::code),
 			Some(code)
 		);
+		assert_eq!(
+			error.database_error().map(DatabaseError::kind),
+			Some(DatabaseErrorKind::Query)
+		);
 		assert!(!error.to_string().contains("CreateExtension::new"));
 	}
 
@@ -625,6 +763,105 @@ mod tests {
 			error.database_error().and_then(DatabaseError::code),
 			Some(code)
 		);
+		assert_eq!(
+			error.database_error().map(DatabaseError::kind),
+			Some(DatabaseErrorKind::Query)
+		);
 		assert!(!error.to_string().contains("CreateExtension::new"));
+	}
+
+	#[rstest]
+	#[case(
+		PgvectorOperationKind::ColumnType,
+		"42704",
+		"ERROR: type \"extensions\".\"vector\" does not exist"
+	)]
+	#[case(
+		PgvectorOperationKind::DistanceOperator,
+		"42883",
+		"operator does not exist: \"extensions\".\"vector\" <=> public.vector"
+	)]
+	#[case(
+		PgvectorOperationKind::ApproximateIndex,
+		"42704",
+		"operator class \"extensions\".\"vector_l2_ops\" does not exist for access method \"hnsw\""
+	)]
+	#[case(
+		PgvectorOperationKind::ApproximateIndex,
+		"42704",
+		"ERROR: access method \"ivfflat\" does not exist"
+	)]
+	fn pgvector_error_hint_accepts_qualified_canonical_postgres_evidence(
+		#[case] context: PgvectorOperationKind,
+		#[case] code: &'static str,
+		#[case] message: &'static str,
+	) {
+		let error = postgres_database_error(code, message);
+
+		let error = map_sqlx_error_with_pgvector_context(error, Some(context));
+
+		assert_eq!(
+			error.database_error().and_then(DatabaseError::code),
+			Some(code)
+		);
+		assert!(
+			error
+				.to_string()
+				.contains("CreateExtension::new(\"vector\")")
+		);
+		assert!(
+			error
+				.source()
+				.and_then(|source| source.downcast_ref::<sqlx::Error>())
+				.is_some()
+		);
+	}
+
+	#[rstest]
+	#[case(
+		PgvectorOperationKind::ApproximateIndex,
+		"operator class \"extensions\".\"vector_custom_ops\" does not exist for access method \"hnsw\""
+	)]
+	#[case(
+		PgvectorOperationKind::ColumnType,
+		"type \"vector\" does not exist while parsing documentation"
+	)]
+	#[case(
+		PgvectorOperationKind::ColumnType,
+		"type \"extensions.vector\" does not exist"
+	)]
+	#[case(
+		PgvectorOperationKind::DistanceOperator,
+		"operator does not exist: vector <=> vector in extension documentation"
+	)]
+	fn pgvector_error_hint_rejects_noncanonical_or_unapproved_identifiers(
+		#[case] context: PgvectorOperationKind,
+		#[case] message: &'static str,
+	) {
+		let code = if context.contains(PgvectorOperationKind::DistanceOperator) {
+			"42883"
+		} else {
+			"42704"
+		};
+		let error = postgres_database_error(code, message);
+
+		let error = map_sqlx_error_with_pgvector_context(error, Some(context));
+
+		assert_eq!(
+			error.database_error().and_then(DatabaseError::code),
+			Some(code)
+		);
+		assert_eq!(
+			error.database_error().map(DatabaseError::kind),
+			Some(DatabaseErrorKind::Query)
+		);
+		assert!(!error.to_string().contains("CreateExtension::new"));
+		assert!(
+			error
+				.source()
+				.and_then(|source| source.downcast_ref::<sqlx::Error>())
+				.is_some(),
+			"an undecorated contextual mapping must retain its original SQLx source"
+		);
 	}
 }

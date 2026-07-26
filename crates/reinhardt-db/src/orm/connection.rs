@@ -193,7 +193,7 @@ pub trait OrmExecutor: Send {
 		context: Option<crate::backends::error::PgvectorOperationKind>,
 	) -> Result<QueryResult> {
 		let result = self.execute(sql, params).await;
-		if self.supports_pgvector_error_hints() {
+		if self.backend() == DatabaseBackend::Postgres && self.supports_pgvector_error_hints() {
 			result.map_err(|error| {
 				crate::backends::error::decorate_error_with_pgvector_context(error, context)
 			})
@@ -213,7 +213,7 @@ pub trait OrmExecutor: Send {
 		context: Option<crate::backends::error::PgvectorOperationKind>,
 	) -> Result<Row> {
 		let result = self.fetch_one(sql, params).await;
-		if self.supports_pgvector_error_hints() {
+		if self.backend() == DatabaseBackend::Postgres && self.supports_pgvector_error_hints() {
 			result.map_err(|error| {
 				crate::backends::error::decorate_error_with_pgvector_context(error, context)
 			})
@@ -233,7 +233,7 @@ pub trait OrmExecutor: Send {
 		context: Option<crate::backends::error::PgvectorOperationKind>,
 	) -> Result<Vec<Row>> {
 		let result = self.fetch_all(sql, params).await;
-		if self.supports_pgvector_error_hints() {
+		if self.backend() == DatabaseBackend::Postgres && self.supports_pgvector_error_hints() {
 			result.map_err(|error| {
 				crate::backends::error::decorate_error_with_pgvector_context(error, context)
 			})
@@ -253,7 +253,7 @@ pub trait OrmExecutor: Send {
 		context: Option<crate::backends::error::PgvectorOperationKind>,
 	) -> Result<Option<Row>> {
 		let result = self.fetch_optional(sql, params).await;
-		if self.supports_pgvector_error_hints() {
+		if self.backend() == DatabaseBackend::Postgres && self.supports_pgvector_error_hints() {
 			result.map_err(|error| {
 				crate::backends::error::decorate_error_with_pgvector_context(error, context)
 			})
@@ -402,7 +402,14 @@ impl DatabaseConnection {
 #[async_trait]
 impl OrmExecutor for DatabaseConnection {
 	fn backend(&self) -> DatabaseBackend {
-		DatabaseConnection::backend(self)
+		self.resolve()
+			.map(|owner| DatabaseBackend::from(owner.database_type()))
+			.unwrap_or_else(|_| DatabaseConnection::backend(self))
+	}
+
+	fn supports_pgvector_error_hints(&self) -> bool {
+		self.resolve()
+			.is_ok_and(|owner| owner.supports_pgvector_error_hints())
 	}
 
 	async fn execute(&mut self, sql: &str, params: Vec<QueryValue>) -> Result<QueryResult> {
@@ -554,6 +561,10 @@ mod tests {
 			DatabaseType::Sqlite
 		}
 
+		fn supports_pgvector_error_hints(&self) -> bool {
+			true
+		}
+
 		fn placeholder(&self, index: usize) -> String {
 			format!("${index}")
 		}
@@ -611,6 +622,15 @@ mod tests {
 		let connection = lease.handle();
 		consume_connection(connection);
 		consume_connection(connection);
+	}
+
+	#[test]
+	fn database_connection_reports_inner_backend_and_pgvector_capability() {
+		let lease = DatabaseConnectionLease::register(mock_backends_connection()).unwrap();
+		let connection = lease.handle();
+
+		assert_eq!(OrmExecutor::backend(&connection), DatabaseBackend::Sqlite);
+		assert!(OrmExecutor::supports_pgvector_error_hints(&connection));
 	}
 
 	#[test]

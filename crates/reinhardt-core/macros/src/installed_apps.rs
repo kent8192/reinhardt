@@ -7,7 +7,7 @@
 //! The `installed_apps!` macro generates:
 //! - An `InstalledApp` enum with variants for each registered application
 //! - Trait implementations: `Display`, `FromStr`, `Debug`, `Clone`, `Copy`, `PartialEq`, `Eq`, `Hash`
-//! - Helper methods: `all_apps()`, `path()`
+//! - Helper methods: `all_apps()`, `all_labels()`, `path()`
 //! - Compile-time validation for framework modules (`reinhardt.*`)
 //!
 //! **Important**: This macro is for **user applications only**. Built-in framework features
@@ -142,6 +142,16 @@
 //!     }
 //! }
 //! ```
+//!
+//! #### `all_labels() -> &'static [&'static str]`
+//!
+//! Returns the declaration labels as a static slice, preserving their declaration order:
+//!
+//! ```rust,ignore
+//! assert_eq!(InstalledApp::all_labels(), &["users", "posts"]);
+//! ```
+//!
+//! `all_labels()` returns declaration labels, while `all_apps()` returns configured app paths.
 //!
 //! #### `path(&self) -> &'static str`
 //!
@@ -433,7 +443,8 @@ impl Parse for InstalledApps {
 /// 3. **Implements** Display trait (enum → path string conversion)
 /// 4. **Implements** FromStr trait (path string → enum parsing)
 /// 5. **Generates** helper methods:
-///    - `all_apps() -> Vec<String>`: List all app paths
+///    - `all_apps() -> Vec<String>`: List all configured app paths
+///    - `all_labels() -> &'static [&'static str]`: List declaration labels
 ///    - `path(&self) -> &'static str`: Get path for a specific app
 /// 6. **Creates** compile-time validation for `reinhardt.*` apps
 ///
@@ -461,6 +472,7 @@ impl Parse for InstalledApps {
 /// impl std::str::FromStr for InstalledApp { /* ... */ }
 /// impl InstalledApp {
 ///     pub fn all_apps() -> Vec<String> { /* ... */ }
+///     pub const fn all_labels() -> &'static [&'static str] { /* ... */ }
 ///     pub fn path(&self) -> &'static str { /* ... */ }
 /// }
 ///
@@ -521,6 +533,11 @@ pub(crate) fn installed_apps_impl(input: TokenStream) -> Result<TokenStream> {
 				/// Returns a vector containing the string representations of all installed applications.
 				pub fn all_apps() -> Vec<String> {
 					vec![]
+				}
+
+				/// Get all installed app declaration labels without allocating.
+				pub const fn all_labels() -> &'static [&'static str] {
+					&[]
 				}
 
 				/// Get the path for this app
@@ -655,6 +672,11 @@ pub(crate) fn installed_apps_impl(input: TokenStream) -> Result<TokenStream> {
 				vec![
 					#(#app_list),*
 				]
+			}
+
+			/// Get all installed app declaration labels without allocating.
+			pub const fn all_labels() -> &'static [&'static str] {
+				&[#(stringify!(#labels)),*]
 			}
 			/// Get the path for this app
 			///

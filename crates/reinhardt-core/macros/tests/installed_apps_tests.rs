@@ -40,6 +40,14 @@ fn test_installed_apps_basic() {
 }
 
 #[test]
+fn all_labels_returns_declared_labels() {
+	assert_eq!(
+		InstalledApp::all_labels(),
+		&["auth", "sessions", "contenttypes", "myapp", "another"]
+	);
+}
+
+#[test]
 fn test_installed_apps_enum() {
 	assert_eq!(InstalledApp::auth.path(), "myproject.auth");
 	assert_eq!(InstalledApp::sessions.path(), "myproject.sessions");

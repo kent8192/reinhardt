@@ -22,3 +22,8 @@ fn test_installed_apps_empty() {
 	assert!(from_str_result.is_err());
 	assert_eq!(from_str_result.unwrap_err(), "Unknown app: anything");
 }
+
+#[test]
+fn all_labels_is_empty_when_no_apps_are_installed() {
+	assert_eq!(InstalledApp::all_labels(), &[] as &[&str]);
+}

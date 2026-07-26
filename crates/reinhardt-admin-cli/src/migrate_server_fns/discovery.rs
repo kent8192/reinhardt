@@ -192,11 +192,13 @@ impl Scanner {
 					}
 				}
 				Item::Fn(function)
-					if has_unknown_qualified_server_fn_attribute(
-						&function.attrs,
-						&attribute_aliases,
-					) =>
+					if has_unknown_server_fn_attribute(&function.attrs, &attribute_aliases) =>
 				{
+					self.record_incomplete_server_fn_coverage(target, module);
+				}
+				Item::Mod(item_mod) if is_conditionally_compiled(&item_mod.attrs) => {
+					// A conditionally compiled module can contribute server functions in a
+					// configuration the migration cannot inspect.
 					self.record_incomplete_server_fn_coverage(target, module);
 				}
 				Item::Mod(item_mod) if !is_conditionally_compiled(&item_mod.attrs) => {
@@ -318,18 +320,21 @@ fn is_app_config(attributes: &[Attribute], aliases: &BTreeMap<String, String>) -
 		.any(|attribute| is_reinhardt_attribute(attribute, "app_config", aliases))
 }
 
-fn has_unknown_qualified_server_fn_attribute(
+fn has_unknown_server_fn_attribute(
 	attributes: &[Attribute],
 	aliases: &BTreeMap<String, String>,
 ) -> bool {
 	attributes.iter().any(|attribute| {
-		attribute.path().segments.len() > 1
-			&& attribute
-				.path()
-				.segments
-				.last()
-				.is_some_and(|segment| segment.ident == "server_fn")
-			&& !is_reinhardt_attribute(attribute, "server_fn", aliases)
+		let segments = &attribute.path().segments;
+		let Some(last) = segments.last() else {
+			return false;
+		};
+		if segments.len() == 1 {
+			return aliases
+				.get(&last.ident.to_string())
+				.is_some_and(|source| source == "__reinhardt_unknown_server_fn__");
+		}
+		last.ident == "server_fn" && !is_reinhardt_attribute(attribute, "server_fn", aliases)
 	})
 }
 
@@ -381,13 +386,12 @@ fn collect_reinhardt_attribute_aliases(
 		}
 		UseTree::Name(name) => {
 			prefix.push(name.ident.to_string());
+			record_attribute_alias(prefix, &name.ident.to_string(), aliases);
 			prefix.pop();
 		}
 		UseTree::Rename(rename) => {
 			prefix.push(rename.ident.to_string());
-			if let Some(attribute) = reinhardt_attribute_from_path(prefix) {
-				aliases.insert(rename.rename.to_string(), attribute.to_owned());
-			}
+			record_attribute_alias(prefix, &rename.rename.to_string(), aliases);
 			prefix.pop();
 		}
 		UseTree::Group(group) => {
@@ -396,6 +400,17 @@ fn collect_reinhardt_attribute_aliases(
 			}
 		}
 		UseTree::Glob(_) => {}
+	}
+}
+
+fn record_attribute_alias(path: &[String], binding: &str, aliases: &mut BTreeMap<String, String>) {
+	if let Some(attribute) = reinhardt_attribute_from_path(path) {
+		aliases.insert(binding.to_owned(), attribute.to_owned());
+	} else if path.last().is_some_and(|segment| segment == "server_fn") {
+		aliases.insert(
+			binding.to_owned(),
+			"__reinhardt_unknown_server_fn__".to_owned(),
+		);
 	}
 }
 

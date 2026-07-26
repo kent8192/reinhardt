@@ -5,6 +5,7 @@ mod rewriter;
 
 use std::collections::BTreeMap;
 use std::fs;
+use std::io::Write;
 use std::path::{Path, PathBuf};
 
 use clap::Args;
@@ -147,8 +148,26 @@ fn read_source(path: &Path) -> Result<String> {
 }
 
 fn write_source(path: &Path, source: &str) -> Result<()> {
-	fs::write(path, source).map_err(|source| MigrateServerFnsError::Io {
+	let parent = path.parent().ok_or_else(|| MigrateServerFnsError::Io {
 		path: path.to_path_buf(),
-		source,
-	})
+		source: std::io::Error::other("source path has no parent directory"),
+	})?;
+	let mut temporary =
+		tempfile::NamedTempFile::new_in(parent).map_err(|source| MigrateServerFnsError::Io {
+			path: path.to_path_buf(),
+			source,
+		})?;
+	temporary
+		.write_all(source.as_bytes())
+		.map_err(|source| MigrateServerFnsError::Io {
+			path: path.to_path_buf(),
+			source,
+		})?;
+	temporary
+		.persist(path)
+		.map_err(|source| MigrateServerFnsError::Io {
+			path: path.to_path_buf(),
+			source: source.error,
+		})?;
+	Ok(())
 }

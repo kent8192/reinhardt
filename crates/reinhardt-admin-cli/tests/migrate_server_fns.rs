@@ -225,10 +225,6 @@ pub fn server_url_patterns() -> ServerRouter {
 
 	assert_success(&output);
 	assert_eq!(
-		stdout(&output),
-		"rewrote: src/apps/polls/urls/server_router.rs\n"
-	);
-	assert_eq!(
 		fs::read_to_string(router).expect("read rewritten router"),
 		r#"use reinhardt::pages::server_fn::ServerFnRouterExt;
 use reinhardt::server_fn;
@@ -239,7 +235,7 @@ async fn local_status() {}
 
 pub fn server_url_patterns() -> ServerRouter {
 	ServerRouter::new()
-		.auto_server_fns_in_crate(module_path!(), concat!(env!("CARGO_MANIFEST_DIR"), "@", env!("CARGO_PKG_NAME"), "@", env!("CARGO_PKG_VERSION")), option_env!("CARGO_BIN_NAME"))
+		.auto_server_fns_in_crate(module_path!(), concat!(env!("CARGO_MANIFEST_DIR"), "@", env!("CARGO_PKG_NAME"), "@", env!("CARGO_PKG_VERSION")), Some(env!("CARGO_CRATE_NAME")))
 }
 "#
 	);
@@ -376,7 +372,7 @@ async fn ready() {}
 pub fn server_url_patterns() {
 	router()
 		.server_fn(ready::marker)
-		.auto_server_fns_in_crate(module_path!(), concat!(env!("CARGO_MANIFEST_DIR"), "@", env!("CARGO_PKG_NAME"), "@", env!("CARGO_PKG_VERSION")), option_env!("CARGO_BIN_NAME"))
+		.auto_server_fns_in_crate(module_path!(), concat!(env!("CARGO_MANIFEST_DIR"), "@", env!("CARGO_PKG_NAME"), "@", env!("CARGO_PKG_VERSION")), Some(env!("CARGO_CRATE_NAME")))
 }
 "#,
 		)],
@@ -426,6 +422,10 @@ pub fn server_url_patterns() -> ServerRouter {
 
 	assert_success(&output);
 	assert_eq!(
+		stdout(&output),
+		"rewrote: src/apps/polls/urls/server_router.rs\n"
+	);
+	assert_eq!(
 		fs::read_to_string(router).expect("read rewritten router"),
 		r#"use crate::apps::polls::server_fn::get_questions;
 pub use self::get_questions::marker as QuestionsMarker;
@@ -434,7 +434,7 @@ use reinhardt::ServerRouter;
 
 pub fn server_url_patterns() -> ServerRouter {
 	ServerRouter::new()
-		.auto_server_fns_in_crate(module_path!(), concat!(env!("CARGO_MANIFEST_DIR"), "@", env!("CARGO_PKG_NAME"), "@", env!("CARGO_PKG_VERSION")), option_env!("CARGO_BIN_NAME"))
+		.auto_server_fns_in_crate(module_path!(), concat!(env!("CARGO_MANIFEST_DIR"), "@", env!("CARGO_PKG_NAME"), "@", env!("CARGO_PKG_VERSION")), Some(env!("CARGO_CRATE_NAME")))
 }
 "#
 	);
@@ -655,7 +655,7 @@ macro_rules! keep_marker {
 pub fn server_url_patterns() -> ServerRouter {
 	keep_marker!(vote::marker);
 	ServerRouter::new()
-		.auto_server_fns_in_crate(module_path!(), concat!(env!("CARGO_MANIFEST_DIR"), "@", env!("CARGO_PKG_NAME"), "@", env!("CARGO_PKG_VERSION")), option_env!("CARGO_BIN_NAME"))
+		.auto_server_fns_in_crate(module_path!(), concat!(env!("CARGO_MANIFEST_DIR"), "@", env!("CARGO_PKG_NAME"), "@", env!("CARGO_PKG_VERSION")), Some(env!("CARGO_CRATE_NAME")))
 }
 "#
 	);
@@ -705,7 +705,7 @@ fn retained_attribute() {}
 
 pub fn server_url_patterns() -> ServerRouter {
 	ServerRouter::new()
-		.auto_server_fns_in_crate(module_path!(), concat!(env!("CARGO_MANIFEST_DIR"), "@", env!("CARGO_PKG_NAME"), "@", env!("CARGO_PKG_VERSION")), option_env!("CARGO_BIN_NAME"))
+		.auto_server_fns_in_crate(module_path!(), concat!(env!("CARGO_MANIFEST_DIR"), "@", env!("CARGO_PKG_NAME"), "@", env!("CARGO_PKG_VERSION")), Some(env!("CARGO_CRATE_NAME")))
 }
 "#
 	);
@@ -748,7 +748,7 @@ use reinhardt::ServerRouter;
 
 pub fn server_url_patterns() -> ServerRouter {
 	ServerRouter::new()
-		.auto_server_fns_in_crate(module_path!(), concat!(env!("CARGO_MANIFEST_DIR"), "@", env!("CARGO_PKG_NAME"), "@", env!("CARGO_PKG_VERSION")), option_env!("CARGO_BIN_NAME"))
+		.auto_server_fns_in_crate(module_path!(), concat!(env!("CARGO_MANIFEST_DIR"), "@", env!("CARGO_PKG_NAME"), "@", env!("CARGO_PKG_VERSION")), Some(env!("CARGO_CRATE_NAME")))
 }
 "#
 	);
@@ -928,7 +928,7 @@ mod child;
 
 pub fn server_url_patterns() -> ServerRouter {
 	router()
-		.auto_server_fns_in_crate(module_path!(), concat!(env!("CARGO_MANIFEST_DIR"), "@", env!("CARGO_PKG_NAME"), "@", env!("CARGO_PKG_VERSION")), option_env!("CARGO_BIN_NAME"))
+		.auto_server_fns_in_crate(module_path!(), concat!(env!("CARGO_MANIFEST_DIR"), "@", env!("CARGO_PKG_NAME"), "@", env!("CARGO_PKG_VERSION")), Some(env!("CARGO_CRATE_NAME")))
 }
 "#
 	);
@@ -984,7 +984,7 @@ mod support;
 
 pub fn server_url_patterns() -> ServerRouter {
 	router()
-		.auto_server_fns_in_crate(module_path!(), concat!(env!("CARGO_MANIFEST_DIR"), "@", env!("CARGO_PKG_NAME"), "@", env!("CARGO_PKG_VERSION")), option_env!("CARGO_BIN_NAME"))
+		.auto_server_fns_in_crate(module_path!(), concat!(env!("CARGO_MANIFEST_DIR"), "@", env!("CARGO_PKG_NAME"), "@", env!("CARGO_PKG_VERSION")), Some(env!("CARGO_CRATE_NAME")))
 }
 "#
 	);
@@ -1130,6 +1130,128 @@ pub fn server_url_patterns() {
 	assert!(
 		stdout(&output).starts_with("skipped mixed registration: src/lib.rs:"),
 		"unknown qualified server_fn paths must keep migration coverage incomplete: {}",
+		stdout(&output)
+	);
+	assert_eq!(fs::read(source).expect("read skipped source"), before);
+}
+
+#[test]
+fn cfg_gated_module_skips_the_migration() {
+	let fixture = prepare_project(
+		"cfg_gated_module",
+		"[lib]\npath = \"src/lib.rs\"\n",
+		&[(
+			"src/lib.rs",
+			r#"use reinhardt::{app_config, server_fn};
+
+#[app_config(name = "root", label = "root")]
+pub struct RootConfig;
+
+#[server_fn]
+pub async fn status() {}
+
+#[cfg(feature = "extra")]
+mod extra {
+	#[server_fn]
+	pub async fn deferred() {}
+}
+
+pub fn server_url_patterns() {
+	router()
+		.server_fn(status::marker)
+}
+"#,
+		)],
+	);
+	let source = fixture.path().join("src/lib.rs");
+	let before = fs::read(&source).expect("read cfg-gated module source");
+
+	let output = run_migrate(fixture.path(), true);
+
+	assert_success(&output);
+	assert!(
+		stdout(&output).starts_with("skipped mixed registration: src/lib.rs:"),
+		"conditionally compiled modules must make coverage incomplete: {}",
+		stdout(&output)
+	);
+	assert_eq!(fs::read(source).expect("read skipped source"), before);
+}
+
+#[test]
+fn renamed_dependency_server_function_alias_skips_the_migration() {
+	let fixture = prepare_project(
+		"renamed_server_fn_alias",
+		"[lib]\npath = \"src/lib.rs\"\n",
+		&[(
+			"src/lib.rs",
+			r#"use reinhardt::{app_config, server_fn};
+use rh::pages::server_fn as sf;
+
+#[app_config(name = "root", label = "root")]
+pub struct RootConfig;
+
+#[server_fn]
+pub async fn status() {}
+
+#[sf]
+pub async fn hidden() {}
+
+pub fn server_url_patterns() {
+	router()
+		.server_fn(status::marker)
+}
+"#,
+		)],
+	);
+	let source = fixture.path().join("src/lib.rs");
+	let before = fs::read(&source).expect("read renamed alias source");
+
+	let output = run_migrate(fixture.path(), true);
+
+	assert_success(&output);
+	assert!(
+		stdout(&output).starts_with("skipped mixed registration: src/lib.rs:"),
+		"unresolved server_fn aliases must make coverage incomplete: {}",
+		stdout(&output)
+	);
+	assert_eq!(fs::read(source).expect("read skipped source"), before);
+}
+
+#[test]
+fn foreign_unqualified_server_function_attribute_skips_the_migration() {
+	let fixture = prepare_project(
+		"foreign_server_fn",
+		"[lib]\npath = \"src/lib.rs\"\n",
+		&[(
+			"src/lib.rs",
+			r#"use other_framework::server_fn;
+use reinhardt::{app_config, server_fn as reinhardt_server_fn};
+
+#[app_config(name = "root", label = "root")]
+pub struct RootConfig;
+
+#[reinhardt_server_fn]
+pub async fn status() {}
+
+#[server_fn]
+pub async fn foreign() {}
+
+pub fn server_url_patterns() {
+	router()
+		.server_fn(status::marker)
+}
+"#,
+		)],
+	);
+	let source = fixture.path().join("src/lib.rs");
+	let before = fs::read(&source).expect("read foreign server_fn source");
+
+	let output = run_migrate(fixture.path(), true);
+
+	assert_success(&output);
+	assert!(
+		stdout(&output).starts_with("skipped mixed registration: src/lib.rs:"),
+		"foreign server_fn attributes must make coverage incomplete: {}",
 		stdout(&output)
 	);
 	assert_eq!(fs::read(source).expect("read skipped source"), before);
@@ -1329,16 +1451,20 @@ fn write_io_failure_exits_nonzero() {
 
 	let fixture = prepare_fixture("safe");
 	let router = router_path(fixture.path());
-	let permissions = fs::metadata(&router)
-		.expect("read router metadata")
+	let directory = router
+		.parent()
+		.expect("router should have a parent directory")
+		.to_path_buf();
+	let permissions = fs::metadata(&directory)
+		.expect("read router directory metadata")
 		.permissions();
 	let _restore = RestorePermissions {
-		path: router.clone(),
+		path: directory.clone(),
 		permissions: permissions.clone(),
 	};
 	let mut read_only = permissions;
-	read_only.set_mode(0o444);
-	fs::set_permissions(&router, read_only).expect("make router read-only");
+	read_only.set_mode(0o555);
+	fs::set_permissions(&directory, read_only).expect("make router directory read-only");
 
 	let output = run_migrate(fixture.path(), true);
 

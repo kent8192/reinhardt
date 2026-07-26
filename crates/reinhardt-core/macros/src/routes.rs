@@ -85,16 +85,7 @@ fn detect_extractors(inputs: &Punctuated<FnArg, Token![,]>) -> Vec<ExtractorInfo
 				&& let Some(segment) = type_path.path.segments.last()
 			{
 				let type_name = segment.ident.to_string();
-				if matches!(
-					type_name.as_str(),
-					"Path"
-						| "Json" | "Query" | "Header"
-						| "Cookie" | "Form"
-						| "Body" | "HeaderNamed"
-						| "CookieNamed" | "CookieStruct"
-						| "SessionValue" | "OptionalSessionValue"
-						| "SessionValueNamed"
-				) {
+				if is_supported_extractor_type_name(&type_name) {
 					extractors.push(ExtractorInfo {
 						pat: pat_type.pat.clone(),
 						ty: pat_type.ty.clone(),
@@ -106,6 +97,27 @@ fn detect_extractors(inputs: &Punctuated<FnArg, Token![,]>) -> Vec<ExtractorInfo
 	}
 
 	extractors
+}
+
+fn is_supported_extractor_type_name(type_name: &str) -> bool {
+	matches!(
+		type_name,
+		"Path"
+			| "Json" | "Query"
+			| "Header"
+			| "HeaderStruct"
+			| "Cookie"
+			| "Form" | "Body"
+			| "Multipart"
+			| "HeaderNamed"
+			| "CookieNamed"
+			| "CookieStruct"
+			| "SessionValue"
+			| "OptionalSessionValue"
+			| "SessionValueNamed"
+			| "PathStruct"
+			| "Validated"
+	)
 }
 
 /// Check whether a type is a raw HTTP `Request`.
@@ -136,20 +148,7 @@ fn is_raw_request_parameter(pat_type: &syn::PatType) -> bool {
 	let Some(segment) = type_path.path.segments.last() else {
 		return true;
 	};
-	!matches!(
-		segment.ident.to_string().as_str(),
-		"Path"
-			| "Json" | "Query"
-			| "Header"
-			| "Cookie"
-			| "Form" | "Body"
-			| "HeaderNamed"
-			| "CookieNamed"
-			| "CookieStruct"
-			| "SessionValue"
-			| "OptionalSessionValue"
-			| "SessionValueNamed"
-	)
+	!is_supported_extractor_type_name(&segment.ident.to_string())
 }
 
 /// Extract request body information from function parameters
@@ -1433,6 +1432,28 @@ mod url_resolver_tests {
 	}
 
 	#[test]
+	fn detect_extractors_includes_supported_structured_extractors() {
+		use syn::parse_quote;
+
+		let inputs: syn::punctuated::Punctuated<FnArg, Token![,]> = parse_quote! {
+			Validated(value): Validated<Payload>,
+			PathStruct(path): PathStruct<PathData>,
+			HeaderStruct(headers): HeaderStruct<HeaderData>,
+			multipart: Multipart
+		};
+
+		let names: Vec<_> = detect_extractors(&inputs)
+			.iter()
+			.map(|extractor| extractor.extractor_name.as_str())
+			.collect();
+
+		assert_eq!(
+			names,
+			vec!["Validated", "PathStruct", "HeaderStruct", "Multipart"]
+		);
+	}
+
+	#[test]
 	fn route_call_passes_raw_request_with_extractors_in_original_order() {
 		let input: ItemFn = syn::parse_quote! {
 			async fn handler(request: reinhardt_http::Request, Path(req): Path<String>, Json(body): Json<Payload>) -> String { String::new() }
@@ -1447,7 +1468,7 @@ mod url_resolver_tests {
 		);
 		let generated = wrapper.to_string();
 		assert!(
-			generated.contains("handler_original (__reinhardt_request , Path (id) , Json (body))"),
+			generated.contains("handler_original (__reinhardt_request , Path (req) , Json (body))"),
 			"{generated}"
 		);
 	}

@@ -20,6 +20,187 @@ struct ModelDateTimeField {
 	kind: ModelDateTimeKind,
 }
 
+struct ModelIntegerField {
+	inner: IntegerField,
+}
+
+impl ModelIntegerField {
+	fn new(name: String, required: bool, min: Option<i64>, max: Option<i64>) -> Self {
+		let mut inner = IntegerField::new(name);
+		inner.required = required;
+		inner.min_value = min;
+		inner.max_value = max;
+		Self { inner }
+	}
+
+	fn clean_unsigned(&self, value: &serde_json::Value) -> FieldResult<serde_json::Value> {
+		let number = match value {
+			serde_json::Value::Number(number) => number.as_u64(),
+			serde_json::Value::String(raw) => raw.trim().parse::<u64>().ok(),
+			_ => None,
+		};
+		let Some(number) = number else {
+			return self.inner.clean(Some(value));
+		};
+
+		if let Some(max) = self.inner.max_value
+			&& (max < 0 || number > max as u64)
+		{
+			return Err(FieldError::Validation(format!(
+				"Ensure this value is less than or equal to {}",
+				max
+			)));
+		}
+
+		Ok(serde_json::Value::Number(number.into()))
+	}
+}
+
+impl FormField for ModelIntegerField {
+	fn name(&self) -> &str {
+		self.inner.name()
+	}
+
+	fn label(&self) -> Option<&str> {
+		self.inner.label()
+	}
+
+	fn required(&self) -> bool {
+		self.inner.required
+	}
+
+	fn help_text(&self) -> Option<&str> {
+		self.inner.help_text()
+	}
+
+	fn widget(&self) -> &Widget {
+		self.inner.widget()
+	}
+
+	fn initial(&self) -> Option<&serde_json::Value> {
+		self.inner.initial()
+	}
+
+	fn clean(&self, value: Option<&serde_json::Value>) -> FieldResult<serde_json::Value> {
+		match value {
+			Some(value) if value.as_i64().is_none() => self.clean_unsigned(value),
+			_ => self.inner.clean(value),
+		}
+	}
+}
+
+struct ModelDecimalField {
+	inner: DecimalField,
+}
+
+impl ModelDecimalField {
+	fn new(name: String, required: bool) -> Self {
+		let mut inner = DecimalField::new(name);
+		inner.required = required;
+		Self { inner }
+	}
+}
+
+impl FormField for ModelDecimalField {
+	fn name(&self) -> &str {
+		self.inner.name()
+	}
+
+	fn label(&self) -> Option<&str> {
+		self.inner.label()
+	}
+
+	fn required(&self) -> bool {
+		self.inner.required
+	}
+
+	fn help_text(&self) -> Option<&str> {
+		self.inner.help_text.as_deref()
+	}
+
+	fn widget(&self) -> &Widget {
+		self.inner.widget()
+	}
+
+	fn initial(&self) -> Option<&serde_json::Value> {
+		self.inner.initial.as_ref()
+	}
+
+	fn clean(&self, value: Option<&serde_json::Value>) -> FieldResult<serde_json::Value> {
+		let cleaned = self.inner.clean(value)?;
+		let Some(value) = value else {
+			return Ok(cleaned);
+		};
+
+		match value {
+			serde_json::Value::String(raw) if !raw.trim().is_empty() => {
+				Ok(serde_json::Value::String(raw.trim().to_owned()))
+			}
+			serde_json::Value::Number(number) => Ok(serde_json::Value::String(number.to_string())),
+			_ => Ok(cleaned),
+		}
+	}
+}
+
+struct ModelJsonField {
+	inner: JSONField,
+}
+
+impl ModelJsonField {
+	fn new(name: String, required: bool) -> Self {
+		Self {
+			inner: JSONField::new(name).required(required),
+		}
+	}
+}
+
+impl FormField for ModelJsonField {
+	fn name(&self) -> &str {
+		self.inner.name()
+	}
+
+	fn label(&self) -> Option<&str> {
+		self.inner.label()
+	}
+
+	fn required(&self) -> bool {
+		self.inner.required
+	}
+
+	fn help_text(&self) -> Option<&str> {
+		if self.inner.help_text.is_empty() {
+			None
+		} else {
+			Some(&self.inner.help_text)
+		}
+	}
+
+	fn widget(&self) -> &Widget {
+		self.inner.widget()
+	}
+
+	fn initial(&self) -> Option<&serde_json::Value> {
+		self.inner.initial.as_ref()
+	}
+
+	fn clean(&self, value: Option<&serde_json::Value>) -> FieldResult<serde_json::Value> {
+		match value {
+			Some(
+				value @ (serde_json::Value::Array(_)
+				| serde_json::Value::Object(_)
+				| serde_json::Value::Bool(_)
+				| serde_json::Value::Number(_)),
+			) => {
+				let serialized = serde_json::to_string(value)
+					.map_err(|error| FieldError::Validation(error.to_string()))?;
+				self.inner
+					.clean(Some(&serde_json::Value::String(serialized)))
+			}
+			_ => self.inner.clean(value),
+		}
+	}
+}
+
 impl ModelDateTimeField {
 	fn new(name: String, required: bool, kind: ModelDateTimeKind) -> Self {
 		let mut inner = DateTimeField::new(name);
@@ -132,22 +313,14 @@ pub(super) fn create_form_field(descriptor: &ModelFormFieldDescriptor) -> Box<dy
 			Box::new(field)
 		}
 		ModelFormFieldKind::Integer { min, max } => {
-			let mut field = IntegerField::new(name);
-			field.required = descriptor.required;
-			field.min_value = min;
-			field.max_value = max;
-			Box::new(field)
+			Box::new(ModelIntegerField::new(name, descriptor.required, min, max))
 		}
 		ModelFormFieldKind::Float => {
 			let mut field = FloatField::new(name);
 			field.required = descriptor.required;
 			Box::new(field)
 		}
-		ModelFormFieldKind::Decimal => {
-			let mut field = DecimalField::new(name);
-			field.required = descriptor.required;
-			Box::new(field)
-		}
+		ModelFormFieldKind::Decimal => Box::new(ModelDecimalField::new(name, descriptor.required)),
 		ModelFormFieldKind::Boolean => {
 			let mut field = BooleanField::new(name);
 			field.required = descriptor.required;
@@ -174,6 +347,6 @@ pub(super) fn create_form_field(descriptor: &ModelFormFieldDescriptor) -> Box<dy
 			ModelDateTimeKind::Naive,
 		)),
 		ModelFormFieldKind::Uuid => Box::new(UUIDField::new(name).required(descriptor.required)),
-		ModelFormFieldKind::Json => Box::new(JSONField::new(name).required(descriptor.required)),
+		ModelFormFieldKind::Json => Box::new(ModelJsonField::new(name, descriptor.required)),
 	}
 }

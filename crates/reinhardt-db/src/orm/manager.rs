@@ -243,7 +243,11 @@ pub async fn init_database_with_pool_size(
 	url: &str,
 	pool_size: Option<u32>,
 ) -> reinhardt_core::exception::Result<()> {
-	if DB.get().is_some() && initialized_database_state()?.is_some() {
+	if DB.get().is_some()
+		&& initialized_database_state()?
+			.as_ref()
+			.is_some_and(database_has_baseline)
+	{
 		return Ok(());
 	}
 
@@ -263,6 +267,21 @@ pub async fn init_database_with_pool_size(
 	}
 
 	Ok(())
+}
+
+fn database_has_baseline(database: &DefaultDatabase) -> bool {
+	match &database.scope {
+		None => true,
+		Some(scope) => scope_has_baseline(scope),
+	}
+}
+
+fn scope_has_baseline(scope: &ScopedRegistrationNode) -> bool {
+	match scoped_predecessor(scope) {
+		Some(ScopedRegistrationPredecessor::Scope(parent)) => scope_has_baseline(&parent),
+		Some(ScopedRegistrationPredecessor::Baseline(_)) => true,
+		None => false,
+	}
 }
 
 fn install_baseline_beneath_scopes(scope: &Arc<ScopedRegistrationNode>, database: DefaultDatabase) {
@@ -2988,6 +3007,29 @@ mod tests {
 
 		result.expect("repeated initialization should not reconnect");
 		assert_eq!(backend.unwrap(), DatabaseBackend::Sqlite);
+	}
+
+	#[serial_test::serial(sqlx_drivers)]
+	#[tokio::test]
+	async fn init_database_installs_a_baseline_beneath_an_existing_scope() {
+		let previous = super::replace_database_connection_for_testing(None).await;
+		let scope = super::install_scoped_database("sqlite::memory:")
+			.await
+			.expect("scope installation should succeed");
+
+		super::init_database("sqlite::memory:")
+			.await
+			.expect("initialization should install a baseline beneath the scope");
+		drop(scope);
+
+		let backend = super::get_connection()
+			.await
+			.expect("dropping the scope should restore the new baseline")
+			.backend();
+		let baseline = super::replace_database_connection_for_testing(previous).await;
+		drop(baseline);
+
+		assert_eq!(backend, DatabaseBackend::Sqlite);
 	}
 
 	#[derive(Debug, Clone, Serialize, Deserialize)]

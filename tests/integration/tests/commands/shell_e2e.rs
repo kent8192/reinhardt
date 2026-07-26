@@ -1401,6 +1401,7 @@ pub fn get_shell_config() -> ShellConfig {
 		InstalledApp::all_labels().iter().copied(),
 	)
 	.with_prelude(r#"let project_marker = "shell-e2e";"#)
+	.with_dependency_features(["commands-shell"])
 }
 "##,
 	);

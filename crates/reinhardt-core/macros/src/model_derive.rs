@@ -2238,6 +2238,7 @@ fn generate_model_form_support(
 		.contains(&field_name.as_str())
 			|| field_name.starts_with("__reinhardt_checkbox_")
 			|| field_name.starts_with("__reinhardt_color_")
+			|| field_name.starts_with("__reinhardt_range_")
 			|| field_name.starts_with("__reinhardt_defaulted_")
 			|| [
 				"empty",

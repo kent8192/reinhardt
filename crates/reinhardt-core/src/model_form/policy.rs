@@ -56,7 +56,8 @@ pub trait NativeModelFormPayload: Sized {
 /// Browser form submissions represent every successful control as text and
 /// omit unchecked checkboxes. The generated color-control marker also omits an
 /// untouched optional color control when the browser supplies its synthetic
-/// black fallback. This conversion is intentionally limited to schema fields
+/// black fallback. An untouched optional range control likewise omits its
+/// browser-generated minimum value. This conversion is intentionally limited to schema fields
 /// permitted by the selected policy; unrelated controls such as the CSRF token
 /// are removed before typed payload decoding.
 ///
@@ -86,6 +87,8 @@ where
 		let color_was_edited = values
 			.remove(&color_sentinel)
 			.map(|value| value == serde_json::Value::String("true".to_owned()));
+		let range_sentinel = format!("__reinhardt_range_{}", descriptor.name);
+		let range_default = values.remove(&range_sentinel);
 		let default_clear_sentinel = format!("__reinhardt_defaulted_{}", descriptor.name);
 		let had_defaulted_value = values.remove(&default_clear_sentinel).is_some();
 		let Some(control) = values.get_mut(descriptor.name) else {
@@ -100,6 +103,10 @@ where
 			continue;
 		};
 		if color_was_edited == Some(false) && text == "#000000" {
+			values.remove(descriptor.name);
+			continue;
+		}
+		if range_default.as_ref() == Some(&serde_json::Value::String(text.clone())) {
 			values.remove(descriptor.name);
 			continue;
 		}

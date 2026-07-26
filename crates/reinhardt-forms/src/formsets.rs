@@ -121,11 +121,6 @@ impl<P: FormModel, C: FormModel> InlineFormSet<P, C> {
 		P::PrimaryKey: Serialize,
 		P: ModelFormPrimaryKey,
 	{
-		if !self.is_valid() {
-			return Err(ModelFormError::ModelValidation {
-				errors: vec!["inline formset contains invalid child fields".to_string()],
-			});
-		}
 		if !C::Schema::fields()
 			.iter()
 			.any(|descriptor| descriptor.name == self.fk_field)
@@ -138,6 +133,8 @@ impl<P: FormModel, C: FormModel> InlineFormSet<P, C> {
 			});
 		}
 		self.validate_foreign_key_kind()?;
+		// A known parent key is trusted formset context, so child validators must
+		// observe it before validation rather than a deferred placeholder.
 		if let Some(parent_id) = self.parent.primary_key() {
 			let parent_id = serde_json::to_value(parent_id).map_err(|error| {
 				ModelFormError::FieldValidation {
@@ -150,6 +147,11 @@ impl<P: FormModel, C: FormModel> InlineFormSet<P, C> {
 			for child_form in &mut self.child_forms {
 				child_form.set_field_value(&self.fk_field, parent_id.clone())?;
 			}
+		}
+		if !self.is_valid() {
+			return Err(ModelFormError::ModelValidation {
+				errors: vec!["inline formset contains invalid child fields".to_string()],
+			});
 		}
 		FormModel::save_with_mode(&mut self.parent, executor, self.parent_persistence_mode).await?;
 		self.parent_persistence_mode = ModelFormPersistenceMode::Update;

@@ -2287,6 +2287,7 @@ fn generate_model_form(
 						let field_name = descriptor.name;
 						let checkbox_sentinel = format!("__reinhardt_checkbox_{field_name}");
 						let color_sentinel = format!("__reinhardt_color_{field_name}");
+						let range_sentinel = format!("__reinhardt_range_{field_name}");
 						let default_clear_sentinel = format!("__reinhardt_defaulted_{field_name}");
 						let control_id = format!("{}-{}", #form_id, field_name);
 						let range_default = if input_type == "range" {
@@ -2455,6 +2456,15 @@ fn generate_model_form(
 								.attr("name", color_sentinel)
 								.attr("value", if color_is_unset { "false" } else { "true" })
 						});
+						let range_sentinel = (input_type == "range"
+							&& !descriptor.required
+							&& stored_value.is_none())
+							.then(|| {
+								#pages_crate::PageElement::new("input")
+									.attr("type", "hidden")
+									.attr("name", range_sentinel)
+									.attr("value", range_default.clone().unwrap_or_default())
+							});
 						let default_clear_sentinel = (descriptor.nullable
 							&& descriptor.has_default
 							&& stored_value.is_some())
@@ -2469,6 +2479,7 @@ fn generate_model_form(
 							.attr("class", "reinhardt-form-field")
 							.children(checkbox_sentinel)
 							.children(color_sentinel)
+							.children(range_sentinel)
 							.children(default_clear_sentinel)
 							.child(
 								#pages_crate::PageElement::new("label")
@@ -7693,6 +7704,7 @@ mod tests {
 		assert!(output_str.contains("temporal-form"));
 		assert!(output_str.contains("__reinhardt_checkbox_"));
 		assert!(output_str.contains("__reinhardt_color_"));
+		assert!(output_str.contains("__reinhardt_range_"));
 		assert!(output_str.contains("let changed = previous != state . value (field) . cloned ()"));
 		assert!(output_str.contains("let _ = self . __state_version . get ()"));
 		assert!(output_str.contains("ModelFormPolicy"));

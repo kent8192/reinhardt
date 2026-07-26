@@ -35,7 +35,6 @@ struct RouteOptions {
 /// Information about parameter extractors
 #[derive(Clone)]
 struct ExtractorInfo {
-	pat: Box<Pat>,
 	ty: Box<Type>,
 	extractor_name: String,
 }
@@ -87,7 +86,6 @@ fn detect_extractors(inputs: &Punctuated<FnArg, Token![,]>) -> Vec<ExtractorInfo
 				let type_name = segment.ident.to_string();
 				if is_supported_extractor_type_name(&type_name) {
 					extractors.push(ExtractorInfo {
-						pat: pat_type.pat.clone(),
 						ty: pat_type.ty.clone(),
 						extractor_name: type_name,
 					});
@@ -541,11 +539,11 @@ fn generate_wrapper_with_both(
 		// status mappings (e.g. `Authentication` -> 401) reach the response. #4446
 		let calls: Vec<_> = extractors
 			.iter()
-			.map(|ext| {
-				let pat = &ext.pat;
+			.zip(extractor_temps.iter())
+			.map(|(ext, temp)| {
 				let ty = &ext.ty;
 				quote! {
-					let #pat = <#ty as #params_crate::FromRequest>::from_request(
+					let #temp = <#ty as #params_crate::FromRequest>::from_request(
 						&#request_binding,
 						&ctx,
 					)

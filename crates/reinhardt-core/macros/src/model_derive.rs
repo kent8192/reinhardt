@@ -2460,7 +2460,7 @@ fn generate_model_form_support(
 					!nullable && field.config.blank != Some(true) && field.config.default.is_none();
 				let unresolved = if let Some(default) = model_form_declared_default(field) {
 					default
-				} else if is_auto_generated_field(field) {
+				} else if is_auto_generated_field(field) && !field.is_fk_id_field {
 					get_auto_field_default_value(field)
 				} else if required {
 					quote! {
@@ -2484,7 +2484,7 @@ fn generate_model_form_support(
 				let required = !is_optional && field.config.blank != Some(true);
 				let default = if let Some(default) = model_form_declared_default(field) {
 					default
-				} else if is_auto_generated_field(field) {
+				} else if is_auto_generated_field(field) && !field.is_fk_id_field {
 					get_auto_field_default_value(field)
 				} else if is_relationship_field_type(&field.ty) {
 					quote!(::std::default::Default::default())
@@ -2519,7 +2519,7 @@ fn generate_model_form_support(
 					!nullable && field.config.blank != Some(true) && field.config.default.is_none();
 				let unresolved = if let Some(default) = model_form_declared_default(field) {
 					default
-				} else if is_auto_generated_field(field) {
+				} else if is_auto_generated_field(field) && !field.is_fk_id_field {
 					get_auto_field_default_value(field)
 				} else if required {
 					quote! {
@@ -2543,13 +2543,26 @@ fn generate_model_form_support(
 					}
 				}
 			} else {
-				quote! {
-					#field_name: return ::core::result::Result::Err(
-						#forms_crate::model_form::ModelFormError::MissingModelField {
-							field: #field_literal,
-						},
-					)
-				}
+				let (is_optional, _) = extract_option_type(&field.ty);
+				let required = !is_optional && field.config.blank != Some(true);
+				let default = if let Some(default) = model_form_declared_default(field) {
+					default
+				} else if is_auto_generated_field(field) {
+					get_auto_field_default_value(field)
+				} else if is_relationship_field_type(&field.ty) {
+					quote!(::std::default::Default::default())
+				} else if required {
+					quote! {
+						return ::core::result::Result::Err(
+							#forms_crate::model_form::ModelFormError::MissingModelField {
+								field: #field_literal,
+							},
+						);
+					}
+				} else {
+					quote!(::std::default::Default::default())
+				};
+				quote!(#field_name: #default)
 			}
 		})
 		.collect();

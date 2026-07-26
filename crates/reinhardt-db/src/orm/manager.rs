@@ -1714,7 +1714,7 @@ mod tests {
 		assert!(matches!(&query.filters()[0].value, FilterValue::Uuid(value) if *value == id));
 	}
 
-	#[test]
+	#[rstest]
 	fn test_get_preserves_numeric_fallback_primary_key_binding() {
 		let query = TestUser::objects().get(42);
 

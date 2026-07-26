@@ -2253,6 +2253,15 @@ fn parse_model_widget(ident: &syn::Ident) -> Result<TypedWidget> {
 	if ident == "TextArea" {
 		return Ok(TypedWidget::Textarea);
 	}
+	if matches!(
+		ident.to_string().as_str(),
+		"Select" | "SelectMultiple" | "RadioSelect" | "MonthInput" | "WeekInput" | "FileInput"
+	) {
+		return Err(Error::new(
+			ident.span(),
+			"this widget is not supported by model-backed forms; use a supported scalar widget or an explicit non-model form",
+		));
+	}
 	parse_widget(ident)
 }
 
@@ -6148,6 +6157,18 @@ mod tests {
 			typed.fields[2].as_field().unwrap().field_type,
 			TypedFieldType::FileField
 		));
+	}
+
+	#[rstest::rstest]
+	fn test_model_form_rejects_widget_without_model_renderer() {
+		let widget: syn::Ident = syn::parse_quote!(SelectMultiple);
+
+		let error = parse_model_widget(&widget).unwrap_err();
+
+		assert_eq!(
+			error.to_string(),
+			"this widget is not supported by model-backed forms; use a supported scalar widget or an explicit non-model form"
+		);
 	}
 }
 

@@ -258,9 +258,27 @@ pub async fn init_database_with_pool_size(
 	let mut guard = database_state()?;
 	if guard.is_none() {
 		*guard = Some(database);
+	} else if let Some(scope) = guard.as_ref().and_then(|current| current.scope.as_ref()) {
+		install_baseline_beneath_scopes(scope, database);
 	}
 
 	Ok(())
+}
+
+fn install_baseline_beneath_scopes(scope: &Arc<ScopedRegistrationNode>, database: DefaultDatabase) {
+	let mut previous = scope
+		.previous
+		.lock()
+		.unwrap_or_else(|poisoned| poisoned.into_inner());
+	match previous.as_ref() {
+		Some(ScopedRegistrationPredecessor::Scope(parent)) => {
+			let parent = Arc::clone(parent);
+			drop(previous);
+			install_baseline_beneath_scopes(&parent, database);
+		}
+		Some(ScopedRegistrationPredecessor::Baseline(_)) => {}
+		None => *previous = Some(ScopedRegistrationPredecessor::Baseline(database)),
+	}
 }
 
 /// Reinitialize the global database connection (for testing)

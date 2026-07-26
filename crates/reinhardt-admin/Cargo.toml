@@ -103,6 +103,7 @@ file-uploads = []
 admin = []
 full = ["console_error_panic_hook", "file-uploads", "all"]
 console_error_panic_hook = ["dep:console_error_panic_hook"]
+pgvector = ["reinhardt-db/pgvector"]
 
 # Server-only dev-dependencies
 [target.'cfg(not(all(target_family = "wasm", target_os = "unknown")))'.dev-dependencies]

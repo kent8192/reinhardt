@@ -243,6 +243,21 @@ pub struct IndexDefinition {
 }
 
 impl IndexDefinition {
+	/// Creates index metadata from its feature-independent fields.
+	pub fn new(name: impl Into<String>, fields: Vec<String>, unique: bool) -> Self {
+		Self {
+			name: name.into(),
+			fields,
+			unique,
+			#[cfg(feature = "pgvector")]
+			index_type: None,
+			#[cfg(feature = "pgvector")]
+			operator_class: None,
+			#[cfg(feature = "pgvector")]
+			expressions: None,
+		}
+	}
+
 	pub(crate) fn index_type(&self) -> Option<super::operations::IndexType> {
 		#[cfg(feature = "pgvector")]
 		{

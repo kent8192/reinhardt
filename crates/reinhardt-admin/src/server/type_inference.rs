@@ -132,6 +132,7 @@ pub fn infer_admin_field_type(db_type: &DbFieldType) -> AdminFieldType {
 		DbFieldType::CIText => AdminFieldType::Text,
 
 		// Vectors → TextArea for structured multi-value editing
+		#[cfg(feature = "pgvector")]
 		DbFieldType::Vector { .. } => AdminFieldType::TextArea,
 
 		// Range types → TextArea for range editing (e.g., "[1,10)" format)
@@ -841,6 +842,7 @@ mod tests {
 	}
 
 	#[test]
+	#[cfg(feature = "pgvector")]
 	fn test_infer_admin_field_type_postgres_vector() {
 		assert_eq!(
 			infer_admin_field_type(&DbFieldType::Vector { dimensions: 1536 }),

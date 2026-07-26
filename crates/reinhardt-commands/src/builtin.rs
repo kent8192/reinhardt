@@ -4905,14 +4905,11 @@ mod tests {
 		let mut target_state = ProjectState::new();
 		for (app_label, model_name) in [("search", "Document"), ("billing", "Invoice")] {
 			let mut model = ModelState::new(app_label, model_name);
-			model.indexes.push(IndexDefinition {
-				name: "shared_embedding_ann".to_string(),
-				fields: vec!["embedding".to_string()],
-				unique: false,
-				index_type: None,
-				operator_class: None,
-				expressions: None,
-			});
+			model.indexes.push(IndexDefinition::new(
+				"shared_embedding_ann",
+				vec!["embedding".to_string()],
+				false,
+			));
 			target_state.add_model(model);
 		}
 

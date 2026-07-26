@@ -842,15 +842,12 @@ mod tests {
 		}
 
 		fn index_metadata() -> Vec<reinhardt_db::orm::inspection::IndexInfo> {
-			vec![reinhardt_db::orm::inspection::IndexInfo {
-				name: "test_users_name_idx".to_string(),
-				fields: vec!["name".to_string()],
-				unique: false,
-				condition: Some("name IS NOT NULL".to_string()),
-				index_type: None,
-				operator_class: None,
-				expressions: None,
-			}]
+			vec![reinhardt_db::orm::inspection::IndexInfo::new(
+				"test_users_name_idx",
+				vec!["name".to_string()],
+				false,
+				Some("name IS NOT NULL".to_string()),
+			)]
 		}
 	}
 

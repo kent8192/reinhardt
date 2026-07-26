@@ -578,18 +578,15 @@ fn model_index_operations(model: &ModelSchemaInfo) -> Vec<Operation> {
 		}
 		let (columns, condition) = constraint.definition.trim().split_once(") WHERE ")?;
 		let columns = columns.strip_prefix("UNIQUE (")?;
-		Some(IndexInfo {
-			name: constraint.name.clone(),
-			fields: columns
+		Some(IndexInfo::new(
+			constraint.name.clone(),
+			columns
 				.split(',')
 				.map(|field| field.trim().to_string())
 				.collect(),
-			unique: true,
-			condition: Some(condition.to_string()),
-			index_type: None,
-			operator_class: None,
-			expressions: None,
-		})
+			true,
+			Some(condition.to_string()),
+		))
 	}));
 
 	indexes

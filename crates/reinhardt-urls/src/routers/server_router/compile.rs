@@ -120,6 +120,13 @@ impl ServerRouter {
 				if current.origin == previous.origin || current.method != previous.method {
 					continue;
 				}
+				if mounted_paths_overlap(&previous.path, &current.path) {
+					errors.push(format!(
+						"Failed to compile mounted route '{}' ({}): overlaps mounted route '{}'",
+						current.path, current.method, previous.path
+					));
+					break;
+				}
 				let mut compiled = CompiledRoutes::default();
 				if insert_compiled_route(
 					&mut compiled,
@@ -460,6 +467,25 @@ impl ServerRouter {
 			Err(errors)
 		}
 	}
+}
+
+fn mounted_paths_overlap(left: &str, right: &str) -> bool {
+	let left = left
+		.trim_end_matches('/')
+		.split('/')
+		.filter(|segment| !segment.is_empty());
+	let right = right
+		.trim_end_matches('/')
+		.split('/')
+		.filter(|segment| !segment.is_empty());
+	let left = left.collect::<Vec<_>>();
+	let right = right.collect::<Vec<_>>();
+	left.len() == right.len()
+		&& left.iter().zip(right).all(|(left, right)| {
+			left.starts_with('{') && left.ends_with('}')
+				|| right.starts_with('{') && right.ends_with('}')
+				|| left == &right
+		})
 }
 
 #[cfg(test)]

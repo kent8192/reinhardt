@@ -538,7 +538,10 @@ fn extract_optional_string_vec_field(
 	field_name: &str,
 ) -> Option<Vec<String>> {
 	fields.iter().find_map(|field| {
-		if !matches!(&field.member, syn::Member::Named(ident) if ident == field_name) {
+		let syn::Member::Named(ident) = &field.member else {
+			return None;
+		};
+		if ident != field_name {
 			return None;
 		}
 		let Expr::Call(call) = &field.expr else {
@@ -561,7 +564,10 @@ fn extract_alter_table_options_field(
 	use super::{AlterTableOptions, MySqlAlgorithm, MySqlLock};
 
 	let options = fields.iter().find_map(|field| {
-		if !matches!(&field.member, syn::Member::Named(ident) if ident == field_name) {
+		let syn::Member::Named(ident) = &field.member else {
+			return None;
+		};
+		if ident != field_name {
 			return None;
 		}
 		let Expr::Call(call) = &field.expr else {
@@ -606,7 +612,10 @@ fn extract_optional_path_variant_field(
 	field_name: &str,
 ) -> Option<String> {
 	fields.iter().find_map(|field| {
-		if !matches!(&field.member, syn::Member::Named(ident) if ident == field_name) {
+		let syn::Member::Named(ident) = &field.member else {
+			return None;
+		};
+		if ident != field_name {
 			return None;
 		}
 		let Expr::Call(call) = &field.expr else {
@@ -789,7 +798,10 @@ fn extract_optional_integer_field(
 	field_name: &str,
 ) -> Option<u64> {
 	fields.iter().find_map(|field| {
-		if !matches!(&field.member, syn::Member::Named(ident) if ident == field_name) {
+		let syn::Member::Named(ident) = &field.member else {
+			return None;
+		};
+		if ident != field_name {
 			return None;
 		}
 		let Expr::Call(call) = &field.expr else {

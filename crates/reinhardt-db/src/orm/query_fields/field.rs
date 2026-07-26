@@ -112,7 +112,13 @@ impl<M: Model, T> Field<M, T> {
 			.last()
 			.expect("typed fields always contain a column path");
 		self.table_alias.as_ref().map_or_else(
-			|| Expr::col(Alias::new(column)).into_simple_expr(),
+			|| {
+				Expr::col((
+					Alias::new(super::expression::TYPED_MODEL_ROOT_ALIAS),
+					Alias::new(column),
+				))
+				.into_simple_expr()
+			},
 			|alias| Expr::col((Alias::new(alias), Alias::new(column))).into_simple_expr(),
 		)
 	}

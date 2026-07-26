@@ -3894,11 +3894,15 @@ where
 
 	fn apply_typed_select_expressions(&self, stmt: &mut SelectStatement) {
 		for (alias, expression) in &self.selected_expressions {
-			stmt.expr_as(expression.clone(), Alias::new(alias));
+			stmt.expr_as(self.qualify_typed_expression(expression), Alias::new(alias));
 		}
 		for (alias, expression) in &self.typed_annotations {
-			stmt.expr_as(expression.clone(), Alias::new(alias));
+			stmt.expr_as(self.qualify_typed_expression(expression), Alias::new(alias));
 		}
+	}
+
+	fn qualify_typed_expression(&self, expression: &SimpleExpr) -> SimpleExpr {
+		crate::orm::query_fields::qualify_model_root(expression, self.root_alias())
 	}
 
 	fn apply_ordering(&self, stmt: &mut SelectStatement) {
@@ -3911,7 +3915,10 @@ where
 			stmt.order_by_expr(Expr::col(self.root_column_reference(field)), order);
 		}
 		for ordering in &self.order_by_expressions {
-			stmt.order_by_expr(ordering.expr.clone(), ordering.order);
+			stmt.order_by_expr(
+				self.qualify_typed_expression(&ordering.expr),
+				ordering.order,
+			);
 		}
 	}
 
@@ -3947,7 +3954,7 @@ where
 
 		for filter in &self.filters {
 			if let FilterField::TypedPredicate(expr) = &filter.field_source {
-				cond = cond.add(expr.as_ref().clone());
+				cond = cond.add(self.qualify_typed_expression(expr));
 				added = true;
 				continue;
 			}
@@ -6609,7 +6616,7 @@ where
 		A: Into<FieldAssignment>,
 	{
 		let stmt = self.update_fields_query(values)?;
-		let (sql, values) = Self::build_update_for_backend(&stmt, conn.backend());
+		let (sql, values) = Self::build_update_for_backend(&stmt, conn.backend())?;
 		let params = super::execution::convert_values(values);
 
 		Ok(conn.execute(&sql, params).await?.rows_affected)
@@ -6699,12 +6706,21 @@ where
 	fn build_update_for_backend(
 		stmt: &UpdateStatement,
 		backend: super::connection::DatabaseBackend,
-	) -> (String, reinhardt_query::prelude::Values) {
-		match backend {
-			super::connection::DatabaseBackend::Postgres => PostgresQueryBuilder.build_update(stmt),
-			super::connection::DatabaseBackend::MySql => MySqlQueryBuilder.build_update(stmt),
-			super::connection::DatabaseBackend::Sqlite => SqliteQueryBuilder.build_update(stmt),
-		}
+	) -> Result<(String, reinhardt_query::prelude::Values), reinhardt_core::exception::DatabaseError>
+	{
+		let result = match backend {
+			super::connection::DatabaseBackend::Postgres => {
+				PostgresQueryBuilder.build_update_checked(stmt)
+			}
+			super::connection::DatabaseBackend::MySql => {
+				MySqlQueryBuilder.build_update_checked(stmt)
+			}
+			super::connection::DatabaseBackend::Sqlite => {
+				SqliteQueryBuilder.build_update_checked(stmt)
+			}
+		};
+		result
+			.map_err(|error| DatabaseError::new(DatabaseErrorKind::Unsupported, error.to_string()))
 	}
 
 	fn build_select_for_backend(
@@ -8421,16 +8437,33 @@ mod tests {
 	use std::collections::HashMap;
 
 	#[cfg(feature = "pgvector")]
-	#[derive(Default)]
 	struct RecordingExecutor {
+		backend: DatabaseBackend,
 		calls: Vec<(String, Vec<crate::orm::QueryValue>)>,
+	}
+
+	#[cfg(feature = "pgvector")]
+	impl RecordingExecutor {
+		fn for_backend(backend: DatabaseBackend) -> Self {
+			Self {
+				backend,
+				calls: Vec::new(),
+			}
+		}
+	}
+
+	#[cfg(feature = "pgvector")]
+	impl Default for RecordingExecutor {
+		fn default() -> Self {
+			Self::for_backend(DatabaseBackend::Postgres)
+		}
 	}
 
 	#[cfg(feature = "pgvector")]
 	#[async_trait::async_trait]
 	impl crate::orm::OrmExecutor for RecordingExecutor {
 		fn backend(&self) -> DatabaseBackend {
-			DatabaseBackend::Postgres
+			self.backend
 		}
 
 		async fn execute(
@@ -8504,7 +8537,7 @@ mod tests {
 
 		assert_eq!(
 			sql,
-			r#"SELECT "id", "embedding" <-> $1 AS "distance" FROM "test_users""#
+			r#"SELECT "id", "test_users"."embedding" <-> $1 AS "distance" FROM "test_users""#
 		);
 		assert_eq!(
 			params,
@@ -8525,7 +8558,7 @@ mod tests {
 
 		assert_eq!(
 			sql,
-			r#"SELECT "id", "embedding" <#> $1 AS "distance" FROM "test_users""#
+			r#"SELECT "id", "test_users"."embedding" <#> $1 AS "distance" FROM "test_users""#
 		);
 		assert_eq!(
 			params,
@@ -8546,7 +8579,7 @@ mod tests {
 
 		assert_eq!(
 			sql,
-			r#"SELECT "id", "embedding" <=> $1 AS "distance" FROM "test_users""#
+			r#"SELECT "id", "test_users"."embedding" <=> $1 AS "distance" FROM "test_users""#
 		);
 		assert_eq!(
 			params,
@@ -8576,7 +8609,7 @@ mod tests {
 
 		assert_eq!(
 			sql,
-			r#"SELECT "id" FROM "test_users" WHERE "embedding" <=> $1 < $2 ORDER BY "embedding" <-> $3 ASC"#
+			r#"SELECT "id" FROM "test_users" WHERE "test_users"."embedding" <=> $1 < $2 ORDER BY "test_users"."embedding" <-> $3 ASC"#
 		);
 		assert_eq!(
 			params,
@@ -8584,6 +8617,62 @@ mod tests {
 				crate::orm::QueryValue::Vector(vec![1.0, 2.0, 3.0]),
 				crate::orm::QueryValue::Float(0.25),
 				crate::orm::QueryValue::Vector(vec![4.0, 5.0, 6.0]),
+			]
+		);
+	}
+
+	#[cfg(feature = "pgvector")]
+	#[test]
+	fn typed_vector_join_qualifies_only_model_root_expressions_with_current_alias() {
+		let root_field = Field::<TestUser, crate::orm::Vector<3>>::new(vec!["embedding"]);
+		let peer_field = Field::<TestUser, crate::orm::Vector<3>>::new(vec!["embedding"])
+			.with_alias("test_vector_peers");
+		let queryset = QuerySet::<TestUser>::new()
+			.from_as("root_users")
+			.inner_join_on::<TestVectorPeer>("root_users.id = test_vector_peers.user_id")
+			.select_expr(
+				"selected_distance",
+				root_field
+					.clone()
+					.l2_distance(typed_vector_target(&[1.0, 2.0, 3.0])),
+			)
+			.select_expr(
+				"peer_distance",
+				peer_field.cosine_distance(typed_vector_target(&[3.0, 2.0, 1.0])),
+			)
+			.annotate_expr(
+				"annotated_distance",
+				root_field
+					.clone()
+					.negative_inner_product(typed_vector_target(&[4.0, 5.0, 6.0])),
+			)
+			.filter(
+				root_field
+					.clone()
+					.cosine_distance(typed_vector_target(&[7.0, 8.0, 9.0]))
+					.lt(0.25),
+			)
+			.order_by(
+				root_field
+					.l2_distance(typed_vector_target(&[9.0, 8.0, 7.0]))
+					.asc(),
+			);
+
+		let (sql, params) = typed_vector_sql_and_params(&queryset);
+
+		assert_eq!(
+			sql,
+			r#"SELECT *, "root_users"."embedding" <-> $1 AS "selected_distance", "test_vector_peers"."embedding" <=> $2 AS "peer_distance", "root_users"."embedding" <#> $3 AS "annotated_distance" FROM "test_users" AS "root_users" INNER JOIN "test_vector_peers" ON root_users.id = test_vector_peers.user_id WHERE "root_users"."embedding" <=> $4 < $5 ORDER BY "root_users"."embedding" <-> $6 ASC"#
+		);
+		assert_eq!(
+			params,
+			vec![
+				crate::orm::QueryValue::Vector(vec![1.0, 2.0, 3.0]),
+				crate::orm::QueryValue::Vector(vec![3.0, 2.0, 1.0]),
+				crate::orm::QueryValue::Vector(vec![4.0, 5.0, 6.0]),
+				crate::orm::QueryValue::Vector(vec![7.0, 8.0, 9.0]),
+				crate::orm::QueryValue::Float(0.25),
+				crate::orm::QueryValue::Vector(vec![9.0, 8.0, 7.0]),
 			]
 		);
 	}
@@ -8644,6 +8733,75 @@ mod tests {
 				crate::orm::QueryValue::Float(0.25),
 				crate::orm::QueryValue::Vector(vec![4.0, 5.0, 6.0]),
 			]
+		);
+	}
+
+	#[cfg(feature = "pgvector")]
+	#[rstest]
+	#[case(
+		DatabaseBackend::MySql,
+		"pgvector distance operators is not supported by the MySQL backend"
+	)]
+	#[case(
+		DatabaseBackend::Sqlite,
+		"pgvector distance operators is not supported by the SQLite backend"
+	)]
+	#[tokio::test]
+	async fn typed_vector_update_rejects_non_postgres_before_executor_call(
+		#[case] backend: DatabaseBackend,
+		#[case] expected_message: &str,
+	) {
+		let field = Field::<TestUser, crate::orm::Vector<3>>::new(vec!["embedding"]);
+		let queryset = QuerySet::<TestUser>::new().filter(
+			field
+				.cosine_distance(typed_vector_target(&[1.0, 2.0, 3.0]))
+				.lt(0.25),
+		);
+		let mut executor = RecordingExecutor::for_backend(backend);
+
+		let error = queryset
+			.update_fields_with_conn(&mut executor, [("username", "alice")])
+			.await
+			.expect_err("non-PostgreSQL updates must reject pgvector predicates");
+
+		assert!(matches!(
+			error,
+			reinhardt_core::exception::Error::Database(ref database_error)
+				if database_error.kind()
+					== reinhardt_core::exception::DatabaseErrorKind::Unsupported
+					&& database_error.message() == expected_message
+		));
+		assert!(executor.calls.is_empty());
+	}
+
+	#[cfg(feature = "pgvector")]
+	#[tokio::test]
+	async fn typed_vector_update_preserves_postgres_sql_and_bound_values() {
+		let field = Field::<TestUser, crate::orm::Vector<3>>::new(vec!["embedding"]);
+		let queryset = QuerySet::<TestUser>::new().filter(
+			field
+				.cosine_distance(typed_vector_target(&[1.0, 2.0, 3.0]))
+				.lt(0.25),
+		);
+		let mut executor = RecordingExecutor::default();
+
+		let rows_affected = queryset
+			.update_fields_with_conn(&mut executor, [("username", "alice")])
+			.await
+			.expect("PostgreSQL vector update should build");
+
+		assert_eq!(rows_affected, 0);
+		assert_eq!(
+			executor.calls,
+			vec![(
+				r#"UPDATE "test_users" SET "username" = $1 WHERE "test_users"."embedding" <=> $2 < $3"#
+					.to_owned(),
+				vec![
+					crate::orm::QueryValue::String("alice".to_owned()),
+					crate::orm::QueryValue::Vector(vec![1.0, 2.0, 3.0]),
+					crate::orm::QueryValue::Float(0.25),
+				],
+			)]
 		);
 	}
 
@@ -8814,6 +8972,47 @@ mod tests {
 
 		fn generated_field_names() -> &'static [&'static str] {
 			&["full_name", "display_name"]
+		}
+	}
+
+	#[cfg(feature = "pgvector")]
+	#[derive(Debug, Clone, Serialize, Deserialize)]
+	struct TestVectorPeer {
+		id: Option<i64>,
+		embedding: crate::orm::Vector<3>,
+	}
+
+	#[cfg(feature = "pgvector")]
+	#[derive(Debug, Clone)]
+	struct TestVectorPeerFields;
+
+	#[cfg(feature = "pgvector")]
+	impl crate::orm::model::FieldSelector for TestVectorPeerFields {
+		fn with_alias(self, _alias: &str) -> Self {
+			self
+		}
+	}
+
+	#[cfg(feature = "pgvector")]
+	impl Model for TestVectorPeer {
+		type PrimaryKey = i64;
+		type Fields = TestVectorPeerFields;
+		type Objects = Manager<Self>;
+
+		fn table_name() -> &'static str {
+			"test_vector_peers"
+		}
+
+		fn primary_key(&self) -> Option<Self::PrimaryKey> {
+			self.id
+		}
+
+		fn set_primary_key(&mut self, value: Self::PrimaryKey) {
+			self.id = Some(value);
+		}
+
+		fn new_fields() -> Self::Fields {
+			TestVectorPeerFields
 		}
 	}
 

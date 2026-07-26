@@ -37,6 +37,7 @@ mod lookup;
 mod traits;
 
 pub use compiler::QueryFieldCompiler;
+pub(crate) use expression::qualify_model_root;
 pub use expression::{OrderedExpression, TypedExpression, TypedPredicate};
 pub use field::Field;
 pub use lookup::{Lookup, LookupType, LookupValue};

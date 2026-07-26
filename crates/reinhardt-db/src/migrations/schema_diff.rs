@@ -3119,6 +3119,52 @@ mod tests {
 	}
 
 	#[test]
+	fn legacy_postgres_multi_column_default_index_matches_introspected_metadata() {
+		// Arrange
+		let mut intro_indexes = std::collections::HashMap::new();
+		intro_indexes.insert(
+			"idx_events_sequence_name".to_string(),
+			introspection::IndexInfo {
+				name: "idx_events_sequence_name".to_string(),
+				columns: vec!["sequence".to_string(), "name".to_string()],
+				unique: false,
+				access_method: Some("btree".to_string()),
+				index_type: Some(IndexType::BTree),
+				expressions: None,
+				operator_class: Some("int4_ops".to_string()),
+				operator_class_is_default: true,
+			},
+		);
+		let mut intro_tables = std::collections::HashMap::new();
+		intro_tables.insert(
+			"events".to_string(),
+			introspection::TableInfo {
+				name: "events".to_string(),
+				columns: std::collections::HashMap::new(),
+				indexes: intro_indexes,
+				primary_key: Vec::new(),
+				foreign_keys: Vec::new(),
+				unique_constraints: Vec::new(),
+				check_constraints: Vec::new(),
+			},
+		);
+		let current = DatabaseSchema::from(introspection::DatabaseSchema {
+			tables: intro_tables,
+		});
+		let mut target = current.clone();
+		let target_index = &mut target.tables.get_mut("events").unwrap().indexes[0];
+		target_index.access_method = None;
+		target_index.index_type = None;
+
+		// Act
+		let result = SchemaDiff::with_dialect(current, target, SqlDialect::Postgres).detect();
+
+		// Assert
+		assert!(result.indexes_to_add.is_empty());
+		assert!(result.indexes_to_remove.is_empty());
+	}
+
+	#[test]
 	fn legacy_mysql_default_index_matches_introspected_metadata() {
 		// Arrange
 		let mut current_table = table_with_cols(

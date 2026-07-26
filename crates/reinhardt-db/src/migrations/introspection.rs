@@ -142,6 +142,46 @@ fn parse_postgres_index_type(
 	}
 }
 
+fn resolve_postgres_operator_class(
+	index_name: &str,
+	index_type: Option<super::IndexType>,
+	operator_classes: &[String],
+	operator_class_defaults: &[bool],
+) -> Result<(Option<String>, bool)> {
+	if operator_classes.is_empty() || operator_classes.len() != operator_class_defaults.len() {
+		return Err(MigrationError::IntrospectionError(format!(
+			"PostgreSQL index {index_name} returned inconsistent operator class metadata"
+		)));
+	}
+
+	if matches!(
+		index_type,
+		Some(super::IndexType::Hnsw { .. } | super::IndexType::Ivfflat { .. })
+	) && operator_classes.len() != 1
+	{
+		return Err(MigrationError::IntrospectionError(format!(
+			"PostgreSQL approximate index {index_name} must have exactly one key"
+		)));
+	}
+
+	let first_operator_class = &operator_classes[0];
+	let first_is_default = operator_class_defaults[0];
+	let all_default = operator_class_defaults.iter().all(|is_default| *is_default);
+	let homogeneous = operator_classes
+		.iter()
+		.all(|operator_class| operator_class == first_operator_class)
+		&& operator_class_defaults
+			.iter()
+			.all(|is_default| *is_default == first_is_default);
+	if operator_classes.len() > 1 && !all_default && !homogeneous {
+		return Err(MigrationError::IntrospectionError(format!(
+			"PostgreSQL index {index_name} uses heterogeneous operator classes that cannot be represented"
+		)));
+	}
+
+	Ok((Some(first_operator_class.clone()), all_default))
+}
+
 /// Foreign key constraint
 #[derive(Debug, Clone, PartialEq)]
 pub struct ForeignKeyInfo {
@@ -635,8 +675,8 @@ impl PostgresIntrospector {
 				am.amname AS access_method,
 				i.reloptions AS index_options,
 				pg_get_expr(ix.indexprs, ix.indrelid) AS index_expressions,
-				(array_agg(opc.opcname ORDER BY key.position))[1] AS operator_class,
-				bool_and(opc.opcdefault) AS operator_class_is_default
+				array_agg(opc.opcname ORDER BY key.position) AS operator_classes,
+				array_agg(opc.opcdefault ORDER BY key.position) AS operator_class_defaults
 			FROM
 				pg_class t
 				JOIN pg_index ix ON t.oid = ix.indrelid
@@ -700,20 +740,24 @@ impl PostgresIntrospector {
 						e
 					))
 				})?;
-			let operator_class: Option<String> = row.try_get("operator_class").map_err(|e| {
-				MigrationError::IntrospectionError(format!("Failed to get operator_class: {}", e))
+			let operator_classes: Vec<String> = row.try_get("operator_classes").map_err(|e| {
+				MigrationError::IntrospectionError(format!("Failed to get operator_classes: {}", e))
 			})?;
-			let operator_class_is_default: bool = row
-				.try_get::<Option<bool>, _>("operator_class_is_default")
-				.map_err(|e| {
+			let operator_class_defaults: Vec<bool> =
+				row.try_get("operator_class_defaults").map_err(|e| {
 					MigrationError::IntrospectionError(format!(
-						"Failed to get operator_class_is_default: {}",
+						"Failed to get operator_class_defaults: {}",
 						e
 					))
-				})?
-				.unwrap_or(false);
+				})?;
 			let index_type =
 				parse_postgres_index_type(&access_method, index_options.as_deref().unwrap_or(&[]))?;
+			let (operator_class, operator_class_is_default) = resolve_postgres_operator_class(
+				&index_name,
+				index_type,
+				&operator_classes,
+				&operator_class_defaults,
+			)?;
 
 			indexes.insert(
 				index_name.clone(),
@@ -1905,6 +1949,91 @@ mod postgres_index_metadata_tests {
 			result,
 			Err(MigrationError::IntrospectionError(message))
 				if message == "invalid PostgreSQL hnsw reloption ef_construction=invalid"
+		));
+	}
+
+	#[test]
+	fn mixed_multi_column_postgres_operator_classes_are_rejected() {
+		// Arrange
+		let operator_classes = vec!["int4_ops".to_string(), "text_pattern_ops".to_string()];
+		let operator_class_defaults = vec![true, false];
+
+		// Act
+		let result = resolve_postgres_operator_class(
+			"idx_events_sequence_name",
+			Some(IndexType::BTree),
+			&operator_classes,
+			&operator_class_defaults,
+		);
+
+		// Assert
+		assert!(matches!(
+			result,
+			Err(MigrationError::IntrospectionError(message))
+				if message
+					== "PostgreSQL index idx_events_sequence_name uses heterogeneous operator classes that cannot be represented"
+		));
+	}
+
+	#[test]
+	fn default_multi_column_postgres_operator_classes_are_representable() {
+		// Arrange
+		let operator_classes = vec!["int4_ops".to_string(), "text_ops".to_string()];
+		let operator_class_defaults = vec![true, true];
+
+		// Act
+		let result = resolve_postgres_operator_class(
+			"idx_events_sequence_name",
+			Some(IndexType::BTree),
+			&operator_classes,
+			&operator_class_defaults,
+		);
+
+		// Assert
+		assert_eq!(result.unwrap(), (Some("int4_ops".to_string()), true));
+	}
+
+	#[test]
+	fn homogeneous_custom_multi_column_postgres_operator_classes_are_representable() {
+		// Arrange
+		let operator_classes = vec!["custom_ops".to_string(), "custom_ops".to_string()];
+		let operator_class_defaults = vec![false, false];
+
+		// Act
+		let result = resolve_postgres_operator_class(
+			"idx_events_sequence_partition",
+			Some(IndexType::BTree),
+			&operator_classes,
+			&operator_class_defaults,
+		);
+
+		// Assert
+		assert_eq!(result.unwrap(), (Some("custom_ops".to_string()), false));
+	}
+
+	#[test]
+	fn multi_key_approximate_postgres_indexes_are_rejected() {
+		// Arrange
+		let operator_classes = vec!["vector_l2_ops".to_string(), "vector_l2_ops".to_string()];
+		let operator_class_defaults = vec![true, true];
+
+		// Act
+		let result = resolve_postgres_operator_class(
+			"idx_source_embeddings",
+			Some(IndexType::Hnsw {
+				m: Some(16),
+				ef_construction: Some(64),
+			}),
+			&operator_classes,
+			&operator_class_defaults,
+		);
+
+		// Assert
+		assert!(matches!(
+			result,
+			Err(MigrationError::IntrospectionError(message))
+				if message
+					== "PostgreSQL approximate index idx_source_embeddings must have exactly one key"
 		));
 	}
 }

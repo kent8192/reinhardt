@@ -223,6 +223,12 @@ pub(super) fn validate(
 			"model-backed form! does not support `slots`; compose surrounding page content outside the generated form",
 		));
 	}
+	if model_source.is_some() && (watch.is_some() || derived.is_some()) {
+		return Err(Error::new(
+			ast.span,
+			"model-backed form! does not support `watch` or `derived` clauses",
+		));
+	}
 
 	// Transform unified validators (scope filtering happens at codegen)
 	let validators = transform_validators(&ast.validators, &ast.fields)?;

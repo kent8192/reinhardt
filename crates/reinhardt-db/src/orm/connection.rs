@@ -141,8 +141,25 @@ impl QueryRow {
 	pub(crate) fn deserialize_model<M: super::Model>(
 		&self,
 	) -> std::result::Result<M, super::FieldCodecError> {
+		let mut data = self.data.clone();
+		if let serde_json::Value::Object(values) = &mut data {
+			for field in M::field_metadata()
+				.into_iter()
+				.filter(|field| field.storage_kind == Some(super::DatabaseStorageKind::DateTime))
+			{
+				let column = field.db_column.as_deref().unwrap_or(&field.name);
+				let Some(serde_json::Value::String(value)) = values.get_mut(column) else {
+					continue;
+				};
+				if chrono::DateTime::parse_from_rfc3339(value).is_err()
+					&& chrono::NaiveDateTime::parse_from_str(value, "%Y-%m-%d %H:%M:%S%.f").is_ok()
+				{
+					*value = format!("{}+00:00", value.replace(' ', "T"));
+				}
+			}
+		}
 		super::json::deserialize_model_row::<M>(
-			self.data.clone(),
+			data,
 			self.json_null_fields.clone(),
 			self.native_json_fields.clone(),
 		)

@@ -1993,6 +1993,17 @@ fn generate_model_form(
 	} else {
 		quote!(::core::matches!(descriptor.name, #(#range_override_names)|*))
 	};
+	let color_override_names: Vec<String> = model_source
+		.overrides
+		.iter()
+		.filter(|override_| matches!(override_.widget, Some(TypedWidget::ColorInput)))
+		.map(|override_| override_.field.to_string())
+		.collect();
+	let is_color_override = if color_override_names.is_empty() {
+		quote!(false)
+	} else {
+		quote!(::core::matches!(descriptor.name, #(#color_override_names)|*))
+	};
 
 	let form_id = form_id_kebab_case(form_ident);
 	let form_class_attribute = macro_ast
@@ -2507,7 +2518,7 @@ fn generate_model_form(
 													descriptor.required,
 													descriptor.has_default,
 													#is_range_override,
-													input_type == "color",
+													#is_color_override,
 											))
 											.collect::<::std::vec::Vec<_>>();
 										let mut state = submit_form.__model_state.borrow_mut();
@@ -7654,6 +7665,25 @@ mod tests {
 		assert!(output_str.contains("__state_version"));
 		assert!(output_str.contains("__ReinhardtModelFormField :: State"));
 		assert!(output_str.contains("FormRuntimeSource for TemporalControlsForm"));
+	}
+
+	#[rstest::rstest]
+	fn test_generate_model_color_snapshot_uses_descriptor_metadata() {
+		let input = quote! {
+			name: PaletteForm,
+			model: Palette,
+			policy: PaletteFields,
+			fields: [accent],
+			server_fn: save_palette,
+			overrides: {
+				accent: { widget: ColorInput },
+			},
+		};
+
+		let output = parse_validate_generate(input).to_string();
+
+		assert!(output.contains("let fields = submit_form"));
+		assert!(output.contains("matches ! (descriptor . name , \"accent\")"));
 	}
 
 	#[rstest::rstest]

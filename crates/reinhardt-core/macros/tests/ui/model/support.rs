@@ -136,6 +136,30 @@ pub mod model_form {
 	pub trait NativeModelFormPayload: Sized {
 		fn from_native_form_value(value: serde_json::Value) -> Result<Self, serde_json::Error>;
 	}
+
+	/// Mirrors the native unchecked-checkbox normalization required by model-form fixtures.
+	pub fn normalize_native_model_form_value<S, P>(
+		mut value: serde_json::Value,
+	) -> Result<serde_json::Value, serde_json::Error>
+	where
+		S: ModelFormSchema,
+		P: ModelFormPolicy,
+	{
+		if let serde_json::Value::Object(values) = &mut value {
+			for descriptor in S::fields() {
+				if descriptor.editable
+					&& P::allows(descriptor.name)
+					&& matches!(descriptor.kind, ModelFormFieldKind::Boolean)
+					&& !descriptor.nullable
+					&& !descriptor.has_default
+					&& !values.contains_key(descriptor.name)
+				{
+					values.insert(descriptor.name.to_owned(), serde_json::Value::Bool(false));
+				}
+			}
+		}
+		Ok(value)
+	}
 	#[derive(Debug, Clone, Copy, PartialEq)]
 	pub enum ModelFormFieldKind {
 		Text {
@@ -946,7 +970,9 @@ pub mod db {
 			) -> crate::db::migrations::FieldType {
 				match storage_kind {
 					DatabaseStorageKind::DateTime => crate::db::migrations::FieldType::TimestampTz,
-					DatabaseStorageKind::NaiveDateTime => crate::db::migrations::FieldType::DateTime,
+					DatabaseStorageKind::NaiveDateTime => {
+						crate::db::migrations::FieldType::DateTime
+					}
 					_ => crate::db::migrations::FieldType::Json,
 				}
 			}

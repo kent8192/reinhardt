@@ -1376,7 +1376,7 @@ fn generate_server_handler(
 				quote! {
 					let native_value = ::serde_json::from_slice(body)
 						.map_err(|_| __invalid_request_error())?;
-					let payload: #payload_type = <#payload_type as #pages_crate_for_model_form::form::NativeModelFormPayload>::from_native_form_value(native_value)
+					let #parameter_name: #payload_type = <#payload_type as #pages_crate_for_model_form::form::NativeModelFormPayload>::from_native_form_value(native_value)
 						.map_err(|_| __invalid_request_error())?;
 					#args_struct_name { #parameter_name }
 				}
@@ -2743,7 +2743,7 @@ mod tests {
 		use syn::parse_quote;
 
 		let func: ItemFn = parse_quote! {
-			async fn save(payload: QuestionModelFormData<AllEditableModelFields>) -> Result<(), ServerFnError> { Ok(()) }
+		async fn save(data: QuestionModelFormData<AllEditableModelFields>) -> Result<(), ServerFnError> { Ok(()) }
 		};
 		let info = ServerFnInfo {
 			func,
@@ -2765,6 +2765,11 @@ mod tests {
 			generated.contains("NativeModelFormPayload")
 				&& generated.contains("from_native_form_value"),
 			"single payload handlers must accept progressive-enhancement form posts: {generated}"
+		);
+		assert!(
+			generated.contains("let data : QuestionModelFormData")
+				&& generated.contains("{ data }"),
+			"the native fallback must bind and forward the declared parameter name: {generated}"
 		);
 	}
 }

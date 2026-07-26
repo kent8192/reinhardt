@@ -42,9 +42,9 @@ async fn save_question(
 ) -> Result<(), ServerFnError> {
     let owner_id = authenticated_owner_id()?;
 
-    // Typed setters are a trusted server-side construction path. They do not
-    // make the field part of the public wire contract.
-    payload.set_owner_id(owner_id);
+    // Trusted typed setters are a server-side construction path. They do not
+	// make the field part of the public wire contract.
+	payload.set_trusted_owner_id(owner_id);
     persist_question(payload).await
 }
 ```
@@ -152,11 +152,12 @@ The selected fields are enforced at both ends:
 The server check is the security boundary. Removing a control from HTML does
 not make a field safe by itself.
 
-Generated typed setters such as `payload.set_owner_id(value)` are deliberately
-available to trusted server code. A setter can populate an excluded editable
-value after authentication or authorization has selected it. In contrast,
-generic `set_json()` respects the active policy and rejected wire input remains
-recorded even if the server later supplies a trusted value.
+Policy-checked typed setters such as `payload.set_owner_id(value)` protect the
+public field selection. Trusted server code can instead use the explicit
+`payload.set_trusted_owner_id(value)` construction path after authentication or
+authorization has selected an excluded editable value. Generic `set_json()`
+also respects the active policy, and rejected wire input remains recorded even
+if the server later supplies a trusted value.
 
 ## Empty values and datetimes
 

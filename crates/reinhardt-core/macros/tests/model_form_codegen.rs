@@ -1,5 +1,6 @@
-#![allow(unexpected_cfgs)]
-
+// The model derive emits `cfg(wasm)` guards for target-neutral generated APIs.
+// This standalone integration-test crate intentionally accepts that known cfg.
+#[allow(unexpected_cfgs)]
 use chrono::{DateTime, NaiveDate, Utc};
 use reinhardt_macros::model;
 use serde::{Deserialize, Serialize};
@@ -98,8 +99,18 @@ fn native_form_payload_defaults_an_omitted_boolean_without_changing_json_deseria
 #[test]
 fn generated_payload_applies_policy_and_preserves_nullable_values() {
 	let mut payload = FormDocumentModelFormData::<TitleOnly>::empty();
-	payload.set_title("published".to_owned());
-	payload.set_secret("do-not-serialize".to_owned());
+	payload
+		.set_title("published".to_owned())
+		.expect("allowed fields should use the policy-checked setter");
+	assert!(matches!(
+		payload.set_secret("browser-input".to_owned()),
+		Err(model_form::ModelFormPayloadError::ForbiddenField { .. })
+	));
+	payload.set_trusted_secret("server-owned".to_owned());
+	assert_eq!(
+		payload.get_json("secret"),
+		Some(serde_json::json!("server-owned"))
+	);
 
 	let encoded = serde_json::to_value(&payload).expect("serialize payload");
 	assert_eq!(encoded, serde_json::json!({ "title": "published" }));
@@ -211,7 +222,9 @@ fn generated_model_forms_include_editable_assigned_primary_keys() {
 	assert!(AssignedKeyDocumentFormSchema::id().required);
 
 	let mut payload = AssignedKeyDocumentModelFormData::<AllEditableModelFields>::empty();
-	payload.set_id("external-key".to_owned());
+	payload
+		.set_id("external-key".to_owned())
+		.expect("editable assigned keys should use the policy-checked setter");
 	assert_eq!(payload.id(), Some(&"external-key".to_owned()));
 	assert_eq!(payload.supplied_fields(), ["id"]);
 }

@@ -2223,12 +2223,29 @@ fn generate_model_form_support(
 	for field in &editable_fields {
 		let field_name = field.name.to_string();
 		let setter_name = format!("set_{field_name}");
-		let collides_with_reserved_api = matches!(
-			field_name.as_str(),
-			"empty" | "forbidden_fields" | "_policy"
-		);
+		let trusted_setter_name = format!("set_trusted_{field_name}");
+		let collides_with_reserved_api = [
+			"empty",
+			"forbidden_fields",
+			"supplied_fields",
+			"get_json",
+			"set_json",
+			"from_native_form_value",
+			"_policy",
+		]
+		.contains(&field_name.as_str())
+			|| [
+				"empty",
+				"forbidden_fields",
+				"supplied_fields",
+				"get_json",
+				"set_json",
+				"from_native_form_value",
+			]
+			.contains(&setter_name.as_str());
 		let collides_with_generated_method = !generated_method_names.insert(field_name)
-			|| !generated_method_names.insert(setter_name);
+			|| !generated_method_names.insert(setter_name)
+			|| !generated_method_names.insert(trusted_setter_name);
 		if collides_with_reserved_api || collides_with_generated_method {
 			return Err(syn::Error::new_spanned(
 				&field.name,
@@ -2302,6 +2319,17 @@ fn generate_model_form_support(
 					}
 					self.#field_name = ::core::option::Option::Some(value);
 					::core::result::Result::Ok(())
+				}
+			}
+		});
+	let trusted_setters = field_names
+		.iter()
+		.zip(&field_types)
+		.map(|(field_name, field_ty)| {
+			let setter_name = Ident::new(&format!("set_trusted_{field_name}"), field_name.span());
+			quote! {
+				pub fn #setter_name(&mut self, value: #field_ty) {
+					self.#field_name = ::core::option::Option::Some(value);
 				}
 			}
 		});
@@ -2527,6 +2555,7 @@ fn generate_model_form_support(
 
 			#(#getters)*
 			#(#setters)*
+			#(#trusted_setters)*
 		}
 
 		impl<P: #core_crate::model_form::ModelFormPolicy> ::std::default::Default for #payload_name<P> {
@@ -8878,6 +8907,31 @@ mod tests {
 			output.contains("required : false") && output.contains("nullable : true"),
 			"nullable relation ID descriptors must accept an omitted relation value"
 		);
+	}
+
+	#[test]
+	fn test_model_form_rejects_payload_api_accessor_collisions() {
+		for field_name in ["json", "get_json", "set_json", "supplied_fields"] {
+			let field_name = Ident::new(field_name, proc_macro2::Span::call_site());
+			let input = quote! {
+				#[model(app_label = "fixture_tests", table_name = "fixture_models", form = true)]
+				struct FixtureModel {
+					#[field(primary_key = true)]
+					id: i64,
+					#[field(max_length = 64)]
+					#field_name: String,
+				}
+			};
+
+			let error = model_derive_impl(syn::parse2(input).unwrap())
+				.expect_err("payload API names must not be shadowed by generated accessors");
+			assert!(
+				error
+					.to_string()
+					.contains("collides with generated model-form API"),
+				"field `{field_name}` must be rejected: {error}",
+			);
+		}
 	}
 
 	#[test]

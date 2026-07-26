@@ -12,7 +12,7 @@ use reinhardt_db::{
 		model_registry::global_registry, operations::postgres::CreateExtension,
 	},
 	orm::{
-		DatabaseConnectionLease, Model, Vector,
+		DatabaseConnectionLease, Model, QueryValue, Vector,
 		query::{Filter, FilterOperator, FilterValue, QuerySet},
 	},
 };
@@ -26,7 +26,8 @@ use testcontainers::{
 
 const APP_LABEL: &str = "task9_pgvector";
 const TABLE_NAME: &str = "task9_pgvector_documents";
-const INDEX_NAME: &str = "task9_pgvector_documents_embedding_cosine_hnsw";
+const HNSW_INDEX_NAME: &str = "task9_pgvector_documents_embedding_cosine_hnsw";
+const IVFFLAT_INDEX_NAME: &str = "task9_pgvector_documents_summary_l2_ivfflat";
 
 #[model(app_label = "task9_pgvector", table_name = "task9_pgvector_documents")]
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -43,6 +44,13 @@ struct PgvectorDocument {
 		ef_construction = 64
 	))]
 	embedding: Vector<3>,
+	#[field(index(
+		name = "task9_pgvector_documents_summary_l2_ivfflat",
+		method = "ivfflat",
+		opclass = "vector_l2_ops",
+		lists = 10
+	))]
+	summary: Vector<3>,
 }
 
 fn vector(values: [f32; 3]) -> Vector<3> {
@@ -170,10 +178,44 @@ async fn native_pgvector_workflow_round_trips_models_and_typed_distance_queries(
 		json!({
 			"access_method": "hnsw",
 			"column_name": "embedding",
-			"index_name": INDEX_NAME,
+			"index_name": HNSW_INDEX_NAME,
 			"key_columns": 1,
 			"operator_class": "vector_cosine_ops",
 			"options": ["ef_construction=64", "m=16"],
+		})
+	);
+
+	let ivfflat_index = connection
+		.query_one(
+			"SELECT index_class.relname AS index_name, \
+			        access_method.amname AS access_method, \
+			        operator_class.opcname AS operator_class, \
+			        attribute.attname AS column_name, \
+			        index_catalog.indnkeyatts::bigint AS key_columns, \
+			        ARRAY(SELECT option FROM unnest(index_class.reloptions) AS option ORDER BY option) \
+			          AS options \
+			 FROM pg_class AS index_class \
+			 JOIN pg_index AS index_catalog ON index_catalog.indexrelid = index_class.oid \
+			 JOIN pg_class AS table_class ON table_class.oid = index_catalog.indrelid \
+			 JOIN pg_am AS access_method ON access_method.oid = index_class.relam \
+			 JOIN pg_opclass AS operator_class ON operator_class.oid = index_catalog.indclass[0] \
+			 JOIN pg_attribute AS attribute \
+			   ON attribute.attrelid = table_class.oid \
+			  AND attribute.attnum = index_catalog.indkey[0] \
+			 WHERE index_class.relname = 'task9_pgvector_documents_summary_l2_ivfflat'",
+			Vec::new(),
+		)
+		.await
+		.expect("the IVFFlat index should be introspectable");
+	assert_eq!(
+		ivfflat_index.data,
+		json!({
+			"access_method": "ivfflat",
+			"column_name": "summary",
+			"index_name": IVFFLAT_INDEX_NAME,
+			"key_columns": 1,
+			"operator_class": "vector_l2_ops",
+			"options": ["lists=10"],
 		})
 	);
 
@@ -185,6 +227,7 @@ async fn native_pgvector_workflow_round_trips_models_and_typed_distance_queries(
 				id: None,
 				name: "first".to_owned(),
 				embedding: vector([1.0, 0.0, 0.0]),
+				summary: vector([1.0, 0.0, 0.0]),
 			},
 		)
 		.await
@@ -196,6 +239,7 @@ async fn native_pgvector_workflow_round_trips_models_and_typed_distance_queries(
 				id: None,
 				name: "second".to_owned(),
 				embedding: vector([1.0, 1.0, 0.0]),
+				summary: vector([1.0, 1.0, 0.0]),
 			},
 		)
 		.await
@@ -207,6 +251,7 @@ async fn native_pgvector_workflow_round_trips_models_and_typed_distance_queries(
 				id: None,
 				name: "third".to_owned(),
 				embedding: vector([0.0, 1.0, 0.0]),
+				summary: vector([0.0, 1.0, 0.0]),
 			},
 		)
 		.await
@@ -239,6 +284,77 @@ async fn native_pgvector_workflow_round_trips_models_and_typed_distance_queries(
 	assert_eq!(third_read.embedding.as_slice(), &[-1.0, 0.0, 0.0]);
 
 	let target = vector([1.0, 0.0, 0.0]);
+	let l2_rows = QuerySet::<PgvectorDocument>::new()
+		.values(&["id"])
+		.select_expr(
+			"distance",
+			PgvectorDocument::new_fields()
+				.embedding
+				.l2_distance(target.clone()),
+		)
+		.order_by(
+			PgvectorDocument::new_fields()
+				.embedding
+				.l2_distance(target.clone())
+				.asc(),
+		)
+		.rows_with_db(&mut connection)
+		.await
+		.expect("typed L2 projection should execute through the ORM");
+	assert_eq!(
+		l2_rows
+			.iter()
+			.map(|row| row.get::<i64>("id").expect("projected id should decode"))
+			.collect::<Vec<_>>(),
+		vec![first_id, second_id, third_id]
+	);
+	assert_eq!(
+		l2_rows
+			.iter()
+			.map(|row| {
+				row.get::<f64>("distance")
+					.expect("projected L2 distance should decode")
+			})
+			.collect::<Vec<_>>(),
+		vec![0.0, 1.0, 2.0]
+	);
+
+	let inner_product_target = vector([2.0, 1.0, 0.0]);
+	let negative_inner_product_rows = QuerySet::<PgvectorDocument>::new()
+		.values(&["id"])
+		.select_expr(
+			"negative_inner_product",
+			PgvectorDocument::new_fields()
+				.embedding
+				.negative_inner_product(inner_product_target.clone()),
+		)
+		.order_by(
+			PgvectorDocument::new_fields()
+				.embedding
+				.negative_inner_product(inner_product_target)
+				.asc(),
+		)
+		.rows_with_db(&mut connection)
+		.await
+		.expect("typed negative inner-product projection should execute through the ORM");
+	assert_eq!(
+		negative_inner_product_rows
+			.iter()
+			.map(|row| row.get::<i64>("id").expect("projected id should decode"))
+			.collect::<Vec<_>>(),
+		vec![second_id, first_id, third_id]
+	);
+	assert_eq!(
+		negative_inner_product_rows
+			.iter()
+			.map(|row| {
+				row.get::<f64>("negative_inner_product")
+					.expect("projected negative inner product should decode")
+			})
+			.collect::<Vec<_>>(),
+		vec![-3.0, -2.0, 2.0]
+	);
+
 	let ordered = QuerySet::<PgvectorDocument>::new()
 		.order_by(
 			PgvectorDocument::new_fields()
@@ -317,6 +433,35 @@ async fn native_pgvector_workflow_round_trips_models_and_typed_distance_queries(
 	// the irrational result with a tight deterministic floating-point tolerance.
 	assert!((distances[1] - (1.0 - 1.0 / 2.0_f64.sqrt())).abs() < 1.0e-12);
 	assert_eq!(distances[2], 2.0);
+
+	let dimension_error = match connection
+		.query_one(
+			"SELECT embedding <-> $1 AS distance \
+			 FROM task9_pgvector_documents \
+			 ORDER BY id \
+			 LIMIT 1",
+			vec![QueryValue::Vector(vec![1.0, 0.0])],
+		)
+		.await
+	{
+		Ok(_) => panic!("PostgreSQL should reject a two-dimensional bound vector"),
+		Err(error) => error,
+	};
+	let dimension_database_error = dimension_error
+		.database_error()
+		.expect("the server failure should retain structured database context");
+	assert_eq!(dimension_database_error.kind(), DatabaseErrorKind::Query);
+	assert_eq!(dimension_database_error.code(), Some("22000"));
+	assert_eq!(
+		dimension_database_error.message(),
+		"different vector dimensions 3 and 2"
+	);
+	assert!(
+		dimension_error
+			.source()
+			.and_then(|source| source.downcast_ref::<sqlx::Error>())
+			.is_some()
+	);
 
 	connection
 		.execute(

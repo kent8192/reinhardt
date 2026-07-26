@@ -73,6 +73,9 @@ where
 			&& matches!(&value, serde_json::Value::String(text) if text.is_empty())
 		{
 			if descriptor.nullable {
+				if descriptor.has_default && !self.values.contains_key(descriptor.name) {
+					return Ok(());
+				}
 				self.values.insert(descriptor.name, serde_json::Value::Null);
 				return Ok(());
 			}
@@ -212,6 +215,9 @@ fn convert_control_value(
 			max_length,
 		} => {
 			let text = expect_string(descriptor.name, value)?;
+			if text.is_empty() && !descriptor.required {
+				return Ok(serde_json::Value::String(text));
+			}
 			if let Some(min_length) = min_length
 				&& text.chars().count() < min_length
 			{
@@ -565,5 +571,90 @@ mod tests {
 		let state = ModelFormState::<NullableBooleanSchema, AllEditableModelFields>::new();
 
 		assert_eq!(state.value("published"), None);
+	}
+
+	struct NullableDefaultSchema;
+
+	impl ModelFormSchema for NullableDefaultSchema {
+		type Model = ();
+
+		fn fields() -> &'static [ModelFormFieldDescriptor] {
+			const FIELDS: [ModelFormFieldDescriptor; 1] = [ModelFormFieldDescriptor {
+				name: "summary",
+				kind: ModelFormFieldKind::Text {
+					min_length: None,
+					max_length: None,
+					multiline: false,
+				},
+				required: false,
+				has_default: true,
+				nullable: true,
+				editable: true,
+				generated_relation_id: false,
+			}];
+			&FIELDS
+		}
+	}
+
+	#[test]
+	fn untouched_nullable_default_remains_omitted() {
+		let mut state = ModelFormState::<NullableDefaultSchema, AllEditableModelFields>::new();
+
+		state
+			.set_value("summary", serde_json::Value::String(String::new()))
+			.expect("an empty optional control should be accepted");
+
+		assert_eq!(state.value("summary"), None);
+	}
+
+	struct OptionalContactSchema;
+
+	impl ModelFormSchema for OptionalContactSchema {
+		type Model = ();
+
+		fn fields() -> &'static [ModelFormFieldDescriptor] {
+			const FIELDS: [ModelFormFieldDescriptor; 2] = [
+				ModelFormFieldDescriptor {
+					name: "email",
+					kind: ModelFormFieldKind::Email {
+						min_length: None,
+						max_length: None,
+					},
+					required: false,
+					has_default: false,
+					nullable: false,
+					editable: true,
+					generated_relation_id: false,
+				},
+				ModelFormFieldDescriptor {
+					name: "website",
+					kind: ModelFormFieldKind::Url {
+						min_length: None,
+						max_length: None,
+					},
+					required: false,
+					has_default: false,
+					nullable: false,
+					editable: true,
+					generated_relation_id: false,
+				},
+			];
+			&FIELDS
+		}
+	}
+
+	#[test]
+	fn optional_email_and_url_accept_empty_controls() {
+		let mut state = ModelFormState::<OptionalContactSchema, AllEditableModelFields>::new();
+
+		for field in ["email", "website"] {
+			state
+				.set_value(field, serde_json::Value::String(String::new()))
+				.expect("an empty optional contact control should be accepted");
+			assert_eq!(
+				state.value(field),
+				Some(&serde_json::Value::String(String::new()))
+			);
+		}
 	}
 }

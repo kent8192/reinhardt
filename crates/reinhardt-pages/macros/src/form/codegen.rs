@@ -2429,7 +2429,8 @@ fn generate_model_form(
 							);
 						}
 						let checkbox_sentinel = (is_checkbox
-							&& (!descriptor.has_default || stored_value.is_some()))
+							&& (!descriptor.has_default || stored_value.is_some())
+							&& (!descriptor.nullable || stored_value.is_some()))
 							.then(|| {
 							#pages_crate::PageElement::new("input")
 								.attr("type", "hidden")
@@ -7684,6 +7685,7 @@ mod tests {
 
 		assert!(output.contains("let fields = submit_form"));
 		assert!(output.contains("matches ! (descriptor . name , \"accent\")"));
+		assert!(output.contains("! descriptor . nullable || stored_value . is_some ()"));
 	}
 
 	#[rstest::rstest]

@@ -113,7 +113,11 @@ where
 						| ModelFormFieldKind::Url { .. }
 				));
 		if text.is_empty() && !descriptor.required && descriptor.nullable {
-			*control = serde_json::Value::Null;
+			if descriptor.has_default {
+				values.remove(descriptor.name);
+			} else {
+				*control = serde_json::Value::Null;
+			}
 			continue;
 		}
 		if remove_empty {
@@ -244,7 +248,7 @@ mod tests {
 		type Model = ();
 
 		fn fields() -> &'static [ModelFormFieldDescriptor] {
-			const FIELDS: [ModelFormFieldDescriptor; 7] = [
+			const FIELDS: [ModelFormFieldDescriptor; 8] = [
 				ModelFormFieldDescriptor {
 					name: "enabled",
 					kind: ModelFormFieldKind::Boolean,
@@ -306,6 +310,19 @@ mod tests {
 					},
 					required: false,
 					has_default: false,
+					nullable: true,
+					editable: true,
+					generated_relation_id: false,
+				},
+				ModelFormFieldDescriptor {
+					name: "summary",
+					kind: ModelFormFieldKind::Text {
+						min_length: None,
+						max_length: None,
+						multiline: false,
+					},
+					required: false,
+					has_default: true,
 					nullable: true,
 					editable: true,
 					generated_relation_id: false,
@@ -382,6 +399,16 @@ mod tests {
 		.expect("native form value should normalize");
 
 		assert_eq!(value, serde_json::json!({ "enabled": false, "title": "" }));
+	}
+
+	#[test]
+	fn native_normalization_omits_blank_nullable_defaults() {
+		let value = normalize_native_model_form_value::<TestSchema, AllEditableModelFields>(
+			serde_json::json!({ "summary": "" }),
+		)
+		.expect("native form value should normalize");
+
+		assert_eq!(value, serde_json::json!({ "enabled": false }));
 	}
 
 	#[test]

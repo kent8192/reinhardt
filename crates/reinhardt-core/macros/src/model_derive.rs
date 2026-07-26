@@ -2265,7 +2265,10 @@ fn generate_model_form_support(
 			let name = LitStr::new(&field.name.to_string(), field.name.span());
 			let (is_optional, _) = extract_option_type(&field.ty);
 			let relation_is_nullable = model_form_relation_id_is_nullable(field, field_infos);
-			let nullable = is_optional || relation_is_nullable;
+			let nullable = field
+				.config
+				.null
+				.unwrap_or(is_optional || relation_is_nullable);
 			let required =
 				!nullable && field.config.blank != Some(true) && field.config.default.is_none();
 			let has_default = field.config.default.is_some();
@@ -8906,6 +8909,30 @@ mod tests {
 		assert!(
 			output.contains("required : false") && output.contains("nullable : true"),
 			"nullable relation ID descriptors must accept an omitted relation value"
+		);
+	}
+
+	#[test]
+	fn test_model_form_explicit_non_null_overrides_option_type() {
+		let input = quote! {
+			#[model(app_label = "fixture_tests", table_name = "fixture_models", form = true)]
+			struct FixtureModel {
+				#[field(primary_key = true)]
+				id: i64,
+				#[field(max_length = 64, null = false)]
+				name: Option<String>,
+			}
+		};
+
+		let output = model_derive_impl(syn::parse2(input).unwrap())
+			.expect("explicit non-null form field should derive")
+			.to_string();
+
+		assert!(
+			output.contains("name : \"name\"")
+				&& output.contains("nullable : false")
+				&& output.contains("required : true"),
+			"an explicit null = false annotation must control the generated descriptor: {output}"
 		);
 	}
 

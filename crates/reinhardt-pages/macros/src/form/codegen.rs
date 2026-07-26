@@ -2211,6 +2211,28 @@ fn generate_model_form(
 							.attr("id", field_name)
 							.attr("type", input_type)
 							.bool_attr("required", descriptor.required && !is_checkbox);
+						let stored_value = self.__model_state.borrow().value(field_name).cloned();
+						if is_checkbox {
+							control = control.bool_attr(
+								"checked",
+								matches!(
+									stored_value,
+									::core::option::Option::Some(
+										#pages_crate::__private::serde_json::Value::Bool(true)
+									)
+								),
+							);
+						} else if let ::core::option::Option::Some(value) = stored_value {
+							let value = match value {
+								#pages_crate::__private::serde_json::Value::String(value) => value,
+								value => value.to_string(),
+							};
+							if tag == "textarea" {
+								control = control.child(value);
+							} else {
+								control = control.attr("value", value);
+							}
+						}
 						if permits_fraction {
 							control = control.attr("step", "any");
 						}

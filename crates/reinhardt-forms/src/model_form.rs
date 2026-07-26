@@ -321,6 +321,7 @@ where
 				)]),
 			});
 		};
+		let form_value = value.clone();
 		self.data.set_json(field_name, value).map_err(|error| {
 			let message = error.to_string();
 			match error {
@@ -333,6 +334,9 @@ where
 				},
 			}
 		})?;
+		let mut bound_values = self.form.cleaned_data().clone();
+		bound_values.insert(field_name.to_owned(), form_value);
+		self.form.bind(bound_values);
 		self.validated_candidate = None;
 		if !self.supplied_fields.contains(&field_name) {
 			self.supplied_fields.push(field_name);
@@ -775,6 +779,17 @@ mod tests {
 		let built = form.build_instance().unwrap();
 
 		assert_eq!(built.title, "CLEANED TITLE");
+	}
+
+	#[test]
+	fn replacement_value_overrides_the_bound_form_value() {
+		let data = question_payload("Replacement", 7);
+		let mut form = ModelForm::<Question, QuestionPolicy>::from_payload(data);
+
+		form.set_field_value("owner_id", json!(9)).unwrap();
+		let built = form.build_instance().unwrap();
+
+		assert_eq!(built.owner_id, 9);
 	}
 
 	#[test]

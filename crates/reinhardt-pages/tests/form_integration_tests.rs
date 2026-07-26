@@ -254,6 +254,11 @@ fn model_form_integer_conversion_preserves_signed_and_unsigned_boundaries() {
 		state.set_value("bounded", serde_json::json!(-3)),
 		Err(ModelFormPayloadError::InvalidValue { .. })
 	));
+	assert_eq!(
+		state.value("bounded"),
+		None,
+		"an invalid edit must not retain the preceding valid control value"
+	);
 	assert!(matches!(
 		state.set_value("bounded", serde_json::json!(3)),
 		Err(ModelFormPayloadError::InvalidValue { .. })

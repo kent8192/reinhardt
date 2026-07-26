@@ -67,9 +67,16 @@ where
 			return Ok(());
 		}
 
-		let converted = convert_control_value(descriptor, value)?;
-		self.values.insert(descriptor.name, converted);
-		Ok(())
+		match convert_control_value(descriptor, value) {
+			Ok(converted) => {
+				self.values.insert(descriptor.name, converted);
+				Ok(())
+			}
+			Err(error) => {
+				self.values.remove(descriptor.name);
+				Err(error)
+			}
+		}
 	}
 
 	/// Returns the converted value stored for a model field.

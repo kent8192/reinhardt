@@ -11,7 +11,7 @@
 //!
 //! See [`ModelMetadata`] for the architecture comparison diagram.
 
-use super::autodetector::{FieldState, ModelState, to_snake_case};
+use super::autodetector::{FieldState, IndexDefinition, ModelState, to_snake_case};
 use super::{ConstraintDefinition, GeneratedColumnDefinition};
 use crate::field_domain::FieldDomain;
 use std::collections::HashMap;
@@ -66,6 +66,11 @@ pub struct ModelMetadata {
 	/// externally-constructible struct does not break the public API.
 	/// Read via [`Self::constraints`]; write via [`Self::add_constraint`].
 	constraints: Vec<ConstraintDefinition>,
+	/// Model-declared indexes.
+	///
+	/// Kept private so adding structured index metadata does not break external
+	/// struct construction. Read and write through the methods below.
+	indexes: Vec<IndexDefinition>,
 }
 
 impl ModelMetadata {
@@ -83,6 +88,7 @@ impl ModelMetadata {
 			options: HashMap::new(),
 			many_to_many_fields: Vec::new(),
 			constraints: Vec::new(),
+			indexes: Vec::new(),
 		}
 	}
 
@@ -105,6 +111,16 @@ impl ModelMetadata {
 	/// (e.g., `#[model(unique_together = ...)]`).
 	pub fn add_constraint(&mut self, constraint: ConstraintDefinition) {
 		self.constraints.push(constraint);
+	}
+
+	/// Adds a model-declared index.
+	pub fn add_index(&mut self, index: IndexDefinition) {
+		self.indexes.push(index);
+	}
+
+	/// Returns model-declared indexes.
+	pub fn indexes(&self) -> &[IndexDefinition] {
+		&self.indexes
 	}
 
 	/// Adds the typed enum-domain constraint for a database column.
@@ -239,6 +255,7 @@ impl ModelMetadata {
 		model_state
 			.constraints
 			.extend(self.constraints.iter().cloned());
+		model_state.indexes.extend(self.indexes.iter().cloned());
 
 		for (name, field_meta) in &self.fields {
 			let Some(domain) = &field_meta.domain else {

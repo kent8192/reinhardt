@@ -241,9 +241,13 @@ fn parse_single_operation(expr: &Expr) -> Option<super::Operation> {
 					new_name,
 				});
 			}
-			"CreateIndex" | "CreateIndexRepair" | "RestoreIndexOnRollback" => {
+			"CreateIndex" | "CreateNamedIndex" | "CreateIndexRepair" | "RestoreIndexOnRollback" => {
 				let table = extract_string_field(&expr_struct.fields, "table")?;
-				let name = extract_optional_str_field(&expr_struct.fields, "name");
+				let name = if variant_name == "CreateNamedIndex" {
+					Some(extract_string_field(&expr_struct.fields, "name")?)
+				} else {
+					extract_optional_str_field(&expr_struct.fields, "name")
+				};
 				let columns = extract_string_vec_field(&expr_struct.fields, "columns");
 				let unique = extract_bool_field(&expr_struct.fields, "unique").unwrap_or(false);
 				let index_type = extract_index_type_field(&expr_struct.fields, "index_type");
@@ -260,6 +264,18 @@ fn parse_single_operation(expr: &Expr) -> Option<super::Operation> {
 				return Some(match variant_name.as_str() {
 					"CreateIndex" => super::Operation::CreateIndex {
 						table,
+						columns,
+						unique,
+						index_type,
+						where_clause,
+						concurrently,
+						expressions,
+						mysql_options,
+						operator_class,
+					},
+					"CreateNamedIndex" => super::Operation::CreateNamedIndex {
+						table,
+						name: name?,
 						columns,
 						unique,
 						index_type,
@@ -299,6 +315,11 @@ fn parse_single_operation(expr: &Expr) -> Option<super::Operation> {
 				let table = extract_string_field(&expr_struct.fields, "table")?;
 				let columns = extract_string_vec_field(&expr_struct.fields, "columns");
 				return Some(super::Operation::DropIndex { table, columns });
+			}
+			"DropNamedIndex" => {
+				let table = extract_string_field(&expr_struct.fields, "table")?;
+				let name = extract_string_field(&expr_struct.fields, "name")?;
+				return Some(super::Operation::DropNamedIndex { table, name });
 			}
 			"AddConstraint" => {
 				let table = extract_string_field(&expr_struct.fields, "table")?;
@@ -1765,6 +1786,21 @@ mod tests {
 				),
 				operator_class: Some("vector_cosine_ops".to_string()),
 			},
+			Operation::CreateNamedIndex {
+				table: "source".to_string(),
+				name: "source_embedding_ann".to_string(),
+				columns: vec!["embedding".to_string()],
+				unique: false,
+				index_type: Some(IndexType::Hnsw {
+					m: Some(16),
+					ef_construction: Some(64),
+				}),
+				where_clause: None,
+				concurrently: false,
+				expressions: None,
+				mysql_options: None,
+				operator_class: Some("vector_cosine_ops".to_string()),
+			},
 			Operation::CreateIndexRepair {
 				table: "source".to_string(),
 				name: Some("source_normalized_embedding_l2".to_string()),
@@ -1795,6 +1831,10 @@ mod tests {
 				expressions: None,
 				mysql_options: Some(AlterTableOptions::default()),
 				operator_class: Some("vector_ip_ops".to_string()),
+			},
+			Operation::DropNamedIndex {
+				table: "source".to_string(),
+				name: "source_embedding_ann".to_string(),
 			},
 		];
 

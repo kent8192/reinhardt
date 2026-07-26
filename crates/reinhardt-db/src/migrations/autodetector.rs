@@ -231,6 +231,12 @@ pub struct IndexDefinition {
 	pub fields: Vec<String>,
 	/// Whether this is a unique index
 	pub unique: bool,
+	/// Typed index method and options.
+	pub index_type: Option<super::operations::IndexType>,
+	/// PostgreSQL operator class.
+	pub operator_class: Option<String>,
+	/// Index expressions.
+	pub expressions: Option<Vec<String>>,
 }
 
 /// Constraint definition for a model
@@ -638,9 +644,9 @@ impl ProjectState {
 					columns: idx.fields.clone(),
 					unique: idx.unique,
 					access_method: None,
-					index_type: None,
-					expressions: None,
-					operator_class: None,
+					index_type: idx.index_type,
+					expressions: idx.expressions.clone(),
+					operator_class: idx.operator_class.clone(),
 				})
 				.collect();
 
@@ -731,9 +737,9 @@ impl ProjectState {
 						columns: idx.fields.clone(),
 						unique: idx.unique,
 						access_method: None,
-						index_type: None,
-						expressions: None,
-						operator_class: None,
+						index_type: idx.index_type,
+						expressions: idx.expressions.clone(),
+						operator_class: idx.operator_class.clone(),
 					})
 					.collect();
 
@@ -1498,6 +1504,33 @@ impl ProjectState {
 						model
 							.constraints
 							.retain(|definition| definition.name != constraint.name());
+					}
+				}
+				Operation::CreateNamedIndex {
+					table,
+					name,
+					columns,
+					unique,
+					index_type,
+					expressions,
+					operator_class,
+					..
+				} => {
+					if let Some(model) = self.find_model_by_table_mut(table) {
+						model.indexes.retain(|index| index.name != *name);
+						model.indexes.push(IndexDefinition {
+							name: name.clone(),
+							fields: columns.clone(),
+							unique: *unique,
+							index_type: *index_type,
+							operator_class: operator_class.clone(),
+							expressions: expressions.clone(),
+						});
+					}
+				}
+				Operation::DropNamedIndex { table, name } => {
+					if let Some(model) = self.find_model_by_table_mut(table) {
+						model.indexes.retain(|index| index.name != *name);
 					}
 				}
 				// Other operations don't affect the schema state in ways we track.
@@ -4755,12 +4788,12 @@ impl MigrationAutodetector {
 				name: Some(index.name.clone()),
 				columns: index.fields.clone(),
 				unique: index.unique,
-				index_type: None,
+				index_type: index.index_type,
 				where_clause: None,
 				concurrently: false,
-				expressions: None,
+				expressions: index.expressions.clone(),
 				mysql_options: None,
-				operator_class: None,
+				operator_class: index.operator_class.clone(),
 			});
 		}
 
@@ -4796,12 +4829,12 @@ impl MigrationAutodetector {
 				name: Some(index.name.clone()),
 				columns: index.fields.clone(),
 				unique: index.unique,
-				index_type: None,
+				index_type: index.index_type,
 				where_clause: None,
 				concurrently: false,
-				expressions: None,
+				expressions: index.expressions.clone(),
 				mysql_options: None,
-				operator_class: None,
+				operator_class: index.operator_class.clone(),
 			});
 		}
 
@@ -5883,12 +5916,12 @@ impl MigrationAutodetector {
 				self.matching_from_model_for_to_model(app_label, model_name, to_model, changes)
 			{
 				for to_index in &to_model.indexes {
-					// Check if this index exists in from_model
-					if !from_model
+					let unchanged = from_model
 						.indexes
 						.iter()
-						.any(|idx| idx.name == to_index.name)
-					{
+						.find(|idx| idx.name == to_index.name)
+						.is_some_and(|idx| idx == to_index);
+					if !unchanged {
 						changes.added_indexes.push((
 							app_label.clone(),
 							model_name.clone(),
@@ -5910,12 +5943,12 @@ impl MigrationAutodetector {
 				self.matching_to_model_for_from_model(app_label, model_name, from_model, changes)
 			{
 				for from_index in &from_model.indexes {
-					// Check if this index still exists in to_model
-					if !to_model
+					let unchanged = to_model
 						.indexes
 						.iter()
-						.any(|idx| idx.name == from_index.name)
-					{
+						.find(|idx| idx.name == from_index.name)
+						.is_some_and(|idx| idx == from_index);
+					if !unchanged {
 						changes.removed_indexes.push((
 							app_label.clone(),
 							model_name.clone(),
@@ -6577,9 +6610,11 @@ impl MigrationAutodetector {
 			| super::Operation::DropConstraint { table, .. }
 			| super::Operation::DropConstraintDefinition { table, .. }
 			| super::Operation::CreateIndex { table, .. }
+			| super::Operation::CreateNamedIndex { table, .. }
 			| super::Operation::CreateIndexRepair { table, .. }
 			| super::Operation::RestoreIndexOnRollback { table, .. }
 			| super::Operation::DropIndex { table, .. }
+			| super::Operation::DropNamedIndex { table, .. }
 			| super::Operation::CreateCompositePrimaryKey { table, .. }
 			| super::Operation::SetAutoIncrementValue { table, .. } => table == table_name,
 			super::Operation::CreateTable { name, .. } | super::Operation::DropTable { name } => {
@@ -7001,6 +7036,85 @@ impl MigrationAutodetector {
 			}
 		}
 
+		let mut altered_index_replacements = Vec::new();
+		let mut replacement_index_keys = BTreeSet::new();
+		for (app_label, model_name, field_name) in &changes.altered_fields {
+			let Some(from_model) = self.from_state.get_model(app_label, model_name) else {
+				continue;
+			};
+			let Some(to_model) = self.to_state.get_model(app_label, model_name) else {
+				continue;
+			};
+			let vector_dimensions_changed = matches!(
+				(
+					from_model.get_field(field_name).map(|field| &field.field_type),
+					to_model.get_field(field_name).map(|field| &field.field_type),
+				),
+				(
+					Some(super::FieldType::Vector {
+						dimensions: from_dimensions,
+					}),
+					Some(super::FieldType::Vector {
+						dimensions: to_dimensions,
+					}),
+				) if from_dimensions != to_dimensions
+			);
+			if !vector_dimensions_changed {
+				continue;
+			}
+			for index in &from_model.indexes {
+				let is_approximate = matches!(
+					index.index_type,
+					Some(
+						super::operations::IndexType::Hnsw { .. }
+							| super::operations::IndexType::Ivfflat { .. }
+					)
+				);
+				if is_approximate
+					&& index.fields.iter().any(|field| field == field_name)
+					&& to_model.indexes.iter().any(|to_index| to_index == index)
+					&& replacement_index_keys.insert((
+						app_label.clone(),
+						model_name.clone(),
+						index.name.clone(),
+					)) {
+					altered_index_replacements.push((
+						app_label.clone(),
+						model_name.clone(),
+						index.clone(),
+					));
+				}
+			}
+		}
+
+		for (app_label, model_name, index_name) in &changes.removed_indexes {
+			let Some(model) = self.from_state.get_model(app_label, model_name) else {
+				continue;
+			};
+			let Some(index) = model.indexes.iter().find(|index| index.name == *index_name) else {
+				continue;
+			};
+			by_app
+				.entry(app_label.clone())
+				.or_default()
+				.push(super::Operation::DropNamedIndex {
+					table: model.table_name.clone(),
+					name: index.name.clone(),
+				});
+		}
+		for (app_label, model_name, index) in &altered_index_replacements {
+			let Some(model) = self.from_state.get_model(app_label, model_name) else {
+				continue;
+			};
+			by_app
+				.entry(app_label.clone())
+				.or_default()
+				.push(super::Operation::DropNamedIndex {
+					table: model.table_name.clone(),
+					name: index.name.clone(),
+				});
+		}
+
 		// RenameColumn for confirmed field renames.
 		for (app_label, model_name, old_name, new_name) in &changes.renamed_fields {
 			if let Some(model) = self.to_state.get_model(app_label, model_name) {
@@ -7404,6 +7518,68 @@ impl MigrationAutodetector {
 					table: to_model.table_name.clone(),
 					constraint: constraint.to_constraint(),
 				});
+		}
+
+		for (app_label, model_name, index) in &changes.added_indexes {
+			let Some(model) = self.to_state.get_model(app_label, model_name) else {
+				continue;
+			};
+			by_app
+				.entry(app_label.clone())
+				.or_default()
+				.push(super::Operation::CreateNamedIndex {
+					table: model.table_name.clone(),
+					name: index.name.clone(),
+					columns: index.fields.clone(),
+					unique: index.unique,
+					index_type: index.index_type,
+					where_clause: None,
+					concurrently: false,
+					expressions: index.expressions.clone(),
+					mysql_options: None,
+					operator_class: index.operator_class.clone(),
+				});
+		}
+		for (app_label, model_name, index) in &altered_index_replacements {
+			let Some(model) = self.to_state.get_model(app_label, model_name) else {
+				continue;
+			};
+			by_app
+				.entry(app_label.clone())
+				.or_default()
+				.push(super::Operation::CreateNamedIndex {
+					table: model.table_name.clone(),
+					name: index.name.clone(),
+					columns: index.fields.clone(),
+					unique: index.unique,
+					index_type: index.index_type,
+					where_clause: None,
+					concurrently: false,
+					expressions: index.expressions.clone(),
+					mysql_options: None,
+					operator_class: index.operator_class.clone(),
+				});
+		}
+		for (app_label, model_name) in &changes.created_models {
+			let Some(model) = self.to_state.get_model(app_label, model_name) else {
+				continue;
+			};
+			for index in &model.indexes {
+				by_app.entry(app_label.clone()).or_default().push(
+					super::Operation::CreateNamedIndex {
+						table: model.table_name.clone(),
+						name: index.name.clone(),
+						columns: index.fields.clone(),
+						unique: index.unique,
+						index_type: index.index_type,
+						where_clause: None,
+						concurrently: false,
+						expressions: index.expressions.clone(),
+						mysql_options: None,
+						operator_class: index.operator_class.clone(),
+					},
+				);
+			}
 		}
 
 		// SetAutoIncrementValue for detected sequence resets.
@@ -8551,6 +8727,293 @@ mod tests {
 		}
 	}
 
+	fn vector_index(
+		index_type: crate::migrations::operations::IndexType,
+		operator_class: &str,
+	) -> IndexDefinition {
+		IndexDefinition {
+			name: "documents_embedding_ann".to_string(),
+			fields: vec!["embedding".to_string()],
+			unique: false,
+			index_type: Some(index_type),
+			operator_class: Some(operator_class.to_string()),
+			expressions: None,
+		}
+	}
+
+	fn vector_model(dimensions: usize, indexes: Vec<IndexDefinition>) -> ModelState {
+		build_model_state(
+			"search",
+			"Document",
+			vec![FieldState::new(
+				"embedding",
+				super::super::FieldType::Vector { dimensions },
+				false,
+			)],
+			indexes,
+			Vec::new(),
+		)
+	}
+
+	fn vector_project_state(model: ModelState) -> ProjectState {
+		build_project_state(vec![(
+			("search".to_string(), "Document".to_string()),
+			model,
+		)])
+	}
+
+	#[rstest]
+	fn vector_index_addition_emits_one_create_operation() {
+		// Arrange
+		let index = vector_index(
+			crate::migrations::operations::IndexType::Hnsw {
+				m: Some(16),
+				ef_construction: Some(64),
+			},
+			"vector_cosine_ops",
+		);
+		let target_state = vector_project_state(vector_model(1536, vec![index]));
+		let detector = MigrationAutodetector::new(
+			vector_project_state(vector_model(1536, Vec::new())),
+			target_state.clone(),
+		);
+
+		// Act
+		let operations = detector.generate_operations();
+
+		// Assert
+		assert_eq!(operations.len(), 1);
+		assert!(matches!(
+			&operations[0],
+			super::super::Operation::CreateNamedIndex {
+				name,
+				table,
+				columns,
+				index_type: Some(crate::migrations::operations::IndexType::Hnsw {
+					m: Some(16),
+					ef_construction: Some(64),
+				}),
+				operator_class: Some(operator_class),
+				..
+			} if name == "documents_embedding_ann"
+				&& table == "search_document"
+				&& columns == &vec!["embedding".to_string()]
+				&& operator_class == "vector_cosine_ops"
+		));
+		let sql = operations[0]
+			.try_to_sql(&crate::migrations::operations::SqlDialect::Postgres)
+			.expect("named vector index must render as PostgreSQL SQL");
+		assert_eq!(
+			sql,
+			"CREATE INDEX documents_embedding_ann ON search_document USING hnsw (embedding vector_cosine_ops) WITH (m = 16, ef_construction = 64);"
+		);
+		assert_eq!(
+			operations[0]
+				.to_reverse_sql(
+					&crate::migrations::operations::SqlDialect::Postgres,
+					&ProjectState::new(),
+				)
+				.expect("named vector index must render reverse SQL"),
+			Some(vec!["DROP INDEX documents_embedding_ann;".to_string()])
+		);
+		let mut replayed_state = vector_project_state(vector_model(1536, Vec::new()));
+		replayed_state.apply_migration_operations(&operations, "search");
+		assert_eq!(
+			replayed_state
+				.get_model("search", "Document")
+				.expect("replayed model")
+				.indexes,
+			target_state
+				.get_model("search", "Document")
+				.expect("target model")
+				.indexes
+		);
+	}
+
+	#[rstest]
+	fn vector_index_removal_emits_one_drop_operation() {
+		// Arrange
+		let index = vector_index(
+			crate::migrations::operations::IndexType::Ivfflat { lists: Some(100) },
+			"vector_l2_ops",
+		);
+		let detector = MigrationAutodetector::new(
+			vector_project_state(vector_model(1536, vec![index])),
+			vector_project_state(vector_model(1536, Vec::new())),
+		);
+
+		// Act
+		let operations = detector.generate_operations();
+
+		// Assert
+		assert_eq!(operations.len(), 1);
+		assert!(matches!(
+			&operations[0],
+			super::super::Operation::DropNamedIndex { table, name }
+				if table == "search_document"
+					&& name == "documents_embedding_ann"
+		));
+		let sql = operations[0]
+			.try_to_sql(&crate::migrations::operations::SqlDialect::Postgres)
+			.expect("named vector index drop must render as PostgreSQL SQL");
+		assert_eq!(sql, "DROP INDEX documents_embedding_ann;");
+	}
+
+	#[rstest]
+	#[case(
+		crate::migrations::operations::IndexType::Hnsw {
+			m: Some(16),
+			ef_construction: Some(64),
+		},
+		"vector_l2_ops",
+		crate::migrations::operations::IndexType::Ivfflat { lists: Some(100) },
+		"vector_l2_ops"
+	)]
+	#[case(
+		crate::migrations::operations::IndexType::Hnsw {
+			m: Some(16),
+			ef_construction: Some(64),
+		},
+		"vector_l2_ops",
+		crate::migrations::operations::IndexType::Hnsw {
+			m: Some(16),
+			ef_construction: Some(64),
+		},
+		"vector_cosine_ops"
+	)]
+	#[case(
+		crate::migrations::operations::IndexType::Hnsw {
+			m: Some(16),
+			ef_construction: Some(64),
+		},
+		"vector_l2_ops",
+		crate::migrations::operations::IndexType::Hnsw {
+			m: Some(24),
+			ef_construction: Some(64),
+		},
+		"vector_l2_ops"
+	)]
+	#[case(
+		crate::migrations::operations::IndexType::Hnsw {
+			m: Some(16),
+			ef_construction: Some(64),
+		},
+		"vector_l2_ops",
+		crate::migrations::operations::IndexType::Hnsw {
+			m: Some(16),
+			ef_construction: Some(96),
+		},
+		"vector_l2_ops"
+	)]
+	#[case(
+		crate::migrations::operations::IndexType::Ivfflat { lists: Some(100) },
+		"vector_l2_ops",
+		crate::migrations::operations::IndexType::Ivfflat { lists: Some(200) },
+		"vector_l2_ops"
+	)]
+	fn vector_index_property_change_emits_drop_then_create(
+		#[case] from_type: crate::migrations::operations::IndexType,
+		#[case] from_opclass: &str,
+		#[case] to_type: crate::migrations::operations::IndexType,
+		#[case] to_opclass: &str,
+	) {
+		// Arrange
+		let detector = MigrationAutodetector::new(
+			vector_project_state(vector_model(
+				1536,
+				vec![vector_index(from_type, from_opclass)],
+			)),
+			vector_project_state(vector_model(1536, vec![vector_index(to_type, to_opclass)])),
+		);
+
+		// Act
+		let operations = detector.generate_operations();
+
+		// Assert
+		assert_eq!(operations.len(), 2);
+		assert!(matches!(
+			&operations[0],
+			super::super::Operation::DropNamedIndex { .. }
+		));
+		assert!(matches!(
+			&operations[1],
+			super::super::Operation::CreateNamedIndex {
+				index_type: Some(actual_type),
+				operator_class: Some(actual_opclass),
+				..
+			} if actual_type == &to_type && actual_opclass == to_opclass
+		));
+	}
+
+	#[rstest]
+	fn vector_index_identical_metadata_emits_no_operation() {
+		// Arrange
+		let index = vector_index(
+			crate::migrations::operations::IndexType::Hnsw {
+				m: Some(16),
+				ef_construction: Some(64),
+			},
+			"vector_ip_ops",
+		);
+		let detector = MigrationAutodetector::new(
+			vector_project_state(vector_model(1536, vec![index.clone()])),
+			vector_project_state(vector_model(1536, vec![index])),
+		);
+
+		// Act
+		let operations = detector.generate_operations();
+
+		// Assert
+		assert!(operations.is_empty());
+	}
+
+	#[rstest]
+	fn vector_index_dimension_change_replaces_index_around_alter_column() {
+		// Arrange
+		let index = vector_index(
+			crate::migrations::operations::IndexType::Hnsw {
+				m: Some(16),
+				ef_construction: Some(64),
+			},
+			"vector_cosine_ops",
+		);
+		let detector = MigrationAutodetector::new(
+			vector_project_state(vector_model(768, vec![index.clone()])),
+			vector_project_state(vector_model(1536, vec![index])),
+		);
+
+		// Act
+		let operations = detector.generate_operations();
+
+		// Assert
+		assert_eq!(operations.len(), 3);
+		assert!(matches!(
+			&operations[0],
+			super::super::Operation::DropNamedIndex { .. }
+		));
+		assert!(matches!(
+			&operations[1],
+			super::super::Operation::AlterColumn {
+				column,
+				new_definition,
+				..
+			} if column == "embedding"
+				&& new_definition.type_definition
+					== (super::super::FieldType::Vector { dimensions: 1536 })
+		));
+		assert!(matches!(
+			&operations[2],
+			super::super::Operation::CreateNamedIndex {
+				index_type: Some(crate::migrations::operations::IndexType::Hnsw {
+					m: Some(16),
+					ef_construction: Some(64),
+				}),
+				operator_class: Some(operator_class),
+				..
+			} if operator_class == "vector_cosine_ops"
+		));
+	}
+
 	#[rstest]
 	fn altered_enum_column_recreates_unchanged_domain_constraint() {
 		// Arrange
@@ -9576,11 +10039,17 @@ mod tests {
 				name: "idx_title".to_string(),
 				fields: vec!["title".to_string()],
 				unique: false,
+				index_type: None,
+				operator_class: None,
+				expressions: None,
 			},
 			IndexDefinition {
 				name: "idx_slug_unique".to_string(),
 				fields: vec!["slug".to_string()],
 				unique: true,
+				index_type: None,
+				operator_class: None,
+				expressions: None,
 			},
 		];
 		let model = build_model_state(
@@ -9739,6 +10208,9 @@ mod tests {
 			name: "idx_created".to_string(),
 			fields: vec!["created_at".to_string()],
 			unique: false,
+			index_type: None,
+			operator_class: None,
+			expressions: None,
 		}];
 		let constraints = vec![ConstraintDefinition {
 			name: "ck_status".to_string(),
@@ -12261,6 +12733,12 @@ mod tests {
 			name: "idx_accounts_user_full_name".to_string(),
 			fields: vec!["full_name".to_string()],
 			unique: false,
+			index_type: Some(crate::migrations::operations::IndexType::Hnsw {
+				m: Some(24),
+				ef_construction: Some(96),
+			}),
+			operator_class: Some("vector_ip_ops".to_string()),
+			expressions: None,
 		};
 		let constraint = ConstraintDefinition {
 			name: "uq_accounts_user_full_name".to_string(),
@@ -12305,11 +12783,17 @@ mod tests {
 				name: Some(name),
 				columns,
 				unique,
+				index_type: Some(crate::migrations::operations::IndexType::Hnsw {
+					m: Some(24),
+					ef_construction: Some(96),
+				}),
+				operator_class: Some(operator_class),
 				..
 			} if table == "accounts_user"
 				&& name == "idx_accounts_user_full_name"
 				&& columns == &vec!["full_name".to_string()]
 				&& !unique
+				&& operator_class == "vector_ip_ops"
 		));
 		assert!(matches!(
 			&operations[1],
@@ -12356,12 +12840,18 @@ mod tests {
 				name: Some(name),
 				columns,
 				unique,
+				index_type: Some(crate::migrations::operations::IndexType::Hnsw {
+					m: Some(24),
+					ef_construction: Some(96),
+				}),
+				operator_class: Some(operator_class),
 				..
 			}
 				if table == "accounts_user"
 					&& name == "idx_accounts_user_full_name"
 					&& columns == &vec!["full_name".to_string()]
 					&& !unique
+					&& operator_class == "vector_ip_ops"
 		)));
 		assert!(operations.iter().any(|operation| matches!(
 				operation,

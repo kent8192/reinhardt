@@ -314,6 +314,23 @@ impl RelationInfo {
 }
 
 /// Index information extracted from inspection
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum IndexMetadataType {
+	/// HNSW approximate vector index.
+	Hnsw {
+		/// Maximum number of connections per layer.
+		m: Option<u16>,
+		/// Candidate list size used while constructing the index.
+		ef_construction: Option<u16>,
+	},
+	/// IVFFlat approximate vector index.
+	Ivfflat {
+		/// Number of inverted lists.
+		lists: Option<u32>,
+	},
+}
+
+/// Index information extracted from inspection
 #[derive(Debug, Clone, PartialEq)]
 pub struct IndexInfo {
 	/// Index name
@@ -324,6 +341,12 @@ pub struct IndexInfo {
 	pub unique: bool,
 	/// Partial index condition
 	pub condition: Option<String>,
+	/// Typed index method and options.
+	pub index_type: Option<IndexMetadataType>,
+	/// PostgreSQL operator class.
+	pub operator_class: Option<String>,
+	/// Index expressions.
+	pub expressions: Option<Vec<String>>,
 }
 
 impl IndexInfo {
@@ -348,6 +371,9 @@ impl IndexInfo {
 			fields: index.fields.clone(),
 			unique: index.unique,
 			condition: index.condition.clone(),
+			index_type: None,
+			operator_class: None,
+			expressions: None,
 		}
 	}
 }

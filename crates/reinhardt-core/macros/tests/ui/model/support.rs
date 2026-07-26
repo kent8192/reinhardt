@@ -107,7 +107,11 @@ pub mod model_info {
 pub mod db {
 	pub mod m2m_naming {
 		pub fn default_through_table(source_table: &str, field_name: &str) -> String {
-			format!("{}_{}", source_table.to_lowercase(), field_name.to_lowercase())
+			format!(
+				"{}_{}",
+				source_table.to_lowercase(),
+				field_name.to_lowercase()
+			)
 		}
 
 		pub fn default_m2m_columns(source_table: &str, target_table: &str) -> (String, String) {
@@ -179,13 +183,7 @@ pub mod db {
 		#[derive(Debug, Clone, Copy)]
 		pub struct OneToOneField<T>(core::marker::PhantomData<T>);
 
-		#[derive(
-			Debug,
-			Clone,
-			Copy,
-			serde::Serialize,
-			serde::Deserialize,
-		)]
+		#[derive(Debug, Clone, Copy, serde::Serialize, serde::Deserialize)]
 		#[serde(bound = "")]
 		pub struct ManyToManyField<Source, Target>(core::marker::PhantomData<(Source, Target)>);
 
@@ -241,8 +239,8 @@ pub mod db {
 	}
 
 	pub mod orm {
-		pub use serde;
 		pub use super::associations::ManyToManyAccessor;
+		pub use serde;
 
 		pub type FixtureFields = serde_json::Map<String, serde_json::Value>;
 		pub type FixtureValue = serde_json::Value;
@@ -260,10 +258,7 @@ pub mod db {
 				self
 			}
 
-			pub async fn first_with_db<E>(
-				self,
-				_db: &mut E,
-			) -> crate::exception::Result<Option<T>>
+			pub async fn first_with_db<E>(self, _db: &mut E) -> crate::exception::Result<Option<T>>
 			where
 				E: connection::OrmExecutor,
 			{
@@ -590,7 +585,9 @@ pub mod db {
 			pub trait RelationTarget: Model {
 				type Path<Root: Model>: RelationPathLike<Root = Root, Target = Self>;
 
-				fn wrap_relation_path<Root: Model>(path: RelationPath<Root, Self>) -> Self::Path<Root>
+				fn wrap_relation_path<Root: Model>(
+					path: RelationPath<Root, Self>,
+				) -> Self::Path<Root>
 				where
 					Self: Sized;
 			}
@@ -805,7 +802,9 @@ pub mod db {
 			type Storage = Option<T::Storage>;
 
 			fn encode_database(&self) -> Result<Self::Storage, FieldCodecError> {
-				self.as_ref().map(DatabaseField::encode_database).transpose()
+				self.as_ref()
+					.map(DatabaseField::encode_database)
+					.transpose()
 			}
 
 			fn decode_database(
@@ -892,11 +891,25 @@ pub mod db {
 			}
 
 			#[derive(Debug, Clone, PartialEq)]
+			pub enum IndexMetadataType {
+				Hnsw {
+					m: Option<u16>,
+					ef_construction: Option<u16>,
+				},
+				Ivfflat {
+					lists: Option<u32>,
+				},
+			}
+
+			#[derive(Debug, Clone, PartialEq)]
 			pub struct IndexInfo {
 				pub name: String,
 				pub fields: Vec<String>,
 				pub unique: bool,
 				pub condition: Option<String>,
+				pub index_type: Option<IndexMetadataType>,
+				pub operator_class: Option<String>,
+				pub expressions: Option<Vec<String>>,
 			}
 
 			#[derive(Debug, Clone, PartialEq)]
@@ -973,6 +986,19 @@ pub mod db {
 	}
 
 	pub mod migrations {
+		pub mod operations {
+			#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+			pub enum IndexType {
+				Hnsw {
+					m: Option<u16>,
+					ef_construction: Option<u16>,
+				},
+				Ivfflat {
+					lists: Option<u32>,
+				},
+			}
+		}
+
 		#[derive(Debug, Clone, PartialEq)]
 		pub enum FieldType {
 			Integer,
@@ -987,9 +1013,17 @@ pub mod db {
 			Uuid,
 			Json,
 			JsonBinary,
-			Vector {
-				dimensions: usize,
-			},
+			Vector { dimensions: usize },
+		}
+
+		#[derive(Debug, Clone, PartialEq)]
+		pub struct IndexDefinition {
+			pub name: String,
+			pub fields: Vec<String>,
+			pub unique: bool,
+			pub index_type: Option<operations::IndexType>,
+			pub operator_class: Option<String>,
+			pub expressions: Option<Vec<String>>,
 		}
 
 		#[derive(Debug, Clone, PartialEq)]
@@ -1019,7 +1053,7 @@ pub mod db {
 		}
 
 		pub mod model_registry {
-			use super::{ConstraintDefinition, FieldType, ForeignKeyInfo};
+			use super::{ConstraintDefinition, FieldType, ForeignKeyInfo, IndexDefinition};
 
 			#[derive(Debug, Clone, PartialEq)]
 			pub struct FieldMetadata {
@@ -1071,6 +1105,8 @@ pub mod db {
 				pub fn add_many_to_many(&mut self, _metadata: ManyToManyMetadata) {}
 
 				pub fn add_constraint(&mut self, _constraint: ConstraintDefinition) {}
+
+				pub fn add_index(&mut self, _index: IndexDefinition) {}
 
 				pub fn add_enum_domain_constraint(
 					&mut self,

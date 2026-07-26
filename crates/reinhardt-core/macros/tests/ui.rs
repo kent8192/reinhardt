@@ -188,11 +188,13 @@ fn test_model_macro_parity_fail() {
 }
 
 #[test]
-fn test_field_attributes_vector() {
+fn test_field_attributes_vector_index() {
 	let t = trybuild::TestCases::new();
 	t.pass("tests/ui/field_attributes/vector_valid.rs");
 	t.compile_fail("tests/ui/field_attributes/vector_dimension_missing.rs");
 	t.compile_fail("tests/ui/field_attributes/vector_dimension_non_literal.rs");
+	t.pass("tests/ui/field_attributes/vector_index_valid.rs");
+	t.compile_fail("tests/ui/field_attributes/vector_index_invalid_*.rs");
 }
 
 #[test]

@@ -711,6 +711,153 @@ enum CompressionMethod {
 	Lz4,
 }
 
+#[derive(Debug, Clone, Copy)]
+enum StructuredIndexMethod {
+	Hnsw,
+	Ivfflat,
+}
+
+#[derive(Debug, Clone)]
+struct StructuredIndexConfig {
+	name: String,
+	method: StructuredIndexMethod,
+	opclass: String,
+	m: Option<u16>,
+	ef_construction: Option<u16>,
+	lists: Option<u32>,
+}
+
+fn optional_u16_tokens(value: Option<u16>) -> TokenStream {
+	match value {
+		Some(value) => quote! { Some(#value) },
+		None => quote! { None },
+	}
+}
+
+fn optional_u32_tokens(value: Option<u32>) -> TokenStream {
+	match value {
+		Some(value) => quote! { Some(#value) },
+		None => quote! { None },
+	}
+}
+
+impl StructuredIndexConfig {
+	fn parse(meta: syn::meta::ParseNestedMeta<'_>) -> Result<Self> {
+		let mut name = None;
+		let mut method = None;
+		let mut opclass = None;
+		let mut m = None;
+		let mut ef_construction = None;
+		let mut lists = None;
+
+		meta.parse_nested_meta(|nested| {
+			if nested.path.is_ident("name") {
+				if name.is_some() {
+					return Err(nested.error("duplicate vector index key `name`"));
+				}
+				name = Some(nested.value()?.parse::<syn::LitStr>()?.value());
+			} else if nested.path.is_ident("method") {
+				if method.is_some() {
+					return Err(nested.error("duplicate vector index key `method`"));
+				}
+				let value = nested.value()?.parse::<syn::LitStr>()?;
+				method = Some(match value.value().as_str() {
+					"hnsw" => StructuredIndexMethod::Hnsw,
+					"ivfflat" => StructuredIndexMethod::Ivfflat,
+					_ => {
+						return Err(syn::Error::new(
+							value.span(),
+							"vector index method must be exactly `hnsw` or `ivfflat`",
+						));
+					}
+				});
+			} else if nested.path.is_ident("opclass") {
+				if opclass.is_some() {
+					return Err(nested.error("duplicate vector index key `opclass`"));
+				}
+				let value = nested.value()?.parse::<syn::LitStr>()?;
+				let value_string = value.value();
+				if !matches!(
+					value_string.as_str(),
+					"vector_l2_ops" | "vector_ip_ops" | "vector_cosine_ops"
+				) {
+					return Err(syn::Error::new(
+						value.span(),
+						"vector index opclass must be one of: vector_l2_ops, vector_ip_ops, vector_cosine_ops",
+					));
+				}
+				opclass = Some(value_string);
+			} else if nested.path.is_ident("m") {
+				if m.is_some() {
+					return Err(nested.error("duplicate vector index key `m`"));
+				}
+				let value = nested.value()?.parse::<syn::LitInt>()?;
+				let parsed = value.base10_parse::<u16>()?;
+				if parsed == 0 {
+					return Err(syn::Error::new(
+						value.span(),
+						"vector index option `m` must be greater than zero",
+					));
+				}
+				m = Some(parsed);
+			} else if nested.path.is_ident("ef_construction") {
+				if ef_construction.is_some() {
+					return Err(nested.error("duplicate vector index key `ef_construction`"));
+				}
+				let value = nested.value()?.parse::<syn::LitInt>()?;
+				let parsed = value.base10_parse::<u16>()?;
+				if parsed == 0 {
+					return Err(syn::Error::new(
+						value.span(),
+						"vector index option `ef_construction` must be greater than zero",
+					));
+				}
+				ef_construction = Some(parsed);
+			} else if nested.path.is_ident("lists") {
+				if lists.is_some() {
+					return Err(nested.error("duplicate vector index key `lists`"));
+				}
+				let value = nested.value()?.parse::<syn::LitInt>()?;
+				let parsed = value.base10_parse::<u32>()?;
+				if parsed == 0 {
+					return Err(syn::Error::new(
+						value.span(),
+						"vector index option `lists` must be greater than zero",
+					));
+				}
+				lists = Some(parsed);
+			} else {
+				return Err(nested.error("unknown vector index key"));
+			}
+			Ok(())
+		})?;
+
+		let name = name.ok_or_else(|| meta.error("vector index requires `name`"))?;
+		let method = method.ok_or_else(|| meta.error("vector index requires `method`"))?;
+		let opclass = opclass.ok_or_else(|| meta.error("vector index requires `opclass`"))?;
+		match method {
+			StructuredIndexMethod::Hnsw if lists.is_some() => {
+				return Err(meta.error("HNSW vector indexes do not accept `lists`"));
+			}
+			StructuredIndexMethod::Ivfflat if m.is_some() || ef_construction.is_some() => {
+				return Err(
+					meta.error("IVFFlat vector indexes do not accept `m` or `ef_construction`")
+				);
+			}
+			_ => {}
+		}
+
+		Ok(Self {
+			name,
+			method,
+			opclass,
+			m,
+			ef_construction,
+			lists,
+		})
+	}
+}
+
 /// Field configuration from `#[field(...)]` attribute
 #[derive(Debug, Clone, Default)]
 struct FieldConfig {
@@ -723,6 +870,7 @@ struct FieldConfig {
 	db_column: Option<String>,
 	editable: Option<bool>,
 	index: Option<bool>,
+	structured_index: Option<StructuredIndexConfig>,
 	check: Option<String>,
 	// Validator flags
 	email: Option<bool>,
@@ -873,8 +1021,15 @@ impl FieldConfig {
 					config.editable = Some(value.value);
 					Ok(())
 				} else if meta.path.is_ident("index") {
-					let value: syn::LitBool = meta.value()?.parse()?;
-					config.index = Some(value.value);
+					if config.index.is_some() || config.structured_index.is_some() {
+						return Err(meta.error("duplicate `index` field attribute"));
+					}
+					if meta.input.peek(syn::Token![=]) {
+						let value: syn::LitBool = meta.value()?.parse()?;
+						config.index = Some(value.value);
+					} else {
+						config.structured_index = Some(StructuredIndexConfig::parse(meta)?);
+					}
 					Ok(())
 				} else if meta.path.is_ident("check") {
 					let value: syn::LitStr = meta.value()?.parse()?;
@@ -1325,6 +1480,13 @@ impl FieldConfig {
 	/// Validate field configuration that depends on the Rust field type.
 	fn validate_for_field_type(&self, ty: &Type) -> Result<()> {
 		self.validate()?;
+
+		if self.structured_index.is_some() && vector_dimensions(ty)?.is_none() {
+			return Err(syn::Error::new_spanned(
+				ty,
+				"structured vector index metadata is only valid on Vector<N> fields",
+			));
+		}
 
 		let has_generated = self.generated.is_some() || self.generated_sql.is_some();
 		let implicit_integer_pk_auto_increment = self.primary_key
@@ -3037,6 +3199,50 @@ pub(crate) fn model_derive_impl(mut input: DeriveInput) -> Result<TokenStream> {
 		.filter(|f| f.config.index.unwrap_or(false))
 		.map(|f| f.name.to_string())
 		.collect();
+	let structured_index_metadata_items: Vec<_> = field_infos
+		.iter()
+		.filter_map(|field| {
+			let config = field.config.structured_index.as_ref()?;
+			let name = &config.name;
+			let column = field
+				.config
+				.db_column
+				.clone()
+				.unwrap_or_else(|| field.name.to_string());
+			let opclass = &config.opclass;
+			let index_type = match config.method {
+				StructuredIndexMethod::Hnsw => {
+					let m = optional_u16_tokens(config.m);
+					let ef_construction = optional_u16_tokens(config.ef_construction);
+					quote! {
+						#orm_crate::inspection::IndexMetadataType::Hnsw {
+							m: #m,
+							ef_construction: #ef_construction,
+						}
+					}
+				}
+				StructuredIndexMethod::Ivfflat => {
+					let lists = optional_u32_tokens(config.lists);
+					quote! {
+						#orm_crate::inspection::IndexMetadataType::Ivfflat {
+							lists: #lists,
+						}
+					}
+				}
+			};
+			Some(quote! {
+				#orm_crate::inspection::IndexInfo {
+					name: #name.to_string(),
+					fields: vec![#column.to_string()],
+					unique: false,
+					condition: None,
+					index_type: Some(#index_type),
+					operator_class: Some(#opclass.to_string()),
+					expressions: None,
+				}
+			})
+		})
+		.collect();
 
 	// Find all check constraint fields
 	let check_constraints: Vec<(String, String)> = field_infos
@@ -3559,8 +3765,14 @@ pub(crate) fn model_derive_impl(mut input: DeriveInput) -> Result<TokenStream> {
 							fields: vec![#indexed_fields.to_string()],
 							unique: false,
 							condition: None,
-						}
-					),*
+							index_type: None,
+							operator_class: None,
+							expressions: None,
+						},
+					)*
+					#(
+						#structured_index_metadata_items,
+					)*
 				]
 			}
 
@@ -4898,6 +5110,49 @@ fn generate_registration_code(input: RegistrationCodeInput<'_>) -> Result<TokenS
 			}
 		})
 		.collect();
+	let index_registrations: Vec<TokenStream> = field_infos
+		.iter()
+		.filter_map(|field| {
+			let config = field.config.structured_index.as_ref()?;
+			let name = &config.name;
+			let column = field
+				.config
+				.db_column
+				.clone()
+				.unwrap_or_else(|| field.name.to_string());
+			let opclass = &config.opclass;
+			let index_type = match config.method {
+				StructuredIndexMethod::Hnsw => {
+					let m = optional_u16_tokens(config.m);
+					let ef_construction = optional_u16_tokens(config.ef_construction);
+					quote! {
+						#migrations_crate::operations::IndexType::Hnsw {
+							m: #m,
+							ef_construction: #ef_construction,
+						}
+					}
+				}
+				StructuredIndexMethod::Ivfflat => {
+					let lists = optional_u32_tokens(config.lists);
+					quote! {
+						#migrations_crate::operations::IndexType::Ivfflat {
+							lists: #lists,
+						}
+					}
+				}
+			};
+			Some(quote! {
+				metadata.add_index(#migrations_crate::IndexDefinition {
+					name: #name.to_string(),
+					fields: vec![#column.to_string()],
+					unique: false,
+					index_type: Some(#index_type),
+					operator_class: Some(#opclass.to_string()),
+					expressions: None,
+				});
+			})
+		})
+		.collect();
 
 	let code = quote! {
 		#[cfg(not(all(target_family = "wasm", target_os = "unknown")))]
@@ -4916,6 +5171,7 @@ fn generate_registration_code(input: RegistrationCodeInput<'_>) -> Result<TokenS
 			#(#fk_id_registrations)*
 			#(#m2m_registrations)*
 			#(#constraint_registrations)*
+			#(#index_registrations)*
 
 			#migrations_crate::model_registry::global_registry().register_model(metadata);
 

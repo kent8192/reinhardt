@@ -1841,6 +1841,18 @@ impl OperationOptimizer {
 							columns: c2,
 						},
 					) if t1 == t2 && c1 == c2 => true,
+					// CreateNamedIndex + DropNamedIndex
+					(
+						Operation::CreateNamedIndex {
+							table: t1,
+							name: n1,
+							..
+						},
+						Operation::DropNamedIndex {
+							table: t2,
+							name: n2,
+						},
+					) if t1 == t2 && n1 == n2 => true,
 					// AddConstraint + DropConstraint
 					(
 						Operation::AddConstraint {

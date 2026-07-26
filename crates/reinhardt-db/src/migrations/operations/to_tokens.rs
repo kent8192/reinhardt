@@ -619,6 +619,18 @@ impl ToTokens for Operation {
 				mysql_options,
 				operator_class,
 			}
+			| Operation::CreateNamedIndex {
+				table,
+				name: _,
+				columns,
+				unique,
+				index_type,
+				where_clause,
+				concurrently,
+				expressions,
+				mysql_options,
+				operator_class,
+			}
 			| Operation::CreateIndexRepair {
 				table,
 				name: _,
@@ -645,6 +657,7 @@ impl ToTokens for Operation {
 			} => {
 				let variant = match self {
 					Operation::CreateIndex { .. } => format_ident!("CreateIndex"),
+					Operation::CreateNamedIndex { .. } => format_ident!("CreateNamedIndex"),
 					Operation::CreateIndexRepair { .. } => format_ident!("CreateIndexRepair"),
 					Operation::RestoreIndexOnRollback { .. } => {
 						format_ident!("RestoreIndexOnRollback")
@@ -654,6 +667,9 @@ impl ToTokens for Operation {
 				let columns_iter = columns.iter();
 				let name_field = match self {
 					Operation::CreateIndex { .. } => quote! {},
+					Operation::CreateNamedIndex { name, .. } => {
+						quote! { name: #name.to_string(), }
+					}
 					Operation::CreateIndexRepair { name, .. }
 					| Operation::RestoreIndexOnRollback { name, .. } => match name {
 						Some(name) => quote! { name: Some(#name.to_string()), },
@@ -730,6 +746,14 @@ impl ToTokens for Operation {
 					Operation::DropIndex {
 						table: #table.to_string(),
 						columns: vec![#(#columns_iter.to_string()),*],
+					}
+				});
+			}
+			Operation::DropNamedIndex { table, name } => {
+				tokens.extend(quote! {
+					Operation::DropNamedIndex {
+						table: #table.to_string(),
+						name: #name.to_string(),
 					}
 				});
 			}

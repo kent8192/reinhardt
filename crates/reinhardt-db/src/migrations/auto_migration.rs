@@ -285,6 +285,12 @@ impl AutoMigrationGenerator {
 						columns.clone()
 					},
 				}),
+				Operation::CreateNamedIndex { table, name, .. } => {
+					Some(Operation::DropNamedIndex {
+						table: table.clone(),
+						name: name.clone(),
+					})
+				}
 				Operation::CreateIndexRepair { .. } => None,
 				Operation::RestoreIndexOnRollback {
 					table,
@@ -310,6 +316,7 @@ impl AutoMigrationGenerator {
 					operator_class: operator_class.clone(),
 				}),
 				Operation::DropIndex { .. } => None, // Cannot rollback without index definition
+				Operation::DropNamedIndex { .. } => None,
 
 				// Special operations
 				Operation::RunSQL { reverse_sql, .. } => {

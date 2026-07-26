@@ -131,8 +131,15 @@ impl Scanner {
 			path: path.clone(),
 			relative_path,
 		});
+		let declaring_directory = path.parent().unwrap_or(Path::new(""));
 		let module_directory = child_module_directory(&path, is_target_root);
-		self.scan_items(&target, &module, &module_directory, &parsed.items)
+		self.scan_items(
+			&target,
+			&module,
+			&module_directory,
+			declaring_directory,
+			&parsed.items,
+		)
 	}
 
 	fn scan_items(
@@ -140,6 +147,7 @@ impl Scanner {
 		target: &TargetKey,
 		module: &ModulePath,
 		module_directory: &Path,
+		declaring_directory: &Path,
 		items: &[Item],
 	) -> Result<()> {
 		for item in items {
@@ -167,7 +175,13 @@ impl Scanner {
 					});
 				}
 				Item::Mod(item_mod) if !is_conditionally_compiled(&item_mod.attrs) => {
-					self.scan_module(target, module, module_directory, item_mod)?;
+					self.scan_module(
+						target,
+						module,
+						module_directory,
+						declaring_directory,
+						item_mod,
+					)?;
 				}
 				_ => {}
 			}
@@ -180,6 +194,7 @@ impl Scanner {
 		target: &TargetKey,
 		module: &ModulePath,
 		module_directory: &Path,
+		declaring_directory: &Path,
 		item_mod: &ItemMod,
 	) -> Result<()> {
 		let mut child_module = module.clone();
@@ -189,11 +204,13 @@ impl Scanner {
 				target,
 				&child_module,
 				&module_directory.join(item_mod.ident.to_string()),
+				declaring_directory,
 				items,
 			);
 		}
 
-		let Some(path) = find_external_module(module_directory, item_mod) else {
+		let Some(path) = find_external_module(module_directory, declaring_directory, item_mod)
+		else {
 			return Ok(());
 		};
 		self.scan_external_module(target.clone(), child_module, path, false)
@@ -211,9 +228,13 @@ fn child_module_directory(path: &Path, is_target_root: bool) -> PathBuf {
 	}
 }
 
-fn find_external_module(module_directory: &Path, item_mod: &ItemMod) -> Option<PathBuf> {
+fn find_external_module(
+	module_directory: &Path,
+	declaring_directory: &Path,
+	item_mod: &ItemMod,
+) -> Option<PathBuf> {
 	if let Some(explicit) = path_attribute(&item_mod.attrs) {
-		let candidate = module_directory.join(explicit);
+		let candidate = declaring_directory.join(explicit);
 		return candidate.is_file().then_some(candidate);
 	}
 

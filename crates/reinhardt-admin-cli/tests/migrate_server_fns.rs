@@ -239,7 +239,7 @@ async fn local_status() {}
 
 pub fn server_url_patterns() -> ServerRouter {
 	ServerRouter::new()
-		.auto_server_fns(module_path!())
+		.auto_server_fns_in_crate(module_path!(), concat!(env!("CARGO_MANIFEST_DIR"), "@", env!("CARGO_PKG_NAME"), "@", env!("CARGO_PKG_VERSION")))
 }
 "#
 	);
@@ -296,7 +296,7 @@ fn root_escape_is_reported_as_unresolved_and_left_byte_identical() {
 	assert_success(&output);
 	assert_eq!(
 		stdout(&output),
-		"skipped unresolved marker `missing`: src/lib.rs:3\n"
+		"skipped mixed registration: src/lib.rs:1\n"
 	);
 	assert_eq!(fs::read(source).expect("read skipped source"), before);
 }
@@ -331,7 +331,7 @@ pub fn server_url_patterns() {
 	assert_success(&output);
 	assert_eq!(
 		stdout(&output),
-		"skipped unresolved marker `duplicated`: src/lib.rs:11\n"
+		"skipped mixed registration: src/lib.rs:9\n"
 	);
 	assert_eq!(fs::read(source).expect("read skipped source"), before);
 }
@@ -358,7 +358,7 @@ fn server_fnset_chain_is_reported_as_mixed_and_left_byte_identical() {
 	assert_success(&output);
 	assert_eq!(
 		stdout(&output),
-		"skipped mixed registration: src/lib.rs:3\n"
+		"skipped mixed registration: src/lib.rs:1\n"
 	);
 	assert_eq!(fs::read(source).expect("read skipped source"), before);
 }
@@ -376,7 +376,7 @@ async fn ready() {}
 pub fn server_url_patterns() {
 	router()
 		.server_fn(ready::marker)
-		.auto_server_fns(module_path!())
+		.auto_server_fns_in_crate(module_path!(), concat!(env!("CARGO_MANIFEST_DIR"), "@", env!("CARGO_PKG_NAME"), "@", env!("CARGO_PKG_VERSION")))
 }
 "#,
 		)],
@@ -387,7 +387,10 @@ pub fn server_url_patterns() {
 	let output = run_migrate(fixture.path(), true);
 
 	assert_success(&output);
-	assert_eq!(stdout(&output), "");
+	assert_eq!(
+		stdout(&output),
+		"skipped mixed registration: src/lib.rs:4\n"
+	);
 	assert_eq!(fs::read(source).expect("read unchanged source"), before);
 }
 
@@ -431,7 +434,7 @@ use reinhardt::ServerRouter;
 
 pub fn server_url_patterns() -> ServerRouter {
 	ServerRouter::new()
-		.auto_server_fns(module_path!())
+		.auto_server_fns_in_crate(module_path!(), concat!(env!("CARGO_MANIFEST_DIR"), "@", env!("CARGO_PKG_NAME"), "@", env!("CARGO_PKG_VERSION")))
 }
 "#
 	);
@@ -565,7 +568,7 @@ pub fn server_url_patterns() -> ServerRouter {
 	assert_success(&output);
 	assert_eq!(
 		stdout(&output),
-		"skipped mixed registration: src/apps/polls/urls/server_router.rs:9\n"
+		"skipped mixed registration: src/apps/polls/urls/server_router.rs:5\n"
 	);
 	assert_eq!(fs::read(router).expect("read skipped router"), before);
 }
@@ -652,7 +655,7 @@ macro_rules! keep_marker {
 pub fn server_url_patterns() -> ServerRouter {
 	keep_marker!(vote::marker);
 	ServerRouter::new()
-		.auto_server_fns(module_path!())
+		.auto_server_fns_in_crate(module_path!(), concat!(env!("CARGO_MANIFEST_DIR"), "@", env!("CARGO_PKG_NAME"), "@", env!("CARGO_PKG_VERSION")))
 }
 "#
 	);
@@ -702,7 +705,7 @@ fn retained_attribute() {}
 
 pub fn server_url_patterns() -> ServerRouter {
 	ServerRouter::new()
-		.auto_server_fns(module_path!())
+		.auto_server_fns_in_crate(module_path!(), concat!(env!("CARGO_MANIFEST_DIR"), "@", env!("CARGO_PKG_NAME"), "@", env!("CARGO_PKG_VERSION")))
 }
 "#
 	);
@@ -745,7 +748,7 @@ use reinhardt::ServerRouter;
 
 pub fn server_url_patterns() -> ServerRouter {
 	ServerRouter::new()
-		.auto_server_fns(module_path!())
+		.auto_server_fns_in_crate(module_path!(), concat!(env!("CARGO_MANIFEST_DIR"), "@", env!("CARGO_PKG_NAME"), "@", env!("CARGO_PKG_VERSION")))
 }
 "#
 	);
@@ -779,7 +782,7 @@ pub fn server_url_patterns() {
 	assert_success(&output);
 	assert_eq!(
 		stdout(&output),
-		"skipped incompatible app ownership: src/lib.rs:6\n"
+		"skipped mixed registration: src/lib.rs:4\n"
 	);
 	assert_eq!(fs::read(source).expect("read skipped router"), before);
 }
@@ -820,7 +823,7 @@ pub fn server_url_patterns() {
 	assert_success(&output);
 	assert_eq!(
 		stdout(&output),
-		"skipped incompatible app ownership: src/lib.rs:14\n"
+		"skipped mixed registration: src/lib.rs:12\n"
 	);
 	assert_eq!(fs::read(source).expect("read skipped router"), before);
 }
@@ -868,7 +871,7 @@ mod admin {
 	assert_success(&output);
 	assert_eq!(
 		stdout(&output),
-		"skipped mixed registration: src/lib.rs:10\nskipped mixed registration: src/lib.rs:20\n"
+		"skipped mixed registration: src/lib.rs:8\nskipped mixed registration: src/lib.rs:18\n"
 	);
 	assert_eq!(
 		fs::read(source).expect("read skipped router chains"),
@@ -885,13 +888,15 @@ fn nonstandard_target_root_resolves_child_module_from_target_parent() {
 			("src/lib.rs", ""),
 			(
 				"tests/social.rs",
-				r#"#[app_config(name = "social", label = "social")]
+				r#"use reinhardt::ServerRouter;
+
+#[app_config(name = "social", label = "social")]
 pub struct SocialConfig;
 
 #[path = "support/child.rs"]
 mod child;
 
-pub fn server_url_patterns() {
+pub fn server_url_patterns() -> ServerRouter {
 	router()
 		.server_fn(child::status::marker)
 }
@@ -913,15 +918,17 @@ pub async fn status() {}
 	assert_eq!(stdout(&output), "rewrote: tests/social.rs\n");
 	assert_eq!(
 		fs::read_to_string(source).expect("read rewritten target"),
-		r#"#[app_config(name = "social", label = "social")]
+		r#"use reinhardt::ServerRouter;
+
+#[app_config(name = "social", label = "social")]
 pub struct SocialConfig;
 
 #[path = "support/child.rs"]
 mod child;
 
-pub fn server_url_patterns() {
+pub fn server_url_patterns() -> ServerRouter {
 	router()
-		.auto_server_fns(module_path!())
+		.auto_server_fns_in_crate(module_path!(), concat!(env!("CARGO_MANIFEST_DIR"), "@", env!("CARGO_PKG_NAME"), "@", env!("CARGO_PKG_VERSION")))
 }
 "#
 	);
@@ -936,13 +943,15 @@ fn path_module_named_lib_uses_non_root_child_directory_rules() {
 			("src/lib.rs", ""),
 			(
 				"tests/social.rs",
-				r#"#[app_config(name = "social", label = "social")]
+				r#"use reinhardt::ServerRouter;
+
+#[app_config(name = "social", label = "social")]
 pub struct SocialConfig;
 
 #[path = "support/lib.rs"]
 mod support;
 
-pub fn server_url_patterns() {
+pub fn server_url_patterns() -> ServerRouter {
 	router()
 		.server_fn(support::child::status::marker)
 }
@@ -965,15 +974,17 @@ pub async fn status() {}
 	assert_eq!(stdout(&output), "rewrote: tests/social.rs\n");
 	assert_eq!(
 		fs::read_to_string(source).expect("read rewritten target"),
-		r#"#[app_config(name = "social", label = "social")]
+		r#"use reinhardt::ServerRouter;
+
+#[app_config(name = "social", label = "social")]
 pub struct SocialConfig;
 
 #[path = "support/lib.rs"]
 mod support;
 
-pub fn server_url_patterns() {
+pub fn server_url_patterns() -> ServerRouter {
 	router()
-		.auto_server_fns(module_path!())
+		.auto_server_fns_in_crate(module_path!(), concat!(env!("CARGO_MANIFEST_DIR"), "@", env!("CARGO_PKG_NAME"), "@", env!("CARGO_PKG_VERSION")))
 }
 "#
 	);
@@ -1043,7 +1054,7 @@ pub fn server_url_patterns() {
 	assert_success(&output);
 	assert_eq!(
 		stdout(&output),
-		"skipped incompatible app ownership: src/lib.rs:10\n"
+		"skipped mixed registration: src/lib.rs:8\n"
 	);
 	assert_eq!(fs::read(source).expect("read skipped router"), before);
 }

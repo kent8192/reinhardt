@@ -472,7 +472,10 @@ fn generate_wrapper_with_both(
 				// reach the response, instead of being flattened into 400 via
 				// `Error::Validation`. See #4446.
 				quote! {
-					let #temp = <#ty as #params_crate::FromRequest>::from_request(&req, &ctx)
+					let #temp = <#ty as #params_crate::FromRequest>::from_request(
+						&__reinhardt_request,
+						&ctx,
+					)
 						.await
 						.map_err(#core_crate::exception::Error::from)?;
 				}
@@ -520,7 +523,10 @@ fn generate_wrapper_with_both(
 				let pat = &ext.pat;
 				let ty = &ext.ty;
 				quote! {
-					let #pat = <#ty as #params_crate::FromRequest>::from_request(&req, &ctx)
+					let #pat = <#ty as #params_crate::FromRequest>::from_request(
+						&__reinhardt_request,
+						&ctx,
+					)
 						.await
 						.map_err(#core_crate::exception::Error::from)?;
 				}
@@ -558,7 +564,7 @@ fn generate_wrapper_with_both(
 							.pat;
 						Some(quote! { #pat })
 					} else if is_request_type(&pat_type.ty) {
-						Some(quote! { req })
+						Some(quote! { __reinhardt_request })
 					} else {
 						let pat = extractor_args
 							.next()
@@ -745,15 +751,15 @@ fn generate_view_type(
 
 		#[#async_trait_crate::async_trait]
 		impl #http_crate::Handler for #view_type_name {
-			async fn handle(&self, req: #http_crate::Request) -> #http_crate::Result<#http_crate::Response> {
-				#view_type_name::#fn_name(req).await
+			async fn handle(&self, __reinhardt_request: #http_crate::Request) -> #http_crate::Result<#http_crate::Response> {
+				#view_type_name::#fn_name(__reinhardt_request).await
 			}
 		}
 
 		impl #view_type_name {
 			/// Handler function for this view
 			#(#fn_attrs)*
-			#fn_vis #asyncness fn #fn_name(req: #http_crate::Request) #output {
+			#fn_vis #asyncness fn #fn_name(__reinhardt_request: #http_crate::Request) #output {
 				#wrapper_body
 			}
 		}
@@ -1398,7 +1404,7 @@ mod url_resolver_tests {
 	#[test]
 	fn route_call_passes_raw_request_with_extractors_in_original_order() {
 		let input: ItemFn = syn::parse_quote! {
-			async fn handler(req: reinhardt_http::Request, Path(id): Path<String>, Json(body): Json<Payload>) -> String { String::new() }
+			async fn handler(request: reinhardt_http::Request, Path(req): Path<String>, Json(body): Json<Payload>) -> String { String::new() }
 		};
 		let extractors = detect_extractors(&input.sig.inputs);
 		let inject_params = detect_inject_params(&input.sig.inputs);
@@ -1410,7 +1416,7 @@ mod url_resolver_tests {
 		);
 		let generated = wrapper.to_string();
 		assert!(
-			generated.contains("handler_original (req , Path (id) , Json (body))"),
+			generated.contains("handler_original (__reinhardt_request , Path (id) , Json (body))"),
 			"{generated}"
 		);
 	}

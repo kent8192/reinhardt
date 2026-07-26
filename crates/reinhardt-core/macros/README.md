@@ -140,9 +140,7 @@ Provides compile-time code generation for common patterns.
   direct access to headers or other request metadata:
 
   ```rust
-  use reinhardt::extractors::Path;
-  use reinhardt::http::{Request, Response, ViewResult};
-  use reinhardt::views::get;
+  use reinhardt::{get, Path, Request, Response, ViewResult};
   use uuid::Uuid;
 
   #[get("/books/import/{job_id}")]

@@ -160,6 +160,8 @@ impl Scanner {
 		inherited_attribute_aliases: &BTreeMap<String, String>,
 	) -> Result<()> {
 		let attribute_aliases = reinhardt_attribute_aliases(items, inherited_attribute_aliases);
+		let mut visible_attribute_aliases = inherited_attribute_aliases.clone();
+		visible_attribute_aliases.extend(attribute_aliases.clone());
 		for item in items {
 			match item {
 				Item::Macro(item_macro) if !item_macro.mac.path.is_ident("macro_rules") => {
@@ -201,7 +203,8 @@ impl Scanner {
 					}
 				}
 				Item::Fn(function)
-					if has_unknown_server_fn_attribute(&function.attrs, &attribute_aliases) =>
+					if has_cfg_attr_server_fn(&function.attrs, &attribute_aliases)
+						|| has_unknown_server_fn_attribute(&function.attrs, &attribute_aliases) =>
 				{
 					self.record_incomplete_server_fn_coverage(target, module);
 				}
@@ -217,7 +220,7 @@ impl Scanner {
 						module_directory,
 						declaring_directory,
 						item_mod,
-						&attribute_aliases,
+						&visible_attribute_aliases,
 					)?;
 				}
 				_ => {}
@@ -434,7 +437,7 @@ fn collect_inherited_attribute_aliases(
 			record_inherited_attribute_alias(&path, rename.rename.to_string(), inherited, aliases);
 		}
 		UseTree::Glob(_) => {
-			if prefix.as_slice() == ["super"] {
+			if prefix.iter().all(|segment| segment == "super") {
 				aliases.extend(inherited.clone());
 			}
 		}
@@ -452,10 +455,13 @@ fn record_inherited_attribute_alias(
 	inherited: &BTreeMap<String, String>,
 	aliases: &mut BTreeMap<String, String>,
 ) {
-	let [parent, source] = path else {
+	let Some(source) = path.last() else {
 		return;
 	};
-	if parent != "super" {
+	let parent = &path[..path.len() - 1];
+	if parent.is_empty()
+		|| (!parent.iter().all(|segment| segment == "super") && parent[0] != "crate")
+	{
 		return;
 	}
 	aliases.insert(
@@ -529,6 +535,43 @@ fn is_conditionally_compiled(attributes: &[Attribute]) -> bool {
 	attributes
 		.iter()
 		.any(|attribute| attribute.path().is_ident("cfg") || attribute.path().is_ident("cfg_attr"))
+}
+
+fn has_cfg_attr_server_fn(attributes: &[Attribute], aliases: &BTreeMap<String, String>) -> bool {
+	attributes.iter().any(|attribute| {
+		attribute.path().is_ident("cfg_attr")
+			&& cfg_attr_contains_server_fn(&attribute.meta, aliases)
+	})
+}
+
+fn cfg_attr_contains_server_fn(meta: &Meta, aliases: &BTreeMap<String, String>) -> bool {
+	let Meta::List(list) = meta else {
+		return false;
+	};
+	let Ok(arguments) =
+		list.parse_args_with(syn::punctuated::Punctuated::<Meta, Token![,]>::parse_terminated)
+	else {
+		return true;
+	};
+	arguments.iter().skip(1).any(|argument| {
+		let path = argument.path();
+		let last = path
+			.segments
+			.last()
+			.map(|segment| segment.ident.to_string());
+		((path.segments.len() == 1
+			&& (last.as_deref() == Some("server_fn")
+				|| aliases
+					.get(last.as_deref().unwrap_or_default())
+					.is_some_and(|resolved| resolved == "server_fn")))
+			|| (last.as_deref() == Some("server_fn")
+				&& path.segments.first().is_some_and(|segment| {
+					matches!(
+						segment.ident.to_string().as_str(),
+						"reinhardt" | "reinhardt_pages"
+					)
+				}))) || (path.is_ident("cfg_attr") && cfg_attr_contains_server_fn(argument, aliases))
+	})
 }
 
 fn server_fn_auto_registers(attributes: &[Attribute], aliases: &BTreeMap<String, String>) -> bool {

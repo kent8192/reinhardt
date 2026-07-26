@@ -477,6 +477,9 @@ fn analyze_chain(
 		.copied()
 		.filter(|method| method.method == "server_fn")
 		.collect();
+	if !server_methods.is_empty() && !imports.has_reinhardt_server_fn_router_ext() {
+		return ChainOutcome::Mixed(span_line(server_methods[0].method.span()));
+	}
 	let mut resolved_markers = Vec::with_capacity(server_methods.len());
 	for method in &server_methods {
 		let Some(argument) = single_marker_argument(method) else {
@@ -768,6 +771,19 @@ impl ImportIndex {
 			}
 		}
 		index
+	}
+
+	fn has_reinhardt_server_fn_router_ext(&self) -> bool {
+		self.bindings.values().flatten().any(|path| {
+			matches!(
+				path.as_slice(),
+				[reinhardt, pages, server_fn, extension]
+					if reinhardt == "reinhardt"
+						&& pages == "pages"
+						&& server_fn == "server_fn"
+						&& extension == "ServerFnRouterExt"
+			)
+		})
 	}
 }
 

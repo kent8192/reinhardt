@@ -94,98 +94,68 @@ fn split_once_ascii_case<'a>(value: &'a str, delimiter: &str) -> Option<(&'a str
 		.map(|index| (&value[..index], &value[index + delimiter.len()..]))
 }
 
-fn postgres_primary_message(message: &str) -> &str {
-	let line = message.lines().next().unwrap_or_default().trim();
-	strip_ascii_case_prefix(line, "ERROR:")
-		.map(str::trim_start)
-		.unwrap_or(line)
-}
-
-fn identifier_final_segment(identifier: &str) -> Option<(String, bool)> {
-	let bytes = identifier.as_bytes();
-	let mut index = 0;
-	let mut final_segment = None;
-	while index < bytes.len() {
-		let (segment, quoted) = if bytes[index] == b'"' {
-			index += 1;
-			let mut segment = String::new();
-			let mut closed = false;
-			while index < bytes.len() {
-				if bytes[index] == b'"' {
-					if bytes.get(index + 1) == Some(&b'"') {
-						segment.push('"');
-						index += 2;
-					} else {
-						index += 1;
-						closed = true;
-						break;
-					}
-				} else {
-					segment.push(bytes[index] as char);
-					index += 1;
-				}
-			}
-			if !closed {
-				return None;
-			}
-			(segment, true)
-		} else {
-			let start = index;
-			while index < bytes.len() && bytes[index] != b'.' {
-				if !(bytes[index].is_ascii_alphanumeric() || matches!(bytes[index], b'_' | b'$')) {
-					return None;
-				}
-				index += 1;
-			}
-			if start == index {
-				return None;
-			}
-			(identifier[start..index].to_owned(), false)
-		};
-		final_segment = Some((segment, quoted));
-		if index == bytes.len() {
-			break;
-		}
-		if bytes[index] != b'.' {
-			return None;
-		}
-		index += 1;
-		if index == bytes.len() {
-			return None;
-		}
-	}
-	final_segment
-}
-
-fn identifier_final_segment_is(identifier: &str, expected: &str) -> bool {
-	identifier_final_segment(identifier).is_some_and(|(segment, quoted)| {
-		if quoted {
-			segment == expected
-		} else {
-			segment.eq_ignore_ascii_case(expected)
-		}
-	})
-}
-
-fn missing_vector_type(message: &str) -> bool {
-	let message = postgres_primary_message(message);
-	strip_ascii_case_prefix(message, "type ")
-		.and_then(|identifier| strip_ascii_case_suffix(identifier, " does not exist"))
-		.is_some_and(|identifier| identifier_final_segment_is(identifier, "vector"))
-}
-
-fn missing_vector_access_method(message: &str) -> bool {
-	let message = postgres_primary_message(message);
-	strip_ascii_case_prefix(message, "access method ")
-		.and_then(|identifier| strip_ascii_case_suffix(identifier, " does not exist"))
-		.is_some_and(|identifier| {
-			identifier_final_segment_is(identifier, "hnsw")
-				|| identifier_final_segment_is(identifier, "ivfflat")
+fn postgres_identifier_segment(identifier: &str) -> bool {
+	let mut chars = identifier.chars();
+	let Some(first) = chars.next() else {
+		return false;
+	};
+	(first == '_' || first.is_ascii_alphabetic())
+		&& chars.all(|character| {
+			character == '_' || character == '$' || character.is_ascii_alphanumeric()
 		})
 }
 
+fn dotted_identifier_final_segment(identifier: &str) -> Option<&str> {
+	let mut segments = identifier.split('.');
+	let final_segment = segments.next_back()?;
+	postgres_identifier_segment(final_segment)
+		.then_some(())
+		.and_then(|()| {
+			segments
+				.all(postgres_identifier_segment)
+				.then_some(final_segment)
+		})
+}
+
+fn quoted_dotted_identifier_final_segment_is(identifier: &str, expected: &str) -> bool {
+	identifier
+		.strip_prefix('"')
+		.and_then(|identifier| identifier.strip_suffix('"'))
+		.and_then(dotted_identifier_final_segment)
+		.is_some_and(|segment| segment == expected)
+}
+
+fn dotted_type_final_segment_is(identifier: &str, expected: &str) -> bool {
+	if identifier.starts_with('"') || identifier.ends_with('"') {
+		quoted_dotted_identifier_final_segment_is(identifier, expected)
+	} else {
+		dotted_identifier_final_segment(identifier).is_some_and(|segment| segment == expected)
+	}
+}
+
+fn qualified_operator_is(operator: &str, expected: &str) -> bool {
+	if operator == expected {
+		return true;
+	}
+	operator
+		.strip_suffix(expected)
+		.and_then(|prefix| prefix.strip_suffix('.'))
+		.is_some_and(postgres_identifier_segment)
+}
+
+fn missing_vector_type(message: &str) -> bool {
+	strip_ascii_case_prefix(message, "type ")
+		.and_then(|identifier| strip_ascii_case_suffix(identifier, " does not exist"))
+		.is_some_and(|identifier| quoted_dotted_identifier_final_segment_is(identifier, "vector"))
+}
+
+fn missing_vector_access_method(message: &str) -> bool {
+	strip_ascii_case_prefix(message, "access method ")
+		.and_then(|identifier| strip_ascii_case_suffix(identifier, " does not exist"))
+		.is_some_and(|identifier| matches!(identifier, "\"hnsw\"" | "\"ivfflat\""))
+}
+
 fn missing_vector_operator_class(message: &str) -> bool {
-	let message = postgres_primary_message(message);
 	let Some(message) = strip_ascii_case_prefix(message, "operator class ") else {
 		return false;
 	};
@@ -196,13 +166,11 @@ fn missing_vector_operator_class(message: &str) -> bool {
 	};
 	["vector_l2_ops", "vector_ip_ops", "vector_cosine_ops"]
 		.iter()
-		.any(|expected| identifier_final_segment_is(operator_class, expected))
-		&& (identifier_final_segment_is(access_method, "hnsw")
-			|| identifier_final_segment_is(access_method, "ivfflat"))
+		.any(|expected| quoted_dotted_identifier_final_segment_is(operator_class, expected))
+		&& matches!(access_method, "\"hnsw\"" | "\"ivfflat\"")
 }
 
 fn missing_vector_distance_operator(message: &str) -> bool {
-	let message = postgres_primary_message(message);
 	let Some(signature) = strip_ascii_case_prefix(message, "operator does not exist: ") else {
 		return false;
 	};
@@ -212,9 +180,11 @@ fn missing_vector_distance_operator(message: &str) -> bool {
 	else {
 		return false;
 	};
-	identifier_final_segment_is(left, "vector")
-		&& matches!(operator, "<->" | "<#>" | "<=>")
-		&& identifier_final_segment_is(right, "vector")
+	dotted_type_final_segment_is(left, "vector")
+		&& ["<->", "<#>", "<=>"]
+			.iter()
+			.any(|expected| qualified_operator_is(operator, expected))
+		&& dotted_type_final_segment_is(right, "vector")
 }
 
 fn pgvector_hint_applies(
@@ -225,6 +195,9 @@ fn pgvector_hint_applies(
 	let Some(context) = context else {
 		return false;
 	};
+	if message.contains(['\n', '\r']) {
+		return false;
+	}
 	match code {
 		Some(POSTGRES_UNDEFINED_OBJECT) => {
 			((context.contains(PgvectorOperationKind::ColumnType)
@@ -774,22 +747,22 @@ mod tests {
 	#[case(
 		PgvectorOperationKind::ColumnType,
 		"42704",
-		"ERROR: type \"extensions\".\"vector\" does not exist"
+		"type \"extensions.vector\" does not exist"
 	)]
 	#[case(
 		PgvectorOperationKind::DistanceOperator,
 		"42883",
-		"operator does not exist: \"extensions\".\"vector\" <=> public.vector"
+		"operator does not exist: extensions.vector extensions.<=> public.vector"
 	)]
 	#[case(
 		PgvectorOperationKind::ApproximateIndex,
 		"42704",
-		"operator class \"extensions\".\"vector_l2_ops\" does not exist for access method \"hnsw\""
+		"operator class \"extensions.vector_l2_ops\" does not exist for access method \"hnsw\""
 	)]
 	#[case(
 		PgvectorOperationKind::ApproximateIndex,
 		"42704",
-		"ERROR: access method \"ivfflat\" does not exist"
+		"access method \"ivfflat\" does not exist"
 	)]
 	fn pgvector_error_hint_accepts_qualified_canonical_postgres_evidence(
 		#[case] context: PgvectorOperationKind,
@@ -828,7 +801,31 @@ mod tests {
 	)]
 	#[case(
 		PgvectorOperationKind::ColumnType,
-		"type \"extensions.vector\" does not exist"
+		"type \"extensions\".\"vector\" does not exist"
+	)]
+	#[case(
+		PgvectorOperationKind::ApproximateIndex,
+		"operator class \"extensions\".\"vector_l2_ops\" does not exist for access method \"hnsw\""
+	)]
+	#[case(
+		PgvectorOperationKind::ColumnType,
+		"type \"extensions.not_vector\" does not exist"
+	)]
+	#[case(
+		PgvectorOperationKind::ApproximateIndex,
+		"operator class \"extensions.vector_custom_ops\" does not exist for access method \"hnsw\""
+	)]
+	#[case(
+		PgvectorOperationKind::ApproximateIndex,
+		"access method \"extensions.hnsw\" does not exist"
+	)]
+	#[case(
+		PgvectorOperationKind::DistanceOperator,
+		"operator does not exist: extensions.vector extensions.<+> public.vector"
+	)]
+	#[case(
+		PgvectorOperationKind::DistanceOperator,
+		"operator does not exist: extensions.vector public.extensions.<=> public.vector"
 	)]
 	#[case(
 		PgvectorOperationKind::DistanceOperator,
@@ -862,6 +859,59 @@ mod tests {
 				.and_then(|source| source.downcast_ref::<sqlx::Error>())
 				.is_some(),
 			"an undecorated contextual mapping must retain its original SQLx source"
+		);
+	}
+
+	#[rstest]
+	#[case(
+		PgvectorOperationKind::ColumnType,
+		"42704",
+		"type \"vector\" does not exist\nDETAIL: extension is not installed"
+	)]
+	#[case(
+		PgvectorOperationKind::ApproximateIndex,
+		"42704",
+		"access method \"hnsw\" does not exist\nHINT: install an extension"
+	)]
+	#[case(
+		PgvectorOperationKind::ApproximateIndex,
+		"42704",
+		"operator class \"vector_l2_ops\" does not exist for access method \"hnsw\"\nDETAIL: custom failure"
+	)]
+	#[case(
+		PgvectorOperationKind::DistanceOperator,
+		"42883",
+		"operator does not exist: vector <=> vector\nHINT: no operator matches"
+	)]
+	#[case(
+		PgvectorOperationKind::ColumnType,
+		"42704",
+		"type \"vector\" does not exist\rDETAIL: extension is not installed"
+	)]
+	fn pgvector_error_hint_rejects_multiline_or_carriage_return_evidence(
+		#[case] context: PgvectorOperationKind,
+		#[case] code: &'static str,
+		#[case] message: &'static str,
+	) {
+		let error = postgres_database_error(code, message);
+
+		let error = map_sqlx_error_with_pgvector_context(error, Some(context));
+
+		assert_eq!(
+			error.database_error().and_then(DatabaseError::code),
+			Some(code)
+		);
+		assert_eq!(
+			error.database_error().map(DatabaseError::kind),
+			Some(DatabaseErrorKind::Query)
+		);
+		assert!(!error.to_string().contains("CreateExtension::new"));
+		assert!(
+			error
+				.source()
+				.and_then(|source| source.downcast_ref::<sqlx::Error>())
+				.is_some(),
+			"rejected multiline evidence must retain its original SQLx source"
 		);
 	}
 }

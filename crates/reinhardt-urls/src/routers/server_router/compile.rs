@@ -92,6 +92,14 @@ impl ServerRouter {
 		errors
 	}
 
+	fn compile_routes_recursive(&self) -> Vec<String> {
+		let mut errors = self.compile_routes();
+		for child in &self.children {
+			errors.extend(child.compile_routes_recursive());
+		}
+		errors
+	}
+
 	fn compile_routes_once(&self) -> CompiledRoutes {
 		let mut compiled = CompiledRoutes::default();
 
@@ -340,7 +348,7 @@ impl ServerRouter {
 	/// ```
 	pub fn validate_routes(&self) -> std::result::Result<(), Vec<String>> {
 		let mut errors = self.collect_configuration_errors_recursive();
-		errors.extend(self.compile_routes());
+		errors.extend(self.compile_routes_recursive());
 		if let Err(name_errors) = self.validate_route_names() {
 			errors.extend(name_errors);
 		}

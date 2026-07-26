@@ -1349,7 +1349,7 @@ impl<M: Model> Manager<M> {
 		let row = match conn.fetch_one(&sql, params).await {
 			Ok(row) => row,
 			Err(error) => {
-				return super::custom_manager::CreateWithConnOutcome::FailedBeforeInsert(error);
+				return super::custom_manager::CreateWithConnOutcome::FailedAfterInsert(error);
 			}
 		};
 		match QueryRow::from_backend_row(row)

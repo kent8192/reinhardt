@@ -444,7 +444,8 @@ fn is_email(value: &str) -> bool {
 }
 
 fn is_url(value: &str) -> bool {
-	url::Url::parse(value).is_ok()
+	url::Url::parse(value)
+		.is_ok_and(|url| matches!(url.scheme(), "http" | "https") && url.host_str().is_some())
 }
 
 fn is_date(value: &str) -> bool {

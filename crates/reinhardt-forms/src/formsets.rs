@@ -135,7 +135,17 @@ impl<P: FormModel, C: FormModel> InlineFormSet<P, C> {
 		self.validate_foreign_key_kind()?;
 		// A known parent key is trusted formset context, so child validators must
 		// observe it before validation rather than a deferred placeholder.
-		if let Some(parent_id) = self.parent.primary_key() {
+		let parent_id_is_zero_sentinel = P::primary_key_uses_zero_sentinel()
+			&& self
+				.parent
+				.primary_key()
+				.as_ref()
+				.is_some_and(|value| value.to_string() == "0");
+		if let Some(parent_id) = self
+			.parent
+			.primary_key()
+			.filter(|_| !parent_id_is_zero_sentinel)
+		{
 			let parent_id = serde_json::to_value(parent_id).map_err(|error| {
 				ModelFormError::FieldValidation {
 					errors: std::collections::HashMap::from([(

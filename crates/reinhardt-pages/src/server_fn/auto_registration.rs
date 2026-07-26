@@ -210,20 +210,15 @@ fn select_entries_for_app_in_crate<'a>(
 	caller_crate: &str,
 	caller_target: Option<&str>,
 ) -> Result<Vec<&'a ServerFnInventoryEntry>, Vec<ServerFnInventoryError>> {
-	let caller = reinhardt_apps::resolve_app_module_owner_in_target(
-		apps.iter(),
-		caller_module,
-		caller_crate,
-		caller_target,
-	)
-	.map_err(|error| vec![resolution_error(caller_module, None, error, true)])?;
+	let caller =
+		resolve_app_module_owner_in_crate_compat(apps, caller_module, caller_crate, caller_target)
+			.map_err(|error| vec![resolution_error(caller_module, None, error, true)])?;
 	let mut selected = Vec::new();
 	for entry in entries {
 		match resolve_entry_owner(apps, entry) {
 			Ok(owner)
 				if owner.module_path == caller.module_path
-					&& owner.crate_id == caller.crate_id
-					&& owner.target_id == caller.target_id =>
+					&& compatible_owner_identity(owner, caller) =>
 			{
 				selected.push(entry)
 			}
@@ -361,13 +356,43 @@ fn resolve_entry_owner<'a>(
 	if entry.crate_id.is_empty() {
 		resolve_app_module_owner(apps.iter(), entry.module_path)
 	} else {
-		reinhardt_apps::resolve_app_module_owner_in_target(
-			apps.iter(),
+		resolve_app_module_owner_in_crate_compat(
+			apps,
 			entry.module_path,
 			entry.crate_id,
 			entry.target_id,
 		)
 	}
+}
+
+fn resolve_app_module_owner_in_crate_compat<'a>(
+	apps: &'a [AppModuleRegistration],
+	module_path: &str,
+	crate_id: &str,
+	target_id: Option<&str>,
+) -> Result<&'a AppModuleRegistration, AppModuleResolutionError> {
+	match reinhardt_apps::resolve_app_module_owner_in_target(
+		apps.iter(),
+		module_path,
+		crate_id,
+		target_id,
+	) {
+		Ok(owner) => Ok(owner),
+		Err(AppModuleResolutionError::Orphan) => resolve_app_module_owner(
+			apps.iter()
+				.filter(|app| app.crate_id.is_empty() && app.target_id.is_none()),
+			module_path,
+		),
+		Err(error) => Err(error),
+	}
+}
+
+fn compatible_owner_identity(
+	owner: &AppModuleRegistration,
+	caller: &AppModuleRegistration,
+) -> bool {
+	owner.crate_id.is_empty()
+		|| (owner.crate_id == caller.crate_id && owner.target_id == caller.target_id)
 }
 
 fn resolution_error(

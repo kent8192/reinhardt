@@ -780,6 +780,10 @@ pub mod __private {
 	pub use reinhardt_urls;
 	pub use serde;
 	pub use serde_json;
+	#[cfg(wasm)]
+	pub use wasm_bindgen;
+	#[cfg(wasm)]
+	pub use web_sys;
 
 	// `tracing` is enabled for all targets *except* browser wasm (wasm32-unknown-unknown).
 	// Browser wasm uses a different logging mechanism, so tracing is intentionally excluded there.

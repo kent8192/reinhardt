@@ -2419,6 +2419,35 @@ fn generate_model_form(
 								#pages_crate::event::SubmitEvent,
 								_,
 							>(move |event: #pages_crate::event::SubmitEvent| {
+								#[cfg(all(target_family = "wasm", target_os = "unknown"))]
+								{
+									use #pages_crate::__private::wasm_bindgen::JsCast;
+									let form = event.raw().current_target().and_then(|target| {
+										target
+											.dyn_into::<#pages_crate::__private::web_sys::HtmlFormElement>()
+											.ok()
+									});
+									if let Some(form) = form
+										&& let Ok(values) = #pages_crate::__private::web_sys::FormData::new_with_form(&form)
+									{
+										let fields = submit_form
+											.__model_state
+											.borrow()
+											.selected_descriptors()
+											.iter()
+											.map(|descriptor| descriptor.name)
+											.collect::<::std::vec::Vec<_>>();
+										let mut state = submit_form.__model_state.borrow_mut();
+										for field in fields {
+											if let Some(value) = values.get(field).as_string() {
+												let _ = state.set_value(
+													field,
+													#pages_crate::__private::serde_json::Value::String(value),
+												);
+											}
+										}
+									}
+								}
 								event.prevent_default();
 								#[cfg(all(target_family = "wasm", target_os = "unknown"))]
 								{

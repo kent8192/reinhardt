@@ -94,21 +94,14 @@ where
 	W: ShellOutput,
 {
 	pub(crate) fn new(mut factory: F, mut output: W) -> CommandResult<Self> {
-		let evaluator = factory.start()?;
-		for warning in factory.take_warnings() {
-			output.warning(&warning)?;
-		}
-		for startup_output in factory.take_startup_output() {
-			if !startup_output.stdout.is_empty() {
-				output.stdout(&startup_output.stdout)?;
+		let evaluator = match factory.start() {
+			Ok(evaluator) => evaluator,
+			Err(error) => {
+				forward_startup(&mut output, &mut factory)?;
+				return Err(error);
 			}
-			if !startup_output.stderr.is_empty() {
-				output.stderr(&startup_output.stderr)?;
-			}
-			if let Some(value) = startup_output.value {
-				output.value(&value)?;
-			}
-		}
+		};
+		forward_startup(&mut output, &mut factory)?;
 		Ok(Self {
 			factory: Some(factory),
 			evaluator,
@@ -122,10 +115,14 @@ where
 	where
 		S: InterruptSignal + 'static,
 	{
-		let evaluator = factory.start()?;
-		for warning in factory.take_warnings() {
-			output.warning(&warning)?;
-		}
+		let evaluator = match factory.start() {
+			Ok(evaluator) => evaluator,
+			Err(error) => {
+				forward_startup(&mut output, &mut factory)?;
+				return Err(error);
+			}
+		};
+		forward_startup(&mut output, &mut factory)?;
 		Ok(Self::from_client_with_signal(
 			factory, evaluator, output, signal,
 		))
@@ -273,19 +270,23 @@ where
 			let mut factory = factory;
 			let replacement = factory.start();
 			let warnings = factory.take_warnings();
-			(factory, replacement, warnings)
+			let startup_output = factory.take_startup_output();
+			(factory, replacement, warnings, startup_output)
 		});
 		let signal = tokio::signal::ctrl_c();
 		tokio::pin!(signal);
 		tokio::select! {
 			result = &mut startup => {
-				let (factory, replacement, warnings) = result
+				let (factory, replacement, warnings, startup_output) = result
 					.map_err(|error| CommandError::ExecutionError(error.to_string()))?;
 				self.factory = Some(factory);
-				self.evaluator = replacement?;
 				for warning in warnings {
 					self.output.warning(&warning)?;
 				}
+				for output in startup_output {
+					self.forward(output)?;
+				}
+				self.evaluator = replacement?;
 				self.output.warning("Shell state was reset and the project prelude was reloaded.")
 			}
 			result = &mut signal => {
@@ -298,6 +299,28 @@ where
 			}
 		}
 	}
+}
+
+fn forward_startup<F, W>(output: &mut W, factory: &mut F) -> CommandResult<()>
+where
+	F: EvaluatorFactory,
+	W: ShellOutput,
+{
+	for warning in factory.take_warnings() {
+		output.warning(&warning)?;
+	}
+	for startup_output in factory.take_startup_output() {
+		if !startup_output.stdout.is_empty() {
+			output.stdout(&startup_output.stdout)?;
+		}
+		if !startup_output.stderr.is_empty() {
+			output.stderr(&startup_output.stderr)?;
+		}
+		if let Some(value) = startup_output.value {
+			output.value(&value)?;
+		}
+	}
+	Ok(())
 }
 
 fn failure_is_fatal(failure: &EvaluationFailure) -> bool {
@@ -357,6 +380,20 @@ mod tests {
 	struct WarningFactory {
 		state: Arc<Mutex<FakeState>>,
 		warnings: Vec<String>,
+	}
+
+	struct FailedStartupFactory {
+		output: Vec<EvaluationOutput>,
+	}
+
+	impl EvaluatorFactory for FailedStartupFactory {
+		fn start(&mut self) -> CommandResult<Box<dyn EvaluatorClient>> {
+			Err(CommandError::ExecutionError("bootstrap failed".to_string()))
+		}
+
+		fn take_startup_output(&mut self) -> Vec<EvaluationOutput> {
+			std::mem::take(&mut self.output)
+		}
 	}
 
 	impl EvaluatorFactory for WarningFactory {
@@ -459,6 +496,26 @@ mod tests {
 		}
 	}
 
+	struct SharedOutput(Arc<Mutex<FakeOutput>>);
+
+	impl ShellOutput for SharedOutput {
+		fn stdout(&mut self, value: &str) -> CommandResult<()> {
+			self.0.lock().expect("shared output lock").stdout(value)
+		}
+
+		fn stderr(&mut self, value: &str) -> CommandResult<()> {
+			self.0.lock().expect("shared output lock").stderr(value)
+		}
+
+		fn value(&mut self, value: &str) -> CommandResult<()> {
+			self.0.lock().expect("shared output lock").value(value)
+		}
+
+		fn warning(&mut self, value: &str) -> CommandResult<()> {
+			self.0.lock().expect("shared output lock").warning(value)
+		}
+	}
+
 	struct FakeInput {
 		events: VecDeque<CommandResult<InputEvent>>,
 	}
@@ -546,6 +603,30 @@ mod tests {
 			session.output().warnings,
 			["InventoryItem requires a qualified import."]
 		);
+	}
+
+	#[test]
+	fn failed_startup_forwards_captured_output_before_returning_its_error() {
+		let shared = Arc::new(Mutex::new(FakeOutput::default()));
+		let output = SharedOutput(Arc::clone(&shared));
+		let factory = FailedStartupFactory {
+			output: vec![output(
+				"prelude output\n",
+				"prelude diagnostic\n",
+				Some("42"),
+			)],
+		};
+
+		let error = match ShellSession::with_signal(factory, output, NeverInterrupt) {
+			Ok(_) => panic!("failed bootstrap should return its error"),
+			Err(error) => error,
+		};
+
+		assert_eq!(error.to_string(), "Execution error: bootstrap failed");
+		let output = shared.lock().expect("shared output lock");
+		assert_eq!(output.stdout, ["prelude output\n"]);
+		assert_eq!(output.stderr, ["prelude diagnostic\n"]);
+		assert_eq!(output.values, ["42"]);
 	}
 
 	#[tokio::test]

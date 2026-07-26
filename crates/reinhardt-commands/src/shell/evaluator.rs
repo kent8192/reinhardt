@@ -494,11 +494,18 @@ impl EvaluatorFactory for EvcxrEvaluatorFactory {
 	fn start(&mut self) -> CommandResult<Box<dyn EvaluatorClient>> {
 		let config = self.config.clone();
 		let startup_interrupt = self.startup_interrupt.clone();
-		let (evaluator, warnings) = EvaluatorWorker::start_with(move || {
+		let started = EvaluatorWorker::start_with(move || {
 			let (evaluator, warnings) = EvcxrEvaluator::bootstrap(&config, &startup_interrupt)?;
 			Ok((Box::new(evaluator), warnings))
-		})
-		.map_err(evaluation_command_error)?;
+		});
+		let (evaluator, warnings) = match started {
+			Ok(started) => started,
+			Err(EvaluationFailure::Output { failure, output }) => {
+				self.startup_output.push(output);
+				return Err(evaluation_command_error(*failure));
+			}
+			Err(failure) => return Err(evaluation_command_error(failure)),
+		};
 		self.startup_interrupt.clear();
 		let (warnings, startup_output) = split_startup_output(warnings);
 		self.warnings = warnings;
@@ -628,21 +635,7 @@ fn evaluation_command_error(failure: EvaluationFailure) -> CommandError {
 		| EvaluationFailure::Panic(message)
 		| EvaluationFailure::ProcessExited(message)
 		| EvaluationFailure::ContextReset(message) => message,
-		EvaluationFailure::Output { failure, output } => {
-			let failure_message = evaluation_command_error(*failure).to_string();
-			let mut message = String::new();
-			if !output.stdout.is_empty() {
-				message.push_str(&output.stdout);
-			}
-			if !output.stderr.is_empty() {
-				message.push_str(&output.stderr);
-			}
-			if !message.is_empty() && !message.ends_with('\n') {
-				message.push('\n');
-			}
-			message.push_str(&failure_message);
-			return CommandError::ExecutionError(message);
-		}
+		EvaluationFailure::Output { failure, .. } => return evaluation_command_error(*failure),
 		EvaluationFailure::Interrupted => "Evaluation was interrupted.".to_string(),
 	};
 	CommandError::ExecutionError(message)

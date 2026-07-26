@@ -116,6 +116,7 @@ fn is_supported_extractor_type_name(type_name: &str) -> bool {
 			| "SessionValue"
 			| "OptionalSessionValue"
 			| "SessionValueNamed"
+			| "OptionalSessionValueNamed"
 			| "PathStruct"
 			| "Validated"
 	)
@@ -559,9 +560,11 @@ fn generate_wrapper_with_both(
 			.collect();
 
 		// Step 2: Validate using temp variables (Deref on the extractor type)
-		let validate_calls: Vec<_> = extractor_temps
+		let validate_calls: Vec<_> = extractors
 			.iter()
-			.map(|temp| {
+			.zip(extractor_temps.iter())
+			.filter(|(ext, _)| ext.extractor_name != "Validated")
+			.map(|(_, temp)| {
 				quote! {
 					#core_crate::validators::Validate::validate(&*#temp)
 						.map_err(|e| #core_crate::exception::Error::Validation(
@@ -1489,6 +1492,17 @@ mod url_resolver_tests {
 			names,
 			vec!["Validated", "PathStruct", "HeaderStruct", "Multipart"]
 		);
+	}
+
+	#[rstest]
+	fn detect_extractors_includes_optional_named_session_value() {
+		let inputs: syn::punctuated::Punctuated<FnArg, Token![,]> = syn::parse_quote! {
+			session: OptionalSessionValueNamed<SessionKey, UserId>
+		};
+
+		let extractors = detect_extractors(&inputs);
+		assert_eq!(extractors.len(), 1);
+		assert_eq!(extractors[0].extractor_name, "OptionalSessionValueNamed");
 	}
 
 	#[rstest]

@@ -586,6 +586,9 @@ fn model_index_operations(model: &ModelSchemaInfo) -> Vec<Operation> {
 				.collect(),
 			unique: true,
 			condition: Some(condition.to_string()),
+			index_type: None,
+			operator_class: None,
+			expressions: None,
 		})
 	}));
 
@@ -1236,13 +1239,31 @@ mod tests {
 
 		let operations = create_table_operations_from_models(vec![model]).unwrap();
 
-		assert!(operations.iter().any(|operation| matches!(
-			operation,
-			Operation::CreateIndex { table, columns, unique: true, where_clause, .. }
-				if table == "users"
-					&& columns == &vec!["email".to_string()]
-					&& where_clause.as_deref() == Some("deleted_at IS NULL")
-		)));
+		let operation = operations
+			.iter()
+			.find(|operation| matches!(operation, Operation::CreateIndex { .. }))
+			.expect("partial unique index operation");
+		match operation {
+			Operation::CreateIndex {
+				table,
+				columns,
+				unique,
+				index_type,
+				where_clause,
+				expressions,
+				operator_class,
+				..
+			} => {
+				assert_eq!(table, "users");
+				assert_eq!(columns, &["email".to_string()]);
+				assert!(*unique);
+				assert_eq!(where_clause.as_deref(), Some("deleted_at IS NULL"));
+				assert_eq!(*index_type, None);
+				assert_eq!(expressions, &None);
+				assert_eq!(operator_class, &None);
+			}
+			other => panic!("expected CreateIndex, got {other:?}"),
+		}
 	}
 
 	#[rstest]

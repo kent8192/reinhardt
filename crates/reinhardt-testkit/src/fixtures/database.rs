@@ -847,6 +847,9 @@ mod tests {
 				fields: vec!["name".to_string()],
 				unique: false,
 				condition: Some("name IS NOT NULL".to_string()),
+				index_type: None,
+				operator_class: None,
+				expressions: None,
 			}]
 		}
 	}
@@ -919,17 +922,35 @@ mod tests {
 
 		let migrations = builder.resolve_migrations_for_test().unwrap();
 
-		assert!(migrations[0].operations.iter().any(|operation| matches!(
-			operation,
+		let operation = migrations[0]
+			.operations
+			.iter()
+			.find(|operation| {
+				matches!(
+					operation,
+					reinhardt_db::migrations::Operation::CreateIndex { .. }
+				)
+			})
+			.expect("model index operation");
+		match operation {
 			reinhardt_db::migrations::Operation::CreateIndex {
 				table,
 				columns,
+				index_type,
 				where_clause,
+				expressions,
+				operator_class,
 				..
-			} if table == "test_users"
-				&& columns == &vec!["name".to_string()]
-				&& where_clause.as_deref() == Some("name IS NOT NULL")
-		)));
+			} => {
+				assert_eq!(table, "test_users");
+				assert_eq!(columns, &["name".to_string()]);
+				assert_eq!(where_clause.as_deref(), Some("name IS NOT NULL"));
+				assert_eq!(*index_type, None);
+				assert_eq!(expressions, &None);
+				assert_eq!(operator_class, &None);
+			}
+			other => panic!("expected CreateIndex, got {other:?}"),
+		}
 	}
 
 	#[rstest]

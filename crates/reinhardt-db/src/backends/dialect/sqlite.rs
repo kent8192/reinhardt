@@ -50,6 +50,7 @@ impl SqliteBackend {
 			QueryValue::String(s) => query.bind(s),
 			QueryValue::Bytes(b) => query.bind(b),
 			QueryValue::Timestamp(dt) => query.bind(dt),
+			QueryValue::NaiveTimestamp(dt) => query.bind(dt),
 			// SQLite stores UUIDs as strings
 			QueryValue::Uuid(u) => query.bind(u.to_string()),
 			QueryValue::Json(value) => query.bind(value.as_deref().cloned().map(sqlx::types::Json)),
@@ -145,13 +146,7 @@ impl SqliteBackend {
 				row.insert(column_name.to_string(), QueryValue::Bytes(value));
 			} else if let Ok(value) = sqlite_row.try_get::<chrono::NaiveDateTime, _>(column_name) {
 				// SQLite stores timestamps as strings/integers, convert to DateTime<Utc>
-				row.insert(
-					column_name.to_string(),
-					QueryValue::Timestamp(chrono::DateTime::from_naive_utc_and_offset(
-						value,
-						chrono::Utc,
-					)),
-				);
+				row.insert(column_name.to_string(), QueryValue::NaiveTimestamp(value));
 			} else if let Ok(value) =
 				sqlite_row.try_get::<chrono::DateTime<chrono::Utc>, _>(column_name)
 			{
@@ -324,6 +319,7 @@ impl SqliteTransactionExecutor {
 			QueryValue::String(s) => query.bind(s),
 			QueryValue::Bytes(b) => query.bind(b),
 			QueryValue::Timestamp(dt) => query.bind(dt),
+			QueryValue::NaiveTimestamp(dt) => query.bind(dt),
 			// SQLite doesn't have native UUID type; bind as string
 			QueryValue::Uuid(u) => query.bind(u.to_string()),
 			QueryValue::Json(value) => query.bind(value.as_deref().cloned().map(sqlx::types::Json)),
@@ -415,13 +411,7 @@ impl SqliteTransactionExecutor {
 				row.insert(column_name.to_string(), QueryValue::Bytes(value));
 			} else if let Ok(value) = sqlite_row.try_get::<chrono::NaiveDateTime, _>(column_name) {
 				// SQLite stores timestamps as strings/integers, convert to DateTime<Utc>
-				row.insert(
-					column_name.to_string(),
-					QueryValue::Timestamp(chrono::DateTime::from_naive_utc_and_offset(
-						value,
-						chrono::Utc,
-					)),
-				);
+				row.insert(column_name.to_string(), QueryValue::NaiveTimestamp(value));
 			} else if let Ok(value) =
 				sqlite_row.try_get::<chrono::DateTime<chrono::Utc>, _>(column_name)
 			{

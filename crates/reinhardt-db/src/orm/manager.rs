@@ -1435,9 +1435,8 @@ impl<M: Model> Manager<M> {
 			reinhardt_query::value::Value::Bytes(None) => QueryValue::Null,
 
 			// Timestamp handling
-			// ChronoDateTime contains NaiveDateTime, convert to UTC
 			reinhardt_query::value::Value::ChronoDateTime(Some(dt)) => {
-				QueryValue::Timestamp(dt.and_utc())
+				QueryValue::NaiveTimestamp(*dt)
 			}
 			reinhardt_query::value::Value::ChronoDateTime(None) => QueryValue::Null,
 			reinhardt_query::value::Value::ChronoDateTimeUtc(Some(dt)) => {
@@ -1551,6 +1550,9 @@ impl<M: Model> Manager<M> {
 			QueryValue::Bytes(value) => reinhardt_query::value::Value::Bytes(Some(Box::new(value))),
 			QueryValue::Timestamp(value) => {
 				reinhardt_query::value::Value::ChronoDateTimeUtc(Some(Box::new(value)))
+			}
+			QueryValue::NaiveTimestamp(value) => {
+				reinhardt_query::value::Value::ChronoDateTime(Some(Box::new(value)))
 			}
 			QueryValue::Uuid(value) => reinhardt_query::value::Value::Uuid(Some(Box::new(value))),
 			QueryValue::Json(value) => reinhardt_query::value::Value::Json(value),
@@ -2848,6 +2850,23 @@ mod tests {
 			));
 
 		assert_eq!(value, crate::orm::connection::QueryValue::IntArray(vec![7]));
+	}
+
+	#[test]
+	fn manager_binds_naive_datetimes_without_converting_them_to_utc() {
+		let value = chrono::NaiveDate::from_ymd_opt(2026, 7, 26)
+			.expect("valid date")
+			.and_hms_opt(9, 15, 30)
+			.expect("valid time");
+
+		let bound = Manager::<TestUser>::sea_value_to_query_value(
+			reinhardt_query::value::Value::ChronoDateTime(Some(Box::new(value))),
+		);
+
+		assert_eq!(
+			bound,
+			crate::orm::connection::QueryValue::NaiveTimestamp(value)
+		);
 	}
 
 	#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

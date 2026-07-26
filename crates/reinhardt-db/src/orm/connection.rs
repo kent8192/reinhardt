@@ -87,6 +87,7 @@ impl QueryRow {
 					serde_json::Value::String(base64::engine::general_purpose::STANDARD.encode(&b))
 				}
 				QueryValue::Timestamp(dt) => serde_json::Value::String(dt.to_rfc3339()),
+				QueryValue::NaiveTimestamp(dt) => serde_json::Value::String(dt.to_string()),
 				QueryValue::Uuid(u) => serde_json::Value::String(u.to_string()),
 				QueryValue::Json(Some(value)) => {
 					native_json_fields.insert(key.clone());

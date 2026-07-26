@@ -39,6 +39,7 @@ fn query_value_to_sea_value(qv: &QueryValue) -> Value {
 		QueryValue::String(s) => Value::String(Some(Box::new(s.clone()))),
 		QueryValue::Bytes(b) => Value::Bytes(Some(Box::new(b.clone()))),
 		QueryValue::Timestamp(dt) => Value::ChronoDateTimeUtc(Some(Box::new(*dt))),
+		QueryValue::NaiveTimestamp(dt) => Value::ChronoDateTime(Some(Box::new(*dt))),
 		QueryValue::Uuid(u) => Value::Uuid(Some(Box::new(*u))),
 		QueryValue::Json(value) => Value::Json(value.clone()),
 		QueryValue::StringArray(values) => Value::Array(

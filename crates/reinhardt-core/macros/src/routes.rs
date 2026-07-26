@@ -146,17 +146,6 @@ fn is_raw_request_parameter(pat_type: &syn::PatType) -> bool {
 	if is_request_type(&pat_type.ty) {
 		return true;
 	}
-	if let (Pat::Ident(pattern), Type::Path(type_path)) = (&*pat_type.pat, &*pat_type.ty)
-		&& pattern.ident == "req"
-		&& type_path.path.segments.len() == 1
-		&& type_path
-			.path
-			.segments
-			.last()
-			.is_some_and(|segment| segment.ident == "Body" && segment.arguments.is_none())
-	{
-		return true;
-	}
 	let Type::Path(type_path) = &*pat_type.ty else {
 		return true;
 	};
@@ -1653,14 +1642,14 @@ mod url_resolver_tests {
 	}
 
 	#[rstest]
-	fn route_call_preserves_body_named_raw_request_alias() {
+	fn route_call_extracts_body_named_req() {
 		let input: ItemFn = syn::parse_quote! {
 			async fn handler(req: Body, Json(payload): Json<Payload>) -> String { String::new() }
 		};
 		let extractors = detect_extractors(&input.sig.inputs);
 		let inject_params = detect_inject_params(&input.sig.inputs);
 
-		assert_eq!(extractors.len(), 1);
+		assert_eq!(extractors.len(), 2);
 		let (_, wrapper) = generate_wrapper_with_both(
 			&input,
 			&extractors,
@@ -1678,7 +1667,7 @@ mod url_resolver_tests {
 			+ ") . await".len();
 		assert_eq!(
 			&call[..call_end],
-			"handler_original (__reinhardt_request , __reinhardt_extractor_0) . await"
+			"handler_original (__reinhardt_extractor_0 , __reinhardt_extractor_1 ,) . await"
 		);
 	}
 

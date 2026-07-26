@@ -2278,9 +2278,16 @@ fn generate_model_form(
 								),
 							);
 						} else if let ::core::option::Option::Some(value) = stored_value {
-							let value = match value {
-								#pages_crate::__private::serde_json::Value::String(value) => value,
-								value => value.to_string(),
+							let value = if matches!(
+								descriptor.kind,
+								#pages_crate::form::ModelFormFieldKind::Json
+							) {
+								#pages_crate::__private::serde_json::to_string(value).unwrap_or_default()
+							} else {
+								match value {
+									#pages_crate::__private::serde_json::Value::String(value) => value.clone(),
+									value => value.to_string(),
+								}
 							};
 							let value = if input_type == "datetime-local"
 								&& matches!(

@@ -196,7 +196,7 @@ pub(super) fn validate(
 	if model_source.is_some() && (redirect_on_success.is_some() || success_url.is_some()) {
 		return Err(Error::new(
 			ast.span,
-			"model-backed form! does not support `redirect_on_success` or `success_url`; use `on_success` to handle a successful model submission explicitly",
+			"model-backed form! does not support `redirect_on_success` or `success_url`; configure submission lifecycle through `use_form(&form)`",
 		));
 	}
 

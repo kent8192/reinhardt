@@ -156,6 +156,12 @@ pub(crate) struct ServerFnOptions {
 	/// }
 	/// ```
 	pub pre_validate: bool,
+
+	/// Enable native HTML model-form payload decoding for this endpoint.
+	///
+	/// This is deliberately opt-in because a normal JSON server function may
+	/// also use a single parameter named `payload`.
+	pub model_form: bool,
 }
 
 fn default_codec() -> String {
@@ -170,6 +176,7 @@ impl Default for ServerFnOptions {
 			codec: default_codec(),
 			no_csrf: false,
 			pre_validate: false,
+			model_form: false,
 		}
 	}
 }
@@ -1349,22 +1356,27 @@ fn generate_server_handler(
 		.collect();
 
 	// Native form extraction normalizes URL-encoded controls into a flat JSON
-	// object before invoking the generated handler. A single `payload` argument
-	// can therefore deserialize that object directly without losing the body.
+	// object before invoking the generated handler. The explicit `model_form`
+	// option enables the payload-specific fallback without changing ordinary
+	// JSON endpoints that happen to use the same parameter name.
 	let pages_crate_for_model_form = get_reinhardt_pages_crate();
-	let native_model_form_fallback = match regular_params.as_slice() {
-		[parameter] if matches!(parameter.pat.as_ref(), syn::Pat::Ident(ident) if ident.ident == "payload") =>
-		{
-			let payload_type = &parameter.ty;
-			quote! {
-				let native_value = ::serde_json::from_slice(body)
-					.map_err(|_| __invalid_request_error())?;
-				let payload: #payload_type = <#payload_type as #pages_crate_for_model_form::form::NativeModelFormPayload>::from_native_form_value(native_value)
-					.map_err(|_| __invalid_request_error())?;
-				#args_struct_name { payload }
+	let native_model_form_fallback = if info.options.model_form {
+		match regular_params.as_slice() {
+			[parameter] if matches!(parameter.pat.as_ref(), syn::Pat::Ident(ident) if ident.ident == "payload") =>
+			{
+				let payload_type = &parameter.ty;
+				quote! {
+					let native_value = ::serde_json::from_slice(body)
+						.map_err(|_| __invalid_request_error())?;
+					let payload: #payload_type = <#payload_type as #pages_crate_for_model_form::form::NativeModelFormPayload>::from_native_form_value(native_value)
+						.map_err(|_| __invalid_request_error())?;
+					#args_struct_name { payload }
+				}
 			}
+			_ => quote! { return Err(__invalid_request_error()); },
 		}
-		_ => quote! { return Err(__invalid_request_error()); },
+	} else {
+		quote! { return Err(__invalid_request_error()); }
 	};
 
 	// Generate codec-specific deserialization code for server
@@ -2301,6 +2313,7 @@ mod tests {
 	fn test_server_fn_options_default() {
 		let options = ServerFnOptions::default();
 		assert!(!options.use_inject);
+		assert!(!options.model_form);
 		assert_eq!(options.endpoint, None);
 		assert_eq!(options.codec, "json");
 	}
@@ -2312,7 +2325,8 @@ mod tests {
 		use syn::parse_quote;
 
 		// Test with endpoint only (use_inject is no longer needed)
-		let attr: syn::Attribute = parse_quote!(#[server_fn(endpoint = "/custom")]);
+		let attr: syn::Attribute =
+			parse_quote!(#[server_fn(endpoint = "/custom", model_form = true)]);
 		let meta_list = attr.meta.require_list().unwrap();
 		let nested: Vec<NestedMeta> = NestedMeta::parse_meta_list(meta_list.tokens.clone())
 			.unwrap()
@@ -2323,6 +2337,7 @@ mod tests {
 		assert!(!options.use_inject);
 		assert_eq!(options.endpoint, Some("/custom".to_string()));
 		assert_eq!(options.codec, "json");
+		assert!(options.model_form);
 	}
 
 	#[test]
@@ -2724,7 +2739,10 @@ mod tests {
 		};
 		let info = ServerFnInfo {
 			func,
-			options: ServerFnOptions::default(),
+			options: ServerFnOptions {
+				model_form: true,
+				..ServerFnOptions::default()
+			},
 			metadata_name: None,
 			endpoint_tokens: None,
 			metadata_name_tokens: None,

@@ -5,7 +5,7 @@ mod schema;
 
 pub use policy::{
 	AllEditableModelFields, ModelFormPayload, ModelFormPayloadError, ModelFormPolicy,
-	NativeModelFormPayload,
+	NativeModelFormPayload, normalize_native_model_form_value,
 };
 pub use schema::{
 	ModelFormFieldDescriptor, ModelFormFieldKind, ModelFormPrimaryKey, ModelFormSchema,

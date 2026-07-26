@@ -22,15 +22,23 @@ pub struct Question {
 
 This opt-in generates the target-neutral `QuestionFormSchema` and the generic
 `QuestionModelFormData<P>` payload. A model without `form = true` has neither
-symbol. The generated payload is the type accepted by the form's server
-function:
+symbol. Each endpoint must name the concrete policy it enforces:
 
 ```rust
 use reinhardt::core::model_form::ModelFormPolicy;
 use reinhardt::pages::ServerFnError;
 
-async fn save_question<P: ModelFormPolicy>(
-    mut payload: QuestionModelFormData<P>,
+struct QuestionSubmissionPolicy;
+
+impl ModelFormPolicy for QuestionSubmissionPolicy {
+    fn allows(field: &str) -> bool {
+        matches!(field, "text")
+    }
+}
+
+#[server_fn(model_form = true)]
+async fn save_question(
+    mut payload: QuestionModelFormData<QuestionSubmissionPolicy>,
 ) -> Result<(), ServerFnError> {
     let owner_id = authenticated_owner_id()?;
 
@@ -41,7 +49,9 @@ async fn save_question<P: ModelFormPolicy>(
 }
 ```
 
-The application-specific `authenticated_owner_id()` and
+`model_form = true` is an explicit endpoint opt-in for native HTML form decoding; it
+does not change ordinary JSON server functions, including those that happen to
+name a parameter `payload`. The application-specific `authenticated_owner_id()` and
 `persist_question()` boundaries above obtain request identity and a database
 executor. Browser model mode calls `save_question` with exactly one argument:
 one generated payload. It does not expand the model fields into positional
@@ -50,8 +60,8 @@ server-function arguments.
 `form!` remains an expression macro. The form-specific policy and data alias
 created inside the expression are implementation items. Do not try to name
 types such as `QuestionFormPolicy` or `QuestionFormData` outside that
-expression. The server function instead stays generic over
-`QuestionModelFormData<P>`.
+expression. The server function instead names the application policy in
+`QuestionModelFormData<QuestionSubmissionPolicy>`.
 
 ## Explicit fields
 
@@ -65,6 +75,7 @@ use reinhardt::pages::form;
 let question_form = form! {
     name: QuestionForm,
     model: Question,
+    policy: QuestionSubmissionPolicy,
     fields: [text],
     server_fn: save_question,
     overrides: {
@@ -89,11 +100,27 @@ form:
 ```rust
 use reinhardt::pages::form;
 
+struct EditorialQuestionPolicy;
+
+impl ModelFormPolicy for EditorialQuestionPolicy {
+    fn allows(field: &str) -> bool {
+        matches!(field, "text" | "published")
+    }
+}
+
+#[server_fn(model_form = true)]
+async fn save_editorial_question(
+    payload: QuestionModelFormData<EditorialQuestionPolicy>,
+) -> Result<(), ServerFnError> {
+    persist_question(payload).await
+}
+
 let editorial_form = form! {
     name: EditorialQuestionForm,
     model: Question,
+    policy: EditorialQuestionPolicy,
     exclude: [owner_id],
-    server_fn: save_question,
+    server_fn: save_editorial_question,
     overrides: {
         text: {
             label: "Question",

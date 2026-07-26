@@ -6,6 +6,7 @@ use crate::model_form::FormModel;
 use serde_json::Value;
 use std::collections::HashMap;
 use std::marker::PhantomData;
+use std::sync::Arc;
 
 /// A field for selecting a single model instance from a queryset
 ///
@@ -27,6 +28,7 @@ pub struct ModelChoiceField<T: FormModel> {
 	pub queryset: Vec<T>,
 	/// Label for the empty/default option (e.g., "Select one...").
 	pub empty_label: Option<String>,
+	choice_label: Option<Arc<dyn Fn(&T) -> String + Send + Sync>>,
 	_phantom: PhantomData<T>,
 }
 
@@ -91,6 +93,7 @@ impl<T: FormModel> ModelChoiceField<T> {
 			initial: None,
 			queryset,
 			empty_label: Some("--------".to_string()),
+			choice_label: None,
 			_phantom: PhantomData,
 		}
 	}
@@ -112,6 +115,14 @@ impl<T: FormModel> ModelChoiceField<T> {
 	/// Sets the label for the empty/default option.
 	pub fn empty_label(mut self, label: Option<String>) -> Self {
 		self.empty_label = label;
+		self
+	}
+	/// Uses the supplied function to render each model choice label.
+	///
+	/// This permits human-readable labels for derive-generated [`FormModel`]
+	/// implementations without requiring a conflicting trait implementation.
+	pub fn choice_label(mut self, label: impl Fn(&T) -> String + Send + Sync + 'static) -> Self {
+		self.choice_label = Some(Arc::new(label));
 		self
 	}
 	/// Overrides the error message for a specific error type.
@@ -139,7 +150,10 @@ impl<T: FormModel> ModelChoiceField<T> {
 		// Convert queryset items to choices
 		for instance in &self.queryset {
 			let value = instance.to_choice_value();
-			let label = instance.to_choice_label();
+			let label = self
+				.choice_label
+				.as_ref()
+				.map_or_else(|| instance.to_choice_label(), |label| label(instance));
 			choices.push((value, label));
 		}
 
@@ -262,6 +276,7 @@ pub struct ModelMultipleChoiceField<T: FormModel> {
 	pub initial: Option<Value>,
 	/// The list of model instances to choose from.
 	pub queryset: Vec<T>,
+	choice_label: Option<Arc<dyn Fn(&T) -> String + Send + Sync>>,
 	_phantom: PhantomData<T>,
 }
 
@@ -335,6 +350,7 @@ impl<T: FormModel> ModelMultipleChoiceField<T> {
 			help_text: String::new(),
 			initial: None,
 			queryset,
+			choice_label: None,
 			_phantom: PhantomData,
 		}
 	}
@@ -351,6 +367,14 @@ impl<T: FormModel> ModelMultipleChoiceField<T> {
 	/// Sets the initial (default) value.
 	pub fn initial(mut self, value: Value) -> Self {
 		self.initial = Some(value);
+		self
+	}
+	/// Uses the supplied function to render each model choice label.
+	///
+	/// This permits human-readable labels for derive-generated [`FormModel`]
+	/// implementations without requiring a conflicting trait implementation.
+	pub fn choice_label(mut self, label: impl Fn(&T) -> String + Send + Sync + 'static) -> Self {
+		self.choice_label = Some(Arc::new(label));
 		self
 	}
 	/// Overrides the error message for a specific error type.
@@ -373,7 +397,10 @@ impl<T: FormModel> ModelMultipleChoiceField<T> {
 		// Convert queryset items to choices
 		for instance in &self.queryset {
 			let value = instance.to_choice_value();
-			let label = instance.to_choice_label();
+			let label = self
+				.choice_label
+				.as_ref()
+				.map_or_else(|| instance.to_choice_label(), |label| label(instance));
 			choices.push((value, label));
 		}
 
@@ -540,6 +567,23 @@ mod tests {
 
 		assert_eq!(field.name(), "choice");
 		assert!(FormField::required(&field));
+	}
+
+	#[test]
+	fn model_choice_field_uses_custom_choice_label() {
+		let field = ModelChoiceField::new(
+			"choice",
+			vec![TestModel {
+				id: 1,
+				name: "Option 1".to_string(),
+			}],
+		)
+		.choice_label(|model| model.name.clone());
+
+		assert_eq!(
+			field.get_choices(),
+			vec![("1".to_string(), "Option 1".to_string())]
+		);
 	}
 
 	#[test]

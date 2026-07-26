@@ -32,6 +32,7 @@ where
 		for descriptor in S::fields() {
 			if descriptor.editable
 				&& P::allows(descriptor.name)
+				&& !descriptor.nullable
 				&& matches!(descriptor.kind, ModelFormFieldKind::Boolean)
 			{
 				values.insert(descriptor.name, serde_json::Value::Bool(false));
@@ -478,4 +479,38 @@ fn normalize_datetime_local(value: &str, aware: bool) -> Option<String> {
 	Some(format!(
 		"{date}T{hour:02}:{minute:02}:{second:02}{fraction}{timezone}"
 	))
+}
+
+#[cfg(test)]
+mod tests {
+	use super::ModelFormState;
+	use reinhardt_core::model_form::{
+		AllEditableModelFields, ModelFormFieldDescriptor, ModelFormFieldKind, ModelFormSchema,
+	};
+
+	struct NullableBooleanSchema;
+
+	impl ModelFormSchema for NullableBooleanSchema {
+		type Model = ();
+
+		fn fields() -> &'static [ModelFormFieldDescriptor] {
+			const FIELDS: [ModelFormFieldDescriptor; 1] = [ModelFormFieldDescriptor {
+				name: "published",
+				kind: ModelFormFieldKind::Boolean,
+				required: false,
+				has_default: false,
+				nullable: true,
+				editable: true,
+				generated_relation_id: false,
+			}];
+			&FIELDS
+		}
+	}
+
+	#[test]
+	fn nullable_boolean_starts_unset() {
+		let state = ModelFormState::<NullableBooleanSchema, AllEditableModelFields>::new();
+
+		assert_eq!(state.value("published"), None);
+	}
 }

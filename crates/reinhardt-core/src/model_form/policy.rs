@@ -2,6 +2,8 @@
 
 use std::fmt;
 
+use crate::model_form::{ModelFormFieldKind, ModelFormSchema};
+
 /// Determines which known model fields a form may accept.
 pub trait ModelFormPolicy: Send + Sync + 'static {
 	/// Returns whether the named model field is permitted by this policy.
@@ -49,6 +51,73 @@ pub trait NativeModelFormPayload: Sized {
 	fn from_native_form_value(value: serde_json::Value) -> Result<Self, serde_json::Error>;
 }
 
+/// Normalizes controls produced by a native HTML model form before decoding.
+///
+/// Browser form submissions represent every successful control as text and
+/// omit unchecked checkboxes. This conversion is intentionally limited to
+/// schema fields permitted by the selected policy; unrelated controls such as
+/// the CSRF token are removed before typed payload decoding.
+///
+/// # Errors
+///
+/// Returns a JSON error when a JSON control does not contain valid JSON text.
+pub fn normalize_native_model_form_value<S, P>(
+	mut value: serde_json::Value,
+) -> Result<serde_json::Value, serde_json::Error>
+where
+	S: ModelFormSchema,
+	P: ModelFormPolicy,
+{
+	let serde_json::Value::Object(values) = &mut value else {
+		return Ok(value);
+	};
+
+	values.remove("csrfmiddlewaretoken");
+	for descriptor in S::fields() {
+		if !descriptor.editable || !P::allows(descriptor.name) {
+			continue;
+		}
+
+		let Some(control) = values.get_mut(descriptor.name) else {
+			if matches!(descriptor.kind, ModelFormFieldKind::Boolean) && !descriptor.nullable {
+				values.insert(descriptor.name.to_owned(), serde_json::Value::Bool(false));
+			}
+			continue;
+		};
+		let serde_json::Value::String(text) = control else {
+			continue;
+		};
+
+		if text.is_empty() && descriptor.nullable {
+			*control = serde_json::Value::Null;
+			continue;
+		}
+		let normalized = match descriptor.kind {
+			ModelFormFieldKind::Boolean => match text.as_str() {
+				"true" | "on" | "1" => Some(serde_json::Value::Bool(true)),
+				"false" | "off" | "0" => Some(serde_json::Value::Bool(false)),
+				_ => None,
+			},
+			ModelFormFieldKind::Integer { .. } => text
+				.parse::<i64>()
+				.ok()
+				.map(|number| serde_json::Value::Number(number.into())),
+			ModelFormFieldKind::Float { .. } => text
+				.parse::<f64>()
+				.ok()
+				.and_then(serde_json::Number::from_f64)
+				.map(serde_json::Value::Number),
+			ModelFormFieldKind::Json => Some(serde_json::from_str(text)?),
+			_ => None,
+		};
+		if let Some(normalized) = normalized {
+			*control = normalized;
+		}
+	}
+
+	Ok(value)
+}
+
 /// An error returned while reading or updating a model form payload.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ModelFormPayloadError {
@@ -94,7 +163,10 @@ impl std::error::Error for ModelFormPayloadError {}
 
 #[cfg(test)]
 mod tests {
-	use crate::model_form::ModelFormPolicy;
+	use super::{AllEditableModelFields, normalize_native_model_form_value};
+	use crate::model_form::{
+		ModelFormFieldDescriptor, ModelFormFieldKind, ModelFormPolicy, ModelFormSchema,
+	};
 
 	struct PublicOnly;
 
@@ -104,9 +176,85 @@ mod tests {
 		}
 	}
 
+	struct TestSchema;
+
+	impl ModelFormSchema for TestSchema {
+		type Model = ();
+
+		fn fields() -> &'static [ModelFormFieldDescriptor] {
+			const FIELDS: [ModelFormFieldDescriptor; 4] = [
+				ModelFormFieldDescriptor {
+					name: "enabled",
+					kind: ModelFormFieldKind::Boolean,
+					required: true,
+					has_default: false,
+					nullable: false,
+					editable: true,
+					generated_relation_id: false,
+				},
+				ModelFormFieldDescriptor {
+					name: "count",
+					kind: ModelFormFieldKind::Integer {
+						min: None,
+						max: None,
+					},
+					required: true,
+					has_default: false,
+					nullable: false,
+					editable: true,
+					generated_relation_id: false,
+				},
+				ModelFormFieldDescriptor {
+					name: "metadata",
+					kind: ModelFormFieldKind::Json,
+					required: false,
+					has_default: false,
+					nullable: true,
+					editable: true,
+					generated_relation_id: false,
+				},
+				ModelFormFieldDescriptor {
+					name: "owner_id",
+					kind: ModelFormFieldKind::Integer {
+						min: None,
+						max: None,
+					},
+					required: true,
+					has_default: false,
+					nullable: false,
+					editable: false,
+					generated_relation_id: false,
+				},
+			];
+			&FIELDS
+		}
+	}
+
 	#[test]
 	fn policy_rejects_known_but_unselected_fields() {
 		assert!(PublicOnly::allows("title"));
 		assert!(!PublicOnly::allows("owner_id"));
+	}
+
+	#[test]
+	fn native_normalization_removes_csrf_and_converts_controls() {
+		let value = normalize_native_model_form_value::<TestSchema, AllEditableModelFields>(
+			serde_json::json!({
+				"csrfmiddlewaretoken": "token",
+				"enabled": "on",
+				"count": "30",
+				"metadata": "{\"draft\":true}",
+			}),
+		)
+		.expect("native form value should normalize");
+
+		assert_eq!(
+			value,
+			serde_json::json!({
+				"enabled": true,
+				"count": 30,
+				"metadata": {"draft": true},
+			}),
+		);
 	}
 }

@@ -2206,24 +2206,6 @@ fn generate_model_form_support(
 		.iter()
 		.map(|field| LitStr::new(&field.name.to_string(), field.name.span()))
 		.collect();
-	let native_boolean_field_literals: Vec<_> = editable_fields
-		.iter()
-		.filter_map(|field| {
-			let (is_optional, inner_ty) = extract_option_type(&field.ty);
-			if is_optional {
-				return None;
-			}
-			let Type::Path(type_path) = inner_ty else {
-				return None;
-			};
-			let is_boolean = type_path
-				.path
-				.segments
-				.last()
-				.is_some_and(|segment| segment.ident == "bool");
-			is_boolean.then(|| LitStr::new(&field.name.to_string(), field.name.span()))
-		})
-		.collect();
 	let descriptor_entries = editable_fields
 		.iter()
 		.zip(&field_kinds)
@@ -2546,32 +2528,9 @@ fn generate_model_form_support(
 			#(#payload_bounds,)*
 		{
 			fn from_native_form_value(
-				mut value: #serde_json_crate::Value,
+				value: #serde_json_crate::Value,
 			) -> ::core::result::Result<Self, #serde_json_crate::Error> {
-				if let #serde_json_crate::Value::Object(values) = &mut value {
-					#(
-					if <P as #core_crate::model_form::ModelFormPolicy>::allows(#native_boolean_field_literals) {
-						match values.get_mut(#native_boolean_field_literals) {
-							::core::option::Option::Some(value) => {
-								let parsed = match value.as_str() {
-									::core::option::Option::Some("true") => ::core::option::Option::Some(true),
-									::core::option::Option::Some("false") => ::core::option::Option::Some(false),
-									_ => ::core::option::Option::None,
-								};
-								if let ::core::option::Option::Some(parsed) = parsed {
-									*value = #serde_json_crate::Value::Bool(parsed);
-								}
-							}
-							::core::option::Option::None => {
-								values.insert(
-									#native_boolean_field_literals.to_owned(),
-									#serde_json_crate::Value::Bool(false),
-								);
-							}
-						}
-					}
-					)*
-				}
+				let value = #core_crate::model_form::normalize_native_model_form_value::<#schema_name, P>(value)?;
 				#serde_json_crate::from_value(value)
 			}
 		}

@@ -66,7 +66,10 @@ pub trait FormModel: Model + Clone + Send + Sync {
 	/// Convert model instance to a choice label for display in forms
 	///
 	/// Default implementation returns the string representation of the primary key.
-	/// Override this method to provide custom display labels.
+	///
+	/// Derive-generated implementations use this default. Configure a
+	/// [`crate::ModelChoiceField`] or [`crate::ModelMultipleChoiceField`] with
+	/// its `choice_label` callback when an application needs a custom label.
 	///
 	/// # Examples
 	///

@@ -294,16 +294,24 @@ fn rewrite_router_function(
 }
 
 fn function_contains_local_use(function: &ItemFn) -> bool {
-	struct LocalUseFinder {
+	struct LocalShadowFinder {
 		found: bool,
 	}
-	impl<'ast> Visit<'ast> for LocalUseFinder {
+	impl<'ast> Visit<'ast> for LocalShadowFinder {
 		fn visit_item_use(&mut self, _item: &'ast ItemUse) {
+			self.found = true;
+		}
+
+		fn visit_local(&mut self, _local: &'ast syn::Local) {
+			self.found = true;
+		}
+
+		fn visit_item(&mut self, _item: &'ast Item) {
 			self.found = true;
 		}
 	}
 
-	let mut finder = LocalUseFinder { found: false };
+	let mut finder = LocalShadowFinder { found: false };
 	finder.visit_block(&function.block);
 	finder.found
 }
@@ -949,6 +957,7 @@ pub(crate) struct TextEdit {
 #[derive(Clone, Copy)]
 enum TextEditKind {
 	Exact,
+	UseTree,
 	MethodSuffix,
 	WholeLine,
 }
@@ -992,7 +1001,7 @@ impl TextEdit {
 			start: item_start(original),
 			end: original.span().end(),
 			replacement: formatted.trim_end().to_owned(),
-			kind: TextEditKind::Exact,
+			kind: TextEditKind::UseTree,
 		}
 	}
 }
@@ -1014,6 +1023,14 @@ pub(crate) fn apply_text_edits(source: &str, edits: &[TextEdit]) -> Option<Strin
 		let mut end = byte_offset(source, &line_starts, edit.end)?;
 		match edit.kind {
 			TextEditKind::Exact => {}
+			TextEditKind::UseTree => {
+				if source
+					.get(start..end)
+					.is_some_and(|item| item.contains("//") || item.contains("/*"))
+				{
+					continue;
+				}
+			}
 			TextEditKind::MethodSuffix => {
 				start = find_method_dot(source, start)?;
 				if edit.replacement.is_empty() {

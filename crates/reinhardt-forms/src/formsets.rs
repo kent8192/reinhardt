@@ -5,7 +5,10 @@
 
 use crate::formset::FormSet;
 use crate::model_form::{FormModel, ModelForm, ModelFormError, ModelFormPersistenceMode};
-use reinhardt_core::model_form::{AllEditableModelFields, ModelFormPolicy, ModelFormSchema};
+use reinhardt_core::model_form::{
+	AllEditableModelFields, ModelFormFieldKind, ModelFormPolicy, ModelFormPrimaryKey,
+	ModelFormSchema,
+};
 use reinhardt_db::orm::OrmExecutor;
 use serde::Serialize;
 use std::marker::PhantomData;
@@ -110,11 +113,13 @@ impl<P: FormModel, C: FormModel> InlineFormSet<P, C> {
 	///
 	/// # Errors
 	///
-	/// Returns an error if any save operation fails or if the parent model
-	/// does not expose a primary key after saving.
+	/// Returns an error if any save operation fails, the child foreign-key field
+	/// cannot accept the parent's primary-key kind, or the parent model does not
+	/// expose a primary key after saving.
 	pub async fn save(&mut self, executor: &mut dyn OrmExecutor) -> Result<(), ModelFormError>
 	where
 		P::PrimaryKey: Serialize,
+		P: ModelFormPrimaryKey,
 	{
 		if !self.is_valid() {
 			return Err(ModelFormError::ModelValidation {
@@ -132,6 +137,7 @@ impl<P: FormModel, C: FormModel> InlineFormSet<P, C> {
 				)]),
 			});
 		}
+		self.validate_foreign_key_kind()?;
 		if let Some(parent_id) = self.parent.primary_key() {
 			let parent_id = serde_json::to_value(parent_id).map_err(|error| {
 				ModelFormError::FieldValidation {
@@ -172,6 +178,28 @@ impl<P: FormModel, C: FormModel> InlineFormSet<P, C> {
 		Ok(())
 	}
 
+	fn validate_foreign_key_kind(&self) -> Result<(), ModelFormError>
+	where
+		P: ModelFormPrimaryKey,
+	{
+		let child = C::Schema::fields()
+			.iter()
+			.find(|descriptor| descriptor.name == self.fk_field);
+		if let Some(child) = child
+			&& !foreign_key_kinds_are_compatible(P::FIELD_KIND, child.kind)
+		{
+			return Err(ModelFormError::FieldValidation {
+				errors: std::collections::HashMap::from([(
+					self.fk_field.clone(),
+					vec![
+						"foreign key field is incompatible with the parent primary key".to_owned(),
+					],
+				)]),
+			});
+		}
+		Ok(())
+	}
+
 	/// Validate all child forms
 	pub fn is_valid(&mut self) -> bool {
 		let mut all_valid = true;
@@ -195,6 +223,10 @@ impl<P: FormModel, C: FormModel> InlineFormSet<P, C> {
 
 		all_valid
 	}
+}
+
+fn foreign_key_kinds_are_compatible(parent: ModelFormFieldKind, child: ModelFormFieldKind) -> bool {
+	std::mem::discriminant(&parent) == std::mem::discriminant(&child)
 }
 
 /// ModelFormSet for managing multiple model instances
@@ -836,6 +868,31 @@ mod tests {
 		let saved_child = formset.child_forms()[0].instance().unwrap();
 		assert_eq!(saved_child.parent_id, Some(1));
 		assert_eq!(executor.fetch_one_calls, 2);
+	}
+
+	#[test]
+	fn test_inline_formset_rejects_generated_parent_key_with_incompatible_child_field() {
+		let parent = TestModel {
+			id: None,
+			name: "parent".to_owned(),
+			email: "parent@example.com".to_owned(),
+		};
+		let mut formset =
+			InlineFormSet::<TestModel, UuidChild>::for_create(parent, "parent_id".to_owned());
+		let mut data = UuidChildModelFormData::<AllEditableModelFields>::empty();
+		data.set_content("child".to_owned());
+		formset.add_child_form(ModelForm::from_payload(data));
+		let mut executor = FormsetExecutor::new(Vec::<Result<Row, Error>>::new());
+
+		let error = tokio_test::block_on(formset.save(&mut executor)).unwrap_err();
+
+		assert!(matches!(
+			error,
+			ModelFormError::FieldValidation { errors }
+				if errors.get("parent_id")
+					== Some(&vec!["foreign key field is incompatible with the parent primary key".to_owned()])
+		));
+		assert_eq!(executor.fetch_one_calls, 0);
 	}
 
 	#[test]

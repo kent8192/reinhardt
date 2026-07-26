@@ -54,9 +54,11 @@ pub trait NativeModelFormPayload: Sized {
 /// Normalizes controls produced by a native HTML model form before decoding.
 ///
 /// Browser form submissions represent every successful control as text and
-/// omit unchecked checkboxes. This conversion is intentionally limited to
-/// schema fields permitted by the selected policy; unrelated controls such as
-/// the CSRF token are removed before typed payload decoding.
+/// omit unchecked checkboxes. The generated color-control marker also omits an
+/// untouched optional color control when the browser supplies its synthetic
+/// black fallback. This conversion is intentionally limited to schema fields
+/// permitted by the selected policy; unrelated controls such as the CSRF token
+/// are removed before typed payload decoding.
 ///
 /// # Errors
 ///
@@ -80,6 +82,10 @@ where
 
 		let checkbox_sentinel = format!("__reinhardt_checkbox_{}", descriptor.name);
 		let has_checkbox_sentinel = values.remove(&checkbox_sentinel).is_some();
+		let color_sentinel = format!("__reinhardt_color_{}", descriptor.name);
+		let color_was_edited = values
+			.remove(&color_sentinel)
+			.map(|value| value == serde_json::Value::String("true".to_owned()));
 		let Some(control) = values.get_mut(descriptor.name) else {
 			if matches!(descriptor.kind, ModelFormFieldKind::Boolean)
 				&& (has_checkbox_sentinel || (!descriptor.nullable && !descriptor.has_default))
@@ -91,6 +97,10 @@ where
 		let serde_json::Value::String(text) = control else {
 			continue;
 		};
+		if color_was_edited == Some(false) && text == "#000000" {
+			values.remove(descriptor.name);
+			continue;
+		}
 
 		let remove_empty = text.is_empty()
 			&& !descriptor.required
@@ -234,7 +244,7 @@ mod tests {
 		type Model = ();
 
 		fn fields() -> &'static [ModelFormFieldDescriptor] {
-			const FIELDS: [ModelFormFieldDescriptor; 6] = [
+			const FIELDS: [ModelFormFieldDescriptor; 7] = [
 				ModelFormFieldDescriptor {
 					name: "enabled",
 					kind: ModelFormFieldKind::Boolean,
@@ -284,6 +294,19 @@ mod tests {
 					required: false,
 					has_default: false,
 					nullable: false,
+					editable: true,
+					generated_relation_id: false,
+				},
+				ModelFormFieldDescriptor {
+					name: "accent",
+					kind: ModelFormFieldKind::Text {
+						min_length: None,
+						max_length: None,
+						multiline: false,
+					},
+					required: false,
+					has_default: false,
+					nullable: true,
 					editable: true,
 					generated_relation_id: false,
 				},
@@ -359,5 +382,34 @@ mod tests {
 		.expect("native form value should normalize");
 
 		assert_eq!(value, serde_json::json!({ "enabled": false, "title": "" }));
+	}
+
+	#[test]
+	fn native_normalization_omits_an_unedited_optional_color_control() {
+		let value = normalize_native_model_form_value::<TestSchema, AllEditableModelFields>(
+			serde_json::json!({
+				"accent": "#000000",
+				"__reinhardt_color_accent": "false",
+			}),
+		)
+		.expect("native form value should normalize");
+
+		assert_eq!(value, serde_json::json!({ "enabled": false }));
+	}
+
+	#[test]
+	fn native_normalization_preserves_an_edited_optional_color_control() {
+		let value = normalize_native_model_form_value::<TestSchema, AllEditableModelFields>(
+			serde_json::json!({
+				"accent": "#000000",
+				"__reinhardt_color_accent": "true",
+			}),
+		)
+		.expect("native form value should normalize");
+
+		assert_eq!(
+			value,
+			serde_json::json!({ "enabled": false, "accent": "#000000" })
+		);
 	}
 }

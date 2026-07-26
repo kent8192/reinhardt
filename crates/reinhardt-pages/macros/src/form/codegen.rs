@@ -2027,7 +2027,9 @@ fn generate_model_form(
 			);
 
 			#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-			enum __ReinhardtModelFormField {}
+			enum __ReinhardtModelFormField {
+				State,
+			}
 
 			#(#descriptor_guards)*
 
@@ -2038,6 +2040,7 @@ fn generate_model_form(
 						#pages_crate::form::ModelFormState<#schema_path, #policy_ident>
 					>
 				>,
+				__state_version: #pages_crate::Signal<u64>,
 				loading: #pages_crate::Signal<bool>,
 				error: #pages_crate::Signal<::core::option::Option<::std::string::String>>,
 				success: #pages_crate::Signal<bool>,
@@ -2051,6 +2054,7 @@ fn generate_model_form(
 						#pages_crate::form::ModelFormState::new()
 							),
 						),
+						__state_version: #pages_crate::Signal::new(0),
 						loading: #pages_crate::Signal::new(false),
 						error: #pages_crate::Signal::new(::core::option::Option::None),
 						success: #pages_crate::Signal::new(false),
@@ -2065,7 +2069,11 @@ fn generate_model_form(
 					(),
 					#pages_crate::form::ModelFormPayloadError,
 				> {
-					self.__model_state.borrow_mut().set_value(field, value)
+					let result = self.__model_state.borrow_mut().set_value(field, value);
+					if result.is_ok() {
+						self.__state_version.update(|version| *version = version.wrapping_add(1));
+					}
+					result
 				}
 
 				pub fn value(
@@ -2256,6 +2264,7 @@ fn generate_model_form(
 
 						let field_name = descriptor.name;
 						let checkbox_sentinel = format!("__reinhardt_checkbox_{field_name}");
+						let color_sentinel = format!("__reinhardt_color_{field_name}");
 						let control_id = format!("{}-{}", #form_id, field_name);
 						let range_default = if input_type == "range" {
 							match descriptor.kind {
@@ -2276,6 +2285,7 @@ fn generate_model_form(
 							.attr("type", input_type)
 							.bool_attr("required", descriptor.required && !is_checkbox);
 						let stored_value = self.__model_state.borrow().value(field_name).cloned();
+						let color_is_unset = input_type == "color" && stored_value.is_none();
 						if is_checkbox {
 							control = control.bool_attr(
 								"checked",
@@ -2348,18 +2358,24 @@ fn generate_model_form(
 								_ => {}
 							}
 						}
+						if input_type == "color" {
+							let color_edit_script = format!(
+								"this.form.elements['{color_sentinel}'].value='true'"
+							);
+							control = control.attr("oninput", color_edit_script);
+						}
 						if is_checkbox {
 							control = control.on(
 								#pages_crate::event::KnownEvent::Change,
 								{
-									let state = ::std::rc::Rc::clone(&self.__model_state);
+									let form = self.clone();
 									#pages_crate::typed_event_handler::<
 										#pages_crate::event::ChangeEvent,
 										_,
 									>(move |event: #pages_crate::event::ChangeEvent| {
 										if let ::core::result::Result::Ok(value) = event.checked() {
 											if let ::core::result::Result::Err(error) =
-												state.borrow_mut().set_value(
+												form.set_value(
 													field_name,
 													#pages_crate::__private::serde_json::Value::Bool(value),
 												)
@@ -2378,14 +2394,14 @@ fn generate_model_form(
 							control = control.on(
 								#pages_crate::event::KnownEvent::Input,
 								{
-									let state = ::std::rc::Rc::clone(&self.__model_state);
+									let form = self.clone();
 									#pages_crate::typed_event_handler::<
 										#pages_crate::event::InputEvent,
 										_,
 									>(move |event: #pages_crate::event::InputEvent| {
 										if let ::core::result::Result::Ok(value) = event.value() {
 											if let ::core::result::Result::Err(error) =
-												state.borrow_mut().set_value(
+												form.set_value(
 													field_name,
 													#pages_crate::__private::serde_json::Value::String(value),
 												)
@@ -2407,10 +2423,17 @@ fn generate_model_form(
 								.attr("name", checkbox_sentinel)
 								.attr("value", "false")
 						});
+						let color_sentinel = (input_type == "color").then(|| {
+							#pages_crate::PageElement::new("input")
+								.attr("type", "hidden")
+								.attr("name", color_sentinel)
+								.attr("value", if color_is_unset { "false" } else { "true" })
+						});
 
 						let mut wrapper = #pages_crate::PageElement::new("div")
 							.attr("class", "reinhardt-form-field")
 							.children(checkbox_sentinel)
+							.children(color_sentinel)
 							.child(
 								#pages_crate::PageElement::new("label")
 									.attr("for", control_id)
@@ -2478,14 +2501,15 @@ fn generate_model_form(
 													descriptor.kind,
 													#pages_crate::form::ModelFormFieldKind::Boolean
 												),
-												descriptor.nullable,
-												descriptor.required,
-												#is_range_override,
+													descriptor.nullable,
+													descriptor.required,
+													#is_range_override,
+													input_type == "color",
 											))
 											.collect::<::std::vec::Vec<_>>();
 										let mut state = submit_form.__model_state.borrow_mut();
-										for (field, is_checkbox, nullable, required, is_range) in fields {
-											if is_range && !required && state.value(field).is_none() {
+										for (field, is_checkbox, nullable, required, is_range, is_color) in fields {
+											if (is_range || is_color) && !required && state.value(field).is_none() {
 												continue;
 											}
 											if let Some(value) = values.get(field).as_string() {
@@ -2537,6 +2561,7 @@ fn generate_model_form(
 				}
 
 				fn runtime_current_values(&self) -> Self::Values {
+					let _ = self.__state_version.get();
 					let state = self.__model_state.borrow();
 					__ReinhardtModelFormValues(
 						state
@@ -2556,13 +2581,17 @@ fn generate_model_form(
 					for (field, value) in &values.0 {
 						let _ = state.set_value(field, value.clone());
 					}
+					drop(state);
+					self.__state_version.update(|version| *version = version.wrapping_add(1));
 				}
 
 				fn runtime_set_field_value<T>(&self, field: Self::Field, _value: T)
 				where
 					T: ::core::any::Any + 'static,
 				{
-					match field {}
+					match field {
+						__ReinhardtModelFormField::State => {}
+					}
 				}
 
 				fn runtime_values_are_dirty(
@@ -2574,16 +2603,20 @@ fn generate_model_form(
 				}
 
 				fn runtime_apply_field_value(&self, field: Self::Field, _values: &Self::Values) {
-					match field {}
+					match field {
+						__ReinhardtModelFormField::State => {}
+					}
 				}
 
 				fn runtime_field_is_dirty(
 					&self,
 					field: Self::Field,
-					_current: &Self::Values,
-					_defaults: &Self::Values,
+					current: &Self::Values,
+					defaults: &Self::Values,
 				) -> bool {
-					match field {}
+					match field {
+						__ReinhardtModelFormField::State => current != defaults,
+					}
 				}
 
 				fn runtime_watch_field<T>(
@@ -2593,11 +2626,13 @@ fn generate_model_form(
 				where
 					T: Clone + 'static,
 				{
-					match field {}
+					match field {
+						__ReinhardtModelFormField::State => ::core::option::Option::None,
+					}
 				}
 
 				fn runtime_fields(&self) -> &'static [Self::Field] {
-					&[]
+					&[__ReinhardtModelFormField::State]
 				}
 			}
 
@@ -7608,6 +7643,9 @@ mod tests {
 		assert!(output_str.contains(":: PATH"));
 		assert!(output_str.contains("temporal-form"));
 		assert!(output_str.contains("__reinhardt_checkbox_"));
+		assert!(output_str.contains("__reinhardt_color_"));
+		assert!(output_str.contains("__state_version"));
+		assert!(output_str.contains("__ReinhardtModelFormField :: State"));
 		assert!(output_str.contains("FormRuntimeSource for TemporalControlsForm"));
 	}
 

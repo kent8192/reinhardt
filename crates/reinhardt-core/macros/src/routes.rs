@@ -171,37 +171,40 @@ fn raw_request_parameter_ident(inputs: &Punctuated<FnArg, Token![,]>) -> Option<
 }
 
 fn wrapper_attribute(attr: &syn::Attribute) -> Option<syn::Attribute> {
-	if attr.path().is_ident("cfg") {
-		return Some(attr.clone());
+	if attr.path().is_ident("cfg") || !attr.path().is_ident("cfg_attr") {
+		return (!is_parameter_sensitive_attribute_path(attr.path())).then(|| attr.clone());
 	}
 	let Meta::List(list) = &attr.meta else {
 		return None;
 	};
-	if !attr.path().is_ident("cfg_attr") {
-		return None;
-	}
 	let Ok(attributes) =
 		Punctuated::<Meta, Token![,]>::parse_terminated.parse2(list.tokens.clone())
 	else {
 		return None;
 	};
 	let condition = attributes.first()?;
-	let cfg_attributes: Vec<_> = attributes
+	let wrapper_attributes: Vec<_> = attributes
 		.iter()
 		.skip(1)
-		.filter(|nested| nested.path().is_ident("cfg"))
+		.filter(|nested| !is_parameter_sensitive_attribute_path(nested.path()))
 		.collect();
-	if cfg_attributes.is_empty() {
+	if wrapper_attributes.is_empty() {
 		return None;
 	}
 	let tokens = quote! {
-		#[cfg_attr(#condition, #(#cfg_attributes),*)]
+		#[cfg_attr(#condition, #(#wrapper_attributes),*)]
 	};
 	syn::Attribute::parse_outer
 		.parse2(tokens)
 		.ok()?
 		.into_iter()
 		.next()
+}
+
+fn is_parameter_sensitive_attribute_path(path: &syn::Path) -> bool {
+	path.segments
+		.last()
+		.is_some_and(|segment| segment.ident == "instrument")
 }
 
 /// Extract request body information from function parameters
@@ -1694,14 +1697,20 @@ mod url_resolver_tests {
 	}
 
 	#[rstest]
-	fn wrapper_attributes_keep_only_conditional_compilation() {
+	fn wrapper_attributes_copy_safe_attributes_and_filter_instrumentation() {
 		let cfg: syn::Attribute = syn::parse_quote!(#[cfg(feature = "trace")]);
+		let deprecated: syn::Attribute = syn::parse_quote!(#[deprecated]);
+		let must_use: syn::Attribute = syn::parse_quote!(#[must_use]);
+		let doc: syn::Attribute = syn::parse_quote!(#[doc = "public route"]);
 		let conditional_cfg: syn::Attribute =
 			syn::parse_quote!(#[cfg_attr(feature = "wasm", cfg(wasm))]);
 		let conditional_tracing: syn::Attribute =
 			syn::parse_quote!(#[cfg_attr(feature = "trace", tracing::instrument)]);
 
 		assert!(wrapper_attribute(&cfg).is_some());
+		assert!(wrapper_attribute(&deprecated).is_some());
+		assert!(wrapper_attribute(&must_use).is_some());
+		assert!(wrapper_attribute(&doc).is_some());
 		assert!(wrapper_attribute(&conditional_cfg).is_some());
 		assert!(wrapper_attribute(&conditional_tracing).is_none());
 	}
@@ -1718,6 +1727,31 @@ mod url_resolver_tests {
 			quote!(#wrapper).to_string(),
 			"# [cfg_attr (feature = \"trace\" , cfg (unix))]"
 		);
+	}
+
+	#[rstest]
+	fn route_wrapper_preserves_safe_builtin_attributes() {
+		let input: ItemFn = syn::parse_quote! {
+			#[deprecated]
+			#[must_use]
+			#[doc = "public route"]
+			async fn handler(Json(payload): Json<Payload>) -> String { String::new() }
+		};
+		let extractors = detect_extractors(&input.sig.inputs);
+		let generated = generate_view_type(
+			&input,
+			"GET",
+			"/handler",
+			&extractors,
+			&[],
+			&RouteOptions::default(),
+		)
+		.expect("route generation should succeed")
+		.to_string();
+
+		assert_eq!(generated.matches("deprecated").count(), 2);
+		assert_eq!(generated.matches("must_use").count(), 2);
+		assert_eq!(generated.matches("public route").count(), 2);
 	}
 
 	#[rstest]

@@ -637,6 +637,10 @@ impl ProjectState {
 					name: idx.name.clone(),
 					columns: idx.fields.clone(),
 					unique: idx.unique,
+					access_method: None,
+					index_type: None,
+					expressions: None,
+					operator_class: None,
 				})
 				.collect();
 
@@ -726,6 +730,10 @@ impl ProjectState {
 						name: idx.name.clone(),
 						columns: idx.fields.clone(),
 						unique: idx.unique,
+						access_method: None,
+						index_type: None,
+						expressions: None,
+						operator_class: None,
 					})
 					.collect();
 

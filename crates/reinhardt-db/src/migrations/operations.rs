@@ -3025,10 +3025,10 @@ impl Operation {
 			));
 		}
 
-		let target_count = expressions
-			.filter(|expressions| !expressions.is_empty())
-			.map_or(columns.len(), <[String]>::len);
-		if target_count != 1 {
+		let expression_count = expressions.map_or(0, <[String]>::len);
+		let has_exactly_one_target = (columns.len() == 1 && expression_count == 0)
+			|| (columns.is_empty() && expression_count == 1);
+		if !has_exactly_one_target {
 			return Err(super::MigrationError::InvalidMigration(
 				"approximate vector indexes require exactly one column or expression".to_string(),
 			));
@@ -9567,6 +9567,24 @@ mod tests {
 	}
 
 	#[rstest]
+	#[case(IndexType::BTree)]
+	#[case(IndexType::Hnsw {
+		m: Some(16),
+		ef_construction: Some(64),
+	})]
+	#[case(IndexType::Ivfflat { lists: Some(100) })]
+	fn vector_index_type_serde_roundtrip_preserves_legacy_and_data_bearing_variants(
+		#[case] index_type: IndexType,
+	) {
+		// Act
+		let serialized = serde_json::to_string(&index_type).unwrap();
+		let reparsed: IndexType = serde_json::from_str(&serialized).unwrap();
+
+		// Assert
+		assert_eq!(reparsed, index_type);
+	}
+
+	#[rstest]
 	fn vector_index_hnsw_migration_renders_forward_and_backward_sql() {
 		// Arrange
 		let operation = vector_index_operation(IndexType::Hnsw {
@@ -9743,6 +9761,112 @@ mod tests {
 			result,
 			Err(crate::migrations::MigrationError::InvalidMigration(message))
 				if message == expected
+		));
+	}
+
+	#[rstest]
+	fn vector_index_migration_rejects_column_and_expression_together() {
+		// Arrange
+		let operation = Operation::CreateIndex {
+			table: "source".to_string(),
+			columns: vec!["embedding".to_string()],
+			unique: false,
+			index_type: Some(IndexType::Hnsw {
+				m: None,
+				ef_construction: None,
+			}),
+			where_clause: None,
+			concurrently: false,
+			expressions: Some(vec!["normalize(embedding)".to_string()]),
+			mysql_options: None,
+			operator_class: Some("vector_cosine_ops".to_string()),
+		};
+
+		// Act
+		let result = operation.try_to_sql(&SqlDialect::Postgres);
+
+		// Assert
+		assert!(matches!(
+			result,
+			Err(crate::migrations::MigrationError::InvalidMigration(message))
+				if message == "approximate vector indexes require exactly one column or expression"
+		));
+	}
+
+	#[rstest]
+	fn vector_index_migration_rejects_empty_target() {
+		// Arrange
+		let operation = Operation::CreateIndex {
+			table: "source".to_string(),
+			columns: vec![],
+			unique: false,
+			index_type: Some(IndexType::Ivfflat { lists: None }),
+			where_clause: None,
+			concurrently: false,
+			expressions: None,
+			mysql_options: None,
+			operator_class: Some("vector_l2_ops".to_string()),
+		};
+
+		// Act
+		let result = operation.try_to_sql(&SqlDialect::Postgres);
+
+		// Assert
+		assert!(matches!(
+			result,
+			Err(crate::migrations::MigrationError::InvalidMigration(message))
+				if message == "approximate vector indexes require exactly one column or expression"
+		));
+	}
+
+	#[rstest]
+	fn vector_index_migration_rejects_multiple_columns_individually() {
+		// Arrange
+		let mut operation = vector_index_operation(IndexType::Ivfflat { lists: None });
+		if let Operation::CreateIndex { columns, .. } = &mut operation {
+			columns.push("tenant_id".to_string());
+		}
+
+		// Act
+		let result = operation.try_to_sql(&SqlDialect::Postgres);
+
+		// Assert
+		assert!(matches!(
+			result,
+			Err(crate::migrations::MigrationError::InvalidMigration(message))
+				if message == "approximate vector indexes require exactly one column or expression"
+		));
+	}
+
+	#[rstest]
+	fn vector_index_migration_rejects_multiple_expressions_individually() {
+		// Arrange
+		let operation = Operation::CreateIndex {
+			table: "source".to_string(),
+			columns: vec![],
+			unique: false,
+			index_type: Some(IndexType::Hnsw {
+				m: None,
+				ef_construction: None,
+			}),
+			where_clause: None,
+			concurrently: false,
+			expressions: Some(vec![
+				"normalize(embedding)".to_string(),
+				"tenant_id".to_string(),
+			]),
+			mysql_options: None,
+			operator_class: Some("vector_cosine_ops".to_string()),
+		};
+
+		// Act
+		let result = operation.try_to_sql(&SqlDialect::Postgres);
+
+		// Assert
+		assert!(matches!(
+			result,
+			Err(crate::migrations::MigrationError::InvalidMigration(message))
+				if message == "approximate vector indexes require exactly one column or expression"
 		));
 	}
 

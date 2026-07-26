@@ -367,6 +367,19 @@ impl CreateIndexStatement {
 			});
 		}
 
+		if supports_approximate_vector_indexes
+			&& self.columns.iter().any(|column| {
+				column
+					.operator_class
+					.as_deref()
+					.is_some_and(|operator_class| !is_valid_postgres_operator_class(operator_class))
+			}) {
+			return Err(crate::QueryBuildError::UnsupportedBackendFeature {
+				feature: "valid PostgreSQL operator class",
+				backend,
+			});
+		}
+
 		let options_match_method = matches!(
 			(self.using, self.options),
 			(_, None)
@@ -441,6 +454,20 @@ pub(crate) fn is_supported_vector_operator_class(operator_class: &str) -> bool {
 		operator_class,
 		"vector_l2_ops" | "vector_ip_ops" | "vector_cosine_ops"
 	)
+}
+
+fn is_valid_postgres_operator_class(operator_class: &str) -> bool {
+	let identifiers = operator_class.split('.').collect::<Vec<_>>();
+	(1..=2).contains(&identifiers.len())
+		&& identifiers.into_iter().all(|identifier| {
+			let mut characters = identifier.chars();
+			characters
+				.next()
+				.is_some_and(|character| character.is_ascii_alphabetic() || character == '_')
+				&& characters.all(|character| {
+					character.is_ascii_alphanumeric() || matches!(character, '_' | '$')
+				})
+		})
 }
 
 impl Default for CreateIndexStatement {
@@ -662,6 +689,58 @@ mod tests {
 	}
 
 	#[rstest]
+	fn create_vector_index_rejects_method_options_mismatch() {
+		// Arrange
+		let mut statement = Query::create_index();
+		statement
+			.name("idx_embedding")
+			.table("source")
+			.col_with_operator_class("embedding", "vector_l2_ops")
+			.using(IndexMethod::Hnsw)
+			.options(IndexOptions::Ivfflat { lists: Some(100) });
+
+		// Act
+		let result = PostgresQueryBuilder::new().build_create_index_checked(&statement);
+
+		// Assert
+		assert!(matches!(
+			result,
+			Err(QueryBuildError::UnsupportedBackendFeature {
+				feature: "matching approximate vector index method and options",
+				backend: "PostgreSQL",
+			})
+		));
+	}
+
+	#[rstest]
+	fn create_vector_index_omits_empty_hnsw_options_clause() {
+		// Arrange
+		let mut statement = Query::create_index();
+		statement
+			.name("idx_embedding")
+			.table("source")
+			.col_with_operator_class("embedding", "vector_l2_ops")
+			.using(IndexMethod::Hnsw)
+			.options(IndexOptions::Hnsw {
+				m: None,
+				ef_construction: None,
+			});
+
+		// Act
+		let sql = PostgresQueryBuilder::new()
+			.build_create_index_checked(&statement)
+			.unwrap()
+			.0;
+
+		// Assert
+		assert_eq!(
+			sql,
+			r#"CREATE INDEX "idx_embedding" ON "source" USING HNSW ("embedding" vector_l2_ops)"#
+		);
+		assert!(!sql.contains("WITH ()"));
+	}
+
+	#[rstest]
 	#[case(None, "supported vector operator class")]
 	#[case(Some("gin_trgm_ops"), "supported vector operator class")]
 	fn create_vector_index_rejects_missing_or_unsupported_operator_class(
@@ -729,6 +808,94 @@ mod tests {
 			result,
 			Err(QueryBuildError::UnsupportedBackendFeature {
 				feature: "non-unique approximate vector indexes",
+				backend: "PostgreSQL",
+			})
+		));
+	}
+
+	#[rstest]
+	fn create_vector_index_rejects_malicious_generic_operator_class() {
+		// Arrange
+		let mut statement = Query::create_index();
+		statement
+			.name("idx_document_search")
+			.table("document")
+			.col_with_operator_class("search", "gin_trgm_ops) WHERE true; --")
+			.using(IndexMethod::Gin);
+
+		// Act
+		let result = PostgresQueryBuilder::new().build_create_index_checked(&statement);
+
+		// Assert
+		assert!(matches!(
+			result,
+			Err(QueryBuildError::UnsupportedBackendFeature {
+				feature: "valid PostgreSQL operator class",
+				backend: "PostgreSQL",
+			})
+		));
+	}
+
+	#[rstest]
+	fn create_vector_index_rejects_overqualified_generic_operator_class() {
+		// Arrange
+		let mut statement = Query::create_index();
+		statement
+			.name("idx_document_search")
+			.table("document")
+			.col_with_operator_class("search", "database.public.gin_trgm_ops")
+			.using(IndexMethod::Gin);
+
+		// Act
+		let result = PostgresQueryBuilder::new().build_create_index_checked(&statement);
+
+		// Assert
+		assert!(matches!(
+			result,
+			Err(QueryBuildError::UnsupportedBackendFeature {
+				feature: "valid PostgreSQL operator class",
+				backend: "PostgreSQL",
+			})
+		));
+	}
+
+	#[rstest]
+	fn create_vector_index_accepts_safe_qualified_generic_operator_class() {
+		// Arrange
+		let mut statement = Query::create_index();
+		statement
+			.name("idx_document_search")
+			.table("document")
+			.col_with_operator_class("search", "public.gin_trgm_ops")
+			.using(IndexMethod::Gin);
+
+		// Act
+		let sql = PostgresQueryBuilder::new()
+			.build_create_index_checked(&statement)
+			.unwrap()
+			.0;
+
+		// Assert
+		assert_eq!(
+			sql,
+			r#"CREATE INDEX "idx_document_search" ON "document" USING GIN ("search" public.gin_trgm_ops)"#
+		);
+	}
+
+	#[rstest]
+	fn create_vector_index_rejects_qualified_vector_operator_class() {
+		// Arrange
+		let mut statement = hnsw_statement();
+		statement.columns[0].operator_class = Some("public.vector_cosine_ops".to_string());
+
+		// Act
+		let result = PostgresQueryBuilder::new().build_create_index_checked(&statement);
+
+		// Assert
+		assert!(matches!(
+			result,
+			Err(QueryBuildError::UnsupportedBackendFeature {
+				feature: "supported vector operator class",
 				backend: "PostgreSQL",
 			})
 		));

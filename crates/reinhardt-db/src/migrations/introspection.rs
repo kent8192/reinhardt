@@ -6,9 +6,7 @@
 use async_trait::async_trait;
 use std::collections::HashMap;
 
-#[cfg(any(feature = "mysql", feature = "postgres", feature = "sqlite"))]
-use super::MigrationError;
-use super::Result;
+use super::{MigrationError, Result};
 
 /// Schema information extracted from a database
 #[derive(Debug, Clone, PartialEq)]
@@ -62,8 +60,84 @@ pub struct IndexInfo {
 	pub columns: Vec<String>,
 	/// Whether the index is unique
 	pub unique: bool,
-	/// Index type (e.g., BTREE, HASH)
-	pub index_type: Option<String>,
+	/// Raw database access method (e.g., btree, hash, hnsw)
+	pub access_method: Option<String>,
+	/// Typed migration index method and options when representable
+	pub index_type: Option<super::IndexType>,
+	/// Index expressions, when the index does not target plain columns
+	pub expressions: Option<Vec<String>>,
+	/// PostgreSQL operator class for the indexed target
+	pub operator_class: Option<String>,
+}
+
+fn parse_postgres_index_type(
+	access_method: &str,
+	reloptions: &[String],
+) -> Result<Option<super::IndexType>> {
+	use super::IndexType;
+
+	match access_method {
+		"btree" => Ok(Some(IndexType::BTree)),
+		"hash" => Ok(Some(IndexType::Hash)),
+		"gin" => Ok(Some(IndexType::Gin)),
+		"gist" => Ok(Some(IndexType::Gist)),
+		"brin" => Ok(Some(IndexType::Brin)),
+		"hnsw" => {
+			let mut m = None;
+			let mut ef_construction = None;
+			for option in reloptions {
+				let Some((name, value)) = option.split_once('=') else {
+					return Err(MigrationError::IntrospectionError(format!(
+						"invalid PostgreSQL hnsw reloption {option}"
+					)));
+				};
+				match name {
+					"m" => {
+						m = Some(value.parse::<u16>().map_err(|_| {
+							MigrationError::IntrospectionError(format!(
+								"invalid PostgreSQL hnsw reloption {option}"
+							))
+						})?);
+					}
+					"ef_construction" => {
+						ef_construction = Some(value.parse::<u16>().map_err(|_| {
+							MigrationError::IntrospectionError(format!(
+								"invalid PostgreSQL hnsw reloption {option}"
+							))
+						})?);
+					}
+					_ => {
+						return Err(MigrationError::IntrospectionError(format!(
+							"unsupported PostgreSQL hnsw reloption {option}"
+						)));
+					}
+				}
+			}
+			Ok(Some(IndexType::Hnsw { m, ef_construction }))
+		}
+		"ivfflat" => {
+			let mut lists = None;
+			for option in reloptions {
+				let Some((name, value)) = option.split_once('=') else {
+					return Err(MigrationError::IntrospectionError(format!(
+						"invalid PostgreSQL ivfflat reloption {option}"
+					)));
+				};
+				if name != "lists" {
+					return Err(MigrationError::IntrospectionError(format!(
+						"unsupported PostgreSQL ivfflat reloption {option}"
+					)));
+				}
+				lists = Some(value.parse::<u32>().map_err(|_| {
+					MigrationError::IntrospectionError(format!(
+						"invalid PostgreSQL ivfflat reloption {option}"
+					))
+				})?);
+			}
+			Ok(Some(IndexType::Ivfflat { lists }))
+		}
+		_ => Ok(None),
+	}
 }
 
 /// Foreign key constraint
@@ -550,28 +624,41 @@ impl PostgresIntrospector {
 		let query = r#"
 			SELECT
 				i.relname AS index_name,
-				array_agg(a.attname ORDER BY array_position(ix.indkey, a.attnum)) AS column_names,
+				COALESCE(
+					array_agg(a.attname ORDER BY key.position)
+						FILTER (WHERE a.attname IS NOT NULL),
+					ARRAY[]::name[]
+				) AS column_names,
 				ix.indisunique AS is_unique,
-				am.amname AS index_type
+				am.amname AS access_method,
+				i.reloptions AS index_options,
+				pg_get_expr(ix.indexprs, ix.indrelid) AS index_expressions,
+				(array_agg(opc.opcname ORDER BY key.position))[1] AS operator_class
 			FROM
-				pg_class t,
-				pg_class i,
-				pg_index ix,
-				pg_attribute a,
-				pg_am am,
-				pg_namespace n
+				pg_class t
+				JOIN pg_index ix ON t.oid = ix.indrelid
+				JOIN pg_class i ON i.oid = ix.indexrelid
+				JOIN pg_am am ON i.relam = am.oid
+				JOIN pg_namespace n ON n.oid = t.relnamespace
+				CROSS JOIN LATERAL generate_subscripts(ix.indclass::oid[], 1) AS key(position)
+				LEFT JOIN pg_attribute a
+					ON a.attrelid = t.oid
+					AND a.attnum = (ix.indkey::smallint[])[key.position]
+				LEFT JOIN pg_opclass opc
+					ON opc.oid = (ix.indclass::oid[])[key.position]
 			WHERE
-				t.oid = ix.indrelid
-				AND i.oid = ix.indexrelid
-				AND a.attrelid = t.oid
-				AND a.attnum = ANY(ix.indkey)
-				AND t.relkind = 'r'
+				t.relkind = 'r'
 				AND t.relname = $1
-				AND i.relam = am.oid
 				AND NOT ix.indisprimary
-				AND n.oid = t.relnamespace
 				AND n.nspname = 'public'
-			GROUP BY i.relname, ix.indisunique, am.amname
+			GROUP BY
+				i.oid,
+				i.relname,
+				i.reloptions,
+				ix.indisunique,
+				ix.indexprs,
+				ix.indrelid,
+				am.amname
 			ORDER BY i.relname
 		"#;
 
@@ -597,9 +684,24 @@ impl PostgresIntrospector {
 			let is_unique: bool = row.try_get("is_unique").map_err(|e| {
 				MigrationError::IntrospectionError(format!("Failed to get is_unique: {}", e))
 			})?;
-			let index_type: String = row.try_get("index_type").map_err(|e| {
-				MigrationError::IntrospectionError(format!("Failed to get index_type: {}", e))
+			let access_method: String = row.try_get("access_method").map_err(|e| {
+				MigrationError::IntrospectionError(format!("Failed to get access_method: {}", e))
 			})?;
+			let index_options: Option<Vec<String>> = row.try_get("index_options").map_err(|e| {
+				MigrationError::IntrospectionError(format!("Failed to get index_options: {}", e))
+			})?;
+			let index_expression: Option<String> =
+				row.try_get("index_expressions").map_err(|e| {
+					MigrationError::IntrospectionError(format!(
+						"Failed to get index_expressions: {}",
+						e
+					))
+				})?;
+			let operator_class: Option<String> = row.try_get("operator_class").map_err(|e| {
+				MigrationError::IntrospectionError(format!("Failed to get operator_class: {}", e))
+			})?;
+			let index_type =
+				parse_postgres_index_type(&access_method, index_options.as_deref().unwrap_or(&[]))?;
 
 			indexes.insert(
 				index_name.clone(),
@@ -607,7 +709,10 @@ impl PostgresIntrospector {
 					name: index_name,
 					columns: column_names,
 					unique: is_unique,
-					index_type: Some(index_type),
+					access_method: Some(access_method),
+					index_type,
+					expressions: index_expression.map(|expression| vec![expression]),
+					operator_class,
 				},
 			);
 		}
@@ -920,7 +1025,10 @@ impl MySQLIntrospector {
 					name: name.clone(),
 					columns: cols.clone(),
 					unique: *is_unique,
-					index_type: Some(idx_type.clone()),
+					access_method: Some(idx_type.clone()),
+					index_type: None,
+					expressions: None,
+					operator_class: None,
 				},
 			);
 
@@ -1325,7 +1433,10 @@ impl SQLiteIntrospector {
 					name: index_row.name,
 					columns,
 					unique: index_row.unique != 0,
+					access_method: None,
 					index_type: None,
+					expressions: None,
+					operator_class: None,
 				},
 			);
 		}
@@ -1741,6 +1852,45 @@ impl DatabaseIntrospector for SQLiteIntrospector {
 			}
 			None => Ok(None),
 		}
+	}
+}
+
+#[cfg(test)]
+mod postgres_index_metadata_tests {
+	use super::*;
+	use crate::migrations::IndexType;
+
+	#[test]
+	fn vector_index_postgres_reloptions_parse_to_typed_methods() {
+		// Act and assert
+		assert_eq!(
+			parse_postgres_index_type(
+				"hnsw",
+				&["ef_construction=64".to_string(), "m=16".to_string()]
+			)
+			.unwrap(),
+			Some(IndexType::Hnsw {
+				m: Some(16),
+				ef_construction: Some(64),
+			})
+		);
+		assert_eq!(
+			parse_postgres_index_type("ivfflat", &["lists=100".to_string()]).unwrap(),
+			Some(IndexType::Ivfflat { lists: Some(100) })
+		);
+	}
+
+	#[test]
+	fn vector_index_postgres_reloptions_reject_malformed_values() {
+		// Act
+		let result = parse_postgres_index_type("hnsw", &["ef_construction=invalid".to_string()]);
+
+		// Assert
+		assert!(matches!(
+			result,
+			Err(MigrationError::IntrospectionError(message))
+				if message == "invalid PostgreSQL hnsw reloption ef_construction=invalid"
+		));
 	}
 }
 

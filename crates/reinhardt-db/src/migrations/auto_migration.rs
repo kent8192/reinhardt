@@ -269,9 +269,21 @@ impl AutoMigrationGenerator {
 				}
 
 				// Index operations
-				Operation::CreateIndex { table, columns, .. } => Some(Operation::DropIndex {
+				Operation::CreateIndex {
+					table,
+					columns,
+					expressions,
+					..
+				} => Some(Operation::DropIndex {
 					table: table.clone(),
-					columns: columns.clone(),
+					columns: if expressions
+						.as_ref()
+						.is_some_and(|expressions| !expressions.is_empty())
+					{
+						vec!["expr".to_string()]
+					} else {
+						columns.clone()
+					},
 				}),
 				Operation::CreateIndexRepair { .. } => None,
 				Operation::RestoreIndexOnRollback {
@@ -433,7 +445,7 @@ impl From<std::io::Error> for AutoMigrationError {
 mod tests {
 	use super::*;
 	use crate::migrations::repository::MigrationRepository;
-	use crate::migrations::{FieldType, Migration, MigrationError, Result};
+	use crate::migrations::{FieldType, Migration, MigrationError, Result, SqlDialect};
 	use async_trait::async_trait;
 	use std::collections::{BTreeMap, HashMap};
 	use tokio::sync::Mutex;
@@ -503,6 +515,64 @@ mod tests {
 		let rollback = generator.generate_rollback(&operations);
 		assert_eq!(rollback.len(), 1);
 		assert!(matches!(rollback[0], Operation::DropTable { .. }));
+	}
+
+	#[test]
+	fn vector_index_column_rollback_retains_column_identity() {
+		// Arrange
+		let generator = AutoMigrationGenerator::new(
+			DatabaseSchema::default(),
+			Arc::new(Mutex::new(TestRepository::new())),
+		);
+		let operation = Operation::CreateIndex {
+			table: "source".to_string(),
+			columns: vec!["embedding".to_string()],
+			unique: false,
+			index_type: None,
+			where_clause: None,
+			concurrently: false,
+			expressions: None,
+			mysql_options: None,
+			operator_class: None,
+		};
+
+		// Act
+		let rollback = generator.generate_rollback(&[operation]);
+
+		// Assert
+		assert_eq!(
+			rollback[0].to_sql(&SqlDialect::Postgres),
+			"DROP INDEX idx_source_embedding;"
+		);
+	}
+
+	#[test]
+	fn vector_index_expression_rollback_retains_expression_identity() {
+		// Arrange
+		let generator = AutoMigrationGenerator::new(
+			DatabaseSchema::default(),
+			Arc::new(Mutex::new(TestRepository::new())),
+		);
+		let operation = Operation::CreateIndex {
+			table: "source".to_string(),
+			columns: vec![],
+			unique: false,
+			index_type: None,
+			where_clause: None,
+			concurrently: false,
+			expressions: Some(vec!["normalize(embedding)".to_string()]),
+			mysql_options: None,
+			operator_class: None,
+		};
+
+		// Act
+		let rollback = generator.generate_rollback(&[operation]);
+
+		// Assert
+		assert_eq!(
+			rollback[0].to_sql(&SqlDialect::Postgres),
+			"DROP INDEX idx_source_expr;"
+		);
 	}
 
 	#[test]

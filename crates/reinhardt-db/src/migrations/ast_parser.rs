@@ -250,6 +250,10 @@ fn parse_single_operation(expr: &Expr) -> Option<super::Operation> {
 				let where_clause = extract_optional_str_field(&expr_struct.fields, "where_clause");
 				let concurrently =
 					extract_bool_field(&expr_struct.fields, "concurrently").unwrap_or(false);
+				let expressions =
+					extract_optional_string_vec_field(&expr_struct.fields, "expressions");
+				let mysql_options =
+					extract_alter_table_options_field(&expr_struct.fields, "mysql_options");
 				let operator_class =
 					extract_optional_str_field(&expr_struct.fields, "operator_class");
 
@@ -261,8 +265,8 @@ fn parse_single_operation(expr: &Expr) -> Option<super::Operation> {
 						index_type,
 						where_clause,
 						concurrently,
-						expressions: None,
-						mysql_options: None,
+						expressions,
+						mysql_options,
 						operator_class,
 					},
 					"CreateIndexRepair" => super::Operation::CreateIndexRepair {
@@ -273,8 +277,8 @@ fn parse_single_operation(expr: &Expr) -> Option<super::Operation> {
 						index_type,
 						where_clause,
 						concurrently,
-						expressions: None,
-						mysql_options: None,
+						expressions,
+						mysql_options,
 						operator_class,
 					},
 					_ => super::Operation::RestoreIndexOnRollback {
@@ -285,8 +289,8 @@ fn parse_single_operation(expr: &Expr) -> Option<super::Operation> {
 						index_type,
 						where_clause,
 						concurrently,
-						expressions: None,
-						mysql_options: None,
+						expressions,
+						mysql_options,
 						operator_class,
 					},
 				});
@@ -455,6 +459,98 @@ fn extract_string_vec_field(
 		}
 	}
 	Vec::new()
+}
+
+fn extract_optional_string_vec_field(
+	fields: &syn::punctuated::Punctuated<syn::FieldValue, syn::token::Comma>,
+	field_name: &str,
+) -> Option<Vec<String>> {
+	fields.iter().find_map(|field| {
+		if !matches!(&field.member, syn::Member::Named(ident) if ident == field_name) {
+			return None;
+		}
+		let Expr::Call(call) = &field.expr else {
+			return None;
+		};
+		let Expr::Path(path) = &*call.func else {
+			return None;
+		};
+		path.path
+			.is_ident("Some")
+			.then(|| call.args.first().map(extract_string_vec))
+			.flatten()
+	})
+}
+
+fn extract_alter_table_options_field(
+	fields: &syn::punctuated::Punctuated<syn::FieldValue, syn::token::Comma>,
+	field_name: &str,
+) -> Option<super::AlterTableOptions> {
+	use super::{AlterTableOptions, MySqlAlgorithm, MySqlLock};
+
+	let options = fields.iter().find_map(|field| {
+		if !matches!(&field.member, syn::Member::Named(ident) if ident == field_name) {
+			return None;
+		}
+		let Expr::Call(call) = &field.expr else {
+			return None;
+		};
+		let Expr::Path(path) = &*call.func else {
+			return None;
+		};
+		if !path.path.is_ident("Some") {
+			return None;
+		}
+		let Expr::Struct(options) = call.args.first()? else {
+			return None;
+		};
+		Some(options)
+	})?;
+
+	let algorithm =
+		extract_optional_path_variant_field(&options.fields, "algorithm").and_then(|variant| {
+			match variant.as_str() {
+				"Instant" => Some(MySqlAlgorithm::Instant),
+				"Inplace" => Some(MySqlAlgorithm::Inplace),
+				"Copy" => Some(MySqlAlgorithm::Copy),
+				"Default" => Some(MySqlAlgorithm::Default),
+				_ => None,
+			}
+		});
+	let lock = extract_optional_path_variant_field(&options.fields, "lock").and_then(|variant| {
+		match variant.as_str() {
+			"None" => Some(MySqlLock::None),
+			"Shared" => Some(MySqlLock::Shared),
+			"Exclusive" => Some(MySqlLock::Exclusive),
+			"Default" => Some(MySqlLock::Default),
+			_ => None,
+		}
+	});
+	Some(AlterTableOptions { algorithm, lock })
+}
+
+fn extract_optional_path_variant_field(
+	fields: &syn::punctuated::Punctuated<syn::FieldValue, syn::token::Comma>,
+	field_name: &str,
+) -> Option<String> {
+	fields.iter().find_map(|field| {
+		if !matches!(&field.member, syn::Member::Named(ident) if ident == field_name) {
+			return None;
+		}
+		let Expr::Call(call) = &field.expr else {
+			return None;
+		};
+		let Expr::Path(some) = &*call.func else {
+			return None;
+		};
+		if !some.path.is_ident("Some") {
+			return None;
+		}
+		let Expr::Path(variant) = call.args.first()? else {
+			return None;
+		};
+		Some(variant.path.segments.last()?.ident.to_string())
+	})
 }
 
 /// Extract `Vec<String>` from expression
@@ -1644,7 +1740,8 @@ mod tests {
 	use super::extract_migration_metadata;
 	use crate::field_domain::{FieldDomain, ModelEnumRepr, ModelEnumValue};
 	use crate::migrations::{
-		ColumnType, Constraint, GeneratedStorage, IndexType, Operation, SchemaExpr,
+		AlterTableOptions, ColumnType, Constraint, GeneratedStorage, IndexType, MySqlAlgorithm,
+		MySqlLock, Operation, SchemaExpr,
 	};
 
 	#[test]
@@ -1658,22 +1755,46 @@ mod tests {
 					m: Some(16),
 					ef_construction: Some(64),
 				}),
-				where_clause: None,
-				concurrently: false,
+				where_clause: Some("tenant_id IS NOT NULL".to_string()),
+				concurrently: true,
 				expressions: None,
-				mysql_options: None,
+				mysql_options: Some(
+					AlterTableOptions::new()
+						.with_algorithm(MySqlAlgorithm::Inplace)
+						.with_lock(MySqlLock::Shared),
+				),
 				operator_class: Some("vector_cosine_ops".to_string()),
 			},
-			Operation::CreateIndex {
+			Operation::CreateIndexRepair {
 				table: "source".to_string(),
-				columns: vec!["embedding".to_string()],
+				name: Some("source_normalized_embedding_l2".to_string()),
+				columns: vec![],
 				unique: false,
 				index_type: Some(IndexType::Ivfflat { lists: Some(100) }),
+				where_clause: Some("active".to_string()),
+				concurrently: true,
+				expressions: Some(vec!["normalize(embedding)".to_string()]),
+				mysql_options: Some(
+					AlterTableOptions::new()
+						.with_algorithm(MySqlAlgorithm::Copy)
+						.with_lock(MySqlLock::Exclusive),
+				),
+				operator_class: Some("vector_l2_ops".to_string()),
+			},
+			Operation::RestoreIndexOnRollback {
+				table: "source".to_string(),
+				name: Some("source_embedding_ip".to_string()),
+				columns: vec!["embedding".to_string()],
+				unique: false,
+				index_type: Some(IndexType::Hnsw {
+					m: None,
+					ef_construction: None,
+				}),
 				where_clause: None,
 				concurrently: false,
 				expressions: None,
-				mysql_options: None,
-				operator_class: Some("vector_l2_ops".to_string()),
+				mysql_options: Some(AlterTableOptions::default()),
+				operator_class: Some("vector_ip_ops".to_string()),
 			},
 		];
 

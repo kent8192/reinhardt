@@ -58,13 +58,8 @@ impl ImportPlan {
 		Self { imports, warnings }
 	}
 
-	#[cfg(test)]
 	pub(crate) fn imports(&self) -> &[String] {
 		&self.imports
-	}
-
-	pub(crate) fn prelude_source(&self) -> String {
-		self.imports.join("\n")
 	}
 
 	pub(crate) fn warnings(&self) -> &[String] {
@@ -107,11 +102,6 @@ mod tests {
 				"use project::apps::inventory::models::Product;",
 				"use project::apps::users::models::User;",
 			]
-		);
-		assert_eq!(
-			plan.prelude_source(),
-			"use project::apps::inventory::models::Product;\n\
-use project::apps::users::models::User;"
 		);
 		assert_eq!(plan.warnings(), &[] as &[String]);
 	}

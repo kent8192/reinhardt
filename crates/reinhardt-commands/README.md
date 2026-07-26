@@ -234,6 +234,10 @@ cargo run --bin manage --features commands-shell -- shell -c \
 project feature forwards to `reinhardt/commands-shell`, `config::shell` defines
 the aliases used by the evaluator, and `get_shell_config()` identifies the
 package, crate, settings factory, installed apps, and optional project prelude.
+When the management binary enables additional project features, pass the same
+selection to `ShellConfig::with_dependency_features`; also call
+`without_default_features` when the binary was built without defaults. This
+keeps the evaluator's path dependency aligned with the management binary.
 The complete native startup shape is:
 
 ```rust,ignore

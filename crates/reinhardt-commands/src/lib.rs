@@ -141,8 +141,12 @@
 //!
 //! The evaluator exposes concrete `settings`, a copyable ORM `db` handle, and
 //! the application `di` context. Unique installed model names are imported;
-//! collisions produce deterministic warnings with concrete registered crate
-//! paths, while the `project_crate` alias can reference the same types.
+//! inaccessible paths and collisions produce deterministic warnings with
+//! concrete registered crate paths, while the `project_crate` alias can
+//! reference the same types. A project's [`ShellConfig`] must pass any
+//! non-default Cargo feature selection used for the management binary through
+//! [`ShellConfig::with_dependency_features`] and
+//! [`ShellConfig::without_default_features`].
 //! Interactive input supports top-level `.await` and `>>> ` / `... ` prompts.
 //! A panic, evaluator exit, or evaluation interrupt clears user state and
 //! reloads every prelude layer. One-shot `shell -c` returns an error for any

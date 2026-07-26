@@ -12,6 +12,8 @@ pub struct ShellConfig {
 	settings_factory_path: String,
 	installed_app_labels: Vec<String>,
 	project_prelude: String,
+	dependency_features: Vec<String>,
+	default_features: bool,
 }
 
 impl ShellConfig {
@@ -34,12 +36,34 @@ impl ShellConfig {
 			settings_factory_path: settings_factory_path.into(),
 			installed_app_labels: installed_app_labels.into_iter().map(Into::into).collect(),
 			project_prelude: String::new(),
+			dependency_features: vec!["commands-shell".to_string()],
+			default_features: true,
 		}
 	}
 
 	/// Adds the project-defined source evaluated after the standard shell prelude.
 	pub fn with_prelude(mut self, source: impl Into<String>) -> Self {
 		self.project_prelude = source.into();
+		self
+	}
+
+	/// Selects the project's active Cargo features for the evaluator dependency.
+	///
+	/// Include every feature used to compile the management binary. The shell always
+	/// adds `commands-shell`, so callers must not include it themselves.
+	pub fn with_dependency_features<I, F>(mut self, features: I) -> Self
+	where
+		I: IntoIterator<Item = F>,
+		F: Into<String>,
+	{
+		self.dependency_features
+			.extend(features.into_iter().map(Into::into));
+		self
+	}
+
+	/// Disables the project's default Cargo features for the evaluator dependency.
+	pub fn without_default_features(mut self) -> Self {
+		self.default_features = false;
 		self
 	}
 
@@ -125,6 +149,14 @@ impl ShellConfig {
 			.filter(|label| seen_labels.insert(label.as_str()))
 			.cloned()
 			.collect();
+		let mut seen_features = HashSet::new();
+		let dependency_features = self
+			.dependency_features
+			.iter()
+			.filter(|feature| !feature.trim().is_empty())
+			.filter(|feature| seen_features.insert(feature.as_str()))
+			.cloned()
+			.collect();
 
 		Ok(ValidatedShellConfig {
 			package_name: self.package_name.clone(),
@@ -133,6 +165,8 @@ impl ShellConfig {
 			settings_factory_path: self.settings_factory_path.clone(),
 			installed_app_labels,
 			project_prelude: self.project_prelude.clone(),
+			dependency_features,
+			default_features: self.default_features,
 		})
 	}
 }
@@ -150,6 +184,8 @@ pub struct ValidatedShellConfig {
 	settings_factory_path: String,
 	installed_app_labels: Vec<String>,
 	project_prelude: String,
+	dependency_features: Vec<String>,
+	default_features: bool,
 }
 
 impl ValidatedShellConfig {
@@ -181,5 +217,15 @@ impl ValidatedShellConfig {
 	/// Returns the project-defined source for the final prelude layer.
 	pub fn project_prelude(&self) -> &str {
 		&self.project_prelude
+	}
+
+	/// Returns the Cargo features selected for the evaluator dependency.
+	pub(crate) fn dependency_features(&self) -> &[String] {
+		&self.dependency_features
+	}
+
+	/// Returns whether the evaluator dependency enables default features.
+	pub(crate) fn default_features(&self) -> bool {
+		self.default_features
 	}
 }

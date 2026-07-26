@@ -1,5 +1,5 @@
 use std::path::Path;
-use std::process::Child;
+use std::process::{Child, Command};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Condvar, Mutex, mpsc};
 use std::thread::{self, JoinHandle};
@@ -43,6 +43,7 @@ pub(crate) struct EvcxrEvaluator {
 	context: CommandContext,
 	output_drainers: OutputDrainers,
 	process_handle: Arc<Mutex<Child>>,
+	owns_process_group: bool,
 	evaluator_id: u64,
 	evaluation_sequence: u64,
 }
@@ -53,8 +54,14 @@ impl EvcxrEvaluator {
 	pub(crate) fn bootstrap(
 		config: &ValidatedShellConfig,
 	) -> Result<(Self, Vec<String>), EvaluationFailure> {
-		let (eval, outputs) = EvalContext::new().map_err(classify_startup_error)?;
-		Self::bootstrap_with_context(config, eval, outputs)
+		let mut command = Command::new(
+			std::env::current_exe()
+				.map_err(|error| EvaluationFailure::ProcessExited(error.to_string()))?,
+		);
+		configure_evaluator_process_group(&mut command)?;
+		let (eval, outputs) =
+			EvalContext::with_subprocess_command(command).map_err(classify_startup_error)?;
+		Self::bootstrap_with_context_and_process_group(config, eval, outputs, cfg!(unix))
 	}
 
 	fn bootstrap_with_context(
@@ -62,8 +69,17 @@ impl EvcxrEvaluator {
 		mut eval: EvalContext,
 		outputs: EvalContextOutputs,
 	) -> Result<(Self, Vec<String>), EvaluationFailure> {
+		Self::bootstrap_with_context_and_process_group(config, eval, outputs, false)
+	}
+
+	fn bootstrap_with_context_and_process_group(
+		config: &ValidatedShellConfig,
+		mut eval: EvalContext,
+		outputs: EvalContextOutputs,
+		owns_process_group: bool,
+	) -> Result<(Self, Vec<String>), EvaluationFailure> {
 		let mut state = eval.state();
-		let dependency = path_dependency(config.package_name(), config.manifest_dir())?;
+		let dependency = path_dependency(config)?;
 		state
 			.add_dep(config.crate_name(), &dependency)
 			.map_err(classify_startup_error)?;
@@ -78,8 +94,8 @@ impl EvcxrEvaluator {
 			.map_err(classify_startup_error)?;
 
 		let import_plan = ImportPlan::from_registry(config.installed_app_labels());
-		let prelude = bootstrap_prelude(config, &import_plan);
-		let warnings = import_plan.warnings().to_vec();
+		let prelude = bootstrap_prelude(config);
+		let mut warnings = import_plan.warnings().to_vec();
 		let context = CommandContext::with_eval_context(eval);
 		let process_handle = context.process_handle();
 		let output_drainers = OutputDrainers::new(outputs);
@@ -87,6 +103,7 @@ impl EvcxrEvaluator {
 			context,
 			output_drainers,
 			process_handle,
+			owns_process_group,
 			evaluator_id: NEXT_EVALUATOR_ID.fetch_add(1, Ordering::Relaxed),
 			evaluation_sequence: 0,
 		};
@@ -95,6 +112,16 @@ impl EvcxrEvaluator {
 				.evaluate(&statement)
 				.map_err(|error| startup_prelude_error(error, &warnings))?;
 		}
+		for import in import_plan.imports() {
+			match evaluator.evaluate(import) {
+				Ok(_) => {}
+				Err(EvaluationFailure::Compilation(error)) => warnings.push(format!(
+					"Model import is unavailable to the evaluator and was skipped: {import}: {error}"
+				)),
+				Err(error) => return Err(startup_prelude_error(error, &warnings)),
+			}
+		}
+		warnings.sort();
 		Ok((evaluator, warnings))
 	}
 }
@@ -179,16 +206,12 @@ impl BlockingShellEvaluator for EvcxrEvaluator {
 
 	fn interrupt_handle(&self) -> EvaluationInterrupt {
 		let process_handle = Arc::clone(&self.process_handle);
+		let owns_process_group = self.owns_process_group;
 		EvaluationInterrupt::new(move || {
-			process_handle
-				.lock()
-				.map_err(|_| {
-					EvaluationFailure::ProcessExited(
-						"evaluator process lock is poisoned".to_string(),
-					)
-				})?
-				.kill()
-				.map_err(|error| EvaluationFailure::ProcessExited(error.to_string()))
+			let mut process = process_handle.lock().map_err(|_| {
+				EvaluationFailure::ProcessExited("evaluator process lock is poisoned".to_string())
+			})?;
+			terminate_evaluator_process(&mut process, owns_process_group)
 		})
 	}
 }
@@ -355,32 +378,35 @@ static NEXT_EVALUATOR_ID: AtomicU64 = AtomicU64::new(1);
 const OUTPUT_BOUNDARY_TIMEOUT: Duration = Duration::from_secs(2);
 const OUTPUT_DISCONNECT_TIMEOUT: Duration = Duration::from_secs(2);
 
-fn path_dependency(package_name: &str, manifest_dir: &Path) -> Result<String, EvaluationFailure> {
-	let path = manifest_dir.to_str().ok_or_else(|| {
+fn path_dependency(config: &ValidatedShellConfig) -> Result<String, EvaluationFailure> {
+	let path = config.manifest_dir().to_str().ok_or_else(|| {
 		EvaluationFailure::Runtime(
 			"project manifest directory cannot be represented in Cargo TOML".to_string(),
 		)
 	})?;
 	let mut dependency = InlineTable::new();
-	dependency.insert("package", package_name.into());
+	dependency.insert("package", config.package_name().into());
 	dependency.insert("path", path.into());
 	let mut features = toml_edit::Array::new();
-	features.push("commands-shell");
+	for feature in config.dependency_features() {
+		features.push(feature);
+	}
 	dependency.insert("features", features.into());
+	if !config.default_features() {
+		dependency.insert("default-features", false.into());
+	}
 	Ok(dependency.to_string())
 }
 
-fn bootstrap_prelude(config: &ValidatedShellConfig, import_plan: &ImportPlan) -> Vec<String> {
+fn bootstrap_prelude(config: &ValidatedShellConfig) -> Vec<String> {
 	let crate_name = config.crate_name();
-	let model_imports = import_plan.prelude_source();
 	let project_prelude = config.project_prelude();
 	let settings_factory = config.settings_factory_path();
 
 	vec![
 		format!(
 			"use {crate_name}::config::shell::framework;\n\
-			 use {crate_name} as project_crate;\n\
-			 {model_imports}"
+			 use {crate_name} as project_crate;"
 		),
 		format!(
 			"let __reinhardt_typed_settings: \
@@ -398,6 +424,54 @@ fn bootstrap_prelude(config: &ValidatedShellConfig, import_plan: &ImportPlan) ->
 			 {project_prelude}"
 		),
 	]
+}
+
+#[cfg(unix)]
+fn configure_evaluator_process_group(command: &mut Command) -> Result<(), EvaluationFailure> {
+	use std::os::unix::process::CommandExt;
+
+	// SAFETY: setpgid is async-signal-safe and the closure only creates a new process group
+	// for the evaluator child before it executes the management binary.
+	unsafe {
+		command.pre_exec(|| {
+			if nix::libc::setpgid(0, 0) == -1 {
+				Err(std::io::Error::last_os_error())
+			} else {
+				Ok(())
+			}
+		});
+	}
+	Ok(())
+}
+
+#[cfg(not(unix))]
+fn configure_evaluator_process_group(_command: &mut Command) -> Result<(), EvaluationFailure> {
+	Ok(())
+}
+
+fn terminate_evaluator_process(
+	process: &mut Child,
+	owns_process_group: bool,
+) -> Result<(), EvaluationFailure> {
+	#[cfg(unix)]
+	{
+		use nix::sys::signal::{Signal, killpg};
+		use nix::unistd::Pid;
+
+		if owns_process_group {
+			let process_group = Pid::from_raw(process.id() as i32);
+			match killpg(process_group, Signal::SIGKILL) {
+				Ok(()) => return Ok(()),
+				Err(nix::errno::Errno::ESRCH) => return Ok(()),
+				Err(_) => {}
+			}
+		}
+	}
+	#[cfg(not(unix))]
+	let _ = owns_process_group;
+	process
+		.kill()
+		.map_err(|error| EvaluationFailure::ProcessExited(error.to_string()))
 }
 
 fn classify_startup_error(error: Error) -> EvaluationFailure {
@@ -569,7 +643,10 @@ impl StreamCapture {
 			.state
 			.lock()
 			.unwrap_or_else(std::sync::PoisonError::into_inner);
-		if state.pending_marker.as_deref() == Some(line.as_str()) {
+		if let Some(marker) = state.pending_marker.as_deref()
+			&& let Some(marker_index) = line.find(marker)
+		{
+			state.buffer.push_str(&line[..marker_index]);
 			state.marker_observed = true;
 		} else {
 			state.buffer.push_str(&line);
@@ -659,7 +736,7 @@ mod tests {
 
 	use super::{
 		BlockingShellEvaluator, EvaluationFailure, EvaluationOutput, EvaluatorWorker,
-		EvcxrEvaluator, path_dependency,
+		EvcxrEvaluator, StreamCapture, path_dependency,
 	};
 	use crate::ShellConfig;
 	use crate::shell::session::{EvaluationInterrupt, EvaluatorClient};
@@ -715,11 +792,29 @@ mod tests {
 
 	#[test]
 	fn project_path_dependency_enables_commands_shell_feature() {
-		let dependency = path_dependency(
-			"shell-project",
-			Path::new("/tmp/shell fixture/project \"quoted\""),
+		let directory = Builder::new()
+			.prefix("shell-dependency")
+			.tempdir()
+			.expect("temporary project directory should be created");
+		let manifest_dir = directory.path().join("project \"quoted\"");
+		std::fs::create_dir_all(&manifest_dir).expect("project directory should be created");
+		std::fs::write(
+			manifest_dir.join("Cargo.toml"),
+			"[package]\nname = \"shell-project\"\nversion = \"0.1.0\"\nedition = \"2024\"\n",
 		)
-		.expect("path dependency should render");
+		.expect("project manifest should be written");
+		let config = ShellConfig::new(
+			"shell-project",
+			"shell_project",
+			&manifest_dir,
+			"shell_project::config::settings",
+			[] as [&str; 0],
+		)
+		.with_dependency_features(["custom-feature"])
+		.without_default_features()
+		.validate()
+		.expect("shell configuration should validate");
+		let dependency = path_dependency(&config).expect("path dependency should render");
 		let manifest = format!("[dependencies]\nshell_project = {dependency}\n");
 		let document = manifest
 			.parse::<toml_edit::DocumentMut>()
@@ -734,7 +829,7 @@ mod tests {
 		);
 		assert_eq!(
 			dependency.get("path").and_then(toml_edit::Value::as_str),
-			Some("/tmp/shell fixture/project \"quoted\"")
+			manifest_dir.to_str()
 		);
 		assert_eq!(
 			dependency
@@ -743,6 +838,35 @@ mod tests {
 				.and_then(|features| features.get(0))
 				.and_then(toml_edit::Value::as_str),
 			Some("commands-shell")
+		);
+		assert_eq!(
+			dependency
+				.get("features")
+				.and_then(toml_edit::Value::as_array)
+				.and_then(|features| features.get(1))
+				.and_then(toml_edit::Value::as_str),
+			Some("custom-feature")
+		);
+		assert_eq!(
+			dependency
+				.get("default-features")
+				.and_then(toml_edit::Value::as_bool),
+			Some(false)
+		);
+	}
+
+	#[test]
+	fn stream_capture_preserves_partial_output_before_boundary() {
+		let capture = StreamCapture::default();
+		let marker = "__REINHARDT_SHELL_OUTPUT_BOUNDARY_1_1__";
+		capture.begin(marker);
+		capture.push(format!("partial output{marker}"));
+
+		assert_eq!(
+			capture
+				.take_at_boundary(marker, Instant::now())
+				.expect("partial-output boundary should be recognized"),
+			"partial output"
 		);
 	}
 

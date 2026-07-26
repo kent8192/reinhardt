@@ -193,13 +193,13 @@ where
 		tokio::pin!(response);
 		tokio::pin!(signal);
 		tokio::select! {
-			biased;
-			result = response => result,
+		biased;
+		result = &mut response => result,
 			signal = signal => {
 				interrupt.interrupt()?;
 				match signal {
 					Ok(()) => {
-						let output = match response.await {
+						let output = match response.as_mut().await {
 							Ok(output) => output,
 							Err(failure) => failure.output().cloned().unwrap_or_default(),
 						};

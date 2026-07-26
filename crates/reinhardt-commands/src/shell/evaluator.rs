@@ -64,6 +64,9 @@ pub(crate) trait BlockingShellEvaluator: Send {
 // Task 5 constructs this adapter inside its blocking evaluator worker.
 #[allow(dead_code)]
 pub(crate) struct EvcxrEvaluator {
+	// Drops before output drainers so Windows closes the Job Object and all
+	// inherited output-pipe handles before reader threads are joined.
+	process_tree_guard: EvaluatorProcessTreeGuard,
 	context: CommandContext,
 	output_drainers: OutputDrainers,
 	process_handle: Arc<Mutex<Child>>,
@@ -103,7 +106,7 @@ impl EvcxrEvaluator {
 		owns_process_group: bool,
 	) -> Result<(Self, Vec<String>), EvaluationFailure> {
 		let mut process_guard =
-			EvaluatorProcessGuard::new(eval.process_handle(), owns_process_group);
+			EvaluatorProcessGuard::new(eval.process_handle(), owns_process_group)?;
 		let mut state = eval.state();
 		let dependency = path_dependency(config)?;
 		state
@@ -119,13 +122,18 @@ impl EvcxrEvaluator {
 		eval.eval_with_state("", state)
 			.map_err(classify_startup_error)?;
 
-		let import_plan = ImportPlan::from_registry(config.installed_app_labels());
 		let prelude = bootstrap_prelude(config);
+		let (aliases, project_prelude) = prelude
+			.split_first()
+			.expect("shell bootstrap always provides framework aliases");
+		let import_plan = ImportPlan::from_registry(config.installed_app_labels());
 		let mut warnings = import_plan.warnings().to_vec();
 		let context = CommandContext::with_eval_context(eval);
 		let process_handle = context.process_handle();
 		let output_drainers = OutputDrainers::new(outputs);
+		let process_tree_guard = process_guard.take_process_tree_guard();
 		let mut evaluator = Self {
+			process_tree_guard,
 			context,
 			output_drainers,
 			process_handle,
@@ -134,6 +142,9 @@ impl EvcxrEvaluator {
 			evaluation_sequence: 0,
 		};
 		process_guard.disarm();
+		evaluator
+			.evaluate(aliases)
+			.map_err(|error| startup_prelude_error(error, &warnings))?;
 		for import in import_plan.imports() {
 			match evaluator.evaluate(import) {
 				Ok(_) => {}
@@ -143,7 +154,7 @@ impl EvcxrEvaluator {
 				Err(error) => return Err(startup_prelude_error(error, &warnings)),
 			}
 		}
-		for statement in prelude {
+		for statement in project_prelude {
 			evaluator
 				.evaluate(&statement)
 				.map_err(|error| startup_prelude_error(error, &warnings))?;
@@ -155,21 +166,102 @@ impl EvcxrEvaluator {
 
 struct EvaluatorProcessGuard {
 	process_handle: Arc<Mutex<Child>>,
+	process_tree_guard: Option<EvaluatorProcessTreeGuard>,
 	owns_process_group: bool,
 	armed: bool,
 }
 
 impl EvaluatorProcessGuard {
-	fn new(process_handle: Arc<Mutex<Child>>, owns_process_group: bool) -> Self {
-		Self {
+	fn new(
+		process_handle: Arc<Mutex<Child>>,
+		owns_process_group: bool,
+	) -> Result<Self, EvaluationFailure> {
+		let process_tree_guard = {
+			let process = process_handle.lock().map_err(|_| {
+				EvaluationFailure::ProcessExited("evaluator process lock is poisoned".to_string())
+			})?;
+			EvaluatorProcessTreeGuard::new(&process)?
+		};
+		Ok(Self {
 			process_handle,
+			process_tree_guard: Some(process_tree_guard),
 			owns_process_group,
 			armed: true,
-		}
+		})
 	}
 
 	fn disarm(&mut self) {
 		self.armed = false;
+	}
+
+	fn take_process_tree_guard(&mut self) -> EvaluatorProcessTreeGuard {
+		self.process_tree_guard
+			.take()
+			.expect("process tree guard is available until evaluator construction completes")
+	}
+}
+
+#[cfg(windows)]
+struct EvaluatorProcessTreeGuard {
+	job: windows_sys::Win32::Foundation::HANDLE,
+}
+
+#[cfg(not(windows))]
+struct EvaluatorProcessTreeGuard;
+
+impl EvaluatorProcessTreeGuard {
+	#[cfg(windows)]
+	fn new(process: &Child) -> Result<Self, EvaluationFailure> {
+		use std::os::windows::io::AsRawHandle;
+		use windows_sys::Win32::Foundation::CloseHandle;
+		use windows_sys::Win32::System::JobObjects::{
+			AssignProcessToJobObject, CreateJobObjectW, JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
+			JOBOBJECT_EXTENDED_LIMIT_INFORMATION, JobObjectExtendedLimitInformation,
+			SetInformationJobObject,
+		};
+
+		// A Job Object owns every evaluator descendant, including children that
+		// inherit stdout/stderr, and therefore prevents output-drainer deadlocks.
+		let job = unsafe { CreateJobObjectW(std::ptr::null(), std::ptr::null()) };
+		if job.is_null() {
+			return Err(EvaluationFailure::ProcessExited(
+				std::io::Error::last_os_error().to_string(),
+			));
+		}
+		let mut limits: JOBOBJECT_EXTENDED_LIMIT_INFORMATION = unsafe { std::mem::zeroed() };
+		limits.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+		let configured = unsafe {
+			SetInformationJobObject(
+				job,
+				JobObjectExtendedLimitInformation,
+				&mut limits as *mut _ as *mut _,
+				std::mem::size_of::<JOBOBJECT_EXTENDED_LIMIT_INFORMATION>() as u32,
+			)
+		};
+		let assigned = configured != 0
+			&& unsafe { AssignProcessToJobObject(job, process.as_raw_handle()) } != 0;
+		if !assigned {
+			unsafe { CloseHandle(job) };
+			return Err(EvaluationFailure::ProcessExited(
+				std::io::Error::last_os_error().to_string(),
+			));
+		}
+		Ok(Self { job })
+	}
+
+	#[cfg(not(windows))]
+	fn new(_process: &Child) -> Result<Self, EvaluationFailure> {
+		Ok(Self)
+	}
+}
+
+#[cfg(windows)]
+impl Drop for EvaluatorProcessTreeGuard {
+	fn drop(&mut self) {
+		if !self.job.is_null() {
+			unsafe { windows_sys::Win32::Foundation::CloseHandle(self.job) };
+			self.job = std::ptr::null_mut();
+		}
 	}
 }
 
@@ -579,19 +671,67 @@ fn terminate_evaluator_process(
 
 fn source_with_commit_sentinel(source: &str, sentinel: &str) -> String {
 	let mut prefix_end = 0;
-	for line in source.split_inclusive('\n') {
-		let trimmed = line.trim_start();
-		if trimmed.starts_with("#![") || trimmed.starts_with("//!") {
-			prefix_end += line.len();
+	let mut found_inner_prefix = false;
+	loop {
+		let rest = &source[prefix_end..];
+		let whitespace = rest.len() - rest.trim_start_matches([' ', '\t', '\r', '\n']).len();
+		let candidate = &rest[whitespace..];
+		let item_end = if candidate.starts_with("#![") {
+			complete_inner_attribute(candidate)
+		} else if candidate.starts_with("//!") {
+			candidate
+				.find('\n')
+				.map(|end| end + 1)
+				.or(Some(candidate.len()))
+		} else if candidate.starts_with("/*!") {
+			candidate.find("*/").map(|end| end + 2)
 		} else {
+			None
+		};
+		let Some(item_end) = item_end else {
+			if found_inner_prefix {
+				prefix_end += whitespace;
+			}
 			break;
-		}
+		};
+		prefix_end += whitespace + item_end;
+		found_inner_prefix = true;
 	}
 	format!(
 		"{}let {sentinel}: ::std::string::String = ::std::string::String::new();\n{}",
 		&source[..prefix_end],
 		&source[prefix_end..]
 	)
+}
+
+fn complete_inner_attribute(source: &str) -> Option<usize> {
+	let mut depth = 0usize;
+	let mut escaped = false;
+	let mut quoted = false;
+	for (index, ch) in source.char_indices() {
+		if quoted {
+			if escaped {
+				escaped = false;
+			} else if ch == '\\' {
+				escaped = true;
+			} else if ch == '"' {
+				quoted = false;
+			}
+			continue;
+		}
+		match ch {
+			'"' => quoted = true,
+			'[' => depth += 1,
+			']' => {
+				depth = depth.checked_sub(1)?;
+				if depth == 0 {
+					return Some(index + ch.len_utf8());
+				}
+			}
+			_ => {}
+		}
+	}
+	None
 }
 
 fn classify_startup_error(error: Error) -> EvaluationFailure {
@@ -847,7 +987,7 @@ mod tests {
 
 	use super::{
 		BlockingShellEvaluator, EvaluationFailure, EvaluationOutput, EvaluatorWorker,
-		EvcxrEvaluator, StreamCapture, path_dependency,
+		EvcxrEvaluator, StreamCapture, path_dependency, source_with_commit_sentinel,
 	};
 	use crate::ShellConfig;
 	use crate::shell::session::{EvaluationInterrupt, EvaluatorClient};
@@ -899,6 +1039,17 @@ mod tests {
 				.expect("interrupt probe state lock")
 				.dropped = true;
 		}
+	}
+
+	#[test]
+	fn commit_sentinel_follows_multiline_inner_attributes_and_block_docs() {
+		let source = "#![\nallow(unused)\n]\n/*! shell documentation */\nlet value = 1;";
+		let rendered = source_with_commit_sentinel(source, "__commit");
+
+		assert_eq!(
+			rendered,
+			"#![\nallow(unused)\n]\n/*! shell documentation */\nlet __commit: ::std::string::String = ::std::string::String::new();\nlet value = 1;"
+		);
 	}
 
 	#[test]

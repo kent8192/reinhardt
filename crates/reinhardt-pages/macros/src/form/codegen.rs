@@ -1984,6 +1984,12 @@ fn generate_model_form(
 	});
 
 	let form_id = form_id_kebab_case(form_ident);
+	let form_class_attribute = macro_ast
+		.styling
+		.class
+		.as_deref()
+		.map(|class| quote! { .attr("class", #class) })
+		.unwrap_or_default();
 	let native_action = quote!(
 		<#server_fn::marker as #pages_crate::server_fn::ServerFnMetadata>::PATH
 	);
@@ -2003,6 +2009,14 @@ fn generate_model_form(
 			}
 
 			pub type #data_ident = #payload_path<#policy_path>;
+
+			#[derive(Clone, PartialEq)]
+			struct __ReinhardtModelFormValues(
+				::std::collections::HashMap<::std::string::String, #pages_crate::__private::serde_json::Value>
+			);
+
+			#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+			enum __ReinhardtModelFormField {}
 
 			#(#descriptor_guards)*
 
@@ -2230,6 +2244,7 @@ fn generate_model_form(
 						);
 
 						let field_name = descriptor.name;
+						let checkbox_sentinel = format!("__reinhardt_checkbox_{field_name}");
 						let control_id = format!("{}-{}", #form_id, field_name);
 						let range_default = if input_type == "range" {
 							match descriptor.kind {
@@ -2267,7 +2282,7 @@ fn generate_model_form(
 								descriptor.kind,
 								#pages_crate::form::ModelFormFieldKind::Json
 							) {
-								#pages_crate::__private::serde_json::to_string(value).unwrap_or_default()
+								#pages_crate::__private::serde_json::to_string(&value).unwrap_or_default()
 							} else {
 								match value {
 									#pages_crate::__private::serde_json::Value::String(value) => value.clone(),
@@ -2375,9 +2390,16 @@ fn generate_model_form(
 								},
 							);
 						}
+						let checkbox_sentinel = is_checkbox.then(|| {
+							#pages_crate::PageElement::new("input")
+								.attr("type", "hidden")
+								.attr("name", checkbox_sentinel)
+								.attr("value", "false")
+						});
 
 						let mut wrapper = #pages_crate::PageElement::new("div")
 							.attr("class", "reinhardt-form-field")
+							.children(checkbox_sentinel)
 							.child(
 								#pages_crate::PageElement::new("label")
 									.attr("for", control_id)
@@ -2398,6 +2420,7 @@ fn generate_model_form(
 					#pages_crate::IntoPage::into_page(
 						#pages_crate::PageElement::new("form")
 						.attr("id", #form_id)
+						#form_class_attribute
 						.attr("method", #method)
 						.attr("action", #native_action)
 						.children(controls)
@@ -2435,14 +2458,30 @@ fn generate_model_form(
 											.borrow()
 											.selected_descriptors()
 											.iter()
-											.map(|descriptor| descriptor.name)
+											.map(|descriptor| (
+												descriptor.name,
+												matches!(
+													descriptor.kind,
+													#pages_crate::form::ModelFormFieldKind::Boolean
+												),
+											))
 											.collect::<::std::vec::Vec<_>>();
 										let mut state = submit_form.__model_state.borrow_mut();
-										for field in fields {
+										for (field, is_checkbox) in fields {
 											if let Some(value) = values.get(field).as_string() {
+												let value = if is_checkbox {
+													#pages_crate::__private::serde_json::Value::Bool(true)
+												} else {
+													#pages_crate::__private::serde_json::Value::String(value)
+												};
 												let _ = state.set_value(
 													field,
-													#pages_crate::__private::serde_json::Value::String(value),
+													value,
+												);
+											} else if is_checkbox {
+												let _ = state.set_value(
+													field,
+													#pages_crate::__private::serde_json::Value::Bool(false),
 												);
 											}
 										}
@@ -2463,6 +2502,71 @@ fn generate_model_form(
 							}),
 						)
 					)
+				}
+			}
+
+			impl #pages_crate::FormRuntimeSource for #form_ident {
+				type Values = __ReinhardtModelFormValues;
+				type Field = __ReinhardtModelFormField;
+
+				fn runtime_initial_values(&self) -> Self::Values {
+					self.runtime_current_values()
+				}
+
+				fn runtime_current_values(&self) -> Self::Values {
+					let state = self.__model_state.borrow();
+					__ReinhardtModelFormValues(
+						state
+							.selected_descriptors()
+							.iter()
+							.filter_map(|descriptor| {
+								state.value(descriptor.name).cloned().map(|value| {
+									(descriptor.name.to_owned(), value)
+								})
+							})
+							.collect(),
+					)
+				}
+
+				fn runtime_apply_values(&self, values: &Self::Values) {
+					let mut state = self.__model_state.borrow_mut();
+					for (field, value) in &values.0 {
+						let _ = state.set_value(field, value.clone());
+					}
+				}
+
+				fn runtime_set_field_value<T>(&self, field: Self::Field, _value: T)
+				where
+					T: ::core::any::Any + 'static,
+				{
+					match field {}
+				}
+
+				fn runtime_apply_field_value(&self, field: Self::Field, _values: &Self::Values) {
+					match field {}
+				}
+
+				fn runtime_field_is_dirty(
+					&self,
+					field: Self::Field,
+					_current: &Self::Values,
+					_defaults: &Self::Values,
+				) -> bool {
+					match field {}
+				}
+
+				fn runtime_watch_field<T>(
+					&self,
+					field: Self::Field,
+				) -> ::core::option::Option<#pages_crate::Signal<T>>
+				where
+					T: Clone + 'static,
+				{
+					match field {}
+				}
+
+				fn runtime_fields(&self) -> &'static [Self::Field] {
+					&[]
 				}
 			}
 
@@ -7457,6 +7561,7 @@ mod tests {
 			policy: TemporalDocumentFields,
 			fields: [aware_at, naive_at, starts_at],
 			server_fn: save_temporal_document,
+			class: "temporal-form",
 		};
 
 		let output = parse_validate_generate(input);
@@ -7470,6 +7575,9 @@ mod tests {
 		assert!(output_str.contains("TemporalDocumentFields"));
 		assert!(output_str.contains("ServerFnMetadata"));
 		assert!(output_str.contains(":: PATH"));
+		assert!(output_str.contains("temporal-form"));
+		assert!(output_str.contains("__reinhardt_checkbox_"));
+		assert!(output_str.contains("FormRuntimeSource for TemporalControlsForm"));
 	}
 
 	#[rstest::rstest]

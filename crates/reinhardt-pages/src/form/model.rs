@@ -205,6 +205,14 @@ fn convert_control_value(
 					format!("must contain at most {max_length} characters"),
 				));
 			}
+			let is_valid = match descriptor.kind {
+				ModelFormFieldKind::Email { .. } => is_email(&text),
+				ModelFormFieldKind::Url { .. } => is_url(&text),
+				_ => unreachable!("email and URL fields are handled by this conversion branch"),
+			};
+			if !is_valid {
+				return Err(invalid_value(descriptor.name, "has an invalid format"));
+			}
 			Ok(serde_json::Value::String(text))
 		}
 		ModelFormFieldKind::Integer { min, max } => {
@@ -392,6 +400,22 @@ fn invalid_value(field: &str, message: impl Into<String>) -> ModelFormPayloadErr
 		field: field.to_owned(),
 		message: message.into(),
 	}
+}
+
+fn is_email(value: &str) -> bool {
+	let mut parts = value.split('@');
+	let (Some(local), Some(domain), None) = (parts.next(), parts.next(), parts.next()) else {
+		return false;
+	};
+	!local.is_empty()
+		&& !domain.is_empty()
+		&& !value.chars().any(char::is_whitespace)
+		&& !domain.starts_with('.')
+		&& !domain.ends_with('.')
+}
+
+fn is_url(value: &str) -> bool {
+	url::Url::parse(value).is_ok()
 }
 
 fn is_date(value: &str) -> bool {

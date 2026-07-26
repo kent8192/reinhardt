@@ -78,10 +78,11 @@ where
 			continue;
 		}
 
+		let checkbox_sentinel = format!("__reinhardt_checkbox_{}", descriptor.name);
+		let has_checkbox_sentinel = values.remove(&checkbox_sentinel).is_some();
 		let Some(control) = values.get_mut(descriptor.name) else {
 			if matches!(descriptor.kind, ModelFormFieldKind::Boolean)
-				&& !descriptor.nullable
-				&& !descriptor.has_default
+				&& (has_checkbox_sentinel || (!descriptor.nullable && !descriptor.has_default))
 			{
 				values.insert(descriptor.name.to_owned(), serde_json::Value::Bool(false));
 			}
@@ -126,7 +127,23 @@ where
 					!time.ends_with('Z') && !time.contains(['+', '-'])
 				}) =>
 			{
-				Some(serde_json::Value::String(format!("{text}Z")))
+				let normalized = text.split_once('T').map_or_else(
+					|| text.to_owned(),
+					|(date, time)| {
+						if time.len() == 5
+							&& time.as_bytes()[2] == b':'
+							&& time
+								.bytes()
+								.enumerate()
+								.all(|(index, byte)| index == 2 || byte.is_ascii_digit())
+						{
+							format!("{date}T{time}:00")
+						} else {
+							text.to_owned()
+						}
+					},
+				);
+				Some(serde_json::Value::String(format!("{normalized}Z")))
 			}
 			_ => None,
 		};
@@ -202,7 +219,7 @@ mod tests {
 		type Model = ();
 
 		fn fields() -> &'static [ModelFormFieldDescriptor] {
-			const FIELDS: [ModelFormFieldDescriptor; 4] = [
+			const FIELDS: [ModelFormFieldDescriptor; 5] = [
 				ModelFormFieldDescriptor {
 					name: "enabled",
 					kind: ModelFormFieldKind::Boolean,
@@ -230,6 +247,15 @@ mod tests {
 					required: false,
 					has_default: false,
 					nullable: true,
+					editable: true,
+					generated_relation_id: false,
+				},
+				ModelFormFieldDescriptor {
+					name: "created_at",
+					kind: ModelFormFieldKind::DateTime,
+					required: true,
+					has_default: false,
+					nullable: false,
 					editable: true,
 					generated_relation_id: false,
 				},
@@ -274,6 +300,25 @@ mod tests {
 				"enabled": true,
 				"count": 30,
 				"metadata": {"draft": true},
+			}),
+		);
+	}
+
+	#[test]
+	fn native_normalization_preserves_datetime_precision_and_checkbox_false() {
+		let value = normalize_native_model_form_value::<TestSchema, AllEditableModelFields>(
+			serde_json::json!({
+				"__reinhardt_checkbox_enabled": "false",
+				"created_at": "2026-07-26T09:30",
+			}),
+		)
+		.expect("native form value should normalize");
+
+		assert_eq!(
+			value,
+			serde_json::json!({
+				"enabled": false,
+				"created_at": "2026-07-26T09:30:00Z",
 			}),
 		);
 	}

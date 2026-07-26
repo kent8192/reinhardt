@@ -220,6 +220,12 @@ fn rewrite_router_function(
 			kind: ReportKind::MixedRegistration,
 		});
 	}
+	if function_contains_local_use(function) {
+		return FunctionOutcome::Skipped(Skipped {
+			line: span_line(function.sig.ident.span()),
+			kind: ReportKind::MixedRegistration,
+		});
+	}
 	let mut analyzer = FunctionAnalyzer {
 		target,
 		module,
@@ -285,6 +291,21 @@ fn rewrite_router_function(
 		bindings: removable_bindings,
 		edits,
 	}
+}
+
+fn function_contains_local_use(function: &ItemFn) -> bool {
+	struct LocalUseFinder {
+		found: bool,
+	}
+	impl<'ast> Visit<'ast> for LocalUseFinder {
+		fn visit_item_use(&mut self, _item: &'ast ItemUse) {
+			self.found = true;
+		}
+	}
+
+	let mut finder = LocalUseFinder { found: false };
+	finder.visit_block(&function.block);
+	finder.found
 }
 
 fn tail_registration_chain(block: &syn::Block) -> Option<LineColumn> {

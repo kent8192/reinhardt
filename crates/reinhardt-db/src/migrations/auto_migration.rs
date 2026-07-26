@@ -5,7 +5,9 @@
 //! - Generates migration operations
 //! - Creates rollback scripts
 
-use super::operations::{Operation, named_index_has_target};
+use super::operations::Operation;
+#[cfg(feature = "pgvector")]
+use super::operations::named_index_has_target;
 use super::repository::MigrationRepository;
 use super::schema_diff::{DatabaseSchema, SchemaDiff};
 use std::path::PathBuf;
@@ -285,6 +287,7 @@ impl AutoMigrationGenerator {
 						columns.clone()
 					},
 				}),
+				#[cfg(feature = "pgvector")]
 				Operation::CreateNamedIndex {
 					table,
 					name,
@@ -333,6 +336,7 @@ impl AutoMigrationGenerator {
 					operator_class: operator_class.clone(),
 				}),
 				Operation::DropIndex { .. } => None, // Cannot rollback without index definition
+				#[cfg(feature = "pgvector")]
 				Operation::DropNamedIndex {
 					table,
 					name,

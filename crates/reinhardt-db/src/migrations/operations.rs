@@ -52,7 +52,9 @@ pub use special::{RunCode, RunSQL, StateOperation};
 
 // Legacy types for backward compatibility
 // These are maintained from the original operations.rs
-use super::{FieldState, FieldType, IndexDefinition, ModelState, ProjectState};
+#[cfg(feature = "pgvector")]
+use super::IndexDefinition;
+use super::{FieldState, FieldType, ModelState, ProjectState};
 use pg_escape::{quote_identifier, quote_literal};
 use reinhardt_query::prelude::{
 	Alias, AlterTableStatement, CockroachDBQueryBuilder, ColumnDef, ColumnType as QueryColumnType,
@@ -62,6 +64,7 @@ use reinhardt_query::prelude::{
 };
 use serde::{Deserialize, Serialize, ser::SerializeStruct};
 
+#[cfg(feature = "pgvector")]
 pub(super) fn named_index_has_target(columns: &[String], expressions: Option<&[String]>) -> bool {
 	!columns.is_empty() || expressions.is_some_and(|expressions| !expressions.is_empty())
 }
@@ -1192,6 +1195,7 @@ pub enum Operation {
 	/// This additive variant preserves source compatibility for legacy
 	/// [`Operation::CreateIndex`] struct literals while allowing model-declared
 	/// indexes to keep their configured names.
+	#[cfg(feature = "pgvector")]
 	CreateNamedIndex {
 		/// The table.
 		table: String,
@@ -1288,6 +1292,7 @@ pub enum Operation {
 		columns: Vec<String>,
 	},
 	/// Drops an index by its explicit physical name.
+	#[cfg(feature = "pgvector")]
 	DropNamedIndex {
 		/// The table containing the index.
 		table: String,
@@ -1902,6 +1907,7 @@ impl Operation {
 				// Counter/constraint-level ops do not affect ProjectState
 				// (they track model-level structure only).
 			}
+			#[cfg(feature = "pgvector")]
 			Operation::CreateNamedIndex {
 				table,
 				name,
@@ -1929,6 +1935,7 @@ impl Operation {
 					});
 				}
 			}
+			#[cfg(feature = "pgvector")]
 			Operation::DropNamedIndex { table, name, .. } => {
 				if let Some(model) = state.find_model_by_table_mut(table) {
 					model.indexes.retain(|index| index.name != *name);
@@ -2813,18 +2820,6 @@ impl Operation {
 				mysql_options,
 				operator_class,
 			}
-			| Operation::CreateNamedIndex {
-				table,
-				columns,
-				unique,
-				index_type,
-				where_clause,
-				concurrently,
-				expressions,
-				mysql_options,
-				operator_class,
-				..
-			}
 			| Operation::CreateIndexRepair {
 				table,
 				name: _,
@@ -2901,7 +2896,6 @@ impl Operation {
 					};
 
 				let idx_name = match self {
-					Operation::CreateNamedIndex { name, .. } => name.clone(),
 					Operation::CreateIndexRepair {
 						name: Some(name), ..
 					} => name.clone(),
@@ -2987,6 +2981,31 @@ impl Operation {
 				sql.push(';');
 				sql
 			}
+			#[cfg(feature = "pgvector")]
+			Operation::CreateNamedIndex {
+				table,
+				name,
+				columns,
+				unique,
+				index_type,
+				where_clause,
+				concurrently,
+				expressions,
+				mysql_options,
+				operator_class,
+			} => Operation::CreateIndexRepair {
+				table: table.clone(),
+				name: Some(name.clone()),
+				columns: columns.clone(),
+				unique: *unique,
+				index_type: *index_type,
+				where_clause: where_clause.clone(),
+				concurrently: *concurrently,
+				expressions: expressions.clone(),
+				mysql_options: *mysql_options,
+				operator_class: operator_class.clone(),
+			}
+			.to_sql(dialect),
 			Operation::RestoreIndexOnRollback { .. } => {
 				"-- rollback-only generated-column index restore".to_string()
 			}
@@ -3005,6 +3024,7 @@ impl Operation {
 					}
 				}
 			}
+			#[cfg(feature = "pgvector")]
 			Operation::DropNamedIndex { table, name, .. } => match dialect {
 				SqlDialect::Mysql => format!(
 					"DROP INDEX {} ON {};",
@@ -3342,6 +3362,7 @@ impl Operation {
 
 	/// Validates every field definition rendered by this operation.
 	pub fn validate_for_dialect(&self, dialect: &SqlDialect) -> super::Result<()> {
+		#[cfg(feature = "pgvector")]
 		if let Self::CreateNamedIndex { name, .. } | Self::DropNamedIndex { name, .. } = self {
 			if name.is_empty() {
 				return Err(super::MigrationError::InvalidMigration(
@@ -3396,14 +3417,6 @@ impl Operation {
 				operator_class,
 				..
 			}
-			| Self::CreateNamedIndex {
-				columns,
-				unique,
-				index_type,
-				expressions,
-				operator_class,
-				..
-			}
 			| Self::CreateIndexRepair {
 				columns,
 				unique,
@@ -3413,6 +3426,22 @@ impl Operation {
 				..
 			}
 			| Self::RestoreIndexOnRollback {
+				columns,
+				unique,
+				index_type,
+				expressions,
+				operator_class,
+				..
+			} => Self::validate_approximate_vector_index(
+				*index_type,
+				*unique,
+				columns,
+				expressions.as_deref(),
+				operator_class.as_deref(),
+				dialect,
+			)?,
+			#[cfg(feature = "pgvector")]
+			Self::CreateNamedIndex {
 				columns,
 				unique,
 				index_type,
@@ -3841,6 +3870,7 @@ impl Operation {
 				};
 				Ok(Some(vec![sql]))
 			}
+			#[cfg(feature = "pgvector")]
 			Operation::CreateNamedIndex { table, name, .. } => {
 				let sql = match dialect {
 					SqlDialect::Mysql => format!(
@@ -4042,6 +4072,7 @@ impl Operation {
 					columns_list
 				)]))
 			}
+			#[cfg(feature = "pgvector")]
 			Operation::DropNamedIndex {
 				table,
 				name,
@@ -4256,11 +4287,13 @@ impl Operation {
 					}
 				}
 			}
+			#[cfg(feature = "pgvector")]
 			Operation::CreateNamedIndex { table, name, .. } => {
 				if let Some(model) = state.find_model_by_table_mut(table) {
 					model.indexes.retain(|index| index.name != *name);
 				}
 			}
+			#[cfg(feature = "pgvector")]
 			Operation::DropNamedIndex {
 				table,
 				name,
@@ -5764,6 +5797,7 @@ impl Operation {
 				table: table.clone(),
 				columns: columns.clone(),
 			})),
+			#[cfg(feature = "pgvector")]
 			Operation::CreateNamedIndex {
 				table,
 				name,
@@ -5805,6 +5839,7 @@ impl Operation {
 					operator_class: None,
 				}))
 			}
+			#[cfg(feature = "pgvector")]
 			Operation::DropNamedIndex {
 				table,
 				name,
@@ -6074,13 +6109,6 @@ impl Operation {
 				index_type,
 				..
 			}
-			| Operation::CreateNamedIndex {
-				table,
-				columns,
-				unique,
-				index_type,
-				..
-			}
 			| Operation::CreateIndexRepair {
 				table,
 				columns,
@@ -6091,12 +6119,25 @@ impl Operation {
 				if index_type.is_some_and(IndexType::is_approximate_vector) {
 					return OperationStatement::DialectOperation(Box::new(self.clone()));
 				}
-				let idx_name = match self {
-					Operation::CreateNamedIndex { name, .. } => name.clone(),
-					_ => format!("idx_{}_{}", table, columns.join("_")),
-				};
+				let idx_name = format!("idx_{}_{}", table, columns.join("_"));
 				OperationStatement::IndexCreate(
 					self.build_create_index(&idx_name, table, columns, *unique),
+				)
+			}
+			#[cfg(feature = "pgvector")]
+			Operation::CreateNamedIndex {
+				table,
+				name,
+				columns,
+				unique,
+				index_type,
+				..
+			} => {
+				if index_type.is_some_and(IndexType::is_approximate_vector) {
+					return OperationStatement::DialectOperation(Box::new(self.clone()));
+				}
+				OperationStatement::IndexCreate(
+					self.build_create_index(name, table, columns, *unique),
 				)
 			}
 			Operation::RestoreIndexOnRollback { .. } => OperationStatement::RawSql(
@@ -6106,6 +6147,7 @@ impl Operation {
 				let idx_name = format!("idx_{}_{}", table, columns.join("_"));
 				OperationStatement::IndexDrop(self.build_drop_index(&idx_name))
 			}
+			#[cfg(feature = "pgvector")]
 			Operation::DropNamedIndex { name, .. } => {
 				OperationStatement::IndexDrop(self.build_drop_index(name))
 			}
@@ -6778,9 +6820,16 @@ impl MigrationOperation for Operation {
 				constraint_name.to_lowercase()
 			)),
 			Operation::CreateIndex { table, unique, .. }
-			| Operation::CreateNamedIndex { table, unique, .. }
 			| Operation::CreateIndexRepair { table, unique, .. }
 			| Operation::RestoreIndexOnRollback { table, unique, .. } => {
+				if *unique {
+					Some(format!("create_unique_index_{}", table.to_lowercase()))
+				} else {
+					Some(format!("create_index_{}", table.to_lowercase()))
+				}
+			}
+			#[cfg(feature = "pgvector")]
+			Operation::CreateNamedIndex { table, unique, .. } => {
 				if *unique {
 					Some(format!("create_unique_index_{}", table.to_lowercase()))
 				} else {
@@ -6790,9 +6839,8 @@ impl MigrationOperation for Operation {
 			Operation::DropIndex { table, .. } => {
 				Some(format!("drop_index_{}", table.to_lowercase()))
 			}
-			Operation::DropNamedIndex { name, .. } => {
-				Some(format!("drop_index_{}", name.to_lowercase()))
-			}
+			#[cfg(feature = "pgvector")]
+			Operation::DropNamedIndex { name, .. } => Some(format!("drop_index_{}", name.to_lowercase())),
 			Operation::RunSQL { .. } => None,  // Triggers auto-naming
 			Operation::RunRust { .. } => None, // Triggers auto-naming
 			Operation::AlterTableComment { table, .. } => {
@@ -6881,7 +6929,6 @@ impl MigrationOperation for Operation {
 				format!("Drop constraint {} from {}", constraint.name(), table)
 			}
 			Operation::CreateIndex { table, unique, .. }
-			| Operation::CreateNamedIndex { table, unique, .. }
 			| Operation::CreateIndexRepair { table, unique, .. }
 			| Operation::RestoreIndexOnRollback { table, unique, .. } => {
 				if *unique {
@@ -6890,7 +6937,16 @@ impl MigrationOperation for Operation {
 					format!("Create index on {}", table)
 				}
 			}
+			#[cfg(feature = "pgvector")]
+			Operation::CreateNamedIndex { table, unique, .. } => {
+				if *unique {
+					format!("Create unique index on {}", table)
+				} else {
+					format!("Create index on {}", table)
+				}
+			}
 			Operation::DropIndex { table, .. } => format!("Drop index on {}", table),
+			#[cfg(feature = "pgvector")]
 			Operation::DropNamedIndex { table, name, .. } => {
 				format!("Drop index {} on {}", name, table)
 			}
@@ -7018,6 +7074,7 @@ impl MigrationOperation for Operation {
 					operator_class: operator_class.clone(),
 				}
 			}
+			#[cfg(feature = "pgvector")]
 			Operation::CreateNamedIndex {
 				table,
 				name,
@@ -7056,6 +7113,7 @@ impl MigrationOperation for Operation {
 					columns: sorted_columns,
 				}
 			}
+			#[cfg(feature = "pgvector")]
 			Operation::DropNamedIndex {
 				table,
 				name,
@@ -7786,6 +7844,7 @@ mod tests {
 		);
 	}
 
+	#[cfg(feature = "pgvector")]
 	#[test]
 	fn drop_named_index_deserializes_legacy_shape_without_false_reverse_definition() {
 		let operation: Operation = serde_json::from_str(
@@ -10581,6 +10640,7 @@ mod tests {
 		);
 	}
 
+	#[cfg(feature = "pgvector")]
 	fn named_vector_index_drop(index_type: Option<IndexType>) -> Operation {
 		Operation::DropNamedIndex {
 			table: "source".to_string(),
@@ -10636,6 +10696,7 @@ mod tests {
 		);
 	}
 
+	#[cfg(feature = "pgvector")]
 	#[rstest]
 	#[case(SqlDialect::Mysql, "DROP INDEX source_embedding_ann ON source;")]
 	#[case(SqlDialect::Sqlite, "DROP INDEX source_embedding_ann;")]

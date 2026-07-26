@@ -273,9 +273,22 @@ fn parse_single_operation(expr: &Expr) -> Option<super::Operation> {
 						mysql_options,
 						operator_class,
 					},
+					#[cfg(feature = "pgvector")]
 					"CreateNamedIndex" => super::Operation::CreateNamedIndex {
 						table,
 						name: name?,
+						columns,
+						unique,
+						index_type,
+						where_clause,
+						concurrently,
+						expressions,
+						mysql_options,
+						operator_class,
+					},
+					#[cfg(not(feature = "pgvector"))]
+					"CreateNamedIndex" => super::Operation::CreateIndex {
+						table,
 						columns,
 						unique,
 						index_type,
@@ -331,6 +344,7 @@ fn parse_single_operation(expr: &Expr) -> Option<super::Operation> {
 					extract_alter_table_options_field(&expr_struct.fields, "mysql_options");
 				let operator_class =
 					extract_optional_str_field(&expr_struct.fields, "operator_class");
+				#[cfg(feature = "pgvector")]
 				return Some(super::Operation::DropNamedIndex {
 					table,
 					name,
@@ -343,6 +357,20 @@ fn parse_single_operation(expr: &Expr) -> Option<super::Operation> {
 					mysql_options,
 					operator_class,
 				});
+				#[cfg(not(feature = "pgvector"))]
+				{
+					let _ = (
+						name,
+						unique,
+						index_type,
+						where_clause,
+						concurrently,
+						expressions,
+						mysql_options,
+						operator_class,
+					);
+					return Some(super::Operation::DropIndex { table, columns });
+				}
 			}
 			"AddConstraint" => {
 				let table = extract_string_field(&expr_struct.fields, "table")?;

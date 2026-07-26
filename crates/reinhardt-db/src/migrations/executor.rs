@@ -1874,6 +1874,7 @@ impl OperationOptimizer {
 						},
 					) if t1 == t2 && c1 == c2 => true,
 					// CreateNamedIndex + DropNamedIndex
+					#[cfg(feature = "pgvector")]
 					(
 						Operation::CreateNamedIndex {
 							table: t1,

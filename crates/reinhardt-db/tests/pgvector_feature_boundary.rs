@@ -64,7 +64,7 @@ fn non_pgvector_consumer_preserves_existing_public_shapes() {
 		source_directory.join("main.rs"),
 		r#"use reinhardt_db::{
     backends::types::QueryValue,
-    migrations::{FieldType, IndexDefinition, IndexType},
+    migrations::{FieldType, IndexDefinition, IndexType, Operation},
     migrations::introspection::IndexInfo as MigrationIndexInfo,
     orm::{DatabaseStorageKind, Model, inspection::IndexInfo as OrmIndexInfo},
 };
@@ -155,6 +155,42 @@ fn pg_operator(value: PgBinOper) {
     }
 }
 
+fn operation(value: Operation) {
+    match value {
+        Operation::CreateTable { .. }
+        | Operation::DropTable { .. }
+        | Operation::AddColumn { .. }
+        | Operation::DropColumn { .. }
+        | Operation::AlterColumn { .. }
+        | Operation::RenameTable { .. }
+        | Operation::RenameColumn { .. }
+        | Operation::AddConstraint { .. }
+        | Operation::AddConstraintDefinition { .. }
+        | Operation::AddConstraintRepair { .. }
+        | Operation::RestoreConstraintOnRollback { .. }
+        | Operation::DropConstraint { .. }
+        | Operation::DropConstraintDefinition { .. }
+        | Operation::CreateIndex { .. }
+        | Operation::CreateIndexRepair { .. }
+        | Operation::RestoreIndexOnRollback { .. }
+        | Operation::DropIndex { .. }
+        | Operation::RunSQL { .. }
+        | Operation::RunRust { .. }
+        | Operation::AlterTableComment { .. }
+        | Operation::AlterUniqueTogether { .. }
+        | Operation::AlterModelOptions { .. }
+        | Operation::CreateInheritedTable { .. }
+        | Operation::AddDiscriminatorColumn { .. }
+        | Operation::MoveModel { .. }
+        | Operation::CreateSchema { .. }
+        | Operation::DropSchema { .. }
+        | Operation::CreateExtension { .. }
+        | Operation::BulkLoad { .. }
+        | Operation::SetAutoIncrementValue { .. }
+        | Operation::CreateCompositePrimaryKey { .. } => {}
+    }
+}
+
 fn main() {
     let _ = LegacyDocument::index_metadata();
     let _ = IndexDefinition {
@@ -174,7 +210,15 @@ fn main() {
         unique: false,
         condition: None,
     };
-    let _ = (storage_kind, query_value, index_type, field_type, query_builder_value, pg_operator);
+    let _ = (
+        storage_kind,
+        query_value,
+        index_type,
+        field_type,
+        query_builder_value,
+        pg_operator,
+        operation,
+    );
 }
 "#,
 	)

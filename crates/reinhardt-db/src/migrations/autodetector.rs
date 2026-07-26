@@ -290,6 +290,63 @@ impl IndexDefinition {
 			None
 		}
 	}
+
+	fn create_operation(&self, table: &str) -> super::Operation {
+		#[cfg(feature = "pgvector")]
+		{
+			super::Operation::CreateNamedIndex {
+				table: table.to_string(),
+				name: self.name.clone(),
+				columns: self.fields.clone(),
+				unique: self.unique,
+				index_type: self.index_type(),
+				where_clause: None,
+				concurrently: false,
+				expressions: self.expressions().cloned(),
+				mysql_options: None,
+				operator_class: self.operator_class().cloned(),
+			}
+		}
+		#[cfg(not(feature = "pgvector"))]
+		{
+			super::Operation::CreateIndex {
+				table: table.to_string(),
+				columns: self.fields.clone(),
+				unique: self.unique,
+				index_type: None,
+				where_clause: None,
+				concurrently: false,
+				expressions: None,
+				mysql_options: None,
+				operator_class: None,
+			}
+		}
+	}
+
+	fn drop_operation(&self, table: &str) -> super::Operation {
+		#[cfg(feature = "pgvector")]
+		{
+			super::Operation::DropNamedIndex {
+				table: table.to_string(),
+				name: self.name.clone(),
+				columns: self.fields.clone(),
+				unique: self.unique,
+				index_type: self.index_type(),
+				where_clause: None,
+				concurrently: false,
+				expressions: self.expressions().cloned(),
+				mysql_options: None,
+				operator_class: self.operator_class().cloned(),
+			}
+		}
+		#[cfg(not(feature = "pgvector"))]
+		{
+			super::Operation::DropIndex {
+				table: table.to_string(),
+				columns: self.fields.clone(),
+			}
+		}
+	}
 }
 
 /// Constraint definition for a model
@@ -1589,6 +1646,7 @@ impl ProjectState {
 							.retain(|definition| definition.name != constraint.name());
 					}
 				}
+				#[cfg(feature = "pgvector")]
 				Operation::CreateNamedIndex {
 					table,
 					name,
@@ -1616,6 +1674,7 @@ impl ProjectState {
 						});
 					}
 				}
+				#[cfg(feature = "pgvector")]
 				Operation::DropNamedIndex { table, name, .. } => {
 					if let Some(model) = self.find_model_by_table_mut(table) {
 						model.indexes.retain(|index| index.name != *name);
@@ -6699,13 +6758,14 @@ impl MigrationAutodetector {
 			| super::Operation::DropConstraint { table, .. }
 			| super::Operation::DropConstraintDefinition { table, .. }
 			| super::Operation::CreateIndex { table, .. }
-			| super::Operation::CreateNamedIndex { table, .. }
 			| super::Operation::CreateIndexRepair { table, .. }
 			| super::Operation::RestoreIndexOnRollback { table, .. }
 			| super::Operation::DropIndex { table, .. }
-			| super::Operation::DropNamedIndex { table, .. }
 			| super::Operation::CreateCompositePrimaryKey { table, .. }
 			| super::Operation::SetAutoIncrementValue { table, .. } => table == table_name,
+			#[cfg(feature = "pgvector")]
+			super::Operation::CreateNamedIndex { table, .. }
+			| super::Operation::DropNamedIndex { table, .. } => table == table_name,
 			super::Operation::CreateTable { name, .. } | super::Operation::DropTable { name } => {
 				name == table_name
 			}
@@ -7197,18 +7257,7 @@ impl MigrationAutodetector {
 			by_app
 				.entry(app_label.clone())
 				.or_default()
-				.push(super::Operation::DropNamedIndex {
-					table: model.table_name.clone(),
-					name: index.name.clone(),
-					columns: index.fields.clone(),
-					unique: index.unique,
-					index_type: index.index_type(),
-					where_clause: None,
-					concurrently: false,
-					expressions: index.expressions().cloned(),
-					mysql_options: None,
-					operator_class: index.operator_class().cloned(),
-				});
+				.push(index.drop_operation(&model.table_name));
 		}
 		for (app_label, model_name, index) in &altered_index_replacements {
 			let Some(model) = self.from_state.get_model(app_label, model_name) else {
@@ -7217,18 +7266,7 @@ impl MigrationAutodetector {
 			by_app
 				.entry(app_label.clone())
 				.or_default()
-				.push(super::Operation::DropNamedIndex {
-					table: model.table_name.clone(),
-					name: index.name.clone(),
-					columns: index.fields.clone(),
-					unique: index.unique,
-					index_type: index.index_type(),
-					where_clause: None,
-					concurrently: false,
-					expressions: index.expressions().cloned(),
-					mysql_options: None,
-					operator_class: index.operator_class().cloned(),
-				});
+				.push(index.drop_operation(&model.table_name));
 		}
 
 		// RenameColumn for confirmed field renames.
@@ -7643,18 +7681,7 @@ impl MigrationAutodetector {
 			by_app
 				.entry(app_label.clone())
 				.or_default()
-				.push(super::Operation::CreateNamedIndex {
-					table: model.table_name.clone(),
-					name: index.name.clone(),
-					columns: index.fields.clone(),
-					unique: index.unique,
-					index_type: index.index_type(),
-					where_clause: None,
-					concurrently: false,
-					expressions: index.expressions().cloned(),
-					mysql_options: None,
-					operator_class: index.operator_class().cloned(),
-				});
+				.push(index.create_operation(&model.table_name));
 		}
 		for (app_label, model_name, index) in &altered_index_replacements {
 			let Some(model) = self.to_state.get_model(app_label, model_name) else {
@@ -7663,38 +7690,17 @@ impl MigrationAutodetector {
 			by_app
 				.entry(app_label.clone())
 				.or_default()
-				.push(super::Operation::CreateNamedIndex {
-					table: model.table_name.clone(),
-					name: index.name.clone(),
-					columns: index.fields.clone(),
-					unique: index.unique,
-					index_type: index.index_type(),
-					where_clause: None,
-					concurrently: false,
-					expressions: index.expressions().cloned(),
-					mysql_options: None,
-					operator_class: index.operator_class().cloned(),
-				});
+				.push(index.create_operation(&model.table_name));
 		}
 		for (app_label, model_name) in &changes.created_models {
 			let Some(model) = self.to_state.get_model(app_label, model_name) else {
 				continue;
 			};
 			for index in &model.indexes {
-				by_app.entry(app_label.clone()).or_default().push(
-					super::Operation::CreateNamedIndex {
-						table: model.table_name.clone(),
-						name: index.name.clone(),
-						columns: index.fields.clone(),
-						unique: index.unique,
-						index_type: index.index_type(),
-						where_clause: None,
-						concurrently: false,
-						expressions: index.expressions().cloned(),
-						mysql_options: None,
-						operator_class: index.operator_class().cloned(),
-					},
-				);
+				by_app
+					.entry(app_label.clone())
+					.or_default()
+					.push(index.create_operation(&model.table_name));
 			}
 		}
 
@@ -8852,6 +8858,81 @@ mod tests {
 			constraints,
 			many_to_many_fields: Vec::new(),
 		}
+	}
+
+	#[cfg(not(feature = "pgvector"))]
+	#[test]
+	fn ordinary_index_addition_uses_legacy_create_index_operation() {
+		let key = ("catalog".to_string(), "Product".to_string());
+		let source = build_project_state(vec![(
+			key.clone(),
+			build_model_state("catalog", "Product", Vec::new(), Vec::new(), Vec::new()),
+		)]);
+		let target = build_project_state(vec![(
+			key,
+			build_model_state(
+				"catalog",
+				"Product",
+				Vec::new(),
+				vec![IndexDefinition::new(
+					"product_sku_idx",
+					vec!["sku".to_string()],
+					false,
+				)],
+				Vec::new(),
+			),
+		)]);
+
+		let operations = MigrationAutodetector::new(source, target).generate_operations();
+
+		assert_eq!(
+			operations,
+			vec![super::super::Operation::CreateIndex {
+				table: "catalog_product".to_string(),
+				columns: vec!["sku".to_string()],
+				unique: false,
+				index_type: None,
+				where_clause: None,
+				concurrently: false,
+				expressions: None,
+				mysql_options: None,
+				operator_class: None,
+			}]
+		);
+	}
+
+	#[cfg(not(feature = "pgvector"))]
+	#[test]
+	fn ordinary_index_removal_uses_legacy_drop_index_operation() {
+		let key = ("catalog".to_string(), "Product".to_string());
+		let source = build_project_state(vec![(
+			key.clone(),
+			build_model_state(
+				"catalog",
+				"Product",
+				Vec::new(),
+				vec![IndexDefinition::new(
+					"product_sku_idx",
+					vec!["sku".to_string()],
+					false,
+				)],
+				Vec::new(),
+			),
+		)]);
+		let target = build_project_state(vec![(
+			key,
+			build_model_state("catalog", "Product", Vec::new(), Vec::new(), Vec::new()),
+		)]);
+
+		let operations = MigrationAutodetector::new(source, target).generate_operations();
+
+		assert_eq!(
+			operations,
+			vec![super::super::Operation::DropIndex {
+				table: "catalog_product".to_string(),
+				columns: vec!["sku".to_string()],
+			}]
+		);
 	}
 
 	#[cfg(feature = "pgvector")]

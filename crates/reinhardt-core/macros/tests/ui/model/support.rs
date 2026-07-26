@@ -912,6 +912,25 @@ pub mod db {
 				pub expressions: Option<Vec<String>>,
 			}
 
+			impl IndexInfo {
+				pub fn new(
+					name: impl Into<String>,
+					fields: Vec<String>,
+					unique: bool,
+					condition: Option<String>,
+				) -> Self {
+					Self {
+						name: name.into(),
+						fields,
+						unique,
+						condition,
+						index_type: None,
+						operator_class: None,
+						expressions: None,
+					}
+				}
+			}
+
 			#[derive(Debug, Clone, PartialEq)]
 			pub enum ConstraintType {
 				Check,

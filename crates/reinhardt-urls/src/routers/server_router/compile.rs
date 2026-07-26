@@ -159,12 +159,11 @@ impl ServerRouter {
 		let origin = *next_origin;
 		*next_origin += 1;
 		for func_route in &self.functions {
+			let route_path = Self::strip_prefix_normalized(&self.prefix, &func_route.path)
+				.unwrap_or_else(|| Cow::Borrowed(&func_route.path));
 			routes.push(MountedFunctionRoute {
 				origin,
-				path: crate::routers::path_utils::join_prefix_path(
-					&current_prefix,
-					&func_route.path,
-				),
+				path: crate::routers::path_utils::join_prefix_path(&current_prefix, &route_path),
 				method: func_route.method.clone(),
 				handler: RouteHandler {
 					handler: func_route.handler.clone(),

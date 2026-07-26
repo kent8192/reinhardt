@@ -45,6 +45,7 @@ impl<const ID: u8> EndpointInfo for TestEndpoint<ID> {
 			31 => "/items/{id}",
 			32 => "/items/{name}",
 			33 => "/api/server_fn/test",
+			34 => "/api/items/{id}",
 			_ => unreachable!("unsupported test endpoint"),
 		}
 	}
@@ -94,6 +95,7 @@ impl<const ID: u8> EndpointInfo for TestEndpoint<ID> {
 			31 => "items-by-id",
 			32 => "items-by-name",
 			33 => "server-fn-test-users",
+			34 => "items-by-prefixed-id",
 			_ => unreachable!("unsupported test endpoint"),
 		}
 	}
@@ -614,8 +616,8 @@ fn validate_routes_distinguishes_mounted_server_function_paths() {
 #[test]
 fn validate_routes_rejects_equivalent_mounted_server_function_patterns() {
 	let router = ServerRouter::new()
-		.mount("/", ServerRouter::new().endpoint(|| TestEndpoint::<31>))
-		.mount("/", ServerRouter::new().endpoint(|| TestEndpoint::<32>));
+		.mount("/api/", ServerRouter::new().endpoint(|| TestEndpoint::<34>))
+		.mount("/api/", ServerRouter::new().endpoint(|| TestEndpoint::<32>));
 
 	let errors = router
 		.validate_routes()

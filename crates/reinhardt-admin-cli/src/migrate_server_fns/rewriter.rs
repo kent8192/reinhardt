@@ -471,6 +471,17 @@ fn analyze_chain(
 	}) {
 		return ChainOutcome::Mixed(span_line(method.method.span()));
 	}
+	if let Some(method) = methods.iter().enumerate().find_map(|(index, method)| {
+		(method.method == "server_fn")
+			.then(|| {
+				methods[index + 1..]
+					.iter()
+					.find(|next| next.method != "server_fn")
+			})
+			.flatten()
+	}) {
+		return ChainOutcome::Mixed(span_line(method.method.span()));
+	}
 
 	let server_methods: Vec<_> = methods
 		.iter()

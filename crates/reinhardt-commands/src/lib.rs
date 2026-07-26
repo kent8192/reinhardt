@@ -121,6 +121,42 @@
 //! respawned child accepts connections at the advertised development address.
 //!
 //! See [`runserver_hooks`] for the full hot-reload runbook and failure modes.
+//!
+//! ## Rust Management Shell
+//!
+//! The `shell` feature enables a stateful Rust evaluator. The facade exposes it
+//! to generated projects as the opt-in `commands-shell` feature; generated
+//! defaults intentionally omit it. Projects opting in provide a
+//! [`ShellConfig`], call [`shell_runtime_hook`] from the outer native `main`
+//! before constructing Tokio, and dispatch through
+//! [`execute_from_command_line_with_settings_and_shell`].
+//!
+//! ```rust,ignore
+//! #[cfg(not(target_arch = "wasm32"))]
+//! fn main() {
+//!     reinhardt::commands::shell_runtime_hook();
+//!     native::main();
+//! }
+//! ```
+//!
+//! The evaluator exposes concrete `settings`, a copyable ORM `db` handle, and
+//! the application `di` context. Unique installed model names are imported;
+//! collisions produce deterministic warnings with concrete registered crate
+//! paths, while the `project_crate` alias can reference the same types.
+//! Interactive input supports top-level `.await` and `>>> ` / `... ` prompts.
+//! A panic, evaluator exit, or evaluation interrupt clears user state and
+//! reloads every prelude layer. One-shot `shell -c` returns an error for any
+//! unsuccessful bootstrap or evaluation. Reinhardt-owned diagnostics do not
+//! echo the raw source, but arbitrary Rust, compiler output, panics, and user
+//! code can print literals; the shell is not a sandbox or secrecy boundary.
+//! History is best-effort under the platform local data directory at
+//! `reinhardt/shell/<package-name>.history`; a missing file is a normal silent
+//! first run, while access or directory-resolution failures warn and continue.
+//! A cold start may compile the project and evaluator support; warm starts
+//! reuse unchanged Cargo artifacts.
+//!
+//! `shell-rhai` has been removed: `shell` now means the Rust evaluator. Existing
+//! settings-only entry points remain compatible with non-shell commands.
 
 /// Base command trait and argument/option definitions.
 pub mod base;
@@ -173,6 +209,7 @@ pub mod runserver_hooks;
 #[cfg(feature = "autoreload")]
 #[doc(hidden)]
 pub mod server_rebuild_pipeline;
+mod shell;
 /// Source-tree enumeration for hot-reload watch targets.
 #[cfg(feature = "autoreload")]
 #[doc(hidden)]
@@ -253,7 +290,9 @@ pub use cli::start_server;
 pub use cli::{
 	Cli, Commands, auto_register_router, execute_from_command_line,
 	execute_from_command_line_with_registry, execute_from_command_line_with_registry_and_settings,
-	execute_from_command_line_with_settings, run_command, run_command_with_registry,
+	execute_from_command_line_with_registry_and_settings_and_shell,
+	execute_from_command_line_with_settings, execute_from_command_line_with_settings_and_shell,
+	run_command, run_command_with_registry,
 };
 pub use collectstatic::{
 	CollectStaticCommand, CollectStaticOptions, CollectStaticStats, VirtualStaticAsset,
@@ -276,6 +315,9 @@ pub use project_config::{ConfigureCommand, ReinhardtDependencySelection};
 pub use registry::CommandRegistry;
 #[cfg(feature = "server")]
 pub use runserver_hooks::{RunserverContext, RunserverHook, RunserverHookRegistration};
+#[cfg(feature = "shell")]
+pub use shell::ShellEnvironment;
+pub use shell::{ShellConfig, shell_runtime_hook};
 pub use start_commands::{StartAppCommand, StartProjectCommand};
 pub use static_asset_settings::StaticAssetSettings;
 pub use style_extractor::{
@@ -323,6 +365,10 @@ pub enum CommandError {
 	/// A runtime error occurred during command execution.
 	#[error("Execution error: {0}")]
 	ExecutionError(String),
+
+	/// A command requires an optional Cargo feature that is not enabled.
+	#[error("{0}")]
+	FeatureDisabled(String),
 
 	/// An I/O error occurred.
 	#[error("IO error: {0}")]

@@ -9,7 +9,9 @@ use crate::base::BaseCommand;
 use crate::collectstatic::{CollectStaticCommand, CollectStaticOptions};
 use crate::local_infra::InfraSubcommand;
 use crate::registry::CommandRegistry;
-use crate::{CheckCommand, CommandContext, MigrateCommand, RunServerCommand, ShellCommand};
+use crate::{
+	CheckCommand, CommandContext, MigrateCommand, RunServerCommand, ShellCommand, ShellConfig,
+};
 #[cfg(feature = "introspect")]
 use clap::ValueEnum;
 use clap::{Parser, Subcommand};
@@ -535,6 +537,22 @@ where
 	execute_from_command_line_with_registry_and_settings(CommandRegistry::new(), settings).await
 }
 
+/// Execute command-line arguments with project settings and Rust shell configuration.
+pub async fn execute_from_command_line_with_settings_and_shell<S>(
+	settings: S,
+	shell: ShellConfig,
+) -> crate::CommandResult<()>
+where
+	S: HasCommonSettings + Clone + Send + Sync + 'static,
+{
+	execute_from_command_line_with_registry_and_settings_and_shell(
+		CommandRegistry::new(),
+		settings,
+		shell,
+	)
+	.await
+}
+
 /// Execute commands from command-line arguments with a custom command registry.
 ///
 /// This entry point works like [`execute_from_command_line`] but additionally
@@ -574,7 +592,7 @@ where
 pub async fn execute_from_command_line_with_registry(
 	registry: CommandRegistry,
 ) -> Result<(), Box<dyn std::error::Error>> {
-	execute_with_registry_and_optional_settings(registry, None).await
+	execute_with_registry_and_optional_settings(registry, None, None).await
 }
 
 /// Execute commands from CLI arguments with a custom command registry **and** the
@@ -602,8 +620,34 @@ where
 	execute_with_registry_and_optional_settings(
 		registry,
 		Some(Arc::new(settings) as Arc<dyn HasCommonSettings>),
+		None,
 	)
 	.await
+}
+
+/// Execute CLI arguments with a custom registry, project settings, and shell configuration.
+pub async fn execute_from_command_line_with_registry_and_settings_and_shell<S>(
+	registry: CommandRegistry,
+	settings: S,
+	shell: ShellConfig,
+) -> crate::CommandResult<()>
+where
+	S: HasCommonSettings + Clone + Send + Sync + 'static,
+{
+	execute_with_registry_and_optional_settings(
+		registry,
+		Some(Arc::new(settings) as Arc<dyn HasCommonSettings>),
+		Some(shell),
+	)
+	.await
+	.map_err(boxed_command_error)
+}
+
+fn boxed_command_error(error: Box<dyn std::error::Error>) -> crate::CommandError {
+	match error.downcast::<crate::CommandError>() {
+		Ok(error) => *error,
+		Err(error) => crate::CommandError::ExecutionError(error.to_string()),
+	}
 }
 
 /// Shared driver: parse CLI arguments, perform pre-dispatch registration, and run
@@ -612,6 +656,7 @@ where
 async fn execute_with_registry_and_optional_settings(
 	registry: CommandRegistry,
 	settings: Option<Arc<dyn HasCommonSettings>>,
+	shell: Option<ShellConfig>,
 ) -> Result<(), Box<dyn std::error::Error>> {
 	// Attempt normal clap parsing first. If it fails (e.g., unknown subcommand),
 	// fall back to checking the registry for a matching custom command.
@@ -659,7 +704,7 @@ async fn execute_with_registry_and_optional_settings(
 	#[cfg(feature = "auth")]
 	reinhardt_auth::auto_register_superuser_creator();
 
-	run_command_core(command, verbosity, registry, settings).await
+	run_command_core(command, verbosity, registry, settings, shell).await
 }
 
 /// Returns `true` for commands that need URL patterns registered **before**
@@ -695,6 +740,7 @@ fn requires_database(command: &Commands, registry: &CommandRegistry) -> bool {
 	match command {
 		Commands::Runserver { .. } => true,
 		Commands::Migrate { .. } => true,
+		Commands::Shell { .. } => false,
 		Commands::Custom { name, .. } => {
 			registry.get(name).is_none() && is_fixture_command_name(name)
 		}
@@ -748,7 +794,7 @@ pub async fn run_command_with_registry(
 	verbosity: u8,
 	registry: CommandRegistry,
 ) -> Result<(), Box<dyn std::error::Error>> {
-	run_command_core(command, verbosity, registry, None).await
+	run_command_core(command, verbosity, registry, None, None).await
 }
 
 /// Execute a command with optional composed settings threaded into the context.
@@ -765,6 +811,7 @@ async fn run_command_core(
 	verbosity: u8,
 	registry: CommandRegistry,
 	settings: Option<Arc<dyn HasCommonSettings>>,
+	shell: Option<ShellConfig>,
 ) -> Result<(), Box<dyn std::error::Error>> {
 	// Initialize ORM database for commands that require it.
 	// This must happen before command dispatch so that commands like
@@ -887,7 +934,7 @@ async fn run_command_core(
 			})
 			.await
 		}
-		Commands::Shell { command } => execute_shell(command, verbosity).await,
+		Commands::Shell { command } => execute_shell(command, verbosity, shell).await,
 		Commands::Check { app_label, deploy } => execute_check(app_label, deploy, verbosity).await,
 		Commands::Collectstatic {
 			clear,
@@ -1256,6 +1303,7 @@ async fn execute_runserver(options: RunServerOptions) -> Result<(), Box<dyn std:
 async fn execute_shell(
 	command: Option<String>,
 	verbosity: u8,
+	shell: Option<ShellConfig>,
 ) -> Result<(), Box<dyn std::error::Error>> {
 	let mut ctx = CommandContext::default();
 	ctx.set_verbosity(verbosity);
@@ -1264,7 +1312,7 @@ async fn execute_shell(
 		ctx.set_option("command".to_string(), cmd_str);
 	}
 
-	let cmd = ShellCommand;
+	let cmd = shell.map(ShellCommand::new).unwrap_or_default();
 	cmd.execute(&ctx).await.map_err(|e| e.into())
 }
 
@@ -2712,6 +2760,19 @@ mod tests {
 
 		// Assert
 		assert!(!result);
+	}
+
+	#[cfg(not(feature = "shell"))]
+	#[tokio::test]
+	async fn shell_without_feature_returns_the_commands_shell_feature_error() {
+		let error = execute_shell(None, 0, None)
+			.await
+			.expect_err("disabled shell support must return a nonzero error");
+
+		assert_eq!(
+			error.to_string(),
+			"The shell command requires the `commands-shell` feature."
+		);
 	}
 
 	#[cfg(feature = "reinhardt-db")]

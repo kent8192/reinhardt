@@ -1,0 +1,1435 @@
+use std::path::Path;
+use std::process::Child;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, Condvar, Mutex, mpsc};
+use std::thread::{self, JoinHandle};
+use std::time::{Duration, Instant};
+
+use evcxr::{CommandContext, Error, EvalContext, EvalContextOutputs};
+use tokio::sync::oneshot;
+use toml_edit::InlineTable;
+
+use super::config::ValidatedShellConfig;
+use super::imports::ImportPlan;
+use super::session::{EvaluationInterrupt, EvaluatorClient, EvaluatorFactory};
+use crate::{CommandError, CommandResult};
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum EvaluationFailure {
+	Compilation(String),
+	Runtime(String),
+	Panic(String),
+	ProcessExited(String),
+	// Task 5 constructs this variant when its cancellation branch wins.
+	#[allow(dead_code)]
+	Interrupted,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub(crate) struct EvaluationOutput {
+	pub(crate) stdout: String,
+	pub(crate) stderr: String,
+	pub(crate) value: Option<String>,
+}
+
+pub(crate) trait BlockingShellEvaluator: Send {
+	fn evaluate(&mut self, source: &str) -> Result<EvaluationOutput, EvaluationFailure>;
+	fn interrupt_handle(&self) -> EvaluationInterrupt;
+}
+
+// Task 5 constructs this adapter inside its blocking evaluator worker.
+#[allow(dead_code)]
+pub(crate) struct EvcxrEvaluator {
+	context: CommandContext,
+	output_drainers: OutputDrainers,
+	process_handle: Arc<Mutex<Child>>,
+	evaluator_id: u64,
+	evaluation_sequence: u64,
+}
+
+impl EvcxrEvaluator {
+	// Task 5 calls this constructor after validating the shell configuration.
+	#[allow(dead_code)]
+	pub(crate) fn bootstrap(
+		config: &ValidatedShellConfig,
+	) -> Result<(Self, Vec<String>), EvaluationFailure> {
+		let (eval, outputs) = EvalContext::new().map_err(classify_startup_error)?;
+		Self::bootstrap_with_context(config, eval, outputs)
+	}
+
+	fn bootstrap_with_context(
+		config: &ValidatedShellConfig,
+		mut eval: EvalContext,
+		outputs: EvalContextOutputs,
+	) -> Result<(Self, Vec<String>), EvaluationFailure> {
+		let mut state = eval.state();
+		let dependency = path_dependency(config.package_name(), config.manifest_dir())?;
+		state
+			.add_dep(config.crate_name(), &dependency)
+			.map_err(classify_startup_error)?;
+		state
+			.add_dep(
+				"tokio",
+				r#"{ version = "1", features = ["rt", "rt-multi-thread", "time"] }"#,
+			)
+			.map_err(classify_startup_error)?;
+		state.set_preserve_vars_on_panic(false);
+		eval.eval_with_state("", state)
+			.map_err(classify_startup_error)?;
+
+		let import_plan = ImportPlan::from_registry(config.installed_app_labels());
+		let prelude = bootstrap_prelude(config, &import_plan);
+		let warnings = import_plan.warnings().to_vec();
+		let context = CommandContext::with_eval_context(eval);
+		let process_handle = context.process_handle();
+		let output_drainers = OutputDrainers::new(outputs);
+		let mut evaluator = Self {
+			context,
+			output_drainers,
+			process_handle,
+			evaluator_id: NEXT_EVALUATOR_ID.fetch_add(1, Ordering::Relaxed),
+			evaluation_sequence: 0,
+		};
+		for statement in prelude {
+			evaluator
+				.evaluate(&statement)
+				.map_err(|error| startup_prelude_error(error, &warnings))?;
+		}
+		Ok((evaluator, warnings))
+	}
+}
+
+impl BlockingShellEvaluator for EvcxrEvaluator {
+	fn evaluate(&mut self, source: &str) -> Result<EvaluationOutput, EvaluationFailure> {
+		self.evaluation_sequence += 1;
+		let sentinel = format!(
+			"__reinhardt_shell_evaluation_{}_{}",
+			self.evaluator_id, self.evaluation_sequence
+		);
+		let marker = format!(
+			"__REINHARDT_SHELL_OUTPUT_BOUNDARY_{}_{}__",
+			self.evaluator_id, self.evaluation_sequence
+		);
+		self.output_drainers.begin(&marker);
+		let result = self.context.execute(&format!(
+			"let {sentinel}: ::std::string::String = ::std::string::String::new();\n{source}"
+		));
+		let committed = result.is_ok()
+			&& self
+				.context
+				.variables_and_types()
+				.any(|(name, _)| name == sentinel);
+		let boundary_result = if matches!(result, Err(Error::SubprocessTerminated(_))) {
+			None
+		} else {
+			let sentinel_cleanup = if committed {
+				format!("::std::mem::drop({sentinel});\n")
+			} else {
+				String::new()
+			};
+			Some(self.context.execute(&format!(
+				"{{\n{sentinel_cleanup}\
+				 ::std::println!(\"{marker}\");\n\
+				 ::std::eprintln!(\"{marker}\");\n}}"
+			)))
+		};
+		let (stdout, stderr) = match boundary_result {
+			Some(Ok(_)) => self.output_drainers.finish(&marker)?,
+			Some(Err(error)) => return Err(classify_boundary_error(error, "")),
+			None => self.output_drainers.finish_after_disconnect(),
+		};
+
+		match result {
+			Ok(_) if !committed => Err(EvaluationFailure::Runtime(nonempty_diagnostic(
+				&stderr,
+				"evaluation failed before committing state",
+			))),
+			Ok(outputs) => Ok(EvaluationOutput {
+				stdout,
+				stderr,
+				value: outputs.get("text/plain").map(str::to_owned),
+			}),
+			Err(Error::CompilationErrors(errors)) => Err(EvaluationFailure::Compilation(
+				errors
+					.iter()
+					.map(|error| error.message())
+					.collect::<Vec<_>>()
+					.join("\n"),
+			)),
+			Err(Error::SubprocessTerminated(message)) => {
+				if is_panic_output(&stderr) {
+					Err(EvaluationFailure::Panic(combine_diagnostic(
+						&message, &stderr,
+					)))
+				} else {
+					Err(EvaluationFailure::ProcessExited(combine_diagnostic(
+						&message, &stderr,
+					)))
+				}
+			}
+			Err(Error::TypeRedefinedVariablesLost(variables)) => {
+				Err(EvaluationFailure::Runtime(format!(
+					"evaluation changed stored variable types: {}",
+					variables.join(", ")
+				)))
+			}
+			Err(Error::Message(message)) => Err(EvaluationFailure::Runtime(message)),
+		}
+	}
+
+	fn interrupt_handle(&self) -> EvaluationInterrupt {
+		let process_handle = Arc::clone(&self.process_handle);
+		EvaluationInterrupt::new(move || {
+			process_handle
+				.lock()
+				.map_err(|_| {
+					EvaluationFailure::ProcessExited(
+						"evaluator process lock is poisoned".to_string(),
+					)
+				})?
+				.kill()
+				.map_err(|error| EvaluationFailure::ProcessExited(error.to_string()))
+		})
+	}
+}
+
+enum EvaluatorRequest {
+	Evaluate {
+		source: String,
+		response: oneshot::Sender<Result<EvaluationOutput, EvaluationFailure>>,
+	},
+	Close,
+}
+
+pub(crate) struct EvaluatorWorker {
+	requests: Option<mpsc::Sender<EvaluatorRequest>>,
+	interrupt: EvaluationInterrupt,
+	worker: Option<JoinHandle<()>>,
+}
+
+pub(crate) struct EvcxrEvaluatorFactory {
+	config: ValidatedShellConfig,
+	warnings: Vec<String>,
+}
+
+impl EvcxrEvaluatorFactory {
+	pub(crate) fn new(config: ValidatedShellConfig) -> Self {
+		Self {
+			config,
+			warnings: Vec::new(),
+		}
+	}
+}
+
+impl EvaluatorFactory for EvcxrEvaluatorFactory {
+	fn start(&mut self) -> CommandResult<Box<dyn EvaluatorClient>> {
+		let config = self.config.clone();
+		let (evaluator, warnings) = EvaluatorWorker::start_with(move || {
+			let (evaluator, warnings) = EvcxrEvaluator::bootstrap(&config)?;
+			Ok((Box::new(evaluator), warnings))
+		})
+		.map_err(evaluation_command_error)?;
+		self.warnings = warnings;
+		Ok(Box::new(evaluator))
+	}
+
+	fn take_warnings(&mut self) -> Vec<String> {
+		std::mem::take(&mut self.warnings)
+	}
+}
+
+impl EvaluatorWorker {
+	pub(crate) fn start_with<F>(factory: F) -> Result<(Self, Vec<String>), EvaluationFailure>
+	where
+		F: FnOnce() -> Result<(Box<dyn BlockingShellEvaluator>, Vec<String>), EvaluationFailure>
+			+ Send
+			+ 'static,
+	{
+		let (requests, receiver) = mpsc::channel();
+		let (startup, started) = mpsc::sync_channel(1);
+		let worker = thread::spawn(move || {
+			let (mut evaluator, warnings) = match factory() {
+				Ok(started) => started,
+				Err(error) => {
+					let _ = startup.send(Err(error));
+					return;
+				}
+			};
+			let interrupt = evaluator.interrupt_handle();
+			if startup.send(Ok((interrupt, warnings))).is_err() {
+				return;
+			}
+			while let Ok(request) = receiver.recv() {
+				match request {
+					EvaluatorRequest::Evaluate { source, response } => {
+						let result = evaluator.evaluate(&source);
+						let _ = response.send(result);
+					}
+					EvaluatorRequest::Close => break,
+				}
+			}
+		});
+		match started.recv() {
+			Ok(Ok((interrupt, warnings))) => Ok((
+				Self {
+					requests: Some(requests),
+					interrupt,
+					worker: Some(worker),
+				},
+				warnings,
+			)),
+			Ok(Err(error)) => {
+				let _ = worker.join();
+				Err(error)
+			}
+			Err(_) => {
+				let _ = worker.join();
+				Err(EvaluationFailure::ProcessExited(
+					"evaluator worker exited during startup".to_string(),
+				))
+			}
+		}
+	}
+
+	#[cfg(test)]
+	pub(crate) fn spawn(evaluator: Box<dyn BlockingShellEvaluator>) -> Self {
+		Self::start_with(move || Ok((evaluator, Vec::new())))
+			.expect("test evaluator worker should start")
+			.0
+	}
+}
+
+#[async_trait::async_trait]
+impl EvaluatorClient for EvaluatorWorker {
+	async fn evaluate(&mut self, source: &str) -> Result<EvaluationOutput, EvaluationFailure> {
+		let (response, result) = oneshot::channel();
+		self.requests
+			.as_ref()
+			.ok_or_else(|| {
+				EvaluationFailure::ProcessExited("evaluator worker is unavailable".to_string())
+			})?
+			.send(EvaluatorRequest::Evaluate {
+				source: source.to_string(),
+				response,
+			})
+			.map_err(|_| {
+				EvaluationFailure::ProcessExited("evaluator worker has exited".to_string())
+			})?;
+		result.await.map_err(|_| {
+			EvaluationFailure::ProcessExited(
+				"evaluator worker dropped its response channel".to_string(),
+			)
+		})?
+	}
+
+	fn interrupt(&self) -> EvaluationInterrupt {
+		self.interrupt.clone()
+	}
+}
+
+impl Drop for EvaluatorWorker {
+	fn drop(&mut self) {
+		if let Some(requests) = self.requests.take() {
+			let _ = requests.send(EvaluatorRequest::Close);
+			let _ = self.interrupt.interrupt();
+			drop(requests);
+		}
+		if let Some(worker) = self.worker.take() {
+			let _ = worker.join();
+		}
+	}
+}
+
+fn evaluation_command_error(failure: EvaluationFailure) -> CommandError {
+	let message = match failure {
+		EvaluationFailure::Compilation(message)
+		| EvaluationFailure::Runtime(message)
+		| EvaluationFailure::Panic(message)
+		| EvaluationFailure::ProcessExited(message) => message,
+		EvaluationFailure::Interrupted => "Evaluation was interrupted.".to_string(),
+	};
+	CommandError::ExecutionError(message)
+}
+
+static NEXT_EVALUATOR_ID: AtomicU64 = AtomicU64::new(1);
+const OUTPUT_BOUNDARY_TIMEOUT: Duration = Duration::from_secs(2);
+const OUTPUT_DISCONNECT_TIMEOUT: Duration = Duration::from_secs(2);
+
+fn path_dependency(package_name: &str, manifest_dir: &Path) -> Result<String, EvaluationFailure> {
+	let path = manifest_dir.to_str().ok_or_else(|| {
+		EvaluationFailure::Runtime(
+			"project manifest directory cannot be represented in Cargo TOML".to_string(),
+		)
+	})?;
+	let mut dependency = InlineTable::new();
+	dependency.insert("package", package_name.into());
+	dependency.insert("path", path.into());
+	let mut features = toml_edit::Array::new();
+	features.push("commands-shell");
+	dependency.insert("features", features.into());
+	Ok(dependency.to_string())
+}
+
+fn bootstrap_prelude(config: &ValidatedShellConfig, import_plan: &ImportPlan) -> Vec<String> {
+	let crate_name = config.crate_name();
+	let model_imports = import_plan.prelude_source();
+	let project_prelude = config.project_prelude();
+	let settings_factory = config.settings_factory_path();
+
+	vec![
+		format!(
+			"use {crate_name}::config::shell::framework;\n\
+			 use {crate_name} as project_crate;\n\
+			 {model_imports}"
+		),
+		format!(
+			"let __reinhardt_typed_settings: \
+			 project_crate::config::shell::ShellSettings = {settings_factory}();\n\
+			 let __reinhardt_shell: \
+			 project_crate::config::shell::ProjectShellEnvironment = \
+			 project_crate::config::shell::ProjectShellEnvironment::bootstrap(\
+			 __reinhardt_typed_settings).await?;\n\
+			 let settings: project_crate::config::shell::ShellSettings = \
+			 __reinhardt_shell.settings().clone();\n\
+			 let db: project_crate::config::shell::ShellDatabase = \
+			 __reinhardt_shell.database();\n\
+			 let di: project_crate::config::shell::ShellDi = \
+			 __reinhardt_shell.di();\n\
+			 {project_prelude}"
+		),
+	]
+}
+
+fn classify_startup_error(error: Error) -> EvaluationFailure {
+	match error {
+		Error::CompilationErrors(errors) => EvaluationFailure::Compilation(
+			errors
+				.iter()
+				.map(|error| error.message())
+				.collect::<Vec<_>>()
+				.join("\n"),
+		),
+		Error::SubprocessTerminated(message) => EvaluationFailure::ProcessExited(message),
+		Error::TypeRedefinedVariablesLost(variables) => EvaluationFailure::Runtime(format!(
+			"startup changed stored variable types: {}",
+			variables.join(", ")
+		)),
+		Error::Message(message) => EvaluationFailure::Runtime(message),
+	}
+}
+
+fn startup_prelude_error(error: EvaluationFailure, warnings: &[String]) -> EvaluationFailure {
+	let warning_suffix = if warnings.is_empty() {
+		String::new()
+	} else {
+		format!("; import warnings: {}", warnings.join("; "))
+	};
+	match error {
+		EvaluationFailure::Compilation(message) => EvaluationFailure::Compilation(format!(
+			"shell bootstrap failed{warning_suffix}: {message}"
+		)),
+		EvaluationFailure::Runtime(message) => {
+			EvaluationFailure::Runtime(format!("shell bootstrap failed{warning_suffix}: {message}"))
+		}
+		other => other,
+	}
+}
+
+fn is_panic_output(stderr: &str) -> bool {
+	stderr.lines().any(|line| {
+		line.starts_with("thread '") && line.contains(" panicked at ")
+			|| line.contains("panic in a function that cannot unwind")
+	})
+}
+
+fn combine_diagnostic(message: &str, stderr: &str) -> String {
+	if stderr.is_empty() {
+		message.to_string()
+	} else {
+		format!("{message}\n{stderr}")
+	}
+}
+
+fn nonempty_diagnostic(stderr: &str, fallback: &str) -> String {
+	if stderr.trim().is_empty() {
+		fallback.to_string()
+	} else {
+		stderr.trim_end().to_string()
+	}
+}
+
+fn classify_boundary_error(error: Error, stderr: &str) -> EvaluationFailure {
+	match classify_startup_error(error) {
+		EvaluationFailure::ProcessExited(message) if is_panic_output(stderr) => {
+			EvaluationFailure::Panic(combine_diagnostic(&message, stderr))
+		}
+		EvaluationFailure::ProcessExited(message) => {
+			EvaluationFailure::ProcessExited(combine_diagnostic(&message, stderr))
+		}
+		other => other,
+	}
+}
+
+struct OutputDrainers {
+	stdout: Arc<StreamCapture>,
+	stderr: Arc<StreamCapture>,
+	stdout_worker: Option<JoinHandle<()>>,
+	stderr_worker: Option<JoinHandle<()>>,
+}
+
+impl OutputDrainers {
+	fn new(outputs: EvalContextOutputs) -> Self {
+		let stdout = Arc::new(StreamCapture::default());
+		let stderr = Arc::new(StreamCapture::default());
+
+		let stdout_receiver = outputs.stdout;
+		let stdout_buffer = Arc::clone(&stdout);
+		let stdout_worker = thread::spawn(move || {
+			while let Ok(line) = stdout_receiver.recv() {
+				stdout_buffer.push(line);
+			}
+			stdout_buffer.disconnect();
+		});
+
+		let stderr_receiver = outputs.stderr;
+		let stderr_buffer = Arc::clone(&stderr);
+		let stderr_worker = thread::spawn(move || {
+			while let Ok(line) = stderr_receiver.recv() {
+				stderr_buffer.push(line);
+			}
+			stderr_buffer.disconnect();
+		});
+
+		Self {
+			stdout,
+			stderr,
+			stdout_worker: Some(stdout_worker),
+			stderr_worker: Some(stderr_worker),
+		}
+	}
+
+	fn begin(&self, marker: &str) {
+		self.stdout.begin(marker);
+		self.stderr.begin(marker);
+	}
+
+	fn finish(&self, marker: &str) -> Result<(String, String), EvaluationFailure> {
+		let deadline = Instant::now() + OUTPUT_BOUNDARY_TIMEOUT;
+		let stdout = self.stdout.take_at_boundary(marker, deadline)?;
+		let stderr = self.stderr.take_at_boundary(marker, deadline)?;
+		Ok((stdout, stderr))
+	}
+
+	fn finish_after_disconnect(&self) -> (String, String) {
+		let deadline = Instant::now() + OUTPUT_DISCONNECT_TIMEOUT;
+		let stdout = self.stdout.take_after_disconnect(deadline);
+		let stderr = self.stderr.take_after_disconnect(deadline);
+		(stdout, stderr)
+	}
+}
+
+impl Drop for OutputDrainers {
+	fn drop(&mut self) {
+		if let Some(worker) = self.stdout_worker.take() {
+			let _ = worker.join();
+		}
+		if let Some(worker) = self.stderr_worker.take() {
+			let _ = worker.join();
+		}
+	}
+}
+
+#[derive(Default)]
+struct StreamCapture {
+	state: Mutex<StreamCaptureState>,
+	changed: Condvar,
+}
+
+#[derive(Default)]
+struct StreamCaptureState {
+	buffer: String,
+	pending_marker: Option<String>,
+	marker_observed: bool,
+	disconnected: bool,
+}
+
+impl StreamCapture {
+	fn begin(&self, marker: &str) {
+		let mut state = self
+			.state
+			.lock()
+			.unwrap_or_else(std::sync::PoisonError::into_inner);
+		state.buffer.clear();
+		state.pending_marker = Some(marker.to_string());
+		state.marker_observed = false;
+	}
+
+	fn push(&self, line: String) {
+		let mut state = self
+			.state
+			.lock()
+			.unwrap_or_else(std::sync::PoisonError::into_inner);
+		if state.pending_marker.as_deref() == Some(line.as_str()) {
+			state.marker_observed = true;
+		} else {
+			state.buffer.push_str(&line);
+			state.buffer.push('\n');
+		}
+		self.changed.notify_all();
+	}
+
+	fn disconnect(&self) {
+		let mut state = self
+			.state
+			.lock()
+			.unwrap_or_else(std::sync::PoisonError::into_inner);
+		state.disconnected = true;
+		self.changed.notify_all();
+	}
+
+	fn take_at_boundary(
+		&self,
+		marker: &str,
+		deadline: Instant,
+	) -> Result<String, EvaluationFailure> {
+		let mut state = self
+			.state
+			.lock()
+			.unwrap_or_else(std::sync::PoisonError::into_inner);
+		while !state.marker_observed && !state.disconnected {
+			let Some(remaining) = deadline.checked_duration_since(Instant::now()) else {
+				break;
+			};
+			let (next_state, timeout) = self
+				.changed
+				.wait_timeout(state, remaining)
+				.unwrap_or_else(std::sync::PoisonError::into_inner);
+			state = next_state;
+			if timeout.timed_out() {
+				break;
+			}
+		}
+		if !state.marker_observed {
+			return Err(EvaluationFailure::ProcessExited(format!(
+				"evaluator output boundary `{marker}` was not observed"
+			)));
+		}
+		state.pending_marker = None;
+		Ok(std::mem::take(&mut state.buffer))
+	}
+
+	fn take_after_disconnect(&self, deadline: Instant) -> String {
+		let mut state = self
+			.state
+			.lock()
+			.unwrap_or_else(std::sync::PoisonError::into_inner);
+		while !state.disconnected {
+			let Some(remaining) = deadline.checked_duration_since(Instant::now()) else {
+				break;
+			};
+			let (next_state, timeout) = self
+				.changed
+				.wait_timeout(state, remaining)
+				.unwrap_or_else(std::sync::PoisonError::into_inner);
+			state = next_state;
+			if timeout.timed_out() {
+				break;
+			}
+		}
+		state.pending_marker = None;
+		std::mem::take(&mut state.buffer)
+	}
+}
+
+#[cfg(test)]
+mod tests {
+	use std::future::Future;
+	use std::io::Read;
+	use std::path::{Path, PathBuf};
+	use std::process::{Child, Command, Output};
+	use std::sync::{Arc, Condvar, Mutex};
+	use std::task::Poll;
+	use std::thread::{self, JoinHandle};
+	use std::time::{Duration, Instant};
+
+	use evcxr::EvalContext;
+	use reinhardt_db::orm::registry::{ModelInfo, global_model_registry};
+	use serial_test::serial;
+	use tempfile::{Builder, TempDir};
+
+	use super::{
+		BlockingShellEvaluator, EvaluationFailure, EvaluationOutput, EvaluatorWorker,
+		EvcxrEvaluator, path_dependency,
+	};
+	use crate::ShellConfig;
+	use crate::shell::session::{EvaluationInterrupt, EvaluatorClient};
+
+	#[derive(Default)]
+	struct InterruptProbeState {
+		started: bool,
+		interrupted: bool,
+		interrupt_count: usize,
+		dropped: bool,
+	}
+
+	struct InterruptibleEvaluator {
+		state: Arc<(Mutex<InterruptProbeState>, Condvar)>,
+	}
+
+	impl BlockingShellEvaluator for InterruptibleEvaluator {
+		fn evaluate(&mut self, _source: &str) -> Result<EvaluationOutput, EvaluationFailure> {
+			let (state, changed) = &*self.state;
+			let mut state = state.lock().expect("interrupt probe state lock");
+			state.started = true;
+			changed.notify_all();
+			while !state.interrupted {
+				state = changed.wait(state).expect("interrupt probe state wait");
+			}
+			Err(EvaluationFailure::ProcessExited(
+				"probe evaluator interrupted".to_string(),
+			))
+		}
+
+		fn interrupt_handle(&self) -> EvaluationInterrupt {
+			let state = Arc::clone(&self.state);
+			EvaluationInterrupt::new(move || {
+				let (state, changed) = &*state;
+				let mut state = state.lock().expect("interrupt probe state lock");
+				state.interrupted = true;
+				state.interrupt_count += 1;
+				changed.notify_all();
+				Ok(())
+			})
+		}
+	}
+
+	impl Drop for InterruptibleEvaluator {
+		fn drop(&mut self) {
+			self.state
+				.0
+				.lock()
+				.expect("interrupt probe state lock")
+				.dropped = true;
+		}
+	}
+
+	#[test]
+	fn project_path_dependency_enables_commands_shell_feature() {
+		let dependency = path_dependency(
+			"shell-project",
+			Path::new("/tmp/shell fixture/project \"quoted\""),
+		)
+		.expect("path dependency should render");
+		let manifest = format!("[dependencies]\nshell_project = {dependency}\n");
+		let document = manifest
+			.parse::<toml_edit::DocumentMut>()
+			.expect("rendered dependency should be valid Cargo TOML");
+		let dependency = document["dependencies"]["shell_project"]
+			.as_inline_table()
+			.expect("project dependency should be an inline table");
+
+		assert_eq!(
+			dependency.get("package").and_then(toml_edit::Value::as_str),
+			Some("shell-project")
+		);
+		assert_eq!(
+			dependency.get("path").and_then(toml_edit::Value::as_str),
+			Some("/tmp/shell fixture/project \"quoted\"")
+		);
+		assert_eq!(
+			dependency
+				.get("features")
+				.and_then(toml_edit::Value::as_array)
+				.and_then(|features| features.get(0))
+				.and_then(toml_edit::Value::as_str),
+			Some("commands-shell")
+		);
+	}
+
+	#[tokio::test]
+	async fn worker_interrupts_a_running_evaluation_and_joins_on_drop() {
+		let state = Arc::new((Mutex::new(InterruptProbeState::default()), Condvar::new()));
+		let mut worker = EvaluatorWorker::spawn(Box::new(InterruptibleEvaluator {
+			state: Arc::clone(&state),
+		}));
+		let interrupt = worker.interrupt();
+		let trigger_state = Arc::clone(&state);
+		let trigger = thread::spawn(move || {
+			let (state, changed) = &*trigger_state;
+			let mut state = state.lock().expect("interrupt probe state lock");
+			while !state.started {
+				state = changed.wait(state).expect("interrupt probe state wait");
+			}
+			drop(state);
+			interrupt
+				.interrupt()
+				.expect("running evaluation should be interruptible");
+		});
+
+		let result = worker.evaluate("long_running()").await;
+		trigger.join().expect("interrupt trigger should join");
+		assert_eq!(
+			result,
+			Err(EvaluationFailure::ProcessExited(
+				"probe evaluator interrupted".to_string()
+			))
+		);
+		drop(worker);
+
+		let state = state.0.lock().expect("interrupt probe state lock");
+		assert_eq!(state.interrupt_count, 2);
+		assert!(state.dropped);
+	}
+
+	#[test]
+	fn worker_factory_constructs_evaluator_on_the_owned_thread() {
+		let caller_thread = thread::current().id();
+		let (created, observed) = std::sync::mpsc::channel();
+		let state = Arc::new((Mutex::new(InterruptProbeState::default()), Condvar::new()));
+
+		let (worker, warnings) = EvaluatorWorker::start_with({
+			let state = Arc::clone(&state);
+			move || {
+				let _ = created.send(thread::current().id());
+				Ok((
+					Box::new(InterruptibleEvaluator { state }) as Box<dyn BlockingShellEvaluator>,
+					vec!["worker warning".to_string()],
+				))
+			}
+		})
+		.expect("worker factory should start");
+
+		assert_ne!(
+			observed.recv().expect("creator thread should be observed"),
+			caller_thread
+		);
+		assert_eq!(warnings, ["worker warning"]);
+		drop(worker);
+	}
+
+	#[tokio::test]
+	async fn dropping_worker_with_a_queued_evaluation_interrupts_and_joins() {
+		let state = Arc::new((Mutex::new(InterruptProbeState::default()), Condvar::new()));
+		let mut worker = EvaluatorWorker::spawn(Box::new(InterruptibleEvaluator {
+			state: Arc::clone(&state),
+		}));
+		let mut evaluation = Box::pin(worker.evaluate("long_running()"));
+		let request_was_queued =
+			std::future::poll_fn(|context| match evaluation.as_mut().poll(context) {
+				Poll::Pending => Poll::Ready(true),
+				Poll::Ready(_) => Poll::Ready(false),
+			})
+			.await;
+		assert!(request_was_queued);
+		drop(evaluation);
+
+		let (finished, completion) = std::sync::mpsc::channel();
+		thread::spawn(move || {
+			drop(worker);
+			let _ = finished.send(());
+		});
+		completion
+			.recv_timeout(Duration::from_secs(2))
+			.expect("worker drop should interrupt queued work and join promptly");
+
+		let state = state.0.lock().expect("interrupt probe state lock");
+		assert_eq!(state.interrupt_count, 1);
+		assert!(state.dropped);
+	}
+
+	struct ShellFixture {
+		_directory: TempDir,
+		manifest_dir: PathBuf,
+		runtime_path: PathBuf,
+	}
+
+	impl ShellFixture {
+		fn create() -> Self {
+			let directory = Builder::new()
+				.prefix("shell-fixture")
+				.tempdir()
+				.expect("temporary fixture directory should be created");
+			let manifest_dir = directory.path().join("shell-project");
+			std::fs::create_dir_all(manifest_dir.join("src"))
+				.expect("fixture source directory should be created");
+			let manifest = "[package]\n\
+				 name = \"shell-project\"\n\
+				 version = \"0.1.0\"\n\
+				 edition = \"2024\"\n\
+				 \n\
+				 [features]\n\
+				 default = []\n\
+				 commands-shell = []\n";
+			std::fs::write(manifest_dir.join("Cargo.toml"), manifest)
+				.expect("fixture manifest should be written");
+			std::fs::write(
+				manifest_dir.join("src/lib.rs"),
+				r#"
+pub extern crate self as reinhardt;
+
+pub mod commands {
+	pub struct ShellEnvironment<S> {
+		settings: S,
+	}
+
+	impl<S> ShellEnvironment<S> {
+		pub async fn bootstrap(settings: S) -> std::io::Result<Self> {
+			Ok(Self { settings })
+		}
+
+		pub fn settings(&self) -> &S {
+			&self.settings
+		}
+
+		pub fn database(&self) -> String {
+			"database-ready".to_string()
+		}
+
+		pub fn di(&self) -> String {
+			"di-ready".to_string()
+		}
+	}
+}
+
+pub mod config {
+	#[cfg(feature = "commands-shell")]
+	pub mod shell {
+		pub use reinhardt as framework;
+
+		pub type ShellSettings = super::settings::Settings;
+		pub type ShellDatabase = String;
+		pub type ShellDi = String;
+		pub type ProjectShellEnvironment =
+			framework::commands::ShellEnvironment<ShellSettings>;
+	}
+
+	pub mod settings {
+		pub type Settings = String;
+
+		pub fn get_settings() -> Settings {
+			"settings-default".to_string()
+		}
+
+		pub fn get_shell_settings() -> Settings {
+			"settings-configured".to_string()
+		}
+	}
+}
+
+pub mod models {
+	pub struct InventoryItem;
+}
+"#,
+			)
+			.expect("fixture library should be written");
+			let runtime_path = build_test_runtime(directory.path());
+
+			Self {
+				_directory: directory,
+				manifest_dir,
+				runtime_path,
+			}
+		}
+
+		fn config(&self) -> ShellConfig {
+			ShellConfig::new(
+				"shell-project",
+				"shell_project",
+				&self.manifest_dir,
+				"shell_project::config::settings::get_shell_settings",
+				["inventory"],
+			)
+			.with_prelude(
+				"let project_prelude_loaded = \
+				 std::any::TypeId::of::<InventoryItem>() == \
+				 std::any::TypeId::of::<shell_project::models::InventoryItem>();\n\
+				 let counter = 40;\n\
+				 let retained = 41;",
+			)
+		}
+	}
+
+	fn build_test_runtime(directory: &Path) -> PathBuf {
+		let dependencies = std::env::current_exe()
+			.expect("current test executable should resolve")
+			.parent()
+			.expect("test executable should have a dependency directory")
+			.to_path_buf();
+		let mut evcxr_libraries = std::fs::read_dir(&dependencies)
+			.expect("test dependency directory should be readable")
+			.filter_map(Result::ok)
+			.map(|entry| entry.path())
+			.filter(|path| {
+				path.file_name()
+					.and_then(|name| name.to_str())
+					.is_some_and(|name| name.starts_with("libevcxr-") && name.ends_with(".rlib"))
+			})
+			.collect::<Vec<_>>();
+		evcxr_libraries.sort();
+		let evcxr_library = evcxr_libraries
+			.last()
+			.expect("compiled evcxr rlib should exist");
+		let runtime_source = directory.join("shell_evcxr_runtime.rs");
+		let runtime_path = directory.join("shell_evcxr_runtime");
+		std::fs::write(&runtime_source, "fn main() { evcxr::runtime_hook(); }\n")
+			.expect("test runtime source should be written");
+		let output = Command::new("rustc")
+			.arg("--edition=2024")
+			.arg(&runtime_source)
+			.arg("-L")
+			.arg(format!("dependency={}", dependencies.display()))
+			.arg("--extern")
+			.arg(format!("evcxr={}", evcxr_library.display()))
+			.arg("-o")
+			.arg(&runtime_path)
+			.output()
+			.expect("test runtime should compile");
+		assert!(
+			output.status.success(),
+			"test runtime compilation failed: {}",
+			String::from_utf8_lossy(&output.stderr)
+		);
+		runtime_path
+	}
+
+	struct ModelRegistryGuard {
+		previous: Vec<ModelInfo>,
+	}
+
+	impl ModelRegistryGuard {
+		fn with_inventory_item() -> Self {
+			let previous = global_model_registry().all();
+			global_model_registry().clear();
+			global_model_registry().register(ModelInfo {
+				app_label: "inventory".to_string(),
+				model_name: "InventoryItem".to_string(),
+				type_path: "shell_project::models::InventoryItem".to_string(),
+				table_name: "inventory_item".to_string(),
+			});
+			Self { previous }
+		}
+	}
+
+	impl Drop for ModelRegistryGuard {
+		fn drop(&mut self) {
+			global_model_registry().clear();
+			for model in self.previous.drain(..) {
+				global_model_registry().register(model);
+			}
+		}
+	}
+
+	struct EnvironmentVariableGuard {
+		name: &'static str,
+		previous: Option<std::ffi::OsString>,
+	}
+
+	impl EnvironmentVariableGuard {
+		fn set(name: &'static str, value: impl AsRef<std::ffi::OsStr>) -> Self {
+			let previous = std::env::var_os(name);
+			// SAFETY: Every real evaluator test is serialized under `shell_evcxr`.
+			unsafe {
+				std::env::set_var(name, value);
+			}
+			Self { name, previous }
+		}
+	}
+
+	impl Drop for EnvironmentVariableGuard {
+		fn drop(&mut self) {
+			// SAFETY: Every real evaluator test is serialized under `shell_evcxr`.
+			unsafe {
+				match self.previous.take() {
+					Some(value) => std::env::set_var(self.name, value),
+					None => std::env::remove_var(self.name),
+				}
+			}
+		}
+	}
+
+	fn new_evaluator(fixture: &ShellFixture) -> EvcxrEvaluator {
+		let validated = fixture
+			.config()
+			.validate()
+			.expect("fixture shell configuration should validate");
+		let evcxr_tmpdir = fixture._directory.path().join("evcxr");
+		std::fs::create_dir_all(&evcxr_tmpdir)
+			.expect("evcxr temporary directory should be created");
+		let _tmpdir = EnvironmentVariableGuard::set("EVCXR_TMPDIR", &evcxr_tmpdir);
+		let context = EvalContext::with_subprocess_command(Command::new(&fixture.runtime_path));
+		let (eval, outputs) = context.unwrap_or_else(|error| {
+			let artifacts = walkdir::WalkDir::new(&evcxr_tmpdir)
+				.into_iter()
+				.filter_map(Result::ok)
+				.map(|entry| entry.path().display().to_string())
+				.collect::<Vec<_>>()
+				.join("\n");
+			panic!(
+				"real evcxr context should start with the test runtime: {error}\n\
+				 generated artifacts:\n{artifacts}"
+			);
+		});
+		let (evaluator, warnings) =
+			EvcxrEvaluator::bootstrap_with_context(&validated, eval, outputs)
+				.expect("real evcxr evaluator should bootstrap the project");
+		assert_eq!(warnings, Vec::<String>::new());
+		evaluator
+	}
+
+	const REAL_EVALUATOR_PROBE: &str = "shell::evaluator::tests::real_evaluator_subprocess_probe";
+	const PROCESS_EXIT_PROBE: &str = "shell::evaluator::tests::process_exit_subprocess_probe";
+	const LARGE_OUTPUT_PROBE: &str = "shell::evaluator::tests::large_output_subprocess_probe";
+
+	struct ProbeChild {
+		child: Child,
+		stdout_reader: Option<JoinHandle<std::io::Result<Vec<u8>>>>,
+		stderr_reader: Option<JoinHandle<std::io::Result<Vec<u8>>>>,
+		reaped: bool,
+	}
+
+	impl ProbeChild {
+		fn spawn(command: &mut Command) -> Self {
+			let mut child = command.spawn().expect("real evaluator probe should start");
+			let mut stdout = child
+				.stdout
+				.take()
+				.expect("probe stdout should be configured as piped");
+			let stdout_reader = thread::spawn(move || {
+				let mut output = Vec::new();
+				stdout.read_to_end(&mut output)?;
+				Ok(output)
+			});
+			let mut stderr = child
+				.stderr
+				.take()
+				.expect("probe stderr should be configured as piped");
+			let stderr_reader = thread::spawn(move || {
+				let mut output = Vec::new();
+				stderr.read_to_end(&mut output)?;
+				Ok(output)
+			});
+			Self {
+				child,
+				stdout_reader: Some(stdout_reader),
+				stderr_reader: Some(stderr_reader),
+				reaped: false,
+			}
+		}
+
+		fn wait_with_output(mut self, probe: &str, timeout: Duration) -> Result<Output, String> {
+			let deadline = Instant::now() + timeout;
+			let mut lifecycle_error = None;
+			loop {
+				match self.child.try_wait() {
+					Ok(Some(_)) => break,
+					Ok(None) if Instant::now() < deadline => {
+						thread::sleep(Duration::from_millis(50));
+					}
+					Ok(None) => {
+						let kill_result = self.child.kill();
+						lifecycle_error = Some(format!(
+							"real evaluator probe `{probe}` timed out after {timeout:?}; \
+							 kill result: {kill_result:?}"
+						));
+						break;
+					}
+					Err(error) => {
+						let kill_result = self.child.kill();
+						lifecycle_error = Some(format!(
+							"real evaluator probe `{probe}` status failed: {error}; \
+							 kill result: {kill_result:?}"
+						));
+						break;
+					}
+				}
+			}
+
+			let status = self.child.wait();
+			self.reaped = status.is_ok();
+			let stdout = join_probe_reader(self.stdout_reader.take(), "stdout");
+			let stderr = join_probe_reader(self.stderr_reader.take(), "stderr");
+			let stdout = stdout.map_err(|error| format_probe_failure(error, &[], &[]))?;
+			let stderr = stderr.map_err(|error| format_probe_failure(error, &stdout, &[]))?;
+			if let Some(error) = lifecycle_error {
+				return Err(format_probe_failure(error, &stdout, &stderr));
+			}
+			let status = status
+				.map_err(|error| format_probe_failure(error.to_string(), &stdout, &stderr))?;
+			Ok(Output {
+				status,
+				stdout,
+				stderr,
+			})
+		}
+	}
+
+	impl Drop for ProbeChild {
+		fn drop(&mut self) {
+			if !self.reaped {
+				if self.child.try_wait().ok().flatten().is_none() {
+					let _ = self.child.kill();
+				}
+				let _ = self.child.wait();
+			}
+			if let Some(reader) = self.stdout_reader.take() {
+				let _ = reader.join();
+			}
+			if let Some(reader) = self.stderr_reader.take() {
+				let _ = reader.join();
+			}
+		}
+	}
+
+	fn join_probe_reader(
+		reader: Option<JoinHandle<std::io::Result<Vec<u8>>>>,
+		stream: &str,
+	) -> Result<Vec<u8>, String> {
+		reader
+			.ok_or_else(|| format!("probe {stream} reader was already consumed"))?
+			.join()
+			.map_err(|_| format!("probe {stream} reader panicked"))?
+			.map_err(|error| format!("probe {stream} read failed: {error}"))
+	}
+
+	fn format_probe_failure(
+		message: impl std::fmt::Display,
+		stdout: &[u8],
+		stderr: &[u8],
+	) -> String {
+		format!(
+			"{message}\nstdout:\n{}\nstderr:\n{}",
+			String::from_utf8_lossy(stdout),
+			String::from_utf8_lossy(stderr)
+		)
+	}
+
+	fn run_probe(probe: &str, timeout: Duration) {
+		let mut command =
+			Command::new(std::env::current_exe().expect("current test executable should resolve"));
+		command
+			.arg("--ignored")
+			.arg("--exact")
+			.arg(probe)
+			.arg("--no-capture")
+			.env("CARGO_BUILD_BUILD_DIR", "target")
+			.env("CARGO_BUILD_JOBS", "1")
+			.stdout(std::process::Stdio::piped())
+			.stderr(std::process::Stdio::piped());
+		let output = ProbeChild::spawn(&mut command)
+			.wait_with_output(probe, timeout)
+			.unwrap_or_else(|error| panic!("{error}"));
+
+		assert!(
+			output.status.success(),
+			"real evaluator probe failed:\nstdout:\n{}\nstderr:\n{}",
+			String::from_utf8_lossy(&output.stdout),
+			String::from_utf8_lossy(&output.stderr)
+		);
+	}
+
+	#[test]
+	#[serial(shell_evcxr)]
+	fn real_evaluator_probes_run_sequentially_with_timeouts() {
+		run_probe(REAL_EVALUATOR_PROBE, Duration::from_secs(240));
+		run_probe(PROCESS_EXIT_PROBE, Duration::from_secs(240));
+	}
+
+	#[test]
+	fn probe_runner_drains_output_larger_than_pipe_capacity() {
+		run_probe(LARGE_OUTPUT_PROBE, Duration::from_secs(3));
+	}
+
+	#[ignore = "subprocess-only pipe-capacity probe"]
+	#[test]
+	fn large_output_subprocess_probe() {
+		use std::io::Write;
+
+		let output = vec![b'x'; 8 * 1024 * 1024];
+		std::io::stdout()
+			.write_all(&output)
+			.expect("large stdout payload should be written");
+		std::io::stderr()
+			.write_all(&output)
+			.expect("large stderr payload should be written");
+	}
+
+	#[ignore = "subprocess-only real evaluator probe"]
+	#[test]
+	fn real_evaluator_subprocess_probe() {
+		crate::shell_runtime_hook();
+		assert_eq!(
+			std::env::var("CARGO_BUILD_BUILD_DIR").as_deref(),
+			Ok("target")
+		);
+		let fixture = ShellFixture::create();
+		let _registry = ModelRegistryGuard::with_inventory_item();
+		let mut evaluator = new_evaluator(&fixture);
+
+		let bindings = evaluator
+			.evaluate(
+				"settings.as_str() == \"settings-configured\" \
+				 && db == \"database-ready\" \
+				 && di == \"di-ready\" \
+				 && project_prelude_loaded",
+			)
+			.expect("bootstrap bindings should evaluate");
+		assert_eq!(bindings.value.as_deref(), Some("true"));
+
+		let asynchronous = evaluator
+			.evaluate(
+				"tokio::time::sleep(std::time::Duration::from_millis(1)).await;\n\
+				 counter + 2",
+			)
+			.expect("top-level await should evaluate");
+		assert_eq!(asynchronous.value.as_deref(), Some("42"));
+
+		let compilation = evaluator
+			.evaluate("missing_name + 1")
+			.expect_err("unknown binding should fail compilation");
+		assert!(matches!(compilation, EvaluationFailure::Compilation(_)));
+		let retained = evaluator
+			.evaluate("retained + 1")
+			.expect("prior binding should remain after compilation failure");
+		assert_eq!(retained.value.as_deref(), Some("42"));
+
+		let runtime_failure = evaluator
+			.evaluate(r#"Err::<(), _>(std::io::Error::other("runtime-probe"))?"#)
+			.expect_err("top-level question mark should report a runtime failure");
+		match runtime_failure {
+			EvaluationFailure::Runtime(message) => {
+				assert!(message.contains("runtime-probe"));
+			}
+			other => panic!("expected runtime failure, got {other:?}"),
+		}
+		let retained = evaluator
+			.evaluate("retained + 1")
+			.expect("prior binding should remain after runtime failure");
+		assert_eq!(retained.value.as_deref(), Some("42"));
+
+		let output = evaluator
+			.evaluate(
+				r#"println!("stdout-probe");
+				   eprintln!("stderr-probe");
+				   42"#,
+			)
+			.expect("output-producing source should evaluate");
+		assert_eq!(output.stdout, "stdout-probe\n");
+		assert!(output.stderr.contains("stderr-probe"));
+		assert!(!output.stdout.contains("__REINHARDT_SHELL_OUTPUT_BOUNDARY_"));
+		assert!(!output.stderr.contains("__REINHARDT_SHELL_OUTPUT_BOUNDARY_"));
+		assert_eq!(output.value.as_deref(), Some("42"));
+		let quiet = evaluator
+			.evaluate("retained + 1")
+			.expect("boundary markers should preserve later values");
+		assert_eq!(quiet.stdout, "");
+		assert_eq!(quiet.stderr, "");
+		assert_eq!(quiet.value.as_deref(), Some("42"));
+		let leaked_sentinels = evaluator
+			.context
+			.variables_and_types()
+			.filter(|(name, _)| name.starts_with("__reinhardt_shell_evaluation_"))
+			.map(|(name, _)| name.to_string())
+			.collect::<Vec<_>>();
+		assert_eq!(leaked_sentinels, Vec::<String>::new());
+
+		let source = r#"let credential = "not-for-diagnostics"; credential.no_such_method()"#;
+		let diagnostic = evaluator
+			.evaluate(source)
+			.expect_err("invalid method should fail compilation");
+		let EvaluationFailure::Compilation(diagnostic) = diagnostic else {
+			panic!("expected compilation failure");
+		};
+		assert!(!diagnostic.contains(source));
+		assert!(!diagnostic.contains("not-for-diagnostics"));
+
+		let panic = evaluator
+			.evaluate(r#"panic!("panic-classification-probe")"#)
+			.expect_err("panic should make the evaluator unusable");
+		match panic {
+			EvaluationFailure::Panic(message) => {
+				assert!(message.contains("panic-classification-probe"));
+			}
+			other => panic!("expected panic classification, got {other:?}"),
+		}
+	}
+
+	#[ignore = "subprocess-only process exit probe"]
+	#[tokio::test]
+	async fn process_exit_subprocess_probe() {
+		crate::shell_runtime_hook();
+		assert_eq!(
+			std::env::var("CARGO_BUILD_BUILD_DIR").as_deref(),
+			Ok("target")
+		);
+		let fixture = ShellFixture::create();
+		let _registry = ModelRegistryGuard::with_inventory_item();
+		let started_path = fixture._directory.path().join("interrupt-started");
+		let source = format!(
+			"std::fs::write({:?}, \"started\").unwrap();\n\
+			 tokio::time::sleep(std::time::Duration::from_secs(30)).await;",
+			started_path
+		);
+		let mut interrupted_worker = EvaluatorWorker::spawn(Box::new(new_evaluator(&fixture)));
+		let interrupt = interrupted_worker.interrupt();
+		let interrupt_started_path = started_path.clone();
+		let interrupter = thread::spawn(move || {
+			let deadline = Instant::now() + Duration::from_secs(30);
+			while !interrupt_started_path.is_file() {
+				assert!(
+					Instant::now() < deadline,
+					"real evaluator did not start the interrupt probe"
+				);
+				thread::sleep(Duration::from_millis(20));
+			}
+			interrupt
+				.interrupt()
+				.expect("running real evaluator should be interrupted");
+		});
+		let interrupted = interrupted_worker
+			.evaluate(&source)
+			.await
+			.expect_err("interrupted real evaluator should terminate");
+		interrupter
+			.join()
+			.expect("real evaluator interrupter should join");
+		assert!(matches!(
+			interrupted,
+			EvaluationFailure::ProcessExited(_) | EvaluationFailure::Panic(_)
+		));
+		drop(interrupted_worker);
+
+		let validated = fixture
+			.config()
+			.validate()
+			.expect("real factory configuration should validate");
+		let evcxr_tmpdir = fixture._directory.path().join("factory-evcxr");
+		std::fs::create_dir_all(&evcxr_tmpdir).expect("factory evcxr directory should be created");
+		let _tmpdir = EnvironmentVariableGuard::set("EVCXR_TMPDIR", &evcxr_tmpdir);
+		let runtime_path = fixture.runtime_path.clone();
+		let (mut replacement, warnings) = EvaluatorWorker::start_with(move || {
+			let context = EvalContext::with_subprocess_command(Command::new(runtime_path));
+			let (eval, outputs) = context.map_err(super::classify_startup_error)?;
+			let (evaluator, warnings) =
+				EvcxrEvaluator::bootstrap_with_context(&validated, eval, outputs)?;
+			Ok((
+				Box::new(evaluator) as Box<dyn BlockingShellEvaluator>,
+				warnings,
+			))
+		})
+		.expect("real evaluator should bootstrap inside its owned worker");
+		assert_eq!(warnings, Vec::<String>::new());
+		let retained = replacement
+			.evaluate("retained + 1")
+			.await
+			.expect("replacement should replay the project prelude");
+		assert_eq!(retained.value.as_deref(), Some("42"));
+		drop(replacement);
+
+		let mut process_exit_evaluator = EvaluatorWorker::spawn(Box::new(new_evaluator(&fixture)));
+		let process_exit = process_exit_evaluator
+			.evaluate("std::process::exit(7)")
+			.await
+			.expect_err("process exit should make the evaluator unusable");
+		assert!(matches!(process_exit, EvaluationFailure::ProcessExited(_)));
+	}
+}

@@ -534,7 +534,7 @@ fn analyze_chain(
 		edits.push(TextEdit::method_suffix(
 			method,
 			if is_outer {
-				Some(".auto_server_fns_in_crate(module_path!(), concat!(env!(\"CARGO_MANIFEST_DIR\"), \"@\", env!(\"CARGO_PKG_NAME\"), \"@\", env!(\"CARGO_PKG_VERSION\")), Some(env!(\"CARGO_CRATE_NAME\")))")
+				Some(".auto_server_fns_in_crate(module_path!(), concat!(env!(\"CARGO_MANIFEST_DIR\"), \"@\", env!(\"CARGO_PKG_NAME\"), \"@\", env!(\"CARGO_PKG_VERSION\")), if cfg!(test) { Some(concat!(env!(\"CARGO_CRATE_NAME\"), \"@test\")) } else if let Some(binary_name) = option_env!(\"CARGO_BIN_NAME\") { Some(binary_name) } else { Some(concat!(env!(\"CARGO_CRATE_NAME\"), \"@lib\")) })")
 			} else {
 				None
 			},
@@ -543,7 +543,7 @@ fn analyze_chain(
 	if outer.method != "server_fn" {
 		edits.push(TextEdit::insert_after_call(
 			outer,
-			".auto_server_fns_in_crate(module_path!(), concat!(env!(\"CARGO_MANIFEST_DIR\"), \"@\", env!(\"CARGO_PKG_NAME\"), \"@\", env!(\"CARGO_PKG_VERSION\")), Some(env!(\"CARGO_CRATE_NAME\")))",
+			".auto_server_fns_in_crate(module_path!(), concat!(env!(\"CARGO_MANIFEST_DIR\"), \"@\", env!(\"CARGO_PKG_NAME\"), \"@\", env!(\"CARGO_PKG_VERSION\")), if cfg!(test) { Some(concat!(env!(\"CARGO_CRATE_NAME\"), \"@test\")) } else if let Some(binary_name) = option_env!(\"CARGO_BIN_NAME\") { Some(binary_name) } else { Some(concat!(env!(\"CARGO_CRATE_NAME\"), \"@lib\")) })",
 		));
 	}
 	ChainOutcome::Safe { bindings, edits }
@@ -623,6 +623,9 @@ fn resolve_marker(
 			None,
 		)
 	} else if let Some(imported) = imports.bindings.get(&first) {
+		if imports.absolute_bindings.contains(&first) {
+			return None;
+		}
 		if imported.len() != 1 {
 			return None;
 		}
@@ -742,6 +745,7 @@ fn remove_server_fn_calls(expression: Expr) -> Expr {
 #[derive(Default)]
 struct ImportIndex {
 	bindings: BTreeMap<String, Vec<ModulePath>>,
+	absolute_bindings: BTreeSet<String>,
 	has_glob: bool,
 }
 
@@ -760,6 +764,9 @@ impl ImportIndex {
 				&mut index.has_glob,
 			);
 			for leaf in leaves {
+				if item_use.leading_colon.is_some() {
+					index.absolute_bindings.insert(leaf.binding.clone());
+				}
 				let Some(canonical) = normalize_components(&leaf.path, module, true) else {
 					continue;
 				};
@@ -1104,6 +1111,12 @@ pub(crate) fn apply_text_edits(source: &str, edits: &[TextEdit]) -> Option<Strin
 			}
 			TextEditKind::MethodSuffix => {
 				start = find_method_dot(source, start)?;
+				if source
+					.get(start..end)
+					.is_some_and(|method| method.contains("//") || method.contains("/*"))
+				{
+					return None;
+				}
 				if edit.replacement.is_empty() {
 					start = include_line_prefix(source, start);
 				}
@@ -1161,7 +1174,12 @@ fn find_method_dot(source: &str, method_start: usize) -> Option<usize> {
 fn include_line_prefix(source: &str, dot: usize) -> usize {
 	let line_start = line_start_byte(source, dot);
 	if source[line_start..dot].trim().is_empty() && line_start > 0 {
-		line_start - 1
+		let newline = line_start - 1;
+		if source.as_bytes().get(newline.saturating_sub(1)) == Some(&b'\r') {
+			newline - 1
+		} else {
+			newline
+		}
 	} else {
 		dot
 	}

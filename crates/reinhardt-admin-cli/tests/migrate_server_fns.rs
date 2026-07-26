@@ -255,7 +255,7 @@ async fn local_status() {}
 
 pub fn server_url_patterns() -> ServerRouter {
 	ServerRouter::new()
-		.auto_server_fns_in_crate(module_path!(), concat!(env!("CARGO_MANIFEST_DIR"), "@", env!("CARGO_PKG_NAME"), "@", env!("CARGO_PKG_VERSION")), Some(env!("CARGO_CRATE_NAME")))
+		.auto_server_fns_in_crate(module_path!(), concat!(env!("CARGO_MANIFEST_DIR"), "@", env!("CARGO_PKG_NAME"), "@", env!("CARGO_PKG_VERSION")), if cfg!(test) { Some(concat!(env!("CARGO_CRATE_NAME"), "@test")) } else if let Some(binary_name) = option_env!("CARGO_BIN_NAME") { Some(binary_name) } else { Some(concat!(env!("CARGO_CRATE_NAME"), "@lib")) })
 }
 "#
 	);
@@ -436,7 +436,7 @@ async fn ready() {}
 pub fn server_url_patterns() {
 	router()
 		.server_fn(ready::marker)
-		.auto_server_fns_in_crate(module_path!(), concat!(env!("CARGO_MANIFEST_DIR"), "@", env!("CARGO_PKG_NAME"), "@", env!("CARGO_PKG_VERSION")), Some(env!("CARGO_CRATE_NAME")))
+		.auto_server_fns_in_crate(module_path!(), concat!(env!("CARGO_MANIFEST_DIR"), "@", env!("CARGO_PKG_NAME"), "@", env!("CARGO_PKG_VERSION")), if cfg!(test) { Some(concat!(env!("CARGO_CRATE_NAME"), "@test")) } else if let Some(binary_name) = option_env!("CARGO_BIN_NAME") { Some(binary_name) } else { Some(concat!(env!("CARGO_CRATE_NAME"), "@lib")) })
 }
 "#,
 		)],
@@ -498,7 +498,7 @@ use reinhardt::ServerRouter;
 
 pub fn server_url_patterns() -> ServerRouter {
 	ServerRouter::new()
-		.auto_server_fns_in_crate(module_path!(), concat!(env!("CARGO_MANIFEST_DIR"), "@", env!("CARGO_PKG_NAME"), "@", env!("CARGO_PKG_VERSION")), Some(env!("CARGO_CRATE_NAME")))
+		.auto_server_fns_in_crate(module_path!(), concat!(env!("CARGO_MANIFEST_DIR"), "@", env!("CARGO_PKG_NAME"), "@", env!("CARGO_PKG_VERSION")), if cfg!(test) { Some(concat!(env!("CARGO_CRATE_NAME"), "@test")) } else if let Some(binary_name) = option_env!("CARGO_BIN_NAME") { Some(binary_name) } else { Some(concat!(env!("CARGO_CRATE_NAME"), "@lib")) })
 }
 "#
 	);
@@ -719,7 +719,7 @@ macro_rules! keep_marker {
 pub fn server_url_patterns() -> ServerRouter {
 	keep_marker!(vote::marker);
 	ServerRouter::new()
-		.auto_server_fns_in_crate(module_path!(), concat!(env!("CARGO_MANIFEST_DIR"), "@", env!("CARGO_PKG_NAME"), "@", env!("CARGO_PKG_VERSION")), Some(env!("CARGO_CRATE_NAME")))
+		.auto_server_fns_in_crate(module_path!(), concat!(env!("CARGO_MANIFEST_DIR"), "@", env!("CARGO_PKG_NAME"), "@", env!("CARGO_PKG_VERSION")), if cfg!(test) { Some(concat!(env!("CARGO_CRATE_NAME"), "@test")) } else if let Some(binary_name) = option_env!("CARGO_BIN_NAME") { Some(binary_name) } else { Some(concat!(env!("CARGO_CRATE_NAME"), "@lib")) })
 }
 "#
 	);
@@ -752,27 +752,15 @@ pub fn server_url_patterns() -> ServerRouter {
 	ServerRouter::new()
 		.server_fn(vote::marker)
 }
-"#,
+		"#,
 	);
+	let before = fs::read(&router).expect("read router with an attribute macro");
 
 	let output = run_migrate(fixture.path(), true);
 
 	assert_success(&output);
-	assert_eq!(
-		fs::read_to_string(router).expect("read rewritten router"),
-		r#"use crate::apps::polls::server_fn::vote;
-use reinhardt::pages::server_fn::ServerFnRouterExt;
-use reinhardt::ServerRouter;
-
-#[keep_marker(vote::marker)]
-fn retained_attribute() {}
-
-pub fn server_url_patterns() -> ServerRouter {
-	ServerRouter::new()
-		.auto_server_fns_in_crate(module_path!(), concat!(env!("CARGO_MANIFEST_DIR"), "@", env!("CARGO_PKG_NAME"), "@", env!("CARGO_PKG_VERSION")), Some(env!("CARGO_CRATE_NAME")))
-}
-"#
-	);
+	assert!(stdout(&output).starts_with("skipped mixed registration:"));
+	assert_eq!(fs::read(router).expect("read skipped router"), before);
 }
 
 #[test]
@@ -812,7 +800,7 @@ use reinhardt::ServerRouter;
 
 pub fn server_url_patterns() -> ServerRouter {
 	ServerRouter::new()
-		.auto_server_fns_in_crate(module_path!(), concat!(env!("CARGO_MANIFEST_DIR"), "@", env!("CARGO_PKG_NAME"), "@", env!("CARGO_PKG_VERSION")), Some(env!("CARGO_CRATE_NAME")))
+		.auto_server_fns_in_crate(module_path!(), concat!(env!("CARGO_MANIFEST_DIR"), "@", env!("CARGO_PKG_NAME"), "@", env!("CARGO_PKG_VERSION")), if cfg!(test) { Some(concat!(env!("CARGO_CRATE_NAME"), "@test")) } else if let Some(binary_name) = option_env!("CARGO_BIN_NAME") { Some(binary_name) } else { Some(concat!(env!("CARGO_CRATE_NAME"), "@lib")) })
 }
 "#
 	);
@@ -969,7 +957,9 @@ pub fn server_url_patterns() -> ServerRouter {
 			),
 			(
 				"tests/support/child.rs",
-				r#"#[server_fn]
+				r#"use reinhardt::server_fn;
+
+#[server_fn]
 pub async fn status() {}
 "#,
 			),
@@ -994,7 +984,7 @@ mod child;
 
 pub fn server_url_patterns() -> ServerRouter {
 	router()
-		.auto_server_fns_in_crate(module_path!(), concat!(env!("CARGO_MANIFEST_DIR"), "@", env!("CARGO_PKG_NAME"), "@", env!("CARGO_PKG_VERSION")), Some(env!("CARGO_CRATE_NAME")))
+		.auto_server_fns_in_crate(module_path!(), concat!(env!("CARGO_MANIFEST_DIR"), "@", env!("CARGO_PKG_NAME"), "@", env!("CARGO_PKG_VERSION")), if cfg!(test) { Some(concat!(env!("CARGO_CRATE_NAME"), "@test")) } else if let Some(binary_name) = option_env!("CARGO_BIN_NAME") { Some(binary_name) } else { Some(concat!(env!("CARGO_CRATE_NAME"), "@lib")) })
 }
 "#
 	);
@@ -1027,7 +1017,9 @@ pub fn server_url_patterns() -> ServerRouter {
 			("tests/support/lib.rs", "pub mod child;\n"),
 			(
 				"tests/support/lib/child.rs",
-				r#"#[server_fn]
+				r#"use reinhardt::server_fn;
+
+#[server_fn]
 pub async fn status() {}
 "#,
 			),
@@ -1052,7 +1044,7 @@ mod support;
 
 pub fn server_url_patterns() -> ServerRouter {
 	router()
-		.auto_server_fns_in_crate(module_path!(), concat!(env!("CARGO_MANIFEST_DIR"), "@", env!("CARGO_PKG_NAME"), "@", env!("CARGO_PKG_VERSION")), Some(env!("CARGO_CRATE_NAME")))
+		.auto_server_fns_in_crate(module_path!(), concat!(env!("CARGO_MANIFEST_DIR"), "@", env!("CARGO_PKG_NAME"), "@", env!("CARGO_PKG_VERSION")), if cfg!(test) { Some(concat!(env!("CARGO_CRATE_NAME"), "@test")) } else if let Some(binary_name) = option_env!("CARGO_BIN_NAME") { Some(binary_name) } else { Some(concat!(env!("CARGO_CRATE_NAME"), "@lib")) })
 }
 "#
 	);
@@ -1381,6 +1373,7 @@ pub fn server_url_patterns() {
 	router()
 		.server_fn(status::marker)
 }
+
 "#,
 		)],
 	);
@@ -1396,6 +1389,131 @@ pub fn server_url_patterns() {
 		stdout(&output)
 	);
 	assert_eq!(fs::read(source).expect("read skipped source"), before);
+}
+
+#[test]
+fn arbitrary_function_attribute_skips_the_migration() {
+	let fixture = prepare_project(
+		"unexpanded_function_attribute",
+		"[lib]\npath = \"src/lib.rs\"\n",
+		&[(
+			"src/lib.rs",
+			r#"use reinhardt::{app_config, server_fn, ServerRouter};
+
+#[app_config(name = "root", label = "root")]
+pub struct RootConfig;
+
+#[server_fn]
+pub async fn status() {}
+
+#[generate_endpoint]
+pub fn generated_endpoint_source() {}
+
+pub fn server_url_patterns() -> ServerRouter {
+	router()
+		.server_fn(status::marker)
+}
+"#,
+		)],
+	);
+	let source = fixture.path().join("src/lib.rs");
+	let before = fs::read(&source).expect("read source");
+
+	let output = run_migrate(fixture.path(), true);
+
+	assert_success(&output);
+	assert!(stdout(&output).starts_with("skipped mixed registration:"));
+	assert_eq!(fs::read(source).expect("read skipped source"), before);
+}
+
+#[test]
+fn absolute_marker_import_is_left_unresolved() {
+	let fixture = prepare_project(
+		"absolute_marker_import",
+		"[lib]\npath = \"src/lib.rs\"\n",
+		&[(
+			"src/lib.rs",
+			r#"use ::dependency::vote;
+use reinhardt::pages::server_fn::ServerFnRouterExt;
+use reinhardt::{app_config, server_fn, ServerRouter};
+
+#[app_config(name = "root", label = "root")]
+pub struct RootConfig;
+
+pub mod dependency {
+	pub mod vote {
+		use super::super::server_fn;
+
+		#[server_fn]
+		pub async fn endpoint() {}
+	}
+}
+
+pub fn server_url_patterns() -> ServerRouter {
+	router()
+		.server_fn(vote::marker)
+}
+"#,
+		)],
+	);
+	let source = fixture.path().join("src/lib.rs");
+	let before = fs::read(&source).expect("read source");
+
+	let output = run_migrate(fixture.path(), true);
+
+	assert_success(&output);
+	assert!(stdout(&output).starts_with("skipped unresolved marker `vote`:"));
+	assert_eq!(fs::read(source).expect("read skipped source"), before);
+}
+
+#[test]
+fn marker_call_comments_skip_the_migration() {
+	let fixture = prepare_fixture("safe");
+	let router = router_path(fixture.path());
+	write_file(
+		fixture.path(),
+		"src/apps/polls/urls/server_router.rs",
+		r#"use crate::apps::polls::server_fn::{get_questions, vote};
+use reinhardt::pages::server_fn::ServerFnRouterExt;
+use reinhardt::ServerRouter;
+
+pub fn server_url_patterns() -> ServerRouter {
+	ServerRouter::new()
+		.server_fn(/* Keep this registration rationale. */ get_questions::marker)
+		.server_fn(vote::marker)
+}
+"#,
+	);
+	let before = fs::read(&router).expect("read router");
+
+	let output = run_migrate(fixture.path(), true);
+
+	assert_success(&output);
+	assert_eq!(
+		stdout(&output),
+		"skipped migration because text edits could not be applied: src/apps/polls/urls/server_router.rs\n"
+	);
+	assert_eq!(fs::read(router).expect("read skipped router"), before);
+}
+
+#[test]
+fn crlf_marker_removal_preserves_complete_newlines() {
+	let fixture = prepare_fixture("safe");
+	let router = router_path(fixture.path());
+	write_file(
+		fixture.path(),
+		"src/apps/polls/urls/server_router.rs",
+		"use crate::apps::polls::server_fn::{get_questions, vote};\r\nuse reinhardt::pages::server_fn::ServerFnRouterExt;\r\nuse reinhardt::ServerRouter;\r\n\r\npub fn server_url_patterns() -> ServerRouter {\r\n\tServerRouter::new()\r\n\t\t.server_fn(get_questions::marker)\r\n\t\t.server_fn(vote::marker)\r\n}\r\n",
+	);
+
+	let output = run_migrate(fixture.path(), true);
+
+	assert_success(&output);
+	let rewritten = fs::read_to_string(router).expect("read rewritten router");
+	assert!(rewritten.contains("auto_server_fns_in_crate"));
+	assert!(!rewritten.contains("\r\r\n"));
+	assert!(rewritten.lines().all(|line| !line.contains('\r')));
+	assert!(rewritten.contains("\r\n"));
 }
 
 #[test]

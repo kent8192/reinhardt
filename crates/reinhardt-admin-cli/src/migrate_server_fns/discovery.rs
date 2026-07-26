@@ -163,6 +163,12 @@ impl Scanner {
 		let mut visible_attribute_aliases = inherited_attribute_aliases.clone();
 		visible_attribute_aliases.extend(attribute_aliases.clone());
 		for item in items {
+			if has_unresolved_item_attribute(item_attributes(item), &attribute_aliases) {
+				// An attribute macro may generate an automatically registered server
+				// function that source-only discovery cannot inspect.
+				self.record_incomplete_server_fn_coverage(target, module);
+				continue;
+			}
 			match item {
 				Item::Macro(item_macro) if !item_macro.mac.path.is_ident("macro_rules") => {
 					// An item macro may expand to an automatically registered server function.
@@ -360,9 +366,11 @@ fn has_unknown_server_fn_attribute(
 			return false;
 		};
 		if segments.len() == 1 {
-			return aliases
-				.get(&last.ident.to_string())
-				.is_some_and(|source| source == "__reinhardt_unknown_server_fn__");
+			return last.ident == "server_fn"
+				&& !is_reinhardt_attribute(attribute, "server_fn", aliases)
+				|| aliases
+					.get(&last.ident.to_string())
+					.is_some_and(|source| source == "__reinhardt_unknown_server_fn__");
 		}
 		last.ident == "server_fn" && !is_reinhardt_attribute(attribute, "server_fn", aliases)
 	})
@@ -378,10 +386,15 @@ fn is_reinhardt_attribute(
 		return false;
 	};
 	if segments.len() == 1 {
-		return last.ident == expected
-			|| aliases
-				.get(&last.ident.to_string())
-				.is_some_and(|resolved| resolved == expected);
+		if expected == "app_config" {
+			return last.ident == expected
+				|| aliases
+					.get(&last.ident.to_string())
+					.is_some_and(|resolved| resolved == expected);
+		}
+		return aliases
+			.get(&last.ident.to_string())
+			.is_some_and(|resolved| resolved == expected);
 	}
 	last.ident == expected
 		&& segments.first().is_some_and(|segment| {
@@ -560,6 +573,67 @@ fn has_unresolved_module_attribute(attributes: &[Attribute]) -> bool {
 			Some("cfg" | "cfg_attr" | "path" | "doc" | "allow" | "warn" | "deny" | "forbid")
 		)
 	})
+}
+
+fn has_unresolved_item_attribute(
+	attributes: &[Attribute],
+	aliases: &BTreeMap<String, String>,
+) -> bool {
+	attributes.iter().any(|attribute| {
+		if is_reinhardt_attribute(attribute, "server_fn", aliases)
+			|| is_reinhardt_attribute(attribute, "app_config", aliases)
+		{
+			return false;
+		}
+		!matches!(
+			attribute
+				.path()
+				.get_ident()
+				.map(|ident| ident.to_string())
+				.as_deref(),
+			Some(
+				"allow"
+					| "automatically_derived"
+					| "cfg" | "cfg_attr"
+					| "cold" | "deny"
+					| "deprecated" | "derive"
+					| "doc" | "export_name"
+					| "forbid" | "inline"
+					| "link" | "link_name"
+					| "link_section"
+					| "macro_export"
+					| "must_use" | "no_mangle"
+					| "non_exhaustive"
+					| "path" | "repr"
+					| "should_panic"
+					| "test" | "track_caller"
+					| "unsafe" | "used"
+					| "warn"
+			)
+		)
+	})
+}
+
+fn item_attributes(item: &Item) -> &[Attribute] {
+	match item {
+		Item::Const(item) => &item.attrs,
+		Item::Enum(item) => &item.attrs,
+		Item::ExternCrate(item) => &item.attrs,
+		Item::Fn(item) => &item.attrs,
+		Item::ForeignMod(item) => &item.attrs,
+		Item::Impl(item) => &item.attrs,
+		Item::Macro(item) => &item.attrs,
+		Item::Mod(item) => &item.attrs,
+		Item::Static(item) => &item.attrs,
+		Item::Struct(item) => &item.attrs,
+		Item::Trait(item) => &item.attrs,
+		Item::TraitAlias(item) => &item.attrs,
+		Item::Type(item) => &item.attrs,
+		Item::Union(item) => &item.attrs,
+		Item::Use(item) => &item.attrs,
+		Item::Verbatim(_) => &[],
+		_ => &[],
+	}
 }
 
 fn has_cfg_attr_server_fn(attributes: &[Attribute], aliases: &BTreeMap<String, String>) -> bool {

@@ -41,6 +41,19 @@ pub trait FormModel: Model + Clone + Send + Sync {
 	fn build_from_payload<P: ModelFormPolicy>(data: &Self::Data<P>)
 	-> Result<Self, ModelFormError>;
 
+	/// Builds a validation-only candidate while allowing one trusted deferred field.
+	///
+	/// Inline formsets use this before a newly created parent has a generated
+	/// primary key. Implementations must use the deferred field only to construct
+	/// the candidate for validation; persistence must still require its real value.
+	fn build_from_payload_with_deferred_required_field<P: ModelFormPolicy>(
+		data: &Self::Data<P>,
+		deferred_field: &str,
+	) -> Result<Self, ModelFormError> {
+		let _ = deferred_field;
+		Self::build_from_payload(data)
+	}
+
 	/// Applies supplied payload values to an existing candidate.
 	fn apply_payload<P: ModelFormPolicy>(
 		&mut self,
@@ -384,6 +397,36 @@ where
 			self.form
 				.add_error(descriptor.name, "This field is required.");
 			valid = false;
+		}
+		if !valid {
+			return false;
+		}
+		if let Err(error) = self.clean_payload() {
+			self.record_validation_error(&error);
+			return false;
+		}
+		let mut candidate = match &self.instance {
+			Some(instance) => instance.clone(),
+			None => {
+				match T::build_from_payload_with_deferred_required_field(&self.data, deferred_field)
+				{
+					Ok(candidate) => candidate,
+					Err(error) => {
+						self.record_validation_error(&error);
+						return false;
+					}
+				}
+			}
+		};
+		if let Err(error) = candidate.apply_payload(&self.data) {
+			self.record_validation_error(&error);
+			return false;
+		}
+		if let Some(validator) = &self.model_validator
+			&& let Err(errors) = validator(&candidate)
+		{
+			self.record_validation_error(&ModelFormError::ModelValidation { errors });
+			return false;
 		}
 		valid
 	}

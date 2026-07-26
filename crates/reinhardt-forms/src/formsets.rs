@@ -674,6 +674,21 @@ mod tests {
 
 	#[model(
 		app_label = "forms",
+		table_name = "advanced_formset_required_child_models",
+		form = true,
+		info = false
+	)]
+	#[derive(Clone, Deserialize, Serialize)]
+	struct RequiredChildModel {
+		#[field(primary_key = true)]
+		id: Option<i64>,
+		parent_id: i64,
+		#[field(max_length = 1_000)]
+		content: String,
+	}
+
+	#[model(
+		app_label = "forms",
 		table_name = "advanced_formset_uuid_parents",
 		form = true,
 		info = false
@@ -868,6 +883,33 @@ mod tests {
 		let saved_child = formset.child_forms()[0].instance().unwrap();
 		assert_eq!(saved_child.parent_id, Some(1));
 		assert_eq!(executor.fetch_one_calls, 2);
+	}
+
+	#[test]
+	fn test_inline_formset_validates_deferred_child_model_before_parent_save() {
+		let parent = TestModel {
+			id: None,
+			name: "parent".to_owned(),
+			email: "parent@example.com".to_owned(),
+		};
+		let mut formset = InlineFormSet::<TestModel, RequiredChildModel>::for_create(
+			parent,
+			"parent_id".to_owned(),
+		);
+		let mut data = RequiredChildModelModelFormData::<AllEditableModelFields>::empty();
+		data.set_content("invalid child".to_owned())
+			.expect("child content should be accepted");
+		formset.add_child_form(
+			ModelForm::from_payload(data)
+				.with_model_validator(|_| Err(vec!["child model validation failed".to_owned()])),
+		);
+		let mut executor = FormsetExecutor::new(Vec::<Result<Row, Error>>::new());
+
+		let error = tokio_test::block_on(formset.save(&mut executor))
+			.expect_err("deferred child validator should reject before saving the parent");
+
+		assert!(matches!(error, ModelFormError::ModelValidation { .. }));
+		assert_eq!(executor.fetch_one_calls, 0);
 	}
 
 	#[test]

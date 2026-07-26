@@ -8,7 +8,7 @@ mod field_factory;
 
 pub use error::ModelFormError;
 
-use crate::Form;
+use crate::{ALL_FIELDS_KEY, Form};
 use reinhardt_core::model_form::{
 	AllEditableModelFields, ModelFormPayload, ModelFormPayloadError, ModelFormPolicy,
 	ModelFormSchema,
@@ -248,7 +248,42 @@ where
 
 	/// Returns whether the current payload can produce a valid model candidate.
 	pub fn is_valid(&mut self) -> bool {
-		self.build_instance().is_ok()
+		match self.build_instance() {
+			Ok(_) => true,
+			Err(error) => {
+				self.record_validation_error(&error);
+				false
+			}
+		}
+	}
+
+	fn record_validation_error(&mut self, error: &ModelFormError) {
+		match error {
+			ModelFormError::ForbiddenInput { field }
+			| ModelFormError::MissingModelField { field } => {
+				self.form.add_error(*field, error.to_string());
+			}
+			ModelFormError::FieldValidation { errors } => {
+				for (field, messages) in errors {
+					for message in messages {
+						let already_recorded = self
+							.form
+							.errors()
+							.get(field)
+							.is_some_and(|existing| existing.contains(message));
+						if !already_recorded {
+							self.form.add_error(field, message);
+						}
+					}
+				}
+			}
+			ModelFormError::ModelValidation { errors } => {
+				for message in errors {
+					self.form.add_error(ALL_FIELDS_KEY, message);
+				}
+			}
+			ModelFormError::Persistence { .. } => {}
+		}
 	}
 
 	/// Persists a validated candidate through the caller-owned executor.
@@ -757,6 +792,23 @@ mod tests {
 			error,
 			ModelFormError::ForbiddenInput { field: "owner_id" }
 		));
+	}
+
+	#[test]
+	fn is_valid_records_structured_model_errors_on_the_form() {
+		let data: QuestionModelFormData<TitleOnly> = serde_json::from_value(json!({
+			"title": "Question",
+			"owner_id": 7,
+		}))
+		.unwrap();
+
+		let mut form = ModelForm::<Question, TitleOnly>::from_payload(data);
+
+		assert!(!form.is_valid());
+		assert_eq!(
+			form.form().errors().get("owner_id"),
+			Some(&vec!["model form field 'owner_id' is forbidden".to_owned()])
+		);
 	}
 
 	#[test]

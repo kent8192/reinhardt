@@ -2287,9 +2287,21 @@ fn generate_model_form_support(
 		.zip(&field_types)
 		.map(|(field_name, field_ty)| {
 			let setter_name = Ident::new(&format!("set_{}", field_name), field_name.span());
+			let field_literal = LitStr::new(&field_name.to_string(), field_name.span());
 			quote! {
-				pub fn #setter_name(&mut self, value: #field_ty) {
+				pub fn #setter_name(
+					&mut self,
+					value: #field_ty,
+				) -> ::core::result::Result<(), #core_crate::model_form::ModelFormPayloadError> {
+					if !<P as #core_crate::model_form::ModelFormPolicy>::allows(#field_literal) {
+						return ::core::result::Result::Err(
+							#core_crate::model_form::ModelFormPayloadError::ForbiddenField {
+								field: #field_literal.to_owned(),
+							},
+						);
+					}
 					self.#field_name = ::core::option::Option::Some(value);
+					::core::result::Result::Ok(())
 				}
 			}
 		});

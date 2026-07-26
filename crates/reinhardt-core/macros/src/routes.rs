@@ -146,17 +146,6 @@ fn is_raw_request_parameter(pat_type: &syn::PatType) -> bool {
 	if is_request_type(&pat_type.ty) {
 		return true;
 	}
-	if let (Pat::Ident(pattern), Type::Path(type_path)) = (&*pat_type.pat, &*pat_type.ty)
-		&& pattern.ident == "request"
-		&& type_path.path.segments.len() == 1
-		&& type_path
-			.path
-			.segments
-			.last()
-			.is_some_and(|segment| segment.ident == "Body" && segment.arguments.is_none())
-	{
-		return true;
-	}
 	let Type::Path(type_path) = &*pat_type.ty else {
 		return true;
 	};
@@ -518,17 +507,24 @@ fn generate_wrapper_with_both(
 
 	// Generate injection calls. Runtime trait dispatch resolves `InjectableType`
 	// wrappers from the registry and falls back to normal `Injectable` values.
+	let inject_temps: Vec<syn::Ident> = inject_params
+		.iter()
+		.enumerate()
+		.map(|(index, _)| {
+			syn::Ident::new(&format!("__reinhardt_inject_{index}"), Span::mixed_site())
+		})
+		.collect();
 	let injection_calls: Vec<_> = inject_params
 		.iter()
-		.map(|param| {
-			let pat = &param.pat;
+		.zip(inject_temps.iter())
+		.map(|(param, temp)| {
 			let ty = &param.ty;
 			let use_cache = param.options.use_cache;
 			let resolve_expr =
 				generate_inject_resolver_expr(&di_crate, ty, quote! { &__di_ctx }, use_cache);
 
 			quote! {
-				let #pat: #ty = #resolve_expr
+				let #temp: #ty = #resolve_expr
 					.map_err(#core_crate::exception::Error::from)?;
 			}
 		})
@@ -619,7 +615,7 @@ fn generate_wrapper_with_both(
 		.iter()
 		.any(|arg| matches!(arg, FnArg::Typed(pat_type) if is_raw_request_parameter(pat_type)));
 	let ordered_call_args = if has_request_param {
-		let mut inject_args = inject_params.iter();
+		let mut inject_args = inject_temps.iter();
 		let mut extractor_args = extractor_args.iter();
 		Some(
 			original_fn
@@ -631,11 +627,10 @@ fn generate_wrapper_with_both(
 						return None;
 					};
 					if pat_type.attrs.iter().any(is_inject_attr) {
-						let pat = &inject_args
+						let temp = inject_args
 							.next()
-							.expect("each injected argument must have detected metadata")
-							.pat;
-						Some(quote! { #pat })
+							.expect("each injected argument must have a generated binding");
+						Some(quote! { #temp })
 					} else if is_raw_request_parameter(pat_type) {
 						Some(quote! { #request_binding })
 					} else {
@@ -653,7 +648,7 @@ fn generate_wrapper_with_both(
 
 	// Preserve the established extractor-then-injection order when no raw
 	// Request is present.
-	let inject_args: Vec<_> = inject_params.iter().map(|param| &param.pat).collect();
+	let inject_args = &inject_temps;
 	let handler_call = if let Some(call_args) = ordered_call_args {
 		quote! { #original_fn_name(#(#call_args),*).await }
 	} else {
@@ -1577,14 +1572,14 @@ mod url_resolver_tests {
 	}
 
 	#[rstest]
-	fn route_call_preserves_request_aliased_as_body() {
+	fn route_call_extracts_body_when_its_binding_is_request() {
 		let input: ItemFn = syn::parse_quote! {
 			async fn handler(request: Body, Json(payload): Json<Payload>) -> String { String::new() }
 		};
 		let extractors = detect_extractors(&input.sig.inputs);
 		let inject_params = detect_inject_params(&input.sig.inputs);
 
-		assert_eq!(extractors.len(), 1);
+		assert_eq!(extractors.len(), 2);
 		let (_, wrapper) = generate_wrapper_with_both(
 			&input,
 			&extractors,
@@ -1602,7 +1597,35 @@ mod url_resolver_tests {
 			+ ") . await".len();
 		assert_eq!(
 			&call[..call_end],
-			"handler_original (__reinhardt_request , __reinhardt_extractor_0) . await"
+			"handler_original (__reinhardt_extractor_0 , __reinhardt_extractor_1 ,) . await"
+		);
+	}
+
+	#[rstest]
+	fn route_call_forwards_mutable_injected_parameter_as_a_value() {
+		let input: ItemFn = syn::parse_quote! {
+			async fn handler(request: reinhardt_http::Request, #[inject] mut service: Service) -> String { String::new() }
+		};
+		let extractors = detect_extractors(&input.sig.inputs);
+		let inject_params = detect_inject_params(&input.sig.inputs);
+		let (_, wrapper) = generate_wrapper_with_both(
+			&input,
+			&extractors,
+			&inject_params,
+			&RouteOptions::default(),
+		);
+		let generated = wrapper.to_string();
+		let call_start = generated
+			.find("handler_original")
+			.expect("generated wrapper should call the renamed handler");
+		let call = &generated[call_start..];
+		let call_end = call
+			.find(") . await")
+			.expect("generated handler call should be awaited")
+			+ ") . await".len();
+		assert_eq!(
+			&call[..call_end],
+			"handler_original (__reinhardt_request , __reinhardt_inject_0) . await"
 		);
 	}
 

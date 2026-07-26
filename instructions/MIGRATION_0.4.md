@@ -45,6 +45,7 @@ pub fn get_shell_config() -> ShellConfig {
 		"my_project::config::settings::get_settings",
 		InstalledApp::all_labels().iter().copied(),
 	)
+	.with_dependency_features(["commands-shell"])
 }
 ```
 

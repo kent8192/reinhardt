@@ -809,10 +809,7 @@ fn source_with_commit_sentinel(source: &str, sentinel: &str) -> String {
 	let mut found_inner_prefix = false;
 	loop {
 		let rest = &source[prefix_end..];
-		let whitespace = rest.len()
-			- rest
-				.trim_start_matches([' ', '\t', '\n', '\u{000B}', '\u{000C}', '\r'])
-				.len();
+		let whitespace = rest.len() - rest.trim_start_matches(is_rust_whitespace).len();
 		let candidate = &rest[whitespace..];
 		let item_end = if candidate.starts_with("#![") {
 			complete_inner_attribute(candidate)
@@ -866,8 +863,7 @@ fn ordinary_comment_before_inner_prefix(source: &str) -> Option<usize> {
 		};
 		consumed += comment_end;
 		let following = &source[consumed..];
-		let whitespace =
-			following.len() - following.trim_start_matches([' ', '\t', '\r', '\n']).len();
+		let whitespace = following.len() - following.trim_start_matches(is_rust_whitespace).len();
 		let next = &following[whitespace..];
 		if next.starts_with("#![") || next.starts_with("//!") || next.starts_with("/*!") {
 			return Some(consumed);
@@ -877,6 +873,23 @@ fn ordinary_comment_before_inner_prefix(source: &str) -> Option<usize> {
 		}
 		consumed += whitespace;
 	}
+}
+
+fn is_rust_whitespace(character: char) -> bool {
+	matches!(
+		character,
+		'\u{0009}'
+			| '\u{000A}'
+			| '\u{000B}'
+			| '\u{000C}'
+			| '\u{000D}'
+			| '\u{0020}'
+			| '\u{0085}'
+			| '\u{200E}'
+			| '\u{200F}'
+			| '\u{2028}'
+			| '\u{2029}'
+	)
 }
 
 fn complete_nested_block_comment(source: &str) -> Option<usize> {
@@ -1460,6 +1473,20 @@ mod tests {
 	}
 
 	#[test]
+	fn commit_sentinel_follows_inner_attributes_after_unicode_rust_whitespace() {
+		let whitespace = "\u{0085}\u{200E}\u{200F}\u{2028}\u{2029}";
+		let source = format!("{whitespace}#![allow(dead_code)]\nlet value = 1;");
+		let rendered = source_with_commit_sentinel(&source, "__commit");
+
+		assert_eq!(
+			rendered,
+			format!(
+				"{whitespace}#![allow(dead_code)]\nlet __commit: ::std::string::String = ::std::string::String::new();\nlet value = 1;"
+			)
+		);
+	}
+
+	#[test]
 	fn commit_sentinel_follows_nested_inner_block_docs() {
 		let source = "/*! outer /* nested */ still outer */\nlet value = 1;";
 		let rendered = source_with_commit_sentinel(source, "__commit");
@@ -1489,6 +1516,19 @@ mod tests {
 		assert_eq!(
 			rendered,
 			"/* outer /* nested */ tail */\n#![allow(unused)]\nlet __commit: ::std::string::String = ::std::string::String::new();\nlet value = 1;"
+		);
+	}
+
+	#[test]
+	fn commit_sentinel_follows_inner_attributes_after_comments_and_rust_whitespace() {
+		let rendered = source_with_commit_sentinel(
+			"// explanation\n\u{000B}\u{000C}\u{0085}#![allow(dead_code)]\nlet value = 1;",
+			"__commit",
+		);
+
+		assert_eq!(
+			rendered,
+			"// explanation\n\u{000B}\u{000C}\u{0085}#![allow(dead_code)]\nlet __commit: ::std::string::String = ::std::string::String::new();\nlet value = 1;"
 		);
 	}
 

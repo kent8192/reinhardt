@@ -8,7 +8,8 @@ mod field_factory;
 
 pub use error::ModelFormError;
 
-use crate::{ALL_FIELDS_KEY, Form};
+use crate::Form;
+use crate::form::ALL_FIELDS_KEY;
 use reinhardt_core::model_form::{
 	AllEditableModelFields, ModelFormPayload, ModelFormPayloadError, ModelFormPolicy,
 	ModelFormSchema,

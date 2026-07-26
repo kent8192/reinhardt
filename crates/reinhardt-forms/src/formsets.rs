@@ -148,8 +148,15 @@ impl<P: FormModel, C: FormModel> InlineFormSet<P, C> {
 		let mut all_valid = true;
 
 		for child_form in &mut self.child_forms {
-			if !child_form.is_valid() {
-				all_valid = false;
+			match child_form.build_instance() {
+				Ok(_) => {}
+				Err(ModelFormError::MissingModelField { field }) if field == self.fk_field => {
+					// The trusted parent key is assigned after the create parent has been saved.
+				}
+				Err(_) => {
+					child_form.is_valid();
+					all_valid = false;
+				}
 			}
 		}
 
@@ -790,6 +797,7 @@ mod tests {
 			Ok(child_model_row(2, 1, "Child content")),
 		]);
 
+		assert!(formset.is_valid());
 		tokio_test::block_on(formset.save(&mut executor)).unwrap();
 
 		let saved_child = formset.child_forms()[0].instance().unwrap();

@@ -164,6 +164,7 @@ impl EvcxrEvaluator {
 		)
 	}
 
+	#[cfg(test)]
 	fn bootstrap_with_context(
 		config: &ValidatedShellConfig,
 		eval: EvalContext,
@@ -172,6 +173,7 @@ impl EvcxrEvaluator {
 		Self::bootstrap_with_context_and_process_group(config, eval, outputs, false)
 	}
 
+	#[cfg(test)]
 	fn bootstrap_with_context_and_process_group(
 		config: &ValidatedShellConfig,
 		eval: EvalContext,
@@ -1136,14 +1138,6 @@ fn is_panic_output(stderr: &str) -> bool {
 		line.starts_with("thread '") && line.contains(" panicked at ")
 			|| line.contains("panic in a function that cannot unwind")
 	})
-}
-
-fn nonempty_diagnostic(stderr: &str, fallback: &str) -> String {
-	if stderr.trim().is_empty() {
-		fallback.to_string()
-	} else {
-		stderr.trim_end().to_string()
-	}
 }
 
 fn classify_boundary_error(error: Error, stderr: &str) -> EvaluationFailure {

@@ -18,8 +18,10 @@ pub use environment::ShellEnvironment;
 
 #[cfg(feature = "shell")]
 use evaluator::EvcxrEvaluatorFactory;
+#[cfg(all(test, feature = "shell"))]
+use session::{EvaluatorFactory, ShellInput};
 #[cfg(feature = "shell")]
-use session::{EvaluatorFactory, ShellInput, ShellOutput, ShellSession};
+use session::{ShellOutput, ShellSession};
 #[cfg(feature = "shell")]
 use terminal::TerminalInput;
 
@@ -74,6 +76,7 @@ pub(crate) async fn run(config: &ShellConfig, command: Option<String>) -> crate:
 	}
 }
 
+#[cfg(feature = "shell")]
 async fn start_session(
 	factory: EvcxrEvaluatorFactory,
 	startup_interrupt: evaluator::StartupInterrupt,
@@ -91,7 +94,7 @@ async fn start_session(
 	}
 }
 
-#[cfg(feature = "shell")]
+#[cfg(all(test, feature = "shell"))]
 async fn run_session<F, W, I>(
 	command: Option<String>,
 	factory: F,

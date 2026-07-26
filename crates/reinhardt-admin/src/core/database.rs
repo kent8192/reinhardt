@@ -1942,7 +1942,7 @@ mod tests {
 		);
 	}
 
-	#[test]
+	#[rstest]
 	fn test_filter_value_to_sea_value_preserves_timestamp_binding() {
 		// Arrange
 		let timestamp = chrono::DateTime::parse_from_rfc3339("2026-07-26T00:00:00Z")
@@ -1960,7 +1960,7 @@ mod tests {
 		);
 	}
 
-	#[test]
+	#[rstest]
 	fn test_filter_value_to_sea_value_preserves_uuid_binding() {
 		// Arrange
 		let uuid =

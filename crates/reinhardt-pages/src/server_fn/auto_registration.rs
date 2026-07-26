@@ -18,6 +18,8 @@ pub struct ServerFnInventoryEntry {
 	pub module_path: &'static str,
 	/// Crate instance defining this server function.
 	pub crate_id: &'static str,
+	/// Binary target identity, when this entry is compiled for a binary target.
+	pub target_id: Option<&'static str>,
 	/// HTTP endpoint path.
 	pub path: &'static str,
 	/// Route name.
@@ -45,9 +47,22 @@ impl ServerFnInventoryEntry {
 		name: &'static str,
 		register: ServerFnRegister,
 	) -> Self {
+		Self::new_in_target(module_path, crate_id, None, path, name, register)
+	}
+
+	/// Creates a server function inventory entry for one compiled target instance.
+	pub const fn new_in_target(
+		module_path: &'static str,
+		crate_id: &'static str,
+		target_id: Option<&'static str>,
+		path: &'static str,
+		name: &'static str,
+		register: ServerFnRegister,
+	) -> Self {
 		Self {
 			module_path,
 			crate_id,
+			target_id,
 			path,
 			name,
 			register,
@@ -163,20 +178,26 @@ pub(crate) fn collect_auto_server_fns_in_crate(
 	router: ServerRouter,
 	caller_module: &str,
 	caller_crate: &str,
+	caller_target: Option<&str>,
 ) -> ServerRouter {
 	let apps = iter_app_module_registrations().copied().collect::<Vec<_>>();
 	let entries = inventory::iter::<ServerFnInventoryEntry>()
 		.copied()
 		.collect::<Vec<_>>();
-	let selected =
-		match select_entries_for_app_in_crate(&apps, &entries, caller_module, caller_crate) {
-			Ok(entries) => entries,
-			Err(errors) => {
-				return errors.into_iter().fold(router, |router, error| {
-					router.with_configuration_error(error.to_string())
-				});
-			}
-		};
+	let selected = match select_entries_for_app_in_crate(
+		&apps,
+		&entries,
+		caller_module,
+		caller_crate,
+		caller_target,
+	) {
+		Ok(entries) => entries,
+		Err(errors) => {
+			return errors.into_iter().fold(router, |router, error| {
+				router.with_configuration_error(error.to_string())
+			});
+		}
+	};
 	selected
 		.into_iter()
 		.fold(router, |router, entry| (entry.register)(router))
@@ -187,19 +208,22 @@ fn select_entries_for_app_in_crate<'a>(
 	entries: &'a [ServerFnInventoryEntry],
 	caller_module: &str,
 	caller_crate: &str,
+	caller_target: Option<&str>,
 ) -> Result<Vec<&'a ServerFnInventoryEntry>, Vec<ServerFnInventoryError>> {
-	let caller =
-		reinhardt_apps::resolve_app_module_owner_in_crate(apps.iter(), caller_module, caller_crate)
-			.map_err(|error| vec![resolution_error(caller_module, None, error, true)])?;
+	let caller = reinhardt_apps::resolve_app_module_owner_in_target(
+		apps.iter(),
+		caller_module,
+		caller_crate,
+		caller_target,
+	)
+	.map_err(|error| vec![resolution_error(caller_module, None, error, true)])?;
 	let mut selected = Vec::new();
 	for entry in entries {
-		match reinhardt_apps::resolve_app_module_owner_in_crate(
-			apps.iter(),
-			entry.module_path,
-			entry.crate_id,
-		) {
+		match resolve_entry_owner(apps, entry) {
 			Ok(owner)
-				if owner.module_path == caller.module_path && owner.crate_id == caller.crate_id =>
+				if owner.module_path == caller.module_path
+					&& owner.crate_id == caller.crate_id
+					&& owner.target_id == caller.target_id =>
 			{
 				selected.push(entry)
 			}
@@ -275,11 +299,7 @@ fn select_entries_for_app<'a>(
 
 	let mut owned_entries = Vec::new();
 	for entry in entries {
-		match reinhardt_apps::resolve_app_module_owner_in_crate(
-			apps.iter(),
-			entry.module_path,
-			entry.crate_id,
-		) {
+		match resolve_entry_owner(apps, entry) {
 			Ok(owner) => owned_entries.push((entry, owner)),
 			Err(error) => errors.push(resolution_error(
 				entry.module_path,
@@ -315,11 +335,7 @@ fn validate_entries(
 	let mut errors = Vec::new();
 	let mut owned_entries = Vec::new();
 	for entry in entries {
-		match reinhardt_apps::resolve_app_module_owner_in_crate(
-			apps.iter(),
-			entry.module_path,
-			entry.crate_id,
-		) {
+		match resolve_entry_owner(apps, entry) {
 			Ok(owner) => owned_entries.push((entry, owner)),
 			Err(error) => errors.push(resolution_error(
 				entry.module_path,
@@ -335,6 +351,22 @@ fn validate_entries(
 		Ok(())
 	} else {
 		Err(errors)
+	}
+}
+
+fn resolve_entry_owner<'a>(
+	apps: &'a [AppModuleRegistration],
+	entry: &ServerFnInventoryEntry,
+) -> Result<&'a AppModuleRegistration, AppModuleResolutionError> {
+	if entry.crate_id.is_empty() {
+		resolve_app_module_owner(apps.iter(), entry.module_path)
+	} else {
+		reinhardt_apps::resolve_app_module_owner_in_target(
+			apps.iter(),
+			entry.module_path,
+			entry.crate_id,
+			entry.target_id,
+		)
 	}
 }
 
@@ -368,13 +400,14 @@ fn resolution_error(
 fn duplicate_errors(
 	owned_entries: &[(&ServerFnInventoryEntry, &AppModuleRegistration)],
 ) -> Vec<ServerFnInventoryError> {
-	let mut paths = BTreeMap::<(&str, &str, &str, &str), Vec<&str>>::new();
-	let mut names = BTreeMap::<(&str, &str, &str, &str), Vec<&str>>::new();
+	let mut paths = BTreeMap::<(&str, &str, Option<&str>, &str, &str), Vec<&str>>::new();
+	let mut names = BTreeMap::<(&str, &str, Option<&str>, &str, &str), Vec<&str>>::new();
 	for (entry, owner) in owned_entries {
 		paths
 			.entry((
 				owner.module_path,
 				owner.crate_id,
+				owner.target_id,
 				owner.app_label,
 				entry.path,
 			))
@@ -384,6 +417,7 @@ fn duplicate_errors(
 			.entry((
 				owner.module_path,
 				owner.crate_id,
+				owner.target_id,
 				owner.app_label,
 				entry.name,
 			))
@@ -392,7 +426,7 @@ fn duplicate_errors(
 	}
 
 	let mut errors = Vec::new();
-	for ((_module_path, _crate_id, app_label, path), mut modules) in paths {
+	for ((_module_path, _crate_id, _target_id, app_label, path), mut modules) in paths {
 		if modules.len() > 1 {
 			modules.sort_unstable();
 			errors.push(ServerFnInventoryError::DuplicatePath {
@@ -402,7 +436,7 @@ fn duplicate_errors(
 			});
 		}
 	}
-	for ((_module_path, _crate_id, app_label, name), mut modules) in names {
+	for ((_module_path, _crate_id, _target_id, app_label, name), mut modules) in names {
 		if modules.len() > 1 {
 			modules.sort_unstable();
 			errors.push(ServerFnInventoryError::DuplicateName {
@@ -427,7 +461,7 @@ fn sort_entries(entries: &mut Vec<&ServerFnInventoryEntry>) {
 mod tests {
 	use super::{
 		ServerFnInventoryEntry, ServerFnInventoryError, collect_auto_server_fns_from_entries,
-		select_entries_for_app, sort_entries,
+		select_entries_for_app, select_entries_for_app_in_crate, sort_entries, validate_entries,
 	};
 	use bytes::Bytes;
 	use reinhardt_apps::AppModuleRegistration;
@@ -446,6 +480,22 @@ mod tests {
 		name: &'static str,
 	) -> ServerFnInventoryEntry {
 		ServerFnInventoryEntry::new(module_path, path, name, passthrough)
+	}
+
+	fn target_entry(
+		module_path: &'static str,
+		target_id: Option<&'static str>,
+		path: &'static str,
+		name: &'static str,
+	) -> ServerFnInventoryEntry {
+		ServerFnInventoryEntry::new_in_target(
+			module_path,
+			"demo-crate",
+			target_id,
+			path,
+			name,
+			passthrough,
+		)
 	}
 
 	fn passthrough(
@@ -519,6 +569,64 @@ mod tests {
 			selected.iter().map(|entry| entry.path).collect::<Vec<_>>(),
 			["/api/first"]
 		);
+	}
+
+	#[test]
+	fn selects_entries_only_from_the_callers_compiled_target() {
+		let apps = [
+			AppModuleRegistration::new_in_target("polls", "demo::apps::polls", "demo-crate", None),
+			AppModuleRegistration::new_in_target(
+				"polls",
+				"demo::apps::polls",
+				"demo-crate",
+				Some("demo"),
+			),
+		];
+		let entries = [
+			target_entry(
+				"demo::apps::polls::server_fn",
+				None,
+				"/api/library",
+				"library",
+			),
+			target_entry(
+				"demo::apps::polls::server_fn",
+				Some("demo"),
+				"/api/binary",
+				"binary",
+			),
+		];
+
+		let selected = select_entries_for_app_in_crate(
+			&apps,
+			&entries,
+			"demo::apps::polls::urls::server_router",
+			"demo-crate",
+			Some("demo"),
+		)
+		.expect("the binary target should resolve independently");
+
+		assert_eq!(
+			selected.iter().map(|entry| entry.path).collect::<Vec<_>>(),
+			["/api/binary"]
+		);
+	}
+
+	#[test]
+	fn accepts_legacy_crate_agnostic_inventory_entries() {
+		let apps = [AppModuleRegistration::new_in_target(
+			"polls",
+			"demo::apps::polls",
+			"demo-crate",
+			None,
+		)];
+		let entries = [test_entry(
+			"demo::apps::polls::server_fn",
+			"/api/legacy",
+			"legacy",
+		)];
+
+		assert_eq!(validate_entries(&apps, &entries), Ok(()));
 	}
 
 	#[test]

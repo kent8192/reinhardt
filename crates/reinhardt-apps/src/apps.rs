@@ -1085,6 +1085,8 @@ pub struct AppModuleRegistration {
 	pub module_path: &'static str,
 	/// Crate instance that contributed this registration.
 	pub crate_id: &'static str,
+	/// Binary target identity, when this registration is compiled for a binary target.
+	pub target_id: Option<&'static str>,
 }
 
 #[cfg(native)]
@@ -1100,10 +1102,21 @@ impl AppModuleRegistration {
 		module_path: &'static str,
 		crate_id: &'static str,
 	) -> Self {
+		Self::new_in_target(app_label, module_path, crate_id, None)
+	}
+
+	/// Creates an application registration for one compiled target instance.
+	pub const fn new_in_target(
+		app_label: &'static str,
+		module_path: &'static str,
+		crate_id: &'static str,
+		target_id: Option<&'static str>,
+	) -> Self {
 		Self {
 			app_label,
 			module_path,
 			crate_id,
+			target_id,
 		}
 	}
 }
@@ -1172,10 +1185,21 @@ pub fn resolve_app_module_owner_in_crate<'a>(
 	module_path: &str,
 	crate_id: &str,
 ) -> Result<&'a AppModuleRegistration, AppModuleResolutionError> {
+	resolve_app_module_owner_in_target(registrations, module_path, crate_id, None)
+}
+
+/// Resolves an owning application within one compiled target instance.
+#[cfg(native)]
+pub fn resolve_app_module_owner_in_target<'a>(
+	registrations: impl IntoIterator<Item = &'a AppModuleRegistration>,
+	module_path: &str,
+	crate_id: &str,
+	target_id: Option<&str>,
+) -> Result<&'a AppModuleRegistration, AppModuleResolutionError> {
 	resolve_app_module_owner(
-		registrations
-			.into_iter()
-			.filter(|registration| registration.crate_id == crate_id),
+		registrations.into_iter().filter(|registration| {
+			registration.crate_id == crate_id && registration.target_id == target_id
+		}),
 		module_path,
 	)
 }

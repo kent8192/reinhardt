@@ -247,12 +247,19 @@ async fn startproject_pages_from_embedded_only() {
 			"generated pages build.rs must declare cfg({cfg}) for Rust 2024 check-cfg:\n{build_rs}"
 		);
 	}
-	for removed_cfg in ["wasm", "native"] {
+	for removed_cfg in ["wasm"] {
 		assert!(
 			!build_rs.contains(&format!("cfg({removed_cfg})")),
 			"generated pages build.rs must not declare the removed cfg({removed_cfg}) alias:\n{build_rs}"
 		);
 	}
+	assert!(
+		build_rs.contains("cargo::rustc-check-cfg=cfg(native)")
+			&& build_rs.contains(
+				"native: { not(all(target_family = \"wasm\", target_os = \"unknown\")) }"
+			),
+		"generated pages build.rs must declare and define the native cfg alias:\n{build_rs}"
+	);
 	assert!(
 		cargo_toml.contains("[workspace]") && cargo_toml.contains("members = ["),
 		"generated pages Cargo.toml must be a nested-workspace-safe root:\n{cargo_toml}"

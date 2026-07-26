@@ -239,7 +239,7 @@ async fn local_status() {}
 
 pub fn server_url_patterns() -> ServerRouter {
 	ServerRouter::new()
-		.auto_server_fns_in_crate(module_path!(), concat!(env!("CARGO_MANIFEST_DIR"), "@", env!("CARGO_PKG_NAME"), "@", env!("CARGO_PKG_VERSION")))
+		.auto_server_fns_in_crate(module_path!(), concat!(env!("CARGO_MANIFEST_DIR"), "@", env!("CARGO_PKG_NAME"), "@", env!("CARGO_PKG_VERSION")), option_env!("CARGO_BIN_NAME"))
 }
 "#
 	);
@@ -376,7 +376,7 @@ async fn ready() {}
 pub fn server_url_patterns() {
 	router()
 		.server_fn(ready::marker)
-		.auto_server_fns_in_crate(module_path!(), concat!(env!("CARGO_MANIFEST_DIR"), "@", env!("CARGO_PKG_NAME"), "@", env!("CARGO_PKG_VERSION")))
+		.auto_server_fns_in_crate(module_path!(), concat!(env!("CARGO_MANIFEST_DIR"), "@", env!("CARGO_PKG_NAME"), "@", env!("CARGO_PKG_VERSION")), option_env!("CARGO_BIN_NAME"))
 }
 "#,
 		)],
@@ -434,7 +434,7 @@ use reinhardt::ServerRouter;
 
 pub fn server_url_patterns() -> ServerRouter {
 	ServerRouter::new()
-		.auto_server_fns_in_crate(module_path!(), concat!(env!("CARGO_MANIFEST_DIR"), "@", env!("CARGO_PKG_NAME"), "@", env!("CARGO_PKG_VERSION")))
+		.auto_server_fns_in_crate(module_path!(), concat!(env!("CARGO_MANIFEST_DIR"), "@", env!("CARGO_PKG_NAME"), "@", env!("CARGO_PKG_VERSION")), option_env!("CARGO_BIN_NAME"))
 }
 "#
 	);
@@ -655,7 +655,7 @@ macro_rules! keep_marker {
 pub fn server_url_patterns() -> ServerRouter {
 	keep_marker!(vote::marker);
 	ServerRouter::new()
-		.auto_server_fns_in_crate(module_path!(), concat!(env!("CARGO_MANIFEST_DIR"), "@", env!("CARGO_PKG_NAME"), "@", env!("CARGO_PKG_VERSION")))
+		.auto_server_fns_in_crate(module_path!(), concat!(env!("CARGO_MANIFEST_DIR"), "@", env!("CARGO_PKG_NAME"), "@", env!("CARGO_PKG_VERSION")), option_env!("CARGO_BIN_NAME"))
 }
 "#
 	);
@@ -705,7 +705,7 @@ fn retained_attribute() {}
 
 pub fn server_url_patterns() -> ServerRouter {
 	ServerRouter::new()
-		.auto_server_fns_in_crate(module_path!(), concat!(env!("CARGO_MANIFEST_DIR"), "@", env!("CARGO_PKG_NAME"), "@", env!("CARGO_PKG_VERSION")))
+		.auto_server_fns_in_crate(module_path!(), concat!(env!("CARGO_MANIFEST_DIR"), "@", env!("CARGO_PKG_NAME"), "@", env!("CARGO_PKG_VERSION")), option_env!("CARGO_BIN_NAME"))
 }
 "#
 	);
@@ -748,7 +748,7 @@ use reinhardt::ServerRouter;
 
 pub fn server_url_patterns() -> ServerRouter {
 	ServerRouter::new()
-		.auto_server_fns_in_crate(module_path!(), concat!(env!("CARGO_MANIFEST_DIR"), "@", env!("CARGO_PKG_NAME"), "@", env!("CARGO_PKG_VERSION")))
+		.auto_server_fns_in_crate(module_path!(), concat!(env!("CARGO_MANIFEST_DIR"), "@", env!("CARGO_PKG_NAME"), "@", env!("CARGO_PKG_VERSION")), option_env!("CARGO_BIN_NAME"))
 }
 "#
 	);
@@ -928,7 +928,7 @@ mod child;
 
 pub fn server_url_patterns() -> ServerRouter {
 	router()
-		.auto_server_fns_in_crate(module_path!(), concat!(env!("CARGO_MANIFEST_DIR"), "@", env!("CARGO_PKG_NAME"), "@", env!("CARGO_PKG_VERSION")))
+		.auto_server_fns_in_crate(module_path!(), concat!(env!("CARGO_MANIFEST_DIR"), "@", env!("CARGO_PKG_NAME"), "@", env!("CARGO_PKG_VERSION")), option_env!("CARGO_BIN_NAME"))
 }
 "#
 	);
@@ -984,7 +984,7 @@ mod support;
 
 pub fn server_url_patterns() -> ServerRouter {
 	router()
-		.auto_server_fns_in_crate(module_path!(), concat!(env!("CARGO_MANIFEST_DIR"), "@", env!("CARGO_PKG_NAME"), "@", env!("CARGO_PKG_VERSION")))
+		.auto_server_fns_in_crate(module_path!(), concat!(env!("CARGO_MANIFEST_DIR"), "@", env!("CARGO_PKG_NAME"), "@", env!("CARGO_PKG_VERSION")), option_env!("CARGO_BIN_NAME"))
 }
 "#
 	);

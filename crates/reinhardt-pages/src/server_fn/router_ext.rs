@@ -93,6 +93,7 @@ pub trait ServerFnRouterExt {
 		self,
 		caller_module: &'static str,
 		caller_crate: &'static str,
+		caller_target: Option<&'static str>,
 	) -> Self;
 
 	/// Register every member of a named server function set.
@@ -131,11 +132,13 @@ impl ServerFnRouterExt for ServerRouter {
 		self,
 		caller_module: &'static str,
 		caller_crate: &'static str,
+		caller_target: Option<&'static str>,
 	) -> Self {
 		crate::server_fn::auto_registration::collect_auto_server_fns_in_crate(
 			self,
 			caller_module,
 			caller_crate,
+			caller_target,
 		)
 	}
 

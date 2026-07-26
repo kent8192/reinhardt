@@ -3,7 +3,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use cargo_metadata::{MetadataCommand, PackageId};
-use syn::{Attribute, Expr, ExprLit, Item, ItemMod, Lit, Meta, Token};
+use syn::{Attribute, Expr, ExprLit, Item, ItemMod, Lit, Meta, Token, UseTree};
 
 use super::{MigrateServerFnsError, Result};
 
@@ -150,6 +150,7 @@ impl Scanner {
 		declaring_directory: &Path,
 		items: &[Item],
 	) -> Result<()> {
+		let attribute_aliases = reinhardt_attribute_aliases(items);
 		for item in items {
 			match item {
 				Item::Macro(item_macro) if !item_macro.mac.path.is_ident("macro_rules") => {
@@ -165,7 +166,7 @@ impl Scanner {
 					});
 				}
 				Item::Struct(item_struct)
-					if is_app_config(&item_struct.attrs)
+					if is_app_config(&item_struct.attrs, &attribute_aliases)
 						&& !is_conditionally_compiled(&item_struct.attrs) =>
 				{
 					self.app_modules
@@ -174,7 +175,7 @@ impl Scanner {
 						.push(module.clone());
 				}
 				Item::Fn(function)
-					if is_server_fn(&function.attrs)
+					if is_server_fn(&function.attrs, &attribute_aliases)
 						&& !is_conditionally_compiled(&function.attrs) =>
 				{
 					let key = ServerFnKey {
@@ -183,7 +184,10 @@ impl Scanner {
 						function: function.sig.ident.to_string(),
 					};
 					self.server_fns.entry(key).or_default().push(ServerFn {
-						auto_register: server_fn_auto_registers(&function.attrs),
+						auto_register: server_fn_auto_registers(
+							&function.attrs,
+							&attribute_aliases,
+						),
 					});
 				}
 				Item::Mod(item_mod) if !is_conditionally_compiled(&item_mod.attrs) => {
@@ -212,7 +216,10 @@ impl Scanner {
 		let mut child_module = module.clone();
 		child_module.push(item_mod.ident.to_string());
 		if let Some((_, items)) = &item_mod.content {
-			let child_directory = module_directory.join(item_mod.ident.to_string());
+			let child_directory = path_attribute(&item_mod.attrs).map_or_else(
+				|| module_directory.join(item_mod.ident.to_string()),
+				|path| declaring_directory.join(path),
+			);
 			return self.scan_items(
 				target,
 				&child_module,
@@ -279,33 +286,94 @@ fn path_attribute(attributes: &[Attribute]) -> Option<PathBuf> {
 	})
 }
 
-fn is_server_fn(attributes: &[Attribute]) -> bool {
+fn is_server_fn(attributes: &[Attribute], aliases: &BTreeMap<String, String>) -> bool {
 	attributes
 		.iter()
-		.any(|attribute| is_reinhardt_attribute(attribute, "server_fn"))
+		.any(|attribute| is_reinhardt_attribute(attribute, "server_fn", aliases))
 }
 
-fn is_app_config(attributes: &[Attribute]) -> bool {
+fn is_app_config(attributes: &[Attribute], aliases: &BTreeMap<String, String>) -> bool {
 	attributes
 		.iter()
-		.any(|attribute| is_reinhardt_attribute(attribute, "app_config"))
+		.any(|attribute| is_reinhardt_attribute(attribute, "app_config", aliases))
 }
 
-fn is_reinhardt_attribute(attribute: &Attribute, expected: &str) -> bool {
+fn is_reinhardt_attribute(
+	attribute: &Attribute,
+	expected: &str,
+	aliases: &BTreeMap<String, String>,
+) -> bool {
 	let segments = &attribute.path().segments;
 	let Some(last) = segments.last() else {
 		return false;
 	};
-	if last.ident != expected {
-		return false;
+	if segments.len() == 1 {
+		return last.ident == expected
+			|| aliases
+				.get(&last.ident.to_string())
+				.is_some_and(|resolved| resolved == expected);
 	}
-	segments.len() == 1
-		|| segments.first().is_some_and(|segment| {
+	last.ident == expected
+		&& segments.first().is_some_and(|segment| {
 			matches!(
 				segment.ident.to_string().as_str(),
 				"reinhardt" | "reinhardt_pages"
 			)
 		})
+}
+
+fn reinhardt_attribute_aliases(items: &[Item]) -> BTreeMap<String, String> {
+	let mut aliases = BTreeMap::new();
+	for item in items {
+		let Item::Use(item_use) = item else {
+			continue;
+		};
+		collect_reinhardt_attribute_aliases(&item_use.tree, &mut Vec::new(), &mut aliases);
+	}
+	aliases
+}
+
+fn collect_reinhardt_attribute_aliases(
+	tree: &UseTree,
+	prefix: &mut Vec<String>,
+	aliases: &mut BTreeMap<String, String>,
+) {
+	match tree {
+		UseTree::Path(path) => {
+			prefix.push(path.ident.to_string());
+			collect_reinhardt_attribute_aliases(&path.tree, prefix, aliases);
+			prefix.pop();
+		}
+		UseTree::Name(name) => {
+			prefix.push(name.ident.to_string());
+			prefix.pop();
+		}
+		UseTree::Rename(rename) => {
+			prefix.push(rename.ident.to_string());
+			if let Some(attribute) = reinhardt_attribute_from_path(prefix) {
+				aliases.insert(rename.rename.to_string(), attribute.to_owned());
+			}
+			prefix.pop();
+		}
+		UseTree::Group(group) => {
+			for item in &group.items {
+				collect_reinhardt_attribute_aliases(item, prefix, aliases);
+			}
+		}
+		UseTree::Glob(_) => {}
+	}
+}
+
+fn reinhardt_attribute_from_path(path: &[String]) -> Option<&'static str> {
+	let (first, last) = (path.first()?, path.last()?);
+	if !matches!(first.as_str(), "reinhardt" | "reinhardt_pages") {
+		return None;
+	}
+	match last.as_str() {
+		"server_fn" => Some("server_fn"),
+		"app_config" => Some("app_config"),
+		_ => None,
+	}
 }
 
 /// Returns whether an item is subject to conditional compilation.
@@ -319,14 +387,11 @@ fn is_conditionally_compiled(attributes: &[Attribute]) -> bool {
 		.any(|attribute| attribute.path().is_ident("cfg") || attribute.path().is_ident("cfg_attr"))
 }
 
-fn server_fn_auto_registers(attributes: &[Attribute]) -> bool {
-	let Some(attribute) = attributes.iter().find(|attribute| {
-		attribute
-			.path()
-			.segments
-			.last()
-			.is_some_and(|segment| segment.ident == "server_fn")
-	}) else {
+fn server_fn_auto_registers(attributes: &[Attribute], aliases: &BTreeMap<String, String>) -> bool {
+	let Some(attribute) = attributes
+		.iter()
+		.find(|attribute| is_reinhardt_attribute(attribute, "server_fn", aliases))
+	else {
 		return true;
 	};
 	let Meta::List(list) = &attribute.meta else {

@@ -657,8 +657,10 @@ async fn startapp_pages_layout_has_target_gated_route_surface() {
 		"server_router.rs must import ServerFnRouterExt:\n{server_contents}"
 	);
 	assert!(
-		server_contents.contains("ServerRouter::new().auto_server_fns(module_path!())"),
-		"server_router.rs must automatically collect the app server functions:\n{server_contents}"
+		server_contents.contains("ServerRouter::new().auto_server_fns_in_crate(")
+			&& server_contents.contains("module_path!()")
+			&& server_contents.contains("env!(\"CARGO_MANIFEST_DIR\")"),
+		"server_router.rs must automatically collect this crate's app server functions:\n{server_contents}"
 	);
 
 	// 5. Per-app aggregator `apps/foo.rs` declares cfg-gated facades and
@@ -742,12 +744,19 @@ async fn workspace_app_pages_uses_unified_template() {
 			"workspace app build.rs must declare cfg({cfg}) for Rust 2024 check-cfg:\n{build_rs}"
 		);
 	}
-	for removed_cfg in ["wasm", "native"] {
+	for removed_cfg in ["wasm"] {
 		assert!(
 			!build_rs.contains(&format!("cfg({removed_cfg})")),
 			"workspace app build.rs must not declare the removed cfg({removed_cfg}) alias:\n{build_rs}"
 		);
 	}
+	assert!(
+		build_rs.contains("cargo::rustc-check-cfg=cfg(native)")
+			&& build_rs.contains(
+				"native: { not(all(target_family = \"wasm\", target_os = \"unknown\")) }"
+			),
+		"workspace app build.rs must declare and define the native cfg alias:\n{build_rs}"
+	);
 
 	// 2. Source files live under apps/<name>/src/
 	let src = app_dir.join("src");
@@ -882,8 +891,10 @@ async fn workspace_app_pages_uses_unified_template() {
 	let server_urls = fs::read_to_string(src.join("urls").join("server_router.rs"))
 		.expect("read server_router.rs");
 	assert!(
-		server_urls.contains("ServerRouter::new().auto_server_fns(module_path!())"),
-		"workspace server_router.rs must automatically collect the app server functions:\n{server_urls}"
+		server_urls.contains("ServerRouter::new().auto_server_fns_in_crate(")
+			&& server_urls.contains("module_path!()")
+			&& server_urls.contains("env!(\"CARGO_MANIFEST_DIR\")"),
+		"workspace server_router.rs must automatically collect this crate's app server functions:\n{server_urls}"
 	);
 	assert!(
 		!server_urls

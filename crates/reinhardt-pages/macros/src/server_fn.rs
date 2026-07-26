@@ -2104,9 +2104,10 @@ fn generate_server_handler(
 				}
 
 				#pages_crate::__private::inventory::submit! {
-					#pages_crate::server_fn::ServerFnInventoryEntry::new_in_crate(
+					#pages_crate::server_fn::ServerFnInventoryEntry::new_in_target(
 						module_path!(),
 						concat!(env!("CARGO_MANIFEST_DIR"), "@", env!("CARGO_PKG_NAME"), "@", env!("CARGO_PKG_VERSION")),
+						option_env!("CARGO_BIN_NAME"),
 						#endpoint,
 						#name_str,
 						#auto_register_fn_name,

@@ -13,5 +13,6 @@ pub fn server_url_patterns() -> ServerRouter {
 	ServerRouter::new().auto_server_fns_in_crate(
 		module_path!(),
 		concat!(env!("CARGO_MANIFEST_DIR"), "@", env!("CARGO_PKG_NAME"), "@", env!("CARGO_PKG_VERSION")),
+		option_env!("CARGO_BIN_NAME"),
 	)
 }

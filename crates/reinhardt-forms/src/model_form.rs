@@ -127,6 +127,8 @@ type ModelValidator<T> = dyn Fn(&T) -> Result<(), Vec<String>> + Send + Sync;
 struct PendingTransactionSave<T> {
 	outcome: AtomicTransactionOutcome,
 	candidate_before_save: T,
+	instance_before_save: Option<T>,
+	persistence_mode_before_save: ModelFormPersistenceMode,
 }
 
 /// A native form that validates a generated payload and persists model candidates.
@@ -329,6 +331,8 @@ where
 			.as_mut()
 			.expect("build_instance caches a validated candidate");
 		let candidate_before_save = candidate.clone();
+		let instance_before_save = self.instance.clone();
+		let persistence_mode_before_save = self.persistence_mode;
 		let transaction_outcome = executor.transaction_outcome();
 		if let Err(error) =
 			FormModel::save_with_mode(candidate, executor, self.persistence_mode).await
@@ -338,6 +342,8 @@ where
 					self.pending_transaction_save = Some(PendingTransactionSave {
 						outcome,
 						candidate_before_save,
+						instance_before_save,
+						persistence_mode_before_save,
 					});
 				} else {
 					self.persistence_mode = ModelFormPersistenceMode::Update;
@@ -351,6 +357,8 @@ where
 			self.pending_transaction_save = Some(PendingTransactionSave {
 				outcome,
 				candidate_before_save,
+				instance_before_save,
+				persistence_mode_before_save,
 			});
 		} else {
 			self.persistence_mode = ModelFormPersistenceMode::Update;
@@ -367,9 +375,9 @@ where
 			return Ok(());
 		}
 		if pending.outcome.is_rolled_back() {
-			self.instance = None;
+			self.instance = pending.instance_before_save;
 			self.validated_candidate = Some(pending.candidate_before_save);
-			self.persistence_mode = ModelFormPersistenceMode::Create;
+			self.persistence_mode = pending.persistence_mode_before_save;
 			return Ok(());
 		}
 		self.pending_transaction_save = Some(pending);

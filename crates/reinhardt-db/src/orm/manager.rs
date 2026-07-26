@@ -1292,7 +1292,15 @@ impl<M: Model> Manager<M> {
 			let result = match conn.execute(&sql, params).await {
 				Ok(result) => result,
 				Err(error) => {
-					return super::custom_manager::CreateWithConnOutcome::FailedBeforeInsert(error);
+					let outcome = match error.database_error().map(DatabaseError::kind) {
+						Some(DatabaseErrorKind::Connection | DatabaseErrorKind::Timeout) => {
+							super::custom_manager::CreateWithConnOutcome::FailedAfterInsert(error)
+						}
+						_ => {
+							super::custom_manager::CreateWithConnOutcome::FailedBeforeInsert(error)
+						}
+					};
+					return outcome;
 				}
 			};
 			let primary_key = explicit_primary_key

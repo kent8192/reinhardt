@@ -10,6 +10,7 @@ use reinhardt_core::model_form::{
 	ModelFormSchema,
 };
 use reinhardt_db::orm::OrmExecutor;
+use reinhardt_db::orm::transaction::AtomicTransactionOutcome;
 use serde::Serialize;
 use std::marker::PhantomData;
 
@@ -20,6 +21,7 @@ use std::marker::PhantomData;
 pub struct InlineFormSet<P: FormModel, C: FormModel> {
 	parent: P,
 	parent_persistence_mode: ModelFormPersistenceMode,
+	pending_parent_save: Option<(AtomicTransactionOutcome, P, ModelFormPersistenceMode)>,
 	_formset: FormSet,
 	fk_field: String,
 	child_forms: Vec<ModelForm<C, AllEditableModelFields>>,
@@ -78,6 +80,7 @@ impl<P: FormModel, C: FormModel> InlineFormSet<P, C> {
 		Self {
 			parent,
 			parent_persistence_mode,
+			pending_parent_save: None,
 			_formset: FormSet::new("inline".to_string()),
 			fk_field,
 			child_forms: Vec::new(),
@@ -121,6 +124,7 @@ impl<P: FormModel, C: FormModel> InlineFormSet<P, C> {
 		P::PrimaryKey: Serialize,
 		P: ModelFormPrimaryKey,
 	{
+		self.finalize_parent_transaction()?;
 		if !C::Schema::fields()
 			.iter()
 			.any(|descriptor| descriptor.name == self.fk_field)
@@ -163,8 +167,14 @@ impl<P: FormModel, C: FormModel> InlineFormSet<P, C> {
 				errors: vec!["inline formset contains invalid child fields".to_string()],
 			});
 		}
+		let parent_before_save = self.parent.clone();
+		let parent_mode_before_save = self.parent_persistence_mode;
 		FormModel::save_with_mode(&mut self.parent, executor, self.parent_persistence_mode).await?;
-		self.parent_persistence_mode = ModelFormPersistenceMode::Update;
+		if let Some(outcome) = executor.transaction_outcome() {
+			self.pending_parent_save = Some((outcome, parent_before_save, parent_mode_before_save));
+		} else {
+			self.parent_persistence_mode = ModelFormPersistenceMode::Update;
+		}
 		let parent_id = self
 			.parent
 			.primary_key()
@@ -188,6 +198,24 @@ impl<P: FormModel, C: FormModel> InlineFormSet<P, C> {
 		}
 
 		Ok(())
+	}
+
+	fn finalize_parent_transaction(&mut self) -> Result<(), ModelFormError> {
+		let Some((outcome, parent_before_save, mode_before_save)) = self.pending_parent_save.take()
+		else {
+			return Ok(());
+		};
+		if outcome.is_committed() {
+			self.parent_persistence_mode = ModelFormPersistenceMode::Update;
+			return Ok(());
+		}
+		if outcome.is_rolled_back() {
+			self.parent = parent_before_save;
+			self.parent_persistence_mode = mode_before_save;
+			return Ok(());
+		}
+		self.pending_parent_save = Some((outcome, parent_before_save, mode_before_save));
+		Err(ModelFormError::TransactionOutcomePending)
 	}
 
 	fn validate_foreign_key_kind(&self) -> Result<(), ModelFormError>

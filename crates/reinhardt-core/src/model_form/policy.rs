@@ -405,7 +405,7 @@ mod tests {
 		)
 		.expect("native form value should normalize");
 
-		assert_eq!(value, serde_json::json!({ "enabled": false, "title": "" }));
+		assert_eq!(value, serde_json::json!({ "title": "" }));
 	}
 
 	#[test]
@@ -415,7 +415,7 @@ mod tests {
 		)
 		.expect("native form value should normalize");
 
-		assert_eq!(value, serde_json::json!({ "enabled": false }));
+		assert_eq!(value, serde_json::json!({}));
 	}
 
 	#[test]
@@ -428,10 +428,7 @@ mod tests {
 		)
 		.expect("native form value should normalize");
 
-		assert_eq!(
-			value,
-			serde_json::json!({ "enabled": false, "summary": null })
-		);
+		assert_eq!(value, serde_json::json!({ "summary": null }));
 	}
 
 	#[test]
@@ -444,7 +441,7 @@ mod tests {
 		)
 		.expect("native form value should normalize");
 
-		assert_eq!(value, serde_json::json!({ "enabled": false }));
+		assert_eq!(value, serde_json::json!({}));
 	}
 
 	#[test]
@@ -457,9 +454,6 @@ mod tests {
 		)
 		.expect("native form value should normalize");
 
-		assert_eq!(
-			value,
-			serde_json::json!({ "enabled": false, "accent": "#000000" })
-		);
+		assert_eq!(value, serde_json::json!({ "accent": "#000000" }));
 	}
 }

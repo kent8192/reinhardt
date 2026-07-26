@@ -2292,12 +2292,21 @@ fn generate_model_form(
 						let control_id = format!("{}-{}", #form_id, field_name);
 						let range_default = if input_type == "range" {
 							match descriptor.kind {
-								#pages_crate::form::ModelFormFieldKind::Integer { min, .. } =>
-									::core::option::Option::Some(min.unwrap_or(0).to_string()),
-								#pages_crate::form::ModelFormFieldKind::Float { min, .. } =>
-									::core::option::Option::Some(min.unwrap_or(0.0).to_string()),
-								#pages_crate::form::ModelFormFieldKind::Decimal { min, .. } =>
-									::core::option::Option::Some(min.unwrap_or("0").to_owned()),
+								#pages_crate::form::ModelFormFieldKind::Integer { min, max } => {
+									let min = min.unwrap_or(0);
+									let max = max.unwrap_or(100);
+									::core::option::Option::Some((min + (max - min) / 2).to_string())
+								}
+								#pages_crate::form::ModelFormFieldKind::Float { min, max } => {
+									let min = min.unwrap_or(0.0);
+									let max = max.unwrap_or(100.0);
+									::core::option::Option::Some((min + (max - min) / 2.0).to_string())
+								}
+								#pages_crate::form::ModelFormFieldKind::Decimal { min, max } => {
+									let min = min.unwrap_or("0").parse::<f64>().unwrap_or(0.0);
+									let max = max.unwrap_or("100").parse::<f64>().unwrap_or(100.0);
+									::core::option::Option::Some((min + (max - min) / 2.0).to_string())
+								}
 								_ => ::core::option::Option::None,
 							}
 						} else {
@@ -2446,8 +2455,7 @@ fn generate_model_form(
 							);
 						}
 						let checkbox_sentinel = (is_checkbox
-							&& (!descriptor.has_default || stored_value.is_some() || default_true)
-							&& (!descriptor.nullable || stored_value.is_some()))
+							&& (!descriptor.has_default || stored_value.is_some() || default_true))
 							.then(|| {
 							#pages_crate::PageElement::new("input")
 								.attr("type", "hidden")

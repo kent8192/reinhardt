@@ -224,7 +224,7 @@ fn rewrite_router_function(
 			kind: ReportKind::MixedRegistration,
 		});
 	}
-	if !returns_server_router(function) {
+	if !returns_server_router(function, imports) {
 		return FunctionOutcome::Skipped(Skipped {
 			line: span_line(function.sig.ident.span()),
 			kind: ReportKind::MixedRegistration,
@@ -303,17 +303,30 @@ fn rewrite_router_function(
 	}
 }
 
-fn returns_server_router(function: &ItemFn) -> bool {
+fn returns_server_router(function: &ItemFn, imports: &ImportIndex) -> bool {
 	let syn::ReturnType::Type(_, ty) = &function.sig.output else {
 		return false;
 	};
 	let syn::Type::Path(path) = ty.as_ref() else {
 		return false;
 	};
-	path.path
+	let components: Vec<_> = path
+		.path
 		.segments
-		.last()
-		.is_some_and(|segment| segment.ident == "ServerRouter")
+		.iter()
+		.map(|segment| segment.ident.to_string())
+		.collect();
+	if components == ["reinhardt", "ServerRouter"] {
+		return true;
+	}
+	if components.len() != 1 {
+		return false;
+	}
+	imports.bindings.get(&components[0]).is_some_and(|paths| {
+		paths
+			.iter()
+			.any(|path| path.len() == 2 && path[0] == "reinhardt" && path[1] == "ServerRouter")
+	})
 }
 
 fn function_contains_local_use(function: &ItemFn) -> bool {
@@ -410,6 +423,7 @@ fn is_registration_chain(method: &ExprMethodCall) -> bool {
 		call.method == "server_fn"
 			|| call.method == "server_fnset"
 			|| call.method == "auto_server_fns"
+			|| call.method == "auto_server_fns_in_crate"
 	})
 }
 
@@ -432,10 +446,9 @@ fn analyze_chain(
 	server_fns: &ServerFnIndex,
 	imports: &ImportIndex,
 ) -> ChainOutcome {
-	if methods
-		.iter()
-		.any(|method| method.method == "auto_server_fns")
-	{
+	if methods.iter().any(|method| {
+		method.method == "auto_server_fns" || method.method == "auto_server_fns_in_crate"
+	}) {
 		return ChainOutcome::AlreadyAutomatic;
 	}
 	if let Some(method) = methods
@@ -924,7 +937,15 @@ fn collect_token_binding_uses(
 					used.insert(binding);
 				}
 			}
-			TokenTree::Literal(_) | TokenTree::Punct(_) => {}
+			TokenTree::Literal(literal) => {
+				let literal = literal.to_string();
+				for binding in candidates {
+					if literal.contains(binding) {
+						used.insert(binding.clone());
+					}
+				}
+			}
+			TokenTree::Punct(_) => {}
 		}
 	}
 }

@@ -315,7 +315,11 @@ fn validate_entries(
 	let mut errors = Vec::new();
 	let mut owned_entries = Vec::new();
 	for entry in entries {
-		match resolve_app_module_owner(apps.iter(), entry.module_path) {
+		match reinhardt_apps::resolve_app_module_owner_in_crate(
+			apps.iter(),
+			entry.module_path,
+			entry.crate_id,
+		) {
 			Ok(owner) => owned_entries.push((entry, owner)),
 			Err(error) => errors.push(resolution_error(
 				entry.module_path,

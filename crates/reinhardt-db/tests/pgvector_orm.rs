@@ -452,9 +452,19 @@ async fn native_pgvector_workflow_round_trips_models_and_typed_distance_queries(
 		.expect("the server failure should retain structured database context");
 	assert_eq!(dimension_database_error.kind(), DatabaseErrorKind::Query);
 	assert_eq!(dimension_database_error.code(), Some("22000"));
+	let dimension_message = dimension_database_error.message().to_ascii_lowercase();
+	assert!(
+		dimension_message.contains("vector") && dimension_message.contains("dimension"),
+		"the PostgreSQL diagnostic should identify a vector dimension mismatch: \
+		 {dimension_message}"
+	);
 	assert_eq!(
-		dimension_database_error.message(),
-		"different vector dimensions 3 and 2"
+		dimension_message
+			.split(|character: char| !character.is_ascii_digit())
+			.filter(|token| !token.is_empty())
+			.collect::<Vec<_>>(),
+		vec!["3", "2"],
+		"the PostgreSQL diagnostic should report expected dimension 3 before actual dimension 2"
 	);
 	assert!(
 		dimension_error

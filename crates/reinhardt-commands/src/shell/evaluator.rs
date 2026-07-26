@@ -109,8 +109,12 @@ impl EvcxrEvaluator {
 			EvaluatorProcessGuard::new(eval.process_handle(), owns_process_group)?;
 		let mut state = eval.state();
 		let dependency = path_dependency(config)?;
+		let cargo_dependency_name = config
+			.crate_name()
+			.strip_prefix("r#")
+			.unwrap_or(config.crate_name());
 		state
-			.add_dep(config.crate_name(), &dependency)
+			.add_dep(cargo_dependency_name, &dependency)
 			.map_err(classify_startup_error)?;
 		state
 			.add_dep(
@@ -293,8 +297,10 @@ impl BlockingShellEvaluator for EvcxrEvaluator {
 			self.evaluator_id, self.evaluation_sequence
 		);
 		let marker = format!(
-			"__REINHARDT_SHELL_OUTPUT_BOUNDARY_{}_{}__",
-			self.evaluator_id, self.evaluation_sequence
+			"__REINHARDT_SHELL_OUTPUT_BOUNDARY_{}_{}_{:032x}__",
+			self.evaluator_id,
+			self.evaluation_sequence,
+			rand::random::<u128>(),
 		);
 		let (pending_stdout, pending_stderr) = self.output_drainers.begin(&marker);
 		let source = source_with_commit_sentinel(source, &sentinel);

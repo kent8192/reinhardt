@@ -116,6 +116,7 @@ impl MySqlQueryBuilder {
 		stmt: &CreateIndexStatement,
 	) -> Result<(String, Values), crate::QueryBuildError> {
 		crate::error::validate_create_index_for_backend(stmt, "MySQL")?;
+		stmt.validate_for_backend("MySQL", false)?;
 		Ok(self.build_create_index(stmt))
 	}
 
@@ -3463,6 +3464,7 @@ impl MySqlQueryBuilder {
 			IndexMethod::Gist | IndexMethod::Gin | IndexMethod::Brin | IndexMethod::Spatial => {
 				"BTREE"
 			}
+			IndexMethod::Hnsw | IndexMethod::Ivfflat => "BTREE",
 		}
 	}
 }
@@ -6031,6 +6033,7 @@ mod tests {
 		stmt.columns.push(IndexColumn {
 			name: "email".into_iden(),
 			order: None,
+			operator_class: None,
 		});
 
 		let (sql, values) = builder.build_create_index(&stmt);
@@ -6050,6 +6053,7 @@ mod tests {
 		stmt.columns.push(IndexColumn {
 			name: "username".into_iden(),
 			order: None,
+			operator_class: None,
 		});
 
 		let (sql, values) = builder.build_create_index(&stmt);
@@ -6072,6 +6076,7 @@ mod tests {
 		stmt.columns.push(IndexColumn {
 			name: "email".into_iden(),
 			order: None,
+			operator_class: None,
 		});
 
 		let (sql, values) = builder.build_create_index(&stmt);
@@ -6092,6 +6097,7 @@ mod tests {
 		stmt.columns.push(IndexColumn {
 			name: "created_at".into_iden(),
 			order: Some(Order::Desc),
+			operator_class: None,
 		});
 
 		let (sql, values) = builder.build_create_index(&stmt);
@@ -6114,10 +6120,12 @@ mod tests {
 		stmt.columns.push(IndexColumn {
 			name: "last_name".into_iden(),
 			order: Some(Order::Asc),
+			operator_class: None,
 		});
 		stmt.columns.push(IndexColumn {
 			name: "first_name".into_iden(),
 			order: Some(Order::Asc),
+			operator_class: None,
 		});
 
 		let (sql, values) = builder.build_create_index(&stmt);
@@ -6140,6 +6148,7 @@ mod tests {
 		stmt.columns.push(IndexColumn {
 			name: "id".into_iden(),
 			order: None,
+			operator_class: None,
 		});
 
 		let (sql, values) = builder.build_create_index(&stmt);
@@ -6162,6 +6171,7 @@ mod tests {
 		stmt.columns.push(IndexColumn {
 			name: "content".into_iden(),
 			order: None,
+			operator_class: None,
 		});
 
 		let (sql, values) = builder.build_create_index(&stmt);

@@ -141,6 +141,7 @@ impl PostgresQueryBuilder {
 		&self,
 		stmt: &CreateIndexStatement,
 	) -> Result<(String, Values), crate::QueryBuildError> {
+		stmt.validate_for_backend("PostgreSQL", true)?;
 		Ok(self.build_create_index(stmt))
 	}
 
@@ -1939,6 +1940,10 @@ impl QueryBuilder for PostgresQueryBuilder {
 			}
 			first = false;
 			writer.push_identifier(&col.name.to_string(), |s| self.escape_iden(s));
+			if let Some(operator_class) = &col.operator_class {
+				writer.push_space();
+				writer.push(operator_class);
+			}
 			if let Some(order) = &col.order {
 				writer.push_space();
 				match order {
@@ -1948,6 +1953,34 @@ impl QueryBuilder for PostgresQueryBuilder {
 			}
 		}
 		writer.push(")");
+
+		if let Some(options) = &stmt.options {
+			match options {
+				crate::query::IndexOptions::Hnsw { m, ef_construction } => {
+					let mut rendered = Vec::new();
+					if let Some(m) = m {
+						rendered.push(format!("m = {m}"));
+					}
+					if let Some(ef_construction) = ef_construction {
+						rendered.push(format!("ef_construction = {ef_construction}"));
+					}
+					if !rendered.is_empty() {
+						writer.push_space();
+						writer.push("WITH (");
+						writer.push(&rendered.join(", "));
+						writer.push(")");
+					}
+				}
+				crate::query::IndexOptions::Ivfflat { lists } => {
+					if let Some(lists) = lists {
+						writer.push_space();
+						writer.push("WITH (lists = ");
+						writer.push(&lists.to_string());
+						writer.push(")");
+					}
+				}
+			}
+		}
 
 		// WHERE clause (partial index)
 		if let Some(where_expr) = &stmt.r#where {
@@ -4643,6 +4676,8 @@ impl PostgresQueryBuilder {
 			IndexMethod::Brin => "BRIN",
 			IndexMethod::FullText => "GIN", // PostgreSQL uses GIN for full-text search
 			IndexMethod::Spatial => "GIST", // PostgreSQL uses GIST for spatial indexes
+			IndexMethod::Hnsw => "HNSW",
+			IndexMethod::Ivfflat => "IVFFLAT",
 		}
 	}
 }
@@ -7704,6 +7739,7 @@ mod tests {
 		stmt.columns.push(IndexColumn {
 			name: "email".into_iden(),
 			order: None,
+			operator_class: None,
 		});
 
 		let (sql, values) = builder.build_create_index(&stmt);
@@ -7726,6 +7762,7 @@ mod tests {
 		stmt.columns.push(IndexColumn {
 			name: "username".into_iden(),
 			order: None,
+			operator_class: None,
 		});
 
 		let (sql, values) = builder.build_create_index(&stmt);
@@ -7748,6 +7785,7 @@ mod tests {
 		stmt.columns.push(IndexColumn {
 			name: "email".into_iden(),
 			order: None,
+			operator_class: None,
 		});
 
 		let (sql, values) = builder.build_create_index(&stmt);
@@ -7770,6 +7808,7 @@ mod tests {
 		stmt.columns.push(IndexColumn {
 			name: "created_at".into_iden(),
 			order: Some(Order::Desc),
+			operator_class: None,
 		});
 
 		let (sql, values) = builder.build_create_index(&stmt);
@@ -7792,10 +7831,12 @@ mod tests {
 		stmt.columns.push(IndexColumn {
 			name: "last_name".into_iden(),
 			order: Some(Order::Asc),
+			operator_class: None,
 		});
 		stmt.columns.push(IndexColumn {
 			name: "first_name".into_iden(),
 			order: Some(Order::Asc),
+			operator_class: None,
 		});
 
 		let (sql, values) = builder.build_create_index(&stmt);
@@ -7818,6 +7859,7 @@ mod tests {
 		stmt.columns.push(IndexColumn {
 			name: "id".into_iden(),
 			order: None,
+			operator_class: None,
 		});
 
 		let (sql, values) = builder.build_create_index(&stmt);
@@ -7840,6 +7882,7 @@ mod tests {
 		stmt.columns.push(IndexColumn {
 			name: "tags".into_iden(),
 			order: None,
+			operator_class: None,
 		});
 
 		let (sql, values) = builder.build_create_index(&stmt);
@@ -7861,6 +7904,7 @@ mod tests {
 		stmt.columns.push(IndexColumn {
 			name: "email".into_iden(),
 			order: None,
+			operator_class: None,
 		});
 		stmt.r#where = Some(Expr::col("active").eq(true).into_simple_expr());
 

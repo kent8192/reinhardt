@@ -250,6 +250,8 @@ fn parse_single_operation(expr: &Expr) -> Option<super::Operation> {
 				let where_clause = extract_optional_str_field(&expr_struct.fields, "where_clause");
 				let concurrently =
 					extract_bool_field(&expr_struct.fields, "concurrently").unwrap_or(false);
+				let operator_class =
+					extract_optional_str_field(&expr_struct.fields, "operator_class");
 
 				return Some(match variant_name.as_str() {
 					"CreateIndex" => super::Operation::CreateIndex {
@@ -261,7 +263,7 @@ fn parse_single_operation(expr: &Expr) -> Option<super::Operation> {
 						concurrently,
 						expressions: None,
 						mysql_options: None,
-						operator_class: None,
+						operator_class,
 					},
 					"CreateIndexRepair" => super::Operation::CreateIndexRepair {
 						table,
@@ -273,7 +275,7 @@ fn parse_single_operation(expr: &Expr) -> Option<super::Operation> {
 						concurrently,
 						expressions: None,
 						mysql_options: None,
-						operator_class: None,
+						operator_class,
 					},
 					_ => super::Operation::RestoreIndexOnRollback {
 						table,
@@ -285,7 +287,7 @@ fn parse_single_operation(expr: &Expr) -> Option<super::Operation> {
 						concurrently,
 						expressions: None,
 						mysql_options: None,
-						operator_class: None,
+						operator_class,
 					},
 				});
 			}
@@ -569,24 +571,73 @@ fn extract_index_type_field(
 				&& let Expr::Path(func_path) = &*expr_call.func
 				&& func_path.path.is_ident("Some")
 				&& !expr_call.args.is_empty()
-				&& let Expr::Path(variant_path) = &expr_call.args[0]
-				&& let Some(last_segment) = variant_path.path.segments.last()
 			{
-				let variant = last_segment.ident.to_string();
-				return match variant.as_str() {
-					"BTree" => Some(IndexType::BTree),
-					"Hash" => Some(IndexType::Hash),
-					"Gin" => Some(IndexType::Gin),
-					"Gist" => Some(IndexType::Gist),
-					"Brin" => Some(IndexType::Brin),
-					"Fulltext" => Some(IndexType::Fulltext),
-					"Spatial" => Some(IndexType::Spatial),
-					_ => None,
-				};
+				match &expr_call.args[0] {
+					Expr::Path(variant_path) => {
+						let variant = variant_path.path.segments.last()?.ident.to_string();
+						return match variant.as_str() {
+							"BTree" => Some(IndexType::BTree),
+							"Hash" => Some(IndexType::Hash),
+							"Gin" => Some(IndexType::Gin),
+							"Gist" => Some(IndexType::Gist),
+							"Brin" => Some(IndexType::Brin),
+							"Fulltext" => Some(IndexType::Fulltext),
+							"Spatial" => Some(IndexType::Spatial),
+							_ => None,
+						};
+					}
+					Expr::Struct(variant) => {
+						let variant_name = variant.path.segments.last()?.ident.to_string();
+						return match variant_name.as_str() {
+							"Hnsw" => Some(IndexType::Hnsw {
+								m: extract_optional_integer_field(&variant.fields, "m")
+									.and_then(|value| u16::try_from(value).ok()),
+								ef_construction: extract_optional_integer_field(
+									&variant.fields,
+									"ef_construction",
+								)
+								.and_then(|value| u16::try_from(value).ok()),
+							}),
+							"Ivfflat" => Some(IndexType::Ivfflat {
+								lists: extract_optional_integer_field(&variant.fields, "lists")
+									.and_then(|value| u32::try_from(value).ok()),
+							}),
+							_ => None,
+						};
+					}
+					_ => {}
+				}
 			}
 		}
 	}
 	None
+}
+
+fn extract_optional_integer_field(
+	fields: &syn::punctuated::Punctuated<syn::FieldValue, syn::token::Comma>,
+	field_name: &str,
+) -> Option<u64> {
+	fields.iter().find_map(|field| {
+		if !matches!(&field.member, syn::Member::Named(ident) if ident == field_name) {
+			return None;
+		}
+		let Expr::Call(call) = &field.expr else {
+			return None;
+		};
+		let Expr::Path(path) = &*call.func else {
+			return None;
+		};
+		if !path.path.is_ident("Some") {
+			return None;
+		}
+		let Expr::Lit(value) = call.args.first()? else {
+			return None;
+		};
+		let syn::Lit::Int(value) = &value.lit else {
+			return None;
+		};
+		value.base10_parse().ok()
+	})
 }
 
 /// Extract `Vec<String>` from vec!["str".to_string(), ...] pattern
@@ -1588,9 +1639,56 @@ fn parse_bool_return(func: &ItemFn) -> Option<bool> {
 
 #[cfg(test)]
 mod tests {
+	use quote::ToTokens;
+
 	use super::extract_migration_metadata;
 	use crate::field_domain::{FieldDomain, ModelEnumRepr, ModelEnumValue};
-	use crate::migrations::{ColumnType, Constraint, GeneratedStorage, Operation, SchemaExpr};
+	use crate::migrations::{
+		ColumnType, Constraint, GeneratedStorage, IndexType, Operation, SchemaExpr,
+	};
+
+	#[test]
+	fn vector_index_tokens_reparse_data_bearing_index_types() {
+		let operations = [
+			Operation::CreateIndex {
+				table: "source".to_string(),
+				columns: vec!["embedding".to_string()],
+				unique: false,
+				index_type: Some(IndexType::Hnsw {
+					m: Some(16),
+					ef_construction: Some(64),
+				}),
+				where_clause: None,
+				concurrently: false,
+				expressions: None,
+				mysql_options: None,
+				operator_class: Some("vector_cosine_ops".to_string()),
+			},
+			Operation::CreateIndex {
+				table: "source".to_string(),
+				columns: vec!["embedding".to_string()],
+				unique: false,
+				index_type: Some(IndexType::Ivfflat { lists: Some(100) }),
+				where_clause: None,
+				concurrently: false,
+				expressions: None,
+				mysql_options: None,
+				operator_class: Some("vector_l2_ops".to_string()),
+			},
+		];
+
+		for operation in operations {
+			let tokens = operation.to_token_stream().to_string();
+			let expression: syn::Expr =
+				syn::parse_str(&tokens).expect("generated operation tokens must parse");
+
+			assert_eq!(
+				super::parse_single_operation(&expression),
+				Some(operation),
+				"generated operation tokens must preserve vector index metadata: {tokens}"
+			);
+		}
+	}
 
 	#[test]
 	fn drop_constraint_ast_accepts_legacy_and_typed_variants() {

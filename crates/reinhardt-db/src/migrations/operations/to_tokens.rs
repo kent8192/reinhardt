@@ -671,6 +671,20 @@ impl ToTokens for Operation {
 							IndexType::Brin => quote! { IndexType::Brin },
 							IndexType::Fulltext => quote! { IndexType::Fulltext },
 							IndexType::Spatial => quote! { IndexType::Spatial },
+							IndexType::Hnsw { m, ef_construction } => {
+								let m = optional_u16_to_tokens(*m);
+								let ef_construction = optional_u16_to_tokens(*ef_construction);
+								quote! {
+									IndexType::Hnsw {
+										m: #m,
+										ef_construction: #ef_construction,
+									}
+								}
+							}
+							IndexType::Ivfflat { lists } => {
+								let lists = optional_u32_to_tokens(*lists);
+								quote! { IndexType::Ivfflat { lists: #lists } }
+							}
 						};
 						quote! { Some(#variant) }
 					}
@@ -1318,6 +1332,13 @@ fn query_column_type_to_tokens(ty: &QueryColumnType) -> TokenStream {
 }
 
 fn optional_u32_to_tokens(value: Option<u32>) -> TokenStream {
+	match value {
+		Some(value) => quote! { Some(#value) },
+		None => quote! { None },
+	}
+}
+
+fn optional_u16_to_tokens(value: Option<u16>) -> TokenStream {
 	match value {
 		Some(value) => quote! { Some(#value) },
 		None => quote! { None },

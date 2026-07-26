@@ -126,6 +126,24 @@ pub enum IndexType {
 	/// Best for: geometric/geographic data
 	/// Supported by: MySQL
 	Spatial,
+
+	/// HNSW approximate vector index
+	///
+	/// Supported by: PostgreSQL with pgvector
+	Hnsw {
+		/// Maximum number of connections per layer.
+		m: Option<u16>,
+		/// Candidate list size used while constructing the index.
+		ef_construction: Option<u16>,
+	},
+
+	/// IVFFlat approximate vector index
+	///
+	/// Supported by: PostgreSQL with pgvector
+	Ivfflat {
+		/// Number of inverted lists.
+		lists: Option<u32>,
+	},
 }
 
 impl std::fmt::Display for IndexType {
@@ -138,6 +156,31 @@ impl std::fmt::Display for IndexType {
 			IndexType::Brin => write!(f, "brin"),
 			IndexType::Fulltext => write!(f, "fulltext"),
 			IndexType::Spatial => write!(f, "spatial"),
+			IndexType::Hnsw { .. } => write!(f, "hnsw"),
+			IndexType::Ivfflat { .. } => write!(f, "ivfflat"),
+		}
+	}
+}
+
+impl IndexType {
+	fn is_approximate_vector(self) -> bool {
+		matches!(self, Self::Hnsw { .. } | Self::Ivfflat { .. })
+	}
+
+	fn options_sql(self) -> Option<String> {
+		match self {
+			Self::Hnsw { m, ef_construction } => {
+				let mut options = Vec::new();
+				if let Some(m) = m {
+					options.push(format!("m = {m}"));
+				}
+				if let Some(ef_construction) = ef_construction {
+					options.push(format!("ef_construction = {ef_construction}"));
+				}
+				(!options.is_empty()).then(|| format!(" WITH ({})", options.join(", ")))
+			}
+			Self::Ivfflat { lists } => lists.map(|lists| format!(" WITH (lists = {lists})")),
+			_ => None,
 		}
 	}
 }
@@ -2616,7 +2659,17 @@ impl Operation {
 					if let Some(exprs) = expressions.as_ref().filter(|e| !e.is_empty()) {
 						// For expression indexes, use expressions and generate a hash-based suffix
 						// Expressions are assumed to be properly formatted, no additional quoting needed
-						let content = exprs.join(", ");
+						let content = if let Some(operator_class) = operator_class
+							&& matches!(dialect, SqlDialect::Postgres)
+						{
+							exprs
+								.iter()
+								.map(|expression| format!("{expression} {operator_class}"))
+								.collect::<Vec<_>>()
+								.join(", ")
+						} else {
+							exprs.join(", ")
+						};
 						let suffix = "expr";
 						(content, suffix.to_string())
 					} else {
@@ -2709,6 +2762,10 @@ impl Operation {
 					using_clause,
 					index_content
 				));
+
+				if let Some(options) = index_type.and_then(|index_type| index_type.options_sql()) {
+					sql.push_str(&options);
+				}
 
 				// Add WHERE clause for partial indexes (PostgreSQL, SQLite, CockroachDB - not MySQL)
 				if let Some(where_cond) = where_clause
@@ -2936,6 +2993,76 @@ impl Operation {
 		Ok(self.to_sql(dialect))
 	}
 
+	fn validate_approximate_vector_index(
+		index_type: Option<IndexType>,
+		unique: bool,
+		columns: &[String],
+		expressions: Option<&[String]>,
+		operator_class: Option<&str>,
+		dialect: &SqlDialect,
+	) -> super::Result<()> {
+		let Some(index_type) = index_type.filter(|index_type| index_type.is_approximate_vector())
+		else {
+			return Ok(());
+		};
+
+		let backend = match dialect {
+			SqlDialect::Postgres => None,
+			SqlDialect::Mysql => Some("mysql"),
+			SqlDialect::Sqlite => Some("sqlite"),
+			SqlDialect::Cockroachdb => Some("cockroachdb"),
+		};
+		if let Some(backend) = backend {
+			return Err(super::MigrationError::UnsupportedBackendFeature {
+				feature: "approximate vector indexes",
+				backend,
+			});
+		}
+
+		if unique {
+			return Err(super::MigrationError::InvalidMigration(
+				"approximate vector indexes cannot be unique".to_string(),
+			));
+		}
+
+		let target_count = expressions
+			.filter(|expressions| !expressions.is_empty())
+			.map_or(columns.len(), <[String]>::len);
+		if target_count != 1 {
+			return Err(super::MigrationError::InvalidMigration(
+				"approximate vector indexes require exactly one column or expression".to_string(),
+			));
+		}
+
+		if !operator_class.is_some_and(|operator_class| {
+			matches!(
+				operator_class,
+				"vector_l2_ops" | "vector_ip_ops" | "vector_cosine_ops"
+			)
+		}) {
+			return Err(super::MigrationError::InvalidMigration(
+				"approximate vector indexes require a supported vector operator class".to_string(),
+			));
+		}
+
+		let zero_option = match index_type {
+			IndexType::Hnsw { m: Some(0), .. } => Some("m"),
+			IndexType::Hnsw {
+				ef_construction: Some(0),
+				..
+			} => Some("ef_construction"),
+			IndexType::Ivfflat { lists: Some(0) } => Some("lists"),
+			_ => None,
+		};
+		if let Some(option) = zero_option {
+			return Err(super::MigrationError::InvalidMigration(format!(
+				"{option} must be greater than zero for approximate vector indexes"
+			)));
+		}
+
+		Ok(())
+	}
+
 	/// Validates every field definition rendered by this operation.
 	pub fn validate_for_dialect(&self, dialect: &SqlDialect) -> super::Result<()> {
 		match self {
@@ -2957,6 +3084,37 @@ impl Operation {
 					column.type_definition.try_to_sql_for_dialect(dialect)?;
 				}
 			}
+			Self::CreateIndex {
+				columns,
+				unique,
+				index_type,
+				expressions,
+				operator_class,
+				..
+			}
+			| Self::CreateIndexRepair {
+				columns,
+				unique,
+				index_type,
+				expressions,
+				operator_class,
+				..
+			}
+			| Self::RestoreIndexOnRollback {
+				columns,
+				unique,
+				index_type,
+				expressions,
+				operator_class,
+				..
+			} => Self::validate_approximate_vector_index(
+				*index_type,
+				*unique,
+				columns,
+				expressions.as_deref(),
+				operator_class.as_deref(),
+				dialect,
+			)?,
 			_ => {}
 		}
 		Ok(())
@@ -3331,11 +3489,23 @@ impl Operation {
 				quote_identifier(new_name),
 				quote_identifier(old_name)
 			)])),
-			Operation::CreateIndex { table, columns, .. } => {
-				// Use the same naming convention as to_sql(): idx_{table}_{columns_joined}
-				// This ensures the rollback DROP INDEX targets the correct index name
-				let columns_joined = columns.join("_");
-				let index_name = format!("idx_{}_{}", table, columns_joined);
+			Operation::CreateIndex {
+				table,
+				columns,
+				expressions,
+				..
+			} => {
+				// Mirror the forward SQL naming convention so rollback targets
+				// expression indexes as well as column indexes.
+				let name_suffix = if expressions
+					.as_ref()
+					.is_some_and(|expressions| !expressions.is_empty())
+				{
+					"expr".to_string()
+				} else {
+					columns.join("_")
+				};
+				let index_name = format!("idx_{}_{}", table, name_suffix);
 				// MySQL requires `DROP INDEX <name> ON <table>`; PostgreSQL/SQLite/CockroachDB
 				// only need the index name. Mirror the dialect dispatch used by the forward
 				// `Operation::DropIndex` SQL generator above.
@@ -3363,8 +3533,8 @@ impl Operation {
 				expressions,
 				mysql_options,
 				operator_class,
-			} => Ok(Some(vec![
-				Operation::CreateIndexRepair {
+			} => {
+				let sql = Operation::CreateIndexRepair {
 					table: table.clone(),
 					name: name.clone(),
 					columns: columns.clone(),
@@ -3376,8 +3546,9 @@ impl Operation {
 					mysql_options: *mysql_options,
 					operator_class: operator_class.clone(),
 				}
-				.to_sql(dialect),
-			])),
+				.try_to_sql(dialect)?;
+				Ok(Some(vec![sql]))
+			}
 			Operation::AddConstraint {
 				table,
 				constraint_sql,
@@ -5450,14 +5621,19 @@ impl Operation {
 				table,
 				columns,
 				unique,
+				index_type,
 				..
 			}
 			| Operation::CreateIndexRepair {
 				table,
 				columns,
 				unique,
+				index_type,
 				..
 			} => {
+				if index_type.is_some_and(IndexType::is_approximate_vector) {
+					return OperationStatement::DialectOperation(Box::new(self.clone()));
+				}
 				let idx_name = format!("idx_{}_{}", table, columns.join("_"));
 				OperationStatement::IndexCreate(
 					self.build_create_index(&idx_name, table, columns, *unique),
@@ -9376,7 +9552,235 @@ mod tests {
 		// Internal state cannot be easily asserted with reinhardt_query's ColumnDef API
 	}
 
-	#[test]
+	fn vector_index_operation(index_type: IndexType) -> Operation {
+		Operation::CreateIndex {
+			table: "source".to_string(),
+			columns: vec!["embedding".to_string()],
+			unique: false,
+			index_type: Some(index_type),
+			where_clause: None,
+			concurrently: false,
+			expressions: None,
+			mysql_options: None,
+			operator_class: Some("vector_cosine_ops".to_string()),
+		}
+	}
+
+	#[rstest]
+	fn vector_index_hnsw_migration_renders_forward_and_backward_sql() {
+		// Arrange
+		let operation = vector_index_operation(IndexType::Hnsw {
+			m: Some(16),
+			ef_construction: Some(64),
+		});
+		let state = ProjectState::default();
+
+		// Act
+		let forward_sql = operation.try_to_sql(&SqlDialect::Postgres).unwrap();
+		let statement_sql = operation
+			.try_to_statement(&SqlDialect::Postgres)
+			.unwrap()
+			.try_to_sql_string(crate::backends::types::DatabaseType::Postgres)
+			.unwrap();
+		let backward_sql = operation
+			.to_reverse_sql(&SqlDialect::Postgres, &state)
+			.unwrap()
+			.unwrap();
+
+		// Assert
+		assert_eq!(
+			forward_sql,
+			"CREATE INDEX idx_source_embedding ON source USING hnsw (embedding vector_cosine_ops) WITH (m = 16, ef_construction = 64);"
+		);
+		assert_eq!(statement_sql, forward_sql);
+		assert_eq!(backward_sql, vec!["DROP INDEX idx_source_embedding;"]);
+	}
+
+	#[rstest]
+	fn vector_index_ivfflat_migration_renders_exact_sql() {
+		// Arrange
+		let mut operation = vector_index_operation(IndexType::Ivfflat { lists: Some(100) });
+		if let Operation::CreateIndex { operator_class, .. } = &mut operation {
+			*operator_class = Some("vector_l2_ops".to_string());
+		}
+
+		// Act
+		let sql = operation.try_to_sql(&SqlDialect::Postgres).unwrap();
+
+		// Assert
+		assert_eq!(
+			sql,
+			"CREATE INDEX idx_source_embedding ON source USING ivfflat (embedding vector_l2_ops) WITH (lists = 100);"
+		);
+	}
+
+	#[rstest]
+	fn vector_index_restore_preserves_hnsw_metadata() {
+		// Arrange
+		let operation = Operation::RestoreIndexOnRollback {
+			table: "source".to_string(),
+			name: Some("source_embedding_cosine_hnsw".to_string()),
+			columns: vec!["embedding".to_string()],
+			unique: false,
+			index_type: Some(IndexType::Hnsw {
+				m: Some(16),
+				ef_construction: Some(64),
+			}),
+			where_clause: None,
+			concurrently: false,
+			expressions: None,
+			mysql_options: None,
+			operator_class: Some("vector_cosine_ops".to_string()),
+		};
+		let state = ProjectState::default();
+
+		// Act
+		let sql = operation
+			.to_reverse_sql(&SqlDialect::Postgres, &state)
+			.unwrap()
+			.unwrap();
+
+		// Assert
+		assert_eq!(
+			sql,
+			vec![
+				"CREATE INDEX source_embedding_cosine_hnsw ON source USING hnsw (embedding vector_cosine_ops) WITH (m = 16, ef_construction = 64);"
+			]
+		);
+	}
+
+	#[rstest]
+	#[case(SqlDialect::Mysql, "mysql")]
+	#[case(SqlDialect::Sqlite, "sqlite")]
+	fn vector_index_migration_rejects_non_postgres_backends(
+		#[case] dialect: SqlDialect,
+		#[case] backend: &'static str,
+	) {
+		// Arrange
+		let operation = vector_index_operation(IndexType::Hnsw {
+			m: None,
+			ef_construction: None,
+		});
+
+		// Act
+		let result = operation.try_to_sql(&dialect);
+
+		// Assert
+		assert!(matches!(
+			result,
+			Err(crate::migrations::MigrationError::UnsupportedBackendFeature {
+				feature: "approximate vector indexes",
+				backend: actual_backend,
+			}) if actual_backend == backend
+		));
+	}
+
+	#[rstest]
+	#[case(
+		IndexType::Hnsw {
+			m: Some(0),
+			ef_construction: Some(64),
+		},
+		"m"
+	)]
+	#[case(
+		IndexType::Hnsw {
+			m: Some(16),
+			ef_construction: Some(0),
+		},
+		"ef_construction"
+	)]
+	#[case(IndexType::Ivfflat { lists: Some(0) }, "lists")]
+	fn vector_index_migration_rejects_zero_options(
+		#[case] index_type: IndexType,
+		#[case] option: &str,
+	) {
+		// Arrange
+		let operation = vector_index_operation(index_type);
+
+		// Act
+		let result = operation.try_to_sql(&SqlDialect::Postgres);
+
+		// Assert
+		assert!(matches!(
+			result,
+			Err(crate::migrations::MigrationError::InvalidMigration(message))
+				if message == format!("{option} must be greater than zero for approximate vector indexes")
+		));
+	}
+
+	#[rstest]
+	#[case(true, vec!["embedding".to_string()], None, Some("vector_l2_ops".to_string()), "approximate vector indexes cannot be unique")]
+	#[case(false, vec!["embedding".to_string(), "tenant_id".to_string()], None, Some("vector_l2_ops".to_string()), "approximate vector indexes require exactly one column or expression")]
+	#[case(false, vec!["embedding".to_string()], None, None, "approximate vector indexes require a supported vector operator class")]
+	#[case(false, vec!["embedding".to_string()], None, Some("gin_trgm_ops".to_string()), "approximate vector indexes require a supported vector operator class")]
+	#[case(false, vec![], Some(vec!["embedding".to_string(), "tenant_id".to_string()]), Some("vector_l2_ops".to_string()), "approximate vector indexes require exactly one column or expression")]
+	fn vector_index_migration_rejects_invalid_structure(
+		#[case] unique: bool,
+		#[case] columns: Vec<String>,
+		#[case] expressions: Option<Vec<String>>,
+		#[case] operator_class: Option<String>,
+		#[case] expected: &str,
+	) {
+		// Arrange
+		let operation = Operation::CreateIndex {
+			table: "source".to_string(),
+			columns,
+			unique,
+			index_type: Some(IndexType::Ivfflat { lists: None }),
+			where_clause: None,
+			concurrently: false,
+			expressions,
+			mysql_options: None,
+			operator_class,
+		};
+
+		// Act
+		let result = operation.try_to_sql(&SqlDialect::Postgres);
+
+		// Assert
+		assert!(matches!(
+			result,
+			Err(crate::migrations::MigrationError::InvalidMigration(message))
+				if message == expected
+		));
+	}
+
+	#[rstest]
+	fn vector_index_expression_migration_renders_operator_class() {
+		// Arrange
+		let operation = Operation::CreateIndex {
+			table: "source".to_string(),
+			columns: vec![],
+			unique: false,
+			index_type: Some(IndexType::Hnsw {
+				m: None,
+				ef_construction: None,
+			}),
+			where_clause: None,
+			concurrently: false,
+			expressions: Some(vec!["normalize(embedding)".to_string()]),
+			mysql_options: None,
+			operator_class: Some("vector_ip_ops".to_string()),
+		};
+		let state = ProjectState::default();
+
+		// Act
+		let forward_sql = operation.try_to_sql(&SqlDialect::Postgres).unwrap();
+		let backward_sql = operation
+			.to_reverse_sql(&SqlDialect::Postgres, &state)
+			.unwrap()
+			.unwrap();
+
+		// Assert
+		assert_eq!(
+			forward_sql,
+			"CREATE INDEX idx_source_expr ON source USING hnsw (normalize(embedding) vector_ip_ops);"
+		);
+		assert_eq!(backward_sql, vec!["DROP INDEX idx_source_expr;"]);
+	}
+
+	#[rstest]
 	fn test_create_index_composite() {
 		let op = Operation::CreateIndex {
 			table: "users".to_string(),

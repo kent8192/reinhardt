@@ -2193,7 +2193,7 @@ pub(crate) fn model_derive_impl(mut input: DeriveInput) -> Result<TokenStream> {
 
 		(pk_getter, pk_setter, quote! {})
 	};
-	let pk_filter_value_impl = if !is_composite_pk && is_uuid_type(pk_type) {
+	let pk_filter_value_impl = if !is_composite_pk && is_fully_qualified_uuid_type(pk_type) {
 		quote! {
 			fn primary_key_filter_value(pk: Self::PrimaryKey) -> #orm_crate::query::FilterValue {
 				#orm_crate::query::FilterValue::Uuid(pk)
@@ -3688,6 +3688,19 @@ fn generate_relationship_metadata(
 /// one place.
 fn is_uuid_type(ty: &Type) -> bool {
 	crate::pk_shape::pk_uuid_shape(ty).0
+}
+
+/// Check whether a type is explicitly `uuid::Uuid`.
+fn is_fully_qualified_uuid_type(ty: &Type) -> bool {
+	let (_, inner_ty) = extract_option_type(ty);
+	matches!(
+		inner_ty,
+		Type::Path(type_path)
+			if matches!(
+				type_path.path.segments.iter().map(|segment| segment.ident.to_string()).collect::<Vec<_>>().as_slice(),
+				[uuid, uuid_type] if uuid == "uuid" && uuid_type == "Uuid"
+			)
+	)
 }
 
 /// Check if a type is String or `Option<String>`
@@ -5529,6 +5542,21 @@ mod tests {
 			}
 			.to_string()
 		);
+	}
+
+	#[rstest]
+	fn uuid_named_primary_key_uses_the_fallback_filter_value() {
+		let input = quote! {
+			#[model(app_label = "test", table_name = "custom_uuid_models")]
+			pub struct CustomUuidModel {
+				#[field(primary_key = true)]
+				pub id: Uuid,
+			}
+		};
+
+		let output = model_derive_impl(syn::parse2(input).unwrap()).unwrap();
+
+		assert!(!output.to_string().contains("primary_key_filter_value"));
 	}
 
 	#[rstest]

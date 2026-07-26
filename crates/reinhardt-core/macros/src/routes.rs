@@ -630,7 +630,9 @@ fn generate_wrapper_with_both(
 			.iter()
 			.zip(extractor_temps.iter())
 			.filter(|(ext, _)| {
-				ext.extractor_name != "Validated" && ext.extractor_name != "Multipart"
+				ext.extractor_name != "Validated"
+					&& ext.extractor_name != "Multipart"
+					&& ext.extractor_name != "OptionalSessionValueNamed"
 			})
 			.map(|(_, temp)| {
 				quote! {

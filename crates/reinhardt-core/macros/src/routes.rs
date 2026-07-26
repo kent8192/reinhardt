@@ -418,7 +418,7 @@ fn generate_wrapper_with_both(
 
 	let fn_name = &original_fn.sig.ident;
 	let original_fn_name = quote::format_ident!("{}_original", fn_name);
-	let request_ident = Ident::new("__reinhardt_request", Span::mixed_site());
+	let request_ident = syn::Ident::new("__reinhardt_request", Span::mixed_site());
 	let fn_attrs: Vec<_> = original_fn
 		.attrs
 		.iter()
@@ -661,6 +661,7 @@ fn generate_view_type(
 	let async_trait_crate = get_async_trait_crate();
 
 	let fn_name = &input.sig.ident;
+	let request_ident = syn::Ident::new("__reinhardt_request", Span::mixed_site());
 	let fn_vis = &input.vis;
 	let fn_attrs: Vec<_> = input
 		.attrs

@@ -511,33 +511,59 @@ pub async fn install_scoped_database(
 	Ok(ScopedDatabaseRegistration { node })
 }
 
-/// Replace the global ORM database connection and return the previous value.
+/// Opaque global ORM database state retained across test replacement.
+#[doc(hidden)]
+pub struct DatabaseRegistrationSnapshot {
+	database: Option<DefaultDatabase>,
+}
+
+/// Replace the global ORM database connection and retain the previous state.
 ///
 /// This is intended for test fixtures that need to mutate global ORM state while
 /// preserving RAII cleanup semantics. Passing `None` clears the global connection.
 #[doc(hidden)]
 pub async fn replace_database_connection_for_testing(
 	lease: Option<DatabaseConnectionLease>,
-) -> Option<DatabaseConnectionLease> {
+) -> DatabaseRegistrationSnapshot {
 	replace_database_connection_for_testing_sync(lease)
 }
 
 fn replace_database_connection_for_testing_sync(
 	lease: Option<DatabaseConnectionLease>,
-) -> Option<DatabaseConnectionLease> {
+) -> DatabaseRegistrationSnapshot {
 	let database = lease.map(|lease| DefaultDatabase {
 		handle: lease.handle(),
 		lease,
 		scope: None,
 	});
 	match database_state() {
-		Ok(mut state) => std::mem::replace(&mut *state, database).map(|database| database.lease),
+		Ok(mut state) => DatabaseRegistrationSnapshot {
+			database: std::mem::replace(&mut *state, database),
+		},
 		Err(error) => {
 			tracing::warn!(
 				error = %error,
 				"Test database registration could not be replaced"
 			);
-			None
+			DatabaseRegistrationSnapshot { database: None }
+		}
+	}
+}
+
+/// Restores a database registration saved by [`replace_database_connection_for_testing`].
+#[doc(hidden)]
+pub async fn restore_database_connection_for_testing(snapshot: DatabaseRegistrationSnapshot) {
+	restore_database_connection_for_testing_sync(snapshot);
+}
+
+fn restore_database_connection_for_testing_sync(snapshot: DatabaseRegistrationSnapshot) {
+	match database_state() {
+		Ok(mut state) => {
+			let replaced = std::mem::replace(&mut *state, snapshot.database);
+			drop(replaced);
+		}
+		Err(error) => {
+			tracing::warn!(error = %error, "Test database registration could not be restored");
 		}
 	}
 }
@@ -2977,7 +3003,7 @@ mod tests {
 	use std::collections::HashMap;
 
 	struct DatabaseStateRestoreGuard {
-		previous: Option<crate::orm::connection::DatabaseConnectionLease>,
+		previous: super::DatabaseRegistrationSnapshot,
 	}
 
 	impl DatabaseStateRestoreGuard {
@@ -2990,9 +3016,10 @@ mod tests {
 
 	impl Drop for DatabaseStateRestoreGuard {
 		fn drop(&mut self) {
-			let replaced =
-				super::replace_database_connection_for_testing_sync(self.previous.take());
-			drop(replaced);
+			super::restore_database_connection_for_testing_sync(std::mem::replace(
+				&mut self.previous,
+				super::DatabaseRegistrationSnapshot { database: None },
+			));
 		}
 	}
 

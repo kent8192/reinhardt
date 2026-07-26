@@ -834,9 +834,15 @@ fn source_with_commit_sentinel(source: &str, sentinel: &str) -> String {
 		prefix_end += whitespace + item_end;
 		found_inner_prefix = true;
 	}
+	let separator = if prefix_end > 0 && !source[..prefix_end].ends_with('\n') {
+		"\n"
+	} else {
+		""
+	};
 	format!(
-		"{}let {sentinel}: ::std::string::String = ::std::string::String::new();\n{}",
+		"{}{}let {sentinel}: ::std::string::String = ::std::string::String::new();\n{}",
 		&source[..prefix_end],
+		separator,
 		&source[prefix_end..]
 	)
 }
@@ -1491,6 +1497,16 @@ mod tests {
 		assert_eq!(
 			rendered,
 			"#![doc = r##\"a ] bracket\"##]\nlet __commit: ::std::string::String = ::std::string::String::new();\nlet value = 1;"
+		);
+	}
+
+	#[test]
+	fn commit_sentinel_terminates_an_eof_inner_line_doc_comment() {
+		let rendered = source_with_commit_sentinel("//! shell notes", "__commit");
+
+		assert_eq!(
+			rendered,
+			"//! shell notes\nlet __commit: ::std::string::String = ::std::string::String::new();\n"
 		);
 	}
 

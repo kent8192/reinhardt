@@ -381,15 +381,12 @@ fn analyze_chain(
 		return ChainOutcome::Mixed(span_line(method.method.span()));
 	}
 
-	let mut bindings = BTreeSet::new();
-	let Some(caller_owner) = resolve_app_module_owner(app_modules, target, module) else {
-		return ChainOutcome::IncompatibleOwnership(span_line(methods[0].method.span()));
-	};
 	let server_methods: Vec<_> = methods
 		.iter()
 		.copied()
 		.filter(|method| method.method == "server_fn")
 		.collect();
+	let mut resolved_markers = Vec::with_capacity(server_methods.len());
 	for method in &server_methods {
 		let Some(argument) = single_marker_argument(method) else {
 			return ChainOutcome::Unresolved {
@@ -403,13 +400,21 @@ fn analyze_chain(
 				line: span_line(method.method.span()),
 			};
 		};
+		if !resolved.auto_register {
+			return ChainOutcome::Mixed(span_line(method.method.span()));
+		}
+		resolved_markers.push((method, resolved));
+	}
+
+	let Some(caller_owner) = resolve_app_module_owner(app_modules, target, module) else {
+		return ChainOutcome::IncompatibleOwnership(span_line(methods[0].method.span()));
+	};
+	let mut bindings = BTreeSet::new();
+	for (method, resolved) in resolved_markers {
 		if resolve_app_module_owner(app_modules, target, &resolved.module)
 			.is_none_or(|owner| owner != caller_owner)
 		{
 			return ChainOutcome::IncompatibleOwnership(span_line(method.method.span()));
-		}
-		if !resolved.auto_register {
-			return ChainOutcome::Mixed(span_line(method.method.span()));
 		}
 		if let Some(binding) = resolved.import_binding {
 			bindings.insert(binding);

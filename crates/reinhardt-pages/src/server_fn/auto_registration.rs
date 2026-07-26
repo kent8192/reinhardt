@@ -238,7 +238,7 @@ fn validate_entries(
 	let mut owned_entries = Vec::new();
 	for entry in entries {
 		match resolve_app_module_owner(apps.iter(), entry.module_path) {
-			Ok(owner) => owned_entries.push((entry, owner.app_label)),
+			Ok(owner) => owned_entries.push((entry, owner)),
 			Err(error) => errors.push(resolution_error(
 				entry.module_path,
 				Some(entry.path),

@@ -36,7 +36,7 @@ impl ShellConfig {
 			settings_factory_path: settings_factory_path.into(),
 			installed_app_labels: installed_app_labels.into_iter().map(Into::into).collect(),
 			project_prelude: String::new(),
-			dependency_features: vec!["commands-shell".to_string()],
+			dependency_features: Vec::new(),
 			default_features: true,
 		}
 	}
@@ -49,8 +49,7 @@ impl ShellConfig {
 
 	/// Selects the project's active Cargo features for the evaluator dependency.
 	///
-	/// Include every feature used to compile the management binary. The shell always
-	/// adds `commands-shell`, so callers must not include it themselves.
+	/// Include every feature used to compile the management binary.
 	pub fn with_dependency_features<I, F>(mut self, features: I) -> Self
 	where
 		I: IntoIterator<Item = F>,

@@ -48,6 +48,20 @@ impl EvaluationFailure {
 		}
 	}
 
+	fn with_prepended_output(self, prefix: EvaluationOutput) -> Self {
+		match self {
+			Self::Output {
+				failure,
+				mut output,
+			} => {
+				output.stdout = format!("{}{}", prefix.stdout, output.stdout);
+				output.stderr = format!("{}{}", prefix.stderr, output.stderr);
+				Self::Output { failure, output }
+			}
+			failure => failure.with_output(prefix),
+		}
+	}
+
 	pub(crate) fn output(&self) -> Option<&EvaluationOutput> {
 		match self {
 			Self::Output { output, .. } => Some(output),
@@ -408,7 +422,16 @@ impl BlockingShellEvaluator for EvcxrEvaluator {
 			)))
 		};
 		let (stdout, stderr) = match boundary_result {
-			Some(Ok(_)) => self.output_drainers.finish(&marker)?,
+			Some(Ok(_)) => match self.output_drainers.finish(&marker) {
+				Ok(output) => output,
+				Err(error) => {
+					return Err(error.with_prepended_output(EvaluationOutput {
+						stdout: pending_stdout,
+						stderr: pending_stderr,
+						value: None,
+					}));
+				}
+			},
 			Some(Err(error)) => {
 				let (stdout, stderr) = self.output_drainers.finish_after_disconnect();
 				return Err(classify_boundary_error(error, &stderr).with_output(
@@ -852,12 +875,12 @@ fn complete_nested_block_comment(source: &str) -> Option<usize> {
 	let mut depth = 0;
 	let mut index = 0;
 	while index + 1 < source.len() {
-		match &source[index..index + 2] {
-			"/*" => {
+		match &source.as_bytes()[index..index + 2] {
+			b"/*" => {
 				depth += 1;
 				index += 2;
 			}
-			"*/" => {
+			b"*/" => {
 				depth -= 1;
 				index += 2;
 				if depth == 0 {
@@ -1445,6 +1468,17 @@ mod tests {
 	}
 
 	#[test]
+	fn commit_sentinel_handles_utf8_in_leading_block_comments() {
+		let source = "/* 日本語 /* nested */ */\n#![allow(unused)]\nlet value = 1;";
+		let rendered = source_with_commit_sentinel(source, "__commit");
+
+		assert_eq!(
+			rendered,
+			"/* 日本語 /* nested */ */\n#![allow(unused)]\nlet __commit: ::std::string::String = ::std::string::String::new();\nlet value = 1;"
+		);
+	}
+
+	#[test]
 	fn commit_sentinel_ignores_brackets_in_raw_inner_attribute_literals() {
 		let source = "#![doc = r##\"a ] bracket\"##]\nlet value = 1;";
 		let rendered = source_with_commit_sentinel(source, "__commit");
@@ -1549,14 +1583,6 @@ mod tests {
 				.and_then(toml_edit::Value::as_array)
 				.and_then(|features| features.get(0))
 				.and_then(toml_edit::Value::as_str),
-			Some("commands-shell")
-		);
-		assert_eq!(
-			dependency
-				.get("features")
-				.and_then(toml_edit::Value::as_array)
-				.and_then(|features| features.get(1))
-				.and_then(toml_edit::Value::as_str),
 			Some("custom-feature")
 		);
 		assert_eq!(
@@ -1604,6 +1630,30 @@ mod tests {
 				.take_at_boundary(second_marker)
 				.expect("second boundary should be recognized"),
 			""
+		);
+	}
+
+	#[test]
+	fn boundary_failure_preserves_output_collected_before_evaluation() {
+		let failure = EvaluationFailure::ProcessExited("boundary timed out".to_string())
+			.with_output(EvaluationOutput {
+				stdout: "during evaluation\n".to_string(),
+				stderr: "during evaluation error\n".to_string(),
+				value: None,
+			})
+			.with_prepended_output(EvaluationOutput {
+				stdout: "before evaluation\n".to_string(),
+				stderr: "before evaluation error\n".to_string(),
+				value: None,
+			});
+
+		assert_eq!(
+			failure.output(),
+			Some(&EvaluationOutput {
+				stdout: "before evaluation\nduring evaluation\n".to_string(),
+				stderr: "before evaluation error\nduring evaluation error\n".to_string(),
+				value: None,
+			})
 		);
 	}
 

@@ -20,4 +20,5 @@ pub fn get_shell_config() -> ShellConfig {
         "{{ crate_name }}::config::settings::get_settings",
         InstalledApp::all_labels().iter().copied(),
     )
+    .with_dependency_features(["commands-shell"])
 }

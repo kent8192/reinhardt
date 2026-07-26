@@ -107,6 +107,12 @@ pub fn validate_form_with_ambient_arguments_source(
 	let fields = transform_fields(&ast.fields)?;
 	validate_list_references(&fields)?;
 	let model_source = transform_model_source(&ast.model_source)?;
+	if model_source.is_some() && !matches!(&action, TypedFormAction::ServerFn(_)) {
+		return Err(Error::new(
+			ast.span,
+			"model-backed form! requires an explicit `server_fn`",
+		));
+	}
 	if model_source.is_some() && (redirect_on_success.is_some() || success_url.is_some()) {
 		return Err(Error::new(
 			ast.span,
@@ -185,6 +191,20 @@ fn transform_model_source(
 		.iter()
 		.map(|override_| {
 			let field = override_.field.to_string();
+			let selected = match &selection {
+				TypedModelFieldSelection::Fields(fields) => {
+					fields.iter().any(|name| name == &override_.field)
+				}
+				TypedModelFieldSelection::Exclude(fields) => {
+					!fields.iter().any(|name| name == &override_.field)
+				}
+			};
+			if !selected {
+				return Err(Error::new(
+					override_.field.span(),
+					format!("`overrides` field `{field}` is not selected by the model form"),
+				));
+			}
 			if !seen_overrides.insert(field.clone()) {
 				return Err(Error::new(
 					override_.field.span(),

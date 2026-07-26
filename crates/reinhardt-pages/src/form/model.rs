@@ -71,18 +71,20 @@ where
 		}
 		if !descriptor.required
 			&& matches!(&value, serde_json::Value::String(text) if text.is_empty())
-			&& !matches!(
+		{
+			if descriptor.nullable {
+				self.values.insert(descriptor.name, serde_json::Value::Null);
+				return Ok(());
+			}
+			if !matches!(
 				descriptor.kind,
 				ModelFormFieldKind::Text { .. }
 					| ModelFormFieldKind::Email { .. }
 					| ModelFormFieldKind::Url { .. }
 			) {
-			if descriptor.nullable {
-				self.values.insert(descriptor.name, serde_json::Value::Null);
-			} else {
 				self.values.remove(descriptor.name);
+				return Ok(());
 			}
-			return Ok(());
 		}
 
 		match convert_control_value(descriptor, value) {

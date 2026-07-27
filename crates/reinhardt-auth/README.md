@@ -853,6 +853,7 @@ impl AuthBackend for MyAuthBackend {
 #### Storage Backends
 
 - **DatabaseSessionBackend** (feature: `database`) - Persistent session storage in database
+  - Uses the connection supplied to `from_connection()` for load, save, delete, and existence checks
   - Session model with expiration timestamps
   - Automatic session cleanup with `cleanup_expired()`
   - SQLite, PostgreSQL, and MySQL support via sqlx

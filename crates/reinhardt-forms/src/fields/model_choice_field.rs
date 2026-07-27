@@ -8,6 +8,8 @@ use std::collections::HashMap;
 use std::marker::PhantomData;
 use std::sync::Arc;
 
+type ChoiceLabel<T> = Arc<dyn Fn(&T) -> String + Send + Sync>;
+
 /// A field for selecting a single model instance from a queryset
 ///
 /// This field displays model instances as choices in a select widget.
@@ -28,7 +30,7 @@ pub struct ModelChoiceField<T: FormModel> {
 	queryset: Vec<T>,
 	/// Label for the empty/default option (e.g., "Select one...").
 	pub empty_label: Option<String>,
-	choice_label: Option<Arc<dyn Fn(&T) -> String + Send + Sync>>,
+	choice_label: Option<ChoiceLabel<T>>,
 	_phantom: PhantomData<T>,
 }
 
@@ -296,7 +298,7 @@ pub struct ModelMultipleChoiceField<T: FormModel> {
 	pub initial: Option<Value>,
 	/// The list of model instances to choose from.
 	queryset: Vec<T>,
-	choice_label: Option<Arc<dyn Fn(&T) -> String + Send + Sync>>,
+	choice_label: Option<ChoiceLabel<T>>,
 	_phantom: PhantomData<T>,
 }
 

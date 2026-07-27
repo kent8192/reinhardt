@@ -2279,7 +2279,7 @@ fn generate_model_form_support(
 		let ty = &field.ty;
 		quote! {
 			#name => {
-				self.#ident = #serde_crate::from_value::<#ty>(value).map_err(|error| {
+				self.#ident = #serde_json_crate::from_value::<#ty>(value).map_err(|error| {
 					#forms_crate::model_form::ModelFormError::FieldValidation {
 						errors: ::std::collections::HashMap::from([(
 							field.to_owned(),
@@ -2847,7 +2847,7 @@ fn generate_model_form_support(
 			fn set_trusted_field_json(
 				&mut self,
 				field: &str,
-				value: #serde_crate::Value,
+				value: #serde_json_crate::Value,
 			) -> ::core::result::Result<(), #forms_crate::model_form::ModelFormError> {
 				match field {
 					#(#trusted_field_assignments,)*

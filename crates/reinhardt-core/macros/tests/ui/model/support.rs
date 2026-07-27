@@ -120,6 +120,9 @@ pub mod model_form {
 	pub trait ModelFormSchema {
 		type Model;
 		fn fields() -> &'static [ModelFormFieldDescriptor];
+		fn default_boolean_is_true(_field: &str) -> bool {
+			false
+		}
 	}
 
 	pub trait ModelFormPayload<P: ModelFormPolicy>: Sized {

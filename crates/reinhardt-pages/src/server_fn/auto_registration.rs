@@ -396,8 +396,7 @@ fn compatible_owner_identity(
 	caller: &AppModuleRegistration,
 ) -> bool {
 	owner.crate_id.is_empty()
-		|| (owner.crate_id == caller.crate_id
-			&& (owner.target_id.is_none() || owner.target_id == caller.target_id))
+		|| (owner.crate_id == caller.crate_id && owner.target_id == caller.target_id)
 }
 
 fn resolution_error(

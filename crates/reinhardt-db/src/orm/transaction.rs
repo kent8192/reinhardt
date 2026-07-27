@@ -118,13 +118,13 @@ pub enum TransactionState {
 	RolledBack,
 }
 
-/// Observable terminal state for a closure-scoped atomic transaction.
 #[derive(Debug)]
 struct AtomicTransactionOutcomeInner {
 	state: AtomicU8,
 	parent: Option<Arc<AtomicTransactionOutcomeInner>>,
 }
 
+/// Observable terminal state for a closure-scoped atomic transaction.
 #[derive(Debug, Clone)]
 pub struct AtomicTransactionOutcome(Arc<AtomicTransactionOutcomeInner>);
 

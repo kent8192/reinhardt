@@ -29,7 +29,8 @@ use nix::unistd::{Pid, getpgid, getpgrp};
 use rexpect::session::PtySession;
 use tempfile::TempDir;
 
-const COMMAND_TIMEOUT: Duration = Duration::from_secs(300);
+// The evaluator builds its dependencies outside the fixture target directory.
+const COMMAND_TIMEOUT: Duration = Duration::from_secs(600);
 const FIXTURE_BUILD_TIMEOUT: Duration = Duration::from_secs(600);
 const PTY_TIMEOUT: Duration = Duration::from_secs(60);
 const CLEANUP_TIMEOUT: Duration = Duration::from_secs(5);

@@ -1381,10 +1381,10 @@ fn generate_server_handler(
 					#args_struct_name { #parameter_name }
 				}
 			}
-			_ => quote! { return Err(__invalid_request_error()); },
+			_ => quote! {{ return Err(__invalid_request_error()); }},
 		}
 	} else {
-		quote! { return Err(__invalid_request_error()); }
+		quote! {{ return Err(__invalid_request_error()); }}
 	};
 
 	// Generate codec-specific deserialization code for server
@@ -2770,6 +2770,32 @@ mod tests {
 			generated.contains("let data : QuestionModelFormData")
 				&& generated.contains("{ data }"),
 			"the native fallback must bind and forward the declared parameter name: {generated}"
+		);
+	}
+
+	#[test]
+	fn server_handler_without_model_form_fallback_is_valid_rust() {
+		use syn::parse_quote;
+
+		let func: ItemFn = parse_quote! {
+			async fn save(data: String) -> Result<(), ServerFnError> { Ok(()) }
+		};
+		let info = ServerFnInfo {
+			func,
+			options: ServerFnOptions::default(),
+			metadata_name: None,
+			endpoint_tokens: None,
+			metadata_name_tokens: None,
+			detail: false,
+			transactional: false,
+			structured_error: false,
+		};
+
+		let generated = generate_server_handler(&info, &[], &[]);
+
+		assert!(
+			syn::parse2::<syn::File>(generated).is_ok(),
+			"a default JSON fallback must remain a valid match-arm expression"
 		);
 	}
 }

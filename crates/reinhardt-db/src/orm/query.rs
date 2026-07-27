@@ -517,6 +517,12 @@ impl From<i32> for FilterValue {
 	}
 }
 
+impl From<u32> for FilterValue {
+	fn from(i: u32) -> Self {
+		FilterValue::Integer(i64::from(i))
+	}
+}
+
 impl From<f64> for FilterValue {
 	fn from(f: f64) -> Self {
 		FilterValue::Float(f)
@@ -6533,6 +6539,21 @@ mod tests {
 	use rstest::rstest;
 	use serde::{Deserialize, Serialize};
 	use std::collections::HashMap;
+
+	#[test]
+	fn filter_value_from_u32_preserves_the_full_unsigned_value() {
+		// Arrange
+		let value = u32::MAX;
+
+		// Act
+		let filter_value = FilterValue::from(value);
+
+		// Assert
+		assert!(matches!(
+			filter_value,
+			FilterValue::Integer(integer) if integer == i64::from(value)
+		));
+	}
 
 	#[test]
 	fn render_select_statement_uses_mysql_identifier_quoting() {

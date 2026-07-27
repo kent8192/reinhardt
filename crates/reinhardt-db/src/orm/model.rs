@@ -21,7 +21,10 @@ pub trait FieldSelector: Clone {
 /// A new associated type `Fields` has been added. It provides a type-safe field selector.
 /// When using the `#[model(...)]` macro, this implementation is automatically generated.
 pub trait Model: Serialize + for<'de> Deserialize<'de> + Send + Sync + Clone {
-	/// The primary key type
+	/// The primary key type.
+	///
+	/// Values must convert into [`FilterValue`](super::query::FilterValue) so
+	/// primary-key lookups preserve their database binding type.
 	type PrimaryKey: Send + Sync + Clone + std::fmt::Display + Into<super::query::FilterValue>;
 
 	/// Type-safe field selector

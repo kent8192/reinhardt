@@ -63,7 +63,11 @@ impl From<introspection::DatabaseSchema> for DatabaseSchema {
 							access_method: idx.access_method.clone(),
 							index_type: idx.index_type,
 							expressions: idx.expressions.clone(),
-							operator_class: if idx.operator_class_is_default {
+							operator_class: if idx.operator_class_is_default
+								&& !matches!(
+									idx.index_type,
+									Some(IndexType::Hnsw { .. } | IndexType::Ivfflat { .. })
+								) {
 								None
 							} else {
 								idx.operator_class.clone()
@@ -357,6 +361,64 @@ impl SchemaDiff {
 			&& Self::effective_index_method(current)
 				.eq_ignore_ascii_case(Self::effective_index_method(target))
 			&& Self::approximate_index_options_equal(current, target)
+	}
+
+	#[cfg(feature = "pgvector")]
+	fn index_has_explicit_name(table: &str, index: &IndexSchema) -> bool {
+		index.name != format!("idx_{table}_{}", index.columns.join("_"))
+	}
+
+	fn create_index_operation(table: &str, index: &IndexSchema) -> Operation {
+		#[cfg(feature = "pgvector")]
+		if Self::index_has_explicit_name(table, index) {
+			return Operation::CreateNamedIndex {
+				table: table.to_string(),
+				name: index.name.clone(),
+				columns: index.columns.clone(),
+				unique: index.unique,
+				index_type: index.index_type,
+				where_clause: None,
+				concurrently: false,
+				expressions: index.expressions.clone(),
+				mysql_options: None,
+				operator_class: index.operator_class.clone(),
+			};
+		}
+
+		Operation::CreateIndex {
+			table: table.to_string(),
+			columns: index.columns.clone(),
+			unique: index.unique,
+			index_type: index.index_type,
+			where_clause: None,
+			concurrently: false,
+			expressions: index.expressions.clone(),
+			mysql_options: None,
+			operator_class: index.operator_class.clone(),
+		}
+	}
+
+	fn drop_index_operation(table: &str, index: &IndexSchema) -> Operation {
+		#[cfg(feature = "pgvector")]
+		if Self::index_has_explicit_name(table, index) {
+			return Operation::DropNamedIndex {
+				table: table.to_string(),
+				name: index.name.clone(),
+				columns: index.columns.clone(),
+				unique: index.unique,
+				index_type: index.index_type,
+				where_clause: None,
+				concurrently: false,
+				expressions: index.expressions.clone(),
+				mysql_options: None,
+				operator_class: index.operator_class.clone(),
+			};
+		}
+
+		Operation::DropIndex {
+			table: table.to_string(),
+			columns: index.columns.clone(),
+		}
 	}
 
 	fn effective_index_method(index: &IndexSchema) -> &str {
@@ -1078,17 +1140,7 @@ impl SchemaDiff {
 				// Generate CreateIndex for indexes on new tables
 				// (detect() only compares indexes on existing tables)
 				for index in &table_schema.indexes {
-					operations.push(Operation::CreateIndex {
-						table: table_name.clone(),
-						columns: index.columns.clone(),
-						unique: index.unique,
-						index_type: index.index_type,
-						where_clause: None,
-						concurrently: false,
-						expressions: index.expressions.clone(),
-						mysql_options: None,
-						operator_class: index.operator_class.clone(),
-					});
+					operations.push(Self::create_index_operation(table_name, index));
 				}
 			}
 		}
@@ -1314,17 +1366,7 @@ impl SchemaDiff {
 
 		// Add indexes
 		for (table_name, index) in &diff.indexes_to_add {
-			operations.push(Operation::CreateIndex {
-				table: table_name.clone(),
-				columns: index.columns.clone(),
-				unique: index.unique,
-				index_type: index.index_type,
-				where_clause: None,
-				concurrently: false,
-				expressions: index.expressions.clone(),
-				mysql_options: None,
-				operator_class: index.operator_class.clone(),
-			});
+			operations.push(Self::create_index_operation(table_name, index));
 		}
 
 		// Remove indexes
@@ -1334,10 +1376,7 @@ impl SchemaDiff {
 			if Self::index_schema_references_any_column(index, &recreated_columns) {
 				continue;
 			}
-			operations.push(Operation::DropIndex {
-				table: table_name.clone(),
-				columns: index.columns.clone(),
-			});
+			operations.push(Self::drop_index_operation(table_name, index));
 		}
 
 		// Remove constraints before adding replacements with the same name.
@@ -1673,7 +1712,7 @@ mod tests {
 
 	#[cfg(feature = "pgvector")]
 	#[test]
-	fn vector_index_introspection_conversion_normalizes_default_operator_class() {
+	fn vector_index_introspection_conversion_retains_default_operator_class() {
 		// Arrange
 		let mut intro_indexes = std::collections::HashMap::new();
 		intro_indexes.insert(
@@ -1724,7 +1763,7 @@ mod tests {
 					ef_construction: Some(64),
 				}),
 				expressions: None,
-				operator_class: None,
+				operator_class: Some("vector_cosine_ops".to_string()),
 			}]
 		);
 	}
@@ -3038,8 +3077,9 @@ mod tests {
 		// Assert
 		assert_eq!(
 			operations,
-			vec![Operation::CreateIndex {
+			vec![Operation::CreateNamedIndex {
 				table: "source".to_string(),
+				name: "source_embedding_cosine_hnsw".to_string(),
 				columns: vec!["embedding".to_string()],
 				unique: false,
 				index_type: Some(IndexType::Hnsw {
@@ -3099,16 +3139,22 @@ mod tests {
 		// Assert
 		assert_eq!(detected.indexes_to_remove.len(), 1);
 		assert_eq!(detected.indexes_to_add.len(), 1);
-		assert!(matches!(
-			&operations[..],
+		match operations.as_slice() {
 			[
-				Operation::CreateIndex {
+				Operation::CreateNamedIndex {
+					name,
 					index_type: Some(IndexType::Hnsw { m: Some(16), .. }),
 					..
 				},
-				Operation::DropIndex { .. }
-			]
-		));
+				Operation::DropNamedIndex {
+					name: dropped_name, ..
+				},
+			] => {
+				assert_eq!(name, "source_embedding_hnsw");
+				assert_eq!(dropped_name, "source_embedding_hnsw");
+			}
+			other => panic!("Expected named index replacement operations, got {other:?}"),
+		}
 	}
 
 	#[test]

@@ -3542,6 +3542,12 @@ fn generate_composite_pk_type(struct_name: &syn::Ident, pk_fields: &[&FieldInfo]
 				write!(f, ")")
 			}
 		}
+
+		impl ::std::convert::From<#composite_pk_name> for #orm_crate::query::FilterValue {
+			fn from(primary_key: #composite_pk_name) -> Self {
+				Self::String(primary_key.to_string())
+			}
+		}
 	}
 }
 

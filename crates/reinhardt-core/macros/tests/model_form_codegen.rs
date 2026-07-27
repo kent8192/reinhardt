@@ -37,7 +37,7 @@ struct StringKeyTarget {
 struct StringKeyChild {
 	#[field(primary_key = true)]
 	id: i64,
-	#[rel(foreign_key)]
+	#[rel(foreign_key, null = true)]
 	target: db::associations::ForeignKeyField<StringKeyTarget>,
 }
 
@@ -161,6 +161,13 @@ fn generated_schema_exposes_descriptors_and_target_primary_key_kinds() {
 			multiline: false,
 		}
 	);
+	assert!(StringKeyChildFormSchema::target_id().nullable);
+
+	let mut child_payload = StringKeyChildModelFormData::<AllEditableModelFields>::empty();
+	child_payload
+		.set_json("target_id", serde_json::json!(null))
+		.expect("nullable relationship identifiers should accept an explicit clear");
+	assert_eq!(child_payload.target_id(), Some(&None));
 
 	let mut payload = FormDocumentModelFormData::<AllEditableModelFields>::empty();
 	payload

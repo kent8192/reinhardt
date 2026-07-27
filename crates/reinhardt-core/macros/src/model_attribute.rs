@@ -3,7 +3,8 @@
 use crate::crate_paths::get_reinhardt_crate;
 use proc_macro2::TokenStream;
 use quote::quote;
-use syn::{Attribute, Field, ItemStruct, Result, Type};
+use syn::parse::Parser;
+use syn::{Attribute, Field, ItemStruct, Meta, Result, Type};
 
 /// Extract target type from ForeignKeyField<T> or OneToOneField<T>
 fn extract_fk_target_type(ty: &Type) -> Option<&Type> {
@@ -18,12 +19,33 @@ fn extract_fk_target_type(ty: &Type) -> Option<&Type> {
 	None
 }
 
+fn model_forms_enabled(args: &TokenStream) -> bool {
+	let parser = syn::punctuated::Punctuated::<Meta, syn::Token![,]>::parse_terminated;
+	parser.parse2(args.clone()).ok().is_some_and(|attributes| {
+		attributes.iter().any(|attribute| {
+			matches!(
+				attribute,
+				Meta::NameValue(name_value)
+					if name_value.path.is_ident("form")
+						&& matches!(
+							&name_value.value,
+							syn::Expr::Lit(syn::ExprLit {
+								lit: syn::Lit::Bool(value),
+								..
+							}) if value.value
+						)
+			)
+		})
+	})
+}
+
 pub(crate) fn model_attribute_impl(
 	args: TokenStream,
 	mut input: ItemStruct,
 ) -> Result<TokenStream> {
 	// Get dynamic crate paths for code generation
 	let reinhardt = get_reinhardt_crate();
+	let model_forms_enabled = model_forms_enabled(&args);
 
 	// Check if #[derive(Model)] already exists (avoid double processing)
 	// Parse derive tokens properly instead of fragile string matching
@@ -150,7 +172,9 @@ pub(crate) fn model_attribute_impl(
 					// Generate _id field with the target model's primary-key type.
 					// `InfoModel` is target-neutral, so generated DTO companions can
 					// compile on WASM without the native ORM surface.
-					let new_field: Field = if relation_is_nullable(&field.attrs) {
+					let new_field: Field = if model_forms_enabled
+						&& relation_is_nullable(&field.attrs)
+					{
 						syn::parse_quote! {
 							#[serde(default)]
 							#id_field_name: ::core::option::Option<<#target_ty as #reinhardt::model_info::InfoModel>::PrimaryKey>

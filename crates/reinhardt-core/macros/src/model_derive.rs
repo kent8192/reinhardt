@@ -3524,6 +3524,10 @@ fn generate_fk_accessor_methods(
 
 			// Extract Target from ForeignKeyField<Target> or OneToOneField<Target>
 			let target_ty = extract_foreign_key_target_type(&field.ty);
+			let nullable = field_infos
+				.iter()
+				.find(|candidate| candidate.name == fk_id_field_name)
+				.is_some_and(|candidate| extract_option_type(&candidate.ty).0);
 			let target_column = field.rel.as_ref().and_then(|relation| {
 				relation.to_field.as_ref().map(|target_field| {
 					quote! {
@@ -3547,6 +3551,17 @@ fn generate_fk_accessor_methods(
 				"Load the related '{}' instance from the database",
 				field_name_str
 			);
+			let load_foreign_key = if nullable {
+				quote! {
+					let Some(fk_id) = self.#fk_id_field_name() else {
+						return ::core::result::Result::Ok(::core::option::Option::None);
+					};
+				}
+			} else {
+				quote! {
+					let fk_id = self.#fk_id_field_name();
+				}
+			};
 
 				quote! {
 					#[doc = #doc_comment]
@@ -3558,7 +3573,7 @@ fn generate_fk_accessor_methods(
 						E: #orm_crate::connection::OrmExecutor,
 					{
 					// Get FK _id value.
-					let fk_id = self.#fk_id_field_name();
+					#load_foreign_key
 
 					// Query the target model through the relation's configured target field.
 					<#target_ty as #orm_crate::Model>::objects()
@@ -6916,6 +6931,7 @@ fn generate_build_function(
 		ForeignKey {
 			related_type: Box<Type>,
 			setter_name: syn::Ident,
+			nullable: bool,
 		},
 		/// `String` field. Setter accepts `impl Into<String>` for ergonomics.
 		String,
@@ -6953,6 +6969,7 @@ fn generate_build_function(
 				kind: SetterKind::ForeignKey {
 					related_type: Box::new(related_type),
 					setter_name,
+					nullable: extract_option_type(&f.ty).0,
 				},
 			});
 		} else if is_string_type(&f.ty) && !extract_option_type(&f.ty).0 {
@@ -7036,6 +7053,7 @@ fn generate_build_function(
 			kind: SetterKind::ForeignKey {
 				related_type: Box::new(related_type),
 				setter_name,
+				nullable: extract_option_type(&id_field_info.ty).0,
 			},
 		});
 	}
@@ -7155,6 +7173,7 @@ fn generate_build_function(
 			SetterKind::ForeignKey {
 				related_type,
 				setter_name,
+				nullable,
 			} => {
 				// Setter named after the related FK field, accepting any
 				// IntoPrimaryKey<Related>. This composes with #4398 — callers
@@ -7171,7 +7190,11 @@ fn generate_build_function(
 					where
 						__FkArg: #orm_crate::IntoPrimaryKey<#related_type>,
 				};
-				let expr = quote! { value.into_primary_key() };
+				let expr = if *nullable {
+					quote! { ::core::option::Option::Some(value.into_primary_key()) }
+				} else {
+					quote! { value.into_primary_key() }
+				};
 				(sig, expr)
 			}
 			SetterKind::String => {
@@ -7559,6 +7582,7 @@ enum InfoSetterKind {
 	Plain,
 	String,
 	Relation { target_ty: TokenStream },
+	NullableRelation { target_ty: TokenStream },
 	ManyToMany { target_ty: TokenStream },
 }
 
@@ -7675,9 +7699,9 @@ fn generate_info_struct(
 		.iter()
 		.map(|fk| (fk.field_name.to_string(), fk))
 		.collect();
-	let fk_id_to_field_name: HashMap<String, Ident> = fk_field_infos
+	let fk_id_to_field: HashMap<String, &ForeignKeyFieldInfo> = fk_field_infos
 		.iter()
-		.map(|fk| (format!("{}_id", fk.field_name), fk.field_name.clone()))
+		.map(|fk| (format!("{}_id", fk.field_name), fk))
 		.collect();
 
 	let mut info_fields = Vec::new();
@@ -7690,16 +7714,40 @@ fn generate_info_struct(
 		if let Some(fk) = fk_by_field_name.get(&name.to_string()) {
 			let id_name = Ident::new(&format!("{}_id", name), name.span());
 			let target_ty = normalize_relation_ty(&fk.target_type);
-			let ty = quote! { #reinhardt::model_info::RelationInfo<#target_ty> };
+			let nullable = field_infos
+				.iter()
+				.find(|candidate| candidate.name == id_name)
+				.is_some_and(|candidate| extract_option_type(&candidate.ty).0);
+			let ty = if nullable {
+				quote! { ::core::option::Option<#reinhardt::model_info::RelationInfo<#target_ty>> }
+			} else {
+				quote! { #reinhardt::model_info::RelationInfo<#target_ty> }
+			};
+			let setter_kind = if nullable {
+				InfoSetterKind::NullableRelation {
+					target_ty: target_ty.clone(),
+				}
+			} else {
+				InfoSetterKind::Relation {
+					target_ty: target_ty.clone(),
+				}
+			};
+			let from_model = if nullable {
+				quote! {
+					#name: model.#id_name.map(#reinhardt::model_info::RelationInfo::new),
+				}
+			} else {
+				quote! {
+					#name: #reinhardt::model_info::RelationInfo::new(model.#id_name),
+				}
+			};
 			info_fields.push(InfoFieldSpec {
 				name: name.clone(),
 				ty,
 				serde_attrs: relation_info_serde_attrs(f),
 				validate_attrs: Vec::new(),
-				setter_kind: InfoSetterKind::Relation { target_ty },
-				from_model: quote! {
-					#name: #reinhardt::model_info::RelationInfo::new(model.#id_name),
-				},
+				setter_kind,
+				from_model,
 			});
 			continue;
 		}
@@ -7806,10 +7854,15 @@ fn generate_info_struct(
 		.map(|f| {
 			let name = &f.name;
 			let name_str = name.to_string();
-			if let Some(relation_name) = fk_id_to_field_name.get(&name_str)
-				&& info_fields.iter().any(|inf| inf.name == *relation_name)
+			if let Some(fk) = fk_id_to_field.get(&name_str)
+				&& info_fields.iter().any(|inf| inf.name == fk.field_name)
 			{
-				quote! { #name: info.#relation_name.into_id(), }
+				let relation_name = &fk.field_name;
+				if extract_option_type(&f.ty).0 {
+					quote! { #name: info.#relation_name.map(#reinhardt::model_info::RelationInfo::into_id), }
+				} else {
+					quote! { #name: info.#relation_name.into_id(), }
+				}
 			} else if info_fields.iter().any(|inf| inf.name == f.name)
 				&& !is_relationship_field_type(&f.ty)
 				&& !is_many_to_many_field_type(&f.ty)
@@ -8003,6 +8056,26 @@ fn generate_info_builder(
 							{
 								self.#name = ::std::option::Option::Some(
 									#reinhardt::model_info::RelationInfo::new(value.into_primary_key())
+								);
+								#builder_name {
+									#(#field_names: self.#field_names,)*
+									_state: ::std::marker::PhantomData,
+								}
+							}
+						}
+					}
+				}
+				InfoSetterKind::NullableRelation { target_ty } => {
+					quote! {
+						#[cfg(not(all(target_family = "wasm", target_os = "unknown")))]
+						#[allow(missing_docs)]
+						impl<#(#free_state_params),*> #builder_name<#(#input_states),*> {
+							pub fn #name(
+								mut self,
+								value: ::core::option::Option<<#target_ty as #reinhardt::model_info::InfoModel>::PrimaryKey>,
+							) -> #builder_name<#(#output_states),*> {
+								self.#name = ::core::option::Option::Some(
+									value.map(#reinhardt::model_info::RelationInfo::new)
 								);
 								#builder_name {
 									#(#field_names: self.#field_names,)*

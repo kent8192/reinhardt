@@ -770,6 +770,12 @@ impl StructuredIndexConfig {
 						"vector index name must not contain NUL",
 					));
 				}
+				if parsed.len() > 63 {
+					return Err(syn::Error::new(
+						value.span(),
+						"vector index name must not exceed PostgreSQL's 63-byte identifier limit",
+					));
+				}
 				name = Some((parsed, value.span()));
 			} else if nested.path.is_ident("method") {
 				if method.is_some() {
@@ -808,10 +814,10 @@ impl StructuredIndexConfig {
 				}
 				let value = nested.value()?.parse::<syn::LitInt>()?;
 				let parsed = value.base10_parse::<u16>()?;
-				if parsed == 0 {
+				if !(2..=100).contains(&parsed) {
 					return Err(syn::Error::new(
 						value.span(),
-						"vector index option `m` must be greater than zero",
+						"vector index option `m` must be in the range 2..=100",
 					));
 				}
 				m = Some(parsed);
@@ -821,10 +827,10 @@ impl StructuredIndexConfig {
 				}
 				let value = nested.value()?.parse::<syn::LitInt>()?;
 				let parsed = value.base10_parse::<u16>()?;
-				if parsed == 0 {
+				if !(4..=1000).contains(&parsed) {
 					return Err(syn::Error::new(
 						value.span(),
-						"vector index option `ef_construction` must be greater than zero",
+						"vector index option `ef_construction` must be in the range 4..=1000",
 					));
 				}
 				ef_construction = Some(parsed);
@@ -834,10 +840,10 @@ impl StructuredIndexConfig {
 				}
 				let value = nested.value()?.parse::<syn::LitInt>()?;
 				let parsed = value.base10_parse::<u32>()?;
-				if parsed == 0 {
+				if !(1..=32768).contains(&parsed) {
 					return Err(syn::Error::new(
 						value.span(),
-						"vector index option `lists` must be greater than zero",
+						"vector index option `lists` must be in the range 1..=32768",
 					));
 				}
 				lists = Some(parsed);
@@ -851,8 +857,17 @@ impl StructuredIndexConfig {
 		let method = method.ok_or_else(|| meta.error("vector index requires `method`"))?;
 		let opclass = opclass.ok_or_else(|| meta.error("vector index requires `opclass`"))?;
 		match method {
-			StructuredIndexMethod::Hnsw if lists.is_some() => {
-				return Err(meta.error("HNSW vector indexes do not accept `lists`"));
+			StructuredIndexMethod::Hnsw => {
+				if lists.is_some() {
+					return Err(meta.error("HNSW vector indexes do not accept `lists`"));
+				}
+				if let (Some(m), Some(ef_construction)) = (m, ef_construction)
+					&& ef_construction < 2 * m
+				{
+					return Err(meta.error(
+						"HNSW vector index option `ef_construction` must be at least twice `m`",
+					));
+				}
 			}
 			StructuredIndexMethod::Ivfflat if m.is_some() || ef_construction.is_some() => {
 				return Err(

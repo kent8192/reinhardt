@@ -13,7 +13,7 @@ struct Document {
 		name = "documents_embedding_hnsw",
 		method = "hnsw",
 		opclass = "vector_l2_ops",
-		m = 0
+		m = 1
 	))]
 	embedding: Vector<1536>,
 }

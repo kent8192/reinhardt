@@ -3276,19 +3276,29 @@ impl Operation {
 		}
 
 		#[cfg(feature = "pgvector")]
-		let zero_option = match _index_type {
-			IndexType::Hnsw { m: Some(0), .. } => Some("m"),
+		let invalid_option = match _index_type {
+			IndexType::Hnsw { m: Some(m), .. } if !(2..=100).contains(&m) => {
+				Some("m must be in the range 2..=100")
+			}
 			IndexType::Hnsw {
-				ef_construction: Some(0),
+				ef_construction: Some(ef_construction),
 				..
-			} => Some("ef_construction"),
-			IndexType::Ivfflat { lists: Some(0) } => Some("lists"),
+			} if !(4..=1000).contains(&ef_construction) => {
+				Some("ef_construction must be in the range 4..=1000")
+			}
+			IndexType::Hnsw {
+				m: Some(m),
+				ef_construction: Some(ef_construction),
+			} if ef_construction < 2 * m => Some("ef_construction must be at least twice m"),
+			IndexType::Ivfflat { lists: Some(lists) } if !(1..=32768).contains(&lists) => {
+				Some("lists must be in the range 1..=32768")
+			}
 			_ => None,
 		};
 		#[cfg(feature = "pgvector")]
-		if let Some(option) = zero_option {
+		if let Some(option) = invalid_option {
 			return Err(super::MigrationError::InvalidMigration(format!(
-				"{option} must be greater than zero for approximate vector indexes"
+				"{option} for approximate vector indexes"
 			)));
 		}
 
@@ -10718,20 +10728,30 @@ mod tests {
 	#[rstest]
 	#[case(
 		IndexType::Hnsw {
-			m: Some(0),
+			m: Some(1),
 			ef_construction: Some(64),
 		},
-		"m"
+		"m must be in the range 2..=100"
 	)]
 	#[case(
 		IndexType::Hnsw {
 			m: Some(16),
-			ef_construction: Some(0),
+			ef_construction: Some(1),
 		},
-		"ef_construction"
+		"ef_construction must be in the range 4..=1000"
 	)]
-	#[case(IndexType::Ivfflat { lists: Some(0) }, "lists")]
-	fn vector_index_migration_rejects_zero_options(
+	#[case(
+		IndexType::Ivfflat { lists: Some(32769) },
+		"lists must be in the range 1..=32768"
+	)]
+	#[case(
+		IndexType::Hnsw {
+			m: Some(16),
+			ef_construction: Some(31),
+		},
+		"ef_construction must be at least twice m"
+	)]
+	fn vector_index_migration_rejects_invalid_options(
 		#[case] index_type: IndexType,
 		#[case] option: &str,
 	) {
@@ -10745,7 +10765,7 @@ mod tests {
 		assert!(matches!(
 			result,
 			Err(crate::migrations::MigrationError::InvalidMigration(message))
-				if message == format!("{option} must be greater than zero for approximate vector indexes")
+				if message == format!("{option} for approximate vector indexes")
 		));
 	}
 

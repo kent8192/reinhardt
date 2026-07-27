@@ -1,5 +1,5 @@
-error: vector index option `m` must be greater than zero
+error: vector index option `m` must be in the range 2..=100
   --> tests/ui/field_attributes/vector_index_invalid_zero.rs:16:7
    |
-16 |         m = 0
+16 |         m = 1
    |             ^

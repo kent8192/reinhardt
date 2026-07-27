@@ -425,22 +425,31 @@ impl CreateIndexStatement {
 
 		match self.options {
 			Some(IndexOptions::Hnsw {
-				m: Some(0),
+				m: Some(m),
 				ef_construction: _,
-			}) => Err(crate::QueryBuildError::UnsupportedBackendFeature {
-				feature: "positive HNSW m",
+			}) if !(2..=100).contains(&m) => Err(crate::QueryBuildError::UnsupportedBackendFeature {
+				feature: "HNSW m in 2..=100",
 				backend,
 			}),
 			Some(IndexOptions::Hnsw {
 				m: _,
-				ef_construction: Some(0),
-			}) => Err(crate::QueryBuildError::UnsupportedBackendFeature {
-				feature: "positive HNSW ef_construction",
+				ef_construction: Some(ef_construction),
+			}) if !(4..=1000).contains(&ef_construction) => {
+				Err(crate::QueryBuildError::UnsupportedBackendFeature {
+					feature: "HNSW ef_construction in 4..=1000",
+					backend,
+				})
+			}
+			Some(IndexOptions::Hnsw {
+				m: Some(m),
+				ef_construction: Some(ef_construction),
+			}) if ef_construction < 2 * m => Err(crate::QueryBuildError::UnsupportedBackendFeature {
+				feature: "HNSW ef_construction at least twice m",
 				backend,
 			}),
-			Some(IndexOptions::Ivfflat { lists: Some(0) }) => {
+			Some(IndexOptions::Ivfflat { lists: Some(lists) }) if !(1..=32768).contains(&lists) => {
 				Err(crate::QueryBuildError::UnsupportedBackendFeature {
-					feature: "positive IVFFlat lists",
+					feature: "IVFFlat lists in 1..=32768",
 					backend,
 				})
 			}
@@ -643,25 +652,33 @@ mod tests {
 	#[case(
 		IndexMethod::Hnsw,
 		IndexOptions::Hnsw {
-			m: Some(0),
+			m: Some(1),
 			ef_construction: Some(64),
 		},
-		"positive HNSW m"
+		"HNSW m in 2..=100"
 	)]
 	#[case(
 		IndexMethod::Hnsw,
 		IndexOptions::Hnsw {
 			m: Some(16),
-			ef_construction: Some(0),
+			ef_construction: Some(1),
 		},
-		"positive HNSW ef_construction"
+		"HNSW ef_construction in 4..=1000"
 	)]
 	#[case(
 		IndexMethod::Ivfflat,
-		IndexOptions::Ivfflat { lists: Some(0) },
-		"positive IVFFlat lists"
+		IndexOptions::Ivfflat { lists: Some(32769) },
+		"IVFFlat lists in 1..=32768"
 	)]
-	fn create_vector_index_rejects_zero_options(
+	#[case(
+		IndexMethod::Hnsw,
+		IndexOptions::Hnsw {
+			m: Some(16),
+			ef_construction: Some(31),
+		},
+		"HNSW ef_construction at least twice m"
+	)]
+	fn create_vector_index_rejects_invalid_options(
 		#[case] method: IndexMethod,
 		#[case] options: IndexOptions,
 		#[case] feature: &'static str,

@@ -222,6 +222,45 @@ impl<M: Model, const N: usize> Field<M, Vector<N>> {
 	}
 }
 
+#[cfg(feature = "pgvector")]
+impl<M: Model, const N: usize> Field<M, Option<Vector<N>>> {
+	fn vector_distance(
+		self,
+		target: Vector<N>,
+		operator: PgBinOper,
+	) -> super::expression::TypedExpression<M, f64> {
+		let expr = SimpleExpr::Binary(
+			Box::new(self.column_expr()),
+			BinOper::PgOperator(operator),
+			Box::new(
+				Expr::value(reinhardt_query::value::Value::Vector(Some(Box::new(
+					target.into_vec(),
+				))))
+				.into_simple_expr(),
+			),
+		);
+		super::expression::TypedExpression::new(expr)
+	}
+
+	/// Compute Euclidean (L2) distance using PostgreSQL's `<->` operator.
+	pub fn l2_distance(self, target: Vector<N>) -> super::expression::TypedExpression<M, f64> {
+		self.vector_distance(target, PgBinOper::L2Distance)
+	}
+
+	/// Compute negative inner product using PostgreSQL's `<#>` operator.
+	pub fn negative_inner_product(
+		self,
+		target: Vector<N>,
+	) -> super::expression::TypedExpression<M, f64> {
+		self.vector_distance(target, PgBinOper::NegativeInnerProduct)
+	}
+
+	/// Compute cosine distance using PostgreSQL's `<=>` operator.
+	pub fn cosine_distance(self, target: Vector<N>) -> super::expression::TypedExpression<M, f64> {
+		self.vector_distance(target, PgBinOper::CosineDistance)
+	}
+}
+
 // =============================================================================
 // String-specific methods
 // =============================================================================

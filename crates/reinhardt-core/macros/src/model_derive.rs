@@ -1881,6 +1881,12 @@ fn vector_dimensions(ty: &Type) -> Result<Option<usize>> {
 			"Vector dimensions must be an integer literal representable as usize",
 		)
 	})?;
+	if !(1..=2000).contains(&dimensions) {
+		return Err(syn::Error::new_spanned(
+			literal,
+			"Vector dimensions must be in the range 1..=2000",
+		));
+	}
 
 	Ok(Some(dimensions))
 }

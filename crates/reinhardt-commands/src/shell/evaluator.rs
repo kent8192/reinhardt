@@ -723,7 +723,6 @@ fn bootstrap_prelude(config: &ValidatedShellConfig) -> Vec<String> {
 	vec![
 		format!(
 			"use {crate_name}::config::shell::framework;\n\
-			 use {crate_name}::config::shell::framework::prelude::*;\n\
 			 use {crate_name} as project_crate;"
 		),
 		format!(
@@ -1676,7 +1675,7 @@ mod tests {
 		.validate()
 		.expect("shell configuration should validate");
 		let prelude = bootstrap_prelude(&config);
-		assert!(prelude[0].contains("use shell_project::config::shell::framework::prelude::*;"));
+		assert!(prelude[0].contains("use shell_project::config::shell::framework;"));
 		let dependency = path_dependency(&config).expect("path dependency should render");
 		let manifest = format!("[dependencies]\nshell_project = {dependency}\n");
 		let document = manifest

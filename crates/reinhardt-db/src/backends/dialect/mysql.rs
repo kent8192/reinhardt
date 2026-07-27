@@ -762,6 +762,7 @@ mod tests {
 	}
 
 	#[test]
+	#[cfg(feature = "pgvector")]
 	fn mysql_rejects_vector_parameters_without_a_fallback_encoding() {
 		let error = MySqlBackend::bind_value(
 			sqlx::query("SELECT ?"),

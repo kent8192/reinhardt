@@ -78,7 +78,7 @@ async fn sqlite_fixture() -> SqliteFixture {
 fn article_payload(title: &str, owner_id: i64) -> ArticleModelFormData<ArticleFormPolicy> {
 	let mut payload = ArticleModelFormData::<ArticleFormPolicy>::empty();
 	payload.set_title(title.to_owned());
-	payload.set_owner_id(owner_id);
+	payload.set_trusted_owner_id(owner_id);
 	payload
 }
 

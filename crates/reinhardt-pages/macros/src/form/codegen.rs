@@ -7760,7 +7760,7 @@ mod tests {
 
 		assert!(output.contains("let fields = submit_form"));
 		assert!(output.contains("matches ! (descriptor . name , \"accent\")"));
-		assert!(output.contains("! descriptor . nullable || stored_value . is_some ()"));
+		assert!(output.contains("input_type == \"color\" && stored_value . is_none ()"));
 		assert!(output.contains("__reinhardt_defaulted_"));
 		assert!(output.contains("widget override `{widget}` is incompatible"));
 	}

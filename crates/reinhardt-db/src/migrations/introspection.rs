@@ -261,6 +261,9 @@ impl PostgresIntrospector {
 		enum_values: Option<Vec<String>>,
 	) -> super::FieldType {
 		use super::FieldType;
+		#[cfg(not(feature = "pgvector"))]
+		let _ = type_definition;
+
 		match udt_name {
 			// Integer types
 			"int4" | "serial" => FieldType::Integer,

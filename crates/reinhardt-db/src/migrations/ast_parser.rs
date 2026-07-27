@@ -2343,6 +2343,7 @@ fn extract_field_type(
 					let variant = last_segment.ident.to_string();
 
 					match variant.as_str() {
+						#[cfg(feature = "pgvector")]
 						"Vector" => {
 							for field_value in &expr_struct.fields {
 								if let syn::Member::Named(ident) = &field_value.member

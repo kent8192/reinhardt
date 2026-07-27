@@ -27,6 +27,12 @@ pub enum QueryBuildError {
 		/// The backend that does not support the feature.
 		backend: &'static str,
 	},
+	/// A pgvector column type uses an unsupported number of dimensions.
+	#[error("pgvector dimensions must be in the range 1..=2000; got {dimensions}")]
+	InvalidPgvectorDimensions {
+		/// The requested vector dimension count.
+		dimensions: u32,
+	},
 }
 
 /// A pgvector feature found through structural query inspection.
@@ -121,6 +127,7 @@ fn pgvector_feature_from_validation(
 			"pgvector values" => Some(PgvectorFeature::VectorValue),
 			_ => None,
 		},
+		Err(QueryBuildError::InvalidPgvectorDimensions { .. }) => None,
 		Ok(()) => None,
 	}
 }
@@ -274,6 +281,54 @@ pub(crate) fn validate_alter_table_for_backend(
 		}
 	}
 	Ok(())
+}
+
+#[cfg(feature = "pgvector")]
+pub(crate) fn validate_postgres_create_table_dimensions(
+	statement: &CreateTableStatement,
+) -> Result<(), QueryBuildError> {
+	for column in &statement.columns {
+		validate_postgres_column_dimensions(column)?;
+	}
+	Ok(())
+}
+
+#[cfg(feature = "pgvector")]
+pub(crate) fn validate_postgres_alter_table_dimensions(
+	statement: &AlterTableStatement,
+) -> Result<(), QueryBuildError> {
+	for operation in &statement.operations {
+		match operation {
+			AlterTableOperation::AddColumn(column) | AlterTableOperation::ModifyColumn(column) => {
+				validate_postgres_column_dimensions(column)?;
+			}
+			_ => {}
+		}
+	}
+	Ok(())
+}
+
+#[cfg(feature = "pgvector")]
+fn validate_postgres_column_dimensions(column: &ColumnDef) -> Result<(), QueryBuildError> {
+	if let Some(column_type) = &column.column_type {
+		validate_postgres_column_type_dimensions(column_type)?;
+	}
+	Ok(())
+}
+
+#[cfg(feature = "pgvector")]
+fn validate_postgres_column_type_dimensions(
+	column_type: &ColumnType,
+) -> Result<(), QueryBuildError> {
+	match column_type {
+		ColumnType::Vector(dimensions) if !(1..=2000).contains(dimensions) => {
+			Err(QueryBuildError::InvalidPgvectorDimensions {
+				dimensions: *dimensions,
+			})
+		}
+		ColumnType::Array(element_type) => validate_postgres_column_type_dimensions(element_type),
+		_ => Ok(()),
+	}
 }
 
 #[cfg(feature = "pgvector")]

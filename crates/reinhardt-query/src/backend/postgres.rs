@@ -101,6 +101,8 @@ impl PostgresQueryBuilder {
 		&self,
 		stmt: &CreateTableStatement,
 	) -> Result<(String, Values), crate::QueryBuildError> {
+		#[cfg(feature = "pgvector")]
+		crate::error::validate_postgres_create_table_dimensions(stmt)?;
 		Ok(self.build_create_table(stmt))
 	}
 
@@ -133,6 +135,8 @@ impl PostgresQueryBuilder {
 		&self,
 		stmt: &AlterTableStatement,
 	) -> Result<(String, Values), crate::QueryBuildError> {
+		#[cfg(feature = "pgvector")]
+		crate::error::validate_postgres_alter_table_dimensions(stmt)?;
 		Ok(self.build_alter_table(stmt))
 	}
 
@@ -146,12 +150,61 @@ impl PostgresQueryBuilder {
 	}
 
 	pub(crate) fn column_def_to_sql(&self, column: &ColumnDef) -> String {
-		let mut sql = self.escape_iden(&column.name.to_string());
+		let mut writer = SqlWriter::new();
+		self.write_column_definition(&mut writer, column);
+		writer.finish().0
+	}
+
+	fn write_column_definition(&self, writer: &mut SqlWriter, column: &ColumnDef) {
+		writer.push_identifier(&column.name.to_string(), |identifier| {
+			self.escape_iden(identifier)
+		});
+		writer.push_space();
+
 		if let Some(column_type) = &column.column_type {
-			sql.push(' ');
-			sql.push_str(&self.column_type_to_sql(column_type));
+			if column.auto_increment {
+				use crate::types::ColumnType;
+				let serial_type = match column_type {
+					ColumnType::SmallInteger => "SMALLSERIAL",
+					ColumnType::Integer => "SERIAL",
+					ColumnType::BigInteger => "BIGSERIAL",
+					_ => &self.column_type_to_sql(column_type),
+				};
+				writer.push(serial_type);
+			} else {
+				writer.push(&self.column_type_to_sql(column_type));
+			}
 		}
-		sql
+
+		if let Some(generated) = &column.generated {
+			self.write_generated_column(writer, generated);
+		}
+		if column.not_null {
+			writer.push_space();
+			writer.push_keyword("NOT NULL");
+		}
+		if column.unique {
+			writer.push_space();
+			writer.push_keyword("UNIQUE");
+		}
+		if column.primary_key {
+			writer.push_space();
+			writer.push_keyword("PRIMARY KEY");
+		}
+		if let Some(default_expr) = &column.default {
+			writer.push_space();
+			writer.push_keyword("DEFAULT");
+			writer.push_space();
+			self.write_simple_expr(writer, default_expr);
+		}
+		if let Some(check_expr) = &column.check {
+			writer.push_space();
+			writer.push_keyword("CHECK");
+			writer.push_space();
+			writer.push("(");
+			self.write_simple_expr_unquoted(writer, check_expr);
+			writer.push(")");
+		}
 	}
 
 	/// Escape an identifier for PostgreSQL
@@ -1669,66 +1722,7 @@ impl QueryBuilder for PostgresQueryBuilder {
 			}
 			first = false;
 
-			// Column name
-			writer.push_identifier(&column.name.to_string(), |s| self.escape_iden(s));
-			writer.push_space();
-
-			// Column type
-			if let Some(col_type) = &column.column_type {
-				// For auto_increment columns, use SERIAL types instead of INTEGER/BIGINT
-				if column.auto_increment {
-					use crate::types::ColumnType;
-					let serial_type = match col_type {
-						ColumnType::SmallInteger => "SMALLSERIAL",
-						ColumnType::Integer => "SERIAL",
-						ColumnType::BigInteger => "BIGSERIAL",
-						_ => &self.column_type_to_sql(col_type),
-					};
-					writer.push(serial_type);
-				} else {
-					writer.push(&self.column_type_to_sql(col_type));
-				}
-			}
-
-			if let Some(generated) = &column.generated {
-				self.write_generated_column(&mut writer, generated);
-			}
-
-			// NOT NULL
-			if column.not_null {
-				writer.push_space();
-				writer.push_keyword("NOT NULL");
-			}
-
-			// UNIQUE
-			if column.unique {
-				writer.push_space();
-				writer.push_keyword("UNIQUE");
-			}
-
-			// PRIMARY KEY
-			if column.primary_key {
-				writer.push_space();
-				writer.push_keyword("PRIMARY KEY");
-			}
-
-			// DEFAULT
-			if let Some(default_expr) = &column.default {
-				writer.push_space();
-				writer.push_keyword("DEFAULT");
-				writer.push_space();
-				self.write_simple_expr(&mut writer, default_expr);
-			}
-
-			// CHECK
-			if let Some(check_expr) = &column.check {
-				writer.push_space();
-				writer.push_keyword("CHECK");
-				writer.push_space();
-				writer.push("(");
-				self.write_simple_expr_unquoted(&mut writer, check_expr);
-				writer.push(")");
-			}
+			self.write_column_definition(&mut writer, column);
 		}
 
 		// Table constraints
@@ -4818,11 +4812,11 @@ impl crate::query::QueryBuilderTrait for PostgresQueryBuilder {
 mod tests {
 	use super::*;
 	#[cfg(feature = "pgvector")]
-	use crate::types::{BinOper, ColumnDef, PgBinOper};
+	use crate::types::{BinOper, PgBinOper};
 	use crate::{
 		expr::{Expr, ExprTrait},
 		query::Query,
-		types::{Alias, IntoIden},
+		types::{Alias, ColumnDef, IntoIden},
 		value::Value,
 	};
 	use rstest::rstest;
@@ -10296,6 +10290,8 @@ mod tests {
 		// A missing pgvector SQL representation or an inlined value would make this fail.
 		let column_sql = ColumnDef::new("embedding")
 			.vector(1536)
+			.not_null(true)
+			.unique(true)
 			.to_string(PostgresQueryBuilder);
 		let mut statement = Query::select();
 		statement
@@ -10310,11 +10306,51 @@ mod tests {
 
 		let (sql, values) = PostgresQueryBuilder::new().build_select(&statement);
 
-		assert_eq!(column_sql, "\"embedding\" vector(1536)");
+		assert_eq!(column_sql, "\"embedding\" vector(1536) NOT NULL UNIQUE");
 		assert_eq!(sql, "SELECT \"embedding\" <=> $1 FROM \"documents\"");
 		assert_eq!(
 			values,
 			vec![Value::Vector(Some(Box::new(vec![1.0, 2.0, 3.0])))].into()
+		);
+	}
+
+	#[test]
+	fn column_definition_renders_constraints_and_expressions() {
+		let column_sql = ColumnDef::new("score")
+			.integer()
+			.not_null(true)
+			.unique(true)
+			.primary_key(true)
+			.default(Expr::val(0).into())
+			.check(Expr::col("score").gte(Expr::val(0)))
+			.to_string(PostgresQueryBuilder);
+
+		assert_eq!(
+			column_sql,
+			"\"score\" INTEGER NOT NULL UNIQUE PRIMARY KEY DEFAULT $1 CHECK (\"score\" >= 0)"
+		);
+	}
+
+	#[cfg(feature = "pgvector")]
+	#[test]
+	fn checked_postgres_ddl_rejects_invalid_vector_dimensions() {
+		let builder = PostgresQueryBuilder::new();
+		let mut create = Query::create_table();
+		create
+			.table("documents")
+			.col(ColumnDef::new("embedding").vector(0));
+		let mut alter = Query::alter_table();
+		alter
+			.table("documents")
+			.add_column(ColumnDef::new("embedding").vector(2001));
+
+		assert_eq!(
+			builder.build_create_table_checked(&create),
+			Err(crate::QueryBuildError::InvalidPgvectorDimensions { dimensions: 0 })
+		);
+		assert_eq!(
+			builder.build_alter_table_checked(&alter),
+			Err(crate::QueryBuildError::InvalidPgvectorDimensions { dimensions: 2001 })
 		);
 	}
 }

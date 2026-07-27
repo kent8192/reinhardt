@@ -1,5 +1,7 @@
 //! Error types for database operations
 
+use std::error::Error as _;
+
 pub use reinhardt_core::exception::{DatabaseError, DatabaseErrorKind};
 
 /// Result type for database operations
@@ -311,11 +313,20 @@ pub(crate) fn decorate_error_with_pgvector_context(
 	error: reinhardt_core::exception::Error,
 	context: Option<PgvectorOperationKind>,
 ) -> reinhardt_core::exception::Error {
-	if !pgvector_hint_applies(
-		context,
-		error.database_error().and_then(DatabaseError::code),
-		error.database_error().map_or("", DatabaseError::message),
-	) {
+	let type_not_found_for_vector_binding = context
+		.is_some_and(|context| context.contains(PgvectorOperationKind::VectorValue))
+		&& error
+			.source()
+			.and_then(|source| source.downcast_ref::<sqlx::Error>())
+			.is_some_and(
+				|source| matches!(source, sqlx::Error::TypeNotFound { type_name } if type_name == "vector"),
+			);
+	if !type_not_found_for_vector_binding
+		&& !pgvector_hint_applies(
+			context,
+			error.database_error().and_then(DatabaseError::code),
+			error.database_error().map_or("", DatabaseError::message),
+		) {
 		return error;
 	}
 
@@ -442,22 +453,11 @@ pub(crate) fn map_sqlx_error_with_pgvector_context(
 	error: sqlx::Error,
 	context: Option<PgvectorOperationKind>,
 ) -> reinhardt_core::exception::Error {
-	let should_add_hint = matches!(&error, sqlx::Error::Database(database_error)
-	if pgvector_hint_applies(
-		context,
-		database_error.code().as_deref(),
-		database_error.message(),
-	));
-
 	let mapped = reinhardt_core::exception::Error::DatabaseWithSource {
 		database_error: map_sqlx_error_ref(&error),
 		source: Box::new(error),
 	};
-	if should_add_hint {
-		decorate_error_with_pgvector_context(mapped, context)
-	} else {
-		mapped
-	}
+	decorate_error_with_pgvector_context(mapped, context)
 }
 
 #[cfg(test)]
@@ -658,6 +658,30 @@ mod tests {
 		// Assert
 		assert_eq!(error.kind(), expected_kind);
 		assert_eq!(error.code(), None);
+	}
+
+	#[test]
+	fn pgvector_vector_binding_type_not_found_adds_installation_hint() {
+		let error = map_sqlx_error_with_pgvector_context(
+			sqlx::Error::TypeNotFound {
+				type_name: "vector".to_string(),
+			},
+			Some(PgvectorOperationKind::VectorValue),
+		);
+
+		assert!(
+			error
+				.to_string()
+				.contains("CreateExtension::new(\"vector\")")
+		);
+		assert!(
+			error
+				.source()
+				.and_then(|source| source.downcast_ref::<sqlx::Error>())
+				.is_some_and(
+					|source| matches!(source, sqlx::Error::TypeNotFound { type_name } if type_name == "vector")
+				)
+		);
 	}
 
 	fn postgres_database_error(code: &'static str, message: &'static str) -> sqlx::Error {

@@ -254,6 +254,7 @@ impl PostgresIntrospector {
 	fn parse_pg_type(
 		udt_name: &str,
 		data_type: &str,
+		type_definition: Option<&str>,
 		char_max_length: Option<i32>,
 		numeric_precision: Option<i32>,
 		numeric_scale: Option<i32>,
@@ -312,11 +313,20 @@ impl PostgresIntrospector {
 			"tstzrange" => FieldType::TsTzRange,
 			"daterange" => FieldType::DateRange,
 
+			#[cfg(feature = "pgvector")]
+			"vector" => type_definition
+				.and_then(Self::parse_pgvector_dimensions)
+				.map_or_else(
+					|| FieldType::Custom(udt_name.to_string()),
+					|dimensions| FieldType::Vector { dimensions },
+				),
+
 			// Array types (udt_name starts with _)
 			name if name.starts_with('_') => {
 				let inner = Self::parse_pg_type(
 					&name[1..],
 					data_type,
+					None,
 					char_max_length,
 					numeric_precision,
 					numeric_scale,
@@ -370,6 +380,16 @@ impl PostgresIntrospector {
 		}
 	}
 
+	#[cfg(feature = "pgvector")]
+	fn parse_pgvector_dimensions(type_definition: &str) -> Option<usize> {
+		let dimensions = type_definition
+			.strip_prefix("vector(")?
+			.strip_suffix(')')?
+			.parse()
+			.ok()?;
+		(1..=2000).contains(&dimensions).then_some(dimensions)
+	}
+
 	/// Fetches enum label values for a given PostgreSQL enum type name
 	async fn fetch_enum_values(&self, type_name: &str) -> Result<Vec<String>> {
 		use sqlx::Row;
@@ -404,13 +424,26 @@ impl PostgresIntrospector {
 
 		// Fetch columns
 		let col_query = r#"
-			SELECT column_name, udt_name, data_type, is_nullable, column_default,
-			       character_maximum_length, numeric_precision, numeric_scale,
-			       is_identity, identity_generation, is_generated,
-			       generation_expression
-			FROM information_schema.columns
-			WHERE table_schema = 'public' AND table_name = $1
-			ORDER BY ordinal_position
+			SELECT columns.column_name, columns.udt_name, columns.data_type,
+			       columns.is_nullable, columns.column_default,
+			       columns.character_maximum_length, columns.numeric_precision,
+			       columns.numeric_scale, columns.is_identity,
+			       columns.identity_generation, columns.is_generated,
+			       columns.generation_expression,
+			       pg_catalog.format_type(attributes.atttypid, attributes.atttypmod)
+			           AS type_definition
+			FROM information_schema.columns AS columns
+			JOIN pg_catalog.pg_namespace AS schemas
+			    ON schemas.nspname = columns.table_schema
+			JOIN pg_catalog.pg_class AS tables
+			    ON tables.relname = columns.table_name
+			    AND tables.relnamespace = schemas.oid
+			JOIN pg_catalog.pg_attribute AS attributes
+			    ON attributes.attrelid = tables.oid
+			    AND attributes.attname = columns.column_name
+			    AND NOT attributes.attisdropped
+			WHERE columns.table_schema = 'public' AND columns.table_name = $1
+			ORDER BY columns.ordinal_position
 		"#;
 		let col_rows = sqlx::query(col_query)
 			.bind(table_name)
@@ -433,6 +466,9 @@ impl PostgresIntrospector {
 			})?;
 			let data_type: String = row.try_get("data_type").map_err(|e| {
 				MigrationError::IntrospectionError(format!("Failed to get data_type: {}", e))
+			})?;
+			let type_definition: String = row.try_get("type_definition").map_err(|e| {
+				MigrationError::IntrospectionError(format!("Failed to get type_definition: {}", e))
 			})?;
 			let is_nullable: String = row.try_get("is_nullable").map_err(|e| {
 				MigrationError::IntrospectionError(format!("Failed to get is_nullable: {}", e))
@@ -497,6 +533,7 @@ impl PostgresIntrospector {
 			let field_type = Self::parse_pg_type(
 				&udt_name,
 				&data_type,
+				Some(&type_definition),
 				char_max_length,
 				numeric_precision,
 				numeric_scale,
@@ -2068,6 +2105,44 @@ mod postgres_index_metadata_tests {
 				if message
 					== "PostgreSQL approximate index idx_source_embeddings must have exactly one key"
 		));
+	}
+}
+
+#[cfg(all(test, feature = "postgres", feature = "pgvector"))]
+mod postgres_tests {
+	use super::PostgresIntrospector;
+	use crate::migrations::FieldType;
+
+	#[test]
+	fn parses_dimensioned_pgvector_type() {
+		let field_type = PostgresIntrospector::parse_pg_type(
+			"vector",
+			"USER-DEFINED",
+			Some("vector(1536)"),
+			None,
+			None,
+			None,
+			None,
+		);
+
+		assert_eq!(field_type, FieldType::Vector { dimensions: 1536 });
+	}
+
+	#[test]
+	fn rejects_undimensioned_or_out_of_range_pgvector_types() {
+		for type_definition in ["vector", "vector(0)", "vector(2001)"] {
+			let field_type = PostgresIntrospector::parse_pg_type(
+				"vector",
+				"USER-DEFINED",
+				Some(type_definition),
+				None,
+				None,
+				None,
+				None,
+			);
+
+			assert_eq!(field_type, FieldType::Custom("vector".to_string()));
+		}
 	}
 }
 

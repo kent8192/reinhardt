@@ -63,12 +63,7 @@ impl From<introspection::DatabaseSchema> for DatabaseSchema {
 							access_method: idx.access_method.clone(),
 							index_type: idx.index_type,
 							expressions: idx.expressions.clone(),
-							operator_class: if idx.operator_class_is_default
-								&& idx
-									.access_method
-									.as_deref()
-									.is_some_and(|method| method.eq_ignore_ascii_case("btree"))
-							{
+							operator_class: if idx.operator_class_is_default {
 								None
 							} else {
 								idx.operator_class.clone()
@@ -1678,7 +1673,7 @@ mod tests {
 
 	#[cfg(feature = "pgvector")]
 	#[test]
-	fn vector_index_introspection_conversion_preserves_all_metadata() {
+	fn vector_index_introspection_conversion_normalizes_default_operator_class() {
 		// Arrange
 		let mut intro_indexes = std::collections::HashMap::new();
 		intro_indexes.insert(
@@ -1729,7 +1724,7 @@ mod tests {
 					ef_construction: Some(64),
 				}),
 				expressions: None,
-				operator_class: Some("vector_cosine_ops".to_string()),
+				operator_class: None,
 			}]
 		);
 	}

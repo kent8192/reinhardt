@@ -51,10 +51,11 @@ rely on.
 |------|--------|--------|-------|
 | — | — | No behavioral changes | Audit date: 2026-02-25 |
 
-## CI Integration
+## SemVer Verification
 
-Automated SemVer checking is performed by `cargo-semver-checks` on every PR
-targeting `main`. See `.github/workflows/semver-check.yml`.
+SemVer compatibility is verified locally with `cargo make semver-check`.
+The shared `.github/workflows/semver-check.yml` workflow remains available for
+explicit dispatch or reuse, but does not run automatically on pull requests.
 
 ## Findings Summary
 

@@ -2019,6 +2019,24 @@ mod tests {
 		}
 	}
 
+	#[test]
+	fn test_filter_value_to_sea_value_preserves_timestamp_and_uuid_types() {
+		let timestamp = chrono::DateTime::parse_from_rfc3339("2026-07-27T00:00:00Z")
+			.expect("timestamp fixture should parse")
+			.with_timezone(&chrono::Utc);
+		let uuid = uuid::Uuid::parse_str("123e4567-e89b-12d3-a456-426614174000")
+			.expect("UUID fixture should parse");
+
+		assert!(matches!(
+			filter_value_to_sea_value(&FilterValue::Timestamp(timestamp)),
+			Value::ChronoDateTimeUtc(Some(_))
+		));
+		assert!(matches!(
+			filter_value_to_sea_value(&FilterValue::Uuid(uuid)),
+			Value::Uuid(Some(_))
+		));
+	}
+
 	// ==================== insert values mismatch tests (#1551) ====================
 
 	#[rstest]

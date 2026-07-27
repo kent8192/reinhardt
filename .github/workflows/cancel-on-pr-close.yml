@@ -31,7 +31,6 @@ jobs:
               'examples-test.yml',
               'examples-test-standalone.yml',
               'semver-check.yml',
-              'semver-check-standalone.yml',
             ];
             const activeStatuses = ['queued', 'in_progress', 'waiting', 'requested'];
 

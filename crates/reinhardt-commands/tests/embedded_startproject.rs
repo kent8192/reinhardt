@@ -131,7 +131,8 @@ fn assert_generated_shell_wiring(root: &Path, crate_name: &str) {
 
 	let config = std::fs::read_to_string(root.join("src/config.rs")).unwrap();
 	assert!(
-		config.contains("#[cfg(feature = \"commands-shell\")]\npub mod shell;"),
+		config.contains("#[cfg(feature = \"commands-shell\")]\npub mod shell;")
+			|| config.contains("#[cfg(all(server, feature = \"commands-shell\"))]\npub mod shell;"),
 		"generated config must gate the shell module behind commands-shell:\n{config}"
 	);
 

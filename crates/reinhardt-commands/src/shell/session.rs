@@ -357,6 +357,7 @@ mod tests {
 	use std::sync::{Arc, Mutex};
 
 	use async_trait::async_trait;
+	use tokio::sync::Notify;
 
 	use super::{
 		EvaluationInterrupt, EvaluatorClient, EvaluatorFactory, InputEvent, InterruptSignal,
@@ -784,18 +785,24 @@ mod tests {
 
 	struct PendingClient {
 		state: Arc<Mutex<FakeState>>,
+		interrupted: Arc<Notify>,
 	}
 
 	#[async_trait]
 	impl EvaluatorClient for PendingClient {
 		async fn evaluate(&mut self, _source: &str) -> Result<EvaluationOutput, EvaluationFailure> {
-			pending().await
+			self.interrupted.notified().await;
+			Err(EvaluationFailure::ProcessExited(
+				"pending evaluator was interrupted".to_string(),
+			))
 		}
 
 		fn interrupt(&self) -> EvaluationInterrupt {
 			let state = Arc::clone(&self.state);
+			let interrupted = Arc::clone(&self.interrupted);
 			EvaluationInterrupt::new(move || {
 				state.lock().expect("fake state lock").interrupts += 1;
+				interrupted.notify_waiters();
 				Ok(())
 			})
 		}
@@ -803,6 +810,7 @@ mod tests {
 
 	struct InterruptFactory {
 		state: Arc<Mutex<FakeState>>,
+		interrupted: Arc<Notify>,
 		replacement: Option<Box<dyn EvaluatorClient>>,
 	}
 
@@ -814,6 +822,7 @@ mod tests {
 			if self.replacement.is_some() {
 				return Ok(Box::new(PendingClient {
 					state: Arc::clone(&self.state),
+					interrupted: Arc::clone(&self.interrupted),
 				}));
 			}
 			self.replacement
@@ -825,16 +834,20 @@ mod tests {
 	#[tokio::test]
 	async fn evaluation_interrupt_kills_running_context_and_replaces_it() {
 		let state = Arc::new(Mutex::new(FakeState::default()));
+		let interrupted = Arc::new(Notify::new());
 		let factory = InterruptFactory {
 			state: Arc::clone(&state),
+			interrupted: Arc::clone(&interrupted),
 			replacement: Some(Box::new(PendingClient {
 				state: Arc::clone(&state),
+				interrupted: Arc::clone(&interrupted),
 			})),
 		};
 		let mut session = ShellSession::from_client_with_signal(
 			factory,
 			Box::new(PendingClient {
 				state: Arc::clone(&state),
+				interrupted,
 			}),
 			FakeOutput::default(),
 			InterruptNow,
@@ -913,16 +926,20 @@ mod tests {
 	#[tokio::test]
 	async fn signal_listener_failure_interrupts_running_evaluation_before_recovery() {
 		let state = Arc::new(Mutex::new(FakeState::default()));
+		let interrupted = Arc::new(Notify::new());
 		let factory = InterruptFactory {
 			state: Arc::clone(&state),
+			interrupted: Arc::clone(&interrupted),
 			replacement: Some(Box::new(PendingClient {
 				state: Arc::clone(&state),
+				interrupted: Arc::clone(&interrupted),
 			})),
 		};
 		let mut session = ShellSession::from_client_with_signal(
 			factory,
 			Box::new(PendingClient {
 				state: Arc::clone(&state),
+				interrupted,
 			}),
 			FakeOutput::default(),
 			InterruptListenerError,

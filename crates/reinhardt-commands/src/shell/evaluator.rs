@@ -70,7 +70,7 @@ impl EvaluationFailure {
 	}
 }
 
-pub(crate) trait BlockingShellEvaluator: Send {
+pub(crate) trait BlockingShellEvaluator {
 	fn evaluate(&mut self, source: &str) -> Result<EvaluationOutput, EvaluationFailure>;
 	fn interrupt_handle(&self) -> EvaluationInterrupt;
 }
@@ -628,8 +628,11 @@ impl EvaluatorWorker {
 	}
 
 	#[cfg(test)]
-	pub(crate) fn spawn(evaluator: Box<dyn BlockingShellEvaluator>) -> Self {
-		Self::start_with(move || Ok((evaluator, Vec::new())))
+	pub(crate) fn spawn<E>(evaluator: E) -> Self
+	where
+		E: BlockingShellEvaluator + Send + 'static,
+	{
+		Self::start_with(move || Ok((Box::new(evaluator), Vec::new())))
 			.expect("test evaluator worker should start")
 			.0
 	}
@@ -1799,9 +1802,9 @@ mod tests {
 	#[tokio::test]
 	async fn worker_interrupts_a_running_evaluation_and_joins_on_drop() {
 		let state = Arc::new((Mutex::new(InterruptProbeState::default()), Condvar::new()));
-		let mut worker = EvaluatorWorker::spawn(Box::new(InterruptibleEvaluator {
+		let mut worker = EvaluatorWorker::spawn(InterruptibleEvaluator {
 			state: Arc::clone(&state),
-		}));
+		});
 		let interrupt = worker.interrupt();
 		let trigger_state = Arc::clone(&state);
 		let trigger = thread::spawn(move || {
@@ -1860,9 +1863,9 @@ mod tests {
 	#[tokio::test]
 	async fn dropping_worker_with_a_queued_evaluation_interrupts_and_joins() {
 		let state = Arc::new((Mutex::new(InterruptProbeState::default()), Condvar::new()));
-		let mut worker = EvaluatorWorker::spawn(Box::new(InterruptibleEvaluator {
+		let mut worker = EvaluatorWorker::spawn(InterruptibleEvaluator {
 			state: Arc::clone(&state),
-		}));
+		});
 		let mut evaluation = Box::pin(worker.evaluate("long_running()"));
 		let request_was_queued =
 			std::future::poll_fn(|context| match evaluation.as_mut().poll(context) {
@@ -1989,6 +1992,7 @@ pub mod models {
 				"shell_project::config::settings::get_shell_settings",
 				["inventory"],
 			)
+			.with_dependency_features(["commands-shell"])
 			.with_prelude(
 				"let project_prelude_loaded = \
 				 std::any::TypeId::of::<InventoryItem>() == \
@@ -2124,6 +2128,27 @@ pub mod models {
 				.expect("real evcxr evaluator should bootstrap the project");
 		assert_eq!(warnings, Vec::<String>::new());
 		evaluator
+	}
+
+	fn new_evaluator_worker(fixture: &ShellFixture) -> EvaluatorWorker {
+		let validated = fixture
+			.config()
+			.validate()
+			.expect("fixture shell configuration should validate");
+		let runtime_path = fixture.runtime_path.clone();
+		let (worker, warnings) = EvaluatorWorker::start_with(move || {
+			let (eval, outputs) = EvalContext::with_subprocess_command(Command::new(runtime_path))
+				.map_err(super::classify_startup_error)?;
+			let (evaluator, warnings) =
+				EvcxrEvaluator::bootstrap_with_context(&validated, eval, outputs)?;
+			Ok((
+				Box::new(evaluator) as Box<dyn BlockingShellEvaluator>,
+				warnings,
+			))
+		})
+		.expect("real evaluator should bootstrap inside its owned worker");
+		assert_eq!(warnings, Vec::<String>::new());
+		worker
 	}
 
 	const REAL_EVALUATOR_PROBE: &str = "shell::evaluator::tests::real_evaluator_subprocess_probe";
@@ -2421,7 +2446,7 @@ pub mod models {
 			 tokio::time::sleep(std::time::Duration::from_secs(30)).await;",
 			started_path
 		);
-		let mut interrupted_worker = EvaluatorWorker::spawn(Box::new(new_evaluator(&fixture)));
+		let mut interrupted_worker = new_evaluator_worker(&fixture);
 		let interrupt = interrupted_worker.interrupt();
 		let interrupt_started_path = started_path.clone();
 		let interrupter = thread::spawn(move || {
@@ -2477,7 +2502,7 @@ pub mod models {
 		assert_eq!(retained.value.as_deref(), Some("42"));
 		drop(replacement);
 
-		let mut process_exit_evaluator = EvaluatorWorker::spawn(Box::new(new_evaluator(&fixture)));
+		let mut process_exit_evaluator = new_evaluator_worker(&fixture);
 		let process_exit = process_exit_evaluator
 			.evaluate("std::process::exit(7)")
 			.await

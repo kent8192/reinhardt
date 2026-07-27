@@ -2369,12 +2369,11 @@ pub mod models {
 		let runtime_failure = evaluator
 			.evaluate(r#"Err::<(), _>(std::io::Error::other("runtime-probe"))?"#)
 			.expect_err("top-level question mark should report a runtime failure");
-		match runtime_failure {
-			EvaluationFailure::Runtime(message) => {
-				assert!(message.contains("runtime-probe"));
-			}
-			other => panic!("expected runtime failure, got {other:?}"),
-		}
+		let EvaluationFailure::Output { failure, output } = runtime_failure else {
+			panic!("expected runtime failure output");
+		};
+		assert!(matches!(*failure, EvaluationFailure::Runtime(_)));
+		assert!(output.stderr.contains("runtime-probe"));
 		let retained = evaluator
 			.evaluate("retained + 1")
 			.expect("prior binding should remain after runtime failure");
@@ -2422,10 +2421,9 @@ pub mod models {
 		let EvaluationFailure::Output { failure, output } = panic else {
 			panic!("expected panic output, got {panic:?}");
 		};
-		let EvaluationFailure::Panic(message) = *failure else {
+		let EvaluationFailure::Panic(_) = *failure else {
 			panic!("expected panic classification");
 		};
-		assert!(message.contains("panic-classification-probe"));
 		assert!(output.stderr.contains("panic-classification-probe"));
 	}
 

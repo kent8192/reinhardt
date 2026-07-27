@@ -195,6 +195,8 @@ fn parse_pk_values(table_name: &str, pk_field: &str, ids: &[String]) -> Vec<Valu
 pub fn filter_value_to_sea_value(v: &FilterValue) -> Value {
 	match v {
 		FilterValue::String(s) => s.clone().into(),
+		FilterValue::Timestamp(value) => (*value).into(),
+		FilterValue::Uuid(value) => (*value).into(),
 		FilterValue::Integer(i) | FilterValue::Int(i) => (*i).into(),
 		FilterValue::Float(f) => (*f).into(),
 		FilterValue::Boolean(b) | FilterValue::Bool(b) => (*b).into(),
@@ -1983,6 +1985,24 @@ mod tests {
 			}
 			_ => panic!("Expected String value"),
 		}
+	}
+
+	#[test]
+	fn test_filter_value_to_sea_value_preserves_timestamp_and_uuid_types() {
+		let timestamp = chrono::DateTime::parse_from_rfc3339("2026-07-27T00:00:00Z")
+			.expect("timestamp fixture should parse")
+			.with_timezone(&chrono::Utc);
+		let uuid = uuid::Uuid::parse_str("123e4567-e89b-12d3-a456-426614174000")
+			.expect("UUID fixture should parse");
+
+		assert!(matches!(
+			filter_value_to_sea_value(&FilterValue::Timestamp(timestamp)),
+			Value::ChronoDateTimeUtc(Some(_))
+		));
+		assert!(matches!(
+			filter_value_to_sea_value(&FilterValue::Uuid(uuid)),
+			Value::Uuid(Some(_))
+		));
 	}
 
 	// ==================== insert values mismatch tests (#1551) ====================

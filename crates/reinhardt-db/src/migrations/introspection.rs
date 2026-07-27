@@ -721,7 +721,11 @@ impl PostgresIntrospector {
 				ix.indisunique AS is_unique,
 				am.amname AS access_method,
 				i.reloptions AS index_options,
-				pg_get_expr(ix.indexprs, ix.indrelid) AS index_expressions,
+				array_agg(
+					pg_get_indexdef(ix.indexrelid, key.position, true)
+					ORDER BY key.position
+				) FILTER (WHERE (ix.indkey::smallint[])[key.position] = 0)
+					AS index_expressions,
 				array_agg(opc.opcname ORDER BY key.position) AS operator_classes,
 				array_agg(opc.opcdefault ORDER BY key.position) AS operator_class_defaults
 			FROM
@@ -746,8 +750,6 @@ impl PostgresIntrospector {
 				i.relname,
 				i.reloptions,
 				ix.indisunique,
-				ix.indexprs,
-				ix.indrelid,
 				am.amname
 			ORDER BY i.relname
 		"#;
@@ -782,7 +784,7 @@ impl PostgresIntrospector {
 				MigrationError::IntrospectionError(format!("Failed to get index_options: {}", e))
 			})?;
 			#[cfg(feature = "pgvector")]
-			let index_expression: Option<String> = row.try_get("index_expressions").map_err(|e| {
+			let index_expressions: Option<Vec<String>> = row.try_get("index_expressions").map_err(|e| {
 				MigrationError::IntrospectionError(format!(
 					"Failed to get index_expressions: {}",
 					e
@@ -824,7 +826,7 @@ impl PostgresIntrospector {
 					#[cfg(not(feature = "pgvector"))]
 					index_type: Some(access_method),
 					#[cfg(feature = "pgvector")]
-					expressions: index_expression.map(|expression| vec![expression]),
+					expressions: index_expressions,
 					#[cfg(feature = "pgvector")]
 					operator_class,
 					#[cfg(feature = "pgvector")]

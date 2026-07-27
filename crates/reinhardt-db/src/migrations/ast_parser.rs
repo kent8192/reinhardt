@@ -175,6 +175,17 @@ fn parse_single_operation(expr: &Expr) -> Option<super::Operation> {
 		let variant_name = expr_struct.path.segments.last()?.ident.to_string();
 
 		match variant_name.as_str() {
+			"CreateExtension" => {
+				let name = extract_string_field(&expr_struct.fields, "name")?;
+				let if_not_exists =
+					extract_bool_field(&expr_struct.fields, "if_not_exists").unwrap_or(true);
+				let schema = extract_optional_str_field(&expr_struct.fields, "schema");
+				return Some(super::Operation::CreateExtension {
+					name,
+					if_not_exists,
+					schema,
+				});
+			}
 			"CreateTable" => {
 				let name = extract_string_field(&expr_struct.fields, "name")?;
 				let columns = extract_columns_field(&expr_struct.fields)?;
@@ -2332,6 +2343,17 @@ fn extract_field_type(
 					let variant = last_segment.ident.to_string();
 
 					match variant.as_str() {
+						"Vector" => {
+							for field_value in &expr_struct.fields {
+								if let syn::Member::Named(ident) = &field_value.member
+									&& ident == "dimensions" && let Expr::Lit(expr_lit) =
+									&field_value.expr && let syn::Lit::Int(lit_int) = &expr_lit.lit
+									&& let Ok(dimensions) = lit_int.base10_parse::<usize>()
+								{
+									return Some(FieldType::Vector { dimensions });
+								}
+							}
+						}
 						"Decimal" => {
 							let mut precision = 10u32;
 							let mut scale = 0u32;

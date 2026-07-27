@@ -36,15 +36,29 @@ fn json_to_sea_value(
 	#[cfg(feature = "pgvector")]
 	if let Some(field_meta) =
 		crate::server::type_inference::get_field_metadata(table_name, field_name)
-		&& let DbFieldType::Vector { dimensions } = field_meta.field_type
+		&& let DbFieldType::Vector { dimensions } = &field_meta.field_type
 	{
+		if field_meta.nullable && matches!(&value, serde_json::Value::Null) {
+			return Ok(Value::Vector(None));
+		}
 		let values = match value {
 			serde_json::Value::String(value) => {
-				serde_json::from_str::<Vec<f32>>(&value).map_err(|error| {
-					AdminError::ValidationError(format!(
-						"Field '{field_name}' must be a JSON array of vector values: {error}"
-					))
-				})?
+				let value = value.trim();
+				if field_meta.nullable && value.is_empty() {
+					return Ok(Value::Vector(None));
+				}
+				serde_json::from_str::<Vec<f32>>(value)
+					.or_else(|_| {
+						value
+							.split(',')
+							.map(|component| component.trim().parse::<f32>())
+							.collect::<Result<Vec<_>, _>>()
+					})
+					.map_err(|error| {
+						AdminError::ValidationError(format!(
+							"Field '{field_name}' must be a JSON array or comma-separated vector values: {error}"
+						))
+					})?
 			}
 			serde_json::Value::Array(_) => {
 				serde_json::from_value::<Vec<f32>>(value).map_err(|error| {
@@ -59,7 +73,7 @@ fn json_to_sea_value(
 				)));
 			}
 		};
-		if values.len() != dimensions {
+		if values.len() != *dimensions {
 			return Err(AdminError::ValidationError(format!(
 				"Field '{field_name}' requires {dimensions} vector values, got {}",
 				values.len()

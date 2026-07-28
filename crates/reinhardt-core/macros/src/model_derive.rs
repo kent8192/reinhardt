@@ -2083,7 +2083,6 @@ pub(crate) fn model_derive_impl(mut input: DeriveInput) -> Result<TokenStream> {
 			composite_pk_type_ref,
 		)
 	};
-
 	// Generate field_metadata implementation
 	let field_metadata_items = generate_field_metadata(&field_infos, &fk_field_infos)?;
 
@@ -2193,6 +2192,27 @@ pub(crate) fn model_derive_impl(mut input: DeriveInput) -> Result<TokenStream> {
 		};
 
 		(pk_getter, pk_setter, quote! {})
+	};
+	let pk_filter_value_impl = if !is_composite_pk && is_fully_qualified_uuid_type(pk_type) {
+		quote! {
+			fn primary_key_filter_value(pk: Self::PrimaryKey) -> #orm_crate::query::FilterValue {
+				#orm_crate::query::FilterValue::Uuid(pk)
+			}
+		}
+	} else if !is_composite_pk && is_fully_qualified_datetime_utc_type(pk_type) {
+		quote! {
+			fn primary_key_filter_value(pk: Self::PrimaryKey) -> #orm_crate::query::FilterValue {
+				#orm_crate::query::FilterValue::Timestamp(pk)
+			}
+		}
+	} else if !is_composite_pk && is_string_type(pk_type) {
+		quote! {
+			fn primary_key_filter_value(pk: Self::PrimaryKey) -> #orm_crate::query::FilterValue {
+				#orm_crate::query::FilterValue::String(pk.to_string())
+			}
+		}
+	} else {
+		quote! {}
 	};
 
 	// Generate field accessor methods
@@ -2332,9 +2352,12 @@ pub(crate) fn model_derive_impl(mut input: DeriveInput) -> Result<TokenStream> {
 				stringify!(#pk_name)
 			}
 
+
 			#pk_impl
 
 			#set_pk_impl
+
+			#pk_filter_value_impl
 
 			#composite_pk_impl
 
@@ -3542,12 +3565,6 @@ fn generate_composite_pk_type(struct_name: &syn::Ident, pk_fields: &[&FieldInfo]
 				write!(f, ")")
 			}
 		}
-
-		impl ::std::convert::From<#composite_pk_name> for #orm_crate::query::FilterValue {
-			fn from(primary_key: #composite_pk_name) -> Self {
-				Self::String(primary_key.to_string())
-			}
-		}
 	}
 }
 
@@ -3673,6 +3690,19 @@ fn is_uuid_type(ty: &Type) -> bool {
 	crate::pk_shape::pk_uuid_shape(ty).0
 }
 
+/// Check whether a type is explicitly `uuid::Uuid`.
+fn is_fully_qualified_uuid_type(ty: &Type) -> bool {
+	let (_, inner_ty) = extract_option_type(ty);
+	matches!(
+		inner_ty,
+		Type::Path(type_path)
+			if matches!(
+				type_path.path.segments.iter().map(|segment| segment.ident.to_string()).collect::<Vec<_>>().as_slice(),
+				[uuid, uuid_type] if uuid == "uuid" && uuid_type == "Uuid"
+			)
+	)
+}
+
 /// Check if a type is String or `Option<String>`
 fn is_string_type(ty: &Type) -> bool {
 	let (_, inner_ty) = extract_option_type(ty);
@@ -3724,6 +3754,36 @@ fn is_datetime_utc_type(ty: &Type) -> bool {
 		return true;
 	}
 	false
+}
+
+/// Check whether a type is explicitly `chrono::DateTime<chrono::Utc>`.
+///
+/// The model macro cannot resolve imports or type aliases, so typed filter
+/// conversion must only be generated for the unambiguous chrono spelling.
+fn is_fully_qualified_datetime_utc_type(ty: &Type) -> bool {
+	let (_, inner_ty) = extract_option_type(ty);
+	let Type::Path(datetime_path) = inner_ty else {
+		return false;
+	};
+	let [chrono_segment, datetime_segment] =
+		datetime_path.path.segments.iter().collect::<Vec<_>>()[..]
+	else {
+		return false;
+	};
+	if chrono_segment.ident != "chrono" || datetime_segment.ident != "DateTime" {
+		return false;
+	}
+	let PathArguments::AngleBracketed(arguments) = &datetime_segment.arguments else {
+		return false;
+	};
+	let Some(GenericArgument::Type(Type::Path(utc_path))) = arguments.args.first() else {
+		return false;
+	};
+	matches!(
+		utc_path.path.segments.iter().collect::<Vec<_>>().as_slice(),
+		[chrono_segment, utc_segment]
+			if chrono_segment.ident == "chrono" && utc_segment.ident == "Utc"
+	)
 }
 
 /// Check if a type is a ManyToManyField
@@ -5294,6 +5354,20 @@ fn generate_info_builder(
 #[cfg(test)]
 mod tests {
 	use super::*;
+	use rstest::rstest;
+
+	fn generated_primary_key_filter_value(output: &TokenStream) -> String {
+		let output = output.to_string();
+		let start = output
+			.find("fn primary_key_filter_value")
+			.expect("UUID and timestamp primary keys should override the filter conversion");
+		let function = &output[start..];
+		let end = function
+			.find('}')
+			.expect("generated filter conversion should have a function body")
+			+ 1;
+		function[..end].to_string()
+	}
 
 	#[test]
 	fn test_fields_are_private() {
@@ -5444,5 +5518,131 @@ mod tests {
 		);
 		assert!(!output_str.contains("pub fn set_id"));
 		assert!(!output_str.contains("pub fn set_created_at"));
+	}
+
+	#[rstest]
+	fn uuid_primary_key_uses_uuid_filter_value() {
+		let input = quote! {
+			#[model(app_label = "test", table_name = "uuid_models")]
+			pub struct UuidModel {
+				#[field(primary_key = true)]
+				pub id: uuid::Uuid,
+			}
+		};
+
+		let output = model_derive_impl(syn::parse2(input).unwrap()).unwrap();
+		let orm_crate = get_reinhardt_orm_crate();
+
+		assert_eq!(
+			generated_primary_key_filter_value(&output),
+			quote! {
+				fn primary_key_filter_value(pk: Self::PrimaryKey) -> #orm_crate::query::FilterValue {
+					#orm_crate::query::FilterValue::Uuid(pk)
+				}
+			}
+			.to_string()
+		);
+	}
+
+	#[rstest]
+	fn uuid_named_primary_key_uses_the_fallback_filter_value() {
+		let input = quote! {
+			#[model(app_label = "test", table_name = "custom_uuid_models")]
+			pub struct CustomUuidModel {
+				#[field(primary_key = true)]
+				pub id: Uuid,
+			}
+		};
+
+		let output = model_derive_impl(syn::parse2(input).unwrap()).unwrap();
+
+		assert!(!output.to_string().contains("primary_key_filter_value"));
+	}
+
+	#[rstest]
+	fn timestamp_primary_key_uses_timestamp_filter_value() {
+		let input = quote! {
+			#[model(app_label = "test", table_name = "timestamp_models")]
+			pub struct TimestampModel {
+				#[field(primary_key = true)]
+				pub id: chrono::DateTime<chrono::Utc>,
+			}
+		};
+
+		let output = model_derive_impl(syn::parse2(input).unwrap()).unwrap();
+		let orm_crate = get_reinhardt_orm_crate();
+
+		assert_eq!(
+			generated_primary_key_filter_value(&output),
+			quote! {
+				fn primary_key_filter_value(pk: Self::PrimaryKey) -> #orm_crate::query::FilterValue {
+					#orm_crate::query::FilterValue::Timestamp(pk)
+				}
+			}
+			.to_string()
+		);
+	}
+
+	#[rstest]
+	fn string_primary_key_uses_string_filter_value() {
+		let input = quote! {
+			#[model(app_label = "test", table_name = "string_models")]
+			pub struct StringModel {
+				#[field(primary_key = true, max_length = 255)]
+				pub id: String,
+			}
+		};
+
+		let output = model_derive_impl(syn::parse2(input).unwrap()).unwrap();
+		let orm_crate = get_reinhardt_orm_crate();
+
+		assert_eq!(
+			generated_primary_key_filter_value(&output),
+			quote! {
+				fn primary_key_filter_value(pk: Self::PrimaryKey) -> #orm_crate::query::FilterValue {
+					#orm_crate::query::FilterValue::String(pk.to_string())
+				}
+			}
+			.to_string()
+		);
+	}
+
+	#[rstest]
+	fn string_named_custom_primary_key_uses_display_string_filter_value() {
+		let input = quote! {
+			#[model(app_label = "test", table_name = "custom_string_models")]
+			pub struct CustomStringModel {
+				#[field(primary_key = true, max_length = 255)]
+				pub id: String,
+			}
+		};
+
+		let output = model_derive_impl(syn::parse2(input).unwrap()).unwrap();
+		let orm_crate = get_reinhardt_orm_crate();
+
+		assert_eq!(
+			generated_primary_key_filter_value(&output),
+			quote! {
+				fn primary_key_filter_value(pk: Self::PrimaryKey) -> #orm_crate::query::FilterValue {
+					#orm_crate::query::FilterValue::String(pk.to_string())
+				}
+			}
+			.to_string()
+		);
+	}
+
+	#[rstest]
+	fn datetime_like_primary_key_uses_the_fallback_filter_value() {
+		let input = quote! {
+			#[model(app_label = "test", table_name = "custom_datetime_models")]
+			pub struct CustomDateTimeModel {
+				#[field(primary_key = true)]
+				pub id: DateTime<Utc>,
+			}
+		};
+
+		let output = model_derive_impl(syn::parse2(input).unwrap()).unwrap();
+
+		assert!(!output.to_string().contains("primary_key_filter_value"));
 	}
 }

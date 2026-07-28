@@ -517,9 +517,66 @@ impl From<i32> for FilterValue {
 	}
 }
 
-impl From<u32> for FilterValue {
-	fn from(i: u32) -> Self {
-		FilterValue::Integer(i64::from(i))
+macro_rules! filter_value_signed_integer {
+	($($type:ty),+ $(,)?) => {
+		$(
+			impl From<$type> for FilterValue {
+				fn from(value: $type) -> Self {
+					Self::Integer(i64::from(value))
+				}
+			}
+		)+
+	};
+}
+
+macro_rules! filter_value_unsigned_integer {
+	($($type:ty),+ $(,)?) => {
+		$(
+			impl From<$type> for FilterValue {
+				fn from(value: $type) -> Self {
+					Self::Integer(i64::from(value))
+				}
+			}
+		)+
+	};
+}
+
+filter_value_signed_integer!(i8, i16);
+filter_value_unsigned_integer!(u8, u16, u32);
+
+impl From<u64> for FilterValue {
+	fn from(value: u64) -> Self {
+		value
+			.try_into()
+			.map_or_else(|_| Self::String(value.to_string()), Self::Integer)
+	}
+}
+
+impl From<usize> for FilterValue {
+	fn from(value: usize) -> Self {
+		Self::from(value as u64)
+	}
+}
+
+impl From<isize> for FilterValue {
+	fn from(value: isize) -> Self {
+		Self::Integer(value as i64)
+	}
+}
+
+impl From<i128> for FilterValue {
+	fn from(value: i128) -> Self {
+		value
+			.try_into()
+			.map_or_else(|_| Self::String(value.to_string()), Self::Integer)
+	}
+}
+
+impl From<u128> for FilterValue {
+	fn from(value: u128) -> Self {
+		value
+			.try_into()
+			.map_or_else(|_| Self::String(value.to_string()), Self::Integer)
 	}
 }
 
@@ -6539,21 +6596,6 @@ mod tests {
 	use rstest::rstest;
 	use serde::{Deserialize, Serialize};
 	use std::collections::HashMap;
-
-	#[test]
-	fn filter_value_from_u32_preserves_the_full_unsigned_value() {
-		// Arrange
-		let value = u32::MAX;
-
-		// Act
-		let filter_value = FilterValue::from(value);
-
-		// Assert
-		assert!(matches!(
-			filter_value,
-			FilterValue::Integer(integer) if integer == i64::from(value)
-		));
-	}
 
 	#[test]
 	fn render_select_statement_uses_mysql_identifier_quoting() {

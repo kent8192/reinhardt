@@ -21,11 +21,8 @@ pub trait FieldSelector: Clone {
 /// A new associated type `Fields` has been added. It provides a type-safe field selector.
 /// When using the `#[model(...)]` macro, this implementation is automatically generated.
 pub trait Model: Serialize + for<'de> Deserialize<'de> + Send + Sync + Clone {
-	/// The primary key type.
-	///
-	/// Values must convert into [`FilterValue`](super::query::FilterValue) so
-	/// primary-key lookups preserve their database binding type.
-	type PrimaryKey: Send + Sync + Clone + std::fmt::Display + Into<super::query::FilterValue>;
+	/// The primary key type
+	type PrimaryKey: Send + Sync + Clone + std::fmt::Display;
 
 	/// Type-safe field selector
 	///
@@ -61,6 +58,19 @@ pub trait Model: Serialize + for<'de> Deserialize<'de> + Send + Sync + Clone {
 	/// Get the primary key field name
 	fn primary_key_field() -> &'static str {
 		"id"
+	}
+
+	/// Converts a primary key into a query filter value.
+	///
+	/// Custom primary-key types retain the historical numeric-or-string fallback.
+	/// Derived models override this conversion for declared primary-key types with
+	/// a dedicated database binding, such as strings, UUIDs, and timestamps.
+	fn primary_key_filter_value(pk: Self::PrimaryKey) -> super::query::FilterValue {
+		let value = pk.to_string();
+		value
+			.parse::<i64>()
+			.map(super::query::FilterValue::Integer)
+			.unwrap_or(super::query::FilterValue::String(value))
 	}
 
 	/// Get the primary key value

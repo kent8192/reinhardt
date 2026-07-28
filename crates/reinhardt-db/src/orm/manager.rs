@@ -228,7 +228,7 @@ impl<M: Model> Manager<M> {
 	/// Returns a QuerySet filtered by the primary key field
 	pub fn get(&self, pk: M::PrimaryKey) -> QuerySet<M> {
 		let pk_field = M::primary_key_field();
-		let pk_value = pk.into();
+		let pk_value = M::primary_key_filter_value(pk);
 
 		let filter = super::query::Filter::new(
 			pk_field.to_string(),
@@ -1597,6 +1597,7 @@ mod tests {
 	use crate::orm::Model;
 	use crate::orm::connection::DatabaseBackend;
 	use crate::orm::query::FilterValue;
+	use rstest::rstest;
 	use serde::{Deserialize, Serialize};
 	use std::collections::HashMap;
 	use uuid::Uuid;
@@ -1682,6 +1683,10 @@ mod tests {
 			Some(self.id)
 		}
 
+		fn primary_key_filter_value(pk: Self::PrimaryKey) -> FilterValue {
+			FilterValue::Uuid(pk)
+		}
+
 		fn set_primary_key(&mut self, value: Self::PrimaryKey) {
 			self.id = value;
 		}
@@ -1695,7 +1700,7 @@ mod tests {
 		}
 	}
 
-	#[test]
+	#[rstest]
 	fn test_get_preserves_uuid_primary_key_binding() {
 		// Arrange
 		let id = Uuid::parse_str("123e4567-e89b-12d3-a456-426614174000")
@@ -1707,6 +1712,14 @@ mod tests {
 		// Assert
 		assert_eq!(query.filters().len(), 1);
 		assert!(matches!(&query.filters()[0].value, FilterValue::Uuid(value) if *value == id));
+	}
+
+	#[rstest]
+	fn test_get_preserves_numeric_fallback_primary_key_binding() {
+		let query = TestUser::objects().get(42);
+
+		assert_eq!(query.filters().len(), 1);
+		assert!(matches!(query.filters()[0].value, FilterValue::Integer(42)));
 	}
 
 	#[test]

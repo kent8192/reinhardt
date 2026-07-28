@@ -28,29 +28,6 @@ pub fn server_url_patterns() -> ServerRouter {
 }
 ```
 
-Preview the safe source migration first. The first command is a dry run and
-does not change files; add `--write` only after reviewing its output.
-
-```bash
-reinhardt-admin migrate-server-fns .
-reinhardt-admin migrate-server-fns . --write
-```
-
-The migration rewrites only fully resolved chains of ordinary, automatically
-registered markers. It safely skips mixed chains, `server_fnset` registrations,
-markers that cannot be resolved uniquely, glob-derived imports, already
-automatic routers, and functions declared with `auto_register = false`.
-It also skips a router unless both the router module and every resolved
-server function are owned by the same `#[app_config]` module, preventing a
-rewrite from producing an orphaned inventory collector.
-Complete skipped mixed or set registrations manually, preserving their
-intentional explicit mounting. For a developer-authored function kept in an
-explicit router or set, add `auto_register = false` to that function. Model-
-generated server-function sets stay explicitly mounted with
-`.server_fnset(...)`. Also remove obsolete application crate aliases, custom
-cfg aliases, and build-script configuration that existed only to support the
-old registration pattern.
-
 For framework-owned or other deliberately explicit routers, retain the marker
 and opt out of inventory registration:
 

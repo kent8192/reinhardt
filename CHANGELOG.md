@@ -7,6 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.3](https://github.com/kent8192/reinhardt-web/compare/reinhardt-web@v0.3.2...reinhardt-web@v0.3.3) - 2026-07-28
+
+### Fixed
+
+- *(ci)* allow auto-fix on non-fast-forward-only branches
+- *(ci)* paginate auto-fix branch-rule checks
+- *(ci)* allow syn major-version duplicates
+- *(orm)* reject oversized queryset bind values
+- *(orm)* keep UUID-looking filters as text
+- *(orm)* bind typed temporal filter values
+- *(orm)* retain UUID filter bindings
+- *(admin)* support typed filter values
+- *(ci)* allow base64 0.23 duplicate on main
+- *(ci)* inherit base64 duplicate policy
+
+### Maintenance
+
+- remove standalone SemVer Check workflow
+
 ## [0.3.2](https://github.com/kent8192/reinhardt-web/compare/reinhardt-web@v0.3.1...reinhardt-web@v0.3.2) - 2026-07-14
 
 ### Fixed

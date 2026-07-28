@@ -1,6 +1,6 @@
 [package]
 name = "reinhardt-mail"
-version = "0.3.2"
+version = "0.3.3"
 description = "Email sending functionality with multiple backends"
 edition.workspace = true
 rust-version.workspace = true

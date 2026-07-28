@@ -466,14 +466,21 @@ fn model_form_empty_nullable_control_clears_while_other_optional_inputs_are_abse
 
 	assert_eq!(state.value("nullable_note"), Some(&serde_json::Value::Null));
 	assert_eq!(state.value("defaulted_label"), None);
-	assert_eq!(state.value("blank_label"), None);
+	assert_eq!(
+		state.value("blank_label"),
+		Some(&serde_json::Value::String(String::new()))
+	);
 	let payload = state
 		.build_payload::<ModelFormEmptyValueData>()
 		.expect("empty controls should assemble a typed payload");
-	assert_eq!(payload.supplied_fields(), ["nullable_note"]);
+	assert_eq!(payload.supplied_fields(), ["nullable_note", "blank_label"]);
 	assert_eq!(
 		payload.get_json("nullable_note"),
 		Some(serde_json::Value::Null)
+	);
+	assert_eq!(
+		payload.get_json("blank_label"),
+		Some(serde_json::Value::String(String::new()))
 	);
 }
 

@@ -2337,7 +2337,7 @@ fn generate_model_form(
 							control = control.bool_attr(
 								"checked",
 								matches!(
-									stored_value,
+									stored_value.as_ref(),
 									::core::option::Option::Some(
 										#pages_crate::__private::serde_json::Value::Bool(true)
 									)
@@ -2350,7 +2350,7 @@ fn generate_model_form(
 								control = control.attr("onchange", checkbox_edit_script);
 							}
 						} else if input_type != "password"
-							&& let ::core::option::Option::Some(value) = stored_value
+							&& let ::core::option::Option::Some(value) = stored_value.as_ref()
 						{
 							let value = if matches!(
 								descriptor.kind,

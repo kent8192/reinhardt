@@ -74,6 +74,12 @@ impl<P: ModelFormPolicy> QuestionModelFormData<P> {
 	}
 }
 
+impl<P: ModelFormPolicy> Default for QuestionModelFormData<P> {
+	fn default() -> Self {
+		Self::empty()
+	}
+}
+
 impl<P: ModelFormPolicy> ModelFormPayload<P> for QuestionModelFormData<P> {
 	fn supplied_fields(&self) -> Vec<&'static str> {
 		if self.title.is_some() {
@@ -131,6 +137,18 @@ async fn save_question<P: ModelFormPolicy>(
 	_payload: QuestionModelFormData<P>,
 ) -> Result<(), reinhardt_pages::ServerFnError> {
 	Ok(())
+}
+
+mod save_question {
+	// Generated server-function markers use the lower-case `marker` name.
+	#[allow(non_camel_case_types)]
+	pub struct marker;
+
+	impl reinhardt_pages::server_fn::ServerFnMetadata for marker {
+		const PATH: &'static str = "/api/server_fn/save_question";
+		const NAME: &'static str = "save_question";
+		const IS_JSON_CODEC: bool = true;
+	}
 }
 
 fn main() {

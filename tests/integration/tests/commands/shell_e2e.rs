@@ -574,18 +574,19 @@ fn wait_for_process_group_exit(process_group: Pid, deadline: Instant) -> io::Res
 
 struct ShellProject {
 	_project_dir: TempDir,
-	_target_dir: TempDir,
 	_evcxr_dir: TempDir,
 	project_root: PathBuf,
 	manage_binary: PathBuf,
+	dynamic_library_paths: Vec<PathBuf>,
 }
 
 impl ShellProject {
 	fn build() -> Self {
 		let project_dir = TempDir::new().expect("shell fixture directory should be created");
-		let target_dir = TempDir::new().expect("shell fixture target directory should be created");
 		let evcxr_dir = TempDir::new().expect("shell fixture evcxr directory should be created");
 		let project_root = project_dir.path().join("shell-e2e-project");
+		let host_target = rustc_host_target();
+		let evcxr_target_dir = evcxr_dir.path().join("target");
 		write_project(&project_root);
 
 		let mut lock_command = Command::new(env!("CARGO"));
@@ -602,6 +603,7 @@ impl ShellProject {
 		);
 		let mut build_command = Command::new(env!("CARGO"));
 		build_command
+			.current_dir(evcxr_dir.path())
 			.args([
 				"build",
 				"--locked",
@@ -610,11 +612,14 @@ impl ShellProject {
 				"commands-shell",
 				"--bin",
 				"manage",
+				"--target",
+				&host_target,
 				"--manifest-path",
 			])
 			.arg(project_root.join("Cargo.toml"))
 			.env("CARGO_BUILD_BUILD_DIR", "target")
-			.env("CARGO_TARGET_DIR", target_dir.path());
+			.env("CARGO_TARGET_DIR", "target")
+			.env("RUSTFLAGS", "-Cprefer-dynamic");
 		let output = supervised_output(build_command, FIXTURE_BUILD_TIMEOUT)
 			.expect("shell fixture manage binary should build");
 		assert!(
@@ -624,23 +629,42 @@ impl ShellProject {
 			String::from_utf8_lossy(&output.stderr)
 		);
 
-		let manage_binary = target_dir.path().join("debug").join(if cfg!(windows) {
-			"manage.exe"
-		} else {
-			"manage"
-		});
+		let manage_binary =
+			evcxr_target_dir
+				.join(&host_target)
+				.join("debug")
+				.join(if cfg!(windows) {
+					"manage.exe"
+				} else {
+					"manage"
+				});
 		assert!(
 			manage_binary.is_file(),
 			"fixture manage binary should exist at {}",
 			manage_binary.display()
 		);
+		let dynamic_library_paths = dynamic_library_paths(&evcxr_target_dir, &host_target);
+		let mut help_command = Command::new(&manage_binary);
+		help_command.arg("--help").current_dir(&project_root).env(
+			dynamic_library_path_env(),
+			std::env::join_paths(&dynamic_library_paths)
+				.expect("dynamic library paths should be valid"),
+		);
+		let help_output = supervised_output(help_command, FIXTURE_BUILD_TIMEOUT)
+			.expect("dynamic fixture manage binary should run");
+		assert!(
+			help_output.status.success(),
+			"dynamic fixture manage binary failed:\nstdout:\n{}\nstderr:\n{}",
+			String::from_utf8_lossy(&help_output.stdout),
+			String::from_utf8_lossy(&help_output.stderr)
+		);
 
 		Self {
 			_project_dir: project_dir,
-			_target_dir: target_dir,
 			_evcxr_dir: evcxr_dir,
 			project_root,
 			manage_binary,
+			dynamic_library_paths,
 		}
 	}
 
@@ -649,7 +673,12 @@ impl ShellProject {
 		command
 			.current_dir(&self.project_root)
 			.env("EVCXR_TMPDIR", self._evcxr_dir.path())
-			.env("EVCXR_CACHE_ENABLED", "1");
+			.env("EVCXR_CACHE_ENABLED", "1")
+			.env(
+				dynamic_library_path_env(),
+				std::env::join_paths(&self.dynamic_library_paths)
+					.expect("dynamic library paths should be valid"),
+			);
 		command
 	}
 
@@ -665,9 +694,67 @@ impl ShellProject {
 			.arg("shell")
 			.current_dir(&self.project_root)
 			.env("EVCXR_TMPDIR", self._evcxr_dir.path())
-			.env("EVCXR_CACHE_ENABLED", "1");
+			.env("EVCXR_CACHE_ENABLED", "1")
+			.env(
+				dynamic_library_path_env(),
+				std::env::join_paths(&self.dynamic_library_paths)
+					.expect("dynamic library paths should be valid"),
+			);
 		command
 	}
+}
+
+#[cfg(target_os = "linux")]
+fn dynamic_library_path_env() -> &'static str {
+	"LD_LIBRARY_PATH"
+}
+
+#[cfg(target_os = "macos")]
+fn dynamic_library_path_env() -> &'static str {
+	"DYLD_FALLBACK_LIBRARY_PATH"
+}
+
+fn dynamic_library_paths(evcxr_target_dir: &Path, host_target: &str) -> Vec<PathBuf> {
+	let mut paths = vec![
+		evcxr_target_dir
+			.join(host_target)
+			.join("debug")
+			.join("deps"),
+		rustc_sysroot()
+			.join("lib")
+			.join("rustlib")
+			.join(host_target)
+			.join("lib"),
+	];
+	if let Some(existing_paths) = std::env::var_os(dynamic_library_path_env()) {
+		paths.extend(std::env::split_paths(&existing_paths));
+	}
+	paths
+}
+
+fn rustc_host_target() -> String {
+	rustc_output(["--print", "host-tuple"])
+}
+
+fn rustc_sysroot() -> PathBuf {
+	PathBuf::from(rustc_output(["--print", "sysroot"]))
+}
+
+fn rustc_output(arguments: impl IntoIterator<Item = &'static str>) -> String {
+	let output = Command::new("rustc")
+		.args(arguments)
+		.output()
+		.expect("rustc should run for the shell fixture");
+	assert!(
+		output.status.success(),
+		"rustc invocation for the shell fixture failed:\nstdout:\n{}\nstderr:\n{}",
+		String::from_utf8_lossy(&output.stdout),
+		String::from_utf8_lossy(&output.stderr)
+	);
+	String::from_utf8(output.stdout)
+		.expect("rustc output should be UTF-8")
+		.trim()
+		.to_string()
 }
 
 #[test]

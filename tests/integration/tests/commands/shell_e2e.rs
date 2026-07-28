@@ -1351,10 +1351,10 @@ name = "manage"
 path = "src/bin/manage.rs"
 
 [dependencies]
-reinhardt = {{ package = "reinhardt-web", path = "{}", default-features = false, features = ["minimal", "core", "conf", "database", "db-sqlite", "commands-shell", "di"] }}
+reinhardt = {{ package = "reinhardt-web", path = "{}", default-features = false, features = ["core", "conf", "db-sqlite", "commands-shell"] }}
 ctor = "0.6"
 serde = {{ version = "1", features = ["derive"] }}
-tokio = {{ version = "1", features = ["full"] }}
+tokio = {{ version = "1", features = ["macros", "rt-multi-thread", "time"] }}
 
 [features]
 default = []

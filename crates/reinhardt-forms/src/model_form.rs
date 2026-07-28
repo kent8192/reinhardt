@@ -471,7 +471,8 @@ where
 	) -> Result<(), ModelFormError> {
 		if T::Schema::fields()
 			.iter()
-			.any(|descriptor| descriptor.name == field_name)
+			.find(|descriptor| descriptor.name == field_name)
+			.is_some_and(|descriptor| descriptor.editable)
 		{
 			return self.set_field_value(field_name, value);
 		}

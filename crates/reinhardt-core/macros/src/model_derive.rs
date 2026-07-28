@@ -2610,11 +2610,15 @@ fn generate_model_form_support(
 					quote!(::std::default::Default::default())
 				} else if required {
 					quote! {
-						return ::core::result::Result::Err(
-							#forms_crate::model_form::ModelFormError::MissingModelField {
-								field: #field_literal,
-							},
-						)
+						if deferred_field == #field_literal {
+							::std::default::Default::default()
+						} else {
+							return ::core::result::Result::Err(
+								#forms_crate::model_form::ModelFormError::MissingModelField {
+									field: #field_literal,
+								},
+							);
+						}
 					}
 				} else {
 					quote!(::std::default::Default::default())

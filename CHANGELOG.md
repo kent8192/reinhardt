@@ -7,6 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.0-alpha.3](https://github.com/kent8192/reinhardt-web/compare/reinhardt-web@v0.4.0-alpha.2...reinhardt-web@v0.4.0-alpha.3) - 2026-07-27
+
+### Added
+
+- *(macros)* pass raw requests alongside extractors
+
+### Fixed
+
+- *(commands)* resolve static manifest aliases
+- *(staticfiles)* harden manifest alias handling
+- *(macros)* support aliased raw request parameters
+- *(macros)* isolate raw request codegen binding
+- *(macros)* hygienically bind raw route requests
+- *(macros)* bind generated route requests hygienically
+- *(ci)* allow base64 0.23 duplicate
+
+### Maintenance
+
+- remove standalone SemVer Check workflow
+
 ## [0.4.0-alpha.2](https://github.com/kent8192/reinhardt-web/compare/reinhardt-web@v0.4.0-alpha.1...reinhardt-web@v0.4.0-alpha.2) - 2026-07-23
 
 ### Added

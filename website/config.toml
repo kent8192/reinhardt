@@ -24,11 +24,11 @@ og_image    = "https://reinhardt-web.dev/og-image.png"
 github_repo = "https://github.com/kent8192/reinhardt-web"
 crates_io   = "https://crates.io/crates/reinhardt-web"
 # reinhardt-version-sync
-docs_rs     = "https://docs.rs/reinhardt-web/0.3.2/reinhardt/"
+docs_rs     = "https://docs.rs/reinhardt-web/0.3.3/reinhardt/"
 changelog   = "https://github.com/kent8192/reinhardt-web/blob/main/CHANGELOG.md"
 deepwiki    = "https://deepwiki.com/kent8192/reinhardt-web"
 # reinhardt-version-sync
-reinhardt_version = "0.3.2"
+reinhardt_version = "0.3.3"
 
 # Populated at build time by deploy-website.yml.
 # Local dev: no version selector is shown (empty versions list).

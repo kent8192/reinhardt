@@ -14,7 +14,7 @@ the latest stable release. The literal below is release-managed.
 
 <!-- reinhardt-version-sync -->
 ```bash
-cargo install reinhardt-admin-cli --version "0.3.2"
+cargo install reinhardt-admin-cli --version "0.3.3"
 ```
 
 This installs the `reinhardt-admin` command.
@@ -40,7 +40,7 @@ reinhardt-admin startproject myproject --with-rest /path/to/directory
 
 # Pin the generated Reinhardt dependency
 reinhardt-admin startproject myproject --with-rest \
-  --reinhardt-version 0.3.2 \
+  --reinhardt-version 0.3.3 \
   --features standard,admin \
   --no-interactive
 ```
@@ -58,7 +58,7 @@ reinhardt-admin configure
 
 # Update a project without prompts
 reinhardt-admin configure /path/to/project \
-  --reinhardt-version 0.3.2 \
+  --reinhardt-version 0.3.3 \
   --features minimal,db-sqlite \
   --no-interactive
 ```
@@ -108,7 +108,7 @@ reinhardt-admin plugin info auth-delion --remote
 
 # Install a plugin
 reinhardt-admin plugin install auth-delion
-reinhardt-admin plugin install auth-delion --version 0.3.2
+reinhardt-admin plugin install auth-delion --version 0.3.3
 
 # Remove a plugin
 reinhardt-admin plugin remove auth-delion

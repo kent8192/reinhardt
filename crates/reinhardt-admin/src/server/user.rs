@@ -5,7 +5,7 @@
 //! `DefaultUser` from `reinhardt-auth`.
 
 use chrono::{DateTime, Utc};
-use reinhardt_db::orm::Model;
+use reinhardt_db::orm::{FilterValue, Model};
 use reinhardt_macros::user;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
@@ -88,11 +88,36 @@ impl Model for AdminDefaultUser {
 		Some(self.id)
 	}
 
+	fn primary_key_filter_value(pk: Self::PrimaryKey) -> FilterValue {
+		FilterValue::Uuid(pk)
+	}
+
 	fn set_primary_key(&mut self, value: Self::PrimaryKey) {
 		self.id = value;
 	}
 
 	fn primary_key_field() -> &'static str {
 		"id"
+	}
+}
+
+#[cfg(test)]
+mod tests {
+	use super::*;
+
+	#[test]
+	fn primary_key_filter_value_preserves_uuid_binding() {
+		// Arrange
+		let primary_key =
+			Uuid::parse_str("123e4567-e89b-12d3-a456-426614174000").expect("UUID should be valid");
+
+		// Act
+		let value = AdminDefaultUser::primary_key_filter_value(primary_key);
+
+		// Assert
+		match value {
+			FilterValue::Uuid(value) => assert_eq!(value, primary_key),
+			_ => panic!("admin user primary key should retain its UUID binding"),
+		}
 	}
 }

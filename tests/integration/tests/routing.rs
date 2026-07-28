@@ -7,6 +7,9 @@ mod nested_router_integration;
 #[path = "routing/router_include_integration.rs"]
 mod router_include_integration;
 
+#[path = "routing/raw_request_extractors_integration.rs"]
+mod raw_request_extractors_integration;
+
 #[path = "routing/router_viewset_integration.rs"]
 mod router_viewset_integration;
 

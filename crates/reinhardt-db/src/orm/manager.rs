@@ -228,14 +228,7 @@ impl<M: Model> Manager<M> {
 	/// Returns a QuerySet filtered by the primary key field
 	pub fn get(&self, pk: M::PrimaryKey) -> QuerySet<M> {
 		let pk_field = M::primary_key_field();
-		let pk_str = pk.to_string();
-
-		// Try to parse as i64 first (common for primary keys), fallback to string
-		let pk_value = if let Ok(int_value) = pk_str.parse::<i64>() {
-			super::query::FilterValue::Integer(int_value)
-		} else {
-			super::query::FilterValue::String(pk_str)
-		};
+		let pk_value = M::primary_key_filter_value(pk);
 
 		let filter = super::query::Filter::new(
 			pk_field.to_string(),
@@ -1603,8 +1596,11 @@ mod tests {
 	use crate::orm::FieldSelector;
 	use crate::orm::Model;
 	use crate::orm::connection::DatabaseBackend;
+	use crate::orm::query::FilterValue;
+	use rstest::rstest;
 	use serde::{Deserialize, Serialize};
 	use std::collections::HashMap;
+	use uuid::Uuid;
 
 	#[derive(Debug, Clone, Serialize, Deserialize)]
 	struct TestUser {
@@ -1658,6 +1654,72 @@ mod tests {
 		fn new_fields() -> Self::Fields {
 			TestUserFields
 		}
+	}
+
+	#[derive(Debug, Clone, Serialize, Deserialize)]
+	struct TestUuidUser {
+		id: Uuid,
+	}
+
+	#[derive(Debug, Clone)]
+	struct TestUuidUserFields;
+
+	impl FieldSelector for TestUuidUserFields {
+		fn with_alias(self, _alias: &str) -> Self {
+			self
+		}
+	}
+
+	impl Model for TestUuidUser {
+		type PrimaryKey = Uuid;
+		type Fields = TestUuidUserFields;
+		type Objects = Manager<Self>;
+
+		fn table_name() -> &'static str {
+			"test_uuid_user"
+		}
+
+		fn primary_key(&self) -> Option<Self::PrimaryKey> {
+			Some(self.id)
+		}
+
+		fn primary_key_filter_value(pk: Self::PrimaryKey) -> FilterValue {
+			FilterValue::Uuid(pk)
+		}
+
+		fn set_primary_key(&mut self, value: Self::PrimaryKey) {
+			self.id = value;
+		}
+
+		fn primary_key_field() -> &'static str {
+			"id"
+		}
+
+		fn new_fields() -> Self::Fields {
+			TestUuidUserFields
+		}
+	}
+
+	#[rstest]
+	fn test_get_preserves_uuid_primary_key_binding() {
+		// Arrange
+		let id = Uuid::parse_str("123e4567-e89b-12d3-a456-426614174000")
+			.expect("UUID literal should be valid");
+
+		// Act
+		let query = TestUuidUser::objects().get(id);
+
+		// Assert
+		assert_eq!(query.filters().len(), 1);
+		assert!(matches!(&query.filters()[0].value, FilterValue::Uuid(value) if *value == id));
+	}
+
+	#[rstest]
+	fn test_get_preserves_numeric_fallback_primary_key_binding() {
+		let query = TestUser::objects().get(42);
+
+		assert_eq!(query.filters().len(), 1);
+		assert!(matches!(query.filters()[0].value, FilterValue::Integer(42)));
 	}
 
 	#[test]

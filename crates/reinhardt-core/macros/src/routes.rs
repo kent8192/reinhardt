@@ -35,8 +35,10 @@ struct RouteOptions {
 /// Information about parameter extractors
 #[derive(Clone)]
 struct ExtractorInfo {
-	pat: Box<Pat>,
 	ty: Box<Type>,
+	// Allow dead_code: production validation derives body classification from the extractor type;
+	// the name remains available for focused extractor-detection regression tests.
+	#[allow(dead_code)]
 	extractor_name: String,
 }
 
@@ -76,6 +78,9 @@ fn detect_extractors(inputs: &Punctuated<FnArg, Token![,]>) -> Vec<ExtractorInfo
 
 	for input in inputs {
 		if let FnArg::Typed(pat_type) = input {
+			if is_raw_request_parameter(pat_type) {
+				continue;
+			}
 			// Skip parameters with #[inject] attribute
 			if pat_type.attrs.iter().any(is_inject_attr) {
 				continue;
@@ -85,18 +90,8 @@ fn detect_extractors(inputs: &Punctuated<FnArg, Token![,]>) -> Vec<ExtractorInfo
 				&& let Some(segment) = type_path.path.segments.last()
 			{
 				let type_name = segment.ident.to_string();
-				if matches!(
-					type_name.as_str(),
-					"Path"
-						| "Json" | "Query" | "Header"
-						| "Cookie" | "Form"
-						| "Body" | "HeaderNamed"
-						| "CookieNamed" | "CookieStruct"
-						| "SessionValue" | "OptionalSessionValue"
-						| "SessionValueNamed"
-				) {
+				if is_supported_extractor_type_name(&type_name) {
 					extractors.push(ExtractorInfo {
-						pat: pat_type.pat.clone(),
 						ty: pat_type.ty.clone(),
 						extractor_name: type_name,
 					});
@@ -106,6 +101,130 @@ fn detect_extractors(inputs: &Punctuated<FnArg, Token![,]>) -> Vec<ExtractorInfo
 	}
 
 	extractors
+}
+
+fn is_supported_extractor_type_name(type_name: &str) -> bool {
+	matches!(
+		type_name,
+		"Path"
+			| "Json" | "Query"
+			| "Header"
+			| "HeaderStruct"
+			| "Cookie"
+			| "Form" | "Body"
+			| "Multipart"
+			| "HeaderNamed"
+			| "CookieNamed"
+			| "CookieStruct"
+			| "SessionValue"
+			| "OptionalSessionValue"
+			| "SessionValueNamed"
+			| "OptionalSessionValueNamed"
+			| "PathStruct"
+			| "Validated"
+	)
+}
+
+/// Check whether a type is a raw HTTP `Request`.
+fn is_request_type(ty: &Type) -> bool {
+	let Type::Path(type_path) = ty else {
+		return false;
+	};
+
+	type_path
+		.path
+		.segments
+		.last()
+		.is_some_and(|segment| segment.ident == "Request" && segment.arguments.is_none())
+}
+
+fn is_raw_request_parameter(pat_type: &syn::PatType) -> bool {
+	if pat_type.attrs.iter().any(is_inject_attr) {
+		return false;
+	}
+
+	if is_request_type(&pat_type.ty) {
+		return true;
+	}
+	let Type::Path(type_path) = &*pat_type.ty else {
+		return true;
+	};
+	let Some(segment) = type_path.path.segments.last() else {
+		return true;
+	};
+	!is_supported_extractor_type_name(&segment.ident.to_string())
+}
+
+fn raw_request_parameter_ident(inputs: &Punctuated<FnArg, Token![,]>) -> Option<syn::Ident> {
+	inputs.iter().find_map(|input| {
+		let FnArg::Typed(pat_type) = input else {
+			return None;
+		};
+		if !is_raw_request_parameter(pat_type) {
+			return None;
+		}
+		let Pat::Ident(pat_ident) = &*pat_type.pat else {
+			return None;
+		};
+		Some(pat_ident.ident.clone())
+	})
+}
+
+fn wrapper_attribute(attr: &syn::Attribute) -> Option<syn::Attribute> {
+	if attr.path().is_ident("cfg") || !attr.path().is_ident("cfg_attr") {
+		return (!is_parameter_sensitive_attribute_path(attr.path())).then(|| attr.clone());
+	}
+	let Meta::List(list) = &attr.meta else {
+		return None;
+	};
+	let Ok(attributes) =
+		Punctuated::<Meta, Token![,]>::parse_terminated.parse2(list.tokens.clone())
+	else {
+		return None;
+	};
+	let condition = attributes.first()?;
+	let wrapper_attributes: Vec<_> = attributes.iter().skip(1).filter_map(wrapper_meta).collect();
+	if wrapper_attributes.is_empty() {
+		return None;
+	}
+	let tokens = quote! {
+		#[cfg_attr(#condition, #(#wrapper_attributes),*)]
+	};
+	syn::Attribute::parse_outer
+		.parse2(tokens)
+		.ok()?
+		.into_iter()
+		.next()
+}
+
+fn wrapper_meta(meta: &Meta) -> Option<Meta> {
+	if is_parameter_sensitive_attribute_path(meta.path()) {
+		return None;
+	}
+	let Meta::List(list) = meta else {
+		return Some(meta.clone());
+	};
+	if !list.path.is_ident("cfg_attr") {
+		return Some(meta.clone());
+	}
+	let attributes = Punctuated::<Meta, Token![,]>::parse_terminated
+		.parse2(list.tokens.clone())
+		.ok()?;
+	let condition = attributes.first()?;
+	let nested_attributes: Vec<_> = attributes.iter().skip(1).filter_map(wrapper_meta).collect();
+	if nested_attributes.is_empty() {
+		return None;
+	}
+	syn::parse2(quote! {
+		cfg_attr(#condition, #(#nested_attributes),*)
+	})
+	.ok()
+}
+
+fn is_parameter_sensitive_attribute_path(path: &syn::Path) -> bool {
+	path.segments
+		.last()
+		.is_some_and(|segment| segment.ident == "instrument")
 }
 
 /// Extract request body information from function parameters
@@ -123,36 +242,69 @@ fn extract_request_body_info(inputs: &Punctuated<FnArg, Token![,]>) -> Option<(S
 				continue;
 			}
 
-			if let Type::Path(type_path) = &*pat_type.ty
-				&& let Some(segment) = type_path.path.segments.last()
-			{
-				let type_name = segment.ident.to_string();
-
-				// Check for body-consuming extractors
-				if matches!(type_name.as_str(), "Json" | "Form" | "Body") {
-					// Extract generic argument T
-					if let syn::PathArguments::AngleBracketed(args) = &segment.arguments
-						&& let Some(syn::GenericArgument::Type(inner_type)) = args.args.first()
-					{
-						// Convert inner type to string
-						let body_type_str = quote!(#inner_type).to_string();
-
-						// Determine content type based on extractor
-						let content_type = match type_name.as_str() {
-							"Json" => "application/json",
-							"Form" => "application/x-www-form-urlencoded",
-							"Body" => "application/octet-stream",
-							_ => "application/octet-stream",
-						};
-
-						return Some((body_type_str, content_type.to_string()));
-					}
-				}
+			if let Some(body_info) = extract_body_info_from_type(&pat_type.ty) {
+				return Some(body_info);
 			}
 		}
 	}
 
 	None
+}
+
+/// Derive body metadata from a body-consuming extractor type.
+///
+/// `Validated<T>` delegates extraction to `T`, so it preserves the body schema
+/// and content type of wrapped `Json<T>`, `Form<T>`, or `Body<T>` extractors.
+fn extract_body_info_from_type(ty: &Type) -> Option<(String, String)> {
+	let Type::Path(type_path) = ty else {
+		return None;
+	};
+	let segment = type_path.path.segments.last()?;
+	if segment.ident == "Multipart" && matches!(segment.arguments, syn::PathArguments::None) {
+		return Some(("Multipart".to_string(), "multipart/form-data".to_string()));
+	}
+	let syn::PathArguments::AngleBracketed(args) = &segment.arguments else {
+		return None;
+	};
+	let inner_type = args.args.iter().find_map(|argument| match argument {
+		syn::GenericArgument::Type(ty) => Some(ty),
+		_ => None,
+	})?;
+
+	if segment.ident == "Validated" {
+		return extract_body_info_from_type(inner_type);
+	}
+
+	let content_type = match segment.ident.to_string().as_str() {
+		"Json" => "application/json",
+		"Form" => "application/x-www-form-urlencoded",
+		"Body" => "application/octet-stream",
+		_ => return None,
+	};
+
+	Some((quote!(#inner_type).to_string(), content_type.to_string()))
+}
+
+fn body_consuming_extractor_name(ty: &Type) -> Option<String> {
+	let Type::Path(type_path) = ty else {
+		return None;
+	};
+	let segment = type_path.path.segments.last()?;
+	if segment.ident == "Validated" {
+		let syn::PathArguments::AngleBracketed(args) = &segment.arguments else {
+			return None;
+		};
+		let inner = args.args.iter().find_map(|argument| match argument {
+			syn::GenericArgument::Type(ty) => Some(ty),
+			_ => None,
+		})?;
+		return body_consuming_extractor_name(inner);
+	}
+	matches!(
+		segment.ident.to_string().as_str(),
+		"Json" | "Form" | "Body" | "Multipart"
+	)
+	.then(|| segment.ident.to_string())
 }
 
 /// Detect parameters with `#[inject]` attribute
@@ -179,17 +331,13 @@ pub(crate) fn detect_inject_params(inputs: &Punctuated<FnArg, Token![,]>) -> Vec
 
 /// Validate duplication of body-consuming extractors
 fn validate_extractors(extractors: &[ExtractorInfo]) -> Result<()> {
-	let body_consuming_types = ["Json", "Form", "Body"];
 	let body_extractors: Vec<_> = extractors
 		.iter()
-		.filter(|ext| body_consuming_types.contains(&ext.extractor_name.as_str()))
+		.filter_map(|ext| body_consuming_extractor_name(&ext.ty))
 		.collect();
 
 	if body_extractors.len() > 1 {
-		let names: Vec<_> = body_extractors
-			.iter()
-			.map(|e| e.extractor_name.as_str())
-			.collect();
+		let names: Vec<_> = body_extractors.iter().map(String::as_str).collect();
 		return Err(Error::new(
 			Span::call_site(),
 			format!(
@@ -370,6 +518,7 @@ fn generate_wrapper_with_both(
 
 	let fn_name = &original_fn.sig.ident;
 	let original_fn_name = quote::format_ident!("{}_original", fn_name);
+	let request_binding = syn::Ident::new("__reinhardt_request", Span::mixed_site());
 	let fn_attrs: Vec<_> = original_fn
 		.attrs
 		.iter()
@@ -398,11 +547,11 @@ fn generate_wrapper_with_both(
 	// Generate DI context extraction
 	let di_context_extraction = if !inject_params.is_empty() {
 		quote! {
-			let __shared_ctx = req.get_di_context::<::std::sync::Arc<#di_crate::InjectionContext>>()
+			let __shared_ctx = #request_binding.get_di_context::<::std::sync::Arc<#di_crate::InjectionContext>>()
 				.ok_or_else(|| #core_crate::exception::Error::Internal(
 					"DI context not set. Ensure the router is configured with .with_di_context()".to_string()
 				))?;
-			let __di_request = req.clone_for_di();
+			let __di_request = #request_binding.clone_for_di();
 			let __di_ctx = ::std::sync::Arc::new((*__shared_ctx).fork_for_request(__di_request));
 			let __resolve_ctx = #di_crate::resolve_context::ResolveContext {
 				root: ::std::sync::Arc::clone(&__shared_ctx),
@@ -415,46 +564,50 @@ fn generate_wrapper_with_both(
 
 	// Generate injection calls. Runtime trait dispatch resolves `InjectableType`
 	// wrappers from the registry and falls back to normal `Injectable` values.
+	let inject_temps: Vec<syn::Ident> = inject_params
+		.iter()
+		.enumerate()
+		.map(|(index, _)| {
+			syn::Ident::new(&format!("__reinhardt_inject_{index}"), Span::mixed_site())
+		})
+		.collect();
 	let injection_calls: Vec<_> = inject_params
 		.iter()
-		.map(|param| {
-			let pat = &param.pat;
+		.zip(inject_temps.iter())
+		.map(|(param, temp)| {
 			let ty = &param.ty;
 			let use_cache = param.options.use_cache;
 			let resolve_expr =
 				generate_inject_resolver_expr(&di_crate, ty, quote! { &__di_ctx }, use_cache);
 
 			quote! {
-				let #pat: #ty = #resolve_expr
+				let #temp: #ty = #resolve_expr
 					.map_err(#core_crate::exception::Error::from)?;
 			}
 		})
 		.collect();
 
-	// Build call arguments for inject params (shared between both paths)
-	let inject_args: Vec<_> = inject_params.iter().map(|param| &param.pat).collect();
-
-	// Generate extractor calls and validation differently based on pre_validate.
-	// When pre_validate = true and a destructuring pattern like `Json(body)` is used,
-	// extracting directly into the pattern would consume the wrapper, making it
-	// impossible to validate via Deref on the original extractor type.
-	// The 3-step approach (extract to temp -> validate temp -> destructure) avoids this.
-	let (extractor_calls, validation_calls, destructure_calls, extractor_args): (
+	// Extract into hygienic temporaries so handler parameter patterns are evaluated
+	// only by the renamed original function. This also permits mutable and
+	// destructuring extractor patterns without interpolating patterns as expressions.
+	let extractor_temps: Vec<syn::Ident> = extractors
+		.iter()
+		.enumerate()
+		.map(|(index, _)| {
+			syn::Ident::new(
+				&format!("__reinhardt_extractor_{index}"),
+				Span::mixed_site(),
+			)
+		})
+		.collect();
+	let (extractor_calls, validation_calls, extractor_args): (
 		Vec<_>,
 		proc_macro2::TokenStream,
-		proc_macro2::TokenStream,
-		Vec<Box<Pat>>,
+		Vec<syn::Ident>,
 	) = if options.pre_validate {
-		// Step 1: Extract into temporary variables
-		let temp_names: Vec<syn::Ident> = extractors
-			.iter()
-			.enumerate()
-			.map(|(i, _)| syn::Ident::new(&format!("__ext_{}", i), Span::call_site()))
-			.collect();
-
 		let calls: Vec<_> = extractors
 			.iter()
-			.zip(temp_names.iter())
+			.zip(extractor_temps.iter())
 			.map(|(ext, temp)| {
 				let ty = &ext.ty;
 				// Route `ParamError` through `From<ParamError> for Error` so
@@ -462,7 +615,10 @@ fn generate_wrapper_with_both(
 				// reach the response, instead of being flattened into 400 via
 				// `Error::Validation`. See #4446.
 				quote! {
-					let #temp = <#ty as #params_crate::FromRequest>::from_request(&req, &ctx)
+					let #temp = <#ty as #params_crate::FromRequest>::from_request(
+						&#request_binding,
+						&ctx,
+					)
 						.await
 						.map_err(#core_crate::exception::Error::from)?;
 				}
@@ -470,9 +626,15 @@ fn generate_wrapper_with_both(
 			.collect();
 
 		// Step 2: Validate using temp variables (Deref on the extractor type)
-		let validate_calls: Vec<_> = temp_names
+		let validate_calls: Vec<_> = extractors
 			.iter()
-			.map(|temp| {
+			.zip(extractor_temps.iter())
+			.filter(|(ext, _)| {
+				ext.extractor_name != "Validated"
+					&& ext.extractor_name != "Multipart"
+					&& ext.extractor_name != "OptionalSessionValueNamed"
+			})
+			.map(|(_, temp)| {
 				quote! {
 					#core_crate::validators::Validate::validate(&*#temp)
 						.map_err(|e| #core_crate::exception::Error::Validation(
@@ -482,44 +644,76 @@ fn generate_wrapper_with_both(
 			})
 			.collect();
 
-		// Step 3: Destructure temp variables into original patterns
-		let destructure: Vec<_> = extractors
-			.iter()
-			.zip(temp_names.iter())
-			.map(|(ext, temp)| {
-				let pat = &ext.pat;
-				quote! { let #pat = #temp; }
-			})
-			.collect();
-
-		let args: Vec<Box<Pat>> = extractors.iter().map(|ext| ext.pat.clone()).collect();
-
-		(
-			calls,
-			quote! { #(#validate_calls)* },
-			quote! { #(#destructure)* },
-			args,
-		)
+		(calls, quote! { #(#validate_calls)* }, extractor_temps)
 	} else {
-		// Without pre_validate: extract directly into the original pattern.
+		// Without pre_validate: extract directly into the hygienic temporary.
 		// Route ParamError through `From<ParamError> for Error` so variant-specific
 		// status mappings (e.g. `Authentication` -> 401) reach the response. #4446
 		let calls: Vec<_> = extractors
 			.iter()
-			.map(|ext| {
-				let pat = &ext.pat;
+			.zip(extractor_temps.iter())
+			.map(|(ext, temp)| {
 				let ty = &ext.ty;
 				quote! {
-					let #pat = <#ty as #params_crate::FromRequest>::from_request(&req, &ctx)
+					let #temp = <#ty as #params_crate::FromRequest>::from_request(
+						&#request_binding,
+						&ctx,
+					)
 						.await
 						.map_err(#core_crate::exception::Error::from)?;
 				}
 			})
 			.collect();
 
-		let args: Vec<Box<Pat>> = extractors.iter().map(|ext| ext.pat.clone()).collect();
+		(calls, quote! {}, extractor_temps)
+	};
 
-		(calls, quote! {}, quote! {}, args)
+	// A raw Request is forwarded without extraction and must retain its position
+	// relative to typed extractors and injected parameters.
+	let has_request_param = original_fn
+		.sig
+		.inputs
+		.iter()
+		.any(|arg| matches!(arg, FnArg::Typed(pat_type) if is_raw_request_parameter(pat_type)));
+	let ordered_call_args = if has_request_param {
+		let mut inject_args = inject_temps.iter();
+		let mut extractor_args = extractor_args.iter();
+		Some(
+			original_fn
+				.sig
+				.inputs
+				.iter()
+				.filter_map(|arg| {
+					let FnArg::Typed(pat_type) = arg else {
+						return None;
+					};
+					if pat_type.attrs.iter().any(is_inject_attr) {
+						let temp = inject_args
+							.next()
+							.expect("each injected argument must have a generated binding");
+						Some(quote! { #temp })
+					} else if is_raw_request_parameter(pat_type) {
+						Some(quote! { #request_binding })
+					} else {
+						let pat = extractor_args
+							.next()
+							.expect("each route argument must have extractor metadata");
+						Some(quote! { #pat })
+					}
+				})
+				.collect::<Vec<_>>(),
+		)
+	} else {
+		None
+	};
+
+	// Preserve the established extractor-then-injection order when no raw
+	// Request is present.
+	let inject_args = &inject_temps;
+	let handler_call = if let Some(call_args) = ordered_call_args {
+		quote! { #original_fn_name(#(#call_args),*).await }
+	} else {
+		quote! { #original_fn_name(#(#extractor_args,)* #(#inject_args),*).await }
 	};
 
 	// Generate the handler body (injection + extraction + call)
@@ -533,11 +727,8 @@ fn generate_wrapper_with_both(
 		// Validate extracted parameters (when pre_validate = true)
 		#validation_calls
 
-		// Destructure into original patterns (when pre_validate = true)
-		#destructure_calls
-
 		// Call the original function
-		#original_fn_name(#(#extractor_args,)* #(#inject_args),*).await
+		#handler_call
 	};
 
 	// Wrap handler body in RESOLVE_CTX.scope() when DI is active
@@ -562,7 +753,7 @@ fn generate_wrapper_with_both(
 		},
 		quote! {
 			// Build ParamContext for extractors
-			let ctx = #params_crate::ParamContext::with_path_params(req.path_params.clone());
+		let ctx = #params_crate::ParamContext::with_path_params(#request_binding.path_params.clone());
 
 			// Extract DI context (if needed)
 			#di_context_extraction
@@ -594,16 +785,32 @@ fn generate_view_type(
 		.iter()
 		.filter(|attr| !attr.path().is_ident("inject"))
 		.collect();
+	let wrapper_attrs: Vec<_> = fn_attrs
+		.iter()
+		.filter_map(|attr| wrapper_attribute(attr))
+		.collect();
 	let output = &input.sig.output;
 	let asyncness = &input.sig.asyncness;
 
 	let view_type_name =
 		syn::Ident::new(&fn_name_to_view_type(&fn_name.to_string()), fn_name.span());
+	let request_binding = syn::Ident::new("__reinhardt_request", Span::mixed_site());
+	let wrapper_request_param = raw_request_parameter_ident(&input.sig.inputs);
+	let wrapper_request_binding = wrapper_request_param.as_ref().unwrap_or(&request_binding);
+	let request_binding_initialization = wrapper_request_param.as_ref().map(|wrapper_param| {
+		quote! {
+			let #request_binding = #wrapper_param;
+		}
+	});
 	let method_ident = syn::Ident::new(method, Span::call_site());
 
 	// Generate wrapper parts
 	let (original_fn, wrapper_body) =
 		generate_wrapper_with_both(input, extractors, inject_params, options);
+	let wrapper_body = quote! {
+		#request_binding_initialization
+		#wrapper_body
+	};
 
 	let route_doc = format!("Route: {} {}", method, path);
 
@@ -686,15 +893,15 @@ fn generate_view_type(
 
 		#[#async_trait_crate::async_trait]
 		impl #http_crate::Handler for #view_type_name {
-			async fn handle(&self, req: #http_crate::Request) -> #http_crate::Result<#http_crate::Response> {
-				#view_type_name::#fn_name(req).await
+			async fn handle(&self, #request_binding: #http_crate::Request) -> #http_crate::Result<#http_crate::Response> {
+				#view_type_name::#fn_name(#request_binding).await
 			}
 		}
 
 		impl #view_type_name {
 			/// Handler function for this view
-			#(#fn_attrs)*
-			#fn_vis #asyncness fn #fn_name(req: #http_crate::Request) #output {
+			#(#wrapper_attrs)*
+			#fn_vis #asyncness fn #fn_name(#wrapper_request_binding: #http_crate::Request) #output {
 				#wrapper_body
 			}
 		}
@@ -1204,6 +1411,7 @@ pub(crate) fn delete_impl(args: TokenStream, input: ItemFn) -> Result<TokenStrea
 #[cfg(test)]
 mod url_resolver_tests {
 	use super::*;
+	use rstest::rstest;
 
 	#[test]
 	fn extract_path_params_none() {
@@ -1334,6 +1542,381 @@ mod url_resolver_tests {
 			.collect();
 
 		assert_eq!(names, vec!["CookieStruct", "Query"]);
+	}
+
+	#[rstest]
+	fn detect_extractors_includes_supported_structured_extractors() {
+		use syn::parse_quote;
+
+		let inputs: syn::punctuated::Punctuated<FnArg, Token![,]> = parse_quote! {
+			Validated(value): Validated<Payload>,
+			PathStruct(path): PathStruct<PathData>,
+			HeaderStruct(headers): HeaderStruct<HeaderData>,
+			multipart: Multipart
+		};
+
+		let extractors = detect_extractors(&inputs);
+		let names: Vec<_> = extractors
+			.iter()
+			.map(|extractor| extractor.extractor_name.as_str())
+			.collect();
+
+		assert_eq!(
+			names,
+			vec!["Validated", "PathStruct", "HeaderStruct", "Multipart"]
+		);
+	}
+
+	#[rstest]
+	fn detect_extractors_includes_optional_named_session_value() {
+		let inputs: syn::punctuated::Punctuated<FnArg, Token![,]> = syn::parse_quote! {
+			session: OptionalSessionValueNamed<SessionKey, UserId>
+		};
+
+		let extractors = detect_extractors(&inputs);
+		assert_eq!(extractors.len(), 1);
+		assert_eq!(extractors[0].extractor_name, "OptionalSessionValueNamed");
+	}
+
+	#[rstest]
+	fn route_call_passes_raw_request_with_extractors_in_original_order() {
+		let input: ItemFn = syn::parse_quote! {
+			async fn handler(request: reinhardt_http::Request, Path(req): Path<String>, Json(body): Json<Payload>) -> String { String::new() }
+		};
+		let extractors = detect_extractors(&input.sig.inputs);
+		let inject_params = detect_inject_params(&input.sig.inputs);
+		let (_, wrapper) = generate_wrapper_with_both(
+			&input,
+			&extractors,
+			&inject_params,
+			&RouteOptions::default(),
+		);
+		let generated = wrapper.to_string();
+		let call_start = generated
+			.find("handler_original")
+			.expect("generated wrapper should call the renamed handler");
+		let call = &generated[call_start..];
+		let call_end = call
+			.find(") . await")
+			.expect("generated handler call should be awaited")
+			+ ") . await".len();
+		assert_eq!(
+			&call[..call_end],
+			"handler_original (__reinhardt_request , __reinhardt_extractor_0 , __reinhardt_extractor_1) . await"
+		);
+	}
+
+	#[rstest]
+	fn route_call_extracts_body_when_the_binding_name_contains_request() {
+		let input: ItemFn = syn::parse_quote! {
+			async fn handler(request_body: Body, Json(payload): Json<Payload>) -> String { String::new() }
+		};
+		let extractors = detect_extractors(&input.sig.inputs);
+		let inject_params = detect_inject_params(&input.sig.inputs);
+
+		assert_eq!(extractors.len(), 2);
+		let (_, wrapper) = generate_wrapper_with_both(
+			&input,
+			&extractors,
+			&inject_params,
+			&RouteOptions::default(),
+		);
+		let generated = wrapper.to_string();
+		let call_start = generated
+			.find("handler_original")
+			.expect("generated wrapper should call the renamed handler");
+		let call = &generated[call_start..];
+		let call_end = call
+			.find(") . await")
+			.expect("generated handler call should be awaited")
+			+ ") . await".len();
+		assert_eq!(
+			&call[..call_end],
+			"handler_original (__reinhardt_extractor_0 , __reinhardt_extractor_1 ,) . await"
+		);
+	}
+
+	#[rstest]
+	fn route_call_extracts_body_when_its_binding_is_request() {
+		let input: ItemFn = syn::parse_quote! {
+			async fn handler(request: Body, Json(payload): Json<Payload>) -> String { String::new() }
+		};
+		let extractors = detect_extractors(&input.sig.inputs);
+		let inject_params = detect_inject_params(&input.sig.inputs);
+
+		assert_eq!(extractors.len(), 2);
+		let (_, wrapper) = generate_wrapper_with_both(
+			&input,
+			&extractors,
+			&inject_params,
+			&RouteOptions::default(),
+		);
+		let generated = wrapper.to_string();
+		let call_start = generated
+			.find("handler_original")
+			.expect("generated wrapper should call the renamed handler");
+		let call = &generated[call_start..];
+		let call_end = call
+			.find(") . await")
+			.expect("generated handler call should be awaited")
+			+ ") . await".len();
+		assert_eq!(
+			&call[..call_end],
+			"handler_original (__reinhardt_extractor_0 , __reinhardt_extractor_1 ,) . await"
+		);
+	}
+
+	#[rstest]
+	fn route_call_extracts_body_named_req() {
+		let input: ItemFn = syn::parse_quote! {
+			async fn handler(req: Body, Json(payload): Json<Payload>) -> String { String::new() }
+		};
+		let extractors = detect_extractors(&input.sig.inputs);
+		let inject_params = detect_inject_params(&input.sig.inputs);
+
+		assert_eq!(extractors.len(), 2);
+		let (_, wrapper) = generate_wrapper_with_both(
+			&input,
+			&extractors,
+			&inject_params,
+			&RouteOptions::default(),
+		);
+		let generated = wrapper.to_string();
+		let call_start = generated
+			.find("handler_original")
+			.expect("generated wrapper should call the renamed handler");
+		let call = &generated[call_start..];
+		let call_end = call
+			.find(") . await")
+			.expect("generated handler call should be awaited")
+			+ ") . await".len();
+		assert_eq!(
+			&call[..call_end],
+			"handler_original (__reinhardt_extractor_0 , __reinhardt_extractor_1 ,) . await"
+		);
+	}
+
+	#[rstest]
+	fn route_wrapper_does_not_copy_parameter_sensitive_attributes() {
+		let input: ItemFn = syn::parse_quote! {
+			#[tracing::instrument(skip(payload))]
+			async fn handler(req: reinhardt_http::Request, Json(payload): Json<Payload>) -> String { String::new() }
+		};
+		let extractors = detect_extractors(&input.sig.inputs);
+		let inject_params = detect_inject_params(&input.sig.inputs);
+		let generated = generate_view_type(
+			&input,
+			"GET",
+			"/handler",
+			&extractors,
+			&inject_params,
+			&RouteOptions::default(),
+		)
+		.expect("route generation should succeed")
+		.to_string();
+
+		assert_eq!(generated.matches("tracing :: instrument").count(), 1);
+	}
+
+	#[rstest]
+	fn wrapper_attributes_copy_safe_attributes_and_filter_instrumentation() {
+		let cfg: syn::Attribute = syn::parse_quote!(#[cfg(feature = "trace")]);
+		let deprecated: syn::Attribute = syn::parse_quote!(#[deprecated]);
+		let must_use: syn::Attribute = syn::parse_quote!(#[must_use]);
+		let doc: syn::Attribute = syn::parse_quote!(#[doc = "public route"]);
+		let conditional_cfg: syn::Attribute =
+			syn::parse_quote!(#[cfg_attr(feature = "wasm", cfg(wasm))]);
+		let conditional_tracing: syn::Attribute =
+			syn::parse_quote!(#[cfg_attr(feature = "trace", tracing::instrument)]);
+
+		assert!(wrapper_attribute(&cfg).is_some());
+		assert!(wrapper_attribute(&deprecated).is_some());
+		assert!(wrapper_attribute(&must_use).is_some());
+		assert!(wrapper_attribute(&doc).is_some());
+		assert!(wrapper_attribute(&conditional_cfg).is_some());
+		assert!(wrapper_attribute(&conditional_tracing).is_none());
+	}
+
+	#[rstest]
+	fn wrapper_attributes_preserve_cfg_from_mixed_cfg_attr() {
+		let mixed: syn::Attribute = syn::parse_quote!(
+			#[cfg_attr(feature = "trace", cfg(unix), tracing::instrument)]
+		);
+
+		let wrapper =
+			wrapper_attribute(&mixed).expect("a mixed cfg_attr should retain its nested cfg gate");
+		assert_eq!(
+			quote!(#wrapper).to_string(),
+			"# [cfg_attr (feature = \"trace\" , cfg (unix))]"
+		);
+	}
+
+	#[rstest]
+	fn wrapper_attributes_filter_nested_conditional_instrumentation() {
+		let nested: syn::Attribute = syn::parse_quote!(
+			#[cfg_attr(feature = "outer", cfg_attr(feature = "trace", tracing::instrument(skip(payload))))]
+		);
+
+		assert!(wrapper_attribute(&nested).is_none());
+	}
+
+	#[rstest]
+	fn route_wrapper_preserves_safe_builtin_attributes() {
+		let input: ItemFn = syn::parse_quote! {
+			#[deprecated]
+			#[must_use]
+			#[doc = "public route"]
+			async fn handler(Json(payload): Json<Payload>) -> String { String::new() }
+		};
+		let extractors = detect_extractors(&input.sig.inputs);
+		let generated = generate_view_type(
+			&input,
+			"GET",
+			"/handler",
+			&extractors,
+			&[],
+			&RouteOptions::default(),
+		)
+		.expect("route generation should succeed")
+		.to_string();
+
+		assert_eq!(generated.matches("deprecated").count(), 2);
+		assert_eq!(generated.matches("must_use").count(), 2);
+		assert_eq!(generated.matches("public route").count(), 2);
+	}
+
+	#[rstest]
+	fn route_pre_validation_skips_multipart() {
+		let input: ItemFn = syn::parse_quote! {
+			async fn handler(multipart: Multipart) -> String { String::new() }
+		};
+		let extractors = detect_extractors(&input.sig.inputs);
+		let (_, wrapper) = generate_wrapper_with_both(
+			&input,
+			&extractors,
+			&[],
+			&RouteOptions {
+				pre_validate: true,
+				..RouteOptions::default()
+			},
+		);
+
+		assert!(!wrapper.to_string().contains("Validate :: validate"));
+	}
+
+	#[rstest]
+	fn route_call_forwards_mutable_injected_parameter_as_a_value() {
+		let input: ItemFn = syn::parse_quote! {
+			async fn handler(request: reinhardt_http::Request, #[inject] mut service: Service) -> String { String::new() }
+		};
+		let extractors = detect_extractors(&input.sig.inputs);
+		let inject_params = detect_inject_params(&input.sig.inputs);
+		let (_, wrapper) = generate_wrapper_with_both(
+			&input,
+			&extractors,
+			&inject_params,
+			&RouteOptions::default(),
+		);
+		let generated = wrapper.to_string();
+		let call_start = generated
+			.find("handler_original")
+			.expect("generated wrapper should call the renamed handler");
+		let call = &generated[call_start..];
+		let call_end = call
+			.find(") . await")
+			.expect("generated handler call should be awaited")
+			+ ") . await".len();
+		assert_eq!(
+			&call[..call_end],
+			"handler_original (__reinhardt_request , __reinhardt_inject_0) . await"
+		);
+	}
+
+	#[rstest]
+	fn validate_extractors_rejects_multipart_with_another_body_extractor() {
+		let inputs: syn::punctuated::Punctuated<FnArg, Token![,]> = syn::parse_quote! {
+			multipart: Multipart,
+			body: Body
+		};
+
+		let error = validate_extractors(&detect_extractors(&inputs))
+			.expect_err("Multipart and Body must not be extracted from one request");
+
+		assert_eq!(
+			error.to_string(),
+			"Cannot use multiple body-consuming extractors: Multipart, Body. Request body can only be read once."
+		);
+	}
+
+	#[rstest]
+	fn validate_extractors_rejects_validated_body_extractor_with_body() {
+		let inputs: syn::punctuated::Punctuated<FnArg, Token![,]> = syn::parse_quote! {
+			payload: Validated<Json<LoginRequest>>,
+			body: Body
+		};
+
+		let error = validate_extractors(&detect_extractors(&inputs))
+			.expect_err("Validated<Json<_>> and Body must not share a request body");
+
+		assert_eq!(
+			error.to_string(),
+			"Cannot use multiple body-consuming extractors: Json, Body. Request body can only be read once."
+		);
+	}
+
+	#[rstest]
+	fn extract_request_body_info_preserves_validated_form_metadata() {
+		let inputs: syn::punctuated::Punctuated<FnArg, Token![,]> = syn::parse_quote! {
+			Validated(payload): Validated<Form<LoginRequest>>
+		};
+
+		assert_eq!(
+			extract_request_body_info(&inputs),
+			Some((
+				"LoginRequest".to_string(),
+				"application/x-www-form-urlencoded".to_string(),
+			))
+		);
+	}
+
+	#[rstest]
+	fn extract_request_body_info_records_multipart_metadata() {
+		let inputs: syn::punctuated::Punctuated<FnArg, Token![,]> = syn::parse_quote! {
+			multipart: Multipart
+		};
+
+		assert_eq!(
+			extract_request_body_info(&inputs),
+			Some(("Multipart".to_string(), "multipart/form-data".to_string()))
+		);
+	}
+
+	#[rstest]
+	fn route_call_forwards_mutable_extractor_as_a_value() {
+		let input: ItemFn = syn::parse_quote! {
+			async fn handler(request: reinhardt_http::Request, mut multipart: Multipart) -> String { String::new() }
+		};
+		let extractors = detect_extractors(&input.sig.inputs);
+		let inject_params = detect_inject_params(&input.sig.inputs);
+		let (_, wrapper) = generate_wrapper_with_both(
+			&input,
+			&extractors,
+			&inject_params,
+			&RouteOptions::default(),
+		);
+		let generated = wrapper.to_string();
+		let call_start = generated
+			.find("handler_original")
+			.expect("generated wrapper should call the renamed handler");
+		let call = &generated[call_start..];
+		let call_end = call
+			.find(") . await")
+			.expect("generated handler call should be awaited")
+			+ ") . await".len();
+		assert_eq!(
+			&call[..call_end],
+			"handler_original (__reinhardt_request , __reinhardt_extractor_0) . await"
+		);
 	}
 
 	#[test]

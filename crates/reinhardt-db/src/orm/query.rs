@@ -517,6 +517,69 @@ impl From<i32> for FilterValue {
 	}
 }
 
+macro_rules! filter_value_signed_integer {
+	($($type:ty),+ $(,)?) => {
+		$(
+			impl From<$type> for FilterValue {
+				fn from(value: $type) -> Self {
+					Self::Integer(i64::from(value))
+				}
+			}
+		)+
+	};
+}
+
+macro_rules! filter_value_unsigned_integer {
+	($($type:ty),+ $(,)?) => {
+		$(
+			impl From<$type> for FilterValue {
+				fn from(value: $type) -> Self {
+					Self::Integer(i64::from(value))
+				}
+			}
+		)+
+	};
+}
+
+filter_value_signed_integer!(i8, i16);
+filter_value_unsigned_integer!(u8, u16, u32);
+
+impl From<u64> for FilterValue {
+	fn from(value: u64) -> Self {
+		value
+			.try_into()
+			.map_or_else(|_| Self::String(value.to_string()), Self::Integer)
+	}
+}
+
+impl From<usize> for FilterValue {
+	fn from(value: usize) -> Self {
+		Self::from(value as u64)
+	}
+}
+
+impl From<isize> for FilterValue {
+	fn from(value: isize) -> Self {
+		Self::Integer(value as i64)
+	}
+}
+
+impl From<i128> for FilterValue {
+	fn from(value: i128) -> Self {
+		value
+			.try_into()
+			.map_or_else(|_| Self::String(value.to_string()), Self::Integer)
+	}
+}
+
+impl From<u128> for FilterValue {
+	fn from(value: u128) -> Self {
+		value
+			.try_into()
+			.map_or_else(|_| Self::String(value.to_string()), Self::Integer)
+	}
+}
+
 impl From<f64> for FilterValue {
 	fn from(f: f64) -> Self {
 		FilterValue::Float(f)

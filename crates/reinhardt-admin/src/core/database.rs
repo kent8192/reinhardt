@@ -190,7 +190,7 @@ fn parse_pk_values(table_name: &str, pk_field: &str, ids: &[String]) -> Vec<Valu
 		.collect()
 }
 
-/// Convert FilterValue to Value
+/// Convert `FilterValue` to `Value` while preserving typed scalar bindings.
 #[doc(hidden)]
 pub fn filter_value_to_sea_value(v: &FilterValue) -> Value {
 	match v {
@@ -1940,6 +1940,38 @@ mod tests {
 			query,
 			r#"SELECT * FROM "users" WHERE EXTRACT(YEAR FROM "created_at") BETWEEN 2024 AND 2026"#
 		);
+	}
+
+	#[rstest]
+	fn test_filter_value_to_sea_value_preserves_timestamp_binding() {
+		// Arrange
+		let timestamp = chrono::DateTime::parse_from_rfc3339("2026-07-26T00:00:00Z")
+			.expect("timestamp should be valid")
+			.with_timezone(&chrono::Utc);
+		let value = FilterValue::Timestamp(timestamp);
+
+		// Act
+		let sea_value = filter_value_to_sea_value(&value);
+
+		// Assert
+		assert_eq!(
+			sea_value,
+			Value::ChronoDateTimeUtc(Some(Box::new(timestamp)))
+		);
+	}
+
+	#[rstest]
+	fn test_filter_value_to_sea_value_preserves_uuid_binding() {
+		// Arrange
+		let uuid =
+			uuid::Uuid::parse_str("123e4567-e89b-12d3-a456-426614174000").expect("UUID is valid");
+		let value = FilterValue::Uuid(uuid);
+
+		// Act
+		let sea_value = filter_value_to_sea_value(&value);
+
+		// Assert
+		assert_eq!(sea_value, Value::Uuid(Some(Box::new(uuid))));
 	}
 
 	#[test]

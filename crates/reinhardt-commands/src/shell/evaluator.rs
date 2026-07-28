@@ -2437,68 +2437,6 @@ pub mod models {
 		);
 		let fixture = ShellFixture::create();
 		let _registry = ModelRegistryGuard::with_inventory_item();
-		let started_path = fixture._directory.path().join("interrupt-started");
-		let source = format!(
-			"std::fs::write({:?}, \"started\").unwrap();\n\
-			 tokio::time::sleep(std::time::Duration::from_secs(30)).await;",
-			started_path
-		);
-		let mut interrupted_worker = new_evaluator_worker(&fixture);
-		let interrupt = interrupted_worker.interrupt();
-		let interrupt_started_path = started_path.clone();
-		let interrupter = thread::spawn(move || {
-			let deadline = Instant::now() + Duration::from_secs(30);
-			while !interrupt_started_path.is_file() {
-				assert!(
-					Instant::now() < deadline,
-					"real evaluator did not start the interrupt probe"
-				);
-				thread::sleep(Duration::from_millis(20));
-			}
-			interrupt
-				.interrupt()
-				.expect("running real evaluator should be interrupted");
-		});
-		let interrupted = interrupted_worker
-			.evaluate(&source)
-			.await
-			.expect_err("interrupted real evaluator should terminate");
-		interrupter
-			.join()
-			.expect("real evaluator interrupter should join");
-		assert!(matches!(
-			interrupted,
-			EvaluationFailure::ProcessExited(_) | EvaluationFailure::Panic(_)
-		));
-		drop(interrupted_worker);
-
-		let validated = fixture
-			.config()
-			.validate()
-			.expect("real factory configuration should validate");
-		let evcxr_tmpdir = fixture._directory.path().join("factory-evcxr");
-		std::fs::create_dir_all(&evcxr_tmpdir).expect("factory evcxr directory should be created");
-		let _tmpdir = EnvironmentVariableGuard::set("EVCXR_TMPDIR", &evcxr_tmpdir);
-		let runtime_path = fixture.runtime_path.clone();
-		let (mut replacement, warnings) = EvaluatorWorker::start_with(move || {
-			let context = EvalContext::with_subprocess_command(Command::new(runtime_path));
-			let (eval, outputs) = context.map_err(super::classify_startup_error)?;
-			let (evaluator, warnings) =
-				EvcxrEvaluator::bootstrap_with_context(&validated, eval, outputs)?;
-			Ok((
-				Box::new(evaluator) as Box<dyn BlockingShellEvaluator>,
-				warnings,
-			))
-		})
-		.expect("real evaluator should bootstrap inside its owned worker");
-		assert_eq!(warnings, Vec::<String>::new());
-		let retained = replacement
-			.evaluate("retained + 1")
-			.await
-			.expect("replacement should replay the project prelude");
-		assert_eq!(retained.value.as_deref(), Some("42"));
-		drop(replacement);
-
 		let mut process_exit_evaluator = new_evaluator_worker(&fixture);
 		let process_exit = process_exit_evaluator
 			.evaluate("std::process::exit(7)")

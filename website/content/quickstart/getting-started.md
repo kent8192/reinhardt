@@ -31,7 +31,7 @@ the latest stable release. The literal below is release-managed.
 
 <!-- reinhardt-version-sync -->
 ```bash
-cargo install reinhardt-admin-cli --version "0.3.2"
+cargo install reinhardt-admin-cli --version "0.3.3"
 ```
 
 **Note:** After installation, the command is `reinhardt-admin`, not
@@ -381,7 +381,7 @@ Check out the [ORM documentation](/docs/api/) for more details.
 ## Getting Help
 
 <!-- reinhardt-version-sync -->
-- 📖 [API Reference](https://docs.rs/reinhardt-web/0.3.2/reinhardt/)
+- 📖 [API Reference](https://docs.rs/reinhardt-web/0.3.3/reinhardt/)
 - 🗺️ [DeepWiki](https://deepwiki.com/kent8192/reinhardt-web) - AI-generated codebase documentation
 - 💬 [GitHub Discussions](https://github.com/kent8192/reinhardt-web/discussions)
 - 🐛 [Report Issues](https://github.com/kent8192/reinhardt-web/issues)

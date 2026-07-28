@@ -48,7 +48,7 @@ If you have written `ModelSerializer` or `Depends()` before, Reinhardt will feel
 ```bash
 # Pin the documented Reinhardt release for reproducibility.
 # Omit --version to let Cargo choose the latest stable release.
-cargo install reinhardt-admin-cli --version "0.3.2"
+cargo install reinhardt-admin-cli --version "0.3.3"
 
 reinhardt-admin startproject my-api && cd my-api
 cargo run --bin manage runserver  # Visit http://127.0.0.1:8000
@@ -103,7 +103,7 @@ Reinhardt follows a **three-phase lifecycle** for every crate:
 | **Stable** (`0.x.0`) | Full SemVer 2.0 guarantees. |
 
 <!-- reinhardt-version-sync -->
-**Current release line:** Reinhardt documentation tracks `0.3.2`. From
+**Current release line:** Reinhardt documentation tracks `0.3.3`. From
 `0.1.0` onward, all public APIs follow SemVer 2.0; future breaking changes
 move through the documented alpha and RC lifecycle before stable publication.
 
@@ -131,7 +131,7 @@ Get a well-balanced feature set with zero configuration:
 [dependencies]
 # Import as 'reinhardt', published as 'reinhardt-web'
 # Default enables the "standard" preset (balanced feature set)
-reinhardt = { version = "0.3.2", package = "reinhardt-web" }
+reinhardt = { version = "0.3.3", package = "reinhardt-web" }
 ```
 
 **Includes:** Core, Database (PostgreSQL), REST API (serializers, parsers, pagination, filters, throttling, versioning, metadata, content negotiation), Auth, Middleware (sessions), Pages (WASM Frontend with SSR), Signals
@@ -153,7 +153,7 @@ For compatibility checks, framework development, and projects that intentionally
 <!-- reinhardt-version-sync -->
 ```toml
 [dependencies]
-reinhardt = { version = "0.3.2", package = "reinhardt-web", default-features = false, features = ["full"] }
+reinhardt = { version = "0.3.3", package = "reinhardt-web", default-features = false, features = ["full"] }
 ```
 
 **Includes:** Everything in Standard, plus Admin, GraphQL, WebSockets, Cache, i18n, Mail, Static Files, Storage, and more
@@ -167,7 +167,7 @@ Lightweight and fast, perfect for simple APIs:
 <!-- reinhardt-version-sync -->
 ```toml
 [dependencies]
-reinhardt = { version = "0.3.2", package = "reinhardt-web", default-features = false, features = ["minimal"] }
+reinhardt = { version = "0.3.3", package = "reinhardt-web", default-features = false, features = ["minimal"] }
 ```
 
 **Includes:** HTTP, routing, DI, parameter extraction, server
@@ -182,24 +182,24 @@ Install only the components you need:
 ```toml
 [dependencies]
 # Core components
-reinhardt-http = "0.3.2"
-reinhardt-urls = "0.3.2"
+reinhardt-http = "0.3.3"
+reinhardt-urls = "0.3.3"
 
 # Optional: Database
-reinhardt-db = "0.3.2"
+reinhardt-db = "0.3.3"
 
 # Optional: Authentication
-reinhardt-auth = "0.3.2"
+reinhardt-auth = "0.3.3"
 
 # Optional: REST API features
-reinhardt-rest = "0.3.2"
+reinhardt-rest = "0.3.3"
 
 # Optional: Admin panel
-reinhardt-admin = "0.3.2"
+reinhardt-admin = "0.3.3"
 
 # Optional: Advanced features
-reinhardt-graphql = "0.3.2"
-reinhardt-websockets = "0.3.2"
+reinhardt-graphql = "0.3.3"
+reinhardt-websockets = "0.3.3"
 ```
 
 **Note on Crate Naming:**
@@ -217,7 +217,7 @@ the latest stable release. The literal below is release-managed.
 
 <!-- reinhardt-version-sync -->
 ```bash
-cargo install reinhardt-admin-cli --version "0.3.2"
+cargo install reinhardt-admin-cli --version "0.3.3"
 ```
 
 ### 2. Create a New Project
@@ -234,7 +234,7 @@ during project creation. Scripts can pass them explicitly:
 <!-- reinhardt-version-sync -->
 ```bash
 reinhardt-admin startproject my-api \
-  --reinhardt-version "0.3.2" \
+  --reinhardt-version "0.3.3" \
   --features standard,admin \
   --no-interactive
 ```

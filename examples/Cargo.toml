@@ -17,7 +17,7 @@ members = [
 [workspace.dependencies]
 # Reinhardt framework from this repository.
 # reinhardt-version-sync
-reinhardt = { path = "..", version = "0.3.2", package = "reinhardt-web" }
+reinhardt = { path = "..", version = "0.3.3", package = "reinhardt-web" }
 
 # The examples workspace is resolved independently in standalone CI, so it must
 # carry the same resolver workaround as the root workspace.

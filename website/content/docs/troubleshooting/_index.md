@@ -30,6 +30,6 @@ Troubleshooting guides provide solutions to common problems encountered during d
 ## See Also
 
 <!-- reinhardt-version-sync -->
-- [API Reference](https://docs.rs/reinhardt-web/0.3.2/reinhardt/)
+- [API Reference](https://docs.rs/reinhardt-web/0.3.3/reinhardt/)
 - [Cookbook](../cookbook/)
 - [Migration Guides](/quickstart/migration-guides/)

@@ -7,6 +7,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.3](https://github.com/kent8192/reinhardt-web/compare/reinhardt-db@v0.3.2...reinhardt-db@v0.3.3) - 2026-07-28
+
+### Fixed
+
+- *(orm)* bind explicit queryset parameters
+- *(orm)* reject oversized queryset bind values
+- *(orm)* keep UUID-looking filters as text
+- *(orm)* bind typed temporal filter values
+- *(orm)* retain UUID filter bindings
+- *(orm)* preserve UUID primary key bindings
+- *(db)* preserve primary key binding types
+- *(db)* preserve composite model primary keys
+- *(db)* support scalar primary key filters
+- *(db)* preserve custom primary key lookups
+- *(db)* retain numeric custom primary key filters
+- *(db)* retain primary key fallback for aliases
+- *(model)* preserve string primary key bindings
+
+### Testing
+
+- *(db)* use rstest for numeric primary key fallback
+
 ## [0.3.2](https://github.com/kent8192/reinhardt-web/compare/reinhardt-db@v0.3.1...reinhardt-db@v0.3.2) - 2026-07-14
 
 ### Fixed

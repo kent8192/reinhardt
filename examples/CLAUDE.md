@@ -35,7 +35,7 @@ By default, examples use the parent Reinhardt checkout through the examples work
 <!-- reinhardt-version-sync -->
 ```toml
 [workspace.dependencies]
-reinhardt = { path = "..", version = "0.3.2", package = "reinhardt-web" }
+reinhardt = { path = "..", version = "0.3.3", package = "reinhardt-web" }
 ```
 
 ### Explicit Patch Mode
@@ -69,7 +69,7 @@ rm -f .cargo/config.toml
 ```toml
 [dependencies]
 # ✅ Main reinhardt crate only
-reinhardt = { version = "0.3.2", package = "reinhardt-web", features = ["core", "database"] }
+reinhardt = { version = "0.3.3", package = "reinhardt-web", features = ["core", "database"] }
 
 # ✅ External crates are fine
 tokio = { workspace = true }
@@ -85,7 +85,7 @@ rstest = "0.26.1"
 <!-- reinhardt-version-sync -->
 ```toml
 [dependencies]
-reinhardt = { version = "0.3.2", package = "reinhardt-web", features = ["core"] }
+reinhardt = { version = "0.3.3", package = "reinhardt-web", features = ["core"] }
 reinhardt-http = { path = "../../../crates/reinhardt-http" }      # ❌ NEVER
 reinhardt-routers = { path = "../../../crates/reinhardt-urls/crates/routers" }  # ❌ NEVER
 reinhardt-di = { path = "../../../crates/reinhardt-di" }          # ❌ NEVER

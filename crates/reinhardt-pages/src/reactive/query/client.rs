@@ -219,9 +219,8 @@ impl Drop for QueryClientInner {
 }
 
 /// Identifies the runtime consumer holding a query lease.
-// These consumer variants are part of the internal loader contract; later
-// navigation and prefetch phases construct the variants that are not used by
-// the ordinary `use_query` hook yet.
+// Some variants are reserved for configuration-specific route and maintenance
+// paths, so not every build constructs all of them.
 #[allow(dead_code)]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum QueryConsumer {
@@ -233,8 +232,6 @@ pub(crate) enum QueryConsumer {
 }
 
 /// Controls whether a failed fetch remains a reusable cache error.
-// The discard policy is exercised by route loaders added in later tasks.
-#[allow(dead_code)]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum QueryErrorPolicy {
 	Retain,
@@ -431,9 +428,8 @@ impl<T: Clone + 'static, E: Clone + 'static> QueryEntry<T, E> {
 		}
 	}
 
-	// The lease result future registers here while a navigation waits for a
-	// generation to settle; later loader tasks will exercise this path.
-	#[allow(dead_code)]
+	// A loader result future registers here while navigation waits for its
+	// request generation to settle.
 	fn register_waiter(&self, waker: &Waker) {
 		let mut waiters = self.waiters.borrow_mut();
 		if !waiters.iter().any(|previous| previous.will_wake(waker)) {
@@ -627,8 +623,6 @@ impl<T: Clone + 'static, E: Clone + 'static> QueryEntry<T, E> {
 	}
 }
 
-// Route preparation consumes this future in later implementation tasks.
-#[allow(dead_code)]
 struct QueryResultFuture<T: Clone + 'static, E: Clone + 'static> {
 	entry: Rc<QueryEntry<T, E>>,
 	generation: Option<u64>,
@@ -658,9 +652,8 @@ impl<T: Clone + 'static, E: Clone + 'static> Future for QueryResultFuture<T, E> 
 }
 
 impl<T: Clone + 'static, E: Clone + 'static> QueryLease<T, E> {
-	// Route preparation consumes this result operation in later implementation
-	// tasks; keep it available while the public hook remains synchronous.
-	#[allow(dead_code)]
+	// Route preparation awaits this result while the public hook remains
+	// synchronous.
 	pub(crate) async fn result(&self) -> Result<T, E> {
 		QueryResultFuture {
 			entry: Rc::clone(&self.inner.entry),
@@ -669,13 +662,14 @@ impl<T: Clone + 'static, E: Clone + 'static> QueryLease<T, E> {
 		.await
 	}
 
-	// Route preparation reads the settled state when a loader joins cached work.
-	#[allow(dead_code)]
+	// Hydration regressions inspect the settled state without creating a public snapshot API.
+	#[cfg(test)]
 	pub(crate) fn state(&self) -> ResourceState<T, E> {
 		self.inner.entry.state.with_untracked(|state| state.clone())
 	}
 }
 
+#[cfg(test)]
 pub(crate) fn acquire_query<T, E>(
 	descriptor: QueryDescriptor<T, E>,
 	options: QueryAcquireOptions,
@@ -687,6 +681,7 @@ where
 	acquire_query_with_options(descriptor, options, QueryOptions::default())
 }
 
+#[cfg(test)]
 pub(super) fn acquire_query_with_options<T, E>(
 	descriptor: QueryDescriptor<T, E>,
 	options: QueryAcquireOptions,
@@ -697,17 +692,6 @@ where
 	E: Clone + Serialize + DeserializeOwned + 'static,
 {
 	super::context::queries().acquire_with_options(descriptor, options, query_options)
-}
-
-pub(crate) fn seed_query_from_serialized<T, E>(
-	descriptor: QueryDescriptor<T, E>,
-	serialized: &serde_json::Value,
-) -> Result<(), serde_json::Error>
-where
-	T: Clone + Serialize + DeserializeOwned + 'static,
-	E: Clone + Serialize + DeserializeOwned + 'static,
-{
-	super::context::queries().seed_from_serialized(descriptor, serialized)
 }
 
 #[cfg(test)]
@@ -724,6 +708,18 @@ pub(super) fn invalidate_query_id(id: &str) {
 }
 
 impl QueryClient {
+	pub(crate) fn acquire<T, E>(
+		&self,
+		descriptor: QueryDescriptor<T, E>,
+		options: QueryAcquireOptions,
+	) -> QueryLease<T, E>
+	where
+		T: Clone + Serialize + DeserializeOwned + 'static,
+		E: Clone + Serialize + DeserializeOwned + 'static,
+	{
+		self.acquire_with_options(descriptor, options, QueryOptions::default())
+	}
+
 	pub(super) fn acquire_with_options<T, E>(
 		&self,
 		descriptor: QueryDescriptor<T, E>,
@@ -741,9 +737,9 @@ impl QueryClient {
 			.acquire(fetcher, options, query_options)
 	}
 
-	fn seed_from_serialized<T, E>(
+	pub(crate) fn seed_serialized<T, E>(
 		&self,
-		descriptor: QueryDescriptor<T, E>,
+		key: QueryKey<T, E>,
 		serialized: &serde_json::Value,
 	) -> Result<(), serde_json::Error>
 	where
@@ -751,8 +747,7 @@ impl QueryClient {
 		E: Clone + Serialize + DeserializeOwned + 'static,
 	{
 		let hydrated_state = serde_json::from_value(serialized.clone())?;
-		let (key, _fetcher, _ssr_prefetch, family_types) = descriptor.into_parts();
-		self.register_family(key.family_id(), family_types);
+		self.register_family(key.family_id(), key.family_types());
 		let id = key.id();
 		#[cfg(any(wasm, test))]
 		super::super::resource::reserve_client_resource_key(&id);

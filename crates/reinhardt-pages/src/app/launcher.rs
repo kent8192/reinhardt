@@ -1073,7 +1073,7 @@ impl ClientLauncher {
 		});
 
 		let query_client = QueryClient::new(self.query_defaults.clone());
-		let query_client_guard = provide_query_client(query_client);
+		let query_client_guard = provide_query_client(query_client.clone());
 		let mut root_context_guards: Vec<Box<dyn Any>> = vec![Box::new(query_client_guard)];
 		root_context_guards.extend(
 			self.root_context_providers
@@ -1170,14 +1170,13 @@ impl ClientLauncher {
 					))
 				})?;
 			coordinator.initialize_committed_index(initial_state.entry_index().unwrap_or(0));
-			let initial_store_hydrated =
-				coordinator
-					.hydrate_initial_store(&initial_path)
-					.map_err(|error| {
-						wasm_bindgen::JsValue::from_str(&format!(
-							"initial route-loader hydration failed: {error}"
-						))
-					})?;
+			let initial_store_hydrated = coordinator
+				.hydrate_initial_store(&query_client, &initial_path)
+				.map_err(|error| {
+					wasm_bindgen::JsValue::from_str(&format!(
+						"initial route-loader hydration failed: {error}"
+					))
+				})?;
 			if !initial_store_hydrated {
 				initial_preparation_path = Some(initial_path.clone());
 			}

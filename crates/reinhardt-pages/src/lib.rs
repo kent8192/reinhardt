@@ -540,12 +540,6 @@ pub mod callback;
 #[allow(dead_code)]
 mod cancellation;
 pub use cancellation::{CancellationHandle, CancellationToken, Cancelled};
-// Internal query lease symbols are re-exported for the loader runtime added
-// in subsequent implementation tasks.
-#[allow(unused_imports)]
-pub(crate) use reactive::{
-	QueryAcquireOptions, QueryConsumer, QueryErrorPolicy, QueryLease, acquire_query,
-};
 pub mod control_binding;
 #[allow(dead_code)] // SSR and browser adapters consume this staged crate-private contract.
 pub(crate) mod document_head;

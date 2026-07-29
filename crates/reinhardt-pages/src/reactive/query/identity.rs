@@ -96,13 +96,16 @@ impl<Args, T, E> QueryFamily<Args, T, E> {
 	/// Builds the exact typed key for one argument set.
 	pub fn key(&self, args: Args) -> QueryKey<T, E>
 	where
-		Args: Serialize,
+		Args: Serialize + 'static,
+		T: 'static,
+		E: 'static,
 	{
 		QueryKey {
 			identity: QueryIdentity {
 				family_id: self.id,
 				arguments_fingerprint: fingerprint(&args),
 			},
+			family_types: QueryFamilyTypes::of::<Args, T, E>(),
 			marker: PhantomData,
 		}
 	}
@@ -132,7 +135,6 @@ impl<Args, T, E> QueryFamily<Args, T, E> {
 			key: self.key(args),
 			fetcher: Rc::new(move |cancellation| Box::pin(fetcher(cancellation))),
 			ssr_prefetch: true,
-			family_types: QueryFamilyTypes::of::<Args, T, E>(),
 		}
 	}
 }
@@ -140,6 +142,7 @@ impl<Args, T, E> QueryFamily<Args, T, E> {
 /// Exact typed cache identity for one query argument set.
 pub struct QueryKey<T, E> {
 	identity: QueryIdentity,
+	family_types: QueryFamilyTypes,
 	marker: PhantomData<fn() -> Result<T, E>>,
 }
 
@@ -147,6 +150,7 @@ impl<T, E> Clone for QueryKey<T, E> {
 	fn clone(&self) -> Self {
 		Self {
 			identity: self.identity.clone(),
+			family_types: self.family_types,
 			marker: PhantomData,
 		}
 	}
@@ -189,6 +193,10 @@ impl<T, E> QueryKey<T, E> {
 		}
 		id
 	}
+
+	pub(crate) fn family_types(&self) -> QueryFamilyTypes {
+		self.family_types
+	}
 }
 
 /// A typed query key paired with one observer-owned fetcher.
@@ -196,7 +204,6 @@ pub struct QueryDescriptor<T, E> {
 	key: QueryKey<T, E>,
 	pub(super) fetcher: Rc<QueryFetcher<T, E>>,
 	pub(super) ssr_prefetch: bool,
-	pub(crate) family_types: QueryFamilyTypes,
 }
 
 impl<T, E> Clone for QueryDescriptor<T, E> {
@@ -205,7 +212,6 @@ impl<T, E> Clone for QueryDescriptor<T, E> {
 			key: self.key.clone(),
 			fetcher: Rc::clone(&self.fetcher),
 			ssr_prefetch: self.ssr_prefetch,
-			family_types: self.family_types,
 		}
 	}
 }
@@ -233,7 +239,8 @@ impl<T, E> QueryDescriptor<T, E> {
 	}
 
 	pub(super) fn into_parts(self) -> QueryDescriptorParts<T, E> {
-		(self.key, self.fetcher, self.ssr_prefetch, self.family_types)
+		let family_types = self.key.family_types();
+		(self.key, self.fetcher, self.ssr_prefetch, family_types)
 	}
 }
 

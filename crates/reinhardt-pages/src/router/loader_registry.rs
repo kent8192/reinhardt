@@ -3,7 +3,7 @@
 use super::loader::{LoaderInputSpec, PreparedLoader, RouteLoaderError};
 use crate::HydrationContext;
 use crate::cancellation::CancellationHandle;
-use crate::reactive::QueryConsumer;
+use crate::reactive::{QueryClient, QueryConsumer};
 use reinhardt_urls::routers::client_router::{RouteContext, RouteLoaderId};
 use std::collections::HashMap;
 use std::fmt;
@@ -53,7 +53,8 @@ pub type LoaderExecutor = fn(&RouteContext, CancellationHandle, LoaderConsumer) 
 pub type LoaderHydrator = fn(&serde_json::Value) -> Result<PreparedLoader, RouteLoaderError>;
 
 /// Erased query-cache seeder used during route-loader hydration.
-pub type LoaderQuerySeeder = fn(&RouteContext, &HydrationContext) -> Result<(), RouteLoaderError>;
+pub type LoaderQuerySeeder =
+	fn(&QueryClient, &RouteContext, &HydrationContext) -> Result<(), RouteLoaderError>;
 
 /// Static registration record for one route loader.
 pub struct LoaderRegistration {
@@ -227,6 +228,7 @@ impl LoaderRegistry {
 	#[doc(hidden)]
 	pub fn seed_hydrated_query(
 		&self,
+		client: &QueryClient,
 		id: RouteLoaderId,
 		context: &RouteContext,
 		hydration: &HydrationContext,
@@ -240,7 +242,7 @@ impl LoaderRegistry {
 				500,
 			)
 		})?;
-		seed_query(context, hydration)
+		seed_query(client, context, hydration)
 	}
 }
 

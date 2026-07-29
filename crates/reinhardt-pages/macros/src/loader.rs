@@ -191,6 +191,7 @@ fn expand_loader(input: ItemFn) -> syn::Result<proc_macro2::TokenStream> {
 			}
 
 			fn #query_seeder_name(
+				__client: &#pages_crate::QueryClient,
 				__context: &#pages_crate::router::request::RouteContext,
 				__hydration: &#pages_crate::HydrationContext,
 			) -> ::core::result::Result<(), #pages_crate::RouteLoaderError> {
@@ -202,6 +203,7 @@ fn expand_loader(input: ItemFn) -> syn::Result<proc_macro2::TokenStream> {
 					}
 				};
 				#pages_crate::router::loader::seed_loader_query::<#data>(
+					__client,
 					<marker as #pages_crate::RouteLoader>::ID,
 					&__context,
 					INPUTS,

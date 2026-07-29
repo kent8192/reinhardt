@@ -13,10 +13,9 @@ mod state;
 mod tests;
 
 pub use client::QueryClient;
-pub(crate) use client::{
-	QueryAcquireOptions, QueryConsumer, QueryErrorPolicy, QueryLease, acquire_query,
-	seed_query_from_serialized,
-};
+#[cfg(test)]
+pub(super) use client::acquire_query;
+pub(crate) use client::{QueryAcquireOptions, QueryConsumer, QueryErrorPolicy, QueryLease};
 pub use context::queries;
 pub(crate) use context::{
 	QueryClientGuard, provide_query_client, with_query_client, with_query_client_async,

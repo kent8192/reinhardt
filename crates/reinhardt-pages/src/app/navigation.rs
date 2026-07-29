@@ -1,6 +1,8 @@
 //! Pages-owned navigation preparation and commit coordination.
 
 use crate::cancellation::{AbortableTaskGuard, CancellationSource};
+#[cfg(wasm)]
+use crate::reactive::QueryClient;
 use crate::reactive::Signal;
 use crate::reactive::hooks::router::NavigateError;
 use crate::router::NavigationType;
@@ -130,7 +132,11 @@ impl NavigationCoordinator {
 	/// binding to panic. Without an SSR state script, the caller prepares the
 	/// initial route on the client before mounting it.
 	#[cfg(wasm)]
-	pub(crate) fn hydrate_initial_store(&self, path: &str) -> Result<bool, RouteLoaderError> {
+	pub(crate) fn hydrate_initial_store(
+		&self,
+		client: &QueryClient,
+		path: &str,
+	) -> Result<bool, RouteLoaderError> {
 		let Some(matched) = self.router.match_tree(path) else {
 			return Ok(true);
 		};
@@ -169,7 +175,7 @@ impl NavigationCoordinator {
 					)
 				})?;
 			self.registry
-				.seed_hydrated_query(*id, &loader_context, &hydration)?;
+				.seed_hydrated_query(client, *id, &loader_context, &hydration)?;
 			let prepared = self.registry.hydrate(*id, value)?;
 			store.insert_prepared(prepared);
 		}
@@ -460,6 +466,9 @@ mod tests {
 	#[cfg(native)]
 	mod native_async_tests {
 		use super::*;
+		use crate::reactive::query::{
+			QueryClient, QueryClientGuard, QueryDefaults, provide_query_client,
+		};
 		use crate::router::loader::with_loader_store;
 		use crate::{Loader, Page, component, layout, loader};
 		use reinhardt_core::page::{IntoPage, Outlet};
@@ -606,6 +615,10 @@ mod tests {
 			LEAF_LOADER_STARTS.with(|starts| starts.set(0));
 		}
 
+		fn provide_test_query_client() -> QueryClientGuard {
+			provide_query_client(QueryClient::new(QueryDefaults::default()))
+		}
+
 		fn router_with_loaded_routes() -> ClientRouter {
 			ClientRouter::new()
 				.route("root", "/", || Page::text("old route"))
@@ -626,6 +639,7 @@ mod tests {
 		fn navigation_keeps_old_route_until_loader_commit() {
 			ReactiveScope::run(|| {
 				reset_test_state();
+				let _query_client = provide_test_query_client();
 				let tasks = Rc::new(RefCell::new(VecDeque::new()));
 				let tasks_for_sink = Rc::clone(&tasks);
 				let _sink = crate::platform::install_task_sink(move |task| {
@@ -664,6 +678,7 @@ mod tests {
 		fn loader_navigation_rechecks_guards_before_commit() {
 			ReactiveScope::run(|| {
 				reset_test_state();
+				let _query_client = provide_test_query_client();
 				let tasks = Rc::new(RefCell::new(VecDeque::new()));
 				let tasks_for_sink = Rc::clone(&tasks);
 				let _sink = crate::platform::install_task_sink(move |task| {
@@ -698,6 +713,7 @@ mod tests {
 		fn nested_layout_and_leaf_loaders_start_in_parallel() {
 			ReactiveScope::run(|| {
 				reset_test_state();
+				let _query_client = provide_test_query_client();
 				let tasks = Rc::new(RefCell::new(VecDeque::new()));
 				let tasks_for_sink = Rc::clone(&tasks);
 				let _sink = crate::platform::install_task_sink(move |task| {
@@ -732,6 +748,7 @@ mod tests {
 		fn superseded_generation_cannot_commit_obsolete_loader_result() {
 			ReactiveScope::run(|| {
 				reset_test_state();
+				let _query_client = provide_test_query_client();
 				let tasks = Rc::new(RefCell::new(VecDeque::new()));
 				let tasks_for_sink = Rc::clone(&tasks);
 				let _sink = crate::platform::install_task_sink(move |task| {
@@ -761,6 +778,7 @@ mod tests {
 		fn failed_loader_retains_route_and_publishes_safe_error() {
 			ReactiveScope::run(|| {
 				reset_test_state();
+				let _query_client = provide_test_query_client();
 				let tasks = Rc::new(RefCell::new(VecDeque::new()));
 				let tasks_for_sink = Rc::clone(&tasks);
 				let _sink = crate::platform::install_task_sink(move |task| {
@@ -793,6 +811,7 @@ mod tests {
 		fn failed_loader_does_not_wait_for_a_slow_sibling() {
 			ReactiveScope::run(|| {
 				reset_test_state();
+				let _query_client = provide_test_query_client();
 				let tasks = Rc::new(RefCell::new(VecDeque::new()));
 				let tasks_for_sink = Rc::clone(&tasks);
 				let _sink = crate::platform::install_task_sink(move |task| {
@@ -821,6 +840,7 @@ mod tests {
 		fn completed_prefetch_releases_its_task_guard() {
 			ReactiveScope::run(|| {
 				reset_test_state();
+				let _query_client = provide_test_query_client();
 				let tasks = Rc::new(RefCell::new(VecDeque::new()));
 				let tasks_for_sink = Rc::clone(&tasks);
 				let _sink = crate::platform::install_task_sink(move |task| {
@@ -842,6 +862,7 @@ mod tests {
 		fn failed_forward_pop_requests_history_restoration() {
 			ReactiveScope::run(|| {
 				reset_test_state();
+				let _query_client = provide_test_query_client();
 				let tasks = Rc::new(RefCell::new(VecDeque::new()));
 				let tasks_for_sink = Rc::clone(&tasks);
 				let _sink = crate::platform::install_task_sink(move |task| {

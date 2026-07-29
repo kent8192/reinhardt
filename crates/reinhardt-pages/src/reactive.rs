@@ -120,10 +120,7 @@ pub mod trackable;
 pub use trackable::Trackable;
 
 // Re-export resource types and the unified hook (available on all targets)
-pub(crate) use query::{
-	QueryAcquireOptions, QueryConsumer, QueryErrorPolicy, QueryLease, acquire_query,
-	seed_query_from_serialized,
-};
+pub(crate) use query::{QueryAcquireOptions, QueryConsumer, QueryErrorPolicy, QueryLease};
 pub use query::{
 	QueryClient, QueryDefaults, QueryDescriptor, QueryFamily, QueryHandle, QueryKey, QueryOptions,
 	QueryPhase, queries, use_mutation, use_query,

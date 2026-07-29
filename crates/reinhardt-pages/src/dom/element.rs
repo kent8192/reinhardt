@@ -28,21 +28,40 @@ use web_sys;
 
 use crate::reactive::{Effect, Signal};
 
+#[cfg(any(wasm, test))]
+fn dispatch_typed_custom_event<T, F>(callback: &mut F, event: crate::platform::Event)
+where
+	F: FnMut(crate::event::CustomEvent<T>),
+{
+	callback(crate::event::CustomEvent::from_raw(event));
+}
+
 #[cfg(wasm)]
-fn typed_custom_event_from_listener<T>(event: web_sys::Event) -> crate::event::CustomEvent<T> {
-	crate::event::CustomEvent::from_raw(event)
+fn dispatch_typed_custom_event_from_browser_listener<T, F>(callback: &mut F, event: web_sys::Event)
+where
+	F: FnMut(crate::event::CustomEvent<T>),
+{
+	dispatch_typed_custom_event(callback, event);
 }
 
 #[cfg(native)]
-fn typed_custom_event_from_listener<T>(event: web_sys::Event) -> crate::event::CustomEvent<T> {
-	use reinhardt_core::types::page::{BaseEventData, NativeEvent, NativeEventPayload};
+fn dispatch_typed_custom_event_from_browser_listener<T, F>(
+	_callback: &mut F,
+	_event: web_sys::Event,
+) where
+	F: FnMut(crate::event::CustomEvent<T>),
+{
+	panic!("browser event listeners are unavailable on native targets")
+}
 
-	let raw = NativeEvent::new(
-		crate::event::EventName::Custom(std::borrow::Cow::Owned(event.type_())),
-		BaseEventData::default(),
-		NativeEventPayload::default(),
-	);
-	crate::event::CustomEvent::from_raw(raw)
+#[cfg(all(native, test))]
+fn dispatch_typed_custom_event_from_native_listener<T, F>(
+	callback: &mut F,
+	event: crate::platform::Event,
+) where
+	F: FnMut(crate::event::CustomEvent<T>),
+{
+	dispatch_typed_custom_event(callback, event);
 }
 
 /// Options used when dispatching a custom DOM event.
@@ -415,7 +434,7 @@ impl Element {
 		F: FnMut(crate::event::CustomEvent<T>) + 'static,
 	{
 		let closure = Closure::wrap(Box::new(move |event: web_sys::Event| {
-			callback(typed_custom_event_from_listener(event));
+			dispatch_typed_custom_event_from_browser_listener(&mut callback, event);
 		}) as Box<dyn FnMut(web_sys::Event)>);
 
 		self.inner
@@ -1008,6 +1027,66 @@ mod tests {
 	use wasm_bindgen_test::*;
 
 	wasm_bindgen_test_configure!(run_in_browser);
+
+	#[cfg(native)]
+	#[test]
+	fn typed_custom_event_listener_preserves_native_raw_event() {
+		use std::borrow::Cow;
+
+		use reinhardt_core::types::page::{
+			BaseEventData, NativeEvent, NativeEventPayload, NativeEventTarget,
+		};
+
+		#[derive(serde::Deserialize)]
+		struct Detail {
+			id: u64,
+		}
+
+		let raw = NativeEvent::new(
+			crate::event::EventName::Custom(Cow::Borrowed("widget-change")),
+			BaseEventData {
+				bubbles: true,
+				cancelable: true,
+				composed: true,
+				time_stamp: 42.5,
+				is_trusted: true,
+			},
+			NativeEventPayload::default(),
+		)
+		.with_custom_detail(serde_json::json!({ "id": 7 }))
+		.with_target(NativeEventTarget::new("rh-widget"))
+		.with_current_target(NativeEventTarget::new("section"));
+		let original = raw.clone();
+		let mut called = false;
+
+		dispatch_typed_custom_event_from_native_listener::<Detail, _>(
+			&mut |event| {
+				called = true;
+				assert_eq!(event.detail().expect("custom detail").id, 7);
+				assert_eq!(event.event_type(), "widget-change");
+				assert_eq!(event.target().expect("target").tag_name(), "rh-widget");
+				assert_eq!(
+					event.current_target().expect("current target").tag_name(),
+					"section"
+				);
+				assert!(event.bubbles());
+				assert!(event.cancelable());
+				assert!(event.composed());
+				assert_eq!(event.time_stamp(), 42.5);
+				assert!(event.is_trusted());
+
+				event.prevent_default();
+				event.stop_propagation();
+				event.stop_immediate_propagation();
+			},
+			raw,
+		);
+
+		assert!(called);
+		assert!(original.default_prevented());
+		assert!(original.propagation_stopped());
+		assert!(original.immediate_propagation_stopped());
+	}
 
 	#[wasm_bindgen_test]
 	fn test_element_set_attribute() {

@@ -71,6 +71,15 @@ pub(super) struct QueryBrowser {
 
 #[cfg(wasm)]
 impl QueryBrowser {
+	pub(super) fn initial_visibility(enabled: bool) -> bool {
+		!enabled
+			|| web_sys::window()
+				.and_then(|window| window.document())
+				.is_none_or(|document| {
+					document.visibility_state() != web_sys::VisibilityState::Hidden
+				})
+	}
+
 	pub(super) fn new(owner: Weak<QueryClientInner>, enabled: bool) -> Self {
 		let counts = Rc::new(BrowserResourceCounts::default());
 		let listener = enabled
@@ -192,6 +201,10 @@ pub(super) struct QueryBrowser;
 
 #[cfg(not(wasm))]
 impl QueryBrowser {
+	pub(super) fn initial_visibility(_enabled: bool) -> bool {
+		true
+	}
+
 	pub(super) fn new(_owner: Weak<QueryClientInner>, _enabled: bool) -> Self {
 		Self
 	}

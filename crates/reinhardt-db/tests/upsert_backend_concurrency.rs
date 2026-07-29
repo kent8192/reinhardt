@@ -4,10 +4,10 @@
 
 use std::collections::HashMap;
 use std::str::FromStr;
-use std::sync::{Arc, Barrier};
-use std::time::Duration;
+use std::sync::{Arc, Condvar, Mutex};
+use std::time::{Duration, Instant};
 
-use reinhardt_core::exception::{DatabaseErrorKind, Error, Result};
+use reinhardt_core::exception::{DatabaseError, DatabaseErrorKind, Error, Result};
 use reinhardt_db::orm::connection::{
 	BackendsConnection, DatabaseBackend, DatabaseConnection, DatabaseConnectionLease,
 };
@@ -435,13 +435,13 @@ fn field(
 
 #[derive(Clone)]
 struct TagRaceManager {
-	barrier: Arc<Barrier>,
+	coordinator: HookCoordinator,
 }
 
 impl Default for TagRaceManager {
 	fn default() -> Self {
 		Self {
-			barrier: Arc::new(Barrier::new(1)),
+			coordinator: HookCoordinator::new(1),
 		}
 	}
 }
@@ -455,7 +455,7 @@ impl CustomManager for TagRaceManager {
 
 	fn before_upsert_write(&self, write: &mut UpsertWrite<'_, Tag>) -> Result<()> {
 		if matches!(write, UpsertWrite::Create(_)) {
-			self.barrier.wait();
+			self.coordinator.arrive_and_wait()?;
 		}
 		Ok(())
 	}
@@ -463,13 +463,13 @@ impl CustomManager for TagRaceManager {
 
 #[derive(Clone)]
 struct TenantTagRaceManager {
-	barrier: Arc<Barrier>,
+	coordinator: HookCoordinator,
 }
 
 impl Default for TenantTagRaceManager {
 	fn default() -> Self {
 		Self {
-			barrier: Arc::new(Barrier::new(1)),
+			coordinator: HookCoordinator::new(1),
 		}
 	}
 }
@@ -483,10 +483,181 @@ impl CustomManager for TenantTagRaceManager {
 
 	fn before_upsert_write(&self, write: &mut UpsertWrite<'_, TenantTag>) -> Result<()> {
 		if matches!(write, UpsertWrite::Create(_)) {
-			self.barrier.wait();
+			self.coordinator.arrive_and_wait()?;
 		}
 		Ok(())
 	}
+}
+
+#[derive(Default)]
+struct HookState {
+	arrived: usize,
+	released: bool,
+	aborted: bool,
+}
+
+struct HookCoordinatorInner {
+	expected: usize,
+	state: Mutex<HookState>,
+	changed: Condvar,
+}
+
+#[derive(Clone)]
+struct HookCoordinator(Arc<HookCoordinatorInner>);
+
+impl HookCoordinator {
+	fn new(expected: usize) -> Self {
+		Self(Arc::new(HookCoordinatorInner {
+			expected,
+			state: Mutex::new(HookState::default()),
+			changed: Condvar::new(),
+		}))
+	}
+
+	fn arrive_and_wait(&self) -> Result<()> {
+		let mut state =
+			self.0.state.lock().map_err(|error| {
+				Error::Internal(format!("hook coordinator lock poisoned: {error}"))
+			})?;
+		state.arrived += 1;
+		self.0.changed.notify_all();
+		while !state.released && !state.aborted {
+			state = self.0.changed.wait(state).map_err(|error| {
+				Error::Internal(format!("hook coordinator wait poisoned: {error}"))
+			})?;
+		}
+		if state.aborted {
+			return Err(Error::Internal(
+				"upsert race coordination aborted".to_owned(),
+			));
+		}
+		Ok(())
+	}
+
+	fn wait_until_ready(&self) -> Result<()> {
+		let deadline = Instant::now() + Duration::from_secs(30);
+		let mut state =
+			self.0.state.lock().map_err(|error| {
+				Error::Internal(format!("hook coordinator lock poisoned: {error}"))
+			})?;
+		while state.arrived < self.0.expected {
+			let remaining = deadline.saturating_duration_since(Instant::now());
+			if remaining.is_zero() {
+				return Err(Error::Internal(format!(
+					"only {} of {} upsert hooks reached the coordinator",
+					state.arrived, self.0.expected
+				)));
+			}
+			let (next, timeout) =
+				self.0
+					.changed
+					.wait_timeout(state, remaining)
+					.map_err(|error| {
+						Error::Internal(format!("hook coordinator wait poisoned: {error}"))
+					})?;
+			state = next;
+			if timeout.timed_out() && state.arrived < self.0.expected {
+				return Err(Error::Internal(format!(
+					"only {} of {} upsert hooks reached the coordinator",
+					state.arrived, self.0.expected
+				)));
+			}
+		}
+		Ok(())
+	}
+
+	fn release(&self) {
+		let mut state = self
+			.0
+			.state
+			.lock()
+			.unwrap_or_else(std::sync::PoisonError::into_inner);
+		state.released = true;
+		self.0.changed.notify_all();
+	}
+
+	fn abort(&self) {
+		let mut state = self
+			.0
+			.state
+			.lock()
+			.unwrap_or_else(std::sync::PoisonError::into_inner);
+		state.aborted = true;
+		self.0.changed.notify_all();
+	}
+}
+
+struct HookAbortGuard {
+	coordinator: HookCoordinator,
+	armed: bool,
+}
+
+impl HookAbortGuard {
+	fn new(coordinator: HookCoordinator) -> Self {
+		Self {
+			coordinator,
+			armed: true,
+		}
+	}
+
+	fn release(&mut self) {
+		self.coordinator.release();
+		self.armed = false;
+	}
+
+	fn abort(&mut self) {
+		self.coordinator.abort();
+		self.armed = false;
+	}
+}
+
+impl Drop for HookAbortGuard {
+	fn drop(&mut self) {
+		if self.armed {
+			self.coordinator.abort();
+		}
+	}
+}
+
+fn join_race_threads<T>(
+	first: std::thread::JoinHandle<Result<T>>,
+	second: std::thread::JoinHandle<Result<T>>,
+) -> Result<[T; 2]> {
+	let first_result = first.join();
+	let second_result = second.join();
+	let first_result = match first_result {
+		Ok(result) => result,
+		Err(payload) => {
+			if let Err(second_error) = second_result {
+				drop(second_error);
+			}
+			std::panic::resume_unwind(payload);
+		}
+	};
+	let second_result = match second_result {
+		Ok(result) => result,
+		Err(payload) => std::panic::resume_unwind(payload),
+	};
+	let first_value = first_result?;
+	let second_value = second_result?;
+	Ok([first_value, second_value])
+}
+
+fn finish_hook_race<T>(
+	coordinator: &HookCoordinator,
+	first: std::thread::JoinHandle<Result<T>>,
+	second: std::thread::JoinHandle<Result<T>>,
+) -> Result<[T; 2]> {
+	let mut abort_guard = HookAbortGuard::new(coordinator.clone());
+	let readiness = coordinator.wait_until_ready();
+	if readiness.is_ok() {
+		abort_guard.release();
+	} else {
+		abort_guard.abort();
+	}
+	let joined = join_race_threads(first, second);
+	readiness?;
+	joined
 }
 
 async fn tag_by_slug(connection: &mut DatabaseConnection, slug: &str) -> Result<Option<Tag>> {
@@ -688,11 +859,13 @@ async fn verify_basic_cases(connection: &mut DatabaseConnection) -> Result<()> {
 }
 
 async fn verify_get_races(connection: &mut DatabaseConnection) -> Result<()> {
-	let barrier = Arc::new(Barrier::new(2));
+	let coordinator = HookCoordinator::new(2);
 	let first_manager = TagRaceManager {
-		barrier: barrier.clone(),
+		coordinator: coordinator.clone(),
 	};
-	let second_manager = TagRaceManager { barrier };
+	let second_manager = TagRaceManager {
+		coordinator: coordinator.clone(),
+	};
 	let mut first_connection = connection.clone();
 	let mut second_connection = connection.clone();
 	let runtime = tokio::runtime::Handle::current();
@@ -721,19 +894,18 @@ async fn verify_get_races(connection: &mut DatabaseConnection) -> Result<()> {
 				.await
 		})
 	});
-	let results = vec![
-		first.join().expect("first get race thread should join")?,
-		second.join().expect("second get race thread should join")?,
-	];
+	let results = finish_hook_race(&coordinator, first, second)?;
 	assert_eq!(results.iter().filter(|(_, created)| *created).count(), 1);
 	assert_eq!(results.iter().filter(|(_, created)| !*created).count(), 1);
 	assert_eq!(tag_count(connection, "single-race").await?, 1);
 
-	let barrier = Arc::new(Barrier::new(2));
+	let coordinator = HookCoordinator::new(2);
 	let first_manager = TenantTagRaceManager {
-		barrier: barrier.clone(),
+		coordinator: coordinator.clone(),
 	};
-	let second_manager = TenantTagRaceManager { barrier };
+	let second_manager = TenantTagRaceManager {
+		coordinator: coordinator.clone(),
+	};
 	let mut first_connection = connection.clone();
 	let mut second_connection = connection.clone();
 	let runtime = tokio::runtime::Handle::current();
@@ -760,28 +932,24 @@ async fn verify_get_races(connection: &mut DatabaseConnection) -> Result<()> {
 				.await
 		})
 	});
-	let results = vec![
-		first
-			.join()
-			.expect("first composite race thread should join")?,
-		second
-			.join()
-			.expect("second composite race thread should join")?,
-	];
+	let results = finish_hook_race(&coordinator, first, second)?;
 	assert_eq!(results.iter().filter(|(_, created)| *created).count(), 1);
 	assert_eq!(results.iter().filter(|(_, created)| !*created).count(), 1);
 	assert_eq!(tenant_tag_count(connection, 11, "composite-race").await?, 1);
 	Ok(())
 }
 
-async fn update_invocation(
+async fn update_invocation<C>(
 	connection: DatabaseConnection,
-	manager: TagRaceManager,
+	manager: C,
 	slug: &'static str,
 	email: &'static str,
 	value: i32,
 	create_marker: &'static str,
-) -> Result<(Tag, bool)> {
+) -> Result<(Tag, bool)>
+where
+	C: CustomManager<Model = Tag>,
+{
 	connection
 		.atomic_write(async |transaction| {
 			manager
@@ -797,11 +965,13 @@ async fn update_invocation(
 }
 
 async fn verify_update_race(connection: &mut DatabaseConnection) -> Result<()> {
-	let barrier = Arc::new(Barrier::new(2));
+	let coordinator = HookCoordinator::new(2);
 	let first_manager = TagRaceManager {
-		barrier: barrier.clone(),
+		coordinator: coordinator.clone(),
 	};
-	let second_manager = TagRaceManager { barrier };
+	let second_manager = TagRaceManager {
+		coordinator: coordinator.clone(),
+	};
 	let runtime = tokio::runtime::Handle::current();
 	let first_runtime = runtime.clone();
 	let first_connection = connection.clone();
@@ -826,14 +996,7 @@ async fn verify_update_race(connection: &mut DatabaseConnection) -> Result<()> {
 			"second-create-default",
 		))
 	});
-	let results = vec![
-		first
-			.join()
-			.expect("first update race thread should join")?,
-		second
-			.join()
-			.expect("second update race thread should join")?,
-	];
+	let results = finish_hook_race(&coordinator, first, second)?;
 	assert_eq!(results.iter().filter(|(_, created)| *created).count(), 1);
 	assert_eq!(results.iter().filter(|(_, created)| !*created).count(), 1);
 	assert_eq!(tag_count(connection, "update-race").await?, 1);
@@ -859,54 +1022,151 @@ async fn verify_update_race(connection: &mut DatabaseConnection) -> Result<()> {
 }
 
 async fn verify_sqlite_update_serialization(connection: &mut DatabaseConnection) -> Result<()> {
-	let entry = Arc::new(tokio::sync::Barrier::new(3));
-	let first_entry = entry.clone();
+	let coordinator = HookCoordinator::new(1);
+	let first_manager = TagRaceManager {
+		coordinator: coordinator.clone(),
+	};
+	let runtime = tokio::runtime::Handle::current();
+	let first_runtime = runtime.clone();
 	let first_connection = connection.clone();
-	let first = tokio::spawn(async move {
-		first_entry.wait().await;
-		update_invocation(
+	let first = std::thread::spawn(move || {
+		first_runtime.block_on(update_invocation(
 			first_connection,
-			TagRaceManager::default(),
+			first_manager,
 			"sqlite-update",
 			"sqlite-update@example.test",
 			301,
 			"first",
-		)
-		.await
+		))
 	});
-	let second_entry = entry.clone();
+	let mut abort_guard = HookAbortGuard::new(coordinator.clone());
+	let readiness = coordinator.wait_until_ready();
+	if readiness.is_err() {
+		drop(abort_guard);
+		let first_result = first.join();
+		if let Err(payload) = first_result {
+			std::panic::resume_unwind(payload);
+		}
+		return readiness;
+	}
+
+	let (started_tx, started_rx) = std::sync::mpsc::sync_channel(1);
 	let second_connection = connection.clone();
-	let second = tokio::spawn(async move {
-		second_entry.wait().await;
-		update_invocation(
-			second_connection,
-			TagRaceManager::default(),
-			"sqlite-update",
-			"sqlite-update@example.test",
-			302,
-			"second",
-		)
-		.await
-	});
-	entry.wait().await;
-	let results = vec![
-		first.await.expect("first SQLite update task should join")?,
-		second
+	let second = std::thread::spawn(move || {
+		runtime.block_on(async move {
+			started_tx.send(()).map_err(|error| {
+				Error::Internal(format!("SQLite contender start signal failed: {error}"))
+			})?;
+			update_invocation(
+				second_connection,
+				Manager::<Tag>::new(),
+				"sqlite-update",
+				"sqlite-update@example.test",
+				302,
+				"second-create-default-must-not-apply",
+			)
 			.await
-			.expect("second SQLite update task should join")?,
-	];
-	assert_eq!(results.iter().filter(|(_, created)| *created).count(), 1);
-	assert_eq!(results.iter().filter(|(_, created)| !*created).count(), 1);
+		})
+	});
+	let started = started_rx
+		.recv_timeout(Duration::from_secs(30))
+		.map_err(|error| Error::Internal(format!("SQLite contender did not start: {error}")));
+	if started.is_ok() {
+		abort_guard.release();
+	} else {
+		abort_guard.abort();
+	}
+	let results = join_race_threads(first, second);
+	started?;
+	let results = results?;
+	assert!(results[0].1);
+	assert!(!results[1].1);
 	assert_eq!(tag_count(connection, "sqlite-update").await?, 1);
 	let persisted = tag_by_slug(connection, "sqlite-update")
 		.await?
 		.expect("the serialized SQLite row should persist");
-	let updater = results
-		.iter()
-		.find(|(_, created)| !*created)
-		.expect("the serialized contender should update");
-	assert_eq!(persisted.value, updater.0.value);
+	assert_eq!(persisted.value, 302);
+	assert_eq!(persisted.create_marker, "first");
 	Ok(())
+}
+
+struct OneshotReleaseGuard(Option<tokio::sync::oneshot::Sender<()>>);
+
+impl OneshotReleaseGuard {
+	fn new(sender: tokio::sync::oneshot::Sender<()>) -> Self {
+		Self(Some(sender))
+	}
+
+	fn release(&mut self) {
+		if let Some(sender) = self.0.take() {
+			let _ = sender.send(());
+		}
+	}
+}
+
+impl Drop for OneshotReleaseGuard {
+	fn drop(&mut self) {
+		self.release();
+	}
+}
+
+fn validate_sqlite_busy(error: &Error) -> Result<()> {
+	let database_error = error.database_error().ok_or_else(|| {
+		Error::Internal(format!(
+			"SQLite lock contender returned a non-database error: {error}"
+		))
+	})?;
+	if !matches!(
+		database_error.kind(),
+		DatabaseErrorKind::Query | DatabaseErrorKind::Serialization
+	) {
+		return Err(Error::Internal(format!(
+			"SQLite lock contender returned {:?}, not a busy classification",
+			database_error.kind()
+		)));
+	}
+	let code = database_error.code().ok_or_else(|| {
+		Error::Internal(format!(
+			"SQLite lock contender omitted its busy/locked result code: {database_error}"
+		))
+	})?;
+	let numeric_code = code.parse::<i32>().map_err(|parse_error| {
+		Error::Internal(format!(
+			"SQLite lock contender returned non-numeric result code '{code}': {parse_error}"
+		))
+	})?;
+	let primary_code = numeric_code & 0xff;
+	if !matches!(primary_code, 5 | 6) {
+		return Err(Error::Internal(format!(
+			"SQLite lock contender returned unrelated result code {code}"
+		)));
+	}
+	let message = database_error.message().to_ascii_lowercase();
+	if !message.contains("busy") && !message.contains("locked") {
+		return Err(Error::Internal(format!(
+			"SQLite result code {code} lacked a busy/locked diagnostic: {database_error}"
+		)));
+	}
+	Ok(())
+}
+
+#[test]
+fn sqlite_busy_validation_rejects_broad_database_errors() {
+	let timeout = Error::from(DatabaseError::new(
+		DatabaseErrorKind::Timeout,
+		"Pool timed out",
+	));
+	let generic_query = Error::from(DatabaseError::new(
+		DatabaseErrorKind::Query,
+		"unrelated SQL error",
+	));
+	let extended_busy = Error::from(
+		DatabaseError::new(DatabaseErrorKind::Query, "database is locked").with_code("261"),
+	);
+
+	assert!(validate_sqlite_busy(&timeout).is_err());
+	assert!(validate_sqlite_busy(&generic_query).is_err());
+	assert!(validate_sqlite_busy(&extended_busy).is_ok());
 }
 
 async fn verify_sqlite_busy_retry(mut fixture: BackendFixture) -> Result<()> {
@@ -925,46 +1185,56 @@ async fn verify_sqlite_busy_retry(mut fixture: BackendFixture) -> Result<()> {
 					.create_default(Tag::field_create_marker(), "holder")
 					.execute_with(transaction)
 					.await?;
-				locked_tx
-					.send(())
-					.expect("the test should wait for the held SQLite transaction");
-				release_rx
-					.await
-					.expect("the test should release the held SQLite transaction");
+				locked_tx.send(()).map_err(|_| {
+					Error::Internal("SQLite holder signal receiver dropped".to_owned())
+				})?;
+				release_rx.await.map_err(|error| {
+					Error::Internal(format!("SQLite holder was not released: {error}"))
+				})?;
 				Ok::<_, Error>(result)
 			})
 			.await
 	});
-	locked_rx
-		.await
-		.expect("the holder should acquire SQLite write intent");
+	if let Err(lock_error) = locked_rx.await {
+		let holder_result = holder
+			.await
+			.map_err(|error| Error::Internal(format!("SQLite holder task failed: {error}")))?;
+		if let Err(error) = holder_result {
+			return Err(error);
+		}
+		return Err(Error::Internal(format!(
+			"SQLite holder did not acquire write intent: {lock_error}"
+		)));
+	}
+	let mut release_guard = OneshotReleaseGuard::new(release_tx);
 
-	let contender_error = update_invocation(
+	let contender_result = update_invocation(
 		fixture.connection.clone(),
-		TagRaceManager::default(),
+		Manager::<Tag>::new(),
 		"sqlite-busy",
 		"sqlite-busy@example.test",
 		402,
 		"contender-create-default-must-not-apply",
 	)
-	.await
-	.expect_err("zero busy timeout should classify the locked contender");
-	assert!(matches!(
-		contender_error.database_kind(),
-		Some(
-			DatabaseErrorKind::Transaction | DatabaseErrorKind::Timeout | DatabaseErrorKind::Query
-		)
-	));
-
-	release_tx
-		.send(())
-		.expect("the held SQLite transaction should still be waiting");
-	let held = holder.await.expect("the SQLite holder task should join")?;
+	.await;
+	release_guard.release();
+	let held = holder
+		.await
+		.map_err(|error| Error::Internal(format!("SQLite holder task failed: {error}")))??;
+	let contender_error = match contender_result {
+		Ok(_) => {
+			return Err(Error::Internal(
+				"zero busy timeout unexpectedly let the locked contender succeed".to_owned(),
+			));
+		}
+		Err(error) => error,
+	};
+	validate_sqlite_busy(&contender_error)?;
 	assert!(held.1);
 
 	let (retried, created) = update_invocation(
 		fixture.connection.clone(),
-		TagRaceManager::default(),
+		Manager::<Tag>::new(),
 		"sqlite-busy",
 		"sqlite-busy@example.test",
 		402,

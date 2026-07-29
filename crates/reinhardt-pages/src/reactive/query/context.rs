@@ -1,6 +1,9 @@
 use std::cell::{Cell, RefCell};
+#[cfg(native)]
 use std::future::Future;
+#[cfg(native)]
 use std::pin::Pin;
+#[cfg(native)]
 use std::task::{Context, Poll};
 
 use super::client::QueryClient;
@@ -62,6 +65,7 @@ pub(crate) fn with_query_client<R>(client: &QueryClient, f: impl FnOnce() -> R) 
 	f()
 }
 
+#[cfg(native)]
 pub(crate) fn with_query_client_async<Fut>(
 	client: QueryClient,
 	future: Fut,
@@ -75,11 +79,13 @@ where
 	}
 }
 
+#[cfg(native)]
 struct QueryClientFuture<Fut> {
 	client: QueryClient,
 	future: Pin<Box<Fut>>,
 }
 
+#[cfg(native)]
 impl<Fut> Future for QueryClientFuture<Fut>
 where
 	Fut: Future,

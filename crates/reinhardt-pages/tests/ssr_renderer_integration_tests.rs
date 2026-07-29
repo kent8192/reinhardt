@@ -683,6 +683,7 @@ async fn test_ssr_options_struct_literal_remains_exhaustive() {
 		enable_partial_hydration: false,
 		default_hydration_strategy: HydrationStrategy::Full,
 		resource_timeout: std::time::Duration::from_secs(2),
+		query_defaults: reinhardt_pages::reactive::QueryDefaults::default(),
 		suspense_streaming: true,
 		script_nonce: None,
 	};

@@ -18,10 +18,10 @@ pub(crate) use client::TestQueryRuntime;
 #[cfg(test)]
 pub(super) use client::acquire_query;
 pub(crate) use client::{QueryAcquireOptions, QueryConsumer, QueryErrorPolicy, QueryLease};
+pub(crate) use context::provide_query_client;
 pub use context::queries;
-pub(crate) use context::{
-	QueryClientGuard, provide_query_client, with_query_client, with_query_client_async,
-};
+#[cfg(native)]
+pub(crate) use context::{QueryClientGuard, with_query_client, with_query_client_async};
 pub use hook::{QueryHandle, use_query};
 pub use identity::{QueryDescriptor, QueryFamily, QueryKey};
 pub use state::{QueryDefaults, QueryOptions, QuerySnapshot, QueryStatus};

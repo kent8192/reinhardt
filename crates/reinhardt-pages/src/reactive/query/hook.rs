@@ -7,13 +7,11 @@ use serde::de::DeserializeOwned;
 use super::super::resource::ResourceState;
 use super::browser::QueryGuard;
 use super::client::{
-	ObserverPolicy, QueryAcquireOptions, QueryClient, QueryConsumer, QueryEntry, QueryErrorPolicy,
-	QueryLease,
+	QueryAcquireOptions, QueryClient, QueryConsumer, QueryEntry, QueryErrorPolicy, QueryLease,
 };
 use super::context::queries;
 use super::identity::QueryDescriptor;
-use super::state::{QueryDefaults, QueryOptions, QuerySnapshot, QueryStatus};
-use crate::cancellation::CancellationSource;
+use super::state::{QueryOptions, QuerySnapshot, QueryStatus};
 
 /// Reactive handle returned by [`use_query`].
 pub struct QueryHandle<T: Clone + 'static, E: Clone + 'static> {
@@ -35,12 +33,12 @@ impl<T: Clone + 'static, E: Clone + 'static> Clone for QueryHandle<T, E> {
 impl<T: Clone + 'static, E: Clone + 'static> QueryHandle<T, E> {
 	fn mark_ssr_read(&self) {
 		#[cfg(native)]
-		crate::ssr::resource_context::mark_resource_read(&self.entry.id);
+		crate::ssr::resource_context::mark_resource_read(&self.entry.hydration_id);
 	}
 
 	/// Returns this query's deterministic SSR hydration key.
 	pub fn ssr_key(&self) -> &str {
-		&self.entry.id
+		&self.entry.hydration_id
 	}
 
 	/// Returns the current observer-specific query state.
@@ -122,11 +120,6 @@ where
 	T: Clone + Serialize + DeserializeOwned + 'static,
 	E: Clone + Serialize + DeserializeOwned + 'static,
 {
-	#[cfg(native)]
-	if let Some(query) = try_create_ssr_query(descriptor.clone(), options.clone()) {
-		return query;
-	}
-
 	queries().observe(descriptor, options)
 }
 
@@ -139,6 +132,19 @@ where
 	T: Clone + Serialize + DeserializeOwned + 'static,
 	E: Clone + Serialize + DeserializeOwned + 'static,
 {
+	#[cfg(wasm)]
+	if let Ok(hydration) = crate::hydration::HydrationContext::from_window() {
+		hydration
+			.seed_query(client, descriptor.key().clone())
+			.unwrap_or_else(|error| {
+				panic!(
+					"query hydration payload `{}` is invalid: {error}",
+					descriptor.key().hydration_id()
+				)
+			});
+	}
+	#[cfg(native)]
+	let ssr_prefetch = descriptor.ssr_prefetch && options.is_enabled();
 	let lease = client.acquire_with_options(
 		descriptor,
 		QueryAcquireOptions {
@@ -158,58 +164,29 @@ where
 			.push(QueryGuard::poll(interval, Rc::clone(&entry)));
 	}
 
-	QueryHandle {
+	let query = QueryHandle {
 		entry,
 		lease,
 		guards,
+	};
+	#[cfg(native)]
+	if ssr_prefetch {
+		let hydration_id = query.entry.hydration_id.clone();
+		let query_for_resource = query.clone();
+		let owner = crate::ssr::resource_context::current_render_owner();
+		crate::ssr::resource_context::with_active_context(|context| {
+			context
+				.borrow_mut()
+				.register_serialized_resource_with_owner(
+					hydration_id,
+					move || async move {
+						let _ = query_for_resource.lease.result().await;
+						serde_json::to_value(query_for_resource.snapshot())
+							.expect("query snapshots must serialize for hydration")
+					},
+					owner,
+				);
+		});
 	}
-}
-
-#[cfg(native)]
-pub(super) fn try_create_ssr_query<T, E>(
-	descriptor: QueryDescriptor<T, E>,
-	options: QueryOptions,
-) -> Option<QueryHandle<T, E>>
-where
-	T: Clone + Serialize + DeserializeOwned + 'static,
-	E: Clone + Serialize + DeserializeOwned + 'static,
-{
-	crate::ssr::resource_context::with_active_context(|context| {
-		let id = descriptor.key().id();
-		context.borrow_mut().reserve_call_order_key(&id);
-		let ssr_prefetch = descriptor.ssr_prefetch && options.is_enabled();
-		let fetcher = Rc::clone(&descriptor.fetcher);
-		let policy = ObserverPolicy::resolve(&options, &QueryDefaults::default());
-		let entry = Rc::new(QueryEntry::new(descriptor));
-		if ssr_prefetch {
-			let resource_fetcher = Rc::clone(&fetcher);
-			context.borrow_mut().register_resource_with_owner(
-				entry.id.clone(),
-				move || {
-					let source = CancellationSource::new();
-					let cancellation = source.handle();
-					let resource_fetcher = Rc::clone(&resource_fetcher);
-					async move {
-						let _source = source;
-						resource_fetcher(cancellation).await
-					}
-				},
-				entry.state,
-				Some(Rc::clone(&entry._scope)),
-			);
-			entry.mark_resolved_fetched();
-		}
-		let lease = entry.make_lease(
-			None,
-			QueryConsumer::MountedQuery,
-			QueryErrorPolicy::Retain,
-			fetcher,
-			policy,
-		);
-		QueryHandle {
-			entry: Rc::clone(&entry),
-			lease,
-			guards: Rc::new(RefCell::new(Vec::new())),
-		}
-	})
+	query
 }

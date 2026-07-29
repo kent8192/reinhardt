@@ -317,6 +317,59 @@ impl SsrResourceContext {
 		});
 	}
 
+	/// Registers an already serialized resource future for request hydration.
+	pub(crate) fn register_serialized_resource_with_owner<F, Fut>(
+		&mut self,
+		key: String,
+		fetcher: F,
+		owner: Option<Rc<ReactiveScope>>,
+	) where
+		F: FnOnce() -> Fut + 'static,
+		Fut: Future<Output = Value> + 'static,
+	{
+		let current_boundary_id = self.current_boundary_id();
+		let active_boundary = current_boundary_id.as_deref();
+		if self.resolved_value_for_scope(&key).is_some() || self.timed_out_for_scope(&key) {
+			return;
+		}
+		let registered_at_top_level = current_boundary_id.is_none();
+		if let Some(pending) = self
+			.pending
+			.iter_mut()
+			.find(|pending| pending_matches_registration_scope(pending, &key, active_boundary))
+		{
+			if let Some(boundary_id) = current_boundary_id.as_ref()
+				&& !pending
+					.boundary_ids
+					.iter()
+					.any(|candidate| candidate == boundary_id)
+			{
+				pending.boundary_ids.push(boundary_id.clone());
+			}
+			return;
+		}
+
+		let id = key.clone();
+		let future: PendingResourceFuture = Box::pin(async move { (id, fetcher().await) });
+		let future: PendingResourceFuture = if let Some(owner) = owner {
+			Box::pin(ScopedPendingResourceFuture {
+				scope: owner.id(),
+				future,
+			})
+		} else {
+			future
+		};
+		self.pending.push(PendingResource {
+			id: key,
+			external: false,
+			registered_at_top_level,
+			boundary_ids: current_boundary_id.into_iter().collect(),
+			read_boundary_ids: Vec::new(),
+			future,
+			subscribers: Vec::new(),
+		});
+	}
+
 	pub(crate) fn mark_resource_read(&mut self, key: &str) {
 		let current_boundary_id = self.current_boundary_id();
 		if let Some(pending) = self.pending.iter_mut().find(|pending| {

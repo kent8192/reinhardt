@@ -29,6 +29,16 @@ pub(crate) struct QueryIdentity {
 	arguments_fingerprint: [u8; 32],
 }
 
+impl QueryIdentity {
+	pub(crate) fn family_id(&self) -> &'static str {
+		self.family_id
+	}
+
+	pub(crate) fn arguments_fingerprint(&self) -> &[u8; 32] {
+		&self.arguments_fingerprint
+	}
+}
+
 #[derive(Clone, Copy)]
 pub(crate) struct QueryFamilyTypes {
 	pub(crate) arguments: TypeId,
@@ -201,6 +211,10 @@ impl<T, E> QueryKey<T, E> {
 			write!(&mut id, "{byte:02x}").expect("writing a query ID to String must succeed");
 		}
 		id
+	}
+
+	pub(crate) fn hydration_id(&self) -> String {
+		super::client::hydration_id(&self.identity)
 	}
 
 	pub(crate) fn family_types(&self) -> QueryFamilyTypes {

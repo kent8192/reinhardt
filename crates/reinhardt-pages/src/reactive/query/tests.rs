@@ -18,7 +18,6 @@ use super::client::{
 	ObserverPolicy, QueryClient, QueryEntry, TestQueryRuntime, acquire_query_with_options,
 	initial_query_state, query_entry,
 };
-use super::hook::try_create_ssr_query;
 use super::runtime::now_ms;
 use super::*;
 
@@ -793,18 +792,21 @@ async fn active_ssr_query_preserves_observer_time_options() {
 	let expected_gc_time = Duration::from_secs(41);
 
 	// Act
-	let query = crate::ssr::resource_context::scope_context(Rc::clone(&context), async {
-		ReactiveScope::run(|| {
-			try_create_ssr_query(
-				QueryFamily::<(), String, String>::new("tests.ssr-query-options")
-					.query((), || async { Ok("value".to_string()) }),
-				QueryOptions::default()
-					.stale_time(expected_stale_time)
-					.gc_time(expected_gc_time),
-			)
-			.expect("active SSR context should create the query")
-		})
-	})
+	let client = QueryClient::new_ssr(QueryDefaults::default());
+	let query = with_query_client_async(
+		client,
+		crate::ssr::resource_context::scope_context(Rc::clone(&context), async {
+			ReactiveScope::run(|| {
+				use_query(
+					QueryFamily::<(), String, String>::new("tests.ssr-query-options")
+						.query((), || async { Ok("value".to_string()) }),
+					QueryOptions::default()
+						.stale_time(expected_stale_time)
+						.gc_time(expected_gc_time),
+				)
+			})
+		}),
+	)
 	.await;
 
 	// Assert
@@ -1616,41 +1618,46 @@ async fn ssr_replayed_query_error_is_fresh_for_stale_time() {
 		crate::ssr::resource_context::SsrResourceContext::new(Duration::from_secs(1)),
 	));
 
-	let discovery_query = crate::ssr::resource_context::scope_context(Rc::clone(&context), async {
-		ReactiveScope::run(|| {
-			let query = try_create_ssr_query(
-				QueryFamily::<(), _, _>::new("ssr-replayed-query-error")
-					.query((), || async { Err::<String, _>("not found".to_string()) }),
-				QueryOptions::default(),
-			)
-			.expect("active SSR context should create the query");
-			let _ = query.snapshot();
-			query
-		})
-	})
+	let client = QueryClient::new_ssr(QueryDefaults::default());
+	let discovery_query = with_query_client_async(
+		client.clone(),
+		crate::ssr::resource_context::scope_context(Rc::clone(&context), async {
+			ReactiveScope::run(|| {
+				let query = use_query(
+					QueryFamily::<(), _, _>::new("ssr-replayed-query-error")
+						.query((), || async { Err::<String, _>("not found".to_string()) }),
+					QueryOptions::default(),
+				);
+				let _ = query.snapshot();
+				query
+			})
+		}),
+	)
 	.await;
 	assert!(crate::ssr::resource_context::resolve_external_resources(&context).await);
 
 	// Act
-	let replayed_query = crate::ssr::resource_context::scope_context(Rc::clone(&context), async {
-		ReactiveScope::run(|| {
-			let query = try_create_ssr_query(
-				QueryFamily::<(), _, _>::new("ssr-replayed-query-error").query((), || async {
-					Err::<String, _>("must not refetch during replay".to_string())
-				}),
-				QueryOptions::default().stale_time(Duration::from_secs(30)),
-			)
-			.expect("active SSR context should replay the query");
+	let replayed_query = with_query_client_async(
+		client,
+		crate::ssr::resource_context::scope_context(Rc::clone(&context), async {
+			ReactiveScope::run(|| {
+				let query = use_query(
+					QueryFamily::<(), _, _>::new("ssr-replayed-query-error").query((), || async {
+						Err::<String, _>("must not refetch during replay".to_string())
+					}),
+					QueryOptions::default().stale_time(Duration::from_secs(30)),
+				);
 
-			// Assert
-			assert_eq!(query.error(), Some("not found".to_string()));
-			assert!(
-				!query.is_stale(),
-				"a replayed error must remain fresh when stale_time is applied"
-			);
-			query
-		})
-	})
+				// Assert
+				assert_eq!(query.error(), Some("not found".to_string()));
+				assert!(
+					!query.is_stale(),
+					"a replayed error must remain fresh when stale_time is applied"
+				);
+				query
+			})
+		}),
+	)
 	.await;
 	drop(replayed_query);
 	drop(discovery_query);
@@ -1671,7 +1678,12 @@ fn server_fn_key_hashes_arguments_without_exposing_them() {
 		key.id(),
 		"server_fn:/api/server_fn/list_jobs:json:sha256:b86b1ea11b28136fe5224b9d1e3017b7efb68d4fae0b90c4940e0c0f89b3907a"
 	);
+	assert_eq!(
+		key.hydration_id(),
+		"query:server_fn:/api/server_fn/list_jobs:json:sha256:b86b1ea11b28136fe5224b9d1e3017b7efb68d4fae0b90c4940e0c0f89b3907a"
+	);
 	assert!(!key.id().contains("[42]"));
+	assert!(!key.hydration_id().contains("[42]"));
 }
 
 #[rstest]

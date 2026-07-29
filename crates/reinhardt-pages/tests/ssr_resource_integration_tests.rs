@@ -3,8 +3,8 @@
 use reinhardt_pages::component::{Component, IntoPage, Page, PageElement};
 use reinhardt_pages::deps;
 use reinhardt_pages::reactive::{
-	QueryFamily, QueryOptions, QueryStatus, ResourceState, Signal, use_id, use_query, use_resource,
-	use_resource_with_key,
+	QueryFamily, QueryOptions, QueryStatus, ResourceState, Signal, queries, use_id, use_query,
+	use_resource, use_resource_with_key,
 };
 use reinhardt_pages::ssr::{SsrOptions, SsrRenderer};
 use rstest::rstest;
@@ -403,10 +403,88 @@ async fn pending_ssr_query_reuse_does_not_create_duplicate_fetcher() {
 	assert!(html.contains("second-shared"));
 	assert_eq!(fetcher_calls.get(), 1);
 	assert_eq!(
-		renderer.state().get_resource_state(&query_id),
-		Some(&serde_json::json!({ "Success": "shared" }))
+		renderer
+			.state()
+			.get_resource_state(&format!("query:{query_id}")),
+		Some(&serde_json::json!({
+			"status": "Success",
+			"data": "shared",
+			"error": null,
+			"refetch_error": null,
+			"is_fetching": false,
+			"is_stale": false
+		}))
 	);
 	assert_eq!(renderer.state().resource_count(), 1);
+}
+
+fn request_query_view(value: &'static str) -> Page {
+	Page::reactive(move || {
+		let _request_client = queries();
+		let query = use_query(
+			QueryFamily::<(), String, String>::new("tests::request-isolation").query(
+				(),
+				move || async move { Ok::<_, String>(value.to_string()) },
+			),
+			QueryOptions::default(),
+		);
+
+		match query.snapshot().status {
+			QueryStatus::Idle | QueryStatus::Pending => {
+				PageElement::new("p").child("loading").into_page()
+			}
+			QueryStatus::Success => PageElement::new("p")
+				.child(query.data().expect("successful query data"))
+				.into_page(),
+			QueryStatus::Error => PageElement::new("p")
+				.child(query.error().expect("failed query error"))
+				.into_page(),
+		}
+	})
+}
+
+#[tokio::test]
+async fn concurrent_ssr_requests_keep_query_clients_isolated() {
+	let mut first_renderer = SsrRenderer::new();
+	let mut second_renderer = SsrRenderer::new();
+
+	let (first_html, second_html) = tokio::join!(
+		first_renderer.render_page_with_view_head_to_string(request_query_view("first-request")),
+		second_renderer.render_page_with_view_head_to_string(request_query_view("second-request")),
+	);
+
+	assert!(first_html.contains("first-request"));
+	assert!(!first_html.contains("second-request"));
+	assert!(second_html.contains("second-request"));
+	assert!(!second_html.contains("first-request"));
+}
+
+#[tokio::test]
+async fn disabled_ssr_query_does_not_register_fetch_work() {
+	let fetch_count = Rc::new(Cell::new(0));
+	let fetch_count_for_view = Rc::clone(&fetch_count);
+	let view = Page::reactive(move || {
+		let fetch_count = Rc::clone(&fetch_count_for_view);
+		let query = use_query(
+			QueryFamily::<(), String, String>::new("tests::disabled-ssr").query((), move || {
+				let fetch_count = Rc::clone(&fetch_count);
+				async move {
+					fetch_count.set(fetch_count.get() + 1);
+					Ok::<_, String>("unexpected".to_string())
+				}
+			}),
+			QueryOptions::default().enabled(false),
+		);
+		assert_eq!(query.snapshot().status, QueryStatus::Idle);
+		PageElement::new("p").child("disabled").into_page()
+	});
+	let mut renderer = SsrRenderer::new();
+
+	let html = renderer.render_page_with_view_head_to_string(view).await;
+
+	assert!(html.contains(">disabled<"));
+	assert_eq!(fetch_count.get(), 0);
+	assert_eq!(renderer.state().resource_count(), 0);
 }
 
 #[tokio::test]

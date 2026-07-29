@@ -21,6 +21,8 @@ use super::identity::{
 };
 use super::runtime::{ScopedQueryFuture, duration_ms, now_ms, spawn_query_task};
 use super::state::{QueryDefaults, QueryOptions};
+#[cfg(any(wasm, test))]
+use super::state::{QuerySnapshot, QueryStatus};
 use crate::cancellation::{AbortableTaskGuard, CancellationSource, scope_cancellation};
 use reinhardt_core::reactive::ReactiveScope;
 
@@ -50,6 +52,10 @@ where
 pub(crate) trait QueryRuntime {
 	fn now_ms(&self) -> u64;
 	fn spawn(&self, task: QueryTask);
+
+	fn executes_inline(&self) -> bool {
+		false
+	}
 }
 
 pub(crate) type QueryRuntimeHandle = Rc<dyn QueryRuntime>;
@@ -68,6 +74,22 @@ impl QueryRuntime for PlatformQueryRuntime {
 
 fn platform_query_runtime() -> QueryRuntimeHandle {
 	Rc::new(PlatformQueryRuntime)
+}
+
+struct SsrQueryRuntime;
+
+impl QueryRuntime for SsrQueryRuntime {
+	fn now_ms(&self) -> u64 {
+		now_ms()
+	}
+
+	fn spawn(&self, _task: QueryTask) {
+		panic!("SSR query work must be polled through its owning query lease")
+	}
+
+	fn executes_inline(&self) -> bool {
+		true
+	}
 }
 
 #[cfg(all(test, not(wasm)))]
@@ -161,6 +183,11 @@ impl QueryClient {
 	/// Creates an empty client using the platform query runtime.
 	pub fn new(defaults: QueryDefaults) -> Self {
 		Self::with_runtime(defaults, platform_query_runtime())
+	}
+
+	/// Creates an empty request-owned client whose work is polled inline.
+	pub fn new_ssr(defaults: QueryDefaults) -> Self {
+		Self::with_runtime(defaults, Rc::new(SsrQueryRuntime))
 	}
 
 	pub(crate) fn with_runtime(defaults: QueryDefaults, runtime: QueryRuntimeHandle) -> Self {
@@ -257,7 +284,7 @@ pub(super) struct QueryRequest<T: Clone + 'static, E: Clone + 'static> {
 
 pub(super) struct QueryEntry<T: Clone + 'static, E: Clone + 'static> {
 	pub(super) _scope: Rc<ReactiveScope>,
-	pub(super) id: String,
+	pub(super) hydration_id: String,
 	family_id: &'static str,
 	pub(super) state: Signal<ResourceState<T, E>>,
 	pub(super) refetch_error: Signal<Option<E>>,
@@ -276,6 +303,7 @@ pub(super) struct QueryEntry<T: Clone + 'static, E: Clone + 'static> {
 	observers: RefCell<Vec<Weak<QueryLeaseInner<T, E>>>>,
 	runtime: QueryRuntimeHandle,
 	owner: Option<Weak<QueryClientInner>>,
+	inline_task: RefCell<Option<QueryTask>>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -361,15 +389,14 @@ fn initial_query_state_at<T, E>(
 }
 
 impl<T: Clone + 'static, E: Clone + 'static> QueryEntry<T, E> {
+	#[cfg(test)]
 	pub(super) fn new(descriptor: QueryDescriptor<T, E>) -> Self
 	where
 		T: Serialize + DeserializeOwned,
 		E: Serialize + DeserializeOwned,
 	{
 		let (key, _fetcher, _ssr_prefetch, _family_types) = descriptor.into_parts();
-		let id = key.id();
-		let hydrated_state = hydrated_query_state(&id);
-		Self::new_with_hydrated_state(key, hydrated_state, platform_query_runtime(), None)
+		Self::new_with_hydrated_state(key, None, platform_query_runtime(), None)
 	}
 
 	fn new_with_hydrated_state(
@@ -380,7 +407,7 @@ impl<T: Clone + 'static, E: Clone + 'static> QueryEntry<T, E> {
 	) -> Self {
 		let (initial_state, last_fetched_ms) =
 			initial_query_state_at(hydrated_state, runtime.now_ms());
-		let id = key.id();
+		let hydration_id = key.hydration_id();
 		let family_id = key.family_id();
 		let scope = Rc::new(ReactiveScope::new());
 		let (state, refetch_error, is_fetching) = scope.enter(|| {
@@ -393,7 +420,7 @@ impl<T: Clone + 'static, E: Clone + 'static> QueryEntry<T, E> {
 
 		Self {
 			_scope: scope,
-			id,
+			hydration_id,
 			family_id,
 			state,
 			refetch_error,
@@ -412,6 +439,7 @@ impl<T: Clone + 'static, E: Clone + 'static> QueryEntry<T, E> {
 			observers: RefCell::new(Vec::new()),
 			runtime,
 			owner,
+			inline_task: RefCell::new(None),
 		}
 	}
 
@@ -444,6 +472,7 @@ impl<T: Clone + 'static, E: Clone + 'static> QueryEntry<T, E> {
 	}
 
 	fn cancel_request(&self) {
+		self.inline_task.borrow_mut().take();
 		if let Some(request) = self.request.borrow_mut().take() {
 			request.source.cancel();
 			Self::clear_manual_refetch(request.manual_observer);
@@ -563,15 +592,6 @@ impl<T: Clone + 'static, E: Clone + 'static> QueryEntry<T, E> {
 		})
 	}
 
-	#[cfg(native)]
-	pub(super) fn mark_resolved_fetched(&self) {
-		if self.state.with_untracked(|state| {
-			matches!(state, ResourceState::Success(_) | ResourceState::Error(_))
-		}) {
-			self.last_fetched_ms.set(Some(self.runtime.now_ms()));
-		}
-	}
-
 	pub(super) fn start_fetch(self: &Rc<Self>, force: bool) -> u64 {
 		self.start_fetch_with(force, None)
 	}
@@ -670,13 +690,18 @@ impl<T: Clone + 'static, E: Clone + 'static> QueryEntry<T, E> {
 		let task = async move {
 			let _ = Abortable::new(scoped, abort_registration).await;
 		};
-		if let Some(owner) = self.owner.clone() {
-			self.runtime.spawn(Box::pin(WeakClientQueryFuture {
+		let task: QueryTask = if let Some(owner) = self.owner.clone() {
+			Box::pin(WeakClientQueryFuture {
 				owner,
 				future: Box::pin(task),
-			}));
+			})
 		} else {
-			self.runtime.spawn(Box::pin(task));
+			Box::pin(task)
+		};
+		if self.runtime.executes_inline() {
+			self.inline_task.borrow_mut().replace(task);
+		} else {
+			self.runtime.spawn(task);
 		}
 		generation
 	}
@@ -781,6 +806,13 @@ impl<T: Clone + 'static, E: Clone + 'static> Future for QueryResultFuture<T, E> 
 
 	fn poll(self: Pin<&mut Self>, context: &mut Context<'_>) -> Poll<Self::Output> {
 		let this = self.get_mut();
+		let inline_task = this.entry.inline_task.borrow_mut().take();
+		if let Some(mut task) = inline_task
+			&& task.as_mut().poll(context).is_pending()
+			&& this.entry.has_request()
+		{
+			this.entry.inline_task.borrow_mut().replace(task);
+		}
 		if let Some(generation) = this.generation {
 			if let Some((completed_generation, result)) = this.entry.completed.borrow().as_ref()
 				&& *completed_generation == generation
@@ -915,6 +947,86 @@ impl QueryClient {
 		Ok(())
 	}
 
+	#[cfg(any(wasm, test))]
+	pub(crate) fn seed_query_snapshot<T, E>(
+		&self,
+		key: QueryKey<T, E>,
+		serialized: &serde_json::Value,
+	) -> Result<(), serde_json::Error>
+	where
+		T: Clone + Serialize + DeserializeOwned + 'static,
+		E: Clone + Serialize + DeserializeOwned + 'static,
+	{
+		let snapshot: QuerySnapshot<T, E> = serde_json::from_value(serialized.clone())?;
+		if snapshot.is_fetching {
+			return Err(invalid_hydration_snapshot(
+				"settled query hydration snapshot is still fetching",
+			));
+		}
+		let refetch_error = snapshot.refetch_error;
+		let hydrated_state = match snapshot.status {
+			QueryStatus::Success => {
+				let value = snapshot.data.ok_or_else(|| {
+					invalid_hydration_snapshot("successful query snapshot is missing data")
+				})?;
+				if snapshot.error.is_some() {
+					return Err(invalid_hydration_snapshot(
+						"successful query snapshot contains an initial error",
+					));
+				}
+				ResourceState::Success(value)
+			}
+			QueryStatus::Error => {
+				if refetch_error.is_some() {
+					return Err(invalid_hydration_snapshot(
+						"initial error query snapshot contains a refetch error",
+					));
+				}
+				let error = snapshot.error.ok_or_else(|| {
+					invalid_hydration_snapshot("error query snapshot is missing its error")
+				})?;
+				if snapshot.data.is_some() {
+					return Err(invalid_hydration_snapshot(
+						"error query snapshot contains successful data",
+					));
+				}
+				ResourceState::Error(error)
+			}
+			QueryStatus::Idle | QueryStatus::Pending => {
+				if snapshot.data.is_some() || snapshot.error.is_some() || refetch_error.is_some() {
+					return Err(invalid_hydration_snapshot(
+						"unsettled query snapshot contains settled state",
+					));
+				}
+				ResourceState::Loading
+			}
+		};
+		self.register_family(key.family_id(), key.family_types());
+		let id = key.id();
+		#[cfg(any(wasm, test))]
+		super::super::resource::reserve_client_resource_key(&id);
+		let identity = key.identity().clone();
+		let mut entries = self.inner.entries.borrow_mut();
+		if let Some(cached) = entries.get(&identity) {
+			Rc::clone(&cached.typed)
+				.downcast::<QueryEntry<T, E>>()
+				.unwrap_or_else(|_| {
+					panic!("query cache key `{id}` was reused with incompatible types")
+				});
+			return Ok(());
+		}
+
+		let entry = Rc::new(QueryEntry::new_with_hydrated_state(
+			key,
+			Some(hydrated_state),
+			Rc::clone(&self.inner.runtime),
+			Some(Rc::downgrade(&self.inner)),
+		));
+		entry.refetch_error.set(refetch_error);
+		entries.insert(identity, cached_query_entry(&entry));
+		Ok(())
+	}
+
 	#[cfg(test)]
 	fn entry_for_descriptor<T, E>(&self, descriptor: QueryDescriptor<T, E>) -> Rc<QueryEntry<T, E>>
 	where
@@ -949,10 +1061,9 @@ impl QueryClient {
 			return entry;
 		}
 
-		let hydrated_state = hydrated_query_state(&id);
 		let entry = Rc::new(QueryEntry::new_with_hydrated_state(
 			key,
-			hydrated_state,
+			None,
 			Rc::clone(&self.inner.runtime),
 			Some(Rc::downgrade(&self.inner)),
 		));
@@ -986,6 +1097,24 @@ impl QueryClient {
 	}
 }
 
+#[cfg(any(wasm, test))]
+fn invalid_hydration_snapshot(message: &'static str) -> serde_json::Error {
+	serde_json::Error::io(std::io::Error::new(
+		std::io::ErrorKind::InvalidData,
+		message,
+	))
+}
+
+pub(crate) fn hydration_id(identity: &QueryIdentity) -> String {
+	use std::fmt::Write;
+
+	let mut digest = String::with_capacity(64);
+	for byte in identity.arguments_fingerprint() {
+		write!(&mut digest, "{byte:02x}").expect("writing into String cannot fail");
+	}
+	format!("query:{}:sha256:{digest}", identity.family_id())
+}
+
 fn cached_query_entry<T, E>(entry: &Rc<QueryEntry<T, E>>) -> CachedQueryEntry
 where
 	T: Clone + 'static,
@@ -1003,24 +1132,4 @@ where
 			move || entry.cancel_request()
 		}),
 	}
-}
-
-#[cfg(wasm)]
-pub(super) fn hydrated_query_state<T, E>(key: &str) -> Option<ResourceState<T, E>>
-where
-	T: Clone + Serialize + DeserializeOwned + 'static,
-	E: Clone + Serialize + DeserializeOwned + 'static,
-{
-	let context = crate::hydration::HydrationContext::from_window().ok()?;
-	let value = context.get_resource_state(key)?;
-	serde_json::from_value(value.clone()).ok()
-}
-
-#[cfg(not(wasm))]
-pub(super) fn hydrated_query_state<T, E>(_key: &str) -> Option<ResourceState<T, E>>
-where
-	T: Clone + Serialize + DeserializeOwned + 'static,
-	E: Clone + Serialize + DeserializeOwned + 'static,
-{
-	None
 }

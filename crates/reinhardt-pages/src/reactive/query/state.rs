@@ -1,5 +1,7 @@
 use std::time::Duration;
 
+use serde::{Deserialize, Serialize};
+
 /// Application-wide defaults used to resolve query observer options.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct QueryDefaults {
@@ -112,7 +114,7 @@ impl Default for QueryOptions {
 }
 
 /// Current lifecycle status of a query observer.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub enum QueryStatus {
 	/// The observer is disabled and has no cached result.
 	Idle,
@@ -125,7 +127,7 @@ pub enum QueryStatus {
 }
 
 /// Observer-specific view of one cached query.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 pub struct QuerySnapshot<T, E> {
 	/// Current lifecycle status.
 	pub status: QueryStatus,

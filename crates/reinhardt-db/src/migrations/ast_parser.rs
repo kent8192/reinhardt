@@ -3,7 +3,7 @@
 //! Provides helper functions to extract migration metadata and operations
 //! from parsed Rust ASTs.
 
-use super::{Migration, Result};
+use super::{Migration, MigrationError, Result};
 use quote::ToTokens;
 use reinhardt_query::value::Value as QueryValue;
 use syn::{Expr, File, Item, ItemFn, Stmt};
@@ -29,6 +29,142 @@ pub fn extract_migration_metadata(ast: &File, app_label: &str, name: &str) -> Re
 		swappable_dependencies: vec![],
 		optional_dependencies: vec![],
 	})
+}
+
+/// Extract migration metadata without accepting missing or malformed core metadata.
+pub fn extract_migration_metadata_strict(
+	ast: &File,
+	app_label: &str,
+	name: &str,
+) -> Result<Migration> {
+	let migration_expr = ast
+		.items
+		.iter()
+		.find_map(|item| {
+			let Item::Fn(function) = item else {
+				return None;
+			};
+			(function.sig.ident == "migration")
+				.then(|| function.block.stmts.last())
+				.flatten()
+				.and_then(|statement| {
+					let Stmt::Expr(expression, _) = statement else {
+						return None;
+					};
+					Some(expression)
+				})
+		})
+		.ok_or_else(|| {
+			MigrationError::InvalidMigration("Missing migration() entrypoint".to_string())
+		})?;
+
+	let Expr::Struct(migration_struct) = migration_expr else {
+		return Err(MigrationError::InvalidMigration(
+			"migration() must return a Migration struct literal".to_string(),
+		));
+	};
+	if migration_struct
+		.path
+		.segments
+		.last()
+		.is_none_or(|segment| segment.ident != "Migration")
+	{
+		return Err(MigrationError::InvalidMigration(
+			"migration() must return a Migration struct literal".to_string(),
+		));
+	}
+
+	let dependencies_expr = extract_field_from_migration_struct(migration_expr, "dependencies")
+		.ok_or_else(|| {
+			MigrationError::InvalidMigration(
+				"Migration metadata is missing required 'dependencies' field".to_string(),
+			)
+		})?;
+	let operations_expr = extract_field_from_migration_struct(migration_expr, "operations")
+		.ok_or_else(|| {
+			MigrationError::InvalidMigration(
+				"Migration metadata is missing required 'operations' field".to_string(),
+			)
+		})?;
+	let dependencies = parse_tuple_vec_expr_strict(&dependencies_expr, "dependencies")?;
+	let operations = parse_operations_vec_strict(&operations_expr)?;
+	let replaces = extract_field_from_migration_struct(migration_expr, "replaces")
+		.map(|expression| parse_tuple_vec_expr_strict(&expression, "replaces"))
+		.transpose()?
+		.unwrap_or_default();
+	let atomic = parse_optional_bool_field(&migration_struct.fields, "atomic", true)?;
+	let initial = parse_optional_initial_field(&migration_struct.fields)?;
+	let state_only = parse_optional_bool_field(&migration_struct.fields, "state_only", false)?;
+	let database_only =
+		parse_optional_bool_field(&migration_struct.fields, "database_only", false)?;
+
+	Ok(Migration {
+		app_label: app_label.to_string(),
+		name: name.to_string(),
+		operations,
+		dependencies,
+		atomic,
+		replaces,
+		initial,
+		state_only,
+		database_only,
+		swappable_dependencies: vec![],
+		optional_dependencies: vec![],
+	})
+}
+
+fn parse_optional_bool_field(
+	fields: &syn::punctuated::Punctuated<syn::FieldValue, syn::token::Comma>,
+	field_name: &str,
+	default: bool,
+) -> Result<bool> {
+	let Some(field) = fields
+		.iter()
+		.find(|field| matches!(&field.member, syn::Member::Named(ident) if ident == field_name))
+	else {
+		return Ok(default);
+	};
+	let Expr::Lit(literal) = &field.expr else {
+		return Err(MigrationError::InvalidMigration(format!(
+			"Malformed migration '{}' metadata",
+			field_name
+		)));
+	};
+	let syn::Lit::Bool(value) = &literal.lit else {
+		return Err(MigrationError::InvalidMigration(format!(
+			"Malformed migration '{}' metadata",
+			field_name
+		)));
+	};
+	Ok(value.value)
+}
+
+fn parse_optional_initial_field(
+	fields: &syn::punctuated::Punctuated<syn::FieldValue, syn::token::Comma>,
+) -> Result<Option<bool>> {
+	let Some(field) = fields
+		.iter()
+		.find(|field| matches!(&field.member, syn::Member::Named(ident) if ident == "initial"))
+	else {
+		return Ok(None);
+	};
+	if let Expr::Path(path) = &field.expr
+		&& path.path.is_ident("None")
+	{
+		return Ok(None);
+	}
+	if let Expr::Call(call) = &field.expr
+		&& let Expr::Path(path) = &*call.func
+		&& path.path.is_ident("Some")
+		&& call.args.len() == 1
+		&& let Expr::Lit(literal) = &call.args[0]
+		&& let syn::Lit::Bool(value) = &literal.lit
+	{
+		return Ok(Some(value.value));
+	}
+	Err(MigrationError::InvalidMigration(
+		"Malformed migration 'initial' metadata".to_string(),
+	))
 }
 
 /// Extract dependencies from `migration()` function
@@ -165,6 +301,51 @@ fn parse_operations_vec(expr: &Expr) -> Vec<super::Operation> {
 	}
 
 	operations
+}
+
+fn parse_operations_vec_strict(expr: &Expr) -> Result<Vec<super::Operation>> {
+	let expressions = parse_vec_expressions(expr, "operations")?;
+	expressions
+		.iter()
+		.map(|expression| {
+			parse_single_operation(expression).ok_or_else(|| {
+				let operation_name = match expression {
+					Expr::Struct(operation) => operation
+						.path
+						.segments
+						.last()
+						.map(|segment| segment.ident.to_string())
+						.unwrap_or_else(|| "<expression>".to_string()),
+					_ => "<expression>".to_string(),
+				};
+				MigrationError::InvalidMigration(format!(
+					"Unsupported or malformed migration operation '{}'",
+					operation_name
+				))
+			})
+		})
+		.collect()
+}
+
+fn parse_vec_expressions(expr: &Expr, field_name: &str) -> Result<Vec<Expr>> {
+	match expr {
+		Expr::Macro(expr_macro) if expr_macro.mac.path.is_ident("vec") => {
+			let tokens = &expr_macro.mac.tokens;
+			let parsed =
+				syn::parse2::<syn::ExprArray>(quote::quote! { [#tokens] }).map_err(|_| {
+					MigrationError::InvalidMigration(format!(
+						"Malformed migration '{}' metadata",
+						field_name
+					))
+				})?;
+			Ok(parsed.elems.into_iter().collect())
+		}
+		Expr::Array(array) => Ok(array.elems.iter().cloned().collect()),
+		_ => Err(MigrationError::InvalidMigration(format!(
+			"Malformed migration '{}' metadata",
+			field_name
+		))),
+	}
 }
 
 /// Parse a single Operation from an expression
@@ -1796,6 +1977,20 @@ fn parse_tuple_vec_expr(expr: &Expr) -> Result<Vec<(String, String)>> {
 	Ok(result)
 }
 
+fn parse_tuple_vec_expr_strict(expr: &Expr, field_name: &str) -> Result<Vec<(String, String)>> {
+	parse_vec_expressions(expr, field_name)?
+		.iter()
+		.map(|expression| {
+			extract_string_tuple(expression).ok_or_else(|| {
+				MigrationError::InvalidMigration(format!(
+					"Malformed migration '{}' metadata",
+					field_name
+				))
+			})
+		})
+		.collect()
+}
+
 /// Extract a tuple of two strings from an expression like ("app", "name")
 fn extract_string_tuple(expr: &Expr) -> Option<(String, String)> {
 	if let Expr::Tuple(expr_tuple) = expr
@@ -1838,13 +2033,144 @@ fn parse_bool_return(func: &ItemFn) -> Option<bool> {
 #[cfg(test)]
 mod tests {
 	use quote::ToTokens;
+	use rstest::rstest;
 
-	use super::extract_migration_metadata;
+	use super::{extract_migration_metadata, extract_migration_metadata_strict};
 	use crate::field_domain::{FieldDomain, ModelEnumRepr, ModelEnumValue};
 	use crate::migrations::{
 		AlterTableOptions, ColumnType, Constraint, FieldType, GeneratedStorage, IndexType,
 		MySqlAlgorithm, MySqlLock, Operation, SchemaExpr,
 	};
+
+	#[rstest]
+	#[case(
+		"pub fn not_a_migration() {}",
+		"Invalid migration: Missing migration() entrypoint"
+	)]
+	#[case(
+		r#"pub fn migration() -> Migration {
+			Migration { operations: vec![], replaces: vec![] }
+		}"#,
+		"Invalid migration: Migration metadata is missing required 'dependencies' field"
+	)]
+	#[case(
+		r#"pub fn migration() -> Migration {
+			Migration { dependencies: vec![], replaces: vec![] }
+		}"#,
+		"Invalid migration: Migration metadata is missing required 'operations' field"
+	)]
+	fn strict_metadata_rejects_missing_entrypoint_and_required_fields(
+		#[case] source: &str,
+		#[case] expected: &str,
+	) {
+		// Arrange
+		let ast = syn::parse_file(source).unwrap();
+
+		// Act
+		let error = extract_migration_metadata_strict(&ast, "blog", "0001_initial").unwrap_err();
+
+		// Assert
+		assert_eq!(error.to_string(), expected);
+	}
+
+	#[rstest]
+	#[case(
+		"Operation::UnknownOperation { value: 1 }",
+		"Invalid migration: Unsupported or malformed migration operation 'UnknownOperation'"
+	)]
+	#[case(
+		r#"Operation::DropTable { wrong_name: "posts".to_string() }"#,
+		"Invalid migration: Unsupported or malformed migration operation 'DropTable'"
+	)]
+	fn strict_metadata_rejects_unknown_and_malformed_operations(
+		#[case] operation: &str,
+		#[case] expected: &str,
+	) {
+		// Arrange
+		let source = format!(
+			r#"pub fn migration() -> Migration {{
+				Migration {{
+					operations: vec![{operation}],
+					dependencies: vec![],
+					replaces: vec![],
+				}}
+			}}"#
+		);
+		let ast = syn::parse_file(&source).unwrap();
+
+		// Act
+		let error = extract_migration_metadata_strict(&ast, "blog", "0001_initial").unwrap_err();
+
+		// Assert
+		assert_eq!(error.to_string(), expected);
+	}
+
+	#[rstest]
+	#[case(
+		r#"dependencies: vec![("blog", 1)], replaces: vec![]"#,
+		"Invalid migration: Malformed migration 'dependencies' metadata"
+	)]
+	#[case(
+		r#"dependencies: vec![], replaces: vec![("blog",)]"#,
+		"Invalid migration: Malformed migration 'replaces' metadata"
+	)]
+	fn strict_metadata_rejects_malformed_relationship_metadata(
+		#[case] metadata: &str,
+		#[case] expected: &str,
+	) {
+		// Arrange
+		let source = format!(
+			r#"pub fn migration() -> Migration {{
+				Migration {{
+					operations: vec![],
+					{metadata},
+				}}
+			}}"#
+		);
+		let ast = syn::parse_file(&source).unwrap();
+
+		// Act
+		let error = extract_migration_metadata_strict(&ast, "blog", "0001_initial").unwrap_err();
+
+		// Assert
+		assert_eq!(error.to_string(), expected);
+	}
+
+	#[rstest]
+	fn strict_metadata_preserves_catalog_flags_and_replacements() {
+		// Arrange
+		let ast = syn::parse_file(
+			r#"pub fn migration() -> Migration {
+				Migration {
+					operations: vec![],
+					dependencies: vec![("accounts", "0001_initial")],
+					replaces: vec![("blog", "0001_old")],
+					atomic: false,
+					initial: Some(false),
+					state_only: true,
+					database_only: true,
+				}
+			}"#,
+		)
+		.unwrap();
+
+		// Act
+		let migration = extract_migration_metadata_strict(&ast, "blog", "0001_squashed").unwrap();
+
+		// Assert
+		assert_eq!(
+			migration.dependencies,
+			vec![("accounts".to_string(), "0001_initial".to_string())]
+		);
+		assert_eq!(
+			migration.replaces,
+			vec![("blog".to_string(), "0001_old".to_string())]
+		);
+		assert!(!migration.atomic);
+		assert_eq!(migration.initial, Some(false));
+		assert!(migration.state_only);
+		assert!(migration.database_only);
+	}
 
 	#[test]
 	#[cfg(feature = "pgvector")]

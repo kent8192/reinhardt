@@ -70,7 +70,7 @@ impl FilesystemSource {
 		let (app_label, name) = self.extract_app_and_name(path)?;
 
 		// Extract metadata from AST using ast_parser utility
-		ast_parser::extract_migration_metadata(&ast, &app_label, &name)
+		ast_parser::extract_migration_metadata_strict(&ast, &app_label, &name)
 	}
 
 	/// Extract app_label and migration name from file path
@@ -136,11 +136,20 @@ impl MigrationSource for FilesystemSource {
 		}
 
 		// Walk directory tree to find all .rs files
-		for entry in walkdir::WalkDir::new(&self.root_dir)
+		let mut entries: Vec<_> = walkdir::WalkDir::new(&self.root_dir)
 			.follow_links(true)
 			.into_iter()
-			.filter_map(|e| e.ok())
-		{
+			.collect::<std::result::Result<_, _>>()
+			.map_err(|error| {
+				MigrationError::IoError(std::io::Error::other(format!(
+					"Failed to traverse migration directory {}: {}",
+					self.root_dir.display(),
+					error
+				)))
+			})?;
+		entries.sort_by(|left, right| left.path().cmp(right.path()));
+
+		for entry in entries {
 			let path = entry.path();
 
 			// Warn when .sql files are found (Reinhardt uses .rs migration files)
@@ -178,7 +187,7 @@ impl MigrationSource for FilesystemSource {
 			migrations.push(self.parse_migration_file(path)?);
 		}
 
-		// Sort by numeric prefix for deterministic ordering (#1335)
+		// Sort by app and numeric prefix for deterministic ordering (#1335)
 		migrations.sort_by(|a, b| {
 			let num_a = a
 				.name
@@ -194,7 +203,10 @@ impl MigrationSource for FilesystemSource {
 				.collect::<String>()
 				.parse::<u32>()
 				.unwrap_or(0);
-			num_a.cmp(&num_b).then_with(|| a.name.cmp(&b.name))
+			a.app_label
+				.cmp(&b.app_label)
+				.then_with(|| num_a.cmp(&num_b))
+				.then_with(|| a.name.cmp(&b.name))
 		});
 
 		Ok(migrations)

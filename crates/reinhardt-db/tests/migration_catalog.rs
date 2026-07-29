@@ -211,6 +211,152 @@ async fn load_strict_rejects_an_invalid_filesystem_migration() {
 }
 
 #[rstest]
+#[case(
+	r#"pub fn migration() -> Migration {
+		Migration {
+			operations: vec![Operation::UnknownOperation { value: 1 }],
+			dependencies: vec![],
+			replaces: vec![],
+		}
+	}"#,
+	"Unsupported or malformed migration operation 'UnknownOperation'"
+)]
+#[case(
+	r#"pub fn migration() -> Migration {
+		Migration {
+			dependencies: vec![],
+			replaces: vec![],
+		}
+	}"#,
+	"Migration metadata is missing required 'operations' field"
+)]
+#[tokio::test]
+async fn load_strict_rejects_semantically_invalid_filesystem_migrations(
+	#[case] source_code: &str,
+	#[case] expected_suffix: &str,
+) {
+	// Arrange
+	let temp_dir = TempDir::new().unwrap();
+	let app_dir = temp_dir.path().join("blog");
+	fs::create_dir(&app_dir).unwrap();
+	fs::write(app_dir.join("0001_initial.rs"), source_code).unwrap();
+	let source = FilesystemSource::new(temp_dir.path());
+
+	// Act
+	let error = MigrationCatalog::load_strict(&source).await.unwrap_err();
+
+	// Assert
+	assert_eq!(
+		error.to_string(),
+		format!("Invalid migration: {expected_suffix}")
+	);
+}
+
+#[rstest]
+#[case(vec!["z", "a", "z", "a"])]
+#[case(vec!["a", "z", "a", "z"])]
+#[tokio::test]
+async fn load_strict_reports_duplicate_keys_deterministically(#[case] apps: Vec<&str>) {
+	// Arrange
+	let migrations = apps
+		.into_iter()
+		.map(|app| migration(app, "0001_initial", &[]))
+		.collect();
+
+	// Act
+	let error = MigrationCatalog::load_strict(&TestSource { migrations })
+		.await
+		.unwrap_err();
+
+	// Assert
+	assert_eq!(
+		error.to_string(),
+		"Invalid migration: Duplicate migration: a.0001_initial"
+	);
+}
+
+#[rstest]
+#[case(vec![
+	migration("z", "0001_initial", &[("z", "9999_missing")]),
+	migration("a", "0001_initial", &[("a", "9999_missing")]),
+])]
+#[case(vec![
+	migration("a", "0001_initial", &[("a", "9999_missing")]),
+	migration("z", "0001_initial", &[("z", "9999_missing")]),
+])]
+#[tokio::test]
+async fn load_strict_reports_missing_dependencies_deterministically(
+	#[case] migrations: Vec<Migration>,
+) {
+	// Act
+	let error = MigrationCatalog::load_strict(&TestSource { migrations })
+		.await
+		.unwrap_err();
+
+	// Assert
+	assert_eq!(
+		error.to_string(),
+		"Dependency error: Missing dependency a.9999_missing required by a.0001_initial"
+	);
+}
+
+#[rstest]
+#[tokio::test]
+async fn filesystem_source_discovers_migrations_in_deterministic_path_order() {
+	// Arrange
+	let temp_dir = TempDir::new().unwrap();
+	for app in ["z", "a"] {
+		let app_dir = temp_dir.path().join(app);
+		fs::create_dir(&app_dir).unwrap();
+		fs::write(
+			app_dir.join("0001_initial.rs"),
+			r#"pub fn migration() -> Migration {
+				Migration {
+					operations: vec![],
+					dependencies: vec![],
+					replaces: vec![],
+				}
+			}"#,
+		)
+		.unwrap();
+	}
+	let source = FilesystemSource::new(temp_dir.path());
+
+	// Act
+	let migrations = source.all_migrations().await.unwrap();
+
+	// Assert
+	let keys: Vec<(&str, &str)> = migrations
+		.iter()
+		.map(|migration| (migration.app_label.as_str(), migration.name.as_str()))
+		.collect();
+	assert_eq!(keys, vec![("a", "0001_initial"), ("z", "0001_initial")]);
+}
+
+#[cfg(unix)]
+#[rstest]
+#[tokio::test]
+async fn filesystem_source_propagates_walkdir_errors() {
+	use std::os::unix::fs::symlink;
+
+	// Arrange
+	let temp_dir = TempDir::new().unwrap();
+	let app_dir = temp_dir.path().join("blog");
+	fs::create_dir(&app_dir).unwrap();
+	symlink(&app_dir, app_dir.join("loop")).unwrap();
+	let source = FilesystemSource::new(temp_dir.path());
+
+	// Act
+	let error = source.all_migrations().await.unwrap_err();
+
+	// Assert
+	let MigrationError::IoError(error) = error else {
+		panic!("expected IoError");
+	};
+	assert_eq!(error.kind(), std::io::ErrorKind::Other);
+}
+
+#[rstest]
 #[tokio::test]
 async fn squash_range_resolves_an_explicit_start_in_topological_order() {
 	// Arrange
@@ -265,6 +411,118 @@ async fn squash_range_uses_the_implicit_app_root() {
 	assert_eq!(
 		range.external_dependencies,
 		vec![("accounts".to_string(), "0001_initial".to_string())]
+	);
+}
+
+#[rstest]
+#[tokio::test]
+async fn squash_range_deduplicates_and_sorts_external_dependencies() {
+	// Arrange
+	let catalog = catalog(vec![
+		migration("accounts", "0001_a", &[]),
+		migration("accounts", "0001_z", &[]),
+		migration(
+			"blog",
+			"0001_initial",
+			&[
+				("accounts", "0001_z"),
+				("accounts", "0001_a"),
+				("accounts", "0001_a"),
+			],
+		),
+		migration("blog", "0002_post", &[("blog", "0001_initial")]),
+	])
+	.await;
+
+	// Act
+	let range = catalog.squash_range("blog", Some("0001"), "0002").unwrap();
+
+	// Assert
+	assert_eq!(
+		range.external_dependencies,
+		vec![
+			("accounts".to_string(), "0001_a".to_string()),
+			("accounts".to_string(), "0001_z".to_string()),
+		]
+	);
+}
+
+#[rstest]
+#[tokio::test]
+async fn squash_range_rejects_same_app_ancestry_crossing_an_external_app() {
+	// Arrange
+	let catalog = catalog(vec![
+		migration("blog", "0001_initial", &[]),
+		migration("accounts", "0001_bridge", &[("blog", "0001_initial")]),
+		migration("blog", "0002_post", &[("accounts", "0001_bridge")]),
+	])
+	.await;
+
+	// Act
+	let error = catalog.squash_range("blog", None, "0002_post").unwrap_err();
+
+	// Assert
+	assert_eq!(
+		error.to_string(),
+		"Invalid migration: Migration ancestry for blog.0002_post crosses external-app nodes: \
+		 accounts.0001_bridge -> blog.0001_initial"
+	);
+}
+
+#[rstest]
+#[tokio::test]
+async fn squash_range_rejects_hidden_branches_through_external_apps() {
+	// Arrange
+	let catalog = catalog(vec![
+		migration("blog", "0001_left", &[]),
+		migration("blog", "0001_right", &[]),
+		migration("accounts", "0001_bridge", &[("blog", "0001_right")]),
+		migration(
+			"blog",
+			"0002_merge",
+			&[("blog", "0001_left"), ("accounts", "0001_bridge")],
+		),
+	])
+	.await;
+
+	// Act
+	let error = catalog
+		.squash_range("blog", None, "0002_merge")
+		.unwrap_err();
+
+	// Assert
+	assert_eq!(
+		error.to_string(),
+		"Invalid migration: Migration ancestry for blog.0002_merge crosses external-app nodes: \
+		 accounts.0001_bridge -> blog.0001_right"
+	);
+}
+
+#[rstest]
+#[tokio::test]
+async fn squash_range_rejects_contraction_cycles() {
+	// Arrange
+	let catalog = catalog(vec![
+		migration("blog", "0001_initial", &[]),
+		migration("accounts", "0001_bridge", &[("blog", "0001_initial")]),
+		migration(
+			"blog",
+			"0002_post",
+			&[("blog", "0001_initial"), ("accounts", "0001_bridge")],
+		),
+	])
+	.await;
+
+	// Act
+	let error = catalog
+		.squash_range("blog", Some("0001"), "0002")
+		.unwrap_err();
+
+	// Assert
+	assert_eq!(
+		error.to_string(),
+		"Invalid migration: Cannot squash range: external dependency accounts.0001_bridge \
+		 depends on selected migration blog.0001_initial"
 	);
 }
 

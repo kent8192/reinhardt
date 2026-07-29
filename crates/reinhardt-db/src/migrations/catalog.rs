@@ -30,7 +30,12 @@ pub struct SquashRange {
 impl MigrationCatalog {
 	/// Load and validate every migration exposed by a source.
 	pub async fn load_strict(source: &dyn MigrationSource) -> Result<Self> {
-		let loaded = source.all_migrations().await?;
+		let mut loaded = source.all_migrations().await?;
+		loaded.sort_by(|left, right| {
+			left.app_label
+				.cmp(&right.app_label)
+				.then_with(|| left.name.cmp(&right.name))
+		});
 		let mut migrations = HashMap::with_capacity(loaded.len());
 
 		for migration in loaded {
@@ -43,8 +48,15 @@ impl MigrationCatalog {
 			}
 		}
 
-		for (key, migration) in &migrations {
-			for (dependency_app, dependency_name) in &migration.dependencies {
+		let mut migration_keys: Vec<MigrationKey> = migrations.keys().cloned().collect();
+		migration_keys.sort_by(Self::compare_keys);
+		for key in &migration_keys {
+			let migration = migrations
+				.get(key)
+				.expect("collected catalog key must have a migration");
+			let mut dependencies = migration.dependencies.clone();
+			dependencies.sort();
+			for (dependency_app, dependency_name) in dependencies {
 				let dependency = MigrationKey::new(dependency_app, dependency_name);
 				if !migrations.contains_key(&dependency) {
 					return Err(MigrationError::DependencyError(format!(
@@ -131,9 +143,15 @@ impl MigrationCatalog {
 			.transpose()?;
 		let mut selected = HashSet::new();
 		let mut current = end_key.clone();
+		let mut external_ancestry_paths = Vec::new();
 
 		loop {
 			selected.insert(current.clone());
+			external_ancestry_paths.extend(
+				self.external_ancestry_paths(&current, app)?
+					.into_iter()
+					.map(|path| (current.clone(), path)),
+			);
 			if start_key.as_ref() == Some(&current) {
 				break;
 			}
@@ -193,9 +211,120 @@ impl MigrationCatalog {
 			.cloned()
 			.collect();
 
+		for (dependency_app, dependency_name) in &external_dependencies {
+			let dependency = MigrationKey::new(dependency_app, dependency_name);
+			if let Some(selected_ancestor) =
+				self.first_reachable_selected_dependency(&dependency, &selected)
+			{
+				return Err(MigrationError::InvalidMigration(format!(
+					"Cannot squash range: external dependency {} depends on selected migration {}",
+					dependency, selected_ancestor
+				)));
+			}
+		}
+
+		external_ancestry_paths.sort_by(|(left_origin, left_path), (right_origin, right_path)| {
+			Self::compare_keys(left_origin, right_origin).then_with(|| {
+				left_path
+					.iter()
+					.map(MigrationKey::id)
+					.cmp(right_path.iter().map(MigrationKey::id))
+			})
+		});
+		if let Some((origin, path)) = external_ancestry_paths.first() {
+			let rendered_path = path
+				.iter()
+				.map(MigrationKey::id)
+				.collect::<Vec<_>>()
+				.join(" -> ");
+			return Err(MigrationError::InvalidMigration(format!(
+				"Migration ancestry for {} crosses external-app nodes: {}",
+				origin, rendered_path
+			)));
+		}
+
 		Ok(SquashRange {
 			migrations,
 			external_dependencies: external_dependencies.into_iter().collect(),
 		})
+	}
+
+	fn compare_keys(left: &MigrationKey, right: &MigrationKey) -> std::cmp::Ordering {
+		left.app_label
+			.cmp(&right.app_label)
+			.then_with(|| left.name.cmp(&right.name))
+	}
+
+	fn external_ancestry_paths(
+		&self,
+		origin: &MigrationKey,
+		app: &str,
+	) -> Result<Vec<Vec<MigrationKey>>> {
+		let mut paths = Vec::new();
+		let mut dependencies = self
+			.graph
+			.get_dependencies(origin)
+			.unwrap_or_default()
+			.iter()
+			.filter(|dependency| dependency.app_label != app)
+			.cloned()
+			.collect::<Vec<_>>();
+		dependencies.sort_by(Self::compare_keys);
+
+		for dependency in dependencies {
+			let mut stack = vec![(dependency.clone(), vec![dependency])];
+			let mut visited = HashSet::new();
+			while let Some((current, path)) = stack.pop() {
+				if !visited.insert(current.clone()) {
+					continue;
+				}
+				if current.app_label == app {
+					paths.push(path);
+					continue;
+				}
+				let mut parents = self
+					.graph
+					.get_dependencies(&current)
+					.unwrap_or_default()
+					.to_vec();
+				parents.sort_by(Self::compare_keys);
+				for parent in parents.into_iter().rev() {
+					let mut next_path = path.clone();
+					next_path.push(parent.clone());
+					stack.push((parent, next_path));
+				}
+			}
+		}
+
+		Ok(paths)
+	}
+
+	fn first_reachable_selected_dependency(
+		&self,
+		start: &MigrationKey,
+		selected: &HashSet<MigrationKey>,
+	) -> Option<MigrationKey> {
+		let mut stack = vec![start.clone()];
+		let mut visited = HashSet::new();
+		let mut reachable_selected = Vec::new();
+
+		while let Some(current) = stack.pop() {
+			if !visited.insert(current.clone()) {
+				continue;
+			}
+			if selected.contains(&current) {
+				reachable_selected.push(current.clone());
+			}
+			let mut dependencies = self
+				.graph
+				.get_dependencies(&current)
+				.unwrap_or_default()
+				.to_vec();
+			dependencies.sort_by(Self::compare_keys);
+			stack.extend(dependencies.into_iter().rev());
+		}
+
+		reachable_selected.sort_by(Self::compare_keys);
+		reachable_selected.into_iter().next()
 	}
 }

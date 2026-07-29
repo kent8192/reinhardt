@@ -153,6 +153,44 @@ fn render() {
 }
 
 #[test]
+fn typed_custom_payload_change_with_static_edit_requires_dynamic_abi_rebuild() {
+	let original = r#"
+fn render() {
+    let page = page!(|| {
+        button {
+            @custom::<u64>("item-selected"): |_| {},
+            "Before"
+        }
+    });
+    page
+}
+"#;
+	let changed = r#"
+fn render() {
+    let page = page!(|| {
+        button {
+            @custom::<String>("item-selected"): |_| {},
+            "After"
+        }
+    });
+    page
+}
+"#;
+	let (root, path) = write_fixture(changed);
+	let baseline = baseline(&root, &path, original);
+
+	assert_eq!(
+		classify_source_change(
+			root.path(),
+			std::slice::from_ref(&path),
+			&baseline,
+			&StaticOverlayStore::new(),
+		),
+		TemplateClassification::RebuildRequired(RebuildReason::DynamicAbiChanged)
+	);
+}
+
+#[test]
 fn static_sibling_of_direct_dynamic_attribute_is_patchable() {
 	let original = r#"
 fn render() {

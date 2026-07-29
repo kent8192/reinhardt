@@ -9306,8 +9306,14 @@ mod tests {
 				.cosine_distance(typed_vector_target(&[1.0, 2.0, 3.0]))
 				.lt(0.25),
 		);
-		let assignment_field =
-			crate::orm::expressions::FieldRef::<TestUser, crate::orm::Vector<3>>::new("embedding");
+		// SAFETY: this pgvector test schema treats the logical `embedding` field on
+		// `TestUser` as `Vector<3>` mapped to the physical `embedding` column.
+		let assignment_field = unsafe {
+			crate::orm::expressions::FieldRef::<TestUser, crate::orm::Vector<3>>::from_model_field(
+				"embedding",
+				"embedding",
+			)
+		};
 		let mut executor = PgvectorUpdateErrorExecutor { code, message };
 
 		let error = queryset
@@ -9338,8 +9344,14 @@ mod tests {
 				.cosine_distance(typed_vector_target(&[1.0, 2.0, 3.0]))
 				.lt(0.25),
 		);
-		let assignment_field =
-			crate::orm::expressions::FieldRef::<TestUser, crate::orm::Vector<3>>::new("embedding");
+		// SAFETY: this pgvector test schema treats the logical `embedding` field on
+		// `TestUser` as `Vector<3>` mapped to the physical `embedding` column.
+		let assignment_field = unsafe {
+			crate::orm::expressions::FieldRef::<TestUser, crate::orm::Vector<3>>::from_model_field(
+				"embedding",
+				"embedding",
+			)
+		};
 
 		let (sql, params) = queryset
 			.update_fields_sql([(assignment_field, typed_vector_target(&[4.0, 5.0, 6.0]))])

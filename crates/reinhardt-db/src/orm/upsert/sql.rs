@@ -1,5 +1,6 @@
 use crate::orm::field_codec::{DatabaseValue, FieldCodecError, database_value_to_query_value};
 use crate::orm::model::Model;
+#[cfg(test)]
 use crate::orm::upsert::assignment::TypedAssignment;
 use crate::orm::upsert::plan::UpsertPlan;
 use crate::orm::{DatabaseBackend, QueryValue};
@@ -97,6 +98,7 @@ pub(crate) fn insert<M: Model>(plan: &UpsertPlan<M>, backend: DatabaseBackend) -
 	Ok(bound_sql(sql, values))
 }
 
+#[cfg(test)]
 pub(crate) fn update_by_primary_key<M: Model>(
 	model: &M,
 	values: &[TypedAssignment<M>],

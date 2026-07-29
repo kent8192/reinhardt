@@ -1,6 +1,7 @@
+#[cfg(test)]
+use super::connection::QueryValue;
 use super::connection::{
-	DatabaseBackend, DatabaseConnection, DatabaseConnectionLease, OrmExecutor, QueryRow,
-	QueryValue, Row,
+	DatabaseBackend, DatabaseConnection, DatabaseConnectionLease, OrmExecutor, QueryRow, Row,
 };
 use super::field_codec::{DatabaseArrayType, database_value_to_query_value};
 use super::inspection::FieldInfo;
@@ -2128,6 +2129,7 @@ impl<M: Model> Manager<M> {
 		}
 	}
 
+	#[cfg(test)]
 	fn query_value_to_sea_value(value: QueryValue) -> reinhardt_query::value::Value {
 		match value {
 			QueryValue::Null => reinhardt_query::value::Value::Int(None),

@@ -1,7 +1,7 @@
 error[E0308]: mismatched types
-  --> tests/orm/ui/fail/upsert_wrong_model_field.rs:30:11
+  --> tests/orm/ui/fail/upsert_wrong_model_field.rs:31:11
    |
-30 |         .lookup(User::field_email(), "a@example.com");
+31 |         .lookup(User::field_email(), "a@example.com");
    |          ------ ^^^^^^^^^^^^^^^^^^^ expected `FieldRef<Tag, _>`, found `FieldRef<User, String>`
    |          |
    |          arguments to this method are incorrect

@@ -1,7 +1,7 @@
 error[E0277]: the trait bound `&str: IntoFieldValue<i32>` is not satisfied
-  --> tests/orm/ui/fail/upsert_wrong_value_type.rs:20:30
+  --> tests/orm/ui/fail/upsert_wrong_value_type.rs:21:30
    |
-20 |         .lookup(Tag::field_rank(), "not-an-integer");
+21 |         .lookup(Tag::field_rank(), "not-an-integer");
    |          ------                    ^^^^^^^^^^^^^^^^ the trait `IntoFieldValue<i32>` is not implemented for `&str`
    |          |
    |          required by a bound introduced by this call

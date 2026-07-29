@@ -1770,7 +1770,11 @@ mod tests {
 
 		let output = parse_and_generate(input).to_string();
 
-		assert!(output.contains("_event : crate :: event :: CustomEvent < crate :: Selected >"));
+		assert!(
+			output.contains(
+				"_event : :: reinhardt_pages :: event :: CustomEvent < crate :: Selected >"
+			)
+		);
 		assert!(output.contains("callback :: typed_custom_event_handler"));
 	}
 

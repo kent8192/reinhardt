@@ -3129,6 +3129,7 @@ impl<M: Model> Default for Manager<M> {
 #[cfg(test)]
 mod tests {
 	use super::{Manager, field_codec_error};
+	#[cfg(feature = "pgvector")]
 	use crate::backends::types::QueryValue;
 	use crate::orm::Json;
 	use crate::orm::Model;
@@ -3389,10 +3390,12 @@ mod tests {
 		}
 	}
 
+	#[cfg(feature = "sqlite")]
 	struct DatabaseStateRestoreGuard {
 		previous: Option<super::DatabaseRegistrationSnapshot>,
 	}
 
+	#[cfg(feature = "sqlite")]
 	impl DatabaseStateRestoreGuard {
 		fn replace(lease: Option<crate::orm::connection::DatabaseConnectionLease>) -> Self {
 			Self {
@@ -3401,6 +3404,7 @@ mod tests {
 		}
 	}
 
+	#[cfg(feature = "sqlite")]
 	impl Drop for DatabaseStateRestoreGuard {
 		fn drop(&mut self) {
 			if let Some(mut previous) = self.previous.take() {
@@ -3642,6 +3646,7 @@ mod tests {
 		);
 	}
 
+	#[cfg(feature = "sqlite")]
 	#[serial_test::serial(sqlx_drivers)]
 	#[tokio::test]
 	async fn init_database_skips_connection_when_already_initialized() {
@@ -3660,6 +3665,7 @@ mod tests {
 		assert_eq!(backend.unwrap(), DatabaseBackend::Sqlite);
 	}
 
+	#[cfg(feature = "sqlite")]
 	#[serial_test::serial(sqlx_drivers)]
 	#[tokio::test]
 	async fn init_database_installs_a_baseline_beneath_an_existing_scope() {
@@ -3680,6 +3686,7 @@ mod tests {
 		assert_eq!(backend, DatabaseBackend::Sqlite);
 	}
 
+	#[cfg(feature = "sqlite")]
 	#[serial_test::serial(sqlx_drivers)]
 	#[tokio::test]
 	async fn restoring_a_snapshot_skips_a_scope_dropped_during_replacement() {
@@ -3701,6 +3708,7 @@ mod tests {
 		assert!(super::get_connection().await.is_err());
 	}
 
+	#[cfg(feature = "sqlite")]
 	#[serial_test::serial(sqlx_drivers)]
 	#[tokio::test]
 	async fn dropping_nested_test_snapshots_preserves_the_newer_registration() {
@@ -4092,6 +4100,7 @@ mod tests {
 		assert_eq!(model, expected);
 	}
 
+	#[cfg(feature = "sqlite")]
 	#[serial_test::serial(sqlx_drivers)]
 	#[tokio::test]
 	async fn test_manager_create_roundtrips_typed_json_fields_on_sqlite() {

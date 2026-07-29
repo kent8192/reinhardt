@@ -275,6 +275,7 @@ mod tests {
 	use crate::backends::error::{DatabaseError, DatabaseErrorKind};
 	use crate::backends::types::{DatabaseType, QueryResult, QueryValue, Row, TransactionExecutor};
 	use crate::orm::composite_pk::CompositePrimaryKey;
+	#[cfg(feature = "sqlite")]
 	use crate::orm::connection::{BackendsConnection, DatabaseConnectionLease};
 	use crate::orm::custom_manager::CustomManager;
 	use crate::orm::expressions::FieldRef;
@@ -292,7 +293,9 @@ mod tests {
 	use serde::{Deserialize, Serialize};
 	use std::collections::{BTreeMap, HashMap, VecDeque};
 	use std::sync::{Arc, Mutex};
+	#[cfg(feature = "sqlite")]
 	use std::time::Duration;
+	#[cfg(feature = "sqlite")]
 	use tokio::sync::Notify;
 
 	#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
@@ -907,6 +910,7 @@ mod tests {
 		assert_eq!(state.lock().unwrap().calls, Vec::<Call>::new());
 	}
 
+	#[cfg(feature = "sqlite")]
 	#[tokio::test]
 	async fn update_or_create_sqlite_execute_with_serializes_real_writers() {
 		let directory = tempfile::tempdir().expect("create SQLite transaction test directory");

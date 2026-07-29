@@ -47,7 +47,10 @@
 //! [`Transaction`], [`Savepoint`], and [`IsolationLevel`] remain SQL-builder
 //! values only. They may generate SQL but cannot control a live ORM transaction.
 //! [`AtomicTransaction`] is also intentionally non-`Copy` and stays bound to
-//! the callback and dedicated connection created by [`DatabaseConnection::atomic`].
+//! the callback and dedicated connection created by
+//! [`DatabaseConnection::atomic`] or the public write-intent variant
+//! [`DatabaseConnection::atomic_write`]. Caller-owned `update_or_create`
+//! execution specifically requires the latter.
 //!
 //! ## Typed Manager Upserts
 //!

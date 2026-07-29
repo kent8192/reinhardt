@@ -129,11 +129,14 @@
 //! # fn main() {}
 //! ```
 //!
-//! Create hooks cannot replace lookup fields. A call to
-//! [`crate::orm::upsert::UpsertCreate::get`] returns `None` when a pending value
-//! is absent, even if the database will later supply a default. Hooks must not
-//! perform external side effects: a create hook may run before a concurrent
-//! insert race is lost, and either branch may later be rolled back.
+//! [`crate::orm::upsert::UpsertCreate::set`] cannot replace lookup fields. The
+//! update view is a normal mutable model and may change writable lookup fields;
+//! persistence still identifies the locked row with its old primary key. A
+//! call to [`crate::orm::upsert::UpsertCreate::get`] returns `None` when a
+//! pending value is absent, even if the database will later supply a default.
+//! Hooks must not perform external side effects: a create hook may run before
+//! a concurrent insert race is lost, and either branch may later be rolled
+//! back.
 //!
 //! # Blanket Implementation
 //!
@@ -765,9 +768,12 @@ pub trait CustomManager: Sized + Send + Sync {
 	/// Hook invoked immediately before an upsert write.
 	///
 	/// The hook can mutate typed create values, mutate an existing model, or
-	/// veto the write. Lookup fields are immutable. A missing pending create
-	/// value reads as `None`, including a value that a database default would
-	/// later supply.
+	/// veto the write. [`crate::orm::upsert::UpsertCreate::set`] cannot replace
+	/// lookup fields. By contrast, the update view is a normal mutable model
+	/// and may change any writable field, including lookup fields; the update
+	/// predicate uses the locked model's old primary key. A missing pending
+	/// create value reads as `None`, including a value that a database default
+	/// would later supply.
 	///
 	/// The hook may run for an insert attempt that loses a concurrent race or
 	/// for a transaction that later rolls back, so external side effects are

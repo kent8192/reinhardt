@@ -170,6 +170,48 @@ impl<C: CustomManager> GetOrCreateBuilder<C> {
 /// Existing rows are locked before their update values and manager hook are
 /// applied. If another invocation wins a concurrent insert race, this builder
 /// locks and updates the winner, then returns `false`.
+///
+/// # Example
+///
+/// ```no_run
+/// # #![allow(unexpected_cfgs)]
+/// # mod migrations { pub use reinhardt_db::migrations::*; }
+/// # mod orm { pub use reinhardt_db::orm::*; }
+/// use reinhardt_core::exception::Error;
+/// use reinhardt_core::macros::model;
+/// use reinhardt_db::orm::{CustomManager, Model};
+/// use serde::{Deserialize, Serialize};
+///
+/// struct User {
+///     id: i64,
+/// }
+///
+/// #[model(app_label = "typed_upsert_docs", table_name = "typed_upsert_profiles")]
+/// #[derive(Serialize, Deserialize)]
+/// struct Profile {
+///     #[field(primary_key = true)]
+///     id: Option<i64>,
+///     #[field(unique = true)]
+///     user_id: i64,
+///     last_seen: i64,
+///     created_at: i64,
+/// }
+///
+/// # async fn example() -> Result<(), Error> {
+/// let user = User { id: 7 };
+/// let now = 1_725_000_000_i64;
+/// let (profile, created) = Profile::objects()
+///     .update_or_create()
+///     .lookup(Profile::field_user_id(), user.id)
+///     .set(Profile::field_last_seen(), now)
+///     .create_default(Profile::field_created_at(), now)
+///     .execute()
+///     .await?;
+/// # let _ = (profile, created);
+/// # Ok(())
+/// # }
+/// # fn main() {}
+/// ```
 pub struct UpdateOrCreateBuilder<C: CustomManager> {
 	manager: C,
 	lookup: Vec<TypedAssignment<C::Model>>,
@@ -239,9 +281,10 @@ impl<C: CustomManager> UpdateOrCreateBuilder<C> {
 
 	/// Executes through a write-intent transaction on the global connection.
 	///
-	/// SQLite acquires write intent before the lookup. MySQL uses a
-	/// `READ COMMITTED` write-intent transaction to avoid missing-row gap-lock
-	/// deadlocks while unique constraints serialize competing inserts.
+	/// On SQLite, the write-intent transaction issues `BEGIN IMMEDIATE` before
+	/// the lookup. MySQL uses a `READ COMMITTED` write-intent transaction to
+	/// avoid missing-row gap-lock deadlocks while unique constraints serialize
+	/// competing inserts.
 	pub async fn execute(self) -> Result<(C::Model, bool)> {
 		let (manager, plan) = self.into_plan()?;
 		let connection = crate::orm::manager::get_connection().await?;

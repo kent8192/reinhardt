@@ -14,6 +14,8 @@ mod tests;
 
 pub use client::QueryClient;
 #[cfg(test)]
+pub(crate) use client::TestQueryRuntime;
+#[cfg(test)]
 pub(super) use client::acquire_query;
 pub(crate) use client::{QueryAcquireOptions, QueryConsumer, QueryErrorPolicy, QueryLease};
 pub use context::queries;

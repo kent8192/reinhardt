@@ -727,6 +727,8 @@ where
 mod tests {
 	use super::*;
 	#[cfg(native)]
+	use crate::reactive::query::TestQueryRuntime;
+	#[cfg(native)]
 	use crate::reactive::{QueryConsumer, QueryDefaults, ResourceState};
 	#[cfg(native)]
 	use crate::{HydrationContext, SsrState};
@@ -881,20 +883,27 @@ mod tests {
 	fn one_client_shares_loader_work_between_prefetch_and_navigation() {
 		ReactiveScope::run(|| {
 			// Arrange
-			let client = QueryClient::new(QueryDefaults::default());
+			let runtime = TestQueryRuntime::new();
+			let client = QueryClient::with_runtime(QueryDefaults::default(), runtime.handle());
 			let fetch_count = Rc::new(Cell::new(0));
-			let tasks = Rc::new(RefCell::new(VecDeque::new()));
-			let tasks_for_sink = Rc::clone(&tasks);
-			let _sink = crate::platform::install_task_sink(move |task| {
-				tasks_for_sink.borrow_mut().push_back(task);
-			});
+			let released = Rc::new(Cell::new(false));
 			let descriptor = QueryFamily::<String, String, String>::new("tests::shared_loader")
 				.query_with_cancellation("project:42".to_owned(), {
 					let fetch_count = Rc::clone(&fetch_count);
+					let released = Rc::clone(&released);
 					move |_cancellation| {
 						let fetch_count = Rc::clone(&fetch_count);
+						let released = Rc::clone(&released);
 						async move {
 							fetch_count.set(fetch_count.get() + 1);
+							std::future::poll_fn(move |_| {
+								if released.get() {
+									Poll::Ready(())
+								} else {
+									Poll::Pending
+								}
+							})
+							.await;
 							Ok("project".to_owned())
 						}
 					}
@@ -915,14 +924,29 @@ mod tests {
 					error_policy: QueryErrorPolicy::Discard,
 				},
 			);
-			poll_query_tasks(&tasks, 4);
+			runtime.run_until_stalled();
+			let mut prefetch_result = tokio_test::task::spawn(prefetch.result());
+			let mut navigation_result = tokio_test::task::spawn(navigation.result());
 
 			// Assert
-			tokio_test::block_on(async {
-				assert_eq!(fetch_count.get(), 1);
-				assert_eq!(prefetch.result().await, Ok("project".to_owned()));
-				assert_eq!(navigation.result().await, Ok("project".to_owned()));
-			});
+			assert_eq!(prefetch_result.poll(), Poll::Pending);
+			assert_eq!(navigation_result.poll(), Poll::Pending);
+			assert_eq!(fetch_count.get(), 1);
+			assert_eq!(runtime.pending_task_count(), 1);
+
+			released.set(true);
+			runtime.run_until_stalled();
+
+			assert!(prefetch_result.is_woken());
+			assert!(navigation_result.is_woken());
+			assert_eq!(
+				prefetch_result.poll(),
+				Poll::Ready(Ok("project".to_owned()))
+			);
+			assert_eq!(
+				navigation_result.poll(),
+				Poll::Ready(Ok("project".to_owned()))
+			);
 		});
 	}
 

@@ -86,6 +86,8 @@ pub mod set_operations;
 pub mod sql_condition_parser;
 pub mod transaction;
 pub mod typed_join;
+/// Typed get-or-create and update-or-create support.
+pub mod upsert;
 /// Validators module.
 pub mod validators;
 /// Validated pgvector value types.

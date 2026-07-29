@@ -246,9 +246,10 @@ pub(crate) struct QueryAcquireOptions {
 	pub error_policy: QueryErrorPolicy,
 }
 
-pub(super) struct QueryRequest<T, E> {
+pub(super) struct QueryRequest<T: Clone + 'static, E: Clone + 'static> {
 	pub(super) generation: u64,
 	invalidation_generation: u64,
+	manual_observer: Option<Weak<QueryLeaseInner<T, E>>>,
 	pub(super) source: CancellationSource,
 	_guard: AbortableTaskGuard,
 	_marker: PhantomData<fn() -> Result<T, E>>,
@@ -270,6 +271,7 @@ pub(super) struct QueryEntry<T: Clone + 'static, E: Clone + 'static> {
 	pub(super) lease_count: Cell<usize>,
 	retain_lease_count: Cell<usize>,
 	pub(super) refetch_after_in_flight: Cell<bool>,
+	queued_manual_refetch: RefCell<Option<Weak<QueryLeaseInner<T, E>>>>,
 	pub(super) last_fetched_ms: Cell<Option<u64>>,
 	observers: RefCell<Vec<Weak<QueryLeaseInner<T, E>>>>,
 	runtime: QueryRuntimeHandle,
@@ -304,6 +306,7 @@ pub(super) struct QueryLeaseInner<T: Clone + 'static, E: Clone + 'static> {
 	consumer: QueryConsumer,
 	pub(super) policy: ObserverPolicy,
 	pub(super) fetcher: Rc<QueryFetcher<T, E>>,
+	pub(super) manual_refetch_pending: Cell<bool>,
 }
 
 /// RAII interest in one keyed query entry.
@@ -404,6 +407,7 @@ impl<T: Clone + 'static, E: Clone + 'static> QueryEntry<T, E> {
 			lease_count: Cell::new(0),
 			retain_lease_count: Cell::new(0),
 			refetch_after_in_flight: Cell::new(false),
+			queued_manual_refetch: RefCell::new(None),
 			last_fetched_ms: Cell::new(last_fetched_ms),
 			observers: RefCell::new(Vec::new()),
 			runtime,
@@ -442,6 +446,8 @@ impl<T: Clone + 'static, E: Clone + 'static> QueryEntry<T, E> {
 	fn cancel_request(&self) {
 		if let Some(request) = self.request.borrow_mut().take() {
 			request.source.cancel();
+			Self::clear_manual_refetch(request.manual_observer);
+			Self::clear_manual_refetch(self.queued_manual_refetch.borrow_mut().take());
 			self.refetch_after_in_flight.set(false);
 			self.is_fetching.set(false);
 			self.wake_waiters();
@@ -485,6 +491,7 @@ impl<T: Clone + 'static, E: Clone + 'static> QueryEntry<T, E> {
 			consumer,
 			policy,
 			fetcher,
+			manual_refetch_pending: Cell::new(false),
 		});
 		self.observers.borrow_mut().push(Rc::downgrade(&inner));
 		QueryLease { inner }
@@ -569,14 +576,42 @@ impl<T: Clone + 'static, E: Clone + 'static> QueryEntry<T, E> {
 		self.start_fetch_with(force, None)
 	}
 
-	pub(super) fn start_fetch_with(
+	pub(super) fn start_observer_refetch(
+		self: &Rc<Self>,
+		observer: &Rc<QueryLeaseInner<T, E>>,
+	) -> u64 {
+		observer.manual_refetch_pending.set(true);
+		self.start_fetch_with(true, Some(Rc::downgrade(observer)))
+	}
+
+	fn queue_manual_refetch(&self, observer: Weak<QueryLeaseInner<T, E>>) {
+		let mut queued = self.queued_manual_refetch.borrow_mut();
+		if let Some(previous) = queued.as_ref()
+			&& !Weak::ptr_eq(previous, &observer)
+			&& let Some(previous) = previous.upgrade()
+		{
+			previous.manual_refetch_pending.set(false);
+		}
+		*queued = Some(observer);
+	}
+
+	fn clear_manual_refetch(observer: Option<Weak<QueryLeaseInner<T, E>>>) {
+		if let Some(observer) = observer.and_then(|observer| observer.upgrade()) {
+			observer.manual_refetch_pending.set(false);
+		}
+	}
+
+	fn start_fetch_with(
 		self: &Rc<Self>,
 		force: bool,
-		fetcher_override: Option<Rc<QueryFetcher<T, E>>>,
+		manual_observer: Option<Weak<QueryLeaseInner<T, E>>>,
 	) -> u64 {
 		if self.has_request() {
 			if force {
 				self.refetch_after_in_flight.set(true);
+			}
+			if let Some(observer) = manual_observer {
+				self.queue_manual_refetch(observer);
 			}
 			return self
 				.request
@@ -589,7 +624,21 @@ impl<T: Clone + 'static, E: Clone + 'static> QueryEntry<T, E> {
 		let had_success = self
 			.state
 			.with_untracked(|state| matches!(state, ResourceState::Success(_)));
-		let Some(fetcher) = self.selected_fetcher().or(fetcher_override) else {
+		let manual_observer = manual_observer.and_then(|observer| observer.upgrade());
+		let fetcher = manual_observer
+			.as_ref()
+			.filter(|observer| !observer.policy.enabled)
+			.map(|observer| Rc::clone(&observer.fetcher))
+			.or_else(|| self.selected_fetcher())
+			.or_else(|| {
+				manual_observer
+					.as_ref()
+					.map(|observer| Rc::clone(&observer.fetcher))
+			});
+		let Some(fetcher) = fetcher else {
+			if let Some(observer) = manual_observer {
+				observer.manual_refetch_pending.set(false);
+			}
 			return self.next_generation.get();
 		};
 		let generation = self.next_request_generation();
@@ -601,6 +650,7 @@ impl<T: Clone + 'static, E: Clone + 'static> QueryEntry<T, E> {
 		*self.request.borrow_mut() = Some(QueryRequest {
 			generation,
 			invalidation_generation,
+			manual_observer: manual_observer.as_ref().map(Rc::downgrade),
 			source,
 			_guard: guard,
 			_marker: PhantomData,
@@ -608,6 +658,8 @@ impl<T: Clone + 'static, E: Clone + 'static> QueryEntry<T, E> {
 		self.is_fetching.set(true);
 		if had_success {
 			self.refetch_error.set(None);
+		} else {
+			self.state.set(ResourceState::Loading);
 		}
 
 		let entry = Rc::clone(self);
@@ -650,6 +702,9 @@ impl<T: Clone + 'static, E: Clone + 'static> QueryEntry<T, E> {
 			.as_ref()
 			.map(|request| request.invalidation_generation)
 			.unwrap_or_default();
+		let manual_observer = request
+			.as_ref()
+			.and_then(|request| request.manual_observer.clone());
 		drop(request);
 		let had_success = self
 			.state
@@ -689,7 +744,21 @@ impl<T: Clone + 'static, E: Clone + 'static> QueryEntry<T, E> {
 		let invalidated_during_request =
 			self.invalidation_generation.get() > request_invalidation_generation;
 		let manual_refetch_queued = self.refetch_after_in_flight.replace(false);
-		if (manual_refetch_queued
+		let queued_manual_observer = self.queued_manual_refetch.borrow_mut().take();
+		let same_observer_is_queued = manual_observer.as_ref().is_some_and(|active| {
+			queued_manual_observer
+				.as_ref()
+				.is_some_and(|queued| Weak::ptr_eq(active, queued))
+		});
+		if !same_observer_is_queued {
+			Self::clear_manual_refetch(manual_observer);
+		}
+		if let Some(observer) = queued_manual_observer
+			&& observer.strong_count() > 0
+			&& self.lease_count.get() > 0
+		{
+			self.start_fetch_with(true, Some(observer));
+		} else if (manual_refetch_queued
 			|| (invalidated_during_request && self.has_active_invalidation_interest()))
 			&& self.lease_count.get() > 0
 		{
@@ -898,13 +967,18 @@ impl QueryClient {
 
 	/// Marks one exact typed query stale and refetches it when actively enabled.
 	pub fn invalidate<T, E>(&self, key: &QueryKey<T, E>) {
+		self.register_family(key.family_id(), key.family_types());
 		if let Some(cached) = self.inner.entries.borrow().get(key.identity()) {
 			(cached.invalidate)();
 		}
 	}
 
 	/// Marks all cached entries in one typed query family stale.
-	pub fn invalidate_family<Args, T, E>(&self, family: QueryFamily<Args, T, E>) {
+	pub fn invalidate_family<Args: 'static, T: 'static, E: 'static>(
+		&self,
+		family: QueryFamily<Args, T, E>,
+	) {
+		self.register_family(family.id(), family.family_types());
 		for cached in self
 			.inner
 			.entries

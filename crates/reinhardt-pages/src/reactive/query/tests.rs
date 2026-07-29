@@ -141,6 +141,21 @@ fn query_snapshot_distinguishes_disabled_pending_and_resolved_state() {
 }
 
 #[test]
+fn disabled_observer_does_not_join_an_enabled_observers_initial_fetch() {
+	let runtime = TestQueryRuntime::new();
+	let client = QueryClient::with_runtime(QueryDefaults::default(), runtime.handle());
+	let family = QueryFamily::<(), String, String>::new("tests.disabled-shared-pending");
+	let descriptor = family.query((), || std::future::pending::<Result<String, String>>());
+	let enabled = client.observe(descriptor.clone(), QueryOptions::default());
+	let disabled = client.observe(descriptor, QueryOptions::new().enabled(false));
+
+	assert_eq!(enabled.snapshot().status, QueryStatus::Pending);
+	assert!(enabled.snapshot().is_fetching);
+	assert_eq!(disabled.snapshot().status, QueryStatus::Idle);
+	assert!(!disabled.snapshot().is_fetching);
+}
+
+#[test]
 fn initial_failure_populates_query_error() {
 	let runtime = TestQueryRuntime::new();
 	let client = QueryClient::with_runtime(QueryDefaults::default(), runtime.handle());
@@ -163,6 +178,53 @@ fn initial_failure_populates_query_error() {
 			is_stale: false,
 		}
 	);
+}
+
+#[test]
+fn refetch_after_initial_error_transitions_through_pending() {
+	let runtime = TestQueryRuntime::new();
+	let client = QueryClient::with_runtime(QueryDefaults::default(), runtime.handle());
+	let family = QueryFamily::<(), String, String>::new("tests.error-refetch-pending");
+	let fetch_count = Rc::new(Cell::new(0));
+	let ready = Rc::new(Cell::new(true));
+	let query = client.observe(
+		family.query((), {
+			let fetch_count = Rc::clone(&fetch_count);
+			let ready = Rc::clone(&ready);
+			move || {
+				let call = fetch_count.get() + 1;
+				fetch_count.set(call);
+				TestGate {
+					ready: Rc::clone(&ready),
+					dropped: Rc::new(Cell::new(0)),
+					result: Some(if call == 1 {
+						Err("offline".to_string())
+					} else {
+						Ok("recovered".to_string())
+					}),
+				}
+			}
+		}),
+		QueryOptions::default(),
+	);
+	runtime.run_until_stalled();
+	assert_eq!(query.snapshot().status, QueryStatus::Error);
+	assert!(!query.snapshot().is_fetching);
+
+	ready.set(false);
+	query.refetch();
+
+	assert_eq!(query.snapshot().status, QueryStatus::Pending);
+	assert!(query.snapshot().is_fetching);
+	assert_eq!(query.error(), None);
+
+	ready.set(true);
+	runtime.run_until_stalled();
+
+	assert_eq!(fetch_count.get(), 2);
+	assert_eq!(query.snapshot().status, QueryStatus::Success);
+	assert_eq!(query.data(), Some("recovered".to_string()));
+	assert!(!query.snapshot().is_fetching);
 }
 
 #[test]
@@ -243,6 +305,59 @@ fn disabled_observer_reads_cache_and_can_refetch_explicitly() {
 
 	assert_eq!(fetch_count.get(), 2);
 	assert_eq!(disabled.data(), Some("cached-2".to_string()));
+}
+
+#[test]
+fn disabled_double_refetch_queued_behind_an_enabled_fetch_uses_its_fetcher() {
+	let runtime = TestQueryRuntime::new();
+	let client = QueryClient::with_runtime(QueryDefaults::default(), runtime.handle());
+	let family = QueryFamily::<(), String, String>::new("tests.disabled-queued-refetch");
+	let enabled_ready = Rc::new(Cell::new(false));
+	let enabled_calls = Rc::new(Cell::new(0));
+	let enabled = client.observe(
+		family.query((), {
+			let enabled_ready = Rc::clone(&enabled_ready);
+			let enabled_calls = Rc::clone(&enabled_calls);
+			move || {
+				enabled_calls.set(enabled_calls.get() + 1);
+				TestGate {
+					ready: Rc::clone(&enabled_ready),
+					dropped: Rc::new(Cell::new(0)),
+					result: Some(Ok("enabled".to_string())),
+				}
+			}
+		}),
+		QueryOptions::default(),
+	);
+	runtime.run_until_stalled();
+
+	let disabled_calls = Rc::new(Cell::new(0));
+	let disabled = client.observe(
+		family.query((), {
+			let disabled_calls = Rc::clone(&disabled_calls);
+			move || {
+				let call = disabled_calls.get() + 1;
+				disabled_calls.set(call);
+				async move { Ok(format!("disabled-{call}")) }
+			}
+		}),
+		QueryOptions::new().enabled(false),
+	);
+
+	disabled.refetch();
+	disabled.refetch();
+	assert_eq!(disabled.snapshot().status, QueryStatus::Pending);
+	assert!(disabled.snapshot().is_fetching);
+	drop(enabled);
+
+	enabled_ready.set(true);
+	runtime.run_until_stalled();
+
+	assert_eq!(enabled_calls.get(), 1);
+	assert_eq!(disabled_calls.get(), 1);
+	assert_eq!(disabled.data(), Some("disabled-1".to_string()));
+	assert_eq!(disabled.snapshot().status, QueryStatus::Success);
+	assert!(!disabled.snapshot().is_fetching);
 }
 
 #[test]
@@ -451,6 +566,62 @@ fn one_client_rejects_incompatible_query_family_types() {
 
 	assert!(message.contains("tests.collision"));
 	assert!(message.contains("incompatible query family types"));
+}
+
+#[test]
+fn exact_invalidation_rejects_an_incompatible_family_with_the_same_id() {
+	let runtime = TestQueryRuntime::new();
+	let client = QueryClient::with_runtime(QueryDefaults::default(), runtime.handle());
+	let registered = QueryFamily::<i64, String, String>::new("tests.invalidate-collision");
+	let incompatible = QueryFamily::<String, String, String>::new("tests.invalidate-collision");
+	let _query = client.observe(
+		registered.query(1, || async { Ok::<_, String>("cached".to_string()) }),
+		QueryOptions::default(),
+	);
+	runtime.run_until_stalled();
+
+	let panic = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+		client.invalidate(&incompatible.key("1".to_string()));
+	}))
+	.expect_err("incompatible exact invalidation must panic");
+	let message = panic
+		.downcast_ref::<String>()
+		.map(String::as_str)
+		.or_else(|| panic.downcast_ref::<&str>().copied())
+		.expect("query family type collision should panic with a string");
+
+	assert_eq!(
+		message,
+		"incompatible query family types for `tests.invalidate-collision`: expected Args=`i64`, data=`alloc::string::String`, error=`alloc::string::String`; actual Args=`alloc::string::String`, data=`alloc::string::String`, error=`alloc::string::String`"
+	);
+}
+
+#[test]
+fn family_invalidation_rejects_an_incompatible_family_with_the_same_id() {
+	let runtime = TestQueryRuntime::new();
+	let client = QueryClient::with_runtime(QueryDefaults::default(), runtime.handle());
+	let registered = QueryFamily::<i64, String, String>::new("tests.invalidate-family-collision");
+	let incompatible = QueryFamily::<i64, u64, String>::new("tests.invalidate-family-collision");
+	let _query = client.observe(
+		registered.query(1, || async { Ok::<_, String>("cached".to_string()) }),
+		QueryOptions::default(),
+	);
+	runtime.run_until_stalled();
+
+	let panic = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+		client.invalidate_family(incompatible);
+	}))
+	.expect_err("incompatible family invalidation must panic");
+	let message = panic
+		.downcast_ref::<String>()
+		.map(String::as_str)
+		.or_else(|| panic.downcast_ref::<&str>().copied())
+		.expect("query family type collision should panic with a string");
+
+	assert_eq!(
+		message,
+		"incompatible query family types for `tests.invalidate-family-collision`: expected Args=`i64`, data=`alloc::string::String`, error=`alloc::string::String`; actual Args=`i64`, data=`u64`, error=`alloc::string::String`"
+	);
 }
 
 #[test]

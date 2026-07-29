@@ -46,11 +46,13 @@ impl<T: Clone + 'static, E: Clone + 'static> QueryHandle<T, E> {
 	/// Returns the current observer-specific query state.
 	pub fn snapshot(&self) -> QuerySnapshot<T, E> {
 		self.mark_ssr_read();
-		let is_fetching = self.entry.is_fetching.get();
+		let manual_refetch_pending = self.lease.inner.manual_refetch_pending.get();
+		let is_fetching = self.entry.is_fetching.get()
+			&& (self.lease.inner.policy.enabled || manual_refetch_pending);
 		let is_stale = self.entry.is_stale(self.lease.inner.policy.stale_time);
 		match self.entry.state.get() {
 			ResourceState::Loading => QuerySnapshot {
-				status: if self.lease.inner.policy.enabled || is_fetching {
+				status: if self.lease.inner.policy.enabled || manual_refetch_pending {
 					QueryStatus::Pending
 				} else {
 					QueryStatus::Idle
@@ -107,8 +109,7 @@ impl<T: Clone + 'static, E: Clone + 'static> QueryHandle<T, E> {
 
 	/// Manually refetches this query.
 	pub fn refetch(&self) {
-		self.entry
-			.start_fetch_with(true, Some(Rc::clone(&self.lease.inner.fetcher)));
+		self.entry.start_observer_refetch(&self.lease.inner);
 	}
 }
 

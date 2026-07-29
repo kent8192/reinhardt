@@ -93,6 +93,15 @@ impl<Args, T, E> QueryFamily<Args, T, E> {
 		self.id
 	}
 
+	pub(crate) fn family_types(&self) -> QueryFamilyTypes
+	where
+		Args: 'static,
+		T: 'static,
+		E: 'static,
+	{
+		QueryFamilyTypes::of::<Args, T, E>()
+	}
+
 	/// Builds the exact typed key for one argument set.
 	pub fn key(&self, args: Args) -> QueryKey<T, E>
 	where

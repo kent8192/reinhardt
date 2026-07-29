@@ -62,6 +62,7 @@ else
 		"examples/CLAUDE.md"
 		"website/config.toml"
 		"crates/reinhardt-admin-cli/src/main.rs"
+		"tests/integration/Cargo.toml"
 	)
 	while IFS= read -r f; do
 		TARGETS+=("$f")

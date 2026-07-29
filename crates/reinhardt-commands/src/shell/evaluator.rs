@@ -72,6 +72,7 @@ impl EvaluationFailure {
 
 pub(crate) trait BlockingShellEvaluator {
 	fn evaluate(&mut self, source: &str) -> Result<EvaluationOutput, EvaluationFailure>;
+	fn flush_output(&mut self) -> EvaluationOutput;
 	fn interrupt_handle(&self) -> EvaluationInterrupt;
 }
 
@@ -490,6 +491,14 @@ impl BlockingShellEvaluator for EvcxrEvaluator {
 		}
 	}
 
+	fn flush_output(&mut self) -> EvaluationOutput {
+		EvaluationOutput {
+			stdout: self.output_drainers.stdout.take_pending(),
+			stderr: self.output_drainers.stderr.take_pending(),
+			value: None,
+		}
+	}
+
 	fn interrupt_handle(&self) -> EvaluationInterrupt {
 		let process_handle = Arc::clone(&self.process_handle);
 		let owns_process_group = self.owns_process_group;
@@ -506,6 +515,9 @@ enum EvaluatorRequest {
 	Evaluate {
 		source: String,
 		response: oneshot::Sender<Result<EvaluationOutput, EvaluationFailure>>,
+	},
+	Flush {
+		response: oneshot::Sender<EvaluationOutput>,
 	},
 	Close,
 }
@@ -601,6 +613,9 @@ impl EvaluatorWorker {
 						let result = evaluator.evaluate(&source);
 						let _ = response.send(result);
 					}
+					EvaluatorRequest::Flush { response } => {
+						let _ = response.send(evaluator.flush_output());
+					}
 					EvaluatorRequest::Close => break,
 				}
 			}
@@ -659,6 +674,24 @@ impl EvaluatorClient for EvaluatorWorker {
 				"evaluator worker dropped its response channel".to_string(),
 			)
 		})?
+	}
+
+	async fn flush_output(&mut self) -> Result<EvaluationOutput, EvaluationFailure> {
+		let (response, result) = oneshot::channel();
+		self.requests
+			.as_ref()
+			.ok_or_else(|| {
+				EvaluationFailure::ProcessExited("evaluator worker is unavailable".to_string())
+			})?
+			.send(EvaluatorRequest::Flush { response })
+			.map_err(|_| {
+				EvaluationFailure::ProcessExited("evaluator worker has exited".to_string())
+			})?;
+		result.await.map_err(|_| {
+			EvaluationFailure::ProcessExited(
+				"evaluator worker dropped its flush response channel".to_string(),
+			)
+		})
 	}
 
 	fn interrupt(&self) -> EvaluationInterrupt {
@@ -809,13 +842,16 @@ fn terminate_evaluator_process(
 }
 
 fn source_with_commit_sentinel(source: &str, sentinel: &str) -> String {
-	let mut prefix_end = 0;
+	let bom_end = source
+		.strip_prefix('\u{FEFF}')
+		.map_or(0, |remaining| source.len() - remaining.len());
+	let mut prefix_end = bom_end;
 	let mut found_inner_prefix = false;
 	loop {
 		let rest = &source[prefix_end..];
 		let whitespace = rest.len() - rest.trim_start_matches(is_rust_whitespace).len();
 		let candidate = &rest[whitespace..];
-		let item_end = if candidate.starts_with("#![") {
+		let item_end = if inner_attribute_open_bracket(candidate).is_some() {
 			complete_inner_attribute(candidate)
 		} else if candidate.starts_with("//!") {
 			candidate
@@ -838,7 +874,7 @@ fn source_with_commit_sentinel(source: &str, sentinel: &str) -> String {
 		prefix_end += whitespace + item_end;
 		found_inner_prefix = true;
 	}
-	let separator = if prefix_end > 0 && !source[..prefix_end].ends_with('\n') {
+	let separator = if found_inner_prefix && !source[..prefix_end].ends_with('\n') {
 		"\n"
 	} else {
 		""
@@ -869,7 +905,10 @@ fn ordinary_comment_before_inner_prefix(source: &str) -> Option<usize> {
 		let following = &source[consumed..];
 		let whitespace = following.len() - following.trim_start_matches(is_rust_whitespace).len();
 		let next = &following[whitespace..];
-		if next.starts_with("#![") || next.starts_with("//!") || next.starts_with("/*!") {
+		if inner_attribute_open_bracket(next).is_some()
+			|| next.starts_with("//!")
+			|| next.starts_with("/*!")
+		{
 			return Some(consumed);
 		}
 		if !next.starts_with("//") && !next.starts_with("/*") {
@@ -972,6 +1011,44 @@ fn complete_inner_block_doc(source: &str) -> Option<usize> {
 }
 
 fn complete_inner_attribute(source: &str) -> Option<usize> {
+	let bracket = inner_attribute_open_bracket(source)?;
+	complete_bracketed_attribute(&source[bracket..]).map(|end| bracket + end)
+}
+
+fn inner_attribute_open_bracket(source: &str) -> Option<usize> {
+	source.strip_prefix('#')?;
+	let mut index = '#'.len_utf8();
+	index += rust_trivia_len(&source[index..])?;
+	if source.as_bytes().get(index) != Some(&b'!') {
+		return None;
+	}
+	index += 1;
+	index += rust_trivia_len(&source[index..])?;
+	(source.as_bytes().get(index) == Some(&b'[')).then_some(index)
+}
+
+fn rust_trivia_len(source: &str) -> Option<usize> {
+	let mut consumed = 0;
+	loop {
+		let remaining = &source[consumed..];
+		let whitespace = remaining.len() - remaining.trim_start_matches(is_rust_whitespace).len();
+		consumed += whitespace;
+		let remaining = &source[consumed..];
+		let comment = if remaining.starts_with("//") {
+			remaining
+				.find('\n')
+				.map(|end| end + 1)
+				.unwrap_or(remaining.len())
+		} else if remaining.starts_with("/*") {
+			complete_nested_block_comment(remaining)?
+		} else {
+			return Some(consumed);
+		};
+		consumed += comment;
+	}
+}
+
+fn complete_bracketed_attribute(source: &str) -> Option<usize> {
 	enum StringState {
 		Quoted { escaped: bool },
 		Raw { hashes: usize },
@@ -1423,6 +1500,10 @@ mod tests {
 			))
 		}
 
+		fn flush_output(&mut self) -> EvaluationOutput {
+			EvaluationOutput::default()
+		}
+
 		fn interrupt_handle(&self) -> EvaluationInterrupt {
 			let state = Arc::clone(&self.state);
 			EvaluationInterrupt::new(move || {
@@ -1479,6 +1560,35 @@ mod tests {
 			format!(
 				"{whitespace}#![allow(dead_code)]\nlet __commit: ::std::string::String = ::std::string::String::new();\nlet value = 1;"
 			)
+		);
+	}
+
+	#[test]
+	fn commit_sentinel_follows_token_spaced_inner_attributes() {
+		for source in [
+			"#! [allow(dead_code)]\nlet value = 1;",
+			"# /* note */ ! [allow(dead_code)]\nlet value = 1;",
+		] {
+			let rendered = source_with_commit_sentinel(source, "__commit");
+
+			assert_eq!(
+				rendered,
+				format!(
+					"{}\nlet __commit: ::std::string::String = ::std::string::String::new();\nlet value = 1;",
+					&source[..source.find('\n').expect("fixture should contain a newline")]
+				)
+			);
+		}
+	}
+
+	#[test]
+	fn commit_sentinel_preserves_a_leading_utf8_bom() {
+		let source = "\u{FEFF}#! [allow(dead_code)]\nlet value = 1;";
+		let rendered = source_with_commit_sentinel(source, "__commit");
+
+		assert_eq!(
+			rendered,
+			"\u{FEFF}#! [allow(dead_code)]\nlet __commit: ::std::string::String = ::std::string::String::new();\nlet value = 1;"
 		);
 	}
 

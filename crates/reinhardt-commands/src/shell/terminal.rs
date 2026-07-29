@@ -195,7 +195,7 @@ pub(crate) trait LineReader {
 		Ok(())
 	}
 
-	fn save_history(&mut self, _path: &Path) -> rustyline::Result<()> {
+	fn append_history(&mut self, _path: &Path) -> rustyline::Result<()> {
 		Ok(())
 	}
 }
@@ -213,8 +213,8 @@ impl LineReader for RustylineLineReader {
 		self.editor.add_history_entry(source).map(|_| ())
 	}
 
-	fn save_history(&mut self, path: &Path) -> rustyline::Result<()> {
-		self.editor.save_history(path)
+	fn append_history(&mut self, path: &Path) -> rustyline::Result<()> {
+		self.editor.append_history(path)
 	}
 }
 
@@ -244,7 +244,13 @@ impl TerminalInput<RustylineLineReader> {
 					if let Some(warning) = load_history_best_effort(editor.history_mut(), &path) {
 						warnings.push_back(warning);
 					}
-					Some(path)
+					match prepare_history_file(&path) {
+						Ok(()) => Some(path),
+						Err(error) => {
+							warnings.push_back(format!("Could not prepare shell history: {error}"));
+							None
+						}
+					}
 				}
 			}
 			None => {
@@ -287,7 +293,7 @@ where
 				self.warnings
 					.push_back(format!("Could not update shell history: {error}"));
 			} else if let Some(path) = &self.history_path
-				&& let Err(error) = self.reader.save_history(path)
+				&& let Err(error) = self.reader.append_history(path)
 			{
 				self.warnings
 					.push_back(format!("Could not save shell history: {error}"));
@@ -378,6 +384,14 @@ pub(crate) fn history_path_in(data_dir: &Path, project_identifier: &str) -> Path
 		.join(format!("{project_identifier}.history"))
 }
 
+fn prepare_history_file(path: &Path) -> std::io::Result<()> {
+	std::fs::File::options()
+		.create(true)
+		.append(true)
+		.open(path)
+		.map(|_| ())
+}
+
 pub(crate) fn load_history_best_effort<H>(history: &mut H, path: &Path) -> Option<String>
 where
 	H: History,
@@ -395,12 +409,12 @@ mod tests {
 	use std::path::Path;
 
 	use rustyline::error::ReadlineError;
-	use rustyline::history::DefaultHistory;
+	use rustyline::history::{DefaultHistory, History};
 	use tempfile::tempdir;
 
 	use super::{
 		BracketStatus, LineReader, TerminalInput, bracket_status, history_path_in,
-		load_history_best_effort,
+		load_history_best_effort, prepare_history_file,
 	};
 	use crate::shell::session::{InputEvent, ShellInput};
 
@@ -429,7 +443,7 @@ mod tests {
 			}
 		}
 
-		fn save_history(&mut self, _path: &Path) -> rustyline::Result<()> {
+		fn append_history(&mut self, _path: &Path) -> rustyline::Result<()> {
 			if self.fail_save_history {
 				Err(ReadlineError::Io(std::io::Error::other(
 					"history save failed",
@@ -619,6 +633,34 @@ mod tests {
 			InputEvent::Warning("Could not save shell history: history save failed".to_string())
 		);
 		assert_eq!(source, InputEvent::Source("exit".to_string()));
+	}
+
+	#[test]
+	fn history_append_preserves_entries_from_overlapping_sessions() {
+		let directory = tempdir().expect("temporary history directory");
+		let history_path = directory.path().join("project.history");
+		prepare_history_file(&history_path).expect("history file should be prepared");
+
+		let mut first = DefaultHistory::new();
+		first
+			.add("first session")
+			.expect("first history entry should be accepted");
+		first
+			.append(&history_path)
+			.expect("first history entry should append");
+
+		let mut second = DefaultHistory::new();
+		second
+			.add("second session")
+			.expect("second history entry should be accepted");
+		second
+			.append(&history_path)
+			.expect("second history entry should append");
+
+		assert_eq!(
+			std::fs::read_to_string(history_path).expect("history file should be readable"),
+			"#V2\nfirst session\nsecond session\n"
+		);
 	}
 
 	#[test]

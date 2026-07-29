@@ -28,6 +28,11 @@ impl EvaluationInterrupt {
 #[async_trait]
 pub(crate) trait EvaluatorClient: Send {
 	async fn evaluate(&mut self, source: &str) -> Result<EvaluationOutput, EvaluationFailure>;
+
+	async fn flush_output(&mut self) -> Result<EvaluationOutput, EvaluationFailure> {
+		Ok(EvaluationOutput::default())
+	}
+
 	fn interrupt(&self) -> EvaluationInterrupt;
 }
 
@@ -83,7 +88,7 @@ impl InterruptSignal for CtrlCSignal {
 
 pub(crate) struct ShellSession<F, W> {
 	factory: Option<F>,
-	evaluator: Box<dyn EvaluatorClient>,
+	evaluator: Option<Box<dyn EvaluatorClient>>,
 	output: W,
 	signal: Box<dyn InterruptSignal>,
 }
@@ -104,7 +109,7 @@ where
 		forward_startup(&mut output, &mut factory)?;
 		Ok(Self {
 			factory: Some(factory),
-			evaluator,
+			evaluator: Some(evaluator),
 			output,
 			signal: Box::new(CtrlCSignal),
 		})
@@ -140,7 +145,7 @@ where
 	{
 		Self {
 			factory: Some(factory),
-			evaluator,
+			evaluator: Some(evaluator),
 			output,
 			signal: Box::new(signal),
 		}
@@ -171,7 +176,7 @@ where
 				InputEvent::Source(source) => {
 					let trimmed = source.trim();
 					if trimmed == "exit" || trimmed == "quit" {
-						return Ok(());
+						return self.finish_interactive().await;
 					}
 					if trimmed.is_empty() {
 						continue;
@@ -193,19 +198,23 @@ where
 					self.output.warning("Current input was discarded.")?;
 				}
 				InputEvent::Warning(message) => self.output.warning(&message)?,
-				InputEvent::Eof => return Ok(()),
+				InputEvent::Eof => return self.finish_interactive().await,
 				InputEvent::EofWithPending => {
 					self.output
 						.warning("Pending input was discarded at end of file.")?;
-					return Ok(());
+					return self.finish_interactive().await;
 				}
 			}
 		}
 	}
 
 	async fn evaluate(&mut self, source: &str) -> Result<EvaluationOutput, EvaluationFailure> {
-		let interrupt = self.evaluator.interrupt();
-		let response = self.evaluator.evaluate(source);
+		let evaluator = self
+			.evaluator
+			.as_mut()
+			.expect("shell evaluator is available while evaluating");
+		let interrupt = evaluator.interrupt();
+		let response = evaluator.evaluate(source);
 		let signal = self.signal.wait();
 		tokio::pin!(response);
 		tokio::pin!(signal);
@@ -237,6 +246,22 @@ where
 		}
 	}
 
+	async fn finish_interactive(&mut self) -> CommandResult<()> {
+		let result = self
+			.evaluator
+			.as_mut()
+			.expect("shell evaluator is available while finishing")
+			.flush_output()
+			.await;
+		match result {
+			Ok(output) => self.forward(output),
+			Err(failure) => {
+				self.forward_failure_output(&failure)?;
+				Err(command_error(failure))
+			}
+		}
+	}
+
 	fn forward(&mut self, output: EvaluationOutput) -> CommandResult<()> {
 		if !output.stdout.is_empty() {
 			self.output.stdout(&output.stdout)?;
@@ -261,6 +286,7 @@ where
 	where
 		F: Send + 'static,
 	{
+		drop(self.evaluator.take());
 		let startup_interrupt = self
 			.factory
 			.as_ref()
@@ -286,7 +312,7 @@ where
 				for output in startup_output {
 					self.forward(output)?;
 				}
-				self.evaluator = replacement?;
+				self.evaluator = Some(replacement?);
 				self.output.warning("Shell state was reset and the project prelude was reloaded.")
 			}
 			result = &mut signal => {
@@ -354,6 +380,7 @@ fn command_error(failure: EvaluationFailure) -> CommandError {
 mod tests {
 	use std::collections::VecDeque;
 	use std::future::{Pending, pending};
+	use std::sync::atomic::{AtomicBool, Ordering};
 	use std::sync::{Arc, Mutex};
 
 	use async_trait::async_trait;
@@ -464,6 +491,62 @@ mod tests {
 				state.lock().expect("fake state lock").interrupts += 1;
 				Ok(())
 			})
+		}
+	}
+
+	struct FlushClient {
+		pending: Option<EvaluationOutput>,
+	}
+
+	#[async_trait]
+	impl EvaluatorClient for FlushClient {
+		async fn evaluate(&mut self, _source: &str) -> Result<EvaluationOutput, EvaluationFailure> {
+			panic!("flush-only evaluator should not receive a source")
+		}
+
+		async fn flush_output(&mut self) -> Result<EvaluationOutput, EvaluationFailure> {
+			Ok(self.pending.take().unwrap_or_default())
+		}
+
+		fn interrupt(&self) -> EvaluationInterrupt {
+			EvaluationInterrupt::new(|| Ok(()))
+		}
+	}
+
+	struct DropAwareClient {
+		dropped: Arc<AtomicBool>,
+	}
+
+	impl Drop for DropAwareClient {
+		fn drop(&mut self) {
+			self.dropped.store(true, Ordering::Release);
+		}
+	}
+
+	#[async_trait]
+	impl EvaluatorClient for DropAwareClient {
+		async fn evaluate(&mut self, _source: &str) -> Result<EvaluationOutput, EvaluationFailure> {
+			Err(EvaluationFailure::ContextReset(
+				"context should be replaced".to_string(),
+			))
+		}
+
+		fn interrupt(&self) -> EvaluationInterrupt {
+			EvaluationInterrupt::new(|| Ok(()))
+		}
+	}
+
+	struct DropAwareFactory {
+		dropped: Arc<AtomicBool>,
+	}
+
+	impl EvaluatorFactory for DropAwareFactory {
+		fn start(&mut self) -> CommandResult<Box<dyn EvaluatorClient>> {
+			assert!(
+				self.dropped.load(Ordering::Acquire),
+				"the failed evaluator must drop before replacement startup"
+			);
+			Ok(Box::new(FlushClient { pending: None }))
 		}
 	}
 
@@ -588,6 +671,66 @@ mod tests {
 		assert_eq!(session.output().stderr, ["warning\n"]);
 		assert_eq!(session.output().values, ["42"]);
 		assert_eq!(session.output().warnings, Vec::<String>::new());
+	}
+
+	#[tokio::test]
+	async fn interactive_exit_forwards_pending_evaluator_output() {
+		let factory = WarningFactory {
+			state: Arc::new(Mutex::new(FakeState::default())),
+			warnings: Vec::new(),
+		};
+		let mut session = ShellSession::from_client_with_signal(
+			factory,
+			Box::new(FlushClient {
+				pending: Some(output("detached stdout\n", "detached stderr\n", None)),
+			}),
+			FakeOutput::default(),
+			NeverInterrupt,
+		);
+		let mut input = FakeInput {
+			events: [Ok(InputEvent::Source("exit".to_string()))]
+				.into_iter()
+				.collect(),
+		};
+
+		session
+			.run_interactive(&mut input)
+			.await
+			.expect("interactive exit should flush pending output");
+
+		assert_eq!(session.output().stdout, ["detached stdout\n"]);
+		assert_eq!(session.output().stderr, ["detached stderr\n"]);
+	}
+
+	#[tokio::test]
+	async fn recovery_drops_the_failed_evaluator_before_replaying_the_prelude() {
+		let dropped = Arc::new(AtomicBool::new(false));
+		let factory = DropAwareFactory {
+			dropped: Arc::clone(&dropped),
+		};
+		let mut session = ShellSession::from_client_with_signal(
+			factory,
+			Box::new(DropAwareClient {
+				dropped: Arc::clone(&dropped),
+			}),
+			FakeOutput::default(),
+			NeverInterrupt,
+		);
+		let mut input = FakeInput {
+			events: [
+				Ok(InputEvent::Source("reset_context()".to_string())),
+				Ok(InputEvent::Eof),
+			]
+			.into_iter()
+			.collect(),
+		};
+
+		session
+			.run_interactive(&mut input)
+			.await
+			.expect("context recovery should succeed");
+
+		assert!(dropped.load(Ordering::Acquire));
 	}
 
 	#[test]

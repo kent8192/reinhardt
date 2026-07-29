@@ -19,6 +19,30 @@
 //! 2. **Robust Module Detection**: Structurally identifies existing migration modules
 //! 3. **Consistent Formatting**: Standardized output via `prettyplease`
 //!
+//! ## Strict Migration Squashing
+//!
+//! [`MigrationCatalog`] loads the complete source tree and validates duplicate
+//! identities, missing dependencies, and cycles before range selection.
+//! Migration names may be exact or unique prefixes. [`MigrationCatalog::squash_range`]
+//! returns a continuous, same-application ancestor range in dependency order,
+//! preserves dependencies entering that range, and rejects ambiguous or
+//! externally re-entering ancestry.
+//!
+//! [`MigrationSquasher`] combines the selected range while retaining exact
+//! replacement identities and stable metadata. Its optimizer applies only
+//! proven schema reductions and treats data operations, renames, constraints,
+//! indexes, bulk operations, custom operations, and unsupported future
+//! operations as ordering barriers. Disabling optimization preserves every
+//! operation in source order.
+//!
+//! [`FilesystemRepository::render`] validates that the combined migration can
+//! be represented as Rust source and emits parseable Rust 2024 code.
+//! [`FilesystemRepository::create_new_source`] validates names and source
+//! before writing, never overwrites an existing destination, and removes a
+//! partially created file if writing or synchronization fails. Catalog loading,
+//! range selection, squashing, and source creation do not require a database
+//! connection.
+//!
 //! ### Generated Entry Point Example
 //!
 //! The migration system automatically generates entry point files:

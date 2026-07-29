@@ -17,6 +17,34 @@
 //! - **Auto-Reload**: Built-in hot-reload for the development server (server + wasm)
 //! - **Tera Template Engine**: Powerful template rendering for project/app generation
 //!
+//! ## Squashing Migrations
+//!
+//! The `squashmigrations` command supports Django-compatible range syntax:
+//!
+//! ```text
+//! manage squashmigrations APP_LABEL MIGRATION_NAME
+//! manage squashmigrations APP_LABEL START_MIGRATION MIGRATION_NAME
+//! ```
+//!
+//! Exact migration names and unambiguous prefixes are accepted. Resolution
+//! rejects ambiguous prefixes, branched ancestry, and ranges that are not
+//! continuous same-application ancestor chains. Dependencies entering the
+//! selected range are preserved.
+//!
+//! Interactive execution prompts before creating the file. Pass `--no-input`
+//! or its `--noinput` alias for automation, `--no-optimize` to preserve the
+//! exact operation sequence, and `--no-header` to omit the generated-file
+//! header. A descriptive `--squashed-name release_window` becomes a name such
+//! as `0001_release_window`.
+//!
+//! Optimization never crosses an operation barrier. Data operations, renames,
+//! constraints, indexes, bulk operations, custom operations, and any operation
+//! without a proven schema reduction retain their order. The command validates
+//! and renders the entire migration before prompting, creates a new file
+//! without overwriting an existing destination, and removes partial output
+//! after a failed write. It reads migration sources only, so no database
+//! connection is required.
+//!
 //! ## Example
 //!
 //! ```rust,no_run

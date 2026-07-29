@@ -57,6 +57,8 @@ details.
 ### Built-in Commands
 
 - **makemigrations** - Create new database migrations based on model changes
+- **squashmigrations** - Combine a safe migration range into one replacement
+  migration without connecting to a database
 - **migrate** - Apply database migrations
 - **dumpdata** - Export model rows as Django-compatible JSON fixtures
 - **loaddata** - Load Django-compatible JSON fixtures into the database
@@ -78,6 +80,35 @@ details.
 - `routers` - Enable URL-related commands (requires `reinhardt-urls`)
 - `shell` - Enable the stateful Rust management shell. The facade exposes this
   as the project-facing `commands-shell` feature.
+
+### Squashing migrations
+
+`squashmigrations` accepts Django-compatible two- and three-positional forms:
+
+```bash
+cargo run --bin manage -- squashmigrations APP_LABEL MIGRATION_NAME
+cargo run --bin manage -- squashmigrations APP_LABEL START_MIGRATION MIGRATION_NAME
+```
+
+Migration names may be exact names or unique prefixes. The command rejects an
+ambiguous prefix, a branched ancestry, or a range that is not a continuous
+same-application ancestor chain. Dependencies entering the selected range from
+other applications remain dependencies of the generated migration.
+
+By default, Reinhardt prompts before writing. Use `--no-input` (or the
+Django-compatible `--noinput` alias) in non-interactive environments. Use
+`--no-optimize` to preserve the exact source operation order, and `--no-header`
+to omit the generated-file header. `--squashed-name descriptive_name` supplies
+a descriptive suffix; Reinhardt keeps the range's starting number, for example
+`0001_descriptive_name`.
+
+The optimizer performs only proven schema reductions. Data operations,
+renames, constraints, indexes, bulk operations, custom operations, and other
+non-reducible operations are barriers: optimization never crosses them.
+Reinhardt validates and renders the complete result before prompting. It then
+creates a new migration file without overwriting an existing destination.
+Invalid source or a failed write leaves no partial destination. The command
+only reads migration source files and does not require a database connection.
 
 ### Pages template hot reload
 

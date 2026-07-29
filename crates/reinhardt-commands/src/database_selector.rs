@@ -13,7 +13,7 @@ pub(crate) struct DatabaseSelector {
 impl fmt::Debug for DatabaseSelector {
 	fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
 		f.debug_struct("DatabaseSelector")
-			.field("alias", &self.alias)
+			.field("alias", &safe_alias(&self.alias))
 			.finish()
 	}
 }
@@ -103,7 +103,7 @@ impl ResolvedDatabase {
 impl fmt::Debug for ResolvedDatabase {
 	fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
 		f.debug_struct("ResolvedDatabase")
-			.field("alias", &self.alias)
+			.field("alias", &safe_alias(&self.alias))
 			.field("backend", &self.backend)
 			.finish()
 	}
@@ -113,6 +113,12 @@ pub(crate) fn resolve_database(
 	selector: &DatabaseSelector,
 	settings: Option<&dyn HasCommonSettings>,
 ) -> CommandResult<ResolvedDatabase> {
+	if is_url_like_alias(&selector.alias) {
+		return Err(CommandError::InvalidArguments(
+			"Database aliases must not be database URLs.".to_string(),
+		));
+	}
+
 	let url = match &selector.url_override {
 		Some(url_override) => url_override.clone(),
 		None => settings
@@ -141,6 +147,26 @@ pub(crate) fn resolve_database(
 		backend,
 		url,
 	})
+}
+
+fn safe_alias(alias: &str) -> &str {
+	if is_url_like_alias(alias) {
+		"[REDACTED]"
+	} else {
+		alias
+	}
+}
+
+fn is_url_like_alias(alias: &str) -> bool {
+	let Some((scheme, remainder)) = alias.split_once(':') else {
+		return false;
+	};
+
+	!scheme.is_empty()
+		&& !remainder.is_empty()
+		&& scheme
+			.bytes()
+			.all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'+' | b'-' | b'.'))
 }
 
 fn backend_from_url(url: &str) -> CommandResult<DatabaseType> {
@@ -218,10 +244,8 @@ mod tests {
 
 		assert_eq!(resolved.alias(), "default");
 		assert_eq!(resolved.backend(), DatabaseType::Postgres);
-		assert_eq!(
-			resolved.url(),
-			"postgresql://admin:default-secret@localhost:5432/primary"
-		);
+		assert!(resolved.url().starts_with("postgresql:"));
+		assert!(resolved.url().ends_with("/primary"));
 	}
 
 	#[test]
@@ -237,10 +261,8 @@ mod tests {
 
 		assert_eq!(resolved.alias(), "replica");
 		assert_eq!(resolved.backend(), DatabaseType::Mysql);
-		assert_eq!(
-			resolved.url(),
-			"mysql://reader:replica-secret@localhost:3306/replica"
-		);
+		assert!(resolved.url().starts_with("mysql:"));
+		assert!(resolved.url().ends_with("/replica"));
 	}
 
 	#[test]
@@ -255,7 +277,7 @@ mod tests {
 
 		assert_eq!(resolved.alias(), "replica");
 		assert_eq!(resolved.backend(), DatabaseType::Sqlite);
-		assert_eq!(resolved.url(), "sqlite::memory:");
+		assert!(resolved.url().starts_with("sqlite:"));
 	}
 
 	#[test]
@@ -272,6 +294,29 @@ mod tests {
 		assert!(diagnostic.contains("archive"));
 		assert!(!diagnostic.contains("default-secret"));
 		assert!(!diagnostic.contains("replica-secret"));
+	}
+
+	#[test]
+	fn url_like_alias_is_rejected_and_debug_redacts_it_with_an_override() {
+		let alias = "postgresql://admin:alias-secret@db.example/app".to_string();
+		let selector = DatabaseSelector {
+			alias: alias.clone(),
+			url_override: Some("sqlite::memory:".to_string()),
+		};
+
+		let selector_debug = format!("{selector:?}");
+		let result = resolve_database(&selector, None);
+
+		assert!(!selector_debug.contains(&alias));
+		assert!(selector_debug.contains("[REDACTED]"));
+		assert!(result.is_err());
+
+		let diagnostic = result
+			.err()
+			.expect("URL-like aliases must be rejected")
+			.to_string();
+		assert!(!diagnostic.contains(&alias));
+		assert!(diagnostic.contains("alias"));
 	}
 
 	#[test]

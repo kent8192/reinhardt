@@ -320,6 +320,11 @@ impl FieldType {
 				}
 			};
 		}
+		if let Self::Array(element_type) = self {
+			return element_type
+				.try_to_sql_for_dialect(dialect)
+				.map(|element_sql| format!("{element_sql}[]"));
+		}
 		Ok(self.to_sql_for_dialect(dialect))
 	}
 
@@ -683,6 +688,32 @@ mod tests {
 					if message == format!(
 						"vector dimensions must be between 1 and 2000, got {dimensions}"
 					)
+			));
+		}
+	}
+
+	#[test]
+	#[cfg(feature = "pgvector")]
+	fn vector_arrays_use_checked_element_rendering() {
+		let field_type = FieldType::Array(Box::new(FieldType::Vector { dimensions: 3 }));
+
+		assert_eq!(
+			field_type
+				.try_to_sql_for_dialect(&SqlDialect::Postgres)
+				.expect("PostgreSQL supports vector arrays"),
+			"VECTOR(3)[]"
+		);
+		for (dialect, backend) in [
+			(SqlDialect::Mysql, "mysql"),
+			(SqlDialect::Sqlite, "sqlite"),
+			(SqlDialect::Cockroachdb, "cockroachdb"),
+		] {
+			assert!(matches!(
+				field_type.try_to_sql_for_dialect(&dialect),
+				Err(MigrationError::UnsupportedBackendFeature {
+					feature: "vector field",
+					backend: actual_backend,
+				}) if actual_backend == backend
 			));
 		}
 	}

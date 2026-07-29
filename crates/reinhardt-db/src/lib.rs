@@ -87,6 +87,9 @@
 //! PostgreSQL `vector(N)` columns. The extension is never installed
 //! automatically: place `CreateExtension::new("vector")` before vector model
 //! operations in the migration sequence.
+//! When installing the extension in a custom schema, ensure that schema is in
+//! PostgreSQL's `search_path` before executing vector DDL: Reinhardt renders
+//! the pgvector type as the unqualified `vector(N)` identifier.
 //!
 //! The model macro accepts structured HNSW and IVFFlat indexes. Typed distance
 //! expressions work in filters, ordering, annotations, and selected

@@ -595,6 +595,16 @@ impl ModelRegistry {
 		})?;
 		let mut owners = HashMap::new();
 		for metadata in models.values() {
+			if let Some(previous_table) =
+				owners.insert(metadata.table_name.clone(), metadata.table_name.clone())
+			{
+				return Err(super::MigrationError::InvalidMigration(format!(
+					"physical table name `{}` is registered by both `{}` and `{}`",
+					metadata.table_name, previous_table, metadata.table_name
+				)));
+			}
+		}
+		for metadata in models.values() {
 			for index in metadata.indexes() {
 				if index.name.is_empty() {
 					return Err(super::MigrationError::InvalidMigration(format!(
@@ -612,8 +622,8 @@ impl ModelRegistry {
 					owners.insert(index.name.clone(), metadata.table_name.clone())
 				{
 					return Err(super::MigrationError::InvalidMigration(format!(
-						"physical index name `{}` is declared by both `{}` and `{}`",
-						index.name, previous_table, metadata.table_name
+						"physical index name `{}` on table `{}` conflicts with relation name owned by table `{}`",
+						index.name, metadata.table_name, previous_table
 					)));
 				}
 			}
@@ -857,6 +867,37 @@ mod tests {
 				if message.contains("shared_embedding_ann")
 					&& message.contains("search_document")
 					&& message.contains("billing_invoice")
+		));
+	}
+
+	#[test]
+	#[cfg(feature = "pgvector")]
+	fn physical_index_names_colliding_with_table_names_are_rejected() {
+		let registry = ModelRegistry::new();
+		let document = ModelMetadata::new("search", "Document", "search_document");
+		let mut invoice = ModelMetadata::new("billing", "Invoice", "billing_invoice");
+		invoice.add_index(IndexDefinition {
+			name: "search_document".to_string(),
+			fields: vec!["embedding".to_string()],
+			unique: false,
+			index_type: Some(super::super::operations::IndexType::Hnsw {
+				m: Some(16),
+				ef_construction: Some(64),
+			}),
+			operator_class: Some("vector_cosine_ops".to_string()),
+			expressions: None,
+		});
+		registry.register_model(document);
+		registry.register_model(invoice);
+
+		let error = registry
+			.validate_physical_index_names()
+			.expect_err("an index may not reuse a physical table relation name");
+
+		assert!(matches!(
+			error,
+			super::super::MigrationError::InvalidMigration(message)
+				if message.contains("search_document") && message.contains("billing_invoice")
 		));
 	}
 

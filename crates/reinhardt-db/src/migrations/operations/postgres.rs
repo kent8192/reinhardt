@@ -75,7 +75,11 @@ impl CreateExtension {
 		}
 	}
 
-	/// Set the schema where the extension should be created
+	/// Set the schema where the extension should be created.
+	///
+	/// For pgvector, the selected schema must be present in PostgreSQL's
+	/// `search_path` before migrations create vector columns or indexes, because
+	/// their DDL uses the unqualified `vector` type name.
 	pub fn with_schema(mut self, schema: impl Into<String>) -> Self {
 		self.schema = Some(schema.into());
 		self

@@ -876,9 +876,9 @@ impl StructuredIndexConfig {
 				if lists.is_some() {
 					return Err(meta.error("HNSW vector indexes do not accept `lists`"));
 				}
-				if let (Some(m), Some(ef_construction)) = (m, ef_construction)
-					&& ef_construction < 2 * m
-				{
+				let effective_m = m.unwrap_or(16);
+				let effective_ef_construction = ef_construction.unwrap_or(64);
+				if effective_ef_construction < 2 * effective_m {
 					return Err(meta.error(
 						"HNSW vector index option `ef_construction` must be at least twice `m`",
 					));
@@ -1857,6 +1857,7 @@ fn map_type_to_field_type(ty: &Type, config: &FieldConfig) -> Result<TokenStream
 	Ok(field_type)
 }
 
+#[cfg(feature = "pgvector")]
 fn vector_dimensions(ty: &Type) -> Result<Option<usize>> {
 	let (_is_option, inner_ty) = extract_option_type(ty);
 	let Type::Path(type_path) = inner_ty else {
@@ -1907,6 +1908,11 @@ fn vector_dimensions(ty: &Type) -> Result<Option<usize>> {
 	}
 
 	Ok(Some(dimensions))
+}
+
+#[cfg(not(feature = "pgvector"))]
+fn vector_dimensions(_ty: &Type) -> Result<Option<usize>> {
+	Ok(None)
 }
 
 fn is_builtin_model_field_type(ty: &Type) -> bool {
@@ -8639,6 +8645,42 @@ fn generate_info_builder(
 #[cfg(test)]
 mod tests {
 	use super::*;
+
+	#[test]
+	#[cfg(not(feature = "pgvector"))]
+	fn vector_named_custom_fields_are_not_claimed_without_pgvector() {
+		let custom_vector: Type = parse_quote! { Vector<3> };
+
+		assert_eq!(vector_dimensions(&custom_vector).unwrap(), None);
+	}
+
+	#[test]
+	#[cfg(feature = "pgvector")]
+	fn vector_dimensions_require_the_pgvector_feature() {
+		let vector: Type = parse_quote! { Vector<3> };
+
+		assert_eq!(vector_dimensions(&vector).unwrap(), Some(3));
+	}
+
+	#[test]
+	#[cfg(feature = "pgvector")]
+	fn hnsw_validation_uses_pgvector_defaults_for_omitted_options() {
+		let attrs = vec![parse_quote! {
+			#[field(index(
+				name = "documents_embedding_hnsw",
+				method = "hnsw",
+				opclass = "vector_l2_ops",
+				m = 100
+			))]
+		}];
+		let error = FieldConfig::from_attrs(&attrs)
+			.expect_err("the default ef_construction must constrain explicit m");
+
+		assert_eq!(
+			error.to_string(),
+			"HNSW vector index option `ef_construction` must be at least twice `m`"
+		);
+	}
 
 	#[test]
 	fn builtin_storage_kind_distinguishes_byte_and_array_vectors() {

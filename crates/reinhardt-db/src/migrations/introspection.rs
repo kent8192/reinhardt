@@ -184,12 +184,26 @@ fn resolve_postgres_operator_class(
 			.iter()
 			.all(|is_default| *is_default == first_is_default);
 	if operator_classes.len() > 1 && !all_default && !homogeneous {
-		return Err(MigrationError::IntrospectionError(format!(
-			"PostgreSQL index {index_name} uses heterogeneous operator classes that cannot be represented"
-		)));
+		// The migration schema represents only one operator class per index. Preserve the
+		// otherwise valid index metadata without claiming a lossy representative class.
+		return Ok((None, false));
 	}
 
 	Ok((Some(first_operator_class.clone()), all_default))
+}
+
+#[cfg(feature = "pgvector")]
+fn validate_postgres_index_key_kinds(
+	index_name: &str,
+	column_key_count: i64,
+	expression_key_count: i64,
+) -> Result<()> {
+	if column_key_count > 0 && expression_key_count > 0 {
+		return Err(MigrationError::IntrospectionError(format!(
+			"PostgreSQL index {index_name} mixes column and expression keys, which cannot be represented"
+		)));
+	}
+	Ok(())
 }
 
 /// Foreign key constraint
@@ -385,7 +399,10 @@ impl PostgresIntrospector {
 
 	#[cfg(feature = "pgvector")]
 	fn parse_pgvector_dimensions(type_definition: &str) -> Option<usize> {
-		let dimensions = type_definition
+		let unqualified_definition = type_definition
+			.rsplit_once('.')
+			.map_or(type_definition, |(_, definition)| definition);
+		let dimensions = unqualified_definition
 			.strip_prefix("vector(")?
 			.strip_suffix(')')?
 			.parse()
@@ -725,12 +742,22 @@ impl PostgresIntrospector {
 				am.amname AS access_method,
 				i.reloptions AS index_options,
 				array_agg(
-					pg_get_indexdef(ix.indexrelid, key.position, true)
+					pg_get_indexdef(ix.indexrelid, key.position + 1, true)
 					ORDER BY key.position
 				) FILTER (WHERE (ix.indkey::smallint[])[key.position] = 0)
 					AS index_expressions,
-				array_agg(opc.opcname ORDER BY key.position) AS operator_classes,
-				array_agg(opc.opcdefault ORDER BY key.position) AS operator_class_defaults
+				array_agg(
+					CASE
+						WHEN opn.nspname = 'pg_catalog' THEN opc.opcname
+						ELSE format('%I.%I', opn.nspname, opc.opcname)
+					END
+					ORDER BY key.position
+				) AS operator_classes,
+				array_agg(opc.opcdefault ORDER BY key.position) AS operator_class_defaults,
+				count(*) FILTER (WHERE (ix.indkey::smallint[])[key.position] <> 0)
+					AS column_key_count,
+				count(*) FILTER (WHERE (ix.indkey::smallint[])[key.position] = 0)
+					AS expression_key_count
 			FROM
 				pg_class t
 				JOIN pg_index ix ON t.oid = ix.indrelid
@@ -743,6 +770,7 @@ impl PostgresIntrospector {
 					AND a.attnum = (ix.indkey::smallint[])[key.position]
 				LEFT JOIN pg_opclass opc
 					ON opc.oid = (ix.indclass::oid[])[key.position]
+				LEFT JOIN pg_namespace opn ON opn.oid = opc.opcnamespace
 			WHERE
 				t.relkind = 'r'
 				AND t.relname = $1
@@ -805,6 +833,18 @@ impl PostgresIntrospector {
 						e
 					))
 				})?;
+			#[cfg(feature = "pgvector")]
+			let column_key_count: i64 = row.try_get("column_key_count").map_err(|e| {
+				MigrationError::IntrospectionError(format!("Failed to get column_key_count: {e}"))
+			})?;
+			#[cfg(feature = "pgvector")]
+			let expression_key_count: i64 = row.try_get("expression_key_count").map_err(|e| {
+				MigrationError::IntrospectionError(format!(
+					"Failed to get expression_key_count: {e}"
+				))
+			})?;
+			#[cfg(feature = "pgvector")]
+			validate_postgres_index_key_kinds(&index_name, column_key_count, expression_key_count)?;
 			#[cfg(feature = "pgvector")]
 			let index_type =
 				parse_postgres_index_type(&access_method, index_options.as_deref().unwrap_or(&[]))?;
@@ -2028,7 +2068,7 @@ mod postgres_index_metadata_tests {
 	}
 
 	#[test]
-	fn mixed_multi_column_postgres_operator_classes_are_rejected() {
+	fn mixed_multi_column_postgres_operator_classes_are_conservatively_represented() {
 		// Arrange
 		let operator_classes = vec!["int4_ops".to_string(), "text_pattern_ops".to_string()];
 		let operator_class_defaults = vec![true, false];
@@ -2042,12 +2082,7 @@ mod postgres_index_metadata_tests {
 		);
 
 		// Assert
-		assert!(matches!(
-			result,
-			Err(MigrationError::IntrospectionError(message))
-				if message
-					== "PostgreSQL index idx_events_sequence_name uses heterogeneous operator classes that cannot be represented"
-		));
+		assert_eq!(result.unwrap(), (None, false));
 	}
 
 	#[test]
@@ -2111,6 +2146,18 @@ mod postgres_index_metadata_tests {
 					== "PostgreSQL approximate index idx_source_embeddings must have exactly one key"
 		));
 	}
+
+	#[test]
+	fn mixed_column_and_expression_indexes_are_rejected() {
+		let error = validate_postgres_index_key_kinds("idx_mixed", 1, 1)
+			.expect_err("mixed index keys must not produce lossy metadata");
+
+		assert!(matches!(
+			error,
+			MigrationError::IntrospectionError(message)
+				if message == "PostgreSQL index idx_mixed mixes column and expression keys, which cannot be represented"
+		));
+	}
 }
 
 #[cfg(all(test, feature = "postgres", feature = "pgvector"))]
@@ -2124,6 +2171,21 @@ mod postgres_tests {
 			"vector",
 			"USER-DEFINED",
 			Some("vector(1536)"),
+			None,
+			None,
+			None,
+			None,
+		);
+
+		assert_eq!(field_type, FieldType::Vector { dimensions: 1536 });
+	}
+
+	#[test]
+	fn parses_schema_qualified_pgvector_type() {
+		let field_type = PostgresIntrospector::parse_pg_type(
+			"vector",
+			"USER-DEFINED",
+			Some("extensions.vector(1536)"),
 			None,
 			None,
 			None,

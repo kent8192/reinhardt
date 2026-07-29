@@ -440,13 +440,14 @@ impl CreateIndexStatement {
 					backend,
 				})
 			}
-			Some(IndexOptions::Hnsw {
-				m: Some(m),
-				ef_construction: Some(ef_construction),
-			}) if ef_construction < 2 * m => Err(crate::QueryBuildError::UnsupportedBackendFeature {
-				feature: "HNSW ef_construction at least twice m",
-				backend,
-			}),
+			Some(IndexOptions::Hnsw { m, ef_construction })
+				if ef_construction.unwrap_or(64) < 2 * m.unwrap_or(16) =>
+			{
+				Err(crate::QueryBuildError::UnsupportedBackendFeature {
+					feature: "HNSW ef_construction at least twice m",
+					backend,
+				})
+			}
 			Some(IndexOptions::Ivfflat { lists: Some(lists) }) if !(1..=32768).contains(&lists) => {
 				Err(crate::QueryBuildError::UnsupportedBackendFeature {
 					feature: "IVFFlat lists in 1..=32768",
@@ -675,6 +676,22 @@ mod tests {
 		IndexOptions::Hnsw {
 			m: Some(16),
 			ef_construction: Some(31),
+		},
+		"HNSW ef_construction at least twice m"
+	)]
+	#[case(
+		IndexMethod::Hnsw,
+		IndexOptions::Hnsw {
+			m: Some(100),
+			ef_construction: None,
+		},
+		"HNSW ef_construction at least twice m"
+	)]
+	#[case(
+		IndexMethod::Hnsw,
+		IndexOptions::Hnsw {
+			m: None,
+			ef_construction: Some(4),
 		},
 		"HNSW ef_construction at least twice m"
 	)]

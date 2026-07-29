@@ -3286,10 +3286,11 @@ impl Operation {
 			} if !(4..=1000).contains(&ef_construction) => {
 				Some("ef_construction must be in the range 4..=1000")
 			}
-			IndexType::Hnsw {
-				m: Some(m),
-				ef_construction: Some(ef_construction),
-			} if ef_construction < 2 * m => Some("ef_construction must be at least twice m"),
+			IndexType::Hnsw { m, ef_construction }
+				if ef_construction.unwrap_or(64) < 2 * m.unwrap_or(16) =>
+			{
+				Some("ef_construction must be at least twice m")
+			}
 			IndexType::Ivfflat { lists: Some(lists) } if !(1..=32768).contains(&lists) => {
 				Some("lists must be in the range 1..=32768")
 			}
@@ -10748,6 +10749,20 @@ mod tests {
 		IndexType::Hnsw {
 			m: Some(16),
 			ef_construction: Some(31),
+		},
+		"ef_construction must be at least twice m"
+	)]
+	#[case(
+		IndexType::Hnsw {
+			m: Some(100),
+			ef_construction: None,
+		},
+		"ef_construction must be at least twice m"
+	)]
+	#[case(
+		IndexType::Hnsw {
+			m: None,
+			ef_construction: Some(4),
 		},
 		"ef_construction must be at least twice m"
 	)]

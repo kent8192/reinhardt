@@ -230,6 +230,7 @@ Available features:
 - `backends` (default): Backend implementations
 - `pool` (default): Connection pooling
 - `postgres` (default): PostgreSQL support
+- `pgvector`: Native PostgreSQL dense-vector ORM and migrations
 - `orm` (default): ORM functionality
 - `migrations` (default): Migration system
 - `hybrid` (default): Multi-database support
@@ -240,6 +241,169 @@ Available features:
 - `di`: DI integration for `DatabaseConnection`
 - `contenttypes`: Generic relations support
 - `all-databases`: All database backends
+
+### Native pgvector
+
+Enable native dense-vector storage directly on `reinhardt-db`:
+
+<!-- reinhardt-version-sync -->
+```toml
+[dependencies]
+reinhardt-db = { version = "0.4.0-alpha.2", features = ["pgvector"] }
+reinhardt-core = { version = "0.4.0-alpha.2", features = ["macros"] }
+serde = { version = "1", features = ["derive"] }
+```
+
+Applications using the facade enable `db-pgvector` instead and import
+`Vector` and `VectorError` from `reinhardt::db::pgvector`:
+
+<!-- reinhardt-version-sync -->
+```toml
+[dependencies]
+reinhardt = { package = "reinhardt-web", version = "0.4.0-alpha.2", features = ["db-pgvector"] }
+```
+
+Reinhardt never installs the PostgreSQL extension automatically. Add
+`CreateExtension::new("vector")` explicitly before the generated vector model
+operations in the migration sequence.
+
+The following model declares both supported approximate index methods and
+builds a typed query whose target vectors are bound values:
+
+```rust
+use reinhardt_core::macros::model;
+use reinhardt_db::{
+    migrations::{
+        MigrationAutodetector, Operation, ProjectState, model_registry::global_registry,
+        operations::postgres::CreateExtension,
+    },
+    orm::{Model, QuerySet, Vector},
+};
+use serde::{Deserialize, Serialize};
+
+#[model(app_label = "search", table_name = "documents")]
+#[derive(Clone, Debug, Serialize, Deserialize)]
+struct Document {
+    #[field(primary_key = true)]
+    id: Option<i64>,
+    #[field(index(
+        name = "documents_embedding_cosine_hnsw",
+        method = "hnsw",
+        opclass = "vector_cosine_ops",
+        m = 16,
+        ef_construction = 64
+    ))]
+    embedding: Vector<1536>,
+    #[field(index(
+        name = "documents_summary_l2_ivfflat",
+        method = "ivfflat",
+        opclass = "vector_l2_ops",
+        lists = 100
+    ))]
+    summary: Vector<1536>,
+}
+
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let metadata = global_registry()
+        .get_model("search", "Document")
+        .ok_or("Document metadata was not registered")?;
+    let mut target_state = ProjectState::new();
+    target_state.add_model(metadata.to_model_state());
+    let mut generated = MigrationAutodetector::new(ProjectState::new(), target_state)
+        .try_generate_migrations()?;
+    let mut migration = generated.pop().ok_or("Document migration was not generated")?;
+    migration.operations.insert(
+        0,
+        CreateExtension::new("vector").into_operation()?,
+    );
+    assert!(matches!(
+        migration.operations.first(),
+        Some(Operation::CreateExtension { name, .. }) if name == "vector"
+    ));
+    assert!(migration.operations[1..]
+        .iter()
+        .any(|operation| matches!(operation, Operation::CreateTable { .. })));
+    assert!(migration.operations[1..]
+        .iter()
+        .any(|operation| matches!(operation, Operation::CreateNamedIndex { .. })));
+
+    let target = Vector::<1536>::try_from(vec![1.0; 1536])?;
+    let fields = Document::new_fields();
+    let nearest = QuerySet::<Document>::new()
+        .filter(
+            fields
+                .embedding
+                .clone()
+                .cosine_distance(target.clone())
+                .lt(0.5),
+        )
+        .order_by(
+            fields
+                .embedding
+                .clone()
+                .l2_distance(target.clone())
+                .asc(),
+        )
+        .annotate_expr(
+            "negative_inner_product",
+            fields
+                .embedding
+                .clone()
+                .negative_inner_product(target.clone()),
+        )
+        .values(&["id"])
+        .select_expr(
+            "cosine_distance",
+            fields.embedding.cosine_distance(target),
+        )
+        .limit(10);
+
+    let _ = nearest;
+    Ok(())
+}
+```
+
+`DatabaseMigrationExecutor` applies these operations in vector order. Rolling
+this migration back removes the model schema and indexes but deliberately
+leaves the database-level extension installed, because other applications or
+schemas may share it.
+
+The typed distance methods map directly to PostgreSQL:
+
+| Method | PostgreSQL operator |
+|--------|---------------------|
+| `l2_distance` | `<->` |
+| `negative_inner_product` | `<#>` |
+| `cosine_distance` | `<=>` |
+
+`Vector<N>` accepts dimensions from 1 through 2000. Construction,
+deserialization, pgvector conversion, and database decoding require exactly
+`N` finite `f32` elements. This feature supports only dense `vector(N)`;
+`halfvec`, `bit`, `sparsevec`, binary quantization, and session tuning APIs are
+not included. An all-zero vector passes Reinhardt's finite-value validation,
+but PostgreSQL pgvector does not index zero vectors for cosine distance.
+
+Vector columns, values, distance expressions, and approximate indexes are
+PostgreSQL-only. Checked construction for MySQL and SQLite returns structured
+unsupported-backend errors rather than emitting incompatible SQL. HNSW and
+IVFFlat indexes are non-unique and accept exactly one column or expression.
+Their operator class must be `vector_l2_ops`, `vector_ip_ops`, or
+`vector_cosine_ops`. Optional HNSW `m` and `ef_construction` values and the
+optional IVFFlat `lists` value must be positive. Explicit names are emitted
+unchanged, and duplicate physical index names are rejected before SQL
+execution.
+
+If PostgreSQL reports a missing vector type, distance operator, or vector
+operator class for an operation that structurally uses pgvector, Reinhardt
+preserves the database error kind, SQLSTATE, and original SQLx source while
+adding a hint to install the extension explicitly with
+`CreateExtension::new("vector")`.
+
+The Rust `pgvector` dependency is optional, has its default features disabled,
+and does not enable its SQLx feature. Reinhardt owns the native binary codec
+against the workspace SQLx 0.8 dependency, so enabling pgvector does not
+introduce a second SQLx API surface. The feature is intentionally absent from
+the default, `full`, and `all-databases` feature groups.
 
 ## Usage
 

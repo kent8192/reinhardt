@@ -834,8 +834,24 @@ mod tests {
 		})
 		.await;
 
-		assert_eq!(result, Ok(()));
-		assert_eq!(*calls.lock().unwrap(), expected_nested_cleanup_calls());
+		assert_eq!(
+			result,
+			Err(SerializerError::Database(DatabaseError::new(
+				DatabaseErrorKind::Transaction,
+				"Nested atomic operation was cancelled",
+			)))
+		);
+		assert_eq!(
+			*calls.lock().unwrap(),
+			[
+				"begin",
+				"savepoint:reinhardt_atomic_0",
+				"operation",
+				"rollback_to_savepoint:reinhardt_atomic_0",
+				"release_savepoint:reinhardt_atomic_0",
+				"rollback",
+			]
+		);
 	}
 
 	#[rstest]

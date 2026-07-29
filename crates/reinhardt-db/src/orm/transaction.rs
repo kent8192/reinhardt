@@ -647,6 +647,7 @@ impl Default for Transaction {
 pub struct AtomicTransaction {
 	executor: Option<Box<dyn TransactionExecutor>>,
 	backend: DatabaseBackend,
+	is_cockroachdb: bool,
 	savepoint_sequence: u64,
 	outcome: AtomicTransactionOutcome,
 	savepoint_outcomes: Vec<AtomicTransactionOutcome>,
@@ -656,9 +657,11 @@ pub struct AtomicTransaction {
 impl AtomicTransaction {
 	pub(crate) fn new(executor: Box<dyn TransactionExecutor>) -> Self {
 		let backend = DatabaseBackend::from(executor.backend());
+		let is_cockroachdb = executor.is_cockroachdb();
 		Self {
 			executor: Some(executor),
 			backend,
+			is_cockroachdb,
 			savepoint_sequence: 0,
 			outcome: AtomicTransactionOutcome::pending(),
 			savepoint_outcomes: Vec::new(),
@@ -690,6 +693,10 @@ impl AtomicTransaction {
 		self.executor
 			.as_deref_mut()
 			.ok_or_else(transaction_consumed_error)
+	}
+
+	fn executor_ref(&self) -> Option<&(dyn TransactionExecutor + 'static)> {
+		self.executor.as_deref()
 	}
 
 	async fn commit(&mut self) -> reinhardt_core::exception::Result<()> {
@@ -936,7 +943,20 @@ impl Drop for AtomicTransaction {
 #[async_trait::async_trait]
 impl OrmExecutor for AtomicTransaction {
 	fn backend(&self) -> DatabaseBackend {
-		self.backend
+		self.executor_ref()
+			.map(|executor| DatabaseBackend::from(executor.backend()))
+			.unwrap_or(self.backend)
+	}
+
+	fn supports_pgvector_error_hints(&self) -> bool {
+		self.executor_ref()
+			.is_some_and(TransactionExecutor::supports_pgvector_error_hints)
+	}
+
+	fn is_cockroachdb(&self) -> bool {
+		self.executor_ref()
+			.map(TransactionExecutor::is_cockroachdb)
+			.unwrap_or(self.is_cockroachdb)
 	}
 
 	fn rolls_back_on_error(&self) -> bool {
@@ -955,12 +975,34 @@ impl OrmExecutor for AtomicTransaction {
 		self.executor_mut()?.execute(sql, params).await
 	}
 
+	async fn execute_with_context(
+		&mut self,
+		sql: &str,
+		params: Vec<QueryValue>,
+		context: Option<crate::backends::error::PgvectorOperationKind>,
+	) -> reinhardt_core::exception::Result<QueryResult> {
+		self.executor_mut()?
+			.execute_with_context(sql, params, context)
+			.await
+	}
+
 	async fn fetch_one(
 		&mut self,
 		sql: &str,
 		params: Vec<QueryValue>,
 	) -> reinhardt_core::exception::Result<Row> {
 		self.executor_mut()?.fetch_one(sql, params).await
+	}
+
+	async fn fetch_one_with_context(
+		&mut self,
+		sql: &str,
+		params: Vec<QueryValue>,
+		context: Option<crate::backends::error::PgvectorOperationKind>,
+	) -> reinhardt_core::exception::Result<Row> {
+		self.executor_mut()?
+			.fetch_one_with_context(sql, params, context)
+			.await
 	}
 
 	async fn fetch_all(
@@ -971,12 +1013,34 @@ impl OrmExecutor for AtomicTransaction {
 		self.executor_mut()?.fetch_all(sql, params).await
 	}
 
+	async fn fetch_all_with_context(
+		&mut self,
+		sql: &str,
+		params: Vec<QueryValue>,
+		context: Option<crate::backends::error::PgvectorOperationKind>,
+	) -> reinhardt_core::exception::Result<Vec<Row>> {
+		self.executor_mut()?
+			.fetch_all_with_context(sql, params, context)
+			.await
+	}
+
 	async fn fetch_optional(
 		&mut self,
 		sql: &str,
 		params: Vec<QueryValue>,
 	) -> reinhardt_core::exception::Result<Option<Row>> {
 		self.executor_mut()?.fetch_optional(sql, params).await
+	}
+
+	async fn fetch_optional_with_context(
+		&mut self,
+		sql: &str,
+		params: Vec<QueryValue>,
+		context: Option<crate::backends::error::PgvectorOperationKind>,
+	) -> reinhardt_core::exception::Result<Option<Row>> {
+		self.executor_mut()?
+			.fetch_optional_with_context(sql, params, context)
+			.await
 	}
 }
 
@@ -985,11 +1049,25 @@ impl OrmExecutor for AtomicTransaction {
 #[async_trait::async_trait]
 impl TransactionExecutor for AtomicTransaction {
 	fn backend(&self) -> DatabaseType {
-		match self.backend {
-			DatabaseBackend::Postgres => DatabaseType::Postgres,
-			DatabaseBackend::MySql => DatabaseType::Mysql,
-			DatabaseBackend::Sqlite => DatabaseType::Sqlite,
-		}
+		self.executor_ref().map_or_else(
+			|| match self.backend {
+				DatabaseBackend::Postgres => DatabaseType::Postgres,
+				DatabaseBackend::MySql => DatabaseType::Mysql,
+				DatabaseBackend::Sqlite => DatabaseType::Sqlite,
+			},
+			TransactionExecutor::backend,
+		)
+	}
+
+	fn supports_pgvector_error_hints(&self) -> bool {
+		self.executor_ref()
+			.is_some_and(TransactionExecutor::supports_pgvector_error_hints)
+	}
+
+	fn is_cockroachdb(&self) -> bool {
+		self.executor_ref()
+			.map(TransactionExecutor::is_cockroachdb)
+			.unwrap_or(self.is_cockroachdb)
 	}
 
 	async fn execute(
@@ -1000,12 +1078,34 @@ impl TransactionExecutor for AtomicTransaction {
 		self.executor_mut()?.execute(sql, params).await
 	}
 
+	async fn execute_with_context(
+		&mut self,
+		sql: &str,
+		params: Vec<QueryValue>,
+		context: Option<crate::backends::error::PgvectorOperationKind>,
+	) -> reinhardt_core::exception::Result<QueryResult> {
+		self.executor_mut()?
+			.execute_with_context(sql, params, context)
+			.await
+	}
+
 	async fn fetch_one(
 		&mut self,
 		sql: &str,
 		params: Vec<QueryValue>,
 	) -> reinhardt_core::exception::Result<Row> {
 		self.executor_mut()?.fetch_one(sql, params).await
+	}
+
+	async fn fetch_one_with_context(
+		&mut self,
+		sql: &str,
+		params: Vec<QueryValue>,
+		context: Option<crate::backends::error::PgvectorOperationKind>,
+	) -> reinhardt_core::exception::Result<Row> {
+		self.executor_mut()?
+			.fetch_one_with_context(sql, params, context)
+			.await
 	}
 
 	async fn fetch_all(
@@ -1016,12 +1116,34 @@ impl TransactionExecutor for AtomicTransaction {
 		self.executor_mut()?.fetch_all(sql, params).await
 	}
 
+	async fn fetch_all_with_context(
+		&mut self,
+		sql: &str,
+		params: Vec<QueryValue>,
+		context: Option<crate::backends::error::PgvectorOperationKind>,
+	) -> reinhardt_core::exception::Result<Vec<Row>> {
+		self.executor_mut()?
+			.fetch_all_with_context(sql, params, context)
+			.await
+	}
+
 	async fn fetch_optional(
 		&mut self,
 		sql: &str,
 		params: Vec<QueryValue>,
 	) -> reinhardt_core::exception::Result<Option<Row>> {
 		self.executor_mut()?.fetch_optional(sql, params).await
+	}
+
+	async fn fetch_optional_with_context(
+		&mut self,
+		sql: &str,
+		params: Vec<QueryValue>,
+		context: Option<crate::backends::error::PgvectorOperationKind>,
+	) -> reinhardt_core::exception::Result<Option<Row>> {
+		self.executor_mut()?
+			.fetch_optional_with_context(sql, params, context)
+			.await
 	}
 
 	async fn commit(self: Box<Self>) -> reinhardt_core::exception::Result<()> {
@@ -1132,6 +1254,10 @@ mod tests {
 			DatabaseType::Postgres
 		}
 
+		fn supports_pgvector_error_hints(&self) -> bool {
+			true
+		}
+
 		async fn execute(&mut self, _sql: &str, _params: Vec<QueryValue>) -> Result<QueryResult> {
 			self.calls.lock().unwrap().push("execute".to_string());
 			Ok(QueryResult {
@@ -1206,6 +1332,27 @@ mod tests {
 				Ok(())
 			}
 		}
+	}
+
+	#[test]
+	fn atomic_transaction_reports_inner_backend_and_pgvector_capability() {
+		let transaction = AtomicTransaction::new(Box::new(MockTransactionExecutor {
+			failure_plan: FailurePlan::default(),
+			calls: Arc::new(Mutex::new(Vec::new())),
+		}));
+
+		assert_eq!(
+			OrmExecutor::backend(&transaction),
+			DatabaseBackend::Postgres
+		);
+		assert!(OrmExecutor::supports_pgvector_error_hints(&transaction));
+		assert_eq!(
+			TransactionExecutor::backend(&transaction),
+			DatabaseType::Postgres
+		);
+		assert!(TransactionExecutor::supports_pgvector_error_hints(
+			&transaction
+		));
 	}
 
 	/// A test executor that deliberately uses the trait's default unsupported

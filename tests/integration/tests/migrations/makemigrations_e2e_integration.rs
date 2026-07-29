@@ -680,6 +680,10 @@ async fn nc_06_index_addition_creates_create_index_migration() {
 			name: "idx_todos_title".to_string(),
 			columns: vec!["title".to_string()],
 			unique: false,
+			access_method: None,
+			index_type: None,
+			expressions: None,
+			operator_class: None,
 		});
 
 	let (_source, repository, _service) = create_migration_infra(&migrations_dir);
@@ -1167,6 +1171,10 @@ async fn nc_12_one_to_one_creates_unique_foreign_key() {
 		name: "idx_profiles_user_id".to_string(),
 		columns: vec!["user_id".to_string()],
 		unique: true,
+		access_method: None,
+		index_type: None,
+		expressions: None,
+		operator_class: None,
 	});
 	target_schema
 		.tables
@@ -1354,6 +1362,10 @@ async fn nc_16_index_deletion_creates_drop_index() {
 			name: "idx_todos_title".to_string(),
 			columns: vec!["title".to_string()],
 			unique: false,
+			access_method: None,
+			index_type: None,
+			expressions: None,
+			operator_class: None,
 		});
 
 	// Target has no index
@@ -3595,6 +3607,10 @@ async fn mn_08_index_addition_gets_create_index_name() {
 			name: "idx_articles_slug".to_string(),
 			columns: vec!["slug".to_string()],
 			unique: true,
+			access_method: None,
+			index_type: None,
+			expressions: None,
+			operator_class: None,
 		});
 
 	// Act

@@ -60,6 +60,70 @@ impl CockroachDBQueryBuilder {
 			postgres: PostgresQueryBuilder::new(),
 		}
 	}
+
+	/// Build a SELECT statement through the checked query-building API.
+	pub fn build_select_checked(
+		&self,
+		stmt: &SelectStatement,
+	) -> Result<(String, Values), crate::QueryBuildError> {
+		crate::error::validate_select_for_backend(stmt, "CockroachDB")?;
+		Ok(self.build_select(stmt))
+	}
+
+	/// Build a CREATE TABLE statement through the checked query-building API.
+	pub fn build_create_table_checked(
+		&self,
+		stmt: &CreateTableStatement,
+	) -> Result<(String, Values), crate::QueryBuildError> {
+		crate::error::validate_create_table_for_backend(stmt, "CockroachDB")?;
+		Ok(self.build_create_table(stmt))
+	}
+
+	/// Build a CREATE INDEX statement through the checked query-building API.
+	pub fn build_create_index_checked(
+		&self,
+		stmt: &CreateIndexStatement,
+	) -> Result<(String, Values), crate::QueryBuildError> {
+		crate::error::validate_create_index_for_backend(stmt, "CockroachDB")?;
+		stmt.validate_for_backend("CockroachDB", false)?;
+		Ok(self.build_create_index(stmt))
+	}
+
+	/// Build an INSERT statement through the checked query-building API.
+	pub fn build_insert_checked(
+		&self,
+		stmt: &InsertStatement,
+	) -> Result<(String, Values), crate::QueryBuildError> {
+		crate::error::validate_insert_for_backend(stmt, "CockroachDB")?;
+		Ok(self.build_insert(stmt))
+	}
+
+	/// Build an UPDATE statement through the checked query-building API.
+	pub fn build_update_checked(
+		&self,
+		stmt: &UpdateStatement,
+	) -> Result<(String, Values), crate::QueryBuildError> {
+		crate::error::validate_update_for_backend(stmt, "CockroachDB")?;
+		Ok(self.build_update(stmt))
+	}
+
+	/// Build a DELETE statement through the checked query-building API.
+	pub fn build_delete_checked(
+		&self,
+		stmt: &DeleteStatement,
+	) -> Result<(String, Values), crate::QueryBuildError> {
+		crate::error::validate_delete_for_backend(stmt, "CockroachDB")?;
+		Ok(self.build_delete(stmt))
+	}
+
+	/// Build an ALTER TABLE statement through the checked query-building API.
+	pub fn build_alter_table_checked(
+		&self,
+		stmt: &AlterTableStatement,
+	) -> Result<(String, Values), crate::QueryBuildError> {
+		crate::error::validate_alter_table_for_backend(stmt, "CockroachDB")?;
+		Ok(self.build_alter_table(stmt))
+	}
 }
 
 impl QueryBuilder for CockroachDBQueryBuilder {
@@ -354,6 +418,175 @@ impl QueryBuilder for CockroachDBQueryBuilder {
 mod tests {
 	use super::*;
 	use crate::query::Query;
+	#[cfg(feature = "pgvector")]
+	use crate::{
+		QueryBuildError, Value,
+		expr::{Expr, SimpleExpr},
+		query::{IndexMethod, IndexOptions},
+		types::{BinOper, ColumnDef, PgBinOper},
+	};
+
+	#[cfg(feature = "pgvector")]
+	fn vector_value() -> Value {
+		Value::Vector(Some(Box::new(vec![1.0, 2.0, 3.0])))
+	}
+
+	#[cfg(feature = "pgvector")]
+	fn assert_cockroach_pgvector_rejection(
+		result: Result<(String, Values), QueryBuildError>,
+		feature: &'static str,
+	) {
+		assert_eq!(
+			result,
+			Err(QueryBuildError::UnsupportedBackendFeature {
+				feature,
+				backend: "CockroachDB",
+			})
+		);
+	}
+
+	#[cfg(feature = "pgvector")]
+	#[test]
+	fn checked_create_table_rejects_vector_column_types() {
+		let mut statement = Query::create_table();
+		statement
+			.table("documents")
+			.col(ColumnDef::new("embedding").vector(1536));
+
+		assert_cockroach_pgvector_rejection(
+			CockroachDBQueryBuilder::new().build_create_table_checked(&statement),
+			"pgvector column types",
+		);
+	}
+
+	#[cfg(feature = "pgvector")]
+	#[test]
+	fn checked_select_rejects_vector_values() {
+		let mut statement = Query::select();
+		statement
+			.expr(SimpleExpr::Value(vector_value()))
+			.from("documents");
+
+		assert_cockroach_pgvector_rejection(
+			CockroachDBQueryBuilder::new().build_select_checked(&statement),
+			"pgvector values",
+		);
+	}
+
+	#[cfg(feature = "pgvector")]
+	#[test]
+	fn checked_select_rejects_all_pgvector_distance_operators() {
+		let operators = [
+			PgBinOper::L2Distance,
+			PgBinOper::NegativeInnerProduct,
+			PgBinOper::CosineDistance,
+		];
+
+		for operator in operators {
+			let mut statement = Query::select();
+			statement
+				.expr(SimpleExpr::Binary(
+					Box::new(Expr::col("embedding").into()),
+					BinOper::PgOperator(operator),
+					Box::new(Expr::col("probe").into()),
+				))
+				.from("documents");
+
+			assert_cockroach_pgvector_rejection(
+				CockroachDBQueryBuilder::new().build_select_checked(&statement),
+				"pgvector distance operators",
+			);
+		}
+	}
+
+	#[cfg(feature = "pgvector")]
+	#[test]
+	fn checked_dml_builds_reject_vector_values() {
+		let mut insert = Query::insert();
+		insert
+			.into_table("documents")
+			.column("embedding")
+			.values_panic([vector_value()]);
+		let mut update = Query::update();
+		update.table("documents").value("embedding", vector_value());
+		let mut delete = Query::delete();
+		delete
+			.from_table("documents")
+			.returning_exprs([SimpleExpr::Value(vector_value())]);
+
+		let builder = CockroachDBQueryBuilder::new();
+		let results = [
+			builder.build_insert_checked(&insert),
+			builder.build_update_checked(&update),
+			builder.build_delete_checked(&delete),
+		];
+
+		for result in results {
+			assert_cockroach_pgvector_rejection(result, "pgvector values");
+		}
+	}
+
+	#[cfg(feature = "pgvector")]
+	#[test]
+	fn checked_alter_table_rejects_vector_column_types() {
+		let mut statement = Query::alter_table();
+		statement
+			.table("documents")
+			.add_column(ColumnDef::new("embedding").vector(1536));
+
+		assert_cockroach_pgvector_rejection(
+			CockroachDBQueryBuilder::new().build_alter_table_checked(&statement),
+			"pgvector column types",
+		);
+	}
+
+	#[cfg(feature = "pgvector")]
+	#[test]
+	fn checked_create_index_rejects_pgvector_index_methods() {
+		let cases = [
+			(
+				IndexMethod::Hnsw,
+				IndexOptions::Hnsw {
+					m: Some(16),
+					ef_construction: Some(64),
+				},
+				"vector_cosine_ops",
+			),
+			(
+				IndexMethod::Ivfflat,
+				IndexOptions::Ivfflat { lists: Some(100) },
+				"vector_l2_ops",
+			),
+		];
+
+		for (method, options, operator_class) in cases {
+			let mut statement = Query::create_index();
+			statement
+				.name("documents_embedding_idx")
+				.table("documents")
+				.col_with_operator_class("embedding", operator_class)
+				.using(method)
+				.options(options);
+
+			assert_cockroach_pgvector_rejection(
+				CockroachDBQueryBuilder::new().build_create_index_checked(&statement),
+				"approximate vector indexes",
+			);
+		}
+	}
+
+	#[test]
+	fn checked_select_preserves_ordinary_cockroach_sql() {
+		let mut statement = Query::select();
+		statement.column("id").from("documents");
+
+		let (sql, values) = CockroachDBQueryBuilder::new()
+			.build_select_checked(&statement)
+			.unwrap();
+
+		assert_eq!(sql, r#"SELECT "id" FROM "documents""#);
+		assert!(values.is_empty());
+	}
 
 	// FUNCTION tests - verify CockroachDB delegates to PostgreSQL
 	#[test]

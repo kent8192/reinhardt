@@ -1,0 +1,22 @@
+error[E0277]: the trait bound `TypedPredicate<OtherDocument>: QueryFilterInput<support::Document>` is not satisfied
+  --> tests/ui/vector_expression/fail/predicate_model_mismatch.rs:12:50
+   |
+12 |     let _query = QuerySet::<Document>::new().filter(predicate);
+   |                                              ------ ^^^^^^^^^ the trait `QueryFilterInput<support::Document>` is not implemented for `TypedPredicate<OtherDocument>`
+   |                                              |
+   |                                              required by a bound introduced by this call
+   |
+help: the trait `QueryFilterInput<support::Document>` is not implemented for `TypedPredicate<OtherDocument>`
+      but trait `QueryFilterInput<OtherDocument>` is implemented for it
+  --> src/orm/query_fields/expression.rs
+   |
+   | / impl<M> crate::orm::query::QueryFilterInput<M> for TypedPredicate<M>
+   | | where
+   | |     M: Model,
+   | |_____________^
+   = help: for that trait implementation, expected `OtherDocument`, found `support::Document`
+note: required by a bound in `QuerySet::<T>::filter`
+  --> src/orm/query.rs
+   |
+   |     pub fn filter(mut self, filter: impl QueryFilterInput<T>) -> Self {
+   |                                          ^^^^^^^^^^^^^^^^^^^ required by this bound in `QuerySet::<T>::filter`

@@ -63,6 +63,7 @@ struct RecordingExecutor {
 	fetch_one_rows: VecDeque<Row>,
 	fetch_all_rows: VecDeque<Vec<Row>>,
 	fetch_optional_rows: VecDeque<Option<Row>>,
+	fetch_optional_contexts: Vec<Option<reinhardt_db::backends::error::PgvectorOperationKind>>,
 }
 
 #[derive(Debug)]
@@ -158,6 +159,7 @@ impl RecordingExecutor {
 			fetch_one_rows: VecDeque::new(),
 			fetch_all_rows: VecDeque::new(),
 			fetch_optional_rows: VecDeque::new(),
+			fetch_optional_contexts: Vec::new(),
 		}
 	}
 
@@ -246,6 +248,16 @@ impl OrmExecutor for RecordingExecutor {
 		self.fetch_optional_rows
 			.pop_front()
 			.ok_or_else(|| Self::exhausted_error("fetch_optional"))
+	}
+
+	async fn fetch_optional_with_context(
+		&mut self,
+		sql: &str,
+		params: Vec<QueryValue>,
+		context: Option<reinhardt_db::backends::error::PgvectorOperationKind>,
+	) -> reinhardt_core::exception::Result<Option<Row>> {
+		self.fetch_optional_contexts.push(context);
+		self.fetch_optional(sql, params).await
 	}
 }
 
@@ -752,7 +764,13 @@ async fn latest_and_earliest_use_typed_ordering_with_caller_owned_executors() {
 		executor
 			.calls
 			.iter()
-			.all(|call| call.sql.contains("LIMIT 1"))
+			.all(|call| call.sql.contains("LIMIT $1"))
+	);
+	assert!(
+		executor
+			.calls
+			.iter()
+			.all(|call| call.params == vec![QueryValue::Int(1)])
 	);
 
 	let mut transaction_executor =
@@ -794,6 +812,18 @@ async fn latest_and_earliest_use_typed_ordering_with_caller_owned_executors() {
 		Some(2)
 	);
 	assert_eq!(transaction_executor.calls.len(), 4);
+	assert!(
+		transaction_executor
+			.calls
+			.iter()
+			.all(|call| call.sql.contains("LIMIT $1"))
+	);
+	assert!(
+		transaction_executor
+			.calls
+			.iter()
+			.all(|call| call.params == vec![QueryValue::Int(1)])
+	);
 }
 
 #[tokio::test]
@@ -870,11 +900,26 @@ async fn in_bulk_uses_one_typed_in_query_and_returns_ordered_maps() {
 	);
 	assert_eq!(
 		executor.calls[0].sql,
-		"SELECT * FROM \"articles\" WHERE \"article_id\" IN (1, 3, 99)"
+		"SELECT * FROM \"articles\" WHERE \"article_id\" IN ($1, $2, $3)"
 	);
 	assert_eq!(
 		executor.calls[1].sql,
-		"SELECT * FROM \"articles\" WHERE \"article_title\" IN ('first', 'second')"
+		"SELECT * FROM \"articles\" WHERE \"article_title\" IN ($1, $2)"
+	);
+	assert_eq!(
+		executor.calls[0].params,
+		vec![
+			QueryValue::Int(1),
+			QueryValue::Int(3),
+			QueryValue::Int(99)
+		]
+	);
+	assert_eq!(
+		executor.calls[1].params,
+		vec![
+			QueryValue::String("first".to_string()),
+			QueryValue::String("second".to_string())
+		]
 	);
 
 	let mut transaction_executor =
@@ -2023,7 +2068,7 @@ async fn query_execution_uses_the_executor_dialect_and_query_row_decode_path() {
 	let mut executor = RecordingExecutor::new(DatabaseBackend::MySql)
 		.with_fetch_one(article_row(5, "get"))
 		.with_fetch_all(vec![article_row(5, "all")])
-		.with_fetch_all(vec![article_row(5, "first")])
+		.with_fetch_optional(Some(article_row(5, "first")))
 		.with_fetch_all(vec![article_row(5, "one")])
 		.with_fetch_all(vec![article_row(5, "one-or-none")])
 		.with_fetch_all({
@@ -2087,6 +2132,8 @@ async fn query_execution_uses_the_executor_dialect_and_query_row_decode_path() {
 	assert_eq!(executor.calls.len(), 8);
 	assert!(executor.calls[0].sql.contains('?'));
 	assert!(executor.calls.iter().all(|call| !call.sql.contains("$1")));
+	assert_eq!(executor.calls[2].kind, "fetch_optional");
+	assert_eq!(executor.fetch_optional_contexts, vec![None]);
 }
 
 #[tokio::test]

@@ -1,4 +1,4 @@
-use thiserror::Error;
+use std::sync::Arc;
 
 /// Driver-independent classification for database failures.
 #[non_exhaustive]
@@ -37,12 +37,12 @@ pub enum DatabaseErrorKind {
 }
 
 /// Structured database failure retained by the framework error boundary.
-#[derive(Debug, Clone, PartialEq, Eq, Error)]
-#[error("{message}")]
+#[derive(Clone)]
 pub struct DatabaseError {
 	kind: DatabaseErrorKind,
 	message: String,
 	code: Option<String>,
+	source: Option<Arc<dyn std::error::Error + Send + Sync>>,
 }
 
 impl DatabaseError {
@@ -52,12 +52,31 @@ impl DatabaseError {
 			kind,
 			message: message.into(),
 			code: None,
+			source: None,
 		}
 	}
 
 	/// Associates a driver- or database-specific error code with this error.
 	pub fn with_code(mut self, code: impl Into<String>) -> Self {
 		self.code = Some(code.into());
+		self
+	}
+
+	/// Replaces the diagnostic message while retaining classification metadata.
+	pub fn with_message(mut self, message: impl Into<String>) -> Self {
+		self.message = message.into();
+		self
+	}
+
+	/// Retains the typed error that caused this database failure.
+	pub fn with_source(mut self, source: impl std::error::Error + Send + Sync + 'static) -> Self {
+		self.source = Some(Arc::new(source));
+		self
+	}
+
+	/// Retains an already boxed typed database error source.
+	pub fn with_boxed_source(mut self, source: Box<dyn std::error::Error + Send + Sync>) -> Self {
+		self.source = Some(Arc::from(source));
 		self
 	}
 
@@ -77,8 +96,45 @@ impl DatabaseError {
 	}
 }
 
+impl std::fmt::Debug for DatabaseError {
+	fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+		formatter
+			.debug_struct("DatabaseError")
+			.field("kind", &self.kind)
+			.field("message", &self.message)
+			.field("code", &self.code)
+			.field("source", &self.source)
+			.finish()
+	}
+}
+
+impl std::fmt::Display for DatabaseError {
+	fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+		formatter.write_str(&self.message)
+	}
+}
+
+impl std::error::Error for DatabaseError {
+	fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+		self.source
+			.as_deref()
+			.map(|source| source as &(dyn std::error::Error + 'static))
+	}
+}
+
+impl PartialEq for DatabaseError {
+	fn eq(&self, other: &Self) -> bool {
+		self.kind == other.kind && self.message == other.message && self.code == other.code
+	}
+}
+
+impl Eq for DatabaseError {}
+
 #[cfg(test)]
 mod tests {
+	use std::error::Error as _;
+	use std::io;
+
 	use super::{DatabaseError, DatabaseErrorKind};
 
 	#[test]
@@ -93,5 +149,21 @@ mod tests {
 			"The injected database connection is no longer available because its DI scope has ended"
 		);
 		assert_eq!(crate::exception::Error::from(error).status_code(), 500);
+	}
+
+	#[test]
+	fn cloned_database_error_preserves_typed_source() {
+		let error = DatabaseError::new(DatabaseErrorKind::Query, "query failed")
+			.with_source(io::Error::other("driver failure"));
+
+		let cloned = error.clone();
+
+		assert_eq!(cloned.kind(), DatabaseErrorKind::Query);
+		assert!(
+			cloned
+				.source()
+				.and_then(|source| source.downcast_ref::<io::Error>())
+				.is_some()
+		);
 	}
 }

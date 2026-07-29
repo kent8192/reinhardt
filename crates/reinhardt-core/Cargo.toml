@@ -112,6 +112,7 @@ page-hot-reload = ["page"]
 
 # External dependency features
 macros = ["dep:reinhardt-macros"]
+pgvector = ["macros", "reinhardt-macros?/pgvector"]
 
 # Aggregate all core features
 core-full = [

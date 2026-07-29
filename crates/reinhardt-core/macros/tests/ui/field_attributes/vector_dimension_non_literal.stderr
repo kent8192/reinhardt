@@ -1,0 +1,5 @@
+error: Vector dimensions must be an integer literal, for example Vector<1536>
+  --> tests/ui/field_attributes/vector_dimension_non_literal.rs:33:19
+   |
+33 |     embedding: Vector<DIMENSIONS>,
+   |                      ^^^^^^^^^^^^

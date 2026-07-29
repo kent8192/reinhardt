@@ -758,6 +758,7 @@ pub mod db {
 			String,
 			Bytes,
 			Json,
+			Vector(usize),
 			Uuid,
 			Date,
 			Time,
@@ -999,6 +1000,7 @@ pub mod db {
 					DatabaseStorageKind::String => "reinhardt.orm.models.CharField",
 					DatabaseStorageKind::Bytes => "reinhardt.orm.models.BinaryField",
 					DatabaseStorageKind::Json => "reinhardt.orm.models.JsonField",
+					DatabaseStorageKind::Vector(_) => "reinhardt.orm.models.VectorField",
 					DatabaseStorageKind::Uuid => "reinhardt.orm.models.UuidField",
 					DatabaseStorageKind::Date => "reinhardt.orm.models.DateField",
 					DatabaseStorageKind::Time => "reinhardt.orm.models.TimeField",
@@ -1027,11 +1029,44 @@ pub mod db {
 			}
 
 			#[derive(Debug, Clone, PartialEq)]
+			pub enum IndexMetadataType {
+				Hnsw {
+					m: Option<u16>,
+					ef_construction: Option<u16>,
+				},
+				Ivfflat {
+					lists: Option<u32>,
+				},
+			}
+
+			#[derive(Debug, Clone, PartialEq)]
 			pub struct IndexInfo {
 				pub name: String,
 				pub fields: Vec<String>,
 				pub unique: bool,
 				pub condition: Option<String>,
+				pub index_type: Option<IndexMetadataType>,
+				pub operator_class: Option<String>,
+				pub expressions: Option<Vec<String>>,
+			}
+
+			impl IndexInfo {
+				pub fn new(
+					name: impl Into<String>,
+					fields: Vec<String>,
+					unique: bool,
+					condition: Option<String>,
+				) -> Self {
+					Self {
+						name: name.into(),
+						fields,
+						unique,
+						condition,
+						index_type: None,
+						operator_class: None,
+						expressions: None,
+					}
+				}
 			}
 
 			#[derive(Debug, Clone, PartialEq)]
@@ -1108,6 +1143,19 @@ pub mod db {
 	}
 
 	pub mod migrations {
+		pub mod operations {
+			#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+			pub enum IndexType {
+				Hnsw {
+					m: Option<u16>,
+					ef_construction: Option<u16>,
+				},
+				Ivfflat {
+					lists: Option<u32>,
+				},
+			}
+		}
+
 		#[derive(Debug, Clone, PartialEq)]
 		pub enum FieldType {
 			Integer,
@@ -1123,6 +1171,17 @@ pub mod db {
 			Uuid,
 			Json,
 			JsonBinary,
+			Vector { dimensions: usize },
+		}
+
+		#[derive(Debug, Clone, PartialEq)]
+		pub struct IndexDefinition {
+			pub name: String,
+			pub fields: Vec<String>,
+			pub unique: bool,
+			pub index_type: Option<operations::IndexType>,
+			pub operator_class: Option<String>,
+			pub expressions: Option<Vec<String>>,
 		}
 
 		#[derive(Debug, Clone, PartialEq)]
@@ -1152,7 +1211,7 @@ pub mod db {
 		}
 
 		pub mod model_registry {
-			use super::{ConstraintDefinition, FieldType, ForeignKeyInfo};
+			use super::{ConstraintDefinition, FieldType, ForeignKeyInfo, IndexDefinition};
 
 			#[derive(Debug, Clone, PartialEq)]
 			pub struct FieldMetadata {
@@ -1204,6 +1263,8 @@ pub mod db {
 				pub fn add_many_to_many(&mut self, _metadata: ManyToManyMetadata) {}
 
 				pub fn add_constraint(&mut self, _constraint: ConstraintDefinition) {}
+
+				pub fn add_index(&mut self, _index: IndexDefinition) {}
 
 				pub fn add_enum_domain_constraint(
 					&mut self,

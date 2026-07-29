@@ -55,7 +55,9 @@ pub use type_mapping::{TypeMapper, TypeMappingError};
 use super::introspection::DatabaseSchema;
 use super::{MigrationError, Result};
 use quote::ToTokens;
-use std::collections::{HashMap, HashSet};
+#[cfg(any(unix, windows, target_os = "redox"))]
+use std::collections::HashMap;
+use std::collections::HashSet;
 #[cfg(any(target_vendor = "apple", target_os = "linux", target_os = "android"))]
 use std::ffi::CString;
 use std::fs::{self, File, OpenOptions, Permissions};
@@ -287,9 +289,55 @@ struct AtomicWriteFile {
 	bytes: Vec<u8>,
 	original: Option<OriginalFile>,
 	temporary: Option<PathBuf>,
+	installed_identity: Option<InstalledOutputIdentity>,
 	backup: Option<BackupFile>,
 	original_moved: bool,
 	installed: bool,
+}
+
+#[cfg(any(unix, windows, target_os = "redox"))]
+#[derive(Debug)]
+struct InstalledOutputIdentity(same_file::Handle);
+
+#[cfg(not(any(unix, windows, target_os = "redox")))]
+#[derive(Debug)]
+struct InstalledOutputIdentity;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum InstalledDestinationState {
+	Same,
+	Missing,
+	Replaced,
+}
+
+impl InstalledOutputIdentity {
+	#[cfg(any(unix, windows, target_os = "redox"))]
+	fn from_file(file: File) -> io::Result<Self> {
+		same_file::Handle::from_file(file).map(Self)
+	}
+
+	#[cfg(not(any(unix, windows, target_os = "redox")))]
+	fn from_file(file: File) -> io::Result<Self> {
+		drop(file);
+		Err(unsupported_filesystem_probe_error())
+	}
+
+	#[cfg(any(unix, windows, target_os = "redox"))]
+	fn destination_state(&self, destination: &Path) -> io::Result<InstalledDestinationState> {
+		match same_file::Handle::from_path(destination) {
+			Ok(current) if current == self.0 => Ok(InstalledDestinationState::Same),
+			Ok(_) => Ok(InstalledDestinationState::Replaced),
+			Err(error) if error.kind() == io::ErrorKind::NotFound => {
+				Ok(InstalledDestinationState::Missing)
+			}
+			Err(error) => Err(error),
+		}
+	}
+
+	#[cfg(not(any(unix, windows, target_os = "redox")))]
+	fn destination_state(&self, _destination: &Path) -> io::Result<InstalledDestinationState> {
+		Err(unsupported_filesystem_probe_error())
+	}
 }
 
 #[derive(Debug)]
@@ -343,10 +391,11 @@ impl AtomicWriteTransaction {
 
 		temporary_file.write_all(&self.files[index].bytes)?;
 		temporary_file.sync_all()?;
-		drop(temporary_file);
 		if let Some(original) = &self.files[index].original {
-			fs::set_permissions(&temporary, original.permissions.clone())?;
+			temporary_file.set_permissions(original.permissions.clone())?;
 		}
+		self.files[index].installed_identity =
+			Some(InstalledOutputIdentity::from_file(temporary_file)?);
 		Ok(())
 	}
 
@@ -428,17 +477,45 @@ impl AtomicWriteTransaction {
 		let mut failures = Vec::new();
 		for (index, file) in self.files.iter_mut().enumerate().rev() {
 			if file.installed {
-				match faults
+				let state = faults
 					.check(
 						AtomicWritePoint::BeforeRollbackRemoveInstalled,
 						index,
 						&file.destination,
 					)
-					.and_then(|()| fs::remove_file(&file.destination))
-				{
-					Ok(()) => file.installed = false,
+					.and_then(|()| {
+						file.installed_identity
+							.as_ref()
+							.expect("every prepared output records its filesystem identity")
+							.destination_state(&file.destination)
+					});
+				match state {
+					Ok(InstalledDestinationState::Same) => {
+						match fs::remove_file(&file.destination) {
+							Ok(()) => file.installed = false,
+							Err(error) => failures.push(RollbackFailure::new(
+								"remove installed output",
+								&file.destination,
+								error,
+							)),
+						}
+					}
+					Ok(InstalledDestinationState::Missing) => file.installed = false,
+					Ok(InstalledDestinationState::Replaced) => {
+						let mut failure = RollbackFailure::new(
+							"preserve concurrently replaced output",
+							&file.destination,
+							io::Error::other("installed output identity changed"),
+						);
+						if let Some(backup) =
+							file.backup.as_ref().filter(|backup| backup.file.exists())
+						{
+							failure.retained_backup = Some(backup.file.clone());
+						}
+						failures.push(failure);
+					}
 					Err(error) => failures.push(RollbackFailure::new(
-						"remove installed output",
+						"verify installed output identity",
 						&file.destination,
 						error,
 					)),
@@ -651,6 +728,7 @@ fn build_atomic_write_plan(
 			bytes: generated.content.as_bytes().to_vec(),
 			original,
 			temporary: None,
+			installed_identity: None,
 			backup: None,
 			original_moved: false,
 			installed: false,
@@ -1764,6 +1842,77 @@ mod atomic_write_tests {
 			original_mode
 		);
 		assert_eq!(entries(temp_dir.path()), vec!["existing.rs".to_string()]);
+	}
+
+	#[cfg(unix)]
+	#[test]
+	fn rollback_preserves_a_later_successful_force_writer() {
+		use std::os::unix::fs::PermissionsExt;
+
+		let temp_dir = tempfile::Builder::new()
+			.prefix("inspectdb-output-")
+			.tempdir_in("/tmp")
+			.expect("temporary directory should be created");
+		let destination = temp_dir.path().join("existing.rs");
+		fs::write(&destination, b"original bytes").expect("original file should be created");
+		fs::set_permissions(&destination, fs::Permissions::from_mode(0o640))
+			.expect("original permissions should be set");
+		let writer_a = output(&destination, "writer A bytes");
+		let mut writer_b_mode = None;
+		let mut faults = CallbackFaults(|point, index, _path: &Path| {
+			if point == AtomicWritePoint::BeforeBackupCleanup && index == 0 {
+				write_generated_files_atomically(&output(&destination, "writer B bytes"), true)
+					.expect("writer B should complete its force installation");
+				fs::set_permissions(&destination, fs::Permissions::from_mode(0o604))
+					.expect("writer B permissions should be set");
+				writer_b_mode = Some(
+					fs::metadata(&destination)
+						.expect("writer B metadata should be readable")
+						.permissions()
+						.mode() & 0o7777,
+				);
+				return Err(io::Error::other("injected writer A cleanup failure"));
+			}
+			Ok(())
+		});
+
+		let error = write_generated_files_atomically_with_faults(&writer_a, true, &mut faults)
+			.expect_err("writer A cleanup failure should be returned");
+		let error = io_error(error);
+
+		assert_eq!(
+			fs::read(&destination).expect("writer B destination should remain readable"),
+			b"writer B bytes"
+		);
+		assert_eq!(
+			fs::metadata(&destination)
+				.expect("writer B metadata should remain readable")
+				.permissions()
+				.mode() & 0o7777,
+			writer_b_mode.expect("writer B should record its installed mode")
+		);
+		let entries = entries(temp_dir.path());
+		assert_eq!(entries.len(), 2);
+		let backup_name = entries
+			.iter()
+			.find(|entry| entry.starts_with(".existing.rs.reinhardt-backup-"))
+			.expect("writer A original backup should be retained");
+		let backup = temp_dir.path().join(backup_name).join("original");
+		assert_eq!(
+			fs::read(&backup).expect("writer A backup should remain readable"),
+			b"original bytes"
+		);
+		let normalized_parent =
+			fs::canonicalize(temp_dir.path()).expect("test directory should be canonicalizable");
+		let normalized_destination = normalized_parent.join("existing.rs");
+		let normalized_backup = normalized_parent.join(backup_name).join("original");
+		let expected = format!(
+			"injected writer A cleanup failure; rollback failures: preserve concurrently replaced \
+			 output for {normalized_destination:?}: installed output identity changed; original \
+			 backup retained at {normalized_backup:?}"
+		);
+		assert_eq!(error.kind(), io::ErrorKind::Other);
+		assert_eq!(error.to_string(), expected);
 	}
 
 	#[test]

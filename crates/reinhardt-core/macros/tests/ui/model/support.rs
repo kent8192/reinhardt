@@ -104,6 +104,126 @@ pub mod model_info {
 	}
 }
 
+pub mod model_form {
+	pub trait ModelFormPolicy: Send + Sync + 'static {
+		fn allows(field: &str) -> bool;
+	}
+
+	pub struct AllEditableModelFields;
+
+	impl ModelFormPolicy for AllEditableModelFields {
+		fn allows(_field: &str) -> bool {
+			true
+		}
+	}
+
+	pub trait ModelFormSchema {
+		type Model;
+		fn fields() -> &'static [ModelFormFieldDescriptor];
+		fn default_boolean_is_true(_field: &str) -> bool {
+			false
+		}
+		fn relation_target_matches<T: 'static>(_field: &str) -> bool {
+			false
+		}
+	}
+
+	pub trait ModelFormPayload<P: ModelFormPolicy>: Sized {
+		fn supplied_fields(&self) -> Vec<&'static str>;
+		fn forbidden_fields(&self) -> &[&'static str];
+		fn get_json(&self, field: &str) -> Option<serde_json::Value>;
+		fn set_json(
+			&mut self,
+			field: &str,
+			value: serde_json::Value,
+		) -> Result<(), ModelFormPayloadError>;
+	}
+
+	pub trait NativeModelFormPayload: Sized {
+		fn from_native_form_value(value: serde_json::Value) -> Result<Self, serde_json::Error>;
+	}
+
+	/// Mirrors the native unchecked-checkbox normalization required by model-form fixtures.
+	pub fn normalize_native_model_form_value<S, P>(
+		mut value: serde_json::Value,
+	) -> Result<serde_json::Value, serde_json::Error>
+	where
+		S: ModelFormSchema,
+		P: ModelFormPolicy,
+	{
+		if let serde_json::Value::Object(values) = &mut value {
+			for descriptor in S::fields() {
+				if descriptor.editable
+					&& P::allows(descriptor.name)
+					&& matches!(descriptor.kind, ModelFormFieldKind::Boolean)
+					&& !descriptor.nullable
+					&& !descriptor.has_default
+					&& !values.contains_key(descriptor.name)
+				{
+					values.insert(descriptor.name.to_owned(), serde_json::Value::Bool(false));
+				}
+			}
+		}
+		Ok(value)
+	}
+	#[derive(Debug, Clone, Copy, PartialEq)]
+	pub enum ModelFormFieldKind {
+		Text {
+			min_length: Option<usize>,
+			max_length: Option<usize>,
+			multiline: bool,
+		},
+		Email {
+			max_length: Option<usize>,
+		},
+		Url {
+			max_length: Option<usize>,
+		},
+		Integer {
+			min: Option<i64>,
+			max: Option<i64>,
+		},
+		Float {
+			min: Option<f64>,
+			max: Option<f64>,
+		},
+		Decimal,
+		Boolean,
+		Date,
+		Time,
+		DateTime,
+		NaiveDateTime,
+		Uuid,
+		Json,
+	}
+
+	pub trait ModelFormPrimaryKey {
+		const FIELD_KIND: ModelFormFieldKind;
+	}
+
+	pub trait ModelFormPrimaryKeyFields {
+		fn primary_key_fields() -> &'static [&'static str];
+	}
+
+	#[derive(Debug, Clone, Copy, PartialEq)]
+	pub struct ModelFormFieldDescriptor {
+		pub name: &'static str,
+		pub kind: ModelFormFieldKind,
+		pub required: bool,
+		pub has_default: bool,
+		pub nullable: bool,
+		pub editable: bool,
+		pub generated_relation_id: bool,
+	}
+
+	#[derive(Debug, Clone, PartialEq, Eq)]
+	pub enum ModelFormPayloadError {
+		UnknownField { field: String },
+		ForbiddenField { field: String },
+		InvalidValue { field: String, message: String },
+	}
+}
+
 pub mod db {
 	pub mod m2m_naming {
 		pub fn default_through_table(source_table: &str, field_name: &str) -> String {
@@ -643,6 +763,7 @@ pub mod db {
 			Date,
 			Time,
 			DateTime,
+			NaiveDateTime,
 		}
 
 		#[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -778,6 +899,8 @@ pub mod db {
 		scalar_codec!(i32, I32);
 		scalar_codec!(i64, I64);
 		scalar_codec!(String, String);
+		scalar_codec!(chrono::DateTime<chrono::Utc>, DateTime);
+		scalar_codec!(chrono::NaiveDateTime, DateTime);
 
 		impl<S: DatabaseScalar> DatabaseScalar for Option<S> {
 			const STORAGE_KIND: DatabaseStorageKind = S::STORAGE_KIND;
@@ -852,6 +975,19 @@ pub mod db {
 			use super::{DatabaseStorageKind, FieldDomain};
 			use std::collections::HashMap;
 
+			pub fn database_storage_field_type(
+				storage_kind: DatabaseStorageKind,
+				_max_length: Option<u32>,
+			) -> crate::db::migrations::FieldType {
+				match storage_kind {
+					DatabaseStorageKind::DateTime => crate::db::migrations::FieldType::TimestampTz,
+					DatabaseStorageKind::NaiveDateTime => {
+						crate::db::migrations::FieldType::DateTime
+					}
+					_ => crate::db::migrations::FieldType::Json,
+				}
+			}
+
 			pub fn database_field_type_path(storage_kind: DatabaseStorageKind) -> &'static str {
 				match storage_kind {
 					DatabaseStorageKind::Bool => "reinhardt.orm.models.BooleanField",
@@ -868,7 +1004,9 @@ pub mod db {
 					DatabaseStorageKind::Uuid => "reinhardt.orm.models.UuidField",
 					DatabaseStorageKind::Date => "reinhardt.orm.models.DateField",
 					DatabaseStorageKind::Time => "reinhardt.orm.models.TimeField",
-					DatabaseStorageKind::DateTime => "reinhardt.orm.models.DateTimeField",
+					DatabaseStorageKind::DateTime | DatabaseStorageKind::NaiveDateTime => {
+						"reinhardt.orm.models.DateTimeField"
+					}
 				}
 			}
 
@@ -1025,6 +1163,7 @@ pub mod db {
 			VarChar(u32),
 			Boolean,
 			TimestampTz,
+			DateTime,
 			Date,
 			Time,
 			Float,

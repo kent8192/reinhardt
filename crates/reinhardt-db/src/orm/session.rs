@@ -1976,7 +1976,9 @@ fn bind_reinhardt_query_value<'a>(
 		RValue::ChronoDate(None) => query.bind(None::<String>),
 		RValue::ChronoTime(Some(value)) => query.bind(value.to_string()),
 		RValue::ChronoTime(None) => query.bind(None::<String>),
-		RValue::ChronoDateTime(Some(value)) => query.bind(value.and_utc().to_rfc3339()),
+		// A NaiveDateTime targets a SQL timestamp without time zone. Preserve
+		// that distinction instead of introducing a UTC offset while binding.
+		RValue::ChronoDateTime(Some(value)) => query.bind(value.to_string()),
 		RValue::ChronoDateTime(None) => query.bind(None::<String>),
 		RValue::ChronoDateTimeUtc(Some(value)) => query.bind(value.to_rfc3339()),
 		RValue::ChronoDateTimeUtc(None) => query.bind(None::<String>),

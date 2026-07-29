@@ -6,6 +6,9 @@ use crate::model_form::FormModel;
 use serde_json::Value;
 use std::collections::HashMap;
 use std::marker::PhantomData;
+use std::sync::Arc;
+
+type ChoiceLabel<T> = Arc<dyn Fn(&T) -> String + Send + Sync>;
 
 /// A field for selecting a single model instance from a queryset
 ///
@@ -24,9 +27,10 @@ pub struct ModelChoiceField<T: FormModel> {
 	/// Optional initial (default) value for the field.
 	pub initial: Option<Value>,
 	/// The list of model instances to choose from.
-	pub queryset: Vec<T>,
+	queryset: Vec<T>,
 	/// Label for the empty/default option (e.g., "Select one...").
 	pub empty_label: Option<String>,
+	choice_label: Option<ChoiceLabel<T>>,
 	_phantom: PhantomData<T>,
 }
 
@@ -35,42 +39,30 @@ impl<T: FormModel> ModelChoiceField<T> {
 	///
 	/// # Examples
 	///
-	/// ```
+	/// ```rust
 	/// use reinhardt_forms::fields::ModelChoiceField;
 	/// use reinhardt_forms::FormField;
-	/// use reinhardt_forms::FormModel;
-	/// use serde_json::{json, Value};
+	/// use reinhardt_macros::model;
+	/// use serde::{Deserialize, Serialize};
+	/// # mod model_form {
+	/// #     pub use reinhardt_forms::model_form::*;
+	/// # }
 	///
-	/// // Define a simple Category model
-	/// #[derive(Clone)]
+	/// #[model(
+	///     app_label = "forms",
+	///     table_name = "model_choice_categories",
+	///     form = true,
+	///     info = false
+	/// )]
+	/// #[derive(Clone, Deserialize, Serialize)]
 	/// struct Category {
+	///     #[field(primary_key = true)]
 	///     id: i32,
+	///     #[field(max_length = 100)]
 	///     name: String,
 	/// }
 	///
-	/// impl FormModel for Category {
-	///     fn field_names() -> Vec<String> {
-	///         vec!["id".to_string(), "name".to_string()]
-	///     }
-	///
-	///     fn get_field(&self, name: &str) -> Option<Value> {
-	///         match name {
-	///             "id" => Some(json!(self.id)),
-	///             "name" => Some(json!(self.name)),
-	///             _ => None,
-	///         }
-	///     }
-	///
-	///     fn set_field(&mut self, _name: &str, _value: Value) -> Result<(), String> {
-	///         Ok(())
-	///     }
-	///
-	///     fn save(&mut self) -> Result<(), String> {
-	///         Ok(())
-	///     }
-	/// }
-	///
-	/// // Create a queryset with sample categories
+	/// # fn main() {
 	/// let categories = vec![
 	///     Category { id: 1, name: "Technology".to_string() },
 	///     Category { id: 2, name: "Science".to_string() },
@@ -79,6 +71,7 @@ impl<T: FormModel> ModelChoiceField<T> {
 	/// let field = ModelChoiceField::new("category", categories);
 	/// assert_eq!(field.name(), "category");
 	/// assert!(FormField::required(&field));
+	/// # }
 	/// ```
 	pub fn new(name: impl Into<String>, queryset: Vec<T>) -> Self {
 		let mut error_messages = HashMap::new();
@@ -91,7 +84,7 @@ impl<T: FormModel> ModelChoiceField<T> {
 			"Select a valid choice.".to_string(),
 		);
 
-		Self {
+		let mut field = Self {
 			name: name.into(),
 			required: true,
 			error_messages,
@@ -102,12 +95,16 @@ impl<T: FormModel> ModelChoiceField<T> {
 			initial: None,
 			queryset,
 			empty_label: Some("--------".to_string()),
+			choice_label: None,
 			_phantom: PhantomData,
-		}
+		};
+		field.refresh_widget_choices();
+		field
 	}
 	/// Sets whether a selection is required.
 	pub fn required(mut self, required: bool) -> Self {
 		self.required = required;
+		self.refresh_widget_choices();
 		self
 	}
 	/// Sets the help text displayed alongside the field.
@@ -123,7 +120,34 @@ impl<T: FormModel> ModelChoiceField<T> {
 	/// Sets the label for the empty/default option.
 	pub fn empty_label(mut self, label: Option<String>) -> Self {
 		self.empty_label = label;
+		self.refresh_widget_choices();
 		self
+	}
+	/// Uses the supplied function to render each model choice label.
+	///
+	/// This permits human-readable labels for derive-generated [`FormModel`]
+	/// implementations without requiring a conflicting trait implementation.
+	pub fn choice_label(mut self, label: impl Fn(&T) -> String + Send + Sync + 'static) -> Self {
+		self.choice_label = Some(Arc::new(label));
+		self.refresh_widget_choices();
+		self
+	}
+
+	/// Returns the current queryset.
+	pub fn queryset(&self) -> &[T] {
+		&self.queryset
+	}
+
+	/// Replaces the queryset and synchronizes the rendered choices.
+	pub fn set_queryset(&mut self, queryset: Vec<T>) {
+		self.queryset = queryset;
+		self.refresh_widget_choices();
+	}
+
+	fn refresh_widget_choices(&mut self) {
+		self.widget = Widget::Select {
+			choices: self.get_choices(),
+		};
 	}
 	/// Overrides the error message for a specific error type.
 	pub fn error_message(
@@ -138,8 +162,6 @@ impl<T: FormModel> ModelChoiceField<T> {
 
 	/// Get choices from queryset
 	/// Converts model instances to (value, label) pairs for display in select widget
-	// Allow dead_code: API reserved for future widget rendering integration
-	#[allow(dead_code)]
 	fn get_choices(&self) -> Vec<(String, String)> {
 		let mut choices = Vec::new();
 
@@ -150,7 +172,10 @@ impl<T: FormModel> ModelChoiceField<T> {
 		// Convert queryset items to choices
 		for instance in &self.queryset {
 			let value = instance.to_choice_value();
-			let label = instance.to_choice_label();
+			let label = self
+				.choice_label
+				.as_ref()
+				.map_or_else(|| instance.to_choice_label(), |label| label(instance));
 			choices.push((value, label));
 		}
 
@@ -272,7 +297,8 @@ pub struct ModelMultipleChoiceField<T: FormModel> {
 	/// Optional initial (default) value for the field.
 	pub initial: Option<Value>,
 	/// The list of model instances to choose from.
-	pub queryset: Vec<T>,
+	queryset: Vec<T>,
+	choice_label: Option<ChoiceLabel<T>>,
 	_phantom: PhantomData<T>,
 }
 
@@ -281,42 +307,31 @@ impl<T: FormModel> ModelMultipleChoiceField<T> {
 	///
 	/// # Examples
 	///
-	/// ```
+	/// ```rust
 	/// use reinhardt_forms::fields::ModelMultipleChoiceField;
 	/// use reinhardt_forms::FormField;
-	/// use reinhardt_forms::FormModel;
-	/// use serde_json::{json, Value};
+	/// use reinhardt_macros::model;
+	/// use serde::{Deserialize, Serialize};
+	/// use serde_json::json;
+	/// # mod model_form {
+	/// #     pub use reinhardt_forms::model_form::*;
+	/// # }
 	///
-	/// // Define a simple Tag model
-	/// #[derive(Clone)]
+	/// #[model(
+	///     app_label = "forms",
+	///     table_name = "model_multiple_choice_tags",
+	///     form = true,
+	///     info = false
+	/// )]
+	/// #[derive(Clone, Deserialize, Serialize)]
 	/// struct Tag {
+	///     #[field(primary_key = true)]
 	///     id: i32,
+	///     #[field(max_length = 100)]
 	///     name: String,
 	/// }
 	///
-	/// impl FormModel for Tag {
-	///     fn field_names() -> Vec<String> {
-	///         vec!["id".to_string(), "name".to_string()]
-	///     }
-	///
-	///     fn get_field(&self, name: &str) -> Option<Value> {
-	///         match name {
-	///             "id" => Some(json!(self.id)),
-	///             "name" => Some(json!(self.name)),
-	///             _ => None,
-	///         }
-	///     }
-	///
-	///     fn set_field(&mut self, _name: &str, _value: Value) -> Result<(), String> {
-	///         Ok(())
-	///     }
-	///
-	///     fn save(&mut self) -> Result<(), String> {
-	///         Ok(())
-	///     }
-	/// }
-	///
-	/// // Create a queryset with sample tags
+	/// # fn main() {
 	/// let tags = vec![
 	///     Tag { id: 1, name: "rust".to_string() },
 	///     Tag { id: 2, name: "programming".to_string() },
@@ -330,6 +345,7 @@ impl<T: FormModel> ModelMultipleChoiceField<T> {
 	/// // Test with multiple selections
 	/// let result = field.clean(Some(&json!(["1", "2"])));
 	/// assert!(result.is_ok());
+	/// # }
 	/// ```
 	pub fn new(name: impl Into<String>, queryset: Vec<T>) -> Self {
 		let mut error_messages = HashMap::new();
@@ -346,7 +362,7 @@ impl<T: FormModel> ModelMultipleChoiceField<T> {
 			"Enter a list of values.".to_string(),
 		);
 
-		Self {
+		let mut field = Self {
 			name: name.into(),
 			required: true,
 			error_messages,
@@ -356,12 +372,16 @@ impl<T: FormModel> ModelMultipleChoiceField<T> {
 			help_text: String::new(),
 			initial: None,
 			queryset,
+			choice_label: None,
 			_phantom: PhantomData,
-		}
+		};
+		field.refresh_widget_choices();
+		field
 	}
 	/// Sets whether at least one selection is required.
 	pub fn required(mut self, required: bool) -> Self {
 		self.required = required;
+		self.refresh_widget_choices();
 		self
 	}
 	/// Sets the help text displayed alongside the field.
@@ -373,6 +393,32 @@ impl<T: FormModel> ModelMultipleChoiceField<T> {
 	pub fn initial(mut self, value: Value) -> Self {
 		self.initial = Some(value);
 		self
+	}
+	/// Uses the supplied function to render each model choice label.
+	///
+	/// This permits human-readable labels for derive-generated [`FormModel`]
+	/// implementations without requiring a conflicting trait implementation.
+	pub fn choice_label(mut self, label: impl Fn(&T) -> String + Send + Sync + 'static) -> Self {
+		self.choice_label = Some(Arc::new(label));
+		self.refresh_widget_choices();
+		self
+	}
+
+	/// Returns the current queryset.
+	pub fn queryset(&self) -> &[T] {
+		&self.queryset
+	}
+
+	/// Replaces the queryset and synchronizes the rendered choices.
+	pub fn set_queryset(&mut self, queryset: Vec<T>) {
+		self.queryset = queryset;
+		self.refresh_widget_choices();
+	}
+
+	fn refresh_widget_choices(&mut self) {
+		self.widget = Widget::Select {
+			choices: self.get_choices(),
+		};
 	}
 	/// Overrides the error message for a specific error type.
 	pub fn error_message(
@@ -386,15 +432,16 @@ impl<T: FormModel> ModelMultipleChoiceField<T> {
 	}
 
 	/// Get choices from queryset
-	// Allow dead_code: API reserved for future widget rendering integration
-	#[allow(dead_code)]
 	fn get_choices(&self) -> Vec<(String, String)> {
 		let mut choices = Vec::new();
 
 		// Convert queryset items to choices
 		for instance in &self.queryset {
 			let value = instance.to_choice_value();
-			let label = instance.to_choice_label();
+			let label = self
+				.choice_label
+				.as_ref()
+				.map_or_else(|| instance.to_choice_label(), |label| label(instance));
 			choices.push((value, label));
 		}
 
@@ -523,34 +570,23 @@ impl<T: FormModel> FormField for ModelMultipleChoiceField<T> {
 mod tests {
 	use super::*;
 	use crate::FormField;
+	use reinhardt_macros::model;
+	use serde::{Deserialize, Serialize};
 	use serde_json::json;
 
 	// Mock model for testing
+	#[model(
+		app_label = "forms",
+		table_name = "model_choice_test_models",
+		form = true,
+		info = false
+	)]
+	#[derive(Clone, Deserialize, Serialize)]
 	struct TestModel {
+		#[field(primary_key = true)]
 		id: i32,
+		#[field(max_length = 100)]
 		name: String,
-	}
-
-	impl FormModel for TestModel {
-		fn field_names() -> Vec<String> {
-			vec!["id".to_string(), "name".to_string()]
-		}
-
-		fn get_field(&self, name: &str) -> Option<Value> {
-			match name {
-				"id" => Some(Value::Number(self.id.into())),
-				"name" => Some(Value::String(self.name.clone())),
-				_ => None,
-			}
-		}
-
-		fn set_field(&mut self, _name: &str, _value: Value) -> Result<(), String> {
-			Ok(())
-		}
-
-		fn save(&mut self) -> Result<(), String> {
-			Ok(())
-		}
 	}
 
 	#[test]
@@ -566,10 +602,29 @@ mod tests {
 			},
 		];
 
+		assert_eq!(queryset[0].to_choice_label(), "1");
+		assert_eq!(queryset[0].to_choice_value(), "1");
 		let field = ModelChoiceField::new("choice", queryset);
 
 		assert_eq!(field.name(), "choice");
 		assert!(FormField::required(&field));
+	}
+
+	#[test]
+	fn model_choice_field_uses_custom_choice_label() {
+		let field = ModelChoiceField::new(
+			"choice",
+			vec![TestModel {
+				id: 1,
+				name: "Option 1".to_string(),
+			}],
+		)
+		.choice_label(|model| model.name.clone());
+
+		assert_eq!(
+			field.get_choices(),
+			vec![("1".to_string(), "Option 1".to_string())]
+		);
 	}
 
 	#[test]

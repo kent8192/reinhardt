@@ -192,6 +192,7 @@ pub fn database_field_type_path(storage_kind: DatabaseStorageKind) -> &'static s
 		DatabaseStorageKind::Date => "reinhardt.orm.models.DateField",
 		DatabaseStorageKind::Time => "reinhardt.orm.models.TimeField",
 		DatabaseStorageKind::DateTime => "reinhardt.orm.models.DateTimeField",
+		DatabaseStorageKind::NaiveDateTime => "reinhardt.orm.models.DateTimeField",
 	}
 }
 
@@ -225,6 +226,7 @@ pub fn database_storage_field_type(
 		DatabaseStorageKind::Date => FieldType::Date,
 		DatabaseStorageKind::Time => FieldType::Time,
 		DatabaseStorageKind::DateTime => FieldType::TimestampTz,
+		DatabaseStorageKind::NaiveDateTime => FieldType::DateTime,
 	}
 }
 

@@ -3,9 +3,15 @@
 //! This module provides advanced FormSet features including inline formsets,
 //! model-based formsets, and dynamic formset generation.
 
-use crate::FormError;
 use crate::formset::FormSet;
-use crate::model_form::{FormModel, ModelForm};
+use crate::model_form::{FormModel, ModelForm, ModelFormError, ModelFormPersistenceMode};
+use reinhardt_core::model_form::{
+	AllEditableModelFields, ModelFormFieldKind, ModelFormPolicy, ModelFormPrimaryKey,
+	ModelFormPrimaryKeyFields, ModelFormSchema,
+};
+use reinhardt_db::orm::OrmExecutor;
+use reinhardt_db::orm::transaction::AtomicTransactionOutcome;
+use serde::Serialize;
 use std::marker::PhantomData;
 
 /// InlineFormSet for managing forms related to a parent model
@@ -14,15 +20,22 @@ use std::marker::PhantomData;
 /// similar to Django's inline formsets for admin.
 pub struct InlineFormSet<P: FormModel, C: FormModel> {
 	parent: P,
+	parent_persistence_mode: ModelFormPersistenceMode,
+	pending_parent_save: Option<(AtomicTransactionOutcome, P, ModelFormPersistenceMode)>,
 	_formset: FormSet,
 	fk_field: String,
-	child_forms: Vec<ModelForm<C>>,
+	child_forms: Vec<ModelForm<C, AllEditableModelFields>>,
 	_phantom_parent: PhantomData<P>,
 	_phantom_child: PhantomData<C>,
 }
 
 impl<P: FormModel, C: FormModel> InlineFormSet<P, C> {
-	/// Create a new InlineFormSet
+	/// Creates an inline formset using the legacy primary-key heuristic.
+	///
+	/// A missing primary key or numeric zero sentinel selects create; any other
+	/// primary key selects update. Models with assigned primary keys, including
+	/// UUIDs, must use [`Self::for_create`] because this constructor cannot
+	/// distinguish a new assigned identifier from an existing row.
 	///
 	/// # Arguments
 	///
@@ -36,8 +49,38 @@ impl<P: FormModel, C: FormModel> InlineFormSet<P, C> {
 	/// let formset = InlineFormSet::new(parent, "author_id".to_string());
 	/// ```
 	pub fn new(parent: P, fk_field: String) -> Self {
+		let primary_key = parent.primary_key();
+		let uses_zero_sentinel = P::primary_key_uses_zero_sentinel()
+			&& primary_key
+				.as_ref()
+				.is_some_and(|value| value.to_string() == "0");
+		let mode = if primary_key.is_some() && !uses_zero_sentinel {
+			ModelFormPersistenceMode::Update
+		} else {
+			ModelFormPersistenceMode::Create
+		};
+		Self::with_parent_mode(parent, fk_field, mode)
+	}
+
+	/// Creates an inline formset that inserts the parent before saving children.
+	pub fn for_create(parent: P, fk_field: String) -> Self {
+		Self::with_parent_mode(parent, fk_field, ModelFormPersistenceMode::Create)
+	}
+
+	/// Creates an inline formset that updates the parent before saving children.
+	pub fn for_update(parent: P, fk_field: String) -> Self {
+		Self::with_parent_mode(parent, fk_field, ModelFormPersistenceMode::Update)
+	}
+
+	fn with_parent_mode(
+		parent: P,
+		fk_field: String,
+		parent_persistence_mode: ModelFormPersistenceMode,
+	) -> Self {
 		Self {
 			parent,
+			parent_persistence_mode,
+			pending_parent_save: None,
 			_formset: FormSet::new("inline".to_string()),
 			fk_field,
 			child_forms: Vec::new(),
@@ -47,7 +90,7 @@ impl<P: FormModel, C: FormModel> InlineFormSet<P, C> {
 	}
 
 	/// Add a child form to the formset
-	pub fn add_child_form(&mut self, form: ModelForm<C>) {
+	pub fn add_child_form(&mut self, form: ModelForm<C, AllEditableModelFields>) {
 		self.child_forms.push(form);
 	}
 
@@ -62,7 +105,7 @@ impl<P: FormModel, C: FormModel> InlineFormSet<P, C> {
 	}
 
 	/// Get all child forms
-	pub fn child_forms(&self) -> &[ModelForm<C>] {
+	pub fn child_forms(&self) -> &[ModelForm<C, AllEditableModelFields>] {
 		&self.child_forms
 	}
 
@@ -73,30 +116,160 @@ impl<P: FormModel, C: FormModel> InlineFormSet<P, C> {
 	///
 	/// # Errors
 	///
-	/// Returns an error if any save operation fails or if the parent model
-	/// does not have an `id` field after saving.
-	pub fn save(&mut self) -> Result<(), FormError> {
-		// Save parent first
-		self.parent
-			.save()
-			.map_err(|e| FormError::Validation(format!("Failed to save parent: {}", e)))?;
-
-		// Get parent ID to set as foreign key on child instances
-		let parent_id = self.parent.get_field("id").ok_or_else(|| {
-			FormError::Validation("Parent model does not have an 'id' field".to_string())
-		})?;
+	/// Returns an error if any save operation fails, the child foreign-key field
+	/// cannot accept the parent's primary-key kind, or the parent model does not
+	/// expose a primary key after saving.
+	pub async fn save(&mut self, executor: &mut dyn OrmExecutor) -> Result<(), ModelFormError>
+	where
+		P::PrimaryKey: Serialize,
+		P: ModelFormPrimaryKey + ModelFormPrimaryKeyFields + 'static,
+	{
+		self.finalize_parent_transaction()?;
+		self.validate_foreign_key_kind()?;
+		for child_form in &mut self.child_forms {
+			child_form.finalize_transaction()?;
+		}
+		// A known parent key is trusted formset context, so child validators must
+		// observe it before validation rather than a deferred placeholder.
+		let parent_id_is_zero_sentinel = P::primary_key_uses_zero_sentinel()
+			&& self
+				.parent
+				.primary_key()
+				.as_ref()
+				.is_some_and(|value| value.to_string() == "0");
+		if let Some(parent_id) = self
+			.parent
+			.primary_key()
+			.filter(|_| !parent_id_is_zero_sentinel)
+		{
+			let parent_id = serde_json::to_value(parent_id).map_err(|error| {
+				ModelFormError::FieldValidation {
+					errors: std::collections::HashMap::from([(
+						self.fk_field.clone(),
+						vec![error.to_string()],
+					)]),
+				}
+			})?;
+			for child_form in &mut self.child_forms {
+				child_form.set_trusted_field_value(&self.fk_field, parent_id.clone())?;
+			}
+		}
+		if !self.is_valid() {
+			return Err(ModelFormError::ModelValidation {
+				errors: vec!["inline formset contains invalid child fields".to_string()],
+			});
+		}
+		let parent_before_save = self.parent.clone();
+		let parent_mode_before_save = self.parent_persistence_mode;
+		if let Err(error) =
+			FormModel::save_with_mode(&mut self.parent, executor, self.parent_persistence_mode)
+				.await
+		{
+			if matches!(error, ModelFormError::PersistenceAfterCreate { .. }) {
+				if let Some(outcome) = executor.transaction_outcome() {
+					self.pending_parent_save =
+						Some((outcome, parent_before_save, parent_mode_before_save));
+				} else {
+					self.parent_persistence_mode = ModelFormPersistenceMode::Update;
+				}
+			}
+			return Err(error);
+		}
+		if let Some(outcome) = executor.transaction_outcome() {
+			self.pending_parent_save = Some((outcome, parent_before_save, parent_mode_before_save));
+		} else {
+			self.parent_persistence_mode = ModelFormPersistenceMode::Update;
+		}
+		let parent_id = self
+			.parent
+			.primary_key()
+			.ok_or(ModelFormError::MissingModelField {
+				field: P::primary_key_field(),
+			})?;
+		let parent_id =
+			serde_json::to_value(parent_id).map_err(|error| ModelFormError::FieldValidation {
+				errors: std::collections::HashMap::from([(
+					self.fk_field.clone(),
+					vec![error.to_string()],
+				)]),
+			})?;
 
 		// Save each child with the foreign key set to the parent ID
 		let fk_field = self.fk_field.clone();
 		for child_form in &mut self.child_forms {
 			// Set the foreign key on the child instance before saving
-			child_form.set_field_value(&fk_field, parent_id.clone());
-
-			child_form
-				.save()
-				.map_err(|e| FormError::Validation(format!("Failed to save child: {}", e)))?;
+			child_form.set_trusted_field_value(&fk_field, parent_id.clone())?;
+			child_form.save(executor).await?;
 		}
 
+		Ok(())
+	}
+
+	fn finalize_parent_transaction(&mut self) -> Result<(), ModelFormError> {
+		let Some((outcome, parent_before_save, mode_before_save)) = self.pending_parent_save.take()
+		else {
+			return Ok(());
+		};
+		if outcome.is_committed() {
+			self.parent_persistence_mode = ModelFormPersistenceMode::Update;
+			return Ok(());
+		}
+		if outcome.is_rolled_back() {
+			self.parent = parent_before_save;
+			self.parent_persistence_mode = mode_before_save;
+			return Ok(());
+		}
+		self.pending_parent_save = Some((outcome, parent_before_save, mode_before_save));
+		Err(ModelFormError::TransactionOutcomePending)
+	}
+
+	fn validate_foreign_key_kind(&self) -> Result<(), ModelFormError>
+	where
+		P: ModelFormPrimaryKey + ModelFormPrimaryKeyFields + 'static,
+	{
+		let descriptor = C::Schema::fields()
+			.iter()
+			.find(|descriptor| descriptor.name == self.fk_field);
+		let child = match descriptor {
+			Some(descriptor) if !descriptor.generated_relation_id => {
+				return Err(foreign_key_validation_error(
+					&self.fk_field,
+					"foreign key field is not a generated relationship identifier",
+				));
+			}
+			Some(_descriptor) if !C::Schema::relation_target_matches::<P>(&self.fk_field) => {
+				return Err(foreign_key_validation_error(
+					&self.fk_field,
+					"foreign key field does not target the parent model",
+				));
+			}
+			Some(descriptor) => descriptor.kind,
+			None => match C::trusted_relation_field_kind(&self.fk_field) {
+				Some(kind) if C::Schema::relation_target_matches::<P>(&self.fk_field) => kind,
+				Some(_) => {
+					return Err(foreign_key_validation_error(
+						&self.fk_field,
+						"foreign key field does not target the parent model",
+					));
+				}
+				None => {
+					return Err(foreign_key_validation_error(
+						&self.fk_field,
+						"unknown trusted foreign key field",
+					));
+				}
+			},
+		};
+		if !foreign_key_kinds_are_compatible(P::FIELD_KIND, child) {
+			return Err(ModelFormError::FieldValidation {
+				errors: std::collections::HashMap::from([(
+					self.fk_field.clone(),
+					vec![
+						"foreign key field is incompatible with the parent primary key".to_owned(),
+					],
+				)]),
+			});
+		}
 		Ok(())
 	}
 
@@ -105,8 +278,19 @@ impl<P: FormModel, C: FormModel> InlineFormSet<P, C> {
 		let mut all_valid = true;
 
 		for child_form in &mut self.child_forms {
-			if !child_form.is_valid() {
-				all_valid = false;
+			match child_form.build_instance() {
+				Ok(_) => {}
+				Err(ModelFormError::MissingModelField { field }) if field == self.fk_field => {
+					// The trusted parent key is assigned after the create parent has been saved,
+					// but every other required child field must still be validated first.
+					if !child_form.is_valid_with_deferred_required_field(&self.fk_field) {
+						all_valid = false;
+					}
+				}
+				Err(_) => {
+					child_form.is_valid();
+					all_valid = false;
+				}
 			}
 		}
 
@@ -114,11 +298,25 @@ impl<P: FormModel, C: FormModel> InlineFormSet<P, C> {
 	}
 }
 
+fn foreign_key_validation_error(field: &str, message: &str) -> ModelFormError {
+	ModelFormError::FieldValidation {
+		errors: std::collections::HashMap::from([(field.to_owned(), vec![message.to_owned()])]),
+	}
+}
+
+fn foreign_key_kinds_are_compatible(parent: ModelFormFieldKind, child: ModelFormFieldKind) -> bool {
+	std::mem::discriminant(&parent) == std::mem::discriminant(&child)
+}
+
 /// ModelFormSet for managing multiple model instances
 ///
 /// This is similar to the base FormSet but specifically designed for model instances.
-pub struct ModelFormSet<T: FormModel> {
-	forms: Vec<ModelForm<T>>,
+pub struct ModelFormSet<T, P = AllEditableModelFields>
+where
+	T: FormModel,
+	P: ModelFormPolicy,
+{
+	forms: Vec<ModelForm<T, P>>,
 	prefix: String,
 	can_delete: bool,
 	can_order: bool,
@@ -126,10 +324,14 @@ pub struct ModelFormSet<T: FormModel> {
 	max_num: Option<usize>,
 	min_num: usize,
 	errors: Vec<String>,
-	_phantom: PhantomData<T>,
+	_phantom: PhantomData<(T, P)>,
 }
 
-impl<T: FormModel> ModelFormSet<T> {
+impl<T, P> ModelFormSet<T, P>
+where
+	T: FormModel,
+	P: ModelFormPolicy,
+{
 	/// Create a new ModelFormSet
 	///
 	/// # Examples
@@ -184,7 +386,7 @@ impl<T: FormModel> ModelFormSet<T> {
 	/// Add a model form to the formset.
 	///
 	/// Returns an error if adding the form would exceed `max_num`.
-	pub fn add_form(&mut self, form: ModelForm<T>) -> Result<(), String> {
+	pub fn add_form(&mut self, form: ModelForm<T, P>) -> Result<(), String> {
 		if let Some(max) = self.max_num
 			&& self.forms.len() >= max
 		{
@@ -198,43 +400,54 @@ impl<T: FormModel> ModelFormSet<T> {
 	}
 
 	/// Get all forms
-	pub fn forms(&self) -> &[ModelForm<T>] {
+	pub fn forms(&self) -> &[ModelForm<T, P>] {
 		&self.forms
 	}
 
 	/// Get mutable access to forms
-	pub fn forms_mut(&mut self) -> &mut Vec<ModelForm<T>> {
+	pub fn forms_mut(&mut self) -> &mut Vec<ModelForm<T, P>> {
 		&mut self.forms
 	}
 
 	/// Validate all forms in the formset
 	pub fn is_valid(&mut self) -> bool {
-		self.errors.clear();
-
 		let mut all_valid = true;
 		for form in &mut self.forms {
-			if !form.is_valid() {
+			if form.is_submission_candidate() && !form.is_valid() {
 				all_valid = false;
 			}
 		}
 
-		// Check minimum number
-		if self.forms.len() < self.min_num {
+		self.validate_cardinality().is_ok() && all_valid
+	}
+
+	fn validate_cardinality(&mut self) -> Result<(), ModelFormError> {
+		self.errors.clear();
+		let candidate_count = self
+			.forms
+			.iter()
+			.filter(|form| form.is_submission_candidate())
+			.count();
+
+		if candidate_count < self.min_num {
 			self.errors
 				.push(format!("Please submit at least {} forms", self.min_num));
-			all_valid = false;
 		}
 
-		// Check maximum number
 		if let Some(max) = self.max_num
-			&& self.forms.len() > max
+			&& candidate_count > max
 		{
 			self.errors
 				.push(format!("Please submit no more than {} forms", max));
-			all_valid = false;
 		}
 
-		all_valid
+		if self.errors.is_empty() {
+			Ok(())
+		} else {
+			Err(ModelFormError::ModelValidation {
+				errors: self.errors.clone(),
+			})
+		}
 	}
 
 	/// Get validation errors
@@ -243,19 +456,26 @@ impl<T: FormModel> ModelFormSet<T> {
 	}
 
 	/// Save all forms in the formset
-	pub fn save(&mut self) -> Result<(), FormError> {
-		if !self.is_valid() {
-			return Err(FormError::Validation(
-				"Cannot save invalid formset".to_string(),
-			));
-		}
-
+	pub async fn save(&mut self, executor: &mut dyn OrmExecutor) -> Result<Vec<T>, ModelFormError> {
+		self.validate_cardinality()?;
 		for form in &mut self.forms {
-			form.save()
-				.map_err(|e| FormError::Validation(format!("Failed to save form: {}", e)))?;
+			if form.is_submission_candidate() {
+				form.build_instance()?;
+			}
+		}
+		let mut saved = Vec::with_capacity(
+			self.forms
+				.iter()
+				.filter(|form| form.is_submission_candidate())
+				.count(),
+		);
+		for form in &mut self.forms {
+			if form.is_submission_candidate() {
+				saved.push(form.save(executor).await?);
+			}
 		}
 
-		Ok(())
+		Ok(saved)
 	}
 
 	/// Get the formset prefix
@@ -440,7 +660,24 @@ impl FormSetFactory {
 	///
 	/// let formset = factory.create_model_formset::<User>();
 	/// ```
-	pub fn create_model_formset<T: FormModel>(&self) -> ModelFormSet<T> {
+	pub fn create_model_formset<T>(&self) -> ModelFormSet<T, AllEditableModelFields>
+	where
+		T: FormModel,
+	{
+		ModelFormSet::new(self.prefix.clone())
+			.with_extra(self.extra)
+			.with_can_delete(self.can_delete)
+			.with_can_order(self.can_order)
+			.with_max_num(self.max_num)
+			.with_min_num(self.min_num)
+	}
+
+	/// Creates a model formset using an explicit generated field policy.
+	pub fn create_model_formset_with_policy<T, P>(&self) -> ModelFormSet<T, P>
+	where
+		T: FormModel,
+		P: ModelFormPolicy,
+	{
 		ModelFormSet::new(self.prefix.clone())
 			.with_extra(self.extra)
 			.with_can_delete(self.can_delete)
@@ -453,136 +690,266 @@ impl FormSetFactory {
 #[cfg(test)]
 mod tests {
 	use super::*;
-	use crate::ModelFormConfig;
-	use crate::model_form::FieldType;
-	use serde_json::Value;
+	use std::collections::VecDeque;
+	use std::sync::Arc;
+	use std::sync::atomic::{AtomicUsize, Ordering};
+
+	use reinhardt_core::exception::{DatabaseError, DatabaseErrorKind, Error};
+	use reinhardt_db::associations::ForeignKeyField;
+	use reinhardt_db::orm::connection::{
+		DatabaseBackend, OrmExecutor, QueryResult, QueryValue, Row,
+	};
+	use reinhardt_macros::model;
+	use serde::{Deserialize, Serialize};
+	use serde_json::json;
 
 	// Test model implementation
-	#[derive(Clone)]
+	#[model(
+		app_label = "forms",
+		table_name = "advanced_formset_test_models",
+		form = true,
+		info = false
+	)]
+	#[derive(Clone, Deserialize, Serialize)]
 	struct TestModel {
+		#[field(primary_key = true)]
 		id: Option<i64>,
+		#[field(max_length = 100)]
 		name: String,
+		#[field(max_length = 254)]
 		email: String,
 	}
 
-	impl FormModel for TestModel {
-		fn field_names() -> Vec<String> {
-			vec!["id".to_string(), "name".to_string(), "email".to_string()]
-		}
-
-		fn field_type(name: &str) -> Option<FieldType> {
-			match name {
-				"id" => Some(FieldType::Integer),
-				"name" => Some(FieldType::Char {
-					max_length: Some(100),
-				}),
-				"email" => Some(FieldType::Email),
-				_ => None,
-			}
-		}
-
-		fn get_field(&self, name: &str) -> Option<Value> {
-			match name {
-				"id" => self.id.map(|id| Value::Number(id.into())),
-				"name" => Some(Value::String(self.name.clone())),
-				"email" => Some(Value::String(self.email.clone())),
-				_ => None,
-			}
-		}
-
-		fn set_field(&mut self, name: &str, value: Value) -> Result<(), String> {
-			match name {
-				"id" => {
-					self.id = value.as_i64();
-					Ok(())
-				}
-				"name" => {
-					self.name = value
-						.as_str()
-						.ok_or("Expected string for name")?
-						.to_string();
-					Ok(())
-				}
-				"email" => {
-					self.email = value
-						.as_str()
-						.ok_or("Expected string for email")?
-						.to_string();
-					Ok(())
-				}
-				_ => Err(format!("Unknown field: {}", name)),
-			}
-		}
-
-		fn save(&mut self) -> Result<(), String> {
-			if self.id.is_none() {
-				self.id = Some(1);
-			}
-			Ok(())
-		}
+	#[model(
+		app_label = "forms",
+		table_name = "advanced_formset_default_models",
+		form = true,
+		info = false
+	)]
+	#[derive(Clone, Deserialize, Serialize)]
+	struct AllDefaultModel {
+		#[field(primary_key = true)]
+		id: Option<i64>,
+		#[field(max_length = 100, default = "generated")]
+		name: String,
+		#[field(default = true)]
+		enabled: bool,
 	}
 
 	// Test child model
-	#[derive(Clone)]
+	#[model(
+		app_label = "forms",
+		table_name = "advanced_formset_child_models",
+		form = true,
+		info = false
+	)]
+	#[derive(Clone, Deserialize, Serialize)]
 	struct ChildModel {
+		#[field(primary_key = true)]
 		id: Option<i64>,
-		parent_id: Option<i64>,
+		#[rel(foreign_key, related_name = "child_models", null = true)]
+		parent: ForeignKeyField<TestModel>,
+		#[field(max_length = 1_000)]
 		content: String,
 	}
 
-	impl FormModel for ChildModel {
-		fn field_names() -> Vec<String> {
-			vec![
-				"id".to_string(),
-				"parent_id".to_string(),
-				"content".to_string(),
-			]
-		}
+	#[model(
+		app_label = "forms",
+		table_name = "advanced_formset_required_child_models",
+		form = true,
+		info = false
+	)]
+	#[derive(Clone, Deserialize, Serialize)]
+	struct RequiredChildModel {
+		#[field(primary_key = true)]
+		id: Option<i64>,
+		#[rel(foreign_key, related_name = "required_child_models")]
+		parent: ForeignKeyField<TestModel>,
+		#[field(max_length = 1_000)]
+		content: String,
+	}
 
-		fn field_type(name: &str) -> Option<FieldType> {
-			match name {
-				"id" | "parent_id" => Some(FieldType::Integer),
-				"content" => Some(FieldType::Text),
-				_ => None,
+	#[model(
+		app_label = "forms",
+		table_name = "advanced_formset_scalar_child_models",
+		form = true,
+		info = false
+	)]
+	#[derive(Clone, Deserialize, Serialize)]
+	struct ScalarChildModel {
+		#[field(primary_key = true)]
+		id: Option<i64>,
+		position: i64,
+		#[field(max_length = 1_000)]
+		content: String,
+	}
+
+	#[model(
+		app_label = "forms",
+		table_name = "advanced_formset_alternate_parents",
+		form = true,
+		info = false
+	)]
+	#[derive(Clone, Deserialize, Serialize)]
+	struct AlternateParent {
+		#[field(primary_key = true)]
+		id: Option<i64>,
+		#[field(max_length = 100)]
+		name: String,
+	}
+
+	#[model(
+		app_label = "forms",
+		table_name = "advanced_formset_alternate_children",
+		form = true,
+		info = false
+	)]
+	#[derive(Clone, Deserialize, Serialize)]
+	struct AlternateChildModel {
+		#[field(primary_key = true)]
+		id: Option<i64>,
+		#[rel(foreign_key, related_name = "alternate_child_models")]
+		parent: ForeignKeyField<AlternateParent>,
+		#[field(max_length = 1_000)]
+		content: String,
+	}
+
+	#[model(
+		app_label = "forms",
+		table_name = "advanced_formset_uuid_parents",
+		form = true,
+		info = false
+	)]
+	#[derive(Clone, Deserialize, Serialize)]
+	struct UuidParent {
+		#[field(primary_key = true, include_in_new = false)]
+		id: uuid::Uuid,
+		#[field(max_length = 100)]
+		name: String,
+	}
+
+	#[model(
+		app_label = "forms",
+		table_name = "advanced_formset_uuid_children",
+		form = true,
+		info = false
+	)]
+	#[derive(Clone, Deserialize, Serialize)]
+	struct UuidChild {
+		#[field(primary_key = true)]
+		id: Option<i64>,
+		#[rel(foreign_key, related_name = "uuid_children", null = true)]
+		parent: ForeignKeyField<UuidParent>,
+		#[field(max_length = 1_000)]
+		content: String,
+	}
+
+	#[derive(Debug)]
+	struct FormsetExecutor {
+		rows: VecDeque<Result<Row, Error>>,
+		fetch_one_calls: usize,
+		queries: Vec<String>,
+	}
+
+	impl FormsetExecutor {
+		fn new(rows: impl IntoIterator<Item = Result<Row, Error>>) -> Self {
+			Self {
+				rows: rows.into_iter().collect(),
+				fetch_one_calls: 0,
+				queries: Vec::new(),
 			}
 		}
+	}
 
-		fn get_field(&self, name: &str) -> Option<Value> {
-			match name {
-				"id" => self.id.map(|id| Value::Number(id.into())),
-				"parent_id" => self.parent_id.map(|id| Value::Number(id.into())),
-				"content" => Some(Value::String(self.content.clone())),
-				_ => None,
-			}
+	#[reinhardt_core::async_trait]
+	impl OrmExecutor for FormsetExecutor {
+		fn backend(&self) -> DatabaseBackend {
+			DatabaseBackend::Postgres
 		}
 
-		fn set_field(&mut self, name: &str, value: Value) -> Result<(), String> {
-			match name {
-				"id" => {
-					self.id = value.as_i64();
-					Ok(())
-				}
-				"parent_id" => {
-					self.parent_id = value.as_i64();
-					Ok(())
-				}
-				"content" => {
-					self.content = value
-						.as_str()
-						.ok_or("Expected string for content")?
-						.to_string();
-					Ok(())
-				}
-				_ => Err(format!("Unknown field: {}", name)),
-			}
+		async fn execute(
+			&mut self,
+			_sql: &str,
+			_params: Vec<QueryValue>,
+		) -> Result<QueryResult, Error> {
+			Err(DatabaseError::new(DatabaseErrorKind::Query, "unexpected execute call").into())
 		}
 
-		fn save(&mut self) -> Result<(), String> {
-			if self.id.is_none() {
-				self.id = Some(1);
-			}
-			Ok(())
+		async fn fetch_one(&mut self, sql: &str, _params: Vec<QueryValue>) -> Result<Row, Error> {
+			self.fetch_one_calls += 1;
+			self.queries.push(sql.to_owned());
+			self.rows.pop_front().unwrap_or_else(|| {
+				Err(DatabaseError::new(DatabaseErrorKind::Query, "missing queued row").into())
+			})
 		}
+
+		async fn fetch_all(
+			&mut self,
+			_sql: &str,
+			_params: Vec<QueryValue>,
+		) -> Result<Vec<Row>, Error> {
+			Err(DatabaseError::new(DatabaseErrorKind::Query, "unexpected fetch_all call").into())
+		}
+
+		async fn fetch_optional(
+			&mut self,
+			_sql: &str,
+			_params: Vec<QueryValue>,
+		) -> Result<Option<Row>, Error> {
+			Err(
+				DatabaseError::new(DatabaseErrorKind::Query, "unexpected fetch_optional call")
+					.into(),
+			)
+		}
+	}
+
+	fn test_model(id: i64, name: &str) -> TestModel {
+		TestModel {
+			id: Some(id),
+			name: name.to_owned(),
+			email: format!("{name}@example.com"),
+		}
+	}
+
+	fn test_model_row(id: i64, name: &str) -> Row {
+		let mut row = Row::new();
+		row.insert("id".to_owned(), QueryValue::Int(id));
+		row.insert("name".to_owned(), QueryValue::String(name.to_owned()));
+		row.insert(
+			"email".to_owned(),
+			QueryValue::String(format!("{name}@example.com")),
+		);
+		row
+	}
+
+	fn child_model_row(id: i64, parent_id: i64, content: &str) -> Row {
+		let mut row = Row::new();
+		row.insert("id".to_owned(), QueryValue::Int(id));
+		row.insert("parent_id".to_owned(), QueryValue::Int(parent_id));
+		row.insert("content".to_owned(), QueryValue::String(content.to_owned()));
+		row
+	}
+
+	fn uuid_parent_row(id: uuid::Uuid, name: &str) -> Row {
+		let mut row = Row::new();
+		row.insert("id".to_owned(), QueryValue::Uuid(id));
+		row.insert("name".to_owned(), QueryValue::String(name.to_owned()));
+		row
+	}
+
+	fn uuid_child_row(id: i64, parent_id: uuid::Uuid, content: &str) -> Row {
+		let mut row = Row::new();
+		row.insert("id".to_owned(), QueryValue::Int(id));
+		row.insert("parent_id".to_owned(), QueryValue::Uuid(parent_id));
+		row.insert("content".to_owned(), QueryValue::String(content.to_owned()));
+		row
+	}
+
+	fn model_form(instance: TestModel) -> ModelForm<TestModel> {
+		ModelForm::from_payload_and_instance(
+			TestModelModelFormData::<AllEditableModelFields>::empty(),
+			instance,
+		)
 	}
 
 	#[test]
@@ -613,36 +980,183 @@ mod tests {
 
 		let child = ChildModel {
 			id: None,
+			parent: ForeignKeyField::new(),
 			parent_id: None,
 			content: "Child content".to_string(),
 		};
-		let child_form = ModelForm::new(Some(child), ModelFormConfig::new());
+		let child_form = ModelForm::from_payload_and_instance(
+			ChildModelModelFormData::<AllEditableModelFields>::empty(),
+			child,
+		);
 		formset.add_child_form(child_form);
 
 		assert_eq!(formset.child_forms().len(), 1);
 	}
 
 	#[test]
-	fn test_inline_formset_save() {
-		let parent = TestModel {
-			id: Some(1),
-			name: "Parent".to_string(),
-			email: "parent@example.com".to_string(),
-		};
-
+	fn test_inline_formset_save_assigns_parent_primary_key() {
+		let parent = test_model(1, "parent");
 		let mut formset =
-			InlineFormSet::<TestModel, ChildModel>::new(parent, "parent_id".to_string());
+			InlineFormSet::<TestModel, ChildModel>::new(parent, "parent_id".to_owned());
+		let mut data = ChildModelModelFormData::<AllEditableModelFields>::empty();
+		data.set_content("Child content".to_owned());
+		formset.add_child_form(ModelForm::from_payload(data));
+		let mut executor = FormsetExecutor::new([
+			Ok(test_model_row(1, "parent")),
+			Ok(child_model_row(2, 1, "Child content")),
+		]);
 
-		let child = ChildModel {
+		assert!(formset.is_valid());
+		tokio_test::block_on(formset.save(&mut executor)).unwrap();
+
+		let saved_child = formset.child_forms()[0].instance().unwrap();
+		assert_eq!(saved_child.parent_id, Some(1));
+		assert_eq!(executor.fetch_one_calls, 2);
+	}
+
+	#[test]
+	fn test_inline_formset_defers_model_validator_until_generated_parent_key_is_assigned() {
+		let parent = TestModel {
 			id: None,
-			parent_id: None,
-			content: "Child content".to_string(),
+			name: "parent".to_owned(),
+			email: "parent@example.com".to_owned(),
 		};
-		let child_form = ModelForm::new(Some(child), ModelFormConfig::new());
-		formset.add_child_form(child_form);
+		let mut formset = InlineFormSet::<TestModel, RequiredChildModel>::for_create(
+			parent,
+			"parent_id".to_owned(),
+		);
+		let mut data = RequiredChildModelModelFormData::<AllEditableModelFields>::empty();
+		data.set_content("invalid child".to_owned())
+			.expect("child content should be accepted");
+		formset.add_child_form(
+			ModelForm::<RequiredChildModel>::from_payload(data).with_model_validator(|candidate| {
+				if candidate.parent_id > 0 {
+					Ok(())
+				} else {
+					Err(vec!["parent key must be assigned".to_owned()])
+				}
+			}),
+		);
+		let mut executor = FormsetExecutor::new([
+			Ok(test_model_row(1, "parent")),
+			Ok(child_model_row(2, 1, "invalid child")),
+		]);
 
-		let result = formset.save();
-		assert!(result.is_ok());
+		tokio_test::block_on(formset.save(&mut executor))
+			.expect("child validator should observe the generated parent key");
+
+		assert_eq!(formset.child_forms()[0].instance().unwrap().parent_id, 1);
+		assert_eq!(executor.fetch_one_calls, 2);
+	}
+
+	#[test]
+	fn test_inline_formset_rejects_editable_scalar_as_foreign_key() {
+		let parent = test_model(1, "parent");
+		let mut formset =
+			InlineFormSet::<TestModel, ScalarChildModel>::for_update(parent, "position".to_owned());
+		let mut executor = FormsetExecutor::new(Vec::<Result<Row, Error>>::new());
+
+		let error = tokio_test::block_on(formset.save(&mut executor)).unwrap_err();
+
+		assert!(matches!(
+			error,
+			ModelFormError::FieldValidation { errors }
+				if errors.get("position")
+					== Some(&vec!["foreign key field is not a generated relationship identifier".to_owned()])
+		));
+		assert_eq!(executor.fetch_one_calls, 0);
+	}
+
+	#[test]
+	fn test_inline_formset_rejects_relation_targeting_different_same_kind_parent() {
+		let parent = test_model(1, "parent");
+		let mut formset = InlineFormSet::<TestModel, AlternateChildModel>::for_update(
+			parent,
+			"parent_id".to_owned(),
+		);
+		let mut executor = FormsetExecutor::new(Vec::<Result<Row, Error>>::new());
+
+		let error = tokio_test::block_on(formset.save(&mut executor)).unwrap_err();
+
+		assert!(matches!(
+			error,
+			ModelFormError::FieldValidation { errors }
+				if errors.get("parent_id")
+					== Some(&vec!["foreign key field does not target the parent model".to_owned()])
+		));
+		assert_eq!(executor.fetch_one_calls, 0);
+	}
+
+	#[test]
+	fn test_inline_formset_rejects_relation_targeting_different_primary_key_kind_parent() {
+		let parent = TestModel {
+			id: None,
+			name: "parent".to_owned(),
+			email: "parent@example.com".to_owned(),
+		};
+		let mut formset =
+			InlineFormSet::<TestModel, UuidChild>::for_create(parent, "parent_id".to_owned());
+		let mut data = UuidChildModelFormData::<AllEditableModelFields>::empty();
+		data.set_content("child".to_owned());
+		formset.add_child_form(ModelForm::from_payload(data));
+		let mut executor = FormsetExecutor::new(Vec::<Result<Row, Error>>::new());
+
+		let error = tokio_test::block_on(formset.save(&mut executor)).unwrap_err();
+
+		assert!(matches!(
+			error,
+			ModelFormError::FieldValidation { errors }
+				if errors.get("parent_id")
+					== Some(&vec!["foreign key field does not target the parent model".to_owned()])
+		));
+		assert_eq!(executor.fetch_one_calls, 0);
+	}
+
+	#[test]
+	fn test_inline_formset_assigned_uuid_parent_create_uses_insert_intent() {
+		let parent_id = uuid::Uuid::from_u128(0x019c_1234_5678_7abc_8def_0123_4567_89ab);
+		let parent = UuidParent {
+			id: parent_id,
+			name: "assigned".to_owned(),
+		};
+		let mut formset =
+			InlineFormSet::<UuidParent, UuidChild>::for_create(parent, "parent_id".to_owned());
+		let mut data = UuidChildModelFormData::<AllEditableModelFields>::empty();
+		data.set_content("created child".to_owned());
+		formset.add_child_form(ModelForm::from_payload(data));
+		let mut executor = FormsetExecutor::new([
+			Ok(uuid_parent_row(parent_id, "assigned")),
+			Ok(uuid_child_row(4, parent_id, "created child")),
+		]);
+
+		tokio_test::block_on(formset.save(&mut executor))
+			.expect("assigned UUID parent should be created without an existence query");
+
+		assert_eq!(
+			executor.queries[0].split_whitespace().next(),
+			Some("INSERT")
+		);
+		assert_eq!(
+			formset.child_forms()[0].instance().unwrap().parent_id,
+			Some(parent_id)
+		);
+	}
+
+	#[test]
+	fn test_inline_formset_existing_parent_update_uses_update_intent() {
+		let parent = test_model(11, "existing");
+		let mut formset =
+			InlineFormSet::<TestModel, ChildModel>::for_update(parent, "parent_id".to_owned());
+		let mut executor = FormsetExecutor::new([Ok(test_model_row(11, "existing"))]);
+
+		tokio_test::block_on(formset.save(&mut executor))
+			.expect("existing parent should be updated with explicit intent");
+
+		assert_eq!(
+			executor.queries[0].split_whitespace().next(),
+			Some("UPDATE")
+		);
+		assert_eq!(executor.fetch_one_calls, 1);
 	}
 
 	#[test]
@@ -664,7 +1178,10 @@ mod tests {
 			name: "Test".to_string(),
 			email: "test@example.com".to_string(),
 		};
-		let form = ModelForm::new(Some(instance), ModelFormConfig::new());
+		let form = ModelForm::from_payload_and_instance(
+			TestModelModelFormData::<AllEditableModelFields>::empty(),
+			instance,
+		);
 		formset.add_form(form).unwrap();
 
 		assert_eq!(formset.forms().len(), 1);
@@ -681,11 +1198,183 @@ mod tests {
 			name: "Test".to_string(),
 			email: "test@example.com".to_string(),
 		};
-		let form = ModelForm::new(Some(instance), ModelFormConfig::new());
+		let form = ModelForm::from_payload_and_instance(
+			TestModelModelFormData::<AllEditableModelFields>::empty(),
+			instance,
+		);
 		formset.add_form(form).unwrap();
 
 		assert!(!formset.is_valid());
 		assert!(!formset.errors().is_empty());
+	}
+
+	#[test]
+	fn test_model_formset_save_preserves_form_order() {
+		let mut formset = ModelFormSet::<TestModel>::new("test".to_owned());
+		formset
+			.add_form(model_form(test_model(1, "first")))
+			.unwrap();
+		formset
+			.add_form(model_form(test_model(2, "second")))
+			.unwrap();
+		let mut executor = FormsetExecutor::new([
+			Ok(test_model_row(1, "first")),
+			Ok(test_model_row(2, "second")),
+		]);
+
+		let saved = tokio_test::block_on(formset.save(&mut executor)).unwrap();
+
+		assert_eq!(
+			saved
+				.iter()
+				.map(|model| model.name.as_str())
+				.collect::<Vec<_>>(),
+			vec!["first", "second"]
+		);
+		assert_eq!(executor.fetch_one_calls, 2);
+	}
+
+	#[test]
+	fn test_model_formset_default_extra_does_not_block_existing_only_save() {
+		let mut formset = ModelFormSet::<TestModel>::new("test".to_owned());
+		formset
+			.add_form(model_form(test_model(1, "existing")))
+			.unwrap();
+		formset
+			.add_form(ModelForm::from_payload(TestModelModelFormData::<
+				AllEditableModelFields,
+			>::empty()))
+			.unwrap();
+		let mut executor = FormsetExecutor::new([Ok(test_model_row(1, "existing"))]);
+
+		let saved = tokio_test::block_on(formset.save(&mut executor))
+			.expect("untouched default extra should be excluded");
+
+		assert_eq!(saved.len(), 1);
+		assert_eq!(saved[0].name, "existing");
+		assert_eq!(executor.fetch_one_calls, 1);
+	}
+
+	#[test]
+	fn test_model_formset_untouched_all_default_extra_does_not_create_phantom_row() {
+		let mut formset = ModelFormSet::<AllDefaultModel>::new("defaults".to_owned());
+		formset
+			.add_form(ModelForm::from_payload(AllDefaultModelModelFormData::<
+				AllEditableModelFields,
+			>::empty()))
+			.unwrap();
+		assert!(formset.forms_mut()[0].is_valid());
+		let mut executor = FormsetExecutor::new(Vec::<Result<Row, Error>>::new());
+
+		let saved = tokio_test::block_on(formset.save(&mut executor))
+			.expect("untouched all-default extra should be excluded");
+
+		assert!(saved.is_empty());
+		assert_eq!(executor.fetch_one_calls, 0);
+	}
+
+	#[test]
+	fn test_model_formset_submitted_extra_is_persisted() {
+		let mut data = TestModelModelFormData::<AllEditableModelFields>::empty();
+		data.set_name("submitted".to_owned());
+		data.set_email("submitted@example.com".to_owned());
+		let mut formset = ModelFormSet::<TestModel>::new("test".to_owned());
+		formset.add_form(ModelForm::from_payload(data)).unwrap();
+		let mut executor = FormsetExecutor::new([Ok(test_model_row(7, "submitted"))]);
+
+		let saved = tokio_test::block_on(formset.save(&mut executor))
+			.expect("submitted extra should be persisted");
+
+		assert_eq!(saved.len(), 1);
+		assert_eq!(saved[0].id, Some(7));
+		assert_eq!(saved[0].name, "submitted");
+		assert_eq!(executor.fetch_one_calls, 1);
+	}
+
+	#[test]
+	fn test_model_formset_save_stops_after_first_persistence_error() {
+		let mut formset = ModelFormSet::<TestModel>::new("test".to_owned());
+		for (id, name) in [(1, "first"), (2, "second"), (3, "third")] {
+			formset.add_form(model_form(test_model(id, name))).unwrap();
+		}
+		let mut executor = FormsetExecutor::new([
+			Ok(test_model_row(1, "first")),
+			Err(DatabaseError::new(DatabaseErrorKind::Timeout, "write timed out").into()),
+			Ok(test_model_row(3, "third")),
+		]);
+
+		let error = tokio_test::block_on(formset.save(&mut executor)).unwrap_err();
+
+		assert_eq!(
+			error.database_error().map(DatabaseError::kind),
+			Some(DatabaseErrorKind::Timeout)
+		);
+		assert_eq!(executor.fetch_one_calls, 2);
+	}
+
+	#[test]
+	fn test_model_formset_save_reuses_preflight_candidate() {
+		let mut data = TestModelModelFormData::<AllEditableModelFields>::empty();
+		data.set_name("candidate".to_owned());
+		data.set_email("candidate@example.com".to_owned());
+		let cleaner_calls = Arc::new(AtomicUsize::new(0));
+		let cleaner_calls_for_field = Arc::clone(&cleaner_calls);
+		let mut form = ModelForm::<TestModel>::from_payload(data);
+		form.form_mut()
+			.add_field_clean_function("name", move |value| {
+				let call = cleaner_calls_for_field.fetch_add(1, Ordering::SeqCst) + 1;
+				Ok(json!(format!(
+					"{}-{call}",
+					value.as_str().expect("name cleaner receives text")
+				)))
+			});
+		let mut formset = ModelFormSet::<TestModel>::new("test".to_owned());
+		formset.add_form(form).unwrap();
+		let mut executor = FormsetExecutor::new([Ok(test_model_row(1, "candidate-1"))]);
+
+		let saved = tokio_test::block_on(formset.save(&mut executor)).unwrap();
+
+		assert_eq!(saved[0].name, "candidate-1");
+		assert_eq!(cleaner_calls.load(Ordering::SeqCst), 1);
+		assert_eq!(executor.fetch_one_calls, 1);
+	}
+
+	#[test]
+	fn test_model_formset_save_rejects_below_minimum_before_persistence() {
+		let mut formset = ModelFormSet::<TestModel>::new("test".to_owned()).with_min_num(2);
+		formset.add_form(model_form(test_model(1, "only"))).unwrap();
+		let mut executor = FormsetExecutor::new([Ok(test_model_row(1, "only"))]);
+
+		let error = tokio_test::block_on(formset.save(&mut executor)).unwrap_err();
+
+		assert!(matches!(
+			error,
+			ModelFormError::ModelValidation { errors }
+				if errors == ["Please submit at least 2 forms"]
+		));
+		assert_eq!(executor.fetch_one_calls, 0);
+	}
+
+	#[test]
+	fn test_model_formset_save_rejects_above_maximum_before_persistence() {
+		let mut formset = ModelFormSet::<TestModel>::new("test".to_owned()).with_max_num(Some(1));
+		formset.forms_mut().push(model_form(test_model(1, "first")));
+		formset
+			.forms_mut()
+			.push(model_form(test_model(2, "second")));
+		let mut executor = FormsetExecutor::new([
+			Ok(test_model_row(1, "first")),
+			Ok(test_model_row(2, "second")),
+		]);
+
+		let error = tokio_test::block_on(formset.save(&mut executor)).unwrap_err();
+
+		assert!(matches!(
+			error,
+			ModelFormError::ModelValidation { errors }
+				if errors == ["Please submit no more than 1 forms"]
+		));
+		assert_eq!(executor.fetch_one_calls, 0);
 	}
 
 	#[test]

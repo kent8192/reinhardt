@@ -16,10 +16,9 @@ use reinhardt_db::associations::markers::ManyToManyConfig;
 use reinhardt_db::associations::{ManyToManyField, ManyToManyManager};
 use reinhardt_db::orm::annotation::{AnnotationValue, Expression, Value};
 use reinhardt_db::orm::composite_pk::{CompositePrimaryKey, PkValue};
-use reinhardt_db::orm::connection::{
-	BackendsConnection, DatabaseBackend, DatabaseConnectionLease, OrmExecutor, QueryResult,
-	QueryValue, Row,
-};
+#[cfg(feature = "sqlite")]
+use reinhardt_db::orm::connection::{BackendsConnection, DatabaseConnectionLease};
+use reinhardt_db::orm::connection::{DatabaseBackend, OrmExecutor, QueryResult, QueryValue, Row};
 use reinhardt_db::orm::custom_manager::CustomManager;
 use reinhardt_db::orm::events::{EventRegistry, EventResult, MapperEvents, set_active_registry};
 use reinhardt_db::orm::execution::{QueryExecution, SelectExecution};
@@ -34,13 +33,14 @@ use reinhardt_db::orm::{
 };
 use reinhardt_query::prelude::{Alias, Query};
 
+#[cfg(feature = "sqlite")]
 async fn sqlite_connection(
 	url: &str,
 ) -> (
 	DatabaseConnectionLease,
 	reinhardt_db::orm::DatabaseConnection,
 ) {
-	let owner = BackendsConnection::connect_sqlite(url).await.unwrap();
+	let owner = BackendsConnection::connect(url).await.unwrap();
 	let lease = DatabaseConnectionLease::register(owner).unwrap();
 	let handle = lease.handle();
 	(lease, handle)
@@ -482,6 +482,62 @@ fn article_locale_row(article_id: i64, locale: &str, title: &str) -> Row {
 	row
 }
 
+async fn save_article(
+	executor: &mut dyn OrmExecutor,
+	article: &Article,
+) -> reinhardt_core::exception::Result<Article> {
+	let manager = Article::objects();
+	if article.primary_key().is_some() {
+		manager.update_with_conn(executor, article).await
+	} else {
+		manager.create_with_conn(executor, article).await
+	}
+}
+
+#[tokio::test]
+async fn dyn_orm_executor_saves_new_and_existing_articles() {
+	let mut executor = RecordingExecutor::new(DatabaseBackend::Postgres)
+		.with_fetch_one(article_row(12, "created"))
+		.with_fetch_one(article_row(12, "updated"));
+
+	let created = save_article(
+		&mut executor,
+		&Article {
+			id: None,
+			title: "created".to_string(),
+		},
+	)
+	.await
+	.expect("dynamic executor should insert a new article");
+	let updated = save_article(
+		&mut executor,
+		&Article {
+			id: created.id,
+			title: "updated".to_string(),
+		},
+	)
+	.await
+	.expect("dynamic executor should update an existing article");
+
+	assert_eq!(created.id, Some(12));
+	assert_eq!(updated.title, "updated");
+	assert_eq!(executor.calls.len(), 2);
+	assert_eq!(executor.calls[0].kind, "fetch_one");
+	assert!(executor.calls[0].sql.starts_with("INSERT"));
+	assert!(
+		executor.calls[0]
+			.params
+			.contains(&QueryValue::String("created".to_string()))
+	);
+	assert_eq!(executor.calls[1].kind, "fetch_one");
+	assert!(executor.calls[1].sql.starts_with("UPDATE"));
+	assert!(
+		executor.calls[1]
+			.params
+			.contains(&QueryValue::String("updated".to_string()))
+	);
+}
+
 #[tokio::test]
 async fn explicit_orm_paths_use_the_caller_owned_recording_executor() {
 	let original = Article {
@@ -562,6 +618,7 @@ async fn explicit_orm_paths_use_the_caller_owned_recording_executor() {
 	);
 }
 
+#[cfg(feature = "sqlite")]
 #[tokio::test]
 async fn concrete_connection_and_atomic_transaction_support_explicit_orm_paths() {
 	let (_lease, mut connection) = sqlite_connection("sqlite::memory:").await;

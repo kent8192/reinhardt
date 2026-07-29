@@ -160,6 +160,8 @@ pub enum DatabaseValue {
 	Time(chrono::NaiveTime),
 	/// UTC timestamp value.
 	DateTime(chrono::DateTime<chrono::Utc>),
+	/// Timezone-naive timestamp value.
+	NaiveDateTime(chrono::NaiveDateTime),
 }
 
 impl DatabaseValue {
@@ -212,6 +214,7 @@ impl DatabaseValue {
 			Self::Date(value) => Ok(serde_json::Value::String(value.to_string())),
 			Self::Time(value) => Ok(serde_json::Value::String(value.to_string())),
 			Self::DateTime(value) => Ok(serde_json::Value::String(value.to_rfc3339())),
+			Self::NaiveDateTime(value) => Ok(serde_json::Value::String(value.to_string())),
 		}
 	}
 }
@@ -261,6 +264,7 @@ pub fn database_value_to_query_value(value: DatabaseValue) -> reinhardt_query::v
 		DatabaseValue::Date(value) => Value::ChronoDate(Some(Box::new(value))),
 		DatabaseValue::Time(value) => Value::ChronoTime(Some(Box::new(value))),
 		DatabaseValue::DateTime(value) => Value::ChronoDateTimeUtc(Some(Box::new(value))),
+		DatabaseValue::NaiveDateTime(value) => Value::ChronoDateTime(Some(Box::new(value))),
 	}
 }
 
@@ -528,6 +532,7 @@ impl_scalar_field!(uuid::Uuid, Uuid, Uuid);
 impl_scalar_field!(chrono::NaiveDate, Date, Date);
 impl_scalar_field!(chrono::NaiveTime, Time, Time);
 impl_scalar_field!(chrono::DateTime<chrono::Utc>, DateTime, DateTime);
+impl_scalar_field!(chrono::NaiveDateTime, NaiveDateTime, NaiveDateTime);
 
 impl<S: DatabaseScalar> private::Sealed for Option<S> {}
 
@@ -767,6 +772,34 @@ mod tests {
 			.unwrap(),
 			None
 		);
+	}
+
+	#[test]
+	fn naive_datetime_database_field_round_trips_without_an_offset() {
+		let value = chrono::NaiveDate::from_ymd_opt(2026, 7, 25)
+			.expect("valid date")
+			.and_hms_opt(14, 30, 0)
+			.expect("valid time");
+
+		assert_database_field_round_trip(value);
+	}
+
+	#[test]
+	fn naive_datetime_binds_as_a_timezone_naive_query_value() {
+		let value = chrono::NaiveDate::from_ymd_opt(2026, 7, 25)
+			.expect("valid date")
+			.and_hms_opt(14, 30, 0)
+			.expect("valid time");
+
+		let database_value = value
+			.encode_database()
+			.expect("encode naive datetime")
+			.into_database_value();
+		assert_eq!(database_value, DatabaseValue::NaiveDateTime(value));
+		assert!(matches!(
+			super::database_value_to_query_value(database_value),
+			reinhardt_query::value::Value::ChronoDateTime(Some(bound)) if *bound == value
+		));
 	}
 
 	#[test]

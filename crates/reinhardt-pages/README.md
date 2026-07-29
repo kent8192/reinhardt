@@ -50,6 +50,8 @@ selector whitespace.
 - **Action State Helpers**: `use_action_state` and `Action::dispatching*` reduce async mutation boilerplate
 - **Headless UI Primitives**: `reinhardt_pages::ui::{ActionButton, ActionResultPanel, ResourcePanel}` compose typed action and resource states without imposing visual styles
 - **Controlled Form Elements**: `bind:` synchronizes typed signals with text, checkbox, radio, numeric, and select controls
+- **Model-backed Forms**: `#[model(form = true)]` supplies typed fields and one
+  policy-safe payload to `form!` on native and WASM targets
 
 For a React concept mapping, see
 [Reinhardt Pages for React developers](docs/react_to_reinhardt.md).
@@ -384,6 +386,12 @@ errors, loading, success, reset, and submit orchestration.
 Async submit lifecycle callbacks re-enter the form's owning reactive scope
 after the submit future resolves, so callbacks may safely create scoped
 reactive handles even when the submit was started outside the render turn.
+
+For model-derived controls, explicit field allowlists, display overrides,
+trusted server setters, and native async persistence, see
+[Model-backed Pages forms](docs/model_forms.md). Model mode submits one
+model-generated generic payload. The form-specific policy and data alias remain
+internal to the `form!` expression and cannot be named by callers.
 
 Create the form with `form!`, then attach runtime behavior to that generated
 form:
@@ -757,7 +765,7 @@ This framework consists of several key modules:
 - **`dom`**: DOM abstraction layer
 - **`builder`**: HTML element builder API
 - **`component`**: Component system with IntoView trait
-- **`form`**: Django Form integration (native only)
+- **`form`**: Cross-target model-form state plus native Django Form rendering
 - **`csrf`**: CSRF protection
 - **`auth`**: Authentication integration
 - **`api`**: API client with Django QuerySet-like interface
@@ -901,9 +909,12 @@ transparent; streaming metadata is emitted outside the branch DOM.
 - Reactive Pages API: `I18nContext`, `I18nStateError`, `TranslatedText`, `tr`, `tn`, `tp`, `tnp`
 - Catalog and global API: `MessageCatalog`, `TranslationContext`, `I18nError`, `LazyString`, `TranslationGuard`, and the functions under `reinhardt_pages::i18n`
 
-### Forms (native only)
-- `FormBinding`, `FormComponent`
-- `Widget`, `FieldMetadata`, `FormMetadata`
+### Forms
+- Cross-target: `ModelFormState`, `ModelFormPolicy`, `ModelFormSchema`, and
+  generated model payload contracts
+- Native: `FormBinding`, `FormComponent`, `Widget`, `FieldMetadata`, and
+  `FormMetadata`
+- [Model-backed Pages forms](docs/model_forms.md)
 
 ### Macros
 - `page!`

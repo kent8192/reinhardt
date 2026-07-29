@@ -81,6 +81,8 @@ pub mod exception;
 /// Flash message storage framework.
 #[cfg(feature = "messages")]
 pub mod messages;
+/// Target-neutral schema, policy, and payload contracts for model-backed forms.
+pub mod model_form;
 /// Target-neutral metadata traits emitted by model macros.
 pub mod model_info {
 	use std::marker::PhantomData;

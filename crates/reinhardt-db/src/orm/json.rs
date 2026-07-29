@@ -341,6 +341,17 @@ pub(crate) fn database_value_from_json(
 					.map(|value| DatabaseValue::DateTime(value.with_timezone(&chrono::Utc)))
 					.map_err(|error| FieldCodecError::Serialization(error.to_string()))
 			}),
+		Some(DatabaseStorageKind::NaiveDateTime) => serde_json::from_value::<String>(value)
+			.map_err(|error| FieldCodecError::Serialization(error.to_string()))
+			.and_then(|value| {
+				chrono::NaiveDateTime::parse_from_str(&value, "%Y-%m-%d %H:%M:%S%.f")
+					.or_else(|_| {
+						chrono::DateTime::parse_from_rfc3339(&value)
+							.map(|datetime| datetime.naive_local())
+					})
+					.map(DatabaseValue::NaiveDateTime)
+					.map_err(|error| FieldCodecError::Serialization(error.to_string()))
+			}),
 		None => DatabaseValue::try_from_json_value(value),
 	}
 }
@@ -513,8 +524,8 @@ mod tests {
 		assert_eq!(value, DatabaseValue::Json(json!(null)));
 	}
 
-	#[test]
 	#[cfg(feature = "pgvector")]
+	#[test]
 	fn vector_storage_decodes_numeric_json_arrays() {
 		let value =
 			database_value_from_json(json!([1.0, 2.0, 3.0]), Some(DatabaseStorageKind::Vector(3)))
@@ -551,6 +562,26 @@ mod tests {
 				)
 			);
 		}
+	}
+
+	#[test]
+	fn naive_datetime_storage_accepts_backend_rfc3339_text_without_shifting() {
+		let value = database_value_from_json(
+			json!("2026-07-26T09:30:00.123456Z"),
+			Some(DatabaseStorageKind::NaiveDateTime),
+		)
+		.expect("RFC 3339 timestamp should decode as a naive wall-clock value");
+
+		assert_eq!(
+			value,
+			DatabaseValue::NaiveDateTime(
+				chrono::NaiveDateTime::parse_from_str(
+					"2026-07-26 09:30:00.123456",
+					"%Y-%m-%d %H:%M:%S%.f",
+				)
+				.expect("expected test datetime"),
+			)
+		);
 	}
 
 	#[test]

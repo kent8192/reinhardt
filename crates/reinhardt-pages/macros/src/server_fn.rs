@@ -156,6 +156,12 @@ pub(crate) struct ServerFnOptions {
 	/// }
 	/// ```
 	pub pre_validate: bool,
+
+	/// Enable native HTML model-form payload decoding for this endpoint.
+	///
+	/// This is deliberately opt-in because a normal JSON server function may
+	/// also use a single parameter named `payload`.
+	pub model_form: bool,
 }
 
 fn default_codec() -> String {
@@ -170,6 +176,7 @@ impl Default for ServerFnOptions {
 			codec: default_codec(),
 			no_csrf: false,
 			pre_validate: false,
+			model_form: false,
 		}
 	}
 }
@@ -1348,11 +1355,45 @@ fn generate_server_handler(
 		})
 		.collect();
 
+	// Native form extraction normalizes URL-encoded controls into a flat JSON
+	// object before invoking the generated handler. The explicit `model_form`
+	// option enables the payload-specific fallback without changing ordinary
+	// JSON endpoints that happen to use the same parameter name.
+	let pages_crate_for_model_form = get_reinhardt_pages_crate();
+	if info.options.model_form && codec != "json" {
+		return quote! {
+			compile_error!("server_fn(model_form = true) requires codec = \"json\" because native model-form controls use the JSON payload fallback");
+		};
+	}
+	let native_model_form_fallback = if info.options.model_form {
+		match regular_params.as_slice() {
+			[parameter] => {
+				let syn::Pat::Ident(parameter_name) = parameter.pat.as_ref() else {
+					return quote! { compile_error!("server_fn(model_form = true) requires one identifier parameter"); };
+				};
+				let parameter_name = &parameter_name.ident;
+				let payload_type = &parameter.ty;
+				quote! {
+					let native_value = ::serde_json::from_slice(body)
+						.map_err(|_| __invalid_request_error())?;
+					let #parameter_name: #payload_type = <#payload_type as #pages_crate_for_model_form::form::NativeModelFormPayload>::from_native_form_value(native_value)
+						.map_err(|_| __invalid_request_error())?;
+					#args_struct_name { #parameter_name }
+				}
+			}
+			_ => quote! {{ return Err(__invalid_request_error()); }},
+		}
+	} else {
+		quote! {{ return Err(__invalid_request_error()); }}
+	};
+
 	// Generate codec-specific deserialization code for server
 	let deserialize_code = match codec {
 		"json" => quote! {
-			let args: #args_struct_name = ::serde_json::from_slice(body)
-				.map_err(|_| __invalid_request_error())?;
+			let args: #args_struct_name = match ::serde_json::from_slice(body) {
+				::core::result::Result::Ok(args) => args,
+				::core::result::Result::Err(_) => #native_model_form_fallback,
+			};
 		},
 		"url" => quote! {
 			let args: #args_struct_name = ::serde_urlencoded::from_str(&body)
@@ -2280,6 +2321,7 @@ mod tests {
 	fn test_server_fn_options_default() {
 		let options = ServerFnOptions::default();
 		assert!(!options.use_inject);
+		assert!(!options.model_form);
 		assert_eq!(options.endpoint, None);
 		assert_eq!(options.codec, "json");
 	}
@@ -2291,7 +2333,8 @@ mod tests {
 		use syn::parse_quote;
 
 		// Test with endpoint only (use_inject is no longer needed)
-		let attr: syn::Attribute = parse_quote!(#[server_fn(endpoint = "/custom")]);
+		let attr: syn::Attribute =
+			parse_quote!(#[server_fn(endpoint = "/custom", model_form = true)]);
 		let meta_list = attr.meta.require_list().unwrap();
 		let nested: Vec<NestedMeta> = NestedMeta::parse_meta_list(meta_list.tokens.clone())
 			.unwrap()
@@ -2302,6 +2345,7 @@ mod tests {
 		assert!(!options.use_inject);
 		assert_eq!(options.endpoint, Some("/custom".to_string()));
 		assert_eq!(options.codec, "json");
+		assert!(options.model_form);
 	}
 
 	#[test]
@@ -2691,6 +2735,67 @@ mod tests {
 				"handler (args . first , __server_fn_inject_0 , Json (last) , __server_fn_inject_1)"
 			),
 			"{generated}"
+		);
+	}
+
+	#[test]
+	fn server_handler_accepts_url_encoded_model_payload_fallback() {
+		use syn::parse_quote;
+
+		let func: ItemFn = parse_quote! {
+		async fn save(data: QuestionModelFormData<AllEditableModelFields>) -> Result<(), ServerFnError> { Ok(()) }
+		};
+		let info = ServerFnInfo {
+			func,
+			options: ServerFnOptions {
+				model_form: true,
+				..ServerFnOptions::default()
+			},
+			metadata_name: None,
+			endpoint_tokens: None,
+			metadata_name_tokens: None,
+			detail: false,
+			transactional: false,
+			structured_error: false,
+		};
+
+		let generated = generate_server_handler(&info, &[], &[]).to_string();
+
+		assert!(
+			generated.contains("NativeModelFormPayload")
+				&& generated.contains("from_native_form_value"),
+			"single payload handlers must accept progressive-enhancement form posts: {generated}"
+		);
+		assert!(
+			generated.contains("let data : QuestionModelFormData")
+				&& generated.contains("{ data }"),
+			"the native fallback must bind and forward the declared parameter name: {generated}"
+		);
+	}
+
+	#[test]
+	fn server_handler_without_model_form_fallback_is_valid_rust() {
+		use syn::parse_quote;
+
+		let func: ItemFn = parse_quote! {
+			async fn save(data: String) -> Result<(), ServerFnError> { Ok(()) }
+		};
+		let info = ServerFnInfo {
+			func,
+			options: ServerFnOptions::default(),
+			metadata_name: None,
+			endpoint_tokens: None,
+			metadata_name_tokens: None,
+			detail: false,
+			transactional: false,
+			structured_error: false,
+		};
+
+		let generated = generate_server_handler(&info, &[], &[]);
+
+		assert!(
+			syn::parse2::<syn::File>(generated).is_ok(),
+			"a default JSON fallback must remain a valid match-arm expression"
 		);
 	}
 }

@@ -27,7 +27,7 @@
 use std::collections::{HashMap, HashSet};
 
 use proc_macro2::{Span, TokenStream};
-use quote::quote;
+use quote::{ToTokens, quote};
 use syn::Token;
 use syn::punctuated::Punctuated;
 use syn::{Data, DeriveInput, Fields, GenericArgument, PathArguments, Result, Type, parse_quote};
@@ -35,7 +35,8 @@ use syn::{Ident, LitBool, LitStr, bracketed, parenthesized};
 
 use crate::crate_paths::{
 	get_linkme_crate, get_reinhardt_core_crate, get_reinhardt_crate, get_reinhardt_db_crate,
-	get_reinhardt_migrations_crate, get_reinhardt_orm_crate,
+	get_reinhardt_forms_crate, get_reinhardt_migrations_crate, get_reinhardt_orm_crate,
+	get_serde_crate, get_serde_json_crate,
 };
 use crate::identifier_case::to_snake_case;
 use crate::rel::RelAttribute;
@@ -64,6 +65,8 @@ struct ModelAttributesParsed {
 	info: Option<bool>,
 	/// Whether this model is only available on the native/server side.
 	server_only: bool,
+	/// Whether to generate target-neutral model-form schema and payload types.
+	form: bool,
 	/// Whether the original model has `#[derive(serde::Serialize)]`.
 	/// Passed from the attribute macro since derive macros cannot see `#[derive()]`.
 	serde_serialize: bool,
@@ -392,6 +395,8 @@ struct ModelConfig {
 	info: bool,
 	/// Whether this model should skip shared data/info output.
 	server_only: bool,
+	/// Whether to generate target-neutral model-form schema and payload types.
+	form: bool,
 	/// Whether the original model derives `serde::Serialize`.
 	serde_serialize: bool,
 	/// Whether the original model derives `serde::Deserialize`.
@@ -407,6 +412,7 @@ impl ModelConfig {
 		let mut manager: Option<syn::Path> = None;
 		let mut info: Option<bool> = None;
 		let mut server_only = false;
+		let mut form = false;
 		let mut serde_serialize = false;
 		let mut serde_deserialize = false;
 
@@ -457,6 +463,9 @@ impl ModelConfig {
 			if model_attr.server_only {
 				server_only = true;
 			}
+			if model_attr.form {
+				form = true;
+			}
 			if model_attr.serde_serialize {
 				serde_serialize = true;
 			}
@@ -482,6 +491,7 @@ impl ModelConfig {
 			manager,
 			info: info.unwrap_or(true),
 			server_only,
+			form,
 			serde_serialize,
 			serde_deserialize,
 		})
@@ -498,6 +508,7 @@ impl ModelConfig {
 		let mut manager: Option<syn::Path> = None;
 		let mut info: Option<bool> = None;
 		let mut server_only = false;
+		let mut form = false;
 		let mut serde_serialize = false;
 		let mut serde_deserialize = false;
 
@@ -546,6 +557,9 @@ impl ModelConfig {
 			} else if ident == "info" {
 				let value: LitBool = input.parse()?;
 				info = Some(value.value());
+			} else if ident == "form" {
+				let value: LitBool = input.parse()?;
+				form = value.value();
 			} else if ident == "unique_together" {
 				// Tuple syntax: unique_together = ("field1", "field2")
 				use syn::punctuated::Punctuated;
@@ -593,6 +607,7 @@ impl ModelConfig {
 			manager,
 			info,
 			server_only,
+			form,
 			serde_serialize,
 			serde_deserialize,
 		})
@@ -1750,8 +1765,8 @@ fn map_type_to_field_type(ty: &Type, config: &FieldConfig) -> Result<TokenStream
 		});
 	}
 
-	// Extract the inner type if it's Option<T>
-	let (_is_option, inner_ty) = extract_option_type(ty);
+	// Extract the innermost type when the field uses nested Option wrappers.
+	let inner_ty = extract_nested_option_type(ty);
 
 	let field_type = match inner_ty {
 		Type::Path(type_path) => {
@@ -1779,6 +1794,9 @@ fn map_type_to_field_type(ty: &Type, config: &FieldConfig) -> Result<TokenStream
 				}
 				"DateTime" => {
 					quote! { #migrations_crate::FieldType::TimestampTz }
+				}
+				"NaiveDateTime" => {
+					quote! { #migrations_crate::FieldType::DateTime }
 				}
 				"Date" => {
 					quote! { #migrations_crate::FieldType::Date }
@@ -1895,7 +1913,7 @@ fn is_builtin_model_field_type(ty: &Type) -> bool {
 	if vector_dimensions(ty).ok().flatten().is_some() {
 		return true;
 	}
-	let (_is_option, inner_ty) = extract_option_type(ty);
+	let inner_ty = extract_nested_option_type(ty);
 	let Type::Path(type_path) = inner_ty else {
 		return false;
 	};
@@ -1909,6 +1927,7 @@ fn is_builtin_model_field_type(ty: &Type) -> bool {
 			| "i64" | "String"
 			| "bool" | "f32"
 			| "f64" | "DateTime"
+			| "NaiveDateTime"
 			| "Date" | "Time"
 			| "Decimal"
 			| "Uuid" | "Vec"
@@ -1923,7 +1942,7 @@ fn builtin_storage_kind(ty: &Type, orm_crate: &TokenStream) -> Option<TokenStrea
 			#orm_crate::DatabaseStorageKind::Vector(#dimensions)
 		});
 	}
-	let (_is_option, inner_ty) = extract_option_type(ty);
+	let inner_ty = extract_nested_option_type(ty);
 	let Type::Path(type_path) = inner_ty else {
 		return None;
 	};
@@ -1957,6 +1976,7 @@ fn builtin_storage_kind(ty: &Type, orm_crate: &TokenStream) -> Option<TokenStrea
 		"Date" => quote! { #orm_crate::DatabaseStorageKind::Date },
 		"Time" => quote! { #orm_crate::DatabaseStorageKind::Time },
 		"DateTime" => quote! { #orm_crate::DatabaseStorageKind::DateTime },
+		"NaiveDateTime" => quote! { #orm_crate::DatabaseStorageKind::NaiveDateTime },
 		_ => return None,
 	};
 
@@ -2202,6 +2222,1050 @@ fn extract_option_type(ty: &Type) -> (bool, &Type) {
 		return (true, inner_ty);
 	}
 	(false, ty)
+}
+
+fn extract_nested_option_type(mut ty: &Type) -> &Type {
+	while let (true, inner_ty) = extract_option_type(ty) {
+		ty = inner_ty;
+	}
+	ty
+}
+
+fn is_model_form_editable(field: &FieldInfo, field_infos: &[FieldInfo]) -> bool {
+	if field.config.skip || field.config.editable == Some(false) {
+		return false;
+	}
+	if field.config.primary_key && is_auto_generated_field(field) {
+		return false;
+	}
+	if field.config.auto_now == Some(true)
+		|| field.config.auto_now_add == Some(true)
+		|| field.config.generated.is_some()
+		|| field.config.generated_sql.is_some()
+		|| field.config.include_in_new == Some(false)
+	{
+		return false;
+	}
+
+	if field.is_fk_id_field {
+		let relation_name = field.name.to_string();
+		return relation_name
+			.strip_suffix("_id")
+			.and_then(|name| field_infos.iter().find(|candidate| candidate.name == name))
+			.is_some_and(|relation| {
+				relation.config.editable != Some(false)
+					&& relation.config.include_in_new != Some(false)
+			});
+	}
+
+	field.config.editable == Some(true)
+		|| (!is_relationship_field_type(&field.ty) && field.rel.is_none())
+}
+
+fn model_form_kind(field: &FieldInfo) -> Result<TokenStream> {
+	let core_crate = get_reinhardt_core_crate();
+	let inner_ty = extract_nested_option_type(&field.ty);
+	let unsupported = || {
+		Err(syn::Error::new_spanned(
+			&field.name,
+			format!(
+				"editable model field `{}` has no supported model-form mapping; set editable = false or use an explicit non-model form",
+				field.name
+			),
+		))
+	};
+
+	if is_many_to_many_field_type(inner_ty)
+		|| is_relationship_field_type(inner_ty)
+		|| field.rel.as_ref().is_some_and(|relation| {
+			!matches!(
+				relation.rel_type,
+				crate::rel::RelationType::ForeignKey | crate::rel::RelationType::OneToOne
+			)
+		}) {
+		return unsupported();
+	}
+
+	let Type::Path(type_path) = inner_ty else {
+		return unsupported();
+	};
+	let Some(segment) = type_path.path.segments.last() else {
+		return unsupported();
+	};
+
+	let kind = match segment.ident.to_string().as_str() {
+		"String" => {
+			let min_length = field
+				.config
+				.min_length
+				.map(|value| quote!(::core::option::Option::Some(#value as usize)))
+				.unwrap_or_else(|| quote!(::core::option::Option::None));
+			let max_length = field
+				.config
+				.max_length
+				.map(|value| quote!(::core::option::Option::Some(#value as usize)))
+				.unwrap_or_else(|| quote!(::core::option::Option::None));
+			if field.config.email == Some(true) {
+				quote!(#core_crate::model_form::ModelFormFieldKind::Email { min_length: #min_length, max_length: #max_length })
+			} else if field.config.url == Some(true) {
+				quote!(#core_crate::model_form::ModelFormFieldKind::Url { min_length: #min_length, max_length: #max_length })
+			} else {
+				quote!(#core_crate::model_form::ModelFormFieldKind::Text { min_length: #min_length, max_length: #max_length, multiline: false })
+			}
+		}
+		"i8" | "i16" | "i32" | "i64" | "isize" | "u8" | "u16" | "u32" | "u64" | "usize" => {
+			let min = field
+				.config
+				.min_value
+				.map(|value| quote!(::core::option::Option::Some(#value)))
+				.unwrap_or_else(|| quote!(::core::option::Option::None));
+			let max = field
+				.config
+				.max_value
+				.map(|value| quote!(::core::option::Option::Some(#value)))
+				.unwrap_or_else(|| quote!(::core::option::Option::None));
+			quote!(#core_crate::model_form::ModelFormFieldKind::Integer { min: #min, max: #max })
+		}
+		"f32" => {
+			if field
+				.config
+				.min_value
+				.is_some_and(|value| !(value as f32).is_finite())
+				|| field
+					.config
+					.max_value
+					.is_some_and(|value| !(value as f32).is_finite())
+			{
+				return Err(syn::Error::new_spanned(
+					&field.name,
+					"f32 model-form bounds must be finite f32 values",
+				));
+			}
+			let min = field
+				.config
+				.min_value
+				.map(|value| quote!(::core::option::Option::Some(#value as f64)))
+				.unwrap_or_else(|| {
+					quote!(::core::option::Option::Some(
+						::core::primitive::f32::MIN as f64
+					))
+				});
+			let max = field
+				.config
+				.max_value
+				.map(|value| quote!(::core::option::Option::Some(#value as f64)))
+				.unwrap_or_else(|| {
+					quote!(::core::option::Option::Some(
+						::core::primitive::f32::MAX as f64
+					))
+				});
+			quote!(#core_crate::model_form::ModelFormFieldKind::Float { min: #min, max: #max })
+		}
+		"f64" => {
+			let min = field
+				.config
+				.min_value
+				.map(|value| quote!(::core::option::Option::Some(#value as f64)))
+				.unwrap_or_else(|| quote!(::core::option::Option::None));
+			let max = field
+				.config
+				.max_value
+				.map(|value| quote!(::core::option::Option::Some(#value as f64)))
+				.unwrap_or_else(|| quote!(::core::option::Option::None));
+			quote!(#core_crate::model_form::ModelFormFieldKind::Float { min: #min, max: #max })
+		}
+		"Decimal" => {
+			let min = field
+				.config
+				.min_value
+				.map(|value| quote!(::core::option::Option::Some(::core::stringify!(#value))))
+				.unwrap_or_else(|| quote!(::core::option::Option::None));
+			let max = field
+				.config
+				.max_value
+				.map(|value| quote!(::core::option::Option::Some(::core::stringify!(#value))))
+				.unwrap_or_else(|| quote!(::core::option::Option::None));
+			quote!(#core_crate::model_form::ModelFormFieldKind::Decimal { min: #min, max: #max })
+		}
+		"bool" => quote!(#core_crate::model_form::ModelFormFieldKind::Boolean),
+		"Date" | "NaiveDate" => quote!(#core_crate::model_form::ModelFormFieldKind::Date),
+		"Time" | "NaiveTime" => quote!(#core_crate::model_form::ModelFormFieldKind::Time),
+		"DateTime" => quote!(#core_crate::model_form::ModelFormFieldKind::DateTime),
+		"NaiveDateTime" => quote!(#core_crate::model_form::ModelFormFieldKind::NaiveDateTime),
+		"Uuid" => quote!(#core_crate::model_form::ModelFormFieldKind::Uuid),
+		"Json" | "Value" | "HashMap" => quote!(#core_crate::model_form::ModelFormFieldKind::Json),
+		_ => return unsupported(),
+	};
+
+	Ok(kind)
+}
+
+fn model_form_relation_id_kind(
+	field: &FieldInfo,
+	field_infos: &[FieldInfo],
+) -> Result<TokenStream> {
+	let core_crate = get_reinhardt_core_crate();
+	let relation = model_form_relation_id_target_type(field, field_infos)?;
+	Ok(quote!(<#relation as #core_crate::model_form::ModelFormPrimaryKey>::FIELD_KIND))
+}
+
+fn model_form_relation_id_target_type<'a>(
+	field: &FieldInfo,
+	field_infos: &'a [FieldInfo],
+) -> Result<&'a Type> {
+	let field_name = field.name.to_string();
+	let relation_name = field_name.strip_suffix("_id").ok_or_else(|| {
+		syn::Error::new_spanned(
+			&field.name,
+			"generated relation id field must end with `_id`",
+		)
+	})?;
+	field_infos
+		.iter()
+		.find(|candidate| candidate.name == relation_name)
+		.and_then(|candidate| extract_fk_target_type(&candidate.ty))
+		.ok_or_else(|| {
+			syn::Error::new_spanned(
+				&field.name,
+				"generated relation id field has no foreign-key target",
+			)
+		})
+}
+
+fn model_form_relation_id_is_nullable(field: &FieldInfo, field_infos: &[FieldInfo]) -> bool {
+	if !field.is_fk_id_field {
+		return false;
+	}
+
+	let field_name = field.name.to_string();
+	let Some(relation_name) = field_name.strip_suffix("_id") else {
+		return false;
+	};
+
+	field_infos.iter().any(|candidate| {
+		candidate.name == relation_name
+			&& candidate
+				.rel
+				.as_ref()
+				.is_some_and(|relation| relation.null == Some(true))
+	})
+}
+
+fn model_form_declared_default(field: &FieldInfo) -> Option<TokenStream> {
+	let expression = field.config.default.as_ref()?;
+	let (is_optional, inner_ty) = extract_option_type(&field.ty);
+	let value = if is_string_type(inner_ty)
+		&& matches!(
+			expression,
+			syn::Expr::Lit(syn::ExprLit {
+				lit: syn::Lit::Str(_),
+				..
+			})
+		) {
+		quote!((#expression).to_owned())
+	} else {
+		quote!(#expression)
+	};
+
+	Some(if is_optional {
+		quote!(::core::option::Option::Some(#value))
+	} else {
+		value
+	})
+}
+
+fn generate_model_form_support(
+	struct_name: &Ident,
+	struct_vis: &syn::Visibility,
+	field_infos: &[FieldInfo],
+) -> Result<TokenStream> {
+	let core_crate = get_reinhardt_core_crate();
+	let forms_crate = get_reinhardt_forms_crate();
+	let native_form_cfg = if forms_crate.is_some() {
+		quote!(#[cfg(not(all(target_family = "wasm", target_os = "unknown")))])
+	} else {
+		quote!(#[cfg(any())])
+	};
+	let forms_crate = forms_crate.unwrap_or_else(|| quote!(::reinhardt_forms));
+	let orm_crate = get_reinhardt_orm_crate();
+	let serde_crate = get_serde_crate();
+	let serde_json_crate = get_serde_json_crate();
+	let schema_name = Ident::new(&format!("{}FormSchema", struct_name), struct_name.span());
+	let payload_name = Ident::new(&format!("{}ModelFormData", struct_name), struct_name.span());
+	let visitor_name = Ident::new(
+		&format!("{}ModelFormDataVisitor", struct_name),
+		struct_name.span(),
+	);
+	let field_const_name = Ident::new(
+		&format!("{}_FORM_FIELDS", struct_name.to_string().to_uppercase()),
+		struct_name.span(),
+	);
+	let editable_fields: Vec<_> = field_infos
+		.iter()
+		.filter(|field| is_model_form_editable(field, field_infos))
+		.collect();
+	if let Some(field) = editable_fields
+		.iter()
+		.find(|field| field.name == "csrfmiddlewaretoken")
+	{
+		return Err(syn::Error::new_spanned(
+			&field.name,
+			"model-backed forms reserve `csrfmiddlewaretoken` for the CSRF control",
+		));
+	}
+	let field_count = editable_fields.len();
+	let field_kinds: Vec<_> = editable_fields
+		.iter()
+		.map(|field| {
+			if field.is_fk_id_field {
+				model_form_relation_id_kind(field, field_infos)
+			} else {
+				model_form_kind(field)
+			}
+		})
+		.collect::<Result<_>>()?;
+	let field_names: Vec<_> = editable_fields.iter().map(|field| &field.name).collect();
+	let mut generated_method_names = HashSet::new();
+	for field in &editable_fields {
+		let field_name = field.name.to_string();
+		let setter_name = format!("set_{field_name}");
+		let trusted_setter_name = format!("set_trusted_{field_name}");
+		let collides_with_reserved_api = [
+			"default",
+			"empty",
+			"fields",
+			"forbidden_fields",
+			"supplied_fields",
+			"get_json",
+			"set_json",
+			"from_native_form_value",
+			"_policy",
+		]
+		.contains(&field_name.as_str())
+			|| field_name.starts_with("__reinhardt_checkbox_")
+			|| field_name.starts_with("__reinhardt_color_")
+			|| field_name.starts_with("__reinhardt_range_")
+			|| field_name.starts_with("__reinhardt_defaulted_")
+			|| [
+				"empty",
+				"forbidden_fields",
+				"supplied_fields",
+				"get_json",
+				"set_json",
+				"from_native_form_value",
+			]
+			.contains(&setter_name.as_str());
+		let collides_with_generated_method = !generated_method_names.insert(field_name)
+			|| !generated_method_names.insert(setter_name)
+			|| !generated_method_names.insert(trusted_setter_name);
+		if collides_with_reserved_api || collides_with_generated_method {
+			return Err(syn::Error::new_spanned(
+				&field.name,
+				"editable model field name collides with generated model-form API; rename the field or set editable = false",
+			));
+		}
+	}
+	let field_types: Vec<_> = editable_fields.iter().map(|field| &field.ty).collect();
+	let trusted_field_kinds: Vec<_> = field_infos
+		.iter()
+		.filter(|field| field.is_fk_id_field)
+		.map(|field| {
+			let name = LitStr::new(&field.name.to_string(), field.name.span());
+			let kind = if field.is_fk_id_field {
+				model_form_relation_id_kind(field, field_infos)
+			} else {
+				model_form_kind(field)
+			}?;
+			Ok(quote!(#name => ::core::option::Option::Some(#kind)))
+		})
+		.collect::<Result<Vec<_>>>()?;
+	let trusted_field_assignments = field_infos.iter().map(|field| {
+		let name = LitStr::new(&field.name.to_string(), field.name.span());
+		let ident = Ident::new(&field.name.to_string(), field.name.span());
+		let ty = &field.ty;
+		quote! {
+			#name => {
+				self.#ident = #serde_json_crate::from_value::<#ty>(value).map_err(|error| {
+					#forms_crate::model_form::ModelFormError::FieldValidation {
+						errors: ::std::collections::HashMap::from([(
+							field.to_owned(),
+							vec![error.to_string()],
+						)]),
+					}
+				})?;
+				::core::result::Result::Ok(())
+			}
+		}
+	});
+	let field_literals: Vec<_> = editable_fields
+		.iter()
+		.map(|field| LitStr::new(&field.name.to_string(), field.name.span()))
+		.collect();
+	let descriptor_entries = editable_fields
+		.iter()
+		.zip(&field_kinds)
+		.map(|(field, kind)| {
+			let name = LitStr::new(&field.name.to_string(), field.name.span());
+			let (is_optional, _) = extract_option_type(&field.ty);
+			let relation_is_nullable = model_form_relation_id_is_nullable(field, field_infos);
+			let nullable = field
+				.config
+				.null
+				.unwrap_or(is_optional || relation_is_nullable);
+			let required =
+				!nullable && field.config.blank != Some(true) && field.config.default.is_none();
+			let has_default = field.config.default.is_some();
+			let generated_relation_id = field.is_fk_id_field;
+			quote! {
+				#core_crate::model_form::ModelFormFieldDescriptor {
+					name: #name,
+					kind: #kind,
+					required: #required,
+					has_default: #has_default,
+					nullable: #nullable,
+					editable: true,
+					generated_relation_id: #generated_relation_id,
+				}
+			}
+		});
+	let default_true_boolean_arms: Vec<_> = editable_fields
+		.iter()
+		.filter(|field| {
+			let (_, value_type) = extract_option_type(&field.ty);
+			value_type.to_token_stream().to_string() == "bool" && field.config.default.is_some()
+		})
+		.map(|field| {
+			let name = LitStr::new(&field.name.to_string(), field.name.span());
+			let default = field
+				.config
+				.default
+				.as_ref()
+				.expect("boolean default fields always have a default expression");
+			quote!(#name => #default)
+		})
+		.collect();
+	let default_true_boolean_body = if default_true_boolean_arms.is_empty() {
+		quote!(false)
+	} else {
+		quote!(match field { #(#default_true_boolean_arms,)* _ => false })
+	};
+	let relation_target_match_arms = editable_fields
+		.iter()
+		.filter(|field| field.is_fk_id_field)
+		.map(|field| {
+			let name = LitStr::new(&field.name.to_string(), field.name.span());
+			let target = model_form_relation_id_target_type(field, field_infos)?;
+			Ok(
+				quote!(#name => ::core::any::TypeId::of::<T>() == ::core::any::TypeId::of::<#target>()),
+			)
+		})
+		.collect::<Result<Vec<_>>>()?;
+	let descriptor_accessors = field_names.iter().enumerate().map(|(index, field_name)| {
+		quote! {
+			pub fn #field_name() -> &'static #core_crate::model_form::ModelFormFieldDescriptor {
+				&#field_const_name[#index]
+			}
+		}
+	});
+	let getters = field_names
+		.iter()
+		.zip(&field_types)
+		.map(|(field_name, field_ty)| {
+			quote! {
+				pub fn #field_name(&self) -> ::core::option::Option<&#field_ty> {
+					self.#field_name.as_ref()
+				}
+			}
+		});
+	let setters = field_names
+		.iter()
+		.zip(&field_types)
+		.map(|(field_name, field_ty)| {
+			let setter_name = Ident::new(&format!("set_{}", field_name), field_name.span());
+			let field_literal = LitStr::new(&field_name.to_string(), field_name.span());
+			quote! {
+				pub fn #setter_name(
+					&mut self,
+					value: #field_ty,
+				) -> ::core::result::Result<(), #core_crate::model_form::ModelFormPayloadError> {
+					if !<P as #core_crate::model_form::ModelFormPolicy>::allows(#field_literal) {
+						return ::core::result::Result::Err(
+							#core_crate::model_form::ModelFormPayloadError::ForbiddenField {
+								field: #field_literal.to_owned(),
+							},
+						);
+					}
+					self.#field_name = ::core::option::Option::Some(value);
+					::core::result::Result::Ok(())
+				}
+			}
+		});
+	let trusted_setters = field_names
+		.iter()
+		.zip(&field_types)
+		.map(|(field_name, field_ty)| {
+			let setter_name = Ident::new(&format!("set_trusted_{field_name}"), field_name.span());
+			quote! {
+				pub fn #setter_name(&mut self, value: #field_ty) {
+					self.#field_name = ::core::option::Option::Some(value);
+				}
+			}
+		});
+	let empty_fields = field_names
+		.iter()
+		.map(|field_name| quote!(#field_name: ::core::option::Option::None));
+	let supplied_fields =
+		field_names
+			.iter()
+			.zip(&field_literals)
+			.map(|(field_name, field_literal)| {
+				quote! {
+					if self.#field_name.is_some() {
+						fields.push(#field_literal);
+					}
+				}
+			});
+	let get_json_arms = field_names.iter().zip(&field_literals).map(|(field_name, field_literal)| {
+		quote! {
+			#field_literal => self.#field_name.as_ref().and_then(|value| #serde_json_crate::to_value(value).ok()),
+		}
+	});
+	let set_json_arms = field_names.iter().zip(&field_literals).zip(&field_types).map(
+		|((field_name, field_literal), field_ty)| {
+			quote! {
+				#field_literal => {
+					if !<P as #core_crate::model_form::ModelFormPolicy>::allows(#field_literal) {
+						return ::core::result::Result::Err(#core_crate::model_form::ModelFormPayloadError::ForbiddenField {
+							field: #field_literal.to_owned(),
+						});
+					}
+					let parsed = #serde_json_crate::from_value::<#field_ty>(value).map_err(|error| {
+						#core_crate::model_form::ModelFormPayloadError::InvalidValue {
+							field: #field_literal.to_owned(),
+							message: error.to_string(),
+						}
+					})?;
+					self.#field_name = ::core::option::Option::Some(parsed);
+					::core::result::Result::Ok(())
+				}
+			}
+		},
+	);
+	let serialize_entries =
+		field_names
+			.iter()
+			.zip(&field_literals)
+			.map(|(field_name, field_literal)| {
+				quote! {
+					if <P as #core_crate::model_form::ModelFormPolicy>::allows(#field_literal) {
+						if let ::core::option::Option::Some(value) = &self.#field_name {
+							#serde_crate::ser::SerializeMap::serialize_entry(&mut map, #field_literal, value)?;
+						}
+					}
+				}
+			});
+	let deserialize_arms =
+		field_names
+			.iter()
+			.zip(&field_literals)
+			.map(|(field_name, field_literal)| {
+				quote! {
+					#field_literal => {
+						if <P as #core_crate::model_form::ModelFormPolicy>::allows(#field_literal) {
+							#field_name = ::core::option::Option::Some(map.next_value()?);
+						} else {
+							let _: #serde_crate::de::IgnoredAny = map.next_value()?;
+							if !forbidden_fields.contains(&#field_literal) {
+								forbidden_fields.push(#field_literal);
+							}
+						}
+					}
+				}
+			});
+	let deserialize_initializers = field_names
+		.iter()
+		.map(|field_name| quote!(let mut #field_name = ::core::option::Option::None;));
+	let serialize_bounds: Vec<_> = field_types
+		.iter()
+		.map(|field_ty| quote!(#field_ty: #serde_crate::Serialize))
+		.collect();
+	let deserialize_bounds: Vec<_> = field_types
+		.iter()
+		.map(|field_ty| quote!(#field_ty: #serde_crate::Deserialize<'de>))
+		.collect();
+	let payload_bounds: Vec<_> = field_types
+		.iter()
+		.map(
+			|field_ty| quote!(#field_ty: #serde_crate::Serialize + #serde_crate::de::DeserializeOwned),
+		)
+		.collect();
+	let missing_noneditable_field = field_infos
+		.iter()
+		.find(|field| {
+			if is_model_form_editable(field, field_infos)
+				|| field.config.skip
+				|| is_relationship_field_type(&field.ty)
+				|| model_form_declared_default(field).is_some()
+				|| is_auto_generated_field(field)
+			{
+				return false;
+			}
+			let (is_optional, _) = extract_option_type(&field.ty);
+			!is_optional && field.config.blank != Some(true)
+		})
+		.map(|field| LitStr::new(&field.name.to_string(), field.name.span()));
+	let build_assignments: Vec<_> = field_infos
+		.iter()
+		.map(|field| {
+			let field_name = &field.name;
+			let field_literal = LitStr::new(&field.name.to_string(), field.name.span());
+			if is_model_form_editable(field, field_infos) {
+				let (is_optional, _) = extract_option_type(&field.ty);
+				let relation_is_nullable = model_form_relation_id_is_nullable(field, field_infos);
+				let nullable = field
+					.config
+					.null
+					.unwrap_or(is_optional || relation_is_nullable);
+				let required =
+					!nullable && field.config.blank != Some(true) && field.config.default.is_none();
+				let unresolved = if let Some(default) = model_form_declared_default(field) {
+					default
+				} else if is_auto_generated_field(field) && !field.is_fk_id_field {
+					get_auto_field_default_value(field)
+				} else if required || (!nullable && field.config.blank == Some(true)) {
+					quote! {
+						return ::core::result::Result::Err(
+							#forms_crate::model_form::ModelFormError::MissingModelField {
+								field: #field_literal,
+							},
+						)
+					}
+				} else {
+					quote!(::std::default::Default::default())
+				};
+				quote! {
+					#field_name: match data.#field_name.as_ref() {
+						::core::option::Option::Some(value) => value.clone(),
+						::core::option::Option::None => #unresolved,
+					}
+				}
+			} else {
+				let (is_optional, _) = extract_option_type(&field.ty);
+				let required = !is_optional && field.config.blank != Some(true);
+				let default = if let Some(default) = model_form_declared_default(field) {
+					default
+				} else if is_auto_generated_field(field) && !field.is_fk_id_field {
+					get_auto_field_default_value(field)
+				} else if is_relationship_field_type(&field.ty) {
+					quote!(::std::default::Default::default())
+				} else if required {
+					quote! {
+						if deferred_field == #field_literal {
+							::std::default::Default::default()
+						} else {
+							return ::core::result::Result::Err(
+								#forms_crate::model_form::ModelFormError::MissingModelField {
+									field: #field_literal,
+								},
+							)
+						}
+					}
+				} else {
+					quote!(::std::default::Default::default())
+				};
+				quote!(#field_name: #default)
+			}
+		})
+		.collect();
+	let deferred_build_assignments: Vec<_> = field_infos
+		.iter()
+		.map(|field| {
+			let field_name = &field.name;
+			let field_literal = LitStr::new(&field.name.to_string(), field.name.span());
+			if is_model_form_editable(field, field_infos) {
+				let (is_optional, _) = extract_option_type(&field.ty);
+				let relation_is_nullable = model_form_relation_id_is_nullable(field, field_infos);
+				let nullable = field
+					.config
+					.null
+					.unwrap_or(is_optional || relation_is_nullable);
+				let required =
+					!nullable && field.config.blank != Some(true) && field.config.default.is_none();
+				let unresolved = if let Some(default) = model_form_declared_default(field) {
+					default
+				} else if is_auto_generated_field(field) && !field.is_fk_id_field {
+					get_auto_field_default_value(field)
+				} else if !nullable && field.config.blank == Some(true) {
+					quote! {
+						return ::core::result::Result::Err(
+							#forms_crate::model_form::ModelFormError::MissingModelField {
+								field: #field_literal,
+							},
+						)
+					}
+				} else if required {
+					quote! {
+						if deferred_field == #field_literal {
+							::std::default::Default::default()
+						} else {
+							return ::core::result::Result::Err(
+								#forms_crate::model_form::ModelFormError::MissingModelField {
+									field: #field_literal,
+								},
+							);
+						}
+					}
+				} else {
+					quote!(::std::default::Default::default())
+				};
+				quote! {
+					#field_name: match data.#field_name.as_ref() {
+						::core::option::Option::Some(value) => value.clone(),
+						::core::option::Option::None => #unresolved,
+					}
+				}
+			} else {
+				let (is_optional, _) = extract_option_type(&field.ty);
+				let required = !is_optional && field.config.blank != Some(true);
+				let default = if let Some(default) = model_form_declared_default(field) {
+					default
+				} else if is_auto_generated_field(field) {
+					get_auto_field_default_value(field)
+				} else if is_relationship_field_type(&field.ty) {
+					quote!(::std::default::Default::default())
+				} else if required {
+					quote! {
+						if deferred_field == #field_literal {
+							::std::default::Default::default()
+						} else {
+							return ::core::result::Result::Err(
+								#forms_crate::model_form::ModelFormError::MissingModelField {
+									field: #field_literal,
+								},
+							);
+						}
+					}
+				} else {
+					quote!(::std::default::Default::default())
+				};
+				quote!(#field_name: #default)
+			}
+		})
+		.collect();
+	let build_from_payload_body = if let Some(field) = &missing_noneditable_field {
+		quote! {
+			let _ = data;
+			::core::result::Result::Err(
+				#forms_crate::model_form::ModelFormError::MissingModelField {
+					field: #field,
+				},
+			)
+		}
+	} else {
+		quote! {
+			::core::result::Result::Ok(Self {
+				#(#build_assignments,)*
+			})
+		}
+	};
+	let build_from_payload_with_deferred_field_body = quote! {
+		::core::result::Result::Ok(Self {
+			#(#deferred_build_assignments,)*
+		})
+	};
+	let apply_payload_fields = editable_fields
+		.iter()
+		.filter(|field| !field.config.primary_key)
+		.map(|field| {
+			let field_name = &field.name;
+			quote! {
+				if let ::core::option::Option::Some(value) = data.#field_name.as_ref() {
+					self.#field_name = value.clone();
+				}
+			}
+		});
+
+	Ok(quote! {
+		#struct_vis struct #schema_name;
+
+		const #field_const_name: [#core_crate::model_form::ModelFormFieldDescriptor; #field_count] = [
+			#(#descriptor_entries),*
+		];
+
+		impl #core_crate::model_form::ModelFormSchema for #schema_name {
+			type Model = #struct_name;
+
+			fn fields() -> &'static [#core_crate::model_form::ModelFormFieldDescriptor] {
+				&#field_const_name
+			}
+
+			fn default_boolean_is_true(field: &str) -> bool {
+				#default_true_boolean_body
+			}
+
+			fn relation_target_matches<T: 'static>(field: &str) -> bool {
+				match field {
+					#(#relation_target_match_arms,)*
+					_ => false,
+				}
+			}
+		}
+
+		impl #schema_name {
+			#(#descriptor_accessors)*
+		}
+
+		#struct_vis struct #payload_name<P: #core_crate::model_form::ModelFormPolicy> {
+			#(#field_names: ::core::option::Option<#field_types>,)*
+			forbidden_fields: ::std::vec::Vec<&'static str>,
+			_policy: ::core::marker::PhantomData<P>,
+		}
+
+		impl<P: #core_crate::model_form::ModelFormPolicy> #payload_name<P> {
+			pub fn empty() -> Self {
+				Self {
+					#(#empty_fields,)*
+					forbidden_fields: ::std::vec::Vec::new(),
+					_policy: ::core::marker::PhantomData,
+				}
+			}
+
+			#(#getters)*
+			#(#setters)*
+			#(#trusted_setters)*
+		}
+
+		impl<P: #core_crate::model_form::ModelFormPolicy> ::std::default::Default for #payload_name<P> {
+			fn default() -> Self {
+				Self::empty()
+			}
+		}
+
+		impl<P> #core_crate::model_form::ModelFormPayload<P> for #payload_name<P>
+		where
+			P: #core_crate::model_form::ModelFormPolicy,
+			#(#payload_bounds,)*
+		{
+			fn supplied_fields(&self) -> ::std::vec::Vec<&'static str> {
+				let mut fields = ::std::vec::Vec::new();
+				#(#supplied_fields)*
+				fields
+			}
+
+			fn forbidden_fields(&self) -> &[&'static str] {
+				&self.forbidden_fields
+			}
+
+			fn get_json(&self, field: &str) -> ::core::option::Option<#serde_json_crate::Value> {
+				match field {
+					#(#get_json_arms)*
+					_ => ::core::option::Option::None,
+				}
+			}
+
+			fn set_json(
+				&mut self,
+				field: &str,
+				value: #serde_json_crate::Value,
+			) -> ::core::result::Result<(), #core_crate::model_form::ModelFormPayloadError> {
+				match field {
+					#(#set_json_arms,)*
+					_ => ::core::result::Result::Err(#core_crate::model_form::ModelFormPayloadError::UnknownField {
+						field: field.to_owned(),
+					}),
+				}
+			}
+		}
+
+		impl<P> #core_crate::model_form::NativeModelFormPayload for #payload_name<P>
+		where
+			P: #core_crate::model_form::ModelFormPolicy,
+			#(#payload_bounds,)*
+		{
+			fn from_native_form_value(
+				value: #serde_json_crate::Value,
+			) -> ::core::result::Result<Self, #serde_json_crate::Error> {
+				let value = #core_crate::model_form::normalize_native_model_form_value::<#schema_name, P>(value)?;
+				#serde_json_crate::from_value(value)
+			}
+		}
+
+		impl<P> #serde_crate::Serialize for #payload_name<P>
+		where
+			P: #core_crate::model_form::ModelFormPolicy,
+			#(#serialize_bounds,)*
+		{
+			fn serialize<S>(&self, serializer: S) -> ::core::result::Result<S::Ok, S::Error>
+			where
+				S: #serde_crate::Serializer,
+			{
+				let mut map = #serde_crate::Serializer::serialize_map(serializer, ::core::option::Option::None)?;
+				#(#serialize_entries)*
+				#serde_crate::ser::SerializeMap::end(map)
+			}
+		}
+
+		struct #visitor_name<P: #core_crate::model_form::ModelFormPolicy>(::core::marker::PhantomData<P>);
+
+		impl<'de, P> #serde_crate::de::Visitor<'de> for #visitor_name<P>
+		where
+			P: #core_crate::model_form::ModelFormPolicy,
+			#(#deserialize_bounds,)*
+		{
+			type Value = #payload_name<P>;
+
+			fn expecting(&self, formatter: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+				formatter.write_str("a model form payload object")
+			}
+
+			fn visit_map<A>(self, mut map: A) -> ::core::result::Result<Self::Value, A::Error>
+			where
+				A: #serde_crate::de::MapAccess<'de>,
+			{
+				#(#deserialize_initializers)*
+				let mut forbidden_fields = ::std::vec::Vec::new();
+				while let ::core::option::Option::Some(field) = map.next_key::<::std::string::String>()? {
+					match field.as_str() {
+						#(#deserialize_arms,)*
+						_ => return ::core::result::Result::Err(<A::Error as #serde_crate::de::Error>::unknown_field(&field, &[#(#field_literals),*])),
+					}
+				}
+				::core::result::Result::Ok(#payload_name {
+					#(#field_names,)*
+					forbidden_fields,
+					_policy: ::core::marker::PhantomData,
+				})
+			}
+		}
+
+		impl<'de, P> #serde_crate::Deserialize<'de> for #payload_name<P>
+		where
+			P: #core_crate::model_form::ModelFormPolicy,
+			#(#deserialize_bounds,)*
+		{
+			fn deserialize<D>(deserializer: D) -> ::core::result::Result<Self, D::Error>
+			where
+				D: #serde_crate::Deserializer<'de>,
+			{
+				#serde_crate::Deserializer::deserialize_map(
+					deserializer,
+					#visitor_name(::core::marker::PhantomData),
+				)
+			}
+		}
+
+		#native_form_cfg
+		impl #forms_crate::model_form::FormModel for #struct_name {
+			type Schema = #schema_name;
+			type Data<P: #core_crate::model_form::ModelFormPolicy> = #payload_name<P>;
+
+			fn build_from_payload<P: #core_crate::model_form::ModelFormPolicy>(
+				data: &Self::Data<P>,
+			) -> ::core::result::Result<Self, #forms_crate::model_form::ModelFormError> {
+				#build_from_payload_body
+			}
+
+			fn build_from_payload_with_deferred_required_field<P: #core_crate::model_form::ModelFormPolicy>(
+				data: &Self::Data<P>,
+				deferred_field: &str,
+			) -> ::core::result::Result<Self, #forms_crate::model_form::ModelFormError> {
+				#build_from_payload_with_deferred_field_body
+			}
+
+			fn apply_payload<P: #core_crate::model_form::ModelFormPolicy>(
+				&mut self,
+				data: &Self::Data<P>,
+			) -> ::core::result::Result<(), #forms_crate::model_form::ModelFormError> {
+				#(#apply_payload_fields)*
+				::core::result::Result::Ok(())
+			}
+
+			fn set_trusted_field_json(
+				&mut self,
+				field: &str,
+				value: #serde_json_crate::Value,
+			) -> ::core::result::Result<(), #forms_crate::model_form::ModelFormError> {
+				match field {
+					#(#trusted_field_assignments,)*
+					_ => ::core::result::Result::Err(#forms_crate::model_form::ModelFormError::FieldValidation {
+						errors: ::std::collections::HashMap::from([(field.to_owned(), vec!["unknown trusted model field".to_owned()])]),
+					}),
+				}
+			}
+
+			fn trusted_relation_field_kind(
+				field: &str,
+			) -> ::core::option::Option<#core_crate::model_form::ModelFormFieldKind> {
+				match field {
+					#(#trusted_field_kinds,)*
+					_ => ::core::option::Option::None,
+				}
+			}
+
+			async fn save_with_mode(
+				&mut self,
+				executor: &mut dyn #orm_crate::connection::OrmExecutor,
+				mode: #forms_crate::model_form::ModelFormPersistenceMode,
+			) -> ::core::result::Result<(), #forms_crate::model_form::ModelFormError> {
+				let manager = <Self as #orm_crate::Model>::objects();
+				let result = match mode {
+					#forms_crate::model_form::ModelFormPersistenceMode::Create => {
+						match #orm_crate::custom_manager::CustomManager::create_with_conn_outcome(
+							&manager,
+							executor,
+							self,
+						)
+						.await {
+							#orm_crate::custom_manager::CreateWithConnOutcome::Created(saved) =>
+								::core::result::Result::Ok(saved),
+							#orm_crate::custom_manager::CreateWithConnOutcome::FailedBeforeInsert(error) =>
+								::core::result::Result::Err((error, false)),
+							#orm_crate::custom_manager::CreateWithConnOutcome::FailedAfterInsert(error) =>
+								::core::result::Result::Err((error, true)),
+						}
+					}
+					#forms_crate::model_form::ModelFormPersistenceMode::Update => {
+						#orm_crate::custom_manager::CustomManager::update_with_conn(
+							&manager,
+							executor,
+							self,
+						)
+						.await
+						.map_err(|error| (error, false))
+					}
+				};
+
+				match result {
+					::core::result::Result::Ok(saved) => {
+						*self = saved;
+						::core::result::Result::Ok(())
+					}
+					::core::result::Result::Err((error, persisted_create)) => {
+						let source = match error {
+							#core_crate::exception::Error::Database(source) => source,
+							#core_crate::exception::Error::DatabaseWithSource {
+								database_error,
+								..
+							} => database_error,
+							other => #core_crate::exception::DatabaseError::new(
+								#core_crate::exception::DatabaseErrorKind::Query,
+								other.to_string(),
+							),
+						};
+						if persisted_create {
+							::core::result::Result::Err(
+								#forms_crate::model_form::ModelFormError::PersistenceAfterCreate { source },
+							)
+						} else {
+							::core::result::Result::Err(
+								#forms_crate::model_form::ModelFormError::Persistence { source },
+							)
+						}
+					}
+				}
+			}
+		}
+	})
 }
 
 /// Generate field accessor methods that return FieldRef<M, T>
@@ -2796,6 +3860,10 @@ fn generate_fk_accessor_methods(
 
 			// Extract Target from ForeignKeyField<Target> or OneToOneField<Target>
 			let target_ty = extract_foreign_key_target_type(&field.ty);
+			let nullable = field_infos
+				.iter()
+				.find(|candidate| candidate.name == fk_id_field_name)
+				.is_some_and(|candidate| extract_option_type(&candidate.ty).0);
 			let target_column = field.rel.as_ref().and_then(|relation| {
 				relation.to_field.as_ref().map(|target_field| {
 					quote! {
@@ -2819,6 +3887,17 @@ fn generate_fk_accessor_methods(
 				"Load the related '{}' instance from the database",
 				field_name_str
 			);
+			let load_foreign_key = if nullable {
+				quote! {
+					let Some(fk_id) = self.#fk_id_field_name() else {
+						return ::core::result::Result::Ok(::core::option::Option::None);
+					};
+				}
+			} else {
+				quote! {
+					let fk_id = self.#fk_id_field_name();
+				}
+			};
 
 				quote! {
 					#[doc = #doc_comment]
@@ -2830,7 +3909,7 @@ fn generate_fk_accessor_methods(
 						E: #orm_crate::connection::OrmExecutor,
 					{
 					// Get FK _id value.
-					let fk_id = self.#fk_id_field_name();
+					#load_foreign_key
 
 					// Query the target model through the relation's configured target field.
 					<#target_ty as #orm_crate::Model>::objects()
@@ -3062,6 +4141,7 @@ fn generate_setter_methods(struct_name: &syn::Ident, field_infos: &[FieldInfo]) 
 pub(crate) fn model_derive_impl(mut input: DeriveInput) -> Result<TokenStream> {
 	// Get the dynamically resolved crate paths
 	let reinhardt = get_reinhardt_crate();
+	let core_crate = get_reinhardt_core_crate();
 	let orm_crate = get_reinhardt_orm_crate();
 
 	// Make all fields module-local (non-pub)
@@ -3588,6 +4668,27 @@ pub(crate) fn model_derive_impl(mut input: DeriveInput) -> Result<TokenStream> {
 	let field_selector_struct = generate_field_selector_struct(struct_name, &field_infos);
 
 	let (info_impl_generics, info_ty_generics, info_where_clause) = generics.split_for_impl();
+	let model_form_primary_key_impl = if is_composite_pk {
+		quote! {}
+	} else if let Ok(kind) = model_form_kind(pk_fields[0]) {
+		quote! {
+			impl #info_impl_generics #core_crate::model_form::ModelFormPrimaryKey for #struct_name #info_ty_generics #info_where_clause {
+				const FIELD_KIND: #core_crate::model_form::ModelFormFieldKind = #kind;
+			}
+		}
+	} else {
+		quote! {}
+	};
+	let primary_key_field_names = pk_fields
+		.iter()
+		.map(|field| LitStr::new(&field.name.to_string(), field.name.span()));
+	let model_form_primary_key_fields_impl = quote! {
+		impl #info_impl_generics #core_crate::model_form::ModelFormPrimaryKeyFields for #struct_name #info_ty_generics #info_where_clause {
+			fn primary_key_fields() -> &'static [&'static str] {
+				&[#(#primary_key_field_names),*]
+			}
+		}
+	};
 	let info_model_impl = if model_config.server_only {
 		quote! {
 			#[cfg(not(all(target_family = "wasm", target_os = "unknown")))]
@@ -3621,6 +4722,8 @@ pub(crate) fn model_derive_impl(mut input: DeriveInput) -> Result<TokenStream> {
 	};
 	let shared_info_output = quote! {
 		#info_model_impl
+		#model_form_primary_key_impl
+		#model_form_primary_key_fields_impl
 		#info_struct
 	};
 
@@ -3693,6 +4796,11 @@ pub(crate) fn model_derive_impl(mut input: DeriveInput) -> Result<TokenStream> {
 	});
 	let fixture_validation =
 		generate_fixture_validation(struct_name, generics, &field_infos, &fk_field_infos);
+	let model_form_output = if model_config.form {
+		generate_model_form_support(struct_name, struct_vis, &field_infos)?
+	} else {
+		quote! {}
+	};
 
 	// Generate the Model implementation
 	let expanded = quote! {
@@ -3700,6 +4808,8 @@ pub(crate) fn model_derive_impl(mut input: DeriveInput) -> Result<TokenStream> {
 			#composite_pk_type_def
 
 			#shared_info_output
+
+			#model_form_output
 
 			#(
 				#database_field_validations
@@ -6278,6 +7388,7 @@ fn generate_build_function(
 		ForeignKey {
 			related_type: Box<Type>,
 			setter_name: syn::Ident,
+			nullable: bool,
 		},
 		/// `String` field. Setter accepts `impl Into<String>` for ergonomics.
 		String,
@@ -6315,6 +7426,7 @@ fn generate_build_function(
 				kind: SetterKind::ForeignKey {
 					related_type: Box::new(related_type),
 					setter_name,
+					nullable: extract_option_type(&f.ty).0,
 				},
 			});
 		} else if is_string_type(&f.ty) && !extract_option_type(&f.ty).0 {
@@ -6398,6 +7510,7 @@ fn generate_build_function(
 			kind: SetterKind::ForeignKey {
 				related_type: Box::new(related_type),
 				setter_name,
+				nullable: extract_option_type(&id_field_info.ty).0,
 			},
 		});
 	}
@@ -6517,6 +7630,7 @@ fn generate_build_function(
 			SetterKind::ForeignKey {
 				related_type,
 				setter_name,
+				nullable,
 			} => {
 				// Setter named after the related FK field, accepting any
 				// IntoPrimaryKey<Related>. This composes with #4398 — callers
@@ -6533,7 +7647,11 @@ fn generate_build_function(
 					where
 						__FkArg: #orm_crate::IntoPrimaryKey<#related_type>,
 				};
-				let expr = quote! { value.into_primary_key() };
+				let expr = if *nullable {
+					quote! { ::core::option::Option::Some(value.into_primary_key()) }
+				} else {
+					quote! { value.into_primary_key() }
+				};
 				(sig, expr)
 			}
 			SetterKind::String => {
@@ -6921,6 +8039,7 @@ enum InfoSetterKind {
 	Plain,
 	String,
 	Relation { target_ty: TokenStream },
+	NullableRelation { target_ty: TokenStream },
 	ManyToMany { target_ty: TokenStream },
 }
 
@@ -7037,9 +8156,9 @@ fn generate_info_struct(
 		.iter()
 		.map(|fk| (fk.field_name.to_string(), fk))
 		.collect();
-	let fk_id_to_field_name: HashMap<String, Ident> = fk_field_infos
+	let fk_id_to_field: HashMap<String, &ForeignKeyFieldInfo> = fk_field_infos
 		.iter()
-		.map(|fk| (format!("{}_id", fk.field_name), fk.field_name.clone()))
+		.map(|fk| (format!("{}_id", fk.field_name), fk))
 		.collect();
 
 	let mut info_fields = Vec::new();
@@ -7052,16 +8171,40 @@ fn generate_info_struct(
 		if let Some(fk) = fk_by_field_name.get(&name.to_string()) {
 			let id_name = Ident::new(&format!("{}_id", name), name.span());
 			let target_ty = normalize_relation_ty(&fk.target_type);
-			let ty = quote! { #reinhardt::model_info::RelationInfo<#target_ty> };
+			let nullable = field_infos
+				.iter()
+				.find(|candidate| candidate.name == id_name)
+				.is_some_and(|candidate| extract_option_type(&candidate.ty).0);
+			let ty = if nullable {
+				quote! { ::core::option::Option<#reinhardt::model_info::RelationInfo<#target_ty>> }
+			} else {
+				quote! { #reinhardt::model_info::RelationInfo<#target_ty> }
+			};
+			let setter_kind = if nullable {
+				InfoSetterKind::NullableRelation {
+					target_ty: target_ty.clone(),
+				}
+			} else {
+				InfoSetterKind::Relation {
+					target_ty: target_ty.clone(),
+				}
+			};
+			let from_model = if nullable {
+				quote! {
+					#name: model.#id_name.map(#reinhardt::model_info::RelationInfo::new),
+				}
+			} else {
+				quote! {
+					#name: #reinhardt::model_info::RelationInfo::new(model.#id_name),
+				}
+			};
 			info_fields.push(InfoFieldSpec {
 				name: name.clone(),
 				ty,
 				serde_attrs: relation_info_serde_attrs(f),
 				validate_attrs: Vec::new(),
-				setter_kind: InfoSetterKind::Relation { target_ty },
-				from_model: quote! {
-					#name: #reinhardt::model_info::RelationInfo::new(model.#id_name),
-				},
+				setter_kind,
+				from_model,
 			});
 			continue;
 		}
@@ -7168,10 +8311,15 @@ fn generate_info_struct(
 		.map(|f| {
 			let name = &f.name;
 			let name_str = name.to_string();
-			if let Some(relation_name) = fk_id_to_field_name.get(&name_str)
-				&& info_fields.iter().any(|inf| inf.name == *relation_name)
+			if let Some(fk) = fk_id_to_field.get(&name_str)
+				&& info_fields.iter().any(|inf| inf.name == fk.field_name)
 			{
-				quote! { #name: info.#relation_name.into_id(), }
+				let relation_name = &fk.field_name;
+				if extract_option_type(&f.ty).0 {
+					quote! { #name: info.#relation_name.map(#reinhardt::model_info::RelationInfo::into_id), }
+				} else {
+					quote! { #name: info.#relation_name.into_id(), }
+				}
 			} else if info_fields.iter().any(|inf| inf.name == f.name)
 				&& !is_relationship_field_type(&f.ty)
 				&& !is_many_to_many_field_type(&f.ty)
@@ -7365,6 +8513,26 @@ fn generate_info_builder(
 							{
 								self.#name = ::std::option::Option::Some(
 									#reinhardt::model_info::RelationInfo::new(value.into_primary_key())
+								);
+								#builder_name {
+									#(#field_names: self.#field_names,)*
+									_state: ::std::marker::PhantomData,
+								}
+							}
+						}
+					}
+				}
+				InfoSetterKind::NullableRelation { target_ty } => {
+					quote! {
+						#[cfg(not(all(target_family = "wasm", target_os = "unknown")))]
+						#[allow(missing_docs)]
+						impl<#(#free_state_params),*> #builder_name<#(#input_states),*> {
+							pub fn #name(
+								mut self,
+								value: ::core::option::Option<<#target_ty as #reinhardt::model_info::InfoModel>::PrimaryKey>,
+							) -> #builder_name<#(#output_states),*> {
+								self.#name = ::core::option::Option::Some(
+									value.map(#reinhardt::model_info::RelationInfo::new)
 								);
 								#builder_name {
 									#(#field_names: self.#field_names,)*
@@ -8429,6 +9597,164 @@ mod tests {
 			),
 			"nullable foreign keys must permit omitted fixture relation values"
 		);
+	}
+
+	#[test]
+	fn test_model_form_nullable_relation_id_descriptor_is_not_required() {
+		let input = quote! {
+			#[model(app_label = "fixture_tests", table_name = "fixture_models", form = true)]
+			struct FixtureModel {
+				#[field(primary_key = true)]
+				id: i64,
+				#[rel(foreign_key, null = true)]
+				author: ForeignKeyField<Author>,
+				#[serde(default)]
+				author_id: <Author as InfoModel>::PrimaryKey,
+			}
+		};
+
+		let output = model_derive_impl(syn::parse2(input).unwrap())
+			.expect("fixture model must generate")
+			.to_string();
+
+		assert!(
+			output.contains("required : false") && output.contains("nullable : true"),
+			"nullable relation ID descriptors must accept an omitted relation value"
+		);
+	}
+
+	#[test]
+	fn test_model_form_explicit_non_null_overrides_option_type() {
+		let input = quote! {
+			#[model(app_label = "fixture_tests", table_name = "fixture_models", form = true)]
+			struct FixtureModel {
+				#[field(primary_key = true)]
+				id: i64,
+				#[field(max_length = 64, null = false)]
+				name: Option<String>,
+			}
+		};
+
+		let output = model_derive_impl(syn::parse2(input).unwrap())
+			.expect("explicit non-null form field should derive")
+			.to_string();
+
+		assert!(
+			output.contains("name : \"name\"")
+				&& output.contains("nullable : false")
+				&& output.contains("required : true")
+				&& output.contains("MissingModelField"),
+			"an explicit null = false annotation must control the generated descriptor: {output}"
+		);
+	}
+
+	#[test]
+	fn test_model_form_f32_bounds_are_representable() {
+		let input = quote! {
+			#[model(app_label = "fixture_tests", table_name = "fixture_models", form = true)]
+			struct FixtureModel {
+				#[field(primary_key = true)]
+				id: i64,
+				ratio: f32,
+			}
+		};
+
+		let output = model_derive_impl(syn::parse2(input).unwrap())
+			.expect("f32 form field should derive")
+			.to_string();
+
+		assert!(
+			output.contains("f32 :: MIN as f64") && output.contains("f32 :: MAX as f64"),
+			"f32 descriptors must bound values to the finite f32 domain: {output}"
+		);
+	}
+
+	#[test]
+	fn test_model_form_blank_non_null_field_requires_explicit_value() {
+		let input = quote! {
+			#[model(app_label = "fixture_tests", table_name = "fixture_models", form = true)]
+			struct FixtureModel {
+				#[field(primary_key = true)]
+				id: i64,
+				#[field(blank = true)]
+				quantity: i64,
+			}
+		};
+
+		let output = model_derive_impl(syn::parse2(input).unwrap())
+			.expect("blank non-null field should derive")
+			.to_string();
+		let quantity_assignment = output
+			.split("quantity : match data . quantity")
+			.nth(1)
+			.expect("generated form must initialize the blank field")
+			.split("} ,")
+			.next()
+			.expect("quantity assignment must terminate");
+
+		assert!(
+			quantity_assignment.contains("MissingModelField"),
+			"omitting a non-null blank field must not synthesize a default: {quantity_assignment}"
+		);
+	}
+
+	#[test]
+	fn test_model_form_emits_relation_target_and_primary_key_metadata() {
+		let input = quote! {
+			#[model(app_label = "fixture_tests", table_name = "fixture_models", form = true)]
+			struct FixtureModel {
+				#[field(primary_key = true)]
+				id: i64,
+				#[rel(foreign_key)]
+				author: ForeignKeyField<Author>,
+			}
+		};
+
+		let output = model_derive_impl(syn::parse2(input).unwrap())
+			.expect("relation-backed form should derive")
+			.to_string();
+
+		assert!(
+			output.contains("relation_target_matches")
+				&& output.contains("TypeId :: of :: < Author >")
+				&& output.contains("ModelFormPrimaryKeyFields"),
+			"generated schemas must expose target-aware relation and primary-key metadata: {output}"
+		);
+	}
+
+	#[test]
+	fn test_model_form_rejects_payload_api_accessor_collisions() {
+		for field_name in [
+			"default",
+			"fields",
+			"json",
+			"get_json",
+			"set_json",
+			"supplied_fields",
+			"__reinhardt_checkbox_enabled",
+			"__reinhardt_color_accent",
+			"__reinhardt_defaulted_summary",
+		] {
+			let field_name = Ident::new(field_name, proc_macro2::Span::call_site());
+			let input = quote! {
+				#[model(app_label = "fixture_tests", table_name = "fixture_models", form = true)]
+				struct FixtureModel {
+					#[field(primary_key = true)]
+					id: i64,
+					#[field(max_length = 64)]
+					#field_name: String,
+				}
+			};
+
+			let error = model_derive_impl(syn::parse2(input).unwrap())
+				.expect_err("payload API names must not be shadowed by generated accessors");
+			assert!(
+				error
+					.to_string()
+					.contains("collides with generated model-form API"),
+				"field `{field_name}` must be rejected: {error}",
+			);
+		}
 	}
 
 	#[test]

@@ -9,8 +9,9 @@
 //! This crate provides comprehensive form processing capabilities inspired by Django's
 //! form system, focusing on data validation and multi-step form wizards.
 //!
-//! This crate is designed to be WASM-compatible, providing a pure form processing layer
-//! without HTML generation or platform-specific features.
+//! Generated model schemas and payloads are target-neutral. Native candidate
+//! construction and persistence use a caller-owned asynchronous ORM executor.
+//! HTML rendering is provided by `reinhardt-pages`.
 //!
 //! ## Features
 //!
@@ -46,15 +47,58 @@
 //!
 //! ### Model Form
 //!
-//! ```rust,ignore
-//! use reinhardt_forms::{ModelForm, ModelFormBuilder};
+//! ```rust,no_run
+//! use reinhardt_core::model_form::ModelFormPolicy;
+//! use reinhardt_db::orm::OrmExecutor;
+//! use reinhardt_forms::{ModelForm, ModelFormError};
+//! use reinhardt_macros::model;
+//! use serde::{Deserialize, Serialize};
+//! # mod model_form {
+//! #     pub use reinhardt_forms::model_form::*;
+//! # }
 //!
-//! // Auto-generate form from User model
-//! let form = ModelFormBuilder::<User>::new()
-//!     .fields(vec!["username".to_string(), "email".to_string(), "bio".to_string()])
-//!     .exclude(vec!["password".to_string()])
-//!     .build();
+//! #[model(
+//!     app_label = "forms",
+//!     table_name = "model_form_documented_users",
+//!     form = true,
+//!     info = false
+//! )]
+//! #[derive(Clone, Deserialize, Serialize)]
+//! struct User {
+//!     #[field(primary_key = true)]
+//!     id: Option<i64>,
+//!     #[field(max_length = 150)]
+//!     username: String,
+//!     #[field(max_length = 254)]
+//!     email: String,
+//! }
+//!
+//! struct PublicUserFields;
+//!
+//! impl ModelFormPolicy for PublicUserFields {
+//!     fn allows(field: &str) -> bool {
+//!         matches!(field, "username" | "email")
+//!     }
+//! }
+//!
+//! async fn create_user(
+//!     executor: &mut dyn OrmExecutor,
+//! ) -> Result<User, ModelFormError> {
+//!     let mut data = UserModelFormData::<PublicUserFields>::empty();
+//!     data.set_username("alice".to_owned());
+//!     data.set_email("alice@example.com".to_owned());
+//!
+//!     let mut form = ModelForm::<User, PublicUserFields>::from_payload(data);
+//!     let candidate = form.build_instance()?;
+//!     assert_eq!(candidate.username, "alice");
+//!     form.save(executor).await
+//! }
+//! # fn main() {}
 //! ```
+//!
+//! `build_instance()` validates and caches a candidate without database
+//! access. `save(executor).await` persists through the caller's executor and
+//! preserves structured database failures in [`ModelFormError`].
 //!
 //! ## Available Field Types
 //!
@@ -166,7 +210,7 @@ pub use formsets::{
 	InlineFormSet,
 	ModelFormSet as AdvancedModelFormSet, // Renamed to avoid conflict
 };
-pub use model_form::{FieldType, FormModel, ModelForm, ModelFormBuilder, ModelFormConfig};
+pub use model_form::{FormModel, ModelForm, ModelFormError, ModelFormPersistenceMode};
 pub use model_formset::{ModelFormSet, ModelFormSetBuilder, ModelFormSetConfig};
 pub use validators::{SlugValidator, UrlValidator};
 pub use wizard::{FormWizard, WizardStep};

@@ -134,9 +134,10 @@ fn convert_value_to_query_value(value: reinhardt_query::value::Value) -> QueryVa
 		SV::ChronoDateTimeWithTimeZone(Some(dt)) => {
 			QueryValue::Timestamp((*dt).with_timezone(&chrono::Utc))
 		}
+		SV::ChronoDateTime(Some(dt)) => QueryValue::NaiveTimestamp(*dt),
 
-		// Other datetime types that cannot be easily converted
-		SV::ChronoDate(_) | SV::ChronoTime(_) | SV::ChronoDateTime(_) => {
+		// Other datetime types that cannot be represented as native parameters.
+		SV::ChronoDate(_) | SV::ChronoTime(_) => {
 			// Convert to string representation as fallback
 			QueryValue::String(format!("{:?}", value))
 		}
@@ -1885,6 +1886,18 @@ mod tests {
 		let option = LoadOption::LoadOnly(vec!["id".to_string(), "name".to_string()]);
 		let comment = option.to_sql_comment();
 		assert!(comment.contains("load_only(id, name)"));
+	}
+
+	#[test]
+	fn naive_datetime_binds_without_an_implicit_utc_offset() {
+		let value = chrono::NaiveDate::from_ymd_opt(2026, 7, 26)
+			.expect("valid date")
+			.and_hms_opt(9, 15, 30)
+			.expect("valid time");
+
+		let result = convert_value_to_query_value(SV::ChronoDateTime(Some(Box::new(value))));
+
+		assert_eq!(result, QueryValue::NaiveTimestamp(value));
 	}
 
 	#[rstest]

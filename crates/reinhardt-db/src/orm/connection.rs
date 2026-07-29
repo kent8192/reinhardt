@@ -87,6 +87,9 @@ impl QueryRow {
 					serde_json::Value::String(base64::engine::general_purpose::STANDARD.encode(&b))
 				}
 				QueryValue::Timestamp(dt) => serde_json::Value::String(dt.to_rfc3339()),
+				QueryValue::NaiveTimestamp(dt) => {
+					serde_json::Value::String(dt.and_utc().to_rfc3339())
+				}
 				QueryValue::Uuid(u) => serde_json::Value::String(u.to_string()),
 				QueryValue::Json(Some(value)) => {
 					native_json_fields.insert(key.clone());
@@ -144,8 +147,25 @@ impl QueryRow {
 	pub(crate) fn deserialize_model<M: super::Model>(
 		&self,
 	) -> std::result::Result<M, super::FieldCodecError> {
+		let mut data = self.data.clone();
+		if let serde_json::Value::Object(values) = &mut data {
+			for field in M::field_metadata()
+				.into_iter()
+				.filter(|field| field.storage_kind == Some(super::DatabaseStorageKind::DateTime))
+			{
+				let column = field.db_column.as_deref().unwrap_or(&field.name);
+				let Some(serde_json::Value::String(value)) = values.get_mut(column) else {
+					continue;
+				};
+				if chrono::DateTime::parse_from_rfc3339(value).is_err()
+					&& chrono::NaiveDateTime::parse_from_str(value, "%Y-%m-%d %H:%M:%S%.f").is_ok()
+				{
+					*value = format!("{}+00:00", value.replace(' ', "T"));
+				}
+			}
+		}
 		super::json::deserialize_model_row::<M>(
-			self.data.clone(),
+			data,
 			self.json_null_fields.clone(),
 			self.native_json_fields.clone(),
 		)
@@ -186,6 +206,16 @@ pub trait OrmExecutor: Send {
 	/// Returns whether PostgreSQL-compatible SQL targets CockroachDB.
 	fn is_cockroachdb(&self) -> bool {
 		false
+	}
+
+	/// Whether propagating an operation failure rolls back the current work.
+	fn rolls_back_on_error(&self) -> bool {
+		false
+	}
+
+	/// Returns the pending outcome for a closure-scoped atomic transaction.
+	fn transaction_outcome(&self) -> Option<super::transaction::AtomicTransactionOutcome> {
+		None
 	}
 
 	/// Executes a SQL statement and preserves backend-specific result metadata.
@@ -657,6 +687,23 @@ mod tests {
 		assert_eq!(
 			DatabaseBackend::from(DatabaseType::Sqlite),
 			DatabaseBackend::Sqlite
+		);
+	}
+
+	#[test]
+	fn query_row_decodes_naive_timestamps_as_utc_rfc3339() {
+		let timestamp = chrono::NaiveDate::from_ymd_opt(2026, 7, 29)
+			.expect("the fixture date must be valid")
+			.and_hms_opt(12, 34, 56)
+			.expect("the fixture time must be valid");
+		let mut backend_row = Row::new();
+		backend_row.insert("applied".to_string(), QueryValue::NaiveTimestamp(timestamp));
+
+		let row = QueryRow::from_backend_row(backend_row);
+
+		assert_eq!(
+			row.get::<chrono::DateTime<chrono::Utc>>("applied"),
+			Some(timestamp.and_utc())
 		);
 	}
 

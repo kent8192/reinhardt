@@ -4,9 +4,14 @@ Django-inspired form handling and validation for Rust
 
 ## Overview
 
-`reinhardt-forms` provides a comprehensive form system for form handling and validation. Inspired by Django's forms framework, it offers both automatic form generation from models and manual form definitions with extensive validation capabilities.
+`reinhardt-forms` provides a comprehensive form system for form handling and
+validation. Inspired by Django's forms framework, it offers generated
+model-backed forms and manual form definitions with extensive validation
+capabilities.
 
-This crate is designed to be **WASM-compatible**, providing a pure form processing layer without HTML generation or platform-specific features. For HTML rendering, see `reinhardt-pages`.
+Target-neutral model schemas and payloads can be shared with WASM code. Native
+candidate construction and persistence use the caller's asynchronous ORM
+executor. For HTML rendering and WASM form submission, see `reinhardt-pages`.
 
 ## Installation
 
@@ -15,11 +20,11 @@ Add `reinhardt` to your `Cargo.toml`:
 <!-- reinhardt-version-sync:3 -->
 ```toml
 [dependencies]
-reinhardt = { version = "0.4.0-alpha.2", features = ["forms"] }
+reinhardt = { version = "0.4.0-alpha.3", features = ["forms"] }
 
 # Or use a preset:
-# reinhardt = { version = "0.4.0-alpha.2", features = ["standard"] }  # Recommended
-# reinhardt = { version = "0.4.0-alpha.2", features = ["full"] }      # All features
+# reinhardt = { version = "0.4.0-alpha.3", features = ["standard"] }  # Recommended
+# reinhardt = { version = "0.4.0-alpha.3", features = ["full"] }      # All features
 
 # Forms is included in the standard preset
 ```
@@ -98,24 +103,23 @@ use reinhardt::forms::{Form, Field, CharField, IntegerField};
 
 #### Implemented ✓
 
-- **ModelForm (`ModelForm<T>`)**: Automatic form generation from models
-  - `FormModel` trait for model integration
-  - Field type inference from model metadata
-  - Field inclusion/exclusion configuration
-  - Custom field override support
-  - Model instance population from form data
-  - Save functionality with validation
+- **Generated model forms (`ModelForm<T, P>`)**: Descriptor-driven model
+  validation and persistence
+  - Explicit `#[model(form = true)]` opt-in
+  - Generated `{Model}FormSchema` metadata and
+    `{Model}ModelFormData<P>` typed payload
+  - `ModelFormPolicy`-controlled public field selection
+  - Typed trusted setters for server-owned values
+  - `from_payload` for explicit create intent
+  - `from_payload_and_instance` for explicit update intent
+  - Database-free, cached `build_instance()` candidate construction
+  - Caller-owned asynchronous `save(executor)` persistence
+  - Structured `ModelFormError`, including retained database errors
 
-- **ModelFormBuilder**: Fluent API for ModelForm configuration
-  - Field selection (include/exclude)
-  - Widget customization
-  - Label customization
-  - Help text customization
-
-- **ModelFormConfig**: Configuration structure for ModelForm behavior
-  - Field mapping configuration
-  - Validation rules
-  - Save behavior customization
+Public JSON fields denied by the active policy are recorded during
+deserialization and rejected by native candidate construction. Hiding a field
+in HTML is not the security boundary. Server code may use the generated typed
+setter to supply an excluded editable value from a trusted source.
 
 ### Formsets
 
@@ -131,11 +135,26 @@ use reinhardt::forms::{Form, Field, CharField, IntegerField};
   - Non-form error tracking
 
 - **ModelFormSet**: Formset for model instances
-  - Queryset integration
-  - Instance creation, update, and deletion
+  - Generated payload and policy integration
+  - Candidate-based `min_num` and `max_num` validation
+  - Asynchronous ordered persistence through a caller-owned executor
+  - Full candidate preflight before the first write
+  - Untouched create-mode extra forms are excluded from cardinality, preflight,
+    and persistence
+  - Mutable extra-form access through `forms_mut` for submitted payloads
+  - Persistence stops at the first error
   - Inline formset support
   - Configuration via `ModelFormSetConfig`
   - Builder pattern API via `ModelFormSetBuilder`
+
+- **AdvancedModelFormSet**: Cardinality-aware model formset
+  - `min_num` and `max_num` validation before candidate preflight
+  - Incremental form insertion through `add_form`
+  - Asynchronous ordered persistence through a caller-owned executor
+  - Untouched create-mode extra forms are excluded from cardinality, preflight,
+    and persistence; supplied or forbidden input marks an extra as submitted
+  - Inline parent persistence uses explicit `InlineFormSet::for_create` or
+    `InlineFormSet::for_update` intent
 
 ### Advanced Features
 
@@ -254,13 +273,83 @@ assert!(form.is_valid());
 
 ### ModelForm
 
-```rust
-use reinhardt::forms::{ModelForm, ModelFormBuilder};
+```rust,no_run
+use reinhardt::core::model_form::{ModelFormPolicy, ModelFormSchema};
+use reinhardt::db::associations::ForeignKeyField;
+use reinhardt::db::orm::OrmExecutor;
+use reinhardt::forms::{FormModel, ModelForm, ModelFormError};
+use reinhardt::model;
+use serde::{Deserialize, Serialize};
 
-let form = ModelFormBuilder::<User>::new()
-    .include_fields(vec!["name", "email"])
-    .build();
+#[model(app_label = "users", form = true)]
+#[derive(Clone, Deserialize, Serialize)]
+struct User {
+    #[field(primary_key = true)]
+    id: i64,
+}
+
+#[model(app_label = "polls", form = true)]
+#[derive(Clone, Deserialize, Serialize)]
+struct Question {
+    #[field(primary_key = true)]
+    id: Option<i64>,
+    #[field(max_length = 200)]
+    text: String,
+    #[rel(foreign_key, related_name = "questions")]
+    owner: ForeignKeyField<User>,
+}
+
+struct PublicQuestionFields;
+
+impl ModelFormPolicy for PublicQuestionFields {
+    fn allows(field: &str) -> bool {
+        field == "text"
+    }
+}
+
+async fn create_question(
+    executor: &mut dyn OrmExecutor,
+    owner_id: i64,
+) -> Result<Question, ModelFormError> {
+    let mut payload = QuestionModelFormData::<PublicQuestionFields>::empty();
+    payload.set_text("Which framework should we use?".to_owned());
+
+    // This typed setter is trusted server-side construction. The same field is
+    // still rejected if it arrives in the public JSON payload.
+    payload.set_trusted_owner_id(owner_id);
+
+    let mut form = ModelForm::<Question, PublicQuestionFields>::from_payload(payload);
+    let candidate = form.build_instance()?;
+    assert_eq!(candidate.owner_id, owner_id);
+
+    form.save(executor).await
+}
+
+fn check_generated_contract<T, P>()
+where
+    T: FormModel,
+    P: ModelFormPolicy,
+    T::Schema: ModelFormSchema<Model = T>,
+{
+}
 ```
+
+Use `from_payload_and_instance(payload, instance)` for an update. Create and
+update intent is selected by the constructor, not by a database existence
+query or a primary-key guess.
+
+`build_instance()` is the equivalent of Django's `commit=False`: it validates
+and caches a model candidate without database access. Repeated calls and a
+failed `save()` reuse that candidate, which makes persistence retryable.
+Mutations made directly to the returned clone after `build_instance()` are the
+caller's validation responsibility.
+
+An excluded required value must have a declared model default, an automatic
+model construction path, or a value supplied by a trusted typed setter before
+construction. Otherwise `build_instance()` returns
+`ModelFormError::MissingModelField`. Persistence failures remain
+`ModelFormError::Persistence`, and `database_error()` returns the structured
+`DatabaseError`.
 
 ### Custom Validation
 

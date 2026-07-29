@@ -3,6 +3,7 @@
 #[test]
 fn non_unique_field_has_no_unique_accessor() {
 	let tests = trybuild::TestCases::new();
+	tests.compile_fail("tests/macros/ui/fail/field_ref_safe_construction.rs");
 	tests.compile_fail("tests/macros/ui/fail/non_unique_field_has_no_unique_accessor.rs");
 	tests.compile_fail("tests/macros/ui/fail/safe_unique_field_proof_cannot_be_forged.rs");
 	tests.compile_fail("tests/macros/ui/fail/unique_field_ref_cannot_be_constructed.rs");

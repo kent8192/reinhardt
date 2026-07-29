@@ -1,0 +1,11 @@
+error[E0599]: no function or associated item named `new` found for struct `FieldRef` in the current scope
+ --> tests/macros/ui/fail/field_ref_safe_construction.rs:6:36
+  |
+6 | 	let _ = FieldRef::<User, String>::new("forged");
+  | 	                                  ^^^ function or associated item not found in `FieldRef<User, std::string::String>`
+  |
+note: if you're trying to build a new `FieldRef<User, std::string::String>`, consider using `FieldRef::<M, T>::from_model_field` which returns `FieldRef<_, _>`
+ --> $WORKSPACE/crates/reinhardt-db/src/orm/expressions.rs
+  |
+  | 	pub const unsafe fn from_model_field(
+  | 	^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^

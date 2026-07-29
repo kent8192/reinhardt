@@ -230,7 +230,7 @@ impl ModelServerFnResource for WidgetResource {
 
 	fn lookup_field() -> UniqueFieldRef<Self::Model, Self::Lookup> {
 		// SAFETY: The handwritten test schema creates a unique index for `name`.
-		unsafe { UniqueFieldRef::from_model_field("name") }
+		unsafe { UniqueFieldRef::from_model_field("name", "name") }
 	}
 
 	fn base_queryset() -> QuerySet<Self::Model> {

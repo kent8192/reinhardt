@@ -171,11 +171,12 @@
 //! a configured alias and defaults to `default`; use `--database-url` only for
 //! an explicit URL override. Human-readable progress is written to stderr.
 //!
-//! Explicit `--output DIRECTORY` mode generates a module file set. Existing
-//! destinations are rejected unless `--force` is also present, and a failed
-//! publication is rollback-safe and all-or-nothing when the command reports
-//! failure: replaced files are restored and newly created partial output is
-//! removed. The `--force` option is invalid without `--output`.
+//! Explicit `--output DIRECTORY` mode generates `DIRECTORY/models.rs` plus
+//! `DIRECTORY/models/<table>.rs` child modules and never generates `mod.rs`.
+//! Existing destinations are rejected unless `--force` is also present, and a
+//! failed publication is rollback-safe and all-or-nothing when the command
+//! reports failure: replaced files are restored and newly created partial
+//! output is removed. The `--force` option is invalid without `--output`.
 
 /// Base command trait and argument/option definitions.
 pub mod base;

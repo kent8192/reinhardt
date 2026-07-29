@@ -168,7 +168,7 @@ impl DatabaseConfig {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct OutputConfig {
-	/// Output directory for generated files
+	/// Output root for `models.rs` and the `models/` child-module directory.
 	pub directory: PathBuf,
 
 	/// Generate all models in a single file

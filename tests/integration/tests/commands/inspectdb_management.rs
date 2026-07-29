@@ -88,7 +88,7 @@ impl InspectDbWriter for RollbackFaultOutput {
 		let new_file = output
 			.files
 			.iter()
-			.find(|file| file.path.ends_with("mod.rs"))
+			.find(|file| file.path.ends_with("models.rs"))
 			.expect("module output should be generated");
 		let original = fs::read(&replacement.path)?;
 
@@ -584,13 +584,7 @@ async fn mysql_inspectdb_selects_exact_tables_and_includes_views(
 		.as_ref()
 		.expect("generated-column metadata should be preserved");
 	assert_eq!(generated.storage, GeneratedStorage::Stored);
-	assert!(
-		generated
-			.raw_sql
-			.as_deref()
-			.is_some_and(|expression| expression.contains("amount")),
-		"generated expression should reference amount",
-	);
+	assert_eq!(generated.raw_sql.as_deref(), Some("`amount`"));
 	let foreign_keys = &schema.tables["audit_log"].foreign_keys;
 	assert_eq!(foreign_keys.len(), 1);
 	assert_eq!(foreign_keys[0].name, "fk_audit_log_account");
@@ -631,8 +625,9 @@ async fn directory_rejection_preserves_existing_output_and_creates_no_partial_fi
 ) {
 	let fixture = sqlite_inspectdb_fixture.await;
 	let output_directory = fixture._temp.path().join("models");
-	fs::create_dir(&output_directory).expect("output directory should be created");
-	let accounts_path = output_directory.join("accounts.rs");
+	fs::create_dir_all(output_directory.join("models"))
+		.expect("output directory should be created");
+	let accounts_path = output_directory.join("models/accounts.rs");
 	fs::write(&accounts_path, b"original bytes").expect("existing output should be created");
 	let output = Arc::new(CapturedOutput::default());
 	let command = InspectDbCommand::with_writer(output.clone());
@@ -668,8 +663,11 @@ async fn directory_rejection_preserves_existing_output_and_creates_no_partial_fi
 					.into_owned()
 			})
 			.collect::<Vec<_>>(),
-		vec!["accounts.rs".to_string()],
+		vec!["models".to_string()],
 	);
+	assert!(!output_directory.join("models.rs").exists());
+	assert!(!output_directory.join("mod.rs").exists());
+	assert!(!output_directory.join("models/mod.rs").exists());
 	assert_eq!(
 		output
 			.stdout
@@ -687,8 +685,9 @@ async fn directory_adapter_propagates_publication_failure_after_strategy_rolls_b
 ) {
 	let fixture = sqlite_inspectdb_fixture.await;
 	let output_directory = fixture._temp.path().join("models");
-	fs::create_dir(&output_directory).expect("output directory should be created");
-	let accounts_path = output_directory.join("accounts.rs");
+	fs::create_dir_all(output_directory.join("models"))
+		.expect("output directory should be created");
+	let accounts_path = output_directory.join("models/accounts.rs");
 	fs::write(&accounts_path, b"original bytes").expect("existing output should be created");
 	let output = Arc::new(RollbackFaultOutput::default());
 	let command = InspectDbCommand::with_writer(output.clone());
@@ -732,8 +731,11 @@ async fn directory_adapter_propagates_publication_failure_after_strategy_rolls_b
 					.into_owned()
 			})
 			.collect::<Vec<_>>(),
-		vec!["accounts.rs".to_string()],
+		vec!["models".to_string()],
 	);
+	assert!(!output_directory.join("models.rs").exists());
+	assert!(!output_directory.join("mod.rs").exists());
+	assert!(!output_directory.join("models/mod.rs").exists());
 	assert!(
 		output
 			.stdout

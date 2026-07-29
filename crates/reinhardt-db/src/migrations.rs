@@ -17,7 +17,9 @@
 //! [`inspect_database`] reads exact table selections and optionally includes
 //! backend views or PostgreSQL partitions. [`render_models_module`] produces a
 //! single parseable Rust module for stdout, while
-//! [`generate_models_canonical`] produces a deterministic multi-file set.
+//! [`generate_models_canonical`] produces a deterministic Rust 2024 multi-file
+//! set rooted at `models.rs` with child modules beneath `models/`; no `mod.rs`
+//! is generated.
 //! Management-command directory output validates the complete set before using
 //! rollback-safe, all-or-nothing publication when the command reports failure.
 //!

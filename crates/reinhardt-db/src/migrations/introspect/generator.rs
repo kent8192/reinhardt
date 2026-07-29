@@ -106,15 +106,15 @@ impl SchemaCodeGenerator {
 			let file = self.generate_single_file(&tables, &table_to_struct, schema)?;
 			output.add_file(file);
 		} else {
-			// Generate one file per table
+			// Generate one file per table beneath the Rust 2024 module directory.
 			for table in &tables {
 				let file = self.generate_model_file(table, &table_to_struct, schema)?;
 				output.add_file(file);
 			}
 
-			// Generate mod.rs file
-			let mod_file = self.generate_mod_file(&tables)?;
-			output.add_file(mod_file);
+			// Generate the sibling module entry point.
+			let module_file = self.generate_module_file(&tables)?;
+			output.add_file(module_file);
 		}
 
 		Ok(output)
@@ -175,13 +175,13 @@ impl SchemaCodeGenerator {
 
 		// Use snake_case for file names
 		let file_name = format!("{}.rs", super::naming::to_snake_case(&table.name));
-		let path = self.config.output.directory.join(file_name);
+		let path = self.config.output.directory.join("models").join(file_name);
 
 		Ok(GeneratedFile::new(path, content))
 	}
 
-	/// Generate the mod.rs file that re-exports all models.
-	fn generate_mod_file(&self, tables: &[&TableInfo]) -> Result<GeneratedFile> {
+	/// Generate `models.rs`, which declares and re-exports all model modules.
+	fn generate_module_file(&self, tables: &[&TableInfo]) -> Result<GeneratedFile> {
 		let mut module_names = Vec::new();
 		let mut struct_names = Vec::new();
 
@@ -210,7 +210,7 @@ impl SchemaCodeGenerator {
 		};
 
 		let content = self.format_tokens(tokens)?;
-		let path = self.config.output.directory.join("mod.rs");
+		let path = self.config.output.directory.join("models.rs");
 
 		Ok(GeneratedFile::new(path, content))
 	}
@@ -509,6 +509,49 @@ mod tests {
 		assert!(code.contains("pub id: i64"));
 		assert!(code.contains("pub name: String"));
 		assert!(code.contains("pub email: Option<String>"));
+	}
+
+	#[test]
+	fn multi_file_generation_uses_rust_2024_module_layout() {
+		let mut config = IntrospectConfig::default().with_app_label("test");
+		config.output.directory = PathBuf::from("/tmp/reinhardt-inspectdb-layout");
+		let generator = SchemaCodeGenerator::new(config);
+		let table = create_test_table();
+		let schema = DatabaseSchema {
+			tables: [("users".to_string(), table)].into(),
+		};
+
+		let output = generator
+			.generate(&schema)
+			.expect("multi-file generation should succeed");
+		let files: Vec<_> = output
+			.files
+			.iter()
+			.map(|file| file.path.as_path())
+			.collect();
+
+		assert_eq!(
+			files,
+			vec![
+				std::path::Path::new("/tmp/reinhardt-inspectdb-layout/models/users.rs"),
+				std::path::Path::new("/tmp/reinhardt-inspectdb-layout/models.rs"),
+			],
+		);
+		assert!(
+			output
+				.files
+				.iter()
+				.all(|file| file.path.file_name().is_none_or(|name| name != "mod.rs")),
+			"Rust 2024 output must never generate mod.rs",
+		);
+		let module = output
+			.files
+			.iter()
+			.find(|file| file.path.ends_with("models.rs"))
+			.expect("models.rs should be generated");
+		syn::parse_file(&module.content).expect("models.rs should be parseable Rust");
+		assert!(module.content.contains("pub mod users;"));
+		assert!(module.content.contains("pub use users::Users;"));
 	}
 
 	#[test]

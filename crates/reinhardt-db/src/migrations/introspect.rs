@@ -103,6 +103,8 @@ pub fn generate_models(
 ///
 /// This applies the same schema and syntax canonicalization to stdout and directory
 /// inspectdb output, then sorts the complete file set by destination path.
+/// Multi-file output uses Rust 2024's `models.rs` plus `models/<table>.rs`
+/// layout and never generates `mod.rs`.
 pub fn generate_models_canonical(
 	config: &IntrospectConfig,
 	schema: &DatabaseSchema,

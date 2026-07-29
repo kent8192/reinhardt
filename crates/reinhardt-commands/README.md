@@ -250,12 +250,13 @@ directly:
 cargo run --bin manage -- inspectdb > src/models.rs
 ```
 
-Use `--output DIRECTORY` for a generated multi-file module. The command
-preflights the complete file set and refuses to overwrite any existing file.
-Add `--force` only with `--output` to replace existing generated files. File
-publication is rollback-safe and all-or-nothing when the command reports a
-failure: replaced files are restored and newly created partial output is
-removed.
+Use `--output DIRECTORY` for a generated Rust 2024 multi-file module. It writes
+`DIRECTORY/models.rs` and one child module per table beneath
+`DIRECTORY/models/`; it never generates `mod.rs`. The command preflights the
+complete file set and refuses to overwrite any existing file. Add `--force`
+only with `--output` to replace existing generated files. File publication is
+rollback-safe and all-or-nothing when the command reports a failure: replaced
+files are restored and newly created partial output is removed.
 
 ### Rust Management Shell
 

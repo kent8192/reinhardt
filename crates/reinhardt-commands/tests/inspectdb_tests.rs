@@ -117,8 +117,15 @@ async fn directory_mode_keeps_stdout_clean_and_writes_generated_files() {
 	let stdout = output.stdout.lock().expect("stdout capture lock");
 	let stderr = output.stderr.lock().expect("stderr capture lock");
 	assert!(stdout.is_empty(), "directory mode must not write stdout");
-	assert!(output_directory.join("users.rs").is_file());
-	assert!(output_directory.join("mod.rs").is_file());
+	assert!(output_directory.join("models.rs").is_file());
+	assert!(output_directory.join("models/users.rs").is_file());
+	assert!(!output_directory.join("mod.rs").exists());
+	assert!(!output_directory.join("models/mod.rs").exists());
+	let models_module =
+		fs::read_to_string(output_directory.join("models.rs")).expect("read models module");
+	syn::parse_file(&models_module).expect("models.rs should be parseable");
+	assert!(models_module.contains("pub mod users;"));
+	assert!(models_module.contains("pub use users::Users;"));
 	assert!(stderr.iter().any(|line| line.contains("Generated 2 files")));
 	drop(stderr);
 	drop(stdout);
@@ -255,8 +262,8 @@ fn base_command_metadata_exposes_output_and_config_short_aliases() {
 async fn atomic_writer_failure_is_returned_without_partial_output() {
 	let (temp, database_url) = sqlite_fixture().await;
 	let output_directory = temp.path().join("models");
-	fs::create_dir(&output_directory).expect("create output directory");
-	fs::write(output_directory.join("users.rs"), "original bytes")
+	fs::create_dir_all(output_directory.join("models")).expect("create output directory");
+	fs::write(output_directory.join("models/users.rs"), "original bytes")
 		.expect("create conflicting destination");
 	let output = Arc::new(CapturedOutput::default());
 	let command = InspectDbCommand::with_writer(output.clone());
@@ -275,10 +282,13 @@ async fn atomic_writer_failure_is_returned_without_partial_output() {
 
 	assert!(error.to_string().contains("Generated file write failed"));
 	assert_eq!(
-		fs::read_to_string(output_directory.join("users.rs")).expect("read original destination"),
+		fs::read_to_string(output_directory.join("models/users.rs"))
+			.expect("read original destination"),
 		"original bytes"
 	);
+	assert!(!output_directory.join("models.rs").exists());
 	assert!(!output_directory.join("mod.rs").exists());
+	assert!(!output_directory.join("models/mod.rs").exists());
 	assert!(
 		output
 			.stdout

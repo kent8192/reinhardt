@@ -1,0 +1,11 @@
+error: HNSW vector indexes do not accept `lists`
+  --> tests/ui/field_attributes/vector_index_invalid_hnsw_lists.rs:12:10
+   |
+12 |       #[field(index(
+   |  _____________^
+13 | |         name = "documents_embedding_hnsw",
+14 | |         method = "hnsw",
+15 | |         opclass = "vector_l2_ops",
+16 | |         lists = 100
+17 | |     ))]
+   | |_____^

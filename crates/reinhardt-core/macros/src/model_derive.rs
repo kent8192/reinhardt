@@ -26,7 +26,7 @@
 
 use std::collections::{HashMap, HashSet};
 
-use proc_macro2::TokenStream;
+use proc_macro2::{Span, TokenStream};
 use quote::{ToTokens, quote};
 use syn::Token;
 use syn::punctuated::Punctuated;
@@ -726,6 +726,184 @@ enum CompressionMethod {
 	Lz4,
 }
 
+#[derive(Debug, Clone, Copy)]
+enum StructuredIndexMethod {
+	Hnsw,
+	Ivfflat,
+}
+
+#[derive(Debug, Clone)]
+struct StructuredIndexConfig {
+	name: String,
+	name_span: Span,
+	method: StructuredIndexMethod,
+	opclass: String,
+	m: Option<u16>,
+	ef_construction: Option<u16>,
+	lists: Option<u32>,
+}
+
+fn optional_u16_tokens(value: Option<u16>) -> TokenStream {
+	match value {
+		Some(value) => quote! { Some(#value) },
+		None => quote! { None },
+	}
+}
+
+fn optional_u32_tokens(value: Option<u32>) -> TokenStream {
+	match value {
+		Some(value) => quote! { Some(#value) },
+		None => quote! { None },
+	}
+}
+
+impl StructuredIndexConfig {
+	fn parse(meta: syn::meta::ParseNestedMeta<'_>) -> Result<Self> {
+		let mut name = None;
+		let mut method = None;
+		let mut opclass = None;
+		let mut m = None;
+		let mut ef_construction = None;
+		let mut lists = None;
+
+		meta.parse_nested_meta(|nested| {
+			if nested.path.is_ident("name") {
+				if name.is_some() {
+					return Err(nested.error("duplicate vector index key `name`"));
+				}
+				let value = nested.value()?.parse::<syn::LitStr>()?;
+				let parsed = value.value();
+				if parsed.is_empty() {
+					return Err(syn::Error::new(
+						value.span(),
+						"vector index name must not be empty",
+					));
+				}
+				if parsed.contains('\0') {
+					return Err(syn::Error::new(
+						value.span(),
+						"vector index name must not contain NUL",
+					));
+				}
+				if parsed.len() > 63 {
+					return Err(syn::Error::new(
+						value.span(),
+						"vector index name must not exceed PostgreSQL's 63-byte identifier limit",
+					));
+				}
+				name = Some((parsed, value.span()));
+			} else if nested.path.is_ident("method") {
+				if method.is_some() {
+					return Err(nested.error("duplicate vector index key `method`"));
+				}
+				let value = nested.value()?.parse::<syn::LitStr>()?;
+				method = Some(match value.value().as_str() {
+					"hnsw" => StructuredIndexMethod::Hnsw,
+					"ivfflat" => StructuredIndexMethod::Ivfflat,
+					_ => {
+						return Err(syn::Error::new(
+							value.span(),
+							"vector index method must be exactly `hnsw` or `ivfflat`",
+						));
+					}
+				});
+			} else if nested.path.is_ident("opclass") {
+				if opclass.is_some() {
+					return Err(nested.error("duplicate vector index key `opclass`"));
+				}
+				let value = nested.value()?.parse::<syn::LitStr>()?;
+				let value_string = value.value();
+				if !matches!(
+					value_string.as_str(),
+					"vector_l2_ops" | "vector_ip_ops" | "vector_cosine_ops"
+				) {
+					return Err(syn::Error::new(
+						value.span(),
+						"vector index opclass must be one of: vector_l2_ops, vector_ip_ops, vector_cosine_ops",
+					));
+				}
+				opclass = Some(value_string);
+			} else if nested.path.is_ident("m") {
+				if m.is_some() {
+					return Err(nested.error("duplicate vector index key `m`"));
+				}
+				let value = nested.value()?.parse::<syn::LitInt>()?;
+				let parsed = value.base10_parse::<u16>()?;
+				if !(2..=100).contains(&parsed) {
+					return Err(syn::Error::new(
+						value.span(),
+						"vector index option `m` must be in the range 2..=100",
+					));
+				}
+				m = Some(parsed);
+			} else if nested.path.is_ident("ef_construction") {
+				if ef_construction.is_some() {
+					return Err(nested.error("duplicate vector index key `ef_construction`"));
+				}
+				let value = nested.value()?.parse::<syn::LitInt>()?;
+				let parsed = value.base10_parse::<u16>()?;
+				if !(4..=1000).contains(&parsed) {
+					return Err(syn::Error::new(
+						value.span(),
+						"vector index option `ef_construction` must be in the range 4..=1000",
+					));
+				}
+				ef_construction = Some(parsed);
+			} else if nested.path.is_ident("lists") {
+				if lists.is_some() {
+					return Err(nested.error("duplicate vector index key `lists`"));
+				}
+				let value = nested.value()?.parse::<syn::LitInt>()?;
+				let parsed = value.base10_parse::<u32>()?;
+				if !(1..=32768).contains(&parsed) {
+					return Err(syn::Error::new(
+						value.span(),
+						"vector index option `lists` must be in the range 1..=32768",
+					));
+				}
+				lists = Some(parsed);
+			} else {
+				return Err(nested.error("unknown vector index key"));
+			}
+			Ok(())
+		})?;
+
+		let (name, name_span) = name.ok_or_else(|| meta.error("vector index requires `name`"))?;
+		let method = method.ok_or_else(|| meta.error("vector index requires `method`"))?;
+		let opclass = opclass.ok_or_else(|| meta.error("vector index requires `opclass`"))?;
+		match method {
+			StructuredIndexMethod::Hnsw => {
+				if lists.is_some() {
+					return Err(meta.error("HNSW vector indexes do not accept `lists`"));
+				}
+				let effective_m = m.unwrap_or(16);
+				let effective_ef_construction = ef_construction.unwrap_or(64);
+				if effective_ef_construction < 2 * effective_m {
+					return Err(meta.error(
+						"HNSW vector index option `ef_construction` must be at least twice `m`",
+					));
+				}
+			}
+			StructuredIndexMethod::Ivfflat if m.is_some() || ef_construction.is_some() => {
+				return Err(
+					meta.error("IVFFlat vector indexes do not accept `m` or `ef_construction`")
+				);
+			}
+			_ => {}
+		}
+
+		Ok(Self {
+			name,
+			name_span,
+			method,
+			opclass,
+			m,
+			ef_construction,
+			lists,
+		})
+	}
+}
+
 /// Field configuration from `#[field(...)]` attribute
 #[derive(Debug, Clone, Default)]
 struct FieldConfig {
@@ -738,6 +916,7 @@ struct FieldConfig {
 	db_column: Option<String>,
 	editable: Option<bool>,
 	index: Option<bool>,
+	structured_index: Option<StructuredIndexConfig>,
 	check: Option<String>,
 	// Validator flags
 	email: Option<bool>,
@@ -888,8 +1067,15 @@ impl FieldConfig {
 					config.editable = Some(value.value);
 					Ok(())
 				} else if meta.path.is_ident("index") {
-					let value: syn::LitBool = meta.value()?.parse()?;
-					config.index = Some(value.value);
+					if config.index.is_some() || config.structured_index.is_some() {
+						return Err(meta.error("duplicate `index` field attribute"));
+					}
+					if meta.input.peek(syn::Token![=]) {
+						let value: syn::LitBool = meta.value()?.parse()?;
+						config.index = Some(value.value);
+					} else {
+						config.structured_index = Some(StructuredIndexConfig::parse(meta)?);
+					}
 					Ok(())
 				} else if meta.path.is_ident("check") {
 					let value: syn::LitStr = meta.value()?.parse()?;
@@ -1341,6 +1527,13 @@ impl FieldConfig {
 	fn validate_for_field_type(&self, ty: &Type) -> Result<()> {
 		self.validate()?;
 
+		if self.structured_index.is_some() && vector_dimensions(ty)?.is_none() {
+			return Err(syn::Error::new_spanned(
+				ty,
+				"structured vector index metadata is only valid on Vector<N> fields",
+			));
+		}
+
 		let has_generated = self.generated.is_some() || self.generated_sql.is_some();
 		let implicit_integer_pk_auto_increment = self.primary_key
 			&& is_integer_primary_key_type(ty)
@@ -1426,6 +1619,9 @@ struct ForeignKeyFieldInfo {
 /// Generate field metadata string from Rust type
 fn field_type_to_metadata_string(ty: &Type, _config: &FieldConfig) -> Result<TokenStream> {
 	let orm_crate = get_reinhardt_orm_crate();
+	if vector_dimensions(ty)?.is_some() {
+		return Ok(quote! { "reinhardt.orm.models.VectorField" });
+	}
 	let (_is_option, inner_ty) = extract_option_type(ty);
 
 	match inner_ty {
@@ -1561,6 +1757,14 @@ fn map_type_to_field_type(ty: &Type, config: &FieldConfig) -> Result<TokenStream
 		return map_explicit_field_type(explicit_type, &migrations_crate);
 	}
 
+	if let Some(dimensions) = vector_dimensions(ty)? {
+		return Ok(quote! {
+			#migrations_crate::FieldType::Vector {
+				dimensions: #dimensions,
+			}
+		});
+	}
+
 	// Extract the innermost type when the field uses nested Option wrappers.
 	let inner_ty = extract_nested_option_type(ty);
 
@@ -1653,7 +1857,68 @@ fn map_type_to_field_type(ty: &Type, config: &FieldConfig) -> Result<TokenStream
 	Ok(field_type)
 }
 
+#[cfg(feature = "pgvector")]
+fn vector_dimensions(ty: &Type) -> Result<Option<usize>> {
+	let (_is_option, inner_ty) = extract_option_type(ty);
+	let Type::Path(type_path) = inner_ty else {
+		return Ok(None);
+	};
+	let Some(segment) = type_path.path.segments.last() else {
+		return Ok(None);
+	};
+	if segment.ident != "Vector" {
+		return Ok(None);
+	}
+
+	let PathArguments::AngleBracketed(arguments) = &segment.arguments else {
+		return Err(syn::Error::new_spanned(
+			ty,
+			"Vector fields require exactly one integer-literal dimension, for example Vector<1536>",
+		));
+	};
+	if arguments.args.len() != 1 {
+		return Err(syn::Error::new_spanned(
+			arguments,
+			"Vector fields require exactly one integer-literal dimension, for example Vector<1536>",
+		));
+	}
+	let Some(GenericArgument::Const(syn::Expr::Lit(literal))) = arguments.args.first() else {
+		return Err(syn::Error::new_spanned(
+			arguments,
+			"Vector dimensions must be an integer literal, for example Vector<1536>",
+		));
+	};
+	let syn::Lit::Int(dimensions) = &literal.lit else {
+		return Err(syn::Error::new_spanned(
+			literal,
+			"Vector dimensions must be an integer literal, for example Vector<1536>",
+		));
+	};
+	let dimensions = dimensions.base10_parse::<usize>().map_err(|_| {
+		syn::Error::new_spanned(
+			dimensions,
+			"Vector dimensions must be an integer literal representable as usize",
+		)
+	})?;
+	if !(1..=2000).contains(&dimensions) {
+		return Err(syn::Error::new_spanned(
+			literal,
+			"Vector dimensions must be in the range 1..=2000",
+		));
+	}
+
+	Ok(Some(dimensions))
+}
+
+#[cfg(not(feature = "pgvector"))]
+fn vector_dimensions(_ty: &Type) -> Result<Option<usize>> {
+	Ok(None)
+}
+
 fn is_builtin_model_field_type(ty: &Type) -> bool {
+	if vector_dimensions(ty).ok().flatten().is_some() {
+		return true;
+	}
 	let inner_ty = extract_nested_option_type(ty);
 	let Type::Path(type_path) = inner_ty else {
 		return false;
@@ -1678,6 +1943,11 @@ fn is_builtin_model_field_type(ty: &Type) -> bool {
 }
 
 fn builtin_storage_kind(ty: &Type, orm_crate: &TokenStream) -> Option<TokenStream> {
+	if let Some(dimensions) = vector_dimensions(ty).ok().flatten() {
+		return Some(quote! {
+			#orm_crate::DatabaseStorageKind::Vector(#dimensions)
+		});
+	}
 	let inner_ty = extract_nested_option_type(ty);
 	let Type::Path(type_path) = inner_ty else {
 		return None;
@@ -3988,6 +4258,25 @@ pub(crate) fn model_derive_impl(mut input: DeriveInput) -> Result<TokenStream> {
 		});
 	}
 
+	let mut structured_index_names = HashMap::new();
+	for field in &field_infos {
+		let Some(config) = field.config.structured_index.as_ref() else {
+			continue;
+		};
+		if structured_index_names
+			.insert(config.name.as_str(), config.name_span)
+			.is_some()
+		{
+			return Err(syn::Error::new(
+				config.name_span,
+				format!(
+					"duplicate structured index name `{}` within model",
+					config.name
+				),
+			));
+		}
+	}
+
 	// Extract ForeignKeyField and OneToOneField information
 	let mut fk_field_infos: Vec<ForeignKeyFieldInfo> = Vec::new();
 	for field_info in &field_infos {
@@ -4051,6 +4340,50 @@ pub(crate) fn model_derive_impl(mut input: DeriveInput) -> Result<TokenStream> {
 		.iter()
 		.filter(|f| f.config.index.unwrap_or(false))
 		.map(|f| f.name.to_string())
+		.collect();
+	let structured_index_metadata_items: Vec<_> = field_infos
+		.iter()
+		.filter_map(|field| {
+			let config = field.config.structured_index.as_ref()?;
+			let name = &config.name;
+			let column = field
+				.config
+				.db_column
+				.clone()
+				.unwrap_or_else(|| field.name.to_string());
+			let opclass = &config.opclass;
+			let index_type = match config.method {
+				StructuredIndexMethod::Hnsw => {
+					let m = optional_u16_tokens(config.m);
+					let ef_construction = optional_u16_tokens(config.ef_construction);
+					quote! {
+						#orm_crate::inspection::IndexMetadataType::Hnsw {
+							m: #m,
+							ef_construction: #ef_construction,
+						}
+					}
+				}
+				StructuredIndexMethod::Ivfflat => {
+					let lists = optional_u32_tokens(config.lists);
+					quote! {
+						#orm_crate::inspection::IndexMetadataType::Ivfflat {
+							lists: #lists,
+						}
+					}
+				}
+			};
+			Some(quote! {
+				#orm_crate::inspection::IndexInfo {
+					name: #name.to_string(),
+					fields: vec![#column.to_string()],
+					unique: false,
+					condition: None,
+					index_type: Some(#index_type),
+					operator_class: Some(#opclass.to_string()),
+					expressions: None,
+				}
+			})
+		})
 		.collect();
 
 	// Find all check constraint fields
@@ -4617,13 +4950,16 @@ pub(crate) fn model_derive_impl(mut input: DeriveInput) -> Result<TokenStream> {
 			fn index_metadata() -> Vec<#orm_crate::inspection::IndexInfo> {
 				vec![
 					#(
-						#orm_crate::inspection::IndexInfo {
-							name: format!("{}_{}_idx", <Self as #orm_crate::Model>::table_name(), #indexed_fields),
-							fields: vec![#indexed_fields.to_string()],
-							unique: false,
-							condition: None,
-						}
-					),*
+						#orm_crate::inspection::IndexInfo::new(
+							format!("{}_{}_idx", <Self as #orm_crate::Model>::table_name(), #indexed_fields),
+							vec![#indexed_fields.to_string()],
+							false,
+							None,
+						),
+					)*
+					#(
+						#structured_index_metadata_items,
+					)*
 				]
 			}
 
@@ -5958,6 +6294,49 @@ fn generate_registration_code(input: RegistrationCodeInput<'_>) -> Result<TokenS
 			}
 		})
 		.collect();
+	let index_registrations: Vec<TokenStream> = field_infos
+		.iter()
+		.filter_map(|field| {
+			let config = field.config.structured_index.as_ref()?;
+			let name = &config.name;
+			let column = field
+				.config
+				.db_column
+				.clone()
+				.unwrap_or_else(|| field.name.to_string());
+			let opclass = &config.opclass;
+			let index_type = match config.method {
+				StructuredIndexMethod::Hnsw => {
+					let m = optional_u16_tokens(config.m);
+					let ef_construction = optional_u16_tokens(config.ef_construction);
+					quote! {
+						#migrations_crate::operations::IndexType::Hnsw {
+							m: #m,
+							ef_construction: #ef_construction,
+						}
+					}
+				}
+				StructuredIndexMethod::Ivfflat => {
+					let lists = optional_u32_tokens(config.lists);
+					quote! {
+						#migrations_crate::operations::IndexType::Ivfflat {
+							lists: #lists,
+						}
+					}
+				}
+			};
+			Some(quote! {
+				metadata.add_index(#migrations_crate::IndexDefinition {
+					name: #name.to_string(),
+					fields: vec![#column.to_string()],
+					unique: false,
+					index_type: Some(#index_type),
+					operator_class: Some(#opclass.to_string()),
+					expressions: None,
+				});
+			})
+		})
+		.collect();
 
 	let code = quote! {
 		#[cfg(not(all(target_family = "wasm", target_os = "unknown")))]
@@ -5976,6 +6355,7 @@ fn generate_registration_code(input: RegistrationCodeInput<'_>) -> Result<TokenS
 			#(#fk_id_registrations)*
 			#(#m2m_registrations)*
 			#(#constraint_registrations)*
+			#(#index_registrations)*
 
 			#migrations_crate::model_registry::global_registry().register_model(metadata);
 
@@ -8282,6 +8662,42 @@ mod tests {
 	use super::*;
 
 	#[test]
+	#[cfg(not(feature = "pgvector"))]
+	fn vector_named_custom_fields_are_not_claimed_without_pgvector() {
+		let custom_vector: Type = parse_quote! { Vector<3> };
+
+		assert_eq!(vector_dimensions(&custom_vector).unwrap(), None);
+	}
+
+	#[test]
+	#[cfg(feature = "pgvector")]
+	fn vector_dimensions_require_the_pgvector_feature() {
+		let vector: Type = parse_quote! { Vector<3> };
+
+		assert_eq!(vector_dimensions(&vector).unwrap(), Some(3));
+	}
+
+	#[test]
+	#[cfg(feature = "pgvector")]
+	fn hnsw_validation_uses_pgvector_defaults_for_omitted_options() {
+		let attrs = vec![parse_quote! {
+			#[field(index(
+				name = "documents_embedding_hnsw",
+				method = "hnsw",
+				opclass = "vector_l2_ops",
+				m = 100
+			))]
+		}];
+		let error = FieldConfig::from_attrs(&attrs)
+			.expect_err("the default ef_construction must constrain explicit m");
+
+		assert_eq!(
+			error.to_string(),
+			"HNSW vector index option `ef_construction` must be at least twice `m`"
+		);
+	}
+
+	#[test]
 	fn builtin_storage_kind_distinguishes_byte_and_array_vectors() {
 		let orm_crate = quote! { orm };
 		let bytes: Type = parse_quote! { Vec<u8> };
@@ -9371,6 +9787,8 @@ mod tests {
 				id: i64,
 				#[rel(foreign_key)]
 				author: ForeignKeyField<Author>,
+				#[serde(default)]
+				author_id: <Author as InfoModel>::PrimaryKey,
 			}
 		};
 

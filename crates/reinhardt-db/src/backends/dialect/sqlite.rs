@@ -20,6 +20,14 @@ fn transaction_consumed_error() -> DatabaseError {
 	)
 }
 
+#[cfg(feature = "pgvector")]
+fn vector_unsupported_error() -> DatabaseError {
+	DatabaseError::new(
+		DatabaseErrorKind::Type,
+		"PostgreSQL vector values are not supported by the SQLite backend",
+	)
+}
+
 /// SQLite database backend
 pub struct SqliteBackend {
 	pool: Arc<SqlitePool>,
@@ -41,8 +49,8 @@ impl SqliteBackend {
 	pub(crate) fn bind_value<'q>(
 		query: sqlx::query::Query<'q, sqlx::Sqlite, sqlx::sqlite::SqliteArguments<'q>>,
 		value: &'q QueryValue,
-	) -> sqlx::query::Query<'q, sqlx::Sqlite, sqlx::sqlite::SqliteArguments<'q>> {
-		match value {
+	) -> Result<sqlx::query::Query<'q, sqlx::Sqlite, sqlx::sqlite::SqliteArguments<'q>>> {
+		Ok(match value {
 			QueryValue::Null => query.bind(None::<i32>),
 			QueryValue::Bool(b) => query.bind(b),
 			QueryValue::Int(i) => query.bind(i),
@@ -54,6 +62,8 @@ impl SqliteBackend {
 			// SQLite stores UUIDs as strings
 			QueryValue::Uuid(u) => query.bind(u.to_string()),
 			QueryValue::Json(value) => query.bind(value.as_deref().cloned().map(sqlx::types::Json)),
+			#[cfg(feature = "pgvector")]
+			QueryValue::Vector(_) => return Err(vector_unsupported_error().into()),
 			QueryValue::StringArray(values) => {
 				query.bind(serde_json::to_string(values).expect("string arrays serialize"))
 			}
@@ -80,7 +90,7 @@ impl SqliteBackend {
 				// For binding, we use current UTC time
 				query.bind(chrono::Utc::now())
 			}
-		}
+		})
 	}
 
 	pub(crate) fn convert_row(sqlite_row: SqliteRow) -> Result<Row> {
@@ -181,7 +191,7 @@ impl DatabaseBackend for SqliteBackend {
 	async fn execute(&self, sql: &str, params: Vec<QueryValue>) -> Result<QueryResult> {
 		let mut query = sqlx::query(sql);
 		for param in &params {
-			query = Self::bind_value(query, param);
+			query = Self::bind_value(query, param)?;
 		}
 		let result = query
 			.execute(self.pool.as_ref())
@@ -196,7 +206,7 @@ impl DatabaseBackend for SqliteBackend {
 	async fn fetch_one(&self, sql: &str, params: Vec<QueryValue>) -> Result<Row> {
 		let mut query = sqlx::query(sql);
 		for param in &params {
-			query = Self::bind_value(query, param);
+			query = Self::bind_value(query, param)?;
 		}
 		let row = query
 			.fetch_one(self.pool.as_ref())
@@ -208,7 +218,7 @@ impl DatabaseBackend for SqliteBackend {
 	async fn fetch_all(&self, sql: &str, params: Vec<QueryValue>) -> Result<Vec<Row>> {
 		let mut query = sqlx::query(sql);
 		for param in &params {
-			query = Self::bind_value(query, param);
+			query = Self::bind_value(query, param)?;
 		}
 		let rows = query
 			.fetch_all(self.pool.as_ref())
@@ -220,7 +230,7 @@ impl DatabaseBackend for SqliteBackend {
 	async fn fetch_optional(&self, sql: &str, params: Vec<QueryValue>) -> Result<Option<Row>> {
 		let mut query = sqlx::query(sql);
 		for param in &params {
-			query = Self::bind_value(query, param);
+			query = Self::bind_value(query, param)?;
 		}
 		let row = query
 			.fetch_optional(self.pool.as_ref())
@@ -310,8 +320,8 @@ impl SqliteTransactionExecutor {
 	fn bind_value<'q>(
 		query: sqlx::query::Query<'q, sqlx::Sqlite, sqlx::sqlite::SqliteArguments<'q>>,
 		value: &'q QueryValue,
-	) -> sqlx::query::Query<'q, sqlx::Sqlite, sqlx::sqlite::SqliteArguments<'q>> {
-		match value {
+	) -> Result<sqlx::query::Query<'q, sqlx::Sqlite, sqlx::sqlite::SqliteArguments<'q>>> {
+		Ok(match value {
 			QueryValue::Null => query.bind(None::<i32>),
 			QueryValue::Bool(b) => query.bind(b),
 			QueryValue::Int(i) => query.bind(i),
@@ -323,6 +333,8 @@ impl SqliteTransactionExecutor {
 			// SQLite doesn't have native UUID type; bind as string
 			QueryValue::Uuid(u) => query.bind(u.to_string()),
 			QueryValue::Json(value) => query.bind(value.as_deref().cloned().map(sqlx::types::Json)),
+			#[cfg(feature = "pgvector")]
+			QueryValue::Vector(_) => return Err(vector_unsupported_error().into()),
 			QueryValue::StringArray(values) => {
 				query.bind(serde_json::to_string(values).expect("string arrays serialize"))
 			}
@@ -345,7 +357,7 @@ impl SqliteTransactionExecutor {
 				query.bind(serde_json::to_string(values).expect("UUID arrays serialize"))
 			}
 			QueryValue::Now => query.bind(chrono::Utc::now()),
-		}
+		})
 	}
 
 	fn convert_row(sqlite_row: SqliteRow) -> Result<Row> {
@@ -436,7 +448,7 @@ impl TransactionExecutor for SqliteTransactionExecutor {
 
 		let mut query = sqlx::query(sql);
 		for param in &params {
-			query = Self::bind_value(query, param);
+			query = Self::bind_value(query, param)?;
 		}
 		let result = query.execute(&mut **tx).await.map_err(map_sqlx_error)?;
 		Ok(QueryResult {
@@ -450,7 +462,7 @@ impl TransactionExecutor for SqliteTransactionExecutor {
 
 		let mut query = sqlx::query(sql);
 		for param in &params {
-			query = Self::bind_value(query, param);
+			query = Self::bind_value(query, param)?;
 		}
 		let row = query.fetch_one(&mut **tx).await.map_err(map_sqlx_error)?;
 		Self::convert_row(row)
@@ -461,7 +473,7 @@ impl TransactionExecutor for SqliteTransactionExecutor {
 
 		let mut query = sqlx::query(sql);
 		for param in &params {
-			query = Self::bind_value(query, param);
+			query = Self::bind_value(query, param)?;
 		}
 		let rows = query.fetch_all(&mut **tx).await.map_err(map_sqlx_error)?;
 		rows.into_iter().map(Self::convert_row).collect()
@@ -472,7 +484,7 @@ impl TransactionExecutor for SqliteTransactionExecutor {
 
 		let mut query = sqlx::query(sql);
 		for param in &params {
-			query = Self::bind_value(query, param);
+			query = Self::bind_value(query, param)?;
 		}
 		let row = query
 			.fetch_optional(&mut **tx)
@@ -529,13 +541,34 @@ impl TransactionExecutor for SqliteTransactionExecutor {
 
 #[cfg(test)]
 mod tests {
-	use super::SqliteTransactionExecutor;
-	use crate::backends::types::{DatabaseType, TransactionExecutor};
+	use super::{SqliteBackend, SqliteTransactionExecutor};
+	use crate::backends::types::{DatabaseType, QueryValue, TransactionExecutor};
 
 	#[test]
 	fn test_transaction_executor_reports_sqlite_backend() {
 		let executor = SqliteTransactionExecutor { tx: None };
 
 		assert_eq!(executor.backend(), DatabaseType::Sqlite);
+	}
+
+	#[test]
+	#[cfg(feature = "pgvector")]
+	fn sqlite_rejects_vector_parameters_without_a_fallback_encoding() {
+		let error = SqliteBackend::bind_value(
+			sqlx::query("SELECT ?"),
+			&QueryValue::Vector(Some(vec![1.0, 2.0, 3.0])),
+		)
+		.err()
+		.unwrap();
+
+		assert_eq!(
+			error.database_kind(),
+			Some(reinhardt_core::exception::DatabaseErrorKind::Type)
+		);
+		assert!(
+			error
+				.to_string()
+				.contains("not supported by the SQLite backend")
+		);
 	}
 }

@@ -11,7 +11,7 @@
 //!
 //! See [`ModelMetadata`] for the architecture comparison diagram.
 
-use super::autodetector::{FieldState, ModelState, to_snake_case};
+use super::autodetector::{FieldState, IndexDefinition, ModelState, to_snake_case};
 use super::{ConstraintDefinition, GeneratedColumnDefinition};
 use crate::field_domain::FieldDomain;
 use std::collections::HashMap;
@@ -66,6 +66,11 @@ pub struct ModelMetadata {
 	/// externally-constructible struct does not break the public API.
 	/// Read via [`Self::constraints`]; write via [`Self::add_constraint`].
 	constraints: Vec<ConstraintDefinition>,
+	/// Model-declared indexes.
+	///
+	/// Kept private so adding structured index metadata does not break external
+	/// struct construction. Read and write through the methods below.
+	indexes: Vec<IndexDefinition>,
 }
 
 impl ModelMetadata {
@@ -83,6 +88,7 @@ impl ModelMetadata {
 			options: HashMap::new(),
 			many_to_many_fields: Vec::new(),
 			constraints: Vec::new(),
+			indexes: Vec::new(),
 		}
 	}
 
@@ -105,6 +111,16 @@ impl ModelMetadata {
 	/// (e.g., `#[model(unique_together = ...)]`).
 	pub fn add_constraint(&mut self, constraint: ConstraintDefinition) {
 		self.constraints.push(constraint);
+	}
+
+	/// Adds a model-declared index.
+	pub fn add_index(&mut self, index: IndexDefinition) {
+		self.indexes.push(index);
+	}
+
+	/// Returns model-declared indexes.
+	pub fn indexes(&self) -> &[IndexDefinition] {
+		&self.indexes
 	}
 
 	/// Adds the typed enum-domain constraint for a database column.
@@ -239,6 +255,7 @@ impl ModelMetadata {
 		model_state
 			.constraints
 			.extend(self.constraints.iter().cloned());
+		model_state.indexes.extend(self.indexes.iter().cloned());
 
 		for (name, field_meta) in &self.fields {
 			let Some(domain) = &field_meta.domain else {
@@ -567,6 +584,53 @@ impl ModelRegistry {
 		}
 	}
 
+	/// Validates physical index names across all registered models.
+	///
+	/// PostgreSQL index names share a schema-level namespace, so two models
+	/// cannot safely declare the same physical name even when their tables
+	/// differ.
+	pub fn validate_physical_index_names(&self) -> super::Result<()> {
+		let models = self.models.read().map_err(|_| {
+			super::MigrationError::InvalidMigration("model registry lock is poisoned".to_string())
+		})?;
+		let mut owners = HashMap::new();
+		for metadata in models.values() {
+			if let Some(previous_table) =
+				owners.insert(metadata.table_name.clone(), metadata.table_name.clone())
+			{
+				return Err(super::MigrationError::InvalidMigration(format!(
+					"physical table name `{}` is registered by both `{}` and `{}`",
+					metadata.table_name, previous_table, metadata.table_name
+				)));
+			}
+		}
+		for metadata in models.values() {
+			for index in metadata.indexes() {
+				if index.name.is_empty() {
+					return Err(super::MigrationError::InvalidMigration(format!(
+						"physical index name on table `{}` must not be empty",
+						metadata.table_name
+					)));
+				}
+				if index.name.contains('\0') {
+					return Err(super::MigrationError::InvalidMigration(format!(
+						"physical index name on table `{}` must not contain NUL",
+						metadata.table_name
+					)));
+				}
+				if let Some(previous_table) =
+					owners.insert(index.name.clone(), metadata.table_name.clone())
+				{
+					return Err(super::MigrationError::InvalidMigration(format!(
+						"physical index name `{}` on table `{}` conflicts with relation name owned by table `{}`",
+						index.name, metadata.table_name, previous_table
+					)));
+				}
+			}
+		}
+		Ok(())
+	}
+
 	/// Get all registered models
 	///
 	/// Returns a freshly-cloned `Vec<ModelMetadata>`. For hot paths that
@@ -760,6 +824,81 @@ mod tests {
 		let metadata = ModelMetadata::new("blog", "Post", "blog_post");
 		registry.register_model(metadata);
 		assert_eq!(registry.count(), 1);
+	}
+
+	#[test]
+	#[cfg(feature = "pgvector")]
+	fn duplicate_physical_index_names_are_rejected_by_registry_validation() {
+		// Arrange
+		let registry = ModelRegistry::new();
+		let mut document = ModelMetadata::new("search", "Document", "search_document");
+		document.add_index(IndexDefinition {
+			name: "shared_embedding_ann".to_string(),
+			fields: vec!["embedding".to_string()],
+			unique: false,
+			index_type: Some(super::super::operations::IndexType::Hnsw {
+				m: Some(16),
+				ef_construction: Some(64),
+			}),
+			operator_class: Some("vector_cosine_ops".to_string()),
+			expressions: None,
+		});
+		let mut invoice = ModelMetadata::new("billing", "Invoice", "billing_invoice");
+		invoice.add_index(IndexDefinition {
+			name: "shared_embedding_ann".to_string(),
+			fields: vec!["embedding".to_string()],
+			unique: false,
+			index_type: Some(super::super::operations::IndexType::Ivfflat { lists: Some(100) }),
+			operator_class: Some("vector_l2_ops".to_string()),
+			expressions: None,
+		});
+		registry.register_model(document);
+		registry.register_model(invoice);
+
+		// Act
+		let error = registry
+			.validate_physical_index_names()
+			.expect_err("duplicate physical index names must fail validation");
+
+		// Assert
+		assert!(matches!(
+			error,
+			super::super::MigrationError::InvalidMigration(message)
+				if message.contains("shared_embedding_ann")
+					&& message.contains("search_document")
+					&& message.contains("billing_invoice")
+		));
+	}
+
+	#[test]
+	#[cfg(feature = "pgvector")]
+	fn physical_index_names_colliding_with_table_names_are_rejected() {
+		let registry = ModelRegistry::new();
+		let document = ModelMetadata::new("search", "Document", "search_document");
+		let mut invoice = ModelMetadata::new("billing", "Invoice", "billing_invoice");
+		invoice.add_index(IndexDefinition {
+			name: "search_document".to_string(),
+			fields: vec!["embedding".to_string()],
+			unique: false,
+			index_type: Some(super::super::operations::IndexType::Hnsw {
+				m: Some(16),
+				ef_construction: Some(64),
+			}),
+			operator_class: Some("vector_cosine_ops".to_string()),
+			expressions: None,
+		});
+		registry.register_model(document);
+		registry.register_model(invoice);
+
+		let error = registry
+			.validate_physical_index_names()
+			.expect_err("an index may not reuse a physical table relation name");
+
+		assert!(matches!(
+			error,
+			super::super::MigrationError::InvalidMigration(message)
+				if message.contains("search_document") && message.contains("billing_invoice")
+		));
 	}
 
 	#[test]

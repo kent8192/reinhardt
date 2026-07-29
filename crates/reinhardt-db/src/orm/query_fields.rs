@@ -31,11 +31,14 @@
 pub mod aggregate;
 pub mod comparison;
 pub mod compiler;
+mod expression;
 mod field;
 mod lookup;
 mod traits;
 
 pub use compiler::QueryFieldCompiler;
+pub(crate) use expression::qualify_model_root;
+pub use expression::{OrderedExpression, TypedExpression, TypedPredicate};
 pub use field::Field;
 pub use lookup::{Lookup, LookupType, LookupValue};
 pub use traits::{Comparable, Date, DateTime, DateTimeType, NumericType, StringType};

@@ -27,6 +27,7 @@ property-based = ["dep:proptest"]
 viewsets = []
 admin = ["dep:reinhardt-conf"]
 messages = ["reinhardt-core/messages"]
+pgvector = ["reinhardt-db/pgvector"]
 full = ["testcontainers", "static", "websockets", "graphql", "property-based", "viewsets", "admin", "messages"]
 
 [dependencies]

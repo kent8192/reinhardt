@@ -102,6 +102,12 @@ impl QueryRow {
 					native_json_fields.insert(key.clone());
 					serde_json::Value::Null
 				}
+				#[cfg(feature = "pgvector")]
+				QueryValue::Vector(Some(values)) => serde_json::Value::Array(
+					values.into_iter().map(serde_json::Value::from).collect(),
+				),
+				#[cfg(feature = "pgvector")]
+				QueryValue::Vector(None) => serde_json::Value::Null,
 				QueryValue::StringArray(values) => serde_json::Value::Array(
 					values.into_iter().map(serde_json::Value::String).collect(),
 				),
@@ -194,6 +200,16 @@ pub trait OrmExecutor: Send {
 	/// Returns the backend used to generate SQL for this executor.
 	fn backend(&self) -> DatabaseBackend;
 
+	/// Returns whether contextual pgvector error hints are supported.
+	fn supports_pgvector_error_hints(&self) -> bool {
+		false
+	}
+
+	/// Returns whether PostgreSQL-compatible SQL targets CockroachDB.
+	fn is_cockroachdb(&self) -> bool {
+		false
+	}
+
 	/// Whether propagating an operation failure rolls back the current work.
 	fn rolls_back_on_error(&self) -> bool {
 		false
@@ -207,14 +223,82 @@ pub trait OrmExecutor: Send {
 	/// Executes a SQL statement and preserves backend-specific result metadata.
 	async fn execute(&mut self, sql: &str, params: Vec<QueryValue>) -> Result<QueryResult>;
 
+	/// Executes a SQL statement with structural pgvector operation context.
+	async fn execute_with_context(
+		&mut self,
+		sql: &str,
+		params: Vec<QueryValue>,
+		context: Option<crate::backends::error::PgvectorOperationKind>,
+	) -> Result<QueryResult> {
+		let result = self.execute(sql, params).await;
+		if self.backend() == DatabaseBackend::Postgres && self.supports_pgvector_error_hints() {
+			result.map_err(|error| {
+				crate::backends::error::decorate_error_with_pgvector_context(error, context)
+			})
+		} else {
+			result
+		}
+	}
+
 	/// Fetches one row.
 	async fn fetch_one(&mut self, sql: &str, params: Vec<QueryValue>) -> Result<Row>;
+
+	/// Fetches one row with structural pgvector operation context.
+	async fn fetch_one_with_context(
+		&mut self,
+		sql: &str,
+		params: Vec<QueryValue>,
+		context: Option<crate::backends::error::PgvectorOperationKind>,
+	) -> Result<Row> {
+		let result = self.fetch_one(sql, params).await;
+		if self.backend() == DatabaseBackend::Postgres && self.supports_pgvector_error_hints() {
+			result.map_err(|error| {
+				crate::backends::error::decorate_error_with_pgvector_context(error, context)
+			})
+		} else {
+			result
+		}
+	}
 
 	/// Fetches all matching rows.
 	async fn fetch_all(&mut self, sql: &str, params: Vec<QueryValue>) -> Result<Vec<Row>>;
 
+	/// Fetches all matching rows with structural pgvector operation context.
+	async fn fetch_all_with_context(
+		&mut self,
+		sql: &str,
+		params: Vec<QueryValue>,
+		context: Option<crate::backends::error::PgvectorOperationKind>,
+	) -> Result<Vec<Row>> {
+		let result = self.fetch_all(sql, params).await;
+		if self.backend() == DatabaseBackend::Postgres && self.supports_pgvector_error_hints() {
+			result.map_err(|error| {
+				crate::backends::error::decorate_error_with_pgvector_context(error, context)
+			})
+		} else {
+			result
+		}
+	}
+
 	/// Fetches an optional row without swallowing backend failures.
 	async fn fetch_optional(&mut self, sql: &str, params: Vec<QueryValue>) -> Result<Option<Row>>;
+
+	/// Fetches an optional row with structural pgvector operation context.
+	async fn fetch_optional_with_context(
+		&mut self,
+		sql: &str,
+		params: Vec<QueryValue>,
+		context: Option<crate::backends::error::PgvectorOperationKind>,
+	) -> Result<Option<Row>> {
+		let result = self.fetch_optional(sql, params).await;
+		if self.backend() == DatabaseBackend::Postgres && self.supports_pgvector_error_hints() {
+			result.map_err(|error| {
+				crate::backends::error::decorate_error_with_pgvector_context(error, context)
+			})
+		} else {
+			result
+		}
+	}
 }
 
 /// Copyable capability for an ORM database connection.
@@ -356,7 +440,18 @@ impl DatabaseConnection {
 #[async_trait]
 impl OrmExecutor for DatabaseConnection {
 	fn backend(&self) -> DatabaseBackend {
-		DatabaseConnection::backend(self)
+		self.resolve()
+			.map(|owner| DatabaseBackend::from(owner.database_type()))
+			.unwrap_or_else(|_| DatabaseConnection::backend(self))
+	}
+
+	fn supports_pgvector_error_hints(&self) -> bool {
+		self.resolve()
+			.is_ok_and(|owner| owner.supports_pgvector_error_hints())
+	}
+
+	fn is_cockroachdb(&self) -> bool {
+		self.resolve().is_ok_and(|owner| owner.is_cockroachdb())
 	}
 
 	async fn execute(&mut self, sql: &str, params: Vec<QueryValue>) -> Result<QueryResult> {
@@ -364,9 +459,29 @@ impl OrmExecutor for DatabaseConnection {
 		owner.execute(sql, params).await
 	}
 
+	async fn execute_with_context(
+		&mut self,
+		sql: &str,
+		params: Vec<QueryValue>,
+		context: Option<crate::backends::error::PgvectorOperationKind>,
+	) -> Result<QueryResult> {
+		let owner = self.resolve()?;
+		owner.execute_with_context(sql, params, context).await
+	}
+
 	async fn fetch_one(&mut self, sql: &str, params: Vec<QueryValue>) -> Result<Row> {
 		let owner = self.resolve()?;
 		owner.fetch_one(sql, params).await
+	}
+
+	async fn fetch_one_with_context(
+		&mut self,
+		sql: &str,
+		params: Vec<QueryValue>,
+		context: Option<crate::backends::error::PgvectorOperationKind>,
+	) -> Result<Row> {
+		let owner = self.resolve()?;
+		owner.fetch_one_with_context(sql, params, context).await
 	}
 
 	async fn fetch_all(&mut self, sql: &str, params: Vec<QueryValue>) -> Result<Vec<Row>> {
@@ -374,9 +489,31 @@ impl OrmExecutor for DatabaseConnection {
 		owner.fetch_all(sql, params).await
 	}
 
+	async fn fetch_all_with_context(
+		&mut self,
+		sql: &str,
+		params: Vec<QueryValue>,
+		context: Option<crate::backends::error::PgvectorOperationKind>,
+	) -> Result<Vec<Row>> {
+		let owner = self.resolve()?;
+		owner.fetch_all_with_context(sql, params, context).await
+	}
+
 	async fn fetch_optional(&mut self, sql: &str, params: Vec<QueryValue>) -> Result<Option<Row>> {
 		let owner = self.resolve()?;
 		owner.fetch_optional(sql, params).await
+	}
+
+	async fn fetch_optional_with_context(
+		&mut self,
+		sql: &str,
+		params: Vec<QueryValue>,
+		context: Option<crate::backends::error::PgvectorOperationKind>,
+	) -> Result<Option<Row>> {
+		let owner = self.resolve()?;
+		owner
+			.fetch_optional_with_context(sql, params, context)
+			.await
 	}
 }
 
@@ -435,20 +572,40 @@ mod tests {
 	use async_trait::async_trait;
 	use reinhardt_core::exception::Result;
 
-	#[cfg(feature = "sqlite")]
-	use super::OrmExecutor;
 	use super::{
-		BackendsConnection, DatabaseBackend, DatabaseConnection, DatabaseConnectionLease, QueryRow,
+		BackendsConnection, DatabaseBackend, DatabaseConnection, DatabaseConnectionLease,
+		OrmExecutor, QueryRow,
 	};
 	use crate::backends::backend::DatabaseBackend as BackendsDatabaseBackend;
 	use crate::backends::types::{DatabaseType, QueryResult, QueryValue, Row, TransactionExecutor};
 
 	struct TestBackend;
 
+	#[test]
+	#[cfg(feature = "pgvector")]
+	fn backend_vector_rows_preserve_numeric_json_arrays() {
+		let mut row = Row::new();
+		row.insert(
+			"embedding".to_owned(),
+			QueryValue::Vector(Some(vec![1.0, 2.0, 3.0])),
+		);
+
+		let query_row = QueryRow::from_backend_row(row);
+
+		assert_eq!(
+			query_row.data["embedding"],
+			serde_json::json!([1.0, 2.0, 3.0])
+		);
+	}
+
 	#[async_trait]
 	impl BackendsDatabaseBackend for TestBackend {
 		fn database_type(&self) -> DatabaseType {
 			DatabaseType::Sqlite
+		}
+
+		fn supports_pgvector_error_hints(&self) -> bool {
+			true
 		}
 
 		fn placeholder(&self, index: usize) -> String {
@@ -508,6 +665,15 @@ mod tests {
 		let connection = lease.handle();
 		consume_connection(connection);
 		consume_connection(connection);
+	}
+
+	#[test]
+	fn database_connection_reports_inner_backend_and_pgvector_capability() {
+		let lease = DatabaseConnectionLease::register(mock_backends_connection()).unwrap();
+		let connection = lease.handle();
+
+		assert_eq!(OrmExecutor::backend(&connection), DatabaseBackend::Sqlite);
+		assert!(OrmExecutor::supports_pgvector_error_hints(&connection));
 	}
 
 	#[test]

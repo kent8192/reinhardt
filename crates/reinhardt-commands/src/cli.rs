@@ -97,6 +97,39 @@ pub enum Commands {
 		migration_dir: PathBuf,
 	},
 
+	/// Squash a continuous range of migrations into one migration
+	#[cfg(feature = "migrations")]
+	#[command(allow_missing_positional = true)]
+	Squashmigrations {
+		/// Application whose migrations will be squashed
+		#[arg(value_name = "APP_LABEL")]
+		app_label: String,
+
+		/// Optional first migration in the squash range
+		#[arg(value_name = "START_MIGRATION")]
+		start_migration: Option<String>,
+
+		/// Last migration in the squash range
+		#[arg(value_name = "MIGRATION_NAME")]
+		migration_name: String,
+
+		/// Preserve the exact source operation order
+		#[arg(long)]
+		no_optimize: bool,
+
+		/// Do not prompt for confirmation
+		#[arg(long, visible_alias = "noinput")]
+		no_input: bool,
+
+		/// Omit the generated-file header
+		#[arg(long)]
+		no_header: bool,
+
+		/// Explicit name for the new squashed migration
+		#[arg(long, value_name = "NAME")]
+		squashed_name: Option<String>,
+	},
+
 	/// Apply database migrations
 	Migrate {
 		/// App label to migrate
@@ -863,6 +896,40 @@ async fn run_command_core(
 				settings.clone(),
 			)
 			.await
+		}
+		#[cfg(feature = "migrations")]
+		Commands::Squashmigrations {
+			app_label,
+			start_migration,
+			migration_name,
+			no_optimize,
+			no_input,
+			no_header,
+			squashed_name,
+		} => {
+			let mut confirmation = crate::StdinConfirmationReader;
+			let standard_output = std::io::stdout();
+			let standard_error = std::io::stderr();
+			let mut stdout = standard_output.lock();
+			let mut stderr = standard_error.lock();
+			crate::execute_squashmigrations_with_io(
+				Path::new("./migrations"),
+				crate::SquashMigrationsOptions {
+					app_label,
+					start_migration,
+					migration_name,
+					no_optimize,
+					no_input,
+					no_header,
+					squashed_name,
+				},
+				&mut confirmation,
+				&mut stdout,
+				&mut stderr,
+			)
+			.await
+			.map(|_| ())
+			.map_err(Into::into)
 		}
 		Commands::Migrate {
 			app_label,
@@ -2722,6 +2789,27 @@ mod tests {
 
 		// Assert
 		assert!(result);
+	}
+
+	#[cfg(feature = "migrations")]
+	#[rstest]
+	fn test_squashmigrations_does_not_require_database_initialization() {
+		// Arrange
+		let command = Commands::Squashmigrations {
+			app_label: "polls".to_string(),
+			start_migration: None,
+			migration_name: "0002".to_string(),
+			no_optimize: false,
+			no_input: true,
+			no_header: false,
+			squashed_name: None,
+		};
+
+		// Act
+		let result = requires_database(&command, &CommandRegistry::new());
+
+		// Assert
+		assert!(!result);
 	}
 
 	#[cfg(feature = "reinhardt-db")]

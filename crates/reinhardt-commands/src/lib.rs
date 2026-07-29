@@ -218,6 +218,9 @@ mod shell;
 #[cfg(feature = "autoreload")]
 #[doc(hidden)]
 pub mod source_roots;
+/// Migration squashing command orchestration.
+#[cfg(feature = "migrations")]
+pub mod squashmigrations;
 /// Project and app scaffolding commands (startproject, startapp).
 pub mod start_commands;
 /// Shared static asset settings resolution.
@@ -322,6 +325,11 @@ pub use runserver_hooks::{RunserverContext, RunserverHook, RunserverHookRegistra
 #[cfg(feature = "shell")]
 pub use shell::ShellEnvironment;
 pub use shell::{ShellConfig, shell_runtime_hook};
+#[cfg(feature = "migrations")]
+pub use squashmigrations::{
+	ConfirmationReader, SquashMigrationsOptions, SquashMigrationsSummary, StdinConfirmationReader,
+	execute_squashmigrations_with_io,
+};
 pub use start_commands::{StartAppCommand, StartProjectCommand};
 pub use static_asset_settings::StaticAssetSettings;
 pub use style_extractor::{

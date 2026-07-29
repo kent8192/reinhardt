@@ -19,6 +19,99 @@ fn empty_context() -> CommandContext {
 	CommandContext::default()
 }
 
+#[cfg(feature = "migrations")]
+#[rstest]
+#[case(
+	&["manage", "squashmigrations", "polls", "0004"],
+	None,
+	"0004",
+	false,
+	false,
+	false,
+	None
+)]
+#[case(
+	&[
+		"manage",
+		"squashmigrations",
+		"polls",
+		"0002",
+		"0004",
+		"--no-optimize",
+		"--no-input",
+		"--no-header",
+		"--squashed-name",
+		"0002_compacted"
+	],
+	Some("0002"),
+	"0004",
+	true,
+	true,
+	true,
+	Some("0002_compacted")
+)]
+#[case(
+	&["manage", "squashmigrations", "polls", "0004", "--noinput"],
+	None,
+	"0004",
+	false,
+	true,
+	false,
+	None
+)]
+fn squashmigrations_parses_django_compatible_forms_and_options(
+	#[case] arguments: &[&str],
+	#[case] expected_start: Option<&str>,
+	#[case] expected_end: &str,
+	#[case] expected_no_optimize: bool,
+	#[case] expected_no_input: bool,
+	#[case] expected_no_header: bool,
+	#[case] expected_name: Option<&str>,
+) {
+	// Act
+	let parsed = Cli::try_parse_from(arguments).unwrap();
+
+	// Assert
+	let Commands::Squashmigrations {
+		app_label,
+		start_migration,
+		migration_name,
+		no_optimize,
+		no_input,
+		no_header,
+		squashed_name,
+	} = parsed.command
+	else {
+		panic!("expected squashmigrations command");
+	};
+	assert_eq!(app_label, "polls");
+	assert_eq!(start_migration.as_deref(), expected_start);
+	assert_eq!(migration_name, expected_end);
+	assert_eq!(no_optimize, expected_no_optimize);
+	assert_eq!(no_input, expected_no_input);
+	assert_eq!(no_header, expected_no_header);
+	assert_eq!(squashed_name.as_deref(), expected_name);
+}
+
+#[cfg(feature = "migrations")]
+#[test]
+fn squashmigrations_rejects_extra_positional_arguments() {
+	// Act
+	let error = Cli::try_parse_from([
+		"manage",
+		"squashmigrations",
+		"polls",
+		"0001",
+		"0004",
+		"unexpected",
+	])
+	.unwrap_err();
+
+	// Assert
+	assert_eq!(error.kind(), clap::error::ErrorKind::UnknownArgument);
+	assert!(error.to_string().contains("unexpected"));
+}
+
 // ============================================================================
 // Test Helper Functions for Runserver Command
 // ============================================================================

@@ -1,5 +1,6 @@
 use super::connection::{
-	DatabaseBackend, DatabaseConnection, DatabaseConnectionLease, OrmExecutor, QueryRow, QueryValue,
+	DatabaseBackend, DatabaseConnection, DatabaseConnectionLease, OrmExecutor, QueryRow,
+	QueryValue, Row,
 };
 use super::field_codec::{DatabaseArrayType, database_value_to_query_value};
 use super::inspection::FieldInfo;
@@ -33,6 +34,12 @@ fn field_codec_error(error: FieldCodecError) -> Error {
 	};
 	let message = error.to_string();
 	Error::database_with_source(kind, message, error)
+}
+
+pub(crate) fn decode_model_row<M: Model>(row: Row) -> reinhardt_core::exception::Result<M> {
+	QueryRow::from_backend_row(row)
+		.deserialize_model::<M>()
+		.map_err(field_codec_error)
 }
 
 fn executor_field_codec_error(error: FieldCodecError) -> crate::backends::error::DatabaseError {
@@ -71,11 +78,6 @@ fn build_select_sql(stmt: &SelectStatement, backend: DatabaseBackend) -> (String
 		DatabaseBackend::MySql => MySqlQueryBuilder.build_select(stmt),
 		DatabaseBackend::Sqlite => SqliteQueryBuilder.build_select(stmt),
 	}
-}
-
-/// Convert a SELECT statement to SQL string based on database backend
-fn select_to_string(stmt: &SelectStatement, backend: DatabaseBackend) -> String {
-	build_select_sql(stmt, backend).0
 }
 
 /// Convert an INSERT statement to SQL string based on database backend
@@ -964,35 +966,6 @@ impl<M: Model> Manager<M> {
 					field_name
 				}
 			})
-	}
-
-	fn normalize_primary_key_aliases(
-		mut fields: HashMap<String, String>,
-	) -> reinhardt_core::exception::Result<HashMap<String, String>> {
-		let primary_key_field = M::primary_key_field();
-		let primary_key_column = M::primary_key_column();
-		if primary_key_field == primary_key_column {
-			return Ok(fields);
-		}
-
-		let logical_value = fields.get(primary_key_field).cloned();
-		let physical_value = fields.get(primary_key_column).cloned();
-		match (logical_value, physical_value) {
-			(Some(logical_value), Some(physical_value)) if logical_value != physical_value => {
-				return Err(Error::Validation(format!(
-					"Conflicting values for primary key aliases `{primary_key_field}` and `{primary_key_column}`"
-				)));
-			}
-			(Some(_), Some(_)) => {
-				fields.remove(primary_key_column);
-			}
-			(None, Some(physical_value)) => {
-				fields.remove(primary_key_column);
-				fields.insert(primary_key_field.to_string(), physical_value);
-			}
-			_ => {}
-		}
-		Ok(fields)
 	}
 
 	fn returning_columns_from_object(
@@ -1889,10 +1862,7 @@ impl<M: Model> Manager<M> {
 					return super::custom_manager::CreateWithConnOutcome::FailedAfterInsert(error);
 				}
 			};
-			return match QueryRow::from_backend_row(row)
-				.deserialize_model::<M>()
-				.map_err(field_codec_error)
-			{
+			return match decode_model_row(row) {
 				Ok(model) => super::custom_manager::CreateWithConnOutcome::Created(model),
 				Err(error) => {
 					super::custom_manager::CreateWithConnOutcome::FailedAfterInsert(error)
@@ -1911,10 +1881,7 @@ impl<M: Model> Manager<M> {
 				};
 			}
 		};
-		match QueryRow::from_backend_row(row)
-			.deserialize_model::<M>()
-			.map_err(field_codec_error)
-		{
+		match decode_model_row(row) {
 			Ok(model) => super::custom_manager::CreateWithConnOutcome::Created(model),
 			Err(error) => super::custom_manager::CreateWithConnOutcome::FailedAfterInsert(error),
 		}
@@ -2392,15 +2359,11 @@ impl<M: Model> Manager<M> {
 				.map(Self::sea_value_to_query_value)
 				.collect();
 			let row = conn.fetch_one(&select_sql, select_params).await?;
-			return QueryRow::from_backend_row(row)
-				.deserialize_model::<M>()
-				.map_err(field_codec_error);
+			return decode_model_row(row);
 		}
 
 		let row = conn.fetch_one_with_context(&sql, values, context).await?;
-		QueryRow::from_backend_row(row)
-			.deserialize_model::<M>()
-			.map_err(field_codec_error)
+		decode_model_row(row)
 	}
 
 	/// Delete a record using reinhardt-query for SQL injection protection
@@ -2659,160 +2622,6 @@ impl<M: Model> Manager<M> {
 		queryset.delete_sql()
 	}
 
-	/// Get or create a record (Django's get_or_create)
-	/// Returns (model, created) where created is true if a new record was created
-	///
-	/// Django equivalent:
-	/// ```python
-	/// obj, created = Model.objects.get_or_create(
-	///     field1=value1,
-	///     defaults={'field2': value2}
-	/// )
-	/// ```
-	pub async fn get_or_create(
-		&self,
-		lookup_fields: HashMap<String, String>,
-		defaults: Option<HashMap<String, String>>,
-	) -> reinhardt_core::exception::Result<(M, bool)> {
-		let conn = get_connection().await?;
-
-		// Try to find existing record
-		let (select_sql, _) = self.get_or_create_sql(
-			&lookup_fields,
-			&defaults.clone().unwrap_or_default(),
-			conn.backend(),
-		)?;
-
-		if let Ok(Some(row)) = conn.query_optional(&select_sql, vec![]).await {
-			// row.data is already serde_json::Value::Object so deserialize directly
-			let model: M = row.deserialize_model().map_err(field_codec_error)?;
-			return Ok((model, false));
-		}
-
-		// Record not found, create new one
-		let mut all_fields = lookup_fields.clone();
-		if let Some(defs) = defaults {
-			all_fields.extend(defs);
-		}
-
-		let fields: Vec<String> = all_fields.keys().cloned().collect();
-		let values: Vec<String> = all_fields.values().map(|v| format!("'{}'", v)).collect();
-
-		let insert_sql = format!(
-			"INSERT INTO {} ({}) VALUES ({}) RETURNING *",
-			M::table_name(),
-			fields.join(", "),
-			values.join(", ")
-		);
-
-		let row = conn.query_one(&insert_sql, vec![]).await?;
-		// row.data is already serde_json::Value::Object so deserialize directly
-		let model: M = row.deserialize_model().map_err(field_codec_error)?;
-
-		Ok((model, true))
-	}
-
-	/// Retrieve a record through a caller-owned executor, or insert it when missing.
-	pub async fn get_or_create_with_conn<E>(
-		&self,
-		conn: &mut E,
-		lookup_fields: HashMap<String, String>,
-		defaults: Option<HashMap<String, String>>,
-	) -> reinhardt_core::exception::Result<(M, bool)>
-	where
-		E: OrmExecutor,
-	{
-		let lookup_fields = Self::normalize_primary_key_aliases(lookup_fields)?;
-		let defaults = Self::normalize_primary_key_aliases(defaults.unwrap_or_default())?;
-		let mut insert_fields = lookup_fields.clone();
-		insert_fields.extend(defaults.clone());
-		let (select_stmt, mut insert_stmt) =
-			self.get_or_create_queries_from_normalized_fields(&lookup_fields, &defaults);
-		let (select_sql, select_values) =
-			build_select_sql_checked(&select_stmt, conn.backend(), conn.is_cockroachdb())?;
-		let select_params = select_values
-			.0
-			.into_iter()
-			.map(Self::sea_value_to_query_value)
-			.collect();
-
-		if let Some(row) = conn.fetch_optional(&select_sql, select_params).await? {
-			let model = QueryRow::from_backend_row(row)
-				.deserialize_model::<M>()
-				.map_err(field_codec_error)?;
-			return Ok((model, false));
-		}
-
-		let backend = conn.backend();
-		if backend != DatabaseBackend::MySql {
-			insert_stmt.returning(Self::returning_columns_from_object(
-				&insert_fields
-					.iter()
-					.map(|(key, value)| (key.clone(), DatabaseValue::String(value.clone())))
-					.collect(),
-			));
-		}
-		let insert_context = super::execution::pgvector_context_for_insert(&insert_stmt);
-		let (insert_sql, insert_values) =
-			build_insert_sql_checked(&insert_stmt, backend, conn.is_cockroachdb())?;
-		let insert_params = insert_values
-			.0
-			.into_iter()
-			.map(Self::sea_value_to_query_value)
-			.collect();
-
-		if backend == DatabaseBackend::MySql {
-			let result = conn
-				.execute_with_context(&insert_sql, insert_params, insert_context)
-				.await?;
-			let primary_key = insert_fields
-				.get(M::primary_key_field())
-				.map(|value| QueryValue::String(value.clone()))
-				.or_else(|| {
-					result
-						.last_insert_id
-						.and_then(|id| i64::try_from(id).ok())
-						.map(QueryValue::Int)
-				})
-				.ok_or_else(|| {
-					Error::from(DatabaseError::new(
-						DatabaseErrorKind::Query,
-						"MySQL get_or_create did not return a primary key",
-					))
-				})?;
-			let field_metadata = M::field_metadata();
-			let primary_key_column = Self::field_column(&field_metadata, M::primary_key_field());
-			let mut reload = Query::select();
-			reload
-				.from(Alias::new(M::table_name()))
-				.column(ColumnRef::Asterisk)
-				.and_where(
-					Expr::col(Alias::new(primary_key_column))
-						.eq(Self::query_value_to_sea_value(primary_key)),
-				);
-			let (reload_sql, reload_values) =
-				build_select_sql_checked(&reload, backend, conn.is_cockroachdb())?;
-			let reload_params = reload_values
-				.0
-				.into_iter()
-				.map(Self::sea_value_to_query_value)
-				.collect();
-			let row = conn.fetch_one(&reload_sql, reload_params).await?;
-			let model = QueryRow::from_backend_row(row)
-				.deserialize_model::<M>()
-				.map_err(field_codec_error)?;
-			return Ok((model, true));
-		}
-
-		let row = conn
-			.fetch_one_with_context(&insert_sql, insert_params, insert_context)
-			.await?;
-		let model = QueryRow::from_backend_row(row)
-			.deserialize_model::<M>()
-			.map_err(field_codec_error)?;
-		Ok((model, true))
-	}
-
 	/// Bulk create multiple records efficiently (Django's bulk_create)
 	/// Inserts multiple records in a single query for performance
 	///
@@ -2881,9 +2690,7 @@ impl<M: Model> Manager<M> {
 				let rows =
 					OrmExecutor::fetch_all_with_context(&mut conn, &sql, values, context).await?;
 				for row in rows {
-					let model: M = QueryRow::from_backend_row(row)
-						.deserialize_model()
-						.map_err(field_codec_error)?;
+					let model = decode_model_row(row)?;
 					results.push(model);
 				}
 			}
@@ -2950,11 +2757,7 @@ impl<M: Model> Manager<M> {
 			}
 
 			for row in conn.fetch_all_with_context(&sql, values, context).await? {
-				results.push(
-					QueryRow::from_backend_row(row)
-						.deserialize_model::<M>()
-						.map_err(field_codec_error)?,
-				);
+				results.push(decode_model_row(row)?);
 			}
 		}
 		Ok(results)
@@ -3106,75 +2909,6 @@ impl<M: Model> Manager<M> {
 			total_updated += conn.execute(&sql, Vec::new()).await?.rows_affected as usize;
 		}
 		Ok(total_updated)
-	}
-
-	/// Get or create - SQL generation using reinhardt-query (for testing)
-	pub fn get_or_create_queries(
-		&self,
-		lookup_fields: &HashMap<String, String>,
-		defaults: &HashMap<String, String>,
-	) -> reinhardt_core::exception::Result<(SelectStatement, InsertStatement)> {
-		let lookup_fields = Self::normalize_primary_key_aliases(lookup_fields.clone())?;
-		let defaults = Self::normalize_primary_key_aliases(defaults.clone())?;
-		Ok(self.get_or_create_queries_from_normalized_fields(&lookup_fields, &defaults))
-	}
-
-	fn get_or_create_queries_from_normalized_fields(
-		&self,
-		lookup_fields: &HashMap<String, String>,
-		defaults: &HashMap<String, String>,
-	) -> (SelectStatement, InsertStatement) {
-		let field_metadata = M::field_metadata();
-		let mut select_stmt = Query::select();
-		select_stmt
-			.from(Alias::new(M::table_name()))
-			.column(ColumnRef::Asterisk);
-
-		for (k, v) in lookup_fields.iter() {
-			let column = Self::field_column(&field_metadata, k);
-			select_stmt.and_where(Expr::col(Alias::new(column)).eq(v.as_str()));
-		}
-
-		// Generate INSERT query with reinhardt-query
-		let mut insert_fields = lookup_fields.clone();
-		insert_fields.extend(defaults.clone());
-
-		let mut insert_stmt = Query::insert();
-		insert_stmt.into_table(Alias::new(M::table_name()));
-
-		let columns: Vec<_> = insert_fields
-			.keys()
-			.map(|k| Alias::new(Self::field_column(&field_metadata, k)))
-			.collect();
-		let values: Vec<reinhardt_query::prelude::Expr> = insert_fields
-			.values()
-			.map(|v| Expr::val(v.clone()))
-			.collect();
-
-		insert_stmt.columns(columns);
-		insert_stmt.values_panic(values);
-
-		(select_stmt.to_owned(), insert_stmt.to_owned())
-	}
-
-	/// Get or create - SQL generation (convenience method for testing)
-	///
-	/// # Arguments
-	///
-	/// * `lookup_fields` - Fields to lookup
-	/// * `defaults` - Default values for creation
-	/// * `backend` - Database backend to generate SQL for
-	pub fn get_or_create_sql(
-		&self,
-		lookup_fields: &HashMap<String, String>,
-		defaults: &HashMap<String, String>,
-		backend: DatabaseBackend,
-	) -> reinhardt_core::exception::Result<(String, String)> {
-		let (select_stmt, insert_stmt) = self.get_or_create_queries(lookup_fields, defaults)?;
-		Ok((
-			select_to_string(&select_stmt, backend),
-			insert_to_string(&insert_stmt, backend),
-		))
 	}
 
 	/// Bulk create - SQL generation only (for testing)
@@ -4260,31 +3994,6 @@ mod tests {
 	}
 
 	#[test]
-	fn test_get_or_create_sql() {
-		let manager = TestUser::objects();
-		let mut lookup = HashMap::new();
-		lookup.insert("email".to_string(), "test@example.com".to_string());
-
-		let mut defaults = HashMap::new();
-		defaults.insert("name".to_string(), "Test User".to_string());
-
-		let (select_sql, insert_sql) = manager
-			.get_or_create_sql(&lookup, &defaults, DatabaseBackend::Postgres)
-			.unwrap();
-
-		// reinhardt-query uses quoted identifiers and TestUser table is "test_user"
-		assert!(select_sql.contains("SELECT") && select_sql.contains("FROM"));
-		assert!(select_sql.contains("test_user"));
-		assert!(select_sql.contains("email"));
-		// reinhardt-query produces parameterized SQL with $1 placeholder instead of inline values
-		assert!(select_sql.contains("$1"));
-		assert!(insert_sql.contains("INSERT"));
-		assert!(insert_sql.contains("test_user"));
-		assert!(insert_sql.contains("email"));
-		assert!(insert_sql.contains("name"));
-	}
-
-	#[test]
 	fn test_bulk_create_sql() {
 		use serde_json::json;
 		let manager = TestUser::objects();
@@ -4659,39 +4368,6 @@ mod tests {
 		let manager = super::Manager::<TestUser>::default();
 		// Default should work the same as new
 		let _ = manager;
-	}
-
-	#[test]
-	fn test_get_or_create_sql_empty_lookup() {
-		let manager = TestUser::objects();
-		let lookup: HashMap<String, String> = HashMap::new();
-		let defaults: HashMap<String, String> = HashMap::new();
-
-		let (select_sql, insert_sql) = manager
-			.get_or_create_sql(&lookup, &defaults, DatabaseBackend::Postgres)
-			.unwrap();
-
-		// Empty lookup still produces valid SQL structure
-		assert!(select_sql.contains("SELECT") || select_sql.contains("select"));
-		assert!(insert_sql.contains("INSERT") || insert_sql.contains("insert"));
-	}
-
-	#[test]
-	fn test_get_or_create_sql_with_multiple_lookups() {
-		let manager = TestUser::objects();
-		let mut lookup = HashMap::new();
-		lookup.insert("email".to_string(), "test@example.com".to_string());
-		lookup.insert("name".to_string(), "Test User".to_string());
-
-		let defaults: HashMap<String, String> = HashMap::new();
-
-		let (select_sql, _insert_sql) = manager
-			.get_or_create_sql(&lookup, &defaults, DatabaseBackend::Postgres)
-			.unwrap();
-
-		// Should have both conditions in WHERE clause
-		assert!(select_sql.contains("email"));
-		assert!(select_sql.contains("name"));
 	}
 
 	#[test]

@@ -23,10 +23,11 @@
 //!
 //! # Hooks
 //!
-//! [`CustomManager`] also exposes three hook methods that default to a no-op
+//! [`CustomManager`] also exposes hook methods that default to a no-op
 //! and that custom implementations can override:
 //!
 //! - [`CustomManager::before_save`] — invoked before `create`/`update`
+//! - [`CustomManager::before_upsert_write`] — invoked before a typed upsert write
 //! - [`CustomManager::before_delete`] — invoked before `delete`
 //! - [`CustomManager::before_bulk_update`] — invoked before `bulk_update`
 //!
@@ -114,7 +115,7 @@
 use std::collections::HashMap;
 use std::future::Future;
 
-use reinhardt_query::{InsertStatement, SelectStatement};
+use reinhardt_query::InsertStatement;
 
 use super::annotation::Annotation;
 use super::composite_pk::PkValue;
@@ -123,6 +124,7 @@ use super::cte::CTE;
 use super::manager::Manager;
 use super::model::Model;
 use super::query::{QueryFilterInput, QuerySet, RelationLoadInput};
+use super::upsert::{GetOrCreateBuilder, UpsertWrite};
 
 /// The result of an insert whose database write and model hydration are separate.
 ///
@@ -149,10 +151,9 @@ pub enum CreateWithConnOutcome<M> {
 ///
 /// # Hooks
 ///
-/// Three hook methods (`before_save`, `before_delete`, `before_bulk_update`)
-/// allow custom implementations to validate or veto operations before they
-/// reach the database. The default implementations are no-ops returning
-/// `Ok(())`.
+/// Hook methods allow custom implementations to validate, mutate, or veto
+/// operations before they reach the database. The default implementations are
+/// no-ops returning `Ok(())`.
 ///
 /// # Bounds
 ///
@@ -492,34 +493,9 @@ pub trait CustomManager: Sized + Send + Sync {
 		async move { Manager::<Self::Model>::new().count_with_conn(conn).await }
 	}
 
-	/// Retrieve a record matching `lookup_fields`, or insert with `defaults`.
-	fn get_or_create<'a>(
-		&'a self,
-		lookup_fields: HashMap<String, String>,
-		defaults: Option<HashMap<String, String>>,
-	) -> impl Future<Output = reinhardt_core::exception::Result<(Self::Model, bool)>> + Send + 'a {
-		async move {
-			let mut conn = super::manager::get_connection().await?;
-			self.get_or_create_with_conn(&mut conn, lookup_fields, defaults)
-				.await
-		}
-	}
-
-	/// Retrieve a record matching `lookup_fields` through a caller-owned executor, or insert it.
-	fn get_or_create_with_conn<'a, E>(
-		&'a self,
-		conn: &'a mut E,
-		lookup_fields: HashMap<String, String>,
-		defaults: Option<HashMap<String, String>>,
-	) -> impl Future<Output = reinhardt_core::exception::Result<(Self::Model, bool)>> + Send + 'a
-	where
-		E: OrmExecutor + 'a,
-	{
-		async move {
-			Manager::<Self::Model>::new()
-				.get_or_create_with_conn(conn, lookup_fields, defaults)
-				.await
-		}
+	/// Starts a typed get-or-create operation.
+	fn get_or_create(self) -> GetOrCreateBuilder<Self> {
+		GetOrCreateBuilder::new(self)
 	}
 
 	/// Bulk-insert multiple records (Django: `bulk_create`).
@@ -661,33 +637,6 @@ pub trait CustomManager: Sized + Send + Sync {
 		Manager::<Self::Model>::new().delete_queryset(queryset)
 	}
 
-	/// Build the `(SELECT, INSERT)` statement pair used by `get_or_create`.
-	///
-	/// Logical and physical primary-key aliases are normalized by [`Manager`].
-	/// Conflicting aliases return `Error::Validation`, so callers should use `?`
-	/// or otherwise handle the result before rendering or executing the statements.
-	fn get_or_create_queries(
-		&self,
-		lookup_fields: &HashMap<String, String>,
-		defaults: &HashMap<String, String>,
-	) -> reinhardt_core::exception::Result<(SelectStatement, InsertStatement)> {
-		Manager::<Self::Model>::new().get_or_create_queries(lookup_fields, defaults)
-	}
-
-	/// Build the SQL strings used by `get_or_create`.
-	///
-	/// Logical and physical primary-key aliases are normalized by [`Manager`].
-	/// Conflicting aliases return `Error::Validation`, so callers should use `?`
-	/// or otherwise handle the result before using the SQL strings.
-	fn get_or_create_sql(
-		&self,
-		lookup_fields: &HashMap<String, String>,
-		defaults: &HashMap<String, String>,
-		backend: DatabaseBackend,
-	) -> reinhardt_core::exception::Result<(String, String)> {
-		Manager::<Self::Model>::new().get_or_create_sql(lookup_fields, defaults, backend)
-	}
-
 	/// Build the bulk-create SQL given pre-extracted `field_names` and rows.
 	fn bulk_create_sql_detailed(
 		&self,
@@ -726,12 +675,24 @@ pub trait CustomManager: Sized + Send + Sync {
 	}
 
 	// =========================================================================
-	// Hooks (3 methods) — default to no-op
+	// Hooks — default to no-op
 	// =========================================================================
 
 	/// Hook invoked before a `create` or `update`. Returning `Err(_)` vetoes
 	/// the write.
 	fn before_save(&self, _model: &mut Self::Model) -> reinhardt_core::exception::Result<()> {
+		Ok(())
+	}
+
+	/// Hook invoked immediately before an upsert write.
+	///
+	/// The hook can mutate typed create values or veto the write. It may run for
+	/// an insert attempt that loses a concurrent race, so implementations must
+	/// avoid external side effects. This hook is separate from [`Self::before_save`].
+	fn before_upsert_write(
+		&self,
+		_write: &mut UpsertWrite<'_, Self::Model>,
+	) -> reinhardt_core::exception::Result<()> {
 		Ok(())
 	}
 

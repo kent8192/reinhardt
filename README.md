@@ -294,6 +294,39 @@ cargo run --bin manage runserver
 # Server will start at http://127.0.0.1:8000
 ```
 
+### Rust Management Shell
+
+Generated projects provide an opt-in, stateful Rust shell backed by `evcxr`.
+Enable the project-local feature when invoking it:
+
+```bash
+cargo run --bin manage --features commands-shell -- shell
+cargo run --bin manage --features commands-shell -- shell -c \
+  'println!("{}", settings.core.debug)'
+```
+
+The shell bootstraps the project's settings, ORM database handle, dependency
+injection context, installed models, and optional project prelude. It binds
+`settings`, `db`, and `di`; uniquely named installed models are imported by
+their short names, while collisions produce a deterministic warning listing
+the concrete registered crate paths. The evaluator's stable `project_crate`
+alias can reference those same types. Interactive Rust is stateful, supports
+top-level `.await`, and uses `>>> ` / `... ` prompts for single-line /
+multiline input.
+The first cold start may compile the project and evaluator support; warm starts
+reuse unchanged Cargo artifacts.
+
+`commands-shell` is deliberately absent from generated default features. A
+project that opts in must provide `config::shell::get_shell_config()`, call
+`shell_runtime_hook()` at the outer native `main` before Tokio starts, and
+dispatch through `execute_from_command_line_with_settings_and_shell`. Generated
+REST and Pages projects include this gated wiring. See the
+[management commands guide](crates/reinhardt-commands/README.md#rust-management-shell)
+for the complete startup contract, bindings, recovery behavior, history
+location, and migration notes. The former `shell-rhai` feature was removed:
+`shell` now means the Rust evaluator, while existing settings-only entry points
+remain compatible with non-shell commands.
+
 **Auto-Reload Support:**
 
 The development server reloads automatically on file changes:

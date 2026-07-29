@@ -16,6 +16,7 @@ use reinhardt_db::orm::QuerySet;
 use reinhardt_db::orm::connection::{DatabaseBackend, OrmExecutor, QueryResult, QueryValue, Row};
 use reinhardt_db::orm::fields::FieldKwarg;
 use reinhardt_db::orm::fixtures::global_fixture_registry;
+use reinhardt_db::orm::registry::global_model_registry;
 use reinhardt_db::orm::relationship::RelationshipType;
 use reinhardt_macros::model;
 use rstest::rstest;
@@ -291,6 +292,33 @@ struct FixtureProjectionDefaultUser {
 
 	#[field(default = true)]
 	is_active: bool,
+}
+
+mod registered_models {
+	use reinhardt_macros::model;
+
+	#[derive(serde::Serialize, serde::Deserialize)]
+	#[model(app_label = "inventory", table_name = "inventory_items")]
+	pub(crate) struct InventoryItem {
+		#[field(primary_key = true)]
+		pub id: i64,
+	}
+}
+
+#[test]
+fn model_registry_records_fully_qualified_type_path() {
+	let _ = registered_models::InventoryItem::table_name();
+
+	let model = global_model_registry()
+		.all()
+		.into_iter()
+		.find(|model| model.model_name == "InventoryItem")
+		.expect("InventoryItem should be registered");
+
+	assert_eq!(
+		model.type_path,
+		concat!(module_path!(), "::registered_models::InventoryItem")
+	);
 }
 
 #[test]

@@ -593,39 +593,38 @@ enum TestDatabaseResource {
 }
 
 struct OrmGlobalRestore {
-	previous: Option<reinhardt_db::orm::connection::DatabaseConnectionLease>,
+	previous: reinhardt_db::orm::manager::DatabaseRegistrationSnapshot,
 }
 
 impl OrmGlobalRestore {
 	fn restore(self) {
 		let previous = self.previous;
-		let result = std::thread::Builder::new()
-			.name("reinhardt-testdb-orm-restore".to_string())
-			.spawn(move || {
-				match tokio::runtime::Builder::new_current_thread()
-					.enable_all()
-					.build()
-				{
-					Ok(runtime) => {
-						runtime.block_on(async move {
-							reinhardt_db::orm::manager::replace_database_connection_for_testing(
-								previous,
-							)
-							.await;
-						});
+		let result =
+			std::thread::Builder::new()
+				.name("reinhardt-testdb-orm-restore".to_string())
+				.spawn(move || {
+					match tokio::runtime::Builder::new_current_thread()
+						.enable_all()
+						.build()
+					{
+						Ok(runtime) => {
+							runtime.block_on(async move {
+								reinhardt_db::orm::manager::restore_database_connection_for_testing(previous)
+								.await;
+							});
+						}
+						Err(error) => {
+							eprintln!(
+								"Warning: failed to build runtime for ORM global restore: {error}"
+							);
+						}
 					}
-					Err(error) => {
-						eprintln!(
-							"Warning: failed to build runtime for ORM global restore: {error}"
-						);
-					}
-				}
-			})
-			.and_then(|handle| {
-				handle
-					.join()
-					.map_err(|_| std::io::Error::other("ORM global restore thread panicked"))
-			});
+				})
+				.and_then(|handle| {
+					handle
+						.join()
+						.map_err(|_| std::io::Error::other("ORM global restore thread panicked"))
+				});
 
 		if let Err(error) = result {
 			eprintln!("Warning: failed to restore ORM global database connection: {error}");
@@ -1219,9 +1218,36 @@ pub fn migration() -> Migration {
 		}
 
 		let after_drop = reinhardt_db::orm::get_connection().await;
-		reinhardt_db::orm::manager::replace_database_connection_for_testing(previous).await;
+		reinhardt_db::orm::manager::restore_database_connection_for_testing(previous).await;
 
 		assert!(after_drop.is_err());
+	}
+
+	#[rstest]
+	#[serial_test::serial(test_database_orm_global)]
+	#[tokio::test]
+	async fn scoped_registration_does_not_restore_dropped_orm_global_fixture() {
+		let previous =
+			reinhardt_db::orm::manager::replace_database_connection_for_testing(None).await;
+		let database = TestDatabase::builder()
+			.migrations::<EmptyProvider>()
+			.with_orm_global()
+			.build()
+			.await
+			.unwrap();
+		let scoped = reinhardt_db::orm::install_scoped_database("sqlite::memory:")
+			.await
+			.unwrap();
+
+		drop(database);
+		drop(scoped);
+		let after_drop = reinhardt_db::orm::get_connection().await;
+		reinhardt_db::orm::manager::restore_database_connection_for_testing(previous).await;
+
+		assert!(
+			after_drop.is_err(),
+			"dropping the scope must skip the inactive test database baseline"
+		);
 	}
 
 	#[rstest]
@@ -1276,7 +1302,7 @@ pub fn migration() -> Migration {
 			.await
 			.unwrap();
 
-		reinhardt_db::orm::manager::replace_database_connection_for_testing(original).await;
+		reinhardt_db::orm::manager::restore_database_connection_for_testing(original).await;
 
 		assert_eq!(rows.len(), 1);
 	}
@@ -1305,7 +1331,7 @@ pub fn migration() -> Migration {
 		let initialized = reinhardt_db::orm::get_connection().await.unwrap();
 		let backend = initialized.backend();
 
-		reinhardt_db::orm::manager::replace_database_connection_for_testing(previous).await;
+		reinhardt_db::orm::manager::restore_database_connection_for_testing(previous).await;
 
 		assert_eq!(
 			backend,

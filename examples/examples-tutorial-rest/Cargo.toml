@@ -50,6 +50,7 @@ cfg_aliases = "0.2"
 default = ["with-reinhardt", "client-router"]
 # client-router: Enable client-side routing support (required for #[routes] macro with UnifiedRouter)
 client-router = []
+commands-shell = ["reinhardt/commands-shell"]
 with-reinhardt = []
 
 [[test]]

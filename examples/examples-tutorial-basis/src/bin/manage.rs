@@ -19,7 +19,12 @@ mod native {
 	// "No URL patterns registered" at runtime.
 	use examples_tutorial_basis as _;
 	use examples_tutorial_basis::config::settings::get_settings;
+	#[cfg(feature = "commands-shell")]
+	use examples_tutorial_basis::config::shell::get_shell_config;
+	#[cfg(not(feature = "commands-shell"))]
 	use reinhardt::commands::execute_from_command_line_with_settings;
+	#[cfg(feature = "commands-shell")]
+	use reinhardt::commands::execute_from_command_line_with_settings_and_shell;
 	use std::process;
 
 	#[tokio::main]
@@ -39,7 +44,14 @@ mod native {
 		// `inventory::submit!`, so no manual `register_superuser_creator`
 		// call is required here.
 
-		if let Err(e) = execute_from_command_line_with_settings(get_settings()).await {
+		#[cfg(feature = "commands-shell")]
+		let result =
+			execute_from_command_line_with_settings_and_shell(get_settings(), get_shell_config())
+				.await;
+		#[cfg(not(feature = "commands-shell"))]
+		let result = execute_from_command_line_with_settings(get_settings()).await;
+
+		if let Err(e) = result {
 			eprintln!("Error: {e}");
 			process::exit(1);
 		}
@@ -48,6 +60,7 @@ mod native {
 
 #[cfg(not(target_arch = "wasm32"))]
 fn main() {
+	reinhardt::commands::shell_runtime_hook();
 	native::main();
 }
 

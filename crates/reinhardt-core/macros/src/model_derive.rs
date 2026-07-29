@@ -5918,9 +5918,6 @@ fn generate_registration_code(input: RegistrationCodeInput<'_>) -> Result<TokenS
 		});
 	}
 
-	// Generate type path for global model registry
-	let type_path = quote! { #struct_name }.to_string();
-
 	// Build per-constraint registration blocks for ModelMetadata.
 	// We walk three parallel vectors (names + field lists) and emit one
 	// `metadata.add_constraint(...)` call per declared `unique_together`.
@@ -5969,7 +5966,7 @@ fn generate_registration_code(input: RegistrationCodeInput<'_>) -> Result<TokenS
 				#orm_crate::registry::ModelInfo {
 					app_label: #app_label.to_string(),
 					model_name: #model_name.to_string(),
-					type_path: #type_path.to_string(),
+					type_path: concat!(module_path!(), "::", stringify!(#struct_name)).to_string(),
 					table_name: #table_name.to_string(),
 				}
 			);

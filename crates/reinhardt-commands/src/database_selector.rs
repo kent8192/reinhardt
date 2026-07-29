@@ -113,12 +113,6 @@ pub(crate) fn resolve_database(
 	selector: &DatabaseSelector,
 	settings: Option<&dyn HasCommonSettings>,
 ) -> CommandResult<ResolvedDatabase> {
-	if is_url_like_alias(&selector.alias) {
-		return Err(CommandError::InvalidArguments(
-			"Database aliases must not be database URLs.".to_string(),
-		));
-	}
-
 	let url = match &selector.url_override {
 		Some(url_override) => url_override.clone(),
 		None => settings
@@ -132,10 +126,9 @@ pub(crate) fn resolve_database(
 			.databases
 			.get(&selector.alias)
 			.ok_or_else(|| {
-				CommandError::InvalidArguments(format!(
-					"Database alias `{}` was not found in settings.",
-					selector.alias
-				))
+				CommandError::InvalidArguments(
+					"Database alias was not found in settings.".to_string(),
+				)
 			})?
 			.to_url(),
 	};
@@ -150,18 +143,15 @@ pub(crate) fn resolve_database(
 }
 
 fn safe_alias(alias: &str) -> &str {
-	if is_url_like_alias(alias) {
+	if alias_looks_sensitive(alias) {
 		"[REDACTED]"
 	} else {
 		alias
 	}
 }
 
-fn is_url_like_alias(alias: &str) -> bool {
-	alias.starts_with("postgres://")
-		|| alias.starts_with("postgresql://")
-		|| alias.starts_with("mysql://")
-		|| alias.starts_with("sqlite:")
+fn alias_looks_sensitive(alias: &str) -> bool {
+	alias.contains("://") || alias.contains('@')
 }
 
 fn backend_from_url(url: &str) -> CommandResult<DatabaseType> {
@@ -218,6 +208,10 @@ mod tests {
 		databases.insert(
 			"reporting:readonly".to_string(),
 			DatabaseConfig::sqlite("reporting.db"),
+		);
+		databases.insert(
+			"sqlite:reporting".to_string(),
+			DatabaseConfig::sqlite("sqlite-reporting.db"),
 		);
 
 		StubProjectSettings {
@@ -283,6 +277,24 @@ mod tests {
 	}
 
 	#[test]
+	fn resolve_database_allows_configured_sqlite_colon_alias() {
+		let settings = settings();
+		let selector = DatabaseSelector {
+			alias: "sqlite:reporting".to_string(),
+			url_override: None,
+		};
+
+		let result = resolve_database(&selector, Some(&settings));
+
+		assert!(result.is_ok());
+
+		let resolved = result.expect("configured sqlite colon alias resolves");
+		assert_eq!(resolved.alias(), "sqlite:reporting");
+		assert_eq!(resolved.backend(), DatabaseType::Sqlite);
+		assert!(resolved.url().ends_with("sqlite-reporting.db"));
+	}
+
+	#[test]
 	fn resolve_database_prefers_url_override_over_selected_alias() {
 		let settings = settings();
 		let selector = DatabaseSelector {
@@ -300,21 +312,23 @@ mod tests {
 	#[test]
 	fn resolve_database_rejects_unknown_alias_without_disclosing_urls() {
 		let settings = settings();
+		let alias = "archive".to_string();
 		let selector = DatabaseSelector {
-			alias: "archive".to_string(),
+			alias: alias.clone(),
 			url_override: None,
 		};
 
 		let error = resolve_database(&selector, Some(&settings)).expect_err("unknown alias fails");
 		let diagnostic = error.to_string();
 
-		assert!(diagnostic.contains("archive"));
+		assert!(!diagnostic.contains(&alias));
+		assert!(diagnostic.contains("alias"));
 		assert!(!diagnostic.contains("default-secret"));
 		assert!(!diagnostic.contains("replica-secret"));
 	}
 
 	#[test]
-	fn url_like_alias_is_rejected_and_debug_redacts_it_with_an_override() {
+	fn url_like_alias_resolves_override_and_debug_redacts_it() {
 		let alias = "postgresql://admin:alias-secret@db.example/app".to_string();
 		let selector = DatabaseSelector {
 			alias: alias.clone(),
@@ -326,14 +340,45 @@ mod tests {
 
 		assert!(!selector_debug.contains(&alias));
 		assert!(selector_debug.contains("[REDACTED]"));
-		assert!(result.is_err());
+		assert!(result.is_ok());
 
-		let diagnostic = result
+		let resolved = result.expect("URL-like aliases may use an override");
+		let resolved_debug = format!("{resolved:?}");
+		assert!(!resolved_debug.contains(&alias));
+		assert!(resolved_debug.contains("[REDACTED]"));
+	}
+
+	#[test]
+	fn unsupported_case_variant_url_alias_is_redacted_from_debug_and_errors() {
+		let alias = "ORACLE://user:case-secret@db.example/app".to_string();
+		let override_selector = DatabaseSelector {
+			alias: alias.clone(),
+			url_override: Some("sqlite::memory:".to_string()),
+		};
+		let unknown_selector = DatabaseSelector {
+			alias: alias.clone(),
+			url_override: None,
+		};
+
+		let selector_debug = format!("{override_selector:?}");
+		let override_result = resolve_database(&override_selector, None);
+		let unknown_result = resolve_database(&unknown_selector, Some(&settings()));
+
+		assert!(!selector_debug.contains(&alias));
+		assert!(override_result.is_ok());
+		assert!(unknown_result.is_err());
+
+		let resolved_debug = format!(
+			"{:?}",
+			override_result.expect("override resolves credential-shaped alias")
+		);
+		let unknown_diagnostic = unknown_result
 			.err()
-			.expect("URL-like aliases must be rejected")
+			.expect("unknown credential-shaped alias fails")
 			.to_string();
-		assert!(!diagnostic.contains(&alias));
-		assert!(diagnostic.contains("alias"));
+		assert!(!resolved_debug.contains(&alias));
+		assert!(!unknown_diagnostic.contains(&alias));
+		assert!(unknown_diagnostic.contains("alias"));
 	}
 
 	#[test]

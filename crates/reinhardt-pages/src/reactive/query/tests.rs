@@ -428,6 +428,196 @@ fn observer_policies_do_not_overwrite_each_other() {
 }
 
 #[test]
+fn polling_and_gc_follow_the_deterministic_runtime_clock() {
+	let runtime = TestQueryRuntime::new();
+	let client = QueryClient::with_runtime(QueryDefaults::default(), runtime.clock());
+	let family = QueryFamily::<(), String, String>::new("tests.polling-gc-clock");
+	let fetch_count = Rc::new(Cell::new(0));
+	let descriptor = family.query((), {
+		let fetch_count = Rc::clone(&fetch_count);
+		move || {
+			let call = fetch_count.get() + 1;
+			fetch_count.set(call);
+			async move { Ok(format!("value-{call}")) }
+		}
+	});
+	let key = descriptor.key().clone();
+	let query = client.observe(
+		descriptor,
+		QueryOptions::new()
+			.refetch_interval(Duration::from_secs(5))
+			.gc_time(Duration::from_secs(30)),
+	);
+	runtime.run_until_stalled();
+	assert_eq!(fetch_count.get(), 1);
+
+	runtime.advance(Duration::from_secs(5));
+	runtime.run_due_maintenance();
+	assert_eq!(fetch_count.get(), 2);
+
+	drop(query);
+	runtime.advance(Duration::from_secs(29));
+	runtime.run_due_maintenance();
+	assert!(client.contains_for_test(&key));
+
+	runtime.advance(Duration::from_secs(1));
+	runtime.run_due_maintenance();
+	assert!(!client.contains_for_test(&key));
+}
+
+#[test]
+fn earliest_polling_observer_starts_one_shared_request() {
+	let runtime = TestQueryRuntime::new();
+	let client = QueryClient::with_runtime(QueryDefaults::default(), runtime.clock());
+	let family = QueryFamily::<(), String, String>::new("tests.earliest-polling-observer");
+	let fetch_count = Rc::new(Cell::new(0));
+	let descriptor = family.query((), {
+		let fetch_count = Rc::clone(&fetch_count);
+		move || {
+			let call = fetch_count.get() + 1;
+			fetch_count.set(call);
+			async move { Ok(format!("value-{call}")) }
+		}
+	});
+	let _slow = client.observe(
+		descriptor.clone(),
+		QueryOptions::new().refetch_interval(Duration::from_secs(10)),
+	);
+	let _fast = client.observe(
+		descriptor,
+		QueryOptions::new().refetch_interval(Duration::from_secs(5)),
+	);
+	runtime.run_until_stalled();
+	assert_eq!(fetch_count.get(), 1);
+
+	runtime.advance(Duration::from_secs(5));
+	runtime.run_due_maintenance();
+
+	assert_eq!(fetch_count.get(), 2);
+}
+
+#[test]
+fn polling_interval_restarts_from_request_completion() {
+	let runtime = TestQueryRuntime::new();
+	let client = QueryClient::with_runtime(QueryDefaults::default(), runtime.clock());
+	let family = QueryFamily::<(), String, String>::new("tests.polling-after-completion");
+	let ready = Rc::new(Cell::new(false));
+	let fetch_count = Rc::new(Cell::new(0));
+	let _query = client.observe(
+		family.query((), {
+			let ready = Rc::clone(&ready);
+			let fetch_count = Rc::clone(&fetch_count);
+			move || {
+				let call = fetch_count.get() + 1;
+				fetch_count.set(call);
+				TestGate {
+					ready: Rc::clone(&ready),
+					dropped: Rc::new(Cell::new(0)),
+					result: Some(Ok(format!("value-{call}"))),
+				}
+			}
+		}),
+		QueryOptions::new().refetch_interval(Duration::from_secs(5)),
+	);
+	runtime.run_until_stalled();
+	assert_eq!(fetch_count.get(), 1);
+
+	runtime.advance(Duration::from_secs(4));
+	ready.set(true);
+	runtime.run_until_stalled();
+	runtime.advance(Duration::from_secs(1));
+	runtime.run_due_maintenance();
+	assert_eq!(fetch_count.get(), 1);
+
+	runtime.advance(Duration::from_secs(4));
+	runtime.run_due_maintenance();
+	assert_eq!(fetch_count.get(), 2);
+}
+
+#[test]
+fn disabled_observer_does_not_contribute_a_polling_deadline() {
+	let runtime = TestQueryRuntime::new();
+	let client = QueryClient::with_runtime(QueryDefaults::default(), runtime.clock());
+	let family = QueryFamily::<(), String, String>::new("tests.disabled-polling");
+	let fetch_count = Rc::new(Cell::new(0));
+	let _query = client.observe(
+		family.query((), {
+			let fetch_count = Rc::clone(&fetch_count);
+			move || {
+				fetch_count.set(fetch_count.get() + 1);
+				async { Ok("unused".to_string()) }
+			}
+		}),
+		QueryOptions::new()
+			.enabled(false)
+			.refetch_interval(Duration::from_secs(5)),
+	);
+
+	runtime.advance(Duration::from_secs(10));
+	runtime.run_due_maintenance();
+
+	assert_eq!(fetch_count.get(), 0);
+}
+
+#[test]
+fn final_observer_drop_uses_the_epoch_maximum_gc_time() {
+	let runtime = TestQueryRuntime::new();
+	let client = QueryClient::with_runtime(QueryDefaults::default(), runtime.clock());
+	let family = QueryFamily::<(), String, String>::new("tests.maximum-gc-time");
+	let descriptor = family.query((), || async { Ok("cached".to_string()) });
+	let key = descriptor.key().clone();
+	let short = client.observe(
+		descriptor.clone(),
+		QueryOptions::new().gc_time(Duration::from_secs(10)),
+	);
+	let long = client.observe(
+		descriptor,
+		QueryOptions::new().gc_time(Duration::from_secs(30)),
+	);
+	runtime.run_until_stalled();
+
+	drop(short);
+	drop(long);
+	runtime.advance(Duration::from_secs(29));
+	runtime.run_due_maintenance();
+	assert!(client.contains_for_test(&key));
+
+	runtime.advance(Duration::from_secs(1));
+	runtime.run_due_maintenance();
+	assert!(!client.contains_for_test(&key));
+}
+
+#[test]
+fn remount_invalidates_an_older_gc_deadline() {
+	let runtime = TestQueryRuntime::new();
+	let client = QueryClient::with_runtime(QueryDefaults::default(), runtime.clock());
+	let family = QueryFamily::<(), String, String>::new("tests.remount-cancels-gc");
+	let descriptor = family.query((), || async { Ok("cached".to_string()) });
+	let key = descriptor.key().clone();
+	let first = client.observe(
+		descriptor.clone(),
+		QueryOptions::new().gc_time(Duration::from_secs(5)),
+	);
+	runtime.run_until_stalled();
+	drop(first);
+
+	runtime.advance(Duration::from_secs(4));
+	let second = client.observe(
+		descriptor,
+		QueryOptions::new().gc_time(Duration::from_secs(5)),
+	);
+	runtime.advance(Duration::from_secs(1));
+	runtime.run_due_maintenance();
+
+	assert!(client.contains_for_test(&key));
+
+	drop(second);
+	runtime.advance(Duration::from_secs(5));
+	runtime.run_due_maintenance();
+	assert!(!client.contains_for_test(&key));
+}
+
+#[test]
 fn exact_invalidation_only_refetches_the_matching_active_query() {
 	let runtime = TestQueryRuntime::new();
 	let client = QueryClient::with_runtime(QueryDefaults::default(), runtime.handle());
@@ -1511,11 +1701,7 @@ fn successful_query_is_not_pending_during_background_fetch() {
 			fetcher,
 			ObserverPolicy::resolve(&QueryOptions::default(), &QueryDefaults::default()),
 		);
-		let query = QueryHandle {
-			entry,
-			lease,
-			guards: Rc::new(RefCell::new(Vec::new())),
-		};
+		let query = QueryHandle { entry, lease };
 
 		// Act
 		let data = query.data();

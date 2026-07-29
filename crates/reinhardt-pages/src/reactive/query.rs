@@ -9,15 +9,22 @@ mod identity;
 mod runtime;
 mod state;
 
-#[cfg(test)]
+#[cfg(all(test, not(target_arch = "wasm32")))]
 mod tests;
 
+#[cfg(feature = "testing")]
+pub use browser::QueryBrowserResourceProbe;
 pub use client::QueryClient;
-#[cfg(test)]
+#[cfg(all(test, not(target_arch = "wasm32")))]
 pub(crate) use client::TestQueryRuntime;
 #[cfg(test)]
 pub(super) use client::acquire_query;
 pub(crate) use client::{QueryAcquireOptions, QueryConsumer, QueryErrorPolicy, QueryLease};
+#[cfg(feature = "testing")]
+pub use client::{
+	query_browser_resource_counts, query_browser_resource_probe_for_test,
+	set_query_visibility_for_test,
+};
 pub(crate) use context::provide_query_client;
 pub use context::queries;
 #[cfg(native)]

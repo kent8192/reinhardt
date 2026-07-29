@@ -1,11 +1,9 @@
-use std::cell::RefCell;
 use std::rc::Rc;
 
 use serde::Serialize;
 use serde::de::DeserializeOwned;
 
 use super::super::resource::ResourceState;
-use super::browser::QueryGuard;
 use super::client::{
 	QueryAcquireOptions, QueryClient, QueryConsumer, QueryEntry, QueryErrorPolicy, QueryLease,
 };
@@ -17,7 +15,6 @@ use super::state::{QueryOptions, QuerySnapshot, QueryStatus};
 pub struct QueryHandle<T: Clone + 'static, E: Clone + 'static> {
 	pub(super) entry: Rc<QueryEntry<T, E>>,
 	pub(super) lease: QueryLease<T, E>,
-	pub(super) guards: Rc<RefCell<Vec<QueryGuard>>>,
 }
 
 impl<T: Clone + 'static, E: Clone + 'static> Clone for QueryHandle<T, E> {
@@ -25,7 +22,6 @@ impl<T: Clone + 'static, E: Clone + 'static> Clone for QueryHandle<T, E> {
 		Self {
 			entry: Rc::clone(&self.entry),
 			lease: self.lease.clone(),
-			guards: Rc::clone(&self.guards),
 		}
 	}
 }
@@ -154,21 +150,8 @@ where
 		options,
 	);
 	let entry = Rc::clone(&lease.inner.entry);
-	let guards = Rc::new(RefCell::new(Vec::new()));
-	if lease.inner.policy.enabled
-		&& let Some(interval) = lease.inner.policy.refetch_interval
-		&& !interval.is_zero()
-	{
-		guards
-			.borrow_mut()
-			.push(QueryGuard::poll(interval, Rc::clone(&entry)));
-	}
 
-	let query = QueryHandle {
-		entry,
-		lease,
-		guards,
-	};
+	let query = QueryHandle { entry, lease };
 	#[cfg(native)]
 	if ssr_prefetch {
 		let hydration_id = query.entry.hydration_id.clone();

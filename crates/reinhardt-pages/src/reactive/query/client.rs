@@ -1,8 +1,9 @@
 use std::any::Any;
 use std::cell::{Cell, RefCell};
-use std::collections::HashMap;
+use std::cmp::{Ordering, Reverse};
 #[cfg(all(test, not(wasm)))]
 use std::collections::VecDeque;
+use std::collections::{BinaryHeap, HashMap};
 use std::future::Future;
 use std::marker::PhantomData;
 use std::pin::Pin;
@@ -53,6 +54,12 @@ pub(crate) trait QueryRuntime {
 	fn now_ms(&self) -> u64;
 	fn spawn(&self, task: QueryTask);
 
+	fn register_maintenance(&self, _callback: Weak<dyn Fn()>) {}
+
+	fn supports_browser_resources(&self) -> bool {
+		false
+	}
+
 	fn executes_inline(&self) -> bool {
 		false
 	}
@@ -69,6 +76,10 @@ impl QueryRuntime for PlatformQueryRuntime {
 
 	fn spawn(&self, task: QueryTask) {
 		spawn_query_task(task);
+	}
+
+	fn supports_browser_resources(&self) -> bool {
+		cfg!(wasm)
 	}
 }
 
@@ -102,6 +113,7 @@ pub(crate) struct TestQueryRuntime {
 struct TestQueryRuntimeInner {
 	now_ms: Cell<u64>,
 	tasks: RefCell<VecDeque<QueryTask>>,
+	maintenance: RefCell<Vec<Weak<dyn Fn()>>>,
 }
 
 #[cfg(all(test, not(wasm)))]
@@ -111,12 +123,41 @@ impl TestQueryRuntime {
 			inner: Rc::new(TestQueryRuntimeInner {
 				now_ms: Cell::new(0),
 				tasks: RefCell::new(VecDeque::new()),
+				maintenance: RefCell::new(Vec::new()),
 			}),
 		}
 	}
 
+	pub(crate) fn clock(&self) -> QueryRuntimeHandle {
+		self.handle()
+	}
+
 	pub(crate) fn handle(&self) -> QueryRuntimeHandle {
 		Rc::clone(&self.inner) as QueryRuntimeHandle
+	}
+
+	pub(crate) fn advance(&self, duration: Duration) {
+		self.inner.now_ms.set(
+			self.inner
+				.now_ms
+				.get()
+				.saturating_add(duration_ms(duration)),
+		);
+	}
+
+	pub(crate) fn run_due_maintenance(&self) {
+		let callbacks = {
+			let mut maintenance = self.inner.maintenance.borrow_mut();
+			maintenance.retain(|callback| callback.strong_count() > 0);
+			maintenance
+				.iter()
+				.filter_map(Weak::upgrade)
+				.collect::<Vec<_>>()
+		};
+		for callback in callbacks {
+			callback();
+		}
+		self.run_until_stalled();
 	}
 
 	pub(crate) fn run_until_stalled(&self) {
@@ -156,6 +197,10 @@ impl QueryRuntime for TestQueryRuntimeInner {
 	fn spawn(&self, task: QueryTask) {
 		self.tasks.borrow_mut().push_back(task);
 	}
+
+	fn register_maintenance(&self, callback: Weak<dyn Fn()>) {
+		self.maintenance.borrow_mut().push(callback);
+	}
 }
 
 /// Application-owned keyed query cache and runtime.
@@ -164,11 +209,15 @@ pub struct QueryClient {
 	inner: Rc<QueryClientInner>,
 }
 
-struct QueryClientInner {
+pub(super) struct QueryClientInner {
 	defaults: QueryDefaults,
 	runtime: QueryRuntimeHandle,
 	entries: RefCell<HashMap<QueryIdentity, CachedQueryEntry>>,
 	families: RefCell<HashMap<&'static str, QueryFamilyTypes>>,
+	deadlines: RefCell<BinaryHeap<Reverse<QueryDeadline>>>,
+	next_deadline_sequence: Cell<u64>,
+	maintenance_callback: RefCell<Option<Rc<dyn Fn()>>>,
+	browser: super::browser::QueryBrowser,
 }
 
 #[derive(Clone)]
@@ -177,6 +226,39 @@ struct CachedQueryEntry {
 	typed: Rc<dyn Any>,
 	invalidate: Rc<dyn Fn()>,
 	cancel: Rc<dyn Fn()>,
+	poll_due: Rc<dyn Fn(u64)>,
+	#[cfg(wasm)]
+	visibility_changed: Rc<dyn Fn(bool, u64)>,
+	deadline_is_current: Rc<dyn Fn(QueryDeadlineKind, u64) -> bool>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum QueryDeadlineKind {
+	Poll,
+	GarbageCollection,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct QueryDeadline {
+	due_ms: u64,
+	sequence: u64,
+	generation: u64,
+	identity: QueryIdentity,
+	kind: QueryDeadlineKind,
+}
+
+impl Ord for QueryDeadline {
+	fn cmp(&self, other: &Self) -> Ordering {
+		self.due_ms
+			.cmp(&other.due_ms)
+			.then_with(|| self.sequence.cmp(&other.sequence))
+	}
+}
+
+impl PartialOrd for QueryDeadline {
+	fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+		Some(self.cmp(other))
+	}
 }
 
 impl QueryClient {
@@ -191,14 +273,33 @@ impl QueryClient {
 	}
 
 	pub(crate) fn with_runtime(defaults: QueryDefaults, runtime: QueryRuntimeHandle) -> Self {
-		Self {
-			inner: Rc::new(QueryClientInner {
-				defaults,
-				runtime,
-				entries: RefCell::new(HashMap::new()),
-				families: RefCell::new(HashMap::new()),
-			}),
-		}
+		let supports_browser_resources = runtime.supports_browser_resources();
+		let inner = Rc::new_cyclic(|owner| QueryClientInner {
+			defaults,
+			runtime,
+			entries: RefCell::new(HashMap::new()),
+			families: RefCell::new(HashMap::new()),
+			deadlines: RefCell::new(BinaryHeap::new()),
+			next_deadline_sequence: Cell::new(0),
+			maintenance_callback: RefCell::new(None),
+			browser: super::browser::QueryBrowser::new(owner.clone(), supports_browser_resources),
+		});
+		let maintenance_callback: Rc<dyn Fn()> = Rc::new({
+			let owner = Rc::downgrade(&inner);
+			move || {
+				if let Some(owner) = owner.upgrade() {
+					owner.run_due_maintenance();
+				}
+			}
+		});
+		inner
+			.runtime
+			.register_maintenance(Rc::downgrade(&maintenance_callback));
+		inner
+			.maintenance_callback
+			.borrow_mut()
+			.replace(maintenance_callback);
+		Self { inner }
 	}
 
 	pub(crate) fn observe<T, E>(
@@ -211,6 +312,21 @@ impl QueryClient {
 		E: Clone + Serialize + DeserializeOwned + 'static,
 	{
 		super::hook::observe_query(self, descriptor, options)
+	}
+
+	/// Observes a query without installing an application context.
+	#[doc(hidden)]
+	#[cfg(feature = "testing")]
+	pub fn observe_for_test<T, E>(
+		&self,
+		descriptor: QueryDescriptor<T, E>,
+		options: QueryOptions,
+	) -> super::hook::QueryHandle<T, E>
+	where
+		T: Clone + Serialize + DeserializeOwned + 'static,
+		E: Clone + Serialize + DeserializeOwned + 'static,
+	{
+		self.observe(descriptor, options)
 	}
 
 	fn register_family(&self, family_id: &'static str, actual: QueryFamilyTypes) {
@@ -236,10 +352,113 @@ impl QueryClient {
 	pub(super) fn same_instance(&self, other: &Self) -> bool {
 		Rc::ptr_eq(&self.inner, &other.inner)
 	}
+
+	#[cfg(test)]
+	pub(crate) fn contains_for_test<T, E>(&self, key: &QueryKey<T, E>) -> bool {
+		self.inner.entries.borrow().contains_key(key.identity())
+	}
+}
+
+impl QueryClientInner {
+	fn schedule_deadline(
+		&self,
+		identity: QueryIdentity,
+		kind: QueryDeadlineKind,
+		generation: u64,
+		due_ms: u64,
+	) {
+		let sequence = self.next_deadline_sequence.get();
+		self.next_deadline_sequence.set(sequence.wrapping_add(1));
+		self.deadlines.borrow_mut().push(Reverse(QueryDeadline {
+			due_ms,
+			sequence,
+			generation,
+			identity,
+			kind,
+		}));
+		self.refresh_browser_timer();
+	}
+
+	fn deadline_is_current(&self, deadline: &QueryDeadline) -> bool {
+		self.entries
+			.borrow()
+			.get(&deadline.identity)
+			.is_some_and(|entry| (entry.deadline_is_current)(deadline.kind, deadline.generation))
+	}
+
+	fn next_current_deadline(&self) -> Option<QueryDeadline> {
+		loop {
+			let deadline = self.deadlines.borrow().peek().cloned()?.0;
+			if self.deadline_is_current(&deadline) {
+				return Some(deadline);
+			}
+			self.deadlines.borrow_mut().pop();
+		}
+	}
+
+	fn refresh_browser_timer(&self) {
+		let deadline_ms = self.next_current_deadline().map(|deadline| deadline.due_ms);
+		self.browser.schedule(deadline_ms, self.runtime.now_ms());
+	}
+
+	fn run_due_maintenance(&self) {
+		let now_ms = self.runtime.now_ms();
+		while let Some(deadline) = self.next_current_deadline() {
+			if deadline.due_ms > now_ms {
+				break;
+			}
+			self.deadlines.borrow_mut().pop();
+			if !self.deadline_is_current(&deadline) {
+				continue;
+			}
+			match deadline.kind {
+				QueryDeadlineKind::Poll => {
+					let poll_due = self
+						.entries
+						.borrow()
+						.get(&deadline.identity)
+						.map(|entry| Rc::clone(&entry.poll_due));
+					if let Some(poll_due) = poll_due {
+						poll_due(deadline.generation);
+					}
+				}
+				QueryDeadlineKind::GarbageCollection => {
+					let cached = self.entries.borrow_mut().remove(&deadline.identity);
+					if let Some(cached) = cached {
+						(cached.cancel)();
+					}
+				}
+			}
+		}
+		self.refresh_browser_timer();
+	}
+
+	#[cfg(wasm)]
+	pub(super) fn handle_browser_timer(&self) {
+		self.run_due_maintenance();
+	}
+
+	#[cfg(wasm)]
+	pub(super) fn handle_visibility_change(&self) {
+		let visible = self.browser.document_is_visible();
+		let now_ms = self.runtime.now_ms();
+		let callbacks = self
+			.entries
+			.borrow()
+			.values()
+			.map(|entry| Rc::clone(&entry.visibility_changed))
+			.collect::<Vec<_>>();
+		for callback in callbacks {
+			callback(visible, now_ms);
+		}
+		self.refresh_browser_timer();
+	}
 }
 
 impl Drop for QueryClientInner {
 	fn drop(&mut self) {
+		self.deadlines.get_mut().clear();
+		self.maintenance_callback.get_mut().take();
 		for entry in self.entries.get_mut().values() {
 			(entry.cancel)();
 		}
@@ -285,6 +504,7 @@ pub(super) struct QueryRequest<T: Clone + 'static, E: Clone + 'static> {
 pub(super) struct QueryEntry<T: Clone + 'static, E: Clone + 'static> {
 	pub(super) _scope: Rc<ReactiveScope>,
 	pub(super) hydration_id: String,
+	identity: QueryIdentity,
 	family_id: &'static str,
 	pub(super) state: Signal<ResourceState<T, E>>,
 	pub(super) refetch_error: Signal<Option<E>>,
@@ -301,6 +521,9 @@ pub(super) struct QueryEntry<T: Clone + 'static, E: Clone + 'static> {
 	queued_manual_refetch: RefCell<Option<Weak<QueryLeaseInner<T, E>>>>,
 	pub(super) last_fetched_ms: Cell<Option<u64>>,
 	observers: RefCell<Vec<Weak<QueryLeaseInner<T, E>>>>,
+	poll_generation: Cell<u64>,
+	gc_generation: Cell<u64>,
+	epoch_gc_time: Cell<Duration>,
 	runtime: QueryRuntimeHandle,
 	owner: Option<Weak<QueryClientInner>>,
 	inline_task: RefCell<Option<QueryTask>>,
@@ -335,6 +558,7 @@ pub(super) struct QueryLeaseInner<T: Clone + 'static, E: Clone + 'static> {
 	pub(super) policy: ObserverPolicy,
 	pub(super) fetcher: Rc<QueryFetcher<T, E>>,
 	pub(super) manual_refetch_pending: Cell<bool>,
+	poll_deadline_ms: Cell<Option<u64>>,
 }
 
 /// RAII interest in one keyed query entry.
@@ -361,6 +585,9 @@ impl<T: Clone + 'static, E: Clone + 'static> Drop for QueryLeaseInner<T, E> {
 		}
 		if remaining == 0 {
 			entry.cancel_request();
+			entry.schedule_garbage_collection();
+		} else {
+			entry.refresh_polling_deadline();
 		}
 	}
 }
@@ -408,6 +635,7 @@ impl<T: Clone + 'static, E: Clone + 'static> QueryEntry<T, E> {
 		let (initial_state, last_fetched_ms) =
 			initial_query_state_at(hydrated_state, runtime.now_ms());
 		let hydration_id = key.hydration_id();
+		let identity = key.identity().clone();
 		let family_id = key.family_id();
 		let scope = Rc::new(ReactiveScope::new());
 		let (state, refetch_error, is_fetching) = scope.enter(|| {
@@ -421,6 +649,7 @@ impl<T: Clone + 'static, E: Clone + 'static> QueryEntry<T, E> {
 		Self {
 			_scope: scope,
 			hydration_id,
+			identity,
 			family_id,
 			state,
 			refetch_error,
@@ -437,6 +666,9 @@ impl<T: Clone + 'static, E: Clone + 'static> QueryEntry<T, E> {
 			queued_manual_refetch: RefCell::new(None),
 			last_fetched_ms: Cell::new(last_fetched_ms),
 			observers: RefCell::new(Vec::new()),
+			poll_generation: Cell::new(0),
+			gc_generation: Cell::new(0),
+			epoch_gc_time: Cell::new(Duration::ZERO),
 			runtime,
 			owner,
 			inline_task: RefCell::new(None),
@@ -463,6 +695,137 @@ impl<T: Clone + 'static, E: Clone + 'static> QueryEntry<T, E> {
 
 	pub(super) fn has_request(&self) -> bool {
 		self.request.borrow().is_some()
+	}
+
+	fn poll_interval_for(policy: ObserverPolicy, consumer: QueryConsumer) -> Option<Duration> {
+		if !policy.enabled || consumer != QueryConsumer::MountedQuery {
+			return None;
+		}
+		policy
+			.refetch_interval
+			.filter(|interval| !interval.is_zero())
+	}
+
+	fn live_observers(&self) -> Vec<Rc<QueryLeaseInner<T, E>>> {
+		let mut observers = self.observers.borrow_mut();
+		observers.retain(|observer| observer.strong_count() > 0);
+		observers.iter().filter_map(Weak::upgrade).collect()
+	}
+
+	fn enabled_mounted_observers(&self) -> Vec<Rc<QueryLeaseInner<T, E>>> {
+		self.live_observers()
+			.into_iter()
+			.filter(|observer| {
+				observer.policy.enabled && observer.consumer == QueryConsumer::MountedQuery
+			})
+			.collect()
+	}
+
+	fn next_poll_generation(&self) -> u64 {
+		let generation = self.poll_generation.get().wrapping_add(1);
+		self.poll_generation.set(generation);
+		generation
+	}
+
+	fn refresh_polling_deadline(&self) {
+		let deadline_ms = self
+			.live_observers()
+			.into_iter()
+			.filter_map(|observer| {
+				Self::poll_interval_for(observer.policy, observer.consumer)
+					.and(observer.poll_deadline_ms.get())
+			})
+			.min();
+		let generation = self.next_poll_generation();
+		if let Some(owner) = self.owner.as_ref().and_then(Weak::upgrade) {
+			if let Some(deadline_ms) = deadline_ms {
+				owner.schedule_deadline(
+					self.identity.clone(),
+					QueryDeadlineKind::Poll,
+					generation,
+					deadline_ms,
+				);
+			} else {
+				owner.refresh_browser_timer();
+			}
+		}
+	}
+
+	fn reschedule_polling_from(&self, now_ms: u64) {
+		for observer in self.live_observers() {
+			observer.poll_deadline_ms.set(
+				Self::poll_interval_for(observer.policy, observer.consumer)
+					.map(|interval| now_ms.saturating_add(duration_ms(interval))),
+			);
+		}
+		self.refresh_polling_deadline();
+	}
+
+	fn suspend_polling(&self) {
+		for observer in self.live_observers() {
+			observer.poll_deadline_ms.set(None);
+		}
+		self.next_poll_generation();
+	}
+
+	fn schedule_garbage_collection(&self) {
+		self.suspend_polling();
+		let generation = self.gc_generation.get().wrapping_add(1);
+		self.gc_generation.set(generation);
+		if let Some(owner) = self.owner.as_ref().and_then(Weak::upgrade) {
+			owner.schedule_deadline(
+				self.identity.clone(),
+				QueryDeadlineKind::GarbageCollection,
+				generation,
+				self.runtime
+					.now_ms()
+					.saturating_add(duration_ms(self.epoch_gc_time.get())),
+			);
+		}
+	}
+
+	fn handle_poll_deadline(self: &Rc<Self>, generation: u64) {
+		if generation != self.poll_generation.get() || self.lease_count.get() == 0 {
+			return;
+		}
+		self.suspend_polling();
+		if !self.has_request() && !self.enabled_mounted_observers().is_empty() {
+			self.start_fetch(true);
+		}
+	}
+
+	#[cfg(wasm)]
+	fn handle_visibility_change(self: &Rc<Self>, visible: bool, now_ms: u64) {
+		if !visible {
+			self.suspend_polling();
+			return;
+		}
+		let observers = self.enabled_mounted_observers();
+		if observers.is_empty() {
+			return;
+		}
+		if observers
+			.iter()
+			.any(|observer| self.is_stale(observer.policy.stale_time))
+		{
+			self.suspend_polling();
+			if !self.has_request() {
+				self.start_fetch(true);
+			}
+		} else {
+			self.reschedule_polling_from(now_ms);
+		}
+	}
+
+	fn deadline_is_current(&self, kind: QueryDeadlineKind, generation: u64) -> bool {
+		match kind {
+			QueryDeadlineKind::Poll => {
+				self.lease_count.get() > 0 && self.poll_generation.get() == generation
+			}
+			QueryDeadlineKind::GarbageCollection => {
+				self.lease_count.get() == 0 && self.gc_generation.get() == generation
+			}
+		}
 	}
 
 	fn next_request_generation(&self) -> u64 {
@@ -507,7 +870,16 @@ impl<T: Clone + 'static, E: Clone + 'static> QueryEntry<T, E> {
 		fetcher: Rc<QueryFetcher<T, E>>,
 		policy: ObserverPolicy,
 	) -> QueryLease<T, E> {
-		self.lease_count.set(self.lease_count.get() + 1);
+		let previous_lease_count = self.lease_count.get();
+		self.lease_count.set(previous_lease_count + 1);
+		if previous_lease_count == 0 {
+			self.gc_generation
+				.set(self.gc_generation.get().wrapping_add(1));
+			self.epoch_gc_time.set(policy.gc_time);
+		} else {
+			self.epoch_gc_time
+				.set(self.epoch_gc_time.get().max(policy.gc_time));
+		}
 		let retains_errors = error_policy == QueryErrorPolicy::Retain;
 		if retains_errors {
 			self.retain_lease_count
@@ -521,8 +893,13 @@ impl<T: Clone + 'static, E: Clone + 'static> QueryEntry<T, E> {
 			policy,
 			fetcher,
 			manual_refetch_pending: Cell::new(false),
+			poll_deadline_ms: Cell::new(
+				Self::poll_interval_for(policy, consumer)
+					.map(|interval| self.runtime.now_ms().saturating_add(duration_ms(interval))),
+			),
 		});
 		self.observers.borrow_mut().push(Rc::downgrade(&inner));
+		self.refresh_polling_deadline();
 		QueryLease { inner }
 	}
 
@@ -761,6 +1138,7 @@ impl<T: Clone + 'static, E: Clone + 'static> QueryEntry<T, E> {
 		}
 		self.is_fetching.set(false);
 		self.wake_waiters();
+		self.reschedule_polling_from(self.runtime.now_ms());
 		let invalidated_during_request =
 			self.invalidation_generation.get() > request_invalidation_generation;
 		let manual_refetch_queued = self.refetch_after_in_flight.replace(false);
@@ -1112,6 +1490,26 @@ pub(crate) fn hydration_id(identity: &QueryIdentity) -> String {
 	format!("query:{}:sha256:{digest}", identity.family_id())
 }
 
+/// Overrides document visibility for browser query lifecycle tests.
+#[cfg(feature = "testing")]
+pub fn set_query_visibility_for_test(client: &QueryClient, visible: bool) {
+	client.inner.browser.set_visibility_for_test(visible);
+}
+
+/// Returns active visibility listeners and polling timers for a query client.
+#[cfg(feature = "testing")]
+pub fn query_browser_resource_counts(client: &QueryClient) -> (usize, usize) {
+	client.inner.browser.resource_counts()
+}
+
+/// Captures a weak view of browser resources for final-client-drop tests.
+#[cfg(feature = "testing")]
+pub fn query_browser_resource_probe_for_test(
+	client: &QueryClient,
+) -> super::browser::QueryBrowserResourceProbe {
+	client.inner.browser.resource_probe()
+}
+
 fn cached_query_entry<T, E>(entry: &Rc<QueryEntry<T, E>>) -> CachedQueryEntry
 where
 	T: Clone + 'static,
@@ -1127,6 +1525,19 @@ where
 		cancel: Rc::new({
 			let entry = Rc::clone(entry);
 			move || entry.cancel_request()
+		}),
+		poll_due: Rc::new({
+			let entry = Rc::clone(entry);
+			move |generation| entry.handle_poll_deadline(generation)
+		}),
+		#[cfg(wasm)]
+		visibility_changed: Rc::new({
+			let entry = Rc::clone(entry);
+			move |visible, now_ms| entry.handle_visibility_change(visible, now_ms)
+		}),
+		deadline_is_current: Rc::new({
+			let entry = Rc::clone(entry);
+			move |kind, generation| entry.deadline_is_current(kind, generation)
 		}),
 	}
 }

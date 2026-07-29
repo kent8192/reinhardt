@@ -7,7 +7,7 @@ use crate::migrations::ast_parser;
 use crate::migrations::dependency::DependencyCondition;
 use async_trait::async_trait;
 use cap_std::ambient_authority;
-use cap_std::fs::{Dir, File, OpenOptions};
+use cap_std::fs::{Dir, File, Metadata, MetadataExt, OpenOptions};
 use quote::quote;
 use reinhardt_query::prelude::{
 	ColumnType as QueryColumnType, GeneratedStorage, SchemaBinOper, SchemaExpr, SchemaFunc, Value,
@@ -39,6 +39,47 @@ pub struct MigrationRenderOptions {
 pub struct FilesystemRepository {
 	/// Root directory for migration files
 	root_dir: PathBuf,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct DirectoryIdentity {
+	device: u64,
+	file: u64,
+}
+
+#[cfg(any(unix, target_os = "wasi", target_os = "vxworks"))]
+fn directory_identity(metadata: &Metadata) -> std::io::Result<DirectoryIdentity> {
+	Ok(DirectoryIdentity {
+		device: MetadataExt::dev(metadata),
+		file: MetadataExt::ino(metadata),
+	})
+}
+
+#[cfg(windows)]
+fn directory_identity(metadata: &Metadata) -> std::io::Result<DirectoryIdentity> {
+	let device = MetadataExt::volume_serial_number(metadata)
+		.map(u64::from)
+		.ok_or_else(|| {
+			std::io::Error::new(
+				std::io::ErrorKind::Unsupported,
+				"root directory volume identity is unavailable",
+			)
+		})?;
+	let file = MetadataExt::file_index(metadata).ok_or_else(|| {
+		std::io::Error::new(
+			std::io::ErrorKind::Unsupported,
+			"root directory file identity is unavailable",
+		)
+	})?;
+	Ok(DirectoryIdentity { device, file })
+}
+
+#[cfg(not(any(unix, windows, target_os = "wasi", target_os = "vxworks")))]
+fn directory_identity(_metadata: &Metadata) -> std::io::Result<DirectoryIdentity> {
+	Err(std::io::Error::new(
+		std::io::ErrorKind::Unsupported,
+		"root directory identity is unavailable on this platform",
+	))
 }
 
 struct IncompleteFile<C>
@@ -752,6 +793,7 @@ impl FilesystemRepository {
 		let formatted = Self::format_with_rustfmt(source)?;
 		std::fs::create_dir_all(&self.root_dir)?;
 		let root = Dir::open_ambient_dir(&self.root_dir, ambient_authority())?;
+		let root_identity = directory_identity(&root.dir_metadata()?)?;
 		before_open()?;
 		root.create_dir_all(app_label)?;
 		let app_directory = root.open_dir(app_label)?;
@@ -769,7 +811,52 @@ impl FilesystemRepository {
 				)))),
 			};
 		}
+		if let Err(identity_error) = self.validate_root_identity(root_identity) {
+			return match incomplete.cleanup_now() {
+				Ok(()) => Err(identity_error),
+				Err(cleanup_error) => Err(MigrationError::IoError(std::io::Error::other(format!(
+					"{identity_error}; failed to remove incomplete file after root directory \
+					 identity validation: {cleanup_error}"
+				)))),
+			};
+		}
 		Ok(incomplete.complete())
+	}
+
+	fn validate_root_identity(&self, expected: DirectoryIdentity) -> Result<()> {
+		let before_open = std::fs::symlink_metadata(&self.root_dir).map_err(|error| {
+			MigrationError::PathTraversal(format!(
+				"Migration root directory identity is unavailable: {error}"
+			))
+		})?;
+		if before_open.file_type().is_symlink() {
+			return Err(MigrationError::PathTraversal(
+				"Migration root directory identity changed to a symbolic link".to_string(),
+			));
+		}
+		let ambient =
+			Dir::open_ambient_dir(&self.root_dir, ambient_authority()).map_err(|error| {
+				MigrationError::PathTraversal(format!(
+					"Migration root directory identity is unavailable: {error}"
+				))
+			})?;
+		let actual = directory_identity(&ambient.dir_metadata()?).map_err(|error| {
+			MigrationError::PathTraversal(format!(
+				"Migration root directory identity is unavailable: {error}"
+			))
+		})?;
+		let after_open = std::fs::symlink_metadata(&self.root_dir).map_err(|error| {
+			MigrationError::PathTraversal(format!(
+				"Migration root directory identity is unavailable: {error}"
+			))
+		})?;
+		if after_open.file_type().is_symlink() || actual != expected {
+			return Err(MigrationError::PathTraversal(format!(
+				"Migration root directory identity changed during source creation: expected \
+				 {expected:?}, found {actual:?}"
+			)));
+		}
+		Ok(())
 	}
 
 	/// Format code with rustfmt, applying project's rustfmt.toml settings (hard_tabs = true)
@@ -1491,8 +1578,55 @@ mod tests {
 			|directory, name| directory.remove_file(name),
 		);
 
-		assert!(result.is_ok());
-		assert!(anchored_root.join("polls/0001_squashed.rs").exists());
+		let error = result.unwrap_err();
+		assert!(matches!(error, MigrationError::PathTraversal(_)));
+		assert!(!anchored_root.join("polls/0001_squashed.rs").exists());
+		assert!(!outside.path().join("polls").exists());
+	}
+
+	#[cfg(unix)]
+	#[test]
+	fn create_new_source_reports_root_identity_and_cleanup_failures() {
+		use std::os::unix::fs::symlink;
+
+		let container = TempDir::new().unwrap();
+		let root = container.path().join("migrations");
+		let anchored_root = container.path().join("anchored-migrations");
+		let outside = TempDir::new().unwrap();
+		std::fs::create_dir(&root).unwrap();
+		let repo = FilesystemRepository::new(&root);
+		let source = repo
+			.render(
+				&create_test_migration("polls", "0001_squashed"),
+				MigrationRenderOptions {
+					include_header: false,
+				},
+			)
+			.unwrap();
+
+		let error = repo
+			.create_new_source_with_hooks(
+				"polls",
+				"0001_squashed",
+				&source,
+				|| {
+					std::fs::rename(&root, &anchored_root)?;
+					symlink(outside.path(), &root)
+				},
+				|file, formatted| {
+					file.write_all(formatted.as_bytes())?;
+					file.sync_all()
+				},
+				|_, _| Err(std::io::Error::other("injected identity cleanup failure")),
+			)
+			.unwrap_err();
+
+		assert!(error.to_string().contains("root directory identity"));
+		assert!(
+			error
+				.to_string()
+				.contains("injected identity cleanup failure")
+		);
 		assert!(!outside.path().join("polls").exists());
 	}
 

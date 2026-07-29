@@ -49,10 +49,10 @@ console_error_panic_hook = "0.1"
 wasm-bindgen-futures = "0.4"
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
-# Keep the facade dependency after the native-only alias. proc-macro-crate
-# resolves duplicate package dependencies to the last declaration, and
-# Reinhardt macros must emit the cross-target `reinhardt` crate name.
-reinhardt-shell = { version = "{{ reinhardt_version }}", package = "reinhardt-web", default-features = false, features = ["commands-shell"], optional = true }
+# Keep the facade dependency after the native-only commands dependency so
+# procedural macros resolve application paths through the cross-target
+# `reinhardt` crate name.
+reinhardt-commands = { version = "{{ reinhardt_version }}", default-features = false, features = ["shell"], optional = true }
 reinhardt = { version = "{{ reinhardt_version }}", package = "reinhardt-web", default-features = {{ reinhardt_default_features }}, features = {{ reinhardt_features_toml }} }
 clap = { version = "4", features = ["derive"] }
 console = "0.16.1"

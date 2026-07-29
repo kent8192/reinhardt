@@ -83,6 +83,75 @@ fn current_directory_aliases_are_rejected_before_mutation() {
 	assert_eq!(directory_entries(temp_dir.path()), Vec::<String>::new());
 }
 
+#[test]
+fn existing_case_aliases_are_rejected_before_mutation_on_case_insensitive_filesystems() {
+	let temp_dir = tempfile::Builder::new()
+		.prefix("inspectdb-output-")
+		.tempdir_in("/tmp")
+		.expect("temporary directory should be created");
+	let destination = temp_dir.path().join("Model.rs");
+	let case_alias = temp_dir.path().join("model.rs");
+	fs::write(&destination, b"original bytes").expect("existing file should be created");
+	if fs::symlink_metadata(&case_alias).is_err() {
+		return;
+	}
+	let output = generated_output(vec![
+		GeneratedFile::new(&destination, "first bytes"),
+		GeneratedFile::new(&case_alias, "second bytes"),
+	]);
+
+	let error = write_generated_files_atomically(&output, true)
+		.expect_err("filesystem-equivalent destinations should be rejected");
+
+	match error {
+		MigrationError::IoError(error) => {
+			assert_eq!(error.kind(), io::ErrorKind::InvalidInput);
+		}
+		other => panic!("expected an I/O error, got {other:?}"),
+	}
+	assert_eq!(
+		fs::read(&destination).expect("existing file should remain readable"),
+		b"original bytes"
+	);
+	assert_eq!(
+		directory_entries(temp_dir.path()),
+		vec!["Model.rs".to_string()]
+	);
+}
+
+#[test]
+fn absent_case_aliases_are_rejected_before_destination_mutation() {
+	let temp_dir = tempfile::Builder::new()
+		.prefix("inspectdb-output-")
+		.tempdir_in("/tmp")
+		.expect("temporary directory should be created");
+	let case_probe = temp_dir.path().join("CaseProbe");
+	let case_probe_alias = temp_dir.path().join("caseprobe");
+	fs::write(&case_probe, b"probe").expect("case probe should be created");
+	let case_insensitive = fs::symlink_metadata(&case_probe_alias).is_ok();
+	fs::remove_file(&case_probe).expect("case probe should be removed");
+	if !case_insensitive {
+		return;
+	}
+	let destination = temp_dir.path().join("Model.rs");
+	let case_alias = temp_dir.path().join("model.rs");
+	let output = generated_output(vec![
+		GeneratedFile::new(&destination, "first bytes"),
+		GeneratedFile::new(&case_alias, "second bytes"),
+	]);
+
+	let error = write_generated_files_atomically(&output, false)
+		.expect_err("filesystem-equivalent absent destinations should be rejected");
+
+	match error {
+		MigrationError::IoError(error) => {
+			assert_eq!(error.kind(), io::ErrorKind::InvalidInput);
+		}
+		other => panic!("expected an I/O error, got {other:?}"),
+	}
+	assert_eq!(directory_entries(temp_dir.path()), Vec::<String>::new());
+}
+
 #[cfg(unix)]
 #[test]
 fn symlink_parent_aliases_are_rejected_before_mutation() {

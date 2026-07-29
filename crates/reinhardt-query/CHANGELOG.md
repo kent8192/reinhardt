@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.0-alpha.4](https://github.com/kent8192/reinhardt-web/compare/reinhardt-query@v0.4.0-alpha.3...reinhardt-query@v0.4.0-alpha.4) - 2026-07-29
+
+### Fixed
+
+- *(pgvector)* preserve vector index metadata
+
+### Maintenance
+
+- *(pgvector)* propagate native vector feature flags
+
+### Other
+
+- sync develop/0.4.0 into pgvector branch
+
 ## [0.4.0-alpha.1](https://github.com/kent8192/reinhardt-web/compare/reinhardt-query@v0.3.2...reinhardt-query@v0.4.0-alpha.1) - 2026-07-21
 
 ### Fixed

@@ -7,6 +7,80 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.0-alpha.4](https://github.com/kent8192/reinhardt-web/compare/reinhardt-core@v0.4.0-alpha.3...reinhardt-core@v0.4.0-alpha.4) - 2026-07-29
+
+### Added
+
+- *(core)* add model form schema contracts
+- *(macros)* generate typed model form schemas
+- *(forms)* [**breaking**] make generated model forms async
+
+### Documentation
+
+- *(forms)* document generated model forms
+
+### Fixed
+
+- *(macros)* preserve model form relation schemas
+- *(macros)* reject repeated setter name collisions
+- *(forms)* enforce model form persistence invariants
+- *(forms)* align model form automatic defaults
+- *(forms)* harden generated form persistence semantics
+- *(forms)* close residual model form review gaps
+- *(macros)* omit generated fields from model forms
+- *(forms)* enforce generated model constraints
+- *(forms)* handle temporal and assigned model inputs
+- *(forms)* preserve model form field contracts
+- *(forms)* preserve specialized field constraints
+- *(forms)* preserve exact generated constraints
+- *(forms)* complete model-backed form submission
+- *(forms)* enforce model form submission policies
+- *(forms)* harden native model form decoding
+- *(forms)* preserve model form defaults
+- *(forms)* harden model form input handling
+- *(forms)* preserve secure model form defaults
+- *(forms)* honor relation form editability
+- *(forms)* preserve nullable relation clears
+- *(forms)* complete model form submission contracts
+- *(forms)* validate model form submission boundaries
+- *(forms)* preserve native model form semantics
+- *(forms)* preserve native defaults and control values
+- *(forms)* preserve model-backed form state
+- *(forms)* reserve the native csrf field name
+- *(forms)* enforce policy in typed setters
+- *(forms)* harden generated model form boundaries
+- *(forms)* preserve optional model form state
+- *(forms)* enforce model form overrides
+- *(forms)* reserve generated form namespaces
+- *(forms)* preflight deferred child validators
+- *(forms)* require generated relation ids
+- *(forms)* prevent duplicate MySQL form inserts
+- *(forms)* preserve native range defaults
+- *(forms)* prevent duplicate create retries
+- *(forms)* synchronize defaults and persistence state
+- *(forms)* synchronize transaction-backed form state
+- *(forms)* preserve transactional retry semantics
+- *(forms)* support trusted inline foreign keys
+- *(forms)* preserve model form control semantics
+- *(forms)* preserve nested form retries
+- *(forms)* validate inline formset retries
+- *(forms)* align native form validation
+- *(forms)* use serde-json for trusted fields
+- *(forms)* support nullable model form relations
+- *(forms)* preserve trusted non-editable model values
+- *(forms)* address model form review feedback
+- *(pgvector)* preserve vector index metadata
+- *(ci)* repair pgvector test coverage
+
+### Maintenance
+
+- *(pgvector)* propagate native vector feature flags
+
+### Other
+
+- sync develop/0.4.0 into pgvector branch
+- sync develop/0.4.0 into pgvector branch
+
 ## [0.4.0-alpha.2](https://github.com/kent8192/reinhardt-web/compare/reinhardt-core@v0.4.0-alpha.1...reinhardt-core@v0.4.0-alpha.2) - 2026-07-23
 
 ### Fixed

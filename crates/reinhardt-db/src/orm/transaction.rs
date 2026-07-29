@@ -1070,6 +1070,13 @@ impl TransactionExecutor for AtomicTransaction {
 			.unwrap_or(self.is_cockroachdb)
 	}
 
+	fn row_lock_capabilities(&self) -> crate::backends::types::RowLockCapabilities {
+		self.executor_ref().map_or_else(
+			crate::backends::types::RowLockCapabilities::unsupported,
+			TransactionExecutor::row_lock_capabilities,
+		)
+	}
+
 	async fn execute(
 		&mut self,
 		sql: &str,

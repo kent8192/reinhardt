@@ -67,6 +67,15 @@ impl TransactionExecutor for FlavoredTransactionExecutor {
 		self.is_cockroachdb
 	}
 
+	fn row_lock_capabilities(&self) -> super::types::RowLockCapabilities {
+		let mut capabilities = self.inner.row_lock_capabilities();
+		if self.is_cockroachdb {
+			capabilities.no_key_update = false;
+			capabilities.targets = false;
+		}
+		capabilities
+	}
+
 	fn supports_pgvector_error_hints(&self) -> bool {
 		self.inner.supports_pgvector_error_hints()
 	}

@@ -18,7 +18,9 @@ use reinhardt_db::orm::annotation::{AnnotationValue, Expression, Value};
 use reinhardt_db::orm::composite_pk::{CompositePrimaryKey, PkValue};
 #[cfg(feature = "sqlite")]
 use reinhardt_db::orm::connection::{BackendsConnection, DatabaseConnectionLease};
-use reinhardt_db::orm::connection::{DatabaseBackend, OrmExecutor, QueryResult, QueryValue, Row};
+use reinhardt_db::orm::connection::{
+	DatabaseBackend, OrmExecutor, QueryResult, QueryValue, Row, TransactionExecutor,
+};
 use reinhardt_db::orm::custom_manager::CustomManager;
 use reinhardt_db::orm::events::{EventRegistry, EventResult, MapperEvents, set_active_registry};
 use reinhardt_db::orm::execution::{QueryExecution, SelectExecution};
@@ -172,6 +174,80 @@ impl OrmExecutor for RecordingExecutor {
 	) -> reinhardt_core::exception::Result<Option<Row>> {
 		self.fetch_optional_contexts.push(context);
 		self.fetch_optional(sql, params).await
+	}
+}
+
+struct RowLockTransactionExecutor {
+	backend: reinhardt_db::backends::DatabaseType,
+	capabilities: reinhardt_db::orm::RowLockCapabilities,
+	calls: Vec<RecordedCall>,
+	rows: Vec<Row>,
+}
+
+impl RowLockTransactionExecutor {
+	fn postgres(rows: Vec<Row>) -> Self {
+		Self {
+			backend: reinhardt_db::backends::DatabaseType::Postgres,
+			capabilities: reinhardt_db::orm::RowLockCapabilities::postgres(),
+			calls: Vec::new(),
+			rows,
+		}
+	}
+}
+
+#[async_trait]
+impl TransactionExecutor for RowLockTransactionExecutor {
+	fn backend(&self) -> reinhardt_db::backends::DatabaseType {
+		self.backend
+	}
+
+	fn row_lock_capabilities(&self) -> reinhardt_db::orm::RowLockCapabilities {
+		self.capabilities
+	}
+
+	async fn execute(
+		&mut self,
+		_sql: &str,
+		_params: Vec<QueryValue>,
+	) -> reinhardt_core::exception::Result<QueryResult> {
+		panic!("row-lock SELECT test does not execute mutations")
+	}
+
+	async fn fetch_one(
+		&mut self,
+		_sql: &str,
+		_params: Vec<QueryValue>,
+	) -> reinhardt_core::exception::Result<Row> {
+		panic!("row-lock SELECT test does not fetch one row")
+	}
+
+	async fn fetch_all(
+		&mut self,
+		sql: &str,
+		params: Vec<QueryValue>,
+	) -> reinhardt_core::exception::Result<Vec<Row>> {
+		self.calls.push(RecordedCall {
+			kind: "fetch_all",
+			sql: sql.to_owned(),
+			params,
+		});
+		Ok(std::mem::take(&mut self.rows))
+	}
+
+	async fn fetch_optional(
+		&mut self,
+		_sql: &str,
+		_params: Vec<QueryValue>,
+	) -> reinhardt_core::exception::Result<Option<Row>> {
+		panic!("row-lock SELECT test does not fetch an optional row")
+	}
+
+	async fn commit(self: Box<Self>) -> reinhardt_core::exception::Result<()> {
+		Ok(())
+	}
+
+	async fn rollback(self: Box<Self>) -> reinhardt_core::exception::Result<()> {
+		Ok(())
 	}
 }
 
@@ -480,6 +556,83 @@ fn article_locale_row(article_id: i64, locale: &str, title: &str) -> Row {
 	row.insert("locale".to_string(), QueryValue::String(locale.to_string()));
 	row.insert("title".to_string(), QueryValue::String(title.to_string()));
 	row
+}
+
+#[tokio::test]
+async fn select_for_update_rejects_an_ordinary_executor_without_querying() {
+	let query = QuerySet::<Article>::new().select_for_update().nowait();
+	let mut executor = RecordingExecutor::new(DatabaseBackend::Postgres);
+
+	let error = query
+		.all_with_db(&mut executor)
+		.await
+		.expect_err("row locks require an active transaction executor");
+
+	assert_eq!(error.database_kind(), Some(DatabaseErrorKind::Transaction));
+	assert!(executor.calls.is_empty());
+}
+
+#[tokio::test]
+async fn select_for_update_renders_postgres_lock_options_in_a_transaction() {
+	let query = QuerySet::<Article>::new()
+		.select_for_update()
+		.nowait()
+		.no_key()
+		.of_model();
+	let mut executor = RowLockTransactionExecutor::postgres(vec![article_row(7, "locked")]);
+
+	let articles = query
+		.all_with_executor(&mut executor)
+		.await
+		.expect("PostgreSQL transaction should support every requested lock option");
+
+	assert_eq!(
+		articles,
+		vec![Article {
+			id: Some(7),
+			title: "locked".to_string(),
+		}]
+	);
+	assert_eq!(executor.calls.len(), 1);
+	assert_eq!(
+		executor.calls[0].sql,
+		"SELECT * FROM \"articles\" FOR NO KEY UPDATE OF \"articles\" NOWAIT"
+	);
+	assert!(executor.calls[0].params.is_empty());
+}
+
+#[tokio::test]
+async fn select_for_update_rejects_missing_server_capability_without_querying() {
+	let query = QuerySet::<Article>::new().select_for_update().skip_locked();
+	let mut executor = RowLockTransactionExecutor::postgres(Vec::new());
+	executor.capabilities.skip_locked = false;
+
+	let error = match query.rows_with_executor(&mut executor).await {
+		Ok(_) => panic!("an older PostgreSQL server must reject SKIP LOCKED"),
+		Err(error) => error,
+	};
+
+	assert_eq!(error.kind(), DatabaseErrorKind::Unsupported);
+	assert!(executor.calls.is_empty());
+}
+
+#[tokio::test]
+async fn select_for_update_rejects_sqlite_instead_of_degrading_to_a_no_op() {
+	let query = QuerySet::<Article>::new().select_for_update();
+	let mut executor = RowLockTransactionExecutor {
+		backend: reinhardt_db::backends::DatabaseType::Sqlite,
+		capabilities: reinhardt_db::orm::RowLockCapabilities::unsupported(),
+		calls: Vec::new(),
+		rows: Vec::new(),
+	};
+
+	let error = match query.rows_with_executor(&mut executor).await {
+		Ok(_) => panic!("SQLite does not support SELECT row locks"),
+		Err(error) => error,
+	};
+
+	assert_eq!(error.kind(), DatabaseErrorKind::Unsupported);
+	assert!(executor.calls.is_empty());
 }
 
 async fn save_article(

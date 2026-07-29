@@ -169,9 +169,12 @@ async fn spa_navigation_full_layout_e2e(#[future] cdp_browser: CdpBrowser) {
 	eprintln!("[e2e] base_url = {base_url}");
 	let browser = cdp_browser.await;
 	let page = browser
-		.new_page(&base_url)
+		.new_page("about:blank")
 		.await
-		.expect("open new page at fixture URL");
+		.expect("open blank browser page");
+	page.navigate(&base_url)
+		.await
+		.expect("navigate to fixture URL");
 
 	// Boot mount: home content section is rendered under the layout shell.
 	if let Err(e) = page.wait_for("#route-home").await {

@@ -903,21 +903,27 @@ fn jobs_component() -> Page {
 }
 
 #[cfg(feature = "msw")]
+async fn retry_job_for_component_test() -> Result<(), String> {
+	Ok(())
+}
+
+#[cfg(feature = "msw")]
 fn jobs_query_component() -> Page {
 	let jobs = use_query(load_jobs::query(), QueryOptions::default());
 	let client = queries();
-	let refresh = use_action(move |_: ()| {
+	let retry = use_action(move |_: ()| {
 		let client = client.clone();
 		async move {
-			client.invalidate(&load_jobs::key());
-			Ok::<_, String>(())
+			retry_job_for_component_test().await?;
+			client.invalidate_family(load_jobs::family());
+			Ok::<(), String>(())
 		}
 	});
 	PageElement::new("div")
 		.child(
 			PageElement::new("button")
-				.listener("click", move |_| refresh.dispatch(()))
-				.child("Refresh"),
+				.listener("click", move |_| retry.dispatch(()))
+				.child("Retry job"),
 		)
 		.child(Page::reactive(move || jobs_query_page(jobs.snapshot())))
 		.into_page()
@@ -972,8 +978,8 @@ async fn server_fn_query_cache_is_scoped_per_screen() {
 	let second = render(jobs_query_component);
 	second.mock_server_fn::<load_jobs::marker>(|_args| Ok(vec!["Second job".to_string()]));
 
-	first.get_by_role(Role::Button, "Refresh").click();
-	second.get_by_role(Role::Button, "Refresh").click();
+	first.get_by_role(Role::Button, "Retry job").click();
+	second.get_by_role(Role::Button, "Retry job").click();
 	first.settle().await;
 	second.settle().await;
 
@@ -990,7 +996,7 @@ async fn server_fn_query_cache_does_not_leak_after_screen_drop() {
 		let first = render(jobs_query_component);
 		first.mock_server_fn::<load_jobs::marker>(|_args| Ok(vec!["First job".to_string()]));
 
-		first.get_by_role(Role::Button, "Refresh").click();
+		first.get_by_role(Role::Button, "Retry job").click();
 		first.settle().await;
 
 		assert!(first.query_by_text("First job").is_some());
@@ -1000,7 +1006,7 @@ async fn server_fn_query_cache_does_not_leak_after_screen_drop() {
 	let second = render(jobs_query_component);
 	second.mock_server_fn::<load_jobs::marker>(|_args| Ok(vec!["Second job".to_string()]));
 
-	second.get_by_role(Role::Button, "Refresh").click();
+	second.get_by_role(Role::Button, "Retry job").click();
 	second.settle().await;
 
 	assert!(second.query_by_text("Second job").is_some());

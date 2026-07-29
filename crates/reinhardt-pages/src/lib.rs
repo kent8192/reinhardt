@@ -9,11 +9,53 @@
 //! optimistic UI state. [`Resource::latest_after`] and
 //! [`use_latest_resource_value`] compose loaded resource state with action
 //! success values so screens can render the latest loaded or mutated data.
-//! [`use_query`] and [`use_action`] provide keyed server-function reads and
-//! explicit mutation workflows. Generated query keys
-//! canonicalize JSON object arguments, hydrated success and error states remain
-//! visible through the first client mount, and query handles distinguish initial
-//! pending state from background fetching.
+//! [`use_query`] and [`use_action`] provide application-owned keyed reads and
+//! explicit mutation workflows. A browser [`ClientLauncher`] owns one
+//! [`QueryClient`], while SSR requests and native component-test screens use
+//! isolated clients. Generated [`QueryFamily`], [`QueryKey`], and
+//! [`QueryDescriptor`] helpers canonicalize JSON object arguments, hydrated
+//! settled state is reused by the first client observer, and [`QuerySnapshot`]
+//! distinguishes initial pending state from background fetching.
+//!
+//! ## Query client v2
+//!
+//! Configure application defaults on the launcher and observer behavior when
+//! mounting a query:
+//!
+//! ```ignore
+//! use std::time::Duration;
+//! use reinhardt_pages::prelude::*;
+//!
+//! ClientLauncher::new("#root")
+//!     .query_defaults(
+//!         QueryDefaults::new()
+//!             .stale_time(Duration::from_secs(30))
+//!             .gc_time(Duration::from_secs(300)),
+//!     );
+//!
+//! let jobs = use_query(
+//!     list_project_jobs::query(project_id),
+//!     QueryOptions::new().refetch_interval(Duration::from_secs(5)),
+//! );
+//! ```
+//!
+//! The generated server-function module exposes `family()`, `key(args...)`,
+//! and `query(args...)`. Non-server-function reads can use
+//! [`QueryFamily::new`] and [`QueryFamily::query`] directly. Call
+//! [`QueryClient::invalidate`] for one exact key or
+//! [`QueryClient::invalidate_family`] after a successful [`use_action`]
+//! mutation. Disabled uncached observers report [`QueryStatus::Idle`];
+//! enabled observers progress through [`QueryStatus::Pending`],
+//! [`QueryStatus::Success`], or [`QueryStatus::Error`]. Successful data remains
+//! visible if a background fetch fails, with the error available through the
+//! `QuerySnapshot::refetch_error` field.
+//!
+//! Observer polling suspends while the browser document is hidden and resumes
+//! according to freshness. SSR query state is request-local and is serialized
+//! for hydration before the browser's first observer mounts. Query client v2
+//! removes `QueryKey::new`, query-handle policy builders, `use_mutation`, and
+//! `Action::invalidates`. Entity normalization (#5843) and retry policy (#5844)
+//! remain separate non-goals.
 //!
 //! ## Features
 //!

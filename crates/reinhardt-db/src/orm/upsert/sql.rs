@@ -46,16 +46,20 @@ pub(crate) fn select_by_lookup<M: Model>(
 	}
 
 	let (mut sql, values) = build_select_sql(&statement, backend);
+	// Workaround for missing reinhardt-query LockClause rendering
+	// (tracked in reinhardt-web#5813). Keep LIMIT and FOR UPDATE together here because
+	// SelectStatement::limit(2) currently adds a bound parameter, which would change
+	// BoundSql.params. Remove both manual suffixes once LockClause rendering and the
+	// inline LIMIT contract can be expressed by the builder.
+	//
+	// Ideal implementation (without workaround):
+	//   statement.limit(2);
+	//   if lock && matches!(backend, DatabaseBackend::Postgres | DatabaseBackend::MySql) {
+	//       statement.lock_exclusive();
+	//   }
+	//   let (sql, values) = build_select_sql(&statement, backend);
 	sql.push_str(" LIMIT 2");
 	if lock && matches!(backend, DatabaseBackend::Postgres | DatabaseBackend::MySql) {
-		// Workaround for missing reinhardt-query lock rendering
-		// (tracked in reinhardt-web#5813).
-		// Remove this suffix once reinhardt-query renders
-		// SelectStatement::lock_exclusive() / LockClause.
-		//
-		// Ideal implementation (without workaround):
-		//   statement.lock_exclusive();
-		//   let (sql, values) = build_select_sql(&statement, backend);
 		sql.push_str(" FOR UPDATE");
 	}
 	Ok(bound_sql(sql, values))

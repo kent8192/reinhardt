@@ -111,10 +111,10 @@ impl MigrationSquasher {
 	///
 	/// # Errors
 	///
-	/// Returns an error for an empty range or when `state_only` or
-	/// `database_only` differs between source migrations, because those
-	/// whole-migration execution modes cannot be represented safely after
-	/// combining their operations.
+	/// Returns an error for an empty range, when source migrations belong to
+	/// different apps, or when `state_only` or `database_only` differs between
+	/// source migrations. Mixed whole-migration execution modes cannot be
+	/// represented safely after combining their operations.
 	pub fn squash_range(
 		&self,
 		range: &SquashRange,

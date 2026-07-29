@@ -8,6 +8,7 @@ use reinhardt_query::prelude::{
 	Alias, Expr, ExprTrait, InsertStatement, MySqlQueryBuilder, OnConflict, PostgresQueryBuilder,
 	Query, QueryBuilder, SelectStatement, SqliteQueryBuilder, UpdateStatement, Values,
 };
+use std::collections::BTreeMap;
 
 pub(crate) struct BoundSql {
 	pub(crate) sql: String,
@@ -157,6 +158,85 @@ pub(crate) fn update_by_primary_key<M: Model>(
 	Ok(bound_sql(sql, values))
 }
 
+pub(crate) fn update_values_by_primary_key<M: Model>(
+	model: &M,
+	values: &BTreeMap<String, DatabaseValue>,
+	backend: DatabaseBackend,
+) -> Result<BoundSql> {
+	if values.is_empty() {
+		return Err(Error::Validation(
+			"typed upsert UPDATE requires at least one assignment".to_owned(),
+		));
+	}
+	let metadata = M::field_metadata();
+	let assignments = values
+		.iter()
+		.map(|(logical_name, value)| {
+			let field = metadata
+				.iter()
+				.find(|field| field.name == *logical_name)
+				.ok_or_else(|| {
+					Error::Validation(format!(
+						"typed upsert UPDATE field '{logical_name}' is missing model metadata"
+					))
+				})?;
+			Ok((field.db_column_name().to_owned(), value.clone()))
+		})
+		.collect::<Result<Vec<_>>>()?;
+
+	let mut statement = Query::update();
+	statement.table(Alias::new(M::table_name()));
+	for (column_name, value) in assignments {
+		statement.value(
+			Alias::new(column_name),
+			database_value_to_query_value(value),
+		);
+	}
+	add_primary_key_predicate(model, &mut statement)?;
+	let (sql, values) = build_update_sql(&statement, backend);
+	Ok(bound_sql(sql, values))
+}
+
+fn add_primary_key_predicate<M: Model>(model: &M, statement: &mut UpdateStatement) -> Result<()> {
+	let encoded_fields = model.encode_database_fields().map_err(field_codec_error)?;
+	let field_metadata = M::field_metadata();
+	let composite_primary_key = M::composite_primary_key();
+	let primary_key_fields = composite_primary_key.as_ref().map_or_else(
+		|| vec![M::primary_key_field().to_owned()],
+		|primary_key| primary_key.fields().to_vec(),
+	);
+	for logical_name in primary_key_fields {
+		let field = field_metadata
+			.iter()
+			.find(|field| field.name == logical_name);
+		let column_name = match field {
+			Some(field) => field.db_column_name(),
+			None if composite_primary_key.is_none() && logical_name == M::primary_key_field() => {
+				M::primary_key_column()
+			}
+			None => {
+				return Err(Error::Validation(format!(
+					"typed upsert UPDATE primary-key field '{logical_name}' is missing model metadata"
+				)));
+			}
+		};
+		let value = encoded_fields.get(&logical_name).ok_or_else(|| {
+			Error::Validation(format!(
+				"typed upsert UPDATE primary-key field '{logical_name}' is missing encoded model values"
+			))
+		})?;
+		if *value == DatabaseValue::Null {
+			return Err(Error::Validation(format!(
+				"typed upsert UPDATE requires non-null primary-key field '{logical_name}'"
+			)));
+		}
+		statement.and_where(
+			Expr::col(Alias::new(column_name)).eq(database_value_to_query_value(value.clone())),
+		);
+	}
+	Ok(())
+}
+
 fn build_select_sql(statement: &SelectStatement, backend: DatabaseBackend) -> (String, Values) {
 	match backend {
 		DatabaseBackend::Postgres => PostgresQueryBuilder.build_select(statement),
@@ -204,9 +284,10 @@ fn field_codec_error(error: FieldCodecError) -> Error {
 
 #[cfg(test)]
 mod tests {
-	use super::{insert, select_by_lookup, update_by_primary_key};
+	use super::{insert, select_by_lookup, update_by_primary_key, update_values_by_primary_key};
 	use crate::orm::composite_pk::CompositePrimaryKey;
 	use crate::orm::expressions::FieldRef;
+	use crate::orm::field_codec::DatabaseValue;
 	use crate::orm::inspection::FieldInfo;
 	use crate::orm::model::{FieldSelector, Model};
 	use crate::orm::upsert::assignment::TypedAssignment;
@@ -214,7 +295,7 @@ mod tests {
 	use crate::orm::{DatabaseBackend, Manager, QueryValue};
 	use rstest::*;
 	use serde::{Deserialize, Serialize};
-	use std::collections::HashMap;
+	use std::collections::{BTreeMap, HashMap};
 
 	#[derive(Clone, Debug, Serialize, Deserialize)]
 	struct Article {
@@ -629,6 +710,36 @@ mod tests {
 			]
 		);
 		assert_eq!(compiled.sql.contains(quote_bearing_headline), false);
+	}
+
+	#[test]
+	fn update_value_map_uses_every_composite_primary_key_column() {
+		let model = ArticleRevision {
+			tenant_id: 7,
+			article_id: 9,
+			headline: "old".to_owned(),
+		};
+		let values = BTreeMap::from([(
+			"headline".to_owned(),
+			DatabaseValue::String("new".to_owned()),
+		)]);
+
+		let compiled = update_values_by_primary_key(&model, &values, DatabaseBackend::Postgres)
+			.expect("compile composite primary-key UPDATE");
+
+		assert_eq!(
+			compiled.sql,
+			"UPDATE \"article_revisions\" SET \"display_headline\" = $1 \
+			 WHERE \"tenant_key\" = $2 AND \"article_key\" = $3"
+		);
+		assert_eq!(
+			compiled.params,
+			vec![
+				QueryValue::String("new".to_owned()),
+				QueryValue::Int(7),
+				QueryValue::Int(9),
+			]
+		);
 	}
 
 	#[rstest]

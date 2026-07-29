@@ -728,3 +728,15 @@ async fn get_or_create_preserves_the_first_builder_encoding_error() {
 	assert!(!error.to_string().contains("second encoding diagnostic"));
 	assert_eq!(executor.operations(), Vec::<&str>::new());
 }
+
+#[tokio::test]
+async fn update_or_create_validation_error_precedes_connection_acquisition() {
+	let error = Manager::<Article>::new()
+		.update_or_create()
+		.set(Article::field_rank(), 1)
+		.execute()
+		.await
+		.expect_err("an empty lookup must fail before acquiring a connection");
+
+	assert!(matches!(error, Error::Validation(_)));
+}

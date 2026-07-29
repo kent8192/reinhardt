@@ -128,6 +128,14 @@ pub trait DatabaseBackend: Send + Sync {
 	/// and provides methods for executing queries within the transaction.
 	async fn begin(&self) -> Result<Box<dyn TransactionExecutor>>;
 
+	/// Begins a transaction that acquires write intent before reading.
+	///
+	/// Backends whose ordinary transaction already provides the required
+	/// locking semantics may use the default implementation.
+	async fn begin_write(&self) -> Result<Box<dyn TransactionExecutor>> {
+		self.begin().await
+	}
+
 	/// Begin a database transaction with a specific isolation level
 	///
 	/// This method is similar to `begin()`, but allows specifying the

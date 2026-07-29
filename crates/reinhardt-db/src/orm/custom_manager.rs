@@ -124,7 +124,7 @@ use super::cte::CTE;
 use super::manager::Manager;
 use super::model::Model;
 use super::query::{QueryFilterInput, QuerySet, RelationLoadInput};
-use super::upsert::{GetOrCreateBuilder, UpsertWrite};
+use super::upsert::{GetOrCreateBuilder, UpdateOrCreateBuilder, UpsertWrite};
 
 /// The result of an insert whose database write and model hydration are separate.
 ///
@@ -496,6 +496,11 @@ pub trait CustomManager: Sized + Send + Sync {
 	/// Starts a typed get-or-create operation.
 	fn get_or_create(self) -> GetOrCreateBuilder<Self> {
 		GetOrCreateBuilder::new(self)
+	}
+
+	/// Starts a typed update-or-create operation.
+	fn update_or_create(self) -> UpdateOrCreateBuilder<Self> {
+		UpdateOrCreateBuilder::new(self)
 	}
 
 	/// Bulk-insert multiple records (Django: `bulk_create`).

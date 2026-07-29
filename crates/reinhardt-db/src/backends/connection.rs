@@ -861,6 +861,15 @@ impl DatabaseConnection {
 		}))
 	}
 
+	/// Begins a transaction that acquires write intent before reading.
+	pub async fn begin_write(&self) -> Result<Box<dyn super::types::TransactionExecutor>> {
+		let inner = self.backend.begin_write().await?;
+		Ok(Box::new(FlavoredTransactionExecutor {
+			inner,
+			is_cockroachdb: self.is_cockroachdb,
+		}))
+	}
+
 	/// Begin a transaction with a specific isolation level
 	///
 	/// # Examples

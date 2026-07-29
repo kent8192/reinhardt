@@ -89,6 +89,7 @@ image = { workspace = true, optional = true }
 flate2 = { workspace = true, optional = true }
 smallvec = { version = "1.13", optional = true }
 paste = { version = "1.0", optional = true }
+same-file = { workspace = true, optional = true }
 
 [features]
 default = [
@@ -151,7 +152,7 @@ backends = ["db-deps", "pool"]
 backends-pool = ["db-deps", "pool"]
 pool = ["db-deps"]
 orm = ["backends", "db-deps", "hybrid"]
-migrations = ["db-deps", "dep:refinery"]
+migrations = ["db-deps", "dep:libc", "dep:refinery", "dep:same-file"]
 hybrid = ["db-deps"]
 associations = ["db-deps"]
 contenttypes = ["db-deps"]
@@ -226,6 +227,9 @@ proptest = { workspace = true }
 trybuild = "1.0"
 ctor = "0.6.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+[target.'cfg(any(target_os = "linux", target_os = "android"))'.dependencies]
+libc = { workspace = true, optional = true }
 
 [[test]]
 name = "contenttypes_registry"

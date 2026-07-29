@@ -737,6 +737,20 @@ fn existing_ancestor_and_relative_path(destination: &Path) -> io::Result<(PathBu
 #[derive(Debug)]
 struct FilesystemPathProbe {
 	root: Option<PathBuf>,
+	entries: Vec<OwnedProbeEntry>,
+}
+
+#[derive(Debug)]
+struct OwnedProbeEntry {
+	path: PathBuf,
+	handle: same_file::Handle,
+	kind: ProbeEntryKind,
+}
+
+#[derive(Debug, Clone, Copy)]
+enum ProbeEntryKind {
+	File,
+	Directory,
 }
 
 impl FilesystemPathProbe {
@@ -745,10 +759,31 @@ impl FilesystemPathProbe {
 			let id = NEXT_ATOMIC_OUTPUT_ID.fetch_add(1, Ordering::Relaxed);
 			let candidate =
 				ancestor.join(format!(".reinhardt-path-probe-{}-{id}", std::process::id()));
-			match fs::create_dir(&candidate) {
+			let mut builder = fs::DirBuilder::new();
+			#[cfg(unix)]
+			{
+				use std::os::unix::fs::DirBuilderExt as _;
+				builder.mode(0o700);
+			}
+			match builder.create(&candidate) {
 				Ok(()) => {
+					let handle = match same_file::Handle::from_path(&candidate) {
+						Ok(handle) => handle,
+						Err(error) => {
+							return Err(cleanup_untracked_probe_entry(
+								error,
+								&candidate,
+								ProbeEntryKind::Directory,
+							));
+						}
+					};
 					return Ok(Self {
-						root: Some(candidate),
+						root: Some(candidate.clone()),
+						entries: vec![OwnedProbeEntry {
+							path: candidate,
+							handle,
+							kind: ProbeEntryKind::Directory,
+						}],
 					});
 				}
 				Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {}
@@ -762,17 +797,34 @@ impl FilesystemPathProbe {
 		))
 	}
 
-	fn create_destination(&self, relative: &Path) -> io::Result<()> {
+	fn create_destination(&mut self, relative: &Path) -> io::Result<()> {
 		let root = self
 			.root
 			.as_ref()
-			.expect("an active filesystem path probe has a root");
+			.expect("an active filesystem path probe has a root")
+			.clone();
 		let mut parent = root.clone();
 		if let Some(relative_parent) = relative.parent() {
 			for component in relative_parent.components() {
 				parent.push(component);
 				match fs::create_dir(&parent) {
-					Ok(()) => {}
+					Ok(()) => {
+						let handle = match same_file::Handle::from_path(&parent) {
+							Ok(handle) => handle,
+							Err(error) => {
+								return Err(cleanup_untracked_probe_entry(
+									error,
+									&parent,
+									ProbeEntryKind::Directory,
+								));
+							}
+						};
+						self.entries.push(OwnedProbeEntry {
+							path: parent.clone(),
+							handle,
+							kind: ProbeEntryKind::Directory,
+						});
+					}
 					Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {
 						if !fs::metadata(&parent)?.is_dir() {
 							return Err(filesystem_destination_collision(relative));
@@ -789,7 +841,24 @@ impl FilesystemPathProbe {
 			.create_new(true)
 			.open(&candidate)
 		{
-			Ok(_) => Ok(()),
+			Ok(file) => {
+				let handle = match same_file::Handle::from_file(file) {
+					Ok(handle) => handle,
+					Err(error) => {
+						return Err(cleanup_untracked_probe_entry(
+							error,
+							&candidate,
+							ProbeEntryKind::File,
+						));
+					}
+				};
+				self.entries.push(OwnedProbeEntry {
+					path: candidate,
+					handle,
+					kind: ProbeEntryKind::File,
+				});
+				Ok(())
+			}
 			Err(error)
 				if matches!(
 					error.kind(),
@@ -803,11 +872,79 @@ impl FilesystemPathProbe {
 	}
 
 	fn cleanup(&mut self) -> io::Result<()> {
-		if let Some(root) = self.root.as_ref() {
-			fs::remove_dir_all(root)?;
-			self.root = None;
+		let Some(root) = self.root.as_ref().cloned() else {
+			return Ok(());
+		};
+		let mut failures = Vec::new();
+		let mut retained = Vec::new();
+		while let Some(entry) = self.entries.pop() {
+			match entry.remove_if_owned() {
+				Ok(()) => {}
+				Err(error) => {
+					failures.push(format!("{:?}: {error}", entry.path));
+					retained.push(entry);
+				}
+			}
 		}
-		Ok(())
+		retained.reverse();
+		self.entries = retained;
+
+		if failures.is_empty() {
+			self.root = None;
+			Ok(())
+		} else {
+			Err(io::Error::other(format!(
+				"Filesystem path probe retained for recovery at {root:?}; cleanup failures: {}",
+				failures.join("; ")
+			)))
+		}
+	}
+}
+
+impl OwnedProbeEntry {
+	fn remove_if_owned(&self) -> io::Result<()> {
+		let current = match same_file::Handle::from_path(&self.path) {
+			Ok(handle) => handle,
+			Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(()),
+			Err(error) => return Err(error),
+		};
+		if current != self.handle {
+			return Err(io::Error::other(
+				"Refusing to remove a probe entry whose filesystem identity changed",
+			));
+		}
+
+		let result = match self.kind {
+			ProbeEntryKind::File => fs::remove_file(&self.path),
+			ProbeEntryKind::Directory => fs::remove_dir(&self.path),
+		};
+		match result {
+			Ok(()) => Ok(()),
+			Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
+			Err(error) => Err(error),
+		}
+	}
+}
+
+fn cleanup_untracked_probe_entry(
+	trigger: io::Error,
+	path: &Path,
+	kind: ProbeEntryKind,
+) -> io::Error {
+	let cleanup = match kind {
+		ProbeEntryKind::File => fs::remove_file(path),
+		ProbeEntryKind::Directory => fs::remove_dir(path),
+	};
+	match cleanup {
+		Ok(()) => trigger,
+		Err(error) if error.kind() == io::ErrorKind::NotFound => trigger,
+		Err(cleanup_error) => io::Error::new(
+			trigger.kind(),
+			format!(
+				"{trigger}; untracked filesystem path probe entry retained at {path:?}: \
+				 {cleanup_error}"
+			),
+		),
 	}
 }
 
@@ -988,19 +1125,6 @@ fn rename_noreplace(source: &Path, destination: &Path) -> io::Result<NoReplacePu
 fn rename_noreplace(source: &Path, destination: &Path) -> io::Result<NoReplacePublish> {
 	use std::os::unix::ffi::OsStrExt as _;
 
-	const AT_FDCWD: i32 = -100;
-	const RENAME_NOREPLACE: u32 = 1;
-
-	unsafe extern "C" {
-		fn renameat2(
-			from_fd: i32,
-			from: *const std::ffi::c_char,
-			to_fd: i32,
-			to: *const std::ffi::c_char,
-			flags: u32,
-		) -> i32;
-	}
-
 	let source = CString::new(source.as_os_str().as_bytes()).map_err(|_| {
 		io::Error::new(
 			io::ErrorKind::InvalidInput,
@@ -1013,15 +1137,17 @@ fn rename_noreplace(source: &Path, destination: &Path) -> io::Result<NoReplacePu
 			"Generated destination path contains an interior NUL byte",
 		)
 	})?;
-	// SAFETY: Both pointers reference NUL-terminated path buffers that remain alive for the
-	// duration of the call. AT_FDCWD makes both paths relative to the current process context.
+	// SAFETY: SYS_renameat2 accepts two directory descriptors, two NUL-terminated path pointers,
+	// and the RENAME_NOREPLACE flag. Both buffers remain alive for the call, and AT_FDCWD makes
+	// both absolute or process-relative paths resolve with normal kernel pathname semantics.
 	let result = unsafe {
-		renameat2(
-			AT_FDCWD,
+		libc::syscall(
+			libc::SYS_renameat2,
+			libc::AT_FDCWD,
 			source.as_ptr(),
-			AT_FDCWD,
+			libc::AT_FDCWD,
 			destination.as_ptr(),
-			RENAME_NOREPLACE,
+			libc::RENAME_NOREPLACE,
 		)
 	};
 	if result == 0 {
@@ -1291,6 +1417,55 @@ mod atomic_write_tests {
 			MigrationError::IoError(error) => error,
 			other => panic!("expected an I/O error, got {other:?}"),
 		}
+	}
+
+	#[test]
+	fn filesystem_probe_cleanup_preserves_unowned_replacement() {
+		let temp_dir = tempfile::Builder::new()
+			.prefix("inspectdb-output-")
+			.tempdir_in("/tmp")
+			.expect("temporary directory should be created");
+		let mut probe = FilesystemPathProbe::create(temp_dir.path())
+			.expect("filesystem path probe should be created");
+		probe
+			.create_destination(Path::new("nested/model.rs"))
+			.expect("probe destination should be created");
+		let root = probe
+			.root
+			.as_ref()
+			.expect("active probe should expose its root")
+			.clone();
+		#[cfg(unix)]
+		{
+			use std::os::unix::fs::PermissionsExt as _;
+
+			assert_eq!(
+				fs::metadata(&root)
+					.expect("probe root metadata should be readable")
+					.permissions()
+					.mode() & 0o077,
+				0
+			);
+		}
+		let replacement = root.join("nested/model.rs");
+		fs::remove_file(&replacement).expect("owned probe file should be removed");
+		fs::create_dir(&replacement).expect("replacement directory should be created");
+		let unexpected = replacement.join("unexpected.txt");
+		fs::write(&unexpected, b"unowned bytes").expect("unexpected content should be created");
+
+		let cleanup_result = probe.cleanup();
+
+		assert_eq!(
+			fs::read(&unexpected).expect("unowned replacement content should remain"),
+			b"unowned bytes"
+		);
+		let error = cleanup_result.expect_err("unowned replacement should make cleanup fail");
+		assert!(error.to_string().contains(&format!("{root:?}")));
+		drop(probe);
+		assert_eq!(
+			fs::read(&unexpected).expect("RAII cleanup should preserve unowned replacement"),
+			b"unowned bytes"
+		);
 	}
 
 	#[test]

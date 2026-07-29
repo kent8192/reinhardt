@@ -204,9 +204,12 @@ fn query_client_guards_restore_the_previous_client() {
 	let second = QueryClient::new(QueryDefaults::default());
 	let first_guard = provide_query_client(first.clone());
 	let second_guard = provide_query_client(second.clone());
+	let nested_first_guard = provide_query_client(first.clone());
 
-	assert!(queries().same_instance(&second));
+	assert!(queries().same_instance(&first));
 	drop(first_guard);
+	assert!(queries().same_instance(&first));
+	drop(nested_first_guard);
 	assert!(queries().same_instance(&second));
 	drop(second_guard);
 
@@ -220,6 +223,45 @@ fn query_client_guards_restore_the_previous_client() {
 		.or_else(|| panic.downcast_ref::<&str>().copied())
 		.expect("missing query client should panic with a string");
 	assert_eq!(message, "use_query requires an active QueryClient");
+}
+
+#[test]
+fn pending_query_task_does_not_retain_the_final_client_owner() {
+	let runtime = TestQueryRuntime::new();
+	let client = QueryClient::with_runtime(QueryDefaults::default(), runtime.handle());
+	let client_guard = provide_query_client(client.clone());
+	let cancellations = Rc::new(Cell::new(0));
+	let family = QueryFamily::<(), String, String>::new("tests.client-drop-cancellation");
+	let query = client.observe(
+		family.query_with_cancellation((), {
+			let cancellations = Rc::clone(&cancellations);
+			move |cancellation| {
+				let cancellations = Rc::clone(&cancellations);
+				async move {
+					let _registration = cancellation.on_cancel(move || {
+						cancellations.set(cancellations.get() + 1);
+					});
+					std::future::pending::<Result<String, String>>().await
+				}
+			}
+		}),
+		QueryOptions::default(),
+	);
+	runtime.run_until_stalled();
+
+	assert_eq!(runtime.pending_task_count(), 1);
+	assert_eq!(cancellations.get(), 0);
+
+	drop(client_guard);
+	drop(client);
+
+	assert_eq!(cancellations.get(), 1);
+	runtime.run_until_stalled();
+	assert_eq!(runtime.pending_task_count(), 0);
+	assert_eq!(query.get(), ResourceState::Loading);
+
+	drop(query);
+	assert_eq!(cancellations.get(), 1);
 }
 
 #[test]

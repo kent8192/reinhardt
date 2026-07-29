@@ -24,6 +24,27 @@ use reinhardt_core::reactive::ReactiveScope;
 
 type QueryTask = Pin<Box<dyn Future<Output = ()> + 'static>>;
 
+struct WeakClientQueryFuture<Fut> {
+	owner: Weak<QueryClientInner>,
+	future: Pin<Box<Fut>>,
+}
+
+impl<Fut> Future for WeakClientQueryFuture<Fut>
+where
+	Fut: Future<Output = ()>,
+{
+	type Output = ();
+
+	fn poll(self: Pin<&mut Self>, context: &mut Context<'_>) -> Poll<Self::Output> {
+		let this = self.get_mut();
+		let Some(inner) = this.owner.upgrade() else {
+			return Poll::Ready(());
+		};
+		let client = QueryClient { inner };
+		super::context::with_query_client(&client, || this.future.as_mut().poll(context))
+	}
+}
+
 pub(crate) trait QueryRuntime {
 	fn now_ms(&self) -> u64;
 	fn spawn(&self, task: QueryTask);
@@ -95,6 +116,10 @@ impl TestQueryRuntime {
 				break;
 			}
 		}
+	}
+
+	pub(crate) fn pending_task_count(&self) -> usize {
+		self.inner.tasks.borrow().len()
 	}
 }
 
@@ -550,16 +575,11 @@ impl<T: Clone + 'static, E: Clone + 'static> QueryEntry<T, E> {
 		let task = async move {
 			let _ = Abortable::new(scoped, abort_registration).await;
 		};
-		if let Some(client) = self
-			.owner
-			.as_ref()
-			.and_then(Weak::upgrade)
-			.map(|inner| QueryClient { inner })
-		{
-			self.runtime
-				.spawn(Box::pin(super::context::with_query_client_async(
-					client, task,
-				)));
+		if let Some(owner) = self.owner.clone() {
+			self.runtime.spawn(Box::pin(WeakClientQueryFuture {
+				owner,
+				future: Box::pin(task),
+			}));
 		} else {
 			self.runtime.spawn(Box::pin(task));
 		}

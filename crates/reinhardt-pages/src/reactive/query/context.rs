@@ -1,4 +1,4 @@
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::future::Future;
 use std::pin::Pin;
 use std::task::{Context, Poll};
@@ -6,17 +6,41 @@ use std::task::{Context, Poll};
 use super::client::QueryClient;
 
 thread_local! {
-	static ACTIVE_QUERY_CLIENTS: RefCell<Vec<QueryClient>> =
+	static ACTIVE_QUERY_CLIENTS: RefCell<Vec<ActiveQueryClient>> =
 		const { RefCell::new(Vec::new()) };
+	static NEXT_QUERY_CLIENT_REGISTRATION_ID: Cell<u64> = const { Cell::new(0) };
+}
+
+struct ActiveQueryClient {
+	registration_id: u64,
+	client: QueryClient,
 }
 
 pub(crate) struct QueryClientGuard {
+	registration_id: u64,
 	client: QueryClient,
 }
 
 pub(crate) fn provide_query_client(client: QueryClient) -> QueryClientGuard {
-	ACTIVE_QUERY_CLIENTS.with(|clients| clients.borrow_mut().push(client.clone()));
-	QueryClientGuard { client }
+	let registration_id = NEXT_QUERY_CLIENT_REGISTRATION_ID.with(|next| {
+		let registration_id = next.get();
+		next.set(
+			registration_id
+				.checked_add(1)
+				.expect("QueryClient context registration IDs are exhausted"),
+		);
+		registration_id
+	});
+	ACTIVE_QUERY_CLIENTS.with(|clients| {
+		clients.borrow_mut().push(ActiveQueryClient {
+			registration_id,
+			client: client.clone(),
+		});
+	});
+	QueryClientGuard {
+		registration_id,
+		client,
+	}
 }
 
 impl Drop for QueryClientGuard {
@@ -25,9 +49,10 @@ impl Drop for QueryClientGuard {
 			let mut clients = clients.borrow_mut();
 			let position = clients
 				.iter()
-				.rposition(|client| client.same_instance(&self.client))
+				.position(|entry| entry.registration_id == self.registration_id)
 				.expect("active QueryClient guard is missing from its context stack");
-			clients.remove(position);
+			let removed = clients.remove(position);
+			debug_assert!(removed.client.same_instance(&self.client));
 		});
 	}
 }
@@ -78,7 +103,7 @@ pub fn queries() -> QueryClient {
 		clients
 			.borrow()
 			.last()
-			.cloned()
+			.map(|entry| entry.client.clone())
 			.expect("use_query requires an active QueryClient")
 	})
 }

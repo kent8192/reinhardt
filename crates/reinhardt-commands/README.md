@@ -58,6 +58,8 @@ details.
 
 - **makemigrations** - Create new database migrations based on model changes
 - **migrate** - Apply database migrations
+- **inspectdb** - Generate deterministic Reinhardt models from an existing
+  PostgreSQL, MySQL, or SQLite schema
 - **dumpdata** - Export model rows as Django-compatible JSON fixtures
 - **loaddata** - Load Django-compatible JSON fixtures into the database
 - **seed** - Run idempotent per-application development seed hooks
@@ -218,6 +220,41 @@ cargo run --bin manage makemigrations
 cargo run --bin manage migrate
 cargo run --bin manage runserver
 ```
+
+### Database schema inspection
+
+`inspectdb` follows Django's positional-table form:
+
+```bash
+cargo run --bin manage -- inspectdb [TABLE ...]
+```
+
+Table arguments are exact names rather than patterns. Without table arguments,
+the command inspects every table; pass `--include-views` to include views or
+`--include-partitions` for PostgreSQL partitions.
+
+`--database` selects a configured database alias and defaults to `default`. It
+never accepts a connection URL. Use `--database-url` for an explicit one-off
+URL that takes precedence over the selected alias:
+
+```bash
+cargo run --bin manage -- inspectdb accounts --database reporting
+cargo run --bin manage -- inspectdb accounts \
+  --database-url 'sqlite:///var/lib/example.sqlite3'
+```
+
+Generated Rust is the only stdout content by default, so it can be redirected
+directly:
+
+```bash
+cargo run --bin manage -- inspectdb > src/models.rs
+```
+
+Use `--output DIRECTORY` for a generated multi-file module. The command
+preflights the complete file set and refuses to overwrite any existing file.
+Add `--force` only with `--output` to replace existing generated files. File
+publication is atomic across the generated set: a failure restores replaced
+files and removes newly created partial output.
 
 ### Rust Management Shell
 

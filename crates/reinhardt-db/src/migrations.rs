@@ -9,6 +9,17 @@
 //! - **AST-Based Entry Points**: Generates Rust 2024 Edition-compliant module files
 //! - **State Reconstruction**: Django-style `ProjectState` building from migration history
 //! - **Zero Downtime**: Support for safe schema changes in production
+//! - **Schema Inspection**: Deterministic PostgreSQL, MySQL, and SQLite model
+//!   generation with exact object selection
+//!
+//! ## Schema Inspection
+//!
+//! [`inspect_database`] reads exact table selections and optionally includes
+//! backend views or PostgreSQL partitions. [`render_models_module`] produces a
+//! single parseable Rust module for stdout, while
+//! [`generate_models_canonical`] produces a deterministic multi-file set.
+//! Management-command directory output validates the complete set before using
+//! rollback-safe atomic publication.
 //!
 //! ## AST-Based Entry Point Generation
 //!

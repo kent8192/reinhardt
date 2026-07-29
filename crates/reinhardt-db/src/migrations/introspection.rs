@@ -794,6 +794,72 @@ pub struct MySQLIntrospector {
 }
 
 #[cfg(feature = "mysql")]
+fn decode_mysql_text(row: &sqlx::mysql::MySqlRow, index: usize, kind: &str) -> Result<String> {
+	use sqlx::Row;
+
+	let bytes: Vec<u8> = row.try_get(index).map_err(|error| {
+		MigrationError::IntrospectionError(format!("Failed to read MySQL {kind}: {error}"))
+	})?;
+	String::from_utf8(bytes)
+		.map_err(|_| MigrationError::IntrospectionError(format!("MySQL {kind} is not valid UTF-8")))
+}
+
+#[cfg(feature = "mysql")]
+fn decode_optional_mysql_text(
+	row: &sqlx::mysql::MySqlRow,
+	index: usize,
+	kind: &str,
+) -> Result<Option<String>> {
+	use sqlx::Row;
+
+	let bytes: Option<Vec<u8>> = row.try_get(index).map_err(|error| {
+		MigrationError::IntrospectionError(format!("Failed to read MySQL {kind}: {error}"))
+	})?;
+	bytes
+		.map(|bytes| {
+			String::from_utf8(bytes).map_err(|_| {
+				MigrationError::IntrospectionError(format!("MySQL {kind} is not valid UTF-8"))
+			})
+		})
+		.transpose()
+}
+
+#[cfg(feature = "mysql")]
+fn decode_optional_mysql_integer(
+	row: &sqlx::mysql::MySqlRow,
+	index: usize,
+	kind: &str,
+) -> Result<Option<i64>> {
+	use sqlx::Row;
+
+	row.try_get(index).map_err(|error| {
+		MigrationError::IntrospectionError(format!("Failed to read MySQL {kind}: {error}"))
+	})
+}
+
+#[cfg(feature = "mysql")]
+fn decode_optional_mysql_unsigned_integer(
+	row: &sqlx::mysql::MySqlRow,
+	index: usize,
+	kind: &str,
+) -> Result<Option<i64>> {
+	use sqlx::Row;
+
+	let value: Option<u64> = row.try_get(index).map_err(|error| {
+		MigrationError::IntrospectionError(format!("Failed to read MySQL {kind}: {error}"))
+	})?;
+	value
+		.map(|value| {
+			i64::try_from(value).map_err(|_| {
+				MigrationError::IntrospectionError(format!(
+					"MySQL {kind} exceeds the supported range"
+				))
+			})
+		})
+		.transpose()
+}
+
+#[cfg(feature = "mysql")]
 impl MySQLIntrospector {
 	/// Creates a new MySQL introspector with the given pool.
 	pub fn new(pool: sqlx::MySqlPool) -> Self {
@@ -911,50 +977,20 @@ impl MySQLIntrospector {
 		let mut primary_key = Vec::new();
 
 		for row in &col_rows {
-			let column_name: String = row.try_get("column_name").map_err(|e| {
-				MigrationError::IntrospectionError(format!("Failed to get column_name: {}", e))
-			})?;
-			let data_type: String = row.try_get("data_type").map_err(|e| {
-				MigrationError::IntrospectionError(format!("Failed to get data_type: {}", e))
-			})?;
-			let column_type_str: String = row.try_get("column_type").map_err(|e| {
-				MigrationError::IntrospectionError(format!("Failed to get column_type: {}", e))
-			})?;
-			let is_nullable: String = row.try_get("is_nullable").map_err(|e| {
-				MigrationError::IntrospectionError(format!("Failed to get is_nullable: {}", e))
-			})?;
-			let column_default: Option<String> = row.try_get("column_default").map_err(|e| {
-				MigrationError::IntrospectionError(format!("Failed to get column_default: {}", e))
-			})?;
-			let column_key: String = row.try_get("column_key").map_err(|e| {
-				MigrationError::IntrospectionError(format!("Failed to get column_key: {}", e))
-			})?;
-			let extra: String = row.try_get("extra").map_err(|e| {
-				MigrationError::IntrospectionError(format!("Failed to get extra: {}", e))
-			})?;
-			let generation_expression: Option<String> =
-				row.try_get("generation_expression").map_err(|e| {
-					MigrationError::IntrospectionError(format!(
-						"Failed to get generation_expression: {}",
-						e
-					))
-				})?;
-			let char_max_length: Option<i64> =
-				row.try_get("character_maximum_length").map_err(|e| {
-					MigrationError::IntrospectionError(format!(
-						"Failed to get character_maximum_length: {}",
-						e
-					))
-				})?;
-			let numeric_precision: Option<i64> = row.try_get("numeric_precision").map_err(|e| {
-				MigrationError::IntrospectionError(format!(
-					"Failed to get numeric_precision: {}",
-					e
-				))
-			})?;
-			let numeric_scale: Option<i64> = row.try_get("numeric_scale").map_err(|e| {
-				MigrationError::IntrospectionError(format!("Failed to get numeric_scale: {}", e))
-			})?;
+			let column_name = decode_mysql_text(row, 0, "column name")?;
+			let data_type = decode_mysql_text(row, 1, "data type")?;
+			let column_type_str = decode_mysql_text(row, 2, "column type")?;
+			let is_nullable = decode_mysql_text(row, 3, "column nullability")?;
+			let column_default = decode_optional_mysql_text(row, 4, "column default")?;
+			let column_key = decode_mysql_text(row, 5, "column key")?;
+			let extra = decode_mysql_text(row, 6, "column extra metadata")?;
+			let generation_expression =
+				decode_optional_mysql_text(row, 7, "generation expression")?;
+			let char_max_length =
+				decode_optional_mysql_integer(row, 8, "character maximum length")?;
+			let numeric_precision =
+				decode_optional_mysql_unsigned_integer(row, 9, "numeric precision")?;
+			let numeric_scale = decode_optional_mysql_unsigned_integer(row, 10, "numeric scale")?;
 
 			// Primary key detection
 			if column_key == "PRI" {
@@ -1014,10 +1050,14 @@ impl MySQLIntrospector {
 
 		let mut idx_map: HashMap<String, (Vec<String>, bool, String)> = HashMap::new();
 		for row in &idx_rows {
-			let index_name: String = row.try_get("index_name").unwrap_or_default();
-			let column_name: String = row.try_get("column_name").unwrap_or_default();
-			let non_unique: i64 = row.try_get("non_unique").unwrap_or(1);
-			let index_type: String = row.try_get("index_type").unwrap_or_default();
+			let index_name = decode_mysql_text(row, 0, "index name")?;
+			let column_name = decode_mysql_text(row, 1, "indexed column name")?;
+			let non_unique: i64 = row.try_get(2).map_err(|error| {
+				MigrationError::IntrospectionError(format!(
+					"Failed to read MySQL index uniqueness: {error}"
+				))
+			})?;
+			let index_type = decode_mysql_text(row, 3, "index type")?;
 
 			let entry = idx_map
 				.entry(index_name)
@@ -1077,12 +1117,12 @@ impl MySQLIntrospector {
 
 		let mut fk_map: HashMap<String, ForeignKeyInfo> = HashMap::new();
 		for row in &fk_rows {
-			let constraint_name: String = row.try_get("constraint_name").unwrap_or_default();
-			let column_name: String = row.try_get("column_name").unwrap_or_default();
-			let ref_table: String = row.try_get("referenced_table_name").unwrap_or_default();
-			let ref_column: String = row.try_get("referenced_column_name").unwrap_or_default();
-			let update_rule: String = row.try_get("update_rule").unwrap_or_default();
-			let delete_rule: String = row.try_get("delete_rule").unwrap_or_default();
+			let constraint_name = decode_mysql_text(row, 0, "constraint name")?;
+			let column_name = decode_mysql_text(row, 1, "foreign-key column name")?;
+			let ref_table = decode_mysql_text(row, 2, "referenced table name")?;
+			let ref_column = decode_mysql_text(row, 3, "referenced column name")?;
+			let update_rule = decode_mysql_text(row, 4, "foreign-key update rule")?;
+			let delete_rule = decode_mysql_text(row, 5, "foreign-key delete rule")?;
 
 			let entry = fk_map
 				.entry(constraint_name.clone())
@@ -1123,8 +1163,6 @@ impl MySQLIntrospector {
 #[async_trait]
 impl DatabaseIntrospector for MySQLIntrospector {
 	async fn read_schema(&self) -> Result<DatabaseSchema> {
-		use sqlx::Row;
-
 		let table_query = r#"
 			SELECT table_name FROM information_schema.tables
 			WHERE table_schema = DATABASE() AND table_type = 'BASE TABLE'
@@ -1138,7 +1176,7 @@ impl DatabaseIntrospector for MySQLIntrospector {
 
 		let mut tables = HashMap::new();
 		for row in &table_rows {
-			let table_name: String = row.try_get("table_name").unwrap_or_default();
+			let table_name = decode_mysql_text(row, 0, "table name")?;
 			let table_info = self.introspect_table(&table_name).await?;
 			tables.insert(table_name, table_info);
 		}
@@ -1934,8 +1972,6 @@ async fn read_mysql_schema(
 	pool: sqlx::MySqlPool,
 	options: &InspectDbOptions,
 ) -> Result<DatabaseSchema> {
-	use sqlx::Row;
-
 	let introspector = MySQLIntrospector::new(pool.clone());
 	let mut schema = introspector.read_schema().await?;
 	if !options.include_views {
@@ -1949,9 +1985,7 @@ async fn read_mysql_schema(
 	.await
 	.map_err(|error| MigrationError::IntrospectionError(error.to_string()))?;
 	for row in rows {
-		let name: String = row.try_get("table_name").map_err(|error| {
-			MigrationError::IntrospectionError(format!("Failed to read view name: {error}"))
-		})?;
+		let name = decode_mysql_text(&row, 0, "view name")?;
 		let table = introspector.introspect_table(&name).await?;
 		schema.tables.insert(name, table);
 	}

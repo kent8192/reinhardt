@@ -4,6 +4,8 @@ use std::cmp::{Ordering, Reverse};
 #[cfg(all(test, not(wasm)))]
 use std::collections::VecDeque;
 use std::collections::{BinaryHeap, HashMap};
+#[cfg(any(wasm, test))]
+use std::collections::HashSet;
 use std::future::Future;
 use std::marker::PhantomData;
 use std::pin::Pin;
@@ -213,6 +215,8 @@ pub(super) struct QueryClientInner {
 	defaults: QueryDefaults,
 	runtime: QueryRuntimeHandle,
 	entries: RefCell<HashMap<QueryIdentity, CachedQueryEntry>>,
+	#[cfg(any(wasm, test))]
+	consumed_hydration_identities: RefCell<HashSet<QueryIdentity>>,
 	families: RefCell<HashMap<&'static str, QueryFamilyTypes>>,
 	deadlines: RefCell<BinaryHeap<Reverse<QueryDeadline>>>,
 	next_deadline_sequence: Cell<u64>,
@@ -278,9 +282,11 @@ impl QueryClient {
 		let document_visible =
 			super::browser::QueryBrowser::initial_visibility(supports_browser_resources);
 		let inner = Rc::new_cyclic(|owner| QueryClientInner {
-			defaults,
-			runtime,
-			entries: RefCell::new(HashMap::new()),
+				defaults,
+				runtime,
+				entries: RefCell::new(HashMap::new()),
+				#[cfg(any(wasm, test))]
+				consumed_hydration_identities: RefCell::new(HashSet::new()),
 			families: RefCell::new(HashMap::new()),
 			deadlines: RefCell::new(BinaryHeap::new()),
 			next_deadline_sequence: Cell::new(0),
@@ -1377,6 +1383,15 @@ impl QueryClient {
 		T: Clone + Serialize + DeserializeOwned + 'static,
 		E: Clone + Serialize + DeserializeOwned + 'static,
 	{
+		let identity = key.identity().clone();
+		if self
+			.inner
+			.consumed_hydration_identities
+			.borrow()
+			.contains(&identity)
+		{
+			return Ok(());
+		}
 		let snapshot: QuerySnapshot<T, E> = serde_json::from_value(serialized.clone())?;
 		if snapshot.is_fetching {
 			return Err(invalid_hydration_snapshot(
@@ -1418,11 +1433,14 @@ impl QueryClient {
 				));
 			}
 		};
+		self.inner
+			.consumed_hydration_identities
+			.borrow_mut()
+			.insert(identity.clone());
 		self.register_family(key.family_id(), key.family_types());
 		let id = key.id();
 		#[cfg(any(wasm, test))]
 		super::super::resource::reserve_client_resource_key(&id);
-		let identity = key.identity().clone();
 		let mut entries = self.inner.entries.borrow_mut();
 		if let Some(cached) = entries.get(&identity) {
 			Rc::clone(&cached.typed)

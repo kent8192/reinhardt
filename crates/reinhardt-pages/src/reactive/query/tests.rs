@@ -1796,6 +1796,52 @@ fn hydrated_query_error_is_fresh_on_first_mount() {
 	});
 }
 
+#[test]
+fn hydration_snapshot_is_consumed_once_after_entry_eviction() {
+	let runtime = TestQueryRuntime::new();
+	let client = QueryClient::with_runtime(
+		QueryDefaults::default().gc_time(Duration::ZERO),
+		runtime.handle(),
+	);
+	let family = QueryFamily::<(), String, String>::new("tests.hydration-consumption");
+	let key = family.key(());
+	let snapshot = serde_json::json!({
+		"status": "Success",
+		"data": "server-value",
+		"error": null,
+		"refetch_error": null,
+		"is_fetching": false,
+		"is_stale": false
+	});
+	let fetch_count = Rc::new(Cell::new(0));
+	let descriptor = family.query((), {
+		let fetch_count = Rc::clone(&fetch_count);
+		move || {
+			fetch_count.set(fetch_count.get() + 1);
+			async { Ok::<_, String>("client-value".to_string()) }
+		}
+	});
+
+	client
+		.seed_query_snapshot(key.clone(), &snapshot)
+		.expect("initial hydration snapshot should seed");
+	let hydrated = client.observe(descriptor.clone(), QueryOptions::default());
+	assert_eq!(hydrated.data(), Some("server-value".to_string()));
+	assert_eq!(fetch_count.get(), 0);
+	drop(hydrated);
+	runtime.run_due_maintenance();
+	assert!(!client.contains_for_test(&key));
+
+	client
+		.seed_query_snapshot(key, &snapshot)
+		.expect("a consumed hydration snapshot should be ignored");
+	let remounted = client.observe(descriptor, QueryOptions::default());
+	runtime.run_until_stalled();
+
+	assert_eq!(fetch_count.get(), 1);
+	assert_eq!(remounted.data(), Some("client-value".to_string()));
+}
+
 #[tokio::test]
 #[serial(query_cache)]
 async fn ssr_replayed_query_error_is_fresh_for_stale_time() {

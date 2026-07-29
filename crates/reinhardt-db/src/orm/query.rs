@@ -16,10 +16,10 @@ use crate::orm::query_fields::{GroupByFields, OrderedExpression, TypedExpression
 use crate::orm::relations::{RelationJoinGraph, RelationJoinKind, RelationPathLike, RelationStep};
 use reinhardt_core::exception::{DatabaseError, DatabaseErrorKind, Error};
 use reinhardt_query::prelude::{
-	Alias, BinOper, CockroachDBQueryBuilder, ColumnRef, Condition, Expr, ExprTrait, Func,
-	JoinType as SeaJoinType, MySqlQueryBuilder, Order, PostgresQueryBuilder, Query, QueryBuilder,
-	QueryStatementBuilder, SelectStatement, SimpleExpr, SqliteQueryBuilder, TableRef,
-	UpdateStatement,
+	Alias, BinOper, CockroachDBQueryBuilder, ColumnRef, Condition, ExplainStatement, Expr,
+	ExprTrait, Func, JoinType as SeaJoinType, MySqlQueryBuilder, Order, PostgresQueryBuilder,
+	Query, QueryBuilder, QueryStatementBuilder, SelectStatement, SimpleExpr, SqliteQueryBuilder,
+	TableRef, UpdateStatement,
 };
 use reinhardt_query::types::PgBinOper;
 use serde::{Deserialize, Serialize};
@@ -29,8 +29,47 @@ use std::marker::PhantomData;
 use std::time::Instant;
 use uuid::Uuid;
 
+pub use reinhardt_query::query::{ExplainFormat, ExplainOptions};
+
 fn executor_error(error: reinhardt_core::exception::Error) -> DatabaseError {
 	crate::backends::error::into_database_error(error)
+}
+
+/// Backend-independent body returned by a plan-only EXPLAIN operation.
+#[derive(Debug, Clone, PartialEq)]
+#[non_exhaustive]
+pub enum ExplainBody {
+	/// Single-column human-readable output joined with newlines.
+	Text(String),
+	/// Machine-readable JSON output.
+	Json(serde_json::Value),
+	/// Backend tabular output retained as JSON objects.
+	Rows(Vec<serde_json::Value>),
+}
+
+/// Database dialect that generated an EXPLAIN plan.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum ExplainBackend {
+	/// PostgreSQL.
+	Postgres,
+	/// MySQL or MariaDB.
+	MySql,
+	/// SQLite.
+	Sqlite,
+	/// CockroachDB's PostgreSQL-compatible dialect.
+	CockroachDb,
+}
+
+/// Structured output from a backend-aware plan-only EXPLAIN operation.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ExplainOutput {
+	/// Backend that generated the plan.
+	pub backend: ExplainBackend,
+	/// Effective output format.
+	pub format: ExplainFormat,
+	/// Decoded plan body, separate from model-row deserialization.
+	pub body: ExplainBody,
 }
 
 // Django QuerySet API types
@@ -1380,6 +1419,112 @@ where
 					})
 			})
 			.collect()
+	}
+
+	fn build_explain_for_backend(
+		stmt: &ExplainStatement,
+		backend: super::connection::DatabaseBackend,
+		is_cockroachdb: bool,
+	) -> Result<(String, reinhardt_query::prelude::Values, ExplainBackend), DatabaseError> {
+		let (result, explain_backend) = if is_cockroachdb {
+			if backend != super::connection::DatabaseBackend::Postgres {
+				return Err(DatabaseError::new(
+					DatabaseErrorKind::Unsupported,
+					"CockroachDB EXPLAIN requires a PostgreSQL-compatible executor",
+				));
+			}
+			(
+				stmt.build_cockroachdb_checked(),
+				ExplainBackend::CockroachDb,
+			)
+		} else {
+			match backend {
+				super::connection::DatabaseBackend::Postgres => {
+					(stmt.build_postgres_checked(), ExplainBackend::Postgres)
+				}
+				super::connection::DatabaseBackend::MySql => {
+					(stmt.build_mysql_checked(), ExplainBackend::MySql)
+				}
+				super::connection::DatabaseBackend::Sqlite => {
+					(stmt.build_sqlite_checked(), ExplainBackend::Sqlite)
+				}
+			}
+		};
+		result
+			.map(|(sql, values)| (sql, values, explain_backend))
+			.map_err(|error| DatabaseError::new(DatabaseErrorKind::Unsupported, error.to_string()))
+	}
+
+	fn decode_explain_rows(
+		rows: Vec<crate::backends::types::Row>,
+		backend: ExplainBackend,
+		format: ExplainFormat,
+	) -> Result<ExplainOutput, DatabaseError> {
+		let rows = rows
+			.into_iter()
+			.map(|row| QueryRow::from_backend_row(row).data)
+			.collect::<Vec<_>>();
+		let body = if format == ExplainFormat::Json {
+			ExplainBody::Json(Self::decode_json_explain_body(rows)?)
+		} else if rows.iter().all(|row| {
+			row.as_object().is_some_and(|values| {
+				values.len() == 1 && values.values().all(is_scalar_plan_value)
+			})
+		}) {
+			let lines = rows
+				.into_iter()
+				.filter_map(|row| {
+					row.as_object()
+						.and_then(|values| values.values().next().cloned())
+				})
+				.map(plan_value_to_text)
+				.collect::<Vec<_>>();
+			ExplainBody::Text(lines.join("\n"))
+		} else {
+			ExplainBody::Rows(rows)
+		};
+
+		Ok(ExplainOutput {
+			backend,
+			format,
+			body,
+		})
+	}
+
+	fn decode_json_explain_body(
+		rows: Vec<serde_json::Value>,
+	) -> Result<serde_json::Value, DatabaseError> {
+		let mut plans = Vec::with_capacity(rows.len());
+		for row in rows {
+			let value = row
+				.as_object()
+				.and_then(|values| {
+					if values.len() == 1 {
+						values.values().next().cloned()
+					} else {
+						None
+					}
+				})
+				.unwrap_or(row);
+			let value = match value {
+				serde_json::Value::String(value) => {
+					serde_json::from_str(&value).map_err(|error| {
+						DatabaseError::new(
+							DatabaseErrorKind::Serialization,
+							format!("EXPLAIN JSON output could not be decoded: {error}"),
+						)
+					})?
+				}
+				value => value,
+			};
+			plans.push(value);
+		}
+
+		Ok(if plans.len() == 1 {
+			plans.pop().expect("one plan was recorded")
+		} else {
+			serde_json::Value::Array(plans)
+		})
 	}
 
 	/// Sets the manager and returns self for chaining.
@@ -5839,6 +5984,112 @@ where
 		stmt.to_owned()
 	}
 
+	/// Returns the backend's estimated plan for this queryset without executing
+	/// the data-producing SELECT.
+	///
+	/// Only typed plan-only options are accepted. `ANALYZE`, arbitrary option
+	/// strings, and execution statistics are intentionally unavailable.
+	///
+	/// # Errors
+	///
+	/// Returns an unsupported database error when the requested format or option
+	/// is unavailable on the active backend.
+	pub async fn explain(
+		&self,
+		options: ExplainOptions,
+	) -> reinhardt_core::exception::Result<ExplainOutput> {
+		let mut conn = super::manager::get_connection().await?;
+		self.explain_with_db(&mut conn, options).await
+	}
+
+	/// Returns the estimated plan through a caller-owned ORM executor.
+	///
+	/// This is the diagnostic counterpart to [`Self::all_with_db`]. The existing
+	/// filtered, joined, and ordered SELECT is wrapped in one EXPLAIN statement;
+	/// the unwrapped SELECT is never submitted separately.
+	pub async fn explain_with_db<E>(
+		&self,
+		conn: &mut E,
+		options: ExplainOptions,
+	) -> reinhardt_core::exception::Result<ExplainOutput>
+	where
+		E: OrmExecutor,
+	{
+		let select = self.build_select_statement()?;
+		let context = super::execution::pgvector_context_for_select(&select);
+		let statement = ExplainStatement::new(select, options);
+		let (sql, values, backend) =
+			Self::build_explain_for_backend(&statement, conn.backend(), conn.is_cockroachdb())?;
+		let param_samples = values
+			.iter()
+			.map(|value| value.to_sql_literal())
+			.collect::<Vec<_>>();
+		let params = super::execution::convert_values(values);
+		let started_at = Instant::now();
+		let result = conn.fetch_all_with_context(&sql, params, context).await;
+		let duration = started_at.elapsed();
+		let rows = match result {
+			Ok(rows) => {
+				super::instrumentation::instrumentation()
+					.orm_query_end_with_params(&sql, &param_samples, duration)
+					.await;
+				rows
+			}
+			Err(error) => {
+				super::instrumentation::instrumentation()
+					.orm_query_error(&sql, &format!("{error:?}"))
+					.await;
+				return Err(error);
+			}
+		};
+		Self::decode_explain_rows(rows, backend, options.format).map_err(Into::into)
+	}
+
+	/// Returns the estimated plan through an active transaction executor.
+	///
+	/// This caller-owned executor path mirrors [`Self::all_with_executor`] and
+	/// keeps the diagnostic on the transaction's dedicated connection.
+	pub async fn explain_with_executor(
+		&self,
+		executor: &mut dyn super::connection::TransactionExecutor,
+		options: ExplainOptions,
+	) -> Result<ExplainOutput, crate::backends::error::DatabaseError> {
+		let select = self.build_select_statement().map_err(executor_error)?;
+		let context = super::execution::pgvector_context_for_select(&select);
+		let statement = ExplainStatement::new(select, options);
+		let (sql, values, backend) = Self::build_explain_for_backend(
+			&statement,
+			Self::executor_backend(executor),
+			executor.is_cockroachdb(),
+		)?;
+		let param_samples = values
+			.iter()
+			.map(|value| value.to_sql_literal())
+			.collect::<Vec<_>>();
+		let params = super::execution::convert_values(values);
+		let started_at = Instant::now();
+		let result = executor
+			.fetch_all_with_context(&sql, params, context)
+			.await
+			.map_err(executor_error);
+		let duration = started_at.elapsed();
+		let rows = match result {
+			Ok(rows) => {
+				super::instrumentation::instrumentation()
+					.orm_query_end_with_params(&sql, &param_samples, duration)
+					.await;
+				rows
+			}
+			Err(error) => {
+				super::instrumentation::instrumentation()
+					.orm_query_error(&sql, &format!("{error:?}"))
+					.await;
+				return Err(error);
+			}
+		};
+		Self::decode_explain_rows(rows, backend, options.format)
+	}
+
 	/// Execute the queryset and return all matching records
 	///
 	/// Fetches all records from the database that match the accumulated filters.
@@ -8494,6 +8745,23 @@ fn escape_like_pattern(value: &str) -> String {
 	escaped
 }
 
+fn is_scalar_plan_value(value: &serde_json::Value) -> bool {
+	matches!(
+		value,
+		serde_json::Value::Null
+			| serde_json::Value::Bool(_)
+			| serde_json::Value::Number(_)
+			| serde_json::Value::String(_)
+	)
+}
+
+fn plan_value_to_text(value: serde_json::Value) -> String {
+	match value {
+		serde_json::Value::String(value) => value,
+		value => value.to_string(),
+	}
+}
+
 #[cfg(test)]
 mod tests {
 	use super::{
@@ -9594,6 +9862,356 @@ mod tests {
 		fn generated_field_names() -> &'static [&'static str] {
 			&["full_name", "display_name"]
 		}
+	}
+
+	struct ExplainRecordingExecutor {
+		backend: DatabaseBackend,
+		is_cockroachdb: bool,
+		calls: Vec<(String, Vec<crate::orm::QueryValue>)>,
+		rows: Vec<crate::orm::Row>,
+	}
+
+	impl ExplainRecordingExecutor {
+		fn new(backend: DatabaseBackend, rows: Vec<crate::orm::Row>) -> Self {
+			Self {
+				backend,
+				is_cockroachdb: false,
+				calls: Vec::new(),
+				rows,
+			}
+		}
+
+		fn cockroachdb(rows: Vec<crate::orm::Row>) -> Self {
+			Self {
+				backend: DatabaseBackend::Postgres,
+				is_cockroachdb: true,
+				calls: Vec::new(),
+				rows,
+			}
+		}
+	}
+
+	#[async_trait::async_trait]
+	impl crate::orm::OrmExecutor for ExplainRecordingExecutor {
+		fn backend(&self) -> DatabaseBackend {
+			self.backend
+		}
+
+		fn is_cockroachdb(&self) -> bool {
+			self.is_cockroachdb
+		}
+
+		async fn execute(
+			&mut self,
+			_sql: &str,
+			_params: Vec<crate::orm::QueryValue>,
+		) -> reinhardt_core::exception::Result<crate::orm::QueryResult> {
+			panic!("plan-only EXPLAIN must not execute a statement")
+		}
+
+		async fn fetch_one(
+			&mut self,
+			_sql: &str,
+			_params: Vec<crate::orm::QueryValue>,
+		) -> reinhardt_core::exception::Result<crate::orm::Row> {
+			panic!("plan-only EXPLAIN fetches its diagnostic rows together")
+		}
+
+		async fn fetch_all(
+			&mut self,
+			sql: &str,
+			params: Vec<crate::orm::QueryValue>,
+		) -> reinhardt_core::exception::Result<Vec<crate::orm::Row>> {
+			self.calls.push((sql.to_owned(), params));
+			Ok(std::mem::take(&mut self.rows))
+		}
+
+		async fn fetch_optional(
+			&mut self,
+			_sql: &str,
+			_params: Vec<crate::orm::QueryValue>,
+		) -> reinhardt_core::exception::Result<Option<crate::orm::Row>> {
+			panic!("plan-only EXPLAIN does not fetch an optional model row")
+		}
+	}
+
+	struct ExplainTransactionExecutor {
+		calls: Vec<(String, Vec<crate::orm::QueryValue>)>,
+		rows: Vec<crate::orm::Row>,
+	}
+
+	#[async_trait::async_trait]
+	impl crate::orm::TransactionExecutor for ExplainTransactionExecutor {
+		fn backend(&self) -> crate::backends::types::DatabaseType {
+			crate::backends::types::DatabaseType::Postgres
+		}
+
+		async fn execute(
+			&mut self,
+			_sql: &str,
+			_params: Vec<crate::orm::QueryValue>,
+		) -> crate::backends::error::Result<crate::orm::QueryResult> {
+			panic!("plan-only EXPLAIN must not execute a statement")
+		}
+
+		async fn fetch_one(
+			&mut self,
+			_sql: &str,
+			_params: Vec<crate::orm::QueryValue>,
+		) -> crate::backends::error::Result<crate::orm::Row> {
+			panic!("plan-only EXPLAIN fetches its diagnostic rows together")
+		}
+
+		async fn fetch_all(
+			&mut self,
+			sql: &str,
+			params: Vec<crate::orm::QueryValue>,
+		) -> crate::backends::error::Result<Vec<crate::orm::Row>> {
+			self.calls.push((sql.to_owned(), params));
+			Ok(std::mem::take(&mut self.rows))
+		}
+
+		async fn fetch_optional(
+			&mut self,
+			_sql: &str,
+			_params: Vec<crate::orm::QueryValue>,
+		) -> crate::backends::error::Result<Option<crate::orm::Row>> {
+			panic!("plan-only EXPLAIN does not fetch an optional model row")
+		}
+
+		async fn commit(self: Box<Self>) -> crate::backends::error::Result<()> {
+			Ok(())
+		}
+
+		async fn rollback(self: Box<Self>) -> crate::backends::error::Result<()> {
+			Ok(())
+		}
+	}
+
+	#[tokio::test]
+	async fn explain_wraps_typed_filtered_select_without_executing_it_separately() {
+		let queryset = QuerySet::<TestUser>::new()
+			.filter(TestUser::field_username().exact("alice"))
+			.order_by(&["-id"]);
+		let plan = serde_json::json!([{
+			"Plan": {
+				"Node Type": "Index Scan",
+				"Relation Name": "test_users"
+			}
+		}]);
+		let mut executor = ExplainRecordingExecutor::new(
+			DatabaseBackend::Postgres,
+			vec![crate::orm::Row {
+				data: HashMap::from([(
+					"QUERY PLAN".to_owned(),
+					crate::orm::QueryValue::Json(Some(Box::new(plan.clone()))),
+				)]),
+			}],
+		);
+
+		let output = queryset
+			.explain_with_db(
+				&mut executor,
+				super::ExplainOptions::default().format(super::ExplainFormat::Json),
+			)
+			.await
+			.expect("PostgreSQL JSON plan should decode");
+
+		assert_eq!(executor.calls.len(), 1);
+		assert_eq!(
+			executor.calls[0].0,
+			r#"EXPLAIN (FORMAT JSON) SELECT * FROM "test_users" WHERE "username" = $1 ORDER BY "id" DESC"#
+		);
+		assert_eq!(
+			executor.calls[0].1,
+			vec![crate::orm::QueryValue::String("alice".to_owned())]
+		);
+		assert_eq!(output.backend, super::ExplainBackend::Postgres);
+		assert_eq!(output.format, super::ExplainFormat::Json);
+		assert_eq!(output.body, super::ExplainBody::Json(plan));
+	}
+
+	#[tokio::test]
+	async fn cockroachdb_explain_reports_its_effective_backend() {
+		let mut executor = ExplainRecordingExecutor::cockroachdb(vec![crate::orm::Row {
+			data: HashMap::from([(
+				"info".to_owned(),
+				crate::orm::QueryValue::String("scan test_users".to_owned()),
+			)]),
+		}]);
+
+		let output = QuerySet::<TestUser>::new()
+			.explain_with_db(&mut executor, super::ExplainOptions::default())
+			.await
+			.expect("CockroachDB text plan should decode");
+
+		assert_eq!(output.backend, super::ExplainBackend::CockroachDb);
+		assert_eq!(executor.calls[0].0, r#"EXPLAIN SELECT * FROM "test_users""#);
+	}
+
+	#[tokio::test]
+	async fn mysql_json_explain_decodes_supported_plan() {
+		let plan = serde_json::json!({
+			"query_block": {
+				"table": {
+					"table_name": "test_users",
+					"access_type": "ALL"
+				}
+			}
+		});
+		let mut executor = ExplainRecordingExecutor::new(
+			DatabaseBackend::MySql,
+			vec![crate::orm::Row {
+				data: HashMap::from([(
+					"EXPLAIN".to_owned(),
+					crate::orm::QueryValue::String(plan.to_string()),
+				)]),
+			}],
+		);
+
+		let output = QuerySet::<TestUser>::new()
+			.filter(TestUser::field_id().eq(7))
+			.explain_with_db(
+				&mut executor,
+				super::ExplainOptions::default().format(super::ExplainFormat::Json),
+			)
+			.await
+			.expect("MySQL JSON plan should decode");
+
+		assert_eq!(output.backend, super::ExplainBackend::MySql);
+		assert_eq!(output.body, super::ExplainBody::Json(plan));
+		assert_eq!(
+			executor.calls[0].0,
+			"EXPLAIN FORMAT=JSON SELECT * FROM `test_users` WHERE `id` = ?"
+		);
+	}
+
+	#[tokio::test]
+	async fn explain_with_executor_uses_one_transaction_connection_call() {
+		let mut executor = ExplainTransactionExecutor {
+			calls: Vec::new(),
+			rows: vec![crate::orm::Row {
+				data: HashMap::from([(
+					"QUERY PLAN".to_owned(),
+					crate::orm::QueryValue::String("Seq Scan on test_users".to_owned()),
+				)]),
+			}],
+		};
+
+		let output = QuerySet::<TestUser>::new()
+			.filter(TestUser::field_id().eq(7))
+			.explain_with_executor(&mut executor, super::ExplainOptions::default())
+			.await
+			.expect("transaction executor plan should decode");
+
+		assert_eq!(
+			output.body,
+			super::ExplainBody::Text("Seq Scan on test_users".to_owned())
+		);
+		assert_eq!(executor.calls.len(), 1);
+		assert_eq!(
+			executor.calls[0].0,
+			r#"EXPLAIN SELECT * FROM "test_users" WHERE "id" = $1"#
+		);
+		assert_eq!(executor.calls[0].1, vec![crate::orm::QueryValue::Int(7)]);
+	}
+
+	#[rstest]
+	#[case(
+		DatabaseBackend::Postgres,
+		reinhardt_query::query::ExplainOptions::default()
+			.format(reinhardt_query::query::ExplainFormat::Tree),
+		"Database error: EXPLAIN FORMAT TREE is not supported by the PostgreSQL backend"
+	)]
+	#[case(
+		DatabaseBackend::MySql,
+		reinhardt_query::query::ExplainOptions::default().verbose(),
+		"Database error: EXPLAIN VERBOSE is not supported by the MySQL backend"
+	)]
+	#[case(
+		DatabaseBackend::Sqlite,
+		reinhardt_query::query::ExplainOptions::default()
+			.format(reinhardt_query::query::ExplainFormat::Json),
+		"Database error: EXPLAIN FORMAT JSON is not supported by the SQLite backend"
+	)]
+	#[tokio::test]
+	async fn explain_rejects_unsupported_capability_before_executor_call(
+		#[case] backend: DatabaseBackend,
+		#[case] options: reinhardt_query::query::ExplainOptions,
+		#[case] expected_message: &str,
+	) {
+		let queryset = QuerySet::<TestUser>::new();
+		let mut executor = ExplainRecordingExecutor::new(backend, Vec::new());
+
+		let error = queryset
+			.explain_with_db(&mut executor, options)
+			.await
+			.expect_err("unsupported EXPLAIN capability should fail");
+
+		assert_eq!(
+			error.database_kind(),
+			Some(reinhardt_core::exception::DatabaseErrorKind::Unsupported)
+		);
+		assert_eq!(error.to_string(), expected_message);
+		assert!(executor.calls.is_empty());
+	}
+
+	#[tokio::test]
+	async fn mysql_explain_rejects_subquery_before_executor_call() {
+		let queryset = QuerySet::<TestUser>::new()
+			.filter_in_subquery("id", |subquery: QuerySet<TestUser>| {
+				subquery.values(&["id"])
+			})
+			.expect("subquery should compile");
+		let mut executor = ExplainRecordingExecutor::new(DatabaseBackend::MySql, Vec::new());
+
+		let error = queryset
+			.explain_with_db(&mut executor, super::ExplainOptions::default())
+			.await
+			.expect_err("MySQL subqueries must be rejected for plan-only safety");
+
+		assert_eq!(
+			error.database_kind(),
+			Some(reinhardt_core::exception::DatabaseErrorKind::Unsupported)
+		);
+		assert_eq!(
+			error.to_string(),
+			"Database error: plan-only EXPLAIN for subqueries or unchecked expressions is not supported by the MySQL backend"
+		);
+		assert!(executor.calls.is_empty());
+	}
+
+	#[tokio::test]
+	async fn sqlite_explain_retains_tabular_plan_rows() {
+		let rows = vec![crate::orm::Row {
+			data: HashMap::from([
+				("id".to_owned(), crate::orm::QueryValue::Int(2)),
+				("parent".to_owned(), crate::orm::QueryValue::Int(0)),
+				("notused".to_owned(), crate::orm::QueryValue::Int(0)),
+				(
+					"detail".to_owned(),
+					crate::orm::QueryValue::String("SCAN test_users".to_owned()),
+				),
+			]),
+		}];
+		let mut executor = ExplainRecordingExecutor::new(DatabaseBackend::Sqlite, rows);
+
+		let output = QuerySet::<TestUser>::new()
+			.explain_with_db(&mut executor, super::ExplainOptions::default())
+			.await
+			.expect("SQLite plan should decode");
+
+		assert_eq!(executor.calls.len(), 1);
+		assert_eq!(
+			executor.calls[0].0,
+			r#"EXPLAIN QUERY PLAN SELECT * FROM "test_users""#
+		);
+		assert!(matches!(
+			output.body,
+			super::ExplainBody::Rows(ref rows)
+				if rows.len() == 1
+					&& rows[0]["detail"] == serde_json::Value::String("SCAN test_users".to_owned())
+		));
 	}
 
 	#[cfg(feature = "pgvector")]

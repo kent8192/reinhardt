@@ -660,6 +660,55 @@ let updated = User::objects()
     .await?;
 ```
 
+### Plan-only QuerySet diagnostics
+
+Use typed generated fields to build the queryset, then call `explain` with
+`ExplainOptions`. The returned `ExplainOutput` records the backend, effective
+format, and a separately decoded plan body; it never deserializes diagnostic
+rows as models.
+
+```rust
+use reinhardt_db::orm::{ExplainFormat, ExplainOptions};
+
+let plan = User::objects()
+    .filter(User::field_email().eq("ada@example.com"))
+    .order_by(User::field_created_at().desc())
+    .explain(ExplainOptions::default().format(ExplainFormat::Json))
+    .await?;
+```
+
+When the equivalent query must stay on a caller-owned connection, use
+`explain_with_db`. Active transactions can use `explain_with_executor`.
+
+```rust
+let plan = connection.atomic(async |transaction| {
+    User::objects()
+        .filter(User::field_id().eq(user_id))
+        .explain_with_executor(transaction, ExplainOptions::default())
+        .await
+        .map_err(reinhardt_core::exception::Error::from)
+}).await?;
+```
+
+Backend capabilities are explicit:
+
+| Backend | Formats | Additional plan-only options |
+|---------|---------|------------------------------|
+| PostgreSQL | `Text`, `Json`, `Xml`, `Yaml` | `verbose`, `costs`, `settings` |
+| MySQL | `Text` (traditional), `Json`, `Tree` | none |
+| SQLite | `Text` (`EXPLAIN QUERY PLAN`) | none |
+| CockroachDB | `Text` | none |
+
+Unsupported combinations return a database error classified as `Unsupported`
+before the executor is called. Reinhardt intentionally exposes a stricter API
+than Django: `ANALYZE`, arbitrary option strings, buffer/timing statistics, and
+every other data-executing explain option are rejected by construction.
+MySQL additionally rejects subqueries, CTEs, unions, and unchecked or function
+expressions because its optimizer may evaluate them while producing a plan;
+plain typed filters, joins, ordering, and limits remain supported. MySQL
+`Tree` output requires MySQL 8.0.16 or newer. SQLite plan row fields are
+diagnostic data whose exact shape may change between SQLite releases.
+
 ### Scoped N+1 Query Detection
 
 Use `NPlusOneScope` around development diagnostics or focused tests to detect

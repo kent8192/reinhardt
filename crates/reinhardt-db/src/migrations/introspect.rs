@@ -662,6 +662,7 @@ fn build_atomic_write_plan(
 	Ok((files, directories))
 }
 
+#[cfg(any(unix, windows, target_os = "redox"))]
 fn validate_filesystem_destination_distinctness(destinations: &[PathBuf]) -> io::Result<()> {
 	let mut groups: HashMap<PathBuf, Vec<PathBuf>> = HashMap::new();
 	for destination in destinations {
@@ -694,6 +695,21 @@ fn validate_filesystem_destination_distinctness(destinations: &[PathBuf]) -> io:
 	Ok(())
 }
 
+#[cfg(not(any(unix, windows, target_os = "redox")))]
+fn validate_filesystem_destination_distinctness(_destinations: &[PathBuf]) -> io::Result<()> {
+	Err(unsupported_filesystem_probe_error())
+}
+
+#[cfg(any(not(any(unix, windows, target_os = "redox")), test))]
+fn unsupported_filesystem_probe_error() -> io::Error {
+	io::Error::new(
+		io::ErrorKind::Unsupported,
+		"Filesystem destination equivalence probing is unsupported on this target; generated \
+		 output was not modified",
+	)
+}
+
+#[cfg(any(unix, windows, target_os = "redox"))]
 fn existing_ancestor_and_relative_path(destination: &Path) -> io::Result<(PathBuf, PathBuf)> {
 	let mut ancestor = destination
 		.parent()
@@ -734,12 +750,14 @@ fn existing_ancestor_and_relative_path(destination: &Path) -> io::Result<(PathBu
 	}
 }
 
+#[cfg(any(unix, windows, target_os = "redox"))]
 #[derive(Debug)]
 struct FilesystemPathProbe {
 	root: Option<PathBuf>,
 	entries: Vec<OwnedProbeEntry>,
 }
 
+#[cfg(any(unix, windows, target_os = "redox"))]
 #[derive(Debug)]
 struct OwnedProbeEntry {
 	path: PathBuf,
@@ -747,18 +765,19 @@ struct OwnedProbeEntry {
 	kind: ProbeEntryKind,
 }
 
+#[cfg(any(unix, windows, target_os = "redox"))]
 #[derive(Debug, Clone, Copy)]
 enum ProbeEntryKind {
 	File,
 	Directory,
 }
 
+#[cfg(any(unix, windows, target_os = "redox"))]
 impl FilesystemPathProbe {
 	fn create(ancestor: &Path) -> io::Result<Self> {
 		for _ in 0..100 {
-			let id = NEXT_ATOMIC_OUTPUT_ID.fetch_add(1, Ordering::Relaxed);
-			let candidate =
-				ancestor.join(format!(".reinhardt-path-probe-{}-{id}", std::process::id()));
+			let token: u128 = rand::random();
+			let candidate = ancestor.join(format!(".reinhardt-path-probe-{token:032x}"));
 			let mut builder = fs::DirBuilder::new();
 			#[cfg(unix)]
 			{
@@ -767,23 +786,10 @@ impl FilesystemPathProbe {
 			}
 			match builder.create(&candidate) {
 				Ok(()) => {
-					let handle = match same_file::Handle::from_path(&candidate) {
-						Ok(handle) => handle,
-						Err(error) => {
-							return Err(cleanup_untracked_probe_entry(
-								error,
-								&candidate,
-								ProbeEntryKind::Directory,
-							));
-						}
-					};
+					let entry = owned_probe_directory(&candidate)?;
 					return Ok(Self {
 						root: Some(candidate.clone()),
-						entries: vec![OwnedProbeEntry {
-							path: candidate,
-							handle,
-							kind: ProbeEntryKind::Directory,
-						}],
+						entries: vec![entry],
 					});
 				}
 				Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {}
@@ -809,21 +815,7 @@ impl FilesystemPathProbe {
 				parent.push(component);
 				match fs::create_dir(&parent) {
 					Ok(()) => {
-						let handle = match same_file::Handle::from_path(&parent) {
-							Ok(handle) => handle,
-							Err(error) => {
-								return Err(cleanup_untracked_probe_entry(
-									error,
-									&parent,
-									ProbeEntryKind::Directory,
-								));
-							}
-						};
-						self.entries.push(OwnedProbeEntry {
-							path: parent.clone(),
-							handle,
-							kind: ProbeEntryKind::Directory,
-						});
+						self.entries.push(owned_probe_directory(&parent)?);
 					}
 					Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {
 						if !fs::metadata(&parent)?.is_dir() {
@@ -842,21 +834,11 @@ impl FilesystemPathProbe {
 			.open(&candidate)
 		{
 			Ok(file) => {
-				let handle = match same_file::Handle::from_file(file) {
-					Ok(handle) => handle,
-					Err(error) => {
-						return Err(cleanup_untracked_probe_entry(
-							error,
-							&candidate,
-							ProbeEntryKind::File,
-						));
-					}
-				};
-				self.entries.push(OwnedProbeEntry {
-					path: candidate,
-					handle,
-					kind: ProbeEntryKind::File,
-				});
+				self.entries.push(owned_probe_entry_from_file(
+					&candidate,
+					file,
+					ProbeEntryKind::File,
+				)?);
 				Ok(())
 			}
 			Err(error)
@@ -901,6 +883,7 @@ impl FilesystemPathProbe {
 	}
 }
 
+#[cfg(any(unix, windows, target_os = "redox"))]
 impl OwnedProbeEntry {
 	fn remove_if_owned(&self) -> io::Result<()> {
 		let current = match same_file::Handle::from_path(&self.path) {
@@ -926,34 +909,66 @@ impl OwnedProbeEntry {
 	}
 }
 
-fn cleanup_untracked_probe_entry(
-	trigger: io::Error,
-	path: &Path,
-	kind: ProbeEntryKind,
-) -> io::Error {
-	let cleanup = match kind {
-		ProbeEntryKind::File => fs::remove_file(path),
-		ProbeEntryKind::Directory => fs::remove_dir(path),
-	};
-	match cleanup {
-		Ok(()) => trigger,
-		Err(error) if error.kind() == io::ErrorKind::NotFound => trigger,
-		Err(cleanup_error) => io::Error::new(
-			trigger.kind(),
-			format!(
-				"{trigger}; untracked filesystem path probe entry retained at {path:?}: \
-				 {cleanup_error}"
-			),
-		),
-	}
+#[cfg(any(unix, target_os = "redox"))]
+fn owned_probe_directory(path: &Path) -> io::Result<OwnedProbeEntry> {
+	let file = File::open(path).map_err(|error| retained_probe_entry_error(error, path))?;
+	owned_probe_entry_from_file(path, file, ProbeEntryKind::Directory)
 }
 
+#[cfg(windows)]
+fn owned_probe_directory(path: &Path) -> io::Result<OwnedProbeEntry> {
+	let handle = same_file::Handle::from_path(path)
+		.map_err(|error| retained_probe_entry_error(error, path))?;
+	Ok(OwnedProbeEntry {
+		path: path.to_path_buf(),
+		handle,
+		kind: ProbeEntryKind::Directory,
+	})
+}
+
+#[cfg(any(unix, windows, target_os = "redox"))]
+fn owned_probe_entry_from_file(
+	path: &Path,
+	file: File,
+	kind: ProbeEntryKind,
+) -> io::Result<OwnedProbeEntry> {
+	owned_probe_entry_from_file_with(path, file, kind, same_file::Handle::from_file)
+}
+
+#[cfg(any(unix, windows, target_os = "redox"))]
+fn owned_probe_entry_from_file_with<F>(
+	path: &Path,
+	file: File,
+	kind: ProbeEntryKind,
+	acquire_identity: F,
+) -> io::Result<OwnedProbeEntry>
+where
+	F: FnOnce(File) -> io::Result<same_file::Handle>,
+{
+	let handle = acquire_identity(file).map_err(|error| retained_probe_entry_error(error, path))?;
+	Ok(OwnedProbeEntry {
+		path: path.to_path_buf(),
+		handle,
+		kind,
+	})
+}
+
+#[cfg(any(unix, windows, target_os = "redox"))]
+fn retained_probe_entry_error(trigger: io::Error, path: &Path) -> io::Error {
+	io::Error::new(
+		trigger.kind(),
+		format!("{trigger}; filesystem path probe entry retained for recovery at {path:?}"),
+	)
+}
+
+#[cfg(any(unix, windows, target_os = "redox"))]
 impl Drop for FilesystemPathProbe {
 	fn drop(&mut self) {
 		let _ = self.cleanup();
 	}
 }
 
+#[cfg(any(unix, windows, target_os = "redox"))]
 fn filesystem_destination_collision(relative: &Path) -> io::Error {
 	io::Error::new(
 		io::ErrorKind::InvalidInput,
@@ -1419,6 +1434,7 @@ mod atomic_write_tests {
 		}
 	}
 
+	#[cfg(any(unix, windows, target_os = "redox"))]
 	#[test]
 	fn filesystem_probe_cleanup_preserves_unowned_replacement() {
 		let temp_dir = tempfile::Builder::new()
@@ -1465,6 +1481,75 @@ mod atomic_write_tests {
 		assert_eq!(
 			fs::read(&unexpected).expect("RAII cleanup should preserve unowned replacement"),
 			b"unowned bytes"
+		);
+	}
+
+	#[cfg(any(unix, windows, target_os = "redox"))]
+	#[test]
+	fn filesystem_probe_root_uses_an_unpredictable_token() {
+		let temp_dir = tempfile::Builder::new()
+			.prefix("inspectdb-output-")
+			.tempdir_in("/tmp")
+			.expect("temporary directory should be created");
+		let mut probe = FilesystemPathProbe::create(temp_dir.path())
+			.expect("filesystem path probe should be created");
+		let root = probe
+			.root
+			.as_ref()
+			.expect("active probe should expose its root");
+		let file_name = root
+			.file_name()
+			.expect("probe root should have a file name")
+			.to_string_lossy();
+		let token = file_name
+			.strip_prefix(".reinhardt-path-probe-")
+			.expect("probe root should have the private prefix");
+
+		assert_eq!(token.len(), 32);
+		assert!(token.bytes().all(|byte| byte.is_ascii_hexdigit()));
+		probe.cleanup().expect("probe cleanup should succeed");
+	}
+
+	#[cfg(any(unix, windows, target_os = "redox"))]
+	#[test]
+	fn probe_identity_failure_retains_created_file() {
+		let temp_dir = tempfile::Builder::new()
+			.prefix("inspectdb-output-")
+			.tempdir_in("/tmp")
+			.expect("temporary directory should be created");
+		let path = temp_dir.path().join("untracked.rs");
+		let file = OpenOptions::new()
+			.write(true)
+			.create_new(true)
+			.open(&path)
+			.expect("probe file should be created");
+
+		let error = owned_probe_entry_from_file_with(&path, file, ProbeEntryKind::File, |_| {
+			Err(io::Error::other("injected identity failure"))
+		})
+		.expect_err("identity failure should be returned");
+
+		assert_eq!(error.kind(), io::ErrorKind::Other);
+		assert_eq!(
+			error.to_string(),
+			format!(
+				"injected identity failure; filesystem path probe entry retained for recovery at \
+				 {path:?}"
+			)
+		);
+		assert!(path.exists());
+		fs::remove_file(path).expect("test-owned retained file should be removed");
+	}
+
+	#[test]
+	fn unsupported_probe_error_is_precise() {
+		let error = unsupported_filesystem_probe_error();
+
+		assert_eq!(error.kind(), io::ErrorKind::Unsupported);
+		assert_eq!(
+			error.to_string(),
+			"Filesystem destination equivalence probing is unsupported on this target; generated \
+			 output was not modified"
 		);
 	}
 

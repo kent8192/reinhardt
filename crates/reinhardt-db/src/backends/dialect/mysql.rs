@@ -290,6 +290,14 @@ impl DatabaseBackend for MySqlBackend {
 		Ok(Box::new(MySqlTransactionExecutor::new(tx)))
 	}
 
+	async fn begin_write(&self) -> Result<Box<dyn TransactionExecutor>> {
+		// READ COMMITTED avoids InnoDB next-key gap locks for missing-row
+		// SELECT ... FOR UPDATE lookups. Unique constraints still serialize
+		// competing inserts, after which the loser can lock and update the winner.
+		self.begin_with_isolation(IsolationLevel::ReadCommitted)
+			.await
+	}
+
 	async fn begin_with_isolation(
 		&self,
 		isolation_level: IsolationLevel,

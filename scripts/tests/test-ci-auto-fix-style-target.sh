@@ -102,6 +102,18 @@ assert.match(
   'write job must fail closed if trusted policy checkout files are staged',
 );
 
+assert.match(
+  workflow,
+  /git cat-file blob ":\$path" \\\n+\s+\| base64 -w0 \\\n+\s+\| jq -ncR --arg p "\$path" '\{path: \$p, contents: input\}'/,
+  'GraphQL additions must stream staged blobs without process arguments',
+);
+
+assert.doesNotMatch(
+  workflow,
+  /--arg c "\$contents"/,
+  'GraphQL additions must not carry file contents in a process argument',
+);
+
 const outputs = new Map();
 const paginateCalls = [];
 await runAutoFixTargetPolicy({

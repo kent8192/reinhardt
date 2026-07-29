@@ -1,0 +1,5 @@
+error: duplicate vector index key `name`
+  --> tests/ui/field_attributes/vector_index_invalid_duplicate_key.rs:14:3
+   |
+14 |         name = "documents_embedding_hnsw_again",
+   |         ^^^^

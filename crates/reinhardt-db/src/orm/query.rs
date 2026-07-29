@@ -9,16 +9,17 @@ use super::field_codec::{
 };
 use super::{FieldSelector, Model};
 use crate::naming::to_snake_case;
-use crate::orm::query_fields::GroupByFields;
 use crate::orm::query_fields::aggregate::{AggregateExpr, ComparisonExpr};
 use crate::orm::query_fields::comparison::FieldComparison;
 use crate::orm::query_fields::compiler::QueryFieldCompiler;
+use crate::orm::query_fields::{GroupByFields, OrderedExpression, TypedExpression};
 use crate::orm::relations::{RelationJoinGraph, RelationJoinKind, RelationPathLike, RelationStep};
 use reinhardt_core::exception::{DatabaseError, DatabaseErrorKind, Error};
 use reinhardt_query::prelude::{
-	Alias, BinOper, ColumnRef, Condition, Expr, ExprTrait, Func, JoinType as SeaJoinType,
-	MySqlQueryBuilder, Order, PostgresQueryBuilder, Query, QueryBuilder, QueryStatementBuilder,
-	SelectStatement, SimpleExpr, SqliteQueryBuilder, TableRef, UpdateStatement,
+	Alias, BinOper, CockroachDBQueryBuilder, ColumnRef, Condition, Expr, ExprTrait, Func,
+	JoinType as SeaJoinType, MySqlQueryBuilder, Order, PostgresQueryBuilder, Query, QueryBuilder,
+	QueryStatementBuilder, SelectStatement, SimpleExpr, SqliteQueryBuilder, TableRef,
+	UpdateStatement,
 };
 use reinhardt_query::types::PgBinOper;
 use serde::{Deserialize, Serialize};
@@ -29,10 +30,7 @@ use std::time::Instant;
 use uuid::Uuid;
 
 fn executor_error(error: reinhardt_core::exception::Error) -> DatabaseError {
-	error
-		.database_error()
-		.cloned()
-		.unwrap_or_else(|| DatabaseError::new(DatabaseErrorKind::Query, error.to_string()))
+	crate::backends::error::into_database_error(error)
 }
 
 // Django QuerySet API types
@@ -148,6 +146,7 @@ pub enum FilterValue {
 enum FilterField {
 	Column,
 	Expression(String),
+	TypedPredicate(Box<SimpleExpr>),
 }
 
 #[derive(Debug, Clone)]
@@ -285,6 +284,17 @@ impl Filter {
 			field_type: None,
 			operator,
 			value,
+		}
+	}
+
+	pub(crate) fn typed_predicate(expr: SimpleExpr) -> Self {
+		Self {
+			field: String::new(),
+			field_source: FilterField::TypedPredicate(Box::new(expr)),
+			relation: None,
+			field_type: None,
+			operator: FilterOperator::Eq,
+			value: FilterValue::Boolean(true),
 		}
 	}
 
@@ -952,6 +962,54 @@ where
 	fn apply_prefetch_related(self, queryset: &mut QuerySet<T>);
 }
 
+/// Input accepted by [`QuerySet::order_by`].
+pub trait IntoOrderBy<M>
+where
+	M: super::Model,
+{
+	/// Replace the active ordering with this input.
+	fn apply(self, queryset: &mut QuerySet<M>);
+}
+
+impl<M> IntoOrderBy<M> for &[&str]
+where
+	M: super::Model,
+{
+	fn apply(self, queryset: &mut QuerySet<M>) {
+		queryset.order_by_fields = self.iter().map(|field| (*field).to_owned()).collect();
+		queryset.order_by_expressions.clear();
+	}
+}
+
+impl<M, const N: usize> IntoOrderBy<M> for &[&str; N]
+where
+	M: super::Model,
+{
+	fn apply(self, queryset: &mut QuerySet<M>) {
+		self.as_slice().apply(queryset);
+	}
+}
+
+impl<M> IntoOrderBy<M> for &Vec<&str>
+where
+	M: super::Model,
+{
+	fn apply(self, queryset: &mut QuerySet<M>) {
+		self.as_slice().apply(queryset);
+	}
+}
+
+impl<M> IntoOrderBy<M> for OrderedExpression<M>
+where
+	M: super::Model,
+{
+	fn apply(self, queryset: &mut QuerySet<M>) {
+		queryset.order_by_fields.clear();
+		queryset.order_by_expressions.clear();
+		queryset.order_by_expressions.push(self);
+	}
+}
+
 impl<T> RelationLoadInput<T> for &[&str]
 where
 	T: super::Model,
@@ -1191,10 +1249,13 @@ where
 	typed_prefetch_related: Vec<TypedPrefetchRelation>,
 	relation_joins: RelationJoinGraph,
 	order_by_fields: Vec<String>,
+	order_by_expressions: Vec<OrderedExpression<T>>,
 	distinct_enabled: bool,
 	selected_fields: Option<Vec<String>>,
+	selected_expressions: Vec<(String, SimpleExpr)>,
 	deferred_fields: Vec<String>,
 	annotations: Vec<super::annotation::Annotation>,
+	typed_annotations: Vec<(String, SimpleExpr)>,
 	manager: Option<std::sync::Arc<super::manager::Manager<T>>>,
 	limit: Option<usize>,
 	offset: Option<usize>,
@@ -1226,10 +1287,13 @@ where
 			typed_prefetch_related: Vec::new(),
 			relation_joins: RelationJoinGraph::new(T::table_name()),
 			order_by_fields: Vec::new(),
+			order_by_expressions: Vec::new(),
 			distinct_enabled: false,
 			selected_fields: None,
+			selected_expressions: Vec::new(),
 			deferred_fields: Vec::new(),
 			annotations: Vec::new(),
+			typed_annotations: Vec::new(),
 			manager: None,
 			limit: None,
 			offset: None,
@@ -1284,20 +1348,14 @@ where
 		} else {
 			self.add_default_select_columns(&mut stmt);
 		}
+		self.apply_typed_select_expressions(&mut stmt);
 		self.apply_relation_joins(&mut stmt);
 		self.apply_manual_joins(&mut stmt);
 
 		if let Some(condition) = self.build_where_condition()? {
 			stmt.cond_where(condition);
 		}
-		for order_field in &self.order_by_fields {
-			let (field, order) = order_field
-				.strip_prefix('-')
-				.map_or((order_field.as_str(), Order::Asc), |field| {
-					(field, Order::Desc)
-				});
-			stmt.order_by_expr(Expr::col(self.root_column_reference(field)), order);
-		}
+		self.apply_ordering(&mut stmt);
 		if let Some(limit) = self.limit {
 			stmt.limit(limit as u64);
 		}
@@ -1336,10 +1394,13 @@ where
 			typed_prefetch_related: Vec::new(),
 			relation_joins: RelationJoinGraph::new(T::table_name()),
 			order_by_fields: Vec::new(),
+			order_by_expressions: Vec::new(),
 			distinct_enabled: false,
 			selected_fields: None,
+			selected_expressions: Vec::new(),
 			deferred_fields: Vec::new(),
 			annotations: Vec::new(),
+			typed_annotations: Vec::new(),
 			manager: Some(manager),
 			limit: None,
 			offset: None,
@@ -1549,10 +1610,13 @@ where
 			typed_prefetch_related: Vec::new(),
 			relation_joins: RelationJoinGraph::new(alias),
 			order_by_fields: Vec::new(),
+			order_by_expressions: Vec::new(),
 			distinct_enabled: false,
 			selected_fields: None,
+			selected_expressions: Vec::new(),
 			deferred_fields: Vec::new(),
 			annotations: Vec::new(),
+			typed_annotations: Vec::new(),
 			manager: None,
 			limit: None,
 			offset: None,
@@ -3826,6 +3890,36 @@ where
 		}
 	}
 
+	fn apply_typed_select_expressions(&self, stmt: &mut SelectStatement) {
+		for (alias, expression) in &self.selected_expressions {
+			stmt.expr_as(self.qualify_typed_expression(expression), Alias::new(alias));
+		}
+		for (alias, expression) in &self.typed_annotations {
+			stmt.expr_as(self.qualify_typed_expression(expression), Alias::new(alias));
+		}
+	}
+
+	fn qualify_typed_expression(&self, expression: &SimpleExpr) -> SimpleExpr {
+		crate::orm::query_fields::qualify_model_root(expression, self.root_alias())
+	}
+
+	fn apply_ordering(&self, stmt: &mut SelectStatement) {
+		for order_field in &self.order_by_fields {
+			let (field, order) = order_field
+				.strip_prefix('-')
+				.map_or((order_field.as_str(), Order::Asc), |field| {
+					(field, Order::Desc)
+				});
+			stmt.order_by_expr(Expr::col(self.root_column_reference(field)), order);
+		}
+		for ordering in &self.order_by_expressions {
+			stmt.order_by_expr(
+				self.qualify_typed_expression(&ordering.expr),
+				ordering.order,
+			);
+		}
+	}
+
 	fn apply_relation_join_graph(stmt: &mut SelectStatement, graph: &RelationJoinGraph) {
 		for join in graph.joins() {
 			let sea_join_type = match join.join_kind {
@@ -3857,6 +3951,11 @@ where
 		let mut added = false;
 
 		for filter in &self.filters {
+			if let FilterField::TypedPredicate(expr) = &filter.field_source {
+				cond = cond.add(self.qualify_typed_expression(expr));
+				added = true;
+				continue;
+			}
 			let col = self.filter_lhs_expr(filter);
 
 			let expr = match (&filter.operator, &filter.value) {
@@ -4851,6 +4950,15 @@ where
 			DatabaseValue::String(value) => value.clone(),
 			DatabaseValue::Bytes(value) => String::from_utf8_lossy(value).into_owned(),
 			DatabaseValue::Json(value) => value.to_string(),
+			#[cfg(feature = "pgvector")]
+			DatabaseValue::Vector(values) => serde_json::Value::Array(
+				values
+					.iter()
+					.copied()
+					.map(serde_json::Value::from)
+					.collect(),
+			)
+			.to_string(),
 			DatabaseValue::Array { values, .. } => serde_json::Value::Array(
 				values
 					.iter()
@@ -5221,6 +5329,7 @@ where
 
 		// Add main table columns while preserving explicit projections.
 		self.add_select_related_root_columns(&mut stmt);
+		self.apply_typed_select_expressions(&mut stmt);
 
 		// Add LEFT JOIN for each legacy related field that is not already covered
 		// by a typed join. The typed graph owns its aliases and join order.
@@ -5363,22 +5472,7 @@ where
 			}
 		}
 
-		// Apply ORDER BY
-		for order_field in &self.order_by_fields {
-			let (field, is_desc) = if let Some(stripped) = order_field.strip_prefix('-') {
-				(stripped, true)
-			} else {
-				(order_field.as_str(), false)
-			};
-
-			let col_ref = self.root_column_reference(field);
-			let expr = Expr::col(col_ref);
-			if is_desc {
-				stmt.order_by_expr(expr, Order::Desc);
-			} else {
-				stmt.order_by_expr(expr, Order::Asc);
-			}
-		}
+		self.apply_ordering(&mut stmt);
 
 		// Apply LIMIT/OFFSET
 		if let Some(limit) = self.limit {
@@ -5947,81 +6041,24 @@ where
 		T: serde::de::DeserializeOwned,
 		E: OrmExecutor,
 	{
-		let stmt = if !self.has_select_related() {
-			let mut stmt = Query::select();
-			self.apply_model_from(&mut stmt);
-
-			// Column selection considering selected_fields and deferred_fields
-			if let Some(ref fields) = self.selected_fields {
-				for field in fields {
-					// Detect raw SQL expressions (like COUNT(*), AVG(price), etc.)
-					if field.contains('(') && field.contains(')') {
-						// Use expr() for raw SQL expressions - clone to satisfy lifetime
-						stmt.expr(Expr::cust(field.clone()));
-					} else {
-						// Regular column reference
-						let col_ref = self.root_column_reference(field);
-						stmt.column(col_ref);
-					}
-				}
-			} else if !self.deferred_fields.is_empty() {
-				let all_fields = T::field_metadata();
-				for field in all_fields {
-					if !self.deferred_fields.contains(&field.name) {
-						let col_ref = self.root_column_reference(&field.name);
-						stmt.column(col_ref);
-					}
-				}
-			} else {
-				self.add_default_select_columns(&mut stmt);
-			}
-
-			self.apply_relation_joins(&mut stmt);
-
-			if let Some(cond) = self.build_where_condition()? {
-				stmt.cond_where(cond);
-			}
-
-			// Apply ORDER BY clause
-			for order_field in &self.order_by_fields {
-				let (field, is_desc) = if let Some(stripped) = order_field.strip_prefix('-') {
-					(stripped, true)
-				} else {
-					(order_field.as_str(), false)
-				};
-
-				let col_ref = self.root_column_reference(field);
-				let expr = Expr::col(col_ref);
-				if is_desc {
-					stmt.order_by_expr(expr, Order::Desc);
-				} else {
-					stmt.order_by_expr(expr, Order::Asc);
-				}
-			}
-
-			// Apply LIMIT/OFFSET
-			if let Some(limit) = self.limit {
-				stmt.limit(limit as u64);
-			}
-			if let Some(offset) = self.offset {
-				stmt.offset(offset as u64);
-			}
-
-			stmt.to_owned()
-		} else {
-			self.select_related_query()?
-		};
-
-		let sql = render_select_statement(&stmt, conn.backend());
+		let stmt = self.build_select_statement()?;
+		let context = super::execution::pgvector_context_for_select(&stmt);
+		let (sql, values) =
+			Self::build_select_for_backend(&stmt, conn.backend(), conn.is_cockroachdb())?;
+		let param_samples = values
+			.iter()
+			.map(|value| value.to_sql_literal())
+			.collect::<Vec<_>>();
+		let params = super::execution::convert_values(values);
 
 		let started_at = Instant::now();
-		let query_result = conn.fetch_all(&sql, vec![]).await;
+		let query_result = conn.fetch_all_with_context(&sql, params, context).await;
 		let duration = started_at.elapsed();
 
 		let rows = match query_result {
 			Ok(rows) => {
 				super::instrumentation::instrumentation()
-					.orm_query_end_with_params(&sql, &[], duration)
+					.orm_query_end_with_params(&sql, &param_samples, duration)
 					.await;
 				rows
 			}
@@ -6046,6 +6083,49 @@ where
 			.collect()
 	}
 
+	/// Execute the queryset with an explicit database connection and return rows
+	/// without deserializing them into the model.
+	///
+	/// This preserves selected and annotated expression values that are not model
+	/// fields while retaining the same backend validation, bound parameters, and
+	/// structural error context as [`Self::all_with_db`].
+	pub async fn rows_with_db<E>(
+		&self,
+		conn: &mut E,
+	) -> reinhardt_core::exception::Result<Vec<QueryRow>>
+	where
+		E: OrmExecutor,
+	{
+		let stmt = self.build_select_statement()?;
+		let context = super::execution::pgvector_context_for_select(&stmt);
+		let (sql, values) =
+			Self::build_select_for_backend(&stmt, conn.backend(), conn.is_cockroachdb())?;
+		let param_samples = values
+			.iter()
+			.map(|value| value.to_sql_literal())
+			.collect::<Vec<_>>();
+		let params = super::execution::convert_values(values);
+
+		let started_at = Instant::now();
+		let query_result = conn.fetch_all_with_context(&sql, params, context).await;
+		let duration = started_at.elapsed();
+
+		match query_result {
+			Ok(rows) => {
+				super::instrumentation::instrumentation()
+					.orm_query_end_with_params(&sql, &param_samples, duration)
+					.await;
+				Ok(rows.into_iter().map(QueryRow::from_backend_row).collect())
+			}
+			Err(error) => {
+				super::instrumentation::instrumentation()
+					.orm_query_error(&sql, &format!("{error:?}"))
+					.await;
+				Err(error)
+			}
+		}
+	}
+
 	/// Execute the queryset through an active transaction executor and return all records.
 	pub async fn all_with_executor(
 		&self,
@@ -6055,7 +6135,12 @@ where
 		T: serde::de::DeserializeOwned,
 	{
 		let stmt = self.build_select_statement().map_err(executor_error)?;
-		let (sql, values) = Self::build_select_for_backend(&stmt, Self::executor_backend(executor));
+		let context = super::execution::pgvector_context_for_select(&stmt);
+		let (sql, values) = Self::build_select_for_backend(
+			&stmt,
+			Self::executor_backend(executor),
+			executor.is_cockroachdb(),
+		)?;
 		let param_samples = values
 			.iter()
 			.map(|value| value.to_sql_literal())
@@ -6063,7 +6148,7 @@ where
 		let params = super::execution::convert_values(values);
 		let started = Instant::now();
 		let result = executor
-			.fetch_all(&sql, params)
+			.fetch_all_with_context(&sql, params, context)
 			.await
 			.map_err(executor_error);
 		let duration = started.elapsed();
@@ -6090,10 +6175,15 @@ where
 		executor: &mut dyn super::connection::TransactionExecutor,
 	) -> Result<usize, crate::backends::error::DatabaseError> {
 		let stmt = self.count_select_query().map_err(executor_error)?;
-		let (sql, values) = Self::build_select_for_backend(&stmt, Self::executor_backend(executor));
+		let context = super::execution::pgvector_context_for_select(&stmt);
+		let (sql, values) = Self::build_select_for_backend(
+			&stmt,
+			Self::executor_backend(executor),
+			executor.is_cockroachdb(),
+		)?;
 		let params = super::execution::convert_values(values);
 		let row = executor
-			.fetch_one(&sql, params)
+			.fetch_one_with_context(&sql, params, context)
 			.await
 			.map_err(executor_error)?;
 		let row = QueryRow::from_backend_row(row);
@@ -6276,14 +6366,16 @@ where
 		E: OrmExecutor,
 	{
 		let stmt = self.count_select_query()?;
-		let (sql, values) = Self::build_select_for_backend(&stmt, conn.backend());
+		let context = super::execution::pgvector_context_for_select(&stmt);
+		let (sql, values) =
+			Self::build_select_for_backend(&stmt, conn.backend(), conn.is_cockroachdb())?;
 		let param_samples = values
 			.iter()
 			.map(|value| value.to_sql_literal())
 			.collect::<Vec<_>>();
 		let params = super::execution::convert_values(values);
 		let started_at = Instant::now();
-		let query_result = conn.fetch_one(&sql, params).await;
+		let query_result = conn.fetch_one_with_context(&sql, params, context).await;
 		let duration = started_at.elapsed();
 		let row = match query_result {
 			Ok(row) => {
@@ -6579,10 +6671,15 @@ where
 		A: Into<FieldAssignment>,
 	{
 		let stmt = self.update_fields_query(values)?;
-		let (sql, values) = Self::build_update_for_backend(&stmt, conn.backend());
+		let context = super::execution::pgvector_context_for_update(&stmt);
+		let (sql, values) =
+			Self::build_update_for_backend(&stmt, conn.backend(), conn.is_cockroachdb())?;
 		let params = super::execution::convert_values(values);
 
-		Ok(conn.execute(&sql, params).await?.rows_affected)
+		Ok(conn
+			.execute_with_context(&sql, params, context)
+			.await?
+			.rows_affected)
 	}
 
 	fn collect_field_assignments<I, A>(values: I) -> Vec<FieldAssignment>
@@ -6669,23 +6766,51 @@ where
 	fn build_update_for_backend(
 		stmt: &UpdateStatement,
 		backend: super::connection::DatabaseBackend,
-	) -> (String, reinhardt_query::prelude::Values) {
-		match backend {
-			super::connection::DatabaseBackend::Postgres => PostgresQueryBuilder.build_update(stmt),
-			super::connection::DatabaseBackend::MySql => MySqlQueryBuilder.build_update(stmt),
-			super::connection::DatabaseBackend::Sqlite => SqliteQueryBuilder.build_update(stmt),
-		}
+		is_cockroachdb: bool,
+	) -> Result<(String, reinhardt_query::prelude::Values), reinhardt_core::exception::DatabaseError>
+	{
+		let result = if is_cockroachdb {
+			CockroachDBQueryBuilder::new().build_update_checked(stmt)
+		} else {
+			match backend {
+				super::connection::DatabaseBackend::Postgres => {
+					PostgresQueryBuilder.build_update_checked(stmt)
+				}
+				super::connection::DatabaseBackend::MySql => {
+					MySqlQueryBuilder.build_update_checked(stmt)
+				}
+				super::connection::DatabaseBackend::Sqlite => {
+					SqliteQueryBuilder.build_update_checked(stmt)
+				}
+			}
+		};
+		result
+			.map_err(|error| DatabaseError::new(DatabaseErrorKind::Unsupported, error.to_string()))
 	}
 
 	fn build_select_for_backend(
 		stmt: &SelectStatement,
 		backend: super::connection::DatabaseBackend,
-	) -> (String, reinhardt_query::prelude::Values) {
-		match backend {
-			super::connection::DatabaseBackend::Postgres => PostgresQueryBuilder.build_select(stmt),
-			super::connection::DatabaseBackend::MySql => MySqlQueryBuilder.build_select(stmt),
-			super::connection::DatabaseBackend::Sqlite => SqliteQueryBuilder.build_select(stmt),
-		}
+		is_cockroachdb: bool,
+	) -> Result<(String, reinhardt_query::prelude::Values), reinhardt_core::exception::DatabaseError>
+	{
+		let result = if is_cockroachdb {
+			CockroachDBQueryBuilder::new().build_select_checked(stmt)
+		} else {
+			match backend {
+				super::connection::DatabaseBackend::Postgres => {
+					PostgresQueryBuilder.build_select_checked(stmt)
+				}
+				super::connection::DatabaseBackend::MySql => {
+					MySqlQueryBuilder.build_select_checked(stmt)
+				}
+				super::connection::DatabaseBackend::Sqlite => {
+					SqliteQueryBuilder.build_select_checked(stmt)
+				}
+			}
+		};
+		result
+			.map_err(|error| DatabaseError::new(DatabaseErrorKind::Unsupported, error.to_string()))
 	}
 
 	fn update_value_to_query_expr(value: &UpdateValue) -> reinhardt_core::exception::Result<Expr> {
@@ -6790,6 +6915,12 @@ where
 			Value::Bytes(Some(b)) => String::from_utf8_lossy(b).to_string(),
 			Value::ChronoDateTimeUtc(Some(dt)) => dt.to_rfc3339(),
 			Value::Uuid(Some(uuid)) => uuid.to_string(),
+			#[cfg(feature = "pgvector")]
+			Value::Vector(Some(values)) => {
+				Self::database_value_to_string(&DatabaseValue::Vector(values.as_ref().clone()))
+			}
+			#[cfg(feature = "pgvector")]
+			Value::Vector(None) => String::new(),
 			_ => String::new(),
 		}
 	}
@@ -7010,7 +7141,9 @@ where
 			}
 		}
 
-		let (sql, values) = Self::build_select_for_backend(&query, conn.backend());
+		let context = super::execution::pgvector_context_for_select(&query);
+		let (sql, values) =
+			Self::build_select_for_backend(&query, conn.backend(), conn.is_cockroachdb())?;
 		let param_samples = values
 			.iter()
 			.map(|value| value.to_sql_literal())
@@ -7018,7 +7151,7 @@ where
 		let params = super::execution::convert_values(values);
 
 		let started_at = Instant::now();
-		let query_result = conn.fetch_all(&sql, params).await;
+		let query_result = conn.fetch_all_with_context(&sql, params, context).await;
 		let duration = started_at.elapsed();
 		let rows = match query_result {
 			Ok(rows) => {
@@ -7107,6 +7240,16 @@ where
 	/// ```
 	pub fn annotate(mut self, annotation: super::annotation::Annotation) -> Self {
 		self.annotations.push(annotation);
+		self
+	}
+
+	/// Add a model-rooted expression to the selected columns under an alias.
+	pub fn annotate_expr<R>(
+		mut self,
+		alias: impl Into<String>,
+		expression: TypedExpression<T, R>,
+	) -> Self {
+		self.typed_annotations.push((alias.into(), expression.expr));
 		self
 	}
 
@@ -7318,6 +7461,7 @@ where
 			} else {
 				self.add_default_select_columns(&mut stmt);
 			}
+			self.apply_typed_select_expressions(&mut stmt);
 
 			self.apply_relation_joins(&mut stmt);
 
@@ -7414,22 +7558,7 @@ where
 				}
 			}
 
-			// Apply ORDER BY
-			for order_field in &self.order_by_fields {
-				let (field, is_desc) = if let Some(stripped) = order_field.strip_prefix('-') {
-					(stripped, true)
-				} else {
-					(order_field.as_str(), false)
-				};
-
-				let col_ref = self.root_column_reference(field);
-				let expr = Expr::col(col_ref);
-				if is_desc {
-					stmt.order_by_expr(expr, Order::Desc);
-				} else {
-					stmt.order_by_expr(expr, Order::Asc);
-				}
-			}
+			self.apply_ordering(&mut stmt);
 
 			// Apply LIMIT/OFFSET
 			if let Some(limit) = self.limit {
@@ -7556,6 +7685,17 @@ where
 		self
 	}
 
+	/// Select a model-rooted expression under an identifier-safe alias.
+	pub fn select_expr<R>(
+		mut self,
+		alias: impl Into<String>,
+		expression: TypedExpression<T, R>,
+	) -> Self {
+		self.selected_expressions
+			.push((alias.into(), expression.expr));
+		self
+	}
+
 	/// Select specific values as a list
 	///
 	/// Alias for `values()` - returns tuple-like results with specified fields.
@@ -7630,8 +7770,11 @@ where
 	/// User::objects().order_by(&["department", "-salary"]);
 	/// # }
 	/// ```
-	pub fn order_by(mut self, fields: &[&str]) -> Self {
-		self.order_by_fields = fields.iter().map(|s| s.to_string()).collect();
+	pub fn order_by<I>(mut self, ordering: I) -> Self
+	where
+		I: IntoOrderBy<T>,
+	{
+		ordering.apply(&mut self);
 		self
 	}
 
@@ -8254,6 +8397,7 @@ fn filter_lhs_expr(filter: &Filter) -> Expr {
 		FilterField::Column => Expr::col(parse_column_reference(&filter.field)),
 		FilterField::Expression(sql) if filter.field == *sql => Expr::cust(sql.clone()),
 		FilterField::Expression(_) => Expr::col(parse_column_reference(&filter.field)),
+		FilterField::TypedPredicate(_) => Expr::cust("TRUE"),
 	}
 }
 
@@ -8266,6 +8410,7 @@ fn filter_lhs_sql(filter: &Filter) -> String {
 		FilterField::Column => quote_identifier(&filter.field),
 		FilterField::Expression(sql) if filter.field == *sql => sql.clone(),
 		FilterField::Expression(_) => quote_identifier(&filter.field),
+		FilterField::TypedPredicate(_) => "TRUE".to_owned(),
 	}
 }
 
@@ -8349,23 +8494,14 @@ fn escape_like_pattern(value: &str) -> String {
 	escaped
 }
 
-fn render_select_statement(
-	statement: &SelectStatement,
-	backend: super::connection::DatabaseBackend,
-) -> String {
-	match backend {
-		super::connection::DatabaseBackend::Postgres => statement.to_string(PostgresQueryBuilder),
-		super::connection::DatabaseBackend::MySql => statement.to_string(MySqlQueryBuilder),
-		super::connection::DatabaseBackend::Sqlite => statement.to_string(SqliteQueryBuilder),
-	}
-}
-
 #[cfg(test)]
 mod tests {
 	use super::{
 		AggregateFunc, AggregateValue, ComparisonOp, FilterCondition, HavingCondition,
-		MAX_FILTER_CONDITION_DEPTH, QueryFilterInput, render_select_statement,
+		MAX_FILTER_CONDITION_DEPTH, QueryFilterInput,
 	};
+	#[cfg(feature = "pgvector")]
+	use crate::orm::Field;
 	use crate::orm::connection::DatabaseBackend;
 	use crate::orm::query::{FieldAssignment, UpdateValue};
 	use crate::orm::{
@@ -8378,10 +8514,916 @@ mod tests {
 	};
 	use rstest::rstest;
 	use serde::{Deserialize, Serialize};
+	#[cfg(feature = "pgvector")]
+	use std::borrow::Cow;
 	use std::collections::HashMap;
+	#[cfg(feature = "pgvector")]
+	use std::fmt;
+
+	#[cfg(feature = "pgvector")]
+	struct RecordingExecutor {
+		backend: DatabaseBackend,
+		calls: Vec<(String, Vec<crate::orm::QueryValue>)>,
+		contexts: Vec<Option<crate::backends::error::PgvectorOperationKind>>,
+		rows: Vec<crate::orm::Row>,
+	}
+
+	#[cfg(feature = "pgvector")]
+	impl RecordingExecutor {
+		fn for_backend(backend: DatabaseBackend) -> Self {
+			Self {
+				backend,
+				calls: Vec::new(),
+				contexts: Vec::new(),
+				rows: Vec::new(),
+			}
+		}
+	}
+
+	#[cfg(feature = "pgvector")]
+	impl Default for RecordingExecutor {
+		fn default() -> Self {
+			Self::for_backend(DatabaseBackend::Postgres)
+		}
+	}
+
+	#[cfg(feature = "pgvector")]
+	#[derive(Debug)]
+	struct MissingVectorOperatorError;
+
+	#[cfg(feature = "pgvector")]
+	impl fmt::Display for MissingVectorOperatorError {
+		fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+			formatter.write_str("operator does not exist: vector <=> vector")
+		}
+	}
+
+	#[cfg(feature = "pgvector")]
+	impl std::error::Error for MissingVectorOperatorError {}
+
+	#[cfg(feature = "pgvector")]
+	impl sqlx::error::DatabaseError for MissingVectorOperatorError {
+		fn message(&self) -> &str {
+			"operator does not exist: vector <=> vector"
+		}
+
+		fn code(&self) -> Option<Cow<'_, str>> {
+			Some(Cow::Borrowed("42883"))
+		}
+
+		fn as_error(&self) -> &(dyn std::error::Error + Send + Sync + 'static) {
+			self
+		}
+
+		fn as_error_mut(&mut self) -> &mut (dyn std::error::Error + Send + Sync + 'static) {
+			self
+		}
+
+		fn into_error(self: Box<Self>) -> Box<dyn std::error::Error + Send + Sync + 'static> {
+			self
+		}
+
+		fn kind(&self) -> sqlx::error::ErrorKind {
+			sqlx::error::ErrorKind::Other
+		}
+	}
+
+	#[cfg(feature = "pgvector")]
+	struct SourcedErrorTransactionExecutor;
+
+	#[cfg(feature = "pgvector")]
+	struct PgvectorUpdateErrorExecutor {
+		code: &'static str,
+		message: &'static str,
+	}
+
+	#[cfg(feature = "pgvector")]
+	#[async_trait::async_trait]
+	impl crate::orm::OrmExecutor for PgvectorUpdateErrorExecutor {
+		fn backend(&self) -> DatabaseBackend {
+			DatabaseBackend::Postgres
+		}
+
+		fn supports_pgvector_error_hints(&self) -> bool {
+			true
+		}
+
+		async fn execute(
+			&mut self,
+			_sql: &str,
+			_params: Vec<crate::orm::QueryValue>,
+		) -> reinhardt_core::exception::Result<crate::orm::QueryResult> {
+			Err(reinhardt_core::exception::DatabaseError::new(
+				reinhardt_core::exception::DatabaseErrorKind::Query,
+				self.message,
+			)
+			.with_code(self.code)
+			.into())
+		}
+
+		async fn fetch_one(
+			&mut self,
+			_sql: &str,
+			_params: Vec<crate::orm::QueryValue>,
+		) -> reinhardt_core::exception::Result<crate::orm::Row> {
+			panic!("pgvector update error executor does not fetch rows")
+		}
+
+		async fn fetch_all(
+			&mut self,
+			_sql: &str,
+			_params: Vec<crate::orm::QueryValue>,
+		) -> reinhardt_core::exception::Result<Vec<crate::orm::Row>> {
+			panic!("pgvector update error executor does not fetch rows")
+		}
+
+		async fn fetch_optional(
+			&mut self,
+			_sql: &str,
+			_params: Vec<crate::orm::QueryValue>,
+		) -> reinhardt_core::exception::Result<Option<crate::orm::Row>> {
+			panic!("pgvector update error executor does not fetch rows")
+		}
+	}
+
+	#[cfg(feature = "pgvector")]
+	#[async_trait::async_trait]
+	impl crate::orm::connection::TransactionExecutor for SourcedErrorTransactionExecutor {
+		fn supports_pgvector_error_hints(&self) -> bool {
+			true
+		}
+
+		async fn execute(
+			&mut self,
+			_sql: &str,
+			_params: Vec<crate::orm::QueryValue>,
+		) -> crate::backends::error::Result<crate::orm::QueryResult> {
+			panic!("SELECT test transaction does not execute mutations")
+		}
+
+		async fn fetch_one(
+			&mut self,
+			_sql: &str,
+			_params: Vec<crate::orm::QueryValue>,
+		) -> crate::backends::error::Result<crate::orm::Row> {
+			panic!("all_with_executor test transaction does not fetch one row")
+		}
+
+		async fn fetch_all(
+			&mut self,
+			_sql: &str,
+			_params: Vec<crate::orm::QueryValue>,
+		) -> crate::backends::error::Result<Vec<crate::orm::Row>> {
+			Err(reinhardt_core::exception::Error::DatabaseWithSource {
+				database_error: reinhardt_core::exception::DatabaseError::new(
+					reinhardt_core::exception::DatabaseErrorKind::Query,
+					"operator does not exist: vector <=> vector",
+				)
+				.with_code("42883"),
+				source: Box::new(sqlx::Error::Database(Box::new(MissingVectorOperatorError))),
+			})
+		}
+
+		async fn fetch_optional(
+			&mut self,
+			_sql: &str,
+			_params: Vec<crate::orm::QueryValue>,
+		) -> crate::backends::error::Result<Option<crate::orm::Row>> {
+			panic!("all_with_executor test transaction does not fetch an optional row")
+		}
+
+		async fn commit(self: Box<Self>) -> crate::backends::error::Result<()> {
+			Ok(())
+		}
+
+		async fn rollback(self: Box<Self>) -> crate::backends::error::Result<()> {
+			Ok(())
+		}
+	}
+
+	#[cfg(feature = "pgvector")]
+	#[async_trait::async_trait]
+	impl crate::orm::OrmExecutor for RecordingExecutor {
+		fn backend(&self) -> DatabaseBackend {
+			self.backend
+		}
+
+		async fn execute(
+			&mut self,
+			sql: &str,
+			params: Vec<crate::orm::QueryValue>,
+		) -> reinhardt_core::exception::Result<crate::orm::QueryResult> {
+			self.calls.push((sql.to_owned(), params));
+			Ok(crate::orm::QueryResult {
+				rows_affected: 0,
+				last_insert_id: None,
+			})
+		}
+
+		async fn execute_with_context(
+			&mut self,
+			sql: &str,
+			params: Vec<crate::orm::QueryValue>,
+			context: Option<crate::backends::error::PgvectorOperationKind>,
+		) -> reinhardt_core::exception::Result<crate::orm::QueryResult> {
+			self.contexts.push(context);
+			self.execute(sql, params).await
+		}
+
+		async fn fetch_one(
+			&mut self,
+			sql: &str,
+			params: Vec<crate::orm::QueryValue>,
+		) -> reinhardt_core::exception::Result<crate::orm::Row> {
+			self.calls.push((sql.to_owned(), params));
+			Ok(crate::orm::Row {
+				data: HashMap::from([("count".to_owned(), crate::orm::QueryValue::Int(0))]),
+			})
+		}
+
+		async fn fetch_one_with_context(
+			&mut self,
+			sql: &str,
+			params: Vec<crate::orm::QueryValue>,
+			context: Option<crate::backends::error::PgvectorOperationKind>,
+		) -> reinhardt_core::exception::Result<crate::orm::Row> {
+			self.contexts.push(context);
+			self.fetch_one(sql, params).await
+		}
+
+		async fn fetch_all(
+			&mut self,
+			sql: &str,
+			params: Vec<crate::orm::QueryValue>,
+		) -> reinhardt_core::exception::Result<Vec<crate::orm::Row>> {
+			self.calls.push((sql.to_owned(), params));
+			Ok(std::mem::take(&mut self.rows))
+		}
+
+		async fn fetch_all_with_context(
+			&mut self,
+			sql: &str,
+			params: Vec<crate::orm::QueryValue>,
+			context: Option<crate::backends::error::PgvectorOperationKind>,
+		) -> reinhardt_core::exception::Result<Vec<crate::orm::Row>> {
+			self.contexts.push(context);
+			self.fetch_all(sql, params).await
+		}
+
+		async fn fetch_optional(
+			&mut self,
+			sql: &str,
+			params: Vec<crate::orm::QueryValue>,
+		) -> reinhardt_core::exception::Result<Option<crate::orm::Row>> {
+			self.calls.push((sql.to_owned(), params));
+			Ok(None)
+		}
+
+		async fn fetch_optional_with_context(
+			&mut self,
+			sql: &str,
+			params: Vec<crate::orm::QueryValue>,
+			context: Option<crate::backends::error::PgvectorOperationKind>,
+		) -> reinhardt_core::exception::Result<Option<crate::orm::Row>> {
+			self.contexts.push(context);
+			self.fetch_optional(sql, params).await
+		}
+	}
+
+	#[cfg(feature = "pgvector")]
+	#[async_trait::async_trait]
+	impl crate::orm::connection::TransactionExecutor for RecordingExecutor {
+		fn backend(&self) -> crate::backends::types::DatabaseType {
+			match self.backend {
+				DatabaseBackend::Postgres => crate::backends::types::DatabaseType::Postgres,
+				DatabaseBackend::MySql => crate::backends::types::DatabaseType::Mysql,
+				DatabaseBackend::Sqlite => crate::backends::types::DatabaseType::Sqlite,
+			}
+		}
+
+		async fn execute(
+			&mut self,
+			sql: &str,
+			params: Vec<crate::orm::QueryValue>,
+		) -> crate::backends::error::Result<crate::orm::QueryResult> {
+			self.calls.push((sql.to_owned(), params));
+			Ok(crate::orm::QueryResult {
+				rows_affected: 0,
+				last_insert_id: None,
+			})
+		}
+
+		async fn fetch_one(
+			&mut self,
+			sql: &str,
+			params: Vec<crate::orm::QueryValue>,
+		) -> crate::backends::error::Result<crate::orm::Row> {
+			self.calls.push((sql.to_owned(), params));
+			Ok(crate::orm::Row {
+				data: HashMap::from([("count".to_owned(), crate::orm::QueryValue::Int(0))]),
+			})
+		}
+
+		async fn fetch_one_with_context(
+			&mut self,
+			sql: &str,
+			params: Vec<crate::orm::QueryValue>,
+			context: Option<crate::backends::error::PgvectorOperationKind>,
+		) -> crate::backends::error::Result<crate::orm::Row> {
+			self.contexts.push(context);
+			<Self as crate::orm::connection::TransactionExecutor>::fetch_one(self, sql, params)
+				.await
+		}
+
+		async fn fetch_all(
+			&mut self,
+			sql: &str,
+			params: Vec<crate::orm::QueryValue>,
+		) -> crate::backends::error::Result<Vec<crate::orm::Row>> {
+			self.calls.push((sql.to_owned(), params));
+			Ok(Vec::new())
+		}
+
+		async fn fetch_optional(
+			&mut self,
+			_sql: &str,
+			_params: Vec<crate::orm::QueryValue>,
+		) -> crate::backends::error::Result<Option<crate::orm::Row>> {
+			Ok(None)
+		}
+
+		async fn commit(self: Box<Self>) -> crate::backends::error::Result<()> {
+			Ok(())
+		}
+
+		async fn rollback(self: Box<Self>) -> crate::backends::error::Result<()> {
+			Ok(())
+		}
+	}
+
+	#[cfg(feature = "pgvector")]
+	fn typed_vector_target(values: &[f32]) -> crate::orm::Vector<3> {
+		crate::orm::Vector::try_from_slice(values).unwrap()
+	}
+
+	#[cfg(feature = "pgvector")]
+	fn distance_and_vector_context() -> crate::backends::error::PgvectorOperationKind {
+		crate::backends::error::PgvectorOperationKind::DistanceOperator
+			.union(crate::backends::error::PgvectorOperationKind::VectorValue)
+	}
+
+	#[cfg(feature = "pgvector")]
+	fn typed_vector_sql_and_params(
+		queryset: &QuerySet<TestUser>,
+	) -> (String, Vec<crate::orm::QueryValue>) {
+		let statement = queryset
+			.build_select_statement()
+			.expect("typed vector query should build");
+		let (sql, values) = PostgresQueryBuilder.build_select(&statement);
+		(sql, crate::orm::execution::convert_values(values))
+	}
+
+	#[cfg(feature = "pgvector")]
+	#[test]
+	fn typed_vector_l2_distance_uses_postgres_operator_and_bound_value() {
+		let field = Field::<TestUser, crate::orm::Vector<3>>::new(vec!["embedding"]);
+		let queryset = QuerySet::<TestUser>::new().values(&["id"]).select_expr(
+			"distance",
+			field.l2_distance(typed_vector_target(&[1.0, 2.0, 3.0])),
+		);
+
+		let (sql, params) = typed_vector_sql_and_params(&queryset);
+
+		assert_eq!(
+			sql,
+			r#"SELECT "id", "test_users"."embedding" <-> $1 AS "distance" FROM "test_users""#
+		);
+		assert_eq!(
+			params,
+			vec![crate::orm::QueryValue::Vector(Some(vec![1.0, 2.0, 3.0]))]
+		);
+	}
+
+	#[cfg(feature = "pgvector")]
+	#[test]
+	fn typed_vector_negative_inner_product_uses_postgres_operator_and_bound_value() {
+		let field = Field::<TestUser, crate::orm::Vector<3>>::new(vec!["embedding"]);
+		let queryset = QuerySet::<TestUser>::new().values(&["id"]).select_expr(
+			"distance",
+			field.negative_inner_product(typed_vector_target(&[3.0, 2.0, 1.0])),
+		);
+
+		let (sql, params) = typed_vector_sql_and_params(&queryset);
+
+		assert_eq!(
+			sql,
+			r#"SELECT "id", "test_users"."embedding" <#> $1 AS "distance" FROM "test_users""#
+		);
+		assert_eq!(
+			params,
+			vec![crate::orm::QueryValue::Vector(Some(vec![3.0, 2.0, 1.0]))]
+		);
+	}
+
+	#[cfg(feature = "pgvector")]
+	#[test]
+	fn typed_vector_cosine_distance_uses_postgres_operator_and_bound_value() {
+		let field = Field::<TestUser, crate::orm::Vector<3>>::new(vec!["embedding"]);
+		let queryset = QuerySet::<TestUser>::new().values(&["id"]).select_expr(
+			"distance",
+			field.cosine_distance(typed_vector_target(&[0.5, 1.5, 2.5])),
+		);
+
+		let (sql, params) = typed_vector_sql_and_params(&queryset);
+
+		assert_eq!(
+			sql,
+			r#"SELECT "id", "test_users"."embedding" <=> $1 AS "distance" FROM "test_users""#
+		);
+		assert_eq!(
+			params,
+			vec![crate::orm::QueryValue::Vector(Some(vec![0.5, 1.5, 2.5]))]
+		);
+	}
+
+	#[cfg(feature = "pgvector")]
+	#[tokio::test]
+	async fn typed_vector_public_executor_error_preserves_sqlx_database_source() {
+		use std::error::Error as _;
+
+		let field = Field::<TestUser, crate::orm::Vector<3>>::new(vec!["embedding"]);
+		let queryset = QuerySet::<TestUser>::new().select_expr(
+			"distance",
+			field.cosine_distance(typed_vector_target(&[0.5, 1.5, 2.5])),
+		);
+		let mut executor = SourcedErrorTransactionExecutor;
+
+		let error = queryset.all_with_executor(&mut executor).await.unwrap_err();
+
+		assert_eq!(
+			error.kind(),
+			reinhardt_core::exception::DatabaseErrorKind::Query
+		);
+		assert_eq!(error.code(), Some("42883"));
+		assert!(
+			error
+				.to_string()
+				.contains("CreateExtension::new(\"vector\")")
+		);
+		let sqlx_error = error
+			.source()
+			.and_then(|source| source.downcast_ref::<sqlx::Error>())
+			.expect("public QuerySet error should retain the original SQLx error");
+		assert!(
+			sqlx_error
+				.as_database_error()
+				.and_then(|source| source
+					.as_error()
+					.downcast_ref::<MissingVectorOperatorError>())
+				.is_some()
+		);
+	}
+
+	#[cfg(feature = "pgvector")]
+	#[test]
+	fn typed_vector_predicate_and_ordering_keep_separate_monotonic_bindings() {
+		let field = Field::<TestUser, crate::orm::Vector<3>>::new(vec!["embedding"]);
+		let queryset = QuerySet::<TestUser>::new()
+			.values(&["id"])
+			.filter(
+				field
+					.clone()
+					.cosine_distance(typed_vector_target(&[1.0, 2.0, 3.0]))
+					.lt(0.25),
+			)
+			.order_by(
+				field
+					.l2_distance(typed_vector_target(&[4.0, 5.0, 6.0]))
+					.asc(),
+			);
+
+		let (sql, params) = typed_vector_sql_and_params(&queryset);
+
+		assert_eq!(
+			sql,
+			r#"SELECT "id" FROM "test_users" WHERE "test_users"."embedding" <=> $1 < $2 ORDER BY "test_users"."embedding" <-> $3 ASC"#
+		);
+		assert_eq!(
+			params,
+			vec![
+				crate::orm::QueryValue::Vector(Some(vec![1.0, 2.0, 3.0])),
+				crate::orm::QueryValue::Float(0.25),
+				crate::orm::QueryValue::Vector(Some(vec![4.0, 5.0, 6.0])),
+			]
+		);
+	}
+
+	#[cfg(feature = "pgvector")]
+	#[test]
+	fn typed_vector_join_qualifies_only_model_root_expressions_with_current_alias() {
+		let root_field = Field::<TestUser, crate::orm::Vector<3>>::new(vec!["embedding"]);
+		let peer_field = Field::<TestUser, crate::orm::Vector<3>>::new(vec!["embedding"])
+			.with_alias("test_vector_peers");
+		let queryset = QuerySet::<TestUser>::new()
+			.from_as("root_users")
+			.inner_join_on::<TestVectorPeer>("root_users.id = test_vector_peers.user_id")
+			.select_expr(
+				"selected_distance",
+				root_field
+					.clone()
+					.l2_distance(typed_vector_target(&[1.0, 2.0, 3.0])),
+			)
+			.select_expr(
+				"peer_distance",
+				peer_field.cosine_distance(typed_vector_target(&[3.0, 2.0, 1.0])),
+			)
+			.annotate_expr(
+				"annotated_distance",
+				root_field
+					.clone()
+					.negative_inner_product(typed_vector_target(&[4.0, 5.0, 6.0])),
+			)
+			.filter(
+				root_field
+					.clone()
+					.cosine_distance(typed_vector_target(&[7.0, 8.0, 9.0]))
+					.lt(0.25),
+			)
+			.order_by(
+				root_field
+					.l2_distance(typed_vector_target(&[9.0, 8.0, 7.0]))
+					.asc(),
+			);
+
+		let (sql, params) = typed_vector_sql_and_params(&queryset);
+
+		assert_eq!(
+			sql,
+			r#"SELECT *, "root_users"."embedding" <-> $1 AS "selected_distance", "test_vector_peers"."embedding" <=> $2 AS "peer_distance", "root_users"."embedding" <#> $3 AS "annotated_distance" FROM "test_users" AS "root_users" INNER JOIN "test_vector_peers" ON root_users.id = test_vector_peers.user_id WHERE "root_users"."embedding" <=> $4 < $5 ORDER BY "root_users"."embedding" <-> $6 ASC"#
+		);
+		assert_eq!(
+			params,
+			vec![
+				crate::orm::QueryValue::Vector(Some(vec![1.0, 2.0, 3.0])),
+				crate::orm::QueryValue::Vector(Some(vec![3.0, 2.0, 1.0])),
+				crate::orm::QueryValue::Vector(Some(vec![4.0, 5.0, 6.0])),
+				crate::orm::QueryValue::Vector(Some(vec![7.0, 8.0, 9.0])),
+				crate::orm::QueryValue::Float(0.25),
+				crate::orm::QueryValue::Vector(Some(vec![9.0, 8.0, 7.0])),
+			]
+		);
+	}
+
+	#[cfg(feature = "pgvector")]
+	#[test]
+	fn typed_vector_query_rejects_sqlite_before_execution() {
+		let field = Field::<TestUser, crate::orm::Vector<3>>::new(vec!["embedding"]);
+		let queryset = QuerySet::<TestUser>::new().filter(
+			field
+				.cosine_distance(typed_vector_target(&[1.0, 2.0, 3.0]))
+				.lt(0.25),
+		);
+		let statement = queryset
+			.build_select_statement()
+			.expect("typed vector statement should build");
+
+		let error = QuerySet::<TestUser>::build_select_for_backend(
+			&statement,
+			DatabaseBackend::Sqlite,
+			false,
+		)
+		.expect_err("SQLite must reject PostgreSQL vector distance operators");
+
+		assert_eq!(
+			error.kind(),
+			reinhardt_core::exception::DatabaseErrorKind::Unsupported
+		);
+		assert_eq!(
+			error.to_string(),
+			"pgvector distance operators is not supported by the SQLite backend"
+		);
+	}
+
+	#[cfg(feature = "pgvector")]
+	#[tokio::test]
+	async fn typed_vector_all_with_db_passes_every_bound_value_to_executor() {
+		let field = Field::<TestUser, crate::orm::Vector<3>>::new(vec!["embedding"]);
+		let queryset = QuerySet::<TestUser>::new()
+			.filter(
+				field
+					.clone()
+					.cosine_distance(typed_vector_target(&[1.0, 2.0, 3.0]))
+					.lt(0.25),
+			)
+			.order_by(
+				field
+					.l2_distance(typed_vector_target(&[4.0, 5.0, 6.0]))
+					.asc(),
+			);
+		let mut executor = RecordingExecutor::default();
+
+		let rows = queryset.all_with_db(&mut executor).await.unwrap();
+
+		assert_eq!(rows, Vec::<TestUser>::new());
+		assert_eq!(executor.calls.len(), 1);
+		assert_eq!(
+			executor.calls[0].1,
+			vec![
+				crate::orm::QueryValue::Vector(Some(vec![1.0, 2.0, 3.0])),
+				crate::orm::QueryValue::Float(0.25),
+				crate::orm::QueryValue::Vector(Some(vec![4.0, 5.0, 6.0])),
+			]
+		);
+		assert_eq!(executor.contexts, vec![Some(distance_and_vector_context())]);
+	}
+
+	#[cfg(feature = "pgvector")]
+	#[tokio::test]
+	async fn typed_vector_rows_with_db_preserves_projected_values_and_bound_context() {
+		let field = Field::<TestUser, crate::orm::Vector<3>>::new(vec!["embedding"]);
+		let queryset = QuerySet::<TestUser>::new().values(&["id"]).select_expr(
+			"distance",
+			field.cosine_distance(typed_vector_target(&[1.0, 2.0, 3.0])),
+		);
+		let mut executor = RecordingExecutor::default();
+		executor.rows.push(crate::orm::Row {
+			data: HashMap::from([
+				("id".to_owned(), crate::orm::QueryValue::Int(7)),
+				("distance".to_owned(), crate::orm::QueryValue::Float(0.25)),
+			]),
+		});
+
+		let rows = queryset.rows_with_db(&mut executor).await.unwrap();
+
+		assert_eq!(rows.len(), 1);
+		assert_eq!(rows[0].get::<i64>("id"), Some(7));
+		assert_eq!(rows[0].get::<f64>("distance"), Some(0.25));
+		assert_eq!(
+			executor.calls[0].1,
+			vec![crate::orm::QueryValue::Vector(Some(vec![1.0, 2.0, 3.0]))]
+		);
+		assert_eq!(executor.contexts, vec![Some(distance_and_vector_context())]);
+	}
+
+	#[cfg(feature = "pgvector")]
+	fn typed_vector_filtered_queryset() -> QuerySet<TestUser> {
+		let field = Field::<TestUser, crate::orm::Vector<3>>::new(vec!["embedding"]);
+		QuerySet::<TestUser>::new().filter(
+			field
+				.cosine_distance(typed_vector_target(&[1.0, 2.0, 3.0]))
+				.lt(0.25),
+		)
+	}
+
+	#[cfg(feature = "pgvector")]
+	#[tokio::test]
+	async fn typed_vector_count_with_db_uses_contextual_fetch_one() {
+		let queryset = typed_vector_filtered_queryset();
+		let mut executor = RecordingExecutor::default();
+
+		let count = queryset
+			.count_with_db(&mut executor)
+			.await
+			.expect("recording count should decode");
+
+		assert_eq!(count, 0);
+		assert_eq!(executor.contexts, vec![Some(distance_and_vector_context())]);
+	}
+
+	#[cfg(feature = "pgvector")]
+	#[tokio::test]
+	async fn typed_vector_exists_with_db_uses_contextual_fetch_one() {
+		let queryset = typed_vector_filtered_queryset();
+		let mut executor = RecordingExecutor::default();
+
+		let exists = queryset
+			.exists_with_db(&mut executor)
+			.await
+			.expect("recording exists should decode");
+
+		assert!(!exists);
+		assert_eq!(executor.contexts, vec![Some(distance_and_vector_context())]);
+	}
+
+	#[cfg(feature = "pgvector")]
+	#[tokio::test]
+	async fn typed_vector_count_with_executor_uses_contextual_fetch_one() {
+		let queryset = typed_vector_filtered_queryset();
+		let mut executor = RecordingExecutor::default();
+
+		let count = queryset
+			.count_with_executor(&mut executor)
+			.await
+			.expect("recording transaction count should decode");
+
+		assert_eq!(count, 0);
+		assert_eq!(executor.contexts, vec![Some(distance_and_vector_context())]);
+	}
+
+	#[cfg(feature = "pgvector")]
+	#[rstest]
+	#[case(
+		DatabaseBackend::MySql,
+		"pgvector distance operators is not supported by the MySQL backend"
+	)]
+	#[case(
+		DatabaseBackend::Sqlite,
+		"pgvector distance operators is not supported by the SQLite backend"
+	)]
+	#[tokio::test]
+	async fn typed_vector_update_rejects_non_postgres_before_executor_call(
+		#[case] backend: DatabaseBackend,
+		#[case] expected_message: &str,
+	) {
+		let field = Field::<TestUser, crate::orm::Vector<3>>::new(vec!["embedding"]);
+		let queryset = QuerySet::<TestUser>::new().filter(
+			field
+				.cosine_distance(typed_vector_target(&[1.0, 2.0, 3.0]))
+				.lt(0.25),
+		);
+		let mut executor = RecordingExecutor::for_backend(backend);
+
+		let error = queryset
+			.update_fields_with_conn(&mut executor, [("username", "alice")])
+			.await
+			.expect_err("non-PostgreSQL updates must reject pgvector predicates");
+
+		assert!(matches!(
+			error,
+			reinhardt_core::exception::Error::Database(ref database_error)
+				if database_error.kind()
+					== reinhardt_core::exception::DatabaseErrorKind::Unsupported
+					&& database_error.message() == expected_message
+		));
+		assert!(executor.calls.is_empty());
+		assert!(executor.contexts.is_empty());
+	}
+
+	#[cfg(feature = "pgvector")]
+	#[tokio::test]
+	async fn typed_vector_update_preserves_postgres_sql_and_bound_values() {
+		let field = Field::<TestUser, crate::orm::Vector<3>>::new(vec!["embedding"]);
+		let queryset = QuerySet::<TestUser>::new().filter(
+			field
+				.cosine_distance(typed_vector_target(&[1.0, 2.0, 3.0]))
+				.lt(0.25),
+		);
+		let mut executor = RecordingExecutor::default();
+
+		let rows_affected = queryset
+			.update_fields_with_conn(&mut executor, [("username", "alice")])
+			.await
+			.expect("PostgreSQL vector update should build");
+
+		assert_eq!(rows_affected, 0);
+		assert_eq!(
+			executor.calls,
+			vec![(
+				r#"UPDATE "test_users" SET "username" = $1 WHERE "test_users"."embedding" <=> $2 < $3"#
+					.to_owned(),
+				vec![
+					crate::orm::QueryValue::String("alice".to_owned()),
+					crate::orm::QueryValue::Vector(Some(vec![1.0, 2.0, 3.0])),
+					crate::orm::QueryValue::Float(0.25),
+				],
+			)]
+		);
+		assert_eq!(executor.contexts, vec![Some(distance_and_vector_context())]);
+	}
+
+	#[cfg(feature = "pgvector")]
+	#[rstest]
+	#[case("42883", "operator does not exist: vector <=> vector")]
+	#[case("42704", "type \"vector\" does not exist")]
+	#[tokio::test]
+	async fn typed_vector_update_aggregates_assignment_and_distance_context(
+		#[case] code: &'static str,
+		#[case] message: &'static str,
+	) {
+		let field = Field::<TestUser, crate::orm::Vector<3>>::new(vec!["embedding"]);
+		let queryset = QuerySet::<TestUser>::new().filter(
+			field
+				.cosine_distance(typed_vector_target(&[1.0, 2.0, 3.0]))
+				.lt(0.25),
+		);
+		let assignment_field =
+			crate::orm::expressions::FieldRef::<TestUser, crate::orm::Vector<3>>::new("embedding");
+		let mut executor = PgvectorUpdateErrorExecutor { code, message };
+
+		let error = queryset
+			.update_fields_with_conn(
+				&mut executor,
+				[(assignment_field, typed_vector_target(&[4.0, 5.0, 6.0]))],
+			)
+			.await
+			.unwrap_err();
+
+		assert_eq!(
+			error.database_error().and_then(|error| error.code()),
+			Some(code)
+		);
+		assert!(
+			error
+				.to_string()
+				.contains("CreateExtension::new(\"vector\")")
+		);
+	}
+
+	#[cfg(feature = "pgvector")]
+	#[test]
+	fn typed_vector_update_fields_sql_reports_assignment_and_predicate_params() {
+		let field = Field::<TestUser, crate::orm::Vector<3>>::new(vec!["embedding"]);
+		let queryset = QuerySet::<TestUser>::new().filter(
+			field
+				.cosine_distance(typed_vector_target(&[1.0, 2.0, 3.0]))
+				.lt(0.25),
+		);
+		let assignment_field =
+			crate::orm::expressions::FieldRef::<TestUser, crate::orm::Vector<3>>::new("embedding");
+
+		let (sql, params) = queryset
+			.update_fields_sql([(assignment_field, typed_vector_target(&[4.0, 5.0, 6.0]))])
+			.expect("typed vector update fields SQL should build");
+
+		assert_eq!(
+			sql,
+			r#"UPDATE "test_users" SET "embedding" = $1 WHERE "test_users"."embedding" <=> $2 < $3"#
+		);
+		assert_eq!(params, vec!["[4.0,5.0,6.0]", "[1.0,2.0,3.0]", "0.25"]);
+	}
+
+	#[cfg(feature = "pgvector")]
+	#[test]
+	fn typed_vector_update_sql_reports_assignment_and_predicate_params() {
+		let field = Field::<TestUser, crate::orm::Vector<3>>::new(vec!["embedding"]);
+		let queryset = QuerySet::<TestUser>::new().filter(
+			field
+				.cosine_distance(typed_vector_target(&[1.0, 2.0, 3.0]))
+				.lt(0.25),
+		);
+		let updates = HashMap::from([(
+			"embedding".to_owned(),
+			UpdateValue::Typed(Ok(DatabaseValue::Vector(vec![4.0, 5.0, 6.0]))),
+		)]);
+
+		let (sql, params) = queryset
+			.update_sql(&updates)
+			.expect("typed vector update SQL should build");
+
+		assert_eq!(
+			sql,
+			r#"UPDATE "test_users" SET "embedding" = $1 WHERE "test_users"."embedding" <=> $2 < $3"#
+		);
+		assert_eq!(params, vec!["[4.0,5.0,6.0]", "[1.0,2.0,3.0]", "0.25"]);
+	}
+
+	#[cfg(feature = "pgvector")]
+	#[test]
+	fn typed_vector_delete_sql_reports_predicate_params() {
+		let field = Field::<TestUser, crate::orm::Vector<3>>::new(vec!["embedding"]);
+		let queryset = QuerySet::<TestUser>::new().filter(
+			field
+				.cosine_distance(typed_vector_target(&[1.0, 2.0, 3.0]))
+				.lt(0.25),
+		);
+
+		let (sql, params) = queryset
+			.delete_sql()
+			.expect("typed vector delete SQL should build");
+
+		assert_eq!(
+			sql,
+			r#"DELETE FROM "test_users" WHERE "test_users"."embedding" <=> $1 < $2"#
+		);
+		assert_eq!(params, vec!["[1.0,2.0,3.0]", "0.25"]);
+	}
+
+	#[cfg(feature = "pgvector")]
+	#[test]
+	fn typed_vector_explicit_former_root_marker_alias_is_preserved() {
+		let field = Field::<TestUser, crate::orm::Vector<3>>::new(vec!["embedding"])
+			.with_alias("__reinhardt_typed_model_root__");
+		let queryset = QuerySet::<TestUser>::new()
+			.from_as("root_users")
+			.select_expr(
+				"distance",
+				field.l2_distance(typed_vector_target(&[1.0, 2.0, 3.0])),
+			);
+
+		let (sql, params) = typed_vector_sql_and_params(&queryset);
+
+		assert_eq!(
+			sql,
+			r#"SELECT *, "__reinhardt_typed_model_root__"."embedding" <-> $1 AS "distance" FROM "test_users" AS "root_users""#
+		);
+		assert_eq!(
+			params,
+			vec![crate::orm::QueryValue::Vector(Some(vec![1.0, 2.0, 3.0]))]
+		);
+	}
 
 	#[test]
-	fn render_select_statement_uses_mysql_identifier_quoting() {
+	fn checked_select_builder_uses_mysql_identifier_quoting() {
 		// Arrange
 		let mut statement = reinhardt_query::prelude::Query::select();
 		statement
@@ -8389,10 +9431,27 @@ mod tests {
 			.from(reinhardt_query::prelude::Alias::new("articles"));
 
 		// Act
-		let sql = render_select_statement(&statement, DatabaseBackend::MySql);
+		let (sql, values) = QuerySet::<TestUser>::build_select_for_backend(
+			&statement,
+			DatabaseBackend::MySql,
+			false,
+		)
+		.expect("MySQL select should build");
 
 		// Assert
 		assert_eq!(sql, "SELECT `id` FROM `articles`");
+		assert!(values.0.is_empty());
+	}
+
+	#[test]
+	#[cfg(feature = "pgvector")]
+	fn vector_database_value_diagnostics_use_json_array_syntax() {
+		let rendered =
+			QuerySet::<TestUser>::database_value_to_string(&DatabaseValue::Vector(vec![
+				1.0, 2.0, 3.0,
+			]));
+
+		assert_eq!(rendered, "[1.0,2.0,3.0]");
 	}
 
 	fn test_field_info(
@@ -8534,6 +9593,47 @@ mod tests {
 
 		fn generated_field_names() -> &'static [&'static str] {
 			&["full_name", "display_name"]
+		}
+	}
+
+	#[cfg(feature = "pgvector")]
+	#[derive(Debug, Clone, Serialize, Deserialize)]
+	struct TestVectorPeer {
+		id: Option<i64>,
+		embedding: crate::orm::Vector<3>,
+	}
+
+	#[cfg(feature = "pgvector")]
+	#[derive(Debug, Clone)]
+	struct TestVectorPeerFields;
+
+	#[cfg(feature = "pgvector")]
+	impl crate::orm::model::FieldSelector for TestVectorPeerFields {
+		fn with_alias(self, _alias: &str) -> Self {
+			self
+		}
+	}
+
+	#[cfg(feature = "pgvector")]
+	impl Model for TestVectorPeer {
+		type PrimaryKey = i64;
+		type Fields = TestVectorPeerFields;
+		type Objects = Manager<Self>;
+
+		fn table_name() -> &'static str {
+			"test_vector_peers"
+		}
+
+		fn primary_key(&self) -> Option<Self::PrimaryKey> {
+			self.id
+		}
+
+		fn set_primary_key(&mut self, value: Self::PrimaryKey) {
+			self.id = Some(value);
+		}
+
+		fn new_fields() -> Self::Fields {
+			TestVectorPeerFields
 		}
 	}
 

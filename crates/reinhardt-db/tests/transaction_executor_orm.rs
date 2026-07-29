@@ -61,6 +61,7 @@ struct RecordingExecutor {
 	fetch_one_rows: VecDeque<Row>,
 	fetch_all_rows: VecDeque<Vec<Row>>,
 	fetch_optional_rows: VecDeque<Option<Row>>,
+	fetch_optional_contexts: Vec<Option<reinhardt_db::backends::error::PgvectorOperationKind>>,
 }
 
 impl RecordingExecutor {
@@ -72,6 +73,7 @@ impl RecordingExecutor {
 			fetch_one_rows: VecDeque::new(),
 			fetch_all_rows: VecDeque::new(),
 			fetch_optional_rows: VecDeque::new(),
+			fetch_optional_contexts: Vec::new(),
 		}
 	}
 
@@ -160,6 +162,16 @@ impl OrmExecutor for RecordingExecutor {
 		self.fetch_optional_rows
 			.pop_front()
 			.ok_or_else(|| Self::exhausted_error("fetch_optional"))
+	}
+
+	async fn fetch_optional_with_context(
+		&mut self,
+		sql: &str,
+		params: Vec<QueryValue>,
+		context: Option<reinhardt_db::backends::error::PgvectorOperationKind>,
+	) -> reinhardt_core::exception::Result<Option<Row>> {
+		self.fetch_optional_contexts.push(context);
+		self.fetch_optional(sql, params).await
 	}
 }
 
@@ -1619,7 +1631,7 @@ async fn query_execution_uses_the_executor_dialect_and_query_row_decode_path() {
 	let mut executor = RecordingExecutor::new(DatabaseBackend::MySql)
 		.with_fetch_one(article_row(5, "get"))
 		.with_fetch_all(vec![article_row(5, "all")])
-		.with_fetch_all(vec![article_row(5, "first")])
+		.with_fetch_optional(Some(article_row(5, "first")))
 		.with_fetch_all(vec![article_row(5, "one")])
 		.with_fetch_all(vec![article_row(5, "one-or-none")])
 		.with_fetch_all({
@@ -1683,6 +1695,8 @@ async fn query_execution_uses_the_executor_dialect_and_query_row_decode_path() {
 	assert_eq!(executor.calls.len(), 8);
 	assert!(executor.calls[0].sql.contains('?'));
 	assert!(executor.calls.iter().all(|call| !call.sql.contains("$1")));
+	assert_eq!(executor.calls[2].kind, "fetch_optional");
+	assert_eq!(executor.fetch_optional_contexts, vec![None]);
 }
 
 #[tokio::test]

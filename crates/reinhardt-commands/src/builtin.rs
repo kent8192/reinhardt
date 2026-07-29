@@ -998,6 +998,7 @@ fn validate_global_migration_changes(
 	from_state: &reinhardt_db::migrations::ProjectState,
 	target_state: &reinhardt_db::migrations::ProjectState,
 ) -> reinhardt_db::migrations::Result<()> {
+	target_state.validate_physical_index_names()?;
 	reinhardt_db::migrations::MigrationAutodetector::new(from_state.clone(), target_state.clone())
 		.validate_table_rename_destinations()
 }
@@ -4536,6 +4537,35 @@ mod tests {
 			.expect_err("cross-app table rename collisions must be rejected before app filtering");
 
 		assert!(error.to_string().contains("multiple target models claim"));
+	}
+
+	#[cfg(feature = "migrations")]
+	#[test]
+	fn global_migration_validation_rejects_cross_app_physical_index_name_collisions() {
+		use reinhardt_db::migrations::{IndexDefinition, ModelState, ProjectState};
+
+		let from_state = ProjectState::new();
+		let mut target_state = ProjectState::new();
+		for (app_label, model_name) in [("search", "Document"), ("billing", "Invoice")] {
+			let mut model = ModelState::new(app_label, model_name);
+			model.indexes.push(IndexDefinition::new(
+				"shared_embedding_ann",
+				vec!["embedding".to_string()],
+				false,
+			));
+			target_state.add_model(model);
+		}
+
+		let error = validate_global_migration_changes(&from_state, &target_state)
+			.expect_err("cross-app physical names must be validated before app filtering");
+
+		assert!(matches!(
+			error,
+			reinhardt_db::migrations::MigrationError::InvalidMigration(message)
+				if message.contains("shared_embedding_ann")
+					&& message.contains("search_document")
+					&& message.contains("billing_invoice")
+		));
 	}
 
 	#[cfg(feature = "migrations")]

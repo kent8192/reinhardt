@@ -8,7 +8,7 @@
 
 use super::ColumnDefinition;
 use super::introspection;
-use super::operations::{Operation, SqlDialect};
+use super::operations::{IndexType, Operation, SqlDialect};
 use std::collections::{BTreeMap, BTreeSet};
 
 /// Schema difference detector
@@ -53,10 +53,39 @@ impl From<introspection::DatabaseSchema> for DatabaseSchema {
 			let indexes: Vec<IndexSchema> = intro_table
 				.indexes
 				.values()
-				.map(|idx| IndexSchema {
-					name: idx.name.clone(),
-					columns: idx.columns.clone(),
-					unique: idx.unique,
+				.map(|idx| {
+					#[cfg(feature = "pgvector")]
+					{
+						IndexSchema {
+							name: idx.name.clone(),
+							columns: idx.columns.clone(),
+							unique: idx.unique,
+							access_method: idx.access_method.clone(),
+							index_type: idx.index_type,
+							expressions: idx.expressions.clone(),
+							operator_class: if idx.operator_class_is_default
+								&& !matches!(
+									idx.index_type,
+									Some(IndexType::Hnsw { .. } | IndexType::Ivfflat { .. })
+								) {
+								None
+							} else {
+								idx.operator_class.clone()
+							},
+						}
+					}
+					#[cfg(not(feature = "pgvector"))]
+					{
+						IndexSchema {
+							name: idx.name.clone(),
+							columns: idx.columns.clone(),
+							unique: idx.unique,
+							access_method: idx.index_type.clone(),
+							index_type: None,
+							expressions: None,
+							operator_class: None,
+						}
+					}
 				})
 				.collect();
 
@@ -210,6 +239,14 @@ pub struct IndexSchema {
 	pub columns: Vec<String>,
 	/// Unique index
 	pub unique: bool,
+	/// Raw database access method
+	pub access_method: Option<String>,
+	/// Typed migration index method and options
+	pub index_type: Option<IndexType>,
+	/// Index expressions
+	pub expressions: Option<Vec<String>>,
+	/// PostgreSQL operator class
+	pub operator_class: Option<String>,
 }
 
 /// Constraint schema
@@ -315,6 +352,118 @@ impl SchemaDiff {
 		}
 	}
 
+	fn indexes_equal(&self, current: &IndexSchema, target: &IndexSchema) -> bool {
+		current.name == target.name
+			&& current.columns == target.columns
+			&& current.unique == target.unique
+			&& current.expressions == target.expressions
+			&& Self::canonical_operator_class(current.operator_class.as_deref())
+				== Self::canonical_operator_class(target.operator_class.as_deref())
+			&& Self::effective_index_method(current)
+				.eq_ignore_ascii_case(Self::effective_index_method(target))
+			&& Self::approximate_index_options_equal(current, target)
+	}
+
+	fn canonical_operator_class(operator_class: Option<&str>) -> Option<&str> {
+		operator_class.map(|name| name.rsplit('.').next().unwrap_or(name))
+	}
+
+	#[cfg(feature = "pgvector")]
+	fn index_has_explicit_name(table: &str, index: &IndexSchema) -> bool {
+		index.name != format!("idx_{table}_{}", index.columns.join("_"))
+	}
+
+	fn create_index_operation(table: &str, index: &IndexSchema) -> Operation {
+		#[cfg(feature = "pgvector")]
+		if Self::index_has_explicit_name(table, index) {
+			return Operation::CreateNamedIndex {
+				table: table.to_string(),
+				name: index.name.clone(),
+				columns: index.columns.clone(),
+				unique: index.unique,
+				index_type: index.index_type,
+				where_clause: None,
+				concurrently: false,
+				expressions: index.expressions.clone(),
+				mysql_options: None,
+				operator_class: index.operator_class.clone(),
+			};
+		}
+
+		Operation::CreateIndex {
+			table: table.to_string(),
+			columns: index.columns.clone(),
+			unique: index.unique,
+			index_type: index.index_type,
+			where_clause: None,
+			concurrently: false,
+			expressions: index.expressions.clone(),
+			mysql_options: None,
+			operator_class: index.operator_class.clone(),
+		}
+	}
+
+	fn drop_index_operation(table: &str, index: &IndexSchema) -> Operation {
+		#[cfg(feature = "pgvector")]
+		if Self::index_has_explicit_name(table, index) {
+			return Operation::DropNamedIndex {
+				table: table.to_string(),
+				name: index.name.clone(),
+				columns: index.columns.clone(),
+				unique: index.unique,
+				index_type: index.index_type,
+				where_clause: None,
+				concurrently: false,
+				expressions: index.expressions.clone(),
+				mysql_options: None,
+				operator_class: index.operator_class.clone(),
+			};
+		}
+
+		Operation::DropIndex {
+			table: table.to_string(),
+			columns: index.columns.clone(),
+		}
+	}
+
+	fn effective_index_method(index: &IndexSchema) -> &str {
+		match index.index_type {
+			Some(IndexType::Hash) => "hash",
+			Some(IndexType::Gin) => "gin",
+			Some(IndexType::Gist) => "gist",
+			Some(IndexType::Brin) => "brin",
+			Some(IndexType::Fulltext) => "fulltext",
+			Some(IndexType::Spatial) => "spatial",
+			#[cfg(feature = "pgvector")]
+			Some(IndexType::Hnsw { .. }) => "hnsw",
+			#[cfg(feature = "pgvector")]
+			Some(IndexType::Ivfflat { .. }) => "ivfflat",
+			Some(IndexType::BTree) | None => index.access_method.as_deref().unwrap_or("btree"),
+		}
+	}
+
+	fn approximate_index_options_equal(current: &IndexSchema, target: &IndexSchema) -> bool {
+		#[cfg(feature = "pgvector")]
+		let current_is_approximate = matches!(
+			current.index_type,
+			Some(IndexType::Hnsw { .. } | IndexType::Ivfflat { .. })
+		);
+		#[cfg(not(feature = "pgvector"))]
+		let current_is_approximate = false;
+		#[cfg(feature = "pgvector")]
+		let target_is_approximate = matches!(
+			target.index_type,
+			Some(IndexType::Hnsw { .. } | IndexType::Ivfflat { .. })
+		);
+		#[cfg(not(feature = "pgvector"))]
+		let target_is_approximate = false;
+		if current_is_approximate || target_is_approximate {
+			current.index_type == target.index_type
+		} else {
+			true
+		}
+	}
+
 	fn is_typed_to_raw_generated_comparison(
 		current: &super::GeneratedColumnDefinition,
 		target: &super::GeneratedColumnDefinition,
@@ -410,6 +559,17 @@ impl SchemaDiff {
 			})
 	}
 
+	fn index_schema_references_any_column(index: &IndexSchema, columns: &BTreeSet<String>) -> bool {
+		index.columns.iter().any(|column| columns.contains(column))
+			|| index.expressions.as_ref().is_some_and(|expressions| {
+				expressions.iter().any(|expression| {
+					columns
+						.iter()
+						.any(|column| Self::expression_text_references_column(expression, column))
+				})
+			})
+	}
+
 	fn recreated_columns_for_table(
 		recreated_generated_columns: &BTreeSet<(String, String)>,
 		table_name: &str,
@@ -435,26 +595,23 @@ impl SchemaDiff {
 		};
 
 		for index in target_table.indexes.iter().filter(|index| {
-			index
-				.columns
-				.iter()
-				.any(|column| affected_columns.contains(column))
+			Self::index_schema_references_any_column(index, affected_columns)
 				&& current_table
 					.indexes
 					.iter()
-					.any(|current_index| current_index == *index)
+					.any(|current_index| self.indexes_equal(current_index, index))
 		}) {
 			operations.push(Operation::CreateIndexRepair {
 				table: table_name.to_string(),
 				name: Some(index.name.clone()),
 				columns: index.columns.clone(),
 				unique: index.unique,
-				index_type: None,
+				index_type: index.index_type,
 				where_clause: None,
 				concurrently: false,
-				expressions: None,
+				expressions: index.expressions.clone(),
 				mysql_options: None,
-				operator_class: None,
+				operator_class: index.operator_class.clone(),
 			});
 		}
 
@@ -486,26 +643,23 @@ impl SchemaDiff {
 		};
 
 		for index in current_table.indexes.iter().filter(|index| {
-			index
-				.columns
-				.iter()
-				.any(|column| affected_columns.contains(column))
+			Self::index_schema_references_any_column(index, affected_columns)
 				&& target_table
 					.indexes
 					.iter()
-					.any(|target_index| target_index == *index)
+					.any(|target_index| self.indexes_equal(index, target_index))
 		}) {
 			operations.push(Operation::RestoreIndexOnRollback {
 				table: table_name.to_string(),
 				name: Some(index.name.clone()),
 				columns: index.columns.clone(),
 				unique: index.unique,
-				index_type: None,
+				index_type: index.index_type,
 				where_clause: None,
 				concurrently: false,
-				expressions: None,
+				expressions: index.expressions.clone(),
 				mysql_options: None,
-				operator_class: None,
+				operator_class: index.operator_class.clone(),
 			});
 		}
 
@@ -908,7 +1062,11 @@ impl SchemaDiff {
 
 				// Index changes
 				for target_index in &target_table.indexes {
-					if !current_table.indexes.contains(target_index) {
+					if !current_table
+						.indexes
+						.iter()
+						.any(|current_index| self.indexes_equal(current_index, target_index))
+					{
 						result
 							.indexes_to_add
 							.push((table_name_owned.clone(), target_index.clone()));
@@ -916,7 +1074,11 @@ impl SchemaDiff {
 				}
 
 				for current_index in &current_table.indexes {
-					if !target_table.indexes.contains(current_index) {
+					if !target_table
+						.indexes
+						.iter()
+						.any(|target_index| self.indexes_equal(current_index, target_index))
+					{
 						result
 							.indexes_to_remove
 							.push((table_name_owned.clone(), current_index.clone()));
@@ -983,17 +1145,7 @@ impl SchemaDiff {
 				// Generate CreateIndex for indexes on new tables
 				// (detect() only compares indexes on existing tables)
 				for index in &table_schema.indexes {
-					operations.push(Operation::CreateIndex {
-						table: table_name.clone(),
-						columns: index.columns.clone(),
-						unique: index.unique,
-						index_type: None,
-						where_clause: None,
-						concurrently: false,
-						expressions: None,
-						mysql_options: None,
-						operator_class: None,
-					});
+					operations.push(Self::create_index_operation(table_name, index));
 				}
 			}
 		}
@@ -1217,36 +1369,19 @@ impl SchemaDiff {
 			self.push_add_column_operation(&mut operations, table_name, col_name);
 		}
 
-		// Add indexes
-		for (table_name, index) in &diff.indexes_to_add {
-			operations.push(Operation::CreateIndex {
-				table: table_name.clone(),
-				columns: index.columns.clone(),
-				unique: index.unique,
-				index_type: None,
-				where_clause: None,
-				concurrently: false,
-				expressions: None,
-				mysql_options: None,
-				operator_class: None,
-			});
-		}
-
-		// Remove indexes
+		// Remove indexes before adding replacements that retain the same physical name.
 		for (table_name, index) in &diff.indexes_to_remove {
 			let recreated_columns =
 				Self::recreated_columns_for_table(&recreated_generated_columns, table_name);
-			if index
-				.columns
-				.iter()
-				.any(|column| recreated_columns.contains(column))
-			{
+			if Self::index_schema_references_any_column(index, &recreated_columns) {
 				continue;
 			}
-			operations.push(Operation::DropIndex {
-				table: table_name.clone(),
-				columns: index.columns.clone(),
-			});
+			operations.push(Self::drop_index_operation(table_name, index));
+		}
+
+		// Add indexes
+		for (table_name, index) in &diff.indexes_to_add {
+			operations.push(Self::create_index_operation(table_name, index));
 		}
 
 		// Remove constraints before adding replacements with the same name.
@@ -1509,7 +1644,9 @@ impl SchemaDiff {
 mod tests {
 	use super::*;
 	use crate::migrations::operations::SqlDialect;
-	use crate::migrations::{FieldType, GeneratedColumnDefinition, GeneratedStorage, SchemaExpr};
+	use crate::migrations::{
+		FieldType, GeneratedColumnDefinition, GeneratedStorage, IndexType, SchemaExpr,
+	};
 
 	#[test]
 	fn test_detect_table_addition() {
@@ -1576,6 +1713,105 @@ mod tests {
 				.and_then(|column| column.generated.as_ref()),
 			Some(&generated)
 		);
+	}
+
+	#[cfg(feature = "pgvector")]
+	#[test]
+	fn vector_index_introspection_conversion_retains_default_operator_class() {
+		// Arrange
+		let mut intro_indexes = std::collections::HashMap::new();
+		intro_indexes.insert(
+			"source_embedding_cosine_hnsw".to_string(),
+			introspection::IndexInfo {
+				name: "source_embedding_cosine_hnsw".to_string(),
+				columns: vec!["embedding".to_string()],
+				unique: false,
+				access_method: Some("hnsw".to_string()),
+				index_type: Some(IndexType::Hnsw {
+					m: Some(16),
+					ef_construction: Some(64),
+				}),
+				expressions: None,
+				operator_class: Some("vector_cosine_ops".to_string()),
+				operator_class_is_default: true,
+			},
+		);
+		let mut intro_tables = std::collections::HashMap::new();
+		intro_tables.insert(
+			"source".to_string(),
+			introspection::TableInfo {
+				name: "source".to_string(),
+				columns: std::collections::HashMap::new(),
+				indexes: intro_indexes,
+				primary_key: Vec::new(),
+				foreign_keys: Vec::new(),
+				unique_constraints: Vec::new(),
+				check_constraints: Vec::new(),
+			},
+		);
+
+		// Act
+		let schema = DatabaseSchema::from(introspection::DatabaseSchema {
+			tables: intro_tables,
+		});
+
+		// Assert
+		assert_eq!(
+			schema.tables["source"].indexes,
+			vec![IndexSchema {
+				name: "source_embedding_cosine_hnsw".to_string(),
+				columns: vec!["embedding".to_string()],
+				unique: false,
+				access_method: Some("hnsw".to_string()),
+				index_type: Some(IndexType::Hnsw {
+					m: Some(16),
+					ef_construction: Some(64),
+				}),
+				expressions: None,
+				operator_class: Some("vector_cosine_ops".to_string()),
+			}]
+		);
+	}
+
+	#[cfg(feature = "pgvector")]
+	#[test]
+	fn postgres_default_btree_operator_class_is_normalized_during_conversion() {
+		// Arrange
+		let mut intro_indexes = std::collections::HashMap::new();
+		intro_indexes.insert(
+			"idx_events_sequence".to_string(),
+			introspection::IndexInfo {
+				name: "idx_events_sequence".to_string(),
+				columns: vec!["sequence".to_string()],
+				unique: false,
+				access_method: Some("btree".to_string()),
+				index_type: Some(IndexType::BTree),
+				expressions: None,
+				operator_class: Some("int4_ops".to_string()),
+				operator_class_is_default: true,
+			},
+		);
+		let mut intro_tables = std::collections::HashMap::new();
+		intro_tables.insert(
+			"events".to_string(),
+			introspection::TableInfo {
+				name: "events".to_string(),
+				columns: std::collections::HashMap::new(),
+				indexes: intro_indexes,
+				primary_key: Vec::new(),
+				foreign_keys: Vec::new(),
+				unique_constraints: Vec::new(),
+				check_constraints: Vec::new(),
+			},
+		);
+
+		// Act
+		let schema = DatabaseSchema::from(introspection::DatabaseSchema {
+			tables: intro_tables,
+		});
+
+		// Assert
+		assert_eq!(schema.tables["events"].indexes[0].operator_class, None);
 	}
 
 	#[test]
@@ -2441,6 +2677,10 @@ mod tests {
 			name: "idx_accounts_user_full_name".to_string(),
 			columns: vec!["full_name".to_string()],
 			unique: false,
+			access_method: None,
+			index_type: None,
+			expressions: None,
+			operator_class: None,
 		});
 		current_table.constraints.push(ConstraintSchema {
 			name: "uq_accounts_user_full_name".to_string(),
@@ -2468,6 +2708,10 @@ mod tests {
 			name: "idx_accounts_user_full_name".to_string(),
 			columns: vec!["full_name".to_string()],
 			unique: false,
+			access_method: None,
+			index_type: None,
+			expressions: None,
+			operator_class: None,
 		});
 		target_table.constraints.push(ConstraintSchema {
 			name: "uq_accounts_user_full_name".to_string(),
@@ -2538,6 +2782,82 @@ mod tests {
 			} if table == "accounts_user"
 				&& constraint_sql == "CONSTRAINT uq_accounts_user_full_name UNIQUE (full_name)"
 		));
+	}
+
+	#[cfg(feature = "pgvector")]
+	#[test]
+	fn vector_index_generated_column_repair_and_restore_preserve_expression_metadata() {
+		// Arrange
+		let mut current_embedding = col("embedding", FieldType::Vector { dimensions: 3 }, false);
+		current_embedding.generated = Some(GeneratedColumnDefinition::raw_sql(
+			"source_embedding",
+			GeneratedStorage::Stored,
+		));
+		let mut current_table = table_with_cols("source", vec![("embedding", current_embedding)]);
+		let index = IndexSchema {
+			name: "source_normalized_embedding_hnsw".to_string(),
+			columns: vec![],
+			unique: false,
+			access_method: Some("hnsw".to_string()),
+			index_type: Some(IndexType::Hnsw {
+				m: Some(16),
+				ef_construction: Some(64),
+			}),
+			expressions: Some(vec!["normalize(embedding)".to_string()]),
+			operator_class: Some("vector_cosine_ops".to_string()),
+		};
+		current_table.indexes.push(index.clone());
+		let mut current = DatabaseSchema::default();
+		current.tables.insert("source".to_string(), current_table);
+
+		let mut target_embedding = col("embedding", FieldType::Vector { dimensions: 3 }, false);
+		target_embedding.generated = Some(GeneratedColumnDefinition::raw_sql(
+			"normalize(source_embedding)",
+			GeneratedStorage::Stored,
+		));
+		let mut target_table = table_with_cols("source", vec![("embedding", target_embedding)]);
+		target_table.indexes.push(index);
+		let mut target = DatabaseSchema::default();
+		target.tables.insert("source".to_string(), target_table);
+
+		// Act
+		let operations = SchemaDiff::new(current, target).generate_operations();
+
+		// Assert
+		assert!(operations.iter().any(|operation| matches!(
+			operation,
+			Operation::RestoreIndexOnRollback {
+				name: Some(name),
+				columns,
+				index_type: Some(IndexType::Hnsw {
+					m: Some(16),
+					ef_construction: Some(64),
+				}),
+				expressions: Some(expressions),
+				operator_class: Some(operator_class),
+				..
+			} if name == "source_normalized_embedding_hnsw"
+				&& columns.is_empty()
+				&& expressions == &vec!["normalize(embedding)".to_string()]
+				&& operator_class == "vector_cosine_ops"
+		)));
+		assert!(operations.iter().any(|operation| matches!(
+			operation,
+			Operation::CreateIndexRepair {
+				name: Some(name),
+				columns,
+				index_type: Some(IndexType::Hnsw {
+					m: Some(16),
+					ef_construction: Some(64),
+				}),
+				expressions: Some(expressions),
+				operator_class: Some(operator_class),
+				..
+			} if name == "source_normalized_embedding_hnsw"
+				&& columns.is_empty()
+				&& expressions == &vec!["normalize(embedding)".to_string()]
+				&& operator_class == "vector_cosine_ops"
+		)));
 	}
 
 	#[test]
@@ -2694,6 +3014,10 @@ mod tests {
 			name: "idx_users_email".to_string(),
 			columns: vec!["email".to_string()],
 			unique: true,
+			access_method: None,
+			index_type: None,
+			expressions: None,
+			operator_class: None,
 		});
 		target.tables.insert("users".to_string(), target_table);
 
@@ -2718,6 +3042,381 @@ mod tests {
 		}
 	}
 
+	#[cfg(feature = "pgvector")]
+	#[test]
+	fn vector_index_schema_diff_preserves_metadata_in_create_operation() {
+		// Arrange
+		let mut current = DatabaseSchema::default();
+		current.tables.insert(
+			"source".to_string(),
+			table_with_cols(
+				"source",
+				vec![(
+					"embedding",
+					col("embedding", FieldType::Vector { dimensions: 3 }, false),
+				)],
+			),
+		);
+		let mut target = current.clone();
+		target
+			.tables
+			.get_mut("source")
+			.unwrap()
+			.indexes
+			.push(IndexSchema {
+				name: "source_embedding_cosine_hnsw".to_string(),
+				columns: vec!["embedding".to_string()],
+				unique: false,
+				access_method: Some("hnsw".to_string()),
+				index_type: Some(IndexType::Hnsw {
+					m: Some(16),
+					ef_construction: Some(64),
+				}),
+				expressions: None,
+				operator_class: Some("vector_cosine_ops".to_string()),
+			});
+
+		// Act
+		let operations = SchemaDiff::new(current, target).generate_operations();
+
+		// Assert
+		assert_eq!(
+			operations,
+			vec![Operation::CreateNamedIndex {
+				table: "source".to_string(),
+				name: "source_embedding_cosine_hnsw".to_string(),
+				columns: vec!["embedding".to_string()],
+				unique: false,
+				index_type: Some(IndexType::Hnsw {
+					m: Some(16),
+					ef_construction: Some(64),
+				}),
+				where_clause: None,
+				concurrently: false,
+				expressions: None,
+				mysql_options: None,
+				operator_class: Some("vector_cosine_ops".to_string()),
+			}]
+		);
+	}
+
+	#[cfg(feature = "pgvector")]
+	#[test]
+	fn vector_index_schema_diff_observes_typed_option_changes() {
+		// Arrange
+		let mut current_table = table_with_cols(
+			"source",
+			vec![(
+				"embedding",
+				col("embedding", FieldType::Vector { dimensions: 3 }, false),
+			)],
+		);
+		let mut target_table = current_table.clone();
+		let current_index = IndexSchema {
+			name: "source_embedding_hnsw".to_string(),
+			columns: vec!["embedding".to_string()],
+			unique: false,
+			access_method: Some("hnsw".to_string()),
+			index_type: Some(IndexType::Hnsw {
+				m: Some(8),
+				ef_construction: Some(64),
+			}),
+			expressions: None,
+			operator_class: Some("vector_l2_ops".to_string()),
+		};
+		let mut target_index = current_index.clone();
+		target_index.index_type = Some(IndexType::Hnsw {
+			m: Some(16),
+			ef_construction: Some(64),
+		});
+		current_table.indexes.push(current_index);
+		target_table.indexes.push(target_index);
+		let mut current = DatabaseSchema::default();
+		current.tables.insert("source".to_string(), current_table);
+		let mut target = DatabaseSchema::default();
+		target.tables.insert("source".to_string(), target_table);
+
+		// Act
+		let diff = SchemaDiff::new(current, target);
+		let detected = diff.detect();
+		let operations = diff.generate_operations();
+
+		// Assert
+		assert_eq!(detected.indexes_to_remove.len(), 1);
+		assert_eq!(detected.indexes_to_add.len(), 1);
+		match operations.as_slice() {
+			[
+				Operation::DropNamedIndex {
+					name: dropped_name, ..
+				},
+				Operation::CreateNamedIndex {
+					name,
+					index_type: Some(IndexType::Hnsw { m: Some(16), .. }),
+					..
+				},
+			] => {
+				assert_eq!(name, "source_embedding_hnsw");
+				assert_eq!(dropped_name, "source_embedding_hnsw");
+			}
+			other => panic!("Expected named index replacement operations, got {other:?}"),
+		}
+	}
+
+	#[cfg(feature = "pgvector")]
+	#[test]
+	fn schema_qualified_vector_operator_class_matches_model_metadata() {
+		// Arrange
+		let mut current_table = table_with_cols(
+			"source",
+			vec![(
+				"embedding",
+				col("embedding", FieldType::Vector { dimensions: 3 }, false),
+			)],
+		);
+		let index = IndexSchema {
+			name: "source_embedding_hnsw".to_string(),
+			columns: vec!["embedding".to_string()],
+			unique: false,
+			access_method: Some("hnsw".to_string()),
+			index_type: Some(IndexType::Hnsw {
+				m: Some(16),
+				ef_construction: Some(64),
+			}),
+			expressions: None,
+			operator_class: Some("public.vector_l2_ops".to_string()),
+		};
+		current_table.indexes.push(index.clone());
+		let mut target_table = current_table.clone();
+		target_table.indexes[0].operator_class = Some("vector_l2_ops".to_string());
+		let current = DatabaseSchema {
+			tables: BTreeMap::from([("source".to_string(), current_table)]),
+		};
+		let target = DatabaseSchema {
+			tables: BTreeMap::from([("source".to_string(), target_table)]),
+		};
+
+		// Act
+		let detected = SchemaDiff::new(current, target).detect();
+
+		// Assert
+		assert!(detected.indexes_to_add.is_empty());
+		assert!(detected.indexes_to_remove.is_empty());
+	}
+
+	#[test]
+	fn legacy_postgres_default_btree_index_matches_introspected_metadata() {
+		// Arrange
+		let mut current_table = table_with_cols(
+			"events",
+			vec![("sequence", col("sequence", FieldType::Integer, false))],
+		);
+		current_table.indexes.push(IndexSchema {
+			name: "idx_events_sequence".to_string(),
+			columns: vec!["sequence".to_string()],
+			unique: false,
+			access_method: Some("btree".to_string()),
+			index_type: Some(IndexType::BTree),
+			expressions: None,
+			operator_class: None,
+		});
+		let mut target_table = current_table.clone();
+		target_table.indexes[0].access_method = None;
+		target_table.indexes[0].index_type = None;
+		let mut current = DatabaseSchema::default();
+		current.tables.insert("events".to_string(), current_table);
+		let mut target = DatabaseSchema::default();
+		target.tables.insert("events".to_string(), target_table);
+
+		// Act
+		let result = SchemaDiff::with_dialect(current, target, SqlDialect::Postgres).detect();
+
+		// Assert
+		assert!(result.indexes_to_add.is_empty());
+		assert!(result.indexes_to_remove.is_empty());
+	}
+
+	#[cfg(feature = "pgvector")]
+	#[test]
+	fn legacy_postgres_multi_column_default_index_matches_introspected_metadata() {
+		// Arrange
+		let mut intro_indexes = std::collections::HashMap::new();
+		intro_indexes.insert(
+			"idx_events_sequence_name".to_string(),
+			introspection::IndexInfo {
+				name: "idx_events_sequence_name".to_string(),
+				columns: vec!["sequence".to_string(), "name".to_string()],
+				unique: false,
+				access_method: Some("btree".to_string()),
+				index_type: Some(IndexType::BTree),
+				expressions: None,
+				operator_class: Some("int4_ops".to_string()),
+				operator_class_is_default: true,
+			},
+		);
+		let mut intro_tables = std::collections::HashMap::new();
+		intro_tables.insert(
+			"events".to_string(),
+			introspection::TableInfo {
+				name: "events".to_string(),
+				columns: std::collections::HashMap::new(),
+				indexes: intro_indexes,
+				primary_key: Vec::new(),
+				foreign_keys: Vec::new(),
+				unique_constraints: Vec::new(),
+				check_constraints: Vec::new(),
+			},
+		);
+		let current = DatabaseSchema::from(introspection::DatabaseSchema {
+			tables: intro_tables,
+		});
+		let mut target = current.clone();
+		let target_index = &mut target.tables.get_mut("events").unwrap().indexes[0];
+		target_index.access_method = None;
+		target_index.index_type = None;
+
+		// Act
+		let result = SchemaDiff::with_dialect(current, target, SqlDialect::Postgres).detect();
+
+		// Assert
+		assert!(result.indexes_to_add.is_empty());
+		assert!(result.indexes_to_remove.is_empty());
+	}
+
+	#[test]
+	fn legacy_mysql_default_index_matches_introspected_metadata() {
+		// Arrange
+		let mut current_table = table_with_cols(
+			"events",
+			vec![("sequence", col("sequence", FieldType::Integer, false))],
+		);
+		current_table.indexes.push(IndexSchema {
+			name: "idx_events_sequence".to_string(),
+			columns: vec!["sequence".to_string()],
+			unique: false,
+			access_method: Some("BTREE".to_string()),
+			index_type: None,
+			expressions: None,
+			operator_class: None,
+		});
+		let mut target_table = current_table.clone();
+		target_table.indexes[0].access_method = None;
+		let mut current = DatabaseSchema::default();
+		current.tables.insert("events".to_string(), current_table);
+		let mut target = DatabaseSchema::default();
+		target.tables.insert("events".to_string(), target_table);
+
+		// Act
+		let result = SchemaDiff::with_dialect(current, target, SqlDialect::Mysql).detect();
+
+		// Assert
+		assert!(result.indexes_to_add.is_empty());
+		assert!(result.indexes_to_remove.is_empty());
+	}
+
+	#[test]
+	fn custom_postgres_access_method_remains_significant() {
+		// Arrange
+		let mut current_table = table_with_cols(
+			"events",
+			vec![("payload", col("payload", FieldType::Json, false))],
+		);
+		current_table.indexes.push(IndexSchema {
+			name: "idx_events_payload".to_string(),
+			columns: vec!["payload".to_string()],
+			unique: false,
+			access_method: Some("gin".to_string()),
+			index_type: Some(IndexType::Gin),
+			expressions: None,
+			operator_class: None,
+		});
+		let mut target_table = current_table.clone();
+		target_table.indexes[0].access_method = None;
+		target_table.indexes[0].index_type = None;
+		let mut current = DatabaseSchema::default();
+		current.tables.insert("events".to_string(), current_table);
+		let mut target = DatabaseSchema::default();
+		target.tables.insert("events".to_string(), target_table);
+
+		// Act
+		let result = SchemaDiff::with_dialect(current, target, SqlDialect::Postgres).detect();
+
+		// Assert
+		assert_eq!(result.indexes_to_add.len(), 1);
+		assert_eq!(result.indexes_to_remove.len(), 1);
+	}
+
+	#[test]
+	fn custom_postgres_operator_class_remains_significant() {
+		// Arrange
+		let mut current_table = table_with_cols(
+			"events",
+			vec![("sequence", col("sequence", FieldType::Integer, false))],
+		);
+		current_table.indexes.push(IndexSchema {
+			name: "idx_events_sequence".to_string(),
+			columns: vec!["sequence".to_string()],
+			unique: false,
+			access_method: Some("btree".to_string()),
+			index_type: Some(IndexType::BTree),
+			expressions: None,
+			operator_class: Some("custom_int4_ops".to_string()),
+		});
+		let mut target_table = current_table.clone();
+		target_table.indexes[0].access_method = None;
+		target_table.indexes[0].index_type = None;
+		target_table.indexes[0].operator_class = None;
+		let mut current = DatabaseSchema::default();
+		current.tables.insert("events".to_string(), current_table);
+		let mut target = DatabaseSchema::default();
+		target.tables.insert("events".to_string(), target_table);
+
+		// Act
+		let result = SchemaDiff::with_dialect(current, target, SqlDialect::Postgres).detect();
+
+		// Assert
+		assert_eq!(result.indexes_to_add.len(), 1);
+		assert_eq!(result.indexes_to_remove.len(), 1);
+	}
+
+	#[cfg(feature = "pgvector")]
+	#[test]
+	fn hnsw_and_ivfflat_access_methods_remain_distinct() {
+		// Arrange
+		let mut current_table = table_with_cols(
+			"source",
+			vec![(
+				"embedding",
+				col("embedding", FieldType::Vector { dimensions: 3 }, false),
+			)],
+		);
+		current_table.indexes.push(IndexSchema {
+			name: "source_embedding_approximate".to_string(),
+			columns: vec!["embedding".to_string()],
+			unique: false,
+			access_method: Some("hnsw".to_string()),
+			index_type: Some(IndexType::Hnsw {
+				m: Some(16),
+				ef_construction: Some(64),
+			}),
+			expressions: None,
+			operator_class: Some("vector_l2_ops".to_string()),
+		});
+		let mut target_table = current_table.clone();
+		target_table.indexes[0].access_method = Some("ivfflat".to_string());
+		target_table.indexes[0].index_type = Some(IndexType::Ivfflat { lists: Some(100) });
+		let mut current = DatabaseSchema::default();
+		current.tables.insert("source".to_string(), current_table);
+		let mut target = DatabaseSchema::default();
+		target.tables.insert("source".to_string(), target_table);
+
+		// Act
+		let result = SchemaDiff::with_dialect(current, target, SqlDialect::Postgres).detect();
+
+		// Assert
+		assert_eq!(result.indexes_to_add.len(), 1);
+		assert_eq!(result.indexes_to_remove.len(), 1);
+	}
+
 	#[test]
 	fn test_generate_operations_drop_index() {
 		// Arrange
@@ -2733,6 +3432,10 @@ mod tests {
 			name: "idx_users_email".to_string(),
 			columns: vec!["email".to_string()],
 			unique: false,
+			access_method: None,
+			index_type: None,
+			expressions: None,
+			operator_class: None,
 		});
 		current.tables.insert("users".to_string(), current_table);
 
@@ -2896,6 +3599,10 @@ mod tests {
 			name: "idx_users_full_name".to_string(),
 			columns: vec!["full_name".to_string()],
 			unique: false,
+			access_method: None,
+			index_type: None,
+			expressions: None,
+			operator_class: None,
 		});
 		current_table.constraints.push(check_constraint(
 			"ck_users_full_name",
@@ -2965,6 +3672,10 @@ mod tests {
 			name: "idx_email".to_string(),
 			columns: vec!["email".to_string()],
 			unique: false,
+			access_method: None,
+			index_type: None,
+			expressions: None,
+			operator_class: None,
 		});
 		current.tables.insert("users".to_string(), current_table);
 
@@ -3032,6 +3743,10 @@ mod tests {
 			name: "idx_users_email".to_string(),
 			columns: vec!["email".to_string()],
 			unique: true,
+			access_method: None,
+			index_type: None,
+			expressions: None,
+			operator_class: None,
 		});
 		target.tables.insert("users".to_string(), table);
 
@@ -3482,6 +4197,10 @@ mod tests {
 			name: "idx_id".to_string(),
 			columns: vec!["id".to_string()],
 			unique: false,
+			access_method: None,
+			index_type: None,
+			expressions: None,
+			operator_class: None,
 		});
 		target.tables.insert("users".to_string(), table);
 

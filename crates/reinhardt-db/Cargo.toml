@@ -30,7 +30,16 @@ sqlx = { version = "0.8", features = [
   "tls-rustls",
   "uuid",
 ], optional = true }
-reinhardt-query = { workspace = true, features = ["full", "thread-safe"], optional = true }
+reinhardt-query = { workspace = true, features = [
+  "derive",
+  "nosql-redis",
+  "thread-safe",
+  "with-bigdecimal",
+  "with-chrono",
+  "with-json",
+  "with-rust_decimal",
+  "with-uuid",
+], optional = true }
 
 # Async runtime
 tokio = { version = "1.41", features = ["full", "macros", "rt", "sync"], optional = true }
@@ -89,6 +98,7 @@ image = { workspace = true, optional = true }
 flate2 = { workspace = true, optional = true }
 smallvec = { version = "1.13", optional = true }
 paste = { version = "1.0", optional = true }
+pgvector = { version = "0.4.2", default-features = false, optional = true }
 
 [features]
 default = [
@@ -176,12 +186,21 @@ database-full = [
   "contenttypes",
   "compressed-fields",
   "image-fields",
+  "pgvector",
   "all-databases",
   "full",
 ]
 
 # Database-specific features
 postgres = ["db-deps", "sqlx/postgres"]
+pgvector = [
+  "postgres",
+  "orm",
+  "migrations",
+  "dep:pgvector",
+  "reinhardt-query/pgvector",
+  "reinhardt-core/pgvector",
+]
 sqlite = ["db-deps", "sqlx/sqlite"]
 mysql = ["db-deps", "sqlx/mysql"]
 
@@ -195,7 +214,7 @@ all-databases = [
   "mysql",
   "cockroachdb-backend",
 ]
-full = ["advanced-queries", "all-databases", "database", "db-mysql", "db-postgres", "db-sqlite", "di", "migrations", "mysql", "nosql-all", "pooling", "postgres", "settings", "sqlite"]
+full = ["advanced-queries", "all-databases", "database", "db-mysql", "db-postgres", "db-sqlite", "di", "migrations", "mysql", "nosql-all", "pgvector", "pooling", "postgres", "settings", "sqlite"]
 settings = ["db-deps", "dep:reinhardt-conf"]
 database = ["db-deps"]
 db-sqlite = ["db-deps"]
@@ -237,6 +256,16 @@ same-file = { workspace = true, optional = true }
 name = "contenttypes_registry"
 path = "tests/contenttypes_registry.rs"
 required-features = ["contenttypes"]
+
+[[test]]
+name = "vector_expression"
+path = "tests/vector_expression.rs"
+required-features = ["pgvector"]
+
+[[test]]
+name = "pgvector_orm"
+path = "tests/pgvector_orm.rs"
+required-features = ["pgvector"]
 
 [target.'cfg(not(all(target_family = "wasm", target_os = "unknown")))'.dev-dependencies]
 tokio-test = "0.4"

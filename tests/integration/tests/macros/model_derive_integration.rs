@@ -449,12 +449,12 @@ async fn generated_relation_accessors_render_configured_physical_columns() {
 	assert!(
 		primary_loader.calls[0]
 			.sql
-			.contains(r#"WHERE "target_pk" = 7"#),
+			.contains(r#"WHERE "target_pk" = $1"#),
 		"generated primary-key loader must use the physical primary-key column: {}",
 		primary_loader.calls[0].sql
 	);
 	assert!(
-		!primary_loader.calls[0].sql.contains(r#"WHERE "id" = 7"#),
+		!primary_loader.calls[0].sql.contains(r#"WHERE "id" = $1"#),
 		"generated primary-key loader must not use the logical primary-key field name"
 	);
 
@@ -498,14 +498,14 @@ async fn generated_relation_accessors_render_configured_physical_columns() {
 	assert!(
 		to_field_loader.calls[0]
 			.sql
-			.contains(r#"WHERE "target_external_key" = 7"#),
+			.contains(r#"WHERE "target_external_key" = $1"#),
 		"generated to_field loader must resolve the target field's physical column: {}",
 		to_field_loader.calls[0].sql
 	);
 	assert!(
 		!to_field_loader.calls[0]
 			.sql
-			.contains(r#"WHERE "target_pk" = 7"#),
+			.contains(r#"WHERE "target_pk" = $1"#),
 		"generated to_field loader must not use the target primary-key column: {}",
 		to_field_loader.calls[0].sql
 	);

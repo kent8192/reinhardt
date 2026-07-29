@@ -142,6 +142,9 @@ pub enum DatabaseValue {
 	Bytes(Vec<u8>),
 	/// Native JSON value.
 	Json(serde_json::Value),
+	/// Native PostgreSQL dense-vector value.
+	#[cfg(feature = "pgvector")]
+	Vector(Vec<f32>),
 	/// Native SQL array values with their element type.
 	Array {
 		/// The type of every array element.
@@ -199,6 +202,9 @@ impl DatabaseValue {
 			Self::Bytes(value) => serde_json::to_value(value)
 				.map_err(|error| FieldCodecError::Serialization(error.to_string())),
 			Self::Json(value) => Ok(value),
+			#[cfg(feature = "pgvector")]
+			Self::Vector(values) => serde_json::to_value(values)
+				.map_err(|error| FieldCodecError::Serialization(error.to_string())),
 			Self::Array { values, .. } => values
 				.into_iter()
 				.map(DatabaseValue::into_json_value)
@@ -228,6 +234,8 @@ pub fn database_value_to_query_value(value: DatabaseValue) -> reinhardt_query::v
 		DatabaseValue::String(value) => Value::String(Some(Box::new(value))),
 		DatabaseValue::Bytes(value) => Value::Bytes(Some(Box::new(value))),
 		DatabaseValue::Json(value) => Value::Json(Some(Box::new(value))),
+		#[cfg(feature = "pgvector")]
+		DatabaseValue::Vector(values) => Value::Vector(Some(Box::new(values))),
 		DatabaseValue::Array {
 			element_type,
 			values,
@@ -667,6 +675,48 @@ impl_array_database_field!(bool, DatabaseArrayType::Bool);
 impl_array_database_field!(uuid::Uuid, DatabaseArrayType::Uuid);
 impl_json_database_field!(std::collections::HashMap<String, String>);
 
+#[cfg(feature = "pgvector")]
+impl<const N: usize> private::Sealed for super::Vector<N> {}
+
+#[cfg(feature = "pgvector")]
+impl<const N: usize> DatabaseScalar for super::Vector<N> {
+	const STORAGE_KIND: DatabaseStorageKind = DatabaseStorageKind::Vector(N);
+
+	fn into_database_value(self) -> DatabaseValue {
+		DatabaseValue::Vector(self.into_vec())
+	}
+
+	fn from_database_value(value: DatabaseValue) -> Result<Self, FieldCodecError> {
+		match value {
+			DatabaseValue::Vector(values) => {
+				values.try_into().map_err(|error: super::VectorError| {
+					FieldCodecError::Serialization(error.to_string())
+				})
+			}
+			actual => Err(FieldCodecError::TypeMismatch {
+				expected: Self::STORAGE_KIND,
+				actual,
+			}),
+		}
+	}
+}
+
+#[cfg(feature = "pgvector")]
+impl<const N: usize> DatabaseField for super::Vector<N> {
+	type Storage = Self;
+
+	fn encode_database(&self) -> Result<Self::Storage, FieldCodecError> {
+		Ok(self.clone())
+	}
+
+	fn decode_database(
+		value: Self::Storage,
+		_context: &FieldCodecContext,
+	) -> Result<Self, FieldCodecError> {
+		Ok(value)
+	}
+}
+
 mod private {
 	pub trait Sealed {}
 }
@@ -674,9 +724,11 @@ mod private {
 #[cfg(test)]
 mod tests {
 	use super::{
-		DatabaseField, DatabaseScalar, DatabaseValue, FieldCodecContext, FieldCodecError,
-		IntoFieldValue, ModelEnumRepr, ModelEnumValue,
+		DatabaseField, DatabaseScalar, DatabaseStorageKind, DatabaseValue, FieldCodecContext,
+		FieldCodecError, IntoFieldValue, ModelEnumRepr, ModelEnumValue,
 	};
+	#[cfg(feature = "pgvector")]
+	use crate::orm::Vector;
 	use std::collections::HashMap;
 
 	fn assert_database_field_round_trip<T>(value: T)
@@ -856,5 +908,37 @@ mod tests {
 		.expect("JSON row array should decode as Vec<String>");
 
 		assert_eq!(decoded, vec!["rust".to_string(), "orm".to_string()]);
+	}
+
+	#[test]
+	#[cfg(feature = "pgvector")]
+	fn fixed_dimension_vectors_round_trip_through_the_database_carrier() {
+		let vector = Vector::<3>::try_from(vec![1.0, 2.0, 3.0]).unwrap();
+
+		assert_eq!(
+			<Vector<3> as DatabaseScalar>::STORAGE_KIND,
+			DatabaseStorageKind::Vector(3)
+		);
+		assert_eq!(
+			vector.clone().into_database_value(),
+			DatabaseValue::Vector(vec![1.0, 2.0, 3.0])
+		);
+		assert_eq!(
+			Vector::<3>::from_database_value(DatabaseValue::Vector(vec![1.0, 2.0, 3.0])).unwrap(),
+			vector
+		);
+	}
+
+	#[test]
+	#[cfg(feature = "pgvector")]
+	fn fixed_dimension_vectors_reject_mismatched_database_values() {
+		let error =
+			Vector::<3>::from_database_value(DatabaseValue::Vector(vec![1.0, 2.0])).unwrap_err();
+
+		assert!(matches!(
+			error,
+			FieldCodecError::Serialization(message)
+				if message == "vector dimension mismatch: expected 3, got 2"
+		));
 	}
 }

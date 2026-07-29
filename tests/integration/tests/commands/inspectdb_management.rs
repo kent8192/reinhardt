@@ -549,7 +549,11 @@ async fn mysql_inspectdb_selects_exact_tables_and_includes_views(
 			name: "idx_accounts_status".to_string(),
 			columns: vec!["status".to_string()],
 			unique: false,
-			index_type: Some("BTREE".to_string()),
+			access_method: Some("BTREE".to_string()),
+			index_type: None,
+			expressions: None,
+			operator_class: None,
+			operator_class_is_default: false,
 		},
 	);
 	assert_eq!(
@@ -558,7 +562,11 @@ async fn mysql_inspectdb_selects_exact_tables_and_includes_views(
 			name: "uq_accounts_name".to_string(),
 			columns: vec!["name".to_string()],
 			unique: true,
-			index_type: Some("BTREE".to_string()),
+			access_method: Some("BTREE".to_string()),
+			index_type: None,
+			expressions: None,
+			operator_class: None,
+			operator_class_is_default: false,
 		},
 	);
 	assert_eq!(

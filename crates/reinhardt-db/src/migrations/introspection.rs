@@ -6,9 +6,8 @@
 use async_trait::async_trait;
 use std::collections::{HashMap, HashSet};
 
-use crate::backends::{DatabaseConnection, DatabaseType};
-
 use super::{MigrationError, Result};
+use crate::backends::{DatabaseConnection, DatabaseType};
 
 /// Schema information extracted from a database
 #[derive(Debug, Clone, PartialEq)]
@@ -73,8 +72,159 @@ pub struct IndexInfo {
 	pub columns: Vec<String>,
 	/// Whether the index is unique
 	pub unique: bool,
-	/// Index type (e.g., BTREE, HASH)
+	/// Raw database access method (e.g., btree, hash, hnsw)
+	#[cfg(feature = "pgvector")]
+	pub access_method: Option<String>,
+	/// Typed migration index method and options when representable
+	#[cfg(feature = "pgvector")]
+	pub index_type: Option<super::IndexType>,
+	/// Raw database index method (e.g., BTREE, HASH).
+	#[cfg(not(feature = "pgvector"))]
 	pub index_type: Option<String>,
+	/// Index expressions, when the index does not target plain columns
+	#[cfg(feature = "pgvector")]
+	pub expressions: Option<Vec<String>>,
+	/// PostgreSQL operator class for the indexed target
+	#[cfg(feature = "pgvector")]
+	pub operator_class: Option<String>,
+	/// Whether PostgreSQL reports the operator class as the access method default
+	#[cfg(feature = "pgvector")]
+	pub operator_class_is_default: bool,
+}
+
+#[cfg(feature = "pgvector")]
+fn parse_postgres_index_type(
+	access_method: &str,
+	reloptions: &[String],
+) -> Result<Option<super::IndexType>> {
+	use super::IndexType;
+
+	match access_method {
+		"btree" => Ok(Some(IndexType::BTree)),
+		"hash" => Ok(Some(IndexType::Hash)),
+		"gin" => Ok(Some(IndexType::Gin)),
+		"gist" => Ok(Some(IndexType::Gist)),
+		"brin" => Ok(Some(IndexType::Brin)),
+		"hnsw" => {
+			let mut m = None;
+			let mut ef_construction = None;
+			for option in reloptions {
+				let Some((name, value)) = option.split_once('=') else {
+					return Err(MigrationError::IntrospectionError(format!(
+						"invalid PostgreSQL hnsw reloption {option}"
+					)));
+				};
+				match name {
+					"m" => {
+						m = Some(value.parse::<u16>().map_err(|_| {
+							MigrationError::IntrospectionError(format!(
+								"invalid PostgreSQL hnsw reloption {option}"
+							))
+						})?);
+					}
+					"ef_construction" => {
+						ef_construction = Some(value.parse::<u16>().map_err(|_| {
+							MigrationError::IntrospectionError(format!(
+								"invalid PostgreSQL hnsw reloption {option}"
+							))
+						})?);
+					}
+					_ => {
+						return Err(MigrationError::IntrospectionError(format!(
+							"unsupported PostgreSQL hnsw reloption {option}"
+						)));
+					}
+				}
+			}
+			Ok(Some(IndexType::Hnsw { m, ef_construction }))
+		}
+		"ivfflat" => {
+			let mut lists = None;
+			for option in reloptions {
+				let Some((name, value)) = option.split_once('=') else {
+					return Err(MigrationError::IntrospectionError(format!(
+						"invalid PostgreSQL ivfflat reloption {option}"
+					)));
+				};
+				if name != "lists" {
+					return Err(MigrationError::IntrospectionError(format!(
+						"unsupported PostgreSQL ivfflat reloption {option}"
+					)));
+				}
+				lists = Some(value.parse::<u32>().map_err(|_| {
+					MigrationError::IntrospectionError(format!(
+						"invalid PostgreSQL ivfflat reloption {option}"
+					))
+				})?);
+			}
+			Ok(Some(IndexType::Ivfflat { lists }))
+		}
+		_ => Ok(None),
+	}
+}
+
+#[cfg(feature = "pgvector")]
+fn resolve_postgres_operator_class(
+	index_name: &str,
+	index_type: Option<super::IndexType>,
+	operator_classes: &[String],
+	operator_class_defaults: &[bool],
+) -> Result<(Option<String>, bool)> {
+	if operator_classes.is_empty() || operator_classes.len() != operator_class_defaults.len() {
+		return Err(MigrationError::IntrospectionError(format!(
+			"PostgreSQL index {index_name} returned inconsistent operator class metadata"
+		)));
+	}
+
+	if matches!(
+		index_type,
+		Some(super::IndexType::Hnsw { .. } | super::IndexType::Ivfflat { .. })
+	) && operator_classes.len() != 1
+	{
+		return Err(MigrationError::IntrospectionError(format!(
+			"PostgreSQL approximate index {index_name} must have exactly one key"
+		)));
+	}
+
+	let canonical_operator_classes = operator_classes
+		.iter()
+		.map(|operator_class| {
+			operator_class
+				.rsplit('.')
+				.next()
+				.unwrap_or(operator_class.as_str())
+		})
+		.collect::<Vec<_>>();
+	let first_operator_class = canonical_operator_classes[0];
+	let first_is_default = operator_class_defaults[0];
+	let all_default = operator_class_defaults.iter().all(|is_default| *is_default);
+	let homogeneous = canonical_operator_classes
+		.iter()
+		.all(|operator_class| *operator_class == first_operator_class)
+		&& operator_class_defaults
+			.iter()
+			.all(|is_default| *is_default == first_is_default);
+	if operator_classes.len() > 1 && !all_default && !homogeneous {
+		// The migration schema represents only one operator class per index. Preserve the
+		// otherwise valid index metadata without claiming a lossy representative class.
+		return Ok((None, false));
+	}
+
+	Ok((Some(first_operator_class.to_string()), all_default))
+}
+
+#[cfg(feature = "pgvector")]
+fn validate_postgres_index_key_kinds(
+	index_name: &str,
+	column_key_count: i64,
+	expression_key_count: i64,
+) -> Result<()> {
+	if column_key_count > 0 && expression_key_count > 0 {
+		return Err(MigrationError::IntrospectionError(format!(
+			"PostgreSQL index {index_name} mixes column and expression keys, which cannot be represented"
+		)));
+	}
+	Ok(())
 }
 
 /// Foreign key constraint
@@ -247,12 +397,16 @@ impl PostgresIntrospector {
 	fn parse_pg_type(
 		udt_name: &str,
 		data_type: &str,
+		type_definition: Option<&str>,
 		char_max_length: Option<i32>,
 		numeric_precision: Option<i32>,
 		numeric_scale: Option<i32>,
 		enum_values: Option<Vec<String>>,
 	) -> super::FieldType {
 		use super::FieldType;
+		#[cfg(not(feature = "pgvector"))]
+		let _ = type_definition;
+
 		match udt_name {
 			// Integer types
 			"int4" | "serial" => FieldType::Integer,
@@ -305,11 +459,28 @@ impl PostgresIntrospector {
 			"tstzrange" => FieldType::TsTzRange,
 			"daterange" => FieldType::DateRange,
 
+			#[cfg(feature = "pgvector")]
+			"vector" => type_definition
+				.and_then(Self::parse_pgvector_dimensions)
+				.map_or_else(
+					|| FieldType::Custom(udt_name.to_string()),
+					|dimensions| FieldType::Vector { dimensions },
+				),
+
 			// Array types (udt_name starts with _)
 			name if name.starts_with('_') => {
+				#[cfg(feature = "pgvector")]
+				let inner_type_definition = if &name[1..] == "vector" {
+					type_definition.and_then(|definition| definition.strip_suffix("[]"))
+				} else {
+					None
+				};
+				#[cfg(not(feature = "pgvector"))]
+				let inner_type_definition = None;
 				let inner = Self::parse_pg_type(
 					&name[1..],
 					data_type,
+					inner_type_definition,
 					char_max_length,
 					numeric_precision,
 					numeric_scale,
@@ -363,6 +534,19 @@ impl PostgresIntrospector {
 		}
 	}
 
+	#[cfg(feature = "pgvector")]
+	fn parse_pgvector_dimensions(type_definition: &str) -> Option<usize> {
+		let unqualified_definition = type_definition
+			.rsplit_once('.')
+			.map_or(type_definition, |(_, definition)| definition);
+		let dimensions = unqualified_definition
+			.strip_prefix("vector(")?
+			.strip_suffix(')')?
+			.parse()
+			.ok()?;
+		(1..=2000).contains(&dimensions).then_some(dimensions)
+	}
+
 	/// Fetches enum label values for a given PostgreSQL enum type name
 	async fn fetch_enum_values(&self, type_name: &str) -> Result<Vec<String>> {
 		use sqlx::Row;
@@ -397,13 +581,26 @@ impl PostgresIntrospector {
 
 		// Fetch columns
 		let col_query = r#"
-			SELECT column_name, udt_name, data_type, is_nullable, column_default,
-			       character_maximum_length, numeric_precision, numeric_scale,
-			       is_identity, identity_generation, is_generated,
-			       generation_expression
-			FROM information_schema.columns
-			WHERE table_schema = 'public' AND table_name = $1
-			ORDER BY ordinal_position
+			SELECT columns.column_name, columns.udt_name, columns.data_type,
+			       columns.is_nullable, columns.column_default,
+			       columns.character_maximum_length, columns.numeric_precision,
+			       columns.numeric_scale, columns.is_identity,
+			       columns.identity_generation, columns.is_generated,
+			       columns.generation_expression,
+			       pg_catalog.format_type(attributes.atttypid, attributes.atttypmod)
+			           AS type_definition
+			FROM information_schema.columns AS columns
+			JOIN pg_catalog.pg_namespace AS schemas
+			    ON schemas.nspname = columns.table_schema
+			JOIN pg_catalog.pg_class AS tables
+			    ON tables.relname = columns.table_name
+			    AND tables.relnamespace = schemas.oid
+			JOIN pg_catalog.pg_attribute AS attributes
+			    ON attributes.attrelid = tables.oid
+			    AND attributes.attname = columns.column_name
+			    AND NOT attributes.attisdropped
+			WHERE columns.table_schema = 'public' AND columns.table_name = $1
+			ORDER BY columns.ordinal_position
 		"#;
 		let col_rows = sqlx::query(col_query)
 			.bind(table_name)
@@ -426,6 +623,9 @@ impl PostgresIntrospector {
 			})?;
 			let data_type: String = row.try_get("data_type").map_err(|e| {
 				MigrationError::IntrospectionError(format!("Failed to get data_type: {}", e))
+			})?;
+			let type_definition: String = row.try_get("type_definition").map_err(|e| {
+				MigrationError::IntrospectionError(format!("Failed to get type_definition: {}", e))
 			})?;
 			let is_nullable: String = row.try_get("is_nullable").map_err(|e| {
 				MigrationError::IntrospectionError(format!("Failed to get is_nullable: {}", e))
@@ -490,6 +690,7 @@ impl PostgresIntrospector {
 			let field_type = Self::parse_pg_type(
 				&udt_name,
 				&data_type,
+				Some(&type_definition),
 				char_max_length,
 				numeric_precision,
 				numeric_scale,
@@ -669,28 +870,55 @@ impl PostgresIntrospector {
 		let query = r#"
 			SELECT
 				i.relname AS index_name,
-				array_agg(a.attname ORDER BY array_position(ix.indkey, a.attnum)) AS column_names,
+				COALESCE(
+					array_agg(a.attname ORDER BY key.position)
+						FILTER (WHERE a.attname IS NOT NULL),
+					ARRAY[]::name[]
+				) AS column_names,
 				ix.indisunique AS is_unique,
-				am.amname AS index_type
+				am.amname AS access_method,
+				i.reloptions AS index_options,
+				array_agg(
+					pg_get_indexdef(ix.indexrelid, key.position + 1, true)
+					ORDER BY key.position
+				) FILTER (WHERE (ix.indkey::smallint[])[key.position] = 0)
+					AS index_expressions,
+				array_agg(
+					CASE
+						WHEN opn.nspname = 'pg_catalog' THEN opc.opcname
+						ELSE format('%I.%I', opn.nspname, opc.opcname)
+					END
+					ORDER BY key.position
+				) AS operator_classes,
+				array_agg(opc.opcdefault ORDER BY key.position) AS operator_class_defaults,
+				count(*) FILTER (WHERE (ix.indkey::smallint[])[key.position] <> 0)
+					AS column_key_count,
+				count(*) FILTER (WHERE (ix.indkey::smallint[])[key.position] = 0)
+					AS expression_key_count
 			FROM
-				pg_class t,
-				pg_class i,
-				pg_index ix,
-				pg_attribute a,
-				pg_am am,
-				pg_namespace n
+				pg_class t
+				JOIN pg_index ix ON t.oid = ix.indrelid
+				JOIN pg_class i ON i.oid = ix.indexrelid
+				JOIN pg_am am ON i.relam = am.oid
+				JOIN pg_namespace n ON n.oid = t.relnamespace
+				CROSS JOIN LATERAL generate_subscripts(ix.indclass::oid[], 1) AS key(position)
+				LEFT JOIN pg_attribute a
+					ON a.attrelid = t.oid
+					AND a.attnum = (ix.indkey::smallint[])[key.position]
+				LEFT JOIN pg_opclass opc
+					ON opc.oid = (ix.indclass::oid[])[key.position]
+				LEFT JOIN pg_namespace opn ON opn.oid = opc.opcnamespace
 			WHERE
-				t.oid = ix.indrelid
-				AND i.oid = ix.indexrelid
-				AND a.attrelid = t.oid
-				AND a.attnum = ANY(ix.indkey)
-				AND t.relkind = 'r'
+				t.relkind = 'r'
 				AND t.relname = $1
-				AND i.relam = am.oid
 				AND NOT ix.indisprimary
-				AND n.oid = t.relnamespace
 				AND n.nspname = 'public'
-			GROUP BY i.relname, ix.indisunique, am.amname
+			GROUP BY
+				i.oid,
+				i.relname,
+				i.reloptions,
+				ix.indisunique,
+				am.amname
 			ORDER BY i.relname
 		"#;
 
@@ -716,9 +944,54 @@ impl PostgresIntrospector {
 			let is_unique: bool = row.try_get("is_unique").map_err(|e| {
 				MigrationError::IntrospectionError(format!("Failed to get is_unique: {}", e))
 			})?;
-			let index_type: String = row.try_get("index_type").map_err(|e| {
-				MigrationError::IntrospectionError(format!("Failed to get index_type: {}", e))
+			let access_method: String = row.try_get("access_method").map_err(|e| {
+				MigrationError::IntrospectionError(format!("Failed to get access_method: {}", e))
 			})?;
+			#[cfg(feature = "pgvector")]
+			let index_options: Option<Vec<String>> = row.try_get("index_options").map_err(|e| {
+				MigrationError::IntrospectionError(format!("Failed to get index_options: {}", e))
+			})?;
+			#[cfg(feature = "pgvector")]
+			let index_expressions: Option<Vec<String>> = row.try_get("index_expressions").map_err(|e| {
+				MigrationError::IntrospectionError(format!(
+					"Failed to get index_expressions: {}",
+					e
+				))
+			})?;
+			#[cfg(feature = "pgvector")]
+			let operator_classes: Vec<String> = row.try_get("operator_classes").map_err(|e| {
+				MigrationError::IntrospectionError(format!("Failed to get operator_classes: {}", e))
+			})?;
+			#[cfg(feature = "pgvector")]
+			let operator_class_defaults: Vec<bool> =
+				row.try_get("operator_class_defaults").map_err(|e| {
+					MigrationError::IntrospectionError(format!(
+						"Failed to get operator_class_defaults: {}",
+						e
+					))
+				})?;
+			#[cfg(feature = "pgvector")]
+			let column_key_count: i64 = row.try_get("column_key_count").map_err(|e| {
+				MigrationError::IntrospectionError(format!("Failed to get column_key_count: {e}"))
+			})?;
+			#[cfg(feature = "pgvector")]
+			let expression_key_count: i64 = row.try_get("expression_key_count").map_err(|e| {
+				MigrationError::IntrospectionError(format!(
+					"Failed to get expression_key_count: {e}"
+				))
+			})?;
+			#[cfg(feature = "pgvector")]
+			validate_postgres_index_key_kinds(&index_name, column_key_count, expression_key_count)?;
+			#[cfg(feature = "pgvector")]
+			let index_type =
+				parse_postgres_index_type(&access_method, index_options.as_deref().unwrap_or(&[]))?;
+			#[cfg(feature = "pgvector")]
+			let (operator_class, operator_class_is_default) = resolve_postgres_operator_class(
+				&index_name,
+				index_type,
+				&operator_classes,
+				&operator_class_defaults,
+			)?;
 
 			indexes.insert(
 				index_name.clone(),
@@ -726,7 +999,18 @@ impl PostgresIntrospector {
 					name: index_name,
 					columns: column_names,
 					unique: is_unique,
-					index_type: Some(index_type),
+					#[cfg(feature = "pgvector")]
+					access_method: Some(access_method),
+					#[cfg(feature = "pgvector")]
+					index_type,
+					#[cfg(not(feature = "pgvector"))]
+					index_type: Some(access_method),
+					#[cfg(feature = "pgvector")]
+					expressions: index_expressions,
+					#[cfg(feature = "pgvector")]
+					operator_class,
+					#[cfg(feature = "pgvector")]
+					operator_class_is_default,
 				},
 			);
 		}
@@ -1097,7 +1381,18 @@ impl MySQLIntrospector {
 					name: name.clone(),
 					columns: cols.clone(),
 					unique: *is_unique,
+					#[cfg(feature = "pgvector")]
+					access_method: Some(idx_type.clone()),
+					#[cfg(feature = "pgvector")]
+					index_type: None,
+					#[cfg(not(feature = "pgvector"))]
 					index_type: Some(idx_type.clone()),
+					#[cfg(feature = "pgvector")]
+					expressions: None,
+					#[cfg(feature = "pgvector")]
+					operator_class: None,
+					#[cfg(feature = "pgvector")]
+					operator_class_is_default: false,
 				},
 			);
 
@@ -1500,7 +1795,15 @@ impl SQLiteIntrospector {
 					name: index_row.name,
 					columns,
 					unique: index_row.unique != 0,
+					#[cfg(feature = "pgvector")]
+					access_method: None,
 					index_type: None,
+					#[cfg(feature = "pgvector")]
+					expressions: None,
+					#[cfg(feature = "pgvector")]
+					operator_class: None,
+					#[cfg(feature = "pgvector")]
+					operator_class_is_default: false,
 				},
 			);
 		}
@@ -2039,6 +2342,208 @@ async fn read_sqlite_schema(
 	}
 
 	Ok(schema)
+}
+
+#[cfg(all(test, feature = "pgvector"))]
+mod postgres_index_metadata_tests {
+	use super::*;
+	use crate::migrations::IndexType;
+
+	#[test]
+	fn vector_index_postgres_reloptions_parse_to_typed_methods() {
+		// Act and assert
+		assert_eq!(
+			parse_postgres_index_type(
+				"hnsw",
+				&["ef_construction=64".to_string(), "m=16".to_string()]
+			)
+			.unwrap(),
+			Some(IndexType::Hnsw {
+				m: Some(16),
+				ef_construction: Some(64),
+			})
+		);
+		assert_eq!(
+			parse_postgres_index_type("ivfflat", &["lists=100".to_string()]).unwrap(),
+			Some(IndexType::Ivfflat { lists: Some(100) })
+		);
+	}
+
+	#[test]
+	fn vector_index_postgres_reloptions_reject_malformed_values() {
+		// Act
+		let result = parse_postgres_index_type("hnsw", &["ef_construction=invalid".to_string()]);
+
+		// Assert
+		assert!(matches!(
+			result,
+			Err(MigrationError::IntrospectionError(message))
+				if message == "invalid PostgreSQL hnsw reloption ef_construction=invalid"
+		));
+	}
+
+	#[test]
+	fn mixed_multi_column_postgres_operator_classes_are_conservatively_represented() {
+		// Arrange
+		let operator_classes = vec!["int4_ops".to_string(), "text_pattern_ops".to_string()];
+		let operator_class_defaults = vec![true, false];
+
+		// Act
+		let result = resolve_postgres_operator_class(
+			"idx_events_sequence_name",
+			Some(IndexType::BTree),
+			&operator_classes,
+			&operator_class_defaults,
+		);
+
+		// Assert
+		assert_eq!(result.unwrap(), (None, false));
+	}
+
+	#[test]
+	fn default_multi_column_postgres_operator_classes_are_representable() {
+		// Arrange
+		let operator_classes = vec!["int4_ops".to_string(), "text_ops".to_string()];
+		let operator_class_defaults = vec![true, true];
+
+		// Act
+		let result = resolve_postgres_operator_class(
+			"idx_events_sequence_name",
+			Some(IndexType::BTree),
+			&operator_classes,
+			&operator_class_defaults,
+		);
+
+		// Assert
+		assert_eq!(result.unwrap(), (Some("int4_ops".to_string()), true));
+	}
+
+	#[test]
+	fn homogeneous_custom_multi_column_postgres_operator_classes_are_representable() {
+		// Arrange
+		let operator_classes = vec!["custom_ops".to_string(), "custom_ops".to_string()];
+		let operator_class_defaults = vec![false, false];
+
+		// Act
+		let result = resolve_postgres_operator_class(
+			"idx_events_sequence_partition",
+			Some(IndexType::BTree),
+			&operator_classes,
+			&operator_class_defaults,
+		);
+
+		// Assert
+		assert_eq!(result.unwrap(), (Some("custom_ops".to_string()), false));
+	}
+
+	#[test]
+	fn multi_key_approximate_postgres_indexes_are_rejected() {
+		// Arrange
+		let operator_classes = vec!["vector_l2_ops".to_string(), "vector_l2_ops".to_string()];
+		let operator_class_defaults = vec![true, true];
+
+		// Act
+		let result = resolve_postgres_operator_class(
+			"idx_source_embeddings",
+			Some(IndexType::Hnsw {
+				m: Some(16),
+				ef_construction: Some(64),
+			}),
+			&operator_classes,
+			&operator_class_defaults,
+		);
+
+		// Assert
+		assert!(matches!(
+			result,
+			Err(MigrationError::IntrospectionError(message))
+				if message
+					== "PostgreSQL approximate index idx_source_embeddings must have exactly one key"
+		));
+	}
+
+	#[test]
+	fn mixed_column_and_expression_indexes_are_rejected() {
+		let error = validate_postgres_index_key_kinds("idx_mixed", 1, 1)
+			.expect_err("mixed index keys must not produce lossy metadata");
+
+		assert!(matches!(
+			error,
+			MigrationError::IntrospectionError(message)
+				if message == "PostgreSQL index idx_mixed mixes column and expression keys, which cannot be represented"
+		));
+	}
+}
+
+#[cfg(all(test, feature = "postgres", feature = "pgvector"))]
+mod postgres_tests {
+	use super::PostgresIntrospector;
+	use crate::migrations::FieldType;
+
+	#[test]
+	fn parses_dimensioned_pgvector_type() {
+		let field_type = PostgresIntrospector::parse_pg_type(
+			"vector",
+			"USER-DEFINED",
+			Some("vector(1536)"),
+			None,
+			None,
+			None,
+			None,
+		);
+
+		assert_eq!(field_type, FieldType::Vector { dimensions: 1536 });
+	}
+
+	#[test]
+	fn parses_schema_qualified_pgvector_type() {
+		let field_type = PostgresIntrospector::parse_pg_type(
+			"vector",
+			"USER-DEFINED",
+			Some("extensions.vector(1536)"),
+			None,
+			None,
+			None,
+			None,
+		);
+
+		assert_eq!(field_type, FieldType::Vector { dimensions: 1536 });
+	}
+
+	#[test]
+	fn parses_dimensioned_pgvector_array_type() {
+		let field_type = PostgresIntrospector::parse_pg_type(
+			"_vector",
+			"ARRAY",
+			Some("vector(3)[]"),
+			None,
+			None,
+			None,
+			None,
+		);
+
+		assert_eq!(
+			field_type,
+			FieldType::Array(Box::new(FieldType::Vector { dimensions: 3 }))
+		);
+	}
+
+	#[test]
+	fn rejects_undimensioned_or_out_of_range_pgvector_types() {
+		for type_definition in ["vector", "vector(0)", "vector(2001)"] {
+			let field_type = PostgresIntrospector::parse_pg_type(
+				"vector",
+				"USER-DEFINED",
+				Some(type_definition),
+				None,
+				None,
+				None,
+				None,
+			);
+
+			assert_eq!(field_type, FieldType::Custom("vector".to_string()));
+		}
+	}
 }
 
 #[cfg(test)]

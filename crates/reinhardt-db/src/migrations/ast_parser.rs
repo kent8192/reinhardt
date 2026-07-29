@@ -175,6 +175,17 @@ fn parse_single_operation(expr: &Expr) -> Option<super::Operation> {
 		let variant_name = expr_struct.path.segments.last()?.ident.to_string();
 
 		match variant_name.as_str() {
+			"CreateExtension" => {
+				let name = extract_string_field(&expr_struct.fields, "name")?;
+				let if_not_exists =
+					extract_bool_field(&expr_struct.fields, "if_not_exists").unwrap_or(true);
+				let schema = extract_optional_str_field(&expr_struct.fields, "schema");
+				return Some(super::Operation::CreateExtension {
+					name,
+					if_not_exists,
+					schema,
+				});
+			}
 			"CreateTable" => {
 				let name = extract_string_field(&expr_struct.fields, "name")?;
 				let columns = extract_columns_field(&expr_struct.fields)?;
@@ -241,15 +252,25 @@ fn parse_single_operation(expr: &Expr) -> Option<super::Operation> {
 					new_name,
 				});
 			}
-			"CreateIndex" | "CreateIndexRepair" | "RestoreIndexOnRollback" => {
+			"CreateIndex" | "CreateNamedIndex" | "CreateIndexRepair" | "RestoreIndexOnRollback" => {
 				let table = extract_string_field(&expr_struct.fields, "table")?;
-				let name = extract_optional_str_field(&expr_struct.fields, "name");
+				let name = if variant_name == "CreateNamedIndex" {
+					Some(extract_string_field(&expr_struct.fields, "name")?)
+				} else {
+					extract_optional_str_field(&expr_struct.fields, "name")
+				};
 				let columns = extract_string_vec_field(&expr_struct.fields, "columns");
 				let unique = extract_bool_field(&expr_struct.fields, "unique").unwrap_or(false);
 				let index_type = extract_index_type_field(&expr_struct.fields, "index_type");
 				let where_clause = extract_optional_str_field(&expr_struct.fields, "where_clause");
 				let concurrently =
 					extract_bool_field(&expr_struct.fields, "concurrently").unwrap_or(false);
+				let expressions =
+					extract_optional_string_vec_field(&expr_struct.fields, "expressions");
+				let mysql_options =
+					extract_alter_table_options_field(&expr_struct.fields, "mysql_options");
+				let operator_class =
+					extract_optional_str_field(&expr_struct.fields, "operator_class");
 
 				return Some(match variant_name.as_str() {
 					"CreateIndex" => super::Operation::CreateIndex {
@@ -259,9 +280,34 @@ fn parse_single_operation(expr: &Expr) -> Option<super::Operation> {
 						index_type,
 						where_clause,
 						concurrently,
-						expressions: None,
-						mysql_options: None,
-						operator_class: None,
+						expressions,
+						mysql_options,
+						operator_class,
+					},
+					#[cfg(feature = "pgvector")]
+					"CreateNamedIndex" => super::Operation::CreateNamedIndex {
+						table,
+						name: name?,
+						columns,
+						unique,
+						index_type,
+						where_clause,
+						concurrently,
+						expressions,
+						mysql_options,
+						operator_class,
+					},
+					#[cfg(not(feature = "pgvector"))]
+					"CreateNamedIndex" => super::Operation::CreateIndex {
+						table,
+						columns,
+						unique,
+						index_type,
+						where_clause,
+						concurrently,
+						expressions,
+						mysql_options,
+						operator_class,
 					},
 					"CreateIndexRepair" => super::Operation::CreateIndexRepair {
 						table,
@@ -271,9 +317,9 @@ fn parse_single_operation(expr: &Expr) -> Option<super::Operation> {
 						index_type,
 						where_clause,
 						concurrently,
-						expressions: None,
-						mysql_options: None,
-						operator_class: None,
+						expressions,
+						mysql_options,
+						operator_class,
 					},
 					_ => super::Operation::RestoreIndexOnRollback {
 						table,
@@ -283,9 +329,9 @@ fn parse_single_operation(expr: &Expr) -> Option<super::Operation> {
 						index_type,
 						where_clause,
 						concurrently,
-						expressions: None,
-						mysql_options: None,
-						operator_class: None,
+						expressions,
+						mysql_options,
+						operator_class,
 					},
 				});
 			}
@@ -293,6 +339,49 @@ fn parse_single_operation(expr: &Expr) -> Option<super::Operation> {
 				let table = extract_string_field(&expr_struct.fields, "table")?;
 				let columns = extract_string_vec_field(&expr_struct.fields, "columns");
 				return Some(super::Operation::DropIndex { table, columns });
+			}
+			"DropNamedIndex" => {
+				let table = extract_string_field(&expr_struct.fields, "table")?;
+				let name = extract_string_field(&expr_struct.fields, "name")?;
+				let columns = extract_string_vec_field(&expr_struct.fields, "columns");
+				let unique = extract_bool_field(&expr_struct.fields, "unique").unwrap_or(false);
+				let index_type = extract_index_type_field(&expr_struct.fields, "index_type");
+				let where_clause = extract_optional_str_field(&expr_struct.fields, "where_clause");
+				let concurrently =
+					extract_bool_field(&expr_struct.fields, "concurrently").unwrap_or(false);
+				let expressions =
+					extract_optional_string_vec_field(&expr_struct.fields, "expressions");
+				let mysql_options =
+					extract_alter_table_options_field(&expr_struct.fields, "mysql_options");
+				let operator_class =
+					extract_optional_str_field(&expr_struct.fields, "operator_class");
+				#[cfg(feature = "pgvector")]
+				return Some(super::Operation::DropNamedIndex {
+					table,
+					name,
+					columns,
+					unique,
+					index_type,
+					where_clause,
+					concurrently,
+					expressions,
+					mysql_options,
+					operator_class,
+				});
+				#[cfg(not(feature = "pgvector"))]
+				{
+					let _ = (
+						name,
+						unique,
+						index_type,
+						where_clause,
+						concurrently,
+						expressions,
+						mysql_options,
+						operator_class,
+					);
+					return Some(super::Operation::DropIndex { table, columns });
+				}
 			}
 			"AddConstraint" => {
 				let table = extract_string_field(&expr_struct.fields, "table")?;
@@ -455,6 +544,107 @@ fn extract_string_vec_field(
 	Vec::new()
 }
 
+fn extract_optional_string_vec_field(
+	fields: &syn::punctuated::Punctuated<syn::FieldValue, syn::token::Comma>,
+	field_name: &str,
+) -> Option<Vec<String>> {
+	fields.iter().find_map(|field| {
+		let syn::Member::Named(ident) = &field.member else {
+			return None;
+		};
+		if ident != field_name {
+			return None;
+		}
+		let Expr::Call(call) = &field.expr else {
+			return None;
+		};
+		let Expr::Path(path) = &*call.func else {
+			return None;
+		};
+		path.path
+			.is_ident("Some")
+			.then(|| call.args.first().map(extract_string_vec))
+			.flatten()
+	})
+}
+
+fn extract_alter_table_options_field(
+	fields: &syn::punctuated::Punctuated<syn::FieldValue, syn::token::Comma>,
+	field_name: &str,
+) -> Option<super::AlterTableOptions> {
+	use super::{AlterTableOptions, MySqlAlgorithm, MySqlLock};
+
+	let options = fields.iter().find_map(|field| {
+		let syn::Member::Named(ident) = &field.member else {
+			return None;
+		};
+		if ident != field_name {
+			return None;
+		}
+		let Expr::Call(call) = &field.expr else {
+			return None;
+		};
+		let Expr::Path(path) = &*call.func else {
+			return None;
+		};
+		if !path.path.is_ident("Some") {
+			return None;
+		}
+		let Expr::Struct(options) = call.args.first()? else {
+			return None;
+		};
+		Some(options)
+	})?;
+
+	let algorithm =
+		extract_optional_path_variant_field(&options.fields, "algorithm").and_then(|variant| {
+			match variant.as_str() {
+				"Instant" => Some(MySqlAlgorithm::Instant),
+				"Inplace" => Some(MySqlAlgorithm::Inplace),
+				"Copy" => Some(MySqlAlgorithm::Copy),
+				"Default" => Some(MySqlAlgorithm::Default),
+				_ => None,
+			}
+		});
+	let lock = extract_optional_path_variant_field(&options.fields, "lock").and_then(|variant| {
+		match variant.as_str() {
+			"None" => Some(MySqlLock::None),
+			"Shared" => Some(MySqlLock::Shared),
+			"Exclusive" => Some(MySqlLock::Exclusive),
+			"Default" => Some(MySqlLock::Default),
+			_ => None,
+		}
+	});
+	Some(AlterTableOptions { algorithm, lock })
+}
+
+fn extract_optional_path_variant_field(
+	fields: &syn::punctuated::Punctuated<syn::FieldValue, syn::token::Comma>,
+	field_name: &str,
+) -> Option<String> {
+	fields.iter().find_map(|field| {
+		let syn::Member::Named(ident) = &field.member else {
+			return None;
+		};
+		if ident != field_name {
+			return None;
+		}
+		let Expr::Call(call) = &field.expr else {
+			return None;
+		};
+		let Expr::Path(some) = &*call.func else {
+			return None;
+		};
+		if !some.path.is_ident("Some") {
+			return None;
+		}
+		let Expr::Path(variant) = call.args.first()? else {
+			return None;
+		};
+		Some(variant.path.segments.last()?.ident.to_string())
+	})
+}
+
 /// Extract `Vec<String>` from expression
 fn extract_string_vec(expr: &Expr) -> Vec<String> {
 	let mut result = Vec::new();
@@ -569,24 +759,79 @@ fn extract_index_type_field(
 				&& let Expr::Path(func_path) = &*expr_call.func
 				&& func_path.path.is_ident("Some")
 				&& !expr_call.args.is_empty()
-				&& let Expr::Path(variant_path) = &expr_call.args[0]
-				&& let Some(last_segment) = variant_path.path.segments.last()
 			{
-				let variant = last_segment.ident.to_string();
-				return match variant.as_str() {
-					"BTree" => Some(IndexType::BTree),
-					"Hash" => Some(IndexType::Hash),
-					"Gin" => Some(IndexType::Gin),
-					"Gist" => Some(IndexType::Gist),
-					"Brin" => Some(IndexType::Brin),
-					"Fulltext" => Some(IndexType::Fulltext),
-					"Spatial" => Some(IndexType::Spatial),
-					_ => None,
-				};
+				match &expr_call.args[0] {
+					Expr::Path(variant_path) => {
+						let variant = variant_path.path.segments.last()?.ident.to_string();
+						return match variant.as_str() {
+							"BTree" => Some(IndexType::BTree),
+							"Hash" => Some(IndexType::Hash),
+							"Gin" => Some(IndexType::Gin),
+							"Gist" => Some(IndexType::Gist),
+							"Brin" => Some(IndexType::Brin),
+							"Fulltext" => Some(IndexType::Fulltext),
+							"Spatial" => Some(IndexType::Spatial),
+							_ => None,
+						};
+					}
+					Expr::Struct(variant) => {
+						let variant_name = variant.path.segments.last()?.ident.to_string();
+						return match variant_name.as_str() {
+							#[cfg(feature = "pgvector")]
+							"Hnsw" => Some(IndexType::Hnsw {
+								m: extract_optional_integer_field(&variant.fields, "m")
+									.and_then(|value| u16::try_from(value).ok()),
+								ef_construction: extract_optional_integer_field(
+									&variant.fields,
+									"ef_construction",
+								)
+								.and_then(|value| u16::try_from(value).ok()),
+							}),
+							#[cfg(feature = "pgvector")]
+							"Ivfflat" => Some(IndexType::Ivfflat {
+								lists: extract_optional_integer_field(&variant.fields, "lists")
+									.and_then(|value| u32::try_from(value).ok()),
+							}),
+							_ => None,
+						};
+					}
+					_ => {}
+				}
 			}
 		}
 	}
 	None
+}
+
+#[cfg(feature = "pgvector")]
+fn extract_optional_integer_field(
+	fields: &syn::punctuated::Punctuated<syn::FieldValue, syn::token::Comma>,
+	field_name: &str,
+) -> Option<u64> {
+	fields.iter().find_map(|field| {
+		let syn::Member::Named(ident) = &field.member else {
+			return None;
+		};
+		if ident != field_name {
+			return None;
+		}
+		let Expr::Call(call) = &field.expr else {
+			return None;
+		};
+		let Expr::Path(path) = &*call.func else {
+			return None;
+		};
+		if !path.path.is_ident("Some") {
+			return None;
+		}
+		let Expr::Lit(value) = call.args.first()? else {
+			return None;
+		};
+		let syn::Lit::Int(value) = &value.lit else {
+			return None;
+		};
+		value.base10_parse().ok()
+	})
 }
 
 /// Extract `Vec<String>` from vec!["str".to_string(), ...] pattern
@@ -1391,6 +1636,10 @@ fn parse_query_column_type(expr: &Expr) -> Option<super::ColumnType> {
 						inner,
 					)?)))
 				}
+				#[cfg(feature = "pgvector")]
+				"Vector" if expr_call.args.len() == 1 => Some(super::ColumnType::Vector(parse_u32_literal(
+					&expr_call.args[0],
+				)?)),
 				"Custom" if expr_call.args.len() == 1 => Some(super::ColumnType::Custom(
 					extract_string_literal(&expr_call.args[0])?,
 				)),
@@ -1588,9 +1837,112 @@ fn parse_bool_return(func: &ItemFn) -> Option<bool> {
 
 #[cfg(test)]
 mod tests {
+	use quote::ToTokens;
+
 	use super::extract_migration_metadata;
 	use crate::field_domain::{FieldDomain, ModelEnumRepr, ModelEnumValue};
-	use crate::migrations::{ColumnType, Constraint, GeneratedStorage, Operation, SchemaExpr};
+	use crate::migrations::{
+		AlterTableOptions, ColumnType, Constraint, FieldType, GeneratedStorage, IndexType,
+		MySqlAlgorithm, MySqlLock, Operation, SchemaExpr,
+	};
+
+	#[test]
+	#[cfg(feature = "pgvector")]
+	fn vector_index_tokens_reparse_data_bearing_index_types() {
+		let operations = [
+			Operation::CreateIndex {
+				table: "source".to_string(),
+				columns: vec!["embedding".to_string()],
+				unique: false,
+				index_type: Some(IndexType::Hnsw {
+					m: Some(16),
+					ef_construction: Some(64),
+				}),
+				where_clause: Some("tenant_id IS NOT NULL".to_string()),
+				concurrently: true,
+				expressions: None,
+				mysql_options: Some(
+					AlterTableOptions::new()
+						.with_algorithm(MySqlAlgorithm::Inplace)
+						.with_lock(MySqlLock::Shared),
+				),
+				operator_class: Some("vector_cosine_ops".to_string()),
+			},
+			Operation::CreateNamedIndex {
+				table: "source".to_string(),
+				name: "source_embedding_ann".to_string(),
+				columns: vec!["embedding".to_string()],
+				unique: false,
+				index_type: Some(IndexType::Hnsw {
+					m: Some(16),
+					ef_construction: Some(64),
+				}),
+				where_clause: None,
+				concurrently: false,
+				expressions: None,
+				mysql_options: None,
+				operator_class: Some("vector_cosine_ops".to_string()),
+			},
+			Operation::CreateIndexRepair {
+				table: "source".to_string(),
+				name: Some("source_normalized_embedding_l2".to_string()),
+				columns: vec![],
+				unique: false,
+				index_type: Some(IndexType::Ivfflat { lists: Some(100) }),
+				where_clause: Some("active".to_string()),
+				concurrently: true,
+				expressions: Some(vec!["normalize(embedding)".to_string()]),
+				mysql_options: Some(
+					AlterTableOptions::new()
+						.with_algorithm(MySqlAlgorithm::Copy)
+						.with_lock(MySqlLock::Exclusive),
+				),
+				operator_class: Some("vector_l2_ops".to_string()),
+			},
+			Operation::RestoreIndexOnRollback {
+				table: "source".to_string(),
+				name: Some("source_embedding_ip".to_string()),
+				columns: vec!["embedding".to_string()],
+				unique: false,
+				index_type: Some(IndexType::Hnsw {
+					m: None,
+					ef_construction: None,
+				}),
+				where_clause: None,
+				concurrently: false,
+				expressions: None,
+				mysql_options: Some(AlterTableOptions::default()),
+				operator_class: Some("vector_ip_ops".to_string()),
+			},
+			Operation::DropNamedIndex {
+				table: "source".to_string(),
+				name: "source_embedding_ann".to_string(),
+				columns: vec!["embedding".to_string()],
+				unique: false,
+				index_type: Some(IndexType::Hnsw {
+					m: Some(16),
+					ef_construction: Some(64),
+				}),
+				where_clause: None,
+				concurrently: false,
+				expressions: None,
+				mysql_options: None,
+				operator_class: Some("vector_cosine_ops".to_string()),
+			},
+		];
+
+		for operation in operations {
+			let tokens = operation.to_token_stream().to_string();
+			let expression: syn::Expr =
+				syn::parse_str(&tokens).expect("generated operation tokens must parse");
+
+			assert_eq!(
+				super::parse_single_operation(&expression),
+				Some(operation),
+				"generated operation tokens must preserve vector index metadata: {tokens}"
+			);
+		}
+	}
 
 	#[test]
 	fn drop_constraint_ast_accepts_legacy_and_typed_variants() {
@@ -1910,6 +2262,39 @@ pub(super) fn migration() -> Migration {
 			SchemaExpr::col("name").cast(ColumnType::Custom("CITEXT".to_string()))
 		);
 	}
+
+	#[cfg(feature = "pgvector")]
+	#[test]
+	fn parse_schema_expr_tokens_accepts_vector_casts() {
+		let parsed = super::parse_schema_expr_tokens(
+			r#"SchemaExpr::col("embedding").cast(ColumnType::Vector(3))"#,
+		)
+		.expect("vector cast tokens should parse");
+
+		assert_eq!(
+			parsed,
+			SchemaExpr::col("embedding").cast(ColumnType::Vector(3))
+		);
+	}
+
+	#[cfg(feature = "pgvector")]
+	#[test]
+	fn extract_field_type_accepts_vector_arrays() {
+		let column: syn::ExprStruct = syn::parse_quote! {
+			ColumnDefinition {
+				type_definition: FieldType::Array(Box::new(FieldType::Vector {
+					dimensions: 3,
+				}))
+			}
+		};
+
+		assert_eq!(
+			super::extract_field_type(&column.fields),
+			Some(FieldType::Array(Box::new(FieldType::Vector {
+				dimensions: 3,
+			})))
+		);
+	}
 }
 
 /// Extract FieldType from type_definition field
@@ -1974,6 +2359,30 @@ fn extract_field_type(
 				{
 					let variant = last_segment.ident.to_string();
 
+					#[cfg(feature = "pgvector")]
+					if variant == "Array" && expr_call.args.len() == 1 {
+						let inner = unwrap_box_new_expr(&expr_call.args[0])?;
+						if let Expr::Struct(inner_struct) = inner
+							&& inner_struct
+								.path
+								.segments
+								.last()
+								.is_some_and(|segment| segment.ident == "Vector")
+						{
+							for field_value in &inner_struct.fields {
+								if let syn::Member::Named(ident) = &field_value.member
+									&& ident == "dimensions" && let Expr::Lit(expr_lit) =
+									&field_value.expr && let syn::Lit::Int(lit_int) = &expr_lit.lit
+									&& let Ok(dimensions) = lit_int.base10_parse::<usize>()
+								{
+									return Some(FieldType::Array(Box::new(FieldType::Vector {
+										dimensions,
+									})));
+								}
+							}
+						}
+					}
+
 					if !expr_call.args.is_empty()
 						&& let Expr::Lit(expr_lit) = &expr_call.args[0]
 						&& let syn::Lit::Int(lit_int) = &expr_lit.lit
@@ -1995,6 +2404,18 @@ fn extract_field_type(
 					let variant = last_segment.ident.to_string();
 
 					match variant.as_str() {
+						#[cfg(feature = "pgvector")]
+						"Vector" => {
+							for field_value in &expr_struct.fields {
+								if let syn::Member::Named(ident) = &field_value.member
+									&& ident == "dimensions" && let Expr::Lit(expr_lit) =
+									&field_value.expr && let syn::Lit::Int(lit_int) = &expr_lit.lit
+									&& let Ok(dimensions) = lit_int.base10_parse::<usize>()
+								{
+									return Some(FieldType::Vector { dimensions });
+								}
+							}
+						}
 						"Decimal" => {
 							let mut precision = 10u32;
 							let mut scale = 0u32;

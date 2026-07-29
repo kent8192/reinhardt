@@ -103,9 +103,11 @@ impl QueryRow {
 					serde_json::Value::Null
 				}
 				#[cfg(feature = "pgvector")]
-				QueryValue::Vector(values) => serde_json::Value::Array(
+				QueryValue::Vector(Some(values)) => serde_json::Value::Array(
 					values.into_iter().map(serde_json::Value::from).collect(),
 				),
+				#[cfg(feature = "pgvector")]
+				QueryValue::Vector(None) => serde_json::Value::Null,
 				QueryValue::StringArray(values) => serde_json::Value::Array(
 					values.into_iter().map(serde_json::Value::String).collect(),
 				),
@@ -585,7 +587,7 @@ mod tests {
 		let mut row = Row::new();
 		row.insert(
 			"embedding".to_owned(),
-			QueryValue::Vector(vec![1.0, 2.0, 3.0]),
+			QueryValue::Vector(Some(vec![1.0, 2.0, 3.0])),
 		);
 
 		let query_row = QueryRow::from_backend_row(row);

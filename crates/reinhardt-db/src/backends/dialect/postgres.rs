@@ -60,7 +60,11 @@ impl PostgresBackend {
 			QueryValue::Uuid(u) => query.bind(u),
 			QueryValue::Json(value) => query.bind(value.as_deref().cloned().map(sqlx::types::Json)),
 			#[cfg(feature = "pgvector")]
-			QueryValue::Vector(values) => query.bind(PgVectorValue::new(values.clone())),
+			QueryValue::Vector(values) => query.bind(
+				values
+					.as_ref()
+					.map(|values| PgVectorValue::new(values.clone())),
+			),
 			QueryValue::StringArray(values) => query.bind(values),
 			QueryValue::IntArray(values) => query.bind(values),
 			QueryValue::BigIntArray(values) => query.bind(values),
@@ -286,7 +290,11 @@ impl PgTransactionExecutor {
 			QueryValue::Uuid(u) => query.bind(u),
 			QueryValue::Json(value) => query.bind(value.as_deref().cloned().map(sqlx::types::Json)),
 			#[cfg(feature = "pgvector")]
-			QueryValue::Vector(values) => query.bind(PgVectorValue::new(values.clone())),
+			QueryValue::Vector(values) => query.bind(
+				values
+					.as_ref()
+					.map(|values| PgVectorValue::new(values.clone())),
+			),
 			QueryValue::StringArray(values) => query.bind(values),
 			QueryValue::IntArray(values) => query.bind(values),
 			QueryValue::BigIntArray(values) => query.bind(values),
@@ -333,7 +341,7 @@ impl PostgresBackend {
 				{
 					Some(value) => row.insert(
 						column_name.to_string(),
-						QueryValue::Vector(value.into_vec()),
+						QueryValue::Vector(Some(value.into_vec())),
 					),
 					None => row.insert(column_name.to_string(), QueryValue::Null),
 				};

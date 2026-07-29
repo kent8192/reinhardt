@@ -440,7 +440,7 @@ async fn native_pgvector_workflow_round_trips_models_and_typed_distance_queries(
 			 FROM task9_pgvector_documents \
 			 ORDER BY id \
 			 LIMIT 1",
-			vec![QueryValue::Vector(vec![1.0, 0.0])],
+			vec![QueryValue::Vector(Some(vec![1.0, 0.0]))],
 		)
 		.await
 	{

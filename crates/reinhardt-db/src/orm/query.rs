@@ -8900,7 +8900,7 @@ mod tests {
 		);
 		assert_eq!(
 			params,
-			vec![crate::orm::QueryValue::Vector(vec![1.0, 2.0, 3.0])]
+			vec![crate::orm::QueryValue::Vector(Some(vec![1.0, 2.0, 3.0]))]
 		);
 	}
 
@@ -8921,7 +8921,7 @@ mod tests {
 		);
 		assert_eq!(
 			params,
-			vec![crate::orm::QueryValue::Vector(vec![3.0, 2.0, 1.0])]
+			vec![crate::orm::QueryValue::Vector(Some(vec![3.0, 2.0, 1.0]))]
 		);
 	}
 
@@ -8942,7 +8942,7 @@ mod tests {
 		);
 		assert_eq!(
 			params,
-			vec![crate::orm::QueryValue::Vector(vec![0.5, 1.5, 2.5])]
+			vec![crate::orm::QueryValue::Vector(Some(vec![0.5, 1.5, 2.5]))]
 		);
 	}
 
@@ -9011,9 +9011,9 @@ mod tests {
 		assert_eq!(
 			params,
 			vec![
-				crate::orm::QueryValue::Vector(vec![1.0, 2.0, 3.0]),
+				crate::orm::QueryValue::Vector(Some(vec![1.0, 2.0, 3.0])),
 				crate::orm::QueryValue::Float(0.25),
-				crate::orm::QueryValue::Vector(vec![4.0, 5.0, 6.0]),
+				crate::orm::QueryValue::Vector(Some(vec![4.0, 5.0, 6.0])),
 			]
 		);
 	}
@@ -9064,12 +9064,12 @@ mod tests {
 		assert_eq!(
 			params,
 			vec![
-				crate::orm::QueryValue::Vector(vec![1.0, 2.0, 3.0]),
-				crate::orm::QueryValue::Vector(vec![3.0, 2.0, 1.0]),
-				crate::orm::QueryValue::Vector(vec![4.0, 5.0, 6.0]),
-				crate::orm::QueryValue::Vector(vec![7.0, 8.0, 9.0]),
+				crate::orm::QueryValue::Vector(Some(vec![1.0, 2.0, 3.0])),
+				crate::orm::QueryValue::Vector(Some(vec![3.0, 2.0, 1.0])),
+				crate::orm::QueryValue::Vector(Some(vec![4.0, 5.0, 6.0])),
+				crate::orm::QueryValue::Vector(Some(vec![7.0, 8.0, 9.0])),
 				crate::orm::QueryValue::Float(0.25),
-				crate::orm::QueryValue::Vector(vec![9.0, 8.0, 7.0]),
+				crate::orm::QueryValue::Vector(Some(vec![9.0, 8.0, 7.0])),
 			]
 		);
 	}
@@ -9129,9 +9129,9 @@ mod tests {
 		assert_eq!(
 			executor.calls[0].1,
 			vec![
-				crate::orm::QueryValue::Vector(vec![1.0, 2.0, 3.0]),
+				crate::orm::QueryValue::Vector(Some(vec![1.0, 2.0, 3.0])),
 				crate::orm::QueryValue::Float(0.25),
-				crate::orm::QueryValue::Vector(vec![4.0, 5.0, 6.0]),
+				crate::orm::QueryValue::Vector(Some(vec![4.0, 5.0, 6.0])),
 			]
 		);
 		assert_eq!(executor.contexts, vec![Some(distance_and_vector_context())]);
@@ -9160,7 +9160,7 @@ mod tests {
 		assert_eq!(rows[0].get::<f64>("distance"), Some(0.25));
 		assert_eq!(
 			executor.calls[0].1,
-			vec![crate::orm::QueryValue::Vector(vec![1.0, 2.0, 3.0])]
+			vec![crate::orm::QueryValue::Vector(Some(vec![1.0, 2.0, 3.0]))]
 		);
 		assert_eq!(executor.contexts, vec![Some(distance_and_vector_context())]);
 	}
@@ -9283,7 +9283,7 @@ mod tests {
 					.to_owned(),
 				vec![
 					crate::orm::QueryValue::String("alice".to_owned()),
-					crate::orm::QueryValue::Vector(vec![1.0, 2.0, 3.0]),
+					crate::orm::QueryValue::Vector(Some(vec![1.0, 2.0, 3.0])),
 					crate::orm::QueryValue::Float(0.25),
 				],
 			)]
@@ -9418,7 +9418,7 @@ mod tests {
 		);
 		assert_eq!(
 			params,
-			vec![crate::orm::QueryValue::Vector(vec![1.0, 2.0, 3.0])]
+			vec![crate::orm::QueryValue::Vector(Some(vec![1.0, 2.0, 3.0]))]
 		);
 	}
 

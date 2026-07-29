@@ -1364,7 +1364,12 @@ impl<M: Model> Manager<M> {
 			stmt.returning(Self::returning_columns_from_object(&obj));
 		}
 		let context = super::execution::pgvector_context_for_insert(&stmt);
-		let (sql, values) = build_insert_sql_checked(&stmt, backend, conn.is_cockroachdb())?;
+		let (sql, values) = match build_insert_sql_checked(&stmt, backend, conn.is_cockroachdb()) {
+			Ok(sql_and_values) => sql_and_values,
+			Err(error) => {
+				return super::custom_manager::CreateWithConnOutcome::FailedBeforeInsert(error);
+			}
+		};
 		let params = values
 			.0
 			.into_iter()
@@ -1423,7 +1428,14 @@ impl<M: Model> Manager<M> {
 				.column(ColumnRef::Asterisk)
 				.and_where(Expr::col(Alias::new(primary_key_column)).eq(primary_key));
 			let (select_sql, select_values) =
-				build_select_sql_checked(&select, backend, conn.is_cockroachdb())?;
+				match build_select_sql_checked(&select, backend, conn.is_cockroachdb()) {
+					Ok(sql_and_values) => sql_and_values,
+					Err(error) => {
+						return super::custom_manager::CreateWithConnOutcome::FailedAfterInsert(
+							error,
+						);
+					}
+				};
 			let select_params = select_values
 				.0
 				.into_iter()
@@ -1622,9 +1634,11 @@ impl<M: Model> Manager<M> {
 			// JSON types - serialize to string
 			reinhardt_query::value::Value::Json(json) => QueryValue::Json(json),
 			#[cfg(feature = "pgvector")]
-			reinhardt_query::value::Value::Vector(Some(values)) => QueryValue::Vector((*values).clone()),
+			reinhardt_query::value::Value::Vector(Some(values)) => {
+				QueryValue::Vector(Some((*values).clone()))
+			}
 			#[cfg(feature = "pgvector")]
-			reinhardt_query::value::Value::Vector(None) => QueryValue::Null,
+			reinhardt_query::value::Value::Vector(None) => QueryValue::Vector(None),
 			reinhardt_query::value::Value::Array(array_type, Some(values)) => {
 				use reinhardt_query::value::Value as SeaValue;
 
@@ -1724,7 +1738,7 @@ impl<M: Model> Manager<M> {
 			QueryValue::Uuid(value) => reinhardt_query::value::Value::Uuid(Some(Box::new(value))),
 			QueryValue::Json(value) => reinhardt_query::value::Value::Json(value),
 			#[cfg(feature = "pgvector")]
-			QueryValue::Vector(values) => reinhardt_query::value::Value::Vector(Some(Box::new(values))),
+			QueryValue::Vector(values) => reinhardt_query::value::Value::Vector(values.map(Box::new)),
 			QueryValue::StringArray(values) => {
 				reinhardt_query::value::Value::Json(Some(Box::new(serde_json::Value::Array(
 					values.into_iter().map(serde_json::Value::String).collect(),
@@ -3012,7 +3026,7 @@ mod tests {
 				("id".to_owned(), QueryValue::Int(7)),
 				(
 					"embedding".to_owned(),
-					QueryValue::Vector(vec![1.0, 2.0, 3.0]),
+					QueryValue::Vector(Some(vec![1.0, 2.0, 3.0])),
 				),
 			]),
 		}
@@ -3220,13 +3234,17 @@ mod tests {
 	#[cfg(feature = "pgvector")]
 	fn manager_preserves_vector_query_values() {
 		let value =
-			Manager::<JsonManagerModel>::query_value_to_sea_value(QueryValue::Vector(vec![
+			Manager::<JsonManagerModel>::query_value_to_sea_value(QueryValue::Vector(Some(vec![
 				1.0, 2.0, 3.0,
-			]));
+			])));
 
 		assert_eq!(
 			value,
 			reinhardt_query::value::Value::Vector(Some(Box::new(vec![1.0, 2.0, 3.0])))
+		);
+		assert_eq!(
+			Manager::<JsonManagerModel>::query_value_to_sea_value(QueryValue::Vector(None)),
+			reinhardt_query::value::Value::Vector(None)
 		);
 	}
 
@@ -3240,8 +3258,8 @@ mod tests {
 			reinhardt_query::value::Value::Vector(None),
 		);
 
-		assert_eq!(value, QueryValue::Vector(vec![1.0, 2.0, 3.0]));
-		assert_eq!(null_value, QueryValue::Null);
+		assert_eq!(value, QueryValue::Vector(Some(vec![1.0, 2.0, 3.0])));
+		assert_eq!(null_value, QueryValue::Vector(None));
 	}
 
 	#[cfg(feature = "pgvector")]

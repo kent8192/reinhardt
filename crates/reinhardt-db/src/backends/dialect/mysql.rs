@@ -762,7 +762,7 @@ mod tests {
 	fn mysql_rejects_vector_parameters_without_a_fallback_encoding() {
 		let error = MySqlBackend::bind_value(
 			sqlx::query("SELECT ?"),
-			&QueryValue::Vector(vec![1.0, 2.0, 3.0]),
+			&QueryValue::Vector(Some(vec![1.0, 2.0, 3.0])),
 		)
 		.err()
 		.unwrap();

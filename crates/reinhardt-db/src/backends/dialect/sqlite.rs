@@ -556,7 +556,7 @@ mod tests {
 	fn sqlite_rejects_vector_parameters_without_a_fallback_encoding() {
 		let error = SqliteBackend::bind_value(
 			sqlx::query("SELECT ?"),
-			&QueryValue::Vector(vec![1.0, 2.0, 3.0]),
+			&QueryValue::Vector(Some(vec![1.0, 2.0, 3.0])),
 		)
 		.err()
 		.unwrap();

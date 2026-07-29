@@ -89,6 +89,8 @@ fn convert_value_to_query_value(value: reinhardt_query::value::Value) -> QueryVa
 		| SV::BigDecimal(None)
 		| SV::Uuid(None) => QueryValue::Null,
 		#[cfg(feature = "pgvector")]
+		SV::Vector(None) => QueryValue::Vector(None),
+		#[cfg(not(feature = "pgvector"))]
 		SV::Vector(None) => QueryValue::Null,
 
 		// Boolean
@@ -172,7 +174,9 @@ fn convert_value_to_query_value(value: reinhardt_query::value::Value) -> QueryVa
 
 		// Native PostgreSQL dense vectors.
 		#[cfg(feature = "pgvector")]
-		SV::Vector(Some(values)) => QueryValue::Vector(*values),
+		SV::Vector(Some(values)) => QueryValue::Vector(Some(*values)),
+		#[cfg(not(feature = "pgvector"))]
+		SV::Vector(Some(values)) => QueryValue::String(format!("{values:?}")),
 
 		// Arrays - convert to string
 		// For reinhardt-query 1.0.0-rc.29+: Array(ArrayType, Option<Box<Vec<Value>>>)
@@ -228,6 +232,8 @@ fn query_value_to_json(value: &SV) -> serde_json::Value {
 		SV::Decimal(value) => serde_json::json!(value.as_deref().map(ToString::to_string)),
 		SV::BigDecimal(value) => serde_json::json!(value.as_deref().map(ToString::to_string)),
 		#[cfg(feature = "pgvector")]
+		SV::Vector(value) => serde_json::json!(value),
+		#[cfg(not(feature = "pgvector"))]
 		SV::Vector(value) => serde_json::json!(value),
 		SV::Array(_, value) => value.as_deref().map_or(serde_json::Value::Null, |values| {
 			array_values_to_json(values)
@@ -1951,15 +1957,15 @@ mod tests {
 
 		let result = convert_value_to_query_value(value);
 
-		assert_eq!(result, QueryValue::Vector(vec![1.0, 2.0, 3.0]));
+		assert_eq!(result, QueryValue::Vector(Some(vec![1.0, 2.0, 3.0])));
 	}
 
 	#[test]
 	#[cfg(feature = "pgvector")]
-	fn null_vector_query_values_remain_sql_null() {
+	fn null_vector_query_values_retain_the_vector_parameter_type() {
 		let result = convert_value_to_query_value(reinhardt_query::value::Value::Vector(None));
 
-		assert_eq!(result, QueryValue::Null);
+		assert_eq!(result, QueryValue::Vector(None));
 	}
 
 	#[test]

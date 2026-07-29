@@ -90,10 +90,33 @@ struct DerivedSource {
 	manual_target: db::associations::ForeignKeyField<ManualTarget>,
 }
 
+#[model(
+	app_label = "derived",
+	table_name = "model_with_constraints",
+	unique_together = ("tenant_id", "slug")
+)]
+#[derive(Serialize, Deserialize)]
+struct ModelWithConstraint {
+	#[field(primary_key = true)]
+	id: i64,
+	#[field(db_column = "tenant_key")]
+	tenant_id: i64,
+	#[field(db_column = "slug_key", max_length = 255)]
+	slug: String,
+}
+
 fn main() {
+	use db::orm::Model;
 	use db::orm::relations::RelationPathLike;
 
 	let relation = DerivedSource::rel_manual_target();
 	assert_eq!(relation.steps()[0].target_table, "manual_targets");
 	let _ = DerivedSource::field_id();
+
+	let unique = ModelWithConstraint::constraint_metadata().remove(0);
+	assert_eq!(unique.fields, vec!["tenant_id", "slug"]);
+	assert_eq!(unique.condition, None);
+	assert!(!unique.deferrable);
+	assert_eq!(unique.nulls_distinct, None);
+	assert_eq!(unique.definition, "UNIQUE (tenant_key, slug_key)");
 }

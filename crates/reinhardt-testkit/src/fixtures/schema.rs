@@ -1247,6 +1247,10 @@ mod tests {
 			name: "age_check".to_string(),
 			constraint_type: ConstraintType::Check,
 			definition: "CONSTRAINT age_check CHECK (age >= 18)".to_string(),
+			fields: Vec::new(),
+			condition: None,
+			deferrable: false,
+			nulls_distinct: None,
 		}]);
 
 		assert!(matches!(
@@ -1267,6 +1271,10 @@ mod tests {
 				name: "active_email_unique".to_string(),
 				constraint_type: ConstraintType::Unique,
 				definition: "UNIQUE (email) WHERE deleted_at IS NULL".to_string(),
+				fields: vec!["email".to_string()],
+				condition: Some("deleted_at IS NULL".to_string()),
+				deferrable: false,
+				nulls_distinct: None,
 			}],
 			indexes: vec![],
 		};

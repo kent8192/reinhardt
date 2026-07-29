@@ -413,6 +413,14 @@ pub struct ConstraintInfo {
 	pub constraint_type: ConstraintType,
 	/// SQL definition
 	pub definition: String,
+	/// Logical model fields that participate in the constraint
+	pub fields: Vec<String>,
+	/// Optional predicate for a partial constraint
+	pub condition: Option<String>,
+	/// Whether constraint enforcement can be deferred
+	pub deferrable: bool,
+	/// Whether multiple NULL values are considered distinct
+	pub nulls_distinct: Option<bool>,
 }
 
 /// Type of database constraint
@@ -446,6 +454,10 @@ impl ConstraintInfo {
 			name: constraint.name.clone(),
 			constraint_type: ConstraintType::Check,
 			definition: constraint.to_sql(),
+			fields: Vec::new(),
+			condition: None,
+			deferrable: false,
+			nulls_distinct: None,
 		}
 	}
 
@@ -468,6 +480,10 @@ impl ConstraintInfo {
 			name: constraint.name.clone(),
 			constraint_type: ConstraintType::Unique,
 			definition: constraint.to_sql(),
+			fields: constraint.fields.clone(),
+			condition: constraint.condition.clone(),
+			deferrable: false,
+			nulls_distinct: None,
 		}
 	}
 
@@ -497,6 +513,10 @@ impl ConstraintInfo {
 			name: constraint.name.clone(),
 			constraint_type: ConstraintType::ForeignKey,
 			definition: constraint.to_sql(),
+			fields: Vec::new(),
+			condition: None,
+			deferrable: false,
+			nulls_distinct: None,
 		}
 	}
 }
@@ -1492,6 +1512,10 @@ mod tests {
 		assert_eq!(info.name, "email_unique");
 		assert_eq!(info.constraint_type, ConstraintType::Unique);
 		assert!(info.definition.contains("UNIQUE"));
+		assert_eq!(info.fields, vec!["email"]);
+		assert_eq!(info.condition, None);
+		assert!(!info.deferrable);
+		assert_eq!(info.nulls_distinct, None);
 	}
 
 	#[test]

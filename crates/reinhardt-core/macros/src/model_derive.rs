@@ -52,6 +52,13 @@ enum ConstraintSpec {
 	},
 }
 
+struct UniqueConstraintMetadata {
+	logical_fields: Vec<String>,
+	column_names: Vec<String>,
+	name: Option<String>,
+	condition: Option<String>,
+}
+
 /// Parsed model attributes (intermediate representation)
 struct ModelAttributesParsed {
 	app_label: Option<String>,
@@ -4431,7 +4438,7 @@ pub(crate) fn model_derive_impl(mut input: DeriveInput) -> Result<TokenStream> {
 			.and_then(|field| field.config.db_column.clone())
 			.unwrap_or_else(|| field_name.to_string())
 	};
-	let unique_constraints: Vec<(Vec<String>, Option<String>, Option<String>)> = model_config
+	let unique_constraints: Vec<UniqueConstraintMetadata> = model_config
 		.constraints
 		.iter()
 		.map(|c| match c {
@@ -4439,35 +4446,36 @@ pub(crate) fn model_derive_impl(mut input: DeriveInput) -> Result<TokenStream> {
 				fields,
 				name,
 				condition,
-			} => (
-				fields
+			} => UniqueConstraintMetadata {
+				logical_fields: fields.clone(),
+				column_names: fields
 					.iter()
 					.map(|field| resolve_db_column(field))
 					.collect(),
-				name.clone(),
-				condition.clone(),
-			),
+				name: name.clone(),
+				condition: condition.clone(),
+			},
 		})
 		.collect();
 
 	// Generate unique constraint names and definitions for code generation
 	let unique_constraint_names: Vec<String> = unique_constraints
 		.iter()
-		.map(|(fields, name, _)| {
-			if let Some(n) = name {
+		.map(|constraint| {
+			if let Some(n) = &constraint.name {
 				n.clone()
 			} else {
 				// Auto-generate name: {table_name}_{field1}_{field2}_uniq
-				format!("{}_{}_uniq", table_name, fields.join("_"))
+				format!("{}_{}_uniq", table_name, constraint.column_names.join("_"))
 			}
 		})
 		.collect();
 
 	let unique_constraint_definitions: Vec<String> = unique_constraints
 		.iter()
-		.map(|(fields, _, condition)| {
-			let fields_str = fields.join(", ");
-			if let Some(cond) = condition {
+		.map(|constraint| {
+			let fields_str = constraint.column_names.join(", ");
+			if let Some(cond) = &constraint.condition {
 				format!("UNIQUE ({}) WHERE {}", fields_str, cond)
 			} else {
 				format!("UNIQUE ({})", fields_str)
@@ -4481,7 +4489,18 @@ pub(crate) fn model_derive_impl(mut input: DeriveInput) -> Result<TokenStream> {
 	// See reinhardt-web#4022.
 	let unique_constraint_field_lists: Vec<Vec<String>> = unique_constraints
 		.iter()
-		.map(|(fields, _, _)| fields.clone())
+		.map(|constraint| constraint.column_names.clone())
+		.collect();
+	let unique_constraint_logical_field_lists: Vec<Vec<String>> = unique_constraints
+		.iter()
+		.map(|constraint| constraint.logical_fields.clone())
+		.collect();
+	let unique_constraint_conditions: Vec<TokenStream> = unique_constraints
+		.iter()
+		.map(|constraint| match &constraint.condition {
+			Some(condition) => quote! { Some(#condition.to_string()) },
+			None => quote! { None },
+		})
 		.collect();
 
 	// Define composite_pk_type_def and holder for code generation
@@ -4969,6 +4988,10 @@ pub(crate) fn model_derive_impl(mut input: DeriveInput) -> Result<TokenStream> {
 						name: #check_constraint_names.to_string(),
 						constraint_type: #orm_crate::inspection::ConstraintType::Check,
 						definition: #check_constraint_expressions.to_string(),
+						fields: Vec::new(),
+						condition: None,
+						deferrable: false,
+						nulls_distinct: None,
 					});
 				)*
 				// Unique constraints
@@ -4977,6 +5000,10 @@ pub(crate) fn model_derive_impl(mut input: DeriveInput) -> Result<TokenStream> {
 						name: #unique_constraint_names.to_string(),
 						constraint_type: #orm_crate::inspection::ConstraintType::Unique,
 						definition: #unique_constraint_definitions.to_string(),
+						fields: vec![#(#unique_constraint_logical_field_lists.to_string()),*],
+						condition: #unique_constraint_conditions,
+						deferrable: false,
+						nulls_distinct: None,
 					});
 				)*
 				constraints
@@ -9032,6 +9059,7 @@ mod tests {
 			compact
 				.contains("fields:vec![\"email_addr\".to_string(),\"display_name\".to_string()]")
 		);
+		assert!(compact.contains("fields:vec![\"email\".to_string(),\"full_name\".to_string()]"));
 		assert!(compact.contains("Field::new(vec![\"email_addr\"])"));
 	}
 

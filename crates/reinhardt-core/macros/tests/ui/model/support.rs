@@ -1092,6 +1092,10 @@ pub mod db {
 				pub name: String,
 				pub constraint_type: ConstraintType,
 				pub definition: String,
+				pub fields: Vec<String>,
+				pub condition: Option<String>,
+				pub deferrable: bool,
+				pub nulls_distinct: Option<bool>,
 			}
 
 			#[derive(Debug, Clone, PartialEq)]

@@ -141,12 +141,13 @@ pub use crate::ui::{
 
 pub use crate::callback::{
 	Callback, IntoEventHandler, IntoTypedEventHandler, into_event_handler, raw_async_event_handler,
-	raw_event_handler, typed_async_event_handler, typed_event_handler,
+	raw_event_handler, typed_async_custom_event_handler, typed_async_event_handler,
+	typed_custom_event_handler, typed_event_handler,
 };
 
 pub use crate::event::{
-	EventConversionError, EventFile, EventPayload, EventTarget, EventTargetError, Modifiers,
-	MouseButton, MouseButtons, Point, PointerKind,
+	CustomEvent, CustomEventDetailError, EventConversionError, EventFile, EventPayload,
+	EventTarget, EventTargetError, Modifiers, MouseButton, MouseButtons, Point, PointerKind,
 };
 
 pub use crate::control_binding::{

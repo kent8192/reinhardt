@@ -112,6 +112,21 @@ fn squashmigrations_rejects_extra_positional_arguments() {
 	assert!(error.to_string().contains("unexpected"));
 }
 
+#[cfg(feature = "migrations")]
+#[rstest]
+#[case(&["manage", "squashmigrations"])]
+#[case(&["manage", "squashmigrations", "polls"])]
+fn squashmigrations_rejects_missing_required_positionals(#[case] arguments: &[&str]) {
+	// Act
+	let error = Cli::try_parse_from(arguments).unwrap_err();
+
+	// Assert
+	assert_eq!(
+		error.kind(),
+		clap::error::ErrorKind::MissingRequiredArgument
+	);
+}
+
 // ============================================================================
 // Test Helper Functions for Runserver Command
 // ============================================================================

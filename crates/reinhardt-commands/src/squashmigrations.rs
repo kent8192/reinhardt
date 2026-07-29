@@ -2,8 +2,8 @@
 
 use crate::{CommandError, CommandResult};
 use reinhardt_db::migrations::{
-	FilesystemRepository, FilesystemSource, MigrationCatalog, MigrationRenderOptions,
-	MigrationSquasher,
+	FilesystemRepository, FilesystemSource, MigrationCatalog, MigrationError,
+	MigrationRenderOptions, MigrationSquasher,
 };
 use std::io::{self, BufRead, IsTerminal, Write};
 use std::path::{Path, PathBuf};
@@ -71,8 +71,30 @@ impl ConfirmationReader for StdinConfirmationReader {
 	}
 }
 
-fn command_error(error: impl std::fmt::Display) -> CommandError {
-	CommandError::ExecutionError(error.to_string())
+fn migration_error_to_command_error(error: MigrationError) -> CommandError {
+	match error {
+		MigrationError::NotFound(_)
+		| MigrationError::DependencyError(_)
+		| MigrationError::InvalidMigration(_)
+		| MigrationError::CircularDependency { .. }
+		| MigrationError::NodeNotFound { .. }
+		| MigrationError::DuplicateOperations(_)
+		| MigrationError::PathTraversal(_) => CommandError::InvalidArguments(error.to_string()),
+		MigrationError::IoError(error) => CommandError::IoError(error),
+		MigrationError::SqlError(_)
+		| MigrationError::DatabaseError(_)
+		| MigrationError::FrameworkError(_)
+		| MigrationError::IrreversibleError(_)
+		| MigrationError::FmtError(_)
+		| MigrationError::IntrospectionError(_)
+		| MigrationError::UnsupportedDatabase(_)
+		| MigrationError::UnsupportedBackendFeature { .. }
+		| MigrationError::ForeignKeyViolation(_)
+		| MigrationError::UnsupportedMigrationRendering { .. } => {
+			CommandError::ExecutionError(error.to_string())
+		}
+		_ => CommandError::ExecutionError(format!("Unclassified migration error: {error}")),
+	}
 }
 
 fn numbered_prefix(name: &str) -> &str {
@@ -87,17 +109,12 @@ fn default_squashed_name(start: &str, end: &str) -> String {
 	)
 }
 
-fn is_safe_migration_name(name: &str) -> bool {
-	if name.contains("..") || name.contains('/') || name.contains('\\') || name.contains('\0') {
-		return false;
-	}
-	let Some((number, description)) = name.split_once('_') else {
-		return false;
-	};
-	number.len() >= 4
-		&& number.bytes().all(|byte| byte.is_ascii_digit())
-		&& !description.is_empty()
-		&& description
+fn is_safe_migration_suffix(suffix: &str) -> bool {
+	suffix
+		.as_bytes()
+		.first()
+		.is_some_and(u8::is_ascii_alphabetic)
+		&& suffix
 			.bytes()
 			.all(|byte| byte.is_ascii_alphanumeric() || byte == b'_')
 }
@@ -134,24 +151,24 @@ pub async fn execute_squashmigrations_with_io(
 	stderr: &mut dyn Write,
 ) -> CommandResult<Option<SquashMigrationsSummary>> {
 	if let Some(name) = options.squashed_name.as_deref()
-		&& !is_safe_migration_name(name)
+		&& !is_safe_migration_suffix(name)
 	{
 		return Err(CommandError::InvalidArguments(
-			"--squashed-name must be a numbered safe ASCII Rust filename component".to_string(),
+			"--squashed-name must be a safe ASCII Rust filename suffix".to_string(),
 		));
 	}
 
 	let source = FilesystemSource::new(migrations_root);
 	let catalog = MigrationCatalog::load_strict(&source)
 		.await
-		.map_err(command_error)?;
+		.map_err(migration_error_to_command_error)?;
 	let range = catalog
 		.squash_range(
 			&options.app_label,
 			options.start_migration.as_deref(),
 			&options.migration_name,
 		)
-		.map_err(command_error)?;
+		.map_err(migration_error_to_command_error)?;
 	let start_migration = range
 		.migrations
 		.first()
@@ -167,10 +184,11 @@ pub async fn execute_squashmigrations_with_io(
 	let migration_count = range.migrations.len();
 	let squashed_name = options
 		.squashed_name
+		.map(|suffix| format!("{}_{}", numbered_prefix(&start_migration), suffix))
 		.unwrap_or_else(|| default_squashed_name(&start_migration, &end_migration));
 	let result = MigrationSquasher::new()
 		.squash_range(&range, &squashed_name, !options.no_optimize)
-		.map_err(command_error)?;
+		.map_err(migration_error_to_command_error)?;
 	let repository = FilesystemRepository::new(migrations_root);
 	let rendered = repository
 		.render(
@@ -179,7 +197,7 @@ pub async fn execute_squashmigrations_with_io(
 				include_header: !options.no_header,
 			},
 		)
-		.map_err(command_error)?;
+		.map_err(migration_error_to_command_error)?;
 
 	if !options.no_input {
 		if !confirmation.is_terminal() {
@@ -206,7 +224,7 @@ pub async fn execute_squashmigrations_with_io(
 
 	let path = repository
 		.create_new_source(&options.app_label, &squashed_name, &rendered)
-		.map_err(command_error)?;
+		.map_err(migration_error_to_command_error)?;
 	let summary = SquashMigrationsSummary {
 		app_label: options.app_label,
 		start_migration,
@@ -219,4 +237,63 @@ pub async fn execute_squashmigrations_with_io(
 	};
 	write_summary(stdout, &summary)?;
 	Ok(Some(summary))
+}
+
+#[cfg(test)]
+mod tests {
+	use super::*;
+	use reinhardt_db::migrations::MigrationError;
+
+	#[derive(Debug, Clone, Copy)]
+	enum ExpectedCategory {
+		InvalidArguments,
+		IoError,
+		ExecutionError,
+	}
+
+	#[test]
+	fn migration_errors_map_to_their_command_error_categories() {
+		// Arrange
+		let cases = [
+			(
+				MigrationError::NotFound("polls.0002".to_string()),
+				ExpectedCategory::InvalidArguments,
+			),
+			(
+				MigrationError::IoError(io::Error::new(
+					io::ErrorKind::PermissionDenied,
+					"migration tree denied",
+				)),
+				ExpectedCategory::IoError,
+			),
+			(
+				MigrationError::UnsupportedMigrationRendering {
+					operation: "RunRust".to_string(),
+				},
+				ExpectedCategory::ExecutionError,
+			),
+		];
+
+		for (error, expected) in cases {
+			// Act
+			let mapped = migration_error_to_command_error(error);
+
+			// Assert
+			match (mapped, expected) {
+				(CommandError::InvalidArguments(message), ExpectedCategory::InvalidArguments) => {
+					assert_eq!(message, "Migration not found: polls.0002")
+				}
+				(CommandError::IoError(error), ExpectedCategory::IoError) => {
+					assert_eq!(error.kind(), io::ErrorKind::PermissionDenied);
+					assert_eq!(error.to_string(), "migration tree denied");
+				}
+				(CommandError::ExecutionError(message), ExpectedCategory::ExecutionError) => {
+					assert_eq!(message, "Unsupported migration rendering: RunRust");
+				}
+				(actual, expected) => {
+					panic!("unexpected migration error mapping: {actual:?} for {expected:?}")
+				}
+			}
+		}
+	}
 }

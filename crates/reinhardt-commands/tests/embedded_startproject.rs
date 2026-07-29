@@ -48,12 +48,45 @@ fn assert_reinhardt_dependency_features(cargo_toml: &str, expected: &[&str]) {
 	}
 }
 
+fn assert_restful_runtime_dependencies(cargo_toml: &str) {
+	let document = cargo_toml
+		.parse::<toml_edit::DocumentMut>()
+		.expect("generated Cargo.toml must parse as TOML");
+	let serde_features = document["dependencies"]["serde"]["features"]
+		.as_array()
+		.expect("generated REST project must directly depend on serde with features");
+	assert!(
+		serde_features
+			.iter()
+			.any(|value| value.as_str() == Some("derive")),
+		"generated REST project must enable serde derive for #[settings]:\n{cargo_toml}"
+	);
+	let reinhardt_features = document["dependencies"]["reinhardt"]["features"]
+		.as_array()
+		.expect("generated REST reinhardt dependency must declare features");
+	assert!(
+		reinhardt_features
+			.iter()
+			.any(|value| value.as_str() == Some("client-router")),
+		"generated REST project must enable UnifiedRouter through client-router:\n{cargo_toml}"
+	);
+}
+
+fn assert_restful_common_settings(root: &Path) {
+	let settings = std::fs::read_to_string(root.join("src/config/settings.rs")).unwrap();
+	assert!(
+		settings.contains("#[settings(core: CoreSettings | contacts: ContactSettings)]"),
+		"generated REST settings must satisfy HasCommonSettings:\n{settings}"
+	);
+}
+
 fn assert_generated_rust_sources_do_not_use_tab_indents(root: &Path) {
 	for relative in [
 		"build.rs",
 		"src/bin/manage.rs",
 		"src/client/components/nav.rs",
 		"src/client/lib.rs",
+		"src/config/shell.rs",
 		"src/config/settings.rs",
 		"src/config/wasm.rs",
 		"src/lib.rs",
@@ -67,6 +100,100 @@ fn assert_generated_rust_sources_do_not_use_tab_indents(root: &Path) {
 	}
 }
 
+fn assert_generated_shell_wiring(root: &Path, crate_name: &str) {
+	let shell_path = root.join("src/config/shell.rs");
+	assert!(
+		shell_path.exists(),
+		"generated project must include src/config/shell.rs"
+	);
+
+	let cargo_toml = std::fs::read_to_string(root.join("Cargo.toml")).unwrap();
+	let document = cargo_toml
+		.parse::<toml_edit::DocumentMut>()
+		.expect("generated Cargo.toml must parse as TOML");
+	let commands_shell = document["features"]["commands-shell"]
+		.as_array()
+		.expect("generated project must declare a commands-shell feature");
+	assert_eq!(commands_shell.len(), 1);
+	assert!(
+		matches!(
+			commands_shell.get(0).and_then(|value| value.as_str()),
+			Some("reinhardt/commands-shell" | "dep:reinhardt-shell")
+		),
+		"generated project must forward commands-shell through a Reinhardt dependency"
+	);
+	let default_features = document["features"]["default"]
+		.as_array()
+		.expect("generated project must declare default features");
+	assert!(
+		default_features
+			.iter()
+			.all(|value| value.as_str() != Some("commands-shell")),
+		"commands-shell must remain opt-in:\n{cargo_toml}"
+	);
+
+	let config = std::fs::read_to_string(root.join("src/config.rs")).unwrap();
+	assert!(
+		config.contains("#[cfg(feature = \"commands-shell\")]\npub mod shell;")
+			|| config.contains("#[cfg(all(server, feature = \"commands-shell\"))]\npub mod shell;"),
+		"generated config must gate the shell module behind commands-shell:\n{config}"
+	);
+
+	let shell = std::fs::read_to_string(shell_path).unwrap();
+	for required in [
+		"pub use reinhardt as framework;",
+		"pub type ShellSettings = ProjectSettings;",
+		"pub type ProjectShellEnvironment =",
+		"framework::commands::ShellEnvironment<ShellSettings>;",
+		"pub type ShellDatabase = framework::db::orm::DatabaseConnection;",
+		"pub type ShellDi = std::sync::Arc<framework::di::InjectionContext>;",
+		"InstalledApp::all_labels()",
+	] {
+		assert!(
+			shell.contains(required),
+			"generated shell config must contain `{required}`:\n{shell}"
+		);
+	}
+	assert!(
+		shell.contains(&format!("\"{crate_name}\""))
+			&& shell.contains(&format!("\"{crate_name}::config::settings::get_settings\"")),
+		"generated shell config must use the renderer-normalized crate name:\n{shell}"
+	);
+	assert!(
+		!shell.contains("CARGO_CRATE_NAME") && !shell.contains(".replace("),
+		"generated shell config must not derive the crate name at runtime:\n{shell}"
+	);
+
+	let manage = std::fs::read_to_string(root.join("src/bin/manage.rs")).unwrap();
+	let outer_main = manage
+		.find("reinhardt::commands::shell_runtime_hook();")
+		.expect("native process entry must call shell_runtime_hook");
+	let tokio_main = manage
+		.find("#[tokio::main]")
+		.expect("generated native module must retain Tokio entry");
+	assert!(
+		outer_main > tokio_main,
+		"shell runtime hook must be in the outer process entry, not the Tokio async entry:\n{manage}"
+	);
+	assert!(
+		manage[outer_main..].contains("native::main();"),
+		"shell runtime hook must execute before native::main:\n{manage}"
+	);
+	for required in [
+		"#[cfg(feature = \"commands-shell\")]",
+		"execute_from_command_line_with_settings_and_shell(",
+		"get_shell_config()",
+		"#[cfg(not(feature = \"commands-shell\"))]",
+		"execute_from_command_line_with_settings(get_settings()).await",
+		"#[cfg(target_arch = \"wasm32\")]\nfn main() {}",
+	] {
+		assert!(
+			manage.contains(required),
+			"generated manage binary must contain `{required}`:\n{manage}"
+		);
+	}
+}
+
 #[rstest]
 #[tokio::test]
 #[serial(cwd)]
@@ -76,7 +203,7 @@ async fn startproject_restful_from_embedded_only() {
 	let prev = std::env::current_dir().unwrap();
 	std::env::set_current_dir(tmp.path()).unwrap();
 
-	let mut ctx = CommandContext::new(vec!["sample_proj".to_string()]);
+	let mut ctx = CommandContext::new(vec!["sample-proj".to_string()]);
 	let mut opts = HashMap::new();
 	opts.insert("restful".to_string(), vec!["true".to_string()]);
 	ctx = ctx.with_options(opts);
@@ -87,7 +214,7 @@ async fn startproject_restful_from_embedded_only() {
 	// Assert
 	std::env::set_current_dir(prev).unwrap();
 	res.expect("startproject succeeds from embedded templates");
-	let generated = tmp.path().join("sample_proj");
+	let generated = tmp.path().join("sample-proj");
 	assert!(
 		generated.join("Cargo.toml").exists(),
 		"Cargo.toml must be generated"
@@ -96,6 +223,10 @@ async fn startproject_restful_from_embedded_only() {
 		generated.join("src").is_dir(),
 		"src/ directory must be generated"
 	);
+	let cargo_toml = std::fs::read_to_string(generated.join("Cargo.toml")).unwrap();
+	assert_restful_runtime_dependencies(&cargo_toml);
+	assert_restful_common_settings(&generated);
+	assert_generated_shell_wiring(&generated, "sample_proj");
 	assert_manifest_parses(&generated.join("Cargo.toml"));
 }
 
@@ -128,10 +259,9 @@ async fn startproject_restful_honors_dependency_selection_flags() {
 	let cargo_toml = std::fs::read_to_string(tmp.path().join("feature_proj/Cargo.toml")).unwrap();
 	assert!(cargo_toml.contains("version = \"0.2.0-rc.4\""));
 	assert!(cargo_toml.contains("default-features = false"));
-	assert!(
-		cargo_toml
-			.contains("features = [\"minimal\", \"db-sqlite\", \"conf\", \"commands\", \"api\"]")
-	);
+	assert!(cargo_toml.contains(
+		"features = [\"minimal\", \"db-sqlite\", \"conf\", \"commands\", \"client-router\", \"api\"]"
+	));
 }
 
 #[rstest]
@@ -143,7 +273,7 @@ async fn startproject_pages_from_embedded_only() {
 	let prev = std::env::current_dir().unwrap();
 	std::env::set_current_dir(tmp.path()).unwrap();
 
-	let mut ctx = CommandContext::new(vec!["sample_pages_proj".to_string()]);
+	let mut ctx = CommandContext::new(vec!["sample-pages-proj".to_string()]);
 	let mut opts = HashMap::new();
 	opts.insert("with-pages".to_string(), vec!["true".to_string()]);
 	ctx = ctx.with_options(opts);
@@ -154,7 +284,7 @@ async fn startproject_pages_from_embedded_only() {
 	// Assert
 	std::env::set_current_dir(prev).unwrap();
 	res.expect("startproject --with-pages succeeds from embedded templates");
-	let generated = tmp.path().join("sample_pages_proj");
+	let generated = tmp.path().join("sample-pages-proj");
 	assert!(
 		generated.join("Cargo.toml").exists(),
 		"Cargo.toml must be generated"
@@ -259,6 +389,20 @@ async fn startproject_pages_from_embedded_only() {
 	assert!(
 		!generated.join("src/shared.rs").exists() && !generated.join("src/shared").exists(),
 		"generated pages project must not create a root shared module"
+	);
+	assert_generated_shell_wiring(&generated, "sample_pages_proj");
+	let document = cargo_toml
+		.parse::<toml_edit::DocumentMut>()
+		.expect("generated Cargo.toml must parse as TOML");
+	assert_eq!(
+		document["features"]["commands-shell"][0].as_str(),
+		Some("dep:reinhardt-shell"),
+		"Pages projects must forward the shell feature through a native-only dependency"
+	);
+	assert!(
+		document["target"]["cfg(not(target_arch = \"wasm32\"))"]["dependencies"]["reinhardt-shell"]
+			.is_inline_table(),
+		"Pages projects must declare the shell dependency only for native targets"
 	);
 	assert_generated_rust_sources_do_not_use_tab_indents(&generated);
 	assert_manifest_parses(&generated.join("Cargo.toml"));

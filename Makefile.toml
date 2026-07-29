@@ -566,7 +566,7 @@ scripts/dependency-feature-audit.sh "${label}"
 '''
 
 [tasks.feature-check-facade]
-description = "Check facade crate feature combinations (19 patterns)"
+description = "Check facade crate feature combinations (20 patterns)"
 script_runner = "bash"
 script = '''
 set -e
@@ -581,6 +581,7 @@ combos=(
 	"graphql-server|reinhardt-web|--no-default-features -F graphql-server"
 	"websocket-server|reinhardt-web|--no-default-features -F websocket-server"
 	"cli-tools|reinhardt-web|--no-default-features -F cli-tools"
+	"commands-shell+sqlite|reinhardt-web|--no-default-features -F commands-shell,db-sqlite --test commands_shell_facade"
 	"standard+mysql|reinhardt-web|--no-default-features -F standard,db-mysql"
 	"standard+sqlite|reinhardt-web|--no-default-features -F standard,db-sqlite"
 	"db-cockroachdb|reinhardt-web|--no-default-features -F minimal,db-cockroachdb"

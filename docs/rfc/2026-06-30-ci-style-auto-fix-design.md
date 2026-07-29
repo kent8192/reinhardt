@@ -115,6 +115,8 @@ the pull request's base commit into an isolated path.
 The write job validates the staged patch before generating the write token.
 Unsupported file statuses and symlink additions are rejected, and GraphQL file
 contents are read from staged blobs instead of following working-tree paths.
+Each blob is streamed through `base64` and `jq`, avoiding process arguments so
+large auto-fix files remain within exec limits.
 
 The GitHub App token is generated only in the write job after the patch is
 applied and the target branch protection and active rules are rechecked. The

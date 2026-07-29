@@ -50,7 +50,7 @@ use reinhardt::settings;
 use std::env;
 
 // Add fragments to extend settings: e.g. `#[settings(core: CoreSettings | cache: CacheSettings)]`
-#[settings(core: CoreSettings)]
+#[settings(core: CoreSettings | contacts: ContactSettings)]
 pub struct ProjectSettings;
 
 /// Get settings based on environment variable

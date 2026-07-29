@@ -16,10 +16,6 @@ use reinhardt_db::backends::{DatabaseConnection, DatabaseType};
 #[cfg(all(feature = "reinhardt-db", not(feature = "migrations")))]
 use reinhardt_db::backends::DatabaseConnection;
 
-// Import DatabaseType for connect_database helper
-#[cfg(all(feature = "reinhardt-db", not(feature = "migrations")))]
-use reinhardt_db::backends::DatabaseType;
-
 // Import ShutdownCoordinator for runall command
 
 /// Database migration command
@@ -154,7 +150,13 @@ impl BaseCommand for MigrateCommand {
 			{
 				#[cfg(feature = "postgres")]
 				{
-					DatabaseConnection::connect_postgres_or_create(&database_url).await
+					DatabaseConnection::connect_postgres_or_create(&database_url)
+						.await
+						.map_err(|error| {
+							crate::CommandError::ExecutionError(format!(
+								"Failed to connect to database: {error:?}"
+							))
+						})?
 				}
 				#[cfg(not(feature = "postgres"))]
 				{
@@ -165,7 +167,13 @@ impl BaseCommand for MigrateCommand {
 			} else if database_url.starts_with("mysql://") {
 				#[cfg(feature = "mysql")]
 				{
-					DatabaseConnection::connect_mysql(&database_url).await
+					DatabaseConnection::connect_mysql(&database_url)
+						.await
+						.map_err(|error| {
+							crate::CommandError::ExecutionError(format!(
+								"Failed to connect to database: {error:?}"
+							))
+						})?
 				}
 				#[cfg(not(feature = "mysql"))]
 				{
@@ -177,7 +185,13 @@ impl BaseCommand for MigrateCommand {
 				// Must be SQLite (validated above)
 				#[cfg(feature = "sqlite")]
 				{
-					DatabaseConnection::connect_sqlite(&database_url).await
+					DatabaseConnection::connect_sqlite(&database_url)
+						.await
+						.map_err(|error| {
+							crate::CommandError::ExecutionError(format!(
+								"Failed to connect to database: {error:?}"
+							))
+						})?
 				}
 				#[cfg(not(feature = "sqlite"))]
 				{
@@ -185,13 +199,7 @@ impl BaseCommand for MigrateCommand {
 						"SQLite support not enabled. Enable 'sqlite' feature.".to_string(),
 					));
 				}
-			}
-			.map_err(|e| {
-				crate::CommandError::ExecutionError(format!(
-					"Failed to connect to database: {:?}",
-					e
-				))
-			})?;
+			};
 
 			// 4.5. Direction detection (Django-style migrate-with-target semantics).
 			//
@@ -1831,8 +1839,20 @@ fn add_reused_table_name_dependencies_with_history(
 	Ok(())
 }
 
-/// Interactive shell command
-pub struct ShellCommand;
+/// Interactive Rust shell command.
+#[derive(Default)]
+pub struct ShellCommand {
+	config: Option<crate::ShellConfig>,
+}
+
+impl ShellCommand {
+	/// Creates a shell command with the project configuration required to bootstrap evcxr.
+	pub fn new(config: crate::ShellConfig) -> Self {
+		Self {
+			config: Some(config),
+		}
+	}
+}
 
 #[async_trait]
 impl BaseCommand for ShellCommand {
@@ -1853,111 +1873,27 @@ impl BaseCommand for ShellCommand {
 	}
 
 	async fn execute(&self, ctx: &CommandContext) -> CommandResult<()> {
-		if let Some(command) = ctx.option("command") {
-			ctx.info(&format!("Executing: {}", command));
-			// Execute the command
-			return Ok(());
-		}
-
-		ctx.info("Starting interactive shell...");
-		ctx.info("Type 'exit' or press Ctrl+D to quit");
-
 		#[cfg(feature = "shell")]
 		{
-			use rustyline::DefaultEditor;
-			use rustyline::error::ReadlineError;
-
-			let mut rl = DefaultEditor::new().map_err(|e| {
-				crate::CommandError::ExecutionError(format!("Failed to create REPL: {}", e))
+			let config = self.config.as_ref().ok_or_else(|| {
+				crate::CommandError::ExecutionError(
+					"Shell configuration is missing. Use \
+					 `execute_from_command_line_with_settings_and_shell` from the generated manage.rs."
+						.to_string(),
+				)
 			})?;
-
-			loop {
-				let readline = rl.readline(">>> ");
-				match readline {
-					Ok(line) => {
-						let trimmed = line.trim();
-						if trimmed == "exit" || trimmed == "quit" {
-							ctx.info("Goodbye!");
-							break;
-						}
-
-						if !trimmed.is_empty() {
-							let _ = rl.add_history_entry(line.as_str());
-
-							// Evaluate code using Rhai engine
-							#[cfg(feature = "shell-rhai")]
-							{
-								Self::eval_rhai(ctx, trimmed)?;
-							}
-							#[cfg(not(feature = "shell-rhai"))]
-							{
-								ctx.warning(
-									"Rhai engine not enabled. Enable 'shell-rhai' feature.",
-								);
-							}
-						}
-					}
-					Err(ReadlineError::Interrupted) | Err(ReadlineError::Eof) => {
-						ctx.info("Goodbye!");
-						break;
-					}
-					Err(err) => {
-						return Err(crate::CommandError::ExecutionError(format!(
-							"REPL error: {}",
-							err
-						)));
-					}
-				}
-			}
-
-			Ok(())
+			crate::shell::run(config, ctx.option("command").cloned()).await
 		}
 
 		#[cfg(not(feature = "shell"))]
 		{
-			ctx.warning("Shell feature not enabled");
-			ctx.info("To use shell, enable the 'shell' feature in Cargo.toml:");
-			ctx.info("  reinhardt-commands = { version = \"*\", features = [\"shell\"] }");
-			Ok(())
-		}
-	}
-}
-
-impl ShellCommand {
-	/// Evaluate code using Rhai engine
-	#[cfg(feature = "shell-rhai")]
-	fn eval_rhai(ctx: &CommandContext, code: &str) -> CommandResult<()> {
-		use rhai::{Engine, EvalAltResult};
-
-		let mut engine = Engine::new();
-
-		// Register helper functions
-		engine.register_fn("println", |s: &str| {
-			println!("{}", s);
-		});
-
-		// Evaluate the code
-		match engine.eval::<rhai::Dynamic>(code) {
-			Ok(result) => {
-				// Display result if not Unit type
-				if !result.is_unit() {
-					ctx.info(&format!("=> {}", result));
-				}
-				Ok(())
-			}
-			Err(e) => {
-				let error_msg = match *e {
-					EvalAltResult::ErrorParsing(ref err, _) => {
-						format!("Parse error: {}", err)
-					}
-					EvalAltResult::ErrorRuntime(ref msg, _) => {
-						format!("Runtime error: {}", msg)
-					}
-					_ => format!("Error: {}", e),
-				};
-				ctx.warning(&error_msg);
-				Ok(())
-			}
+			let _ = (&self.config, ctx);
+			Err(crate::CommandError::FeatureDisabled(
+				"The shell command requires the `shell` feature when using \
+				 `reinhardt-commands` directly, or `commands-shell` through the \
+				 `reinhardt` facade."
+					.to_string(),
+			))
 		}
 	}
 }
@@ -4262,25 +4198,7 @@ pub(crate) async fn initialize_orm_database(
 	ctx: &CommandContext,
 ) -> Result<(), crate::CommandError> {
 	let env_database_url = std::env::var("DATABASE_URL").ok();
-	let url =
-		match ctx.settings.as_ref() {
-			Some(settings) => DatabaseConnection::database_url_from(
-				settings.as_ref(),
-				env_database_url.as_deref(),
-			)
-			.map_err(|e| {
-				crate::CommandError::ExecutionError(format!("Failed to get database URL: {}", e))
-			})?,
-			None => match env_database_url.clone() {
-				Some(url) => url,
-				// No `ctx.settings` and no `DATABASE_URL`: fall back to the disk
-				// loader that reads `settings/*.toml` directly. This restores
-				// parity with the pre-refactor behaviour and is symmetric with
-				// `sync_database_url_to_env`, which already re-resolves from
-				// settings on its `None` arm (#5042).
-				None => get_database_url_from_settings()?,
-			},
-		};
+	let url = resolve_database_url(ctx.settings.as_deref(), env_database_url.as_deref())?;
 
 	sync_database_url_to_env(env_database_url.as_deref(), &url, ctx);
 
@@ -4294,6 +4212,29 @@ pub(crate) async fn initialize_orm_database(
 		sanitize_database_url(&url)
 	));
 	Ok(())
+}
+
+/// Resolves the database URL with the management-command precedence rules.
+///
+/// An explicit `DATABASE_URL` value overrides composed settings. Callers without
+/// a composed settings value fall back to the on-disk settings loader.
+#[cfg(feature = "reinhardt-db")]
+pub(crate) fn resolve_database_url(
+	settings: Option<&dyn reinhardt_conf::HasCommonSettings>,
+	env_database_url: Option<&str>,
+) -> Result<String, crate::CommandError> {
+	match settings {
+		Some(settings) => DatabaseConnection::database_url_from(settings, env_database_url)
+			.map_err(|error| {
+				crate::CommandError::ExecutionError(format!("Failed to get database URL: {error}"))
+			}),
+		None => match env_database_url {
+			Some(url) => Ok(url.to_string()),
+			// Commands without typed settings retain compatibility with projects
+			// that load their database configuration directly from TOML files.
+			None => get_database_url_from_settings(),
+		},
+	}
 }
 
 /// Helper function to get DATABASE_URL from settings files only (ignoring env var).
@@ -4403,7 +4344,7 @@ pub(crate) fn get_database_url_from_settings() -> Result<String, crate::CommandE
 }
 
 /// Helper function to connect to database
-#[cfg(feature = "reinhardt-db")]
+#[cfg(feature = "migrations")]
 async fn connect_database(url: &str) -> CommandResult<(DatabaseType, DatabaseConnection)> {
 	let db_type = if url.starts_with("postgres://") || url.starts_with("postgresql://") {
 		DatabaseType::Postgres
@@ -5713,7 +5654,7 @@ name = "db.sqlite3"
 
 	#[test]
 	fn test_shell_command_metadata() {
-		let cmd = ShellCommand;
+		let cmd = ShellCommand::default();
 		assert_eq!(cmd.name(), "shell");
 		assert_eq!(cmd.description(), "Start an interactive Rust REPL");
 
@@ -5722,6 +5663,21 @@ name = "db.sqlite3"
 		// Only option: -c/--command
 		assert_eq!(options[0].short, Some('c'));
 		assert_eq!(options[0].long, "command");
+	}
+
+	#[tokio::test]
+	#[cfg(feature = "shell")]
+	async fn shell_command_without_project_config_returns_migration_guidance() {
+		let error = ShellCommand::default()
+			.execute(&CommandContext::default())
+			.await
+			.expect_err("registry construction must not make shell configuration optional");
+
+		assert_eq!(
+			error.to_string(),
+			"Execution error: Shell configuration is missing. Use \
+			 `execute_from_command_line_with_settings_and_shell` from the generated manage.rs."
+		);
 	}
 
 	#[test]
@@ -5955,19 +5911,6 @@ name = "db.sqlite3"
 			// Result depends on whether any dependencies are registered
 			assert!(result.is_ok() || result.is_err());
 		}
-	}
-
-	#[tokio::test]
-	async fn test_shell_command_with_command_option() {
-		let cmd = ShellCommand;
-		let mut ctx = CommandContext::default();
-		ctx.set_option("command".to_string(), "let x = 1 + 2".to_string());
-
-		// Execute with a simple command
-		let result = cmd.execute(&ctx).await;
-
-		// Should succeed (command is processed and returned)
-		assert!(result.is_ok());
 	}
 
 	#[cfg(feature = "reinhardt-db")]

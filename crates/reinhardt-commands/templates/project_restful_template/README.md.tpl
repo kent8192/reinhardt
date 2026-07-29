@@ -29,6 +29,45 @@ cargo run --bin manage migrate
 cargo run --bin manage startapp myapp
 ```
 
+### Rust management shell (opt-in)
+
+The generated `commands-shell` feature is intentionally not a default feature.
+Enable it when starting the stateful Rust shell:
+
+```bash
+cargo run --bin manage --features commands-shell -- shell
+cargo run --bin manage --features commands-shell -- shell -c \
+  'println!("{}", settings.core.debug)'
+```
+
+`src/config/shell.rs` supplies `get_shell_config()`. The generated native
+entry calls `shell_runtime_hook()` before Tokio starts, then selects
+`execute_from_command_line_with_settings_and_shell` when the feature is
+enabled; without it, the settings-only dispatcher remains active for
+non-shell commands.
+
+The shell binds concrete project `settings`, the copyable ORM `db` handle,
+the application `di` context, and the stable `framework` alias. Unique
+installed model names are imported automatically. A collision emits a
+deterministically ordered warning with concrete registered crate paths instead
+of choosing an ambiguous short name; the evaluator's `project_crate` alias can
+reference those same types. Add project Rust with
+`ShellConfig::with_prelude(...)`.
+
+Interactive input supports top-level `.await`, preserves successful state, and
+uses `>>> ` / `... ` for primary / multiline input. A panic, evaluator exit,
+or Ctrl+C during evaluation clears user state and reloads every prelude layer.
+`shell -c` evaluates one snippet, returns zero only on success, returns non-zero
+on failure, and Reinhardt's own diagnostics do not repeat the raw source.
+Arbitrary Rust, compiler output, panics, and user code can still print literals;
+the shell is not a sandbox. History is best-effort at
+`<platform local data directory>/reinhardt/shell/<package-name>.history`.
+A missing file is a silent first run; directory-resolution, read, or write
+failures warn without preventing startup.
+
+`shell-rhai` has been removed. `shell` now means the Rust evaluator; old Rhai
+syntax is not supported.
+
 ## Common Tasks
 
 ### Development

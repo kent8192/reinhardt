@@ -136,6 +136,10 @@ regex = { workspace = true }
 tracing = { workspace = true }
 trybuild = { workspace = true }
 
+[target.'cfg(any(target_os = "macos", all(target_os = "linux", not(target_env = "uclibc"))))'.dependencies]
+nix = { version = "0.31", features = ["process", "signal"] }
+rexpect = "0.6"
+
 [features]
 default = ["postgres", "sqlite", "caching", "hot-reload", "dynamic-redis"]
 testcontainers = []

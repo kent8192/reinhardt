@@ -160,8 +160,8 @@ pub use custom_manager::{CreateWithConnOutcome, CustomManager};
 #[cfg(feature = "di")]
 pub use engine::register_request_database;
 pub use manager::{
-	get_connection, get_connection_lease, get_connection_registration, init_database,
-	init_database_with_pool_size, reinitialize_database,
+	ScopedDatabaseRegistration, get_connection, get_connection_lease, get_connection_registration,
+	init_database, init_database_with_pool_size, install_scoped_database, reinitialize_database,
 };
 #[cfg(feature = "pgvector")]
 pub use vector::{MAX_DENSE_VECTOR_DIMENSIONS, Vector, VectorError};

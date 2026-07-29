@@ -86,6 +86,40 @@ cargo make dev-release
 
 The server listens at `http://127.0.0.1:8000/`.
 
+### Explore Models in the Rust Shell
+
+The tutorial exposes the shell through an opt-in `commands-shell` feature that
+is absent from its defaults:
+
+```bash
+cargo run --bin manage --features commands-shell -- shell
+cargo run --bin manage --features commands-shell -- shell -c \
+  'println!("{:?}", db.backend())'
+```
+
+The feature-gated `config::shell::get_shell_config()` and outer process hook
+load the concrete settings, ORM `db` handle, application `di` context,
+`framework` alias, and uniquely named installed models such as `Question` and
+`Choice`. Ambiguous short model names are skipped with a deterministic warning
+that lists their concrete registered crate paths; the evaluator's
+`project_crate` alias can reference those same types. A project can extend the
+last prelude layer with `ShellConfig::with_prelude(...)`.
+
+Interactive Rust preserves successful definitions, supports top-level
+`.await`, and uses `>>> ` / `... ` prompts for complete / multiline input.
+Ctrl+C during evaluation, a panic, or evaluator process exit clears user state
+and reloads settings, database/DI bindings, model imports, and the project
+prelude. `shell -c` evaluates exactly once, exits zero only on success, returns
+non-zero on failure, and Reinhardt's own diagnostics do not repeat the raw
+source. Arbitrary Rust, compiler output, panics, and user code can still print
+literals; the shell is not a sandbox.
+
+History is loaded and saved best-effort at
+`<platform local data directory>/reinhardt/shell/examples-tutorial-basis.history`;
+a missing file is a silent first run, while directory-resolution, read, or
+write failures warn without blocking the prompt. `shell-rhai` was removed, so
+`shell` now means the Rust evaluator and does not accept old Rhai syntax.
+
 ### Inspect Registered Routes
 
 ```bash
@@ -196,6 +230,7 @@ examples-tutorial-basis/
 │   ├── config/
 │   │   ├── admin.rs
 │   │   ├── apps.rs
+│   │   ├── shell.rs
 │   │   ├── settings.rs
 │   │   ├── urls.rs
 │   │   └── wasm.rs

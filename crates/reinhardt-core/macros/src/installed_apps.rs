@@ -7,7 +7,7 @@
 //! The `installed_apps!` macro generates:
 //! - An `InstalledApp` enum with variants for each registered application
 //! - Trait implementations: `Display`, `FromStr`, `Debug`, `Clone`, `Copy`, `PartialEq`, `Eq`, `Hash`
-//! - Helper methods: `all_apps()`, `path()`
+//! - Helper methods: `all_apps()`, `all_labels()`, `path()`
 //! - Compile-time validation for framework modules (`reinhardt.*`)
 //!
 //! **Important**: This macro is for **user applications only**. Built-in framework features
@@ -142,6 +142,16 @@
 //!     }
 //! }
 //! ```
+//!
+//! #### `all_labels() -> &'static [&'static str]`
+//!
+//! Returns the declaration labels as a static slice, preserving their declaration order:
+//!
+//! ```rust,ignore
+//! assert_eq!(InstalledApp::all_labels(), &["users", "posts"]);
+//! ```
+//!
+//! `all_labels()` returns declaration labels, while `all_apps()` returns configured app paths.
 //!
 //! #### `path(&self) -> &'static str`
 //!
@@ -355,6 +365,7 @@ use proc_macro2::TokenStream;
 use quote::quote;
 use syn::{
 	Ident, LitStr, Result, Token,
+	ext::IdentExt,
 	parse::{Parse, ParseStream},
 	punctuated::Punctuated,
 };
@@ -433,7 +444,8 @@ impl Parse for InstalledApps {
 /// 3. **Implements** Display trait (enum → path string conversion)
 /// 4. **Implements** FromStr trait (path string → enum parsing)
 /// 5. **Generates** helper methods:
-///    - `all_apps() -> Vec<String>`: List all app paths
+///    - `all_apps() -> Vec<String>`: List all configured app paths
+///    - `all_labels() -> &'static [&'static str]`: List declaration labels
 ///    - `path(&self) -> &'static str`: Get path for a specific app
 /// 6. **Creates** compile-time validation for `reinhardt.*` apps
 ///
@@ -461,6 +473,7 @@ impl Parse for InstalledApps {
 /// impl std::str::FromStr for InstalledApp { /* ... */ }
 /// impl InstalledApp {
 ///     pub fn all_apps() -> Vec<String> { /* ... */ }
+///     pub const fn all_labels() -> &'static [&'static str] { /* ... */ }
 ///     pub fn path(&self) -> &'static str { /* ... */ }
 /// }
 ///
@@ -523,6 +536,11 @@ pub(crate) fn installed_apps_impl(input: TokenStream) -> Result<TokenStream> {
 					vec![]
 				}
 
+				/// Get all installed app declaration labels without allocating.
+				pub const fn all_labels() -> &'static [&'static str] {
+					&[]
+				}
+
 				/// Get the path for this app
 				///
 				pub fn path(&self) -> &'static str {
@@ -551,7 +569,14 @@ pub(crate) fn installed_apps_impl(input: TokenStream) -> Result<TokenStream> {
 	// Write app labels to state file for cross-macro communication with #[routes].
 	// This replaces the __reinhardt_for_each_app #[macro_export] callback pattern
 	// that triggers macro_expanded_macro_exports_accessed_by_absolute_paths on Rust 1.96+.
-	let label_strings: Vec<String> = labels.iter().map(|l| l.to_string()).collect();
+	let label_strings: Vec<String> = labels
+		.iter()
+		.map(|label| label.unraw().to_string())
+		.collect();
+	let label_literals: Vec<_> = label_strings
+		.iter()
+		.map(|label| LitStr::new(label, proc_macro2::Span::call_site()))
+		.collect();
 	if let Err(err) = crate::macro_state::write_installed_apps(&label_strings) {
 		return Err(syn::Error::new(
 			proc_macro2::Span::call_site(),
@@ -656,6 +681,11 @@ pub(crate) fn installed_apps_impl(input: TokenStream) -> Result<TokenStream> {
 					#(#app_list),*
 				]
 			}
+
+				/// Get all installed app declaration labels without allocating.
+				pub const fn all_labels() -> &'static [&'static str] {
+					&[#(#label_literals),*]
+				}
 			/// Get the path for this app
 			///
 			pub fn path(&self) -> &'static str {

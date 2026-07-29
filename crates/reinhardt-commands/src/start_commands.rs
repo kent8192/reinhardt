@@ -138,7 +138,7 @@ impl BaseCommand for StartProjectCommand {
 				"argon2-hasher",
 			][..]
 		} else {
-			&["conf", "commands", "db-postgres", "api"][..]
+			&["conf", "commands", "client-router", "db-postgres", "api"][..]
 		};
 		let dependency_selection =
 			project_config::resolve_dependency_selection(ctx, required_features).await?;

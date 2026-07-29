@@ -22,6 +22,10 @@ name = "reinhardt"
 name = "pages_i18n_facade"
 required-features = ["pages", "i18n"]
 
+[[test]]
+name = "commands_shell_facade"
+required-features = ["commands-shell", "db-sqlite"]
+
 [package.metadata.docs.rs]
 all-features = true
 rustdoc-args = ["--cfg", "docsrs"]
@@ -144,6 +148,7 @@ server = ["reinhardt-server"]
 commands = ["reinhardt-commands", "reinhardt-commands/migrations"]
 commands-autoreload = ["commands", "reinhardt-commands/autoreload"]
 commands-server = ["commands", "reinhardt-commands/server"]
+commands-shell = ["commands", "database", "di", "reinhardt-commands/shell"]
 introspect = ["reinhardt-commands/introspect"]
 
 # Parent crate features (new module structure)
@@ -210,6 +215,7 @@ full = [
   "storage",
   "commands",
   "commands-autoreload",
+  "commands-shell",
   "test",
   # Parent crate -full features (recursive full feature activation)
   "reinhardt-db/database-full",

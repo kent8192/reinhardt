@@ -14,6 +14,20 @@ installed_apps! {
 	another: "custom.another",
 }
 
+mod raw_identifier_label {
+	use reinhardt_macros::installed_apps;
+
+	installed_apps! {
+		r#type: "myproject.type",
+	}
+
+	#[test]
+	fn all_labels_uses_the_unraw_identifier_spelling() {
+		assert_eq!(InstalledApp::all_labels(), &["type"]);
+		assert_eq!(InstalledApp::r#type.path(), "myproject.type");
+	}
+}
+
 #[test]
 fn test_installed_apps_empty() {
 	installed_apps! {}
@@ -37,6 +51,14 @@ fn test_installed_apps_basic() {
 	assert_eq!(apps.len(), 5);
 	assert!(apps.contains(&"myproject.auth".to_string()));
 	assert!(apps.contains(&"myproject.contenttypes".to_string()));
+}
+
+#[test]
+fn all_labels_returns_declared_labels() {
+	assert_eq!(
+		InstalledApp::all_labels(),
+		&["auth", "sessions", "contenttypes", "myapp", "another"]
+	);
 }
 
 #[test]

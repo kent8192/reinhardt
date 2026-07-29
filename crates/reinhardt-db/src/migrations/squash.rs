@@ -27,7 +27,7 @@
 //! assert_eq!(squashed.replaces.len(), 3);
 //! ```
 
-use super::{Migration, MigrationError, Operation, Result};
+use super::{Migration, MigrationError, Operation, Result, SquashRange};
 use std::collections::HashSet;
 
 /// Options for migration squashing
@@ -57,6 +57,17 @@ impl Default for SquashOptions {
 			no_optimize: false,
 		}
 	}
+}
+
+/// The migration and operation counts produced by a range squash.
+#[derive(Debug)]
+pub struct SquashResult {
+	/// The combined migration.
+	pub migration: Migration,
+	/// Number of operations before optimization.
+	pub original_operation_count: usize,
+	/// Number of operations after optimization.
+	pub optimized_operation_count: usize,
 }
 
 /// Migration squasher
@@ -89,6 +100,99 @@ impl MigrationSquasher {
 	/// ```
 	pub fn new() -> Self {
 		Self { _private: () }
+	}
+
+	/// Squash a validated migration range.
+	///
+	/// External dependencies retain the range's stable order. Replacement and
+	/// conditional dependency metadata is deduplicated in source order.
+	/// Atomicity is disabled when any source migration is non-atomic, while the
+	/// initial marker comes from the first migration.
+	///
+	/// # Errors
+	///
+	/// Returns an error for an empty range or when `state_only` or
+	/// `database_only` differs between source migrations, because those
+	/// whole-migration execution modes cannot be represented safely after
+	/// combining their operations.
+	pub fn squash_range(
+		&self,
+		range: &SquashRange,
+		name: impl Into<String>,
+		optimize: bool,
+	) -> Result<SquashResult> {
+		let first = range.migrations.first().ok_or_else(|| {
+			MigrationError::InvalidMigration("Cannot squash empty migration range".to_string())
+		})?;
+		let state_only = first.state_only;
+		let database_only = first.database_only;
+
+		if range
+			.migrations
+			.iter()
+			.any(|migration| migration.state_only != state_only)
+		{
+			return Err(MigrationError::InvalidMigration(
+				"Cannot squash migrations with mixed state_only flags".to_string(),
+			));
+		}
+		if range
+			.migrations
+			.iter()
+			.any(|migration| migration.database_only != database_only)
+		{
+			return Err(MigrationError::InvalidMigration(
+				"Cannot squash migrations with mixed database_only flags".to_string(),
+			));
+		}
+
+		let mut operations = Vec::new();
+		let mut replaces = Vec::new();
+		let mut swappable_dependencies = Vec::new();
+		let mut optional_dependencies = Vec::new();
+		for migration in &range.migrations {
+			operations.extend(migration.operations.clone());
+			for replacement in &migration.replaces {
+				if !replaces.contains(replacement) {
+					replaces.push(replacement.clone());
+				}
+			}
+			let identity = (migration.app_label.clone(), migration.name.clone());
+			if !replaces.contains(&identity) {
+				replaces.push(identity);
+			}
+			for dependency in &migration.swappable_dependencies {
+				if !swappable_dependencies.contains(dependency) {
+					swappable_dependencies.push(dependency.clone());
+				}
+			}
+			for dependency in &migration.optional_dependencies {
+				if !optional_dependencies.contains(dependency) {
+					optional_dependencies.push(dependency.clone());
+				}
+			}
+		}
+		let original_operation_count = operations.len();
+		if optimize {
+			operations = self.optimize_operations(operations);
+		}
+
+		let mut migration = Migration::new(name, first.app_label.clone());
+		migration.operations = operations;
+		migration.dependencies = range.external_dependencies.clone();
+		migration.replaces = replaces;
+		migration.atomic = range.migrations.iter().all(|source| source.atomic);
+		migration.initial = first.initial;
+		migration.state_only = state_only;
+		migration.database_only = database_only;
+		migration.swappable_dependencies = swappable_dependencies;
+		migration.optional_dependencies = optional_dependencies;
+
+		Ok(SquashResult {
+			optimized_operation_count: migration.operations.len(),
+			migration,
+			original_operation_count,
+		})
 	}
 
 	/// Squash multiple migrations into one
@@ -183,7 +287,13 @@ impl MigrationSquasher {
 		Ok(squashed)
 	}
 
-	/// Optimize operations by removing redundant ones
+	/// Optimize operations by removing proven-equivalent schema lifecycles.
+	///
+	/// Create/drop table and add/drop column pairs reduce only inside segments
+	/// containing the five recognized table and column operations. Adjacent
+	/// alters of the same column retain the first old definition and final new
+	/// definition. Every other operation is a barrier, including data
+	/// operations and operation variants added in the future.
 	///
 	/// # Example
 	///
@@ -212,71 +322,167 @@ impl MigrationSquasher {
 	/// assert_eq!(optimized.len(), 0);
 	/// ```
 	pub fn optimize_operations(&self, operations: Vec<Operation>) -> Vec<Operation> {
-		let mut optimized = Vec::new();
-		let mut created_tables = HashSet::new();
-		let mut dropped_tables = HashSet::new();
-
+		let mut optimized = Vec::with_capacity(operations.len());
+		let mut segment = Vec::new();
 		for operation in operations {
-			let should_push = match &operation {
-				Operation::CreateTable { name, .. } => {
-					// Remove from dropped_tables if re-created
-					dropped_tables.remove(name);
-					created_tables.insert(name.clone());
-					true
-				}
-				Operation::DropTable { name } => {
-					// If table was just created, remove both operations
-					if created_tables.contains(name) {
-						optimized.retain(
-							|op| !matches!(op, Operation::CreateTable { name: table_name, .. } if table_name == name),
-						);
-						created_tables.remove(name);
-						false
-					} else {
-						dropped_tables.insert(name.clone());
-						true
-					}
-				}
-				Operation::AddColumn { table, .. } => {
-					// Skip if table was dropped
-					!dropped_tables.contains(table)
-				}
-				Operation::DropColumn { table, column, .. } => {
-					// Remove corresponding AddColumn if exists
-					let had_add = optimized.iter().any(|op| {
-						matches!(op, Operation::AddColumn { table: t, column: c, .. } if t == table && c.name == *column)
-					});
-
-					if had_add {
-						optimized.retain(|op| {
-							!matches!(op, Operation::AddColumn { table: t, column: c, .. } if t == table && c.name == *column)
-						});
-						false
-					} else {
-						!dropped_tables.contains(table)
-					}
-				}
-				Operation::AlterColumn { table, .. } => {
-					// Skip if table was dropped
-					!dropped_tables.contains(table)
-				}
-				Operation::RenameTable { old_name, .. } => {
-					// Skip if table was dropped
-					!dropped_tables.contains(old_name)
-				}
-				Operation::RenameColumn { table, .. } => {
-					// Skip if table was dropped
-					!dropped_tables.contains(table)
-				}
-				_ => true,
-			};
-
-			if should_push {
+			if Self::is_reducible(&operation) {
+				segment.push(operation);
+			} else {
+				optimized.extend(Self::optimize_segment(std::mem::take(&mut segment)));
 				optimized.push(operation);
+			}
+		}
+		optimized.extend(Self::optimize_segment(segment));
+
+		optimized
+	}
+
+	fn is_reducible(operation: &Operation) -> bool {
+		matches!(
+			operation,
+			Operation::CreateTable { .. }
+				| Operation::DropTable { .. }
+				| Operation::AddColumn { .. }
+				| Operation::DropColumn { .. }
+				| Operation::AlterColumn { .. }
+		)
+	}
+
+	fn optimize_segment(segment: Vec<Operation>) -> Vec<Operation> {
+		let mut optimized = Vec::with_capacity(segment.len());
+
+		for operation in segment {
+			match operation {
+				Operation::DropTable { ref name } => {
+					if let Some(create_index) =
+						optimized.iter().rposition(
+							|candidate| matches!(candidate, Operation::CreateTable { name: candidate_name, .. } if candidate_name == name),
+						)
+						&& optimized[create_index + 1..]
+							.iter()
+							.filter(|candidate| Self::operation_table(candidate) == Some(name))
+							.all(|candidate| {
+								matches!(
+									candidate,
+									Operation::AddColumn { .. }
+										| Operation::DropColumn { .. }
+										| Operation::AlterColumn { .. }
+								)
+							})
+					{
+						optimized = optimized
+							.into_iter()
+							.enumerate()
+							.filter_map(|(index, candidate)| {
+								let remove_same_table =
+									index > create_index
+										&& Self::operation_table(&candidate) == Some(name);
+								(index != create_index && !remove_same_table).then_some(candidate)
+							})
+							.collect();
+					} else {
+						optimized.push(operation);
+					}
+				}
+				Operation::DropColumn {
+					ref table,
+					ref column,
+					..
+				} => {
+					if let Some(add_index) = optimized.iter().rposition(|candidate| {
+						matches!(
+							candidate,
+							Operation::AddColumn {
+								table: candidate_table,
+								column: candidate_column,
+								..
+							} if candidate_table == table && candidate_column.name == *column
+						)
+					}) && !optimized[add_index + 1..].iter().any(|candidate| {
+						matches!(
+							candidate,
+							Operation::CreateTable { name, .. } | Operation::DropTable { name }
+								if name == table
+						) || matches!(
+							candidate,
+							Operation::AddColumn {
+								table: candidate_table,
+								column: candidate_column,
+								..
+							} if candidate_table == table && candidate_column.name == *column
+						) || matches!(
+							candidate,
+							Operation::DropColumn {
+								table: candidate_table,
+								column: candidate_column,
+								..
+							} if candidate_table == table && candidate_column == column
+						)
+					}) {
+						optimized = optimized
+							.into_iter()
+							.enumerate()
+							.filter_map(|(index, candidate)| {
+								let remove_matching_alter = index > add_index
+									&& matches!(
+										&candidate,
+										Operation::AlterColumn {
+											table: candidate_table,
+											column: candidate_column,
+											..
+										} if candidate_table == table && candidate_column == column
+									);
+								(index != add_index && !remove_matching_alter).then_some(candidate)
+							})
+							.collect();
+					} else {
+						optimized.push(operation);
+					}
+				}
+				Operation::AlterColumn {
+					table,
+					column,
+					old_definition,
+					new_definition,
+					mysql_options,
+				} => {
+					if let Some(Operation::AlterColumn {
+						table: previous_table,
+						column: previous_column,
+						new_definition: previous_new_definition,
+						mysql_options: previous_mysql_options,
+						..
+					}) = optimized.last_mut()
+						&& *previous_table == table
+						&& *previous_column == column
+					{
+						*previous_new_definition = new_definition;
+						*previous_mysql_options = mysql_options;
+					} else {
+						optimized.push(Operation::AlterColumn {
+							table,
+							column,
+							old_definition,
+							new_definition,
+							mysql_options,
+						});
+					}
+				}
+				_ => optimized.push(operation),
 			}
 		}
 
 		optimized
+	}
+
+	fn operation_table(operation: &Operation) -> Option<&String> {
+		match operation {
+			Operation::CreateTable { name, .. } | Operation::DropTable { name } => Some(name),
+			Operation::AddColumn { table, .. }
+			| Operation::DropColumn { table, .. }
+			| Operation::AlterColumn { table, .. } => Some(table),
+			_ => None,
+		}
 	}
 }
 

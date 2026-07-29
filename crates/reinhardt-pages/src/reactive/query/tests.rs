@@ -308,6 +308,47 @@ fn disabled_observer_reads_cache_and_can_refetch_explicitly() {
 }
 
 #[test]
+fn disabled_refetch_prefers_the_earliest_live_enabled_observer_fetcher() {
+	let runtime = TestQueryRuntime::new();
+	let client = QueryClient::with_runtime(QueryDefaults::default(), runtime.handle());
+	let family = QueryFamily::<(), String, String>::new("tests.disabled-enabled-priority");
+	let enabled_calls = Rc::new(Cell::new(0));
+	let enabled = client.observe(
+		family.query((), {
+			let enabled_calls = Rc::clone(&enabled_calls);
+			move || {
+				let call = enabled_calls.get() + 1;
+				enabled_calls.set(call);
+				async move { Ok(format!("enabled-{call}")) }
+			}
+		}),
+		QueryOptions::default(),
+	);
+	runtime.run_until_stalled();
+
+	let disabled_calls = Rc::new(Cell::new(0));
+	let disabled = client.observe(
+		family.query((), {
+			let disabled_calls = Rc::clone(&disabled_calls);
+			move || {
+				let call = disabled_calls.get() + 1;
+				disabled_calls.set(call);
+				async move { Ok(format!("disabled-{call}")) }
+			}
+		}),
+		QueryOptions::new().enabled(false),
+	);
+
+	disabled.refetch();
+	runtime.run_until_stalled();
+
+	assert_eq!(enabled_calls.get(), 2);
+	assert_eq!(disabled_calls.get(), 0);
+	assert_eq!(enabled.data(), Some("enabled-2".to_string()));
+	assert_eq!(disabled.data(), Some("enabled-2".to_string()));
+}
+
+#[test]
 fn disabled_double_refetch_queued_behind_an_enabled_fetch_uses_its_fetcher() {
 	let runtime = TestQueryRuntime::new();
 	let client = QueryClient::with_runtime(QueryDefaults::default(), runtime.handle());

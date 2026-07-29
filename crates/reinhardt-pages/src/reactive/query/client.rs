@@ -625,16 +625,11 @@ impl<T: Clone + 'static, E: Clone + 'static> QueryEntry<T, E> {
 			.state
 			.with_untracked(|state| matches!(state, ResourceState::Success(_)));
 		let manual_observer = manual_observer.and_then(|observer| observer.upgrade());
-		let fetcher = manual_observer
-			.as_ref()
-			.filter(|observer| !observer.policy.enabled)
-			.map(|observer| Rc::clone(&observer.fetcher))
-			.or_else(|| self.selected_fetcher())
-			.or_else(|| {
-				manual_observer
-					.as_ref()
-					.map(|observer| Rc::clone(&observer.fetcher))
-			});
+		let fetcher = self.selected_fetcher().or_else(|| {
+			manual_observer
+				.as_ref()
+				.map(|observer| Rc::clone(&observer.fetcher))
+		});
 		let Some(fetcher) = fetcher else {
 			if let Some(observer) = manual_observer {
 				observer.manual_refetch_pending.set(false);

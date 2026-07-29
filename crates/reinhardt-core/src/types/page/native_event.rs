@@ -611,6 +611,7 @@ pub struct NativeEvent {
 	target: Option<NativeEventTarget>,
 	base: BaseEventData,
 	payload: NativeEventPayload,
+	custom_detail: Option<serde_json::Value>,
 	dispatch_state: Arc<NativeDispatchState>,
 }
 
@@ -627,6 +628,7 @@ impl NativeEvent {
 			target: None,
 			base,
 			payload,
+			custom_detail: None,
 			dispatch_state: Arc::new(NativeDispatchState::default()),
 		}
 	}
@@ -675,6 +677,18 @@ impl NativeEvent {
 	/// Returns the captured interface-family payload.
 	pub const fn payload(&self) -> &NativeEventPayload {
 		&self.payload
+	}
+
+	/// Attaches a custom event detail payload.
+	#[must_use]
+	pub fn with_custom_detail(mut self, detail: serde_json::Value) -> Self {
+		self.custom_detail = Some(detail);
+		self
+	}
+
+	/// Returns the custom event detail payload when present.
+	pub const fn custom_detail(&self) -> Option<&serde_json::Value> {
+		self.custom_detail.as_ref()
 	}
 
 	/// Sets the originating target snapshot.
@@ -731,5 +745,26 @@ impl NativeEvent {
 		self.dispatch_state
 			.immediate_propagation_stopped
 			.load(Ordering::SeqCst)
+	}
+}
+
+#[cfg(test)]
+mod tests {
+	use std::borrow::Cow;
+
+	use super::{BaseEventData, NativeEvent, NativeEventPayload};
+	use reinhardt_event_catalog::EventName;
+
+	#[test]
+	fn native_event_distinguishes_plain_event_from_null_custom_detail() {
+		let plain = NativeEvent::new(
+			EventName::Custom(Cow::Borrowed("item-selected")),
+			BaseEventData::default(),
+			NativeEventPayload::default(),
+		);
+		assert_eq!(plain.custom_detail(), None);
+
+		let custom = plain.with_custom_detail(serde_json::Value::Null);
+		assert_eq!(custom.custom_detail(), Some(&serde_json::Value::Null));
 	}
 }

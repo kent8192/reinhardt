@@ -1082,10 +1082,11 @@ fn decode_mysql_text(row: &sqlx::mysql::MySqlRow, index: usize, kind: &str) -> R
 	use sqlx::Row;
 
 	let bytes: Vec<u8> = row.try_get(index).map_err(|error| {
-		MigrationError::IntrospectionError(format!("Failed to read MySQL {kind}: {error}"))
+		MigrationError::IntrospectionError(format!("Failed to read MySQL {}: {}", kind, error))
 	})?;
-	String::from_utf8(bytes)
-		.map_err(|_| MigrationError::IntrospectionError(format!("MySQL {kind} is not valid UTF-8")))
+	String::from_utf8(bytes).map_err(|_| {
+		MigrationError::IntrospectionError(format!("MySQL {} is not valid UTF-8", kind))
+	})
 }
 
 #[cfg(feature = "mysql")]
@@ -1097,12 +1098,12 @@ fn decode_optional_mysql_text(
 	use sqlx::Row;
 
 	let bytes: Option<Vec<u8>> = row.try_get(index).map_err(|error| {
-		MigrationError::IntrospectionError(format!("Failed to read MySQL {kind}: {error}"))
+		MigrationError::IntrospectionError(format!("Failed to read MySQL {}: {}", kind, error))
 	})?;
 	bytes
 		.map(|bytes| {
 			String::from_utf8(bytes).map_err(|_| {
-				MigrationError::IntrospectionError(format!("MySQL {kind} is not valid UTF-8"))
+				MigrationError::IntrospectionError(format!("MySQL {} is not valid UTF-8", kind))
 			})
 		})
 		.transpose()
@@ -1117,7 +1118,7 @@ fn decode_optional_mysql_integer(
 	use sqlx::Row;
 
 	row.try_get(index).map_err(|error| {
-		MigrationError::IntrospectionError(format!("Failed to read MySQL {kind}: {error}"))
+		MigrationError::IntrospectionError(format!("Failed to read MySQL {}: {}", kind, error))
 	})
 }
 
@@ -1130,13 +1131,14 @@ fn decode_optional_mysql_unsigned_integer(
 	use sqlx::Row;
 
 	let value: Option<u64> = row.try_get(index).map_err(|error| {
-		MigrationError::IntrospectionError(format!("Failed to read MySQL {kind}: {error}"))
+		MigrationError::IntrospectionError(format!("Failed to read MySQL {}: {}", kind, error))
 	})?;
 	value
 		.map(|value| {
 			i64::try_from(value).map_err(|_| {
 				MigrationError::IntrospectionError(format!(
-					"MySQL {kind} exceeds the supported range"
+					"MySQL {} exceeds the supported range",
+					kind
 				))
 			})
 		})
@@ -1147,7 +1149,8 @@ fn decode_optional_mysql_unsigned_integer(
 fn mysql_catalog_u32(value: Option<i64>, default: u32, kind: &str) -> Result<u32> {
 	u32::try_from(value.unwrap_or(i64::from(default))).map_err(|_| {
 		MigrationError::IntrospectionError(format!(
-			"MySQL {kind} is outside the supported u32 range"
+			"MySQL {} is outside the supported u32 range",
+			kind
 		))
 	})
 }

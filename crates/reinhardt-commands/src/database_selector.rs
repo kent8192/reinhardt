@@ -199,11 +199,11 @@ mod tests {
 		let mut databases = HashMap::new();
 		databases.insert(
 			"default".to_string(),
-			DatabaseConfig::postgresql("primary", "admin", "default-secret", "localhost", 5432),
+			DatabaseConfig::postgresql("primary", "admin", String::new(), "localhost", 5432),
 		);
 		databases.insert(
 			"replica".to_string(),
-			DatabaseConfig::mysql("replica", "reader", "replica-secret", "localhost", 3306),
+			DatabaseConfig::mysql("replica", "reader", String::new(), "localhost", 3306),
 		);
 		databases.insert(
 			"reporting:readonly".to_string(),

@@ -43,9 +43,9 @@ use std::collections::HashMap;
 
 use reinhardt_db::backends::DatabaseConnection;
 use reinhardt_db::migrations::{
-	ColumnDefinition, Constraint, ForeignKeyAction, GeneratedColumnDefinition, GeneratedStorage,
-	Migration, Operation, executor::DatabaseMigrationExecutor, field_type_string_to_field_type,
-	to_snake_case,
+	ColumnDefinition, Constraint, FieldType, ForeignKeyAction, GeneratedColumnDefinition,
+	GeneratedStorage, Migration, Operation, executor::DatabaseMigrationExecutor,
+	field_type_string_to_field_type, to_snake_case,
 };
 use reinhardt_db::orm::Model;
 use reinhardt_db::orm::fields::FieldKwarg;
@@ -112,6 +112,15 @@ pub fn field_info_to_column_definition(
 	field_info: &FieldInfo,
 ) -> Result<ColumnDefinition, SchemaError> {
 	let attributes = convert_attributes(&field_info.attributes);
+	#[cfg(feature = "pgvector")]
+	let field_type = match field_info.storage_kind {
+		Some(reinhardt_db::orm::DatabaseStorageKind::Vector(dimensions)) => {
+			FieldType::Vector { dimensions }
+		}
+		_ => field_type_string_to_field_type(&field_info.field_type, &attributes)
+			.map_err(SchemaError::FieldConversion)?,
+	};
+	#[cfg(not(feature = "pgvector"))]
 	let field_type = field_type_string_to_field_type(&field_info.field_type, &attributes)
 		.map_err(SchemaError::FieldConversion)?;
 
@@ -578,15 +587,15 @@ fn model_index_operations(model: &ModelSchemaInfo) -> Vec<Operation> {
 		}
 		let (columns, condition) = constraint.definition.trim().split_once(") WHERE ")?;
 		let columns = columns.strip_prefix("UNIQUE (")?;
-		Some(IndexInfo {
-			name: constraint.name.clone(),
-			fields: columns
+		Some(IndexInfo::new(
+			constraint.name.clone(),
+			columns
 				.split(',')
 				.map(|field| field.trim().to_string())
 				.collect(),
-			unique: true,
-			condition: Some(condition.to_string()),
-		})
+			true,
+			Some(condition.to_string()),
+		))
 	}));
 
 	indexes
@@ -1066,6 +1075,34 @@ mod tests {
 		assert_eq!(column.default.as_deref(), Some("'guest'"));
 	}
 
+	#[cfg(feature = "pgvector")]
+	#[test]
+	fn test_field_info_to_column_definition_preserves_vector_dimensions() {
+		let field = FieldInfo {
+			name: "embedding".to_string(),
+			field_type: "reinhardt.orm.models.VectorField".to_string(),
+			storage_kind: Some(reinhardt_db::orm::DatabaseStorageKind::Vector(1536)),
+			domain: None,
+			nullable: false,
+			primary_key: false,
+			unique: false,
+			blank: false,
+			editable: true,
+			default: None,
+			db_default: None,
+			db_column: None,
+			choices: None,
+			attributes: HashMap::new(),
+		};
+
+		let column = field_info_to_column_definition(&field).unwrap();
+
+		assert_eq!(
+			column.type_definition,
+			FieldType::Vector { dimensions: 1536 }
+		);
+	}
+
 	#[test]
 	fn test_field_info_to_column_definition_escapes_quotes_in_string_default() {
 		// Arrange
@@ -1236,13 +1273,31 @@ mod tests {
 
 		let operations = create_table_operations_from_models(vec![model]).unwrap();
 
-		assert!(operations.iter().any(|operation| matches!(
-			operation,
-			Operation::CreateIndex { table, columns, unique: true, where_clause, .. }
-				if table == "users"
-					&& columns == &vec!["email".to_string()]
-					&& where_clause.as_deref() == Some("deleted_at IS NULL")
-		)));
+		let operation = operations
+			.iter()
+			.find(|operation| matches!(operation, Operation::CreateIndex { .. }))
+			.expect("partial unique index operation");
+		match operation {
+			Operation::CreateIndex {
+				table,
+				columns,
+				unique,
+				index_type,
+				where_clause,
+				expressions,
+				operator_class,
+				..
+			} => {
+				assert_eq!(table, "users");
+				assert_eq!(columns, &["email".to_string()]);
+				assert!(*unique);
+				assert_eq!(where_clause.as_deref(), Some("deleted_at IS NULL"));
+				assert_eq!(*index_type, None);
+				assert_eq!(expressions, &None);
+				assert_eq!(operator_class, &None);
+			}
+			other => panic!("expected CreateIndex, got {other:?}"),
+		}
 	}
 
 	#[rstest]

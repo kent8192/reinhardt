@@ -1,0 +1,25 @@
+error[E0277]: the trait bound `OrderedExpression<OtherDocument>: IntoOrderBy<support::Document>` is not satisfied
+  --> tests/ui/vector_expression/fail/ordering_model_mismatch.rs:12:52
+   |
+12 |     let _query = QuerySet::<Document>::new().order_by(ordering);
+   |                                              -------- ^^^^^^^^ the trait `IntoOrderBy<support::Document>` is not implemented for `OrderedExpression<OtherDocument>`
+   |                                              |
+   |                                              required by a bound introduced by this call
+   |
+help: the trait `IntoOrderBy<support::Document>` is not implemented for `OrderedExpression<OtherDocument>`
+      but trait `IntoOrderBy<OtherDocument>` is implemented for it
+  --> src/orm/query.rs
+   |
+   | / impl<M> IntoOrderBy<M> for OrderedExpression<M>
+   | | where
+   | |     M: super::Model,
+   | |____________________^
+   = help: for that trait implementation, expected `OtherDocument`, found `support::Document`
+note: required by a bound in `QuerySet::<T>::order_by`
+  --> src/orm/query.rs
+   |
+   |     pub fn order_by<I>(mut self, ordering: I) -> Self
+   |            -------- required by a bound in this associated function
+   |     where
+   |         I: IntoOrderBy<T>,
+   |            ^^^^^^^^^^^^^^ required by this bound in `QuerySet::<T>::order_by`

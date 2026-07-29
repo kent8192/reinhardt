@@ -42,6 +42,8 @@ fn query_value_to_sea_value(qv: &QueryValue) -> Value {
 		QueryValue::NaiveTimestamp(dt) => Value::ChronoDateTime(Some(Box::new(*dt))),
 		QueryValue::Uuid(u) => Value::Uuid(Some(Box::new(*u))),
 		QueryValue::Json(value) => Value::Json(value.clone()),
+		#[cfg(feature = "pgvector")]
+		QueryValue::Vector(values) => Value::Vector(values.clone().map(Box::new)),
 		QueryValue::StringArray(values) => Value::Array(
 			reinhardt_query::value::ArrayType::String,
 			Some(Box::new(

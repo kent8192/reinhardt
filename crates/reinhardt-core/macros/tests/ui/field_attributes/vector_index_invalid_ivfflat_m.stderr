@@ -1,0 +1,11 @@
+error: IVFFlat vector indexes do not accept `m` or `ef_construction`
+  --> tests/ui/field_attributes/vector_index_invalid_ivfflat_m.rs:12:10
+   |
+12 |       #[field(index(
+   |  _____________^
+13 | |         name = "documents_embedding_ivfflat",
+14 | |         method = "ivfflat",
+15 | |         opclass = "vector_l2_ops",
+16 | |         m = 16
+17 | |     ))]
+   | |_____^

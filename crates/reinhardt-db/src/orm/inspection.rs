@@ -186,6 +186,8 @@ pub fn database_field_type_path(storage_kind: DatabaseStorageKind) -> &'static s
 		DatabaseStorageKind::String => "reinhardt.orm.models.CharField",
 		DatabaseStorageKind::Bytes => "reinhardt.orm.models.BinaryField",
 		DatabaseStorageKind::Json => "reinhardt.orm.models.JsonField",
+		#[cfg(feature = "pgvector")]
+		DatabaseStorageKind::Vector(_) => "reinhardt.orm.models.VectorField",
 		DatabaseStorageKind::Uuid => "reinhardt.orm.models.UuidField",
 		DatabaseStorageKind::Date => "reinhardt.orm.models.DateField",
 		DatabaseStorageKind::Time => "reinhardt.orm.models.TimeField",
@@ -218,6 +220,8 @@ pub fn database_storage_field_type(
 		),
 		DatabaseStorageKind::Bytes => FieldType::Binary,
 		DatabaseStorageKind::Json => FieldType::JsonBinary,
+		#[cfg(feature = "pgvector")]
+		DatabaseStorageKind::Vector(dimensions) => FieldType::Vector { dimensions },
 		DatabaseStorageKind::Uuid => FieldType::Uuid,
 		DatabaseStorageKind::Date => FieldType::Date,
 		DatabaseStorageKind::Time => FieldType::Time,
@@ -314,6 +318,24 @@ impl RelationInfo {
 }
 
 /// Index information extracted from inspection
+#[cfg(feature = "pgvector")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum IndexMetadataType {
+	/// HNSW approximate vector index.
+	Hnsw {
+		/// Maximum number of connections per layer.
+		m: Option<u16>,
+		/// Candidate list size used while constructing the index.
+		ef_construction: Option<u16>,
+	},
+	/// IVFFlat approximate vector index.
+	Ivfflat {
+		/// Number of inverted lists.
+		lists: Option<u32>,
+	},
+}
+
+/// Index information extracted from inspection
 #[derive(Debug, Clone, PartialEq)]
 pub struct IndexInfo {
 	/// Index name
@@ -324,9 +346,39 @@ pub struct IndexInfo {
 	pub unique: bool,
 	/// Partial index condition
 	pub condition: Option<String>,
+	/// Typed index method and options.
+	#[cfg(feature = "pgvector")]
+	pub index_type: Option<IndexMetadataType>,
+	/// PostgreSQL operator class.
+	#[cfg(feature = "pgvector")]
+	pub operator_class: Option<String>,
+	/// Index expressions.
+	#[cfg(feature = "pgvector")]
+	pub expressions: Option<Vec<String>>,
 }
 
 impl IndexInfo {
+	/// Creates index metadata from its feature-independent fields.
+	pub fn new(
+		name: impl Into<String>,
+		fields: Vec<String>,
+		unique: bool,
+		condition: Option<String>,
+	) -> Self {
+		Self {
+			name: name.into(),
+			fields,
+			unique,
+			condition,
+			#[cfg(feature = "pgvector")]
+			index_type: None,
+			#[cfg(feature = "pgvector")]
+			operator_class: None,
+			#[cfg(feature = "pgvector")]
+			expressions: None,
+		}
+	}
+
 	/// Create IndexInfo from an Index
 	///
 	/// # Examples
@@ -343,12 +395,12 @@ impl IndexInfo {
 	/// assert!(!info.unique);
 	/// ```
 	pub fn from_index(index: &Index) -> Self {
-		Self {
-			name: index.name.clone(),
-			fields: index.fields.clone(),
-			unique: index.unique,
-			condition: index.condition.clone(),
-		}
+		Self::new(
+			index.name.clone(),
+			index.fields.clone(),
+			index.unique,
+			index.condition.clone(),
+		)
 	}
 }
 

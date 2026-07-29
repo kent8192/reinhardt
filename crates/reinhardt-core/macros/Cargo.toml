@@ -25,6 +25,7 @@ full = []
 db-postgres = []
 db-mysql = []
 db-sqlite = []
+pgvector = []
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["macros", "rt", "time"] }

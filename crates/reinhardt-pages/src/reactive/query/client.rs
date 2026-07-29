@@ -72,11 +72,11 @@ pub(super) struct QueryEntry<T: Clone + 'static, E: Clone + 'static> {
 	pub(super) is_fetching: Signal<bool>,
 	pub(super) fetcher: RefCell<Rc<QueryFetcher<T, E>>>,
 	pub(super) request: RefCell<Option<QueryRequest<T, E>>>,
-	pub(super) next_generation: Cell<u64>,
+	next_generation: Cell<u64>,
 	pub(super) completed: RefCell<Option<(u64, Result<T, E>)>>,
-	pub(super) waiters: RefCell<Vec<Waker>>,
+	waiters: RefCell<Vec<Waker>>,
 	pub(super) lease_count: Cell<usize>,
-	pub(super) retain_lease_count: Cell<usize>,
+	retain_lease_count: Cell<usize>,
 	pub(super) refetch_after_in_flight: Cell<bool>,
 	pub(super) last_fetched_ms: Cell<Option<u64>>,
 	pub(super) stale_time: Cell<Duration>,
@@ -85,8 +85,8 @@ pub(super) struct QueryEntry<T: Clone + 'static, E: Clone + 'static> {
 
 pub(super) struct QueryLeaseInner<T: Clone + 'static, E: Clone + 'static> {
 	pub(super) entry: Rc<QueryEntry<T, E>>,
-	pub(super) generation: Cell<Option<u64>>,
-	pub(super) retains_errors: bool,
+	generation: Cell<Option<u64>>,
+	retains_errors: bool,
 }
 
 /// RAII interest in one keyed query entry.
@@ -142,7 +142,7 @@ impl<T: Clone + 'static, E: Clone + 'static> QueryEntry<T, E> {
 		Self::new_with_hydrated_state(key, hydrated_state)
 	}
 
-	pub(super) fn new_with_hydrated_state(
+	fn new_with_hydrated_state(
 		key: QueryKey<T, E>,
 		hydrated_state: Option<ResourceState<T, E>>,
 	) -> Self {
@@ -170,7 +170,7 @@ impl<T: Clone + 'static, E: Clone + 'static> QueryEntry<T, E> {
 		}
 	}
 
-	pub(super) fn update_policy(&self, key: QueryKey<T, E>) {
+	fn update_policy(&self, key: QueryKey<T, E>) {
 		*self.fetcher.borrow_mut() = key.fetcher;
 		self.stale_time.set(key.stale_time);
 		self.gc_time.set(key.gc_time);
@@ -192,13 +192,13 @@ impl<T: Clone + 'static, E: Clone + 'static> QueryEntry<T, E> {
 		self.request.borrow().is_some()
 	}
 
-	pub(super) fn next_request_generation(&self) -> u64 {
+	fn next_request_generation(&self) -> u64 {
 		let generation = self.next_generation.get();
 		self.next_generation.set(generation.wrapping_add(1));
 		generation
 	}
 
-	pub(super) fn cancel_request(&self) {
+	fn cancel_request(&self) {
 		if let Some(request) = self.request.borrow_mut().take() {
 			request.source.cancel();
 			self.refetch_after_in_flight.set(false);
@@ -207,7 +207,7 @@ impl<T: Clone + 'static, E: Clone + 'static> QueryEntry<T, E> {
 		}
 	}
 
-	pub(super) fn wake_waiters(&self) {
+	fn wake_waiters(&self) {
 		let waiters = std::mem::take(&mut *self.waiters.borrow_mut());
 		for waiter in waiters {
 			waiter.wake();
@@ -217,7 +217,7 @@ impl<T: Clone + 'static, E: Clone + 'static> QueryEntry<T, E> {
 	// The lease result future registers here while a navigation waits for a
 	// generation to settle; later loader tasks will exercise this path.
 	#[allow(dead_code)]
-	pub(super) fn register_waiter(&self, waker: &Waker) {
+	fn register_waiter(&self, waker: &Waker) {
 		let mut waiters = self.waiters.borrow_mut();
 		if !waiters.iter().any(|previous| previous.will_wake(waker)) {
 			waiters.push(waker.clone());
@@ -244,7 +244,7 @@ impl<T: Clone + 'static, E: Clone + 'static> QueryEntry<T, E> {
 		}
 	}
 
-	pub(super) fn acquire(self: &Rc<Self>, options: QueryAcquireOptions) -> QueryLease<T, E>
+	fn acquire(self: &Rc<Self>, options: QueryAcquireOptions) -> QueryLease<T, E>
 	where
 		T: Serialize + DeserializeOwned,
 		E: Serialize + DeserializeOwned,
@@ -387,8 +387,8 @@ impl<T: Clone + 'static, E: Clone + 'static> QueryEntry<T, E> {
 // Route preparation consumes this future in later implementation tasks.
 #[allow(dead_code)]
 struct QueryResultFuture<T: Clone + 'static, E: Clone + 'static> {
-	pub(super) entry: Rc<QueryEntry<T, E>>,
-	pub(super) generation: Option<u64>,
+	entry: Rc<QueryEntry<T, E>>,
+	generation: Option<u64>,
 }
 
 impl<T: Clone + 'static, E: Clone + 'static> Future for QueryResultFuture<T, E> {
@@ -455,7 +455,7 @@ where
 	let hydrated_state = serde_json::from_value(serialized.clone())?;
 	let id = key.id.clone();
 	#[cfg(any(wasm, test))]
-	super::resource::reserve_client_resource_key(&id);
+	super::super::resource::reserve_client_resource_key(&id);
 	let cache_id = scoped_query_cache_id(&id);
 	QUERY_CACHE.with(|cache| {
 		let mut cache = cache.borrow_mut();
@@ -495,7 +495,7 @@ where
 {
 	let id = key.id.clone();
 	#[cfg(any(wasm, test))]
-	super::resource::reserve_client_resource_key(&id);
+	super::super::resource::reserve_client_resource_key(&id);
 	let cache_id = scoped_query_cache_id(&id);
 	QUERY_CACHE.with(|cache| {
 		let mut cache = cache.borrow_mut();

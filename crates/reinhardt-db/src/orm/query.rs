@@ -1183,7 +1183,7 @@ enum SelectForUpdateBehavior {
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum SelectForUpdateTarget {
 	Root,
-	Relation(SmallVec<[RelationStep; 4]>),
+	Relation(Box<SmallVec<[RelationStep; 4]>>),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1268,7 +1268,7 @@ where
 		self.queryset
 			.relation_joins
 			.add_steps_with_override(&steps, path.join_kind_override());
-		let target = SelectForUpdateTarget::Relation(steps);
+		let target = SelectForUpdateTarget::Relation(Box::new(steps));
 		let spec = self
 			.queryset
 			.select_for_update

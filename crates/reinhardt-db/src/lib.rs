@@ -33,6 +33,8 @@
 //!
 //! - **Django-style Models**: Define database models with structs
 //! - **QuerySet API**: Chainable query builder with conditional partial updates
+//! - **Typed Date Projections**: Database-side truncation, time-zone conversion,
+//!   distinctness, and deterministic ordering
 //! - **Field Types**: Rich set of field types with validation
 //! - **Relationships**: ForeignKey, ManyToMany, OneToOne
 //! - **Fixtures**: Django-compatible model fixture dump/load runtime with upsert,

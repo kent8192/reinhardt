@@ -3,7 +3,7 @@
 //! This module provides the [`Func`] struct with static methods for
 //! constructing common SQL aggregate function calls.
 
-use super::simple_expr::SimpleExpr;
+use super::simple_expr::{SimpleExpr, TemporalTimeZone, TemporalTruncKind, TemporalTruncOutput};
 use crate::types::IntoIden;
 
 /// SQL aggregate function builder.
@@ -60,6 +60,21 @@ impl Func {
 	/// Create a COALESCE(expr1, expr2, ...) function call.
 	pub fn coalesce(exprs: Vec<SimpleExpr>) -> SimpleExpr {
 		SimpleExpr::FunctionCall("COALESCE".into_iden(), exprs)
+	}
+
+	/// Create a typed temporal truncation expression.
+	pub fn temporal_trunc(
+		expr: SimpleExpr,
+		kind: TemporalTruncKind,
+		time_zone: Option<TemporalTimeZone>,
+		output: TemporalTruncOutput,
+	) -> SimpleExpr {
+		SimpleExpr::TemporalTrunc {
+			expr: Box::new(expr),
+			kind,
+			time_zone,
+			output,
+		}
 	}
 }
 

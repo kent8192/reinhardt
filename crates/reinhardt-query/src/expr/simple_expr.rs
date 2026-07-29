@@ -28,6 +28,58 @@ pub enum SubQueryOper {
 	Some,
 }
 
+/// Temporal truncation unit used by database-side date projections.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TemporalTruncKind {
+	/// Calendar year.
+	Year,
+	/// Calendar month.
+	Month,
+	/// ISO week beginning on Monday.
+	Week,
+	/// Calendar day.
+	Day,
+	/// Hour.
+	Hour,
+	/// Minute.
+	Minute,
+	/// Second.
+	Second,
+}
+
+impl TemporalTruncKind {
+	/// Return the canonical SQL truncation name.
+	pub const fn as_str(self) -> &'static str {
+		match self {
+			Self::Year => "year",
+			Self::Month => "month",
+			Self::Week => "week",
+			Self::Day => "day",
+			Self::Hour => "hour",
+			Self::Minute => "minute",
+			Self::Second => "second",
+		}
+	}
+}
+
+/// Result type requested from a temporal truncation expression.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TemporalTruncOutput {
+	/// A database date value.
+	Date,
+	/// A database timestamp value.
+	DateTime,
+}
+
+/// Time-zone conversion requested before datetime truncation.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum TemporalTimeZone {
+	/// Coordinated Universal Time.
+	Utc,
+	/// An IANA time-zone name.
+	Named(String),
+}
+
 /// A simple SQL expression.
 ///
 /// This enum represents the AST for SQL expressions. Each variant corresponds
@@ -110,6 +162,18 @@ pub enum SimpleExpr {
 
 	/// A CAST expression (e.g., `CAST(x AS INTEGER)`)
 	Cast(Box<SimpleExpr>, DynIden),
+
+	/// A typed backend-specific temporal truncation expression.
+	TemporalTrunc {
+		/// Source date or datetime expression.
+		expr: Box<SimpleExpr>,
+		/// Truncation unit.
+		kind: TemporalTruncKind,
+		/// Time zone applied before truncation for datetime projections.
+		time_zone: Option<TemporalTimeZone>,
+		/// Projected database value type.
+		output: TemporalTruncOutput,
+	},
 
 	/// A window function with inline window specification
 	///

@@ -1,0 +1,73 @@
+error[E0277]: the trait bound `std::string::String: DateProjectionField` is not satisfied
+  --> tests/ui/date_projection/wrong_field.rs:21:4
+   |
+20 |         .dates(
+   |          ----- required by a bound introduced by this call
+21 |             ProjectionEvent::field_title(),
+   |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ the trait `DateProjectionField` is not implemented for `std::string::String`
+   |
+help: the following other types implement trait `DateProjectionField`
+  --> src/orm/query.rs
+   |
+   | impl DateProjectionField for chrono::NaiveDate {}
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `NaiveDate`
+   | impl DateProjectionField for Option<chrono::NaiveDate> {}
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `std::option::Option<NaiveDate>`
+note: required by a bound in `Manager::<M>::dates`
+  --> src/orm/manager.rs
+   |
+   |     pub async fn dates<F>(
+   |                  ----- required by a bound in this associated function
+...
+   |         F: super::query::DateProjectionField,
+   |            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ required by this bound in `Manager::<M>::dates`
+
+error[E0277]: the trait bound `std::string::String: DateProjectionField` is not satisfied
+  --> tests/ui/date_projection/wrong_field.rs:19:10
+   |
+19 |       let _ = ProjectionEvent::objects()
+   |  _____________^
+20 | |         .dates(
+21 | |             ProjectionEvent::field_title(),
+22 | |             DateTruncKind::Day,
+23 | |             DateProjectionOrder::Asc,
+24 | |         )
+   | |_________^ the trait `DateProjectionField` is not implemented for `std::string::String`
+   |
+help: the following other types implement trait `DateProjectionField`
+  --> src/orm/query.rs
+   |
+   | impl DateProjectionField for chrono::NaiveDate {}
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `NaiveDate`
+   | impl DateProjectionField for Option<chrono::NaiveDate> {}
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `std::option::Option<NaiveDate>`
+note: required by a bound in `Manager::<M>::dates`
+  --> src/orm/manager.rs
+   |
+   |     pub async fn dates<F>(
+   |                  ----- required by a bound in this associated function
+...
+   |         F: super::query::DateProjectionField,
+   |            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ required by this bound in `Manager::<M>::dates`
+
+error[E0277]: the trait bound `std::string::String: DateProjectionField` is not satisfied
+  --> tests/ui/date_projection/wrong_field.rs:25:4
+   |
+25 |         .await?;
+   |          ^^^^^ the trait `DateProjectionField` is not implemented for `std::string::String`
+   |
+help: the following other types implement trait `DateProjectionField`
+  --> src/orm/query.rs
+   |
+   | impl DateProjectionField for chrono::NaiveDate {}
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `NaiveDate`
+   | impl DateProjectionField for Option<chrono::NaiveDate> {}
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `std::option::Option<NaiveDate>`
+note: required by a bound in `Manager::<M>::dates`
+  --> src/orm/manager.rs
+   |
+   |     pub async fn dates<F>(
+   |                  ----- required by a bound in this associated function
+...
+   |         F: super::query::DateProjectionField,
+   |            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ required by this bound in `Manager::<M>::dates`

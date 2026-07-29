@@ -4,7 +4,7 @@
 
 use super::{QueryBuilder, SqlWriter};
 use crate::{
-	expr::{Condition, SimpleExpr},
+	expr::{Condition, SimpleExpr, TemporalTruncKind, TemporalTruncOutput},
 	query::{
 		AlterIndexStatement, AlterTableOperation, AlterTableStatement, CheckTableStatement,
 		CreateIndexStatement, CreateTableStatement, CreateTriggerStatement, CreateViewStatement,
@@ -53,6 +53,81 @@ impl SqliteQueryBuilder {
 	/// Create a new SQLite query builder
 	pub fn new() -> Self {
 		Self
+	}
+
+	fn write_monday_date(&self, writer: &mut SqlWriter, expr: &SimpleExpr) {
+		writer.push("DATE(");
+		self.write_simple_expr(writer, expr);
+		writer.push(", '-' || ((CAST(strftime('%w', ");
+		self.write_simple_expr(writer, expr);
+		writer.push(") AS INTEGER) + 6) % 7) || ' days')");
+	}
+
+	fn write_temporal_trunc(
+		&self,
+		writer: &mut SqlWriter,
+		expr: &SimpleExpr,
+		kind: TemporalTruncKind,
+		output: TemporalTruncOutput,
+	) {
+		if kind == TemporalTruncKind::Week {
+			if output == TemporalTruncOutput::DateTime {
+				writer.push("DATETIME(");
+			}
+			self.write_monday_date(writer, expr);
+			if output == TemporalTruncOutput::DateTime {
+				writer.push(")");
+			}
+			return;
+		}
+
+		match (kind, output) {
+			(TemporalTruncKind::Year, _) => {
+				writer.push(match output {
+					TemporalTruncOutput::Date => "DATE(",
+					TemporalTruncOutput::DateTime => "DATETIME(",
+				});
+				self.write_simple_expr(writer, expr);
+				writer.push(", 'start of year')");
+			}
+			(TemporalTruncKind::Month, _) => {
+				writer.push(match output {
+					TemporalTruncOutput::Date => "DATE(",
+					TemporalTruncOutput::DateTime => "DATETIME(",
+				});
+				self.write_simple_expr(writer, expr);
+				writer.push(", 'start of month')");
+			}
+			(TemporalTruncKind::Day, _) => {
+				writer.push(match output {
+					TemporalTruncOutput::Date => "DATE(",
+					TemporalTruncOutput::DateTime => "DATETIME(",
+				});
+				self.write_simple_expr(writer, expr);
+				if output == TemporalTruncOutput::DateTime {
+					writer.push(", 'start of day')");
+				} else {
+					writer.push(")");
+				}
+			}
+			(
+				TemporalTruncKind::Hour | TemporalTruncKind::Minute | TemporalTruncKind::Second,
+				TemporalTruncOutput::DateTime,
+			) => {
+				let format = match kind {
+					TemporalTruncKind::Hour => "%Y-%m-%d %H:00:00",
+					TemporalTruncKind::Minute => "%Y-%m-%d %H:%M:00",
+					TemporalTruncKind::Second => "%Y-%m-%d %H:%M:%S",
+					_ => unreachable!("matched datetime truncation kind"),
+				};
+				writer.push("DATETIME(strftime('");
+				writer.push(format);
+				writer.push("', ");
+				self.write_simple_expr(writer, expr);
+				writer.push("))");
+			}
+			_ => unreachable!("invalid temporal truncation kind and output"),
+		}
 	}
 
 	/// Build a SELECT statement after rejecting PostgreSQL-only vector features.
@@ -493,6 +568,9 @@ impl SqliteQueryBuilder {
 				writer.push_identifier(&type_name.to_string(), |s| self.escape_iden(s));
 				writer.push(")");
 			}
+			SimpleExpr::TemporalTrunc {
+				expr, kind, output, ..
+			} => self.write_temporal_trunc(writer, expr, *kind, *output),
 		}
 	}
 

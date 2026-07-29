@@ -44,7 +44,7 @@ use std::fmt::Write as FmtWrite;
 
 use super::{QueryBuilder, SqlWriter};
 use crate::{
-	expr::{Condition, SimpleExpr},
+	expr::{Condition, SimpleExpr, TemporalTimeZone, TemporalTruncKind, TemporalTruncOutput},
 	query::{
 		AlterIndexStatement, AlterTableOperation, AlterTableStatement, CheckTableStatement,
 		CreateIndexStatement, CreateTableStatement, CreateTriggerStatement, CreateViewStatement,
@@ -86,6 +86,57 @@ impl PostgresQueryBuilder {
 	/// Create a new PostgreSQL query builder
 	pub fn new() -> Self {
 		Self
+	}
+
+	fn write_temporal_zone(&self, writer: &mut SqlWriter, zone: String, unquoted: bool) {
+		if unquoted {
+			writer.push("'");
+			writer.push(&zone.replace('\'', "''"));
+			writer.push("'");
+		} else {
+			writer.push_value(crate::value::Value::String(Some(Box::new(zone))), |index| {
+				self.placeholder(index)
+			});
+		}
+	}
+
+	fn write_temporal_trunc(
+		&self,
+		writer: &mut SqlWriter,
+		expr: &SimpleExpr,
+		kind: TemporalTruncKind,
+		time_zone: Option<&TemporalTimeZone>,
+		output: TemporalTruncOutput,
+		unquoted: bool,
+	) {
+		writer.push("DATE_TRUNC('");
+		writer.push(kind.as_str());
+		writer.push("', ");
+		if unquoted {
+			self.write_simple_expr_unquoted(writer, expr);
+		} else {
+			self.write_simple_expr(writer, expr);
+		}
+		if output == TemporalTruncOutput::DateTime {
+			writer.push(" AT TIME ZONE ");
+			let zone = match time_zone {
+				Some(TemporalTimeZone::Named(zone)) => zone.clone(),
+				Some(TemporalTimeZone::Utc) | None => "UTC".to_string(),
+			};
+			self.write_temporal_zone(writer, zone, unquoted);
+		}
+		writer.push(")");
+		match output {
+			TemporalTruncOutput::Date => writer.push("::date"),
+			TemporalTruncOutput::DateTime => {
+				writer.push(" AT TIME ZONE ");
+				let zone = match time_zone {
+					Some(TemporalTimeZone::Named(zone)) => zone.clone(),
+					Some(TemporalTimeZone::Utc) | None => "UTC".to_string(),
+				};
+				self.write_temporal_zone(writer, zone, unquoted);
+			}
+		}
 	}
 
 	/// Build a SELECT statement through the checked query-building API.
@@ -783,6 +834,12 @@ impl PostgresQueryBuilder {
 				writer.push_identifier(&type_name.to_string(), |s| self.escape_iden(s));
 				writer.push(")");
 			}
+			SimpleExpr::TemporalTrunc {
+				expr,
+				kind,
+				time_zone,
+				output,
+			} => self.write_temporal_trunc(writer, expr, *kind, time_zone.as_ref(), *output, false),
 		}
 	}
 
@@ -1022,6 +1079,12 @@ impl PostgresQueryBuilder {
 				writer.push_identifier(&type_name.to_string(), |s| self.escape_iden(s));
 				writer.push(")");
 			}
+			SimpleExpr::TemporalTrunc {
+				expr,
+				kind,
+				time_zone,
+				output,
+			} => self.write_temporal_trunc(writer, expr, *kind, time_zone.as_ref(), *output, true),
 		}
 	}
 

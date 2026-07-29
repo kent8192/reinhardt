@@ -19,7 +19,7 @@ use reinhardt_query::prelude::{
 	Alias, BinOper, CockroachDBQueryBuilder, ColumnRef, Condition, Expr, ExprTrait, Func,
 	JoinType as SeaJoinType, MySqlQueryBuilder, Order, PostgresQueryBuilder, Query, QueryBuilder,
 	QueryStatementBuilder, SelectStatement, SimpleExpr, SqliteQueryBuilder, TableRef,
-	UpdateStatement,
+	TemporalTimeZone, TemporalTruncKind, TemporalTruncOutput, UpdateStatement,
 };
 use reinhardt_query::types::PgBinOper;
 use serde::{Deserialize, Serialize};
@@ -31,6 +31,103 @@ use uuid::Uuid;
 
 fn executor_error(error: reinhardt_core::exception::Error) -> DatabaseError {
 	crate::backends::error::into_database_error(error)
+}
+
+mod temporal_projection_field {
+	pub trait Sealed {}
+
+	impl Sealed for chrono::NaiveDate {}
+	impl Sealed for Option<chrono::NaiveDate> {}
+	impl Sealed for chrono::DateTime<chrono::Utc> {}
+	impl Sealed for Option<chrono::DateTime<chrono::Utc>> {}
+}
+
+/// Field types accepted by [`QuerySet::dates`].
+pub trait DateProjectionField: temporal_projection_field::Sealed {}
+
+impl DateProjectionField for chrono::NaiveDate {}
+impl DateProjectionField for Option<chrono::NaiveDate> {}
+
+/// Field types accepted by [`QuerySet::datetimes`].
+pub trait DateTimeProjectionField: temporal_projection_field::Sealed {}
+
+impl DateTimeProjectionField for chrono::DateTime<chrono::Utc> {}
+impl DateTimeProjectionField for Option<chrono::DateTime<chrono::Utc>> {}
+
+/// Truncation unit for date projections.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DateTruncKind {
+	/// First day of the calendar year.
+	Year,
+	/// First day of the calendar month.
+	Month,
+	/// Monday of the ISO week.
+	Week,
+	/// Calendar day.
+	Day,
+}
+
+impl From<DateTruncKind> for TemporalTruncKind {
+	fn from(kind: DateTruncKind) -> Self {
+		match kind {
+			DateTruncKind::Year => Self::Year,
+			DateTruncKind::Month => Self::Month,
+			DateTruncKind::Week => Self::Week,
+			DateTruncKind::Day => Self::Day,
+		}
+	}
+}
+
+/// Truncation unit for datetime projections.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DateTimeTruncKind {
+	/// First instant of the calendar year.
+	Year,
+	/// First instant of the calendar month.
+	Month,
+	/// Monday at midnight of the ISO week.
+	Week,
+	/// Midnight of the calendar day.
+	Day,
+	/// Start of the hour.
+	Hour,
+	/// Start of the minute.
+	Minute,
+	/// Start of the second.
+	Second,
+}
+
+impl From<DateTimeTruncKind> for TemporalTruncKind {
+	fn from(kind: DateTimeTruncKind) -> Self {
+		match kind {
+			DateTimeTruncKind::Year => Self::Year,
+			DateTimeTruncKind::Month => Self::Month,
+			DateTimeTruncKind::Week => Self::Week,
+			DateTimeTruncKind::Day => Self::Day,
+			DateTimeTruncKind::Hour => Self::Hour,
+			DateTimeTruncKind::Minute => Self::Minute,
+			DateTimeTruncKind::Second => Self::Second,
+		}
+	}
+}
+
+/// Ordering direction for date and datetime projections.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum DateProjectionOrder {
+	/// Ascending chronological order.
+	#[default]
+	Asc,
+	/// Descending chronological order.
+	Desc,
+}
+
+impl From<DateProjectionOrder> for Order {
+	fn from(order: DateProjectionOrder) -> Self {
+		match order {
+			DateProjectionOrder::Asc => Self::Asc,
+			DateProjectionOrder::Desc => Self::Desc,
+		}
+	}
 }
 
 // Django QuerySet API types
@@ -1380,6 +1477,183 @@ where
 					})
 			})
 			.collect()
+	}
+
+	fn temporal_projection_statement(
+		&self,
+		field: &str,
+		kind: TemporalTruncKind,
+		order: DateProjectionOrder,
+		time_zone: Option<TemporalTimeZone>,
+		output: TemporalTruncOutput,
+	) -> reinhardt_core::exception::Result<SelectStatement> {
+		let source = Expr::col(self.root_column_reference(field)).into_simple_expr();
+		let projection = Func::temporal_trunc(source.clone(), kind, time_zone, output);
+		let mut stmt = Query::select();
+		self.apply_model_from(&mut stmt);
+		stmt.expr_as(projection.clone(), Alias::new("value"));
+		self.apply_relation_joins(&mut stmt);
+		self.apply_manual_joins(&mut stmt);
+		if let Some(condition) = self.build_where_condition()? {
+			stmt.cond_where(condition);
+		}
+		stmt.and_where(source.is_not_null());
+		stmt.distinct();
+		stmt.order_by_expr(Expr::col(Alias::new("value")), order.into());
+		if let Some(limit) = self.limit {
+			stmt.limit(limit as u64);
+		}
+		if let Some(offset) = self.offset {
+			stmt.offset(offset as u64);
+		}
+		Ok(stmt.to_owned())
+	}
+
+	async fn temporal_rows_with_db<E>(
+		stmt: &SelectStatement,
+		conn: &mut E,
+	) -> reinhardt_core::exception::Result<Vec<crate::backends::types::Row>>
+	where
+		E: OrmExecutor,
+	{
+		let context = super::execution::pgvector_context_for_select(stmt);
+		let (sql, values) =
+			Self::build_select_for_backend(stmt, conn.backend(), conn.is_cockroachdb())?;
+		let param_samples = values
+			.iter()
+			.map(|value| value.to_sql_literal())
+			.collect::<Vec<_>>();
+		let params = super::execution::convert_values(values);
+		let started_at = Instant::now();
+		let result = conn.fetch_all_with_context(&sql, params, context).await;
+		let duration = started_at.elapsed();
+		match result {
+			Ok(rows) => {
+				super::instrumentation::instrumentation()
+					.orm_query_end_with_params(&sql, &param_samples, duration)
+					.await;
+				Ok(rows)
+			}
+			Err(error) => {
+				super::instrumentation::instrumentation()
+					.orm_query_error(&sql, &format!("{error:?}"))
+					.await;
+				Err(error)
+			}
+		}
+	}
+
+	async fn temporal_rows_with_executor(
+		stmt: &SelectStatement,
+		executor: &mut dyn super::connection::TransactionExecutor,
+	) -> Result<Vec<crate::backends::types::Row>, crate::backends::error::DatabaseError> {
+		let context = super::execution::pgvector_context_for_select(stmt);
+		let (sql, values) = Self::build_select_for_backend(
+			stmt,
+			Self::executor_backend(executor),
+			executor.is_cockroachdb(),
+		)?;
+		let param_samples = values
+			.iter()
+			.map(|value| value.to_sql_literal())
+			.collect::<Vec<_>>();
+		let params = super::execution::convert_values(values);
+		let started_at = Instant::now();
+		let result = executor
+			.fetch_all_with_context(&sql, params, context)
+			.await
+			.map_err(executor_error);
+		let duration = started_at.elapsed();
+		match result {
+			Ok(rows) => {
+				super::instrumentation::instrumentation()
+					.orm_query_end_with_params(&sql, &param_samples, duration)
+					.await;
+				Ok(rows)
+			}
+			Err(error) => {
+				super::instrumentation::instrumentation()
+					.orm_query_error(&sql, &format!("{error:?}"))
+					.await;
+				Err(error)
+			}
+		}
+	}
+
+	fn projection_value(
+		row: crate::backends::types::Row,
+	) -> Result<crate::backends::types::QueryValue, DatabaseError> {
+		row.data.get("value").cloned().ok_or_else(|| {
+			DatabaseError::new(
+				DatabaseErrorKind::ColumnNotFound,
+				"date projection did not return the `value` column",
+			)
+		})
+	}
+
+	fn decode_date_projection(
+		rows: Vec<crate::backends::types::Row>,
+	) -> Result<Vec<chrono::NaiveDate>, DatabaseError> {
+		let mut values = Vec::with_capacity(rows.len());
+		for row in rows {
+			let date = match Self::projection_value(row)? {
+				crate::backends::types::QueryValue::Null => continue,
+				crate::backends::types::QueryValue::String(value) => {
+					chrono::NaiveDate::parse_from_str(&value, "%Y-%m-%d").map_err(|error| {
+						DatabaseError::new(
+							DatabaseErrorKind::Serialization,
+							format!("invalid projected date `{value}`: {error}"),
+						)
+					})?
+				}
+				crate::backends::types::QueryValue::NaiveTimestamp(value) => value.date(),
+				crate::backends::types::QueryValue::Timestamp(value) => value.date_naive(),
+				value => {
+					return Err(DatabaseError::new(
+						DatabaseErrorKind::Type,
+						format!("cannot decode projected date from {value:?}"),
+					));
+				}
+			};
+			values.push(date);
+		}
+		Ok(values)
+	}
+
+	fn decode_datetime_projection(
+		rows: Vec<crate::backends::types::Row>,
+		time_zone: chrono_tz::Tz,
+	) -> Result<Vec<chrono::DateTime<chrono_tz::Tz>>, DatabaseError> {
+		let mut values = Vec::with_capacity(rows.len());
+		for row in rows {
+			let utc = match Self::projection_value(row)? {
+				crate::backends::types::QueryValue::Null => continue,
+				crate::backends::types::QueryValue::Timestamp(value) => value,
+				crate::backends::types::QueryValue::NaiveTimestamp(value) => value.and_utc(),
+				crate::backends::types::QueryValue::String(value) => {
+					if let Ok(value) = chrono::DateTime::parse_from_rfc3339(&value) {
+						value.with_timezone(&chrono::Utc)
+					} else {
+						chrono::NaiveDateTime::parse_from_str(&value, "%Y-%m-%d %H:%M:%S%.f")
+							.map(|value| value.and_utc())
+							.map_err(|error| {
+								DatabaseError::new(
+									DatabaseErrorKind::Serialization,
+									format!("invalid projected datetime `{value}`: {error}"),
+								)
+							})?
+					}
+				}
+				value => {
+					return Err(DatabaseError::new(
+						DatabaseErrorKind::Type,
+						format!("cannot decode projected datetime from {value:?}"),
+					));
+				}
+			};
+			values.push(utc.with_timezone(&time_zone));
+		}
+		Ok(values)
 	}
 
 	/// Sets the manager and returns self for chaining.
@@ -5837,6 +6111,151 @@ where
 		stmt.and_where(Expr::col((junction_table, junction_main_fk)).is_in(values));
 
 		stmt.to_owned()
+	}
+
+	/// Return distinct truncated values from a generated date field.
+	///
+	/// Truncation, `DISTINCT`, null exclusion, and ordering are performed by the
+	/// database. ISO weeks begin on Monday.
+	pub async fn dates<F>(
+		&self,
+		field: super::expressions::FieldRef<T, F>,
+		kind: DateTruncKind,
+		order: DateProjectionOrder,
+	) -> reinhardt_core::exception::Result<Vec<chrono::NaiveDate>>
+	where
+		F: DateProjectionField,
+	{
+		let mut conn = super::manager::get_connection().await?;
+		self.dates_with_db(&mut conn, field, kind, order).await
+	}
+
+	/// Return distinct truncated dates through a caller-owned ORM executor.
+	pub async fn dates_with_db<E, F>(
+		&self,
+		conn: &mut E,
+		field: super::expressions::FieldRef<T, F>,
+		kind: DateTruncKind,
+		order: DateProjectionOrder,
+	) -> reinhardt_core::exception::Result<Vec<chrono::NaiveDate>>
+	where
+		E: OrmExecutor,
+		F: DateProjectionField,
+	{
+		let stmt = self.temporal_projection_statement(
+			field.name(),
+			kind.into(),
+			order,
+			None,
+			TemporalTruncOutput::Date,
+		)?;
+		let rows = Self::temporal_rows_with_db(&stmt, conn).await?;
+		Self::decode_date_projection(rows).map_err(Error::from)
+	}
+
+	/// Return distinct truncated dates through an active transaction executor.
+	pub async fn dates_with_executor<F>(
+		&self,
+		executor: &mut dyn super::connection::TransactionExecutor,
+		field: super::expressions::FieldRef<T, F>,
+		kind: DateTruncKind,
+		order: DateProjectionOrder,
+	) -> Result<Vec<chrono::NaiveDate>, crate::backends::error::DatabaseError>
+	where
+		F: DateProjectionField,
+	{
+		let stmt = self
+			.temporal_projection_statement(
+				field.name(),
+				kind.into(),
+				order,
+				None,
+				TemporalTruncOutput::Date,
+			)
+			.map_err(executor_error)?;
+		let rows = Self::temporal_rows_with_executor(&stmt, executor).await?;
+		Self::decode_date_projection(rows)
+	}
+
+	/// Return distinct truncated values from a generated UTC datetime field.
+	///
+	/// `time_zone` defaults to UTC. The database converts each source instant
+	/// before truncation. SQLite and MySQL return an `Unsupported` capability
+	/// error for named zones; PostgreSQL performs named-zone conversion.
+	pub async fn datetimes<F>(
+		&self,
+		field: super::expressions::FieldRef<T, F>,
+		kind: DateTimeTruncKind,
+		order: DateProjectionOrder,
+		time_zone: Option<chrono_tz::Tz>,
+	) -> reinhardt_core::exception::Result<Vec<chrono::DateTime<chrono_tz::Tz>>>
+	where
+		F: DateTimeProjectionField,
+	{
+		let mut conn = super::manager::get_connection().await?;
+		self.datetimes_with_db(&mut conn, field, kind, order, time_zone)
+			.await
+	}
+
+	/// Return distinct truncated datetimes through a caller-owned ORM executor.
+	pub async fn datetimes_with_db<E, F>(
+		&self,
+		conn: &mut E,
+		field: super::expressions::FieldRef<T, F>,
+		kind: DateTimeTruncKind,
+		order: DateProjectionOrder,
+		time_zone: Option<chrono_tz::Tz>,
+	) -> reinhardt_core::exception::Result<Vec<chrono::DateTime<chrono_tz::Tz>>>
+	where
+		E: OrmExecutor,
+		F: DateTimeProjectionField,
+	{
+		let time_zone = time_zone.unwrap_or(chrono_tz::Tz::UTC);
+		let query_time_zone = if time_zone == chrono_tz::Tz::UTC {
+			TemporalTimeZone::Utc
+		} else {
+			TemporalTimeZone::Named(time_zone.name().to_string())
+		};
+		let stmt = self.temporal_projection_statement(
+			field.name(),
+			kind.into(),
+			order,
+			Some(query_time_zone),
+			TemporalTruncOutput::DateTime,
+		)?;
+		let rows = Self::temporal_rows_with_db(&stmt, conn).await?;
+		Self::decode_datetime_projection(rows, time_zone).map_err(Error::from)
+	}
+
+	/// Return distinct truncated datetimes through an active transaction executor.
+	pub async fn datetimes_with_executor<F>(
+		&self,
+		executor: &mut dyn super::connection::TransactionExecutor,
+		field: super::expressions::FieldRef<T, F>,
+		kind: DateTimeTruncKind,
+		order: DateProjectionOrder,
+		time_zone: Option<chrono_tz::Tz>,
+	) -> Result<Vec<chrono::DateTime<chrono_tz::Tz>>, crate::backends::error::DatabaseError>
+	where
+		F: DateTimeProjectionField,
+	{
+		let time_zone = time_zone.unwrap_or(chrono_tz::Tz::UTC);
+		let query_time_zone = if time_zone == chrono_tz::Tz::UTC {
+			TemporalTimeZone::Utc
+		} else {
+			TemporalTimeZone::Named(time_zone.name().to_string())
+		};
+		let stmt = self
+			.temporal_projection_statement(
+				field.name(),
+				kind.into(),
+				order,
+				Some(query_time_zone),
+				TemporalTruncOutput::DateTime,
+			)
+			.map_err(executor_error)?;
+		let rows = Self::temporal_rows_with_executor(&stmt, executor).await?;
+		Self::decode_datetime_projection(rows, time_zone)
 	}
 
 	/// Execute the queryset and return all matching records

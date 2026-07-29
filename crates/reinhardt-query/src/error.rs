@@ -331,7 +331,6 @@ fn validate_postgres_column_type_dimensions(
 	}
 }
 
-#[cfg(feature = "pgvector")]
 fn unsupported(feature: &'static str, backend: &'static str) -> QueryBuildError {
 	QueryBuildError::UnsupportedBackendFeature { feature, backend }
 }
@@ -436,6 +435,16 @@ fn validate_simple_expr(expr: &SimpleExpr, backend: &'static str) -> Result<(), 
 		| SimpleExpr::AsEnum(_, expression)
 		| SimpleExpr::ExprAlias(expression, _)
 		| SimpleExpr::Cast(expression, _) => validate_simple_expr(expression, backend),
+		SimpleExpr::TemporalTrunc {
+			expr, time_zone, ..
+		} => {
+			if matches!(backend, "MySQL" | "SQLite")
+				&& matches!(time_zone, Some(crate::expr::TemporalTimeZone::Named(_)))
+			{
+				return Err(unsupported("named time-zone conversion", backend));
+			}
+			validate_simple_expr(expr, backend)
+		}
 		SimpleExpr::Binary(left, _operator, right) => {
 			#[cfg(feature = "pgvector")]
 			if matches!(
@@ -657,7 +666,10 @@ fn collect_simple_expr_pgvector_features_with_values(
 		SimpleExpr::Unary(_, expression)
 		| SimpleExpr::AsEnum(_, expression)
 		| SimpleExpr::ExprAlias(expression, _)
-		| SimpleExpr::Cast(expression, _) => {
+		| SimpleExpr::Cast(expression, _)
+		| SimpleExpr::TemporalTrunc {
+			expr: expression, ..
+		} => {
 			collect_simple_expr_pgvector_features_with_values(
 				expression,
 				features,

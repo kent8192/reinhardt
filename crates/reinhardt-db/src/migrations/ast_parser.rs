@@ -1636,6 +1636,10 @@ fn parse_query_column_type(expr: &Expr) -> Option<super::ColumnType> {
 						inner,
 					)?)))
 				}
+				#[cfg(feature = "pgvector")]
+				"Vector" if expr_call.args.len() == 1 => Some(super::ColumnType::Vector(parse_u32_literal(
+					&expr_call.args[0],
+				)?)),
 				"Custom" if expr_call.args.len() == 1 => Some(super::ColumnType::Custom(
 					extract_string_literal(&expr_call.args[0])?,
 				)),
@@ -1838,8 +1842,8 @@ mod tests {
 	use super::extract_migration_metadata;
 	use crate::field_domain::{FieldDomain, ModelEnumRepr, ModelEnumValue};
 	use crate::migrations::{
-		AlterTableOptions, ColumnType, Constraint, GeneratedStorage, IndexType, MySqlAlgorithm,
-		MySqlLock, Operation, SchemaExpr,
+		AlterTableOptions, ColumnType, Constraint, FieldType, GeneratedStorage, IndexType,
+		MySqlAlgorithm, MySqlLock, Operation, SchemaExpr,
 	};
 
 	#[test]
@@ -2258,6 +2262,39 @@ pub(super) fn migration() -> Migration {
 			SchemaExpr::col("name").cast(ColumnType::Custom("CITEXT".to_string()))
 		);
 	}
+
+	#[cfg(feature = "pgvector")]
+	#[test]
+	fn parse_schema_expr_tokens_accepts_vector_casts() {
+		let parsed = super::parse_schema_expr_tokens(
+			r#"SchemaExpr::col("embedding").cast(ColumnType::Vector(3))"#,
+		)
+		.expect("vector cast tokens should parse");
+
+		assert_eq!(
+			parsed,
+			SchemaExpr::col("embedding").cast(ColumnType::Vector(3))
+		);
+	}
+
+	#[cfg(feature = "pgvector")]
+	#[test]
+	fn extract_field_type_accepts_vector_arrays() {
+		let column: syn::ExprStruct = syn::parse_quote! {
+			ColumnDefinition {
+				type_definition: FieldType::Array(Box::new(FieldType::Vector {
+					dimensions: 3,
+				}))
+			}
+		};
+
+		assert_eq!(
+			super::extract_field_type(&column.fields),
+			Some(FieldType::Array(Box::new(FieldType::Vector {
+				dimensions: 3,
+			})))
+		);
+	}
 }
 
 /// Extract FieldType from type_definition field
@@ -2321,6 +2358,30 @@ fn extract_field_type(
 					&& let Some(last_segment) = func_path.path.segments.last()
 				{
 					let variant = last_segment.ident.to_string();
+
+					#[cfg(feature = "pgvector")]
+					if variant == "Array" && expr_call.args.len() == 1 {
+						let inner = unwrap_box_new_expr(&expr_call.args[0])?;
+						if let Expr::Struct(inner_struct) = inner
+							&& inner_struct
+								.path
+								.segments
+								.last()
+								.is_some_and(|segment| segment.ident == "Vector")
+						{
+							for field_value in &inner_struct.fields {
+								if let syn::Member::Named(ident) = &field_value.member
+									&& ident == "dimensions" && let Expr::Lit(expr_lit) =
+									&field_value.expr && let syn::Lit::Int(lit_int) = &expr_lit.lit
+									&& let Ok(dimensions) = lit_int.base10_parse::<usize>()
+								{
+									return Some(FieldType::Array(Box::new(FieldType::Vector {
+										dimensions,
+									})));
+								}
+							}
+						}
+					}
 
 					if !expr_call.args.is_empty()
 						&& let Expr::Lit(expr_lit) = &expr_call.args[0]

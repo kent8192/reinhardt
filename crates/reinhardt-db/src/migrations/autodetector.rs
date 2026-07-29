@@ -700,7 +700,11 @@ impl Default for ProjectState {
 impl ProjectState {
 	/// Validates that physical index names are safe and unique in the schema namespace.
 	pub fn validate_physical_index_names(&self) -> super::Result<()> {
-		let mut owners = HashMap::new();
+		let mut owners = self
+			.models
+			.values()
+			.map(|model| (model.table_name.clone(), model.table_name.clone()))
+			.collect::<HashMap<_, _>>();
 		for model in self.models.values() {
 			for index in &model.indexes {
 				if index.name.is_empty() {
@@ -719,7 +723,7 @@ impl ProjectState {
 					owners.insert(index.name.clone(), model.table_name.clone())
 				{
 					return Err(super::MigrationError::InvalidMigration(format!(
-						"physical index name `{}` is declared by both `{}` and `{}`",
+						"physical index name `{}` conflicts with relation `{}` while declared by `{}`",
 						index.name, previous_table, model.table_name
 					)));
 				}
@@ -7231,8 +7235,12 @@ impl MigrationAutodetector {
 					)
 				);
 				if is_approximate
-					&& index.fields.iter().any(|field| field == field_name)
-					&& to_model.indexes.iter().any(|to_index| to_index == index)
+					&& (index.fields.iter().any(|field| field == field_name)
+						|| index.expressions().is_some_and(|expressions| {
+							expressions.iter().any(|expression| {
+								Self::expression_text_references_column(expression, field_name)
+							})
+						})) && to_model.indexes.iter().any(|to_index| to_index == index)
 					&& replacement_index_keys.insert((
 						app_label.clone(),
 						model_name.clone(),
@@ -9031,6 +9039,54 @@ mod tests {
 
 	#[cfg(feature = "pgvector")]
 	#[test]
+	fn vector_index_name_cannot_collide_with_model_table() {
+		// Arrange
+		let mut document = vector_model(3, Vec::new());
+		document.indexes.push(IndexDefinition {
+			name: "billing_invoice".to_string(),
+			fields: vec!["embedding".to_string()],
+			unique: false,
+			index_type: Some(crate::migrations::operations::IndexType::Hnsw {
+				m: Some(16),
+				ef_construction: Some(64),
+			}),
+			operator_class: Some("vector_l2_ops".to_string()),
+			expressions: None,
+		});
+		let invoice = build_model_state(
+			"billing",
+			"Invoice",
+			vec![FieldState::new(
+				"id",
+				super::super::FieldType::BigInteger,
+				false,
+			)],
+			Vec::new(),
+			Vec::new(),
+		);
+		let detector = MigrationAutodetector::new(
+			ProjectState::new(),
+			build_project_state(vec![
+				(("search".to_string(), "Document".to_string()), document),
+				(("billing".to_string(), "Invoice".to_string()), invoice),
+			]),
+		);
+
+		// Act
+		let error = detector
+			.try_generate_operations()
+			.expect_err("index names must not collide with table relations");
+
+		// Assert
+		assert!(matches!(
+			error,
+			super::super::MigrationError::InvalidMigration(message)
+				if message.contains("billing_invoice")
+		));
+	}
+
+	#[cfg(feature = "pgvector")]
+	#[test]
 	#[should_panic(expected = "use try_generate_operations()")]
 	fn infallible_generate_operations_cannot_emit_duplicate_physical_names() {
 		duplicate_vector_index_detector().generate_operations();
@@ -9320,6 +9376,49 @@ mod tests {
 				operator_class: Some(operator_class),
 				..
 			} if operator_class == "vector_cosine_ops"
+		));
+	}
+
+	#[cfg(feature = "pgvector")]
+	#[rstest]
+	fn vector_dimension_change_replaces_expression_index_around_alter_column() {
+		// Arrange
+		let mut index = vector_index(
+			crate::migrations::operations::IndexType::Hnsw {
+				m: Some(16),
+				ef_construction: Some(64),
+			},
+			"vector_cosine_ops",
+		);
+		index.fields.clear();
+		index.expressions = Some(vec!["normalize(embedding)".to_string()]);
+		let detector = MigrationAutodetector::new(
+			vector_project_state(vector_model(768, vec![index.clone()])),
+			vector_project_state(vector_model(1536, vec![index])),
+		);
+
+		// Act
+		let operations = detector.generate_operations();
+
+		// Assert
+		assert_eq!(operations.len(), 3);
+		assert!(matches!(
+			&operations[0],
+			super::super::Operation::DropNamedIndex {
+				expressions: Some(expressions),
+				..
+			} if expressions == &vec!["normalize(embedding)".to_string()]
+		));
+		assert!(matches!(
+			&operations[1],
+			super::super::Operation::AlterColumn { column, .. } if column == "embedding"
+		));
+		assert!(matches!(
+			&operations[2],
+			super::super::Operation::CreateNamedIndex {
+				expressions: Some(expressions),
+				..
+			} if expressions == &vec!["normalize(embedding)".to_string()]
 		));
 	}
 

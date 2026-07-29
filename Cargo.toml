@@ -313,6 +313,7 @@ db-pgvector = [
   "reinhardt-admin?/pgvector",
   "reinhardt-core/pgvector",
   "reinhardt-macros/pgvector",
+  "reinhardt-test?/pgvector",
 ]
 db-mysql = ["database", "reinhardt-db/mysql", "reinhardt-commands?/mysql"]
 db-sqlite = ["database", "reinhardt-db/sqlite", "reinhardt-commands?/sqlite"]

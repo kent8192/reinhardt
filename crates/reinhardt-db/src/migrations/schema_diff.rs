@@ -357,10 +357,15 @@ impl SchemaDiff {
 			&& current.columns == target.columns
 			&& current.unique == target.unique
 			&& current.expressions == target.expressions
-			&& current.operator_class == target.operator_class
+			&& Self::canonical_operator_class(current.operator_class.as_deref())
+				== Self::canonical_operator_class(target.operator_class.as_deref())
 			&& Self::effective_index_method(current)
 				.eq_ignore_ascii_case(Self::effective_index_method(target))
 			&& Self::approximate_index_options_equal(current, target)
+	}
+
+	fn canonical_operator_class(operator_class: Option<&str>) -> Option<&str> {
+		operator_class.map(|name| name.rsplit('.').next().unwrap_or(name))
 	}
 
 	#[cfg(feature = "pgvector")]
@@ -1364,12 +1369,7 @@ impl SchemaDiff {
 			self.push_add_column_operation(&mut operations, table_name, col_name);
 		}
 
-		// Add indexes
-		for (table_name, index) in &diff.indexes_to_add {
-			operations.push(Self::create_index_operation(table_name, index));
-		}
-
-		// Remove indexes
+		// Remove indexes before adding replacements that retain the same physical name.
 		for (table_name, index) in &diff.indexes_to_remove {
 			let recreated_columns =
 				Self::recreated_columns_for_table(&recreated_generated_columns, table_name);
@@ -1377,6 +1377,11 @@ impl SchemaDiff {
 				continue;
 			}
 			operations.push(Self::drop_index_operation(table_name, index));
+		}
+
+		// Add indexes
+		for (table_name, index) in &diff.indexes_to_add {
+			operations.push(Self::create_index_operation(table_name, index));
 		}
 
 		// Remove constraints before adding replacements with the same name.
@@ -3141,13 +3146,13 @@ mod tests {
 		assert_eq!(detected.indexes_to_add.len(), 1);
 		match operations.as_slice() {
 			[
+				Operation::DropNamedIndex {
+					name: dropped_name, ..
+				},
 				Operation::CreateNamedIndex {
 					name,
 					index_type: Some(IndexType::Hnsw { m: Some(16), .. }),
 					..
-				},
-				Operation::DropNamedIndex {
-					name: dropped_name, ..
 				},
 			] => {
 				assert_eq!(name, "source_embedding_hnsw");
@@ -3155,6 +3160,47 @@ mod tests {
 			}
 			other => panic!("Expected named index replacement operations, got {other:?}"),
 		}
+	}
+
+	#[cfg(feature = "pgvector")]
+	#[test]
+	fn schema_qualified_vector_operator_class_matches_model_metadata() {
+		// Arrange
+		let mut current_table = table_with_cols(
+			"source",
+			vec![(
+				"embedding",
+				col("embedding", FieldType::Vector { dimensions: 3 }, false),
+			)],
+		);
+		let index = IndexSchema {
+			name: "source_embedding_hnsw".to_string(),
+			columns: vec!["embedding".to_string()],
+			unique: false,
+			access_method: Some("hnsw".to_string()),
+			index_type: Some(IndexType::Hnsw {
+				m: Some(16),
+				ef_construction: Some(64),
+			}),
+			expressions: None,
+			operator_class: Some("public.vector_l2_ops".to_string()),
+		};
+		current_table.indexes.push(index.clone());
+		let mut target_table = current_table.clone();
+		target_table.indexes[0].operator_class = Some("vector_l2_ops".to_string());
+		let current = DatabaseSchema {
+			tables: BTreeMap::from([("source".to_string(), current_table)]),
+		};
+		let target = DatabaseSchema {
+			tables: BTreeMap::from([("source".to_string(), target_table)]),
+		};
+
+		// Act
+		let detected = SchemaDiff::new(current, target).detect();
+
+		// Assert
+		assert!(detected.indexes_to_add.is_empty());
+		assert!(detected.indexes_to_remove.is_empty());
 	}
 
 	#[test]

@@ -43,9 +43,9 @@ use std::collections::HashMap;
 
 use reinhardt_db::backends::DatabaseConnection;
 use reinhardt_db::migrations::{
-	ColumnDefinition, Constraint, ForeignKeyAction, GeneratedColumnDefinition, GeneratedStorage,
-	Migration, Operation, executor::DatabaseMigrationExecutor, field_type_string_to_field_type,
-	to_snake_case,
+	ColumnDefinition, Constraint, FieldType, ForeignKeyAction, GeneratedColumnDefinition,
+	GeneratedStorage, Migration, Operation, executor::DatabaseMigrationExecutor,
+	field_type_string_to_field_type, to_snake_case,
 };
 use reinhardt_db::orm::Model;
 use reinhardt_db::orm::fields::FieldKwarg;
@@ -112,6 +112,15 @@ pub fn field_info_to_column_definition(
 	field_info: &FieldInfo,
 ) -> Result<ColumnDefinition, SchemaError> {
 	let attributes = convert_attributes(&field_info.attributes);
+	#[cfg(feature = "pgvector")]
+	let field_type = match field_info.storage_kind {
+		Some(reinhardt_db::orm::DatabaseStorageKind::Vector(dimensions)) => {
+			FieldType::Vector { dimensions }
+		}
+		_ => field_type_string_to_field_type(&field_info.field_type, &attributes)
+			.map_err(SchemaError::FieldConversion)?,
+	};
+	#[cfg(not(feature = "pgvector"))]
 	let field_type = field_type_string_to_field_type(&field_info.field_type, &attributes)
 		.map_err(SchemaError::FieldConversion)?;
 
@@ -1064,6 +1073,34 @@ mod tests {
 
 		assert_eq!(column.name, "usr_name");
 		assert_eq!(column.default.as_deref(), Some("'guest'"));
+	}
+
+	#[cfg(feature = "pgvector")]
+	#[test]
+	fn test_field_info_to_column_definition_preserves_vector_dimensions() {
+		let field = FieldInfo {
+			name: "embedding".to_string(),
+			field_type: "reinhardt.orm.models.VectorField".to_string(),
+			storage_kind: Some(reinhardt_db::orm::DatabaseStorageKind::Vector(1536)),
+			domain: None,
+			nullable: false,
+			primary_key: false,
+			unique: false,
+			blank: false,
+			editable: true,
+			default: None,
+			db_default: None,
+			db_column: None,
+			choices: None,
+			attributes: HashMap::new(),
+		};
+
+		let column = field_info_to_column_definition(&field).unwrap();
+
+		assert_eq!(
+			column.type_definition,
+			FieldType::Vector { dimensions: 1536 }
+		);
 	}
 
 	#[test]

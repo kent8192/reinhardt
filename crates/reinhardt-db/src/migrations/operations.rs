@@ -2361,6 +2361,8 @@ impl Operation {
 					"TEXT".to_string()
 				}
 			}
+			#[cfg(feature = "pgvector")]
+			QueryColumnType::Vector(dimensions) => format!("VECTOR({dimensions})"),
 			QueryColumnType::Custom(custom) => custom.clone(),
 			_ => panic!("unsupported generated-column cast column type"),
 		}
@@ -2398,6 +2400,8 @@ impl Operation {
 			QueryColumnType::Json | QueryColumnType::JsonBinary | QueryColumnType::Array(_) => {
 				"JSON".to_string()
 			}
+			#[cfg(feature = "pgvector")]
+			QueryColumnType::Vector(dimensions) => format!("VECTOR({dimensions})"),
 			QueryColumnType::Custom(custom) => custom.clone(),
 			_ => panic!("unsupported generated-column cast column type"),
 		}

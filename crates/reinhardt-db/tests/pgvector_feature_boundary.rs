@@ -139,7 +139,6 @@ fn query_builder_value(value: Value) {
         | Value::BigInt(_) | Value::TinyUnsigned(_) | Value::SmallUnsigned(_)
         | Value::Unsigned(_) | Value::BigUnsigned(_) | Value::Float(_)
         | Value::Double(_) | Value::Char(_) | Value::String(_) | Value::Bytes(_)
-        | Value::Vector(_)
         | Value::ChronoDate(_) | Value::ChronoTime(_) | Value::ChronoDateTime(_)
         | Value::ChronoDateTimeUtc(_) | Value::ChronoDateTimeLocal(_)
         | Value::ChronoDateTimeWithTimeZone(_) | Value::Uuid(_) | Value::Json(_)

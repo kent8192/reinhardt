@@ -1476,6 +1476,8 @@ fn query_column_type_to_tokens(ty: &QueryColumnType) -> TokenStream {
 			let inner = query_column_type_to_tokens(inner);
 			quote! { ColumnType::Array(Box::new(#inner)) }
 		}
+		#[cfg(feature = "pgvector")]
+		QueryColumnType::Vector(dimensions) => quote! { ColumnType::Vector(#dimensions) },
 		QueryColumnType::Custom(name) => quote! { ColumnType::Custom(#name.to_string()) },
 		_ => panic!("unsupported generated-column cast type: {:?}", ty),
 	}

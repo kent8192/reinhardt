@@ -30,7 +30,16 @@ sqlx = { version = "0.8", features = [
   "tls-rustls",
   "uuid",
 ], optional = true }
-reinhardt-query = { workspace = true, features = ["full", "thread-safe"], optional = true }
+reinhardt-query = { workspace = true, features = [
+  "derive",
+  "nosql-redis",
+  "thread-safe",
+  "with-bigdecimal",
+  "with-chrono",
+  "with-json",
+  "with-rust_decimal",
+  "with-uuid",
+], optional = true }
 
 # Async runtime
 tokio = { version = "1.41", features = ["full", "macros", "rt", "sync"], optional = true }

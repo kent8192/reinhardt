@@ -174,12 +174,21 @@ fn resolve_postgres_operator_class(
 		)));
 	}
 
-	let first_operator_class = &operator_classes[0];
+	let canonical_operator_classes = operator_classes
+		.iter()
+		.map(|operator_class| {
+			operator_class
+				.rsplit('.')
+				.next()
+				.unwrap_or(operator_class.as_str())
+		})
+		.collect::<Vec<_>>();
+	let first_operator_class = canonical_operator_classes[0];
 	let first_is_default = operator_class_defaults[0];
 	let all_default = operator_class_defaults.iter().all(|is_default| *is_default);
-	let homogeneous = operator_classes
+	let homogeneous = canonical_operator_classes
 		.iter()
-		.all(|operator_class| operator_class == first_operator_class)
+		.all(|operator_class| *operator_class == first_operator_class)
 		&& operator_class_defaults
 			.iter()
 			.all(|is_default| *is_default == first_is_default);
@@ -189,7 +198,7 @@ fn resolve_postgres_operator_class(
 		return Ok((None, false));
 	}
 
-	Ok((Some(first_operator_class.clone()), all_default))
+	Ok((Some(first_operator_class.to_string()), all_default))
 }
 
 #[cfg(feature = "pgvector")]
@@ -340,10 +349,18 @@ impl PostgresIntrospector {
 
 			// Array types (udt_name starts with _)
 			name if name.starts_with('_') => {
+				#[cfg(feature = "pgvector")]
+				let inner_type_definition = if &name[1..] == "vector" {
+					type_definition.and_then(|definition| definition.strip_suffix("[]"))
+				} else {
+					None
+				};
+				#[cfg(not(feature = "pgvector"))]
+				let inner_type_definition = None;
 				let inner = Self::parse_pg_type(
 					&name[1..],
 					data_type,
-					None,
+					inner_type_definition,
 					char_max_length,
 					numeric_precision,
 					numeric_scale,
@@ -2193,6 +2210,24 @@ mod postgres_tests {
 		);
 
 		assert_eq!(field_type, FieldType::Vector { dimensions: 1536 });
+	}
+
+	#[test]
+	fn parses_dimensioned_pgvector_array_type() {
+		let field_type = PostgresIntrospector::parse_pg_type(
+			"_vector",
+			"ARRAY",
+			Some("vector(3)[]"),
+			None,
+			None,
+			None,
+			None,
+		);
+
+		assert_eq!(
+			field_type,
+			FieldType::Array(Box::new(FieldType::Vector { dimensions: 3 }))
+		);
 	}
 
 	#[test]

@@ -195,6 +195,7 @@ full = [
   "standard",
   "conf",
   "database",
+  "db-pgvector",
   "auth",
   "argon2-hasher",
   "bcrypt-hasher",
@@ -299,7 +300,14 @@ auth-token = ["auth", "reinhardt-auth/token"]
 
 # Fine-grained database support
 db-postgres = ["database", "reinhardt-db/postgres", "reinhardt-commands?/postgres"]
-db-pgvector = ["database", "db-postgres", "reinhardt-db/pgvector", "reinhardt-admin?/pgvector"]
+db-pgvector = [
+  "database",
+  "db-postgres",
+  "reinhardt-db/pgvector",
+  "reinhardt-admin?/pgvector",
+  "reinhardt-core/pgvector",
+  "reinhardt-macros/pgvector",
+]
 db-mysql = ["database", "reinhardt-db/mysql", "reinhardt-commands?/mysql"]
 db-sqlite = ["database", "reinhardt-db/sqlite", "reinhardt-commands?/sqlite"]
 db-cockroachdb = ["database", "reinhardt-db/cockroachdb-backend", "reinhardt-commands?/postgres"]

@@ -177,13 +177,21 @@ database-full = [
   "contenttypes",
   "compressed-fields",
   "image-fields",
+  "pgvector",
   "all-databases",
   "full",
 ]
 
 # Database-specific features
 postgres = ["db-deps", "sqlx/postgres"]
-pgvector = ["postgres", "orm", "migrations", "dep:pgvector", "reinhardt-query/pgvector"]
+pgvector = [
+  "postgres",
+  "orm",
+  "migrations",
+  "dep:pgvector",
+  "reinhardt-query/pgvector",
+  "reinhardt-core/pgvector",
+]
 sqlite = ["db-deps", "sqlx/sqlite"]
 mysql = ["db-deps", "sqlx/mysql"]
 
@@ -197,7 +205,7 @@ all-databases = [
   "mysql",
   "cockroachdb-backend",
 ]
-full = ["advanced-queries", "all-databases", "database", "db-mysql", "db-postgres", "db-sqlite", "di", "migrations", "mysql", "nosql-all", "pooling", "postgres", "settings", "sqlite"]
+full = ["advanced-queries", "all-databases", "database", "db-mysql", "db-postgres", "db-sqlite", "di", "migrations", "mysql", "nosql-all", "pgvector", "pooling", "postgres", "settings", "sqlite"]
 settings = ["db-deps", "dep:reinhardt-conf"]
 database = ["db-deps"]
 db-sqlite = ["db-deps"]

@@ -53,6 +53,7 @@ full = [
 	"with-rust_decimal",
 	"with-bigdecimal",
 	"nosql-redis",
+	"pgvector",
 ]
 
 [dev-dependencies]

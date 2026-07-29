@@ -1,14 +1,11 @@
 error[E0631]: type mismatch in function arguments
-  --> tests/ui/page/fail/custom_typed_handler_mismatch.rs:20:17
+  --> tests/ui/page/fail/custom_typed_handler_mismatch.rs:21:51
    |
-15 |   fn handle_other(event: CustomEvent<OtherPayload>) {
-   |   ------------------------------------------------- found signature defined here
+15 | fn handle_other(event: CustomEvent<OtherPayload>) {
+   | ------------------------------------------------- found signature defined here
 ...
-20 |       let _invalid = page!(|| {
-   |  ____________________^
-21 | |         div { @custom::<ItemSelected>("item-selected"): crate::handle_other, }
-22 | |     });
-   | |______^ expected due to this
+21 |         div { @custom::<ItemSelected>("item-selected"): crate::handle_other, }
+   |                                                         ^^^^^ expected due to this
    |
    = note: expected function signature `fn(CustomEvent<ItemSelected>) -> _`
               found function signature `fn(CustomEvent<OtherPayload>) -> _`
@@ -21,4 +18,3 @@ note: required by a bound in `typed_custom_event_handler`
 ...
    |     H: IntoTypedEventHandler<CustomEvent<T>>,
    |        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ required by this bound in `typed_custom_event_handler`
-   = note: this error originates in the macro `page` (in Nightly builds, run with -Z macro-backtrace for more info)

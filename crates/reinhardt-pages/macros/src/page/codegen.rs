@@ -1083,11 +1083,11 @@ fn generate_event(
 				wrap_expr_with_captures(handler, pages_crate, ctx)
 			};
 			let adapter = if is_async_closure(handler) {
-				quote! {
+				quote_spanned! {handler.span()=>
 					#pages_crate::callback::typed_async_custom_event_handler::<#payload_type, _, _>(#lowered_handler)
 				}
 			} else {
-				quote! {
+				quote_spanned! {handler.span()=>
 					#pages_crate::callback::typed_custom_event_handler::<#payload_type, _>(#lowered_handler)
 				}
 			};

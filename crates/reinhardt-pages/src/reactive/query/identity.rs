@@ -67,6 +67,11 @@ impl QueryFamilyTypes {
 }
 
 /// Defines the typed identity shared by queries with the same arguments.
+///
+/// A family ID and its `Args` encoding form a persistent cache contract. Every
+/// descriptor using the same pair must represent the same semantic operation
+/// and serialize `Args` to the same canonical JSON shape. Version the ID when
+/// either the operation meaning or canonical argument encoding changes.
 pub struct QueryFamily<Args, T, E> {
 	id: &'static str,
 	marker: PhantomData<fn(Args) -> Result<T, E>>,
@@ -91,6 +96,11 @@ impl<Args, T, E> fmt::Debug for QueryFamily<Args, T, E> {
 
 impl<Args, T, E> QueryFamily<Args, T, E> {
 	/// Creates a typed query family with a stable application-wide identifier.
+	///
+	/// Reusing `id` with the same `Args` type is only valid for the same semantic
+	/// operation and canonical argument encoding. Use a new versioned ID when
+	/// either contract changes, even if `Args`, `T`, and `E` remain the same Rust
+	/// types.
 	pub const fn new(id: &'static str) -> Self {
 		Self {
 			id,

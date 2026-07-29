@@ -861,6 +861,13 @@ let projects = use_query(
 );
 ```
 
+Treat a manual family's ID and `Args` encoding as a persistent cache contract.
+Every descriptor that reuses the same family ID with the same argument type
+must represent the same semantic operation and produce the same canonical JSON
+argument shape. If the operation meaning or canonical encoding changes, use a
+new versioned ID such as `projects.by-organization.v2`, even when the Rust types
+stay unchanged.
+
 `QueryOptions` are fixed when an observer mounts. They control `enabled`,
 `stale_time`, `gc_time`, and `refetch_interval` for that observer. Disabled
 observers without cached data report `QueryStatus::Idle`; enabled initial loads

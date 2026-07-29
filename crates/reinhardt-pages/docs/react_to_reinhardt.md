@@ -795,6 +795,12 @@ let events = use_query(
 );
 ```
 
+The manual family ID and `Args` encoding are a persistent cache contract.
+Descriptors that reuse the same family ID and argument type must describe the
+same semantic operation and serialize arguments to the same canonical JSON
+shape. Version the ID, for example `audit-events.by-project.v2`, whenever the
+operation meaning or canonical encoding changes, even if the Rust types do not.
+
 `QueryOptions` belong to the mounted observer. `enabled(false)` with no cached
 result reports `QueryStatus::Idle`; an enabled initial request reports
 `Pending`, followed by `Success` or `Error`. A background refetch preserves

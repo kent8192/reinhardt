@@ -454,23 +454,28 @@ fn request_query_view(value: &'static str, fetch_barrier: Arc<Barrier>) -> Page 
 
 #[tokio::test]
 async fn concurrent_ssr_requests_keep_query_clients_isolated() {
-	let mut first_renderer = SsrRenderer::new();
-	let mut second_renderer = SsrRenderer::new();
+	let isolation_options = SsrOptions::new().resource_timeout(Duration::from_secs(30));
+	let mut first_renderer = SsrRenderer::with_options(isolation_options.clone());
+	let mut second_renderer = SsrRenderer::with_options(isolation_options);
 	let fetch_barrier = Arc::new(Barrier::new(2));
 	let query_id = QueryFamily::<(), String, String>::new("tests::request-isolation")
 		.key(())
 		.id();
 
-	let (first_html, second_html) = tokio::join!(
-		first_renderer.render_page_with_view_head_to_string(request_query_view(
-			"first-request",
-			Arc::clone(&fetch_barrier),
-		)),
-		second_renderer.render_page_with_view_head_to_string(request_query_view(
-			"second-request",
-			fetch_barrier,
-		)),
-	);
+	let (first_html, second_html) = tokio::time::timeout(Duration::from_secs(5), async {
+		tokio::join!(
+			first_renderer.render_page_with_view_head_to_string(request_query_view(
+				"first-request",
+				Arc::clone(&fetch_barrier),
+			)),
+			second_renderer.render_page_with_view_head_to_string(request_query_view(
+				"second-request",
+				fetch_barrier,
+			)),
+		)
+	})
+	.await
+	.expect("concurrent SSR query fetches must both reach the request-isolation barrier");
 
 	assert!(first_html.contains("first-request"));
 	assert!(!first_html.contains("second-request"));

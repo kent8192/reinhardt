@@ -1660,11 +1660,9 @@ mod tests {
 				.seed_query(&client, key.clone())
 				.expect_err("unsettled SSR query snapshots must be rejected");
 
-			assert!(
-				error
-					.to_string()
-					.contains("unsettled query hydration snapshot"),
-				"{error}"
+			assert_eq!(
+				error.to_string(),
+				"unsettled query hydration snapshot cannot be restored"
 			);
 			assert_eq!(fetch_count.get(), 0);
 

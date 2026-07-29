@@ -1232,8 +1232,9 @@ async fn concurrent_streams_scope_queries_created_after_suspense_resumes() {
 	let query_barrier = Arc::new(Barrier::new(2));
 	let first_fetch_count = Rc::new(Cell::new(0));
 	let second_fetch_count = Rc::new(Cell::new(0));
-	let mut first_renderer = SsrRenderer::new();
-	let mut second_renderer = SsrRenderer::new();
+	let isolation_options = SsrOptions::new().resource_timeout(Duration::from_secs(30));
+	let mut first_renderer = SsrRenderer::with_options(isolation_options.clone());
+	let mut second_renderer = SsrRenderer::with_options(isolation_options);
 	let mut first_stream = first_renderer
 		.render_page_with_view_head(late_stream_query_view(
 			"first-late-query",
@@ -1273,7 +1274,11 @@ async fn concurrent_streams_scope_queries_created_after_suspense_resumes() {
 		.send(())
 		.expect("second stream gate receiver");
 	let (first_replacement, second_replacement) =
-		tokio::join!(first_stream.next(), second_stream.next());
+		tokio::time::timeout(Duration::from_secs(5), async {
+			tokio::join!(first_stream.next(), second_stream.next())
+		})
+		.await
+		.expect("resumed streaming queries must both reach the request-isolation barrier");
 	let first_replacement = first_replacement
 		.expect("first stream replacement")
 		.into_string();

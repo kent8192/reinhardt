@@ -32,6 +32,7 @@ use tempfile::TempDir;
 // The evaluator builds its dependencies outside the fixture target directory.
 const COMMAND_TIMEOUT: Duration = Duration::from_secs(600);
 const FIXTURE_BUILD_TIMEOUT: Duration = Duration::from_secs(600);
+const FIXTURE_BUILD_JOBS: &str = "2";
 const PTY_TIMEOUT: Duration = Duration::from_secs(60);
 const CLEANUP_TIMEOUT: Duration = Duration::from_secs(5);
 const READER_TIMEOUT: Duration = Duration::from_secs(2);
@@ -619,6 +620,9 @@ impl ShellProject {
 			.arg(project_root.join("Cargo.toml"))
 			.env("CARGO_BUILD_BUILD_DIR", "target")
 			.env("CARGO_TARGET_DIR", "target")
+			// The fixture uses an isolated target directory, so its dynamic build can
+			// safely use two compiler jobs even when the outer CI workspace build is serial.
+			.env("CARGO_BUILD_JOBS", FIXTURE_BUILD_JOBS)
 			.env("RUSTFLAGS", "-Cprefer-dynamic");
 		let output = supervised_output(build_command, FIXTURE_BUILD_TIMEOUT)
 			.expect("shell fixture manage binary should build");

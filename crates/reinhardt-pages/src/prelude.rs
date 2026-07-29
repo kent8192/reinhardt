@@ -53,6 +53,7 @@
 //! ## Events and Callbacks
 //! - [`Callback`], [`IntoEventHandler`], [`into_event_handler`]
 //! - [`Event`] (platform-agnostic event type)
+//! - Custom event detail: [`CustomEvent`], [`CustomEventDetailError`]
 //! - Controlled form support: [`ControlBindingError`], [`NumberParseError`],
 //!   [`NumberParseErrorKind`], [`NumberValue`]
 //!

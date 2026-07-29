@@ -145,7 +145,7 @@ use reinhardt_pages::prelude::*;
 use reinhardt::pages::prelude::*;
 ```
 
-### Typed standard events and raw custom events
+### Typed standard events and custom-event detail
 
 Standard intrinsic events select an exact payload from the authoritative event
 catalog. The payload is inferred in `page!`, or can be named explicitly for an
@@ -171,10 +171,55 @@ page!({
 })
 ```
 
-Use `@custom("name")` and `platform::Event` for an arbitrary raw DOM event.
-Custom typed `detail` values are intentionally deferred to #5636. Component
-`@event` props remain typed by the component's declared prop type; the DOM
-event catalog applies only to intrinsic elements.
+For arbitrary custom events, choose the raw or typed DSL explicitly:
+
+```rust,ignore
+use reinhardt_pages::prelude::*;
+use serde::Deserialize;
+
+#[derive(Deserialize)]
+struct ItemSelected {
+    id: u64,
+}
+
+page!({
+    // Raw DOM event transport.
+    button { @custom("item-selected"): |event: Event| { inspect(event); } }
+
+    // Typed CustomEvent.detail transport.
+    button { @custom::<ItemSelected>("item-selected"): |event| {
+        if let Ok(detail) = event.detail() {
+            select(detail.id);
+        }
+    } }
+})
+```
+
+Native component tests can dispatch the same typed custom event:
+
+```rust,ignore
+button.dispatch(
+    EventFixture::custom("item-selected")
+        .custom_detail(&ItemSelected { id: 42 }),
+)?;
+```
+
+`EventFixture::custom("item-selected")` by itself creates a plain named event,
+not a browser `CustomEvent`. Use `.custom_detail_value(Value::Null)` to model
+the browser `CustomEvent` default detail, and use a pre-serialized malformed
+value for decoding-error tests:
+
+```rust,ignore
+use serde_json::{Value, json};
+
+let default_detail = EventFixture::custom("item-selected")
+    .custom_detail_value(Value::Null);
+let malformed_detail = EventFixture::custom("item-selected")
+    .custom_detail_value(json!({ "id": "not-a-number" }));
+```
+
+Component `@event` props remain typed by the component's declared prop type;
+the DOM event catalog applies only to intrinsic elements.
 
 ### Lifecycle-managed document head
 

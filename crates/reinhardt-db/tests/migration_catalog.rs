@@ -219,7 +219,7 @@ async fn load_strict_rejects_an_invalid_filesystem_migration() {
 			replaces: vec![],
 		}
 	}"#,
-	"Unsupported or malformed migration operation 'UnknownOperation'"
+	"operations[0].UnknownOperation is unsupported or malformed"
 )]
 #[case(
 	r#"pub fn migration() -> Migration {

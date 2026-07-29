@@ -908,11 +908,7 @@ async fn in_bulk_uses_one_typed_in_query_and_returns_ordered_maps() {
 	);
 	assert_eq!(
 		executor.calls[0].params,
-		vec![
-			QueryValue::Int(1),
-			QueryValue::Int(3),
-			QueryValue::Int(99)
-		]
+		vec![QueryValue::Int(1), QueryValue::Int(3), QueryValue::Int(99)]
 	);
 	assert_eq!(
 		executor.calls[1].params,

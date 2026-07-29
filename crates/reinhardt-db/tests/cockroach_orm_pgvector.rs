@@ -18,7 +18,9 @@ use reinhardt_db::{
 	},
 	orm::{
 		DatabaseConnectionLease, DatabaseValue, Model, Vector,
-		manager::replace_database_connection_for_testing,
+		manager::{
+			replace_database_connection_for_testing, restore_database_connection_for_testing,
+		},
 		query::{FieldAssignment, Filter, FilterOperator, FilterValue, QuerySet, UpdateValue},
 		transaction::IsolationLevel,
 	},
@@ -458,8 +460,7 @@ async fn cockroach_global_bulk_update_rejects_vector_values_before_execution() {
 		.bulk_update(vec![document(Some(7))], vec!["embedding".to_owned()], None)
 		.await;
 
-	let installed = replace_database_connection_for_testing(previous).await;
-	drop(installed);
+	restore_database_connection_for_testing(previous).await;
 
 	let error = result.expect_err("CockroachDB should reject global vector bulk updates");
 	assert_cockroach_pgvector_value_error(&error);

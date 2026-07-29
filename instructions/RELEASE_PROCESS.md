@@ -389,6 +389,11 @@ The following packages are excluded from release:
 - `reinhardt-benchmarks` - Benchmark tests
 - `examples-*` - Example projects
 
+Although `reinhardt-integration-tests` is not released, its package version
+stays aligned with the release train. `scripts/update-version-refs.sh` updates
+the marked version in `tests/integration/Cargo.toml` whenever release-plz
+creates or refreshes a Release PR.
+
 ### Configuration Rationale
 
 Key configuration decisions and the reasons behind them:

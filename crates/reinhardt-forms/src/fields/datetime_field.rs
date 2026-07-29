@@ -1,5 +1,5 @@
 use crate::field::{FieldError, FieldResult, FormField, Widget};
-use chrono::NaiveDateTime;
+use chrono::{Datelike, NaiveDateTime};
 
 /// DateTimeField for date and time input
 pub struct DateTimeField {
@@ -105,6 +105,11 @@ impl FormField for DateTimeField {
 				}
 
 				let dt = self.parse_datetime(s).map_err(FieldError::Validation)?;
+				if !(1_000..=9_999).contains(&dt.year()) {
+					return Err(FieldError::Validation(
+						"Enter a year between 1000 and 9999".to_owned(),
+					));
+				}
 
 				Ok(serde_json::Value::String(
 					dt.format("%Y-%m-%d %H:%M:%S").to_string(),
@@ -223,11 +228,11 @@ mod tests {
 			.unwrap();
 		assert_eq!(result, serde_json::json!("2025-01-15 14:30:00"));
 
-		// US format with 2-digit year (chrono interprets as 00-99 AD)
-		let result = field
-			.clean(Some(&serde_json::json!("01/15/25 14:30:00")))
-			.unwrap();
-		assert_eq!(result, serde_json::json!("0025-01-15 14:30:00"));
+		assert!(
+			field
+				.clean(Some(&serde_json::json!("01/15/25 14:30:00")))
+				.is_err()
+		);
 	}
 
 	#[test]
@@ -240,11 +245,11 @@ mod tests {
 			.unwrap();
 		assert_eq!(result, serde_json::json!("2025-01-15 14:30:00"));
 
-		// US format with 2-digit year (no seconds)
-		let result = field
-			.clean(Some(&serde_json::json!("01/15/25 14:30")))
-			.unwrap();
-		assert_eq!(result, serde_json::json!("0025-01-15 14:30:00"));
+		assert!(
+			field
+				.clean(Some(&serde_json::json!("01/15/25 14:30")))
+				.is_err()
+		);
 	}
 
 	#[test]

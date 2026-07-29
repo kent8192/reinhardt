@@ -1118,10 +1118,9 @@ impl<M: Model> Manager<M> {
 			let explicit_primary_key = obj
 				.get(M::primary_key_field())
 				.filter(|value| {
-					!matches!(
-						value,
-						DatabaseValue::Null | DatabaseValue::I32(0) | DatabaseValue::I64(0)
-					)
+					!matches!(value, DatabaseValue::Null)
+						&& (!M::primary_key_uses_zero_sentinel()
+							|| !matches!(value, DatabaseValue::I32(0) | DatabaseValue::I64(0)))
 				})
 				.cloned();
 			if explicit_primary_key.is_none() {
@@ -1236,11 +1235,38 @@ impl<M: Model> Manager<M> {
 		model: &M,
 	) -> reinhardt_core::exception::Result<M>
 	where
-		E: OrmExecutor,
+		E: OrmExecutor + ?Sized,
 	{
-		let obj = model.encode_database_fields().map_err(field_codec_error)?;
-		let mut stmt =
-			Self::build_insert_statement_from_object(&obj, |field| model.field_is_none(field))?;
+		match self.create_with_conn_outcome(conn, model).await {
+			super::custom_manager::CreateWithConnOutcome::Created(model) => Ok(model),
+			super::custom_manager::CreateWithConnOutcome::FailedBeforeInsert(error)
+			| super::custom_manager::CreateWithConnOutcome::FailedAfterInsert(error) => Err(error),
+		}
+	}
+
+	/// Inserts a record and reports whether a later hydration failure happened after the write.
+	pub async fn create_with_conn_outcome<E>(
+		&self,
+		conn: &mut E,
+		model: &M,
+	) -> super::custom_manager::CreateWithConnOutcome<M>
+	where
+		E: OrmExecutor + ?Sized,
+	{
+		let obj = match model.encode_database_fields().map_err(field_codec_error) {
+			Ok(obj) => obj,
+			Err(error) => {
+				return super::custom_manager::CreateWithConnOutcome::FailedBeforeInsert(error);
+			}
+		};
+		let mut stmt = match Self::build_insert_statement_from_object(&obj, |field| {
+			model.field_is_none(field)
+		}) {
+			Ok(statement) => statement,
+			Err(error) => {
+				return super::custom_manager::CreateWithConnOutcome::FailedBeforeInsert(error);
+			}
+		};
 		let backend = conn.backend();
 		if backend != DatabaseBackend::MySql {
 			stmt.returning(Self::returning_columns_from_object(&obj));
@@ -1256,13 +1282,25 @@ impl<M: Model> Manager<M> {
 			let explicit_primary_key = obj
 				.get(M::primary_key_field())
 				.filter(|value| {
-					!matches!(
-						value,
-						DatabaseValue::Null | DatabaseValue::I32(0) | DatabaseValue::I64(0)
-					)
+					!matches!(value, DatabaseValue::Null)
+						&& (!matches!(value, DatabaseValue::I32(0) | DatabaseValue::I64(0))
+							|| !M::primary_key_uses_zero_sentinel())
 				})
 				.cloned();
-			let result = conn.execute(&sql, params).await?;
+			let result = match conn.execute(&sql, params).await {
+				Ok(result) => result,
+				Err(error) => {
+					let outcome = match error.database_error().map(DatabaseError::kind) {
+						Some(DatabaseErrorKind::Connection | DatabaseErrorKind::Timeout) => {
+							super::custom_manager::CreateWithConnOutcome::FailedAfterInsert(error)
+						}
+						_ => {
+							super::custom_manager::CreateWithConnOutcome::FailedBeforeInsert(error)
+						}
+					};
+					return outcome;
+				}
+			};
 			let primary_key = explicit_primary_key
 				.map(database_value_to_query_value)
 				.or_else(|| {
@@ -1277,7 +1315,13 @@ impl<M: Model> Manager<M> {
 						DatabaseErrorKind::Unsupported,
 						"MySQL insert did not return a generated primary key",
 					))
-				})?;
+				});
+			let primary_key = match primary_key {
+				Ok(primary_key) => primary_key,
+				Err(error) => {
+					return super::custom_manager::CreateWithConnOutcome::FailedAfterInsert(error);
+				}
+			};
 			let field_metadata = M::field_metadata();
 			let primary_key_column = Self::field_column(&field_metadata, M::primary_key_field());
 			let mut select = Query::select();
@@ -1291,16 +1335,41 @@ impl<M: Model> Manager<M> {
 				.into_iter()
 				.map(Self::sea_value_to_query_value)
 				.collect();
-			let row = conn.fetch_one(&select_sql, select_params).await?;
-			return QueryRow::from_backend_row(row)
+			let row = match conn.fetch_one(&select_sql, select_params).await {
+				Ok(row) => row,
+				Err(error) => {
+					return super::custom_manager::CreateWithConnOutcome::FailedAfterInsert(error);
+				}
+			};
+			return match QueryRow::from_backend_row(row)
 				.deserialize_model::<M>()
-				.map_err(field_codec_error);
+				.map_err(field_codec_error)
+			{
+				Ok(model) => super::custom_manager::CreateWithConnOutcome::Created(model),
+				Err(error) => {
+					super::custom_manager::CreateWithConnOutcome::FailedAfterInsert(error)
+				}
+			};
 		}
 
-		let row = conn.fetch_one(&sql, params).await?;
-		QueryRow::from_backend_row(row)
+		let row = match conn.fetch_one(&sql, params).await {
+			Ok(row) => row,
+			Err(error) => {
+				return match error.database_error().map(DatabaseError::kind) {
+					Some(DatabaseErrorKind::Connection | DatabaseErrorKind::Timeout) => {
+						super::custom_manager::CreateWithConnOutcome::FailedAfterInsert(error)
+					}
+					_ => super::custom_manager::CreateWithConnOutcome::FailedBeforeInsert(error),
+				};
+			}
+		};
+		match QueryRow::from_backend_row(row)
 			.deserialize_model::<M>()
 			.map_err(field_codec_error)
+		{
+			Ok(model) => super::custom_manager::CreateWithConnOutcome::Created(model),
+			Err(error) => super::custom_manager::CreateWithConnOutcome::FailedAfterInsert(error),
+		}
 	}
 
 	pub(crate) fn json_to_sea_value_for_field(
@@ -1435,9 +1504,8 @@ impl<M: Model> Manager<M> {
 			reinhardt_query::value::Value::Bytes(None) => QueryValue::Null,
 
 			// Timestamp handling
-			// ChronoDateTime contains NaiveDateTime, convert to UTC
 			reinhardt_query::value::Value::ChronoDateTime(Some(dt)) => {
-				QueryValue::Timestamp(dt.and_utc())
+				QueryValue::NaiveTimestamp(*dt)
 			}
 			reinhardt_query::value::Value::ChronoDateTime(None) => QueryValue::Null,
 			reinhardt_query::value::Value::ChronoDateTimeUtc(Some(dt)) => {
@@ -1551,6 +1619,9 @@ impl<M: Model> Manager<M> {
 			QueryValue::Bytes(value) => reinhardt_query::value::Value::Bytes(Some(Box::new(value))),
 			QueryValue::Timestamp(value) => {
 				reinhardt_query::value::Value::ChronoDateTimeUtc(Some(Box::new(value)))
+			}
+			QueryValue::NaiveTimestamp(value) => {
+				reinhardt_query::value::Value::ChronoDateTime(Some(Box::new(value)))
 			}
 			QueryValue::Uuid(value) => reinhardt_query::value::Value::Uuid(Some(Box::new(value))),
 			QueryValue::Json(value) => reinhardt_query::value::Value::Json(value),
@@ -1709,7 +1780,7 @@ impl<M: Model> Manager<M> {
 		model: &M,
 	) -> reinhardt_core::exception::Result<M>
 	where
-		E: OrmExecutor,
+		E: OrmExecutor + ?Sized,
 	{
 		model.primary_key().ok_or_else(|| {
 			Error::from(DatabaseError::new(
@@ -2848,6 +2919,23 @@ mod tests {
 			));
 
 		assert_eq!(value, crate::orm::connection::QueryValue::IntArray(vec![7]));
+	}
+
+	#[test]
+	fn manager_binds_naive_datetimes_without_converting_them_to_utc() {
+		let value = chrono::NaiveDate::from_ymd_opt(2026, 7, 26)
+			.expect("valid date")
+			.and_hms_opt(9, 15, 30)
+			.expect("valid time");
+
+		let bound = Manager::<TestUser>::sea_value_to_query_value(
+			reinhardt_query::value::Value::ChronoDateTime(Some(Box::new(value))),
+		);
+
+		assert_eq!(
+			bound,
+			crate::orm::connection::QueryValue::NaiveTimestamp(value)
+		);
 	}
 
 	#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

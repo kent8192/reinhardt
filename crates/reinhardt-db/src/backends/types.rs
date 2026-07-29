@@ -58,6 +58,8 @@ pub enum QueryValue {
 	Bytes(Vec<u8>),
 	/// Timestamp variant.
 	Timestamp(chrono::DateTime<chrono::Utc>),
+	/// Timezone-naive timestamp variant.
+	NaiveTimestamp(chrono::NaiveDateTime),
 	/// UUID value for PostgreSQL uuid columns
 	Uuid(Uuid),
 	/// JSON value, preserving the distinction between JSON null and SQL NULL.
@@ -119,6 +121,12 @@ impl From<bool> for QueryValue {
 impl From<chrono::DateTime<chrono::Utc>> for QueryValue {
 	fn from(dt: chrono::DateTime<chrono::Utc>) -> Self {
 		QueryValue::Timestamp(dt)
+	}
+}
+
+impl From<chrono::NaiveDateTime> for QueryValue {
+	fn from(dt: chrono::NaiveDateTime) -> Self {
+		QueryValue::NaiveTimestamp(dt)
 	}
 }
 
@@ -299,6 +307,20 @@ impl TryFrom<QueryValue> for chrono::DateTime<chrono::Utc> {
 			_ => Err(DatabaseError::new(
 				DatabaseErrorKind::Type,
 				format!("Cannot convert {:?} to DateTime<Utc>", value),
+			)),
+		}
+	}
+}
+
+impl TryFrom<QueryValue> for chrono::NaiveDateTime {
+	type Error = DatabaseError;
+
+	fn try_from(value: QueryValue) -> std::result::Result<Self, Self::Error> {
+		match value {
+			QueryValue::NaiveTimestamp(dt) => Ok(dt),
+			_ => Err(DatabaseError::new(
+				DatabaseErrorKind::Type,
+				format!("Cannot convert {:?} to NaiveDateTime", value),
 			)),
 		}
 	}

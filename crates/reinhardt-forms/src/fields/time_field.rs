@@ -39,6 +39,7 @@ impl TimeField {
 			widget: Widget::TextInput,
 			initial: None,
 			input_formats: vec![
+				"%H:%M:%S%.f".to_string(),
 				"%H:%M:%S".to_string(),
 				"%H:%M".to_string(),
 				"%I:%M:%S %p".to_string(),
@@ -103,7 +104,7 @@ impl FormField for TimeField {
 				let time = self.parse_time(s).map_err(FieldError::Validation)?;
 
 				Ok(serde_json::Value::String(
-					time.format("%H:%M:%S").to_string(),
+					time.format("%H:%M:%S%.f").to_string(),
 				))
 			}
 		}
@@ -131,6 +132,18 @@ mod tests {
 				.clean(Some(&serde_json::json!("02:30:00 PM")))
 				.unwrap(),
 			serde_json::json!("14:30:00")
+		);
+	}
+
+	#[test]
+	fn test_timefield_preserves_fractional_seconds() {
+		let field = TimeField::new("start_time".to_string());
+
+		assert_eq!(
+			field
+				.clean(Some(&serde_json::json!("12:30:00.500")))
+				.unwrap(),
+			serde_json::json!("12:30:00.500")
 		);
 	}
 

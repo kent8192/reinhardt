@@ -29,6 +29,8 @@ pub enum DatabaseStorageKind {
 	Time,
 	/// UTC timestamp storage.
 	DateTime,
+	/// Timezone-naive timestamp storage.
+	NaiveDateTime,
 }
 
 /// Persistent representation used by a model enum.

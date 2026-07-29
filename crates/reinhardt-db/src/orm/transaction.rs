@@ -50,6 +50,7 @@
 
 use futures::FutureExt;
 use reinhardt_core::exception::{DatabaseError, DatabaseErrorKind};
+use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 use std::sync::{Arc, Mutex};
 
 use super::connection::{
@@ -115,6 +116,107 @@ pub enum TransactionState {
 	Committed,
 	/// RolledBack variant.
 	RolledBack,
+}
+
+#[derive(Debug)]
+struct AtomicTransactionOutcomeInner {
+	state: AtomicU8,
+	parent: Option<Arc<AtomicTransactionOutcomeInner>>,
+}
+
+/// Observable terminal state for a closure-scoped atomic transaction.
+#[derive(Debug, Clone)]
+pub struct AtomicTransactionOutcome(Arc<AtomicTransactionOutcomeInner>);
+
+struct NestedAtomicCancellationGuard {
+	poisoned: Arc<AtomicBool>,
+	armed: bool,
+}
+
+impl NestedAtomicCancellationGuard {
+	fn new(poisoned: Arc<AtomicBool>) -> Self {
+		Self {
+			poisoned,
+			armed: true,
+		}
+	}
+
+	fn disarm(&mut self) {
+		self.armed = false;
+	}
+}
+
+impl Drop for NestedAtomicCancellationGuard {
+	fn drop(&mut self) {
+		if self.armed {
+			self.poisoned.store(true, Ordering::Release);
+		}
+	}
+}
+
+impl AtomicTransactionOutcome {
+	const PENDING: u8 = 0;
+	const COMMITTED: u8 = 1;
+	const ROLLED_BACK: u8 = 2;
+	const UNKNOWN: u8 = 3;
+
+	fn pending() -> Self {
+		Self(Arc::new(AtomicTransactionOutcomeInner {
+			state: AtomicU8::new(Self::PENDING),
+			parent: None,
+		}))
+	}
+
+	fn pending_with_parent(parent: &Self) -> Self {
+		Self(Arc::new(AtomicTransactionOutcomeInner {
+			state: AtomicU8::new(Self::PENDING),
+			parent: Some(parent.0.clone()),
+		}))
+	}
+
+	fn set_committed(&self) {
+		self.0.state.store(Self::COMMITTED, Ordering::Release);
+	}
+
+	fn set_rolled_back(&self) {
+		self.0.state.store(Self::ROLLED_BACK, Ordering::Release);
+	}
+
+	fn set_unknown(&self) {
+		self.0.state.store(Self::UNKNOWN, Ordering::Release);
+	}
+
+	/// Returns whether the transaction has committed.
+	pub fn is_committed(&self) -> bool {
+		self.0.state.load(Ordering::Acquire) == Self::COMMITTED
+			&& self
+				.0
+				.parent
+				.as_ref()
+				.is_none_or(|parent| AtomicTransactionOutcome(parent.clone()).is_committed())
+	}
+
+	/// Returns whether the transaction has rolled back.
+	pub fn is_rolled_back(&self) -> bool {
+		self.0.state.load(Ordering::Acquire) == Self::ROLLED_BACK
+			|| self
+				.0
+				.parent
+				.as_ref()
+				.is_some_and(|parent| AtomicTransactionOutcome(parent.clone()).is_rolled_back())
+	}
+
+	/// Returns whether the transaction outcome is not safely known yet.
+	pub fn is_pending_or_unknown(&self) -> bool {
+		matches!(
+			self.0.state.load(Ordering::Acquire),
+			Self::PENDING | Self::UNKNOWN
+		) || self
+			.0
+			.parent
+			.as_ref()
+			.is_some_and(|parent| AtomicTransactionOutcome(parent.clone()).is_pending_or_unknown())
+	}
 }
 
 /// Savepoint for nested transactions
@@ -546,6 +648,9 @@ pub struct AtomicTransaction {
 	executor: Option<Box<dyn TransactionExecutor>>,
 	backend: DatabaseBackend,
 	savepoint_sequence: u64,
+	outcome: AtomicTransactionOutcome,
+	savepoint_outcomes: Vec<AtomicTransactionOutcome>,
+	poisoned: Arc<AtomicBool>,
 }
 
 impl AtomicTransaction {
@@ -555,12 +660,33 @@ impl AtomicTransaction {
 			executor: Some(executor),
 			backend,
 			savepoint_sequence: 0,
+			outcome: AtomicTransactionOutcome::pending(),
+			savepoint_outcomes: Vec::new(),
+			poisoned: Arc::new(AtomicBool::new(false)),
 		}
+	}
+
+	/// Returns the outcome for the currently active atomic scope.
+	///
+	/// During a nested [`Self::atomic`] callback this is the savepoint outcome;
+	/// otherwise it is the outer transaction outcome.
+	pub fn outcome(&self) -> AtomicTransactionOutcome {
+		self.savepoint_outcomes
+			.last()
+			.cloned()
+			.unwrap_or_else(|| self.outcome.clone())
 	}
 
 	fn executor_mut<'transaction>(
 		&'transaction mut self,
 	) -> reinhardt_core::exception::Result<&'transaction mut (dyn TransactionExecutor + 'static)> {
+		if self.poisoned.load(Ordering::Acquire) {
+			return Err(DatabaseError::new(
+				DatabaseErrorKind::Transaction,
+				"Nested atomic operation was cancelled",
+			)
+			.into());
+		}
 		self.executor
 			.as_deref_mut()
 			.ok_or_else(transaction_consumed_error)
@@ -580,6 +706,26 @@ impl AtomicTransaction {
 			.take()
 			.ok_or_else(transaction_consumed_error)?;
 		executor.rollback().await
+	}
+
+	async fn rollback_cancelled_scope<T, E>(&mut self) -> std::result::Result<T, E>
+	where
+		E: std::error::Error + From<reinhardt_core::exception::Error>,
+	{
+		let cancellation_error = DatabaseError::new(
+			DatabaseErrorKind::Transaction,
+			"Nested atomic operation was cancelled",
+		);
+		match self.rollback().await {
+			Ok(()) => {
+				self.outcome.set_rolled_back();
+				Err(E::from(cancellation_error.into()))
+			}
+			Err(error) => {
+				self.outcome.set_unknown();
+				Err(E::from(error))
+			}
+		}
 	}
 
 	fn next_savepoint_name(&mut self) -> reinhardt_core::exception::Result<String> {
@@ -618,17 +764,31 @@ impl AtomicTransaction {
 			) -> std::result::Result<T, E>,
 		E: std::error::Error + From<reinhardt_core::exception::Error>,
 	{
+		if self.poisoned.load(Ordering::Acquire) {
+			return self.rollback_cancelled_scope().await;
+		}
 		match std::panic::AssertUnwindSafe(f(&mut self))
 			.catch_unwind()
 			.await
 		{
 			Ok(Ok(value)) => {
-				self.commit().await.map_err(E::from)?;
+				if self.poisoned.load(Ordering::Acquire) {
+					return self.rollback_cancelled_scope().await;
+				}
+				if let Err(error) = self.commit().await {
+					self.outcome.set_unknown();
+					return Err(E::from(error));
+				}
+				self.outcome.set_committed();
 				Ok(value)
 			}
 			Ok(Err(operation_error)) => match self.rollback().await {
-				Ok(()) => Err(operation_error),
+				Ok(()) => {
+					self.outcome.set_rolled_back();
+					Err(operation_error)
+				}
 				Err(rollback_error) => {
+					self.outcome.set_unknown();
 					tracing::error!(
 						operation_error = %operation_error,
 						rollback_error = %rollback_error,
@@ -639,10 +799,13 @@ impl AtomicTransaction {
 			},
 			Err(panic_payload) => {
 				if let Err(rollback_error) = self.rollback().await {
+					self.outcome.set_unknown();
 					tracing::error!(
 						rollback_error = %rollback_error,
 						"Atomic transaction rollback failed while resuming callback panic"
 					);
+				} else {
+					self.outcome.set_rolled_back();
 				}
 				std::panic::resume_unwind(panic_payload)
 			}
@@ -662,20 +825,41 @@ impl AtomicTransaction {
 			.savepoint(&savepoint_name)
 			.await
 			.map_err(E::from)?;
+		let outcome = AtomicTransactionOutcome::pending_with_parent(&self.outcome());
+		self.savepoint_outcomes.push(outcome.clone());
+		let mut cancellation_guard = NestedAtomicCancellationGuard::new(self.poisoned.clone());
 
-		match std::panic::AssertUnwindSafe(f(self)).catch_unwind().await {
-			Ok(Ok(value)) => self
-				.executor_mut()?
-				.release_savepoint(&savepoint_name)
-				.await
-				.map(|()| value)
-				.map_err(E::from),
+		let callback_result = std::panic::AssertUnwindSafe(f(self)).catch_unwind().await;
+		cancellation_guard.disarm();
+		let result = match callback_result {
+			Ok(Ok(value)) => {
+				let release_result = match self.executor_mut() {
+					Ok(executor) => executor.release_savepoint(&savepoint_name).await,
+					Err(error) => Err(error),
+				};
+				match release_result {
+					Ok(()) => {
+						outcome.set_committed();
+						Ok(value)
+					}
+					Err(error) => {
+						outcome.set_unknown();
+						self.poisoned.store(true, Ordering::Release);
+						Err(E::from(error))
+					}
+				}
+			}
 			Ok(Err(operation_error)) => {
 				let (rollback_result, release_result) =
 					self.cleanup_savepoint(&savepoint_name).await;
 				match (rollback_result, release_result) {
-					(Ok(()), Ok(())) => Err(operation_error),
+					(Ok(()), Ok(())) => {
+						outcome.set_rolled_back();
+						Err(operation_error)
+					}
 					(Err(rollback_error), Ok(())) => {
+						outcome.set_unknown();
+						self.poisoned.store(true, Ordering::Release);
 						tracing::error!(
 							operation_error = %operation_error,
 							rollback_to_savepoint_error = %rollback_error,
@@ -684,6 +868,8 @@ impl AtomicTransaction {
 						Err(E::from(rollback_error))
 					}
 					(Ok(()), Err(release_error)) => {
+						outcome.set_unknown();
+						self.poisoned.store(true, Ordering::Release);
 						tracing::error!(
 							operation_error = %operation_error,
 							release_savepoint_error = %release_error,
@@ -692,6 +878,8 @@ impl AtomicTransaction {
 						Err(E::from(release_error))
 					}
 					(Err(rollback_error), Err(release_error)) => {
+						outcome.set_unknown();
+						self.poisoned.store(true, Ordering::Release);
 						tracing::error!(
 							operation_error = %operation_error,
 							rollback_to_savepoint_error = %rollback_error,
@@ -705,6 +893,12 @@ impl AtomicTransaction {
 			Err(panic_payload) => {
 				let (rollback_result, release_result) =
 					self.cleanup_savepoint(&savepoint_name).await;
+				if rollback_result.is_ok() && release_result.is_ok() {
+					outcome.set_rolled_back();
+				} else {
+					outcome.set_unknown();
+					self.poisoned.store(true, Ordering::Release);
+				}
 				if let Err(rollback_error) = rollback_result {
 					tracing::error!(
 						rollback_to_savepoint_error = %rollback_error,
@@ -717,7 +911,23 @@ impl AtomicTransaction {
 						"Nested atomic release-savepoint failed while resuming callback panic"
 					);
 				}
+				self.savepoint_outcomes.pop();
 				std::panic::resume_unwind(panic_payload)
+			}
+		};
+		self.savepoint_outcomes.pop();
+		result
+	}
+}
+
+impl Drop for AtomicTransaction {
+	fn drop(&mut self) {
+		if self.executor.is_some() && self.outcome.is_pending_or_unknown() {
+			// The owned transaction executor rolls the backend transaction back when dropped.
+			// Publish that terminal state to models which retained this outcome before cancellation.
+			self.outcome.set_rolled_back();
+			for outcome in &self.savepoint_outcomes {
+				outcome.set_rolled_back();
 			}
 		}
 	}
@@ -727,6 +937,14 @@ impl AtomicTransaction {
 impl OrmExecutor for AtomicTransaction {
 	fn backend(&self) -> DatabaseBackend {
 		self.backend
+	}
+
+	fn rolls_back_on_error(&self) -> bool {
+		true
+	}
+
+	fn transaction_outcome(&self) -> Option<AtomicTransactionOutcome> {
+		Some(self.outcome())
 	}
 
 	async fn execute(
@@ -1434,7 +1652,12 @@ mod tests {
 			})
 			.await;
 
-		assert!(result.is_ok());
+		match result {
+			Err(ApplicationError::Framework(error)) => {
+				assert_eq!(error.database_kind(), Some(DatabaseErrorKind::Transaction));
+			}
+			other => panic!("expected the poisoned outer transaction to roll back, got {other:?}"),
+		}
 		assert_transaction_calls(
 			&calls,
 			&[
@@ -1442,9 +1665,77 @@ mod tests {
 				"savepoint:reinhardt_atomic_0",
 				"rollback_to_savepoint:reinhardt_atomic_0",
 				"release_savepoint:reinhardt_atomic_0",
-				"commit",
+				"rollback",
 			],
 		);
+	}
+
+	#[tokio::test]
+	async fn test_atomic_transaction_rolls_back_when_nested_cancellation_is_caught() {
+		let (connection, calls) = mock_connection_with_failures(FailurePlan::default());
+
+		let result: std::result::Result<(), ApplicationError> = connection
+			.atomic(async |transaction| {
+				transaction.poisoned.store(true, Ordering::Release);
+				Ok(())
+			})
+			.await;
+
+		match result {
+			Err(ApplicationError::Framework(error)) => {
+				assert_eq!(error.database_kind(), Some(DatabaseErrorKind::Transaction));
+			}
+			other => panic!("expected the cancelled outer transaction to roll back, got {other:?}"),
+		}
+		assert_transaction_calls(&calls, &["begin", "rollback"]);
+	}
+
+	#[tokio::test]
+	async fn test_atomic_transaction_rolls_back_when_savepoint_release_fails() {
+		let (connection, calls) = mock_connection_with_failures(FailurePlan {
+			release_savepoint: true,
+			..FailurePlan::default()
+		});
+
+		let result: std::result::Result<(), ApplicationError> = connection
+			.atomic(async |transaction| {
+				let nested: std::result::Result<(), ApplicationError> =
+					transaction.atomic(async |_nested| Ok(())).await;
+				assert!(matches!(nested, Err(ApplicationError::Framework(_))));
+				Ok(())
+			})
+			.await;
+
+		match result {
+			Err(ApplicationError::Framework(error)) => {
+				assert_eq!(error.database_kind(), Some(DatabaseErrorKind::Transaction));
+			}
+			other => panic!("expected the poisoned outer transaction to roll back, got {other:?}"),
+		}
+		assert_transaction_calls(
+			&calls,
+			&[
+				"begin",
+				"savepoint:reinhardt_atomic_0",
+				"release_savepoint:reinhardt_atomic_0",
+				"rollback",
+			],
+		);
+	}
+
+	#[test]
+	fn dropping_live_atomic_transaction_marks_its_outcome_rolled_back() {
+		let calls = Arc::new(Mutex::new(Vec::new()));
+		let transaction = AtomicTransaction::new(Box::new(MockTransactionExecutor {
+			failure_plan: FailurePlan::default(),
+			calls: Arc::clone(&calls),
+		}));
+		let outcome = transaction.outcome();
+
+		drop(transaction);
+
+		assert!(outcome.is_rolled_back());
+		assert!(calls.lock().unwrap().is_empty());
 	}
 
 	#[tokio::test]

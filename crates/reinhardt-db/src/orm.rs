@@ -153,7 +153,7 @@ pub mod custom_manager;
 // Unified query interface facade
 pub mod query;
 
-pub use custom_manager::CustomManager;
+pub use custom_manager::{CreateWithConnOutcome, CustomManager};
 #[cfg(feature = "di")]
 pub use engine::register_request_database;
 pub use manager::{

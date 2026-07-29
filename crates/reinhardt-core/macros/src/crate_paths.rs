@@ -3,6 +3,34 @@
 use proc_macro2::TokenStream;
 use quote::quote;
 
+/// Resolves the path to the `serde` crate dynamically.
+pub(crate) fn get_serde_crate() -> TokenStream {
+	use proc_macro_crate::{FoundCrate, crate_name};
+
+	match crate_name("serde") {
+		Ok(FoundCrate::Itself) => quote!(crate),
+		Ok(FoundCrate::Name(name)) => {
+			let ident = syn::Ident::new(&name, proc_macro2::Span::call_site());
+			quote!(::#ident)
+		}
+		Err(_) => quote!(::serde),
+	}
+}
+
+/// Resolves the path to the `serde_json` crate dynamically.
+pub(crate) fn get_serde_json_crate() -> TokenStream {
+	use proc_macro_crate::{FoundCrate, crate_name};
+
+	match crate_name("serde_json") {
+		Ok(FoundCrate::Itself) => quote!(crate),
+		Ok(FoundCrate::Name(name)) => {
+			let ident = syn::Ident::new(&name, proc_macro2::Span::call_site());
+			quote!(::#ident)
+		}
+		Err(_) => quote!(::serde_json),
+	}
+}
+
 /// Resolves the path to the Reinhardt crate dynamically.
 /// This supports different crate naming scenarios (reinhardt, reinhardt-web, reinhardt-core, etc.)
 pub(crate) fn get_reinhardt_crate() -> TokenStream {
@@ -154,6 +182,40 @@ pub(crate) fn get_reinhardt_core_crate() -> TokenStream {
 
 	// Final fallback
 	quote!(::reinhardt_core)
+}
+
+/// Resolves the path to the optional `reinhardt-forms` crate dynamically.
+pub(crate) fn get_reinhardt_forms_crate() -> Option<TokenStream> {
+	use proc_macro_crate::{FoundCrate, crate_name};
+
+	match crate_name("reinhardt-forms") {
+		Ok(FoundCrate::Itself) => return Some(quote!(crate)),
+		Ok(FoundCrate::Name(name)) => {
+			let ident = syn::Ident::new(&name, proc_macro2::Span::call_site());
+			return Some(quote!(::#ident));
+		}
+		Err(_) => {}
+	}
+
+	match crate_name("reinhardt") {
+		Ok(FoundCrate::Itself) => return Some(quote!(crate::forms)),
+		Ok(FoundCrate::Name(name)) => {
+			let ident = syn::Ident::new(&name, proc_macro2::Span::call_site());
+			return Some(quote!(::#ident::forms));
+		}
+		Err(_) => {}
+	}
+
+	match crate_name("reinhardt-web") {
+		Ok(FoundCrate::Itself) => return Some(quote!(crate::forms)),
+		Ok(FoundCrate::Name(name)) => {
+			let ident = syn::Ident::new(&name, proc_macro2::Span::call_site());
+			return Some(quote!(::#ident::forms));
+		}
+		Err(_) => {}
+	}
+
+	None
 }
 
 /// Resolves the path to the reinhardt_auth crate dynamically.

@@ -99,6 +99,7 @@ impl MySqlBackend {
 			QueryValue::String(s) => query.bind(s),
 			QueryValue::Bytes(b) => query.bind(b),
 			QueryValue::Timestamp(dt) => query.bind(dt),
+			QueryValue::NaiveTimestamp(dt) => query.bind(dt),
 			// MySQL stores UUIDs as BINARY(16) or CHAR(36); we bind as string
 			QueryValue::Uuid(u) => query.bind(u.to_string()),
 			QueryValue::Json(value) => query.bind(value.as_deref().cloned().map(sqlx::types::Json)),
@@ -190,14 +191,8 @@ impl MySqlBackend {
 					Err(_) => row.insert(column_name.to_string(), QueryValue::Bytes(value)),
 				};
 			} else if let Ok(value) = mysql_row.try_get::<chrono::NaiveDateTime, _>(column_name) {
-				// MySQL TIMESTAMP/DATETIME without timezone
-				row.insert(
-					column_name.to_string(),
-					QueryValue::Timestamp(chrono::DateTime::from_naive_utc_and_offset(
-						value,
-						chrono::Utc,
-					)),
-				);
+				// MySQL DATETIME without timezone
+				row.insert(column_name.to_string(), QueryValue::NaiveTimestamp(value));
 			} else if let Ok(value) =
 				mysql_row.try_get::<chrono::DateTime<chrono::Utc>, _>(column_name)
 			{
@@ -342,6 +337,7 @@ impl MySqlTransactionExecutor {
 			QueryValue::String(s) => query.bind(s),
 			QueryValue::Bytes(b) => query.bind(b),
 			QueryValue::Timestamp(dt) => query.bind(dt),
+			QueryValue::NaiveTimestamp(dt) => query.bind(dt),
 			// MySQL stores UUIDs as BINARY(16) or CHAR(36); we bind as string
 			QueryValue::Uuid(u) => query.bind(u.to_string()),
 			QueryValue::Json(value) => query.bind(value.as_deref().cloned().map(sqlx::types::Json)),

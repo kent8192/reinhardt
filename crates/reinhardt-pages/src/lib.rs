@@ -601,9 +601,8 @@ pub mod form_generated;
 pub mod form_state;
 // Runtime support for DTO-derived client forms.
 pub mod client_form;
-// FormComponent requires reinhardt-forms which is not WASM-compatible yet.
-// Client-side forms use PageElement.
-#[cfg(native)]
+// Model-backed form state is target-neutral. Legacy FormComponent support is
+// gated inside the module because it still depends on reinhardt-forms.
 pub mod form;
 
 // API and communication
@@ -781,6 +780,10 @@ pub mod __private {
 	pub use reinhardt_urls;
 	pub use serde;
 	pub use serde_json;
+	#[cfg(wasm)]
+	pub use wasm_bindgen;
+	#[cfg(wasm)]
+	pub use web_sys;
 
 	// `tracing` is enabled for all targets *except* browser wasm (wasm32-unknown-unknown).
 	// Browser wasm uses a different logging mechanism, so tracing is intentionally excluded there.

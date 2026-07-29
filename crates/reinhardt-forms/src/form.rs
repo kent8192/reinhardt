@@ -288,6 +288,11 @@ impl Form {
 	pub fn cleaned_data(&self) -> &HashMap<String, serde_json::Value> {
 		&self.data
 	}
+
+	/// Returns the currently bound, pre-cleaning form values.
+	pub fn bound_data(&self) -> &HashMap<String, serde_json::Value> {
+		&self.data
+	}
 	/// Returns the current validation errors keyed by field name.
 	pub fn errors(&self) -> &HashMap<String, Vec<String>> {
 		&self.errors

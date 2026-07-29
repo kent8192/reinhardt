@@ -849,8 +849,19 @@ impl DatabaseMigrationRecorder {
 							))
 						})?
 				}
-				_ => row
+				DatabaseType::Postgres => row
 					.get("applied")
+					.or_else(|_| {
+						row.get::<chrono::NaiveDateTime>("applied")
+							.map(|naive| naive.and_utc())
+					})
+					.map_err(super::MigrationError::DatabaseError)?,
+				DatabaseType::Mysql => row
+					.get("applied")
+					.or_else(|_| {
+						row.get::<chrono::NaiveDateTime>("applied")
+							.map(|naive| naive.and_utc())
+					})
 					.map_err(super::MigrationError::DatabaseError)?,
 			};
 
@@ -966,8 +977,19 @@ impl DatabaseMigrationRecorder {
 							))
 						})?
 				}
-				_ => row
+				DatabaseType::Postgres => row
 					.get("applied")
+					.or_else(|_| {
+						row.get::<chrono::NaiveDateTime>("applied")
+							.map(|naive| naive.and_utc())
+					})
+					.map_err(super::MigrationError::DatabaseError)?,
+				DatabaseType::Mysql => row
+					.get("applied")
+					.or_else(|_| {
+						row.get::<chrono::NaiveDateTime>("applied")
+							.map(|naive| naive.and_utc())
+					})
 					.map_err(super::MigrationError::DatabaseError)?,
 			};
 

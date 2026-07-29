@@ -43,6 +43,7 @@ impl PostgresBackend {
 			QueryValue::String(s) => query.bind(s),
 			QueryValue::Bytes(b) => query.bind(b),
 			QueryValue::Timestamp(dt) => query.bind(dt),
+			QueryValue::NaiveTimestamp(dt) => query.bind(dt),
 			QueryValue::Uuid(u) => query.bind(u),
 			QueryValue::Json(value) => query.bind(value.as_deref().cloned().map(sqlx::types::Json)),
 			QueryValue::StringArray(values) => query.bind(values),
@@ -190,6 +191,7 @@ impl PgTransactionExecutor {
 			QueryValue::String(s) => query.bind(s),
 			QueryValue::Bytes(b) => query.bind(b),
 			QueryValue::Timestamp(dt) => query.bind(dt),
+			QueryValue::NaiveTimestamp(dt) => query.bind(dt),
 			QueryValue::Uuid(u) => query.bind(u),
 			QueryValue::Json(value) => query.bind(value.as_deref().cloned().map(sqlx::types::Json)),
 			QueryValue::StringArray(values) => query.bind(values),
@@ -355,13 +357,7 @@ impl PostgresBackend {
 			} else if let Ok(value) = pg_row.try_get::<Vec<u8>, _>(column_name) {
 				row.insert(column_name.to_string(), QueryValue::Bytes(value));
 			} else if let Ok(value) = pg_row.try_get::<chrono::NaiveDateTime, _>(column_name) {
-				row.insert(
-					column_name.to_string(),
-					QueryValue::Timestamp(chrono::DateTime::from_naive_utc_and_offset(
-						value,
-						chrono::Utc,
-					)),
-				);
+				row.insert(column_name.to_string(), QueryValue::NaiveTimestamp(value));
 			} else if let Ok(value) =
 				pg_row.try_get::<chrono::DateTime<chrono::Utc>, _>(column_name)
 			{

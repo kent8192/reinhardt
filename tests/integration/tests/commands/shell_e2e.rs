@@ -5,6 +5,7 @@
 
 //! Desktop Unix end-to-end coverage for the ORM-aware Rust management shell.
 
+use std::ffi::OsString;
 use std::fs;
 use std::io::{self, Read};
 use std::ops::{Deref, DerefMut};
@@ -579,6 +580,51 @@ struct ShellProject {
 	project_root: PathBuf,
 	manage_binary: PathBuf,
 	dynamic_library_paths: Vec<PathBuf>,
+	rust_flags: FixtureRustFlags,
+}
+
+#[derive(Clone)]
+struct FixtureRustFlags {
+	rustflags: Option<OsString>,
+	encoded_rustflags: Option<OsString>,
+}
+
+impl FixtureRustFlags {
+	fn with_prefer_dynamic() -> Self {
+		if let Some(mut encoded_rustflags) = std::env::var_os("CARGO_ENCODED_RUSTFLAGS") {
+			if !encoded_rustflags.is_empty() {
+				encoded_rustflags.push("\u{1F}");
+			}
+			encoded_rustflags.push("-Cprefer-dynamic");
+			return Self {
+				rustflags: std::env::var_os("RUSTFLAGS"),
+				encoded_rustflags: Some(encoded_rustflags),
+			};
+		}
+
+		let mut rustflags = std::env::var_os("RUSTFLAGS").unwrap_or_default();
+		if !rustflags.is_empty() {
+			rustflags.push(" ");
+		}
+		rustflags.push("-Cprefer-dynamic");
+		Self {
+			rustflags: Some(rustflags),
+			encoded_rustflags: None,
+		}
+	}
+
+	fn apply(&self, command: &mut Command) {
+		if let Some(rustflags) = &self.rustflags {
+			command.env("RUSTFLAGS", rustflags);
+		} else {
+			command.env_remove("RUSTFLAGS");
+		}
+		if let Some(encoded_rustflags) = &self.encoded_rustflags {
+			command.env("CARGO_ENCODED_RUSTFLAGS", encoded_rustflags);
+		} else {
+			command.env_remove("CARGO_ENCODED_RUSTFLAGS");
+		}
+	}
 }
 
 impl ShellProject {
@@ -588,6 +634,7 @@ impl ShellProject {
 		let project_root = project_dir.path().join("shell-e2e-project");
 		let host_target = rustc_host_target();
 		let evcxr_target_dir = evcxr_dir.path().join("target");
+		let rust_flags = FixtureRustFlags::with_prefer_dynamic();
 		write_project(&project_root);
 
 		let mut lock_command = Command::new(env!("CARGO"));
@@ -622,8 +669,8 @@ impl ShellProject {
 			.env("CARGO_TARGET_DIR", "target")
 			// The fixture uses an isolated target directory, so its dynamic build can
 			// safely use two compiler jobs even when the outer CI workspace build is serial.
-			.env("CARGO_BUILD_JOBS", FIXTURE_BUILD_JOBS)
-			.env("RUSTFLAGS", "-Cprefer-dynamic");
+			.env("CARGO_BUILD_JOBS", FIXTURE_BUILD_JOBS);
+		rust_flags.apply(&mut build_command);
 		let output = supervised_output(build_command, FIXTURE_BUILD_TIMEOUT)
 			.expect("shell fixture manage binary should build");
 		assert!(
@@ -654,6 +701,7 @@ impl ShellProject {
 			std::env::join_paths(&dynamic_library_paths)
 				.expect("dynamic library paths should be valid"),
 		);
+		rust_flags.apply(&mut help_command);
 		let help_output = supervised_output(help_command, FIXTURE_BUILD_TIMEOUT)
 			.expect("dynamic fixture manage binary should run");
 		assert!(
@@ -669,6 +717,7 @@ impl ShellProject {
 			project_root,
 			manage_binary,
 			dynamic_library_paths,
+			rust_flags,
 		}
 	}
 
@@ -683,6 +732,7 @@ impl ShellProject {
 				std::env::join_paths(&self.dynamic_library_paths)
 					.expect("dynamic library paths should be valid"),
 			);
+		self.rust_flags.apply(&mut command);
 		command
 	}
 
@@ -704,6 +754,7 @@ impl ShellProject {
 				std::env::join_paths(&self.dynamic_library_paths)
 					.expect("dynamic library paths should be valid"),
 			);
+		self.rust_flags.apply(&mut command);
 		command
 	}
 }
@@ -745,7 +796,7 @@ fn rustc_sysroot() -> PathBuf {
 }
 
 fn rustc_output(arguments: impl IntoIterator<Item = &'static str>) -> String {
-	let output = Command::new("rustc")
+	let output = Command::new(std::env::var_os("RUSTC").unwrap_or_else(|| OsString::from("rustc")))
 		.args(arguments)
 		.output()
 		.expect("rustc should run for the shell fixture");

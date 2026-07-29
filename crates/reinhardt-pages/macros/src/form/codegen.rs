@@ -53,8 +53,9 @@ use reinhardt_manouche::core::{
 	TypedFormAction, TypedFormCallbacks, TypedFormDerived, TypedFormFieldCollection,
 	TypedFormFieldDef, TypedFormFieldEntry, TypedFormFieldGroup, TypedFormMacro, TypedFormSlots,
 	TypedFormState, TypedFormWatch, TypedIcon, TypedIconChild, TypedIconPosition,
-	TypedImageInputDef, TypedMeterDef, TypedOutputDef, TypedProgressDef, TypedSubmitButtonDef,
-	TypedValidatorRule, TypedWidget, TypedWrapper,
+	TypedImageInputDef, TypedMeterDef, TypedModelFieldSelection, TypedModelFormSource,
+	TypedOutputDef, TypedProgressDef, TypedSubmitButtonDef, TypedValidatorRule, TypedWidget,
+	TypedWrapper,
 };
 
 /// Collects scalar fields from field entries, flattening groups.
@@ -1901,6 +1902,952 @@ fn is_basic_form_value_type(ty: &syn::Type) -> bool {
 	)
 }
 
+fn generated_model_support_path(model: &syn::Path, suffix: &str) -> syn::Path {
+	let mut path = model.clone();
+	let segment = path
+		.segments
+		.last_mut()
+		.expect("validated model path must contain a segment");
+	segment.ident = format_ident!("{}{}", segment.ident, suffix, span = segment.ident.span());
+	segment.arguments = syn::PathArguments::None;
+	path
+}
+
+fn generate_model_form(
+	macro_ast: &TypedFormMacro,
+	model_source: &TypedModelFormSource,
+	pages_crate: &TokenStream,
+	use_statement: &TokenStream,
+) -> TokenStream {
+	let form_ident = &macro_ast.name;
+	let policy_ident = format_ident!("{}SelectionPolicy", form_ident);
+	let data_ident = format_ident!("{}Data", form_ident);
+	let schema_path = generated_model_support_path(&model_source.model, "FormSchema");
+	let payload_path = generated_model_support_path(&model_source.model, "ModelFormData");
+	let policy_path = &model_source.policy;
+	let server_fn = match &macro_ast.action {
+		TypedFormAction::ServerFn(server_fn) => server_fn,
+		_ => unreachable!("model-backed forms require a server_fn after validation"),
+	};
+
+	let selected_idents: Vec<&syn::Ident> = match &model_source.selection {
+		TypedModelFieldSelection::Fields(fields) | TypedModelFieldSelection::Exclude(fields) => {
+			fields.iter().collect()
+		}
+	};
+	let override_idents = model_source
+		.overrides
+		.iter()
+		.map(|override_| &override_.field);
+	let descriptor_guards = selected_idents
+		.into_iter()
+		.chain(override_idents)
+		.map(|field| {
+			quote! {
+				let _: &#pages_crate::form::ModelFormFieldDescriptor = #schema_path::#field();
+			}
+		});
+	let selection_policy_body = match &model_source.selection {
+		TypedModelFieldSelection::Fields(fields) if fields.is_empty() => quote! { false },
+		TypedModelFieldSelection::Fields(fields) => {
+			let names = fields.iter().map(ToString::to_string);
+			quote! { ::core::matches!(field, #(#names)|*) }
+		}
+		TypedModelFieldSelection::Exclude(fields) if fields.is_empty() => quote! { true },
+		TypedModelFieldSelection::Exclude(fields) => {
+			let names = fields.iter().map(ToString::to_string);
+			quote! { !::core::matches!(field, #(#names)|*) }
+		}
+	};
+	let policy_body = quote! {
+		<#policy_path as #pages_crate::form::ModelFormPolicy>::allows(field)
+			&& (#selection_policy_body)
+	};
+
+	let override_arms = model_source.overrides.iter().map(|override_| {
+		let name = override_.field.to_string();
+		let widget = override_
+			.widget
+			.as_ref()
+			.map(widget_to_string)
+			.map(|widget| quote!(::core::option::Option::Some(#widget)))
+			.unwrap_or_else(|| quote!(::core::option::Option::None));
+		let label = override_
+			.label
+			.as_deref()
+			.map(|label| quote!(::core::option::Option::Some(#label)))
+			.unwrap_or_else(|| quote!(::core::option::Option::None));
+		let help_text = override_
+			.help_text
+			.as_deref()
+			.map(|help_text| quote!(::core::option::Option::Some(#help_text)))
+			.unwrap_or_else(|| quote!(::core::option::Option::None));
+		quote! {
+			#name => (#widget, #label, #help_text),
+		}
+	});
+	let range_override_names: Vec<String> = model_source
+		.overrides
+		.iter()
+		.filter(|override_| matches!(override_.widget, Some(TypedWidget::RangeInput)))
+		.map(|override_| override_.field.to_string())
+		.collect();
+	let is_range_override = if range_override_names.is_empty() {
+		quote!(false)
+	} else {
+		quote!(::core::matches!(descriptor.name, #(#range_override_names)|*))
+	};
+	let color_override_names: Vec<String> = model_source
+		.overrides
+		.iter()
+		.filter(|override_| matches!(override_.widget, Some(TypedWidget::ColorInput)))
+		.map(|override_| override_.field.to_string())
+		.collect();
+	let is_color_override = if color_override_names.is_empty() {
+		quote!(false)
+	} else {
+		quote!(::core::matches!(descriptor.name, #(#color_override_names)|*))
+	};
+
+	let form_id = form_id_kebab_case(form_ident);
+	let form_class_attribute = macro_ast
+		.styling
+		.class
+		.as_deref()
+		.map(|class| quote! { .attr("class", #class) })
+		.unwrap_or_default();
+	let native_action = quote!(
+		<#server_fn::marker as #pages_crate::server_fn::ServerFnMetadata>::PATH
+	);
+	// Server-function endpoints are registered exclusively for POST.
+	let method = "post";
+
+	quote! {
+		{
+			#use_statement
+
+			struct #policy_ident;
+
+			impl #pages_crate::form::ModelFormPolicy for #policy_ident {
+				fn allows(field: &str) -> bool {
+					#policy_body
+				}
+			}
+
+			pub type #data_ident = #payload_path<#policy_path>;
+
+			#[derive(Clone, PartialEq)]
+			struct __ReinhardtModelFormValues(
+				::std::collections::HashMap<::std::string::String, #pages_crate::__private::serde_json::Value>
+			);
+
+			#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+			enum __ReinhardtModelFormField {
+				State,
+			}
+
+			#(#descriptor_guards)*
+
+			#[derive(Clone)]
+			struct #form_ident {
+				__model_state: ::std::rc::Rc<
+					::std::cell::RefCell<
+						#pages_crate::form::ModelFormState<#schema_path, #policy_ident>
+					>
+				>,
+				__state_version: #pages_crate::Signal<u64>,
+				loading: #pages_crate::Signal<bool>,
+				error: #pages_crate::Signal<::core::option::Option<::std::string::String>>,
+				success: #pages_crate::Signal<bool>,
+			}
+
+			impl #form_ident {
+				fn new() -> Self {
+					Self {
+						__model_state: ::std::rc::Rc::new(
+							::std::cell::RefCell::new(
+						#pages_crate::form::ModelFormState::new()
+							),
+						),
+						__state_version: #pages_crate::Signal::new(0),
+						loading: #pages_crate::Signal::new(false),
+						error: #pages_crate::Signal::new(::core::option::Option::None),
+						success: #pages_crate::Signal::new(false),
+					}
+				}
+
+				pub fn set_value(
+					&self,
+					field: &str,
+					value: #pages_crate::__private::serde_json::Value,
+				) -> ::core::result::Result<
+					(),
+					#pages_crate::form::ModelFormPayloadError,
+				> {
+					let mut state = self.__model_state.borrow_mut();
+					let previous = state.value(field).cloned();
+					let result = state.set_value(field, value);
+					let changed = previous != state.value(field).cloned();
+					drop(state);
+					if changed {
+						self.__state_version.update(|version| *version = version.wrapping_add(1));
+					}
+					result
+				}
+
+				pub fn value(
+					&self,
+					field: &str,
+				) -> ::core::option::Option<
+					#pages_crate::__private::serde_json::Value
+				> {
+					self.__model_state.borrow().value(field).cloned()
+				}
+
+				pub fn data(
+					&self,
+				) -> ::core::result::Result<
+					#data_ident,
+					#pages_crate::form::ModelFormPayloadError,
+				> {
+					self.__model_state.borrow().build_payload_for::<
+						#data_ident,
+						#policy_path,
+					>()
+				}
+
+				pub fn loading(&self) -> &#pages_crate::Signal<bool> {
+					&self.loading
+				}
+
+				pub fn error(
+					&self,
+				) -> &#pages_crate::Signal<
+					::core::option::Option<::std::string::String>
+				> {
+					&self.error
+				}
+
+				pub fn success(&self) -> &#pages_crate::Signal<bool> {
+					&self.success
+				}
+
+				pub async fn submit(
+					&self,
+				) -> ::core::result::Result<(), #pages_crate::ServerFnError> {
+					#[cfg(all(target_family = "wasm", target_os = "unknown"))]
+					{
+						self.loading.set(false);
+						self.error.set(::core::option::Option::None);
+						self.success.set(false);
+					}
+					let payload = match self.data() {
+						::core::result::Result::Ok(payload) => payload,
+						::core::result::Result::Err(error) => {
+							let error = #pages_crate::ServerFnError::validation_with_message(
+								error.to_string(),
+								::core::iter::empty::<(&str, &str)>(),
+							);
+							#[cfg(all(target_family = "wasm", target_os = "unknown"))]
+							self.error.set(::core::option::Option::Some(error.to_string()));
+							return ::core::result::Result::Err(error);
+						}
+					};
+
+					#[cfg(all(target_family = "wasm", target_os = "unknown"))]
+					{
+						self.loading.set(true);
+						self.error.set(::core::option::Option::None);
+						self.success.set(false);
+						let result = #server_fn(payload).await;
+						self.loading.set(false);
+						match result {
+							::core::result::Result::Ok(_) => {
+								self.success.set(true);
+								::core::result::Result::Ok(())
+							}
+							::core::result::Result::Err(error) => {
+								self.error.set(::core::option::Option::Some(error.to_string()));
+								::core::result::Result::Err(error)
+							}
+						}
+					}
+					#[cfg(not(all(target_family = "wasm", target_os = "unknown")))]
+					{
+						let _ = payload;
+						::core::result::Result::Ok(())
+					}
+				}
+
+				pub fn into_page(self) -> #pages_crate::Page {
+					let _ = self.__state_version.get();
+					let mut controls = ::std::vec::Vec::new();
+					for descriptor in self.__model_state.borrow().selected_descriptors() {
+						if !<#policy_ident as #pages_crate::form::ModelFormPolicy>::allows(descriptor.name) {
+							continue;
+						}
+						let (
+							widget_override,
+							label_override,
+							help_text,
+						): (
+							::core::option::Option<&'static str>,
+							::core::option::Option<&'static str>,
+							::core::option::Option<&'static str>,
+						) =
+							match descriptor.name {
+								#(#override_arms)*
+								_ => (
+									::core::option::Option::None,
+									::core::option::Option::None,
+									::core::option::Option::None,
+								),
+							};
+						let label = label_override.unwrap_or(descriptor.name);
+						let widget_override = match widget_override {
+							::core::option::Option::Some(widget) => match (widget, descriptor.kind) {
+								("CheckboxInput", #pages_crate::form::ModelFormFieldKind::Boolean)
+								| ("DateInput", #pages_crate::form::ModelFormFieldKind::Date)
+								| ("TimeInput", #pages_crate::form::ModelFormFieldKind::Time)
+								| ("DateTimeInput", #pages_crate::form::ModelFormFieldKind::DateTime | #pages_crate::form::ModelFormFieldKind::NaiveDateTime)
+								| ("EmailInput", #pages_crate::form::ModelFormFieldKind::Email { .. })
+								| ("UrlInput", #pages_crate::form::ModelFormFieldKind::Url { .. })
+								| ("NumberInput" | "RangeInput", #pages_crate::form::ModelFormFieldKind::Integer { .. } | #pages_crate::form::ModelFormFieldKind::Float { .. } | #pages_crate::form::ModelFormFieldKind::Decimal { .. })
+								| ("TextInput", #pages_crate::form::ModelFormFieldKind::Text { .. })
+								| ("Textarea" | "TextArea", #pages_crate::form::ModelFormFieldKind::Text { .. } | #pages_crate::form::ModelFormFieldKind::Json)
+								| ("PasswordInput" | "HiddenInput" | "ColorInput" | "TelInput" | "SearchInput", #pages_crate::form::ModelFormFieldKind::Text { .. }) => ::core::option::Option::Some(widget),
+								_ => {
+									#pages_crate::warn_log!(
+										"model form widget override `{}` is incompatible with `{}`; using the generated default",
+										widget,
+										descriptor.name,
+									);
+									::core::option::Option::None
+								}
+							},
+							::core::option::Option::None => ::core::option::Option::None,
+						};
+						let (tag, input_type) = match widget_override {
+							::core::option::Option::Some("Textarea" | "TextArea") =>
+								("textarea", "text"),
+							::core::option::Option::Some("PasswordInput") =>
+								("input", "password"),
+							::core::option::Option::Some("EmailInput") =>
+								("input", "email"),
+							::core::option::Option::Some("NumberInput") =>
+								("input", "number"),
+							::core::option::Option::Some("CheckboxInput") =>
+								("input", "checkbox"),
+							::core::option::Option::Some("DateInput") =>
+								("input", "date"),
+							::core::option::Option::Some("TimeInput") =>
+								("input", "time"),
+							::core::option::Option::Some("DateTimeInput") =>
+								("input", "datetime-local"),
+							::core::option::Option::Some("UrlInput") =>
+								("input", "url"),
+							::core::option::Option::Some("HiddenInput") =>
+								("input", "hidden"),
+							::core::option::Option::Some("ColorInput") =>
+								("input", "color"),
+							::core::option::Option::Some("RangeInput") =>
+								("input", "range"),
+							::core::option::Option::Some("TelInput") =>
+								("input", "tel"),
+							::core::option::Option::Some("SearchInput") =>
+								("input", "search"),
+							::core::option::Option::Some(_) => ("input", "text"),
+							::core::option::Option::None => match descriptor.kind {
+								#pages_crate::form::ModelFormFieldKind::Text {
+									multiline: true,
+									..
+								}
+								| #pages_crate::form::ModelFormFieldKind::Json =>
+									("textarea", "text"),
+								#pages_crate::form::ModelFormFieldKind::Email { .. } =>
+									("input", "email"),
+								#pages_crate::form::ModelFormFieldKind::Url { .. } =>
+									("input", "url"),
+								#pages_crate::form::ModelFormFieldKind::Integer { .. }
+								| #pages_crate::form::ModelFormFieldKind::Float { .. }
+								| #pages_crate::form::ModelFormFieldKind::Decimal { .. } =>
+									("input", "number"),
+								#pages_crate::form::ModelFormFieldKind::Boolean =>
+									("input", "checkbox"),
+								#pages_crate::form::ModelFormFieldKind::Date =>
+									("input", "date"),
+								#pages_crate::form::ModelFormFieldKind::Time =>
+									("input", "time"),
+								#pages_crate::form::ModelFormFieldKind::DateTime
+								| #pages_crate::form::ModelFormFieldKind::NaiveDateTime =>
+									("input", "datetime-local"),
+								#pages_crate::form::ModelFormFieldKind::Text { .. }
+								| #pages_crate::form::ModelFormFieldKind::Uuid =>
+									("input", "text"),
+							},
+						};
+						let field_name = descriptor.name;
+						let stored_value = self.__model_state.borrow().value(field_name).cloned();
+						let default_true = matches!(
+							descriptor.kind,
+							#pages_crate::form::ModelFormFieldKind::Boolean
+						) && <#schema_path as #pages_crate::form::ModelFormSchema>::default_boolean_is_true(field_name);
+						let uses_nullable_boolean_select = input_type == "checkbox"
+							&& descriptor.nullable
+							&& !default_true;
+						let (tag, input_type) = if uses_nullable_boolean_select {
+							("select", "select")
+						} else {
+							(tag, input_type)
+						};
+						let is_checkbox = input_type == "checkbox";
+						let permits_subminute_precision = matches!(
+							descriptor.kind,
+							#pages_crate::form::ModelFormFieldKind::Float { .. }
+								| #pages_crate::form::ModelFormFieldKind::Decimal { .. }
+								| #pages_crate::form::ModelFormFieldKind::Time
+								| #pages_crate::form::ModelFormFieldKind::DateTime
+								| #pages_crate::form::ModelFormFieldKind::NaiveDateTime
+						);
+
+						let checkbox_sentinel = format!("__reinhardt_checkbox_{field_name}");
+						let color_sentinel = format!("__reinhardt_color_{field_name}");
+						let range_sentinel = format!("__reinhardt_range_{field_name}");
+						let default_clear_sentinel = format!("__reinhardt_defaulted_{field_name}");
+						let control_id = format!("{}-{}", #form_id, field_name);
+						let range_default = if input_type == "range" {
+							match descriptor.kind {
+								#pages_crate::form::ModelFormFieldKind::Integer { min, max } => {
+									let min = min.unwrap_or(0);
+									let max = max.unwrap_or(100);
+									let default = if max < min {
+										min
+									} else {
+										((::core::primitive::i128::from(min)
+											+ ::core::primitive::i128::from(max)
+											+ 1)
+											.div_euclid(2)) as i64
+									};
+									::core::option::Option::Some(default.to_string())
+								}
+								#pages_crate::form::ModelFormFieldKind::Float { min, max } => {
+									let min = min.unwrap_or(0.0);
+									let max = max.unwrap_or(100.0);
+									::core::option::Option::Some(if max < min { min } else { min + (max - min) / 2.0 }.to_string())
+								}
+								#pages_crate::form::ModelFormFieldKind::Decimal { min, max } => {
+									let min = min.unwrap_or("0").parse::<f64>().unwrap_or(0.0);
+									let max = max.unwrap_or("100").parse::<f64>().unwrap_or(100.0);
+									::core::option::Option::Some(if max < min { min } else { min + (max - min) / 2.0 }.to_string())
+								}
+								_ => ::core::option::Option::None,
+							}
+						} else {
+							::core::option::Option::None
+						};
+						let mut control = #pages_crate::PageElement::new(tag)
+							.attr("name", field_name)
+							.attr("id", control_id.clone())
+							.bool_attr("required", descriptor.required && !is_checkbox);
+						if tag == "input" {
+							control = control.attr("type", input_type);
+						}
+						let color_is_unset = input_type == "color" && stored_value.is_none();
+						if uses_nullable_boolean_select {
+							control = control
+								.child(
+									#pages_crate::PageElement::new("option")
+										.attr("value", "")
+										.bool_attr("selected", stored_value.is_none())
+										.child("Unset")
+								)
+								.child(
+									#pages_crate::PageElement::new("option")
+										.attr("value", "true")
+										.bool_attr(
+											"selected",
+											matches!(
+												stored_value.as_ref(),
+												::core::option::Option::Some(
+													#pages_crate::__private::serde_json::Value::Bool(true)
+												)
+											),
+										)
+										.child("True")
+								)
+								.child(
+									#pages_crate::PageElement::new("option")
+										.attr("value", "false")
+										.bool_attr(
+											"selected",
+											matches!(
+												stored_value.as_ref(),
+												::core::option::Option::Some(
+													#pages_crate::__private::serde_json::Value::Bool(false)
+												)
+											),
+										)
+										.child("False")
+								);
+						} else if is_checkbox {
+							control = control.bool_attr(
+								"checked",
+								matches!(
+									stored_value.as_ref(),
+									::core::option::Option::Some(
+										#pages_crate::__private::serde_json::Value::Bool(true)
+									)
+								) || (stored_value.is_none() && default_true),
+							);
+						} else if input_type != "password"
+							&& let ::core::option::Option::Some(value) = stored_value.as_ref()
+						{
+							let value = if matches!(
+								descriptor.kind,
+								#pages_crate::form::ModelFormFieldKind::Json
+							) {
+								#pages_crate::__private::serde_json::to_string(&value).unwrap_or_default()
+							} else {
+								match value {
+									#pages_crate::__private::serde_json::Value::Null => ::std::string::String::new(),
+									#pages_crate::__private::serde_json::Value::String(value) => value.clone(),
+									value => value.to_string(),
+								}
+							};
+							let value = if input_type == "datetime-local"
+								&& matches!(
+									descriptor.kind,
+									#pages_crate::form::ModelFormFieldKind::DateTime
+								)
+							{
+								value.strip_suffix('Z').unwrap_or(&value).to_owned()
+							} else {
+								value
+							};
+							if tag == "textarea" {
+								control = control.child(value);
+							} else {
+								control = control.attr("value", value);
+							}
+						}
+						if permits_subminute_precision {
+							control = control.attr("step", "any");
+						}
+						if input_type == "range" {
+							match descriptor.kind {
+								#pages_crate::form::ModelFormFieldKind::Integer { min, max } => {
+									if let ::core::option::Option::Some(min) = min {
+										control = control.attr("min", min.to_string());
+									}
+									if let ::core::option::Option::Some(max) = max {
+										control = control.attr("max", max.to_string());
+									}
+								}
+								#pages_crate::form::ModelFormFieldKind::Float { min, max } => {
+									if let ::core::option::Option::Some(min) = min {
+										control = control.attr("min", min.to_string());
+									}
+									if let ::core::option::Option::Some(max) = max {
+										control = control.attr("max", max.to_string());
+									}
+								}
+								#pages_crate::form::ModelFormFieldKind::Decimal { min, max } => {
+									if let ::core::option::Option::Some(min) = min {
+										control = control.attr("min", min);
+									}
+									if let ::core::option::Option::Some(max) = max {
+										control = control.attr("max", max);
+									}
+								}
+								_ => {}
+							}
+						}
+						if input_type == "color" {
+							let color_edit_script = format!(
+								"this.form.elements['{color_sentinel}'].value='true'"
+							);
+							control = control.attr("oninput", color_edit_script);
+						}
+						if is_checkbox {
+							control = control.on(
+								#pages_crate::event::KnownEvent::Change,
+								{
+									let form = self.clone();
+									#pages_crate::typed_event_handler::<
+										#pages_crate::event::ChangeEvent,
+										_,
+									>(move |event: #pages_crate::event::ChangeEvent| {
+										if let ::core::result::Result::Ok(value) = event.checked() {
+											if let ::core::result::Result::Err(error) =
+												form.set_value(
+													field_name,
+													#pages_crate::__private::serde_json::Value::Bool(value),
+												)
+											{
+												#pages_crate::warn_log!(
+													"model form field `{}` rejected input: {}",
+													field_name,
+													error,
+												);
+											}
+										}
+									})
+								},
+							);
+						} else if uses_nullable_boolean_select {
+							control = control.on(
+								#pages_crate::event::KnownEvent::Change,
+								{
+									let form = self.clone();
+									#pages_crate::typed_event_handler::<
+										#pages_crate::event::ChangeEvent,
+										_,
+									>(move |event: #pages_crate::event::ChangeEvent| {
+										if let ::core::result::Result::Ok(value) = event.value() {
+											if let ::core::result::Result::Err(error) =
+												form.set_value(
+													field_name,
+													#pages_crate::__private::serde_json::Value::String(value),
+												)
+											{
+												#pages_crate::warn_log!(
+													"model form field `{}` rejected input: {}",
+													field_name,
+													error,
+												);
+											}
+										}
+									})
+								},
+							);
+						} else {
+							control = control.on(
+								#pages_crate::event::KnownEvent::Input,
+								{
+									let form = self.clone();
+									#pages_crate::typed_event_handler::<
+										#pages_crate::event::InputEvent,
+										_,
+									>(move |event: #pages_crate::event::InputEvent| {
+										if let ::core::result::Result::Ok(value) = event.value() {
+											if let ::core::result::Result::Err(error) =
+												form.set_value(
+													field_name,
+													#pages_crate::__private::serde_json::Value::String(value),
+												)
+											{
+												#pages_crate::warn_log!(
+													"model form field `{}` rejected input: {}",
+													field_name,
+													error,
+												);
+											}
+										}
+									})
+								},
+							);
+						}
+						let checkbox_sentinel = if uses_nullable_boolean_select {
+							::core::option::Option::Some(
+								#pages_crate::PageElement::new("input")
+									.attr("type", "hidden")
+									.attr("name", checkbox_sentinel)
+									.attr("value", "unset")
+							)
+						} else {
+							is_checkbox.then(|| {
+								#pages_crate::PageElement::new("input")
+									.attr("type", "hidden")
+									.attr("name", checkbox_sentinel)
+									.attr("value", "false")
+							})
+						};
+						let color_sentinel = (input_type == "color").then(|| {
+							#pages_crate::PageElement::new("input")
+								.attr("type", "hidden")
+								.attr("name", color_sentinel)
+								.attr("value", if color_is_unset { "false" } else { "true" })
+						});
+						let range_sentinel = (input_type == "range"
+							&& !descriptor.required
+							&& stored_value.is_none())
+							.then(|| {
+								#pages_crate::PageElement::new("input")
+									.attr("type", "hidden")
+									.attr("name", range_sentinel)
+									.attr("value", range_default.clone().unwrap_or_default())
+							});
+						let default_clear_control_id = format!("{control_id}-clear");
+						let default_clear_sentinel = (descriptor.nullable && descriptor.has_default)
+							.then(|| {
+								#pages_crate::PageElement::new("input")
+									.attr("type", "checkbox")
+									.attr("id", default_clear_control_id.clone())
+									.attr("name", default_clear_sentinel)
+									.attr("value", "true")
+									.bool_attr(
+										"checked",
+										matches!(
+											stored_value,
+											::core::option::Option::Some(
+												#pages_crate::__private::serde_json::Value::Null
+											)
+										),
+									)
+							});
+						let default_clear_label = (descriptor.nullable && descriptor.has_default)
+							.then(|| {
+								#pages_crate::PageElement::new("label")
+									.attr("for", default_clear_control_id)
+									.child("Clear value")
+							});
+
+						let mut wrapper = #pages_crate::PageElement::new("div")
+							.attr("class", "reinhardt-form-field")
+							.children(checkbox_sentinel)
+							.children(color_sentinel)
+							.children(range_sentinel)
+							.children(default_clear_sentinel)
+							.children(default_clear_label)
+							.child(
+								#pages_crate::PageElement::new("label")
+									.attr("for", control_id)
+									.child(label.to_owned())
+							)
+							.child(control);
+						if let ::core::option::Option::Some(help_text) = help_text {
+							wrapper = wrapper.child(
+								#pages_crate::PageElement::new("small")
+									.attr("class", "reinhardt-form-help")
+									.child(help_text.to_owned())
+							);
+						}
+						controls.push(wrapper);
+					}
+
+					let submit_form = self.clone();
+					#pages_crate::IntoPage::into_page(
+						#pages_crate::PageElement::new("form")
+						.attr("id", #form_id)
+						#form_class_attribute
+						.attr("method", #method)
+						.attr("action", #native_action)
+						.children(controls)
+						.child({
+							let csrf_token = #pages_crate::csrf::get_csrf_token().unwrap_or_default();
+							#pages_crate::PageElement::new("input")
+								.attr("type", "hidden")
+								.attr("name", #pages_crate::csrf::CSRF_FORM_FIELD)
+								.attr("value", csrf_token)
+						})
+						.child(
+							#pages_crate::PageElement::new("button")
+								.attr("type", "submit")
+								.child("Submit")
+						)
+						.on(
+							#pages_crate::event::KnownEvent::Submit,
+							#pages_crate::typed_event_handler::<
+								#pages_crate::event::SubmitEvent,
+								_,
+							>(move |event: #pages_crate::event::SubmitEvent| {
+								// This is mutated only by the WASM submit snapshot below.
+								#[allow(unused_mut)]
+								let mut snapshot_valid = true;
+								#[cfg(all(target_family = "wasm", target_os = "unknown"))]
+								{
+									use #pages_crate::__private::wasm_bindgen::JsCast;
+									let form = event.raw().current_target().and_then(|target| {
+										target
+											.dyn_into::<#pages_crate::__private::web_sys::HtmlFormElement>()
+											.ok()
+									});
+									if let Some(form) = form
+										&& let Ok(values) = #pages_crate::__private::web_sys::FormData::new_with_form(&form)
+									{
+										let fields = submit_form
+											.__model_state
+											.borrow()
+											.selected_descriptors()
+											.iter()
+											.filter(|descriptor| {
+											<#policy_ident as #pages_crate::form::ModelFormPolicy>::allows(
+													descriptor.name,
+												)
+											})
+											.map(|descriptor| (
+												descriptor.name,
+												matches!(
+													descriptor.kind,
+													#pages_crate::form::ModelFormFieldKind::Boolean
+												) && !(descriptor.nullable
+													&& !<#schema_path as #pages_crate::form::ModelFormSchema>::default_boolean_is_true(
+														descriptor.name,
+													)),
+													descriptor.nullable,
+													descriptor.required,
+													descriptor.has_default,
+													#is_range_override,
+													#is_color_override,
+											))
+											.collect::<::std::vec::Vec<_>>();
+										let mut state = submit_form.__model_state.borrow_mut();
+										for (field, is_checkbox, nullable, required, has_default, is_range, is_color) in fields {
+											let default_clear_sentinel = format!("__reinhardt_defaulted_{field}");
+											let clears_default = nullable
+												&& has_default
+												&& values
+													.get(&default_clear_sentinel)
+													.as_string()
+													.as_deref()
+													== ::core::option::Option::Some("true");
+											if clears_default {
+												let _ = state.set_value(
+													field,
+													#pages_crate::__private::serde_json::Value::Null,
+												);
+												continue;
+											}
+											if (is_range || is_color) && !required && state.value(field).is_none() {
+												continue;
+											}
+											if let Some(value) = values.get(field).as_string() {
+												let value = if is_checkbox {
+													#pages_crate::__private::serde_json::Value::Bool(true)
+												} else {
+													#pages_crate::__private::serde_json::Value::String(value)
+												};
+												if let ::core::result::Result::Err(error) = state.set_value(
+													field,
+													value,
+												) {
+													snapshot_valid = false;
+													submit_form.error.set(::core::option::Option::Some(error.to_string()));
+												}
+											} else if is_checkbox
+												&& !nullable
+												&& !(has_default && state.value(field).is_none())
+											{
+												let _ = state.set_value(field, #pages_crate::__private::serde_json::Value::Bool(false));
+											}
+										}
+									}
+								}
+								event.prevent_default();
+								if !snapshot_valid {
+									return;
+								}
+								#[cfg(all(target_family = "wasm", target_os = "unknown"))]
+								{
+									let form = submit_form.clone();
+									#pages_crate::platform::spawn_task(async move {
+										let _ = form.submit().await;
+									});
+								}
+								#[cfg(not(all(target_family = "wasm", target_os = "unknown")))]
+								{
+									let _ = &submit_form;
+								}
+							}),
+						)
+					)
+				}
+			}
+
+			impl #pages_crate::FormRuntimeSource for #form_ident {
+				type Values = __ReinhardtModelFormValues;
+				type Field = __ReinhardtModelFormField;
+
+				fn runtime_initial_values(&self) -> Self::Values {
+					self.runtime_current_values()
+				}
+
+				fn runtime_current_values(&self) -> Self::Values {
+					let _ = self.__state_version.get();
+					let state = self.__model_state.borrow();
+					__ReinhardtModelFormValues(
+						state
+							.selected_descriptors()
+							.iter()
+							.filter_map(|descriptor| {
+								if !<#policy_ident as #pages_crate::form::ModelFormPolicy>::allows(descriptor.name) {
+									return ::core::option::Option::None;
+								}
+								state.value(descriptor.name).cloned().map(|value| {
+									(descriptor.name.to_owned(), value)
+								})
+							})
+							.collect(),
+					)
+				}
+
+				fn runtime_apply_values(&self, values: &Self::Values) {
+					let mut state = self.__model_state.borrow_mut();
+					state.clear_selected_values();
+					for (field, value) in &values.0 {
+						let _ = state.set_value(field, value.clone());
+					}
+					drop(state);
+					self.__state_version.update(|version| *version = version.wrapping_add(1));
+				}
+
+				fn runtime_set_field_value<T>(&self, field: Self::Field, _value: T)
+				where
+					T: ::core::any::Any + 'static,
+				{
+					match field {
+						__ReinhardtModelFormField::State => {}
+					}
+				}
+
+				fn runtime_values_are_dirty(
+					&self,
+					current: &Self::Values,
+					defaults: &Self::Values,
+				) -> bool {
+					current != defaults
+				}
+
+				fn runtime_apply_field_value(&self, field: Self::Field, _values: &Self::Values) {
+					match field {
+						__ReinhardtModelFormField::State => {}
+					}
+				}
+
+				fn runtime_field_is_dirty(
+					&self,
+					field: Self::Field,
+					current: &Self::Values,
+					defaults: &Self::Values,
+				) -> bool {
+					match field {
+						__ReinhardtModelFormField::State => current != defaults,
+					}
+				}
+
+				fn runtime_watch_field<T>(
+					&self,
+					field: Self::Field,
+				) -> ::core::option::Option<#pages_crate::Signal<T>>
+				where
+					T: Clone + 'static,
+				{
+					match field {
+						__ReinhardtModelFormField::State => ::core::option::Option::None,
+					}
+				}
+
+				fn runtime_fields(&self) -> &'static [Self::Field] {
+					&[__ReinhardtModelFormField::State]
+				}
+			}
+
+			let __reinhardt_form = #form_ident::new();
+			__reinhardt_form
+		}
+	}
+}
+
 /// Generates the complete code for a form! macro invocation.
 ///
 /// This function generates conditional code that works for both WASM and server builds.
@@ -1911,6 +2858,9 @@ pub(super) fn generate(
 	let crate_info = get_reinhardt_pages_crate_info();
 	let use_statement = &crate_info.use_statement;
 	let pages_crate = &crate_info.ident;
+	if let Some(model_source) = &macro_ast.model_source {
+		return generate_model_form(macro_ast, model_source, pages_crate, use_statement);
+	}
 
 	let struct_name = &macro_ast.name;
 	let ambient_argument_deprecation_markers =
@@ -6873,6 +7823,92 @@ mod tests {
 
 		// Check action
 		assert!(output_str.contains("/api/login"));
+	}
+
+	#[rstest::rstest]
+	fn test_generate_model_temporal_controls_preserve_html_precision_and_local_values() {
+		let input = quote! {
+			name: TemporalControlsForm,
+			model: TemporalDocument,
+			policy: TemporalDocumentFields,
+			fields: [aware_at, naive_at, starts_at],
+			server_fn: save_temporal_document,
+			class: "temporal-form",
+		};
+
+		let output = parse_validate_generate(input);
+		let output_str = output.to_string();
+
+		assert!(output_str.contains("ModelFormFieldKind :: Time"));
+		assert!(output_str.contains("ModelFormFieldKind :: DateTime"));
+		assert!(output_str.contains("ModelFormFieldKind :: NaiveDateTime"));
+		assert!(output_str.contains("control = control . attr (\"step\" , \"any\")"));
+		assert!(output_str.contains("value . strip_suffix ('Z')"));
+		assert!(output_str.contains("TemporalDocumentFields"));
+		assert!(output_str.contains("ServerFnMetadata"));
+		assert!(output_str.contains(":: PATH"));
+		assert!(output_str.contains("temporal-form"));
+		assert!(output_str.contains("__reinhardt_checkbox_"));
+		assert!(output_str.contains("__reinhardt_color_"));
+		assert!(output_str.contains("__reinhardt_range_"));
+		assert!(output_str.contains("let changed = previous != state . value (field) . cloned ()"));
+		assert!(output_str.contains("let _ = self . __state_version . get ()"));
+		assert!(output_str.contains("ModelFormPolicy"));
+		assert!(output_str.contains("selected_descriptors () . iter () . filter (| descriptor |"));
+		assert!(output_str.contains("__ReinhardtModelFormField :: State"));
+		assert!(output_str.contains("FormRuntimeSource for TemporalControlsForm"));
+	}
+
+	#[rstest::rstest]
+	fn test_generate_model_color_snapshot_uses_descriptor_metadata() {
+		let input = quote! {
+			name: PaletteForm,
+			model: Palette,
+			policy: PaletteFields,
+			fields: [accent],
+			server_fn: save_palette,
+			overrides: {
+				accent: { widget: ColorInput },
+			},
+		};
+
+		let output = parse_validate_generate(input).to_string();
+
+		assert!(output.contains("let fields = submit_form"));
+		assert!(output.contains("matches ! (descriptor . name , \"accent\")"));
+		assert!(output.contains("input_type == \"color\" && stored_value . is_none ()"));
+		assert!(output.contains("__reinhardt_defaulted_"));
+		assert!(output.contains("using the generated default"));
+		assert!(!output.contains("panic !"));
+	}
+
+	#[rstest::rstest]
+	fn test_generate_model_form_uses_endpoint_policy_and_safe_native_controls() {
+		let input = quote! {
+			name: QuestionForm,
+			model: Question,
+			policy: QuestionSubmissionPolicy,
+			fields: [title, published, score],
+			server_fn: save_question,
+			overrides: {
+				score: { widget: RangeInput },
+			},
+		};
+
+		let output = parse_validate_generate(input).to_string();
+
+		assert!(output.contains("QuestionModelFormData < QuestionSubmissionPolicy >"));
+		assert!(
+			!output.contains("QuestionModelFormData < QuestionFormSelectionPolicy >"),
+			"the public data alias must remain assignable to the server endpoint payload"
+		);
+		assert!(output.contains("i128 :: from (min)"));
+		assert!(output.contains("Value :: Null => :: std :: string :: String :: new ()"));
+		assert!(output.contains("child (\"Unset\")"));
+		assert!(output.contains("__reinhardt_checkbox_"));
+		assert!(output.contains("\"unset\""));
+		assert!(output.contains("Clear value"));
+		assert!(!output.contains("checkbox_edit_script"));
 	}
 
 	#[rstest::rstest]

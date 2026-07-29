@@ -121,6 +121,8 @@ pub struct TypedFormMacro {
 	pub slots: Option<TypedFormSlots>,
 	/// Validated field definitions (can include field groups and collections)
 	pub fields: Vec<TypedFormFieldEntry>,
+	/// Validated source for a model-backed form.
+	pub model_source: Option<TypedModelFormSource>,
 	/// Validated unified validators. Each rule carries a `ValidatorScope`
 	/// controlling whether it executes on server, client, or both.
 	pub validators: Vec<TypedFormValidator>,
@@ -132,6 +134,41 @@ pub struct TypedFormMacro {
 	pub strip_arguments: Vec<TypedStripArgument>,
 	/// Span for error reporting
 	pub span: Span,
+}
+
+/// Validated source configuration for a model-backed form.
+#[derive(Debug, Clone)]
+pub struct TypedModelFormSource {
+	/// Model type used to generate form fields.
+	pub model: Path,
+	/// Nameable policy enforced by the server-function payload.
+	pub policy: Path,
+	/// Validated field selection policy.
+	pub selection: TypedModelFieldSelection,
+	/// Validated presentation overrides for selected fields.
+	pub overrides: Vec<TypedModelFieldOverride>,
+}
+
+/// Validated selection policy for a model-backed form.
+#[derive(Debug, Clone)]
+pub enum TypedModelFieldSelection {
+	/// Include only the listed model fields.
+	Fields(Vec<Ident>),
+	/// Include every model field except the listed identifiers.
+	Exclude(Vec<Ident>),
+}
+
+/// Validated presentation override for one model-backed form field.
+#[derive(Debug, Clone)]
+pub struct TypedModelFieldOverride {
+	/// Model field receiving the override.
+	pub field: Ident,
+	/// Validated widget selection.
+	pub widget: Option<TypedWidget>,
+	/// Display label.
+	pub label: Option<String>,
+	/// Help text shown with the field.
+	pub help_text: Option<String>,
 }
 
 /// Typed form action configuration.
@@ -1698,6 +1735,7 @@ impl TypedFormMacro {
 			choices_loader: None,
 			slots: None,
 			fields: Vec::new(),
+			model_source: None,
 			validators: Vec::new(),
 			strip_arguments: Vec::new(),
 			span,

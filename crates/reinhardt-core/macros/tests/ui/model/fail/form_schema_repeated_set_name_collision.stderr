@@ -1,0 +1,5 @@
+error: editable model field name collides with generated model-form API; rename the field or set editable = false
+  --> tests/ui/model/fail/form_schema_repeated_set_name_collision.rs:12:2
+   |
+12 |     set_set_foo: String,
+   |     ^^^^^^^^^^^

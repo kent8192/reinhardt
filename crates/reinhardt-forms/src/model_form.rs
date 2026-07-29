@@ -3,98 +3,103 @@
 //! ModelForms automatically generate forms from ORM models, handling field
 //! inference, validation, and saving.
 
-use crate::{CharField, EmailField, FloatField, Form, FormError, FormField, IntegerField, Widget};
+mod error;
+mod field_factory;
+
+pub use error::ModelFormError;
+
+use crate::Form;
+use crate::form::ALL_FIELDS_KEY;
+use reinhardt_core::model_form::{
+	AllEditableModelFields, ModelFormFieldKind, ModelFormPayload, ModelFormPayloadError,
+	ModelFormPolicy, ModelFormPrimaryKeyFields, ModelFormSchema,
+};
+use reinhardt_db::orm::transaction::AtomicTransactionOutcome;
+use reinhardt_db::orm::{Model, OrmExecutor};
 use serde_json::Value;
 use std::collections::HashMap;
 use std::marker::PhantomData;
 
-/// Field type metadata for ModelForm field inference
-#[derive(Debug, Clone)]
-pub enum FieldType {
-	/// Character field with optional maximum length constraint.
-	Char {
-		/// Maximum character length, if any.
-		max_length: Option<usize>,
-	},
-	/// Multi-line text field rendered as a textarea.
-	Text,
-	/// Integer number field.
-	Integer,
-	/// Floating-point number field.
-	Float,
-	/// Boolean field rendered as a checkbox.
-	Boolean,
-	/// Date and time field.
-	DateTime,
-	/// Date-only field.
-	Date,
-	/// Time-only field.
-	Time,
-	/// Email address field with format validation.
-	Email,
-	/// URL field with format validation.
-	Url,
-	/// JSON data field.
-	Json,
+/// Explicit persistence operation used for an already validated model candidate.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ModelFormPersistenceMode {
+	/// Insert a candidate created from a form payload.
+	Create,
+	/// Update a candidate built from an existing model instance.
+	Update,
 }
 
-/// Trait for models that can be used with ModelForm
-///
-/// This trait is specifically for form models. For ORM models, use `reinhardt_db::orm::Model`.
-pub trait FormModel: Send + Sync {
-	/// Get the model's field names
-	fn field_names() -> Vec<String>;
+/// Native bridge generated for models that opt in to model-backed forms.
+// The native model form contract intentionally exposes an async persistence method.
+#[allow(async_fn_in_trait)]
+pub trait FormModel: Model + ModelFormPrimaryKeyFields + Clone + Send + Sync {
+	/// Generated descriptor schema for this model.
+	type Schema: ModelFormSchema<Model = Self>;
+	/// Generated typed payload under the active field policy.
+	type Data<P: ModelFormPolicy>: ModelFormPayload<P>;
 
-	/// Get field type metadata for form field inference
+	/// Builds a create candidate from supplied values and declared model defaults.
+	fn build_from_payload<P: ModelFormPolicy>(data: &Self::Data<P>)
+	-> Result<Self, ModelFormError>;
+
+	/// Builds a validation-only candidate while allowing one trusted deferred field.
 	///
-	/// # Examples
-	///
-	/// ```ignore
-	/// # use reinhardt_forms::model_form::FieldType;
-	/// fn field_type(name: &str) -> Option<FieldType> {
-	///     match name {
-	///         "name" => Some(FieldType::Char { max_length: Some(100) }),
-	///         "email" => Some(FieldType::Email),
-	///         "age" => Some(FieldType::Integer),
-	///         _ => None,
-	///     }
-	/// }
-	/// ```
-	fn field_type(_name: &str) -> Option<FieldType> {
+	/// Inline formsets use this before a newly created parent has a generated
+	/// primary key. Implementations must use the deferred field only to construct
+	/// the candidate for validation; persistence must still require its real value.
+	fn build_from_payload_with_deferred_required_field<P: ModelFormPolicy>(
+		data: &Self::Data<P>,
+		deferred_field: &str,
+	) -> Result<Self, ModelFormError> {
+		let _ = deferred_field;
+		Self::build_from_payload(data)
+	}
+
+	/// Applies supplied payload values to an existing candidate.
+	fn apply_payload<P: ModelFormPolicy>(
+		&mut self,
+		data: &Self::Data<P>,
+	) -> Result<(), ModelFormError>;
+
+	/// Applies a server-trusted relationship value excluded from public payloads.
+	fn set_trusted_field_json(&mut self, field: &str, value: Value) -> Result<(), ModelFormError> {
+		let _ = value;
+		Err(ModelFormError::FieldValidation {
+			errors: HashMap::from([(
+				field.to_owned(),
+				vec!["unknown trusted model field".to_owned()],
+			)]),
+		})
+	}
+
+	/// Returns the input kind accepted by a server-trusted relationship field.
+	fn trusted_relation_field_kind(_field: &str) -> Option<ModelFormFieldKind> {
 		None
 	}
 
-	/// Get a field value by name
-	fn get_field(&self, name: &str) -> Option<Value>;
+	/// Persists this candidate using an explicit create or update operation.
+	async fn save_with_mode(
+		&mut self,
+		executor: &mut dyn OrmExecutor,
+		mode: ModelFormPersistenceMode,
+	) -> Result<(), ModelFormError>;
 
-	/// Set a field value by name
-	fn set_field(&mut self, name: &str, value: Value) -> Result<(), String>;
-
-	/// Save the model to the database
-	fn save(&mut self) -> Result<(), String>;
-
-	/// Run model-level (cross-field) validation hook.
+	/// Inserts this candidate using the caller-owned ORM executor.
 	///
-	/// This is an opt-in extension point invoked by [`ModelForm::is_valid`]
-	/// *after* per-field validation has already succeeded. The default
-	/// implementation intentionally performs no extra validation and returns
-	/// `Ok(())`; per-field validation is fully handled by the form's
-	/// [`crate::Form::is_valid`] pipeline.
-	///
-	/// Implementers SHOULD override this method when they need cross-field
-	/// invariants (e.g. "end_date must be after start_date") that cannot be
-	/// expressed at the individual field level.
-	///
-	/// Returns `Ok(())` when the model passes all cross-field invariants, or
-	/// `Err(messages)` with one or more human-readable error messages.
-	fn validate(&self) -> Result<(), Vec<String>> {
-		Ok(())
+	/// Call [`Self::save_with_mode`] with [`ModelFormPersistenceMode::Update`]
+	/// when persisting a known existing model.
+	async fn save(&mut self, executor: &mut dyn OrmExecutor) -> Result<(), ModelFormError> {
+		self.save_with_mode(executor, ModelFormPersistenceMode::Create)
+			.await
 	}
 
 	/// Convert model instance to a choice label for display in forms
 	///
 	/// Default implementation returns the string representation of the primary key.
-	/// Override this method to provide custom display labels.
+	///
+	/// Derive-generated implementations use this default. Configure a
+	/// [`crate::ModelChoiceField`] or [`crate::ModelMultipleChoiceField`] with
+	/// its `choice_label` callback when an application needs a custom label.
 	///
 	/// # Examples
 	///
@@ -107,13 +112,8 @@ pub trait FormModel: Send + Sync {
 	/// # }
 	/// ```
 	fn to_choice_label(&self) -> String {
-		// Default: use the "id" field or empty string
-		self.get_field("id")
-			.and_then(|v| v.as_i64().map(|i| i.to_string()))
-			.or_else(|| {
-				self.get_field("id")
-					.and_then(|v| v.as_str().map(|s| s.to_string()))
-			})
+		self.primary_key()
+			.map(|primary_key| primary_key.to_string())
 			.unwrap_or_default()
 	}
 
@@ -132,357 +132,359 @@ pub trait FormModel: Send + Sync {
 	/// # }
 	/// ```
 	fn to_choice_value(&self) -> String {
-		self.get_field("id")
-			.and_then(|v| v.as_i64().map(|i| i.to_string()))
-			.or_else(|| {
-				self.get_field("id")
-					.and_then(|v| v.as_str().map(|s| s.to_string()))
-			})
+		self.primary_key()
+			.map(|primary_key| primary_key.to_string())
 			.unwrap_or_default()
 	}
 }
 
-/// ModelForm configuration
-#[derive(Debug, Clone, Default)]
-pub struct ModelFormConfig {
-	/// Fields to include in the form (None = all fields)
-	pub fields: Option<Vec<String>>,
-	/// Fields to exclude from the form
-	pub exclude: Vec<String>,
-	/// Custom widgets for specific fields
-	pub widgets: HashMap<String, crate::Widget>,
-	/// Custom labels for specific fields
-	pub labels: HashMap<String, String>,
-	/// Custom help text for specific fields
-	pub help_texts: HashMap<String, String>,
+type ModelValidator<T> = dyn Fn(&T) -> Result<(), Vec<String>> + Send + Sync;
+
+struct PendingTransactionSave<T> {
+	outcome: AtomicTransactionOutcome,
+	candidate_before_save: T,
+	instance_before_save: Option<T>,
+	persistence_mode_before_save: ModelFormPersistenceMode,
 }
 
-impl ModelFormConfig {
-	/// Creates a new default configuration.
-	pub fn new() -> Self {
-		Self::default()
-	}
-	/// Sets the list of fields to include in the generated form.
-	pub fn fields(mut self, fields: Vec<String>) -> Self {
-		self.fields = Some(fields);
-		self
-	}
-	/// Sets the list of fields to exclude from the generated form.
-	pub fn exclude(mut self, exclude: Vec<String>) -> Self {
-		self.exclude = exclude;
-		self
-	}
-	/// Overrides the widget for a specific field.
-	pub fn widget(mut self, field: String, widget: crate::Widget) -> Self {
-		self.widgets.insert(field, widget);
-		self
-	}
-	/// Sets a custom label for a specific field.
-	pub fn label(mut self, field: String, label: String) -> Self {
-		self.labels.insert(field, label);
-		self
-	}
-	/// Sets custom help text for a specific field.
-	pub fn help_text(mut self, field: String, text: String) -> Self {
-		self.help_texts.insert(field, text);
-		self
-	}
-}
-
-/// A form that is automatically generated from a Model
-pub struct ModelForm<T: FormModel> {
+/// A native form that validates a generated payload and persists model candidates.
+pub struct ModelForm<T, P = AllEditableModelFields>
+where
+	T: FormModel,
+	P: ModelFormPolicy,
+{
 	form: Form,
+	data: T::Data<P>,
+	supplied_fields: Vec<&'static str>,
 	instance: Option<T>,
-	// Allow dead_code: config stored for future form rendering customization
-	#[allow(dead_code)]
-	config: ModelFormConfig,
-	_phantom: PhantomData<T>,
+	validated_candidate: Option<T>,
+	trusted_field_values: HashMap<String, Value>,
+	persistence_mode: ModelFormPersistenceMode,
+	pending_transaction_save: Option<PendingTransactionSave<T>>,
+	model_validator: Option<Box<ModelValidator<T>>>,
+	_policy: PhantomData<P>,
 }
 
-impl<T: FormModel> ModelForm<T> {
-	/// Create a form field from field type metadata
-	fn create_form_field(
-		name: &str,
-		field_type: FieldType,
-		config: &ModelFormConfig,
-	) -> Box<dyn FormField> {
-		let label = config.labels.get(name).cloned();
-		let help_text = config.help_texts.get(name).cloned();
-		let widget = config.widgets.get(name).cloned();
-
-		match field_type {
-			FieldType::Char { max_length } => {
-				let mut field = CharField::new(name.to_string());
-				if let Some(label) = label {
-					field.label = Some(label);
-				}
-				if let Some(help) = help_text {
-					field.help_text = Some(help);
-				}
-				if let Some(w) = widget {
-					field.widget = w;
-				}
-				field.max_length = max_length;
-				Box::new(field)
-			}
-			FieldType::Text => {
-				let mut field = CharField::new(name.to_string());
-				if let Some(label) = label {
-					field.label = Some(label);
-				}
-				if let Some(help) = help_text {
-					field.help_text = Some(help);
-				}
-				if let Some(w) = widget {
-					field.widget = w;
-				} else {
-					field.widget = Widget::TextArea;
-				}
-				Box::new(field)
-			}
-			FieldType::Email => {
-				let mut field = EmailField::new(name.to_string());
-				if let Some(label) = label {
-					field.label = Some(label);
-				}
-				if let Some(help) = help_text {
-					field.help_text = Some(help);
-				}
-				if let Some(w) = widget {
-					field.widget = w;
-				}
-				Box::new(field)
-			}
-			FieldType::Integer => {
-				let mut field = IntegerField::new(name.to_string());
-				if let Some(label) = label {
-					field.label = Some(label);
-				}
-				if let Some(help) = help_text {
-					field.help_text = Some(help);
-				}
-				if let Some(w) = widget {
-					field.widget = w;
-				}
-				Box::new(field)
-			}
-			FieldType::Float => {
-				let mut field = FloatField::new(name.to_string());
-				if let Some(label) = label {
-					field.label = Some(label);
-				}
-				if let Some(help) = help_text {
-					field.help_text = Some(help);
-				}
-				if let Some(w) = widget {
-					field.widget = w;
-				}
-				Box::new(field)
-			}
-			// For unsupported types, default to CharField
-			_ => {
-				let mut field = CharField::new(name.to_string());
-				if let Some(label) = label {
-					field.label = Some(label);
-				}
-				if let Some(help) = help_text {
-					field.help_text = Some(help);
-				}
-				if let Some(w) = widget {
-					field.widget = w;
-				}
-				Box::new(field)
-			}
-		}
-	}
-
-	/// Create a new ModelForm from a model instance
-	///
-	/// # Examples
-	///
-	/// ```ignore
-	/// use reinhardt_forms::{ModelForm, ModelFormConfig};
-	///
-	/// // Assuming we have a model that implements the Model trait
-	/// let config = ModelFormConfig::new();
-	/// let form = ModelForm::new(Some(instance), config);
-	/// ```
-	pub fn new(instance: Option<T>, config: ModelFormConfig) -> Self {
+impl<T, P> ModelForm<T, P>
+where
+	T: FormModel,
+	P: ModelFormPolicy,
+{
+	fn initialize(
+		data: T::Data<P>,
+		instance: Option<T>,
+		persistence_mode: ModelFormPersistenceMode,
+	) -> Self {
+		let supplied_fields = data.supplied_fields();
 		let mut form = Form::new();
+		let mut form_data = HashMap::new();
 
-		// Get field names from model
-		let all_fields = T::field_names();
-
-		// Filter fields based on config
-		let fields_to_include: Vec<String> = if let Some(ref include) = config.fields {
-			include
-				.iter()
-				.filter(|f| !config.exclude.contains(f))
-				.cloned()
-				.collect()
-		} else {
-			all_fields
-				.iter()
-				.filter(|f| !config.exclude.contains(f))
-				.cloned()
-				.collect()
-		};
-
-		// Infer field types from model metadata and add to form
-		for field_name in &fields_to_include {
-			if let Some(field_type) = T::field_type(field_name) {
-				let form_field = Self::create_form_field(field_name, field_type, &config);
-				form.add_field(form_field);
-			}
-		}
-
-		// If instance exists, populate initial data from the instance
-		if let Some(ref inst) = instance {
-			let mut initial = HashMap::new();
-			for field_name in &fields_to_include {
-				if let Some(value) = inst.get_field(field_name) {
-					initial.insert(field_name.clone(), value);
+		for descriptor in T::Schema::fields() {
+			if descriptor.editable
+				&& P::allows(descriptor.name)
+				&& supplied_fields.contains(&descriptor.name)
+			{
+				let explicit_null = descriptor.nullable
+					&& data
+						.get_json(descriptor.name)
+						.is_some_and(|value| value.is_null());
+				if explicit_null {
+					continue;
+				}
+				form.add_field(field_factory::create_form_field(descriptor));
+				if let Some(value) = data.get_json(descriptor.name) {
+					form_data.insert(descriptor.name.to_owned(), value);
 				}
 			}
-			form.bind(initial);
 		}
+		form.bind(form_data);
 
 		Self {
 			form,
+			data,
+			supplied_fields,
 			instance,
-			config,
-			_phantom: PhantomData,
+			validated_candidate: None,
+			trusted_field_values: HashMap::new(),
+			persistence_mode,
+			pending_transaction_save: None,
+			model_validator: None,
+			_policy: PhantomData,
 		}
 	}
-	/// Create a new ModelForm without an instance (for creation)
-	///
-	/// # Examples
-	///
-	/// ```ignore
-	/// use reinhardt_forms::{ModelForm, ModelFormConfig};
-	///
-	/// let config = ModelFormConfig::new();
-	/// let form = ModelForm::<MyModel>::empty(config);
-	/// ```
-	pub fn empty(config: ModelFormConfig) -> Self {
-		Self::new(None, config)
+
+	/// Creates a model form for a new instance.
+	pub fn from_payload(data: T::Data<P>) -> Self {
+		Self::initialize(data, None, ModelFormPersistenceMode::Create)
 	}
-	/// Bind data to the form
-	///
-	/// # Examples
-	///
-	/// ```ignore
-	/// use reinhardt_forms::{ModelForm, ModelFormConfig};
-	/// use std::collections::HashMap;
-	/// use serde_json::json;
-	///
-	/// let config = ModelFormConfig::new();
-	/// let mut form = ModelForm::<MyModel>::empty(config);
-	/// let mut data = HashMap::new();
-	/// data.insert("field".to_string(), json!("value"));
-	/// form.bind(data);
-	/// ```
-	pub fn bind(&mut self, data: HashMap<String, Value>) -> &mut Self {
-		// Bind data to the underlying form
-		self.form.bind(data);
+
+	/// Creates a model form that applies a payload to an existing instance.
+	pub fn from_payload_and_instance(data: T::Data<P>, instance: T) -> Self {
+		Self::initialize(data, Some(instance), ModelFormPersistenceMode::Update)
+	}
+
+	/// Installs a model-level validator that runs after cleaned values are applied.
+	pub fn with_model_validator(
+		mut self,
+		validator: impl Fn(&T) -> Result<(), Vec<String>> + Send + Sync + 'static,
+	) -> Self {
+		self.model_validator = Some(Box::new(validator));
+		self.validated_candidate = None;
 		self
 	}
-	/// Check if the form is valid
-	///
-	/// # Examples
-	///
-	/// ```ignore
-	/// use reinhardt_forms::{ModelForm, ModelFormConfig};
-	///
-	/// let config = ModelFormConfig::new();
-	/// let mut form = ModelForm::<MyModel>::empty(config);
-	/// let is_valid = form.is_valid();
-	/// ```
-	pub fn is_valid(&mut self) -> bool {
-		// Step 1: per-field validation via the underlying `Form` pipeline.
-		// This runs `clean`, custom field-clean callbacks, CSRF checks, and
-		// populates `cleaned_data()`. Without this call, ModelForm would
-		// accept any bound data unconditionally (skeleton always-Ok).
-		if !self.form.is_valid() {
-			return false;
+	fn clean_payload(&mut self) -> Result<(), ModelFormError> {
+		if let Some(field) = self.data.forbidden_fields().first() {
+			return Err(ModelFormError::ForbiddenInput { field });
 		}
-
-		// Step 2: optional cross-field validation hook on the model.
-		// Capture the messages returned by `FormModel::validate` into the
-		// underlying `Form`'s non-field error bucket (keyed by `ALL_FIELDS_KEY`)
-		// so callers can retrieve them through `form().errors()` instead of
-		// only learning that validation failed.
-		if let Some(ref instance) = self.instance
-			&& let Err(messages) = instance.validate()
+		if self.persistence_mode == ModelFormPersistenceMode::Update
+			&& let Some(field) = T::primary_key_fields()
+				.iter()
+				.copied()
+				.find(|field| self.supplied_fields.contains(field))
 		{
-			for message in messages {
-				self.form.add_error(crate::form::ALL_FIELDS_KEY, message);
-			}
-			return false;
+			return Err(ModelFormError::FieldValidation {
+				errors: HashMap::from([(
+					field.to_owned(),
+					vec!["model form primary keys cannot be updated".to_owned()],
+				)]),
+			});
 		}
 
-		true
+		if !self.form.is_valid() {
+			return Err(ModelFormError::FieldValidation {
+				errors: self.form.errors().clone(),
+			});
+		}
+
+		for field in &self.supplied_fields {
+			let Some(value) = self.form.cleaned_data().get(*field).cloned() else {
+				continue;
+			};
+			self.data.set_json(field, value).map_err(|error| {
+				let message = error.to_string();
+				match error {
+					ModelFormPayloadError::ForbiddenField { .. } => {
+						ModelFormError::ForbiddenInput { field }
+					}
+					ModelFormPayloadError::UnknownField { .. }
+					| ModelFormPayloadError::InvalidValue { .. } => ModelFormError::FieldValidation {
+						errors: HashMap::from([((*field).to_owned(), vec![message])]),
+					},
+				}
+			})?;
+		}
+
+		Ok(())
 	}
-	/// Save the form data to the model instance
-	///
-	/// Returns `FormError::NoInstance` if no model instance is available.
-	///
-	/// # Examples
-	///
-	/// ```ignore
-	/// use reinhardt_forms::{ModelForm, ModelFormConfig};
-	///
-	/// let config = ModelFormConfig::new();
-	/// let mut form = ModelForm::<MyModel>::empty(config);
-	/// // Returns Err(FormError::NoInstance) without an instance
-	/// assert!(form.save().is_err());
-	/// ```
-	pub fn save(&mut self) -> Result<T, FormError> {
-		// Surface the missing-instance error first so callers can distinguish
-		// "no model to save into" from "data failed validation".
-		if self.instance.is_none() {
-			return Err(FormError::NoInstance);
+
+	/// Validates the payload and builds a model candidate without database access.
+	pub fn build_instance(&mut self) -> Result<T, ModelFormError> {
+		if let Some(candidate) = &self.validated_candidate {
+			return Ok(candidate.clone());
 		}
 
-		if !self.is_valid() {
-			return Err(FormError::Validation("Form is not valid".to_string()));
+		self.clean_payload()?;
+		let mut candidate = match &self.instance {
+			Some(instance) => instance.clone(),
+			None => match self.trusted_field_values.keys().next() {
+				Some(field) => {
+					T::build_from_payload_with_deferred_required_field(&self.data, field)?
+				}
+				None => T::build_from_payload(&self.data)?,
+			},
+		};
+		candidate.apply_payload(&self.data)?;
+		for (field, value) in &self.trusted_field_values {
+			T::set_trusted_field_json(&mut candidate, field, value.clone())?;
 		}
 
-		// Keep this path non-panicking even though presence was checked above:
-		// future invariant drift should surface a typed error rather than aborting
-		// the process.
-		let mut instance = self.instance.take().ok_or(FormError::NoInstance)?;
+		if let Some(validator) = &self.model_validator {
+			validator(&candidate).map_err(|errors| ModelFormError::ModelValidation { errors })?;
+		}
 
-		// Set field values from form's cleaned_data
-		let cleaned_data = self.form.cleaned_data();
-		for (field_name, value) in cleaned_data.iter() {
-			if let Err(e) = instance.set_field(field_name, value.clone()) {
-				return Err(FormError::Validation(format!(
-					"Failed to set field {}: {}",
-					field_name, e
-				)));
+		self.validated_candidate = Some(candidate.clone());
+		Ok(candidate)
+	}
+
+	/// Returns whether the current payload can produce a valid model candidate.
+	pub fn is_valid(&mut self) -> bool {
+		match self.build_instance() {
+			Ok(_) => true,
+			Err(error) => {
+				self.record_validation_error(&error);
+				false
 			}
 		}
-
-		// Save the instance
-		if let Err(e) = instance.save() {
-			return Err(FormError::Validation(format!("Failed to save: {}", e)));
-		}
-
-		Ok(instance)
 	}
-	/// Set a field value directly on the model instance.
-	///
-	/// This is used by `InlineFormSet` to set foreign key values on child
-	/// instances before saving.
-	///
-	/// If no instance exists, this method is a no-op.
-	pub fn set_field_value(&mut self, field_name: &str, value: Value) {
-		if let Some(ref mut instance) = self.instance {
-			// Silently ignore errors from set_field, as the field may not exist
-			// on all model types (defensive approach for inline formsets)
-			let _ = instance.set_field(field_name, value);
+
+	fn record_validation_error(&mut self, error: &ModelFormError) {
+		match error {
+			ModelFormError::ForbiddenInput { field }
+			| ModelFormError::MissingModelField { field } => {
+				self.form.add_error(*field, error.to_string());
+			}
+			ModelFormError::FieldValidation { errors } => {
+				for (field, messages) in errors {
+					for message in messages {
+						let already_recorded = self
+							.form
+							.errors()
+							.get(field)
+							.is_some_and(|existing| existing.contains(message));
+						if !already_recorded {
+							self.form.add_error(field, message);
+						}
+					}
+				}
+			}
+			ModelFormError::ModelValidation { errors } => {
+				for message in errors {
+					self.form.add_error(ALL_FIELDS_KEY, message);
+				}
+			}
+			ModelFormError::Persistence { .. }
+			| ModelFormError::PersistenceAfterCreate { .. }
+			| ModelFormError::TransactionOutcomePending => {}
 		}
+	}
+
+	/// Persists a validated candidate through the caller-owned executor.
+	pub async fn save(&mut self, executor: &mut dyn OrmExecutor) -> Result<T, ModelFormError> {
+		self.finalize_transaction_save()?;
+		if self.validated_candidate.is_none() {
+			self.build_instance()?;
+		}
+
+		let candidate = self
+			.validated_candidate
+			.as_mut()
+			.expect("build_instance caches a validated candidate");
+		let candidate_before_save = candidate.clone();
+		let instance_before_save = self.instance.clone();
+		let persistence_mode_before_save = self.persistence_mode;
+		let transaction_outcome = executor.transaction_outcome();
+		if let Err(error) =
+			FormModel::save_with_mode(candidate, executor, self.persistence_mode).await
+		{
+			if matches!(error, ModelFormError::PersistenceAfterCreate { .. }) {
+				if let Some(outcome) = transaction_outcome {
+					self.pending_transaction_save = Some(PendingTransactionSave {
+						outcome,
+						candidate_before_save,
+						instance_before_save,
+						persistence_mode_before_save,
+					});
+				} else {
+					self.persistence_mode = ModelFormPersistenceMode::Update;
+				}
+			}
+			return Err(error);
+		}
+		let saved = candidate.clone();
+		self.instance = Some(saved.clone());
+		if let Some(outcome) = transaction_outcome {
+			self.pending_transaction_save = Some(PendingTransactionSave {
+				outcome,
+				candidate_before_save,
+				instance_before_save,
+				persistence_mode_before_save,
+			});
+		} else {
+			self.persistence_mode = ModelFormPersistenceMode::Update;
+		}
+		Ok(saved)
+	}
+
+	fn finalize_transaction_save(&mut self) -> Result<(), ModelFormError> {
+		let Some(pending) = self.pending_transaction_save.take() else {
+			return Ok(());
+		};
+		if pending.outcome.is_committed() {
+			self.persistence_mode = ModelFormPersistenceMode::Update;
+			return Ok(());
+		}
+		if pending.outcome.is_rolled_back() {
+			self.instance = pending.instance_before_save;
+			self.validated_candidate = Some(pending.candidate_before_save);
+			self.persistence_mode = pending.persistence_mode_before_save;
+			return Ok(());
+		}
+		self.pending_transaction_save = Some(pending);
+		Err(ModelFormError::TransactionOutcomePending)
+	}
+
+	pub(crate) fn finalize_transaction(&mut self) -> Result<(), ModelFormError> {
+		self.finalize_transaction_save()
+	}
+
+	/// Replaces one payload field, primarily for inline foreign-key assignment.
+	pub fn set_field_value(
+		&mut self,
+		field_name: &str,
+		value: Value,
+	) -> Result<(), ModelFormError> {
+		self.finalize_transaction_save()?;
+		let Some(descriptor) = T::Schema::fields()
+			.iter()
+			.find(|descriptor| descriptor.name == field_name)
+		else {
+			return Err(ModelFormError::FieldValidation {
+				errors: HashMap::from([(
+					field_name.to_owned(),
+					vec!["unknown model form field".to_owned()],
+				)]),
+			});
+		};
+		let field_name = descriptor.name;
+		let form_value = value.clone();
+		self.data.set_json(field_name, value).map_err(|error| {
+			let message = error.to_string();
+			match error {
+				ModelFormPayloadError::ForbiddenField { .. } => {
+					ModelFormError::ForbiddenInput { field: field_name }
+				}
+				ModelFormPayloadError::UnknownField { .. }
+				| ModelFormPayloadError::InvalidValue { .. } => ModelFormError::FieldValidation {
+					errors: HashMap::from([(field_name.to_owned(), vec![message])]),
+				},
+			}
+		})?;
+		let mut bound_values = self.form.bound_data().clone();
+		if self
+			.form
+			.fields()
+			.iter()
+			.all(|field| field.name() != field_name)
+		{
+			self.form
+				.add_field(field_factory::create_form_field(descriptor));
+		}
+		bound_values.insert(field_name.to_owned(), form_value);
+		self.form.bind(bound_values);
+		self.validated_candidate = None;
+		if !self.supplied_fields.contains(&field_name) {
+			self.supplied_fields.push(field_name);
+		}
+		Ok(())
+	}
+
+	pub(crate) fn set_trusted_field_value(
+		&mut self,
+		field_name: &str,
+		value: Value,
+	) -> Result<(), ModelFormError> {
+		self.finalize_transaction_save()?;
+		if T::Schema::fields()
+			.iter()
+			.find(|descriptor| descriptor.name == field_name)
+			.is_some_and(|descriptor| descriptor.editable)
+		{
+			return self.set_field_value(field_name, value);
+		}
+		self.trusted_field_values
+			.insert(field_name.to_owned(), value);
+		self.validated_candidate = None;
+		Ok(())
 	}
 
 	/// Returns a reference to the underlying form.
@@ -491,333 +493,979 @@ impl<T: FormModel> ModelForm<T> {
 	}
 	/// Returns a mutable reference to the underlying form.
 	pub fn form_mut(&mut self) -> &mut Form {
+		self.validated_candidate = None;
 		&mut self.form
 	}
 	/// Returns a reference to the model instance, if one exists.
 	pub fn instance(&self) -> Option<&T> {
 		self.instance.as_ref()
 	}
-}
 
-/// Builder for creating ModelForm instances
-pub struct ModelFormBuilder<T: FormModel> {
-	config: ModelFormConfig,
-	_phantom: PhantomData<T>,
-}
+	pub(crate) fn is_submission_candidate(&self) -> bool {
+		self.instance.is_some()
+			|| !self.supplied_fields.is_empty()
+			|| !self.data.forbidden_fields().is_empty()
+	}
 
-impl<T: FormModel> ModelFormBuilder<T> {
-	/// Creates a new `ModelFormBuilder` with default configuration.
-	pub fn new() -> Self {
-		Self {
-			config: ModelFormConfig::default(),
-			_phantom: PhantomData,
+	/// Performs structural validation before an inline formset assigns a generated parent key.
+	///
+	/// Model-level validation intentionally runs only after the real key is installed, so
+	/// validators may safely depend on that relationship.
+	pub(crate) fn is_valid_with_deferred_required_field(&mut self, deferred_field: &str) -> bool {
+		let mut valid = self.form.is_valid();
+		for descriptor in T::Schema::fields() {
+			if descriptor.name == deferred_field
+				|| !descriptor.editable
+				|| !descriptor.required
+				|| self.supplied_fields.contains(&descriptor.name)
+			{
+				continue;
+			}
+			self.form
+				.add_error(descriptor.name, "This field is required.");
+			valid = false;
 		}
-	}
-	/// Sets the list of fields to include in the form.
-	pub fn fields(mut self, fields: Vec<String>) -> Self {
-		self.config.fields = Some(fields);
-		self
-	}
-	/// Sets the list of fields to exclude from the form.
-	pub fn exclude(mut self, exclude: Vec<String>) -> Self {
-		self.config.exclude = exclude;
-		self
-	}
-	/// Overrides the widget for a specific field.
-	pub fn widget(mut self, field: String, widget: crate::Widget) -> Self {
-		self.config.widgets.insert(field, widget);
-		self
-	}
-	/// Overrides the label for a specific field.
-	pub fn label(mut self, field: String, label: String) -> Self {
-		self.config.labels.insert(field, label);
-		self
-	}
-	/// Overrides the help text for a specific field.
-	pub fn help_text(mut self, field: String, text: String) -> Self {
-		self.config.help_texts.insert(field, text);
-		self
-	}
-	/// Build the ModelForm with the configured settings
-	///
-	/// # Examples
-	///
-	/// ```ignore
-	/// use reinhardt_forms::{ModelFormBuilder, ModelFormConfig};
-	///
-	/// let config = ModelFormConfig::new();
-	/// let builder = ModelFormBuilder::<MyModel>::new();
-	/// let form = builder.build(None);
-	/// ```
-	pub fn build(self, instance: Option<T>) -> ModelForm<T> {
-		ModelForm::new(instance, self.config)
-	}
-}
-
-impl<T: FormModel> Default for ModelFormBuilder<T> {
-	fn default() -> Self {
-		Self::new()
+		if !valid {
+			return false;
+		}
+		if let Err(error) = self.clean_payload() {
+			self.record_validation_error(&error);
+			return false;
+		}
+		let mut candidate = match &self.instance {
+			Some(instance) => instance.clone(),
+			None => {
+				match T::build_from_payload_with_deferred_required_field(&self.data, deferred_field)
+				{
+					Ok(candidate) => candidate,
+					Err(error) => {
+						self.record_validation_error(&error);
+						return false;
+					}
+				}
+			}
+		};
+		if let Err(error) = candidate.apply_payload(&self.data) {
+			self.record_validation_error(&error);
+			return false;
+		}
+		valid
 	}
 }
 
 #[cfg(test)]
 mod tests {
 	use super::*;
-	use rstest::rstest;
+	use chrono::{DateTime, NaiveDate, Utc};
+	use std::collections::VecDeque;
+	use std::sync::Arc;
+	use std::sync::atomic::{AtomicUsize, Ordering};
 
-	// Mock model for testing
-	#[derive(Debug)]
-	struct TestModel {
+	use reinhardt_core::exception::{DatabaseError, DatabaseErrorKind, Error};
+	use reinhardt_core::model_form::{
+		ModelFormFieldDescriptor, ModelFormFieldKind, ModelFormPolicy,
+	};
+	use reinhardt_db::orm::connection::{
+		DatabaseBackend, OrmExecutor, QueryResult, QueryValue, Row,
+	};
+	use reinhardt_macros::model;
+	use serde::{Deserialize, Serialize};
+	use serde_json::json;
+
+	#[model(
+		app_label = "forms",
+		table_name = "model_form_questions",
+		form = true,
+		info = false
+	)]
+	#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+	struct Question {
+		#[field(primary_key = true)]
+		id: Option<i64>,
+		#[field(max_length = 200)]
+		title: String,
+		owner_id: i64,
+		#[field(default = true)]
+		published: bool,
+	}
+
+	#[model(
+		app_label = "forms",
+		table_name = "model_form_uuid_records",
+		form = true,
+		info = false
+	)]
+	#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+	struct UuidRecord {
+		#[field(primary_key = true, include_in_new = false)]
+		id: uuid::Uuid,
+		#[field(max_length = 200)]
+		title: String,
+	}
+
+	#[model(
+		app_label = "forms",
+		table_name = "model_form_optional_uuid_records",
+		form = true,
+		info = false
+	)]
+	#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+	struct OptionalUuidRecord {
+		#[field(primary_key = true)]
+		id: Option<uuid::Uuid>,
+		#[field(max_length = 200)]
+		title: String,
+	}
+
+	#[model(
+		app_label = "forms",
+		table_name = "model_form_zero_sentinel_records",
+		form = true,
+		info = false
+	)]
+	#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+	struct ZeroSentinelRecord {
+		#[field(primary_key = true)]
 		id: i32,
-		name: String,
-		email: String,
+		#[field(max_length = 200)]
+		title: String,
 	}
 
-	impl FormModel for TestModel {
-		fn field_names() -> Vec<String> {
-			vec!["id".to_string(), "name".to_string(), "email".to_string()]
-		}
+	#[model(
+		app_label = "forms",
+		table_name = "model_form_composite_primary_key_records",
+		form = true,
+		info = false
+	)]
+	#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+	struct CompositePrimaryKeyRecord {
+		#[field(primary_key = true, auto_increment = false)]
+		account_id: i64,
+		#[field(primary_key = true, auto_increment = false)]
+		sequence: i64,
+		#[field(max_length = 200)]
+		title: String,
+	}
 
-		fn field_type(name: &str) -> Option<FieldType> {
-			match name {
-				"id" => Some(FieldType::Integer),
-				"name" => Some(FieldType::Char {
-					max_length: Some(100),
-				}),
-				"email" => Some(FieldType::Email),
-				_ => None,
-			}
-		}
+	#[model(
+		app_label = "forms",
+		table_name = "model_form_temporal_records",
+		form = true,
+		info = false
+	)]
+	#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+	struct TemporalRecord {
+		#[field(primary_key = true)]
+		id: Option<i64>,
+		aware_at: DateTime<Utc>,
+		naive_at: chrono::NaiveDateTime,
+		nullable_naive_at: Option<chrono::NaiveDateTime>,
+	}
 
-		fn get_field(&self, name: &str) -> Option<Value> {
-			match name {
-				"id" => Some(Value::Number(self.id.into())),
-				"name" => Some(Value::String(self.name.clone())),
-				"email" => Some(Value::String(self.email.clone())),
-				_ => None,
-			}
-		}
+	#[model(
+		app_label = "forms",
+		table_name = "model_form_hidden_required_records",
+		form = true,
+		info = false
+	)]
+	#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+	struct HiddenRequiredRecord {
+		#[field(primary_key = true)]
+		id: Option<i64>,
+		#[field(max_length = 200)]
+		title: String,
+		#[field(max_length = 200, editable = false)]
+		audit_actor: String,
+	}
 
-		fn set_field(&mut self, name: &str, value: Value) -> Result<(), String> {
-			match name {
-				"id" => {
-					if let Value::Number(n) = value {
-						self.id = n.as_i64().unwrap() as i32;
-						Ok(())
-					} else {
-						Err("Invalid type for id".to_string())
-					}
-				}
-				"name" => {
-					if let Value::String(s) = value {
-						self.name = s;
-						Ok(())
-					} else {
-						Err("Invalid type for name".to_string())
-					}
-				}
-				"email" => {
-					if let Value::String(s) = value {
-						self.email = s;
-						Ok(())
-					} else {
-						Err("Invalid type for email".to_string())
-					}
-				}
-				_ => Err(format!("Unknown field: {}", name)),
-			}
-		}
+	#[model(
+		app_label = "forms",
+		table_name = "model_form_skipped_default_records",
+		form = true,
+		info = false
+	)]
+	#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+	struct SkippedDefaultRecord {
+		#[field(primary_key = true)]
+		id: Option<i64>,
+		#[field(max_length = 200)]
+		title: String,
+		#[field(max_length = 200, skip = true)]
+		system_value: String,
+	}
 
-		fn save(&mut self) -> Result<(), String> {
-			// Mock save
-			Ok(())
+	#[model(
+		app_label = "forms",
+		table_name = "model_form_excluded_from_new_records",
+		form = true,
+		info = false
+	)]
+	#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+	struct ExcludedFromNewRecord {
+		#[field(primary_key = true)]
+		id: Option<i64>,
+		#[field(max_length = 200)]
+		title: String,
+		#[field(max_length = 200, include_in_new = false)]
+		system_value: String,
+	}
+
+	struct QuestionPolicy;
+
+	impl ModelFormPolicy for QuestionPolicy {
+		fn allows(field: &str) -> bool {
+			matches!(field, "title" | "owner_id" | "published")
 		}
 	}
 
-	#[rstest]
-	fn test_model_form_config() {
-		// Arrange
-		let config = ModelFormConfig::new()
-			.fields(vec!["name".to_string(), "email".to_string()])
-			.exclude(vec!["id".to_string()]);
+	struct TitleOnly;
 
-		// Assert
-		assert_eq!(
-			config.fields,
-			Some(vec!["name".to_string(), "email".to_string()])
-		);
-		assert_eq!(config.exclude, vec!["id".to_string()]);
+	impl ModelFormPolicy for TitleOnly {
+		fn allows(field: &str) -> bool {
+			field == "title"
+		}
 	}
 
-	#[rstest]
-	fn test_model_form_builder() {
-		// Arrange
-		let instance = TestModel {
-			id: 1,
-			name: "John".to_string(),
-			email: "john@example.com".to_string(),
-		};
-
-		// Act
-		let form = ModelFormBuilder::<TestModel>::new()
-			.fields(vec!["name".to_string(), "email".to_string()])
-			.build(Some(instance));
-
-		// Assert
-		assert!(form.instance().is_some());
-	}
-
-	#[rstest]
-	fn test_model_field_names() {
-		// Act
-		let fields = TestModel::field_names();
-
-		// Assert
-		assert_eq!(
-			fields,
-			vec!["id".to_string(), "name".to_string(), "email".to_string()]
-		);
-	}
-
-	// Model that always fails the cross-field validation hook, used to prove
-	// that `ModelForm::is_valid` actually consults `FormModel::validate`.
 	#[derive(Debug)]
-	struct AlwaysInvalidModel;
+	struct RetryExecutor {
+		rows: VecDeque<Result<Row, Error>>,
+		fetch_one_calls: usize,
+		queries: Vec<String>,
+	}
 
-	impl FormModel for AlwaysInvalidModel {
-		fn field_names() -> Vec<String> {
-			vec![]
-		}
-
-		fn get_field(&self, _name: &str) -> Option<Value> {
-			None
-		}
-
-		fn set_field(&mut self, _name: &str, _value: Value) -> Result<(), String> {
-			Ok(())
-		}
-
-		fn save(&mut self) -> Result<(), String> {
-			Ok(())
-		}
-
-		fn validate(&self) -> Result<(), Vec<String>> {
-			Err(vec!["cross-field invariant violated".to_string()])
+	impl RetryExecutor {
+		fn new(rows: impl IntoIterator<Item = Result<Row, Error>>) -> Self {
+			Self {
+				rows: rows.into_iter().collect(),
+				fetch_one_calls: 0,
+				queries: Vec::new(),
+			}
 		}
 	}
 
-	#[rstest]
-	fn test_is_valid_rejects_unbound_form() {
-		// Arrange: an empty form has no bound data, so the underlying
-		// `Form::is_valid` must return false. Previously `ModelForm::is_valid`
-		// was a skeleton that returned `true` unconditionally for unbound
-		// forms — this test guards against regression.
-		let mut form = ModelForm::<TestModel>::empty(ModelFormConfig::new());
+	#[reinhardt_core::async_trait]
+	impl OrmExecutor for RetryExecutor {
+		fn backend(&self) -> DatabaseBackend {
+			DatabaseBackend::Postgres
+		}
 
-		// Act
-		let actual = form.is_valid();
+		async fn execute(
+			&mut self,
+			_sql: &str,
+			_params: Vec<QueryValue>,
+		) -> Result<QueryResult, Error> {
+			Err(DatabaseError::new(DatabaseErrorKind::Query, "unexpected execute call").into())
+		}
 
-		// Assert
-		assert!(!actual, "Unbound ModelForm must not be valid");
+		async fn fetch_one(&mut self, sql: &str, _params: Vec<QueryValue>) -> Result<Row, Error> {
+			self.fetch_one_calls += 1;
+			self.queries.push(sql.to_owned());
+			self.rows.pop_front().unwrap_or_else(|| {
+				Err(DatabaseError::new(DatabaseErrorKind::Query, "missing queued row").into())
+			})
+		}
+
+		async fn fetch_all(
+			&mut self,
+			_sql: &str,
+			_params: Vec<QueryValue>,
+		) -> Result<Vec<Row>, Error> {
+			Err(DatabaseError::new(DatabaseErrorKind::Query, "unexpected fetch_all call").into())
+		}
+
+		async fn fetch_optional(
+			&mut self,
+			_sql: &str,
+			_params: Vec<QueryValue>,
+		) -> Result<Option<Row>, Error> {
+			Err(
+				DatabaseError::new(DatabaseErrorKind::Query, "unexpected fetch_optional call")
+					.into(),
+			)
+		}
 	}
 
-	#[rstest]
-	fn test_is_valid_rejects_invalid_email_field() {
-		// Arrange: bind syntactically invalid data to a field-typed form.
-		let instance = TestModel {
-			id: 1,
-			name: "John".to_string(),
-			email: "john@example.com".to_string(),
+	#[derive(Debug)]
+	struct MySqlHydrationRetryExecutor {
+		fetch_rows: VecDeque<Result<Row, Error>>,
+		queries: Vec<String>,
+	}
+
+	impl MySqlHydrationRetryExecutor {
+		fn new(fetch_rows: impl IntoIterator<Item = Result<Row, Error>>) -> Self {
+			Self {
+				fetch_rows: fetch_rows.into_iter().collect(),
+				queries: Vec::new(),
+			}
+		}
+	}
+
+	#[reinhardt_core::async_trait]
+	impl OrmExecutor for MySqlHydrationRetryExecutor {
+		fn backend(&self) -> DatabaseBackend {
+			DatabaseBackend::MySql
+		}
+
+		async fn execute(
+			&mut self,
+			sql: &str,
+			_params: Vec<QueryValue>,
+		) -> Result<QueryResult, Error> {
+			self.queries.push(sql.to_owned());
+			Ok(QueryResult {
+				rows_affected: 1,
+				last_insert_id: Some(23),
+			})
+		}
+
+		async fn fetch_one(&mut self, sql: &str, _params: Vec<QueryValue>) -> Result<Row, Error> {
+			self.queries.push(sql.to_owned());
+			self.fetch_rows.pop_front().unwrap_or_else(|| {
+				Err(DatabaseError::new(DatabaseErrorKind::Query, "missing queued row").into())
+			})
+		}
+
+		async fn fetch_all(
+			&mut self,
+			_sql: &str,
+			_params: Vec<QueryValue>,
+		) -> Result<Vec<Row>, Error> {
+			Err(DatabaseError::new(DatabaseErrorKind::Query, "unexpected fetch_all call").into())
+		}
+
+		async fn fetch_optional(
+			&mut self,
+			_sql: &str,
+			_params: Vec<QueryValue>,
+		) -> Result<Option<Row>, Error> {
+			Err(
+				DatabaseError::new(DatabaseErrorKind::Query, "unexpected fetch_optional call")
+					.into(),
+			)
+		}
+	}
+
+	fn question_row(id: i64, title: &str, owner_id: i64, published: bool) -> Row {
+		let mut row = Row::new();
+		row.insert("id".to_owned(), QueryValue::Int(id));
+		row.insert("title".to_owned(), QueryValue::String(title.to_owned()));
+		row.insert("owner_id".to_owned(), QueryValue::Int(owner_id));
+		row.insert("published".to_owned(), QueryValue::Bool(published));
+		row
+	}
+
+	fn question_payload(title: &str, owner_id: i64) -> QuestionModelFormData<QuestionPolicy> {
+		let mut data = QuestionModelFormData::<QuestionPolicy>::empty();
+		data.set_title(title.to_owned());
+		data.set_owner_id(owner_id);
+		data
+	}
+
+	fn uuid_record_row(id: uuid::Uuid, title: &str) -> Row {
+		let mut row = Row::new();
+		row.insert("id".to_owned(), QueryValue::Uuid(id));
+		row.insert("title".to_owned(), QueryValue::String(title.to_owned()));
+		row
+	}
+
+	fn optional_uuid_record_row(id: uuid::Uuid, title: &str) -> Row {
+		uuid_record_row(id, title)
+	}
+
+	fn zero_sentinel_record_row(title: &str) -> Row {
+		let mut row = Row::new();
+		row.insert("id".to_owned(), QueryValue::Int(0));
+		row.insert("title".to_owned(), QueryValue::String(title.to_owned()));
+		row
+	}
+
+	#[test]
+	fn generated_model_form_builds_create_candidate_from_typed_payload() {
+		let data = question_payload("Created", 7);
+
+		let mut form = ModelForm::<Question, QuestionPolicy>::from_payload(data);
+		let built = form.build_instance().unwrap();
+
+		assert_eq!(built.title, "Created");
+		assert_eq!(built.owner_id, 7);
+		assert_eq!(built.id, None);
+	}
+
+	#[test]
+	fn generated_model_form_preserves_omitted_update_fields() {
+		let mut data = QuestionModelFormData::<QuestionPolicy>::empty();
+		data.set_title("Updated".to_owned());
+		let instance = Question {
+			id: Some(19),
+			title: "Original".to_owned(),
+			owner_id: 41,
+			published: false,
 		};
-		let mut form = ModelForm::new(Some(instance), ModelFormConfig::new());
-		let mut data = HashMap::new();
-		data.insert("id".to_string(), Value::Number(1.into()));
-		data.insert("name".to_string(), Value::String("John".to_string()));
-		data.insert(
-			"email".to_string(),
-			Value::String("not-an-email".to_string()),
-		);
-		form.bind(data);
 
-		// Act
-		let actual = form.is_valid();
+		let mut form =
+			ModelForm::<Question, QuestionPolicy>::from_payload_and_instance(data, instance);
+		let built = form.build_instance().unwrap();
 
-		// Assert
-		assert!(
-			!actual,
-			"ModelForm::is_valid must reject malformed email values"
-		);
+		assert_eq!(built.id, Some(19));
+		assert_eq!(built.title, "Updated");
+		assert_eq!(built.owner_id, 41);
+		assert!(!built.published);
 	}
 
-	#[rstest]
-	fn test_is_valid_accepts_valid_bound_data() {
-		// Arrange
-		let instance = TestModel {
-			id: 1,
-			name: "John".to_string(),
-			email: "john@example.com".to_string(),
+	#[test]
+	fn generated_model_form_rejects_every_composite_primary_key_field_on_update() {
+		let mut data = CompositePrimaryKeyRecordModelFormData::<AllEditableModelFields>::empty();
+		data.set_sequence(2)
+			.expect("composite primary-key field should be represented in the payload");
+		let instance = CompositePrimaryKeyRecord {
+			account_id: 1,
+			sequence: 1,
+			title: "Original".to_owned(),
 		};
-		let mut form = ModelForm::new(Some(instance), ModelFormConfig::new());
-		let mut data = HashMap::new();
-		data.insert("id".to_string(), Value::Number(2.into()));
-		data.insert("name".to_string(), Value::String("Jane".to_string()));
-		data.insert(
-			"email".to_string(),
-			Value::String("jane@example.com".to_string()),
-		);
-		form.bind(data);
+		let mut form =
+			ModelForm::<CompositePrimaryKeyRecord>::from_payload_and_instance(data, instance);
 
-		// Act
-		let actual = form.is_valid();
+		let error = form
+			.build_instance()
+			.expect_err("updates must reject later composite primary-key fields");
 
-		// Assert
-		assert!(actual, "Valid bound data must pass validation");
+		assert!(matches!(
+			error,
+			ModelFormError::FieldValidation { errors }
+				if errors.get("sequence")
+					== Some(&vec!["model form primary keys cannot be updated".to_owned()])
+		));
 	}
 
-	#[rstest]
-	fn test_is_valid_consults_model_validate_hook() {
-		// Arrange: a model whose cross-field validator always fails.
-		// The underlying Form has no fields, so per-field validation
-		// trivially passes once we bind empty data — meaning the only
-		// way the form can be invalid is via the model-level hook.
-		let mut form = ModelForm::new(Some(AlwaysInvalidModel), ModelFormConfig::new());
-		form.bind(HashMap::new());
+	#[test]
+	fn generated_model_form_uses_declared_model_defaults_on_create() {
+		let data = question_payload("Defaulted", 3);
 
-		// Act
-		let actual = form.is_valid();
+		let mut form = ModelForm::<Question, QuestionPolicy>::from_payload(data);
+		let built = form.build_instance().unwrap();
 
-		// Assert
-		assert!(
-			!actual,
-			"ModelForm::is_valid must propagate FormModel::validate errors"
-		);
-		let non_field_errors = form
-			.form()
-			.errors()
-			.get(crate::form::ALL_FIELDS_KEY)
-			.expect("model validate errors must be captured under ALL_FIELDS_KEY");
+		assert!(built.published);
+	}
+
+	#[test]
+	fn generated_model_form_round_trips_aware_and_naive_datetimes_through_native_fields() {
+		let mut data = TemporalRecordModelFormData::<AllEditableModelFields>::empty();
+		data.set_json("aware_at", json!("2026-07-25T14:30:00Z"))
+			.expect("aware datetime should deserialize");
+		data.set_json("naive_at", json!("2026-07-25T14:30:00"))
+			.expect("naive datetime should deserialize");
+		let mut form = ModelForm::<TemporalRecord>::from_payload(data);
+
+		let built = form
+			.build_instance()
+			.expect("native field cleaning should preserve both datetime types");
+
+		let expected = NaiveDate::from_ymd_opt(2026, 7, 25)
+			.expect("valid date")
+			.and_hms_opt(14, 30, 0)
+			.expect("valid time");
 		assert_eq!(
-			non_field_errors,
-			&vec!["cross-field invariant violated".to_string()],
-			"FormModel::validate messages must be attached to the form's non-field error bucket"
+			built.aware_at,
+			DateTime::<Utc>::from_naive_utc_and_offset(expected, Utc)
+		);
+		assert_eq!(built.naive_at, expected);
+		assert_eq!(built.nullable_naive_at, None);
+	}
+
+	#[test]
+	fn generated_model_form_accepts_explicit_null_for_nullable_non_text_field() {
+		let mut data = TemporalRecordModelFormData::<AllEditableModelFields>::empty();
+		data.set_json("aware_at", json!("2026-07-25T14:30:00Z"))
+			.expect("aware datetime should deserialize");
+		data.set_json("naive_at", json!("2026-07-25T14:30:00"))
+			.expect("naive datetime should deserialize");
+		data.set_json("nullable_naive_at", Value::Null)
+			.expect("nullable datetime should accept an explicit clear");
+		let mut form = ModelForm::<TemporalRecord>::from_payload(data);
+
+		let built = form
+			.build_instance()
+			.expect("explicit null should bypass non-null field conversion");
+
+		assert_eq!(built.nullable_naive_at, None);
+	}
+
+	#[test]
+	fn generated_model_form_reports_unresolved_required_model_field() {
+		let mut data = QuestionModelFormData::<QuestionPolicy>::empty();
+		data.set_title("Missing owner".to_owned());
+
+		let mut form = ModelForm::<Question, QuestionPolicy>::from_payload(data);
+		let error = form.build_instance().unwrap_err();
+
+		assert!(matches!(
+			error,
+			ModelFormError::MissingModelField { field: "owner_id" }
+		));
+	}
+
+	#[test]
+	fn generated_model_form_reports_unresolved_required_non_editable_field() {
+		let mut data = HiddenRequiredRecordModelFormData::<AllEditableModelFields>::empty();
+		data.set_title("Missing audit actor".to_owned());
+
+		let mut form = ModelForm::<HiddenRequiredRecord>::from_payload(data);
+		let error = form.build_instance().unwrap_err();
+
+		assert!(matches!(
+			error,
+			ModelFormError::MissingModelField {
+				field: "audit_actor"
+			}
+		));
+	}
+
+	#[test]
+	fn trusted_non_editable_field_builds_a_deferred_candidate() {
+		let mut data = HiddenRequiredRecordModelFormData::<AllEditableModelFields>::empty();
+		data.set_title("Trusted relation".to_owned());
+		let mut form = ModelForm::<HiddenRequiredRecord>::from_payload(data);
+
+		form.set_trusted_field_value("audit_actor", json!("system"))
+			.expect("a trusted non-editable field should satisfy model construction");
+		let built = form
+			.build_instance()
+			.expect("the trusted value should be retained in the candidate");
+
+		assert_eq!(built.audit_actor, "system");
+	}
+
+	#[test]
+	fn generated_model_form_default_initializes_skipped_field() {
+		let mut data = SkippedDefaultRecordModelFormData::<AllEditableModelFields>::empty();
+		data.set_title("Skipped default".to_owned());
+
+		let mut form = ModelForm::<SkippedDefaultRecord>::from_payload(data);
+		let built = form.build_instance().unwrap();
+
+		assert_eq!(built.title, "Skipped default");
+		assert_eq!(built.system_value, "");
+	}
+
+	#[test]
+	fn generated_model_form_default_initializes_field_excluded_from_new() {
+		let mut data = ExcludedFromNewRecordModelFormData::<AllEditableModelFields>::empty();
+		data.set_title("Excluded default".to_owned());
+
+		let mut form = ModelForm::<ExcludedFromNewRecord>::from_payload(data);
+		let built = form.build_instance().unwrap();
+
+		assert_eq!(built.title, "Excluded default");
+		assert_eq!(built.system_value, "");
+	}
+
+	#[test]
+	fn generated_model_form_applies_cleaned_values_before_model_validation() {
+		let data = question_payload("  cleaned title  ", 5);
+		let mut form = ModelForm::<Question, QuestionPolicy>::from_payload(data)
+			.with_model_validator(|candidate| {
+				if candidate.title == "CLEANED TITLE" {
+					Ok(())
+				} else {
+					Err(vec!["validator observed uncleaned data".to_owned()])
+				}
+			});
+		form.form_mut().add_field_clean_function("title", |value| {
+			Ok(json!(
+				value
+					.as_str()
+					.expect("title cleaner receives text")
+					.trim()
+					.to_uppercase()
+			))
+		});
+
+		let built = form.build_instance().unwrap();
+
+		assert_eq!(built.title, "CLEANED TITLE");
+	}
+
+	#[test]
+	fn generated_model_form_save_runs_model_validation_before_persistence() {
+		let data = question_payload("Rejected", 5);
+		let mut form = ModelForm::<Question, QuestionPolicy>::from_payload(data)
+			.with_model_validator(|_| Err(vec!["model validation failed".to_owned()]));
+		let mut executor = RetryExecutor::new(Vec::<Result<Row, Error>>::new());
+
+		let error = tokio_test::block_on(form.save(&mut executor))
+			.expect_err("save must not persist a candidate rejected by model validation");
+
+		assert!(matches!(error, ModelFormError::ModelValidation { .. }));
+		assert_eq!(executor.fetch_one_calls, 0);
+	}
+
+	#[test]
+	fn replacement_value_overrides_the_bound_form_value() {
+		let data = question_payload("Replacement", 7);
+		let mut form = ModelForm::<Question, QuestionPolicy>::from_payload(data);
+
+		form.set_field_value("owner_id", json!(9)).unwrap();
+		let built = form.build_instance().unwrap();
+
+		assert_eq!(built.owner_id, 9);
+	}
+
+	#[test]
+	fn recorded_forbidden_wire_input_precedes_field_cleaning() {
+		let data: QuestionModelFormData<TitleOnly> = serde_json::from_value(json!({
+			"title": "",
+			"owner_id": 7,
+		}))
+		.unwrap();
+
+		let mut form = ModelForm::<Question, TitleOnly>::from_payload(data);
+		let error = form.build_instance().unwrap_err();
+
+		assert!(matches!(
+			error,
+			ModelFormError::ForbiddenInput { field: "owner_id" }
+		));
+	}
+
+	#[test]
+	fn is_valid_records_structured_model_errors_on_the_form() {
+		let data: QuestionModelFormData<TitleOnly> = serde_json::from_value(json!({
+			"title": "Question",
+			"owner_id": 7,
+		}))
+		.unwrap();
+
+		let mut form = ModelForm::<Question, TitleOnly>::from_payload(data);
+
+		assert!(!form.is_valid());
+		assert_eq!(
+			form.form().errors().get("owner_id"),
+			Some(&vec!["model form field 'owner_id' is forbidden".to_owned()])
 		);
 	}
 
-	#[rstest]
-	fn test_save_without_instance_returns_no_instance_error() {
-		// Arrange
-		let config = ModelFormConfig::new();
-		let mut form = ModelForm::<TestModel>::empty(config);
+	#[test]
+	fn generated_model_form_keeps_non_idempotently_cleaned_candidate_after_uncertain_create() {
+		let data = question_payload("Retryable", 17);
+		let cleaner_calls = Arc::new(AtomicUsize::new(0));
+		let mut executor = RetryExecutor::new([
+			Err(Error::database_with_source(
+				DatabaseErrorKind::Timeout,
+				"temporary database timeout",
+				std::io::Error::new(std::io::ErrorKind::TimedOut, "driver timeout"),
+			)),
+			Ok(question_row(23, "Retryable-1", 17, true)),
+		]);
+		let mut form = ModelForm::<Question, QuestionPolicy>::from_payload(data);
+		let cleaner_calls_for_field = Arc::clone(&cleaner_calls);
+		form.form_mut()
+			.add_field_clean_function("title", move |value| {
+				let call = cleaner_calls_for_field.fetch_add(1, Ordering::SeqCst) + 1;
+				Ok(json!(format!(
+					"{}-{call}",
+					value.as_str().expect("title cleaner receives text")
+				)))
+			});
 
-		// Act
-		let result = form.save();
+		let built = form.build_instance().unwrap();
+		assert_eq!(built.title, "Retryable-1");
+		assert_eq!(cleaner_calls.load(Ordering::SeqCst), 1);
 
-		// Assert
-		assert!(result.is_err());
-		let err = result.unwrap_err();
-		assert!(
-			matches!(err, FormError::NoInstance),
-			"Expected FormError::NoInstance, got: {err}"
+		let first_error = tokio_test::block_on(form.save(&mut executor)).unwrap_err();
+		assert!(matches!(
+			first_error,
+			ModelFormError::PersistenceAfterCreate { .. }
+		));
+		assert_eq!(
+			first_error.database_error().map(DatabaseError::kind),
+			Some(DatabaseErrorKind::Timeout)
 		);
+		assert!(form.instance().is_none());
+		assert_eq!(form.build_instance().unwrap(), built);
+		assert_eq!(cleaner_calls.load(Ordering::SeqCst), 1);
+		assert_eq!(executor.fetch_one_calls, 1);
+		assert_eq!(cleaner_calls.load(Ordering::SeqCst), 1);
+	}
+
+	#[test]
+	fn mysql_hydration_failure_never_retries_the_insert() {
+		let data = question_payload("Persisted before hydration", 17);
+		let mut executor = MySqlHydrationRetryExecutor::new([
+			Err(DatabaseError::new(DatabaseErrorKind::Query, "MySQL reload failed").into()),
+			Ok(question_row(23, "Persisted before hydration", 17, true)),
+		]);
+		let mut form = ModelForm::<Question, QuestionPolicy>::from_payload(data);
+
+		let error = tokio_test::block_on(form.save(&mut executor)).unwrap_err();
+		assert!(matches!(
+			error,
+			ModelFormError::PersistenceAfterCreate { .. }
+		));
+
+		let retry_error = tokio_test::block_on(form.save(&mut executor)).unwrap_err();
+		assert!(matches!(retry_error, ModelFormError::Persistence { .. }));
+		assert_eq!(
+			executor
+				.queries
+				.iter()
+				.filter(|query| query.trim_start().starts_with("INSERT"))
+				.count(),
+			1
+		);
+	}
+
+	#[test]
+	fn generated_uuid_model_form_reuses_dynamic_default_for_update_after_uncertain_insert() {
+		let mut data = UuidRecordModelFormData::<AllEditableModelFields>::empty();
+		data.set_title("UUID create".to_owned());
+		let mut form = ModelForm::<UuidRecord>::from_payload(data);
+		let built = form.build_instance().unwrap();
+		let generated_id = built.id;
+		let mut executor = RetryExecutor::new([
+			Err(DatabaseError::new(DatabaseErrorKind::Timeout, "retry UUID create").into()),
+			Ok(uuid_record_row(generated_id, "UUID create")),
+		]);
+
+		let first_error = tokio_test::block_on(form.save(&mut executor)).unwrap_err();
+		assert!(matches!(
+			first_error,
+			ModelFormError::PersistenceAfterCreate { .. }
+		));
+		assert_eq!(
+			first_error.database_error().map(DatabaseError::kind),
+			Some(DatabaseErrorKind::Timeout)
+		);
+		assert_eq!(form.build_instance().unwrap().id, generated_id);
+
+		let saved = tokio_test::block_on(form.save(&mut executor)).unwrap();
+
+		assert_eq!(saved.id, generated_id);
+		assert_eq!(executor.fetch_one_calls, 2);
+		assert!(executor.queries[0].trim_start().starts_with("INSERT"));
+		assert!(executor.queries[1].trim_start().starts_with("UPDATE"));
+	}
+
+	#[test]
+	fn generated_optional_uuid_model_form_uses_create_path() {
+		let mut data = OptionalUuidRecordModelFormData::<AllEditableModelFields>::empty();
+		data.set_title("Optional UUID create".to_owned());
+		let mut form = ModelForm::<OptionalUuidRecord>::from_payload(data);
+		let built = form.build_instance().unwrap();
+		let generated_id = built.id.expect("optional UUID primary key is generated");
+		let mut executor = RetryExecutor::new([Ok(optional_uuid_record_row(
+			generated_id,
+			"Optional UUID create",
+		))]);
+
+		let saved = tokio_test::block_on(form.save(&mut executor)).unwrap();
+
+		assert_eq!(saved.id, Some(generated_id));
+		assert_eq!(executor.fetch_one_calls, 1);
+		assert!(executor.queries[0].trim_start().starts_with("INSERT"));
+	}
+
+	#[test]
+	fn direct_form_model_save_inserts_assigned_primary_keys() {
+		let id = uuid::Uuid::from_u128(0x019c_1234_5678_7abc_8def_0123_4567_89ab);
+		let mut record = UuidRecord {
+			id,
+			title: "Assigned primary key".to_owned(),
+		};
+		let mut executor = RetryExecutor::new([Ok(uuid_record_row(id, "Assigned primary key"))]);
+
+		tokio_test::block_on(FormModel::save(&mut record, &mut executor)).unwrap();
+
+		assert!(executor.queries[0].trim_start().starts_with("INSERT"));
+	}
+
+	#[test]
+	fn generated_existing_zero_sentinel_model_form_uses_update_path() {
+		let mut data = ZeroSentinelRecordModelFormData::<AllEditableModelFields>::empty();
+		data.set_title("Existing zero sentinel".to_owned());
+		let instance = ZeroSentinelRecord {
+			id: 0,
+			title: "Original".to_owned(),
+		};
+		let mut form = ModelForm::<ZeroSentinelRecord>::from_payload_and_instance(data, instance);
+		let mut executor =
+			RetryExecutor::new([Ok(zero_sentinel_record_row("Existing zero sentinel"))]);
+
+		let saved = tokio_test::block_on(form.save(&mut executor)).unwrap();
+
+		assert_eq!(saved.id, 0);
+		assert_eq!(saved.title, "Existing zero sentinel");
+		assert_eq!(executor.fetch_one_calls, 1);
+		assert!(executor.queries[0].trim_start().starts_with("UPDATE"));
+	}
+
+	#[test]
+	fn descriptor_factory_maps_all_supported_field_kinds() {
+		let cases = [
+			(
+				ModelFormFieldKind::Text {
+					min_length: None,
+					max_length: Some(20),
+					multiline: false,
+				},
+				json!("text"),
+			),
+			(
+				ModelFormFieldKind::Email {
+					min_length: Some(3),
+					max_length: Some(50),
+				},
+				json!("person@example.com"),
+			),
+			(
+				ModelFormFieldKind::Url {
+					min_length: Some(8),
+					max_length: Some(80),
+				},
+				json!("https://example.com"),
+			),
+			(
+				ModelFormFieldKind::Integer {
+					min: Some(1),
+					max: Some(10),
+				},
+				json!(5),
+			),
+			(
+				ModelFormFieldKind::Float {
+					min: None,
+					max: None,
+				},
+				json!(1.5),
+			),
+			(
+				ModelFormFieldKind::Decimal {
+					min: None,
+					max: None,
+				},
+				json!("1.25"),
+			),
+			(ModelFormFieldKind::Boolean, json!(true)),
+			(ModelFormFieldKind::Date, json!("2026-07-25")),
+			(ModelFormFieldKind::Time, json!("14:30:00")),
+			(ModelFormFieldKind::DateTime, json!("2026-07-25 14:30:00")),
+			(
+				ModelFormFieldKind::Uuid,
+				json!("01983c74-08c2-7ad2-a596-6bdbba00be40"),
+			),
+			(ModelFormFieldKind::Json, json!("{\"valid\":true}")),
+		];
+
+		for (kind, value) in cases {
+			let descriptor = ModelFormFieldDescriptor {
+				name: "value",
+				kind,
+				required: true,
+				has_default: false,
+				nullable: false,
+				editable: true,
+				generated_relation_id: false,
+			};
+			let field = field_factory::create_form_field(&descriptor);
+
+			assert_eq!(field.name(), "value");
+			if matches!(kind, ModelFormFieldKind::Boolean) {
+				assert!(!field.required());
+			} else {
+				assert!(field.required());
+			}
+			assert!(
+				field.clean(Some(&value)).is_ok(),
+				"descriptor kind {kind:?} must accept its native value"
+			);
+		}
+	}
+
+	#[test]
+	fn descriptor_factory_applies_text_length_and_integer_range() {
+		let text = field_factory::create_form_field(&ModelFormFieldDescriptor {
+			name: "short",
+			kind: ModelFormFieldKind::Text {
+				min_length: Some(2),
+				max_length: Some(3),
+				multiline: true,
+			},
+			required: false,
+			has_default: false,
+			nullable: false,
+			editable: true,
+			generated_relation_id: false,
+		});
+		let integer = field_factory::create_form_field(&ModelFormFieldDescriptor {
+			name: "bounded",
+			kind: ModelFormFieldKind::Integer {
+				min: Some(2),
+				max: Some(4),
+			},
+			required: true,
+			has_default: false,
+			nullable: false,
+			editable: true,
+			generated_relation_id: false,
+		});
+
+		assert!(!text.required());
+		assert!(text.clean(Some(&json!("a"))).is_err());
+		assert!(text.clean(Some(&json!("four"))).is_err());
+		assert!(integer.clean(Some(&json!(1))).is_err());
+		assert!(integer.clean(Some(&json!(5))).is_err());
+	}
+
+	#[test]
+	fn descriptor_factory_preserves_unsigned_integer_values() {
+		let field = field_factory::create_form_field(&ModelFormFieldDescriptor {
+			name: "identifier",
+			kind: ModelFormFieldKind::Integer {
+				min: None,
+				max: None,
+			},
+			required: true,
+			has_default: false,
+			nullable: false,
+			editable: true,
+			generated_relation_id: false,
+		});
+		let value = json!(u64::MAX);
+
+		assert_eq!(field.clean(Some(&value)).unwrap(), value);
+	}
+
+	#[test]
+	fn descriptor_factory_accepts_structured_json_values() {
+		let field = field_factory::create_form_field(&ModelFormFieldDescriptor {
+			name: "metadata",
+			kind: ModelFormFieldKind::Json,
+			required: true,
+			has_default: false,
+			nullable: false,
+			editable: true,
+			generated_relation_id: false,
+		});
+		let value = json!({"nested": [true, {"count": 2}]});
+
+		assert_eq!(field.clean(Some(&value)).unwrap(), value);
+	}
+
+	#[test]
+	fn descriptor_factory_preserves_exact_decimal_text() {
+		let field = field_factory::create_form_field(&ModelFormFieldDescriptor {
+			name: "amount",
+			kind: ModelFormFieldKind::Decimal {
+				min: None,
+				max: None,
+			},
+			required: true,
+			has_default: false,
+			nullable: false,
+			editable: true,
+			generated_relation_id: false,
+		});
+		let value = json!("12345678901234567890.12345678");
+
+		assert_eq!(field.clean(Some(&value)).unwrap(), value);
 	}
 }

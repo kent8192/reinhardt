@@ -4863,6 +4863,7 @@ where
 			DatabaseValue::Date(value) => value.to_string(),
 			DatabaseValue::Time(value) => value.to_string(),
 			DatabaseValue::DateTime(value) => value.to_rfc3339(),
+			DatabaseValue::NaiveDateTime(value) => value.to_string(),
 		}
 	}
 

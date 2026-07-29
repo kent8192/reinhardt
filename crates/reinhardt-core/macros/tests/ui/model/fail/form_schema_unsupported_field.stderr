@@ -1,0 +1,5 @@
+error: editable model field `tags` has no supported model-form mapping; set editable = false or use an explicit non-model form
+  --> tests/ui/model/fail/form_schema_unsupported_field.rs:10:2
+   |
+10 |     tags: Vec<String>,
+   |     ^^^^

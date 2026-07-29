@@ -1,4 +1,5 @@
 use crate::field::{FieldError, FieldResult, FormField, Widget};
+use rust_decimal::Decimal;
 use std::str::FromStr;
 
 /// DecimalField for decimal number input with digit and precision validation.
@@ -31,6 +32,10 @@ pub struct DecimalField {
 	pub max_value: Option<f64>,
 	/// Minimum allowed value.
 	pub min_value: Option<f64>,
+	/// Exact maximum bound used when precision must be preserved.
+	pub max_decimal_value: Option<Decimal>,
+	/// Exact minimum bound used when precision must be preserved.
+	pub min_decimal_value: Option<Decimal>,
 	/// Maximum total number of digits allowed.
 	pub max_digits: Option<usize>,
 	/// Maximum number of digits after the decimal point.
@@ -65,6 +70,8 @@ impl DecimalField {
 			initial: None,
 			max_value: None,
 			min_value: None,
+			max_decimal_value: None,
+			min_decimal_value: None,
 			max_digits: None,
 			decimal_places: None,
 			localize: false,
@@ -238,6 +245,25 @@ impl FormField for DecimalField {
 					)));
 				}
 
+				let exact = Decimal::from_str(&str_repr)
+					.map_err(|_| FieldError::Validation("Enter a number".to_string()))?;
+				if let Some(max) = self.max_decimal_value
+					&& exact > max
+				{
+					return Err(FieldError::Validation(format!(
+						"Ensure this value is less than or equal to {}",
+						max
+					)));
+				}
+				if let Some(min) = self.min_decimal_value
+					&& exact < min
+				{
+					return Err(FieldError::Validation(format!(
+						"Ensure this value is greater than or equal to {}",
+						min
+					)));
+				}
+
 				Ok(serde_json::json!(num))
 			}
 		}
@@ -293,6 +319,22 @@ mod tests {
 		));
 		assert!(matches!(
 			field.clean(Some(&serde_json::json!(101.0))),
+			Err(FieldError::Validation(_))
+		));
+	}
+
+	#[test]
+	fn test_decimalfield_exact_range_preserves_large_integer_bounds() {
+		let mut field = DecimalField::new("amount".to_string());
+		field.max_decimal_value = Some(Decimal::from_str("9007199254740992").unwrap());
+
+		assert!(
+			field
+				.clean(Some(&serde_json::json!("9007199254740992")))
+				.is_ok()
+		);
+		assert!(matches!(
+			field.clean(Some(&serde_json::json!("9007199254740993"))),
 			Err(FieldError::Validation(_))
 		));
 	}

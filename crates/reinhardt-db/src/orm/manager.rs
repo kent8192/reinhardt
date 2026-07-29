@@ -830,36 +830,21 @@ impl<M: Model> Manager<M> {
 	}
 
 	/// Preserve the model-declared primary-key storage type when binding executor queries.
-	fn primary_key_query_value(pk: &M::PrimaryKey) -> reinhardt_query::value::Value {
-		let pk_string = pk.to_string();
-		let field_type = M::field_metadata()
-			.into_iter()
-			.find(|field| field.name == M::primary_key_field())
-			.map(|field| field.field_type);
+	fn primary_key_query_value(
+		pk: &M::PrimaryKey,
+	) -> Result<reinhardt_query::value::Value, FieldCodecError> {
+		M::primary_key_database_value(pk).map(database_value_to_query_value)
+	}
 
-		match field_type
-			.as_deref()
-			.and_then(|value| value.rsplit('.').next())
-		{
-			Some("AutoField")
-			| Some("IntegerField")
-			| Some("BigAutoField")
-			| Some("BigIntegerField") => pk_string.parse::<i64>().map_or_else(
-				|_| reinhardt_query::value::Value::String(Some(Box::new(pk_string.clone()))),
-				|value| reinhardt_query::value::Value::BigInt(Some(value)),
-			),
-			Some("UuidField") => Uuid::parse_str(&pk_string).map_or_else(
-				|_| reinhardt_query::value::Value::String(Some(Box::new(pk_string.clone()))),
-				|value| reinhardt_query::value::Value::Uuid(Some(Box::new(value))),
-			),
-			// Manual models often do not provide field metadata. Preserve the
-			// numeric storage type for those models when the primary key is
-			// represented by an integer.
-			_ => pk_string.parse::<i64>().map_or_else(
-				|_| reinhardt_query::value::Value::String(Some(Box::new(pk_string))),
-				|value| reinhardt_query::value::Value::BigInt(Some(value)),
-			),
-		}
+	fn build_delete_statement(pk: &M::PrimaryKey) -> Result<DeleteStatement, FieldCodecError> {
+		let primary_key_value = Self::primary_key_query_value(pk)?;
+		let field_metadata = M::field_metadata();
+		let primary_key_column = Self::field_column(&field_metadata, M::primary_key_field());
+
+		let mut stmt = Query::delete();
+		stmt.from_table(Alias::new(M::table_name()))
+			.and_where(Expr::col(Alias::new(primary_key_column)).eq(primary_key_value));
+		Ok(stmt)
 	}
 
 	fn is_generated_field(field: &str) -> bool {
@@ -2168,7 +2153,8 @@ impl<M: Model> Manager<M> {
 			let field_metadata = M::field_metadata();
 			let primary_key_column = Self::field_column(&field_metadata, M::primary_key_field());
 			select.and_where(
-				Expr::col(Alias::new(primary_key_column)).eq(Self::primary_key_query_value(&pk)),
+				Expr::col(Alias::new(primary_key_column))
+					.eq(Self::primary_key_query_value(&pk).map_err(executor_field_codec_error)?),
 			);
 			let (select_sql, select_values) = build_select_sql(&select, backend);
 			let select_params = select_values
@@ -2263,7 +2249,7 @@ impl<M: Model> Manager<M> {
 				.column(ColumnRef::Asterisk)
 				.and_where(
 					Expr::col(Alias::new(primary_key_column))
-						.eq(Self::primary_key_query_value(&pk)),
+						.eq(Self::primary_key_query_value(&pk).map_err(field_codec_error)?),
 				);
 			let (select_sql, select_values) = build_select_sql(&select, backend);
 			let select_params = select_values
@@ -2290,17 +2276,15 @@ impl<M: Model> Manager<M> {
 	}
 
 	/// Delete a model by primary key through a caller-owned transaction executor.
+	///
+	/// The physical column comes from model metadata and the bound value comes
+	/// from the primary-key field codec.
 	pub async fn delete_with_executor(
 		&self,
 		executor: &mut dyn super::connection::TransactionExecutor,
 		pk: M::PrimaryKey,
 	) -> Result<(), crate::backends::error::DatabaseError> {
-		let mut stmt = Query::delete();
-		let field_metadata = M::field_metadata();
-		let primary_key_column = Self::field_column(&field_metadata, M::primary_key_field());
-		stmt.from_table(Alias::new(M::table_name())).and_where(
-			Expr::col(Alias::new(primary_key_column)).eq(Self::primary_key_query_value(&pk)),
-		);
+		let stmt = Self::build_delete_statement(&pk).map_err(executor_field_codec_error)?;
 		let (sql, values) = build_delete_sql(&stmt, Self::executor_backend(executor));
 		let params = values
 			.0
@@ -2317,7 +2301,9 @@ impl<M: Model> Manager<M> {
 	/// Delete a record through a caller-owned ORM executor.
 	///
 	/// Pass the transaction supplied by [`DatabaseConnection::atomic`] when the
-	/// deletion must participate in a closure-scoped transaction.
+	/// deletion must participate in a closure-scoped transaction. The physical
+	/// column comes from model metadata and the bound value comes from the
+	/// primary-key field codec.
 	///
 	/// # Arguments
 	///
@@ -2347,15 +2333,7 @@ impl<M: Model> Manager<M> {
 	where
 		E: OrmExecutor,
 	{
-		// Build reinhardt-query DELETE statement
-		let mut stmt = Query::delete();
-
-		let pk_value = Self::primary_key_query_value(&pk);
-		let field_metadata = M::field_metadata();
-		let primary_key_column = Self::field_column(&field_metadata, M::primary_key_field());
-
-		stmt.from_table(Alias::new(M::table_name()))
-			.and_where(Expr::col(Alias::new(primary_key_column)).eq(pk_value));
+		let stmt = Self::build_delete_statement(&pk).map_err(field_codec_error)?;
 
 		let (sql, values) = build_delete_sql(&stmt, conn.backend());
 		let values: Vec<_> = values
@@ -3250,14 +3228,15 @@ impl<M: Model> Default for Manager<M> {
 
 #[cfg(test)]
 mod tests {
-	use super::{Manager, field_codec_error};
+	use super::{Manager, build_delete_sql, field_codec_error};
 	use crate::orm::Json;
 	use crate::orm::Model;
 	use crate::orm::connection::DatabaseBackend;
 	use crate::orm::inspection::FieldInfo;
-	use crate::orm::{FieldCodecError, FieldSelector};
+	use crate::orm::{DatabaseValue, FieldCodecError, FieldSelector};
 	use serde::{Deserialize, Serialize};
 	use std::collections::HashMap;
+	use std::fmt;
 
 	struct DatabaseStateRestoreGuard {
 		previous: Option<super::DatabaseRegistrationSnapshot>,
@@ -3443,6 +3422,108 @@ mod tests {
 
 		fn new_fields() -> Self::Fields {
 			TestUserFields
+		}
+	}
+
+	#[derive(Debug, Clone, Serialize, Deserialize)]
+	struct ExternalId(String);
+
+	impl fmt::Display for ExternalId {
+		fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+			formatter.write_str(&self.0)
+		}
+	}
+
+	#[derive(Debug, Clone, Serialize, Deserialize)]
+	struct TypedKeyUser {
+		external_id: ExternalId,
+	}
+
+	#[derive(Debug, Clone)]
+	struct TypedKeyUserFields;
+
+	impl FieldSelector for TypedKeyUserFields {
+		fn with_alias(self, _alias: &str) -> Self {
+			self
+		}
+	}
+
+	impl Model for TypedKeyUser {
+		type PrimaryKey = ExternalId;
+		type Fields = TypedKeyUserFields;
+		type Objects = Manager<Self>;
+
+		fn table_name() -> &'static str {
+			"typed_key_user"
+		}
+
+		fn primary_key_column() -> &'static str {
+			"external_key"
+		}
+
+		fn primary_key_database_value(
+			pk: &Self::PrimaryKey,
+		) -> Result<DatabaseValue, FieldCodecError> {
+			Ok(DatabaseValue::String(format!("external:{}", pk.0)))
+		}
+
+		fn primary_key(&self) -> Option<Self::PrimaryKey> {
+			Some(self.external_id.clone())
+		}
+
+		fn set_primary_key(&mut self, value: Self::PrimaryKey) {
+			self.external_id = value;
+		}
+
+		fn primary_key_field() -> &'static str {
+			"external_id"
+		}
+
+		fn new_fields() -> Self::Fields {
+			TypedKeyUserFields
+		}
+
+		fn field_metadata() -> Vec<FieldInfo> {
+			let mut field = test_manager_field_info("external_id", "CustomKeyField", false, true);
+			field.db_column = Some(Self::primary_key_column().to_owned());
+			vec![field]
+		}
+	}
+
+	#[test]
+	fn delete_uses_primary_key_column_and_database_field_binding() {
+		let cases = [
+			(
+				DatabaseBackend::Postgres,
+				"DELETE FROM \"typed_key_user\" WHERE \"external_key\" = $1",
+			),
+			(
+				DatabaseBackend::MySql,
+				"DELETE FROM `typed_key_user` WHERE `external_key` = ?",
+			),
+			(
+				DatabaseBackend::Sqlite,
+				"DELETE FROM \"typed_key_user\" WHERE \"external_key\" = ?",
+			),
+		];
+
+		for (backend, expected_sql) in cases {
+			// Arrange
+			let primary_key = ExternalId("42".to_owned());
+
+			// Act
+			let statement = Manager::<TypedKeyUser>::build_delete_statement(&primary_key)
+				.expect("custom primary key should encode");
+			let (sql, values) = build_delete_sql(&statement, backend);
+
+			// Assert
+			assert_eq!(sql, expected_sql);
+			assert_eq!(
+				values.0,
+				vec![reinhardt_query::value::Value::String(Some(Box::new(
+					"external:42".to_owned()
+				)))]
+			);
 		}
 	}
 

@@ -385,11 +385,20 @@ pub(crate) fn history_path_in(data_dir: &Path, project_identifier: &str) -> Path
 }
 
 fn prepare_history_file(path: &Path) -> std::io::Result<()> {
-	std::fs::File::options()
-		.create(true)
-		.append(true)
-		.open(path)
-		.map(|_| ())
+	let mut options = std::fs::File::options();
+	options.create(true).append(true);
+	#[cfg(unix)]
+	{
+		use std::os::unix::fs::OpenOptionsExt;
+		options.mode(0o600);
+	}
+	let file = options.open(path)?;
+	#[cfg(unix)]
+	{
+		use std::os::unix::fs::PermissionsExt;
+		file.set_permissions(std::fs::Permissions::from_mode(0o600))?;
+	}
+	Ok(())
 }
 
 pub(crate) fn load_history_best_effort<H>(history: &mut H, path: &Path) -> Option<String>
@@ -661,6 +670,43 @@ mod tests {
 			std::fs::read_to_string(history_path).expect("history file should be readable"),
 			"#V2\nfirst session\nsecond session\n"
 		);
+	}
+
+	#[cfg(unix)]
+	#[test]
+	fn history_file_is_created_with_private_permissions() {
+		use std::os::unix::fs::PermissionsExt;
+
+		let directory = tempdir().expect("temporary history directory");
+		let history_path = directory.path().join("project.history");
+
+		prepare_history_file(&history_path).expect("history file should be prepared");
+
+		let mode = std::fs::metadata(history_path)
+			.expect("history metadata should be readable")
+			.permissions()
+			.mode();
+		assert_eq!(mode & 0o777, 0o600);
+	}
+
+	#[cfg(unix)]
+	#[test]
+	fn existing_history_file_permissions_are_tightened() {
+		use std::os::unix::fs::PermissionsExt;
+
+		let directory = tempdir().expect("temporary history directory");
+		let history_path = directory.path().join("project.history");
+		std::fs::write(&history_path, "#V2\nexisting\n").expect("history should be created");
+		std::fs::set_permissions(&history_path, std::fs::Permissions::from_mode(0o644))
+			.expect("history permissions should be relaxed");
+
+		prepare_history_file(&history_path).expect("history file should be prepared");
+
+		let mode = std::fs::metadata(history_path)
+			.expect("history metadata should be readable")
+			.permissions()
+			.mode();
+		assert_eq!(mode & 0o777, 0o600);
 	}
 
 	#[test]

@@ -1226,6 +1226,33 @@ pub fn migration() -> Migration {
 	#[rstest]
 	#[serial_test::serial(test_database_orm_global)]
 	#[tokio::test]
+	async fn scoped_registration_does_not_restore_dropped_orm_global_fixture() {
+		let previous =
+			reinhardt_db::orm::manager::replace_database_connection_for_testing(None).await;
+		let database = TestDatabase::builder()
+			.migrations::<EmptyProvider>()
+			.with_orm_global()
+			.build()
+			.await
+			.unwrap();
+		let scoped = reinhardt_db::orm::install_scoped_database("sqlite::memory:")
+			.await
+			.unwrap();
+
+		drop(database);
+		drop(scoped);
+		let after_drop = reinhardt_db::orm::get_connection().await;
+		reinhardt_db::orm::manager::restore_database_connection_for_testing(previous).await;
+
+		assert!(
+			after_drop.is_err(),
+			"dropping the scope must skip the inactive test database baseline"
+		);
+	}
+
+	#[rstest]
+	#[serial_test::serial(test_database_orm_global)]
+	#[tokio::test]
 	async fn with_orm_global_restores_previous_connection_on_drop() {
 		let owner = reinhardt_db::backends::DatabaseConnection::connect_sqlite("sqlite::memory:")
 			.await

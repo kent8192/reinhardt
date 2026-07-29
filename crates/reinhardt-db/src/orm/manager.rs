@@ -457,7 +457,7 @@ fn nearest_active_predecessor(node: &ScopedRegistrationNode) -> Option<DefaultDa
 				previous = scoped_predecessor(&scope);
 			}
 			Some(ScopedRegistrationPredecessor::Baseline(database)) => {
-				return Some(database.clone());
+				return active_database_predecessor(Some(database.clone()));
 			}
 			None => return None,
 		}

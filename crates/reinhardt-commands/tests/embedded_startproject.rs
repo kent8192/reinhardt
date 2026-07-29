@@ -115,9 +115,12 @@ fn assert_generated_shell_wiring(root: &Path, crate_name: &str) {
 		.as_array()
 		.expect("generated project must declare a commands-shell feature");
 	assert_eq!(commands_shell.len(), 1);
-	assert_eq!(
-		commands_shell.get(0).and_then(|value| value.as_str()),
-		Some("reinhardt/commands-shell")
+	assert!(
+		matches!(
+			commands_shell.get(0).and_then(|value| value.as_str()),
+			Some("reinhardt/commands-shell" | "dep:reinhardt-shell")
+		),
+		"generated project must forward commands-shell through a Reinhardt dependency"
 	);
 	let default_features = document["features"]["default"]
 		.as_array()
@@ -388,6 +391,19 @@ async fn startproject_pages_from_embedded_only() {
 		"generated pages project must not create a root shared module"
 	);
 	assert_generated_shell_wiring(&generated, "sample_pages_proj");
+	let document = cargo_toml
+		.parse::<toml_edit::DocumentMut>()
+		.expect("generated Cargo.toml must parse as TOML");
+	assert_eq!(
+		document["features"]["commands-shell"][0].as_str(),
+		Some("dep:reinhardt-shell"),
+		"Pages projects must forward the shell feature through a native-only dependency"
+	);
+	assert!(
+		document["target"]["cfg(not(target_arch = \"wasm32\"))"]["dependencies"]["reinhardt-shell"]
+			.is_inline_table(),
+		"Pages projects must declare the shell dependency only for native targets"
+	);
 	assert_generated_rust_sources_do_not_use_tab_indents(&generated);
 	assert_manifest_parses(&generated.join("Cargo.toml"));
 }

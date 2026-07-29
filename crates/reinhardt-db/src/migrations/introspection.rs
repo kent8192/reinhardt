@@ -6,15 +6,26 @@
 use async_trait::async_trait;
 use std::collections::HashMap;
 
-#[cfg(any(feature = "mysql", feature = "postgres", feature = "sqlite"))]
-use super::MigrationError;
-use super::Result;
+use crate::backends::{DatabaseConnection, DatabaseType};
+
+use super::{MigrationError, Result};
 
 /// Schema information extracted from a database
 #[derive(Debug, Clone, PartialEq)]
 pub struct DatabaseSchema {
 	/// All tables in the schema
 	pub tables: HashMap<String, TableInfo>,
+}
+
+/// Options controlling the schema objects selected for inspectdb output.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct InspectDbOptions {
+	/// Exact table names to include. An empty list includes every selected object.
+	pub tables: Vec<String>,
+	/// Whether database views should be included with tables.
+	pub include_views: bool,
+	/// Whether PostgreSQL partitions should be included with tables.
+	pub include_partitions: bool,
 }
 
 /// Table metadata
@@ -109,6 +120,80 @@ pub trait DatabaseIntrospector: Send + Sync {
 
 	/// Read a specific table schema
 	async fn read_table(&self, table_name: &str) -> Result<Option<TableInfo>>;
+}
+
+/// Read a schema through a connection and select the requested schema objects.
+///
+/// Table names in [`InspectDbOptions::tables`] are exact identifiers. Unknown names are
+/// reported as errors so a misspelled command-line argument cannot silently produce a
+/// partial model module.
+pub async fn inspect_database(
+	connection: &DatabaseConnection,
+	options: &InspectDbOptions,
+) -> Result<DatabaseSchema> {
+	if options.include_partitions && connection.database_type() != DatabaseType::Postgres {
+		return Err(MigrationError::IntrospectionError(
+			"include_partitions is only supported for PostgreSQL".to_string(),
+		));
+	}
+
+	let mut schema = match connection.database_type() {
+		DatabaseType::Postgres => {
+			#[cfg(feature = "postgres")]
+			{
+				let pool = connection.into_postgres().ok_or_else(|| {
+					MigrationError::UnsupportedDatabase("PostgreSQL connection".to_string())
+				})?;
+				read_postgres_schema(pool, options).await?
+			}
+			#[cfg(not(feature = "postgres"))]
+			{
+				return Err(MigrationError::UnsupportedDatabase(
+					"PostgreSQL".to_string(),
+				));
+			}
+		}
+		DatabaseType::Mysql => {
+			#[cfg(feature = "mysql")]
+			{
+				let pool = connection.into_mysql().ok_or_else(|| {
+					MigrationError::UnsupportedDatabase("MySQL connection".to_string())
+				})?;
+				read_mysql_schema(pool, options).await?
+			}
+			#[cfg(not(feature = "mysql"))]
+			{
+				return Err(MigrationError::UnsupportedDatabase("MySQL".to_string()));
+			}
+		}
+		DatabaseType::Sqlite => {
+			#[cfg(feature = "sqlite")]
+			{
+				let pool = connection.into_sqlite().ok_or_else(|| {
+					MigrationError::UnsupportedDatabase("SQLite connection".to_string())
+				})?;
+				read_sqlite_schema(pool, options).await?
+			}
+			#[cfg(not(feature = "sqlite"))]
+			{
+				return Err(MigrationError::UnsupportedDatabase("SQLite".to_string()));
+			}
+		}
+	};
+
+	if options.tables.is_empty() {
+		return Ok(schema);
+	}
+
+	let mut selected = HashMap::with_capacity(options.tables.len());
+	for table_name in &options.tables {
+		let table = schema.tables.remove(table_name).ok_or_else(|| {
+			MigrationError::IntrospectionError(format!("Requested table not found: {table_name}"))
+		})?;
+		selected.insert(table_name.clone(), table);
+	}
+
+	Ok(DatabaseSchema { tables: selected })
 }
 
 /// PostgreSQL schema introspector
@@ -1742,6 +1827,118 @@ impl DatabaseIntrospector for SQLiteIntrospector {
 			None => Ok(None),
 		}
 	}
+}
+
+#[cfg(feature = "postgres")]
+async fn read_postgres_schema(
+	pool: sqlx::PgPool,
+	options: &InspectDbOptions,
+) -> Result<DatabaseSchema> {
+	use sqlx::Row;
+
+	let introspector = PostgresIntrospector::new(pool.clone());
+	let mut schema = introspector.read_schema().await?;
+
+	if options.include_views {
+		let rows = sqlx::query(
+			"SELECT table_name FROM information_schema.views WHERE table_schema = 'public' ORDER BY table_name",
+		)
+		.fetch_all(&pool)
+		.await
+		.map_err(|error| MigrationError::IntrospectionError(error.to_string()))?;
+		for row in rows {
+			let name: String = row.try_get("table_name").map_err(|error| {
+				MigrationError::IntrospectionError(format!("Failed to read view name: {error}"))
+			})?;
+			let table = introspector.introspect_table(&name).await?;
+			schema.tables.insert(name, table);
+		}
+	}
+
+	if options.include_partitions {
+		let rows = sqlx::query(
+			"SELECT child.relname AS table_name \
+			 FROM pg_inherits \
+			 JOIN pg_class child ON child.oid = pg_inherits.inhrelid \
+			 JOIN pg_namespace namespace ON namespace.oid = child.relnamespace \
+			 WHERE namespace.nspname = 'public' \
+			 ORDER BY child.relname",
+		)
+		.fetch_all(&pool)
+		.await
+		.map_err(|error| MigrationError::IntrospectionError(error.to_string()))?;
+		for row in rows {
+			let name: String = row.try_get("table_name").map_err(|error| {
+				MigrationError::IntrospectionError(format!(
+					"Failed to read partition name: {error}"
+				))
+			})?;
+			let table = introspector.introspect_table(&name).await?;
+			schema.tables.insert(name, table);
+		}
+	}
+
+	Ok(schema)
+}
+
+#[cfg(feature = "mysql")]
+async fn read_mysql_schema(
+	pool: sqlx::MySqlPool,
+	options: &InspectDbOptions,
+) -> Result<DatabaseSchema> {
+	use sqlx::Row;
+
+	let introspector = MySQLIntrospector::new(pool.clone());
+	let mut schema = introspector.read_schema().await?;
+	if !options.include_views {
+		return Ok(schema);
+	}
+
+	let rows = sqlx::query(
+		"SELECT table_name FROM information_schema.views WHERE table_schema = DATABASE() ORDER BY table_name",
+	)
+	.fetch_all(&pool)
+	.await
+	.map_err(|error| MigrationError::IntrospectionError(error.to_string()))?;
+	for row in rows {
+		let name: String = row.try_get("table_name").map_err(|error| {
+			MigrationError::IntrospectionError(format!("Failed to read view name: {error}"))
+		})?;
+		let table = introspector.introspect_table(&name).await?;
+		schema.tables.insert(name, table);
+	}
+
+	Ok(schema)
+}
+
+#[cfg(feature = "sqlite")]
+async fn read_sqlite_schema(
+	pool: sqlx::SqlitePool,
+	options: &InspectDbOptions,
+) -> Result<DatabaseSchema> {
+	use sqlx::Row;
+
+	let introspector = SQLiteIntrospector::new(pool.clone());
+	let mut schema = introspector.read_schema().await?;
+	if !options.include_views {
+		return Ok(schema);
+	}
+
+	let rows = sqlx::query(
+		"SELECT name FROM sqlite_master WHERE type = 'view' AND name NOT LIKE 'sqlite_%' ORDER BY name",
+	)
+	.fetch_all(&pool)
+	.await
+	.map_err(|error| MigrationError::IntrospectionError(error.to_string()))?;
+	for row in rows {
+		let name: String = row.try_get("name").map_err(|error| {
+			MigrationError::IntrospectionError(format!("Failed to read view name: {error}"))
+		})?;
+		let table = introspector.introspect_table(&name).await?;
+		schema.tables.insert(name, table);
+	}
+
+	Ok(schema)
 }
 
 #[cfg(test)]

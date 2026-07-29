@@ -54,6 +54,7 @@ pub use type_mapping::{TypeMapper, TypeMappingError};
 
 use super::introspection::DatabaseSchema;
 use super::{MigrationError, Result};
+use quote::ToTokens;
 
 /// Introspect a database and generate Rust model code.
 ///
@@ -85,6 +86,86 @@ pub fn generate_models(
 ) -> Result<GeneratedOutput> {
 	let generator = SchemaCodeGenerator::new(config.clone());
 	generator.generate(schema)
+}
+
+/// Render all selected models as one parseable Rust module.
+///
+/// The existing schema generator remains the source of model syntax. This wrapper forces
+/// single-file output and canonicalizes the generated syntax so HashMap-backed metadata does
+/// not make inspectdb output depend on hash iteration order.
+pub fn render_models_module(config: &IntrospectConfig, schema: &DatabaseSchema) -> Result<String> {
+	let mut config = config.clone();
+	config.output.single_file = true;
+	config.imports.additional.sort();
+
+	let schema = canonicalize_schema(schema);
+	let output = generate_models(&config, &schema)?;
+	let Some(file) = output.files.into_iter().next() else {
+		return Ok(String::new());
+	};
+
+	let mut syntax = syn::parse_file(&file.content).map_err(|error| {
+		MigrationError::IntrospectionError(format!("Failed to parse generated code: {error}"))
+	})?;
+	canonicalize_module(&mut syntax);
+	Ok(prettyplease::unparse(&syntax))
+}
+
+fn canonicalize_schema(schema: &DatabaseSchema) -> DatabaseSchema {
+	let mut schema = schema.clone();
+	for table in schema.tables.values_mut() {
+		table.primary_key.sort();
+		for index in table.indexes.values_mut() {
+			index.columns.sort();
+		}
+		for foreign_key in &mut table.foreign_keys {
+			foreign_key.columns.sort();
+			foreign_key.referenced_columns.sort();
+		}
+		table
+			.foreign_keys
+			.sort_by(|left, right| left.name.cmp(&right.name));
+		for constraint in &mut table.unique_constraints {
+			constraint.columns.sort();
+		}
+		table
+			.unique_constraints
+			.sort_by(|left, right| left.name.cmp(&right.name));
+		table.check_constraints.sort_by(|left, right| {
+			left.name
+				.cmp(&right.name)
+				.then_with(|| left.expression.cmp(&right.expression))
+		});
+	}
+	schema
+}
+
+fn canonicalize_module(syntax: &mut syn::File) {
+	let mut imports = Vec::new();
+	let mut items = Vec::new();
+	for mut item in std::mem::take(&mut syntax.items) {
+		if let syn::Item::Struct(model) = &mut item
+			&& let syn::Fields::Named(fields) = &mut model.fields
+		{
+			let mut named: Vec<_> = std::mem::take(&mut fields.named).into_iter().collect();
+			named.sort_by(|left, right| left.ident.cmp(&right.ident));
+			fields.named = named.into_iter().collect();
+		}
+
+		if matches!(item, syn::Item::Use(_)) {
+			imports.push(item);
+		} else {
+			items.push(item);
+		}
+	}
+
+	imports.sort_by_key(|item| item.to_token_stream().to_string());
+	items.sort_by_key(|item| match item {
+		syn::Item::Struct(model) => model.ident.to_string(),
+		_ => item.to_token_stream().to_string(),
+	});
+	imports.extend(items);
+	syntax.items = imports;
 }
 
 /// Write generated files to disk.

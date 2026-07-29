@@ -157,12 +157,12 @@ pub use zero_downtime::{MigrationPhase, Strategy, ZeroDowntimeMigration};
 pub use introspect::{
 	GeneratedFile, GeneratedOutput, GenerationConfig, IntrospectConfig, NamingConvention,
 	OutputConfig, SchemaCodeGenerator, TableFilterConfig, TypeMapper, TypeMappingError,
-	escape_rust_keyword, generate_models, preview_output, sanitize_identifier, to_pascal_case,
-	write_output,
+	escape_rust_keyword, generate_models, preview_output, render_models_module,
+	sanitize_identifier, to_pascal_case, write_output,
 };
 pub use introspection::{
 	ColumnInfo, DatabaseIntrospector, ForeignKeyInfo as IntrospectionForeignKeyInfo, IndexInfo,
-	TableInfo, UniqueConstraintInfo,
+	InspectDbOptions, TableInfo, UniqueConstraintInfo, inspect_database,
 };
 
 // Re-export types from reinhardt-backends for convenience

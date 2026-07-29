@@ -175,13 +175,7 @@ impl MigrationSource for FilesystemSource {
 			}
 
 			// Parse migration file
-			match self.parse_migration_file(path) {
-				Ok(migration) => migrations.push(migration),
-				Err(e) => {
-					// Log error but continue scanning
-					eprintln!("Warning: Failed to parse {}: {}", path.display(), e);
-				}
-			}
+			migrations.push(self.parse_migration_file(path)?);
 		}
 
 		// Sort by numeric prefix for deterministic ordering (#1335)

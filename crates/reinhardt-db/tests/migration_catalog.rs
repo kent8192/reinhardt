@@ -1,0 +1,321 @@
+use async_trait::async_trait;
+use reinhardt_db::migrations::{
+	FilesystemSource, Migration, MigrationCatalog, MigrationError, MigrationKey, MigrationSource,
+	Result,
+};
+use rstest::*;
+use std::fs;
+use tempfile::TempDir;
+
+struct TestSource {
+	migrations: Vec<Migration>,
+}
+
+#[async_trait]
+impl MigrationSource for TestSource {
+	async fn all_migrations(&self) -> Result<Vec<Migration>> {
+		Ok(self.migrations.clone())
+	}
+}
+
+struct ErrorSource;
+
+#[async_trait]
+impl MigrationSource for ErrorSource {
+	async fn all_migrations(&self) -> Result<Vec<Migration>> {
+		Err(MigrationError::InvalidMigration(
+			"catalog source failed".to_string(),
+		))
+	}
+}
+
+fn migration(app: &str, name: &str, dependencies: &[(&str, &str)]) -> Migration {
+	let mut migration = Migration::new(name, app);
+	migration.dependencies = dependencies
+		.iter()
+		.map(|(dependency_app, dependency_name)| {
+			(
+				(*dependency_app).to_string(),
+				(*dependency_name).to_string(),
+			)
+		})
+		.collect();
+	migration
+}
+
+async fn catalog(migrations: Vec<Migration>) -> MigrationCatalog {
+	MigrationCatalog::load_strict(&TestSource { migrations })
+		.await
+		.unwrap()
+}
+
+#[rstest]
+#[tokio::test]
+async fn resolve_unique_prefix_prefers_an_exact_match() {
+	// Arrange
+	let catalog = catalog(vec![
+		migration("blog", "0002", &[]),
+		migration("blog", "0002_add_title", &[]),
+	])
+	.await;
+
+	// Act
+	let resolved = catalog.resolve_unique_prefix("blog", "0002").unwrap();
+
+	// Assert
+	assert_eq!(resolved, MigrationKey::new("blog", "0002"));
+}
+
+#[rstest]
+#[tokio::test]
+async fn resolve_unique_prefix_accepts_a_unique_partial_name() {
+	// Arrange
+	let catalog = catalog(vec![
+		migration("blog", "0001_initial", &[]),
+		migration("blog", "0002_add_title", &[("blog", "0001_initial")]),
+	])
+	.await;
+
+	// Act
+	let resolved = catalog.resolve_unique_prefix("blog", "0002_add").unwrap();
+
+	// Assert
+	assert_eq!(resolved, MigrationKey::new("blog", "0002_add_title"));
+}
+
+#[rstest]
+#[tokio::test]
+async fn resolve_unique_prefix_reports_sorted_ambiguous_candidates() {
+	// Arrange
+	let catalog = catalog(vec![
+		migration("blog", "0002_add_title", &[]),
+		migration("blog", "0002_add_body", &[]),
+	])
+	.await;
+
+	// Act
+	let error = catalog.resolve_unique_prefix("blog", "0002").unwrap_err();
+
+	// Assert
+	assert_eq!(
+		error.to_string(),
+		"Invalid migration: Ambiguous migration prefix '0002' for app 'blog'; candidates: \
+		 0002_add_body, 0002_add_title"
+	);
+}
+
+#[rstest]
+#[case("missing", "0001", "Migration not found: app missing")]
+#[case("blog", "9999", "Migration not found: blog.9999")]
+#[tokio::test]
+async fn resolve_unique_prefix_rejects_unknown_apps_and_names(
+	#[case] app: &str,
+	#[case] prefix: &str,
+	#[case] expected: &str,
+) {
+	// Arrange
+	let catalog = catalog(vec![migration("blog", "0001_initial", &[])]).await;
+
+	// Act
+	let error = catalog.resolve_unique_prefix(app, prefix).unwrap_err();
+
+	// Assert
+	assert_eq!(error.to_string(), expected);
+}
+
+#[rstest]
+#[tokio::test]
+async fn load_strict_propagates_source_errors() {
+	// Act
+	let error = MigrationCatalog::load_strict(&ErrorSource)
+		.await
+		.unwrap_err();
+
+	// Assert
+	assert_eq!(
+		error.to_string(),
+		"Invalid migration: catalog source failed"
+	);
+}
+
+#[rstest]
+#[tokio::test]
+async fn load_strict_rejects_a_missing_dependency() {
+	// Arrange
+	let source = TestSource {
+		migrations: vec![migration(
+			"blog",
+			"0002_add_title",
+			&[("blog", "0001_initial")],
+		)],
+	};
+
+	// Act
+	let error = MigrationCatalog::load_strict(&source).await.unwrap_err();
+
+	// Assert
+	assert_eq!(
+		error.to_string(),
+		"Dependency error: Missing dependency blog.0001_initial required by blog.0002_add_title"
+	);
+}
+
+#[rstest]
+#[tokio::test]
+async fn load_strict_rejects_cycles() {
+	// Arrange
+	let source = TestSource {
+		migrations: vec![
+			migration("blog", "0001_initial", &[("blog", "0002_add_title")]),
+			migration("blog", "0002_add_title", &[("blog", "0001_initial")]),
+		],
+	};
+
+	// Act
+	let error = MigrationCatalog::load_strict(&source).await.unwrap_err();
+
+	// Assert
+	assert_eq!(
+		error.to_string(),
+		"Circular dependency detected: blog.0001_initial, blog.0002_add_title"
+	);
+}
+
+#[rstest]
+#[tokio::test]
+async fn load_strict_rejects_an_invalid_filesystem_migration() {
+	// Arrange
+	let temp_dir = TempDir::new().unwrap();
+	let app_dir = temp_dir.path().join("blog");
+	fs::create_dir(&app_dir).unwrap();
+	fs::write(
+		app_dir.join("0001_initial.rs"),
+		"pub fn migration( -> Migration {",
+	)
+	.unwrap();
+	let source = FilesystemSource::new(temp_dir.path());
+
+	// Act
+	let error = MigrationCatalog::load_strict(&source).await.unwrap_err();
+
+	// Assert
+	let MigrationError::InvalidMigration(message) = error else {
+		panic!("expected InvalidMigration");
+	};
+	let expected_prefix = format!(
+		"Failed to parse {}:",
+		app_dir.join("0001_initial.rs").display()
+	);
+	// NOTE: The remaining parser diagnostic is generated by syn and is not part of this API.
+	assert!(message.starts_with(&expected_prefix));
+}
+
+#[rstest]
+#[tokio::test]
+async fn squash_range_resolves_an_explicit_start_in_topological_order() {
+	// Arrange
+	let catalog = catalog(vec![
+		migration("blog", "0001_initial", &[]),
+		migration("blog", "0002_add_title", &[("blog", "0001_initial")]),
+		migration("blog", "0003_publish", &[("blog", "0002_add_title")]),
+	])
+	.await;
+
+	// Act
+	let range = catalog.squash_range("blog", Some("0002"), "0003").unwrap();
+
+	// Assert
+	let names: Vec<&str> = range
+		.migrations
+		.iter()
+		.map(|migration| migration.name.as_str())
+		.collect();
+	assert_eq!(names, vec!["0002_add_title", "0003_publish"]);
+	assert_eq!(
+		range.external_dependencies,
+		vec![("blog".to_string(), "0001_initial".to_string())]
+	);
+}
+
+#[rstest]
+#[tokio::test]
+async fn squash_range_uses_the_implicit_app_root() {
+	// Arrange
+	let catalog = catalog(vec![
+		migration("accounts", "0001_initial", &[]),
+		migration("blog", "0001_initial", &[("accounts", "0001_initial")]),
+		migration("blog", "0002_add_title", &[("blog", "0001_initial")]),
+		migration("blog", "0003_publish", &[("blog", "0002_add_title")]),
+	])
+	.await;
+
+	// Act
+	let range = catalog.squash_range("blog", None, "0003").unwrap();
+
+	// Assert
+	let names: Vec<&str> = range
+		.migrations
+		.iter()
+		.map(|migration| migration.name.as_str())
+		.collect();
+	assert_eq!(
+		names,
+		vec!["0001_initial", "0002_add_title", "0003_publish"]
+	);
+	assert_eq!(
+		range.external_dependencies,
+		vec![("accounts".to_string(), "0001_initial".to_string())]
+	);
+}
+
+#[rstest]
+#[tokio::test]
+async fn squash_range_rejects_branched_ancestry() {
+	// Arrange
+	let catalog = catalog(vec![
+		migration("blog", "0001_initial", &[]),
+		migration("blog", "0002_left", &[("blog", "0001_initial")]),
+		migration("blog", "0002_right", &[("blog", "0001_initial")]),
+		migration(
+			"blog",
+			"0003_merge",
+			&[("blog", "0002_right"), ("blog", "0002_left")],
+		),
+	])
+	.await;
+
+	// Act
+	let error = catalog
+		.squash_range("blog", None, "0003_merge")
+		.unwrap_err();
+
+	// Assert
+	assert_eq!(
+		error.to_string(),
+		"Invalid migration: Ambiguous migration ancestry for blog.0003_merge; parents: \
+		 0002_left, 0002_right"
+	);
+}
+
+#[rstest]
+#[tokio::test]
+async fn squash_range_rejects_a_start_outside_the_end_ancestry() {
+	// Arrange
+	let catalog = catalog(vec![
+		migration("blog", "0001_initial", &[]),
+		migration("blog", "0002_left", &[("blog", "0001_initial")]),
+		migration("blog", "0002_right", &[("blog", "0001_initial")]),
+	])
+	.await;
+
+	// Act
+	let error = catalog
+		.squash_range("blog", Some("0002_left"), "0002_right")
+		.unwrap_err();
+
+	// Assert
+	assert_eq!(
+		error.to_string(),
+		"Invalid migration: blog.0002_left is not an ancestor of blog.0002_right"
+	);
+}

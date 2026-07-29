@@ -38,6 +38,7 @@
 pub mod ast_parser;
 pub mod auto_migration;
 pub mod autodetector;
+pub mod catalog;
 pub mod dependency;
 pub mod di_support;
 pub mod executor;
@@ -132,6 +133,7 @@ pub use reinhardt_query::prelude::{
 pub use auto_migration::{
 	AutoMigrationError, AutoMigrationGenerator, AutoMigrationResult, ValidationResult,
 };
+pub use catalog::{MigrationCatalog, SquashRange};
 pub use operations::{
 	AddField, AlterField, CreateCollation, CreateExtension, CreateModel, DeleteModel,
 	DropExtension, FieldDefinition, MoveModel, RemoveField, RenameField, RenameModel, RunCode,

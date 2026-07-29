@@ -404,6 +404,26 @@ async fn startproject_pages_from_embedded_only() {
 			.is_inline_table(),
 		"Pages projects must declare the shell dependency only for native targets"
 	);
+	let native_dependencies =
+		document["target"]["cfg(not(target_arch = \"wasm32\"))"]["dependencies"]
+			.as_table_like()
+			.expect("Pages projects must declare native dependencies");
+	let native_dependency_names = native_dependencies
+		.iter()
+		.map(|(name, _)| name)
+		.collect::<Vec<_>>();
+	let shell_position = native_dependency_names
+		.iter()
+		.position(|name| *name == "reinhardt-shell")
+		.expect("Pages projects must declare the native shell alias");
+	let facade_position = native_dependency_names
+		.iter()
+		.position(|name| *name == "reinhardt")
+		.expect("Pages projects must declare the native facade dependency");
+	assert!(
+		shell_position < facade_position,
+		"the facade dependency must follow the shell alias so proc-macro-crate resolves the cross-target crate name"
+	);
 	assert_generated_rust_sources_do_not_use_tab_indents(&generated);
 	assert_manifest_parses(&generated.join("Cargo.toml"));
 }

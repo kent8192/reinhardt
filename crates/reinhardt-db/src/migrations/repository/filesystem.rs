@@ -82,6 +82,71 @@ fn directory_identity(_metadata: &Metadata) -> std::io::Result<DirectoryIdentity
 	))
 }
 
+#[cfg(all(unix, not(target_os = "vxworks")))]
+fn path_directory_identity(metadata: &std::fs::Metadata) -> std::io::Result<DirectoryIdentity> {
+	use std::os::unix::fs::MetadataExt;
+
+	Ok(DirectoryIdentity {
+		device: metadata.dev(),
+		file: metadata.ino(),
+	})
+}
+
+#[cfg(target_os = "wasi")]
+fn path_directory_identity(metadata: &std::fs::Metadata) -> std::io::Result<DirectoryIdentity> {
+	use std::os::wasi::fs::MetadataExt;
+
+	Ok(DirectoryIdentity {
+		device: metadata.dev(),
+		file: metadata.ino(),
+	})
+}
+
+#[cfg(target_os = "vxworks")]
+fn path_directory_identity(metadata: &std::fs::Metadata) -> std::io::Result<DirectoryIdentity> {
+	use std::os::vxworks::fs::MetadataExt;
+
+	Ok(DirectoryIdentity {
+		device: metadata.st_dev(),
+		file: metadata.st_ino(),
+	})
+}
+
+#[cfg(windows)]
+fn path_directory_identity(metadata: &std::fs::Metadata) -> std::io::Result<DirectoryIdentity> {
+	use std::os::windows::fs::MetadataExt;
+
+	let device = metadata
+		.volume_serial_number()
+		.map(u64::from)
+		.ok_or_else(|| {
+			std::io::Error::new(
+				std::io::ErrorKind::Unsupported,
+				"root directory volume identity is unavailable",
+			)
+		})?;
+	let file = metadata.file_index().ok_or_else(|| {
+		std::io::Error::new(
+			std::io::ErrorKind::Unsupported,
+			"root directory file identity is unavailable",
+		)
+	})?;
+	Ok(DirectoryIdentity { device, file })
+}
+
+#[cfg(not(any(unix, windows, target_os = "wasi", target_os = "vxworks")))]
+fn path_directory_identity(_metadata: &std::fs::Metadata) -> std::io::Result<DirectoryIdentity> {
+	Err(std::io::Error::new(
+		std::io::ErrorKind::Unsupported,
+		"root directory identity is unavailable on this platform",
+	))
+}
+
+struct RootValidationHooks<B, V> {
+	before_open: B,
+	after_identity_open: V,
+}
+
 struct IncompleteFile<C>
 where
 	C: Fn(&Dir, &str) -> std::io::Result<()>,
@@ -762,7 +827,10 @@ impl FilesystemRepository {
 			app_label,
 			migration_name,
 			source,
-			|| Ok(()),
+			RootValidationHooks {
+				before_open: || Ok(()),
+				after_identity_open: || Ok(()),
+			},
 			|file, formatted| {
 				file.write_all(formatted.as_bytes())?;
 				file.flush()?;
@@ -772,20 +840,25 @@ impl FilesystemRepository {
 		)
 	}
 
-	fn create_new_source_with_hooks<B, W, C>(
+	fn create_new_source_with_hooks<B, V, W, C>(
 		&self,
 		app_label: &str,
 		migration_name: &str,
 		source: &str,
-		before_open: B,
+		hooks: RootValidationHooks<B, V>,
 		write_source: W,
 		cleanup: C,
 	) -> Result<PathBuf>
 	where
 		B: FnOnce() -> std::io::Result<()>,
+		V: FnOnce() -> std::io::Result<()>,
 		W: FnOnce(&mut File, &str) -> std::io::Result<()>,
 		C: Fn(&Dir, &str) -> std::io::Result<()>,
 	{
+		let RootValidationHooks {
+			before_open,
+			after_identity_open,
+		} = hooks;
 		let path = self.migration_path(app_label, migration_name)?;
 		syn::parse_file(source).map_err(|error| {
 			MigrationError::InvalidMigration(format!("Failed to parse migration source: {error}"))
@@ -811,7 +884,8 @@ impl FilesystemRepository {
 				)))),
 			};
 		}
-		if let Err(identity_error) = self.validate_root_identity(root_identity) {
+		if let Err(identity_error) = self.validate_root_identity(root_identity, after_identity_open)
+		{
 			return match incomplete.cleanup_now() {
 				Ok(()) => Err(identity_error),
 				Err(cleanup_error) => Err(MigrationError::IoError(std::io::Error::other(format!(
@@ -823,7 +897,10 @@ impl FilesystemRepository {
 		Ok(incomplete.complete())
 	}
 
-	fn validate_root_identity(&self, expected: DirectoryIdentity) -> Result<()> {
+	fn validate_root_identity<V>(&self, expected: DirectoryIdentity, after_open: V) -> Result<()>
+	where
+		V: FnOnce() -> std::io::Result<()>,
+	{
 		let before_open = std::fs::symlink_metadata(&self.root_dir).map_err(|error| {
 			MigrationError::PathTraversal(format!(
 				"Migration root directory identity is unavailable: {error}"
@@ -845,6 +922,7 @@ impl FilesystemRepository {
 				"Migration root directory identity is unavailable: {error}"
 			))
 		})?;
+		after_open()?;
 		let after_open = std::fs::symlink_metadata(&self.root_dir).map_err(|error| {
 			MigrationError::PathTraversal(format!(
 				"Migration root directory identity is unavailable: {error}"
@@ -854,6 +932,17 @@ impl FilesystemRepository {
 			return Err(MigrationError::PathTraversal(format!(
 				"Migration root directory identity changed during source creation: expected \
 				 {expected:?}, found {actual:?}"
+			)));
+		}
+		let after_open_identity = path_directory_identity(&after_open).map_err(|error| {
+			MigrationError::PathTraversal(format!(
+				"Migration root directory identity is unavailable: {error}"
+			))
+		})?;
+		if after_open_identity != expected {
+			return Err(MigrationError::PathTraversal(format!(
+				"Migration root directory identity changed during source creation: expected \
+				 {expected:?}, found {after_open_identity:?}"
 			)));
 		}
 		Ok(())
@@ -1494,7 +1583,10 @@ mod tests {
 			"polls",
 			"0001_squashed",
 			&source,
-			|| Ok(()),
+			RootValidationHooks {
+				before_open: || Ok(()),
+				after_identity_open: || Ok(()),
+			},
 			|file, formatted| {
 				file.write_all(&formatted.as_bytes()[..16])?;
 				Err(std::io::Error::other("injected write failure"))
@@ -1528,9 +1620,12 @@ mod tests {
 			"polls",
 			"0001_squashed",
 			&source,
-			|| {
-				std::fs::remove_dir(root.path().join("polls"))?;
-				symlink(outside.path(), root.path().join("polls"))
+			RootValidationHooks {
+				before_open: || {
+					std::fs::remove_dir(root.path().join("polls"))?;
+					symlink(outside.path(), root.path().join("polls"))
+				},
+				after_identity_open: || Ok(()),
 			},
 			|file, formatted| {
 				file.write_all(formatted.as_bytes())?;
@@ -1567,9 +1662,12 @@ mod tests {
 			"polls",
 			"0001_squashed",
 			&source,
-			|| {
-				std::fs::rename(&root, &anchored_root)?;
-				symlink(outside.path(), &root)
+			RootValidationHooks {
+				before_open: || {
+					std::fs::rename(&root, &anchored_root)?;
+					symlink(outside.path(), &root)
+				},
+				after_identity_open: || Ok(()),
 			},
 			|file, formatted| {
 				file.write_all(formatted.as_bytes())?;
@@ -1609,15 +1707,18 @@ mod tests {
 				"polls",
 				"0001_squashed",
 				&source,
-				|| {
-					std::fs::rename(&root, &anchored_root)?;
-					symlink(outside.path(), &root)
+				RootValidationHooks {
+					before_open: || {
+						std::fs::rename(&root, &anchored_root)?;
+						symlink(outside.path(), &root)
+					},
+					after_identity_open: || Ok(()),
 				},
 				|file, formatted| {
 					file.write_all(formatted.as_bytes())?;
 					file.sync_all()
 				},
-				|_, _| Err(std::io::Error::other("injected identity cleanup failure")),
+				|_: &Dir, _: &str| Err(std::io::Error::other("injected identity cleanup failure")),
 			)
 			.unwrap_err();
 
@@ -1648,16 +1749,71 @@ mod tests {
 				"polls",
 				"0001_squashed",
 				&source,
-				|| Ok(()),
+				RootValidationHooks {
+					before_open: || Ok(()),
+					after_identity_open: || Ok(()),
+				},
 				|file, _| {
 					file.write_all(b"partial")?;
 					Err(std::io::Error::other("injected write failure"))
 				},
-				|_, _| Err(std::io::Error::other("injected cleanup failure")),
+				|_: &Dir, _: &str| Err(std::io::Error::other("injected cleanup failure")),
 			)
 			.unwrap_err();
 
 		assert!(error.to_string().contains("injected write failure"));
 		assert!(error.to_string().contains("injected cleanup failure"));
+	}
+
+	#[cfg(unix)]
+	#[test]
+	fn create_new_source_rejects_root_directory_swap_after_identity_open() {
+		let container = TempDir::new().unwrap();
+		let root = container.path().join("migrations");
+		let anchored_root = container.path().join("anchored-migrations");
+		let replacement_root = container.path().join("replacement-migrations");
+		std::fs::create_dir(&root).unwrap();
+		std::fs::create_dir(&replacement_root).unwrap();
+		std::fs::write(replacement_root.join("marker"), b"replacement root").unwrap();
+		let repo = FilesystemRepository::new(&root);
+		let source = repo
+			.render(
+				&create_test_migration("polls", "0001_squashed"),
+				MigrationRenderOptions {
+					include_header: false,
+				},
+			)
+			.unwrap();
+
+		let result = repo.create_new_source_with_hooks(
+			"polls",
+			"0001_squashed",
+			&source,
+			RootValidationHooks {
+				before_open: || Ok(()),
+				after_identity_open: || {
+					std::fs::rename(&root, &anchored_root)?;
+					std::fs::rename(&replacement_root, &root)
+				},
+			},
+			|file, formatted| {
+				file.write_all(formatted.as_bytes())?;
+				file.sync_all()
+			},
+			|directory, name| directory.remove_file(name),
+		);
+
+		let anchored_file = anchored_root.join("polls/0001_squashed.rs");
+		assert_eq!(
+			std::fs::read(root.join("marker")).unwrap(),
+			b"replacement root"
+		);
+		assert!(!root.join("polls/0001_squashed.rs").exists());
+		assert!(
+			matches!(result, Err(MigrationError::PathTraversal(_))) && !anchored_file.exists(),
+			"expected root identity error and anchored cleanup, got {result:?}; anchored file \
+			 exists: {}",
+			anchored_file.exists()
+		);
 	}
 }

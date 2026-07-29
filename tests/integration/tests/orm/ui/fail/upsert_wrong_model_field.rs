@@ -1,4 +1,5 @@
-// Compile-only fixtures intentionally leave model fields unconstructed.
+// Compile-only helpers are type-checked but not run, and model macro expansion emits
+// generated cfg checks for features defined by the consuming integration crate.
 #![allow(dead_code, unexpected_cfgs)]
 //! Fail case: a builder rejects a field accessor from another model.
 

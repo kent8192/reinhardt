@@ -348,7 +348,8 @@ jobs:
           while IFS=$'\t' read -r status path extra; do
             case "$status" in
               M|A)
-                base64 -w0 < "$path" \
+                git cat-file blob ":$path" \
+                  | base64 -w0 \
                   | jq -ncR --arg p "$path" '{path: $p, contents: input}' \
                   >> "$ADDITIONS_FILE"
                 ;;

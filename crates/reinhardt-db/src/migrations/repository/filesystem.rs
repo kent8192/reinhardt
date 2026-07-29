@@ -4,10 +4,20 @@
 
 use super::{Migration, MigrationError, MigrationRepository, Result};
 use crate::migrations::ast_parser;
+use crate::migrations::dependency::DependencyCondition;
 use async_trait::async_trait;
 use quote::quote;
+use std::fs::{File, OpenOptions};
+use std::io::Write;
 use std::path::{Path, PathBuf};
 use syn::parse_quote;
+
+/// Controls optional content in rendered migration source.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct MigrationRenderOptions {
+	/// Include the generated-file header.
+	pub include_header: bool,
+}
 
 /// Repository that persists migrations as `.rs` files
 ///
@@ -27,7 +37,83 @@ pub struct FilesystemRepository {
 	root_dir: PathBuf,
 }
 
+struct IncompleteFile {
+	path: PathBuf,
+	file: Option<File>,
+	complete: bool,
+}
+
+impl IncompleteFile {
+	fn new(path: PathBuf, file: File) -> Self {
+		Self {
+			path,
+			file: Some(file),
+			complete: false,
+		}
+	}
+
+	fn file_mut(&mut self) -> &mut File {
+		self.file.as_mut().expect("incomplete file must be open")
+	}
+
+	fn complete(mut self) -> PathBuf {
+		self.complete = true;
+		self.path.clone()
+	}
+}
+
+impl Drop for IncompleteFile {
+	fn drop(&mut self) {
+		self.file.take();
+		if !self.complete {
+			let _ = std::fs::remove_file(&self.path);
+		}
+	}
+}
+
 impl FilesystemRepository {
+	fn operation_kind(operation: &crate::migrations::Operation) -> &'static str {
+		use crate::migrations::Operation;
+
+		match operation {
+			Operation::CreateTable { .. } => "CreateTable",
+			Operation::DropTable { .. } => "DropTable",
+			Operation::AddColumn { .. } => "AddColumn",
+			Operation::DropColumn { .. } => "DropColumn",
+			Operation::AlterColumn { .. } => "AlterColumn",
+			Operation::RenameTable { .. } => "RenameTable",
+			Operation::RenameColumn { .. } => "RenameColumn",
+			Operation::AddConstraint { .. } => "AddConstraint",
+			Operation::AddConstraintDefinition { .. } => "AddConstraintDefinition",
+			Operation::AddConstraintRepair { .. } => "AddConstraintRepair",
+			Operation::RestoreConstraintOnRollback { .. } => "RestoreConstraintOnRollback",
+			Operation::DropConstraint { .. } => "DropConstraint",
+			Operation::DropConstraintDefinition { .. } => "DropConstraintDefinition",
+			Operation::CreateIndex { .. } => "CreateIndex",
+			#[cfg(feature = "pgvector")]
+			Operation::CreateNamedIndex { .. } => "CreateNamedIndex",
+			Operation::CreateIndexRepair { .. } => "CreateIndexRepair",
+			Operation::RestoreIndexOnRollback { .. } => "RestoreIndexOnRollback",
+			Operation::DropIndex { .. } => "DropIndex",
+			#[cfg(feature = "pgvector")]
+			Operation::DropNamedIndex { .. } => "DropNamedIndex",
+			Operation::RunSQL { .. } => "RunSQL",
+			Operation::RunRust { .. } => "RunRust",
+			Operation::AlterTableComment { .. } => "AlterTableComment",
+			Operation::AlterUniqueTogether { .. } => "AlterUniqueTogether",
+			Operation::AlterModelOptions { .. } => "AlterModelOptions",
+			Operation::CreateInheritedTable { .. } => "CreateInheritedTable",
+			Operation::AddDiscriminatorColumn { .. } => "AddDiscriminatorColumn",
+			Operation::MoveModel { .. } => "MoveModel",
+			Operation::CreateSchema { .. } => "CreateSchema",
+			Operation::DropSchema { .. } => "DropSchema",
+			Operation::CreateExtension { .. } => "CreateExtension",
+			Operation::BulkLoad { .. } => "BulkLoad",
+			Operation::SetAutoIncrementValue { .. } => "SetAutoIncrementValue",
+			Operation::CreateCompositePrimaryKey { .. } => "CreateCompositePrimaryKey",
+		}
+	}
+
 	/// Create a new FilesystemRepository
 	///
 	/// # Arguments
@@ -115,8 +201,8 @@ impl FilesystemRepository {
 		Ok(path)
 	}
 
-	/// Generate Rust code for a migration file
-	fn generate_migration_code(&self, migration: &Migration) -> Result<String> {
+	/// Render a complete Rust migration source file.
+	pub fn render(&self, migration: &Migration, options: MigrationRenderOptions) -> Result<String> {
 		// Build dependencies vector (tuple elements need .to_string() for String type)
 		let deps: Vec<_> = migration
 			.dependencies
@@ -134,6 +220,38 @@ impl FilesystemRepository {
 				quote! { (#app.to_string(), #name.to_string()) }
 			})
 			.collect();
+		let swappable_dependencies = migration.swappable_dependencies.iter().map(|dependency| {
+			let setting_key = &dependency.setting_key;
+			let default_app = &dependency.default_app;
+			let default_model = &dependency.default_model;
+			let migration_name = &dependency.migration_name;
+			quote! {
+				SwappableDependency::new(
+					#setting_key,
+					#default_app,
+					#default_model,
+					#migration_name,
+				)
+			}
+		});
+		let optional_dependencies = migration.optional_dependencies.iter().map(|dependency| {
+			let app_label = &dependency.app_label;
+			let migration_name = &dependency.migration_name;
+			let condition = match &dependency.condition {
+				DependencyCondition::AppInstalled(value) => {
+					quote! { DependencyCondition::AppInstalled(#value.to_string()) }
+				}
+				DependencyCondition::SettingEnabled(value) => {
+					quote! { DependencyCondition::SettingEnabled(#value.to_string()) }
+				}
+				DependencyCondition::FeatureEnabled(value) => {
+					quote! { DependencyCondition::FeatureEnabled(#value.to_string()) }
+				}
+			};
+			quote! {
+				OptionalDependency::new(#app_label, #migration_name, #condition)
+			}
+		});
 
 		let app_label = &migration.app_label;
 		let name = &migration.name;
@@ -155,6 +273,9 @@ impl FilesystemRepository {
 		// Generate full migration file
 		let file: syn::File = parse_quote! {
 			use reinhardt::db::migrations::prelude::*;
+			use reinhardt::db::migrations::dependency::{
+				DependencyCondition, OptionalDependency, SwappableDependency,
+			};
 			use reinhardt::db::migrations::FieldType;
 
 			pub(super) fn migration() -> Migration {
@@ -168,8 +289,8 @@ impl FilesystemRepository {
 					initial: #initial_tokens,
 					state_only: #state_only,
 					database_only: #database_only,
-					swappable_dependencies: vec![],
-					optional_dependencies: vec![],
+					swappable_dependencies: vec![#(#swappable_dependencies),*],
+					optional_dependencies: vec![#(#optional_dependencies),*],
 				}
 			}
 		};
@@ -177,14 +298,73 @@ impl FilesystemRepository {
 		// Format with prettyplease first, then apply rustfmt
 		let prettyplease_output = prettyplease::unparse(&file);
 		let formatted = Self::format_with_rustfmt(&prettyplease_output)?;
-		Ok(formatted)
+		syn::parse_file(&formatted).map_err(|error| {
+			let operations = migration
+				.operations
+				.iter()
+				.map(Self::operation_kind)
+				.collect::<Vec<_>>()
+				.join(", ");
+			MigrationError::UnsupportedMigrationRendering {
+				operation: format!("{operations}: {error}"),
+			}
+		})?;
+
+		if options.include_header {
+			Ok(format!(
+				"// Generated by Reinhardt migrations.\n\n{formatted}"
+			))
+		} else {
+			Ok(formatted)
+		}
+	}
+
+	/// Create a new migration source file without overwriting an existing file.
+	pub fn create_new_source(
+		&self,
+		app_label: &str,
+		migration_name: &str,
+		source: &str,
+	) -> Result<PathBuf> {
+		self.create_new_source_with(app_label, migration_name, source, |file, formatted| {
+			file.write_all(formatted.as_bytes())?;
+			file.flush()?;
+			file.sync_all()
+		})
+	}
+
+	fn create_new_source_with<F>(
+		&self,
+		app_label: &str,
+		migration_name: &str,
+		source: &str,
+		write_source: F,
+	) -> Result<PathBuf>
+	where
+		F: FnOnce(&mut File, &str) -> std::io::Result<()>,
+	{
+		let path = self.migration_path(app_label, migration_name)?;
+		syn::parse_file(source).map_err(|error| {
+			MigrationError::InvalidMigration(format!("Failed to parse migration source: {error}"))
+		})?;
+		let formatted = Self::format_with_rustfmt(source)?;
+
+		if let Some(parent) = path.parent() {
+			std::fs::create_dir_all(parent)?;
+		}
+		let file = OpenOptions::new()
+			.write(true)
+			.create_new(true)
+			.open(&path)?;
+		let mut incomplete = IncompleteFile::new(path, file);
+		write_source(incomplete.file_mut(), &formatted)?;
+		Ok(incomplete.complete())
 	}
 
 	/// Format code with rustfmt, applying project's rustfmt.toml settings (hard_tabs = true)
 	///
 	/// Falls back to prettyplease output if rustfmt is not available or fails.
 	fn format_with_rustfmt(code: &str) -> Result<String> {
-		use std::io::Write;
 		use std::process::{Command, Stdio};
 
 		// Try to run rustfmt
@@ -288,17 +468,13 @@ impl MigrationRepository for FilesystemRepository {
 			})?;
 		}
 
-		// Generate migration code
-		let code = self.generate_migration_code(migration)?;
-
-		// Write to file
-		tokio::fs::write(&path, code).await.map_err(|e| {
-			MigrationError::IoError(std::io::Error::other(format!(
-				"Failed to write {}: {}",
-				path.display(),
-				e
-			)))
-		})?;
+		let code = self.render(
+			migration,
+			MigrationRenderOptions {
+				include_header: true,
+			},
+		)?;
+		self.create_new_source(&migration.app_label, &migration.name, &code)?;
 
 		Ok(())
 	}
@@ -799,5 +975,30 @@ mod tests {
 		// Assert - round-trip: get() parses back the same initial value
 		let retrieved = repo.get("polls", "0001_initial_false").await.unwrap();
 		assert_eq!(retrieved.initial, Some(false));
+	}
+
+	#[test]
+	fn create_new_source_removes_partial_file_when_injected_write_fails() {
+		use std::io::Write;
+
+		let temp_dir = TempDir::new().unwrap();
+		let repo = FilesystemRepository::new(temp_dir.path());
+		let source = repo
+			.render(
+				&create_test_migration("polls", "0001_squashed"),
+				MigrationRenderOptions {
+					include_header: false,
+				},
+			)
+			.unwrap();
+
+		let result =
+			repo.create_new_source_with("polls", "0001_squashed", &source, |file, formatted| {
+				file.write_all(&formatted.as_bytes()[..16])?;
+				Err(std::io::Error::other("injected write failure"))
+			});
+
+		assert!(matches!(result, Err(MigrationError::IoError(_))));
+		assert!(!temp_dir.path().join("polls/0001_squashed.rs").exists());
 	}
 }

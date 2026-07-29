@@ -140,7 +140,10 @@ pub use operations::{
 	RunSQL, StateOperation, special::DataMigration,
 };
 pub use recorder::{DatabaseMigrationRecorder, MigrationRecorder};
-pub use repository::{MigrationRepository, filesystem::FilesystemRepository};
+pub use repository::{
+	MigrationRepository,
+	filesystem::{FilesystemRepository, MigrationRenderOptions},
+};
 pub use schema_diff::{
 	ColumnSchema, ConstraintSchema, DatabaseSchema, ForeignKeySchemaInfo, IndexSchema, SchemaDiff,
 	SchemaDiffResult, TableSchema,
@@ -306,6 +309,13 @@ pub enum MigrationError {
 	/// migration root directory.
 	#[error("Path traversal detected: {0}")]
 	PathTraversal(String),
+
+	/// A migration operation cannot be represented by the source renderer.
+	#[error("Unsupported migration rendering: {operation}")]
+	UnsupportedMigrationRendering {
+		/// Description of the operation or metadata that cannot be rendered.
+		operation: String,
+	},
 }
 
 impl From<reinhardt_core::exception::Error> for MigrationError {

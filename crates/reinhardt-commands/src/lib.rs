@@ -173,8 +173,9 @@
 //!
 //! Explicit `--output DIRECTORY` mode generates a module file set. Existing
 //! destinations are rejected unless `--force` is also present, and a failed
-//! publication restores replaced files while removing newly created partial
-//! output. The `--force` option is invalid without `--output`.
+//! publication is rollback-safe and all-or-nothing when the command reports
+//! failure: replaced files are restored and newly created partial output is
+//! removed. The `--force` option is invalid without `--output`.
 
 /// Base command trait and argument/option definitions.
 pub mod base;

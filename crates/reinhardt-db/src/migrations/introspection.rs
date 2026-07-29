@@ -860,6 +860,15 @@ fn decode_optional_mysql_unsigned_integer(
 }
 
 #[cfg(feature = "mysql")]
+fn mysql_catalog_u32(value: Option<i64>, default: u32, kind: &str) -> Result<u32> {
+	u32::try_from(value.unwrap_or(i64::from(default))).map_err(|_| {
+		MigrationError::IntrospectionError(format!(
+			"MySQL {kind} is outside the supported u32 range"
+		))
+	})
+}
+
+#[cfg(feature = "mysql")]
 impl MySQLIntrospector {
 	/// Creates a new MySQL introspector with the given pool.
 	pub fn new(pool: sqlx::MySqlPool) -> Self {
@@ -872,10 +881,10 @@ impl MySQLIntrospector {
 		char_max_length: Option<i64>,
 		numeric_precision: Option<i64>,
 		numeric_scale: Option<i64>,
-	) -> super::FieldType {
+	) -> Result<super::FieldType> {
 		use super::FieldType;
 		let data_type_lower = data_type.to_lowercase();
-		match data_type_lower.as_str() {
+		let field_type = match data_type_lower.as_str() {
 			"tinyint" => {
 				// MySQL uses tinyint(1) for boolean
 				if column_type.to_lowercase().starts_with("tinyint(1)") {
@@ -889,16 +898,24 @@ impl MySQLIntrospector {
 			"int" | "integer" => FieldType::Integer,
 			"bigint" => FieldType::BigInteger,
 
-			"varchar" => FieldType::VarChar(char_max_length.unwrap_or(255) as u32),
-			"char" => FieldType::Char(char_max_length.unwrap_or(1) as u32),
+			"varchar" => FieldType::VarChar(mysql_catalog_u32(
+				char_max_length,
+				255,
+				"character maximum length",
+			)?),
+			"char" => FieldType::Char(mysql_catalog_u32(
+				char_max_length,
+				1,
+				"character maximum length",
+			)?),
 			"text" => FieldType::Text,
 			"tinytext" => FieldType::TinyText,
 			"mediumtext" => FieldType::MediumText,
 			"longtext" => FieldType::LongText,
 
 			"decimal" | "numeric" => FieldType::Decimal {
-				precision: numeric_precision.unwrap_or(10) as u32,
-				scale: numeric_scale.unwrap_or(2) as u32,
+				precision: mysql_catalog_u32(numeric_precision, 10, "numeric precision")?,
+				scale: mysql_catalog_u32(numeric_scale, 2, "numeric scale")?,
 			},
 			"float" => FieldType::Float,
 			"double" => FieldType::Double,
@@ -930,7 +947,8 @@ impl MySQLIntrospector {
 			}
 
 			_ => FieldType::Custom(data_type.to_string()),
-		}
+		};
+		Ok(field_type)
 	}
 
 	/// Parse enum or set values from MySQL column_type string.
@@ -1006,7 +1024,7 @@ impl MySQLIntrospector {
 				char_max_length,
 				numeric_precision,
 				numeric_scale,
-			);
+			)?;
 
 			columns.insert(
 				column_name.clone(),
@@ -2037,6 +2055,24 @@ mod tests {
 		assert_eq!(
 			error.to_string(),
 			"Introspection error: include_partitions is only supported for PostgreSQL"
+		);
+	}
+
+	#[test]
+	#[cfg(feature = "mysql")]
+	fn mysql_catalog_integer_conversion_rejects_values_outside_u32() {
+		let negative = mysql_catalog_u32(Some(-1), 255, "character maximum length")
+			.expect_err("negative catalog metadata must be rejected");
+		assert_eq!(
+			negative.to_string(),
+			"Introspection error: MySQL character maximum length is outside the supported u32 range",
+		);
+
+		let overflow = mysql_catalog_u32(Some(i64::from(u32::MAX) + 1), 10, "numeric precision")
+			.expect_err("oversized catalog metadata must be rejected");
+		assert_eq!(
+			overflow.to_string(),
+			"Introspection error: MySQL numeric precision is outside the supported u32 range",
 		);
 	}
 

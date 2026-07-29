@@ -253,8 +253,9 @@ cargo run --bin manage -- inspectdb > src/models.rs
 Use `--output DIRECTORY` for a generated multi-file module. The command
 preflights the complete file set and refuses to overwrite any existing file.
 Add `--force` only with `--output` to replace existing generated files. File
-publication is atomic across the generated set: a failure restores replaced
-files and removes newly created partial output.
+publication is rollback-safe and all-or-nothing when the command reports a
+failure: replaced files are restored and newly created partial output is
+removed.
 
 ### Rust Management Shell
 

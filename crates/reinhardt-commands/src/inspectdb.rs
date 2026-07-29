@@ -25,6 +25,19 @@ pub trait InspectDbWriter: Send + Sync {
 
 	/// Write one progress or diagnostic message to stderr.
 	fn write_stderr(&self, content: &str) -> io::Result<()>;
+
+	/// Publish a complete generated directory output.
+	///
+	/// The default strategy uses the rollback-safe database migration writer.
+	/// Embedders may replace the strategy when they own an equivalent
+	/// all-or-nothing publication boundary.
+	fn publish_generated_files(
+		&self,
+		output: &GeneratedOutput,
+		force: bool,
+	) -> reinhardt_db::migrations::Result<()> {
+		write_generated_files_atomically(output, force)
+	}
 }
 
 struct StandardInspectDbWriter;
@@ -160,11 +173,11 @@ impl BaseCommand for InspectDbCommand {
 		if output_directory.is_some() {
 			let output = generate_models_canonical(&config, &schema).map_err(generation_error)?;
 			validate_generated_files(&output)?;
-			write_generated_files_atomically(&output, ctx.has_option("force")).map_err(
-				|error| {
+			self.writer
+				.publish_generated_files(&output, ctx.has_option("force"))
+				.map_err(|error| {
 					CommandError::ExecutionError(format!("Generated file write failed: {error}"))
-				},
-			)?;
+				})?;
 			self.progress(&format!("Generated {} files", output.files.len()))?;
 		} else {
 			let module = render_models_module(&config, &schema).map_err(generation_error)?;

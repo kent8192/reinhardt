@@ -19,7 +19,7 @@
 //! single parseable Rust module for stdout, while
 //! [`generate_models_canonical`] produces a deterministic multi-file set.
 //! Management-command directory output validates the complete set before using
-//! rollback-safe atomic publication.
+//! rollback-safe, all-or-nothing publication when the command reports failure.
 //!
 //! ## AST-Based Entry Point Generation
 //!

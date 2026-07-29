@@ -1,4 +1,43 @@
 //! Typed builders, assignment views, and normalized plans for atomic upserts.
+//!
+//! Generated model [`FieldRef`] accessors bind every assignment to its model
+//! and database field type. Lookups must cover a primary key, a field declared
+//! `unique = true`, or every field of an immediate, unconditional unique
+//! constraint. A lookup field cannot also be a default or update assignment.
+//!
+//! # Example
+//!
+//! ```no_run
+//! # #![allow(unexpected_cfgs)]
+//! # mod migrations { pub use reinhardt_db::migrations::*; }
+//! # mod orm { pub use reinhardt_db::orm::*; }
+//! use reinhardt_core::exception::Error;
+//! use reinhardt_core::macros::model;
+//! use reinhardt_db::orm::{CustomManager, Model};
+//! use serde::{Deserialize, Serialize};
+//!
+//! #[model(app_label = "typed_upsert_docs", table_name = "typed_upsert_tags")]
+//! #[derive(Serialize, Deserialize)]
+//! struct Tag {
+//!     #[field(primary_key = true)]
+//!     id: Option<i64>,
+//!     #[field(max_length = 64, unique = true)]
+//!     slug: String,
+//!     display_order: i32,
+//! }
+//!
+//! # async fn example() -> Result<(), Error> {
+//! let (tag, created) = Tag::objects()
+//!     .get_or_create()
+//!     .lookup(Tag::field_slug(), "rust")
+//!     .default(Tag::field_display_order(), 10_i32)
+//!     .execute()
+//!     .await?;
+//! # let _ = (tag, created);
+//! # Ok(())
+//! # }
+//! # fn main() {}
+//! ```
 
 pub(crate) mod assignment;
 pub(crate) mod execution;
@@ -18,6 +57,9 @@ use reinhardt_core::exception::{Error, Result};
 pub use assignment::{UpsertCreate, UpsertWrite};
 
 /// Typed builder for retrieving an existing row or creating it atomically.
+///
+/// A successful insert returns `true`. If another invocation wins a concurrent
+/// insert race, this builder reloads that row and returns `false`.
 pub struct GetOrCreateBuilder<C: CustomManager> {
 	manager: C,
 	lookup: Vec<TypedAssignment<C::Model>>,
@@ -41,6 +83,8 @@ impl<C: CustomManager> GetOrCreateBuilder<C> {
 	}
 
 	/// Adds a field whose value identifies the row.
+	///
+	/// The complete lookup must cover supported immediate uniqueness.
 	pub fn lookup<T, V>(self, field: FieldRef<C::Model, T>, value: V) -> Self
 	where
 		T: DatabaseField,
@@ -53,6 +97,8 @@ impl<C: CustomManager> GetOrCreateBuilder<C> {
 	}
 
 	/// Adds a value used only when the row must be created.
+	///
+	/// A default cannot target a lookup field.
 	pub fn default<T, V>(self, field: FieldRef<C::Model, T>, value: V) -> Self
 	where
 		T: DatabaseField,
@@ -74,6 +120,9 @@ impl<C: CustomManager> GetOrCreateBuilder<C> {
 	}
 
 	/// Executes through a caller-owned ORM executor.
+	///
+	/// The executor may be a connection, transaction, or savepoint that
+	/// implements [`OrmExecutor`].
 	pub async fn execute_with<E>(self, executor: &mut E) -> Result<(C::Model, bool)>
 	where
 		E: OrmExecutor + ?Sized,
@@ -117,6 +166,10 @@ impl<C: CustomManager> GetOrCreateBuilder<C> {
 }
 
 /// Typed builder for updating a locked row or creating it atomically.
+///
+/// Existing rows are locked before their update values and manager hook are
+/// applied. If another invocation wins a concurrent insert race, this builder
+/// locks and updates the winner, then returns `false`.
 pub struct UpdateOrCreateBuilder<C: CustomManager> {
 	manager: C,
 	lookup: Vec<TypedAssignment<C::Model>>,
@@ -143,6 +196,8 @@ impl<C: CustomManager> UpdateOrCreateBuilder<C> {
 	}
 
 	/// Adds a field whose value identifies the row.
+	///
+	/// The complete lookup must cover supported immediate uniqueness.
 	pub fn lookup<T, V>(self, field: FieldRef<C::Model, T>, value: V) -> Self
 	where
 		T: DatabaseField,
@@ -155,6 +210,8 @@ impl<C: CustomManager> UpdateOrCreateBuilder<C> {
 	}
 
 	/// Adds a value applied to both the update and create branches.
+	///
+	/// A set assignment cannot target a lookup field.
 	pub fn set<T, V>(self, field: FieldRef<C::Model, T>, value: V) -> Self
 	where
 		T: DatabaseField,
@@ -167,6 +224,8 @@ impl<C: CustomManager> UpdateOrCreateBuilder<C> {
 	}
 
 	/// Adds a value used only by the create branch.
+	///
+	/// A create default cannot target a lookup field.
 	pub fn create_default<T, V>(self, field: FieldRef<C::Model, T>, value: V) -> Self
 	where
 		T: DatabaseField,
@@ -179,6 +238,10 @@ impl<C: CustomManager> UpdateOrCreateBuilder<C> {
 	}
 
 	/// Executes through a write-intent transaction on the global connection.
+	///
+	/// SQLite acquires write intent before the lookup. MySQL uses a
+	/// `READ COMMITTED` write-intent transaction to avoid missing-row gap-lock
+	/// deadlocks while unique constraints serialize competing inserts.
 	pub async fn execute(self) -> Result<(C::Model, bool)> {
 		let (manager, plan) = self.into_plan()?;
 		let connection = crate::orm::manager::get_connection().await?;

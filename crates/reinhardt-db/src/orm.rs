@@ -48,6 +48,19 @@
 //! values only. They may generate SQL but cannot control a live ORM transaction.
 //! [`AtomicTransaction`] is also intentionally non-`Copy` and stays bound to
 //! the callback and dedicated connection created by [`DatabaseConnection::atomic`].
+//!
+//! ## Typed Manager Upserts
+//!
+//! [`CustomManager::get_or_create`] and [`CustomManager::update_or_create`]
+//! start builders whose generated [`FieldRef`] values check the model and
+//! assignment value types during compilation. A lookup must cover a primary
+//! key, a `unique = true` field, or an immediate, unconditional unique
+//! constraint. Defaults and updates cannot replace lookup fields.
+//!
+//! `get_or_create().execute_with(...)` accepts any [`OrmExecutor`].
+//! `update_or_create().execute_with(...)` requires an [`AtomicTransaction`]
+//! created by [`DatabaseConnection::atomic_write`]; a transaction from
+//! [`DatabaseConnection::atomic`] is rejected before SQL execution.
 
 // Core modules - always available
 pub mod aggregation;

@@ -67,6 +67,10 @@ impl fmt::Display for F {
 ///
 /// This type replaces Python-style `__` (double underscore) field lookup notation
 /// with Rust-idiomatic typed field accessors.
+/// Typed manager upsert builders accept the same generated references, so
+/// fields from another model and mismatched assignment values do not compile.
+/// Dynamic field names must be validated against model metadata and routed
+/// through an explicitly lower-level query API.
 ///
 /// # Type Parameters
 ///

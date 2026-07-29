@@ -33,6 +33,8 @@
 //!
 //! - **Django-style Models**: Define database models with structs
 //! - **QuerySet API**: Chainable query builder with conditional partial updates
+//! - **Typed Manager Upserts**: Compile-time checked `get_or_create` and
+//!   `update_or_create` builders with explicit transaction semantics
 //! - **Field Types**: Rich set of field types with validation
 //! - **Relationships**: ForeignKey, ManyToMany, OneToOne
 //! - **Fixtures**: Django-compatible model fixture dump/load runtime with upsert,

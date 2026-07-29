@@ -70,6 +70,71 @@
 //! let manager = User::objects();
 //! ```
 //!
+//! ## Upsert Hook
+//!
+//! [`CustomManager::before_upsert_write`] is separate from
+//! [`CustomManager::before_save`]. It can mutate pending typed create values or
+//! the locked model that will be updated:
+//!
+//! ```no_run
+//! # #![allow(unexpected_cfgs)]
+//! # mod migrations { pub use reinhardt_db::migrations::*; }
+//! # mod orm { pub use reinhardt_db::orm::*; }
+//! use reinhardt_core::exception::Result;
+//! use reinhardt_core::macros::model;
+//! use reinhardt_db::orm::custom_manager::CustomManager;
+//! use reinhardt_db::orm::upsert::UpsertWrite;
+//! use serde::{Deserialize, Serialize};
+//!
+//! #[derive(Default)]
+//! struct AccountManager;
+//!
+//! impl CustomManager for AccountManager {
+//!     type Model = Account;
+//!
+//!     fn new() -> Self {
+//!         Self
+//!     }
+//!
+//!     fn before_upsert_write(
+//!         &self,
+//!         write: &mut UpsertWrite<'_, Account>,
+//!     ) -> Result<()> {
+//!         match write {
+//!             UpsertWrite::Create(create) => {
+//!                 create.set(Account::field_normalized_name(), "normalized")?;
+//!             }
+//!             UpsertWrite::Update(account) => {
+//!                 account.normalized_name.make_ascii_lowercase();
+//!             }
+//!         }
+//!         Ok(())
+//!     }
+//! }
+//!
+//! #[model(
+//!     app_label = "custom_manager_docs",
+//!     table_name = "custom_manager_accounts",
+//!     manager = AccountManager
+//! )]
+//! #[derive(Serialize, Deserialize)]
+//! struct Account {
+//!     #[field(primary_key = true)]
+//!     id: Option<i64>,
+//!     #[field(max_length = 64, unique = true)]
+//!     name: String,
+//!     #[field(max_length = 64)]
+//!     normalized_name: String,
+//! }
+//! # fn main() {}
+//! ```
+//!
+//! Create hooks cannot replace lookup fields. A call to
+//! [`crate::orm::upsert::UpsertCreate::get`] returns `None` when a pending value
+//! is absent, even if the database will later supply a default. Hooks must not
+//! perform external side effects: a create hook may run before a concurrent
+//! insert race is lost, and either branch may later be rolled back.
+//!
 //! # Blanket Implementation
 //!
 //! The blanket `impl<M: Model> CustomManager for Manager<M>` makes every
@@ -494,11 +559,19 @@ pub trait CustomManager: Sized + Send + Sync {
 	}
 
 	/// Starts a typed get-or-create operation.
+	///
+	/// The lookup must cover supported immediate uniqueness. Call
+	/// [`GetOrCreateBuilder::execute_with`] to use a caller-owned
+	/// [`OrmExecutor`].
 	fn get_or_create(self) -> GetOrCreateBuilder<Self> {
 		GetOrCreateBuilder::new(self)
 	}
 
 	/// Starts a typed update-or-create operation.
+	///
+	/// Caller-owned execution requires a
+	/// [`super::transaction::AtomicTransaction`] created by
+	/// [`super::connection::DatabaseConnection::atomic_write`].
 	fn update_or_create(self) -> UpdateOrCreateBuilder<Self> {
 		UpdateOrCreateBuilder::new(self)
 	}
@@ -691,9 +764,14 @@ pub trait CustomManager: Sized + Send + Sync {
 
 	/// Hook invoked immediately before an upsert write.
 	///
-	/// The hook can mutate typed create values or veto the write. It may run for
-	/// an insert attempt that loses a concurrent race, so implementations must
-	/// avoid external side effects. This hook is separate from [`Self::before_save`].
+	/// The hook can mutate typed create values, mutate an existing model, or
+	/// veto the write. Lookup fields are immutable. A missing pending create
+	/// value reads as `None`, including a value that a database default would
+	/// later supply.
+	///
+	/// The hook may run for an insert attempt that loses a concurrent race or
+	/// for a transaction that later rolls back, so external side effects are
+	/// unsupported. This hook is separate from [`Self::before_save`].
 	fn before_upsert_write(
 		&self,
 		_write: &mut UpsertWrite<'_, Self::Model>,

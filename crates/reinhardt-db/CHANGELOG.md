@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Breaking Changes
+
+- Replace the string-map `Manager::get_or_create` API and remove
+  `get_or_create_with_conn`, `get_or_create_queries`, and `get_or_create_sql`.
+  Use the typed `get_or_create` and `update_or_create` builders with generated
+  model field accessors; caller-owned update/create execution requires a
+  write-intent `AtomicTransaction`.
+
 ## [0.4.0-alpha.2](https://github.com/kent8192/reinhardt-web/compare/reinhardt-db@v0.4.0-alpha.1...reinhardt-db@v0.4.0-alpha.2) - 2026-07-23
 
 ### Added

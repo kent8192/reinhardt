@@ -1631,6 +1631,86 @@ mod tests {
 		});
 	}
 
+	#[cfg(native)]
+	fn assert_unsettled_query_snapshot_is_rejected(status: &'static str) {
+		ReactiveScope::run(|| {
+			let family_id = match status {
+				"Idle" => "tests::invalid-idle-hydrated-query",
+				"Pending" => "tests::invalid-pending-hydrated-query",
+				_ => panic!("unsupported unsettled query status"),
+			};
+			let family = QueryFamily::<(), String, String>::new(family_id);
+			let key = family.key(());
+			let mut malformed_state = SsrState::new();
+			malformed_state.add_resource_state(
+				key.hydration_id(),
+				serde_json::json!({
+					"status": status,
+					"data": null,
+					"error": null,
+					"refetch_error": null,
+					"is_fetching": false,
+					"is_stale": false
+				}),
+			);
+			let client = QueryClient::new(QueryDefaults::default());
+			let fetch_count = Rc::new(Cell::new(0));
+
+			let error = HydrationContext::from_state(malformed_state)
+				.seed_query(&client, key.clone())
+				.expect_err("unsettled SSR query snapshots must be rejected");
+
+			assert!(
+				error
+					.to_string()
+					.contains("unsettled query hydration snapshot"),
+				"{error}"
+			);
+			assert_eq!(fetch_count.get(), 0);
+
+			let mut valid_state = SsrState::new();
+			valid_state.add_resource_state(
+				key.hydration_id(),
+				serde_json::json!({
+					"status": "Success",
+					"data": "server-value",
+					"error": null,
+					"refetch_error": null,
+					"is_fetching": false,
+					"is_stale": false
+				}),
+			);
+			HydrationContext::from_state(valid_state)
+				.seed_query(&client, key)
+				.expect("a valid snapshot should seed after malformed input is rejected");
+			let hydrated = client.observe(
+				family.query((), {
+					let fetch_count = Rc::clone(&fetch_count);
+					move || {
+						fetch_count.set(fetch_count.get() + 1);
+						async { Ok::<_, String>("client-value".to_string()) }
+					}
+				}),
+				QueryOptions::default(),
+			);
+
+			assert_eq!(hydrated.data(), Some("server-value".to_string()));
+			assert_eq!(fetch_count.get(), 0);
+		});
+	}
+
+	#[cfg(native)]
+	#[test]
+	fn idle_query_snapshot_does_not_seed_cache_or_start_fetch() {
+		assert_unsettled_query_snapshot_is_rejected("Idle");
+	}
+
+	#[cfg(native)]
+	#[test]
+	fn pending_query_snapshot_does_not_seed_cache_or_start_fetch() {
+		assert_unsettled_query_snapshot_is_rejected("Pending");
+	}
+
 	#[test]
 	fn test_hydration_error_display() {
 		let err = HydrationError::RootNotFound("#app".to_string());

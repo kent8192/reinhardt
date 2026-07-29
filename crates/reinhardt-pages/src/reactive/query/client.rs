@@ -993,12 +993,9 @@ impl QueryClient {
 				ResourceState::Error(error)
 			}
 			QueryStatus::Idle | QueryStatus::Pending => {
-				if snapshot.data.is_some() || snapshot.error.is_some() || refetch_error.is_some() {
-					return Err(invalid_hydration_snapshot(
-						"unsettled query snapshot contains settled state",
-					));
-				}
-				ResourceState::Loading
+				return Err(invalid_hydration_snapshot(
+					"unsettled query hydration snapshot cannot be restored",
+				));
 			}
 		};
 		self.register_family(key.family_id(), key.family_types());

@@ -10,7 +10,9 @@ use reinhardt_pages::ssr::{SsrOptions, SsrRenderer};
 use rstest::rstest;
 use std::cell::Cell;
 use std::rc::Rc;
+use std::sync::Arc;
 use std::time::Duration;
+use tokio::sync::Barrier;
 
 fn resource_view() -> Page {
 	Page::reactive(|| {
@@ -418,13 +420,20 @@ async fn pending_ssr_query_reuse_does_not_create_duplicate_fetcher() {
 	assert_eq!(renderer.state().resource_count(), 1);
 }
 
-fn request_query_view(value: &'static str) -> Page {
+fn request_query_view(value: &'static str, fetch_barrier: Arc<Barrier>) -> Page {
 	Page::reactive(move || {
 		let _request_client = queries();
+		let fetch_barrier = Arc::clone(&fetch_barrier);
 		let query = use_query(
 			QueryFamily::<(), String, String>::new("tests::request-isolation").query(
 				(),
-				move || async move { Ok::<_, String>(value.to_string()) },
+				move || {
+					let fetch_barrier = Arc::clone(&fetch_barrier);
+					async move {
+						fetch_barrier.wait().await;
+						Ok::<_, String>(value.to_string())
+					}
+				},
 			),
 			QueryOptions::default(),
 		);
@@ -447,16 +456,40 @@ fn request_query_view(value: &'static str) -> Page {
 async fn concurrent_ssr_requests_keep_query_clients_isolated() {
 	let mut first_renderer = SsrRenderer::new();
 	let mut second_renderer = SsrRenderer::new();
+	let fetch_barrier = Arc::new(Barrier::new(2));
+	let query_id = QueryFamily::<(), String, String>::new("tests::request-isolation")
+		.key(())
+		.id();
 
 	let (first_html, second_html) = tokio::join!(
-		first_renderer.render_page_with_view_head_to_string(request_query_view("first-request")),
-		second_renderer.render_page_with_view_head_to_string(request_query_view("second-request")),
+		first_renderer.render_page_with_view_head_to_string(request_query_view(
+			"first-request",
+			Arc::clone(&fetch_barrier),
+		)),
+		second_renderer.render_page_with_view_head_to_string(request_query_view(
+			"second-request",
+			fetch_barrier,
+		)),
 	);
 
 	assert!(first_html.contains("first-request"));
 	assert!(!first_html.contains("second-request"));
 	assert!(second_html.contains("second-request"));
 	assert!(!second_html.contains("first-request"));
+	assert_eq!(
+		first_renderer
+			.state()
+			.get_resource_state(&format!("query:{query_id}"))
+			.and_then(|snapshot| snapshot.get("data")),
+		Some(&serde_json::json!("first-request"))
+	);
+	assert_eq!(
+		second_renderer
+			.state()
+			.get_resource_state(&format!("query:{query_id}"))
+			.and_then(|snapshot| snapshot.get("data")),
+		Some(&serde_json::json!("second-request"))
+	);
 }
 
 #[tokio::test]

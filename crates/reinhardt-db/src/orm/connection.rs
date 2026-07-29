@@ -5,9 +5,10 @@
 //! [`DatabaseConnection`] resolves the backend for each operation.
 
 use async_trait::async_trait;
+use futures::StreamExt;
 use std::sync::Arc;
 
-use reinhardt_core::exception::Result;
+use reinhardt_core::exception::{DatabaseError, DatabaseErrorKind, Result};
 
 use super::connection_registry::{self, ConnectionSlot, Generation, RegisteredConnection};
 use super::transaction::AtomicTransaction;
@@ -16,7 +17,7 @@ use super::transaction::AtomicTransaction;
 pub use crate::backends::connection::DatabaseConnection as BackendsConnection;
 use crate::backends::types::DatabaseType;
 pub use crate::backends::types::{
-	IsolationLevel, QueryResult, QueryValue, Row, TransactionExecutor,
+	IsolationLevel, QueryResult, QueryValue, Row, RowStream, TransactionExecutor,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -280,6 +281,42 @@ pub trait OrmExecutor: Send {
 		}
 	}
 
+	/// Streams matching rows without eager materialization.
+	fn fetch_stream<'a>(
+		&'a mut self,
+		_sql: String,
+		_params: Vec<QueryValue>,
+		_chunk_size: usize,
+	) -> Result<RowStream<'a>> {
+		Err(DatabaseError::new(
+			DatabaseErrorKind::Unsupported,
+			"Row streaming is not supported by this ORM executor",
+		)
+		.into())
+	}
+
+	/// Streams rows with structural pgvector operation context.
+	fn fetch_stream_with_context<'a>(
+		&'a mut self,
+		sql: String,
+		params: Vec<QueryValue>,
+		chunk_size: usize,
+		context: Option<crate::backends::error::PgvectorOperationKind>,
+	) -> Result<RowStream<'a>> {
+		let decorate =
+			self.backend() == DatabaseBackend::Postgres && self.supports_pgvector_error_hints();
+		let stream = self.fetch_stream(sql, params, chunk_size)?;
+		if decorate {
+			Ok(Box::pin(stream.map(move |result| {
+				result.map_err(|error| {
+					crate::backends::error::decorate_error_with_pgvector_context(error, context)
+				})
+			})))
+		} else {
+			Ok(stream)
+		}
+	}
+
 	/// Fetches an optional row without swallowing backend failures.
 	async fn fetch_optional(&mut self, sql: &str, params: Vec<QueryValue>) -> Result<Option<Row>>;
 
@@ -497,6 +534,45 @@ impl OrmExecutor for DatabaseConnection {
 	) -> Result<Vec<Row>> {
 		let owner = self.resolve()?;
 		owner.fetch_all_with_context(sql, params, context).await
+	}
+
+	fn fetch_stream<'a>(
+		&'a mut self,
+		sql: String,
+		params: Vec<QueryValue>,
+		chunk_size: usize,
+	) -> Result<RowStream<'a>> {
+		self.fetch_stream_with_context(sql, params, chunk_size, None)
+	}
+
+	fn fetch_stream_with_context<'a>(
+		&'a mut self,
+		sql: String,
+		params: Vec<QueryValue>,
+		chunk_size: usize,
+		context: Option<crate::backends::error::PgvectorOperationKind>,
+	) -> Result<RowStream<'a>> {
+		let owner = self.resolve()?;
+		if !owner.supports_row_streaming() {
+			return Err(DatabaseError::new(
+				DatabaseErrorKind::Unsupported,
+				"Row streaming is not supported by this database backend",
+			)
+			.into());
+		}
+		Ok(Box::pin(async_stream::stream! {
+			let rows = owner.fetch_stream_with_context(sql, params, chunk_size, context);
+			let mut rows = match rows {
+				Ok(rows) => rows,
+				Err(error) => {
+					yield Err(error);
+					return;
+				}
+			};
+			while let Some(row) = rows.next().await {
+				yield row;
+			}
+		}))
 	}
 
 	async fn fetch_optional(&mut self, sql: &str, params: Vec<QueryValue>) -> Result<Option<Row>> {

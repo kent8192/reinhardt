@@ -14,6 +14,7 @@ use crate::orm::query_fields::comparison::FieldComparison;
 use crate::orm::query_fields::compiler::QueryFieldCompiler;
 use crate::orm::query_fields::{GroupByFields, OrderedExpression, TypedExpression};
 use crate::orm::relations::{RelationJoinGraph, RelationJoinKind, RelationPathLike, RelationStep};
+use futures::{Stream, StreamExt};
 use reinhardt_core::exception::{DatabaseError, DatabaseErrorKind, Error};
 use reinhardt_query::prelude::{
 	Alias, BinOper, CockroachDBQueryBuilder, ColumnRef, Condition, Expr, ExprTrait, Func,
@@ -26,12 +27,17 @@ use serde::{Deserialize, Serialize};
 use smallvec::SmallVec;
 use std::collections::HashMap;
 use std::marker::PhantomData;
+use std::pin::Pin;
 use std::time::Instant;
 use uuid::Uuid;
 
 fn executor_error(error: reinhardt_core::exception::Error) -> DatabaseError {
 	crate::backends::error::into_database_error(error)
 }
+
+/// A lifetime-bound stream of decoded QuerySet models.
+pub type QuerySetStream<'a, T> =
+	Pin<Box<dyn Stream<Item = reinhardt_core::exception::Result<T>> + Send + 'a>>;
 
 // Django QuerySet API types
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -1266,6 +1272,7 @@ where
 	having_conditions: Vec<HavingCondition>,
 	subquery_conditions: Vec<SubqueryCondition>,
 	from_alias: Option<String>,
+	empty_result: bool,
 	/// Subquery SQL for FROM clause (derived table)
 	/// When set, the FROM clause will use this subquery instead of the model's table
 	from_subquery_sql: Option<String>,
@@ -1304,8 +1311,17 @@ where
 			having_conditions: Vec::new(),
 			subquery_conditions: Vec::new(),
 			from_alias: None,
+			empty_result: false,
 			from_subquery_sql: None,
 		}
+	}
+
+	/// Returns a QuerySet that is known to contain no rows.
+	///
+	/// Execution methods can use this marker to avoid invoking an executor.
+	pub fn none(mut self) -> Self {
+		self.empty_result = true;
+		self
 	}
 
 	fn executor_backend(
@@ -1411,6 +1427,7 @@ where
 			having_conditions: Vec::new(),
 			subquery_conditions: Vec::new(),
 			from_alias: None,
+			empty_result: false,
 			from_subquery_sql: None,
 		}
 	}
@@ -1596,6 +1613,7 @@ where
 		let subquery_qs = QuerySet::<M>::new();
 		// Apply the builder to configure the subquery
 		let configured_subquery = builder(subquery_qs);
+		let empty_result = configured_subquery.empty_result;
 		// Generate SQL for the subquery (wrapped in parentheses)
 		let subquery_sql = configured_subquery.as_subquery()?;
 
@@ -1627,6 +1645,7 @@ where
 			having_conditions: Vec::new(),
 			subquery_conditions: Vec::new(),
 			from_alias: Some(alias.to_string()),
+			empty_result,
 			from_subquery_sql: Some(subquery_sql),
 		})
 	}
@@ -6124,6 +6143,148 @@ where
 				Err(error)
 			}
 		}
+	}
+
+	/// Streams decoded models through a caller-owned ORM executor.
+	///
+	/// The returned stream borrows `conn`, so the executor cannot be reused
+	/// until the stream completes or is dropped. `chunk_size` is a bounded
+	/// driver fetch or buffering hint and must be greater than zero.
+	pub fn iterator_with_db<'a, E>(
+		&self,
+		conn: &'a mut E,
+		chunk_size: usize,
+	) -> reinhardt_core::exception::Result<QuerySetStream<'a, T>>
+	where
+		T: serde::de::DeserializeOwned + 'a,
+		E: OrmExecutor + 'a,
+	{
+		if chunk_size == 0 {
+			return Err(DatabaseError::new(
+				DatabaseErrorKind::Configuration,
+				"QuerySet iterator chunk_size must be greater than zero",
+			)
+			.into());
+		}
+		if self.empty_result {
+			return Ok(Box::pin(futures::stream::empty()));
+		}
+
+		let stmt = self.build_select_statement()?;
+		let context = super::execution::pgvector_context_for_select(&stmt);
+		let (sql, values) =
+			Self::build_select_for_backend(&stmt, conn.backend(), conn.is_cockroachdb())?;
+		let param_samples = values
+			.iter()
+			.map(|value| value.to_sql_literal())
+			.collect::<Vec<_>>();
+		let params = super::execution::convert_values(values);
+		let mut rows = conn.fetch_stream_with_context(sql.clone(), params, chunk_size, context)?;
+		let started = Instant::now();
+
+		Ok(Box::pin(async_stream::stream! {
+			while let Some(row) = rows.next().await {
+				let row = match row {
+					Ok(row) => row,
+					Err(error) => {
+						super::instrumentation::instrumentation()
+							.orm_query_error(&sql, &format!("{error:?}"))
+							.await;
+						yield Err(error);
+						return;
+					}
+				};
+				match QueryRow::from_backend_row(row).deserialize_model::<T>() {
+					Ok(model) => yield Ok(model),
+					Err(error) => {
+						let error = Error::from(DatabaseError::new(
+							DatabaseErrorKind::Serialization,
+							format!("Deserialization error: {error}"),
+						));
+						super::instrumentation::instrumentation()
+							.orm_query_error(&sql, &format!("{error:?}"))
+							.await;
+						yield Err(error);
+						return;
+					}
+				}
+			}
+			super::instrumentation::instrumentation()
+				.orm_query_end_with_params(&sql, &param_samples, started.elapsed())
+				.await;
+		}))
+	}
+
+	/// Streams decoded models through an active transaction executor.
+	///
+	/// This caller-owned-executor path never reacquires a pooled connection and
+	/// never falls back to eager materialization or pagination.
+	pub fn iterator_with_executor<'a>(
+		&self,
+		executor: &'a mut dyn super::connection::TransactionExecutor,
+		chunk_size: usize,
+	) -> reinhardt_core::exception::Result<QuerySetStream<'a, T>>
+	where
+		T: serde::de::DeserializeOwned + 'a,
+	{
+		if chunk_size == 0 {
+			return Err(DatabaseError::new(
+				DatabaseErrorKind::Configuration,
+				"QuerySet iterator chunk_size must be greater than zero",
+			)
+			.into());
+		}
+		if self.empty_result {
+			return Ok(Box::pin(futures::stream::empty()));
+		}
+
+		let stmt = self.build_select_statement()?;
+		let context = super::execution::pgvector_context_for_select(&stmt);
+		let (sql, values) = Self::build_select_for_backend(
+			&stmt,
+			Self::executor_backend(executor),
+			executor.is_cockroachdb(),
+		)?;
+		let param_samples = values
+			.iter()
+			.map(|value| value.to_sql_literal())
+			.collect::<Vec<_>>();
+		let params = super::execution::convert_values(values);
+		let mut rows =
+			executor.fetch_stream_with_context(sql.clone(), params, chunk_size, context)?;
+		let started = Instant::now();
+
+		Ok(Box::pin(async_stream::stream! {
+			while let Some(row) = rows.next().await {
+				let row = match row {
+					Ok(row) => row,
+					Err(error) => {
+						super::instrumentation::instrumentation()
+							.orm_query_error(&sql, &format!("{error:?}"))
+							.await;
+						yield Err(error);
+						return;
+					}
+				};
+				match QueryRow::from_backend_row(row).deserialize_model::<T>() {
+					Ok(model) => yield Ok(model),
+					Err(error) => {
+						let error = Error::from(DatabaseError::new(
+							DatabaseErrorKind::Serialization,
+							format!("Deserialization error: {error}"),
+						));
+						super::instrumentation::instrumentation()
+							.orm_query_error(&sql, &format!("{error:?}"))
+							.await;
+						yield Err(error);
+						return;
+					}
+				}
+			}
+			super::instrumentation::instrumentation()
+				.orm_query_end_with_params(&sql, &param_samples, started.elapsed())
+				.await;
+		}))
 	}
 
 	/// Execute the queryset through an active transaction executor and return all records.

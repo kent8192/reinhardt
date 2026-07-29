@@ -12,6 +12,12 @@
 //! records the SQL joins required by the filter, so application code does not
 //! need raw join builders for common FK, reverse, or M2M lookups.
 //!
+//! QuerySet retrieval keeps the same generated-field guarantees:
+//! `latest_by`/`earliest_by` accept [`OrderingField`] values, while
+//! unique-field bulk retrieval accepts [`UniqueFieldRef`]. Bulk results use a
+//! deterministically ordered `BTreeMap`; [`query::QuerySet::none`] and empty
+//! bulk inputs remain lazy and do not resolve or call an executor.
+//!
 //! ## Transaction Management
 //!
 //! ORM writes run inside closure-scoped transactions. Start an outer operation

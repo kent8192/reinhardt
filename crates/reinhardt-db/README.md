@@ -496,6 +496,53 @@ let updated = User::objects()
     .await?;
 ```
 
+### Typed retrieval helpers
+
+Models can define their default latest/earliest ordering with generated field
+metadata:
+
+```rust
+#[model(
+    app_label = "events",
+    table_name = "events",
+    get_latest_by = ("created_at", "id")
+)]
+struct Event {
+    #[field(primary_key = true)]
+    id: i64,
+    created_at: DateTime<Utc>,
+    #[field(max_length = 255, unique = true)]
+    slug: String,
+}
+
+let latest = Event::objects().all().latest().await?;
+let earliest = Event::objects()
+    .all()
+    .earliest_by(&[
+        Event::field_created_at().ordering(),
+        Event::field_id().ordering(),
+    ])
+    .await?;
+
+let by_id = Event::objects().all().in_bulk([3_i64, 1, 3]).await?;
+let by_slug = Event::objects()
+    .all()
+    .in_bulk_by(Event::unique_slug(), ["launch", "archive"])
+    .await?;
+
+let empty = Event::objects().all().none();
+assert_eq!(empty.count().await?, 0);
+```
+
+Unlike Django's string field names, explicit ordering and unique-field bulk
+lookups accept only generated typed field proofs for the same model. Bulk
+retrieval returns a `BTreeMap`, so iteration is sorted by key; duplicate input
+keys collapse and missing keys are omitted. Empty input and `none()` are lazy:
+they do not resolve a connection or invoke an executor. The equivalent
+`*_with_db` and `*_with_executor` methods keep retrieval bound to a
+caller-owned connection or transaction executor. These contracts are
+backend-neutral across PostgreSQL, MySQL, and SQLite.
+
 ### Scoped N+1 Query Detection
 
 Use `NPlusOneScope` around development diagnostics or focused tests to detect

@@ -4,6 +4,7 @@
 //! By default, it exports the expression-based query API (SQLAlchemy-style).
 
 use super::connection::{OrmExecutor, QueryRow};
+use super::expressions::{OrderingField, UniqueFieldRef};
 use super::field_codec::{
 	DatabaseField, DatabaseValue, FieldCodecError, IntoFieldValue, database_value_to_query_value,
 };
@@ -23,7 +24,7 @@ use reinhardt_query::prelude::{
 use reinhardt_query::types::PgBinOper;
 use serde::{Deserialize, Serialize};
 use smallvec::SmallVec;
-use std::collections::HashMap;
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::marker::PhantomData;
 use std::time::Instant;
 use uuid::Uuid;
@@ -1205,6 +1206,7 @@ where
 	having_conditions: Vec<HavingCondition>,
 	subquery_conditions: Vec<SubqueryCondition>,
 	from_alias: Option<String>,
+	empty: bool,
 	/// Subquery SQL for FROM clause (derived table)
 	/// When set, the FROM clause will use this subquery instead of the model's table
 	from_subquery_sql: Option<String>,
@@ -1240,6 +1242,7 @@ where
 			having_conditions: Vec::new(),
 			subquery_conditions: Vec::new(),
 			from_alias: None,
+			empty: false,
 			from_subquery_sql: None,
 		}
 	}
@@ -1350,6 +1353,7 @@ where
 			having_conditions: Vec::new(),
 			subquery_conditions: Vec::new(),
 			from_alias: None,
+			empty: false,
 			from_subquery_sql: None,
 		}
 	}
@@ -1563,8 +1567,15 @@ where
 			having_conditions: Vec::new(),
 			subquery_conditions: Vec::new(),
 			from_alias: Some(alias.to_string()),
+			empty: false,
 			from_subquery_sql: Some(subquery_sql),
 		})
+	}
+
+	/// Marks this queryset as empty without resolving a database connection.
+	pub fn none(mut self) -> Self {
+		self.empty = true;
+		self
 	}
 
 	/// Add an INNER JOIN to the query
@@ -3849,6 +3860,10 @@ where
 
 	/// Build WHERE condition using reinhardt-query from accumulated filters
 	fn build_where_condition(&self) -> reinhardt_core::exception::Result<Option<Condition>> {
+		if self.empty {
+			return Ok(Some(Condition::all().add(Expr::val(1).eq(0))));
+		}
+
 		if !self.has_where_predicates() {
 			return Ok(None);
 		}
@@ -5800,6 +5815,10 @@ where
 	where
 		T: serde::de::DeserializeOwned,
 	{
+		if self.empty {
+			return Ok(Vec::new());
+		}
+
 		let mut conn = super::manager::get_connection().await?;
 		self.all_with_db(&mut conn).await
 	}
@@ -5852,8 +5871,484 @@ where
 	where
 		T: serde::de::DeserializeOwned,
 	{
+		if self.empty {
+			return Ok(None);
+		}
+
 		let mut conn = super::manager::get_connection().await?;
 		self.first_with_db(&mut conn).await
+	}
+
+	/// Return the newest row using the model's `get_latest_by` metadata.
+	pub async fn latest(&self) -> reinhardt_core::exception::Result<T>
+	where
+		T: serde::de::DeserializeOwned,
+	{
+		let ordering = self.metadata_retrieval_ordering(true)?;
+		if self.empty {
+			return Err(Error::NotFound(
+				"No record found matching the query".to_string(),
+			));
+		}
+		let mut conn = super::manager::get_connection().await?;
+		self.single_with_db(&mut conn, ordering).await
+	}
+
+	/// Return the oldest row using the model's `get_latest_by` metadata.
+	pub async fn earliest(&self) -> reinhardt_core::exception::Result<T>
+	where
+		T: serde::de::DeserializeOwned,
+	{
+		let ordering = self.metadata_retrieval_ordering(false)?;
+		if self.empty {
+			return Err(Error::NotFound(
+				"No record found matching the query".to_string(),
+			));
+		}
+		let mut conn = super::manager::get_connection().await?;
+		self.single_with_db(&mut conn, ordering).await
+	}
+
+	/// Return the newest row ordered by the supplied typed model fields.
+	pub async fn latest_by(
+		&self,
+		fields: &[OrderingField<T>],
+	) -> reinhardt_core::exception::Result<T>
+	where
+		T: serde::de::DeserializeOwned,
+	{
+		let ordering = Self::typed_retrieval_ordering(fields, true)?;
+		if self.empty {
+			return Err(Error::NotFound(
+				"No record found matching the query".to_string(),
+			));
+		}
+		let mut conn = super::manager::get_connection().await?;
+		self.single_with_db(&mut conn, ordering).await
+	}
+
+	/// Return the oldest row ordered by the supplied typed model fields.
+	pub async fn earliest_by(
+		&self,
+		fields: &[OrderingField<T>],
+	) -> reinhardt_core::exception::Result<T>
+	where
+		T: serde::de::DeserializeOwned,
+	{
+		let ordering = Self::typed_retrieval_ordering(fields, false)?;
+		if self.empty {
+			return Err(Error::NotFound(
+				"No record found matching the query".to_string(),
+			));
+		}
+		let mut conn = super::manager::get_connection().await?;
+		self.single_with_db(&mut conn, ordering).await
+	}
+
+	/// Return the newest row through a caller-owned ORM executor.
+	pub async fn latest_with_db<E>(&self, conn: &mut E) -> reinhardt_core::exception::Result<T>
+	where
+		T: serde::de::DeserializeOwned,
+		E: OrmExecutor,
+	{
+		let ordering = self.metadata_retrieval_ordering(true)?;
+		self.single_with_db(conn, ordering).await
+	}
+
+	/// Return the oldest row through a caller-owned ORM executor.
+	pub async fn earliest_with_db<E>(&self, conn: &mut E) -> reinhardt_core::exception::Result<T>
+	where
+		T: serde::de::DeserializeOwned,
+		E: OrmExecutor,
+	{
+		let ordering = self.metadata_retrieval_ordering(false)?;
+		self.single_with_db(conn, ordering).await
+	}
+
+	/// Return the newest row ordered by typed fields through a caller-owned ORM executor.
+	pub async fn latest_by_with_db<E>(
+		&self,
+		conn: &mut E,
+		fields: &[OrderingField<T>],
+	) -> reinhardt_core::exception::Result<T>
+	where
+		T: serde::de::DeserializeOwned,
+		E: OrmExecutor,
+	{
+		let ordering = Self::typed_retrieval_ordering(fields, true)?;
+		self.single_with_db(conn, ordering).await
+	}
+
+	/// Return the oldest row ordered by typed fields through a caller-owned ORM executor.
+	pub async fn earliest_by_with_db<E>(
+		&self,
+		conn: &mut E,
+		fields: &[OrderingField<T>],
+	) -> reinhardt_core::exception::Result<T>
+	where
+		T: serde::de::DeserializeOwned,
+		E: OrmExecutor,
+	{
+		let ordering = Self::typed_retrieval_ordering(fields, false)?;
+		self.single_with_db(conn, ordering).await
+	}
+
+	/// Return the newest row through an active transaction executor.
+	pub async fn latest_with_executor(
+		&self,
+		executor: &mut dyn super::connection::TransactionExecutor,
+	) -> crate::backends::Result<T>
+	where
+		T: serde::de::DeserializeOwned,
+	{
+		let ordering = self.metadata_retrieval_ordering(true)?;
+		self.single_with_executor(executor, ordering).await
+	}
+
+	/// Return the oldest row through an active transaction executor.
+	pub async fn earliest_with_executor(
+		&self,
+		executor: &mut dyn super::connection::TransactionExecutor,
+	) -> crate::backends::Result<T>
+	where
+		T: serde::de::DeserializeOwned,
+	{
+		let ordering = self.metadata_retrieval_ordering(false)?;
+		self.single_with_executor(executor, ordering).await
+	}
+
+	/// Return the newest row ordered by typed fields through an active transaction executor.
+	pub async fn latest_by_with_executor(
+		&self,
+		executor: &mut dyn super::connection::TransactionExecutor,
+		fields: &[OrderingField<T>],
+	) -> crate::backends::Result<T>
+	where
+		T: serde::de::DeserializeOwned,
+	{
+		let ordering = Self::typed_retrieval_ordering(fields, true)?;
+		self.single_with_executor(executor, ordering).await
+	}
+
+	/// Return the oldest row ordered by typed fields through an active transaction executor.
+	pub async fn earliest_by_with_executor(
+		&self,
+		executor: &mut dyn super::connection::TransactionExecutor,
+		fields: &[OrderingField<T>],
+	) -> crate::backends::Result<T>
+	where
+		T: serde::de::DeserializeOwned,
+	{
+		let ordering = Self::typed_retrieval_ordering(fields, false)?;
+		self.single_with_executor(executor, ordering).await
+	}
+
+	fn metadata_retrieval_ordering(
+		&self,
+		latest: bool,
+	) -> reinhardt_core::exception::Result<Vec<String>> {
+		let fields = T::latest_by_fields();
+		if fields.is_empty() {
+			return Err(Error::Validation(format!(
+				"{} requires Model::latest_by_fields() metadata or an explicit typed field",
+				if latest {
+					"QuerySet::latest"
+				} else {
+					"QuerySet::earliest"
+				}
+			)));
+		}
+		Ok(fields
+			.iter()
+			.map(|field| {
+				if latest {
+					field
+						.strip_prefix('-')
+						.map_or_else(|| format!("-{field}"), ToOwned::to_owned)
+				} else {
+					(*field).to_owned()
+				}
+			})
+			.collect())
+	}
+
+	fn typed_retrieval_ordering(
+		fields: &[OrderingField<T>],
+		latest: bool,
+	) -> reinhardt_core::exception::Result<Vec<String>> {
+		if fields.is_empty() {
+			return Err(Error::Validation(
+				"QuerySet retrieval requires at least one typed ordering field".to_string(),
+			));
+		}
+		Ok(fields
+			.iter()
+			.map(|field| {
+				if latest {
+					format!("-{}", field.name())
+				} else {
+					field.name().to_owned()
+				}
+			})
+			.collect())
+	}
+
+	async fn single_with_db<E>(
+		&self,
+		conn: &mut E,
+		ordering: Vec<String>,
+	) -> reinhardt_core::exception::Result<T>
+	where
+		T: serde::de::DeserializeOwned,
+		E: OrmExecutor,
+	{
+		let mut queryset = self.clone();
+		queryset.order_by_fields = ordering;
+		queryset.limit = Some(1);
+		queryset
+			.all_with_db(conn)
+			.await?
+			.into_iter()
+			.next()
+			.ok_or_else(|| Error::NotFound("No record found matching the query".to_string()))
+	}
+
+	async fn single_with_executor(
+		&self,
+		executor: &mut dyn super::connection::TransactionExecutor,
+		ordering: Vec<String>,
+	) -> crate::backends::Result<T>
+	where
+		T: serde::de::DeserializeOwned,
+	{
+		let mut queryset = self.clone();
+		queryset.order_by_fields = ordering;
+		queryset.limit = Some(1);
+		queryset
+			.all_with_executor(executor)
+			.await?
+			.into_iter()
+			.next()
+			.ok_or_else(|| Error::NotFound("No record found matching the query".to_string()))
+	}
+
+	/// Fetch rows by primary key and return them in deterministic key order.
+	pub async fn in_bulk<I>(
+		&self,
+		keys: I,
+	) -> reinhardt_core::exception::Result<BTreeMap<T::PrimaryKey, T>>
+	where
+		T: serde::de::DeserializeOwned,
+		T::PrimaryKey: DatabaseField + Ord,
+		I: IntoIterator<Item = T::PrimaryKey>,
+	{
+		let keys = keys.into_iter().collect::<BTreeSet<_>>();
+		if self.empty || keys.is_empty() {
+			return Ok(BTreeMap::new());
+		}
+		let mut conn = super::manager::get_connection().await?;
+		self.in_bulk_with_keys_db(&mut conn, keys).await
+	}
+
+	/// Fetch rows by primary key through a caller-owned ORM executor.
+	pub async fn in_bulk_with_db<E, I>(
+		&self,
+		conn: &mut E,
+		keys: I,
+	) -> reinhardt_core::exception::Result<BTreeMap<T::PrimaryKey, T>>
+	where
+		T: serde::de::DeserializeOwned,
+		T::PrimaryKey: DatabaseField + Ord,
+		E: OrmExecutor,
+		I: IntoIterator<Item = T::PrimaryKey>,
+	{
+		let keys = keys.into_iter().collect::<BTreeSet<_>>();
+		if self.empty || keys.is_empty() {
+			return Ok(BTreeMap::new());
+		}
+		self.in_bulk_with_keys_db(conn, keys).await
+	}
+
+	/// Fetch rows by primary key through an active transaction executor.
+	pub async fn in_bulk_with_executor<I>(
+		&self,
+		executor: &mut dyn super::connection::TransactionExecutor,
+		keys: I,
+	) -> crate::backends::Result<BTreeMap<T::PrimaryKey, T>>
+	where
+		T: serde::de::DeserializeOwned,
+		T::PrimaryKey: DatabaseField + Ord,
+		I: IntoIterator<Item = T::PrimaryKey>,
+	{
+		let keys = keys.into_iter().collect::<BTreeSet<_>>();
+		if self.empty || keys.is_empty() {
+			return Ok(BTreeMap::new());
+		}
+		self.in_bulk_with_keys_executor(executor, keys).await
+	}
+
+	/// Fetch rows by a metadata-proven unique field in deterministic key order.
+	pub async fn in_bulk_by<K, I>(
+		&self,
+		unique_field: UniqueFieldRef<T, K>,
+		keys: I,
+	) -> reinhardt_core::exception::Result<BTreeMap<K, T>>
+	where
+		T: serde::de::DeserializeOwned,
+		K: DatabaseField + Ord,
+		I: IntoIterator<Item = K>,
+	{
+		let keys = keys.into_iter().collect::<BTreeSet<_>>();
+		if self.empty || keys.is_empty() {
+			return Ok(BTreeMap::new());
+		}
+		let getter = Self::unique_getter(&unique_field)?;
+		let mut conn = super::manager::get_connection().await?;
+		self.in_bulk_by_keys_db(&mut conn, unique_field, getter, keys)
+			.await
+	}
+
+	/// Fetch rows by a metadata-proven unique field through a caller-owned ORM executor.
+	pub async fn in_bulk_by_with_db<E, K, I>(
+		&self,
+		conn: &mut E,
+		unique_field: UniqueFieldRef<T, K>,
+		keys: I,
+	) -> reinhardt_core::exception::Result<BTreeMap<K, T>>
+	where
+		T: serde::de::DeserializeOwned,
+		E: OrmExecutor,
+		K: DatabaseField + Ord,
+		I: IntoIterator<Item = K>,
+	{
+		let keys = keys.into_iter().collect::<BTreeSet<_>>();
+		if self.empty || keys.is_empty() {
+			return Ok(BTreeMap::new());
+		}
+		let getter = Self::unique_getter(&unique_field)?;
+		self.in_bulk_by_keys_db(conn, unique_field, getter, keys)
+			.await
+	}
+
+	/// Fetch rows by a metadata-proven unique field through an active transaction executor.
+	pub async fn in_bulk_by_with_executor<K, I>(
+		&self,
+		executor: &mut dyn super::connection::TransactionExecutor,
+		unique_field: UniqueFieldRef<T, K>,
+		keys: I,
+	) -> crate::backends::Result<BTreeMap<K, T>>
+	where
+		T: serde::de::DeserializeOwned,
+		K: DatabaseField + Ord,
+		I: IntoIterator<Item = K>,
+	{
+		let keys = keys.into_iter().collect::<BTreeSet<_>>();
+		if self.empty || keys.is_empty() {
+			return Ok(BTreeMap::new());
+		}
+		let getter = Self::unique_getter(&unique_field)?;
+		self.in_bulk_by_keys_executor(executor, unique_field, getter, keys)
+			.await
+	}
+
+	fn unique_getter<K>(
+		unique_field: &UniqueFieldRef<T, K>,
+	) -> reinhardt_core::exception::Result<fn(&T) -> Option<K>>
+	where
+		K: DatabaseField,
+	{
+		unique_field.getter().ok_or_else(|| {
+			Error::Validation(format!(
+				"QuerySet::in_bulk_by requires a generated getter for unique field `{}`",
+				unique_field.name()
+			))
+		})
+	}
+
+	async fn in_bulk_with_keys_db<E>(
+		&self,
+		conn: &mut E,
+		keys: BTreeSet<T::PrimaryKey>,
+	) -> reinhardt_core::exception::Result<BTreeMap<T::PrimaryKey, T>>
+	where
+		T: serde::de::DeserializeOwned,
+		T::PrimaryKey: DatabaseField + Ord,
+		E: OrmExecutor,
+	{
+		let filter = super::expressions::FieldRef::<T, T::PrimaryKey>::new(T::primary_key_column())
+			.is_in(keys);
+		let rows = self.clone().filter(filter).all_with_db(conn).await?;
+		Ok(rows
+			.into_iter()
+			.filter_map(|model| model.primary_key().map(|key| (key, model)))
+			.collect())
+	}
+
+	async fn in_bulk_with_keys_executor(
+		&self,
+		executor: &mut dyn super::connection::TransactionExecutor,
+		keys: BTreeSet<T::PrimaryKey>,
+	) -> crate::backends::Result<BTreeMap<T::PrimaryKey, T>>
+	where
+		T: serde::de::DeserializeOwned,
+		T::PrimaryKey: DatabaseField + Ord,
+	{
+		let filter = super::expressions::FieldRef::<T, T::PrimaryKey>::new(T::primary_key_column())
+			.is_in(keys);
+		let rows = self
+			.clone()
+			.filter(filter)
+			.all_with_executor(executor)
+			.await?;
+		Ok(rows
+			.into_iter()
+			.filter_map(|model| model.primary_key().map(|key| (key, model)))
+			.collect())
+	}
+
+	async fn in_bulk_by_keys_db<E, K>(
+		&self,
+		conn: &mut E,
+		unique_field: UniqueFieldRef<T, K>,
+		getter: fn(&T) -> Option<K>,
+		keys: BTreeSet<K>,
+	) -> reinhardt_core::exception::Result<BTreeMap<K, T>>
+	where
+		T: serde::de::DeserializeOwned,
+		E: OrmExecutor,
+		K: DatabaseField + Ord,
+	{
+		let rows = self
+			.clone()
+			.filter(unique_field.is_in(keys))
+			.all_with_db(conn)
+			.await?;
+		Ok(rows
+			.into_iter()
+			.filter_map(|model| getter(&model).map(|key| (key, model)))
+			.collect())
+	}
+
+	async fn in_bulk_by_keys_executor<K>(
+		&self,
+		executor: &mut dyn super::connection::TransactionExecutor,
+		unique_field: UniqueFieldRef<T, K>,
+		getter: fn(&T) -> Option<K>,
+		keys: BTreeSet<K>,
+	) -> crate::backends::Result<BTreeMap<K, T>>
+	where
+		T: serde::de::DeserializeOwned,
+		K: DatabaseField + Ord,
+	{
+		let rows = self
+			.clone()
+			.filter(unique_field.is_in(keys))
+			.all_with_executor(executor)
+			.await?;
+		Ok(rows
+			.into_iter()
+			.filter_map(|model| getter(&model).map(|key| (key, model)))
+			.collect())
 	}
 
 	/// Execute the queryset and return a single matching record
@@ -5906,6 +6401,12 @@ where
 	where
 		T: serde::de::DeserializeOwned,
 	{
+		if self.empty {
+			return Err(reinhardt_core::exception::Error::NotFound(
+				"No record found matching the query".to_string(),
+			));
+		}
+
 		let mut conn = super::manager::get_connection().await?;
 		self.get_with_db(&mut conn).await
 	}
@@ -5947,6 +6448,10 @@ where
 		T: serde::de::DeserializeOwned,
 		E: OrmExecutor,
 	{
+		if self.empty {
+			return Ok(Vec::new());
+		}
+
 		let stmt = if !self.has_select_related() {
 			let mut stmt = Query::select();
 			self.apply_model_from(&mut stmt);
@@ -6054,6 +6559,10 @@ where
 	where
 		T: serde::de::DeserializeOwned,
 	{
+		if self.empty {
+			return Ok(Vec::new());
+		}
+
 		let stmt = self.build_select_statement().map_err(executor_error)?;
 		let (sql, values) = Self::build_select_for_backend(&stmt, Self::executor_backend(executor));
 		let param_samples = values
@@ -6089,6 +6598,10 @@ where
 		&self,
 		executor: &mut dyn super::connection::TransactionExecutor,
 	) -> Result<usize, crate::backends::error::DatabaseError> {
+		if self.empty {
+			return Ok(0);
+		}
+
 		let stmt = self.count_select_query().map_err(executor_error)?;
 		let (sql, values) = Self::build_select_for_backend(&stmt, Self::executor_backend(executor));
 		let params = super::execution::convert_values(values);
@@ -6108,6 +6621,10 @@ where
 	where
 		T: serde::de::DeserializeOwned,
 	{
+		if self.empty {
+			return Ok(Vec::new());
+		}
+
 		let mut queryset = self.clone();
 		queryset.limit = Some(queryset.limit.map_or(2, |limit| limit.min(2)));
 		queryset.all_with_executor(executor).await
@@ -6151,6 +6668,12 @@ where
 		T: serde::de::DeserializeOwned,
 		E: OrmExecutor,
 	{
+		if self.empty {
+			return Err(reinhardt_core::exception::Error::NotFound(
+				"No record found matching the query".to_string(),
+			));
+		}
+
 		let results = self.all_with_db(conn).await?;
 		match results.len() {
 			0 => Err(reinhardt_core::exception::Error::NotFound(
@@ -6220,6 +6743,10 @@ where
 		T: serde::de::DeserializeOwned,
 		E: OrmExecutor,
 	{
+		if self.empty {
+			return Ok(None);
+		}
+
 		let mut results = self.all_with_db(conn).await?;
 		Ok(results.drain(..).next())
 	}
@@ -6266,6 +6793,10 @@ where
 	/// # }
 	/// ```
 	pub async fn count(&self) -> reinhardt_core::exception::Result<usize> {
+		if self.empty {
+			return Ok(0);
+		}
+
 		let mut conn = super::manager::get_connection().await?;
 		self.count_with_db(&mut conn).await
 	}
@@ -6275,6 +6806,10 @@ where
 	where
 		E: OrmExecutor,
 	{
+		if self.empty {
+			return Ok(0);
+		}
+
 		let stmt = self.count_select_query()?;
 		let (sql, values) = Self::build_select_for_backend(&stmt, conn.backend());
 		let param_samples = values
@@ -6410,6 +6945,10 @@ where
 	/// # }
 	/// ```
 	pub async fn exists(&self) -> reinhardt_core::exception::Result<bool> {
+		if self.empty {
+			return Ok(false);
+		}
+
 		let mut conn = super::manager::get_connection().await?;
 		self.exists_with_db(&mut conn).await
 	}
@@ -6419,6 +6958,10 @@ where
 	where
 		E: OrmExecutor,
 	{
+		if self.empty {
+			return Ok(false);
+		}
+
 		Ok(self.count_with_db(conn).await? > 0)
 	}
 

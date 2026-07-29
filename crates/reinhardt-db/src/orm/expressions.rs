@@ -208,6 +208,24 @@ impl<M, T: DatabaseField> UniqueFieldRef<M, T> {
 	{
 		self.field.eq(value)
 	}
+
+	/// Create an IN filter using the unique field's lookup type.
+	pub fn is_in<I, V>(&self, values: I) -> Filter
+	where
+		I: IntoIterator<Item = V>,
+		V: IntoFieldValue<T>,
+	{
+		Filter::new(
+			self.name().to_string(),
+			FilterOperator::In,
+			FilterValue::List(
+				values
+					.into_iter()
+					.map(|value| FilterValue::Typed(value.into_field_value()))
+					.collect(),
+			),
+		)
+	}
 }
 
 impl<M, T> FieldRef<M, T> {

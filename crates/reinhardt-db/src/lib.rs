@@ -32,7 +32,8 @@
 //! ### ORM (`orm` module)
 //!
 //! - **Django-style Models**: Define database models with structs
-//! - **QuerySet API**: Chainable query builder with conditional partial updates
+//! - **QuerySet API**: Chainable query builder with typed latest/earliest,
+//!   deterministic bulk retrieval, lazy empty querysets, and conditional partial updates
 //! - **Field Types**: Rich set of field types with validation
 //! - **Relationships**: ForeignKey, ManyToMany, OneToOne
 //! - **Fixtures**: Django-compatible model fixture dump/load runtime with upsert,

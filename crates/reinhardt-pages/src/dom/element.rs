@@ -28,6 +28,23 @@ use web_sys;
 
 use crate::reactive::{Effect, Signal};
 
+#[cfg(wasm)]
+fn typed_custom_event_from_listener<T>(event: web_sys::Event) -> crate::event::CustomEvent<T> {
+	crate::event::CustomEvent::from_raw(event)
+}
+
+#[cfg(native)]
+fn typed_custom_event_from_listener<T>(event: web_sys::Event) -> crate::event::CustomEvent<T> {
+	use reinhardt_core::types::page::{BaseEventData, NativeEvent, NativeEventPayload};
+
+	let raw = NativeEvent::new(
+		crate::event::EventName::Custom(std::borrow::Cow::Owned(event.type_())),
+		BaseEventData::default(),
+		NativeEventPayload::default(),
+	);
+	crate::event::CustomEvent::from_raw(raw)
+}
+
 /// Options used when dispatching a custom DOM event.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct CustomEventOptions {
@@ -382,11 +399,12 @@ impl Element {
 		}
 	}
 
-	/// Add a custom event listener that deserializes `CustomEvent.detail`.
+	/// Add a typed custom event listener that retains the raw browser event.
 	///
-	/// Payloads are decoded with `serde_wasm_bindgen`, so callers can receive
-	/// Rust structs from web component event payloads while still handling
-	/// malformed detail values explicitly.
+	/// The callback receives [`crate::event::CustomEvent`], which defers detail
+	/// decoding until the callback calls `detail` or `into_detail`. This lets
+	/// callers inspect event metadata and distinguish malformed custom-event
+	/// details from same-named plain browser events.
 	pub fn add_typed_custom_event_listener<T, F>(
 		&self,
 		event_type: &str,
@@ -394,11 +412,21 @@ impl Element {
 	) -> EventHandle
 	where
 		T: DeserializeOwned + 'static,
-		F: FnMut(Result<T, String>) + 'static,
+		F: FnMut(crate::event::CustomEvent<T>) + 'static,
 	{
-		self.add_custom_event_listener(event_type, move |detail| {
-			callback(serde_wasm_bindgen::from_value(detail).map_err(|err| err.to_string()));
-		})
+		let closure = Closure::wrap(Box::new(move |event: web_sys::Event| {
+			callback(typed_custom_event_from_listener(event));
+		}) as Box<dyn FnMut(web_sys::Event)>);
+
+		self.inner
+			.add_event_listener_with_callback(event_type, closure.as_ref().unchecked_ref())
+			.expect("Failed to add typed custom event listener");
+
+		EventHandle {
+			element: self.inner.clone(),
+			event_type: event_type.to_string(),
+			closure: Some(closure),
+		}
 	}
 
 	/// Dispatch a custom event with `detail` using browser default options.

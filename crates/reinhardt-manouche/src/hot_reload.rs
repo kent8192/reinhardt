@@ -375,7 +375,8 @@ impl LoweringContext {
 fn event_parts(event: &IntrinsicEvent) -> (String, &syn::Expr) {
 	match event {
 		IntrinsicEvent::Standard { event, handler } => (event.to_string(), handler),
-		IntrinsicEvent::Custom { name, handler } => (name.value(), handler),
+		IntrinsicEvent::RawCustom { name, handler }
+		| IntrinsicEvent::TypedCustom { name, handler, .. } => (name.value(), handler),
 	}
 }
 

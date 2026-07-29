@@ -52,6 +52,8 @@ pub use special::{RunCode, RunSQL, StateOperation};
 
 // Legacy types for backward compatibility
 // These are maintained from the original operations.rs
+#[cfg(feature = "pgvector")]
+use super::IndexDefinition;
 use super::{FieldState, FieldType, ModelState, ProjectState};
 use pg_escape::{quote_identifier, quote_literal};
 use reinhardt_query::prelude::{
@@ -61,6 +63,11 @@ use reinhardt_query::prelude::{
 	QueryBuilder, SchemaExpr, SchemaFunc, SimpleExpr, SqliteQueryBuilder, Value,
 };
 use serde::{Deserialize, Serialize, ser::SerializeStruct};
+
+#[cfg(feature = "pgvector")]
+pub(super) fn named_index_has_target(columns: &[String], expressions: Option<&[String]>) -> bool {
+	!columns.is_empty() || expressions.is_some_and(|expressions| !expressions.is_empty())
+}
 
 /// Index type for database indexes
 ///
@@ -126,6 +133,26 @@ pub enum IndexType {
 	/// Best for: geometric/geographic data
 	/// Supported by: MySQL
 	Spatial,
+
+	/// HNSW approximate vector index
+	///
+	/// Supported by: PostgreSQL with pgvector
+	#[cfg(feature = "pgvector")]
+	Hnsw {
+		/// Maximum number of connections per layer.
+		m: Option<u16>,
+		/// Candidate list size used while constructing the index.
+		ef_construction: Option<u16>,
+	},
+
+	/// IVFFlat approximate vector index
+	///
+	/// Supported by: PostgreSQL with pgvector
+	#[cfg(feature = "pgvector")]
+	Ivfflat {
+		/// Number of inverted lists.
+		lists: Option<u32>,
+	},
 }
 
 impl std::fmt::Display for IndexType {
@@ -138,6 +165,43 @@ impl std::fmt::Display for IndexType {
 			IndexType::Brin => write!(f, "brin"),
 			IndexType::Fulltext => write!(f, "fulltext"),
 			IndexType::Spatial => write!(f, "spatial"),
+			#[cfg(feature = "pgvector")]
+			IndexType::Hnsw { .. } => write!(f, "hnsw"),
+			#[cfg(feature = "pgvector")]
+			IndexType::Ivfflat { .. } => write!(f, "ivfflat"),
+		}
+	}
+}
+
+impl IndexType {
+	fn is_approximate_vector(self) -> bool {
+		#[cfg(feature = "pgvector")]
+		{
+			matches!(self, Self::Hnsw { .. } | Self::Ivfflat { .. })
+		}
+		#[cfg(not(feature = "pgvector"))]
+		{
+			let _ = self;
+			false
+		}
+	}
+
+	fn options_sql(self) -> Option<String> {
+		match self {
+			#[cfg(feature = "pgvector")]
+			Self::Hnsw { m, ef_construction } => {
+				let mut options = Vec::new();
+				if let Some(m) = m {
+					options.push(format!("m = {m}"));
+				}
+				if let Some(ef_construction) = ef_construction {
+					options.push(format!("ef_construction = {ef_construction}"));
+				}
+				(!options.is_empty()).then(|| format!(" WITH ({})", options.join(", ")))
+			}
+			#[cfg(feature = "pgvector")]
+			Self::Ivfflat { lists } => lists.map(|lists| format!(" WITH (lists = {lists})")),
+			_ => None,
 		}
 	}
 }
@@ -1126,6 +1190,40 @@ pub enum Operation {
 		#[serde(default, skip_serializing_if = "Option::is_none")]
 		operator_class: Option<String>,
 	},
+	/// Creates an index with an explicit physical name.
+	///
+	/// This additive variant preserves source compatibility for legacy
+	/// [`Operation::CreateIndex`] struct literals while allowing model-declared
+	/// indexes to keep their configured names.
+	#[cfg(feature = "pgvector")]
+	CreateNamedIndex {
+		/// The table.
+		table: String,
+		/// Explicit physical index name.
+		name: String,
+		/// The columns.
+		columns: Vec<String>,
+		/// Whether the index is unique.
+		unique: bool,
+		/// Typed index method and options.
+		#[serde(default, skip_serializing_if = "Option::is_none")]
+		index_type: Option<IndexType>,
+		/// Partial index condition.
+		#[serde(default, skip_serializing_if = "Option::is_none")]
+		where_clause: Option<String>,
+		/// Whether to create concurrently.
+		#[serde(default)]
+		concurrently: bool,
+		/// Index expressions.
+		#[serde(default, skip_serializing_if = "Option::is_none")]
+		expressions: Option<Vec<String>>,
+		/// MySQL ALTER TABLE options.
+		#[serde(default, skip_serializing_if = "Option::is_none")]
+		mysql_options: Option<AlterTableOptions>,
+		/// PostgreSQL operator class.
+		#[serde(default, skip_serializing_if = "Option::is_none")]
+		operator_class: Option<String>,
+	},
 	/// Generated-column dependency index repair applied only when migrating forward.
 	CreateIndexRepair {
 		/// The table.
@@ -1192,6 +1290,38 @@ pub enum Operation {
 		table: String,
 		/// The columns.
 		columns: Vec<String>,
+	},
+	/// Drops an index by its explicit physical name.
+	#[cfg(feature = "pgvector")]
+	DropNamedIndex {
+		/// The table containing the index.
+		table: String,
+		/// Explicit physical index name.
+		name: String,
+		/// Indexed columns from the removed definition.
+		#[serde(default)]
+		columns: Vec<String>,
+		/// Whether the removed index is unique.
+		#[serde(default)]
+		unique: bool,
+		/// Typed method and options from the removed definition.
+		#[serde(default, skip_serializing_if = "Option::is_none")]
+		index_type: Option<IndexType>,
+		/// Partial index condition from the removed definition.
+		#[serde(default, skip_serializing_if = "Option::is_none")]
+		where_clause: Option<String>,
+		/// Whether the removed index was created concurrently.
+		#[serde(default)]
+		concurrently: bool,
+		/// Expressions from the removed definition.
+		#[serde(default, skip_serializing_if = "Option::is_none")]
+		expressions: Option<Vec<String>>,
+		/// MySQL options from the removed definition.
+		#[serde(default, skip_serializing_if = "Option::is_none")]
+		mysql_options: Option<AlterTableOptions>,
+		/// PostgreSQL operator class from the removed definition.
+		#[serde(default, skip_serializing_if = "Option::is_none")]
+		operator_class: Option<String>,
 	},
 	/// RunSQL variant.
 	RunSQL {
@@ -1409,6 +1539,79 @@ const fn default_true() -> bool {
 }
 
 impl Operation {
+	#[cfg(feature = "pgvector")]
+	pub(crate) fn pgvector_operation_kind(
+		&self,
+	) -> Option<crate::backends::error::PgvectorOperationKind> {
+		use crate::backends::error::PgvectorOperationKind;
+
+		match self {
+			Self::CreateTable { columns, .. } | Self::CreateInheritedTable { columns, .. }
+				if columns
+					.iter()
+					.any(|column| matches!(column.type_definition, FieldType::Vector { .. })) =>
+			{
+				Some(PgvectorOperationKind::ColumnType)
+			}
+			Self::AddColumn { column, .. }
+			| Self::AlterColumn {
+				new_definition: column,
+				..
+			} if matches!(column.type_definition, FieldType::Vector { .. }) => {
+				Some(PgvectorOperationKind::ColumnType)
+			}
+			Self::CreateIndex { index_type, .. }
+			| Self::CreateNamedIndex { index_type, .. }
+			| Self::CreateIndexRepair { index_type, .. }
+				if index_type.is_some_and(IndexType::is_approximate_vector) =>
+			{
+				Some(PgvectorOperationKind::ApproximateIndex)
+			}
+			_ => None,
+		}
+	}
+
+	#[cfg(not(feature = "pgvector"))]
+	pub(crate) fn pgvector_operation_kind(
+		&self,
+	) -> Option<crate::backends::error::PgvectorOperationKind> {
+		None
+	}
+
+	#[cfg(feature = "pgvector")]
+	pub(crate) fn pgvector_reverse_operation_kind(
+		&self,
+	) -> Option<crate::backends::error::PgvectorOperationKind> {
+		use crate::backends::error::PgvectorOperationKind;
+
+		match self {
+			Self::DropColumn {
+				old_definition: Some(column),
+				..
+			}
+			| Self::AlterColumn {
+				old_definition: Some(column),
+				..
+			} if matches!(column.type_definition, FieldType::Vector { .. }) => {
+				Some(PgvectorOperationKind::ColumnType)
+			}
+			Self::DropNamedIndex { index_type, .. }
+			| Self::RestoreIndexOnRollback { index_type, .. }
+				if index_type.is_some_and(IndexType::is_approximate_vector) =>
+			{
+				Some(PgvectorOperationKind::ApproximateIndex)
+			}
+			_ => None,
+		}
+	}
+
+	#[cfg(not(feature = "pgvector"))]
+	pub(crate) fn pgvector_reverse_operation_kind(
+		&self,
+	) -> Option<crate::backends::error::PgvectorOperationKind> {
+		None
+	}
+
 	fn order_model_fields_by_generated_dependencies(
 		model: &ModelState,
 	) -> Vec<(&String, &FieldState)> {
@@ -1703,6 +1906,40 @@ impl Operation {
 			| Operation::CreateCompositePrimaryKey { .. } => {
 				// Counter/constraint-level ops do not affect ProjectState
 				// (they track model-level structure only).
+			}
+			#[cfg(feature = "pgvector")]
+			Operation::CreateNamedIndex {
+				table,
+				name,
+				columns,
+				unique,
+				index_type,
+				expressions,
+				operator_class,
+				..
+			} => {
+				if let Some(model) = state.find_model_by_table_mut(table) {
+					#[cfg(not(feature = "pgvector"))]
+					let _ = (index_type, expressions, operator_class);
+					model.indexes.retain(|index| index.name != *name);
+					model.indexes.push(IndexDefinition {
+						name: name.clone(),
+						fields: columns.clone(),
+						unique: *unique,
+						#[cfg(feature = "pgvector")]
+						index_type: *index_type,
+						#[cfg(feature = "pgvector")]
+						operator_class: operator_class.clone(),
+						#[cfg(feature = "pgvector")]
+						expressions: expressions.clone(),
+					});
+				}
+			}
+			#[cfg(feature = "pgvector")]
+			Operation::DropNamedIndex { table, name, .. } => {
+				if let Some(model) = state.find_model_by_table_mut(table) {
+					model.indexes.retain(|index| index.name != *name);
+				}
 			}
 			Operation::MoveModel {
 				model_name,
@@ -2124,6 +2361,8 @@ impl Operation {
 					"TEXT".to_string()
 				}
 			}
+			#[cfg(feature = "pgvector")]
+			QueryColumnType::Vector(dimensions) => format!("VECTOR({dimensions})"),
 			QueryColumnType::Custom(custom) => custom.clone(),
 			_ => panic!("unsupported generated-column cast column type"),
 		}
@@ -2161,6 +2400,8 @@ impl Operation {
 			QueryColumnType::Json | QueryColumnType::JsonBinary | QueryColumnType::Array(_) => {
 				"JSON".to_string()
 			}
+			#[cfg(feature = "pgvector")]
+			QueryColumnType::Vector(dimensions) => format!("VECTOR({dimensions})"),
 			QueryColumnType::Custom(custom) => custom.clone(),
 			_ => panic!("unsupported generated-column cast column type"),
 		}
@@ -2616,7 +2857,17 @@ impl Operation {
 					if let Some(exprs) = expressions.as_ref().filter(|e| !e.is_empty()) {
 						// For expression indexes, use expressions and generate a hash-based suffix
 						// Expressions are assumed to be properly formatted, no additional quoting needed
-						let content = exprs.join(", ");
+						let content = if let Some(operator_class) = operator_class
+							&& matches!(dialect, SqlDialect::Postgres)
+						{
+							exprs
+								.iter()
+								.map(|expression| format!("{expression} {operator_class}"))
+								.collect::<Vec<_>>()
+								.join(", ")
+						} else {
+							exprs.join(", ")
+						};
 						let suffix = "expr";
 						(content, suffix.to_string())
 					} else {
@@ -2710,6 +2961,10 @@ impl Operation {
 					index_content
 				));
 
+				if let Some(options) = index_type.and_then(|index_type| index_type.options_sql()) {
+					sql.push_str(&options);
+				}
+
 				// Add WHERE clause for partial indexes (PostgreSQL, SQLite, CockroachDB - not MySQL)
 				if let Some(where_cond) = where_clause
 					&& !matches!(dialect, SqlDialect::Mysql)
@@ -2730,6 +2985,31 @@ impl Operation {
 				sql.push(';');
 				sql
 			}
+			#[cfg(feature = "pgvector")]
+			Operation::CreateNamedIndex {
+				table,
+				name,
+				columns,
+				unique,
+				index_type,
+				where_clause,
+				concurrently,
+				expressions,
+				mysql_options,
+				operator_class,
+			} => Operation::CreateIndexRepair {
+				table: table.clone(),
+				name: Some(name.clone()),
+				columns: columns.clone(),
+				unique: *unique,
+				index_type: *index_type,
+				where_clause: where_clause.clone(),
+				concurrently: *concurrently,
+				expressions: expressions.clone(),
+				mysql_options: *mysql_options,
+				operator_class: operator_class.clone(),
+			}
+			.to_sql(dialect),
 			Operation::RestoreIndexOnRollback { .. } => {
 				"-- rollback-only generated-column index restore".to_string()
 			}
@@ -2748,6 +3028,17 @@ impl Operation {
 					}
 				}
 			}
+			#[cfg(feature = "pgvector")]
+			Operation::DropNamedIndex { table, name, .. } => match dialect {
+				SqlDialect::Mysql => format!(
+					"DROP INDEX {} ON {};",
+					quote_identifier(name),
+					quote_identifier(table)
+				),
+				SqlDialect::Postgres | SqlDialect::Sqlite | SqlDialect::Cockroachdb => {
+					format!("DROP INDEX {};", quote_identifier(name))
+				}
+			},
 			Operation::RunSQL { sql, .. } => sql.to_string(),
 			Operation::RunRust { code, .. } => {
 				// For SQL generation, RunRust is a no-op comment
@@ -2928,6 +3219,269 @@ impl Operation {
 				constraint_name,
 			} => Self::create_composite_pk_to_sql(table, columns, constraint_name.as_deref()),
 		}
+	}
+
+	/// Generates forward SQL after validating backend-specific field support.
+	pub fn try_to_sql(&self, dialect: &SqlDialect) -> super::Result<String> {
+		self.validate_for_dialect(dialect)?;
+		Ok(self.to_sql(dialect))
+	}
+
+	fn validate_approximate_vector_index(
+		index_type: Option<IndexType>,
+		unique: bool,
+		columns: &[String],
+		expressions: Option<&[String]>,
+		operator_class: Option<&str>,
+		dialect: &SqlDialect,
+	) -> super::Result<()> {
+		let Some(_index_type) = index_type.filter(|index_type| index_type.is_approximate_vector())
+		else {
+			return Ok(());
+		};
+
+		let backend = match dialect {
+			SqlDialect::Postgres => None,
+			SqlDialect::Mysql => Some("mysql"),
+			SqlDialect::Sqlite => Some("sqlite"),
+			SqlDialect::Cockroachdb => Some("cockroachdb"),
+		};
+		if let Some(backend) = backend {
+			return Err(super::MigrationError::UnsupportedBackendFeature {
+				feature: "approximate vector indexes",
+				backend,
+			});
+		}
+
+		if unique {
+			return Err(super::MigrationError::InvalidMigration(
+				"approximate vector indexes cannot be unique".to_string(),
+			));
+		}
+
+		let expression_count = expressions.map_or(0, <[String]>::len);
+		let has_exactly_one_target = (columns.len() == 1 && expression_count == 0)
+			|| (columns.is_empty() && expression_count == 1);
+		if !has_exactly_one_target {
+			return Err(super::MigrationError::InvalidMigration(
+				"approximate vector indexes require exactly one column or expression".to_string(),
+			));
+		}
+
+		if !operator_class.is_some_and(|operator_class| {
+			matches!(
+				operator_class,
+				"vector_l2_ops" | "vector_ip_ops" | "vector_cosine_ops"
+			)
+		}) {
+			return Err(super::MigrationError::InvalidMigration(
+				"approximate vector indexes require a supported vector operator class".to_string(),
+			));
+		}
+
+		#[cfg(feature = "pgvector")]
+		let invalid_option = match _index_type {
+			IndexType::Hnsw { m: Some(m), .. } if !(2..=100).contains(&m) => {
+				Some("m must be in the range 2..=100")
+			}
+			IndexType::Hnsw {
+				ef_construction: Some(ef_construction),
+				..
+			} if !(4..=1000).contains(&ef_construction) => {
+				Some("ef_construction must be in the range 4..=1000")
+			}
+			IndexType::Hnsw { m, ef_construction }
+				if ef_construction.unwrap_or(64) < 2 * m.unwrap_or(16) =>
+			{
+				Some("ef_construction must be at least twice m")
+			}
+			IndexType::Ivfflat { lists: Some(lists) } if !(1..=32768).contains(&lists) => {
+				Some("lists must be in the range 1..=32768")
+			}
+			_ => None,
+		};
+		#[cfg(feature = "pgvector")]
+		if let Some(option) = invalid_option {
+			return Err(super::MigrationError::InvalidMigration(format!(
+				"{option} for approximate vector indexes"
+			)));
+		}
+
+		Ok(())
+	}
+
+	/// Validates operation invariants that require the migration project state.
+	///
+	/// Expression index result types cannot be inferred from [`ProjectState`],
+	/// so PostgreSQL remains responsible for validating expression targets.
+	pub fn validate_for_state(&self, state: &ProjectState) -> super::Result<()> {
+		self.validate_for_state_with_unknown_table_policy(state, false)
+	}
+
+	/// Validates known migration state while deferring targets whose table history is absent.
+	pub(crate) fn validate_for_partial_state(&self, state: &ProjectState) -> super::Result<()> {
+		self.validate_for_state_with_unknown_table_policy(state, true)
+	}
+
+	fn validate_for_state_with_unknown_table_policy(
+		&self,
+		state: &ProjectState,
+		allow_unknown_table: bool,
+	) -> super::Result<()> {
+		#[cfg(feature = "pgvector")]
+		if let Self::CreateIndex {
+			table,
+			columns,
+			index_type,
+			expressions,
+			..
+		}
+		| Self::CreateNamedIndex {
+			table,
+			columns,
+			index_type,
+			expressions,
+			..
+		} = self && index_type.is_some_and(IndexType::is_approximate_vector)
+			&& expressions
+				.as_ref()
+				.is_none_or(|expressions| expressions.is_empty())
+			&& columns.len() == 1
+		{
+			let column = &columns[0];
+			let Some(model) = state.find_model_by_table(table) else {
+				if allow_unknown_table {
+					return Ok(());
+				}
+				return Err(super::MigrationError::InvalidMigration(format!(
+					"approximate vector index targets unknown table `{table}`"
+				)));
+			};
+			let field = model.fields.get(column).ok_or_else(|| {
+				super::MigrationError::InvalidMigration(format!(
+					"approximate vector index on table `{table}` targets unknown column `{column}`"
+				))
+			})?;
+			if !matches!(field.field_type, FieldType::Vector { .. }) {
+				return Err(super::MigrationError::InvalidMigration(format!(
+					"approximate vector index on table `{table}` targets non-vector column `{column}`"
+				)));
+			}
+		}
+
+		#[cfg(not(feature = "pgvector"))]
+		let _ = (state, allow_unknown_table);
+
+		Ok(())
+	}
+
+	/// Validates every field definition rendered by this operation.
+	pub fn validate_for_dialect(&self, dialect: &SqlDialect) -> super::Result<()> {
+		#[cfg(feature = "pgvector")]
+		if let Self::CreateNamedIndex { name, .. } | Self::DropNamedIndex { name, .. } = self {
+			if name.is_empty() {
+				return Err(super::MigrationError::InvalidMigration(
+					"physical index name must not be empty".to_string(),
+				));
+			}
+			if name.contains('\0') {
+				return Err(super::MigrationError::InvalidMigration(
+					"physical index name must not contain NUL".to_string(),
+				));
+			}
+		}
+
+		match self {
+			Self::CreateTable { columns, .. } => {
+				for column in columns {
+					column.type_definition.try_to_sql_for_dialect(dialect)?;
+				}
+			}
+			Self::AddColumn { column, .. } => {
+				column.type_definition.try_to_sql_for_dialect(dialect)?;
+			}
+			Self::AlterColumn { new_definition, .. } => {
+				new_definition
+					.type_definition
+					.try_to_sql_for_dialect(dialect)?;
+			}
+			Self::CreateInheritedTable { columns, .. } => {
+				for column in columns {
+					column.type_definition.try_to_sql_for_dialect(dialect)?;
+				}
+			}
+			Self::CreateExtension { .. } => {
+				let backend = match dialect {
+					SqlDialect::Postgres => None,
+					SqlDialect::Mysql => Some("mysql"),
+					SqlDialect::Sqlite => Some("sqlite"),
+					SqlDialect::Cockroachdb => Some("cockroachdb"),
+				};
+				if let Some(backend) = backend {
+					return Err(super::MigrationError::UnsupportedBackendFeature {
+						feature: "PostgreSQL extensions",
+						backend,
+					});
+				}
+			}
+			Self::CreateIndex {
+				columns,
+				unique,
+				index_type,
+				expressions,
+				operator_class,
+				..
+			}
+			| Self::CreateIndexRepair {
+				columns,
+				unique,
+				index_type,
+				expressions,
+				operator_class,
+				..
+			}
+			| Self::RestoreIndexOnRollback {
+				columns,
+				unique,
+				index_type,
+				expressions,
+				operator_class,
+				..
+			} => Self::validate_approximate_vector_index(
+				*index_type,
+				*unique,
+				columns,
+				expressions.as_deref(),
+				operator_class.as_deref(),
+				dialect,
+			)?,
+			#[cfg(feature = "pgvector")]
+			Self::CreateNamedIndex {
+				columns,
+				unique,
+				index_type,
+				expressions,
+				operator_class,
+				..
+			}
+			| Self::DropNamedIndex {
+				columns,
+				unique,
+				index_type,
+				expressions,
+				operator_class,
+				..
+			} => Self::validate_approximate_vector_index(
+				*index_type,
+				*unique,
+				columns,
+				expressions.as_deref(),
+				operator_class.as_deref(),
+				dialect,
+			)?,
+			_ => {}
+		}
+		Ok(())
 	}
 
 	/// Generate `SetAutoIncrementValue` SQL for each dialect
@@ -3299,11 +3853,23 @@ impl Operation {
 				quote_identifier(new_name),
 				quote_identifier(old_name)
 			)])),
-			Operation::CreateIndex { table, columns, .. } => {
-				// Use the same naming convention as to_sql(): idx_{table}_{columns_joined}
-				// This ensures the rollback DROP INDEX targets the correct index name
-				let columns_joined = columns.join("_");
-				let index_name = format!("idx_{}_{}", table, columns_joined);
+			Operation::CreateIndex {
+				table,
+				columns,
+				expressions,
+				..
+			} => {
+				// Mirror the forward SQL naming convention so rollback targets
+				// expression indexes as well as column indexes.
+				let name_suffix = if expressions
+					.as_ref()
+					.is_some_and(|expressions| !expressions.is_empty())
+				{
+					"expr".to_string()
+				} else {
+					columns.join("_")
+				};
+				let index_name = format!("idx_{}_{}", table, name_suffix);
 				// MySQL requires `DROP INDEX <name> ON <table>`; PostgreSQL/SQLite/CockroachDB
 				// only need the index name. Mirror the dialect dispatch used by the forward
 				// `Operation::DropIndex` SQL generator above.
@@ -3315,6 +3881,20 @@ impl Operation {
 					),
 					SqlDialect::Postgres | SqlDialect::Sqlite | SqlDialect::Cockroachdb => {
 						format!("DROP INDEX {};", quote_identifier(&index_name))
+					}
+				};
+				Ok(Some(vec![sql]))
+			}
+			#[cfg(feature = "pgvector")]
+			Operation::CreateNamedIndex { table, name, .. } => {
+				let sql = match dialect {
+					SqlDialect::Mysql => format!(
+						"DROP INDEX {} ON {};",
+						quote_identifier(name),
+						quote_identifier(table)
+					),
+					SqlDialect::Postgres | SqlDialect::Sqlite | SqlDialect::Cockroachdb => {
+						format!("DROP INDEX {};", quote_identifier(name))
 					}
 				};
 				Ok(Some(vec![sql]))
@@ -3331,8 +3911,8 @@ impl Operation {
 				expressions,
 				mysql_options,
 				operator_class,
-			} => Ok(Some(vec![
-				Operation::CreateIndexRepair {
+			} => {
+				let sql = Operation::CreateIndexRepair {
 					table: table.clone(),
 					name: name.clone(),
 					columns: columns.clone(),
@@ -3344,8 +3924,9 @@ impl Operation {
 					mysql_options: *mysql_options,
 					operator_class: operator_class.clone(),
 				}
-				.to_sql(dialect),
-			])),
+				.try_to_sql(dialect)?;
+				Ok(Some(vec![sql]))
+			}
 			Operation::AddConstraint {
 				table,
 				constraint_sql,
@@ -3505,6 +4086,38 @@ impl Operation {
 					quote_identifier(table),
 					columns_list
 				)]))
+			}
+			#[cfg(feature = "pgvector")]
+			Operation::DropNamedIndex {
+				table,
+				name,
+				columns,
+				unique,
+				index_type,
+				where_clause,
+				concurrently,
+				expressions,
+				mysql_options,
+				operator_class,
+			} => {
+				if !named_index_has_target(columns, expressions.as_deref()) {
+					return Ok(None);
+				}
+				Ok(Some(vec![
+					Operation::CreateNamedIndex {
+						table: table.clone(),
+						name: name.clone(),
+						columns: columns.clone(),
+						unique: *unique,
+						index_type: *index_type,
+						where_clause: where_clause.clone(),
+						concurrently: *concurrently,
+						expressions: expressions.clone(),
+						mysql_options: *mysql_options,
+						operator_class: operator_class.clone(),
+					}
+					.try_to_sql(dialect)?,
+				]))
 			}
 			Operation::DropConstraint {
 				table,
@@ -3687,6 +4300,43 @@ impl Operation {
 						}
 						model.constraints.push(definition);
 					}
+				}
+			}
+			#[cfg(feature = "pgvector")]
+			Operation::CreateNamedIndex { table, name, .. } => {
+				if let Some(model) = state.find_model_by_table_mut(table) {
+					model.indexes.retain(|index| index.name != *name);
+				}
+			}
+			#[cfg(feature = "pgvector")]
+			Operation::DropNamedIndex {
+				table,
+				name,
+				columns,
+				unique,
+				index_type,
+				expressions,
+				operator_class,
+				..
+			} => {
+				if !named_index_has_target(columns, expressions.as_deref()) {
+					return;
+				}
+				if let Some(model) = state.find_model_by_table_mut(table) {
+					#[cfg(not(feature = "pgvector"))]
+					let _ = (index_type, operator_class);
+					model.indexes.retain(|index| index.name != *name);
+					model.indexes.push(IndexDefinition {
+						name: name.clone(),
+						fields: columns.clone(),
+						unique: *unique,
+						#[cfg(feature = "pgvector")]
+						index_type: *index_type,
+						#[cfg(feature = "pgvector")]
+						operator_class: operator_class.clone(),
+						#[cfg(feature = "pgvector")]
+						expressions: expressions.clone(),
+					});
 				}
 			}
 			_ => {
@@ -4771,6 +5421,24 @@ impl SqliteTableRecreation {
 
 	/// Generate the SQL statements for table recreation and dependent object restoration.
 	pub fn to_sql_statements(&self) -> Vec<String> {
+		self.try_to_sql_statements().unwrap_or_else(|error| {
+			panic!(
+				"SQLite recreation requires checked SQL rendering; use try_to_sql_statements: {error}"
+			)
+		})
+	}
+
+	/// Generates table-recreation SQL after validating every replacement column.
+	pub fn try_to_sql_statements(&self) -> super::Result<Vec<String>> {
+		for column in &self.new_columns {
+			column
+				.type_definition
+				.try_to_sql_for_dialect(&SqlDialect::Sqlite)?;
+		}
+		Ok(self.render_sql_statements())
+	}
+
+	fn render_sql_statements(&self) -> Vec<String> {
 		let temp_table = format!("{}_new", self.table_name);
 		let quote =
 			|identifier: &str| Operation::quote_dialect_identifier(identifier, &SqlDialect::Sqlite);
@@ -5144,6 +5812,30 @@ impl Operation {
 				table: table.clone(),
 				columns: columns.clone(),
 			})),
+			#[cfg(feature = "pgvector")]
+			Operation::CreateNamedIndex {
+				table,
+				name,
+				columns,
+				unique,
+				index_type,
+				where_clause,
+				concurrently,
+				expressions,
+				mysql_options,
+				operator_class,
+			} => Ok(Some(Operation::DropNamedIndex {
+				table: table.clone(),
+				name: name.clone(),
+				columns: columns.clone(),
+				unique: *unique,
+				index_type: *index_type,
+				where_clause: where_clause.clone(),
+				concurrently: *concurrently,
+				expressions: expressions.clone(),
+				mysql_options: *mysql_options,
+				operator_class: operator_class.clone(),
+			})),
 			Operation::CreateIndexRepair { .. } | Operation::RestoreIndexOnRollback { .. } => {
 				Ok(None)
 			}
@@ -5160,6 +5852,35 @@ impl Operation {
 					expressions: None,
 					mysql_options: None,
 					operator_class: None,
+				}))
+			}
+			#[cfg(feature = "pgvector")]
+			Operation::DropNamedIndex {
+				table,
+				name,
+				columns,
+				unique,
+				index_type,
+				where_clause,
+				concurrently,
+				expressions,
+				mysql_options,
+				operator_class,
+			} => {
+				if !named_index_has_target(columns, expressions.as_deref()) {
+					return Ok(None);
+				}
+				Ok(Some(Operation::CreateNamedIndex {
+					table: table.clone(),
+					name: name.clone(),
+					columns: columns.clone(),
+					unique: *unique,
+					index_type: *index_type,
+					where_clause: where_clause.clone(),
+					concurrently: *concurrently,
+					expressions: expressions.clone(),
+					mysql_options: *mysql_options,
+					operator_class: operator_class.clone(),
 				}))
 			}
 			// Operations that are not reversible as Operations
@@ -5201,44 +5922,90 @@ impl OperationStatement {
 	where
 		E: sqlx::Executor<'c, Database = sqlx::Postgres>,
 	{
-		use crate::backends::sql_build_helpers;
 		use crate::backends::types::DatabaseType;
-		let db_type = DatabaseType::Postgres;
+		let sql = self
+			.try_to_sql_string(DatabaseType::Postgres)
+			.map_err(|error| sqlx::Error::Protocol(error.to_string()))?;
+		sqlx::query(&sql).execute(executor).await?;
+		Ok(())
+	}
+
+	/// Converts to SQL while preserving checked backend feature errors.
+	pub fn try_to_sql_string(
+		&self,
+		db_type: crate::backends::types::DatabaseType,
+	) -> super::Result<String> {
+		use crate::backends::sql_build_helpers;
+
+		let map_query_error = |error: reinhardt_query::QueryBuildError| match error {
+			reinhardt_query::QueryBuildError::UnsupportedBackendFeature { feature, .. } => {
+				super::MigrationError::UnsupportedBackendFeature {
+					feature,
+					backend: match db_type {
+						crate::backends::types::DatabaseType::Postgres => "postgres",
+						crate::backends::types::DatabaseType::Mysql => "mysql",
+						crate::backends::types::DatabaseType::Sqlite => "sqlite",
+					},
+				}
+			}
+			_ => super::MigrationError::InvalidMigration(error.to_string()),
+		};
+
 		match self {
-			OperationStatement::TableCreate(stmt) => {
-				let sql = sql_build_helpers::build_create_table_sql(db_type, stmt);
-				sqlx::query(&sql).execute(executor).await?;
-			}
-			OperationStatement::TableDrop(stmt) => {
-				let sql = sql_build_helpers::build_drop_table_sql(db_type, stmt);
-				sqlx::query(&sql).execute(executor).await?;
-			}
-			OperationStatement::TableAlter(stmt) => {
-				let sql = sql_build_helpers::build_alter_table_sql(db_type, stmt);
-				sqlx::query(&sql).execute(executor).await?;
-			}
-			OperationStatement::TableRename(stmt) => {
-				let sql = sql_build_helpers::build_alter_table_sql(db_type, stmt);
-				sqlx::query(&sql).execute(executor).await?;
-			}
-			OperationStatement::IndexCreate(stmt) => {
-				let sql = sql_build_helpers::build_create_index_sql(db_type, stmt);
-				sqlx::query(&sql).execute(executor).await?;
-			}
-			OperationStatement::IndexDrop(stmt) => {
-				let sql = sql_build_helpers::build_drop_index_sql(db_type, stmt);
-				sqlx::query(&sql).execute(executor).await?;
-			}
-			OperationStatement::RawSql(sql) => {
-				// Already sanitized with pg_escape::quote_identifier
-				sqlx::query(sql).execute(executor).await?;
-			}
-			OperationStatement::DialectOperation(operation) => {
-				let sql = operation.to_sql(&SqlDialect::Postgres);
-				sqlx::query(&sql).execute(executor).await?;
+			Self::TableCreate(stmt) => match db_type {
+				crate::backends::types::DatabaseType::Postgres => PostgresQueryBuilder
+					.build_create_table_checked(stmt)
+					.map(|(sql, _)| sql)
+					.map_err(map_query_error),
+				crate::backends::types::DatabaseType::Mysql => MySqlQueryBuilder
+					.build_create_table_checked(stmt)
+					.map(|(sql, _)| sql)
+					.map_err(map_query_error),
+				crate::backends::types::DatabaseType::Sqlite => SqliteQueryBuilder
+					.build_create_table_checked(stmt)
+					.map(|(sql, _)| sql)
+					.map_err(map_query_error),
+			},
+			Self::TableDrop(stmt) => Ok(sql_build_helpers::build_drop_table_sql(db_type, stmt)),
+			Self::TableAlter(stmt) | Self::TableRename(stmt) => match db_type {
+				crate::backends::types::DatabaseType::Postgres => PostgresQueryBuilder
+					.build_alter_table_checked(stmt)
+					.map(|(sql, _)| sql)
+					.map_err(map_query_error),
+				crate::backends::types::DatabaseType::Mysql => MySqlQueryBuilder
+					.build_alter_table_checked(stmt)
+					.map(|(sql, _)| sql)
+					.map_err(map_query_error),
+				crate::backends::types::DatabaseType::Sqlite => SqliteQueryBuilder
+					.build_alter_table_checked(stmt)
+					.map(|(sql, _)| sql)
+					.map_err(map_query_error),
+			},
+			Self::IndexCreate(stmt) => match db_type {
+				crate::backends::types::DatabaseType::Postgres => PostgresQueryBuilder
+					.build_create_index_checked(stmt)
+					.map(|(sql, _)| sql)
+					.map_err(map_query_error),
+				crate::backends::types::DatabaseType::Mysql => MySqlQueryBuilder
+					.build_create_index_checked(stmt)
+					.map(|(sql, _)| sql)
+					.map_err(map_query_error),
+				crate::backends::types::DatabaseType::Sqlite => SqliteQueryBuilder
+					.build_create_index_checked(stmt)
+					.map(|(sql, _)| sql)
+					.map_err(map_query_error),
+			},
+			Self::IndexDrop(stmt) => Ok(sql_build_helpers::build_drop_index_sql(db_type, stmt)),
+			Self::RawSql(sql) => Ok(sql.clone()),
+			Self::DialectOperation(operation) => {
+				let dialect = match db_type {
+					crate::backends::types::DatabaseType::Postgres => SqlDialect::Postgres,
+					crate::backends::types::DatabaseType::Mysql => SqlDialect::Mysql,
+					crate::backends::types::DatabaseType::Sqlite => SqlDialect::Sqlite,
+				};
+				operation.try_to_sql(&dialect)
 			}
 		}
-		Ok(())
 	}
 
 	/// Convert to SQL string for logging/debugging
@@ -5247,41 +6014,21 @@ impl OperationStatement {
 	///
 	/// * `db_type` - Database type to generate SQL for (PostgreSQL, MySQL, SQLite)
 	pub fn to_sql_string(&self, db_type: crate::backends::types::DatabaseType) -> String {
-		use crate::backends::sql_build_helpers;
-
-		match self {
-			OperationStatement::TableCreate(stmt) => {
-				sql_build_helpers::build_create_table_sql(db_type, stmt)
-			}
-			OperationStatement::TableDrop(stmt) => {
-				sql_build_helpers::build_drop_table_sql(db_type, stmt)
-			}
-			OperationStatement::TableAlter(stmt) => {
-				sql_build_helpers::build_alter_table_sql(db_type, stmt)
-			}
-			OperationStatement::TableRename(stmt) => {
-				sql_build_helpers::build_alter_table_sql(db_type, stmt)
-			}
-			OperationStatement::IndexCreate(stmt) => {
-				sql_build_helpers::build_create_index_sql(db_type, stmt)
-			}
-			OperationStatement::IndexDrop(stmt) => {
-				sql_build_helpers::build_drop_index_sql(db_type, stmt)
-			}
-			OperationStatement::RawSql(sql) => sql.clone(),
-			OperationStatement::DialectOperation(operation) => {
-				let dialect = match db_type {
-					crate::backends::types::DatabaseType::Postgres => SqlDialect::Postgres,
-					crate::backends::types::DatabaseType::Mysql => SqlDialect::Mysql,
-					crate::backends::types::DatabaseType::Sqlite => SqlDialect::Sqlite,
-				};
-				operation.to_sql(&dialect)
-			}
-		}
+		self.try_to_sql_string(db_type).unwrap_or_else(|error| {
+			panic!(
+				"operation statement requires checked SQL rendering; use try_to_sql_string: {error}"
+			)
+		})
 	}
 }
 
 impl Operation {
+	/// Converts to a query statement after validating the selected dialect.
+	pub fn try_to_statement(&self, dialect: &SqlDialect) -> super::Result<OperationStatement> {
+		self.validate_for_dialect(dialect)?;
+		Ok(self.to_statement())
+	}
+
 	/// Convert Operation to reinhardt-query statement or sanitized raw SQL
 	pub fn to_statement(&self) -> OperationStatement {
 		match self {
@@ -5374,17 +6121,38 @@ impl Operation {
 				table,
 				columns,
 				unique,
+				index_type,
 				..
 			}
 			| Operation::CreateIndexRepair {
 				table,
 				columns,
 				unique,
+				index_type,
 				..
 			} => {
+				if index_type.is_some_and(IndexType::is_approximate_vector) {
+					return OperationStatement::DialectOperation(Box::new(self.clone()));
+				}
 				let idx_name = format!("idx_{}_{}", table, columns.join("_"));
 				OperationStatement::IndexCreate(
 					self.build_create_index(&idx_name, table, columns, *unique),
+				)
+			}
+			#[cfg(feature = "pgvector")]
+			Operation::CreateNamedIndex {
+				table,
+				name,
+				columns,
+				unique,
+				index_type,
+				..
+			} => {
+				if index_type.is_some_and(IndexType::is_approximate_vector) {
+					return OperationStatement::DialectOperation(Box::new(self.clone()));
+				}
+				OperationStatement::IndexCreate(
+					self.build_create_index(name, table, columns, *unique),
 				)
 			}
 			Operation::RestoreIndexOnRollback { .. } => OperationStatement::RawSql(
@@ -5393,6 +6161,10 @@ impl Operation {
 			Operation::DropIndex { table, columns } => {
 				let idx_name = format!("idx_{}_{}", table, columns.join("_"));
 				OperationStatement::IndexDrop(self.build_drop_index(&idx_name))
+			}
+			#[cfg(feature = "pgvector")]
+			Operation::DropNamedIndex { name, .. } => {
+				OperationStatement::IndexDrop(self.build_drop_index(name))
 			}
 			Operation::RunSQL { sql, .. } => OperationStatement::RawSql(sql.to_string()),
 			Operation::RunRust { code, .. } => {
@@ -5880,6 +6652,20 @@ impl Operation {
 			FieldType::TsTzRange => col_def.custom(Alias::new("TSTZRANGE")),
 			FieldType::TsVector => col_def.custom(Alias::new("TSVECTOR")),
 			FieldType::TsQuery => col_def.custom(Alias::new("TSQUERY")),
+			#[cfg(feature = "pgvector")]
+			FieldType::Vector { dimensions } => {
+				if !(1..=2_000).contains(dimensions) {
+					panic!(
+						"vector fields require checked statement construction; use try_to_statement"
+					);
+				}
+				let dimensions = u32::try_from(*dimensions).unwrap_or_else(|_| {
+					panic!(
+						"vector fields require checked statement construction; use try_to_statement"
+					)
+				});
+				col_def.vector(dimensions)
+			}
 			FieldType::Custom(custom_type) => col_def.custom(Alias::new(custom_type)),
 		}
 	}
@@ -6057,9 +6843,19 @@ impl MigrationOperation for Operation {
 					Some(format!("create_index_{}", table.to_lowercase()))
 				}
 			}
+			#[cfg(feature = "pgvector")]
+			Operation::CreateNamedIndex { table, unique, .. } => {
+				if *unique {
+					Some(format!("create_unique_index_{}", table.to_lowercase()))
+				} else {
+					Some(format!("create_index_{}", table.to_lowercase()))
+				}
+			}
 			Operation::DropIndex { table, .. } => {
 				Some(format!("drop_index_{}", table.to_lowercase()))
 			}
+			#[cfg(feature = "pgvector")]
+			Operation::DropNamedIndex { name, .. } => Some(format!("drop_index_{}", name.to_lowercase())),
 			Operation::RunSQL { .. } => None,  // Triggers auto-naming
 			Operation::RunRust { .. } => None, // Triggers auto-naming
 			Operation::AlterTableComment { table, .. } => {
@@ -6156,7 +6952,19 @@ impl MigrationOperation for Operation {
 					format!("Create index on {}", table)
 				}
 			}
+			#[cfg(feature = "pgvector")]
+			Operation::CreateNamedIndex { table, unique, .. } => {
+				if *unique {
+					format!("Create unique index on {}", table)
+				} else {
+					format!("Create index on {}", table)
+				}
+			}
 			Operation::DropIndex { table, .. } => format!("Drop index on {}", table),
+			#[cfg(feature = "pgvector")]
+			Operation::DropNamedIndex { table, name, .. } => {
+				format!("Drop index {} on {}", name, table)
+			}
 			Operation::RunSQL { sql, .. } => {
 				let preview = if sql.len() > 50 {
 					format!("{}...", &sql[..50])
@@ -6281,6 +7089,35 @@ impl MigrationOperation for Operation {
 					operator_class: operator_class.clone(),
 				}
 			}
+			#[cfg(feature = "pgvector")]
+			Operation::CreateNamedIndex {
+				table,
+				name,
+				columns,
+				unique,
+				index_type,
+				where_clause,
+				concurrently,
+				expressions,
+				mysql_options,
+				operator_class,
+			} => {
+				let mut sorted_columns = columns.clone();
+				sorted_columns.sort();
+
+				Operation::CreateNamedIndex {
+					table: table.clone(),
+					name: name.clone(),
+					columns: sorted_columns,
+					unique: *unique,
+					index_type: *index_type,
+					where_clause: where_clause.clone(),
+					concurrently: *concurrently,
+					expressions: expressions.clone(),
+					mysql_options: *mysql_options,
+					operator_class: operator_class.clone(),
+				}
+			}
 			// DropIndex: Sort columns
 			Operation::DropIndex { table, columns } => {
 				let mut sorted_columns = columns.clone();
@@ -6289,6 +7126,34 @@ impl MigrationOperation for Operation {
 				Operation::DropIndex {
 					table: table.clone(),
 					columns: sorted_columns,
+				}
+			}
+			#[cfg(feature = "pgvector")]
+			Operation::DropNamedIndex {
+				table,
+				name,
+				columns,
+				unique,
+				index_type,
+				where_clause,
+				concurrently,
+				expressions,
+				mysql_options,
+				operator_class,
+			} => {
+				let mut sorted_columns = columns.clone();
+				sorted_columns.sort();
+				Operation::DropNamedIndex {
+					table: table.clone(),
+					name: name.clone(),
+					columns: sorted_columns,
+					unique: *unique,
+					index_type: *index_type,
+					where_clause: where_clause.clone(),
+					concurrently: *concurrently,
+					expressions: expressions.clone(),
+					mysql_options: *mysql_options,
+					operator_class: operator_class.clone(),
 				}
 			}
 			// AlterUniqueTogether: Sort field lists and sort within each list
@@ -6994,6 +7859,45 @@ mod tests {
 		);
 	}
 
+	#[cfg(feature = "pgvector")]
+	#[test]
+	fn drop_named_index_deserializes_legacy_shape_without_false_reverse_definition() {
+		let operation: Operation = serde_json::from_str(
+			r#"{
+				"type": "DropNamedIndex",
+				"table": "documents",
+				"name": "documents_embedding_ann"
+			}"#,
+		)
+		.expect("legacy DropNamedIndex JSON should remain readable");
+
+		assert!(matches!(
+			&operation,
+			Operation::DropNamedIndex {
+				table,
+				name,
+				columns,
+				index_type: None,
+				expressions: None,
+				..
+			} if table == "documents"
+				&& name == "documents_embedding_ann"
+				&& columns.is_empty()
+		));
+		assert_eq!(
+			operation
+				.to_reverse_sql(&SqlDialect::Postgres, &ProjectState::new())
+				.expect("legacy reverse SQL decision"),
+			None
+		);
+		assert_eq!(
+			operation
+				.to_reverse_operation(&ProjectState::new())
+				.expect("legacy reverse operation decision"),
+			None
+		);
+	}
+
 	#[test]
 	fn legacy_drop_constraint_rust_source_shape_still_typechecks() {
 		let operation = Operation::DropConstraint {
@@ -7559,6 +8463,238 @@ mod tests {
 			model.fields.contains_key("name"),
 			"Model should contain 'name' field"
 		);
+	}
+
+	#[cfg(feature = "pgvector")]
+	#[test]
+	fn checked_vector_create_and_alter_sql_preserve_dimensions() {
+		let vector_column = ColumnDefinition::new("embedding", FieldType::Vector { dimensions: 3 });
+		let create = Operation::CreateTable {
+			name: "documents".to_owned(),
+			columns: vec![vector_column.clone()],
+			constraints: vec![],
+			without_rowid: None,
+			partition: None,
+			interleave_in_parent: None,
+		};
+		let alter = Operation::AlterColumn {
+			table: "documents".to_owned(),
+			column: "embedding".to_owned(),
+			old_definition: None,
+			new_definition: vector_column,
+			mysql_options: None,
+		};
+
+		assert!(
+			create
+				.try_to_sql(&SqlDialect::Postgres)
+				.unwrap()
+				.contains("VECTOR(3)")
+		);
+		assert!(
+			alter
+				.try_to_sql(&SqlDialect::Postgres)
+				.unwrap()
+				.contains("TYPE VECTOR(3)")
+		);
+	}
+
+	#[cfg(feature = "pgvector")]
+	#[test]
+	fn checked_vector_ddl_rejects_unsupported_backends() {
+		let operation = Operation::AddColumn {
+			table: "documents".to_owned(),
+			column: ColumnDefinition::new("embedding", FieldType::Vector { dimensions: 3 }),
+			mysql_options: None,
+		};
+
+		for (dialect, backend) in [
+			(SqlDialect::Mysql, "mysql"),
+			(SqlDialect::Sqlite, "sqlite"),
+			(SqlDialect::Cockroachdb, "cockroachdb"),
+		] {
+			assert!(matches!(
+				operation.try_to_sql(&dialect),
+				Err(crate::migrations::MigrationError::UnsupportedBackendFeature {
+					feature: "vector field",
+					backend: actual_backend,
+				}) if actual_backend == backend
+			));
+		}
+	}
+
+	#[cfg(feature = "pgvector")]
+	#[test]
+	fn legacy_vector_operation_sql_fails_fast_on_unsupported_backends() {
+		let operation = Operation::AddColumn {
+			table: "documents".to_owned(),
+			column: ColumnDefinition::new("embedding", FieldType::Vector { dimensions: 3 }),
+			mysql_options: None,
+		};
+
+		for dialect in [SqlDialect::Mysql, SqlDialect::Sqlite] {
+			let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+				operation.to_sql(&dialect)
+			}));
+
+			let payload = result.expect_err("legacy rendering must not return vector SQL");
+			let message = payload
+				.downcast_ref::<String>()
+				.map(String::as_str)
+				.or_else(|| payload.downcast_ref::<&str>().copied())
+				.unwrap();
+			assert!(message.contains("try_to_sql"));
+		}
+	}
+
+	#[cfg(feature = "pgvector")]
+	#[test]
+	fn checked_inherited_table_vector_ddl_rejects_unsupported_backends() {
+		let operation = Operation::CreateInheritedTable {
+			name: "child_documents".to_owned(),
+			columns: vec![ColumnDefinition::new(
+				"embedding",
+				FieldType::Vector { dimensions: 3 },
+			)],
+			base_table: "documents".to_owned(),
+			join_column: "document_id".to_owned(),
+		};
+
+		for (dialect, backend) in [
+			(SqlDialect::Mysql, "mysql"),
+			(SqlDialect::Sqlite, "sqlite"),
+			(SqlDialect::Cockroachdb, "cockroachdb"),
+		] {
+			assert!(matches!(
+				operation.try_to_sql(&dialect),
+				Err(crate::migrations::MigrationError::UnsupportedBackendFeature {
+					feature: "vector field",
+					backend: actual_backend,
+				}) if actual_backend == backend
+			));
+		}
+	}
+
+	#[cfg(feature = "pgvector")]
+	#[test]
+	fn checked_vector_statement_rendering_rejects_unsupported_backends() {
+		let operation = Operation::CreateTable {
+			name: "documents".to_owned(),
+			columns: vec![ColumnDefinition::new(
+				"embedding",
+				FieldType::Vector { dimensions: 3 },
+			)],
+			constraints: vec![],
+			without_rowid: None,
+			partition: None,
+			interleave_in_parent: None,
+		};
+		let statement = operation.try_to_statement(&SqlDialect::Postgres).unwrap();
+
+		for (database_type, backend) in [
+			(crate::backends::types::DatabaseType::Mysql, "mysql"),
+			(crate::backends::types::DatabaseType::Sqlite, "sqlite"),
+		] {
+			assert!(matches!(
+				statement.try_to_sql_string(database_type),
+				Err(crate::migrations::MigrationError::UnsupportedBackendFeature {
+					feature: "pgvector column types",
+					backend: actual_backend,
+				}) if actual_backend == backend
+			));
+		}
+	}
+
+	#[cfg(feature = "pgvector")]
+	#[test]
+	fn legacy_vector_statement_rendering_fails_fast_on_unsupported_backends() {
+		let operation = Operation::CreateTable {
+			name: "documents".to_owned(),
+			columns: vec![ColumnDefinition::new(
+				"embedding",
+				FieldType::Vector { dimensions: 3 },
+			)],
+			constraints: vec![],
+			without_rowid: None,
+			partition: None,
+			interleave_in_parent: None,
+		};
+		let statement = operation.to_statement();
+
+		for database_type in [
+			crate::backends::types::DatabaseType::Mysql,
+			crate::backends::types::DatabaseType::Sqlite,
+		] {
+			let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+				statement.to_sql_string(database_type)
+			}));
+
+			let payload =
+				result.expect_err("legacy statement rendering must not return vector SQL");
+			let message = payload
+				.downcast_ref::<String>()
+				.map(String::as_str)
+				.or_else(|| payload.downcast_ref::<&str>().copied())
+				.unwrap();
+			assert!(message.contains("try_to_sql_string"));
+		}
+	}
+
+	#[cfg(feature = "pgvector")]
+	#[test]
+	fn checked_vector_statement_construction_rejects_invalid_dimensions() {
+		for dimensions in [0, 2_001, usize::MAX] {
+			let operation = Operation::CreateTable {
+				name: "documents".to_owned(),
+				columns: vec![ColumnDefinition::new(
+					"embedding",
+					FieldType::Vector { dimensions },
+				)],
+				constraints: vec![],
+				without_rowid: None,
+				partition: None,
+				interleave_in_parent: None,
+			};
+
+			assert!(matches!(
+				operation.try_to_statement(&SqlDialect::Postgres),
+				Err(crate::migrations::MigrationError::InvalidMigration(message))
+					if message == format!(
+						"vector dimensions must be between 1 and 2000, got {dimensions}"
+					)
+			));
+		}
+	}
+
+	#[cfg(feature = "pgvector")]
+	#[test]
+	fn legacy_vector_statement_construction_rejects_invalid_dimensions_before_conversion() {
+		for dimensions in [0, 2_001, usize::MAX] {
+			let operation = Operation::CreateTable {
+				name: "documents".to_owned(),
+				columns: vec![ColumnDefinition::new(
+					"embedding",
+					FieldType::Vector { dimensions },
+				)],
+				constraints: vec![],
+				without_rowid: None,
+				partition: None,
+				interleave_in_parent: None,
+			};
+			let result =
+				std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| operation.to_statement()));
+
+			let payload = match result {
+				Err(payload) => payload,
+				Ok(_) => panic!("legacy statement construction must reject invalid dimensions"),
+			};
+			let message = payload
+				.downcast_ref::<String>()
+				.map(String::as_str)
+				.or_else(|| payload.downcast_ref::<&str>().copied())
+				.unwrap();
+			assert!(message.contains("try_to_statement"));
+		}
 	}
 
 	#[test]
@@ -9063,7 +10199,779 @@ mod tests {
 		// Internal state cannot be easily asserted with reinhardt_query's ColumnDef API
 	}
 
+	#[cfg(feature = "pgvector")]
+	fn vector_index_operation(index_type: IndexType) -> Operation {
+		Operation::CreateIndex {
+			table: "source".to_string(),
+			columns: vec!["embedding".to_string()],
+			unique: false,
+			index_type: Some(index_type),
+			where_clause: None,
+			concurrently: false,
+			expressions: None,
+			mysql_options: None,
+			operator_class: Some("vector_cosine_ops".to_string()),
+		}
+	}
+
+	#[cfg(feature = "pgvector")]
+	fn vector_index_project_state(field_type: FieldType) -> ProjectState {
+		let mut state = ProjectState::new();
+		let mut model = ModelState::new("search", "Source");
+		model.table_name = "source".to_string();
+		model.add_field(FieldState::new("embedding", field_type, false));
+		state.add_model(model);
+		state
+	}
+
+	#[cfg(feature = "pgvector")]
 	#[test]
+	fn explicit_vector_index_rejects_scalar_column_in_project_state() {
+		// Arrange
+		let operation = vector_index_operation(IndexType::Hnsw {
+			m: Some(16),
+			ef_construction: Some(64),
+		});
+		let state = vector_index_project_state(FieldType::Text);
+
+		// Act
+		let result = operation.validate_for_state(&state);
+
+		// Assert
+		assert!(matches!(
+			result,
+			Err(crate::migrations::MigrationError::InvalidMigration(message))
+				if message == "approximate vector index on table `source` targets non-vector column `embedding`"
+		));
+	}
+
+	#[cfg(feature = "pgvector")]
+	#[test]
+	fn explicit_named_vector_index_rejects_scalar_column_in_project_state() {
+		// Arrange
+		let operation = Operation::CreateNamedIndex {
+			table: "source".to_string(),
+			name: "source_embedding_ann".to_string(),
+			columns: vec!["embedding".to_string()],
+			unique: false,
+			index_type: Some(IndexType::Ivfflat { lists: Some(100) }),
+			where_clause: None,
+			concurrently: false,
+			expressions: None,
+			mysql_options: None,
+			operator_class: Some("vector_l2_ops".to_string()),
+		};
+		let state = vector_index_project_state(FieldType::Integer);
+
+		// Act
+		let result = operation.validate_for_state(&state);
+
+		// Assert
+		assert!(matches!(
+			result,
+			Err(crate::migrations::MigrationError::InvalidMigration(message))
+				if message == "approximate vector index on table `source` targets non-vector column `embedding`"
+		));
+	}
+
+	#[cfg(feature = "pgvector")]
+	#[test]
+	fn explicit_vector_index_accepts_vector_column_in_project_state() {
+		// Arrange
+		let operation = vector_index_operation(IndexType::Hnsw {
+			m: Some(16),
+			ef_construction: Some(64),
+		});
+		let state = vector_index_project_state(FieldType::Vector { dimensions: 1536 });
+
+		// Act
+		let result = operation.validate_for_state(&state);
+
+		// Assert
+		result.unwrap();
+	}
+
+	#[cfg(feature = "pgvector")]
+	#[test]
+	fn explicit_vector_index_rejects_unknown_column_in_project_state() {
+		// Arrange
+		let operation = vector_index_operation(IndexType::Ivfflat { lists: Some(100) });
+		let mut state = vector_index_project_state(FieldType::Vector { dimensions: 1536 });
+		state
+			.find_model_by_table_mut("source")
+			.unwrap()
+			.fields
+			.remove("embedding");
+
+		// Act
+		let result = operation.validate_for_state(&state);
+
+		// Assert
+		assert!(matches!(
+			result,
+			Err(crate::migrations::MigrationError::InvalidMigration(message))
+				if message == "approximate vector index on table `source` targets unknown column `embedding`"
+		));
+	}
+
+	#[cfg(feature = "pgvector")]
+	#[test]
+	fn explicit_vector_expression_index_defers_result_type_validation_to_postgres() {
+		// Arrange
+		let operation = Operation::CreateIndex {
+			table: "source".to_string(),
+			columns: Vec::new(),
+			unique: false,
+			index_type: Some(IndexType::Hnsw {
+				m: Some(16),
+				ef_construction: Some(64),
+			}),
+			where_clause: None,
+			concurrently: false,
+			expressions: Some(vec!["normalize(embedding)".to_string()]),
+			mysql_options: None,
+			operator_class: Some("vector_cosine_ops".to_string()),
+		};
+		let state = vector_index_project_state(FieldType::Text);
+
+		// Act
+		let result = operation.validate_for_state(&state);
+
+		// Assert
+		result.unwrap();
+	}
+
+	#[cfg(feature = "pgvector")]
+	#[rstest]
+	#[case(IndexType::BTree)]
+	#[case(IndexType::Hnsw {
+		m: Some(16),
+		ef_construction: Some(64),
+	})]
+	#[case(IndexType::Ivfflat { lists: Some(100) })]
+	fn vector_index_type_serde_roundtrip_preserves_legacy_and_data_bearing_variants(
+		#[case] index_type: IndexType,
+	) {
+		// Act
+		let serialized = serde_json::to_string(&index_type).unwrap();
+		let reparsed: IndexType = serde_json::from_str(&serialized).unwrap();
+
+		// Assert
+		assert_eq!(reparsed, index_type);
+	}
+
+	#[cfg(feature = "pgvector")]
+	#[rstest]
+	fn vector_index_hnsw_migration_renders_forward_and_backward_sql() {
+		// Arrange
+		let operation = vector_index_operation(IndexType::Hnsw {
+			m: Some(16),
+			ef_construction: Some(64),
+		});
+		let state = ProjectState::default();
+
+		// Act
+		let forward_sql = operation.try_to_sql(&SqlDialect::Postgres).unwrap();
+		let statement_sql = operation
+			.try_to_statement(&SqlDialect::Postgres)
+			.unwrap()
+			.try_to_sql_string(crate::backends::types::DatabaseType::Postgres)
+			.unwrap();
+		let backward_sql = operation
+			.to_reverse_sql(&SqlDialect::Postgres, &state)
+			.unwrap()
+			.unwrap();
+
+		// Assert
+		assert_eq!(
+			forward_sql,
+			"CREATE INDEX idx_source_embedding ON source USING hnsw (embedding vector_cosine_ops) WITH (m = 16, ef_construction = 64);"
+		);
+		assert_eq!(statement_sql, forward_sql);
+		assert_eq!(backward_sql, vec!["DROP INDEX idx_source_embedding;"]);
+	}
+
+	#[cfg(feature = "pgvector")]
+	#[test]
+	fn pgvector_error_hint_derives_context_from_migration_operations() {
+		let vector_column = Operation::CreateTable {
+			name: "source".to_string(),
+			columns: vec![ColumnDefinition::new(
+				"embedding",
+				FieldType::Vector { dimensions: 3 },
+			)],
+			constraints: Vec::new(),
+			without_rowid: None,
+			interleave_in_parent: None,
+			partition: None,
+		};
+		let vector_index = vector_index_operation(IndexType::Hnsw {
+			m: Some(16),
+			ef_construction: Some(64),
+		});
+		let restore_vector_column = Operation::AlterColumn {
+			table: "source".to_string(),
+			column: "embedding".to_string(),
+			old_definition: Some(ColumnDefinition::new(
+				"embedding",
+				FieldType::Vector { dimensions: 3 },
+			)),
+			new_definition: ColumnDefinition::new("embedding", FieldType::Text),
+			mysql_options: None,
+		};
+		let restore_vector_index =
+			named_vector_index_drop(Some(IndexType::Ivfflat { lists: Some(100) }));
+		let rollback_restore_vector_index = Operation::RestoreIndexOnRollback {
+			table: "source".to_string(),
+			name: Some("source_embedding_hnsw".to_string()),
+			columns: vec!["embedding".to_string()],
+			unique: false,
+			index_type: Some(IndexType::Hnsw {
+				m: Some(16),
+				ef_construction: Some(64),
+			}),
+			where_clause: None,
+			concurrently: false,
+			expressions: None,
+			mysql_options: None,
+			operator_class: Some("vector_cosine_ops".to_string()),
+		};
+
+		assert_eq!(
+			vector_column.pgvector_operation_kind(),
+			Some(crate::backends::error::PgvectorOperationKind::ColumnType)
+		);
+		assert_eq!(
+			vector_index.pgvector_operation_kind(),
+			Some(crate::backends::error::PgvectorOperationKind::ApproximateIndex)
+		);
+		assert_eq!(vector_index.pgvector_reverse_operation_kind(), None);
+		assert_eq!(restore_vector_column.pgvector_operation_kind(), None);
+		assert_eq!(
+			restore_vector_column.pgvector_reverse_operation_kind(),
+			Some(crate::backends::error::PgvectorOperationKind::ColumnType)
+		);
+		assert_eq!(restore_vector_index.pgvector_operation_kind(), None);
+		assert_eq!(
+			restore_vector_index.pgvector_reverse_operation_kind(),
+			Some(crate::backends::error::PgvectorOperationKind::ApproximateIndex)
+		);
+		assert_eq!(
+			rollback_restore_vector_index.pgvector_operation_kind(),
+			None
+		);
+		assert_eq!(
+			rollback_restore_vector_index.pgvector_reverse_operation_kind(),
+			Some(crate::backends::error::PgvectorOperationKind::ApproximateIndex)
+		);
+	}
+
+	#[cfg(feature = "pgvector")]
+	#[rstest]
+	fn vector_index_ivfflat_migration_renders_exact_sql() {
+		// Arrange
+		let mut operation = vector_index_operation(IndexType::Ivfflat { lists: Some(100) });
+		if let Operation::CreateIndex { operator_class, .. } = &mut operation {
+			*operator_class = Some("vector_l2_ops".to_string());
+		}
+
+		// Act
+		let sql = operation.try_to_sql(&SqlDialect::Postgres).unwrap();
+
+		// Assert
+		assert_eq!(
+			sql,
+			"CREATE INDEX idx_source_embedding ON source USING ivfflat (embedding vector_l2_ops) WITH (lists = 100);"
+		);
+	}
+
+	#[cfg(feature = "pgvector")]
+	#[rstest]
+	fn vector_index_restore_preserves_hnsw_metadata() {
+		// Arrange
+		let operation = Operation::RestoreIndexOnRollback {
+			table: "source".to_string(),
+			name: Some("source_embedding_cosine_hnsw".to_string()),
+			columns: vec!["embedding".to_string()],
+			unique: false,
+			index_type: Some(IndexType::Hnsw {
+				m: Some(16),
+				ef_construction: Some(64),
+			}),
+			where_clause: None,
+			concurrently: false,
+			expressions: None,
+			mysql_options: None,
+			operator_class: Some("vector_cosine_ops".to_string()),
+		};
+		let state = ProjectState::default();
+
+		// Act
+		let sql = operation
+			.to_reverse_sql(&SqlDialect::Postgres, &state)
+			.unwrap()
+			.unwrap();
+
+		// Assert
+		assert_eq!(
+			sql,
+			vec![
+				"CREATE INDEX source_embedding_cosine_hnsw ON source USING hnsw (embedding vector_cosine_ops) WITH (m = 16, ef_construction = 64);"
+			]
+		);
+	}
+
+	#[cfg(feature = "pgvector")]
+	#[rstest]
+	#[case(SqlDialect::Mysql, "mysql")]
+	#[case(SqlDialect::Sqlite, "sqlite")]
+	fn vector_index_migration_rejects_non_postgres_backends(
+		#[case] dialect: SqlDialect,
+		#[case] backend: &'static str,
+	) {
+		// Arrange
+		let operation = vector_index_operation(IndexType::Hnsw {
+			m: None,
+			ef_construction: None,
+		});
+
+		// Act
+		let result = operation.try_to_sql(&dialect);
+
+		// Assert
+		assert!(matches!(
+			result,
+			Err(crate::migrations::MigrationError::UnsupportedBackendFeature {
+				feature: "approximate vector indexes",
+				backend: actual_backend,
+			}) if actual_backend == backend
+		));
+	}
+
+	#[rstest]
+	#[case(SqlDialect::Mysql, "mysql")]
+	#[case(SqlDialect::Sqlite, "sqlite")]
+	#[case(SqlDialect::Cockroachdb, "cockroachdb")]
+	fn create_extension_migration_rejects_non_postgres_backends(
+		#[case] dialect: SqlDialect,
+		#[case] backend: &'static str,
+	) {
+		let operation = Operation::CreateExtension {
+			name: "vector".to_string(),
+			if_not_exists: true,
+			schema: None,
+		};
+
+		let result = operation.try_to_sql(&dialect);
+
+		assert!(matches!(
+			result,
+			Err(crate::migrations::MigrationError::UnsupportedBackendFeature {
+				feature: "PostgreSQL extensions",
+				backend: actual_backend,
+			}) if actual_backend == backend
+		));
+	}
+
+	#[test]
+	fn create_extension_migration_quotes_identifiers_and_does_not_auto_drop_on_reverse() {
+		let operation = Operation::CreateExtension {
+			name: "vector\"; DROP TABLE documents; --".to_string(),
+			if_not_exists: true,
+			schema: Some("extension\"schema".to_string()),
+		};
+
+		assert_eq!(
+			operation
+				.try_to_sql(&SqlDialect::Postgres)
+				.expect("PostgreSQL supports extension migrations"),
+			"CREATE EXTENSION IF NOT EXISTS \"vector\"\"; DROP TABLE documents; --\" SCHEMA \"extension\"\"schema\";"
+		);
+		assert_eq!(
+			operation
+				.to_reverse_sql(&SqlDialect::Postgres, &ProjectState::new())
+				.expect("reverse SQL generation should succeed"),
+			None
+		);
+	}
+
+	#[cfg(feature = "pgvector")]
+	#[rstest]
+	#[case("", "must not be empty")]
+	#[case("documents\0embedding", "must not contain NUL")]
+	fn named_vector_index_migration_rejects_unsafe_physical_name(
+		#[case] name: &str,
+		#[case] expected: &str,
+	) {
+		// Arrange
+		let operation = Operation::CreateNamedIndex {
+			table: "source".to_string(),
+			name: name.to_string(),
+			columns: vec!["embedding".to_string()],
+			unique: false,
+			index_type: Some(IndexType::Hnsw {
+				m: Some(16),
+				ef_construction: Some(64),
+			}),
+			where_clause: None,
+			concurrently: false,
+			expressions: None,
+			mysql_options: None,
+			operator_class: Some("vector_cosine_ops".to_string()),
+		};
+
+		// Act
+		let result = operation.try_to_sql(&SqlDialect::Postgres);
+
+		// Assert
+		assert!(matches!(
+			result,
+			Err(crate::migrations::MigrationError::InvalidMigration(message))
+				if message.contains(expected)
+		));
+	}
+
+	#[cfg(feature = "pgvector")]
+	#[test]
+	fn named_vector_index_migration_quotes_unusual_physical_name() {
+		let operation = Operation::CreateNamedIndex {
+			table: "source".to_string(),
+			name: "select embedding-ann".to_string(),
+			columns: vec!["embedding".to_string()],
+			unique: false,
+			index_type: Some(IndexType::Ivfflat { lists: Some(100) }),
+			where_clause: None,
+			concurrently: false,
+			expressions: None,
+			mysql_options: None,
+			operator_class: Some("vector_l2_ops".to_string()),
+		};
+
+		assert_eq!(
+			operation
+				.try_to_sql(&SqlDialect::Postgres)
+				.expect("unusual names must be identifier-quoted"),
+			"CREATE INDEX \"select embedding-ann\" ON source USING ivfflat (embedding vector_l2_ops) WITH (lists = 100);"
+		);
+	}
+
+	#[cfg(feature = "pgvector")]
+	fn named_vector_index_drop(index_type: Option<IndexType>) -> Operation {
+		Operation::DropNamedIndex {
+			table: "source".to_string(),
+			name: "source_embedding_ann".to_string(),
+			columns: vec!["embedding".to_string()],
+			unique: false,
+			index_type,
+			where_clause: None,
+			concurrently: false,
+			expressions: None,
+			mysql_options: None,
+			operator_class: Some("vector_cosine_ops".to_string()),
+		}
+	}
+
+	#[cfg(feature = "pgvector")]
+	#[rstest]
+	#[case(SqlDialect::Mysql, "mysql")]
+	#[case(SqlDialect::Sqlite, "sqlite")]
+	fn named_vector_index_drop_rejects_unsupported_backends(
+		#[case] dialect: SqlDialect,
+		#[case] backend: &'static str,
+	) {
+		// Arrange
+		let operation = named_vector_index_drop(Some(IndexType::Hnsw {
+			m: Some(16),
+			ef_construction: Some(64),
+		}));
+
+		// Act
+		let result = operation.try_to_sql(&dialect);
+
+		// Assert
+		assert!(matches!(
+			result,
+			Err(crate::migrations::MigrationError::UnsupportedBackendFeature {
+				feature: "approximate vector indexes",
+				backend: actual_backend,
+			}) if actual_backend == backend
+		));
+	}
+
+	#[cfg(feature = "pgvector")]
+	#[test]
+	fn named_vector_index_drop_renders_exact_postgres_sql() {
+		let operation = named_vector_index_drop(Some(IndexType::Ivfflat { lists: Some(100) }));
+
+		assert_eq!(
+			operation
+				.try_to_sql(&SqlDialect::Postgres)
+				.expect("PostgreSQL supports approximate vector indexes"),
+			"DROP INDEX source_embedding_ann;"
+		);
+	}
+
+	#[cfg(feature = "pgvector")]
+	#[rstest]
+	#[case(SqlDialect::Mysql, "DROP INDEX source_embedding_ann ON source;")]
+	#[case(SqlDialect::Sqlite, "DROP INDEX source_embedding_ann;")]
+	fn legacy_named_index_drop_without_type_remains_backend_agnostic(
+		#[case] dialect: SqlDialect,
+		#[case] expected: &str,
+	) {
+		let operation = named_vector_index_drop(None);
+
+		assert_eq!(
+			operation
+				.try_to_sql(&dialect)
+				.expect("legacy named index drops do not identify a vector index"),
+			expected
+		);
+	}
+
+	#[cfg(feature = "pgvector")]
+	#[rstest]
+	#[case(
+		IndexType::Hnsw {
+			m: Some(1),
+			ef_construction: Some(64),
+		},
+		"m must be in the range 2..=100"
+	)]
+	#[case(
+		IndexType::Hnsw {
+			m: Some(16),
+			ef_construction: Some(1),
+		},
+		"ef_construction must be in the range 4..=1000"
+	)]
+	#[case(
+		IndexType::Ivfflat { lists: Some(32769) },
+		"lists must be in the range 1..=32768"
+	)]
+	#[case(
+		IndexType::Hnsw {
+			m: Some(16),
+			ef_construction: Some(31),
+		},
+		"ef_construction must be at least twice m"
+	)]
+	#[case(
+		IndexType::Hnsw {
+			m: Some(100),
+			ef_construction: None,
+		},
+		"ef_construction must be at least twice m"
+	)]
+	#[case(
+		IndexType::Hnsw {
+			m: None,
+			ef_construction: Some(4),
+		},
+		"ef_construction must be at least twice m"
+	)]
+	fn vector_index_migration_rejects_invalid_options(
+		#[case] index_type: IndexType,
+		#[case] option: &str,
+	) {
+		// Arrange
+		let operation = vector_index_operation(index_type);
+
+		// Act
+		let result = operation.try_to_sql(&SqlDialect::Postgres);
+
+		// Assert
+		assert!(matches!(
+			result,
+			Err(crate::migrations::MigrationError::InvalidMigration(message))
+				if message == format!("{option} for approximate vector indexes")
+		));
+	}
+
+	#[cfg(feature = "pgvector")]
+	#[rstest]
+	#[case(true, vec!["embedding".to_string()], None, Some("vector_l2_ops".to_string()), "approximate vector indexes cannot be unique")]
+	#[case(false, vec!["embedding".to_string(), "tenant_id".to_string()], None, Some("vector_l2_ops".to_string()), "approximate vector indexes require exactly one column or expression")]
+	#[case(false, vec!["embedding".to_string()], None, None, "approximate vector indexes require a supported vector operator class")]
+	#[case(false, vec!["embedding".to_string()], None, Some("gin_trgm_ops".to_string()), "approximate vector indexes require a supported vector operator class")]
+	#[case(false, vec![], Some(vec!["embedding".to_string(), "tenant_id".to_string()]), Some("vector_l2_ops".to_string()), "approximate vector indexes require exactly one column or expression")]
+	fn vector_index_migration_rejects_invalid_structure(
+		#[case] unique: bool,
+		#[case] columns: Vec<String>,
+		#[case] expressions: Option<Vec<String>>,
+		#[case] operator_class: Option<String>,
+		#[case] expected: &str,
+	) {
+		// Arrange
+		let operation = Operation::CreateIndex {
+			table: "source".to_string(),
+			columns,
+			unique,
+			index_type: Some(IndexType::Ivfflat { lists: None }),
+			where_clause: None,
+			concurrently: false,
+			expressions,
+			mysql_options: None,
+			operator_class,
+		};
+
+		// Act
+		let result = operation.try_to_sql(&SqlDialect::Postgres);
+
+		// Assert
+		assert!(matches!(
+			result,
+			Err(crate::migrations::MigrationError::InvalidMigration(message))
+				if message == expected
+		));
+	}
+
+	#[cfg(feature = "pgvector")]
+	#[rstest]
+	fn vector_index_migration_rejects_column_and_expression_together() {
+		// Arrange
+		let operation = Operation::CreateIndex {
+			table: "source".to_string(),
+			columns: vec!["embedding".to_string()],
+			unique: false,
+			index_type: Some(IndexType::Hnsw {
+				m: None,
+				ef_construction: None,
+			}),
+			where_clause: None,
+			concurrently: false,
+			expressions: Some(vec!["normalize(embedding)".to_string()]),
+			mysql_options: None,
+			operator_class: Some("vector_cosine_ops".to_string()),
+		};
+
+		// Act
+		let result = operation.try_to_sql(&SqlDialect::Postgres);
+
+		// Assert
+		assert!(matches!(
+			result,
+			Err(crate::migrations::MigrationError::InvalidMigration(message))
+				if message == "approximate vector indexes require exactly one column or expression"
+		));
+	}
+
+	#[cfg(feature = "pgvector")]
+	#[rstest]
+	fn vector_index_migration_rejects_empty_target() {
+		// Arrange
+		let operation = Operation::CreateIndex {
+			table: "source".to_string(),
+			columns: vec![],
+			unique: false,
+			index_type: Some(IndexType::Ivfflat { lists: None }),
+			where_clause: None,
+			concurrently: false,
+			expressions: None,
+			mysql_options: None,
+			operator_class: Some("vector_l2_ops".to_string()),
+		};
+
+		// Act
+		let result = operation.try_to_sql(&SqlDialect::Postgres);
+
+		// Assert
+		assert!(matches!(
+			result,
+			Err(crate::migrations::MigrationError::InvalidMigration(message))
+				if message == "approximate vector indexes require exactly one column or expression"
+		));
+	}
+
+	#[cfg(feature = "pgvector")]
+	#[rstest]
+	fn vector_index_migration_rejects_multiple_columns_individually() {
+		// Arrange
+		let mut operation = vector_index_operation(IndexType::Ivfflat { lists: None });
+		if let Operation::CreateIndex { columns, .. } = &mut operation {
+			columns.push("tenant_id".to_string());
+		}
+
+		// Act
+		let result = operation.try_to_sql(&SqlDialect::Postgres);
+
+		// Assert
+		assert!(matches!(
+			result,
+			Err(crate::migrations::MigrationError::InvalidMigration(message))
+				if message == "approximate vector indexes require exactly one column or expression"
+		));
+	}
+
+	#[cfg(feature = "pgvector")]
+	#[rstest]
+	fn vector_index_migration_rejects_multiple_expressions_individually() {
+		// Arrange
+		let operation = Operation::CreateIndex {
+			table: "source".to_string(),
+			columns: vec![],
+			unique: false,
+			index_type: Some(IndexType::Hnsw {
+				m: None,
+				ef_construction: None,
+			}),
+			where_clause: None,
+			concurrently: false,
+			expressions: Some(vec![
+				"normalize(embedding)".to_string(),
+				"tenant_id".to_string(),
+			]),
+			mysql_options: None,
+			operator_class: Some("vector_cosine_ops".to_string()),
+		};
+
+		// Act
+		let result = operation.try_to_sql(&SqlDialect::Postgres);
+
+		// Assert
+		assert!(matches!(
+			result,
+			Err(crate::migrations::MigrationError::InvalidMigration(message))
+				if message == "approximate vector indexes require exactly one column or expression"
+		));
+	}
+
+	#[cfg(feature = "pgvector")]
+	#[rstest]
+	fn vector_index_expression_migration_renders_operator_class() {
+		// Arrange
+		let operation = Operation::CreateIndex {
+			table: "source".to_string(),
+			columns: vec![],
+			unique: false,
+			index_type: Some(IndexType::Hnsw {
+				m: None,
+				ef_construction: None,
+			}),
+			where_clause: None,
+			concurrently: false,
+			expressions: Some(vec!["normalize(embedding)".to_string()]),
+			mysql_options: None,
+			operator_class: Some("vector_ip_ops".to_string()),
+		};
+		let state = ProjectState::default();
+
+		// Act
+		let forward_sql = operation.try_to_sql(&SqlDialect::Postgres).unwrap();
+		let backward_sql = operation
+			.to_reverse_sql(&SqlDialect::Postgres, &state)
+			.unwrap()
+			.unwrap();
+
+		// Assert
+		assert_eq!(
+			forward_sql,
+			"CREATE INDEX idx_source_expr ON source USING hnsw (normalize(embedding) vector_ip_ops);"
+		);
+		assert_eq!(backward_sql, vec!["DROP INDEX idx_source_expr;"]);
+	}
+
+	#[rstest]
 	fn test_create_index_composite() {
 		let op = Operation::CreateIndex {
 			table: "users".to_string(),

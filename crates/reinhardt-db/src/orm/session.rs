@@ -1867,6 +1867,8 @@ fn sql_with_postgres_parameter_casts<'a>(
 fn postgres_parameter_cast(value: &RValue) -> Option<&'static str> {
 	match value {
 		RValue::Json(_) => Some("jsonb"),
+		#[cfg(feature = "pgvector")]
+		RValue::Vector(_) => Some("vector"),
 		RValue::Array(array_type, None) => postgres_array_type_cast(array_type),
 		RValue::Array(array_type, Some(values)) if postgres_array_literal(values).is_some() => {
 			postgres_array_type_cast(array_type)
@@ -1953,6 +1955,13 @@ fn bind_reinhardt_query_value<'a>(
 		RValue::Decimal(Some(value)) => query.bind(value.to_string()),
 		RValue::String(Some(s)) => query.bind(s.as_ref().clone()),
 		RValue::Bytes(Some(b)) => query.bind(b.as_ref().clone()),
+		#[cfg(feature = "pgvector")]
+		RValue::Vector(Some(values)) if backend == DbBackend::Postgres => {
+			let value = values.iter().map(ToString::to_string).collect::<Vec<_>>();
+			query.bind(format!("[{}]", value.join(",")))
+		}
+		#[cfg(feature = "pgvector")]
+		RValue::Vector(None) if backend == DbBackend::Postgres => query.bind(None::<String>),
 		// UUID: sqlx::Any doesn't natively support UUID, bind as string
 		RValue::Uuid(Some(u)) => query.bind(u.to_string()),
 		// Json variant is available because reinhardt-query is compiled with "with-json" feature
@@ -3121,6 +3130,24 @@ mod tests {
 		assert_eq!(
 			cast_sql.as_ref(),
 			"UPDATE items SET payload = $1::jsonb WHERE id = 1"
+		);
+	}
+
+	#[cfg(feature = "pgvector")]
+	#[test]
+	fn test_postgres_vector_parameter_placeholders_are_cast() {
+		use reinhardt_query::value::Values;
+
+		let values = Values(vec![
+			RValue::Vector(Some(Box::new(vec![1.0, 2.0, 3.0]))),
+			RValue::Vector(None),
+		]);
+		let sql = "UPDATE items SET embedding = $1, optional_embedding = $2";
+		let cast_sql = super::sql_with_postgres_parameter_casts(DbBackend::Postgres, sql, &values);
+
+		assert_eq!(
+			cast_sql.as_ref(),
+			"UPDATE items SET embedding = $1::vector, optional_embedding = $2::vector"
 		);
 	}
 

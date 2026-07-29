@@ -1,0 +1,5 @@
+error: vector index opclass must be one of: vector_l2_ops, vector_ip_ops, vector_cosine_ops
+  --> tests/ui/field_attributes/vector_index_invalid_opclass.rs:15:13
+   |
+15 |         opclass = "vector_taxicab_ops"
+   |                   ^^^^^^^^^^^^^^^^^^^^

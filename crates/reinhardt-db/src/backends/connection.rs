@@ -6,6 +6,7 @@ use super::{
 	backend::DatabaseBackend,
 	error::Result,
 	query_builder::{DeleteBuilder, InsertBuilder, SelectBuilder, UpdateBuilder},
+	types::{DatabaseType, QueryResult, QueryValue, Row, TransactionExecutor},
 };
 
 #[cfg(any(feature = "postgres", feature = "sqlite", feature = "mysql"))]
@@ -49,6 +50,104 @@ pub struct DatabaseConnection {
 	/// differently. This flag is set at connection time via a `SELECT version()`
 	/// probe and is `false` for any non-Postgres backend.
 	is_cockroachdb: bool,
+}
+
+struct FlavoredTransactionExecutor {
+	inner: Box<dyn TransactionExecutor>,
+	is_cockroachdb: bool,
+}
+
+#[async_trait::async_trait]
+impl TransactionExecutor for FlavoredTransactionExecutor {
+	fn backend(&self) -> DatabaseType {
+		self.inner.backend()
+	}
+
+	fn is_cockroachdb(&self) -> bool {
+		self.is_cockroachdb
+	}
+
+	fn supports_pgvector_error_hints(&self) -> bool {
+		self.inner.supports_pgvector_error_hints()
+	}
+
+	async fn execute(&mut self, sql: &str, params: Vec<QueryValue>) -> Result<QueryResult> {
+		self.inner.execute(sql, params).await
+	}
+
+	async fn execute_with_context(
+		&mut self,
+		sql: &str,
+		params: Vec<QueryValue>,
+		context: Option<super::error::PgvectorOperationKind>,
+	) -> Result<QueryResult> {
+		self.inner.execute_with_context(sql, params, context).await
+	}
+
+	async fn fetch_one(&mut self, sql: &str, params: Vec<QueryValue>) -> Result<Row> {
+		self.inner.fetch_one(sql, params).await
+	}
+
+	async fn fetch_one_with_context(
+		&mut self,
+		sql: &str,
+		params: Vec<QueryValue>,
+		context: Option<super::error::PgvectorOperationKind>,
+	) -> Result<Row> {
+		self.inner
+			.fetch_one_with_context(sql, params, context)
+			.await
+	}
+
+	async fn fetch_all(&mut self, sql: &str, params: Vec<QueryValue>) -> Result<Vec<Row>> {
+		self.inner.fetch_all(sql, params).await
+	}
+
+	async fn fetch_all_with_context(
+		&mut self,
+		sql: &str,
+		params: Vec<QueryValue>,
+		context: Option<super::error::PgvectorOperationKind>,
+	) -> Result<Vec<Row>> {
+		self.inner
+			.fetch_all_with_context(sql, params, context)
+			.await
+	}
+
+	async fn fetch_optional(&mut self, sql: &str, params: Vec<QueryValue>) -> Result<Option<Row>> {
+		self.inner.fetch_optional(sql, params).await
+	}
+
+	async fn fetch_optional_with_context(
+		&mut self,
+		sql: &str,
+		params: Vec<QueryValue>,
+		context: Option<super::error::PgvectorOperationKind>,
+	) -> Result<Option<Row>> {
+		self.inner
+			.fetch_optional_with_context(sql, params, context)
+			.await
+	}
+
+	async fn commit(self: Box<Self>) -> Result<()> {
+		self.inner.commit().await
+	}
+
+	async fn rollback(self: Box<Self>) -> Result<()> {
+		self.inner.rollback().await
+	}
+
+	async fn savepoint(&mut self, name: &str) -> Result<()> {
+		self.inner.savepoint(name).await
+	}
+
+	async fn release_savepoint(&mut self, name: &str) -> Result<()> {
+		self.inner.release_savepoint(name).await
+	}
+
+	async fn rollback_to_savepoint(&mut self, name: &str) -> Result<()> {
+		self.inner.rollback_to_savepoint(name).await
+	}
 }
 
 /// Injectable implementation for DatabaseConnection
@@ -549,6 +648,11 @@ impl DatabaseConnection {
 		self.backend.database_type()
 	}
 
+	/// Returns whether the inner backend supports contextual pgvector hints.
+	pub fn supports_pgvector_error_hints(&self) -> bool {
+		self.backend.supports_pgvector_error_hints()
+	}
+
 	/// Returns true when the underlying server is CockroachDB.
 	///
 	/// CockroachDB is wire-compatible with PostgreSQL and uses the same
@@ -652,6 +756,17 @@ impl DatabaseConnection {
 		self.backend.execute(sql, params).await
 	}
 
+	pub(crate) async fn execute_with_context(
+		&self,
+		sql: &str,
+		params: Vec<super::types::QueryValue>,
+		context: Option<super::error::PgvectorOperationKind>,
+	) -> Result<super::types::QueryResult> {
+		self.backend
+			.execute_with_context(sql, params, context)
+			.await
+	}
+
 	/// Fetches one.
 	pub async fn fetch_one(
 		&self,
@@ -659,6 +774,17 @@ impl DatabaseConnection {
 		params: Vec<super::types::QueryValue>,
 	) -> Result<super::types::Row> {
 		self.backend.fetch_one(sql, params).await
+	}
+
+	pub(crate) async fn fetch_one_with_context(
+		&self,
+		sql: &str,
+		params: Vec<super::types::QueryValue>,
+		context: Option<super::error::PgvectorOperationKind>,
+	) -> Result<super::types::Row> {
+		self.backend
+			.fetch_one_with_context(sql, params, context)
+			.await
 	}
 
 	/// Fetches all.
@@ -670,6 +796,17 @@ impl DatabaseConnection {
 		self.backend.fetch_all(sql, params).await
 	}
 
+	pub(crate) async fn fetch_all_with_context(
+		&self,
+		sql: &str,
+		params: Vec<super::types::QueryValue>,
+		context: Option<super::error::PgvectorOperationKind>,
+	) -> Result<Vec<super::types::Row>> {
+		self.backend
+			.fetch_all_with_context(sql, params, context)
+			.await
+	}
+
 	/// Fetches optional.
 	pub async fn fetch_optional(
 		&self,
@@ -677,6 +814,17 @@ impl DatabaseConnection {
 		params: Vec<super::types::QueryValue>,
 	) -> Result<Option<super::types::Row>> {
 		self.backend.fetch_optional(sql, params).await
+	}
+
+	pub(crate) async fn fetch_optional_with_context(
+		&self,
+		sql: &str,
+		params: Vec<super::types::QueryValue>,
+		context: Option<super::error::PgvectorOperationKind>,
+	) -> Result<Option<super::types::Row>> {
+		self.backend
+			.fetch_optional_with_context(sql, params, context)
+			.await
 	}
 
 	/// Begin a database transaction and return a dedicated executor
@@ -706,7 +854,11 @@ impl DatabaseConnection {
 	/// # }
 	/// ```
 	pub async fn begin(&self) -> Result<Box<dyn super::types::TransactionExecutor>> {
-		self.backend.begin().await
+		let inner = self.backend.begin().await?;
+		Ok(Box::new(FlavoredTransactionExecutor {
+			inner,
+			is_cockroachdb: self.is_cockroachdb,
+		}))
 	}
 
 	/// Begin a transaction with a specific isolation level
@@ -730,7 +882,11 @@ impl DatabaseConnection {
 		&self,
 		level: super::types::IsolationLevel,
 	) -> Result<Box<dyn super::types::TransactionExecutor>> {
-		self.backend.begin_with_isolation(level).await
+		let inner = self.backend.begin_with_isolation(level).await?;
+		Ok(Box::new(FlavoredTransactionExecutor {
+			inner,
+			is_cockroachdb: self.is_cockroachdb,
+		}))
 	}
 
 	#[cfg(feature = "postgres")]
@@ -764,6 +920,127 @@ impl DatabaseConnection {
 #[cfg(test)]
 mod tests {
 	use rstest::rstest;
+
+	#[cfg(feature = "pgvector")]
+	struct WrappedPostgresBackend {
+		context:
+			std::sync::Arc<std::sync::Mutex<Option<super::super::error::PgvectorOperationKind>>>,
+	}
+
+	#[cfg(feature = "pgvector")]
+	#[async_trait::async_trait]
+	impl super::super::backend::DatabaseBackend for WrappedPostgresBackend {
+		fn database_type(&self) -> super::super::types::DatabaseType {
+			super::super::types::DatabaseType::Postgres
+		}
+
+		fn supports_pgvector_error_hints(&self) -> bool {
+			true
+		}
+
+		fn placeholder(&self, index: usize) -> String {
+			format!("${index}")
+		}
+
+		fn supports_returning(&self) -> bool {
+			true
+		}
+
+		fn supports_on_conflict(&self) -> bool {
+			true
+		}
+
+		async fn execute(
+			&self,
+			_sql: &str,
+			_params: Vec<super::super::types::QueryValue>,
+		) -> super::super::error::Result<super::super::types::QueryResult> {
+			panic!("contextual connection execution must use the backend context seam")
+		}
+
+		async fn execute_with_context(
+			&self,
+			_sql: &str,
+			_params: Vec<super::super::types::QueryValue>,
+			context: Option<super::super::error::PgvectorOperationKind>,
+		) -> super::super::error::Result<super::super::types::QueryResult> {
+			*self
+				.context
+				.lock()
+				.expect("context mutex should not be poisoned") = context;
+			Ok(super::super::types::QueryResult {
+				rows_affected: 1,
+				last_insert_id: None,
+			})
+		}
+
+		async fn fetch_one(
+			&self,
+			_sql: &str,
+			_params: Vec<super::super::types::QueryValue>,
+		) -> super::super::error::Result<super::super::types::Row> {
+			panic!("wrapped test backend does not fetch rows")
+		}
+
+		async fn fetch_all(
+			&self,
+			_sql: &str,
+			_params: Vec<super::super::types::QueryValue>,
+		) -> super::super::error::Result<Vec<super::super::types::Row>> {
+			panic!("wrapped test backend does not fetch rows")
+		}
+
+		async fn fetch_optional(
+			&self,
+			_sql: &str,
+			_params: Vec<super::super::types::QueryValue>,
+		) -> super::super::error::Result<Option<super::super::types::Row>> {
+			panic!("wrapped test backend does not fetch rows")
+		}
+
+		async fn begin(
+			&self,
+		) -> super::super::error::Result<Box<dyn super::super::types::TransactionExecutor>> {
+			panic!("wrapped test backend does not begin transactions")
+		}
+
+		fn as_any(&self) -> &dyn std::any::Any {
+			self
+		}
+	}
+
+	#[cfg(feature = "pgvector")]
+	#[tokio::test]
+	async fn contextual_execution_uses_wrapped_backend_trait_seam() {
+		let context = std::sync::Arc::new(std::sync::Mutex::new(None));
+		let connection =
+			super::DatabaseConnection::new(std::sync::Arc::new(WrappedPostgresBackend {
+				context: context.clone(),
+			}));
+
+		assert_eq!(
+			connection.database_type(),
+			super::super::types::DatabaseType::Postgres
+		);
+		assert!(connection.supports_pgvector_error_hints());
+
+		let result = connection
+			.execute_with_context(
+				"ALTER TABLE source ADD COLUMN embedding vector(3)",
+				Vec::new(),
+				Some(super::super::error::PgvectorOperationKind::ColumnType),
+			)
+			.await
+			.expect("wrapped backend should execute contextually");
+
+		assert_eq!(result.rows_affected, 1);
+		assert_eq!(
+			*context
+				.lock()
+				.expect("context mutex should not be poisoned"),
+			Some(super::super::error::PgvectorOperationKind::ColumnType)
+		);
+	}
 
 	#[cfg(feature = "postgres")]
 	#[test]

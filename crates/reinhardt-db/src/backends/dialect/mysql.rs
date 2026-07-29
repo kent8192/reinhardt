@@ -21,6 +21,14 @@ fn transaction_consumed_error() -> DatabaseError {
 	)
 }
 
+#[cfg(feature = "pgvector")]
+fn vector_unsupported_error() -> DatabaseError {
+	DatabaseError::new(
+		DatabaseErrorKind::Type,
+		"PostgreSQL vector values are not supported by the MySQL backend",
+	)
+}
+
 fn optional_last_insert_id(last_insert_id: u64) -> Option<u64> {
 	(last_insert_id != 0).then_some(last_insert_id)
 }
@@ -90,8 +98,8 @@ impl MySqlBackend {
 	fn bind_value<'q>(
 		query: sqlx::query::Query<'q, sqlx::MySql, sqlx::mysql::MySqlArguments>,
 		value: &'q QueryValue,
-	) -> sqlx::query::Query<'q, sqlx::MySql, sqlx::mysql::MySqlArguments> {
-		match value {
+	) -> Result<sqlx::query::Query<'q, sqlx::MySql, sqlx::mysql::MySqlArguments>> {
+		Ok(match value {
 			QueryValue::Null => query.bind(None::<i32>),
 			QueryValue::Bool(b) => query.bind(b),
 			QueryValue::Int(i) => query.bind(i),
@@ -103,6 +111,8 @@ impl MySqlBackend {
 			// MySQL stores UUIDs as BINARY(16) or CHAR(36); we bind as string
 			QueryValue::Uuid(u) => query.bind(u.to_string()),
 			QueryValue::Json(value) => query.bind(value.as_deref().cloned().map(sqlx::types::Json)),
+			#[cfg(feature = "pgvector")]
+			QueryValue::Vector(_) => return Err(vector_unsupported_error().into()),
 			QueryValue::StringArray(values) => {
 				query.bind(serde_json::to_string(values).expect("string arrays serialize"))
 			}
@@ -129,7 +139,7 @@ impl MySqlBackend {
 				// For binding, we use current UTC time
 				query.bind(chrono::Utc::now())
 			}
-		}
+		})
 	}
 
 	fn convert_row(mysql_row: MySqlRow) -> Result<Row> {
@@ -226,7 +236,7 @@ impl DatabaseBackend for MySqlBackend {
 	async fn execute(&self, sql: &str, params: Vec<QueryValue>) -> Result<QueryResult> {
 		let mut query = sqlx::query(sql);
 		for param in &params {
-			query = Self::bind_value(query, param);
+			query = Self::bind_value(query, param)?;
 		}
 		let result = query
 			.execute(self.pool.as_ref())
@@ -242,7 +252,7 @@ impl DatabaseBackend for MySqlBackend {
 	async fn fetch_one(&self, sql: &str, params: Vec<QueryValue>) -> Result<Row> {
 		let mut query = sqlx::query(sql);
 		for param in &params {
-			query = Self::bind_value(query, param);
+			query = Self::bind_value(query, param)?;
 		}
 		let mysql_row = query
 			.fetch_one(self.pool.as_ref())
@@ -254,7 +264,7 @@ impl DatabaseBackend for MySqlBackend {
 	async fn fetch_all(&self, sql: &str, params: Vec<QueryValue>) -> Result<Vec<Row>> {
 		let mut query = sqlx::query(sql);
 		for param in &params {
-			query = Self::bind_value(query, param);
+			query = Self::bind_value(query, param)?;
 		}
 		let mysql_rows = query
 			.fetch_all(self.pool.as_ref())
@@ -266,7 +276,7 @@ impl DatabaseBackend for MySqlBackend {
 	async fn fetch_optional(&self, sql: &str, params: Vec<QueryValue>) -> Result<Option<Row>> {
 		let mut query = sqlx::query(sql);
 		for param in &params {
-			query = Self::bind_value(query, param);
+			query = Self::bind_value(query, param)?;
 		}
 		let mysql_row = query
 			.fetch_optional(self.pool.as_ref())
@@ -328,8 +338,8 @@ impl MySqlTransactionExecutor {
 	fn bind_value<'q>(
 		query: sqlx::query::Query<'q, sqlx::MySql, sqlx::mysql::MySqlArguments>,
 		value: &'q QueryValue,
-	) -> sqlx::query::Query<'q, sqlx::MySql, sqlx::mysql::MySqlArguments> {
-		match value {
+	) -> Result<sqlx::query::Query<'q, sqlx::MySql, sqlx::mysql::MySqlArguments>> {
+		Ok(match value {
 			QueryValue::Null => query.bind(None::<i32>),
 			QueryValue::Bool(b) => query.bind(b),
 			QueryValue::Int(i) => query.bind(i),
@@ -341,6 +351,8 @@ impl MySqlTransactionExecutor {
 			// MySQL stores UUIDs as BINARY(16) or CHAR(36); we bind as string
 			QueryValue::Uuid(u) => query.bind(u.to_string()),
 			QueryValue::Json(value) => query.bind(value.as_deref().cloned().map(sqlx::types::Json)),
+			#[cfg(feature = "pgvector")]
+			QueryValue::Vector(_) => return Err(vector_unsupported_error().into()),
 			QueryValue::StringArray(values) => {
 				query.bind(serde_json::to_string(values).expect("string arrays serialize"))
 			}
@@ -363,7 +375,7 @@ impl MySqlTransactionExecutor {
 				query.bind(serde_json::to_string(values).expect("UUID arrays serialize"))
 			}
 			QueryValue::Now => query.bind(chrono::Utc::now()),
-		}
+		})
 	}
 
 	fn convert_row(mysql_row: MySqlRow) -> Result<Row> {
@@ -382,7 +394,7 @@ impl TransactionExecutor for MySqlTransactionExecutor {
 
 		let mut query = sqlx::query(sql);
 		for param in &params {
-			query = Self::bind_value(query, param);
+			query = Self::bind_value(query, param)?;
 		}
 		let result = query.execute(&mut **tx).await.map_err(map_sqlx_error)?;
 		let last_insert_id = result.last_insert_id();
@@ -397,7 +409,7 @@ impl TransactionExecutor for MySqlTransactionExecutor {
 
 		let mut query = sqlx::query(sql);
 		for param in &params {
-			query = Self::bind_value(query, param);
+			query = Self::bind_value(query, param)?;
 		}
 		let row = query.fetch_one(&mut **tx).await.map_err(map_sqlx_error)?;
 		Self::convert_row(row)
@@ -408,7 +420,7 @@ impl TransactionExecutor for MySqlTransactionExecutor {
 
 		let mut query = sqlx::query(sql);
 		for param in &params {
-			query = Self::bind_value(query, param);
+			query = Self::bind_value(query, param)?;
 		}
 		let rows = query.fetch_all(&mut **tx).await.map_err(map_sqlx_error)?;
 		rows.into_iter().map(Self::convert_row).collect()
@@ -419,7 +431,7 @@ impl TransactionExecutor for MySqlTransactionExecutor {
 
 		let mut query = sqlx::query(sql);
 		for param in &params {
-			query = Self::bind_value(query, param);
+			query = Self::bind_value(query, param)?;
 		}
 		let row = query
 			.fetch_optional(&mut **tx)
@@ -554,7 +566,7 @@ impl MySqlRawTransactionExecutor {
 	fn bind_value<'q>(
 		query: sqlx::query::Query<'q, sqlx::MySql, sqlx::mysql::MySqlArguments>,
 		value: &'q QueryValue,
-	) -> sqlx::query::Query<'q, sqlx::MySql, sqlx::mysql::MySqlArguments> {
+	) -> Result<sqlx::query::Query<'q, sqlx::MySql, sqlx::mysql::MySqlArguments>> {
 		MySqlTransactionExecutor::bind_value(query, value)
 	}
 
@@ -583,7 +595,7 @@ impl TransactionExecutor for MySqlRawTransactionExecutor {
 
 		let mut query = sqlx::query(sql);
 		for param in &params {
-			query = Self::bind_value(query, param);
+			query = Self::bind_value(query, param)?;
 		}
 		let result = query.execute(&mut **conn).await.map_err(map_sqlx_error)?;
 		let last_insert_id = result.last_insert_id();
@@ -598,7 +610,7 @@ impl TransactionExecutor for MySqlRawTransactionExecutor {
 
 		let mut query = sqlx::query(sql);
 		for param in &params {
-			query = Self::bind_value(query, param);
+			query = Self::bind_value(query, param)?;
 		}
 		let row = query.fetch_one(&mut **conn).await.map_err(map_sqlx_error)?;
 		Self::convert_row(row)
@@ -609,7 +621,7 @@ impl TransactionExecutor for MySqlRawTransactionExecutor {
 
 		let mut query = sqlx::query(sql);
 		for param in &params {
-			query = Self::bind_value(query, param);
+			query = Self::bind_value(query, param)?;
 		}
 		let rows = query.fetch_all(&mut **conn).await.map_err(map_sqlx_error)?;
 		rows.into_iter().map(Self::convert_row).collect()
@@ -620,7 +632,7 @@ impl TransactionExecutor for MySqlRawTransactionExecutor {
 
 		let mut query = sqlx::query(sql);
 		for param in &params {
-			query = Self::bind_value(query, param);
+			query = Self::bind_value(query, param)?;
 		}
 		let row = query
 			.fetch_optional(&mut **conn)
@@ -692,11 +704,11 @@ impl TransactionExecutor for MySqlRawTransactionExecutor {
 #[cfg(test)]
 mod tests {
 	use super::{
-		CloseOnDrop, CloseOnDropGuard, MySqlRawTransactionExecutor, MySqlTransactionExecutor,
-		is_boolean_type, mysql_release_savepoint_sql, mysql_rollback_to_savepoint_sql,
-		mysql_savepoint_sql, optional_last_insert_id,
+		CloseOnDrop, CloseOnDropGuard, MySqlBackend, MySqlRawTransactionExecutor,
+		MySqlTransactionExecutor, is_boolean_type, mysql_release_savepoint_sql,
+		mysql_rollback_to_savepoint_sql, mysql_savepoint_sql, optional_last_insert_id,
 	};
-	use crate::backends::types::{DatabaseType, TransactionExecutor};
+	use crate::backends::types::{DatabaseType, QueryValue, TransactionExecutor};
 	use std::sync::Arc;
 	use std::sync::atomic::{AtomicUsize, Ordering};
 
@@ -743,6 +755,27 @@ mod tests {
 
 		assert_eq!(transaction_executor.backend(), DatabaseType::Mysql);
 		assert_eq!(raw_transaction_executor.backend(), DatabaseType::Mysql);
+	}
+
+	#[test]
+	#[cfg(feature = "pgvector")]
+	fn mysql_rejects_vector_parameters_without_a_fallback_encoding() {
+		let error = MySqlBackend::bind_value(
+			sqlx::query("SELECT ?"),
+			&QueryValue::Vector(Some(vec![1.0, 2.0, 3.0])),
+		)
+		.err()
+		.unwrap();
+
+		assert_eq!(
+			error.database_kind(),
+			Some(reinhardt_core::exception::DatabaseErrorKind::Type)
+		);
+		assert!(
+			error
+				.to_string()
+				.contains("not supported by the MySQL backend")
+		);
 	}
 
 	#[test]

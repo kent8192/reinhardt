@@ -102,6 +102,9 @@ pub enum Value {
 	String(Option<Box<String>>),
 	/// Binary data (boxed)
 	Bytes(Option<Box<Vec<u8>>>),
+	/// pgvector dense vector data (boxed)
+	#[cfg(feature = "pgvector")]
+	Vector(Option<Box<Vec<f32>>>),
 
 	// -------------------------------------------------------------------------
 	// Feature-gated types: chrono
@@ -185,6 +188,8 @@ impl Value {
 			Self::Char(v) => v.is_none(),
 			Self::String(v) => v.is_none(),
 			Self::Bytes(v) => v.is_none(),
+			#[cfg(feature = "pgvector")]
+			Self::Vector(v) => v.is_none(),
 			#[cfg(feature = "with-chrono")]
 			Self::ChronoDate(v) => v.is_none(),
 			#[cfg(feature = "with-chrono")]
@@ -284,6 +289,13 @@ impl Value {
 				format!("X'{}'", hex)
 			}
 			Self::Bytes(None) => "NULL".to_string(),
+			#[cfg(feature = "pgvector")]
+			Self::Vector(Some(values)) => {
+				let values = values.iter().map(ToString::to_string).collect::<Vec<_>>();
+				format!("'[{}]'", values.join(","))
+			}
+			#[cfg(feature = "pgvector")]
+			Self::Vector(None) => "NULL".to_string(),
 			#[cfg(feature = "with-chrono")]
 			Self::ChronoDate(Some(v)) => format!("'{}'", v),
 			#[cfg(feature = "with-chrono")]
@@ -340,5 +352,19 @@ impl Default for Value {
 	/// Returns the default value, which is a null string.
 	fn default() -> Self {
 		Self::String(None)
+	}
+}
+
+#[cfg(all(test, feature = "pgvector"))]
+mod tests {
+	use super::Value;
+
+	#[test]
+	fn vector_literals_are_deterministic_and_nullable() {
+		let value = Value::Vector(Some(Box::new(vec![1.0, 2.0, 3.0])));
+
+		assert_eq!(value.to_sql_literal(), "'[1,2,3]'");
+		assert!(!value.is_null());
+		assert!(Value::Vector(None).is_null());
 	}
 }

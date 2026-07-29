@@ -20,9 +20,13 @@
 //! ```
 
 use crate::backends::schema::BaseDatabaseSchemaEditor;
-use crate::migrations::ProjectState;
+use crate::migrations::{MigrationError, Operation, ProjectState};
 use pg_escape::quote_literal;
 use serde::{Deserialize, Serialize};
+
+fn quote_postgres_identifier(identifier: &str) -> String {
+	format!("\"{}\"", identifier.replace('"', "\"\""))
+}
 
 /// Create a PostgreSQL extension
 ///
@@ -71,7 +75,11 @@ impl CreateExtension {
 		}
 	}
 
-	/// Set the schema where the extension should be created
+	/// Set the schema where the extension should be created.
+	///
+	/// For pgvector, the selected schema must be present in PostgreSQL's
+	/// `search_path` before migrations create vector columns or indexes, because
+	/// their DDL uses the unqualified `vector` type name.
 	pub fn with_schema(mut self, schema: impl Into<String>) -> Self {
 		self.schema = Some(schema.into());
 		self
@@ -81,6 +89,14 @@ impl CreateExtension {
 	pub fn with_version(mut self, version: impl Into<String>) -> Self {
 		self.version = Some(version.into());
 		self
+	}
+
+	/// Convert this PostgreSQL extension request into an executable migration operation.
+	///
+	/// Version-pinned extension requests cannot be represented by the legacy
+	/// [`Operation`] shape and are rejected instead of silently discarding the version.
+	pub fn into_operation(self) -> crate::migrations::Result<Operation> {
+		self.try_into()
 	}
 
 	/// Apply to project state (extensions don't modify state)
@@ -107,12 +123,11 @@ impl CreateExtension {
 	/// ```
 	pub fn database_forwards(&self, _schema_editor: &dyn BaseDatabaseSchemaEditor) -> Vec<String> {
 		let mut parts = vec!["CREATE EXTENSION IF NOT EXISTS".to_string()];
-		// Always use double quotes for PostgreSQL identifier safety
-		parts.push(format!("\"{}\"", self.name));
+		parts.push(quote_postgres_identifier(&self.name));
 
 		if let Some(ref schema) = self.schema {
 			parts.push("SCHEMA".to_string());
-			parts.push(format!("\"{}\"", schema));
+			parts.push(quote_postgres_identifier(schema));
 		}
 
 		if let Some(ref version) = self.version {
@@ -140,7 +155,28 @@ impl CreateExtension {
 	/// assert!(sql[0].contains("DROP EXTENSION"));
 	/// ```
 	pub fn database_backwards(&self, _schema_editor: &dyn BaseDatabaseSchemaEditor) -> Vec<String> {
-		vec![format!("DROP EXTENSION IF EXISTS \"{}\";", self.name)]
+		vec![format!(
+			"DROP EXTENSION IF EXISTS {};",
+			quote_postgres_identifier(&self.name)
+		)]
+	}
+}
+
+impl TryFrom<CreateExtension> for Operation {
+	type Error = MigrationError;
+
+	fn try_from(extension: CreateExtension) -> Result<Self, Self::Error> {
+		if extension.version.is_some() {
+			return Err(MigrationError::InvalidMigration(
+				"extension versions cannot be represented by Migration operations".to_string(),
+			));
+		}
+
+		Ok(Self::CreateExtension {
+			name: extension.name,
+			if_not_exists: true,
+			schema: extension.schema,
+		})
 	}
 }
 
@@ -407,6 +443,71 @@ mod tests {
 		assert_eq!(sql.len(), 1);
 		assert!(sql[0].contains("CREATE EXTENSION IF NOT EXISTS"));
 		assert!(sql[0].contains("\"hstore\""));
+	}
+
+	#[cfg(feature = "postgres")]
+	#[test]
+	fn create_vector_extension_emits_explicit_setup_sql() {
+		use crate::backends::schema::test_utils::MockSchemaEditor;
+
+		let editor = MockSchemaEditor::new();
+
+		assert_eq!(
+			CreateExtension::new("vector").database_forwards(&editor),
+			vec!["CREATE EXTENSION IF NOT EXISTS \"vector\";"]
+		);
+	}
+
+	#[test]
+	fn create_extension_converts_to_an_executable_migration_operation() {
+		use crate::migrations::operations::Operation;
+
+		let operation = CreateExtension::new("vector")
+			.with_schema("extensions")
+			.into_operation()
+			.expect("an unversioned extension should be representable");
+
+		assert_eq!(
+			operation,
+			Operation::CreateExtension {
+				name: "vector".to_string(),
+				if_not_exists: true,
+				schema: Some("extensions".to_string()),
+			}
+		);
+	}
+
+	#[test]
+	fn create_extension_rejects_version_when_converting_to_legacy_operation() {
+		let error = CreateExtension::new("vector")
+			.with_version("0.8.0")
+			.into_operation()
+			.expect_err("the legacy operation cannot represent an extension version");
+
+		assert_eq!(
+			error.to_string(),
+			"Invalid migration: extension versions cannot be represented by Migration operations"
+		);
+	}
+
+	#[test]
+	fn create_extension_sql_quotes_unsafe_identifiers() {
+		use crate::backends::schema::test_utils::MockSchemaEditor;
+
+		let editor = MockSchemaEditor::new();
+		let extension = CreateExtension::new("vector\"; DROP TABLE documents; --")
+			.with_schema("extension\"schema");
+
+		assert_eq!(
+			extension.database_forwards(&editor),
+			vec![
+				"CREATE EXTENSION IF NOT EXISTS \"vector\"\"; DROP TABLE documents; --\" SCHEMA \"extension\"\"schema\";"
+			]
+		);
+		assert_eq!(
+			extension.database_backwards(&editor),
+			vec!["DROP EXTENSION IF EXISTS \"vector\"\"; DROP TABLE documents; --\";"]
+		);
 	}
 
 	#[cfg(feature = "postgres")]

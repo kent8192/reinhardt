@@ -17,6 +17,7 @@ graphql = ["reinhardt-testkit/graphql"]
 property-based = ["reinhardt-testkit/property-based"]
 viewsets = ["reinhardt-testkit/viewsets"]
 messages = ["reinhardt-testkit/messages"]
+pgvector = ["reinhardt-testkit/pgvector"]
 tasks = ["dep:reinhardt-tasks"]
 admin = [
   "dep:reinhardt-admin",

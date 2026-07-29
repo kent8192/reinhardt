@@ -197,7 +197,7 @@ fn main() {
 				},
 			},
 		};
-		let _: QuestionModelFormData<QuestionSubmissionPolicy> = form
+		let _: QuestionModelFormData<QuestionFields> = form
 			.data()
 			.expect("selected fields produce the endpoint payload type");
 	});

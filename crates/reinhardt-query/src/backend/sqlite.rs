@@ -55,6 +55,70 @@ impl SqliteQueryBuilder {
 		Self
 	}
 
+	/// Build a SELECT statement after rejecting PostgreSQL-only vector features.
+	pub fn build_select_checked(
+		&self,
+		stmt: &SelectStatement,
+	) -> Result<(String, Values), crate::QueryBuildError> {
+		crate::error::validate_select_for_backend(stmt, "SQLite")?;
+		Ok(self.build_select(stmt))
+	}
+
+	/// Build a CREATE TABLE statement after rejecting PostgreSQL-only vector features.
+	pub fn build_create_table_checked(
+		&self,
+		stmt: &CreateTableStatement,
+	) -> Result<(String, Values), crate::QueryBuildError> {
+		crate::error::validate_create_table_for_backend(stmt, "SQLite")?;
+		Ok(self.build_create_table(stmt))
+	}
+
+	/// Build a CREATE INDEX statement after rejecting PostgreSQL-only vector features.
+	pub fn build_create_index_checked(
+		&self,
+		stmt: &CreateIndexStatement,
+	) -> Result<(String, Values), crate::QueryBuildError> {
+		crate::error::validate_create_index_for_backend(stmt, "SQLite")?;
+		stmt.validate_for_backend("SQLite", false)?;
+		Ok(self.build_create_index(stmt))
+	}
+
+	/// Build an INSERT statement after rejecting PostgreSQL-only vector features.
+	pub fn build_insert_checked(
+		&self,
+		stmt: &InsertStatement,
+	) -> Result<(String, Values), crate::QueryBuildError> {
+		crate::error::validate_insert_for_backend(stmt, "SQLite")?;
+		Ok(self.build_insert(stmt))
+	}
+
+	/// Build an UPDATE statement after rejecting PostgreSQL-only vector features.
+	pub fn build_update_checked(
+		&self,
+		stmt: &UpdateStatement,
+	) -> Result<(String, Values), crate::QueryBuildError> {
+		crate::error::validate_update_for_backend(stmt, "SQLite")?;
+		Ok(self.build_update(stmt))
+	}
+
+	/// Build a DELETE statement after rejecting PostgreSQL-only vector features.
+	pub fn build_delete_checked(
+		&self,
+		stmt: &DeleteStatement,
+	) -> Result<(String, Values), crate::QueryBuildError> {
+		crate::error::validate_delete_for_backend(stmt, "SQLite")?;
+		Ok(self.build_delete(stmt))
+	}
+
+	/// Build an ALTER TABLE statement after rejecting PostgreSQL-only vector features.
+	pub fn build_alter_table_checked(
+		&self,
+		stmt: &AlterTableStatement,
+	) -> Result<(String, Values), crate::QueryBuildError> {
+		crate::error::validate_alter_table_for_backend(stmt, "SQLite")?;
+		Ok(self.build_alter_table(stmt))
+	}
+
 	/// Escape an identifier for SQLite
 	///
 	/// SQLite uses double quotes for identifiers.
@@ -1931,6 +1995,8 @@ impl SqliteQueryBuilder {
 			Json => "TEXT".to_string(), // SQLite JSON1 extension stores JSON as TEXT
 			JsonBinary => "TEXT".to_string(),
 			Array(_) => "TEXT".to_string(), // SQLite doesn't have ARRAY, use TEXT (JSON)
+			#[cfg(feature = "pgvector")]
+			Vector(_) => "TEXT".to_string(),
 			Custom(name) => name.clone(),
 		}
 	}
@@ -2060,12 +2126,47 @@ impl crate::query::QueryBuilderTrait for SqliteQueryBuilder {
 #[cfg(test)]
 mod tests {
 	use super::*;
+	#[cfg(feature = "pgvector")]
+	use crate::{
+		QueryBuildError, Value,
+		types::{ColumnDef, SchemaExpr, TableRef},
+	};
 	use crate::{
 		expr::{Expr, ExprTrait},
 		query::Query,
 		types::{Alias, IntoIden},
 	};
 	use rstest::rstest;
+
+	#[cfg(feature = "pgvector")]
+	fn vector_value() -> Value {
+		Value::Vector(Some(Box::new(vec![1.0, 2.0, 3.0])))
+	}
+
+	#[cfg(feature = "pgvector")]
+	fn vector_subquery_table() -> TableRef {
+		let mut vector_select = Query::select();
+		vector_select
+			.expr(crate::expr::SimpleExpr::Value(vector_value()))
+			.from("vector_source");
+		TableRef::SubQuery(
+			Box::new(vector_select),
+			Alias::new("vector_source").into_iden(),
+		)
+	}
+
+	#[cfg(feature = "pgvector")]
+	fn assert_sqlite_vector_value_rejection(
+		result: Result<(String, crate::value::Values), QueryBuildError>,
+	) {
+		assert_eq!(
+			result,
+			Err(QueryBuildError::UnsupportedBackendFeature {
+				feature: "pgvector values",
+				backend: "SQLite",
+			})
+		);
+	}
 
 	#[test]
 	fn test_escape_identifier() {
@@ -4551,6 +4652,7 @@ mod tests {
 		stmt.columns.push(IndexColumn {
 			name: "email".into_iden(),
 			order: None,
+			operator_class: None,
 		});
 
 		let (sql, values) = builder.build_create_index(&stmt);
@@ -4573,6 +4675,7 @@ mod tests {
 		stmt.columns.push(IndexColumn {
 			name: "username".into_iden(),
 			order: None,
+			operator_class: None,
 		});
 
 		let (sql, values) = builder.build_create_index(&stmt);
@@ -4595,6 +4698,7 @@ mod tests {
 		stmt.columns.push(IndexColumn {
 			name: "email".into_iden(),
 			order: None,
+			operator_class: None,
 		});
 
 		let (sql, values) = builder.build_create_index(&stmt);
@@ -4617,6 +4721,7 @@ mod tests {
 		stmt.columns.push(IndexColumn {
 			name: "created_at".into_iden(),
 			order: Some(Order::Desc),
+			operator_class: None,
 		});
 
 		let (sql, values) = builder.build_create_index(&stmt);
@@ -4639,10 +4744,12 @@ mod tests {
 		stmt.columns.push(IndexColumn {
 			name: "last_name".into_iden(),
 			order: Some(Order::Asc),
+			operator_class: None,
 		});
 		stmt.columns.push(IndexColumn {
 			name: "first_name".into_iden(),
 			order: Some(Order::Asc),
+			operator_class: None,
 		});
 
 		let (sql, values) = builder.build_create_index(&stmt);
@@ -4664,6 +4771,7 @@ mod tests {
 		stmt.columns.push(IndexColumn {
 			name: "email".into_iden(),
 			order: None,
+			operator_class: None,
 		});
 		stmt.r#where = Some(Expr::col("active").eq(true).into_simple_expr());
 
@@ -5583,5 +5691,67 @@ mod tests {
 		// Assert
 		assert!(sql.contains("\"orders\".\"status\""));
 		assert!(sql.contains("WHERE"));
+	}
+
+	#[cfg(feature = "pgvector")]
+	#[test]
+	fn checked_build_rejects_pgvector_columns() {
+		// SQLite has no pgvector column type, so checked building must not fall back to TEXT.
+		let mut statement = Query::create_table();
+		statement
+			.table("documents")
+			.col(ColumnDef::new("embedding").vector(1536));
+
+		let result = SqliteQueryBuilder::new().build_create_table_checked(&statement);
+
+		assert_eq!(
+			result,
+			Err(QueryBuildError::UnsupportedBackendFeature {
+				feature: "pgvector column types",
+				backend: "SQLite",
+			})
+		);
+	}
+
+	#[cfg(feature = "pgvector")]
+	#[test]
+	fn checked_dml_builds_reject_vector_subquery_tables() {
+		let mut insert = Query::insert();
+		insert
+			.into_table(vector_subquery_table())
+			.column("embedding")
+			.values_panic([1_i32]);
+		let mut update = Query::update();
+		update
+			.table(vector_subquery_table())
+			.value("embedding", 1_i32);
+		let mut delete = Query::delete();
+		delete.from_table(vector_subquery_table());
+
+		let builder = SqliteQueryBuilder::new();
+		let results = [
+			builder.build_insert_checked(&insert),
+			builder.build_update_checked(&update),
+			builder.build_delete_checked(&delete),
+		];
+
+		for result in results {
+			assert_sqlite_vector_value_rejection(result);
+		}
+	}
+
+	#[cfg(feature = "pgvector")]
+	#[test]
+	fn checked_alter_table_rejects_vector_generated_expressions() {
+		let mut statement = Query::alter_table();
+		statement.table("documents").add_column(
+			ColumnDef::new("embedding_copy")
+				.integer()
+				.generated_stored(SchemaExpr::val(vector_value())),
+		);
+
+		assert_sqlite_vector_value_rejection(
+			SqliteQueryBuilder::new().build_alter_table_checked(&statement),
+		);
 	}
 }

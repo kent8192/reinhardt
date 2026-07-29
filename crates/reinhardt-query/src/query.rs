@@ -114,7 +114,7 @@ pub mod update;
 pub use alter_index::AlterIndexStatement;
 pub use alter_table::{AlterTableOperation, AlterTableStatement};
 pub use comment::CommentStatement;
-pub use create_index::{CreateIndexStatement, IndexColumn, IndexMethod};
+pub use create_index::{CreateIndexStatement, IndexColumn, IndexMethod, IndexOptions};
 pub use create_table::CreateTableStatement;
 pub use create_trigger::CreateTriggerStatement;
 pub use create_view::CreateViewStatement;

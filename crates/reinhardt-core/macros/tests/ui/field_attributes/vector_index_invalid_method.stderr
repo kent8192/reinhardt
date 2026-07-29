@@ -1,0 +1,5 @@
+error: vector index method must be exactly `hnsw` or `ivfflat`
+  --> tests/ui/field_attributes/vector_index_invalid_method.rs:14:12
+   |
+14 |         method = "ann",
+   |                  ^^^^^

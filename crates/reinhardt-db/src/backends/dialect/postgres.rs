@@ -7,11 +7,24 @@ use uuid::Uuid;
 
 use crate::backends::{
 	backend::DatabaseBackend,
-	error::{DatabaseError, DatabaseErrorKind, Result, map_sqlx_error},
+	error::{
+		DatabaseError, DatabaseErrorKind, PgvectorOperationKind, Result, map_sqlx_error,
+		map_sqlx_error_with_pgvector_context,
+	},
 	types::{
 		DatabaseType, IsolationLevel, QueryResult, QueryValue, Row, Savepoint, TransactionExecutor,
 	},
 };
+#[cfg(feature = "pgvector")]
+use crate::orm::vector::PgVectorValue;
+
+#[cfg(not(feature = "pgvector"))]
+fn vector_support_disabled_error() -> DatabaseError {
+	DatabaseError::new(
+		DatabaseErrorKind::Type,
+		"pgvector support is not enabled for PostgreSQL vector values",
+	)
+}
 
 /// PostgreSQL database backend
 pub struct PostgresBackend {
@@ -34,8 +47,8 @@ impl PostgresBackend {
 	fn bind_value<'q>(
 		query: sqlx::query::Query<'q, sqlx::Postgres, sqlx::postgres::PgArguments>,
 		value: &'q QueryValue,
-	) -> sqlx::query::Query<'q, sqlx::Postgres, sqlx::postgres::PgArguments> {
-		match value {
+	) -> Result<sqlx::query::Query<'q, sqlx::Postgres, sqlx::postgres::PgArguments>> {
+		Ok(match value {
 			QueryValue::Null => query.bind(None::<i32>),
 			QueryValue::Bool(b) => query.bind(b),
 			QueryValue::Int(i) => query.bind(i),
@@ -46,6 +59,12 @@ impl PostgresBackend {
 			QueryValue::NaiveTimestamp(dt) => query.bind(dt),
 			QueryValue::Uuid(u) => query.bind(u),
 			QueryValue::Json(value) => query.bind(value.as_deref().cloned().map(sqlx::types::Json)),
+			#[cfg(feature = "pgvector")]
+			QueryValue::Vector(values) => query.bind(
+				values
+					.as_ref()
+					.map(|values| PgVectorValue::new(values.clone())),
+			),
 			QueryValue::StringArray(values) => query.bind(values),
 			QueryValue::IntArray(values) => query.bind(values),
 			QueryValue::BigIntArray(values) => query.bind(values),
@@ -58,11 +77,82 @@ impl PostgresBackend {
 				// For binding, we use current UTC time
 				query.bind(chrono::Utc::now())
 			}
-		}
+		})
 	}
 
 	fn convert_row(pg_row: PgRow) -> Result<Row> {
 		Self::convert_row_internal(pg_row)
+	}
+
+	pub(crate) async fn execute_with_context(
+		&self,
+		sql: &str,
+		params: Vec<QueryValue>,
+		context: Option<PgvectorOperationKind>,
+	) -> Result<QueryResult> {
+		let mut query = sqlx::query(sql);
+		for param in &params {
+			query = Self::bind_value(query, param)?;
+		}
+		let result = query
+			.execute(self.pool.as_ref())
+			.await
+			.map_err(|error| map_sqlx_error_with_pgvector_context(error, context))?;
+		Ok(QueryResult {
+			rows_affected: result.rows_affected(),
+			last_insert_id: None,
+		})
+	}
+
+	pub(crate) async fn fetch_one_with_context(
+		&self,
+		sql: &str,
+		params: Vec<QueryValue>,
+		context: Option<PgvectorOperationKind>,
+	) -> Result<Row> {
+		let mut query = sqlx::query(sql);
+		for param in &params {
+			query = Self::bind_value(query, param)?;
+		}
+		let row = query
+			.fetch_one(self.pool.as_ref())
+			.await
+			.map_err(|error| map_sqlx_error_with_pgvector_context(error, context))?;
+		Self::convert_row(row)
+	}
+
+	pub(crate) async fn fetch_all_with_context(
+		&self,
+		sql: &str,
+		params: Vec<QueryValue>,
+		context: Option<PgvectorOperationKind>,
+	) -> Result<Vec<Row>> {
+		let mut query = sqlx::query(sql);
+		for param in &params {
+			query = Self::bind_value(query, param)?;
+		}
+		let rows = query
+			.fetch_all(self.pool.as_ref())
+			.await
+			.map_err(|error| map_sqlx_error_with_pgvector_context(error, context))?;
+		rows.into_iter().map(Self::convert_row).collect()
+	}
+
+	pub(crate) async fn fetch_optional_with_context(
+		&self,
+		sql: &str,
+		params: Vec<QueryValue>,
+		context: Option<PgvectorOperationKind>,
+	) -> Result<Option<Row>> {
+		let mut query = sqlx::query(sql);
+		for param in &params {
+			query = Self::bind_value(query, param)?;
+		}
+		let row = query
+			.fetch_optional(self.pool.as_ref())
+			.await
+			.map_err(|error| map_sqlx_error_with_pgvector_context(error, context))?;
+		row.map(Self::convert_row).transpose()
 	}
 }
 
@@ -70,6 +160,10 @@ impl PostgresBackend {
 impl DatabaseBackend for PostgresBackend {
 	fn database_type(&self) -> DatabaseType {
 		DatabaseType::Postgres
+	}
+
+	fn supports_pgvector_error_hints(&self) -> bool {
+		true
 	}
 
 	fn placeholder(&self, index: usize) -> String {
@@ -85,54 +179,55 @@ impl DatabaseBackend for PostgresBackend {
 	}
 
 	async fn execute(&self, sql: &str, params: Vec<QueryValue>) -> Result<QueryResult> {
-		let mut query = sqlx::query(sql);
-		for param in &params {
-			query = Self::bind_value(query, param);
-		}
-		let result = query
-			.execute(self.pool.as_ref())
-			.await
-			.map_err(map_sqlx_error)?;
-		Ok(QueryResult {
-			rows_affected: result.rows_affected(),
-			last_insert_id: None,
-		})
+		self.execute_with_context(sql, params, None).await
+	}
+
+	async fn execute_with_context(
+		&self,
+		sql: &str,
+		params: Vec<QueryValue>,
+		context: Option<PgvectorOperationKind>,
+	) -> Result<QueryResult> {
+		PostgresBackend::execute_with_context(self, sql, params, context).await
 	}
 
 	async fn fetch_one(&self, sql: &str, params: Vec<QueryValue>) -> Result<Row> {
-		let mut query = sqlx::query(sql);
-		for param in &params {
-			query = Self::bind_value(query, param);
-		}
-		let row = query
-			.fetch_one(self.pool.as_ref())
-			.await
-			.map_err(map_sqlx_error)?;
-		Self::convert_row(row)
+		self.fetch_one_with_context(sql, params, None).await
+	}
+
+	async fn fetch_one_with_context(
+		&self,
+		sql: &str,
+		params: Vec<QueryValue>,
+		context: Option<PgvectorOperationKind>,
+	) -> Result<Row> {
+		PostgresBackend::fetch_one_with_context(self, sql, params, context).await
 	}
 
 	async fn fetch_all(&self, sql: &str, params: Vec<QueryValue>) -> Result<Vec<Row>> {
-		let mut query = sqlx::query(sql);
-		for param in &params {
-			query = Self::bind_value(query, param);
-		}
-		let rows = query
-			.fetch_all(self.pool.as_ref())
-			.await
-			.map_err(map_sqlx_error)?;
-		rows.into_iter().map(Self::convert_row).collect()
+		self.fetch_all_with_context(sql, params, None).await
+	}
+
+	async fn fetch_all_with_context(
+		&self,
+		sql: &str,
+		params: Vec<QueryValue>,
+		context: Option<PgvectorOperationKind>,
+	) -> Result<Vec<Row>> {
+		PostgresBackend::fetch_all_with_context(self, sql, params, context).await
 	}
 
 	async fn fetch_optional(&self, sql: &str, params: Vec<QueryValue>) -> Result<Option<Row>> {
-		let mut query = sqlx::query(sql);
-		for param in &params {
-			query = Self::bind_value(query, param);
-		}
-		let row = query
-			.fetch_optional(self.pool.as_ref())
-			.await
-			.map_err(map_sqlx_error)?;
-		row.map(Self::convert_row).transpose()
+		self.fetch_optional_with_context(sql, params, None).await
+	}
+
+	async fn fetch_optional_with_context(
+		&self,
+		sql: &str,
+		params: Vec<QueryValue>,
+		context: Option<PgvectorOperationKind>,
+	) -> Result<Option<Row>> {
+		PostgresBackend::fetch_optional_with_context(self, sql, params, context).await
 	}
 
 	async fn begin(&self) -> Result<Box<dyn TransactionExecutor>> {
@@ -182,8 +277,8 @@ impl PgTransactionExecutor {
 	fn bind_value<'q>(
 		query: sqlx::query::Query<'q, sqlx::Postgres, sqlx::postgres::PgArguments>,
 		value: &'q QueryValue,
-	) -> sqlx::query::Query<'q, sqlx::Postgres, sqlx::postgres::PgArguments> {
-		match value {
+	) -> Result<sqlx::query::Query<'q, sqlx::Postgres, sqlx::postgres::PgArguments>> {
+		Ok(match value {
 			QueryValue::Null => query.bind(None::<i32>),
 			QueryValue::Bool(b) => query.bind(b),
 			QueryValue::Int(i) => query.bind(i),
@@ -194,6 +289,12 @@ impl PgTransactionExecutor {
 			QueryValue::NaiveTimestamp(dt) => query.bind(dt),
 			QueryValue::Uuid(u) => query.bind(u),
 			QueryValue::Json(value) => query.bind(value.as_deref().cloned().map(sqlx::types::Json)),
+			#[cfg(feature = "pgvector")]
+			QueryValue::Vector(values) => query.bind(
+				values
+					.as_ref()
+					.map(|values| PgVectorValue::new(values.clone())),
+			),
 			QueryValue::StringArray(values) => query.bind(values),
 			QueryValue::IntArray(values) => query.bind(values),
 			QueryValue::BigIntArray(values) => query.bind(values),
@@ -202,7 +303,7 @@ impl PgTransactionExecutor {
 			QueryValue::DoubleArray(values) => query.bind(values),
 			QueryValue::UuidArray(values) => query.bind(values),
 			QueryValue::Now => query.bind(chrono::Utc::now()),
-		}
+		})
 	}
 
 	fn convert_row(pg_row: PgRow) -> Result<Row> {
@@ -228,6 +329,23 @@ impl PostgresBackend {
 					Ok(None) => row.insert(column_name.to_string(), QueryValue::Null),
 					Err(error) => return Err(map_sqlx_error(error).into()),
 				};
+				continue;
+			}
+			if type_name == "VECTOR" {
+				#[cfg(not(feature = "pgvector"))]
+				return Err(vector_support_disabled_error().into());
+				#[cfg(feature = "pgvector")]
+				match pg_row
+					.try_get::<Option<PgVectorValue>, _>(column_name)
+					.map_err(map_sqlx_error)?
+				{
+					Some(value) => row.insert(
+						column_name.to_string(),
+						QueryValue::Vector(Some(value.into_vec())),
+					),
+					None => row.insert(column_name.to_string(), QueryValue::Null),
+				};
+				#[cfg(feature = "pgvector")]
 				continue;
 			}
 
@@ -376,7 +494,20 @@ impl TransactionExecutor for PgTransactionExecutor {
 		DatabaseType::Postgres
 	}
 
+	fn supports_pgvector_error_hints(&self) -> bool {
+		true
+	}
+
 	async fn execute(&mut self, sql: &str, params: Vec<QueryValue>) -> Result<QueryResult> {
+		self.execute_with_context(sql, params, None).await
+	}
+
+	async fn execute_with_context(
+		&mut self,
+		sql: &str,
+		params: Vec<QueryValue>,
+		context: Option<PgvectorOperationKind>,
+	) -> Result<QueryResult> {
 		let tx = self.tx.as_mut().ok_or_else(|| {
 			DatabaseError::new(
 				DatabaseErrorKind::Transaction,
@@ -386,9 +517,12 @@ impl TransactionExecutor for PgTransactionExecutor {
 
 		let mut query = sqlx::query(sql);
 		for param in &params {
-			query = Self::bind_value(query, param);
+			query = Self::bind_value(query, param)?;
 		}
-		let result = query.execute(&mut **tx).await.map_err(map_sqlx_error)?;
+		let result = query
+			.execute(&mut **tx)
+			.await
+			.map_err(|error| map_sqlx_error_with_pgvector_context(error, context))?;
 		Ok(QueryResult {
 			rows_affected: result.rows_affected(),
 			last_insert_id: None,
@@ -396,6 +530,15 @@ impl TransactionExecutor for PgTransactionExecutor {
 	}
 
 	async fn fetch_one(&mut self, sql: &str, params: Vec<QueryValue>) -> Result<Row> {
+		self.fetch_one_with_context(sql, params, None).await
+	}
+
+	async fn fetch_one_with_context(
+		&mut self,
+		sql: &str,
+		params: Vec<QueryValue>,
+		context: Option<PgvectorOperationKind>,
+	) -> Result<Row> {
 		let tx = self.tx.as_mut().ok_or_else(|| {
 			DatabaseError::new(
 				DatabaseErrorKind::Transaction,
@@ -405,13 +548,25 @@ impl TransactionExecutor for PgTransactionExecutor {
 
 		let mut query = sqlx::query(sql);
 		for param in &params {
-			query = Self::bind_value(query, param);
+			query = Self::bind_value(query, param)?;
 		}
-		let row = query.fetch_one(&mut **tx).await.map_err(map_sqlx_error)?;
+		let row = query
+			.fetch_one(&mut **tx)
+			.await
+			.map_err(|error| map_sqlx_error_with_pgvector_context(error, context))?;
 		Self::convert_row(row)
 	}
 
 	async fn fetch_all(&mut self, sql: &str, params: Vec<QueryValue>) -> Result<Vec<Row>> {
+		self.fetch_all_with_context(sql, params, None).await
+	}
+
+	async fn fetch_all_with_context(
+		&mut self,
+		sql: &str,
+		params: Vec<QueryValue>,
+		context: Option<PgvectorOperationKind>,
+	) -> Result<Vec<Row>> {
 		let tx = self.tx.as_mut().ok_or_else(|| {
 			DatabaseError::new(
 				DatabaseErrorKind::Transaction,
@@ -421,13 +576,25 @@ impl TransactionExecutor for PgTransactionExecutor {
 
 		let mut query = sqlx::query(sql);
 		for param in &params {
-			query = Self::bind_value(query, param);
+			query = Self::bind_value(query, param)?;
 		}
-		let rows = query.fetch_all(&mut **tx).await.map_err(map_sqlx_error)?;
+		let rows = query
+			.fetch_all(&mut **tx)
+			.await
+			.map_err(|error| map_sqlx_error_with_pgvector_context(error, context))?;
 		rows.into_iter().map(Self::convert_row).collect()
 	}
 
 	async fn fetch_optional(&mut self, sql: &str, params: Vec<QueryValue>) -> Result<Option<Row>> {
+		self.fetch_optional_with_context(sql, params, None).await
+	}
+
+	async fn fetch_optional_with_context(
+		&mut self,
+		sql: &str,
+		params: Vec<QueryValue>,
+		context: Option<PgvectorOperationKind>,
+	) -> Result<Option<Row>> {
 		let tx = self.tx.as_mut().ok_or_else(|| {
 			DatabaseError::new(
 				DatabaseErrorKind::Transaction,
@@ -437,12 +604,12 @@ impl TransactionExecutor for PgTransactionExecutor {
 
 		let mut query = sqlx::query(sql);
 		for param in &params {
-			query = Self::bind_value(query, param);
+			query = Self::bind_value(query, param)?;
 		}
 		let row = query
 			.fetch_optional(&mut **tx)
 			.await
-			.map_err(map_sqlx_error)?;
+			.map_err(|error| map_sqlx_error_with_pgvector_context(error, context))?;
 		row.map(Self::convert_row).transpose()
 	}
 

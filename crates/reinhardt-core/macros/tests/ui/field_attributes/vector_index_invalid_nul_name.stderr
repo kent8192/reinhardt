@@ -1,0 +1,5 @@
+error: vector index name must not contain NUL
+  --> tests/ui/field_attributes/vector_index_invalid_nul_name.rs:13:10
+   |
+13 |         name = "documents\0embedding",
+   |                ^^^^^^^^^^^^^^^^^^^^^^

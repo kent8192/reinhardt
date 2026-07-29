@@ -28,8 +28,66 @@ const SENSITIVE_FIELDS: &[&str] = &["password_hash", "password_salt"];
 /// String values are inspected for ISO 8601 date/time patterns and converted
 /// to the appropriate chrono type so that PostgreSQL accepts them for
 /// `timestamptz`, `date`, and `time` columns without an explicit cast.
-fn json_to_sea_value(value: serde_json::Value) -> Value {
-	match value {
+fn json_to_sea_value(
+	table_name: &str,
+	field_name: &str,
+	value: serde_json::Value,
+) -> AdminResult<Value> {
+	#[cfg(feature = "pgvector")]
+	if let Some(field_meta) =
+		crate::server::type_inference::get_field_metadata(table_name, field_name)
+		&& let DbFieldType::Vector { dimensions } = &field_meta.field_type
+	{
+		if field_meta.nullable && matches!(&value, serde_json::Value::Null) {
+			return Ok(Value::Vector(None));
+		}
+		let values = match value {
+			serde_json::Value::String(value) => {
+				let value = value.trim();
+				if field_meta.nullable && value.is_empty() {
+					return Ok(Value::Vector(None));
+				}
+				serde_json::from_str::<Vec<f32>>(value)
+					.or_else(|_| {
+						value
+							.split(',')
+							.map(|component| component.trim().parse::<f32>())
+							.collect::<Result<Vec<_>, _>>()
+					})
+					.map_err(|error| {
+						AdminError::ValidationError(format!(
+							"Field '{field_name}' must be a JSON array or comma-separated vector values: {error}"
+						))
+					})?
+			}
+			serde_json::Value::Array(_) => {
+				serde_json::from_value::<Vec<f32>>(value).map_err(|error| {
+					AdminError::ValidationError(format!(
+						"Field '{field_name}' must be an array of vector values: {error}"
+					))
+				})?
+			}
+			_ => {
+				return Err(AdminError::ValidationError(format!(
+					"Field '{field_name}' must be a JSON array of vector values"
+				)));
+			}
+		};
+		if values.len() != *dimensions {
+			return Err(AdminError::ValidationError(format!(
+				"Field '{field_name}' requires {dimensions} vector values, got {}",
+				values.len()
+			)));
+		}
+		if values.iter().any(|value| !value.is_finite()) {
+			return Err(AdminError::ValidationError(format!(
+				"Field '{field_name}' contains a non-finite vector value"
+			)));
+		}
+		return Ok(Value::Vector(Some(Box::new(values))));
+	}
+
+	Ok(match value {
 		serde_json::Value::String(s) => {
 			// ISO 8601 datetime with timezone offset (e.g. "2026-04-02T16:45:50Z")
 			if let Ok(dt) = chrono::DateTime::parse_from_rfc3339(&s) {
@@ -42,13 +100,13 @@ fn json_to_sea_value(value: serde_json::Value) -> Value {
 			// Date only
 			} else if s.len() == 10 {
 				if let Ok(d) = chrono::NaiveDate::parse_from_str(&s, "%Y-%m-%d") {
-					return Value::ChronoDate(Some(Box::new(d)));
+					return Ok(Value::ChronoDate(Some(Box::new(d))));
 				}
 				Value::String(Some(Box::new(s)))
 			// Time only
 			} else if s.len() == 8 && s.chars().filter(|c| *c == ':').count() == 2 {
 				if let Ok(t) = chrono::NaiveTime::parse_from_str(&s, "%H:%M:%S") {
-					return Value::ChronoTime(Some(Box::new(t)));
+					return Ok(Value::ChronoTime(Some(Box::new(t))));
 				}
 				Value::String(Some(Box::new(s)))
 			// UUID (8-4-4-4-12 hex pattern)
@@ -57,7 +115,7 @@ fn json_to_sea_value(value: serde_json::Value) -> Value {
 					matches!(i, 8 | 13 | 18 | 23) && c == '-' || c.is_ascii_hexdigit()
 				}) {
 				if let Ok(uuid) = uuid::Uuid::parse_str(&s) {
-					return Value::Uuid(Some(Box::new(uuid)));
+					return Ok(Value::Uuid(Some(Box::new(uuid))));
 				}
 				Value::String(Some(Box::new(s)))
 			} else {
@@ -76,7 +134,7 @@ fn json_to_sea_value(value: serde_json::Value) -> Value {
 		serde_json::Value::Bool(b) => Value::Bool(Some(b)),
 		serde_json::Value::Null => Value::Int(None),
 		_ => Value::String(Some(Box::new(value.to_string()))),
-	}
+	})
 }
 
 /// Dummy record type for admin panel CRUD operations
@@ -1143,7 +1201,7 @@ impl AdminDatabase {
 			let value = data.get(&key).cloned().unwrap_or(serde_json::Value::Null);
 			columns.push(Alias::new(&key));
 
-			let sea_value = json_to_sea_value(value);
+			let sea_value = json_to_sea_value(table_name, &key, value)?;
 			values.push(sea_value);
 		}
 
@@ -1222,7 +1280,7 @@ impl AdminDatabase {
 		// Build SET clauses in sorted order
 		for key in sorted_keys {
 			let value = data.get(&key).cloned().unwrap_or(serde_json::Value::Null);
-			let sea_value = json_to_sea_value(value);
+			let sea_value = json_to_sea_value(table_name, &key, value)?;
 			query.value(Alias::new(&key), sea_value);
 		}
 

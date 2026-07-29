@@ -16,6 +16,29 @@ use std::collections::HashSet;
 #[cfg(feature = "sqlite")]
 use super::introspection::SQLiteIntrospector;
 
+fn validate_and_advance_migration_state(
+	migration: &Migration,
+	state: &mut super::ProjectState,
+) -> Result<()> {
+	for operation in &migration.operations {
+		operation.validate_for_partial_state(state)?;
+		operation.state_forwards(&migration.app_label, state);
+	}
+	Ok(())
+}
+
+fn migration_sql_dialect(connection: &DatabaseConnection) -> SqlDialect {
+	if connection.is_cockroachdb() {
+		return SqlDialect::Cockroachdb;
+	}
+
+	match connection.database_type() {
+		DatabaseType::Postgres => SqlDialect::Postgres,
+		DatabaseType::Mysql => SqlDialect::Mysql,
+		DatabaseType::Sqlite => SqlDialect::Sqlite,
+	}
+}
+
 /// Split SQL string into individual statements while handling:
 /// - String literals (single/double quotes)
 /// - Comments (line and block)
@@ -250,6 +273,7 @@ impl DatabaseMigrationExecutor {
 		migrations: &[Migration],
 	) -> Result<ExecutionResult> {
 		let mut applied = Vec::new();
+		let mut validation_state = super::ProjectState::new();
 
 		// Build MigrationGraph for dependency resolution
 		let mut graph = super::graph::MigrationGraph::new();
@@ -280,6 +304,7 @@ impl DatabaseMigrationExecutor {
 				.ok_or_else(|| {
 					MigrationError::DependencyError(format!("Migration not found: {}", key.id()))
 				})?;
+			validate_and_advance_migration_state(migration, &mut validation_state)?;
 
 			// Check if already applied
 			if self
@@ -400,12 +425,7 @@ impl DatabaseMigrationExecutor {
 			return Ok(());
 		}
 
-		// Determine SQL dialect
-		let dialect = match self.connection.database_type() {
-			crate::backends::types::DatabaseType::Postgres => SqlDialect::Postgres,
-			crate::backends::types::DatabaseType::Mysql => SqlDialect::Mysql,
-			crate::backends::types::DatabaseType::Sqlite => SqlDialect::Sqlite,
-		};
+		let dialect = migration_sql_dialect(&self.connection);
 
 		let requires_sqlite_recreation = matches!(dialect, SqlDialect::Sqlite)
 			&& migration
@@ -426,13 +446,19 @@ impl DatabaseMigrationExecutor {
 		let project_state = super::ProjectState::default();
 
 		for operation in migration.operations.iter().rev() {
+			operation.validate_for_dialect(&dialect)?;
+			let reverse_operation = operation.to_reverse_operation(&project_state)?;
+			if let Some(reverse_operation) = &reverse_operation {
+				reverse_operation.validate_for_dialect(&dialect)?;
+			}
+
 			// Check if SQLite and reverse operation requires recreation
 			#[cfg(feature = "sqlite")]
 			if matches!(dialect, SqlDialect::Sqlite)
 				&& operation.reverse_requires_sqlite_recreation()
 			{
 				// Get the reverse operation and use table recreation
-				if let Some(reverse_op) = operation.to_reverse_operation(&project_state)? {
+				if let Some(reverse_op) = reverse_operation {
 					tracing::debug!("=== SQLite Recreation for reverse of {:?} ===", operation);
 					self.handle_sqlite_recreation(&reverse_op, &mut editor)
 						.await?;
@@ -464,7 +490,9 @@ impl DatabaseMigrationExecutor {
 				// splits type reversion and NOT NULL restoration).
 				for sql in &statements {
 					tracing::debug!("{}", sql);
-					editor.execute(sql).await?;
+					editor
+						.execute_with_context(sql, operation.pgvector_reverse_operation_kind())
+						.await?;
 				}
 
 				tracing::debug!("✅ Reverse operation executed successfully");
@@ -502,11 +530,7 @@ impl DatabaseMigrationExecutor {
 			return Ok(());
 		}
 
-		let dialect = match self.db_type {
-			DatabaseType::Postgres => SqlDialect::Postgres,
-			DatabaseType::Sqlite => SqlDialect::Sqlite,
-			DatabaseType::Mysql => SqlDialect::Mysql,
-		};
+		let dialect = migration_sql_dialect(&self.connection);
 
 		let requires_sqlite_recreation = matches!(dialect, SqlDialect::Sqlite)
 			&& migration
@@ -524,9 +548,6 @@ impl DatabaseMigrationExecutor {
 		.await?;
 
 		// Log if database_only flag is set
-		// Note: ProjectState tracking during migration execution is a planned enhancement.
-		// Currently, state is not tracked during apply_migration. For rollback operations,
-		// use to_reverse_sql with a pre-operation ProjectState snapshot.
 		if migration.database_only {
 			tracing::debug!(
 				"Skipping ProjectState updates for migration '{}' (database_only=true)",
@@ -543,6 +564,8 @@ impl DatabaseMigrationExecutor {
 
 		// Execute operations through schema editor
 		for operation in &migration.operations {
+			operation.validate_for_dialect(&dialect)?;
+
 			// Handle SQLite table recreation for incompatible operations
 			#[cfg(feature = "sqlite")]
 			if matches!(dialect, SqlDialect::Sqlite) && operation.requires_sqlite_recreation() {
@@ -573,7 +596,7 @@ impl DatabaseMigrationExecutor {
 				}
 			}
 
-			let sql = operation.to_sql(&dialect);
+			let sql = operation.try_to_sql(&dialect)?;
 
 			tracing::debug!(
 				"Executing migration SQL (length={}, semicolons={})",
@@ -596,14 +619,17 @@ impl DatabaseMigrationExecutor {
 						&statement[..statement.len().min(100)]
 					);
 
-					editor.execute(statement).await.map_err(|e| {
-						tracing::error!(
-							"Migration operation failed: {}. SQL: {}",
-							e,
-							&statement[..statement.len().min(200)]
-						);
-						e
-					})?;
+					editor
+						.execute_with_context(statement, operation.pgvector_operation_kind())
+						.await
+						.map_err(|e| {
+							tracing::error!(
+								"Migration operation failed: {}. SQL: {}",
+								e,
+								&statement[..statement.len().min(200)]
+							);
+							e
+						})?;
 
 					tracing::debug!("Statement {} executed successfully", i + 1);
 				}
@@ -658,8 +684,11 @@ impl DatabaseMigrationExecutor {
 
 	async fn apply_after_schema_table(&mut self, plan: &MigrationPlan) -> Result<ExecutionResult> {
 		let mut applied = Vec::new();
+		let mut validation_state = super::ProjectState::new();
 
 		for migration in &plan.migrations {
+			validate_and_advance_migration_state(migration, &mut validation_state)?;
+
 			// Check if already applied
 			if self
 				.recorder
@@ -1208,6 +1237,8 @@ impl DatabaseMigrationExecutor {
 	) -> Result<()> {
 		use super::operations::SqliteTableRecreation;
 
+		operation.validate_for_dialect(&SqlDialect::Sqlite)?;
+
 		// Build the recreation plan based on operation type.
 		//
 		// Critical: introspection must run via the editor's open transaction so
@@ -1437,13 +1468,13 @@ impl DatabaseMigrationExecutor {
 					std::mem::discriminant(operation)
 				);
 				// No scoped foreign-key state has been changed at this point.
-				let sql = operation.to_sql(&super::operations::SqlDialect::Sqlite);
+				let sql = operation.try_to_sql(&super::operations::SqlDialect::Sqlite)?;
 				editor.execute(&sql).await?;
 				return Ok(());
 			}
 		};
 
-		let statements = recreation.to_sql_statements();
+		let statements = recreation.try_to_sql_statements()?;
 		editor
 			.with_foreign_keys_disabled(move |editor| {
 				Box::pin(async move {
@@ -1492,6 +1523,16 @@ impl DatabaseMigrationExecutor {
 		service: &MigrationService,
 	) -> Result<()> {
 		let migration = service.load_migration(app_label, migration_name).await?;
+		let mut validation_state = super::ProjectState::new();
+		for historical_migration in service.build_dependency_graph().await? {
+			if historical_migration.app_label == migration.app_label
+				&& historical_migration.name == migration.name
+			{
+				break;
+			}
+			validate_and_advance_migration_state(&historical_migration, &mut validation_state)?;
+		}
+		validate_and_advance_migration_state(&migration, &mut validation_state)?;
 
 		#[cfg(feature = "postgres")]
 		if self.connection.is_cockroachdb() {
@@ -1832,6 +1873,20 @@ impl OperationOptimizer {
 							columns: c2,
 						},
 					) if t1 == t2 && c1 == c2 => true,
+					// CreateNamedIndex + DropNamedIndex
+					#[cfg(feature = "pgvector")]
+					(
+						Operation::CreateNamedIndex {
+							table: t1,
+							name: n1,
+							..
+						},
+						Operation::DropNamedIndex {
+							table: t2,
+							name: n2,
+							..
+						},
+					) if t1 == t2 && n1 == n2 => true,
 					// AddConstraint + DropConstraint
 					(
 						Operation::AddConstraint {
@@ -3536,6 +3591,326 @@ CREATE UNIQUE INDEX "idx_products_id" ON "products" ("id");"###;
 	}
 }
 
+#[cfg(all(test, feature = "pgvector"))]
+mod vector_index_validation_state_tests {
+	use super::*;
+	use crate::migrations::{ColumnDefinition, FieldType, Migration};
+
+	fn vector_index(table: &str) -> Operation {
+		Operation::CreateIndex {
+			table: table.to_string(),
+			columns: vec!["embedding".to_string()],
+			unique: false,
+			index_type: Some(crate::migrations::operations::IndexType::Hnsw {
+				m: Some(16),
+				ef_construction: Some(64),
+			}),
+			where_clause: None,
+			concurrently: false,
+			expressions: None,
+			mysql_options: None,
+			operator_class: Some("vector_cosine_ops".to_string()),
+		}
+	}
+
+	#[test]
+	fn validation_state_carries_vector_columns_across_ordered_migrations() {
+		// Arrange
+		let mut create_table = Migration::new("0001_initial", "search");
+		create_table.operations.push(Operation::CreateTable {
+			name: "documents".to_string(),
+			columns: vec![ColumnDefinition::new(
+				"embedding",
+				FieldType::Vector { dimensions: 1536 },
+			)],
+			constraints: Vec::new(),
+			without_rowid: None,
+			interleave_in_parent: None,
+			partition: None,
+		});
+		let mut create_index = Migration::new("0002_embedding_index", "search");
+		create_index.operations.push(vector_index("documents"));
+		let mut state = crate::migrations::ProjectState::new();
+
+		// Act
+		validate_and_advance_migration_state(&create_table, &mut state).unwrap();
+		let result = validate_and_advance_migration_state(&create_index, &mut state);
+
+		// Assert
+		result.unwrap();
+	}
+
+	#[test]
+	fn database_only_migration_advances_transient_vector_validation_state() {
+		// Arrange
+		let mut migration = Migration::new("0001_database_only", "search");
+		migration.database_only = true;
+		migration.operations.push(Operation::CreateTable {
+			name: "documents".to_string(),
+			columns: vec![ColumnDefinition::new("id", FieldType::Integer)],
+			constraints: Vec::new(),
+			without_rowid: None,
+			interleave_in_parent: None,
+			partition: None,
+		});
+		migration.operations.push(Operation::AddColumn {
+			table: "documents".to_string(),
+			column: ColumnDefinition::new("embedding", FieldType::Vector { dimensions: 1536 }),
+			mysql_options: None,
+		});
+		migration.operations.push(vector_index("documents"));
+		let mut state = crate::migrations::ProjectState::new();
+
+		// Act
+		let result = validate_and_advance_migration_state(&migration, &mut state);
+
+		// Assert
+		result.unwrap();
+	}
+
+	#[cfg(feature = "sqlite")]
+	async fn sqlite_executor() -> DatabaseMigrationExecutor {
+		let connection = DatabaseConnection::connect_sqlite("sqlite::memory:")
+			.await
+			.unwrap();
+		DatabaseMigrationExecutor::new(connection)
+	}
+
+	#[cfg(feature = "sqlite")]
+	#[tokio::test]
+	async fn incremental_apply_defers_unknown_vector_index_table_to_backend() {
+		// Arrange
+		let mut create_table = Migration::new("0001_initial", "search_partial");
+		create_table.state_only = true;
+		create_table.operations.push(Operation::CreateTable {
+			name: "partial_documents".to_string(),
+			columns: vec![ColumnDefinition::new(
+				"embedding",
+				FieldType::Vector { dimensions: 1536 },
+			)],
+			constraints: Vec::new(),
+			without_rowid: None,
+			interleave_in_parent: None,
+			partition: None,
+		});
+		let mut create_index = Migration::new("0002_embedding_index", "search_partial");
+		create_index
+			.operations
+			.push(vector_index("partial_documents"));
+		let mut executor = sqlite_executor().await;
+		executor
+			.apply_migrations(std::slice::from_ref(&create_table))
+			.await
+			.unwrap();
+
+		// Act
+		let result = executor
+			.apply_migrations(std::slice::from_ref(&create_index))
+			.await;
+
+		// Assert
+		assert!(matches!(
+			result,
+			Err(MigrationError::UnsupportedBackendFeature {
+				feature: "approximate vector indexes",
+				backend: "sqlite",
+			})
+		));
+	}
+
+	#[cfg(feature = "sqlite")]
+	#[tokio::test]
+	async fn incremental_plan_defers_unknown_vector_index_table_to_backend() {
+		// Arrange
+		let mut create_table = Migration::new("0001_initial", "search_partial_plan");
+		create_table.state_only = true;
+		create_table.operations.push(Operation::CreateTable {
+			name: "partial_plan_documents".to_string(),
+			columns: vec![ColumnDefinition::new(
+				"embedding",
+				FieldType::Vector { dimensions: 1536 },
+			)],
+			constraints: Vec::new(),
+			without_rowid: None,
+			interleave_in_parent: None,
+			partition: None,
+		});
+		let mut create_index = Migration::new("0002_embedding_index", "search_partial_plan");
+		create_index
+			.operations
+			.push(vector_index("partial_plan_documents"));
+		let initial_plan = MigrationPlan::new().with_migration(create_table);
+		let incremental_plan = MigrationPlan::new().with_migration(create_index);
+		let mut executor = sqlite_executor().await;
+		executor.apply(&initial_plan).await.unwrap();
+
+		// Act
+		let result = executor.apply(&incremental_plan).await;
+
+		// Assert
+		assert!(matches!(
+			result,
+			Err(MigrationError::UnsupportedBackendFeature {
+				feature: "approximate vector indexes",
+				backend: "sqlite",
+			})
+		));
+	}
+
+	#[cfg(feature = "sqlite")]
+	#[tokio::test]
+	async fn apply_rejects_missing_vector_index_column_when_table_is_known() {
+		// Arrange
+		let mut create_table = Migration::new("0001_initial", "search_known");
+		create_table.state_only = true;
+		create_table.operations.push(Operation::CreateTable {
+			name: "known_documents".to_string(),
+			columns: vec![ColumnDefinition::new("id", FieldType::Integer)],
+			constraints: Vec::new(),
+			without_rowid: None,
+			interleave_in_parent: None,
+			partition: None,
+		});
+		let mut create_index = Migration::new("0002_embedding_index", "search_known");
+		create_index
+			.operations
+			.push(vector_index("known_documents"));
+		let mut executor = sqlite_executor().await;
+
+		// Act
+		let result = executor
+			.apply_migrations(&[create_table, create_index])
+			.await;
+
+		// Assert
+		assert!(matches!(
+			result,
+			Err(MigrationError::InvalidMigration(message))
+				if message == "approximate vector index on table `known_documents` targets unknown column `embedding`"
+		));
+	}
+
+	#[cfg(feature = "sqlite")]
+	#[tokio::test]
+	async fn apply_rejects_scalar_vector_index_column_when_table_is_known() {
+		// Arrange
+		let mut create_table = Migration::new("0001_initial", "search_scalar");
+		create_table.state_only = true;
+		create_table.operations.push(Operation::CreateTable {
+			name: "scalar_documents".to_string(),
+			columns: vec![ColumnDefinition::new("embedding", FieldType::Text)],
+			constraints: Vec::new(),
+			without_rowid: None,
+			interleave_in_parent: None,
+			partition: None,
+		});
+		let mut create_index = Migration::new("0002_embedding_index", "search_scalar");
+		create_index
+			.operations
+			.push(vector_index("scalar_documents"));
+		let mut executor = sqlite_executor().await;
+
+		// Act
+		let result = executor
+			.apply_migrations(&[create_table, create_index])
+			.await;
+
+		// Assert
+		assert!(matches!(
+			result,
+			Err(MigrationError::InvalidMigration(message))
+				if message == "approximate vector index on table `scalar_documents` targets non-vector column `embedding`"
+		));
+	}
+}
+
+#[cfg(all(test, feature = "pgvector", feature = "sqlite"))]
+mod cockroachdb_executor_dialect_tests {
+	use super::*;
+	use crate::migrations::{ColumnDefinition, FieldType};
+
+	async fn cockroachdb_flavored_executor() -> DatabaseMigrationExecutor {
+		let sqlite = DatabaseConnection::connect_sqlite("sqlite::memory:")
+			.await
+			.expect("the test SQLite backend should connect");
+		let connection = DatabaseConnection::new_with_flavor(sqlite.backend(), true);
+		DatabaseMigrationExecutor::new(connection)
+	}
+
+	fn create_extension_migration() -> Migration {
+		let mut migration = Migration::new("0001_vector_extension", "search");
+		migration.operations.push(Operation::CreateExtension {
+			name: "vector".to_string(),
+			if_not_exists: true,
+			schema: None,
+		});
+		migration
+	}
+
+	#[tokio::test]
+	async fn apply_path_rejects_extension_for_cockroachdb_flavor() {
+		let executor = cockroachdb_flavored_executor().await;
+
+		let result = executor
+			.apply_migration(&create_extension_migration())
+			.await;
+
+		assert!(matches!(
+			result,
+			Err(MigrationError::UnsupportedBackendFeature {
+				feature: "PostgreSQL extensions",
+				backend: "cockroachdb",
+			})
+		));
+	}
+
+	#[tokio::test]
+	async fn rollback_path_rejects_extension_for_cockroachdb_flavor() {
+		let mut executor = cockroachdb_flavored_executor().await;
+
+		let result = executor
+			.rollback_migration(&create_extension_migration())
+			.await;
+
+		assert!(matches!(
+			result,
+			Err(MigrationError::UnsupportedBackendFeature {
+				feature: "PostgreSQL extensions",
+				backend: "cockroachdb",
+			})
+		));
+	}
+
+	#[tokio::test]
+	async fn ordinary_cockroachdb_migration_still_executes() {
+		let executor = cockroachdb_flavored_executor().await;
+		let mut migration = Migration::new("0001_documents", "search");
+		migration.operations.push(Operation::CreateTable {
+			name: "documents".to_string(),
+			columns: vec![ColumnDefinition::new("id", FieldType::Integer)],
+			constraints: Vec::new(),
+			without_rowid: None,
+			interleave_in_parent: None,
+			partition: None,
+		});
+
+		executor
+			.apply_migration(&migration)
+			.await
+			.expect("ordinary CockroachDB migrations should remain executable");
+
+		let table = executor
+			.connection()
+			.fetch_optional(
+				"SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?",
+				vec!["documents".into()],
+			)
+			.await
+			.expect("the test backend should inspect its schema");
+		assert!(table.is_some());
+	}
+}
+
 #[cfg(all(test, feature = "sqlite"))]
 mod rollback_orchestration_tests {
 	//! In-crate tests for [`DatabaseMigrationExecutor::rollback_migrations`] and
@@ -3580,6 +3955,50 @@ mod rollback_orchestration_tests {
 			.await
 			.expect("failed to open sqlite :memory: connection");
 		DatabaseMigrationExecutor::new(connection)
+	}
+
+	#[rstest]
+	#[tokio::test]
+	#[cfg(feature = "pgvector")]
+	async fn sqlite_vector_alter_column_recreation_returns_a_structured_error() {
+		let mut initial = Migration::new("0001_initial", "vector_recreation");
+		initial.operations.push(Operation::CreateTable {
+			name: "documents".to_owned(),
+			columns: vec![ColumnDefinition::new("embedding", FieldType::Text)],
+			constraints: vec![],
+			without_rowid: None,
+			interleave_in_parent: None,
+			partition: None,
+		});
+		let mut alter = Migration::new("0002_vector", "vector_recreation");
+		alter
+			.dependencies
+			.push(("vector_recreation".to_owned(), "0001_initial".to_owned()));
+		alter.operations.push(Operation::AlterColumn {
+			table: "documents".to_owned(),
+			column: "embedding".to_owned(),
+			old_definition: Some(ColumnDefinition::new("embedding", FieldType::Text)),
+			new_definition: ColumnDefinition::new("embedding", FieldType::Vector { dimensions: 3 }),
+			mysql_options: None,
+		});
+		let mut executor = make_executor().await;
+		executor
+			.apply_migrations(std::slice::from_ref(&initial))
+			.await
+			.unwrap();
+
+		let error = executor
+			.apply_migrations(std::slice::from_ref(&alter))
+			.await
+			.unwrap_err();
+
+		assert!(matches!(
+			error,
+			MigrationError::UnsupportedBackendFeature {
+				feature: "vector field",
+				backend: "sqlite",
+			}
+		));
 	}
 
 	/// Build a single-operation `CreateTable` migration with one integer

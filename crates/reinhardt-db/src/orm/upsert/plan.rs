@@ -254,6 +254,9 @@ fn select_unique_proof<M: Model>(
 			}
 			matches!(candidate.source, UniqueProofSource::Constraint(_))
 				&& candidate.nulls_distinct == Some(false)
+				&& metadata_by_name
+					.get(field_name.as_str())
+					.is_some_and(|field| field.nullable)
 		})
 	});
 	let Some(candidate) = candidate else {
@@ -416,6 +419,13 @@ mod tests {
 
 		fn constraint_metadata() -> Vec<ConstraintInfo> {
 			vec![
+				unique_constraint(
+					"redundant_primary_key_nulls_not_distinct",
+					&["id"],
+					None,
+					false,
+					Some(false),
+				),
 				unique_constraint(
 					"tenant_external_region_unique",
 					&["tenant", "external", "region"],
@@ -643,6 +653,26 @@ mod tests {
 			UpsertMode::GetOrCreate,
 		)
 		.expect_err("NULL primary key cannot prove one row");
+
+		assert_validation(
+			error,
+			"upsert lookup must cover an immediate unconditional unique constraint",
+		);
+	}
+
+	#[rstest]
+	fn normalize_rejects_null_for_non_nullable_constraint_field() {
+		let error = normalize::<Article>(
+			vec![assignment::<Option<i64>, _>(
+				"id",
+				"article_id",
+				None::<i64>,
+			)],
+			Vec::new(),
+			Vec::new(),
+			UpsertMode::GetOrCreate,
+		)
+		.expect_err("NULL cannot satisfy a constraint over a non-nullable field");
 
 		assert_validation(
 			error,

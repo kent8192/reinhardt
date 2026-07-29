@@ -157,8 +157,8 @@ pub use zero_downtime::{MigrationPhase, Strategy, ZeroDowntimeMigration};
 pub use introspect::{
 	GeneratedFile, GeneratedOutput, GenerationConfig, IntrospectConfig, NamingConvention,
 	OutputConfig, SchemaCodeGenerator, TableFilterConfig, TypeMapper, TypeMappingError,
-	escape_rust_keyword, generate_models, preview_output, render_models_module,
-	sanitize_identifier, to_pascal_case, write_output,
+	escape_rust_keyword, generate_models, generate_models_canonical, preview_output,
+	render_models_module, sanitize_identifier, to_pascal_case, write_output,
 };
 pub use introspection::{
 	ColumnInfo, DatabaseIntrospector, ForeignKeyInfo as IntrospectionForeignKeyInfo, IndexInfo,

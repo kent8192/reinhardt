@@ -1,7 +1,7 @@
 //! Command execution context
 
 use reinhardt_conf::HasCommonSettings;
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;
 
 const SUPPRESS_OUTPUT_OPTION: &str = "__reinhardt_suppress_output";
@@ -28,15 +28,43 @@ pub struct CommandContext {
 
 impl std::fmt::Debug for CommandContext {
 	fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+		let options: BTreeMap<_, _> = self
+			.options
+			.iter()
+			.map(|(key, values)| {
+				let displayed_values = if option_values_are_sensitive(key, values) {
+					vec!["[REDACTED]"]
+				} else {
+					values.iter().map(String::as_str).collect()
+				};
+				(key.as_str(), displayed_values)
+			})
+			.collect();
 		// `dyn HasCommonSettings` is not Debug, so render its presence only.
 		f.debug_struct("CommandContext")
 			.field("args", &self.args)
-			.field("options", &self.options)
+			.field("options", &options)
 			.field("verbosity", &self.verbosity)
 			.field("suppress_output", &self.output_is_suppressed())
 			.field("settings", &self.settings.as_ref().map(|_| "<settings>"))
 			.finish()
 	}
+}
+
+fn option_values_are_sensitive(key: &str, values: &[String]) -> bool {
+	let normalized_key = key.to_ascii_lowercase().replace('_', "-");
+	let sensitive_key = normalized_key == "url"
+		|| normalized_key.ends_with("-url")
+		|| normalized_key.contains("password")
+		|| normalized_key.contains("passwd")
+		|| normalized_key.contains("secret")
+		|| normalized_key.contains("token")
+		|| normalized_key.contains("api-key")
+		|| normalized_key.contains("credential");
+	sensitive_key
+		|| values
+			.iter()
+			.any(|value| value.contains("://") || value.contains('@'))
 }
 
 impl CommandContext {

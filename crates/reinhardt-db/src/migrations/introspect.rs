@@ -99,6 +99,36 @@ pub fn generate_models(
 	generator.generate(schema)
 }
 
+/// Generate a deterministic, credential-free set of parseable Rust source files.
+///
+/// This applies the same schema and syntax canonicalization to stdout and directory
+/// inspectdb output, then sorts the complete file set by destination path.
+pub fn generate_models_canonical(
+	config: &IntrospectConfig,
+	schema: &DatabaseSchema,
+) -> Result<GeneratedOutput> {
+	let mut config = config.clone();
+	config.database.url.clear();
+	config.imports.additional.sort();
+
+	let schema = canonicalize_schema(schema);
+	let mut output = generate_models(&config, &schema)?;
+	for file in &mut output.files {
+		let mut syntax = syn::parse_file(&file.content).map_err(|error| {
+			MigrationError::IntrospectionError(format!(
+				"Failed to parse generated code for `{}`: {error}",
+				file.path.display()
+			))
+		})?;
+		canonicalize_module(&mut syntax);
+		file.content = prettyplease::unparse(&syntax);
+	}
+	output
+		.files
+		.sort_by(|left, right| left.path.cmp(&right.path));
+	Ok(output)
+}
+
 /// Render all selected models as one parseable Rust module.
 ///
 /// The existing schema generator remains the source of model syntax. This wrapper forces
@@ -108,21 +138,12 @@ pub fn render_models_module(config: &IntrospectConfig, schema: &DatabaseSchema) 
 	let mut config = config.clone();
 	// inspectdb renders a source artifact, so it must not pass connection details
 	// through to the shared generator's header rendering.
-	config.database.url.clear();
 	config.output.single_file = true;
-	config.imports.additional.sort();
-
-	let schema = canonicalize_schema(schema);
-	let output = generate_models(&config, &schema)?;
+	let output = generate_models_canonical(&config, schema)?;
 	let Some(file) = output.files.into_iter().next() else {
 		return Ok(String::new());
 	};
-
-	let mut syntax = syn::parse_file(&file.content).map_err(|error| {
-		MigrationError::IntrospectionError(format!("Failed to parse generated code: {error}"))
-	})?;
-	canonicalize_module(&mut syntax);
-	Ok(prettyplease::unparse(&syntax))
+	Ok(file.content)
 }
 
 fn canonicalize_schema(schema: &DatabaseSchema) -> DatabaseSchema {

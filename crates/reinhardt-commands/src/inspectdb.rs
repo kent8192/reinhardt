@@ -5,10 +5,11 @@ use crate::{
 	BaseCommand, CommandArgument, CommandContext, CommandError, CommandOption, CommandResult,
 };
 use async_trait::async_trait;
+use reinhardt_db::backends::DatabaseType;
 use reinhardt_db::migrations::introspect::write_generated_files_atomically;
 use reinhardt_db::migrations::{
-	GeneratedOutput, InspectDbOptions, IntrospectConfig, generate_models, inspect_database,
-	render_models_module,
+	GeneratedOutput, InspectDbOptions, IntrospectConfig, generate_models_canonical,
+	inspect_database, render_models_module,
 };
 use std::io::{self, Write as _};
 use std::path::PathBuf;
@@ -90,8 +91,8 @@ impl BaseCommand for InspectDbCommand {
 			CommandOption::option(None, "database-url", "One-off database URL override"),
 			CommandOption::flag(None, "include-views", "Include database views"),
 			CommandOption::flag(None, "include-partitions", "Include PostgreSQL partitions"),
-			CommandOption::option(None, "output", "Output directory for generated files"),
-			CommandOption::option(None, "config", "Path to configuration TOML file"),
+			CommandOption::option(Some('o'), "output", "Output directory for generated files"),
+			CommandOption::option(Some('c'), "config", "Path to configuration TOML file"),
 			CommandOption::flag(None, "force", "Overwrite existing generated files"),
 		]
 	}
@@ -109,11 +110,7 @@ impl BaseCommand for InspectDbCommand {
 		}
 
 		let mut config = match ctx.option("config") {
-			Some(path) => IntrospectConfig::from_file(path).map_err(|error| {
-				CommandError::InvalidArguments(format!(
-					"Failed to load inspectdb configuration: {error}"
-				))
-			})?,
+			Some(path) => load_config(PathBuf::from(path))?,
 			None => IntrospectConfig::default(),
 		};
 		// Database selection is owned by DatabaseSelector. Configuration files
@@ -137,6 +134,11 @@ impl BaseCommand for InspectDbCommand {
 				"Database selection returned an invalid identity.".to_string(),
 			));
 		}
+		if ctx.has_option("include-partitions") && resolved.backend() != DatabaseType::Postgres {
+			return Err(CommandError::InvalidArguments(
+				"include_partitions is only supported for PostgreSQL.".to_string(),
+			));
+		}
 		let options = InspectDbOptions {
 			tables: ctx.args.clone(),
 			include_views: ctx.has_option("include-views"),
@@ -156,7 +158,7 @@ impl BaseCommand for InspectDbCommand {
 		self.progress(&format!("Found {} schema objects", schema.tables.len()))?;
 
 		if output_directory.is_some() {
-			let output = generate_models(&config, &schema).map_err(generation_error)?;
+			let output = generate_models_canonical(&config, &schema).map_err(generation_error)?;
 			validate_generated_files(&output)?;
 			write_generated_files_atomically(&output, ctx.has_option("force")).map_err(
 				|error| {
@@ -177,6 +179,22 @@ impl BaseCommand for InspectDbCommand {
 
 		Ok(())
 	}
+}
+
+fn load_config(path: PathBuf) -> CommandResult<IntrospectConfig> {
+	let content = std::fs::read_to_string(&path).map_err(|error| {
+		CommandError::InvalidArguments(format!(
+			"Failed to read inspectdb configuration `{}` ({:?}).",
+			path.display(),
+			error.kind()
+		))
+	})?;
+	IntrospectConfig::from_toml(&content).map_err(|_| {
+		CommandError::InvalidArguments(format!(
+			"Failed to parse inspectdb configuration `{}`.",
+			path.display()
+		))
+	})
 }
 
 fn validate_generated_files(output: &GeneratedOutput) -> CommandResult<()> {

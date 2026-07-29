@@ -4,6 +4,8 @@
 
 use reinhardt_commands::{BaseCommand, CommandContext, InspectDbCommand, InspectDbWriter};
 use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
+use std::collections::BTreeMap;
+use std::fs;
 use std::io;
 use std::sync::{Arc, Mutex};
 use tempfile::TempDir;
@@ -120,5 +122,145 @@ async fn directory_mode_keeps_stdout_clean_and_writes_generated_files() {
 	assert!(stderr.iter().any(|line| line.contains("Generated 2 files")));
 	drop(stderr);
 	drop(stdout);
+	temp.close().expect("remove temporary output directory");
+}
+
+#[tokio::test]
+async fn include_partitions_is_rejected_before_sqlite_connection() {
+	let output = Arc::new(CapturedOutput::default());
+	let command = InspectDbCommand::with_writer(output.clone());
+	let mut context = CommandContext::default();
+	context.set_option("database".to_string(), "default".to_string());
+	context.set_option(
+		"database-url".to_string(),
+		"sqlite:////dev/null/cannot-connect.sqlite3".to_string(),
+	);
+	context.set_option("include-partitions".to_string(), "true".to_string());
+
+	let error = command
+		.execute(&context)
+		.await
+		.expect_err("SQLite partitions must be rejected before connecting");
+
+	assert_eq!(
+		error.to_string(),
+		"Invalid arguments: include_partitions is only supported for PostgreSQL."
+	);
+	assert!(
+		output
+			.stdout
+			.lock()
+			.expect("stdout capture lock")
+			.is_empty()
+	);
+	assert!(
+		output
+			.stderr
+			.lock()
+			.expect("stderr capture lock")
+			.is_empty()
+	);
+}
+
+#[test]
+fn command_context_debug_redacts_database_url_credentials() {
+	let credential = "postgres://debug-user:debug-password@db.example/app?token=query-secret";
+	let mut context = CommandContext::default();
+	context.set_option("database-url".to_string(), credential.to_string());
+	context.set_option("output".to_string(), "generated".to_string());
+
+	let debug = format!("{context:?}");
+
+	assert!(debug.contains("database-url"));
+	assert!(debug.contains("[REDACTED]"));
+	assert!(debug.contains("generated"));
+	assert!(!debug.contains(credential));
+	assert!(!debug.contains("debug-user"));
+	assert!(!debug.contains("debug-password"));
+	assert!(!debug.contains("db.example"));
+	assert!(!debug.contains("query-secret"));
+}
+
+#[tokio::test]
+async fn malformed_config_error_preserves_path_and_redacts_source_credentials() {
+	let temp = tempfile::Builder::new()
+		.prefix("reinhardt-inspectdb-config-")
+		.tempdir_in("/tmp")
+		.expect("temporary configuration directory");
+	let config_path = temp.path().join("inspectdb.toml");
+	let credential = "postgres://config-user:config-password@db.example/app?token=config-secret";
+	fs::write(&config_path, format!("[database]\nurl = {credential}\n"))
+		.expect("write malformed configuration");
+	let command = InspectDbCommand::with_writer(Arc::new(CapturedOutput::default()));
+	let mut context = CommandContext::default();
+	context.set_option(
+		"config".to_string(),
+		config_path.to_string_lossy().into_owned(),
+	);
+
+	let error = command
+		.execute(&context)
+		.await
+		.expect_err("malformed configuration must fail");
+	let diagnostic = error.to_string();
+
+	assert!(diagnostic.contains("parse"));
+	assert!(diagnostic.contains(&config_path.to_string_lossy().into_owned()));
+	assert!(!diagnostic.contains(credential));
+	assert!(!diagnostic.contains("config-user"));
+	assert!(!diagnostic.contains("config-password"));
+	assert!(!diagnostic.contains("db.example"));
+	assert!(!diagnostic.contains("config-secret"));
+	temp.close()
+		.expect("remove temporary configuration directory");
+}
+
+#[test]
+fn base_command_metadata_exposes_output_and_config_short_aliases() {
+	let options: BTreeMap<_, _> = InspectDbCommand::default()
+		.options()
+		.into_iter()
+		.map(|option| (option.long.clone(), option))
+		.collect();
+
+	assert_eq!(options["output"].short, Some('o'));
+	assert_eq!(options["config"].short, Some('c'));
+}
+
+#[tokio::test]
+async fn atomic_writer_failure_is_returned_without_partial_output() {
+	let (temp, database_url) = sqlite_fixture().await;
+	let output_directory = temp.path().join("models");
+	fs::create_dir(&output_directory).expect("create output directory");
+	fs::write(output_directory.join("users.rs"), "original bytes")
+		.expect("create conflicting destination");
+	let output = Arc::new(CapturedOutput::default());
+	let command = InspectDbCommand::with_writer(output.clone());
+	let mut context = CommandContext::new(vec!["users".to_string()]);
+	context.set_option("database".to_string(), "default".to_string());
+	context.set_option("database-url".to_string(), database_url);
+	context.set_option(
+		"output".to_string(),
+		output_directory.to_string_lossy().into_owned(),
+	);
+
+	let error = command
+		.execute(&context)
+		.await
+		.expect_err("existing destination must reject the atomic file set");
+
+	assert!(error.to_string().contains("Generated file write failed"));
+	assert_eq!(
+		fs::read_to_string(output_directory.join("users.rs")).expect("read original destination"),
+		"original bytes"
+	);
+	assert!(!output_directory.join("mod.rs").exists());
+	assert!(
+		output
+			.stdout
+			.lock()
+			.expect("stdout capture lock")
+			.is_empty()
+	);
 	temp.close().expect("remove temporary output directory");
 }

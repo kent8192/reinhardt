@@ -192,6 +192,9 @@ pub mod embedded_templates;
 pub mod formatter;
 /// Internationalization commands (makemessages, compilemessages).
 pub mod i18n_commands;
+/// Database schema inspection command.
+#[cfg(feature = "migrations")]
+pub mod inspectdb;
 /// Project introspection command for platform metadata discovery.
 #[cfg(feature = "introspect")]
 pub mod introspect;
@@ -313,6 +316,8 @@ pub use data_commands::{
 	execute_loaddata, execute_seed,
 };
 pub use i18n_commands::{CompileMessagesCommand, MakeMessagesCommand};
+#[cfg(feature = "migrations")]
+pub use inspectdb::{InspectDbCommand, InspectDbWriter};
 #[cfg(feature = "introspect")]
 pub use introspect::IntrospectCommand;
 pub use mail_commands::SendTestEmailCommand;

@@ -27,6 +27,9 @@ mod makemigrations_command_boundary;
 #[path = "commands/introspect_integration.rs"]
 mod introspect_integration;
 
+#[path = "commands/squashmigrations_management.rs"]
+mod squashmigrations_management;
+
 // Built-in command integration tests
 #[path = "commands/builtin_integration.rs"]
 mod builtin_integration;

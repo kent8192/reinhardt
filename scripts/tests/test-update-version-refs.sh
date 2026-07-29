@@ -268,4 +268,32 @@ run_case "08 docs.rs versioned URL" \
 	"0.2.0-rc.5" \
 	"website/config.toml"
 
+# Fixture 09: the default target set keeps the integration test package aligned
+run_default_integration_manifest_case() {
+	local name="$1"
+	local tmpdir
+	tmpdir=$(mktemp -d)
+	mkdir -p "$tmpdir/scripts" "$tmpdir/tests/integration"
+	cp "$SCRIPT" "$tmpdir/scripts/update-version-refs.sh"
+	cat > "$tmpdir/tests/integration/Cargo.toml" <<'EOF'
+[package]
+name = "reinhardt-integration-tests"
+# reinhardt-version-sync
+version = "0.2.0-rc.2"
+EOF
+
+	REINHARDT_REPO_ROOT="$tmpdir" \
+		bash "$tmpdir/scripts/update-version-refs.sh" "0.4.0-alpha.4" >/dev/null 2>&1
+
+	if grep -q '^version = "0.4.0-alpha.4"$' "$tmpdir/tests/integration/Cargo.toml"; then
+		pass "$name"
+	else
+		fail "$name"
+		cat "$tmpdir/tests/integration/Cargo.toml" >&2
+	fi
+	rm -rf "$tmpdir"
+}
+
+run_default_integration_manifest_case "09 default integration manifest target"
+
 exit "$FAIL"

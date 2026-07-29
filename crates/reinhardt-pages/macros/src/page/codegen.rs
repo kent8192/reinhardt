@@ -1047,7 +1047,7 @@ fn generate_event(
 				}
 			}
 		}
-		IntrinsicEvent::Custom { name, handler } => {
+		IntrinsicEvent::RawCustom { name, handler } => {
 			let raw_type = quote! { #pages_crate::platform::Event };
 			let lowered_handler = lower_intrinsic_closure(handler, raw_type);
 			let lowered_handler = if matches!(handler, syn::Expr::Closure(_)) {
@@ -1059,6 +1059,37 @@ fn generate_event(
 				quote! { #pages_crate::callback::raw_async_event_handler(#lowered_handler) }
 			} else {
 				quote! { #pages_crate::callback::raw_event_handler(#lowered_handler) }
+			};
+
+			quote! {
+				.on(
+					#pages_crate::event::EventName::Custom(::std::borrow::Cow::Borrowed(#name)),
+					#adapter
+				)
+			}
+		}
+		IntrinsicEvent::TypedCustom {
+			name,
+			payload_type,
+			handler,
+		} => {
+			let event_type = quote! {
+				#pages_crate::event::CustomEvent<#payload_type>
+			};
+			let lowered_handler = lower_intrinsic_closure(handler, event_type.clone());
+			let lowered_handler = if matches!(handler, syn::Expr::Closure(_)) {
+				closure_expr_with_move_captures(&lowered_handler, pages_crate, ctx)
+			} else {
+				wrap_expr_with_captures(handler, pages_crate, ctx)
+			};
+			let adapter = if is_async_closure(handler) {
+				quote! {
+					#pages_crate::callback::typed_async_custom_event_handler::<#payload_type, _, _>(#lowered_handler)
+				}
+			} else {
+				quote! {
+					#pages_crate::callback::typed_custom_event_handler::<#payload_type, _>(#lowered_handler)
+				}
 			};
 
 			quote! {
@@ -1695,6 +1726,52 @@ mod tests {
 		assert!(output.contains("event :: EventName :: Custom"));
 		assert!(output.contains("\"item-selected\""));
 		assert!(output.contains("callback :: raw_event_handler"));
+	}
+
+	#[test]
+	fn test_generate_typed_custom_event_uses_custom_adapter() {
+		let input = quote::quote!(|| {
+			div {
+				@custom::<crate::Selected>("item-selected"): |event| {
+					let _ = event;
+				},
+			}
+		});
+
+		let output = parse_and_generate(input).to_string();
+
+		assert!(output.contains("event :: CustomEvent < crate :: Selected >"));
+		assert!(output.contains("callback :: typed_custom_event_handler"));
+		assert!(output.contains("\"item-selected\""));
+	}
+
+	#[test]
+	fn test_generate_async_typed_custom_event_uses_custom_adapter() {
+		let input = quote::quote!(|| {
+			div {
+				@custom::<crate::Selected>("item-loaded"): async |event| {
+					let _ = event;
+				},
+			}
+		});
+
+		let output = parse_and_generate(input).to_string();
+
+		assert!(output.contains("event :: CustomEvent < crate :: Selected >"));
+		assert!(output.contains("callback :: typed_async_custom_event_handler"));
+		assert!(output.contains("\"item-loaded\""));
+	}
+
+	#[test]
+	fn test_generate_zero_argument_typed_custom_event_adds_typed_parameter() {
+		let input = quote::quote!(|| {
+			div { @custom::<crate::Selected>("item-focused"): || {}, }
+		});
+
+		let output = parse_and_generate(input).to_string();
+
+		assert!(output.contains("_event : crate :: event :: CustomEvent < crate :: Selected >"));
+		assert!(output.contains("callback :: typed_custom_event_handler"));
 	}
 
 	#[test]

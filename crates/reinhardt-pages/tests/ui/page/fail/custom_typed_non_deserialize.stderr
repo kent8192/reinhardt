@@ -1,0 +1,30 @@
+error[E0277]: the trait bound `NotDeserializable: serde::de::DeserializeOwned` is not satisfied
+  --> tests/ui/page/fail/custom_typed_non_deserialize.rs:10:14
+   |
+10 |             @custom::<NotDeserializable>("item-selected"): |event| {
+   |                       ^^^^^^^^^^^^^^^^^ unsatisfied trait bound
+   |
+help: the trait `for<'de> serde_core::de::Deserialize<'de>` is not implemented for `NotDeserializable`
+  --> tests/ui/page/fail/custom_typed_non_deserialize.rs:5:1
+   |
+ 5 | struct NotDeserializable;
+   | ^^^^^^^^^^^^^^^^^^^^^^^^
+   = help: the following other types implement trait `serde_core::de::Deserialize<'de>`:
+             `&'a [u8]` implements `serde_core::de::Deserialize<'de>`
+             `&'a reinhardt_pages::__private::serde_json::raw::RawValue` implements `serde_core::de::Deserialize<'de>`
+             `&'a std::path::Path` implements `serde_core::de::Deserialize<'de>`
+             `&'a str` implements `serde_core::de::Deserialize<'de>`
+             `()` implements `serde_core::de::Deserialize<'de>`
+             `(T,)` implements `serde_core::de::Deserialize<'de>`
+             `(T0, T1)` implements `serde_core::de::Deserialize<'de>`
+             `(T0, T1, T2)` implements `serde_core::de::Deserialize<'de>`
+           and $N others
+   = note: required for `NotDeserializable` to implement `serde_core::de::DeserializeOwned`
+note: required by a bound in `typed_custom_event_handler`
+  --> src/callback.rs
+   |
+   | pub fn typed_custom_event_handler<T, H>(handler: H) -> PageEventHandler
+   |        -------------------------- required by a bound in this function
+   | where
+   |     T: DeserializeOwned + 'static,
+   |        ^^^^^^^^^^^^^^^^ required by this bound in `typed_custom_event_handler`

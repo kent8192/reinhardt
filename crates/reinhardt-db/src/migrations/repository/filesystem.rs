@@ -9,6 +9,9 @@ use async_trait::async_trait;
 use cap_std::ambient_authority;
 use cap_std::fs::{Dir, File, OpenOptions};
 use quote::quote;
+use reinhardt_query::prelude::{
+	ColumnType as QueryColumnType, GeneratedStorage, SchemaBinOper, SchemaExpr, SchemaFunc, Value,
+};
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use syn::parse_quote;
@@ -255,8 +258,8 @@ impl FilesystemRepository {
 
 	/// Render a complete Rust migration source file.
 	pub fn render(&self, migration: &Migration, options: MigrationRenderOptions) -> Result<String> {
-		for operation in &migration.operations {
-			Self::validate_renderable_operation(operation)?;
+		for (index, operation) in migration.operations.iter().enumerate() {
+			Self::validate_renderable_operation(index, operation)?;
 		}
 		// Build dependencies vector (tuple elements need .to_string() for String type)
 		let deps: Vec<_> = migration
@@ -369,31 +372,74 @@ impl FilesystemRepository {
 			&migration.app_label,
 			&migration.name,
 		)
-		.map_err(|_| MigrationError::UnsupportedMigrationRendering {
-			operation: migration
-				.operations
-				.first()
-				.map(Self::operation_kind)
-				.unwrap_or("Migration")
-				.to_string(),
+		.map_err(|error| {
+			let context = match error {
+				MigrationError::InvalidMigration(message) if message.starts_with("operations[") => {
+					message
+				}
+				other => format!("Migration.metadata: {other}"),
+			};
+			MigrationError::UnsupportedMigrationRendering { operation: context }
 		})?;
-		if reparsed.operations != migration.operations
-			|| reparsed.dependencies != migration.dependencies
-			|| reparsed.replaces != migration.replaces
-			|| reparsed.atomic != migration.atomic
-			|| reparsed.initial != migration.initial
-			|| reparsed.state_only != migration.state_only
-			|| reparsed.database_only != migration.database_only
-			|| reparsed.swappable_dependencies != migration.swappable_dependencies
-			|| reparsed.optional_dependencies != migration.optional_dependencies
+		if let Some((index, (expected, _))) = migration
+			.operations
+			.iter()
+			.zip(&reparsed.operations)
+			.enumerate()
+			.find(|(_, (expected, actual))| expected != actual)
 		{
 			return Err(MigrationError::UnsupportedMigrationRendering {
-				operation: migration
-					.operations
-					.first()
-					.map(Self::operation_kind)
-					.unwrap_or("Migration")
-					.to_string(),
+				operation: format!(
+					"operations[{}].{}: semantic mismatch",
+					index,
+					Self::operation_kind(expected)
+				),
+			});
+		}
+		if migration.operations.len() != reparsed.operations.len() {
+			let index = migration.operations.len().min(reparsed.operations.len());
+			let kind = migration
+				.operations
+				.get(index)
+				.map(Self::operation_kind)
+				.unwrap_or("unexpected");
+			return Err(MigrationError::UnsupportedMigrationRendering {
+				operation: format!("operations[{index}].{kind}: operation count mismatch"),
+			});
+		}
+		let metadata_mismatch = [
+			(
+				migration.dependencies != reparsed.dependencies,
+				"Migration.dependencies",
+			),
+			(
+				migration.replaces != reparsed.replaces,
+				"Migration.replaces",
+			),
+			(migration.atomic != reparsed.atomic, "Migration.atomic"),
+			(migration.initial != reparsed.initial, "Migration.initial"),
+			(
+				migration.state_only != reparsed.state_only,
+				"Migration.state_only",
+			),
+			(
+				migration.database_only != reparsed.database_only,
+				"Migration.database_only",
+			),
+			(
+				migration.swappable_dependencies != reparsed.swappable_dependencies,
+				"Migration.swappable_dependencies",
+			),
+			(
+				migration.optional_dependencies != reparsed.optional_dependencies,
+				"Migration.optional_dependencies",
+			),
+		]
+		.into_iter()
+		.find_map(|(mismatch, context)| mismatch.then_some(context));
+		if let Some(context) = metadata_mismatch {
+			return Err(MigrationError::UnsupportedMigrationRendering {
+				operation: format!("{context}: semantic mismatch"),
 			});
 		}
 
@@ -406,10 +452,42 @@ impl FilesystemRepository {
 		}
 	}
 
-	fn validate_renderable_operation(operation: &crate::migrations::Operation) -> Result<()> {
+	fn validate_renderable_operation(
+		index: usize,
+		operation: &crate::migrations::Operation,
+	) -> Result<()> {
 		use crate::migrations::{Constraint, Operation};
 
 		let kind = Self::operation_kind(operation);
+		let context = format!("operations[{index}].{kind}");
+		match operation {
+			Operation::CreateTable { columns, .. }
+			| Operation::CreateInheritedTable { columns, .. } => {
+				for column in columns {
+					Self::validate_renderable_column(&context, column)?;
+				}
+			}
+			Operation::AddColumn { column, .. } => {
+				Self::validate_renderable_column(&context, column)?;
+			}
+			Operation::DropColumn {
+				old_definition: Some(column),
+				..
+			} => {
+				Self::validate_renderable_column(&context, column)?;
+			}
+			Operation::AlterColumn {
+				old_definition,
+				new_definition,
+				..
+			} => {
+				if let Some(column) = old_definition {
+					Self::validate_renderable_column(&context, column)?;
+				}
+				Self::validate_renderable_column(&context, new_definition)?;
+			}
+			_ => {}
+		}
 		let constraints = match operation {
 			Operation::CreateTable { constraints, .. } => Some(constraints.as_slice()),
 			Operation::AddConstraintDefinition { constraint, .. }
@@ -424,7 +502,7 @@ impl FilesystemRepository {
 				.any(|constraint| matches!(constraint, Constraint::Exclude { .. }))
 		}) {
 			return Err(MigrationError::UnsupportedMigrationRendering {
-				operation: format!("{kind}.Constraint::Exclude"),
+				operation: format!("{context}.Constraint::Exclude"),
 			});
 		}
 		match operation {
@@ -437,9 +515,7 @@ impl FilesystemRepository {
 				|| interleave_in_parent.is_some()
 				|| partition.is_some() =>
 			{
-				Err(MigrationError::UnsupportedMigrationRendering {
-					operation: kind.to_string(),
-				})
+				Err(MigrationError::UnsupportedMigrationRendering { operation: context })
 			}
 			Operation::AddColumn {
 				mysql_options: Some(_),
@@ -465,12 +541,173 @@ impl FilesystemRepository {
 			| Operation::BulkLoad { .. }
 			| Operation::SetAutoIncrementValue { .. }
 			| Operation::CreateCompositePrimaryKey { .. } => {
-				Err(MigrationError::UnsupportedMigrationRendering {
-					operation: kind.to_string(),
-				})
+				Err(MigrationError::UnsupportedMigrationRendering { operation: context })
 			}
 			_ => Ok(()),
 		}
+	}
+
+	fn validate_renderable_column(
+		context: &str,
+		column: &crate::migrations::ColumnDefinition,
+	) -> Result<()> {
+		let Some(generated) = &column.generated else {
+			return Ok(());
+		};
+		let context = format!("{context}.GeneratedColumnDefinition");
+		match generated.storage {
+			GeneratedStorage::Stored | GeneratedStorage::Virtual => {}
+			_ => return Self::unsupported_rendering(format!("{context}.GeneratedStorage")),
+		}
+		if generated.expr.is_none() && generated.expr_tokens.is_some() {
+			let Some(expression) = generated.typed_expr() else {
+				return Self::unsupported_rendering(format!("{context}.expr_tokens"));
+			};
+			return Self::validate_schema_expr(&context, &expression);
+		}
+		if let Some(expression) = generated.expr.as_deref() {
+			Self::validate_schema_expr(&context, expression)?;
+		}
+		Ok(())
+	}
+
+	fn validate_schema_expr(context: &str, expression: &SchemaExpr) -> Result<()> {
+		match expression {
+			SchemaExpr::Column(_) => Ok(()),
+			SchemaExpr::Value(value) => Self::validate_schema_value(context, value),
+			SchemaExpr::Binary { left, op, right } => {
+				match op {
+					SchemaBinOper::Add
+					| SchemaBinOper::Sub
+					| SchemaBinOper::Mul
+					| SchemaBinOper::Div => {}
+					_ => {
+						return Self::unsupported_rendering(format!(
+							"{context}.SchemaExpr.SchemaBinOper"
+						));
+					}
+				}
+				Self::validate_schema_expr(context, left)?;
+				Self::validate_schema_expr(context, right)
+			}
+			SchemaExpr::Function { func, args } => {
+				match func {
+					SchemaFunc::Concat => {}
+					SchemaFunc::Coalesce if !args.is_empty() => {}
+					SchemaFunc::Coalesce => {
+						return Self::unsupported_rendering(format!(
+							"{context}.SchemaExpr.SchemaFunc::Coalesce"
+						));
+					}
+					_ => {
+						return Self::unsupported_rendering(format!(
+							"{context}.SchemaExpr.SchemaFunc"
+						));
+					}
+				}
+				for argument in args {
+					Self::validate_schema_expr(context, argument)?;
+				}
+				Ok(())
+			}
+			SchemaExpr::Cast { expr, ty } => {
+				Self::validate_schema_expr(context, expr)?;
+				Self::validate_query_column_type(context, ty)
+			}
+			_ => Self::unsupported_rendering(format!("{context}.SchemaExpr")),
+		}
+	}
+
+	fn validate_schema_value(context: &str, value: &Value) -> Result<()> {
+		match value {
+			Value::Bool(_)
+			| Value::TinyInt(_)
+			| Value::SmallInt(_)
+			| Value::Int(_)
+			| Value::BigInt(_)
+			| Value::TinyUnsigned(_)
+			| Value::SmallUnsigned(_)
+			| Value::Unsigned(_)
+			| Value::BigUnsigned(_)
+			| Value::Float(_)
+			| Value::Double(_)
+			| Value::Char(_)
+			| Value::String(_) => Ok(()),
+			Value::Bytes(_) => {
+				Self::unsupported_rendering(format!("{context}.SchemaExpr.Value::Bytes"))
+			}
+			#[cfg(feature = "pgvector")]
+			Value::Vector(_) => Self::unsupported_rendering(format!("{context}.SchemaExpr.Value::Vector")),
+			Value::ChronoDate(_) => {
+				Self::unsupported_rendering(format!("{context}.SchemaExpr.Value::ChronoDate"))
+			}
+			Value::ChronoTime(_) => {
+				Self::unsupported_rendering(format!("{context}.SchemaExpr.Value::ChronoTime"))
+			}
+			Value::ChronoDateTime(_) => {
+				Self::unsupported_rendering(format!("{context}.SchemaExpr.Value::ChronoDateTime"))
+			}
+			Value::ChronoDateTimeUtc(_) => Self::unsupported_rendering(format!(
+				"{context}.SchemaExpr.Value::ChronoDateTimeUtc"
+			)),
+			Value::ChronoDateTimeLocal(_) => Self::unsupported_rendering(format!(
+				"{context}.SchemaExpr.Value::ChronoDateTimeLocal"
+			)),
+			Value::ChronoDateTimeWithTimeZone(_) => Self::unsupported_rendering(format!(
+				"{context}.SchemaExpr.Value::ChronoDateTimeWithTimeZone"
+			)),
+			Value::Uuid(_) => {
+				Self::unsupported_rendering(format!("{context}.SchemaExpr.Value::Uuid"))
+			}
+			Value::Json(_) => {
+				Self::unsupported_rendering(format!("{context}.SchemaExpr.Value::Json"))
+			}
+			Value::Decimal(_) => {
+				Self::unsupported_rendering(format!("{context}.SchemaExpr.Value::Decimal"))
+			}
+			Value::BigDecimal(_) => {
+				Self::unsupported_rendering(format!("{context}.SchemaExpr.Value::BigDecimal"))
+			}
+			Value::Array(_, _) => {
+				Self::unsupported_rendering(format!("{context}.SchemaExpr.Value::Array"))
+			}
+		}
+	}
+
+	fn validate_query_column_type(context: &str, column_type: &QueryColumnType) -> Result<()> {
+		match column_type {
+			QueryColumnType::Char(_)
+			| QueryColumnType::String(_)
+			| QueryColumnType::Text
+			| QueryColumnType::TinyInteger
+			| QueryColumnType::SmallInteger
+			| QueryColumnType::Integer
+			| QueryColumnType::BigInteger
+			| QueryColumnType::Float
+			| QueryColumnType::Double
+			| QueryColumnType::Decimal(_)
+			| QueryColumnType::Boolean
+			| QueryColumnType::Date
+			| QueryColumnType::Time
+			| QueryColumnType::DateTime
+			| QueryColumnType::Timestamp
+			| QueryColumnType::TimestampWithTimeZone
+			| QueryColumnType::Binary(_)
+			| QueryColumnType::VarBinary(_)
+			| QueryColumnType::Blob
+			| QueryColumnType::Uuid
+			| QueryColumnType::Json
+			| QueryColumnType::JsonBinary
+			| QueryColumnType::Custom(_) => Ok(()),
+			QueryColumnType::Array(inner) => Self::validate_query_column_type(context, inner),
+			#[cfg(feature = "pgvector")]
+			QueryColumnType::Vector(_) => Ok(()),
+			_ => Self::unsupported_rendering(format!("{context}.SchemaExpr.ColumnType")),
+		}
+	}
+
+	fn unsupported_rendering<T>(operation: String) -> Result<T> {
+		Err(MigrationError::UnsupportedMigrationRendering { operation })
 	}
 
 	/// Create a new migration source file without overwriting an existing file.
@@ -514,8 +751,8 @@ impl FilesystemRepository {
 		})?;
 		let formatted = Self::format_with_rustfmt(source)?;
 		std::fs::create_dir_all(&self.root_dir)?;
-		before_open()?;
 		let root = Dir::open_ambient_dir(&self.root_dir, ambient_authority())?;
+		before_open()?;
 		root.create_dir_all(app_label)?;
 		let app_directory = root.open_dir(app_label)?;
 		let file_name = format!("{migration_name}.rs");
@@ -1217,6 +1454,46 @@ mod tests {
 
 		assert!(result.is_err());
 		assert!(!outside.path().join("0001_squashed.rs").exists());
+	}
+
+	#[cfg(unix)]
+	#[test]
+	fn create_new_source_anchors_root_before_path_replacement() {
+		use std::os::unix::fs::symlink;
+
+		let container = TempDir::new().unwrap();
+		let root = container.path().join("migrations");
+		let anchored_root = container.path().join("anchored-migrations");
+		let outside = TempDir::new().unwrap();
+		std::fs::create_dir(&root).unwrap();
+		let repo = FilesystemRepository::new(&root);
+		let source = repo
+			.render(
+				&create_test_migration("polls", "0001_squashed"),
+				MigrationRenderOptions {
+					include_header: false,
+				},
+			)
+			.unwrap();
+
+		let result = repo.create_new_source_with_hooks(
+			"polls",
+			"0001_squashed",
+			&source,
+			|| {
+				std::fs::rename(&root, &anchored_root)?;
+				symlink(outside.path(), &root)
+			},
+			|file, formatted| {
+				file.write_all(formatted.as_bytes())?;
+				file.sync_all()
+			},
+			|directory, name| directory.remove_file(name),
+		);
+
+		assert!(result.is_ok());
+		assert!(anchored_root.join("polls/0001_squashed.rs").exists());
+		assert!(!outside.path().join("polls").exists());
 	}
 
 	#[test]

@@ -423,7 +423,8 @@ fn parse_operations_vec_strict(expr: &Expr) -> Result<Vec<super::Operation>> {
 	let expressions = parse_vec_expressions(expr, "operations")?;
 	expressions
 		.iter()
-		.map(|expression| {
+		.enumerate()
+		.map(|(index, expression)| {
 			parse_single_operation(expression).ok_or_else(|| {
 				let operation_name = match expression {
 					Expr::Struct(operation) => operation
@@ -435,8 +436,8 @@ fn parse_operations_vec_strict(expr: &Expr) -> Result<Vec<super::Operation>> {
 					_ => "<expression>".to_string(),
 				};
 				MigrationError::InvalidMigration(format!(
-					"Unsupported or malformed migration operation '{}'",
-					operation_name
+					"operations[{}].{} is unsupported or malformed",
+					index, operation_name
 				))
 			})
 		})
@@ -869,9 +870,7 @@ fn extract_alter_table_options_field(
 	fields: &syn::punctuated::Punctuated<syn::FieldValue, syn::token::Comma>,
 	field_name: &str,
 ) -> Option<super::AlterTableOptions> {
-	use super::{AlterTableOptions, MySqlAlgorithm, MySqlLock};
-
-	let options = fields.iter().find_map(|field| {
+	fields.iter().find_map(|field| {
 		let syn::Member::Named(ident) = &field.member else {
 			return None;
 		};
@@ -887,11 +886,48 @@ fn extract_alter_table_options_field(
 		if !path.path.is_ident("Some") {
 			return None;
 		}
-		let Expr::Struct(options) = call.args.first()? else {
-			return None;
+		parse_alter_table_options_expr(call.args.first()?)
+	})
+}
+
+fn parse_alter_table_options_expr(expr: &Expr) -> Option<super::AlterTableOptions> {
+	use super::{AlterTableOptions, MySqlAlgorithm, MySqlLock};
+
+	if let Expr::Call(call) = expr
+		&& let Expr::Path(function) = &*call.func
+		&& function
+			.path
+			.segments
+			.last()
+			.is_some_and(|segment| segment.ident == "new")
+		&& call.args.is_empty()
+	{
+		return Some(AlterTableOptions::new());
+	}
+	if let Expr::MethodCall(call) = expr {
+		let options = parse_alter_table_options_expr(&call.receiver)?;
+		let variant = call.args.first().and_then(extract_path_variant)?;
+		return match call.method.to_string().as_str() {
+			"with_algorithm" if call.args.len() == 1 => match variant.as_str() {
+				"Instant" => Some(options.with_algorithm(MySqlAlgorithm::Instant)),
+				"Inplace" => Some(options.with_algorithm(MySqlAlgorithm::Inplace)),
+				"Copy" => Some(options.with_algorithm(MySqlAlgorithm::Copy)),
+				"Default" => Some(options.with_algorithm(MySqlAlgorithm::Default)),
+				_ => None,
+			},
+			"with_lock" if call.args.len() == 1 => match variant.as_str() {
+				"None" => Some(options.with_lock(MySqlLock::None)),
+				"Shared" => Some(options.with_lock(MySqlLock::Shared)),
+				"Exclusive" => Some(options.with_lock(MySqlLock::Exclusive)),
+				"Default" => Some(options.with_lock(MySqlLock::Default)),
+				_ => None,
+			},
+			_ => None,
 		};
-		Some(options)
-	})?;
+	}
+	let Expr::Struct(options) = expr else {
+		return None;
+	};
 
 	let algorithm =
 		extract_optional_path_variant_field(&options.fields, "algorithm").and_then(|variant| {
@@ -913,6 +949,16 @@ fn extract_alter_table_options_field(
 		}
 	});
 	Some(AlterTableOptions { algorithm, lock })
+}
+
+fn extract_path_variant(expr: &Expr) -> Option<String> {
+	let Expr::Path(path) = expr else {
+		return None;
+	};
+	path.path
+		.segments
+		.last()
+		.map(|segment| segment.ident.to_string())
 }
 
 fn extract_optional_path_variant_field(
@@ -1206,6 +1252,7 @@ fn parse_single_constraint(expr: &Expr) -> Option<super::Constraint> {
 					.unwrap_or(super::ForeignKeyAction::Restrict);
 				let on_update = extract_foreign_key_action_field(&expr_struct.fields, "on_update")
 					.unwrap_or(super::ForeignKeyAction::Restrict);
+				let deferrable = extract_deferrable_option_field(&expr_struct.fields, "deferrable");
 
 				return Some(super::Constraint::ForeignKey {
 					name,
@@ -1214,7 +1261,7 @@ fn parse_single_constraint(expr: &Expr) -> Option<super::Constraint> {
 					referenced_columns,
 					on_delete,
 					on_update,
-					deferrable: None,
+					deferrable,
 				});
 			}
 			"Unique" => {
@@ -1255,6 +1302,7 @@ fn parse_single_constraint(expr: &Expr) -> Option<super::Constraint> {
 					.unwrap_or(super::ForeignKeyAction::Restrict);
 				let on_update = extract_foreign_key_action_field(&expr_struct.fields, "on_update")
 					.unwrap_or(super::ForeignKeyAction::NoAction);
+				let deferrable = extract_deferrable_option_field(&expr_struct.fields, "deferrable");
 
 				return Some(super::Constraint::OneToOne {
 					name,
@@ -1263,7 +1311,7 @@ fn parse_single_constraint(expr: &Expr) -> Option<super::Constraint> {
 					referenced_column,
 					on_delete,
 					on_update,
-					deferrable: None,
+					deferrable,
 				});
 			}
 			"ManyToMany" => {
@@ -1291,6 +1339,32 @@ fn parse_single_constraint(expr: &Expr) -> Option<super::Constraint> {
 	}
 
 	None
+}
+
+fn extract_deferrable_option_field(
+	fields: &syn::punctuated::Punctuated<syn::FieldValue, syn::token::Comma>,
+	field_name: &str,
+) -> Option<super::DeferrableOption> {
+	let field = fields
+		.iter()
+		.find(|field| matches!(&field.member, syn::Member::Named(ident) if ident == field_name))?;
+	let Expr::Call(call) = &field.expr else {
+		return None;
+	};
+	let Expr::Path(function) = &*call.func else {
+		return None;
+	};
+	if !function.path.is_ident("Some") || call.args.len() != 1 {
+		return None;
+	}
+	let Expr::Path(value) = &call.args[0] else {
+		return None;
+	};
+	match value.path.segments.last()?.ident.to_string().as_str() {
+		"Immediate" => Some(super::DeferrableOption::Immediate),
+		"Deferred" => Some(super::DeferrableOption::Deferred),
+		_ => None,
+	}
 }
 
 /// Parse constraints from vec![...] or array expression
@@ -2192,11 +2266,11 @@ mod tests {
 	#[rstest]
 	#[case(
 		"Operation::UnknownOperation { value: 1 }",
-		"Invalid migration: Unsupported or malformed migration operation 'UnknownOperation'"
+		"Invalid migration: operations[0].UnknownOperation is unsupported or malformed"
 	)]
 	#[case(
 		r#"Operation::DropTable { wrong_name: "posts".to_string() }"#,
-		"Invalid migration: Unsupported or malformed migration operation 'DropTable'"
+		"Invalid migration: operations[0].DropTable is unsupported or malformed"
 	)]
 	fn strict_metadata_rejects_unknown_and_malformed_operations(
 		#[case] operation: &str,

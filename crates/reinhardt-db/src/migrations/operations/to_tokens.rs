@@ -206,20 +206,12 @@ impl ToTokens for MySqlLock {
 
 impl ToTokens for AlterTableOptions {
 	fn to_tokens(&self, tokens: &mut TokenStream) {
-		let algorithm_token = match &self.algorithm {
-			Some(algo) => quote! { Some(#algo) },
-			None => quote! { None },
-		};
-		let lock_token = match &self.lock {
-			Some(lock) => quote! { Some(#lock) },
-			None => quote! { None },
-		};
-		tokens.extend(quote! {
-			AlterTableOptions {
-				algorithm: #algorithm_token,
-				lock: #lock_token,
-			}
-		});
+		let algorithm_token = self
+			.algorithm
+			.as_ref()
+			.map(|algorithm| quote! { .with_algorithm(#algorithm) });
+		let lock_token = self.lock.as_ref().map(|lock| quote! { .with_lock(#lock) });
+		tokens.extend(quote! { AlterTableOptions::new() #algorithm_token #lock_token });
 	}
 }
 
@@ -1326,7 +1318,7 @@ impl ToTokens for GeneratedColumnDefinition {
 		let storage_token = match self.storage {
 			GeneratedStorage::Stored => quote! { GeneratedStorage::Stored },
 			GeneratedStorage::Virtual => quote! { GeneratedStorage::Virtual },
-			_ => quote! { GeneratedStorage::Stored },
+			_ => panic!("unsupported generated-column storage: {:?}", self.storage),
 		};
 
 		let canonical_expr = self.typed_expr();

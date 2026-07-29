@@ -42,3 +42,6 @@ mod custom_manager_ui;
 
 #[path = "orm/queryset_docs_ui.rs"]
 mod queryset_docs_ui;
+
+#[path = "orm/upsert_builder_ui.rs"]
+mod upsert_builder_ui;

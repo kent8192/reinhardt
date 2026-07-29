@@ -204,7 +204,11 @@ async fn hover_prefetch_is_side_effect_free_and_shared_by_navigation() {
 		Some("hover")
 	);
 
-	let pointerover = web_sys::PointerEvent::new("pointerover").expect("pointerover event");
+	let pointerover_init = web_sys::PointerEventInit::new();
+	pointerover_init.set_bubbles(true);
+	let pointerover =
+		web_sys::PointerEvent::new_with_event_init_dict("pointerover", &pointerover_init)
+			.expect("pointerover event");
 	anchor
 		.dispatch_event(&pointerover)
 		.expect("dispatch pointerover");

@@ -7,7 +7,9 @@ use std::collections::HashMap;
 
 use crate::reactive::query::QueryDefaults;
 #[cfg(wasm)]
-use crate::reactive::query::{QueryClient, provide_query_client};
+use crate::reactive::query::{
+	QueryClient, provide_query_client, with_query_client, with_query_client_async,
+};
 use crate::reactive::{Context, ContextGuard};
 
 #[cfg(wasm)]
@@ -939,6 +941,7 @@ impl ClientLauncher {
 		document: &web_sys::Document,
 		root_el: &web_sys::Element,
 		scope: &std::rc::Rc<reinhardt_core::reactive::ReactiveScope>,
+		query_client: &QueryClient,
 	) {
 		let ctx = LaunchCtx {
 			window,
@@ -965,20 +968,23 @@ impl ClientLauncher {
 			let last_params_for_listener = last_params.clone();
 			let document_for_listener = document.clone();
 			let scope_for_listener = std::rc::Rc::clone(scope);
+			let query_client_for_listener = query_client.clone();
 			let listener_subscription = with_spa_router(|r| {
 				r.on_navigate_dyn(Box::new(move |path, _params_from_router| {
-					if let Some(params) = next_path_subscription_match(
-						&pattern_for_listener,
-						path,
-						&last_params_for_listener,
-					) {
-						let ctx = PathCtx {
-							document: &document_for_listener,
+					with_query_client(&query_client_for_listener, || {
+						if let Some(params) = next_path_subscription_match(
+							&pattern_for_listener,
 							path,
-							params: &params,
-						};
-						scope_for_listener.enter(|| callback_for_listener(&ctx));
-					}
+							&last_params_for_listener,
+						) {
+							let ctx = PathCtx {
+								document: &document_for_listener,
+								path,
+								params: &params,
+							};
+							scope_for_listener.enter(|| callback_for_listener(&ctx));
+						}
+					});
 				}))
 			});
 			std::mem::forget(listener_subscription);
@@ -1068,13 +1074,19 @@ impl ClientLauncher {
 		#[cfg(feature = "console_error_panic_hook")]
 		console_error_panic_hook::set_once();
 
+		let query_client = QueryClient::new(self.query_defaults.clone());
 		crate::reactive::runtime::set_scheduler(|task| {
-			wasm_bindgen_futures::spawn_local(async move { task() });
+			if let Some(client) = crate::reactive::query::current_query_client() {
+				wasm_bindgen_futures::spawn_local(with_query_client_async(client, async move {
+					task()
+				}));
+			} else {
+				wasm_bindgen_futures::spawn_local(async move { task() });
+			}
 		});
 
-		let query_client = QueryClient::new(self.query_defaults.clone());
-		let query_client_guard = provide_query_client(query_client.clone());
-		let mut root_context_guards: Vec<Box<dyn Any>> = vec![Box::new(query_client_guard)];
+		let _query_client_activation = provide_query_client(query_client.clone());
+		let mut root_context_guards: Vec<Box<dyn Any>> = vec![Box::new(query_client.clone())];
 		root_context_guards.extend(
 			self.root_context_providers
 				.drain(..)
@@ -1181,13 +1193,16 @@ impl ClientLauncher {
 				initial_preparation_path = Some(initial_path.clone());
 			}
 			let pop_coordinator = std::rc::Rc::clone(&coordinator);
+			let pop_query_client = query_client.clone();
 			let pop_subscription = listen_pop_requests(move |request| {
-				if pop_coordinator.consume_restoration_pop() {
-					return;
-				}
-				let target_index = request.state.entry_index();
-				let _ = pop_coordinator
-					.navigate(request.path, super::NavigationIntent::Pop { target_index });
+				with_query_client(&pop_query_client, || {
+					if pop_coordinator.consume_restoration_pop() {
+						return;
+					}
+					let target_index = request.state.entry_index();
+					let _ = pop_coordinator
+						.navigate(request.path, super::NavigationIntent::Pop { target_index });
+				});
 			})?;
 			store_navigation_coordinator(coordinator);
 			store_popstate_subscription(pop_subscription);
@@ -1253,31 +1268,32 @@ impl ClientLauncher {
 		let document_for_render = document.clone();
 		let scope_for_render = std::rc::Rc::clone(&scope);
 		let document_head_manager_for_render = document_head_manager.clone();
+		let query_client_for_render = query_client.clone();
 		let render_subscription = with_spa_router(|r| {
-			r.on_navigate_dyn(Box::new(
-				move |_path, _params| match Self::render_and_mount(
-					&render_root,
-					&document_head_manager_for_render,
-				) {
-					Ok(()) => {
-						if let Some((after_launch_hooks, path_subscriptions)) =
-							lifecycle_for_render.borrow_mut().take()
-						{
-							Self::activate_post_mount_lifecycle(
-								after_launch_hooks,
-								path_subscriptions,
-								&window_for_render,
-								&document_for_render,
-								&render_root,
-								&scope_for_render,
-							);
+			r.on_navigate_dyn(Box::new(move |_path, _params| {
+				with_query_client(&query_client_for_render, || {
+					match Self::render_and_mount(&render_root, &document_head_manager_for_render) {
+						Ok(()) => {
+							if let Some((after_launch_hooks, path_subscriptions)) =
+								lifecycle_for_render.borrow_mut().take()
+							{
+								Self::activate_post_mount_lifecycle(
+									after_launch_hooks,
+									path_subscriptions,
+									&window_for_render,
+									&document_for_render,
+									&render_root,
+									&scope_for_render,
+									&query_client_for_render,
+								);
+							}
+						}
+						Err(error) => {
+							web_sys::console::error_1(&format!("re-render failed: {error}").into());
 						}
 					}
-					Err(error) => {
-						web_sys::console::error_1(&format!("re-render failed: {error}").into());
-					}
-				},
-			))
+				});
+			}))
 		});
 		std::mem::forget(render_subscription);
 
@@ -1307,6 +1323,7 @@ impl ClientLauncher {
 				&document,
 				&root_el,
 				&scope,
+				&query_client,
 			);
 		}
 

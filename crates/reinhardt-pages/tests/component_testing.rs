@@ -17,7 +17,9 @@ use reinhardt_pages::event::{ClickEvent, EventPayload, FocusEvent, typed_event_h
 use reinhardt_pages::prelude::spawn_task;
 use reinhardt_pages::reactive::hooks::use_action;
 #[cfg(feature = "msw")]
-use reinhardt_pages::reactive::{QueryOptions, QuerySnapshot, QueryStatus, queries, use_query};
+use reinhardt_pages::reactive::{
+	QueryFamily, QueryOptions, QuerySnapshot, QueryStatus, queries, use_query,
+};
 use reinhardt_pages::reactive::{ResourceState, Signal, use_resource};
 #[cfg(feature = "msw")]
 use reinhardt_pages::server_fn::{ServerFnError, server_fn};
@@ -383,6 +385,46 @@ async fn click_action_uses_own_screen_scheduler() {
 	assert!(first.query_by_text("Saved").is_some());
 	assert!(second.query_by_text("Saved").is_none());
 	assert!(second.query_by_text("Idle").is_some());
+}
+
+#[cfg(feature = "msw")]
+#[tokio::test]
+async fn late_event_reenters_the_originating_screen_query_client() {
+	const FAMILY: QueryFamily<(), usize, String> = QueryFamily::new("tests.screen-owner");
+	let render_owner = |fetches: Rc<Cell<usize>>| {
+		move || {
+			let query = use_query(
+				FAMILY.query((), {
+					let fetches = Rc::clone(&fetches);
+					move || {
+						let value = fetches.get() + 1;
+						fetches.set(value);
+						async move { Ok::<_, String>(value) }
+					}
+				}),
+				QueryOptions::default(),
+			);
+			Page::fragment([
+				PageElement::new("button")
+					.listener("click", move |_| queries().invalidate_family(FAMILY))
+					.child("Refresh owner")
+					.into_page(),
+				Page::reactive(move || query.data().unwrap_or_default().to_string().into_page()),
+			])
+		}
+	};
+	let first_fetches = Rc::new(Cell::new(0));
+	let second_fetches = Rc::new(Cell::new(0));
+	let first = render(render_owner(Rc::clone(&first_fetches)));
+	let second = render(render_owner(Rc::clone(&second_fetches)));
+	first.settle().await;
+	second.settle().await;
+
+	first.get_by_role(Role::Button, "Refresh owner").click();
+	first.settle().await;
+
+	assert_eq!(first_fetches.get(), 2);
+	assert_eq!(second_fetches.get(), 1);
 }
 
 #[tokio::test]

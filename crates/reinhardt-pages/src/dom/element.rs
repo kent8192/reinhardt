@@ -307,8 +307,13 @@ impl Element {
 	where
 		F: FnMut() + 'static,
 	{
+		let query_client = crate::reactive::query::current_query_client();
 		let closure = Closure::wrap(Box::new(move |_event: web_sys::Event| {
-			callback();
+			if let Some(client) = query_client.as_ref() {
+				crate::reactive::query::with_query_client(client, &mut callback);
+			} else {
+				callback();
+			}
 		}) as Box<dyn FnMut(web_sys::Event)>);
 
 		self.inner
@@ -342,8 +347,13 @@ impl Element {
 	where
 		F: FnMut(web_sys::Event) + 'static,
 	{
+		let query_client = crate::reactive::query::current_query_client();
 		let closure = Closure::wrap(Box::new(move |event: web_sys::Event| {
-			callback(event);
+			if let Some(client) = query_client.as_ref() {
+				crate::reactive::query::with_query_client(client, || callback(event));
+			} else {
+				callback(event);
+			}
 		}) as Box<dyn FnMut(web_sys::Event)>);
 
 		self.inner
@@ -365,9 +375,15 @@ impl Element {
 	where
 		F: FnMut(JsValue) + 'static,
 	{
+		let query_client = crate::reactive::query::current_query_client();
 		let closure = Closure::wrap(Box::new(move |event: web_sys::Event| {
 			if let Some(custom_event) = event.dyn_ref::<web_sys::CustomEvent>() {
-				callback(custom_event.detail());
+				let detail = custom_event.detail();
+				if let Some(client) = query_client.as_ref() {
+					crate::reactive::query::with_query_client(client, || callback(detail));
+				} else {
+					callback(detail);
+				}
 			}
 		}) as Box<dyn FnMut(web_sys::Event)>);
 

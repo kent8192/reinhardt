@@ -1,10 +1,10 @@
 //! Pages-owned navigation preparation and commit coordination.
 
 use crate::cancellation::{AbortableTaskGuard, CancellationSource};
-#[cfg(wasm)]
-use crate::reactive::QueryClient;
+use crate::reactive::QueryDefaults;
 use crate::reactive::Signal;
 use crate::reactive::hooks::router::NavigateError;
+use crate::reactive::query::{QueryClient, current_query_client, with_query_client};
 use crate::router::NavigationType;
 use crate::router::loader::{LoaderStore, RouteLoaderError, route_context};
 use crate::router::loader_registry::{LoaderConsumer, LoaderRegistry, execute_loader};
@@ -52,6 +52,7 @@ struct NavigationAttempt {
 /// matching and commit operations.
 pub(crate) struct NavigationCoordinator {
 	router: Rc<ClientRouter>,
+	query_client: QueryClient,
 	registry: LoaderRegistry,
 	next_generation: Cell<u64>,
 	next_prefetch_id: Cell<u64>,
@@ -70,10 +71,13 @@ pub(crate) struct NavigationCoordinator {
 #[allow(dead_code)]
 impl NavigationCoordinator {
 	pub(crate) fn new(router: Rc<ClientRouter>) -> Result<Rc<Self>, RouteLoaderError> {
+		let query_client =
+			current_query_client().unwrap_or_else(|| QueryClient::new(QueryDefaults::default()));
 		let registry = LoaderRegistry::global()
 			.map_err(|error| RouteLoaderError::with_status(error.to_string(), 500))?;
 		Ok(Rc::new(Self {
 			router,
+			query_client,
 			registry,
 			next_generation: Cell::new(0),
 			next_prefetch_id: Cell::new(0),
@@ -188,6 +192,15 @@ impl NavigationCoordinator {
 		path: String,
 		intent: NavigationIntent,
 	) -> Result<(), NavigateError> {
+		let query_client = self.query_client.clone();
+		with_query_client(&query_client, || self.navigate_in_context(path, intent))
+	}
+
+	fn navigate_in_context(
+		self: &Rc<Self>,
+		path: String,
+		intent: NavigationIntent,
+	) -> Result<(), NavigateError> {
 		let matched = self.router.match_tree(&path);
 
 		self.cancel_active_attempt();
@@ -261,6 +274,11 @@ impl NavigationCoordinator {
 	}
 
 	pub(crate) fn prefetch(self: &Rc<Self>, path: String) -> Result<(), NavigateError> {
+		let query_client = self.query_client.clone();
+		with_query_client(&query_client, || self.prefetch_in_context(path))
+	}
+
+	fn prefetch_in_context(self: &Rc<Self>, path: String) -> Result<(), NavigateError> {
 		let Some(matched) = self.router.match_tree(&path) else {
 			return Ok(());
 		};

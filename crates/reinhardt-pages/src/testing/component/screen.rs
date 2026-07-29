@@ -7,8 +7,7 @@ use reinhardt_core::reactive::ReactiveScope;
 use reinhardt_core::types::page::{IntoPage, Page, PageElement};
 
 use crate::reactive::query::{
-	QueryClient, QueryClientGuard, QueryDefaults, provide_query_client, with_query_client,
-	with_query_client_async,
+	QueryClient, QueryDefaults, with_query_client, with_query_client_async,
 };
 
 use super::error::QueryError;
@@ -26,12 +25,6 @@ use super::tree::{ScreenInner, TestDom, shared_screen_inner};
 #[derive(Clone)]
 pub struct Screen {
 	inner: Rc<RefCell<ScreenInner>>,
-	query_context: Rc<ScreenQueryContext>,
-}
-
-struct ScreenQueryContext {
-	client: QueryClient,
-	_guard: QueryClientGuard,
 }
 
 /// Input accepted by [`render`] and [`Screen::render`].
@@ -73,7 +66,6 @@ impl Screen {
 		let scheduler = Rc::new(SchedulerScope::new());
 		let reactive_scope = ReactiveScope::new();
 		let query_client = QueryClient::new(QueryDefaults::default());
-		let query_client_guard = provide_query_client(query_client.clone());
 		#[cfg(feature = "msw")]
 		{
 			let mocks = SharedServerFnMocks::default();
@@ -85,11 +77,7 @@ impl Screen {
 				})
 			});
 			Self {
-				inner: shared_screen_inner(dom, reactive_scope, scheduler, mocks),
-				query_context: Rc::new(ScreenQueryContext {
-					client: query_client,
-					_guard: query_client_guard,
-				}),
+				inner: shared_screen_inner(dom, reactive_scope, scheduler, query_client, mocks),
 			}
 		}
 		#[cfg(not(feature = "msw"))]
@@ -99,11 +87,7 @@ impl Screen {
 					.with_current(|| reactive_scope.enter(|| TestDom::render(view.render_page())))
 			});
 			Self {
-				inner: shared_screen_inner(dom, reactive_scope, scheduler),
-				query_context: Rc::new(ScreenQueryContext {
-					client: query_client,
-					_guard: query_client_guard,
-				}),
+				inner: shared_screen_inner(dom, reactive_scope, scheduler, query_client),
 			}
 		}
 	}
@@ -249,13 +233,13 @@ impl Screen {
 			(
 				Rc::clone(&inner.scheduler),
 				inner.mocks.clone(),
-				self.query_context.client.clone(),
+				inner.query_client.clone(),
 			)
 		};
 		#[cfg(not(feature = "msw"))]
 		let (scheduler, query_client) = (
 			Rc::clone(&self.inner.borrow().scheduler),
-			self.query_context.client.clone(),
+			self.inner.borrow().query_client.clone(),
 		);
 
 		for _ in 0..100 {

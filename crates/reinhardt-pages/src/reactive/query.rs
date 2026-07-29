@@ -25,10 +25,12 @@ pub use client::{
 	query_browser_resource_counts, query_browser_resource_probe_for_test,
 	set_query_visibility_for_test,
 };
+#[cfg(test)]
+pub(crate) use context::QueryClientGuard;
+#[cfg(any(wasm, test))]
 pub(crate) use context::provide_query_client;
 pub use context::queries;
-#[cfg(native)]
-pub(crate) use context::{QueryClientGuard, with_query_client, with_query_client_async};
+pub(crate) use context::{current_query_client, with_query_client, with_query_client_async};
 pub use hook::{QueryHandle, use_query};
 pub use identity::{QueryDescriptor, QueryFamily, QueryKey};
 pub use state::{QueryDefaults, QueryOptions, QuerySnapshot, QueryStatus};

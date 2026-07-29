@@ -1,9 +1,6 @@
 use std::cell::{Cell, RefCell};
-#[cfg(native)]
 use std::future::Future;
-#[cfg(native)]
 use std::pin::Pin;
-#[cfg(native)]
 use std::task::{Context, Poll};
 
 use super::client::QueryClient;
@@ -65,7 +62,6 @@ pub(crate) fn with_query_client<R>(client: &QueryClient, f: impl FnOnce() -> R) 
 	f()
 }
 
-#[cfg(native)]
 pub(crate) fn with_query_client_async<Fut>(
 	client: QueryClient,
 	future: Fut,
@@ -79,13 +75,11 @@ where
 	}
 }
 
-#[cfg(native)]
 struct QueryClientFuture<Fut> {
 	client: QueryClient,
 	future: Pin<Box<Fut>>,
 }
 
-#[cfg(native)]
 impl<Fut> Future for QueryClientFuture<Fut>
 where
 	Fut: Future,
@@ -98,6 +92,10 @@ where
 	}
 }
 
+pub(crate) fn current_query_client() -> Option<QueryClient> {
+	ACTIVE_QUERY_CLIENTS.with(|clients| clients.borrow().last().map(|entry| entry.client.clone()))
+}
+
 /// Returns the active application query client.
 ///
 /// # Panics
@@ -105,11 +103,5 @@ where
 /// Panics when called outside an application, SSR request, or component-test
 /// query client context.
 pub fn queries() -> QueryClient {
-	ACTIVE_QUERY_CLIENTS.with(|clients| {
-		clients
-			.borrow()
-			.last()
-			.map(|entry| entry.client.clone())
-			.expect("use_query requires an active QueryClient")
-	})
+	current_query_client().expect("use_query requires an active QueryClient")
 }

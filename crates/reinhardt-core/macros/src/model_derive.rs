@@ -9749,6 +9749,8 @@ mod tests {
 				id: i64,
 				#[rel(foreign_key)]
 				author: ForeignKeyField<Author>,
+				#[serde(default)]
+				author_id: <Author as InfoModel>::PrimaryKey,
 			}
 		};
 

@@ -88,7 +88,8 @@ fn storage_kind(value: DatabaseStorageKind) {
         | DatabaseStorageKind::Decimal | DatabaseStorageKind::String
         | DatabaseStorageKind::Bytes | DatabaseStorageKind::Json
         | DatabaseStorageKind::Uuid | DatabaseStorageKind::Date
-        | DatabaseStorageKind::Time | DatabaseStorageKind::DateTime => {}
+        | DatabaseStorageKind::Time | DatabaseStorageKind::DateTime
+        | DatabaseStorageKind::NaiveDateTime => {}
     }
 }
 
@@ -96,6 +97,7 @@ fn query_value(value: QueryValue) {
     match value {
         QueryValue::Null | QueryValue::Bool(_) | QueryValue::Int(_) | QueryValue::Float(_)
         | QueryValue::String(_) | QueryValue::Bytes(_) | QueryValue::Timestamp(_)
+        | QueryValue::NaiveTimestamp(_)
         | QueryValue::Uuid(_) | QueryValue::Json(_) | QueryValue::StringArray(_)
         | QueryValue::IntArray(_) | QueryValue::BigIntArray(_) | QueryValue::BoolArray(_)
         | QueryValue::FloatArray(_) | QueryValue::DoubleArray(_) | QueryValue::UuidArray(_)
@@ -137,6 +139,7 @@ fn query_builder_value(value: Value) {
         | Value::BigInt(_) | Value::TinyUnsigned(_) | Value::SmallUnsigned(_)
         | Value::Unsigned(_) | Value::BigUnsigned(_) | Value::Float(_)
         | Value::Double(_) | Value::Char(_) | Value::String(_) | Value::Bytes(_)
+        | Value::Vector(_)
         | Value::ChronoDate(_) | Value::ChronoTime(_) | Value::ChronoDateTime(_)
         | Value::ChronoDateTimeUtc(_) | Value::ChronoDateTimeLocal(_)
         | Value::ChronoDateTimeWithTimeZone(_) | Value::Uuid(_) | Value::Json(_)
@@ -152,6 +155,7 @@ fn pg_operator(value: PgBinOper) {
         | PgBinOper::JsonContainsAnyKey | PgBinOper::JsonContainsAllKeys
         | PgBinOper::JsonGetByIndex | PgBinOper::JsonGetAsText
         | PgBinOper::JsonGetPath | PgBinOper::JsonGetPathAsText => {}
+        _ => {}
     }
 }
 

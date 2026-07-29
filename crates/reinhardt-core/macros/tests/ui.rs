@@ -188,6 +188,7 @@ fn test_model_macro_parity_fail() {
 }
 
 #[test]
+#[cfg(feature = "pgvector")]
 fn test_field_attributes_vector_index() {
 	let t = trybuild::TestCases::new();
 	t.pass("tests/ui/field_attributes/vector_valid.rs");

@@ -1,12 +1,15 @@
 //! Behavioral tests for typed ORM upsert builders.
 
 use std::collections::{HashMap, VecDeque};
+use std::fmt;
+use std::sync::Arc;
 
 use async_trait::async_trait;
 use reinhardt_core::exception::{DatabaseError, DatabaseErrorKind, Error, Result};
 use reinhardt_db::orm::connection::{DatabaseBackend, OrmExecutor, QueryResult, QueryValue, Row};
 use reinhardt_db::orm::custom_manager::CustomManager;
 use reinhardt_db::orm::expressions::FieldRef;
+use reinhardt_db::orm::field_codec::{DatabaseValue, FieldCodecError, IntoFieldValue};
 use reinhardt_db::orm::inspection::FieldInfo;
 use reinhardt_db::orm::manager::Manager;
 use reinhardt_db::orm::model::{FieldSelector, Model};
@@ -79,6 +82,66 @@ impl Article {
 	}
 }
 
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+struct LookupArticle {
+	#[serde(rename(deserialize = "row_id"))]
+	id: Option<i64>,
+	#[serde(rename(deserialize = "tenant_key"))]
+	tenant_id: i64,
+	#[serde(rename(deserialize = "slug_key"))]
+	slug: String,
+	#[serde(rename(deserialize = "headline_text"))]
+	headline: String,
+}
+
+impl Model for LookupArticle {
+	type PrimaryKey = i64;
+	type Fields = ArticleFields;
+	type Objects = Manager<Self>;
+
+	fn table_name() -> &'static str {
+		"lookup_articles"
+	}
+
+	fn new_fields() -> Self::Fields {
+		ArticleFields
+	}
+
+	fn primary_key(&self) -> Option<Self::PrimaryKey> {
+		self.id
+	}
+
+	fn set_primary_key(&mut self, value: Self::PrimaryKey) {
+		self.id = Some(value);
+	}
+
+	fn field_metadata() -> Vec<FieldInfo> {
+		vec![
+			field("id", Some("row_id"), true, false),
+			field("tenant_id", Some("tenant_key"), false, true),
+			field("slug", Some("slug_key"), false, false),
+			field("headline", Some("headline_text"), false, false),
+		]
+	}
+}
+
+impl LookupArticle {
+	fn field_tenant_id() -> FieldRef<Self, i64> {
+		// SAFETY: the names and type match LookupArticle's declared tenant field.
+		unsafe { FieldRef::from_model_field("tenant_id", "tenant_key") }
+	}
+
+	fn field_slug() -> FieldRef<Self, String> {
+		// SAFETY: the names and type match LookupArticle's declared slug field.
+		unsafe { FieldRef::from_model_field("slug", "slug_key") }
+	}
+
+	fn field_headline() -> FieldRef<Self, String> {
+		// SAFETY: the names and type match LookupArticle's declared headline field.
+		unsafe { FieldRef::from_model_field("headline", "headline_text") }
+	}
+}
+
 fn field(name: &str, db_column: Option<&str>, primary_key: bool, unique: bool) -> FieldInfo {
 	FieldInfo {
 		name: name.to_owned(),
@@ -107,6 +170,20 @@ fn article_row(id: i64, slug: &str, rank: i32) -> Row {
 				QueryValue::String(slug.to_owned()),
 			),
 			("article_rank".to_owned(), QueryValue::Int(i64::from(rank))),
+		]),
+	}
+}
+
+fn lookup_article_row(id: i64, tenant_id: i64, slug: &str, headline: &str) -> Row {
+	Row {
+		data: HashMap::from([
+			("row_id".to_owned(), QueryValue::Int(id)),
+			("tenant_key".to_owned(), QueryValue::Int(tenant_id)),
+			("slug_key".to_owned(), QueryValue::String(slug.to_owned())),
+			(
+				"headline_text".to_owned(),
+				QueryValue::String(headline.to_owned()),
+			),
 		]),
 	}
 }
@@ -243,6 +320,27 @@ impl CustomManager for PlainManager {
 	}
 }
 
+#[derive(Debug)]
+struct RaceMarker {
+	identity: Arc<()>,
+}
+
+impl fmt::Display for RaceMarker {
+	fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+		formatter.write_str("race-marker")
+	}
+}
+
+impl std::error::Error for RaceMarker {}
+
+struct FailingValue(&'static str);
+
+impl IntoFieldValue<i64> for FailingValue {
+	fn into_field_value(self) -> std::result::Result<DatabaseValue, FieldCodecError> {
+		Err(FieldCodecError::Serialization(self.0.to_owned()))
+	}
+}
+
 #[tokio::test]
 async fn get_or_create_validation_error_precedes_executor_use() {
 	let mut executor = RecordingExecutor::new(DatabaseBackend::Postgres);
@@ -316,6 +414,89 @@ async fn get_or_create_absent_row_inserts_and_reloads() {
 	assert_eq!(article.id, Some(2));
 	assert!(created);
 	assert_eq!(executor.operations(), ["fetch_all", "execute", "fetch_all"]);
+}
+
+fn exact_multi_lookup_calls() -> Vec<RecordedCall> {
+	let select_sql = "SELECT \"row_id\", \"tenant_key\", \"slug_key\", \"headline_text\" \
+		FROM \"lookup_articles\" WHERE \"tenant_key\" = $1 AND \"slug_key\" = $2 LIMIT 2";
+	vec![
+		RecordedCall {
+			operation: "fetch_all",
+			sql: select_sql.to_owned(),
+			params: vec![QueryValue::Int(7), QueryValue::String("rust".to_owned())],
+		},
+		RecordedCall {
+			operation: "execute",
+			sql: "INSERT INTO \"lookup_articles\" (\"tenant_key\", \"slug_key\", \
+				\"headline_text\") VALUES ($1, $2, $3) \
+				ON CONFLICT (\"tenant_key\") DO NOTHING"
+				.to_owned(),
+			params: vec![
+				QueryValue::Int(7),
+				QueryValue::String("rust".to_owned()),
+				QueryValue::String("typed builders".to_owned()),
+			],
+		},
+		RecordedCall {
+			operation: "fetch_all",
+			sql: select_sql.to_owned(),
+			params: vec![QueryValue::Int(7), QueryValue::String("rust".to_owned())],
+		},
+	]
+}
+
+#[tokio::test]
+async fn get_or_create_create_path_uses_complete_lookup_and_excludes_defaults_from_reload() {
+	let mut executor = RecordingExecutor::new(DatabaseBackend::Postgres)
+		.with_fetch_all(Ok(Vec::new()))
+		.with_execute(Ok(QueryResult {
+			rows_affected: 1,
+			last_insert_id: None,
+		}))
+		.with_fetch_all(Ok(vec![lookup_article_row(
+			11,
+			7,
+			"rust",
+			"typed builders",
+		)]));
+
+	let (_, created) = Manager::<LookupArticle>::new()
+		.get_or_create()
+		.lookup(LookupArticle::field_tenant_id(), 7)
+		.lookup(LookupArticle::field_slug(), "rust")
+		.default(LookupArticle::field_headline(), "typed builders")
+		.execute_with(&mut executor)
+		.await
+		.expect("multi-field create and complete-lookup reload must succeed");
+
+	assert!(created);
+	assert_eq!(executor.operations(), ["fetch_all", "execute", "fetch_all"]);
+	assert_eq!(executor.calls, exact_multi_lookup_calls());
+}
+
+#[tokio::test]
+async fn get_or_create_conflict_path_reloads_with_the_complete_lookup_only() {
+	let mut executor = RecordingExecutor::new(DatabaseBackend::Postgres)
+		.with_fetch_all(Ok(Vec::new()))
+		.with_execute(Ok(QueryResult {
+			rows_affected: 0,
+			last_insert_id: None,
+		}))
+		.with_fetch_all(Ok(vec![lookup_article_row(12, 7, "rust", "race winner")]));
+
+	let (article, created) = Manager::<LookupArticle>::new()
+		.get_or_create()
+		.lookup(LookupArticle::field_tenant_id(), 7)
+		.lookup(LookupArticle::field_slug(), "rust")
+		.default(LookupArticle::field_headline(), "typed builders")
+		.execute_with(&mut executor)
+		.await
+		.expect("conflict recovery must reload by the complete lookup");
+
+	assert!(!created);
+	assert_eq!(article.headline, "race winner");
+	assert_eq!(executor.operations(), ["fetch_all", "execute", "fetch_all"]);
+	assert_eq!(executor.calls, exact_multi_lookup_calls());
 }
 
 #[rstest]
@@ -395,13 +576,16 @@ async fn mysql_unique_violation_with_matching_row_is_a_lost_race() {
 
 #[tokio::test]
 async fn mysql_unrelated_unique_violation_returns_the_original_error() {
+	let marker = Arc::new(());
 	let mut executor = RecordingExecutor::new(DatabaseBackend::MySql)
 		.with_fetch_all(Ok(Vec::new()))
-		.with_execute(Err(DatabaseError::new(
+		.with_execute(Err(Error::database_with_source(
 			DatabaseErrorKind::UniqueViolation,
 			"unrelated unique constraint",
-		)
-		.into()))
+			RaceMarker {
+				identity: Arc::clone(&marker),
+			},
+		)))
 		.with_fetch_all(Ok(Vec::new()));
 
 	let error = Manager::<Article>::new()
@@ -416,6 +600,10 @@ async fn mysql_unrelated_unique_violation_returns_the_original_error() {
 		Some(DatabaseErrorKind::UniqueViolation)
 	);
 	assert!(error.to_string().contains("unrelated unique constraint"));
+	let returned_marker = std::error::Error::source(&error)
+		.and_then(|source| source.downcast_ref::<RaceMarker>())
+		.expect("the original typed source must be returned");
+	assert!(Arc::ptr_eq(&returned_marker.identity, &marker));
 	assert_eq!(executor.operations(), ["fetch_all", "execute", "fetch_all"]);
 }
 
@@ -520,8 +708,14 @@ async fn get_or_create_preserves_the_first_builder_encoding_error() {
 
 	let error = Manager::<Article>::new()
 		.get_or_create()
-		.lookup(Article::field_id(), u64::MAX)
-		.lookup(Article::field_slug(), "rust")
+		.lookup(
+			Article::field_id(),
+			FailingValue("first encoding diagnostic"),
+		)
+		.default(
+			Article::field_id(),
+			FailingValue("second encoding diagnostic"),
+		)
 		.execute_with(&mut executor)
 		.await
 		.expect_err("the first builder encoding failure must be retained");
@@ -530,6 +724,7 @@ async fn get_or_create_preserves_the_first_builder_encoding_error() {
 		error.database_kind(),
 		Some(DatabaseErrorKind::Serialization)
 	);
-	assert!(error.to_string().contains("exceeds i64 database range"));
+	assert!(error.to_string().contains("first encoding diagnostic"));
+	assert!(!error.to_string().contains("second encoding diagnostic"));
 	assert_eq!(executor.operations(), Vec::<&str>::new());
 }

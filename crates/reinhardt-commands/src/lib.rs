@@ -180,6 +180,8 @@ pub(crate) mod createsuperuser;
 /// Data fixture and development seeding commands.
 #[cfg(feature = "reinhardt-db")]
 pub mod data_commands;
+#[cfg(feature = "reinhardt-db")]
+pub(crate) mod database_selector;
 /// Debounced file-system watcher for hot-reload (replaces inline watcher).
 #[cfg(feature = "autoreload")]
 #[doc(hidden)]

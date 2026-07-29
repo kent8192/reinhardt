@@ -181,6 +181,30 @@ fn command_context_debug_redacts_database_url_credentials() {
 	assert!(!debug.contains("query-secret"));
 }
 
+#[test]
+fn command_context_debug_redacts_credential_bearing_positional_arguments() {
+	let credential =
+		"postgres://positional-user:positional-password@db.example/app?token=query-secret";
+	let context = CommandContext::new(vec![
+		"users".to_string(),
+		"--database-url".to_string(),
+		credential.to_string(),
+		"--token=inline-secret".to_string(),
+	]);
+
+	let debug = format!("{context:?}");
+
+	assert!(debug.contains("users"));
+	assert!(debug.contains("--database-url"));
+	assert!(debug.contains("[REDACTED]"));
+	assert!(!debug.contains(credential));
+	assert!(!debug.contains("positional-user"));
+	assert!(!debug.contains("positional-password"));
+	assert!(!debug.contains("db.example"));
+	assert!(!debug.contains("query-secret"));
+	assert!(!debug.contains("inline-secret"));
+}
+
 #[tokio::test]
 async fn malformed_config_error_preserves_path_and_redacts_source_credentials() {
 	let temp = tempfile::Builder::new()

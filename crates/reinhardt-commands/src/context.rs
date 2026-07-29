@@ -28,6 +28,17 @@ pub struct CommandContext {
 
 impl std::fmt::Debug for CommandContext {
 	fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+		let args: Vec<_> = self
+			.args
+			.iter()
+			.map(|argument| {
+				if argument_is_sensitive(argument) {
+					"[REDACTED]"
+				} else {
+					argument.as_str()
+				}
+			})
+			.collect();
 		let options: BTreeMap<_, _> = self
 			.options
 			.iter()
@@ -42,7 +53,7 @@ impl std::fmt::Debug for CommandContext {
 			.collect();
 		// `dyn HasCommonSettings` is not Debug, so render its presence only.
 		f.debug_struct("CommandContext")
-			.field("args", &self.args)
+			.field("args", &args)
 			.field("options", &options)
 			.field("verbosity", &self.verbosity)
 			.field("suppress_output", &self.output_is_suppressed())
@@ -52,19 +63,33 @@ impl std::fmt::Debug for CommandContext {
 }
 
 fn option_values_are_sensitive(key: &str, values: &[String]) -> bool {
+	option_name_is_sensitive(key) || values.iter().any(|value| value_is_sensitive(value))
+}
+
+fn option_name_is_sensitive(key: &str) -> bool {
 	let normalized_key = key.to_ascii_lowercase().replace('_', "-");
-	let sensitive_key = normalized_key == "url"
+	normalized_key == "url"
 		|| normalized_key.ends_with("-url")
 		|| normalized_key.contains("password")
 		|| normalized_key.contains("passwd")
 		|| normalized_key.contains("secret")
 		|| normalized_key.contains("token")
 		|| normalized_key.contains("api-key")
-		|| normalized_key.contains("credential");
-	sensitive_key
-		|| values
-			.iter()
-			.any(|value| value.contains("://") || value.contains('@'))
+		|| normalized_key.contains("credential")
+}
+
+fn value_is_sensitive(value: &str) -> bool {
+	value.contains("://") || value.contains('@')
+}
+
+fn argument_is_sensitive(argument: &str) -> bool {
+	if value_is_sensitive(argument) {
+		return true;
+	}
+	argument
+		.strip_prefix("--")
+		.and_then(|flag| flag.split_once('='))
+		.is_some_and(|(name, _)| option_name_is_sensitive(name))
 }
 
 impl CommandContext {

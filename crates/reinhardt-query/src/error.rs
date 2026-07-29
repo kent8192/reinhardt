@@ -174,6 +174,54 @@ pub(crate) fn validate_select_for_backend(
 	Ok(())
 }
 
+pub(crate) fn validate_select_lock_for_backend(
+	statement: &SelectStatement,
+	backend: &'static str,
+) -> Result<(), QueryBuildError> {
+	for cte in &statement.ctes {
+		validate_select_lock_for_backend(&cte.query, backend)?;
+	}
+	for table in &statement.from {
+		if let TableRef::SubQuery(query, _) = table {
+			validate_select_lock_for_backend(query, backend)?;
+		}
+	}
+	for join in &statement.join {
+		if let TableRef::SubQuery(query, _) = &join.table {
+			validate_select_lock_for_backend(query, backend)?;
+		}
+	}
+	for (_, union) in &statement.unions {
+		validate_select_lock_for_backend(union, backend)?;
+	}
+
+	let Some(lock) = &statement.lock else {
+		return Ok(());
+	};
+
+	match backend {
+		"PostgreSQL" => Ok(()),
+		"MySQL" => {
+			if matches!(
+				lock.r#type,
+				crate::query::LockType::NoKeyUpdate | crate::query::LockType::KeyShare
+			) {
+				return Err(unsupported("the requested row lock strength", backend));
+			}
+			Ok(())
+		}
+		"SQLite" => Err(unsupported("row locking", backend)),
+		"CockroachDB" => {
+			if lock.tables.is_empty() {
+				Ok(())
+			} else {
+				Err(unsupported("row lock table targets", backend))
+			}
+		}
+		_ => Ok(()),
+	}
+}
+
 pub(crate) fn validate_create_table_for_backend(
 	statement: &CreateTableStatement,
 	backend: &'static str,
@@ -331,7 +379,6 @@ fn validate_postgres_column_type_dimensions(
 	}
 }
 
-#[cfg(feature = "pgvector")]
 fn unsupported(feature: &'static str, backend: &'static str) -> QueryBuildError {
 	QueryBuildError::UnsupportedBackendFeature { feature, backend }
 }

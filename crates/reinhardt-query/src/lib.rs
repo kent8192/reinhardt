@@ -15,6 +15,7 @@
 //! - **DCL (Data Control Language) support** - Build GRANT and REVOKE statements
 //! - **Expression system** - Rich expression API with arithmetic, comparison, and logical operators
 //! - **Advanced SQL features** - JOINs, GROUP BY, HAVING, DISTINCT, UNION, CTEs, Window functions
+//! - **Typed row locking** - Lock strengths, mutually exclusive wait behavior, and table targets
 //!
 //! ### DDL (Data Definition Language)
 //! - **Typed generated columns** - DDL-safe [`types::SchemaExpr`] builders for generated column bodies
@@ -377,9 +378,9 @@ pub mod prelude {
 	};
 	// DML query builders
 	pub use crate::query::{
-		DeleteStatement, ForeignKey, ForeignKeyCreateStatement, InsertStatement, OnConflict, Query,
-		QueryBuilderTrait, QueryStatementBuilder, QueryStatementWriter, SelectStatement,
-		UpdateStatement,
+		DeleteStatement, ForeignKey, ForeignKeyCreateStatement, InsertStatement, LockBehavior,
+		LockType, OnConflict, Query, QueryBuilderTrait, QueryStatementBuilder,
+		QueryStatementWriter, SelectStatement, UpdateStatement,
 	};
 	// DDL query builders
 	pub use crate::query::{

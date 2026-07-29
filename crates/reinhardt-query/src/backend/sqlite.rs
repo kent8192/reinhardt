@@ -60,6 +60,7 @@ impl SqliteQueryBuilder {
 		&self,
 		stmt: &SelectStatement,
 	) -> Result<(String, Values), crate::QueryBuildError> {
+		crate::error::validate_select_lock_for_backend(stmt, "SQLite")?;
 		crate::error::validate_select_for_backend(stmt, "SQLite")?;
 		Ok(self.build_select(stmt))
 	}

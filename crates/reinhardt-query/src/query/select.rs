@@ -108,9 +108,7 @@ pub enum LockBehavior {
 	SkipLocked,
 }
 
-/// Lock clause for SELECT ... FOR UPDATE/SHARE
-// NOTE: Fields are currently unused because FOR UPDATE/SHARE is not yet implemented
-#[allow(dead_code)]
+/// Lock clause for `SELECT ... FOR UPDATE/SHARE`.
 #[derive(Debug, Clone)]
 pub struct LockClause {
 	pub(crate) r#type: LockType,
@@ -755,7 +753,10 @@ impl SelectStatement {
 
 	// LOCK methods
 
-	/// Set FOR UPDATE lock
+	/// Set the row lock strength.
+	///
+	/// Calling this method replaces the complete existing lock clause, including
+	/// its behavior and table targets.
 	pub fn lock(&mut self, lock_type: LockType) -> &mut Self {
 		self.lock = Some(LockClause {
 			r#type: lock_type,
@@ -765,12 +766,50 @@ impl SelectStatement {
 		self
 	}
 
-	/// Set FOR UPDATE lock
+	/// Set the row lock wait behavior.
+	///
+	/// `NOWAIT` and `SKIP LOCKED` are mutually exclusive because a lock clause
+	/// stores only one behavior. If no lock strength has been configured, this
+	/// method creates a `FOR UPDATE` lock.
+	pub fn lock_behavior(&mut self, behavior: LockBehavior) -> &mut Self {
+		self.lock
+			.get_or_insert_with(|| LockClause {
+				r#type: LockType::Update,
+				tables: Vec::new(),
+				behavior: None,
+			})
+			.behavior = Some(behavior);
+		self
+	}
+
+	/// Restrict the row lock to typed table references.
+	///
+	/// If no lock strength has been configured, this method creates a
+	/// `FOR UPDATE` lock.
+	pub fn lock_tables<I, T>(&mut self, tables: I) -> &mut Self
+	where
+		I: IntoIterator<Item = T>,
+		T: IntoTableRef,
+	{
+		self.lock
+			.get_or_insert_with(|| LockClause {
+				r#type: LockType::Update,
+				tables: Vec::new(),
+				behavior: None,
+			})
+			.tables = tables
+			.into_iter()
+			.map(IntoTableRef::into_table_ref)
+			.collect();
+		self
+	}
+
+	/// Set a `FOR UPDATE` lock.
 	pub fn lock_exclusive(&mut self) -> &mut Self {
 		self.lock(LockType::Update)
 	}
 
-	/// Set FOR SHARE lock
+	/// Set a `FOR SHARE` lock.
 	pub fn lock_shared(&mut self) -> &mut Self {
 		self.lock(LockType::Share)
 	}

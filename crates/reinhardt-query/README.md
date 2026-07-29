@@ -13,6 +13,7 @@ A type-safe SQL query builder for the Reinhardt framework.
 - **DCL (Data Control Language) support** - GRANT and REVOKE statements
 - **Expression system** - Arithmetic, comparison, logical, and pattern matching operators
 - **Advanced SQL** - JOINs, GROUP BY, HAVING, DISTINCT, UNION, CTEs, Window functions
+- **Typed row locking** - Lock strengths, wait behavior, and table targets without raw SQL
 - **Parameterized queries** - `$1` for PostgreSQL/CockroachDB, `?` for MySQL/SQLite
 - **CASE WHEN expressions** - Conditional expressions in queries
 - **Subqueries** - EXISTS, IN, ALL, ANY, SOME operators
@@ -111,6 +112,40 @@ stmt.from_table("users")
 let builder = PostgresQueryBuilder::new();
 let (sql, values) = builder.build_delete(&stmt);
 ```
+
+### Row locking
+
+Use the owned query AST to configure locking reads. A single
+[`LockBehavior`](https://docs.rs/reinhardt-query/latest/reinhardt_query/query/enum.LockBehavior.html)
+keeps `NOWAIT` and `SKIP LOCKED` mutually exclusive, and `lock_tables` accepts
+typed `TableRef` values rather than unchecked SQL.
+
+```rust
+use reinhardt_query::prelude::*;
+
+let mut stmt = Query::select();
+stmt.column(("u", "id"))
+    .from(TableRef::table_alias("users", "u"))
+    .lock(LockType::NoKeyUpdate)
+    .lock_tables([TableRef::table_alias("users", "u")])
+    .lock_behavior(LockBehavior::Nowait);
+
+let (sql, values) = PostgresQueryBuilder::new().build_select_checked(&stmt)?;
+assert_eq!(
+    sql,
+    r#"SELECT "u"."id" FROM "users" AS "u" FOR NO KEY UPDATE OF "u" NOWAIT"#
+);
+# Ok::<(), QueryBuildError>(())
+```
+
+PostgreSQL supports all four lock strengths, table targets, and both wait
+behaviors. MySQL supports `FOR UPDATE`, `FOR SHARE`, table targets, and both
+wait behaviors; its checked builder rejects the PostgreSQL-specific strengths.
+CockroachDB supports all strengths (with `NO KEY UPDATE` and `KEY SHARE` as
+aliases) and both wait behaviors, but its checked builder rejects table targets.
+SQLite does not support locking reads, so its checked builder returns
+`QueryBuildError::UnsupportedBackendFeature` instead of silently omitting the
+lock.
 
 ### CREATE TABLE
 

@@ -3,8 +3,12 @@
 #![cfg(all(feature = "postgres", feature = "mysql", feature = "sqlite"))]
 
 use std::collections::HashMap;
+use std::future::Future;
+use std::pin::Pin;
 use std::str::FromStr;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Condvar, Mutex};
+use std::task::{Context, Poll};
 use std::time::{Duration, Instant};
 
 use reinhardt_core::exception::{DatabaseError, DatabaseErrorKind, Error, Result};
@@ -227,8 +231,11 @@ async fn connect_sqlite(
 		.expect("SQLite URL should parse")
 		.create_if_missing(true)
 		.busy_timeout(busy_timeout);
+	// Pre-open every pool slot so a probed contender cannot be pending on
+	// connection creation or checkout while the holder owns only one slot.
 	let pool = sqlx::sqlite::SqlitePoolOptions::new()
 		.max_connections(4)
+		.min_connections(4)
 		.connect_with(options)
 		.await
 		.expect("SQLite pool should connect");
@@ -619,45 +626,198 @@ impl Drop for HookAbortGuard {
 	}
 }
 
-fn join_race_threads<T>(
-	first: std::thread::JoinHandle<Result<T>>,
-	second: std::thread::JoinHandle<Result<T>>,
-) -> Result<[T; 2]> {
-	let first_result = first.join();
-	let second_result = second.join();
-	let first_result = match first_result {
-		Ok(result) => result,
-		Err(payload) => {
-			if let Err(second_error) = second_result {
-				drop(second_error);
-			}
-			std::panic::resume_unwind(payload);
-		}
-	};
-	let second_result = match second_result {
-		Ok(result) => result,
-		Err(payload) => std::panic::resume_unwind(payload),
-	};
-	let first_value = first_result?;
-	let second_value = second_result?;
-	Ok([first_value, second_value])
+fn spawn_race_thread<T, F>(name: &str, operation: F) -> Result<std::thread::JoinHandle<Result<T>>>
+where
+	T: Send + 'static,
+	F: FnOnce() -> Result<T> + Send + 'static,
+{
+	std::thread::Builder::new()
+		.name(name.to_owned())
+		.spawn(operation)
+		.map_err(|error| Error::Internal(format!("failed to spawn {name}: {error}")))
 }
 
-fn finish_hook_race<T>(
+fn collect_joined<T>(handles: Vec<std::thread::JoinHandle<Result<T>>>) -> Result<Vec<T>> {
+	let mut results = Vec::with_capacity(handles.len());
+	let mut panic_payload = None;
+	for handle in handles {
+		match handle.join() {
+			Ok(result) => results.push(result),
+			Err(payload) if panic_payload.is_none() => panic_payload = Some(payload),
+			Err(_) => {}
+		}
+	}
+	if let Some(payload) = panic_payload {
+		std::panic::resume_unwind(payload);
+	}
+	results.into_iter().collect()
+}
+
+struct RaceThreads<T> {
+	coordination: HookAbortGuard,
+	handles: Vec<std::thread::JoinHandle<Result<T>>>,
+}
+
+impl<T: Send + 'static> RaceThreads<T> {
+	fn new(coordinator: HookCoordinator, first: std::thread::JoinHandle<Result<T>>) -> Self {
+		Self {
+			coordination: HookAbortGuard::new(coordinator),
+			handles: vec![first],
+		}
+	}
+
+	fn spawn<F>(&mut self, name: &str, operation: F) -> Result<()>
+	where
+		F: FnOnce() -> Result<T> + Send + 'static,
+	{
+		let spawned = std::thread::Builder::new()
+			.name(name.to_owned())
+			.spawn(operation);
+		self.attach_spawn(name, spawned)
+	}
+
+	fn attach_spawn(
+		&mut self,
+		name: &str,
+		spawned: std::io::Result<std::thread::JoinHandle<Result<T>>>,
+	) -> Result<()> {
+		let handle =
+			spawned.map_err(|error| Error::Internal(format!("failed to spawn {name}: {error}")))?;
+		self.handles.push(handle);
+		Ok(())
+	}
+
+	fn release(&mut self) {
+		self.coordination.release();
+	}
+
+	fn abort(&mut self) {
+		self.coordination.abort();
+	}
+
+	fn collect_pair(mut self) -> Result<[T; 2]> {
+		let values = self.collect_all()?;
+		values.try_into().map_err(|values: Vec<T>| {
+			Error::Internal(format!(
+				"upsert race joined {} participants instead of two",
+				values.len()
+			))
+		})
+	}
+
+	fn collect_all(&mut self) -> Result<Vec<T>> {
+		let handles = std::mem::take(&mut self.handles);
+		collect_joined(handles)
+	}
+}
+
+impl<T> Drop for RaceThreads<T> {
+	fn drop(&mut self) {
+		self.coordination.abort();
+		for handle in self.handles.drain(..) {
+			let _ = handle.join();
+		}
+	}
+}
+
+fn finish_hook_race<T: Send + 'static>(
 	coordinator: &HookCoordinator,
-	first: std::thread::JoinHandle<Result<T>>,
-	second: std::thread::JoinHandle<Result<T>>,
+	mut participants: RaceThreads<T>,
 ) -> Result<[T; 2]> {
-	let mut abort_guard = HookAbortGuard::new(coordinator.clone());
 	let readiness = coordinator.wait_until_ready();
 	if readiness.is_ok() {
-		abort_guard.release();
+		participants.release();
 	} else {
-		abort_guard.abort();
+		participants.abort();
 	}
-	let joined = join_race_threads(first, second);
+	let joined = participants.collect_pair();
 	readiness?;
 	joined
+}
+
+struct PendingProbe<F> {
+	future: Pin<Box<F>>,
+	pending: Option<std::sync::mpsc::Sender<()>>,
+}
+
+impl<F> PendingProbe<F> {
+	fn new(future: F, pending: std::sync::mpsc::Sender<()>) -> Self {
+		Self {
+			future: Box::pin(future),
+			pending: Some(pending),
+		}
+	}
+}
+
+impl<F: Future> Future for PendingProbe<F> {
+	type Output = F::Output;
+
+	fn poll(self: Pin<&mut Self>, context: &mut Context<'_>) -> Poll<Self::Output> {
+		let this = self.get_mut();
+		match this.future.as_mut().poll(context) {
+			Poll::Pending => {
+				if let Some(pending) = this.pending.take() {
+					let _ = pending.send(());
+				}
+				Poll::Pending
+			}
+			Poll::Ready(output) => Poll::Ready(output),
+		}
+	}
+}
+
+#[test]
+fn race_thread_owner_aborts_and_joins_after_second_spawn_failure() {
+	let coordinator = HookCoordinator::new(1);
+	let thread_coordinator = coordinator.clone();
+	let exited = Arc::new(AtomicBool::new(false));
+	let thread_exited = exited.clone();
+	let first = spawn_race_thread("owner-spawn-failure-first", move || {
+		let result = thread_coordinator.arrive_and_wait();
+		thread_exited.store(true, Ordering::Release);
+		result
+	})
+	.expect("the first characterization thread should spawn");
+	let mut participants = RaceThreads::new(coordinator.clone(), first);
+	coordinator
+		.wait_until_ready()
+		.expect("the first characterization hook should arrive");
+
+	let spawn_error = participants
+		.attach_spawn(
+			"forced-second-spawn-failure",
+			Err(std::io::Error::other("forced spawn failure")),
+		)
+		.expect_err("the synthetic second spawn must fail");
+	assert!(matches!(spawn_error, Error::Internal(_)));
+	drop(participants);
+
+	assert!(exited.load(Ordering::Acquire));
+}
+
+#[test]
+fn race_thread_owner_aborts_and_joins_during_unwind() {
+	let coordinator = HookCoordinator::new(1);
+	let thread_coordinator = coordinator.clone();
+	let exited = Arc::new(AtomicBool::new(false));
+	let thread_exited = exited.clone();
+	let first = spawn_race_thread("owner-unwind-first", move || {
+		let result = thread_coordinator.arrive_and_wait();
+		thread_exited.store(true, Ordering::Release);
+		result
+	})
+	.expect("the characterization thread should spawn");
+
+	let unwind = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+		let _participants = RaceThreads::new(coordinator.clone(), first);
+		coordinator
+			.wait_until_ready()
+			.expect("the characterization hook should arrive");
+		panic!("force race owner unwind");
+	}));
+
+	assert!(unwind.is_err());
+	assert!(exited.load(Ordering::Acquire));
 }
 
 async fn tag_by_slug(connection: &mut DatabaseConnection, slug: &str) -> Result<Option<Tag>> {
@@ -870,7 +1030,7 @@ async fn verify_get_races(connection: &mut DatabaseConnection) -> Result<()> {
 	let mut second_connection = connection.clone();
 	let runtime = tokio::runtime::Handle::current();
 	let first_runtime = runtime.clone();
-	let first = std::thread::spawn(move || {
+	let first = spawn_race_thread("single-get-race-first", move || {
 		first_runtime.block_on(async move {
 			first_manager
 				.get_or_create()
@@ -881,8 +1041,9 @@ async fn verify_get_races(connection: &mut DatabaseConnection) -> Result<()> {
 				.execute_with(&mut first_connection)
 				.await
 		})
-	});
-	let second = std::thread::spawn(move || {
+	})?;
+	let mut participants = RaceThreads::new(coordinator.clone(), first);
+	participants.spawn("single-get-race-second", move || {
 		runtime.block_on(async move {
 			second_manager
 				.get_or_create()
@@ -893,8 +1054,8 @@ async fn verify_get_races(connection: &mut DatabaseConnection) -> Result<()> {
 				.execute_with(&mut second_connection)
 				.await
 		})
-	});
-	let results = finish_hook_race(&coordinator, first, second)?;
+	})?;
+	let results = finish_hook_race(&coordinator, participants)?;
 	assert_eq!(results.iter().filter(|(_, created)| *created).count(), 1);
 	assert_eq!(results.iter().filter(|(_, created)| !*created).count(), 1);
 	assert_eq!(tag_count(connection, "single-race").await?, 1);
@@ -910,7 +1071,7 @@ async fn verify_get_races(connection: &mut DatabaseConnection) -> Result<()> {
 	let mut second_connection = connection.clone();
 	let runtime = tokio::runtime::Handle::current();
 	let first_runtime = runtime.clone();
-	let first = std::thread::spawn(move || {
+	let first = spawn_race_thread("composite-get-race-first", move || {
 		first_runtime.block_on(async move {
 			first_manager
 				.get_or_create()
@@ -920,8 +1081,9 @@ async fn verify_get_races(connection: &mut DatabaseConnection) -> Result<()> {
 				.execute_with(&mut first_connection)
 				.await
 		})
-	});
-	let second = std::thread::spawn(move || {
+	})?;
+	let mut participants = RaceThreads::new(coordinator.clone(), first);
+	participants.spawn("composite-get-race-second", move || {
 		runtime.block_on(async move {
 			second_manager
 				.get_or_create()
@@ -931,8 +1093,8 @@ async fn verify_get_races(connection: &mut DatabaseConnection) -> Result<()> {
 				.execute_with(&mut second_connection)
 				.await
 		})
-	});
-	let results = finish_hook_race(&coordinator, first, second)?;
+	})?;
+	let results = finish_hook_race(&coordinator, participants)?;
 	assert_eq!(results.iter().filter(|(_, created)| *created).count(), 1);
 	assert_eq!(results.iter().filter(|(_, created)| !*created).count(), 1);
 	assert_eq!(tenant_tag_count(connection, 11, "composite-race").await?, 1);
@@ -975,7 +1137,7 @@ async fn verify_update_race(connection: &mut DatabaseConnection) -> Result<()> {
 	let runtime = tokio::runtime::Handle::current();
 	let first_runtime = runtime.clone();
 	let first_connection = connection.clone();
-	let first = std::thread::spawn(move || {
+	let first = spawn_race_thread("update-race-first", move || {
 		first_runtime.block_on(update_invocation(
 			first_connection,
 			first_manager,
@@ -984,9 +1146,10 @@ async fn verify_update_race(connection: &mut DatabaseConnection) -> Result<()> {
 			101,
 			"first-create-default",
 		))
-	});
+	})?;
+	let mut participants = RaceThreads::new(coordinator.clone(), first);
 	let second_connection = connection.clone();
-	let second = std::thread::spawn(move || {
+	participants.spawn("update-race-second", move || {
 		runtime.block_on(update_invocation(
 			second_connection,
 			second_manager,
@@ -995,8 +1158,8 @@ async fn verify_update_race(connection: &mut DatabaseConnection) -> Result<()> {
 			202,
 			"second-create-default",
 		))
-	});
-	let results = finish_hook_race(&coordinator, first, second)?;
+	})?;
+	let results = finish_hook_race(&coordinator, participants)?;
 	assert_eq!(results.iter().filter(|(_, created)| *created).count(), 1);
 	assert_eq!(results.iter().filter(|(_, created)| !*created).count(), 1);
 	assert_eq!(tag_count(connection, "update-race").await?, 1);
@@ -1029,7 +1192,7 @@ async fn verify_sqlite_update_serialization(connection: &mut DatabaseConnection)
 	let runtime = tokio::runtime::Handle::current();
 	let first_runtime = runtime.clone();
 	let first_connection = connection.clone();
-	let first = std::thread::spawn(move || {
+	let first = spawn_race_thread("sqlite-update-holder", move || {
 		first_runtime.block_on(update_invocation(
 			first_connection,
 			first_manager,
@@ -1038,25 +1201,20 @@ async fn verify_sqlite_update_serialization(connection: &mut DatabaseConnection)
 			301,
 			"first",
 		))
-	});
-	let mut abort_guard = HookAbortGuard::new(coordinator.clone());
+	})?;
+	let mut participants = RaceThreads::new(coordinator.clone(), first);
 	let readiness = coordinator.wait_until_ready();
 	if readiness.is_err() {
-		drop(abort_guard);
-		let first_result = first.join();
-		if let Err(payload) = first_result {
-			std::panic::resume_unwind(payload);
-		}
+		participants.abort();
+		let joined = participants.collect_all();
+		joined?;
 		return readiness;
 	}
 
-	let (started_tx, started_rx) = std::sync::mpsc::sync_channel(1);
+	let (pending_tx, pending_rx) = std::sync::mpsc::channel();
 	let second_connection = connection.clone();
-	let second = std::thread::spawn(move || {
-		runtime.block_on(async move {
-			started_tx.send(()).map_err(|error| {
-				Error::Internal(format!("SQLite contender start signal failed: {error}"))
-			})?;
+	participants.spawn("sqlite-update-contender", move || {
+		runtime.block_on(PendingProbe::new(
 			update_invocation(
 				second_connection,
 				Manager::<Tag>::new(),
@@ -1064,20 +1222,23 @@ async fn verify_sqlite_update_serialization(connection: &mut DatabaseConnection)
 				"sqlite-update@example.test",
 				302,
 				"second-create-default-must-not-apply",
-			)
-			.await
-		})
-	});
-	let started = started_rx
+			),
+			pending_tx,
+		))
+	})?;
+	// The pool has three pre-opened idle connections while A holds one. This
+	// notification therefore observes B's polled atomic-write future waiting
+	// on BEGIN IMMEDIATE rather than waiting for pool capacity.
+	let pending = pending_rx
 		.recv_timeout(Duration::from_secs(30))
-		.map_err(|error| Error::Internal(format!("SQLite contender did not start: {error}")));
-	if started.is_ok() {
-		abort_guard.release();
+		.map_err(|error| Error::Internal(format!("SQLite contender was never pending: {error}")));
+	if pending.is_ok() {
+		participants.release();
 	} else {
-		abort_guard.abort();
+		participants.abort();
 	}
-	let results = join_race_threads(first, second);
-	started?;
+	let results = participants.collect_pair();
+	pending?;
 	let results = results?;
 	assert!(results[0].1);
 	assert!(!results[1].1);
@@ -1174,7 +1335,7 @@ async fn verify_sqlite_busy_retry(mut fixture: BackendFixture) -> Result<()> {
 	let (locked_tx, locked_rx) = tokio::sync::oneshot::channel();
 	let (release_tx, release_rx) = tokio::sync::oneshot::channel();
 	let holder_connection = fixture.connection.clone();
-	let holder = tokio::spawn(async move {
+	let holder = async move {
 		holder_connection
 			.atomic_write(async |transaction| {
 				let result = Tag::objects()
@@ -1194,33 +1355,30 @@ async fn verify_sqlite_busy_retry(mut fixture: BackendFixture) -> Result<()> {
 				Ok::<_, Error>(result)
 			})
 			.await
-	});
-	if let Err(lock_error) = locked_rx.await {
-		let holder_result = holder
-			.await
-			.map_err(|error| Error::Internal(format!("SQLite holder task failed: {error}")))?;
-		if let Err(error) = holder_result {
-			return Err(error);
-		}
-		return Err(Error::Internal(format!(
-			"SQLite holder did not acquire write intent: {lock_error}"
-		)));
-	}
-	let mut release_guard = OneshotReleaseGuard::new(release_tx);
-
-	let contender_result = update_invocation(
-		fixture.connection.clone(),
-		Manager::<Tag>::new(),
-		"sqlite-busy",
-		"sqlite-busy@example.test",
-		402,
-		"contender-create-default-must-not-apply",
-	)
-	.await;
-	release_guard.release();
-	let held = holder
-		.await
-		.map_err(|error| Error::Internal(format!("SQLite holder task failed: {error}")))??;
+	};
+	let contender_connection = fixture.connection.clone();
+	let contender = async move {
+		locked_rx.await.map_err(|error| {
+			Error::Internal(format!(
+				"SQLite holder did not acquire write intent: {error}"
+			))
+		})?;
+		let mut release_guard = OneshotReleaseGuard::new(release_tx);
+		let result = update_invocation(
+			contender_connection,
+			Manager::<Tag>::new(),
+			"sqlite-busy",
+			"sqlite-busy@example.test",
+			402,
+			"contender-create-default-must-not-apply",
+		)
+		.await;
+		release_guard.release();
+		Ok::<_, Error>(result)
+	};
+	let (held, contender_result) = tokio::join!(holder, contender);
+	let held = held?;
+	let contender_result = contender_result?;
 	let contender_error = match contender_result {
 		Ok(_) => {
 			return Err(Error::Internal(

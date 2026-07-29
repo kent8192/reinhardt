@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.0-alpha.3](https://github.com/kent8192/reinhardt-web/compare/reinhardt-macros@v0.4.0-alpha.2...reinhardt-macros@v0.4.0-alpha.3) - 2026-07-27
+
+### Added
+
+- *(macros)* pass raw requests alongside extractors
+
+### Fixed
+
+- *(macros)* support aliased raw request parameters
+- *(macros)* isolate raw request codegen binding
+- *(macros)* hygienically bind raw route requests
+- *(macros)* bind generated route requests hygienically
+
 ## [0.4.0-alpha.2](https://github.com/kent8192/reinhardt-web/compare/reinhardt-macros@v0.4.0-alpha.1...reinhardt-macros@v0.4.0-alpha.2) - 2026-07-23
 
 ### Documentation

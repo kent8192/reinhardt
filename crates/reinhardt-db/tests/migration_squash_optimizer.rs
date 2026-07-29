@@ -153,6 +153,78 @@ fn optimizer_applies_only_proven_schema_reductions() {
 }
 
 #[test]
+fn optimizer_uses_original_adjacency_for_alter_reductions() {
+	let first_alter = alter_column(
+		"accounts",
+		"handle",
+		FieldType::VarChar(40),
+		FieldType::VarChar(80),
+	);
+	let second_alter = alter_column(
+		"accounts",
+		"handle",
+		FieldType::VarChar(80),
+		FieldType::VarChar(160),
+	);
+	let operations = vec![
+		first_alter.clone(),
+		add_column("profiles", "temporary", FieldType::Integer),
+		drop_column("profiles", "temporary"),
+		second_alter.clone(),
+	];
+
+	let optimized = MigrationSquasher::new().optimize_operations(operations);
+
+	assert_eq!(optimized, vec![first_alter, second_alter]);
+}
+
+#[test]
+fn optimizer_coalesces_only_alters_adjacent_in_the_original_segment() {
+	let first_alter = alter_column(
+		"accounts",
+		"handle",
+		FieldType::VarChar(40),
+		FieldType::VarChar(80),
+	);
+	let second_alter = alter_column(
+		"accounts",
+		"handle",
+		FieldType::VarChar(80),
+		FieldType::VarChar(160),
+	);
+	let expected_alter = alter_column(
+		"accounts",
+		"handle",
+		FieldType::VarChar(40),
+		FieldType::VarChar(160),
+	);
+
+	let adjacent = MigrationSquasher::new()
+		.optimize_operations(vec![first_alter.clone(), second_alter.clone()]);
+	let separated_by_barrier = MigrationSquasher::new().optimize_operations(vec![
+		first_alter.clone(),
+		Operation::RunSQL {
+			sql: "SELECT handle FROM accounts".to_string(),
+			reverse_sql: None,
+		},
+		second_alter.clone(),
+	]);
+
+	assert_eq!(adjacent, vec![expected_alter]);
+	assert_eq!(
+		separated_by_barrier,
+		vec![
+			first_alter,
+			Operation::RunSQL {
+				sql: "SELECT handle FROM accounts".to_string(),
+				reverse_sql: None,
+			},
+			second_alter,
+		]
+	);
+}
+
+#[test]
 fn optimizer_does_not_reduce_across_barriers() {
 	struct Case {
 		name: &'static str,
@@ -308,6 +380,28 @@ fn squash_range_rejects_mixed_whole_migration_modes() {
 			format!("Invalid migration: Cannot squash migrations with mixed {name} flags")
 		);
 	}
+}
+
+#[test]
+fn squash_range_rejects_publicly_constructed_cross_app_ranges() {
+	let first = migration(
+		"0001_initial",
+		vec![add_column("accounts", "handle", FieldType::VarChar(80))],
+	);
+	let mut second = migration(
+		"0002_profile",
+		vec![add_column("profiles", "bio", FieldType::Text)],
+	);
+	second.app_label = "profiles".to_string();
+
+	let error = MigrationSquasher::new()
+		.squash_range(&range(vec![first, second]), "0001_squashed_0002", true)
+		.expect_err("public squash ranges must not combine apps");
+
+	assert_eq!(
+		error.to_string(),
+		"Invalid migration: All migrations in squash range must belong to the same app"
+	);
 }
 
 #[test]

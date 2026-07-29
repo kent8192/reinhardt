@@ -124,6 +124,15 @@ impl MigrationSquasher {
 		let first = range.migrations.first().ok_or_else(|| {
 			MigrationError::InvalidMigration("Cannot squash empty migration range".to_string())
 		})?;
+		if range
+			.migrations
+			.iter()
+			.any(|migration| migration.app_label != first.app_label)
+		{
+			return Err(MigrationError::InvalidMigration(
+				"All migrations in squash range must belong to the same app".to_string(),
+			));
+		}
 		let state_only = first.state_only;
 		let database_only = first.database_only;
 
@@ -350,8 +359,15 @@ impl MigrationSquasher {
 
 	fn optimize_segment(segment: Vec<Operation>) -> Vec<Operation> {
 		let mut optimized = Vec::with_capacity(segment.len());
+		let mut previous_alter = None;
 
 		for operation in segment {
+			let current_alter = match &operation {
+				Operation::AlterColumn { table, column, .. } => {
+					Some((table.clone(), column.clone()))
+				}
+				_ => None,
+			};
 			match operation {
 				Operation::DropTable { ref name } => {
 					if let Some(create_index) =
@@ -446,7 +462,14 @@ impl MigrationSquasher {
 					new_definition,
 					mysql_options,
 				} => {
-					if let Some(Operation::AlterColumn {
+					let follows_same_alter =
+						previous_alter
+							.as_ref()
+							.is_some_and(|(previous_table, previous_column)| {
+								previous_table == &table && previous_column == &column
+							});
+					if follows_same_alter
+						&& let Some(Operation::AlterColumn {
 						table: previous_table,
 						column: previous_column,
 						new_definition: previous_new_definition,
@@ -470,6 +493,7 @@ impl MigrationSquasher {
 				}
 				_ => optimized.push(operation),
 			}
+			previous_alter = current_alter;
 		}
 
 		optimized

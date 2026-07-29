@@ -92,6 +92,70 @@ impl MySqlQueryBuilder {
 		Self
 	}
 
+	/// Build a SELECT statement after rejecting PostgreSQL-only vector features.
+	pub fn build_select_checked(
+		&self,
+		stmt: &SelectStatement,
+	) -> Result<(String, Values), crate::QueryBuildError> {
+		crate::error::validate_select_for_backend(stmt, "MySQL")?;
+		Ok(self.build_select(stmt))
+	}
+
+	/// Build a CREATE TABLE statement after rejecting PostgreSQL-only vector features.
+	pub fn build_create_table_checked(
+		&self,
+		stmt: &CreateTableStatement,
+	) -> Result<(String, Values), crate::QueryBuildError> {
+		crate::error::validate_create_table_for_backend(stmt, "MySQL")?;
+		Ok(self.build_create_table(stmt))
+	}
+
+	/// Build a CREATE INDEX statement after rejecting PostgreSQL-only vector features.
+	pub fn build_create_index_checked(
+		&self,
+		stmt: &CreateIndexStatement,
+	) -> Result<(String, Values), crate::QueryBuildError> {
+		crate::error::validate_create_index_for_backend(stmt, "MySQL")?;
+		stmt.validate_for_backend("MySQL", false)?;
+		Ok(self.build_create_index(stmt))
+	}
+
+	/// Build an INSERT statement after rejecting PostgreSQL-only vector features.
+	pub fn build_insert_checked(
+		&self,
+		stmt: &InsertStatement,
+	) -> Result<(String, Values), crate::QueryBuildError> {
+		crate::error::validate_insert_for_backend(stmt, "MySQL")?;
+		Ok(self.build_insert(stmt))
+	}
+
+	/// Build an UPDATE statement after rejecting PostgreSQL-only vector features.
+	pub fn build_update_checked(
+		&self,
+		stmt: &UpdateStatement,
+	) -> Result<(String, Values), crate::QueryBuildError> {
+		crate::error::validate_update_for_backend(stmt, "MySQL")?;
+		Ok(self.build_update(stmt))
+	}
+
+	/// Build a DELETE statement after rejecting PostgreSQL-only vector features.
+	pub fn build_delete_checked(
+		&self,
+		stmt: &DeleteStatement,
+	) -> Result<(String, Values), crate::QueryBuildError> {
+		crate::error::validate_delete_for_backend(stmt, "MySQL")?;
+		Ok(self.build_delete(stmt))
+	}
+
+	/// Build an ALTER TABLE statement after rejecting PostgreSQL-only vector features.
+	pub fn build_alter_table_checked(
+		&self,
+		stmt: &AlterTableStatement,
+	) -> Result<(String, Values), crate::QueryBuildError> {
+		crate::error::validate_alter_table_for_backend(stmt, "MySQL")?;
+		Ok(self.build_alter_table(stmt))
+	}
+
 	/// Escape an identifier for MySQL
 	///
 	/// MySQL uses backticks for identifiers.
@@ -3248,6 +3312,8 @@ impl MySqlQueryBuilder {
 			Json => "JSON".to_string(),
 			JsonBinary => "JSON".to_string(), // MySQL JSON is binary
 			Array(_) => "JSON".to_string(),   // MySQL doesn't have ARRAY, use JSON
+			#[cfg(feature = "pgvector")]
+			Vector(_) => "JSON".to_string(),
 			Custom(name) => name.clone(),
 		}
 	}
@@ -3274,6 +3340,8 @@ impl MySqlQueryBuilder {
 			VarBinary(len) => format!("BINARY({len})"),
 			Uuid => "CHAR(36)".to_string(),
 			Json | JsonBinary | Array(_) => "JSON".to_string(),
+			#[cfg(feature = "pgvector")]
+			Vector(_) => "JSON".to_string(),
 			Custom(name) => name.clone(),
 		}
 	}
@@ -3399,6 +3467,7 @@ impl MySqlQueryBuilder {
 			IndexMethod::Gist | IndexMethod::Gin | IndexMethod::Brin | IndexMethod::Spatial => {
 				"BTREE"
 			}
+			IndexMethod::Hnsw | IndexMethod::Ivfflat => "BTREE",
 		}
 	}
 }
@@ -3456,12 +3525,48 @@ impl crate::query::QueryBuilderTrait for MySqlQueryBuilder {
 #[cfg(test)]
 mod tests {
 	use super::*;
+	#[cfg(feature = "pgvector")]
+	use crate::{
+		QueryBuildError, Value,
+		types::{BinOper, PgBinOper, TableRef, WindowStatement},
+		value::ArrayType,
+	};
 	use crate::{
 		expr::{Expr, ExprTrait},
 		query::Query,
 		types::{Alias, IntoIden},
 	};
 	use rstest::rstest;
+
+	#[cfg(feature = "pgvector")]
+	fn vector_value() -> Value {
+		Value::Vector(Some(Box::new(vec![1.0, 2.0, 3.0])))
+	}
+
+	#[cfg(feature = "pgvector")]
+	fn vector_subquery_table() -> TableRef {
+		let mut vector_select = Query::select();
+		vector_select
+			.expr(crate::expr::SimpleExpr::Value(vector_value()))
+			.from("vector_source");
+		TableRef::SubQuery(
+			Box::new(vector_select),
+			Alias::new("vector_source").into_iden(),
+		)
+	}
+
+	#[cfg(feature = "pgvector")]
+	fn assert_mysql_vector_value_rejection(
+		result: Result<(String, crate::value::Values), QueryBuildError>,
+	) {
+		assert_eq!(
+			result,
+			Err(QueryBuildError::UnsupportedBackendFeature {
+				feature: "pgvector values",
+				backend: "MySQL",
+			})
+		);
+	}
 
 	#[test]
 	fn test_escape_identifier() {
@@ -5938,6 +6043,7 @@ mod tests {
 		stmt.columns.push(IndexColumn {
 			name: "email".into_iden(),
 			order: None,
+			operator_class: None,
 		});
 
 		let (sql, values) = builder.build_create_index(&stmt);
@@ -5957,6 +6063,7 @@ mod tests {
 		stmt.columns.push(IndexColumn {
 			name: "username".into_iden(),
 			order: None,
+			operator_class: None,
 		});
 
 		let (sql, values) = builder.build_create_index(&stmt);
@@ -5979,6 +6086,7 @@ mod tests {
 		stmt.columns.push(IndexColumn {
 			name: "email".into_iden(),
 			order: None,
+			operator_class: None,
 		});
 
 		let (sql, values) = builder.build_create_index(&stmt);
@@ -5999,6 +6107,7 @@ mod tests {
 		stmt.columns.push(IndexColumn {
 			name: "created_at".into_iden(),
 			order: Some(Order::Desc),
+			operator_class: None,
 		});
 
 		let (sql, values) = builder.build_create_index(&stmt);
@@ -6021,10 +6130,12 @@ mod tests {
 		stmt.columns.push(IndexColumn {
 			name: "last_name".into_iden(),
 			order: Some(Order::Asc),
+			operator_class: None,
 		});
 		stmt.columns.push(IndexColumn {
 			name: "first_name".into_iden(),
 			order: Some(Order::Asc),
+			operator_class: None,
 		});
 
 		let (sql, values) = builder.build_create_index(&stmt);
@@ -6047,6 +6158,7 @@ mod tests {
 		stmt.columns.push(IndexColumn {
 			name: "id".into_iden(),
 			order: None,
+			operator_class: None,
 		});
 
 		let (sql, values) = builder.build_create_index(&stmt);
@@ -6069,6 +6181,7 @@ mod tests {
 		stmt.columns.push(IndexColumn {
 			name: "content".into_iden(),
 			order: None,
+			operator_class: None,
 		});
 
 		let (sql, values) = builder.build_create_index(&stmt);
@@ -7912,5 +8025,136 @@ mod tests {
 
 		// Assert - single quotes in host must be escaped by doubling
 		assert_eq!(result, "'admin'@'host''; DROP USER root; --'");
+	}
+
+	#[cfg(feature = "pgvector")]
+	#[test]
+	fn checked_build_rejects_pgvector_distance_expressions() {
+		// Rendering a pgvector operator on MySQL is invalid, so checked building must stop first.
+		let mut statement = Query::select();
+		statement
+			.expr(crate::expr::SimpleExpr::Binary(
+				Box::new(Expr::col("embedding").into()),
+				BinOper::PgOperator(PgBinOper::CosineDistance),
+				Box::new(crate::expr::SimpleExpr::Value(Value::Vector(Some(
+					Box::new(vec![1.0, 2.0, 3.0]),
+				)))),
+			))
+			.from("documents");
+
+		let result = MySqlQueryBuilder::new().build_select_checked(&statement);
+
+		assert_eq!(
+			result,
+			Err(QueryBuildError::UnsupportedBackendFeature {
+				feature: "pgvector distance operators",
+				backend: "MySQL",
+			})
+		);
+	}
+
+	#[cfg(feature = "pgvector")]
+	#[test]
+	fn checked_build_rejects_pgvector_values() {
+		let mut statement = Query::select();
+		statement
+			.expr(crate::expr::SimpleExpr::Value(vector_value()))
+			.from("documents");
+
+		assert_mysql_vector_value_rejection(
+			MySqlQueryBuilder::new().build_select_checked(&statement),
+		);
+	}
+
+	#[cfg(feature = "pgvector")]
+	#[test]
+	fn checked_dml_builds_reject_vector_subquery_tables() {
+		let mut insert = Query::insert();
+		insert
+			.into_table(vector_subquery_table())
+			.column("embedding")
+			.values_panic([1_i32]);
+		let mut update = Query::update();
+		update
+			.table(vector_subquery_table())
+			.value("embedding", 1_i32);
+		let mut delete = Query::delete();
+		delete.from_table(vector_subquery_table());
+
+		let builder = MySqlQueryBuilder::new();
+		let results = [
+			builder.build_insert_checked(&insert),
+			builder.build_update_checked(&update),
+			builder.build_delete_checked(&delete),
+		];
+
+		for result in results {
+			assert_mysql_vector_value_rejection(result);
+		}
+	}
+
+	#[cfg(feature = "pgvector")]
+	#[test]
+	fn checked_create_index_rejects_vector_subquery_table() {
+		let mut statement = Query::create_index();
+		statement
+			.name("idx_embedding")
+			.table(vector_subquery_table())
+			.col("embedding");
+
+		assert_mysql_vector_value_rejection(
+			MySqlQueryBuilder::new().build_create_index_checked(&statement),
+		);
+	}
+
+	#[cfg(feature = "pgvector")]
+	#[test]
+	fn checked_select_rejects_vector_values_in_ctes() {
+		let mut cte = Query::select();
+		cte.expr(crate::expr::SimpleExpr::Value(vector_value()))
+			.from("vector_source");
+		let mut statement = Query::select();
+		statement
+			.with_cte("vectors", cte)
+			.column("id")
+			.from("documents");
+
+		assert_mysql_vector_value_rejection(
+			MySqlQueryBuilder::new().build_select_checked(&statement),
+		);
+	}
+
+	#[cfg(feature = "pgvector")]
+	#[test]
+	fn checked_select_rejects_vector_values_in_windows() {
+		let window = WindowStatement {
+			partition_by: vec![crate::expr::SimpleExpr::Value(vector_value())],
+			order_by: Vec::new(),
+			frame: None,
+		};
+		let mut statement = Query::select();
+		statement
+			.column("id")
+			.from("documents")
+			.window_as("vector_window", window);
+
+		assert_mysql_vector_value_rejection(
+			MySqlQueryBuilder::new().build_select_checked(&statement),
+		);
+	}
+
+	#[cfg(feature = "pgvector")]
+	#[test]
+	fn checked_select_rejects_vector_values_nested_in_arrays() {
+		let nested_vector_array =
+			Value::Array(ArrayType::Float, Some(Box::new(vec![vector_value()])));
+		let mut statement = Query::select();
+		statement
+			.expr(crate::expr::SimpleExpr::Value(nested_vector_array))
+			.from("documents");
+
+		assert_mysql_vector_value_rejection(
+			MySqlQueryBuilder::new().build_select_checked(&statement),
+		);
 	}
 }

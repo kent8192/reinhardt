@@ -72,6 +72,7 @@
 //!
 //! #### Database Backends ✅
 //! - `db-postgres` - PostgreSQL support
+//! - `db-pgvector` - pgvector support, including serializable vector markers for shared WASM models
 //! - `db-mysql` - MySQL support
 //! - `db-sqlite` - SQLite support
 //! - `db-cockroachdb` - CockroachDB support (distributed transactions)
@@ -499,6 +500,12 @@ pub mod db {
 	pub use reinhardt_db::DatabaseError as Error;
 	pub use reinhardt_db::Json;
 
+	/// Validated pgvector value types.
+	#[cfg(feature = "db-pgvector")]
+	pub mod pgvector {
+		pub use reinhardt_db::orm::{MAX_DENSE_VECTOR_DIMENSIONS, Vector, VectorError};
+	}
+
 	/// Low-level backend connections used to register ORM connection leases.
 	pub mod backends {
 		pub use reinhardt_db::backends::*;
@@ -537,6 +544,14 @@ pub mod db {
 
 	#[cfg(test)]
 	mod tests {
+		#[cfg(feature = "db-pgvector")]
+		#[test]
+		fn pgvector_types_are_available_through_the_facade() {
+			let vector = super::pgvector::Vector::<2>::try_from(vec![1.0, 2.0]).unwrap();
+
+			assert_eq!(vector.as_slice(), &[1.0, 2.0]);
+		}
+
 		#[test]
 		fn m2m_naming_helpers_are_available_through_facade() {
 			assert_eq!(
@@ -556,6 +571,93 @@ pub mod db {
 pub mod db {
 	use serde::{Deserialize, Deserializer, Serialize, Serializer, de::DeserializeOwned};
 	use std::ops::{Deref, DerefMut};
+
+	/// WASM-compatible pgvector marker types.
+	#[cfg(feature = "db-pgvector")]
+	pub mod pgvector {
+		use serde::{Deserialize, Serialize};
+
+		/// Largest dense-vector dimension accepted by PostgreSQL pgvector.
+		pub const MAX_DENSE_VECTOR_DIMENSIONS: usize = 2000;
+
+		/// Dimension or element validation error for a dense vector marker.
+		#[derive(Debug, Clone, PartialEq, Eq)]
+		pub enum VectorError {
+			/// The const-generic dimension is outside pgvector's supported range.
+			InvalidDimensions {
+				/// Requested dimension.
+				dimensions: usize,
+			},
+			/// The supplied value length does not match the declared dimension.
+			DimensionMismatch {
+				/// Declared dimension.
+				expected: usize,
+				/// Supplied value length.
+				actual: usize,
+			},
+			/// A vector element is NaN or infinite.
+			NonFiniteElement {
+				/// Invalid element position.
+				index: usize,
+			},
+		}
+
+		impl std::fmt::Display for VectorError {
+			fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+				match self {
+					Self::InvalidDimensions { dimensions } => write!(
+						formatter,
+						"vector dimensions must be between 1 and {MAX_DENSE_VECTOR_DIMENSIONS}, got {dimensions}"
+					),
+					Self::DimensionMismatch { expected, actual } => write!(
+						formatter,
+						"vector dimension mismatch: expected {expected}, got {actual}"
+					),
+					Self::NonFiniteElement { index } => {
+						write!(formatter, "vector element at index {index} must be finite")
+					}
+				}
+			}
+		}
+
+		impl std::error::Error for VectorError {}
+
+		/// Serializable dense-vector marker used by shared WASM model definitions.
+		#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+		pub struct Vector<const N: usize>(Vec<f32>);
+
+		impl<const N: usize> Vector<N> {
+			/// Returns the vector elements.
+			pub fn as_slice(&self) -> &[f32] {
+				&self.0
+			}
+
+			/// Consumes the marker and returns its elements.
+			pub fn into_vec(self) -> Vec<f32> {
+				self.0
+			}
+		}
+
+		impl<const N: usize> TryFrom<Vec<f32>> for Vector<N> {
+			type Error = VectorError;
+
+			fn try_from(values: Vec<f32>) -> Result<Self, Self::Error> {
+				if !(1..=MAX_DENSE_VECTOR_DIMENSIONS).contains(&N) {
+					return Err(VectorError::InvalidDimensions { dimensions: N });
+				}
+				if values.len() != N {
+					return Err(VectorError::DimensionMismatch {
+						expected: N,
+						actual: values.len(),
+					});
+				}
+				if let Some(index) = values.iter().position(|value| !value.is_finite()) {
+					return Err(VectorError::NonFiniteElement { index });
+				}
+				Ok(Self(values))
+			}
+		}
+	}
 
 	/// WASM-compatible typed JSON field wrapper.
 	#[repr(transparent)]

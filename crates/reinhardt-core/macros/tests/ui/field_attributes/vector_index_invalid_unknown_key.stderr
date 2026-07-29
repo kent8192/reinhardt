@@ -1,0 +1,5 @@
+error: unknown vector index key
+  --> tests/ui/field_attributes/vector_index_invalid_unknown_key.rs:16:3
+   |
+16 |         probes = 10
+   |         ^^^^^^

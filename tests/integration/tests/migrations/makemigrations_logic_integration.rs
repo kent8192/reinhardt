@@ -542,6 +542,10 @@ async fn nc_06_index_addition_creates_create_index_migration() {
 			name: "idx_title".to_string(),
 			columns: vec!["title".to_string()],
 			unique: false,
+			access_method: None,
+			index_type: None,
+			expressions: None,
+			operator_class: None,
 		});
 
 	let repository = Arc::new(Mutex::new(TestRepository::new()));
@@ -981,6 +985,10 @@ async fn nc_12_one_to_one_creates_unique_foreign_key() {
 			name: "idx_unique_profile_id".to_string(),
 			columns: vec!["profile_id".to_string()],
 			unique: true,
+			access_method: None,
+			index_type: None,
+			expressions: None,
+			operator_class: None,
 		});
 
 	let repository = Arc::new(Mutex::new(TestRepository::new()));
@@ -1131,6 +1139,10 @@ async fn nc_15_unique_constraint_addition_creates_add_constraint() {
 			name: "idx_unique_title".to_string(),
 			columns: vec!["title".to_string()],
 			unique: true,
+			access_method: None,
+			index_type: None,
+			expressions: None,
+			operator_class: None,
 		});
 
 	let repository = Arc::new(Mutex::new(TestRepository::new()));
@@ -1179,6 +1191,10 @@ async fn nc_16_index_deletion_creates_drop_index() {
 			name: "idx_title".to_string(),
 			columns: vec!["title".to_string()],
 			unique: false,
+			access_method: None,
+			index_type: None,
+			expressions: None,
+			operator_class: None,
 		});
 
 	// to_schema has no index (index removed)

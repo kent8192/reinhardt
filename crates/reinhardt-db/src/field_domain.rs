@@ -1,5 +1,8 @@
 //! Shared database field domain metadata.
 
+/// Maximum number of dimensions supported by pgvector dense vectors.
+pub const MAX_DENSE_VECTOR_DIMENSIONS: usize = 2_000;
+
 /// Physical database storage used by a model field.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum DatabaseStorageKind {
@@ -21,6 +24,9 @@ pub enum DatabaseStorageKind {
 	Bytes,
 	/// Native JSON storage.
 	Json,
+	/// Native PostgreSQL dense-vector storage with a fixed dimension.
+	#[cfg(feature = "pgvector")]
+	Vector(usize),
 	/// UUID storage.
 	Uuid,
 	/// Calendar date storage.

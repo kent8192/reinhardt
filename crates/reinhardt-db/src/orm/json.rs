@@ -2,6 +2,8 @@
 
 use super::model::Model;
 use super::{DatabaseStorageKind, DatabaseValue, FieldCodecError};
+#[cfg(feature = "pgvector")]
+use crate::field_domain::MAX_DENSE_VECTOR_DIMENSIONS;
 use base64::Engine;
 use serde::de::value::{MapDeserializer, StringDeserializer};
 use serde::de::{IntoDeserializer, Visitor};
@@ -237,6 +239,32 @@ pub(crate) fn database_value_from_json(
 	match storage_kind {
 		Some(DatabaseStorageKind::Json) => Ok(DatabaseValue::Json(value)),
 		_ if value.is_null() => Ok(DatabaseValue::Null),
+		#[cfg(feature = "pgvector")]
+		Some(DatabaseStorageKind::Vector(dimensions)) => {
+			if dimensions == 0 || dimensions > MAX_DENSE_VECTOR_DIMENSIONS {
+				return Err(FieldCodecError::Serialization(format!(
+					"vector dimension {dimensions} exceeds maximum {MAX_DENSE_VECTOR_DIMENSIONS}"
+				)));
+			}
+			let values = serde_json::from_value::<Vec<f32>>(value)
+				.map_err(|error| FieldCodecError::Serialization(error.to_string()))?;
+			if values.len() != dimensions {
+				return Err(FieldCodecError::Serialization(format!(
+					"vector dimension mismatch: expected {dimensions}, got {}",
+					values.len()
+				)));
+			}
+			if let Some((index, _)) = values
+				.iter()
+				.enumerate()
+				.find(|(_, value)| !value.is_finite())
+			{
+				return Err(FieldCodecError::Serialization(format!(
+					"vector element at index {index} is not finite"
+				)));
+			}
+			Ok(DatabaseValue::Vector(values))
+		}
 		Some(DatabaseStorageKind::Bool) => serde_json::from_value(value)
 			.map(DatabaseValue::Bool)
 			.map_err(|error| FieldCodecError::Serialization(error.to_string())),
@@ -494,6 +522,46 @@ mod tests {
 			.expect("JSON null should decode");
 
 		assert_eq!(value, DatabaseValue::Json(json!(null)));
+	}
+
+	#[cfg(feature = "pgvector")]
+	#[test]
+	fn vector_storage_decodes_numeric_json_arrays() {
+		let value =
+			database_value_from_json(json!([1.0, 2.0, 3.0]), Some(DatabaseStorageKind::Vector(3)))
+				.unwrap();
+
+		assert_eq!(value, DatabaseValue::Vector(vec![1.0, 2.0, 3.0]));
+	}
+
+	#[test]
+	#[cfg(feature = "pgvector")]
+	fn vector_storage_rejects_runtime_dimension_mismatches() {
+		let error =
+			database_value_from_json(json!([1.0, 2.0]), Some(DatabaseStorageKind::Vector(3)))
+				.unwrap_err();
+
+		assert_eq!(
+			error.to_string(),
+			"field serialization failed: vector dimension mismatch: expected 3, got 2"
+		);
+	}
+
+	#[test]
+	#[cfg(feature = "pgvector")]
+	fn vector_storage_rejects_unsupported_declared_dimensions() {
+		for (dimensions, value) in [(0, json!([])), (2_001, json!(vec![0.0; 2_001]))] {
+			let error =
+				database_value_from_json(value, Some(DatabaseStorageKind::Vector(dimensions)))
+					.unwrap_err();
+
+			assert_eq!(
+				error.to_string(),
+				format!(
+					"field serialization failed: vector dimension {dimensions} exceeds maximum 2000"
+				)
+			);
+		}
 	}
 
 	#[test]

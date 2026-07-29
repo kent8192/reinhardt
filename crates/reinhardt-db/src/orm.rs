@@ -88,6 +88,9 @@ pub mod transaction;
 pub mod typed_join;
 /// Validators module.
 pub mod validators;
+/// Validated pgvector value types.
+#[cfg(feature = "pgvector")]
+pub mod vector;
 /// Window module.
 pub mod window;
 
@@ -160,6 +163,8 @@ pub use manager::{
 	ScopedDatabaseRegistration, get_connection, get_connection_lease, get_connection_registration,
 	init_database, init_database_with_pool_size, install_scoped_database, reinitialize_database,
 };
+#[cfg(feature = "pgvector")]
+pub use vector::{MAX_DENSE_VECTOR_DIMENSIONS, Vector, VectorError};
 
 // Re-export paste for macro usage
 #[doc(hidden)]
@@ -190,7 +195,7 @@ pub use model::{
 };
 pub use query_fields::{
 	Comparable, DateTimeType, Field, GroupByFields, Lookup, LookupType, LookupValue, NumericType,
-	QueryFieldCompiler, StringType,
+	OrderedExpression, QueryFieldCompiler, StringType, TypedExpression, TypedPredicate,
 };
 #[doc(hidden)]
 pub use serde;
@@ -238,7 +243,7 @@ pub use events::{
 	InstanceEvents, MapperEvents, SessionEvents, get_active_registry, set_active_registry,
 	with_event_registry,
 };
-pub use execution::{ExecutionResult, QueryExecution, SelectExecution};
+pub use execution::{ExecutionResult, InsertExecution, QueryExecution, SelectExecution};
 pub use field_codec::*;
 // Re-export from reinhardt-hybrid
 pub use crate::hybrid::{
@@ -287,8 +292,8 @@ pub use reverse_accessor::ReverseAccessor;
 pub use manager::Manager;
 // Query types are always available
 pub use query::{
-	FieldAssignment, Filter, FilterCondition, FilterOperator, FilterValue, OrmQuery, QuerySet,
-	UpdateValue,
+	FieldAssignment, Filter, FilterCondition, FilterOperator, FilterValue, IntoOrderBy, OrmQuery,
+	QuerySet, UpdateValue,
 };
 
 // Advanced ORM features

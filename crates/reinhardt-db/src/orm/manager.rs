@@ -615,7 +615,7 @@ fn replace_database_connection_for_testing_sync(
 	};
 	match database_state() {
 		Ok(mut state) => {
-			let previous = std::mem::replace(&mut *state, Some(database));
+			let previous = (*state).replace(database);
 			*registration
 				.previous
 				.lock()

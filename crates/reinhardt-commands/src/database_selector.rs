@@ -158,15 +158,10 @@ fn safe_alias(alias: &str) -> &str {
 }
 
 fn is_url_like_alias(alias: &str) -> bool {
-	let Some((scheme, remainder)) = alias.split_once(':') else {
-		return false;
-	};
-
-	!scheme.is_empty()
-		&& !remainder.is_empty()
-		&& scheme
-			.bytes()
-			.all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'+' | b'-' | b'.'))
+	alias.starts_with("postgres://")
+		|| alias.starts_with("postgresql://")
+		|| alias.starts_with("mysql://")
+		|| alias.starts_with("sqlite:")
 }
 
 fn backend_from_url(url: &str) -> CommandResult<DatabaseType> {
@@ -220,6 +215,10 @@ mod tests {
 			"replica".to_string(),
 			DatabaseConfig::mysql("replica", "reader", "replica-secret", "localhost", 3306),
 		);
+		databases.insert(
+			"reporting:readonly".to_string(),
+			DatabaseConfig::sqlite("reporting.db"),
+		);
 
 		StubProjectSettings {
 			core: CoreSettings {
@@ -263,6 +262,24 @@ mod tests {
 		assert_eq!(resolved.backend(), DatabaseType::Mysql);
 		assert!(resolved.url().starts_with("mysql:"));
 		assert!(resolved.url().ends_with("/replica"));
+	}
+
+	#[test]
+	fn resolve_database_allows_configured_colon_alias() {
+		let settings = settings();
+		let selector = DatabaseSelector {
+			alias: "reporting:readonly".to_string(),
+			url_override: None,
+		};
+
+		let result = resolve_database(&selector, Some(&settings));
+
+		assert!(result.is_ok());
+
+		let resolved = result.expect("configured colon alias resolves");
+		assert_eq!(resolved.alias(), "reporting:readonly");
+		assert_eq!(resolved.backend(), DatabaseType::Sqlite);
+		assert!(resolved.url().ends_with("reporting.db"));
 	}
 
 	#[test]

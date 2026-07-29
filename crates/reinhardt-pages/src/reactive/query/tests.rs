@@ -1,0 +1,1084 @@
+use std::cell::{Cell, RefCell};
+use std::collections::VecDeque;
+use std::future::Future;
+use std::pin::Pin;
+use std::rc::Rc;
+use std::task::{Context, Poll, Waker};
+use std::time::Duration;
+
+use reinhardt_core::reactive::ReactiveScope;
+use rstest::rstest;
+use serde::Serialize;
+use serde::Serializer;
+use serde::ser::SerializeMap;
+use serial_test::serial;
+
+use super::super::resource::ResourceState;
+use super::client::{
+	QueryEntry, clear_query_cache_for_test, initial_query_state, invalidate_query_id, query_entry,
+};
+use super::hook::try_create_ssr_query;
+use super::runtime::now_ms;
+use super::*;
+
+struct OrderedMapArgs(&'static [(&'static str, i64)]);
+
+impl Serialize for OrderedMapArgs {
+	fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+	where
+		S: Serializer,
+	{
+		let mut map = serializer.serialize_map(Some(self.0.len()))?;
+		for (key, value) in self.0 {
+			map.serialize_entry(key, value)?;
+		}
+		map.end()
+	}
+}
+
+struct OrderedLargeMapArgs(&'static [(&'static str, u128)]);
+
+impl Serialize for OrderedLargeMapArgs {
+	fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+	where
+		S: Serializer,
+	{
+		let mut map = serializer.serialize_map(Some(self.0.len()))?;
+		for (key, value) in self.0 {
+			map.serialize_entry(key, value)?;
+		}
+		map.end()
+	}
+}
+
+type TestTask = Pin<Box<dyn Future<Output = ()> + 'static>>;
+
+fn poll_one_task(tasks: &Rc<RefCell<VecDeque<TestTask>>>) -> Poll<()> {
+	let mut task = tasks
+		.borrow_mut()
+		.pop_front()
+		.expect("a query request should schedule one task");
+	let mut context = Context::from_waker(Waker::noop());
+	let result = task.as_mut().poll(&mut context);
+	if result.is_pending() {
+		tasks.borrow_mut().push_back(task);
+	}
+	result
+}
+
+struct TestGate {
+	ready: Rc<Cell<bool>>,
+	dropped: Rc<Cell<usize>>,
+	result: Option<Result<String, String>>,
+}
+
+impl Future for TestGate {
+	type Output = Result<String, String>;
+
+	fn poll(self: Pin<&mut Self>, _context: &mut Context<'_>) -> Poll<Self::Output> {
+		let this = self.get_mut();
+		if this.ready.get() {
+			Poll::Ready(
+				this.result
+					.take()
+					.expect("test gate polled after completion"),
+			)
+		} else {
+			Poll::Pending
+		}
+	}
+}
+
+impl Drop for TestGate {
+	fn drop(&mut self) {
+		self.dropped.set(self.dropped.get() + 1);
+	}
+}
+
+#[test]
+#[serial(query_cache)]
+fn imperative_acquisition_deduplicates_in_flight_work() {
+	ReactiveScope::run(|| {
+		// Arrange
+		clear_query_cache_for_test();
+		let tasks = Rc::new(RefCell::new(VecDeque::new()));
+		let tasks_for_sink = Rc::clone(&tasks);
+		let _sink = crate::platform::install_task_sink(move |task| {
+			tasks_for_sink.borrow_mut().push_back(task);
+		});
+		let calls = Rc::new(Cell::new(0));
+		let key = QueryKey::new("imperative-dedupe", {
+			let calls = Rc::clone(&calls);
+			move || {
+				calls.set(calls.get() + 1);
+				async { Ok::<_, String>("value".to_string()) }
+			}
+		});
+
+		// Act
+		let first = acquire_query(
+			key.clone(),
+			QueryAcquireOptions {
+				consumer: QueryConsumer::Navigation(1),
+				error_policy: QueryErrorPolicy::Discard,
+			},
+		);
+		let second = acquire_query(
+			key,
+			QueryAcquireOptions {
+				consumer: QueryConsumer::Navigation(2),
+				error_policy: QueryErrorPolicy::Discard,
+			},
+		);
+
+		// Assert
+		assert_eq!(calls.get(), 0, "acquisition must not run a second fetch");
+		assert_eq!(tasks.borrow().len(), 1);
+		assert_eq!(poll_one_task(&tasks), Poll::Ready(()));
+		assert_eq!(calls.get(), 1);
+		assert_eq!(
+			tokio_test::block_on(first.result()),
+			Ok("value".to_string())
+		);
+		assert_eq!(
+			tokio_test::block_on(second.result()),
+			Ok("value".to_string())
+		);
+	});
+}
+
+#[test]
+#[serial(query_cache)]
+fn dropping_one_of_two_leases_keeps_request_alive() {
+	ReactiveScope::run(|| {
+		// Arrange
+		clear_query_cache_for_test();
+		let tasks = Rc::new(RefCell::new(VecDeque::new()));
+		let tasks_for_sink = Rc::clone(&tasks);
+		let _sink = crate::platform::install_task_sink(move |task| {
+			tasks_for_sink.borrow_mut().push_back(task);
+		});
+		let ready = Rc::new(Cell::new(false));
+		let dropped = Rc::new(Cell::new(0));
+		let key: QueryKey<String, String> = QueryKey::new("two-leases", {
+			let ready = Rc::clone(&ready);
+			let dropped = Rc::clone(&dropped);
+			move || TestGate {
+				ready: Rc::clone(&ready),
+				dropped: Rc::clone(&dropped),
+				result: Some(Ok("shared".to_string())),
+			}
+		});
+		let entry = query_entry(key.clone());
+		let first = acquire_query(
+			key.clone(),
+			QueryAcquireOptions {
+				consumer: QueryConsumer::Navigation(1),
+				error_policy: QueryErrorPolicy::Discard,
+			},
+		);
+		let second = acquire_query(
+			key,
+			QueryAcquireOptions {
+				consumer: QueryConsumer::MountedRoute(2),
+				error_policy: QueryErrorPolicy::Discard,
+			},
+		);
+		assert_eq!(poll_one_task(&tasks), Poll::Pending);
+
+		// Act
+		drop(first);
+		assert_eq!(entry.lease_count.get(), 1);
+		assert!(entry.has_request(), "the remaining lease keeps work alive");
+		ready.set(true);
+		let completion = poll_one_task(&tasks);
+
+		// Assert
+		assert_eq!(completion, Poll::Ready(()));
+		assert_eq!(
+			entry.state.with_untracked(|state| state.clone()),
+			ResourceState::Success("shared".to_string())
+		);
+		assert_eq!(
+			tokio_test::block_on(second.result()),
+			Ok("shared".to_string())
+		);
+		assert_eq!(dropped.get(), 1);
+	});
+}
+
+#[test]
+#[serial(query_cache)]
+fn shared_fetch_receives_the_query_request_cancellation_handle() {
+	ReactiveScope::run(|| {
+		// Arrange
+		clear_query_cache_for_test();
+		let tasks = Rc::new(RefCell::new(VecDeque::new()));
+		let tasks_for_sink = Rc::clone(&tasks);
+		let _sink = crate::platform::install_task_sink(move |task| {
+			tasks_for_sink.borrow_mut().push_back(task);
+		});
+		let ready = Rc::new(Cell::new(false));
+		let dropped = Rc::new(Cell::new(0));
+		let observed_cancellation = Rc::new(RefCell::new(None));
+		let key: QueryKey<String, String> =
+			QueryKey::new_with_cancellation("shared-request-cancellation", {
+				let ready = Rc::clone(&ready);
+				let dropped = Rc::clone(&dropped);
+				let observed_cancellation = Rc::clone(&observed_cancellation);
+				move |cancellation| {
+					observed_cancellation.borrow_mut().replace(cancellation);
+					TestGate {
+						ready: Rc::clone(&ready),
+						dropped: Rc::clone(&dropped),
+						result: Some(Ok("shared".to_string())),
+					}
+				}
+			});
+		let first = acquire_query(
+			key.clone(),
+			QueryAcquireOptions {
+				consumer: QueryConsumer::Prefetch,
+				error_policy: QueryErrorPolicy::Discard,
+			},
+		);
+		let second = acquire_query(
+			key,
+			QueryAcquireOptions {
+				consumer: QueryConsumer::Navigation(2),
+				error_policy: QueryErrorPolicy::Discard,
+			},
+		);
+		assert_eq!(poll_one_task(&tasks), Poll::Pending);
+
+		// Act
+		drop(first);
+		let cancellation = observed_cancellation
+			.borrow()
+			.as_ref()
+			.expect("the shared fetch receives a cancellation handle")
+			.clone();
+
+		// Assert
+		assert!(
+			!cancellation.is_cancelled(),
+			"the remaining lease keeps the shared request cancellation alive"
+		);
+		ready.set(true);
+		assert_eq!(poll_one_task(&tasks), Poll::Ready(()));
+		assert_eq!(
+			tokio_test::block_on(second.result()),
+			Ok("shared".to_string())
+		);
+		assert_eq!(dropped.get(), 1);
+	});
+}
+
+#[test]
+#[serial(query_cache)]
+fn dropping_final_lease_cancels_request_once() {
+	ReactiveScope::run(|| {
+		// Arrange
+		clear_query_cache_for_test();
+		let tasks = Rc::new(RefCell::new(VecDeque::new()));
+		let tasks_for_sink = Rc::clone(&tasks);
+		let _sink = crate::platform::install_task_sink(move |task| {
+			tasks_for_sink.borrow_mut().push_back(task);
+		});
+		let ready = Rc::new(Cell::new(false));
+		let dropped = Rc::new(Cell::new(0));
+		let key: QueryKey<String, String> = QueryKey::new("final-lease-cancel", {
+			let ready = Rc::clone(&ready);
+			let dropped = Rc::clone(&dropped);
+			move || TestGate {
+				ready: Rc::clone(&ready),
+				dropped: Rc::clone(&dropped),
+				result: Some(Ok("never-published".to_string())),
+			}
+		});
+		let entry = query_entry(key.clone());
+		let lease = acquire_query(
+			key,
+			QueryAcquireOptions {
+				consumer: QueryConsumer::Navigation(3),
+				error_policy: QueryErrorPolicy::Discard,
+			},
+		);
+		assert_eq!(poll_one_task(&tasks), Poll::Pending);
+		let cancelled = Rc::new(Cell::new(0));
+		let cancelled_for_callback = Rc::clone(&cancelled);
+		let registration = entry
+			.request
+			.borrow()
+			.as_ref()
+			.expect("the pending request must be owned by the entry")
+			.source
+			.register(move || cancelled_for_callback.set(cancelled_for_callback.get() + 1));
+
+		// Act
+		drop(lease);
+		let completion = poll_one_task(&tasks);
+
+		// Assert
+		assert_eq!(cancelled.get(), 1, "the source must cancel exactly once");
+		assert!(entry.request.borrow().is_none());
+		assert!(!entry.is_fetching.get());
+		assert_eq!(completion, Poll::Ready(()));
+		assert_eq!(dropped.get(), 1, "the aborted fetch future must be dropped");
+		drop(registration);
+		let _ = ready;
+	});
+}
+
+#[test]
+#[serial(query_cache)]
+fn queued_refetch_keeps_completed_generation_for_existing_lease() {
+	ReactiveScope::run(|| {
+		// Arrange
+		clear_query_cache_for_test();
+		let tasks = Rc::new(RefCell::new(VecDeque::new()));
+		let tasks_for_sink = Rc::clone(&tasks);
+		let _sink = crate::platform::install_task_sink(move |task| {
+			tasks_for_sink.borrow_mut().push_back(task);
+		});
+		let ready = Rc::new(Cell::new(false));
+		let dropped = Rc::new(Cell::new(0));
+		let key: QueryKey<String, String> = QueryKey::new("queued-generation", {
+			let ready = Rc::clone(&ready);
+			let dropped = Rc::clone(&dropped);
+			move || TestGate {
+				ready: Rc::clone(&ready),
+				dropped: Rc::clone(&dropped),
+				result: Some(Ok("first".to_string())),
+			}
+		});
+		let entry = query_entry(key.clone());
+		let lease = acquire_query(
+			key,
+			QueryAcquireOptions {
+				consumer: QueryConsumer::Navigation(11),
+				error_policy: QueryErrorPolicy::Discard,
+			},
+		);
+		assert_eq!(poll_one_task(&tasks), Poll::Pending);
+		let _ = entry.start_fetch(true);
+
+		// Act
+		ready.set(true);
+		assert_eq!(poll_one_task(&tasks), Poll::Ready(()));
+		let mut result = Box::pin(lease.result());
+		let mut context = Context::from_waker(Waker::noop());
+
+		// Assert
+		assert!(
+			entry.has_request(),
+			"the queued refetch must start after completion"
+		);
+		assert_eq!(
+			result.as_mut().poll(&mut context),
+			Poll::Ready(Ok("first".to_string()))
+		);
+		drop(result);
+		drop(lease);
+	});
+}
+
+#[test]
+#[serial(query_cache)]
+fn cancelling_request_discards_queued_refetch() {
+	ReactiveScope::run(|| {
+		// Arrange
+		clear_query_cache_for_test();
+		let tasks = Rc::new(RefCell::new(VecDeque::new()));
+		let tasks_for_sink = Rc::clone(&tasks);
+		let _sink = crate::platform::install_task_sink(move |task| {
+			tasks_for_sink.borrow_mut().push_back(task);
+		});
+		let ready = Rc::new(Cell::new(false));
+		let dropped = Rc::new(Cell::new(0));
+		let key: QueryKey<String, String> = QueryKey::new("cancel-queued-refetch", {
+			let ready = Rc::clone(&ready);
+			let dropped = Rc::clone(&dropped);
+			move || TestGate {
+				ready: Rc::clone(&ready),
+				dropped: Rc::clone(&dropped),
+				result: Some(Ok("replacement".to_string())),
+			}
+		});
+		let entry = query_entry(key.clone());
+		let lease = acquire_query(
+			key.clone(),
+			QueryAcquireOptions {
+				consumer: QueryConsumer::Navigation(12),
+				error_policy: QueryErrorPolicy::Discard,
+			},
+		);
+		assert_eq!(poll_one_task(&tasks), Poll::Pending);
+		let _ = entry.start_fetch(true);
+		assert!(entry.refetch_after_in_flight.get());
+
+		// Act
+		drop(lease);
+
+		// Assert
+		assert!(!entry.refetch_after_in_flight.get());
+		assert_eq!(poll_one_task(&tasks), Poll::Ready(()));
+		ready.set(true);
+		let replacement = acquire_query(
+			key,
+			QueryAcquireOptions {
+				consumer: QueryConsumer::Navigation(13),
+				error_policy: QueryErrorPolicy::Discard,
+			},
+		);
+		assert_eq!(poll_one_task(&tasks), Poll::Ready(()));
+		assert!(
+			!entry.has_request(),
+			"a cancelled request must not schedule a stale follow-up fetch"
+		);
+		assert_eq!(
+			tokio_test::block_on(replacement.result()),
+			Ok("replacement".to_string())
+		);
+	});
+}
+
+#[test]
+#[serial(query_cache)]
+fn cancel_completion_race_does_not_publish_obsolete_value() {
+	ReactiveScope::run(|| {
+		// Arrange
+		clear_query_cache_for_test();
+		let tasks = Rc::new(RefCell::new(VecDeque::new()));
+		let tasks_for_sink = Rc::clone(&tasks);
+		let _sink = crate::platform::install_task_sink(move |task| {
+			tasks_for_sink.borrow_mut().push_back(task);
+		});
+		let ready = Rc::new(Cell::new(false));
+		let dropped = Rc::new(Cell::new(0));
+		let key: QueryKey<String, String> = QueryKey::new("cancel-race", {
+			let ready = Rc::clone(&ready);
+			let dropped = Rc::clone(&dropped);
+			move || TestGate {
+				ready: Rc::clone(&ready),
+				dropped: Rc::clone(&dropped),
+				result: Some(Ok("obsolete".to_string())),
+			}
+		});
+		let entry = query_entry(key.clone());
+		let lease = acquire_query(
+			key,
+			QueryAcquireOptions {
+				consumer: QueryConsumer::Navigation(4),
+				error_policy: QueryErrorPolicy::Discard,
+			},
+		);
+		assert_eq!(poll_one_task(&tasks), Poll::Pending);
+		let generation = entry
+			.request
+			.borrow()
+			.as_ref()
+			.expect("the request generation must be visible")
+			.generation;
+
+		// Act
+		drop(lease);
+		entry.complete_fetch(generation, Ok("obsolete".to_string()));
+		let completion = poll_one_task(&tasks);
+
+		// Assert
+		assert_eq!(completion, Poll::Ready(()));
+		assert_eq!(
+			entry.state.with_untracked(|state| state.clone()),
+			ResourceState::Loading
+		);
+		assert!(entry.completed.borrow().is_none());
+		assert_eq!(dropped.get(), 1);
+		let _ = ready;
+	});
+}
+
+#[test]
+#[serial(query_cache)]
+fn cancelled_revalidation_preserves_previous_success() {
+	ReactiveScope::run(|| {
+		// Arrange
+		clear_query_cache_for_test();
+		let tasks = Rc::new(RefCell::new(VecDeque::new()));
+		let tasks_for_sink = Rc::clone(&tasks);
+		let _sink = crate::platform::install_task_sink(move |task| {
+			tasks_for_sink.borrow_mut().push_back(task);
+		});
+		let ready = Rc::new(Cell::new(false));
+		let dropped = Rc::new(Cell::new(0));
+		let key: QueryKey<String, String> = QueryKey::new("cancel-revalidation", {
+			let ready = Rc::clone(&ready);
+			let dropped = Rc::clone(&dropped);
+			move || TestGate {
+				ready: Rc::clone(&ready),
+				dropped: Rc::clone(&dropped),
+				result: Some(Ok("new".to_string())),
+			}
+		})
+		.with_stale_time(Duration::ZERO);
+		let entry = query_entry(key.clone());
+		entry.state.set(ResourceState::Success("old".to_string()));
+		entry.last_fetched_ms.set(Some(now_ms()));
+		let lease = acquire_query(
+			key,
+			QueryAcquireOptions {
+				consumer: QueryConsumer::Navigation(5),
+				error_policy: QueryErrorPolicy::Discard,
+			},
+		);
+		assert_eq!(poll_one_task(&tasks), Poll::Pending);
+
+		// Act
+		drop(lease);
+		ready.set(true);
+		let completion = poll_one_task(&tasks);
+
+		// Assert
+		assert_eq!(completion, Poll::Ready(()));
+		assert_eq!(
+			entry.state.with_untracked(|state| state.clone()),
+			ResourceState::Success("old".to_string())
+		);
+		assert!(!entry.is_fetching.get());
+		assert!(entry.last_fetched_ms.get().is_some());
+		assert_eq!(dropped.get(), 1);
+	});
+}
+
+#[test]
+#[serial(query_cache)]
+fn discarded_error_retries_on_next_acquisition() {
+	ReactiveScope::run(|| {
+		// Arrange
+		clear_query_cache_for_test();
+		let calls = Rc::new(Cell::new(0));
+		let key: QueryKey<String, String> = QueryKey::new("discarded-error", {
+			let calls = Rc::clone(&calls);
+			move || {
+				calls.set(calls.get() + 1);
+				async { Err::<String, _>("route failed".to_string()) }
+			}
+		});
+
+		// Act
+		let first = acquire_query(
+			key.clone(),
+			QueryAcquireOptions {
+				consumer: QueryConsumer::Navigation(6),
+				error_policy: QueryErrorPolicy::Discard,
+			},
+		);
+		assert_eq!(
+			tokio_test::block_on(first.result()),
+			Err("route failed".to_string())
+		);
+		let second = acquire_query(
+			key,
+			QueryAcquireOptions {
+				consumer: QueryConsumer::Navigation(7),
+				error_policy: QueryErrorPolicy::Discard,
+			},
+		);
+
+		// Assert
+		assert_eq!(calls.get(), 2);
+		assert_eq!(
+			tokio_test::block_on(second.result()),
+			Err("route failed".to_string())
+		);
+	});
+}
+
+#[test]
+#[serial(query_cache)]
+fn invalidation_survives_cancelled_request() {
+	ReactiveScope::run(|| {
+		// Arrange
+		clear_query_cache_for_test();
+		let tasks = Rc::new(RefCell::new(VecDeque::new()));
+		let tasks_for_sink = Rc::clone(&tasks);
+		let _sink = crate::platform::install_task_sink(move |task| {
+			tasks_for_sink.borrow_mut().push_back(task);
+		});
+		let ready = Rc::new(Cell::new(false));
+		let dropped = Rc::new(Cell::new(0));
+		let calls = Rc::new(Cell::new(0));
+		let key: QueryKey<String, String> = QueryKey::new("cancel-then-invalidate", {
+			let ready = Rc::clone(&ready);
+			let dropped = Rc::clone(&dropped);
+			let calls = Rc::clone(&calls);
+			move || {
+				calls.set(calls.get() + 1);
+				TestGate {
+					ready: Rc::clone(&ready),
+					dropped: Rc::clone(&dropped),
+					result: Some(Ok("refetched".to_string())),
+				}
+			}
+		});
+		let lease = acquire_query(
+			key,
+			QueryAcquireOptions {
+				consumer: QueryConsumer::Navigation(8),
+				error_policy: QueryErrorPolicy::Discard,
+			},
+		);
+		assert_eq!(poll_one_task(&tasks), Poll::Pending);
+
+		// Act
+		drop(lease);
+		ready.set(true);
+		invalidate_query_id("cancel-then-invalidate");
+		assert_eq!(
+			tasks.borrow().len(),
+			2,
+			"the invalidation must queue a replacement request"
+		);
+		assert_eq!(poll_one_task(&tasks), Poll::Ready(()));
+		assert_eq!(poll_one_task(&tasks), Poll::Ready(()));
+
+		// Assert
+		assert_eq!(calls.get(), 2);
+		assert_eq!(dropped.get(), 2);
+		let entry = query_entry(QueryKey::new("cancel-then-invalidate", || async {
+			Ok::<_, String>("unused".to_string())
+		}));
+		assert_eq!(
+			entry.state.with_untracked(|state| state.clone()),
+			ResourceState::Success("refetched".to_string())
+		);
+	});
+}
+
+#[rstest]
+#[serial(query_cache)]
+fn use_query_deduplicates_shared_key() {
+	ReactiveScope::run(|| {
+		// Arrange
+		clear_query_cache_for_test();
+		let calls = Rc::new(Cell::new(0));
+
+		// Act
+		let first = use_query(QueryKey::new("shared", {
+			let calls = Rc::clone(&calls);
+			move || {
+				calls.set(calls.get() + 1);
+				async { Ok::<_, String>("value".to_string()) }
+			}
+		}));
+		let second = use_query(QueryKey::new("shared", {
+			let calls = Rc::clone(&calls);
+			move || {
+				calls.set(calls.get() + 1);
+				async { Ok::<_, String>("value".to_string()) }
+			}
+		}));
+
+		// Assert
+		assert_eq!(calls.get(), 1);
+		assert_eq!(first.data(), Some("value".to_string()));
+		assert_eq!(second.data(), Some("value".to_string()));
+	});
+}
+
+#[rstest]
+#[serial(query_cache)]
+fn cached_query_survives_the_scope_that_created_it() {
+	// Arrange
+	clear_query_cache_for_test();
+	let key = QueryKey::new("retained-cache-entry", || async {
+		Ok::<_, String>("cached".to_string())
+	});
+	let scope = ReactiveScope::new();
+	let first = scope.enter(|| use_query(key.clone()));
+	assert_eq!(first.data(), Some("cached".to_string()));
+	drop(first);
+	drop(scope);
+
+	// Act
+	let cached = ReactiveScope::run(|| use_query(key));
+
+	// Assert
+	assert_eq!(cached.data(), Some("cached".to_string()));
+}
+
+#[rstest]
+#[serial(query_cache)]
+fn refetch_runs_fetcher_again() {
+	ReactiveScope::run(|| {
+		// Arrange
+		clear_query_cache_for_test();
+		let calls = Rc::new(Cell::new(0));
+		let query = use_query(QueryKey::new("manual-refetch", {
+			let calls = Rc::clone(&calls);
+			move || {
+				let value = calls.get() + 1;
+				calls.set(value);
+				async move { Ok::<_, String>(value) }
+			}
+		}));
+
+		// Act
+		query.refetch();
+
+		// Assert
+		assert_eq!(calls.get(), 2);
+		assert_eq!(query.data(), Some(2));
+	});
+}
+
+#[rstest]
+#[serial(query_cache)]
+fn failed_query_respects_stale_time_before_retrying() {
+	ReactiveScope::run(|| {
+		// Arrange
+		clear_query_cache_for_test();
+		let calls = Rc::new(Cell::new(0));
+		let key = QueryKey::new("failed-query", {
+			let calls = Rc::clone(&calls);
+			move || {
+				calls.set(calls.get() + 1);
+				async { Err::<String, _>("not found".to_string()) }
+			}
+		})
+		.with_stale_time(Duration::from_secs(30));
+
+		// Act
+		let first = use_query(key.clone());
+		let second = use_query(key);
+
+		// Assert
+		assert_eq!(calls.get(), 1);
+		assert_eq!(first.error(), Some("not found".to_string()));
+		assert_eq!(second.error(), Some("not found".to_string()));
+	});
+}
+
+#[rstest]
+#[serial(query_cache)]
+fn successful_query_is_not_pending_during_background_fetch() {
+	ReactiveScope::run(|| {
+		// Arrange
+		clear_query_cache_for_test();
+		let entry = Rc::new(QueryEntry::new(QueryKey::new(
+			"background-refetch",
+			|| async { Ok::<_, String>("fresh".to_string()) },
+		)));
+		entry
+			.state
+			.set(ResourceState::Success("cached".to_string()));
+		entry.is_fetching.set(true);
+		let lease = entry.make_lease(None, QueryErrorPolicy::Retain);
+		let query = QueryHandle {
+			entry,
+			lease,
+			guards: Rc::new(RefCell::new(Vec::new())),
+		};
+
+		// Act
+		let data = query.data();
+		let is_fetching = query.is_fetching();
+		let is_pending = query.is_pending();
+
+		// Assert
+		assert_eq!(data, Some("cached".to_string()));
+		assert!(is_fetching);
+		assert!(!is_pending);
+	});
+}
+
+#[rstest]
+#[serial(query_cache)]
+fn mutation_success_invalidates_registered_query() {
+	ReactiveScope::run(|| {
+		// Arrange
+		clear_query_cache_for_test();
+		let calls = Rc::new(Cell::new(0));
+		let key = QueryKey::new("invalidated", {
+			let calls = Rc::clone(&calls);
+			move || {
+				let value = calls.get() + 1;
+				calls.set(value);
+				async move { Ok::<_, String>(value) }
+			}
+		});
+		let query = use_query(key.clone());
+		let mutation =
+			use_mutation(|_: ()| async { Ok::<_, String>("done".to_string()) }).invalidates(key);
+
+		// Act
+		mutation.force_success_for_test("done".to_string());
+
+		// Assert
+		assert_eq!(calls.get(), 2);
+		assert_eq!(query.data(), Some(2));
+	});
+}
+
+#[rstest]
+#[serial(query_cache)]
+fn invalidation_during_in_flight_fetch_runs_after_completion() {
+	ReactiveScope::run(|| {
+		// Arrange
+		clear_query_cache_for_test();
+		let calls = Rc::new(Cell::new(0));
+
+		// Act
+		let query = use_query(QueryKey::new("queued-invalidation", {
+			let calls = Rc::clone(&calls);
+			move || {
+				let calls = Rc::clone(&calls);
+				async move {
+					let value = calls.get() + 1;
+					calls.set(value);
+					if value == 1 {
+						invalidate_query_id("queued-invalidation");
+					}
+					Ok::<_, String>(value)
+				}
+			}
+		}));
+
+		// Assert
+		assert_eq!(calls.get(), 2);
+		assert_eq!(query.data(), Some(2));
+	});
+}
+
+#[test]
+#[serial(query_cache)]
+fn manual_query_call_order_key_reserves_client_resource_counter() {
+	ReactiveScope::run(|| {
+		// Arrange
+		clear_query_cache_for_test();
+		super::super::resource::set_client_resource_counter(0);
+
+		// Act
+		let _entry = query_entry(QueryKey::new("rh-res-0", || async {
+			Ok::<_, String>("query".to_string())
+		}));
+
+		// Assert
+		assert_eq!(super::super::resource::current_client_resource_counter(), 1);
+		super::super::resource::set_client_resource_counter(0);
+	});
+}
+
+#[test]
+#[serial(query_cache)]
+fn hydrated_query_error_is_fresh_on_first_mount() {
+	ReactiveScope::run(|| {
+		// Arrange
+		let (hydrated_state, last_fetched_ms) =
+			initial_query_state(Some(ResourceState::Error("not found".to_string())));
+		let entry = QueryEntry::new(QueryKey::new("hydrated-query-error", || async {
+			Err::<String, _>("not found".to_string())
+		}));
+		entry.state.set(hydrated_state);
+		entry.last_fetched_ms.set(last_fetched_ms);
+
+		// Assert
+		assert!(
+			!entry.should_fetch_on_mount(),
+			"a freshly hydrated error must remain visible for the initial mount"
+		);
+	});
+}
+
+#[tokio::test]
+#[serial(query_cache)]
+async fn ssr_replayed_query_error_is_fresh_for_stale_time() {
+	// Arrange
+	let context = Rc::new(RefCell::new(
+		crate::ssr::resource_context::SsrResourceContext::new(Duration::from_secs(1)),
+	));
+
+	let discovery_query = crate::ssr::resource_context::scope_context(Rc::clone(&context), async {
+		ReactiveScope::run(|| {
+			let query = try_create_ssr_query(QueryKey::new("ssr-replayed-query-error", || async {
+				Err::<String, _>("not found".to_string())
+			}))
+			.expect("active SSR context should create the query");
+			let _ = query.get();
+			query
+		})
+	})
+	.await;
+	assert!(crate::ssr::resource_context::resolve_external_resources(&context).await);
+
+	// Act
+	let replayed_query = crate::ssr::resource_context::scope_context(Rc::clone(&context), async {
+		ReactiveScope::run(|| {
+			let query = try_create_ssr_query(QueryKey::new("ssr-replayed-query-error", || async {
+				Err::<String, _>("must not refetch during replay".to_string())
+			}))
+			.expect("active SSR context should replay the query");
+			let query = query.stale_time(Duration::from_secs(30));
+
+			// Assert
+			assert_eq!(query.get(), ResourceState::Error("not found".to_string()));
+			assert!(
+				!query.entry.is_stale(),
+				"a replayed error must remain fresh when stale_time is applied"
+			);
+			query
+		})
+	})
+	.await;
+	drop(replayed_query);
+	drop(discovery_query);
+}
+
+#[rstest]
+#[serial(query_cache)]
+fn server_fn_key_hashes_arguments_without_exposing_them() {
+	// Arrange
+	clear_query_cache_for_test();
+
+	struct Marker;
+
+	impl crate::server_fn::ServerFnMetadata for Marker {
+		const PATH: &'static str = "/api/server_fn/list_jobs";
+		const NAME: &'static str = "list_jobs";
+		const CODEC: &'static str = "json";
+		const IS_JSON_CODEC: bool = true;
+	}
+
+	// Act
+	let key: QueryKey<Vec<i64>, crate::server_fn::ServerFnError> =
+		QueryKey::from_server_fn::<Marker, _, _, _>((42_i64,), || async { Ok(vec![42]) });
+
+	// Assert
+	assert_eq!(
+		key.id(),
+		"server_fn:/api/server_fn/list_jobs:json:sha256:b86b1ea11b28136fe5224b9d1e3017b7efb68d4fae0b90c4940e0c0f89b3907a"
+	);
+	assert!(!key.id().contains("[42]"));
+}
+
+#[rstest]
+#[serial(query_cache)]
+fn server_fn_key_preserves_large_integer_arguments() {
+	// Arrange
+	clear_query_cache_for_test();
+
+	struct Marker;
+
+	impl crate::server_fn::ServerFnMetadata for Marker {
+		const PATH: &'static str = "/api/server_fn/load_job";
+		const NAME: &'static str = "load_job";
+		const CODEC: &'static str = "json";
+		const IS_JSON_CODEC: bool = true;
+	}
+
+	// Act
+	let key: QueryKey<(), crate::server_fn::ServerFnError> =
+		QueryKey::from_server_fn::<Marker, _, _, _>((u128::MAX,), || async { Ok(()) });
+
+	// Assert
+	assert_eq!(
+		key.id(),
+		"server_fn:/api/server_fn/load_job:json:sha256:d80bcc323657a82faa939889d29892c9b53c3bb4f98ff3738140a27a3ac7b9df"
+	);
+	assert!(!key.id().contains(&u128::MAX.to_string()));
+}
+
+#[rstest]
+#[serial(query_cache)]
+fn server_fn_key_canonicalizes_object_arguments() {
+	// Arrange
+	clear_query_cache_for_test();
+
+	struct Marker;
+
+	impl crate::server_fn::ServerFnMetadata for Marker {
+		const PATH: &'static str = "/api/server_fn/filter_jobs";
+		const NAME: &'static str = "filter_jobs";
+		const CODEC: &'static str = "json";
+		const IS_JSON_CODEC: bool = true;
+	}
+
+	// Act
+	let first: QueryKey<(), crate::server_fn::ServerFnError> =
+		QueryKey::from_server_fn::<Marker, _, _, _>(
+			(OrderedMapArgs(&[("status", 1), ("owner", 2)]),),
+			|| async { Ok(()) },
+		);
+	let second: QueryKey<(), crate::server_fn::ServerFnError> =
+		QueryKey::from_server_fn::<Marker, _, _, _>(
+			(OrderedMapArgs(&[("owner", 2), ("status", 1)]),),
+			|| async { Ok(()) },
+		);
+
+	// Assert
+	assert_eq!(first.id(), second.id());
+	assert_eq!(
+		first.id(),
+		"server_fn:/api/server_fn/filter_jobs:json:sha256:b2b2c11c6c2d2aacfabe8dba6102508d46a7690b66d0662adc332e4802f078d2"
+	);
+}
+
+#[rstest]
+#[serial(query_cache)]
+fn server_fn_key_canonicalizes_large_integer_object_arguments() {
+	// Arrange
+	clear_query_cache_for_test();
+
+	struct Marker;
+
+	impl crate::server_fn::ServerFnMetadata for Marker {
+		const PATH: &'static str = "/api/server_fn/filter_large_jobs";
+		const NAME: &'static str = "filter_large_jobs";
+		const CODEC: &'static str = "json";
+		const IS_JSON_CODEC: bool = true;
+	}
+
+	// Act
+	let first: QueryKey<(), crate::server_fn::ServerFnError> =
+		QueryKey::from_server_fn::<Marker, _, _, _>(
+			(OrderedLargeMapArgs(&[("status", u128::MAX), ("owner", 2)]),),
+			|| async { Ok(()) },
+		);
+	let second: QueryKey<(), crate::server_fn::ServerFnError> =
+		QueryKey::from_server_fn::<Marker, _, _, _>(
+			(OrderedLargeMapArgs(&[("owner", 2), ("status", u128::MAX)]),),
+			|| async { Ok(()) },
+		);
+
+	// Assert
+	assert_eq!(first.id(), second.id());
+}
+
+#[rstest]
+#[serial(query_cache)]
+fn server_fn_key_does_not_expose_sensitive_arguments() {
+	// Arrange
+	clear_query_cache_for_test();
+
+	struct Marker;
+
+	impl crate::server_fn::ServerFnMetadata for Marker {
+		const PATH: &'static str = "/api/server_fn/load_user";
+		const NAME: &'static str = "load_user";
+		const CODEC: &'static str = "json";
+		const IS_JSON_CODEC: bool = true;
+	}
+
+	let email = "sensitive@example.com";
+
+	// Act
+	let key: QueryKey<(), crate::server_fn::ServerFnError> =
+		QueryKey::from_server_fn::<Marker, _, _, _>((email,), || async { Ok(()) });
+
+	// Assert
+	assert_eq!(
+		key.id(),
+		"server_fn:/api/server_fn/load_user:json:sha256:5cb828e12cdd77b9af33cfac3c965b44acc673692df8ffb22bc6794506ea59bc"
+	);
+	assert!(!key.id().contains(email));
+}

@@ -48,6 +48,14 @@ pub(crate) fn select_by_lookup<M: Model>(
 	let (mut sql, values) = build_select_sql(&statement, backend);
 	sql.push_str(" LIMIT 2");
 	if lock && matches!(backend, DatabaseBackend::Postgres | DatabaseBackend::MySql) {
+		// Workaround for missing reinhardt-query lock rendering
+		// (tracked in reinhardt-web#5813).
+		// Remove this suffix once reinhardt-query renders
+		// SelectStatement::lock_exclusive() / LockClause.
+		//
+		// Ideal implementation (without workaround):
+		//   statement.lock_exclusive();
+		//   let (sql, values) = build_select_sql(&statement, backend);
 		sql.push_str(" FOR UPDATE");
 	}
 	Ok(bound_sql(sql, values))
@@ -106,35 +114,39 @@ pub(crate) fn update_by_primary_key<M: Model>(
 
 	let encoded_fields = model.encode_database_fields().map_err(field_codec_error)?;
 	let field_metadata = M::field_metadata();
-	let primary_key_fields = M::composite_primary_key().map_or_else(
+	let composite_primary_key = M::composite_primary_key();
+	let primary_key_fields = composite_primary_key.as_ref().map_or_else(
 		|| vec![M::primary_key_field().to_owned()],
 		|primary_key| primary_key.fields().to_vec(),
 	);
 	for logical_name in primary_key_fields {
-		let value = encoded_fields
-			.get(&logical_name)
-			.filter(|value| **value != DatabaseValue::Null)
-			.cloned()
-			.ok_or_else(|| {
-				Error::Validation(format!(
-					"typed upsert UPDATE requires non-null primary-key field '{logical_name}'"
-				))
-			})?;
-		let column_name = field_metadata
+		let field = field_metadata
 			.iter()
-			.find(|field| field.name == logical_name)
-			.map_or_else(
-				|| {
-					if logical_name == M::primary_key_field() {
-						M::primary_key_column()
-					} else {
-						logical_name.as_str()
-					}
-				},
-				|field| field.db_column_name(),
-			);
-		statement
-			.and_where(Expr::col(Alias::new(column_name)).eq(database_value_to_query_value(value)));
+			.find(|field| field.name == logical_name);
+		let column_name = match field {
+			Some(field) => field.db_column_name(),
+			None if composite_primary_key.is_none() && logical_name == M::primary_key_field() => {
+				M::primary_key_column()
+			}
+			None => {
+				return Err(Error::Validation(format!(
+					"typed upsert UPDATE primary-key field '{logical_name}' is missing model metadata"
+				)));
+			}
+		};
+		let value = encoded_fields.get(&logical_name).ok_or_else(|| {
+			Error::Validation(format!(
+				"typed upsert UPDATE primary-key field '{logical_name}' is missing encoded model values"
+			))
+		})?;
+		if *value == DatabaseValue::Null {
+			return Err(Error::Validation(format!(
+				"typed upsert UPDATE requires non-null primary-key field '{logical_name}'"
+			)));
+		}
+		statement.and_where(
+			Expr::col(Alias::new(column_name)).eq(database_value_to_query_value(value.clone())),
+		);
 	}
 
 	let (sql, values) = build_update_sql(&statement, backend);
@@ -320,6 +332,118 @@ mod tests {
 		}
 	}
 
+	#[derive(Clone, Debug, Serialize, Deserialize)]
+	struct MissingCompositeMetadata {
+		tenant_id: i64,
+		article_id: i64,
+		headline: String,
+	}
+
+	impl Model for MissingCompositeMetadata {
+		type PrimaryKey = String;
+		type Fields = ArticleFields;
+		type Objects = Manager<Self>;
+
+		fn table_name() -> &'static str {
+			"missing_composite_metadata"
+		}
+
+		fn new_fields() -> Self::Fields {
+			ArticleFields
+		}
+
+		fn primary_key(&self) -> Option<Self::PrimaryKey> {
+			None
+		}
+
+		fn set_primary_key(&mut self, _value: Self::PrimaryKey) {}
+
+		fn composite_primary_key() -> Option<CompositePrimaryKey> {
+			CompositePrimaryKey::new(vec!["tenant_id".to_owned(), "article_id".to_owned()]).ok()
+		}
+
+		fn field_metadata() -> Vec<FieldInfo> {
+			vec![
+				field("tenant_id", None, true, false, false),
+				field("headline", None, false, false, false),
+			]
+		}
+	}
+
+	impl MissingCompositeMetadata {
+		fn headline_field() -> FieldRef<Self, String> {
+			// SAFETY: the names match the model's declared headline field.
+			unsafe { FieldRef::from_model_field("headline", "headline") }
+		}
+	}
+
+	#[derive(Clone, Debug, Serialize, Deserialize)]
+	struct MissingPrimaryKeyValue {
+		other_id: i64,
+		headline: String,
+	}
+
+	impl Model for MissingPrimaryKeyValue {
+		type PrimaryKey = i64;
+		type Fields = ArticleFields;
+		type Objects = Manager<Self>;
+
+		fn table_name() -> &'static str {
+			"missing_primary_key_values"
+		}
+
+		fn new_fields() -> Self::Fields {
+			ArticleFields
+		}
+
+		fn primary_key(&self) -> Option<Self::PrimaryKey> {
+			None
+		}
+
+		fn set_primary_key(&mut self, _value: Self::PrimaryKey) {}
+
+		fn field_metadata() -> Vec<FieldInfo> {
+			vec![
+				field("id", None, true, false, false),
+				field("headline", None, false, false, false),
+			]
+		}
+	}
+
+	impl MissingPrimaryKeyValue {
+		fn headline_field() -> FieldRef<Self, String> {
+			// SAFETY: the names match the model's declared headline field.
+			unsafe { FieldRef::from_model_field("headline", "headline") }
+		}
+	}
+
+	#[derive(Clone, Debug, Serialize, Deserialize)]
+	struct MetadataFreeModel {
+		id: Option<i64>,
+	}
+
+	impl Model for MetadataFreeModel {
+		type PrimaryKey = i64;
+		type Fields = ArticleFields;
+		type Objects = Manager<Self>;
+
+		fn table_name() -> &'static str {
+			"metadata_free_models"
+		}
+
+		fn new_fields() -> Self::Fields {
+			ArticleFields
+		}
+
+		fn primary_key(&self) -> Option<Self::PrimaryKey> {
+			self.id
+		}
+
+		fn set_primary_key(&mut self, value: Self::PrimaryKey) {
+			self.id = Some(value);
+		}
+	}
+
 	fn field(
 		name: &str,
 		db_column: Option<&str>,
@@ -501,6 +625,136 @@ mod tests {
 			]
 		);
 		assert_eq!(compiled.sql.contains(quote_bearing_headline), false);
+	}
+
+	#[rstest]
+	fn update_rejects_empty_assignments() {
+		let model = ArticleRevision {
+			tenant_id: 7,
+			article_id: 9,
+			headline: "old".to_owned(),
+		};
+
+		let error = expect_error(
+			update_by_primary_key(&model, &[], DatabaseBackend::Postgres),
+			"empty assignments must fail",
+		);
+
+		assert_validation(
+			error,
+			"typed upsert UPDATE requires at least one assignment",
+		);
+	}
+
+	#[rstest]
+	fn update_rejects_missing_composite_primary_key_metadata() {
+		let model = MissingCompositeMetadata {
+			tenant_id: 7,
+			article_id: 9,
+			headline: "old".to_owned(),
+		};
+		let values = vec![
+			TypedAssignment::new(MissingCompositeMetadata::headline_field(), "new")
+				.expect("encode headline"),
+		];
+
+		let error = expect_error(
+			update_by_primary_key(&model, &values, DatabaseBackend::Postgres),
+			"missing composite primary-key metadata must fail",
+		);
+
+		assert_validation(
+			error,
+			"typed upsert UPDATE primary-key field 'article_id' is missing model metadata",
+		);
+	}
+
+	#[rstest]
+	fn update_rejects_missing_primary_key_value() {
+		let model = MissingPrimaryKeyValue {
+			other_id: 7,
+			headline: "old".to_owned(),
+		};
+		let values = vec![
+			TypedAssignment::new(MissingPrimaryKeyValue::headline_field(), "new")
+				.expect("encode headline"),
+		];
+
+		let error = expect_error(
+			update_by_primary_key(&model, &values, DatabaseBackend::Postgres),
+			"missing primary-key value must fail",
+		);
+
+		assert_validation(
+			error,
+			"typed upsert UPDATE primary-key field 'id' is missing encoded model values",
+		);
+	}
+
+	#[rstest]
+	fn update_rejects_null_primary_key_value() {
+		let model = Article {
+			id: None,
+			tenant_id: 7,
+			slug: Some("rust".to_owned()),
+			headline: "old".to_owned(),
+		};
+		let values =
+			vec![TypedAssignment::new(Article::headline_field(), "new").expect("encode headline")];
+
+		let error = expect_error(
+			update_by_primary_key(&model, &values, DatabaseBackend::Postgres),
+			"null primary-key value must fail",
+		);
+
+		assert_validation(
+			error,
+			"typed upsert UPDATE requires non-null primary-key field 'id'",
+		);
+	}
+
+	#[rstest]
+	fn select_rejects_empty_model_field_metadata() {
+		let plan = UpsertPlan::<MetadataFreeModel> {
+			lookup: Vec::new(),
+			create: Vec::new(),
+			update: Vec::new(),
+			proof: UniqueProof {
+				logical_fields: Vec::new(),
+				column_names: Vec::new(),
+				source: UniqueProofSource::PrimaryKey,
+			},
+			mode: UpsertMode::GetOrCreate,
+		};
+
+		let error = expect_error(
+			select_by_lookup(&plan, DatabaseBackend::Postgres, false),
+			"empty field metadata must fail",
+		);
+
+		assert_validation(
+			error,
+			"typed upsert SELECT requires field metadata for 'metadata_free_models'",
+		);
+	}
+
+	fn assert_validation(error: reinhardt_core::exception::Error, expected: &str) {
+		match error {
+			reinhardt_core::exception::Error::Validation(message) => {
+				assert_eq!(message, expected);
+			}
+			other => panic!("expected validation error, got {other:?}"),
+		}
+	}
+
+	fn expect_error<T>(
+		result: reinhardt_core::exception::Result<T>,
+		message: &str,
+	) -> reinhardt_core::exception::Error {
+		match result {
+			Ok(_) => panic!("{message}"),
+			Err(error) => error,
+		}
 	}
 
 	fn quoted(backend: DatabaseBackend, identifier: &str) -> String {

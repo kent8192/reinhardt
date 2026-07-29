@@ -4,7 +4,7 @@ use super::loader_registry::LoaderConsumer;
 use crate::cancellation::CancellationHandle;
 use crate::hydration::HydrationContext;
 use crate::reactive::{
-	QueryAcquireOptions, QueryErrorPolicy, QueryKey, QueryLease, acquire_query,
+	QueryAcquireOptions, QueryErrorPolicy, QueryFamily, QueryLease, acquire_query,
 	seed_query_from_serialized,
 };
 use reinhardt_urls::routers::client_router::{ClientRouteTreeMatch, RouteContext, RouteLoaderId};
@@ -653,8 +653,9 @@ where
 			500,
 		)
 	})?;
-	let key = QueryKey::<T, RouteLoaderError>::new_with_cancellation(cache_id, fetcher);
-	seed_query_from_serialized(key, serialized).map_err(|error| {
+	let descriptor = QueryFamily::<String, T, RouteLoaderError>::new("reinhardt.route_loader")
+		.query_with_cancellation(cache_id, fetcher);
+	seed_query_from_serialized(descriptor, serialized).map_err(|error| {
 		RouteLoaderError::from_diagnostic(
 			"route loader query hydration state is invalid",
 			Some(500),
@@ -702,9 +703,10 @@ where
 	}
 	let cache_id = loader_cache_id(id, context, specs)
 		.map_err(|error| RouteLoaderError::with_status(error.to_string(), 400))?;
-	let key = QueryKey::<T, RouteLoaderError>::new_with_cancellation(cache_id, fetcher);
+	let descriptor = QueryFamily::<String, T, RouteLoaderError>::new("reinhardt.route_loader")
+		.query_with_cancellation(cache_id, fetcher);
 	let lease = acquire_query(
-		key,
+		descriptor,
 		QueryAcquireOptions {
 			consumer: consumer.into(),
 			error_policy: QueryErrorPolicy::Discard,
@@ -883,16 +885,17 @@ mod tests {
 
 			// Act
 			let lease = acquire_query(
-				QueryKey::new_with_cancellation(cache_id, {
-					let fetches = Rc::clone(&fetches);
-					move |_cancellation| {
+				QueryFamily::<String, String, RouteLoaderError>::new("reinhardt.route_loader")
+					.query_with_cancellation(cache_id, {
 						let fetches = Rc::clone(&fetches);
-						async move {
-							fetches.set(fetches.get() + 1);
-							Ok::<_, RouteLoaderError>("client refetch".to_string())
+						move |_cancellation| {
+							let fetches = Rc::clone(&fetches);
+							async move {
+								fetches.set(fetches.get() + 1);
+								Ok::<_, RouteLoaderError>("client refetch".to_string())
+							}
 						}
-					}
-				}),
+					}),
 				QueryAcquireOptions {
 					consumer: QueryConsumer::Navigation(1),
 					error_policy: QueryErrorPolicy::Discard,

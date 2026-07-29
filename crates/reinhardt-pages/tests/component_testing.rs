@@ -17,7 +17,7 @@ use reinhardt_pages::event::{ClickEvent, EventPayload, FocusEvent, typed_event_h
 use reinhardt_pages::prelude::spawn_task;
 use reinhardt_pages::reactive::hooks::use_action;
 #[cfg(feature = "msw")]
-use reinhardt_pages::reactive::use_query;
+use reinhardt_pages::reactive::{QueryOptions, use_query};
 use reinhardt_pages::reactive::{ResourceState, Signal, use_resource};
 #[cfg(feature = "msw")]
 use reinhardt_pages::server_fn::{ServerFnError, server_fn};
@@ -885,7 +885,7 @@ fn jobs_component() -> Page {
 
 #[cfg(feature = "msw")]
 fn jobs_query_component() -> Page {
-	let jobs = use_query(load_jobs::key());
+	let jobs = use_query(load_jobs::query(), QueryOptions::default());
 	let refetch_jobs = jobs.clone();
 	PageElement::new("div")
 		.child(
@@ -899,13 +899,13 @@ fn jobs_query_component() -> Page {
 
 #[cfg(feature = "msw")]
 fn injected_jobs_query_component() -> Page {
-	let jobs = use_query(load_injected_jobs::key());
+	let jobs = use_query(load_injected_jobs::query(), QueryOptions::default());
 	Page::reactive(move || jobs_resource_page(jobs.get()))
 }
 
 #[cfg(feature = "msw")]
 fn injected_alias_jobs_query_component() -> Page {
-	let jobs = use_query(load_injected_alias_jobs::key());
+	let jobs = use_query(load_injected_alias_jobs::query(), QueryOptions::default());
 	Page::reactive(move || jobs_resource_page(jobs.get()))
 }
 

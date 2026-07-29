@@ -3,7 +3,8 @@
 use reinhardt_pages::component::{Component, IntoPage, Page, PageElement};
 use reinhardt_pages::deps;
 use reinhardt_pages::reactive::{
-	QueryKey, ResourceState, Signal, use_id, use_query, use_resource, use_resource_with_key,
+	QueryFamily, QueryKey, QueryOptions, ResourceState, Signal, use_id, use_query, use_resource,
+	use_resource_with_key,
 };
 use reinhardt_pages::ssr::{SsrOptions, SsrRenderer};
 use rstest::rstest;
@@ -327,20 +328,29 @@ async fn pending_ssr_resource_reuse_does_not_create_duplicate_fetcher() {
 #[tokio::test]
 async fn pending_ssr_query_reuse_does_not_create_duplicate_fetcher() {
 	let fetcher_calls = Rc::new(Cell::new(0));
+	let query_id = QueryFamily::<(), String, String>::new("shared-query")
+		.key(())
+		.id();
 	let first_calls = Rc::clone(&fetcher_calls);
 	let second_calls = Rc::clone(&fetcher_calls);
 	let view = Page::reactive(move || {
 		let first_calls = Rc::clone(&first_calls);
-		let first = use_query(QueryKey::new("shared-query", move || {
-			first_calls.set(first_calls.get() + 1);
-			async { Ok::<_, String>("shared".to_string()) }
-		}));
+		let first = use_query(
+			QueryKey::new("shared-query", move || {
+				first_calls.set(first_calls.get() + 1);
+				async { Ok::<_, String>("shared".to_string()) }
+			}),
+			QueryOptions::default(),
+		);
 
 		let second_calls = Rc::clone(&second_calls);
-		let second = use_query(QueryKey::new("shared-query", move || {
-			second_calls.set(second_calls.get() + 1);
-			async { Ok::<_, String>("shared".to_string()) }
-		}));
+		let second = use_query(
+			QueryKey::new("shared-query", move || {
+				second_calls.set(second_calls.get() + 1);
+				async { Ok::<_, String>("shared".to_string()) }
+			}),
+			QueryOptions::default(),
+		);
 
 		Page::fragment([
 			match first.get() {
@@ -366,12 +376,7 @@ async fn pending_ssr_query_reuse_does_not_create_duplicate_fetcher() {
 	assert!(html.contains("first-shared"));
 	assert!(html.contains("second-shared"));
 	assert_eq!(fetcher_calls.get(), 1);
-	assert!(
-		renderer
-			.state()
-			.get_resource_state("shared-query")
-			.is_some()
-	);
+	assert!(renderer.state().get_resource_state(&query_id).is_some());
 	assert_eq!(renderer.state().resource_count(), 1);
 }
 

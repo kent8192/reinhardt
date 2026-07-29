@@ -1930,9 +1930,9 @@ fn generate_server_handler(
 		}
 	};
 	let query_ssr_policy = if has_inject_or_extractor {
-		quote! { __query_key.with_ssr_prefetch(false) }
+		quote! { __query_descriptor.with_ssr_prefetch(false) }
 	} else {
-		quote! { __query_key }
+		quote! { __query_descriptor }
 	};
 	let private_interfaces_allowance = if info.allows_private_interfaces() {
 		quote! { #[allow(private_interfaces)] }
@@ -1944,10 +1944,34 @@ fn generate_server_handler(
 	} else {
 		quote! {}
 	};
-	let query_key_tokens = quote! {
-		/// Builds a typed cache key for this server function and argument set.
+	let query_endpoint = info
+		.options
+		.endpoint
+		.clone()
+		.unwrap_or_else(|| format!("/api/server_fn/{name}"));
+	let query_family_id = syn::LitStr::new(
+		&format!("server_fn:{query_endpoint}:{codec}"),
+		proc_macro2::Span::call_site(),
+	);
+	let query_argument_tuple_type = quote! { (#(#regular_param_types,)*) };
+	let query_generic_argument_tuple_type = quote! { (#(#query_arg_generics,)*) };
+	let query_helper_tokens = quote! {
+		/// Returns the typed query family for this server function.
 		// The generated signature mirrors endpoints that deliberately allow private
 		// request or response types on the source server function.
+		#private_interfaces_allowance
+		pub fn family() -> #pages_crate::reactive::QueryFamily<
+			#query_argument_tuple_type,
+			<#return_type as #pages_crate::server_fn::ServerFnQueryResult>::Response,
+			<#return_type as #pages_crate::server_fn::ServerFnQueryResult>::Error,
+		>
+		where
+			#return_type: #pages_crate::server_fn::ServerFnQueryResult,
+		{
+			#pages_crate::reactive::QueryFamily::new(#query_family_id)
+		}
+
+		/// Builds the exact typed cache key for this server function and argument set.
 		// Injected and extractor-only native paths intentionally cannot consume the
 		// client-visible arguments outside MSW or WASM builds, and consumer crates
 		// may intentionally omit the optional `msw` feature checked in the body.
@@ -1959,13 +1983,35 @@ fn generate_server_handler(
 			<#return_type as #pages_crate::server_fn::ServerFnQueryResult>::Response,
 			<#return_type as #pages_crate::server_fn::ServerFnQueryResult>::Error,
 		>
+			#key_where_clause
+		{
+			let __query_args = (#(#regular_param_idents.clone(),)*);
+			#pages_crate::reactive::QueryFamily::<
+				#query_generic_argument_tuple_type,
+				<#return_type as #pages_crate::server_fn::ServerFnQueryResult>::Response,
+				<#return_type as #pages_crate::server_fn::ServerFnQueryResult>::Error,
+			>::new(#query_family_id)
+			.key(__query_args)
+		}
+
+		/// Builds a typed fetch descriptor for this server function and argument set.
+		#private_interfaces_allowance
+		#key_cfg_allowances
+		pub fn query #key_generics(
+			#(#regular_param_idents: #query_arg_generics),*
+		) -> #pages_crate::reactive::QueryDescriptor<
+			<#return_type as #pages_crate::server_fn::ServerFnQueryResult>::Response,
+			<#return_type as #pages_crate::server_fn::ServerFnQueryResult>::Error,
+		>
 		#key_where_clause
 		{
 			let __query_args = (#(#regular_param_idents.clone(),)*);
-			let __query_key = #pages_crate::reactive::QueryKey::from_server_fn::<marker, _, _, _>(
-				__query_args,
-				#query_fetcher,
-			);
+			let __query_descriptor = #pages_crate::reactive::QueryFamily::<
+				#query_generic_argument_tuple_type,
+				<#return_type as #pages_crate::server_fn::ServerFnQueryResult>::Response,
+				<#return_type as #pages_crate::server_fn::ServerFnQueryResult>::Error,
+			>::new(#query_family_id)
+			.query(__query_args, #query_fetcher);
 			#query_ssr_policy
 		}
 	};
@@ -2097,7 +2143,7 @@ fn generate_server_handler(
 
 			#response_metadata_impl
 			#request_metadata_impl
-			#query_key_tokens
+			#query_helper_tokens
 
 			#msw_wasm_inner_tokens
 		}
@@ -2249,7 +2295,7 @@ fn generate_server_handler(
 				}
 			}
 
-			#query_key_tokens
+			#query_helper_tokens
 
 			// MSW: server-side MockableServerFn (conditionally generated; Issue #3673)
 			#msw_server_tokens

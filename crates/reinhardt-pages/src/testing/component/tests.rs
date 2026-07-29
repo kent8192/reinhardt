@@ -12,7 +12,6 @@ use rstest::rstest;
 
 use super::{EventError, EventFixture, EventFixtureError, QueryError, Role, render};
 use crate::Callback;
-use crate::deps;
 use crate::event::{
 	ChangeEvent, ClickEvent, EventPayload, InputEvent, KeyDownEvent, Modifiers, Point, PointerKind,
 	PointerMoveEvent, typed_event_handler,
@@ -20,12 +19,15 @@ use crate::event::{
 use crate::reactive::hooks::use_effect;
 use serial_test::serial;
 
-use crate::reactive::{QueryKey, ResourceState, use_query};
+use crate::reactive::{QueryKey, QueryOptions, ResourceState, use_query};
 
 fn scheduled_query_component() -> Page {
-	let query = use_query(QueryKey::new("scheduled-query", || async {
-		Ok::<_, String>("Scheduled query result".to_string())
-	}));
+	let query = use_query(
+		QueryKey::new("scheduled-query", || async {
+			Ok::<_, String>("Scheduled query result".to_string())
+		}),
+		QueryOptions::default(),
+	);
 	Page::reactive(move || match query.get() {
 		ResourceState::Loading => Page::text("Loading"),
 		ResourceState::Success(value) => Page::text(value),
@@ -35,9 +37,12 @@ fn scheduled_query_component() -> Page {
 
 #[cfg(not(feature = "msw"))]
 fn screen_scoped_query_component(value: &'static str) -> Page {
-	let query = use_query(QueryKey::new("screen-scoped-query", move || async move {
-		Ok::<_, String>(value.to_string())
-	}));
+	let query = use_query(
+		QueryKey::new("screen-scoped-query", move || async move {
+			Ok::<_, String>(value.to_string())
+		}),
+		QueryOptions::default(),
+	);
 	Page::reactive(move || match query.get() {
 		ResourceState::Loading => Page::text("Loading"),
 		ResourceState::Success(value) => Page::text(value),

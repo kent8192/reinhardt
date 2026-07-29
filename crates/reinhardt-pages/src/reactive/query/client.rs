@@ -4,7 +4,7 @@ use std::collections::HashMap;
 use std::future::Future;
 use std::marker::PhantomData;
 use std::pin::Pin;
-use std::rc::Rc;
+use std::rc::{Rc, Weak};
 use std::task::{Context, Poll, Waker};
 use std::time::Duration;
 
@@ -14,8 +14,9 @@ use serde::de::DeserializeOwned;
 
 use super::super::Signal;
 use super::super::resource::ResourceState;
-use super::identity::{QueryFetcher, QueryKey};
+use super::identity::{QueryDescriptor, QueryFetcher, QueryKey};
 use super::runtime::{ScopedQueryFuture, duration_ms, now_ms, spawn_query_task};
+use super::state::{QueryDefaults, QueryOptions};
 use crate::cancellation::{AbortableTaskGuard, CancellationSource, scope_cancellation};
 use reinhardt_core::reactive::ReactiveScope;
 
@@ -70,7 +71,6 @@ pub(super) struct QueryEntry<T: Clone + 'static, E: Clone + 'static> {
 	pub(super) id: String,
 	pub(super) state: Signal<ResourceState<T, E>>,
 	pub(super) is_fetching: Signal<bool>,
-	pub(super) fetcher: RefCell<Rc<QueryFetcher<T, E>>>,
 	pub(super) request: RefCell<Option<QueryRequest<T, E>>>,
 	next_generation: Cell<u64>,
 	pub(super) completed: RefCell<Option<(u64, Result<T, E>)>>,
@@ -81,12 +81,15 @@ pub(super) struct QueryEntry<T: Clone + 'static, E: Clone + 'static> {
 	pub(super) last_fetched_ms: Cell<Option<u64>>,
 	pub(super) stale_time: Cell<Duration>,
 	pub(super) gc_time: Cell<Duration>,
+	observers: RefCell<Vec<Weak<QueryLeaseInner<T, E>>>>,
 }
 
 pub(super) struct QueryLeaseInner<T: Clone + 'static, E: Clone + 'static> {
 	pub(super) entry: Rc<QueryEntry<T, E>>,
 	generation: Cell<Option<u64>>,
 	retains_errors: bool,
+	enabled: bool,
+	fetcher: Rc<QueryFetcher<T, E>>,
 }
 
 /// RAII interest in one keyed query entry.
@@ -133,21 +136,31 @@ pub(super) fn initial_query_state<T, E>(
 }
 
 impl<T: Clone + 'static, E: Clone + 'static> QueryEntry<T, E> {
-	pub(super) fn new(key: QueryKey<T, E>) -> Self
+	pub(super) fn new(descriptor: QueryDescriptor<T, E>) -> Self
 	where
 		T: Serialize + DeserializeOwned,
 		E: Serialize + DeserializeOwned,
 	{
-		let hydrated_state = hydrated_query_state(&key.id);
-		Self::new_with_hydrated_state(key, hydrated_state)
+		let (key, _fetcher, _ssr_prefetch) = descriptor.into_parts();
+		let id = key.id();
+		let hydrated_state = hydrated_query_state(&id);
+		let defaults = QueryDefaults::default();
+		Self::new_with_hydrated_state(
+			key,
+			hydrated_state,
+			defaults.resolved_stale_time(),
+			defaults.resolved_gc_time(),
+		)
 	}
 
 	fn new_with_hydrated_state(
 		key: QueryKey<T, E>,
 		hydrated_state: Option<ResourceState<T, E>>,
+		stale_time: Duration,
+		gc_time: Duration,
 	) -> Self {
 		let (initial_state, last_fetched_ms) = initial_query_state(hydrated_state);
-		let id = key.id;
+		let id = key.id();
 		let scope = Rc::new(ReactiveScope::new());
 		let (state, is_fetching) = scope.enter(|| (Signal::new(initial_state), Signal::new(false)));
 
@@ -156,7 +169,6 @@ impl<T: Clone + 'static, E: Clone + 'static> QueryEntry<T, E> {
 			id,
 			state,
 			is_fetching,
-			fetcher: RefCell::new(key.fetcher),
 			request: RefCell::new(None),
 			next_generation: Cell::new(0),
 			completed: RefCell::new(None),
@@ -165,15 +177,15 @@ impl<T: Clone + 'static, E: Clone + 'static> QueryEntry<T, E> {
 			retain_lease_count: Cell::new(0),
 			refetch_after_in_flight: Cell::new(false),
 			last_fetched_ms: Cell::new(last_fetched_ms),
-			stale_time: Cell::new(key.stale_time),
-			gc_time: Cell::new(key.gc_time),
+			stale_time: Cell::new(stale_time),
+			gc_time: Cell::new(gc_time),
+			observers: RefCell::new(Vec::new()),
 		}
 	}
 
-	fn update_policy(&self, key: QueryKey<T, E>) {
-		*self.fetcher.borrow_mut() = key.fetcher;
-		self.stale_time.set(key.stale_time);
-		self.gc_time.set(key.gc_time);
+	fn update_policy(&self, stale_time: Duration, gc_time: Duration) {
+		self.stale_time.set(stale_time);
+		self.gc_time.set(gc_time);
 	}
 
 	pub(super) fn is_stale(&self) -> bool {
@@ -228,6 +240,8 @@ impl<T: Clone + 'static, E: Clone + 'static> QueryEntry<T, E> {
 		self: &Rc<Self>,
 		generation: Option<u64>,
 		error_policy: QueryErrorPolicy,
+		fetcher: Rc<QueryFetcher<T, E>>,
+		enabled: bool,
 	) -> QueryLease<T, E> {
 		self.lease_count.set(self.lease_count.get() + 1);
 		let retains_errors = error_policy == QueryErrorPolicy::Retain;
@@ -235,22 +249,30 @@ impl<T: Clone + 'static, E: Clone + 'static> QueryEntry<T, E> {
 			self.retain_lease_count
 				.set(self.retain_lease_count.get() + 1);
 		}
-		QueryLease {
-			inner: Rc::new(QueryLeaseInner {
-				entry: Rc::clone(self),
-				generation: Cell::new(generation),
-				retains_errors,
-			}),
-		}
+		let inner = Rc::new(QueryLeaseInner {
+			entry: Rc::clone(self),
+			generation: Cell::new(generation),
+			retains_errors,
+			enabled,
+			fetcher,
+		});
+		self.observers.borrow_mut().push(Rc::downgrade(&inner));
+		QueryLease { inner }
 	}
 
-	fn acquire(self: &Rc<Self>, options: QueryAcquireOptions) -> QueryLease<T, E>
+	fn acquire(
+		self: &Rc<Self>,
+		fetcher: Rc<QueryFetcher<T, E>>,
+		options: QueryAcquireOptions,
+		query_options: QueryOptions,
+	) -> QueryLease<T, E>
 	where
 		T: Serialize + DeserializeOwned,
 		E: Serialize + DeserializeOwned,
 	{
 		let _consumer = options.consumer;
-		let should_fetch = if self.has_request() {
+		let enabled = query_options.is_enabled();
+		let should_fetch = if !enabled || self.has_request() {
 			false
 		} else if options.error_policy == QueryErrorPolicy::Retain {
 			self.should_fetch_on_mount()
@@ -265,7 +287,7 @@ impl<T: Clone + 'static, E: Clone + 'static> QueryEntry<T, E> {
 		// a ready fetch synchronously, and completion must observe this lease when
 		// deciding whether an error is retainable or whether invalidation queues a
 		// follow-up request.
-		let lease = self.make_lease(None, options.error_policy);
+		let lease = self.make_lease(None, options.error_policy, fetcher, enabled);
 		let generation = if should_fetch {
 			Some(self.start_fetch(false))
 		} else {
@@ -276,6 +298,16 @@ impl<T: Clone + 'static, E: Clone + 'static> QueryEntry<T, E> {
 		};
 		lease.inner.generation.set(generation);
 		lease
+	}
+
+	fn selected_fetcher(&self) -> Option<Rc<QueryFetcher<T, E>>> {
+		let mut observers = self.observers.borrow_mut();
+		observers.retain(|observer| observer.strong_count() > 0);
+		observers
+			.iter()
+			.filter_map(Weak::upgrade)
+			.find(|observer| observer.enabled)
+			.map(|observer| Rc::clone(&observer.fetcher))
 	}
 
 	#[cfg(native)]
@@ -306,6 +338,9 @@ impl<T: Clone + 'static, E: Clone + 'static> QueryEntry<T, E> {
 		if !force && had_success && !self.is_stale() {
 			return self.next_generation.get();
 		}
+		let Some(fetcher) = self.selected_fetcher() else {
+			return self.next_generation.get();
+		};
 		let generation = self.next_request_generation();
 		let source = CancellationSource::new();
 		let token = source.handle();
@@ -323,17 +358,12 @@ impl<T: Clone + 'static, E: Clone + 'static> QueryEntry<T, E> {
 		}
 
 		let entry = Rc::clone(self);
-		let fetch_entry = Rc::clone(&entry);
 		let scope = entry._scope.id();
 		let fetch_cancellation = token.clone();
 		let scoped = ScopedQueryFuture {
 			scope,
 			future: Box::pin(async move {
-				let result = scope_cancellation(token, async move {
-					let fetcher = fetch_entry.fetcher.borrow().clone();
-					fetcher(fetch_cancellation).await
-				})
-				.await;
+				let result = scope_cancellation(token, fetcher(fetch_cancellation)).await;
 				entry.complete_fetch(generation, result);
 			}),
 		};
@@ -434,18 +464,34 @@ impl<T: Clone + 'static, E: Clone + 'static> QueryLease<T, E> {
 }
 
 pub(crate) fn acquire_query<T, E>(
-	key: QueryKey<T, E>,
+	descriptor: QueryDescriptor<T, E>,
 	options: QueryAcquireOptions,
 ) -> QueryLease<T, E>
 where
 	T: Clone + Serialize + DeserializeOwned + 'static,
 	E: Clone + Serialize + DeserializeOwned + 'static,
 {
-	query_entry(key).acquire(options)
+	acquire_query_with_options(descriptor, options, QueryOptions::default())
+}
+
+pub(super) fn acquire_query_with_options<T, E>(
+	descriptor: QueryDescriptor<T, E>,
+	options: QueryAcquireOptions,
+	query_options: QueryOptions,
+) -> QueryLease<T, E>
+where
+	T: Clone + Serialize + DeserializeOwned + 'static,
+	E: Clone + Serialize + DeserializeOwned + 'static,
+{
+	let defaults = QueryDefaults::default();
+	let stale_time = query_options.resolved_stale_time(&defaults);
+	let gc_time = query_options.resolved_gc_time(&defaults);
+	let (key, fetcher, _ssr_prefetch) = descriptor.into_parts();
+	query_entry_for_key(key, stale_time, gc_time).acquire(fetcher, options, query_options)
 }
 
 pub(crate) fn seed_query_from_serialized<T, E>(
-	key: QueryKey<T, E>,
+	descriptor: QueryDescriptor<T, E>,
 	serialized: &serde_json::Value,
 ) -> Result<(), serde_json::Error>
 where
@@ -453,7 +499,9 @@ where
 	E: Clone + Serialize + DeserializeOwned + 'static,
 {
 	let hydrated_state = serde_json::from_value(serialized.clone())?;
-	let id = key.id.clone();
+	let defaults = QueryDefaults::default();
+	let (key, _fetcher, _ssr_prefetch) = descriptor.into_parts();
+	let id = key.id();
 	#[cfg(any(wasm, test))]
 	super::super::resource::reserve_client_resource_key(&id);
 	let cache_id = scoped_query_cache_id(&id);
@@ -471,6 +519,8 @@ where
 		let entry = Rc::new(QueryEntry::new_with_hydrated_state(
 			key,
 			Some(hydrated_state),
+			defaults.resolved_stale_time(),
+			defaults.resolved_gc_time(),
 		));
 		cache.insert(
 			cache_id,
@@ -488,12 +538,31 @@ where
 	Ok(())
 }
 
-pub(super) fn query_entry<T, E>(key: QueryKey<T, E>) -> Rc<QueryEntry<T, E>>
+#[cfg(test)]
+pub(super) fn query_entry<T, E>(descriptor: QueryDescriptor<T, E>) -> Rc<QueryEntry<T, E>>
 where
 	T: Clone + Serialize + DeserializeOwned + 'static,
 	E: Clone + Serialize + DeserializeOwned + 'static,
 {
-	let id = key.id.clone();
+	let defaults = QueryDefaults::default();
+	let (key, _fetcher, _ssr_prefetch) = descriptor.into_parts();
+	query_entry_for_key(
+		key,
+		defaults.resolved_stale_time(),
+		defaults.resolved_gc_time(),
+	)
+}
+
+fn query_entry_for_key<T, E>(
+	key: QueryKey<T, E>,
+	stale_time: Duration,
+	gc_time: Duration,
+) -> Rc<QueryEntry<T, E>>
+where
+	T: Clone + Serialize + DeserializeOwned + 'static,
+	E: Clone + Serialize + DeserializeOwned + 'static,
+{
+	let id = key.id();
 	#[cfg(any(wasm, test))]
 	super::super::resource::reserve_client_resource_key(&id);
 	let cache_id = scoped_query_cache_id(&id);
@@ -505,11 +574,17 @@ where
 				.unwrap_or_else(|_| {
 					panic!("query cache key `{id}` was reused with incompatible types")
 				});
-			entry.update_policy(key);
+			entry.update_policy(stale_time, gc_time);
 			return entry;
 		}
 
-		let entry = Rc::new(QueryEntry::new(key));
+		let hydrated_state = hydrated_query_state(&id);
+		let entry = Rc::new(QueryEntry::new_with_hydrated_state(
+			key,
+			hydrated_state,
+			stale_time,
+			gc_time,
+		));
 		cache.insert(
 			cache_id,
 			CachedQueryEntry {

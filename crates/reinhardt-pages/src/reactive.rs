@@ -124,7 +124,10 @@ pub(crate) use query::{
 	QueryAcquireOptions, QueryConsumer, QueryErrorPolicy, QueryLease, acquire_query,
 	seed_query_from_serialized,
 };
-pub use query::{QueryHandle, QueryKey, QueryPhase, use_mutation, use_query};
+pub use query::{
+	QueryDefaults, QueryDescriptor, QueryFamily, QueryHandle, QueryKey, QueryOptions, QueryPhase,
+	use_mutation, use_query,
+};
 pub use resource::{Resource, ResourceState, use_resource, use_resource_with_key};
 pub use resource_value::{
 	LatestResourceState, LatestResourceValue, LatestResourceValueBuilder, use_latest_resource_value,

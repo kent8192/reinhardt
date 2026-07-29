@@ -94,7 +94,8 @@
 
 pub use crate::reactive::{
 	Effect, LatestResourceState, LatestResourceValue, LatestResourceValueBuilder, Memo,
-	QueryHandle, QueryKey, QueryPhase, Resource, ResourceState, Signal, use_latest_resource_value,
+	QueryDefaults, QueryDescriptor, QueryFamily, QueryHandle, QueryKey, QueryOptions, QueryPhase,
+	Resource, ResourceState, Signal, use_latest_resource_value,
 };
 
 // Context system

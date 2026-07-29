@@ -1,8 +1,9 @@
+use std::fmt;
+use std::fmt::Write as _;
 use std::future::Future;
 use std::marker::PhantomData;
 use std::pin::Pin;
 use std::rc::Rc;
-use std::time::Duration;
 
 use serde::Serialize;
 use sha2::{Digest, Sha256};
@@ -14,110 +15,210 @@ use super::canonical_json;
 pub(super) type QueryFuture<T, E> = Pin<Box<dyn Future<Output = Result<T, E>> + 'static>>;
 pub(super) type QueryFetcher<T, E> = dyn Fn(CancellationHandle) -> QueryFuture<T, E> + 'static;
 
-const DEFAULT_STALE_TIME: Duration = Duration::from_secs(30);
-const DEFAULT_GC_TIME: Duration = Duration::from_secs(5 * 60);
+/// Stable, type-erased identity shared by a query family and one argument set.
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+pub(crate) struct QueryIdentity {
+	family_id: &'static str,
+	arguments_fingerprint: [u8; 32],
+}
 
-/// Typed cache key and fetcher for a query.
-///
-/// Values are normally produced by the `#[server_fn]` generated `key(...)`
-/// helper. Manual keys are also supported for non-server-function fetchers.
+/// Defines the typed identity shared by queries with the same arguments.
+pub struct QueryFamily<Args, T, E> {
+	id: &'static str,
+	marker: PhantomData<fn(Args) -> Result<T, E>>,
+}
+
+impl<Args, T, E> Clone for QueryFamily<Args, T, E> {
+	fn clone(&self) -> Self {
+		*self
+	}
+}
+
+impl<Args, T, E> Copy for QueryFamily<Args, T, E> {}
+
+impl<Args, T, E> fmt::Debug for QueryFamily<Args, T, E> {
+	fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+		formatter
+			.debug_struct("QueryFamily")
+			.field("id", &self.id)
+			.finish_non_exhaustive()
+	}
+}
+
+impl<Args, T, E> QueryFamily<Args, T, E> {
+	/// Creates a typed query family with a stable application-wide identifier.
+	pub const fn new(id: &'static str) -> Self {
+		Self {
+			id,
+			marker: PhantomData,
+		}
+	}
+
+	/// Returns this family's stable identifier.
+	pub const fn id(&self) -> &'static str {
+		self.id
+	}
+
+	/// Builds the exact typed key for one argument set.
+	pub fn key(&self, args: Args) -> QueryKey<T, E>
+	where
+		Args: Serialize,
+	{
+		QueryKey {
+			identity: QueryIdentity {
+				family_id: self.id,
+				arguments_fingerprint: fingerprint(&args),
+			},
+			marker: PhantomData,
+		}
+	}
+
+	/// Builds a query descriptor using a fetcher without cancellation input.
+	pub fn query<F, Fut>(&self, args: Args, fetcher: F) -> QueryDescriptor<T, E>
+	where
+		Args: Serialize,
+		F: Fn() -> Fut + 'static,
+		Fut: Future<Output = Result<T, E>> + 'static,
+	{
+		self.query_with_cancellation(args, move |_| fetcher())
+	}
+
+	/// Builds a query descriptor whose fetcher receives its cancellation handle.
+	pub fn query_with_cancellation<F, Fut>(&self, args: Args, fetcher: F) -> QueryDescriptor<T, E>
+	where
+		Args: Serialize,
+		F: Fn(CancellationHandle) -> Fut + 'static,
+		Fut: Future<Output = Result<T, E>> + 'static,
+	{
+		QueryDescriptor {
+			key: self.key(args),
+			fetcher: Rc::new(move |cancellation| Box::pin(fetcher(cancellation))),
+			ssr_prefetch: true,
+		}
+	}
+}
+
+/// Exact typed cache identity for one query argument set.
 pub struct QueryKey<T, E> {
-	pub(super) id: String,
-	pub(super) fetcher: Rc<QueryFetcher<T, E>>,
-	pub(super) stale_time: Duration,
-	pub(super) gc_time: Duration,
-	pub(super) ssr_prefetch: bool,
-	_type: PhantomData<fn() -> Result<T, E>>,
+	identity: QueryIdentity,
+	marker: PhantomData<fn() -> Result<T, E>>,
 }
 
 impl<T, E> Clone for QueryKey<T, E> {
 	fn clone(&self) -> Self {
 		Self {
-			id: self.id.clone(),
-			fetcher: Rc::clone(&self.fetcher),
-			stale_time: self.stale_time,
-			gc_time: self.gc_time,
-			ssr_prefetch: self.ssr_prefetch,
-			_type: PhantomData,
+			identity: self.identity.clone(),
+			marker: PhantomData,
 		}
 	}
 }
 
+impl<T, E> fmt::Debug for QueryKey<T, E> {
+	fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+		formatter
+			.debug_struct("QueryKey")
+			.field("identity", &self.identity)
+			.finish_non_exhaustive()
+	}
+}
+
+impl<T, E> PartialEq for QueryKey<T, E> {
+	fn eq(&self, other: &Self) -> bool {
+		self.identity == other.identity
+	}
+}
+
+impl<T, E> Eq for QueryKey<T, E> {}
+
 impl<T, E> QueryKey<T, E> {
-	/// Creates a typed query key from an explicit cache ID and fetcher.
-	pub fn new<Id, F, Fut>(id: Id, fetcher: F) -> Self
+	/// Returns the type-erased exact identity.
+	#[allow(private_interfaces)]
+	pub fn identity(&self) -> &QueryIdentity {
+		&self.identity
+	}
+
+	/// Returns the stable query-family identifier.
+	pub fn family_id(&self) -> &'static str {
+		self.identity.family_id
+	}
+
+	/// Returns the deterministic cache and hydration ID.
+	pub fn id(&self) -> String {
+		let mut id = format!("{}:sha256:", self.identity.family_id);
+		for byte in self.identity.arguments_fingerprint {
+			write!(&mut id, "{byte:02x}").expect("writing a query ID to String must succeed");
+		}
+		id
+	}
+
+	/// Transitional constructor for manually keyed query fetchers.
+	pub fn new<F, Fut>(id: &'static str, fetcher: F) -> QueryDescriptor<T, E>
 	where
-		Id: Into<String>,
 		F: Fn() -> Fut + 'static,
 		Fut: Future<Output = Result<T, E>> + 'static,
 	{
-		Self::new_with_cancellation(id, move |_| fetcher())
+		QueryFamily::<(), T, E>::new(id).query((), fetcher)
 	}
 
-	pub(crate) fn new_with_cancellation<Id, F, Fut>(id: Id, fetcher: F) -> Self
+	#[cfg(test)]
+	pub(crate) fn new_with_cancellation<F, Fut>(
+		id: &'static str,
+		fetcher: F,
+	) -> QueryDescriptor<T, E>
 	where
-		Id: Into<String>,
 		F: Fn(CancellationHandle) -> Fut + 'static,
 		Fut: Future<Output = Result<T, E>> + 'static,
 	{
+		QueryFamily::<(), T, E>::new(id).query_with_cancellation((), fetcher)
+	}
+}
+
+/// A typed query key paired with one observer-owned fetcher.
+pub struct QueryDescriptor<T, E> {
+	key: QueryKey<T, E>,
+	pub(super) fetcher: Rc<QueryFetcher<T, E>>,
+	pub(super) ssr_prefetch: bool,
+}
+
+impl<T, E> Clone for QueryDescriptor<T, E> {
+	fn clone(&self) -> Self {
 		Self {
-			id: id.into(),
-			fetcher: Rc::new(move |cancellation| Box::pin(fetcher(cancellation))),
-			stale_time: DEFAULT_STALE_TIME,
-			gc_time: DEFAULT_GC_TIME,
-			ssr_prefetch: true,
-			_type: PhantomData,
+			key: self.key.clone(),
+			fetcher: Rc::clone(&self.fetcher),
+			ssr_prefetch: self.ssr_prefetch,
 		}
 	}
+}
 
-	/// Creates a typed key for a generated `#[server_fn]` marker.
-	///
-	/// JSON object keys are sorted recursively so logically equivalent argument
-	/// maps produce the same cache and hydration ID. The canonical argument
-	/// payload is SHA-256 hashed before it becomes part of the ID.
-	pub fn from_server_fn<M, Args, F, Fut>(args: Args, fetcher: F) -> Self
-	where
-		M: crate::server_fn::ServerFnMetadata,
-		Args: Serialize,
-		F: Fn() -> Fut + 'static,
-		Fut: Future<Output = Result<T, E>> + 'static,
-	{
-		let encoded_args = canonical_json::encode(&args)
-			.expect("server function query arguments must serialize into a cache key");
-		let args_digest = Sha256::digest(encoded_args.as_bytes());
-		Self::new(
-			format!("server_fn:{}:{}:sha256:{args_digest:x}", M::PATH, M::CODEC),
-			fetcher,
-		)
+impl<T, E> fmt::Debug for QueryDescriptor<T, E> {
+	fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+		formatter
+			.debug_struct("QueryDescriptor")
+			.field("key", &self.key)
+			.field("ssr_prefetch", &self.ssr_prefetch)
+			.finish_non_exhaustive()
+	}
+}
+
+impl<T, E> QueryDescriptor<T, E> {
+	/// Returns the descriptor's exact typed key.
+	pub fn key(&self) -> &QueryKey<T, E> {
+		&self.key
 	}
 
-	/// Returns the stable cache ID for this key.
-	pub fn id(&self) -> &str {
-		&self.id
-	}
-
-	/// Configures how long a resolved value is considered fresh.
-	///
-	/// SSR-replayed success and error states are both treated as freshly fetched
-	/// so the initial replay preserves the server-rendered state before a retry.
-	pub fn with_stale_time(mut self, stale_time: Duration) -> Self {
-		self.stale_time = stale_time;
-		self
-	}
-
-	/// Configures the requested cache retention window after the last observer.
-	///
-	/// The current implementation stores this value for cache policy parity and
-	/// future eviction; entries are retained for the app lifetime unless the
-	/// cache is explicitly cleared.
-	pub fn with_gc_time(mut self, gc_time: Duration) -> Self {
-		self.gc_time = gc_time;
-		self
-	}
-
-	/// Configures whether SSR may prefetch this query in the native resource context.
+	/// Configures whether native SSR may prefetch this descriptor.
 	pub fn with_ssr_prefetch(mut self, enabled: bool) -> Self {
 		self.ssr_prefetch = enabled;
 		self
 	}
+
+	pub(super) fn into_parts(self) -> (QueryKey<T, E>, Rc<QueryFetcher<T, E>>, bool) {
+		(self.key, self.fetcher, self.ssr_prefetch)
+	}
+}
+
+fn fingerprint<Args: Serialize>(args: &Args) -> [u8; 32] {
+	let encoded = canonical_json::encode(args)
+		.expect("query family arguments must serialize into a stable cache key");
+	Sha256::digest(encoded.as_bytes()).into()
 }

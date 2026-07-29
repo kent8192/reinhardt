@@ -10,11 +10,11 @@ use super::super::hooks::async_action::{Action, use_action};
 use super::super::resource::ResourceState;
 use super::browser::QueryGuard;
 use super::client::{
-	QueryAcquireOptions, QueryConsumer, QueryEntry, QueryErrorPolicy, QueryLease, acquire_query,
-	invalidate_query_id,
+	QueryAcquireOptions, QueryConsumer, QueryEntry, QueryErrorPolicy, QueryLease,
+	acquire_query_with_options, invalidate_query_id,
 };
-use super::identity::QueryKey;
-use super::state::QueryPhase;
+use super::identity::{QueryDescriptor, QueryKey};
+use super::state::{QueryOptions, QueryPhase};
 use crate::cancellation::CancellationSource;
 
 /// Reactive handle returned by [`use_query`].
@@ -142,29 +142,44 @@ impl<T: Clone + 'static, E: Clone + 'static> QueryHandle<T, E> {
 }
 
 /// Creates or subscribes to an app-wide keyed query.
-pub fn use_query<T, E>(key: QueryKey<T, E>) -> QueryHandle<T, E>
+pub fn use_query<T, E>(
+	descriptor: QueryDescriptor<T, E>,
+	options: QueryOptions,
+) -> QueryHandle<T, E>
 where
 	T: Clone + Serialize + DeserializeOwned + 'static,
 	E: Clone + Serialize + DeserializeOwned + 'static,
 {
 	#[cfg(native)]
-	if let Some(query) = try_create_ssr_query(key.clone()) {
+	if let Some(query) = try_create_ssr_query(descriptor.clone(), options.clone()) {
 		return query;
 	}
 
-	let lease = acquire_query(
-		key,
+	let refetch_interval = options.refetch_interval_value();
+	let enabled = options.is_enabled();
+	let lease = acquire_query_with_options(
+		descriptor,
 		QueryAcquireOptions {
 			consumer: QueryConsumer::MountedQuery,
 			error_policy: QueryErrorPolicy::Retain,
 		},
+		options,
 	);
 	let entry = Rc::clone(&lease.inner.entry);
+	let guards = Rc::new(RefCell::new(Vec::new()));
+	if enabled
+		&& let Some(interval) = refetch_interval
+		&& !interval.is_zero()
+	{
+		guards
+			.borrow_mut()
+			.push(QueryGuard::poll(interval, Rc::clone(&entry)));
+	}
 
 	QueryHandle {
 		entry,
 		lease,
-		guards: Rc::new(RefCell::new(Vec::new())),
+		guards,
 	}
 }
 
@@ -199,25 +214,31 @@ where
 }
 
 #[cfg(native)]
-pub(super) fn try_create_ssr_query<T, E>(key: QueryKey<T, E>) -> Option<QueryHandle<T, E>>
+pub(super) fn try_create_ssr_query<T, E>(
+	descriptor: QueryDescriptor<T, E>,
+	options: QueryOptions,
+) -> Option<QueryHandle<T, E>>
 where
 	T: Clone + Serialize + DeserializeOwned + 'static,
 	E: Clone + Serialize + DeserializeOwned + 'static,
 {
 	crate::ssr::resource_context::with_active_context(|context| {
-		context.borrow_mut().reserve_call_order_key(key.id());
-		let ssr_prefetch = key.ssr_prefetch;
-		let entry = Rc::new(QueryEntry::new(key));
+		let id = descriptor.key().id();
+		context.borrow_mut().reserve_call_order_key(&id);
+		let ssr_prefetch = descriptor.ssr_prefetch && options.is_enabled();
+		let fetcher = Rc::clone(&descriptor.fetcher);
+		let entry = Rc::new(QueryEntry::new(descriptor));
 		if ssr_prefetch {
-			let fetcher = entry.fetcher.borrow().clone();
+			let resource_fetcher = Rc::clone(&fetcher);
 			context.borrow_mut().register_resource_with_owner(
 				entry.id.clone(),
 				move || {
 					let source = CancellationSource::new();
 					let cancellation = source.handle();
+					let resource_fetcher = Rc::clone(&resource_fetcher);
 					async move {
 						let _source = source;
-						fetcher(cancellation).await
+						resource_fetcher(cancellation).await
 					}
 				},
 				entry.state,
@@ -225,7 +246,12 @@ where
 			);
 			entry.mark_resolved_fetched();
 		}
-		let lease = entry.make_lease(None, QueryErrorPolicy::Retain);
+		let lease = entry.make_lease(
+			None,
+			QueryErrorPolicy::Retain,
+			fetcher,
+			options.is_enabled(),
+		);
 		QueryHandle {
 			entry: Rc::clone(&entry),
 			lease,

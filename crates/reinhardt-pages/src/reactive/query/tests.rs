@@ -10,12 +10,13 @@ use reinhardt_core::reactive::ReactiveScope;
 use rstest::rstest;
 use serde::Serialize;
 use serde::Serializer;
-use serde::ser::SerializeMap;
+use serde::ser::{Error as _, SerializeMap};
 use serial_test::serial;
 
 use super::super::resource::ResourceState;
 use super::client::{
-	QueryEntry, clear_query_cache_for_test, initial_query_state, invalidate_query_id, query_entry,
+	QueryEntry, acquire_query_with_options, clear_query_cache_for_test, initial_query_state,
+	invalidate_query_id, query_entry,
 };
 use super::hook::try_create_ssr_query;
 use super::runtime::now_ms;
@@ -48,6 +49,17 @@ impl Serialize for OrderedLargeMapArgs {
 			map.serialize_entry(key, value)?;
 		}
 		map.end()
+	}
+}
+
+struct FailingFingerprintArgs;
+
+impl Serialize for FailingFingerprintArgs {
+	fn serialize<S>(&self, _serializer: S) -> Result<S::Ok, S::Error>
+	where
+		S: Serializer,
+	{
+		Err(S::Error::custom("fingerprint failed"))
 	}
 }
 
@@ -93,6 +105,27 @@ impl Drop for TestGate {
 	fn drop(&mut self) {
 		self.dropped.set(self.dropped.get() + 1);
 	}
+}
+
+#[test]
+fn typed_family_keys_share_family_and_distinguish_arguments() {
+	let family = QueryFamily::<i64, String, String>::new("tests.project");
+
+	let first = family.key(1);
+	let same = family.key(1);
+	let second = family.key(2);
+
+	assert_eq!(first.identity(), same.identity());
+	assert_ne!(first.identity(), second.identity());
+	assert_eq!(first.family_id(), "tests.project");
+}
+
+#[test]
+#[should_panic(expected = "query family arguments must serialize into a stable cache key")]
+fn typed_family_rejects_arguments_without_a_stable_fingerprint() {
+	let family = QueryFamily::<FailingFingerprintArgs, String, String>::new("tests.failure");
+
+	let _ = family.key(FailingFingerprintArgs);
 }
 
 #[test]
@@ -160,7 +193,7 @@ fn dropping_one_of_two_leases_keeps_request_alive() {
 		});
 		let ready = Rc::new(Cell::new(false));
 		let dropped = Rc::new(Cell::new(0));
-		let key: QueryKey<String, String> = QueryKey::new("two-leases", {
+		let key = QueryKey::new("two-leases", {
 			let ready = Rc::clone(&ready);
 			let dropped = Rc::clone(&dropped);
 			move || TestGate {
@@ -221,20 +254,19 @@ fn shared_fetch_receives_the_query_request_cancellation_handle() {
 		let ready = Rc::new(Cell::new(false));
 		let dropped = Rc::new(Cell::new(0));
 		let observed_cancellation = Rc::new(RefCell::new(None));
-		let key: QueryKey<String, String> =
-			QueryKey::new_with_cancellation("shared-request-cancellation", {
-				let ready = Rc::clone(&ready);
-				let dropped = Rc::clone(&dropped);
-				let observed_cancellation = Rc::clone(&observed_cancellation);
-				move |cancellation| {
-					observed_cancellation.borrow_mut().replace(cancellation);
-					TestGate {
-						ready: Rc::clone(&ready),
-						dropped: Rc::clone(&dropped),
-						result: Some(Ok("shared".to_string())),
-					}
+		let key = QueryKey::new_with_cancellation("shared-request-cancellation", {
+			let ready = Rc::clone(&ready);
+			let dropped = Rc::clone(&dropped);
+			let observed_cancellation = Rc::clone(&observed_cancellation);
+			move |cancellation| {
+				observed_cancellation.borrow_mut().replace(cancellation);
+				TestGate {
+					ready: Rc::clone(&ready),
+					dropped: Rc::clone(&dropped),
+					result: Some(Ok("shared".to_string())),
 				}
-			});
+			}
+		});
 		let first = acquire_query(
 			key.clone(),
 			QueryAcquireOptions {
@@ -287,7 +319,7 @@ fn dropping_final_lease_cancels_request_once() {
 		});
 		let ready = Rc::new(Cell::new(false));
 		let dropped = Rc::new(Cell::new(0));
-		let key: QueryKey<String, String> = QueryKey::new("final-lease-cancel", {
+		let key = QueryKey::new("final-lease-cancel", {
 			let ready = Rc::clone(&ready);
 			let dropped = Rc::clone(&dropped);
 			move || TestGate {
@@ -343,7 +375,7 @@ fn queued_refetch_keeps_completed_generation_for_existing_lease() {
 		});
 		let ready = Rc::new(Cell::new(false));
 		let dropped = Rc::new(Cell::new(0));
-		let key: QueryKey<String, String> = QueryKey::new("queued-generation", {
+		let key = QueryKey::new("queued-generation", {
 			let ready = Rc::clone(&ready);
 			let dropped = Rc::clone(&dropped);
 			move || TestGate {
@@ -396,7 +428,7 @@ fn cancelling_request_discards_queued_refetch() {
 		});
 		let ready = Rc::new(Cell::new(false));
 		let dropped = Rc::new(Cell::new(0));
-		let key: QueryKey<String, String> = QueryKey::new("cancel-queued-refetch", {
+		let key = QueryKey::new("cancel-queued-refetch", {
 			let ready = Rc::clone(&ready);
 			let dropped = Rc::clone(&dropped);
 			move || TestGate {
@@ -456,7 +488,7 @@ fn cancel_completion_race_does_not_publish_obsolete_value() {
 		});
 		let ready = Rc::new(Cell::new(false));
 		let dropped = Rc::new(Cell::new(0));
-		let key: QueryKey<String, String> = QueryKey::new("cancel-race", {
+		let key = QueryKey::new("cancel-race", {
 			let ready = Rc::clone(&ready);
 			let dropped = Rc::clone(&dropped);
 			move || TestGate {
@@ -511,7 +543,7 @@ fn cancelled_revalidation_preserves_previous_success() {
 		});
 		let ready = Rc::new(Cell::new(false));
 		let dropped = Rc::new(Cell::new(0));
-		let key: QueryKey<String, String> = QueryKey::new("cancel-revalidation", {
+		let key = QueryKey::new("cancel-revalidation", {
 			let ready = Rc::clone(&ready);
 			let dropped = Rc::clone(&dropped);
 			move || TestGate {
@@ -519,17 +551,17 @@ fn cancelled_revalidation_preserves_previous_success() {
 				dropped: Rc::clone(&dropped),
 				result: Some(Ok("new".to_string())),
 			}
-		})
-		.with_stale_time(Duration::ZERO);
+		});
 		let entry = query_entry(key.clone());
 		entry.state.set(ResourceState::Success("old".to_string()));
 		entry.last_fetched_ms.set(Some(now_ms()));
-		let lease = acquire_query(
+		let lease = acquire_query_with_options(
 			key,
 			QueryAcquireOptions {
 				consumer: QueryConsumer::Navigation(5),
 				error_policy: QueryErrorPolicy::Discard,
 			},
+			QueryOptions::default().stale_time(Duration::ZERO),
 		);
 		assert_eq!(poll_one_task(&tasks), Poll::Pending);
 
@@ -557,7 +589,7 @@ fn discarded_error_retries_on_next_acquisition() {
 		// Arrange
 		clear_query_cache_for_test();
 		let calls = Rc::new(Cell::new(0));
-		let key: QueryKey<String, String> = QueryKey::new("discarded-error", {
+		let key = QueryKey::new("discarded-error", {
 			let calls = Rc::clone(&calls);
 			move || {
 				calls.set(calls.get() + 1);
@@ -596,7 +628,7 @@ fn discarded_error_retries_on_next_acquisition() {
 
 #[test]
 #[serial(query_cache)]
-fn invalidation_survives_cancelled_request() {
+fn invalidation_without_live_observer_does_not_refetch() {
 	ReactiveScope::run(|| {
 		// Arrange
 		clear_query_cache_for_test();
@@ -608,7 +640,7 @@ fn invalidation_survives_cancelled_request() {
 		let ready = Rc::new(Cell::new(false));
 		let dropped = Rc::new(Cell::new(0));
 		let calls = Rc::new(Cell::new(0));
-		let key: QueryKey<String, String> = QueryKey::new("cancel-then-invalidate", {
+		let key = QueryKey::new("cancel-then-invalidate", {
 			let ready = Rc::clone(&ready);
 			let dropped = Rc::clone(&dropped);
 			let calls = Rc::clone(&calls);
@@ -621,8 +653,9 @@ fn invalidation_survives_cancelled_request() {
 				}
 			}
 		});
+		let id = key.key().id();
 		let lease = acquire_query(
-			key,
+			key.clone(),
 			QueryAcquireOptions {
 				consumer: QueryConsumer::Navigation(8),
 				error_policy: QueryErrorPolicy::Discard,
@@ -633,24 +666,21 @@ fn invalidation_survives_cancelled_request() {
 		// Act
 		drop(lease);
 		ready.set(true);
-		invalidate_query_id("cancel-then-invalidate");
+		invalidate_query_id(&id);
 		assert_eq!(
 			tasks.borrow().len(),
-			2,
-			"the invalidation must queue a replacement request"
+			1,
+			"an inactive cache entry must not retain a fetch closure"
 		);
-		assert_eq!(poll_one_task(&tasks), Poll::Ready(()));
 		assert_eq!(poll_one_task(&tasks), Poll::Ready(()));
 
 		// Assert
-		assert_eq!(calls.get(), 2);
-		assert_eq!(dropped.get(), 2);
-		let entry = query_entry(QueryKey::new("cancel-then-invalidate", || async {
-			Ok::<_, String>("unused".to_string())
-		}));
+		assert_eq!(calls.get(), 1);
+		assert_eq!(dropped.get(), 1);
+		let entry = query_entry(key);
 		assert_eq!(
 			entry.state.with_untracked(|state| state.clone()),
-			ResourceState::Success("refetched".to_string())
+			ResourceState::Loading
 		);
 	});
 }
@@ -664,20 +694,26 @@ fn use_query_deduplicates_shared_key() {
 		let calls = Rc::new(Cell::new(0));
 
 		// Act
-		let first = use_query(QueryKey::new("shared", {
-			let calls = Rc::clone(&calls);
-			move || {
-				calls.set(calls.get() + 1);
-				async { Ok::<_, String>("value".to_string()) }
-			}
-		}));
-		let second = use_query(QueryKey::new("shared", {
-			let calls = Rc::clone(&calls);
-			move || {
-				calls.set(calls.get() + 1);
-				async { Ok::<_, String>("value".to_string()) }
-			}
-		}));
+		let first = use_query(
+			QueryKey::new("shared", {
+				let calls = Rc::clone(&calls);
+				move || {
+					calls.set(calls.get() + 1);
+					async { Ok::<_, String>("value".to_string()) }
+				}
+			}),
+			QueryOptions::default(),
+		);
+		let second = use_query(
+			QueryKey::new("shared", {
+				let calls = Rc::clone(&calls);
+				move || {
+					calls.set(calls.get() + 1);
+					async { Ok::<_, String>("value".to_string()) }
+				}
+			}),
+			QueryOptions::default(),
+		);
 
 		// Assert
 		assert_eq!(calls.get(), 1);
@@ -695,13 +731,13 @@ fn cached_query_survives_the_scope_that_created_it() {
 		Ok::<_, String>("cached".to_string())
 	});
 	let scope = ReactiveScope::new();
-	let first = scope.enter(|| use_query(key.clone()));
+	let first = scope.enter(|| use_query(key.clone(), QueryOptions::default()));
 	assert_eq!(first.data(), Some("cached".to_string()));
 	drop(first);
 	drop(scope);
 
 	// Act
-	let cached = ReactiveScope::run(|| use_query(key));
+	let cached = ReactiveScope::run(|| use_query(key, QueryOptions::default()));
 
 	// Assert
 	assert_eq!(cached.data(), Some("cached".to_string()));
@@ -714,14 +750,17 @@ fn refetch_runs_fetcher_again() {
 		// Arrange
 		clear_query_cache_for_test();
 		let calls = Rc::new(Cell::new(0));
-		let query = use_query(QueryKey::new("manual-refetch", {
-			let calls = Rc::clone(&calls);
-			move || {
-				let value = calls.get() + 1;
-				calls.set(value);
-				async move { Ok::<_, String>(value) }
-			}
-		}));
+		let query = use_query(
+			QueryKey::new("manual-refetch", {
+				let calls = Rc::clone(&calls);
+				move || {
+					let value = calls.get() + 1;
+					calls.set(value);
+					async move { Ok::<_, String>(value) }
+				}
+			}),
+			QueryOptions::default(),
+		);
 
 		// Act
 		query.refetch();
@@ -745,12 +784,17 @@ fn failed_query_respects_stale_time_before_retrying() {
 				calls.set(calls.get() + 1);
 				async { Err::<String, _>("not found".to_string()) }
 			}
-		})
-		.with_stale_time(Duration::from_secs(30));
+		});
 
 		// Act
-		let first = use_query(key.clone());
-		let second = use_query(key);
+		let first = use_query(
+			key.clone(),
+			QueryOptions::default().stale_time(Duration::from_secs(30)),
+		);
+		let second = use_query(
+			key,
+			QueryOptions::default().stale_time(Duration::from_secs(30)),
+		);
 
 		// Assert
 		assert_eq!(calls.get(), 1);
@@ -765,15 +809,16 @@ fn successful_query_is_not_pending_during_background_fetch() {
 	ReactiveScope::run(|| {
 		// Arrange
 		clear_query_cache_for_test();
-		let entry = Rc::new(QueryEntry::new(QueryKey::new(
-			"background-refetch",
-			|| async { Ok::<_, String>("fresh".to_string()) },
-		)));
+		let descriptor = QueryKey::new("background-refetch", || async {
+			Ok::<_, String>("fresh".to_string())
+		});
+		let fetcher = Rc::clone(&descriptor.fetcher);
+		let entry = Rc::new(QueryEntry::new(descriptor));
 		entry
 			.state
 			.set(ResourceState::Success("cached".to_string()));
 		entry.is_fetching.set(true);
-		let lease = entry.make_lease(None, QueryErrorPolicy::Retain);
+		let lease = entry.make_lease(None, QueryErrorPolicy::Retain, fetcher, true);
 		let query = QueryHandle {
 			entry,
 			lease,
@@ -807,9 +852,9 @@ fn mutation_success_invalidates_registered_query() {
 				async move { Ok::<_, String>(value) }
 			}
 		});
-		let query = use_query(key.clone());
-		let mutation =
-			use_mutation(|_: ()| async { Ok::<_, String>("done".to_string()) }).invalidates(key);
+		let query = use_query(key.clone(), QueryOptions::default());
+		let mutation = use_mutation(|_: ()| async { Ok::<_, String>("done".to_string()) })
+			.invalidates(key.key().clone());
 
 		// Act
 		mutation.force_success_for_test("done".to_string());
@@ -829,20 +874,26 @@ fn invalidation_during_in_flight_fetch_runs_after_completion() {
 		let calls = Rc::new(Cell::new(0));
 
 		// Act
-		let query = use_query(QueryKey::new("queued-invalidation", {
-			let calls = Rc::clone(&calls);
-			move || {
+		let family = QueryFamily::<(), i32, String>::new("queued-invalidation");
+		let id = family.key(()).id();
+		let query = use_query(
+			family.query((), {
 				let calls = Rc::clone(&calls);
-				async move {
-					let value = calls.get() + 1;
-					calls.set(value);
-					if value == 1 {
-						invalidate_query_id("queued-invalidation");
+				move || {
+					let calls = Rc::clone(&calls);
+					let id = id.clone();
+					async move {
+						let value = calls.get() + 1;
+						calls.set(value);
+						if value == 1 {
+							invalidate_query_id(&id);
+						}
+						Ok::<_, String>(value)
 					}
-					Ok::<_, String>(value)
 				}
-			}
-		}));
+			}),
+			QueryOptions::default(),
+		);
 
 		// Assert
 		assert_eq!(calls.get(), 2);
@@ -852,7 +903,7 @@ fn invalidation_during_in_flight_fetch_runs_after_completion() {
 
 #[test]
 #[serial(query_cache)]
-fn manual_query_call_order_key_reserves_client_resource_counter() {
+fn typed_query_identity_does_not_reserve_resource_counter() {
 	ReactiveScope::run(|| {
 		// Arrange
 		clear_query_cache_for_test();
@@ -864,7 +915,7 @@ fn manual_query_call_order_key_reserves_client_resource_counter() {
 		}));
 
 		// Assert
-		assert_eq!(super::super::resource::current_client_resource_counter(), 1);
+		assert_eq!(super::super::resource::current_client_resource_counter(), 0);
 		super::super::resource::set_client_resource_counter(0);
 	});
 }
@@ -900,9 +951,12 @@ async fn ssr_replayed_query_error_is_fresh_for_stale_time() {
 
 	let discovery_query = crate::ssr::resource_context::scope_context(Rc::clone(&context), async {
 		ReactiveScope::run(|| {
-			let query = try_create_ssr_query(QueryKey::new("ssr-replayed-query-error", || async {
-				Err::<String, _>("not found".to_string())
-			}))
+			let query = try_create_ssr_query(
+				QueryKey::new("ssr-replayed-query-error", || async {
+					Err::<String, _>("not found".to_string())
+				}),
+				QueryOptions::default(),
+			)
 			.expect("active SSR context should create the query");
 			let _ = query.get();
 			query
@@ -914,9 +968,12 @@ async fn ssr_replayed_query_error_is_fresh_for_stale_time() {
 	// Act
 	let replayed_query = crate::ssr::resource_context::scope_context(Rc::clone(&context), async {
 		ReactiveScope::run(|| {
-			let query = try_create_ssr_query(QueryKey::new("ssr-replayed-query-error", || async {
-				Err::<String, _>("must not refetch during replay".to_string())
-			}))
+			let query = try_create_ssr_query(
+				QueryKey::new("ssr-replayed-query-error", || async {
+					Err::<String, _>("must not refetch during replay".to_string())
+				}),
+				QueryOptions::default(),
+			)
 			.expect("active SSR context should replay the query");
 			let query = query.stale_time(Duration::from_secs(30));
 
@@ -940,18 +997,9 @@ fn server_fn_key_hashes_arguments_without_exposing_them() {
 	// Arrange
 	clear_query_cache_for_test();
 
-	struct Marker;
-
-	impl crate::server_fn::ServerFnMetadata for Marker {
-		const PATH: &'static str = "/api/server_fn/list_jobs";
-		const NAME: &'static str = "list_jobs";
-		const CODEC: &'static str = "json";
-		const IS_JSON_CODEC: bool = true;
-	}
-
 	// Act
 	let key: QueryKey<Vec<i64>, crate::server_fn::ServerFnError> =
-		QueryKey::from_server_fn::<Marker, _, _, _>((42_i64,), || async { Ok(vec![42]) });
+		QueryFamily::new("server_fn:/api/server_fn/list_jobs:json").key((42_i64,));
 
 	// Assert
 	assert_eq!(
@@ -967,18 +1015,9 @@ fn server_fn_key_preserves_large_integer_arguments() {
 	// Arrange
 	clear_query_cache_for_test();
 
-	struct Marker;
-
-	impl crate::server_fn::ServerFnMetadata for Marker {
-		const PATH: &'static str = "/api/server_fn/load_job";
-		const NAME: &'static str = "load_job";
-		const CODEC: &'static str = "json";
-		const IS_JSON_CODEC: bool = true;
-	}
-
 	// Act
 	let key: QueryKey<(), crate::server_fn::ServerFnError> =
-		QueryKey::from_server_fn::<Marker, _, _, _>((u128::MAX,), || async { Ok(()) });
+		QueryFamily::new("server_fn:/api/server_fn/load_job:json").key((u128::MAX,));
 
 	// Assert
 	assert_eq!(
@@ -994,26 +1033,13 @@ fn server_fn_key_canonicalizes_object_arguments() {
 	// Arrange
 	clear_query_cache_for_test();
 
-	struct Marker;
-
-	impl crate::server_fn::ServerFnMetadata for Marker {
-		const PATH: &'static str = "/api/server_fn/filter_jobs";
-		const NAME: &'static str = "filter_jobs";
-		const CODEC: &'static str = "json";
-		const IS_JSON_CODEC: bool = true;
-	}
-
 	// Act
 	let first: QueryKey<(), crate::server_fn::ServerFnError> =
-		QueryKey::from_server_fn::<Marker, _, _, _>(
-			(OrderedMapArgs(&[("status", 1), ("owner", 2)]),),
-			|| async { Ok(()) },
-		);
+		QueryFamily::new("server_fn:/api/server_fn/filter_jobs:json")
+			.key((OrderedMapArgs(&[("status", 1), ("owner", 2)]),));
 	let second: QueryKey<(), crate::server_fn::ServerFnError> =
-		QueryKey::from_server_fn::<Marker, _, _, _>(
-			(OrderedMapArgs(&[("owner", 2), ("status", 1)]),),
-			|| async { Ok(()) },
-		);
+		QueryFamily::new("server_fn:/api/server_fn/filter_jobs:json")
+			.key((OrderedMapArgs(&[("owner", 2), ("status", 1)]),));
 
 	// Assert
 	assert_eq!(first.id(), second.id());
@@ -1029,26 +1055,13 @@ fn server_fn_key_canonicalizes_large_integer_object_arguments() {
 	// Arrange
 	clear_query_cache_for_test();
 
-	struct Marker;
-
-	impl crate::server_fn::ServerFnMetadata for Marker {
-		const PATH: &'static str = "/api/server_fn/filter_large_jobs";
-		const NAME: &'static str = "filter_large_jobs";
-		const CODEC: &'static str = "json";
-		const IS_JSON_CODEC: bool = true;
-	}
-
 	// Act
 	let first: QueryKey<(), crate::server_fn::ServerFnError> =
-		QueryKey::from_server_fn::<Marker, _, _, _>(
-			(OrderedLargeMapArgs(&[("status", u128::MAX), ("owner", 2)]),),
-			|| async { Ok(()) },
-		);
+		QueryFamily::new("server_fn:/api/server_fn/filter_large_jobs:json")
+			.key((OrderedLargeMapArgs(&[("status", u128::MAX), ("owner", 2)]),));
 	let second: QueryKey<(), crate::server_fn::ServerFnError> =
-		QueryKey::from_server_fn::<Marker, _, _, _>(
-			(OrderedLargeMapArgs(&[("owner", 2), ("status", u128::MAX)]),),
-			|| async { Ok(()) },
-		);
+		QueryFamily::new("server_fn:/api/server_fn/filter_large_jobs:json")
+			.key((OrderedLargeMapArgs(&[("owner", 2), ("status", u128::MAX)]),));
 
 	// Assert
 	assert_eq!(first.id(), second.id());
@@ -1060,20 +1073,11 @@ fn server_fn_key_does_not_expose_sensitive_arguments() {
 	// Arrange
 	clear_query_cache_for_test();
 
-	struct Marker;
-
-	impl crate::server_fn::ServerFnMetadata for Marker {
-		const PATH: &'static str = "/api/server_fn/load_user";
-		const NAME: &'static str = "load_user";
-		const CODEC: &'static str = "json";
-		const IS_JSON_CODEC: bool = true;
-	}
-
 	let email = "sensitive@example.com";
 
 	// Act
 	let key: QueryKey<(), crate::server_fn::ServerFnError> =
-		QueryKey::from_server_fn::<Marker, _, _, _>((email,), || async { Ok(()) });
+		QueryFamily::new("server_fn:/api/server_fn/load_user:json").key((email,));
 
 	// Assert
 	assert_eq!(

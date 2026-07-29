@@ -1,6 +1,6 @@
 use reinhardt_db::migrations::{
 	ColumnDefinition, FieldType, FilesystemRepository, Migration, MigrationError,
-	MigrationRenderOptions, Operation,
+	MigrationRenderOptions, MigrationSource, Operation,
 	dependency::{DependencyCondition, OptionalDependency, SwappableDependency},
 };
 use std::fs;
@@ -48,8 +48,8 @@ fn render_produces_parseable_formatted_source_with_optional_header() {
 	assert!(without_header.contains("\tMigration {"));
 }
 
-#[test]
-fn render_preserves_dependencies_replacements_flags_and_conditional_metadata() {
+#[tokio::test]
+async fn render_preserves_dependencies_replacements_flags_and_conditional_metadata() {
 	let temp_dir = TempDir::new().unwrap();
 	let repository = FilesystemRepository::new(temp_dir.path());
 	let mut migration = migration();
@@ -82,17 +82,30 @@ fn render_preserves_dependencies_replacements_flags_and_conditional_metadata() {
 			},
 		)
 		.unwrap();
+	repository
+		.create_new_source("accounts", "0001_squashed", &source)
+		.unwrap();
+	let loaded = reinhardt_db::migrations::FilesystemSource::new(temp_dir.path())
+		.all_migrations()
+		.await
+		.unwrap();
+	let loaded = &loaded[0];
 
-	syn::parse_file(&source).unwrap();
-	assert!(source.contains("(\"auth\".to_string(), \"0001_initial\".to_string())"));
-	assert!(source.contains("(\"accounts\".to_string(), \"0002_handle\".to_string())"));
-	assert!(source.contains("atomic: false"));
-	assert!(source.contains("initial: Some(false)"));
-	assert!(source.contains("state_only: true"));
-	assert!(source.contains("database_only: false"));
-	assert!(source.contains("SwappableDependency::new("));
-	assert!(source.contains("OptionalDependency::new("));
-	assert!(source.contains("DependencyCondition::FeatureEnabled("));
+	assert_eq!(loaded.operations, migration.operations);
+	assert_eq!(loaded.dependencies, migration.dependencies);
+	assert_eq!(loaded.replaces, migration.replaces);
+	assert_eq!(loaded.atomic, migration.atomic);
+	assert_eq!(loaded.initial, migration.initial);
+	assert_eq!(loaded.state_only, migration.state_only);
+	assert_eq!(loaded.database_only, migration.database_only);
+	assert_eq!(
+		loaded.swappable_dependencies,
+		migration.swappable_dependencies
+	);
+	assert_eq!(
+		loaded.optional_dependencies,
+		migration.optional_dependencies
+	);
 }
 
 #[test]
@@ -139,4 +152,62 @@ fn create_new_source_rejects_invalid_names_and_source_before_writing() {
 		MigrationError::InvalidMigration(_)
 	));
 	assert!(!temp_dir.path().join("accounts/0001_squashed.rs").exists());
+}
+
+#[test]
+fn create_new_source_rejects_unsafe_ascii_components() {
+	let temp_dir = TempDir::new().unwrap();
+	let repository = FilesystemRepository::new(temp_dir.path());
+	let source = repository
+		.render(
+			&migration(),
+			MigrationRenderOptions {
+				include_header: false,
+			},
+		)
+		.unwrap();
+	let invalid_components = [
+		("account app", "0001_initial"),
+		(".accounts", "0001_initial"),
+		("accounts.rs", "0001_initial"),
+		("accounts", "migration"),
+		("accounts", ".0001_initial"),
+		("accounts", "0001 initial"),
+		("accounts", "0001_initial.rs"),
+		("accounts", "0001_\u{7f}"),
+	];
+
+	for (app_label, migration_name) in invalid_components {
+		let error = repository
+			.create_new_source(app_label, migration_name, &source)
+			.unwrap_err();
+		assert!(
+			matches!(error, MigrationError::PathTraversal(_)),
+			"{app_label}.{migration_name}: {error}"
+		);
+	}
+}
+
+#[cfg(unix)]
+#[test]
+fn create_new_source_does_not_follow_app_directory_symlink() {
+	use std::os::unix::fs::symlink;
+
+	let root = TempDir::new().unwrap();
+	let outside = TempDir::new().unwrap();
+	symlink(outside.path(), root.path().join("accounts")).unwrap();
+	let repository = FilesystemRepository::new(root.path());
+	let source = repository
+		.render(
+			&migration(),
+			MigrationRenderOptions {
+				include_header: false,
+			},
+		)
+		.unwrap();
+
+	let result = repository.create_new_source("accounts", "0001_squashed", &source);
+
+	assert!(result.is_err());
+	assert!(!outside.path().join("0001_squashed.rs").exists());
 }

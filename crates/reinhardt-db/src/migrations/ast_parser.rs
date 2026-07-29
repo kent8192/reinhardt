@@ -104,8 +104,10 @@ pub fn extract_migration_metadata_strict(
 	let state_only = parse_optional_bool_field(&migration_struct.fields, "state_only", false)?;
 	let database_only =
 		parse_optional_bool_field(&migration_struct.fields, "database_only", false)?;
-	validate_empty_dependency_metadata(&migration_struct.fields, "swappable_dependencies")?;
-	validate_empty_dependency_metadata(&migration_struct.fields, "optional_dependencies")?;
+	let swappable_dependencies =
+		parse_swappable_dependencies(&migration_struct.fields, "swappable_dependencies")?;
+	let optional_dependencies =
+		parse_optional_dependencies(&migration_struct.fields, "optional_dependencies")?;
 
 	Ok(Migration {
 		app_label: app_label.to_string(),
@@ -117,28 +119,114 @@ pub fn extract_migration_metadata_strict(
 		initial,
 		state_only,
 		database_only,
-		swappable_dependencies: vec![],
-		optional_dependencies: vec![],
+		swappable_dependencies,
+		optional_dependencies,
 	})
 }
 
-fn validate_empty_dependency_metadata(
+fn dependency_metadata_expressions(
 	fields: &syn::punctuated::Punctuated<syn::FieldValue, syn::token::Comma>,
 	field_name: &str,
-) -> Result<()> {
+) -> Result<Vec<Expr>> {
 	let Some(field) = fields
 		.iter()
 		.find(|field| matches!(&field.member, syn::Member::Named(ident) if ident == field_name))
 	else {
-		return Ok(());
+		return Ok(Vec::new());
 	};
-	if parse_vec_expressions(&field.expr, field_name)?.is_empty() {
-		return Ok(());
+	parse_vec_expressions(&field.expr, field_name)
+}
+
+fn parse_swappable_dependencies(
+	fields: &syn::punctuated::Punctuated<syn::FieldValue, syn::token::Comma>,
+	field_name: &str,
+) -> Result<Vec<super::dependency::SwappableDependency>> {
+	dependency_metadata_expressions(fields, field_name)?
+		.iter()
+		.map(|expression| {
+			let Expr::Call(call) = expression else {
+				return Err(malformed_dependency_metadata(field_name));
+			};
+			if !call_path_is(&call.func, "SwappableDependency", "new") || call.args.len() != 4 {
+				return Err(malformed_dependency_metadata(field_name));
+			}
+			Ok(super::dependency::SwappableDependency::new(
+				extract_string_expr(&call.args[0])
+					.ok_or_else(|| malformed_dependency_metadata(field_name))?,
+				extract_string_expr(&call.args[1])
+					.ok_or_else(|| malformed_dependency_metadata(field_name))?,
+				extract_string_expr(&call.args[2])
+					.ok_or_else(|| malformed_dependency_metadata(field_name))?,
+				extract_string_expr(&call.args[3])
+					.ok_or_else(|| malformed_dependency_metadata(field_name))?,
+			))
+		})
+		.collect()
+}
+
+fn parse_optional_dependencies(
+	fields: &syn::punctuated::Punctuated<syn::FieldValue, syn::token::Comma>,
+	field_name: &str,
+) -> Result<Vec<super::dependency::OptionalDependency>> {
+	dependency_metadata_expressions(fields, field_name)?
+		.iter()
+		.map(|expression| {
+			let Expr::Call(call) = expression else {
+				return Err(malformed_dependency_metadata(field_name));
+			};
+			if !call_path_is(&call.func, "OptionalDependency", "new") || call.args.len() != 3 {
+				return Err(malformed_dependency_metadata(field_name));
+			}
+			Ok(super::dependency::OptionalDependency::new(
+				extract_string_expr(&call.args[0])
+					.ok_or_else(|| malformed_dependency_metadata(field_name))?,
+				extract_string_expr(&call.args[1])
+					.ok_or_else(|| malformed_dependency_metadata(field_name))?,
+				parse_dependency_condition(&call.args[2])
+					.ok_or_else(|| malformed_dependency_metadata(field_name))?,
+			))
+		})
+		.collect()
+}
+
+fn parse_dependency_condition(expr: &Expr) -> Option<super::dependency::DependencyCondition> {
+	let Expr::Call(call) = expr else {
+		return None;
+	};
+	let Expr::Path(path) = &*call.func else {
+		return None;
+	};
+	if call.args.len() != 1 {
+		return None;
 	}
-	Err(MigrationError::InvalidMigration(format!(
-		"Migration metadata field '{}' is not supported by filesystem catalogs unless empty",
-		field_name
-	)))
+	let value = extract_string_expr(&call.args[0])?;
+	match path.path.segments.last()?.ident.to_string().as_str() {
+		"AppInstalled" => Some(super::dependency::DependencyCondition::AppInstalled(value)),
+		"SettingEnabled" => Some(super::dependency::DependencyCondition::SettingEnabled(
+			value,
+		)),
+		"FeatureEnabled" => Some(super::dependency::DependencyCondition::FeatureEnabled(
+			value,
+		)),
+		_ => None,
+	}
+}
+
+fn call_path_is(function: &Expr, type_name: &str, function_name: &str) -> bool {
+	let Expr::Path(path) = function else {
+		return false;
+	};
+	let mut segments = path.path.segments.iter().rev();
+	segments
+		.next()
+		.is_some_and(|segment| segment.ident == function_name)
+		&& segments
+			.next()
+			.is_some_and(|segment| segment.ident == type_name)
+}
+
+fn malformed_dependency_metadata(field_name: &str) -> MigrationError {
+	MigrationError::InvalidMigration(format!("Malformed migration '{}' metadata", field_name))
 }
 
 fn parse_optional_bool_field(
@@ -2200,45 +2288,71 @@ mod tests {
 		assert!(migration.database_only);
 	}
 
-	#[rstest]
-	#[case(
-		"swappable_dependencies",
-		"vec![SwappableDependency::new(\"AUTH_USER_MODEL\", \"auth\", \"User\", \
-		 \"0001_initial\")]"
-	)]
-	#[case(
-		"optional_dependencies",
-		"vec![OptionalDependency::new(\"gis\", \"0001_initial\", condition)]"
-	)]
-	fn strict_metadata_rejects_nonempty_unsupported_dependency_metadata(
-		#[case] field: &str,
-		#[case] value: &str,
-	) {
+	#[test]
+	fn strict_metadata_preserves_conditional_dependencies() {
 		// Arrange
-		let source = format!(
-			r#"pub fn migration() -> Migration {{
-				Migration {{
+		let ast = syn::parse_file(
+			r#"pub fn migration() -> Migration {
+				Migration {
 					operations: vec![],
 					dependencies: vec![],
 					replaces: vec![],
-					{field}: {value},
-				}}
-			}}"#
-		);
-		let ast = syn::parse_file(&source).unwrap();
+					swappable_dependencies: vec![
+						SwappableDependency::new(
+							"AUTH_USER_MODEL", "auth", "User", "0001_initial"
+						)
+					],
+					optional_dependencies: vec![
+						OptionalDependency::new(
+							"gis",
+							"0001_initial",
+							DependencyCondition::AppInstalled("gis".to_string()),
+						),
+						OptionalDependency::new(
+							"audit",
+							"0002_events",
+							DependencyCondition::SettingEnabled("AUDIT_ENABLED".to_string()),
+						),
+						OptionalDependency::new(
+							"search",
+							"0003_index",
+							DependencyCondition::FeatureEnabled("search".to_string()),
+						),
+					],
+				}
+			}"#,
+		)
+		.unwrap();
 
 		// Act
-		let error = extract_migration_metadata_strict(&ast, "blog", "0001_initial").unwrap_err();
+		let migration = extract_migration_metadata_strict(&ast, "blog", "0001_initial").unwrap();
 
 		// Assert
 		assert_eq!(
-			error.to_string(),
-			format!(
-				"Invalid migration: Migration metadata field '{}' is not supported by filesystem \
-				 catalogs unless empty",
-				field
-			)
+			migration.swappable_dependencies,
+			vec![super::super::dependency::SwappableDependency::new(
+				"AUTH_USER_MODEL",
+				"auth",
+				"User",
+				"0001_initial",
+			)]
 		);
+		assert_eq!(migration.optional_dependencies.len(), 3);
+		assert!(matches!(
+			migration.optional_dependencies[0].condition,
+			super::super::dependency::DependencyCondition::AppInstalled(ref value)
+				if value == "gis"
+		));
+		assert!(matches!(
+			migration.optional_dependencies[1].condition,
+			super::super::dependency::DependencyCondition::SettingEnabled(ref value)
+				if value == "AUDIT_ENABLED"
+		));
+		assert!(matches!(
+			migration.optional_dependencies[2].condition,
+			super::super::dependency::DependencyCondition::FeatureEnabled(ref value)
+				if value == "search"
+		));
 	}
 
 	#[test]

@@ -6,8 +6,9 @@ use super::{Migration, MigrationError, MigrationRepository, Result};
 use crate::migrations::ast_parser;
 use crate::migrations::dependency::DependencyCondition;
 use async_trait::async_trait;
+use cap_std::ambient_authority;
+use cap_std::fs::{Dir, File, OpenOptions};
 use quote::quote;
-use std::fs::{File, OpenOptions};
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use syn::parse_quote;
@@ -37,18 +38,30 @@ pub struct FilesystemRepository {
 	root_dir: PathBuf,
 }
 
-struct IncompleteFile {
+struct IncompleteFile<C>
+where
+	C: Fn(&Dir, &str) -> std::io::Result<()>,
+{
 	path: PathBuf,
+	directory: Dir,
+	name: String,
 	file: Option<File>,
 	complete: bool,
+	cleanup: C,
 }
 
-impl IncompleteFile {
-	fn new(path: PathBuf, file: File) -> Self {
+impl<C> IncompleteFile<C>
+where
+	C: Fn(&Dir, &str) -> std::io::Result<()>,
+{
+	fn new(path: PathBuf, directory: Dir, name: String, file: File, cleanup: C) -> Self {
 		Self {
 			path,
+			directory,
+			name,
 			file: Some(file),
 			complete: false,
+			cleanup,
 		}
 	}
 
@@ -60,13 +73,23 @@ impl IncompleteFile {
 		self.complete = true;
 		self.path.clone()
 	}
+
+	fn cleanup_now(&mut self) -> std::io::Result<()> {
+		self.file.take();
+		(self.cleanup)(&self.directory, &self.name)?;
+		self.complete = true;
+		Ok(())
+	}
 }
 
-impl Drop for IncompleteFile {
+impl<C> Drop for IncompleteFile<C>
+where
+	C: Fn(&Dir, &str) -> std::io::Result<()>,
+{
 	fn drop(&mut self) {
 		self.file.take();
 		if !self.complete {
-			let _ = std::fs::remove_file(&self.path);
+			let _ = (self.cleanup)(&self.directory, &self.name);
 		}
 	}
 }
@@ -169,6 +192,35 @@ impl FilesystemRepository {
 			)));
 		}
 
+		let valid = if label == "Migration name" {
+			let Some((number, description)) = component.split_once('_') else {
+				return Err(MigrationError::PathTraversal(format!(
+					"{} is not a numbered migration name: {}",
+					label, component
+				)));
+			};
+			number.len() >= 4
+				&& number.bytes().all(|byte| byte.is_ascii_digit())
+				&& !description.is_empty()
+				&& description
+					.bytes()
+					.all(|byte| byte.is_ascii_alphanumeric() || byte == b'_')
+		} else {
+			component
+				.as_bytes()
+				.first()
+				.is_some_and(u8::is_ascii_alphabetic)
+				&& component
+					.bytes()
+					.all(|byte| byte.is_ascii_alphanumeric() || byte == b'_')
+		};
+		if !valid {
+			return Err(MigrationError::PathTraversal(format!(
+				"{} is not a safe ASCII component: {}",
+				label, component
+			)));
+		}
+
 		Ok(())
 	}
 
@@ -203,6 +255,9 @@ impl FilesystemRepository {
 
 	/// Render a complete Rust migration source file.
 	pub fn render(&self, migration: &Migration, options: MigrationRenderOptions) -> Result<String> {
+		for operation in &migration.operations {
+			Self::validate_renderable_operation(operation)?;
+		}
 		// Build dependencies vector (tuple elements need .to_string() for String type)
 		let deps: Vec<_> = migration
 			.dependencies
@@ -298,7 +353,7 @@ impl FilesystemRepository {
 		// Format with prettyplease first, then apply rustfmt
 		let prettyplease_output = prettyplease::unparse(&file);
 		let formatted = Self::format_with_rustfmt(&prettyplease_output)?;
-		syn::parse_file(&formatted).map_err(|error| {
+		let parsed = syn::parse_file(&formatted).map_err(|error| {
 			let operations = migration
 				.operations
 				.iter()
@@ -309,6 +364,38 @@ impl FilesystemRepository {
 				operation: format!("{operations}: {error}"),
 			}
 		})?;
+		let reparsed = ast_parser::extract_migration_metadata_strict(
+			&parsed,
+			&migration.app_label,
+			&migration.name,
+		)
+		.map_err(|_| MigrationError::UnsupportedMigrationRendering {
+			operation: migration
+				.operations
+				.first()
+				.map(Self::operation_kind)
+				.unwrap_or("Migration")
+				.to_string(),
+		})?;
+		if reparsed.operations != migration.operations
+			|| reparsed.dependencies != migration.dependencies
+			|| reparsed.replaces != migration.replaces
+			|| reparsed.atomic != migration.atomic
+			|| reparsed.initial != migration.initial
+			|| reparsed.state_only != migration.state_only
+			|| reparsed.database_only != migration.database_only
+			|| reparsed.swappable_dependencies != migration.swappable_dependencies
+			|| reparsed.optional_dependencies != migration.optional_dependencies
+		{
+			return Err(MigrationError::UnsupportedMigrationRendering {
+				operation: migration
+					.operations
+					.first()
+					.map(Self::operation_kind)
+					.unwrap_or("Migration")
+					.to_string(),
+			});
+		}
 
 		if options.include_header {
 			Ok(format!(
@@ -319,6 +406,73 @@ impl FilesystemRepository {
 		}
 	}
 
+	fn validate_renderable_operation(operation: &crate::migrations::Operation) -> Result<()> {
+		use crate::migrations::{Constraint, Operation};
+
+		let kind = Self::operation_kind(operation);
+		let constraints = match operation {
+			Operation::CreateTable { constraints, .. } => Some(constraints.as_slice()),
+			Operation::AddConstraintDefinition { constraint, .. }
+			| Operation::DropConstraintDefinition { constraint, .. } => {
+				Some(std::slice::from_ref(constraint))
+			}
+			_ => None,
+		};
+		if constraints.is_some_and(|constraints| {
+			constraints
+				.iter()
+				.any(|constraint| matches!(constraint, Constraint::Exclude { .. }))
+		}) {
+			return Err(MigrationError::UnsupportedMigrationRendering {
+				operation: format!("{kind}.Constraint::Exclude"),
+			});
+		}
+		match operation {
+			Operation::CreateTable {
+				without_rowid,
+				interleave_in_parent,
+				partition,
+				..
+			} if without_rowid.is_some()
+				|| interleave_in_parent.is_some()
+				|| partition.is_some() =>
+			{
+				Err(MigrationError::UnsupportedMigrationRendering {
+					operation: kind.to_string(),
+				})
+			}
+			Operation::AddColumn {
+				mysql_options: Some(_),
+				..
+			}
+			| Operation::AlterColumn {
+				old_definition: Some(_),
+				..
+			}
+			| Operation::AlterColumn {
+				mysql_options: Some(_),
+				..
+			}
+			| Operation::RunRust { .. }
+			| Operation::AlterTableComment { .. }
+			| Operation::AlterUniqueTogether { .. }
+			| Operation::AlterModelOptions { .. }
+			| Operation::CreateInheritedTable { .. }
+			| Operation::AddDiscriminatorColumn { .. }
+			| Operation::MoveModel { .. }
+			| Operation::CreateSchema { .. }
+			| Operation::DropSchema { .. }
+			| Operation::BulkLoad { .. }
+			| Operation::SetAutoIncrementValue { .. }
+			| Operation::CreateCompositePrimaryKey { .. } => {
+				Err(MigrationError::UnsupportedMigrationRendering {
+					operation: kind.to_string(),
+				})
+			}
+			_ => Ok(()),
+		}
+	}
+
 	/// Create a new migration source file without overwriting an existing file.
 	pub fn create_new_source(
 		&self,
@@ -326,38 +480,58 @@ impl FilesystemRepository {
 		migration_name: &str,
 		source: &str,
 	) -> Result<PathBuf> {
-		self.create_new_source_with(app_label, migration_name, source, |file, formatted| {
-			file.write_all(formatted.as_bytes())?;
-			file.flush()?;
-			file.sync_all()
-		})
+		self.create_new_source_with_hooks(
+			app_label,
+			migration_name,
+			source,
+			|| Ok(()),
+			|file, formatted| {
+				file.write_all(formatted.as_bytes())?;
+				file.flush()?;
+				file.sync_all()
+			},
+			|directory, name| directory.remove_file(name),
+		)
 	}
 
-	fn create_new_source_with<F>(
+	fn create_new_source_with_hooks<B, W, C>(
 		&self,
 		app_label: &str,
 		migration_name: &str,
 		source: &str,
-		write_source: F,
+		before_open: B,
+		write_source: W,
+		cleanup: C,
 	) -> Result<PathBuf>
 	where
-		F: FnOnce(&mut File, &str) -> std::io::Result<()>,
+		B: FnOnce() -> std::io::Result<()>,
+		W: FnOnce(&mut File, &str) -> std::io::Result<()>,
+		C: Fn(&Dir, &str) -> std::io::Result<()>,
 	{
 		let path = self.migration_path(app_label, migration_name)?;
 		syn::parse_file(source).map_err(|error| {
 			MigrationError::InvalidMigration(format!("Failed to parse migration source: {error}"))
 		})?;
 		let formatted = Self::format_with_rustfmt(source)?;
-
-		if let Some(parent) = path.parent() {
-			std::fs::create_dir_all(parent)?;
+		std::fs::create_dir_all(&self.root_dir)?;
+		before_open()?;
+		let root = Dir::open_ambient_dir(&self.root_dir, ambient_authority())?;
+		root.create_dir_all(app_label)?;
+		let app_directory = root.open_dir(app_label)?;
+		let file_name = format!("{migration_name}.rs");
+		let mut options = OpenOptions::new();
+		options.write(true).create_new(true);
+		let file = app_directory.open_with(&file_name, &options)?;
+		let mut incomplete = IncompleteFile::new(path, app_directory, file_name, file, cleanup);
+		if let Err(write_error) = write_source(incomplete.file_mut(), &formatted) {
+			return match incomplete.cleanup_now() {
+				Ok(()) => Err(MigrationError::IoError(write_error)),
+				Err(cleanup_error) => Err(MigrationError::IoError(std::io::Error::other(format!(
+					"Failed to write migration source: {write_error}; failed to remove incomplete \
+					 file: {cleanup_error}"
+				)))),
+			};
 		}
-		let file = OpenOptions::new()
-			.write(true)
-			.create_new(true)
-			.open(&path)?;
-		let mut incomplete = IncompleteFile::new(path, file);
-		write_source(incomplete.file_mut(), &formatted)?;
 		Ok(incomplete.complete())
 	}
 
@@ -992,13 +1166,87 @@ mod tests {
 			)
 			.unwrap();
 
-		let result =
-			repo.create_new_source_with("polls", "0001_squashed", &source, |file, formatted| {
+		let result = repo.create_new_source_with_hooks(
+			"polls",
+			"0001_squashed",
+			&source,
+			|| Ok(()),
+			|file, formatted| {
 				file.write_all(&formatted.as_bytes()[..16])?;
 				Err(std::io::Error::other("injected write failure"))
-			});
+			},
+			|directory, name| directory.remove_file(name),
+		);
 
 		assert!(matches!(result, Err(MigrationError::IoError(_))));
 		assert!(!temp_dir.path().join("polls/0001_squashed.rs").exists());
+	}
+
+	#[cfg(unix)]
+	#[test]
+	fn create_new_source_resists_symlink_swap_after_validation() {
+		use std::os::unix::fs::symlink;
+
+		let root = TempDir::new().unwrap();
+		let outside = TempDir::new().unwrap();
+		std::fs::create_dir(root.path().join("polls")).unwrap();
+		let repo = FilesystemRepository::new(root.path());
+		let source = repo
+			.render(
+				&create_test_migration("polls", "0001_squashed"),
+				MigrationRenderOptions {
+					include_header: false,
+				},
+			)
+			.unwrap();
+
+		let result = repo.create_new_source_with_hooks(
+			"polls",
+			"0001_squashed",
+			&source,
+			|| {
+				std::fs::remove_dir(root.path().join("polls"))?;
+				symlink(outside.path(), root.path().join("polls"))
+			},
+			|file, formatted| {
+				file.write_all(formatted.as_bytes())?;
+				file.sync_all()
+			},
+			|directory, name| directory.remove_file(name),
+		);
+
+		assert!(result.is_err());
+		assert!(!outside.path().join("0001_squashed.rs").exists());
+	}
+
+	#[test]
+	fn create_new_source_reports_write_and_cleanup_failures() {
+		let temp_dir = TempDir::new().unwrap();
+		let repo = FilesystemRepository::new(temp_dir.path());
+		let source = repo
+			.render(
+				&create_test_migration("polls", "0001_squashed"),
+				MigrationRenderOptions {
+					include_header: false,
+				},
+			)
+			.unwrap();
+
+		let error = repo
+			.create_new_source_with_hooks(
+				"polls",
+				"0001_squashed",
+				&source,
+				|| Ok(()),
+				|file, _| {
+					file.write_all(b"partial")?;
+					Err(std::io::Error::other("injected write failure"))
+				},
+				|_, _| Err(std::io::Error::other("injected cleanup failure")),
+			)
+			.unwrap_err();
+
+		assert!(error.to_string().contains("injected write failure"));
+		assert!(error.to_string().contains("injected cleanup failure"));
 	}
 }

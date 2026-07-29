@@ -78,6 +78,7 @@ quote = { version = "1.0", optional = true }
 proc-macro2 = { version = "1.0", optional = true }
 prettyplease = { version = "0.2", optional = true }
 walkdir = { version = "2.5", optional = true }
+cap-std = { version = "3.4.5", optional = true }
 aquamarine = { workspace = true, optional = true }
 mongodb = { version = "3.0", optional = true, features = ["bson-3"] }
 bson = { version = "3.0.0", optional = true }
@@ -161,7 +162,7 @@ backends = ["db-deps", "pool"]
 backends-pool = ["db-deps", "pool"]
 pool = ["db-deps"]
 orm = ["backends", "db-deps", "hybrid"]
-migrations = ["db-deps", "dep:refinery"]
+migrations = ["db-deps", "dep:cap-std", "dep:refinery"]
 hybrid = ["db-deps"]
 associations = ["db-deps"]
 contenttypes = ["db-deps"]

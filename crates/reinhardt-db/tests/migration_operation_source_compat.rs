@@ -4,6 +4,7 @@ fn migration_operation_source_compat() {
 	let tests = trybuild::TestCases::new();
 	tests.pass("tests/ui/drop_constraint_legacy.rs");
 	tests.pass("tests/ui/create_index_legacy.rs");
+	tests.pass("tests/ui/migration_renderer_supported_variants.rs");
 }
 
 #[cfg(feature = "migrations")]
@@ -20,18 +21,82 @@ fn migration_renderer_round_trips_rust_callback_source() {
 	});
 	let repository = FilesystemRepository::new("/unused");
 
-	let source = repository
+	let error = repository
 		.render(
 			&migration,
 			MigrationRenderOptions {
 				include_header: true,
 			},
 		)
-		.unwrap();
+		.unwrap_err();
 
-	syn::parse_file(&source).unwrap();
-	assert!(source.contains("Operation::RunRust"));
-	assert!(source.contains("\"seed_accounts\".to_string()"));
+	assert!(matches!(
+		error,
+		reinhardt_db::migrations::MigrationError::UnsupportedMigrationRendering {
+			operation
+		} if operation == "RunRust"
+	));
+}
+
+#[cfg(feature = "migrations")]
+#[test]
+fn migration_renderer_rejects_nested_exclude_constraints_without_losing_payload() {
+	use reinhardt_db::migrations::{
+		ColumnDefinition, Constraint, FieldType, FilesystemRepository, Migration, MigrationError,
+		MigrationRenderOptions, Operation,
+	};
+
+	let exclude = || Constraint::Exclude {
+		name: "accounts_active_excl".to_string(),
+		elements: vec![("active".to_string(), "=".to_string())],
+		using: Some("gist".to_string()),
+		where_clause: Some("active".to_string()),
+	};
+	let cases = [
+		(
+			"CreateTable.Constraint::Exclude",
+			Operation::CreateTable {
+				name: "accounts".to_string(),
+				columns: vec![ColumnDefinition::new("active", FieldType::Boolean)],
+				constraints: vec![exclude()],
+				without_rowid: None,
+				interleave_in_parent: None,
+				partition: None,
+			},
+		),
+		(
+			"AddConstraintDefinition.Constraint::Exclude",
+			Operation::AddConstraintDefinition {
+				table: "accounts".to_string(),
+				constraint: exclude(),
+			},
+		),
+		(
+			"DropConstraintDefinition.Constraint::Exclude",
+			Operation::DropConstraintDefinition {
+				table: "accounts".to_string(),
+				constraint: exclude(),
+			},
+		),
+	];
+
+	for (expected, operation) in cases {
+		let mut migration = Migration::new("0001_exclude", "accounts");
+		migration.operations.push(operation);
+		let error = FilesystemRepository::new("/unused")
+			.render(
+				&migration,
+				MigrationRenderOptions {
+					include_header: false,
+				},
+			)
+			.unwrap_err();
+		assert!(matches!(
+			error,
+			MigrationError::UnsupportedMigrationRendering { operation }
+				if operation == expected
+		));
+	}
 }
 
 #[cfg(feature = "migrations")]
@@ -77,13 +142,15 @@ fn migration_renderer_round_trips_supported_operation_source() {
 }
 
 #[cfg(feature = "migrations")]
-#[test]
-fn migration_renderer_compatibility_matrix_covers_every_operation_variant() {
+#[tokio::test]
+async fn migration_renderer_compatibility_matrix_covers_every_operation_variant() {
 	use reinhardt_db::migrations::{
 		BulkLoadFormat, BulkLoadOptions, BulkLoadSource, ColumnDefinition, Constraint, FieldType,
-		FilesystemRepository, Migration, MigrationRenderOptions, Operation,
+		FilesystemRepository, Migration, MigrationError, MigrationRenderOptions, MigrationSource,
+		Operation,
 	};
 	use std::collections::HashMap;
+	use tempfile::TempDir;
 
 	let column = || ColumnDefinition::new("value", FieldType::Integer);
 	let constraint = || Constraint::Check {
@@ -320,18 +387,71 @@ fn migration_renderer_compatibility_matrix_covers_every_operation_variant() {
 	assert_eq!(expected_variants, 33);
 	#[cfg(not(feature = "pgvector"))]
 	assert_eq!(expected_variants, 31);
-	let mut migration = Migration::new("0003_matrix", "accounts");
-	migration.operations = operations;
-
-	let source = FilesystemRepository::new("/unused")
-		.render(
+	for (index, operation) in operations.into_iter().enumerate() {
+		let (kind, supported) = match &operation {
+			Operation::CreateTable { .. } => ("CreateTable", true),
+			Operation::DropTable { .. } => ("DropTable", true),
+			Operation::AddColumn { .. } => ("AddColumn", true),
+			Operation::DropColumn { .. } => ("DropColumn", true),
+			Operation::AlterColumn { .. } => ("AlterColumn", false),
+			Operation::RenameTable { .. } => ("RenameTable", true),
+			Operation::RenameColumn { .. } => ("RenameColumn", true),
+			Operation::AddConstraint { .. } => ("AddConstraint", true),
+			Operation::AddConstraintDefinition { .. } => ("AddConstraintDefinition", true),
+			Operation::AddConstraintRepair { .. } => ("AddConstraintRepair", true),
+			Operation::RestoreConstraintOnRollback { .. } => ("RestoreConstraintOnRollback", true),
+			Operation::DropConstraint { .. } => ("DropConstraint", true),
+			Operation::DropConstraintDefinition { .. } => ("DropConstraintDefinition", true),
+			Operation::CreateIndex { .. } => ("CreateIndex", true),
+			#[cfg(feature = "pgvector")]
+			Operation::CreateNamedIndex { .. } => ("CreateNamedIndex", true),
+			Operation::CreateIndexRepair { .. } => ("CreateIndexRepair", true),
+			Operation::RestoreIndexOnRollback { .. } => ("RestoreIndexOnRollback", true),
+			Operation::DropIndex { .. } => ("DropIndex", true),
+			#[cfg(feature = "pgvector")]
+			Operation::DropNamedIndex { .. } => ("DropNamedIndex", true),
+			Operation::RunSQL { .. } => ("RunSQL", true),
+			Operation::RunRust { .. } => ("RunRust", false),
+			Operation::AlterTableComment { .. } => ("AlterTableComment", false),
+			Operation::AlterUniqueTogether { .. } => ("AlterUniqueTogether", false),
+			Operation::AlterModelOptions { .. } => ("AlterModelOptions", false),
+			Operation::CreateInheritedTable { .. } => ("CreateInheritedTable", false),
+			Operation::AddDiscriminatorColumn { .. } => ("AddDiscriminatorColumn", false),
+			Operation::MoveModel { .. } => ("MoveModel", false),
+			Operation::CreateSchema { .. } => ("CreateSchema", false),
+			Operation::DropSchema { .. } => ("DropSchema", false),
+			Operation::CreateExtension { .. } => ("CreateExtension", true),
+			Operation::BulkLoad { .. } => ("BulkLoad", false),
+			Operation::SetAutoIncrementValue { .. } => ("SetAutoIncrementValue", false),
+			Operation::CreateCompositePrimaryKey { .. } => ("CreateCompositePrimaryKey", false),
+		};
+		let temp_dir = TempDir::new().unwrap();
+		let repository = FilesystemRepository::new(temp_dir.path());
+		let migration_name = format!("0001_matrix_{index}");
+		let mut migration = Migration::new(&migration_name, "accounts");
+		migration.operations.push(operation.clone());
+		let rendered = repository.render(
 			&migration,
 			MigrationRenderOptions {
 				include_header: false,
 			},
-		)
-		.unwrap();
-
-	syn::parse_file(&source).unwrap();
-	assert_eq!(source.matches("Operation::").count(), expected_variants);
+		);
+		if !supported {
+			assert!(matches!(
+				rendered,
+				Err(MigrationError::UnsupportedMigrationRendering { operation })
+					if operation == kind
+			));
+			continue;
+		}
+		let source = rendered.unwrap_or_else(|error| panic!("{kind}: {error}"));
+		repository
+			.create_new_source("accounts", &migration_name, &source)
+			.unwrap();
+		let loaded = reinhardt_db::migrations::FilesystemSource::new(temp_dir.path())
+			.all_migrations()
+			.await
+			.unwrap();
+		assert_eq!(loaded[0].operations, vec![operation], "{kind}");
+	}
 }

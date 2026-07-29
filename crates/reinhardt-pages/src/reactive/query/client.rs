@@ -1,11 +1,11 @@
 use std::any::Any;
 use std::cell::{Cell, RefCell};
 use std::cmp::{Ordering, Reverse};
+#[cfg(any(wasm, test))]
+use std::collections::HashSet;
 #[cfg(all(test, not(wasm)))]
 use std::collections::VecDeque;
 use std::collections::{BinaryHeap, HashMap};
-#[cfg(any(wasm, test))]
-use std::collections::HashSet;
 use std::future::Future;
 use std::marker::PhantomData;
 use std::pin::Pin;
@@ -282,11 +282,11 @@ impl QueryClient {
 		let document_visible =
 			super::browser::QueryBrowser::initial_visibility(supports_browser_resources);
 		let inner = Rc::new_cyclic(|owner| QueryClientInner {
-				defaults,
-				runtime,
-				entries: RefCell::new(HashMap::new()),
-				#[cfg(any(wasm, test))]
-				consumed_hydration_identities: RefCell::new(HashSet::new()),
+			defaults,
+			runtime,
+			entries: RefCell::new(HashMap::new()),
+			#[cfg(any(wasm, test))]
+			consumed_hydration_identities: RefCell::new(HashSet::new()),
 			families: RefCell::new(HashMap::new()),
 			deadlines: RefCell::new(BinaryHeap::new()),
 			next_deadline_sequence: Cell::new(0),
@@ -1012,7 +1012,9 @@ impl<T: Clone + 'static, E: Clone + 'static> QueryEntry<T, E> {
 			observer.policy.enabled
 				&& matches!(
 					observer.consumer,
-					QueryConsumer::MountedQuery | QueryConsumer::Maintenance
+					QueryConsumer::MountedRoute(_)
+						| QueryConsumer::MountedQuery
+						| QueryConsumer::Maintenance
 				)
 		})
 	}
@@ -1266,12 +1268,6 @@ impl<T: Clone + 'static, E: Clone + 'static> QueryLease<T, E> {
 			generation: self.inner.generation.get(),
 		}
 		.await
-	}
-
-	// Hydration regressions inspect the settled state without creating a public snapshot API.
-	#[cfg(test)]
-	pub(crate) fn state(&self) -> ResourceState<T, E> {
-		self.inner.entry.state.with_untracked(|state| state.clone())
 	}
 }
 

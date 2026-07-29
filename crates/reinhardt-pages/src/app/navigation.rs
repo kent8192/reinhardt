@@ -170,17 +170,9 @@ impl NavigationCoordinator {
 			return Ok(false);
 		}
 		for id in matched.loader_ids() {
-			let value = hydration
-				.get_route_loader_state(id.as_str())
-				.ok_or_else(|| {
-					RouteLoaderError::with_status(
-						format!("route loader `{}` is missing from SSR state", id.as_str()),
-						500,
-					)
-				})?;
-			self.registry
-				.seed_hydrated_query(client, *id, &loader_context, &hydration)?;
-			let prepared = self.registry.hydrate(*id, value)?;
+			let prepared =
+				self.registry
+					.seed_hydrated_query(client, *id, &loader_context, &hydration)?;
 			store.insert_prepared(prepared);
 		}
 		self.mounted_store.borrow_mut().replace(store);

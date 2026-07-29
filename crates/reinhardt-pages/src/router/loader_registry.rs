@@ -48,13 +48,9 @@ impl From<LoaderConsumer> for QueryConsumer {
 /// Erased loader executor submitted by the `#[loader]` macro.
 pub type LoaderExecutor = fn(&RouteContext, CancellationHandle, LoaderConsumer) -> LoaderFuture;
 
-/// Erased deserializer used to restore a successful loader value during
-/// client hydration.
-pub type LoaderHydrator = fn(&serde_json::Value) -> Result<PreparedLoader, RouteLoaderError>;
-
 /// Erased query-cache seeder used during route-loader hydration.
 pub type LoaderQuerySeeder =
-	fn(&QueryClient, &RouteContext, &HydrationContext) -> Result<(), RouteLoaderError>;
+	fn(&QueryClient, &RouteContext, &HydrationContext) -> Result<PreparedLoader, RouteLoaderError>;
 
 /// Static registration record for one route loader.
 pub struct LoaderRegistration {
@@ -82,23 +78,6 @@ impl LoaderRegistration {
 }
 
 inventory::collect!(LoaderRegistration);
-
-/// Static hydration registration generated alongside a `#[loader]` marker.
-pub struct LoaderHydrationRegistration {
-	/// Stable loader identifier.
-	pub id: RouteLoaderId,
-	/// Deserializes one successful wire value into a typed prepared value.
-	pub hydrate: LoaderHydrator,
-}
-
-impl LoaderHydrationRegistration {
-	/// Creates a hydration registration.
-	pub const fn new(id: RouteLoaderId, hydrate: LoaderHydrator) -> Self {
-		Self { id, hydrate }
-	}
-}
-
-inventory::collect!(LoaderHydrationRegistration);
 
 /// Static query-cache seeding registration generated alongside a `#[loader]`
 /// marker.
@@ -145,7 +124,6 @@ impl std::error::Error for LoaderRegistryError {}
 /// Read-only lookup table for erased loader registrations.
 pub struct LoaderRegistry {
 	entries: HashMap<RouteLoaderId, &'static LoaderRegistration>,
-	hydrators: HashMap<RouteLoaderId, LoaderHydrator>,
 	query_seeders: HashMap<RouteLoaderId, LoaderQuerySeeder>,
 }
 
@@ -163,7 +141,6 @@ impl LoaderRegistry {
 		}
 		Ok(Self {
 			entries: indexed,
-			hydrators: HashMap::new(),
 			query_seeders: HashMap::new(),
 		})
 	}
@@ -171,11 +148,6 @@ impl LoaderRegistry {
 	/// Collects all inventory registrations for the current application.
 	pub fn global() -> Result<Self, LoaderRegistryError> {
 		let mut registry = Self::from_entries(inventory::iter::<LoaderRegistration>)?;
-		for registration in inventory::iter::<LoaderHydrationRegistration> {
-			registry
-				.hydrators
-				.insert(registration.id, registration.hydrate);
-		}
 		for registration in inventory::iter::<LoaderQueryHydrationRegistration> {
 			registry
 				.query_seeders
@@ -205,26 +177,7 @@ impl LoaderRegistry {
 		self.entries.is_empty()
 	}
 
-	/// Restores one successful loader value from the SSR hydration payload.
-	#[doc(hidden)]
-	pub fn hydrate(
-		&self,
-		id: RouteLoaderId,
-		value: &serde_json::Value,
-	) -> Result<PreparedLoader, RouteLoaderError> {
-		let hydrate = self.hydrators.get(&id).ok_or_else(|| {
-			RouteLoaderError::with_status(
-				format!(
-					"route loader `{}` has no hydration deserializer",
-					id.as_str()
-				),
-				500,
-			)
-		})?;
-		hydrate(value)
-	}
-
-	/// Seeds the typed query cache for one hydrated route loader.
+	/// Hydrates one loader and acquires its mounted-route query lease.
 	#[doc(hidden)]
 	pub fn seed_hydrated_query(
 		&self,
@@ -232,7 +185,7 @@ impl LoaderRegistry {
 		id: RouteLoaderId,
 		context: &RouteContext,
 		hydration: &HydrationContext,
-	) -> Result<(), RouteLoaderError> {
+	) -> Result<PreparedLoader, RouteLoaderError> {
 		let seed_query = self.query_seeders.get(&id).ok_or_else(|| {
 			RouteLoaderError::with_status(
 				format!(

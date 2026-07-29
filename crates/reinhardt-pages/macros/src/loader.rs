@@ -66,7 +66,6 @@ fn expand_loader(input: ItemFn) -> syn::Result<proc_macro2::TokenStream> {
 	let module_name = function_name.clone();
 	let executor_name = format_ident!("__execute", span = function_name.span());
 	let fetcher_name = format_ident!("__fetch", span = function_name.span());
-	let hydrator_name = format_ident!("__hydrate", span = function_name.span());
 	let query_seeder_name = format_ident!("__seed_query", span = function_name.span());
 	let input_specs = signature.args.iter().filter_map(|arg| {
 		let kind = arg.kind?;
@@ -178,23 +177,14 @@ fn expand_loader(input: ItemFn) -> syn::Result<proc_macro2::TokenStream> {
 				})
 			}
 
-			fn #hydrator_name(
-				__value: &#pages_crate::__private::serde_json::Value,
-			) -> ::core::result::Result<
-				#pages_crate::router::loader::PreparedLoader,
-				#pages_crate::RouteLoaderError,
-			> {
-				#pages_crate::router::loader::PreparedLoader::from_serialized::<#data>(
-					<marker as #pages_crate::RouteLoader>::ID,
-					__value,
-				)
-			}
-
 			fn #query_seeder_name(
 				__client: &#pages_crate::QueryClient,
 				__context: &#pages_crate::router::request::RouteContext,
 				__hydration: &#pages_crate::HydrationContext,
-			) -> ::core::result::Result<(), #pages_crate::RouteLoaderError> {
+			) -> ::core::result::Result<
+				#pages_crate::router::loader::PreparedLoader,
+				#pages_crate::RouteLoaderError,
+			> {
 				let __context = __context.clone();
 				let __fetcher = {
 					let __fetch_context = __context.clone();
@@ -218,13 +208,6 @@ fn expand_loader(input: ItemFn) -> syn::Result<proc_macro2::TokenStream> {
 					inputs: INPUTS,
 					execute: #executor_name,
 				}
-			}
-
-			#pages_crate::__private::inventory::submit! {
-				#pages_crate::router::loader_registry::LoaderHydrationRegistration::new(
-					<marker as #pages_crate::RouteLoader>::ID,
-					#hydrator_name,
-				)
 			}
 
 			#pages_crate::__private::inventory::submit! {

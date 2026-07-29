@@ -4,7 +4,8 @@ use super::loader_registry::LoaderConsumer;
 use crate::cancellation::CancellationHandle;
 use crate::hydration::HydrationContext;
 use crate::reactive::{
-	QueryAcquireOptions, QueryClient, QueryErrorPolicy, QueryFamily, QueryLease, queries,
+	QueryAcquireOptions, QueryClient, QueryConsumer, QueryErrorPolicy, QueryFamily, QueryLease,
+	queries,
 };
 use reinhardt_urls::routers::client_router::{ClientRouteTreeMatch, RouteContext, RouteLoaderId};
 use serde::{Deserialize, Deserializer, Serialize, Serializer, de::DeserializeOwned};
@@ -364,31 +365,6 @@ pub struct PreparedLoader {
 // handoff contract for the registry and coordinator.
 #[allow(dead_code)]
 impl PreparedLoader {
-	/// Reconstructs a prepared value from a successful SSR payload.
-	#[doc(hidden)]
-	pub fn from_serialized<T>(
-		id: RouteLoaderId,
-		serialized: &serde_json::Value,
-	) -> Result<Self, RouteLoaderError>
-	where
-		T: Clone + Serialize + DeserializeOwned + 'static,
-	{
-		let value: T = serde_json::from_value(serialized.clone()).map_err(|error| {
-			RouteLoaderError::from_diagnostic(
-				"route loader hydration value is invalid",
-				Some(500),
-				error,
-			)
-		})?;
-		Ok(Self {
-			id,
-			type_id: TypeId::of::<T>(),
-			value: Rc::new(value),
-			serialized: serialized.clone(),
-			lease: ErasedQueryLease(Rc::new(())),
-		})
-	}
-
 	pub(crate) fn new<T>(
 		id: RouteLoaderId,
 		value: T,
@@ -472,7 +448,7 @@ struct StoredLoader {
 	serialized: serde_json::Value,
 	// The lease is intentionally retained for as long as the prepared value is mounted.
 	#[allow(dead_code)]
-	lease: ErasedQueryLease,
+	lease: Option<ErasedQueryLease>,
 }
 
 impl LoaderStore {
@@ -493,7 +469,7 @@ impl LoaderStore {
 				type_id: TypeId::of::<T>(),
 				value: Rc::new(value),
 				serialized,
-				lease: ErasedQueryLease(Rc::new(())),
+				lease: None,
 			},
 		);
 		Ok(())
@@ -534,7 +510,7 @@ impl LoaderStore {
 				type_id,
 				value,
 				serialized,
-				lease,
+				lease: Some(lease),
 			},
 		);
 	}
@@ -615,18 +591,18 @@ pub fn seed_loader_query<T>(
 	context: &RouteContext,
 	specs: &[LoaderInputSpec],
 	hydration: &HydrationContext,
-	_fetcher: impl Fn(
+	fetcher: impl Fn(
 		CancellationHandle,
 	) -> std::pin::Pin<
 		Box<dyn std::future::Future<Output = Result<T, RouteLoaderError>> + 'static>,
 	> + 'static,
-) -> Result<(), RouteLoaderError>
+) -> Result<PreparedLoader, RouteLoaderError>
 where
 	T: Clone + Serialize + DeserializeOwned + 'static,
 {
 	let cache_id = loader_cache_id(id, context, specs)
 		.map_err(|error| RouteLoaderError::with_status(error.to_string(), 400))?;
-	let serialized = hydration.get_resource_state(&cache_id).ok_or_else(|| {
+	let query_state = hydration.get_resource_state(&cache_id).ok_or_else(|| {
 		RouteLoaderError::with_status(
 			format!(
 				"route loader `{}` query state is missing from SSR state",
@@ -635,14 +611,40 @@ where
 			500,
 		)
 	})?;
-	let key = QueryFamily::<String, T, RouteLoaderError>::new(id.as_str()).key(cache_id);
-	client.seed_serialized(key, serialized).map_err(|error| {
+	let serialized = hydration
+		.get_route_loader_state(id.as_str())
+		.ok_or_else(|| {
+			RouteLoaderError::with_status(
+				format!("route loader `{}` is missing from SSR state", id.as_str()),
+				500,
+			)
+		})?;
+	let value: T = serde_json::from_value(serialized.clone()).map_err(|error| {
 		RouteLoaderError::from_diagnostic(
-			"route loader query hydration state is invalid",
+			"route loader hydration value is invalid",
 			Some(500),
 			error,
 		)
-	})
+	})?;
+	let descriptor = QueryFamily::<String, T, RouteLoaderError>::new(id.as_str())
+		.query_with_cancellation(cache_id, fetcher);
+	client
+		.seed_serialized(descriptor.key().clone(), query_state)
+		.map_err(|error| {
+			RouteLoaderError::from_diagnostic(
+				"route loader query hydration state is invalid",
+				Some(500),
+				error,
+			)
+		})?;
+	let lease = client.acquire(
+		descriptor,
+		QueryAcquireOptions {
+			consumer: QueryConsumer::MountedRoute(0),
+			error_policy: QueryErrorPolicy::Discard,
+		},
+	);
+	Ok(PreparedLoader::new(id, value, serialized.clone(), lease))
 }
 
 /// Acquires a registered loader using the shared query cache.
@@ -694,7 +696,7 @@ mod tests {
 	#[cfg(native)]
 	use crate::reactive::query::TestQueryRuntime;
 	#[cfg(native)]
-	use crate::reactive::{QueryConsumer, QueryDefaults, ResourceState};
+	use crate::reactive::{QueryConsumer, QueryDefaults};
 	#[cfg(native)]
 	use crate::{HydrationContext, SsrState};
 	#[cfg(native)]
@@ -712,6 +714,8 @@ mod tests {
 	use std::rc::Rc;
 	#[cfg(native)]
 	use std::task::{Context, Poll, Waker};
+	#[cfg(native)]
+	use std::time::Duration;
 
 	#[cfg(native)]
 	type QueryTask = Pin<Box<dyn Future<Output = ()> + 'static>>;
@@ -971,7 +975,11 @@ mod tests {
 	fn hydration_seed_keeps_route_loader_query_fresh_without_refetching() {
 		ReactiveScope::run(|| {
 			// Arrange
-			let query_client = QueryClient::new(QueryDefaults::default());
+			let runtime = TestQueryRuntime::new();
+			let query_client = QueryClient::with_runtime(
+				QueryDefaults::default().gc_time(Duration::ZERO),
+				runtime.handle(),
+			);
 			let route_context = context(&[("project_id", "42")], "tab=open");
 			let loader_id = RouteLoaderId::new("tests::hydrated_loader");
 			let inputs = [
@@ -981,10 +989,11 @@ mod tests {
 			let cache_id = loader_cache_id(loader_id, &route_context, &inputs).expect("cache key");
 			let mut state = SsrState::new();
 			state.add_route_loader_query_state(&cache_id, "SSR loader value");
+			state.add_route_loader_state(loader_id.as_str(), "SSR loader value");
 			let hydration = HydrationContext::from_state(state);
 			let fetches = Rc::new(Cell::new(0));
 
-			seed_loader_query::<String>(
+			let prepared = seed_loader_query::<String>(
 				&query_client,
 				loader_id,
 				&route_context,
@@ -1002,32 +1011,35 @@ mod tests {
 				},
 			)
 			.expect("seeded SSR query");
+			let store = LoaderStore::new();
+			store.insert_prepared(prepared);
+			assert_eq!(
+				store
+					.get::<String>(loader_id)
+					.expect("hydrated route value"),
+				Loader("SSR loader value".to_string())
+			);
+			let query_key =
+				QueryFamily::<String, String, RouteLoaderError>::new(loader_id.as_str())
+					.key(cache_id);
+			assert_eq!(fetches.get(), 0, "the hydrated query must remain fresh");
 
 			// Act
-			let lease = query_client.acquire(
-				QueryFamily::<String, String, RouteLoaderError>::new(loader_id.as_str())
-					.query_with_cancellation(cache_id, {
-						let fetches = Rc::clone(&fetches);
-						move |_cancellation| {
-							let fetches = Rc::clone(&fetches);
-							async move {
-								fetches.set(fetches.get() + 1);
-								Ok::<_, RouteLoaderError>("client refetch".to_string())
-							}
-						}
-					}),
-				QueryAcquireOptions {
-					consumer: QueryConsumer::Navigation(1),
-					error_policy: QueryErrorPolicy::Discard,
-				},
-			);
+			query_client.invalidate(&query_key);
+			runtime.run_until_stalled();
 
 			// Assert
-			let ResourceState::Success(value) = lease.state() else {
-				panic!("the seeded query must expose its SSR success state");
-			};
-			assert_eq!(value, "SSR loader value");
-			assert_eq!(fetches.get(), 0, "the hydrated query must remain fresh");
+			assert_eq!(
+				fetches.get(),
+				1,
+				"the hydrated mounted route must refetch when invalidated"
+			);
+			drop(store);
+			runtime.run_due_maintenance();
+			assert!(
+				!query_client.contains_for_test(&query_key),
+				"dropping the final mounted route owner must release the query"
+			);
 		});
 	}
 }

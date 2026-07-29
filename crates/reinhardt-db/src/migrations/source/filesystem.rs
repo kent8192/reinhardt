@@ -12,6 +12,10 @@ use syn::File;
 ///
 /// This source scans directories for `.rs` migration files and parses them
 /// using `syn` to extract metadata like dependencies, atomic flag, and replaces.
+///
+/// The filesystem path is authoritative for migration identity. For a path
+/// `<root>/<app>/<name>.rs`, the loaded migration uses `<app>` and `<name>` even
+/// if duplicate `app_label` or `name` fields appear in the source literal.
 pub struct FilesystemSource {
 	/// Root directory containing migration files
 	root_dir: PathBuf,
@@ -70,7 +74,15 @@ impl FilesystemSource {
 		let (app_label, name) = self.extract_app_and_name(path)?;
 
 		// Extract metadata from AST using ast_parser utility
-		ast_parser::extract_migration_metadata_strict(&ast, &app_label, &name)
+		ast_parser::extract_migration_metadata_strict(&ast, &app_label, &name).map_err(|error| {
+			MigrationError::InvalidMigration(format!(
+				"Failed to load {} as {}.{}: {}",
+				path.display(),
+				app_label,
+				name,
+				error
+			))
+		})
 	}
 
 	/// Extract app_label and migration name from file path
@@ -136,17 +148,30 @@ impl MigrationSource for FilesystemSource {
 		}
 
 		// Walk directory tree to find all .rs files
-		let mut entries: Vec<_> = walkdir::WalkDir::new(&self.root_dir)
+		let mut entries = Vec::new();
+		let mut traversal_errors = Vec::new();
+		for result in walkdir::WalkDir::new(&self.root_dir)
 			.follow_links(true)
 			.into_iter()
-			.collect::<std::result::Result<_, _>>()
-			.map_err(|error| {
-				MigrationError::IoError(std::io::Error::other(format!(
-					"Failed to traverse migration directory {}: {}",
-					self.root_dir.display(),
-					error
-				)))
-			})?;
+		{
+			match result {
+				Ok(entry) => entries.push(entry),
+				Err(error) => {
+					let key = error
+						.path()
+						.map(|path| path.to_string_lossy().into_owned())
+						.unwrap_or_default();
+					traversal_errors.push((key, error.to_string()));
+				}
+			}
+		}
+		traversal_errors.sort();
+		if let Some((path, error)) = traversal_errors.first() {
+			return Err(MigrationError::IoError(std::io::Error::other(format!(
+				"Failed to traverse migration path {}: {}",
+				path, error
+			))));
+		}
 		entries.sort_by(|left, right| left.path().cmp(right.path()));
 
 		for entry in entries {

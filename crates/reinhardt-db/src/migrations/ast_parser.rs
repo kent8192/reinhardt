@@ -32,6 +32,13 @@ pub fn extract_migration_metadata(ast: &File, app_label: &str, name: &str) -> Re
 }
 
 /// Extract migration metadata without accepting missing or malformed core metadata.
+///
+/// `app_label` and `name` are authoritative. Filesystem callers derive them from
+/// the migration path rather than trusting duplicate identity fields in source.
+///
+/// Swappable and optional dependencies are not currently representable by the
+/// filesystem catalog format. They may be omitted or specified as empty vectors;
+/// non-empty values are rejected to prevent semantic loss.
 pub fn extract_migration_metadata_strict(
 	ast: &File,
 	app_label: &str,
@@ -97,6 +104,8 @@ pub fn extract_migration_metadata_strict(
 	let state_only = parse_optional_bool_field(&migration_struct.fields, "state_only", false)?;
 	let database_only =
 		parse_optional_bool_field(&migration_struct.fields, "database_only", false)?;
+	validate_empty_dependency_metadata(&migration_struct.fields, "swappable_dependencies")?;
+	validate_empty_dependency_metadata(&migration_struct.fields, "optional_dependencies")?;
 
 	Ok(Migration {
 		app_label: app_label.to_string(),
@@ -111,6 +120,25 @@ pub fn extract_migration_metadata_strict(
 		swappable_dependencies: vec![],
 		optional_dependencies: vec![],
 	})
+}
+
+fn validate_empty_dependency_metadata(
+	fields: &syn::punctuated::Punctuated<syn::FieldValue, syn::token::Comma>,
+	field_name: &str,
+) -> Result<()> {
+	let Some(field) = fields
+		.iter()
+		.find(|field| matches!(&field.member, syn::Member::Named(ident) if ident == field_name))
+	else {
+		return Ok(());
+	};
+	if parse_vec_expressions(&field.expr, field_name)?.is_empty() {
+		return Ok(());
+	}
+	Err(MigrationError::InvalidMigration(format!(
+		"Migration metadata field '{}' is not supported by filesystem catalogs unless empty",
+		field_name
+	)))
 }
 
 fn parse_optional_bool_field(
@@ -2170,6 +2198,47 @@ mod tests {
 		assert_eq!(migration.initial, Some(false));
 		assert!(migration.state_only);
 		assert!(migration.database_only);
+	}
+
+	#[rstest]
+	#[case(
+		"swappable_dependencies",
+		"vec![SwappableDependency::new(\"AUTH_USER_MODEL\", \"auth\", \"User\", \
+		 \"0001_initial\")]"
+	)]
+	#[case(
+		"optional_dependencies",
+		"vec![OptionalDependency::new(\"gis\", \"0001_initial\", condition)]"
+	)]
+	fn strict_metadata_rejects_nonempty_unsupported_dependency_metadata(
+		#[case] field: &str,
+		#[case] value: &str,
+	) {
+		// Arrange
+		let source = format!(
+			r#"pub fn migration() -> Migration {{
+				Migration {{
+					operations: vec![],
+					dependencies: vec![],
+					replaces: vec![],
+					{field}: {value},
+				}}
+			}}"#
+		);
+		let ast = syn::parse_file(&source).unwrap();
+
+		// Act
+		let error = extract_migration_metadata_strict(&ast, "blog", "0001_initial").unwrap_err();
+
+		// Assert
+		assert_eq!(
+			error.to_string(),
+			format!(
+				"Invalid migration: Migration metadata field '{}' is not supported by filesystem \
+				 catalogs unless empty",
+				field
+			)
+		);
 	}
 
 	#[test]

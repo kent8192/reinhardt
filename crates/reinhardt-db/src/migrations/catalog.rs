@@ -141,6 +141,10 @@ impl MigrationCatalog {
 		let start_key = start
 			.map(|prefix| self.resolve_unique_prefix(app, prefix))
 			.transpose()?;
+		let safe_pre_start_ancestors = start_key
+			.as_ref()
+			.map(|key| self.same_app_ancestors_before_start(key, app))
+			.unwrap_or_default();
 		let mut selected = HashSet::new();
 		let mut current = end_key.clone();
 		let mut external_ancestry_paths = Vec::new();
@@ -231,7 +235,11 @@ impl MigrationCatalog {
 					.cmp(right_path.iter().map(MigrationKey::id))
 			})
 		});
-		if let Some((origin, path)) = external_ancestry_paths.first() {
+		let unsafe_external_path = external_ancestry_paths.iter().find(|(_, path)| {
+			path.last()
+				.is_none_or(|ancestor| !safe_pre_start_ancestors.contains(ancestor))
+		});
+		if let Some((origin, path)) = unsafe_external_path {
 			let rendered_path = path
 				.iter()
 				.map(MigrationKey::id)
@@ -326,5 +334,41 @@ impl MigrationCatalog {
 
 		reachable_selected.sort_by(Self::compare_keys);
 		reachable_selected.into_iter().next()
+	}
+
+	fn same_app_ancestors_before_start(
+		&self,
+		start: &MigrationKey,
+		app: &str,
+	) -> HashSet<MigrationKey> {
+		let mut stack = self
+			.graph
+			.get_dependencies(start)
+			.unwrap_or_default()
+			.iter()
+			.filter(|dependency| dependency.app_label == app)
+			.cloned()
+			.collect::<Vec<_>>();
+		stack.sort_by(Self::compare_keys);
+		stack.reverse();
+
+		let mut visited = HashSet::new();
+		let mut same_app_ancestors = HashSet::new();
+		while let Some(current) = stack.pop() {
+			if !visited.insert(current.clone()) {
+				continue;
+			}
+			if current.app_label == app {
+				same_app_ancestors.insert(current.clone());
+			}
+			let mut dependencies = self
+				.graph
+				.get_dependencies(&current)
+				.unwrap_or_default()
+				.to_vec();
+			dependencies.sort_by(Self::compare_keys);
+			stack.extend(dependencies.into_iter().rev());
+		}
+		same_app_ancestors
 	}
 }

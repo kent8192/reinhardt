@@ -248,8 +248,43 @@ async fn load_strict_rejects_semantically_invalid_filesystem_migrations(
 	// Assert
 	assert_eq!(
 		error.to_string(),
-		format!("Invalid migration: {expected_suffix}")
+		format!(
+			"Invalid migration: Failed to load {} as blog.0001_initial: Invalid migration: \
+			 {expected_suffix}",
+			app_dir.join("0001_initial.rs").display()
+		)
 	);
+}
+
+#[rstest]
+#[tokio::test]
+async fn filesystem_source_uses_path_derived_app_and_name() {
+	// Arrange
+	let temp_dir = TempDir::new().unwrap();
+	let app_dir = temp_dir.path().join("blog");
+	fs::create_dir(&app_dir).unwrap();
+	fs::write(
+		app_dir.join("0001_initial.rs"),
+		r#"pub fn migration() -> Migration {
+			Migration {
+				app_label: "wrong_app".to_string(),
+				name: "9999_wrong".to_string(),
+				operations: vec![],
+				dependencies: vec![],
+				replaces: vec![],
+			}
+		}"#,
+	)
+	.unwrap();
+	let source = FilesystemSource::new(temp_dir.path());
+
+	// Act
+	let migrations = source.all_migrations().await.unwrap();
+
+	// Assert
+	assert_eq!(migrations.len(), 1);
+	assert_eq!(migrations[0].app_label, "blog");
+	assert_eq!(migrations[0].name, "0001_initial");
 }
 
 #[rstest]
@@ -356,6 +391,37 @@ async fn filesystem_source_propagates_walkdir_errors() {
 	assert_eq!(error.kind(), std::io::ErrorKind::Other);
 }
 
+#[cfg(unix)]
+#[rstest]
+#[tokio::test]
+async fn filesystem_source_reports_the_first_sorted_walkdir_error() {
+	use std::os::unix::fs::symlink;
+
+	// Arrange
+	let temp_dir = TempDir::new().unwrap();
+	for app in ["z", "a"] {
+		let app_dir = temp_dir.path().join(app);
+		fs::create_dir(&app_dir).unwrap();
+		symlink(&app_dir, app_dir.join("loop")).unwrap();
+	}
+	let source = FilesystemSource::new(temp_dir.path());
+
+	// Act
+	let error = source.all_migrations().await.unwrap_err();
+
+	// Assert
+	let MigrationError::IoError(error) = error else {
+		panic!("expected IoError");
+	};
+	let expected_path = temp_dir.path().join("a").join("loop");
+	assert!(
+		error
+			.to_string()
+			.contains(&expected_path.display().to_string()),
+		"the deterministic first traversal error must identify the a/loop path"
+	);
+}
+
 #[rstest]
 #[tokio::test]
 async fn squash_range_resolves_an_explicit_start_in_topological_order() {
@@ -444,6 +510,76 @@ async fn squash_range_deduplicates_and_sorts_external_dependencies() {
 			("accounts".to_string(), "0001_a".to_string()),
 			("accounts".to_string(), "0001_z".to_string()),
 		]
+	);
+}
+
+#[rstest]
+#[case(Some("0002"), "0003_final", vec!["0002_change", "0003_final"])]
+#[case(Some("0002"), "0002_change", vec!["0002_change"])]
+#[tokio::test]
+async fn squash_range_allows_external_paths_ending_before_an_explicit_start(
+	#[case] start: Option<&str>,
+	#[case] end: &str,
+	#[case] expected_migrations: Vec<&str>,
+) {
+	// Arrange
+	let catalog = catalog(vec![
+		migration("blog", "0001_initial", &[]),
+		migration("accounts", "0001_initial", &[("blog", "0001_initial")]),
+		migration(
+			"blog",
+			"0002_change",
+			&[("blog", "0001_initial"), ("accounts", "0001_initial")],
+		),
+		migration("blog", "0003_final", &[("blog", "0002_change")]),
+	])
+	.await;
+
+	// Act
+	let range = catalog.squash_range("blog", start, end).unwrap();
+
+	// Assert
+	let migration_names: Vec<&str> = range
+		.migrations
+		.iter()
+		.map(|migration| migration.name.as_str())
+		.collect();
+	assert_eq!(migration_names, expected_migrations);
+	assert_eq!(
+		range.external_dependencies,
+		vec![
+			("accounts".to_string(), "0001_initial".to_string()),
+			("blog".to_string(), "0001_initial".to_string()),
+		]
+	);
+}
+
+#[rstest]
+#[tokio::test]
+async fn squash_range_rejects_an_explicit_hidden_branch_not_before_start() {
+	// Arrange
+	let catalog = catalog(vec![
+		migration("blog", "0001_predecessor", &[]),
+		migration("blog", "0001_competing", &[]),
+		migration("accounts", "0001_bridge", &[("blog", "0001_competing")]),
+		migration(
+			"blog",
+			"0002_change",
+			&[("blog", "0001_predecessor"), ("accounts", "0001_bridge")],
+		),
+	])
+	.await;
+
+	// Act
+	let error = catalog
+		.squash_range("blog", Some("0002"), "0002")
+		.unwrap_err();
+
+	// Assert
+	assert_eq!(
+		error.to_string(),
+		"Invalid migration: Migration ancestry for blog.0002_change crosses external-app nodes: \
+		 accounts.0001_bridge -> blog.0001_competing"
 	);
 }
 

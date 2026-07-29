@@ -4,7 +4,7 @@
 //! and extract table definitions, column metadata, indexes, and constraints.
 
 use async_trait::async_trait;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use crate::backends::{DatabaseConnection, DatabaseType};
 
@@ -131,11 +131,7 @@ pub async fn inspect_database(
 	connection: &DatabaseConnection,
 	options: &InspectDbOptions,
 ) -> Result<DatabaseSchema> {
-	if options.include_partitions && connection.database_type() != DatabaseType::Postgres {
-		return Err(MigrationError::IntrospectionError(
-			"include_partitions is only supported for PostgreSQL".to_string(),
-		));
-	}
+	validate_partition_option(connection.database_type(), options.include_partitions)?;
 
 	let mut schema = match connection.database_type() {
 		DatabaseType::Postgres => {
@@ -194,6 +190,44 @@ pub async fn inspect_database(
 	}
 
 	Ok(DatabaseSchema { tables: selected })
+}
+
+fn validate_partition_option(database_type: DatabaseType, include_partitions: bool) -> Result<()> {
+	if include_partitions && database_type != DatabaseType::Postgres {
+		return Err(MigrationError::IntrospectionError(
+			"include_partitions is only supported for PostgreSQL".to_string(),
+		));
+	}
+	Ok(())
+}
+
+fn filter_postgres_partitions(
+	schema: &mut DatabaseSchema,
+	partition_names: &HashSet<String>,
+	include_partitions: bool,
+) {
+	if !include_partitions {
+		schema
+			.tables
+			.retain(|name, _| !partition_names.contains(name));
+	}
+}
+
+#[cfg(feature = "postgres")]
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct PostgresRelation {
+	name: String,
+	is_partition: bool,
+}
+
+#[cfg(feature = "postgres")]
+fn postgres_partition_names(
+	relations: impl IntoIterator<Item = PostgresRelation>,
+) -> HashSet<String> {
+	relations
+		.into_iter()
+		.filter_map(|relation| relation.is_partition.then_some(relation.name))
+		.collect()
 }
 
 /// PostgreSQL schema introspector
@@ -1838,6 +1872,8 @@ async fn read_postgres_schema(
 
 	let introspector = PostgresIntrospector::new(pool.clone());
 	let mut schema = introspector.read_schema().await?;
+	let partition_names = read_postgres_partition_names(&pool).await?;
+	filter_postgres_partitions(&mut schema, &partition_names, options.include_partitions);
 
 	if options.include_views {
 		let rows = sqlx::query(
@@ -1855,30 +1891,42 @@ async fn read_postgres_schema(
 		}
 	}
 
-	if options.include_partitions {
-		let rows = sqlx::query(
-			"SELECT child.relname AS table_name \
-			 FROM pg_inherits \
-			 JOIN pg_class child ON child.oid = pg_inherits.inhrelid \
-			 JOIN pg_namespace namespace ON namespace.oid = child.relnamespace \
-			 WHERE namespace.nspname = 'public' \
-			 ORDER BY child.relname",
-		)
-		.fetch_all(&pool)
-		.await
-		.map_err(|error| MigrationError::IntrospectionError(error.to_string()))?;
-		for row in rows {
-			let name: String = row.try_get("table_name").map_err(|error| {
+	Ok(schema)
+}
+
+#[cfg(feature = "postgres")]
+async fn read_postgres_partition_names(pool: &sqlx::PgPool) -> Result<HashSet<String>> {
+	use sqlx::Row;
+
+	let rows = sqlx::query(
+		"SELECT relation.relname AS table_name, relation.relispartition AS is_partition \
+		 FROM pg_class relation \
+		 JOIN pg_namespace namespace ON namespace.oid = relation.relnamespace \
+		 WHERE namespace.nspname = 'public' AND relation.relkind IN ('r', 'p') \
+		 ORDER BY relation.relname",
+	)
+	.fetch_all(pool)
+	.await
+	.map_err(|error| MigrationError::IntrospectionError(error.to_string()))?;
+
+	let relations = rows
+		.into_iter()
+		.map(|row| {
+			let name = row.try_get("table_name").map_err(|error| {
 				MigrationError::IntrospectionError(format!(
-					"Failed to read partition name: {error}"
+					"Failed to read PostgreSQL relation name: {error}"
 				))
 			})?;
-			let table = introspector.introspect_table(&name).await?;
-			schema.tables.insert(name, table);
-		}
-	}
+			let is_partition = row.try_get("is_partition").map_err(|error| {
+				MigrationError::IntrospectionError(format!(
+					"Failed to read PostgreSQL partition flag: {error}"
+				))
+			})?;
+			Ok(PostgresRelation { name, is_partition })
+		})
+		.collect::<Result<Vec<_>>>()?;
 
-	Ok(schema)
+	Ok(postgres_partition_names(relations))
 }
 
 #[cfg(feature = "mysql")]
@@ -1946,6 +1994,82 @@ async fn read_sqlite_schema(
 mod tests {
 	use super::*;
 	use crate::migrations::FieldType;
+	use std::collections::HashSet;
+
+	#[test]
+	fn partition_validation_rejects_mysql_without_connecting() {
+		let error = validate_partition_option(DatabaseType::Mysql, true)
+			.expect_err("MySQL must reject PostgreSQL-only partitions before database I/O");
+		assert_eq!(
+			error.to_string(),
+			"Introspection error: include_partitions is only supported for PostgreSQL"
+		);
+	}
+
+	#[test]
+	#[cfg(feature = "postgres")]
+	fn postgres_partition_filter_excludes_only_partition_children() {
+		let mut tables = HashMap::new();
+		for name in ["orders", "ordinary_inheritance_child", "orders_2026"] {
+			tables.insert(
+				name.to_string(),
+				TableInfo {
+					name: name.to_string(),
+					columns: HashMap::new(),
+					indexes: HashMap::new(),
+					primary_key: Vec::new(),
+					foreign_keys: Vec::new(),
+					unique_constraints: Vec::new(),
+					check_constraints: Vec::new(),
+				},
+			);
+		}
+		let partition_names = postgres_partition_names([
+			PostgresRelation {
+				name: "orders".to_string(),
+				is_partition: false,
+			},
+			PostgresRelation {
+				name: "ordinary_inheritance_child".to_string(),
+				is_partition: false,
+			},
+			PostgresRelation {
+				name: "orders_2026".to_string(),
+				is_partition: true,
+			},
+		]);
+
+		let mut without_partitions = DatabaseSchema {
+			tables: tables.clone(),
+		};
+		filter_postgres_partitions(&mut without_partitions, &partition_names, false);
+		assert_eq!(
+			without_partitions
+				.tables
+				.keys()
+				.cloned()
+				.collect::<HashSet<_>>(),
+			HashSet::from([
+				"orders".to_string(),
+				"ordinary_inheritance_child".to_string(),
+			])
+		);
+
+		let mut with_partitions = DatabaseSchema { tables };
+		filter_postgres_partitions(&mut with_partitions, &partition_names, true);
+		assert_eq!(
+			with_partitions
+				.tables
+				.keys()
+				.cloned()
+				.collect::<HashSet<_>>(),
+			HashSet::from([
+				"orders".to_string(),
+				"ordinary_inheritance_child".to_string(),
+				"orders_2026".to_string(),
+			])
+		);
+	}
 
 	#[cfg(feature = "sqlite")]
 	#[tokio::test]

@@ -95,6 +95,9 @@ pub fn generate_models(
 /// not make inspectdb output depend on hash iteration order.
 pub fn render_models_module(config: &IntrospectConfig, schema: &DatabaseSchema) -> Result<String> {
 	let mut config = config.clone();
+	// inspectdb renders a source artifact, so it must not pass connection details
+	// through to the shared generator's header rendering.
+	config.database.url.clear();
 	config.output.single_file = true;
 	config.imports.additional.sort();
 

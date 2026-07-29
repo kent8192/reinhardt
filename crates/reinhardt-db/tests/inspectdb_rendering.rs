@@ -162,3 +162,20 @@ fn render_models_module_is_stable_and_parses_as_one_rust_module() {
 			< source.find("use std::collections::BTreeSet;").unwrap()
 	);
 }
+
+#[test]
+fn render_models_module_never_emits_database_credentials() {
+	let mut tables = HashMap::new();
+	tables.insert("accounts".to_string(), table("accounts", &["id"]));
+	let schema = DatabaseSchema { tables };
+	let config = IntrospectConfig::default().with_database_url(
+		"postgres://inspect_user:database-password@localhost/accounts?api_key=query-secret",
+	);
+
+	let source = render_models_module(&config, &schema).expect("schema should render");
+
+	assert!(!source.contains("database-password"));
+	assert!(!source.contains("query-secret"));
+	assert!(!source.contains("inspect_user"));
+	assert!(!source.contains("localhost/accounts"));
+}

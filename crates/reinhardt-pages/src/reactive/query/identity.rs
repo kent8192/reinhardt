@@ -255,9 +255,12 @@ impl<T, E> QueryDescriptor<T, E> {
 		&self.key
 	}
 
-	/// Configures whether native SSR may prefetch this descriptor.
+	/// Disables native SSR prefetch when `enabled` is `false`.
+	///
+	/// This policy is monotonic: `true` preserves the descriptor's existing
+	/// eligibility and cannot re-enable a descriptor disabled by its generator.
 	pub fn with_ssr_prefetch(mut self, enabled: bool) -> Self {
-		self.ssr_prefetch = enabled;
+		self.ssr_prefetch &= enabled;
 		self
 	}
 

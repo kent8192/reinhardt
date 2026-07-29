@@ -1802,6 +1802,19 @@ fn invalidation_during_in_flight_fetch_runs_after_completion() {
 }
 
 #[test]
+fn ssr_prefetch_policy_can_only_disable_an_eligible_descriptor() {
+	let family = QueryFamily::<(), String, String>::new("tests.ssr-prefetch-policy");
+
+	let eligible = family.query((), || async { Ok("eligible".to_string()) });
+	let disabled = eligible.clone().with_ssr_prefetch(false);
+	let attempted_reenable = disabled.clone().with_ssr_prefetch(true);
+
+	assert!(eligible.ssr_prefetch);
+	assert!(!disabled.ssr_prefetch);
+	assert!(!attempted_reenable.ssr_prefetch);
+}
+
+#[test]
 #[serial(query_cache)]
 fn typed_query_identity_does_not_reserve_resource_counter() {
 	ReactiveScope::run(|| {

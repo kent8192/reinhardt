@@ -6,6 +6,7 @@ use reinhardt_pages::reactive::{
 	QueryFamily, QueryOptions, QueryStatus, ResourceState, Signal, queries, use_id, use_query,
 	use_resource, use_resource_with_key,
 };
+use reinhardt_pages::server_fn::{ServerFnError, server_fn};
 use reinhardt_pages::ssr::{SsrOptions, SsrRenderer};
 use rstest::rstest;
 use std::cell::Cell;
@@ -13,6 +14,27 @@ use std::rc::Rc;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::Barrier;
+
+#[derive(Clone)]
+struct SsrQueryDependency;
+
+struct SsrQueryDependencyKey;
+
+impl reinhardt_di::InjectableKey for SsrQueryDependencyKey {}
+
+#[server_fn]
+async fn ssr_injected_prefetch_guard(
+	#[inject] _dependency: reinhardt_di::KeyedDepends<SsrQueryDependencyKey, SsrQueryDependency>,
+) -> Result<String, ServerFnError> {
+	Ok("unexpected injected query".to_string())
+}
+
+#[server_fn]
+async fn ssr_extractor_prefetch_guard(
+	_header: reinhardt_di::params::Header<String>,
+) -> Result<String, ServerFnError> {
+	Ok("unexpected extractor query".to_string())
+}
 
 fn resource_view() -> Page {
 	Page::reactive(|| {
@@ -522,6 +544,44 @@ async fn disabled_ssr_query_does_not_register_fetch_work() {
 
 	assert!(html.contains(">disabled<"));
 	assert_eq!(fetch_count.get(), 0);
+	assert_eq!(renderer.state().resource_count(), 0);
+}
+
+#[tokio::test]
+async fn injected_server_fn_query_cannot_be_reenabled_for_ssr_prefetch() {
+	let view = Page::reactive(|| {
+		let query = use_query(
+			ssr_injected_prefetch_guard::query().with_ssr_prefetch(true),
+			QueryOptions::default(),
+		);
+		assert_eq!(query.snapshot().status, QueryStatus::Pending);
+		PageElement::new("p").child("injected-disabled").into_page()
+	});
+	let mut renderer = SsrRenderer::new();
+
+	let html = renderer.render_page_with_view_head_to_string(view).await;
+
+	assert!(html.contains(">injected-disabled<"));
+	assert_eq!(renderer.state().resource_count(), 0);
+}
+
+#[tokio::test]
+async fn extractor_server_fn_query_cannot_be_reenabled_for_ssr_prefetch() {
+	let view = Page::reactive(|| {
+		let query = use_query(
+			ssr_extractor_prefetch_guard::query().with_ssr_prefetch(true),
+			QueryOptions::default(),
+		);
+		assert_eq!(query.snapshot().status, QueryStatus::Pending);
+		PageElement::new("p")
+			.child("extractor-disabled")
+			.into_page()
+	});
+	let mut renderer = SsrRenderer::new();
+
+	let html = renderer.render_page_with_view_head_to_string(view).await;
+
+	assert!(html.contains(">extractor-disabled<"));
 	assert_eq!(renderer.state().resource_count(), 0);
 }
 

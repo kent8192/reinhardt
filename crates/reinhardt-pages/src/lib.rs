@@ -25,6 +25,7 @@
 //! ```ignore
 //! use std::time::Duration;
 //! use reinhardt_pages::prelude::*;
+//! use reinhardt_pages::ClientLauncher;
 //!
 //! ClientLauncher::new("#root")
 //!     .query_defaults(

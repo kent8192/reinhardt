@@ -1,4 +1,5 @@
 use reinhardt_pages::prelude::*;
+use reinhardt_pages::ClientLauncher;
 
 const JOBS: QueryFamily<u64, Vec<String>, String> = QueryFamily::new("ui.prelude.jobs");
 
@@ -18,5 +19,6 @@ pub fn prelude_page() -> Page {
 }
 
 fn main() {
+	let _launcher = ClientLauncher::new("#root").query_defaults(QueryDefaults::new());
 	let _: Page = prelude_page();
 }

@@ -1505,6 +1505,53 @@ fn discarded_error_retries_on_next_acquisition() {
 
 #[test]
 #[serial(query_cache)]
+fn discarded_error_retries_for_a_later_retaining_observer() {
+	ReactiveScope::run(|| {
+		// Arrange
+		let _query_client = isolated_query_client();
+		let calls = Rc::new(Cell::new(0));
+		let descriptor =
+			QueryFamily::<(), _, _>::new("discarded-error-retain-observer").query((), {
+				let calls = Rc::clone(&calls);
+				move || {
+					let call = calls.get() + 1;
+					calls.set(call);
+					async move {
+						if call == 1 {
+							Err("route failed".to_string())
+						} else {
+							Ok("hook recovered".to_string())
+						}
+					}
+				}
+			});
+		let discarded = acquire_query(
+			descriptor.clone(),
+			QueryAcquireOptions {
+				consumer: QueryConsumer::Navigation(8),
+				error_policy: QueryErrorPolicy::Discard,
+			},
+		);
+		assert_eq!(
+			tokio_test::block_on(discarded.result()),
+			Err("route failed".to_string())
+		);
+		drop(discarded);
+
+		// Act
+		let retained = use_query(
+			descriptor,
+			QueryOptions::default().stale_time(Duration::from_secs(30)),
+		);
+
+		// Assert
+		assert_eq!(calls.get(), 2);
+		assert_eq!(retained.data(), Some("hook recovered".to_string()));
+	});
+}
+
+#[test]
+#[serial(query_cache)]
 fn invalidation_without_live_observer_does_not_refetch() {
 	ReactiveScope::run(|| {
 		// Arrange

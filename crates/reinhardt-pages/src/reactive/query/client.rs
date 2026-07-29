@@ -704,7 +704,9 @@ impl<T: Clone + 'static, E: Clone + 'static> QueryEntry<T, E> {
 		self.state.with_untracked(|state| match state {
 			ResourceState::Loading => true,
 			ResourceState::Success(_) => self.is_stale(stale_time),
-			ResourceState::Error(_) => self.invalidated.get(),
+			ResourceState::Error(_) => {
+				self.invalidated.get() || self.last_fetched_ms.get().is_none()
+			}
 		})
 	}
 

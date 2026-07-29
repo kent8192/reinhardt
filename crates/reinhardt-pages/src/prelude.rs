@@ -39,7 +39,7 @@
 //! - [`use_id`], [`use_layout_effect`], [`use_debug_value`]
 //! - [`use_optimistic`], [`use_shared_state`]
 //! - [`use_action`], [`use_action_state`], [`use_sync_external_store`]
-//! - [`use_query`], [`use_mutation`], [`use_head`], [`use_page_title`]
+//! - [`use_query`], [`use_action`], [`use_head`], [`use_page_title`]
 //!
 //! ## Component System
 //! - [`Component`], [`PageElement`], [`IntoPage`], [`Page`], [`Props`]
@@ -94,8 +94,8 @@
 
 pub use crate::reactive::{
 	Effect, LatestResourceState, LatestResourceValue, LatestResourceValueBuilder, Memo,
-	QueryDefaults, QueryDescriptor, QueryFamily, QueryHandle, QueryKey, QueryOptions, QueryPhase,
-	Resource, ResourceState, Signal, use_latest_resource_value,
+	QueryDefaults, QueryDescriptor, QueryFamily, QueryHandle, QueryKey, QueryOptions,
+	QuerySnapshot, QueryStatus, Resource, ResourceState, Signal, use_latest_resource_value,
 };
 
 // Context system
@@ -104,6 +104,7 @@ pub use crate::reactive::{
 };
 
 // Hooks API
+pub use crate::reactive::use_query;
 pub use crate::reactive::{Action, ActionPhase, ActionStateBuilder, use_action, use_action_state};
 pub use crate::reactive::{
 	Dispatch, EffectReturn, OptimisticState, Ref, SetState, SetStateExt, SharedSetState,
@@ -112,7 +113,6 @@ pub use crate::reactive::{
 	use_reducer, use_ref, use_retained_effect, use_retained_layout_effect, use_shared_state,
 	use_state, use_sync_external_store, use_transition,
 };
-pub use crate::reactive::{use_mutation, use_query};
 
 // Unified resource hooks (available on all targets)
 pub use crate::reactive::{use_resource, use_resource_with_key};

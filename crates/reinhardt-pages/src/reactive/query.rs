@@ -22,6 +22,6 @@ pub use context::queries;
 pub(crate) use context::{
 	QueryClientGuard, provide_query_client, with_query_client, with_query_client_async,
 };
-pub use hook::{QueryHandle, use_mutation, use_query};
+pub use hook::{QueryHandle, use_query};
 pub use identity::{QueryDescriptor, QueryFamily, QueryKey};
-pub use state::{QueryDefaults, QueryOptions, QueryPhase};
+pub use state::{QueryDefaults, QueryOptions, QuerySnapshot, QueryStatus};

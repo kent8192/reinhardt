@@ -3,7 +3,7 @@
 use reinhardt_pages::component::{Component, IntoPage, Page, PageElement};
 use reinhardt_pages::deps;
 use reinhardt_pages::reactive::{
-	QueryFamily, QueryOptions, ResourceState, Signal, use_id, use_query, use_resource,
+	QueryFamily, QueryOptions, QueryStatus, ResourceState, Signal, use_id, use_query, use_resource,
 	use_resource_with_key,
 };
 use reinhardt_pages::ssr::{SsrOptions, SsrRenderer};
@@ -353,19 +353,45 @@ async fn pending_ssr_query_reuse_does_not_create_duplicate_fetcher() {
 		);
 
 		Page::fragment([
-			match first.get() {
-				ResourceState::Success(value) => PageElement::new("p")
-					.child(format!("first-{value}"))
+			match first.snapshot().status {
+				QueryStatus::Idle | QueryStatus::Pending => {
+					PageElement::new("p").child("first-loading").into_page()
+				}
+				QueryStatus::Success => PageElement::new("p")
+					.child(format!(
+						"first-{}",
+						first
+							.data()
+							.expect("a successful query snapshot contains data")
+					))
 					.into_page(),
-				ResourceState::Loading => PageElement::new("p").child("first-loading").into_page(),
-				ResourceState::Error(error) => PageElement::new("p").child(error).into_page(),
+				QueryStatus::Error => PageElement::new("p")
+					.child(
+						first
+							.error()
+							.expect("an error query snapshot contains an error"),
+					)
+					.into_page(),
 			},
-			match second.get() {
-				ResourceState::Success(value) => PageElement::new("p")
-					.child(format!("second-{value}"))
+			match second.snapshot().status {
+				QueryStatus::Idle | QueryStatus::Pending => {
+					PageElement::new("p").child("second-loading").into_page()
+				}
+				QueryStatus::Success => PageElement::new("p")
+					.child(format!(
+						"second-{}",
+						second
+							.data()
+							.expect("a successful query snapshot contains data")
+					))
 					.into_page(),
-				ResourceState::Loading => PageElement::new("p").child("second-loading").into_page(),
-				ResourceState::Error(error) => PageElement::new("p").child(error).into_page(),
+				QueryStatus::Error => PageElement::new("p")
+					.child(
+						second
+							.error()
+							.expect("an error query snapshot contains an error"),
+					)
+					.into_page(),
 			},
 		])
 	});

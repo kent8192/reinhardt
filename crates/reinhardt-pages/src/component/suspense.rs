@@ -45,7 +45,7 @@
 //! ```
 
 use crate::component::{IntoPage, Page, PageElement};
-use crate::reactive::{QueryHandle, Resource};
+use crate::reactive::{QueryHandle, QueryStatus, Resource};
 use reinhardt_core::types::page::SuspenseNode;
 
 /// Trait for checking whether a resource is in the loading state.
@@ -75,7 +75,7 @@ impl<T: Clone + 'static, E: Clone + 'static> ResourceTracker for Resource<T, E> 
 
 impl<T: Clone + 'static, E: Clone + 'static> ResourceTracker for QueryHandle<T, E> {
 	fn is_loading(&self) -> bool {
-		self.is_pending()
+		self.snapshot().status == QueryStatus::Pending
 	}
 
 	fn ssr_resource_key(&self) -> Option<String> {

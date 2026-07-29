@@ -19,7 +19,7 @@ use crate::event::{
 use crate::reactive::hooks::use_effect;
 use serial_test::serial;
 
-use crate::reactive::{QueryFamily, QueryOptions, ResourceState, use_query};
+use crate::reactive::{QueryFamily, QueryOptions, QueryStatus, use_query};
 
 fn scheduled_query_component() -> Page {
 	let query = use_query(
@@ -28,10 +28,18 @@ fn scheduled_query_component() -> Page {
 		}),
 		QueryOptions::default(),
 	);
-	Page::reactive(move || match query.get() {
-		ResourceState::Loading => Page::text("Loading"),
-		ResourceState::Success(value) => Page::text(value),
-		ResourceState::Error(error) => Page::text(error.to_string()),
+	Page::reactive(move || match query.snapshot().status {
+		QueryStatus::Idle | QueryStatus::Pending => Page::text("Loading"),
+		QueryStatus::Success => Page::text(
+			query
+				.data()
+				.expect("a successful query snapshot contains data"),
+		),
+		QueryStatus::Error => Page::text(
+			query
+				.error()
+				.expect("an error query snapshot contains an error"),
+		),
 	})
 }
 
@@ -43,10 +51,18 @@ fn screen_scoped_query_component(value: &'static str) -> Page {
 		}),
 		QueryOptions::default(),
 	);
-	Page::reactive(move || match query.get() {
-		ResourceState::Loading => Page::text("Loading"),
-		ResourceState::Success(value) => Page::text(value),
-		ResourceState::Error(error) => Page::text(error),
+	Page::reactive(move || match query.snapshot().status {
+		QueryStatus::Idle | QueryStatus::Pending => Page::text("Loading"),
+		QueryStatus::Success => Page::text(
+			query
+				.data()
+				.expect("a successful query snapshot contains data"),
+		),
+		QueryStatus::Error => Page::text(
+			query
+				.error()
+				.expect("an error query snapshot contains an error"),
+		),
 	})
 }
 

@@ -9,8 +9,8 @@
 //! optimistic UI state. [`Resource::latest_after`] and
 //! [`use_latest_resource_value`] compose loaded resource state with action
 //! success values so screens can render the latest loaded or mutated data.
-//! [`use_query`] and [`use_mutation`] add a keyed, app-wide cache layer for
-//! server-function reads and invalidating mutations. Generated query keys
+//! [`use_query`] and [`use_action`] provide keyed server-function reads and
+//! explicit mutation workflows. Generated query keys
 //! canonicalize JSON object arguments, hydrated success and error states remain
 //! visible through the first client mount, and query handles distinguish initial
 //! pending state from background fetching.
@@ -682,8 +682,8 @@ pub use portal::{Portal, PortalError, PortalHandle, PortalTarget, mount_portal};
 pub use reactive::{
 	Effect, ExplicitDeps, LatestResourceState, LatestResourceValue, LatestResourceValueBuilder,
 	Memo, QueryClient, QueryDefaults, QueryDescriptor, QueryFamily, QueryHandle, QueryKey,
-	QueryOptions, QueryPhase, ReactiveDeps, Resource, ResourceState, Signal, Trackable, queries,
-	use_latest_resource_value, use_resource, use_resource_with_key,
+	QueryOptions, QuerySnapshot, QueryStatus, ReactiveDeps, Resource, ResourceState, Signal,
+	Trackable, queries, use_latest_resource_value, use_resource, use_resource_with_key,
 };
 // Re-export Context system
 pub use reactive::{
@@ -691,6 +691,7 @@ pub use reactive::{
 };
 // Re-export Hooks API
 pub use app::{ClientLauncher, LaunchCtx, PathCtx, PathParams};
+pub use reactive::use_query;
 pub use reactive::{Action, ActionPhase, ActionStateBuilder, use_action, use_action_state};
 pub use reactive::{
 	Dispatch, EffectReturn, OptimisticState, Ref, SetState, SetStateExt, SharedSetState,
@@ -699,7 +700,6 @@ pub use reactive::{
 	use_reducer, use_ref, use_retained_effect, use_retained_layout_effect, use_shared_state,
 	use_state, use_sync_external_store, use_transition,
 };
-pub use reactive::{use_mutation, use_query};
 #[cfg(native)]
 pub use reinhardt_forms::{
 	Widget,

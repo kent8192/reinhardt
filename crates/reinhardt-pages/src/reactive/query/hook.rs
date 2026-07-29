@@ -1,21 +1,18 @@
 use std::cell::RefCell;
-use std::future::Future;
 use std::rc::Rc;
-use std::time::Duration;
 
 use serde::Serialize;
 use serde::de::DeserializeOwned;
 
-use super::super::hooks::async_action::{Action, use_action};
 use super::super::resource::ResourceState;
 use super::browser::QueryGuard;
 use super::client::{
-	QueryAcquireOptions, QueryClient, QueryConsumer, QueryEntry, QueryErrorPolicy, QueryLease,
-	invalidate_query_id,
+	ObserverPolicy, QueryAcquireOptions, QueryClient, QueryConsumer, QueryEntry, QueryErrorPolicy,
+	QueryLease,
 };
 use super::context::queries;
-use super::identity::{QueryDescriptor, QueryKey};
-use super::state::{QueryOptions, QueryPhase};
+use super::identity::QueryDescriptor;
+use super::state::{QueryDefaults, QueryOptions, QuerySnapshot, QueryStatus};
 use crate::cancellation::CancellationSource;
 
 /// Reactive handle returned by [`use_query`].
@@ -46,99 +43,72 @@ impl<T: Clone + 'static, E: Clone + 'static> QueryHandle<T, E> {
 		&self.entry.id
 	}
 
-	/// Returns the underlying resource-style state.
-	pub fn get(&self) -> ResourceState<T, E> {
+	/// Returns the current observer-specific query state.
+	pub fn snapshot(&self) -> QuerySnapshot<T, E> {
 		self.mark_ssr_read();
-		self.entry.state.get()
-	}
-
-	/// Returns the current query phase.
-	pub fn phase(&self) -> QueryPhase<T, E> {
-		self.mark_ssr_read();
+		let is_fetching = self.entry.is_fetching.get();
+		let is_stale = self.entry.is_stale(self.lease.inner.policy.stale_time);
 		match self.entry.state.get() {
-			ResourceState::Loading => QueryPhase::Pending,
-			ResourceState::Success(value) => QueryPhase::Success(value),
-			ResourceState::Error(error) => QueryPhase::Error(error),
+			ResourceState::Loading => QuerySnapshot {
+				status: if self.lease.inner.policy.enabled || is_fetching {
+					QueryStatus::Pending
+				} else {
+					QueryStatus::Idle
+				},
+				data: None,
+				error: None,
+				refetch_error: None,
+				is_fetching,
+				is_stale,
+			},
+			ResourceState::Success(data) => QuerySnapshot {
+				status: QueryStatus::Success,
+				data: Some(data),
+				error: None,
+				refetch_error: self.entry.refetch_error.get(),
+				is_fetching,
+				is_stale,
+			},
+			ResourceState::Error(error) => QuerySnapshot {
+				status: QueryStatus::Error,
+				data: None,
+				error: Some(error),
+				refetch_error: None,
+				is_fetching,
+				is_stale,
+			},
 		}
-	}
-
-	/// Returns `true` while a fetch is in progress.
-	pub fn is_fetching(&self) -> bool {
-		self.mark_ssr_read();
-		self.entry.is_fetching.get()
-	}
-
-	/// Returns `true` until the query has a successful value or error.
-	pub fn is_pending(&self) -> bool {
-		self.phase().is_pending()
-	}
-
-	/// Returns `true` if the query has a successful value.
-	pub fn is_success(&self) -> bool {
-		self.phase().is_success()
-	}
-
-	/// Returns `true` if the query is in an error state.
-	pub fn is_error(&self) -> bool {
-		self.phase().is_error()
 	}
 
 	/// Returns the current successful value, if present.
 	pub fn data(&self) -> Option<T> {
-		self.mark_ssr_read();
-		match self.entry.state.get() {
-			ResourceState::Success(value) => Some(value),
-			_ => None,
-		}
+		self.snapshot().data
 	}
 
 	/// Returns the current error value, if present.
 	pub fn error(&self) -> Option<E> {
-		self.mark_ssr_read();
-		match self.entry.state.get() {
-			ResourceState::Error(error) => Some(error),
-			_ => None,
-		}
+		self.snapshot().error
+	}
+
+	/// Returns the latest background-fetch error, if present.
+	pub fn refetch_error(&self) -> Option<E> {
+		self.snapshot().refetch_error
+	}
+
+	/// Returns `true` while a fetch is in progress.
+	pub fn is_fetching(&self) -> bool {
+		self.snapshot().is_fetching
+	}
+
+	/// Returns whether this observer considers the cached state stale.
+	pub fn is_stale(&self) -> bool {
+		self.snapshot().is_stale
 	}
 
 	/// Manually refetches this query.
 	pub fn refetch(&self) {
-		self.entry.start_fetch(true);
-	}
-
-	/// Refetches this query at a fixed interval while the handle is alive.
-	pub fn poll(self, interval: Duration) -> Self {
-		if !interval.is_zero() {
-			self.guards
-				.borrow_mut()
-				.push(QueryGuard::poll(interval, Rc::clone(&self.entry)));
-		}
-		self
-	}
-
-	/// Updates the stale-time policy for this mounted query.
-	pub fn stale_time(self, stale_time: Duration) -> Self {
-		self.entry.stale_time.set(stale_time);
-		if self.entry.is_stale() {
-			self.entry.start_fetch(false);
-		}
-		self
-	}
-
-	/// Updates the cache retention policy for this mounted query.
-	pub fn gc_time(self, gc_time: Duration) -> Self {
-		self.entry.gc_time.set(gc_time);
-		self
-	}
-
-	/// Returns the current stale-time policy.
-	pub fn stale_time_policy(&self) -> Duration {
-		self.entry.stale_time.get()
-	}
-
-	/// Returns the current cache retention policy.
-	pub fn gc_time_policy(&self) -> Duration {
-		self.entry.gc_time.get()
+		self.entry
+			.start_fetch_with(true, Some(Rc::clone(&self.lease.inner.fetcher)));
 	}
 }
 
@@ -168,8 +138,6 @@ where
 	T: Clone + Serialize + DeserializeOwned + 'static,
 	E: Clone + Serialize + DeserializeOwned + 'static,
 {
-	let refetch_interval = options.refetch_interval_value();
-	let enabled = options.is_enabled();
 	let lease = client.acquire_with_options(
 		descriptor,
 		QueryAcquireOptions {
@@ -180,8 +148,8 @@ where
 	);
 	let entry = Rc::clone(&lease.inner.entry);
 	let guards = Rc::new(RefCell::new(Vec::new()));
-	if enabled
-		&& let Some(interval) = refetch_interval
+	if lease.inner.policy.enabled
+		&& let Some(interval) = lease.inner.policy.refetch_interval
 		&& !interval.is_zero()
 	{
 		guards
@@ -193,36 +161,6 @@ where
 		entry,
 		lease,
 		guards,
-	}
-}
-
-/// Creates a mutation action that can invalidate queries on success.
-pub fn use_mutation<P, T, E, F, Fut>(mutation_fn: F) -> Action<T, E>
-where
-	P: 'static,
-	T: Clone + 'static,
-	E: Clone + 'static,
-	F: Fn(P) -> Fut + 'static,
-	Fut: Future<Output = Result<T, E>> + 'static,
-{
-	use_action(mutation_fn)
-}
-
-impl<T, E> Action<T, E>
-where
-	T: Clone + 'static,
-	E: Clone + 'static,
-{
-	/// Refetches `key` after this mutation succeeds.
-	pub fn invalidates<QT, QE>(self, key: QueryKey<QT, QE>) -> Self
-	where
-		QT: Clone + 'static,
-		QE: Clone + 'static,
-	{
-		let id = key.id().to_string();
-		self.on_success(move |_| {
-			invalidate_query_id(&id);
-		})
 	}
 }
 
@@ -240,7 +178,8 @@ where
 		context.borrow_mut().reserve_call_order_key(&id);
 		let ssr_prefetch = descriptor.ssr_prefetch && options.is_enabled();
 		let fetcher = Rc::clone(&descriptor.fetcher);
-		let entry = Rc::new(QueryEntry::new(descriptor, &options));
+		let policy = ObserverPolicy::resolve(&options, &QueryDefaults::default());
+		let entry = Rc::new(QueryEntry::new(descriptor));
 		if ssr_prefetch {
 			let resource_fetcher = Rc::clone(&fetcher);
 			context.borrow_mut().register_resource_with_owner(
@@ -261,9 +200,10 @@ where
 		}
 		let lease = entry.make_lease(
 			None,
+			QueryConsumer::MountedQuery,
 			QueryErrorPolicy::Retain,
 			fetcher,
-			options.is_enabled(),
+			policy,
 		);
 		QueryHandle {
 			entry: Rc::clone(&entry),

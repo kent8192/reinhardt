@@ -16,7 +16,9 @@ use serde::de::DeserializeOwned;
 
 use super::super::Signal;
 use super::super::resource::ResourceState;
-use super::identity::{QueryDescriptor, QueryFamilyTypes, QueryFetcher, QueryIdentity, QueryKey};
+use super::identity::{
+	QueryDescriptor, QueryFamily, QueryFamilyTypes, QueryFetcher, QueryIdentity, QueryKey,
+};
 use super::runtime::{ScopedQueryFuture, duration_ms, now_ms, spawn_query_task};
 use super::state::{QueryDefaults, QueryOptions};
 use crate::cancellation::{AbortableTaskGuard, CancellationSource, scope_cancellation};
@@ -149,9 +151,9 @@ struct QueryClientInner {
 
 #[derive(Clone)]
 struct CachedQueryEntry {
-	id: String,
+	family_id: &'static str,
 	typed: Rc<dyn Any>,
-	refetch: Rc<dyn Fn()>,
+	invalidate: Rc<dyn Fn()>,
 	cancel: Rc<dyn Fn()>,
 }
 
@@ -246,6 +248,7 @@ pub(crate) struct QueryAcquireOptions {
 
 pub(super) struct QueryRequest<T, E> {
 	pub(super) generation: u64,
+	invalidation_generation: u64,
 	pub(super) source: CancellationSource,
 	_guard: AbortableTaskGuard,
 	_marker: PhantomData<fn() -> Result<T, E>>,
@@ -254,29 +257,53 @@ pub(super) struct QueryRequest<T, E> {
 pub(super) struct QueryEntry<T: Clone + 'static, E: Clone + 'static> {
 	pub(super) _scope: Rc<ReactiveScope>,
 	pub(super) id: String,
+	family_id: &'static str,
 	pub(super) state: Signal<ResourceState<T, E>>,
+	pub(super) refetch_error: Signal<Option<E>>,
 	pub(super) is_fetching: Signal<bool>,
 	pub(super) request: RefCell<Option<QueryRequest<T, E>>>,
 	next_generation: Cell<u64>,
+	invalidation_generation: Cell<u64>,
+	invalidated: Cell<bool>,
 	pub(super) completed: RefCell<Option<(u64, Result<T, E>)>>,
 	waiters: RefCell<Vec<Waker>>,
 	pub(super) lease_count: Cell<usize>,
 	retain_lease_count: Cell<usize>,
 	pub(super) refetch_after_in_flight: Cell<bool>,
 	pub(super) last_fetched_ms: Cell<Option<u64>>,
-	pub(super) stale_time: Cell<Duration>,
-	pub(super) gc_time: Cell<Duration>,
 	observers: RefCell<Vec<Weak<QueryLeaseInner<T, E>>>>,
 	runtime: QueryRuntimeHandle,
 	owner: Option<Weak<QueryClientInner>>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) struct ObserverPolicy {
+	pub(super) enabled: bool,
+	pub(super) stale_time: Duration,
+	// Task 7 consumes the resolved observer retention duration when it adds GC.
+	#[allow(dead_code)]
+	pub(super) gc_time: Duration,
+	pub(super) refetch_interval: Option<Duration>,
+}
+
+impl ObserverPolicy {
+	pub(super) fn resolve(options: &QueryOptions, defaults: &QueryDefaults) -> Self {
+		Self {
+			enabled: options.is_enabled(),
+			stale_time: options.resolved_stale_time(defaults),
+			gc_time: options.resolved_gc_time(defaults),
+			refetch_interval: options.refetch_interval_value(),
+		}
+	}
 }
 
 pub(super) struct QueryLeaseInner<T: Clone + 'static, E: Clone + 'static> {
 	pub(super) entry: Rc<QueryEntry<T, E>>,
 	generation: Cell<Option<u64>>,
 	retains_errors: bool,
-	enabled: bool,
-	fetcher: Rc<QueryFetcher<T, E>>,
+	consumer: QueryConsumer,
+	pub(super) policy: ObserverPolicy,
+	pub(super) fetcher: Rc<QueryFetcher<T, E>>,
 }
 
 /// RAII interest in one keyed query entry.
@@ -331,7 +358,7 @@ fn initial_query_state_at<T, E>(
 }
 
 impl<T: Clone + 'static, E: Clone + 'static> QueryEntry<T, E> {
-	pub(super) fn new(descriptor: QueryDescriptor<T, E>, options: &QueryOptions) -> Self
+	pub(super) fn new(descriptor: QueryDescriptor<T, E>) -> Self
 	where
 		T: Serialize + DeserializeOwned,
 		E: Serialize + DeserializeOwned,
@@ -339,67 +366,67 @@ impl<T: Clone + 'static, E: Clone + 'static> QueryEntry<T, E> {
 		let (key, _fetcher, _ssr_prefetch, _family_types) = descriptor.into_parts();
 		let id = key.id();
 		let hydrated_state = hydrated_query_state(&id);
-		let defaults = QueryDefaults::default();
-		Self::new_with_hydrated_state(
-			key,
-			hydrated_state,
-			options.resolved_stale_time(&defaults),
-			options.resolved_gc_time(&defaults),
-			platform_query_runtime(),
-			None,
-		)
+		Self::new_with_hydrated_state(key, hydrated_state, platform_query_runtime(), None)
 	}
 
 	fn new_with_hydrated_state(
 		key: QueryKey<T, E>,
 		hydrated_state: Option<ResourceState<T, E>>,
-		stale_time: Duration,
-		gc_time: Duration,
 		runtime: QueryRuntimeHandle,
 		owner: Option<Weak<QueryClientInner>>,
 	) -> Self {
 		let (initial_state, last_fetched_ms) =
 			initial_query_state_at(hydrated_state, runtime.now_ms());
 		let id = key.id();
+		let family_id = key.family_id();
 		let scope = Rc::new(ReactiveScope::new());
-		let (state, is_fetching) = scope.enter(|| (Signal::new(initial_state), Signal::new(false)));
+		let (state, refetch_error, is_fetching) = scope.enter(|| {
+			(
+				Signal::new(initial_state),
+				Signal::new(None),
+				Signal::new(false),
+			)
+		});
 
 		Self {
 			_scope: scope,
 			id,
+			family_id,
 			state,
+			refetch_error,
 			is_fetching,
 			request: RefCell::new(None),
 			next_generation: Cell::new(0),
+			invalidation_generation: Cell::new(0),
+			invalidated: Cell::new(false),
 			completed: RefCell::new(None),
 			waiters: RefCell::new(Vec::new()),
 			lease_count: Cell::new(0),
 			retain_lease_count: Cell::new(0),
 			refetch_after_in_flight: Cell::new(false),
 			last_fetched_ms: Cell::new(last_fetched_ms),
-			stale_time: Cell::new(stale_time),
-			gc_time: Cell::new(gc_time),
 			observers: RefCell::new(Vec::new()),
 			runtime,
 			owner,
 		}
 	}
 
-	fn update_policy(&self, stale_time: Duration, gc_time: Duration) {
-		self.stale_time.set(stale_time);
-		self.gc_time.set(gc_time);
-	}
-
-	pub(super) fn is_stale(&self) -> bool {
+	pub(super) fn is_stale(&self, stale_time: Duration) -> bool {
+		if self.invalidated.get() {
+			return true;
+		}
 		let Some(last_fetched_ms) = self.last_fetched_ms.get() else {
 			return true;
 		};
-		self.runtime.now_ms().saturating_sub(last_fetched_ms) >= duration_ms(self.stale_time.get())
+		self.runtime.now_ms().saturating_sub(last_fetched_ms) >= duration_ms(stale_time)
 	}
 
-	pub(super) fn should_fetch_on_mount(&self) -> bool {
-		self.state
-			.with_untracked(|state| matches!(state, ResourceState::Loading) || self.is_stale())
+	pub(super) fn should_fetch_on_mount(&self, stale_time: Duration) -> bool {
+		self.state.with_untracked(|state| match state {
+			ResourceState::Loading => true,
+			ResourceState::Success(_) => self.is_stale(stale_time),
+			ResourceState::Error(_) => self.invalidated.get(),
+		})
 	}
 
 	pub(super) fn has_request(&self) -> bool {
@@ -440,9 +467,10 @@ impl<T: Clone + 'static, E: Clone + 'static> QueryEntry<T, E> {
 	pub(super) fn make_lease(
 		self: &Rc<Self>,
 		generation: Option<u64>,
+		consumer: QueryConsumer,
 		error_policy: QueryErrorPolicy,
 		fetcher: Rc<QueryFetcher<T, E>>,
-		enabled: bool,
+		policy: ObserverPolicy,
 	) -> QueryLease<T, E> {
 		self.lease_count.set(self.lease_count.get() + 1);
 		let retains_errors = error_policy == QueryErrorPolicy::Retain;
@@ -454,7 +482,8 @@ impl<T: Clone + 'static, E: Clone + 'static> QueryEntry<T, E> {
 			entry: Rc::clone(self),
 			generation: Cell::new(generation),
 			retains_errors,
-			enabled,
+			consumer,
+			policy,
 			fetcher,
 		});
 		self.observers.borrow_mut().push(Rc::downgrade(&inner));
@@ -465,21 +494,19 @@ impl<T: Clone + 'static, E: Clone + 'static> QueryEntry<T, E> {
 		self: &Rc<Self>,
 		fetcher: Rc<QueryFetcher<T, E>>,
 		options: QueryAcquireOptions,
-		query_options: QueryOptions,
+		policy: ObserverPolicy,
 	) -> QueryLease<T, E>
 	where
 		T: Serialize + DeserializeOwned,
 		E: Serialize + DeserializeOwned,
 	{
-		let _consumer = options.consumer;
-		let enabled = query_options.is_enabled();
-		let should_fetch = if !enabled || self.has_request() {
+		let should_fetch = if !policy.enabled || self.has_request() {
 			false
 		} else if options.error_policy == QueryErrorPolicy::Retain {
-			self.should_fetch_on_mount()
+			self.should_fetch_on_mount(policy.stale_time)
 		} else {
 			match self.state.with_untracked(|state| state.clone()) {
-				ResourceState::Success(_) => self.is_stale(),
+				ResourceState::Success(_) => self.is_stale(policy.stale_time),
 				ResourceState::Error(_) => true,
 				ResourceState::Loading => true,
 			}
@@ -488,7 +515,13 @@ impl<T: Clone + 'static, E: Clone + 'static> QueryEntry<T, E> {
 		// a ready fetch synchronously, and completion must observe this lease when
 		// deciding whether an error is retainable or whether invalidation queues a
 		// follow-up request.
-		let lease = self.make_lease(None, options.error_policy, fetcher, enabled);
+		let lease = self.make_lease(
+			None,
+			options.consumer,
+			options.error_policy,
+			fetcher,
+			policy,
+		);
 		let generation = if should_fetch {
 			Some(self.start_fetch(false))
 		} else {
@@ -507,8 +540,20 @@ impl<T: Clone + 'static, E: Clone + 'static> QueryEntry<T, E> {
 		observers
 			.iter()
 			.filter_map(Weak::upgrade)
-			.find(|observer| observer.enabled)
+			.find(|observer| observer.policy.enabled)
 			.map(|observer| Rc::clone(&observer.fetcher))
+	}
+
+	fn has_active_invalidation_interest(&self) -> bool {
+		let mut observers = self.observers.borrow_mut();
+		observers.retain(|observer| observer.strong_count() > 0);
+		observers.iter().filter_map(Weak::upgrade).any(|observer| {
+			observer.policy.enabled
+				&& matches!(
+					observer.consumer,
+					QueryConsumer::MountedQuery | QueryConsumer::Maintenance
+				)
+		})
 	}
 
 	#[cfg(native)]
@@ -521,6 +566,14 @@ impl<T: Clone + 'static, E: Clone + 'static> QueryEntry<T, E> {
 	}
 
 	pub(super) fn start_fetch(self: &Rc<Self>, force: bool) -> u64 {
+		self.start_fetch_with(force, None)
+	}
+
+	pub(super) fn start_fetch_with(
+		self: &Rc<Self>,
+		force: bool,
+		fetcher_override: Option<Rc<QueryFetcher<T, E>>>,
+	) -> u64 {
 		if self.has_request() {
 			if force {
 				self.refetch_after_in_flight.set(true);
@@ -536,26 +589,25 @@ impl<T: Clone + 'static, E: Clone + 'static> QueryEntry<T, E> {
 		let had_success = self
 			.state
 			.with_untracked(|state| matches!(state, ResourceState::Success(_)));
-		if !force && had_success && !self.is_stale() {
-			return self.next_generation.get();
-		}
-		let Some(fetcher) = self.selected_fetcher() else {
+		let Some(fetcher) = self.selected_fetcher().or(fetcher_override) else {
 			return self.next_generation.get();
 		};
 		let generation = self.next_request_generation();
+		let invalidation_generation = self.invalidation_generation.get();
 		let source = CancellationSource::new();
 		let token = source.handle();
 		let (abort_handle, abort_registration) = AbortHandle::new_pair();
 		let guard = AbortableTaskGuard::new(abort_handle);
 		*self.request.borrow_mut() = Some(QueryRequest {
 			generation,
+			invalidation_generation,
 			source,
 			_guard: guard,
 			_marker: PhantomData,
 		});
 		self.is_fetching.set(true);
-		if !had_success {
-			self.state.set(ResourceState::Loading);
+		if had_success {
+			self.refetch_error.set(None);
 		}
 
 		let entry = Rc::clone(self);
@@ -583,20 +635,25 @@ impl<T: Clone + 'static, E: Clone + 'static> QueryEntry<T, E> {
 	}
 
 	pub(super) fn complete_fetch(self: &Rc<Self>, generation: u64, result: Result<T, E>) {
-		let cancelled = self
-			.request
-			.borrow()
+		let request = self.request.borrow();
+		let cancelled = request
 			.as_ref()
 			.map(|request| request.source.handle().is_cancelled())
 			.unwrap_or(true);
-		let matches_request = self
-			.request
-			.borrow()
+		let matches_request = request
 			.as_ref()
 			.is_some_and(|request| request.generation == generation);
 		if cancelled || !matches_request {
 			return;
 		}
+		let request_invalidation_generation = request
+			.as_ref()
+			.map(|request| request.invalidation_generation)
+			.unwrap_or_default();
+		drop(request);
+		let had_success = self
+			.state
+			.with_untracked(|state| matches!(state, ResourceState::Success(_)));
 		self.request.borrow_mut().take();
 		self.completed
 			.borrow_mut()
@@ -604,20 +661,47 @@ impl<T: Clone + 'static, E: Clone + 'static> QueryEntry<T, E> {
 		match result {
 			Ok(value) => {
 				self.last_fetched_ms.set(Some(self.runtime.now_ms()));
+				self.refetch_error.set(None);
 				self.state.set(ResourceState::Success(value));
+				if self.invalidation_generation.get() == request_invalidation_generation {
+					self.invalidated.set(false);
+				}
 			}
 			Err(error) => {
-				if self.retain_lease_count.get() > 0 {
-					self.last_fetched_ms.set(Some(self.runtime.now_ms()));
+				if had_success {
+					self.refetch_error.set(Some(error));
 				} else {
+					self.refetch_error.set(None);
+					self.state.set(ResourceState::Error(error));
+				}
+				if !had_success && self.retain_lease_count.get() > 0 {
+					self.last_fetched_ms.set(Some(self.runtime.now_ms()));
+					if self.invalidation_generation.get() == request_invalidation_generation {
+						self.invalidated.set(false);
+					}
+				} else if !had_success {
 					self.last_fetched_ms.set(None);
 				}
-				self.state.set(ResourceState::Error(error));
 			}
 		}
 		self.is_fetching.set(false);
 		self.wake_waiters();
-		if self.refetch_after_in_flight.replace(false) && self.lease_count.get() > 0 {
+		let invalidated_during_request =
+			self.invalidation_generation.get() > request_invalidation_generation;
+		let manual_refetch_queued = self.refetch_after_in_flight.replace(false);
+		if (manual_refetch_queued
+			|| (invalidated_during_request && self.has_active_invalidation_interest()))
+			&& self.lease_count.get() > 0
+		{
+			self.start_fetch(true);
+		}
+	}
+
+	fn invalidate(self: &Rc<Self>) {
+		self.invalidated.set(true);
+		self.invalidation_generation
+			.set(self.invalidation_generation.get().wrapping_add(1));
+		if !self.has_request() && self.has_active_invalidation_interest() {
 			self.start_fetch(true);
 		}
 	}
@@ -703,10 +787,6 @@ where
 	super::context::queries().entry_for_descriptor(descriptor)
 }
 
-pub(super) fn invalidate_query_id(id: &str) {
-	super::context::queries().invalidate(id);
-}
-
 impl QueryClient {
 	pub(crate) fn acquire<T, E>(
 		&self,
@@ -730,11 +810,10 @@ impl QueryClient {
 		T: Clone + Serialize + DeserializeOwned + 'static,
 		E: Clone + Serialize + DeserializeOwned + 'static,
 	{
-		let stale_time = query_options.resolved_stale_time(&self.inner.defaults);
-		let gc_time = query_options.resolved_gc_time(&self.inner.defaults);
+		let policy = ObserverPolicy::resolve(&query_options, &self.inner.defaults);
 		let (key, fetcher, _ssr_prefetch, family_types) = descriptor.into_parts();
-		self.entry_for_key(key, family_types, stale_time, gc_time)
-			.acquire(fetcher, options, query_options)
+		self.entry_for_key(key, family_types)
+			.acquire(fetcher, options, policy)
 	}
 
 	pub(crate) fn seed_serialized<T, E>(
@@ -765,8 +844,6 @@ impl QueryClient {
 		let entry = Rc::new(QueryEntry::new_with_hydrated_state(
 			key,
 			Some(hydrated_state),
-			self.inner.defaults.resolved_stale_time(),
-			self.inner.defaults.resolved_gc_time(),
 			Rc::clone(&self.inner.runtime),
 			Some(Rc::downgrade(&self.inner)),
 		));
@@ -781,20 +858,13 @@ impl QueryClient {
 		E: Clone + Serialize + DeserializeOwned + 'static,
 	{
 		let (key, _fetcher, _ssr_prefetch, family_types) = descriptor.into_parts();
-		self.entry_for_key(
-			key,
-			family_types,
-			self.inner.defaults.resolved_stale_time(),
-			self.inner.defaults.resolved_gc_time(),
-		)
+		self.entry_for_key(key, family_types)
 	}
 
 	fn entry_for_key<T, E>(
 		&self,
 		key: QueryKey<T, E>,
 		family_types: QueryFamilyTypes,
-		stale_time: Duration,
-		gc_time: Duration,
 	) -> Rc<QueryEntry<T, E>>
 	where
 		T: Clone + Serialize + DeserializeOwned + 'static,
@@ -812,7 +882,6 @@ impl QueryClient {
 				.unwrap_or_else(|_| {
 					panic!("query cache key `{id}` was reused with incompatible types")
 				});
-			entry.update_policy(stale_time, gc_time);
 			return entry;
 		}
 
@@ -820,8 +889,6 @@ impl QueryClient {
 		let entry = Rc::new(QueryEntry::new_with_hydrated_state(
 			key,
 			hydrated_state,
-			stale_time,
-			gc_time,
 			Rc::clone(&self.inner.runtime),
 			Some(Rc::downgrade(&self.inner)),
 		));
@@ -829,15 +896,23 @@ impl QueryClient {
 		entry
 	}
 
-	fn invalidate(&self, id: &str) {
-		if let Some(cached) = self
+	/// Marks one exact typed query stale and refetches it when actively enabled.
+	pub fn invalidate<T, E>(&self, key: &QueryKey<T, E>) {
+		if let Some(cached) = self.inner.entries.borrow().get(key.identity()) {
+			(cached.invalidate)();
+		}
+	}
+
+	/// Marks all cached entries in one typed query family stale.
+	pub fn invalidate_family<Args, T, E>(&self, family: QueryFamily<Args, T, E>) {
+		for cached in self
 			.inner
 			.entries
 			.borrow()
 			.values()
-			.find(|cached| cached.id == id)
+			.filter(|cached| cached.family_id == family.id())
 		{
-			(cached.refetch)();
+			(cached.invalidate)();
 		}
 	}
 }
@@ -848,13 +923,11 @@ where
 	E: Clone + 'static,
 {
 	CachedQueryEntry {
-		id: entry.id.clone(),
+		family_id: entry.family_id,
 		typed: entry.clone(),
-		refetch: Rc::new({
+		invalidate: Rc::new({
 			let entry = Rc::clone(entry);
-			move || {
-				entry.start_fetch(true);
-			}
+			move || entry.invalidate()
 		}),
 		cancel: Rc::new({
 			let entry = Rc::clone(entry);

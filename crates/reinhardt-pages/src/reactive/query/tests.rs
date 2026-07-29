@@ -15,8 +15,8 @@ use serial_test::serial;
 
 use super::super::resource::ResourceState;
 use super::client::{
-	QueryClient, QueryEntry, TestQueryRuntime, acquire_query_with_options, initial_query_state,
-	invalidate_query_id, query_entry,
+	ObserverPolicy, QueryClient, QueryEntry, TestQueryRuntime, acquire_query_with_options,
+	initial_query_state, query_entry,
 };
 use super::hook::try_create_ssr_query;
 use super::runtime::now_ms;
@@ -109,6 +109,261 @@ impl Drop for TestGate {
 	fn drop(&mut self) {
 		self.dropped.set(self.dropped.get() + 1);
 	}
+}
+
+#[test]
+fn query_snapshot_distinguishes_disabled_pending_and_resolved_state() {
+	let runtime = TestQueryRuntime::new();
+	let client = QueryClient::with_runtime(QueryDefaults::default(), runtime.handle());
+	let family = QueryFamily::<i64, String, String>::new("tests.snapshot-state");
+	let disabled = client.observe(
+		family.query(0, || async { Ok("disabled".to_string()) }),
+		QueryOptions::new().enabled(false),
+	);
+	let initial = client.observe(
+		family.query(1, || std::future::pending::<Result<String, String>>()),
+		QueryOptions::default(),
+	);
+	let resolved = client.observe(
+		family.query(2, || async { Ok("cached".to_string()) }),
+		QueryOptions::default(),
+	);
+
+	assert_eq!(disabled.snapshot().status, QueryStatus::Idle);
+	assert!(!disabled.snapshot().is_fetching);
+	assert_eq!(initial.snapshot().status, QueryStatus::Pending);
+	assert!(initial.snapshot().is_fetching);
+
+	runtime.run_until_stalled();
+
+	assert_eq!(resolved.data(), Some("cached".to_string()));
+	assert_eq!(resolved.snapshot().status, QueryStatus::Success);
+}
+
+#[test]
+fn initial_failure_populates_query_error() {
+	let runtime = TestQueryRuntime::new();
+	let client = QueryClient::with_runtime(QueryDefaults::default(), runtime.handle());
+	let family = QueryFamily::<(), String, String>::new("tests.initial-error");
+	let query = client.observe(
+		family.query((), || async { Err("offline".to_string()) }),
+		QueryOptions::default(),
+	);
+
+	runtime.run_until_stalled();
+
+	assert_eq!(
+		query.snapshot(),
+		QuerySnapshot {
+			status: QueryStatus::Error,
+			data: None,
+			error: Some("offline".to_string()),
+			refetch_error: None,
+			is_fetching: false,
+			is_stale: false,
+		}
+	);
+}
+
+#[test]
+fn background_failure_preserves_data_and_clears_on_next_request() {
+	let runtime = TestQueryRuntime::new();
+	let client = QueryClient::with_runtime(QueryDefaults::default(), runtime.handle());
+	let family = QueryFamily::<(), String, String>::new("tests.background-error");
+	let fail_next_fetch = Rc::new(Cell::new(false));
+	let descriptor = family.query((), {
+		let fail_next_fetch = Rc::clone(&fail_next_fetch);
+		move || {
+			let fail = fail_next_fetch.get();
+			async move {
+				if fail {
+					Err("offline".to_string())
+				} else {
+					Ok("cached".to_string())
+				}
+			}
+		}
+	});
+	let key = descriptor.key().clone();
+	let query = client.observe(descriptor, QueryOptions::default());
+	runtime.run_until_stalled();
+
+	fail_next_fetch.set(true);
+	client.invalidate(&key);
+	runtime.run_until_stalled();
+
+	assert_eq!(
+		query.snapshot(),
+		QuerySnapshot {
+			status: QueryStatus::Success,
+			data: Some("cached".to_string()),
+			error: None,
+			refetch_error: Some("offline".to_string()),
+			is_fetching: false,
+			is_stale: true,
+		}
+	);
+
+	fail_next_fetch.set(false);
+	query.refetch();
+
+	assert_eq!(query.refetch_error(), None);
+	assert!(query.is_fetching());
+
+	runtime.run_until_stalled();
+	assert_eq!(query.data(), Some("cached".to_string()));
+}
+
+#[test]
+fn disabled_observer_reads_cache_and_can_refetch_explicitly() {
+	let runtime = TestQueryRuntime::new();
+	let client = QueryClient::with_runtime(QueryDefaults::default(), runtime.handle());
+	let family = QueryFamily::<(), String, String>::new("tests.disabled-cached-read");
+	let fetch_count = Rc::new(Cell::new(0));
+	let descriptor = family.query((), {
+		let fetch_count = Rc::clone(&fetch_count);
+		move || {
+			let value = fetch_count.get() + 1;
+			fetch_count.set(value);
+			async move { Ok(format!("cached-{value}")) }
+		}
+	});
+	let enabled = client.observe(descriptor.clone(), QueryOptions::default());
+	runtime.run_until_stalled();
+	assert_eq!(enabled.data(), Some("cached-1".to_string()));
+	drop(enabled);
+
+	let disabled = client.observe(descriptor, QueryOptions::new().enabled(false));
+
+	assert_eq!(disabled.data(), Some("cached-1".to_string()));
+	assert_eq!(fetch_count.get(), 1);
+
+	disabled.refetch();
+	runtime.run_until_stalled();
+
+	assert_eq!(fetch_count.get(), 2);
+	assert_eq!(disabled.data(), Some("cached-2".to_string()));
+}
+
+#[test]
+fn observer_policies_do_not_overwrite_each_other() {
+	let runtime = TestQueryRuntime::new();
+	let client = QueryClient::with_runtime(
+		QueryDefaults::default()
+			.stale_time(Duration::from_secs(90))
+			.gc_time(Duration::from_secs(180)),
+		runtime.handle(),
+	);
+	let family = QueryFamily::<(), String, String>::new("tests.observer-policies");
+	let descriptor = family.query((), || async { Ok("cached".to_string()) });
+	let first = client.observe(descriptor.clone(), QueryOptions::default());
+	runtime.run_until_stalled();
+	let second = client.observe(
+		descriptor,
+		QueryOptions::default()
+			.stale_time(Duration::ZERO)
+			.gc_time(Duration::from_secs(1)),
+	);
+	runtime.run_until_stalled();
+
+	assert!(!first.is_stale());
+	assert!(second.is_stale());
+	assert_eq!(first.lease.inner.policy.gc_time, Duration::from_secs(180));
+	assert_eq!(second.lease.inner.policy.gc_time, Duration::from_secs(1));
+}
+
+#[test]
+fn exact_invalidation_only_refetches_the_matching_active_query() {
+	let runtime = TestQueryRuntime::new();
+	let client = QueryClient::with_runtime(QueryDefaults::default(), runtime.handle());
+	let family = QueryFamily::<i64, String, String>::new("tests.exact-invalidation");
+	let first_count = Rc::new(Cell::new(0));
+	let second_count = Rc::new(Cell::new(0));
+	let first_descriptor = family.query(1, {
+		let first_count = Rc::clone(&first_count);
+		move || {
+			first_count.set(first_count.get() + 1);
+			async { Ok("first".to_string()) }
+		}
+	});
+	let first_key = first_descriptor.key().clone();
+	let _first = client.observe(first_descriptor, QueryOptions::default());
+	let _second = client.observe(
+		family.query(2, {
+			let second_count = Rc::clone(&second_count);
+			move || {
+				second_count.set(second_count.get() + 1);
+				async { Ok("second".to_string()) }
+			}
+		}),
+		QueryOptions::default(),
+	);
+	runtime.run_until_stalled();
+
+	client.invalidate(&first_key);
+	runtime.run_until_stalled();
+
+	assert_eq!(first_count.get(), 2);
+	assert_eq!(second_count.get(), 1);
+}
+
+#[test]
+fn family_invalidation_marks_inactive_entries_stale_until_remount() {
+	let runtime = TestQueryRuntime::new();
+	let client = QueryClient::with_runtime(QueryDefaults::default(), runtime.handle());
+	let family = QueryFamily::<i64, String, String>::new("tests.family-invalidation");
+	let fetch_count = Rc::new(Cell::new(0));
+	let descriptor = family.query(1, {
+		let fetch_count = Rc::clone(&fetch_count);
+		move || {
+			let value = fetch_count.get() + 1;
+			fetch_count.set(value);
+			async move {
+				let value = if value == 1 { "cached" } else { "refetched" };
+				Ok(value.to_string())
+			}
+		}
+	});
+	let query = client.observe(descriptor.clone(), QueryOptions::default());
+	runtime.run_until_stalled();
+	assert_eq!(query.data(), Some("cached".to_string()));
+
+	drop(query);
+	client.invalidate_family(family);
+	runtime.run_until_stalled();
+
+	assert_eq!(fetch_count.get(), 1);
+
+	let remounted = client.observe(descriptor, QueryOptions::default());
+	runtime.run_until_stalled();
+
+	assert_eq!(fetch_count.get(), 2);
+	assert_eq!(remounted.data(), Some("refetched".to_string()));
+}
+
+#[test]
+fn disabled_only_family_invalidation_does_not_fetch() {
+	let runtime = TestQueryRuntime::new();
+	let client = QueryClient::with_runtime(QueryDefaults::default(), runtime.handle());
+	let family = QueryFamily::<(), String, String>::new("tests.disabled-invalidation");
+	let fetch_count = Rc::new(Cell::new(0));
+	let query = client.observe(
+		family.query((), {
+			let fetch_count = Rc::clone(&fetch_count);
+			move || {
+				fetch_count.set(fetch_count.get() + 1);
+				async { Ok("cached".to_string()) }
+			}
+		}),
+		QueryOptions::new().enabled(false),
+	);
+
+	client.invalidate_family(family);
+	runtime.run_until_stalled();
+
+	assert_eq!(fetch_count.get(), 0);
+	assert_eq!(query.snapshot().status, QueryStatus::Idle);
+	assert!(query.is_stale());
 }
 
 #[test]
@@ -258,7 +513,7 @@ fn pending_query_task_does_not_retain_the_final_client_owner() {
 	assert_eq!(cancellations.get(), 1);
 	runtime.run_until_stalled();
 	assert_eq!(runtime.pending_task_count(), 0);
-	assert_eq!(query.get(), ResourceState::Loading);
+	assert_eq!(query.snapshot().status, QueryStatus::Pending);
 
 	drop(query);
 	assert_eq!(cancellations.get(), 1);
@@ -341,8 +596,8 @@ async fn active_ssr_query_preserves_observer_time_options() {
 	.await;
 
 	// Assert
-	assert_eq!(query.stale_time_policy(), expected_stale_time);
-	assert_eq!(query.gc_time_policy(), expected_gc_time);
+	assert_eq!(query.lease.inner.policy.stale_time, expected_stale_time);
+	assert_eq!(query.lease.inner.policy.gc_time, expected_gc_time);
 }
 
 #[test]
@@ -850,6 +1105,7 @@ fn invalidation_without_live_observer_does_not_refetch() {
 	ReactiveScope::run(|| {
 		// Arrange
 		let _query_client = isolated_query_client();
+		let client = queries();
 		let tasks = Rc::new(RefCell::new(VecDeque::new()));
 		let tasks_for_sink = Rc::clone(&tasks);
 		let _sink = crate::platform::install_task_sink(move |task| {
@@ -871,7 +1127,7 @@ fn invalidation_without_live_observer_does_not_refetch() {
 				}
 			}
 		});
-		let id = key.key().id();
+		let exact_key = key.key().clone();
 		let lease = acquire_query(
 			key.clone(),
 			QueryAcquireOptions {
@@ -884,7 +1140,7 @@ fn invalidation_without_live_observer_does_not_refetch() {
 		// Act
 		drop(lease);
 		ready.set(true);
-		invalidate_query_id(&id);
+		client.invalidate(&exact_key);
 		assert_eq!(
 			tasks.borrow().len(),
 			1,
@@ -1029,12 +1285,18 @@ fn successful_query_is_not_pending_during_background_fetch() {
 		let descriptor = QueryFamily::<(), _, _>::new("background-refetch")
 			.query((), || async { Ok::<_, String>("fresh".to_string()) });
 		let fetcher = Rc::clone(&descriptor.fetcher);
-		let entry = Rc::new(QueryEntry::new(descriptor, &QueryOptions::default()));
+		let entry = Rc::new(QueryEntry::new(descriptor));
 		entry
 			.state
 			.set(ResourceState::Success("cached".to_string()));
 		entry.is_fetching.set(true);
-		let lease = entry.make_lease(None, QueryErrorPolicy::Retain, fetcher, true);
+		let lease = entry.make_lease(
+			None,
+			QueryConsumer::MountedQuery,
+			QueryErrorPolicy::Retain,
+			fetcher,
+			ObserverPolicy::resolve(&QueryOptions::default(), &QueryDefaults::default()),
+		);
 		let query = QueryHandle {
 			entry,
 			lease,
@@ -1044,40 +1306,12 @@ fn successful_query_is_not_pending_during_background_fetch() {
 		// Act
 		let data = query.data();
 		let is_fetching = query.is_fetching();
-		let is_pending = query.is_pending();
+		let status = query.snapshot().status;
 
 		// Assert
 		assert_eq!(data, Some("cached".to_string()));
 		assert!(is_fetching);
-		assert!(!is_pending);
-	});
-}
-
-#[rstest]
-#[serial(query_cache)]
-fn mutation_success_invalidates_registered_query() {
-	ReactiveScope::run(|| {
-		// Arrange
-		let _query_client = isolated_query_client();
-		let calls = Rc::new(Cell::new(0));
-		let key = QueryFamily::<(), _, _>::new("invalidated").query((), {
-			let calls = Rc::clone(&calls);
-			move || {
-				let value = calls.get() + 1;
-				calls.set(value);
-				async move { Ok::<_, String>(value) }
-			}
-		});
-		let query = use_query(key.clone(), QueryOptions::default());
-		let mutation = use_mutation(|_: ()| async { Ok::<_, String>("done".to_string()) })
-			.invalidates(key.key().clone());
-
-		// Act
-		mutation.force_success_for_test("done".to_string());
-
-		// Assert
-		assert_eq!(calls.get(), 2);
-		assert_eq!(query.data(), Some(2));
+		assert_eq!(status, QueryStatus::Success);
 	});
 }
 
@@ -1087,22 +1321,25 @@ fn invalidation_during_in_flight_fetch_runs_after_completion() {
 	ReactiveScope::run(|| {
 		// Arrange
 		let _query_client = isolated_query_client();
+		let client = queries();
 		let calls = Rc::new(Cell::new(0));
 
 		// Act
 		let family = QueryFamily::<(), i32, String>::new("queued-invalidation");
-		let id = family.key(()).id();
+		let exact_key = family.key(());
 		let query = use_query(
 			family.query((), {
 				let calls = Rc::clone(&calls);
+				let client = client.clone();
 				move || {
 					let calls = Rc::clone(&calls);
-					let id = id.clone();
+					let client = client.clone();
+					let exact_key = exact_key.clone();
 					async move {
 						let value = calls.get() + 1;
 						calls.set(value);
 						if value == 1 {
-							invalidate_query_id(&id);
+							client.invalidate(&exact_key);
 						}
 						Ok::<_, String>(value)
 					}
@@ -1147,14 +1384,13 @@ fn hydrated_query_error_is_fresh_on_first_mount() {
 		let entry = QueryEntry::new(
 			QueryFamily::<(), _, _>::new("hydrated-query-error")
 				.query((), || async { Err::<String, _>("not found".to_string()) }),
-			&QueryOptions::default(),
 		);
 		entry.state.set(hydrated_state);
 		entry.last_fetched_ms.set(last_fetched_ms);
 
 		// Assert
 		assert!(
-			!entry.should_fetch_on_mount(),
+			!entry.should_fetch_on_mount(QueryDefaults::default().resolved_stale_time()),
 			"a freshly hydrated error must remain visible for the initial mount"
 		);
 	});
@@ -1176,7 +1412,7 @@ async fn ssr_replayed_query_error_is_fresh_for_stale_time() {
 				QueryOptions::default(),
 			)
 			.expect("active SSR context should create the query");
-			let _ = query.get();
+			let _ = query.snapshot();
 			query
 		})
 	})
@@ -1190,15 +1426,14 @@ async fn ssr_replayed_query_error_is_fresh_for_stale_time() {
 				QueryFamily::<(), _, _>::new("ssr-replayed-query-error").query((), || async {
 					Err::<String, _>("must not refetch during replay".to_string())
 				}),
-				QueryOptions::default(),
+				QueryOptions::default().stale_time(Duration::from_secs(30)),
 			)
 			.expect("active SSR context should replay the query");
-			let query = query.stale_time(Duration::from_secs(30));
 
 			// Assert
-			assert_eq!(query.get(), ResourceState::Error("not found".to_string()));
+			assert_eq!(query.error(), Some("not found".to_string()));
 			assert!(
-				!query.entry.is_stale(),
+				!query.is_stale(),
 				"a replayed error must remain fresh when stale_time is applied"
 			);
 			query

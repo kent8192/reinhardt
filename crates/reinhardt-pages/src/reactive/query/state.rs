@@ -111,46 +111,32 @@ impl Default for QueryOptions {
 	}
 }
 
-/// Current phase of a query.
-#[derive(Clone, Debug, PartialEq)]
-pub enum QueryPhase<T, E> {
-	/// The query has no successful value or error yet.
+/// Current lifecycle status of a query observer.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum QueryStatus {
+	/// The observer is disabled and has no cached result.
+	Idle,
+	/// The first fetch is in progress.
 	Pending,
-	/// The query has loaded successfully.
-	Success(T),
-	/// The latest fetch failed.
-	Error(E),
+	/// Cached data is available.
+	Success,
+	/// The initial fetch failed without producing data.
+	Error,
 }
 
-impl<T, E> QueryPhase<T, E> {
-	/// Returns `true` if the query is pending.
-	pub fn is_pending(&self) -> bool {
-		matches!(self, Self::Pending)
-	}
-
-	/// Returns `true` if the query is successful.
-	pub fn is_success(&self) -> bool {
-		matches!(self, Self::Success(_))
-	}
-
-	/// Returns `true` if the query is in an error state.
-	pub fn is_error(&self) -> bool {
-		matches!(self, Self::Error(_))
-	}
-
-	/// Returns the success value if available.
-	pub fn result(&self) -> Option<&T> {
-		match self {
-			Self::Success(value) => Some(value),
-			_ => None,
-		}
-	}
-
-	/// Returns the error value if available.
-	pub fn error(&self) -> Option<&E> {
-		match self {
-			Self::Error(error) => Some(error),
-			_ => None,
-		}
-	}
+/// Observer-specific view of one cached query.
+#[derive(Clone, Debug, PartialEq)]
+pub struct QuerySnapshot<T, E> {
+	/// Current lifecycle status.
+	pub status: QueryStatus,
+	/// Latest successfully fetched data.
+	pub data: Option<T>,
+	/// Initial fetch error when no data is available.
+	pub error: Option<E>,
+	/// Error from a background fetch that preserved existing data.
+	pub refetch_error: Option<E>,
+	/// Whether this query currently has a request in flight.
+	pub is_fetching: bool,
+	/// Whether this observer considers the cached state stale.
+	pub is_stale: bool,
 }

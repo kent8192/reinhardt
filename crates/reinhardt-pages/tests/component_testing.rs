@@ -17,7 +17,7 @@ use reinhardt_pages::event::{ClickEvent, EventPayload, FocusEvent, typed_event_h
 use reinhardt_pages::prelude::spawn_task;
 use reinhardt_pages::reactive::hooks::use_action;
 #[cfg(feature = "msw")]
-use reinhardt_pages::reactive::{QueryOptions, use_query};
+use reinhardt_pages::reactive::{QueryOptions, QuerySnapshot, QueryStatus, queries, use_query};
 use reinhardt_pages::reactive::{ResourceState, Signal, use_resource};
 #[cfg(feature = "msw")]
 use reinhardt_pages::server_fn::{ServerFnError, server_fn};
@@ -878,6 +878,25 @@ fn jobs_resource_page(state: ResourceState<Vec<String>, ServerFnError>) -> Page 
 }
 
 #[cfg(feature = "msw")]
+fn jobs_query_page(snapshot: QuerySnapshot<Vec<String>, ServerFnError>) -> Page {
+	match snapshot.status {
+		QueryStatus::Idle | QueryStatus::Pending => text_page("Loading"),
+		QueryStatus::Success => text_page(
+			snapshot
+				.data
+				.expect("a successful query snapshot contains data")
+				.join(", "),
+		),
+		QueryStatus::Error => text_page(
+			snapshot
+				.error
+				.expect("an error query snapshot contains an error")
+				.to_string(),
+		),
+	}
+}
+
+#[cfg(feature = "msw")]
 fn jobs_component() -> Page {
 	let jobs = use_resource(|| async { load_jobs().await }, deps![]);
 	Page::reactive(move || jobs_resource_page(jobs.get()))
@@ -886,27 +905,34 @@ fn jobs_component() -> Page {
 #[cfg(feature = "msw")]
 fn jobs_query_component() -> Page {
 	let jobs = use_query(load_jobs::query(), QueryOptions::default());
-	let refetch_jobs = jobs.clone();
+	let client = queries();
+	let refresh = use_action(move |_: ()| {
+		let client = client.clone();
+		async move {
+			client.invalidate(&load_jobs::key());
+			Ok::<_, String>(())
+		}
+	});
 	PageElement::new("div")
 		.child(
 			PageElement::new("button")
-				.listener("click", move |_| refetch_jobs.refetch())
+				.listener("click", move |_| refresh.dispatch(()))
 				.child("Refresh"),
 		)
-		.child(Page::reactive(move || jobs_resource_page(jobs.get())))
+		.child(Page::reactive(move || jobs_query_page(jobs.snapshot())))
 		.into_page()
 }
 
 #[cfg(feature = "msw")]
 fn injected_jobs_query_component() -> Page {
 	let jobs = use_query(load_injected_jobs::query(), QueryOptions::default());
-	Page::reactive(move || jobs_resource_page(jobs.get()))
+	Page::reactive(move || jobs_query_page(jobs.snapshot()))
 }
 
 #[cfg(feature = "msw")]
 fn injected_alias_jobs_query_component() -> Page {
 	let jobs = use_query(load_injected_alias_jobs::query(), QueryOptions::default());
-	Page::reactive(move || jobs_resource_page(jobs.get()))
+	Page::reactive(move || jobs_query_page(jobs.snapshot()))
 }
 
 #[cfg(feature = "msw")]

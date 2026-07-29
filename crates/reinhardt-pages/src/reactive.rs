@@ -123,7 +123,7 @@ pub use trackable::Trackable;
 pub(crate) use query::{QueryAcquireOptions, QueryConsumer, QueryErrorPolicy, QueryLease};
 pub use query::{
 	QueryClient, QueryDefaults, QueryDescriptor, QueryFamily, QueryHandle, QueryKey, QueryOptions,
-	QueryPhase, queries, use_mutation, use_query,
+	QuerySnapshot, QueryStatus, queries, use_query,
 };
 pub use resource::{Resource, ResourceState, use_resource, use_resource_with_key};
 pub use resource_value::{

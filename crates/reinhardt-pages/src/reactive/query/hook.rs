@@ -10,9 +10,10 @@ use super::super::hooks::async_action::{Action, use_action};
 use super::super::resource::ResourceState;
 use super::browser::QueryGuard;
 use super::client::{
-	QueryAcquireOptions, QueryConsumer, QueryEntry, QueryErrorPolicy, QueryLease,
-	acquire_query_with_options, invalidate_query_id,
+	QueryAcquireOptions, QueryClient, QueryConsumer, QueryEntry, QueryErrorPolicy, QueryLease,
+	invalidate_query_id,
 };
+use super::context::queries;
 use super::identity::{QueryDescriptor, QueryKey};
 use super::state::{QueryOptions, QueryPhase};
 use crate::cancellation::CancellationSource;
@@ -155,9 +156,21 @@ where
 		return query;
 	}
 
+	queries().observe(descriptor, options)
+}
+
+pub(super) fn observe_query<T, E>(
+	client: &QueryClient,
+	descriptor: QueryDescriptor<T, E>,
+	options: QueryOptions,
+) -> QueryHandle<T, E>
+where
+	T: Clone + Serialize + DeserializeOwned + 'static,
+	E: Clone + Serialize + DeserializeOwned + 'static,
+{
 	let refetch_interval = options.refetch_interval_value();
 	let enabled = options.is_enabled();
-	let lease = acquire_query_with_options(
+	let lease = client.acquire_with_options(
 		descriptor,
 		QueryAcquireOptions {
 			consumer: QueryConsumer::MountedQuery,

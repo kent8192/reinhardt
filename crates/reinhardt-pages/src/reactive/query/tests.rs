@@ -15,7 +15,7 @@ use serial_test::serial;
 
 use super::super::resource::ResourceState;
 use super::client::{
-	QueryEntry, acquire_query_with_options, clear_query_cache_for_test, initial_query_state,
+	QueryClient, QueryEntry, TestQueryRuntime, acquire_query_with_options, initial_query_state,
 	invalidate_query_id, query_entry,
 };
 use super::hook::try_create_ssr_query;
@@ -53,6 +53,10 @@ impl Serialize for OrderedLargeMapArgs {
 }
 
 struct FailingFingerprintArgs;
+
+fn isolated_query_client() -> QueryClientGuard {
+	provide_query_client(QueryClient::new(QueryDefaults::default()))
+}
 
 impl Serialize for FailingFingerprintArgs {
 	fn serialize<S>(&self, _serializer: S) -> Result<S::Ok, S::Error>
@@ -129,11 +133,101 @@ fn typed_family_rejects_arguments_without_a_stable_fingerprint() {
 }
 
 #[test]
+fn identical_keys_share_only_within_one_client() {
+	let family = QueryFamily::<i64, String, String>::new("tests.client-scope");
+	let runtime = TestQueryRuntime::new();
+	let first_client = QueryClient::with_runtime(QueryDefaults::default(), runtime.handle());
+	let second_client = QueryClient::with_runtime(QueryDefaults::default(), runtime.handle());
+	let calls = Rc::new(Cell::new(0));
+
+	let counted_fetcher = |calls: Rc<Cell<usize>>, value: &'static str| {
+		move || {
+			calls.set(calls.get() + 1);
+			async move { Ok::<_, String>(value.to_string()) }
+		}
+	};
+
+	let first = first_client.observe(
+		family.query(1, counted_fetcher(Rc::clone(&calls), "first")),
+		QueryOptions::default(),
+	);
+	let same_client = first_client.observe(
+		family.query(1, counted_fetcher(Rc::clone(&calls), "first")),
+		QueryOptions::default(),
+	);
+	let other_client = second_client.observe(
+		family.query(1, counted_fetcher(Rc::clone(&calls), "second")),
+		QueryOptions::default(),
+	);
+
+	runtime.run_until_stalled();
+
+	assert_eq!(first.data(), Some("first".to_string()));
+	assert_eq!(same_client.data(), Some("first".to_string()));
+	assert_eq!(other_client.data(), Some("second".to_string()));
+	assert_eq!(calls.get(), 2);
+}
+
+#[test]
+fn one_client_rejects_incompatible_query_family_types() {
+	let runtime = TestQueryRuntime::new();
+	let client = QueryClient::with_runtime(QueryDefaults::default(), runtime.handle());
+	let first = QueryFamily::<i64, String, String>::new("tests.collision");
+	let second = QueryFamily::<String, String, String>::new("tests.collision");
+
+	let _first = client.observe(
+		first.query(1, || async { Ok::<_, String>("first".to_string()) }),
+		QueryOptions::default(),
+	);
+	let panic = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+		let _second = client.observe(
+			second.query("1".to_string(), || async {
+				Ok::<_, String>("second".to_string())
+			}),
+			QueryOptions::default(),
+		);
+	}))
+	.expect_err("incompatible query family types must panic");
+	let message = panic
+		.downcast_ref::<String>()
+		.map(String::as_str)
+		.or_else(|| panic.downcast_ref::<&str>().copied())
+		.expect("query family type collision should panic with a string");
+
+	assert!(message.contains("tests.collision"));
+	assert!(message.contains("incompatible query family types"));
+}
+
+#[test]
+fn query_client_guards_restore_the_previous_client() {
+	let first = QueryClient::new(QueryDefaults::default());
+	let second = QueryClient::new(QueryDefaults::default());
+	let first_guard = provide_query_client(first.clone());
+	let second_guard = provide_query_client(second.clone());
+
+	assert!(queries().same_instance(&second));
+	drop(first_guard);
+	assert!(queries().same_instance(&second));
+	drop(second_guard);
+
+	let panic = match std::panic::catch_unwind(queries) {
+		Ok(_) => panic!("dropping every guard must remove the ambient query client"),
+		Err(panic) => panic,
+	};
+	let message = panic
+		.downcast_ref::<String>()
+		.map(String::as_str)
+		.or_else(|| panic.downcast_ref::<&str>().copied())
+		.expect("missing query client should panic with a string");
+	assert_eq!(message, "use_query requires an active QueryClient");
+}
+
+#[test]
 #[serial(query_cache)]
 fn earliest_live_enabled_observer_supplies_the_fetcher() {
 	ReactiveScope::run(|| {
 		// Arrange
-		clear_query_cache_for_test();
+		let _query_client = isolated_query_client();
 		let family = QueryFamily::<(), String, String>::new("tests.observer-fetcher-order");
 		let first_calls = Rc::new(Cell::new(0));
 		let second_calls = Rc::new(Cell::new(0));
@@ -214,7 +308,7 @@ async fn active_ssr_query_preserves_observer_time_options() {
 fn imperative_acquisition_deduplicates_in_flight_work() {
 	ReactiveScope::run(|| {
 		// Arrange
-		clear_query_cache_for_test();
+		let _query_client = isolated_query_client();
 		let tasks = Rc::new(RefCell::new(VecDeque::new()));
 		let tasks_for_sink = Rc::clone(&tasks);
 		let _sink = crate::platform::install_task_sink(move |task| {
@@ -266,7 +360,7 @@ fn imperative_acquisition_deduplicates_in_flight_work() {
 fn dropping_one_of_two_leases_keeps_request_alive() {
 	ReactiveScope::run(|| {
 		// Arrange
-		clear_query_cache_for_test();
+		let _query_client = isolated_query_client();
 		let tasks = Rc::new(RefCell::new(VecDeque::new()));
 		let tasks_for_sink = Rc::clone(&tasks);
 		let _sink = crate::platform::install_task_sink(move |task| {
@@ -326,7 +420,7 @@ fn dropping_one_of_two_leases_keeps_request_alive() {
 fn shared_fetch_receives_the_query_request_cancellation_handle() {
 	ReactiveScope::run(|| {
 		// Arrange
-		clear_query_cache_for_test();
+		let _query_client = isolated_query_client();
 		let tasks = Rc::new(RefCell::new(VecDeque::new()));
 		let tasks_for_sink = Rc::clone(&tasks);
 		let _sink = crate::platform::install_task_sink(move |task| {
@@ -393,7 +487,7 @@ fn shared_fetch_receives_the_query_request_cancellation_handle() {
 fn dropping_final_lease_cancels_request_once() {
 	ReactiveScope::run(|| {
 		// Arrange
-		clear_query_cache_for_test();
+		let _query_client = isolated_query_client();
 		let tasks = Rc::new(RefCell::new(VecDeque::new()));
 		let tasks_for_sink = Rc::clone(&tasks);
 		let _sink = crate::platform::install_task_sink(move |task| {
@@ -449,7 +543,7 @@ fn dropping_final_lease_cancels_request_once() {
 fn queued_refetch_keeps_completed_generation_for_existing_lease() {
 	ReactiveScope::run(|| {
 		// Arrange
-		clear_query_cache_for_test();
+		let _query_client = isolated_query_client();
 		let tasks = Rc::new(RefCell::new(VecDeque::new()));
 		let tasks_for_sink = Rc::clone(&tasks);
 		let _sink = crate::platform::install_task_sink(move |task| {
@@ -502,7 +596,7 @@ fn queued_refetch_keeps_completed_generation_for_existing_lease() {
 fn cancelling_request_discards_queued_refetch() {
 	ReactiveScope::run(|| {
 		// Arrange
-		clear_query_cache_for_test();
+		let _query_client = isolated_query_client();
 		let tasks = Rc::new(RefCell::new(VecDeque::new()));
 		let tasks_for_sink = Rc::clone(&tasks);
 		let _sink = crate::platform::install_task_sink(move |task| {
@@ -562,7 +656,7 @@ fn cancelling_request_discards_queued_refetch() {
 fn cancel_completion_race_does_not_publish_obsolete_value() {
 	ReactiveScope::run(|| {
 		// Arrange
-		clear_query_cache_for_test();
+		let _query_client = isolated_query_client();
 		let tasks = Rc::new(RefCell::new(VecDeque::new()));
 		let tasks_for_sink = Rc::clone(&tasks);
 		let _sink = crate::platform::install_task_sink(move |task| {
@@ -617,7 +711,7 @@ fn cancel_completion_race_does_not_publish_obsolete_value() {
 fn cancelled_revalidation_preserves_previous_success() {
 	ReactiveScope::run(|| {
 		// Arrange
-		clear_query_cache_for_test();
+		let _query_client = isolated_query_client();
 		let tasks = Rc::new(RefCell::new(VecDeque::new()));
 		let tasks_for_sink = Rc::clone(&tasks);
 		let _sink = crate::platform::install_task_sink(move |task| {
@@ -669,7 +763,7 @@ fn cancelled_revalidation_preserves_previous_success() {
 fn discarded_error_retries_on_next_acquisition() {
 	ReactiveScope::run(|| {
 		// Arrange
-		clear_query_cache_for_test();
+		let _query_client = isolated_query_client();
 		let calls = Rc::new(Cell::new(0));
 		let key = QueryFamily::<(), _, _>::new("discarded-error").query((), {
 			let calls = Rc::clone(&calls);
@@ -713,7 +807,7 @@ fn discarded_error_retries_on_next_acquisition() {
 fn invalidation_without_live_observer_does_not_refetch() {
 	ReactiveScope::run(|| {
 		// Arrange
-		clear_query_cache_for_test();
+		let _query_client = isolated_query_client();
 		let tasks = Rc::new(RefCell::new(VecDeque::new()));
 		let tasks_for_sink = Rc::clone(&tasks);
 		let _sink = crate::platform::install_task_sink(move |task| {
@@ -772,7 +866,7 @@ fn invalidation_without_live_observer_does_not_refetch() {
 fn use_query_deduplicates_shared_key() {
 	ReactiveScope::run(|| {
 		// Arrange
-		clear_query_cache_for_test();
+		let _query_client = isolated_query_client();
 		let calls = Rc::new(Cell::new(0));
 
 		// Act
@@ -808,7 +902,7 @@ fn use_query_deduplicates_shared_key() {
 #[serial(query_cache)]
 fn cached_query_survives_the_scope_that_created_it() {
 	// Arrange
-	clear_query_cache_for_test();
+	let _query_client = isolated_query_client();
 	let key = QueryFamily::<(), _, _>::new("retained-cache-entry")
 		.query((), || async { Ok::<_, String>("cached".to_string()) });
 	let scope = ReactiveScope::new();
@@ -829,7 +923,7 @@ fn cached_query_survives_the_scope_that_created_it() {
 fn refetch_runs_fetcher_again() {
 	ReactiveScope::run(|| {
 		// Arrange
-		clear_query_cache_for_test();
+		let _query_client = isolated_query_client();
 		let calls = Rc::new(Cell::new(0));
 		let query = use_query(
 			QueryFamily::<(), _, _>::new("manual-refetch").query((), {
@@ -857,7 +951,7 @@ fn refetch_runs_fetcher_again() {
 fn failed_query_respects_stale_time_before_retrying() {
 	ReactiveScope::run(|| {
 		// Arrange
-		clear_query_cache_for_test();
+		let _query_client = isolated_query_client();
 		let calls = Rc::new(Cell::new(0));
 		let key = QueryFamily::<(), _, _>::new("failed-query").query((), {
 			let calls = Rc::clone(&calls);
@@ -889,7 +983,7 @@ fn failed_query_respects_stale_time_before_retrying() {
 fn successful_query_is_not_pending_during_background_fetch() {
 	ReactiveScope::run(|| {
 		// Arrange
-		clear_query_cache_for_test();
+		let _query_client = isolated_query_client();
 		let descriptor = QueryFamily::<(), _, _>::new("background-refetch")
 			.query((), || async { Ok::<_, String>("fresh".to_string()) });
 		let fetcher = Rc::clone(&descriptor.fetcher);
@@ -922,7 +1016,7 @@ fn successful_query_is_not_pending_during_background_fetch() {
 fn mutation_success_invalidates_registered_query() {
 	ReactiveScope::run(|| {
 		// Arrange
-		clear_query_cache_for_test();
+		let _query_client = isolated_query_client();
 		let calls = Rc::new(Cell::new(0));
 		let key = QueryFamily::<(), _, _>::new("invalidated").query((), {
 			let calls = Rc::clone(&calls);
@@ -950,7 +1044,7 @@ fn mutation_success_invalidates_registered_query() {
 fn invalidation_during_in_flight_fetch_runs_after_completion() {
 	ReactiveScope::run(|| {
 		// Arrange
-		clear_query_cache_for_test();
+		let _query_client = isolated_query_client();
 		let calls = Rc::new(Cell::new(0));
 
 		// Act
@@ -986,7 +1080,7 @@ fn invalidation_during_in_flight_fetch_runs_after_completion() {
 fn typed_query_identity_does_not_reserve_resource_counter() {
 	ReactiveScope::run(|| {
 		// Arrange
-		clear_query_cache_for_test();
+		let _query_client = isolated_query_client();
 		super::super::resource::set_client_resource_counter(0);
 
 		// Act
@@ -1077,7 +1171,7 @@ async fn ssr_replayed_query_error_is_fresh_for_stale_time() {
 #[serial(query_cache)]
 fn server_fn_key_hashes_arguments_without_exposing_them() {
 	// Arrange
-	clear_query_cache_for_test();
+	let _query_client = isolated_query_client();
 
 	// Act
 	let key: QueryKey<Vec<i64>, crate::server_fn::ServerFnError> =
@@ -1095,7 +1189,7 @@ fn server_fn_key_hashes_arguments_without_exposing_them() {
 #[serial(query_cache)]
 fn server_fn_key_preserves_large_integer_arguments() {
 	// Arrange
-	clear_query_cache_for_test();
+	let _query_client = isolated_query_client();
 
 	// Act
 	let key: QueryKey<(), crate::server_fn::ServerFnError> =
@@ -1113,7 +1207,7 @@ fn server_fn_key_preserves_large_integer_arguments() {
 #[serial(query_cache)]
 fn server_fn_key_canonicalizes_object_arguments() {
 	// Arrange
-	clear_query_cache_for_test();
+	let _query_client = isolated_query_client();
 
 	// Act
 	let first: QueryKey<(), crate::server_fn::ServerFnError> =
@@ -1135,7 +1229,7 @@ fn server_fn_key_canonicalizes_object_arguments() {
 #[serial(query_cache)]
 fn server_fn_key_canonicalizes_large_integer_object_arguments() {
 	// Arrange
-	clear_query_cache_for_test();
+	let _query_client = isolated_query_client();
 
 	// Act
 	let first: QueryKey<(), crate::server_fn::ServerFnError> =
@@ -1153,7 +1247,7 @@ fn server_fn_key_canonicalizes_large_integer_object_arguments() {
 #[serial(query_cache)]
 fn server_fn_key_does_not_expose_sensitive_arguments() {
 	// Arrange
-	clear_query_cache_for_test();
+	let _query_client = isolated_query_client();
 
 	let email = "sensitive@example.com";
 

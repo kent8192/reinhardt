@@ -67,10 +67,8 @@ async fn query_fetches_are_scheduled_until_screen_settles() {
 
 #[cfg(not(feature = "msw"))]
 #[tokio::test]
-#[serial_test::serial(query_cache)]
 async fn query_cache_is_scoped_per_screen_without_msw() {
 	// Arrange
-	crate::reactive::query::clear_query_cache_for_test();
 	let first = render(|| screen_scoped_query_component("first"));
 	first.settle().await;
 
@@ -78,7 +76,6 @@ async fn query_cache_is_scoped_per_screen_without_msw() {
 	let second = render(|| screen_scoped_query_component("second"));
 	second.settle().await;
 	let second_output = second.pretty();
-	crate::reactive::query::clear_query_cache_for_test();
 
 	// Assert
 	assert_eq!(first.pretty(), "first\n");

@@ -1,3 +1,4 @@
+use std::any::{TypeId, type_name};
 use std::fmt;
 use std::fmt::Write as _;
 use std::future::Future;
@@ -14,12 +15,45 @@ use super::canonical_json;
 
 pub(super) type QueryFuture<T, E> = Pin<Box<dyn Future<Output = Result<T, E>> + 'static>>;
 pub(super) type QueryFetcher<T, E> = dyn Fn(CancellationHandle) -> QueryFuture<T, E> + 'static;
+type QueryDescriptorParts<T, E> = (
+	QueryKey<T, E>,
+	Rc<QueryFetcher<T, E>>,
+	bool,
+	QueryFamilyTypes,
+);
 
 /// Stable, type-erased identity shared by a query family and one argument set.
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
 pub(crate) struct QueryIdentity {
 	family_id: &'static str,
 	arguments_fingerprint: [u8; 32],
+}
+
+#[derive(Clone, Copy)]
+pub(crate) struct QueryFamilyTypes {
+	pub(crate) arguments: TypeId,
+	pub(crate) data: TypeId,
+	pub(crate) error: TypeId,
+	pub(crate) arguments_name: &'static str,
+	pub(crate) data_name: &'static str,
+	pub(crate) error_name: &'static str,
+}
+
+impl QueryFamilyTypes {
+	fn of<Args: 'static, T: 'static, E: 'static>() -> Self {
+		Self {
+			arguments: TypeId::of::<Args>(),
+			data: TypeId::of::<T>(),
+			error: TypeId::of::<E>(),
+			arguments_name: type_name::<Args>(),
+			data_name: type_name::<T>(),
+			error_name: type_name::<E>(),
+		}
+	}
+
+	pub(crate) fn matches(&self, other: &Self) -> bool {
+		self.arguments == other.arguments && self.data == other.data && self.error == other.error
+	}
 }
 
 /// Defines the typed identity shared by queries with the same arguments.
@@ -76,7 +110,9 @@ impl<Args, T, E> QueryFamily<Args, T, E> {
 	/// Builds a query descriptor using a fetcher without cancellation input.
 	pub fn query<F, Fut>(&self, args: Args, fetcher: F) -> QueryDescriptor<T, E>
 	where
-		Args: Serialize,
+		Args: Serialize + 'static,
+		T: 'static,
+		E: 'static,
 		F: Fn() -> Fut + 'static,
 		Fut: Future<Output = Result<T, E>> + 'static,
 	{
@@ -86,7 +122,9 @@ impl<Args, T, E> QueryFamily<Args, T, E> {
 	/// Builds a query descriptor whose fetcher receives its cancellation handle.
 	pub fn query_with_cancellation<F, Fut>(&self, args: Args, fetcher: F) -> QueryDescriptor<T, E>
 	where
-		Args: Serialize,
+		Args: Serialize + 'static,
+		T: 'static,
+		E: 'static,
 		F: Fn(CancellationHandle) -> Fut + 'static,
 		Fut: Future<Output = Result<T, E>> + 'static,
 	{
@@ -94,6 +132,7 @@ impl<Args, T, E> QueryFamily<Args, T, E> {
 			key: self.key(args),
 			fetcher: Rc::new(move |cancellation| Box::pin(fetcher(cancellation))),
 			ssr_prefetch: true,
+			family_types: QueryFamilyTypes::of::<Args, T, E>(),
 		}
 	}
 }
@@ -157,6 +196,7 @@ pub struct QueryDescriptor<T, E> {
 	key: QueryKey<T, E>,
 	pub(super) fetcher: Rc<QueryFetcher<T, E>>,
 	pub(super) ssr_prefetch: bool,
+	pub(crate) family_types: QueryFamilyTypes,
 }
 
 impl<T, E> Clone for QueryDescriptor<T, E> {
@@ -165,6 +205,7 @@ impl<T, E> Clone for QueryDescriptor<T, E> {
 			key: self.key.clone(),
 			fetcher: Rc::clone(&self.fetcher),
 			ssr_prefetch: self.ssr_prefetch,
+			family_types: self.family_types,
 		}
 	}
 }
@@ -191,8 +232,8 @@ impl<T, E> QueryDescriptor<T, E> {
 		self
 	}
 
-	pub(super) fn into_parts(self) -> (QueryKey<T, E>, Rc<QueryFetcher<T, E>>, bool) {
-		(self.key, self.fetcher, self.ssr_prefetch)
+	pub(super) fn into_parts(self) -> QueryDescriptorParts<T, E> {
+		(self.key, self.fetcher, self.ssr_prefetch, self.family_types)
 	}
 }
 

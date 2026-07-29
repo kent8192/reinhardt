@@ -5,6 +5,9 @@ use std::any::Any;
 use std::cell::RefCell;
 use std::collections::HashMap;
 
+use crate::reactive::query::QueryDefaults;
+#[cfg(wasm)]
+use crate::reactive::query::{QueryClient, provide_query_client};
 use crate::reactive::{Context, ContextGuard};
 
 #[cfg(wasm)]
@@ -338,6 +341,8 @@ fn common_loader_prefix_len(previous: &[Option<String>], next: &[Option<String>]
 pub struct ClientLauncher {
 	#[cfg_attr(not(wasm), allow(dead_code))]
 	pub(super) root_selector: &'static str,
+	#[cfg_attr(not(wasm), allow(dead_code))]
+	pub(super) query_defaults: QueryDefaults,
 	/// Optional `ClientRouter` initialiser registered via
 	/// [`ClientLauncher::router_client`]. Mutually exclusive with
 	/// `launch()` rejects the launcher if neither source is set.
@@ -598,6 +603,7 @@ impl ClientLauncher {
 	pub fn new(root_selector: &'static str) -> Self {
 		Self {
 			root_selector,
+			query_defaults: QueryDefaults::default(),
 			client_router_init: None,
 			intercept_links: true,
 			before_launch_hooks: Vec::new(),
@@ -606,6 +612,12 @@ impl ClientLauncher {
 			path_subscriptions: Vec::new(),
 			use_inventory: false,
 		}
+	}
+
+	/// Configures the defaults used by the application query client.
+	pub fn query_defaults(mut self, defaults: QueryDefaults) -> Self {
+		self.query_defaults = defaults;
+		self
 	}
 
 	/// Provide a root context for the lifetime of the launched application.
@@ -1060,11 +1072,14 @@ impl ClientLauncher {
 			wasm_bindgen_futures::spawn_local(async move { task() });
 		});
 
-		let root_context_guards = self
-			.root_context_providers
-			.drain(..)
-			.map(|provider| provider())
-			.collect::<Vec<_>>();
+		let query_client = QueryClient::new(self.query_defaults.clone());
+		let query_client_guard = provide_query_client(query_client);
+		let mut root_context_guards: Vec<Box<dyn Any>> = vec![Box::new(query_client_guard)];
+		root_context_guards.extend(
+			self.root_context_providers
+				.drain(..)
+				.map(|provider| provider()),
+		);
 
 		// Step 3: drain before_launch callbacks before any router or DOM work.
 		for hook in self.before_launch_hooks.drain(..) {
@@ -1328,7 +1343,19 @@ mod tests {
 		let launcher = ClientLauncher::new("#root");
 
 		assert_eq!(launcher.root_selector, "#root");
+		assert_eq!(launcher.query_defaults, QueryDefaults::default());
 		assert!(launcher.client_router_init.is_none());
+	}
+
+	#[test]
+	fn query_defaults_replaces_the_application_client_defaults() {
+		let defaults = QueryDefaults::new()
+			.stale_time(std::time::Duration::from_secs(5))
+			.gc_time(std::time::Duration::from_secs(60));
+
+		let launcher = ClientLauncher::new("#root").query_defaults(defaults.clone());
+
+		assert_eq!(launcher.query_defaults, defaults);
 	}
 
 	// (Refs #4234) Mirrors `test_client_launcher_router_stores_init_fn`

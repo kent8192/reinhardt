@@ -729,9 +729,9 @@ where
 mod tests {
 	use super::*;
 	#[cfg(native)]
-	use crate::reactive::query::clear_query_cache_for_test;
+	use crate::reactive::query::{QueryClient, provide_query_client};
 	#[cfg(native)]
-	use crate::reactive::{QueryConsumer, ResourceState};
+	use crate::reactive::{QueryConsumer, QueryDefaults, ResourceState};
 	#[cfg(native)]
 	use crate::{HydrationContext, SsrState};
 	#[cfg(native)]
@@ -858,7 +858,7 @@ mod tests {
 	fn hydration_seed_keeps_route_loader_query_fresh_without_refetching() {
 		ReactiveScope::run(|| {
 			// Arrange
-			clear_query_cache_for_test();
+			let _query_client = provide_query_client(QueryClient::new(QueryDefaults::default()));
 			let route_context = context(&[("project_id", "42")], "tab=open");
 			let loader_id = RouteLoaderId::new("tests::hydrated_loader");
 			let inputs = [

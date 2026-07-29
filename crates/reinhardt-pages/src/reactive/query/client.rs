@@ -1,6 +1,8 @@
 use std::any::Any;
 use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
+#[cfg(all(test, not(wasm)))]
+use std::collections::VecDeque;
 use std::future::Future;
 use std::marker::PhantomData;
 use std::pin::Pin;
@@ -14,20 +16,181 @@ use serde::de::DeserializeOwned;
 
 use super::super::Signal;
 use super::super::resource::ResourceState;
-use super::identity::{QueryDescriptor, QueryFetcher, QueryKey};
+use super::identity::{QueryDescriptor, QueryFamilyTypes, QueryFetcher, QueryIdentity, QueryKey};
 use super::runtime::{ScopedQueryFuture, duration_ms, now_ms, spawn_query_task};
 use super::state::{QueryDefaults, QueryOptions};
 use crate::cancellation::{AbortableTaskGuard, CancellationSource, scope_cancellation};
 use reinhardt_core::reactive::ReactiveScope;
 
-thread_local! {
-	static QUERY_CACHE: RefCell<HashMap<String, CachedQueryEntry>> = RefCell::new(HashMap::new());
+type QueryTask = Pin<Box<dyn Future<Output = ()> + 'static>>;
+
+pub(crate) trait QueryRuntime {
+	fn now_ms(&self) -> u64;
+	fn spawn(&self, task: QueryTask);
+}
+
+pub(crate) type QueryRuntimeHandle = Rc<dyn QueryRuntime>;
+
+struct PlatformQueryRuntime;
+
+impl QueryRuntime for PlatformQueryRuntime {
+	fn now_ms(&self) -> u64 {
+		now_ms()
+	}
+
+	fn spawn(&self, task: QueryTask) {
+		spawn_query_task(task);
+	}
+}
+
+fn platform_query_runtime() -> QueryRuntimeHandle {
+	Rc::new(PlatformQueryRuntime)
+}
+
+#[cfg(all(test, not(wasm)))]
+#[derive(Clone)]
+pub(crate) struct TestQueryRuntime {
+	inner: Rc<TestQueryRuntimeInner>,
+}
+
+#[cfg(all(test, not(wasm)))]
+struct TestQueryRuntimeInner {
+	now_ms: Cell<u64>,
+	tasks: RefCell<VecDeque<QueryTask>>,
+}
+
+#[cfg(all(test, not(wasm)))]
+impl TestQueryRuntime {
+	pub(crate) fn new() -> Self {
+		Self {
+			inner: Rc::new(TestQueryRuntimeInner {
+				now_ms: Cell::new(0),
+				tasks: RefCell::new(VecDeque::new()),
+			}),
+		}
+	}
+
+	pub(crate) fn handle(&self) -> QueryRuntimeHandle {
+		Rc::clone(&self.inner) as QueryRuntimeHandle
+	}
+
+	pub(crate) fn run_until_stalled(&self) {
+		let mut context = Context::from_waker(Waker::noop());
+		loop {
+			let task_count = self.inner.tasks.borrow().len();
+			if task_count == 0 {
+				break;
+			}
+			let mut completed = 0;
+			for _ in 0..task_count {
+				let Some(mut task) = self.inner.tasks.borrow_mut().pop_front() else {
+					break;
+				};
+				match task.as_mut().poll(&mut context) {
+					Poll::Ready(()) => completed += 1,
+					Poll::Pending => self.inner.tasks.borrow_mut().push_back(task),
+				}
+			}
+			if completed == 0 && self.inner.tasks.borrow().len() == task_count {
+				break;
+			}
+		}
+	}
+}
+
+#[cfg(all(test, not(wasm)))]
+impl QueryRuntime for TestQueryRuntimeInner {
+	fn now_ms(&self) -> u64 {
+		self.now_ms.get()
+	}
+
+	fn spawn(&self, task: QueryTask) {
+		self.tasks.borrow_mut().push_back(task);
+	}
+}
+
+/// Application-owned keyed query cache and runtime.
+#[derive(Clone)]
+pub struct QueryClient {
+	inner: Rc<QueryClientInner>,
+}
+
+struct QueryClientInner {
+	defaults: QueryDefaults,
+	runtime: QueryRuntimeHandle,
+	entries: RefCell<HashMap<QueryIdentity, CachedQueryEntry>>,
+	families: RefCell<HashMap<&'static str, QueryFamilyTypes>>,
 }
 
 #[derive(Clone)]
 struct CachedQueryEntry {
+	id: String,
 	typed: Rc<dyn Any>,
 	refetch: Rc<dyn Fn()>,
+	cancel: Rc<dyn Fn()>,
+}
+
+impl QueryClient {
+	/// Creates an empty client using the platform query runtime.
+	pub fn new(defaults: QueryDefaults) -> Self {
+		Self::with_runtime(defaults, platform_query_runtime())
+	}
+
+	pub(crate) fn with_runtime(defaults: QueryDefaults, runtime: QueryRuntimeHandle) -> Self {
+		Self {
+			inner: Rc::new(QueryClientInner {
+				defaults,
+				runtime,
+				entries: RefCell::new(HashMap::new()),
+				families: RefCell::new(HashMap::new()),
+			}),
+		}
+	}
+
+	pub(crate) fn observe<T, E>(
+		&self,
+		descriptor: QueryDescriptor<T, E>,
+		options: QueryOptions,
+	) -> super::hook::QueryHandle<T, E>
+	where
+		T: Clone + Serialize + DeserializeOwned + 'static,
+		E: Clone + Serialize + DeserializeOwned + 'static,
+	{
+		super::hook::observe_query(self, descriptor, options)
+	}
+
+	fn register_family(&self, family_id: &'static str, actual: QueryFamilyTypes) {
+		let mut families = self.inner.families.borrow_mut();
+		let Some(expected) = families.get(&family_id) else {
+			families.insert(family_id, actual);
+			return;
+		};
+		if expected.matches(&actual) {
+			return;
+		}
+		panic!(
+			"incompatible query family types for `{family_id}`: expected Args=`{}`, data=`{}`, error=`{}`; actual Args=`{}`, data=`{}`, error=`{}`",
+			expected.arguments_name,
+			expected.data_name,
+			expected.error_name,
+			actual.arguments_name,
+			actual.data_name,
+			actual.error_name,
+		);
+	}
+
+	pub(super) fn same_instance(&self, other: &Self) -> bool {
+		Rc::ptr_eq(&self.inner, &other.inner)
+	}
+}
+
+impl Drop for QueryClientInner {
+	fn drop(&mut self) {
+		for entry in self.entries.get_mut().values() {
+			(entry.cancel)();
+		}
+		self.entries.get_mut().clear();
+	}
 }
 
 /// Identifies the runtime consumer holding a query lease.
@@ -82,6 +245,8 @@ pub(super) struct QueryEntry<T: Clone + 'static, E: Clone + 'static> {
 	pub(super) stale_time: Cell<Duration>,
 	pub(super) gc_time: Cell<Duration>,
 	observers: RefCell<Vec<Weak<QueryLeaseInner<T, E>>>>,
+	runtime: QueryRuntimeHandle,
+	owner: Option<Weak<QueryClientInner>>,
 }
 
 pub(super) struct QueryLeaseInner<T: Clone + 'static, E: Clone + 'static> {
@@ -120,15 +285,23 @@ impl<T: Clone + 'static, E: Clone + 'static> Drop for QueryLeaseInner<T, E> {
 	}
 }
 
+#[cfg(test)]
 pub(super) fn initial_query_state<T, E>(
 	hydrated_state: Option<ResourceState<T, E>>,
+) -> (ResourceState<T, E>, Option<u64>) {
+	initial_query_state_at(hydrated_state, now_ms())
+}
+
+fn initial_query_state_at<T, E>(
+	hydrated_state: Option<ResourceState<T, E>>,
+	now_ms: u64,
 ) -> (ResourceState<T, E>, Option<u64>) {
 	let initial_state = hydrated_state.unwrap_or(ResourceState::Loading);
 	let last_fetched_ms = if matches!(
 		&initial_state,
 		ResourceState::Success(_) | ResourceState::Error(_)
 	) {
-		Some(now_ms())
+		Some(now_ms)
 	} else {
 		None
 	};
@@ -141,7 +314,7 @@ impl<T: Clone + 'static, E: Clone + 'static> QueryEntry<T, E> {
 		T: Serialize + DeserializeOwned,
 		E: Serialize + DeserializeOwned,
 	{
-		let (key, _fetcher, _ssr_prefetch) = descriptor.into_parts();
+		let (key, _fetcher, _ssr_prefetch, _family_types) = descriptor.into_parts();
 		let id = key.id();
 		let hydrated_state = hydrated_query_state(&id);
 		let defaults = QueryDefaults::default();
@@ -150,6 +323,8 @@ impl<T: Clone + 'static, E: Clone + 'static> QueryEntry<T, E> {
 			hydrated_state,
 			options.resolved_stale_time(&defaults),
 			options.resolved_gc_time(&defaults),
+			platform_query_runtime(),
+			None,
 		)
 	}
 
@@ -158,8 +333,11 @@ impl<T: Clone + 'static, E: Clone + 'static> QueryEntry<T, E> {
 		hydrated_state: Option<ResourceState<T, E>>,
 		stale_time: Duration,
 		gc_time: Duration,
+		runtime: QueryRuntimeHandle,
+		owner: Option<Weak<QueryClientInner>>,
 	) -> Self {
-		let (initial_state, last_fetched_ms) = initial_query_state(hydrated_state);
+		let (initial_state, last_fetched_ms) =
+			initial_query_state_at(hydrated_state, runtime.now_ms());
 		let id = key.id();
 		let scope = Rc::new(ReactiveScope::new());
 		let (state, is_fetching) = scope.enter(|| (Signal::new(initial_state), Signal::new(false)));
@@ -180,6 +358,8 @@ impl<T: Clone + 'static, E: Clone + 'static> QueryEntry<T, E> {
 			stale_time: Cell::new(stale_time),
 			gc_time: Cell::new(gc_time),
 			observers: RefCell::new(Vec::new()),
+			runtime,
+			owner,
 		}
 	}
 
@@ -192,7 +372,7 @@ impl<T: Clone + 'static, E: Clone + 'static> QueryEntry<T, E> {
 		let Some(last_fetched_ms) = self.last_fetched_ms.get() else {
 			return true;
 		};
-		now_ms().saturating_sub(last_fetched_ms) >= duration_ms(self.stale_time.get())
+		self.runtime.now_ms().saturating_sub(last_fetched_ms) >= duration_ms(self.stale_time.get())
 	}
 
 	pub(super) fn should_fetch_on_mount(&self) -> bool {
@@ -315,7 +495,7 @@ impl<T: Clone + 'static, E: Clone + 'static> QueryEntry<T, E> {
 		if self.state.with_untracked(|state| {
 			matches!(state, ResourceState::Success(_) | ResourceState::Error(_))
 		}) {
-			self.last_fetched_ms.set(Some(now_ms()));
+			self.last_fetched_ms.set(Some(self.runtime.now_ms()));
 		}
 	}
 
@@ -367,9 +547,22 @@ impl<T: Clone + 'static, E: Clone + 'static> QueryEntry<T, E> {
 				entry.complete_fetch(generation, result);
 			}),
 		};
-		spawn_query_task(async move {
+		let task = async move {
 			let _ = Abortable::new(scoped, abort_registration).await;
-		});
+		};
+		if let Some(client) = self
+			.owner
+			.as_ref()
+			.and_then(Weak::upgrade)
+			.map(|inner| QueryClient { inner })
+		{
+			self.runtime
+				.spawn(Box::pin(super::context::with_query_client_async(
+					client, task,
+				)));
+		} else {
+			self.runtime.spawn(Box::pin(task));
+		}
 		generation
 	}
 
@@ -394,12 +587,12 @@ impl<T: Clone + 'static, E: Clone + 'static> QueryEntry<T, E> {
 			.replace((generation, result.clone()));
 		match result {
 			Ok(value) => {
-				self.last_fetched_ms.set(Some(now_ms()));
+				self.last_fetched_ms.set(Some(self.runtime.now_ms()));
 				self.state.set(ResourceState::Success(value));
 			}
 			Err(error) => {
 				if self.retain_lease_count.get() > 0 {
-					self.last_fetched_ms.set(Some(now_ms()));
+					self.last_fetched_ms.set(Some(self.runtime.now_ms()));
 				} else {
 					self.last_fetched_ms.set(None);
 				}
@@ -483,11 +676,7 @@ where
 	T: Clone + Serialize + DeserializeOwned + 'static,
 	E: Clone + Serialize + DeserializeOwned + 'static,
 {
-	let defaults = QueryDefaults::default();
-	let stale_time = query_options.resolved_stale_time(&defaults);
-	let gc_time = query_options.resolved_gc_time(&defaults);
-	let (key, fetcher, _ssr_prefetch) = descriptor.into_parts();
-	query_entry_for_key(key, stale_time, gc_time).acquire(fetcher, options, query_options)
+	super::context::queries().acquire_with_options(descriptor, options, query_options)
 }
 
 pub(crate) fn seed_query_from_serialized<T, E>(
@@ -498,44 +687,7 @@ where
 	T: Clone + Serialize + DeserializeOwned + 'static,
 	E: Clone + Serialize + DeserializeOwned + 'static,
 {
-	let hydrated_state = serde_json::from_value(serialized.clone())?;
-	let defaults = QueryDefaults::default();
-	let (key, _fetcher, _ssr_prefetch) = descriptor.into_parts();
-	let id = key.id();
-	#[cfg(any(wasm, test))]
-	super::super::resource::reserve_client_resource_key(&id);
-	let cache_id = scoped_query_cache_id(&id);
-	QUERY_CACHE.with(|cache| {
-		let mut cache = cache.borrow_mut();
-		if let Some(cached) = cache.get(&cache_id) {
-			let _entry = Rc::clone(&cached.typed)
-				.downcast::<QueryEntry<T, E>>()
-				.unwrap_or_else(|_| {
-					panic!("query cache key `{id}` was reused with incompatible types")
-				});
-			return;
-		}
-
-		let entry = Rc::new(QueryEntry::new_with_hydrated_state(
-			key,
-			Some(hydrated_state),
-			defaults.resolved_stale_time(),
-			defaults.resolved_gc_time(),
-		));
-		cache.insert(
-			cache_id,
-			CachedQueryEntry {
-				typed: entry.clone(),
-				refetch: Rc::new({
-					let entry = Rc::clone(&entry);
-					move || {
-						entry.start_fetch(true);
-					}
-				}),
-			},
-		);
-	});
-	Ok(())
+	super::context::queries().seed_from_serialized(descriptor, serialized)
 }
 
 #[cfg(test)]
@@ -544,31 +696,102 @@ where
 	T: Clone + Serialize + DeserializeOwned + 'static,
 	E: Clone + Serialize + DeserializeOwned + 'static,
 {
-	let defaults = QueryDefaults::default();
-	let (key, _fetcher, _ssr_prefetch) = descriptor.into_parts();
-	query_entry_for_key(
-		key,
-		defaults.resolved_stale_time(),
-		defaults.resolved_gc_time(),
-	)
+	super::context::queries().entry_for_descriptor(descriptor)
 }
 
-fn query_entry_for_key<T, E>(
-	key: QueryKey<T, E>,
-	stale_time: Duration,
-	gc_time: Duration,
-) -> Rc<QueryEntry<T, E>>
-where
-	T: Clone + Serialize + DeserializeOwned + 'static,
-	E: Clone + Serialize + DeserializeOwned + 'static,
-{
-	let id = key.id();
-	#[cfg(any(wasm, test))]
-	super::super::resource::reserve_client_resource_key(&id);
-	let cache_id = scoped_query_cache_id(&id);
-	QUERY_CACHE.with(|cache| {
-		let mut cache = cache.borrow_mut();
-		if let Some(cached) = cache.get(&cache_id) {
+pub(super) fn invalidate_query_id(id: &str) {
+	super::context::queries().invalidate(id);
+}
+
+impl QueryClient {
+	pub(super) fn acquire_with_options<T, E>(
+		&self,
+		descriptor: QueryDescriptor<T, E>,
+		options: QueryAcquireOptions,
+		query_options: QueryOptions,
+	) -> QueryLease<T, E>
+	where
+		T: Clone + Serialize + DeserializeOwned + 'static,
+		E: Clone + Serialize + DeserializeOwned + 'static,
+	{
+		let stale_time = query_options.resolved_stale_time(&self.inner.defaults);
+		let gc_time = query_options.resolved_gc_time(&self.inner.defaults);
+		let (key, fetcher, _ssr_prefetch, family_types) = descriptor.into_parts();
+		self.entry_for_key(key, family_types, stale_time, gc_time)
+			.acquire(fetcher, options, query_options)
+	}
+
+	fn seed_from_serialized<T, E>(
+		&self,
+		descriptor: QueryDescriptor<T, E>,
+		serialized: &serde_json::Value,
+	) -> Result<(), serde_json::Error>
+	where
+		T: Clone + Serialize + DeserializeOwned + 'static,
+		E: Clone + Serialize + DeserializeOwned + 'static,
+	{
+		let hydrated_state = serde_json::from_value(serialized.clone())?;
+		let (key, _fetcher, _ssr_prefetch, family_types) = descriptor.into_parts();
+		self.register_family(key.family_id(), family_types);
+		let id = key.id();
+		#[cfg(any(wasm, test))]
+		super::super::resource::reserve_client_resource_key(&id);
+		let identity = key.identity().clone();
+		let mut entries = self.inner.entries.borrow_mut();
+		if let Some(cached) = entries.get(&identity) {
+			let _entry = Rc::clone(&cached.typed)
+				.downcast::<QueryEntry<T, E>>()
+				.unwrap_or_else(|_| {
+					panic!("query cache key `{id}` was reused with incompatible types")
+				});
+			return Ok(());
+		}
+
+		let entry = Rc::new(QueryEntry::new_with_hydrated_state(
+			key,
+			Some(hydrated_state),
+			self.inner.defaults.resolved_stale_time(),
+			self.inner.defaults.resolved_gc_time(),
+			Rc::clone(&self.inner.runtime),
+			Some(Rc::downgrade(&self.inner)),
+		));
+		entries.insert(identity, cached_query_entry(&entry));
+		Ok(())
+	}
+
+	#[cfg(test)]
+	fn entry_for_descriptor<T, E>(&self, descriptor: QueryDescriptor<T, E>) -> Rc<QueryEntry<T, E>>
+	where
+		T: Clone + Serialize + DeserializeOwned + 'static,
+		E: Clone + Serialize + DeserializeOwned + 'static,
+	{
+		let (key, _fetcher, _ssr_prefetch, family_types) = descriptor.into_parts();
+		self.entry_for_key(
+			key,
+			family_types,
+			self.inner.defaults.resolved_stale_time(),
+			self.inner.defaults.resolved_gc_time(),
+		)
+	}
+
+	fn entry_for_key<T, E>(
+		&self,
+		key: QueryKey<T, E>,
+		family_types: QueryFamilyTypes,
+		stale_time: Duration,
+		gc_time: Duration,
+	) -> Rc<QueryEntry<T, E>>
+	where
+		T: Clone + Serialize + DeserializeOwned + 'static,
+		E: Clone + Serialize + DeserializeOwned + 'static,
+	{
+		self.register_family(key.family_id(), family_types);
+		let id = key.id();
+		#[cfg(any(wasm, test))]
+		super::super::resource::reserve_client_resource_key(&id);
+		let identity = key.identity().clone();
+		let mut entries = self.inner.entries.borrow_mut();
+		if let Some(cached) = entries.get(&identity) {
 			let entry = Rc::clone(&cached.typed)
 				.downcast::<QueryEntry<T, E>>()
 				.unwrap_or_else(|_| {
@@ -584,39 +807,45 @@ where
 			hydrated_state,
 			stale_time,
 			gc_time,
+			Rc::clone(&self.inner.runtime),
+			Some(Rc::downgrade(&self.inner)),
 		));
-		cache.insert(
-			cache_id,
-			CachedQueryEntry {
-				typed: entry.clone(),
-				refetch: Rc::new({
-					let entry = Rc::clone(&entry);
-					move || {
-						entry.start_fetch(true);
-					}
-				}),
-			},
-		);
+		entries.insert(identity, cached_query_entry(&entry));
 		entry
-	})
-}
-
-pub(super) fn invalidate_query_id(id: &str) {
-	let cache_id = scoped_query_cache_id(id);
-	QUERY_CACHE.with(|cache| {
-		if let Some(cached) = cache.borrow().get(&cache_id) {
-			(cached.refetch)();
-		}
-	});
-}
-
-pub(super) fn scoped_query_cache_id(id: &str) -> String {
-	#[cfg(all(native, feature = "testing"))]
-	if let Some(scope_id) = crate::testing::component::active_query_scope_id() {
-		return format!("test-screen:{scope_id}:{id}");
 	}
 
-	id.to_string()
+	fn invalidate(&self, id: &str) {
+		if let Some(cached) = self
+			.inner
+			.entries
+			.borrow()
+			.values()
+			.find(|cached| cached.id == id)
+		{
+			(cached.refetch)();
+		}
+	}
+}
+
+fn cached_query_entry<T, E>(entry: &Rc<QueryEntry<T, E>>) -> CachedQueryEntry
+where
+	T: Clone + 'static,
+	E: Clone + 'static,
+{
+	CachedQueryEntry {
+		id: entry.id.clone(),
+		typed: entry.clone(),
+		refetch: Rc::new({
+			let entry = Rc::clone(entry);
+			move || {
+				entry.start_fetch(true);
+			}
+		}),
+		cancel: Rc::new({
+			let entry = Rc::clone(entry);
+			move || entry.cancel_request()
+		}),
+	}
 }
 
 #[cfg(wasm)]
@@ -637,9 +866,4 @@ where
 	E: Clone + Serialize + DeserializeOwned + 'static,
 {
 	None
-}
-
-#[cfg(all(test, not(wasm)))]
-pub(crate) fn clear_query_cache_for_test() {
-	QUERY_CACHE.with(|cache| cache.borrow_mut().clear());
 }

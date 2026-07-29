@@ -24,6 +24,7 @@
 //! use reinhardt_core::exception::Error;
 //! use reinhardt_db::{backends::DatabaseConnection as BackendsConnection, orm::DatabaseConnectionLease};
 //!
+//! # #[cfg(feature = "sqlite")]
 //! # async fn example() -> Result<(), Error> {
 //! let owner = BackendsConnection::connect_sqlite("sqlite::memory:").await?;
 //! let lease = DatabaseConnectionLease::register(owner)?;

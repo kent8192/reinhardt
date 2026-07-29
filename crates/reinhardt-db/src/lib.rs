@@ -98,9 +98,13 @@
 //! expressions; every target vector remains a bound query value.
 //!
 //! ```rust
+//! # #[cfg(feature = "pgvector")]
 //! # mod migrations { pub use reinhardt_db::migrations::*; }
+//! # #[cfg(feature = "pgvector")]
 //! # mod orm { pub use reinhardt_db::orm::*; }
+//! # #[cfg(feature = "pgvector")]
 //! use reinhardt_core::macros::model;
+//! # #[cfg(feature = "pgvector")]
 //! use reinhardt_db::{
 //!     migrations::{
 //!         MigrationAutodetector, Operation, ProjectState, model_registry::global_registry,
@@ -108,8 +112,10 @@
 //!     },
 //!     orm::{Model, QuerySet, Vector},
 //! };
+//! # #[cfg(feature = "pgvector")]
 //! use serde::{Deserialize, Serialize};
 //!
+//! # #[cfg(feature = "pgvector")]
 //! #[model(app_label = "search", table_name = "documents")]
 //! #[derive(Clone, Debug, Serialize, Deserialize)]
 //! struct Document {
@@ -132,6 +138,7 @@
 //!     summary: Vector<3>,
 //! }
 //!
+//! # #[cfg(feature = "pgvector")]
 //! fn main() -> Result<(), Box<dyn std::error::Error>> {
 //!     let metadata = global_registry()
 //!         .get_model("search", "Document")
@@ -190,6 +197,8 @@
 //!     let _ = nearest;
 //!     Ok(())
 //! }
+//! # #[cfg(not(feature = "pgvector"))]
+//! # fn main() {}
 //! ```
 //!
 //! `DatabaseMigrationExecutor` applies these operations in vector order.
@@ -300,6 +309,7 @@
 //!     Framework(#[from] Error),
 //! }
 //!
+//! # #[cfg(feature = "sqlite")]
 //! # async fn example() -> Result<(), ApplicationError> {
 //! let owner = BackendsConnection::connect_sqlite("sqlite::memory:").await?;
 //! let lease = DatabaseConnectionLease::register(owner)?;

@@ -1,3 +1,4 @@
+// The model macro emits feature cfgs not declared by this standalone integration-test crate.
 #![allow(unexpected_cfgs)]
 
 use reinhardt_core::macros::model;

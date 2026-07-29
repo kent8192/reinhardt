@@ -105,6 +105,14 @@ pub trait Model: Serialize + for<'de> Deserialize<'de> + Send + Sync + Clone {
 		Self::primary_key_field()
 	}
 
+	/// Get the physical database columns used as the default latest ordering.
+	///
+	/// Manual model implementations have no default latest ordering. The model
+	/// macro overrides this method for `#[model(get_latest_by = (...))]`.
+	fn latest_by_fields() -> &'static [&'static str] {
+		&[]
+	}
+
 	/// Get the primary key value
 	///
 	/// Returns an owned copy of the primary key. For composite primary keys,

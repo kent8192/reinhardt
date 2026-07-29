@@ -1,0 +1,8 @@
+error[E0308]: mismatched types
+  --> tests/orm/ui/fail/queryset_latest_cross_model_field.rs:27:3
+   |
+27 |         Project::field_id().ordering(),
+   |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ expected `OrderingField<Event>`, found `OrderingField<Project>`
+   |
+   = note: expected struct `reinhardt_db::orm::OrderingField<Event>`
+              found struct `reinhardt_db::orm::OrderingField<Project>`

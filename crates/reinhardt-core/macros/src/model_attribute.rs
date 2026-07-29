@@ -266,7 +266,8 @@ pub(crate) fn model_attribute_impl(
 		}
 	};
 
-	// Create a #[model_config(...)] helper attribute with the arguments
+	// Create a #[model_config(...)] helper attribute with the original arguments.
+	// `get_latest_by` is resolved against the generated model fields by the derive macro.
 	// Using model_config instead of model to avoid name collision with the attribute macro
 	let config_attr: Attribute = if args.is_empty() && serde_flags.is_empty() {
 		syn::parse_quote! { #[model_config] }

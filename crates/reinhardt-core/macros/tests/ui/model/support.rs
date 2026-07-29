@@ -413,6 +413,9 @@ pub mod db {
 			fn primary_key_column() -> &'static str {
 				Self::primary_key_field()
 			}
+			fn latest_by_fields() -> &'static [&'static str] {
+				&[]
+			}
 			fn primary_key(&self) -> Option<Self::PrimaryKey>;
 			fn set_primary_key(&mut self, value: Self::PrimaryKey);
 			fn field_is_none(&self, field_name: &str) -> bool;
@@ -518,6 +521,15 @@ pub mod db {
 
 			impl<Model, Type> UniqueFieldRef<Model, Type> {
 				pub const unsafe fn from_model_field(_name: &'static str) -> Self {
+					Self {
+						_marker: core::marker::PhantomData,
+					}
+				}
+
+				pub const unsafe fn from_model_field_with_getter(
+					_name: &'static str,
+					_getter: fn(&Model) -> Option<Type>,
+				) -> Self {
 					Self {
 						_marker: core::marker::PhantomData,
 					}

@@ -120,6 +120,28 @@ pub struct FieldRef<M, T> {
 	_phantom: PhantomData<(M, T)>,
 }
 
+/// Type-safe proof that a physical database column belongs to model `M`.
+///
+/// `OrderingField<M>` intentionally has no public constructor. Obtain one from
+/// [`FieldRef::ordering`] so the model identity remains coupled to the column.
+#[derive(Debug, Clone, Copy)]
+pub struct OrderingField<M> {
+	// The QuerySet retrieval layer reads this crate-internal column accessor.
+	#[allow(dead_code)]
+	name: &'static str,
+	_phantom: PhantomData<M>,
+}
+
+impl<M> OrderingField<M> {
+	/// Get the physical database column name.
+	#[doc(hidden)]
+	// The QuerySet retrieval layer reads ordering columns internally.
+	#[allow(dead_code)]
+	pub(crate) const fn name(&self) -> &'static str {
+		self.name
+	}
+}
+
 /// Type-safe proof that a model field can identify at most one row.
 ///
 /// `UniqueFieldRef<M, T>` is generated for single-column primary keys,
@@ -128,6 +150,9 @@ pub struct FieldRef<M, T> {
 #[derive(Debug, Clone, Copy)]
 pub struct UniqueFieldRef<M, T> {
 	field: FieldRef<M, T>,
+	// The QuerySet retrieval layer calls the generated getter internally.
+	#[allow(dead_code)]
+	getter: Option<fn(&M) -> Option<T>>,
 }
 
 impl<M, T: DatabaseField> UniqueFieldRef<M, T> {
@@ -141,12 +166,39 @@ impl<M, T: DatabaseField> UniqueFieldRef<M, T> {
 	pub const unsafe fn from_model_field(name: &'static str) -> Self {
 		Self {
 			field: FieldRef::new(name),
+			getter: None,
+		}
+	}
+
+	/// Construct a reference for a uniquely identified model field with a getter.
+	///
+	/// # Safety
+	///
+	/// The caller must ensure that `name` identifies a field of `M` whose
+	/// lookup value is `T` and which has a single-column uniqueness guarantee.
+	/// `getter` must return the value stored in that same field.
+	#[doc(hidden)]
+	pub const unsafe fn from_model_field_with_getter(
+		name: &'static str,
+		getter: fn(&M) -> Option<T>,
+	) -> Self {
+		Self {
+			field: FieldRef::new(name),
+			getter: Some(getter),
 		}
 	}
 
 	/// Get the unique field name.
 	pub const fn name(&self) -> &'static str {
 		self.field.name()
+	}
+
+	/// Get the macro-generated model-value accessor, when available.
+	#[doc(hidden)]
+	// The QuerySet retrieval layer calls this accessor internally.
+	#[allow(dead_code)]
+	pub(crate) const fn getter(&self) -> Option<fn(&M) -> Option<T>> {
+		self.getter
 	}
 
 	/// Create an equality filter using the unique field's lookup type.
@@ -193,6 +245,14 @@ impl<M, T> FieldRef<M, T> {
 	/// ```
 	pub const fn name(&self) -> &'static str {
 		self.name
+	}
+
+	/// Convert this field reference into a type-safe ordering field.
+	pub const fn ordering(&self) -> OrderingField<M> {
+		OrderingField {
+			name: self.name,
+			_phantom: PhantomData,
+		}
 	}
 
 	/// Create a partial-update assignment for this field.

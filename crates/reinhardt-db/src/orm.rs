@@ -175,7 +175,9 @@ pub use connection::{
 pub use constraints::{
 	CheckConstraint, Constraint, ForeignKeyConstraint, OnDelete, OnUpdate, UniqueConstraint,
 };
-pub use expressions::{Exists, F, FieldRef, OuterRef, Q, QOperator, Subquery, UniqueFieldRef};
+pub use expressions::{
+	Exists, F, FieldRef, OrderingField, OuterRef, Q, QOperator, Subquery, UniqueFieldRef,
+};
 pub use functions::{
 	Abs, Cast, Ceil, Concat, CurrentDate, CurrentTime, Extract, ExtractComponent, Floor, Greatest,
 	Least, Length, Lower, Mod, Now, NullIf, Power, Round, SqlType, Sqrt, Substr, Trim, TrimType,

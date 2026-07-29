@@ -94,13 +94,13 @@ impl fmt::Display for F {
 /// // The #[model] attribute macro automatically generates:
 /// // impl User {
 /// //     pub const fn field_id() -> FieldRef<User, i64> {
-/// //         FieldRef::new("id")
+/// //         unsafe { FieldRef::from_model_field("id", "id") }
 /// //     }
 /// //     pub const fn field_name() -> FieldRef<User, String> {
-/// //         FieldRef::new("name")
+/// //         unsafe { FieldRef::from_model_field("name", "name") }
 /// //     }
 /// //     pub const fn field_email() -> FieldRef<User, String> {
-/// //         FieldRef::new("email")
+/// //         unsafe { FieldRef::from_model_field("email", "email") }
 /// //     }
 /// // }
 ///
@@ -116,7 +116,8 @@ impl fmt::Display for F {
 /// ```
 #[derive(Debug, Clone, Copy)]
 pub struct FieldRef<M, T> {
-	name: &'static str,
+	logical_name: &'static str,
+	column_name: &'static str,
 	_phantom: PhantomData<(M, T)>,
 }
 
@@ -135,12 +136,16 @@ impl<M, T: DatabaseField> UniqueFieldRef<M, T> {
 	///
 	/// # Safety
 	///
-	/// The caller must ensure that `name` identifies a field of `M` whose
+	/// The caller must ensure that `logical_name` and `column_name` identify a field of `M` whose
 	/// lookup value is `T` and which has a single-column uniqueness guarantee.
 	#[doc(hidden)]
-	pub const unsafe fn from_model_field(name: &'static str) -> Self {
+	pub const unsafe fn from_model_field(
+		logical_name: &'static str,
+		column_name: &'static str,
+	) -> Self {
 		Self {
-			field: FieldRef::new(name),
+			// SAFETY: the caller upholds the model-field identity and type invariants.
+			field: unsafe { FieldRef::from_model_field(logical_name, column_name) },
 		}
 	}
 
@@ -159,28 +164,27 @@ impl<M, T: DatabaseField> UniqueFieldRef<M, T> {
 }
 
 impl<M, T> FieldRef<M, T> {
-	/// Create a new field reference with compile-time type safety
+	/// Construct a field reference from model-derived metadata.
 	///
-	/// This constructor is typically used by the `#[derive(Model)]` macro
-	/// to generate field accessor methods.
+	/// # Safety
 	///
-	/// # Arguments
-	///
-	/// - `name`: Field name as a static string
-	///
-	/// # Examples
-	///
-	/// ```no_run
-	/// # struct User;
-	/// use reinhardt_db::orm::expressions::FieldRef;
-	///
-	/// const USER_ID: FieldRef<User, i64> = FieldRef::new("id");
-	/// ```
-	pub const fn new(name: &'static str) -> Self {
+	/// The caller must ensure that `logical_name` and `column_name` are derived from the same
+	/// declared field of `M` and that `T` is that field's Rust type.
+	#[doc(hidden)]
+	pub const unsafe fn from_model_field(
+		logical_name: &'static str,
+		column_name: &'static str,
+	) -> Self {
 		Self {
-			name,
+			logical_name,
+			column_name,
 			_phantom: PhantomData,
 		}
+	}
+
+	/// Get the logical Rust field name.
+	pub const fn logical_name(&self) -> &'static str {
+		self.logical_name
 	}
 
 	/// Get the field name
@@ -192,7 +196,7 @@ impl<M, T> FieldRef<M, T> {
 	/// assert_eq!(id_ref.name(), "id");
 	/// ```
 	pub const fn name(&self) -> &'static str {
-		self.name
+		self.column_name
 	}
 
 	/// Create a partial-update assignment for this field.
@@ -210,7 +214,10 @@ impl<M, T> FieldRef<M, T> {
 		T: DatabaseField,
 		V: IntoFieldValue<T>,
 	{
-		FieldAssignment::new(self.name, UpdateValue::Typed(value.into_field_value()))
+		FieldAssignment::new(
+			self.column_name,
+			UpdateValue::Typed(value.into_field_value()),
+		)
 	}
 
 	/// Convert to SQL representation
@@ -222,7 +229,7 @@ impl<M, T> FieldRef<M, T> {
 	/// assert_eq!(id_ref.to_sql(), "\"id\"");
 	/// ```
 	pub fn to_sql(&self) -> String {
-		quote_identifier(self.name)
+		quote_identifier(self.column_name)
 	}
 
 	/// Create an equality filter for this field
@@ -239,7 +246,7 @@ impl<M, T> FieldRef<M, T> {
 		V: IntoFieldValue<T>,
 	{
 		Filter::new(
-			self.name.to_string(),
+			self.column_name.to_string(),
 			FilterOperator::Eq,
 			FilterValue::Typed(value.into_field_value()),
 		)
@@ -261,7 +268,7 @@ impl<M, T> FieldRef<M, T> {
 		V: IntoFieldValue<T>,
 	{
 		Filter::new(
-			self.name.to_string(),
+			self.column_name.to_string(),
 			FilterOperator::IExact,
 			FilterValue::Typed(value.into_field_value()),
 		)
@@ -281,7 +288,7 @@ impl<M, T> FieldRef<M, T> {
 		V: IntoFieldValue<T>,
 	{
 		Filter::new(
-			self.name.to_string(),
+			self.column_name.to_string(),
 			FilterOperator::Ne,
 			FilterValue::Typed(value.into_field_value()),
 		)
@@ -301,7 +308,7 @@ impl<M, T> FieldRef<M, T> {
 		V: IntoFieldValue<T>,
 	{
 		Filter::new(
-			self.name.to_string(),
+			self.column_name.to_string(),
 			FilterOperator::Gt,
 			FilterValue::Typed(value.into_field_value()),
 		)
@@ -321,7 +328,7 @@ impl<M, T> FieldRef<M, T> {
 		V: IntoFieldValue<T>,
 	{
 		Filter::new(
-			self.name.to_string(),
+			self.column_name.to_string(),
 			FilterOperator::Gte,
 			FilterValue::Typed(value.into_field_value()),
 		)
@@ -341,7 +348,7 @@ impl<M, T> FieldRef<M, T> {
 		V: IntoFieldValue<T>,
 	{
 		Filter::new(
-			self.name.to_string(),
+			self.column_name.to_string(),
 			FilterOperator::Lt,
 			FilterValue::Typed(value.into_field_value()),
 		)
@@ -361,7 +368,7 @@ impl<M, T> FieldRef<M, T> {
 		V: IntoFieldValue<T>,
 	{
 		Filter::new(
-			self.name.to_string(),
+			self.column_name.to_string(),
 			FilterOperator::Lte,
 			FilterValue::Typed(value.into_field_value()),
 		)
@@ -375,7 +382,7 @@ impl<M, T> FieldRef<M, T> {
 		V: IntoFieldValue<T>,
 	{
 		Filter::new(
-			self.name.to_string(),
+			self.column_name.to_string(),
 			FilterOperator::In,
 			FilterValue::List(
 				values
@@ -394,7 +401,7 @@ impl<M, T> FieldRef<M, T> {
 		V: IntoFieldValue<T>,
 	{
 		Filter::new(
-			self.name.to_string(),
+			self.column_name.to_string(),
 			FilterOperator::NotIn,
 			FilterValue::List(
 				values
@@ -412,7 +419,7 @@ impl<M, T> FieldRef<M, T> {
 		V: IntoFieldValue<T>,
 	{
 		Filter::new(
-			self.name.to_string(),
+			self.column_name.to_string(),
 			FilterOperator::Contains,
 			FilterValue::Typed(value.into_field_value()),
 		)
@@ -425,7 +432,7 @@ impl<M, T> FieldRef<M, T> {
 		V: IntoFieldValue<T>,
 	{
 		Filter::new(
-			self.name.to_string(),
+			self.column_name.to_string(),
 			FilterOperator::IContains,
 			FilterValue::Typed(value.into_field_value()),
 		)
@@ -438,7 +445,7 @@ impl<M, T> FieldRef<M, T> {
 		V: IntoFieldValue<T>,
 	{
 		Filter::new(
-			self.name.to_string(),
+			self.column_name.to_string(),
 			FilterOperator::StartsWith,
 			FilterValue::Typed(value.into_field_value()),
 		)
@@ -451,7 +458,7 @@ impl<M, T> FieldRef<M, T> {
 		V: IntoFieldValue<T>,
 	{
 		Filter::new(
-			self.name.to_string(),
+			self.column_name.to_string(),
 			FilterOperator::IStartsWith,
 			FilterValue::Typed(value.into_field_value()),
 		)
@@ -464,7 +471,7 @@ impl<M, T> FieldRef<M, T> {
 		V: IntoFieldValue<T>,
 	{
 		Filter::new(
-			self.name.to_string(),
+			self.column_name.to_string(),
 			FilterOperator::EndsWith,
 			FilterValue::Typed(value.into_field_value()),
 		)
@@ -477,7 +484,7 @@ impl<M, T> FieldRef<M, T> {
 		V: IntoFieldValue<T>,
 	{
 		Filter::new(
-			self.name.to_string(),
+			self.column_name.to_string(),
 			FilterOperator::IEndsWith,
 			FilterValue::Typed(value.into_field_value()),
 		)
@@ -486,7 +493,7 @@ impl<M, T> FieldRef<M, T> {
 	/// Create an IS NULL filter.
 	pub fn is_null(&self) -> Filter {
 		Filter::new(
-			self.name.to_string(),
+			self.column_name.to_string(),
 			FilterOperator::IsNull,
 			FilterValue::Null,
 		)
@@ -495,7 +502,7 @@ impl<M, T> FieldRef<M, T> {
 	/// Create an IS NOT NULL filter.
 	pub fn is_not_null(&self) -> Filter {
 		Filter::new(
-			self.name.to_string(),
+			self.column_name.to_string(),
 			FilterOperator::IsNotNull,
 			FilterValue::Null,
 		)
@@ -508,7 +515,7 @@ impl<M, T> FieldRef<M, T> {
 		V: IntoFieldValue<T>,
 	{
 		Filter::new(
-			self.name.to_string(),
+			self.column_name.to_string(),
 			FilterOperator::Regex,
 			FilterValue::Typed(pattern.into_field_value()),
 		)
@@ -521,7 +528,7 @@ impl<M, T> FieldRef<M, T> {
 		V: IntoFieldValue<T>,
 	{
 		Filter::new(
-			self.name.to_string(),
+			self.column_name.to_string(),
 			FilterOperator::IRegex,
 			FilterValue::Typed(pattern.into_field_value()),
 		)
@@ -534,7 +541,7 @@ impl<M, T> FieldRef<M, T> {
 		V: IntoFieldValue<T>,
 	{
 		Filter::new(
-			self.name.to_string(),
+			self.column_name.to_string(),
 			FilterOperator::Range,
 			FilterValue::Range(
 				Box::new(FilterValue::Typed(start.into_field_value())),
@@ -550,7 +557,7 @@ impl<M, T> FieldRef<M, T> {
 		V: ToString,
 	{
 		Filter::new(
-			self.name.to_string(),
+			self.column_name.to_string(),
 			FilterOperator::ArrayContains,
 			FilterValue::Array(values.into_iter().map(|v| v.to_string()).collect()),
 		)
@@ -563,7 +570,7 @@ impl<M, T> FieldRef<M, T> {
 		V: ToString,
 	{
 		Filter::new(
-			self.name.to_string(),
+			self.column_name.to_string(),
 			FilterOperator::ArrayContainedBy,
 			FilterValue::Array(values.into_iter().map(|v| v.to_string()).collect()),
 		)
@@ -576,7 +583,7 @@ impl<M, T> FieldRef<M, T> {
 		V: ToString,
 	{
 		Filter::new(
-			self.name.to_string(),
+			self.column_name.to_string(),
 			FilterOperator::ArrayOverlap,
 			FilterValue::Array(values.into_iter().map(|v| v.to_string()).collect()),
 		)
@@ -585,7 +592,7 @@ impl<M, T> FieldRef<M, T> {
 	/// Create a PostgreSQL JSONB containment filter (`@>`).
 	pub fn jsonb_contains(&self, json: &str) -> Filter {
 		Filter::new(
-			self.name.to_string(),
+			self.column_name.to_string(),
 			FilterOperator::JsonbContains,
 			FilterValue::String(json.to_string()),
 		)
@@ -594,7 +601,7 @@ impl<M, T> FieldRef<M, T> {
 	/// Create a PostgreSQL JSONB contained-by filter (`<@`).
 	pub fn jsonb_contained_by(&self, json: &str) -> Filter {
 		Filter::new(
-			self.name.to_string(),
+			self.column_name.to_string(),
 			FilterOperator::JsonbContainedBy,
 			FilterValue::String(json.to_string()),
 		)
@@ -603,7 +610,7 @@ impl<M, T> FieldRef<M, T> {
 	/// Create a PostgreSQL JSONB key-exists filter (`?`).
 	pub fn jsonb_has_key(&self, key: &str) -> Filter {
 		Filter::new(
-			self.name.to_string(),
+			self.column_name.to_string(),
 			FilterOperator::JsonbKeyExists,
 			FilterValue::String(key.to_string()),
 		)
@@ -616,7 +623,7 @@ impl<M, T> FieldRef<M, T> {
 		V: ToString,
 	{
 		Filter::new(
-			self.name.to_string(),
+			self.column_name.to_string(),
 			FilterOperator::JsonbAnyKeyExists,
 			FilterValue::Array(keys.into_iter().map(|v| v.to_string()).collect()),
 		)
@@ -629,7 +636,7 @@ impl<M, T> FieldRef<M, T> {
 		V: ToString,
 	{
 		Filter::new(
-			self.name.to_string(),
+			self.column_name.to_string(),
 			FilterOperator::JsonbAllKeysExist,
 			FilterValue::Array(keys.into_iter().map(|v| v.to_string()).collect()),
 		)
@@ -638,7 +645,7 @@ impl<M, T> FieldRef<M, T> {
 	/// Create a PostgreSQL JSONPath existence filter (`@?`).
 	pub fn jsonb_path_exists(&self, path: &str) -> Filter {
 		Filter::new(
-			self.name.to_string(),
+			self.column_name.to_string(),
 			FilterOperator::JsonbPathExists,
 			FilterValue::String(path.to_string()),
 		)
@@ -651,7 +658,7 @@ impl<M, T> FieldRef<M, T> {
 		V: IntoFieldValue<T>,
 	{
 		Filter::new(
-			self.name.to_string(),
+			self.column_name.to_string(),
 			FilterOperator::RangeContains,
 			FilterValue::Typed(value.into_field_value()),
 		)
@@ -660,7 +667,7 @@ impl<M, T> FieldRef<M, T> {
 	/// Create a PostgreSQL range field contained-by filter (`<@`).
 	pub fn range_contained_by(&self, range: &str) -> Filter {
 		Filter::new(
-			self.name.to_string(),
+			self.column_name.to_string(),
 			FilterOperator::RangeContainedBy,
 			FilterValue::String(range.to_string()),
 		)
@@ -669,7 +676,7 @@ impl<M, T> FieldRef<M, T> {
 	/// Create a PostgreSQL range field overlap filter (`&&`).
 	pub fn range_overlaps(&self, range: &str) -> Filter {
 		Filter::new(
-			self.name.to_string(),
+			self.column_name.to_string(),
 			FilterOperator::RangeOverlaps,
 			FilterValue::String(range.to_string()),
 		)
@@ -745,7 +752,7 @@ impl<M, T> FieldRef<M, T> {
 	}
 
 	fn transform(&self, template: &str) -> TransformedFieldRef<M> {
-		let sql = template.replace("{field}", &quote_identifier(self.name));
+		let sql = template.replace("{field}", &quote_identifier(self.column_name));
 		TransformedFieldRef::new(sql)
 	}
 
@@ -759,9 +766,9 @@ impl<M, T> FieldRef<M, T> {
 	/// ```
 	pub fn eq_field<T2>(&self, other: FieldRef<M, T2>) -> Filter {
 		Filter::new(
-			self.name.to_string(),
+			self.column_name.to_string(),
 			FilterOperator::Eq,
-			FilterValue::FieldRef(F::new(other.name)),
+			FilterValue::FieldRef(F::new(other.column_name)),
 		)
 	}
 
@@ -775,9 +782,9 @@ impl<M, T> FieldRef<M, T> {
 	/// ```
 	pub fn ne_field<T2>(&self, other: FieldRef<M, T2>) -> Filter {
 		Filter::new(
-			self.name.to_string(),
+			self.column_name.to_string(),
 			FilterOperator::Ne,
-			FilterValue::FieldRef(F::new(other.name)),
+			FilterValue::FieldRef(F::new(other.column_name)),
 		)
 	}
 
@@ -791,9 +798,9 @@ impl<M, T> FieldRef<M, T> {
 	/// ```
 	pub fn gt_field<T2>(&self, other: FieldRef<M, T2>) -> Filter {
 		Filter::new(
-			self.name.to_string(),
+			self.column_name.to_string(),
 			FilterOperator::Gt,
-			FilterValue::FieldRef(F::new(other.name)),
+			FilterValue::FieldRef(F::new(other.column_name)),
 		)
 	}
 
@@ -807,9 +814,9 @@ impl<M, T> FieldRef<M, T> {
 	/// ```
 	pub fn gte_field<T2>(&self, other: FieldRef<M, T2>) -> Filter {
 		Filter::new(
-			self.name.to_string(),
+			self.column_name.to_string(),
 			FilterOperator::Gte,
-			FilterValue::FieldRef(F::new(other.name)),
+			FilterValue::FieldRef(F::new(other.column_name)),
 		)
 	}
 
@@ -823,9 +830,9 @@ impl<M, T> FieldRef<M, T> {
 	/// ```
 	pub fn lt_field<T2>(&self, other: FieldRef<M, T2>) -> Filter {
 		Filter::new(
-			self.name.to_string(),
+			self.column_name.to_string(),
 			FilterOperator::Lt,
-			FilterValue::FieldRef(F::new(other.name)),
+			FilterValue::FieldRef(F::new(other.column_name)),
 		)
 	}
 
@@ -839,9 +846,9 @@ impl<M, T> FieldRef<M, T> {
 	/// ```
 	pub fn lte_field<T2>(&self, other: FieldRef<M, T2>) -> Filter {
 		Filter::new(
-			self.name.to_string(),
+			self.column_name.to_string(),
 			FilterOperator::Lte,
-			FilterValue::FieldRef(F::new(other.name)),
+			FilterValue::FieldRef(F::new(other.column_name)),
 		)
 	}
 }
@@ -935,7 +942,7 @@ impl<M> TransformedFieldRef<M> {
 
 impl<M, T> fmt::Display for FieldRef<M, T> {
 	fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-		write!(f, "{}", self.name)
+		write!(f, "{}", self.column_name)
 	}
 }
 
@@ -945,14 +952,14 @@ impl<M, T> fmt::Display for FieldRef<M, T> {
 // no longer rely on this conversion.
 impl<M, T> From<FieldRef<M, T>> for String {
 	fn from(field_ref: FieldRef<M, T>) -> Self {
-		field_ref.name.to_string()
+		field_ref.column_name.to_string()
 	}
 }
 
 // Allow conversion from FieldRef to F for backward compatibility
 impl<M, T> From<FieldRef<M, T>> for F {
 	fn from(field_ref: FieldRef<M, T>) -> Self {
-		F::new(field_ref.name)
+		F::new(field_ref.column_name)
 	}
 }
 
@@ -1506,15 +1513,18 @@ mod tests {
 	// Simulating what #[derive(Model)] macro would generate
 	impl TestUser {
 		const fn field_id() -> FieldRef<TestUser, i64> {
-			FieldRef::new("id")
+			// SAFETY: this test model declares the Rust field name and column name together.
+			unsafe { FieldRef::from_model_field("id", "id") }
 		}
 
 		const fn field_name() -> FieldRef<TestUser, String> {
-			FieldRef::new("name")
+			// SAFETY: this test model declares the Rust field name and column name together.
+			unsafe { FieldRef::from_model_field("name", "name") }
 		}
 
 		const fn field_created_at() -> FieldRef<TestUser, i64> {
-			FieldRef::new("created_at")
+			// SAFETY: this test model declares the Rust field name and column name together.
+			unsafe { FieldRef::from_model_field("created_at", "created_at") }
 		}
 	}
 
@@ -1524,6 +1534,15 @@ mod tests {
 		assert_eq!(id_ref.name(), "id");
 		assert_eq!(id_ref.to_sql(), "\"id\"");
 		assert_eq!(format!("{}", id_ref), "id");
+	}
+
+	#[test]
+	fn field_ref_keeps_logical_and_physical_names() {
+		let field = unsafe { FieldRef::<TestUser, i64>::from_model_field("id", "user_id") };
+
+		assert_eq!(field.logical_name(), "id");
+		assert_eq!(field.name(), "user_id");
+		assert_eq!(field.to_sql(), "\"user_id\"");
 	}
 
 	#[test]
@@ -1757,7 +1776,8 @@ mod tests {
 	#[test]
 	fn test_field_ref_const_to_f_conversion() {
 		// Verify const FieldRef can be converted to F
-		const ID_FIELD: FieldRef<TestUser, i64> = FieldRef::new("id");
+		// SAFETY: this test model declares the Rust field name and column name together.
+		const ID_FIELD: FieldRef<TestUser, i64> = unsafe { FieldRef::from_model_field("id", "id") };
 		let f: F = ID_FIELD.into();
 
 		assert_eq!(f.to_sql(), "\"id\"");

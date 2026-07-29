@@ -3020,8 +3020,12 @@ fn generate_model_form_support(
 ///
 /// // The #[model] attribute macro automatically generates:
 /// impl User {
-///     pub const fn field_id() -> FieldRef<User, i64> { FieldRef::new("id") }
-///     pub const fn field_name() -> FieldRef<User, String> { FieldRef::new("name") }
+///     pub const fn field_id() -> FieldRef<User, i64> {
+///         unsafe { FieldRef::from_model_field("id", "id") }
+///     }
+///     pub const fn field_name() -> FieldRef<User, String> {
+///         unsafe { FieldRef::from_model_field("name", "name") }
+///     }
 /// }
 /// ```
 fn generate_field_accessors(
@@ -3062,6 +3066,7 @@ fn generate_field_accessors(
 		.filter(|field| !field.config.skip)
 		.map(|field| {
 			let field_name = &field.name;
+			let logical_name = field_name.to_string();
 			let field_type = &field.ty;
 			let method_name = syn::Ident::new(&format!("field_{}", field_name), field_name.span());
 			let column_name = field
@@ -3076,7 +3081,9 @@ fn generate_field_accessors(
 				/// Returns a `FieldRef<#struct_name, #field_type>` that provides compile-time
 				/// type safety for field operations.
 				pub const fn #method_name() -> #orm_crate::expressions::FieldRef<#struct_name, #field_type> {
-					#orm_crate::expressions::FieldRef::new(#column_name)
+					// SAFETY: the model macro derives both names and the Rust field type
+					// from the same declared model field.
+					unsafe { #orm_crate::expressions::FieldRef::from_model_field(#logical_name, #column_name) }
 				}
 			}
 		})
@@ -3090,6 +3097,7 @@ fn generate_field_accessors(
 		.iter()
 		.map(|field| {
 			let field_name = &field.name;
+			let logical_name = field_name.to_string();
 			let (_, lookup_type) = extract_option_type(&field.ty);
 			let field_name_str = field
 				.config
@@ -3101,8 +3109,9 @@ fn generate_field_accessors(
 			quote! {
 				/// Unique-field accessor for type-safe single-row lookups.
 				pub const fn #method_name() -> #orm_crate::expressions::UniqueFieldRef<#struct_name, #lookup_type> {
-					// SAFETY: This accessor is generated only for fields proven unique by model metadata.
-					unsafe { #orm_crate::expressions::UniqueFieldRef::from_model_field(#field_name_str) }
+					// SAFETY: the model macro derives both names and the Rust field type from a
+					// single field whose uniqueness is proven by model metadata.
+					unsafe { #orm_crate::expressions::UniqueFieldRef::from_model_field(#logical_name, #field_name_str) }
 				}
 			}
 		})
@@ -3166,15 +3175,22 @@ fn generate_relation_traversal_accessors(
 		.filter(|field| !is_many_to_many_field_type(&field.ty))
 		.map(|field| {
 			let field_name = &field.name;
-			let field_name_str = field_name.to_string();
+			let logical_name = field_name.to_string();
+			let column_name = field
+				.config
+				.db_column
+				.clone()
+				.unwrap_or_else(|| logical_name.clone());
 			let field_type = &field.ty;
 			let method_name = syn::Ident::new(&format!("field_{}", field_name), field_name.span());
-			let doc_comment = format!("Reference the `{field_name_str}` field through this relation path.");
+			let doc_comment = format!("Reference the `{logical_name}` field through this relation path.");
 
 			quote! {
 				#[doc = #doc_comment]
 				pub fn #method_name(self) -> #orm_crate::relations::RelatedFieldRef<Root, #struct_name, #field_type> {
-					self.field(#orm_crate::expressions::FieldRef::new(#field_name_str))
+					// SAFETY: the model macro derives both names and the Rust field type
+					// from the same declared model field.
+					self.field(unsafe { #orm_crate::expressions::FieldRef::from_model_field(#logical_name, #column_name) })
 				}
 			}
 		})
@@ -8952,7 +8968,7 @@ mod tests {
 	}
 
 	#[test]
-	fn test_relation_traversal_field_accessors_use_rust_field_names() {
+	fn test_relation_traversal_field_accessors_preserve_logical_and_physical_names() {
 		let input = quote! {
 			#[model(app_label = "test", table_name = "projects")]
 			pub struct Project {
@@ -8973,8 +8989,8 @@ mod tests {
 			.and_then(|output| output.split("pub fn field_email").next())
 			.expect("generated relation traversal slug accessor");
 
-		assert!(slug_accessor.contains("FieldRef :: new (\"slug\")"));
-		assert!(!slug_accessor.contains("FieldRef :: new (\"email\")"));
+		assert!(slug_accessor.contains("FieldRef :: from_model_field (\"slug\" , \"email\")"));
+		assert!(!slug_accessor.contains("FieldRef :: from_model_field (\"slug\" , \"slug\")"));
 	}
 
 	#[test]
@@ -8996,7 +9012,10 @@ mod tests {
 			.nth(1)
 			.expect("generated unique email accessor");
 
-		assert!(unique_accessor.contains("UniqueFieldRef :: from_model_field (\"email_addr\")"));
+		assert!(
+			unique_accessor
+				.contains("UniqueFieldRef :: from_model_field (\"email\" , \"email_addr\")")
+		);
 	}
 
 	#[test]

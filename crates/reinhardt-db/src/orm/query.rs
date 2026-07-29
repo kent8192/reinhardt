@@ -8437,40 +8437,58 @@ mod tests {
 		}
 
 		const fn field_id() -> crate::orm::expressions::FieldRef<TestUser, i64> {
-			crate::orm::expressions::FieldRef::new("id")
+			// SAFETY: this test model declares the Rust field name and column name together.
+			unsafe { crate::orm::expressions::FieldRef::from_model_field("id", "id") }
 		}
 
 		const fn field_username() -> crate::orm::expressions::FieldRef<TestUser, String> {
-			crate::orm::expressions::FieldRef::new("username")
+			// SAFETY: this test model declares the Rust field name and column name together.
+			unsafe { crate::orm::expressions::FieldRef::from_model_field("username", "username") }
 		}
 
 		const fn field_email() -> crate::orm::expressions::FieldRef<TestUser, String> {
-			crate::orm::expressions::FieldRef::new("email")
+			// SAFETY: this test model declares the Rust field name and column name together.
+			unsafe { crate::orm::expressions::FieldRef::from_model_field("email", "email") }
 		}
 
 		const fn field_full_name() -> crate::orm::expressions::FieldRef<TestUser, String> {
-			crate::orm::expressions::FieldRef::new("full_name")
+			// SAFETY: this test model declares the Rust field name and column name together.
+			unsafe { crate::orm::expressions::FieldRef::from_model_field("full_name", "full_name") }
 		}
 
 		const fn field_display_name() -> crate::orm::expressions::FieldRef<TestUser, String> {
-			crate::orm::expressions::FieldRef::new("display_name")
+			// SAFETY: this test model declares the Rust field name and column name together.
+			unsafe {
+				crate::orm::expressions::FieldRef::from_model_field("display_name", "display_name")
+			}
 		}
 
 		const fn field_created_at()
 		-> crate::orm::expressions::FieldRef<TestUser, chrono::DateTime<chrono::Utc>> {
-			crate::orm::expressions::FieldRef::new("created_at")
+			// SAFETY: this test model declares the Rust field name and column name together.
+			unsafe {
+				crate::orm::expressions::FieldRef::from_model_field("created_at", "created_at")
+			}
 		}
 
 		const fn field_tags() -> crate::orm::expressions::FieldRef<TestUser, Vec<String>> {
-			crate::orm::expressions::FieldRef::new("tags")
+			// SAFETY: this test model declares the Rust field name and column name together.
+			unsafe { crate::orm::expressions::FieldRef::from_model_field("tags", "tags") }
 		}
 
 		const fn field_metadata() -> crate::orm::expressions::FieldRef<TestUser, String> {
-			crate::orm::expressions::FieldRef::new("metadata")
+			// SAFETY: this test model declares the Rust field name and column name together.
+			unsafe { crate::orm::expressions::FieldRef::from_model_field("metadata", "metadata") }
 		}
 
 		const fn field_active_period() -> crate::orm::expressions::FieldRef<TestUser, String> {
-			crate::orm::expressions::FieldRef::new("active_period")
+			// SAFETY: this test model declares the Rust field name and column name together.
+			unsafe {
+				crate::orm::expressions::FieldRef::from_model_field(
+					"active_period",
+					"active_period",
+				)
+			}
 		}
 	}
 
@@ -8607,11 +8625,18 @@ mod tests {
 	impl TestCorpusFile {
 		const fn field_normalized_path() -> crate::orm::expressions::FieldRef<TestCorpusFile, String>
 		{
-			crate::orm::expressions::FieldRef::new("normalized_path")
+			// SAFETY: this test model declares the Rust field name and column name together.
+			unsafe {
+				crate::orm::expressions::FieldRef::from_model_field(
+					"normalized_path",
+					"normalized_path",
+				)
+			}
 		}
 
 		const fn field_email() -> crate::orm::expressions::FieldRef<TestCorpusFile, String> {
-			crate::orm::expressions::FieldRef::new("email")
+			// SAFETY: this test model declares the Rust field name and column name together.
+			unsafe { crate::orm::expressions::FieldRef::from_model_field("email", "email") }
 		}
 	}
 
@@ -8832,7 +8857,10 @@ mod tests {
 			TestUserCorpusFile,
 		>()
 		.then::<TestCorpusFileProject, TestProject>()
-		.field(crate::orm::expressions::FieldRef::<TestProject, String>::new("name"))
+		// SAFETY: this test declares the Rust field name and column name together.
+		.field(unsafe {
+			crate::orm::expressions::FieldRef::<TestProject, String>::from_model_field("name", "name")
+		})
 		.eq("reinhardt")
 	}
 
@@ -9641,7 +9669,12 @@ mod tests {
 				TestUserCorpusFile,
 			>()
 			.then::<TestCorpusFileProject, TestProject>()
-			.field(crate::orm::expressions::FieldRef::<TestProject, String>::new("name"))
+			// SAFETY: this test declares the Rust field name and column name together.
+			.field(unsafe {
+				crate::orm::expressions::FieldRef::<TestProject, String>::from_model_field(
+					"name", "name",
+				)
+			})
 			.eq("reinhardt");
 
 		let sql = QuerySet::<TestUser>::new()
@@ -9744,14 +9777,16 @@ mod tests {
 
 	#[test]
 	fn test_aliasless_manual_joins_rebase_typed_filter_aliases() {
-		let make_filter =
-			|| {
-				crate::orm::relations::RelationPath::<TestProjects, TestProjects>::from_descriptor::<
+		let make_filter = || {
+			crate::orm::relations::RelationPath::<TestProjects, TestProjects>::from_descriptor::<
 				TestProjectsChildren,
 			>()
-			.field(crate::orm::expressions::FieldRef::<TestProjects, i64>::new("id"))
+			// SAFETY: this test declares the Rust field name and column name together.
+			.field(unsafe {
+				crate::orm::expressions::FieldRef::<TestProjects, i64>::from_model_field("id", "id")
+			})
 			.eq(1)
-			};
+		};
 
 		let sql = QuerySet::<TestProjects>::new()
 			.filter(make_filter())
@@ -10539,7 +10574,12 @@ mod tests {
 			crate::orm::relations::RelationPath::<TestUser, TestProject>::from_descriptor::<
 				TestUserProjects,
 			>()
-			.field(crate::orm::expressions::FieldRef::<TestProject, String>::new("name"))
+			// SAFETY: this test declares the Rust field name and column name together.
+			.field(unsafe {
+				crate::orm::expressions::FieldRef::<TestProject, String>::from_model_field(
+					"name", "name",
+				)
+			})
 			.icontains("rust");
 
 		let sql = QuerySet::<TestUser>::new()
@@ -10559,7 +10599,12 @@ mod tests {
 			crate::orm::relations::RelationPath::<TestMembership, TestProject>::from_descriptor::<
 				TestMembershipProjects,
 			>()
-			.field(crate::orm::expressions::FieldRef::<TestProject, String>::new("name"))
+			// SAFETY: this test declares the Rust field name and column name together.
+			.field(unsafe {
+				crate::orm::expressions::FieldRef::<TestProject, String>::from_model_field(
+					"name", "name",
+				)
+			})
 			.icontains("rust");
 
 		let sql = QuerySet::<TestMembership>::new()

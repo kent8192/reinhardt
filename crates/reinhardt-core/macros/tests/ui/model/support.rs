@@ -490,20 +490,29 @@ pub mod db {
 		pub mod expressions {
 			#[derive(Debug, Clone)]
 			pub struct FieldRef<Model, Type> {
-				pub name: &'static str,
+				logical_name: &'static str,
+				column_name: &'static str,
 				_marker: core::marker::PhantomData<(Model, Type)>,
 			}
 
 			impl<Model, Type> FieldRef<Model, Type> {
-				pub const fn new(name: &'static str) -> Self {
+				pub const unsafe fn from_model_field(
+					logical_name: &'static str,
+					column_name: &'static str,
+				) -> Self {
 					Self {
-						name,
+						logical_name,
+						column_name,
 						_marker: core::marker::PhantomData,
 					}
 				}
 
+				pub const fn logical_name(&self) -> &'static str {
+					self.logical_name
+				}
+
 				pub const fn name(&self) -> &'static str {
-					self.name
+					self.column_name
 				}
 
 				pub fn eq(self, _value: impl Into<Type>) -> bool {
@@ -517,7 +526,10 @@ pub mod db {
 			}
 
 			impl<Model, Type> UniqueFieldRef<Model, Type> {
-				pub const unsafe fn from_model_field(_name: &'static str) -> Self {
+				pub const unsafe fn from_model_field(
+					_logical_name: &'static str,
+					_column_name: &'static str,
+				) -> Self {
 					Self {
 						_marker: core::marker::PhantomData,
 					}

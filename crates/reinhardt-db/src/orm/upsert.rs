@@ -189,7 +189,11 @@ impl<C: CustomManager> UpdateOrCreateBuilder<C> {
 			.await
 	}
 
-	/// Executes without finishing a caller-owned atomic transaction.
+	/// Executes without finishing a caller-owned write-intent transaction.
+	///
+	/// Obtain the transaction from [`crate::orm::connection::DatabaseConnection::atomic_write`].
+	/// An ordinary [`crate::orm::connection::DatabaseConnection::atomic`] transaction
+	/// is rejected before any SQL is issued.
 	pub async fn execute_with(
 		self,
 		transaction: &mut AtomicTransaction,

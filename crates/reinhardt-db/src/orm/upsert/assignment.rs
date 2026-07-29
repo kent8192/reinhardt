@@ -3,7 +3,9 @@ use crate::orm::field_codec::{
 	DatabaseField, DatabaseScalar, DatabaseValue, FieldCodecContext, FieldCodecError,
 	IntoFieldValue,
 };
+use crate::orm::model::Model;
 use reinhardt_core::exception::{DatabaseErrorKind, Error, Result};
+use std::collections::HashSet;
 use std::marker::PhantomData;
 
 #[derive(Debug, Clone, PartialEq)]
@@ -81,7 +83,7 @@ pub struct UpsertCreate<'a, M> {
 	pub(crate) values: &'a mut Vec<TypedAssignment<M>>,
 }
 
-impl<M> UpsertCreate<'_, M> {
+impl<M: Model> UpsertCreate<'_, M> {
 	/// Reads a typed value from the pending create values or immutable lookup.
 	pub fn get<T>(&self, field: FieldRef<M, T>) -> Result<Option<T>>
 	where
@@ -127,6 +129,7 @@ impl<M> UpsertCreate<'_, M> {
 		}
 
 		let assignment = TypedAssignment::new(field, value)?;
+		validate_writable_create_assignments::<M>(std::slice::from_ref(&assignment))?;
 		if let Some(existing) = self
 			.values
 			.iter_mut()
@@ -138,6 +141,54 @@ impl<M> UpsertCreate<'_, M> {
 		}
 		Ok(())
 	}
+}
+
+pub(crate) fn validate_writable_create_assignments<M: Model>(
+	assignments: &[TypedAssignment<M>],
+) -> Result<()> {
+	let metadata = M::field_metadata();
+	let generated = M::generated_field_names();
+	let mut seen = HashSet::new();
+	for assignment in assignments {
+		if !seen.insert(assignment.logical_name) {
+			return Err(Error::Validation(format!(
+				"duplicate upsert create hook assignment for field '{}'",
+				assignment.logical_name
+			)));
+		}
+		let field = metadata
+			.iter()
+			.find(|field| field.name == assignment.logical_name)
+			.ok_or_else(|| {
+				Error::Validation(format!(
+					"unknown upsert create hook field '{}'",
+					assignment.logical_name
+				))
+			})?;
+		if field.db_column_name() != assignment.column_name {
+			return Err(Error::Validation(format!(
+				"upsert create hook field '{}' expected database column '{}', got '{}'",
+				assignment.logical_name,
+				field.db_column_name(),
+				assignment.column_name
+			)));
+		}
+		if generated.iter().any(|generated| {
+			*generated == assignment.logical_name || *generated == assignment.column_name
+		}) {
+			return Err(Error::Validation(format!(
+				"upsert create hook field '{}' is database-generated and not writable",
+				assignment.logical_name
+			)));
+		}
+		if !field.editable {
+			return Err(Error::Validation(format!(
+				"upsert create hook field '{}' is not writable",
+				assignment.logical_name
+			)));
+		}
+	}
+	Ok(())
 }
 
 /// Hook view for the create or update branch of an upsert operation.

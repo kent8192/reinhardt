@@ -641,13 +641,15 @@ impl Default for Transaction {
 
 /// A closure-scoped transaction that owns one dedicated backend executor.
 ///
-/// Instances are created only by [`super::connection::DatabaseConnection::atomic`]
-/// and are finalized by its lifecycle runner. Nested calls create savepoints on
-/// the same executor instead of acquiring another database connection.
+/// Instances are created by [`super::connection::DatabaseConnection::atomic`] or
+/// [`super::connection::DatabaseConnection::atomic_write`] and are finalized by
+/// their lifecycle runner. Nested calls create savepoints on the same executor
+/// instead of acquiring another database connection.
 pub struct AtomicTransaction {
 	executor: Option<Box<dyn TransactionExecutor>>,
 	backend: DatabaseBackend,
 	is_cockroachdb: bool,
+	write_intent: bool,
 	savepoint_sequence: u64,
 	outcome: AtomicTransactionOutcome,
 	savepoint_outcomes: Vec<AtomicTransactionOutcome>,
@@ -662,11 +664,23 @@ impl AtomicTransaction {
 			executor: Some(executor),
 			backend,
 			is_cockroachdb,
+			write_intent: false,
 			savepoint_sequence: 0,
 			outcome: AtomicTransactionOutcome::pending(),
 			savepoint_outcomes: Vec::new(),
 			poisoned: Arc::new(AtomicBool::new(false)),
 		}
+	}
+
+	pub(crate) fn new_write(executor: Box<dyn TransactionExecutor>) -> Self {
+		let mut transaction = Self::new(executor);
+		transaction.write_intent = true;
+		transaction
+	}
+
+	/// Returns whether this transaction acquired write intent before its first query.
+	pub fn has_write_intent(&self) -> bool {
+		self.write_intent
 	}
 
 	/// Returns the outcome for the currently active atomic scope.

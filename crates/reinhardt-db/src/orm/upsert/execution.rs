@@ -4,8 +4,9 @@ use crate::orm::field_codec::{DatabaseValue, FieldCodecError};
 use crate::orm::manager::decode_model_row;
 use crate::orm::model::Model;
 use crate::orm::transaction::AtomicTransaction;
-use crate::orm::upsert::assignment::TypedAssignment;
-use crate::orm::upsert::assignment::{UpsertCreate, UpsertWrite};
+use crate::orm::upsert::assignment::{
+	TypedAssignment, UpsertCreate, UpsertWrite, validate_writable_create_assignments,
+};
 use crate::orm::upsert::plan::UpsertPlan;
 use crate::orm::upsert::sql;
 use reinhardt_core::exception::{DatabaseErrorKind, Error, Result};
@@ -23,15 +24,15 @@ where
 	let backend = executor.backend();
 	let select = sql::select_by_lookup(&plan, backend, false)?;
 	let rows = executor.fetch_all(&select.sql, select.params).await?;
-	match decode_lookup_rows(rows)? {
-		Some(model) => return Ok((model, false)),
-		None => {}
+	if let Some(model) = decode_lookup_rows(rows)? {
+		return Ok((model, false));
 	}
 
 	manager.before_upsert_write(&mut UpsertWrite::Create(UpsertCreate {
 		lookup: &plan.lookup,
 		values: &mut plan.create,
 	}))?;
+	validate_writable_create_assignments::<C::Model>(&plan.create)?;
 
 	let insert = sql::insert(&plan, backend)?;
 	match executor.execute(&insert.sql, insert.params).await {
@@ -100,6 +101,13 @@ pub(crate) async fn execute_update_or_create<C>(
 where
 	C: CustomManager,
 {
+	if !transaction.has_write_intent() {
+		return Err(crate::backends::DatabaseError::new(
+			DatabaseErrorKind::Transaction,
+			"update_or_create requires a write-intent atomic transaction",
+		)
+		.into());
+	}
 	if let Some(locked) = load_locked(&plan, transaction).await? {
 		return update_locked(manager, &plan, locked, transaction).await;
 	}
@@ -108,6 +116,7 @@ where
 		lookup: &plan.lookup,
 		values: &mut plan.create,
 	}))?;
+	validate_writable_create_assignments::<C::Model>(&plan.create)?;
 	let backend = transaction.backend();
 	let insert = sql::insert(&plan, backend)?;
 	match transaction.execute(&insert.sql, insert.params).await {
@@ -199,7 +208,7 @@ where
 	if values.is_empty() {
 		return Ok((candidate, false));
 	}
-	let update = sql::update_values_by_primary_key(&candidate, &values, transaction.backend())?;
+	let update = sql::update_values_by_primary_key(&locked, &values, transaction.backend())?;
 	let result = transaction.execute(&update.sql, update.params).await?;
 	if result.rows_affected != 1 {
 		return Err(Error::Conflict(format!(
@@ -262,13 +271,16 @@ fn field_codec_error(error: FieldCodecError) -> Error {
 
 #[cfg(test)]
 mod tests {
-	use super::execute_update_or_create;
+	use super::{build_update_candidate, execute_get_or_create, execute_update_or_create};
 	use crate::backends::error::{DatabaseError, DatabaseErrorKind};
 	use crate::backends::types::{DatabaseType, QueryResult, QueryValue, Row, TransactionExecutor};
-	use crate::orm::connection::DatabaseBackend;
+	use crate::orm::composite_pk::CompositePrimaryKey;
+	use crate::orm::connection::{BackendsConnection, DatabaseConnectionLease};
 	use crate::orm::custom_manager::CustomManager;
 	use crate::orm::expressions::FieldRef;
+	use crate::orm::field_codec::{DatabaseStorageKind, DatabaseValue, FieldCodecError};
 	use crate::orm::inspection::FieldInfo;
+	use crate::orm::json::Json;
 	use crate::orm::manager::Manager;
 	use crate::orm::model::{FieldSelector, Model};
 	use crate::orm::transaction::AtomicTransaction;
@@ -278,8 +290,10 @@ mod tests {
 	use async_trait::async_trait;
 	use reinhardt_core::exception::Error;
 	use serde::{Deserialize, Serialize};
-	use std::collections::{HashMap, VecDeque};
+	use std::collections::{BTreeMap, HashMap, VecDeque};
 	use std::sync::{Arc, Mutex};
+	use std::time::Duration;
+	use tokio::sync::Notify;
 
 	#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 	struct Article {
@@ -288,6 +302,7 @@ mod tests {
 		rank: i32,
 		headline: String,
 		computed: i32,
+		readonly: String,
 	}
 
 	#[derive(Clone)]
@@ -327,6 +342,7 @@ mod tests {
 				field("rank", false, false),
 				field("headline", false, false),
 				field("computed", false, false),
+				noneditable_field("readonly"),
 			]
 		}
 
@@ -336,6 +352,11 @@ mod tests {
 	}
 
 	impl Article {
+		fn id_field() -> FieldRef<Self, Option<i64>> {
+			// SAFETY: the logical and physical names match Article's nullable primary key.
+			unsafe { FieldRef::from_model_field("id", "id") }
+		}
+
 		fn slug_field() -> FieldRef<Self, String> {
 			// SAFETY: the logical and physical names match Article's string field.
 			unsafe { FieldRef::from_model_field("slug", "slug") }
@@ -349,6 +370,150 @@ mod tests {
 		fn headline_field() -> FieldRef<Self, String> {
 			// SAFETY: the logical and physical names match Article's string field.
 			unsafe { FieldRef::from_model_field("headline", "headline") }
+		}
+
+		fn computed_field() -> FieldRef<Self, i32> {
+			// SAFETY: the logical and physical names match Article's generated i32 field.
+			unsafe { FieldRef::from_model_field("computed", "computed") }
+		}
+
+		fn readonly_field() -> FieldRef<Self, String> {
+			// SAFETY: the logical and physical names match Article's noneditable string field.
+			unsafe { FieldRef::from_model_field("readonly", "readonly") }
+		}
+	}
+
+	#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+	struct JsonArticle {
+		id: Option<i64>,
+		rank: i32,
+		json_null: Option<Json<serde_json::Value>>,
+		sql_null: Option<Json<serde_json::Value>>,
+	}
+
+	impl Model for JsonArticle {
+		type PrimaryKey = i64;
+		type Fields = ArticleFields;
+		type Objects = Manager<Self>;
+
+		fn table_name() -> &'static str {
+			"json_articles"
+		}
+
+		fn new_fields() -> Self::Fields {
+			ArticleFields
+		}
+
+		fn primary_key(&self) -> Option<Self::PrimaryKey> {
+			self.id
+		}
+
+		fn set_primary_key(&mut self, value: Self::PrimaryKey) {
+			self.id = Some(value);
+		}
+
+		fn field_is_none(&self, field_name: &str) -> bool {
+			match field_name {
+				"id" => self.id.is_none(),
+				"json_null" => self.json_null.is_none(),
+				"sql_null" => self.sql_null.is_none(),
+				_ => false,
+			}
+		}
+
+		fn encode_database_fields(
+			&self,
+		) -> std::result::Result<BTreeMap<String, DatabaseValue>, FieldCodecError> {
+			Ok(BTreeMap::from([
+				(
+					"id".to_owned(),
+					self.id.map_or(DatabaseValue::Null, DatabaseValue::I64),
+				),
+				("rank".to_owned(), DatabaseValue::I32(self.rank)),
+				(
+					"json_null".to_owned(),
+					self.json_null
+						.as_ref()
+						.map_or(DatabaseValue::Null, |value| {
+							DatabaseValue::Json(value.as_inner().clone())
+						}),
+				),
+				(
+					"sql_null".to_owned(),
+					self.sql_null.as_ref().map_or(DatabaseValue::Null, |value| {
+						DatabaseValue::Json(value.as_inner().clone())
+					}),
+				),
+			]))
+		}
+
+		fn field_metadata() -> Vec<FieldInfo> {
+			vec![
+				field("id", true, false),
+				field("rank", false, false),
+				json_field("json_null"),
+				json_field("sql_null"),
+			]
+		}
+	}
+
+	impl JsonArticle {
+		fn rank_field() -> FieldRef<Self, i32> {
+			// SAFETY: the logical and physical names match JsonArticle's i32 field.
+			unsafe { FieldRef::from_model_field("rank", "rank") }
+		}
+	}
+
+	#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+	struct CompositeArticle {
+		tenant_id: i64,
+		article_id: i64,
+		slug: String,
+		rank: i32,
+	}
+
+	impl Model for CompositeArticle {
+		type PrimaryKey = String;
+		type Fields = ArticleFields;
+		type Objects = Manager<Self>;
+
+		fn table_name() -> &'static str {
+			"composite_articles"
+		}
+
+		fn new_fields() -> Self::Fields {
+			ArticleFields
+		}
+
+		fn primary_key(&self) -> Option<Self::PrimaryKey> {
+			None
+		}
+
+		fn set_primary_key(&mut self, _value: Self::PrimaryKey) {}
+
+		fn composite_primary_key() -> Option<CompositePrimaryKey> {
+			CompositePrimaryKey::new(vec!["tenant_id".to_owned(), "article_id".to_owned()]).ok()
+		}
+
+		fn field_metadata() -> Vec<FieldInfo> {
+			vec![
+				field_with_column("tenant_id", "tenant_key", true, false),
+				field_with_column("article_id", "article_key", true, false),
+				field("slug", false, true),
+				field("rank", false, false),
+			]
+		}
+	}
+
+	impl CompositeArticle {
+		fn slug_field() -> FieldRef<Self, String> {
+			// SAFETY: the logical and physical names match CompositeArticle's string field.
+			unsafe { FieldRef::from_model_field("slug", "slug") }
+		}
+
+		fn rank_field() -> FieldRef<Self, i32> {
+			// SAFETY: the logical and physical names match CompositeArticle's i32 field.
+			unsafe { FieldRef::from_model_field("rank", "rank") }
 		}
 	}
 
@@ -371,6 +536,26 @@ mod tests {
 		}
 	}
 
+	fn noneditable_field(name: &str) -> FieldInfo {
+		let mut field = field(name, false, false);
+		field.editable = false;
+		field
+	}
+
+	fn field_with_column(name: &str, column: &str, primary_key: bool, unique: bool) -> FieldInfo {
+		let mut field = field(name, primary_key, unique);
+		field.db_column = Some(column.to_owned());
+		field
+	}
+
+	fn json_field(name: &str) -> FieldInfo {
+		let mut field = field(name, false, false);
+		field.field_type = "JsonField".to_owned();
+		field.nullable = true;
+		field.storage_kind = Some(DatabaseStorageKind::Json);
+		field
+	}
+
 	fn article_row(id: i64, slug: &str, rank: i32, headline: &str, computed: i32) -> Row {
 		Row {
 			data: HashMap::from([
@@ -382,6 +567,21 @@ mod tests {
 					QueryValue::String(headline.to_owned()),
 				),
 				("computed".to_owned(), QueryValue::Int(i64::from(computed))),
+				(
+					"readonly".to_owned(),
+					QueryValue::String("fixed".to_owned()),
+				),
+			]),
+		}
+	}
+
+	fn composite_article_row(tenant_id: i64, article_id: i64, slug: &str, rank: i32) -> Row {
+		Row {
+			data: HashMap::from([
+				("tenant_key".to_owned(), QueryValue::Int(tenant_id)),
+				("article_key".to_owned(), QueryValue::Int(article_id)),
+				("slug".to_owned(), QueryValue::String(slug.to_owned())),
+				("rank".to_owned(), QueryValue::Int(i64::from(rank))),
 			]),
 		}
 	}
@@ -416,6 +616,15 @@ mod tests {
 				execute_results: execute_results.into(),
 				fetch_results: fetch_results.into(),
 			}));
+			let transaction = AtomicTransaction::new_write(Box::new(Self {
+				state: Arc::clone(&state),
+				backend,
+			}));
+			(transaction, state)
+		}
+
+		fn ordinary_transaction(backend: DatabaseType) -> (AtomicTransaction, Arc<Mutex<State>>) {
+			let state = Arc::new(Mutex::new(State::default()));
 			let transaction = AtomicTransaction::new(Box::new(Self {
 				state: Arc::clone(&state),
 				backend,
@@ -539,6 +748,289 @@ mod tests {
 			.expect("normalize update-or-create plan")
 	}
 
+	fn get_plan() -> super::UpsertPlan<Article> {
+		normalize(
+			vec![TypedAssignment::new(Article::slug_field(), "rust").expect("encode lookup")],
+			vec![TypedAssignment::new(Article::rank_field(), 1).expect("encode create default")],
+			Vec::new(),
+			UpsertMode::GetOrCreate,
+		)
+		.expect("normalize get-or-create plan")
+	}
+
+	fn composite_plan() -> super::UpsertPlan<CompositeArticle> {
+		normalize(
+			vec![
+				TypedAssignment::new(CompositeArticle::slug_field(), "rust")
+					.expect("encode composite lookup"),
+			],
+			Vec::new(),
+			vec![
+				TypedAssignment::new(CompositeArticle::rank_field(), 2)
+					.expect("encode composite update"),
+			],
+			UpsertMode::UpdateOrCreate,
+		)
+		.expect("normalize composite update-or-create plan")
+	}
+
+	struct CompositePkHookManager;
+
+	impl CustomManager for CompositePkHookManager {
+		type Model = CompositeArticle;
+
+		fn new() -> Self {
+			Self
+		}
+
+		fn before_upsert_write(
+			&self,
+			write: &mut UpsertWrite<'_, CompositeArticle>,
+		) -> reinhardt_core::exception::Result<()> {
+			if let UpsertWrite::Update(article) = write {
+				article.tenant_id = 8;
+				article.article_id = 10;
+			}
+			Ok(())
+		}
+	}
+
+	#[derive(Clone, Copy)]
+	enum InvalidCreateField {
+		Generated,
+		Noneditable,
+	}
+
+	struct InvalidCreateHookManager {
+		field: InvalidCreateField,
+	}
+
+	impl CustomManager for InvalidCreateHookManager {
+		type Model = Article;
+
+		fn new() -> Self {
+			Self {
+				field: InvalidCreateField::Generated,
+			}
+		}
+
+		fn before_upsert_write(
+			&self,
+			write: &mut UpsertWrite<'_, Article>,
+		) -> reinhardt_core::exception::Result<()> {
+			if let UpsertWrite::Create(create) = write {
+				match self.field {
+					InvalidCreateField::Generated => {
+						create.set(Article::computed_field(), 99)?;
+					}
+					InvalidCreateField::Noneditable => {
+						create.set(Article::readonly_field(), "changed")?;
+					}
+				}
+			}
+			Ok(())
+		}
+	}
+
+	#[tokio::test]
+	async fn get_or_create_rejects_invalid_create_hook_fields_before_write() {
+		for (field, diagnostic) in [
+			(InvalidCreateField::Generated, "database-generated"),
+			(InvalidCreateField::Noneditable, "not writable"),
+		] {
+			let (mut transaction, state) =
+				Recorder::transaction(DatabaseType::Postgres, Vec::new(), vec![Ok(Vec::new())]);
+			let manager = InvalidCreateHookManager { field };
+
+			let error = execute_get_or_create(&manager, get_plan(), &mut transaction)
+				.await
+				.expect_err("invalid create hook assignment must fail");
+
+			assert!(error.to_string().contains(diagnostic));
+			assert_eq!(
+				state
+					.lock()
+					.unwrap()
+					.calls
+					.iter()
+					.map(|call| call.operation)
+					.collect::<Vec<_>>(),
+				["fetch_all"]
+			);
+		}
+	}
+
+	#[tokio::test]
+	async fn update_or_create_rejects_invalid_create_hook_fields_before_write() {
+		for (field, diagnostic) in [
+			(InvalidCreateField::Generated, "database-generated"),
+			(InvalidCreateField::Noneditable, "not writable"),
+		] {
+			let (mut transaction, state) =
+				Recorder::transaction(DatabaseType::Postgres, Vec::new(), vec![Ok(Vec::new())]);
+			let manager = InvalidCreateHookManager { field };
+
+			let error = execute_update_or_create(&manager, plan(2, None), &mut transaction)
+				.await
+				.expect_err("invalid update-or-create hook assignment must fail");
+
+			assert!(error.to_string().contains(diagnostic));
+			assert_eq!(
+				state
+					.lock()
+					.unwrap()
+					.calls
+					.iter()
+					.map(|call| call.operation)
+					.collect::<Vec<_>>(),
+				["fetch_all"]
+			);
+		}
+	}
+
+	#[tokio::test]
+	async fn update_or_create_rejects_non_write_intent_transaction_before_sql() {
+		let (mut transaction, state) = Recorder::ordinary_transaction(DatabaseType::Sqlite);
+
+		let error = Manager::<Article>::new()
+			.update_or_create()
+			.lookup(Article::slug_field(), "rust")
+			.set(Article::rank_field(), 2)
+			.execute_with(&mut transaction)
+			.await
+			.expect_err("ordinary atomic transactions must not run update_or_create");
+
+		assert_eq!(
+			error.to_string(),
+			"Database error: update_or_create requires a write-intent atomic transaction"
+		);
+		assert_eq!(state.lock().unwrap().calls, Vec::<Call>::new());
+	}
+
+	#[tokio::test]
+	async fn update_or_create_sqlite_execute_with_serializes_real_writers() {
+		let directory = tempfile::tempdir().expect("create SQLite transaction test directory");
+		let database_path = directory.path().join("update-or-create.sqlite3");
+		let owner = BackendsConnection::connect_sqlite(
+			database_path
+				.to_str()
+				.expect("temporary database path must be valid UTF-8"),
+		)
+		.await
+		.expect("connect SQLite update-or-create database");
+		let lease = DatabaseConnectionLease::register(owner).expect("register SQLite connection");
+		let connection = lease.handle();
+		connection
+			.execute(
+				"CREATE TABLE articles (id INTEGER PRIMARY KEY, slug TEXT NOT NULL UNIQUE, \
+				 rank INTEGER NOT NULL, headline TEXT NOT NULL, computed INTEGER NOT NULL, \
+				 readonly TEXT NOT NULL)",
+				Vec::new(),
+			)
+			.await
+			.expect("create update-or-create table");
+		connection
+			.execute(
+				"INSERT INTO articles \
+				 (id, slug, rank, headline, computed, readonly) VALUES (1, 'rust', 1, 'old', 10, 'fixed')",
+				Vec::new(),
+			)
+			.await
+			.expect("insert update-or-create fixture");
+
+		let ordinary_error = connection
+			.atomic(async |transaction| {
+				Manager::<Article>::new()
+					.update_or_create()
+					.lookup(Article::slug_field(), "rust")
+					.set(Article::rank_field(), 2)
+					.execute_with(transaction)
+					.await
+			})
+			.await
+			.expect_err("ordinary atomic must reject update_or_create");
+		assert!(ordinary_error.to_string().contains("write-intent"));
+
+		let first_ready = Arc::new(Notify::new());
+		let release_first = Arc::new(Notify::new());
+		let second_entered = Arc::new(Notify::new());
+		let first_connection = connection;
+		let first_ready_task = Arc::clone(&first_ready);
+		let release_first_task = Arc::clone(&release_first);
+		let first = tokio::spawn(async move {
+			first_connection
+				.atomic_write(async |transaction| {
+					Manager::<Article>::new()
+						.update_or_create()
+						.lookup(Article::slug_field(), "rust")
+						.set(Article::rank_field(), 2)
+						.execute_with(transaction)
+						.await?;
+					first_ready_task.notify_one();
+					release_first_task.notified().await;
+					Ok::<_, Error>(())
+				})
+				.await
+		});
+		first_ready.notified().await;
+
+		let second_connection = connection;
+		let second_entered_task = Arc::clone(&second_entered);
+		let second = tokio::spawn(async move {
+			second_connection
+				.atomic_write(async |transaction| {
+					second_entered_task.notify_one();
+					Manager::<Article>::new()
+						.update_or_create()
+						.lookup(Article::slug_field(), "rust")
+						.set(Article::rank_field(), 3)
+						.execute_with(transaction)
+						.await
+				})
+				.await
+		});
+		assert!(
+			tokio::time::timeout(Duration::from_millis(100), second_entered.notified())
+				.await
+				.is_err(),
+			"second execute_with callback must wait for SQLite write intent"
+		);
+
+		release_first.notify_one();
+		first
+			.await
+			.expect("first writer task must not panic")
+			.expect("first writer must commit");
+		let (_, created) = tokio::time::timeout(Duration::from_secs(2), second)
+			.await
+			.expect("second writer must enter after first commit")
+			.expect("second writer task must not panic")
+			.expect("second writer must commit");
+		assert!(!created);
+	}
+
+	#[test]
+	fn update_candidate_preserves_native_json_null_and_sql_null() {
+		let locked = JsonArticle {
+			id: Some(1),
+			rank: 1,
+			json_null: Some(Json::new(serde_json::Value::Null)),
+			sql_null: None,
+		};
+		let set =
+			vec![TypedAssignment::new(JsonArticle::rank_field(), 2).expect("encode rank update")];
+
+		let (candidate, _) =
+			build_update_candidate(&locked, &set).expect("build JSON update candidate");
+
+		assert_eq!(candidate.rank, 2);
+		assert_eq!(
+			candidate.json_null,
+			Some(Json::new(serde_json::Value::Null))
+		);
+		assert_eq!(candidate.sql_null, None);
+	}
+
 	#[tokio::test]
 	async fn update_or_create_existing_row_locks_and_updates_by_primary_key() {
 		let (mut transaction, state) = Recorder::transaction(
@@ -562,7 +1054,7 @@ mod tests {
 			vec![
 				Call {
 					operation: "fetch_all",
-					sql: "SELECT \"id\", \"slug\", \"rank\", \"headline\", \"computed\" FROM \
+					sql: "SELECT \"id\", \"slug\", \"rank\", \"headline\", \"computed\", \"readonly\" FROM \
 						\"articles\" WHERE \"slug\" = $1 LIMIT 2 FOR UPDATE"
 						.to_owned(),
 					params: vec![QueryValue::String("rust".to_owned())],
@@ -573,6 +1065,75 @@ mod tests {
 					params: vec![QueryValue::Int(2), QueryValue::Int(7)],
 				},
 			]
+		);
+	}
+
+	#[tokio::test]
+	async fn update_or_create_primary_key_set_targets_the_locked_primary_key() {
+		let (mut transaction, state) = Recorder::transaction(
+			DatabaseType::Postgres,
+			vec![Ok(QueryResult {
+				rows_affected: 1,
+				last_insert_id: None,
+			})],
+			vec![Ok(vec![article_row(7, "rust", 1, "old", 10)])],
+		);
+		let mut mutation_plan = plan(2, None);
+		mutation_plan.update.push(
+			TypedAssignment::new(Article::id_field(), Some(8)).expect("encode primary-key update"),
+		);
+
+		let (article, created) =
+			execute_update_or_create(&Manager::<Article>::new(), mutation_plan, &mut transaction)
+				.await
+				.expect("mutate primary key using locked row predicate");
+
+		assert_eq!(article.id, Some(8));
+		assert!(!created);
+		assert_eq!(
+			state.lock().unwrap().calls[1],
+			Call {
+				operation: "execute",
+				sql: "UPDATE \"articles\" SET \"id\" = $1, \"rank\" = $2 WHERE \"id\" = $3"
+					.to_owned(),
+				params: vec![QueryValue::Int(8), QueryValue::Int(2), QueryValue::Int(7)],
+			}
+		);
+	}
+
+	#[tokio::test]
+	async fn update_or_create_hook_composite_pk_mutation_targets_locked_components() {
+		let (mut transaction, state) = Recorder::transaction(
+			DatabaseType::Postgres,
+			vec![Ok(QueryResult {
+				rows_affected: 1,
+				last_insert_id: None,
+			})],
+			vec![Ok(vec![composite_article_row(7, 9, "rust", 1)])],
+		);
+
+		let (article, created) =
+			execute_update_or_create(&CompositePkHookManager, composite_plan(), &mut transaction)
+				.await
+				.expect("mutate composite primary key using locked predicate");
+
+		assert_eq!((article.tenant_id, article.article_id), (8, 10));
+		assert!(!created);
+		assert_eq!(
+			state.lock().unwrap().calls[1],
+			Call {
+				operation: "execute",
+				sql: "UPDATE \"composite_articles\" SET \"article_key\" = $1, \"rank\" = $2, \
+					\"tenant_key\" = $3 WHERE \"tenant_key\" = $4 AND \"article_key\" = $5"
+					.to_owned(),
+				params: vec![
+					QueryValue::Int(10),
+					QueryValue::Int(2),
+					QueryValue::Int(8),
+					QueryValue::Int(7),
+					QueryValue::Int(9),
+				],
+			}
 		);
 	}
 
@@ -815,16 +1376,27 @@ mod tests {
 		);
 	}
 
-	#[test]
-	fn update_or_create_backend_lock_contract_is_explicit() {
+	#[tokio::test]
+	async fn update_or_create_mysql_lookup_compiles_for_update() {
+		let (mut transaction, state) = Recorder::transaction(
+			DatabaseType::Mysql,
+			Vec::new(),
+			vec![Ok(vec![article_row(14, "rust", 2, "same", 17)])],
+		);
+
+		execute_update_or_create(&Manager::<Article>::new(), plan(2, None), &mut transaction)
+			.await
+			.expect("load unchanged MySQL row");
+
 		assert_eq!(
-			[
-				DatabaseBackend::Postgres,
-				DatabaseBackend::MySql,
-				DatabaseBackend::Sqlite,
-			]
-			.map(|backend| matches!(backend, DatabaseBackend::Postgres | DatabaseBackend::MySql)),
-			[true, true, false]
+			state.lock().unwrap().calls[0],
+			Call {
+				operation: "fetch_all",
+				sql: "SELECT `id`, `slug`, `rank`, `headline`, `computed`, `readonly` FROM \
+					`articles` WHERE `slug` = ? LIMIT 2 FOR UPDATE"
+					.to_owned(),
+				params: vec![QueryValue::String("rust".to_owned())],
+			}
 		);
 	}
 }

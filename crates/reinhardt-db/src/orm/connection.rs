@@ -394,7 +394,7 @@ impl DatabaseConnection {
 	async fn begin_atomic_write(&self) -> Result<AtomicTransaction> {
 		let owner = self.resolve()?;
 		let executor = owner.begin_write().await?;
-		Ok(AtomicTransaction::new(executor))
+		Ok(AtomicTransaction::new_write(executor))
 	}
 
 	async fn begin_atomic_with_isolation(
@@ -424,7 +424,7 @@ impl DatabaseConnection {
 	}
 
 	/// Runs a closure in a transaction that acquires write intent before reading.
-	pub(crate) async fn atomic_write<F, T, E>(&self, f: F) -> std::result::Result<T, E>
+	pub async fn atomic_write<F, T, E>(&self, f: F) -> std::result::Result<T, E>
 	where
 		F: for<'txn> std::ops::AsyncFnOnce(
 				&'txn mut AtomicTransaction,
@@ -802,6 +802,7 @@ mod tests {
 
 		connection
 			.atomic_write(async |transaction| {
+				assert!(transaction.has_write_intent());
 				OrmExecutor::execute(
 					transaction,
 					"INSERT INTO records (name) VALUES (?)",

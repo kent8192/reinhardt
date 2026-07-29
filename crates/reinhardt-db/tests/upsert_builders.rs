@@ -740,3 +740,35 @@ async fn update_or_create_validation_error_precedes_connection_acquisition() {
 
 	assert!(matches!(error, Error::Validation(_)));
 }
+
+#[tokio::test]
+async fn update_or_create_preserves_the_first_builder_encoding_error() {
+	let error = Manager::<Article>::new()
+		.update_or_create()
+		.lookup(
+			Article::field_id(),
+			FailingValue("first update encoding diagnostic"),
+		)
+		.set(
+			Article::field_id(),
+			FailingValue("second update encoding diagnostic"),
+		)
+		.execute()
+		.await
+		.expect_err("the first update builder encoding failure must be retained");
+
+	assert_eq!(
+		error.database_kind(),
+		Some(DatabaseErrorKind::Serialization)
+	);
+	assert!(
+		error
+			.to_string()
+			.contains("first update encoding diagnostic")
+	);
+	assert!(
+		!error
+			.to_string()
+			.contains("second update encoding diagnostic")
+	);
+}

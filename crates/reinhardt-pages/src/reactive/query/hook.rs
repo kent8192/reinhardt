@@ -227,7 +227,7 @@ where
 		context.borrow_mut().reserve_call_order_key(&id);
 		let ssr_prefetch = descriptor.ssr_prefetch && options.is_enabled();
 		let fetcher = Rc::clone(&descriptor.fetcher);
-		let entry = Rc::new(QueryEntry::new(descriptor));
+		let entry = Rc::new(QueryEntry::new(descriptor, &options));
 		if ssr_prefetch {
 			let resource_fetcher = Rc::clone(&fetcher);
 			context.borrow_mut().register_resource_with_owner(

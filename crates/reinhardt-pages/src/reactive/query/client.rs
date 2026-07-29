@@ -136,7 +136,7 @@ pub(super) fn initial_query_state<T, E>(
 }
 
 impl<T: Clone + 'static, E: Clone + 'static> QueryEntry<T, E> {
-	pub(super) fn new(descriptor: QueryDescriptor<T, E>) -> Self
+	pub(super) fn new(descriptor: QueryDescriptor<T, E>, options: &QueryOptions) -> Self
 	where
 		T: Serialize + DeserializeOwned,
 		E: Serialize + DeserializeOwned,
@@ -148,8 +148,8 @@ impl<T: Clone + 'static, E: Clone + 'static> QueryEntry<T, E> {
 		Self::new_with_hydrated_state(
 			key,
 			hydrated_state,
-			defaults.resolved_stale_time(),
-			defaults.resolved_gc_time(),
+			options.resolved_stale_time(&defaults),
+			options.resolved_gc_time(&defaults),
 		)
 	}
 

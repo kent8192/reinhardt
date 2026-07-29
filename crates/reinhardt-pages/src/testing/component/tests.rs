@@ -19,11 +19,11 @@ use crate::event::{
 use crate::reactive::hooks::use_effect;
 use serial_test::serial;
 
-use crate::reactive::{QueryKey, QueryOptions, ResourceState, use_query};
+use crate::reactive::{QueryFamily, QueryOptions, ResourceState, use_query};
 
 fn scheduled_query_component() -> Page {
 	let query = use_query(
-		QueryKey::new("scheduled-query", || async {
+		QueryFamily::<(), _, _>::new("scheduled-query").query((), || async {
 			Ok::<_, String>("Scheduled query result".to_string())
 		}),
 		QueryOptions::default(),
@@ -38,7 +38,7 @@ fn scheduled_query_component() -> Page {
 #[cfg(not(feature = "msw"))]
 fn screen_scoped_query_component(value: &'static str) -> Page {
 	let query = use_query(
-		QueryKey::new("screen-scoped-query", move || async move {
+		QueryFamily::<(), _, _>::new("screen-scoped-query").query((), move || async move {
 			Ok::<_, String>(value.to_string())
 		}),
 		QueryOptions::default(),

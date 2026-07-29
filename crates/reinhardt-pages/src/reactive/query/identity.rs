@@ -150,27 +150,6 @@ impl<T, E> QueryKey<T, E> {
 		}
 		id
 	}
-
-	/// Transitional constructor for manually keyed query fetchers.
-	pub fn new<F, Fut>(id: &'static str, fetcher: F) -> QueryDescriptor<T, E>
-	where
-		F: Fn() -> Fut + 'static,
-		Fut: Future<Output = Result<T, E>> + 'static,
-	{
-		QueryFamily::<(), T, E>::new(id).query((), fetcher)
-	}
-
-	#[cfg(test)]
-	pub(crate) fn new_with_cancellation<F, Fut>(
-		id: &'static str,
-		fetcher: F,
-	) -> QueryDescriptor<T, E>
-	where
-		F: Fn(CancellationHandle) -> Fut + 'static,
-		Fut: Future<Output = Result<T, E>> + 'static,
-	{
-		QueryFamily::<(), T, E>::new(id).query_with_cancellation((), fetcher)
-	}
 }
 
 /// A typed query key paired with one observer-owned fetcher.

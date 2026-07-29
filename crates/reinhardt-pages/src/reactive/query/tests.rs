@@ -130,6 +130,87 @@ fn typed_family_rejects_arguments_without_a_stable_fingerprint() {
 
 #[test]
 #[serial(query_cache)]
+fn earliest_live_enabled_observer_supplies_the_fetcher() {
+	ReactiveScope::run(|| {
+		// Arrange
+		clear_query_cache_for_test();
+		let family = QueryFamily::<(), String, String>::new("tests.observer-fetcher-order");
+		let first_calls = Rc::new(Cell::new(0));
+		let second_calls = Rc::new(Cell::new(0));
+		let first = use_query(
+			family.query((), {
+				let first_calls = Rc::clone(&first_calls);
+				move || {
+					let call = first_calls.get() + 1;
+					first_calls.set(call);
+					async move { Ok::<_, String>(format!("first-{call}")) }
+				}
+			}),
+			QueryOptions::default(),
+		);
+		let second = use_query(
+			family.query((), {
+				let second_calls = Rc::clone(&second_calls);
+				move || {
+					let call = second_calls.get() + 1;
+					second_calls.set(call);
+					async move { Ok::<_, String>(format!("second-{call}")) }
+				}
+			}),
+			QueryOptions::default(),
+		);
+
+		// Act
+		second.refetch();
+
+		// Assert
+		assert_eq!(first_calls.get(), 2);
+		assert_eq!(second_calls.get(), 0);
+		assert_eq!(second.data(), Some("first-2".to_string()));
+
+		// Act
+		drop(first);
+		second.refetch();
+
+		// Assert
+		assert_eq!(first_calls.get(), 2);
+		assert_eq!(second_calls.get(), 1);
+		assert_eq!(second.data(), Some("second-1".to_string()));
+	});
+}
+
+#[tokio::test]
+#[serial(query_cache)]
+async fn active_ssr_query_preserves_observer_time_options() {
+	// Arrange
+	let context = Rc::new(RefCell::new(
+		crate::ssr::resource_context::SsrResourceContext::new(Duration::from_secs(1)),
+	));
+	let expected_stale_time = Duration::from_secs(17);
+	let expected_gc_time = Duration::from_secs(41);
+
+	// Act
+	let query = crate::ssr::resource_context::scope_context(Rc::clone(&context), async {
+		ReactiveScope::run(|| {
+			try_create_ssr_query(
+				QueryFamily::<(), String, String>::new("tests.ssr-query-options")
+					.query((), || async { Ok("value".to_string()) }),
+				QueryOptions::default()
+					.stale_time(expected_stale_time)
+					.gc_time(expected_gc_time),
+			)
+			.expect("active SSR context should create the query")
+		})
+	})
+	.await;
+
+	// Assert
+	assert_eq!(query.stale_time_policy(), expected_stale_time);
+	assert_eq!(query.gc_time_policy(), expected_gc_time);
+}
+
+#[test]
+#[serial(query_cache)]
 fn imperative_acquisition_deduplicates_in_flight_work() {
 	ReactiveScope::run(|| {
 		// Arrange
@@ -140,7 +221,7 @@ fn imperative_acquisition_deduplicates_in_flight_work() {
 			tasks_for_sink.borrow_mut().push_back(task);
 		});
 		let calls = Rc::new(Cell::new(0));
-		let key = QueryKey::new("imperative-dedupe", {
+		let key = QueryFamily::<(), _, _>::new("imperative-dedupe").query((), {
 			let calls = Rc::clone(&calls);
 			move || {
 				calls.set(calls.get() + 1);
@@ -193,7 +274,7 @@ fn dropping_one_of_two_leases_keeps_request_alive() {
 		});
 		let ready = Rc::new(Cell::new(false));
 		let dropped = Rc::new(Cell::new(0));
-		let key = QueryKey::new("two-leases", {
+		let key = QueryFamily::<(), _, _>::new("two-leases").query((), {
 			let ready = Rc::clone(&ready);
 			let dropped = Rc::clone(&dropped);
 			move || TestGate {
@@ -254,19 +335,20 @@ fn shared_fetch_receives_the_query_request_cancellation_handle() {
 		let ready = Rc::new(Cell::new(false));
 		let dropped = Rc::new(Cell::new(0));
 		let observed_cancellation = Rc::new(RefCell::new(None));
-		let key = QueryKey::new_with_cancellation("shared-request-cancellation", {
-			let ready = Rc::clone(&ready);
-			let dropped = Rc::clone(&dropped);
-			let observed_cancellation = Rc::clone(&observed_cancellation);
-			move |cancellation| {
-				observed_cancellation.borrow_mut().replace(cancellation);
-				TestGate {
-					ready: Rc::clone(&ready),
-					dropped: Rc::clone(&dropped),
-					result: Some(Ok("shared".to_string())),
+		let key = QueryFamily::<(), _, _>::new("shared-request-cancellation")
+			.query_with_cancellation((), {
+				let ready = Rc::clone(&ready);
+				let dropped = Rc::clone(&dropped);
+				let observed_cancellation = Rc::clone(&observed_cancellation);
+				move |cancellation| {
+					observed_cancellation.borrow_mut().replace(cancellation);
+					TestGate {
+						ready: Rc::clone(&ready),
+						dropped: Rc::clone(&dropped),
+						result: Some(Ok("shared".to_string())),
+					}
 				}
-			}
-		});
+			});
 		let first = acquire_query(
 			key.clone(),
 			QueryAcquireOptions {
@@ -319,7 +401,7 @@ fn dropping_final_lease_cancels_request_once() {
 		});
 		let ready = Rc::new(Cell::new(false));
 		let dropped = Rc::new(Cell::new(0));
-		let key = QueryKey::new("final-lease-cancel", {
+		let key = QueryFamily::<(), _, _>::new("final-lease-cancel").query((), {
 			let ready = Rc::clone(&ready);
 			let dropped = Rc::clone(&dropped);
 			move || TestGate {
@@ -375,7 +457,7 @@ fn queued_refetch_keeps_completed_generation_for_existing_lease() {
 		});
 		let ready = Rc::new(Cell::new(false));
 		let dropped = Rc::new(Cell::new(0));
-		let key = QueryKey::new("queued-generation", {
+		let key = QueryFamily::<(), _, _>::new("queued-generation").query((), {
 			let ready = Rc::clone(&ready);
 			let dropped = Rc::clone(&dropped);
 			move || TestGate {
@@ -428,7 +510,7 @@ fn cancelling_request_discards_queued_refetch() {
 		});
 		let ready = Rc::new(Cell::new(false));
 		let dropped = Rc::new(Cell::new(0));
-		let key = QueryKey::new("cancel-queued-refetch", {
+		let key = QueryFamily::<(), _, _>::new("cancel-queued-refetch").query((), {
 			let ready = Rc::clone(&ready);
 			let dropped = Rc::clone(&dropped);
 			move || TestGate {
@@ -488,7 +570,7 @@ fn cancel_completion_race_does_not_publish_obsolete_value() {
 		});
 		let ready = Rc::new(Cell::new(false));
 		let dropped = Rc::new(Cell::new(0));
-		let key = QueryKey::new("cancel-race", {
+		let key = QueryFamily::<(), _, _>::new("cancel-race").query((), {
 			let ready = Rc::clone(&ready);
 			let dropped = Rc::clone(&dropped);
 			move || TestGate {
@@ -543,7 +625,7 @@ fn cancelled_revalidation_preserves_previous_success() {
 		});
 		let ready = Rc::new(Cell::new(false));
 		let dropped = Rc::new(Cell::new(0));
-		let key = QueryKey::new("cancel-revalidation", {
+		let key = QueryFamily::<(), _, _>::new("cancel-revalidation").query((), {
 			let ready = Rc::clone(&ready);
 			let dropped = Rc::clone(&dropped);
 			move || TestGate {
@@ -589,7 +671,7 @@ fn discarded_error_retries_on_next_acquisition() {
 		// Arrange
 		clear_query_cache_for_test();
 		let calls = Rc::new(Cell::new(0));
-		let key = QueryKey::new("discarded-error", {
+		let key = QueryFamily::<(), _, _>::new("discarded-error").query((), {
 			let calls = Rc::clone(&calls);
 			move || {
 				calls.set(calls.get() + 1);
@@ -640,7 +722,7 @@ fn invalidation_without_live_observer_does_not_refetch() {
 		let ready = Rc::new(Cell::new(false));
 		let dropped = Rc::new(Cell::new(0));
 		let calls = Rc::new(Cell::new(0));
-		let key = QueryKey::new("cancel-then-invalidate", {
+		let key = QueryFamily::<(), _, _>::new("cancel-then-invalidate").query((), {
 			let ready = Rc::clone(&ready);
 			let dropped = Rc::clone(&dropped);
 			let calls = Rc::clone(&calls);
@@ -695,7 +777,7 @@ fn use_query_deduplicates_shared_key() {
 
 		// Act
 		let first = use_query(
-			QueryKey::new("shared", {
+			QueryFamily::<(), _, _>::new("shared").query((), {
 				let calls = Rc::clone(&calls);
 				move || {
 					calls.set(calls.get() + 1);
@@ -705,7 +787,7 @@ fn use_query_deduplicates_shared_key() {
 			QueryOptions::default(),
 		);
 		let second = use_query(
-			QueryKey::new("shared", {
+			QueryFamily::<(), _, _>::new("shared").query((), {
 				let calls = Rc::clone(&calls);
 				move || {
 					calls.set(calls.get() + 1);
@@ -727,9 +809,8 @@ fn use_query_deduplicates_shared_key() {
 fn cached_query_survives_the_scope_that_created_it() {
 	// Arrange
 	clear_query_cache_for_test();
-	let key = QueryKey::new("retained-cache-entry", || async {
-		Ok::<_, String>("cached".to_string())
-	});
+	let key = QueryFamily::<(), _, _>::new("retained-cache-entry")
+		.query((), || async { Ok::<_, String>("cached".to_string()) });
 	let scope = ReactiveScope::new();
 	let first = scope.enter(|| use_query(key.clone(), QueryOptions::default()));
 	assert_eq!(first.data(), Some("cached".to_string()));
@@ -751,7 +832,7 @@ fn refetch_runs_fetcher_again() {
 		clear_query_cache_for_test();
 		let calls = Rc::new(Cell::new(0));
 		let query = use_query(
-			QueryKey::new("manual-refetch", {
+			QueryFamily::<(), _, _>::new("manual-refetch").query((), {
 				let calls = Rc::clone(&calls);
 				move || {
 					let value = calls.get() + 1;
@@ -778,7 +859,7 @@ fn failed_query_respects_stale_time_before_retrying() {
 		// Arrange
 		clear_query_cache_for_test();
 		let calls = Rc::new(Cell::new(0));
-		let key = QueryKey::new("failed-query", {
+		let key = QueryFamily::<(), _, _>::new("failed-query").query((), {
 			let calls = Rc::clone(&calls);
 			move || {
 				calls.set(calls.get() + 1);
@@ -809,11 +890,10 @@ fn successful_query_is_not_pending_during_background_fetch() {
 	ReactiveScope::run(|| {
 		// Arrange
 		clear_query_cache_for_test();
-		let descriptor = QueryKey::new("background-refetch", || async {
-			Ok::<_, String>("fresh".to_string())
-		});
+		let descriptor = QueryFamily::<(), _, _>::new("background-refetch")
+			.query((), || async { Ok::<_, String>("fresh".to_string()) });
 		let fetcher = Rc::clone(&descriptor.fetcher);
-		let entry = Rc::new(QueryEntry::new(descriptor));
+		let entry = Rc::new(QueryEntry::new(descriptor, &QueryOptions::default()));
 		entry
 			.state
 			.set(ResourceState::Success("cached".to_string()));
@@ -844,7 +924,7 @@ fn mutation_success_invalidates_registered_query() {
 		// Arrange
 		clear_query_cache_for_test();
 		let calls = Rc::new(Cell::new(0));
-		let key = QueryKey::new("invalidated", {
+		let key = QueryFamily::<(), _, _>::new("invalidated").query((), {
 			let calls = Rc::clone(&calls);
 			move || {
 				let value = calls.get() + 1;
@@ -910,9 +990,10 @@ fn typed_query_identity_does_not_reserve_resource_counter() {
 		super::super::resource::set_client_resource_counter(0);
 
 		// Act
-		let _entry = query_entry(QueryKey::new("rh-res-0", || async {
-			Ok::<_, String>("query".to_string())
-		}));
+		let _entry = query_entry(
+			QueryFamily::<(), _, _>::new("rh-res-0")
+				.query((), || async { Ok::<_, String>("query".to_string()) }),
+		);
 
 		// Assert
 		assert_eq!(super::super::resource::current_client_resource_counter(), 0);
@@ -927,9 +1008,11 @@ fn hydrated_query_error_is_fresh_on_first_mount() {
 		// Arrange
 		let (hydrated_state, last_fetched_ms) =
 			initial_query_state(Some(ResourceState::Error("not found".to_string())));
-		let entry = QueryEntry::new(QueryKey::new("hydrated-query-error", || async {
-			Err::<String, _>("not found".to_string())
-		}));
+		let entry = QueryEntry::new(
+			QueryFamily::<(), _, _>::new("hydrated-query-error")
+				.query((), || async { Err::<String, _>("not found".to_string()) }),
+			&QueryOptions::default(),
+		);
 		entry.state.set(hydrated_state);
 		entry.last_fetched_ms.set(last_fetched_ms);
 
@@ -952,9 +1035,8 @@ async fn ssr_replayed_query_error_is_fresh_for_stale_time() {
 	let discovery_query = crate::ssr::resource_context::scope_context(Rc::clone(&context), async {
 		ReactiveScope::run(|| {
 			let query = try_create_ssr_query(
-				QueryKey::new("ssr-replayed-query-error", || async {
-					Err::<String, _>("not found".to_string())
-				}),
+				QueryFamily::<(), _, _>::new("ssr-replayed-query-error")
+					.query((), || async { Err::<String, _>("not found".to_string()) }),
 				QueryOptions::default(),
 			)
 			.expect("active SSR context should create the query");
@@ -969,7 +1051,7 @@ async fn ssr_replayed_query_error_is_fresh_for_stale_time() {
 	let replayed_query = crate::ssr::resource_context::scope_context(Rc::clone(&context), async {
 		ReactiveScope::run(|| {
 			let query = try_create_ssr_query(
-				QueryKey::new("ssr-replayed-query-error", || async {
+				QueryFamily::<(), _, _>::new("ssr-replayed-query-error").query((), || async {
 					Err::<String, _>("must not refetch during replay".to_string())
 				}),
 				QueryOptions::default(),

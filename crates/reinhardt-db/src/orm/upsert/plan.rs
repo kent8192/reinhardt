@@ -59,7 +59,7 @@ pub(crate) fn normalize<M: Model>(
 		.iter()
 		.map(|field| (field.name.as_str(), field))
 		.collect::<HashMap<_, _>>();
-	validate_assignments::<M>(&lookup, "lookup", false, &metadata_by_name)?;
+	validate_assignments::<M>(&lookup, "lookup", true, &metadata_by_name)?;
 	let create_role = match mode {
 		UpsertMode::GetOrCreate => "default",
 		UpsertMode::UpdateOrCreate => "create_default",
@@ -249,11 +249,11 @@ fn select_unique_proof<M: Model>(
 			else {
 				return false;
 			};
-			let nullable_null = metadata_by_name
-				.get(field_name.as_str())
-				.is_some_and(|field| field.nullable)
-				&& assignment.value == DatabaseValue::Null;
-			!nullable_null || candidate.nulls_distinct == Some(false)
+			if assignment.value != DatabaseValue::Null {
+				return true;
+			}
+			matches!(candidate.source, UniqueProofSource::Constraint(_))
+				&& candidate.nulls_distinct == Some(false)
 		})
 	});
 	let Some(candidate) = candidate else {
@@ -302,6 +302,7 @@ mod tests {
 	use crate::orm::model::{FieldSelector, Model};
 	use crate::orm::upsert::assignment::TypedAssignment;
 	use crate::orm::{DatabaseValue, Manager};
+	use reinhardt_core::macros::model;
 	use rstest::*;
 	use serde::{Deserialize, Serialize};
 	use std::collections::HashMap;
@@ -318,6 +319,13 @@ mod tests {
 		fn with_alias(self, _alias: &str) -> Self {
 			self
 		}
+	}
+
+	#[model(app_label = "tests", table_name = "nullable_primary_key_articles")]
+	#[derive(Clone, Debug, Serialize, Deserialize)]
+	struct NullablePrimaryKeyArticle {
+		#[field(primary_key = true, auto_increment = false)]
+		id: Option<i64>,
 	}
 
 	fn field(
@@ -408,6 +416,13 @@ mod tests {
 
 		fn constraint_metadata() -> Vec<ConstraintInfo> {
 			vec![
+				unique_constraint(
+					"tenant_external_region_unique",
+					&["tenant", "external", "region"],
+					None,
+					false,
+					None,
+				),
 				unique_constraint(
 					"tenant_external_unique",
 					&["tenant", "external"],
@@ -617,6 +632,25 @@ mod tests {
 	}
 
 	#[rstest]
+	fn normalize_rejects_null_primary_key_from_generated_accessor() {
+		let lookup = TypedAssignment::new(NullablePrimaryKeyArticle::field_id(), None::<i64>)
+			.expect("encode nullable primary key");
+
+		let error = normalize::<NullablePrimaryKeyArticle>(
+			vec![lookup],
+			Vec::new(),
+			Vec::new(),
+			UpsertMode::GetOrCreate,
+		)
+		.expect_err("NULL primary key cannot prove one row");
+
+		assert_validation(
+			error,
+			"upsert lookup must cover an immediate unconditional unique constraint",
+		);
+	}
+
+	#[rstest]
 	fn normalize_accepts_nullable_nulls_not_distinct_constraint() {
 		let plan = normalize::<Article>(
 			vec![
@@ -806,6 +840,30 @@ mod tests {
 			UpsertMode::GetOrCreate,
 		)
 		.expect_err("non-writable assignment must fail");
+
+		assert_validation(error, expected);
+	}
+
+	#[rstest]
+	#[case(
+		string_assignment("readonly", "readonly", "value"),
+		"upsert field 'readonly' is not writable"
+	)]
+	#[case(
+		string_assignment("generated", "generated", "value"),
+		"upsert field 'generated' is database-generated and not writable"
+	)]
+	fn normalize_rejects_non_writable_lookup_fields(
+		#[case] lookup: TypedAssignment<Article>,
+		#[case] expected: &str,
+	) {
+		let error = normalize::<Article>(
+			vec![lookup],
+			Vec::new(),
+			Vec::new(),
+			UpsertMode::GetOrCreate,
+		)
+		.expect_err("lookup fields are copied into the create write");
 
 		assert_validation(error, expected);
 	}

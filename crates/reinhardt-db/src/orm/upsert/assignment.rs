@@ -164,8 +164,11 @@ fn field_codec_error(error: FieldCodecError) -> Error {
 
 #[cfg(test)]
 mod tests {
-	use super::{TypedAssignment, UpsertCreate};
-	use crate::orm::field_codec::{DatabaseArrayType, DatabaseValue};
+	use super::{TypedAssignment, UpsertCreate, field_codec_error};
+	use crate::orm::field_codec::{
+		DatabaseArrayType, DatabaseStorageKind, DatabaseValue, FieldCodecContext, FieldCodecError,
+		ModelEnumRepr, ModelEnumValue,
+	};
 	use chrono::{TimeZone, Utc};
 	use reinhardt_core::macros::{ModelEnum, model};
 	use rstest::*;
@@ -453,5 +456,34 @@ mod tests {
 				.message(),
 			"typed upsert field codec failed: field serialization failed: unsigned integer value 18446744073709551615 exceeds i64 database range"
 		);
+	}
+
+	#[rstest]
+	#[case(
+		FieldCodecError::TypeMismatch {
+			expected: DatabaseStorageKind::I32,
+			actual: DatabaseValue::String("wrong".to_owned()),
+		},
+		reinhardt_core::exception::DatabaseErrorKind::Type
+	)]
+	#[case(
+		FieldCodecError::invalid_enum(
+			FieldCodecContext::new("AssignmentModel", "status", "status_col"),
+			ModelEnumRepr::String,
+			ModelEnumValue::String("unknown".to_owned()),
+		),
+		reinhardt_core::exception::DatabaseErrorKind::Type
+	)]
+	#[case(
+		FieldCodecError::Serialization("invalid payload".to_owned()),
+		reinhardt_core::exception::DatabaseErrorKind::Serialization
+	)]
+	fn field_codec_errors_keep_their_database_error_kind(
+		#[case] source: FieldCodecError,
+		#[case] expected: reinhardt_core::exception::DatabaseErrorKind,
+	) {
+		let error = field_codec_error(source);
+
+		assert_eq!(error.database_kind(), Some(expected));
 	}
 }

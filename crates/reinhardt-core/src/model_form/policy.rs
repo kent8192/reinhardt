@@ -82,7 +82,13 @@ where
 		}
 
 		let checkbox_sentinel = format!("__reinhardt_checkbox_{}", descriptor.name);
-		let has_checkbox_sentinel = values.remove(&checkbox_sentinel).is_some();
+		let checkbox_sentinel_value = values.remove(&checkbox_sentinel);
+		let checkbox_was_unchecked = checkbox_sentinel_value
+			.as_ref()
+			.is_some_and(|value| value == &serde_json::Value::String("false".to_owned()));
+		let checkbox_was_unset = checkbox_sentinel_value
+			.as_ref()
+			.is_some_and(|value| value == &serde_json::Value::String("unset".to_owned()));
 		let color_sentinel = format!("__reinhardt_color_{}", descriptor.name);
 		let color_was_edited = values
 			.remove(&color_sentinel)
@@ -90,9 +96,11 @@ where
 		let range_sentinel = format!("__reinhardt_range_{}", descriptor.name);
 		let range_default = values.remove(&range_sentinel);
 		let default_clear_sentinel = format!("__reinhardt_defaulted_{}", descriptor.name);
-		let had_defaulted_value = values.remove(&default_clear_sentinel).is_some();
+		let had_defaulted_value = values
+			.remove(&default_clear_sentinel)
+			.is_some_and(|value| value == serde_json::Value::String("true".to_owned()));
 		let Some(control) = values.get_mut(descriptor.name) else {
-			if matches!(descriptor.kind, ModelFormFieldKind::Boolean) && has_checkbox_sentinel {
+			if matches!(descriptor.kind, ModelFormFieldKind::Boolean) && checkbox_was_unchecked {
 				values.insert(descriptor.name.to_owned(), serde_json::Value::Bool(false));
 			}
 			continue;
@@ -105,6 +113,10 @@ where
 			continue;
 		}
 		if range_default.as_ref() == Some(&serde_json::Value::String(text.clone())) {
+			values.remove(descriptor.name);
+			continue;
+		}
+		if checkbox_was_unset && text.is_empty() {
 			values.remove(descriptor.name);
 			continue;
 		}
@@ -146,9 +158,12 @@ where
 						.ok()
 						.map(|number| serde_json::Value::Number(number.into()))
 				}),
-			ModelFormFieldKind::Float { .. } => text
+			ModelFormFieldKind::Float { min, max } => text
 				.parse::<f64>()
 				.ok()
+				.filter(|number| number.is_finite())
+				.filter(|number| min.is_none_or(|min| *number >= min))
+				.filter(|number| max.is_none_or(|max| *number <= max))
 				.and_then(serde_json::Number::from_f64)
 				.map(serde_json::Value::Number),
 			ModelFormFieldKind::Time if text.len() == 5 && text.as_bytes()[2] == b':' => {
@@ -351,6 +366,25 @@ mod tests {
 		}
 	}
 
+	struct NullableBooleanSchema;
+
+	impl ModelFormSchema for NullableBooleanSchema {
+		type Model = ();
+
+		fn fields() -> &'static [ModelFormFieldDescriptor] {
+			const FIELDS: [ModelFormFieldDescriptor; 1] = [ModelFormFieldDescriptor {
+				name: "published",
+				kind: ModelFormFieldKind::Boolean,
+				required: false,
+				has_default: false,
+				nullable: true,
+				editable: true,
+				generated_relation_id: false,
+			}];
+			&FIELDS
+		}
+	}
+
 	#[test]
 	fn policy_rejects_known_but_unselected_fields() {
 		assert!(PublicOnly::allows("title"));
@@ -396,6 +430,29 @@ mod tests {
 				"created_at": "2026-07-26T09:30:00Z",
 			}),
 		);
+	}
+
+	#[test]
+	fn native_normalization_preserves_nullable_boolean_unset_and_false() {
+		let unset = normalize_native_model_form_value::<
+			NullableBooleanSchema,
+			AllEditableModelFields,
+		>(serde_json::json!({
+			"published": "",
+			"__reinhardt_checkbox_published": "unset",
+		}))
+		.expect("nullable boolean control should normalize");
+		assert_eq!(unset, serde_json::json!({}));
+
+		let false_value = normalize_native_model_form_value::<
+			NullableBooleanSchema,
+			AllEditableModelFields,
+		>(serde_json::json!({
+			"published": "false",
+			"__reinhardt_checkbox_published": "unset",
+		}))
+		.expect("nullable boolean false selection should normalize");
+		assert_eq!(false_value, serde_json::json!({ "published": false }));
 	}
 
 	#[test]

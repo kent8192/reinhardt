@@ -5,7 +5,15 @@ metadata. Model support is explicit: add `form = true` to `#[model]`.
 
 ```rust
 use reinhardt::model;
+use reinhardt::db::associations::ForeignKeyField;
 use serde::{Deserialize, Serialize};
+
+#[model(app_label = "users", form = true)]
+#[derive(Clone, Deserialize, Serialize)]
+pub struct User {
+    #[field(primary_key = true)]
+    id: i64,
+}
 
 #[model(app_label = "polls", form = true)]
 #[derive(Clone, Deserialize, Serialize)]
@@ -14,7 +22,8 @@ pub struct Question {
     id: Option<i64>,
     #[field(max_length = 200)]
     text: String,
-    owner_id: i64,
+    #[rel(foreign_key, related_name = "questions")]
+    owner: ForeignKeyField<User>,
     #[field(default = false)]
     published: bool,
 }

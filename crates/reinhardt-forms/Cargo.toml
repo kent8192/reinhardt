@@ -39,6 +39,8 @@ full = []
 
 [dev-dependencies]
 insta = { workspace = true }
+linkme = { workspace = true }
+reinhardt = { workspace = true, features = ["core", "database"] }
 tokio-test = "0.4"
 rstest = { workspace = true }
 proptest = { workspace = true }

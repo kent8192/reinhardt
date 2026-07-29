@@ -7,7 +7,7 @@ use crate::formset::FormSet;
 use crate::model_form::{FormModel, ModelForm, ModelFormError, ModelFormPersistenceMode};
 use reinhardt_core::model_form::{
 	AllEditableModelFields, ModelFormFieldKind, ModelFormPolicy, ModelFormPrimaryKey,
-	ModelFormSchema,
+	ModelFormPrimaryKeyFields, ModelFormSchema,
 };
 use reinhardt_db::orm::OrmExecutor;
 use reinhardt_db::orm::transaction::AtomicTransactionOutcome;
@@ -122,7 +122,7 @@ impl<P: FormModel, C: FormModel> InlineFormSet<P, C> {
 	pub async fn save(&mut self, executor: &mut dyn OrmExecutor) -> Result<(), ModelFormError>
 	where
 		P::PrimaryKey: Serialize,
-		P: ModelFormPrimaryKey,
+		P: ModelFormPrimaryKey + ModelFormPrimaryKeyFields + 'static,
 	{
 		self.finalize_parent_transaction()?;
 		self.validate_foreign_key_kind()?;
@@ -225,20 +225,40 @@ impl<P: FormModel, C: FormModel> InlineFormSet<P, C> {
 
 	fn validate_foreign_key_kind(&self) -> Result<(), ModelFormError>
 	where
-		P: ModelFormPrimaryKey,
+		P: ModelFormPrimaryKey + ModelFormPrimaryKeyFields + 'static,
 	{
-		let child = C::Schema::fields()
+		let descriptor = C::Schema::fields()
 			.iter()
-			.find(|descriptor| descriptor.name == self.fk_field)
-			.map(|descriptor| descriptor.kind)
-			.or_else(|| C::trusted_relation_field_kind(&self.fk_field));
-		let Some(child) = child else {
-			return Err(ModelFormError::FieldValidation {
-				errors: std::collections::HashMap::from([(
-					self.fk_field.clone(),
-					vec!["unknown trusted foreign key field".to_owned()],
-				)]),
-			});
+			.find(|descriptor| descriptor.name == self.fk_field);
+		let child = match descriptor {
+			Some(descriptor) if !descriptor.generated_relation_id => {
+				return Err(foreign_key_validation_error(
+					&self.fk_field,
+					"foreign key field is not a generated relationship identifier",
+				));
+			}
+			Some(_descriptor) if !C::Schema::relation_target_matches::<P>(&self.fk_field) => {
+				return Err(foreign_key_validation_error(
+					&self.fk_field,
+					"foreign key field does not target the parent model",
+				));
+			}
+			Some(descriptor) => descriptor.kind,
+			None => match C::trusted_relation_field_kind(&self.fk_field) {
+				Some(kind) if C::Schema::relation_target_matches::<P>(&self.fk_field) => kind,
+				Some(_) => {
+					return Err(foreign_key_validation_error(
+						&self.fk_field,
+						"foreign key field does not target the parent model",
+					));
+				}
+				None => {
+					return Err(foreign_key_validation_error(
+						&self.fk_field,
+						"unknown trusted foreign key field",
+					));
+				}
+			},
 		};
 		if !foreign_key_kinds_are_compatible(P::FIELD_KIND, child) {
 			return Err(ModelFormError::FieldValidation {
@@ -275,6 +295,12 @@ impl<P: FormModel, C: FormModel> InlineFormSet<P, C> {
 		}
 
 		all_valid
+	}
+}
+
+fn foreign_key_validation_error(field: &str, message: &str) -> ModelFormError {
+	ModelFormError::FieldValidation {
+		errors: std::collections::HashMap::from([(field.to_owned(), vec![message.to_owned()])]),
 	}
 }
 
@@ -669,6 +695,7 @@ mod tests {
 	use std::sync::atomic::{AtomicUsize, Ordering};
 
 	use reinhardt_core::exception::{DatabaseError, DatabaseErrorKind, Error};
+	use reinhardt_db::associations::ForeignKeyField;
 	use reinhardt_db::orm::connection::{
 		DatabaseBackend, OrmExecutor, QueryResult, QueryValue, Row,
 	};
@@ -720,7 +747,8 @@ mod tests {
 	struct ChildModel {
 		#[field(primary_key = true)]
 		id: Option<i64>,
-		parent_id: Option<i64>,
+		#[rel(foreign_key, related_name = "child_models", null = true)]
+		parent: ForeignKeyField<TestModel>,
 		#[field(max_length = 1_000)]
 		content: String,
 	}
@@ -735,7 +763,53 @@ mod tests {
 	struct RequiredChildModel {
 		#[field(primary_key = true)]
 		id: Option<i64>,
-		parent_id: i64,
+		#[rel(foreign_key, related_name = "required_child_models")]
+		parent: ForeignKeyField<TestModel>,
+		#[field(max_length = 1_000)]
+		content: String,
+	}
+
+	#[model(
+		app_label = "forms",
+		table_name = "advanced_formset_scalar_child_models",
+		form = true,
+		info = false
+	)]
+	#[derive(Clone, Deserialize, Serialize)]
+	struct ScalarChildModel {
+		#[field(primary_key = true)]
+		id: Option<i64>,
+		position: i64,
+		#[field(max_length = 1_000)]
+		content: String,
+	}
+
+	#[model(
+		app_label = "forms",
+		table_name = "advanced_formset_alternate_parents",
+		form = true,
+		info = false
+	)]
+	#[derive(Clone, Deserialize, Serialize)]
+	struct AlternateParent {
+		#[field(primary_key = true)]
+		id: Option<i64>,
+		#[field(max_length = 100)]
+		name: String,
+	}
+
+	#[model(
+		app_label = "forms",
+		table_name = "advanced_formset_alternate_children",
+		form = true,
+		info = false
+	)]
+	#[derive(Clone, Deserialize, Serialize)]
+	struct AlternateChildModel {
+		#[field(primary_key = true)]
+		id: Option<i64>,
+		#[rel(foreign_key, related_name = "alternate_child_models")]
+		parent: ForeignKeyField<AlternateParent>,
 		#[field(max_length = 1_000)]
 		content: String,
 	}
@@ -764,7 +838,8 @@ mod tests {
 	struct UuidChild {
 		#[field(primary_key = true)]
 		id: Option<i64>,
-		parent_id: Option<uuid::Uuid>,
+		#[rel(foreign_key, related_name = "uuid_children", null = true)]
+		parent: ForeignKeyField<UuidParent>,
 		#[field(max_length = 1_000)]
 		content: String,
 	}
@@ -905,6 +980,7 @@ mod tests {
 
 		let child = ChildModel {
 			id: None,
+			parent: ForeignKeyField::new(),
 			parent_id: None,
 			content: "Child content".to_string(),
 		};
@@ -939,7 +1015,7 @@ mod tests {
 	}
 
 	#[test]
-	fn test_inline_formset_validates_deferred_child_model_before_parent_save() {
+	fn test_inline_formset_defers_model_validator_until_generated_parent_key_is_assigned() {
 		let parent = TestModel {
 			id: None,
 			name: "parent".to_owned(),
@@ -953,20 +1029,66 @@ mod tests {
 		data.set_content("invalid child".to_owned())
 			.expect("child content should be accepted");
 		formset.add_child_form(
-			ModelForm::from_payload(data)
-				.with_model_validator(|_| Err(vec!["child model validation failed".to_owned()])),
+			ModelForm::<RequiredChildModel>::from_payload(data).with_model_validator(|candidate| {
+				if candidate.parent_id > 0 {
+					Ok(())
+				} else {
+					Err(vec!["parent key must be assigned".to_owned()])
+				}
+			}),
 		);
+		let mut executor = FormsetExecutor::new([
+			Ok(test_model_row(1, "parent")),
+			Ok(child_model_row(2, 1, "invalid child")),
+		]);
+
+		tokio_test::block_on(formset.save(&mut executor))
+			.expect("child validator should observe the generated parent key");
+
+		assert_eq!(formset.child_forms()[0].instance().unwrap().parent_id, 1);
+		assert_eq!(executor.fetch_one_calls, 2);
+	}
+
+	#[test]
+	fn test_inline_formset_rejects_editable_scalar_as_foreign_key() {
+		let parent = test_model(1, "parent");
+		let mut formset =
+			InlineFormSet::<TestModel, ScalarChildModel>::for_update(parent, "position".to_owned());
 		let mut executor = FormsetExecutor::new(Vec::<Result<Row, Error>>::new());
 
-		let error = tokio_test::block_on(formset.save(&mut executor))
-			.expect_err("deferred child validator should reject before saving the parent");
+		let error = tokio_test::block_on(formset.save(&mut executor)).unwrap_err();
 
-		assert!(matches!(error, ModelFormError::ModelValidation { .. }));
+		assert!(matches!(
+			error,
+			ModelFormError::FieldValidation { errors }
+				if errors.get("position")
+					== Some(&vec!["foreign key field is not a generated relationship identifier".to_owned()])
+		));
 		assert_eq!(executor.fetch_one_calls, 0);
 	}
 
 	#[test]
-	fn test_inline_formset_rejects_generated_parent_key_with_incompatible_child_field() {
+	fn test_inline_formset_rejects_relation_targeting_different_same_kind_parent() {
+		let parent = test_model(1, "parent");
+		let mut formset = InlineFormSet::<TestModel, AlternateChildModel>::for_update(
+			parent,
+			"parent_id".to_owned(),
+		);
+		let mut executor = FormsetExecutor::new(Vec::<Result<Row, Error>>::new());
+
+		let error = tokio_test::block_on(formset.save(&mut executor)).unwrap_err();
+
+		assert!(matches!(
+			error,
+			ModelFormError::FieldValidation { errors }
+				if errors.get("parent_id")
+					== Some(&vec!["foreign key field does not target the parent model".to_owned()])
+		));
+		assert_eq!(executor.fetch_one_calls, 0);
+	}
+
+	#[test]
+	fn test_inline_formset_rejects_relation_targeting_different_primary_key_kind_parent() {
 		let parent = TestModel {
 			id: None,
 			name: "parent".to_owned(),
@@ -985,7 +1107,7 @@ mod tests {
 			error,
 			ModelFormError::FieldValidation { errors }
 				if errors.get("parent_id")
-					== Some(&vec!["foreign key field is incompatible with the parent primary key".to_owned()])
+					== Some(&vec!["foreign key field does not target the parent model".to_owned()])
 		));
 		assert_eq!(executor.fetch_one_calls, 0);
 	}

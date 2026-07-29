@@ -2034,7 +2034,7 @@ fn generate_model_form(
 				}
 			}
 
-			pub type #data_ident = #payload_path<#policy_ident>;
+			pub type #data_ident = #payload_path<#policy_path>;
 
 			#[derive(Clone, PartialEq)]
 			struct __ReinhardtModelFormValues(
@@ -2112,7 +2112,7 @@ fn generate_model_form(
 				> {
 					self.__model_state.borrow().build_payload_for::<
 						#data_ident,
-						#policy_ident,
+						#policy_path,
 					>()
 				}
 
@@ -2213,9 +2213,17 @@ fn generate_model_form(
 								| ("EmailInput", #pages_crate::form::ModelFormFieldKind::Email { .. })
 								| ("UrlInput", #pages_crate::form::ModelFormFieldKind::Url { .. })
 								| ("NumberInput" | "RangeInput", #pages_crate::form::ModelFormFieldKind::Integer { .. } | #pages_crate::form::ModelFormFieldKind::Float { .. } | #pages_crate::form::ModelFormFieldKind::Decimal { .. })
+								| ("TextInput", #pages_crate::form::ModelFormFieldKind::Text { .. })
 								| ("Textarea" | "TextArea", #pages_crate::form::ModelFormFieldKind::Text { .. } | #pages_crate::form::ModelFormFieldKind::Json)
 								| ("PasswordInput" | "HiddenInput" | "ColorInput" | "TelInput" | "SearchInput", #pages_crate::form::ModelFormFieldKind::Text { .. }) => ::core::option::Option::Some(widget),
-								_ => panic!("model form widget override `{widget}` is incompatible with `{}`", descriptor.name),
+								_ => {
+									#pages_crate::warn_log!(
+										"model form widget override `{}` is incompatible with `{}`; using the generated default",
+										widget,
+										descriptor.name,
+									);
+									::core::option::Option::None
+								}
 							},
 							::core::option::Option::None => ::core::option::Option::None,
 						};
@@ -2278,6 +2286,20 @@ fn generate_model_form(
 									("input", "text"),
 							},
 						};
+						let field_name = descriptor.name;
+						let stored_value = self.__model_state.borrow().value(field_name).cloned();
+						let default_true = matches!(
+							descriptor.kind,
+							#pages_crate::form::ModelFormFieldKind::Boolean
+						) && <#schema_path as #pages_crate::form::ModelFormSchema>::default_boolean_is_true(field_name);
+						let uses_nullable_boolean_select = input_type == "checkbox"
+							&& descriptor.nullable
+							&& !default_true;
+						let (tag, input_type) = if uses_nullable_boolean_select {
+							("select", "select")
+						} else {
+							(tag, input_type)
+						};
 						let is_checkbox = input_type == "checkbox";
 						let permits_subminute_precision = matches!(
 							descriptor.kind,
@@ -2288,7 +2310,6 @@ fn generate_model_form(
 								| #pages_crate::form::ModelFormFieldKind::NaiveDateTime
 						);
 
-						let field_name = descriptor.name;
 						let checkbox_sentinel = format!("__reinhardt_checkbox_{field_name}");
 						let color_sentinel = format!("__reinhardt_color_{field_name}");
 						let range_sentinel = format!("__reinhardt_range_{field_name}");
@@ -2302,8 +2323,10 @@ fn generate_model_form(
 									let default = if max < min {
 										min
 									} else {
-										let span = max - min;
-										min + span / 2 + span.rem_euclid(2)
+										((::core::primitive::i128::from(min)
+											+ ::core::primitive::i128::from(max)
+											+ 1)
+											.div_euclid(2)) as i64
 									};
 									::core::option::Option::Some(default.to_string())
 								}
@@ -2325,15 +2348,48 @@ fn generate_model_form(
 						let mut control = #pages_crate::PageElement::new(tag)
 							.attr("name", field_name)
 							.attr("id", control_id.clone())
-							.attr("type", input_type)
 							.bool_attr("required", descriptor.required && !is_checkbox);
-						let stored_value = self.__model_state.borrow().value(field_name).cloned();
-						let default_true = matches!(
-							descriptor.kind,
-							#pages_crate::form::ModelFormFieldKind::Boolean
-						) && <#schema_path as #pages_crate::form::ModelFormSchema>::default_boolean_is_true(field_name);
+						if tag == "input" {
+							control = control.attr("type", input_type);
+						}
 						let color_is_unset = input_type == "color" && stored_value.is_none();
-						if is_checkbox {
+						if uses_nullable_boolean_select {
+							control = control
+								.child(
+									#pages_crate::PageElement::new("option")
+										.attr("value", "")
+										.bool_attr("selected", stored_value.is_none())
+										.child("Unset")
+								)
+								.child(
+									#pages_crate::PageElement::new("option")
+										.attr("value", "true")
+										.bool_attr(
+											"selected",
+											matches!(
+												stored_value.as_ref(),
+												::core::option::Option::Some(
+													#pages_crate::__private::serde_json::Value::Bool(true)
+												)
+											),
+										)
+										.child("True")
+								)
+								.child(
+									#pages_crate::PageElement::new("option")
+										.attr("value", "false")
+										.bool_attr(
+											"selected",
+											matches!(
+												stored_value.as_ref(),
+												::core::option::Option::Some(
+													#pages_crate::__private::serde_json::Value::Bool(false)
+												)
+											),
+										)
+										.child("False")
+								);
+						} else if is_checkbox {
 							control = control.bool_attr(
 								"checked",
 								matches!(
@@ -2343,12 +2399,6 @@ fn generate_model_form(
 									)
 								) || (stored_value.is_none() && default_true),
 							);
-							if descriptor.nullable && stored_value.is_none() && !default_true {
-								let checkbox_edit_script = format!(
-									"this.form.elements['{checkbox_sentinel}'].disabled=false"
-								);
-								control = control.attr("onchange", checkbox_edit_script);
-							}
 						} else if input_type != "password"
 							&& let ::core::option::Option::Some(value) = stored_value.as_ref()
 						{
@@ -2359,6 +2409,7 @@ fn generate_model_form(
 								#pages_crate::__private::serde_json::to_string(&value).unwrap_or_default()
 							} else {
 								match value {
+									#pages_crate::__private::serde_json::Value::Null => ::std::string::String::new(),
 									#pages_crate::__private::serde_json::Value::String(value) => value.clone(),
 									value => value.to_string(),
 								}
@@ -2443,6 +2494,32 @@ fn generate_model_form(
 									})
 								},
 							);
+						} else if uses_nullable_boolean_select {
+							control = control.on(
+								#pages_crate::event::KnownEvent::Change,
+								{
+									let form = self.clone();
+									#pages_crate::typed_event_handler::<
+										#pages_crate::event::ChangeEvent,
+										_,
+									>(move |event: #pages_crate::event::ChangeEvent| {
+										if let ::core::result::Result::Ok(value) = event.value() {
+											if let ::core::result::Result::Err(error) =
+												form.set_value(
+													field_name,
+													#pages_crate::__private::serde_json::Value::String(value),
+												)
+											{
+												#pages_crate::warn_log!(
+													"model form field `{}` rejected input: {}",
+													field_name,
+													error,
+												);
+											}
+										}
+									})
+								},
+							);
 						} else {
 							control = control.on(
 								#pages_crate::event::KnownEvent::Input,
@@ -2470,16 +2547,21 @@ fn generate_model_form(
 								},
 							);
 						}
-						let checkbox_sentinel = is_checkbox.then(|| {
-							#pages_crate::PageElement::new("input")
-								.attr("type", "hidden")
-								.attr("name", checkbox_sentinel)
-								.attr("value", "false")
-								.bool_attr(
-									"disabled",
-									descriptor.nullable && stored_value.is_none() && !default_true,
-								)
-						});
+						let checkbox_sentinel = if uses_nullable_boolean_select {
+							::core::option::Option::Some(
+								#pages_crate::PageElement::new("input")
+									.attr("type", "hidden")
+									.attr("name", checkbox_sentinel)
+									.attr("value", "unset")
+							)
+						} else {
+							is_checkbox.then(|| {
+								#pages_crate::PageElement::new("input")
+									.attr("type", "hidden")
+									.attr("name", checkbox_sentinel)
+									.attr("value", "false")
+							})
+						};
 						let color_sentinel = (input_type == "color").then(|| {
 							#pages_crate::PageElement::new("input")
 								.attr("type", "hidden")
@@ -2495,14 +2577,29 @@ fn generate_model_form(
 									.attr("name", range_sentinel)
 									.attr("value", range_default.clone().unwrap_or_default())
 							});
-						let default_clear_sentinel = (descriptor.nullable
-							&& descriptor.has_default
-							&& stored_value.is_some())
+						let default_clear_control_id = format!("{control_id}-clear");
+						let default_clear_sentinel = (descriptor.nullable && descriptor.has_default)
 							.then(|| {
 								#pages_crate::PageElement::new("input")
-									.attr("type", "hidden")
+									.attr("type", "checkbox")
+									.attr("id", default_clear_control_id.clone())
 									.attr("name", default_clear_sentinel)
 									.attr("value", "true")
+									.bool_attr(
+										"checked",
+										matches!(
+											stored_value,
+											::core::option::Option::Some(
+												#pages_crate::__private::serde_json::Value::Null
+											)
+										),
+									)
+							});
+						let default_clear_label = (descriptor.nullable && descriptor.has_default)
+							.then(|| {
+								#pages_crate::PageElement::new("label")
+									.attr("for", default_clear_control_id)
+									.child("Clear value")
 							});
 
 						let mut wrapper = #pages_crate::PageElement::new("div")
@@ -2511,6 +2608,7 @@ fn generate_model_form(
 							.children(color_sentinel)
 							.children(range_sentinel)
 							.children(default_clear_sentinel)
+							.children(default_clear_label)
 							.child(
 								#pages_crate::PageElement::new("label")
 									.attr("for", control_id)
@@ -2582,7 +2680,10 @@ fn generate_model_form(
 												matches!(
 													descriptor.kind,
 													#pages_crate::form::ModelFormFieldKind::Boolean
-												),
+												) && !(descriptor.nullable
+													&& !<#schema_path as #pages_crate::form::ModelFormSchema>::default_boolean_is_true(
+														descriptor.name,
+													)),
 													descriptor.nullable,
 													descriptor.required,
 													descriptor.has_default,
@@ -2592,6 +2693,21 @@ fn generate_model_form(
 											.collect::<::std::vec::Vec<_>>();
 										let mut state = submit_form.__model_state.borrow_mut();
 										for (field, is_checkbox, nullable, required, has_default, is_range, is_color) in fields {
+											let default_clear_sentinel = format!("__reinhardt_defaulted_{field}");
+											let clears_default = nullable
+												&& has_default
+												&& values
+													.get(&default_clear_sentinel)
+													.as_string()
+													.as_deref()
+													== ::core::option::Option::Some("true");
+											if clears_default {
+												let _ = state.set_value(
+													field,
+													#pages_crate::__private::serde_json::Value::Null,
+												);
+												continue;
+											}
 											if (is_range || is_color) && !required && state.value(field).is_none() {
 												continue;
 											}
@@ -7762,7 +7878,37 @@ mod tests {
 		assert!(output.contains("matches ! (descriptor . name , \"accent\")"));
 		assert!(output.contains("input_type == \"color\" && stored_value . is_none ()"));
 		assert!(output.contains("__reinhardt_defaulted_"));
-		assert!(output.contains("widget override `{widget}` is incompatible"));
+		assert!(output.contains("using the generated default"));
+		assert!(!output.contains("panic !"));
+	}
+
+	#[rstest::rstest]
+	fn test_generate_model_form_uses_endpoint_policy_and_safe_native_controls() {
+		let input = quote! {
+			name: QuestionForm,
+			model: Question,
+			policy: QuestionSubmissionPolicy,
+			fields: [title, published, score],
+			server_fn: save_question,
+			overrides: {
+				score: { widget: RangeInput },
+			},
+		};
+
+		let output = parse_validate_generate(input).to_string();
+
+		assert!(output.contains("QuestionModelFormData < QuestionSubmissionPolicy >"));
+		assert!(
+			!output.contains("QuestionModelFormData < QuestionFormSelectionPolicy >"),
+			"the public data alias must remain assignable to the server endpoint payload"
+		);
+		assert!(output.contains("i128 :: from (min)"));
+		assert!(output.contains("Value :: Null => :: std :: string :: String :: new ()"));
+		assert!(output.contains("child (\"Unset\")"));
+		assert!(output.contains("__reinhardt_checkbox_"));
+		assert!(output.contains("\"unset\""));
+		assert!(output.contains("Clear value"));
+		assert!(!output.contains("checkbox_edit_script"));
 	}
 
 	#[rstest::rstest]

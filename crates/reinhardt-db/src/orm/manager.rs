@@ -1118,12 +1118,9 @@ impl<M: Model> Manager<M> {
 			let explicit_primary_key = obj
 				.get(M::primary_key_field())
 				.filter(|value| {
-					!matches!(
-						value,
-						DatabaseValue::Null
-							| DatabaseValue::I32(0)
-							| DatabaseValue::I64(0) if M::primary_key_uses_zero_sentinel()
-					)
+					!matches!(value, DatabaseValue::Null)
+						&& (!M::primary_key_uses_zero_sentinel()
+							|| !matches!(value, DatabaseValue::I32(0) | DatabaseValue::I64(0)))
 				})
 				.cloned();
 			if explicit_primary_key.is_none() {

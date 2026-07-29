@@ -18,6 +18,14 @@ impl ModelFormPolicy for QuestionFields {
 	}
 }
 
+struct QuestionSubmissionPolicy;
+
+impl ModelFormPolicy for QuestionSubmissionPolicy {
+	fn allows(field: &str) -> bool {
+		matches!(field, "title" | "owner_id")
+	}
+}
+
 struct QuestionFormSchema;
 
 const QUESTION_FIELDS: [ModelFormFieldDescriptor; 2] = [
@@ -155,8 +163,8 @@ impl<P: ModelFormPolicy> NativeModelFormPayload for QuestionModelFormData<P> {
 	}
 }
 
-async fn save_question<P: ModelFormPolicy>(
-	_payload: QuestionModelFormData<P>,
+async fn save_question(
+	_payload: QuestionModelFormData<QuestionSubmissionPolicy>,
 ) -> Result<(), reinhardt_pages::ServerFnError> {
 	Ok(())
 }
@@ -175,7 +183,7 @@ mod save_question {
 
 fn main() {
 	reinhardt_core::reactive::ReactiveScope::run(|| {
-		let _form = form! {
+		let form = form! {
 			name: QuestionForm,
 			model: Question,
 			policy: QuestionFields,
@@ -189,5 +197,8 @@ fn main() {
 				},
 			},
 		};
+		let _: QuestionModelFormData<QuestionSubmissionPolicy> = form
+			.data()
+			.expect("selected fields produce the endpoint payload type");
 	});
 }

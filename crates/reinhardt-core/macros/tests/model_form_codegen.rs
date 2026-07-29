@@ -9,7 +9,7 @@ include!("ui/model/support.rs");
 
 use model_form::{
 	AllEditableModelFields, ModelFormFieldKind, ModelFormPayload, ModelFormPolicy,
-	NativeModelFormPayload,
+	ModelFormPrimaryKeyFields, ModelFormSchema, NativeModelFormPayload,
 };
 
 #[model(app_label = "forms", form = true)]
@@ -162,6 +162,17 @@ fn generated_schema_exposes_descriptors_and_target_primary_key_kinds() {
 		}
 	);
 	assert!(StringKeyChildFormSchema::target_id().nullable);
+	assert!(
+		<StringKeyChildFormSchema as ModelFormSchema>::relation_target_matches::<StringKeyTarget>(
+			"target_id"
+		)
+	);
+	assert!(
+		!<StringKeyChildFormSchema as ModelFormSchema>::relation_target_matches::<FormDocument>(
+			"target_id"
+		)
+	);
+	assert_eq!(FormDocument::primary_key_fields(), ["id"]);
 
 	let mut child_payload = StringKeyChildModelFormData::<AllEditableModelFields>::empty();
 	child_payload

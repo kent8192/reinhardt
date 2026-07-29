@@ -275,10 +275,18 @@ assert!(form.is_valid());
 
 ```rust,no_run
 use reinhardt::core::model_form::{ModelFormPolicy, ModelFormSchema};
+use reinhardt::db::associations::ForeignKeyField;
 use reinhardt::db::orm::OrmExecutor;
 use reinhardt::forms::{FormModel, ModelForm, ModelFormError};
 use reinhardt::model;
 use serde::{Deserialize, Serialize};
+
+#[model(app_label = "users", form = true)]
+#[derive(Clone, Deserialize, Serialize)]
+struct User {
+    #[field(primary_key = true)]
+    id: i64,
+}
 
 #[model(app_label = "polls", form = true)]
 #[derive(Clone, Deserialize, Serialize)]
@@ -287,7 +295,8 @@ struct Question {
     id: Option<i64>,
     #[field(max_length = 200)]
     text: String,
-    owner_id: i64,
+    #[rel(foreign_key, related_name = "questions")]
+    owner: ForeignKeyField<User>,
 }
 
 struct PublicQuestionFields;
@@ -307,7 +316,7 @@ async fn create_question(
 
     // This typed setter is trusted server-side construction. The same field is
     // still rejected if it arrives in the public JSON payload.
-    payload.set_owner_id(owner_id);
+    payload.set_trusted_owner_id(owner_id);
 
     let mut form = ModelForm::<Question, PublicQuestionFields>::from_payload(payload);
     let candidate = form.build_instance()?;

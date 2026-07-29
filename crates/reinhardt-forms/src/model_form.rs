@@ -12,7 +12,7 @@ use crate::Form;
 use crate::form::ALL_FIELDS_KEY;
 use reinhardt_core::model_form::{
 	AllEditableModelFields, ModelFormFieldKind, ModelFormPayload, ModelFormPayloadError,
-	ModelFormPolicy, ModelFormSchema,
+	ModelFormPolicy, ModelFormPrimaryKeyFields, ModelFormSchema,
 };
 use reinhardt_db::orm::transaction::AtomicTransactionOutcome;
 use reinhardt_db::orm::{Model, OrmExecutor};
@@ -32,7 +32,7 @@ pub enum ModelFormPersistenceMode {
 /// Native bridge generated for models that opt in to model-backed forms.
 // The native model form contract intentionally exposes an async persistence method.
 #[allow(async_fn_in_trait)]
-pub trait FormModel: Model + Clone + Send + Sync {
+pub trait FormModel: Model + ModelFormPrimaryKeyFields + Clone + Send + Sync {
 	/// Generated descriptor schema for this model.
 	type Schema: ModelFormSchema<Model = Self>;
 	/// Generated typed payload under the active field policy.
@@ -237,11 +237,14 @@ where
 			return Err(ModelFormError::ForbiddenInput { field });
 		}
 		if self.persistence_mode == ModelFormPersistenceMode::Update
-			&& self.supplied_fields.contains(&T::primary_key_field())
+			&& let Some(field) = T::primary_key_fields()
+				.iter()
+				.copied()
+				.find(|field| self.supplied_fields.contains(field))
 		{
 			return Err(ModelFormError::FieldValidation {
 				errors: HashMap::from([(
-					T::primary_key_field().to_owned(),
+					field.to_owned(),
 					vec!["model form primary keys cannot be updated".to_owned()],
 				)]),
 			});
@@ -420,6 +423,7 @@ where
 		field_name: &str,
 		value: Value,
 	) -> Result<(), ModelFormError> {
+		self.finalize_transaction_save()?;
 		let Some(descriptor) = T::Schema::fields()
 			.iter()
 			.find(|descriptor| descriptor.name == field_name)
@@ -469,6 +473,7 @@ where
 		field_name: &str,
 		value: Value,
 	) -> Result<(), ModelFormError> {
+		self.finalize_transaction_save()?;
 		if T::Schema::fields()
 			.iter()
 			.find(|descriptor| descriptor.name == field_name)
@@ -502,6 +507,10 @@ where
 			|| !self.data.forbidden_fields().is_empty()
 	}
 
+	/// Performs structural validation before an inline formset assigns a generated parent key.
+	///
+	/// Model-level validation intentionally runs only after the real key is installed, so
+	/// validators may safely depend on that relationship.
 	pub(crate) fn is_valid_with_deferred_required_field(&mut self, deferred_field: &str) -> bool {
 		let mut valid = self.form.is_valid();
 		for descriptor in T::Schema::fields() {
@@ -538,12 +547,6 @@ where
 		};
 		if let Err(error) = candidate.apply_payload(&self.data) {
 			self.record_validation_error(&error);
-			return false;
-		}
-		if let Some(validator) = &self.model_validator
-			&& let Err(errors) = validator(&candidate)
-		{
-			self.record_validation_error(&ModelFormError::ModelValidation { errors });
 			return false;
 		}
 		valid
@@ -624,6 +627,22 @@ mod tests {
 	struct ZeroSentinelRecord {
 		#[field(primary_key = true)]
 		id: i32,
+		#[field(max_length = 200)]
+		title: String,
+	}
+
+	#[model(
+		app_label = "forms",
+		table_name = "model_form_composite_primary_key_records",
+		form = true,
+		info = false
+	)]
+	#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+	struct CompositePrimaryKeyRecord {
+		#[field(primary_key = true, auto_increment = false)]
+		account_id: i64,
+		#[field(primary_key = true, auto_increment = false)]
+		sequence: i64,
 		#[field(max_length = 200)]
 		title: String,
 	}
@@ -894,6 +913,31 @@ mod tests {
 	}
 
 	#[test]
+	fn generated_model_form_rejects_every_composite_primary_key_field_on_update() {
+		let mut data = CompositePrimaryKeyRecordModelFormData::<AllEditableModelFields>::empty();
+		data.set_sequence(2)
+			.expect("composite primary-key field should be represented in the payload");
+		let instance = CompositePrimaryKeyRecord {
+			account_id: 1,
+			sequence: 1,
+			title: "Original".to_owned(),
+		};
+		let mut form =
+			ModelForm::<CompositePrimaryKeyRecord>::from_payload_and_instance(data, instance);
+
+		let error = form
+			.build_instance()
+			.expect_err("updates must reject later composite primary-key fields");
+
+		assert!(matches!(
+			error,
+			ModelFormError::FieldValidation { errors }
+				if errors.get("sequence")
+					== Some(&vec!["model form primary keys cannot be updated".to_owned()])
+		));
+	}
+
+	#[test]
 	fn generated_model_form_uses_declared_model_defaults_on_create() {
 		let data = question_payload("Defaulted", 3);
 
@@ -1039,6 +1083,20 @@ mod tests {
 		let built = form.build_instance().unwrap();
 
 		assert_eq!(built.title, "CLEANED TITLE");
+	}
+
+	#[test]
+	fn generated_model_form_save_runs_model_validation_before_persistence() {
+		let data = question_payload("Rejected", 5);
+		let mut form = ModelForm::<Question, QuestionPolicy>::from_payload(data)
+			.with_model_validator(|_| Err(vec!["model validation failed".to_owned()]));
+		let mut executor = RetryExecutor::new(Vec::<Result<Row, Error>>::new());
+
+		let error = tokio_test::block_on(form.save(&mut executor))
+			.expect_err("save must not persist a candidate rejected by model validation");
+
+		assert!(matches!(error, ModelFormError::ModelValidation { .. }));
+		assert_eq!(executor.fetch_one_calls, 0);
 	}
 
 	#[test]

@@ -1,6 +1,6 @@
 //! Native form-field construction from target-neutral model descriptors.
 
-use chrono::{DateTime, NaiveDateTime, SecondsFormat, Utc};
+use chrono::{DateTime, Datelike, NaiveDateTime, SecondsFormat, Utc};
 use reinhardt_core::model_form::{ModelFormFieldDescriptor, ModelFormFieldKind};
 use rust_decimal::Decimal;
 use std::str::FromStr;
@@ -44,6 +44,16 @@ impl ModelIntegerField {
 		let Some(number) = number else {
 			return self.inner.clean(Some(value));
 		};
+
+		if let Some(min) = self.inner.min_value
+			&& min > 0
+			&& number < min as u64
+		{
+			return Err(FieldError::Validation(format!(
+				"Ensure this value is greater than or equal to {}",
+				min
+			)));
+		}
 
 		if let Some(max) = self.inner.max_value
 			&& (max < 0 || number > max as u64)
@@ -226,6 +236,15 @@ impl ModelDateTimeField {
 			}
 		}
 	}
+
+	fn validate_year(year: i32) -> FieldResult<()> {
+		if !(1000..=9999).contains(&year) {
+			return Err(FieldError::Validation(
+				"Enter a year between 1000 and 9999".to_owned(),
+			));
+		}
+		Ok(())
+	}
 }
 
 impl FormField for ModelDateTimeField {
@@ -260,6 +279,7 @@ impl FormField for ModelDateTimeField {
 				match self.kind {
 					ModelDateTimeKind::AwareUtc => {
 						if let Ok(datetime) = DateTime::parse_from_rfc3339(input) {
+							Self::validate_year(datetime.year())?;
 							return Ok(serde_json::Value::String(
 								datetime
 									.with_timezone(&Utc)
@@ -271,6 +291,7 @@ impl FormField for ModelDateTimeField {
 						if let Ok(datetime) =
 							NaiveDateTime::parse_from_str(input, "%Y-%m-%dT%H:%M:%S%.f")
 						{
+							Self::validate_year(datetime.year())?;
 							return Ok(self.normalize_parsed(datetime));
 						}
 					}
@@ -286,6 +307,30 @@ impl FormField for ModelDateTimeField {
 			}
 			cleaned => Ok(cleaned),
 		}
+	}
+}
+
+#[cfg(test)]
+mod tests {
+	use super::*;
+	use serde_json::json;
+
+	#[test]
+	fn integer_field_rejects_unsigned_text_below_minimum() {
+		let field = ModelIntegerField::new("quantity".to_owned(), true, Some(10), None);
+
+		assert!(field.clean(Some(&json!("5"))).is_err());
+		assert_eq!(field.clean(Some(&json!("10"))).unwrap(), json!(10));
+	}
+
+	#[test]
+	fn datetime_field_rejects_out_of_range_years_in_iso_fast_paths() {
+		let aware =
+			ModelDateTimeField::new("aware_at".to_owned(), true, ModelDateTimeKind::AwareUtc);
+		let naive = ModelDateTimeField::new("naive_at".to_owned(), true, ModelDateTimeKind::Naive);
+
+		assert!(aware.clean(Some(&json!("0025-01-15T14:30:00Z"))).is_err());
+		assert!(naive.clean(Some(&json!("0025-01-15T14:30:00"))).is_err());
 	}
 }
 

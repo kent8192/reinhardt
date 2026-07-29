@@ -2062,7 +2062,42 @@ fn model_form_kind(field: &FieldInfo) -> Result<TokenStream> {
 				.unwrap_or_else(|| quote!(::core::option::Option::None));
 			quote!(#core_crate::model_form::ModelFormFieldKind::Integer { min: #min, max: #max })
 		}
-		"f32" | "f64" => {
+		"f32" => {
+			if field
+				.config
+				.min_value
+				.is_some_and(|value| !(value as f32).is_finite())
+				|| field
+					.config
+					.max_value
+					.is_some_and(|value| !(value as f32).is_finite())
+			{
+				return Err(syn::Error::new_spanned(
+					&field.name,
+					"f32 model-form bounds must be finite f32 values",
+				));
+			}
+			let min = field
+				.config
+				.min_value
+				.map(|value| quote!(::core::option::Option::Some(#value as f64)))
+				.unwrap_or_else(|| {
+					quote!(::core::option::Option::Some(
+						::core::primitive::f32::MIN as f64
+					))
+				});
+			let max = field
+				.config
+				.max_value
+				.map(|value| quote!(::core::option::Option::Some(#value as f64)))
+				.unwrap_or_else(|| {
+					quote!(::core::option::Option::Some(
+						::core::primitive::f32::MAX as f64
+					))
+				});
+			quote!(#core_crate::model_form::ModelFormFieldKind::Float { min: #min, max: #max })
+		}
+		"f64" => {
 			let min = field
 				.config
 				.min_value
@@ -2106,6 +2141,14 @@ fn model_form_relation_id_kind(
 	field_infos: &[FieldInfo],
 ) -> Result<TokenStream> {
 	let core_crate = get_reinhardt_core_crate();
+	let relation = model_form_relation_id_target_type(field, field_infos)?;
+	Ok(quote!(<#relation as #core_crate::model_form::ModelFormPrimaryKey>::FIELD_KIND))
+}
+
+fn model_form_relation_id_target_type<'a>(
+	field: &FieldInfo,
+	field_infos: &'a [FieldInfo],
+) -> Result<&'a Type> {
 	let field_name = field.name.to_string();
 	let relation_name = field_name.strip_suffix("_id").ok_or_else(|| {
 		syn::Error::new_spanned(
@@ -2113,7 +2156,7 @@ fn model_form_relation_id_kind(
 			"generated relation id field must end with `_id`",
 		)
 	})?;
-	let relation = field_infos
+	field_infos
 		.iter()
 		.find(|candidate| candidate.name == relation_name)
 		.and_then(|candidate| extract_fk_target_type(&candidate.ty))
@@ -2122,8 +2165,7 @@ fn model_form_relation_id_kind(
 				&field.name,
 				"generated relation id field has no foreign-key target",
 			)
-		})?;
-	Ok(quote!(<#relation as #core_crate::model_form::ModelFormPrimaryKey>::FIELD_KIND))
+		})
 }
 
 fn model_form_relation_id_is_nullable(field: &FieldInfo, field_infos: &[FieldInfo]) -> bool {
@@ -2343,6 +2385,17 @@ fn generate_model_form_support(
 	} else {
 		quote!(match field { #(#default_true_boolean_arms,)* _ => false })
 	};
+	let relation_target_match_arms = editable_fields
+		.iter()
+		.filter(|field| field.is_fk_id_field)
+		.map(|field| {
+			let name = LitStr::new(&field.name.to_string(), field.name.span());
+			let target = model_form_relation_id_target_type(field, field_infos)?;
+			Ok(
+				quote!(#name => ::core::any::TypeId::of::<T>() == ::core::any::TypeId::of::<#target>()),
+			)
+		})
+		.collect::<Result<Vec<_>>>()?;
 	let descriptor_accessors = field_names.iter().enumerate().map(|(index, field_name)| {
 		quote! {
 			pub fn #field_name() -> &'static #core_crate::model_form::ModelFormFieldDescriptor {
@@ -2515,7 +2568,7 @@ fn generate_model_form_support(
 					default
 				} else if is_auto_generated_field(field) && !field.is_fk_id_field {
 					get_auto_field_default_value(field)
-				} else if required {
+				} else if required || (!nullable && field.config.blank == Some(true)) {
 					quote! {
 						return ::core::result::Result::Err(
 							#forms_crate::model_form::ModelFormError::MissingModelField {
@@ -2578,6 +2631,14 @@ fn generate_model_form_support(
 					default
 				} else if is_auto_generated_field(field) && !field.is_fk_id_field {
 					get_auto_field_default_value(field)
+				} else if !nullable && field.config.blank == Some(true) {
+					quote! {
+						return ::core::result::Result::Err(
+							#forms_crate::model_form::ModelFormError::MissingModelField {
+								field: #field_literal,
+							},
+						)
+					}
 				} else if required {
 					quote! {
 						if deferred_field == #field_literal {
@@ -2676,6 +2737,13 @@ fn generate_model_form_support(
 
 			fn default_boolean_is_true(field: &str) -> bool {
 				#default_true_boolean_body
+			}
+
+			fn relation_target_matches<T: 'static>(field: &str) -> bool {
+				match field {
+					#(#relation_target_match_arms,)*
+					_ => false,
+				}
 			}
 		}
 
@@ -4284,6 +4352,16 @@ pub(crate) fn model_derive_impl(mut input: DeriveInput) -> Result<TokenStream> {
 	} else {
 		quote! {}
 	};
+	let primary_key_field_names = pk_fields
+		.iter()
+		.map(|field| LitStr::new(&field.name.to_string(), field.name.span()));
+	let model_form_primary_key_fields_impl = quote! {
+		impl #info_impl_generics #core_crate::model_form::ModelFormPrimaryKeyFields for #struct_name #info_ty_generics #info_where_clause {
+			fn primary_key_fields() -> &'static [&'static str] {
+				&[#(#primary_key_field_names),*]
+			}
+		}
+	};
 	let info_model_impl = if model_config.server_only {
 		quote! {
 			#[cfg(not(all(target_family = "wasm", target_os = "unknown")))]
@@ -4318,6 +4396,7 @@ pub(crate) fn model_derive_impl(mut input: DeriveInput) -> Result<TokenStream> {
 	let shared_info_output = quote! {
 		#info_model_impl
 		#model_form_primary_key_impl
+		#model_form_primary_key_fields_impl
 		#info_struct
 	};
 
@@ -9192,6 +9271,80 @@ mod tests {
 				&& output.contains("required : true")
 				&& output.contains("MissingModelField"),
 			"an explicit null = false annotation must control the generated descriptor: {output}"
+		);
+	}
+
+	#[test]
+	fn test_model_form_f32_bounds_are_representable() {
+		let input = quote! {
+			#[model(app_label = "fixture_tests", table_name = "fixture_models", form = true)]
+			struct FixtureModel {
+				#[field(primary_key = true)]
+				id: i64,
+				ratio: f32,
+			}
+		};
+
+		let output = model_derive_impl(syn::parse2(input).unwrap())
+			.expect("f32 form field should derive")
+			.to_string();
+
+		assert!(
+			output.contains("f32 :: MIN as f64") && output.contains("f32 :: MAX as f64"),
+			"f32 descriptors must bound values to the finite f32 domain: {output}"
+		);
+	}
+
+	#[test]
+	fn test_model_form_blank_non_null_field_requires_explicit_value() {
+		let input = quote! {
+			#[model(app_label = "fixture_tests", table_name = "fixture_models", form = true)]
+			struct FixtureModel {
+				#[field(primary_key = true)]
+				id: i64,
+				#[field(blank = true)]
+				quantity: i64,
+			}
+		};
+
+		let output = model_derive_impl(syn::parse2(input).unwrap())
+			.expect("blank non-null field should derive")
+			.to_string();
+		let quantity_assignment = output
+			.split("quantity : match data . quantity")
+			.nth(1)
+			.expect("generated form must initialize the blank field")
+			.split("} ,")
+			.next()
+			.expect("quantity assignment must terminate");
+
+		assert!(
+			quantity_assignment.contains("MissingModelField"),
+			"omitting a non-null blank field must not synthesize a default: {quantity_assignment}"
+		);
+	}
+
+	#[test]
+	fn test_model_form_emits_relation_target_and_primary_key_metadata() {
+		let input = quote! {
+			#[model(app_label = "fixture_tests", table_name = "fixture_models", form = true)]
+			struct FixtureModel {
+				#[field(primary_key = true)]
+				id: i64,
+				#[rel(foreign_key)]
+				author: ForeignKeyField<Author>,
+			}
+		};
+
+		let output = model_derive_impl(syn::parse2(input).unwrap())
+			.expect("relation-backed form should derive")
+			.to_string();
+
+		assert!(
+			output.contains("relation_target_matches")
+				&& output.contains("TypeId :: of :: < Author >")
+				&& output.contains("ModelFormPrimaryKeyFields"),
+			"generated schemas must expose target-aware relation and primary-key metadata: {output}"
 		);
 	}
 

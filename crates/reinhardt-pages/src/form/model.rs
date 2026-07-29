@@ -71,6 +71,10 @@ where
 				field: field.to_owned(),
 			});
 		}
+		if descriptor.nullable && value.is_null() {
+			self.values.insert(descriptor.name, serde_json::Value::Null);
+			return Ok(());
+		}
 		if !descriptor.required
 			&& matches!(&value, serde_json::Value::String(text) if text.is_empty())
 		{
@@ -662,6 +666,51 @@ mod tests {
 			.expect("an empty optional control should be accepted");
 
 		assert_eq!(state.value("summary"), None);
+	}
+
+	#[test]
+	fn explicit_nullable_default_clear_is_preserved() {
+		let mut state = ModelFormState::<NullableDefaultSchema, AllEditableModelFields>::new();
+
+		state
+			.set_value("summary", serde_json::Value::Null)
+			.expect("an explicit nullable clear should be accepted");
+
+		assert_eq!(state.value("summary"), Some(&serde_json::Value::Null));
+	}
+
+	struct F32Schema;
+
+	impl ModelFormSchema for F32Schema {
+		type Model = ();
+
+		fn fields() -> &'static [ModelFormFieldDescriptor] {
+			const FIELDS: [ModelFormFieldDescriptor; 1] = [ModelFormFieldDescriptor {
+				name: "ratio",
+				kind: ModelFormFieldKind::Float {
+					min: Some(f32::MIN as f64),
+					max: Some(f32::MAX as f64),
+				},
+				required: true,
+				has_default: false,
+				nullable: false,
+				editable: true,
+				generated_relation_id: false,
+			}];
+			&FIELDS
+		}
+	}
+
+	#[test]
+	fn f32_fields_reject_values_that_would_narrow_to_infinity() {
+		let mut state = ModelFormState::<F32Schema, AllEditableModelFields>::new();
+
+		assert!(
+			state
+				.set_value("ratio", serde_json::Value::String("1e100".to_owned()))
+				.is_err()
+		);
+		assert_eq!(state.value("ratio"), None);
 	}
 
 	struct OptionalContactSchema;

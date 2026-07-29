@@ -71,15 +71,6 @@ pub fn validate_form_with_ambient_arguments_source(
 	// Transform state configuration
 	let state = transform_state(&ast.state)?;
 
-	// Transform callbacks
-	let callbacks = transform_callbacks(&ast.callbacks)?;
-
-	// Transform watch block
-	let watch = transform_watch(&ast.watch)?;
-
-	// Transform derived block
-	let derived = transform_derived(&ast.derived)?;
-
 	// Transform redirect configuration
 	let redirect_on_success = transform_redirect(&ast.redirect_on_success)?;
 
@@ -113,16 +104,10 @@ pub fn validate_form_with_ambient_arguments_source(
 			"model-backed form! requires an explicit `server_fn`",
 		));
 	}
-	if model_source.is_some() && !matches!(method, FormMethod::Post) {
-		return Err(Error::new(
-			ast.span,
-			"model-backed form! supports only method: Post",
-		));
-	}
 	if model_source.is_some() && (redirect_on_success.is_some() || success_url.is_some()) {
 		return Err(Error::new(
 			ast.span,
-			"model-backed form! does not support `redirect_on_success` or `success_url`; use `on_success` to handle a successful model submission explicitly",
+			"model-backed form! does not support `redirect_on_success` or `success_url`; configure submission lifecycle through `use_form(&form)`",
 		));
 	}
 	if model_source.is_some() && initial_loader.is_some() {
@@ -131,12 +116,46 @@ pub fn validate_form_with_ambient_arguments_source(
 			"model-backed form! does not support `initial_loader`; initialize values through the generated form state",
 		));
 	}
+	if model_source.is_some() && choices_loader.is_some() {
+		return Err(Error::new(
+			ast.span,
+			"model-backed form! does not support `choices_loader`; configure static choices through the generated model schema",
+		));
+	}
+	if model_source.is_some() && !matches!(method, FormMethod::Post) {
+		return Err(Error::new(
+			ast.span,
+			"model-backed form! requires `method: Post` for its server_fn action",
+		));
+	}
 	if model_source.is_some() && slots.is_some() {
 		return Err(Error::new(
 			ast.span,
 			"model-backed form! does not support `slots`; compose surrounding page content outside the generated form",
 		));
 	}
+	if model_source.is_some() && (ast.watch.is_some() || ast.derived.is_some()) {
+		return Err(Error::new(
+			ast.span,
+			"model-backed form! does not support `watch` or `derived` clauses",
+		));
+	}
+	if model_source.is_some() && ast.callbacks.has_any() {
+		return Err(Error::new(
+			ast.span,
+			"model-backed form! does not support callback clauses; configure submission lifecycle through `use_form(&form)`",
+		));
+	}
+
+	// Transform callbacks after model-form restrictions so model submissions
+	// receive the same targeted diagnostics as the Pages macro.
+	let callbacks = transform_callbacks(&ast.callbacks)?;
+
+	// Transform watch block
+	let watch = transform_watch(&ast.watch)?;
+
+	// Transform derived block
+	let derived = transform_derived(&ast.derived)?;
 
 	// Transform unified validators (scope filtering happens at codegen)
 	let validators = transform_validators(&ast.validators, &ast.fields)?;
@@ -2128,6 +2147,15 @@ fn parse_model_widget(ident: &syn::Ident) -> Result<TypedWidget> {
 	if ident == "TextArea" {
 		return Ok(TypedWidget::Textarea);
 	}
+	if matches!(
+		ident.to_string().as_str(),
+		"Select" | "SelectMultiple" | "RadioSelect" | "MonthInput" | "WeekInput" | "FileInput"
+	) {
+		return Err(Error::new(
+			ident.span(),
+			"this widget is not supported by model-backed forms; use a supported scalar widget or an explicit non-model form",
+		));
+	}
 	parse_widget(ident)
 }
 
@@ -3222,6 +3250,85 @@ mod tests {
 		assert!(
 			error.contains(expected_clause),
 			"expected diagnostic to name `{expected_clause}`, got: {error}"
+		);
+	}
+
+	#[rstest]
+	#[case(
+		quote! {
+			name: QuestionForm,
+			model: Question,
+			policy: QuestionFields,
+			fields: [title],
+			server_fn: save_question,
+			choices_loader: load_choices,
+		},
+		"model-backed form! does not support `choices_loader`; configure static choices through the generated model schema"
+	)]
+	#[case(
+		quote! {
+			name: QuestionForm,
+			model: Question,
+			policy: QuestionFields,
+			fields: [title],
+			server_fn: save_question,
+			method: Get,
+		},
+		"model-backed form! requires `method: Post` for its server_fn action"
+	)]
+	#[case(
+		quote! {
+			name: QuestionForm,
+			model: Question,
+			policy: QuestionFields,
+			fields: [title],
+			server_fn: save_question,
+			watch: { preview: |form| { form } },
+		},
+		"model-backed form! does not support `watch` or `derived` clauses"
+	)]
+	#[case(
+		quote! {
+			name: QuestionForm,
+			model: Question,
+			policy: QuestionFields,
+			fields: [title],
+			server_fn: save_question,
+			derived: { preview: |form| { form } },
+		},
+		"model-backed form! does not support `watch` or `derived` clauses"
+	)]
+	#[case(
+		quote! {
+			name: QuestionForm,
+			model: Question,
+			policy: QuestionFields,
+			fields: [title],
+			server_fn: save_question,
+			on_success: |result| { result },
+		},
+		"model-backed form! does not support callback clauses; configure submission lifecycle through `use_form(&form)`"
+	)]
+	fn test_validate_model_form_rejects_unsupported_runtime_clauses(
+		#[case] input: proc_macro2::TokenStream,
+		#[case] expected: &str,
+	) {
+		let error = parse_and_validate(input)
+			.expect_err("model form runtime clause should be rejected")
+			.to_string();
+
+		assert_eq!(error, expected);
+	}
+
+	#[test]
+	fn test_model_form_rejects_widget_without_model_renderer() {
+		let widget: syn::Ident = syn::parse_quote!(SelectMultiple);
+
+		let error = parse_model_widget(&widget).unwrap_err();
+
+		assert_eq!(
+			error.to_string(),
+			"this widget is not supported by model-backed forms; use a supported scalar widget or an explicit non-model form"
 		);
 	}
 

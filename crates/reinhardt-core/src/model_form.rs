@@ -8,5 +8,6 @@ pub use policy::{
 	NativeModelFormPayload, normalize_native_model_form_value,
 };
 pub use schema::{
-	ModelFormFieldDescriptor, ModelFormFieldKind, ModelFormPrimaryKey, ModelFormSchema,
+	ModelFormFieldDescriptor, ModelFormFieldKind, ModelFormPrimaryKey, ModelFormPrimaryKeyFields,
+	ModelFormSchema,
 };

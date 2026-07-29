@@ -87,7 +87,9 @@ impl QueryRow {
 					serde_json::Value::String(base64::engine::general_purpose::STANDARD.encode(&b))
 				}
 				QueryValue::Timestamp(dt) => serde_json::Value::String(dt.to_rfc3339()),
-				QueryValue::NaiveTimestamp(dt) => serde_json::Value::String(dt.to_string()),
+				QueryValue::NaiveTimestamp(dt) => {
+					serde_json::Value::String(dt.and_utc().to_rfc3339())
+				}
 				QueryValue::Uuid(u) => serde_json::Value::String(u.to_string()),
 				QueryValue::Json(Some(value)) => {
 					native_json_fields.insert(key.clone());
@@ -433,9 +435,10 @@ mod tests {
 	use async_trait::async_trait;
 	use reinhardt_core::exception::Result;
 
+	#[cfg(feature = "sqlite")]
+	use super::OrmExecutor;
 	use super::{
-		BackendsConnection, DatabaseBackend, DatabaseConnection, DatabaseConnectionLease,
-		OrmExecutor,
+		BackendsConnection, DatabaseBackend, DatabaseConnection, DatabaseConnectionLease, QueryRow,
 	};
 	use crate::backends::backend::DatabaseBackend as BackendsDatabaseBackend;
 	use crate::backends::types::{DatabaseType, QueryResult, QueryValue, Row, TransactionExecutor};
@@ -520,6 +523,23 @@ mod tests {
 		assert_eq!(
 			DatabaseBackend::from(DatabaseType::Sqlite),
 			DatabaseBackend::Sqlite
+		);
+	}
+
+	#[test]
+	fn query_row_decodes_naive_timestamps_as_utc_rfc3339() {
+		let timestamp = chrono::NaiveDate::from_ymd_opt(2026, 7, 29)
+			.expect("the fixture date must be valid")
+			.and_hms_opt(12, 34, 56)
+			.expect("the fixture time must be valid");
+		let mut backend_row = Row::new();
+		backend_row.insert("applied".to_string(), QueryValue::NaiveTimestamp(timestamp));
+
+		let row = QueryRow::from_backend_row(backend_row);
+
+		assert_eq!(
+			row.get::<chrono::DateTime<chrono::Utc>>("applied"),
+			Some(timestamp.and_utc())
 		);
 	}
 

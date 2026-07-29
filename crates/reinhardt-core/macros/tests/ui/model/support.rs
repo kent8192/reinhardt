@@ -123,6 +123,9 @@ pub mod model_form {
 		fn default_boolean_is_true(_field: &str) -> bool {
 			false
 		}
+		fn relation_target_matches<T: 'static>(_field: &str) -> bool {
+			false
+		}
 	}
 
 	pub trait ModelFormPayload<P: ModelFormPolicy>: Sized {
@@ -196,6 +199,10 @@ pub mod model_form {
 
 	pub trait ModelFormPrimaryKey {
 		const FIELD_KIND: ModelFormFieldKind;
+	}
+
+	pub trait ModelFormPrimaryKeyFields {
+		fn primary_key_fields() -> &'static [&'static str];
 	}
 
 	#[derive(Debug, Clone, Copy, PartialEq)]

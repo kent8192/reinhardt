@@ -94,6 +94,14 @@ pub trait ModelFormSchema {
 	fn default_boolean_is_true(_field: &str) -> bool {
 		false
 	}
+
+	/// Returns whether a generated relationship identifier targets `T`.
+	///
+	/// This keeps relation-aware form helpers target-safe without exposing ORM
+	/// metadata to shared form schemas.
+	fn relation_target_matches<T: 'static>(_field: &str) -> bool {
+		false
+	}
 }
 
 /// Supplies the target-neutral form kind for a model primary key.
@@ -105,9 +113,22 @@ pub trait ModelFormPrimaryKey {
 	const FIELD_KIND: ModelFormFieldKind;
 }
 
+/// Supplies the complete field list that composes a model primary key.
+///
+/// Unlike [`ModelFormPrimaryKey`], this trait also supports composite primary
+/// keys. It is intended for relation-aware form helpers that must exclude all
+/// target primary-key fields from an update payload.
+pub trait ModelFormPrimaryKeyFields {
+	/// Returns the field names that compose this model's primary key.
+	fn primary_key_fields() -> &'static [&'static str];
+}
+
 #[cfg(test)]
 mod tests {
-	use crate::model_form::{ModelFormFieldDescriptor, ModelFormFieldKind, ModelFormPrimaryKey};
+	use crate::model_form::{
+		ModelFormFieldDescriptor, ModelFormFieldKind, ModelFormPrimaryKey,
+		ModelFormPrimaryKeyFields,
+	};
 
 	struct TextPrimaryKey;
 
@@ -117,6 +138,12 @@ mod tests {
 			max_length: Some(64),
 			multiline: false,
 		};
+	}
+
+	impl ModelFormPrimaryKeyFields for TextPrimaryKey {
+		fn primary_key_fields() -> &'static [&'static str] {
+			&["id"]
+		}
 	}
 
 	#[test]
@@ -149,5 +176,10 @@ mod tests {
 				multiline: false,
 			}
 		);
+	}
+
+	#[test]
+	fn primary_key_fields_support_composite_keys() {
+		assert_eq!(TextPrimaryKey::primary_key_fields(), ["id"]);
 	}
 }

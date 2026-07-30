@@ -5,6 +5,7 @@ use reinhardt_db::backends::DatabaseConnection;
 use reinhardt_db::migrations::{
 	ColumnDefinition, FieldType, Migration, MigrationCatalog, MigrationDirection, MigrationError,
 	MigrationKey, MigrationSource, Operation, ProjectState, Result, SqlDialect, plan_migration_sql,
+	plan_migration_sql_with_states,
 };
 
 struct TestSource {
@@ -243,6 +244,217 @@ async fn non_atomic_plan_never_renders_transaction_wrappers() {
 	.unwrap();
 
 	assert_eq!(plan.render(SqlDialect::Postgres), "SELECT 1;\n");
+}
+
+#[tokio::test]
+async fn backward_drop_table_uses_the_catalog_target_state() {
+	let initial = create_table("catalog", "0001_initial", "books");
+	let mut drop_books =
+		Migration::new("0002_drop_books", "catalog").add_operation(Operation::DropTable {
+			name: "books".to_string(),
+		});
+	drop_books.dependencies = vec![("catalog".to_string(), "0001_initial".to_string())];
+	let catalog = MigrationCatalog::load_strict(&TestSource {
+		migrations: vec![drop_books.clone(), initial],
+	})
+	.await
+	.unwrap();
+	let state_after = catalog
+		.state_after(&MigrationKey::new("catalog", "0002_drop_books"))
+		.unwrap();
+	let state_before = catalog
+		.state_before(&MigrationKey::new("catalog", "0002_drop_books"))
+		.unwrap();
+	assert!(state_after.models.is_empty());
+	let connection = DatabaseConnection::connect_sqlite("sqlite::memory:")
+		.await
+		.unwrap();
+
+	let plan = plan_migration_sql_with_states(
+		&connection,
+		&drop_books,
+		&state_before,
+		&state_after,
+		MigrationDirection::Backward,
+	)
+	.await
+	.unwrap();
+
+	assert_eq!(
+		plan.render(SqlDialect::Mysql),
+		"CREATE TABLE books (\n  id INTEGER NOT NULL\n);\n"
+	);
+}
+
+#[tokio::test]
+async fn state_after_only_drop_table_error_points_to_the_two_state_api() {
+	let initial = create_table("catalog", "0001_initial", "books");
+	let mut drop_books =
+		Migration::new("0002_drop_books", "catalog").add_operation(Operation::DropTable {
+			name: "books".to_string(),
+		});
+	drop_books.dependencies = vec![("catalog".to_string(), "0001_initial".to_string())];
+	let catalog = MigrationCatalog::load_strict(&TestSource {
+		migrations: vec![drop_books.clone(), initial],
+	})
+	.await
+	.unwrap();
+	let state_after = catalog
+		.state_after(&MigrationKey::new("catalog", "0002_drop_books"))
+		.unwrap();
+	let connection = DatabaseConnection::connect_sqlite("sqlite::memory:")
+		.await
+		.unwrap();
+
+	let error = plan_migration_sql(
+		&connection,
+		&drop_books,
+		&state_after,
+		MigrationDirection::Backward,
+	)
+	.await
+	.unwrap_err();
+
+	assert!(matches!(error, MigrationError::IrreversibleError(_)));
+	assert_eq!(
+		error.to_string(),
+		"Irreversible migration: catalog.0002_drop_books requires pre-operation project state; use plan_migration_sql_with_states"
+	);
+}
+
+#[tokio::test]
+async fn backward_legacy_drop_column_uses_its_pre_operation_definition() {
+	let mut initial = create_table("catalog", "0001_initial", "books");
+	initial.operations = vec![Operation::CreateTable {
+		name: "books".to_string(),
+		columns: vec![
+			ColumnDefinition::new("id", FieldType::Integer),
+			ColumnDefinition::new("title", FieldType::Text),
+		],
+		constraints: Vec::new(),
+		without_rowid: None,
+		interleave_in_parent: None,
+		partition: None,
+	}];
+	let mut drop_title =
+		Migration::new("0002_drop_title", "catalog").add_operation(Operation::DropColumn {
+			table: "books".to_string(),
+			column: "title".to_string(),
+			old_definition: None,
+		});
+	drop_title.dependencies = vec![("catalog".to_string(), "0001_initial".to_string())];
+	let catalog = MigrationCatalog::load_strict(&TestSource {
+		migrations: vec![drop_title.clone(), initial],
+	})
+	.await
+	.unwrap();
+	let state_after = catalog
+		.state_after(&MigrationKey::new("catalog", "0002_drop_title"))
+		.unwrap();
+	let state_before = catalog
+		.state_before(&MigrationKey::new("catalog", "0002_drop_title"))
+		.unwrap();
+	let books = state_after.find_model_by_table("books").unwrap();
+	assert_eq!(books.fields.keys().collect::<Vec<_>>(), vec!["id"]);
+	let connection = DatabaseConnection::connect_sqlite("sqlite::memory:")
+		.await
+		.unwrap();
+
+	let plan = plan_migration_sql_with_states(
+		&connection,
+		&drop_title,
+		&state_before,
+		&state_after,
+		MigrationDirection::Backward,
+	)
+	.await
+	.unwrap();
+
+	assert!(plan.render(SqlDialect::Mysql).contains("title TEXT"));
+}
+
+#[tokio::test]
+async fn backward_legacy_alter_column_uses_its_pre_operation_definition() {
+	let initial = create_table("catalog", "0001_initial", "books");
+	let mut alter_id =
+		Migration::new("0002_alter_id", "catalog").add_operation(Operation::AlterColumn {
+			table: "books".to_string(),
+			column: "id".to_string(),
+			old_definition: None,
+			new_definition: ColumnDefinition::new("id", FieldType::Text),
+			mysql_options: None,
+		});
+	alter_id.dependencies = vec![("catalog".to_string(), "0001_initial".to_string())];
+	let catalog = MigrationCatalog::load_strict(&TestSource {
+		migrations: vec![alter_id.clone(), initial],
+	})
+	.await
+	.unwrap();
+	let state_before = catalog
+		.state_before(&MigrationKey::new("catalog", "0002_alter_id"))
+		.unwrap();
+	let state_after = catalog
+		.state_after(&MigrationKey::new("catalog", "0002_alter_id"))
+		.unwrap();
+	let connection = DatabaseConnection::connect_sqlite("sqlite::memory:")
+		.await
+		.unwrap();
+	connection
+		.execute("CREATE TABLE books (id TEXT NOT NULL)", vec![])
+		.await
+		.unwrap();
+
+	let plan = plan_migration_sql_with_states(
+		&connection,
+		&alter_id,
+		&state_before,
+		&state_after,
+		MigrationDirection::Backward,
+	)
+	.await
+	.unwrap();
+
+	assert!(plan.render(SqlDialect::Sqlite).contains("id INTEGER"));
+}
+
+#[tokio::test]
+async fn two_state_planner_rejects_a_mismatched_target_state() {
+	let initial = create_table("catalog", "0001_initial", "books");
+	let title = add_column(
+		"catalog",
+		"0002_title",
+		&[("catalog", "0001_initial")],
+		"books",
+		"title",
+	);
+	let catalog = MigrationCatalog::load_strict(&TestSource {
+		migrations: vec![title.clone(), initial],
+	})
+	.await
+	.unwrap();
+	let state_before = catalog
+		.state_before(&MigrationKey::new("catalog", "0002_title"))
+		.unwrap();
+	let mismatched_after = ProjectState::new();
+	let connection = DatabaseConnection::connect_sqlite("sqlite::memory:")
+		.await
+		.unwrap();
+
+	let error = plan_migration_sql_with_states(
+		&connection,
+		&title,
+		&state_before,
+		&mismatched_after,
+		MigrationDirection::Backward,
+	)
+	.await
+	.unwrap_err();
+
+	assert!(matches!(error, MigrationError::InvalidMigration(_)));
+	assert_eq!(
+		error.to_string(),
+		"Invalid migration: catalog.0002_title state_after does not match state_before replay"
+	);
 }
 
 #[tokio::test]

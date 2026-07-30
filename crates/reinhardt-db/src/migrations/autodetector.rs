@@ -129,7 +129,7 @@ pub struct ForeignKeyInfo {
 }
 
 /// Field state for migration detection
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct FieldState {
 	/// The name.
 	pub name: String,
@@ -189,7 +189,7 @@ impl FieldState {
 /// Model state for migration detection
 ///
 /// Django equivalent: `ModelState` in django/db/migrations/state.py
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct ModelState {
 	/// Application label (e.g., "auth", "blog")
 	pub app_label: String,
@@ -685,7 +685,7 @@ impl ModelState {
 ///
 /// assert!(state.get_model("myapp", "User").is_some());
 /// ```
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct ProjectState {
 	/// Models: (app_label, model_name) -> ModelState
 	pub models: std::collections::BTreeMap<(String, String), ModelState>,

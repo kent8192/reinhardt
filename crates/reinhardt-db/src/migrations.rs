@@ -54,6 +54,11 @@
 //! consumes this same plan and keeps table-existence checks as execution policy.
 //! SQLite recreation planning may read schema metadata through the supplied
 //! connection, but it does not execute DDL.
+//! Backward inspection of destructive operations must use
+//! [`plan_migration_sql_with_states`] with
+//! [`MigrationCatalog::state_before`] and [`MigrationCatalog::state_after`].
+//! Both states are required because a post-migration state cannot retain a
+//! dropped table or legacy dropped-column definition.
 //!
 //! ### Generated Entry Point Example
 //!
@@ -191,7 +196,10 @@ pub use source::{
 	MigrationSource, composite::CompositeSource, filesystem::FilesystemSource,
 	registry::RegistrySource,
 };
-pub use sql_plan::{MigrationDirection, MigrationSqlPlan, PlannedStatement, plan_migration_sql};
+pub use sql_plan::{
+	MigrationDirection, MigrationSqlPlan, PlannedStatement, plan_migration_sql,
+	plan_migration_sql_with_states,
+};
 pub use squash::{MigrationSquasher, SquashOptions, SquashResult};
 pub use state_loader::{MigrationStateLoader, build_state_from_files};
 pub use visualization::{HistoryEntry, MigrationStats, MigrationVisualizer, OutputFormat};

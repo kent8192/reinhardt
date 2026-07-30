@@ -1438,6 +1438,102 @@ pub async fn plan_migration_sql(
 	state: &ProjectState,
 	direction: MigrationDirection,
 ) -> Result<MigrationSqlPlan> {
+	plan_migration_sql_for_inspection(connection, migration, state, direction, None).await
+}
+
+/// Builds a SQL plan from explicit states on both sides of a migration.
+///
+/// Forward planning uses `state_before`. Backward planning starts from
+/// `state_after`, while replaying the migration forward from `state_before`
+/// captures the pre-operation snapshots required to reverse destructive
+/// operations such as legacy `DropColumn` and `DropTable`.
+pub async fn plan_migration_sql_with_states(
+	connection: &DatabaseConnection,
+	migration: &Migration,
+	state_before: &ProjectState,
+	state_after: &ProjectState,
+	direction: MigrationDirection,
+) -> Result<MigrationSqlPlan> {
+	let (operation_states, replayed_after) =
+		migration_operation_pre_states(migration, state_before)?;
+	let expected_after = if migration.database_only {
+		state_before
+	} else {
+		&replayed_after
+	};
+	if expected_after != state_after {
+		return Err(MigrationError::InvalidMigration(format!(
+			"{} state_after does not match state_before replay",
+			migration.id()
+		)));
+	}
+	let backward_operation_states =
+		matches!(direction, MigrationDirection::Backward).then_some(operation_states);
+	let state = match direction {
+		MigrationDirection::Forward => state_before,
+		MigrationDirection::Backward => state_after,
+	};
+	plan_migration_sql_for_inspection(
+		connection,
+		migration,
+		state,
+		direction,
+		backward_operation_states.as_deref(),
+	)
+	.await
+}
+
+fn migration_operation_pre_states(
+	migration: &Migration,
+	state_before: &ProjectState,
+) -> Result<(Vec<ProjectState>, ProjectState)> {
+	let mut current = state_before.clone();
+	let mut states = Vec::with_capacity(migration.operations.len());
+	for operation in &migration.operations {
+		operation.validate_for_partial_state(&current)?;
+		states.push(current.clone());
+		operation.state_forwards(&migration.app_label, &mut current);
+	}
+	Ok((states, current))
+}
+
+fn irreversible_planning_error(migration: &Migration, operation: &Operation) -> MigrationError {
+	let requires_pre_operation_state = matches!(
+		operation,
+		Operation::DropTable { .. }
+			| Operation::DropColumn {
+				old_definition: None,
+				..
+			} | Operation::AlterColumn {
+			old_definition: None,
+			..
+		} | Operation::DropConstraint { .. }
+	);
+	if requires_pre_operation_state {
+		MigrationError::IrreversibleError(format!(
+			"{} requires pre-operation project state; use plan_migration_sql_with_states",
+			migration.id()
+		))
+	} else {
+		let operation_name = match operation {
+			Operation::RunSQL { .. } => "RunSQL",
+			Operation::RunRust { .. } => "RunRust",
+			_ => "operation",
+		};
+		MigrationError::IrreversibleError(format!(
+			"{} contains an irreversible {operation_name} operation",
+			migration.id()
+		))
+	}
+}
+
+async fn plan_migration_sql_for_inspection(
+	connection: &DatabaseConnection,
+	migration: &Migration,
+	state: &ProjectState,
+	direction: MigrationDirection,
+	backward_operation_states: Option<&[ProjectState]>,
+) -> Result<MigrationSqlPlan> {
 	#[cfg(feature = "sqlite")]
 	if migration_requires_sqlite_recreation(connection, migration, direction) {
 		let mut editor = SchemaEditor::new_for_migration(
@@ -1454,13 +1550,22 @@ pub async fn plan_migration_sql(
 			direction,
 			true,
 			Some(&mut editor),
+			backward_operation_states,
 		)
 		.await?;
 		editor.finish().await?;
 		return Ok(plan);
 	}
-	plan_migration_sql_with_irreversible_policy(connection, migration, state, direction, true, None)
-		.await
+	plan_migration_sql_with_irreversible_policy(
+		connection,
+		migration,
+		state,
+		direction,
+		true,
+		None,
+		backward_operation_states,
+	)
+	.await
 }
 
 pub(crate) async fn plan_migration_sql_for_execution(
@@ -1477,6 +1582,7 @@ pub(crate) async fn plan_migration_sql_for_execution(
 		direction,
 		false,
 		Some(editor),
+		None,
 	)
 	.await
 }
@@ -1505,6 +1611,7 @@ async fn plan_migration_sql_with_irreversible_policy(
 	#[cfg_attr(not(feature = "sqlite"), allow(unused_variables))] mut sqlite_editor: Option<
 		&mut SchemaEditor,
 	>,
+	backward_operation_states: Option<&[ProjectState]>,
 ) -> Result<MigrationSqlPlan> {
 	if migration.state_only {
 		return Ok(MigrationSqlPlan {
@@ -1530,17 +1637,20 @@ async fn plan_migration_sql_with_irreversible_policy(
 	#[cfg(feature = "sqlite")]
 	let mut sqlite_opaque_operation_seen = None;
 
-	let operations: Vec<&Operation> = match direction {
-		MigrationDirection::Forward => migration.operations.iter().collect(),
-		MigrationDirection::Backward => migration.operations.iter().rev().collect(),
+	let operations: Vec<(usize, &Operation)> = match direction {
+		MigrationDirection::Forward => migration.operations.iter().enumerate().collect(),
+		MigrationDirection::Backward => migration.operations.iter().enumerate().rev().collect(),
 	};
 
-	for operation in operations {
+	for (operation_index, operation) in operations {
 		let first_statement = statements.len();
 		operation.validate_for_dialect(&dialect)?;
+		let operation_state = backward_operation_states
+			.and_then(|states| states.get(operation_index))
+			.unwrap_or(state);
 		let planned_operation = match direction {
 			MigrationDirection::Forward => Some(operation.clone()),
-			MigrationDirection::Backward => operation.to_reverse_operation(state)?,
+			MigrationDirection::Backward => operation.to_reverse_operation(operation_state)?,
 		};
 		#[cfg(feature = "sqlite")]
 		let sqlite_effect = if matches!(dialect, SqlDialect::Sqlite) {
@@ -1571,10 +1681,7 @@ async fn plan_migration_sql_with_irreversible_policy(
 				matches!(direction, MigrationDirection::Backward) && planned_operation.is_none();
 			if reverse_missing {
 				if strict_irreversible {
-					return Err(MigrationError::IrreversibleError(format!(
-						"{} contains an irreversible operation",
-						migration.id()
-					)));
+					return Err(irreversible_planning_error(migration, operation));
 				}
 				statements.push(PlannedStatement::Comment(format!(
 					"No reverse SQL available for an operation in {}",
@@ -1622,20 +1729,16 @@ async fn plan_migration_sql_with_irreversible_policy(
 				}
 			},
 			MigrationDirection::Backward => {
-				let reverse = operation.to_reverse_sql(&dialect, state)?;
+				let reverse = operation.to_reverse_sql(&dialect, operation_state)?;
 				let Some(reverse) = reverse else {
+					if strict_irreversible {
+						return Err(irreversible_planning_error(migration, operation));
+					}
 					let operation_name = match operation {
 						Operation::RunSQL { .. } => "RunSQL",
 						Operation::RunRust { .. } => "RunRust",
 						_ => "operation",
 					};
-					if strict_irreversible {
-						return Err(MigrationError::IrreversibleError(format!(
-							"{} contains an irreversible {} operation",
-							migration.id(),
-							operation_name
-						)));
-					}
 					statements.push(PlannedStatement::Comment(format!(
 						"No reverse SQL available for {operation_name} in {}",
 						migration.id()

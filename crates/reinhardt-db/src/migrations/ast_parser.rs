@@ -443,29 +443,76 @@ fn parse_single_operation_strict(expr: &Expr, index: usize) -> Result<super::Ope
 	if let Expr::Struct(operation) = expr {
 		match operation_name.as_str() {
 			"CreateTable" => {
-				validate_strict_constraints(&operation.fields, &context)?;
+				let name = parse_string_field_strict(&operation.fields, "name", &context)?;
+				let columns =
+					parse_column_vector_field_strict(&operation.fields, "columns", &context)?;
+				let constraints = parse_constraint_vector_field_strict(
+					&operation.fields,
+					"constraints",
+					&context,
+				)?;
 				for field_name in ["without_rowid", "interleave_in_parent", "partition"] {
 					validate_unsupported_optional_field(&operation.fields, field_name, &context)?;
 				}
+				return Ok(super::Operation::CreateTable {
+					name,
+					columns,
+					constraints,
+					without_rowid: None,
+					interleave_in_parent: None,
+					partition: None,
+				});
 			}
 			"AddColumn" => {
-				parse_optional_alter_table_options_strict(
+				let table = parse_string_field_strict(&operation.fields, "table", &context)?;
+				let column = parse_column_field_strict(&operation.fields, "column", &context)?;
+				let mysql_options = parse_optional_alter_table_options_strict(
 					&operation.fields,
 					"mysql_options",
 					&context,
 				)?;
+				return Ok(super::Operation::AddColumn {
+					table,
+					column,
+					mysql_options,
+				});
 			}
-			"AlterColumn" => {
-				parse_optional_column_definition_strict(
+			"DropColumn" => {
+				let table = parse_string_field_strict(&operation.fields, "table", &context)?;
+				let column = parse_string_field_strict(&operation.fields, "column", &context)?;
+				let old_definition = parse_optional_column_definition_strict(
 					&operation.fields,
 					"old_definition",
 					&context,
 				)?;
-				parse_optional_alter_table_options_strict(
+				return Ok(super::Operation::DropColumn {
+					table,
+					column,
+					old_definition,
+				});
+			}
+			"AlterColumn" => {
+				let table = parse_string_field_strict(&operation.fields, "table", &context)?;
+				let column = parse_string_field_strict(&operation.fields, "column", &context)?;
+				let new_definition =
+					parse_column_field_strict(&operation.fields, "new_definition", &context)?;
+				let old_definition = parse_optional_column_definition_strict(
+					&operation.fields,
+					"old_definition",
+					&context,
+				)?;
+				let mysql_options = parse_optional_alter_table_options_strict(
 					&operation.fields,
 					"mysql_options",
 					&context,
 				)?;
+				return Ok(super::Operation::AlterColumn {
+					table,
+					column,
+					new_definition,
+					old_definition,
+					mysql_options,
+				});
 			}
 			_ => {}
 		}
@@ -492,6 +539,16 @@ fn strict_payload_error(context: &str, field_name: &str) -> MigrationError {
 	))
 }
 
+fn parse_string_field_strict(
+	fields: &syn::punctuated::Punctuated<syn::FieldValue, syn::token::Comma>,
+	field_name: &str,
+	context: &str,
+) -> Result<String> {
+	strict_field_expression(fields, field_name)
+		.and_then(extract_string_expr)
+		.ok_or_else(|| strict_payload_error(context, field_name))
+}
+
 fn is_none_expression(expr: &Expr) -> bool {
 	matches!(expr, Expr::Path(path) if path.path.is_ident("None"))
 }
@@ -508,24 +565,50 @@ fn validate_unsupported_optional_field(
 	}
 }
 
-fn validate_strict_constraints(
+fn parse_column_vector_field_strict(
 	fields: &syn::punctuated::Punctuated<syn::FieldValue, syn::token::Comma>,
+	field_name: &str,
 	context: &str,
-) -> Result<()> {
-	let Some(expression) = strict_field_expression(fields, "constraints") else {
-		return Err(strict_payload_error(context, "constraints"));
+) -> Result<Vec<super::ColumnDefinition>> {
+	let Some(expression) = strict_field_expression(fields, field_name) else {
+		return Err(strict_payload_error(context, field_name));
 	};
-	for (index, constraint) in parse_vec_expressions(expression, "constraints")?
+	parse_vec_expressions(expression, field_name)
+		.map_err(|_| strict_payload_error(context, field_name))?
 		.iter()
 		.enumerate()
-	{
-		if parse_single_constraint(constraint).is_none() {
-			return Err(MigrationError::InvalidMigration(format!(
-				"{context}.constraints[{index}] is unsupported or malformed"
-			)));
-		}
-	}
-	Ok(())
+		.map(|(index, expression)| {
+			parse_column_definition_strict(expression, &format!("{context}.{field_name}[{index}]"))
+		})
+		.collect()
+}
+
+fn parse_constraint_vector_field_strict(
+	fields: &syn::punctuated::Punctuated<syn::FieldValue, syn::token::Comma>,
+	field_name: &str,
+	context: &str,
+) -> Result<Vec<super::Constraint>> {
+	let Some(expression) = strict_field_expression(fields, field_name) else {
+		return Err(strict_payload_error(context, field_name));
+	};
+	parse_vec_expressions(expression, field_name)
+		.map_err(|_| strict_payload_error(context, field_name))?
+		.iter()
+		.enumerate()
+		.map(|(index, expression)| {
+			parse_constraint_strict(expression, &format!("{context}.{field_name}[{index}]"))
+		})
+		.collect()
+}
+
+fn parse_column_field_strict(
+	fields: &syn::punctuated::Punctuated<syn::FieldValue, syn::token::Comma>,
+	field_name: &str,
+	context: &str,
+) -> Result<super::ColumnDefinition> {
+	let expression = strict_field_expression(fields, field_name)
+		.ok_or_else(|| strict_payload_error(context, field_name))?;
+	parse_column_definition_strict(expression, &format!("{context}.{field_name}"))
 }
 
 fn parse_optional_column_definition_strict(
@@ -539,9 +622,16 @@ fn parse_optional_column_definition_strict(
 	if is_none_expression(expression) {
 		return Ok(None);
 	}
-	parse_optional_column_definition(expression)
-		.ok_or_else(|| strict_payload_error(context, field_name))
-		.map(Some)
+	let Expr::Call(call) = expression else {
+		return Err(strict_payload_error(context, field_name));
+	};
+	let Expr::Path(some) = &*call.func else {
+		return Err(strict_payload_error(context, field_name));
+	};
+	if !some.path.is_ident("Some") || call.args.len() != 1 {
+		return Err(strict_payload_error(context, field_name));
+	}
+	parse_column_definition_strict(&call.args[0], &format!("{context}.{field_name}")).map(Some)
 }
 
 fn parse_optional_alter_table_options_strict(
@@ -1654,6 +1744,354 @@ fn parse_column_definition(expr: &Expr) -> Option<super::ColumnDefinition> {
 	None
 }
 
+fn parse_column_definition_strict(expr: &Expr, context: &str) -> Result<super::ColumnDefinition> {
+	let Expr::Struct(column) = expr else {
+		return Err(MigrationError::InvalidMigration(format!(
+			"{context} is unsupported or malformed"
+		)));
+	};
+	if column
+		.path
+		.segments
+		.last()
+		.is_none_or(|segment| segment.ident != "ColumnDefinition")
+	{
+		return Err(MigrationError::InvalidMigration(format!(
+			"{context} is unsupported or malformed"
+		)));
+	}
+	validate_exact_named_fields(
+		&column.fields,
+		&[
+			"name",
+			"type_definition",
+			"not_null",
+			"unique",
+			"primary_key",
+			"auto_increment",
+			"default",
+			"generated",
+			"domain",
+		],
+		context,
+	)?;
+
+	let name = parse_string_field_strict(&column.fields, "name", context)?;
+	let type_expression = strict_field_expression(&column.fields, "type_definition")
+		.ok_or_else(|| strict_payload_error(context, "type_definition"))?;
+	let type_definition = parse_field_type_strict(type_expression)
+		.ok_or_else(|| strict_payload_error(context, "type_definition"))?;
+	let not_null = parse_bool_field_strict(&column.fields, "not_null", context)?;
+	let unique = parse_bool_field_strict(&column.fields, "unique", context)?;
+	let primary_key = parse_bool_field_strict(&column.fields, "primary_key", context)?;
+	let auto_increment = parse_bool_field_strict(&column.fields, "auto_increment", context)?;
+	let default = parse_optional_string_field_strict(&column.fields, "default", context)?;
+	let generated = parse_optional_generated_field_strict(&column.fields, "generated", context)?;
+	let domain = parse_optional_domain_field_strict(&column.fields, "domain", context)?;
+
+	Ok(super::ColumnDefinition {
+		name,
+		type_definition,
+		not_null,
+		unique,
+		primary_key,
+		auto_increment,
+		default,
+		generated,
+		domain,
+	})
+}
+
+fn parse_bool_field_strict(
+	fields: &syn::punctuated::Punctuated<syn::FieldValue, syn::token::Comma>,
+	field_name: &str,
+	context: &str,
+) -> Result<bool> {
+	let expression = strict_field_expression(fields, field_name)
+		.ok_or_else(|| strict_payload_error(context, field_name))?;
+	let Expr::Lit(syn::ExprLit {
+		lit: syn::Lit::Bool(value),
+		..
+	}) = expression
+	else {
+		return Err(strict_payload_error(context, field_name));
+	};
+	Ok(value.value)
+}
+
+fn parse_optional_string_field_strict(
+	fields: &syn::punctuated::Punctuated<syn::FieldValue, syn::token::Comma>,
+	field_name: &str,
+	context: &str,
+) -> Result<Option<String>> {
+	let expression = strict_field_expression(fields, field_name)
+		.ok_or_else(|| strict_payload_error(context, field_name))?;
+	parse_optional_string_strict(expression)
+		.ok_or_else(|| strict_payload_error(context, field_name))
+}
+
+fn parse_optional_string_strict(expr: &Expr) -> Option<Option<String>> {
+	if is_none_expression(expr) {
+		return Some(None);
+	}
+	let Expr::Call(call) = expr else {
+		return None;
+	};
+	let Expr::Path(some) = &*call.func else {
+		return None;
+	};
+	if !some.path.is_ident("Some") || call.args.len() != 1 {
+		return None;
+	}
+	Some(Some(extract_string_expr(&call.args[0])?))
+}
+
+fn parse_optional_generated_field_strict(
+	fields: &syn::punctuated::Punctuated<syn::FieldValue, syn::token::Comma>,
+	field_name: &str,
+	context: &str,
+) -> Result<Option<super::GeneratedColumnDefinition>> {
+	let expression = strict_field_expression(fields, field_name)
+		.ok_or_else(|| strict_payload_error(context, field_name))?;
+	if is_none_expression(expression) {
+		return Ok(None);
+	}
+	let Expr::Call(call) = expression else {
+		return Err(strict_payload_error(context, field_name));
+	};
+	let Expr::Path(some) = &*call.func else {
+		return Err(strict_payload_error(context, field_name));
+	};
+	if !some.path.is_ident("Some") || call.args.len() != 1 {
+		return Err(strict_payload_error(context, field_name));
+	}
+	parse_generated_column_definition_strict(&call.args[0], &format!("{context}.{field_name}"))
+		.map(Some)
+}
+
+fn parse_optional_domain_field_strict(
+	fields: &syn::punctuated::Punctuated<syn::FieldValue, syn::token::Comma>,
+	field_name: &str,
+	context: &str,
+) -> Result<Option<crate::field_domain::FieldDomain>> {
+	let expression = strict_field_expression(fields, field_name)
+		.ok_or_else(|| strict_payload_error(context, field_name))?;
+	if is_none_expression(expression) {
+		return Ok(None);
+	}
+	let Expr::Call(call) = expression else {
+		return Err(strict_payload_error(context, field_name));
+	};
+	let Expr::Path(some) = &*call.func else {
+		return Err(strict_payload_error(context, field_name));
+	};
+	if !some.path.is_ident("Some") || call.args.len() != 1 {
+		return Err(strict_payload_error(context, field_name));
+	}
+	parse_field_domain(&call.args[0])
+		.ok_or_else(|| strict_payload_error(context, field_name))
+		.map(Some)
+}
+
+fn parse_string_vector_strict(expr: &Expr, context: &str) -> Result<Vec<String>> {
+	parse_vec_expressions(expr, context)
+		.map_err(|_| {
+			MigrationError::InvalidMigration(format!("{context} is unsupported or malformed"))
+		})?
+		.iter()
+		.enumerate()
+		.map(|(index, expression)| {
+			extract_string_expr(expression).ok_or_else(|| {
+				MigrationError::InvalidMigration(format!(
+					"{context}[{index}] is unsupported or malformed"
+				))
+			})
+		})
+		.collect()
+}
+
+fn parse_string_vector_field_strict(
+	fields: &syn::punctuated::Punctuated<syn::FieldValue, syn::token::Comma>,
+	field_name: &str,
+	context: &str,
+) -> Result<Vec<String>> {
+	let expression = strict_field_expression(fields, field_name)
+		.ok_or_else(|| strict_payload_error(context, field_name))?;
+	parse_string_vector_strict(expression, &format!("{context}.{field_name}"))
+}
+
+fn parse_foreign_key_action_field_strict(
+	fields: &syn::punctuated::Punctuated<syn::FieldValue, syn::token::Comma>,
+	field_name: &str,
+	context: &str,
+) -> Result<super::ForeignKeyAction> {
+	extract_foreign_key_action_field(fields, field_name)
+		.ok_or_else(|| strict_payload_error(context, field_name))
+}
+
+fn parse_optional_deferrable_field_strict(
+	fields: &syn::punctuated::Punctuated<syn::FieldValue, syn::token::Comma>,
+	field_name: &str,
+	context: &str,
+) -> Result<Option<super::DeferrableOption>> {
+	let expression = strict_field_expression(fields, field_name)
+		.ok_or_else(|| strict_payload_error(context, field_name))?;
+	if is_none_expression(expression) {
+		return Ok(None);
+	}
+	extract_deferrable_option_field(fields, field_name)
+		.ok_or_else(|| strict_payload_error(context, field_name))
+		.map(Some)
+}
+
+fn validate_exact_named_fields(
+	fields: &syn::punctuated::Punctuated<syn::FieldValue, syn::token::Comma>,
+	expected: &[&str],
+	context: &str,
+) -> Result<()> {
+	for field in fields {
+		let syn::Member::Named(name) = &field.member else {
+			return Err(MigrationError::InvalidMigration(format!(
+				"{context} is unsupported or malformed"
+			)));
+		};
+		if !expected.iter().any(|expected| name == expected) {
+			return Err(MigrationError::InvalidMigration(format!(
+				"{context}.{name} is unsupported or malformed"
+			)));
+		}
+	}
+	Ok(())
+}
+
+fn parse_constraint_strict(expr: &Expr, context: &str) -> Result<super::Constraint> {
+	let Expr::Struct(constraint) = expr else {
+		return Err(MigrationError::InvalidMigration(format!(
+			"{context} is unsupported or malformed"
+		)));
+	};
+	let variant = constraint
+		.path
+		.segments
+		.last()
+		.map(|segment| segment.ident.to_string())
+		.ok_or_else(|| {
+			MigrationError::InvalidMigration(format!("{context} is unsupported or malformed"))
+		})?;
+	let fields = &constraint.fields;
+
+	match variant.as_str() {
+		"PrimaryKey" => {
+			validate_exact_named_fields(fields, &["name", "columns"], context)?;
+			Ok(super::Constraint::PrimaryKey {
+				name: parse_string_field_strict(fields, "name", context)?,
+				columns: parse_string_vector_field_strict(fields, "columns", context)?,
+			})
+		}
+		"ForeignKey" => {
+			validate_exact_named_fields(
+				fields,
+				&[
+					"name",
+					"columns",
+					"referenced_table",
+					"referenced_columns",
+					"on_delete",
+					"on_update",
+					"deferrable",
+				],
+				context,
+			)?;
+			Ok(super::Constraint::ForeignKey {
+				name: parse_string_field_strict(fields, "name", context)?,
+				columns: parse_string_vector_field_strict(fields, "columns", context)?,
+				referenced_table: parse_string_field_strict(fields, "referenced_table", context)?,
+				referenced_columns: parse_string_vector_field_strict(
+					fields,
+					"referenced_columns",
+					context,
+				)?,
+				on_delete: parse_foreign_key_action_field_strict(fields, "on_delete", context)?,
+				on_update: parse_foreign_key_action_field_strict(fields, "on_update", context)?,
+				deferrable: parse_optional_deferrable_field_strict(fields, "deferrable", context)?,
+			})
+		}
+		"Unique" => {
+			validate_exact_named_fields(fields, &["name", "columns"], context)?;
+			Ok(super::Constraint::Unique {
+				name: parse_string_field_strict(fields, "name", context)?,
+				columns: parse_string_vector_field_strict(fields, "columns", context)?,
+			})
+		}
+		"Check" => {
+			validate_exact_named_fields(fields, &["name", "expression"], context)?;
+			Ok(super::Constraint::Check {
+				name: parse_string_field_strict(fields, "name", context)?,
+				expression: parse_string_field_strict(fields, "expression", context)?,
+			})
+		}
+		"EnumDomain" => {
+			validate_exact_named_fields(fields, &["name", "column", "domain"], context)?;
+			let domain_expression = strict_field_expression(fields, "domain")
+				.ok_or_else(|| strict_payload_error(context, "domain"))?;
+			let domain = parse_field_domain(domain_expression)
+				.ok_or_else(|| strict_payload_error(context, "domain"))?;
+			Ok(super::Constraint::EnumDomain {
+				name: parse_string_field_strict(fields, "name", context)?,
+				column: parse_string_field_strict(fields, "column", context)?,
+				domain,
+			})
+		}
+		"OneToOne" => {
+			validate_exact_named_fields(
+				fields,
+				&[
+					"name",
+					"column",
+					"referenced_table",
+					"referenced_column",
+					"on_delete",
+					"on_update",
+					"deferrable",
+				],
+				context,
+			)?;
+			Ok(super::Constraint::OneToOne {
+				name: parse_string_field_strict(fields, "name", context)?,
+				column: parse_string_field_strict(fields, "column", context)?,
+				referenced_table: parse_string_field_strict(fields, "referenced_table", context)?,
+				referenced_column: parse_string_field_strict(fields, "referenced_column", context)?,
+				on_delete: parse_foreign_key_action_field_strict(fields, "on_delete", context)?,
+				on_update: parse_foreign_key_action_field_strict(fields, "on_update", context)?,
+				deferrable: parse_optional_deferrable_field_strict(fields, "deferrable", context)?,
+			})
+		}
+		"ManyToMany" => {
+			validate_exact_named_fields(
+				fields,
+				&[
+					"name",
+					"through_table",
+					"source_column",
+					"target_column",
+					"target_table",
+				],
+				context,
+			)?;
+			Ok(super::Constraint::ManyToMany {
+				name: parse_string_field_strict(fields, "name", context)?,
+				through_table: parse_string_field_strict(fields, "through_table", context)?,
+				source_column: parse_string_field_strict(fields, "source_column", context)?,
+				target_column: parse_string_field_strict(fields, "target_column", context)?,
+				target_table: parse_string_field_strict(fields, "target_table", context)?,
+			})
+		}
+		_ => Err(MigrationError::InvalidMigration(format!(
+			"{context} is unsupported or malformed"
+		))),
+	}
+}
+
 fn extract_field_domain(
 	fields: &syn::punctuated::Punctuated<syn::FieldValue, syn::token::Comma>,
 ) -> Option<crate::field_domain::FieldDomain> {
@@ -1846,6 +2284,89 @@ fn parse_generated_column_definition(expr: &Expr) -> Option<super::GeneratedColu
 	}
 
 	None
+}
+
+fn parse_generated_column_definition_strict(
+	expr: &Expr,
+	context: &str,
+) -> Result<super::GeneratedColumnDefinition> {
+	if let Expr::Struct(generated) = expr {
+		if generated
+			.path
+			.segments
+			.last()
+			.is_none_or(|segment| segment.ident != "GeneratedColumnDefinition")
+		{
+			return Err(MigrationError::InvalidMigration(format!(
+				"{context} is unsupported or malformed"
+			)));
+		}
+		validate_exact_named_fields(
+			&generated.fields,
+			&["expr", "expr_tokens", "raw_sql", "storage"],
+			context,
+		)?;
+		let expr = parse_optional_schema_expr_field_strict(&generated.fields, "expr", context)?;
+		let expr_tokens =
+			parse_optional_string_field_strict(&generated.fields, "expr_tokens", context)?;
+		let raw_sql = parse_optional_string_field_strict(&generated.fields, "raw_sql", context)?;
+		let storage_expression = strict_field_expression(&generated.fields, "storage")
+			.ok_or_else(|| strict_payload_error(context, "storage"))?;
+		let storage = parse_generated_storage_expr(storage_expression)
+			.ok_or_else(|| strict_payload_error(context, "storage"))?;
+		let token_expr = expr_tokens
+			.as_deref()
+			.map(|tokens| {
+				parse_schema_expr_tokens(tokens)
+					.ok_or_else(|| strict_payload_error(context, "expr_tokens"))
+			})
+			.transpose()?;
+		if let (Some(expr), Some(token_expr)) = (&expr, &token_expr)
+			&& expr != token_expr
+		{
+			return Err(strict_payload_error(context, "expr_tokens"));
+		}
+		if expr.is_none() && token_expr.is_none() && raw_sql.is_none() {
+			return Err(MigrationError::InvalidMigration(format!(
+				"{context} is unsupported or malformed"
+			)));
+		}
+		return Ok(super::GeneratedColumnDefinition {
+			expr: expr.or(token_expr).map(Box::new),
+			expr_tokens,
+			raw_sql,
+			storage,
+		});
+	}
+
+	parse_generated_column_definition(expr).ok_or_else(|| {
+		MigrationError::InvalidMigration(format!("{context} is unsupported or malformed"))
+	})
+}
+
+fn parse_optional_schema_expr_field_strict(
+	fields: &syn::punctuated::Punctuated<syn::FieldValue, syn::token::Comma>,
+	field_name: &str,
+	context: &str,
+) -> Result<Option<super::SchemaExpr>> {
+	let expression = strict_field_expression(fields, field_name)
+		.ok_or_else(|| strict_payload_error(context, field_name))?;
+	if is_none_expression(expression) {
+		return Ok(None);
+	}
+	let Expr::Call(call) = expression else {
+		return Err(strict_payload_error(context, field_name));
+	};
+	let Expr::Path(some) = &*call.func else {
+		return Err(strict_payload_error(context, field_name));
+	};
+	if !some.path.is_ident("Some") || call.args.len() != 1 {
+		return Err(strict_payload_error(context, field_name));
+	}
+	let inner = unwrap_box_new_expr(&call.args[0]).unwrap_or(&call.args[0]);
+	parse_schema_expr(inner)
+		.ok_or_else(|| strict_payload_error(context, field_name))
+		.map(Some)
 }
 
 pub(crate) fn parse_schema_expr_tokens(tokens: &str) -> Option<super::SchemaExpr> {
@@ -2522,7 +3043,6 @@ mod tests {
 				Constraint::Unique {
 					name: "posts_slug_key".to_string(),
 					columns: vec!["slug".to_string()],
-					deferrable: None,
 				},
 				Constraint::Unknown { value: 1 },
 			],
@@ -2581,6 +3101,144 @@ mod tests {
 		let error = extract_migration_metadata_strict(&ast, "blog", "0001_initial").unwrap_err();
 
 		// Assert
+		assert_eq!(error.to_string(), expected);
+	}
+
+	#[rstest]
+	#[case(
+		r#"Operation::AddColumn {
+			table: "posts".to_string(),
+			column: ColumnDefinition {
+				name: "payload".to_string(),
+				type_definition: FieldType::Binary,
+				not_null: false,
+				unique: false,
+				primary_key: false,
+				auto_increment: false,
+				default: None,
+				generated: Some(GeneratedColumnDefinition::typed(
+					SchemaExpr::val(Value::Bytes(Some(Box::new(vec![1u8])))),
+					"SchemaExpr::val(Value::Bytes(Some(Box::new(vec![1u8]))))",
+					GeneratedStorage::Stored,
+				)),
+				domain: None,
+			},
+			mysql_options: None,
+		}"#,
+		"Invalid migration: operations[0].AddColumn.column.generated is unsupported or malformed"
+	)]
+	#[case(
+		r#"Operation::AddColumn {
+			table: "posts".to_string(),
+			column: ColumnDefinition {
+				name: "payload".to_string(),
+				type_definition: FieldType::UnknownBinary,
+				not_null: false,
+				unique: false,
+				primary_key: false,
+				auto_increment: false,
+				default: None,
+				generated: None,
+				domain: None,
+			},
+			mysql_options: None,
+		}"#,
+		"Invalid migration: operations[0].AddColumn.column.type_definition is unsupported or malformed"
+	)]
+	#[case(
+		r#"Operation::AddColumn {
+			table: "posts".to_string(),
+			column: ColumnDefinition {
+				name: "payload".to_string(),
+				type_definition: FieldType::Binary,
+				not_null: "false",
+				unique: false,
+				primary_key: false,
+				auto_increment: false,
+				default: None,
+				generated: None,
+				domain: None,
+			},
+			mysql_options: None,
+		}"#,
+		"Invalid migration: operations[0].AddColumn.column.not_null is unsupported or malformed"
+	)]
+	fn strict_metadata_rejects_lossy_nested_column_fields(
+		#[case] operation: &str,
+		#[case] expected: &str,
+	) {
+		let source = format!(
+			r#"pub fn migration() -> Migration {{
+				Migration {{
+					operations: vec![{operation}],
+					dependencies: vec![],
+					replaces: vec![],
+				}}
+			}}"#
+		);
+		let ast = syn::parse_file(&source).unwrap();
+
+		let error = extract_migration_metadata_strict(&ast, "blog", "0001_initial").unwrap_err();
+
+		assert_eq!(error.to_string(), expected);
+	}
+
+	#[rstest]
+	#[case(
+		r#"Operation::CreateTable {
+			name: "posts".to_string(),
+			columns: vec![
+				ColumnDefinition {
+					name: "id".to_string(),
+					type_definition: FieldType::Integer,
+					not_null: true,
+					unique: false,
+					primary_key: true,
+					auto_increment: true,
+					default: None,
+					generated: None,
+					domain: None,
+				},
+				42,
+			],
+			constraints: vec![],
+			without_rowid: None,
+			interleave_in_parent: None,
+			partition: None,
+		}"#,
+		"Invalid migration: operations[0].CreateTable.columns[1] is unsupported or malformed"
+	)]
+	#[case(
+		r#"Operation::CreateTable {
+			name: "posts".to_string(),
+			columns: vec![],
+			constraints: vec![Constraint::Unique {
+				name: "posts_slug_key".to_string(),
+				columns: vec!["slug".to_string(), 42],
+			}],
+			without_rowid: None,
+			interleave_in_parent: None,
+			partition: None,
+		}"#,
+		"Invalid migration: operations[0].CreateTable.constraints[0].columns[1] is unsupported or malformed"
+	)]
+	fn strict_metadata_rejects_nested_vector_element_loss(
+		#[case] operation: &str,
+		#[case] expected: &str,
+	) {
+		let source = format!(
+			r#"pub fn migration() -> Migration {{
+				Migration {{
+					operations: vec![{operation}],
+					dependencies: vec![],
+					replaces: vec![],
+				}}
+			}}"#
+		);
+		let ast = syn::parse_file(&source).unwrap();
+
+		let error = extract_migration_metadata_strict(&ast, "blog", "0001_initial").unwrap_err();
+
 		assert_eq!(error.to_string(), expected);
 	}
 
@@ -3167,6 +3825,185 @@ pub(super) fn migration() -> Migration {
 			})))
 		);
 	}
+}
+
+fn parse_field_type_strict(expr: &Expr) -> Option<super::FieldType> {
+	use super::FieldType;
+
+	match expr {
+		Expr::Path(path) => match path.path.segments.last()?.ident.to_string().as_str() {
+			"BigInteger" => Some(FieldType::BigInteger),
+			"Integer" => Some(FieldType::Integer),
+			"SmallInteger" => Some(FieldType::SmallInteger),
+			"TinyInt" => Some(FieldType::TinyInt),
+			"MediumInt" => Some(FieldType::MediumInt),
+			"Text" => Some(FieldType::Text),
+			"TinyText" => Some(FieldType::TinyText),
+			"MediumText" => Some(FieldType::MediumText),
+			"LongText" => Some(FieldType::LongText),
+			"Date" => Some(FieldType::Date),
+			"Time" => Some(FieldType::Time),
+			"DateTime" => Some(FieldType::DateTime),
+			"TimestampTz" => Some(FieldType::TimestampTz),
+			"Float" => Some(FieldType::Float),
+			"Double" => Some(FieldType::Double),
+			"Real" => Some(FieldType::Real),
+			"Boolean" => Some(FieldType::Boolean),
+			"Binary" => Some(FieldType::Binary),
+			"Blob" => Some(FieldType::Blob),
+			"TinyBlob" => Some(FieldType::TinyBlob),
+			"MediumBlob" => Some(FieldType::MediumBlob),
+			"LongBlob" => Some(FieldType::LongBlob),
+			"Bytea" => Some(FieldType::Bytea),
+			"Json" => Some(FieldType::Json),
+			"JsonBinary" => Some(FieldType::JsonBinary),
+			"HStore" => Some(FieldType::HStore),
+			"CIText" => Some(FieldType::CIText),
+			"Int4Range" => Some(FieldType::Int4Range),
+			"Int8Range" => Some(FieldType::Int8Range),
+			"NumRange" => Some(FieldType::NumRange),
+			"DateRange" => Some(FieldType::DateRange),
+			"TsRange" => Some(FieldType::TsRange),
+			"TsTzRange" => Some(FieldType::TsTzRange),
+			"TsVector" => Some(FieldType::TsVector),
+			"TsQuery" => Some(FieldType::TsQuery),
+			"Uuid" => Some(FieldType::Uuid),
+			"Year" => Some(FieldType::Year),
+			_ => None,
+		},
+		Expr::Call(call) => {
+			let Expr::Path(function) = &*call.func else {
+				return None;
+			};
+			match function.path.segments.last()?.ident.to_string().as_str() {
+				"Char" if call.args.len() == 1 => {
+					Some(FieldType::Char(parse_u32_literal(&call.args[0])?))
+				}
+				"VarChar" if call.args.len() == 1 => {
+					Some(FieldType::VarChar(parse_u32_literal(&call.args[0])?))
+				}
+				"Array" if call.args.len() == 1 => {
+					let inner = unwrap_box_new_expr(&call.args[0])?;
+					Some(FieldType::Array(Box::new(parse_field_type_strict(inner)?)))
+				}
+				"Custom" if call.args.len() == 1 => {
+					Some(FieldType::Custom(extract_string_expr(&call.args[0])?))
+				}
+				_ => None,
+			}
+		}
+		Expr::Struct(field_type) => {
+			let variant = field_type.path.segments.last()?.ident.to_string();
+			let fields = &field_type.fields;
+			match variant.as_str() {
+				"Decimal" => {
+					validate_exact_named_fields(
+						fields,
+						&["precision", "scale"],
+						"FieldType::Decimal",
+					)
+					.ok()?;
+					Some(FieldType::Decimal {
+						precision: parse_u32_field_exact(fields, "precision")?,
+						scale: parse_u32_field_exact(fields, "scale")?,
+					})
+				}
+				#[cfg(feature = "pgvector")]
+				"Vector" => {
+					validate_exact_named_fields(fields, &["dimensions"], "FieldType::Vector")
+						.ok()?;
+					Some(FieldType::Vector {
+						dimensions: usize::try_from(parse_u64_field_exact(fields, "dimensions")?)
+							.ok()?,
+					})
+				}
+				"Enum" => {
+					validate_exact_named_fields(fields, &["values"], "FieldType::Enum").ok()?;
+					Some(FieldType::Enum {
+						values: parse_string_vector_field_exact(fields, "values")?,
+					})
+				}
+				"Set" => {
+					validate_exact_named_fields(fields, &["values"], "FieldType::Set").ok()?;
+					Some(FieldType::Set {
+						values: parse_string_vector_field_exact(fields, "values")?,
+					})
+				}
+				"ForeignKey" => {
+					validate_exact_named_fields(
+						fields,
+						&["to_table", "to_field", "on_delete"],
+						"FieldType::ForeignKey",
+					)
+					.ok()?;
+					Some(FieldType::ForeignKey {
+						to_table: extract_string_field(fields, "to_table")?,
+						to_field: extract_string_field(fields, "to_field")?,
+						on_delete: extract_foreign_key_action_field(fields, "on_delete")?,
+					})
+				}
+				"OneToOne" => {
+					validate_exact_named_fields(
+						fields,
+						&["to", "on_delete", "on_update"],
+						"FieldType::OneToOne",
+					)
+					.ok()?;
+					Some(FieldType::OneToOne {
+						to: extract_string_field(fields, "to")?,
+						on_delete: extract_foreign_key_action_field(fields, "on_delete")?,
+						on_update: extract_foreign_key_action_field(fields, "on_update")?,
+					})
+				}
+				"ManyToMany" => {
+					validate_exact_named_fields(
+						fields,
+						&["to", "through"],
+						"FieldType::ManyToMany",
+					)
+					.ok()?;
+					let through_expression = strict_field_expression(fields, "through")?;
+					Some(FieldType::ManyToMany {
+						to: extract_string_field(fields, "to")?,
+						through: parse_optional_string_strict(through_expression)?,
+					})
+				}
+				_ => None,
+			}
+		}
+		_ => None,
+	}
+}
+
+fn parse_u32_field_exact(
+	fields: &syn::punctuated::Punctuated<syn::FieldValue, syn::token::Comma>,
+	field_name: &str,
+) -> Option<u32> {
+	parse_u64_field_exact(fields, field_name).and_then(|value| u32::try_from(value).ok())
+}
+
+fn parse_u64_field_exact(
+	fields: &syn::punctuated::Punctuated<syn::FieldValue, syn::token::Comma>,
+	field_name: &str,
+) -> Option<u64> {
+	let expression = strict_field_expression(fields, field_name)?;
+	let Expr::Lit(syn::ExprLit {
+		lit: syn::Lit::Int(value),
+		..
+	}) = expression
+	else {
+		return None;
+	};
+	value.base10_parse().ok()
+}
+
+fn parse_string_vector_field_exact(
+	fields: &syn::punctuated::Punctuated<syn::FieldValue, syn::token::Comma>,
+	field_name: &str,
+) -> Option<Vec<String>> {
+	let expression = strict_field_expression(fields, field_name)?;
+	let expressions = parse_vec_expressions(expression, field_name).ok()?;
+	expressions.iter().map(extract_string_expr).collect()
 }
 
 /// Extract FieldType from type_definition field

@@ -11,7 +11,7 @@ fn projection_statement(
 		TemporalTruncOutput::DateTime => "occurred_at",
 	})
 	.into_simple_expr();
-	let projection = Func::temporal_trunc(source.clone(), kind, time_zone, output);
+	let projection = Func::temporal_trunc(source.clone(), kind, time_zone, output).unwrap();
 	let mut statement = Query::select();
 	statement
 		.expr_as(projection.clone(), "value")

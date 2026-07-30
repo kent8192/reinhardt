@@ -19,6 +19,14 @@ use crate::{
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 #[non_exhaustive]
 pub enum QueryBuildError {
+	/// A temporal truncation unit cannot produce the requested result type.
+	#[error("temporal truncation {kind} cannot produce a {output} value")]
+	InvalidTemporalTruncation {
+		/// The requested truncation unit.
+		kind: &'static str,
+		/// The requested result type.
+		output: &'static str,
+	},
 	/// A query requires a feature unavailable in the selected backend.
 	#[error("{feature} is not supported by the {backend} backend")]
 	UnsupportedBackendFeature {
@@ -127,6 +135,7 @@ fn pgvector_feature_from_validation(
 			"pgvector values" => Some(PgvectorFeature::VectorValue),
 			_ => None,
 		},
+		Err(QueryBuildError::InvalidTemporalTruncation { .. }) => None,
 		Err(QueryBuildError::InvalidPgvectorDimensions { .. }) => None,
 		Ok(()) => None,
 	}

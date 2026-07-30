@@ -80,7 +80,8 @@ let projection = Func::temporal_trunc(
     TemporalTruncKind::Hour,
     Some(TemporalTimeZone::Utc),
     TemporalTruncOutput::DateTime,
-);
+)
+.expect("hour truncation produces a datetime");
 let mut stmt = Query::select();
 stmt.expr_as(projection, "value").from("events").distinct();
 ```

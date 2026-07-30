@@ -68,13 +68,24 @@ impl Func {
 		kind: TemporalTruncKind,
 		time_zone: Option<TemporalTimeZone>,
 		output: TemporalTruncOutput,
-	) -> SimpleExpr {
-		SimpleExpr::TemporalTrunc {
+	) -> Result<SimpleExpr, crate::QueryBuildError> {
+		if output == TemporalTruncOutput::Date
+			&& matches!(
+				kind,
+				TemporalTruncKind::Hour | TemporalTruncKind::Minute | TemporalTruncKind::Second
+			) {
+			return Err(crate::QueryBuildError::InvalidTemporalTruncation {
+				kind: kind.as_str(),
+				output: "date",
+			});
+		}
+
+		Ok(SimpleExpr::TemporalTrunc {
 			expr: Box::new(expr),
 			kind,
 			time_zone,
 			output,
-		}
+		})
 	}
 }
 
@@ -84,6 +95,29 @@ mod tests {
 	use crate::expr::Expr;
 	use crate::value::Value;
 	use rstest::rstest;
+
+	#[rstest]
+	fn test_temporal_trunc_rejects_time_units_for_date_output() {
+		// Arrange
+		let expr = Expr::col("occurred_at").into_simple_expr();
+
+		// Act
+		let result = Func::temporal_trunc(
+			expr,
+			TemporalTruncKind::Hour,
+			None,
+			TemporalTruncOutput::Date,
+		);
+
+		// Assert
+		assert!(matches!(
+			result,
+			Err(crate::QueryBuildError::InvalidTemporalTruncation {
+				kind: "hour",
+				output: "date"
+			})
+		));
+	}
 
 	#[rstest]
 	fn test_func_count_creates_function_call() {

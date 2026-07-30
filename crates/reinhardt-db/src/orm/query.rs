@@ -1488,7 +1488,10 @@ where
 		output: TemporalTruncOutput,
 	) -> reinhardt_core::exception::Result<SelectStatement> {
 		let source = Expr::col(self.root_column_reference(field)).into_simple_expr();
-		let projection = Func::temporal_trunc(source.clone(), kind, time_zone, output);
+		let projection =
+			Func::temporal_trunc(source.clone(), kind, time_zone, output).map_err(|error| {
+				DatabaseError::new(DatabaseErrorKind::Unsupported, error.to_string())
+			})?;
 		let mut stmt = Query::select();
 		self.apply_model_from(&mut stmt);
 		stmt.expr_as(projection.clone(), Alias::new("value"));

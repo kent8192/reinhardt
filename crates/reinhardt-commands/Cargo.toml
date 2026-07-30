@@ -72,6 +72,7 @@ syn = { workspace = true, features = ["full", "parsing", "visit", "visit-mut"] }
 quote = { workspace = true }
 proc-macro2 = { workspace = true, features = ["span-locations"] }
 prettyplease = "0.2"
+percent-encoding = "2.3"
 
 # TLS/HTTPS support
 rustls = "0.23"

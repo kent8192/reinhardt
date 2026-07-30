@@ -44,6 +44,22 @@ fn postgres_renders_lock_behavior(#[case] behavior: LockBehavior, #[case] sql_su
 }
 
 #[rstest]
+fn postgres_checked_builder_rejects_locks_on_union_queries() {
+	let mut statement = locked_select(LockType::Update);
+	let mut union = Query::select();
+	union.column("id").from("archived_users");
+	statement.union(union);
+
+	assert_eq!(
+		PostgresQueryBuilder::new().build_select_checked(&statement),
+		Err(QueryBuildError::UnsupportedBackendFeature {
+			feature: "row locking on UNION queries",
+			backend: "PostgreSQL",
+		})
+	);
+}
+
+#[rstest]
 fn lock_behavior_is_mutually_exclusive() {
 	let mut statement = locked_select(LockType::Update);
 	statement
@@ -140,7 +156,16 @@ fn cockroach_checked_builder_explicitly_accepts_lock_strengths(#[case] lock_type
 		.build_select_checked(&statement)
 		.expect("CockroachDB supports all strengths as two semantic lock pairs");
 
-	assert!(sql.ends_with(" NOWAIT"));
+	let expected_lock = match lock_type {
+		LockType::Update => "FOR UPDATE",
+		LockType::NoKeyUpdate => "FOR NO KEY UPDATE",
+		LockType::Share => "FOR SHARE",
+		LockType::KeyShare => "FOR KEY SHARE",
+	};
+	assert_eq!(
+		sql,
+		format!(r#"SELECT \"id\" FROM \"users\" {expected_lock} NOWAIT"#)
+	);
 }
 
 #[rstest]

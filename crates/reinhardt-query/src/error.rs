@@ -200,7 +200,12 @@ pub(crate) fn validate_select_lock_for_backend(
 	};
 
 	match backend {
-		"PostgreSQL" => Ok(()),
+		"PostgreSQL" => {
+			if !statement.unions.is_empty() {
+				return Err(unsupported("row locking on UNION queries", backend));
+			}
+			Ok(())
+		}
 		"MySQL" => {
 			if matches!(
 				lock.r#type,

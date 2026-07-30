@@ -1629,6 +1629,37 @@ where
 				"explicit row-lock targets are not supported by this backend or server version",
 			));
 		}
+		let graph = self.relation_join_graph_for_query();
+		for target in &spec.targets {
+			let SelectForUpdateTarget::Relation(steps) = target else {
+				continue;
+			};
+			if steps.is_empty() {
+				return Err(DatabaseError::new(
+					DatabaseErrorKind::Validation,
+					"SELECT FOR UPDATE relation lock target must contain at least one relation step",
+				));
+			}
+			let aliases = graph.aliases_for_steps(steps).ok_or_else(|| {
+				DatabaseError::new(
+					DatabaseErrorKind::Validation,
+					"SELECT FOR UPDATE relation lock target could not be resolved",
+				)
+			})?;
+			for alias in aliases {
+				let join = graph
+					.joins()
+					.iter()
+					.find(|join| join.alias == alias)
+					.expect("resolved relation aliases always have a planned join");
+				if join.join_kind == RelationJoinKind::Left {
+					return Err(DatabaseError::new(
+						DatabaseErrorKind::Validation,
+						"SELECT FOR UPDATE cannot lock a relation reached through an outer join",
+					));
+				}
+			}
+		}
 		Ok(())
 	}
 

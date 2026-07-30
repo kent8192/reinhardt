@@ -21,6 +21,111 @@ fn empty_context() -> CommandContext {
 
 #[cfg(feature = "migrations")]
 #[rstest]
+#[case(&["manage", "showmigrations"], true, false)]
+#[case(&["manage", "showmigrations", "-l"], true, false)]
+#[case(&["manage", "showmigrations", "--list"], true, false)]
+#[case(&["manage", "showmigrations", "-p"], false, true)]
+#[case(&["manage", "showmigrations", "--plan"], false, true)]
+fn showmigrations_parses_modes(
+	#[case] arguments: &[&str],
+	#[case] expected_list: bool,
+	#[case] expected_plan: bool,
+) {
+	let parsed = Cli::try_parse_from(arguments).expect("showmigrations parses");
+
+	let Commands::Showmigrations {
+		app_labels,
+		list,
+		plan,
+		database,
+		database_url,
+	} = parsed.command
+	else {
+		panic!("expected showmigrations command");
+	};
+	assert!(app_labels.is_empty());
+	assert_eq!(list, expected_list);
+	assert_eq!(plan, expected_plan);
+	assert_eq!(database, "default");
+	assert_eq!(database_url, None);
+}
+
+#[cfg(feature = "migrations")]
+#[test]
+fn showmigrations_parses_apps_and_database_selection() {
+	let parsed = Cli::try_parse_from([
+		"manage",
+		"showmigrations",
+		"polls",
+		"auth",
+		"--database",
+		"replica",
+		"--database-url",
+		"sqlite::memory:",
+	])
+	.expect("showmigrations parses");
+
+	let Commands::Showmigrations {
+		app_labels,
+		list,
+		plan,
+		database,
+		database_url,
+	} = parsed.command
+	else {
+		panic!("expected showmigrations command");
+	};
+	assert_eq!(app_labels, ["polls", "auth"]);
+	assert!(list);
+	assert!(!plan);
+	assert_eq!(database, "replica");
+	assert_eq!(database_url.as_deref(), Some("sqlite::memory:"));
+}
+
+#[cfg(feature = "migrations")]
+#[test]
+fn showmigrations_rejects_list_and_plan_together() {
+	let error = Cli::try_parse_from(["manage", "showmigrations", "--list", "--plan"])
+		.expect_err("modes conflict");
+
+	assert_eq!(error.kind(), clap::error::ErrorKind::ArgumentConflict);
+}
+
+#[cfg(feature = "migrations")]
+#[test]
+fn sqlmigrate_parses_complete_form() {
+	let parsed = Cli::try_parse_from([
+		"manage",
+		"sqlmigrate",
+		"polls",
+		"0002",
+		"--backwards",
+		"--database",
+		"replica",
+		"--database-url",
+		"sqlite::memory:",
+	])
+	.expect("sqlmigrate parses");
+
+	let Commands::Sqlmigrate {
+		app_label,
+		migration_name,
+		backwards,
+		database,
+		database_url,
+	} = parsed.command
+	else {
+		panic!("expected sqlmigrate command");
+	};
+	assert_eq!(app_label, "polls");
+	assert_eq!(migration_name, "0002");
+	assert!(backwards);
+	assert_eq!(database, "replica");
+	assert_eq!(database_url.as_deref(), Some("sqlite::memory:"));
+}
+
+#[cfg(feature = "migrations")]
+#[rstest]
 #[case(
 	&["manage", "squashmigrations", "polls", "0004"],
 	None,

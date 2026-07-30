@@ -241,6 +241,13 @@ impl MigrationCatalog {
 		}
 	}
 
+	/// Return a migration from this validated catalog.
+	pub fn migration(&self, key: &MigrationKey) -> Result<&Migration> {
+		self.migrations
+			.get(key)
+			.ok_or_else(|| MigrationError::NotFound(key.id()))
+	}
+
 	/// Resolve a continuous, single-app ancestor range.
 	pub fn squash_range(&self, app: &str, start: Option<&str>, end: &str) -> Result<SquashRange> {
 		let end_key = self.resolve_unique_prefix(app, end)?;

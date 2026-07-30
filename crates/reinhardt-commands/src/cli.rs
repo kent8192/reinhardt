@@ -130,6 +130,60 @@ pub enum Commands {
 		squashed_name: Option<String>,
 	},
 
+	/// Display migration application state or dependency order
+	#[cfg(feature = "migrations")]
+	Showmigrations {
+		/// Applications to include, together with their transitive dependencies
+		#[arg(value_name = "APP_LABEL")]
+		app_labels: Vec<String>,
+
+		/// Display migrations grouped by application
+		#[arg(
+			short = 'l',
+			long,
+			default_value_t = true,
+			default_value_if("plan", clap::builder::ArgPredicate::IsPresent, "false"),
+			conflicts_with = "plan"
+		)]
+		list: bool,
+
+		/// Display the complete selected dependency plan
+		#[arg(short = 'p', long, conflicts_with = "list")]
+		plan: bool,
+
+		/// Configured database alias
+		#[arg(long, default_value = "default")]
+		database: String,
+
+		/// One-off database URL override
+		#[arg(long)]
+		database_url: Option<String>,
+	},
+
+	/// Render the SQL for one migration without executing it
+	#[cfg(feature = "migrations")]
+	Sqlmigrate {
+		/// Application containing the migration
+		#[arg(value_name = "APP_LABEL")]
+		app_label: String,
+
+		/// Exact migration name or unambiguous prefix
+		#[arg(value_name = "MIGRATION_NAME")]
+		migration_name: String,
+
+		/// Render rollback SQL
+		#[arg(long)]
+		backwards: bool,
+
+		/// Configured database alias
+		#[arg(long, default_value = "default")]
+		database: String,
+
+		/// One-off database URL override
+		#[arg(long)]
+		database_url: Option<String>,
+	},
+
 	/// Apply database migrations
 	Migrate {
 		/// App label to migrate
@@ -966,6 +1020,59 @@ async fn run_command_core(
 			.await
 			.map(|_| ())
 			.map_err(Into::into)
+		}
+		#[cfg(feature = "migrations")]
+		Commands::Showmigrations {
+			app_labels,
+			list,
+			plan,
+			database,
+			database_url,
+		} => {
+			let mut ctx = CommandContext::new(app_labels);
+			ctx.set_verbosity(verbosity);
+			ctx.set_option("database".to_string(), database);
+			if list {
+				ctx.set_option("list".to_string(), "true".to_string());
+			}
+			if plan {
+				ctx.set_option("plan".to_string(), "true".to_string());
+			}
+			if let Some(database_url) = database_url {
+				ctx.set_option("database-url".to_string(), database_url);
+			}
+			if let Some(settings) = settings.clone() {
+				ctx = ctx.with_settings(settings);
+			}
+			crate::ShowMigrationsCommand::default()
+				.execute(&ctx)
+				.await
+				.map_err(Into::into)
+		}
+		#[cfg(feature = "migrations")]
+		Commands::Sqlmigrate {
+			app_label,
+			migration_name,
+			backwards,
+			database,
+			database_url,
+		} => {
+			let mut ctx = CommandContext::new(vec![app_label, migration_name]);
+			ctx.set_verbosity(verbosity);
+			ctx.set_option("database".to_string(), database);
+			if backwards {
+				ctx.set_option("backwards".to_string(), "true".to_string());
+			}
+			if let Some(database_url) = database_url {
+				ctx.set_option("database-url".to_string(), database_url);
+			}
+			if let Some(settings) = settings.clone() {
+				ctx = ctx.with_settings(settings);
+			}
+			crate::SqlMigrateCommand::default()
+				.execute(&ctx)
+				.await
+				.map_err(Into::into)
 		}
 		Commands::Migrate {
 			app_label,
@@ -2922,6 +3029,31 @@ mod tests {
 
 		// Assert
 		assert!(!result);
+	}
+
+	#[cfg(feature = "migrations")]
+	#[rstest]
+	fn migration_visibility_commands_select_their_own_database() {
+		let commands = [
+			Commands::Showmigrations {
+				app_labels: Vec::new(),
+				list: true,
+				plan: false,
+				database: "default".to_string(),
+				database_url: None,
+			},
+			Commands::Sqlmigrate {
+				app_label: "polls".to_string(),
+				migration_name: "0001".to_string(),
+				backwards: false,
+				database: "default".to_string(),
+				database_url: None,
+			},
+		];
+
+		for command in commands {
+			assert!(!requires_database(&command, &CommandRegistry::new()));
+		}
 	}
 
 	#[cfg(feature = "reinhardt-db")]

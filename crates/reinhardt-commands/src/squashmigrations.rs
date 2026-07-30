@@ -71,7 +71,7 @@ impl ConfirmationReader for StdinConfirmationReader {
 	}
 }
 
-fn migration_error_to_command_error(error: MigrationError) -> CommandError {
+pub(crate) fn migration_error_to_command_error(error: MigrationError) -> CommandError {
 	match error {
 		MigrationError::NotFound(_)
 		| MigrationError::DependencyError(_)

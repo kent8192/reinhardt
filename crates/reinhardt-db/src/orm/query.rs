@@ -1544,6 +1544,12 @@ where
 			self.add_default_select_columns(&mut stmt);
 		}
 		self.apply_typed_select_expressions(&mut stmt);
+		for annotation in &self.annotations {
+			stmt.expr_as(
+				Expr::cust(self.annotation_value_to_select_sql(&annotation.value)),
+				Alias::new(&annotation.alias),
+			);
+		}
 		self.apply_relation_joins(&mut stmt);
 		self.apply_manual_joins(&mut stmt);
 
@@ -1705,7 +1711,7 @@ where
 			let SelectForUpdateTarget::Relation(steps) = target else {
 				continue;
 			};
-			if backend == crate::backends::types::DatabaseType::Postgres && steps.is_empty() {
+			if steps.is_empty() {
 				return Err(DatabaseError::new(
 					DatabaseErrorKind::Query,
 					"SELECT FOR UPDATE relation lock target must contain at least one relation step",

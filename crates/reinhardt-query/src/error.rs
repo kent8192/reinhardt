@@ -280,6 +280,7 @@ fn validate_select_lock_for_backend_with_union_context(
 			) {
 				return Err(unsupported("the requested row lock strength", backend));
 			}
+			validate_lock_tables_belong_to_statement(statement, lock.tables.as_slice(), backend)?;
 			Ok(())
 		}
 		"SQLite" => Err(unsupported("row locking", backend)),
@@ -298,7 +299,7 @@ fn contains_aggregate(expr: &SimpleExpr) -> bool {
 	match expr {
 		SimpleExpr::FunctionCall(name, arguments) => {
 			matches!(
-				name.to_string().as_str(),
+				name.to_string().to_ascii_uppercase().as_str(),
 				"COUNT"
 					| "SUM" | "AVG" | "MIN"
 					| "MAX" | "ARRAY_AGG"
@@ -379,17 +380,26 @@ fn validate_lock_tables_belong_to_statement(
 ) -> Result<(), QueryBuildError> {
 	let mut relations = Vec::with_capacity(statement.from.len() + statement.join.len());
 	for table in &statement.from {
-		relations.extend(table_ref_lock_names(table));
+		relations.extend(
+			table_ref_lock_names(table)
+				.into_iter()
+				.map(|name| (name, table_ref_is_derived(table))),
+		);
 	}
 	for join in &statement.join {
-		relations.extend(table_ref_lock_names(&join.table));
+		relations.extend(
+			table_ref_lock_names(&join.table)
+				.into_iter()
+				.map(|name| (name, table_ref_is_derived(&join.table))),
+		);
 	}
 	for target in targets {
 		if table_ref_is_derived(target)
-			|| !table_ref_lock_names(target)
-				.iter()
-				.any(|target_name| relations.iter().any(|relation| relation == target_name))
-		{
+			|| !table_ref_lock_names(target).iter().any(|target_name| {
+				relations
+					.iter()
+					.any(|(relation, derived)| relation == target_name && !derived)
+			}) {
 			return Err(unsupported(
 				"row lock target absent from the query",
 				backend,

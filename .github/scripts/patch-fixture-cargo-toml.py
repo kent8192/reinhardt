@@ -52,27 +52,32 @@ def enable_features(manifest: Path, extra_features: list[str]) -> None:
 
 
 def workspace_form(manifest: Path, reinhardt_path: Path) -> None:
-	"""Repoint every `reinhardt` dependency at the workspace checkout.
+	"""Repoint every `reinhardt-web` dependency at the workspace checkout.
 
-	Two forms are produced by the project_pages_template:
-	  1. `[dependencies] reinhardt = { version = "...", ... }`     (inline form)
-	  2. `[dev-dependencies.reinhardt] \\n version = "..."`        (table form)
-	Both must be rewritten — leaving either at `version = "..."` while the other
+	Three forms are produced by the project_pages_template:
+	  1. `reinhardt = { version = "...", package = "reinhardt-web", ... }`
+	  2. `reinhardt-shell = { version = "...", package = "reinhardt-web", ... }`
+	  3. `[dev-dependencies.reinhardt] \\n version = "..."` (table form)
+	All must be rewritten — leaving one at `version = "..."` while another
 	uses `path = "..."` triggers Cargo's
 	`Dependency 'reinhardt' has different source paths depending on the build target`
 	error, since dev-deps and prod-deps are treated as separate resolution targets.
+	Leaving an alias such as `reinhardt-shell` on crates.io also makes the fixture
+	resolve that alias against the last published feature set instead of PR HEAD.
 	"""
 	text = manifest.read_text()
-	# Form 1: inline `reinhardt = { version = "...", ... }`
+	# Forms 1 and 2: inline dependencies whose package is `reinhardt-web`.
 	inline_pattern = re.compile(
-		r'^reinhardt\s*=\s*\{\s*version\s*=\s*"[^"]*"\s*,',
+		r'^(?P<name>reinhardt(?:-[A-Za-z0-9_-]+)?)\s*=\s*\{\s*'
+		r'version\s*=\s*"[^"]*"\s*,'
+		r'(?P<rest>[^}\n]*\bpackage\s*=\s*"reinhardt-web"[^}\n]*\})',
 		re.MULTILINE,
 	)
 	new_text, inline_count = inline_pattern.subn(
-		f'reinhardt = {{ path = "{reinhardt_path}",',
+		lambda m: f'{m.group("name")} = {{ path = "{reinhardt_path}",{m.group("rest")}',
 		text,
 	)
-	# Form 2: `[dev-dependencies.reinhardt]` table whose first key is `version`.
+	# Form 3: `[dev-dependencies.reinhardt]` table whose first key is `version`.
 	# Match the `version = "..."` line that immediately follows the section
 	# header (allowing intervening blank/comment lines) and replace just that
 	# line with `path = "<reinhardt_path>"`.

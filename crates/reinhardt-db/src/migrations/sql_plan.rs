@@ -467,6 +467,7 @@ async fn sqlite_load_virtual_schema(
 #[cfg(feature = "sqlite")]
 fn sqlite_rename_typed_constraint_column(
 	constraint: &mut super::Constraint,
+	table: &str,
 	old_name: &str,
 	new_name: &str,
 ) -> Result<()> {
@@ -477,10 +478,30 @@ fn sqlite_rename_typed_constraint_column(
 	};
 	match constraint {
 		super::Constraint::PrimaryKey { columns, .. }
-		| super::Constraint::ForeignKey { columns, .. }
 		| super::Constraint::Unique { columns, .. } => columns.iter_mut().for_each(rename),
-		super::Constraint::EnumDomain { column, .. }
-		| super::Constraint::OneToOne { column, .. } => rename(column),
+		super::Constraint::ForeignKey {
+			columns,
+			referenced_table,
+			referenced_columns,
+			..
+		} => {
+			columns.iter_mut().for_each(rename);
+			if referenced_table == table {
+				referenced_columns.iter_mut().for_each(rename);
+			}
+		}
+		super::Constraint::EnumDomain { column, .. } => rename(column),
+		super::Constraint::OneToOne {
+			column,
+			referenced_table,
+			referenced_column,
+			..
+		} => {
+			rename(column);
+			if referenced_table == table {
+				rename(referenced_column);
+			}
+		}
 		super::Constraint::ManyToMany {
 			source_column,
 			target_column,
@@ -501,6 +522,80 @@ fn sqlite_rename_typed_constraint_column(
 				)));
 			}
 		}
+	}
+	Ok(())
+}
+
+#[cfg(feature = "sqlite")]
+fn sqlite_rename_typed_constraint_table(
+	constraint: &mut super::Constraint,
+	old_name: &str,
+	new_name: &str,
+) {
+	let rename = |table: &mut String| {
+		if table == old_name {
+			new_name.clone_into(table);
+		}
+	};
+	match constraint {
+		super::Constraint::ForeignKey {
+			referenced_table, ..
+		}
+		| super::Constraint::OneToOne {
+			referenced_table, ..
+		} => rename(referenced_table),
+		super::Constraint::ManyToMany {
+			through_table,
+			target_table,
+			..
+		} => {
+			rename(through_table);
+			rename(target_table);
+		}
+		super::Constraint::PrimaryKey { .. }
+		| super::Constraint::Unique { .. }
+		| super::Constraint::Check { .. }
+		| super::Constraint::EnumDomain { .. }
+		| super::Constraint::Exclude { .. } => {}
+	}
+}
+
+#[cfg(feature = "sqlite")]
+fn sqlite_index_requires_raw_sql(index: &super::operations::SqliteRecreatedIndex) -> bool {
+	let Some(sql) = index.sql.as_deref() else {
+		return false;
+	};
+	let normalized = sql.to_ascii_uppercase();
+	index.columns.is_empty()
+		|| normalized.contains(" WHERE ")
+		|| normalized.contains(" COLLATE ")
+		|| normalized.contains(" ASC")
+		|| normalized.contains(" DESC")
+}
+
+#[cfg(feature = "sqlite")]
+fn sqlite_reject_unrewritable_rename_metadata(
+	schema: &SqliteTableRecreation,
+	target: &str,
+) -> Result<()> {
+	if !schema.raw_constraints.is_empty() || !schema.triggers.is_empty() {
+		return Err(MigrationError::InvalidMigration(format!(
+			"cannot safely plan SQLite rename for '{target}' with raw constraints or triggers"
+		)));
+	}
+	if schema
+		.new_columns
+		.iter()
+		.any(|column| column.generated.is_some())
+	{
+		return Err(MigrationError::InvalidMigration(format!(
+			"cannot safely plan SQLite rename for '{target}' with generated column expressions"
+		)));
+	}
+	if schema.indexes.iter().any(sqlite_index_requires_raw_sql) {
+		return Err(MigrationError::InvalidMigration(format!(
+			"cannot safely plan SQLite rename for '{target}' with index metadata requiring raw SQL (partial or expression index)"
+		)));
 	}
 	Ok(())
 }
@@ -571,10 +666,12 @@ async fn sqlite_advance_virtual_schema(
 						"cannot plan SQLite RenameTable for missing table '{old_name}'"
 					))
 				})?;
-			if !schema.raw_constraints.is_empty() || !schema.triggers.is_empty() {
-				return Err(MigrationError::InvalidMigration(format!(
-					"cannot safely plan SQLite table rename for '{old_name}' with raw constraints or triggers"
-				)));
+			sqlite_reject_unrewritable_rename_metadata(&schema, old_name)?;
+			for constraint in &mut schema.constraints {
+				sqlite_rename_typed_constraint_table(constraint, old_name, new_name);
+			}
+			for index in &mut schema.indexes {
+				index.sql = None;
 			}
 			schema.table_name.clone_from(new_name);
 			schemas.insert(old_name.clone(), None);
@@ -592,11 +689,7 @@ async fn sqlite_advance_virtual_schema(
 						"cannot plan SQLite RenameColumn for missing table '{table}'"
 					))
 				})?;
-			if !schema.raw_constraints.is_empty() || !schema.triggers.is_empty() {
-				return Err(MigrationError::InvalidMigration(format!(
-					"cannot safely plan SQLite column rename for '{table}.{old_name}' with raw constraints or triggers"
-				)));
-			}
+			sqlite_reject_unrewritable_rename_metadata(&schema, &format!("{table}.{old_name}"))?;
 			for column in &mut schema.new_columns {
 				if column.name == *old_name {
 					column.name.clone_from(new_name);
@@ -613,7 +706,7 @@ async fn sqlite_advance_virtual_schema(
 				}
 			}
 			for constraint in &mut schema.constraints {
-				sqlite_rename_typed_constraint_column(constraint, old_name, new_name)?;
+				sqlite_rename_typed_constraint_column(constraint, table, old_name, new_name)?;
 			}
 			for index in &mut schema.indexes {
 				for column in &mut index.columns {
@@ -626,6 +719,89 @@ async fn sqlite_advance_virtual_schema(
 				}
 			}
 			schemas.insert(table.clone(), Some(schema));
+		}
+		Operation::AddDiscriminatorColumn {
+			table,
+			column_name,
+			default_value,
+		} => {
+			let mut schema = sqlite_load_virtual_schema(editor, table, schemas)
+				.await?
+				.ok_or_else(|| {
+					MigrationError::InvalidMigration(format!(
+						"cannot plan SQLite AddDiscriminatorColumn for missing table '{table}'"
+					))
+				})?;
+			let mut column =
+				super::ColumnDefinition::new(column_name, super::FieldType::VarChar(50));
+			column.default = Some(format!("'{default_value}'"));
+			schema.new_columns.push(column);
+			schema.columns_to_copy.push(column_name.clone());
+			schemas.insert(table.clone(), Some(schema));
+		}
+		Operation::CreateInheritedTable {
+			name,
+			columns,
+			base_table,
+			join_column,
+		} => {
+			if sqlite_load_virtual_schema(editor, name, schemas)
+				.await?
+				.is_none()
+			{
+				let mut inherited_columns = Vec::with_capacity(columns.len() + 1);
+				inherited_columns.push(super::ColumnDefinition::new(
+					join_column,
+					super::FieldType::Integer,
+				));
+				inherited_columns.extend(columns.iter().cloned());
+				let columns_to_copy = inherited_columns
+					.iter()
+					.filter(|column| column.generated.is_none())
+					.map(|column| column.name.clone())
+					.collect();
+				schemas.insert(
+					name.clone(),
+					Some(SqliteTableRecreation {
+						table_name: name.clone(),
+						new_columns: inherited_columns,
+						columns_to_copy,
+						constraints: vec![super::Constraint::ForeignKey {
+							name: format!("{name}_{join_column}_fk"),
+							columns: vec![join_column.clone()],
+							referenced_table: base_table.clone(),
+							referenced_columns: vec!["id".to_string()],
+							on_delete: super::ForeignKeyAction::NoAction,
+							on_update: super::ForeignKeyAction::NoAction,
+							deferrable: None,
+						}],
+						raw_constraint_sqls: Vec::new(),
+						raw_constraints: Vec::new(),
+						column_collations: Vec::new(),
+						indexes: Vec::new(),
+						triggers: Vec::new(),
+						without_rowid: false,
+						strict: false,
+					}),
+				);
+			}
+		}
+		Operation::MoveModel {
+			rename_table,
+			old_table_name,
+			new_table_name,
+			..
+		} if *rename_table => {
+			let (Some(old_name), Some(new_name)) = (old_table_name, new_table_name) else {
+				return Err(MigrationError::InvalidMigration(
+					"SQLite MoveModel table rename requires both table names".to_string(),
+				));
+			};
+			let rename = Operation::RenameTable {
+				old_name: old_name.clone(),
+				new_name: new_name.clone(),
+			};
+			Box::pin(sqlite_advance_virtual_schema(editor, &rename, schemas)).await?;
 		}
 		Operation::CreateIndex {
 			table,
@@ -653,6 +829,66 @@ async fn sqlite_advance_virtual_schema(
 					columns: columns.clone(),
 					unique: *unique,
 					sql: Some(operation.try_to_sql(&SqlDialect::Sqlite)?),
+				});
+			schemas.insert(table.clone(), Some(schema));
+		}
+		Operation::CreateIndexRepair {
+			table,
+			name,
+			columns,
+			unique,
+			index_type,
+			where_clause,
+			concurrently,
+			expressions,
+			mysql_options,
+			operator_class,
+		}
+		| Operation::RestoreIndexOnRollback {
+			table,
+			name,
+			columns,
+			unique,
+			index_type,
+			where_clause,
+			concurrently,
+			expressions,
+			mysql_options,
+			operator_class,
+		} => {
+			let mut schema = sqlite_load_virtual_schema(editor, table, schemas)
+				.await?
+				.ok_or_else(|| {
+					MigrationError::InvalidMigration(format!(
+						"cannot plan SQLite generated index for missing table '{table}'"
+					))
+				})?;
+			let suffix = if columns.is_empty() {
+				"expr".to_string()
+			} else {
+				columns.join("_")
+			};
+			let executable = Operation::CreateIndexRepair {
+				table: table.clone(),
+				name: name.clone(),
+				columns: columns.clone(),
+				unique: *unique,
+				index_type: *index_type,
+				where_clause: where_clause.clone(),
+				concurrently: *concurrently,
+				expressions: expressions.clone(),
+				mysql_options: *mysql_options,
+				operator_class: operator_class.clone(),
+			};
+			schema
+				.indexes
+				.push(super::operations::SqliteRecreatedIndex {
+					name: name
+						.clone()
+						.unwrap_or_else(|| format!("idx_{table}_{suffix}")),
+					columns: columns.clone(),
+					unique: *unique,
+					sql: Some(executable.try_to_sql(&SqlDialect::Sqlite)?),
 				});
 			schemas.insert(table.clone(), Some(schema));
 		}
@@ -705,21 +941,141 @@ async fn sqlite_advance_virtual_schema(
 			schema.indexes.retain(|index| index.name != *name);
 			schemas.insert(table.clone(), Some(schema));
 		}
-		_ => {}
+		Operation::MoveModel { .. }
+		| Operation::AddConstraint { .. }
+		| Operation::AddConstraintDefinition { .. }
+		| Operation::AddConstraintRepair { .. }
+		| Operation::RestoreConstraintOnRollback { .. }
+		| Operation::DropConstraint { .. }
+		| Operation::DropConstraintDefinition { .. }
+		| Operation::DropColumn { .. }
+		| Operation::AlterColumn { .. }
+		| Operation::RunSQL { .. }
+		| Operation::RunRust { .. }
+		| Operation::AlterTableComment { .. }
+		| Operation::AlterUniqueTogether { .. }
+		| Operation::AlterModelOptions { .. }
+		| Operation::CreateSchema { .. }
+		| Operation::DropSchema { .. }
+		| Operation::CreateExtension { .. }
+		| Operation::BulkLoad { .. }
+		| Operation::SetAutoIncrementValue { .. }
+		| Operation::CreateCompositePrimaryKey { .. } => {
+			return Err(MigrationError::InvalidMigration(format!(
+				"SQLite virtual schema received an unclassified operation: {:?}",
+				std::mem::discriminant(operation)
+			)));
+		}
 	}
 	Ok(())
 }
 
 #[cfg(feature = "sqlite")]
-fn sqlite_operation_is_opaque(operation: &Operation) -> bool {
-	matches!(
-		operation,
-		Operation::RunSQL { .. }
-			| Operation::BulkLoad { .. }
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SqliteVirtualEffect {
+	Simulate,
+	SchemaNeutral,
+	Opaque(&'static str),
+}
+
+#[cfg(feature = "sqlite")]
+fn sqlite_forward_virtual_effect(operation: &Operation) -> SqliteVirtualEffect {
+	match operation {
+		Operation::CreateTable { .. }
+		| Operation::DropTable { .. }
+		| Operation::AddColumn { .. }
+		| Operation::DropColumn { .. }
+		| Operation::AlterColumn { .. }
+		| Operation::RenameTable { .. }
+		| Operation::RenameColumn { .. }
+		| Operation::AddConstraint { .. }
+		| Operation::AddConstraintDefinition { .. }
+		| Operation::AddConstraintRepair { .. }
+		| Operation::DropConstraint { .. }
+		| Operation::DropConstraintDefinition { .. }
+		| Operation::CreateIndex { .. }
+		| Operation::CreateIndexRepair { .. }
+		| Operation::DropIndex { .. }
+		| Operation::CreateInheritedTable { .. }
+		| Operation::AddDiscriminatorColumn { .. } => SqliteVirtualEffect::Simulate,
+		#[cfg(feature = "pgvector")]
+		Operation::CreateNamedIndex { .. } | Operation::DropNamedIndex { .. } => {
+			SqliteVirtualEffect::Simulate
+		}
+		Operation::MoveModel { rename_table, .. } if *rename_table => SqliteVirtualEffect::Simulate,
+		Operation::RunSQL { .. } => SqliteVirtualEffect::Opaque("RunSQL"),
+		Operation::AlterUniqueTogether { .. } => SqliteVirtualEffect::Opaque("AlterUniqueTogether"),
+		Operation::CreateSchema { .. } => SqliteVirtualEffect::Opaque("CreateSchema"),
+		Operation::DropSchema { .. } => SqliteVirtualEffect::Opaque("DropSchema"),
+		Operation::CreateExtension { .. } => SqliteVirtualEffect::Opaque("CreateExtension"),
+		Operation::CreateCompositePrimaryKey { .. } => {
+			SqliteVirtualEffect::Opaque("CreateCompositePrimaryKey")
+		}
+		Operation::RestoreConstraintOnRollback { .. }
+		| Operation::RestoreIndexOnRollback { .. }
+		| Operation::RunRust { .. }
+		| Operation::AlterTableComment { .. }
+		| Operation::AlterModelOptions { .. }
+		| Operation::MoveModel { .. }
+		| Operation::BulkLoad { .. }
+		| Operation::SetAutoIncrementValue { .. } => SqliteVirtualEffect::SchemaNeutral,
+	}
+}
+
+#[cfg(feature = "sqlite")]
+fn sqlite_virtual_effect(
+	operation: &Operation,
+	planned_operation: Option<&Operation>,
+	direction: MigrationDirection,
+) -> SqliteVirtualEffect {
+	match direction {
+		MigrationDirection::Forward => sqlite_forward_virtual_effect(operation),
+		MigrationDirection::Backward => match operation {
+			Operation::RunSQL { reverse_sql, .. } => {
+				if reverse_sql.is_some() {
+					SqliteVirtualEffect::Opaque("RunSQL")
+				} else {
+					SqliteVirtualEffect::SchemaNeutral
+				}
+			}
+			Operation::RestoreIndexOnRollback { .. } => SqliteVirtualEffect::Simulate,
+			Operation::CreateTable { .. }
+			| Operation::DropTable { .. }
+			| Operation::AddColumn { .. }
+			| Operation::DropColumn { .. }
+			| Operation::AlterColumn { .. }
+			| Operation::RenameTable { .. }
+			| Operation::RenameColumn { .. }
+			| Operation::AddConstraint { .. }
+			| Operation::AddConstraintDefinition { .. }
+			| Operation::AddConstraintRepair { .. }
+			| Operation::RestoreConstraintOnRollback { .. }
+			| Operation::DropConstraint { .. }
+			| Operation::DropConstraintDefinition { .. }
+			| Operation::CreateIndex { .. }
+			| Operation::CreateIndexRepair { .. }
+			| Operation::DropIndex { .. }
+			| Operation::RunRust { .. }
+			| Operation::AlterTableComment { .. }
+			| Operation::AlterUniqueTogether { .. }
+			| Operation::AlterModelOptions { .. }
+			| Operation::CreateInheritedTable { .. }
+			| Operation::AddDiscriminatorColumn { .. }
+			| Operation::MoveModel { .. }
 			| Operation::CreateSchema { .. }
 			| Operation::DropSchema { .. }
 			| Operation::CreateExtension { .. }
-	)
+			| Operation::BulkLoad { .. }
+			| Operation::SetAutoIncrementValue { .. }
+			| Operation::CreateCompositePrimaryKey { .. } => planned_operation
+				.map(sqlite_forward_virtual_effect)
+				.unwrap_or(SqliteVirtualEffect::SchemaNeutral),
+			#[cfg(feature = "pgvector")]
+			Operation::CreateNamedIndex { .. } | Operation::DropNamedIndex { .. } => planned_operation
+				.map(sqlite_forward_virtual_effect)
+				.unwrap_or(SqliteVirtualEffect::SchemaNeutral),
+		},
+	}
 }
 
 /// Builds the SQL plan consumed by both migration execution and SQL inspection.
@@ -817,7 +1173,7 @@ async fn plan_migration_sql_with_irreversible_policy(
 	#[cfg(feature = "sqlite")]
 	let mut sqlite_virtual_schemas = HashMap::<String, Option<SqliteTableRecreation>>::new();
 	#[cfg(feature = "sqlite")]
-	let mut sqlite_opaque_operation_seen = false;
+	let mut sqlite_opaque_operation_seen = None;
 
 	let operations: Vec<&Operation> = match direction {
 		MigrationDirection::Forward => migration.operations.iter().collect(),
@@ -832,12 +1188,14 @@ async fn plan_migration_sql_with_irreversible_policy(
 			MigrationDirection::Backward => operation.to_reverse_operation(state)?,
 		};
 		#[cfg(feature = "sqlite")]
-		if matches!(dialect, SqlDialect::Sqlite)
-			&& planned_operation
-				.as_ref()
-				.is_some_and(sqlite_operation_is_opaque)
-		{
-			sqlite_opaque_operation_seen = true;
+		let sqlite_effect = if matches!(dialect, SqlDialect::Sqlite) {
+			sqlite_virtual_effect(operation, planned_operation.as_ref(), direction)
+		} else {
+			SqliteVirtualEffect::SchemaNeutral
+		};
+		#[cfg(feature = "sqlite")]
+		if let SqliteVirtualEffect::Opaque(operation_name) = sqlite_effect {
+			sqlite_opaque_operation_seen = Some(operation_name);
 		}
 
 		#[cfg(feature = "sqlite")]
@@ -848,10 +1206,10 @@ async fn plan_migration_sql_with_irreversible_policy(
 			};
 		#[cfg(feature = "sqlite")]
 		if requires_recreation {
-			if sqlite_opaque_operation_seen {
+			if let Some(operation_name) = sqlite_opaque_operation_seen {
 				return Err(MigrationError::InvalidMigration(format!(
-					"cannot safely plan SQLite recreation after opaque RunSQL in {}",
-					migration.id()
+					"cannot safely plan SQLite recreation after opaque {operation_name} in {}",
+					migration.id(),
 				)));
 			}
 			let reverse_missing =
@@ -941,7 +1299,8 @@ async fn plan_migration_sql_with_irreversible_policy(
 			.extend((first_statement..statements.len()).map(|_| planned_operation.clone()));
 		sqlite_recreation_groups.extend((first_statement..statements.len()).map(|_| None));
 		#[cfg(feature = "sqlite")]
-		if needs_sqlite_editor && let Some(operation) = planned_operation.as_ref() {
+		if needs_sqlite_editor && matches!(sqlite_effect, SqliteVirtualEffect::Simulate) {
+			let operation = planned_operation.as_ref().unwrap_or(operation);
 			let editor = sqlite_editor.as_mut().expect("SQLite planner editor");
 			sqlite_advance_virtual_schema(editor, operation, &mut sqlite_virtual_schemas).await?;
 		}
@@ -954,4 +1313,124 @@ async fn plan_migration_sql_with_irreversible_policy(
 		sqlite_recreation_groups,
 		direction,
 	})
+}
+
+#[cfg(all(test, feature = "sqlite"))]
+mod tests {
+	use super::*;
+	use crate::migrations::{
+		BulkLoadFormat, BulkLoadOptions, BulkLoadSource, ColumnDefinition, FieldType,
+	};
+
+	#[test]
+	fn sqlite_virtual_effect_classifies_special_schema_operations() {
+		let discriminator = Operation::AddDiscriminatorColumn {
+			table: "animals".to_string(),
+			column_name: "kind".to_string(),
+			default_value: "animal".to_string(),
+		};
+		let inherited = Operation::CreateInheritedTable {
+			name: "employees".to_string(),
+			columns: vec![ColumnDefinition::new("name", FieldType::Text)],
+			base_table: "people".to_string(),
+			join_column: "person_id".to_string(),
+		};
+		let moved = Operation::MoveModel {
+			model_name: "Book".to_string(),
+			from_app: "old".to_string(),
+			to_app: "new".to_string(),
+			rename_table: true,
+			old_table_name: Some("old_books".to_string()),
+			new_table_name: Some("new_books".to_string()),
+		};
+		let state_only_move = Operation::MoveModel {
+			model_name: "Book".to_string(),
+			from_app: "old".to_string(),
+			to_app: "new".to_string(),
+			rename_table: false,
+			old_table_name: None,
+			new_table_name: None,
+		};
+		let create_repair = Operation::CreateIndexRepair {
+			table: "books".to_string(),
+			name: Some("idx_books_title".to_string()),
+			columns: vec!["title".to_string()],
+			unique: false,
+			index_type: None,
+			where_clause: None,
+			concurrently: false,
+			expressions: None,
+			mysql_options: None,
+			operator_class: None,
+		};
+		let restore = Operation::RestoreIndexOnRollback {
+			table: "books".to_string(),
+			name: Some("idx_books_title".to_string()),
+			columns: vec!["title".to_string()],
+			unique: false,
+			index_type: None,
+			where_clause: None,
+			concurrently: false,
+			expressions: None,
+			mysql_options: None,
+			operator_class: None,
+		};
+
+		assert_eq!(
+			sqlite_forward_virtual_effect(&discriminator),
+			SqliteVirtualEffect::Simulate
+		);
+		assert_eq!(
+			sqlite_forward_virtual_effect(&inherited),
+			SqliteVirtualEffect::Simulate
+		);
+		assert_eq!(
+			sqlite_forward_virtual_effect(&moved),
+			SqliteVirtualEffect::Simulate
+		);
+		assert_eq!(
+			sqlite_forward_virtual_effect(&state_only_move),
+			SqliteVirtualEffect::SchemaNeutral
+		);
+		assert_eq!(
+			sqlite_forward_virtual_effect(&create_repair),
+			SqliteVirtualEffect::Simulate
+		);
+		assert_eq!(
+			sqlite_forward_virtual_effect(&restore),
+			SqliteVirtualEffect::SchemaNeutral
+		);
+		assert_eq!(
+			sqlite_virtual_effect(&restore, None, MigrationDirection::Backward),
+			SqliteVirtualEffect::Simulate
+		);
+	}
+
+	#[test]
+	fn sqlite_virtual_effect_treats_bulk_load_as_schema_neutral() {
+		let bulk_load = Operation::BulkLoad {
+			table: "books".to_string(),
+			source: BulkLoadSource::Stdin,
+			format: BulkLoadFormat::Csv,
+			options: BulkLoadOptions::default(),
+		};
+
+		assert_eq!(
+			sqlite_forward_virtual_effect(&bulk_load),
+			SqliteVirtualEffect::SchemaNeutral
+		);
+	}
+
+	#[test]
+	fn sqlite_virtual_effect_classifies_reverse_run_sql_from_original_operation() {
+		let operation = Operation::RunSQL {
+			sql: "ALTER TABLE books ADD COLUMN opaque TEXT".to_string(),
+			reverse_sql: Some("ALTER TABLE books DROP COLUMN opaque".to_string()),
+		};
+
+		assert_eq!(
+			sqlite_virtual_effect(&operation, None, MigrationDirection::Backward),
+			SqliteVirtualEffect::Opaque("RunSQL")
+		);
+	}
 }

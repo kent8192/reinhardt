@@ -636,9 +636,262 @@ async fn sqlite_backward_recreation_uses_prior_add_and_rename_state() {
 }
 
 #[tokio::test]
+async fn sqlite_backward_recreation_rejects_prior_reverse_run_sql() {
+	let connection = sqlite_connection().await;
+	connection
+		.execute(
+			"CREATE TABLE \"books\" (\"id\" INTEGER PRIMARY KEY, \"added\" TEXT, \"opaque\" TEXT)",
+			vec![],
+		)
+		.await
+		.unwrap();
+	let mut migration = Migration::new("0012_backward_opaque", "catalog");
+	migration.operations = vec![
+		Operation::AddColumn {
+			table: "books".to_string(),
+			column: ColumnDefinition::new("added", FieldType::Text),
+			mysql_options: None,
+		},
+		Operation::RunSQL {
+			sql: "ALTER TABLE \"books\" ADD COLUMN \"opaque\" TEXT".to_string(),
+			reverse_sql: Some("ALTER TABLE \"books\" DROP COLUMN \"opaque\"".to_string()),
+		},
+	];
+
+	let error = plan_migration_sql(
+		&connection,
+		&migration,
+		&ProjectState::new(),
+		MigrationDirection::Backward,
+	)
+	.await
+	.unwrap_err();
+
+	assert_eq!(
+		error.to_string(),
+		"Invalid migration: cannot safely plan SQLite recreation after opaque RunSQL in catalog.0012_backward_opaque"
+	);
+}
+
+#[tokio::test]
+async fn sqlite_table_rename_updates_plain_index_and_self_foreign_key() {
+	let connection = sqlite_connection().await;
+	connection
+		.execute(
+			"CREATE TABLE \"nodes\" (\"id\" INTEGER PRIMARY KEY, \"parent_id\" INTEGER, \"obsolete\" TEXT, CONSTRAINT \"nodes_parent_fk\" FOREIGN KEY (\"parent_id\") REFERENCES \"nodes\" (\"id\"))",
+			vec![],
+		)
+		.await
+		.unwrap();
+	connection
+		.execute(
+			"CREATE INDEX \"idx_nodes_parent_id\" ON \"nodes\" (\"parent_id\")",
+			vec![],
+		)
+		.await
+		.unwrap();
+	let mut migration = Migration::new("0013_rename_dependencies", "catalog");
+	migration.operations = vec![
+		Operation::RenameTable {
+			old_name: "nodes".to_string(),
+			new_name: "tree_nodes".to_string(),
+		},
+		Operation::DropColumn {
+			table: "tree_nodes".to_string(),
+			column: "obsolete".to_string(),
+			old_definition: Some(ColumnDefinition::new("obsolete", FieldType::Text)),
+		},
+	];
+
+	let plan = plan_migration_sql(
+		&connection,
+		&migration,
+		&ProjectState::new(),
+		MigrationDirection::Forward,
+	)
+	.await
+	.unwrap();
+	let planned_sql = sql(&plan.statements);
+
+	assert!(
+		planned_sql[1].contains("REFERENCES tree_nodes(\"id\")"),
+		"{planned_sql:?}"
+	);
+	assert_eq!(
+		planned_sql.last().copied(),
+		Some("CREATE INDEX \"idx_nodes_parent_id\" ON \"tree_nodes\" (\"parent_id\");")
+	);
+
+	let mut executor = DatabaseMigrationExecutor::new(connection.clone());
+	executor
+		.apply_migrations(std::slice::from_ref(&migration))
+		.await
+		.unwrap();
+	let foreign_keys = connection
+		.fetch_all("PRAGMA foreign_key_list(\"tree_nodes\")", vec![])
+		.await
+		.unwrap();
+	assert_eq!(
+		foreign_keys[0].get::<String>("table").unwrap(),
+		"tree_nodes"
+	);
+	let index_sql = connection
+		.fetch_one(
+			"SELECT sql FROM sqlite_master WHERE type = 'index' AND name = 'idx_nodes_parent_id'",
+			vec![],
+		)
+		.await
+		.unwrap()
+		.get::<String>("sql")
+		.unwrap();
+	assert_eq!(
+		index_sql,
+		"CREATE INDEX \"idx_nodes_parent_id\" ON \"tree_nodes\" (\"parent_id\")"
+	);
+}
+
+#[tokio::test]
+async fn sqlite_column_rename_rejects_partial_index_metadata() {
+	let connection = sqlite_connection().await;
+	connection
+		.execute(
+			"CREATE TABLE \"books\" (\"id\" INTEGER PRIMARY KEY, \"title\" TEXT, \"obsolete\" TEXT)",
+			vec![],
+		)
+		.await
+		.unwrap();
+	connection
+		.execute(
+			"CREATE INDEX \"idx_books_live_title\" ON \"books\" (\"title\") WHERE \"title\" IS NOT NULL",
+			vec![],
+		)
+		.await
+		.unwrap();
+	let mut migration = Migration::new("0014_partial_rename", "catalog");
+	migration.operations = vec![
+		Operation::RenameColumn {
+			table: "books".to_string(),
+			old_name: "title".to_string(),
+			new_name: "name".to_string(),
+		},
+		Operation::DropColumn {
+			table: "books".to_string(),
+			column: "obsolete".to_string(),
+			old_definition: Some(ColumnDefinition::new("obsolete", FieldType::Text)),
+		},
+	];
+
+	let error = plan_migration_sql(
+		&connection,
+		&migration,
+		&ProjectState::new(),
+		MigrationDirection::Forward,
+	)
+	.await
+	.unwrap_err();
+
+	assert!(matches!(error, MigrationError::InvalidMigration(_)));
+	assert!(error.to_string().contains("partial or expression index"));
+}
+
+#[tokio::test]
+async fn sqlite_column_rename_rejects_expression_index_metadata() {
+	let connection = sqlite_connection().await;
+	connection
+		.execute(
+			"CREATE TABLE \"books\" (\"id\" INTEGER PRIMARY KEY, \"title\" TEXT, \"obsolete\" TEXT)",
+			vec![],
+		)
+		.await
+		.unwrap();
+	connection
+		.execute(
+			"CREATE INDEX \"idx_books_lower_title\" ON \"books\" (lower(\"title\"))",
+			vec![],
+		)
+		.await
+		.unwrap();
+	let mut migration = Migration::new("0015_expression_rename", "catalog");
+	migration.operations = vec![
+		Operation::RenameColumn {
+			table: "books".to_string(),
+			old_name: "title".to_string(),
+			new_name: "name".to_string(),
+		},
+		Operation::DropColumn {
+			table: "books".to_string(),
+			column: "obsolete".to_string(),
+			old_definition: Some(ColumnDefinition::new("obsolete", FieldType::Text)),
+		},
+	];
+
+	let error = plan_migration_sql(
+		&connection,
+		&migration,
+		&ProjectState::new(),
+		MigrationDirection::Forward,
+	)
+	.await
+	.unwrap_err();
+
+	assert!(matches!(error, MigrationError::InvalidMigration(_)));
+	assert!(error.to_string().contains("partial or expression index"));
+}
+
+#[tokio::test]
+async fn sqlite_discriminator_column_is_visible_to_later_recreation() {
+	let connection = sqlite_connection().await;
+	connection
+		.execute(
+			"CREATE TABLE \"animals\" (\"id\" INTEGER PRIMARY KEY, \"obsolete\" TEXT)",
+			vec![],
+		)
+		.await
+		.unwrap();
+	let mut migration = Migration::new("0016_discriminator", "catalog");
+	migration.operations = vec![
+		Operation::AddDiscriminatorColumn {
+			table: "animals".to_string(),
+			column_name: "kind".to_string(),
+			default_value: "animal".to_string(),
+		},
+		Operation::DropColumn {
+			table: "animals".to_string(),
+			column: "obsolete".to_string(),
+			old_definition: Some(ColumnDefinition::new("obsolete", FieldType::Text)),
+		},
+	];
+
+	let plan = plan_migration_sql(
+		&connection,
+		&migration,
+		&ProjectState::new(),
+		MigrationDirection::Forward,
+	)
+	.await
+	.unwrap();
+
+	assert!(sql(&plan.statements)[1].contains("kind VARCHAR(50) DEFAULT 'animal'"));
+	let mut executor = DatabaseMigrationExecutor::new(connection.clone());
+	executor
+		.apply_migrations(std::slice::from_ref(&migration))
+		.await
+		.unwrap();
+	let columns = connection
+		.fetch_all("PRAGMA table_info(\"animals\")", vec![])
+		.await
+		.unwrap();
+	let names = columns
+		.iter()
+		.map(|row| row.get::<String>("name").unwrap())
+		.collect::<Vec<_>>();
+	assert_eq!(names, vec!["id", "kind"]);
+}
+
+#[tokio::test]
 async fn executor_consumes_comment_plan_without_dispatching_it_as_sql() {
 	let connection = sqlite_connection().await;
-	let mut migration = Migration::new("0012_rust_only", "catalog");
+	let mut migration = Migration::new("0017_rust_only", "catalog");
 	migration.operations.push(Operation::RunRust {
 		code: "panic_if_executed_as_sql();".to_string(),
 		reverse_code: Some("clear();".to_string()),

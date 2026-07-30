@@ -18,12 +18,28 @@ impl fmt::Debug for DbClientSpec {
 	fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
 		f.debug_struct("DbClientSpec")
 			.field("executable", &self.executable)
-			.field("arguments", &self.arguments)
+			.field("arguments", &RedactedArguments(&self.arguments))
 			.field(
 				"secret_environment",
 				&RedactedEnvironment(&self.secret_environment),
 			)
 			.finish()
+	}
+}
+
+struct RedactedArguments<'a>(&'a [OsString]);
+
+impl fmt::Debug for RedactedArguments<'_> {
+	fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+		let mut list = f.debug_list();
+		for argument in self.0 {
+			if argument.to_string_lossy().starts_with("file:") {
+				list.entry(&RedactedValue);
+			} else {
+				list.entry(argument);
+			}
+		}
+		list.finish()
 	}
 }
 
@@ -117,20 +133,22 @@ fn build_mysql_spec(database_url: &str) -> CommandResult<DbClientSpec> {
 }
 
 fn build_sqlite_spec(database_url: &str) -> CommandResult<DbClientSpec> {
-	let without_query = database_url
-		.split_once('?')
-		.map_or(database_url, |(path, _)| path);
-	let without_fragment = without_query
+	let without_fragment = database_url
 		.split_once('#')
-		.map_or(without_query, |(path, _)| path);
+		.map_or(database_url, |(url, _)| url);
+	let (url_without_query, query) = without_fragment
+		.split_once('?')
+		.map_or((without_fragment, None), |(path, query)| {
+			(path, Some(query))
+		});
 	let encoded_path =
-		if without_fragment == "sqlite::memory:" || without_fragment == "sqlite://:memory:" {
+		if url_without_query == "sqlite::memory:" || url_without_query == "sqlite://:memory:" {
 			":memory:"
-		} else if let Some(path) = without_fragment.strip_prefix("sqlite:///") {
+		} else if let Some(path) = url_without_query.strip_prefix("sqlite:///") {
 			path
-		} else if let Some(path) = without_fragment.strip_prefix("sqlite://") {
+		} else if let Some(path) = url_without_query.strip_prefix("sqlite://") {
 			path
-		} else if let Some(path) = without_fragment.strip_prefix("sqlite:") {
+		} else if let Some(path) = url_without_query.strip_prefix("sqlite:") {
 			path
 		} else {
 			return Err(malformed_url("SQLite"));
@@ -138,11 +156,21 @@ fn build_sqlite_spec(database_url: &str) -> CommandResult<DbClientSpec> {
 	if encoded_path.is_empty() {
 		return Err(malformed_url("SQLite"));
 	}
-	let path = decode_component(encoded_path, "SQLite")?;
+	let database_argument = match query {
+		Some(query) => {
+			let uri = if encoded_path.starts_with("file:") {
+				format!("{encoded_path}?{query}")
+			} else {
+				format!("file:{encoded_path}?{query}")
+			};
+			OsString::from(uri)
+		}
+		None => decode_component(encoded_path, "SQLite")?,
+	};
 
 	Ok(DbClientSpec {
 		executable: OsString::from("sqlite3"),
-		arguments: vec![path],
+		arguments: vec![database_argument],
 		secret_environment: Vec::new(),
 	})
 }
@@ -300,8 +328,8 @@ mod tests {
 
 	#[test]
 	fn sqlite_preserves_relative_and_absolute_file_paths_without_query_parameters() {
-		let relative = resolved_database("sqlite:data/report%20cache.sqlite3?mode=rw");
-		let absolute = resolved_database("sqlite:////tmp/report%20cache.sqlite3?mode=rw");
+		let relative = resolved_database("sqlite:data/report%20cache.sqlite3");
+		let absolute = resolved_database("sqlite:////tmp/report%20cache.sqlite3");
 
 		let relative_spec =
 			build_client_spec(&relative, &[]).expect("build relative SQLite client");
@@ -320,6 +348,67 @@ mod tests {
 			vec![OsString::from("/tmp/report cache.sqlite3")]
 		);
 		assert!(absolute_spec.secret_environment.is_empty());
+	}
+
+	#[test]
+	fn sqlite_preserves_named_memory_mode_and_cache_as_a_uri_filename() {
+		let database = resolved_database("sqlite:file:shared?mode=memory&cache=shared");
+
+		let spec = build_client_spec(&database, &[]).expect("build named-memory SQLite client");
+
+		assert_eq!(spec.executable, OsString::from("sqlite3"));
+		assert_eq!(
+			spec.arguments,
+			vec![OsString::from("file:shared?mode=memory&cache=shared")]
+		);
+		assert!(spec.secret_environment.is_empty());
+	}
+
+	#[test]
+	fn sqlite_preserves_absolute_read_only_mode_as_a_uri_filename() {
+		let database =
+			resolved_database("sqlite:////tmp/report%20cache.sqlite3?mode=ro&immutable=1");
+
+		let spec = build_client_spec(&database, &[]).expect("build read-only SQLite client");
+
+		assert_eq!(
+			spec.arguments,
+			vec![OsString::from(
+				"file:/tmp/report%20cache.sqlite3?mode=ro&immutable=1"
+			)]
+		);
+	}
+
+	#[test]
+	fn sqlite_uri_preserves_query_order_and_percent_encoding() {
+		let database = resolved_database(
+			"sqlite:data/report%20cache.sqlite3?cache=private&vfs=unix%2Ddotfile&mode=rw",
+		);
+
+		let spec = build_client_spec(&database, &[]).expect("build SQLite URI client");
+
+		assert_eq!(
+			spec.arguments,
+			vec![OsString::from(
+				"file:data/report%20cache.sqlite3?cache=private&vfs=unix%2Ddotfile&mode=rw"
+			)]
+		);
+	}
+
+	#[test]
+	fn sqlite_uri_is_redacted_from_debug_output() {
+		let raw_url = "sqlite:file:shared?mode=memory&cache=shared&token=do-not-print-this";
+		let database = resolved_database(raw_url);
+
+		let spec = build_client_spec(&database, &[]).expect("build named-memory SQLite client");
+		let debug = format!("{spec:?}");
+
+		assert!(!debug.contains(raw_url));
+		assert!(!debug.contains("do-not-print-this"));
+		assert_eq!(
+			debug,
+			"DbClientSpec { executable: \"sqlite3\", arguments: [\"[REDACTED]\"], secret_environment: [] }"
+		);
 	}
 
 	#[test]

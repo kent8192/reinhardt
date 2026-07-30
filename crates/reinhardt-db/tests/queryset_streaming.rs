@@ -6,6 +6,10 @@ use reinhardt_db::backends::types::{
 #[cfg(feature = "sqlite")]
 use reinhardt_db::orm::DatabaseConnectionLease;
 use reinhardt_db::orm::{Model, QuerySet};
+use reinhardt_query::prelude::{
+	Alias, ColumnDef, Expr, Query, QueryStatementBuilder, SqliteQueryBuilder,
+};
+use rstest::rstest;
 use serde::{Deserialize, Serialize};
 use std::collections::VecDeque;
 use std::pin::Pin;
@@ -235,13 +239,16 @@ impl TransactionExecutor for UnsupportedExecutor {
 	}
 }
 
+#[rstest]
 #[tokio::test]
 async fn iterator_with_executor_bounds_buffer_and_decodes_rows() {
+	// Arrange
 	let rows = (1..=7)
 		.map(|id| Ok(article_row(id, QueryValue::String(format!("article-{id}")))))
 		.collect();
 	let mut executor = StreamingExecutor::new(rows);
 
+	// Act
 	let models = QuerySet::<StreamedArticle>::new()
 		.iterator_with_executor(&mut executor, 3)
 		.unwrap()
@@ -251,6 +258,7 @@ async fn iterator_with_executor_bounds_buffer_and_decodes_rows() {
 		.collect::<reinhardt_core::exception::Result<Vec<_>>>()
 		.unwrap();
 
+	// Assert
 	assert_eq!(models.len(), 7);
 	assert_eq!(models[0].title, "article-1");
 	assert_eq!(executor.stream_calls, 1);
@@ -258,8 +266,10 @@ async fn iterator_with_executor_bounds_buffer_and_decodes_rows() {
 	assert!(executor.dropped.load(Ordering::SeqCst));
 }
 
+#[rstest]
 #[tokio::test]
 async fn iterator_with_executor_releases_stream_on_early_drop() {
+	// Arrange
 	let mut executor = StreamingExecutor::new(vec![
 		Ok(article_row(1, QueryValue::String("first".to_owned()))),
 		Ok(article_row(2, QueryValue::String("second".to_owned()))),
@@ -269,14 +279,18 @@ async fn iterator_with_executor_releases_stream_on_early_drop() {
 		.iterator_with_executor(&mut executor, 1)
 		.unwrap();
 
+	// Act
 	assert_eq!(stream.next().await.unwrap().unwrap().title, "first");
 	drop(stream);
 
+	// Assert
 	assert!(dropped.load(Ordering::SeqCst));
 }
 
+#[rstest]
 #[tokio::test]
 async fn iterator_with_executor_releases_stream_after_cancelled_poll() {
+	// Arrange
 	let mut executor = StreamingExecutor::pending_after(vec![Ok(article_row(
 		1,
 		QueryValue::String("first".to_owned()),
@@ -286,8 +300,10 @@ async fn iterator_with_executor_releases_stream_after_cancelled_poll() {
 		.iterator_with_executor(&mut executor, 1)
 		.unwrap();
 
+	// Act
 	assert_eq!(stream.next().await.unwrap().unwrap().title, "first");
 	let cancelled = tokio::time::timeout(std::time::Duration::from_millis(10), stream.next()).await;
+	// Assert
 	assert!(cancelled.is_err());
 	assert!(!dropped.load(Ordering::SeqCst));
 	drop(stream);
@@ -295,8 +311,10 @@ async fn iterator_with_executor_releases_stream_after_cancelled_poll() {
 	assert!(dropped.load(Ordering::SeqCst));
 }
 
+#[rstest]
 #[tokio::test]
 async fn iterator_with_executor_surfaces_midstream_backend_error() {
+	// Arrange
 	let backend_error = DatabaseError::new(DatabaseErrorKind::Query, "stream interrupted");
 	let mut executor = StreamingExecutor::new(vec![
 		Ok(article_row(1, QueryValue::String("first".to_owned()))),
@@ -307,14 +325,18 @@ async fn iterator_with_executor_surfaces_midstream_backend_error() {
 		.iterator_with_executor(&mut executor, 2)
 		.unwrap();
 
+	// Act
 	assert_eq!(stream.next().await.unwrap().unwrap().title, "first");
+	// Assert
 	let error = stream.next().await.unwrap().unwrap_err();
 	assert_eq!(error.database_kind(), Some(DatabaseErrorKind::Query));
 	assert!(stream.next().await.is_none());
 }
 
+#[rstest]
 #[tokio::test]
 async fn iterator_with_executor_surfaces_midstream_decode_error() {
+	// Arrange
 	let mut executor = StreamingExecutor::new(vec![
 		Ok(article_row(1, QueryValue::String("first".to_owned()))),
 		Ok(article_row(2, QueryValue::Int(42))),
@@ -323,7 +345,9 @@ async fn iterator_with_executor_surfaces_midstream_decode_error() {
 		.iterator_with_executor(&mut executor, 2)
 		.unwrap();
 
+	// Act
 	assert_eq!(stream.next().await.unwrap().unwrap().title, "first");
+	// Assert
 	let error = stream.next().await.unwrap().unwrap_err();
 	assert_eq!(
 		error.database_kind(),
@@ -332,14 +356,18 @@ async fn iterator_with_executor_surfaces_midstream_decode_error() {
 	assert!(stream.next().await.is_none());
 }
 
+#[rstest]
 #[tokio::test]
 async fn iterator_with_executor_handles_empty_and_none_querysets() {
+	// Arrange
 	let mut empty_executor = StreamingExecutor::new(Vec::new());
+	// Act
 	let rows = QuerySet::<StreamedArticle>::new()
 		.iterator_with_executor(&mut empty_executor, 4)
 		.unwrap()
 		.collect::<Vec<_>>()
 		.await;
+	// Assert
 	assert_eq!(rows.len(), 0);
 	assert_eq!(empty_executor.stream_calls, 1);
 
@@ -357,15 +385,18 @@ async fn iterator_with_executor_handles_empty_and_none_querysets() {
 	assert_eq!(none_executor.stream_calls, 0);
 }
 
-#[test]
+#[rstest]
 fn iterator_with_executor_rejects_invalid_chunks_and_unsupported_executors() {
+	// Arrange
 	let mut streaming_executor = StreamingExecutor::new(Vec::new());
+	// Act
 	let error = match QuerySet::<StreamedArticle>::new()
 		.iterator_with_executor(&mut streaming_executor, 0)
 	{
 		Ok(_) => panic!("zero chunk size must be rejected"),
 		Err(error) => error,
 	};
+	// Assert
 	assert_eq!(
 		error.database_kind(),
 		Some(DatabaseErrorKind::Configuration)
@@ -383,30 +414,36 @@ fn iterator_with_executor_rejects_invalid_chunks_and_unsupported_executors() {
 }
 
 #[cfg(feature = "sqlite")]
+#[rstest]
 #[tokio::test]
 async fn sqlite_queryset_iterator_delivers_rows_without_query_cache() {
+	// Arrange
 	let owner = reinhardt_db::backends::DatabaseConnection::connect_sqlite("sqlite::memory:")
 		.await
 		.unwrap();
-	owner
-		.execute(
-			"CREATE TABLE streamed_articles (id INTEGER PRIMARY KEY, title TEXT NOT NULL)",
-			vec![],
+	let create_table = Query::create_table()
+		.table(Alias::new("streamed_articles"))
+		.col(
+			ColumnDef::new(Alias::new("id"))
+				.integer()
+				.not_null(true)
+				.primary_key(true),
 		)
-		.await
-		.unwrap();
+		.col(ColumnDef::new(Alias::new("title")).string().not_null(true))
+		.to_string(SqliteQueryBuilder);
+	owner.execute(&create_table, vec![]).await.unwrap();
 	for (id, title) in [(1, "first"), (2, "second"), (3, "third")] {
-		owner
-			.execute(
-				"INSERT INTO streamed_articles (id, title) VALUES (?, ?)",
-				vec![QueryValue::Int(id), QueryValue::String(title.to_owned())],
-			)
-			.await
-			.unwrap();
+		let insert = Query::insert()
+			.into_table(Alias::new("streamed_articles"))
+			.columns([Alias::new("id"), Alias::new("title")])
+			.values_panic([Expr::val(id), Expr::val(title)])
+			.to_string(SqliteQueryBuilder);
+		owner.execute(&insert, vec![]).await.unwrap();
 	}
 	let lease = DatabaseConnectionLease::register(owner).unwrap();
 	let mut connection = lease.handle();
 
+	// Act
 	let models = QuerySet::<StreamedArticle>::new()
 		.iterator_with_db(&mut connection, 1)
 		.unwrap()
@@ -416,6 +453,7 @@ async fn sqlite_queryset_iterator_delivers_rows_without_query_cache() {
 		.collect::<reinhardt_core::exception::Result<Vec<_>>>()
 		.unwrap();
 
+	// Assert
 	assert_eq!(
 		models,
 		vec![

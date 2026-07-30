@@ -43,7 +43,7 @@ pub type QuerySetStream<'a, T> =
 struct StreamQueryAccounting {
 	sql: String,
 	params: Vec<String>,
-	started: Instant,
+	duration: std::time::Duration,
 }
 
 impl StreamQueryAccounting {
@@ -51,8 +51,12 @@ impl StreamQueryAccounting {
 		Self {
 			sql,
 			params,
-			started: Instant::now(),
+			duration: std::time::Duration::ZERO,
 		}
+	}
+
+	fn record_poll(&mut self, duration: std::time::Duration) {
+		self.duration += duration;
 	}
 }
 
@@ -61,7 +65,7 @@ impl Drop for StreamQueryAccounting {
 		super::instrumentation::instrumentation().orm_query_end_with_params_sync(
 			&self.sql,
 			&self.params,
-			self.started.elapsed(),
+			self.duration,
 		);
 	}
 }
@@ -1570,6 +1574,9 @@ where
 	fn build_where_condition_for_write(
 		&self,
 	) -> reinhardt_core::exception::Result<Option<Condition>> {
+		if self.empty_result {
+			return Ok(Some(Condition::all().add(Expr::val(false))));
+		}
 		let mut queryset = self.clone();
 		queryset.relation_joins = RelationJoinGraph::new(T::table_name());
 		queryset.from_alias = None;
@@ -5467,6 +5474,9 @@ where
 		if let Some(cond) = where_condition {
 			stmt.cond_where(cond);
 		}
+		if self.empty_result {
+			stmt.and_where(Expr::val(false));
+		}
 
 		// Apply GROUP BY
 		for group_field in &self.group_by_fields {
@@ -5995,6 +6005,9 @@ where
 	where
 		T: serde::de::DeserializeOwned,
 	{
+		if self.empty_result {
+			return Ok(None);
+		}
 		let mut conn = super::manager::get_connection().await?;
 		self.first_with_db(&mut conn).await
 	}
@@ -6049,6 +6062,11 @@ where
 	where
 		T: serde::de::DeserializeOwned,
 	{
+		if self.empty_result {
+			return Err(reinhardt_core::exception::Error::NotFound(
+				"No record found matching the query".to_string(),
+			));
+		}
 		let mut conn = super::manager::get_connection().await?;
 		self.get_with_db(&mut conn).await
 	}
@@ -6218,13 +6236,18 @@ where
 		let rows = conn.fetch_stream_with_context(sql.clone(), params, chunk_size, context)?;
 
 		Ok(Box::pin(async_stream::stream! {
-			let accounting = StreamQueryAccounting::new(sql.clone(), param_samples);
+			let mut accounting = StreamQueryAccounting::new(sql.clone(), param_samples);
 			let mut rows = Some(rows);
-			while let Some(row) = rows.as_mut().expect("row stream is available").next().await {
+			loop {
+				let poll_started_at = Instant::now();
+				let row = rows.as_mut().expect("row stream is available").next().await;
+				accounting.record_poll(poll_started_at.elapsed());
+				let Some(row) = row else {
+					break;
+				};
 				let row = match row {
 					Ok(row) => row,
 					Err(error) => {
-						rows = None;
 						super::instrumentation::instrumentation()
 							.orm_query_error(&sql, &format!("{error:?}"))
 							.await;
@@ -6239,7 +6262,6 @@ where
 							DatabaseErrorKind::Serialization,
 							format!("Deserialization error: {error}"),
 						));
-						rows = None;
 						super::instrumentation::instrumentation()
 							.orm_query_error(&sql, &format!("{error:?}"))
 							.await;
@@ -6290,13 +6312,18 @@ where
 		let rows = executor.fetch_stream_with_context(sql.clone(), params, chunk_size, context)?;
 
 		Ok(Box::pin(async_stream::stream! {
-			let accounting = StreamQueryAccounting::new(sql.clone(), param_samples);
+			let mut accounting = StreamQueryAccounting::new(sql.clone(), param_samples);
 			let mut rows = Some(rows);
-			while let Some(row) = rows.as_mut().expect("row stream is available").next().await {
+			loop {
+				let poll_started_at = Instant::now();
+				let row = rows.as_mut().expect("row stream is available").next().await;
+				accounting.record_poll(poll_started_at.elapsed());
+				let Some(row) = row else {
+					break;
+				};
 				let row = match row {
 					Ok(row) => row,
 					Err(error) => {
-						rows = None;
 						super::instrumentation::instrumentation()
 							.orm_query_error(&sql, &format!("{error:?}"))
 							.await;
@@ -6311,7 +6338,6 @@ where
 							DatabaseErrorKind::Serialization,
 							format!("Deserialization error: {error}"),
 						));
-						rows = None;
 						super::instrumentation::instrumentation()
 							.orm_query_error(&sql, &format!("{error:?}"))
 							.await;
@@ -6560,6 +6586,9 @@ where
 	/// # }
 	/// ```
 	pub async fn count(&self) -> reinhardt_core::exception::Result<usize> {
+		if self.empty_result {
+			return Ok(0);
+		}
 		let mut conn = super::manager::get_connection().await?;
 		self.count_with_db(&mut conn).await
 	}
@@ -6709,6 +6738,9 @@ where
 	/// # }
 	/// ```
 	pub async fn exists(&self) -> reinhardt_core::exception::Result<bool> {
+		if self.empty_result {
+			return Ok(false);
+		}
 		let mut conn = super::manager::get_connection().await?;
 		self.exists_with_db(&mut conn).await
 	}
@@ -7268,6 +7300,13 @@ where
 		T: super::Model + Clone,
 	{
 		Self::composite_primary_key_for_values(pk_values)?;
+		if self.empty_result {
+			return Err(DatabaseError::new(
+				DatabaseErrorKind::Query,
+				"No record found matching the composite primary key",
+			)
+			.into());
+		}
 		let mut conn = super::manager::get_connection().await?;
 		self.get_composite_with_db(&mut conn, pk_values).await
 	}
@@ -7308,6 +7347,13 @@ where
 		use reinhardt_query::prelude::{Alias, BinOper, ColumnRef, Expr, Value};
 
 		let composite_pk = Self::composite_primary_key_for_values(pk_values)?;
+		if self.empty_result {
+			return Err(DatabaseError::new(
+				DatabaseErrorKind::Query,
+				"No record found matching the composite primary key",
+			)
+			.into());
+		}
 
 		// Build SELECT query using reinhardt-query
 		let table_name = T::table_name();

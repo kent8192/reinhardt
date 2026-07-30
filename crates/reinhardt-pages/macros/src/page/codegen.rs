@@ -1738,11 +1738,28 @@ mod tests {
 			}
 		});
 
-		let output = parse_and_generate(input).to_string();
+		let output: syn::Expr = syn::parse2(parse_and_generate(input))
+			.expect("generated typed custom event should be a Rust expression");
+		let expected: syn::Expr = syn::parse2(quote::quote!({
+			#[allow(unused_variables)]
+			|| -> ::reinhardt_pages::component::Page {
+				::reinhardt_pages::component::IntoPage::into_page(
+					::reinhardt_pages::component::PageElement::new("div").on(
+						::reinhardt_pages::event::EventName::Custom(::std::borrow::Cow::Borrowed(
+							"item-selected",
+						)),
+						::reinhardt_pages::callback::typed_custom_event_handler::<crate::Selected, _>(
+							|event: ::reinhardt_pages::event::CustomEvent<crate::Selected>| {
+								let _ = event;
+							},
+						),
+					),
+				)
+			}
+		}))
+		.expect("expected typed custom event shape should parse");
 
-		assert!(output.contains("event :: CustomEvent < crate :: Selected >"));
-		assert!(output.contains("callback :: typed_custom_event_handler"));
-		assert!(output.contains("\"item-selected\""));
+		assert_eq!(output, expected);
 	}
 
 	#[test]

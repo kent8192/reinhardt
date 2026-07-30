@@ -175,9 +175,9 @@ For arbitrary custom events, choose the raw or typed DSL explicitly:
 
 ```rust,ignore
 use reinhardt_pages::prelude::*;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
-#[derive(Deserialize)]
+#[derive(Deserialize, Serialize)]
 struct ItemSelected {
     id: u64,
 }

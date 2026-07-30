@@ -92,6 +92,7 @@ method continues until tasks created by other tasks are also complete.
 ## Raw and component events
 
 Use a standard `EventFixture` for intrinsic catalog events. Use
-`EventFixture::custom` only with `@custom("name")` or another raw listener.
+`EventFixture::custom` with `@custom("name")` for raw listeners, or add
+`.custom_detail(...)` for typed `@custom::<Detail>("name")` listeners.
 Component event props keep the argument type declared by the component prop;
 they are not converted through the intrinsic event catalog.

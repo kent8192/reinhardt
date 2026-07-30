@@ -677,7 +677,8 @@ pub use builder::{
 };
 pub use callback::{
 	Callback, IntoEventHandler, IntoTypedEventHandler, event_handler, into_event_handler,
-	raw_async_event_handler, raw_event_handler, typed_async_event_handler, typed_event_handler,
+	raw_async_event_handler, raw_event_handler, typed_async_custom_event_handler,
+	typed_async_event_handler, typed_custom_event_handler, typed_event_handler,
 };
 pub use client_form::{ClientFormChoice, ClientFormChoiceSource};
 #[cfg(native)]

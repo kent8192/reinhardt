@@ -5,9 +5,9 @@ use crate::{CommandError, CommandResult};
 use percent_encoding::percent_decode_str;
 use reinhardt_db::backends::DatabaseType;
 use std::env;
-use std::ffi::OsString;
+use std::ffi::{OsStr, OsString};
 use std::fmt;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use url::{Host, Url};
 
@@ -63,23 +63,45 @@ impl DbClientRunner for PortableDbClientRunner {
 	}
 }
 
-fn resolve_executable(executable: &OsString) -> CommandResult<PathBuf> {
-	let path = env::var_os("PATH").unwrap_or_default();
+fn resolve_executable(executable: &OsStr) -> CommandResult<PathBuf> {
+	let Some(path) = env::var_os("PATH") else {
+		return Err(executable_not_found(executable));
+	};
 	for directory in env::split_paths(&path) {
+		if directory.as_os_str().is_empty() {
+			continue;
+		}
 		for extension in executable_extensions() {
-			let mut filename = executable.clone();
+			let mut filename = executable.to_os_string();
 			filename.push(extension);
 			let candidate = directory.join(filename);
-			if candidate.is_file() {
+			if is_executable_candidate(&candidate) {
 				return Ok(candidate);
 			}
 		}
 	}
 
-	Err(CommandError::ExecutionError(format!(
+	Err(executable_not_found(executable))
+}
+
+fn executable_not_found(executable: &OsStr) -> CommandError {
+	CommandError::ExecutionError(format!(
 		"Database client executable `{}` was not found on PATH.",
 		executable.to_string_lossy()
-	)))
+	))
+}
+
+#[cfg(unix)]
+fn is_executable_candidate(candidate: &Path) -> bool {
+	use std::os::unix::fs::PermissionsExt;
+
+	std::fs::metadata(candidate)
+		.is_ok_and(|metadata| metadata.is_file() && metadata.permissions().mode() & 0o111 != 0)
+}
+
+#[cfg(not(unix))]
+fn is_executable_candidate(candidate: &Path) -> bool {
+	candidate.is_file()
 }
 
 #[cfg(not(windows))]
@@ -89,16 +111,21 @@ fn executable_extensions() -> Vec<OsString> {
 
 #[cfg(windows)]
 fn executable_extensions() -> Vec<OsString> {
+	let configured = env::var_os("PATHEXT");
+	windows_executable_extensions(configured.as_deref())
+}
+
+#[cfg(any(windows, test))]
+fn windows_executable_extensions(configured: Option<&OsStr>) -> Vec<OsString> {
 	let mut extensions = vec![OsString::new()];
-	let configured =
-		env::var_os("PATHEXT").unwrap_or_else(|| OsString::from(".COM;.EXE;.BAT;.CMD"));
-	extensions.extend(
-		configured
-			.to_string_lossy()
-			.split(';')
-			.filter(|extension| !extension.is_empty())
-			.map(OsString::from),
-	);
+	let configured = configured.unwrap_or_else(|| OsStr::new(".COM;.EXE"));
+	for extension in configured.to_string_lossy().split(';') {
+		let extension = extension.to_ascii_uppercase();
+		let extension = OsString::from(&extension);
+		if matches!(extension.to_str(), Some(".COM" | ".EXE")) && !extensions.contains(&extension) {
+			extensions.push(extension);
+		}
+	}
 	extensions
 }
 
@@ -339,13 +366,11 @@ mod tests {
 	use crate::database_selector::{DatabaseSelector, resolve_database};
 	use serial_test::serial;
 	use std::ffi::{OsStr, OsString};
-	#[cfg(unix)]
 	use std::fs;
-	#[cfg(unix)]
 	use std::io::Write;
-	#[cfg(unix)]
 	use std::path::Path;
 	#[cfg(unix)]
+	use std::path::PathBuf;
 	use std::process::{Command, Stdio};
 	use tempfile::TempDir;
 
@@ -373,6 +398,19 @@ mod tests {
 		fs::set_permissions(path, permissions).expect("make fake client executable");
 	}
 
+	fn copy_test_executable_as_client(directory: &Path, name: &str) {
+		let filename = if cfg!(windows) {
+			format!("{name}.EXE")
+		} else {
+			name.to_string()
+		};
+		fs::copy(
+			std::env::current_exe().expect("resolve test executable"),
+			directory.join(filename),
+		)
+		.expect("copy test executable as fake client");
+	}
+
 	struct PathGuard(Option<OsString>);
 
 	impl PathGuard {
@@ -394,6 +432,25 @@ mod tests {
 					std::env::remove_var("PATH");
 				}
 			}
+		}
+	}
+
+	#[cfg(unix)]
+	struct CurrentDirGuard(PathBuf);
+
+	#[cfg(unix)]
+	impl CurrentDirGuard {
+		fn set(path: &Path) -> Self {
+			let original = std::env::current_dir().expect("read current directory");
+			std::env::set_current_dir(path).expect("set current directory");
+			Self(original)
+		}
+	}
+
+	#[cfg(unix)]
+	impl Drop for CurrentDirGuard {
+		fn drop(&mut self) {
+			std::env::set_current_dir(&self.0).expect("restore current directory");
 		}
 	}
 
@@ -419,15 +476,32 @@ mod tests {
 		}
 	}
 
+	#[test]
+	fn windows_executable_extensions_reject_shell_scripts_case_insensitively() {
+		let extensions =
+			super::windows_executable_extensions(Some(OsStr::new(".BAT;.eXe;.CMD;.COM;.EXE")));
+
+		assert_eq!(
+			extensions,
+			vec![
+				OsString::new(),
+				OsString::from(".EXE"),
+				OsString::from(".COM"),
+			]
+		);
+	}
+
 	#[cfg(windows)]
 	#[test]
 	#[serial(env)]
 	fn executable_resolution_uses_windows_pathext_entries() {
 		let directory = TempDir::new().expect("create fake client directory");
-		let executable = directory.path().join("psql.TEST");
-		std::fs::write(&executable, b"fake executable").expect("write fake executable");
+		let batch_file = directory.path().join("psql.BAT");
+		let executable = directory.path().join("psql.EXE");
+		std::fs::write(batch_file, b"@echo off").expect("write fake batch file");
+		std::fs::write(&executable, b"fake native executable").expect("write fake executable");
 		let _path = PathGuard::set(directory.path());
-		let _pathext = EnvironmentVariableGuard::set("PATHEXT", ".TEST;.EXE");
+		let _pathext = EnvironmentVariableGuard::set("PATHEXT", ".BAT;.EXE");
 
 		let resolved =
 			super::resolve_executable(&OsString::from("psql")).expect("resolve fake executable");
@@ -446,6 +520,141 @@ mod tests {
 				}
 			}
 		}
+	}
+
+	#[cfg(unix)]
+	#[test]
+	#[serial(env)]
+	fn portable_runner_skips_non_executable_files_in_earlier_path_entries() {
+		let non_executable_directory =
+			TempDir::new().expect("create non-executable client directory");
+		let executable_directory = TempDir::new().expect("create executable client directory");
+		fs::write(
+			non_executable_directory.path().join("sqlite3"),
+			"#!/bin/sh\nexit 91\n",
+		)
+		.expect("write non-executable client");
+		write_fake_client(executable_directory.path(), "sqlite3", "exit 0");
+		let path =
+			std::env::join_paths([non_executable_directory.path(), executable_directory.path()])
+				.expect("join fake client PATH");
+		let _path = PathGuard::set(path);
+		let database = resolved_database("sqlite:db.sqlite3");
+		let spec = build_client_spec(&database, &[]).expect("build client spec");
+
+		let outcome = PortableDbClientRunner
+			.run(&spec)
+			.expect("run executable client");
+
+		assert_eq!(outcome, DbShellOutcome::Exited(0));
+	}
+
+	#[cfg(unix)]
+	#[test]
+	#[serial(env)]
+	fn portable_runner_follows_symlinks_to_executable_files() {
+		use std::os::unix::fs::symlink;
+
+		let directory = TempDir::new().expect("create fake client directory");
+		let target_directory = TempDir::new().expect("create fake target directory");
+		write_fake_client(target_directory.path(), "sqlite-client", "exit 0");
+		symlink(
+			target_directory.path().join("sqlite-client"),
+			directory.path().join("sqlite3"),
+		)
+		.expect("create executable client symlink");
+		let _path = PathGuard::set(directory.path());
+		let database = resolved_database("sqlite:db.sqlite3");
+		let spec = build_client_spec(&database, &[]).expect("build client spec");
+
+		let outcome = PortableDbClientRunner
+			.run(&spec)
+			.expect("run symlinked client");
+
+		assert_eq!(outcome, DbShellOutcome::Exited(0));
+	}
+
+	#[cfg(unix)]
+	#[test]
+	#[serial(env)]
+	fn portable_runner_reports_non_executable_files_as_missing() {
+		let directory = TempDir::new().expect("create fake client directory");
+		fs::write(directory.path().join("sqlite3"), "#!/bin/sh\nexit 0\n")
+			.expect("write non-executable client");
+		let _path = PathGuard::set(directory.path());
+		let database = resolved_database("sqlite:db.sqlite3");
+		let spec = build_client_spec(&database, &[]).expect("build client spec");
+
+		let error = PortableDbClientRunner
+			.run(&spec)
+			.expect_err("non-executable client should not resolve");
+
+		assert_eq!(
+			error.to_string(),
+			"Execution error: Database client executable `sqlite3` was not found on PATH."
+		);
+	}
+
+	#[cfg(unix)]
+	#[test]
+	#[serial(env, cwd)]
+	fn portable_runner_does_not_search_current_directory_when_path_is_unset() {
+		let directory = TempDir::new().expect("create fake client directory");
+		write_fake_client(directory.path(), "sqlite3", "exit 0");
+		let _current_dir = CurrentDirGuard::set(directory.path());
+		let _path = EnvironmentVariableGuard::remove("PATH");
+		let database = resolved_database("sqlite:db.sqlite3");
+		let spec = build_client_spec(&database, &[]).expect("build client spec");
+
+		let error = PortableDbClientRunner
+			.run(&spec)
+			.expect_err("unset PATH must not search the current directory");
+
+		assert_eq!(
+			error.to_string(),
+			"Execution error: Database client executable `sqlite3` was not found on PATH."
+		);
+	}
+
+	#[cfg(unix)]
+	#[test]
+	#[serial(env, cwd)]
+	fn portable_runner_skips_empty_path_entries_instead_of_searching_current_directory() {
+		let directory = TempDir::new().expect("create fake client directory");
+		write_fake_client(directory.path(), "sqlite3", "exit 0");
+		let _current_dir = CurrentDirGuard::set(directory.path());
+		let _path = PathGuard::set(OsStr::new(""));
+		let database = resolved_database("sqlite:db.sqlite3");
+		let spec = build_client_spec(&database, &[]).expect("build client spec");
+
+		let error = PortableDbClientRunner
+			.run(&spec)
+			.expect_err("empty PATH entry must not search the current directory");
+
+		assert_eq!(
+			error.to_string(),
+			"Execution error: Database client executable `sqlite3` was not found on PATH."
+		);
+	}
+
+	#[cfg(unix)]
+	#[test]
+	#[serial(env, cwd)]
+	fn portable_runner_preserves_explicit_relative_path_entries() {
+		let directory = TempDir::new().expect("create fake client directory");
+		let relative_directory = directory.path().join("clients");
+		fs::create_dir(&relative_directory).expect("create relative client directory");
+		write_fake_client(&relative_directory, "sqlite3", "exit 0");
+		let _current_dir = CurrentDirGuard::set(directory.path());
+		let _path = PathGuard::set(OsStr::new("clients"));
+		let database = resolved_database("sqlite:db.sqlite3");
+		let spec = build_client_spec(&database, &[]).expect("build client spec");
+
+		let outcome = PortableDbClientRunner
+			.run(&spec)
+			.expect("run client from explicit relative PATH entry");
+
+		assert_eq!(outcome, DbShellOutcome::Exited(0));
 	}
 
 	#[cfg(unix)]
@@ -590,19 +799,10 @@ mod tests {
 		assert_eq!(outcome, DbShellOutcome::TerminatedBySignal);
 	}
 
-	#[cfg(unix)]
 	#[test]
 	fn portable_runner_inherits_standard_streams() {
 		let directory = TempDir::new().expect("create fake client directory");
-		write_fake_client(
-			directory.path(),
-			"sqlite3",
-			r#"
-IFS= read -r input
-printf 'fake-stdout:%s\n' "$input"
-printf 'fake-stderr:%s\n' "$input" >&2
-"#,
-		);
+		copy_test_executable_as_client(directory.path(), "sqlite3");
 		let executable = std::env::current_exe().expect("resolve test executable");
 		let mut child = Command::new(executable)
 			.args([
@@ -612,6 +812,7 @@ printf 'fake-stderr:%s\n' "$input" >&2
 			])
 			.env("DBSHELL_STREAM_CHILD", "1")
 			.env("PATH", directory.path())
+			.env("PATHEXT", ".BAT;.EXE")
 			.stdin(Stdio::piped())
 			.stdout(Stdio::piped())
 			.stderr(Stdio::piped())
@@ -632,23 +833,57 @@ printf 'fake-stderr:%s\n' "$input" >&2
 			"{output:?}"
 		);
 		assert!(
+			String::from_utf8_lossy(&output.stdout).contains("fake-secret:child-secret"),
+			"{output:?}"
+		);
+		assert!(
 			String::from_utf8_lossy(&output.stderr).contains("fake-stderr:terminal-input"),
 			"{output:?}"
 		);
 	}
 
-	#[cfg(unix)]
 	#[test]
 	fn portable_runner_inherits_standard_streams_child() {
 		if std::env::var_os("DBSHELL_STREAM_CHILD").is_none() {
 			return;
 		}
-		let database = resolved_database("sqlite:db.sqlite3");
-		let spec = build_client_spec(&database, &[]).expect("build client spec");
+		let spec = super::DbClientSpec {
+			executable: OsString::from("sqlite3"),
+			arguments: vec![
+				OsString::from("--exact"),
+				OsString::from("dbshell::tests::portable_runner_fake_client_child"),
+				OsString::from("--nocapture"),
+			],
+			secret_environment: vec![
+				(OsString::from("DBSHELL_FAKE_CLIENT"), OsString::from("1")),
+				(
+					OsString::from("DBSHELL_FAKE_SECRET"),
+					OsString::from("child-secret"),
+				),
+			],
+		};
 
 		let outcome = PortableDbClientRunner.run(&spec).expect("run fake client");
 
 		assert_eq!(outcome, DbShellOutcome::Exited(0));
+	}
+
+	#[test]
+	fn portable_runner_fake_client_child() {
+		if std::env::var_os("DBSHELL_FAKE_CLIENT").is_none() {
+			return;
+		}
+		let mut input = String::new();
+		std::io::stdin()
+			.read_line(&mut input)
+			.expect("read inherited stdin");
+
+		print!("fake-stdout:{input}");
+		println!(
+			"fake-secret:{}",
+			std::env::var("DBSHELL_FAKE_SECRET").expect("read child-only secret")
+		);
+		eprint!("fake-stderr:{input}");
 	}
 
 	#[test]

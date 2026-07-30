@@ -6242,12 +6242,14 @@ where
 	fn bulk_key_batches<K>(
 		keys: BTreeSet<K>,
 		backend: super::connection::DatabaseBackend,
+		reserved_binds: usize,
 	) -> Vec<Vec<K>> {
-		let limit = match backend {
+		let parameter_limit = match backend {
 			super::connection::DatabaseBackend::Sqlite => 900,
 			super::connection::DatabaseBackend::Postgres
 			| super::connection::DatabaseBackend::MySql => 65_535,
 		};
+		let limit = parameter_limit.saturating_sub(reserved_binds).max(1);
 		let mut remaining = keys.into_iter().collect::<Vec<_>>();
 		let mut batches = Vec::new();
 		while !remaining.is_empty() {
@@ -6255,6 +6257,16 @@ where
 			batches.push(remaining.drain(..count).collect());
 		}
 		batches
+	}
+
+	fn select_bind_count(
+		&self,
+		backend: super::connection::DatabaseBackend,
+		is_cockroachdb: bool,
+	) -> reinhardt_core::exception::Result<usize> {
+		let statement = self.build_select_statement()?;
+		let (_, values) = Self::build_select_for_backend(&statement, backend, is_cockroachdb)?;
+		Ok(values.len())
 	}
 
 	/// Fetch rows by primary key and return them in deterministic key order.
@@ -6407,8 +6419,9 @@ where
 		E: OrmExecutor,
 	{
 		let field = super::expressions::FieldRef::<T, T::PrimaryKey>::new(T::primary_key_column());
+		let reserved_binds = self.select_bind_count(conn.backend(), conn.is_cockroachdb())?;
 		let mut result = BTreeMap::new();
-		for keys in Self::bulk_key_batches(keys, conn.backend()) {
+		for keys in Self::bulk_key_batches(keys, conn.backend(), reserved_binds) {
 			let rows = self
 				.clone()
 				.filter(field.is_in(keys))
@@ -6431,8 +6444,10 @@ where
 		T: serde::de::DeserializeOwned,
 		T::PrimaryKey: DatabaseField + Ord,
 	{
+		let backend = Self::executor_backend(executor);
+		let reserved_binds = self.select_bind_count(backend, executor.is_cockroachdb())?;
 		let mut result = BTreeMap::new();
-		for keys in Self::bulk_key_batches(keys, Self::executor_backend(executor)) {
+		for keys in Self::bulk_key_batches(keys, backend, reserved_binds) {
 			let filter =
 				super::expressions::FieldRef::<T, T::PrimaryKey>::new(T::primary_key_column())
 					.is_in(keys);
@@ -6461,8 +6476,9 @@ where
 		E: OrmExecutor,
 		K: DatabaseField + Ord,
 	{
+		let reserved_binds = self.select_bind_count(conn.backend(), conn.is_cockroachdb())?;
 		let mut result = BTreeMap::new();
-		for keys in Self::bulk_key_batches(keys, conn.backend()) {
+		for keys in Self::bulk_key_batches(keys, conn.backend(), reserved_binds) {
 			let rows = self
 				.clone()
 				.filter(unique_field.is_in(keys))
@@ -6487,8 +6503,10 @@ where
 		T: serde::de::DeserializeOwned,
 		K: DatabaseField + Ord,
 	{
+		let backend = Self::executor_backend(executor);
+		let reserved_binds = self.select_bind_count(backend, executor.is_cockroachdb())?;
 		let mut result = BTreeMap::new();
-		for keys in Self::bulk_key_batches(keys, Self::executor_backend(executor)) {
+		for keys in Self::bulk_key_batches(keys, backend, reserved_binds) {
 			let rows = self
 				.clone()
 				.filter(unique_field.is_in(keys))

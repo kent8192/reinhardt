@@ -331,6 +331,16 @@ impl PostgresBackend {
 				};
 				continue;
 			}
+			if type_name == "XML" {
+				match pg_row.try_get::<Option<String>, _>(column_name) {
+					Ok(Some(value)) => {
+						row.insert(column_name.to_string(), QueryValue::String(value))
+					}
+					Ok(None) => row.insert(column_name.to_string(), QueryValue::Null),
+					Err(error) => return Err(map_sqlx_error(error).into()),
+				};
+				continue;
+			}
 			if type_name == "VECTOR" {
 				#[cfg(not(feature = "pgvector"))]
 				return Err(vector_support_disabled_error().into());

@@ -1370,6 +1370,9 @@ where
 
 		let mut stmt = Query::select();
 		self.apply_model_from(&mut stmt);
+		if self.distinct_enabled {
+			stmt.distinct();
+		}
 		if let Some(ref fields) = self.selected_fields {
 			for field in fields {
 				if field.contains('(') && field.contains(')') {
@@ -1393,6 +1396,51 @@ where
 
 		if let Some(condition) = self.build_where_condition()? {
 			stmt.cond_where(condition);
+		}
+		for group_field in &self.group_by_fields {
+			stmt.group_by_col(self.root_column_reference(group_field));
+		}
+		for having_cond in &self.having_conditions {
+			let HavingCondition::AggregateCompare {
+				func,
+				field,
+				operator,
+				value,
+			} = having_cond;
+			let expression = self.having_aggregate_expr(func, field);
+			let expression = match operator {
+				ComparisonOp::Eq => match value {
+					AggregateValue::Int(value) => expression.eq(*value),
+					AggregateValue::Float(value) => expression.eq(*value),
+				},
+				ComparisonOp::Ne => match value {
+					AggregateValue::Int(value) => expression.ne(*value),
+					AggregateValue::Float(value) => expression.ne(*value),
+				},
+				ComparisonOp::Gt => match value {
+					AggregateValue::Int(value) => expression.gt(*value),
+					AggregateValue::Float(value) => expression.gt(*value),
+				},
+				ComparisonOp::Gte => match value {
+					AggregateValue::Int(value) => expression.gte(*value),
+					AggregateValue::Float(value) => expression.gte(*value),
+				},
+				ComparisonOp::Lt => match value {
+					AggregateValue::Int(value) => expression.lt(*value),
+					AggregateValue::Float(value) => expression.lt(*value),
+				},
+				ComparisonOp::Lte => match value {
+					AggregateValue::Int(value) => expression.lte(*value),
+					AggregateValue::Float(value) => expression.lte(*value),
+				},
+			};
+			stmt.and_having(expression);
+		}
+		for annotation in &self.annotations {
+			stmt.expr_as(
+				Expr::cust(self.annotation_value_to_select_sql(&annotation.value)),
+				Alias::new(&annotation.alias),
+			);
 		}
 		self.apply_ordering(&mut stmt);
 		if let Some(limit) = self.limit {

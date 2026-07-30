@@ -264,10 +264,8 @@ fn unsafe_window(window: &WindowStatement) -> bool {
 
 fn unsafe_expr(expression: &SimpleExpr) -> bool {
 	match expression {
-		SimpleExpr::SubQuery(_, _)
-		| SimpleExpr::Custom(_)
-		| SimpleExpr::CustomWithExpr(_, _)
-		| SimpleExpr::FunctionCall(_, _) => true,
+		SimpleExpr::SubQuery(_, _) | SimpleExpr::Custom(_) | SimpleExpr::FunctionCall(_, _) => true,
+		SimpleExpr::CustomWithExpr(_, expressions) => expressions.iter().any(unsafe_expr),
 		SimpleExpr::Unary(_, expression)
 		| SimpleExpr::AsEnum(_, expression)
 		| SimpleExpr::ExprAlias(expression, _)

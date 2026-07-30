@@ -1461,16 +1461,11 @@ fn test_none_keeps_builder_chains_empty_and_statement_inspection_deterministic()
 		.to_sql()
 		.expect("empty queryset SQL should compile");
 
-	assert_eq!(before_none, after_none);
-	assert!(
-		before_none.contains("WHERE 1 = 0"),
-		"SQL was: {before_none}"
+	assert_eq!(
+		before_none,
+		"SELECT * FROM \"products\" WHERE 1 = 0 ORDER BY \"price\" DESC LIMIT 3"
 	);
-	assert!(
-		before_none.contains("ORDER BY \"price\" DESC"),
-		"SQL was: {before_none}"
-	);
-	assert!(before_none.contains("LIMIT 3"), "SQL was: {before_none}");
+	assert_eq!(after_none, before_none);
 }
 
 #[tokio::test]

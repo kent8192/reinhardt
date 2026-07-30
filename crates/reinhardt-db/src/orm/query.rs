@@ -5984,6 +5984,7 @@ where
 				"No record found matching the query".to_string(),
 			));
 		}
+		self.ensure_unsliced_retrieval()?;
 		let mut conn = super::manager::get_connection().await?;
 		self.single_with_db(&mut conn, ordering).await
 	}
@@ -5999,6 +6000,7 @@ where
 				"No record found matching the query".to_string(),
 			));
 		}
+		self.ensure_unsliced_retrieval()?;
 		let mut conn = super::manager::get_connection().await?;
 		self.single_with_db(&mut conn, ordering).await
 	}
@@ -6017,6 +6019,7 @@ where
 				"No record found matching the query".to_string(),
 			));
 		}
+		self.ensure_unsliced_retrieval()?;
 		let mut conn = super::manager::get_connection().await?;
 		self.single_with_db(&mut conn, ordering).await
 	}
@@ -6035,6 +6038,7 @@ where
 				"No record found matching the query".to_string(),
 			));
 		}
+		self.ensure_unsliced_retrieval()?;
 		let mut conn = super::manager::get_connection().await?;
 		self.single_with_db(&mut conn, ordering).await
 	}
@@ -6244,7 +6248,7 @@ where
 		backend: super::connection::DatabaseBackend,
 		reserved_binds: usize,
 	) -> Vec<Vec<K>> {
-		let parameter_limit = match backend {
+		let parameter_limit: usize = match backend {
 			super::connection::DatabaseBackend::Sqlite => 900,
 			super::connection::DatabaseBackend::Postgres
 			| super::connection::DatabaseBackend::MySql => 65_535,

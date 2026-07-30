@@ -3341,6 +3341,19 @@ fn resolve_latest_by_fields(
 				.config
 				.db_column
 				.clone()
+				.or_else(|| {
+					field
+						.is_fk_id_field
+						.then(|| {
+							let relation_name = rust_field_name.trim_end_matches("_id");
+							field_infos
+								.iter()
+								.find(|candidate| candidate.name == relation_name)
+								.and_then(|candidate| candidate.rel.as_ref())
+								.and_then(|relation| relation.db_column.clone())
+						})
+						.flatten()
+				})
 				.unwrap_or_else(|| rust_field_name.to_owned());
 			Ok(if descending {
 				format!("-{column}")

@@ -41,9 +41,10 @@
 //! constraints, indexes, bulk operations, custom operations, and any operation
 //! without a proven schema reduction retain their order. The command validates
 //! and renders the entire migration before prompting, creates a new file
-//! without overwriting an existing destination, and removes partial output
-//! after a failed write. It reads migration sources only, so no database
-//! connection is required.
+//! without overwriting an existing destination, and attempts anchored cleanup
+//! after a failed write. If cleanup also fails, the error reports both
+//! failures. It reads migration sources only, so no database connection is
+//! required.
 //!
 //! ## Example
 //!

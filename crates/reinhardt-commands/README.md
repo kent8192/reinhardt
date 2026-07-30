@@ -107,8 +107,11 @@ renames, constraints, indexes, bulk operations, custom operations, and other
 non-reducible operations are barriers: optimization never crosses them.
 Reinhardt validates and renders the complete result before prompting. It then
 creates a new migration file without overwriting an existing destination.
-Invalid source or a failed write leaves no partial destination. The command
-only reads migration source files and does not require a database connection.
+Invalid source is rejected before file creation. If a write fails, Reinhardt
+attempts to remove the incomplete file through its anchored directory handle.
+A cleanup failure reports both the original write error and the cleanup error.
+The command only reads migration source files and does not require a database
+connection.
 
 ### Pages template hot reload
 

@@ -38,10 +38,11 @@
 //! [`FilesystemRepository::render`] validates that the combined migration can
 //! be represented as Rust source and emits parseable Rust 2024 code.
 //! [`FilesystemRepository::create_new_source`] validates names and source
-//! before writing, never overwrites an existing destination, and removes a
-//! partially created file if writing or synchronization fails. Catalog loading,
-//! range selection, squashing, and source creation do not require a database
-//! connection.
+//! before writing and never overwrites an existing destination. If writing or
+//! synchronization fails, it attempts to remove the incomplete file through
+//! the anchored application directory. A cleanup failure reports both the
+//! original error and the cleanup error. Catalog loading, range selection,
+//! squashing, and source creation do not require a database connection.
 //!
 //! ### Generated Entry Point Example
 //!

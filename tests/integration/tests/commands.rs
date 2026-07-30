@@ -30,6 +30,9 @@ mod introspect_integration;
 #[path = "commands/inspectdb_management.rs"]
 mod inspectdb_management;
 
+#[path = "commands/dbshell_management.rs"]
+mod dbshell_management;
+
 // Built-in command integration tests
 #[path = "commands/builtin_integration.rs"]
 mod builtin_integration;

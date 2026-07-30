@@ -192,12 +192,7 @@ fn append_sql(statements: &mut Vec<PlannedStatement>, sql: &str) {
 }
 
 #[cfg(feature = "sqlite")]
-async fn sqlite_planning_metadata(
-	editor: &mut SchemaEditor,
-	table: &str,
-	previous: Option<SqliteTableRecreation>,
-	prior_operations: &[Operation],
-) -> Result<(
+type SqlitePlanningMetadata = (
 	Vec<super::ColumnDefinition>,
 	Vec<(String, String)>,
 	Vec<super::Constraint>,
@@ -206,7 +201,15 @@ async fn sqlite_planning_metadata(
 	Vec<String>,
 	bool,
 	bool,
-)> {
+);
+
+#[cfg(feature = "sqlite")]
+async fn sqlite_planning_metadata(
+	editor: &mut SchemaEditor,
+	table: &str,
+	previous: Option<SqliteTableRecreation>,
+	prior_operations: &[Operation],
+) -> Result<SqlitePlanningMetadata> {
 	let mut metadata = if let Some(previous) = previous {
 		let mut raw_constraints = previous.raw_constraints;
 		raw_constraints.extend(previous.raw_constraint_sqls.into_iter().map(|sql| {
@@ -416,12 +419,307 @@ fn sqlite_recreation_table(operation: &Operation) -> Option<&str> {
 }
 
 #[cfg(feature = "sqlite")]
-fn sqlite_known_schema_table(operation: &Operation) -> Option<&str> {
-	match operation {
-		Operation::CreateTable { name, .. } => Some(name),
-		Operation::AddColumn { table, .. } => Some(table),
-		_ => None,
+fn sqlite_virtual_from_metadata(
+	table: &str,
+	metadata: SqlitePlanningMetadata,
+) -> SqliteTableRecreation {
+	let columns_to_copy = metadata
+		.0
+		.iter()
+		.filter(|column| column.generated.is_none())
+		.map(|column| column.name.clone())
+		.collect();
+	SqliteTableRecreation {
+		table_name: table.to_string(),
+		new_columns: metadata.0,
+		columns_to_copy,
+		constraints: metadata.2,
+		raw_constraint_sqls: Vec::new(),
+		raw_constraints: metadata.3,
+		column_collations: metadata.1,
+		indexes: metadata.4,
+		triggers: metadata.5,
+		without_rowid: metadata.6,
+		strict: metadata.7,
 	}
+}
+
+#[cfg(feature = "sqlite")]
+async fn sqlite_load_virtual_schema(
+	editor: &mut SchemaEditor,
+	table: &str,
+	schemas: &mut HashMap<String, Option<SqliteTableRecreation>>,
+) -> Result<Option<SqliteTableRecreation>> {
+	if let Some(schema) = schemas.get(table) {
+		return Ok(schema.clone());
+	}
+	let schema = if editor.table_exists(table).await? {
+		let metadata =
+			DatabaseMigrationExecutor::read_sqlite_table_via_editor(editor, table).await?;
+		Some(sqlite_virtual_from_metadata(table, metadata))
+	} else {
+		None
+	};
+	schemas.insert(table.to_string(), schema.clone());
+	Ok(schema)
+}
+
+#[cfg(feature = "sqlite")]
+fn sqlite_rename_typed_constraint_column(
+	constraint: &mut super::Constraint,
+	old_name: &str,
+	new_name: &str,
+) -> Result<()> {
+	let rename = |column: &mut String| {
+		if column == old_name {
+			new_name.clone_into(column);
+		}
+	};
+	match constraint {
+		super::Constraint::PrimaryKey { columns, .. }
+		| super::Constraint::ForeignKey { columns, .. }
+		| super::Constraint::Unique { columns, .. } => columns.iter_mut().for_each(rename),
+		super::Constraint::EnumDomain { column, .. }
+		| super::Constraint::OneToOne { column, .. } => rename(column),
+		super::Constraint::ManyToMany {
+			source_column,
+			target_column,
+			..
+		} => {
+			rename(source_column);
+			rename(target_column);
+		}
+		super::Constraint::Exclude { elements, .. } => {
+			for (column, _) in elements {
+				rename(column);
+			}
+		}
+		super::Constraint::Check { expression, .. } => {
+			if expression.contains(old_name) {
+				return Err(MigrationError::InvalidMigration(format!(
+					"cannot safely plan SQLite column rename for CHECK expression referencing '{old_name}'"
+				)));
+			}
+		}
+	}
+	Ok(())
+}
+
+#[cfg(feature = "sqlite")]
+async fn sqlite_advance_virtual_schema(
+	editor: &mut SchemaEditor,
+	operation: &Operation,
+	schemas: &mut HashMap<String, Option<SqliteTableRecreation>>,
+) -> Result<()> {
+	match operation {
+		Operation::CreateTable {
+			name,
+			columns,
+			constraints,
+			without_rowid,
+			..
+		} => {
+			if sqlite_load_virtual_schema(editor, name, schemas)
+				.await?
+				.is_none()
+			{
+				let columns_to_copy = columns
+					.iter()
+					.filter(|column| column.generated.is_none())
+					.map(|column| column.name.clone())
+					.collect();
+				schemas.insert(
+					name.clone(),
+					Some(SqliteTableRecreation {
+						table_name: name.clone(),
+						new_columns: columns.clone(),
+						columns_to_copy,
+						constraints: constraints.clone(),
+						raw_constraint_sqls: Vec::new(),
+						raw_constraints: Vec::new(),
+						column_collations: Vec::new(),
+						indexes: Vec::new(),
+						triggers: Vec::new(),
+						without_rowid: without_rowid.unwrap_or(false),
+						strict: false,
+					}),
+				);
+			}
+		}
+		Operation::DropTable { name } => {
+			schemas.insert(name.clone(), None);
+		}
+		Operation::AddColumn { table, column, .. } => {
+			let mut schema = sqlite_load_virtual_schema(editor, table, schemas)
+				.await?
+				.ok_or_else(|| {
+					MigrationError::InvalidMigration(format!(
+						"cannot plan SQLite AddColumn for missing table '{table}'"
+					))
+				})?;
+			schema.new_columns.push(column.clone());
+			if column.generated.is_none() {
+				schema.columns_to_copy.push(column.name.clone());
+			}
+			schemas.insert(table.clone(), Some(schema));
+		}
+		Operation::RenameTable { old_name, new_name } => {
+			let mut schema = sqlite_load_virtual_schema(editor, old_name, schemas)
+				.await?
+				.ok_or_else(|| {
+					MigrationError::InvalidMigration(format!(
+						"cannot plan SQLite RenameTable for missing table '{old_name}'"
+					))
+				})?;
+			if !schema.raw_constraints.is_empty() || !schema.triggers.is_empty() {
+				return Err(MigrationError::InvalidMigration(format!(
+					"cannot safely plan SQLite table rename for '{old_name}' with raw constraints or triggers"
+				)));
+			}
+			schema.table_name.clone_from(new_name);
+			schemas.insert(old_name.clone(), None);
+			schemas.insert(new_name.clone(), Some(schema));
+		}
+		Operation::RenameColumn {
+			table,
+			old_name,
+			new_name,
+		} => {
+			let mut schema = sqlite_load_virtual_schema(editor, table, schemas)
+				.await?
+				.ok_or_else(|| {
+					MigrationError::InvalidMigration(format!(
+						"cannot plan SQLite RenameColumn for missing table '{table}'"
+					))
+				})?;
+			if !schema.raw_constraints.is_empty() || !schema.triggers.is_empty() {
+				return Err(MigrationError::InvalidMigration(format!(
+					"cannot safely plan SQLite column rename for '{table}.{old_name}' with raw constraints or triggers"
+				)));
+			}
+			for column in &mut schema.new_columns {
+				if column.name == *old_name {
+					column.name.clone_from(new_name);
+				}
+			}
+			for column in &mut schema.columns_to_copy {
+				if column == old_name {
+					column.clone_from(new_name);
+				}
+			}
+			for (column, _) in &mut schema.column_collations {
+				if column == old_name {
+					column.clone_from(new_name);
+				}
+			}
+			for constraint in &mut schema.constraints {
+				sqlite_rename_typed_constraint_column(constraint, old_name, new_name)?;
+			}
+			for index in &mut schema.indexes {
+				for column in &mut index.columns {
+					if column == old_name {
+						column.clone_from(new_name);
+					}
+				}
+				if !index.columns.is_empty() {
+					index.sql = None;
+				}
+			}
+			schemas.insert(table.clone(), Some(schema));
+		}
+		Operation::CreateIndex {
+			table,
+			columns,
+			unique,
+			expressions,
+			..
+		} => {
+			let mut schema = sqlite_load_virtual_schema(editor, table, schemas)
+				.await?
+				.ok_or_else(|| {
+					MigrationError::InvalidMigration(format!(
+						"cannot plan SQLite CreateIndex for missing table '{table}'"
+					))
+				})?;
+			let suffix = if expressions.as_ref().is_some_and(|value| !value.is_empty()) {
+				"expr".to_string()
+			} else {
+				columns.join("_")
+			};
+			schema
+				.indexes
+				.push(super::operations::SqliteRecreatedIndex {
+					name: format!("idx_{table}_{suffix}"),
+					columns: columns.clone(),
+					unique: *unique,
+					sql: Some(operation.try_to_sql(&SqlDialect::Sqlite)?),
+				});
+			schemas.insert(table.clone(), Some(schema));
+		}
+		#[cfg(feature = "pgvector")]
+		Operation::CreateNamedIndex {
+			table,
+			name,
+			columns,
+			unique,
+			..
+		} => {
+			let mut schema = sqlite_load_virtual_schema(editor, table, schemas)
+				.await?
+				.ok_or_else(|| {
+					MigrationError::InvalidMigration(format!(
+						"cannot plan SQLite CreateNamedIndex for missing table '{table}'"
+					))
+				})?;
+			schema
+				.indexes
+				.push(super::operations::SqliteRecreatedIndex {
+					name: name.clone(),
+					columns: columns.clone(),
+					unique: *unique,
+					sql: Some(operation.try_to_sql(&SqlDialect::Sqlite)?),
+				});
+			schemas.insert(table.clone(), Some(schema));
+		}
+		Operation::DropIndex { table, columns } => {
+			let mut schema = sqlite_load_virtual_schema(editor, table, schemas)
+				.await?
+				.ok_or_else(|| {
+					MigrationError::InvalidMigration(format!(
+						"cannot plan SQLite DropIndex for missing table '{table}'"
+					))
+				})?;
+			let name = format!("idx_{table}_{}", columns.join("_"));
+			schema.indexes.retain(|index| index.name != name);
+			schemas.insert(table.clone(), Some(schema));
+		}
+		#[cfg(feature = "pgvector")]
+		Operation::DropNamedIndex { table, name, .. } => {
+			let mut schema = sqlite_load_virtual_schema(editor, table, schemas)
+				.await?
+				.ok_or_else(|| {
+					MigrationError::InvalidMigration(format!(
+						"cannot plan SQLite DropNamedIndex for missing table '{table}'"
+					))
+				})?;
+			schema.indexes.retain(|index| index.name != *name);
+			schemas.insert(table.clone(), Some(schema));
+		}
+		_ => {}
+	}
+	Ok(())
+}
+
+#[cfg(feature = "sqlite")]
+fn sqlite_operation_is_opaque(operation: &Operation) -> bool {
+	matches!(
+		operation,
+		Operation::RunSQL { .. }
+			| Operation::BulkLoad { .. }
+			| Operation::CreateSchema { .. }
+			| Operation::DropSchema { .. }
+			| Operation::CreateExtension { .. }
+	)
 }
 
 /// Builds the SQL plan consumed by both migration execution and SQL inspection.
@@ -431,7 +729,29 @@ pub async fn plan_migration_sql(
 	state: &ProjectState,
 	direction: MigrationDirection,
 ) -> Result<MigrationSqlPlan> {
-	plan_migration_sql_with_irreversible_policy(connection, migration, state, direction, true).await
+	#[cfg(feature = "sqlite")]
+	if migration_requires_sqlite_recreation(connection, migration, direction) {
+		let mut editor = SchemaEditor::new_for_migration(
+			connection.clone(),
+			false,
+			connection.database_type(),
+			true,
+		)
+		.await?;
+		let plan = plan_migration_sql_with_irreversible_policy(
+			connection,
+			migration,
+			state,
+			direction,
+			true,
+			Some(&mut editor),
+		)
+		.await?;
+		editor.finish().await?;
+		return Ok(plan);
+	}
+	plan_migration_sql_with_irreversible_policy(connection, migration, state, direction, true, None)
+		.await
 }
 
 pub(crate) async fn plan_migration_sql_for_execution(
@@ -439,9 +759,32 @@ pub(crate) async fn plan_migration_sql_for_execution(
 	migration: &Migration,
 	state: &ProjectState,
 	direction: MigrationDirection,
+	editor: &mut SchemaEditor,
 ) -> Result<MigrationSqlPlan> {
-	plan_migration_sql_with_irreversible_policy(connection, migration, state, direction, false)
-		.await
+	plan_migration_sql_with_irreversible_policy(
+		connection,
+		migration,
+		state,
+		direction,
+		false,
+		Some(editor),
+	)
+	.await
+}
+
+pub(crate) fn migration_requires_sqlite_recreation(
+	connection: &DatabaseConnection,
+	migration: &Migration,
+	direction: MigrationDirection,
+) -> bool {
+	matches!(migration_sql_dialect(connection), SqlDialect::Sqlite)
+		&& migration
+			.operations
+			.iter()
+			.any(|operation| match direction {
+				MigrationDirection::Forward => operation.requires_sqlite_recreation(),
+				MigrationDirection::Backward => operation.reverse_requires_sqlite_recreation(),
+			})
 }
 
 async fn plan_migration_sql_with_irreversible_policy(
@@ -450,6 +793,9 @@ async fn plan_migration_sql_with_irreversible_policy(
 	state: &ProjectState,
 	direction: MigrationDirection,
 	strict_irreversible: bool,
+	#[cfg_attr(not(feature = "sqlite"), allow(unused_variables))] mut sqlite_editor: Option<
+		&mut SchemaEditor,
+	>,
 ) -> Result<MigrationSqlPlan> {
 	if migration.state_only {
 		return Ok(MigrationSqlPlan {
@@ -467,32 +813,11 @@ async fn plan_migration_sql_with_irreversible_policy(
 	let mut sqlite_recreation_groups = Vec::new();
 	let mut next_recreation_group = 0;
 	#[cfg(feature = "sqlite")]
-	let needs_sqlite_editor = matches!(dialect, SqlDialect::Sqlite)
-		&& migration
-			.operations
-			.iter()
-			.any(|operation| match direction {
-				MigrationDirection::Forward => operation.requires_sqlite_recreation(),
-				MigrationDirection::Backward => operation.reverse_requires_sqlite_recreation(),
-			});
+	let needs_sqlite_editor = migration_requires_sqlite_recreation(connection, migration, direction);
 	#[cfg(feature = "sqlite")]
-	let mut sqlite_editor = if needs_sqlite_editor {
-		Some(
-			SchemaEditor::new_for_migration(
-				connection.clone(),
-				false,
-				connection.database_type(),
-				true,
-			)
-			.await?,
-		)
-	} else {
-		None
-	};
+	let mut sqlite_virtual_schemas = HashMap::<String, Option<SqliteTableRecreation>>::new();
 	#[cfg(feature = "sqlite")]
-	let mut sqlite_recreations = HashMap::<String, SqliteTableRecreation>::new();
-	#[cfg(feature = "sqlite")]
-	let mut sqlite_prior_operations = HashMap::<String, Vec<Operation>>::new();
+	let mut sqlite_opaque_operation_seen = false;
 
 	let operations: Vec<&Operation> = match direction {
 		MigrationDirection::Forward => migration.operations.iter().collect(),
@@ -506,6 +831,14 @@ async fn plan_migration_sql_with_irreversible_policy(
 			MigrationDirection::Forward => Some(operation.clone()),
 			MigrationDirection::Backward => operation.to_reverse_operation(state)?,
 		};
+		#[cfg(feature = "sqlite")]
+		if matches!(dialect, SqlDialect::Sqlite)
+			&& planned_operation
+				.as_ref()
+				.is_some_and(sqlite_operation_is_opaque)
+		{
+			sqlite_opaque_operation_seen = true;
+		}
 
 		#[cfg(feature = "sqlite")]
 		let requires_recreation = matches!(dialect, SqlDialect::Sqlite)
@@ -515,6 +848,12 @@ async fn plan_migration_sql_with_irreversible_policy(
 			};
 		#[cfg(feature = "sqlite")]
 		if requires_recreation {
+			if sqlite_opaque_operation_seen {
+				return Err(MigrationError::InvalidMigration(format!(
+					"cannot safely plan SQLite recreation after opaque RunSQL in {}",
+					migration.id()
+				)));
+			}
 			let reverse_missing =
 				matches!(direction, MigrationDirection::Backward) && planned_operation.is_none();
 			if reverse_missing {
@@ -536,19 +875,17 @@ async fn plan_migration_sql_with_irreversible_policy(
 				.as_ref()
 				.expect("checked reverse operation");
 			let editor = sqlite_editor.as_mut().expect("SQLite planner editor");
-			let table = sqlite_recreation_table(operation).ok_or_else(|| {
-				MigrationError::InvalidMigration(format!(
-					"SQLite recreation operation has no table: {:?}",
-					std::mem::discriminant(operation)
-				))
-			})?;
-			let previous = sqlite_recreations.remove(table);
-			let prior_operations = sqlite_prior_operations.remove(table).unwrap_or_default();
-			let (recreation_statements, recreation) =
-				sqlite_recreation_statements(editor, operation, previous, &prior_operations)
-					.await?;
+			let (recreation_statements, recreation) = sqlite_recreation_statements(
+				editor,
+				operation,
+				sqlite_recreation_table(operation)
+					.and_then(|table| sqlite_virtual_schemas.remove(table))
+					.flatten(),
+				&[],
+			)
+			.await?;
 			statements.extend(recreation_statements.into_iter().map(PlannedStatement::Sql));
-			sqlite_recreations.insert(table.to_string(), recreation);
+			sqlite_virtual_schemas.insert(recreation.table_name.clone(), Some(recreation));
 			planned_operations
 				.extend((first_statement..statements.len()).map(|_| planned_operation.clone()));
 			sqlite_recreation_groups
@@ -604,20 +941,10 @@ async fn plan_migration_sql_with_irreversible_policy(
 			.extend((first_statement..statements.len()).map(|_| planned_operation.clone()));
 		sqlite_recreation_groups.extend((first_statement..statements.len()).map(|_| None));
 		#[cfg(feature = "sqlite")]
-		if matches!(dialect, SqlDialect::Sqlite)
-			&& let Some(operation) = planned_operation
-			&& let Some(table) = sqlite_known_schema_table(&operation)
-		{
-			sqlite_prior_operations
-				.entry(table.to_string())
-				.or_default()
-				.push(operation);
+		if needs_sqlite_editor && let Some(operation) = planned_operation.as_ref() {
+			let editor = sqlite_editor.as_mut().expect("SQLite planner editor");
+			sqlite_advance_virtual_schema(editor, operation, &mut sqlite_virtual_schemas).await?;
 		}
-	}
-
-	#[cfg(feature = "sqlite")]
-	if let Some(editor) = sqlite_editor {
-		editor.finish().await?;
 	}
 
 	Ok(MigrationSqlPlan {

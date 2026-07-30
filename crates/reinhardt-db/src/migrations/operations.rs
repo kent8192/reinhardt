@@ -1579,6 +1579,8 @@ impl Operation {
 	}
 
 	#[cfg(feature = "pgvector")]
+	// This remains available for direct reverse-SQL callers outside migration plans.
+	#[allow(dead_code)]
 	pub(crate) fn pgvector_reverse_operation_kind(
 		&self,
 	) -> Option<crate::backends::error::PgvectorOperationKind> {
@@ -1606,6 +1608,8 @@ impl Operation {
 	}
 
 	#[cfg(not(feature = "pgvector"))]
+	// This keeps the direct reverse-SQL API feature-independent.
+	#[allow(dead_code)]
 	pub(crate) fn pgvector_reverse_operation_kind(
 		&self,
 	) -> Option<crate::backends::error::PgvectorOperationKind> {

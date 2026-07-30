@@ -10,7 +10,10 @@ use super::{
 	MigrationService, MigrationSqlPlan, Operation, PlannedStatement, ProjectState, Result,
 	SchemaEditor,
 	operations::SqlDialect,
-	sql_plan::{MigrationDirection, plan_migration_sql_for_execution, split_sql_statements},
+	sql_plan::{
+		MigrationDirection, migration_requires_sqlite_recreation, plan_migration_sql_for_execution,
+		split_sql_statements,
+	},
 };
 use crate::backends::{connection::DatabaseConnection, types::DatabaseType};
 use async_trait::async_trait;
@@ -19,6 +22,12 @@ use std::{collections::HashSet, sync::Arc};
 
 #[cfg(feature = "sqlite")]
 use super::introspection::SQLiteIntrospector;
+
+fn planned_operation_context(
+	operation: Option<&Operation>,
+) -> Option<crate::backends::error::PgvectorOperationKind> {
+	operation.and_then(Operation::pgvector_operation_kind)
+}
 
 fn validate_and_advance_migration_state(
 	migration: &Migration,
@@ -48,6 +57,7 @@ trait SqlPlanner: Send + Sync {
 		migration: &Migration,
 		state: &ProjectState,
 		direction: MigrationDirection,
+		editor: &mut SchemaEditor,
 	) -> Result<MigrationSqlPlan>;
 }
 
@@ -61,8 +71,9 @@ impl SqlPlanner for DefaultSqlPlanner {
 		migration: &Migration,
 		state: &ProjectState,
 		direction: MigrationDirection,
+		editor: &mut SchemaEditor,
 	) -> Result<MigrationSqlPlan> {
-		plan_migration_sql_for_execution(connection, migration, state, direction).await
+		plan_migration_sql_for_execution(connection, migration, state, direction, editor).await
 	}
 }
 
@@ -307,6 +318,18 @@ impl DatabaseMigrationExecutor {
 		}
 
 		let project_state = super::ProjectState::default();
+		let requires_sqlite_recreation = migration_requires_sqlite_recreation(
+			&self.connection,
+			migration,
+			MigrationDirection::Backward,
+		);
+		let mut editor = SchemaEditor::new_for_migration(
+			self.connection.clone(),
+			migration.atomic,
+			self.db_type,
+			requires_sqlite_recreation,
+		)
+		.await?;
 		let plan = self
 			.planner
 			.plan(
@@ -314,9 +337,10 @@ impl DatabaseMigrationExecutor {
 				migration,
 				&project_state,
 				MigrationDirection::Backward,
+				&mut editor,
 			)
 			.await?;
-		self.execute_sql_plan(migration, plan).await?;
+		self.execute_sql_plan(migration, plan, editor).await?;
 
 		Ok(())
 	}
@@ -353,6 +377,18 @@ impl DatabaseMigrationExecutor {
 			migration.id(),
 			migration.atomic,
 		);
+		let requires_sqlite_recreation = migration_requires_sqlite_recreation(
+			&self.connection,
+			migration,
+			MigrationDirection::Forward,
+		);
+		let mut editor = SchemaEditor::new_for_migration(
+			self.connection.clone(),
+			migration.atomic,
+			self.db_type,
+			requires_sqlite_recreation,
+		)
+		.await?;
 		let plan = self
 			.planner
 			.plan(
@@ -360,25 +396,22 @@ impl DatabaseMigrationExecutor {
 				migration,
 				&ProjectState::default(),
 				MigrationDirection::Forward,
+				&mut editor,
 			)
 			.await?;
-		self.execute_sql_plan(migration, plan).await?;
+		self.execute_sql_plan(migration, plan, editor).await?;
 
 		tracing::debug!("Migration '{}' applied successfully", migration.id());
 
 		Ok(())
 	}
 
-	async fn execute_sql_plan(&self, migration: &Migration, plan: MigrationSqlPlan) -> Result<()> {
-		let requires_sqlite_recreation = plan.sqlite_recreation_groups.iter().any(Option::is_some);
-		let mut editor = SchemaEditor::new_for_migration(
-			self.connection.clone(),
-			plan.atomic,
-			self.db_type,
-			requires_sqlite_recreation,
-		)
-		.await?;
-
+	async fn execute_sql_plan(
+		&self,
+		migration: &Migration,
+		plan: MigrationSqlPlan,
+		mut editor: SchemaEditor,
+	) -> Result<()> {
 		tracing::debug!(
 			"Executing migration '{}' (atomic={}, effective_atomic={})",
 			migration.id(),
@@ -436,10 +469,7 @@ impl DatabaseMigrationExecutor {
 						);
 						continue;
 					}
-					let context = operation.and_then(|operation| match plan.direction {
-						MigrationDirection::Forward => operation.pgvector_operation_kind(),
-						MigrationDirection::Backward => operation.pgvector_reverse_operation_kind(),
-					});
+					let context = planned_operation_context(operation);
 					editor
 						.execute_with_context(statement, context)
 						.await
@@ -2787,6 +2817,8 @@ impl Default for OperationOptimizer {
 mod optimizer_tests {
 	use super::*;
 	use crate::migrations::{ColumnDefinition, FieldType};
+	#[cfg(feature = "pgvector")]
+	use crate::{backends::error::PgvectorOperationKind, migrations::IndexType};
 
 	struct SentinelPlanner;
 
@@ -2798,6 +2830,7 @@ mod optimizer_tests {
 			migration: &Migration,
 			_state: &ProjectState,
 			direction: MigrationDirection,
+			_editor: &mut SchemaEditor,
 		) -> Result<MigrationSqlPlan> {
 			Ok(MigrationSqlPlan {
 				atomic: migration.atomic,
@@ -2848,6 +2881,62 @@ mod optimizer_tests {
 			.expect("inspect operation table");
 		assert!(sentinel.is_some());
 		assert!(operation_table.is_none());
+	}
+
+	#[cfg(feature = "pgvector")]
+	#[test]
+	fn rollback_vector_column_uses_reverse_executable_operation_context() {
+		let operation = Operation::DropColumn {
+			table: "documents".to_string(),
+			column: "embedding".to_string(),
+			old_definition: Some(ColumnDefinition::new(
+				"embedding",
+				FieldType::Vector { dimensions: 3 },
+			)),
+		};
+		let planned_operation = operation
+			.to_reverse_operation(&ProjectState::default())
+			.expect("construct reverse operation")
+			.expect("vector column drop is reversible");
+
+		assert!(matches!(planned_operation, Operation::AddColumn { .. }));
+		assert_eq!(
+			planned_operation_context(Some(&planned_operation)),
+			Some(PgvectorOperationKind::ColumnType)
+		);
+	}
+
+	#[cfg(feature = "pgvector")]
+	#[test]
+	fn rollback_vector_index_uses_reverse_executable_operation_context() {
+		let operation = Operation::DropNamedIndex {
+			table: "documents".to_string(),
+			name: "documents_embedding_hnsw".to_string(),
+			columns: vec!["embedding".to_string()],
+			unique: false,
+			index_type: Some(IndexType::Hnsw {
+				m: Some(16),
+				ef_construction: Some(64),
+			}),
+			where_clause: None,
+			concurrently: false,
+			expressions: None,
+			mysql_options: None,
+			operator_class: Some("vector_l2_ops".to_string()),
+		};
+		let planned_operation = operation
+			.to_reverse_operation(&ProjectState::default())
+			.expect("construct reverse operation")
+			.expect("named vector index drop is reversible");
+
+		assert!(matches!(
+			planned_operation,
+			Operation::CreateNamedIndex { .. }
+		));
+		assert_eq!(
+			planned_operation_context(Some(&planned_operation)),
+			Some(PgvectorOperationKind::ApproximateIndex)
+		);
 	}
 
 	#[test]

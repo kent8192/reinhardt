@@ -10061,6 +10061,7 @@ mod tests {
 		}
 	}
 
+	#[rstest]
 	#[tokio::test]
 	async fn explain_wraps_typed_filtered_select_without_executing_it_separately() {
 		let queryset = QuerySet::<TestUser>::new()
@@ -10104,6 +10105,7 @@ mod tests {
 		assert_eq!(output.body, super::ExplainBody::Json(plan));
 	}
 
+	#[rstest]
 	#[tokio::test]
 	async fn cockroachdb_explain_reports_its_effective_backend() {
 		let mut executor = ExplainRecordingExecutor::cockroachdb(vec![crate::orm::Row {
@@ -10122,6 +10124,7 @@ mod tests {
 		assert_eq!(executor.calls[0].0, r#"EXPLAIN SELECT * FROM "test_users""#);
 	}
 
+	#[rstest]
 	#[tokio::test]
 	async fn mysql_json_explain_decodes_supported_plan() {
 		let plan = serde_json::json!({
@@ -10159,6 +10162,7 @@ mod tests {
 		);
 	}
 
+	#[rstest]
 	#[tokio::test]
 	async fn explain_with_executor_uses_one_transaction_connection_call() {
 		let mut executor = ExplainTransactionExecutor {
@@ -10229,6 +10233,7 @@ mod tests {
 		assert!(executor.calls.is_empty());
 	}
 
+	#[rstest]
 	#[tokio::test]
 	async fn mysql_explain_rejects_subquery_before_executor_call() {
 		let queryset = QuerySet::<TestUser>::new()
@@ -10254,6 +10259,7 @@ mod tests {
 		assert!(executor.calls.is_empty());
 	}
 
+	#[rstest]
 	#[tokio::test]
 	async fn sqlite_explain_retains_tabular_plan_rows() {
 		let rows = vec![crate::orm::Row {

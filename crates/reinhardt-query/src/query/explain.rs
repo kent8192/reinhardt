@@ -12,7 +12,7 @@ use crate::{
 	},
 	expr::{Condition, ConditionExpression, SimpleExpr},
 	query::SelectStatement,
-	types::{JoinOn, OrderExpr, OrderExprKind, TableRef, WindowStatement},
+	types::{FrameType, JoinOn, OrderExpr, OrderExprKind, TableRef, WindowStatement},
 	value::Values,
 };
 
@@ -116,6 +116,7 @@ impl ExplainStatement {
 	/// Builds MySQL EXPLAIN SQL after validating backend capabilities.
 	pub fn build_mysql_checked(&self) -> Result<(String, Values), QueryBuildError> {
 		self.reject_postgres_options("MySQL")?;
+		self.reject_mysql_window_null_ordering()?;
 		if mysql_explain_may_evaluate_query(&self.select) {
 			return Err(unsupported(
 				"plan-only EXPLAIN for subqueries or unchecked expressions",
@@ -125,7 +126,10 @@ impl ExplainStatement {
 		let format = match self.options.format {
 			ExplainFormat::Text => "TRADITIONAL",
 			ExplainFormat::Json => "JSON",
-			ExplainFormat::Tree => "TREE",
+			ExplainFormat::Tree => {
+				// MySqlBackend also represents MariaDB, which does not support TREE output.
+				return Err(unsupported("EXPLAIN FORMAT TREE", "MySQL/MariaDB"));
+			}
 			ExplainFormat::Xml => {
 				return Err(unsupported("EXPLAIN FORMAT XML", "MySQL"));
 			}
@@ -140,6 +144,7 @@ impl ExplainStatement {
 	/// Builds SQLite EXPLAIN QUERY PLAN SQL after validating backend capabilities.
 	pub fn build_sqlite_checked(&self) -> Result<(String, Values), QueryBuildError> {
 		self.reject_postgres_options("SQLite")?;
+		self.reject_sqlite_groups_window_frames()?;
 		if self.options.format != ExplainFormat::Text {
 			return Err(unsupported(format_feature(self.options.format), "SQLite"));
 		}
@@ -195,6 +200,30 @@ impl ExplainStatement {
 		}
 		if self.options.settings {
 			return Err(unsupported("EXPLAIN SETTINGS", backend));
+		}
+		Ok(())
+	}
+
+	fn reject_mysql_window_null_ordering(&self) -> Result<(), QueryBuildError> {
+		if self
+			.select
+			.windows
+			.iter()
+			.any(|(_, window)| window.order_by.iter().any(|order| order.nulls.is_some()))
+		{
+			return Err(unsupported("NULLS FIRST/LAST in window ordering", "MySQL"));
+		}
+		Ok(())
+	}
+
+	fn reject_sqlite_groups_window_frames(&self) -> Result<(), QueryBuildError> {
+		if self.select.windows.iter().any(|(_, window)| {
+			matches!(
+				window.frame.as_ref().map(|frame| frame.frame_type.clone()),
+				Some(FrameType::Groups)
+			)
+		}) {
+			return Err(unsupported("GROUPS window frames", "SQLite"));
 		}
 		Ok(())
 	}
@@ -299,6 +328,7 @@ mod tests {
 		query::Query,
 		types::{Frame, FrameClause, FrameType, WindowStatement},
 	};
+	use rstest::rstest;
 
 	fn filtered_select() -> SelectStatement {
 		Query::select()
@@ -308,7 +338,7 @@ mod tests {
 			.to_owned()
 	}
 
-	#[test]
+	#[rstest]
 	fn postgres_build_preserves_select_bindings_and_safe_options() {
 		let statement = ExplainStatement::new(
 			filtered_select(),
@@ -331,8 +361,8 @@ mod tests {
 		assert_eq!(values.len(), 1);
 	}
 
-	#[test]
-	fn mysql_build_uses_explicit_tree_format() {
+	#[rstest]
+	fn mysql_build_rejects_tree_format_for_mariadb_compatibility() {
 		let statement = ExplainStatement::new(
 			filtered_select(),
 			ExplainOptions {
@@ -341,18 +371,16 @@ mod tests {
 			},
 		);
 
-		let (sql, values) = statement
-			.build_mysql_checked()
-			.expect("MySQL TREE format should build");
-
 		assert_eq!(
-			sql,
-			"EXPLAIN FORMAT=TREE SELECT `id` FROM `users` WHERE `active` = ?"
+			statement.build_mysql_checked(),
+			Err(QueryBuildError::UnsupportedBackendFeature {
+				feature: "EXPLAIN FORMAT TREE",
+				backend: "MySQL/MariaDB",
+			})
 		);
-		assert_eq!(values.len(), 1);
 	}
 
-	#[test]
+	#[rstest]
 	fn sqlite_build_uses_query_plan_and_preserves_bindings() {
 		let statement = ExplainStatement::new(filtered_select(), ExplainOptions::default());
 
@@ -367,7 +395,7 @@ mod tests {
 		assert_eq!(values.len(), 1);
 	}
 
-	#[test]
+	#[rstest]
 	fn checked_non_postgres_explain_rejects_distinct_on() {
 		let mut select = Query::select();
 		select.column("id").from("users").distinct_on(["id"]);
@@ -385,7 +413,7 @@ mod tests {
 		);
 	}
 
-	#[test]
+	#[rstest]
 	fn cockroachdb_explain_permits_distinct_on() {
 		let mut select = Query::select();
 		select.column("id").from("users").distinct_on(["id"]);
@@ -400,7 +428,7 @@ mod tests {
 		);
 	}
 
-	#[test]
+	#[rstest]
 	fn mysql_explain_rejects_groups_window_frames_before_rendering() {
 		let mut select = filtered_select();
 		select.window_as(
@@ -426,7 +454,53 @@ mod tests {
 		);
 	}
 
-	#[test]
+	#[rstest]
+	fn sqlite_explain_rejects_groups_window_frames_before_rendering() {
+		let mut select = filtered_select();
+		select.window_as(
+			"ranked",
+			WindowStatement {
+				partition_by: Vec::new(),
+				order_by: Vec::new(),
+				frame: Some(FrameClause {
+					frame_type: FrameType::Groups,
+					start: Frame::CurrentRow,
+					end: None,
+				}),
+			},
+		);
+
+		assert_eq!(
+			ExplainStatement::new(select, ExplainOptions::default()).build_sqlite_checked(),
+			Err(QueryBuildError::UnsupportedBackendFeature {
+				feature: "GROUPS window frames",
+				backend: "SQLite",
+			})
+		);
+	}
+
+	#[rstest]
+	fn mysql_explain_rejects_nulls_window_ordering_before_rendering() {
+		let mut select = filtered_select();
+		select.window_as(
+			"ranked",
+			WindowStatement {
+				partition_by: Vec::new(),
+				order_by: vec![OrderExpr::new("id").nulls(crate::types::NullOrdering::First)],
+				frame: None,
+			},
+		);
+
+		assert_eq!(
+			ExplainStatement::new(select, ExplainOptions::default()).build_mysql_checked(),
+			Err(QueryBuildError::UnsupportedBackendFeature {
+				feature: "NULLS FIRST/LAST in window ordering",
+				backend: "MySQL",
+			})
+		);
+	}
+
+	#[rstest]
 	fn mysql_explain_rejects_full_outer_joins_before_rendering() {
 		let select = Query::select()
 			.column(("users", "id"))
@@ -447,7 +521,7 @@ mod tests {
 		);
 	}
 
-	#[test]
+	#[rstest]
 	fn unsupported_format_returns_capability_error() {
 		let statement = ExplainStatement::new(
 			filtered_select(),
@@ -466,7 +540,7 @@ mod tests {
 		);
 	}
 
-	#[test]
+	#[rstest]
 	fn mysql_rejects_subquery_before_building_sql() {
 		let subquery = Query::select().column("id").from("accounts").to_owned();
 		let statement = ExplainStatement::new(

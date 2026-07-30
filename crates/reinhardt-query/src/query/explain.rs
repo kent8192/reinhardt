@@ -367,6 +367,24 @@ mod tests {
 	}
 
 	#[test]
+	fn checked_non_postgres_explain_rejects_distinct_on() {
+		let mut select = Query::select();
+		select.column("id").from("users").distinct_on(["id"]);
+		let statement = ExplainStatement::new(select.to_owned(), ExplainOptions::default());
+
+		let error = statement
+			.build_mysql_checked()
+			.expect_err("MySQL must reject PostgreSQL-only DISTINCT ON before rendering");
+		assert_eq!(
+			error,
+			QueryBuildError::UnsupportedBackendFeature {
+				feature: "DISTINCT ON",
+				backend: "MySQL",
+			}
+		);
+	}
+
+	#[test]
 	fn unsupported_format_returns_capability_error() {
 		let statement = ExplainStatement::new(
 			filtered_select(),

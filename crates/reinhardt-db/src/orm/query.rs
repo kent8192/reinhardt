@@ -1452,6 +1452,20 @@ where
 		Ok(stmt.to_owned())
 	}
 
+	fn ensure_explainable_shape(&self) -> reinhardt_core::exception::Result<()> {
+		if !self.ctes.is_empty()
+			|| !self.lateral_joins.is_empty()
+			|| self.from_subquery_sql.is_some()
+		{
+			return Err(DatabaseError::new(
+				DatabaseErrorKind::Unsupported,
+				"EXPLAIN does not support QuerySets with CTEs, lateral joins, or a subquery source.",
+			)
+			.into());
+		}
+		Ok(())
+	}
+
 	fn decode_backend_rows(
 		rows: Vec<crate::backends::types::Row>,
 	) -> Result<Vec<T>, crate::backends::error::DatabaseError>
@@ -6070,6 +6084,7 @@ where
 	where
 		E: OrmExecutor,
 	{
+		self.ensure_explainable_shape()?;
 		let select = self.build_select_statement()?;
 		let context = super::execution::pgvector_context_for_select(&select);
 		let statement = ExplainStatement::new(select, options);
@@ -6109,6 +6124,7 @@ where
 		executor: &mut dyn super::connection::TransactionExecutor,
 		options: ExplainOptions,
 	) -> Result<ExplainOutput, crate::backends::error::DatabaseError> {
+		self.ensure_explainable_shape().map_err(executor_error)?;
 		let select = self.build_select_statement().map_err(executor_error)?;
 		let context = super::execution::pgvector_context_for_select(&select);
 		let statement = ExplainStatement::new(select, options);
@@ -7894,8 +7910,10 @@ where
 			})
 			.collect();
 
-		for (value_sql, alias) in annotation_exprs {
-			stmt.expr_as(Expr::cust(value_sql), Alias::new(alias));
+		if !self.has_select_related() {
+			for (value_sql, alias) in annotation_exprs {
+				stmt.expr_as(Expr::cust(value_sql), Alias::new(alias));
+			}
 		}
 
 		use reinhardt_query::prelude::PostgresQueryBuilder;

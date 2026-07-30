@@ -184,6 +184,12 @@ impl MySqlBackend {
 				&& let Ok(value) = mysql_row.try_get::<bool, _>(column_name)
 			{
 				row.insert(column_name.to_string(), QueryValue::Bool(value));
+			} else if let Ok(value) = mysql_row.try_get::<u64, _>(column_name) {
+				let value = match i64::try_from(value) {
+					Ok(value) => QueryValue::Int(value),
+					Err(_) => QueryValue::String(value.to_string()),
+				};
+				row.insert(column_name.to_string(), value);
 			} else if let Ok(value) = mysql_row.try_get::<i64, _>(column_name) {
 				row.insert(column_name.to_string(), QueryValue::Int(value));
 			} else if let Ok(value) = mysql_row.try_get::<i32, _>(column_name) {

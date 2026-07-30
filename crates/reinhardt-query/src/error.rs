@@ -6,7 +6,8 @@ use crate::{
 	expr::{Condition, ConditionExpression, ConditionHolder, SimpleExpr},
 	query::{
 		AlterTableOperation, AlterTableStatement, CreateIndexStatement, CreateTableStatement,
-		DeleteStatement, InsertSource, InsertStatement, SelectStatement, UpdateStatement,
+		DeleteStatement, InsertSource, InsertStatement, SelectDistinct, SelectStatement,
+		UpdateStatement,
 	},
 	types::{
 		ColumnDef, ColumnType, OrderExpr, OrderExprKind, SchemaExpr, TableConstraint, TableRef,
@@ -136,6 +137,13 @@ pub(crate) fn validate_select_for_backend(
 	statement: &SelectStatement,
 	backend: &'static str,
 ) -> Result<(), QueryBuildError> {
+	if backend != "PostgreSQL" && matches!(statement.distinct, Some(SelectDistinct::DistinctOn(_)))
+	{
+		return Err(QueryBuildError::UnsupportedBackendFeature {
+			feature: "DISTINCT ON",
+			backend,
+		});
+	}
 	for cte in &statement.ctes {
 		validate_select_for_backend(&cte.query, backend)?;
 	}

@@ -1,7 +1,7 @@
 //! End-to-end coverage for the `squashmigrations` management command.
 
 use clap::Parser;
-use reinhardt_commands::{Cli, run_command};
+use reinhardt_commands::{Cli, CommandError, run_command};
 use reinhardt_db::migrations::{
 	ColumnDefinition, FieldType, FilesystemRepository, FilesystemSource, Migration,
 	MigrationRenderOptions, MigrationSource, Operation,
@@ -9,7 +9,12 @@ use reinhardt_db::migrations::{
 use serial_test::serial;
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::process::{Command, Stdio};
 use tempfile::TempDir;
+
+const NONINTERACTIVE_CHILD_ENV: &str = "REINHARDT_SQUASHMIGRATIONS_NONINTERACTIVE_CHILD";
+const NONINTERACTIVE_TEST_NAME: &str =
+	"squashmigrations_management::noninteractive_input_without_no_input_does_not_write";
 
 struct ProjectDirGuard {
 	original_dir: PathBuf,
@@ -122,7 +127,7 @@ async fn loaded_migration(project: &Path, name: &str) -> Migration {
 }
 
 #[tokio::test]
-#[serial(cwd)]
+#[serial(command_current_dir)]
 async fn cli_dispatch_generates_parseable_squash_with_exact_semantics() {
 	// Arrange
 	let project = create_linear_project();
@@ -192,7 +197,7 @@ async fn cli_dispatch_generates_parseable_squash_with_exact_semantics() {
 }
 
 #[tokio::test]
-#[serial(cwd)]
+#[serial(command_current_dir)]
 async fn no_optimize_and_no_header_preserve_every_operation_without_a_prompt() {
 	// Arrange
 	let project = create_linear_project();
@@ -249,7 +254,7 @@ async fn no_optimize_and_no_header_preserve_every_operation_without_a_prompt() {
 }
 
 #[tokio::test]
-#[serial(cwd)]
+#[serial(command_current_dir)]
 async fn ambiguous_ancestry_fails_before_creating_a_squashed_migration() {
 	// Arrange
 	let project = TempDir::new().expect("temporary project should be created");
@@ -298,7 +303,7 @@ async fn ambiguous_ancestry_fails_before_creating_a_squashed_migration() {
 }
 
 #[tokio::test]
-#[serial(cwd)]
+#[serial(command_current_dir)]
 async fn existing_destination_is_preserved_when_create_new_refuses_overwrite() {
 	// Arrange
 	let project = create_linear_project();
@@ -322,10 +327,18 @@ async fn existing_destination_is_preserved_when_create_new_refuses_overwrite() {
 	.expect("squashmigrations arguments should parse");
 
 	// Act
-	let result = run_command(cli.command, cli.verbosity).await;
+	let error = run_command(cli.command, cli.verbosity)
+		.await
+		.expect_err("create-new semantics should reject an existing destination");
 
 	// Assert
-	assert!(result.is_err());
+	let command_error = error
+		.downcast_ref::<CommandError>()
+		.expect("dispatch should preserve the typed command error");
+	match command_error {
+		CommandError::IoError(error) => assert_eq!(error.kind(), std::io::ErrorKind::AlreadyExists),
+		other => panic!("expected an already-exists IO error, got {other:?}"),
+	}
 	assert_eq!(
 		fs::read_to_string(existing_path).expect("existing source should remain readable"),
 		existing_source
@@ -333,29 +346,52 @@ async fn existing_destination_is_preserved_when_create_new_refuses_overwrite() {
 }
 
 #[tokio::test]
-#[serial(cwd)]
+#[serial(command_current_dir)]
 async fn noninteractive_input_without_no_input_does_not_write() {
+	if std::env::var_os(NONINTERACTIVE_CHILD_ENV).is_some() {
+		let cli = Cli::try_parse_from([
+			"manage",
+			"squashmigrations",
+			"polls",
+			"0004_remove_temporary_column",
+			"--squashed-name",
+			"unattended",
+		])
+		.expect("squashmigrations arguments should parse");
+		let error = run_command(cli.command, cli.verbosity)
+			.await
+			.expect_err("null stdin should require --no-input");
+		eprint!("{error}");
+
+		// This process is an isolated one-shot test helper with no owned cleanup.
+		std::process::exit(2);
+	}
+
 	// Arrange
 	let project = create_linear_project();
-	let _cwd = ProjectDirGuard::enter(project.path());
-	let cli = Cli::try_parse_from([
-		"manage",
-		"squashmigrations",
-		"polls",
-		"0004_remove_temporary_column",
-		"--squashed-name",
-		"unattended",
-	])
-	.expect("squashmigrations arguments should parse");
 
 	// Act
-	let error = run_command(cli.command, cli.verbosity)
-		.await
-		.expect_err("non-terminal input should require --no-input");
+	let output =
+		Command::new(std::env::current_exe().expect("test executable should be available"))
+			.args(["--exact", NONINTERACTIVE_TEST_NAME, "--nocapture"])
+			.env(NONINTERACTIVE_CHILD_ENV, "1")
+			.current_dir(project.path())
+			.stdin(Stdio::null())
+			.stdout(Stdio::piped())
+			.stderr(Stdio::piped())
+			.output()
+			.expect("noninteractive child should execute");
 
 	// Assert
 	assert_eq!(
-		error.to_string(),
+		output.status.code(),
+		Some(2),
+		"child stdout: {}\nchild stderr: {}",
+		String::from_utf8_lossy(&output.stdout),
+		String::from_utf8_lossy(&output.stderr)
+	);
+	assert_eq!(
+		String::from_utf8(output.stderr).expect("child stderr should be UTF-8"),
 		"Invalid arguments: squashmigrations requires terminal input; use --no-input in \
 		 non-interactive environments"
 	);

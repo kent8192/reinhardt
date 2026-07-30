@@ -28,17 +28,7 @@ pub struct CommandContext {
 
 impl std::fmt::Debug for CommandContext {
 	fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-		let args: Vec<_> = self
-			.args
-			.iter()
-			.map(|argument| {
-				if argument_is_sensitive(argument) {
-					"[REDACTED]"
-				} else {
-					argument.as_str()
-				}
-			})
-			.collect();
+		let args = redact_arguments(&self.args);
 		let options: BTreeMap<_, _> = self
 			.options
 			.iter()
@@ -90,6 +80,24 @@ fn argument_is_sensitive(argument: &str) -> bool {
 		.strip_prefix("--")
 		.and_then(|flag| flag.split_once('='))
 		.is_some_and(|(name, _)| option_name_is_sensitive(name))
+}
+
+fn redact_arguments(arguments: &[String]) -> Vec<&str> {
+	let mut redact_next = false;
+	arguments
+		.iter()
+		.map(|argument| {
+			let is_sensitive = redact_next || argument_is_sensitive(argument);
+			redact_next = argument
+				.strip_prefix("--")
+				.is_some_and(|flag| !flag.contains('=') && option_name_is_sensitive(flag));
+			if is_sensitive {
+				"[REDACTED]"
+			} else {
+				argument.as_str()
+			}
+		})
+		.collect()
 }
 
 impl CommandContext {
@@ -375,6 +383,22 @@ mod tests {
 
 		assert!(ctx.has_option("key"));
 		assert_eq!(ctx.option("key"), Some(&"value".to_string()));
+	}
+
+	#[rstest]
+	fn debug_redacts_positional_values_after_sensitive_flags() {
+		let context = CommandContext::new(vec![
+			"--password".to_string(),
+			"hunter2".to_string(),
+			"--token".to_string(),
+			"abc123".to_string(),
+			"safe".to_string(),
+		]);
+
+		assert_eq!(
+			format!("{context:?}"),
+			"CommandContext { args: [\"[REDACTED]\", \"[REDACTED]\", \"[REDACTED]\", \"[REDACTED]\", \"safe\"], options: {}, verbosity: 0, suppress_output: false, settings: None }"
+		);
 	}
 
 	#[rstest]

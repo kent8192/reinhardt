@@ -2238,9 +2238,31 @@ async fn read_postgres_schema(
 	} else {
 		let mut tables = HashMap::new();
 		for name in &options.tables {
-			let table = introspector.read_table(name).await?.ok_or_else(|| {
-				MigrationError::IntrospectionError(format!("Table `{name}` was not found"))
-			})?;
+			let table = match introspector.read_table(name).await? {
+				Some(table) => table,
+				None if options.include_views => {
+					let view_exists = sqlx::query(
+						"SELECT table_name FROM information_schema.views \
+						 WHERE table_schema = 'public' AND table_name = $1",
+					)
+					.bind(name)
+					.fetch_optional(&pool)
+					.await
+					.map_err(|error| MigrationError::IntrospectionError(error.to_string()))?
+					.is_some();
+					if !view_exists {
+						return Err(MigrationError::IntrospectionError(format!(
+							"Table or view `{name}` was not found"
+						)));
+					}
+					introspector.introspect_table(name).await?
+				}
+				None => {
+					return Err(MigrationError::IntrospectionError(format!(
+						"Table `{name}` was not found"
+					)));
+				}
+			};
 			tables.insert(name.clone(), table);
 		}
 		DatabaseSchema { tables }
@@ -2248,7 +2270,7 @@ async fn read_postgres_schema(
 	let partition_names = read_postgres_partition_names(&pool).await?;
 	filter_postgres_partitions(&mut schema, &partition_names, options.include_partitions);
 
-	if options.include_views {
+	if options.include_views && options.tables.is_empty() {
 		let rows = sqlx::query(
 			"SELECT table_name FROM information_schema.views WHERE table_schema = 'public' ORDER BY table_name",
 		)
@@ -2308,8 +2330,41 @@ async fn read_mysql_schema(
 	options: &InspectDbOptions,
 ) -> Result<DatabaseSchema> {
 	let introspector = MySQLIntrospector::new(pool.clone());
-	let mut schema = introspector.read_schema().await?;
-	if !options.include_views {
+	let mut schema = if options.tables.is_empty() {
+		introspector.read_schema().await?
+	} else {
+		let mut tables = HashMap::new();
+		for name in &options.tables {
+			let table = match introspector.read_table(name).await? {
+				Some(table) => table,
+				None if options.include_views => {
+					let view_exists = sqlx::query(
+						"SELECT table_name FROM information_schema.views \
+						 WHERE table_schema = DATABASE() AND table_name = ?",
+					)
+					.bind(name)
+					.fetch_optional(&pool)
+					.await
+					.map_err(|error| MigrationError::IntrospectionError(error.to_string()))?
+					.is_some();
+					if !view_exists {
+						return Err(MigrationError::IntrospectionError(format!(
+							"Table or view `{name}` was not found"
+						)));
+					}
+					introspector.introspect_table(name).await?
+				}
+				None => {
+					return Err(MigrationError::IntrospectionError(format!(
+						"Table `{name}` was not found"
+					)));
+				}
+			};
+			tables.insert(name.clone(), table);
+		}
+		DatabaseSchema { tables }
+	};
+	if !options.include_views || !options.tables.is_empty() {
 		return Ok(schema);
 	}
 

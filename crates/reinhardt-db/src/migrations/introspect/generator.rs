@@ -321,15 +321,15 @@ impl SchemaCodeGenerator {
 		let mut attrs = Vec::new();
 		if field_name != column.name {
 			let column_name = column.name.as_str();
-			attrs.push(quote! { #[field(db_column = #column_name)] });
+			attrs.push(quote! { db_column = #column_name });
 		}
 
 		// Primary key attribute
 		if table.primary_key.contains(&column.name) {
 			if column.auto_increment {
-				attrs.push(quote! { #[field(primary_key = true, auto_increment = true)] });
+				attrs.push(quote! { primary_key = true, auto_increment = true });
 			} else {
-				attrs.push(quote! { #[field(primary_key = true)] });
+				attrs.push(quote! { primary_key = true });
 			}
 		}
 
@@ -339,13 +339,13 @@ impl SchemaCodeGenerator {
 			.iter()
 			.any(|c| c.columns.len() == 1 && c.columns.contains(&column.name));
 		if is_unique && !table.primary_key.contains(&column.name) {
-			attrs.push(quote! { #[field(unique = true)] });
+			attrs.push(quote! { unique = true });
 		}
 
 		// Max length for varchar
 		if let crate::migrations::fields::FieldType::VarChar(len) = &column.column_type {
 			let len = *len;
-			attrs.push(quote! { #[field(max_length = #len)] });
+			attrs.push(quote! { max_length = #len });
 		}
 
 		// Default value
@@ -353,12 +353,12 @@ impl SchemaCodeGenerator {
 			// Skip auto-generated defaults like NOW() or sequences
 			if !is_auto_default(default) {
 				let default_str = default.as_str();
-				attrs.push(quote! { #[field(default = #default_str)] });
+				attrs.push(quote! { default = #default_str });
 			}
 		}
 
 		if let Some(generated) = column.generated.as_ref() {
-			attrs.push(Self::generated_field_attr(generated)?);
+			attrs.push(Self::generated_field_args(generated)?);
 		}
 
 		// Generate doc comment if enabled
@@ -368,15 +368,16 @@ impl SchemaCodeGenerator {
 		} else {
 			None
 		};
+		let field_attr = (!attrs.is_empty()).then(|| quote! { #[field(#(#attrs),*)] });
 
 		Ok(quote! {
 			#doc
-			#(#attrs)*
+			#field_attr
 			pub #field_ident: #rust_type,
 		})
 	}
 
-	fn generated_field_attr(generated: &GeneratedColumnDefinition) -> Result<TokenStream> {
+	fn generated_field_args(generated: &GeneratedColumnDefinition) -> Result<TokenStream> {
 		let storage_attr = match generated.storage {
 			GeneratedStorage::Stored => quote! { generated_stored = true },
 			GeneratedStorage::Virtual => quote! { generated_virtual = true },
@@ -394,11 +395,11 @@ impl SchemaCodeGenerator {
 					e
 				))
 			})?;
-			return Ok(quote! { #[field(generated = #expr, #storage_attr)] });
+			return Ok(quote! { generated = #expr, #storage_attr });
 		}
 
 		if let Some(raw_sql) = generated.raw_sql.as_deref() {
-			return Ok(quote! { #[field(generated_sql = #raw_sql, #storage_attr)] });
+			return Ok(quote! { generated_sql = #raw_sql, #storage_attr });
 		}
 
 		Err(MigrationError::IntrospectionError(
@@ -610,6 +611,40 @@ mod tests {
 		assert!(code.contains("generated_stored = true"));
 		assert!(code.contains(r#"generated = SchemaExpr::col("name")"#));
 		assert!(code.contains("generated_virtual = true"));
+	}
+
+	#[test]
+	fn test_generate_model_combines_renamed_field_metadata() {
+		let config = IntrospectConfig::default().with_app_label("test");
+		let generator = SchemaCodeGenerator::new(config);
+		let mut table = create_test_table();
+		table.columns.insert(
+			"display-name".to_string(),
+			ColumnInfo {
+				name: "display-name".to_string(),
+				column_type: FieldType::VarChar(255),
+				nullable: false,
+				default: None,
+				auto_increment: false,
+				generated: None,
+			},
+		);
+		let table_to_struct: HashMap<String, String> =
+			[("users".to_string(), "Users".to_string())].into();
+		let schema = DatabaseSchema {
+			tables: [("users".to_string(), table.clone())].into(),
+		};
+
+		let tokens = generator
+			.generate_model(&table, &table_to_struct, &schema)
+			.expect("model generation should succeed");
+		let code = generator
+			.format_tokens(tokens)
+			.expect("generated model should format");
+
+		assert!(code.contains(
+			"#[field(db_column = \"display-name\", max_length = 255)]\npub display_name: String,"
+		));
 	}
 
 	#[test]

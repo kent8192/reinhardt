@@ -175,6 +175,7 @@ impl BaseCommand for InspectDbCommand {
 		if let Some(table) = schema
 			.tables
 			.values()
+			.filter(|table| config.should_include_table(&table.name))
 			.find(|table| table.primary_key.is_empty())
 		{
 			return Err(CommandError::ExecutionError(format!(

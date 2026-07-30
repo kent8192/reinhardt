@@ -1508,6 +1508,48 @@ where
 			stmt.cond_where(condition);
 		}
 		stmt.and_where(source.is_not_null());
+		for group_field in &self.group_by_fields {
+			stmt.group_by_col(self.root_column_reference(group_field));
+		}
+		for having_cond in &self.having_conditions {
+			match having_cond {
+				HavingCondition::AggregateCompare {
+					func,
+					field,
+					operator,
+					value,
+				} => {
+					let aggregate = self.having_aggregate_expr(func, field);
+					let condition = match operator {
+						ComparisonOp::Eq => match value {
+							AggregateValue::Int(value) => aggregate.eq(*value),
+							AggregateValue::Float(value) => aggregate.eq(*value),
+						},
+						ComparisonOp::Ne => match value {
+							AggregateValue::Int(value) => aggregate.ne(*value),
+							AggregateValue::Float(value) => aggregate.ne(*value),
+						},
+						ComparisonOp::Gt => match value {
+							AggregateValue::Int(value) => aggregate.gt(*value),
+							AggregateValue::Float(value) => aggregate.gt(*value),
+						},
+						ComparisonOp::Gte => match value {
+							AggregateValue::Int(value) => aggregate.gte(*value),
+							AggregateValue::Float(value) => aggregate.gte(*value),
+						},
+						ComparisonOp::Lt => match value {
+							AggregateValue::Int(value) => aggregate.lt(*value),
+							AggregateValue::Float(value) => aggregate.lt(*value),
+						},
+						ComparisonOp::Lte => match value {
+							AggregateValue::Int(value) => aggregate.lte(*value),
+							AggregateValue::Float(value) => aggregate.lte(*value),
+						},
+					};
+					stmt.and_having(condition);
+				}
+			}
+		}
 		stmt.distinct();
 		stmt.order_by_expr(Expr::col(Alias::new("value")), order.into());
 		if let Some(limit) = self.limit {
@@ -8926,8 +8968,8 @@ fn escape_like_pattern(value: &str) -> String {
 #[cfg(test)]
 mod tests {
 	use super::{
-		AggregateFunc, AggregateValue, ComparisonOp, FilterCondition, HavingCondition,
-		MAX_FILTER_CONDITION_DEPTH, QueryFilterInput,
+		AggregateFunc, AggregateValue, ComparisonOp, DateProjectionOrder, FilterCondition,
+		HavingCondition, MAX_FILTER_CONDITION_DEPTH, QueryFilterInput,
 	};
 	#[cfg(feature = "pgvector")]
 	use crate::orm::Field;
@@ -8939,7 +8981,10 @@ mod tests {
 	};
 	use reinhardt_query::{
 		QueryBuilder,
-		prelude::{PostgresQueryBuilder, QueryStatementBuilder, SqliteQueryBuilder},
+		prelude::{
+			PostgresQueryBuilder, QueryStatementBuilder, SqliteQueryBuilder, TemporalTruncKind,
+			TemporalTruncOutput,
+		},
 	};
 	use rstest::rstest;
 	use serde::{Deserialize, Serialize};
@@ -11945,6 +11990,35 @@ mod tests {
 		assert_eq!(
 			sql,
 			r#"SELECT "test_users".* FROM "test_users" INNER JOIN "test_corpus_files" AS "corpus_file" ON "test_users"."corpus_file_id" = "corpus_file"."id" WHERE "corpus_file"."normalized_path" = '/docs/index.md' GROUP BY "test_users"."id""#
+		);
+	}
+
+	#[test]
+	fn temporal_projection_preserves_grouping_and_having() {
+		let mut queryset = QuerySet::<TestUser>::new();
+		queryset.group_by_fields = vec!["id".to_string()];
+		queryset
+			.having_conditions
+			.push(HavingCondition::AggregateCompare {
+				func: AggregateFunc::Count,
+				field: "*".to_string(),
+				operator: ComparisonOp::Gt,
+				value: AggregateValue::Int(1),
+			});
+
+		let statement = queryset
+			.temporal_projection_statement(
+				"created_at",
+				TemporalTruncKind::Day,
+				DateProjectionOrder::Asc,
+				None,
+				TemporalTruncOutput::Date,
+			)
+			.expect("temporal projection statement should compile");
+
+		assert_eq!(
+			statement.to_string(PostgresQueryBuilder),
+			r#"SELECT DISTINCT DATE_TRUNC('day', "created_at")::date AS "value" FROM "test_users" WHERE "created_at" IS NOT NULL GROUP BY "id" HAVING COUNT(*) > 1 ORDER BY "value" ASC"#
 		);
 	}
 

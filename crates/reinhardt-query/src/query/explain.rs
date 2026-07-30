@@ -295,7 +295,7 @@ fn unsafe_expr(expression: &SimpleExpr) -> bool {
 	match expression {
 		SimpleExpr::SubQuery(_, _) | SimpleExpr::Custom(_) | SimpleExpr::FunctionCall(_, _) => true,
 		SimpleExpr::CustomWithExpr(template, expressions) => {
-			template != "? LIKE ? ESCAPE '\\'" || expressions.iter().any(unsafe_expr)
+			!is_generated_like_template(template) || expressions.iter().any(unsafe_expr)
 		}
 		SimpleExpr::Unary(_, expression)
 		| SimpleExpr::AsEnum(_, expression)
@@ -317,6 +317,52 @@ fn unsafe_expr(expression: &SimpleExpr) -> bool {
 		| SimpleExpr::Value(_)
 		| SimpleExpr::Constant(_)
 		| SimpleExpr::Asterisk => false,
+	}
+}
+
+/// Returns whether `template` is the limited SQL shape emitted by the typed
+/// queryset `contains`, `startswith`, and `endswith` lookups.
+///
+/// Accepting only a quoted column path prevents this narrow exception from
+/// allowing a caller-supplied custom expression to run during MySQL EXPLAIN.
+fn is_generated_like_template(template: &str) -> bool {
+	let Some(column_path) = template.strip_suffix(" LIKE ? ESCAPE '\\'") else {
+		return false;
+	};
+	let mut remaining = column_path;
+	loop {
+		let Some(after_opening_quote) = remaining.strip_prefix('"') else {
+			return false;
+		};
+		let mut index = 0;
+		let bytes = after_opening_quote.as_bytes();
+		let mut closed = false;
+		while index < bytes.len() {
+			if bytes[index] != b'"' {
+				index += 1;
+				continue;
+			}
+			if bytes.get(index + 1) == Some(&b'"') {
+				index += 2;
+				continue;
+			}
+			if index == 0 {
+				return false;
+			}
+			remaining = &after_opening_quote[index + 1..];
+			closed = true;
+			break;
+		}
+		if !closed {
+			return false;
+		}
+		if remaining.is_empty() {
+			return true;
+		}
+		let Some(after_separator) = remaining.strip_prefix('.') else {
+			return false;
+		};
+		remaining = after_separator;
 	}
 }
 
@@ -553,6 +599,46 @@ mod tests {
 
 		assert_eq!(
 			statement.build_mysql_checked(),
+			Err(QueryBuildError::UnsupportedBackendFeature {
+				feature: "plan-only EXPLAIN for subqueries or unchecked expressions",
+				backend: "MySQL",
+			})
+		);
+	}
+
+	#[rstest]
+	fn mysql_explain_allows_typed_like_lookup_template() {
+		let select = Query::select()
+			.column("id")
+			.from("users")
+			.and_where(Expr::cust_with_values(
+				"\"username\" LIKE ? ESCAPE '\\'",
+				["ada"],
+			))
+			.to_owned();
+
+		assert_eq!(
+			ExplainStatement::new(select, ExplainOptions::default())
+				.build_mysql_checked()
+				.expect("typed LIKE lookup should be safe to explain")
+				.0,
+			"EXPLAIN FORMAT=TRADITIONAL SELECT `id` FROM `users` WHERE \"username\" LIKE ? ESCAPE '\\'"
+		);
+	}
+
+	#[rstest]
+	fn mysql_explain_rejects_custom_like_template() {
+		let select = Query::select()
+			.column("id")
+			.from("users")
+			.and_where(Expr::cust_with_values(
+				"LOWER(\"username\") LIKE ? ESCAPE '\\'",
+				["ada"],
+			))
+			.to_owned();
+
+		assert_eq!(
+			ExplainStatement::new(select, ExplainOptions::default()).build_mysql_checked(),
 			Err(QueryBuildError::UnsupportedBackendFeature {
 				feature: "plan-only EXPLAIN for subqueries or unchecked expressions",
 				backend: "MySQL",

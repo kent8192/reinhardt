@@ -80,10 +80,6 @@ fn representative_migration() -> Migration {
 			column: ColumnDefinition::new("title", FieldType::Text),
 			mysql_options: None,
 		},
-		table(
-			"visibility_archive",
-			vec![ColumnDefinition::new("id", FieldType::Integer)],
-		),
 		Operation::DropTable {
 			name: "visibility_archive".to_string(),
 		},
@@ -196,8 +192,15 @@ async fn column_exists(
 
 async fn assert_collected_sql_matches_executor(
 	connection: DatabaseConnection,
-	expected_add_column: &str,
+	expected_create_table: &str,
 ) {
+	connection
+		.execute("CREATE TABLE visibility_archive (id INTEGER)", Vec::new())
+		.await
+		.expect("pre-existing archive table should be installed");
+	assert!(!table_exists(&connection, "visibility_items").await);
+	assert!(!column_exists(&connection, "visibility_items", "title").await);
+	assert!(table_exists(&connection, "visibility_archive").await);
 	let migration = representative_migration();
 	let plan = plan_migration_sql(
 		&connection,
@@ -212,22 +215,28 @@ async fn assert_collected_sql_matches_executor(
 		.statements
 		.iter()
 		.filter_map(|statement| match statement {
-			PlannedStatement::Sql(sql) => Some(sql),
+			PlannedStatement::Sql(sql) => {
+				Some(sql.trim().trim_end_matches(';').trim_end().to_string())
+			}
 			PlannedStatement::Comment(_) => None,
 		})
 		.collect::<Vec<_>>();
+	let rendered = collected
+		.split(";\n")
+		.map(str::trim)
+		.filter(|statement| {
+			!statement.is_empty() && *statement != "BEGIN" && *statement != "COMMIT"
+		})
+		.map(ToString::to_string)
+		.collect::<Vec<_>>();
+	let expected = vec![
+		expected_create_table.to_string(),
+		"ALTER TABLE visibility_items ADD COLUMN title TEXT".to_string(),
+		"DROP TABLE visibility_archive".to_string(),
+	];
 
-	assert_eq!(executable.len(), 4);
-	assert_eq!(executable[1], expected_add_column);
-	assert!(executable[0].starts_with("CREATE TABLE"));
-	assert!(executable[2].starts_with("CREATE TABLE"));
-	assert!(executable[3].starts_with("DROP TABLE"));
-	for statement in &executable {
-		assert!(
-			collected.contains(statement.trim_end_matches(';')),
-			"collected SQL omitted executor-visible statement: {statement}\n{collected}",
-		);
-	}
+	assert_eq!(executable, expected);
+	assert_eq!(rendered, executable);
 
 	let mut executor = DatabaseMigrationExecutor::new(connection.clone());
 	let result = executor
@@ -252,7 +261,7 @@ async fn postgres_collected_sql_matches_executor_visible_plan(
 
 	assert_collected_sql_matches_executor(
 		connection,
-		"ALTER TABLE visibility_items ADD COLUMN title TEXT",
+		"CREATE TABLE visibility_items (\n  id INTEGER\n)",
 	)
 	.await;
 }
@@ -269,7 +278,7 @@ async fn mysql_collected_sql_matches_executor_visible_plan(
 
 	assert_collected_sql_matches_executor(
 		connection,
-		"ALTER TABLE visibility_items ADD COLUMN title TEXT",
+		"CREATE TABLE `visibility_items` (\n  `id` INTEGER\n)",
 	)
 	.await;
 }
@@ -282,7 +291,7 @@ async fn sqlite_collected_sql_matches_executor_visible_plan() {
 
 	assert_collected_sql_matches_executor(
 		connection,
-		"ALTER TABLE visibility_items ADD COLUMN title TEXT",
+		"CREATE TABLE visibility_items (\n  id INTEGER\n)",
 	)
 	.await;
 }

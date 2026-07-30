@@ -94,13 +94,13 @@ impl fmt::Display for F {
 /// // The #[model] attribute macro automatically generates:
 /// // impl User {
 /// //     pub const fn field_id() -> FieldRef<User, i64> {
-/// //         FieldRef::new("id")
+/// //         unsafe { FieldRef::from_model_field("id") }
 /// //     }
 /// //     pub const fn field_name() -> FieldRef<User, String> {
-/// //         FieldRef::new("name")
+/// //         unsafe { FieldRef::from_model_field("name") }
 /// //     }
 /// //     pub const fn field_email() -> FieldRef<User, String> {
-/// //         FieldRef::new("email")
+/// //         unsafe { FieldRef::from_model_field("email") }
 /// //     }
 /// // }
 ///
@@ -114,10 +114,27 @@ impl fmt::Display for F {
 /// let f: F = User::field_name().into();
 /// assert_eq!(f.to_sql(), "name");
 /// ```
+/// Marker carried by field references emitted by the model derive macro.
+///
+/// This is intentionally an uninhabited type: callers can use it in type
+/// signatures but cannot manufacture the proof required for SQL ordering.
+#[doc(hidden)]
 #[derive(Debug, Clone, Copy)]
-pub struct FieldRef<M, T> {
+pub enum GeneratedModelField {}
+
+/// Marker for a field name supplied directly by application code.
+///
+/// Such references remain useful for dynamically composed filters, but they
+/// cannot be promoted to [`OrderingField`] without the model macro's proof.
+#[doc(hidden)]
+#[derive(Debug, Clone, Copy)]
+pub enum UnverifiedModelField {}
+
+#[derive(Debug, Clone, Copy)]
+/// A typed model field reference whose origin controls ordering eligibility.
+pub struct FieldRef<M, T, Origin = GeneratedModelField> {
 	name: &'static str,
-	_phantom: PhantomData<(M, T)>,
+	_phantom: PhantomData<(M, T, Origin)>,
 }
 
 /// Type-safe proof that a physical database column belongs to model `M`.
@@ -165,7 +182,7 @@ impl<M, T: DatabaseField> UniqueFieldRef<M, T> {
 	#[doc(hidden)]
 	pub const unsafe fn from_model_field(name: &'static str) -> Self {
 		Self {
-			field: FieldRef::new(name),
+			field: unsafe { FieldRef::from_model_field(name) },
 			getter: None,
 		}
 	}
@@ -183,7 +200,7 @@ impl<M, T: DatabaseField> UniqueFieldRef<M, T> {
 		getter: fn(&M) -> Option<T>,
 	) -> Self {
 		Self {
-			field: FieldRef::new(name),
+			field: unsafe { FieldRef::from_model_field(name) },
 			getter: Some(getter),
 		}
 	}
@@ -228,11 +245,12 @@ impl<M, T: DatabaseField> UniqueFieldRef<M, T> {
 	}
 }
 
-impl<M, T> FieldRef<M, T> {
+impl<M, T> FieldRef<M, T, UnverifiedModelField> {
 	/// Create a new field reference with compile-time type safety
 	///
-	/// This constructor is typically used by the `#[derive(Model)]` macro
-	/// to generate field accessor methods.
+	/// This constructor is for dynamically composed filters. It deliberately
+	/// does not permit conversion into [`OrderingField`]. Generated model
+	/// accessors use [`FieldRef::from_model_field`] instead.
 	///
 	/// # Arguments
 	///
@@ -244,7 +262,14 @@ impl<M, T> FieldRef<M, T> {
 	/// # struct User;
 	/// use reinhardt_db::orm::expressions::FieldRef;
 	///
-	/// const USER_ID: FieldRef<User, i64> = FieldRef::new("id");
+	/// const USER_ID: FieldRef<User, i64, UnverifiedModelField> = FieldRef::new("id");
+	/// ```
+	///
+	/// ```compile_fail
+	/// use reinhardt_db::orm::expressions::FieldRef;
+	///
+	/// struct User;
+	/// let ordering = FieldRef::<User, i64>::new("unverified_column").ordering();
 	/// ```
 	pub const fn new(name: &'static str) -> Self {
 		Self {
@@ -252,7 +277,25 @@ impl<M, T> FieldRef<M, T> {
 			_phantom: PhantomData,
 		}
 	}
+}
 
+impl<M, T> FieldRef<M, T, GeneratedModelField> {
+	/// Construct a field reference proven to come from a model definition.
+	///
+	/// # Safety
+	///
+	/// `name` must identify a persisted scalar database column of `M`. The
+	/// model derive macro upholds this invariant for generated accessors.
+	#[doc(hidden)]
+	pub const unsafe fn from_model_field(name: &'static str) -> Self {
+		Self {
+			name,
+			_phantom: PhantomData,
+		}
+	}
+}
+
+impl<M, T, Origin> FieldRef<M, T, Origin> {
 	/// Get the field name
 	///
 	/// # Examples
@@ -827,7 +870,7 @@ impl<M, T> FieldRef<M, T> {
 	/// let filter = Order::field_discount_price().eq_field(Order::field_total_price());
 	/// // Results in: WHERE discount_price = total_price
 	/// ```
-	pub fn eq_field<T2>(&self, other: FieldRef<M, T2>) -> Filter {
+	pub fn eq_field<T2, OtherOrigin>(&self, other: FieldRef<M, T2, OtherOrigin>) -> Filter {
 		Filter::new(
 			self.name.to_string(),
 			FilterOperator::Eq,
@@ -843,7 +886,7 @@ impl<M, T> FieldRef<M, T> {
 	/// let filter = Order::field_discount_price().ne_field(Order::field_total_price());
 	/// // Results in: WHERE discount_price != total_price
 	/// ```
-	pub fn ne_field<T2>(&self, other: FieldRef<M, T2>) -> Filter {
+	pub fn ne_field<T2, OtherOrigin>(&self, other: FieldRef<M, T2, OtherOrigin>) -> Filter {
 		Filter::new(
 			self.name.to_string(),
 			FilterOperator::Ne,
@@ -859,7 +902,7 @@ impl<M, T> FieldRef<M, T> {
 	/// let filter = Order::field_total_price().gt_field(Order::field_discount_price());
 	/// // Results in: WHERE total_price > discount_price
 	/// ```
-	pub fn gt_field<T2>(&self, other: FieldRef<M, T2>) -> Filter {
+	pub fn gt_field<T2, OtherOrigin>(&self, other: FieldRef<M, T2, OtherOrigin>) -> Filter {
 		Filter::new(
 			self.name.to_string(),
 			FilterOperator::Gt,
@@ -875,7 +918,7 @@ impl<M, T> FieldRef<M, T> {
 	/// let filter = Order::field_total_price().gte_field(Order::field_discount_price());
 	/// // Results in: WHERE total_price >= discount_price
 	/// ```
-	pub fn gte_field<T2>(&self, other: FieldRef<M, T2>) -> Filter {
+	pub fn gte_field<T2, OtherOrigin>(&self, other: FieldRef<M, T2, OtherOrigin>) -> Filter {
 		Filter::new(
 			self.name.to_string(),
 			FilterOperator::Gte,
@@ -891,7 +934,7 @@ impl<M, T> FieldRef<M, T> {
 	/// let filter = Order::field_discount_price().lt_field(Order::field_total_price());
 	/// // Results in: WHERE discount_price < total_price
 	/// ```
-	pub fn lt_field<T2>(&self, other: FieldRef<M, T2>) -> Filter {
+	pub fn lt_field<T2, OtherOrigin>(&self, other: FieldRef<M, T2, OtherOrigin>) -> Filter {
 		Filter::new(
 			self.name.to_string(),
 			FilterOperator::Lt,
@@ -907,7 +950,7 @@ impl<M, T> FieldRef<M, T> {
 	/// let filter = Order::field_discount_price().lte_field(Order::field_total_price());
 	/// // Results in: WHERE discount_price <= total_price
 	/// ```
-	pub fn lte_field<T2>(&self, other: FieldRef<M, T2>) -> Filter {
+	pub fn lte_field<T2, OtherOrigin>(&self, other: FieldRef<M, T2, OtherOrigin>) -> Filter {
 		Filter::new(
 			self.name.to_string(),
 			FilterOperator::Lte,
@@ -916,7 +959,7 @@ impl<M, T> FieldRef<M, T> {
 	}
 }
 
-impl<M, T: DatabaseField> FieldRef<M, T> {
+impl<M, T: DatabaseField> FieldRef<M, T, GeneratedModelField> {
 	/// Convert this persisted scalar field reference into a type-safe ordering field.
 	///
 	/// Relationship fields are virtual model properties and cannot appear in an
@@ -1017,7 +1060,7 @@ impl<M> TransformedFieldRef<M> {
 	}
 }
 
-impl<M, T> fmt::Display for FieldRef<M, T> {
+impl<M, T, Origin> fmt::Display for FieldRef<M, T, Origin> {
 	fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
 		write!(f, "{}", self.name)
 	}
@@ -1027,15 +1070,15 @@ impl<M, T> fmt::Display for FieldRef<M, T> {
 // (logging, error messages, custom query builders). `Manager::filter` /
 // `QuerySet::filter` now take `impl Into<FilterCondition>` (Issue #4650), so they
 // no longer rely on this conversion.
-impl<M, T> From<FieldRef<M, T>> for String {
-	fn from(field_ref: FieldRef<M, T>) -> Self {
+impl<M, T, Origin> From<FieldRef<M, T, Origin>> for String {
+	fn from(field_ref: FieldRef<M, T, Origin>) -> Self {
 		field_ref.name.to_string()
 	}
 }
 
 // Allow conversion from FieldRef to F for backward compatibility
-impl<M, T> From<FieldRef<M, T>> for F {
-	fn from(field_ref: FieldRef<M, T>) -> Self {
+impl<M, T, Origin> From<FieldRef<M, T, Origin>> for F {
+	fn from(field_ref: FieldRef<M, T, Origin>) -> Self {
 		F::new(field_ref.name)
 	}
 }
@@ -1590,15 +1633,18 @@ mod tests {
 	// Simulating what #[derive(Model)] macro would generate
 	impl TestUser {
 		const fn field_id() -> FieldRef<TestUser, i64> {
-			FieldRef::new("id")
+			// SAFETY: this mirrors a generated accessor for the persisted `id` field.
+			unsafe { FieldRef::from_model_field("id") }
 		}
 
 		const fn field_name() -> FieldRef<TestUser, String> {
-			FieldRef::new("name")
+			// SAFETY: this mirrors a generated accessor for the persisted `name` field.
+			unsafe { FieldRef::from_model_field("name") }
 		}
 
 		const fn field_created_at() -> FieldRef<TestUser, i64> {
-			FieldRef::new("created_at")
+			// SAFETY: this mirrors a generated accessor for the persisted `created_at` field.
+			unsafe { FieldRef::from_model_field("created_at") }
 		}
 	}
 
@@ -1841,7 +1887,7 @@ mod tests {
 	#[test]
 	fn test_field_ref_const_to_f_conversion() {
 		// Verify const FieldRef can be converted to F
-		const ID_FIELD: FieldRef<TestUser, i64> = FieldRef::new("id");
+		const ID_FIELD: FieldRef<TestUser, i64> = unsafe { FieldRef::from_model_field("id") };
 		let f: F = ID_FIELD.into();
 
 		assert_eq!(f.to_sql(), "\"id\"");

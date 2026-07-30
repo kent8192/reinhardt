@@ -521,12 +521,12 @@ impl FieldAssignment {
 	}
 }
 
-impl<M, T, V> From<(super::expressions::FieldRef<M, T>, V)> for FieldAssignment
+impl<M, T, Origin, V> From<(super::expressions::FieldRef<M, T, Origin>, V)> for FieldAssignment
 where
 	T: DatabaseField,
 	V: IntoFieldValue<T>,
 {
-	fn from((field, value): (super::expressions::FieldRef<M, T>, V)) -> Self {
+	fn from((field, value): (super::expressions::FieldRef<M, T, Origin>, V)) -> Self {
 		Self {
 			field: field.name().to_owned(),
 			value: UpdateValue::Typed(value.into_field_value()),
@@ -6254,11 +6254,17 @@ where
 			| super::connection::DatabaseBackend::MySql => 65_535,
 		};
 		let limit = parameter_limit.saturating_sub(reserved_binds).max(1);
-		let mut remaining = keys.into_iter().collect::<Vec<_>>();
-		let mut batches = Vec::new();
-		while !remaining.is_empty() {
-			let count = remaining.len().min(limit);
-			batches.push(remaining.drain(..count).collect());
+		let mut batches = Vec::with_capacity(keys.len().div_ceil(limit));
+		let mut batch = Vec::with_capacity(limit);
+		for key in keys {
+			batch.push(key);
+			if batch.len() == limit {
+				batches.push(batch);
+				batch = Vec::with_capacity(limit);
+			}
+		}
+		if !batch.is_empty() {
+			batches.push(batch);
 		}
 		batches
 	}
@@ -6422,7 +6428,11 @@ where
 		T::PrimaryKey: DatabaseField + Ord,
 		E: OrmExecutor,
 	{
-		let field = super::expressions::FieldRef::<T, T::PrimaryKey>::new(T::primary_key_column());
+		let field = super::expressions::FieldRef::<
+			T,
+			T::PrimaryKey,
+			super::expressions::UnverifiedModelField,
+		>::new(T::primary_key_column());
 		let reserved_binds = self.select_bind_count(conn.backend(), conn.is_cockroachdb())?;
 		let mut result = BTreeMap::new();
 		for keys in Self::bulk_key_batches(keys, conn.backend(), reserved_binds) {
@@ -6452,9 +6462,12 @@ where
 		let reserved_binds = self.select_bind_count(backend, executor.is_cockroachdb())?;
 		let mut result = BTreeMap::new();
 		for keys in Self::bulk_key_batches(keys, backend, reserved_binds) {
-			let filter =
-				super::expressions::FieldRef::<T, T::PrimaryKey>::new(T::primary_key_column())
-					.is_in(keys);
+			let filter = super::expressions::FieldRef::<
+				T,
+				T::PrimaryKey,
+				super::expressions::UnverifiedModelField,
+			>::new(T::primary_key_column())
+			.is_in(keys);
 			let rows = self
 				.clone()
 				.filter(filter)
@@ -9157,7 +9170,7 @@ mod tests {
 	use serde::{Deserialize, Serialize};
 	#[cfg(feature = "pgvector")]
 	use std::borrow::Cow;
-	use std::collections::HashMap;
+	use std::collections::{BTreeSet, HashMap};
 	#[cfg(feature = "pgvector")]
 	use std::fmt;
 
@@ -9947,8 +9960,11 @@ mod tests {
 				.cosine_distance(typed_vector_target(&[1.0, 2.0, 3.0]))
 				.lt(0.25),
 		);
-		let assignment_field =
-			crate::orm::expressions::FieldRef::<TestUser, crate::orm::Vector<3>>::new("embedding");
+		let assignment_field = crate::orm::expressions::FieldRef::<
+			TestUser,
+			crate::orm::Vector<3>,
+			crate::orm::expressions::UnverifiedModelField,
+		>::new("embedding");
 		let mut executor = PgvectorUpdateErrorExecutor { code, message };
 
 		let error = queryset
@@ -9979,8 +9995,11 @@ mod tests {
 				.cosine_distance(typed_vector_target(&[1.0, 2.0, 3.0]))
 				.lt(0.25),
 		);
-		let assignment_field =
-			crate::orm::expressions::FieldRef::<TestUser, crate::orm::Vector<3>>::new("embedding");
+		let assignment_field = crate::orm::expressions::FieldRef::<
+			TestUser,
+			crate::orm::Vector<3>,
+			crate::orm::expressions::UnverifiedModelField,
+		>::new("embedding");
 
 		let (sql, params) = queryset
 			.update_fields_sql([(assignment_field, typed_vector_target(&[4.0, 5.0, 6.0]))])
@@ -10137,40 +10156,49 @@ mod tests {
 		}
 
 		const fn field_id() -> crate::orm::expressions::FieldRef<TestUser, i64> {
-			crate::orm::expressions::FieldRef::new("id")
+			// SAFETY: this test accessor names TestUser's persisted `id` field.
+			unsafe { crate::orm::expressions::FieldRef::from_model_field("id") }
 		}
 
 		const fn field_username() -> crate::orm::expressions::FieldRef<TestUser, String> {
-			crate::orm::expressions::FieldRef::new("username")
+			// SAFETY: this test accessor names TestUser's persisted `username` field.
+			unsafe { crate::orm::expressions::FieldRef::from_model_field("username") }
 		}
 
 		const fn field_email() -> crate::orm::expressions::FieldRef<TestUser, String> {
-			crate::orm::expressions::FieldRef::new("email")
+			// SAFETY: this test accessor names TestUser's persisted `email` field.
+			unsafe { crate::orm::expressions::FieldRef::from_model_field("email") }
 		}
 
 		const fn field_full_name() -> crate::orm::expressions::FieldRef<TestUser, String> {
-			crate::orm::expressions::FieldRef::new("full_name")
+			// SAFETY: this test accessor names TestUser's persisted `full_name` field.
+			unsafe { crate::orm::expressions::FieldRef::from_model_field("full_name") }
 		}
 
 		const fn field_display_name() -> crate::orm::expressions::FieldRef<TestUser, String> {
-			crate::orm::expressions::FieldRef::new("display_name")
+			// SAFETY: this test accessor names TestUser's persisted `display_name` field.
+			unsafe { crate::orm::expressions::FieldRef::from_model_field("display_name") }
 		}
 
 		const fn field_created_at()
 		-> crate::orm::expressions::FieldRef<TestUser, chrono::DateTime<chrono::Utc>> {
-			crate::orm::expressions::FieldRef::new("created_at")
+			// SAFETY: this test accessor names TestUser's persisted `created_at` field.
+			unsafe { crate::orm::expressions::FieldRef::from_model_field("created_at") }
 		}
 
 		const fn field_tags() -> crate::orm::expressions::FieldRef<TestUser, Vec<String>> {
-			crate::orm::expressions::FieldRef::new("tags")
+			// SAFETY: this test accessor names TestUser's persisted `tags` field.
+			unsafe { crate::orm::expressions::FieldRef::from_model_field("tags") }
 		}
 
 		const fn field_metadata() -> crate::orm::expressions::FieldRef<TestUser, String> {
-			crate::orm::expressions::FieldRef::new("metadata")
+			// SAFETY: this test accessor names TestUser's persisted `metadata` field.
+			unsafe { crate::orm::expressions::FieldRef::from_model_field("metadata") }
 		}
 
 		const fn field_active_period() -> crate::orm::expressions::FieldRef<TestUser, String> {
-			crate::orm::expressions::FieldRef::new("active_period")
+			// SAFETY: this test accessor names TestUser's persisted `active_period` field.
+			unsafe { crate::orm::expressions::FieldRef::from_model_field("active_period") }
 		}
 	}
 
@@ -10348,11 +10376,13 @@ mod tests {
 	impl TestCorpusFile {
 		const fn field_normalized_path() -> crate::orm::expressions::FieldRef<TestCorpusFile, String>
 		{
-			crate::orm::expressions::FieldRef::new("normalized_path")
+			// SAFETY: this test accessor names TestCorpusFile's persisted `normalized_path` field.
+			unsafe { crate::orm::expressions::FieldRef::from_model_field("normalized_path") }
 		}
 
 		const fn field_email() -> crate::orm::expressions::FieldRef<TestCorpusFile, String> {
-			crate::orm::expressions::FieldRef::new("email")
+			// SAFETY: this test accessor names TestCorpusFile's persisted `email` field.
+			unsafe { crate::orm::expressions::FieldRef::from_model_field("email") }
 		}
 	}
 
@@ -10573,7 +10603,10 @@ mod tests {
 			TestUserCorpusFile,
 		>()
 		.then::<TestCorpusFileProject, TestProject>()
-		.field(crate::orm::expressions::FieldRef::<TestProject, String>::new("name"))
+		.field(unsafe {
+			// SAFETY: `name` is a persisted TestProject field in this query fixture.
+			crate::orm::expressions::FieldRef::<TestProject, String>::from_model_field("name")
+		})
 		.eq("reinhardt")
 	}
 
@@ -10694,6 +10727,20 @@ mod tests {
 				multiplicity: crate::orm::relations::RelationMultiplicity::Multiple,
 			}]
 		}
+	}
+
+	#[test]
+	fn bulk_key_batches_split_sqlite_keys_without_reordering() {
+		// Arrange
+		let keys = (0_i64..901).collect::<BTreeSet<_>>();
+
+		// Act
+		let batches = QuerySet::<TestUser>::bulk_key_batches(keys, DatabaseBackend::Sqlite, 0);
+
+		// Assert
+		assert_eq!(batches.len(), 2);
+		assert_eq!(batches[0], (0_i64..900).collect::<Vec<_>>());
+		assert_eq!(batches[1], vec![900]);
 	}
 
 	#[test]
@@ -11382,7 +11429,10 @@ mod tests {
 				TestUserCorpusFile,
 			>()
 			.then::<TestCorpusFileProject, TestProject>()
-			.field(crate::orm::expressions::FieldRef::<TestProject, String>::new("name"))
+			.field(unsafe {
+				// SAFETY: `name` is a persisted TestProject field in this query fixture.
+				crate::orm::expressions::FieldRef::<TestProject, String>::from_model_field("name")
+			})
 			.eq("reinhardt");
 
 		let sql = QuerySet::<TestUser>::new()
@@ -11485,14 +11535,16 @@ mod tests {
 
 	#[test]
 	fn test_aliasless_manual_joins_rebase_typed_filter_aliases() {
-		let make_filter =
-			|| {
-				crate::orm::relations::RelationPath::<TestProjects, TestProjects>::from_descriptor::<
+		let make_filter = || {
+			crate::orm::relations::RelationPath::<TestProjects, TestProjects>::from_descriptor::<
 				TestProjectsChildren,
 			>()
-			.field(crate::orm::expressions::FieldRef::<TestProjects, i64>::new("id"))
+			.field(unsafe {
+				// SAFETY: `id` is a persisted TestProjects field in this query fixture.
+				crate::orm::expressions::FieldRef::<TestProjects, i64>::from_model_field("id")
+			})
 			.eq(1)
-			};
+		};
 
 		let sql = QuerySet::<TestProjects>::new()
 			.filter(make_filter())
@@ -12280,7 +12332,10 @@ mod tests {
 			crate::orm::relations::RelationPath::<TestUser, TestProject>::from_descriptor::<
 				TestUserProjects,
 			>()
-			.field(crate::orm::expressions::FieldRef::<TestProject, String>::new("name"))
+			.field(unsafe {
+				// SAFETY: `name` is a persisted TestProject field in this query fixture.
+				crate::orm::expressions::FieldRef::<TestProject, String>::from_model_field("name")
+			})
 			.icontains("rust");
 
 		let sql = QuerySet::<TestUser>::new()
@@ -12300,7 +12355,10 @@ mod tests {
 			crate::orm::relations::RelationPath::<TestMembership, TestProject>::from_descriptor::<
 				TestMembershipProjects,
 			>()
-			.field(crate::orm::expressions::FieldRef::<TestProject, String>::new("name"))
+			.field(unsafe {
+				// SAFETY: `name` is a persisted TestProject field in this query fixture.
+				crate::orm::expressions::FieldRef::<TestProject, String>::from_model_field("name")
+			})
 			.icontains("rust");
 
 		let sql = QuerySet::<TestMembership>::new()

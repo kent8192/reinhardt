@@ -666,6 +666,12 @@ Models can define their default latest/earliest ordering with generated field
 metadata:
 
 ```rust
+use chrono::{DateTime, Utc};
+use reinhardt_db::model;
+use reinhardt_db::orm::Model;
+use serde::{Deserialize, Serialize};
+
+#[derive(Serialize, Deserialize)]
 #[model(
     app_label = "events",
     table_name = "events",

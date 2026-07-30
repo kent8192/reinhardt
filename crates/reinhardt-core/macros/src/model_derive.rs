@@ -3380,8 +3380,12 @@ fn resolve_latest_by_fields(
 ///
 /// // The #[model] attribute macro automatically generates:
 /// impl User {
-///     pub const fn field_id() -> FieldRef<User, i64> { FieldRef::new("id") }
-///     pub const fn field_name() -> FieldRef<User, String> { FieldRef::new("name") }
+///     pub const fn field_id() -> FieldRef<User, i64> {
+///         unsafe { FieldRef::from_model_field("id") }
+///     }
+///     pub const fn field_name() -> FieldRef<User, String> {
+///         unsafe { FieldRef::from_model_field("name") }
+///     }
 /// }
 /// ```
 fn generate_field_accessors(
@@ -3436,7 +3440,8 @@ fn generate_field_accessors(
 				/// Returns a `FieldRef<#struct_name, #field_type>` that provides compile-time
 				/// type safety for field operations.
 				pub const fn #method_name() -> #orm_crate::expressions::FieldRef<#struct_name, #field_type> {
-					#orm_crate::expressions::FieldRef::new(#column_name)
+					// SAFETY: `#[model]` emits this accessor only for a persisted scalar model field.
+					unsafe { #orm_crate::expressions::FieldRef::from_model_field(#column_name) }
 				}
 			}
 		})
@@ -3552,7 +3557,10 @@ fn generate_relation_traversal_accessors(
 			quote! {
 				#[doc = #doc_comment]
 				pub fn #method_name(self) -> #orm_crate::relations::RelatedFieldRef<Root, #struct_name, #field_type> {
-					self.field(#orm_crate::expressions::FieldRef::new(#field_name_str))
+					// SAFETY: this accessor is generated only for a persisted scalar model field.
+					self.field(unsafe {
+						#orm_crate::expressions::FieldRef::from_model_field(#field_name_str)
+					})
 				}
 			}
 		})

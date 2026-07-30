@@ -705,8 +705,10 @@ async fn none_short_circuits_owned_and_transaction_executors() {
 #[tokio::test]
 async fn latest_and_earliest_use_typed_ordering_with_caller_owned_executors() {
 	let ordering = [
-		FieldRef::<Article, i64>::new("article_id").ordering(),
-		FieldRef::<Article, String>::new("article_title").ordering(),
+		// SAFETY: these columns are declared by the Article test model below.
+		unsafe { FieldRef::<Article, i64>::from_model_field("article_id") }.ordering(),
+		// SAFETY: these columns are declared by the Article test model below.
+		unsafe { FieldRef::<Article, String>::from_model_field("article_title") }.ordering(),
 	];
 	let queryset = QuerySet::<Article>::new();
 	let mut executor = RecordingExecutor::new(DatabaseBackend::Postgres)

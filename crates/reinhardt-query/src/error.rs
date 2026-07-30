@@ -445,8 +445,23 @@ fn validate_simple_expr(expr: &SimpleExpr, backend: &'static str) -> Result<(), 
 		| SimpleExpr::ExprAlias(expression, _)
 		| SimpleExpr::Cast(expression, _) => validate_simple_expr(expression, backend),
 		SimpleExpr::TemporalTrunc {
-			expr, time_zone, ..
+			expr,
+			kind,
+			time_zone,
+			output,
 		} => {
+			if *output == crate::expr::TemporalTruncOutput::Date
+				&& matches!(
+					kind,
+					crate::expr::TemporalTruncKind::Hour
+						| crate::expr::TemporalTruncKind::Minute
+						| crate::expr::TemporalTruncKind::Second
+				) {
+				return Err(QueryBuildError::InvalidTemporalTruncation {
+					kind: kind.as_str(),
+					output: "date",
+				});
+			}
 			if matches!(backend, "MySQL" | "SQLite")
 				&& matches!(time_zone, Some(crate::expr::TemporalTimeZone::Named(_)))
 			{

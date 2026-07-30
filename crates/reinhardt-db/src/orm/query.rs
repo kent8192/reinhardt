@@ -1487,6 +1487,13 @@ where
 		time_zone: Option<TemporalTimeZone>,
 		output: TemporalTruncOutput,
 	) -> reinhardt_core::exception::Result<SelectStatement> {
+		if self.from_subquery_sql.is_some() {
+			return Err(DatabaseError::new(
+				DatabaseErrorKind::Unsupported,
+				"date and datetime projections are not supported on querysets created from subqueries",
+			)
+			.into());
+		}
 		let source = Expr::col(self.root_column_reference(field)).into_simple_expr();
 		let projection =
 			Func::temporal_trunc(source.clone(), kind, time_zone, output).map_err(|error| {
@@ -3873,9 +3880,7 @@ where
 	}
 
 	fn root_column_reference(&self, field: &str) -> ColumnRef {
-		if (!self.relation_joins.is_empty() || !self.manual_joins.is_empty())
-			&& !field.contains('.')
-		{
+		if (!self.relation_joins.is_empty() || !self.joins.is_empty()) && !field.contains('.') {
 			ColumnRef::table_column(Alias::new(self.root_alias()), Alias::new(field))
 		} else {
 			parse_column_reference(field)

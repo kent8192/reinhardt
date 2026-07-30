@@ -11,6 +11,7 @@ use reinhardt_query::prelude::{
 };
 use rstest::rstest;
 use serde::{Deserialize, Serialize};
+use serial_test::serial;
 use std::collections::VecDeque;
 use std::pin::Pin;
 use std::sync::{
@@ -418,6 +419,7 @@ fn iterator_with_executor_rejects_invalid_chunks_and_unsupported_executors() {
 #[cfg(feature = "sqlite")]
 #[rstest]
 #[tokio::test]
+#[serial(queryset_streaming_connection_registry)]
 async fn sqlite_queryset_iterator_delivers_rows_without_query_cache() {
 	// Arrange
 	let owner = reinhardt_db::backends::DatabaseConnection::connect_sqlite("sqlite::memory:")

@@ -45,6 +45,7 @@ struct StreamQueryAccounting {
 	sql: String,
 	params: Vec<String>,
 	duration: std::time::Duration,
+	completed: bool,
 }
 
 impl StreamQueryAccounting {
@@ -53,16 +54,24 @@ impl StreamQueryAccounting {
 			sql,
 			params,
 			duration: std::time::Duration::ZERO,
+			completed: true,
 		}
 	}
 
 	fn record_poll(&mut self, duration: std::time::Duration) {
 		self.duration += duration;
 	}
+
+	fn disarm_completion(&mut self) {
+		self.completed = false;
+	}
 }
 
 impl Drop for StreamQueryAccounting {
 	fn drop(&mut self) {
+		if !self.completed {
+			return;
+		}
 		super::instrumentation::instrumentation().orm_query_end_with_params_sync(
 			&self.sql,
 			&self.params,
@@ -79,11 +88,16 @@ impl Drop for StreamQueryAccounting {
 struct TimedRowStream<'rows, 'accounting> {
 	rows: RowStream<'rows>,
 	accounting: &'accounting mut StreamQueryAccounting,
+	pending_since: Option<Instant>,
 }
 
 impl<'rows, 'accounting> TimedRowStream<'rows, 'accounting> {
 	fn new(rows: RowStream<'rows>, accounting: &'accounting mut StreamQueryAccounting) -> Self {
-		Self { rows, accounting }
+		Self {
+			rows,
+			accounting,
+			pending_since: None,
+		}
 	}
 }
 
@@ -91,10 +105,17 @@ impl Stream for TimedRowStream<'_, '_> {
 	type Item = reinhardt_core::exception::Result<crate::backends::types::Row>;
 
 	fn poll_next(mut self: Pin<&mut Self>, context: &mut Context<'_>) -> Poll<Option<Self::Item>> {
-		let started_at = Instant::now();
+		if self.pending_since.is_none() {
+			self.pending_since = Some(Instant::now());
+		}
 		let result = self.rows.as_mut().poll_next(context);
 		if result.is_ready() {
-			self.accounting.record_poll(started_at.elapsed());
+			let duration = self
+				.pending_since
+				.take()
+				.expect("stream poll start time is initialized")
+				.elapsed();
+			self.accounting.record_poll(duration);
 		}
 		result
 	}
@@ -6280,6 +6301,7 @@ where
 							.orm_query_error(&sql, &format!("{error:?}"))
 							.await;
 						drop(rows.take());
+						accounting.disarm_completion();
 						yield Err(error);
 						return;
 					}
@@ -6295,6 +6317,7 @@ where
 							.orm_query_error(&sql, &format!("{error:?}"))
 							.await;
 						drop(rows.take());
+						accounting.disarm_completion();
 						yield Err(error);
 						return;
 					}
@@ -6355,6 +6378,7 @@ where
 							.orm_query_error(&sql, &format!("{error:?}"))
 							.await;
 						drop(rows.take());
+						accounting.disarm_completion();
 						yield Err(error);
 						return;
 					}
@@ -6370,6 +6394,7 @@ where
 							.orm_query_error(&sql, &format!("{error:?}"))
 							.await;
 						drop(rows.take());
+						accounting.disarm_completion();
 						yield Err(error);
 						return;
 					}

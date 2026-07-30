@@ -104,8 +104,7 @@ impl TypeMapper {
 			// Integer types
 			FieldType::BigInteger => quote! { i64 },
 			FieldType::Integer => quote! { i32 },
-			FieldType::SmallInteger => quote! { i16 },
-			FieldType::TinyInt => quote! { i8 },
+			FieldType::SmallInteger | FieldType::TinyInt => quote! { i32 },
 			FieldType::MediumInt => quote! { i32 },
 
 			// String types
@@ -189,10 +188,13 @@ impl TypeMapper {
 			}
 
 			// Custom type
-			FieldType::Custom(name) if name == "u8" => quote! { u8 },
-			FieldType::Custom(name) if name == "u16" => quote! { u16 },
-			FieldType::Custom(name) if name == "u32" => quote! { u32 },
-			FieldType::Custom(name) if name == "u64" => quote! { u64 },
+			FieldType::Custom(name) if name == "u8" || name == "u16" => quote! { i32 },
+			FieldType::Custom(name) if name == "u32" => quote! { i64 },
+			FieldType::Custom(name) if name == "u64" => {
+				return Err(TypeMappingError::UnsupportedType(
+					"MySQL BIGINT UNSIGNED exceeds the supported signed integer binding range; configure a type override".to_string(),
+				));
+			}
 			FieldType::Custom(_) => quote! { String },
 		};
 
@@ -209,8 +211,7 @@ impl TypeMapper {
 		let base_type = match field_type {
 			FieldType::BigInteger => "i64",
 			FieldType::Integer => "i32",
-			FieldType::SmallInteger => "i16",
-			FieldType::TinyInt => "i8",
+			FieldType::SmallInteger | FieldType::TinyInt => "i32",
 			FieldType::MediumInt => "i32",
 			FieldType::Char(_) | FieldType::VarChar(_) | FieldType::Text => "String",
 			FieldType::TinyText | FieldType::MediumText | FieldType::LongText => "String",
@@ -248,6 +249,13 @@ impl TypeMapper {
 			FieldType::DateRange => "(NaiveDate, NaiveDate)",
 			FieldType::TsRange => "(NaiveDateTime, NaiveDateTime)",
 			FieldType::TsTzRange => "(DateTime<Utc>, DateTime<Utc>)",
+			FieldType::Custom(name) if name == "u8" || name == "u16" => "i32",
+			FieldType::Custom(name) if name == "u32" => "i64",
+			FieldType::Custom(name) if name == "u64" => {
+				return Err(TypeMappingError::UnsupportedType(
+					"MySQL BIGINT UNSIGNED exceeds the supported signed integer binding range; configure a type override".to_string(),
+				));
+			}
 			FieldType::Custom(name) => name.as_str(),
 			FieldType::ManyToMany { .. } => {
 				return Err(TypeMappingError::UnsupportedType("ManyToMany".to_string()));
@@ -347,7 +355,12 @@ mod tests {
 		assert_eq!(result.unwrap(), "i32");
 
 		let result = mapper.field_type_to_rust_string(&FieldType::SmallInteger, false, false);
-		assert_eq!(result.unwrap(), "i16");
+		assert_eq!(result.unwrap(), "i32");
+
+		let error = mapper
+			.field_type_to_rust(&FieldType::Custom("u64".to_string()))
+			.expect_err("BIGINT UNSIGNED must not be represented as lossless u64");
+		assert!(error.to_string().contains("BIGINT UNSIGNED"));
 	}
 
 	#[test]

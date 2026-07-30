@@ -332,7 +332,11 @@ pub async fn inspect_database(
 	}
 
 	let mut selected = HashMap::with_capacity(options.tables.len());
+	let mut requested = HashSet::with_capacity(options.tables.len());
 	for table_name in &options.tables {
+		if !requested.insert(table_name) {
+			continue;
+		}
 		let table = schema.tables.remove(table_name).ok_or_else(|| {
 			MigrationError::IntrospectionError(format!("Requested table not found: {table_name}"))
 		})?;
@@ -2130,8 +2134,12 @@ impl SQLiteIntrospector {
 			.await
 			.map_err(|e| MigrationError::IntrospectionError(e.to_string()))?;
 
-		// Check AUTOINCREMENT by inspecting CREATE TABLE SQL
+		// Check whether the table opts out of SQLite's rowid storage.
 		let create_sql = Self::get_create_table_sql(&self.pool, table_name).await?;
+		let without_rowid = create_sql
+			.as_ref()
+			.map(|sql| sql.to_uppercase().contains("WITHOUT ROWID"))
+			.unwrap_or(false);
 		let has_autoincrement = create_sql
 			.as_ref()
 			.map(|sql| sql.to_uppercase().contains("AUTOINCREMENT"))
@@ -2151,8 +2159,13 @@ impl SQLiteIntrospector {
 		for row in &rows {
 			let is_pk = row.pk > 0;
 
-			// AUTOINCREMENT only applies to INTEGER PRIMARY KEY columns
-			let is_auto = is_pk && has_autoincrement;
+			// An INTEGER PRIMARY KEY aliases SQLite's rowid even without the
+			// AUTOINCREMENT keyword. AUTOINCREMENT only changes rowid reuse.
+			let is_rowid_alias = primary_key.len() == 1
+				&& row.pk == 1
+				&& row.r#type.trim().eq_ignore_ascii_case("INTEGER")
+				&& !without_rowid;
+			let is_auto = is_pk && (has_autoincrement || is_rowid_alias);
 
 			// Primary key columns are implicitly NOT NULL in SQLite
 			let nullable = if is_pk { false } else { row.notnull == 0 };
@@ -2866,6 +2879,26 @@ mod tests {
 		assert_eq!(name_col.name, "name");
 		assert_eq!(name_col.column_type, FieldType::Text);
 		assert!(!name_col.nullable);
+	}
+
+	#[cfg(feature = "sqlite")]
+	#[tokio::test]
+	async fn sqlite_integer_primary_key_without_autoincrement_is_generated() {
+		use sqlx::SqlitePool;
+
+		let pool = SqlitePool::connect("sqlite::memory:")
+			.await
+			.expect("in-memory SQLite pool should connect");
+		sqlx::query("CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT NOT NULL)")
+			.execute(&pool)
+			.await
+			.expect("test table should be created");
+
+		let schema = SQLiteIntrospector::new(pool)
+			.read_schema()
+			.await
+			.expect("schema should be introspected");
+		assert!(schema.tables["users"].columns["id"].auto_increment);
 	}
 
 	#[cfg(feature = "sqlite")]

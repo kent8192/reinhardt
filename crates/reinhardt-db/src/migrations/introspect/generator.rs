@@ -89,6 +89,19 @@ impl SchemaCodeGenerator {
 			return Ok(output);
 		}
 
+		let mut names = HashSet::with_capacity(tables.len());
+		for table in &tables {
+			let struct_name = table_to_struct_name(
+				&table.name,
+				self.config.generation.struct_naming_convention(),
+			);
+			if !names.insert(struct_name.clone()) {
+				return Err(MigrationError::IntrospectionError(format!(
+					"Multiple tables normalize to the generated model name `{struct_name}`"
+				)));
+			}
+		}
+
 		// Build a map of table name -> struct name for FK resolution
 		let table_to_struct: HashMap<String, String> = tables
 			.iter()
@@ -655,6 +668,28 @@ mod tests {
 				.to_string()
 				.contains("normalize to the same Rust field name")
 		);
+	}
+
+	#[test]
+	fn generate_rejects_normalized_model_name_collisions() {
+		let config = IntrospectConfig::default().with_app_label("test");
+		let generator = SchemaCodeGenerator::new(config);
+		let mut hyphenated = create_test_table();
+		hyphenated.name = "user-profile".to_string();
+		let mut underscored = create_test_table();
+		underscored.name = "user_profile".to_string();
+		let schema = DatabaseSchema {
+			tables: [
+				("user-profile".to_string(), hyphenated),
+				("user_profile".to_string(), underscored),
+			]
+			.into(),
+		};
+
+		let error = generator
+			.generate(&schema)
+			.expect_err("colliding generated model names must be rejected");
+		assert!(error.to_string().contains("generated model name"));
 	}
 
 	#[test]

@@ -137,7 +137,9 @@ pub(crate) fn validate_select_for_backend(
 	statement: &SelectStatement,
 	backend: &'static str,
 ) -> Result<(), QueryBuildError> {
-	if backend != "PostgreSQL" && matches!(statement.distinct, Some(SelectDistinct::DistinctOn(_)))
+	if backend != "PostgreSQL"
+		&& matches!(statement.distinct, Some(SelectDistinct::DistinctOn(_)))
+		&& backend != "CockroachDB"
 	{
 		return Err(QueryBuildError::UnsupportedBackendFeature {
 			feature: "DISTINCT ON",
@@ -154,6 +156,9 @@ pub(crate) fn validate_select_for_backend(
 		validate_table_ref(table, backend)?;
 	}
 	for join in &statement.join {
+		if backend == "MySQL" && matches!(join.join, crate::types::JoinType::FullOuterJoin) {
+			return Err(unsupported("FULL OUTER JOIN", backend));
+		}
 		validate_table_ref(&join.table, backend)?;
 		if let Some(crate::types::JoinOn::Condition(condition)) = &join.on {
 			validate_condition(condition, backend)?;
@@ -339,7 +344,6 @@ fn validate_postgres_column_type_dimensions(
 	}
 }
 
-#[cfg(feature = "pgvector")]
 fn unsupported(feature: &'static str, backend: &'static str) -> QueryBuildError {
 	QueryBuildError::UnsupportedBackendFeature { feature, backend }
 }
@@ -519,6 +523,13 @@ fn validate_order_expr(order: &OrderExpr, backend: &'static str) -> Result<(), Q
 }
 
 fn validate_window(window: &WindowStatement, backend: &'static str) -> Result<(), QueryBuildError> {
+	if backend == "MySQL"
+		&& matches!(
+			window.frame.as_ref().map(|frame| &frame.frame_type),
+			Some(crate::types::FrameType::Groups)
+		) {
+		return Err(unsupported("GROUPS window frames", backend));
+	}
 	for partition in &window.partition_by {
 		validate_simple_expr(partition, backend)?;
 	}

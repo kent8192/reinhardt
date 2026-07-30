@@ -297,6 +297,7 @@ mod tests {
 	use crate::{
 		expr::{Expr, ExprTrait},
 		query::Query,
+		types::{Frame, FrameClause, FrameType, WindowStatement},
 	};
 
 	fn filtered_select() -> SelectStatement {
@@ -381,6 +382,68 @@ mod tests {
 				feature: "DISTINCT ON",
 				backend: "MySQL",
 			}
+		);
+	}
+
+	#[test]
+	fn cockroachdb_explain_permits_distinct_on() {
+		let mut select = Query::select();
+		select.column("id").from("users").distinct_on(["id"]);
+		let statement = ExplainStatement::new(select.to_owned(), ExplainOptions::default());
+
+		assert_eq!(
+			statement.build_cockroachdb_checked(),
+			Ok((
+				"EXPLAIN SELECT DISTINCT ON (\"id\") \"id\" FROM \"users\"".to_string(),
+				Values::default(),
+			))
+		);
+	}
+
+	#[test]
+	fn mysql_explain_rejects_groups_window_frames_before_rendering() {
+		let mut select = filtered_select();
+		select.window_as(
+			"ranked",
+			WindowStatement {
+				partition_by: Vec::new(),
+				order_by: Vec::new(),
+				frame: Some(FrameClause {
+					frame_type: FrameType::Groups,
+					start: Frame::CurrentRow,
+					end: None,
+				}),
+			},
+		);
+		let statement = ExplainStatement::new(select, ExplainOptions::default());
+
+		assert_eq!(
+			statement.build_mysql_checked(),
+			Err(QueryBuildError::UnsupportedBackendFeature {
+				feature: "GROUPS window frames",
+				backend: "MySQL",
+			})
+		);
+	}
+
+	#[test]
+	fn mysql_explain_rejects_full_outer_joins_before_rendering() {
+		let select = Query::select()
+			.column(("users", "id"))
+			.from("users")
+			.full_outer_join(
+				"accounts",
+				Expr::col(("users", "account_id")).equals(("accounts", "id")),
+			)
+			.to_owned();
+		let statement = ExplainStatement::new(select, ExplainOptions::default());
+
+		assert_eq!(
+			statement.build_mysql_checked(),
+			Err(QueryBuildError::UnsupportedBackendFeature {
+				feature: "FULL OUTER JOIN",
+				backend: "MySQL",
+			})
 		);
 	}
 

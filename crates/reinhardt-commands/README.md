@@ -127,11 +127,38 @@ its transitive cross-application dependencies. `sqlmigrate APP MIGRATION`
 accepts an exact name or unique prefix and renders through the same SQL planner
 used by migration execution. Pass `--backwards` for rollback SQL.
 
+```bash
+# List every migration, or only polls plus its transitive dependencies.
+cargo run --bin manage -- showmigrations
+cargo run --bin manage -- showmigrations polls --list
+
+# Display execution order and render forward or rollback SQL.
+cargo run --bin manage -- showmigrations polls --plan
+cargo run --bin manage -- sqlmigrate polls 0002
+cargo run --bin manage -- sqlmigrate polls 0002 --backwards
+```
+
+`--list` (`-l`) and `--plan` (`-p`) are mutually exclusive; list mode is the
+default. At verbosity level two, applied entries include their recorded
+timestamps. Prefix matching is scoped to the selected application and must
+identify exactly one migration. An ambiguous or unknown prefix is rejected
+before output.
+
 Both commands accept `--database ALIAS` and a one-off `--database-url URL`.
-They load and validate the complete migration catalog before output.
-`showmigrations` reads an existing recorder table without creating it, while
-`sqlmigrate` performs no schema or migration-history writes. SQL output is
-fully buffered before its single stdout write.
+The alias selects a configured database; a URL override replaces that alias's
+connection URL for the invocation without changing settings. Diagnostics name
+the alias but redact URL credentials. Both commands load and validate the
+complete migration catalog before output. `showmigrations` reads an existing
+recorder table without creating it, while `sqlmigrate` performs no schema or
+migration-history writes. SQL output is fully buffered before its single
+stdout write, so an irreversible rollback or late planning error emits no
+partial script.
+
+Rendered SQL follows the selected backend. PostgreSQL uses double-quoted
+identifiers and transactional DDL wrappers, MySQL uses backticks and omits
+transaction wrappers for DDL, and SQLite uses its table-recreation sequence
+when an alteration cannot be expressed directly. Informational data-operation
+comments remain comments and are never executed.
 
 ### Pages template hot reload
 

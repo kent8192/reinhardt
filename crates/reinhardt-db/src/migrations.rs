@@ -67,11 +67,24 @@
 //! consumes this same plan and keeps table-existence checks as execution policy.
 //! SQLite recreation planning may read schema metadata through the supplied
 //! connection, but it does not execute DDL.
+//! [`MigrationSqlPlan::render`] preserves statement order and emits
+//! backend-specific SQL: PostgreSQL uses transactional DDL wrappers, MySQL
+//! omits those wrappers, and SQLite includes the full temporary-table copy,
+//! drop, and rename sequence when recreation is required. Rendering is
+//! complete and uncolored, so callers can buffer the whole script before
+//! publishing it.
 //! Backward inspection of destructive operations must use
 //! [`plan_migration_sql_with_states`] with
 //! [`MigrationCatalog::state_before`] and [`MigrationCatalog::state_after`].
 //! Both states are required because a post-migration state cannot retain a
 //! dropped table or legacy dropped-column definition.
+//!
+//! [`MigrationCatalog::snapshot`] reads existing recorder state without
+//! creating the recorder table. An absent backend-specific recorder relation
+//! is an empty applied set; permission, query, and type errors remain errors.
+//! Filtering by application retains transitive cross-application dependencies
+//! in topological order and preserves applied timestamps in the immutable
+//! snapshot.
 //!
 //! ### Generated Entry Point Example
 //!

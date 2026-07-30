@@ -53,13 +53,29 @@
 //! `showmigrations` reads one immutable catalog and recorder snapshot, then
 //! displays either application-grouped `[X]` / `[ ]` state or the selected
 //! dependency order. It treats an absent recorder table as an empty applied
-//! set and never creates migration history.
+//! set and never creates migration history. `--list` / `-l` and `--plan` /
+//! `-p` are mutually exclusive, list mode is the default, and verbosity level
+//! two includes recorded timestamps. Application filtering retains transitive
+//! cross-application dependencies.
 //!
 //! `sqlmigrate APP MIGRATION` accepts an exact name or unique prefix and uses
 //! the SQL planner shared with migration execution. `--backwards` reconstructs
 //! both sides of the migration before rendering rollback SQL. The complete
 //! uncolored script is buffered before one stdout write; no schema or history
-//! statement is executed.
+//! statement is executed. An irreversible rollback or late planning error
+//! therefore emits no partial script.
+//!
+//! Both commands accept `--database ALIAS`; `--database-url URL` supplies a
+//! one-invocation override without modifying configured settings. Diagnostics
+//! identify the alias and redact URL credentials. PostgreSQL output uses
+//! transactional DDL wrappers, MySQL omits them, and SQLite emits table
+//! recreation SQL when the requested alteration requires it.
+//!
+//! ```text
+//! manage showmigrations polls --plan --database default
+//! manage sqlmigrate polls 0002 --database default
+//! manage sqlmigrate polls 0002 --backwards --database default
+//! ```
 //!
 //! ## Example
 //!

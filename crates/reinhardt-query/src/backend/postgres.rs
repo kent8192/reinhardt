@@ -4917,6 +4917,21 @@ mod tests {
 	}
 
 	#[test]
+	fn checked_select_rejects_row_locking_with_window_projection() {
+		let builder = PostgresQueryBuilder::new();
+		let mut statement = Query::select();
+		statement
+			.expr(Expr::row_number().over(crate::types::WindowStatement::default()))
+			.from("accounts")
+			.lock(LockType::Update);
+
+		let error = builder
+			.build_select_checked(&statement)
+			.expect_err("PostgreSQL must reject row locking on window queries");
+		assert!(error.to_string().contains("window-function"));
+	}
+
+	#[test]
 	fn checked_select_rejects_lock_targets_on_nullable_outer_join_sides() {
 		let builder = PostgresQueryBuilder::new();
 		let mut statement = Query::select();
@@ -4933,6 +4948,29 @@ mod tests {
 			.build_select_checked(&statement)
 			.expect_err("PostgreSQL must reject locks on nullable outer-join sides");
 		assert!(error.to_string().contains("nullable outer-join"));
+	}
+
+	#[test]
+	fn checked_select_rejects_targetless_locking_across_outer_joins() {
+		let builder = PostgresQueryBuilder::new();
+		let mut statement = Query::select();
+		statement
+			.column(("parents", "id"))
+			.from("parents")
+			.left_join(
+				"children",
+				Expr::col(("parents", "id")).equals(("children", "parent_id")),
+			)
+			.lock(LockType::Update);
+
+		let error = builder
+			.build_select_checked(&statement)
+			.expect_err("PostgreSQL must reject targetless locks across outer joins");
+		assert!(
+			error
+				.to_string()
+				.contains("outer joins without explicit targets")
+		);
 	}
 
 	#[test]

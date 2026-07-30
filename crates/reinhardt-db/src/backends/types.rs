@@ -764,6 +764,18 @@ impl RowLockCapabilities {
 		}
 	}
 
+	/// Capabilities for a MariaDB server with the supplied semantic version.
+	pub const fn mariadb_for_version(major: u16, minor: u16, _patch: u16) -> Self {
+		let version = major * 100 + minor;
+		Self {
+			update: true,
+			no_key_update: false,
+			nowait: version >= 1003,
+			skip_locked: version >= 1006,
+			targets: false,
+		}
+	}
+
 	/// Capabilities for PostgreSQL 9.5 and newer.
 	pub const fn postgres() -> Self {
 		Self::postgres_for_version(9, 5)

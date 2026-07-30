@@ -1550,6 +1550,7 @@ where
 		if let Some(condition) = self.build_where_condition()? {
 			stmt.cond_where(condition);
 		}
+		self.apply_grouping_and_having(&mut stmt);
 		self.apply_ordering(&mut stmt);
 		if let Some(limit) = self.limit {
 			stmt.limit(limit as u64);
@@ -1559,6 +1560,49 @@ where
 		}
 		self.apply_select_for_update(&mut stmt);
 		Ok(stmt.to_owned())
+	}
+
+	fn apply_grouping_and_having(&self, stmt: &mut SelectStatement) {
+		for group_field in &self.group_by_fields {
+			stmt.group_by_col(self.root_column_reference(group_field));
+		}
+
+		for having_cond in &self.having_conditions {
+			let HavingCondition::AggregateCompare {
+				func,
+				field,
+				operator,
+				value,
+			} = having_cond;
+			let aggregate = self.having_aggregate_expr(func, field);
+			let expression = match operator {
+				ComparisonOp::Eq => match value {
+					AggregateValue::Int(value) => aggregate.eq(*value),
+					AggregateValue::Float(value) => aggregate.eq(*value),
+				},
+				ComparisonOp::Ne => match value {
+					AggregateValue::Int(value) => aggregate.ne(*value),
+					AggregateValue::Float(value) => aggregate.ne(*value),
+				},
+				ComparisonOp::Gt => match value {
+					AggregateValue::Int(value) => aggregate.gt(*value),
+					AggregateValue::Float(value) => aggregate.gt(*value),
+				},
+				ComparisonOp::Gte => match value {
+					AggregateValue::Int(value) => aggregate.gte(*value),
+					AggregateValue::Float(value) => aggregate.gte(*value),
+				},
+				ComparisonOp::Lt => match value {
+					AggregateValue::Int(value) => aggregate.lt(*value),
+					AggregateValue::Float(value) => aggregate.lt(*value),
+				},
+				ComparisonOp::Lte => match value {
+					AggregateValue::Int(value) => aggregate.lte(*value),
+					AggregateValue::Float(value) => aggregate.lte(*value),
+				},
+			};
+			stmt.and_having(expression);
+		}
 	}
 
 	fn apply_select_for_update(&self, stmt: &mut SelectStatement) {
@@ -5769,55 +5813,7 @@ where
 			stmt.cond_where(cond);
 		}
 
-		// Apply GROUP BY
-		for group_field in &self.group_by_fields {
-			let col_ref = self.root_column_reference(group_field);
-			stmt.group_by_col(col_ref);
-		}
-
-		// Apply HAVING
-		for having_cond in &self.having_conditions {
-			match having_cond {
-				HavingCondition::AggregateCompare {
-					func,
-					field,
-					operator,
-					value,
-				} => {
-					let agg_expr = self.having_aggregate_expr(func, field);
-
-					// Build comparison expression
-					let having_expr = match operator {
-						ComparisonOp::Eq => match value {
-							AggregateValue::Int(v) => agg_expr.eq(*v),
-							AggregateValue::Float(v) => agg_expr.eq(*v),
-						},
-						ComparisonOp::Ne => match value {
-							AggregateValue::Int(v) => agg_expr.ne(*v),
-							AggregateValue::Float(v) => agg_expr.ne(*v),
-						},
-						ComparisonOp::Gt => match value {
-							AggregateValue::Int(v) => agg_expr.gt(*v),
-							AggregateValue::Float(v) => agg_expr.gt(*v),
-						},
-						ComparisonOp::Gte => match value {
-							AggregateValue::Int(v) => agg_expr.gte(*v),
-							AggregateValue::Float(v) => agg_expr.gte(*v),
-						},
-						ComparisonOp::Lt => match value {
-							AggregateValue::Int(v) => agg_expr.lt(*v),
-							AggregateValue::Float(v) => agg_expr.lt(*v),
-						},
-						ComparisonOp::Lte => match value {
-							AggregateValue::Int(v) => agg_expr.lte(*v),
-							AggregateValue::Float(v) => agg_expr.lte(*v),
-						},
-					};
-
-					stmt.and_having(having_expr);
-				}
-			}
-		}
+		self.apply_grouping_and_having(&mut stmt);
 
 		self.apply_ordering(&mut stmt);
 

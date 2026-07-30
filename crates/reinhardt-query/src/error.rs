@@ -245,6 +245,30 @@ fn validate_select_lock_for_backend_with_union_context(
 				) {
 				return Err(unsupported("row locking with aggregate queries", backend));
 			}
+			if statement
+				.selects
+				.iter()
+				.any(|select| contains_window(&select.expr))
+				|| statement.orders.iter().any(
+					|order| matches!(&order.expr, OrderExprKind::Expr(expr) if contains_window(expr)),
+				) {
+				return Err(unsupported(
+					"row locking with window-function queries",
+					backend,
+				));
+			}
+			if lock.tables.is_empty()
+				&& statement.join.iter().any(|join| {
+					matches!(
+						join.join,
+						JoinType::LeftJoin | JoinType::RightJoin | JoinType::FullOuterJoin
+					)
+				}) {
+				return Err(unsupported(
+					"row locking across outer joins without explicit targets",
+					backend,
+				));
+			}
 			validate_lock_tables_belong_to_statement(statement, lock.tables.as_slice(), backend)?;
 			validate_lock_tables_are_not_nullable(statement, lock.tables.as_slice(), backend)?;
 			Ok(())
@@ -308,6 +332,36 @@ fn contains_aggregate(expr: &SimpleExpr) -> bool {
 				)
 		}
 		SimpleExpr::WindowNamed { func, .. } => contains_aggregate(func),
+		SimpleExpr::Column(_)
+		| SimpleExpr::TableColumn(_, _)
+		| SimpleExpr::Value(_)
+		| SimpleExpr::Custom(_)
+		| SimpleExpr::Constant(_)
+		| SimpleExpr::Asterisk
+		| SimpleExpr::SubQuery(_, _) => false,
+	}
+}
+
+fn contains_window(expr: &SimpleExpr) -> bool {
+	match expr {
+		SimpleExpr::Window { .. } | SimpleExpr::WindowNamed { .. } => true,
+		SimpleExpr::Unary(_, expression)
+		| SimpleExpr::AsEnum(_, expression)
+		| SimpleExpr::ExprAlias(expression, _)
+		| SimpleExpr::Cast(expression, _) => contains_window(expression),
+		SimpleExpr::Binary(left, _, right) => contains_window(left) || contains_window(right),
+		SimpleExpr::FunctionCall(_, arguments)
+		| SimpleExpr::Tuple(arguments)
+		| SimpleExpr::CustomWithExpr(_, arguments) => arguments.iter().any(contains_window),
+		SimpleExpr::Case(case) => {
+			case.when_clauses
+				.iter()
+				.any(|(condition, result)| contains_window(condition) || contains_window(result))
+				|| case
+					.else_clause
+					.as_ref()
+					.is_some_and(|result| contains_window(result))
+		}
 		SimpleExpr::Column(_)
 		| SimpleExpr::TableColumn(_, _)
 		| SimpleExpr::Value(_)
@@ -557,7 +611,7 @@ pub(crate) fn validate_insert_for_backend(
 	}
 	if let Some(expressions) = &statement.returning_exprs {
 		for expression in expressions {
-			validate_simple_expr(expression, backend)?;
+			validate_simple_expr_lock(expression, backend)?;
 		}
 	}
 	Ok(())

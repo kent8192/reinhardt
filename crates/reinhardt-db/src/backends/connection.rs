@@ -57,10 +57,17 @@ fn postgres_row_lock_capabilities(
 }
 
 fn mysql_row_lock_capabilities(version: Option<&str>) -> RowLockCapabilities {
-	version
-		.and_then(parse_server_version)
-		.map(|(major, minor, patch)| RowLockCapabilities::mysql_for_version(major, minor, patch))
-		.unwrap_or_else(RowLockCapabilities::mysql)
+	let Some(version) = version else {
+		return RowLockCapabilities::mysql();
+	};
+	let Some((major, minor, patch)) = parse_server_version(version) else {
+		return RowLockCapabilities::mysql();
+	};
+	if version.to_ascii_lowercase().contains("mariadb") {
+		RowLockCapabilities::mariadb_for_version(major, minor, patch)
+	} else {
+		RowLockCapabilities::mysql_for_version(major, minor, patch)
+	}
 }
 
 #[cfg(feature = "sqlite")]
@@ -1160,6 +1167,15 @@ mod tests {
 		assert!(mysql_801.nowait);
 		assert!(mysql_801.skip_locked);
 		assert!(mysql_801.targets);
+
+		let mariadb_105 = super::mysql_row_lock_capabilities(Some("10.5.23-MariaDB"));
+		assert!(mariadb_105.nowait);
+		assert!(!mariadb_105.skip_locked);
+		assert!(!mariadb_105.targets);
+
+		let mariadb_106 = super::mysql_row_lock_capabilities(Some("10.6.18-MariaDB"));
+		assert!(mariadb_106.skip_locked);
+		assert!(!mariadb_106.targets);
 	}
 
 	/// Helper to build a CREATE DATABASE SQL statement with proper identifier escaping.

@@ -945,6 +945,123 @@ async fn sqlite_parent_table_rename_updates_lazily_loaded_child_foreign_key() {
 }
 
 #[tokio::test]
+async fn sqlite_parent_table_rename_rejects_lazily_loaded_child_trigger() {
+	let connection = sqlite_connection().await;
+	connection
+		.execute(
+			"CREATE TABLE \"parents\" (\"id\" INTEGER PRIMARY KEY)",
+			vec![],
+		)
+		.await
+		.unwrap();
+	connection
+		.execute(
+			"CREATE TABLE \"children\" (\"id\" INTEGER PRIMARY KEY, \"parent_id\" INTEGER, \"obsolete\" TEXT)",
+			vec![],
+		)
+		.await
+		.unwrap();
+	connection
+		.execute(
+			"CREATE TRIGGER \"children_touch_parent\" AFTER INSERT ON \"children\" BEGIN UPDATE \"parents\" SET \"id\" = \"id\" WHERE \"id\" = NEW.\"parent_id\"; END",
+			vec![],
+		)
+		.await
+		.unwrap();
+	let mut migration = Migration::new("0018_external_trigger", "catalog");
+	migration.operations = vec![
+		Operation::RenameTable {
+			old_name: "parents".to_string(),
+			new_name: "guardians".to_string(),
+		},
+		Operation::DropColumn {
+			table: "children".to_string(),
+			column: "obsolete".to_string(),
+			old_definition: Some(ColumnDefinition::new("obsolete", FieldType::Text)),
+		},
+	];
+
+	let error = plan_migration_sql(
+		&connection,
+		&migration,
+		&ProjectState::new(),
+		MigrationDirection::Forward,
+	)
+	.await
+	.unwrap_err();
+
+	assert!(matches!(error, MigrationError::InvalidMigration(_)));
+	assert!(
+		error
+			.to_string()
+			.contains("raw trigger references renamed SQLite identifier 'parents'"),
+		"{error}"
+	);
+}
+
+#[tokio::test]
+async fn sqlite_parent_table_rename_ignores_unrelated_trigger_identifier() {
+	let connection = sqlite_connection().await;
+	connection
+		.execute(
+			"CREATE TABLE \"parents\" (\"id\" INTEGER PRIMARY KEY)",
+			vec![],
+		)
+		.await
+		.unwrap();
+	connection
+		.execute(
+			"CREATE TABLE \"parents_archive\" (\"id\" INTEGER PRIMARY KEY)",
+			vec![],
+		)
+		.await
+		.unwrap();
+	connection
+		.execute(
+			"CREATE TABLE \"children\" (\"id\" INTEGER PRIMARY KEY, \"parent_id\" INTEGER, \"obsolete\" TEXT)",
+			vec![],
+		)
+		.await
+		.unwrap();
+	connection
+		.execute(
+			"CREATE TRIGGER \"children_archive_parent\" AFTER INSERT ON \"children\" BEGIN UPDATE \"parents_archive\" SET \"id\" = \"id\" WHERE \"id\" = NEW.\"parent_id\"; END",
+			vec![],
+		)
+		.await
+		.unwrap();
+	let mut migration = Migration::new("0019_unrelated_external_trigger", "catalog");
+	migration.operations = vec![
+		Operation::RenameTable {
+			old_name: "parents".to_string(),
+			new_name: "guardians".to_string(),
+		},
+		Operation::DropColumn {
+			table: "children".to_string(),
+			column: "obsolete".to_string(),
+			old_definition: Some(ColumnDefinition::new("obsolete", FieldType::Text)),
+		},
+	];
+
+	let plan = plan_migration_sql(
+		&connection,
+		&migration,
+		&ProjectState::new(),
+		MigrationDirection::Forward,
+	)
+	.await
+	.unwrap();
+
+	assert!(
+		sql(&plan.statements)
+			.last()
+			.is_some_and(|statement| statement.contains("\"parents_archive\"")),
+		"{:?}",
+		plan.statements
+	);
+}
+
+#[tokio::test]
 async fn sqlite_parent_column_rename_updates_lazily_loaded_child_foreign_key() {
 	let connection = sqlite_connection().await;
 	connection

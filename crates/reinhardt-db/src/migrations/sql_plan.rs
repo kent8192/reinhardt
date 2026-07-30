@@ -459,10 +459,159 @@ enum SqliteRenameTransform {
 }
 
 #[cfg(feature = "sqlite")]
+fn sqlite_sql_mentions_identifier(sql: &str, identifier: &str) -> bool {
+	let mut chars = sql.char_indices().peekable();
+	while let Some((start, ch)) = chars.next() {
+		match ch {
+			'\'' => {
+				let mut quoted_token = String::new();
+				while let Some((_, quoted)) = chars.next() {
+					if quoted == '\'' {
+						if chars.peek().is_some_and(|(_, escaped)| *escaped == '\'') {
+							chars.next();
+							quoted_token.push('\'');
+						} else {
+							break;
+						}
+					} else {
+						quoted_token.push(quoted);
+					}
+				}
+				if quoted_token.eq_ignore_ascii_case(identifier) {
+					return true;
+				}
+			}
+			'-' if chars.peek().is_some_and(|(_, next)| *next == '-') => {
+				chars.next();
+				for (_, comment) in chars.by_ref() {
+					if comment == '\n' {
+						break;
+					}
+				}
+			}
+			'/' if chars.peek().is_some_and(|(_, next)| *next == '*') => {
+				chars.next();
+				while let Some((_, comment)) = chars.next() {
+					if comment == '*' && chars.peek().is_some_and(|(_, next)| *next == '/') {
+						chars.next();
+						break;
+					}
+				}
+			}
+			'"' | '`' => {
+				let quote = ch;
+				let mut quoted_identifier = String::new();
+				while let Some((_, quoted)) = chars.next() {
+					if quoted == quote {
+						if chars.peek().is_some_and(|(_, escaped)| *escaped == quote) {
+							chars.next();
+							quoted_identifier.push(quote);
+						} else {
+							break;
+						}
+					} else {
+						quoted_identifier.push(quoted);
+					}
+				}
+				if quoted_identifier.eq_ignore_ascii_case(identifier) {
+					return true;
+				}
+			}
+			'[' => {
+				let mut quoted_identifier = String::new();
+				while let Some((_, quoted)) = chars.next() {
+					if quoted == ']' {
+						if chars.peek().is_some_and(|(_, escaped)| *escaped == ']') {
+							chars.next();
+							quoted_identifier.push(']');
+						} else {
+							break;
+						}
+					} else {
+						quoted_identifier.push(quoted);
+					}
+				}
+				if quoted_identifier.eq_ignore_ascii_case(identifier) {
+					return true;
+				}
+			}
+			ch if ch == '_' || ch.is_alphabetic() || !ch.is_ascii() => {
+				let mut end = start + ch.len_utf8();
+				while let Some(&(_, next)) = chars.peek() {
+					if next == '_' || next == '$' || next.is_alphanumeric() || !next.is_ascii() {
+						end += next.len_utf8();
+						chars.next();
+					} else {
+						break;
+					}
+				}
+				if sql[start..end].eq_ignore_ascii_case(identifier) {
+					return true;
+				}
+			}
+			_ => {}
+		}
+	}
+	false
+}
+
+#[cfg(feature = "sqlite")]
+fn sqlite_raw_sql_references_transform(sql: &str, transform: &SqliteRenameTransform) -> bool {
+	match transform {
+		SqliteRenameTransform::Table { old_name, .. } => {
+			sqlite_sql_mentions_identifier(sql, old_name)
+		}
+		SqliteRenameTransform::Column {
+			table, old_name, ..
+		} => {
+			sqlite_sql_mentions_identifier(sql, table)
+				&& sqlite_sql_mentions_identifier(sql, old_name)
+		}
+	}
+}
+
+#[cfg(feature = "sqlite")]
+fn sqlite_reject_raw_metadata_for_transform(
+	schema: &SqliteTableRecreation,
+	transform: &SqliteRenameTransform,
+) -> Result<()> {
+	let renamed_identifier = match transform {
+		SqliteRenameTransform::Table { old_name, .. } => old_name.clone(),
+		SqliteRenameTransform::Column {
+			table, old_name, ..
+		} => format!("{table}.{old_name}"),
+	};
+	let raw_constraint_references_transform = schema
+		.raw_constraint_sqls
+		.iter()
+		.any(|sql| sqlite_raw_sql_references_transform(sql, transform))
+		|| schema
+			.raw_constraints
+			.iter()
+			.any(|constraint| sqlite_raw_sql_references_transform(&constraint.sql, transform));
+	if raw_constraint_references_transform {
+		return Err(MigrationError::InvalidMigration(format!(
+			"raw constraint references renamed SQLite identifier '{renamed_identifier}'"
+		)));
+	}
+	if schema
+		.triggers
+		.iter()
+		.any(|trigger| sqlite_raw_sql_references_transform(trigger, transform))
+	{
+		return Err(MigrationError::InvalidMigration(format!(
+			"raw trigger references renamed SQLite identifier '{renamed_identifier}'"
+		)));
+	}
+	Ok(())
+}
+
+#[cfg(feature = "sqlite")]
 fn sqlite_apply_rename_transform(
 	schema: &mut SqliteTableRecreation,
 	transform: &SqliteRenameTransform,
-) {
+) -> Result<()> {
+	sqlite_reject_raw_metadata_for_transform(schema, transform)?;
 	for constraint in &mut schema.constraints {
 		match (constraint, transform) {
 			(
@@ -538,6 +687,7 @@ fn sqlite_apply_rename_transform(
 			_ => {}
 		}
 	}
+	Ok(())
 }
 
 #[cfg(feature = "sqlite")]
@@ -545,11 +695,12 @@ fn sqlite_record_rename_transform(
 	schemas: &mut HashMap<String, Option<SqliteTableRecreation>>,
 	transforms: &mut Vec<SqliteRenameTransform>,
 	transform: SqliteRenameTransform,
-) {
+) -> Result<()> {
 	for schema in schemas.values_mut().filter_map(Option::as_mut) {
-		sqlite_apply_rename_transform(schema, &transform);
+		sqlite_apply_rename_transform(schema, &transform)?;
 	}
 	transforms.push(transform);
+	Ok(())
 }
 
 #[cfg(feature = "sqlite")]
@@ -567,7 +718,7 @@ async fn sqlite_load_virtual_schema(
 			DatabaseMigrationExecutor::read_sqlite_table_via_editor(editor, table).await?;
 		let mut schema = sqlite_virtual_from_metadata(table, metadata);
 		for transform in transforms {
-			sqlite_apply_rename_transform(&mut schema, transform);
+			sqlite_apply_rename_transform(&mut schema, transform)?;
 		}
 		Some(schema)
 	} else {
@@ -788,8 +939,8 @@ async fn sqlite_advance_virtual_schema(
 				old_name: old_name.clone(),
 				new_name: new_name.clone(),
 			};
-			sqlite_apply_rename_transform(&mut schema, &transform);
-			sqlite_record_rename_transform(schemas, transforms, transform);
+			sqlite_apply_rename_transform(&mut schema, &transform)?;
+			sqlite_record_rename_transform(schemas, transforms, transform)?;
 			for index in &mut schema.indexes {
 				index.sql = None;
 			}
@@ -846,7 +997,7 @@ async fn sqlite_advance_virtual_schema(
 					old_name: old_name.clone(),
 					new_name: new_name.clone(),
 				},
-			);
+			)?;
 			schemas.insert(table.clone(), Some(schema));
 		}
 		Operation::AddDiscriminatorColumn {
@@ -1669,5 +1820,38 @@ mod tests {
 			None,
 			Some("custom_ops"),
 		));
+	}
+
+	#[test]
+	fn sqlite_stored_column_rename_rejects_raw_constraint_reference() {
+		let mut schema = SqliteTableRecreation::for_drop_column(
+			"children",
+			vec![
+				ColumnDefinition::new("id", FieldType::Integer),
+				ColumnDefinition::new("obsolete", FieldType::Text),
+			],
+			"obsolete",
+			Vec::new(),
+		)
+		.with_raw_constraints(vec![
+			super::super::operations::SqliteRecreatedConstraint {
+				name: Some("children_parent_fk".to_string()),
+				physical_name: None,
+				columns: vec!["parent_code".to_string()],
+				sql: "CONSTRAINT \"children_parent_fk\" FOREIGN KEY (\"parent_code\") REFERENCES \"parents\" (\"code\")".to_string(),
+			},
+		]);
+		let transform = SqliteRenameTransform::Column {
+			table: "parents".to_string(),
+			old_name: "code".to_string(),
+			new_name: "slug".to_string(),
+		};
+
+		let error = sqlite_apply_rename_transform(&mut schema, &transform).unwrap_err();
+
+		assert_eq!(
+			error.to_string(),
+			"Invalid migration: raw constraint references renamed SQLite identifier 'parents.code'"
+		);
 	}
 }

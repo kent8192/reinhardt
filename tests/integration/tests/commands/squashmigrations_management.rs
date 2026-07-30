@@ -61,6 +61,48 @@ fn write_migration(repository: &FilesystemRepository, migration: &Migration) {
 		.expect("migration fixture should be created");
 }
 
+fn cargo_check_generated_module(source: &Path) {
+	let crate_dir = TempDir::new().expect("temporary verification crate should be created");
+	let source_dir = crate_dir.path().join("src");
+	fs::create_dir(&source_dir).expect("verification source directory should be created");
+	fs::copy(source, source_dir.join("generated.rs"))
+		.expect("generated migration should be copied into verification crate");
+	fs::write(source_dir.join("lib.rs"), "mod generated;\n")
+		.expect("verification crate module should be written");
+	let framework_crate = Path::new(env!("CARGO_MANIFEST_DIR"))
+		.join("../..")
+		.canonicalize()
+		.expect("reinhardt framework path should be canonical");
+	let framework_crate = framework_crate.to_string_lossy().replace('\\', "\\\\");
+	fs::write(
+		crate_dir.path().join("Cargo.toml"),
+		format!(
+			r#"[package]
+name = "squashed-migration-check"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+reinhardt = {{ package = "reinhardt-web", path = "{framework_crate}", default-features = false, features = ["database"] }}
+"#
+		),
+	)
+	.expect("verification manifest should be written");
+
+	let output = Command::new(env!("CARGO"))
+		.args(["check", "--quiet"])
+		.current_dir(crate_dir.path())
+		.output()
+		.expect("cargo check should execute for generated migration");
+	assert!(
+		output.status.success(),
+		"generated migration module should compile\nstdout: {}\nstderr: {}",
+		String::from_utf8_lossy(&output.stdout),
+		String::from_utf8_lossy(&output.stderr)
+	);
+}
+
 fn create_linear_project() -> TempDir {
 	let project = TempDir::new().expect("temporary project should be created");
 	let repository = FilesystemRepository::new(project.path().join("migrations"));
@@ -101,7 +143,7 @@ fn create_linear_project() -> TempDir {
 	remove_temporary_column.operations = vec![Operation::DropColumn {
 		table: "entries".to_string(),
 		column: "temporary_note".to_string(),
-		old_definition: None,
+		old_definition: Some(ColumnDefinition::new("temporary_note", FieldType::Text)),
 	}];
 
 	for migration in [
@@ -154,6 +196,7 @@ async fn cli_dispatch_generates_parseable_squash_with_exact_semantics() {
 	let generated_source =
 		fs::read_to_string(&generated_path).expect("generated source should be readable");
 	syn::parse_file(&generated_source).expect("generated source should be valid Rust syntax");
+	cargo_check_generated_module(&generated_path);
 	let generated = loaded_migration(project.path(), "0001_release").await;
 	assert_eq!(
 		generated.dependencies,
@@ -190,7 +233,7 @@ async fn cli_dispatch_generates_parseable_squash_with_exact_semantics() {
 			Operation::DropColumn {
 				table: "entries".to_string(),
 				column: "temporary_note".to_string(),
-				old_definition: None,
+				old_definition: Some(ColumnDefinition::new("temporary_note", FieldType::Text,)),
 			},
 		]
 	);
@@ -247,7 +290,7 @@ async fn no_optimize_and_no_header_preserve_every_operation_without_a_prompt() {
 			Operation::DropColumn {
 				table: "entries".to_string(),
 				column: "temporary_note".to_string(),
-				old_definition: None,
+				old_definition: Some(ColumnDefinition::new("temporary_note", FieldType::Text,)),
 			},
 		]
 	);

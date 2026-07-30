@@ -1782,7 +1782,11 @@ mod tests {
 						::reinhardt_pages::event::EventName::Custom(::std::borrow::Cow::Borrowed(
 							"item-loaded",
 						)),
-						::reinhardt_pages::callback::typed_async_custom_event_handler::<crate::Selected, _, _>(
+						::reinhardt_pages::callback::typed_async_custom_event_handler::<
+							crate::Selected,
+							_,
+							_,
+						>(
 							|event: ::reinhardt_pages::event::CustomEvent<crate::Selected>| async move {
 								let _ = event;
 							},

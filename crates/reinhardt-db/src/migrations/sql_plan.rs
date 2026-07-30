@@ -445,10 +445,119 @@ fn sqlite_virtual_from_metadata(
 }
 
 #[cfg(feature = "sqlite")]
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum SqliteRenameTransform {
+	Table {
+		old_name: String,
+		new_name: String,
+	},
+	Column {
+		table: String,
+		old_name: String,
+		new_name: String,
+	},
+}
+
+#[cfg(feature = "sqlite")]
+fn sqlite_apply_rename_transform(
+	schema: &mut SqliteTableRecreation,
+	transform: &SqliteRenameTransform,
+) {
+	for constraint in &mut schema.constraints {
+		match (constraint, transform) {
+			(
+				super::Constraint::ForeignKey {
+					referenced_table, ..
+				}
+				| super::Constraint::OneToOne {
+					referenced_table, ..
+				},
+				SqliteRenameTransform::Table { old_name, new_name },
+			) if referenced_table == old_name => referenced_table.clone_from(new_name),
+			(
+				super::Constraint::ManyToMany {
+					through_table,
+					target_table,
+					..
+				},
+				SqliteRenameTransform::Table { old_name, new_name },
+			) => {
+				if through_table == old_name {
+					through_table.clone_from(new_name);
+				}
+				if target_table == old_name {
+					target_table.clone_from(new_name);
+				}
+			}
+			(
+				super::Constraint::ForeignKey {
+					referenced_table,
+					referenced_columns,
+					..
+				},
+				SqliteRenameTransform::Column {
+					table,
+					old_name,
+					new_name,
+				},
+			) if referenced_table == table => {
+				for column in referenced_columns {
+					if column == old_name {
+						column.clone_from(new_name);
+					}
+				}
+			}
+			(
+				super::Constraint::OneToOne {
+					referenced_table,
+					referenced_column,
+					..
+				},
+				SqliteRenameTransform::Column {
+					table,
+					old_name,
+					new_name,
+				},
+			) if referenced_table == table && referenced_column == old_name => {
+				referenced_column.clone_from(new_name);
+			}
+			(
+				super::Constraint::ManyToMany {
+					target_table,
+					target_column,
+					..
+				},
+				SqliteRenameTransform::Column {
+					table,
+					old_name,
+					new_name,
+				},
+			) if target_table == table && target_column == old_name => {
+				target_column.clone_from(new_name);
+			}
+			_ => {}
+		}
+	}
+}
+
+#[cfg(feature = "sqlite")]
+fn sqlite_record_rename_transform(
+	schemas: &mut HashMap<String, Option<SqliteTableRecreation>>,
+	transforms: &mut Vec<SqliteRenameTransform>,
+	transform: SqliteRenameTransform,
+) {
+	for schema in schemas.values_mut().filter_map(Option::as_mut) {
+		sqlite_apply_rename_transform(schema, &transform);
+	}
+	transforms.push(transform);
+}
+
+#[cfg(feature = "sqlite")]
 async fn sqlite_load_virtual_schema(
 	editor: &mut SchemaEditor,
 	table: &str,
 	schemas: &mut HashMap<String, Option<SqliteTableRecreation>>,
+	transforms: &[SqliteRenameTransform],
 ) -> Result<Option<SqliteTableRecreation>> {
 	if let Some(schema) = schemas.get(table) {
 		return Ok(schema.clone());
@@ -456,7 +565,11 @@ async fn sqlite_load_virtual_schema(
 	let schema = if editor.table_exists(table).await? {
 		let metadata =
 			DatabaseMigrationExecutor::read_sqlite_table_via_editor(editor, table).await?;
-		Some(sqlite_virtual_from_metadata(table, metadata))
+		let mut schema = sqlite_virtual_from_metadata(table, metadata);
+		for transform in transforms {
+			sqlite_apply_rename_transform(&mut schema, transform);
+		}
+		Some(schema)
 	} else {
 		None
 	};
@@ -527,50 +640,49 @@ fn sqlite_rename_typed_constraint_column(
 }
 
 #[cfg(feature = "sqlite")]
-fn sqlite_rename_typed_constraint_table(
-	constraint: &mut super::Constraint,
-	old_name: &str,
-	new_name: &str,
-) {
-	let rename = |table: &mut String| {
-		if table == old_name {
-			new_name.clone_into(table);
-		}
-	};
-	match constraint {
-		super::Constraint::ForeignKey {
-			referenced_table, ..
-		}
-		| super::Constraint::OneToOne {
-			referenced_table, ..
-		} => rename(referenced_table),
-		super::Constraint::ManyToMany {
-			through_table,
-			target_table,
-			..
-		} => {
-			rename(through_table);
-			rename(target_table);
-		}
-		super::Constraint::PrimaryKey { .. }
-		| super::Constraint::Unique { .. }
-		| super::Constraint::Check { .. }
-		| super::Constraint::EnumDomain { .. }
-		| super::Constraint::Exclude { .. } => {}
-	}
+fn sqlite_quote_identifier(identifier: &str) -> String {
+	format!("\"{}\"", identifier.replace('"', "\"\""))
 }
 
 #[cfg(feature = "sqlite")]
-fn sqlite_index_requires_raw_sql(index: &super::operations::SqliteRecreatedIndex) -> bool {
+fn sqlite_index_requires_raw_sql(
+	index: &super::operations::SqliteRecreatedIndex,
+	table: &str,
+) -> bool {
 	let Some(sql) = index.sql.as_deref() else {
 		return false;
 	};
-	let normalized = sql.to_ascii_uppercase();
-	index.columns.is_empty()
-		|| normalized.contains(" WHERE ")
-		|| normalized.contains(" COLLATE ")
-		|| normalized.contains(" ASC")
-		|| normalized.contains(" DESC")
+	if index.columns.is_empty() {
+		return true;
+	}
+	let unique = if index.unique { "UNIQUE " } else { "" };
+	let columns = index
+		.columns
+		.iter()
+		.map(|column| sqlite_quote_identifier(column))
+		.collect::<Vec<_>>()
+		.join(", ");
+	let canonical = format!(
+		"CREATE {unique}INDEX {} ON {} ({columns})",
+		sqlite_quote_identifier(&index.name),
+		sqlite_quote_identifier(table),
+	);
+	sql.trim().trim_end_matches(';') != canonical
+}
+
+#[cfg(feature = "sqlite")]
+fn sqlite_typed_index_requires_raw_sql(
+	index_type: Option<super::IndexType>,
+	where_clause: Option<&str>,
+	concurrently: bool,
+	expressions: Option<&[String]>,
+	operator_class: Option<&str>,
+) -> bool {
+	index_type.is_some_and(|index_type| !matches!(index_type, super::IndexType::BTree))
+		|| where_clause.is_some()
+		|| concurrently
+		|| expressions.is_some_and(|expressions| !expressions.is_empty())
+		|| operator_class.is_some()
 }
 
 #[cfg(feature = "sqlite")]
@@ -592,7 +704,11 @@ fn sqlite_reject_unrewritable_rename_metadata(
 			"cannot safely plan SQLite rename for '{target}' with generated column expressions"
 		)));
 	}
-	if schema.indexes.iter().any(sqlite_index_requires_raw_sql) {
+	if schema
+		.indexes
+		.iter()
+		.any(|index| sqlite_index_requires_raw_sql(index, &schema.table_name))
+	{
 		return Err(MigrationError::InvalidMigration(format!(
 			"cannot safely plan SQLite rename for '{target}' with index metadata requiring raw SQL (partial or expression index)"
 		)));
@@ -605,6 +721,7 @@ async fn sqlite_advance_virtual_schema(
 	editor: &mut SchemaEditor,
 	operation: &Operation,
 	schemas: &mut HashMap<String, Option<SqliteTableRecreation>>,
+	transforms: &mut Vec<SqliteRenameTransform>,
 ) -> Result<()> {
 	match operation {
 		Operation::CreateTable {
@@ -614,7 +731,7 @@ async fn sqlite_advance_virtual_schema(
 			without_rowid,
 			..
 		} => {
-			if sqlite_load_virtual_schema(editor, name, schemas)
+			if sqlite_load_virtual_schema(editor, name, schemas, transforms)
 				.await?
 				.is_none()
 			{
@@ -645,7 +762,7 @@ async fn sqlite_advance_virtual_schema(
 			schemas.insert(name.clone(), None);
 		}
 		Operation::AddColumn { table, column, .. } => {
-			let mut schema = sqlite_load_virtual_schema(editor, table, schemas)
+			let mut schema = sqlite_load_virtual_schema(editor, table, schemas, transforms)
 				.await?
 				.ok_or_else(|| {
 					MigrationError::InvalidMigration(format!(
@@ -659,7 +776,7 @@ async fn sqlite_advance_virtual_schema(
 			schemas.insert(table.clone(), Some(schema));
 		}
 		Operation::RenameTable { old_name, new_name } => {
-			let mut schema = sqlite_load_virtual_schema(editor, old_name, schemas)
+			let mut schema = sqlite_load_virtual_schema(editor, old_name, schemas, transforms)
 				.await?
 				.ok_or_else(|| {
 					MigrationError::InvalidMigration(format!(
@@ -667,9 +784,12 @@ async fn sqlite_advance_virtual_schema(
 					))
 				})?;
 			sqlite_reject_unrewritable_rename_metadata(&schema, old_name)?;
-			for constraint in &mut schema.constraints {
-				sqlite_rename_typed_constraint_table(constraint, old_name, new_name);
-			}
+			let transform = SqliteRenameTransform::Table {
+				old_name: old_name.clone(),
+				new_name: new_name.clone(),
+			};
+			sqlite_apply_rename_transform(&mut schema, &transform);
+			sqlite_record_rename_transform(schemas, transforms, transform);
 			for index in &mut schema.indexes {
 				index.sql = None;
 			}
@@ -682,7 +802,7 @@ async fn sqlite_advance_virtual_schema(
 			old_name,
 			new_name,
 		} => {
-			let mut schema = sqlite_load_virtual_schema(editor, table, schemas)
+			let mut schema = sqlite_load_virtual_schema(editor, table, schemas, transforms)
 				.await?
 				.ok_or_else(|| {
 					MigrationError::InvalidMigration(format!(
@@ -718,6 +838,15 @@ async fn sqlite_advance_virtual_schema(
 					index.sql = None;
 				}
 			}
+			sqlite_record_rename_transform(
+				schemas,
+				transforms,
+				SqliteRenameTransform::Column {
+					table: table.clone(),
+					old_name: old_name.clone(),
+					new_name: new_name.clone(),
+				},
+			);
 			schemas.insert(table.clone(), Some(schema));
 		}
 		Operation::AddDiscriminatorColumn {
@@ -725,7 +854,7 @@ async fn sqlite_advance_virtual_schema(
 			column_name,
 			default_value,
 		} => {
-			let mut schema = sqlite_load_virtual_schema(editor, table, schemas)
+			let mut schema = sqlite_load_virtual_schema(editor, table, schemas, transforms)
 				.await?
 				.ok_or_else(|| {
 					MigrationError::InvalidMigration(format!(
@@ -745,7 +874,7 @@ async fn sqlite_advance_virtual_schema(
 			base_table,
 			join_column,
 		} => {
-			if sqlite_load_virtual_schema(editor, name, schemas)
+			if sqlite_load_virtual_schema(editor, name, schemas, transforms)
 				.await?
 				.is_none()
 			{
@@ -801,16 +930,23 @@ async fn sqlite_advance_virtual_schema(
 				old_name: old_name.clone(),
 				new_name: new_name.clone(),
 			};
-			Box::pin(sqlite_advance_virtual_schema(editor, &rename, schemas)).await?;
+			Box::pin(sqlite_advance_virtual_schema(
+				editor, &rename, schemas, transforms,
+			))
+			.await?;
 		}
 		Operation::CreateIndex {
 			table,
 			columns,
 			unique,
+			index_type,
+			where_clause,
+			concurrently,
 			expressions,
+			operator_class,
 			..
 		} => {
-			let mut schema = sqlite_load_virtual_schema(editor, table, schemas)
+			let mut schema = sqlite_load_virtual_schema(editor, table, schemas, transforms)
 				.await?
 				.ok_or_else(|| {
 					MigrationError::InvalidMigration(format!(
@@ -822,13 +958,22 @@ async fn sqlite_advance_virtual_schema(
 			} else {
 				columns.join("_")
 			};
+			let sql = sqlite_typed_index_requires_raw_sql(
+				*index_type,
+				where_clause.as_deref(),
+				*concurrently,
+				expressions.as_deref(),
+				operator_class.as_deref(),
+			)
+			.then(|| operation.try_to_sql(&SqlDialect::Sqlite))
+			.transpose()?;
 			schema
 				.indexes
 				.push(super::operations::SqliteRecreatedIndex {
 					name: format!("idx_{table}_{suffix}"),
 					columns: columns.clone(),
 					unique: *unique,
-					sql: Some(operation.try_to_sql(&SqlDialect::Sqlite)?),
+					sql,
 				});
 			schemas.insert(table.clone(), Some(schema));
 		}
@@ -856,7 +1001,7 @@ async fn sqlite_advance_virtual_schema(
 			mysql_options,
 			operator_class,
 		} => {
-			let mut schema = sqlite_load_virtual_schema(editor, table, schemas)
+			let mut schema = sqlite_load_virtual_schema(editor, table, schemas, transforms)
 				.await?
 				.ok_or_else(|| {
 					MigrationError::InvalidMigration(format!(
@@ -880,6 +1025,15 @@ async fn sqlite_advance_virtual_schema(
 				mysql_options: *mysql_options,
 				operator_class: operator_class.clone(),
 			};
+			let sql = sqlite_typed_index_requires_raw_sql(
+				*index_type,
+				where_clause.as_deref(),
+				*concurrently,
+				expressions.as_deref(),
+				operator_class.as_deref(),
+			)
+			.then(|| executable.try_to_sql(&SqlDialect::Sqlite))
+			.transpose()?;
 			schema
 				.indexes
 				.push(super::operations::SqliteRecreatedIndex {
@@ -888,7 +1042,7 @@ async fn sqlite_advance_virtual_schema(
 						.unwrap_or_else(|| format!("idx_{table}_{suffix}")),
 					columns: columns.clone(),
 					unique: *unique,
-					sql: Some(executable.try_to_sql(&SqlDialect::Sqlite)?),
+					sql,
 				});
 			schemas.insert(table.clone(), Some(schema));
 		}
@@ -898,27 +1052,41 @@ async fn sqlite_advance_virtual_schema(
 			name,
 			columns,
 			unique,
+			index_type,
+			where_clause,
+			concurrently,
+			expressions,
+			operator_class,
 			..
 		} => {
-			let mut schema = sqlite_load_virtual_schema(editor, table, schemas)
+			let mut schema = sqlite_load_virtual_schema(editor, table, schemas, transforms)
 				.await?
 				.ok_or_else(|| {
 					MigrationError::InvalidMigration(format!(
 						"cannot plan SQLite CreateNamedIndex for missing table '{table}'"
 					))
 				})?;
+			let sql = sqlite_typed_index_requires_raw_sql(
+				*index_type,
+				where_clause.as_deref(),
+				*concurrently,
+				expressions.as_deref(),
+				operator_class.as_deref(),
+			)
+			.then(|| operation.try_to_sql(&SqlDialect::Sqlite))
+			.transpose()?;
 			schema
 				.indexes
 				.push(super::operations::SqliteRecreatedIndex {
 					name: name.clone(),
 					columns: columns.clone(),
 					unique: *unique,
-					sql: Some(operation.try_to_sql(&SqlDialect::Sqlite)?),
+					sql,
 				});
 			schemas.insert(table.clone(), Some(schema));
 		}
 		Operation::DropIndex { table, columns } => {
-			let mut schema = sqlite_load_virtual_schema(editor, table, schemas)
+			let mut schema = sqlite_load_virtual_schema(editor, table, schemas, transforms)
 				.await?
 				.ok_or_else(|| {
 					MigrationError::InvalidMigration(format!(
@@ -931,7 +1099,7 @@ async fn sqlite_advance_virtual_schema(
 		}
 		#[cfg(feature = "pgvector")]
 		Operation::DropNamedIndex { table, name, .. } => {
-			let mut schema = sqlite_load_virtual_schema(editor, table, schemas)
+			let mut schema = sqlite_load_virtual_schema(editor, table, schemas, transforms)
 				.await?
 				.ok_or_else(|| {
 					MigrationError::InvalidMigration(format!(
@@ -1173,6 +1341,8 @@ async fn plan_migration_sql_with_irreversible_policy(
 	#[cfg(feature = "sqlite")]
 	let mut sqlite_virtual_schemas = HashMap::<String, Option<SqliteTableRecreation>>::new();
 	#[cfg(feature = "sqlite")]
+	let mut sqlite_rename_transforms = Vec::<SqliteRenameTransform>::new();
+	#[cfg(feature = "sqlite")]
 	let mut sqlite_opaque_operation_seen = None;
 
 	let operations: Vec<&Operation> = match direction {
@@ -1233,15 +1403,22 @@ async fn plan_migration_sql_with_irreversible_policy(
 				.as_ref()
 				.expect("checked reverse operation");
 			let editor = sqlite_editor.as_mut().expect("SQLite planner editor");
-			let (recreation_statements, recreation) = sqlite_recreation_statements(
+			let table = sqlite_recreation_table(operation).ok_or_else(|| {
+				MigrationError::InvalidMigration(format!(
+					"SQLite recreation operation has no table: {:?}",
+					std::mem::discriminant(operation)
+				))
+			})?;
+			sqlite_load_virtual_schema(
 				editor,
-				operation,
-				sqlite_recreation_table(operation)
-					.and_then(|table| sqlite_virtual_schemas.remove(table))
-					.flatten(),
-				&[],
+				table,
+				&mut sqlite_virtual_schemas,
+				&sqlite_rename_transforms,
 			)
 			.await?;
+			let previous = sqlite_virtual_schemas.remove(table).flatten();
+			let (recreation_statements, recreation) =
+				sqlite_recreation_statements(editor, operation, previous, &[]).await?;
 			statements.extend(recreation_statements.into_iter().map(PlannedStatement::Sql));
 			sqlite_virtual_schemas.insert(recreation.table_name.clone(), Some(recreation));
 			planned_operations
@@ -1302,7 +1479,13 @@ async fn plan_migration_sql_with_irreversible_policy(
 		if needs_sqlite_editor && matches!(sqlite_effect, SqliteVirtualEffect::Simulate) {
 			let operation = planned_operation.as_ref().unwrap_or(operation);
 			let editor = sqlite_editor.as_mut().expect("SQLite planner editor");
-			sqlite_advance_virtual_schema(editor, operation, &mut sqlite_virtual_schemas).await?;
+			sqlite_advance_virtual_schema(
+				editor,
+				operation,
+				&mut sqlite_virtual_schemas,
+				&mut sqlite_rename_transforms,
+			)
+			.await?;
 		}
 	}
 
@@ -1432,5 +1615,59 @@ mod tests {
 			sqlite_virtual_effect(&operation, None, MigrationDirection::Backward),
 			SqliteVirtualEffect::Opaque("RunSQL")
 		);
+	}
+
+	#[test]
+	fn sqlite_simple_index_allow_list_requires_canonical_structural_sql() {
+		let canonical = super::super::operations::SqliteRecreatedIndex {
+			name: "idx_books_title".to_string(),
+			columns: vec!["title".to_string()],
+			unique: false,
+			sql: Some("CREATE INDEX \"idx_books_title\" ON \"books\" (\"title\")".to_string()),
+		};
+		let mut multiline_partial = canonical.clone();
+		multiline_partial.sql = Some(
+			"CREATE INDEX \"idx_books_title\" ON \"books\" (\"title\")\nWHERE\t\"title\" IS NOT NULL"
+				.to_string(),
+		);
+		let mut collated = canonical.clone();
+		collated.sql = Some(
+			"CREATE INDEX \"idx_books_title\" ON \"books\" (\"title\" COLLATE NOCASE)".to_string(),
+		);
+		let mut unquoted = canonical.clone();
+		unquoted.sql = Some("CREATE INDEX idx_books_title ON books (title)".to_string());
+		let unique = super::super::operations::SqliteRecreatedIndex {
+			name: "idx_books_title_unique".to_string(),
+			columns: vec!["title".to_string()],
+			unique: true,
+			sql: Some(
+				"CREATE UNIQUE INDEX \"idx_books_title_unique\" ON \"books\" (\"title\")"
+					.to_string(),
+			),
+		};
+		let mut descending = canonical.clone();
+		descending.sql =
+			Some("CREATE INDEX \"idx_books_title\" ON \"books\" (\"title\" DESC)".to_string());
+
+		assert!(!sqlite_index_requires_raw_sql(&canonical, "books"));
+		assert!(!sqlite_index_requires_raw_sql(&unique, "books"));
+		assert!(sqlite_index_requires_raw_sql(&multiline_partial, "books"));
+		assert!(sqlite_index_requires_raw_sql(&collated, "books"));
+		assert!(sqlite_index_requires_raw_sql(&descending, "books"));
+		assert!(sqlite_index_requires_raw_sql(&unquoted, "books"));
+		assert!(sqlite_typed_index_requires_raw_sql(
+			Some(super::super::IndexType::Hash),
+			None,
+			false,
+			None,
+			None,
+		));
+		assert!(sqlite_typed_index_requires_raw_sql(
+			None,
+			None,
+			false,
+			None,
+			Some("custom_ops"),
+		));
 	}
 }

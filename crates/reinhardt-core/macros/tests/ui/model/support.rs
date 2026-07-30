@@ -505,6 +505,10 @@ pub mod db {
 					}
 				}
 
+				pub const unsafe fn from_model_field(name: &'static str) -> Self {
+					Self::new(name)
+				}
+
 				pub const fn name(&self) -> &'static str {
 					self.name
 				}

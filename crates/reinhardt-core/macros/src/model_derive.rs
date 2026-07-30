@@ -3345,7 +3345,9 @@ fn resolve_latest_by_fields(
 					field
 						.is_fk_id_field
 						.then(|| {
-							let relation_name = rust_field_name.trim_end_matches("_id");
+							let relation_name = rust_field_name
+								.strip_suffix("_id")
+								.expect("foreign-key ID fields always end with `_id`");
 							field_infos
 								.iter()
 								.find(|candidate| candidate.name == relation_name)
@@ -9315,6 +9317,31 @@ mod tests {
 			compact
 				.contains("fnlatest_by_fields()->&'static[&'staticstr]{&[\"created_on\",\"id\"]}")
 		);
+	}
+
+	#[test]
+	fn test_get_latest_by_uses_custom_column_for_relationship_named_with_id_suffix() {
+		let input = quote! {
+			#[model(
+				app_label = "events",
+				table_name = "events",
+				get_latest_by = ("user_id_id",)
+			)]
+			pub struct Event {
+				#[field(primary_key = true)]
+				pub id: i64,
+				#[rel(foreign_key, db_column = "user_fk")]
+				pub user_id: db::associations::ForeignKeyField<User>,
+				#[serde(default)]
+				user_id_id: <User as reinhardt::model_info::InfoModel>::PrimaryKey,
+			}
+		};
+
+		let output = model_derive_impl(syn::parse2(input).unwrap())
+			.expect("get_latest_by fields should resolve");
+		let compact = output.to_string().replace(' ', "");
+
+		assert!(compact.contains("fnlatest_by_fields()->&'static[&'staticstr]{&[\"user_fk\"]}"));
 	}
 
 	#[test]

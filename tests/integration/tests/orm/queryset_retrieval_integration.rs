@@ -21,7 +21,7 @@ struct RetrievalEvent {
 	id: Option<i64>,
 	created_at: i64,
 	#[field(max_length = 64, unique = true)]
-	slug: String,
+	slug: Option<String>,
 }
 
 async fn assert_retrieval_contract(url: &str) {
@@ -79,6 +79,23 @@ async fn assert_retrieval_contract(url: &str) {
 		.await
 		.expect("primary-key bulk retrieval should load");
 	assert_eq!(by_id.keys().copied().collect::<Vec<_>>(), vec![1, 3]);
+	let values_by_id = queryset
+		.clone()
+		.values(&["created_at", "slug"])
+		.in_bulk_with_db(&mut connection, [3_i64, 1])
+		.await
+		.expect("primary-key bulk retrieval should retain an omitted lookup column");
+	assert_eq!(values_by_id.keys().copied().collect::<Vec<_>>(), vec![1, 3]);
+	let deferred_by_id = queryset
+		.clone()
+		.defer(&["id"])
+		.in_bulk_with_db(&mut connection, [3_i64, 1])
+		.await
+		.expect("primary-key bulk retrieval should retain a deferred lookup column");
+	assert_eq!(
+		deferred_by_id.keys().copied().collect::<Vec<_>>(),
+		vec![1, 3]
+	);
 	let by_slug = queryset
 		.in_bulk_by_with_db(
 			&mut connection,
@@ -94,6 +111,20 @@ async fn assert_retrieval_contract(url: &str) {
 		.expect("unique-field bulk retrieval should load");
 	assert_eq!(
 		by_slug.keys().cloned().collect::<Vec<_>>(),
+		vec!["first".to_string(), "third".to_string()]
+	);
+	let only_by_slug = queryset
+		.clone()
+		.only(&["id", "created_at"])
+		.in_bulk_by_with_db(
+			&mut connection,
+			RetrievalEvent::unique_slug(),
+			["third".to_string(), "first".to_string()],
+		)
+		.await
+		.expect("unique-field bulk retrieval should retain an omitted lookup column");
+	assert_eq!(
+		only_by_slug.keys().cloned().collect::<Vec<_>>(),
 		vec!["first".to_string(), "third".to_string()]
 	);
 	assert_eq!(

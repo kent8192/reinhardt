@@ -1,3 +1,4 @@
+// The model macro emits native-only cfgs evaluated in this standalone trybuild crate.
 #![allow(unexpected_cfgs)]
 //! Fail case: virtual relationship fields cannot prove SQL ordering validity.
 

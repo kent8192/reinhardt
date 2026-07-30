@@ -1,3 +1,4 @@
+// The model macro emits native-only cfgs evaluated in this standalone trybuild crate.
 #![allow(unexpected_cfgs)]
 //! Fail case: ordering fields from distinct models cannot be combined.
 

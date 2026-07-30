@@ -6279,7 +6279,32 @@ where
 		Ok(values.len())
 	}
 
+	fn with_bulk_lookup_column(mut self, column: &str) -> Self {
+		if let Some(fields) = &mut self.selected_fields {
+			if !fields
+				.iter()
+				.any(|field| Self::projection_includes_column(field, column))
+			{
+				fields.push(column.to_string());
+			}
+		} else {
+			self.deferred_fields
+				.retain(|field| !Self::projection_includes_column(field, column));
+		}
+		self
+	}
+
+	fn projection_includes_column(field: &str, column: &str) -> bool {
+		field == column
+			|| field
+				.rsplit_once('.')
+				.is_some_and(|(_, field_name)| field_name == column)
+	}
+
 	/// Fetch rows by primary key and return them in deterministic key order.
+	///
+	/// When the queryset uses a field projection, the primary-key column is
+	/// selected automatically so every returned model can be indexed.
 	pub async fn in_bulk<I>(
 		&self,
 		keys: I,
@@ -6438,6 +6463,7 @@ where
 		for keys in Self::bulk_key_batches(keys, conn.backend(), reserved_binds) {
 			let rows = self
 				.clone()
+				.with_bulk_lookup_column(T::primary_key_column())
 				.filter(field.is_in(keys))
 				.all_with_db(conn)
 				.await?;
@@ -6470,6 +6496,7 @@ where
 			.is_in(keys);
 			let rows = self
 				.clone()
+				.with_bulk_lookup_column(T::primary_key_column())
 				.filter(filter)
 				.all_with_executor(executor)
 				.await?;
@@ -6498,6 +6525,7 @@ where
 		for keys in Self::bulk_key_batches(keys, conn.backend(), reserved_binds) {
 			let rows = self
 				.clone()
+				.with_bulk_lookup_column(unique_field.name())
 				.filter(unique_field.is_in(keys))
 				.all_with_db(conn)
 				.await?;
@@ -6526,6 +6554,7 @@ where
 		for keys in Self::bulk_key_batches(keys, backend, reserved_binds) {
 			let rows = self
 				.clone()
+				.with_bulk_lookup_column(unique_field.name())
 				.filter(unique_field.is_in(keys))
 				.all_with_executor(executor)
 				.await?;

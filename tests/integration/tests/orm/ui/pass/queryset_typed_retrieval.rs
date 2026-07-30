@@ -1,3 +1,4 @@
+// The model macro emits native-only cfgs evaluated in this standalone trybuild crate.
 #![allow(unexpected_cfgs)]
 //! Pass case: typed retrieval metadata preserves model identity and unique keys.
 

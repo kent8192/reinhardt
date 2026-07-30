@@ -1,3 +1,4 @@
+// The model macro emits native-only cfgs evaluated in this standalone trybuild crate.
 #![allow(unexpected_cfgs)]
 //! Fail case: in-bulk retrieval accepts only metadata-proven unique fields.
 

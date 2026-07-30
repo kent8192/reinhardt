@@ -10,5 +10,6 @@ fn queryset_docs_example_compile_pass() {
 	t.compile_fail("tests/orm/ui/fail/model_enum_string_filter.rs");
 	t.compile_fail("tests/orm/ui/fail/model_enum_integer_filter.rs");
 	t.compile_fail("tests/orm/ui/fail/queryset_latest_cross_model_field.rs");
+	t.compile_fail("tests/orm/ui/fail/queryset_relationship_ordering.rs");
 	t.compile_fail("tests/orm/ui/fail/queryset_in_bulk_non_unique_field.rs");
 }

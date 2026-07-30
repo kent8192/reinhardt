@@ -265,14 +265,6 @@ impl<M, T> FieldRef<M, T> {
 		self.name
 	}
 
-	/// Convert this field reference into a type-safe ordering field.
-	pub const fn ordering(&self) -> OrderingField<M> {
-		OrderingField {
-			name: self.name,
-			_phantom: PhantomData,
-		}
-	}
-
 	/// Create a partial-update assignment for this field.
 	///
 	/// # Examples
@@ -921,6 +913,20 @@ impl<M, T> FieldRef<M, T> {
 			FilterOperator::Lte,
 			FilterValue::FieldRef(F::new(other.name)),
 		)
+	}
+}
+
+impl<M, T: DatabaseField> FieldRef<M, T> {
+	/// Convert this persisted scalar field reference into a type-safe ordering field.
+	///
+	/// Relationship fields are virtual model properties and cannot appear in an
+	/// SQL `ORDER BY` clause. Their generated `FieldRef` accessors therefore do
+	/// not satisfy this scalar-field bound.
+	pub const fn ordering(&self) -> OrderingField<M> {
+		OrderingField {
+			name: self.name,
+			_phantom: PhantomData,
+		}
 	}
 }
 

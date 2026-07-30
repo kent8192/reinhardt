@@ -7,10 +7,10 @@ use super::naming::{column_to_field_name, sanitize_identifier, table_to_struct_n
 use super::type_mapping::TypeMapper;
 use crate::migrations::introspection::{ColumnInfo, DatabaseSchema, TableInfo};
 use crate::migrations::{GeneratedColumnDefinition, GeneratedStorage, MigrationError, Result};
-use chrono::Utc;
 use proc_macro2::TokenStream;
 use quote::{format_ident, quote};
 use std::collections::HashMap;
+use std::collections::HashSet;
 use std::path::PathBuf;
 
 /// Generated output containing all model files.
@@ -89,14 +89,27 @@ impl SchemaCodeGenerator {
 			return Ok(output);
 		}
 
+		let mut names = HashSet::with_capacity(tables.len());
+		for table in &tables {
+			let struct_name = sanitize_identifier(&table_to_struct_name(
+				&table.name,
+				self.config.generation.struct_naming_convention(),
+			));
+			if !names.insert(struct_name.clone()) {
+				return Err(MigrationError::IntrospectionError(format!(
+					"Multiple tables normalize to the generated model name `{struct_name}`"
+				)));
+			}
+		}
+
 		// Build a map of table name -> struct name for FK resolution
 		let table_to_struct: HashMap<String, String> = tables
 			.iter()
 			.map(|t| {
-				let struct_name = table_to_struct_name(
+				let struct_name = sanitize_identifier(&table_to_struct_name(
 					&t.name,
 					self.config.generation.struct_naming_convention(),
-				);
+				));
 				(t.name.clone(), struct_name)
 			})
 			.collect();
@@ -107,15 +120,15 @@ impl SchemaCodeGenerator {
 			let file = self.generate_single_file(&tables, &table_to_struct, schema)?;
 			output.add_file(file);
 		} else {
-			// Generate one file per table
+			// Generate one file per table beneath the Rust 2024 module directory.
 			for table in &tables {
 				let file = self.generate_model_file(table, &table_to_struct, schema)?;
 				output.add_file(file);
 			}
 
-			// Generate mod.rs file
-			let mod_file = self.generate_mod_file(&tables)?;
-			output.add_file(mod_file);
+			// Generate the sibling module entry point.
+			let module_file = self.generate_module_file(&tables)?;
+			output.add_file(module_file);
 		}
 
 		Ok(output)
@@ -163,11 +176,13 @@ impl SchemaCodeGenerator {
 	) -> Result<GeneratedFile> {
 		let header = self.generate_header();
 		let imports = self.generate_imports();
+		let relationship_imports = self.generate_relationship_imports(table, table_to_struct);
 		let model = self.generate_model(table, table_to_struct, schema)?;
 
 		let tokens = quote! {
 			#header
 			#imports
+			#relationship_imports
 
 			#model
 		};
@@ -175,25 +190,51 @@ impl SchemaCodeGenerator {
 		let content = self.format_tokens(tokens)?;
 
 		// Use snake_case for file names
-		let file_name = format!("{}.rs", super::naming::to_snake_case(&table.name));
-		let path = self.config.output.directory.join(file_name);
+		let file_name = format!("{}.rs", module_file_stem(&table.name));
+		let path = self.config.output.directory.join("models").join(file_name);
 
 		Ok(GeneratedFile::new(path, content))
 	}
 
-	/// Generate the mod.rs file that re-exports all models.
-	fn generate_mod_file(&self, tables: &[&TableInfo]) -> Result<GeneratedFile> {
+	fn generate_relationship_imports(
+		&self,
+		table: &TableInfo,
+		table_to_struct: &HashMap<String, String>,
+	) -> TokenStream {
+		if self.config.output.single_file || !self.config.generation.detect_relationships {
+			return TokenStream::new();
+		}
+		let current_module = module_file_stem(&table.name);
+		let mut imported_tables = HashSet::new();
+		let imports: Vec<_> = table
+			.foreign_keys
+			.iter()
+			.filter_map(|foreign_key| {
+				let target = table_to_struct.get(&foreign_key.referenced_table)?;
+				let module = module_file_stem(&foreign_key.referenced_table);
+				(module != current_module && imported_tables.insert(module.clone())).then(|| {
+					let module = format_ident!("{}", module);
+					let target = format_ident!("{}", target);
+					quote! { use super::#module::#target; }
+				})
+			})
+			.collect();
+		quote! { #(#imports)* }
+	}
+
+	/// Generate `models.rs`, which declares and re-exports all model modules.
+	fn generate_module_file(&self, tables: &[&TableInfo]) -> Result<GeneratedFile> {
 		let mut module_names = Vec::new();
 		let mut struct_names = Vec::new();
 
 		for table in tables {
-			let snake_name = super::naming::to_snake_case(&table.name);
-			let struct_name = table_to_struct_name(
+			let module_name = module_file_stem(&table.name);
+			let struct_name = sanitize_identifier(&table_to_struct_name(
 				&table.name,
 				self.config.generation.struct_naming_convention(),
-			);
+			));
 
-			let module_ident = format_ident!("{}", sanitize_identifier(&snake_name));
+			let module_ident = format_ident!("{}", module_name);
 			let struct_ident = format_ident!("{}", struct_name);
 
 			module_names.push(module_ident);
@@ -211,34 +252,24 @@ impl SchemaCodeGenerator {
 		};
 
 		let content = self.format_tokens(tokens)?;
-		let path = self.config.output.directory.join("mod.rs");
+		let path = self.config.output.directory.join("models.rs");
 
 		Ok(GeneratedFile::new(path, content))
 	}
 
 	/// Generate the file header comment.
 	fn generate_header(&self) -> TokenStream {
-		let timestamp = Utc::now().format("%Y-%m-%dT%H:%M:%SZ").to_string();
-		let db_url = &self.config.database.url;
-
-		// Mask password in URL for display
-		let display_url = mask_password_in_url(db_url);
-
 		// Build header comments as doc attributes
-		let comment1 = "Generated by `reinhardt introspect` - DO NOT EDIT";
-		let comment2 = format!("Source: {}", display_url);
-		let comment3 = format!("Generated at: {}", timestamp);
-		let comment4 = "";
-		let comment5 = "To regenerate, run:";
-		let comment6 = "  cargo run --bin manage introspect";
+		let comment1 = "Generated by `reinhardt inspectdb` - DO NOT EDIT";
+		let comment2 = "";
+		let comment3 = "To regenerate, run:";
+		let comment4 = "  cargo run --bin manage inspectdb";
 
 		quote! {
 			#![doc = #comment1]
 			#![doc = #comment2]
 			#![doc = #comment3]
 			#![doc = #comment4]
-			#![doc = #comment5]
-			#![doc = #comment6]
 		}
 	}
 
@@ -268,16 +299,26 @@ impl SchemaCodeGenerator {
 	fn generate_model(
 		&self,
 		table: &TableInfo,
-		_table_to_struct: &HashMap<String, String>,
+		table_to_struct: &HashMap<String, String>,
 		_schema: &DatabaseSchema,
 	) -> Result<TokenStream> {
-		let struct_name = table_to_struct_name(
+		let struct_name = sanitize_identifier(&table_to_struct_name(
 			&table.name,
 			self.config.generation.struct_naming_convention(),
-		);
+		));
 		let struct_ident = format_ident!("{}", struct_name);
 		let table_name = &table.name;
 		let app_label = &self.config.generation.app_label;
+		for index in table.indexes.values() {
+			if index.columns.len() != 1 {
+				return Err(MigrationError::IntrospectionError(format!(
+					"index `{}` on `{}` has {} columns and cannot be represented by a field attribute",
+					index.name,
+					table.name,
+					index.columns.len()
+				)));
+			}
+		}
 
 		// Generate derives
 		let derives: Vec<TokenStream> = self
@@ -290,10 +331,29 @@ impl SchemaCodeGenerator {
 
 		// Generate fields
 		let mut fields = Vec::new();
-		let columns: Vec<_> = table.columns.values().collect();
+		let mut field_names = HashSet::new();
+		let mut columns: Vec<_> = table.columns.values().collect();
+		columns.sort_by_key(|column| {
+			table
+				.primary_key
+				.iter()
+				.position(|name| name == &column.name)
+				.map(|position| (0, position, String::new()))
+				.unwrap_or_else(|| (1, 0, column.name.clone()))
+		});
 
 		for column in &columns {
-			let field = self.generate_field(table, column)?;
+			let field_name = column_to_field_name(
+				&column.name,
+				self.config.generation.field_naming_convention(),
+			);
+			if !field_names.insert(field_name.clone()) {
+				return Err(MigrationError::IntrospectionError(format!(
+					"Columns in `{}` normalize to the same Rust field name `{field_name}`",
+					table.name
+				)));
+			}
+			let field = self.generate_field(table, column, table_to_struct)?;
 			fields.push(field);
 		}
 
@@ -311,32 +371,64 @@ impl SchemaCodeGenerator {
 	}
 
 	/// Generate a field for a column.
-	fn generate_field(&self, table: &TableInfo, column: &ColumnInfo) -> Result<TokenStream> {
+	fn generate_field(
+		&self,
+		table: &TableInfo,
+		column: &ColumnInfo,
+		table_to_struct: &HashMap<String, String>,
+	) -> Result<TokenStream> {
 		let field_name = column_to_field_name(
 			&column.name,
 			self.config.generation.field_naming_convention(),
 		);
 		let field_ident = format_ident!("{}", field_name);
 
-		let rust_type = self
-			.type_mapper
-			.map_column(&table.name, column)
-			.map_err(|e| {
-				MigrationError::IntrospectionError(format!(
-					"Failed to map type for {}.{}: {}",
-					table.name, column.name, e
-				))
-			})?;
+		let relationship = self
+			.config
+			.generation
+			.detect_relationships
+			.then(|| {
+				table.foreign_keys.iter().find_map(|foreign_key| {
+					if foreign_key.columns.as_slice() == [column.name.as_str()] {
+						table_to_struct.get(&foreign_key.referenced_table)
+					} else {
+						None
+					}
+				})
+			})
+			.flatten();
+		let rust_type = if let Some(target) = relationship {
+			let target_ident = format_ident!("{}", target);
+			quote! { ForeignKeyField<#target_ident> }
+		} else {
+			self.type_mapper
+				.map_column(&table.name, column)
+				.map_err(|e| {
+					MigrationError::IntrospectionError(format!(
+						"Failed to map type for {}.{}: {}",
+						table.name, column.name, e
+					))
+				})?
+		};
 
 		// Generate field attributes
 		let mut attrs = Vec::new();
+		let relationship_attr = relationship.as_ref().map(|_| {
+			let column_name = column.name.as_str();
+			let nullable = column.nullable;
+			quote! { #[rel(foreign_key, db_column = #column_name, null = #nullable)] }
+		});
+		if relationship.is_none() && field_name != column.name {
+			let column_name = column.name.as_str();
+			attrs.push(quote! { db_column = #column_name });
+		}
 
 		// Primary key attribute
 		if table.primary_key.contains(&column.name) {
 			if column.auto_increment {
-				attrs.push(quote! { #[field(primary_key = true, auto_increment = true)] });
+				attrs.push(quote! { primary_key = true, auto_increment = true });
 			} else {
-				attrs.push(quote! { #[field(primary_key = true)] });
+				attrs.push(quote! { primary_key = true, auto_increment = false });
 			}
 		}
 
@@ -344,28 +436,55 @@ impl SchemaCodeGenerator {
 		let is_unique = table
 			.unique_constraints
 			.iter()
-			.any(|c| c.columns.len() == 1 && c.columns.contains(&column.name));
+			.any(|c| c.columns.len() == 1 && c.columns.contains(&column.name))
+			|| table
+				.indexes
+				.values()
+				.any(|index| index.unique && index.columns.as_slice() == [column.name.as_str()]);
 		if is_unique && !table.primary_key.contains(&column.name) {
-			attrs.push(quote! { #[field(unique = true)] });
+			attrs.push(quote! { unique = true });
+		}
+		let is_indexed = table
+			.indexes
+			.values()
+			.any(|index| index.columns.as_slice() == [column.name.as_str()] && !index.unique);
+		if is_indexed {
+			attrs.push(quote! { index = true });
 		}
 
 		// Max length for varchar
 		if let crate::migrations::fields::FieldType::VarChar(len) = &column.column_type {
 			let len = *len;
-			attrs.push(quote! { #[field(max_length = #len)] });
+			attrs.push(quote! { max_length = #len });
+		}
+		if matches!(
+			column.column_type,
+			crate::migrations::fields::FieldType::Char(_)
+				| crate::migrations::fields::FieldType::Text
+				| crate::migrations::fields::FieldType::TinyText
+				| crate::migrations::fields::FieldType::MediumText
+				| crate::migrations::fields::FieldType::LongText
+		) {
+			attrs.push(quote! { field_type = "text" });
 		}
 
 		// Default value
 		if let Some(ref default) = column.default {
 			// Skip auto-generated defaults like NOW() or sequences
 			if !is_auto_default(default) {
-				let default_str = default.as_str();
-				attrs.push(quote! { #[field(default = #default_str)] });
+				let default_expression = render_default_expression(default, &column.column_type)
+					.map_err(|error| {
+						MigrationError::IntrospectionError(format!(
+							"Failed to render default expression for {}.{}: {error}",
+							table.name, column.name
+						))
+					})?;
+				attrs.push(quote! { default = #default_expression });
 			}
 		}
 
 		if let Some(generated) = column.generated.as_ref() {
-			attrs.push(Self::generated_field_attr(generated)?);
+			attrs.push(Self::generated_field_args(generated)?);
 		}
 
 		// Generate doc comment if enabled
@@ -375,15 +494,17 @@ impl SchemaCodeGenerator {
 		} else {
 			None
 		};
+		let field_attr = (!attrs.is_empty()).then(|| quote! { #[field(#(#attrs),*)] });
 
 		Ok(quote! {
 			#doc
-			#(#attrs)*
+			#relationship_attr
+			#field_attr
 			pub #field_ident: #rust_type,
 		})
 	}
 
-	fn generated_field_attr(generated: &GeneratedColumnDefinition) -> Result<TokenStream> {
+	fn generated_field_args(generated: &GeneratedColumnDefinition) -> Result<TokenStream> {
 		let storage_attr = match generated.storage {
 			GeneratedStorage::Stored => quote! { generated_stored = true },
 			GeneratedStorage::Virtual => quote! { generated_virtual = true },
@@ -401,11 +522,11 @@ impl SchemaCodeGenerator {
 					e
 				))
 			})?;
-			return Ok(quote! { #[field(generated = #expr, #storage_attr)] });
+			return Ok(quote! { generated = #expr, #storage_attr });
 		}
 
 		if let Some(raw_sql) = generated.raw_sql.as_deref() {
-			return Ok(quote! { #[field(generated_sql = #raw_sql, #storage_attr)] });
+			return Ok(quote! { generated_sql = #raw_sql, #storage_attr });
 		}
 
 		Err(MigrationError::IntrospectionError(
@@ -423,6 +544,15 @@ impl SchemaCodeGenerator {
 	}
 }
 
+fn module_file_stem(table_name: &str) -> String {
+	let stem = super::naming::to_snake_case(table_name);
+	if stem == "mod" {
+		"mod_model".to_string()
+	} else {
+		sanitize_identifier(&stem)
+	}
+}
+
 /// Check if a default value is auto-generated (e.g., NOW(), sequences).
 fn is_auto_default(default: &str) -> bool {
 	let upper = default.to_uppercase();
@@ -435,29 +565,54 @@ fn is_auto_default(default: &str) -> bool {
 		|| upper.contains("GEN_RANDOM_UUID")
 }
 
-/// Mask password in database URL for display.
-fn mask_password_in_url(url: &str) -> String {
-	// Simple regex-free password masking
-	if let Some(at_pos) = url.find('@')
-		&& let Some(colon_pos) = url[..at_pos].rfind(':')
-		&& let Some(slash_pos) = url[..colon_pos].rfind('/')
-	{
-		let prefix = &url[..slash_pos + 1];
-		let user_end = url[slash_pos + 1..].find(':').map(|p| slash_pos + 1 + p);
-		if let Some(user_end) = user_end {
-			let user = &url[slash_pos + 1..user_end];
-			let suffix = &url[at_pos..];
-			return format!("{}{}:****{}", prefix, user, suffix);
-		}
+fn render_default_expression(
+	default: &str,
+	field_type: &crate::migrations::fields::FieldType,
+) -> Result<TokenStream> {
+	use crate::migrations::fields::FieldType;
+
+	if matches!(field_type, FieldType::Boolean) {
+		return match default.trim() {
+			"0" | "false" | "FALSE" => Ok(quote! { false }),
+			"1" | "true" | "TRUE" => Ok(quote! { true }),
+			value => value
+				.parse::<TokenStream>()
+				.map_err(|error| MigrationError::IntrospectionError(error.to_string())),
+		};
 	}
-	url.to_string()
+
+	if matches!(
+		field_type,
+		FieldType::Char(_)
+			| FieldType::VarChar(_)
+			| FieldType::Text
+			| FieldType::TinyText
+			| FieldType::MediumText
+			| FieldType::LongText
+	) {
+		let value = default.trim();
+		let value = value.split_once("::").map_or(value, |(literal, _)| literal);
+		let unquoted = value
+			.strip_prefix('\'')
+			.and_then(|value| value.strip_suffix('\''))
+			.unwrap_or(value)
+			.replace("''", "'");
+		return Ok(quote! { #unquoted });
+	}
+
+	default
+		.trim()
+		.parse::<TokenStream>()
+		.map_err(|error| MigrationError::IntrospectionError(error.to_string()))
 }
 
 #[cfg(test)]
 mod tests {
 	use super::*;
 	use crate::migrations::fields::FieldType;
-	use crate::migrations::introspection::{ColumnInfo, TableInfo, UniqueConstraintInfo};
+	use crate::migrations::introspection::{
+		ColumnInfo, ForeignKeyInfo, TableInfo, UniqueConstraintInfo,
+	};
 	use crate::migrations::{GeneratedColumnDefinition, GeneratedStorage, SchemaExpr};
 	use std::collections::HashMap;
 
@@ -541,6 +696,238 @@ mod tests {
 	}
 
 	#[test]
+	fn generate_model_emits_typed_literals_for_scalar_defaults() {
+		let config = IntrospectConfig::default().with_app_label("test");
+		let generator = SchemaCodeGenerator::new(config);
+		let mut table = create_test_table();
+		table.columns.insert(
+			"enabled".to_string(),
+			ColumnInfo {
+				name: "enabled".to_string(),
+				column_type: FieldType::Boolean,
+				nullable: false,
+				default: Some("0".to_string()),
+				auto_increment: false,
+				generated: None,
+			},
+		);
+		table.columns.insert(
+			"retries".to_string(),
+			ColumnInfo {
+				name: "retries".to_string(),
+				column_type: FieldType::Integer,
+				nullable: false,
+				default: Some("0".to_string()),
+				auto_increment: false,
+				generated: None,
+			},
+		);
+		let schema = DatabaseSchema {
+			tables: [("users".to_string(), table.clone())].into(),
+		};
+		let code = generator
+			.format_tokens(
+				generator
+					.generate_model(&table, &HashMap::new(), &schema)
+					.expect("model generation should succeed"),
+			)
+			.expect("generated model should format");
+
+		assert!(code.contains("default = false"));
+		assert!(code.contains("default = 0"));
+	}
+
+	#[test]
+	fn generate_model_preserves_primary_key_order_and_text_metadata() {
+		let generator = SchemaCodeGenerator::new(IntrospectConfig::default());
+		let mut table = create_test_table();
+		table.primary_key = vec!["name".to_string(), "id".to_string()];
+		table.columns.insert(
+			"description".to_string(),
+			ColumnInfo {
+				name: "description".to_string(),
+				column_type: FieldType::Text,
+				nullable: false,
+				default: Some("'pending'::character varying".to_string()),
+				auto_increment: false,
+				generated: None,
+			},
+		);
+		let schema = DatabaseSchema {
+			tables: [("users".to_string(), table.clone())].into(),
+		};
+		let code = generator
+			.format_tokens(
+				generator
+					.generate_model(&table, &HashMap::new(), &schema)
+					.expect("model generation should succeed"),
+			)
+			.expect("generated model should format");
+
+		assert!(code.contains("field_type = \"text\""));
+		assert!(code.contains("default = \"pending\""));
+		assert!(
+			code.find("pub name").expect("name field") < code.find("pub id").expect("id field")
+		);
+	}
+
+	#[test]
+	fn generate_model_emits_enabled_foreign_key_relationships() {
+		let generator = SchemaCodeGenerator::new(IntrospectConfig::default());
+		let mut project = create_test_table();
+		project.name = "projects".to_string();
+		let mut job = create_test_table();
+		job.name = "jobs".to_string();
+		job.columns.remove("name");
+		job.columns.insert(
+			"project".to_string(),
+			ColumnInfo {
+				name: "project".to_string(),
+				column_type: FieldType::BigInteger,
+				nullable: false,
+				default: None,
+				auto_increment: false,
+				generated: None,
+			},
+		);
+		job.foreign_keys = vec![ForeignKeyInfo {
+			name: "jobs_project_fk".to_string(),
+			columns: vec!["project".to_string()],
+			referenced_table: "projects".to_string(),
+			referenced_columns: vec!["id".to_string()],
+			on_delete: None,
+			on_update: None,
+		}];
+		let schema = DatabaseSchema {
+			tables: [
+				("projects".to_string(), project),
+				("jobs".to_string(), job.clone()),
+			]
+			.into(),
+		};
+		let code = generator
+			.format_tokens(
+				generator
+					.generate_model(
+						&job,
+						&[("projects".to_string(), "Projects".to_string())].into(),
+						&schema,
+					)
+					.expect("model generation should succeed"),
+			)
+			.expect("generated model should format");
+
+		assert!(code.contains("#[rel(foreign_key, db_column = \"project\", null = false)]"));
+		assert!(code.contains("pub project: ForeignKeyField<Projects>"));
+	}
+
+	#[test]
+	fn generate_model_rejects_normalized_field_name_collisions() {
+		let config = IntrospectConfig::default().with_app_label("test");
+		let generator = SchemaCodeGenerator::new(config);
+		let mut table = create_test_table();
+		table.columns.insert(
+			"display-name".to_string(),
+			ColumnInfo {
+				name: "display-name".to_string(),
+				column_type: FieldType::Text,
+				nullable: false,
+				default: None,
+				auto_increment: false,
+				generated: None,
+			},
+		);
+		table.columns.insert(
+			"display_name".to_string(),
+			ColumnInfo {
+				name: "display_name".to_string(),
+				column_type: FieldType::Text,
+				nullable: false,
+				default: None,
+				auto_increment: false,
+				generated: None,
+			},
+		);
+		let schema = DatabaseSchema {
+			tables: [("users".to_string(), table.clone())].into(),
+		};
+
+		let error = generator
+			.generate_model(&table, &HashMap::new(), &schema)
+			.expect_err("normalized collisions must be rejected");
+		assert!(
+			error
+				.to_string()
+				.contains("normalize to the same Rust field name")
+		);
+	}
+
+	#[test]
+	fn generate_rejects_normalized_model_name_collisions() {
+		let config = IntrospectConfig::default().with_app_label("test");
+		let generator = SchemaCodeGenerator::new(config);
+		let mut hyphenated = create_test_table();
+		hyphenated.name = "user-profile".to_string();
+		let mut underscored = create_test_table();
+		underscored.name = "user_profile".to_string();
+		let schema = DatabaseSchema {
+			tables: [
+				("user-profile".to_string(), hyphenated),
+				("user_profile".to_string(), underscored),
+			]
+			.into(),
+		};
+
+		let error = generator
+			.generate(&schema)
+			.expect_err("colliding generated model names must be rejected");
+		assert!(error.to_string().contains("generated model name"));
+	}
+
+	#[test]
+	fn multi_file_generation_uses_rust_2024_module_layout() {
+		let mut config = IntrospectConfig::default().with_app_label("test");
+		config.output.directory = PathBuf::from("/tmp/reinhardt-inspectdb-layout");
+		let generator = SchemaCodeGenerator::new(config);
+		let table = create_test_table();
+		let schema = DatabaseSchema {
+			tables: [("users".to_string(), table)].into(),
+		};
+
+		let output = generator
+			.generate(&schema)
+			.expect("multi-file generation should succeed");
+		let files: Vec<_> = output
+			.files
+			.iter()
+			.map(|file| file.path.as_path())
+			.collect();
+
+		assert_eq!(
+			files,
+			vec![
+				std::path::Path::new("/tmp/reinhardt-inspectdb-layout/models/users.rs"),
+				std::path::Path::new("/tmp/reinhardt-inspectdb-layout/models.rs"),
+			],
+		);
+		assert!(
+			output
+				.files
+				.iter()
+				.all(|file| file.path.file_name().is_none_or(|name| name != "mod.rs")),
+			"Rust 2024 output must never generate mod.rs",
+		);
+		let module = output
+			.files
+			.iter()
+			.find(|file| file.path.ends_with("models.rs"))
+			.expect("models.rs should be generated");
+		syn::parse_file(&module.content).expect("models.rs should be parseable Rust");
+		assert!(module.content.contains("pub mod users;"));
+		assert!(module.content.contains("pub use users::Users;"));
+	}
+
+	#[test]
 	fn test_generate_model_emits_generated_field_attributes() {
 		let config = IntrospectConfig::default().with_app_label("test");
 		let generator = SchemaCodeGenerator::new(config);
@@ -595,16 +982,37 @@ mod tests {
 	}
 
 	#[test]
-	fn test_mask_password_in_url() {
-		assert_eq!(
-			mask_password_in_url("postgres://user:secret@localhost/db"),
-			"postgres://user:****@localhost/db"
+	fn test_generate_model_combines_renamed_field_metadata() {
+		let config = IntrospectConfig::default().with_app_label("test");
+		let generator = SchemaCodeGenerator::new(config);
+		let mut table = create_test_table();
+		table.columns.insert(
+			"display-name".to_string(),
+			ColumnInfo {
+				name: "display-name".to_string(),
+				column_type: FieldType::VarChar(255),
+				nullable: false,
+				default: None,
+				auto_increment: false,
+				generated: None,
+			},
 		);
+		let table_to_struct: HashMap<String, String> =
+			[("users".to_string(), "Users".to_string())].into();
+		let schema = DatabaseSchema {
+			tables: [("users".to_string(), table.clone())].into(),
+		};
 
-		assert_eq!(
-			mask_password_in_url("postgres://localhost/db"),
-			"postgres://localhost/db"
-		);
+		let tokens = generator
+			.generate_model(&table, &table_to_struct, &schema)
+			.expect("model generation should succeed");
+		let code = generator
+			.format_tokens(tokens)
+			.expect("generated model should format");
+
+		assert!(code.contains(
+			"#[field(db_column = \"display-name\", max_length = 255u32)]\n    pub display_name: String,"
+		));
 	}
 
 	#[test]

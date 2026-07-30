@@ -39,6 +39,40 @@ pub enum PlannedStatement {
 	Comment(String),
 }
 
+impl MigrationSqlPlan {
+	/// Render a complete, uncolored SQL script for a database dialect.
+	///
+	/// Transaction wrappers are emitted only when the migration is atomic and
+	/// the selected backend supports transactional DDL.
+	pub fn render(&self, dialect: SqlDialect) -> String {
+		let transactional_ddl = !matches!(dialect, SqlDialect::Mysql);
+		let wrapped = self.atomic && transactional_ddl;
+		let mut rendered = String::new();
+
+		if wrapped {
+			rendered.push_str("BEGIN;\n");
+		}
+		for statement in &self.statements {
+			match statement {
+				PlannedStatement::Sql(sql) => {
+					rendered.push_str(sql.trim().trim_end_matches(';').trim_end());
+					rendered.push_str(";\n");
+				}
+				PlannedStatement::Comment(comment) => {
+					rendered.push_str("-- ");
+					rendered.push_str(comment.trim());
+					rendered.push('\n');
+				}
+			}
+		}
+		if wrapped {
+			rendered.push_str("COMMIT;\n");
+		}
+
+		rendered
+	}
+}
+
 fn migration_sql_dialect(connection: &DatabaseConnection) -> SqlDialect {
 	if connection.is_cockroachdb() {
 		return SqlDialect::Cockroachdb;

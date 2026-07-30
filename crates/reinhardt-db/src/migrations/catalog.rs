@@ -2,7 +2,7 @@
 
 use super::{
 	DatabaseMigrationRecorder, Migration, MigrationError, MigrationGraph, MigrationKey,
-	MigrationSource, Result,
+	MigrationSource, ProjectState, Result,
 };
 use chrono::{DateTime, Utc};
 use std::collections::{BTreeSet, HashMap, HashSet};
@@ -190,6 +190,22 @@ impl MigrationCatalog {
 		Ok(MigrationSnapshot { ordered, applied })
 	}
 
+	/// Reconstruct the project state immediately before a migration.
+	///
+	/// Only the target migration's transitive dependencies are replayed. This
+	/// excludes unrelated migrations while preserving both sides of a merge.
+	pub fn state_before(&self, key: &MigrationKey) -> Result<ProjectState> {
+		self.reconstruct_state(key, false)
+	}
+
+	/// Reconstruct the project state immediately after a migration.
+	///
+	/// The target migration and all of its transitive dependencies are replayed
+	/// in topological order.
+	pub fn state_after(&self, key: &MigrationKey) -> Result<ProjectState> {
+		self.reconstruct_state(key, true)
+	}
+
 	/// Resolve an exact migration name or an unambiguous name prefix.
 	pub fn resolve_unique_prefix(&self, app: &str, prefix: &str) -> Result<MigrationKey> {
 		let exact = MigrationKey::new(app, prefix);
@@ -351,6 +367,58 @@ impl MigrationCatalog {
 		left.app_label
 			.cmp(&right.app_label)
 			.then_with(|| left.name.cmp(&right.name))
+	}
+
+	fn reconstruct_state(
+		&self,
+		target: &MigrationKey,
+		include_target: bool,
+	) -> Result<ProjectState> {
+		if !self.migrations.contains_key(target) {
+			return Err(MigrationError::NotFound(target.id()));
+		}
+
+		let mut selected = HashSet::new();
+		let mut pending = self
+			.graph
+			.get_dependencies(target)
+			.unwrap_or_default()
+			.to_vec();
+		if include_target {
+			pending.push(target.clone());
+		}
+
+		while let Some(key) = pending.pop() {
+			if !selected.insert(key.clone()) {
+				continue;
+			}
+			pending.extend(
+				self.graph
+					.get_dependencies(&key)
+					.unwrap_or_default()
+					.iter()
+					.cloned(),
+			);
+		}
+
+		let mut state = ProjectState::default();
+		for key in self.graph.topological_sort()? {
+			if !selected.contains(&key) {
+				continue;
+			}
+			let migration = self
+				.migrations
+				.get(&key)
+				.expect("catalog and graph keys must match");
+			if migration.database_only {
+				continue;
+			}
+			for operation in &migration.operations {
+				operation.validate_for_partial_state(&state)?;
+				operation.state_forwards(&migration.app_label, &mut state);
+			}
+		}
+		Ok(state)
 	}
 
 	fn external_ancestry_paths(

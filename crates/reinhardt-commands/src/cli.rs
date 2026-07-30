@@ -1185,8 +1185,18 @@ fn parse_cli_arguments(
 /// arguments and passes the requested numeric verbosity to that command.
 fn normalize_count_style_verbosity_args<T: AsRef<OsStr>>(raw_args: &[T]) -> Vec<OsString> {
 	let mut normalized = Vec::with_capacity(raw_args.len());
+	let mut reached_argument_separator = false;
 	for argument in raw_args {
 		let argument = argument.as_ref();
+		if reached_argument_separator {
+			normalized.push(argument.to_os_string());
+			continue;
+		}
+		if argument == OsStr::new("--") {
+			normalized.push(argument.to_os_string());
+			reached_argument_separator = true;
+			continue;
+		}
 		let Some(value) = argument
 			.to_str()
 			.and_then(|argument| argument.strip_prefix("--verbosity="))
@@ -2191,6 +2201,35 @@ mod tests {
 			Commands::Dbshell {
 				client_arguments, ..
 			} => assert_eq!(client_arguments, vec![non_utf8]),
+			other => panic!("Expected Dbshell command, got {other:?}"),
+		}
+	}
+
+	#[cfg(feature = "reinhardt-db")]
+	#[test]
+	fn driver_parser_does_not_normalize_dbshell_passthrough_verbosity() {
+		let raw_args = vec![
+			OsString::from("manage"),
+			OsString::from("--verbosity=2"),
+			OsString::from("dbshell"),
+			OsString::from("--database-url"),
+			OsString::from("sqlite:db.sqlite3"),
+			OsString::from("--"),
+			OsString::from("--verbosity=2"),
+			OsString::from("-v"),
+		];
+
+		let (command, verbosity) = parse_cli_arguments(&raw_args, &CommandRegistry::new())
+			.expect("parse dbshell arguments");
+
+		assert_eq!(verbosity, 2);
+		match command {
+			Commands::Dbshell {
+				client_arguments, ..
+			} => assert_eq!(
+				client_arguments,
+				vec![OsString::from("--verbosity=2"), OsString::from("-v")]
+			),
 			other => panic!("Expected Dbshell command, got {other:?}"),
 		}
 	}

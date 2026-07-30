@@ -471,14 +471,15 @@ fn validate_simple_expr(expr: &SimpleExpr, backend: &'static str) -> Result<(), 
 		}
 		SimpleExpr::Binary(left, _operator, right) => {
 			#[cfg(feature = "pgvector")]
-			if matches!(
-				_operator,
-				BinOper::PgOperator(
-					PgBinOper::L2Distance
-						| PgBinOper::NegativeInnerProduct
-						| PgBinOper::CosineDistance
-				)
-			) {
+			if backend != "PostgreSQL"
+				&& matches!(
+					_operator,
+					BinOper::PgOperator(
+						PgBinOper::L2Distance
+							| PgBinOper::NegativeInnerProduct
+							| PgBinOper::CosineDistance
+					)
+				) {
 				return Err(unsupported("pgvector distance operators", backend));
 			}
 			validate_simple_expr(left, backend)?;
@@ -518,7 +519,7 @@ fn validate_simple_expr(expr: &SimpleExpr, backend: &'static str) -> Result<(), 
 fn validate_value(value: &Value, _backend: &'static str) -> Result<(), QueryBuildError> {
 	match value {
 		#[cfg(feature = "pgvector")]
-		Value::Vector(_) => Err(unsupported("pgvector values", _backend)),
+		Value::Vector(_) if _backend != "PostgreSQL" => Err(unsupported("pgvector values", _backend)),
 		Value::Array(_, Some(values)) => {
 			for value in values.iter() {
 				validate_value(value, _backend)?;

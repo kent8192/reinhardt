@@ -163,6 +163,7 @@ impl PostgresQueryBuilder {
 		&self,
 		stmt: &InsertStatement,
 	) -> Result<(String, Values), crate::QueryBuildError> {
+		crate::error::validate_insert_for_backend(stmt, "PostgreSQL")?;
 		Ok(self.build_insert(stmt))
 	}
 
@@ -171,6 +172,7 @@ impl PostgresQueryBuilder {
 		&self,
 		stmt: &UpdateStatement,
 	) -> Result<(String, Values), crate::QueryBuildError> {
+		crate::error::validate_update_for_backend(stmt, "PostgreSQL")?;
 		Ok(self.build_update(stmt))
 	}
 
@@ -179,6 +181,7 @@ impl PostgresQueryBuilder {
 		&self,
 		stmt: &DeleteStatement,
 	) -> Result<(String, Values), crate::QueryBuildError> {
+		crate::error::validate_delete_for_backend(stmt, "PostgreSQL")?;
 		Ok(self.build_delete(stmt))
 	}
 

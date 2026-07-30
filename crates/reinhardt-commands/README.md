@@ -145,20 +145,22 @@ identify exactly one migration. An ambiguous or unknown prefix is rejected
 before output.
 
 Both commands accept `--database ALIAS` and a one-off `--database-url URL`.
-The alias selects a configured database; a URL override replaces that alias's
-connection URL for the invocation without changing settings. Diagnostics name
-the alias but redact URL credentials. Both commands load and validate the
-complete migration catalog before output. `showmigrations` reads an existing
-recorder table without creating it, while `sqlmigrate` performs no schema or
-migration-history writes. SQL output is fully buffered before its single
-stdout write, so an irreversible rollback or late planning error emits no
-partial script.
+Without a URL override, the alias selects a configured database. With
+`--database-url`, the command connects directly to that URL without looking up
+the alias; the alias remains a safe diagnostic label and settings are not
+modified. Diagnostics redact URL credentials and sensitive-looking aliases.
+Both commands load and validate the complete migration catalog before output.
+`showmigrations` reads an existing recorder table without creating it, while
+`sqlmigrate` performs no schema or migration-history writes. SQL output is
+fully buffered before its single stdout write, so an irreversible rollback or
+late planning error emits no partial script.
 
 Rendered SQL follows the selected backend. PostgreSQL uses double-quoted
-identifiers and transactional DDL wrappers, MySQL uses backticks and omits
-transaction wrappers for DDL, and SQLite uses its table-recreation sequence
-when an alteration cannot be expressed directly. Informational data-operation
-comments remain comments and are never executed.
+identifiers, MySQL uses backticks, and SQLite uses its table-recreation sequence
+when an alteration cannot be expressed directly. Transaction wrappers are
+emitted only when the migration plan is atomic and the backend supports
+transactional DDL; MySQL DDL is therefore never wrapped. Informational
+data-operation comments remain comments and are never executed.
 
 ### Pages template hot reload
 

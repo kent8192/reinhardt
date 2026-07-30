@@ -68,9 +68,10 @@
 //! SQLite recreation planning may read schema metadata through the supplied
 //! connection, but it does not execute DDL.
 //! [`MigrationSqlPlan::render`] preserves statement order and emits
-//! backend-specific SQL: PostgreSQL uses transactional DDL wrappers, MySQL
-//! omits those wrappers, and SQLite includes the full temporary-table copy,
-//! drop, and rename sequence when recreation is required. Rendering is
+//! backend-specific SQL. Transaction wrappers are emitted only when the
+//! migration plan is atomic and the selected backend supports transactional
+//! DDL; MySQL DDL is never wrapped. SQLite includes the full temporary-table
+//! copy, drop, and rename sequence when recreation is required. Rendering is
 //! complete and uncolored, so callers can buffer the whole script before
 //! publishing it.
 //! Backward inspection of destructive operations must use

@@ -65,11 +65,14 @@
 //! statement is executed. An irreversible rollback or late planning error
 //! therefore emits no partial script.
 //!
-//! Both commands accept `--database ALIAS`; `--database-url URL` supplies a
-//! one-invocation override without modifying configured settings. Diagnostics
-//! identify the alias and redact URL credentials. PostgreSQL output uses
-//! transactional DDL wrappers, MySQL omits them, and SQLite emits table
-//! recreation SQL when the requested alteration requires it.
+//! Both commands accept `--database ALIAS`. Without `--database-url`, the alias
+//! is looked up in configured settings. A URL override bypasses alias lookup
+//! and connects directly while retaining the alias as a safe diagnostic label;
+//! settings are not modified. Diagnostics redact URL credentials and
+//! sensitive-looking aliases. Transaction wrappers are emitted only for an
+//! atomic migration plan on a backend that supports transactional DDL, so
+//! MySQL DDL remains unwrapped. SQLite emits table recreation SQL when the
+//! requested alteration requires it.
 //!
 //! ```text
 //! manage showmigrations polls --plan --database default

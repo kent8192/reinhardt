@@ -443,6 +443,18 @@ fn parse_single_operation_strict(expr: &Expr, index: usize) -> Result<super::Ope
 	if let Expr::Struct(operation) = expr {
 		match operation_name.as_str() {
 			"CreateTable" => {
+				validate_exact_named_fields(
+					&operation.fields,
+					&[
+						"name",
+						"columns",
+						"constraints",
+						"without_rowid",
+						"interleave_in_parent",
+						"partition",
+					],
+					&context,
+				)?;
 				let name = parse_string_field_strict(&operation.fields, "name", &context)?;
 				let columns =
 					parse_column_vector_field_strict(&operation.fields, "columns", &context)?;
@@ -463,7 +475,18 @@ fn parse_single_operation_strict(expr: &Expr, index: usize) -> Result<super::Ope
 					partition: None,
 				});
 			}
+			"DropTable" => {
+				validate_exact_named_fields(&operation.fields, &["name"], &context)?;
+				return Ok(super::Operation::DropTable {
+					name: parse_string_field_strict(&operation.fields, "name", &context)?,
+				});
+			}
 			"AddColumn" => {
+				validate_exact_named_fields(
+					&operation.fields,
+					&["table", "column", "mysql_options"],
+					&context,
+				)?;
 				let table = parse_string_field_strict(&operation.fields, "table", &context)?;
 				let column = parse_column_field_strict(&operation.fields, "column", &context)?;
 				let mysql_options = parse_optional_alter_table_options_strict(
@@ -478,6 +501,11 @@ fn parse_single_operation_strict(expr: &Expr, index: usize) -> Result<super::Ope
 				});
 			}
 			"DropColumn" => {
+				validate_exact_named_fields(
+					&operation.fields,
+					&["table", "column", "old_definition"],
+					&context,
+				)?;
 				let table = parse_string_field_strict(&operation.fields, "table", &context)?;
 				let column = parse_string_field_strict(&operation.fields, "column", &context)?;
 				let old_definition = parse_optional_column_definition_strict(
@@ -492,6 +520,17 @@ fn parse_single_operation_strict(expr: &Expr, index: usize) -> Result<super::Ope
 				});
 			}
 			"AlterColumn" => {
+				validate_exact_named_fields(
+					&operation.fields,
+					&[
+						"table",
+						"column",
+						"old_definition",
+						"new_definition",
+						"mysql_options",
+					],
+					&context,
+				)?;
 				let table = parse_string_field_strict(&operation.fields, "table", &context)?;
 				let column = parse_string_field_strict(&operation.fields, "column", &context)?;
 				let new_definition =
@@ -514,13 +553,289 @@ fn parse_single_operation_strict(expr: &Expr, index: usize) -> Result<super::Ope
 					mysql_options,
 				});
 			}
+			"RenameTable" => {
+				validate_exact_named_fields(
+					&operation.fields,
+					&["old_name", "new_name"],
+					&context,
+				)?;
+				return Ok(super::Operation::RenameTable {
+					old_name: parse_string_field_strict(&operation.fields, "old_name", &context)?,
+					new_name: parse_string_field_strict(&operation.fields, "new_name", &context)?,
+				});
+			}
+			"RenameColumn" => {
+				validate_exact_named_fields(
+					&operation.fields,
+					&["table", "old_name", "new_name"],
+					&context,
+				)?;
+				return Ok(super::Operation::RenameColumn {
+					table: parse_string_field_strict(&operation.fields, "table", &context)?,
+					old_name: parse_string_field_strict(&operation.fields, "old_name", &context)?,
+					new_name: parse_string_field_strict(&operation.fields, "new_name", &context)?,
+				});
+			}
+			"AddConstraint" | "AddConstraintRepair" | "RestoreConstraintOnRollback" => {
+				validate_exact_named_fields(
+					&operation.fields,
+					&["table", "constraint_sql"],
+					&context,
+				)?;
+				let table = parse_string_field_strict(&operation.fields, "table", &context)?;
+				let constraint_sql =
+					parse_string_field_strict(&operation.fields, "constraint_sql", &context)?;
+				return Ok(match operation_name.as_str() {
+					"AddConstraint" => super::Operation::AddConstraint {
+						table,
+						constraint_sql,
+					},
+					"AddConstraintRepair" => super::Operation::AddConstraintRepair {
+						table,
+						constraint_sql,
+					},
+					_ => super::Operation::RestoreConstraintOnRollback {
+						table,
+						constraint_sql,
+					},
+				});
+			}
+			"AddConstraintDefinition" | "DropConstraintDefinition" => {
+				validate_exact_named_fields(&operation.fields, &["table", "constraint"], &context)?;
+				let table = parse_string_field_strict(&operation.fields, "table", &context)?;
+				let constraint_expression =
+					strict_field_expression(&operation.fields, "constraint")
+						.ok_or_else(|| strict_payload_error(&context, "constraint"))?;
+				let constraint = parse_constraint_strict(
+					constraint_expression,
+					&format!("{context}.constraint"),
+				)?;
+				return Ok(if operation_name == "AddConstraintDefinition" {
+					super::Operation::AddConstraintDefinition { table, constraint }
+				} else {
+					super::Operation::DropConstraintDefinition { table, constraint }
+				});
+			}
+			"DropConstraint" => {
+				validate_exact_named_fields(
+					&operation.fields,
+					&["table", "constraint_name"],
+					&context,
+				)?;
+				return Ok(super::Operation::DropConstraint {
+					table: parse_string_field_strict(&operation.fields, "table", &context)?,
+					constraint_name: parse_string_field_strict(
+						&operation.fields,
+						"constraint_name",
+						&context,
+					)?,
+				});
+			}
+			"CreateIndex"
+			| "CreateNamedIndex"
+			| "CreateIndexRepair"
+			| "RestoreIndexOnRollback"
+			| "DropNamedIndex" => {
+				return parse_index_operation_strict(operation, &operation_name, &context);
+			}
+			"DropIndex" => {
+				validate_exact_named_fields(&operation.fields, &["table", "columns"], &context)?;
+				return Ok(super::Operation::DropIndex {
+					table: parse_string_field_strict(&operation.fields, "table", &context)?,
+					columns: parse_string_vector_field_strict(
+						&operation.fields,
+						"columns",
+						&context,
+					)?,
+				});
+			}
+			"RunSQL" => {
+				validate_exact_named_fields(&operation.fields, &["sql", "reverse_sql"], &context)?;
+				return Ok(super::Operation::RunSQL {
+					sql: parse_string_field_strict(&operation.fields, "sql", &context)?,
+					reverse_sql: parse_optional_string_field_strict(
+						&operation.fields,
+						"reverse_sql",
+						&context,
+					)?,
+				});
+			}
+			"CreateExtension" => {
+				validate_exact_named_fields(
+					&operation.fields,
+					&["name", "if_not_exists", "schema"],
+					&context,
+				)?;
+				return Ok(super::Operation::CreateExtension {
+					name: parse_string_field_strict(&operation.fields, "name", &context)?,
+					if_not_exists: parse_bool_field_strict(
+						&operation.fields,
+						"if_not_exists",
+						&context,
+					)?,
+					schema: parse_optional_string_field_strict(
+						&operation.fields,
+						"schema",
+						&context,
+					)?,
+				});
+			}
 			_ => {}
 		}
 	}
 
-	parse_single_operation(expr).ok_or_else(|| {
-		MigrationError::InvalidMigration(format!("{context} is unsupported or malformed"))
-	})
+	Err(MigrationError::InvalidMigration(format!(
+		"{context} is unsupported or malformed"
+	)))
+}
+
+fn parse_index_operation_strict(
+	operation: &syn::ExprStruct,
+	operation_name: &str,
+	context: &str,
+) -> Result<super::Operation> {
+	let has_required_name = matches!(operation_name, "CreateNamedIndex" | "DropNamedIndex");
+	let has_optional_name = matches!(
+		operation_name,
+		"CreateIndexRepair" | "RestoreIndexOnRollback"
+	);
+	let expected = if has_required_name || has_optional_name {
+		&[
+			"table",
+			"name",
+			"columns",
+			"unique",
+			"index_type",
+			"where_clause",
+			"concurrently",
+			"expressions",
+			"mysql_options",
+			"operator_class",
+		][..]
+	} else {
+		&[
+			"table",
+			"columns",
+			"unique",
+			"index_type",
+			"where_clause",
+			"concurrently",
+			"expressions",
+			"mysql_options",
+			"operator_class",
+		][..]
+	};
+	validate_exact_named_fields(&operation.fields, expected, context)?;
+
+	let table = parse_string_field_strict(&operation.fields, "table", context)?;
+	let columns = parse_string_vector_field_strict(&operation.fields, "columns", context)?;
+	let unique = parse_bool_field_strict(&operation.fields, "unique", context)?;
+	let index_type =
+		parse_optional_index_type_field_strict(&operation.fields, "index_type", context)?;
+	let where_clause =
+		parse_optional_string_field_strict(&operation.fields, "where_clause", context)?;
+	let concurrently = parse_bool_field_strict(&operation.fields, "concurrently", context)?;
+	let expressions =
+		parse_optional_string_vector_field_strict(&operation.fields, "expressions", context)?;
+	let mysql_options =
+		parse_optional_alter_table_options_strict(&operation.fields, "mysql_options", context)?;
+	let operator_class =
+		parse_optional_string_field_strict(&operation.fields, "operator_class", context)?;
+
+	if operation_name == "CreateIndex" {
+		return Ok(super::Operation::CreateIndex {
+			table,
+			columns,
+			unique,
+			index_type,
+			where_clause,
+			concurrently,
+			expressions,
+			mysql_options,
+			operator_class,
+		});
+	}
+
+	if has_optional_name {
+		let name = parse_optional_string_field_strict(&operation.fields, "name", context)?;
+		return Ok(if operation_name == "CreateIndexRepair" {
+			super::Operation::CreateIndexRepair {
+				table,
+				name,
+				columns,
+				unique,
+				index_type,
+				where_clause,
+				concurrently,
+				expressions,
+				mysql_options,
+				operator_class,
+			}
+		} else {
+			super::Operation::RestoreIndexOnRollback {
+				table,
+				name,
+				columns,
+				unique,
+				index_type,
+				where_clause,
+				concurrently,
+				expressions,
+				mysql_options,
+				operator_class,
+			}
+		});
+	}
+
+	let name = parse_string_field_strict(&operation.fields, "name", context)?;
+	#[cfg(feature = "pgvector")]
+	{
+		return Ok(if operation_name == "CreateNamedIndex" {
+			super::Operation::CreateNamedIndex {
+				table,
+				name,
+				columns,
+				unique,
+				index_type,
+				where_clause,
+				concurrently,
+				expressions,
+				mysql_options,
+				operator_class,
+			}
+		} else {
+			super::Operation::DropNamedIndex {
+				table,
+				name,
+				columns,
+				unique,
+				index_type,
+				where_clause,
+				concurrently,
+				expressions,
+				mysql_options,
+				operator_class,
+			}
+		});
+	}
+	#[cfg(not(feature = "pgvector"))]
+	{
+		let _ = (
+			table,
+			name,
+			columns,
+			unique,
+			index_type,
+			where_clause,
+			concurrently,
+			expressions,
+			mysql_options,
+			operator_class,
+		);
+		Err(MigrationError::InvalidMigration(format!(
+			"{context} is unsupported or malformed"
+		)))
+	}
 }
 
 fn strict_field_expression<'a>(
@@ -654,9 +969,101 @@ fn parse_optional_alter_table_options_strict(
 	if !function.path.is_ident("Some") || call.args.len() != 1 {
 		return Err(strict_payload_error(context, field_name));
 	}
-	parse_alter_table_options_expr(&call.args[0])
+	parse_alter_table_options_expr_strict(&call.args[0])
 		.ok_or_else(|| strict_payload_error(context, field_name))
 		.map(Some)
+}
+
+fn parse_alter_table_options_expr_strict(expr: &Expr) -> Option<super::AlterTableOptions> {
+	use super::{AlterTableOptions, MySqlAlgorithm, MySqlLock};
+
+	if let Expr::Call(call) = expr
+		&& let Expr::Path(function) = &*call.func
+		&& function
+			.path
+			.segments
+			.last()
+			.is_some_and(|segment| segment.ident == "new")
+		&& call.args.is_empty()
+	{
+		return Some(AlterTableOptions::new());
+	}
+	if let Expr::MethodCall(call) = expr {
+		let options = parse_alter_table_options_expr_strict(&call.receiver)?;
+		let variant = call.args.first().and_then(extract_path_variant)?;
+		return match call.method.to_string().as_str() {
+			"with_algorithm" if call.args.len() == 1 => match variant.as_str() {
+				"Instant" => Some(options.with_algorithm(MySqlAlgorithm::Instant)),
+				"Inplace" => Some(options.with_algorithm(MySqlAlgorithm::Inplace)),
+				"Copy" => Some(options.with_algorithm(MySqlAlgorithm::Copy)),
+				"Default" => Some(options.with_algorithm(MySqlAlgorithm::Default)),
+				_ => None,
+			},
+			"with_lock" if call.args.len() == 1 => match variant.as_str() {
+				"None" => Some(options.with_lock(MySqlLock::None)),
+				"Shared" => Some(options.with_lock(MySqlLock::Shared)),
+				"Exclusive" => Some(options.with_lock(MySqlLock::Exclusive)),
+				"Default" => Some(options.with_lock(MySqlLock::Default)),
+				_ => None,
+			},
+			_ => None,
+		};
+	}
+	let Expr::Struct(options) = expr else {
+		return None;
+	};
+	if options
+		.path
+		.segments
+		.last()
+		.is_none_or(|segment| segment.ident != "AlterTableOptions")
+		|| validate_exact_named_fields(&options.fields, &["algorithm", "lock"], "mysql_options")
+			.is_err()
+	{
+		return None;
+	}
+
+	let algorithm = match parse_optional_path_variant_strict(&options.fields, "algorithm")? {
+		Some(variant) => Some(match variant.as_str() {
+			"Instant" => MySqlAlgorithm::Instant,
+			"Inplace" => MySqlAlgorithm::Inplace,
+			"Copy" => MySqlAlgorithm::Copy,
+			"Default" => MySqlAlgorithm::Default,
+			_ => return None,
+		}),
+		None => None,
+	};
+	let lock = match parse_optional_path_variant_strict(&options.fields, "lock")? {
+		Some(variant) => Some(match variant.as_str() {
+			"None" => MySqlLock::None,
+			"Shared" => MySqlLock::Shared,
+			"Exclusive" => MySqlLock::Exclusive,
+			"Default" => MySqlLock::Default,
+			_ => return None,
+		}),
+		None => None,
+	};
+	Some(AlterTableOptions { algorithm, lock })
+}
+
+fn parse_optional_path_variant_strict(
+	fields: &syn::punctuated::Punctuated<syn::FieldValue, syn::token::Comma>,
+	field_name: &str,
+) -> Option<Option<String>> {
+	let expression = strict_field_expression(fields, field_name)?;
+	if is_none_expression(expression) {
+		return Some(None);
+	}
+	let Expr::Call(call) = expression else {
+		return None;
+	};
+	let Expr::Path(some) = &*call.func else {
+		return None;
+	};
+	if !some.path.is_ident("Some") || call.args.len() != 1 {
+		return None;
+	}
+	Some(Some(extract_path_variant(&call.args[0])?))
 }
 
 fn parse_vec_expressions(expr: &Expr, field_name: &str) -> Result<Vec<Expr>> {
@@ -1920,6 +2327,144 @@ fn parse_string_vector_field_strict(
 	parse_string_vector_strict(expression, &format!("{context}.{field_name}"))
 }
 
+fn parse_optional_string_vector_field_strict(
+	fields: &syn::punctuated::Punctuated<syn::FieldValue, syn::token::Comma>,
+	field_name: &str,
+	context: &str,
+) -> Result<Option<Vec<String>>> {
+	let expression = strict_field_expression(fields, field_name)
+		.ok_or_else(|| strict_payload_error(context, field_name))?;
+	if is_none_expression(expression) {
+		return Ok(None);
+	}
+	let Expr::Call(call) = expression else {
+		return Err(strict_payload_error(context, field_name));
+	};
+	let Expr::Path(some) = &*call.func else {
+		return Err(strict_payload_error(context, field_name));
+	};
+	if !some.path.is_ident("Some") || call.args.len() != 1 {
+		return Err(strict_payload_error(context, field_name));
+	}
+	parse_string_vector_strict(&call.args[0], &format!("{context}.{field_name}")).map(Some)
+}
+
+fn parse_optional_index_type_field_strict(
+	fields: &syn::punctuated::Punctuated<syn::FieldValue, syn::token::Comma>,
+	field_name: &str,
+	context: &str,
+) -> Result<Option<super::IndexType>> {
+	let expression = strict_field_expression(fields, field_name)
+		.ok_or_else(|| strict_payload_error(context, field_name))?;
+	if is_none_expression(expression) {
+		return Ok(None);
+	}
+	let Expr::Call(call) = expression else {
+		return Err(strict_payload_error(context, field_name));
+	};
+	let Expr::Path(some) = &*call.func else {
+		return Err(strict_payload_error(context, field_name));
+	};
+	if !some.path.is_ident("Some") || call.args.len() != 1 {
+		return Err(strict_payload_error(context, field_name));
+	}
+	parse_index_type_strict(&call.args[0])
+		.ok_or_else(|| strict_payload_error(context, field_name))
+		.map(Some)
+}
+
+fn parse_index_type_strict(expr: &Expr) -> Option<super::IndexType> {
+	use super::IndexType;
+
+	match expr {
+		Expr::Path(path) => match path.path.segments.last()?.ident.to_string().as_str() {
+			"BTree" => Some(IndexType::BTree),
+			"Hash" => Some(IndexType::Hash),
+			"Gin" => Some(IndexType::Gin),
+			"Gist" => Some(IndexType::Gist),
+			"Brin" => Some(IndexType::Brin),
+			"Fulltext" => Some(IndexType::Fulltext),
+			"Spatial" => Some(IndexType::Spatial),
+			_ => None,
+		},
+		#[cfg(feature = "pgvector")]
+		Expr::Struct(index_type)
+			if index_type
+				.path
+				.segments
+				.last()
+				.is_some_and(|segment| segment.ident == "Hnsw") =>
+		{
+			if validate_exact_named_fields(
+				&index_type.fields,
+				&["m", "ef_construction"],
+				"index_type",
+			)
+			.is_err()
+			{
+				return None;
+			}
+			Some(IndexType::Hnsw {
+				m: parse_optional_unsigned_integer_field_strict::<u16>(&index_type.fields, "m")?,
+				ef_construction: parse_optional_unsigned_integer_field_strict::<u16>(
+					&index_type.fields,
+					"ef_construction",
+				)?,
+			})
+		}
+		#[cfg(feature = "pgvector")]
+		Expr::Struct(index_type)
+			if index_type
+				.path
+				.segments
+				.last()
+				.is_some_and(|segment| segment.ident == "Ivfflat") =>
+		{
+			if validate_exact_named_fields(&index_type.fields, &["lists"], "index_type").is_err() {
+				return None;
+			}
+			Some(IndexType::Ivfflat {
+				lists: parse_optional_unsigned_integer_field_strict::<u32>(
+					&index_type.fields,
+					"lists",
+				)?,
+			})
+		}
+		_ => None,
+	}
+}
+
+#[cfg(feature = "pgvector")]
+fn parse_optional_unsigned_integer_field_strict<T>(
+	fields: &syn::punctuated::Punctuated<syn::FieldValue, syn::token::Comma>,
+	field_name: &str,
+) -> Option<Option<T>>
+where
+	T: TryFrom<u64>,
+{
+	let expression = strict_field_expression(fields, field_name)?;
+	if is_none_expression(expression) {
+		return Some(None);
+	}
+	let Expr::Call(call) = expression else {
+		return None;
+	};
+	let Expr::Path(some) = &*call.func else {
+		return None;
+	};
+	if !some.path.is_ident("Some") || call.args.len() != 1 {
+		return None;
+	}
+	let Expr::Lit(syn::ExprLit {
+		lit: syn::Lit::Int(value),
+		..
+	}) = &call.args[0]
+	else {
+		return None;
+	};
+	Some(Some(T::try_from(value.base10_parse().ok()?).ok()?))
+}
+
 fn parse_foreign_key_action_field_strict(
 	fields: &syn::punctuated::Punctuated<syn::FieldValue, syn::token::Comma>,
 	field_name: &str,
@@ -2922,7 +3467,14 @@ mod tests {
 	)]
 	#[case(
 		r#"Operation::DropTable { wrong_name: "posts".to_string() }"#,
-		"Invalid migration: operations[0].DropTable is unsupported or malformed"
+		"Invalid migration: operations[0].DropTable.wrong_name is unsupported or malformed"
+	)]
+	#[case(
+		r#"Operation::RunRust {
+			code: "seed_data()".to_string(),
+			reverse_code: None,
+		}"#,
+		"Invalid migration: operations[0].RunRust is unsupported or malformed"
 	)]
 	fn strict_metadata_rejects_unknown_and_malformed_operations(
 		#[case] operation: &str,
@@ -3000,6 +3552,36 @@ mod tests {
 							}),
 							mysql_options: Some(AlterTableOptions::new()),
 						},
+						Operation::AddConstraintDefinition {
+							table: "posts".to_string(),
+							constraint: Constraint::Unique {
+								name: "posts_tenant_slug_key".to_string(),
+								columns: vec![
+									"tenant_id".to_string(),
+									"slug".to_string(),
+								],
+							},
+						},
+						Operation::CreateIndex {
+							table: "posts".to_string(),
+							columns: vec![
+								"tenant_id".to_string(),
+								"slug".to_string(),
+							],
+							unique: true,
+							index_type: Some(IndexType::BTree),
+							where_clause: Some("deleted_at IS NULL".to_string()),
+							concurrently: true,
+							expressions: Some(vec![
+								"LOWER(slug)".to_string(),
+								"tenant_id".to_string(),
+							]),
+							mysql_options: Some(AlterTableOptions {
+								algorithm: Some(MySqlAlgorithm::Inplace),
+								lock: Some(MySqlLock::Shared),
+							}),
+							operator_class: Some("text_pattern_ops".to_string()),
+						},
 					],
 					dependencies: vec![],
 					replaces: vec![],
@@ -3031,6 +3613,32 @@ mod tests {
 				mysql_options: Some(options),
 				..
 			} if options == &AlterTableOptions::new()
+		));
+		assert!(matches!(
+			&migration.operations[2],
+			Operation::AddConstraintDefinition {
+				constraint: Constraint::Unique { columns, .. },
+				..
+			} if columns == &["tenant_id".to_string(), "slug".to_string()]
+		));
+		assert!(matches!(
+			&migration.operations[3],
+			Operation::CreateIndex {
+				columns,
+				unique: true,
+				index_type: Some(IndexType::BTree),
+				where_clause: Some(where_clause),
+				concurrently: true,
+				expressions: Some(expressions),
+				mysql_options: Some(options),
+				operator_class: Some(operator_class),
+				..
+			} if columns == &["tenant_id".to_string(), "slug".to_string()]
+				&& where_clause == "deleted_at IS NULL"
+				&& expressions == &["LOWER(slug)".to_string(), "tenant_id".to_string()]
+				&& options.algorithm == Some(MySqlAlgorithm::Inplace)
+				&& options.lock == Some(MySqlLock::Shared)
+				&& operator_class == "text_pattern_ops"
 		));
 	}
 
@@ -3226,6 +3834,124 @@ mod tests {
 		#[case] operation: &str,
 		#[case] expected: &str,
 	) {
+		let source = format!(
+			r#"pub fn migration() -> Migration {{
+				Migration {{
+					operations: vec![{operation}],
+					dependencies: vec![],
+					replaces: vec![],
+				}}
+			}}"#
+		);
+		let ast = syn::parse_file(&source).unwrap();
+
+		let error = extract_migration_metadata_strict(&ast, "blog", "0001_initial").unwrap_err();
+
+		assert_eq!(error.to_string(), expected);
+	}
+
+	#[rstest]
+	#[case(
+		r#"Operation::AddConstraintDefinition {
+			table: "posts".to_string(),
+			constraint: Constraint::Unique {
+				name: "posts_tenant_slug_key".to_string(),
+				columns: vec!["tenant_id".to_string(), "slug".to_owned()],
+			},
+		}"#,
+		"Invalid migration: operations[0].AddConstraintDefinition.constraint.columns[1] is unsupported or malformed"
+	)]
+	#[case(
+		r#"Operation::DropConstraintDefinition {
+			table: "posts".to_string(),
+			constraint: Constraint::ForeignKey {
+				name: "posts_tenant_fk".to_string(),
+				columns: vec!["tenant_id".to_string()],
+				referenced_table: "tenants".to_string(),
+				referenced_columns: vec!["id".to_string(), 42],
+				on_delete: ForeignKeyAction::Cascade,
+				on_update: ForeignKeyAction::NoAction,
+				deferrable: None,
+			},
+		}"#,
+		"Invalid migration: operations[0].DropConstraintDefinition.constraint.referenced_columns[1] is unsupported or malformed"
+	)]
+	#[case(
+		r#"Operation::AddConstraintDefinition {
+			table: "posts".to_string(),
+			constraint: Constraint::Unique {
+				name: "posts_slug_key".to_string(),
+				columns: vec!["slug".to_string()],
+				scope: "tenant".to_string(),
+			},
+		}"#,
+		"Invalid migration: operations[0].AddConstraintDefinition.constraint.scope is unsupported or malformed"
+	)]
+	fn strict_metadata_rejects_lossy_constraint_definition_payloads(
+		#[case] operation: &str,
+		#[case] expected: &str,
+	) {
+		let source = format!(
+			r#"pub fn migration() -> Migration {{
+				Migration {{
+					operations: vec![{operation}],
+					dependencies: vec![],
+					replaces: vec![],
+				}}
+			}}"#
+		);
+		let ast = syn::parse_file(&source).unwrap();
+
+		let error = extract_migration_metadata_strict(&ast, "blog", "0001_initial").unwrap_err();
+
+		assert_eq!(error.to_string(), expected);
+	}
+
+	#[rstest]
+	#[case(
+		"unique: \"true\",",
+		"Invalid migration: operations[0].CreateIndex.unique is unsupported or malformed"
+	)]
+	#[case(
+		r#"columns: vec!["tenant_id".to_string(), "slug".to_owned()],"#,
+		"Invalid migration: operations[0].CreateIndex.columns[1] is unsupported or malformed"
+	)]
+	#[case(
+		r#"expressions: Some(vec!["LOWER(slug)".to_owned()]),"#,
+		"Invalid migration: operations[0].CreateIndex.expressions[0] is unsupported or malformed"
+	)]
+	#[case(
+		r#"mysql_options: Some(AlterTableOptions {
+			algorithm: Some(MySqlAlgorithm::Unknown),
+			lock: None,
+		}),"#,
+		"Invalid migration: operations[0].CreateIndex.mysql_options is unsupported or malformed"
+	)]
+	fn strict_metadata_rejects_lossy_index_payloads(
+		#[case] replacement: &str,
+		#[case] expected: &str,
+	) {
+		let mut fields = [
+			r#"table: "posts".to_string(),"#,
+			r#"columns: vec!["tenant_id".to_string(), "slug".to_string()],"#,
+			"unique: true,",
+			"index_type: None,",
+			"where_clause: None,",
+			"concurrently: false,",
+			"expressions: None,",
+			"mysql_options: None,",
+			"operator_class: None,",
+		];
+		let field_name = replacement
+			.split(':')
+			.next()
+			.expect("replacement must name an index field");
+		let target = fields
+			.iter_mut()
+			.find(|field| field.starts_with(field_name))
+			.expect("replacement field must exist");
+		*target = replacement;
+		let operation = format!("Operation::CreateIndex {{ {} }}", fields.join(" "));
 		let source = format!(
 			r#"pub fn migration() -> Migration {{
 				Migration {{

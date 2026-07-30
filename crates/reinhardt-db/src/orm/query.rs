@@ -7721,6 +7721,9 @@ where
 			if let Some(cond) = self.build_where_condition()? {
 				stmt.cond_where(cond);
 			}
+			if self.empty_result {
+				stmt.and_where(Expr::val(false));
+			}
 
 			// Apply GROUP BY
 			for group_field in &self.group_by_fields {

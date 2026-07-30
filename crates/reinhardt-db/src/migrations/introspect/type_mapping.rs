@@ -189,6 +189,10 @@ impl TypeMapper {
 			}
 
 			// Custom type
+			FieldType::Custom(name) if name == "u8" => quote! { u8 },
+			FieldType::Custom(name) if name == "u16" => quote! { u16 },
+			FieldType::Custom(name) if name == "u32" => quote! { u32 },
+			FieldType::Custom(name) if name == "u64" => quote! { u64 },
 			FieldType::Custom(_) => quote! { String },
 		};
 

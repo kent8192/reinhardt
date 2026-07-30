@@ -10,6 +10,7 @@ use crate::migrations::{GeneratedColumnDefinition, GeneratedStorage, MigrationEr
 use proc_macro2::TokenStream;
 use quote::{format_ident, quote};
 use std::collections::HashMap;
+use std::collections::HashSet;
 use std::path::PathBuf;
 
 /// Generated output containing all model files.
@@ -279,9 +280,20 @@ impl SchemaCodeGenerator {
 
 		// Generate fields
 		let mut fields = Vec::new();
+		let mut field_names = HashSet::new();
 		let columns: Vec<_> = table.columns.values().collect();
 
 		for column in &columns {
+			let field_name = column_to_field_name(
+				&column.name,
+				self.config.generation.field_naming_convention(),
+			);
+			if !field_names.insert(field_name.clone()) {
+				return Err(MigrationError::IntrospectionError(format!(
+					"Columns in `{}` normalize to the same Rust field name `{field_name}`",
+					table.name
+				)));
+			}
 			let field = self.generate_field(table, column)?;
 			fields.push(field);
 		}
@@ -329,7 +341,7 @@ impl SchemaCodeGenerator {
 			if column.auto_increment {
 				attrs.push(quote! { primary_key = true, auto_increment = true });
 			} else {
-				attrs.push(quote! { primary_key = true });
+				attrs.push(quote! { primary_key = true, auto_increment = false });
 			}
 		}
 
@@ -352,8 +364,14 @@ impl SchemaCodeGenerator {
 		if let Some(ref default) = column.default {
 			// Skip auto-generated defaults like NOW() or sequences
 			if !is_auto_default(default) {
-				let default_str = default.as_str();
-				attrs.push(quote! { default = #default_str });
+				let default_expression = render_default_expression(default, &column.column_type)
+					.map_err(|error| {
+						MigrationError::IntrospectionError(format!(
+							"Failed to render default expression for {}.{}: {error}",
+							table.name, column.name
+						))
+					})?;
+				attrs.push(quote! { default = #default_expression });
 			}
 		}
 
@@ -427,6 +445,46 @@ fn is_auto_default(default: &str) -> bool {
 		|| upper.contains("NEXTVAL")
 		|| upper.contains("UUID_GENERATE")
 		|| upper.contains("GEN_RANDOM_UUID")
+}
+
+fn render_default_expression(
+	default: &str,
+	field_type: &crate::migrations::fields::FieldType,
+) -> Result<TokenStream> {
+	use crate::migrations::fields::FieldType;
+
+	if matches!(field_type, FieldType::Boolean) {
+		return match default.trim() {
+			"0" | "false" | "FALSE" => Ok(quote! { false }),
+			"1" | "true" | "TRUE" => Ok(quote! { true }),
+			value => value
+				.parse::<TokenStream>()
+				.map_err(|error| MigrationError::IntrospectionError(error.to_string())),
+		};
+	}
+
+	if matches!(
+		field_type,
+		FieldType::Char(_)
+			| FieldType::VarChar(_)
+			| FieldType::Text
+			| FieldType::TinyText
+			| FieldType::MediumText
+			| FieldType::LongText
+	) {
+		let value = default.trim();
+		let unquoted = value
+			.strip_prefix('\'')
+			.and_then(|value| value.strip_suffix('\''))
+			.unwrap_or(value)
+			.replace("''", "'");
+		return Ok(quote! { #unquoted });
+	}
+
+	default
+		.trim()
+		.parse::<TokenStream>()
+		.map_err(|error| MigrationError::IntrospectionError(error.to_string()))
 }
 
 #[cfg(test)]
@@ -514,6 +572,89 @@ mod tests {
 		assert!(code.contains("pub id: i64"));
 		assert!(code.contains("pub name: String"));
 		assert!(code.contains("pub email: Option<String>"));
+	}
+
+	#[test]
+	fn generate_model_emits_typed_literals_for_scalar_defaults() {
+		let config = IntrospectConfig::default().with_app_label("test");
+		let generator = SchemaCodeGenerator::new(config);
+		let mut table = create_test_table();
+		table.columns.insert(
+			"enabled".to_string(),
+			ColumnInfo {
+				name: "enabled".to_string(),
+				column_type: FieldType::Boolean,
+				nullable: false,
+				default: Some("0".to_string()),
+				auto_increment: false,
+				generated: None,
+			},
+		);
+		table.columns.insert(
+			"retries".to_string(),
+			ColumnInfo {
+				name: "retries".to_string(),
+				column_type: FieldType::Integer,
+				nullable: false,
+				default: Some("0".to_string()),
+				auto_increment: false,
+				generated: None,
+			},
+		);
+		let schema = DatabaseSchema {
+			tables: [("users".to_string(), table.clone())].into(),
+		};
+		let code = generator
+			.format_tokens(
+				generator
+					.generate_model(&table, &HashMap::new(), &schema)
+					.expect("model generation should succeed"),
+			)
+			.expect("generated model should format");
+
+		assert!(code.contains("default = false"));
+		assert!(code.contains("default = 0"));
+	}
+
+	#[test]
+	fn generate_model_rejects_normalized_field_name_collisions() {
+		let config = IntrospectConfig::default().with_app_label("test");
+		let generator = SchemaCodeGenerator::new(config);
+		let mut table = create_test_table();
+		table.columns.insert(
+			"display-name".to_string(),
+			ColumnInfo {
+				name: "display-name".to_string(),
+				column_type: FieldType::Text,
+				nullable: false,
+				default: None,
+				auto_increment: false,
+				generated: None,
+			},
+		);
+		table.columns.insert(
+			"display_name".to_string(),
+			ColumnInfo {
+				name: "display_name".to_string(),
+				column_type: FieldType::Text,
+				nullable: false,
+				default: None,
+				auto_increment: false,
+				generated: None,
+			},
+		);
+		let schema = DatabaseSchema {
+			tables: [("users".to_string(), table.clone())].into(),
+		};
+
+		let error = generator
+			.generate_model(&table, &HashMap::new(), &schema)
+			.expect_err("normalized collisions must be rejected");
+		assert!(
+			error
+				.to_string()
+				.contains("normalize to the same Rust field name")
+		);
 	}
 
 	#[test]

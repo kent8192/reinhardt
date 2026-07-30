@@ -555,7 +555,7 @@ impl PostgresIntrospector {
 			FROM pg_enum e
 			JOIN pg_type t ON e.enumtypid = t.oid
 			JOIN pg_namespace n ON t.typnamespace = n.oid
-			WHERE t.typname = $1 AND n.nspname = 'public'
+			WHERE t.typname = $1 AND n.nspname = current_schema()
 			ORDER BY e.enumsortorder
 		"#;
 		let rows = sqlx::query(query)
@@ -599,7 +599,7 @@ impl PostgresIntrospector {
 			    ON attributes.attrelid = tables.oid
 			    AND attributes.attname = columns.column_name
 			    AND NOT attributes.attisdropped
-			WHERE columns.table_schema = 'public' AND columns.table_name = $1
+			WHERE columns.table_schema = current_schema() AND columns.table_name = $1
 			ORDER BY columns.ordinal_position
 		"#;
 		let col_rows = sqlx::query(col_query)
@@ -724,7 +724,7 @@ impl PostgresIntrospector {
 			JOIN information_schema.key_column_usage kcu
 			    ON tc.constraint_name = kcu.constraint_name
 			    AND tc.table_schema = kcu.table_schema
-			WHERE tc.table_schema = 'public' AND tc.table_name = $1
+			WHERE tc.table_schema = current_schema() AND tc.table_name = $1
 			    AND tc.constraint_type = 'PRIMARY KEY'
 			ORDER BY kcu.ordinal_position
 		"#;
@@ -758,7 +758,7 @@ impl PostgresIntrospector {
 			JOIN information_schema.referential_constraints rc
 			    ON tc.constraint_name = rc.constraint_name
 			    AND tc.table_schema = rc.constraint_schema
-			WHERE tc.table_schema = 'public' AND tc.table_name = $1
+			WHERE tc.table_schema = current_schema() AND tc.table_name = $1
 			    AND tc.constraint_type = 'FOREIGN KEY'
 			ORDER BY tc.constraint_name, kcu.ordinal_position
 		"#;
@@ -818,7 +818,7 @@ impl PostgresIntrospector {
 			JOIN information_schema.key_column_usage kcu
 			    ON tc.constraint_name = kcu.constraint_name
 			    AND tc.table_schema = kcu.table_schema
-			WHERE tc.table_schema = 'public' AND tc.table_name = $1
+			WHERE tc.table_schema = current_schema() AND tc.table_name = $1
 			    AND tc.constraint_type = 'UNIQUE'
 			ORDER BY tc.constraint_name, kcu.ordinal_position
 		"#;
@@ -912,7 +912,7 @@ impl PostgresIntrospector {
 				t.relkind = 'r'
 				AND t.relname = $1
 				AND NOT ix.indisprimary
-				AND n.nspname = 'public'
+				AND n.nspname = current_schema()
 			GROUP BY
 				i.oid,
 				i.relname,
@@ -1027,7 +1027,7 @@ impl DatabaseIntrospector for PostgresIntrospector {
 
 		let table_query = r#"
 			SELECT table_name FROM information_schema.tables
-			WHERE table_schema = 'public' AND table_type = 'BASE TABLE'
+			WHERE table_schema = current_schema() AND table_type = 'BASE TABLE'
 		"#;
 		let table_rows = sqlx::query(table_query)
 			.fetch_all(&self.pool)
@@ -1050,7 +1050,7 @@ impl DatabaseIntrospector for PostgresIntrospector {
 		// Check if table exists
 		let exists_query = r#"
 			SELECT table_name FROM information_schema.tables
-			WHERE table_schema = 'public' AND table_type = 'BASE TABLE' AND table_name = $1
+			WHERE table_schema = current_schema() AND table_type = 'BASE TABLE' AND table_name = $1
 		"#;
 		let exists = sqlx::query(exists_query)
 			.bind(table_name)
@@ -1171,19 +1171,43 @@ impl MySQLIntrospector {
 	) -> Result<super::FieldType> {
 		use super::FieldType;
 		let data_type_lower = data_type.to_lowercase();
+		let unsigned = column_type.to_ascii_lowercase().contains("unsigned");
 		let field_type = match data_type_lower.as_str() {
 			"tinyint" => {
 				// MySQL uses tinyint(1) for boolean
 				if column_type.to_lowercase().starts_with("tinyint(1)") {
 					FieldType::Boolean
 				} else {
-					FieldType::TinyInt
+					if unsigned {
+						FieldType::Custom("u8".to_string())
+					} else {
+						FieldType::TinyInt
+					}
 				}
 			}
-			"smallint" => FieldType::SmallInteger,
-			"mediumint" => FieldType::MediumInt,
-			"int" | "integer" => FieldType::Integer,
-			"bigint" => FieldType::BigInteger,
+			"smallint" => {
+				if unsigned {
+					FieldType::Custom("u16".to_string())
+				} else {
+					FieldType::SmallInteger
+				}
+			}
+			"mediumint" | "int" | "integer" => {
+				if unsigned {
+					FieldType::Custom("u32".to_string())
+				} else if data_type_lower == "mediumint" {
+					FieldType::MediumInt
+				} else {
+					FieldType::Integer
+				}
+			}
+			"bigint" => {
+				if unsigned {
+					FieldType::Custom("u64".to_string())
+				} else {
+					FieldType::BigInteger
+				}
+			}
 
 			"varchar" => FieldType::VarChar(mysql_catalog_u32(
 				char_max_length,
@@ -1620,7 +1644,24 @@ impl SQLiteIntrospector {
 					};
 				}
 				// Default fallback for unknown types
-				FieldType::Custom(type_str.to_string())
+				// SQLite type affinity is determined by substrings in the declared
+				// type, not by an exhaustive list of canonical spellings.
+				if upper.contains("INT") {
+					FieldType::Integer
+				} else if upper.contains("CHAR") || upper.contains("CLOB") || upper.contains("TEXT")
+				{
+					FieldType::Text
+				} else if upper.contains("BLOB") || upper.is_empty() {
+					FieldType::Blob
+				} else if upper.contains("REAL") || upper.contains("FLOA") || upper.contains("DOUB")
+				{
+					FieldType::Real
+				} else {
+					FieldType::Decimal {
+						precision: 10,
+						scale: 2,
+					}
+				}
 			}
 		}
 	}
@@ -2243,7 +2284,7 @@ async fn read_postgres_schema(
 				None if options.include_views => {
 					let view_exists = sqlx::query(
 						"SELECT table_name FROM information_schema.views \
-						 WHERE table_schema = 'public' AND table_name = $1",
+						 WHERE table_schema = current_schema() AND table_name = $1",
 					)
 					.bind(name)
 					.fetch_optional(&pool)
@@ -2272,7 +2313,7 @@ async fn read_postgres_schema(
 
 	if options.include_views && options.tables.is_empty() {
 		let rows = sqlx::query(
-			"SELECT table_name FROM information_schema.views WHERE table_schema = 'public' ORDER BY table_name",
+			"SELECT table_name FROM information_schema.views WHERE table_schema = current_schema() ORDER BY table_name",
 		)
 		.fetch_all(&pool)
 		.await
@@ -2297,7 +2338,7 @@ async fn read_postgres_partition_names(pool: &sqlx::PgPool) -> Result<HashSet<St
 		"SELECT relation.relname AS table_name, relation.relispartition AS is_partition \
 		 FROM pg_class relation \
 		 JOIN pg_namespace namespace ON namespace.oid = relation.relnamespace \
-		 WHERE namespace.nspname = 'public' AND relation.relkind IN ('r', 'p') \
+		 WHERE namespace.nspname = current_schema() AND relation.relkind IN ('r', 'p') \
 		 ORDER BY relation.relname",
 	)
 	.fetch_all(pool)
@@ -2391,8 +2432,40 @@ async fn read_sqlite_schema(
 	use sqlx::Row;
 
 	let introspector = SQLiteIntrospector::new(pool.clone());
-	let mut schema = introspector.read_schema().await?;
-	if !options.include_views {
+	let mut schema = if options.tables.is_empty() {
+		introspector.read_schema().await?
+	} else {
+		let mut tables = HashMap::new();
+		for name in &options.tables {
+			let table = match introspector.read_table(name).await? {
+				Some(table) => table,
+				None if options.include_views => {
+					let view_exists = sqlx::query(
+						"SELECT name FROM sqlite_master WHERE type = 'view' AND name = ?",
+					)
+					.bind(name)
+					.fetch_optional(&pool)
+					.await
+					.map_err(|error| MigrationError::IntrospectionError(error.to_string()))?
+					.is_some();
+					if !view_exists {
+						return Err(MigrationError::IntrospectionError(format!(
+							"Table or view `{name}` was not found"
+						)));
+					}
+					introspector.introspect_table(name).await?
+				}
+				None => {
+					return Err(MigrationError::IntrospectionError(format!(
+						"Table `{name}` was not found"
+					)));
+				}
+			};
+			tables.insert(name.clone(), table);
+		}
+		DatabaseSchema { tables }
+	};
+	if !options.include_views || !options.tables.is_empty() {
 		return Ok(schema);
 	}
 
@@ -2647,6 +2720,37 @@ mod tests {
 		assert_eq!(
 			overflow.to_string(),
 			"Introspection error: MySQL numeric precision is outside the supported u32 range",
+		);
+	}
+
+	#[test]
+	#[cfg(feature = "mysql")]
+	fn mysql_unsigned_integer_columns_map_to_unsigned_rust_types() {
+		assert_eq!(
+			MySQLIntrospector::parse_mysql_type("tinyint", "tinyint unsigned", None, None, None)
+				.expect("type should parse"),
+			FieldType::Custom("u8".to_string())
+		);
+		assert_eq!(
+			MySQLIntrospector::parse_mysql_type("bigint", "bigint unsigned", None, None, None)
+				.expect("type should parse"),
+			FieldType::Custom("u64".to_string())
+		);
+	}
+
+	#[test]
+	fn sqlite_type_affinity_handles_legal_noncanonical_declarations() {
+		assert_eq!(
+			SQLiteIntrospector::parse_sqlite_type("UNSIGNED BIG INT"),
+			FieldType::Integer
+		);
+		assert_eq!(
+			SQLiteIntrospector::parse_sqlite_type("CHARACTER(20)"),
+			FieldType::Text
+		);
+		assert_eq!(
+			SQLiteIntrospector::parse_sqlite_type("DOUBLE UNSIGNED"),
+			FieldType::Real
 		);
 	}
 

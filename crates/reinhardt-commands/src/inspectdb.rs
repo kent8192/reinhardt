@@ -12,7 +12,7 @@ use reinhardt_db::migrations::{
 	inspect_database, render_models_module,
 };
 use std::io::{self, Write as _};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 /// Output sink used by [`InspectDbCommand`].
@@ -156,6 +156,9 @@ impl BaseCommand for InspectDbCommand {
 				"include_partitions is only supported for PostgreSQL.".to_string(),
 			));
 		}
+		if resolved.backend() == DatabaseType::Sqlite {
+			ensure_sqlite_database_exists(resolved.url())?;
+		}
 		let options = InspectDbOptions {
 			tables: ctx.args.clone(),
 			include_views: ctx.has_option("include-views"),
@@ -207,6 +210,25 @@ impl BaseCommand for InspectDbCommand {
 
 		Ok(())
 	}
+}
+
+fn ensure_sqlite_database_exists(url: &str) -> CommandResult<()> {
+	let Some(path_and_query) = url.strip_prefix("sqlite:") else {
+		return Ok(());
+	};
+	let (path, query) = path_and_query
+		.split_once('?')
+		.unwrap_or((path_and_query, ""));
+	if path == ":memory:" || query.split('&').any(|part| part == "mode=memory") {
+		return Ok(());
+	}
+	let path = path.strip_prefix("//").unwrap_or(path);
+	if path.is_empty() || Path::new(path).is_file() {
+		return Ok(());
+	}
+	Err(CommandError::ExecutionError(
+		"SQLite database file does not exist.".to_string(),
+	))
 }
 
 fn load_config(path: PathBuf) -> CommandResult<IntrospectConfig> {

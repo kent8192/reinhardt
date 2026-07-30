@@ -183,6 +183,99 @@ async fn postgres_permission_errors_remain_errors() {
 }
 
 #[tokio::test]
+#[serial(migration_visibility_containers)]
+async fn postgres_missing_relation_inside_recorder_view_remains_an_error() {
+	let (_container, connection, _port) = postgres_connection().await;
+	connection
+		.execute(
+			"CREATE FUNCTION migration_visibility_records()
+			 RETURNS TABLE (app TEXT, name TEXT, applied TIMESTAMPTZ)
+			 LANGUAGE plpgsql
+			 AS $$
+			 BEGIN
+			     RETURN QUERY EXECUTE
+			         'SELECT app, name, applied FROM visibility_missing_dependency';
+			 END
+			 $$",
+			vec![],
+		)
+		.await
+		.unwrap();
+	connection
+		.execute(
+			"CREATE VIEW reinhardt_migrations AS
+			 SELECT * FROM migration_visibility_records()",
+			vec![],
+		)
+		.await
+		.unwrap();
+	let recorder = DatabaseMigrationRecorder::new(connection);
+
+	let error = recorder
+		.get_applied_migrations_if_present()
+		.await
+		.unwrap_err();
+
+	let MigrationError::DatabaseError(error) = error else {
+		panic!("expected a database error");
+	};
+	assert_eq!(error.code(), Some("42P01"));
+	assert_eq!(
+		error.message(),
+		"relation \"visibility_missing_dependency\" does not exist"
+	);
+}
+
+#[tokio::test]
+#[serial(migration_visibility_containers)]
+async fn mysql_missing_table_inside_recorder_view_remains_an_error() {
+	let (_container, connection) = mysql_connection().await;
+	let pool = connection
+		.into_mysql()
+		.expect("the fixture should expose a MySQL pool");
+	sqlx::raw_sql(
+		"CREATE FUNCTION migration_visibility_timestamp()
+			 RETURNS DATETIME
+			 READS SQL DATA
+			 RETURN (
+			     SELECT applied
+			     FROM visibility_missing_dependency
+			     LIMIT 1
+			 )",
+	)
+	.execute(&pool)
+	.await
+	.unwrap();
+	connection
+		.execute(
+			"CREATE VIEW reinhardt_migrations AS
+			 SELECT
+			     'blog' AS app,
+			     '0001_initial' AS name,
+			     migration_visibility_timestamp() AS applied",
+			vec![],
+		)
+		.await
+		.unwrap();
+	let recorder = DatabaseMigrationRecorder::new(connection);
+
+	let error = recorder
+		.get_applied_migrations_if_present()
+		.await
+		.unwrap_err();
+
+	let MigrationError::DatabaseError(error) = error else {
+		panic!("expected a database error");
+	};
+	assert_eq!(error.code(), Some("HY000"));
+	assert_eq!(
+		error.message(),
+		"View 'migration_visibility.reinhardt_migrations' references invalid table(s) or column(s) \
+		 or function(s) or definer/invoker of view lack rights to use them"
+	);
+}
+
+#[tokio::test]
 async fn malformed_recorder_schema_remains_an_error() {
 	let (_directory, connection) = sqlite_connection().await;
 	connection

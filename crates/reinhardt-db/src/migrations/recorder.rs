@@ -148,7 +148,7 @@ impl Default for MigrationRecorder {
 }
 
 impl DatabaseMigrationRecorder {
-	fn recorder_table_is_absent(&self, error: &super::MigrationError) -> bool {
+	fn recorder_table_might_be_absent(&self, error: &super::MigrationError) -> bool {
 		use crate::backends::types::DatabaseType;
 
 		let super::MigrationError::DatabaseError(error) = error else {
@@ -165,6 +165,40 @@ impl DatabaseMigrationRecorder {
 						.eq_ignore_ascii_case("no such table: reinhardt_migrations")
 			}
 		}
+	}
+
+	async fn recorder_relation_exists(&self) -> super::Result<bool> {
+		use crate::backends::types::DatabaseType;
+
+		let sql = match self.connection.database_type() {
+			DatabaseType::Postgres => {
+				"SELECT to_regclass('reinhardt_migrations') IS NOT NULL AS recorder_exists"
+			}
+			DatabaseType::Mysql => {
+				"SELECT EXISTS(
+					SELECT 1
+					FROM information_schema.tables
+					WHERE table_schema = DATABASE()
+					  AND table_name = 'reinhardt_migrations'
+				) AS recorder_exists"
+			}
+			DatabaseType::Sqlite => return Ok(false),
+		};
+		let rows = self
+			.connection
+			.fetch_all(sql, vec![])
+			.await
+			.map_err(map_framework_database_error)?;
+		let row = rows.first().ok_or_else(|| {
+			super::MigrationError::DatabaseError(DatabaseError::new(
+				DatabaseErrorKind::Query,
+				"Recorder relation existence query returned no rows",
+			))
+		})?;
+
+		row.get::<bool>("recorder_exists")
+			.or_else(|_| row.get::<i64>("recorder_exists").map(|exists| exists != 0))
+			.map_err(super::MigrationError::DatabaseError)
 	}
 
 	/// Create a new database-backed migration recorder
@@ -897,7 +931,15 @@ impl DatabaseMigrationRecorder {
 	/// timestamp decoding errors, are returned to the caller.
 	pub async fn get_applied_migrations_if_present(&self) -> super::Result<Vec<MigrationRecord>> {
 		match self.get_applied_migrations().await {
-			Err(error) if self.recorder_table_is_absent(&error) => Ok(Vec::new()),
+			Err(error) if self.recorder_table_might_be_absent(&error) => {
+				if self.connection.database_type() == crate::backends::types::DatabaseType::Sqlite {
+					return Ok(Vec::new());
+				}
+				match self.recorder_relation_exists().await {
+					Ok(false) => Ok(Vec::new()),
+					Ok(true) | Err(_) => Err(error),
+				}
+			}
 			result => result,
 		}
 	}

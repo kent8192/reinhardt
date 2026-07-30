@@ -868,6 +868,7 @@ impl FilesystemRepository {
 		let root = Dir::open_ambient_dir(&self.root_dir, ambient_authority())?;
 		let root_identity = directory_identity(&root.dir_metadata()?)?;
 		before_open()?;
+		self.validate_root_identity(root_identity, || Ok(()))?;
 		root.create_dir_all(app_label)?;
 		let app_directory = root.open_dir(app_label)?;
 		let file_name = format!("{migration_name}.rs");
@@ -1640,6 +1641,52 @@ mod tests {
 
 	#[cfg(unix)]
 	#[test]
+	fn create_new_source_rejects_preexisting_root_symlink_before_file_creation() {
+		use std::cell::Cell;
+		use std::os::unix::fs::symlink;
+
+		let container = TempDir::new().unwrap();
+		let root = container.path().join("migrations");
+		let outside = TempDir::new().unwrap();
+		symlink(outside.path(), &root).unwrap();
+		let repo = FilesystemRepository::new(&root);
+		let source = repo
+			.render(
+				&create_test_migration("polls", "0001_squashed"),
+				MigrationRenderOptions {
+					include_header: false,
+				},
+			)
+			.unwrap();
+		let cleanup_called = Cell::new(false);
+
+		let error = repo
+			.create_new_source_with_hooks(
+				"polls",
+				"0001_squashed",
+				&source,
+				RootValidationHooks {
+					before_open: || Ok(()),
+					after_identity_open: || Ok(()),
+				},
+				|file, formatted| {
+					file.write_all(formatted.as_bytes())?;
+					file.sync_all()
+				},
+				|_: &Dir, _: &str| {
+					cleanup_called.set(true);
+					Err(std::io::Error::other("injected cleanup failure"))
+				},
+			)
+			.unwrap_err();
+
+		assert!(matches!(error, MigrationError::PathTraversal(_)));
+		assert!(!cleanup_called.get());
+		assert!(!outside.path().join("polls/0001_squashed.rs").exists());
+	}
+
+	#[cfg(unix)]
+	#[test]
 	fn create_new_source_anchors_root_before_path_replacement() {
 		use std::os::unix::fs::symlink;
 
@@ -1684,7 +1731,8 @@ mod tests {
 
 	#[cfg(unix)]
 	#[test]
-	fn create_new_source_reports_root_identity_and_cleanup_failures() {
+	fn create_new_source_rejects_root_swap_before_cleanup_is_needed() {
+		use std::cell::Cell;
 		use std::os::unix::fs::symlink;
 
 		let container = TempDir::new().unwrap();
@@ -1701,6 +1749,7 @@ mod tests {
 				},
 			)
 			.unwrap();
+		let cleanup_called = Cell::new(false);
 
 		let error = repo
 			.create_new_source_with_hooks(
@@ -1718,16 +1767,16 @@ mod tests {
 					file.write_all(formatted.as_bytes())?;
 					file.sync_all()
 				},
-				|_: &Dir, _: &str| Err(std::io::Error::other("injected identity cleanup failure")),
+				|_: &Dir, _: &str| {
+					cleanup_called.set(true);
+					Err(std::io::Error::other("injected identity cleanup failure"))
+				},
 			)
 			.unwrap_err();
 
 		assert!(error.to_string().contains("root directory identity"));
-		assert!(
-			error
-				.to_string()
-				.contains("injected identity cleanup failure")
-		);
+		assert!(!cleanup_called.get());
+		assert!(!anchored_root.join("polls/0001_squashed.rs").exists());
 		assert!(!outside.path().join("polls").exists());
 	}
 

@@ -1,4 +1,9 @@
-#![allow(dead_code, unexpected_cfgs)]
+// The fixture defines fields solely to make the generated field accessor fail,
+// so the compiler cannot observe reads from every field.
+#![allow(dead_code)]
+// The model macro emits its documented custom cfg names while trybuild invokes
+// rustc directly, without Cargo's check-cfg configuration.
+#![allow(unexpected_cfgs)]
 
 use chrono::NaiveDate;
 use reinhardt_core::macros::model;

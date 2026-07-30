@@ -1508,7 +1508,7 @@ where
 			)
 			.into());
 		}
-		if !self.group_by_fields.is_empty() {
+		if !self.group_by_fields.is_empty() || !self.having_conditions.is_empty() {
 			return Err(DatabaseError::new(
 				DatabaseErrorKind::Unsupported,
 				"date and datetime projections are not supported on grouped querysets",
@@ -9597,10 +9597,6 @@ mod tests {
 		.expect_err("SQLite must reject PostgreSQL vector distance operators");
 
 		assert_eq!(
-			error.kind(),
-			reinhardt_core::exception::DatabaseErrorKind::Unsupported
-		);
-		assert_eq!(
 			error.to_string(),
 			"pgvector distance operators is not supported by the SQLite backend"
 		);
@@ -12048,6 +12044,34 @@ mod tests {
 			error.kind(),
 			reinhardt_core::exception::DatabaseErrorKind::Unsupported
 		);
+		assert_eq!(
+			error.to_string(),
+			"date and datetime projections are not supported on grouped querysets"
+		);
+	}
+
+	#[test]
+	fn temporal_projection_rejects_having_only_querysets() {
+		let mut queryset = QuerySet::<TestUser>::new();
+		queryset
+			.having_conditions
+			.push(HavingCondition::AggregateCompare {
+				func: AggregateFunc::Count,
+				field: "*".to_string(),
+				operator: ComparisonOp::Gt,
+				value: AggregateValue::Int(1),
+			});
+
+		let error = queryset
+			.temporal_projection_statement(
+				"created_at",
+				TemporalTruncKind::Day,
+				DateProjectionOrder::Asc,
+				None,
+				TemporalTruncOutput::Date,
+			)
+			.expect_err("temporal projections must reject HAVING-only querysets");
+
 		assert_eq!(
 			error.to_string(),
 			"date and datetime projections are not supported on grouped querysets"

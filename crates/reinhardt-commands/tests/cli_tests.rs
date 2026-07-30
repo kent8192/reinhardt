@@ -1647,7 +1647,7 @@ fn dbshell_parses_database_selection_and_passthrough() {
 		} => {
 			assert_eq!(database, "replica");
 			assert_eq!(
-				database_url.as_deref(),
+				database_url.as_ref().map(|url| url.as_str()),
 				Some("postgresql://operator:secret@db.example/app")
 			);
 			assert_eq!(
@@ -1661,4 +1661,35 @@ fn dbshell_parses_database_selection_and_passthrough() {
 		}
 		other => panic!("Expected Dbshell command, got {other:?}"),
 	}
+}
+
+#[cfg(feature = "reinhardt-db")]
+#[rstest]
+fn dbshell_debug_redacts_database_url_override() {
+	let password = "do-not-print-this";
+	let raw_url = format!("postgresql://operator:{password}@db.example/private");
+	let cli = Cli::try_parse_from([
+		OsString::from("manage"),
+		OsString::from("dbshell"),
+		OsString::from("--database-url"),
+		OsString::from(&raw_url),
+	])
+	.expect("dbshell URL override should parse");
+
+	let command_debug = format!("{:?}", cli.command);
+	let cli_debug = format!("{cli:?}");
+
+	for debug in [&command_debug, &cli_debug] {
+		assert!(!debug.contains(password));
+		assert!(!debug.contains(&raw_url));
+		assert!(debug.contains("[REDACTED]"));
+	}
+	assert_eq!(
+		command_debug,
+		"Dbshell { database: \"default\", database_url: Some(RedactedDatabaseUrl(\"[REDACTED]\")), client_arguments: [] }"
+	);
+	assert_eq!(
+		cli_debug,
+		"Cli { command: Dbshell { database: \"default\", database_url: Some(RedactedDatabaseUrl(\"[REDACTED]\")), client_arguments: [] }, verbosity: 0 }"
+	);
 }

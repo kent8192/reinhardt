@@ -22,9 +22,12 @@ use reinhardt_conf::settings::sources::{DefaultSource, LowPriorityEnvSource, Tom
 use reinhardt_utils::staticfiles::StaticFilesConfig;
 use serde_json::Value;
 use std::env;
+use std::ffi::{OsStr, OsString};
 #[cfg(feature = "reinhardt-db")]
-use std::ffi::OsString;
+use std::fmt;
 use std::path::{Path, PathBuf};
+#[cfg(feature = "reinhardt-db")]
+use std::str::FromStr;
 use std::sync::Arc;
 
 #[cfg(feature = "routers")]
@@ -46,6 +49,45 @@ pub struct Cli {
 	/// Verbosity level (can be repeated for more output)
 	#[arg(short, long, action = clap::ArgAction::Count)]
 	pub verbosity: u8,
+}
+
+/// A database URL override whose debug representation never exposes its value.
+#[cfg(feature = "reinhardt-db")]
+#[derive(Clone, PartialEq, Eq)]
+pub struct RedactedDatabaseUrl(String);
+
+#[cfg(feature = "reinhardt-db")]
+impl RedactedDatabaseUrl {
+	/// Returns the database URL value.
+	///
+	/// Callers must avoid including the returned value in diagnostics because it
+	/// can contain database credentials.
+	pub fn as_str(&self) -> &str {
+		&self.0
+	}
+
+	fn into_inner(self) -> String {
+		self.0
+	}
+}
+
+#[cfg(feature = "reinhardt-db")]
+impl fmt::Debug for RedactedDatabaseUrl {
+	fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+		formatter
+			.debug_tuple("RedactedDatabaseUrl")
+			.field(&"[REDACTED]")
+			.finish()
+	}
+}
+
+#[cfg(feature = "reinhardt-db")]
+impl FromStr for RedactedDatabaseUrl {
+	type Err = std::convert::Infallible;
+
+	fn from_str(value: &str) -> Result<Self, Self::Err> {
+		Ok(Self(value.to_string()))
+	}
 }
 
 /// Output format for the introspect command
@@ -329,7 +371,7 @@ pub enum Commands {
 
 		/// One-off database URL override
 		#[arg(long)]
-		database_url: Option<String>,
+		database_url: Option<RedactedDatabaseUrl>,
 
 		/// Arguments passed directly to the native database client
 		#[arg(last = true, allow_hyphen_values = true)]
@@ -714,35 +756,11 @@ async fn execute_with_registry_and_optional_settings(
 ) -> Result<(), Box<dyn std::error::Error>> {
 	// Attempt normal clap parsing first. If it fails (e.g., unknown subcommand),
 	// fall back to checking the registry for a matching custom command.
-	let raw_args: Vec<String> = env::args().collect();
-	let normalized_args = normalize_count_style_verbosity_args(&raw_args);
-	let (command, verbosity) = match Cli::try_parse_from(&normalized_args) {
-		Ok(cli) => (cli.command, cli.verbosity),
-		Err(clap_err) => {
-			// Only intercept "unknown subcommand" errors; re-raise others (--help, --version, etc.)
-			if !is_unknown_subcommand(&clap_err) {
-				clap_err.exit();
-			}
-
-			// Resolve custom commands from the original arguments to preserve the
-			// legacy value-style verbosity convention for their command contexts.
-			match resolve_custom_command(&raw_args, &registry) {
-				Some((name, args, verbosity)) => {
-					#[cfg(feature = "reinhardt-db")]
-					if registry.get(&name).is_none()
-						&& is_fixture_command_name(&name)
-						&& let Err(error) = parse_fixture_command(&name, &args)
-					{
-						error.exit();
-					}
-					(Commands::Custom { name, args }, verbosity)
-				}
-				None => {
-					// No custom command matched either; let clap display its error.
-					clap_err.exit();
-				}
-			}
-		}
+	let raw_args: Vec<OsString> = env::args_os().collect();
+	let (command, verbosity) = match parse_cli_arguments(&raw_args, &registry) {
+		Ok(parsed) => parsed,
+		Err(DriverParseError::Clap(error)) => (*error).exit(),
+		Err(DriverParseError::Command(error)) => return Err(error.into()),
 	};
 
 	// Only register router for commands that serve HTTP traffic.
@@ -1095,7 +1113,7 @@ async fn run_command_core(
 #[cfg(feature = "reinhardt-db")]
 fn execute_dbshell(
 	database: String,
-	database_url: Option<String>,
+	database_url: Option<RedactedDatabaseUrl>,
 	client_arguments: Vec<OsString>,
 	settings: Option<&dyn HasCommonSettings>,
 ) -> Result<(), Box<dyn std::error::Error>> {
@@ -1111,7 +1129,7 @@ fn execute_dbshell(
 #[cfg(feature = "reinhardt-db")]
 fn execute_dbshell_with_runner(
 	database: String,
-	database_url: Option<String>,
+	database_url: Option<RedactedDatabaseUrl>,
 	client_arguments: Vec<OsString>,
 	settings: Option<&dyn HasCommonSettings>,
 	runner: &dyn crate::dbshell::DbClientRunner,
@@ -1119,11 +1137,45 @@ fn execute_dbshell_with_runner(
 	let database = crate::database_selector::resolve_database(
 		&crate::database_selector::DatabaseSelector {
 			alias: database,
-			url_override: database_url,
+			url_override: database_url.map(RedactedDatabaseUrl::into_inner),
 		},
 		settings,
 	)?;
 	crate::dbshell::run_database_shell(&database, &client_arguments, runner).map_err(Into::into)
+}
+
+#[derive(Debug)]
+enum DriverParseError {
+	Clap(Box<clap::Error>),
+	Command(crate::CommandError),
+}
+
+fn parse_cli_arguments(
+	raw_args: &[OsString],
+	registry: &CommandRegistry,
+) -> Result<(Commands, u8), DriverParseError> {
+	let normalized_args = normalize_count_style_verbosity_args(raw_args);
+	match Cli::try_parse_from(&normalized_args) {
+		Ok(cli) => Ok((cli.command, cli.verbosity)),
+		Err(clap_error) if !is_unknown_subcommand(&clap_error) => {
+			Err(DriverParseError::Clap(Box::new(clap_error)))
+		}
+		Err(clap_error) => {
+			match resolve_custom_command(raw_args, registry).map_err(DriverParseError::Command)? {
+				Some((name, args, verbosity)) => {
+					#[cfg(feature = "reinhardt-db")]
+					if registry.get(&name).is_none()
+						&& is_fixture_command_name(&name)
+						&& let Err(error) = parse_fixture_command(&name, &args)
+					{
+						return Err(DriverParseError::Clap(Box::new(error)));
+					}
+					Ok((Commands::Custom { name, args }, verbosity))
+				}
+				None => Err(DriverParseError::Clap(Box::new(clap_error))),
+			}
+		}
+	}
 }
 
 /// Rewrite `--verbosity=N` into clap's count-style verbosity flags.
@@ -1131,18 +1183,25 @@ fn execute_dbshell_with_runner(
 /// This lets the standard parser reach its `InvalidSubcommand` path for a
 /// custom command, while [`resolve_custom_command`] still reads the original
 /// arguments and passes the requested numeric verbosity to that command.
-fn normalize_count_style_verbosity_args(raw_args: &[String]) -> Vec<String> {
+fn normalize_count_style_verbosity_args<T: AsRef<OsStr>>(raw_args: &[T]) -> Vec<OsString> {
 	let mut normalized = Vec::with_capacity(raw_args.len());
 	for argument in raw_args {
-		let Some(value) = argument.strip_prefix("--verbosity=") else {
-			normalized.push(argument.clone());
+		let argument = argument.as_ref();
+		let Some(value) = argument
+			.to_str()
+			.and_then(|argument| argument.strip_prefix("--verbosity="))
+		else {
+			normalized.push(argument.to_os_string());
 			continue;
 		};
 		let Ok(count) = value.parse::<u8>() else {
-			normalized.push(argument.clone());
+			normalized.push(argument.to_os_string());
 			continue;
 		};
-		normalized.extend(std::iter::repeat_n("--verbosity".to_string(), count.into()));
+		normalized.extend(std::iter::repeat_n(
+			OsString::from("--verbosity"),
+			count.into(),
+		));
 	}
 	normalized
 }
@@ -1161,41 +1220,63 @@ fn is_unknown_subcommand(err: &clap::Error) -> bool {
 /// The convention is: `manage <subcommand> [args...]`.  Global flags that
 /// appear before the subcommand (e.g., `-v`) are skipped. Both count-style
 /// `--verbosity` and legacy value-style `--verbosity 2` are accepted.
-fn resolve_custom_command(
-	raw_args: &[String],
+fn resolve_custom_command<T: AsRef<OsStr>>(
+	raw_args: &[T],
 	registry: &CommandRegistry,
-) -> Option<(String, Vec<String>, u8)> {
+) -> crate::CommandResult<Option<(String, Vec<String>, u8)>> {
 	let mut verbosity: u8 = 0;
 
 	// Skip the binary name (argv[0]) and parse leading global flags.
 	let mut iter = raw_args.iter().skip(1).peekable();
 	while let Some(arg) = iter.peek() {
+		let arg = utf8_custom_argument(arg.as_ref())?;
 		if !arg.starts_with('-') {
 			break;
 		}
-		let flag = iter.next().unwrap(); // safe: peeked above
+		let flag = utf8_custom_argument(iter.next().unwrap().as_ref())?; // safe: peeked above
 
 		if flag == "-v" || flag == "--verbose" {
 			verbosity = verbosity.saturating_add(1);
 		} else if flag == "--verbosity" {
-			if let Some(value) = iter.peek().and_then(|value| value.parse::<u8>().ok()) {
+			if let Some(value) = iter
+				.peek()
+				.map(|value| utf8_custom_argument(value.as_ref()))
+				.transpose()?
+				.and_then(|value| value.parse::<u8>().ok())
+			{
 				verbosity = value;
 				iter.next();
 			} else {
 				verbosity = verbosity.saturating_add(1);
 			}
 		} else if let Some(value) = flag.strip_prefix("--verbosity=") {
-			verbosity = value.parse().ok()?;
+			let Ok(value) = value.parse() else {
+				return Ok(None);
+			};
+			verbosity = value;
 		}
 	}
 
-	let subcommand = iter.next()?;
+	let Some(subcommand) = iter.next() else {
+		return Ok(None);
+	};
+	let subcommand = utf8_custom_argument(subcommand.as_ref())?;
 	if registry.get(subcommand).is_some() || is_fixture_command_name(subcommand) {
-		let remaining: Vec<String> = iter.cloned().collect();
-		Some((subcommand.clone(), remaining, verbosity))
+		let remaining = iter
+			.map(|argument| utf8_custom_argument(argument.as_ref()).map(str::to_string))
+			.collect::<crate::CommandResult<Vec<_>>>()?;
+		Ok(Some((subcommand.to_string(), remaining, verbosity)))
 	} else {
-		None
+		Ok(None)
 	}
+}
+
+fn utf8_custom_argument(argument: &OsStr) -> crate::CommandResult<&str> {
+	argument.to_str().ok_or_else(|| {
+		crate::CommandError::InvalidArguments(
+			"Custom command names and arguments must be valid UTF-8.".to_string(),
+		)
+	})
 }
 
 /// Execute a custom command looked up from the registry.
@@ -2057,7 +2138,11 @@ mod tests {
 
 		let result = execute_dbshell_with_runner(
 			"default".to_string(),
-			Some("sqlite:db.sqlite3".to_string()),
+			Some(
+				"sqlite:db.sqlite3"
+					.parse()
+					.expect("database URL wrapper should parse"),
+			),
 			vec![OsString::from("-readonly")],
 			None,
 			&runner,
@@ -2072,11 +2157,66 @@ mod tests {
 	fn dbshell_does_not_require_orm_initialization() {
 		let command = Commands::Dbshell {
 			database: "default".to_string(),
-			database_url: Some("sqlite:db.sqlite3".to_string()),
+			database_url: Some(
+				"sqlite:db.sqlite3"
+					.parse()
+					.expect("database URL wrapper should parse"),
+			),
 			client_arguments: Vec::new(),
 		};
 
 		assert!(!requires_database(&command, &CommandRegistry::new()));
+	}
+
+	#[cfg(all(feature = "reinhardt-db", unix))]
+	#[test]
+	fn driver_parser_preserves_non_utf8_dbshell_passthrough() {
+		use std::os::unix::ffi::OsStringExt;
+
+		let non_utf8 = OsString::from_vec(vec![0xff, b'-', 0xfe]);
+		let raw_args = vec![
+			OsString::from("manage"),
+			OsString::from("dbshell"),
+			OsString::from("--database-url"),
+			OsString::from("sqlite:db.sqlite3"),
+			OsString::from("--"),
+			non_utf8.clone(),
+		];
+
+		let (command, verbosity) = parse_cli_arguments(&raw_args, &CommandRegistry::new())
+			.expect("parse dbshell arguments");
+
+		assert_eq!(verbosity, 0);
+		match command {
+			Commands::Dbshell {
+				client_arguments, ..
+			} => assert_eq!(client_arguments, vec![non_utf8]),
+			other => panic!("Expected Dbshell command, got {other:?}"),
+		}
+	}
+
+	#[cfg(all(feature = "reinhardt-db", unix))]
+	#[test]
+	fn custom_command_non_utf8_error_omits_raw_argument_bytes() {
+		use std::os::unix::ffi::OsStringExt;
+
+		let raw_args = vec![
+			OsString::from("manage"),
+			OsString::from("seed"),
+			OsString::from_vec(vec![
+				0xff, b'd', b'o', b'-', b'n', b'o', b't', b'-', b'p', b'r', b'i', b'n', b't',
+			]),
+		];
+
+		let diagnostic = resolve_custom_command(&raw_args, &CommandRegistry::new())
+			.expect_err("custom command arguments must be valid UTF-8")
+			.to_string();
+
+		assert_eq!(
+			diagnostic,
+			"Invalid arguments: Custom command names and arguments must be valid UTF-8."
+		);
+		assert!(!diagnostic.contains("do-not-print"));
 	}
 
 	#[cfg(feature = "reinhardt-db")]
@@ -2652,7 +2792,8 @@ mod tests {
 				"writing_sources.WritingProject".to_string(),
 			],
 			&registry,
-		);
+		)
+		.expect("fixture arguments must be valid UTF-8");
 
 		assert_eq!(
 			resolved,
@@ -2677,7 +2818,8 @@ mod tests {
 					fixture_command.to_string(),
 				],
 				&registry,
-			);
+			)
+			.expect("fixture arguments must be valid UTF-8");
 
 			assert_eq!(resolved, Some((fixture_command.to_string(), Vec::new(), 1)));
 		}
@@ -2696,7 +2838,8 @@ mod tests {
 			raw_args.extend(args);
 			raw_args.push("dumpdata".to_string());
 			assert_eq!(
-				resolve_custom_command(&raw_args, &registry),
+				resolve_custom_command(&raw_args, &registry)
+					.expect("fixture arguments must be valid UTF-8"),
 				Some(("dumpdata".to_string(), Vec::new(), 2))
 			);
 		}
@@ -2718,7 +2861,8 @@ mod tests {
 
 		assert!(is_unknown_subcommand(&clap_error));
 		assert_eq!(
-			resolve_custom_command(&raw_args, &registry),
+			resolve_custom_command(&raw_args, &registry)
+				.expect("fixture arguments must be valid UTF-8"),
 			Some(("seed".to_string(), Vec::new(), 2))
 		);
 	}

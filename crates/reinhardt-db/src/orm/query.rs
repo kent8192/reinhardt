@@ -6199,6 +6199,7 @@ where
 		self.ensure_unsliced_retrieval()?;
 		let mut queryset = self.clone();
 		queryset.order_by_fields = ordering;
+		queryset.order_by_expressions.clear();
 		queryset.limit = Some(1);
 		queryset
 			.all_with_db(conn)
@@ -6219,6 +6220,7 @@ where
 		self.ensure_unsliced_retrieval().map_err(executor_error)?;
 		let mut queryset = self.clone();
 		queryset.order_by_fields = ordering;
+		queryset.order_by_expressions.clear();
 		queryset.limit = Some(1);
 		queryset
 			.all_with_executor(executor)
@@ -6656,6 +6658,9 @@ where
 	where
 		E: OrmExecutor,
 	{
+		if self.empty {
+			return Ok(Vec::new());
+		}
 		let stmt = self.build_select_statement()?;
 		let context = super::execution::pgvector_context_for_select(&stmt);
 		let (sql, values) =
@@ -7659,6 +7664,11 @@ where
 		T: super::Model + Clone,
 	{
 		Self::composite_primary_key_for_values(pk_values)?;
+		if self.empty {
+			return Err(Error::NotFound(
+				"No record found matching the query".to_string(),
+			));
+		}
 		let mut conn = super::manager::get_connection().await?;
 		self.get_composite_with_db(&mut conn, pk_values).await
 	}
@@ -7696,6 +7706,11 @@ where
 		T: super::Model + Clone,
 		E: OrmExecutor,
 	{
+		if self.empty {
+			return Err(Error::NotFound(
+				"No record found matching the query".to_string(),
+			));
+		}
 		use reinhardt_query::prelude::{Alias, BinOper, ColumnRef, Expr, Value};
 
 		let composite_pk = Self::composite_primary_key_for_values(pk_values)?;

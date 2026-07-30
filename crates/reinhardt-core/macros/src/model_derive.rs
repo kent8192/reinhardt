@@ -3318,6 +3318,13 @@ fn resolve_latest_by_fields(
 					)
 				})?;
 
+			if field.config.skip {
+				return Err(syn::Error::new_spanned(
+					struct_name,
+					format!("get_latest_by cannot include skipped field '{field_name}'"),
+				));
+			}
+
 			if field.rel.is_some() || is_relationship_field_type(&field.ty) {
 				let message = if field.rel.as_ref().is_some_and(|relation| {
 					relation.rel_type == crate::rel::RelationType::ManyToMany

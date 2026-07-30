@@ -710,6 +710,10 @@ they do not resolve a connection or invoke an executor. The equivalent
 caller-owned connection or transaction executor. These contracts are
 backend-neutral across PostgreSQL, MySQL, and SQLite.
 
+When a retrieval ordering field is nullable, its relative NULL placement follows
+the connected database. Filter nulls explicitly before calling `latest*` or
+`earliest*` when that placement is part of the application contract.
+
 ### Scoped N+1 Query Detection
 
 Use `NPlusOneScope` around development diagnostics or focused tests to detect

@@ -49,8 +49,11 @@ console_error_panic_hook = "0.1"
 wasm-bindgen-futures = "0.4"
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+# Keep the facade dependency after the native-only commands dependency so
+# procedural macros resolve application paths through the cross-target
+# `reinhardt` crate name.
+reinhardt-commands = { version = "{{ reinhardt_version }}", default-features = false, features = ["shell"], optional = true }
 reinhardt = { version = "{{ reinhardt_version }}", package = "reinhardt-web", default-features = {{ reinhardt_default_features }}, features = {{ reinhardt_features_toml }} }
-reinhardt-shell = { version = "{{ reinhardt_version }}", package = "reinhardt-web", default-features = false, features = ["commands-shell"], optional = true }
 clap = { version = "4", features = ["derive"] }
 console = "0.16.1"
 tokio = { version = "1", features = ["full"] }
@@ -61,7 +64,7 @@ cfg_aliases = "0.2"
 [features]
 default = ["with-reinhardt", "client-router"]
 client-router = []
-commands-shell = ["dep:reinhardt-shell"]
+commands-shell = ["reinhardt/commands", "reinhardt/database", "reinhardt/di", "dep:reinhardt-commands"]
 with-reinhardt = []
 msw = ["reinhardt/msw"]
 

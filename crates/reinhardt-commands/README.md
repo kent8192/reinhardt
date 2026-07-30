@@ -264,10 +264,13 @@ cargo run --bin manage --features commands-shell -- shell -c \
   'println!("{}", settings.core.debug)'
 ```
 
-`commands-shell` is intentionally absent from generated default features. The
-project feature forwards to `reinhardt/commands-shell`, `config::shell` defines
-the aliases used by the evaluator, and `get_shell_config()` identifies the
-package, crate, settings factory, installed apps, and optional project prelude.
+`commands-shell` is intentionally absent from generated default features.
+REST projects forward the facade feature to `reinhardt/commands-shell`. Pages
+projects enable the shell implementation through a native-only
+`reinhardt-commands` dependency so server-only evaluator dependencies do not
+enter WASM builds. `config::shell` defines the aliases used by the evaluator,
+and `get_shell_config()` identifies the package, crate, settings factory,
+installed apps, and optional project prelude.
 When the management binary enables additional project features, pass the same
 selection to `ShellConfig::with_dependency_features`; also call
 `without_default_features` when the binary was built without defaults. This

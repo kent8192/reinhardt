@@ -69,7 +69,7 @@ fn format_list(snapshot: &MigrationSnapshot, verbosity: u8) -> String {
 					output.push_str(&migration.name);
 					if verbosity >= 2 {
 						output.push_str(" (applied at ");
-						output.push_str(&applied_at.to_rfc3339());
+						output.push_str(&applied_at.format("%Y-%m-%d %H:%M:%S").to_string());
 						output.push(')');
 					}
 				}
@@ -204,7 +204,10 @@ impl BaseCommand for ShowMigrationsCommand {
 			ShowMigrationsMode::List
 		};
 		let output = format_migration_snapshot(&snapshot, mode, ctx.verbosity());
-		self.writer.write_stdout(&output)?;
+		self.writer
+			.write_stdout(&output)
+			.map_err(CommandError::IoError)
+			.map_err(|error| with_command_context(error, &command_context))?;
 		Ok(())
 	}
 }

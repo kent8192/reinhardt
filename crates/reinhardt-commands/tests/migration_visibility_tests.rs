@@ -13,7 +13,10 @@ use reinhardt_db::migrations::{
 };
 use std::collections::HashMap;
 use std::io;
-use std::sync::{Arc, Mutex};
+use std::sync::{
+	Arc, Mutex,
+	atomic::{AtomicUsize, Ordering},
+};
 
 struct TestSource {
 	migrations: Vec<Migration>,
@@ -34,6 +37,19 @@ impl MigrationVisibilityWriter for RecordingWriter {
 impl RecordingWriter {
 	fn outputs(&self) -> Vec<String> {
 		self.writes.lock().unwrap().clone()
+	}
+}
+
+#[derive(Default)]
+struct FailingWriter {
+	attempts: AtomicUsize,
+	successful_writes: Mutex<Vec<String>>,
+}
+
+impl MigrationVisibilityWriter for FailingWriter {
+	fn write_stdout(&self, _content: &str) -> io::Result<()> {
+		self.attempts.fetch_add(1, Ordering::SeqCst);
+		Err(io::Error::other("sink failed"))
 	}
 }
 
@@ -75,7 +91,7 @@ fn list_output_is_grouped_with_exact_markers_and_level_two_timestamps() {
 	);
 	assert_eq!(
 		verbose,
-		"auth\n [X] 0001_initial (applied at 2026-07-29T12:34:56+00:00)\npolls\n [ ] 0001_initial\n"
+		"auth\n [X] 0001_initial (applied at 2026-07-29 12:34:56)\npolls\n [ ] 0001_initial\n"
 	);
 }
 
@@ -273,4 +289,76 @@ async fn migration_errors_identify_command_and_redacted_database_alias() {
 	assert!(diagnostic.contains("[REDACTED]"));
 	assert!(!diagnostic.contains(alias));
 	assert!(!diagnostic.contains("alias-secret"));
+}
+
+#[tokio::test]
+async fn showmigrations_stdout_failure_preserves_io_category_and_safe_context() {
+	let migrations = tempfile::tempdir().unwrap();
+	let writer = Arc::new(FailingWriter::default());
+	let command = ShowMigrationsCommand::with_writer(writer.clone());
+	let alias = "postgresql://admin:show-secret@db.example/catalog";
+	let mut context = CommandContext::default();
+	context.set_option("database".to_string(), alias.to_string());
+	context.set_option("database-url".to_string(), "sqlite::memory:".to_string());
+	context.set_option(
+		"migrations-dir".to_string(),
+		migrations.path().to_string_lossy().into_owned(),
+	);
+
+	let error = command.execute(&context).await.unwrap_err();
+	let diagnostic = error.to_string();
+
+	assert!(matches!(
+		error,
+		reinhardt_commands::CommandError::IoError(_)
+	));
+	assert_eq!(writer.attempts.load(Ordering::SeqCst), 1);
+	assert!(writer.successful_writes.lock().unwrap().is_empty());
+	assert!(diagnostic.contains("showmigrations"));
+	assert!(diagnostic.contains("[REDACTED]"));
+	assert!(!diagnostic.contains(alias));
+	assert!(!diagnostic.contains("show-secret"));
+}
+
+#[tokio::test]
+async fn sqlmigrate_stdout_failure_preserves_io_category_and_target_context() {
+	let migrations = tempfile::tempdir().unwrap();
+	let repository = reinhardt_db::migrations::FilesystemRepository::new(migrations.path());
+	let migration = create_books_migration();
+	let source = repository
+		.render(
+			&migration,
+			MigrationRenderOptions {
+				include_header: false,
+			},
+		)
+		.unwrap();
+	repository
+		.create_new_source("catalog", "0001_initial", &source)
+		.unwrap();
+	let writer = Arc::new(FailingWriter::default());
+	let command = SqlMigrateCommand::with_writer(writer.clone());
+	let alias = "postgresql://admin:sql-secret@db.example/catalog";
+	let mut context = CommandContext::new(vec!["catalog".to_string(), "0001".to_string()]);
+	context.set_option("database".to_string(), alias.to_string());
+	context.set_option("database-url".to_string(), "sqlite::memory:".to_string());
+	context.set_option(
+		"migrations-dir".to_string(),
+		migrations.path().to_string_lossy().into_owned(),
+	);
+
+	let error = command.execute(&context).await.unwrap_err();
+	let diagnostic = error.to_string();
+
+	assert!(matches!(
+		error,
+		reinhardt_commands::CommandError::IoError(_)
+	));
+	assert_eq!(writer.attempts.load(Ordering::SeqCst), 1);
+	assert!(writer.successful_writes.lock().unwrap().is_empty());
+	assert!(diagnostic.contains("sqlmigrate"));
+	assert!(diagnostic.contains("catalog.0001"));
+	assert!(diagnostic.contains("[REDACTED]"));
+	assert!(!diagnostic.contains(alias));
+	assert!(!diagnostic.contains("sql-secret"));
 }

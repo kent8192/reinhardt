@@ -148,7 +148,10 @@ impl BaseCommand for SqlMigrateCommand {
 			.await
 			.map_err(crate::squashmigrations::migration_error_to_command_error)
 			.map_err(|error| with_command_context(error, &command_context))?;
-		self.writer.write_stdout(&output)?;
+		self.writer
+			.write_stdout(&output)
+			.map_err(crate::CommandError::IoError)
+			.map_err(|error| with_command_context(error, &command_context))?;
 		Ok(())
 	}
 }

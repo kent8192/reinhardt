@@ -62,6 +62,10 @@ details.
 - **migrate** - Apply database migrations
 - **inspectdb** - Generate deterministic Reinhardt models from an existing
   PostgreSQL, MySQL, or SQLite schema
+- **showmigrations** - Display applied state or the selected dependency plan
+  without creating migration history
+- **sqlmigrate** - Render backend-specific forward or rollback SQL without
+  executing schema statements
 - **dumpdata** - Export model rows as Django-compatible JSON fixtures
 - **loaddata** - Load Django-compatible JSON fixtures into the database
 - **seed** - Run idempotent per-application development seed hooks
@@ -114,6 +118,20 @@ attempts to remove the incomplete file through its anchored directory handle.
 A cleanup failure reports both the original write error and the cleanup error.
 The command only reads migration source files and does not require a database
 connection.
+
+### Inspecting migration state and SQL
+
+`showmigrations` lists migration state by application by default. Use `--plan`
+to show the complete selected dependency order; selecting an application keeps
+its transitive cross-application dependencies. `sqlmigrate APP MIGRATION`
+accepts an exact name or unique prefix and renders through the same SQL planner
+used by migration execution. Pass `--backwards` for rollback SQL.
+
+Both commands accept `--database ALIAS` and a one-off `--database-url URL`.
+They load and validate the complete migration catalog before output.
+`showmigrations` reads an existing recorder table without creating it, while
+`sqlmigrate` performs no schema or migration-history writes. SQL output is
+fully buffered before its single stdout write.
 
 ### Pages template hot reload
 

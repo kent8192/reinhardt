@@ -198,8 +198,6 @@ pub(crate) mod createsuperuser;
 pub mod data_commands;
 #[cfg(feature = "reinhardt-db")]
 pub(crate) mod database_selector;
-// The process runner and command adapter consume this specification layer in later dbshell tasks.
-#[allow(dead_code)]
 #[cfg(feature = "reinhardt-db")]
 pub(crate) mod dbshell;
 /// Debounced file-system watcher for hot-reload (replaces inline watcher).

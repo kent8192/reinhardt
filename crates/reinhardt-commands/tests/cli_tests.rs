@@ -7,6 +7,7 @@
 use clap::{CommandFactory, Parser};
 use reinhardt_commands::{Cli, CommandContext, Commands};
 use rstest::*;
+use std::ffi::OsString;
 use std::path::PathBuf;
 
 // ============================================================================
@@ -1597,4 +1598,67 @@ fn inspectdb_rejects_force_without_output() {
 		clap::error::ErrorKind::MissingRequiredArgument
 	);
 	assert!(error.to_string().contains("--output"));
+}
+
+#[cfg(feature = "reinhardt-db")]
+#[rstest]
+fn dbshell_parses_default_database_alias() {
+	let command = Cli::try_parse_from(["manage", "dbshell"])
+		.expect("minimal dbshell arguments should parse")
+		.command;
+
+	match command {
+		Commands::Dbshell {
+			database,
+			database_url,
+			client_arguments,
+		} => {
+			assert_eq!(database, "default");
+			assert_eq!(database_url, None);
+			assert_eq!(client_arguments, Vec::<OsString>::new());
+		}
+		other => panic!("Expected Dbshell command, got {other:?}"),
+	}
+}
+
+#[cfg(feature = "reinhardt-db")]
+#[rstest]
+fn dbshell_parses_database_selection_and_passthrough() {
+	let command = Cli::try_parse_from([
+		"manage",
+		"dbshell",
+		"--database",
+		"replica",
+		"--database-url",
+		"postgresql://operator:secret@db.example/app",
+		"--",
+		"--echo-all",
+		"-v",
+		"ON_ERROR_STOP=1",
+	])
+	.expect("complete dbshell arguments should parse")
+	.command;
+
+	match command {
+		Commands::Dbshell {
+			database,
+			database_url,
+			client_arguments,
+		} => {
+			assert_eq!(database, "replica");
+			assert_eq!(
+				database_url.as_deref(),
+				Some("postgresql://operator:secret@db.example/app")
+			);
+			assert_eq!(
+				client_arguments,
+				vec![
+					OsString::from("--echo-all"),
+					OsString::from("-v"),
+					OsString::from("ON_ERROR_STOP=1"),
+				]
+			);
+		}
+		other => panic!("Expected Dbshell command, got {other:?}"),
+	}
 }

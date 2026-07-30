@@ -22,6 +22,8 @@ use reinhardt_conf::settings::sources::{DefaultSource, LowPriorityEnvSource, Tom
 use reinhardt_utils::staticfiles::StaticFilesConfig;
 use serde_json::Value;
 use std::env;
+#[cfg(feature = "reinhardt-db")]
+use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -316,6 +318,22 @@ pub enum Commands {
 		/// Overwrite existing generated files
 		#[arg(long, requires = "output")]
 		force: bool,
+	},
+
+	/// Launch the native client for a configured database
+	#[cfg(feature = "reinhardt-db")]
+	Dbshell {
+		/// Configured database alias
+		#[arg(long, default_value = "default")]
+		database: String,
+
+		/// One-off database URL override
+		#[arg(long)]
+		database_url: Option<String>,
+
+		/// Arguments passed directly to the native database client
+		#[arg(last = true, allow_hyphen_values = true)]
+		client_arguments: Vec<OsString>,
 	},
 
 	/// Output structured project metadata for platform introspection
@@ -1025,6 +1043,17 @@ async fn run_command_core(
 			)
 			.await
 		}
+		#[cfg(feature = "reinhardt-db")]
+		Commands::Dbshell {
+			database,
+			database_url,
+			client_arguments,
+		} => execute_dbshell(
+			database,
+			database_url,
+			client_arguments,
+			settings.as_deref(),
+		),
 		#[cfg(feature = "introspect")]
 		Commands::Introspect { format, section } => execute_introspect(format, section, verbosity).await,
 		#[cfg(feature = "openapi")]
@@ -1061,6 +1090,40 @@ async fn run_command_core(
 			execute_custom_command(&name, &args, verbosity, &registry).await
 		}
 	}
+}
+
+#[cfg(feature = "reinhardt-db")]
+fn execute_dbshell(
+	database: String,
+	database_url: Option<String>,
+	client_arguments: Vec<OsString>,
+	settings: Option<&dyn HasCommonSettings>,
+) -> Result<(), Box<dyn std::error::Error>> {
+	execute_dbshell_with_runner(
+		database,
+		database_url,
+		client_arguments,
+		settings,
+		&crate::dbshell::PortableDbClientRunner,
+	)
+}
+
+#[cfg(feature = "reinhardt-db")]
+fn execute_dbshell_with_runner(
+	database: String,
+	database_url: Option<String>,
+	client_arguments: Vec<OsString>,
+	settings: Option<&dyn HasCommonSettings>,
+	runner: &dyn crate::dbshell::DbClientRunner,
+) -> Result<(), Box<dyn std::error::Error>> {
+	let database = crate::database_selector::resolve_database(
+		&crate::database_selector::DatabaseSelector {
+			alias: database,
+			url_override: database_url,
+		},
+		settings,
+	)?;
+	crate::dbshell::run_database_shell(&database, &client_arguments, runner).map_err(Into::into)
 }
 
 /// Rewrite `--verbosity=N` into clap's count-style verbosity flags.
@@ -1957,13 +2020,64 @@ mod tests {
 	use super::*;
 	use rstest::rstest;
 	#[cfg(feature = "reinhardt-db")]
+	use std::cell::Cell;
+	#[cfg(feature = "reinhardt-db")]
 	use std::sync::atomic::{AtomicBool, Ordering};
+
+	#[cfg(feature = "reinhardt-db")]
+	struct RecordingDbClientRunner {
+		called: Cell<bool>,
+		outcome: crate::dbshell::DbShellOutcome,
+	}
+
+	#[cfg(feature = "reinhardt-db")]
+	impl crate::dbshell::DbClientRunner for RecordingDbClientRunner {
+		fn run(
+			&self,
+			_spec: &crate::dbshell::DbClientSpec,
+		) -> crate::CommandResult<crate::dbshell::DbShellOutcome> {
+			self.called.set(true);
+			Ok(self.outcome)
+		}
+	}
 
 	#[cfg(feature = "reinhardt-db")]
 	struct RegisteredFixtureNameCommand;
 
 	#[cfg(feature = "reinhardt-db")]
 	static REGISTERED_FIXTURE_NAME_COMMAND_EXECUTED: AtomicBool = AtomicBool::new(false);
+
+	#[cfg(feature = "reinhardt-db")]
+	#[test]
+	fn dbshell_dispatch_resolves_url_override_without_settings() {
+		let runner = RecordingDbClientRunner {
+			called: Cell::new(false),
+			outcome: crate::dbshell::DbShellOutcome::Exited(0),
+		};
+
+		let result = execute_dbshell_with_runner(
+			"default".to_string(),
+			Some("sqlite:db.sqlite3".to_string()),
+			vec![OsString::from("-readonly")],
+			None,
+			&runner,
+		);
+
+		assert!(result.is_ok());
+		assert!(runner.called.get());
+	}
+
+	#[cfg(feature = "reinhardt-db")]
+	#[test]
+	fn dbshell_does_not_require_orm_initialization() {
+		let command = Commands::Dbshell {
+			database: "default".to_string(),
+			database_url: Some("sqlite:db.sqlite3".to_string()),
+			client_arguments: Vec::new(),
+		};
+
+		assert!(!requires_database(&command, &CommandRegistry::new()));
+	}
 
 	#[cfg(feature = "reinhardt-db")]
 	#[async_trait::async_trait]

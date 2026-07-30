@@ -29,6 +29,25 @@ pub(crate) trait DbClientRunner {
 
 pub(crate) struct PortableDbClientRunner;
 
+pub(crate) fn run_database_shell(
+	database: &ResolvedDatabase,
+	client_arguments: &[OsString],
+	runner: &dyn DbClientRunner,
+) -> CommandResult<()> {
+	let spec = build_client_spec(database, client_arguments)?;
+	let client_name = spec.executable.to_string_lossy();
+
+	match runner.run(&spec)? {
+		DbShellOutcome::Exited(0) => Ok(()),
+		DbShellOutcome::Exited(status) => Err(CommandError::ExecutionError(format!(
+			"Database client `{client_name}` exited with status {status}."
+		))),
+		DbShellOutcome::TerminatedBySignal => Err(CommandError::ExecutionError(format!(
+			"Database client `{client_name}` was terminated by a signal."
+		))),
+	}
+}
+
 impl DbClientRunner for PortableDbClientRunner {
 	fn run(&self, spec: &DbClientSpec) -> CommandResult<DbShellOutcome> {
 		let executables = resolve_executable_candidates(&spec.executable)?;
@@ -88,11 +107,6 @@ fn client_launch_error(spec: &DbClientSpec, error: std::io::Error) -> CommandErr
 		"Failed to launch database client executable `{}`: {error}",
 		spec.executable.to_string_lossy()
 	))
-}
-
-#[cfg(test)]
-fn resolve_executable(executable: &OsStr) -> CommandResult<PathBuf> {
-	resolve_executable_candidates(executable).map(|mut executables| executables.remove(0))
 }
 
 fn resolve_executable_candidates(executable: &OsStr) -> CommandResult<Vec<PathBuf>> {
@@ -419,7 +433,11 @@ fn malformed_url(backend: &str) -> CommandError {
 
 #[cfg(test)]
 mod tests {
-	use super::{DbClientRunner, DbShellOutcome, PortableDbClientRunner, build_client_spec};
+	use super::{
+		DbClientRunner, DbShellOutcome, PortableDbClientRunner, build_client_spec,
+		run_database_shell,
+	};
+	use crate::CommandResult;
 	use crate::database_selector::{DatabaseSelector, resolve_database};
 	use std::ffi::{OsStr, OsString};
 	use std::fs;
@@ -427,6 +445,72 @@ mod tests {
 	use std::path::Path;
 	use std::process::{Command, Stdio};
 	use tempfile::TempDir;
+
+	struct FixedOutcomeRunner(DbShellOutcome);
+
+	impl DbClientRunner for FixedOutcomeRunner {
+		fn run(&self, _spec: &super::DbClientSpec) -> CommandResult<DbShellOutcome> {
+			Ok(self.0)
+		}
+	}
+
+	#[test]
+	fn command_adapter_accepts_zero_exit_status() {
+		let database =
+			resolved_database("postgresql://operator:do-not-print-this@db.example:5432/private");
+
+		let result = run_database_shell(
+			&database,
+			&[],
+			&FixedOutcomeRunner(DbShellOutcome::Exited(0)),
+		);
+
+		assert!(result.is_ok());
+	}
+
+	#[test]
+	fn command_adapter_reports_nonzero_status_without_secrets() {
+		let password = "do-not-print-this";
+		let raw_url = format!("postgresql://operator:{password}@db.example:5432/private");
+		let database = resolved_database(&raw_url);
+
+		let diagnostic = run_database_shell(
+			&database,
+			&[],
+			&FixedOutcomeRunner(DbShellOutcome::Exited(23)),
+		)
+		.expect_err("nonzero client status should fail")
+		.to_string();
+
+		assert_eq!(
+			diagnostic,
+			"Execution error: Database client `psql` exited with status 23."
+		);
+		assert!(!diagnostic.contains(password));
+		assert!(!diagnostic.contains(&raw_url));
+	}
+
+	#[test]
+	fn command_adapter_reports_signal_termination_distinctly_without_secrets() {
+		let password = "do-not-print-this";
+		let raw_url = format!("mysql://operator:{password}@db.example:3306/private");
+		let database = resolved_database(&raw_url);
+
+		let diagnostic = run_database_shell(
+			&database,
+			&[],
+			&FixedOutcomeRunner(DbShellOutcome::TerminatedBySignal),
+		)
+		.expect_err("signal-terminated client should fail")
+		.to_string();
+
+		assert_eq!(
+			diagnostic,
+			"Execution error: Database client `mysql` was terminated by a signal."
+		);
+		assert!(!diagnostic.contains(password));
+		assert!(!diagnostic.contains(&raw_url));
+	}
 
 	fn resolved_database(url: &str) -> crate::database_selector::ResolvedDatabase {
 		resolve_database(

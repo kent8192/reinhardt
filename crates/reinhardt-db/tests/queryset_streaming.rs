@@ -321,6 +321,7 @@ async fn iterator_with_executor_surfaces_midstream_backend_error() {
 		Err(backend_error.into()),
 		Ok(article_row(2, QueryValue::String("unreachable".to_owned()))),
 	]);
+	let dropped = Arc::clone(&executor.dropped);
 	let mut stream = QuerySet::<StreamedArticle>::new()
 		.iterator_with_executor(&mut executor, 2)
 		.unwrap();
@@ -330,7 +331,7 @@ async fn iterator_with_executor_surfaces_midstream_backend_error() {
 	// Assert
 	let error = stream.next().await.unwrap().unwrap_err();
 	assert_eq!(error.database_kind(), Some(DatabaseErrorKind::Query));
-	assert!(stream.next().await.is_none());
+	assert!(dropped.load(Ordering::SeqCst));
 }
 
 #[rstest]
@@ -341,6 +342,7 @@ async fn iterator_with_executor_surfaces_midstream_decode_error() {
 		Ok(article_row(1, QueryValue::String("first".to_owned()))),
 		Ok(article_row(2, QueryValue::Int(42))),
 	]);
+	let dropped = Arc::clone(&executor.dropped);
 	let mut stream = QuerySet::<StreamedArticle>::new()
 		.iterator_with_executor(&mut executor, 2)
 		.unwrap();
@@ -353,7 +355,7 @@ async fn iterator_with_executor_surfaces_midstream_decode_error() {
 		error.database_kind(),
 		Some(DatabaseErrorKind::Serialization)
 	);
-	assert!(stream.next().await.is_none());
+	assert!(dropped.load(Ordering::SeqCst));
 }
 
 #[rstest]

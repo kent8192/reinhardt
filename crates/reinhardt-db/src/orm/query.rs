@@ -3,7 +3,7 @@
 //! This module provides a unified entry point for querying functionality.
 //! By default, it exports the expression-based query API (SQLAlchemy-style).
 
-use super::connection::{OrmExecutor, QueryRow};
+use super::connection::{OrmExecutor, QueryRow, RowStream};
 use super::field_codec::{
 	DatabaseField, DatabaseValue, FieldCodecError, IntoFieldValue, database_value_to_query_value,
 };
@@ -28,6 +28,7 @@ use smallvec::SmallVec;
 use std::collections::HashMap;
 use std::marker::PhantomData;
 use std::pin::Pin;
+use std::task::{Context, Poll};
 use std::time::Instant;
 use uuid::Uuid;
 
@@ -67,6 +68,35 @@ impl Drop for StreamQueryAccounting {
 			&self.params,
 			self.duration,
 		);
+	}
+}
+
+/// Times individual backend-stream polls without spanning consumer idle time.
+///
+/// A pending poll is deliberately not retained as elapsed state: cancelling a
+/// consumer poll therefore resets its timing instead of charging later
+/// application backpressure to the database query.
+struct TimedRowStream<'rows, 'accounting> {
+	rows: RowStream<'rows>,
+	accounting: &'accounting mut StreamQueryAccounting,
+}
+
+impl<'rows, 'accounting> TimedRowStream<'rows, 'accounting> {
+	fn new(rows: RowStream<'rows>, accounting: &'accounting mut StreamQueryAccounting) -> Self {
+		Self { rows, accounting }
+	}
+}
+
+impl Stream for TimedRowStream<'_, '_> {
+	type Item = reinhardt_core::exception::Result<crate::backends::types::Row>;
+
+	fn poll_next(mut self: Pin<&mut Self>, context: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+		let started_at = Instant::now();
+		let result = self.rows.as_mut().poll_next(context);
+		if result.is_ready() {
+			self.accounting.record_poll(started_at.elapsed());
+		}
+		result
 	}
 }
 
@@ -6237,11 +6267,9 @@ where
 
 		Ok(Box::pin(async_stream::stream! {
 			let mut accounting = StreamQueryAccounting::new(sql.clone(), param_samples);
-			let mut rows = Some(rows);
+			let mut rows = Some(TimedRowStream::new(rows, &mut accounting));
 			loop {
-				let poll_started_at = Instant::now();
 				let row = rows.as_mut().expect("row stream is available").next().await;
-				accounting.record_poll(poll_started_at.elapsed());
 				let Some(row) = row else {
 					break;
 				};
@@ -6251,6 +6279,7 @@ where
 						super::instrumentation::instrumentation()
 							.orm_query_error(&sql, &format!("{error:?}"))
 							.await;
+						drop(rows.take());
 						yield Err(error);
 						return;
 					}
@@ -6265,12 +6294,12 @@ where
 						super::instrumentation::instrumentation()
 							.orm_query_error(&sql, &format!("{error:?}"))
 							.await;
+						drop(rows.take());
 						yield Err(error);
 						return;
 					}
 				}
 			}
-			drop(accounting);
 		}))
 	}
 
@@ -6313,11 +6342,9 @@ where
 
 		Ok(Box::pin(async_stream::stream! {
 			let mut accounting = StreamQueryAccounting::new(sql.clone(), param_samples);
-			let mut rows = Some(rows);
+			let mut rows = Some(TimedRowStream::new(rows, &mut accounting));
 			loop {
-				let poll_started_at = Instant::now();
 				let row = rows.as_mut().expect("row stream is available").next().await;
-				accounting.record_poll(poll_started_at.elapsed());
 				let Some(row) = row else {
 					break;
 				};
@@ -6327,6 +6354,7 @@ where
 						super::instrumentation::instrumentation()
 							.orm_query_error(&sql, &format!("{error:?}"))
 							.await;
+						drop(rows.take());
 						yield Err(error);
 						return;
 					}
@@ -6341,12 +6369,12 @@ where
 						super::instrumentation::instrumentation()
 							.orm_query_error(&sql, &format!("{error:?}"))
 							.await;
+						drop(rows.take());
 						yield Err(error);
 						return;
 					}
 				}
 			}
-			drop(accounting);
 		}))
 	}
 

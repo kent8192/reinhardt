@@ -3,8 +3,9 @@
 use clap::Parser;
 use reinhardt_commands::{Cli, CommandError, run_command};
 use reinhardt_db::migrations::{
-	ColumnDefinition, Constraint, FieldType, FilesystemRepository, FilesystemSource, Migration,
-	MigrationCatalog, MigrationRenderOptions, MigrationSource, MigrationSquasher, Operation,
+	ColumnDefinition, Constraint, FieldType, FilesystemRepository, FilesystemSource, IndexType,
+	Migration, MigrationCatalog, MigrationRenderOptions, MigrationSource, MigrationSquasher,
+	Operation,
 };
 use serial_test::serial;
 use std::fs;
@@ -172,22 +173,35 @@ async fn loaded_migration(project: &Path, name: &str) -> Migration {
 async fn strict_catalog_squash_and_render_preserve_nested_semantics() {
 	let input = TempDir::new().expect("temporary input tree should be created");
 	let input_repository = FilesystemRepository::new(input.path());
-	let operation = Operation::CreateTable {
-		name: "tagged_posts".to_string(),
-		columns: vec![
-			ColumnDefinition::new("id", FieldType::Integer),
-			ColumnDefinition::new("tag_ids", FieldType::Array(Box::new(FieldType::Integer))),
-		],
-		constraints: vec![Constraint::Unique {
-			name: "tagged_posts_tag_ids_key".to_string(),
-			columns: vec!["tag_ids".to_string()],
-		}],
-		without_rowid: None,
-		interleave_in_parent: None,
-		partition: None,
-	};
+	let operations = vec![
+		Operation::CreateTable {
+			name: "tagged_posts".to_string(),
+			columns: vec![
+				ColumnDefinition::new("id", FieldType::Integer),
+				ColumnDefinition::new("tag_ids", FieldType::Array(Box::new(FieldType::Integer))),
+			],
+			constraints: vec![Constraint::Unique {
+				name: "tagged_posts_tag_ids_key".to_string(),
+				columns: vec!["tag_ids".to_string()],
+			}],
+			without_rowid: None,
+			interleave_in_parent: None,
+			partition: None,
+		},
+		Operation::CreateIndex {
+			table: "tagged_posts".to_string(),
+			columns: vec!["tag_ids".to_string(), "id".to_string()],
+			unique: true,
+			index_type: Some(IndexType::BTree),
+			where_clause: Some("id > 0".to_string()),
+			concurrently: false,
+			expressions: Some(vec!["LOWER(CAST(id AS TEXT))".to_string()]),
+			mysql_options: None,
+			operator_class: Some("text_pattern_ops".to_string()),
+		},
+	];
 	let mut migration = Migration::new("0001_initial", "posts");
-	migration.operations = vec![operation.clone()];
+	migration.operations = operations.clone();
 	write_migration(&input_repository, &migration);
 
 	let source = FilesystemSource::new(input.path());
@@ -211,7 +225,7 @@ async fn strict_catalog_squash_and_render_preserve_nested_semantics() {
 		.expect("rendered squash should reload strictly");
 
 	assert_eq!(reparsed.len(), 1);
-	assert_eq!(reparsed[0].operations, vec![operation]);
+	assert_eq!(reparsed[0].operations, operations);
 }
 
 #[tokio::test]

@@ -12,7 +12,7 @@ use crate::{
 	},
 	expr::{Condition, ConditionExpression, SimpleExpr},
 	query::SelectStatement,
-	types::{FrameType, JoinOn, OrderExpr, OrderExprKind, TableRef, WindowStatement},
+	types::{BinOper, FrameType, JoinOn, OrderExpr, OrderExprKind, TableRef, WindowStatement},
 	value::Values,
 };
 
@@ -106,6 +106,7 @@ impl ExplainStatement {
 
 	/// Builds PostgreSQL EXPLAIN SQL after validating backend capabilities.
 	pub fn build_postgres_checked(&self) -> Result<(String, Values), QueryBuildError> {
+		self.reject_select_lock("PostgreSQL")?;
 		if self.options.format == ExplainFormat::Tree {
 			return Err(unsupported("EXPLAIN FORMAT TREE", "PostgreSQL"));
 		}
@@ -115,6 +116,7 @@ impl ExplainStatement {
 
 	/// Builds MySQL EXPLAIN SQL after validating backend capabilities.
 	pub fn build_mysql_checked(&self) -> Result<(String, Values), QueryBuildError> {
+		self.reject_select_lock("MySQL")?;
 		self.reject_postgres_options("MySQL")?;
 		self.reject_mysql_window_null_ordering()?;
 		if mysql_explain_may_evaluate_query(&self.select) {
@@ -143,8 +145,10 @@ impl ExplainStatement {
 
 	/// Builds SQLite EXPLAIN QUERY PLAN SQL after validating backend capabilities.
 	pub fn build_sqlite_checked(&self) -> Result<(String, Values), QueryBuildError> {
+		self.reject_select_lock("SQLite")?;
 		self.reject_postgres_options("SQLite")?;
 		self.reject_sqlite_groups_window_frames()?;
+		self.reject_sqlite_ilike()?;
 		if self.options.format != ExplainFormat::Text {
 			return Err(unsupported(format_feature(self.options.format), "SQLite"));
 		}
@@ -154,6 +158,7 @@ impl ExplainStatement {
 
 	/// Builds CockroachDB EXPLAIN SQL after validating backend capabilities.
 	pub fn build_cockroachdb_checked(&self) -> Result<(String, Values), QueryBuildError> {
+		self.reject_select_lock("CockroachDB")?;
 		self.reject_postgres_options("CockroachDB")?;
 		if self.options.format != ExplainFormat::Text {
 			return Err(unsupported(
@@ -216,8 +221,20 @@ impl ExplainStatement {
 		Ok(())
 	}
 
+	fn reject_select_lock(&self, backend: &'static str) -> Result<(), QueryBuildError> {
+		if self.select.lock.is_some() {
+			return Err(unsupported("SELECT lock clauses in EXPLAIN", backend));
+		}
+		Ok(())
+	}
+
 	fn reject_sqlite_groups_window_frames(&self) -> Result<(), QueryBuildError> {
 		if self.select.windows.iter().any(|(_, window)| {
+			matches!(
+				window.frame.as_ref().map(|frame| frame.frame_type.clone()),
+				Some(FrameType::Groups)
+			)
+		}) || statement_has_window_feature(&self.select, |window| {
 			matches!(
 				window.frame.as_ref().map(|frame| frame.frame_type.clone()),
 				Some(FrameType::Groups)
@@ -227,6 +244,126 @@ impl ExplainStatement {
 		}
 		Ok(())
 	}
+
+	fn reject_sqlite_ilike(&self) -> Result<(), QueryBuildError> {
+		if statement_has_expression(&self.select, &|expression| {
+			matches!(expression, SimpleExpr::Binary(_, BinOper::ILike, _))
+		}) {
+			return Err(unsupported("ILIKE", "SQLite"));
+		}
+		Ok(())
+	}
+}
+
+fn statement_has_window_feature(
+	statement: &SelectStatement,
+	predicate: impl Fn(&WindowStatement) -> bool + Copy,
+) -> bool {
+	statement_has_expression(statement, &|expression| match expression {
+		SimpleExpr::Window { func, window } => {
+			predicate(window) || expression_has_window_feature(func, predicate)
+		}
+		_ => expression_has_window_feature(expression, predicate),
+	})
+}
+
+fn expression_has_window_feature(
+	expression: &SimpleExpr,
+	predicate: impl Fn(&WindowStatement) -> bool + Copy,
+) -> bool {
+	match expression {
+		SimpleExpr::Window { func, window } => {
+			predicate(window) || expression_has_window_feature(func, predicate)
+		}
+		SimpleExpr::WindowNamed { func, .. }
+		| SimpleExpr::Unary(_, func)
+		| SimpleExpr::AsEnum(_, func)
+		| SimpleExpr::ExprAlias(func, _)
+		| SimpleExpr::Cast(func, _) => expression_has_window_feature(func, predicate),
+		SimpleExpr::Binary(left, _, right) => {
+			expression_has_window_feature(left, predicate)
+				|| expression_has_window_feature(right, predicate)
+		}
+		SimpleExpr::FunctionCall(_, expressions)
+		| SimpleExpr::Tuple(expressions)
+		| SimpleExpr::CustomWithExpr(_, expressions) => expressions
+			.iter()
+			.any(|expression| expression_has_window_feature(expression, predicate)),
+		SimpleExpr::Case(case) => {
+			case.when_clauses.iter().any(|(condition, result)| {
+				expression_has_window_feature(condition, predicate)
+					|| expression_has_window_feature(result, predicate)
+			}) || case
+				.else_clause
+				.as_ref()
+				.is_some_and(|result| expression_has_window_feature(result, predicate))
+		}
+		_ => false,
+	}
+}
+
+fn statement_has_expression(
+	statement: &SelectStatement,
+	predicate: &impl Fn(&SimpleExpr) -> bool,
+) -> bool {
+	statement.selects.iter().any(|select| expression_matches(&select.expr, predicate))
+		|| statement.groups.iter().any(|expression| expression_matches(expression, predicate))
+		|| statement.orders.iter().any(|order| matches!(&order.expr, OrderExprKind::Expr(expression) if expression_matches(expression, predicate)))
+		|| conditions_match(&statement.r#where.conditions, predicate)
+		|| conditions_match(&statement.having.conditions, predicate)
+		|| statement.windows.iter().any(|(_, window)| {
+			window
+				.partition_by
+				.iter()
+				.any(|expression| expression_matches(expression, predicate))
+				|| window.order_by.iter().any(|order| {
+					matches!(&order.expr, OrderExprKind::Expr(expression) if expression_matches(expression, predicate))
+				})
+		})
+}
+
+fn conditions_match(
+	conditions: &[ConditionExpression],
+	predicate: &impl Fn(&SimpleExpr) -> bool,
+) -> bool {
+	conditions.iter().any(|condition| match condition {
+		ConditionExpression::SimpleExpr(expression) => expression_matches(expression, predicate),
+		ConditionExpression::Condition(condition) => {
+			conditions_match(&condition.conditions, predicate)
+		}
+	})
+}
+
+fn expression_matches(expression: &SimpleExpr, predicate: &impl Fn(&SimpleExpr) -> bool) -> bool {
+	predicate(expression)
+		|| match expression {
+			SimpleExpr::Unary(_, expression)
+			| SimpleExpr::AsEnum(_, expression)
+			| SimpleExpr::ExprAlias(expression, _)
+			| SimpleExpr::Cast(expression, _)
+			| SimpleExpr::WindowNamed {
+				func: expression, ..
+			} => expression_matches(expression, predicate),
+			SimpleExpr::Window { func, .. } => expression_matches(func, predicate),
+			SimpleExpr::Binary(left, _, right) => {
+				expression_matches(left, predicate) || expression_matches(right, predicate)
+			}
+			SimpleExpr::FunctionCall(_, expressions)
+			| SimpleExpr::Tuple(expressions)
+			| SimpleExpr::CustomWithExpr(_, expressions) => expressions
+				.iter()
+				.any(|expression| expression_matches(expression, predicate)),
+			SimpleExpr::Case(case) => {
+				case.when_clauses.iter().any(|(condition, result)| {
+					expression_matches(condition, predicate)
+						|| expression_matches(result, predicate)
+				}) || case
+					.else_clause
+					.as_ref()
+					.is_some_and(|result| expression_matches(result, predicate))
+			}
+			_ => false,
+		}
 }
 
 fn sql_bool(value: bool) -> &'static str {

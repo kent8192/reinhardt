@@ -260,10 +260,14 @@ impl DatabaseBackend for SqliteBackend {
 			}
 			let rows = query.fetch(pool.as_ref());
 			futures::pin_mut!(rows);
-			while let Some(row) = rows.next().await {
-				yield row
-					.map_err(|error| map_sqlx_error(error).into())
-					.and_then(Self::convert_row);
+			let rows = rows.ready_chunks(chunk_size);
+			futures::pin_mut!(rows);
+			while let Some(chunk) = rows.next().await {
+				for row in chunk {
+					yield row
+						.map_err(|error| map_sqlx_error(error).into())
+						.and_then(Self::convert_row);
+				}
 			}
 		}))
 	}
@@ -547,10 +551,14 @@ impl TransactionExecutor for SqliteTransactionExecutor {
 			}
 			let rows = query.fetch(&mut **tx);
 			futures::pin_mut!(rows);
-			while let Some(row) = rows.next().await {
-				yield row
-					.map_err(|error| map_sqlx_error(error).into())
-					.and_then(Self::convert_row);
+			let rows = rows.ready_chunks(chunk_size);
+			futures::pin_mut!(rows);
+			while let Some(chunk) = rows.next().await {
+				for row in chunk {
+					yield row
+						.map_err(|error| map_sqlx_error(error).into())
+						.and_then(Self::convert_row);
+				}
 			}
 		}))
 	}

@@ -39,6 +39,33 @@ fn executor_error(error: reinhardt_core::exception::Error) -> DatabaseError {
 pub type QuerySetStream<'a, T> =
 	Pin<Box<dyn Stream<Item = reinhardt_core::exception::Result<T>> + Send + 'a>>;
 
+/// Records a streaming query when its generator finishes or is dropped.
+struct StreamQueryAccounting {
+	sql: String,
+	params: Vec<String>,
+	started: Instant,
+}
+
+impl StreamQueryAccounting {
+	fn new(sql: String, params: Vec<String>) -> Self {
+		Self {
+			sql,
+			params,
+			started: Instant::now(),
+		}
+	}
+}
+
+impl Drop for StreamQueryAccounting {
+	fn drop(&mut self) {
+		super::instrumentation::instrumentation().orm_query_end_with_params_sync(
+			&self.sql,
+			&self.params,
+			self.started.elapsed(),
+		);
+	}
+}
+
 // Django QuerySet API types
 #[derive(Debug, Clone, Serialize, Deserialize)]
 /// Defines possible filter operator values.
@@ -5913,6 +5940,9 @@ where
 	where
 		T: serde::de::DeserializeOwned,
 	{
+		if self.empty_result {
+			return Ok(Vec::new());
+		}
 		let mut conn = super::manager::get_connection().await?;
 		self.all_with_db(&mut conn).await
 	}
@@ -6060,6 +6090,9 @@ where
 		T: serde::de::DeserializeOwned,
 		E: OrmExecutor,
 	{
+		if self.empty_result {
+			return Ok(Vec::new());
+		}
 		let stmt = self.build_select_statement()?;
 		let context = super::execution::pgvector_context_for_select(&stmt);
 		let (sql, values) =
@@ -6115,6 +6148,9 @@ where
 	where
 		E: OrmExecutor,
 	{
+		if self.empty_result {
+			return Ok(Vec::new());
+		}
 		let stmt = self.build_select_statement()?;
 		let context = super::execution::pgvector_context_for_select(&stmt);
 		let (sql, values) =
@@ -6179,14 +6215,16 @@ where
 			.map(|value| value.to_sql_literal())
 			.collect::<Vec<_>>();
 		let params = super::execution::convert_values(values);
-		let mut rows = conn.fetch_stream_with_context(sql.clone(), params, chunk_size, context)?;
-		let started = Instant::now();
+		let rows = conn.fetch_stream_with_context(sql.clone(), params, chunk_size, context)?;
 
 		Ok(Box::pin(async_stream::stream! {
-			while let Some(row) = rows.next().await {
+			let accounting = StreamQueryAccounting::new(sql.clone(), param_samples);
+			let mut rows = Some(rows);
+			while let Some(row) = rows.as_mut().expect("row stream is available").next().await {
 				let row = match row {
 					Ok(row) => row,
 					Err(error) => {
+						rows = None;
 						super::instrumentation::instrumentation()
 							.orm_query_error(&sql, &format!("{error:?}"))
 							.await;
@@ -6201,6 +6239,7 @@ where
 							DatabaseErrorKind::Serialization,
 							format!("Deserialization error: {error}"),
 						));
+						rows = None;
 						super::instrumentation::instrumentation()
 							.orm_query_error(&sql, &format!("{error:?}"))
 							.await;
@@ -6209,9 +6248,7 @@ where
 					}
 				}
 			}
-			super::instrumentation::instrumentation()
-				.orm_query_end_with_params(&sql, &param_samples, started.elapsed())
-				.await;
+			drop(accounting);
 		}))
 	}
 
@@ -6250,15 +6287,16 @@ where
 			.map(|value| value.to_sql_literal())
 			.collect::<Vec<_>>();
 		let params = super::execution::convert_values(values);
-		let mut rows =
-			executor.fetch_stream_with_context(sql.clone(), params, chunk_size, context)?;
-		let started = Instant::now();
+		let rows = executor.fetch_stream_with_context(sql.clone(), params, chunk_size, context)?;
 
 		Ok(Box::pin(async_stream::stream! {
-			while let Some(row) = rows.next().await {
+			let accounting = StreamQueryAccounting::new(sql.clone(), param_samples);
+			let mut rows = Some(rows);
+			while let Some(row) = rows.as_mut().expect("row stream is available").next().await {
 				let row = match row {
 					Ok(row) => row,
 					Err(error) => {
+						rows = None;
 						super::instrumentation::instrumentation()
 							.orm_query_error(&sql, &format!("{error:?}"))
 							.await;
@@ -6273,6 +6311,7 @@ where
 							DatabaseErrorKind::Serialization,
 							format!("Deserialization error: {error}"),
 						));
+						rows = None;
 						super::instrumentation::instrumentation()
 							.orm_query_error(&sql, &format!("{error:?}"))
 							.await;
@@ -6281,9 +6320,7 @@ where
 					}
 				}
 			}
-			super::instrumentation::instrumentation()
-				.orm_query_end_with_params(&sql, &param_samples, started.elapsed())
-				.await;
+			drop(accounting);
 		}))
 	}
 
@@ -6295,6 +6332,9 @@ where
 	where
 		T: serde::de::DeserializeOwned,
 	{
+		if self.empty_result {
+			return Ok(Vec::new());
+		}
 		let stmt = self.build_select_statement().map_err(executor_error)?;
 		let context = super::execution::pgvector_context_for_select(&stmt);
 		let (sql, values) = Self::build_select_for_backend(
@@ -6335,6 +6375,9 @@ where
 		&self,
 		executor: &mut dyn super::connection::TransactionExecutor,
 	) -> Result<usize, crate::backends::error::DatabaseError> {
+		if self.empty_result {
+			return Ok(0);
+		}
 		let stmt = self.count_select_query().map_err(executor_error)?;
 		let context = super::execution::pgvector_context_for_select(&stmt);
 		let (sql, values) = Self::build_select_for_backend(
@@ -6526,6 +6569,9 @@ where
 	where
 		E: OrmExecutor,
 	{
+		if self.empty_result {
+			return Ok(0);
+		}
 		let stmt = self.count_select_query()?;
 		let context = super::execution::pgvector_context_for_select(&stmt);
 		let (sql, values) =
@@ -6816,6 +6862,9 @@ where
 		I: IntoIterator<Item = A>,
 		A: Into<FieldAssignment>,
 	{
+		if self.empty_result {
+			return Ok(0);
+		}
 		let mut conn = super::manager::get_connection().await?;
 		self.update_fields_with_conn(&mut conn, values).await
 	}
@@ -6831,6 +6880,9 @@ where
 		I: IntoIterator<Item = A>,
 		A: Into<FieldAssignment>,
 	{
+		if self.empty_result {
+			return Ok(0);
+		}
 		let stmt = self.update_fields_query(values)?;
 		let context = super::execution::pgvector_context_for_update(&stmt);
 		let (sql, values) =
@@ -9296,6 +9348,49 @@ mod tests {
 			]
 		);
 		assert_eq!(executor.contexts, vec![Some(distance_and_vector_context())]);
+	}
+
+	#[cfg(feature = "pgvector")]
+	#[tokio::test]
+	async fn none_short_circuits_read_and_write_execution_paths() {
+		let mut executor = RecordingExecutor::default();
+
+		let rows = QuerySet::<TestUser>::new()
+			.none()
+			.all_with_db(&mut executor)
+			.await
+			.expect("none queryset should not execute a select");
+		assert_eq!(rows, Vec::<TestUser>::new());
+
+		let rows = QuerySet::<TestUser>::new()
+			.none()
+			.rows_with_db(&mut executor)
+			.await
+			.expect("none queryset should not execute a row select");
+		assert_eq!(rows, Vec::<crate::orm::QueryRow>::new());
+
+		let count = QuerySet::<TestUser>::new()
+			.none()
+			.count_with_db(&mut executor)
+			.await
+			.expect("none queryset should not execute a count");
+		assert_eq!(count, 0);
+
+		let exists = QuerySet::<TestUser>::new()
+			.none()
+			.exists_with_db(&mut executor)
+			.await
+			.expect("none queryset should not execute an existence check");
+		assert!(!exists);
+
+		let rows_affected = QuerySet::<TestUser>::new()
+			.none()
+			.update_fields_with_conn(&mut executor, [("username", "alice")])
+			.await
+			.expect("none queryset should not execute an update");
+		assert_eq!(rows_affected, 0);
+		assert!(executor.calls.is_empty());
+		assert!(executor.contexts.is_empty());
 	}
 
 	#[cfg(feature = "pgvector")]

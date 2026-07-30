@@ -3227,6 +3227,20 @@ impl Operation {
 		Ok(self.to_sql(dialect))
 	}
 
+	/// Classifies forward planning output without losing non-SQL operations.
+	pub(crate) fn to_planned_forward_output(
+		&self,
+		dialect: &SqlDialect,
+	) -> super::Result<PlannedOperationOutput> {
+		match self {
+			Operation::RunRust { code, .. } => Ok(PlannedOperationOutput::Comment(format!(
+				"RunRust: {}",
+				code.lines().next().unwrap_or("")
+			))),
+			_ => self.try_to_sql(dialect).map(PlannedOperationOutput::Sql),
+		}
+	}
+
 	fn validate_approximate_vector_index(
 		index_type: Option<IndexType>,
 		unique: bool,
@@ -4365,6 +4379,14 @@ impl Operation {
 
 		None
 	}
+}
+
+/// Internal result of classifying one forward operation for SQL planning.
+pub(crate) enum PlannedOperationOutput {
+	/// Executable SQL that may contain multiple statements.
+	Sql(String),
+	/// Non-executable information retained in collected plans.
+	Comment(String),
 }
 
 /// Column definition for legacy operations

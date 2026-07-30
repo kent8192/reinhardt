@@ -1,0 +1,404 @@
+#![cfg(feature = "sqlite")]
+
+use std::sync::Arc;
+
+use async_trait::async_trait;
+use reinhardt_db::backends::{
+	DatabaseBackend, DatabaseConnection, DatabaseError, DatabaseErrorKind, DatabaseType,
+	QueryResult, QueryValue, Row, types::TransactionExecutor,
+};
+use reinhardt_db::migrations::{
+	ColumnDefinition, DatabaseMigrationExecutor, FieldType, Migration, MigrationDirection,
+	MigrationError, Operation, PlannedStatement, ProjectState, plan_migration_sql,
+};
+
+async fn sqlite_connection() -> DatabaseConnection {
+	DatabaseConnection::connect_sqlite("sqlite::memory:")
+		.await
+		.expect("connect to SQLite")
+}
+
+struct PlanningBackend(DatabaseType);
+
+#[async_trait]
+impl DatabaseBackend for PlanningBackend {
+	fn database_type(&self) -> DatabaseType {
+		self.0
+	}
+
+	fn placeholder(&self, index: usize) -> String {
+		match self.0 {
+			DatabaseType::Postgres => format!("${index}"),
+			DatabaseType::Mysql | DatabaseType::Sqlite => "?".to_string(),
+		}
+	}
+
+	fn supports_returning(&self) -> bool {
+		!matches!(self.0, DatabaseType::Mysql)
+	}
+
+	fn supports_on_conflict(&self) -> bool {
+		true
+	}
+
+	async fn execute(
+		&self,
+		_sql: &str,
+		_params: Vec<QueryValue>,
+	) -> reinhardt_db::backends::Result<QueryResult> {
+		Err(DatabaseError::new(
+			DatabaseErrorKind::Unsupported,
+			"planning backend does not execute SQL",
+		)
+		.into())
+	}
+
+	async fn fetch_one(
+		&self,
+		_sql: &str,
+		_params: Vec<QueryValue>,
+	) -> reinhardt_db::backends::Result<Row> {
+		Err(DatabaseError::new(
+			DatabaseErrorKind::Unsupported,
+			"planning backend does not fetch rows",
+		)
+		.into())
+	}
+
+	async fn fetch_all(
+		&self,
+		_sql: &str,
+		_params: Vec<QueryValue>,
+	) -> reinhardt_db::backends::Result<Vec<Row>> {
+		Err(DatabaseError::new(
+			DatabaseErrorKind::Unsupported,
+			"planning backend does not fetch rows",
+		)
+		.into())
+	}
+
+	async fn fetch_optional(
+		&self,
+		_sql: &str,
+		_params: Vec<QueryValue>,
+	) -> reinhardt_db::backends::Result<Option<Row>> {
+		Err(DatabaseError::new(
+			DatabaseErrorKind::Unsupported,
+			"planning backend does not fetch rows",
+		)
+		.into())
+	}
+
+	async fn begin(&self) -> reinhardt_db::backends::Result<Box<dyn TransactionExecutor>> {
+		Err(DatabaseError::new(
+			DatabaseErrorKind::Unsupported,
+			"planning backend does not begin transactions",
+		)
+		.into())
+	}
+
+	fn as_any(&self) -> &dyn std::any::Any {
+		self
+	}
+}
+
+fn sql(statements: &[PlannedStatement]) -> Vec<&str> {
+	statements
+		.iter()
+		.filter_map(|statement| match statement {
+			PlannedStatement::Sql(sql) => Some(sql.as_str()),
+			PlannedStatement::Comment(_) => None,
+		})
+		.collect()
+}
+
+#[tokio::test]
+async fn forward_plan_preserves_operation_and_statement_order() {
+	let connection = sqlite_connection().await;
+	let mut migration = Migration::new("0001_initial", "catalog");
+	migration.operations = vec![
+		Operation::RunSQL {
+			sql: "CREATE TABLE \"events\" (\"id\" INTEGER); INSERT INTO \"events\" VALUES (1);"
+				.to_string(),
+			reverse_sql: Some("DROP TABLE \"events\";".to_string()),
+		},
+		Operation::RenameTable {
+			old_name: "event log".to_string(),
+			new_name: "audit log".to_string(),
+		},
+	];
+
+	let plan = plan_migration_sql(
+		&connection,
+		&migration,
+		&ProjectState::new(),
+		MigrationDirection::Forward,
+	)
+	.await
+	.unwrap();
+
+	assert!(plan.atomic);
+	assert_eq!(
+		sql(&plan.statements),
+		vec![
+			"CREATE TABLE \"events\" (\"id\" INTEGER)",
+			"INSERT INTO \"events\" VALUES (1)",
+			"ALTER TABLE \"event log\" RENAME TO \"audit log\""
+		]
+	);
+}
+
+#[tokio::test]
+async fn planner_uses_backend_specific_identifier_quoting() {
+	let mut migration = Migration::new("0001_quoted", "catalog");
+	migration.operations.push(Operation::CreateTable {
+		name: "order history".to_string(),
+		columns: vec![ColumnDefinition::new("select", FieldType::Integer)],
+		constraints: Vec::new(),
+		without_rowid: None,
+		interleave_in_parent: None,
+		partition: None,
+	});
+
+	let postgres = plan_migration_sql(
+		&DatabaseConnection::new(Arc::new(PlanningBackend(DatabaseType::Postgres))),
+		&migration,
+		&ProjectState::new(),
+		MigrationDirection::Forward,
+	)
+	.await
+	.unwrap();
+	let mysql = plan_migration_sql(
+		&DatabaseConnection::new(Arc::new(PlanningBackend(DatabaseType::Mysql))),
+		&migration,
+		&ProjectState::new(),
+		MigrationDirection::Forward,
+	)
+	.await
+	.unwrap();
+
+	assert_eq!(
+		sql(&postgres.statements),
+		vec!["CREATE TABLE \"order history\" (\n  \"select\" INTEGER\n)"]
+	);
+	assert_eq!(
+		sql(&mysql.statements),
+		vec!["CREATE TABLE `order history` (\n  `select` INTEGER\n)"]
+	);
+}
+
+#[tokio::test]
+async fn backward_plan_reverses_operation_order_and_each_statement_is_separate() {
+	let connection = sqlite_connection().await;
+	let mut migration = Migration::new("0002_change_name", "catalog");
+	migration.operations = vec![
+		Operation::RunSQL {
+			sql: "SELECT 1".to_string(),
+			reverse_sql: Some("SELECT 2; SELECT 3;".to_string()),
+		},
+		Operation::RenameTable {
+			old_name: "books".to_string(),
+			new_name: "catalog_books".to_string(),
+		},
+	];
+
+	let plan = plan_migration_sql(
+		&connection,
+		&migration,
+		&ProjectState::new(),
+		MigrationDirection::Backward,
+	)
+	.await
+	.unwrap();
+
+	assert_eq!(
+		sql(&plan.statements),
+		vec![
+			"ALTER TABLE catalog_books RENAME TO books",
+			"SELECT 2",
+			"SELECT 3",
+		]
+	);
+}
+
+#[tokio::test]
+async fn run_rust_is_a_comment_and_non_atomic_metadata_is_preserved() {
+	let connection = sqlite_connection().await;
+	let mut migration = Migration::new("0003_seed", "catalog").atomic(false);
+	migration.operations.push(Operation::RunRust {
+		code: "seed_catalog();".to_string(),
+		reverse_code: Some("clear_catalog();".to_string()),
+	});
+
+	let plan = plan_migration_sql(
+		&connection,
+		&migration,
+		&ProjectState::new(),
+		MigrationDirection::Forward,
+	)
+	.await
+	.unwrap();
+
+	assert!(!plan.atomic);
+	assert_eq!(
+		plan.statements,
+		vec![PlannedStatement::Comment(
+			"RunRust: seed_catalog();".to_string()
+		)]
+	);
+}
+
+#[tokio::test]
+async fn backward_plan_rejects_irreversible_operation() {
+	let connection = sqlite_connection().await;
+	let mut migration = Migration::new("0004_irreversible", "catalog");
+	migration.operations.push(Operation::RunSQL {
+		sql: "DELETE FROM \"events\"".to_string(),
+		reverse_sql: None,
+	});
+
+	let error = plan_migration_sql(
+		&connection,
+		&migration,
+		&ProjectState::new(),
+		MigrationDirection::Backward,
+	)
+	.await
+	.unwrap_err();
+
+	assert!(matches!(error, MigrationError::IrreversibleError(_)));
+	assert_eq!(
+		error.to_string(),
+		"Irreversible migration: catalog.0004_irreversible contains an irreversible RunSQL operation"
+	);
+}
+
+#[tokio::test]
+async fn sqlite_recreation_is_planned_without_executing_ddl() {
+	let connection = sqlite_connection().await;
+	connection
+		.execute(
+			"CREATE TABLE \"books\" (\"id\" INTEGER PRIMARY KEY, \"title\" TEXT NOT NULL, \"obsolete\" TEXT)",
+			vec![],
+		)
+		.await
+		.unwrap();
+	let mut migration = Migration::new("0005_drop_obsolete", "catalog");
+	migration.operations.push(Operation::DropColumn {
+		table: "books".to_string(),
+		column: "obsolete".to_string(),
+		old_definition: Some(ColumnDefinition::new("obsolete", FieldType::Text)),
+	});
+
+	let plan = plan_migration_sql(
+		&connection,
+		&migration,
+		&ProjectState::new(),
+		MigrationDirection::Forward,
+	)
+	.await
+	.unwrap();
+
+	assert_eq!(
+		sql(&plan.statements),
+		vec![
+			"CREATE TABLE \"books_new\" (\n  id INTEGER NOT NULL PRIMARY KEY,\n  title TEXT NOT NULL\n);",
+			"INSERT INTO \"books_new\" (\"id\", \"title\") SELECT \"id\", \"title\" FROM \"books\";",
+			"DROP TABLE \"books\";",
+			"ALTER TABLE \"books_new\" RENAME TO \"books\";",
+		]
+	);
+	let columns = connection
+		.fetch_all("PRAGMA table_info(\"books\")", vec![])
+		.await
+		.unwrap();
+	assert_eq!(columns.len(), 3);
+}
+
+#[tokio::test]
+async fn sqlite_recreation_includes_schema_changes_planned_earlier_in_the_migration() {
+	let connection = sqlite_connection().await;
+	connection
+		.execute(
+			"CREATE TABLE \"books\" (\"id\" INTEGER PRIMARY KEY, \"obsolete\" TEXT)",
+			vec![],
+		)
+		.await
+		.unwrap();
+	let mut migration = Migration::new("0006_add_and_drop", "catalog");
+	migration.operations = vec![
+		Operation::AddColumn {
+			table: "books".to_string(),
+			column: ColumnDefinition::new("title", FieldType::Text),
+			mysql_options: None,
+		},
+		Operation::DropColumn {
+			table: "books".to_string(),
+			column: "obsolete".to_string(),
+			old_definition: Some(ColumnDefinition::new("obsolete", FieldType::Text)),
+		},
+	];
+
+	let plan = plan_migration_sql(
+		&connection,
+		&migration,
+		&ProjectState::new(),
+		MigrationDirection::Forward,
+	)
+	.await
+	.unwrap();
+
+	assert_eq!(
+		sql(&plan.statements),
+		vec![
+			"ALTER TABLE books ADD COLUMN title TEXT",
+			"CREATE TABLE \"books_new\" (\n  id INTEGER NOT NULL PRIMARY KEY,\n  title TEXT\n);",
+			"INSERT INTO \"books_new\" (\"id\", \"title\") SELECT \"id\", \"title\" FROM \"books\";",
+			"DROP TABLE \"books\";",
+			"ALTER TABLE \"books_new\" RENAME TO \"books\";",
+		]
+	);
+
+	let mut executor = DatabaseMigrationExecutor::new(connection.clone());
+	executor
+		.apply_migrations(std::slice::from_ref(&migration))
+		.await
+		.unwrap();
+	let columns = connection
+		.fetch_all("PRAGMA table_info(\"books\")", vec![])
+		.await
+		.unwrap();
+	let names = columns
+		.iter()
+		.map(|row| row.get::<String>("name").unwrap())
+		.collect::<Vec<_>>();
+	assert_eq!(names, vec!["id", "title"]);
+}
+
+#[tokio::test]
+async fn executor_consumes_comment_plan_without_dispatching_it_as_sql() {
+	let connection = sqlite_connection().await;
+	let mut migration = Migration::new("0007_rust_only", "catalog");
+	migration.operations.push(Operation::RunRust {
+		code: "panic_if_executed_as_sql();".to_string(),
+		reverse_code: Some("clear();".to_string()),
+	});
+	let mut executor = DatabaseMigrationExecutor::new(connection.clone());
+
+	let result = executor
+		.apply_migrations(std::slice::from_ref(&migration))
+		.await
+		.unwrap();
+
+	assert_eq!(result.applied, vec![migration.id()]);
+	assert!(
+		connection
+			.fetch_optional(
+				"SELECT name FROM sqlite_master WHERE name = 'panic_if_executed_as_sql'",
+				vec![],
+			)
+			.await
+			.unwrap()
+			.is_none()
+	);
+}

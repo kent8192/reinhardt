@@ -7,11 +7,15 @@
 #[allow(unused_imports)]
 use super::{
 	DatabaseMigrationRecorder, ForeignKeyAction, Migration, MigrationError, MigrationPlan,
-	MigrationService, Operation, Result, SchemaEditor, operations::SqlDialect,
+	MigrationService, MigrationSqlPlan, Operation, PlannedStatement, ProjectState, Result,
+	SchemaEditor,
+	operations::SqlDialect,
+	sql_plan::{MigrationDirection, plan_migration_sql_for_execution, split_sql_statements},
 };
 use crate::backends::{connection::DatabaseConnection, types::DatabaseType};
+use async_trait::async_trait;
 use indexmap::IndexMap;
-use std::collections::HashSet;
+use std::{collections::HashSet, sync::Arc};
 
 #[cfg(feature = "sqlite")]
 use super::introspection::SQLiteIntrospector;
@@ -27,169 +31,6 @@ fn validate_and_advance_migration_state(
 	Ok(())
 }
 
-fn migration_sql_dialect(connection: &DatabaseConnection) -> SqlDialect {
-	if connection.is_cockroachdb() {
-		return SqlDialect::Cockroachdb;
-	}
-
-	match connection.database_type() {
-		DatabaseType::Postgres => SqlDialect::Postgres,
-		DatabaseType::Mysql => SqlDialect::Mysql,
-		DatabaseType::Sqlite => SqlDialect::Sqlite,
-	}
-}
-
-/// Split SQL string into individual statements while handling:
-/// - String literals (single/double quotes)
-/// - Comments (line and block)
-/// - PostgreSQL dollar-quotes ($$...$$)
-fn split_sql_statements(sql: &str) -> Vec<String> {
-	let mut statements = Vec::new();
-	let mut current = String::new();
-	let mut chars = sql.chars().peekable();
-
-	#[derive(Debug, PartialEq)]
-	enum State {
-		Normal,
-		SingleQuote,
-		DoubleQuote,
-		LineComment,
-		BlockComment,
-		DollarQuote(String),
-	}
-
-	let mut state = State::Normal;
-
-	while let Some(ch) = chars.next() {
-		match state {
-			State::Normal => {
-				if ch == '\'' {
-					current.push(ch);
-					state = State::SingleQuote;
-				} else if ch == '"' {
-					current.push(ch);
-					state = State::DoubleQuote;
-				} else if ch == '-' && chars.peek() == Some(&'-') {
-					current.push(ch);
-					current.push(chars.next().unwrap());
-					state = State::LineComment;
-				} else if ch == '/' && chars.peek() == Some(&'*') {
-					current.push(ch);
-					current.push(chars.next().unwrap());
-					state = State::BlockComment;
-				} else if ch == '$' {
-					// Potential dollar-quote start
-					let mut tag = String::from("$");
-					current.push(ch);
-
-					// Collect tag until next $
-					while let Some(&next_ch) = chars.peek() {
-						if next_ch == '$' {
-							tag.push(chars.next().unwrap());
-							current.push('$');
-							state = State::DollarQuote(tag);
-							break;
-						} else if next_ch.is_alphanumeric() || next_ch == '_' {
-							tag.push(chars.next().unwrap());
-							current.push(next_ch);
-						} else {
-							// Not a valid dollar-quote tag
-							break;
-						}
-					}
-				} else if ch == ';' {
-					// Statement separator - save current statement if non-empty
-					let trimmed = current.trim();
-					if !trimmed.is_empty() {
-						statements.push(trimmed.to_string());
-					}
-					current.clear();
-				} else {
-					current.push(ch);
-				}
-			}
-			State::SingleQuote => {
-				current.push(ch);
-				if ch == '\'' {
-					// Check for escaped quote ''
-					if chars.peek() == Some(&'\'') {
-						current.push(chars.next().unwrap());
-					} else {
-						state = State::Normal;
-					}
-				} else if ch == '\\' && chars.peek().is_some() {
-					// Escaped character
-					current.push(chars.next().unwrap());
-				}
-			}
-			State::DoubleQuote => {
-				current.push(ch);
-				if ch == '"' {
-					state = State::Normal;
-				} else if ch == '\\' && chars.peek().is_some() {
-					// Escaped character
-					current.push(chars.next().unwrap());
-				}
-			}
-			State::LineComment => {
-				current.push(ch);
-				if ch == '\n' {
-					state = State::Normal;
-				}
-			}
-			State::BlockComment => {
-				current.push(ch);
-				if ch == '*' && chars.peek() == Some(&'/') {
-					current.push(chars.next().unwrap());
-					state = State::Normal;
-				}
-			}
-			State::DollarQuote(ref tag) => {
-				current.push(ch);
-				// Check if we're at the closing tag
-				if ch == '$' {
-					let mut potential_close = String::from("$");
-					let mut temp_chars = vec![];
-
-					// Collect potential closing tag
-					while let Some(&next_ch) = chars.peek() {
-						if next_ch == '$' {
-							potential_close.push(chars.next().unwrap());
-							temp_chars.push('$');
-							break;
-						} else if potential_close.len() < tag.len()
-							&& (next_ch.is_alphanumeric() || next_ch == '_')
-						{
-							potential_close.push(chars.next().unwrap());
-							temp_chars.push(next_ch);
-						} else {
-							break;
-						}
-					}
-
-					// Add collected characters to current
-					for temp_ch in &temp_chars {
-						current.push(*temp_ch);
-					}
-
-					// Check if it matches the opening tag
-					if potential_close == *tag {
-						state = State::Normal;
-					}
-				}
-			}
-		}
-	}
-
-	// Add final statement if non-empty
-	let trimmed = current.trim();
-	if !trimmed.is_empty() {
-		statements.push(trimmed.to_string());
-	}
-
-	statements
-}
-
 #[derive(Debug)]
 /// Represents a execution result.
 pub struct ExecutionResult {
@@ -199,11 +40,38 @@ pub struct ExecutionResult {
 	pub failed: Option<String>,
 }
 
+#[async_trait]
+trait SqlPlanner: Send + Sync {
+	async fn plan(
+		&self,
+		connection: &DatabaseConnection,
+		migration: &Migration,
+		state: &ProjectState,
+		direction: MigrationDirection,
+	) -> Result<MigrationSqlPlan>;
+}
+
+struct DefaultSqlPlanner;
+
+#[async_trait]
+impl SqlPlanner for DefaultSqlPlanner {
+	async fn plan(
+		&self,
+		connection: &DatabaseConnection,
+		migration: &Migration,
+		state: &ProjectState,
+		direction: MigrationDirection,
+	) -> Result<MigrationSqlPlan> {
+		plan_migration_sql_for_execution(connection, migration, state, direction).await
+	}
+}
+
 /// Migration executor using DatabaseConnection (supports multiple database types)
 pub struct DatabaseMigrationExecutor {
 	connection: DatabaseConnection,
 	recorder: DatabaseMigrationRecorder,
 	db_type: DatabaseType,
+	planner: Arc<dyn SqlPlanner>,
 }
 
 impl DatabaseMigrationExecutor {
@@ -231,6 +99,19 @@ impl DatabaseMigrationExecutor {
 			connection,
 			recorder,
 			db_type,
+			planner: Arc::new(DefaultSqlPlanner),
+		}
+	}
+
+	#[cfg(test)]
+	fn new_with_planner(connection: DatabaseConnection, planner: Arc<dyn SqlPlanner>) -> Self {
+		let db_type = connection.database_type();
+		let recorder = DatabaseMigrationRecorder::new(connection.clone());
+		Self {
+			connection,
+			recorder,
+			db_type,
+			planner,
 		}
 	}
 
@@ -425,88 +306,17 @@ impl DatabaseMigrationExecutor {
 			return Ok(());
 		}
 
-		let dialect = migration_sql_dialect(&self.connection);
-
-		let requires_sqlite_recreation = matches!(dialect, SqlDialect::Sqlite)
-			&& migration
-				.operations
-				.iter()
-				.any(Operation::reverse_requires_sqlite_recreation);
-
-		// Create SchemaEditor for atomic operations
-		let mut editor = SchemaEditor::new_for_migration(
-			self.connection.clone(),
-			migration.atomic,
-			self.connection.database_type(),
-			requires_sqlite_recreation,
-		)
-		.await?;
-
-		// Process operations in reverse order
 		let project_state = super::ProjectState::default();
-
-		for operation in migration.operations.iter().rev() {
-			operation.validate_for_dialect(&dialect)?;
-			let reverse_operation = operation.to_reverse_operation(&project_state)?;
-			if let Some(reverse_operation) = &reverse_operation {
-				reverse_operation.validate_for_dialect(&dialect)?;
-			}
-
-			// Check if SQLite and reverse operation requires recreation
-			#[cfg(feature = "sqlite")]
-			if matches!(dialect, SqlDialect::Sqlite)
-				&& operation.reverse_requires_sqlite_recreation()
-			{
-				// Get the reverse operation and use table recreation
-				if let Some(reverse_op) = reverse_operation {
-					tracing::debug!("=== SQLite Recreation for reverse of {:?} ===", operation);
-					self.handle_sqlite_recreation(&reverse_op, &mut editor)
-						.await?;
-					tracing::debug!("✅ SQLite recreation for reverse operation completed");
-					continue;
-				} else {
-					tracing::warn!(
-						"Cannot generate reverse operation for SQLite recreation: {:?}",
-						operation
-					);
-					// Fall through to standard SQL execution
-				}
-			}
-
-			// Standard reverse SQL execution
-			let reverse_sql = operation.to_reverse_sql(&dialect, &project_state)?;
-
-			if let Some(statements) = reverse_sql {
-				tracing::debug!(
-					"=== Reverse SQL for {:?} ({} statement(s)) ===",
-					operation,
-					statements.len()
-				);
-				// Dispatch each statement separately through SchemaEditor.
-				// SchemaEditor::execute() is backed by sqlx Extended Query, which
-				// accepts only one statement per payload — see operations.rs
-				// `Operation::to_reverse_sql` for why some DDL reversals produce
-				// multiple statements (e.g. AlterColumn on PostgreSQL/CockroachDB
-				// splits type reversion and NOT NULL restoration).
-				for sql in &statements {
-					tracing::debug!("{}", sql);
-					editor
-						.execute_with_context(sql, operation.pgvector_reverse_operation_kind())
-						.await?;
-				}
-
-				tracing::debug!("✅ Reverse operation executed successfully");
-			} else {
-				tracing::warn!(
-					"No reverse SQL available for operation in migration '{}': {:?}",
-					migration.id(),
-					operation
-				);
-			}
-		}
-
-		// Commit SchemaEditor changes
-		editor.finish().await?;
+		let plan = self
+			.planner
+			.plan(
+				&self.connection,
+				migration,
+				&project_state,
+				MigrationDirection::Backward,
+			)
+			.await?;
+		self.execute_sql_plan(migration, plan).await?;
 
 		Ok(())
 	}
@@ -530,23 +340,6 @@ impl DatabaseMigrationExecutor {
 			return Ok(());
 		}
 
-		let dialect = migration_sql_dialect(&self.connection);
-
-		let requires_sqlite_recreation = matches!(dialect, SqlDialect::Sqlite)
-			&& migration
-				.operations
-				.iter()
-				.any(Operation::requires_sqlite_recreation);
-
-		// Create schema editor with atomic support based on migration's atomic flag
-		let mut editor = SchemaEditor::new_for_migration(
-			self.connection.clone(),
-			migration.atomic,
-			self.db_type,
-			requires_sqlite_recreation,
-		)
-		.await?;
-
 		// Log if database_only flag is set
 		if migration.database_only {
 			tracing::debug!(
@@ -556,92 +349,113 @@ impl DatabaseMigrationExecutor {
 		}
 
 		tracing::debug!(
-			"Applying migration '{}' (atomic={}, effective_atomic={})",
+			"Planning migration '{}' (atomic={})",
 			migration.id(),
 			migration.atomic,
-			editor.is_atomic()
 		);
-
-		// Execute operations through schema editor
-		for operation in &migration.operations {
-			operation.validate_for_dialect(&dialect)?;
-
-			// Handle SQLite table recreation for incompatible operations
-			#[cfg(feature = "sqlite")]
-			if matches!(dialect, SqlDialect::Sqlite) && operation.requires_sqlite_recreation() {
-				self.handle_sqlite_recreation(operation, &mut editor)
-					.await?;
-				continue;
-			}
-
-			// Check if this is a CreateTable operation and if the table already
-			// exists. The check MUST run through the schema editor (and thus
-			// through the editor's open transaction, if any) — otherwise the
-			// pool may pick a different physical connection whose schema cache
-			// is stale w.r.t. DDL committed earlier in this same migration.
-			//
-			// On SQLite, an introspection read on a separate pool connection
-			// after a DDL on the transaction's connection raises SQLITE_SCHEMA
-			// (code 262, "database schema is locked") because the schema
-			// cookie has been bumped on the writer but the reader's prepared
-			// statement cache is stale. See reinhardt-web#4584.
-			if let Operation::CreateTable { name, .. } = operation {
-				let table_exists = editor.table_exists(name).await?;
-				if table_exists {
-					tracing::info!(
-						"Table '{}' already exists, skipping CREATE TABLE operation",
-						name
-					);
-					continue;
-				}
-			}
-
-			let sql = operation.try_to_sql(&dialect)?;
-
-			tracing::debug!(
-				"Executing migration SQL (length={}, semicolons={})",
-				sql.len(),
-				sql.matches(';').count()
-			);
-
-			// Split SQL into individual statements to handle PostgreSQL's
-			// prepared statement limitation (cannot execute multiple commands)
-			let statements = split_sql_statements(&sql);
-
-			tracing::debug!("Split into {} statements", statements.len());
-
-			for (i, statement) in statements.iter().enumerate() {
-				if !statement.trim().is_empty() {
-					tracing::debug!(
-						"Statement {} (length: {} chars): {}",
-						i + 1,
-						statement.len(),
-						&statement[..statement.len().min(100)]
-					);
-
-					editor
-						.execute_with_context(statement, operation.pgvector_operation_kind())
-						.await
-						.map_err(|e| {
-							tracing::error!(
-								"Migration operation failed: {}. SQL: {}",
-								e,
-								&statement[..statement.len().min(200)]
-							);
-							e
-						})?;
-
-					tracing::debug!("Statement {} executed successfully", i + 1);
-				}
-			}
-		}
-
-		// Finish (commits if atomic)
-		editor.finish().await?;
+		let plan = self
+			.planner
+			.plan(
+				&self.connection,
+				migration,
+				&ProjectState::default(),
+				MigrationDirection::Forward,
+			)
+			.await?;
+		self.execute_sql_plan(migration, plan).await?;
 
 		tracing::debug!("Migration '{}' applied successfully", migration.id());
 
 		Ok(())
+	}
+
+	async fn execute_sql_plan(&self, migration: &Migration, plan: MigrationSqlPlan) -> Result<()> {
+		let requires_sqlite_recreation = plan.sqlite_recreation_groups.iter().any(Option::is_some);
+		let mut editor = SchemaEditor::new_for_migration(
+			self.connection.clone(),
+			plan.atomic,
+			self.db_type,
+			requires_sqlite_recreation,
+		)
+		.await?;
+
+		tracing::debug!(
+			"Executing migration '{}' (atomic={}, effective_atomic={})",
+			migration.id(),
+			plan.atomic,
+			editor.is_atomic()
+		);
+
+		let mut index = 0;
+		while index < plan.statements.len() {
+			#[cfg(feature = "sqlite")]
+			if let Some(group) = plan.sqlite_recreation_groups[index] {
+				let mut sql = Vec::new();
+				while index < plan.statements.len()
+					&& plan.sqlite_recreation_groups[index] == Some(group)
+				{
+					if let PlannedStatement::Sql(statement) = &plan.statements[index] {
+						sql.push(statement.clone());
+					}
+					index += 1;
+				}
+				editor
+					.with_foreign_keys_disabled(move |editor| {
+						Box::pin(async move {
+							for statement in sql {
+								editor.execute(&statement).await?;
+							}
+							let violations = editor.check_foreign_key_integrity().await?;
+							if !violations.is_empty() {
+								return Err(MigrationError::ForeignKeyViolation(format!(
+									"Foreign key violations detected after table recreation: {}",
+									violations.join("; ")
+								)));
+							}
+							Ok(())
+						})
+					})
+					.await?;
+				continue;
+			}
+
+			let statement = &plan.statements[index];
+			let operation = plan.planned_operations[index].as_ref();
+			index += 1;
+			match statement {
+				PlannedStatement::Comment(comment) => {
+					tracing::debug!("Migration plan comment: {comment}");
+				}
+				PlannedStatement::Sql(statement) => {
+					if let Some(Operation::CreateTable { name, .. }) = operation
+						&& editor.table_exists(name).await?
+					{
+						tracing::info!(
+							"Table '{}' already exists, skipping CREATE TABLE operation",
+							name
+						);
+						continue;
+					}
+					let context = operation.and_then(|operation| match plan.direction {
+						MigrationDirection::Forward => operation.pgvector_operation_kind(),
+						MigrationDirection::Backward => operation.pgvector_reverse_operation_kind(),
+					});
+					editor
+						.execute_with_context(statement, context)
+						.await
+						.map_err(|error| {
+							tracing::error!(
+								"Migration operation failed: {}. SQL: {}",
+								error,
+								&statement[..statement.len().min(200)]
+							);
+							error
+						})?;
+				}
+			}
+		}
+
+		editor.finish().await
 	}
 
 	/// Apply migrations from a MigrationPlan
@@ -749,7 +563,7 @@ impl DatabaseMigrationExecutor {
 	/// stale column list and silently discard the just-`ALTER`'d column.
 	/// See reinhardt-web#4447.
 	#[cfg(feature = "sqlite")]
-	async fn read_sqlite_table_via_editor(
+	pub(crate) async fn read_sqlite_table_via_editor(
 		editor: &mut SchemaEditor,
 		table_name: &str,
 	) -> Result<(
@@ -1217,292 +1031,6 @@ impl DatabaseMigrationExecutor {
 			without_rowid,
 			strict,
 		))
-	}
-
-	/// Handle SQLite table recreation for operations that require it
-	///
-	/// SQLite has limited ALTER TABLE support. Operations like DropColumn and AlterColumn
-	/// require table recreation (CREATE new table → COPY data → DROP old → RENAME).
-	///
-	/// This method handles foreign key constraints by:
-	/// 1. Disabling FK checks before recreation
-	/// 2. Executing the table recreation
-	/// 3. Re-enabling FK checks
-	/// 4. Checking for FK integrity violations
-	#[cfg(feature = "sqlite")]
-	async fn handle_sqlite_recreation(
-		&self,
-		operation: &Operation,
-		editor: &mut SchemaEditor,
-	) -> Result<()> {
-		use super::operations::SqliteTableRecreation;
-
-		operation.validate_for_dialect(&SqlDialect::Sqlite)?;
-
-		// Build the recreation plan based on operation type.
-		//
-		// Critical: introspection must run via the editor's open transaction so
-		// that DDL applied earlier in the same migration (e.g. a preceding
-		// `AddColumn`) is visible. Reading via the pool would land on a
-		// different connection that cannot see the uncommitted schema and
-		// would silently rebuild the table from a stale column set — the
-		// root cause of reinhardt-web#4447.
-		let recreation = match operation {
-			Operation::AddColumn { table, column, .. } => {
-				tracing::debug!(
-					"Handling SQLite table recreation for AddColumn: table={}, column={}",
-					table,
-					column.name
-				);
-				let (
-					columns,
-					column_collations,
-					constraints,
-					raw_constraints,
-					indexes,
-					triggers,
-					without_rowid,
-					strict,
-				) = Self::read_sqlite_table_via_editor(editor, table).await?;
-				SqliteTableRecreation::for_add_column(table, columns, column.clone(), constraints)
-					.with_column_collations(column_collations)
-					.with_raw_constraints(raw_constraints)
-					.with_indexes(indexes)
-					.with_triggers(triggers)
-					.with_without_rowid(without_rowid)
-					.with_strict(strict)
-			}
-			Operation::DropColumn { table, column, .. } => {
-				tracing::debug!(
-					"Handling SQLite table recreation for DropColumn: table={}, column={}",
-					table,
-					column
-				);
-				let (
-					columns,
-					column_collations,
-					constraints,
-					raw_constraints,
-					indexes,
-					triggers,
-					without_rowid,
-					strict,
-				) = Self::read_sqlite_table_via_editor(editor, table).await?;
-				SqliteTableRecreation::for_drop_column(table, columns, column, constraints)
-					.with_column_collations(column_collations)
-					.with_raw_constraints(raw_constraints)
-					.with_indexes(indexes)
-					.with_triggers(triggers)
-					.with_without_rowid(without_rowid)
-					.with_strict(strict)
-					.without_raw_constraints_referencing(column)
-					.without_indexes_referencing(column)
-			}
-			Operation::AlterColumn {
-				table,
-				column,
-				new_definition,
-				..
-			} => {
-				tracing::debug!(
-					"Handling SQLite table recreation for AlterColumn: table={}, column={}",
-					table,
-					column
-				);
-				let (
-					columns,
-					column_collations,
-					constraints,
-					raw_constraints,
-					indexes,
-					triggers,
-					without_rowid,
-					strict,
-				) = Self::read_sqlite_table_via_editor(editor, table).await?;
-				SqliteTableRecreation::for_alter_column(
-					table,
-					columns,
-					column,
-					new_definition.clone(),
-					constraints,
-				)
-				.with_column_collations(column_collations)
-				.with_raw_constraints(raw_constraints)
-				.with_indexes(indexes)
-				.with_triggers(triggers)
-				.with_without_rowid(without_rowid)
-				.with_strict(strict)
-			}
-			Operation::AddConstraint {
-				table,
-				constraint_sql,
-			}
-			| Operation::AddConstraintRepair {
-				table,
-				constraint_sql,
-			} => {
-				tracing::debug!(
-					"Handling SQLite table recreation for AddConstraint: table={}",
-					table
-				);
-				let (
-					columns,
-					column_collations,
-					constraints,
-					raw_constraints,
-					indexes,
-					triggers,
-					without_rowid,
-					strict,
-				) = Self::read_sqlite_table_via_editor(editor, table).await?;
-				SqliteTableRecreation::for_add_constraint(
-					table,
-					columns,
-					constraints,
-					constraint_sql.clone(),
-				)
-				.with_column_collations(column_collations)
-				.with_raw_constraints(raw_constraints)
-				.with_indexes(indexes)
-				.with_triggers(triggers)
-				.with_without_rowid(without_rowid)
-				.with_strict(strict)
-			}
-			Operation::AddConstraintDefinition { table, constraint } => {
-				tracing::debug!(
-					"Handling SQLite table recreation for typed constraint: table={}",
-					table
-				);
-				let (
-					columns,
-					column_collations,
-					constraints,
-					raw_constraints,
-					indexes,
-					triggers,
-					without_rowid,
-					strict,
-				) = Self::read_sqlite_table_via_editor(editor, table).await?;
-				SqliteTableRecreation::for_add_constraint_definition(
-					table,
-					columns,
-					constraints,
-					constraint.clone(),
-				)
-				.with_column_collations(column_collations)
-				.with_raw_constraints(raw_constraints)
-				.with_indexes(indexes)
-				.with_triggers(triggers)
-				.with_without_rowid(without_rowid)
-				.with_strict(strict)
-			}
-			Operation::DropConstraint {
-				table,
-				constraint_name,
-				..
-			} => {
-				tracing::debug!(
-					"Handling SQLite table recreation for DropConstraint: table={}, constraint={}",
-					table,
-					constraint_name
-				);
-				let (
-					columns,
-					column_collations,
-					constraints,
-					raw_constraints,
-					indexes,
-					triggers,
-					without_rowid,
-					strict,
-				) = Self::read_sqlite_table_via_editor(editor, table).await?;
-				SqliteTableRecreation::for_drop_constraint(
-					table,
-					columns,
-					constraints,
-					constraint_name,
-				)
-				.with_column_collations(column_collations)
-				.with_raw_constraints(raw_constraints)
-				.without_raw_constraint_named(constraint_name)
-				.with_indexes(indexes)
-				.with_triggers(triggers)
-				.with_without_rowid(without_rowid)
-				.with_strict(strict)
-			}
-			Operation::DropConstraintDefinition { table, constraint } => {
-				tracing::debug!(
-					"Handling SQLite table recreation for typed constraint drop: table={}, constraint={}",
-					table,
-					constraint.name()
-				);
-				let (
-					columns,
-					column_collations,
-					constraints,
-					raw_constraints,
-					indexes,
-					triggers,
-					without_rowid,
-					strict,
-				) = Self::read_sqlite_table_via_editor(editor, table).await?;
-				SqliteTableRecreation::for_drop_constraint(
-					table,
-					columns,
-					constraints,
-					constraint.name(),
-				)
-				.with_column_collations(column_collations)
-				.with_raw_constraints(raw_constraints)
-				.without_raw_constraint_named(constraint.name())
-				.with_indexes(indexes)
-				.with_triggers(triggers)
-				.with_without_rowid(without_rowid)
-				.with_strict(strict)
-			}
-			_ => {
-				// This branch should not be reached if requires_sqlite_recreation() is correct
-				tracing::warn!(
-					"Operation {:?} was passed to handle_sqlite_recreation but is not handled. \
-					Attempting to execute as-is, which may fail.",
-					std::mem::discriminant(operation)
-				);
-				// No scoped foreign-key state has been changed at this point.
-				let sql = operation.try_to_sql(&super::operations::SqlDialect::Sqlite)?;
-				editor.execute(&sql).await?;
-				return Ok(());
-			}
-		};
-
-		let statements = recreation.try_to_sql_statements()?;
-		editor
-			.with_foreign_keys_disabled(move |editor| {
-				Box::pin(async move {
-					for stmt in statements {
-						tracing::debug!(
-							"Executing recreation SQL: {}",
-							&stmt[..stmt.len().min(100)]
-						);
-						editor.execute(&stmt).await?;
-					}
-					let violations = editor.check_foreign_key_integrity().await?;
-					if !violations.is_empty() {
-						return Err(MigrationError::ForeignKeyViolation(format!(
-							"Foreign key violations detected after table recreation: {}",
-							violations.join("; ")
-						)));
-					}
-					Ok(())
-				})
-			})
-			.await?;
-
-		tracing::debug!(
-			"SQLite table recreation completed for {:?}",
-			std::mem::discriminant(operation)
-		);
-
-		Ok(())
 	}
 
 	/// Record a migration as applied without actually running it
@@ -3259,6 +2787,68 @@ impl Default for OperationOptimizer {
 mod optimizer_tests {
 	use super::*;
 	use crate::migrations::{ColumnDefinition, FieldType};
+
+	struct SentinelPlanner;
+
+	#[async_trait]
+	impl SqlPlanner for SentinelPlanner {
+		async fn plan(
+			&self,
+			_connection: &DatabaseConnection,
+			migration: &Migration,
+			_state: &ProjectState,
+			direction: MigrationDirection,
+		) -> Result<MigrationSqlPlan> {
+			Ok(MigrationSqlPlan {
+				atomic: migration.atomic,
+				statements: vec![PlannedStatement::Sql(
+					"CREATE TABLE \"planner_sentinel\" (\"id\" INTEGER)".to_string(),
+				)],
+				planned_operations: vec![None],
+				sqlite_recreation_groups: vec![None],
+				direction,
+			})
+		}
+	}
+
+	#[cfg(feature = "sqlite")]
+	#[tokio::test]
+	async fn executor_executes_injected_plan_instead_of_compiling_operations() {
+		let connection = DatabaseConnection::connect_sqlite("sqlite::memory:")
+			.await
+			.expect("connect to SQLite");
+		let mut migration = Migration::new("0001_planner_spy", "planner");
+		migration.operations.push(Operation::RunSQL {
+			sql: "CREATE TABLE \"operation_compiler_table\" (\"id\" INTEGER)".to_string(),
+			reverse_sql: Some("DROP TABLE \"operation_compiler_table\"".to_string()),
+		});
+		let mut executor = DatabaseMigrationExecutor::new_with_planner(
+			connection.clone(),
+			Arc::new(SentinelPlanner),
+		);
+
+		executor
+			.apply_migrations(std::slice::from_ref(&migration))
+			.await
+			.expect("apply injected migration plan");
+
+		let sentinel = connection
+			.fetch_optional(
+				"SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'planner_sentinel'",
+				vec![],
+			)
+			.await
+			.expect("inspect sentinel table");
+		let operation_table = connection
+			.fetch_optional(
+				"SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'operation_compiler_table'",
+				vec![],
+			)
+			.await
+			.expect("inspect operation table");
+		assert!(sentinel.is_some());
+		assert!(operation_table.is_none());
+	}
 
 	#[test]
 	fn test_optimizer_creation() {

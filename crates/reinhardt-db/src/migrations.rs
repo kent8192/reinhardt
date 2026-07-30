@@ -6,6 +6,7 @@
 //!
 //! - **Auto-detection**: Detects model changes and generates migrations
 //! - **Migration Graph**: Manages dependencies between migrations
+//! - **Shared SQL Planning**: Previews the same ordered statements consumed by execution
 //! - **AST-Based Entry Points**: Generates Rust 2024 Edition-compliant module files
 //! - **State Reconstruction**: Django-style `ProjectState` building from migration history
 //! - **Zero Downtime**: Support for safe schema changes in production
@@ -43,6 +44,16 @@
 //! the anchored application directory. A cleanup failure reports both the
 //! original error and the cleanup error. Catalog loading, range selection,
 //! squashing, and source creation do not require a database connection.
+//!
+//! ## Shared SQL Planning
+//!
+//! [`plan_migration_sql`] creates a read-only [`MigrationSqlPlan`] for forward
+//! or backward execution. Each item is either executable [`PlannedStatement::Sql`]
+//! or a non-executable [`PlannedStatement::Comment`], so Rust data operations
+//! remain visible without being sent to the database. The migration executor
+//! consumes this same plan and keeps table-existence checks as execution policy.
+//! SQLite recreation planning may read schema metadata through the supplied
+//! connection, but it does not execute DDL.
 //!
 //! ### Generated Entry Point Example
 //!
@@ -85,6 +96,7 @@ pub mod schema_diff;
 pub mod schema_editor;
 pub mod service;
 pub mod source;
+pub mod sql_plan;
 #[cfg(feature = "sqlite")]
 pub(crate) mod sqlite_pragma;
 pub mod squash;
@@ -179,6 +191,7 @@ pub use source::{
 	MigrationSource, composite::CompositeSource, filesystem::FilesystemSource,
 	registry::RegistrySource,
 };
+pub use sql_plan::{MigrationDirection, MigrationSqlPlan, PlannedStatement, plan_migration_sql};
 pub use squash::{MigrationSquasher, SquashOptions, SquashResult};
 pub use state_loader::{MigrationStateLoader, build_state_from_files};
 pub use visualization::{HistoryEntry, MigrationStats, MigrationVisualizer, OutputFormat};

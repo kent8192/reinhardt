@@ -397,7 +397,7 @@ mod tests {
 
 		assert_eq!(
 			format!("{context:?}"),
-			"CommandContext { args: [\"[REDACTED]\", \"[REDACTED]\", \"[REDACTED]\", \"[REDACTED]\", \"safe\"], options: {}, verbosity: 0, suppress_output: false, settings: None }"
+			"CommandContext { args: [\"--password\", \"[REDACTED]\", \"--token\", \"[REDACTED]\", \"safe\"], options: {}, verbosity: 0, suppress_output: false, settings: None }"
 		);
 	}
 

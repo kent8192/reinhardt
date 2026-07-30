@@ -70,9 +70,20 @@ impl IntrospectConfig {
 
 	/// Parse configuration from TOML string.
 	pub fn from_toml(content: &str) -> Result<Self, ConfigError> {
-		toml::from_str(content).map_err(|e| ConfigError::ParseError {
+		let config: Self = toml::from_str(content).map_err(|e| ConfigError::ParseError {
 			message: e.to_string(),
-		})
+		})?;
+		config.validate_table_patterns()?;
+		Ok(config)
+	}
+
+	fn validate_table_patterns(&self) -> Result<(), ConfigError> {
+		for pattern in self.tables.include.iter().chain(&self.tables.exclude) {
+			Regex::new(pattern).map_err(|_| ConfigError::InvalidPattern {
+				pattern: pattern.clone(),
+			})?;
+		}
+		Ok(())
 	}
 
 	/// Check if a table should be included based on filter configuration.
@@ -431,6 +442,13 @@ exclude = ["^pg_"]
 		assert!(config.should_include_table("posts"));
 		assert!(!config.should_include_table("comments"));
 		assert!(!config.should_include_table("pg_tables"));
+	}
+
+	#[test]
+	fn rejects_invalid_table_filter_pattern_during_config_loading() {
+		let error = IntrospectConfig::from_toml("[tables]\nexclude = [\"[\"]")
+			.expect_err("invalid table filter must be rejected");
+		assert!(matches!(error, ConfigError::InvalidPattern { .. }));
 	}
 
 	#[test]

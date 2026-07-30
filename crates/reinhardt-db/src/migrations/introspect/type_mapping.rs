@@ -149,13 +149,15 @@ impl TypeMapper {
 			}
 			FieldType::HStore => quote! { std::collections::HashMap<String, String> },
 			FieldType::CIText => quote! { String },
-			FieldType::Int4Range => quote! { (i32, i32) },
-			FieldType::Int8Range => quote! { (i64, i64) },
-			FieldType::NumRange => quote! { (rust_decimal::Decimal, rust_decimal::Decimal) },
-			FieldType::DateRange => quote! { (chrono::NaiveDate, chrono::NaiveDate) },
-			FieldType::TsRange => quote! { (chrono::NaiveDateTime, chrono::NaiveDateTime) },
-			FieldType::TsTzRange => {
-				quote! { (chrono::DateTime<chrono::Utc>, chrono::DateTime<chrono::Utc>) }
+			FieldType::Int4Range
+			| FieldType::Int8Range
+			| FieldType::NumRange
+			| FieldType::DateRange
+			| FieldType::TsRange
+			| FieldType::TsTzRange => {
+				return Err(TypeMappingError::UnsupportedType(
+					"PostgreSQL range columns require a custom type override because generated models cannot represent range bounds losslessly".to_string(),
+				));
 			}
 			FieldType::TsVector => quote! { String },
 			FieldType::TsQuery => quote! { String },
@@ -168,7 +170,7 @@ impl TypeMapper {
 			FieldType::Uuid => quote! { uuid::Uuid },
 
 			// Year (MySQL)
-			FieldType::Year => quote! { i16 },
+			FieldType::Year => quote! { i32 },
 
 			// Enum/Set (MySQL)
 			FieldType::Enum { .. } => quote! { String },
@@ -227,7 +229,7 @@ impl TypeMapper {
 			FieldType::TinyBlob | FieldType::MediumBlob | FieldType::LongBlob => "Vec<u8>",
 			FieldType::Json | FieldType::JsonBinary => "serde_json::Value",
 			FieldType::Uuid => "uuid::Uuid",
-			FieldType::Year => "i16",
+			FieldType::Year => "i32",
 			FieldType::HStore => "std::collections::HashMap<String, String>",
 			FieldType::CIText => "String",
 			FieldType::TsVector | FieldType::TsQuery => "String",
@@ -243,12 +245,16 @@ impl TypeMapper {
 			FieldType::Array(_) => "Vec<_>",
 			FieldType::Enum { .. } => "String",
 			FieldType::Set { .. } => "Vec<String>",
-			FieldType::Int4Range => "(i32, i32)",
-			FieldType::Int8Range => "(i64, i64)",
-			FieldType::NumRange => "(Decimal, Decimal)",
-			FieldType::DateRange => "(NaiveDate, NaiveDate)",
-			FieldType::TsRange => "(NaiveDateTime, NaiveDateTime)",
-			FieldType::TsTzRange => "(DateTime<Utc>, DateTime<Utc>)",
+			FieldType::Int4Range
+			| FieldType::Int8Range
+			| FieldType::NumRange
+			| FieldType::DateRange
+			| FieldType::TsRange
+			| FieldType::TsTzRange => {
+				return Err(TypeMappingError::UnsupportedType(
+					"PostgreSQL range columns require a custom type override because generated models cannot represent range bounds losslessly".to_string(),
+				));
+			}
 			FieldType::Custom(name) if name == "u8" || name == "u16" => "i32",
 			FieldType::Custom(name) if name == "u32" => "i64",
 			FieldType::Custom(name) if name == "u64" => {
@@ -361,6 +367,21 @@ mod tests {
 			.field_type_to_rust(&FieldType::Custom("u64".to_string()))
 			.expect_err("BIGINT UNSIGNED must not be represented as lossless u64");
 		assert!(error.to_string().contains("BIGINT UNSIGNED"));
+	}
+
+	#[test]
+	fn maps_mysql_year_to_a_supported_integer_type_and_rejects_ranges() {
+		let mapper = TypeMapper::default();
+		assert_eq!(
+			mapper
+				.field_type_to_rust_string(&FieldType::Year, false, false)
+				.expect("YEAR should be supported"),
+			"i32"
+		);
+		let error = mapper
+			.field_type_to_rust(&FieldType::Int4Range)
+			.expect_err("range types require a custom override");
+		assert!(error.to_string().contains("range columns"));
 	}
 
 	#[test]

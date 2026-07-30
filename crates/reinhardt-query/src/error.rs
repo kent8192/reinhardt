@@ -230,6 +230,12 @@ fn validate_select_lock_for_backend_with_union_context(
 			if statement.distinct.is_some() {
 				return Err(unsupported("row locking with DISTINCT queries", backend));
 			}
+			if !statement.groups.is_empty() || !statement.having.conditions.is_empty() {
+				return Err(unsupported(
+					"row locking with GROUP BY or HAVING queries",
+					backend,
+				));
+			}
 			validate_lock_tables_belong_to_statement(statement, lock.tables.as_slice(), backend)?;
 			Ok(())
 		}

@@ -1523,6 +1523,9 @@ where
 
 		let mut stmt = Query::select();
 		self.apply_model_from(&mut stmt);
+		if self.distinct_enabled {
+			stmt.distinct();
+		}
 		if let Some(ref fields) = self.selected_fields {
 			for field in fields {
 				if field.contains('(') && field.contains(')') {
@@ -1630,12 +1633,21 @@ where
 			));
 		}
 		let graph = self.relation_join_graph_for_query();
-		if spec.targets.is_empty()
-			&& graph
-				.joins()
-				.iter()
-				.any(|join| join.join_kind == RelationJoinKind::Left)
-		{
+		let has_outer_join = graph
+			.joins()
+			.iter()
+			.any(|join| join.join_kind == RelationJoinKind::Left)
+			|| !self.select_related_fields.is_empty()
+			|| self.joins.iter().any(|join| {
+				!join.on_condition.is_empty()
+					&& matches!(
+						join.join_type,
+						super::sqlalchemy_query::JoinType::Left
+							| super::sqlalchemy_query::JoinType::Right
+							| super::sqlalchemy_query::JoinType::Full
+					)
+			});
+		if spec.targets.is_empty() && has_outer_join {
 			return Err(DatabaseError::new(
 				DatabaseErrorKind::Query,
 				"SELECT FOR UPDATE with an outer join requires explicit non-nullable lock targets",

@@ -31,18 +31,6 @@ fn map_postgres_initial_connect_error(error: sqlx::Error) -> DatabaseError {
 	}
 }
 
-fn default_row_lock_capabilities(
-	database_type: DatabaseType,
-	is_cockroachdb: bool,
-) -> RowLockCapabilities {
-	match database_type {
-		DatabaseType::Postgres if is_cockroachdb => RowLockCapabilities::cockroachdb(),
-		DatabaseType::Postgres => RowLockCapabilities::postgres(),
-		DatabaseType::Mysql => RowLockCapabilities::mysql(),
-		DatabaseType::Sqlite => RowLockCapabilities::unsupported(),
-	}
-}
-
 fn parse_server_version(version: &str) -> Option<(u16, u16, u16)> {
 	let start = version.find(|character: char| character.is_ascii_digit())?;
 	let mut parts = version[start..]
@@ -94,13 +82,13 @@ pub struct DatabaseConnection {
 	/// differently. This flag is set at connection time via a `SELECT version()`
 	/// probe and is `false` for any non-Postgres backend.
 	is_cockroachdb: bool,
-	row_lock_capabilities: RowLockCapabilities,
+	row_lock_capabilities: Option<RowLockCapabilities>,
 }
 
 struct FlavoredTransactionExecutor {
 	inner: Box<dyn TransactionExecutor>,
 	is_cockroachdb: bool,
-	row_lock_capabilities: RowLockCapabilities,
+	row_lock_capabilities: Option<RowLockCapabilities>,
 }
 
 #[async_trait::async_trait]
@@ -115,6 +103,7 @@ impl TransactionExecutor for FlavoredTransactionExecutor {
 
 	fn row_lock_capabilities(&self) -> super::types::RowLockCapabilities {
 		self.row_lock_capabilities
+			.unwrap_or_else(|| self.inner.row_lock_capabilities())
 	}
 
 	fn supports_pgvector_error_hints(&self) -> bool {
@@ -321,12 +310,28 @@ impl DatabaseConnection {
 	/// flavor is already known — e.g. tests that mount a CockroachDB pool, or
 	/// adapters that pre-probe `SELECT version()` themselves.
 	pub fn new_with_flavor(backend: Arc<dyn DatabaseBackend>, is_cockroachdb: bool) -> Self {
-		let row_lock_capabilities =
-			default_row_lock_capabilities(backend.database_type(), is_cockroachdb);
+		let row_lock_capabilities = is_cockroachdb.then_some(RowLockCapabilities::cockroachdb());
 		Self {
 			backend,
 			is_cockroachdb,
 			row_lock_capabilities,
+		}
+	}
+
+	/// Creates a new instance with an explicit row-lock capability profile.
+	///
+	/// This is useful for custom backends whose server version is known by the
+	/// caller. Without an explicit profile, transaction executors retain their
+	/// own capability reporting.
+	pub fn new_with_flavor_and_row_lock_capabilities(
+		backend: Arc<dyn DatabaseBackend>,
+		is_cockroachdb: bool,
+		row_lock_capabilities: RowLockCapabilities,
+	) -> Self {
+		Self {
+			backend,
+			is_cockroachdb,
+			row_lock_capabilities: Some(row_lock_capabilities),
 		}
 	}
 
@@ -355,7 +360,7 @@ impl DatabaseConnection {
 		Ok(Self {
 			backend: Arc::new(PostgresBackend::new(pool)),
 			is_cockroachdb,
-			row_lock_capabilities,
+			row_lock_capabilities: Some(row_lock_capabilities),
 		})
 	}
 
@@ -461,10 +466,10 @@ impl DatabaseConnection {
 				return Ok(Self {
 					backend: Arc::new(PostgresBackend::new(pool)),
 					is_cockroachdb,
-					row_lock_capabilities: postgres_row_lock_capabilities(
+					row_lock_capabilities: Some(postgres_row_lock_capabilities(
 						version.as_deref(),
 						is_cockroachdb,
-					),
+					)),
 				});
 			}
 			Err(e) => {
@@ -581,7 +586,7 @@ impl DatabaseConnection {
 			return Ok(Self {
 				backend: Arc::new(SqliteBackend::new(pool)),
 				is_cockroachdb: false,
-				row_lock_capabilities: RowLockCapabilities::unsupported(),
+				row_lock_capabilities: Some(RowLockCapabilities::unsupported()),
 			});
 		}
 
@@ -682,7 +687,7 @@ impl DatabaseConnection {
 		Ok(Self {
 			backend: Arc::new(SqliteBackend::new(pool)),
 			is_cockroachdb: false,
-			row_lock_capabilities: RowLockCapabilities::unsupported(),
+			row_lock_capabilities: Some(RowLockCapabilities::unsupported()),
 		})
 	}
 
@@ -692,7 +697,7 @@ impl DatabaseConnection {
 		Self {
 			backend: Arc::new(SqliteBackend::new(pool)),
 			is_cockroachdb: false,
-			row_lock_capabilities: RowLockCapabilities::unsupported(),
+			row_lock_capabilities: Some(RowLockCapabilities::unsupported()),
 		}
 	}
 
@@ -708,7 +713,7 @@ impl DatabaseConnection {
 		Ok(Self {
 			backend: Arc::new(MySqlBackend::new(pool)),
 			is_cockroachdb: false,
-			row_lock_capabilities: mysql_row_lock_capabilities(version.as_deref()),
+			row_lock_capabilities: Some(mysql_row_lock_capabilities(version.as_deref())),
 		})
 	}
 
@@ -1149,10 +1154,12 @@ mod tests {
 		assert!(mysql_800.update);
 		assert!(!mysql_800.nowait);
 		assert!(!mysql_800.skip_locked);
+		assert!(!mysql_800.targets);
 
 		let mysql_801 = super::mysql_row_lock_capabilities(Some("8.0.1"));
 		assert!(mysql_801.nowait);
 		assert!(mysql_801.skip_locked);
+		assert!(mysql_801.targets);
 	}
 
 	/// Helper to build a CREATE DATABASE SQL statement with proper identifier escaping.

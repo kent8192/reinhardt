@@ -760,7 +760,7 @@ impl RowLockCapabilities {
 			no_key_update: false,
 			nowait: supports_wait_options,
 			skip_locked: supports_wait_options,
-			targets: true,
+			targets: supports_wait_options,
 		}
 	}
 

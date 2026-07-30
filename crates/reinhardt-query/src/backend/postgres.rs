@@ -4866,11 +4866,37 @@ mod tests {
 	use crate::types::{BinOper, PgBinOper};
 	use crate::{
 		expr::{Expr, ExprTrait},
-		query::Query,
+		query::{LockType, Query},
 		types::{Alias, ColumnDef, IntoIden},
 		value::Value,
 	};
 	use rstest::rstest;
+
+	#[test]
+	fn checked_select_rejects_row_locking_with_group_by_or_having() {
+		let builder = PostgresQueryBuilder::new();
+		let mut grouped = Query::select();
+		grouped
+			.column("account_id")
+			.from("ledger_entries")
+			.group_by_col("account_id")
+			.lock(LockType::Update);
+		let grouped_error = builder
+			.build_select_checked(&grouped)
+			.expect_err("PostgreSQL must reject row locking on grouped queries");
+		assert!(grouped_error.to_string().contains("GROUP BY or HAVING"));
+
+		let mut having = Query::select();
+		having
+			.column("account_id")
+			.from("ledger_entries")
+			.and_having(Expr::col("account_id").gt(0))
+			.lock(LockType::Update);
+		let having_error = builder
+			.build_select_checked(&having)
+			.expect_err("PostgreSQL must reject row locking on HAVING queries");
+		assert!(having_error.to_string().contains("GROUP BY or HAVING"));
+	}
 
 	#[test]
 	fn test_escape_identifier() {

@@ -2492,6 +2492,7 @@ fn validate_exact_named_fields(
 	expected: &[&str],
 	context: &str,
 ) -> Result<()> {
+	let mut seen = Vec::with_capacity(fields.len());
 	for field in fields {
 		let syn::Member::Named(name) = &field.member else {
 			return Err(MigrationError::InvalidMigration(format!(
@@ -2503,6 +2504,12 @@ fn validate_exact_named_fields(
 				"{context}.{name} is unsupported or malformed"
 			)));
 		}
+		if seen.contains(&name) {
+			return Err(MigrationError::InvalidMigration(format!(
+				"{context}.{name} is duplicated"
+			)));
+		}
+		seen.push(name);
 	}
 	Ok(())
 }
@@ -3502,7 +3509,7 @@ mod tests {
 	use crate::field_domain::{FieldDomain, ModelEnumRepr, ModelEnumValue};
 	use crate::migrations::{
 		AlterTableOptions, ColumnDefinition, ColumnType, Constraint, FieldType, GeneratedStorage,
-		IndexType, MySqlAlgorithm, MySqlLock, Operation, SchemaExpr,
+		IndexType, MigrationError, MySqlAlgorithm, MySqlLock, Operation, SchemaExpr,
 	};
 
 	#[rstest]
@@ -3573,6 +3580,56 @@ mod tests {
 
 		// Assert
 		assert_eq!(error.to_string(), expected);
+	}
+
+	#[rstest]
+	#[case(
+		r#"Operation::CreateIndex {
+			table: "posts".to_string(),
+			columns: vec!["slug".to_string()],
+			unique: true,
+			unique: false,
+			index_type: None,
+			where_clause: None,
+			concurrently: false,
+			expressions: None,
+			mysql_options: None,
+			operator_class: None,
+		}"#,
+		"operations[0].CreateIndex.unique is duplicated"
+	)]
+	#[case(
+		r#"Operation::AddConstraintDefinition {
+			table: "posts".to_string(),
+			constraint: Constraint::Unique {
+				name: "posts_slug_key".to_string(),
+				columns: vec!["slug".to_string()],
+				columns: vec!["tenant_id".to_string(), "slug".to_string()],
+			},
+		}"#,
+		"operations[0].AddConstraintDefinition.constraint.columns is duplicated"
+	)]
+	fn strict_metadata_rejects_duplicate_named_fields(
+		#[case] operation: &str,
+		#[case] expected: &str,
+	) {
+		let source = format!(
+			r#"pub fn migration() -> Migration {{
+				Migration {{
+					operations: vec![{operation}],
+					dependencies: vec![],
+					replaces: vec![],
+				}}
+			}}"#
+		);
+		let ast = syn::parse_file(&source).unwrap();
+
+		let error = extract_migration_metadata_strict(&ast, "blog", "0001_initial").unwrap_err();
+
+		let MigrationError::InvalidMigration(message) = error else {
+			panic!("duplicate field must return InvalidMigration");
+		};
+		assert_eq!(message, expected);
 	}
 
 	#[test]

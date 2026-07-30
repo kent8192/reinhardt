@@ -166,7 +166,7 @@ impl<M> OrderingField<M> {
 /// unique constraints. Nullable fields use their inner type for lookups.
 #[derive(Debug, Clone, Copy)]
 pub struct UniqueFieldRef<M, T> {
-	field: FieldRef<M, T>,
+	field: FieldRef<M, T, GeneratedModelField>,
 	// The QuerySet retrieval layer calls the generated getter internally.
 	#[allow(dead_code)]
 	getter: Option<fn(&M) -> Option<T>>,
@@ -280,6 +280,18 @@ impl<M, T> FieldRef<M, T, UnverifiedModelField> {
 }
 
 impl<M, T> FieldRef<M, T, GeneratedModelField> {
+	/// Create an unverified field reference for a dynamically composed filter.
+	///
+	/// This preserves the historical two-parameter `FieldRef::<M, T>::new`
+	/// call shape while preventing dynamic field names from becoming ordering
+	/// proofs.
+	pub const fn new(name: &'static str) -> FieldRef<M, T, UnverifiedModelField> {
+		FieldRef {
+			name,
+			_phantom: PhantomData,
+		}
+	}
+
 	/// Construct a field reference proven to come from a model definition.
 	///
 	/// # Safety

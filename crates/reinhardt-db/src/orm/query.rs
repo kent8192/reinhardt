@@ -3607,7 +3607,7 @@ where
 	}
 
 	fn root_column_reference(&self, field: &str) -> ColumnRef {
-		if !self.relation_joins.is_empty() && !field.contains('.') {
+		if (!self.relation_joins.is_empty() || self.has_select_related()) && !field.contains('.') {
 			ColumnRef::table_column(Alias::new(self.root_alias()), Alias::new(field))
 		} else {
 			parse_column_reference(field)
@@ -11328,6 +11328,23 @@ mod tests {
 		assert!(sql.contains("SELECT"));
 		assert!(sql.contains("test_users"));
 		assert!(sql.contains("LEFT JOIN"));
+	}
+
+	#[test]
+	fn select_related_qualifies_root_ordering_columns() {
+		// Arrange
+		let mut queryset = QuerySet::<TestUser>::new().select_related(&["profile"]);
+		queryset.order_by_fields.push("id".to_string());
+
+		// Act
+		let statement = queryset
+			.select_related_query()
+			.expect("select-related query should compile");
+		use reinhardt_query::prelude::{PostgresQueryBuilder, QueryStatementBuilder};
+		let sql = statement.build(PostgresQueryBuilder).0;
+
+		// Assert
+		assert!(sql.contains("ORDER BY \"test_users\".\"id\" ASC"));
 	}
 
 	#[test]

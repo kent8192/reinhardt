@@ -3441,7 +3441,7 @@ fn generate_field_accessors(
 				///
 				/// Returns a `FieldRef<#struct_name, #field_type>` that provides compile-time
 				/// type safety for field operations.
-				pub const fn #method_name() -> #orm_crate::expressions::FieldRef<#struct_name, #field_type> {
+				pub const fn #method_name() -> #orm_crate::expressions::FieldRef<#struct_name, #field_type, #orm_crate::expressions::GeneratedModelField> {
 					// SAFETY: `#[model]` emits this accessor only for a persisted scalar model field.
 					unsafe { #orm_crate::expressions::FieldRef::from_model_field(#column_name) }
 				}

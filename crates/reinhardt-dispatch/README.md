@@ -13,11 +13,11 @@ Add `reinhardt` to your `Cargo.toml`:
 <!-- reinhardt-version-sync:3 -->
 ```toml
 [dependencies]
-reinhardt = { version = "0.3.3", features = ["dispatch"] }
+reinhardt = { version = "0.3.4", features = ["dispatch"] }
 
 # Or use a preset:
-# reinhardt = { version = "0.3.3", features = ["standard"] }  # Recommended
-# reinhardt = { version = "0.3.3", features = ["full"] }      # All features
+# reinhardt = { version = "0.3.4", features = ["standard"] }  # Recommended
+# reinhardt = { version = "0.3.4", features = ["full"] }      # All features
 ```
 
 Then import dispatch features:

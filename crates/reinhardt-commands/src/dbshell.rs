@@ -721,9 +721,9 @@ mod tests {
 				let expected = std::env::var_os("DBSHELL_EXPECTED_EXECUTABLE")
 					.expect("read expected executable");
 				assert_eq!(
-					super::resolve_executable(OsStr::new("psql"))
+					super::resolve_executable_candidates(OsStr::new("psql"))
 						.expect("resolve native executable"),
-					std::path::PathBuf::from(expected)
+					vec![std::path::PathBuf::from(expected)]
 				);
 			}
 			_ => panic!("unknown isolated runner case: {case}"),

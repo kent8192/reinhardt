@@ -740,26 +740,38 @@ pub struct RowLockCapabilities {
 }
 
 impl RowLockCapabilities {
-	/// Capabilities for PostgreSQL 9.5 and newer.
-	pub const fn postgres() -> Self {
+	/// Capabilities for a PostgreSQL server with the supplied major and minor version.
+	pub const fn postgres_for_version(major: u16, minor: u16) -> Self {
+		let version = major * 100 + minor;
 		Self {
 			update: true,
-			no_key_update: true,
-			nowait: true,
-			skip_locked: true,
+			no_key_update: version >= 903,
+			nowait: version >= 801,
+			skip_locked: version >= 905,
 			targets: true,
 		}
 	}
 
-	/// Capabilities for MySQL 8.0.1 and newer.
-	pub const fn mysql() -> Self {
+	/// Capabilities for a MySQL server with the supplied semantic version.
+	pub const fn mysql_for_version(major: u16, minor: u16, patch: u16) -> Self {
+		let supports_wait_options = major > 8 || (major == 8 && (minor > 0 || patch >= 1));
 		Self {
 			update: true,
 			no_key_update: false,
-			nowait: true,
-			skip_locked: true,
+			nowait: supports_wait_options,
+			skip_locked: supports_wait_options,
 			targets: true,
 		}
+	}
+
+	/// Capabilities for PostgreSQL 9.5 and newer.
+	pub const fn postgres() -> Self {
+		Self::postgres_for_version(9, 5)
+	}
+
+	/// Capabilities for MySQL 8.0.1 and newer.
+	pub const fn mysql() -> Self {
+		Self::mysql_for_version(8, 0, 1)
 	}
 
 	/// Capabilities for CockroachDB's PostgreSQL-compatible lock syntax.

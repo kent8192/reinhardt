@@ -6,7 +6,7 @@ use super::{
 	backend::DatabaseBackend,
 	error::Result,
 	query_builder::{DeleteBuilder, InsertBuilder, SelectBuilder, UpdateBuilder},
-	types::{DatabaseType, QueryResult, QueryValue, Row, TransactionExecutor},
+	types::{DatabaseType, QueryResult, QueryValue, Row, RowLockCapabilities, TransactionExecutor},
 };
 
 #[cfg(any(feature = "postgres", feature = "sqlite", feature = "mysql"))]
@@ -31,6 +31,50 @@ fn map_postgres_initial_connect_error(error: sqlx::Error) -> DatabaseError {
 	}
 }
 
+fn default_row_lock_capabilities(
+	database_type: DatabaseType,
+	is_cockroachdb: bool,
+) -> RowLockCapabilities {
+	match database_type {
+		DatabaseType::Postgres if is_cockroachdb => RowLockCapabilities::cockroachdb(),
+		DatabaseType::Postgres => RowLockCapabilities::postgres(),
+		DatabaseType::Mysql => RowLockCapabilities::mysql(),
+		DatabaseType::Sqlite => RowLockCapabilities::unsupported(),
+	}
+}
+
+fn parse_server_version(version: &str) -> Option<(u16, u16, u16)> {
+	let start = version.find(|character: char| character.is_ascii_digit())?;
+	let mut parts = version[start..]
+		.split(|character: char| !character.is_ascii_digit())
+		.filter(|part| !part.is_empty());
+	Some((
+		parts.next()?.parse().ok()?,
+		parts.next()?.parse().ok()?,
+		parts.next().and_then(|part| part.parse().ok()).unwrap_or(0),
+	))
+}
+
+fn postgres_row_lock_capabilities(
+	version: Option<&str>,
+	is_cockroachdb: bool,
+) -> RowLockCapabilities {
+	if is_cockroachdb {
+		return RowLockCapabilities::cockroachdb();
+	}
+	version
+		.and_then(parse_server_version)
+		.map(|(major, minor, _)| RowLockCapabilities::postgres_for_version(major, minor))
+		.unwrap_or_else(RowLockCapabilities::postgres)
+}
+
+fn mysql_row_lock_capabilities(version: Option<&str>) -> RowLockCapabilities {
+	version
+		.and_then(parse_server_version)
+		.map(|(major, minor, patch)| RowLockCapabilities::mysql_for_version(major, minor, patch))
+		.unwrap_or_else(RowLockCapabilities::mysql)
+}
+
 #[cfg(feature = "sqlite")]
 use super::dialect::SqliteBackend;
 
@@ -50,11 +94,13 @@ pub struct DatabaseConnection {
 	/// differently. This flag is set at connection time via a `SELECT version()`
 	/// probe and is `false` for any non-Postgres backend.
 	is_cockroachdb: bool,
+	row_lock_capabilities: RowLockCapabilities,
 }
 
 struct FlavoredTransactionExecutor {
 	inner: Box<dyn TransactionExecutor>,
 	is_cockroachdb: bool,
+	row_lock_capabilities: RowLockCapabilities,
 }
 
 #[async_trait::async_trait]
@@ -68,12 +114,7 @@ impl TransactionExecutor for FlavoredTransactionExecutor {
 	}
 
 	fn row_lock_capabilities(&self) -> super::types::RowLockCapabilities {
-		let mut capabilities = self.inner.row_lock_capabilities();
-		if self.is_cockroachdb {
-			capabilities.no_key_update = false;
-			capabilities.targets = false;
-		}
-		capabilities
+		self.row_lock_capabilities
 	}
 
 	fn supports_pgvector_error_hints(&self) -> bool {
@@ -280,9 +321,12 @@ impl DatabaseConnection {
 	/// flavor is already known — e.g. tests that mount a CockroachDB pool, or
 	/// adapters that pre-probe `SELECT version()` themselves.
 	pub fn new_with_flavor(backend: Arc<dyn DatabaseBackend>, is_cockroachdb: bool) -> Self {
+		let row_lock_capabilities =
+			default_row_lock_capabilities(backend.database_type(), is_cockroachdb);
 		Self {
 			backend,
 			is_cockroachdb,
+			row_lock_capabilities,
 		}
 	}
 
@@ -301,11 +345,17 @@ impl DatabaseConnection {
 		let pool = Self::build_postgres_pool(url, pool_size)
 			.await
 			.map_err(map_postgres_initial_connect_error)?;
-		let is_cockroachdb = Self::probe_cockroachdb(&pool).await;
+		let version = Self::probe_postgres_version(&pool).await;
+		let is_cockroachdb = version
+			.as_deref()
+			.is_some_and(|value| value.starts_with("CockroachDB"));
+		let row_lock_capabilities =
+			postgres_row_lock_capabilities(version.as_deref(), is_cockroachdb);
 
 		Ok(Self {
 			backend: Arc::new(PostgresBackend::new(pool)),
 			is_cockroachdb,
+			row_lock_capabilities,
 		})
 	}
 
@@ -324,11 +374,11 @@ impl DatabaseConnection {
 	/// Used to drive the migration-lock dispatch in `MigrationRecorder`
 	/// (issue #4642: CockroachDB does not implement `pg_advisory_lock`).
 	#[cfg(feature = "postgres")]
-	async fn probe_cockroachdb(pool: &sqlx::PgPool) -> bool {
-		sqlx::query_scalar::<_, bool>("SELECT version() LIKE 'CockroachDB%'")
+	async fn probe_postgres_version(pool: &sqlx::PgPool) -> Option<String> {
+		sqlx::query_scalar::<_, String>("SELECT version()")
 			.fetch_one(pool)
 			.await
-			.unwrap_or(false)
+			.ok()
 	}
 
 	/// Connect to PostgreSQL with automatic database creation if it doesn't exist.
@@ -404,10 +454,17 @@ impl DatabaseConnection {
 		// so we can check the SQLSTATE code
 		match Self::build_postgres_pool(url, pool_size).await {
 			Ok(pool) => {
-				let is_cockroachdb = Self::probe_cockroachdb(&pool).await;
+				let version = Self::probe_postgres_version(&pool).await;
+				let is_cockroachdb = version
+					.as_deref()
+					.is_some_and(|value| value.starts_with("CockroachDB"));
 				return Ok(Self {
 					backend: Arc::new(PostgresBackend::new(pool)),
 					is_cockroachdb,
+					row_lock_capabilities: postgres_row_lock_capabilities(
+						version.as_deref(),
+						is_cockroachdb,
+					),
 				});
 			}
 			Err(e) => {
@@ -524,6 +581,7 @@ impl DatabaseConnection {
 			return Ok(Self {
 				backend: Arc::new(SqliteBackend::new(pool)),
 				is_cockroachdb: false,
+				row_lock_capabilities: RowLockCapabilities::unsupported(),
 			});
 		}
 
@@ -624,6 +682,7 @@ impl DatabaseConnection {
 		Ok(Self {
 			backend: Arc::new(SqliteBackend::new(pool)),
 			is_cockroachdb: false,
+			row_lock_capabilities: RowLockCapabilities::unsupported(),
 		})
 	}
 
@@ -633,6 +692,7 @@ impl DatabaseConnection {
 		Self {
 			backend: Arc::new(SqliteBackend::new(pool)),
 			is_cockroachdb: false,
+			row_lock_capabilities: RowLockCapabilities::unsupported(),
 		}
 	}
 
@@ -641,9 +701,14 @@ impl DatabaseConnection {
 	pub async fn connect_mysql(url: &str) -> Result<Self> {
 		use sqlx::MySqlPool;
 		let pool = MySqlPool::connect(url).await.map_err(map_sqlx_error)?;
+		let version = sqlx::query_scalar::<_, String>("SELECT VERSION()")
+			.fetch_one(&pool)
+			.await
+			.ok();
 		Ok(Self {
 			backend: Arc::new(MySqlBackend::new(pool)),
 			is_cockroachdb: false,
+			row_lock_capabilities: mysql_row_lock_capabilities(version.as_deref()),
 		})
 	}
 
@@ -867,6 +932,7 @@ impl DatabaseConnection {
 		Ok(Box::new(FlavoredTransactionExecutor {
 			inner,
 			is_cockroachdb: self.is_cockroachdb,
+			row_lock_capabilities: self.row_lock_capabilities,
 		}))
 	}
 
@@ -895,6 +961,7 @@ impl DatabaseConnection {
 		Ok(Box::new(FlavoredTransactionExecutor {
 			inner,
 			is_cockroachdb: self.is_cockroachdb,
+			row_lock_capabilities: self.row_lock_capabilities,
 		}))
 	}
 
@@ -1057,6 +1124,35 @@ mod tests {
 		let error = super::map_postgres_initial_connect_error(sqlx::Error::PoolTimedOut);
 
 		assert_eq!(error.kind(), super::DatabaseErrorKind::Timeout);
+	}
+
+	#[rstest]
+	#[case("PostgreSQL 9.4.26", Some((9, 4, 26)))]
+	#[case("8.0.0-rc1", Some((8, 0, 0)))]
+	#[case("not a version", None)]
+	fn server_version_parser_extracts_numeric_components(
+		#[case] version: &str,
+		#[case] expected: Option<(u16, u16, u16)>,
+	) {
+		assert_eq!(super::parse_server_version(version), expected);
+	}
+
+	#[test]
+	fn row_lock_capabilities_follow_probed_server_versions() {
+		let postgres_94 = super::postgres_row_lock_capabilities(Some("PostgreSQL 9.4.26"), false);
+		assert!(postgres_94.update);
+		assert!(postgres_94.no_key_update);
+		assert!(postgres_94.nowait);
+		assert!(!postgres_94.skip_locked);
+
+		let mysql_800 = super::mysql_row_lock_capabilities(Some("8.0.0"));
+		assert!(mysql_800.update);
+		assert!(!mysql_800.nowait);
+		assert!(!mysql_800.skip_locked);
+
+		let mysql_801 = super::mysql_row_lock_capabilities(Some("8.0.1"));
+		assert!(mysql_801.nowait);
+		assert!(mysql_801.skip_locked);
 	}
 
 	/// Helper to build a CREATE DATABASE SQL statement with proper identifier escaping.

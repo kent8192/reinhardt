@@ -165,7 +165,10 @@ async fn assert_blocking_until_transaction_end(
 	assert_eq!(rows.len(), 1);
 }
 
-async fn assert_nowait_fails_immediately(connection: reinhardt_db::orm::DatabaseConnection) {
+async fn assert_nowait_fails_immediately(
+	connection: reinhardt_db::orm::DatabaseConnection,
+	expected_sqlstate: &str,
+) {
 	reset_rows(connection).await;
 	let holder = hold_first_row(connection, false).await;
 
@@ -194,9 +197,14 @@ async fn assert_nowait_fails_immediately(connection: reinhardt_db::orm::Database
 		.expect("the holder task must not panic")
 		.expect("the holder transaction must commit");
 	let nowait_result = result.expect("NOWAIT must return before the deadline");
-	assert!(
-		nowait_result.is_err(),
-		"NOWAIT must report lock contention instead of waiting"
+	let error = nowait_result.expect_err("NOWAIT must report lock contention instead of waiting");
+	let database_error = error
+		.database_error()
+		.expect("NOWAIT contention must be reported as a database error");
+	assert_eq!(
+		database_error.code(),
+		Some(expected_sqlstate),
+		"NOWAIT must report the backend lock-contention SQLSTATE"
 	);
 }
 
@@ -232,7 +240,7 @@ async fn assert_skip_locked_omits_locked_row(connection: reinhardt_db::orm::Data
 	);
 }
 
-async fn run_row_lock_contract(url: &str) {
+async fn run_row_lock_contract(url: &str, expected_nowait_sqlstate: &str) {
 	let (_lease, connection) = connect(url).await;
 	connection
 		.execute(
@@ -244,7 +252,7 @@ async fn run_row_lock_contract(url: &str) {
 
 	assert_blocking_until_transaction_end(connection, false).await;
 	assert_blocking_until_transaction_end(connection, true).await;
-	assert_nowait_fails_immediately(connection).await;
+	assert_nowait_fails_immediately(connection, expected_nowait_sqlstate).await;
 	assert_skip_locked_omits_locked_row(connection).await;
 }
 
@@ -252,19 +260,19 @@ async fn run_row_lock_contract(url: &str) {
 #[serial(row_locking_integration)]
 async fn postgres_row_locks_follow_transaction_boundaries_and_wait_policies() {
 	let (_container, _pool, _port, url) = postgres_container().await;
-	run_row_lock_contract(&url).await;
+	run_row_lock_contract(&url, "55P03").await;
 }
 
 #[tokio::test]
 #[serial(row_locking_integration)]
 async fn mysql_row_locks_follow_transaction_boundaries_and_wait_policies() {
 	let (_container, _pool, _port, url) = mysql_container().await;
-	run_row_lock_contract(&url).await;
+	run_row_lock_contract(&url, "HY000").await;
 }
 
 #[tokio::test]
 #[serial(row_locking_integration)]
 async fn cockroachdb_row_locks_follow_transaction_boundaries_and_wait_policies() {
 	let (_container, _pool, _port, url) = cockroachdb_container().await;
-	run_row_lock_contract(&url).await;
+	run_row_lock_contract(&url, "55P03").await;
 }

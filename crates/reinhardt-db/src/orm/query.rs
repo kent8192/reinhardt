@@ -1630,19 +1630,30 @@ where
 			));
 		}
 		let graph = self.relation_join_graph_for_query();
+		if spec.targets.is_empty()
+			&& graph
+				.joins()
+				.iter()
+				.any(|join| join.join_kind == RelationJoinKind::Left)
+		{
+			return Err(DatabaseError::new(
+				DatabaseErrorKind::Query,
+				"SELECT FOR UPDATE with an outer join requires explicit non-nullable lock targets",
+			));
+		}
 		for target in &spec.targets {
 			let SelectForUpdateTarget::Relation(steps) = target else {
 				continue;
 			};
 			if steps.is_empty() {
 				return Err(DatabaseError::new(
-					DatabaseErrorKind::Validation,
+					DatabaseErrorKind::Query,
 					"SELECT FOR UPDATE relation lock target must contain at least one relation step",
 				));
 			}
 			let aliases = graph.aliases_for_steps(steps).ok_or_else(|| {
 				DatabaseError::new(
-					DatabaseErrorKind::Validation,
+					DatabaseErrorKind::Query,
 					"SELECT FOR UPDATE relation lock target could not be resolved",
 				)
 			})?;
@@ -1654,7 +1665,7 @@ where
 					.expect("resolved relation aliases always have a planned join");
 				if join.join_kind == RelationJoinKind::Left {
 					return Err(DatabaseError::new(
-						DatabaseErrorKind::Validation,
+						DatabaseErrorKind::Query,
 						"SELECT FOR UPDATE cannot lock a relation reached through an outer join",
 					));
 				}

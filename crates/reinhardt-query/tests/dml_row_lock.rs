@@ -60,6 +60,54 @@ fn postgres_checked_builder_rejects_locks_on_union_queries() {
 }
 
 #[rstest]
+fn postgres_checked_builder_rejects_lock_on_union_arm() {
+	let mut statement = Query::select();
+	statement.column("id").from("users");
+	let mut union = Query::select();
+	union
+		.column("id")
+		.from("archived_users")
+		.lock(LockType::Update);
+	statement.union(union);
+
+	assert_eq!(
+		PostgresQueryBuilder::new().build_select_checked(&statement),
+		Err(QueryBuildError::UnsupportedBackendFeature {
+			feature: "row locking on UNION queries",
+			backend: "PostgreSQL",
+		})
+	);
+}
+
+#[rstest]
+fn postgres_checked_builder_rejects_lock_on_distinct_query() {
+	let mut statement = locked_select(LockType::Update);
+	statement.distinct();
+
+	assert_eq!(
+		PostgresQueryBuilder::new().build_select_checked(&statement),
+		Err(QueryBuildError::UnsupportedBackendFeature {
+			feature: "row locking with DISTINCT queries",
+			backend: "PostgreSQL",
+		})
+	);
+}
+
+#[rstest]
+fn sqlite_checked_builder_rejects_locks_in_expression_subqueries() {
+	let mut statement = Query::select();
+	statement.expr(Expr::subquery(locked_select(LockType::Update)));
+
+	assert_eq!(
+		SqliteQueryBuilder::new().build_select_checked(&statement),
+		Err(QueryBuildError::UnsupportedBackendFeature {
+			feature: "row locking",
+			backend: "SQLite",
+		})
+	);
+}
+
+#[rstest]
 fn lock_behavior_is_mutually_exclusive() {
 	let mut statement = locked_select(LockType::Update);
 	statement
@@ -80,10 +128,7 @@ fn postgres_renders_typed_lock_targets_using_aliases() {
 		.column(("u", "id"))
 		.from(TableRef::table_alias("users", "u"))
 		.lock(LockType::NoKeyUpdate)
-		.lock_tables([
-			TableRef::table_alias("users", "u"),
-			TableRef::schema_table("audit", "events"),
-		])
+		.lock_tables([TableRef::table_alias("users", "u")])
 		.lock_behavior(LockBehavior::Nowait);
 
 	let (sql, _) = PostgresQueryBuilder::new()
@@ -92,7 +137,21 @@ fn postgres_renders_typed_lock_targets_using_aliases() {
 
 	assert_eq!(
 		sql,
-		r#"SELECT "u"."id" FROM "users" AS "u" FOR NO KEY UPDATE OF "u", "audit"."events" NOWAIT"#
+		r#"SELECT "u"."id" FROM "users" AS "u" FOR NO KEY UPDATE OF "u" NOWAIT"#
+	);
+}
+
+#[rstest]
+fn postgres_checked_builder_rejects_lock_target_absent_from_query() {
+	let mut statement = locked_select(LockType::Update);
+	statement.lock_tables([TableRef::table("audit_events")]);
+
+	assert_eq!(
+		PostgresQueryBuilder::new().build_select_checked(&statement),
+		Err(QueryBuildError::UnsupportedBackendFeature {
+			feature: "row lock target absent from the query",
+			backend: "PostgreSQL",
+		})
 	);
 }
 
@@ -161,10 +220,11 @@ fn cockroach_checked_builder_explicitly_accepts_lock_strengths(#[case] lock_type
 		LockType::NoKeyUpdate => "FOR NO KEY UPDATE",
 		LockType::Share => "FOR SHARE",
 		LockType::KeyShare => "FOR KEY SHARE",
+		_ => unreachable!("the test cases cover every supported lock type"),
 	};
 	assert_eq!(
 		sql,
-		format!(r#"SELECT \"id\" FROM \"users\" {expected_lock} NOWAIT"#)
+		format!(r#"SELECT "id" FROM "users" {expected_lock} NOWAIT"#)
 	);
 }
 

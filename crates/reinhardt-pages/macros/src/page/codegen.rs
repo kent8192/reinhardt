@@ -1814,12 +1814,12 @@ mod tests {
 				::reinhardt_pages::component::IntoPage::into_page(
 					::reinhardt_pages::component::PageElement::new("div").on(
 						::reinhardt_pages::event::EventName::Custom(::std::borrow::Cow::Borrowed(
-							"item-focused"
+							"item-focused",
 						)),
 						::reinhardt_pages::callback::typed_custom_event_handler::<crate::Selected, _>(
-							|_event: ::reinhardt_pages::event::CustomEvent<crate::Selected>| {}
-						)
-					)
+							|_event: ::reinhardt_pages::event::CustomEvent<crate::Selected>| {},
+						),
+					),
 				)
 			}
 		}))

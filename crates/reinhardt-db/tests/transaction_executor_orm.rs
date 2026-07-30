@@ -740,31 +740,18 @@ async fn latest_and_earliest_use_typed_ordering_with_caller_owned_executors() {
 		Some(2)
 	);
 	assert_eq!(executor.calls.len(), 4);
-	assert!(
-		executor.calls[0]
-			.sql
-			.contains("ORDER BY \"article_id\" DESC")
-	);
-	assert!(
-		executor.calls[1]
-			.sql
-			.contains("ORDER BY \"article_id\" ASC")
-	);
-	assert!(
-		executor.calls[2]
-			.sql
-			.contains("ORDER BY \"article_id\" DESC, \"article_title\" DESC")
-	);
-	assert!(
-		executor.calls[3]
-			.sql
-			.contains("ORDER BY \"article_id\" ASC, \"article_title\" ASC")
-	);
-	assert!(
+	assert_eq!(
 		executor
 			.calls
 			.iter()
-			.all(|call| call.sql.contains("LIMIT $1"))
+			.map(|call| call.sql.as_str())
+			.collect::<Vec<_>>(),
+		vec![
+			"SELECT * FROM \"articles\" ORDER BY \"article_id\" DESC LIMIT $1",
+			"SELECT * FROM \"articles\" ORDER BY \"article_id\" ASC LIMIT $1",
+			"SELECT * FROM \"articles\" ORDER BY \"article_id\" DESC, \"article_title\" DESC LIMIT $1",
+			"SELECT * FROM \"articles\" ORDER BY \"article_id\" ASC, \"article_title\" ASC LIMIT $1",
+		]
 	);
 	assert!(
 		executor

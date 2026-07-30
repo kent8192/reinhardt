@@ -6196,6 +6196,7 @@ where
 		T: serde::de::DeserializeOwned,
 		E: OrmExecutor,
 	{
+		self.ensure_unsliced_retrieval()?;
 		let mut queryset = self.clone();
 		queryset.order_by_fields = ordering;
 		queryset.limit = Some(1);
@@ -6215,6 +6216,7 @@ where
 	where
 		T: serde::de::DeserializeOwned,
 	{
+		self.ensure_unsliced_retrieval().map_err(executor_error)?;
 		let mut queryset = self.clone();
 		queryset.order_by_fields = ordering;
 		queryset.limit = Some(1);
@@ -6224,6 +6226,33 @@ where
 			.into_iter()
 			.next()
 			.ok_or_else(|| Error::NotFound("No record found matching the query".to_string()))
+	}
+
+	fn ensure_unsliced_retrieval(&self) -> reinhardt_core::exception::Result<()> {
+		if self.limit.is_some() || self.offset.is_some() {
+			return Err(Error::Validation(
+				"QuerySet retrieval helpers cannot be called on a sliced queryset".to_string(),
+			));
+		}
+		Ok(())
+	}
+
+	fn bulk_key_batches<K>(
+		keys: BTreeSet<K>,
+		backend: super::connection::DatabaseBackend,
+	) -> Vec<Vec<K>> {
+		let limit = match backend {
+			super::connection::DatabaseBackend::Sqlite => 900,
+			super::connection::DatabaseBackend::Postgres
+			| super::connection::DatabaseBackend::MySql => 65_535,
+		};
+		let mut remaining = keys.into_iter().collect::<Vec<_>>();
+		let mut batches = Vec::new();
+		while !remaining.is_empty() {
+			let count = remaining.len().min(limit);
+			batches.push(remaining.drain(..count).collect());
+		}
+		batches
 	}
 
 	/// Fetch rows by primary key and return them in deterministic key order.
@@ -6236,6 +6265,7 @@ where
 		T::PrimaryKey: DatabaseField + Ord,
 		I: IntoIterator<Item = T::PrimaryKey>,
 	{
+		self.ensure_unsliced_retrieval()?;
 		let keys = keys.into_iter().collect::<BTreeSet<_>>();
 		if self.empty || keys.is_empty() {
 			return Ok(BTreeMap::new());
@@ -6256,6 +6286,7 @@ where
 		E: OrmExecutor,
 		I: IntoIterator<Item = T::PrimaryKey>,
 	{
+		self.ensure_unsliced_retrieval()?;
 		let keys = keys.into_iter().collect::<BTreeSet<_>>();
 		if self.empty || keys.is_empty() {
 			return Ok(BTreeMap::new());
@@ -6274,6 +6305,7 @@ where
 		T::PrimaryKey: DatabaseField + Ord,
 		I: IntoIterator<Item = T::PrimaryKey>,
 	{
+		self.ensure_unsliced_retrieval().map_err(executor_error)?;
 		let keys = keys.into_iter().collect::<BTreeSet<_>>();
 		if self.empty || keys.is_empty() {
 			return Ok(BTreeMap::new());
@@ -6292,6 +6324,7 @@ where
 		K: DatabaseField + Ord,
 		I: IntoIterator<Item = K>,
 	{
+		self.ensure_unsliced_retrieval()?;
 		let keys = keys.into_iter().collect::<BTreeSet<_>>();
 		if self.empty || keys.is_empty() {
 			return Ok(BTreeMap::new());
@@ -6315,6 +6348,7 @@ where
 		K: DatabaseField + Ord,
 		I: IntoIterator<Item = K>,
 	{
+		self.ensure_unsliced_retrieval()?;
 		let keys = keys.into_iter().collect::<BTreeSet<_>>();
 		if self.empty || keys.is_empty() {
 			return Ok(BTreeMap::new());
@@ -6336,6 +6370,7 @@ where
 		K: DatabaseField + Ord,
 		I: IntoIterator<Item = K>,
 	{
+		self.ensure_unsliced_retrieval().map_err(executor_error)?;
 		let keys = keys.into_iter().collect::<BTreeSet<_>>();
 		if self.empty || keys.is_empty() {
 			return Ok(BTreeMap::new());
@@ -6369,13 +6404,20 @@ where
 		T::PrimaryKey: DatabaseField + Ord,
 		E: OrmExecutor,
 	{
-		let filter = super::expressions::FieldRef::<T, T::PrimaryKey>::new(T::primary_key_column())
-			.is_in(keys);
-		let rows = self.clone().filter(filter).all_with_db(conn).await?;
-		Ok(rows
-			.into_iter()
-			.filter_map(|model| model.primary_key().map(|key| (key, model)))
-			.collect())
+		let field = super::expressions::FieldRef::<T, T::PrimaryKey>::new(T::primary_key_column());
+		let mut result = BTreeMap::new();
+		for keys in Self::bulk_key_batches(keys, conn.backend()) {
+			let rows = self
+				.clone()
+				.filter(field.is_in(keys))
+				.all_with_db(conn)
+				.await?;
+			result.extend(
+				rows.into_iter()
+					.filter_map(|model| model.primary_key().map(|key| (key, model))),
+			);
+		}
+		Ok(result)
 	}
 
 	async fn in_bulk_with_keys_executor(
@@ -6387,17 +6429,22 @@ where
 		T: serde::de::DeserializeOwned,
 		T::PrimaryKey: DatabaseField + Ord,
 	{
-		let filter = super::expressions::FieldRef::<T, T::PrimaryKey>::new(T::primary_key_column())
-			.is_in(keys);
-		let rows = self
-			.clone()
-			.filter(filter)
-			.all_with_executor(executor)
-			.await?;
-		Ok(rows
-			.into_iter()
-			.filter_map(|model| model.primary_key().map(|key| (key, model)))
-			.collect())
+		let mut result = BTreeMap::new();
+		for keys in Self::bulk_key_batches(keys, Self::executor_backend(executor)) {
+			let filter =
+				super::expressions::FieldRef::<T, T::PrimaryKey>::new(T::primary_key_column())
+					.is_in(keys);
+			let rows = self
+				.clone()
+				.filter(filter)
+				.all_with_executor(executor)
+				.await?;
+			result.extend(
+				rows.into_iter()
+					.filter_map(|model| model.primary_key().map(|key| (key, model))),
+			);
+		}
+		Ok(result)
 	}
 
 	async fn in_bulk_by_keys_db<E, K>(
@@ -6412,15 +6459,19 @@ where
 		E: OrmExecutor,
 		K: DatabaseField + Ord,
 	{
-		let rows = self
-			.clone()
-			.filter(unique_field.is_in(keys))
-			.all_with_db(conn)
-			.await?;
-		Ok(rows
-			.into_iter()
-			.filter_map(|model| getter(&model).map(|key| (key, model)))
-			.collect())
+		let mut result = BTreeMap::new();
+		for keys in Self::bulk_key_batches(keys, conn.backend()) {
+			let rows = self
+				.clone()
+				.filter(unique_field.is_in(keys))
+				.all_with_db(conn)
+				.await?;
+			result.extend(
+				rows.into_iter()
+					.filter_map(|model| getter(&model).map(|key| (key, model))),
+			);
+		}
+		Ok(result)
 	}
 
 	async fn in_bulk_by_keys_executor<K>(
@@ -6434,15 +6485,19 @@ where
 		T: serde::de::DeserializeOwned,
 		K: DatabaseField + Ord,
 	{
-		let rows = self
-			.clone()
-			.filter(unique_field.is_in(keys))
-			.all_with_executor(executor)
-			.await?;
-		Ok(rows
-			.into_iter()
-			.filter_map(|model| getter(&model).map(|key| (key, model)))
-			.collect())
+		let mut result = BTreeMap::new();
+		for keys in Self::bulk_key_batches(keys, Self::executor_backend(executor)) {
+			let rows = self
+				.clone()
+				.filter(unique_field.is_in(keys))
+				.all_with_executor(executor)
+				.await?;
+			result.extend(
+				rows.into_iter()
+					.filter_map(|model| getter(&model).map(|key| (key, model))),
+			);
+		}
+		Ok(result)
 	}
 
 	/// Execute the queryset and return a single matching record
@@ -7198,6 +7253,9 @@ where
 		I: IntoIterator<Item = A>,
 		A: Into<FieldAssignment>,
 	{
+		if self.empty {
+			return Ok(0);
+		}
 		let mut conn = super::manager::get_connection().await?;
 		self.update_fields_with_conn(&mut conn, values).await
 	}
@@ -7213,6 +7271,9 @@ where
 		I: IntoIterator<Item = A>,
 		A: Into<FieldAssignment>,
 	{
+		if self.empty {
+			return Ok(0);
+		}
 		let stmt = self.update_fields_query(values)?;
 		let context = super::execution::pgvector_context_for_update(&stmt);
 		let (sql, values) =

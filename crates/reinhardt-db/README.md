@@ -691,7 +691,10 @@ let earliest = Event::objects()
 let by_id = Event::objects().all().in_bulk([3_i64, 1, 3]).await?;
 let by_slug = Event::objects()
     .all()
-    .in_bulk_by(Event::unique_slug(), ["launch", "archive"])
+    .in_bulk_by(
+        Event::unique_slug(),
+        ["launch".to_string(), "archive".to_string()],
+    )
     .await?;
 
 let empty = Event::objects().all().none();

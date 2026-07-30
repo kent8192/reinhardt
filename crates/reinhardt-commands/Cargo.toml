@@ -89,6 +89,7 @@ url = { workspace = true }
 tempfile = { workspace = true }
 
 [target.'cfg(unix)'.dependencies]
+libc = { workspace = true }
 nix = { version = "0.29", features = ["signal"] }
 
 [target.'cfg(windows)'.dependencies]

@@ -112,6 +112,7 @@ impl PostgresQueryBuilder {
 		&self,
 		stmt: &InsertStatement,
 	) -> Result<(String, Values), crate::QueryBuildError> {
+		crate::error::validate_insert_lock_for_backend(stmt, "PostgreSQL")?;
 		Ok(self.build_insert(stmt))
 	}
 
@@ -120,6 +121,7 @@ impl PostgresQueryBuilder {
 		&self,
 		stmt: &UpdateStatement,
 	) -> Result<(String, Values), crate::QueryBuildError> {
+		crate::error::validate_update_lock_for_backend(stmt, "PostgreSQL")?;
 		Ok(self.build_update(stmt))
 	}
 
@@ -128,6 +130,7 @@ impl PostgresQueryBuilder {
 		&self,
 		stmt: &DeleteStatement,
 	) -> Result<(String, Values), crate::QueryBuildError> {
+		crate::error::validate_delete_lock_for_backend(stmt, "PostgreSQL")?;
 		Ok(self.build_delete(stmt))
 	}
 
@@ -4865,7 +4868,7 @@ mod tests {
 	#[cfg(feature = "pgvector")]
 	use crate::types::{BinOper, PgBinOper};
 	use crate::{
-		expr::{Expr, ExprTrait},
+		expr::{Expr, ExprTrait, Func},
 		query::{LockType, Query},
 		types::{Alias, ColumnDef, IntoIden},
 		value::Value,
@@ -4896,6 +4899,88 @@ mod tests {
 			.build_select_checked(&having)
 			.expect_err("PostgreSQL must reject row locking on HAVING queries");
 		assert!(having_error.to_string().contains("GROUP BY or HAVING"));
+	}
+
+	#[test]
+	fn checked_select_rejects_row_locking_with_aggregate_projection() {
+		let builder = PostgresQueryBuilder::new();
+		let mut statement = Query::select();
+		statement
+			.expr(Func::count(Expr::col("id").into_simple_expr()))
+			.from("accounts")
+			.lock(LockType::Update);
+
+		let error = builder
+			.build_select_checked(&statement)
+			.expect_err("PostgreSQL must reject row locking on aggregate queries");
+		assert!(error.to_string().contains("aggregate"));
+	}
+
+	#[test]
+	fn checked_select_rejects_lock_targets_on_nullable_outer_join_sides() {
+		let builder = PostgresQueryBuilder::new();
+		let mut statement = Query::select();
+		statement
+			.column(("parents", "id"))
+			.from("parents")
+			.left_join(
+				"children",
+				Expr::col(("parents", "id")).equals(("children", "parent_id")),
+			)
+			.lock_tables(["children"]);
+
+		let error = builder
+			.build_select_checked(&statement)
+			.expect_err("PostgreSQL must reject locks on nullable outer-join sides");
+		assert!(error.to_string().contains("nullable outer-join"));
+	}
+
+	#[test]
+	fn checked_dml_rejects_nested_locked_selects() {
+		let builder = PostgresQueryBuilder::new();
+		let mut source = Query::select();
+		source.column("id").from("accounts").lock(LockType::Update);
+		let insert = Query::insert()
+			.into_table("archive")
+			.columns(["account_id"])
+			.from_subquery(source.to_owned())
+			.to_owned();
+
+		assert!(builder.build_insert_checked(&insert).is_ok());
+
+		let mut invalid_source = Query::select();
+		invalid_source
+			.expr(Func::count(Expr::col("id").into_simple_expr()))
+			.from("accounts")
+			.lock(LockType::Update);
+		let invalid_insert = Query::insert()
+			.into_table("archive")
+			.columns(["account_id"])
+			.from_subquery(invalid_source.to_owned())
+			.to_owned();
+
+		let error = builder
+			.build_insert_checked(&invalid_insert)
+			.expect_err("checked INSERT must validate nested row locks");
+		assert!(error.to_string().contains("aggregate"));
+
+		let update = Query::update()
+			.table("archive")
+			.value_expr("account_id", Expr::subquery(invalid_source.clone()))
+			.to_owned();
+		let update_error = builder
+			.build_update_checked(&update)
+			.expect_err("checked UPDATE must validate nested row locks");
+		assert!(update_error.to_string().contains("aggregate"));
+
+		let delete = Query::delete()
+			.from_table("archive")
+			.and_where(Expr::exists(invalid_source))
+			.to_owned();
+		let delete_error = builder
+			.build_delete_checked(&delete)
+			.expect_err("checked DELETE must validate nested row locks");
+		assert!(delete_error.to_string().contains("aggregate"));
 	}
 
 	#[test]

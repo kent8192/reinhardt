@@ -9,8 +9,8 @@ use crate::{
 		DeleteStatement, InsertSource, InsertStatement, SelectStatement, UpdateStatement,
 	},
 	types::{
-		ColumnDef, ColumnType, OrderExpr, OrderExprKind, SchemaExpr, TableConstraint, TableRef,
-		WindowStatement,
+		ColumnDef, ColumnType, JoinType, OrderExpr, OrderExprKind, SchemaExpr, TableConstraint,
+		TableRef, WindowStatement,
 	},
 	value::Value,
 };
@@ -236,7 +236,17 @@ fn validate_select_lock_for_backend_with_union_context(
 					backend,
 				));
 			}
+			if statement
+				.selects
+				.iter()
+				.any(|select| contains_aggregate(&select.expr))
+				|| statement.orders.iter().any(
+					|order| matches!(&order.expr, OrderExprKind::Expr(expr) if contains_aggregate(expr)),
+				) {
+				return Err(unsupported("row locking with aggregate queries", backend));
+			}
 			validate_lock_tables_belong_to_statement(statement, lock.tables.as_slice(), backend)?;
+			validate_lock_tables_are_not_nullable(statement, lock.tables.as_slice(), backend)?;
 			Ok(())
 		}
 		"MySQL" => {
@@ -257,6 +267,54 @@ fn validate_select_lock_for_backend_with_union_context(
 			}
 		}
 		_ => Ok(()),
+	}
+}
+
+fn contains_aggregate(expr: &SimpleExpr) -> bool {
+	match expr {
+		SimpleExpr::FunctionCall(name, arguments) => {
+			matches!(
+				name.to_string().as_str(),
+				"COUNT"
+					| "SUM" | "AVG" | "MIN"
+					| "MAX" | "ARRAY_AGG"
+					| "JSON_AGG" | "JSONB_AGG"
+					| "STRING_AGG" | "BOOL_AND"
+					| "BOOL_OR" | "EVERY"
+					| "XMLAGG"
+			) || arguments.iter().any(contains_aggregate)
+		}
+		SimpleExpr::Unary(_, expression)
+		| SimpleExpr::AsEnum(_, expression)
+		| SimpleExpr::ExprAlias(expression, _)
+		| SimpleExpr::Cast(expression, _) => contains_aggregate(expression),
+		SimpleExpr::Binary(left, _, right) => contains_aggregate(left) || contains_aggregate(right),
+		SimpleExpr::Tuple(expressions) | SimpleExpr::CustomWithExpr(_, expressions) => {
+			expressions.iter().any(contains_aggregate)
+		}
+		SimpleExpr::Case(case) => {
+			case.when_clauses.iter().any(|(condition, result)| {
+				contains_aggregate(condition) || contains_aggregate(result)
+			}) || case
+				.else_clause
+				.as_ref()
+				.is_some_and(|result| contains_aggregate(result))
+		}
+		SimpleExpr::Window { func, window } => {
+			contains_aggregate(func)
+				|| window.partition_by.iter().any(contains_aggregate)
+				|| window.order_by.iter().any(
+					|order| matches!(&order.expr, OrderExprKind::Expr(expr) if contains_aggregate(expr)),
+				)
+		}
+		SimpleExpr::WindowNamed { func, .. } => contains_aggregate(func),
+		SimpleExpr::Column(_)
+		| SimpleExpr::TableColumn(_, _)
+		| SimpleExpr::Value(_)
+		| SimpleExpr::Custom(_)
+		| SimpleExpr::Constant(_)
+		| SimpleExpr::Asterisk
+		| SimpleExpr::SubQuery(_, _) => false,
 	}
 }
 
@@ -282,6 +340,42 @@ fn validate_lock_tables_belong_to_statement(
 				backend,
 			));
 		}
+	}
+	Ok(())
+}
+
+fn validate_lock_tables_are_not_nullable(
+	statement: &SelectStatement,
+	targets: &[TableRef],
+	backend: &'static str,
+) -> Result<(), QueryBuildError> {
+	let mut relations = Vec::new();
+	for table in &statement.from {
+		relations.extend(table_ref_lock_names(table));
+	}
+	let mut nullable_relations = Vec::new();
+	for join in &statement.join {
+		let joined_relations = table_ref_lock_names(&join.table);
+		match join.join {
+			JoinType::LeftJoin => nullable_relations.extend(joined_relations.iter().cloned()),
+			JoinType::RightJoin => nullable_relations.extend(relations.iter().cloned()),
+			JoinType::FullOuterJoin => {
+				nullable_relations.extend(relations.iter().cloned());
+				nullable_relations.extend(joined_relations.iter().cloned());
+			}
+			JoinType::Join | JoinType::InnerJoin | JoinType::CrossJoin => {}
+		}
+		relations.extend(joined_relations);
+	}
+	if targets.iter().flat_map(table_ref_lock_names).any(|target| {
+		nullable_relations
+			.iter()
+			.any(|nullable_relation| nullable_relation == &target)
+	}) {
+		return Err(unsupported(
+			"row lock target on nullable outer-join side",
+			backend,
+		));
 	}
 	Ok(())
 }
@@ -458,9 +552,27 @@ pub(crate) fn validate_insert_for_backend(
 		}
 		InsertSource::Subquery(query) => validate_select_for_backend(query, backend)?,
 	}
+	if let InsertSource::Subquery(query) = &statement.source {
+		validate_select_lock_for_backend(query, backend)?;
+	}
 	if let Some(expressions) = &statement.returning_exprs {
 		for expression in expressions {
 			validate_simple_expr(expression, backend)?;
+		}
+	}
+	Ok(())
+}
+
+pub(crate) fn validate_insert_lock_for_backend(
+	statement: &InsertStatement,
+	backend: &'static str,
+) -> Result<(), QueryBuildError> {
+	if let InsertSource::Subquery(query) = &statement.source {
+		validate_select_lock_for_backend(query, backend)?;
+	}
+	if let Some(expressions) = &statement.returning_exprs {
+		for expression in expressions {
+			validate_simple_expr_lock(expression, backend)?;
 		}
 	}
 	Ok(())
@@ -475,11 +587,33 @@ pub(crate) fn validate_update_for_backend(
 	}
 	for (_, expression) in &statement.values {
 		validate_simple_expr(expression, backend)?;
+		validate_simple_expr_lock(expression, backend)?;
 	}
 	validate_condition_holder(&statement.r#where, backend)?;
+	validate_condition_holder_lock(&statement.r#where, backend)?;
 	if let Some(expressions) = &statement.returning_exprs {
 		for expression in expressions {
 			validate_simple_expr(expression, backend)?;
+			validate_simple_expr_lock(expression, backend)?;
+		}
+	}
+	Ok(())
+}
+
+pub(crate) fn validate_update_lock_for_backend(
+	statement: &UpdateStatement,
+	backend: &'static str,
+) -> Result<(), QueryBuildError> {
+	if let Some(table) = &statement.table {
+		validate_table_ref_lock(table, backend)?;
+	}
+	for (_, expression) in &statement.values {
+		validate_simple_expr_lock(expression, backend)?;
+	}
+	validate_condition_holder_lock(&statement.r#where, backend)?;
+	if let Some(expressions) = &statement.returning_exprs {
+		for expression in expressions {
+			validate_simple_expr_lock(expression, backend)?;
 		}
 	}
 	Ok(())
@@ -493,9 +627,27 @@ pub(crate) fn validate_delete_for_backend(
 		validate_table_ref(table, backend)?;
 	}
 	validate_condition_holder(&statement.r#where, backend)?;
+	validate_condition_holder_lock(&statement.r#where, backend)?;
 	if let Some(expressions) = &statement.returning_exprs {
 		for expression in expressions {
 			validate_simple_expr(expression, backend)?;
+			validate_simple_expr_lock(expression, backend)?;
+		}
+	}
+	Ok(())
+}
+
+pub(crate) fn validate_delete_lock_for_backend(
+	statement: &DeleteStatement,
+	backend: &'static str,
+) -> Result<(), QueryBuildError> {
+	if let Some(table) = &statement.table {
+		validate_table_ref_lock(table, backend)?;
+	}
+	validate_condition_holder_lock(&statement.r#where, backend)?;
+	if let Some(expressions) = &statement.returning_exprs {
+		for expression in expressions {
+			validate_simple_expr_lock(expression, backend)?;
 		}
 	}
 	Ok(())

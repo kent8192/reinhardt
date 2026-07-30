@@ -175,11 +175,12 @@ impl BaseCommand for InspectDbCommand {
 			.map_err(|error| {
 				CommandError::ExecutionError(format!("Database inspection failed: {error}"))
 			})?;
-		if let Some(table) = schema
-			.tables
-			.values()
-			.filter(|table| config.should_include_table(&table.name))
-			.find(|table| table.primary_key.is_empty())
+		if !options.include_views
+			&& let Some(table) = schema
+				.tables
+				.values()
+				.filter(|table| config.should_include_table(&table.name))
+				.find(|table| table.primary_key.is_empty())
 		{
 			return Err(CommandError::ExecutionError(format!(
 				"Cannot generate model for `{}` because it has no primary key.",

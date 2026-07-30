@@ -122,7 +122,11 @@ impl TypeMapper {
 			FieldType::TimestampTz => quote! { chrono::DateTime<chrono::Utc> },
 
 			// Numeric types
-			FieldType::Decimal { .. } => quote! { rust_decimal::Decimal },
+			FieldType::Decimal { precision, scale } => {
+				return Err(TypeMappingError::UnsupportedType(format!(
+					"DECIMAL({precision}, {scale}) cannot be generated without losing its precision and scale; configure a type override"
+				)));
+			}
 			FieldType::Float => quote! { f32 },
 			FieldType::Double => quote! { f64 },
 			FieldType::Real => quote! { f32 },
@@ -143,11 +147,38 @@ impl TypeMapper {
 			FieldType::JsonBinary => quote! { serde_json::Value },
 
 			// PostgreSQL-specific types
-			FieldType::Array(inner) => {
+			FieldType::Array(inner)
+				if matches!(
+					inner.as_ref(),
+					FieldType::Char(_)
+						| FieldType::VarChar(_)
+						| FieldType::Text | FieldType::TinyText
+						| FieldType::MediumText
+						| FieldType::LongText
+						| FieldType::BigInteger
+						| FieldType::Integer
+						| FieldType::SmallInteger
+						| FieldType::TinyInt
+						| FieldType::MediumInt
+						| FieldType::Float | FieldType::Double
+						| FieldType::Real | FieldType::Boolean
+						| FieldType::Uuid
+				) =>
+			{
 				let inner_type = self.field_type_to_rust(inner)?;
 				quote! { Vec<#inner_type> }
 			}
-			FieldType::HStore => quote! { std::collections::HashMap<String, String> },
+			FieldType::Array(_) => {
+				return Err(TypeMappingError::UnsupportedType(
+					"PostgreSQL array element type has no supported model field codec; configure a type override".to_string(),
+				));
+			}
+			FieldType::HStore => {
+				return Err(TypeMappingError::UnsupportedType(
+					"PostgreSQL HSTORE requires a dedicated field codec; configure a type override"
+						.to_string(),
+				));
+			}
 			FieldType::CIText => quote! { String },
 			FieldType::Int4Range
 			| FieldType::Int8Range
@@ -174,7 +205,12 @@ impl TypeMapper {
 
 			// Enum/Set (MySQL)
 			FieldType::Enum { .. } => quote! { String },
-			FieldType::Set { .. } => quote! { Vec<String> },
+			FieldType::Set { .. } => {
+				return Err(TypeMappingError::UnsupportedType(
+					"MySQL SET requires a dedicated field codec; configure a type override"
+						.to_string(),
+				));
+			}
 
 			// Relationship types - these are handled specially by the generator
 			FieldType::ForeignKey { .. } => {
@@ -197,7 +233,11 @@ impl TypeMapper {
 					"MySQL BIGINT UNSIGNED exceeds the supported signed integer binding range; configure a type override".to_string(),
 				));
 			}
-			FieldType::Custom(_) => quote! { String },
+			FieldType::Custom(name) => {
+				return Err(TypeMappingError::UnsupportedType(format!(
+					"custom SQL type `{name}` cannot be represented without an explicit type override"
+				)));
+			}
 		};
 
 		Ok(tokens)

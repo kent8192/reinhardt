@@ -176,11 +176,13 @@ impl SchemaCodeGenerator {
 	) -> Result<GeneratedFile> {
 		let header = self.generate_header();
 		let imports = self.generate_imports();
+		let relationship_imports = self.generate_relationship_imports(table, table_to_struct);
 		let model = self.generate_model(table, table_to_struct, schema)?;
 
 		let tokens = quote! {
 			#header
 			#imports
+			#relationship_imports
 
 			#model
 		};
@@ -192,6 +194,32 @@ impl SchemaCodeGenerator {
 		let path = self.config.output.directory.join("models").join(file_name);
 
 		Ok(GeneratedFile::new(path, content))
+	}
+
+	fn generate_relationship_imports(
+		&self,
+		table: &TableInfo,
+		table_to_struct: &HashMap<String, String>,
+	) -> TokenStream {
+		if self.config.output.single_file || !self.config.generation.detect_relationships {
+			return TokenStream::new();
+		}
+		let current_module = module_file_stem(&table.name);
+		let mut imported_tables = HashSet::new();
+		let imports: Vec<_> = table
+			.foreign_keys
+			.iter()
+			.filter_map(|foreign_key| {
+				let target = table_to_struct.get(&foreign_key.referenced_table)?;
+				let module = module_file_stem(&foreign_key.referenced_table);
+				(module != current_module && imported_tables.insert(module.clone())).then(|| {
+					let module = format_ident!("{}", module);
+					let target = format_ident!("{}", target);
+					quote! { use super::#module::#target; }
+				})
+			})
+			.collect();
+		quote! { #(#imports)* }
 	}
 
 	/// Generate `models.rs`, which declares and re-exports all model modules.
@@ -281,6 +309,16 @@ impl SchemaCodeGenerator {
 		let struct_ident = format_ident!("{}", struct_name);
 		let table_name = &table.name;
 		let app_label = &self.config.generation.app_label;
+		for index in table.indexes.values() {
+			if index.columns.len() != 1 {
+				return Err(MigrationError::IntrospectionError(format!(
+					"index `{}` on `{}` has {} columns and cannot be represented by a field attribute",
+					index.name,
+					table.name,
+					index.columns.len()
+				)));
+			}
+		}
 
 		// Generate derives
 		let derives: Vec<TokenStream> = self
@@ -345,7 +383,7 @@ impl SchemaCodeGenerator {
 		);
 		let field_ident = format_ident!("{}", field_name);
 
-		let relationship_target = self
+		let relationship = self
 			.config
 			.generation
 			.detect_relationships
@@ -359,7 +397,7 @@ impl SchemaCodeGenerator {
 				})
 			})
 			.flatten();
-		let rust_type = if let Some(target) = relationship_target {
+		let rust_type = if let Some(target) = relationship {
 			let target_ident = format_ident!("{}", target);
 			quote! { ForeignKeyField<#target_ident> }
 		} else {
@@ -375,10 +413,12 @@ impl SchemaCodeGenerator {
 
 		// Generate field attributes
 		let mut attrs = Vec::new();
-		let relationship_attr = relationship_target
-			.is_some()
-			.then(|| quote! { #[rel(foreign_key)] });
-		if field_name != column.name {
+		let relationship_attr = relationship.as_ref().map(|_| {
+			let column_name = column.name.as_str();
+			let nullable = column.nullable;
+			quote! { #[rel(foreign_key, db_column = #column_name, null = #nullable)] }
+		});
+		if relationship.is_none() && field_name != column.name {
 			let column_name = column.name.as_str();
 			attrs.push(quote! { db_column = #column_name });
 		}
@@ -396,9 +436,20 @@ impl SchemaCodeGenerator {
 		let is_unique = table
 			.unique_constraints
 			.iter()
-			.any(|c| c.columns.len() == 1 && c.columns.contains(&column.name));
+			.any(|c| c.columns.len() == 1 && c.columns.contains(&column.name))
+			|| table
+				.indexes
+				.values()
+				.any(|index| index.unique && index.columns.as_slice() == [column.name.as_str()]);
 		if is_unique && !table.primary_key.contains(&column.name) {
 			attrs.push(quote! { unique = true });
+		}
+		let is_indexed = table
+			.indexes
+			.values()
+			.any(|index| index.columns.as_slice() == [column.name.as_str()] && !index.unique);
+		if is_indexed {
+			attrs.push(quote! { index = true });
 		}
 
 		// Max length for varchar
@@ -766,7 +817,7 @@ mod tests {
 			)
 			.expect("generated model should format");
 
-		assert!(code.contains("#[rel(foreign_key)]"));
+		assert!(code.contains("#[rel(foreign_key, db_column = \"project\", null = false)]"));
 		assert!(code.contains("pub project: ForeignKeyField<Projects>"));
 	}
 

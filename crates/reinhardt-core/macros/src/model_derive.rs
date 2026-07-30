@@ -1006,10 +1006,11 @@ struct FieldConfig {
 	/// When false, field is excluded and uses default value
 	include_in_new: Option<bool>,
 
-	// PostgreSQL-specific type attributes
+	// Explicit database type metadata. `text` is also used by MySQL and SQLite
+	// inspectdb output, while the remaining mappings are PostgreSQL-specific.
 	/// Explicit field type specification (e.g., "jsonb", "hstore", "citext")
 	/// Takes priority over automatic type inference
-	#[cfg(feature = "db-postgres")]
+	#[cfg(any(feature = "db-postgres", feature = "db-mysql", feature = "db-sqlite"))]
 	field_type: Option<String>,
 	/// Base type for array elements (e.g., "VARCHAR(50)", "INTEGER")
 	/// Used when the Rust type is `Vec<T>` but the element type cannot be inferred
@@ -1379,15 +1380,23 @@ impl FieldConfig {
 				}
 				// PostgreSQL-specific type attributes
 				else if meta.path.is_ident("field_type") {
-					#[cfg(feature = "db-postgres")]
+					#[cfg(any(
+						feature = "db-postgres",
+						feature = "db-mysql",
+						feature = "db-sqlite"
+					))]
 					{
 						let value: syn::LitStr = meta.value()?.parse()?;
 						config.field_type = Some(value.value());
 						Ok(())
 					}
-					#[cfg(not(feature = "db-postgres"))]
+					#[cfg(not(any(
+						feature = "db-postgres",
+						feature = "db-mysql",
+						feature = "db-sqlite"
+					)))]
 					{
-						Err(meta.error("field_type is only available with db-postgres feature"))
+						Err(meta.error("field_type is only available with a database feature"))
 					}
 				} else if meta.path.is_ident("array_base_type") {
 					#[cfg(feature = "db-postgres")]
@@ -1751,8 +1760,8 @@ fn map_type_to_field_type(ty: &Type, config: &FieldConfig) -> Result<TokenStream
 	let migrations_crate = get_reinhardt_migrations_crate();
 	let orm_crate = get_reinhardt_orm_crate();
 
-	// PostgreSQL: Check for explicit field_type attribute first
-	#[cfg(feature = "db-postgres")]
+	// Check explicit type metadata before Rust-type inference.
+	#[cfg(any(feature = "db-postgres", feature = "db-mysql", feature = "db-sqlite"))]
 	if let Some(explicit_type) = &config.field_type {
 		return map_explicit_field_type(explicit_type, &migrations_crate);
 	}
@@ -2049,8 +2058,8 @@ fn generate_database_field_validations(field_infos: &[FieldInfo]) -> Vec<TokenSt
 		.collect()
 }
 
-/// Map explicit PostgreSQL field type string to FieldType
-#[cfg(feature = "db-postgres")]
+/// Map explicit database field type string to FieldType.
+#[cfg(any(feature = "db-postgres", feature = "db-mysql", feature = "db-sqlite"))]
 fn map_explicit_field_type(
 	field_type_str: &str,
 	migrations_crate: &proc_macro2::TokenStream,

@@ -13,6 +13,8 @@ use reinhardt_db::orm::{
 	OrmExecutor,
 };
 use serde::{Deserialize, Serialize};
+#[cfg(feature = "sqlite")]
+use serial_test::serial;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 struct ProjectionEvent {
@@ -294,6 +296,7 @@ async fn dates_with_executor_uses_the_caller_owned_transaction() {
 
 #[tokio::test]
 #[cfg(feature = "sqlite")]
+#[serial(date_projection_database)]
 async fn sqlite_executes_distinct_null_excluding_date_and_datetime_projections() {
 	let owner = BackendsConnection::connect_sqlite("sqlite::memory:")
 		.await

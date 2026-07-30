@@ -1,10 +1,11 @@
-#![allow(dead_code, unexpected_cfgs)]
+// The UI fixture declares model fields only to exercise macro expansion.
+#![allow(dead_code)]
+// `trybuild` compiles the fixture without Cargo's feature-check configuration.
+#![allow(unexpected_cfgs)]
 
 use chrono::{DateTime, NaiveDate, Utc};
 use reinhardt_core::macros::model;
-use reinhardt_db::orm::{
-	DateProjectionOrder, DateTimeTruncKind, DateTruncKind, Model,
-};
+use reinhardt_db::orm::{DateProjectionOrder, DateTimeTruncKind, DateTruncKind, Model};
 use serde::{Deserialize, Serialize};
 
 #[derive(Serialize, Deserialize)]

@@ -3870,7 +3870,9 @@ where
 	}
 
 	fn root_column_reference(&self, field: &str) -> ColumnRef {
-		if !self.relation_joins.is_empty() && !field.contains('.') {
+		if (!self.relation_joins.is_empty() || !self.manual_joins.is_empty())
+			&& !field.contains('.')
+		{
 			ColumnRef::table_column(Alias::new(self.root_alias()), Alias::new(field))
 		} else {
 			parse_column_reference(field)

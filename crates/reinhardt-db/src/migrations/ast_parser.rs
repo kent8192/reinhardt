@@ -36,9 +36,9 @@ pub fn extract_migration_metadata(ast: &File, app_label: &str, name: &str) -> Re
 /// `app_label` and `name` are authoritative. Filesystem callers derive them from
 /// the migration path rather than trusting duplicate identity fields in source.
 ///
-/// Swappable and optional dependencies are not currently representable by the
-/// filesystem catalog format. They may be omitted or specified as empty vectors;
-/// non-empty values are rejected to prevent semantic loss.
+/// Swappable and optional dependencies are parsed from their constructor forms.
+/// Operation payloads that this parser cannot reconstruct exactly are rejected
+/// with an operation and field position instead of being silently discarded.
 pub fn extract_migration_metadata_strict(
 	ast: &File,
 	app_label: &str,
@@ -424,24 +424,149 @@ fn parse_operations_vec_strict(expr: &Expr) -> Result<Vec<super::Operation>> {
 	expressions
 		.iter()
 		.enumerate()
-		.map(|(index, expression)| {
-			parse_single_operation(expression).ok_or_else(|| {
-				let operation_name = match expression {
-					Expr::Struct(operation) => operation
-						.path
-						.segments
-						.last()
-						.map(|segment| segment.ident.to_string())
-						.unwrap_or_else(|| "<expression>".to_string()),
-					_ => "<expression>".to_string(),
-				};
-				MigrationError::InvalidMigration(format!(
-					"operations[{}].{} is unsupported or malformed",
-					index, operation_name
-				))
-			})
-		})
+		.map(|(index, expression)| parse_single_operation_strict(expression, index))
 		.collect()
+}
+
+fn parse_single_operation_strict(expr: &Expr, index: usize) -> Result<super::Operation> {
+	let operation_name = match expr {
+		Expr::Struct(operation) => operation
+			.path
+			.segments
+			.last()
+			.map(|segment| segment.ident.to_string())
+			.unwrap_or_else(|| "<expression>".to_string()),
+		_ => "<expression>".to_string(),
+	};
+	let context = format!("operations[{index}].{operation_name}");
+
+	if let Expr::Struct(operation) = expr {
+		match operation_name.as_str() {
+			"CreateTable" => {
+				validate_strict_constraints(&operation.fields, &context)?;
+				for field_name in ["without_rowid", "interleave_in_parent", "partition"] {
+					validate_unsupported_optional_field(&operation.fields, field_name, &context)?;
+				}
+			}
+			"AddColumn" => {
+				parse_optional_alter_table_options_strict(
+					&operation.fields,
+					"mysql_options",
+					&context,
+				)?;
+			}
+			"AlterColumn" => {
+				parse_optional_column_definition_strict(
+					&operation.fields,
+					"old_definition",
+					&context,
+				)?;
+				parse_optional_alter_table_options_strict(
+					&operation.fields,
+					"mysql_options",
+					&context,
+				)?;
+			}
+			_ => {}
+		}
+	}
+
+	parse_single_operation(expr).ok_or_else(|| {
+		MigrationError::InvalidMigration(format!("{context} is unsupported or malformed"))
+	})
+}
+
+fn strict_field_expression<'a>(
+	fields: &'a syn::punctuated::Punctuated<syn::FieldValue, syn::token::Comma>,
+	field_name: &str,
+) -> Option<&'a Expr> {
+	fields.iter().find_map(|field| {
+		matches!(&field.member, syn::Member::Named(ident) if ident == field_name)
+			.then_some(&field.expr)
+	})
+}
+
+fn strict_payload_error(context: &str, field_name: &str) -> MigrationError {
+	MigrationError::InvalidMigration(format!(
+		"{context}.{field_name} is unsupported or malformed"
+	))
+}
+
+fn is_none_expression(expr: &Expr) -> bool {
+	matches!(expr, Expr::Path(path) if path.path.is_ident("None"))
+}
+
+fn validate_unsupported_optional_field(
+	fields: &syn::punctuated::Punctuated<syn::FieldValue, syn::token::Comma>,
+	field_name: &str,
+	context: &str,
+) -> Result<()> {
+	if strict_field_expression(fields, field_name).is_none_or(is_none_expression) {
+		Ok(())
+	} else {
+		Err(strict_payload_error(context, field_name))
+	}
+}
+
+fn validate_strict_constraints(
+	fields: &syn::punctuated::Punctuated<syn::FieldValue, syn::token::Comma>,
+	context: &str,
+) -> Result<()> {
+	let Some(expression) = strict_field_expression(fields, "constraints") else {
+		return Err(strict_payload_error(context, "constraints"));
+	};
+	for (index, constraint) in parse_vec_expressions(expression, "constraints")?
+		.iter()
+		.enumerate()
+	{
+		if parse_single_constraint(constraint).is_none() {
+			return Err(MigrationError::InvalidMigration(format!(
+				"{context}.constraints[{index}] is unsupported or malformed"
+			)));
+		}
+	}
+	Ok(())
+}
+
+fn parse_optional_column_definition_strict(
+	fields: &syn::punctuated::Punctuated<syn::FieldValue, syn::token::Comma>,
+	field_name: &str,
+	context: &str,
+) -> Result<Option<super::ColumnDefinition>> {
+	let Some(expression) = strict_field_expression(fields, field_name) else {
+		return Ok(None);
+	};
+	if is_none_expression(expression) {
+		return Ok(None);
+	}
+	parse_optional_column_definition(expression)
+		.ok_or_else(|| strict_payload_error(context, field_name))
+		.map(Some)
+}
+
+fn parse_optional_alter_table_options_strict(
+	fields: &syn::punctuated::Punctuated<syn::FieldValue, syn::token::Comma>,
+	field_name: &str,
+	context: &str,
+) -> Result<Option<super::AlterTableOptions>> {
+	let Some(expression) = strict_field_expression(fields, field_name) else {
+		return Ok(None);
+	};
+	if is_none_expression(expression) {
+		return Ok(None);
+	}
+	let Expr::Call(call) = expression else {
+		return Err(strict_payload_error(context, field_name));
+	};
+	let Expr::Path(function) = &*call.func else {
+		return Err(strict_payload_error(context, field_name));
+	};
+	if !function.path.is_ident("Some") || call.args.len() != 1 {
+		return Err(strict_payload_error(context, field_name));
+	}
+	parse_alter_table_options_expr(&call.args[0])
+		.ok_or_else(|| strict_payload_error(context, field_name))
+		.map(Some)
 }
 
 fn parse_vec_expressions(expr: &Expr, field_name: &str) -> Result<Vec<Expr>> {
@@ -505,10 +630,12 @@ fn parse_single_operation(expr: &Expr) -> Option<super::Operation> {
 			"AddColumn" => {
 				let table = extract_string_field(&expr_struct.fields, "table")?;
 				let column = extract_column_definition_field(&expr_struct.fields, "column")?;
+				let mysql_options =
+					extract_alter_table_options_field(&expr_struct.fields, "mysql_options");
 				return Some(super::Operation::AddColumn {
 					table,
 					column,
-					mysql_options: None,
+					mysql_options,
 				});
 			}
 			"DropColumn" => {
@@ -527,12 +654,16 @@ fn parse_single_operation(expr: &Expr) -> Option<super::Operation> {
 				let column = extract_string_field(&expr_struct.fields, "column")?;
 				let new_definition =
 					extract_column_definition_field(&expr_struct.fields, "new_definition")?;
+				let old_definition =
+					extract_optional_column_definition_field(&expr_struct.fields, "old_definition");
+				let mysql_options =
+					extract_alter_table_options_field(&expr_struct.fields, "mysql_options");
 				return Some(super::Operation::AlterColumn {
 					table,
 					column,
 					new_definition,
-					old_definition: None,
-					mysql_options: None,
+					old_definition,
+					mysql_options,
 				});
 			}
 			"RenameTable" => {
@@ -2228,8 +2359,8 @@ mod tests {
 	use super::{extract_migration_metadata, extract_migration_metadata_strict};
 	use crate::field_domain::{FieldDomain, ModelEnumRepr, ModelEnumValue};
 	use crate::migrations::{
-		AlterTableOptions, ColumnType, Constraint, FieldType, GeneratedStorage, IndexType,
-		MySqlAlgorithm, MySqlLock, Operation, SchemaExpr,
+		AlterTableOptions, ColumnDefinition, ColumnType, Constraint, FieldType, GeneratedStorage,
+		IndexType, MySqlAlgorithm, MySqlLock, Operation, SchemaExpr,
 	};
 
 	#[rstest]
@@ -2273,6 +2404,164 @@ mod tests {
 		"Invalid migration: operations[0].DropTable is unsupported or malformed"
 	)]
 	fn strict_metadata_rejects_unknown_and_malformed_operations(
+		#[case] operation: &str,
+		#[case] expected: &str,
+	) {
+		// Arrange
+		let source = format!(
+			r#"pub fn migration() -> Migration {{
+				Migration {{
+					operations: vec![{operation}],
+					dependencies: vec![],
+					replaces: vec![],
+				}}
+			}}"#
+		);
+		let ast = syn::parse_file(&source).unwrap();
+
+		// Act
+		let error = extract_migration_metadata_strict(&ast, "blog", "0001_initial").unwrap_err();
+
+		// Assert
+		assert_eq!(error.to_string(), expected);
+	}
+
+	#[test]
+	fn strict_metadata_preserves_supported_operation_payloads() {
+		// Arrange
+		let ast = syn::parse_file(
+			r#"pub fn migration() -> Migration {
+				Migration {
+					operations: vec![
+						Operation::AddColumn {
+							table: "posts".to_string(),
+							column: ColumnDefinition {
+								name: "title".to_string(),
+								type_definition: FieldType::Text,
+								not_null: false,
+								unique: false,
+								primary_key: false,
+								auto_increment: false,
+								default: None,
+								generated: None,
+								domain: None,
+							},
+							mysql_options: Some(
+								AlterTableOptions::new()
+									.with_algorithm(MySqlAlgorithm::Inplace)
+									.with_lock(MySqlLock::Shared),
+							),
+						},
+						Operation::AlterColumn {
+							table: "posts".to_string(),
+							column: "title".to_string(),
+							new_definition: ColumnDefinition {
+								name: "title".to_string(),
+								type_definition: FieldType::VarChar(255),
+								not_null: false,
+								unique: false,
+								primary_key: false,
+								auto_increment: false,
+								default: None,
+								generated: None,
+								domain: None,
+							},
+							old_definition: Some(ColumnDefinition {
+								name: "title".to_string(),
+								type_definition: FieldType::Text,
+								not_null: false,
+								unique: false,
+								primary_key: false,
+								auto_increment: false,
+								default: None,
+								generated: None,
+								domain: None,
+							}),
+							mysql_options: Some(AlterTableOptions::new()),
+						},
+					],
+					dependencies: vec![],
+					replaces: vec![],
+				}
+			}"#,
+		)
+		.unwrap();
+
+		// Act
+		let migration =
+			extract_migration_metadata_strict(&ast, "blog", "0002_change_title").unwrap();
+
+		// Assert
+		assert!(matches!(
+			&migration.operations[0],
+			Operation::AddColumn {
+				mysql_options: Some(options),
+				..
+			} if options.algorithm == Some(MySqlAlgorithm::Inplace)
+				&& options.lock == Some(MySqlLock::Shared)
+		));
+		assert!(matches!(
+			&migration.operations[1],
+			Operation::AlterColumn {
+				old_definition: Some(ColumnDefinition {
+					type_definition: FieldType::Text,
+					..
+				}),
+				mysql_options: Some(options),
+				..
+			} if options == &AlterTableOptions::new()
+		));
+	}
+
+	#[rstest]
+	#[case(
+		r#"Operation::CreateTable {
+			name: "posts".to_string(),
+			columns: vec![],
+			constraints: vec![
+				Constraint::Unique {
+					name: "posts_slug_key".to_string(),
+					columns: vec!["slug".to_string()],
+					deferrable: None,
+				},
+				Constraint::Unknown { value: 1 },
+			],
+			without_rowid: None,
+			interleave_in_parent: None,
+			partition: None,
+		}"#,
+		"Invalid migration: operations[0].CreateTable.constraints[1] is unsupported or malformed"
+	)]
+	#[case(
+		r#"Operation::CreateTable {
+			name: "posts".to_string(),
+			columns: vec![],
+			constraints: vec![],
+			without_rowid: Some(true),
+			interleave_in_parent: None,
+			partition: None,
+		}"#,
+		"Invalid migration: operations[0].CreateTable.without_rowid is unsupported or malformed"
+	)]
+	#[case(
+		r#"Operation::AddColumn {
+			table: "posts".to_string(),
+			column: ColumnDefinition {
+				name: "title".to_string(),
+				type_definition: FieldType::Text,
+				not_null: false,
+				unique: false,
+				primary_key: false,
+				auto_increment: false,
+				default: None,
+				generated: None,
+				domain: None,
+			},
+			mysql_options: Some(AlterTableOptions::unknown()),
+		}"#,
+		"Invalid migration: operations[0].AddColumn.mysql_options is unsupported or malformed"
+	)]
+	fn strict_metadata_rejects_payloads_that_cannot_be_preserved(
 		#[case] operation: &str,
 		#[case] expected: &str,
 	) {

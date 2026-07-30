@@ -790,7 +790,7 @@ fn parse_index_operation_strict(
 	let name = parse_string_field_strict(&operation.fields, "name", context)?;
 	#[cfg(feature = "pgvector")]
 	{
-		return Ok(if operation_name == "CreateNamedIndex" {
+		Ok(if operation_name == "CreateNamedIndex" {
 			super::Operation::CreateNamedIndex {
 				table,
 				name,
@@ -816,7 +816,7 @@ fn parse_index_operation_strict(
 				mysql_options,
 				operator_class,
 			}
-		});
+		})
 	}
 	#[cfg(not(feature = "pgvector"))]
 	{
@@ -873,7 +873,7 @@ fn validate_unsupported_optional_field(
 	field_name: &str,
 	context: &str,
 ) -> Result<()> {
-	if strict_field_expression(fields, field_name).is_none_or(is_none_expression) {
+	if strict_field_expression(fields, field_name).is_some_and(is_none_expression) {
 		Ok(())
 	} else {
 		Err(strict_payload_error(context, field_name))
@@ -932,7 +932,7 @@ fn parse_optional_column_definition_strict(
 	context: &str,
 ) -> Result<Option<super::ColumnDefinition>> {
 	let Some(expression) = strict_field_expression(fields, field_name) else {
-		return Ok(None);
+		return Err(strict_payload_error(context, field_name));
 	};
 	if is_none_expression(expression) {
 		return Ok(None);
@@ -955,7 +955,7 @@ fn parse_optional_alter_table_options_strict(
 	context: &str,
 ) -> Result<Option<super::AlterTableOptions>> {
 	let Some(expression) = strict_field_expression(fields, field_name) else {
-		return Ok(None);
+		return Err(strict_payload_error(context, field_name));
 	};
 	if is_none_expression(expression) {
 		return Ok(None);
@@ -2295,9 +2295,7 @@ fn parse_optional_domain_field_strict(
 	if !some.path.is_ident("Some") || call.args.len() != 1 {
 		return Err(strict_payload_error(context, field_name));
 	}
-	parse_field_domain(&call.args[0])
-		.ok_or_else(|| strict_payload_error(context, field_name))
-		.map(Some)
+	parse_field_domain_strict(&call.args[0], &format!("{context}.{field_name}")).map(Some)
 }
 
 fn parse_string_vector_strict(expr: &Expr, context: &str) -> Result<Vec<String>> {
@@ -2579,8 +2577,8 @@ fn parse_constraint_strict(expr: &Expr, context: &str) -> Result<super::Constrai
 			validate_exact_named_fields(fields, &["name", "column", "domain"], context)?;
 			let domain_expression = strict_field_expression(fields, "domain")
 				.ok_or_else(|| strict_payload_error(context, "domain"))?;
-			let domain = parse_field_domain(domain_expression)
-				.ok_or_else(|| strict_payload_error(context, "domain"))?;
+			let domain =
+				parse_field_domain_strict(domain_expression, &format!("{context}.domain"))?;
 			Ok(super::Constraint::EnumDomain {
 				name: parse_string_field_strict(fields, "name", context)?,
 				column: parse_string_field_strict(fields, "column", context)?,
@@ -2654,6 +2652,84 @@ fn extract_field_domain(
 		return None;
 	}
 	parse_field_domain(&call.args[0])
+}
+
+fn parse_field_domain_strict(
+	expr: &Expr,
+	context: &str,
+) -> Result<crate::field_domain::FieldDomain> {
+	use crate::field_domain::{FieldDomain, ModelEnumRepr, ModelEnumValue};
+
+	let Expr::Struct(domain) = expr else {
+		return Err(MigrationError::InvalidMigration(format!(
+			"{context} is unsupported or malformed"
+		)));
+	};
+	if domain
+		.path
+		.segments
+		.last()
+		.is_none_or(|segment| segment.ident != "Enum")
+	{
+		return Err(MigrationError::InvalidMigration(format!(
+			"{context} is unsupported or malformed"
+		)));
+	}
+	validate_exact_named_fields(&domain.fields, &["repr", "values"], context)?;
+
+	let repr_expression = strict_field_expression(&domain.fields, "repr")
+		.ok_or_else(|| strict_payload_error(context, "repr"))?;
+	let repr = match extract_path_variant(repr_expression).as_deref() {
+		Some("String") => ModelEnumRepr::String,
+		Some("I32") => ModelEnumRepr::I32,
+		_ => return Err(strict_payload_error(context, "repr")),
+	};
+	let values_expression = strict_field_expression(&domain.fields, "values")
+		.ok_or_else(|| strict_payload_error(context, "values"))?;
+	let values = parse_vec_expressions(values_expression, "values")
+		.map_err(|_| strict_payload_error(context, "values"))?
+		.iter()
+		.enumerate()
+		.map(|(index, expression)| {
+			let item_context = format!("{context}.values[{index}]");
+			let Expr::Call(call) = expression else {
+				return Err(MigrationError::InvalidMigration(format!(
+					"{item_context} is unsupported or malformed"
+				)));
+			};
+			let Expr::Path(variant) = &*call.func else {
+				return Err(MigrationError::InvalidMigration(format!(
+					"{item_context} is unsupported or malformed"
+				)));
+			};
+			if call.args.len() != 1 {
+				return Err(MigrationError::InvalidMigration(format!(
+					"{item_context} is unsupported or malformed"
+				)));
+			}
+			match variant.path.segments.last().map(|segment| &segment.ident) {
+				Some(name) if name == "String" => extract_string_expr(&call.args[0])
+					.map(ModelEnumValue::String)
+					.ok_or_else(|| {
+						MigrationError::InvalidMigration(format!(
+							"{item_context} is unsupported or malformed"
+						))
+					}),
+				Some(name) if name == "I32" => parse_i32_expr(&call.args[0])
+					.map(ModelEnumValue::I32)
+					.ok_or_else(|| {
+						MigrationError::InvalidMigration(format!(
+							"{item_context} is unsupported or malformed"
+						))
+					}),
+				_ => Err(MigrationError::InvalidMigration(format!(
+					"{item_context} is unsupported or malformed"
+				))),
+			}
+		})
+		.collect::<Result<Vec<_>>>()?;
+
+	Ok(FieldDomain::Enum { repr, values }.canonicalized())
 }
 
 fn parse_field_domain(expr: &Expr) -> Option<crate::field_domain::FieldDomain> {
@@ -3886,6 +3962,21 @@ mod tests {
 			},
 		}"#,
 		"Invalid migration: operations[0].AddConstraintDefinition.constraint.scope is unsupported or malformed"
+	)]
+	#[case(
+		r#"Operation::AddConstraintDefinition {
+			table: "posts".to_string(),
+			constraint: Constraint::EnumDomain {
+				name: "posts_status_domain".to_string(),
+				column: "status".to_string(),
+				domain: FieldDomain::Enum {
+					repr: ModelEnumRepr::String,
+					values: vec![],
+					collation: "C".to_string(),
+				},
+			},
+		}"#,
+		"Invalid migration: operations[0].AddConstraintDefinition.constraint.domain.collation is unsupported or malformed"
 	)]
 	fn strict_metadata_rejects_lossy_constraint_definition_payloads(
 		#[case] operation: &str,

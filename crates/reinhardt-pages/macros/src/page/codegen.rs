@@ -1806,14 +1806,26 @@ mod tests {
 			div { @custom::<crate::Selected>("item-focused"): || {}, }
 		});
 
-		let output = parse_and_generate(input).to_string();
+		let output: syn::Expr = syn::parse2(parse_and_generate(input))
+			.expect("generated zero-argument typed custom event should be a Rust expression");
+		let expected: syn::Expr = syn::parse2(quote::quote!({
+			#[allow(unused_variables)]
+			|| -> ::reinhardt_pages::component::Page {
+				::reinhardt_pages::component::IntoPage::into_page(
+					::reinhardt_pages::component::PageElement::new("div").on(
+						::reinhardt_pages::event::EventName::Custom(::std::borrow::Cow::Borrowed(
+							"item-focused"
+						)),
+						::reinhardt_pages::callback::typed_custom_event_handler::<crate::Selected, _>(
+							|_event: ::reinhardt_pages::event::CustomEvent<crate::Selected>| {}
+						)
+					)
+				)
+			}
+		}))
+		.expect("expected zero-argument typed custom event shape should parse");
 
-		assert!(
-			output.contains(
-				"_event : :: reinhardt_pages :: event :: CustomEvent < crate :: Selected >"
-			)
-		);
-		assert!(output.contains("callback :: typed_custom_event_handler"));
+		assert_eq!(output, expected);
 	}
 
 	#[test]

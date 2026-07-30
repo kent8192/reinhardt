@@ -1,7 +1,29 @@
 //! Strict migration catalog loading and squash range resolution.
 
-use super::{Migration, MigrationError, MigrationGraph, MigrationKey, MigrationSource, Result};
+use super::{
+	DatabaseMigrationRecorder, Migration, MigrationError, MigrationGraph, MigrationKey,
+	MigrationSource, Result,
+};
+use chrono::{DateTime, Utc};
 use std::collections::{BTreeSet, HashMap, HashSet};
+
+/// A migration identity paired with the time it was applied.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AppliedMigration {
+	/// The migration identity.
+	pub key: MigrationKey,
+	/// The UTC timestamp recorded after applying the migration.
+	pub applied_at: DateTime<Utc>,
+}
+
+/// An immutable view of ordered migrations and their applied state.
+#[derive(Debug, Clone)]
+pub struct MigrationSnapshot {
+	/// Selected migrations in topological order.
+	pub ordered: Vec<Migration>,
+	/// Applied timestamps keyed by migration identity.
+	pub applied: HashMap<MigrationKey, DateTime<Utc>>,
+}
 
 /// A validated snapshot of all migrations from a migration source.
 pub struct MigrationCatalog {
@@ -98,6 +120,74 @@ impl MigrationCatalog {
 		graph.topological_sort()?;
 
 		Ok(Self { migrations, graph })
+	}
+
+	/// Build an immutable applied-state snapshot for selected applications.
+	///
+	/// Selecting applications includes all transitive dependencies, even when
+	/// those dependencies belong to other applications. An empty selection
+	/// includes the complete catalog.
+	pub async fn snapshot(
+		&self,
+		recorder: &DatabaseMigrationRecorder,
+		apps: &[String],
+	) -> Result<MigrationSnapshot> {
+		let known_apps: HashSet<&str> = self
+			.migrations
+			.keys()
+			.map(|key| key.app_label.as_str())
+			.collect();
+		for app in apps {
+			if !known_apps.contains(app.as_str()) {
+				return Err(MigrationError::NotFound(format!("app {app}")));
+			}
+		}
+
+		let ordered_keys = self.graph.topological_sort()?;
+		let selected = if apps.is_empty() {
+			self.migrations.keys().cloned().collect()
+		} else {
+			let requested_apps: HashSet<&str> = apps.iter().map(String::as_str).collect();
+			let mut selected = HashSet::new();
+			let mut pending: Vec<MigrationKey> = ordered_keys
+				.iter()
+				.filter(|key| requested_apps.contains(key.app_label.as_str()))
+				.cloned()
+				.collect();
+
+			while let Some(key) = pending.pop() {
+				if !selected.insert(key.clone()) {
+					continue;
+				}
+				pending.extend(
+					self.graph
+						.get_dependencies(&key)
+						.unwrap_or_default()
+						.iter()
+						.cloned(),
+				);
+			}
+			selected
+		};
+
+		let ordered = ordered_keys
+			.into_iter()
+			.filter(|key| selected.contains(key))
+			.map(|key| {
+				self.migrations
+					.get(&key)
+					.expect("catalog and graph keys must match")
+					.clone()
+			})
+			.collect();
+		let applied = recorder
+			.get_applied_migrations_if_present()
+			.await?
+			.into_iter()
+			.map(|record| (MigrationKey::new(record.app, record.name), record.applied))
+			.collect();
+
+		Ok(MigrationSnapshot { ordered, applied })
 	}
 
 	/// Resolve an exact migration name or an unambiguous name prefix.

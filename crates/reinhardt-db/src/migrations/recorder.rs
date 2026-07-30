@@ -148,6 +148,25 @@ impl Default for MigrationRecorder {
 }
 
 impl DatabaseMigrationRecorder {
+	fn recorder_table_is_absent(&self, error: &super::MigrationError) -> bool {
+		use crate::backends::types::DatabaseType;
+
+		let super::MigrationError::DatabaseError(error) = error else {
+			return false;
+		};
+
+		match self.connection.database_type() {
+			DatabaseType::Postgres => error.code() == Some("42P01"),
+			DatabaseType::Mysql => matches!(error.code(), Some("42S02" | "1146")),
+			DatabaseType::Sqlite => {
+				error.code() == Some("1")
+					&& error
+						.message()
+						.eq_ignore_ascii_case("no such table: reinhardt_migrations")
+			}
+		}
+	}
+
 	/// Create a new database-backed migration recorder
 	///
 	/// # Examples
@@ -869,6 +888,18 @@ impl DatabaseMigrationRecorder {
 		}
 
 		Ok(records)
+	}
+
+	/// Return all applied migrations without creating the recorder table.
+	///
+	/// A missing recorder table means that no migrations have been applied.
+	/// Other database failures, including malformed schemas, permissions, and
+	/// timestamp decoding errors, are returned to the caller.
+	pub async fn get_applied_migrations_if_present(&self) -> super::Result<Vec<MigrationRecord>> {
+		match self.get_applied_migrations().await {
+			Err(error) if self.recorder_table_is_absent(&error) => Ok(Vec::new()),
+			result => result,
+		}
 	}
 
 	/// Unapply a migration (remove from records)

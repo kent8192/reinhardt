@@ -158,7 +158,7 @@ pub use reinhardt_query::prelude::{
 pub use auto_migration::{
 	AutoMigrationError, AutoMigrationGenerator, AutoMigrationResult, ValidationResult,
 };
-pub use catalog::{MigrationCatalog, SquashRange};
+pub use catalog::{AppliedMigration, MigrationCatalog, MigrationSnapshot, SquashRange};
 pub use operations::{
 	AddField, AlterField, CreateCollation, CreateExtension, CreateModel, DeleteModel,
 	DropExtension, FieldDefinition, MoveModel, RemoveField, RenameField, RenameModel, RunCode,

@@ -1494,6 +1494,20 @@ where
 			)
 			.into());
 		}
+		if !self.lateral_joins.is_empty() {
+			return Err(DatabaseError::new(
+				DatabaseErrorKind::Unsupported,
+				"date and datetime projections are not supported on querysets with lateral joins",
+			)
+			.into());
+		}
+		if !self.group_by_fields.is_empty() {
+			return Err(DatabaseError::new(
+				DatabaseErrorKind::Unsupported,
+				"date and datetime projections are not supported on grouped querysets",
+			)
+			.into());
+		}
 		let source = Expr::col(self.root_column_reference(field)).into_simple_expr();
 		let projection =
 			Func::temporal_trunc(source.clone(), kind, time_zone, output).map_err(|error| {
@@ -1508,9 +1522,6 @@ where
 			stmt.cond_where(condition);
 		}
 		stmt.and_where(source.is_not_null());
-		for group_field in &self.group_by_fields {
-			stmt.group_by_col(self.root_column_reference(group_field));
-		}
 		for having_cond in &self.having_conditions {
 			match having_cond {
 				HavingCondition::AggregateCompare {
@@ -6168,7 +6179,8 @@ where
 	/// Return distinct truncated values from a generated date field.
 	///
 	/// Truncation, `DISTINCT`, null exclusion, and ordering are performed by the
-	/// database. ISO weeks begin on Monday.
+	/// database. ISO weeks begin on Monday. Grouped querysets and querysets with
+	/// lateral joins are not supported.
 	pub async fn dates<F>(
 		&self,
 		field: super::expressions::FieldRef<T, F>,
@@ -6183,6 +6195,8 @@ where
 	}
 
 	/// Return distinct truncated dates through a caller-owned ORM executor.
+	///
+	/// Grouped querysets and querysets with lateral joins are not supported.
 	pub async fn dates_with_db<E, F>(
 		&self,
 		conn: &mut E,
@@ -6206,6 +6220,8 @@ where
 	}
 
 	/// Return distinct truncated dates through an active transaction executor.
+	///
+	/// Grouped querysets and querysets with lateral joins are not supported.
 	pub async fn dates_with_executor<F>(
 		&self,
 		executor: &mut dyn super::connection::TransactionExecutor,
@@ -6233,7 +6249,8 @@ where
 	///
 	/// `time_zone` defaults to UTC. The database converts each source instant
 	/// before truncation. SQLite and MySQL return an `Unsupported` capability
-	/// error for named zones; PostgreSQL performs named-zone conversion.
+	/// error for named zones; PostgreSQL performs named-zone conversion. Grouped
+	/// querysets and querysets with lateral joins are not supported.
 	pub async fn datetimes<F>(
 		&self,
 		field: super::expressions::FieldRef<T, F>,
@@ -6250,6 +6267,8 @@ where
 	}
 
 	/// Return distinct truncated datetimes through a caller-owned ORM executor.
+	///
+	/// Grouped querysets and querysets with lateral joins are not supported.
 	pub async fn datetimes_with_db<E, F>(
 		&self,
 		conn: &mut E,
@@ -6280,6 +6299,8 @@ where
 	}
 
 	/// Return distinct truncated datetimes through an active transaction executor.
+	///
+	/// Grouped querysets and querysets with lateral joins are not supported.
 	pub async fn datetimes_with_executor<F>(
 		&self,
 		executor: &mut dyn super::connection::TransactionExecutor,
@@ -11994,7 +12015,7 @@ mod tests {
 	}
 
 	#[test]
-	fn temporal_projection_preserves_grouping_and_having() {
+	fn temporal_projection_rejects_grouped_querysets() {
 		let mut queryset = QuerySet::<TestUser>::new();
 		queryset.group_by_fields = vec!["id".to_string()];
 		queryset
@@ -12006,7 +12027,7 @@ mod tests {
 				value: AggregateValue::Int(1),
 			});
 
-		let statement = queryset
+		let error = queryset
 			.temporal_projection_statement(
 				"created_at",
 				TemporalTruncKind::Day,
@@ -12014,11 +12035,41 @@ mod tests {
 				None,
 				TemporalTruncOutput::Date,
 			)
-			.expect("temporal projection statement should compile");
+			.expect_err("temporal projections must reject grouped querysets");
 
 		assert_eq!(
-			statement.to_string(PostgresQueryBuilder),
-			r#"SELECT DISTINCT DATE_TRUNC('day', "created_at")::date AS "value" FROM "test_users" WHERE "created_at" IS NOT NULL GROUP BY "id" HAVING COUNT(*) > 1 ORDER BY "value" ASC"#
+			error.kind(),
+			reinhardt_core::exception::DatabaseErrorKind::Unsupported
+		);
+		assert_eq!(
+			error.to_string(),
+			"date and datetime projections are not supported on grouped querysets"
+		);
+	}
+
+	#[test]
+	fn temporal_projection_rejects_querysets_with_lateral_joins() {
+		let queryset = QuerySet::<TestUser>::new().with_lateral_join(
+			crate::orm::lateral_join::LateralJoin::new("latest_event", "SELECT 1").inner(),
+		);
+
+		let error = queryset
+			.temporal_projection_statement(
+				"created_at",
+				TemporalTruncKind::Day,
+				DateProjectionOrder::Asc,
+				None,
+				TemporalTruncOutput::Date,
+			)
+			.expect_err("temporal projections must reject querysets with lateral joins");
+
+		assert_eq!(
+			error.kind(),
+			reinhardt_core::exception::DatabaseErrorKind::Unsupported
+		);
+		assert_eq!(
+			error.to_string(),
+			"date and datetime projections are not supported on querysets with lateral joins"
 		);
 	}
 

@@ -144,6 +144,7 @@ impl PostgresQueryBuilder {
 		&self,
 		stmt: &SelectStatement,
 	) -> Result<(String, Values), crate::QueryBuildError> {
+		crate::error::validate_select_for_backend(stmt, "PostgreSQL")?;
 		Ok(self.build_select(stmt))
 	}
 
@@ -4877,7 +4878,7 @@ mod tests {
 	#[cfg(feature = "pgvector")]
 	use crate::types::{BinOper, PgBinOper};
 	use crate::{
-		expr::{Expr, ExprTrait},
+		expr::{Expr, ExprTrait, SimpleExpr, TemporalTruncKind, TemporalTruncOutput},
 		query::Query,
 		types::{Alias, ColumnDef, IntoIden},
 		value::Value,
@@ -4914,6 +4915,30 @@ mod tests {
 		let (sql, values) = builder.build_select(&stmt);
 		assert_eq!(sql, "SELECT \"id\", \"name\" FROM \"users\"");
 		assert_eq!(values.len(), 0);
+	}
+
+	#[test]
+	fn test_checked_select_rejects_direct_invalid_temporal_date_truncation() {
+		let mut stmt = Query::select();
+		stmt.expr(SimpleExpr::TemporalTrunc {
+			expr: Box::new(Expr::col("occurred_on").into_simple_expr()),
+			kind: TemporalTruncKind::Hour,
+			time_zone: None,
+			output: TemporalTruncOutput::Date,
+		})
+		.from("events");
+
+		let error = PostgresQueryBuilder
+			.build_select_checked(&stmt.to_owned())
+			.expect_err("PostgreSQL must reject hourly date truncation");
+
+		assert!(matches!(
+			error,
+			crate::QueryBuildError::InvalidTemporalTruncation {
+				kind: "hour",
+				output: "date"
+			}
+		));
 	}
 
 	#[test]

@@ -1494,6 +1494,13 @@ where
 			)
 			.into());
 		}
+		if !self.ctes.is_empty() {
+			return Err(DatabaseError::new(
+				DatabaseErrorKind::Unsupported,
+				"date and datetime projections are not supported on querysets with CTEs",
+			)
+			.into());
+		}
 		if !self.lateral_joins.is_empty() {
 			return Err(DatabaseError::new(
 				DatabaseErrorKind::Unsupported,
@@ -12070,6 +12077,33 @@ mod tests {
 		assert_eq!(
 			error.to_string(),
 			"date and datetime projections are not supported on querysets with lateral joins"
+		);
+	}
+
+	#[rstest]
+	fn temporal_projection_rejects_querysets_with_ctes() {
+		let queryset = QuerySet::<TestUser>::new().with_cte(crate::orm::cte::CTE::new(
+			"recent_users",
+			"SELECT * FROM test_users",
+		));
+
+		let error = queryset
+			.temporal_projection_statement(
+				"created_at",
+				TemporalTruncKind::Day,
+				DateProjectionOrder::Asc,
+				None,
+				TemporalTruncOutput::Date,
+			)
+			.expect_err("temporal projections must reject querysets with CTEs");
+
+		assert_eq!(
+			error.kind(),
+			reinhardt_core::exception::DatabaseErrorKind::Unsupported
+		);
+		assert_eq!(
+			error.to_string(),
+			"date and datetime projections are not supported on querysets with CTEs"
 		);
 	}
 

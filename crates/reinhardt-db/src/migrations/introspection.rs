@@ -1292,7 +1292,7 @@ impl MySQLIntrospector {
 			let generation_expression =
 				decode_optional_mysql_text(row, 7, "generation expression")?;
 			let char_max_length =
-				decode_optional_mysql_integer(row, 8, "character maximum length")?;
+				decode_optional_mysql_unsigned_integer(row, 8, "character maximum length")?;
 			let numeric_precision =
 				decode_optional_mysql_unsigned_integer(row, 9, "numeric precision")?;
 			let numeric_scale = decode_optional_mysql_unsigned_integer(row, 10, "numeric scale")?;
@@ -2233,7 +2233,18 @@ async fn read_postgres_schema(
 	use sqlx::Row;
 
 	let introspector = PostgresIntrospector::new(pool.clone());
-	let mut schema = introspector.read_schema().await?;
+	let mut schema = if options.tables.is_empty() {
+		introspector.read_schema().await?
+	} else {
+		let mut tables = HashMap::new();
+		for name in &options.tables {
+			let table = introspector.read_table(name).await?.ok_or_else(|| {
+				MigrationError::IntrospectionError(format!("Table `{name}` was not found"))
+			})?;
+			tables.insert(name.clone(), table);
+		}
+		DatabaseSchema { tables }
+	};
 	let partition_names = read_postgres_partition_names(&pool).await?;
 	filter_postgres_partitions(&mut schema, &partition_names, options.include_partitions);
 

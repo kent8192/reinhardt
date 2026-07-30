@@ -189,10 +189,7 @@ impl TypeMapper {
 			}
 
 			// Custom type
-			FieldType::Custom(type_name) => {
-				// Try to parse as Rust type, fallback to String
-				type_name.parse().unwrap_or_else(|_| quote! { String })
-			}
+			FieldType::Custom(_) => quote! { String },
 		};
 
 		Ok(tokens)

@@ -157,7 +157,7 @@ fn alias_looks_sensitive(alias: &str) -> bool {
 fn backend_from_url(url: &str) -> CommandResult<DatabaseType> {
 	match url.split_once(':').map(|(scheme, _)| scheme) {
 		Some("postgres") | Some("postgresql") => Ok(DatabaseType::Postgres),
-		Some("mysql") => Ok(DatabaseType::Mysql),
+		Some("mariadb") | Some("mysql") => Ok(DatabaseType::Mysql),
 		Some("sqlite") => Ok(DatabaseType::Sqlite),
 		Some(scheme) if !scheme.is_empty() => Err(CommandError::InvalidArguments(format!(
 			"Unsupported database URL scheme `{scheme}`."

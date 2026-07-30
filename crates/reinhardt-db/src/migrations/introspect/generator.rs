@@ -319,6 +319,10 @@ impl SchemaCodeGenerator {
 
 		// Generate field attributes
 		let mut attrs = Vec::new();
+		if field_name != column.name {
+			let column_name = column.name.as_str();
+			attrs.push(quote! { #[field(db_column = #column_name)] });
+		}
 
 		// Primary key attribute
 		if table.primary_key.contains(&column.name) {

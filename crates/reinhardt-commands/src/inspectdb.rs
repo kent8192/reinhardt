@@ -122,10 +122,14 @@ impl BaseCommand for InspectDbCommand {
 			));
 		}
 
-		let mut config = match ctx.option("config") {
+		let config_path = ctx.option("config");
+		let mut config = match config_path {
 			Some(path) => load_config(PathBuf::from(path))?,
 			None => IntrospectConfig::default(),
 		};
+		if config_path.is_none() {
+			config.tables.exclude.clear();
+		}
 		// Database selection is owned by DatabaseSelector. Configuration files
 		// control generation and filtering but never override the selected URL.
 		config.database.url.clear();
@@ -168,6 +172,16 @@ impl BaseCommand for InspectDbCommand {
 			.map_err(|error| {
 				CommandError::ExecutionError(format!("Database inspection failed: {error}"))
 			})?;
+		if let Some(table) = schema
+			.tables
+			.values()
+			.find(|table| table.primary_key.is_empty())
+		{
+			return Err(CommandError::ExecutionError(format!(
+				"Cannot generate model for `{}` because it has no primary key.",
+				table.name
+			)));
+		}
 		self.progress(&format!("Found {} schema objects", schema.tables.len()))?;
 
 		if output_directory.is_some() {

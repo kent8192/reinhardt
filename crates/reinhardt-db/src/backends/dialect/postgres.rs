@@ -314,7 +314,7 @@ impl PgTransactionExecutor {
 impl PostgresBackend {
 	/// Internal row conversion method shared between backend and transaction executor
 	pub(crate) fn convert_row_internal(pg_row: PgRow) -> Result<Row> {
-		use sqlx::Row as SqlxRow;
+		use sqlx::{Row as SqlxRow, ValueRef};
 
 		let mut row = Row::new();
 		for column in pg_row.columns() {
@@ -332,13 +332,19 @@ impl PostgresBackend {
 				continue;
 			}
 			if type_name == "XML" {
-				match pg_row.try_get::<Option<String>, _>(column_name) {
-					Ok(Some(value)) => {
-						row.insert(column_name.to_string(), QueryValue::String(value))
-					}
-					Ok(None) => row.insert(column_name.to_string(), QueryValue::Null),
-					Err(error) => return Err(map_sqlx_error(error).into()),
-				};
+				let value = pg_row.try_get_raw(column_name).map_err(map_sqlx_error)?;
+				if value.is_null() {
+					row.insert(column_name.to_string(), QueryValue::Null);
+				} else {
+					let value = std::str::from_utf8(value.as_bytes().map_err(map_sqlx_error)?)
+						.map_err(|error| {
+							DatabaseError::new(DatabaseErrorKind::Serialization, error.to_string())
+						})?;
+					row.insert(
+						column_name.to_string(),
+						QueryValue::String(value.to_string()),
+					);
+				}
 				continue;
 			}
 			if type_name == "VECTOR" {

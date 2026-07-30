@@ -5615,6 +5615,13 @@ where
 			stmt.cond_where(cond);
 		}
 
+		for annotation in &self.annotations {
+			stmt.expr_as(
+				Expr::cust(self.annotation_value_to_select_sql(&annotation.value)),
+				Alias::new(&annotation.alias),
+			);
+		}
+
 		// Apply GROUP BY
 		for group_field in &self.group_by_fields {
 			let col_ref = self.root_column_reference(group_field);

@@ -3833,9 +3833,9 @@ fn generate_relation_traversal_accessors(
 			}
 
 			#[doc = #wrapper_field_doc]
-			pub fn field<Value>(
+			pub fn field<Value, Origin>(
 				self,
-				field: #orm_crate::expressions::FieldRef<#struct_name, Value>,
+				field: #orm_crate::expressions::FieldRef<#struct_name, Value, Origin>,
 			) -> #orm_crate::relations::RelatedFieldRef<Root, #struct_name, Value> {
 				self.inner.field(field)
 			}

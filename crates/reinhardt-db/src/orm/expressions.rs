@@ -132,7 +132,7 @@ pub enum UnverifiedModelField {}
 
 #[derive(Debug, Clone, Copy)]
 /// A typed model field reference whose origin controls ordering eligibility.
-pub struct FieldRef<M, T, Origin = GeneratedModelField> {
+pub struct FieldRef<M, T, Origin = UnverifiedModelField> {
 	name: &'static str,
 	_phantom: PhantomData<(M, T, Origin)>,
 }
@@ -280,18 +280,6 @@ impl<M, T> FieldRef<M, T, UnverifiedModelField> {
 }
 
 impl<M, T> FieldRef<M, T, GeneratedModelField> {
-	/// Create an unverified field reference for a dynamically composed filter.
-	///
-	/// This preserves the historical two-parameter `FieldRef::<M, T>::new`
-	/// call shape while preventing dynamic field names from becoming ordering
-	/// proofs.
-	pub const fn new(name: &'static str) -> FieldRef<M, T, UnverifiedModelField> {
-		FieldRef {
-			name,
-			_phantom: PhantomData,
-		}
-	}
-
 	/// Construct a field reference proven to come from a model definition.
 	///
 	/// # Safety
@@ -1644,17 +1632,17 @@ mod tests {
 
 	// Simulating what #[derive(Model)] macro would generate
 	impl TestUser {
-		const fn field_id() -> FieldRef<TestUser, i64> {
+		const fn field_id() -> FieldRef<TestUser, i64, GeneratedModelField> {
 			// SAFETY: this mirrors a generated accessor for the persisted `id` field.
 			unsafe { FieldRef::from_model_field("id") }
 		}
 
-		const fn field_name() -> FieldRef<TestUser, String> {
+		const fn field_name() -> FieldRef<TestUser, String, GeneratedModelField> {
 			// SAFETY: this mirrors a generated accessor for the persisted `name` field.
 			unsafe { FieldRef::from_model_field("name") }
 		}
 
-		const fn field_created_at() -> FieldRef<TestUser, i64> {
+		const fn field_created_at() -> FieldRef<TestUser, i64, GeneratedModelField> {
 			// SAFETY: this mirrors a generated accessor for the persisted `created_at` field.
 			unsafe { FieldRef::from_model_field("created_at") }
 		}
@@ -1899,10 +1887,18 @@ mod tests {
 	#[test]
 	fn test_field_ref_const_to_f_conversion() {
 		// Verify const FieldRef can be converted to F
-		const ID_FIELD: FieldRef<TestUser, i64> = unsafe { FieldRef::from_model_field("id") };
+		const ID_FIELD: FieldRef<TestUser, i64, GeneratedModelField> =
+			unsafe { FieldRef::from_model_field("id") };
 		let f: F = ID_FIELD.into();
 
 		assert_eq!(f.to_sql(), "\"id\"");
+	}
+
+	#[test]
+	fn test_field_ref_new_matches_the_default_origin_type() {
+		const ID_FIELD: FieldRef<TestUser, i64> = FieldRef::new("id");
+
+		assert_eq!(ID_FIELD.name(), "id");
 	}
 }
 // Auto-generated tests for expressions module

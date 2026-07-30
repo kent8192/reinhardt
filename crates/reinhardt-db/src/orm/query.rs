@@ -3607,7 +3607,9 @@ where
 	}
 
 	fn root_column_reference(&self, field: &str) -> ColumnRef {
-		if (!self.relation_joins.is_empty() || self.has_select_related()) && !field.contains('.') {
+		if (!self.relation_joins.is_empty() || !self.joins.is_empty() || self.has_select_related())
+			&& !field.contains('.')
+		{
 			ColumnRef::table_column(Alias::new(self.root_alias()), Alias::new(field))
 		} else {
 			parse_column_reference(field)
@@ -6288,8 +6290,9 @@ where
 				fields.push(column.to_string());
 			}
 		} else {
+			let field_name = Self::logical_field_name_for_column(column);
 			self.deferred_fields
-				.retain(|field| !Self::projection_includes_column(field, column));
+				.retain(|field| !Self::projection_includes_column(field, &field_name));
 		}
 		self
 	}
@@ -6299,6 +6302,13 @@ where
 			|| field
 				.rsplit_once('.')
 				.is_some_and(|(_, field_name)| field_name == column)
+	}
+
+	fn logical_field_name_for_column(column: &str) -> String {
+		T::field_metadata()
+			.iter()
+			.find(|metadata| metadata.db_column_name() == column)
+			.map_or_else(|| column.to_owned(), |metadata| metadata.name.clone())
 	}
 
 	/// Fetch rows by primary key and return them in deterministic key order.
@@ -10184,48 +10194,83 @@ mod tests {
 			}
 		}
 
-		const fn field_id() -> crate::orm::expressions::FieldRef<TestUser, i64> {
+		const fn field_id() -> crate::orm::expressions::FieldRef<
+			TestUser,
+			i64,
+			crate::orm::expressions::GeneratedModelField,
+		> {
 			// SAFETY: this test accessor names TestUser's persisted `id` field.
 			unsafe { crate::orm::expressions::FieldRef::from_model_field("id") }
 		}
 
-		const fn field_username() -> crate::orm::expressions::FieldRef<TestUser, String> {
+		const fn field_username() -> crate::orm::expressions::FieldRef<
+			TestUser,
+			String,
+			crate::orm::expressions::GeneratedModelField,
+		> {
 			// SAFETY: this test accessor names TestUser's persisted `username` field.
 			unsafe { crate::orm::expressions::FieldRef::from_model_field("username") }
 		}
 
-		const fn field_email() -> crate::orm::expressions::FieldRef<TestUser, String> {
+		const fn field_email() -> crate::orm::expressions::FieldRef<
+			TestUser,
+			String,
+			crate::orm::expressions::GeneratedModelField,
+		> {
 			// SAFETY: this test accessor names TestUser's persisted `email` field.
 			unsafe { crate::orm::expressions::FieldRef::from_model_field("email") }
 		}
 
-		const fn field_full_name() -> crate::orm::expressions::FieldRef<TestUser, String> {
+		const fn field_full_name() -> crate::orm::expressions::FieldRef<
+			TestUser,
+			String,
+			crate::orm::expressions::GeneratedModelField,
+		> {
 			// SAFETY: this test accessor names TestUser's persisted `full_name` field.
 			unsafe { crate::orm::expressions::FieldRef::from_model_field("full_name") }
 		}
 
-		const fn field_display_name() -> crate::orm::expressions::FieldRef<TestUser, String> {
+		const fn field_display_name() -> crate::orm::expressions::FieldRef<
+			TestUser,
+			String,
+			crate::orm::expressions::GeneratedModelField,
+		> {
 			// SAFETY: this test accessor names TestUser's persisted `display_name` field.
 			unsafe { crate::orm::expressions::FieldRef::from_model_field("display_name") }
 		}
 
-		const fn field_created_at()
-		-> crate::orm::expressions::FieldRef<TestUser, chrono::DateTime<chrono::Utc>> {
+		const fn field_created_at() -> crate::orm::expressions::FieldRef<
+			TestUser,
+			chrono::DateTime<chrono::Utc>,
+			crate::orm::expressions::GeneratedModelField,
+		> {
 			// SAFETY: this test accessor names TestUser's persisted `created_at` field.
 			unsafe { crate::orm::expressions::FieldRef::from_model_field("created_at") }
 		}
 
-		const fn field_tags() -> crate::orm::expressions::FieldRef<TestUser, Vec<String>> {
+		const fn field_tags() -> crate::orm::expressions::FieldRef<
+			TestUser,
+			Vec<String>,
+			crate::orm::expressions::GeneratedModelField,
+		> {
 			// SAFETY: this test accessor names TestUser's persisted `tags` field.
 			unsafe { crate::orm::expressions::FieldRef::from_model_field("tags") }
 		}
 
-		const fn field_metadata() -> crate::orm::expressions::FieldRef<TestUser, String> {
+		const fn field_metadata() -> crate::orm::expressions::FieldRef<
+			TestUser,
+			String,
+			crate::orm::expressions::GeneratedModelField,
+		> {
 			// SAFETY: this test accessor names TestUser's persisted `metadata` field.
 			unsafe { crate::orm::expressions::FieldRef::from_model_field("metadata") }
 		}
 
-		const fn field_active_period() -> crate::orm::expressions::FieldRef<TestUser, String> {
+		const fn field_active_period() -> crate::orm::expressions::FieldRef<
+			TestUser,
+			String,
+			crate::orm::expressions::GeneratedModelField,
+		> {
 			// SAFETY: this test accessor names TestUser's persisted `active_period` field.
 			unsafe { crate::orm::expressions::FieldRef::from_model_field("active_period") }
 		}
@@ -10403,13 +10448,20 @@ mod tests {
 	}
 
 	impl TestCorpusFile {
-		const fn field_normalized_path() -> crate::orm::expressions::FieldRef<TestCorpusFile, String>
-		{
+		const fn field_normalized_path() -> crate::orm::expressions::FieldRef<
+			TestCorpusFile,
+			String,
+			crate::orm::expressions::GeneratedModelField,
+		> {
 			// SAFETY: this test accessor names TestCorpusFile's persisted `normalized_path` field.
 			unsafe { crate::orm::expressions::FieldRef::from_model_field("normalized_path") }
 		}
 
-		const fn field_email() -> crate::orm::expressions::FieldRef<TestCorpusFile, String> {
+		const fn field_email() -> crate::orm::expressions::FieldRef<
+			TestCorpusFile,
+			String,
+			crate::orm::expressions::GeneratedModelField,
+		> {
 			// SAFETY: this test accessor names TestCorpusFile's persisted `email` field.
 			unsafe { crate::orm::expressions::FieldRef::from_model_field("email") }
 		}
@@ -10634,7 +10686,11 @@ mod tests {
 		.then::<TestCorpusFileProject, TestProject>()
 		.field(unsafe {
 			// SAFETY: `name` is a persisted TestProject field in this query fixture.
-			crate::orm::expressions::FieldRef::<TestProject, String>::from_model_field("name")
+			crate::orm::expressions::FieldRef::<
+				TestProject,
+				String,
+				crate::orm::expressions::GeneratedModelField,
+			>::from_model_field("name")
 		})
 		.eq("reinhardt")
 	}
@@ -11477,7 +11533,11 @@ mod tests {
 			.then::<TestCorpusFileProject, TestProject>()
 			.field(unsafe {
 				// SAFETY: `name` is a persisted TestProject field in this query fixture.
-				crate::orm::expressions::FieldRef::<TestProject, String>::from_model_field("name")
+				crate::orm::expressions::FieldRef::<
+					TestProject,
+					String,
+					crate::orm::expressions::GeneratedModelField,
+				>::from_model_field("name")
 			})
 			.eq("reinhardt");
 
@@ -11587,7 +11647,11 @@ mod tests {
 			>()
 			.field(unsafe {
 				// SAFETY: `id` is a persisted TestProjects field in this query fixture.
-				crate::orm::expressions::FieldRef::<TestProjects, i64>::from_model_field("id")
+				crate::orm::expressions::FieldRef::<
+					TestProjects,
+					i64,
+					crate::orm::expressions::GeneratedModelField,
+				>::from_model_field("id")
 			})
 			.eq(1)
 		};
@@ -11645,6 +11709,25 @@ mod tests {
 			sql.contains(r#"INNER JOIN "test_projects" ON test_users.id = test_projects.user_id"#)
 		);
 		assert!(sql.contains(r#"WHERE "test_projects"."name" = 'reinhardt'"#));
+	}
+
+	#[test]
+	fn test_manual_join_qualifies_root_ordering_columns() {
+		let sql = QuerySet::<TestUser>::new()
+			.inner_join_on::<TestProject>("test_users.id = test_projects.user_id")
+			.order_by(&["id"])
+			.to_sql()
+			.expect("query SQL should compile");
+
+		assert!(sql.contains(r#"ORDER BY "test_users"."id" ASC"#));
+	}
+
+	#[test]
+	fn test_bulk_lookup_restores_deferred_logical_name_for_custom_column() {
+		let queryset = QuerySet::<TestCorpusFile>::new().defer(&["email"]);
+		let queryset = queryset.with_bulk_lookup_column("email_addr");
+
+		assert!(queryset.deferred_fields.is_empty());
 	}
 
 	#[test]
@@ -12380,7 +12463,11 @@ mod tests {
 			>()
 			.field(unsafe {
 				// SAFETY: `name` is a persisted TestProject field in this query fixture.
-				crate::orm::expressions::FieldRef::<TestProject, String>::from_model_field("name")
+				crate::orm::expressions::FieldRef::<
+					TestProject,
+					String,
+					crate::orm::expressions::GeneratedModelField,
+				>::from_model_field("name")
 			})
 			.icontains("rust");
 
@@ -12403,7 +12490,11 @@ mod tests {
 			>()
 			.field(unsafe {
 				// SAFETY: `name` is a persisted TestProject field in this query fixture.
-				crate::orm::expressions::FieldRef::<TestProject, String>::from_model_field("name")
+				crate::orm::expressions::FieldRef::<
+					TestProject,
+					String,
+					crate::orm::expressions::GeneratedModelField,
+				>::from_model_field("name")
 			})
 			.icontains("rust");
 

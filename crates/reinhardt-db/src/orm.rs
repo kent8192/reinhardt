@@ -14,8 +14,7 @@
 //!
 //! ## Streaming QuerySets
 //!
-//! [`QuerySet::iterator_with_db`](crate::orm::QuerySet::iterator_with_db) and
-//! [`QuerySet::iterator_with_executor`](crate::orm::QuerySet::iterator_with_executor)
+//! [`QuerySet::iterator_with_db`] and [`QuerySet::iterator_with_executor`]
 //! return lifetime-bound streams that decode one model per item. The borrowed
 //! executor remains in use until the stream completes or is dropped, and each
 //! item retains backend or model-decoding failures in its `Result`.

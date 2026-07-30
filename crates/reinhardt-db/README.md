@@ -76,19 +76,20 @@ driver resources when it completes, fails, is cancelled, or is dropped early.
 ```rust
 use futures::StreamExt;
 use reinhardt_db::orm::{Model, OrmExecutor, QuerySet};
+use serde::de::DeserializeOwned;
 
 async fn stream_models<M, E>(connection: &mut E) -> reinhardt_core::exception::Result<()>
 where
-    M: Model,
+    M: Model + DeserializeOwned,
     E: OrmExecutor,
 {
-let mut models = QuerySet::<M>::new().iterator_with_db(connection, 128)?;
-while let Some(model) = models.next().await {
-    let model = model?;
-    // Process the typed model without a QuerySet-level result cache.
-    let _ = model;
-}
-Ok(())
+	let mut models = QuerySet::<M>::new().iterator_with_db(connection, 128)?;
+	while let Some(model) = models.next().await {
+		let model = model?;
+		// Process the typed model without a QuerySet-level result cache.
+		let _ = model;
+	}
+	Ok(())
 }
 ```
 

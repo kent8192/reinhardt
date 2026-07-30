@@ -6287,6 +6287,7 @@ where
 							.orm_query_error(&sql, &format!("{error:?}"))
 							.await;
 						drop(rows.take());
+						accounting.disarm_completion();
 						yield Err(error);
 						return;
 					}
@@ -9437,15 +9438,19 @@ mod tests {
 	}
 
 	#[cfg(feature = "pgvector")]
+	#[rstest]
 	#[tokio::test]
 	async fn none_short_circuits_read_and_write_execution_paths() {
+		// Arrange
 		let mut executor = RecordingExecutor::default();
 
+		// Act
 		let rows = QuerySet::<TestUser>::new()
 			.none()
 			.all_with_db(&mut executor)
 			.await
 			.expect("none queryset should not execute a select");
+		// Assert
 		assert_eq!(rows, Vec::<TestUser>::new());
 
 		let rows = QuerySet::<TestUser>::new()

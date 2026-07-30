@@ -60,7 +60,14 @@ fn mysql_row_lock_capabilities(version: Option<&str>) -> RowLockCapabilities {
 	let Some(version) = version else {
 		return RowLockCapabilities::mysql();
 	};
-	let Some((major, minor, patch)) = parse_server_version(version) else {
+	let components: Vec<_> = version.split('-').collect();
+	let normalized_version = components
+		.iter()
+		.position(|component| component.to_ascii_lowercase().contains("mariadb"))
+		.and_then(|mariadb| mariadb.checked_sub(1))
+		.and_then(|version_component| components.get(version_component).copied())
+		.unwrap_or(version);
+	let Some((major, minor, patch)) = parse_server_version(normalized_version) else {
 		return RowLockCapabilities::mysql();
 	};
 	if version.to_ascii_lowercase().contains("mariadb") {
@@ -1147,6 +1154,15 @@ mod tests {
 		#[case] expected: Option<(u16, u16, u16)>,
 	) {
 		assert_eq!(super::parse_server_version(version), expected);
+	}
+
+	#[test]
+	fn maria_db_compatibility_prefix_uses_the_maria_db_version() {
+		let capabilities = super::mysql_row_lock_capabilities(Some("5.5.5-10.11.6-MariaDB"));
+
+		assert!(capabilities.nowait);
+		assert!(capabilities.skip_locked);
+		assert!(!capabilities.targets);
 	}
 
 	#[test]

@@ -1642,6 +1642,7 @@ where
 	fn validate_select_for_update(
 		&self,
 		capabilities: crate::backends::types::RowLockCapabilities,
+		backend: crate::backends::types::DatabaseType,
 	) -> Result<(), crate::backends::error::DatabaseError> {
 		let Some(spec) = &self.select_for_update else {
 			return Ok(());
@@ -1691,7 +1692,10 @@ where
 							| super::sqlalchemy_query::JoinType::Full
 					)
 			});
-		if spec.targets.is_empty() && has_outer_join {
+		if backend == crate::backends::types::DatabaseType::Postgres
+			&& spec.targets.is_empty()
+			&& has_outer_join
+		{
 			return Err(DatabaseError::new(
 				DatabaseErrorKind::Query,
 				"SELECT FOR UPDATE with an outer join requires explicit non-nullable lock targets",
@@ -1701,7 +1705,7 @@ where
 			let SelectForUpdateTarget::Relation(steps) = target else {
 				continue;
 			};
-			if steps.is_empty() {
+			if backend == crate::backends::types::DatabaseType::Postgres && steps.is_empty() {
 				return Err(DatabaseError::new(
 					DatabaseErrorKind::Query,
 					"SELECT FOR UPDATE relation lock target must contain at least one relation step",
@@ -1719,7 +1723,9 @@ where
 					.iter()
 					.find(|join| join.alias == alias)
 					.expect("resolved relation aliases always have a planned join");
-				if join.join_kind == RelationJoinKind::Left {
+				if backend == crate::backends::types::DatabaseType::Postgres
+					&& join.join_kind == RelationJoinKind::Left
+				{
 					return Err(DatabaseError::new(
 						DatabaseErrorKind::Query,
 						"SELECT FOR UPDATE cannot lock a relation reached through an outer join",
@@ -6480,7 +6486,7 @@ where
 	where
 		T: serde::de::DeserializeOwned,
 	{
-		self.validate_select_for_update(executor.row_lock_capabilities())?;
+		self.validate_select_for_update(executor.row_lock_capabilities(), executor.backend())?;
 		let stmt = self.build_select_statement().map_err(executor_error)?;
 		let context = super::execution::pgvector_context_for_select(&stmt);
 		let (sql, values) = Self::build_select_for_backend(
@@ -6521,7 +6527,7 @@ where
 		&self,
 		executor: &mut dyn super::connection::TransactionExecutor,
 	) -> Result<Vec<QueryRow>, crate::backends::error::DatabaseError> {
-		self.validate_select_for_update(executor.row_lock_capabilities())?;
+		self.validate_select_for_update(executor.row_lock_capabilities(), executor.backend())?;
 		let stmt = self.build_select_statement().map_err(executor_error)?;
 		let context = super::execution::pgvector_context_for_select(&stmt);
 		let (sql, values) = Self::build_select_for_backend(

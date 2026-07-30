@@ -385,9 +385,10 @@ fn validate_lock_tables_belong_to_statement(
 		relations.extend(table_ref_lock_names(&join.table));
 	}
 	for target in targets {
-		if !table_ref_lock_names(target)
-			.iter()
-			.any(|target_name| relations.iter().any(|relation| relation == target_name))
+		if table_ref_is_derived(target)
+			|| !table_ref_lock_names(target)
+				.iter()
+				.any(|target_name| relations.iter().any(|relation| relation == target_name))
 		{
 			return Err(unsupported(
 				"row lock target absent from the query",
@@ -452,6 +453,10 @@ fn table_ref_lock_names(table: &TableRef) -> Vec<String> {
 		| TableRef::SchemaTableAlias(_, _, alias)
 		| TableRef::SubQuery(_, alias) => vec![alias.to_string()],
 	}
+}
+
+fn table_ref_is_derived(table: &TableRef) -> bool {
+	matches!(table, TableRef::SubQuery(_, _))
 }
 
 fn validate_condition_holder_lock(

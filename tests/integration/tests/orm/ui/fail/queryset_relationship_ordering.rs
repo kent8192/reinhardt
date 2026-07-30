@@ -13,8 +13,8 @@ struct Project {
 	id: i64,
 }
 
-#[derive(Serialize, Deserialize)]
 #[model(app_label = "jobs", table_name = "jobs")]
+#[derive(Serialize, Deserialize)]
 struct Job {
 	#[field(primary_key = true)]
 	id: i64,

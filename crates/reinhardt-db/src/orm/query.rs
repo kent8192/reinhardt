@@ -12042,7 +12042,7 @@ mod tests {
 
 		assert_eq!(
 			error.kind(),
-			reinhardt_core::exception::DatabaseErrorKind::Unsupported
+			reinhardt_core::exception::ErrorKind::Unsupported
 		);
 		assert_eq!(
 			error.to_string(),
@@ -12096,7 +12096,7 @@ mod tests {
 
 		assert_eq!(
 			error.kind(),
-			reinhardt_core::exception::DatabaseErrorKind::Unsupported
+			reinhardt_core::exception::ErrorKind::Unsupported
 		);
 		assert_eq!(
 			error.to_string(),
@@ -12123,7 +12123,7 @@ mod tests {
 
 		assert_eq!(
 			error.kind(),
-			reinhardt_core::exception::DatabaseErrorKind::Unsupported
+			reinhardt_core::exception::ErrorKind::Unsupported
 		);
 		assert_eq!(
 			error.to_string(),

@@ -4814,6 +4814,22 @@ pub(crate) fn model_derive_impl(mut input: DeriveInput) -> Result<TokenStream> {
 			);
 		}
 	});
+	let primary_key_database_value = if is_composite_pk {
+		quote! {}
+	} else {
+		quote! {
+			fn primary_key_database_value(
+				pk: &Self::PrimaryKey,
+			) -> ::core::result::Result<
+				#orm_crate::DatabaseValue,
+				#orm_crate::FieldCodecError,
+			> {
+				<#pk_type as #orm_crate::DatabaseField>::encode_database(pk).map(
+					<<#pk_type as #orm_crate::DatabaseField>::Storage as #orm_crate::DatabaseScalar>::into_database_value
+				)
+			}
+		}
+	};
 	let decode_database_fields = database_codec_fields.iter().map(|field| {
 		let field_name = &field.name;
 		let field_ty = &field.ty;
@@ -4922,6 +4938,8 @@ pub(crate) fn model_derive_impl(mut input: DeriveInput) -> Result<TokenStream> {
 			fn primary_key_uses_zero_sentinel() -> bool {
 				#primary_key_uses_zero_sentinel
 			}
+
+			#primary_key_database_value
 
 			fn field_is_none(&self, field_name: &str) -> bool {
 				match field_name {
@@ -8890,6 +8908,29 @@ mod tests {
 			.to_string();
 
 		assert!(output.contains("fn primary_key_uses_zero_sentinel () -> bool { true }"));
+	}
+
+	#[test]
+	fn test_model_routes_primary_key_values_through_database_field_codec() {
+		let input = quote! {
+			#[model(app_label = "test", table_name = "external_users", info = false)]
+			struct ExternalUser {
+				#[field(primary_key = true, max_length = 64)]
+				external_id: String,
+				#[field(max_length = 120)]
+				name: String,
+			}
+		};
+
+		let output = model_derive_impl(syn::parse2(input).unwrap())
+			.expect("string primary key model must generate")
+			.to_string();
+		let compact = output.split_whitespace().collect::<String>();
+
+		assert!(compact.contains("fnprimary_key_database_value(pk:&Self::PrimaryKey"));
+		assert!(compact.contains("<Stringas"));
+		assert!(compact.contains("DatabaseField>::encode_database(pk)"));
+		assert!(compact.contains("DatabaseScalar>::into_database_value"));
 	}
 
 	#[test]

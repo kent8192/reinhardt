@@ -101,6 +101,8 @@ pub mod connection;
 pub mod connection_ext; // reinhardt-query connection support
 /// Constraints module.
 pub mod constraints;
+/// Per-type database value conversion ([`DbValue`]).
+pub mod db_value;
 /// Expressions module.
 pub mod expressions;
 /// Fields module.
@@ -209,6 +211,7 @@ pub use connection::{
 pub use constraints::{
 	CheckConstraint, Constraint, ForeignKeyConstraint, OnDelete, OnUpdate, UniqueConstraint,
 };
+pub use db_value::DbValue;
 pub use expressions::{Exists, F, FieldRef, OuterRef, Q, QOperator, Subquery};
 pub use functions::{
 	Abs, Cast, Ceil, Concat, CurrentDate, CurrentTime, Extract, ExtractComponent, Floor, Greatest,

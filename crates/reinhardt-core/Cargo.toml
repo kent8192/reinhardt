@@ -108,6 +108,14 @@ page = ["types"]
 # External dependency features
 macros = ["dep:reinhardt-macros"]
 
+# Forward the DB-dialect flags to the derive macro so its per-dialect field
+# mappings (json/jsonb, array, hstore) are actually reachable in downstream
+# crates. Without this the macro's #[cfg(feature = "db-postgres")] arms are never
+# enabled and e.g. a `serde_json::Value` field fails with "Unsupported field type".
+db-postgres = ["reinhardt-macros?/db-postgres"]
+db-mysql = ["reinhardt-macros?/db-mysql"]
+db-sqlite = ["reinhardt-macros?/db-sqlite"]
+
 # Aggregate all core features
 core-full = [
   "types",

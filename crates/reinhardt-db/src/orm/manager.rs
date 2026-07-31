@@ -684,66 +684,46 @@ impl<M: Model> Manager<M> {
 		conn: &DatabaseConnection,
 		model: &M,
 	) -> reinhardt_core::exception::Result<M> {
-		let json = serde_json::to_value(model)
-			.map_err(|e| reinhardt_core::exception::Error::Database(e.to_string()))?;
-
-		// Extract fields and values from model
-		let obj = json.as_object().ok_or_else(|| {
-			reinhardt_core::exception::Error::Database("Model must serialize to object".to_string())
-		})?;
+		use super::connection::QueryValue;
 
 		// Build reinhardt-query INSERT statement
 		let mut stmt = Query::insert();
 		stmt.into_table(Alias::new(M::table_name()));
 
-		// Get the primary key field name to filter out auto-increment fields
 		let pk_field = M::primary_key_field();
 
-		// Filter out primary key fields and null datetime fields.
-		// Null datetime fields are skipped to let database DEFAULT apply
-		// (e.g., created_at, updated_at with DEFAULT CURRENT_TIMESTAMP).
-		let (fields, values): (Vec<_>, Vec<_>) = obj
-			.iter()
-			.filter(|(k, v)| {
-				let key = k.as_str();
-				// Exclude primary key field if it's null or 0 (auto-increment)
-				if key == pk_field {
-					if v.is_null() {
-						return false;
-					}
-					if let Some(n) = v.as_i64() {
-						return n != 0;
-					}
-				}
-				// Skip null datetime fields to let database DEFAULT apply
-				if v.is_null()
-					&& (key == "created_at"
-						|| key == "updated_at"
-						|| key.ends_with("_date")
-						|| key.ends_with("_time")
-						|| key.ends_with("_at"))
-				{
-					return false;
-				}
-				true
-			})
-			.map(|(k, v)| {
-				// Convert null values to SQL NULL for proper insertion
-				let value = if v.is_null() {
-					reinhardt_query::value::Value::Int(None)
-				} else {
-					Self::json_to_sea_value(v)
-				};
-				(Alias::new(k.as_str()), value)
-			})
-			.unzip();
+		// Typed columns straight from the model — each value is already the right
+		// QueryValue via its field's DbValue. No serde round-trip, no type guess.
+		let columns = model.to_db_columns();
+
+		let mut fields = Vec::new();
+		let mut values = Vec::new();
+		for (col, qv) in &columns {
+			let col = *col;
+			// Exclude the primary key when it's null or 0 (auto-increment).
+			if col == pk_field && matches!(qv, QueryValue::Null | QueryValue::Int(0)) {
+				continue;
+			}
+			// Skip null datetime fields so the database DEFAULT applies
+			// (e.g. created_at/updated_at with DEFAULT CURRENT_TIMESTAMP).
+			if matches!(qv, QueryValue::Null)
+				&& (col == "created_at"
+					|| col == "updated_at"
+					|| col.ends_with("_date")
+					|| col.ends_with("_time")
+					|| col.ends_with("_at"))
+			{
+				continue;
+			}
+			fields.push(Alias::new(col));
+			values.push(Self::query_value_to_sea(qv.clone()));
+		}
 
 		stmt.columns(fields);
 		stmt.values_panic(values);
 
-		// Add RETURNING clause with explicit column names from JSON object
-		// Note: Using Asterisk in columns() may not work correctly with reinhardt-query
-		let all_columns: Vec<_> = obj.keys().map(|k| Alias::new(k.as_str())).collect();
+		// RETURNING every column so the row hydrates back into M.
+		let all_columns: Vec<_> = columns.iter().map(|(c, _)| Alias::new(*c)).collect();
 		stmt.returning(all_columns);
 
 		let (sql, values) = build_insert_sql(&stmt, conn.backend());
@@ -754,10 +734,7 @@ impl<M: Model> Manager<M> {
 			.collect();
 
 		let row = conn.query_one(&sql, values).await?;
-
-		// row.data is already serde_json::Value::Object so deserialize directly
-		serde_json::from_value(row.data.clone())
-			.map_err(|e| reinhardt_core::exception::Error::Database(e.to_string()))
+		M::from_db_columns(&row)
 	}
 
 	/// Convert serde_json::Value to reinhardt_query::value::Value for parameter binding
@@ -826,6 +803,28 @@ impl<M: Model> Manager<M> {
 		}
 	}
 
+	/// Convert a typed [`QueryValue`](super::connection::QueryValue) back into a
+	/// reinhardt_query `Value` for the SQL builder. Inverse of
+	/// `sea_value_to_query_value`; lossless. The model already produced typed
+	/// values via `DbValue`, so there's no type inference here.
+	fn query_value_to_sea(v: super::connection::QueryValue) -> reinhardt_query::value::Value {
+		use super::connection::QueryValue;
+		use reinhardt_query::value::Value as RV;
+		match v {
+			QueryValue::Null => RV::Int(None),
+			QueryValue::Bool(b) => RV::Bool(Some(b)),
+			QueryValue::Int(i) => RV::BigInt(Some(i)),
+			QueryValue::Float(f) => RV::Double(Some(f)),
+			QueryValue::String(s) => RV::String(Some(Box::new(s))),
+			QueryValue::Bytes(b) => RV::Bytes(Some(Box::new(b))),
+			QueryValue::Timestamp(t) => RV::ChronoDateTimeUtc(Some(Box::new(t))),
+			QueryValue::Uuid(u) => RV::Uuid(Some(Box::new(u))),
+			QueryValue::Json(j) => RV::Json(Some(Box::new(j))),
+			// to_db_columns never yields Now (it's a SQL default sentinel).
+			QueryValue::Now => RV::Int(None),
+		}
+	}
+
 	/// Convert reinhardt_query::value::Value to QueryValue for database parameter binding
 	fn sea_value_to_query_value(v: reinhardt_query::value::Value) -> super::connection::QueryValue {
 		use super::connection::QueryValue;
@@ -878,8 +877,8 @@ impl<M: Model> Manager<M> {
 			reinhardt_query::value::Value::Uuid(Some(u)) => QueryValue::Uuid(*u),
 			reinhardt_query::value::Value::Uuid(None) => QueryValue::Null,
 
-			// JSON types - serialize to string
-			reinhardt_query::value::Value::Json(Some(json)) => QueryValue::String(json.to_string()),
+			// JSON types bind as json/jsonb, not text (a jsonb column rejects a text param)
+			reinhardt_query::value::Value::Json(Some(json)) => QueryValue::Json(*json),
 			reinhardt_query::value::Value::Json(None) => QueryValue::Null,
 
 			// For complex types or unsupported types, convert to null
@@ -955,46 +954,52 @@ impl<M: Model> Manager<M> {
 			reinhardt_core::exception::Error::Database("Model must have primary key".to_string())
 		})?;
 
-		let json = serde_json::to_value(model)
-			.map_err(|e| reinhardt_core::exception::Error::Database(e.to_string()))?;
-
-		let obj = json.as_object().ok_or_else(|| {
-			reinhardt_core::exception::Error::Database("Model must serialize to object".to_string())
-		})?;
+		use super::connection::QueryValue;
 
 		// Build reinhardt-query UPDATE statement
 		let mut stmt = Query::update();
 		stmt.table(Alias::new(M::table_name()));
 
-		// Add SET clauses for all fields except primary key
-		for (k, v) in obj
-			.iter()
-			.filter(|(k, _)| k.as_str() != M::primary_key_field())
-		{
-			if v.is_null() {
-				// Use untyped NULL to avoid PostgreSQL type mismatch errors
-				// (e.g., setting timestamp column to NULL would fail with Int(None))
-				stmt.value_expr(Alias::new(k.as_str()), Expr::cust("NULL"));
+		let pk_field = M::primary_key_field();
+
+		// Typed columns straight from the model — each value already the right
+		// QueryValue via its field's DbValue (see create_with_conn).
+		let columns = model.to_db_columns();
+
+		// SET every column except the primary key.
+		for (col, qv) in &columns {
+			let col = *col;
+			if col == pk_field {
+				continue;
+			}
+			if matches!(qv, QueryValue::Null) {
+				// Untyped NULL avoids a Postgres type-mismatch on a NULL bind.
+				stmt.value_expr(Alias::new(col), Expr::cust("NULL"));
 			} else {
-				stmt.value(Alias::new(k.as_str()), Self::json_to_sea_value(v));
+				stmt.value(Alias::new(col), Self::query_value_to_sea(qv.clone()));
 			}
 		}
 
-		// Add WHERE clause for primary key
-		// Try to parse as i64 first (common for primary keys), fallback to string
-		let pk_str = pk.to_string();
-		let pk_value = if let Ok(int_value) = pk_str.parse::<i64>() {
-			reinhardt_query::value::Value::BigInt(Some(int_value))
-		} else if let Ok(uuid) = Uuid::parse_str(&pk_str) {
-			reinhardt_query::value::Value::Uuid(Some(Box::new(uuid)))
-		} else {
-			reinhardt_query::value::Value::String(Some(Box::new(pk_str)))
-		};
-		stmt.and_where(Expr::col(Alias::new(M::primary_key_field())).eq(pk_value));
+		// WHERE on the primary key, carrying its declared type.
+		let pk_value = columns
+			.iter()
+			.find(|(c, _)| *c == pk_field)
+			.map(|(_, qv)| Self::query_value_to_sea(qv.clone()))
+			.unwrap_or_else(|| {
+				// The pk column is always present; this only guards the impossible.
+				let pk_str = pk.to_string();
+				if let Ok(int_value) = pk_str.parse::<i64>() {
+					reinhardt_query::value::Value::BigInt(Some(int_value))
+				} else if let Ok(uuid) = Uuid::parse_str(&pk_str) {
+					reinhardt_query::value::Value::Uuid(Some(Box::new(uuid)))
+				} else {
+					reinhardt_query::value::Value::String(Some(Box::new(pk_str)))
+				}
+			});
+		stmt.and_where(Expr::col(Alias::new(pk_field)).eq(pk_value));
 
-		// Add RETURNING clause with explicit column names from JSON object
-		// Note: Using Asterisk in columns() may not work correctly with reinhardt-query
-		let all_columns: Vec<_> = obj.keys().map(|k| Alias::new(k.as_str())).collect();
+		// RETURNING every column so the row hydrates back into M.
+		let all_columns: Vec<_> = columns.iter().map(|(c, _)| Alias::new(*c)).collect();
 		stmt.returning(all_columns);
 
 		let (sql, values) = build_update_sql(&stmt, conn.backend());
@@ -1005,9 +1010,7 @@ impl<M: Model> Manager<M> {
 			.collect();
 
 		let row = conn.query_one(&sql, values).await?;
-		// row.data is already serde_json::Value::Object so deserialize directly
-		serde_json::from_value(row.data.clone())
-			.map_err(|e| reinhardt_core::exception::Error::Database(e.to_string()))
+		M::from_db_columns(&row)
 	}
 
 	/// Delete a record using reinhardt-query for SQL injection protection
@@ -1246,9 +1249,7 @@ impl<M: Model> Manager<M> {
 		);
 
 		if let Ok(Some(row)) = conn.query_optional(&select_sql, vec![]).await {
-			// row.data is already serde_json::Value::Object so deserialize directly
-			let model: M = serde_json::from_value(row.data.clone())
-				.map_err(|e| reinhardt_core::exception::Error::Database(e.to_string()))?;
+			let model: M = M::from_db_columns(&row)?;
 			return Ok((model, false));
 		}
 
@@ -1269,9 +1270,7 @@ impl<M: Model> Manager<M> {
 		);
 
 		let row = conn.query_one(&insert_sql, vec![]).await?;
-		// row.data is already serde_json::Value::Object so deserialize directly
-		let model: M = serde_json::from_value(row.data.clone())
-			.map_err(|e| reinhardt_core::exception::Error::Database(e.to_string()))?;
+		let model: M = M::from_db_columns(&row)?;
 
 		Ok((model, true))
 	}
@@ -1349,9 +1348,7 @@ impl<M: Model> Manager<M> {
 				let sql_with_returning = sql + " RETURNING *";
 				let rows = conn.query(&sql_with_returning, vec![]).await?;
 				for row in rows {
-					// row.data is already serde_json::Value::Object so deserialize directly
-					let model: M = serde_json::from_value(row.data.clone())
-						.map_err(|e| reinhardt_core::exception::Error::Database(e.to_string()))?;
+					let model: M = M::from_db_columns(&row)?;
 					results.push(model);
 				}
 			}

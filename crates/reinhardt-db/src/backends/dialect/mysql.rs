@@ -44,6 +44,7 @@ impl MySqlBackend {
 			QueryValue::Timestamp(dt) => query.bind(dt),
 			// MySQL stores UUIDs as BINARY(16) or CHAR(36); we bind as string
 			QueryValue::Uuid(u) => query.bind(u.to_string()),
+			QueryValue::Json(v) => query.bind(v.to_string()),
 			QueryValue::Now => {
 				// MySQL uses NOW() function, which should be part of SQL string
 				// For binding, we use current UTC time
@@ -208,6 +209,7 @@ impl MySqlTransactionExecutor {
 			QueryValue::Timestamp(dt) => query.bind(dt),
 			// MySQL stores UUIDs as BINARY(16) or CHAR(36); we bind as string
 			QueryValue::Uuid(u) => query.bind(u.to_string()),
+			QueryValue::Json(v) => query.bind(v.to_string()),
 			QueryValue::Now => query.bind(chrono::Utc::now()),
 		}
 	}

@@ -2085,6 +2085,11 @@ pub(crate) fn model_derive_impl(mut input: DeriveInput) -> Result<TokenStream> {
 	};
 	// Generate field_metadata implementation
 	let field_metadata_items = generate_field_metadata(&field_infos, &fk_field_infos)?;
+	// Generate the typed write + read walkers (Model::to_db_columns / from_db_columns).
+	let to_db_columns_items = generate_to_db_columns(&field_infos)?;
+	let from_db_columns_inits = generate_from_db_columns(&field_infos)?;
+	let db_walker_core_crate = get_reinhardt_core_crate();
+	let db_walker_orm_crate = get_reinhardt_orm_crate();
 
 	// Generate auto-registration code
 	let registration_code = generate_registration_code(
@@ -2367,6 +2372,20 @@ pub(crate) fn model_derive_impl(mut input: DeriveInput) -> Result<TokenStream> {
 				]
 			}
 
+			fn to_db_columns(&self) -> Vec<(&'static str, #orm_crate::QueryValue)> {
+				vec![
+					#(#to_db_columns_items),*
+				]
+			}
+
+			fn from_db_columns(
+				row: &#db_walker_orm_crate::connection::QueryRow,
+			) -> #db_walker_core_crate::exception::Result<Self> {
+				Ok(Self {
+					#(#from_db_columns_inits),*
+				})
+			}
+
 			fn index_metadata() -> Vec<#orm_crate::inspection::IndexInfo> {
 				vec![
 					#(
@@ -2415,6 +2434,78 @@ pub(crate) fn model_derive_impl(mut input: DeriveInput) -> Result<TokenStream> {
 	};
 
 	Ok(expanded)
+}
+
+/// Generate the per-field write walker for `Model::to_db_columns`: each stored
+/// column mapped through `DbValue::to_db_value`, so the value keeps its
+/// declared Rust type instead of round-tripping through serde. Includes regular
+/// columns and FK `_id` columns; excludes relationship accessors, many-to-many,
+/// and skipped fields (they aren't stored columns).
+fn generate_to_db_columns(field_infos: &[FieldInfo]) -> Result<Vec<TokenStream>> {
+	let orm_crate = get_reinhardt_orm_crate();
+	let mut items = Vec::new();
+	for f in field_infos {
+		if f.config.skip {
+			continue;
+		}
+		if is_relationship_field_type(&f.ty) {
+			continue;
+		}
+		if f
+			.rel
+			.as_ref()
+			.map(|r| matches!(r.rel_type, crate::rel::RelationType::ManyToMany))
+			.unwrap_or(false)
+		{
+			continue;
+		}
+		let ident = &f.name;
+		let column = f
+			.config
+			.db_column
+			.clone()
+			.unwrap_or_else(|| f.name.to_string());
+		items.push(quote! {
+			(#column, #orm_crate::DbValue::to_db_value(&self.#ident))
+		});
+	}
+	Ok(items)
+}
+
+/// Generate the per-field read walker for `Model::from_db_columns`: each stored
+/// column reconstructed through `DbValue::from_db_value`; non-column fields
+/// (relationship accessors, M2M, skipped) are defaulted. Mirrors Django's
+/// `Model.from_db`, which fills the concrete columns and leaves accessors to
+/// their lazy descriptors.
+fn generate_from_db_columns(field_infos: &[FieldInfo]) -> Result<Vec<TokenStream>> {
+	let orm_crate = get_reinhardt_orm_crate();
+	let mut inits = Vec::new();
+	for f in field_infos {
+		let ident = &f.name;
+		let is_column = !f.config.skip
+			&& !is_relationship_field_type(&f.ty)
+			&& !f
+				.rel
+				.as_ref()
+				.map(|r| matches!(r.rel_type, crate::rel::RelationType::ManyToMany))
+				.unwrap_or(false);
+		if is_column {
+			let column = f
+				.config
+				.db_column
+				.clone()
+				.unwrap_or_else(|| f.name.to_string());
+			let ty = &f.ty;
+			inits.push(quote! {
+				#ident: <#ty as #orm_crate::DbValue>::from_db_value(row.query_value(#column))?
+			});
+		} else {
+			inits.push(quote! {
+				#ident: ::core::default::Default::default()
+			});
+		}
+	}
+	Ok(inits)
 }
 
 /// Generate FieldInfo construction for field_metadata()

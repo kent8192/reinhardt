@@ -44,6 +44,7 @@ impl PostgresBackend {
 			QueryValue::Bytes(b) => query.bind(b),
 			QueryValue::Timestamp(dt) => query.bind(dt),
 			QueryValue::Uuid(u) => query.bind(u),
+			QueryValue::Json(v) => query.bind(v),
 			QueryValue::Now => {
 				// PostgreSQL uses NOW() function, which should be part of SQL string
 				// For binding, we use current UTC time
@@ -167,6 +168,7 @@ impl PgTransactionExecutor {
 			QueryValue::Bytes(b) => query.bind(b),
 			QueryValue::Timestamp(dt) => query.bind(dt),
 			QueryValue::Uuid(u) => query.bind(u),
+			QueryValue::Json(v) => query.bind(v),
 			QueryValue::Now => query.bind(chrono::Utc::now()),
 		}
 	}
@@ -194,6 +196,9 @@ impl PostgresBackend {
 				row.insert(column_name.to_string(), QueryValue::Int(value));
 			} else if let Ok(value) = pg_row.try_get::<i32, _>(column_name) {
 				row.insert(column_name.to_string(), QueryValue::Int(value as i64));
+			} else if let Ok(value) = pg_row.try_get::<i16, _>(column_name) {
+				// smallint / int2 (Django SmallInteger, PositiveSmallInteger)
+				row.insert(column_name.to_string(), QueryValue::Int(value as i64));
 			} else if let Ok(value) = pg_row.try_get::<rust_decimal::Decimal, _>(column_name) {
 				// Convert DECIMAL/NUMERIC to f64 for Float storage
 				if let Some(f) = value.to_f64() {
@@ -203,6 +208,9 @@ impl PostgresBackend {
 				}
 			} else if let Ok(value) = pg_row.try_get::<f64, _>(column_name) {
 				row.insert(column_name.to_string(), QueryValue::Float(value));
+			} else if let Ok(value) = pg_row.try_get::<serde_json::Value, _>(column_name) {
+				// json/jsonb columns decode to a real JSON value, not the text form.
+				row.insert(column_name.to_string(), QueryValue::Json(value));
 			} else if let Ok(value) = pg_row.try_get::<String, _>(column_name) {
 				row.insert(column_name.to_string(), QueryValue::String(value));
 			} else if let Ok(value) = pg_row.try_get::<Vec<u8>, _>(column_name) {

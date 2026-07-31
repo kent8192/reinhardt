@@ -57,6 +57,8 @@ impl QueryRow {
 				}
 				QueryValue::Timestamp(dt) => serde_json::Value::String(dt.to_rfc3339()),
 				QueryValue::Uuid(u) => serde_json::Value::String(u.to_string()),
+				// json/jsonb: hand back the parsed value, not its text form.
+				QueryValue::Json(v) => v,
 				// NOW() should never appear in Row data (it's resolved to actual timestamp in database)
 				QueryValue::Now => panic!("QueryValue::Now should not appear in Row data"),
 			};
@@ -77,6 +79,32 @@ impl QueryRow {
 		self.data
 			.get(key)
 			.and_then(|v| serde_json::from_value(v.clone()).ok())
+	}
+
+	/// The typed value for a column, taken straight from the backend row rather
+	/// than the serde projection — this is what model hydration reads through
+	/// `DbValue::from_db_value`. A missing column yields `Null` (so `Option`
+	/// fields and deferred columns hydrate cleanly). Rows synthesized without a
+	/// backend `Row` (e.g. in tests) fall back to converting the serde value; the
+	/// uuid/timestamp `DbValue` impls accept the string form for that case.
+	pub fn query_value(&self, key: &str) -> QueryValue {
+		if let Some(row) = &self.inner
+			&& let Some(value) = row.data.get(key)
+		{
+			return value.clone();
+		}
+		match self.data.get(key) {
+			None | Some(serde_json::Value::Null) => QueryValue::Null,
+			Some(serde_json::Value::Bool(b)) => QueryValue::Bool(*b),
+			Some(serde_json::Value::Number(n)) => n
+				.as_i64()
+				.map(QueryValue::Int)
+				.unwrap_or_else(|| QueryValue::Float(n.as_f64().unwrap_or_default())),
+			Some(serde_json::Value::String(s)) => QueryValue::String(s.clone()),
+			Some(v @ (serde_json::Value::Object(_) | serde_json::Value::Array(_))) => {
+				QueryValue::Json(v.clone())
+			}
+		}
 	}
 }
 

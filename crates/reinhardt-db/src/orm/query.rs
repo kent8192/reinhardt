@@ -99,7 +99,7 @@ pub enum FilterOperator {
 	RangeOverlaps,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone)]
 /// Defines possible filter value values.
 pub enum FilterValue {
 	/// String variant.
@@ -4195,20 +4195,7 @@ where
 			}
 		};
 		rows.into_iter()
-			.map(|row| {
-				serde_json::from_value(serde_json::to_value(&row.data).map_err(|e| {
-					reinhardt_core::exception::Error::Database(format!(
-						"Serialization error: {}",
-						e
-					))
-				})?)
-				.map_err(|e| {
-					reinhardt_core::exception::Error::Database(format!(
-						"Deserialization error: {}",
-						e
-					))
-				})
-			})
+			.map(|row| T::from_db_columns(&row))
 			.collect()
 	}
 
@@ -4454,20 +4441,7 @@ where
 			}
 		};
 		rows.into_iter()
-			.map(|row| {
-				serde_json::from_value(serde_json::to_value(&row.data).map_err(|e| {
-					reinhardt_core::exception::Error::Database(format!(
-						"Serialization error: {}",
-						e
-					))
-				})?)
-				.map_err(|e| {
-					reinhardt_core::exception::Error::Database(format!(
-						"Deserialization error: {}",
-						e
-					))
-				})
-			})
+			.map(|row| T::from_db_columns(&row))
 			.collect()
 	}
 
@@ -5203,15 +5177,9 @@ where
 			)));
 		}
 
-		// Deserialize the single row into the model
+		// Hydrate the single row into the model via typed columns.
 		let row = &rows[0];
-		let value = serde_json::to_value(&row.data).map_err(|e| {
-			reinhardt_core::exception::Error::Database(format!("Serialization error: {}", e))
-		})?;
-
-		serde_json::from_value(value).map_err(|e| {
-			reinhardt_core::exception::Error::Database(format!("Deserialization error: {}", e))
-		})
+		T::from_db_columns(row)
 	}
 
 	/// Add an annotation to the QuerySet
@@ -6579,6 +6547,7 @@ fn query_value_to_sql_literal(value: &QueryValue) -> String {
 		),
 		QueryValue::Timestamp(v) => format!("'{}'", v.to_rfc3339()),
 		QueryValue::Uuid(v) => format!("'{}'", v),
+		QueryValue::Json(v) => format!("'{}'::jsonb", v.to_string().replace('\'', "''")),
 		QueryValue::Now => "NOW()".to_string(),
 	}
 }

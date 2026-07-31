@@ -1080,6 +1080,24 @@ fn parse_vec_expressions(expr: &Expr, field_name: &str) -> Result<Vec<Expr>> {
 			Ok(parsed.elems.into_iter().collect())
 		}
 		Expr::Array(array) => Ok(array.elems.iter().cloned().collect()),
+		Expr::Call(call)
+			if call.args.is_empty()
+				&& let Expr::Path(path) = &*call.func
+				&& path
+					.path
+					.segments
+					.iter()
+					.rev()
+					.nth(1)
+					.is_some_and(|segment| segment.ident == "Vec")
+				&& path
+					.path
+					.segments
+					.last()
+					.is_some_and(|segment| segment.ident == "new") =>
+		{
+			Ok(Vec::new())
+		}
 		_ => Err(MigrationError::InvalidMigration(format!(
 			"Malformed migration '{}' metadata",
 			field_name
@@ -4708,6 +4726,8 @@ fn parse_field_type_strict(expr: &Expr) -> Option<super::FieldType> {
 		Expr::Path(path) => match path.path.segments.last()?.ident.to_string().as_str() {
 			"BigInteger" => Some(FieldType::BigInteger),
 			"Integer" => Some(FieldType::Integer),
+			// Legacy migration sources represented auto-incrementing integers as Serial.
+			"Serial" => Some(FieldType::Integer),
 			"SmallInteger" => Some(FieldType::SmallInteger),
 			"TinyInt" => Some(FieldType::TinyInt),
 			"MediumInt" => Some(FieldType::MediumInt),

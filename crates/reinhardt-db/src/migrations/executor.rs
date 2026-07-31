@@ -29,6 +29,15 @@ fn planned_operation_context(
 	operation.and_then(Operation::pgvector_operation_kind)
 }
 
+#[cfg(feature = "sqlite")]
+fn can_execute_sqlite_recreation_sequentially(error: &MigrationError) -> bool {
+	matches!(
+		error,
+		MigrationError::InvalidMigration(message)
+			if message.starts_with("cannot safely plan SQLite recreation after opaque ")
+	)
+}
+
 fn validate_and_advance_migration_state(
 	migration: &Migration,
 	state: &mut super::ProjectState,
@@ -389,7 +398,7 @@ impl DatabaseMigrationExecutor {
 			requires_sqlite_recreation,
 		)
 		.await?;
-		let plan = self
+		let plan_result = self
 			.planner
 			.plan(
 				&self.connection,
@@ -398,8 +407,19 @@ impl DatabaseMigrationExecutor {
 				MigrationDirection::Forward,
 				&mut editor,
 			)
-			.await?;
-		self.execute_sql_plan(migration, plan, editor).await?;
+			.await;
+		match plan_result {
+			Ok(plan) => self.execute_sql_plan(migration, plan, editor).await?,
+			#[cfg(feature = "sqlite")]
+			Err(error) if can_execute_sqlite_recreation_sequentially(&error) => {
+				tracing::debug!(
+					"Falling back to sequential SQLite migration execution after opaque operation: {error}"
+				);
+				self.execute_sqlite_migration_sequentially(migration, editor)
+					.await?;
+			}
+			Err(error) => return Err(error),
+		}
 
 		tracing::debug!("Migration '{}' applied successfully", migration.id());
 
@@ -411,6 +431,17 @@ impl DatabaseMigrationExecutor {
 		migration: &Migration,
 		plan: MigrationSqlPlan,
 		mut editor: SchemaEditor,
+	) -> Result<()> {
+		self.execute_sql_plan_statements(migration, &plan, &mut editor)
+			.await?;
+		editor.finish().await
+	}
+
+	async fn execute_sql_plan_statements(
+		&self,
+		migration: &Migration,
+		plan: &MigrationSqlPlan,
+		editor: &mut SchemaEditor,
 	) -> Result<()> {
 		tracing::debug!(
 			"Executing migration '{}' (atomic={}, effective_atomic={})",
@@ -485,6 +516,31 @@ impl DatabaseMigrationExecutor {
 			}
 		}
 
+		Ok(())
+	}
+
+	#[cfg(feature = "sqlite")]
+	async fn execute_sqlite_migration_sequentially(
+		&self,
+		migration: &Migration,
+		mut editor: SchemaEditor,
+	) -> Result<()> {
+		for operation in &migration.operations {
+			let mut single_operation = migration.clone();
+			single_operation.operations = vec![operation.clone()];
+			let plan = self
+				.planner
+				.plan(
+					&self.connection,
+					&single_operation,
+					&ProjectState::default(),
+					MigrationDirection::Forward,
+					&mut editor,
+				)
+				.await?;
+			self.execute_sql_plan_statements(&single_operation, &plan, &mut editor)
+				.await?;
+		}
 		editor.finish().await
 	}
 

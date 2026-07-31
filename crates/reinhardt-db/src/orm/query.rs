@@ -12041,8 +12041,8 @@ mod tests {
 			.expect_err("temporal projections must reject grouped querysets");
 
 		assert_eq!(
-			error.kind(),
-			reinhardt_core::exception::ErrorKind::Unsupported
+			error.database_kind(),
+			Some(reinhardt_core::exception::DatabaseErrorKind::Unsupported)
 		);
 		assert_eq!(
 			error.to_string(),
@@ -12095,8 +12095,8 @@ mod tests {
 			.expect_err("temporal projections must reject querysets with lateral joins");
 
 		assert_eq!(
-			error.kind(),
-			reinhardt_core::exception::ErrorKind::Unsupported
+			error.database_kind(),
+			Some(reinhardt_core::exception::DatabaseErrorKind::Unsupported)
 		);
 		assert_eq!(
 			error.to_string(),
@@ -12122,8 +12122,8 @@ mod tests {
 			.expect_err("temporal projections must reject querysets with CTEs");
 
 		assert_eq!(
-			error.kind(),
-			reinhardt_core::exception::ErrorKind::Unsupported
+			error.database_kind(),
+			Some(reinhardt_core::exception::DatabaseErrorKind::Unsupported)
 		);
 		assert_eq!(
 			error.to_string(),

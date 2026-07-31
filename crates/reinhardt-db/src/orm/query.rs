@@ -12046,7 +12046,7 @@ mod tests {
 		);
 		assert_eq!(
 			error.to_string(),
-			"date and datetime projections are not supported on grouped querysets"
+			"Database error: date and datetime projections are not supported on grouped querysets"
 		);
 	}
 
@@ -12074,7 +12074,7 @@ mod tests {
 
 		assert_eq!(
 			error.to_string(),
-			"date and datetime projections are not supported on grouped querysets"
+			"Database error: date and datetime projections are not supported on grouped querysets"
 		);
 	}
 
@@ -12100,7 +12100,7 @@ mod tests {
 		);
 		assert_eq!(
 			error.to_string(),
-			"date and datetime projections are not supported on querysets with lateral joins"
+			"Database error: date and datetime projections are not supported on querysets with lateral joins"
 		);
 	}
 
@@ -12127,7 +12127,7 @@ mod tests {
 		);
 		assert_eq!(
 			error.to_string(),
-			"date and datetime projections are not supported on querysets with CTEs"
+			"Database error: date and datetime projections are not supported on querysets with CTEs"
 		);
 	}
 

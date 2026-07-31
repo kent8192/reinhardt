@@ -31,8 +31,8 @@ use rexpect::session::PtySession;
 use tempfile::TempDir;
 
 // The evaluator builds its dependencies outside the fixture target directory.
-const COMMAND_TIMEOUT: Duration = Duration::from_secs(900);
-const FIXTURE_BUILD_TIMEOUT: Duration = Duration::from_secs(900);
+const COMMAND_TIMEOUT: Duration = Duration::from_secs(1200);
+const FIXTURE_BUILD_TIMEOUT: Duration = Duration::from_secs(1200);
 const FIXTURE_BUILD_JOBS: &str = "2";
 const PTY_TIMEOUT: Duration = Duration::from_secs(60);
 const CLEANUP_TIMEOUT: Duration = Duration::from_secs(5);

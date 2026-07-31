@@ -539,10 +539,6 @@ impl FilesystemRepository {
 				..
 			}
 			| Operation::AlterColumn {
-				old_definition: Some(_),
-				..
-			}
-			| Operation::AlterColumn {
 				mysql_options: Some(_),
 				..
 			}

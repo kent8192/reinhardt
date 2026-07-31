@@ -1740,10 +1740,11 @@ mod tests {
 
 		let output = parse_and_generate(input).to_string();
 
-		assert!(output.contains("reinhardt_pages::callback::typed_custom_event_handler"));
-		assert!(output.contains("::reinhardt_pages::event::EventName::Custom"));
+		assert!(output.contains("callback :: typed_custom_event_handler"));
+		assert!(output.contains("event :: CustomEvent < crate :: Selected >"));
+		assert!(output.contains("event :: EventName :: Custom"));
 		assert!(output.contains("\"item-selected\""));
-		assert!(output.contains("let _ = event;"));
+		assert!(output.contains("let _ = event"));
 	}
 
 	#[test]
@@ -1758,10 +1759,9 @@ mod tests {
 
 		let output = parse_and_generate(input).to_string();
 
-		assert!(output.contains(
-			"reinhardt_pages::callback::typed_async_custom_event_handler::<crate::Selected, _, _>",
-		));
-		assert!(output.contains("::reinhardt_pages::event::EventName::Custom"));
+		assert!(output.contains("callback :: typed_async_custom_event_handler"));
+		assert!(output.contains("event :: CustomEvent < crate :: Selected >"));
+		assert!(output.contains("event :: EventName :: Custom"));
 		assert!(output.contains("\"item-loaded\""));
 	}
 
@@ -1773,8 +1773,8 @@ mod tests {
 
 		let output = parse_and_generate(input).to_string();
 
-		assert!(output.contains("reinhardt_pages::callback::typed_custom_event_handler"));
-		assert!(output.contains("::reinhardt_pages::event::EventName::Custom"));
+		assert!(output.contains("callback :: typed_custom_event_handler"));
+		assert!(output.contains("event :: EventName :: Custom"));
 		assert!(output.contains("\"item-focused\""));
 		assert!(output.contains("_event"));
 	}

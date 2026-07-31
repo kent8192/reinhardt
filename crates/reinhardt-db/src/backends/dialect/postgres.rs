@@ -339,9 +339,9 @@ impl PostgresBackend {
 					let value = std::str::from_utf8(value.as_bytes().map_err(|error| {
 						DatabaseError::new(DatabaseErrorKind::Serialization, error.to_string())
 					})?)
-						.map_err(|error| {
-							DatabaseError::new(DatabaseErrorKind::Serialization, error.to_string())
-						})?;
+					.map_err(|error| {
+						DatabaseError::new(DatabaseErrorKind::Serialization, error.to_string())
+					})?;
 					row.insert(
 						column_name.to_string(),
 						QueryValue::String(value.to_string()),

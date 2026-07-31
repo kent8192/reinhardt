@@ -3176,8 +3176,8 @@ impl MySqlQueryBuilder {
 			Blob => "BLOB".to_string(),
 			Uuid => "CHAR(36)".to_string(), // UUID as CHAR(36) in MySQL
 			Json => "JSON".to_string(),
-			JsonBinary => "JSON".to_string(), // MySQL JSON is binary
-			Array(_) => "JSON".to_string(),   // MySQL doesn't have ARRAY, use JSON
+			Jsonb => "JSON".to_string(),    // MySQL JSON is binary
+			Array(_) => "JSON".to_string(), // MySQL doesn't have ARRAY, use JSON
 			Custom(name) => name.clone(),
 		}
 	}

@@ -54,7 +54,7 @@ fn field_type_to_tokens(field_type: &FieldType) -> TokenStream {
 
 		// JSON types
 		FieldType::Json => quote! { FieldType::Json },
-		FieldType::JsonBinary => quote! { FieldType::JsonBinary },
+		FieldType::Jsonb => quote! { FieldType::Jsonb },
 
 		// PostgreSQL-specific types
 		FieldType::Array(inner) => {
@@ -916,7 +916,7 @@ impl ToTokens for ColumnDefinition {
 
 			// JSON types
 			FieldType::Json => quote! { FieldType::Json },
-			FieldType::JsonBinary => quote! { FieldType::JsonBinary },
+			FieldType::Jsonb => quote! { FieldType::Jsonb },
 
 			// PostgreSQL-specific types
 			FieldType::Array(inner) => {

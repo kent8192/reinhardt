@@ -77,8 +77,8 @@ pub enum FieldType {
 	// JSON types
 	/// Json variant.
 	Json,
-	/// JsonBinary variant.
-	JsonBinary, // PostgreSQL JSONB
+	/// Jsonb variant.
+	Jsonb, // PostgreSQL JSONB
 
 	// PostgreSQL-specific types
 	/// PostgreSQL Array type with inner element type
@@ -189,7 +189,7 @@ impl FieldType {
 				SqlDialect::Mysql => "CHAR(36)".to_string(), // MySQL doesn't have native UUID
 				SqlDialect::Sqlite => "TEXT".to_string(),    // SQLite doesn't have native UUID
 			},
-			FieldType::JsonBinary => match dialect {
+			FieldType::Jsonb => match dialect {
 				SqlDialect::Postgres | SqlDialect::Cockroachdb => "JSONB".to_string(),
 				SqlDialect::Mysql | SqlDialect::Sqlite => "JSON".to_string(), // Fallback to JSON
 			},
@@ -297,7 +297,7 @@ impl FieldType {
 			FieldType::LongBlob => "LONGBLOB".to_string(),
 			FieldType::Bytea => "BYTEA".to_string(),
 			FieldType::Json => "JSON".to_string(),
-			FieldType::JsonBinary => "JSONB".to_string(),
+			FieldType::Jsonb => "JSONB".to_string(),
 			// PostgreSQL-specific types
 			FieldType::Array(inner) => format!("{}[]", inner.to_sql_string()),
 			FieldType::HStore => "HSTORE".to_string(),

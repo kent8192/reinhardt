@@ -897,7 +897,7 @@ fn extract_field_type(
 						"LongBlob" => Some(FieldType::LongBlob),
 						"Bytea" => Some(FieldType::Bytea),
 						"Json" => Some(FieldType::Json),
-						"JsonBinary" => Some(FieldType::JsonBinary),
+						"Jsonb" => Some(FieldType::Jsonb),
 						"Uuid" => Some(FieldType::Uuid),
 						"Year" => Some(FieldType::Year),
 						_ => Some(FieldType::Custom(segments.join("::"))),

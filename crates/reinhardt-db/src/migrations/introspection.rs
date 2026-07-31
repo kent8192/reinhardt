@@ -167,7 +167,7 @@ impl PostgresIntrospector {
 
 			// JSON
 			"json" => FieldType::Json,
-			"jsonb" => FieldType::JsonBinary,
+			"jsonb" => FieldType::Jsonb,
 
 			// UUID
 			"uuid" => FieldType::Uuid,
@@ -1045,7 +1045,7 @@ impl SQLiteIntrospector {
 			"DATETIME" => FieldType::DateTime,
 			"TIMESTAMP" => FieldType::DateTime,
 			"JSON" => FieldType::Json,
-			"JSONB" => FieldType::JsonBinary,
+			"JSONB" => FieldType::Jsonb,
 			"UUID" => FieldType::Uuid,
 			"NUMERIC" => FieldType::Decimal {
 				precision: 10,

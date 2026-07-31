@@ -4191,7 +4191,7 @@ impl Operation {
 			FieldType::Float => col_def.float(),
 			FieldType::Double | FieldType::Real => col_def.double(),
 			FieldType::Json => col_def.json(),
-			FieldType::JsonBinary => col_def.json_binary(),
+			FieldType::Jsonb => col_def.jsonb(),
 			FieldType::Uuid => col_def.uuid(),
 			FieldType::Binary | FieldType::Bytea => col_def.binary(0),
 			FieldType::Blob | FieldType::TinyBlob | FieldType::MediumBlob | FieldType::LongBlob => {

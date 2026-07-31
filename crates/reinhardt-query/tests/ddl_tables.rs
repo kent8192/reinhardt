@@ -641,7 +641,7 @@ async fn test_postgres_create_table_all_column_types(
 		)
 		.col(
 			ColumnDef::new("jsonb_val")
-				.column_type(ColumnType::JsonBinary)
+				.column_type(ColumnType::Jsonb)
 				.not_null(false),
 		);
 

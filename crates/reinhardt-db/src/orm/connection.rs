@@ -42,7 +42,7 @@ impl From<DatabaseType> for DatabaseBackend {
 }
 
 /// Query row wrapper for ORM compatibility
-#[derive(serde::Serialize)]
+#[derive(Debug, PartialEq, serde::Serialize)]
 pub struct QueryRow {
 	/// The data.
 	pub data: serde_json::Value,

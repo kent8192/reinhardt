@@ -267,7 +267,7 @@ async fn postgres_row_locks_follow_transaction_boundaries_and_wait_policies() {
 #[serial(row_locking_integration)]
 async fn mysql_row_locks_follow_transaction_boundaries_and_wait_policies() {
 	let (_container, _pool, _port, url) = mysql_container().await;
-	run_row_lock_contract(&url, "3572").await;
+	run_row_lock_contract(&url, "HY000").await;
 }
 
 #[tokio::test]

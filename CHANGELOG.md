@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.4](https://github.com/kent8192/reinhardt-web/compare/reinhardt-web@v0.3.3...reinhardt-web@v0.3.4) - 2026-07-30
+
+### Documentation
+
+- add release announcement(s)
+
+### Fixed
+
+- *(ci)* stream auto-fix additions from staged blobs
+- *(orm)* preserve typed keys in manager deletion
+
 ## [0.3.3](https://github.com/kent8192/reinhardt-web/compare/reinhardt-web@v0.3.2...reinhardt-web@v0.3.3) - 2026-07-28
 
 ### Fixed

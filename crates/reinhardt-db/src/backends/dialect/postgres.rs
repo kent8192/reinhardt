@@ -336,7 +336,9 @@ impl PostgresBackend {
 				if value.is_null() {
 					row.insert(column_name.to_string(), QueryValue::Null);
 				} else {
-					let value = std::str::from_utf8(value.as_bytes().map_err(map_sqlx_error)?)
+					let value = std::str::from_utf8(value.as_bytes().map_err(|error| {
+						DatabaseError::new(DatabaseErrorKind::Serialization, error.to_string())
+					})?)
 						.map_err(|error| {
 							DatabaseError::new(DatabaseErrorKind::Serialization, error.to_string())
 						})?;

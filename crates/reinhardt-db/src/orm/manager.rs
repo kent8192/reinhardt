@@ -3128,7 +3128,7 @@ impl<M: Model> Default for Manager<M> {
 
 #[cfg(test)]
 mod tests {
-	use super::{Manager, field_codec_error};
+		use super::{build_delete_sql, Manager, field_codec_error};
 	#[cfg(feature = "pgvector")]
 	use crate::backends::types::QueryValue;
 	use crate::orm::Json;

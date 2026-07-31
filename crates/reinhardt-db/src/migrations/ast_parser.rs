@@ -1080,6 +1080,34 @@ fn parse_vec_expressions(expr: &Expr, field_name: &str) -> Result<Vec<Expr>> {
 			Ok(parsed.elems.into_iter().collect())
 		}
 		Expr::Array(array) => Ok(array.elems.iter().cloned().collect()),
+		Expr::Call(call) => {
+			let Expr::Path(func_path) = &*call.func else {
+				return Err(MigrationError::InvalidMigration(format!(
+					"Malformed migration '{}' metadata",
+					field_name
+				)));
+			};
+			if call.args.is_empty()
+				&& func_path.path.segments.len() >= 1
+				&& func_path
+					.path
+					.segments
+					.last()
+					.is_some_and(|segment| segment.ident == "new")
+				&& func_path
+					.path
+					.segments
+					.iter()
+					.any(|segment| segment.ident == "Vec")
+			{
+				Ok(Vec::new())
+			} else {
+				Err(MigrationError::InvalidMigration(format!(
+					"Malformed migration '{}' metadata",
+					field_name
+				)))
+			}
+		}
 		_ => Err(MigrationError::InvalidMigration(format!(
 			"Malformed migration '{}' metadata",
 			field_name
@@ -2186,12 +2214,14 @@ fn parse_column_definition_strict(expr: &Expr, context: &str) -> Result<super::C
 	let name = parse_string_field_strict(&column.fields, "name", context)?;
 	let type_expression = strict_field_expression(&column.fields, "type_definition")
 		.ok_or_else(|| strict_payload_error(context, "type_definition"))?;
+	let is_serial_type = is_field_type_path_variant(type_expression, "Serial");
 	let type_definition = parse_field_type_strict(type_expression)
 		.ok_or_else(|| strict_payload_error(context, "type_definition"))?;
 	let not_null = parse_bool_field_strict(&column.fields, "not_null", context)?;
 	let unique = parse_bool_field_strict(&column.fields, "unique", context)?;
 	let primary_key = parse_bool_field_strict(&column.fields, "primary_key", context)?;
-	let auto_increment = parse_bool_field_strict(&column.fields, "auto_increment", context)?;
+	let auto_increment =
+		parse_bool_field_strict(&column.fields, "auto_increment", context)? || is_serial_type;
 	let default = parse_optional_string_field_strict(&column.fields, "default", context)?;
 	let generated = parse_optional_generated_field_strict(&column.fields, "generated", context)?;
 	let domain = parse_optional_domain_field_strict(&column.fields, "domain", context)?;
@@ -4147,7 +4177,31 @@ mod tests {
 		assert_eq!(error.to_string(), expected);
 	}
 
-	#[rstest]
+	#[test]
+	fn strict_metadata_accepts_vec_new_relationship_metadata() {
+		let source = r#"pub fn migration() -> Migration {
+			Migration {
+				operations: vec![],
+				dependencies: Vec::new(),
+				replaces: Vec::new(),
+				swappable_dependencies: Vec::new(),
+				optional_dependencies: Vec::new(),
+			}
+		}"#;
+
+		let ast = syn::parse_file(source).unwrap();
+
+		let migration = extract_migration_metadata_strict(&ast, "blog", "0001_initial").unwrap();
+
+		assert_eq!(migration.app_label, "blog");
+		assert_eq!(migration.name, "0001_initial");
+		assert_eq!(migration.dependencies, Vec::<(String, String)>::new());
+		assert_eq!(migration.replaces, Vec::<(String, String)>::new());
+		assert_eq!(migration.swappable_dependencies.len(), 0);
+		assert_eq!(migration.optional_dependencies.len(), 0);
+	}
+
+	#[test]
 	fn strict_metadata_preserves_catalog_flags_and_replacements() {
 		// Arrange
 		let ast = syn::parse_file(
@@ -4706,6 +4760,7 @@ fn parse_field_type_strict(expr: &Expr) -> Option<super::FieldType> {
 
 	match expr {
 		Expr::Path(path) => match path.path.segments.last()?.ident.to_string().as_str() {
+			"Serial" => Some(FieldType::Integer),
 			"BigInteger" => Some(FieldType::BigInteger),
 			"Integer" => Some(FieldType::Integer),
 			"SmallInteger" => Some(FieldType::SmallInteger),
@@ -4849,6 +4904,16 @@ fn parse_field_type_strict(expr: &Expr) -> Option<super::FieldType> {
 	}
 }
 
+fn is_field_type_path_variant(expression: &Expr, variant: &str) -> bool {
+	let Expr::Path(path) = expression else {
+		return false;
+	};
+	path.path
+		.segments
+		.last()
+		.is_some_and(|segment| segment.ident == variant)
+}
+
 fn parse_u32_field_exact(
 	fields: &syn::punctuated::Punctuated<syn::FieldValue, syn::token::Comma>,
 	field_name: &str,
@@ -4904,6 +4969,7 @@ fn extract_field_type(
 					let variant = last_segment.ident.to_string();
 
 					return match variant.as_str() {
+						"Serial" => Some(FieldType::Integer),
 						"Integer" => Some(FieldType::Integer),
 						"BigInteger" => Some(FieldType::BigInteger),
 						"SmallInteger" => Some(FieldType::SmallInteger),

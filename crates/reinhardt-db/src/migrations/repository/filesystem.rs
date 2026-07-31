@@ -7,7 +7,7 @@ use crate::migrations::ast_parser;
 use crate::migrations::dependency::DependencyCondition;
 use async_trait::async_trait;
 use cap_std::ambient_authority;
-use cap_std::fs::{Dir, File, Metadata, MetadataExt, OpenOptions};
+use cap_std::fs::{Dir, File, OpenOptions};
 use quote::quote;
 use reinhardt_query::prelude::{
 	ColumnType as QueryColumnType, GeneratedStorage, SchemaBinOper, SchemaExpr, SchemaFunc, Value,
@@ -47,43 +47,9 @@ struct DirectoryIdentity {
 	file: u64,
 }
 
-#[cfg(any(unix, target_os = "wasi", target_os = "vxworks"))]
-fn directory_identity(metadata: &Metadata) -> std::io::Result<DirectoryIdentity> {
-	Ok(DirectoryIdentity {
-		device: MetadataExt::dev(metadata),
-		file: MetadataExt::ino(metadata),
-	})
-}
-
-#[cfg(windows)]
-fn directory_identity(metadata: &Metadata) -> std::io::Result<DirectoryIdentity> {
-	let device = MetadataExt::volume_serial_number(metadata)
-		.map(u64::from)
-		.ok_or_else(|| {
-			std::io::Error::new(
-				std::io::ErrorKind::Unsupported,
-				"root directory volume identity is unavailable",
-			)
-		})?;
-	let file = MetadataExt::file_index(metadata).ok_or_else(|| {
-		std::io::Error::new(
-			std::io::ErrorKind::Unsupported,
-			"root directory file identity is unavailable",
-		)
-	})?;
-	Ok(DirectoryIdentity { device, file })
-}
-
-#[cfg(not(any(unix, windows, target_os = "wasi", target_os = "vxworks")))]
-fn directory_identity(_metadata: &Metadata) -> std::io::Result<DirectoryIdentity> {
-	Err(std::io::Error::new(
-		std::io::ErrorKind::Unsupported,
-		"root directory identity is unavailable on this platform",
-	))
-}
-
 #[cfg(all(unix, not(target_os = "vxworks")))]
-fn path_directory_identity(metadata: &std::fs::Metadata) -> std::io::Result<DirectoryIdentity> {
+fn root_directory_identity(path: &Path) -> std::io::Result<DirectoryIdentity> {
+	let metadata = std::fs::symlink_metadata(path)?;
 	use std::os::unix::fs::MetadataExt;
 
 	Ok(DirectoryIdentity {
@@ -92,8 +58,24 @@ fn path_directory_identity(metadata: &std::fs::Metadata) -> std::io::Result<Dire
 	})
 }
 
+#[cfg(windows)]
+fn root_directory_identity(path: &Path) -> std::io::Result<DirectoryIdentity> {
+	use std::collections::hash_map::DefaultHasher;
+	use std::hash::{Hash, Hasher};
+
+	let canonical = std::fs::canonicalize(path)?;
+	let mut hasher = DefaultHasher::new();
+	canonical.to_string_lossy().hash(&mut hasher);
+	let key = hasher.finish();
+	Ok(DirectoryIdentity {
+		device: key,
+		file: key,
+	})
+}
+
 #[cfg(target_os = "wasi")]
-fn path_directory_identity(metadata: &std::fs::Metadata) -> std::io::Result<DirectoryIdentity> {
+fn root_directory_identity(path: &Path) -> std::io::Result<DirectoryIdentity> {
+	let metadata = std::fs::symlink_metadata(path)?;
 	use std::os::wasi::fs::MetadataExt;
 
 	Ok(DirectoryIdentity {
@@ -103,7 +85,8 @@ fn path_directory_identity(metadata: &std::fs::Metadata) -> std::io::Result<Dire
 }
 
 #[cfg(target_os = "vxworks")]
-fn path_directory_identity(metadata: &std::fs::Metadata) -> std::io::Result<DirectoryIdentity> {
+fn root_directory_identity(path: &Path) -> std::io::Result<DirectoryIdentity> {
+	let metadata = std::fs::symlink_metadata(path)?;
 	use std::os::vxworks::fs::MetadataExt;
 
 	Ok(DirectoryIdentity {
@@ -112,30 +95,9 @@ fn path_directory_identity(metadata: &std::fs::Metadata) -> std::io::Result<Dire
 	})
 }
 
-#[cfg(windows)]
-fn path_directory_identity(metadata: &std::fs::Metadata) -> std::io::Result<DirectoryIdentity> {
-	use std::os::windows::fs::MetadataExt;
-
-	let device = metadata
-		.volume_serial_number()
-		.map(u64::from)
-		.ok_or_else(|| {
-			std::io::Error::new(
-				std::io::ErrorKind::Unsupported,
-				"root directory volume identity is unavailable",
-			)
-		})?;
-	let file = metadata.file_index().ok_or_else(|| {
-		std::io::Error::new(
-			std::io::ErrorKind::Unsupported,
-			"root directory file identity is unavailable",
-		)
-	})?;
-	Ok(DirectoryIdentity { device, file })
-}
-
 #[cfg(not(any(unix, windows, target_os = "wasi", target_os = "vxworks")))]
-fn path_directory_identity(_metadata: &std::fs::Metadata) -> std::io::Result<DirectoryIdentity> {
+fn root_directory_identity(path: &Path) -> std::io::Result<DirectoryIdentity> {
+	let _ = path;
 	Err(std::io::Error::new(
 		std::io::ErrorKind::Unsupported,
 		"root directory identity is unavailable on this platform",
@@ -628,10 +590,6 @@ impl FilesystemRepository {
 				..
 			}
 			| Operation::AlterColumn {
-				old_definition: Some(_),
-				..
-			}
-			| Operation::AlterColumn {
 				mysql_options: Some(_),
 				..
 			}
@@ -866,7 +824,7 @@ impl FilesystemRepository {
 		let formatted = Self::format_with_rustfmt(source)?;
 		std::fs::create_dir_all(&self.root_dir)?;
 		let root = Dir::open_ambient_dir(&self.root_dir, ambient_authority())?;
-		let root_identity = directory_identity(&root.dir_metadata()?)?;
+		let root_identity = root_directory_identity(&self.root_dir)?;
 		before_open()?;
 		self.validate_root_identity(root_identity, || Ok(()))?;
 		root.create_dir_all(app_label)?;
@@ -918,7 +876,8 @@ impl FilesystemRepository {
 					"Migration root directory identity is unavailable: {error}"
 				))
 			})?;
-		let actual = directory_identity(&ambient.dir_metadata()?).map_err(|error| {
+		let _ = ambient;
+		let actual = root_directory_identity(&self.root_dir).map_err(|error| {
 			MigrationError::PathTraversal(format!(
 				"Migration root directory identity is unavailable: {error}"
 			))
@@ -935,7 +894,7 @@ impl FilesystemRepository {
 				 {expected:?}, found {actual:?}"
 			)));
 		}
-		let after_open_identity = path_directory_identity(&after_open).map_err(|error| {
+		let after_open_identity = root_directory_identity(&self.root_dir).map_err(|error| {
 			MigrationError::PathTraversal(format!(
 				"Migration root directory identity is unavailable: {error}"
 			))

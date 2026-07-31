@@ -7,5 +7,8 @@ error[E0599]: no associated function or constant named `new` found for struct `U
 note: if you're trying to build a new `UniqueFieldRef<Article, std::string::String>`, consider using `UniqueFieldRef::<M, T>::from_model_field` which returns `UniqueFieldRef<_, _>`
  --> $WORKSPACE/crates/reinhardt-db/src/orm/expressions.rs
   |
-  | 	pub const unsafe fn from_model_field(
-  | 	^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  | /     pub const unsafe fn from_model_field(
+  |      logical_name: &'static str,
+  |      column_name: &'static str,
+  | |     ) -> Self {
+  | |_____________^

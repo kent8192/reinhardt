@@ -2307,7 +2307,7 @@ async fn read_postgres_schema(
 				}
 				None => {
 					return Err(MigrationError::IntrospectionError(format!(
-						"Table `{name}` was not found"
+						"Requested table not found: {name}"
 					)));
 				}
 			};
@@ -2404,7 +2404,7 @@ async fn read_mysql_schema(
 				}
 				None => {
 					return Err(MigrationError::IntrospectionError(format!(
-						"Table `{name}` was not found"
+						"Requested table not found: {name}"
 					)));
 				}
 			};
@@ -2464,7 +2464,7 @@ async fn read_sqlite_schema(
 				}
 				None => {
 					return Err(MigrationError::IntrospectionError(format!(
-						"Table `{name}` was not found"
+						"Requested table not found: {name}"
 					)));
 				}
 			};

@@ -320,10 +320,7 @@ fn contains_aggregate(expr: &SimpleExpr) -> bool {
 		SimpleExpr::Case(case) => {
 			case.when_clauses.iter().any(|(condition, result)| {
 				contains_aggregate(condition) || contains_aggregate(result)
-			}) || case
-				.else_clause
-				.as_ref()
-				.is_some_and(|result| contains_aggregate(result))
+			}) || case.else_clause.as_ref().is_some_and(contains_aggregate)
 		}
 		SimpleExpr::Window { func, window } => {
 			contains_aggregate(func)
@@ -358,10 +355,7 @@ fn contains_window(expr: &SimpleExpr) -> bool {
 			case.when_clauses
 				.iter()
 				.any(|(condition, result)| contains_window(condition) || contains_window(result))
-				|| case
-					.else_clause
-					.as_ref()
-					.is_some_and(|result| contains_window(result))
+				|| case.else_clause.as_ref().is_some_and(contains_window)
 		}
 		SimpleExpr::Column(_)
 		| SimpleExpr::TableColumn(_, _)

@@ -10287,7 +10287,7 @@ mod tests {
 		);
 		assert_eq!(
 			output.body,
-			super::ExplainBody::Rows(vec![serde_json::Map::from_iter([
+			super::ExplainBody::Rows(vec![serde_json::Value::Object(serde_json::Map::from_iter([
 				("id".to_owned(), serde_json::Value::from(2)),
 				("parent".to_owned(), serde_json::Value::from(0)),
 				("notused".to_owned(), serde_json::Value::from(0)),
@@ -10295,7 +10295,7 @@ mod tests {
 					"detail".to_owned(),
 					serde_json::Value::String("SCAN test_users".to_owned()),
 				),
-			])])
+			]))])
 		);
 	}
 

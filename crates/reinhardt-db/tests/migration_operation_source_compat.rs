@@ -607,7 +607,7 @@ async fn migration_renderer_compatibility_matrix_covers_every_operation_variant(
 			Operation::DropTable { .. } => ("DropTable", true),
 			Operation::AddColumn { .. } => ("AddColumn", true),
 			Operation::DropColumn { .. } => ("DropColumn", true),
-			Operation::AlterColumn { .. } => ("AlterColumn", false),
+			Operation::AlterColumn { .. } => ("AlterColumn", true),
 			Operation::RenameTable { .. } => ("RenameTable", true),
 			Operation::RenameColumn { .. } => ("RenameColumn", true),
 			Operation::AddConstraint { .. } => ("AddConstraint", true),

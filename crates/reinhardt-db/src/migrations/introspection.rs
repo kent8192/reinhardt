@@ -1114,6 +1114,19 @@ fn decode_optional_mysql_text(
 }
 
 #[cfg(feature = "mysql")]
+fn decode_optional_mysql_integer(
+	row: &sqlx::mysql::MySqlRow,
+	index: usize,
+	kind: &str,
+) -> Result<Option<i64>> {
+	use sqlx::Row;
+
+	row.try_get(index).map_err(|error| {
+		MigrationError::IntrospectionError(format!("Failed to read MySQL {}: {}", kind, error))
+	})
+}
+
+#[cfg(feature = "mysql")]
 fn decode_optional_mysql_unsigned_integer(
 	row: &sqlx::mysql::MySqlRow,
 	index: usize,
@@ -1307,7 +1320,7 @@ impl MySQLIntrospector {
 			let generation_expression =
 				decode_optional_mysql_text(row, 7, "generation expression")?;
 			let char_max_length =
-				decode_optional_mysql_unsigned_integer(row, 8, "character maximum length")?;
+				decode_optional_mysql_integer(row, 8, "character maximum length")?;
 			let numeric_precision =
 				decode_optional_mysql_unsigned_integer(row, 9, "numeric precision")?;
 			let numeric_scale = decode_optional_mysql_unsigned_integer(row, 10, "numeric scale")?;

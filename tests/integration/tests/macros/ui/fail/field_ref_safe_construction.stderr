@@ -2,7 +2,7 @@ error[E0599]: no associated function or constant named `new` found for struct `r
  --> tests/macros/ui/fail/field_ref_safe_construction.rs:6:36
   |
 6 |     let _ = FieldRef::<User, String>::new("forged");
-   |                                       ^^^ associated function or constant not found in `reinhardt_db::orm::FieldRef<User, std::string::String>`
+  |                                       ^^^ associated function or constant not found in `reinhardt_db::orm::FieldRef<User, std::string::String>`
   |
 note: if you're trying to build a new `reinhardt_db::orm::FieldRef<User, std::string::String>`, consider using `reinhardt_db::orm::FieldRef::<M, T>::from_model_field` which returns `reinhardt_db::orm::FieldRef<_, _>`
  --> $WORKSPACE/crates/reinhardt-db/src/orm/expressions.rs

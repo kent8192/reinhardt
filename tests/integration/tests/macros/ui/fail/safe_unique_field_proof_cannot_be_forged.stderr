@@ -2,6 +2,6 @@ error[E0133]: call to unsafe function `UniqueFieldRef::<M, T>::from_model_field`
  --> tests/macros/ui/fail/safe_unique_field_proof_cannot_be_forged.rs:6:10
   |
 6 |     let _ = UniqueFieldRef::<Article, String>::from_model_field("title", "title");
-  |          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ call to unsafe function
+  |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ call to unsafe function
   |
   = note: consult the function's documentation for information on how to avoid undefined behavior

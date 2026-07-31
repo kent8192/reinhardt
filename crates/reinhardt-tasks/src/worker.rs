@@ -12,7 +12,7 @@ use crate::{
 use chrono::Utc;
 use std::sync::Arc;
 use std::time::Duration;
-use tokio::sync::{Semaphore, broadcast};
+use tokio::sync::broadcast;
 
 /// Worker configuration
 ///
@@ -165,7 +165,7 @@ impl Default for WorkerConfig {
 ///
 /// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
 /// let config = WorkerConfig::new("worker-1".to_string());
-/// let worker = Worker::new(config);
+/// let worker = Arc::new(Worker::new(config));
 /// let backend = Arc::new(DummyBackend::new());
 ///
 /// // Start worker in background
@@ -185,8 +185,6 @@ pub struct Worker {
 	task_lock: Option<Arc<dyn TaskLock>>,
 	result_backend: Option<Arc<dyn ResultBackend>>,
 	webhook_senders: Vec<Arc<dyn WebhookSender>>,
-	/// Semaphore that enforces the configured concurrency limit
-	concurrency_semaphore: Arc<Semaphore>,
 }
 
 impl Worker {
@@ -202,7 +200,6 @@ impl Worker {
 	/// ```
 	pub fn new(config: WorkerConfig) -> Self {
 		let (shutdown_tx, _) = broadcast::channel(1);
-		let concurrency_semaphore = Arc::new(Semaphore::new(config.concurrency));
 
 		// Create webhook senders from configuration
 		let webhook_senders: Vec<Arc<dyn WebhookSender>> = config
@@ -220,7 +217,6 @@ impl Worker {
 			task_lock: None,
 			result_backend: None,
 			webhook_senders,
-			concurrency_semaphore,
 		}
 	}
 
@@ -286,108 +282,102 @@ impl Worker {
 	/// let worker = Worker::new(WorkerConfig::default());
 	/// let backend = Arc::new(DummyBackend::new());
 	///
-	/// worker.run(backend).await?;
+	/// Arc::new(worker).run(backend).await?;
 	/// # Ok(())
 	/// # }
 	/// ```
 	pub async fn run(
-		&self,
+		self: Arc<Self>,
 		backend: Arc<dyn TaskBackend>,
 	) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-		use tokio::time::interval;
-
-		let mut shutdown_rx = self.shutdown_tx.subscribe();
-		let mut poll_interval = interval(self.config.poll_interval);
-
+		let concurrency = self.config.concurrency.max(1);
 		tracing::info!(
 			worker = %self.config.name,
-			concurrency = self.config.concurrency,
+			concurrency,
 			"Worker started"
 		);
 
-		loop {
-			tokio::select! {
-				_ = shutdown_rx.recv() => {
-					tracing::info!(worker = %self.config.name, "Shutdown signal received");
-					break;
-				}
-				_ = poll_interval.tick() => {
-					self.try_process_task(backend.clone()).await;
-				}
-			}
+		// Concurrency is N independent consumer loops — one spawned task each.
+		// That IS the limit: each loop holds a single message at a time, so at
+		// most `concurrency` tasks run at once with nothing reserved ahead. No
+		// shared permit, no prefetch. tokio schedules the loops across its threads.
+		let mut handles = Vec::with_capacity(concurrency);
+		for _ in 0..concurrency {
+			let worker = Arc::clone(&self);
+			let backend = backend.clone();
+			handles.push(tokio::spawn(async move { worker.consume(backend).await }));
+		}
+		for handle in handles {
+			let _ = handle.await;
 		}
 
 		tracing::info!(worker = %self.config.name, "Worker stopped");
 		Ok(())
 	}
 
-	/// Try to process a single task from the backend.
-	///
-	/// Acquires a concurrency permit before executing the task, ensuring the
-	/// configured concurrency limit is enforced. The permit is released
-	/// when the spawned task completes.
-	async fn try_process_task(&self, backend: Arc<dyn TaskBackend>) {
-		// Acquire concurrency permit before dequeue to prevent task loss
-		// when semaphore is closed.
-		let permit = match self.concurrency_semaphore.clone().acquire_owned().await {
-			Ok(permit) => permit,
-			Err(_) => {
-				tracing::error!(
-					worker = %self.config.name,
-					"Concurrency semaphore closed unexpectedly"
-				);
-				return;
+	/// One consumer loop: dequeue a task, run it, report status, repeat. `run`
+	/// spawns `concurrency` of these. Each holds one message at a time (it runs
+	/// the task inline before dequeuing the next), so in-flight work is bounded by
+	/// the number of loops. When the queue is empty the loop waits `poll_interval`.
+	async fn consume(&self, backend: Arc<dyn TaskBackend>) {
+		use tokio::time::interval;
+
+		let mut shutdown_rx = self.shutdown_tx.subscribe();
+		let mut poll_interval = interval(self.config.poll_interval);
+
+		loop {
+			// Stop promptly on shutdown, even while the queue is busy.
+			match shutdown_rx.try_recv() {
+				Ok(()) | Err(broadcast::error::TryRecvError::Closed) => break,
+				_ => {}
 			}
-		};
 
-		match backend.dequeue().await {
-			Ok(Some(task_id)) => {
-				tracing::info!(worker = %self.config.name, task_id = %task_id, "Processing task");
-
-				// Execute task; permit is held for the duration
-				match self.execute_task(task_id, backend.clone()).await {
-					Ok(_) => {
-						tracing::info!(
-							worker = %self.config.name,
-							task_id = %task_id,
-							"Task completed successfully"
-						);
-						if let Err(e) = backend.update_status(task_id, TaskStatus::Success).await {
+			match backend.dequeue().await {
+				Ok(Some(task_id)) => {
+					tracing::info!(worker = %self.config.name, task_id = %task_id, "Processing task");
+					let status = match self.execute_task(task_id, backend.clone()).await {
+						Ok(_) => {
+							tracing::info!(
+								worker = %self.config.name,
+								task_id = %task_id,
+								"Task completed successfully"
+							);
+							TaskStatus::Success
+						}
+						Err(e) => {
 							tracing::error!(
 								worker = %self.config.name,
 								task_id = %task_id,
 								error = %e,
-								"Failed to update task status"
+								"Task failed"
 							);
+							TaskStatus::Failure
 						}
-					}
-					Err(e) => {
+					};
+					if let Err(e) = backend.update_status(task_id, status).await {
 						tracing::error!(
 							worker = %self.config.name,
 							task_id = %task_id,
 							error = %e,
-							"Task failed"
+							"Failed to update task status"
 						);
-						if let Err(e) = backend.update_status(task_id, TaskStatus::Failure).await {
-							tracing::error!(
-								worker = %self.config.name,
-								task_id = %task_id,
-								error = %e,
-								"Failed to update task status"
-							);
-						}
 					}
 				}
-
-				// Permit is dropped here, releasing the concurrency slot
-				drop(permit);
-			}
-			Ok(None) => {
-				// No tasks available - interval will automatically wait before next poll
-			}
-			Err(e) => {
-				tracing::error!(worker = %self.config.name, error = %e, "Failed to dequeue task");
-				// Error occurred - interval will automatically wait before next poll
+				// Empty queue or a transient dequeue error: wait for the next
+				// tick or shutdown, then poll again.
+				Ok(None) => {
+					tokio::select! {
+						_ = shutdown_rx.recv() => break,
+						_ = poll_interval.tick() => {}
+					}
+				}
+				Err(e) => {
+					tracing::error!(worker = %self.config.name, error = %e, "Failed to dequeue task");
+					tokio::select! {
+						_ = shutdown_rx.recv() => break,
+						_ = poll_interval.tick() => {}
+					}
+				}
 			}
 		}
 	}
@@ -611,7 +601,6 @@ impl Worker {
 impl Default for Worker {
 	fn default() -> Self {
 		let config = WorkerConfig::default();
-		let concurrency_semaphore = Arc::new(Semaphore::new(config.concurrency));
 		Self {
 			config,
 			shutdown_tx: broadcast::channel(1).0,
@@ -619,7 +608,6 @@ impl Default for Worker {
 			task_lock: None,
 			result_backend: None,
 			webhook_senders: Vec::new(),
-			concurrency_semaphore,
 		}
 	}
 }
@@ -692,10 +680,9 @@ mod tests {
 			task_lock: None,
 			result_backend: None,
 			webhook_senders: Vec::new(),
-			concurrency_semaphore: worker.concurrency_semaphore.clone(),
 		};
 
-		let handle = tokio::spawn(async move { worker.run(backend).await });
+		let handle = tokio::spawn(async move { Arc::new(worker).run(backend).await });
 
 		// Give worker time to start
 		sleep(Duration::from_millis(100)).await;
@@ -734,31 +721,6 @@ mod tests {
 
 		// Assert
 		assert!(worker.task_lock.is_some());
-	}
-
-	#[rstest]
-	#[tokio::test]
-	async fn test_try_process_task_returns_early_when_semaphore_closed() {
-		// Arrange
-		let config = WorkerConfig::new("test-worker".to_string());
-		let semaphore = Arc::new(Semaphore::new(1));
-		semaphore.close(); // Close semaphore to trigger early return
-		let worker = Worker {
-			config,
-			shutdown_tx: broadcast::channel(1).0,
-			registry: None,
-			task_lock: None,
-			result_backend: None,
-			webhook_senders: Vec::new(),
-			concurrency_semaphore: semaphore,
-		};
-		let backend = Arc::new(DummyBackend::new());
-
-		// Act - should return immediately without dequeuing
-		worker.try_process_task(backend).await;
-
-		// Assert - if we reach here without panic, the early return path worked
-		// DummyBackend would not have been called for dequeue
 	}
 
 	#[rstest]

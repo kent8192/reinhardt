@@ -1088,7 +1088,7 @@ fn parse_vec_expressions(expr: &Expr, field_name: &str) -> Result<Vec<Expr>> {
 				)));
 			};
 			if call.args.is_empty()
-				&& func_path.path.segments.len() >= 1
+				&& !func_path.path.segments.is_empty()
 				&& func_path
 					.path
 					.segments

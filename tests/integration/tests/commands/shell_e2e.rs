@@ -31,7 +31,7 @@ use rexpect::session::PtySession;
 use tempfile::TempDir;
 
 // The evaluator builds its dependencies outside the fixture target directory.
-const COMMAND_TIMEOUT: Duration = Duration::from_secs(600);
+const COMMAND_TIMEOUT: Duration = Duration::from_secs(1_200);
 const FIXTURE_BUILD_TIMEOUT: Duration = Duration::from_secs(600);
 const FIXTURE_BUILD_JOBS: &str = "2";
 // Workaround for evcxr/evcxr#487 (tracked in reinhardt-web#5817).

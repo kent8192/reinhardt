@@ -50,6 +50,7 @@ async-stream = { version = "0.3", optional = true }
 serde = { version = "1.0", features = ["derive"], optional = true }
 serde_json = { version = "1.0", optional = true }
 chrono = { version = "0.4", features = ["serde"], optional = true }
+chrono-tz = { workspace = true, optional = true }
 uuid = { version = "1.11", features = ["v4", "v7", "serde"], optional = true }
 
 # Error handling
@@ -123,6 +124,7 @@ db-deps = [
   "dep:async-stream",
   "dep:base64",
   "dep:chrono",
+  "dep:chrono-tz",
   "dep:clap",
   "dep:console",
   "dep:dashmap",

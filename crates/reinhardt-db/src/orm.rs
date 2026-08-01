@@ -12,6 +12,11 @@
 //! records the SQL joins required by the filter, so application code does not
 //! need raw join builders for common FK, reverse, or M2M lookups.
 //!
+//! [`QuerySet::dates`] and [`QuerySet::datetimes`] accept generated typed field
+//! references. They exclude nulls and perform truncation, distinct projection,
+//! and ordering in the database. Named-zone conversion is supported by
+//! PostgreSQL; MySQL and SQLite return an explicit capability error.
+//!
 //! ## Streaming QuerySets
 //!
 //! [`QuerySet::iterator_with_db`] and [`QuerySet::iterator_with_executor`]
@@ -305,8 +310,9 @@ pub use reverse_accessor::ReverseAccessor;
 pub use manager::Manager;
 // Query types are always available
 pub use query::{
-	FieldAssignment, Filter, FilterCondition, FilterOperator, FilterValue, IntoOrderBy, OrmQuery,
-	QuerySet, QuerySetStream, UpdateValue,
+	DateProjectionField, DateProjectionOrder, DateTimeProjectionField, DateTimeTruncKind,
+	DateTruncKind, FieldAssignment, Filter, FilterCondition, FilterOperator, FilterValue,
+	IntoOrderBy, OrmQuery, QuerySet, QuerySetStream, UpdateValue,
 };
 
 // Advanced ORM features

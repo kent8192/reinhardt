@@ -4,6 +4,10 @@
 //!
 //! A type-safe SQL query builder for the Reinhardt framework.
 //!
+//! Temporal projection expressions model truncation kind, output type, and
+//! time-zone conversion structurally so each backend can lower them without
+//! unchecked SQL fragments in callers.
+//!
 //! This crate provides a fluent API for constructing SQL queries that target
 //! PostgreSQL, MySQL, and SQLite databases. It generates parameterized queries
 //! with proper identifier escaping and value placeholders for each backend.
@@ -373,7 +377,8 @@ pub mod prelude {
 	// Expression system
 	pub use crate::expr::{
 		CaseExprBuilder, CaseStatement, Cond, Condition, ConditionExpression, ConditionHolder,
-		ConditionType, Expr, ExprTrait, Func, IntoCondition, Keyword, SimpleExpr,
+		ConditionType, Expr, ExprTrait, Func, IntoCondition, Keyword, SimpleExpr, TemporalTimeZone,
+		TemporalTruncKind, TemporalTruncOutput,
 	};
 	// DML query builders
 	pub use crate::query::{

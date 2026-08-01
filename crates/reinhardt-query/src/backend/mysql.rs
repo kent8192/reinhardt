@@ -4,7 +4,7 @@
 
 use super::{QueryBuilder, SqlWriter};
 use crate::{
-	expr::{Condition, SimpleExpr},
+	expr::{Condition, SimpleExpr, TemporalTimeZone, TemporalTruncKind, TemporalTruncOutput},
 	query::{
 		AlterIndexStatement, AlterTableOperation, AlterTableStatement, CheckTableStatement,
 		CreateIndexStatement, CreateTableStatement, CreateTriggerStatement, CreateViewStatement,
@@ -90,6 +90,87 @@ impl MySqlQueryBuilder {
 	/// Create a new MySQL query builder
 	pub fn new() -> Self {
 		Self
+	}
+
+	fn write_datetime_in_zone(
+		&self,
+		writer: &mut SqlWriter,
+		expr: &SimpleExpr,
+		time_zone: Option<&TemporalTimeZone>,
+	) {
+		writer.push("CONVERT_TZ(");
+		self.write_simple_expr(writer, expr);
+		writer.push(", '+00:00', ");
+		let zone = match time_zone {
+			Some(TemporalTimeZone::Named(zone)) => zone.clone(),
+			Some(TemporalTimeZone::Utc) | None => "+00:00".to_string(),
+		};
+		writer.push_value(
+			crate::value::Value::String(Some(Box::new(zone))),
+			|_index| self.placeholder(0),
+		);
+		writer.push(")");
+	}
+
+	fn write_week_start(
+		&self,
+		writer: &mut SqlWriter,
+		expr: &SimpleExpr,
+		time_zone: Option<&TemporalTimeZone>,
+		output: TemporalTruncOutput,
+	) {
+		writer.push("STR_TO_DATE(DATE_FORMAT(");
+		if output == TemporalTruncOutput::DateTime {
+			self.write_datetime_in_zone(writer, expr, time_zone);
+		} else {
+			self.write_simple_expr(writer, expr);
+		}
+		writer.push(", '%x-%v Monday'), '%x-%v %W')");
+	}
+
+	fn write_temporal_trunc(
+		&self,
+		writer: &mut SqlWriter,
+		expr: &SimpleExpr,
+		kind: TemporalTruncKind,
+		time_zone: Option<&TemporalTimeZone>,
+		output: TemporalTruncOutput,
+	) {
+		if kind == TemporalTruncKind::Week {
+			writer.push("CAST(");
+			self.write_week_start(writer, expr, time_zone, output);
+			writer.push(match output {
+				TemporalTruncOutput::Date => " AS DATE)",
+				TemporalTruncOutput::DateTime => " AS DATETIME)",
+			});
+			return;
+		}
+
+		let format = match (kind, output) {
+			(TemporalTruncKind::Year, TemporalTruncOutput::Date) => "%Y-01-01",
+			(TemporalTruncKind::Month, TemporalTruncOutput::Date) => "%Y-%m-01",
+			(TemporalTruncKind::Day, TemporalTruncOutput::Date) => "%Y-%m-%d",
+			(TemporalTruncKind::Year, TemporalTruncOutput::DateTime) => "%Y-01-01 00:00:00",
+			(TemporalTruncKind::Month, TemporalTruncOutput::DateTime) => "%Y-%m-01 00:00:00",
+			(TemporalTruncKind::Day, TemporalTruncOutput::DateTime) => "%Y-%m-%d 00:00:00",
+			(TemporalTruncKind::Hour, TemporalTruncOutput::DateTime) => "%Y-%m-%d %H:00:00",
+			(TemporalTruncKind::Minute, TemporalTruncOutput::DateTime) => "%Y-%m-%d %H:%i:00",
+			(TemporalTruncKind::Second, TemporalTruncOutput::DateTime) => "%Y-%m-%d %H:%i:%s",
+			_ => unreachable!("invalid temporal truncation kind and output"),
+		};
+		writer.push("CAST(DATE_FORMAT(");
+		if output == TemporalTruncOutput::DateTime {
+			self.write_datetime_in_zone(writer, expr, time_zone);
+		} else {
+			self.write_simple_expr(writer, expr);
+		}
+		writer.push(", '");
+		writer.push(format);
+		writer.push("') AS ");
+		writer.push(match output {
+			TemporalTruncOutput::Date => "DATE)",
+			TemporalTruncOutput::DateTime => "DATETIME)",
+		});
 	}
 
 	/// Build a SELECT statement after rejecting PostgreSQL-only vector features.
@@ -518,6 +599,12 @@ impl MySqlQueryBuilder {
 				writer.push_identifier(&type_name.to_string(), |s| self.escape_iden(s));
 				writer.push(")");
 			}
+			SimpleExpr::TemporalTrunc {
+				expr,
+				kind,
+				time_zone,
+				output,
+			} => self.write_temporal_trunc(writer, expr, *kind, time_zone.as_ref(), *output),
 		}
 	}
 
@@ -1540,8 +1627,10 @@ impl QueryBuilder for MySqlQueryBuilder {
 		if let Some(select) = &stmt.select {
 			let (select_sql, select_values) = self.build_select(select);
 			writer.push_space();
-			writer.push(&select_sql);
-			writer.append_values(&select_values);
+			writer.push(&crate::query::traits::inline_params(
+				&select_sql,
+				&select_values,
+			));
 		}
 
 		writer.finish()

@@ -7,6 +7,69 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.0-alpha.4](https://github.com/kent8192/reinhardt-web/compare/reinhardt-db@v0.4.0-alpha.3...reinhardt-db@v0.4.0-alpha.4) - 2026-08-01
+
+### Changed
+
+- *(db)* accept dynamic ORM executors
+
+### Documentation
+
+- *(db)* document atomic transaction outcomes
+
+### Fixed
+
+- *(forms)* harden generated form persistence semantics
+- *(db)* preserve naive timestamp wall-clock values
+- *(forms)* complete model-backed form submission
+- *(forms)* harden native model form decoding
+- *(db)* preserve naive datetime query parameters
+- *(forms)* prevent duplicate MySQL form inserts
+- *(forms)* prevent duplicate create retries
+- *(forms)* defer uncertain generated keys
+- *(forms)* synchronize defaults and persistence state
+- *(forms)* synchronize transaction-backed form state
+- *(forms)* preserve transactional retry semantics
+- *(forms)* preserve inline uncertain create state
+- *(db)* scope atomic outcomes to savepoints
+- *(db)* decode MySQL UTC fields with model metadata
+- *(forms)* preserve nested form retries
+- *(forms)* align native form validation
+- *(db)* read PostgreSQL naive migration timestamps
+- *(forms)* address model form review feedback
+- *(pgvector)* preserve vector index metadata
+- *(orm)* preserve typed vector NULL bindings
+- *(ci)* repair pgvector test coverage
+- *(pgvector)* close migration and binding gaps
+- *(db)* restore pgvector test registration with snapshot
+- *(db)* qualify temporal projections with manual joins
+- *(query)* reject invalid temporal date truncation
+- *(db)* validate temporal projection query shapes
+- *(orm)* preserve temporal projection grouping
+- *(orm)* reject incompatible temporal projections
+- *(db)* reject temporal projections with ctes
+- *(db)* reject HAVING date projections
+- *(query)* validate PostgreSQL temporal expressions
+- *(db)* use ErrorKind in queryset date projection assertions
+- *(db)* temporal projection date tests use database kind
+- *(db)* match temporal projection error display
+- *(query)* address temporal projection review feedback
+- *(db)* resolve row lock review findings
+- *(orm)* close row locking review gaps
+- *(db)* resolve typed retrieval review feedback
+- *(db)* reject exhausted bulk bind budgets
+
+### Maintenance
+
+- *(pgvector)* propagate native vector feature flags
+
+### Other
+
+- sync develop/0.4.0 into pgvector branch
+- sync develop/0.4.0 into pgvector branch
+- sync shared CI repairs
+- sync develop/0.4.0 into typed date projections
+
 ## [0.4.0-alpha.2](https://github.com/kent8192/reinhardt-web/compare/reinhardt-db@v0.4.0-alpha.1...reinhardt-db@v0.4.0-alpha.2) - 2026-07-23
 
 ### Added

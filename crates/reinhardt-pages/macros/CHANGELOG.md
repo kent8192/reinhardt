@@ -7,6 +7,60 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.0-alpha.4](https://github.com/kent8192/reinhardt-web/compare/reinhardt-pages-macros@v0.4.0-alpha.3...reinhardt-pages-macros@v0.4.0-alpha.4) - 2026-08-01
+
+### Added
+
+- *(pages)* generate model-backed forms
+
+### Fixed
+
+- *(forms)* harden generated form persistence semantics
+- *(pages)* preserve valid boolean and fractional controls
+- *(pages)* render stored model form values
+- *(pages)* reject unsupported model form widgets
+- *(forms)* enforce generated model constraints
+- *(forms)* handle temporal and assigned model inputs
+- *(forms)* preserve model form field contracts
+- *(pages)* retain native model form submission
+- *(pages)* validate model widget overrides
+- *(forms)* complete model-backed form submission
+- *(forms)* enforce model form submission policies
+- *(forms)* harden native model form decoding
+- *(forms)* preserve model form defaults
+- *(forms)* harden model form input handling
+- *(forms)* preserve secure model form defaults
+- *(forms)* preserve untouched model controls
+- *(forms)* synchronize hydrated model submits
+- *(forms)* complete model form submission contracts
+- *(forms)* validate model form submission boundaries
+- *(forms)* reject unsupported model reactivity
+- *(forms)* preserve native model form semantics
+- *(forms)* validate inline and runtime model form state
+- *(forms)* preserve native defaults and control values
+- *(forms)* preserve model-backed form state
+- *(forms)* reset omitted model form fields
+- *(forms)* retain untouched boolean defaults
+- *(pages)* reject unsupported model form callbacks
+- *(forms)* harden generated model form boundaries
+- *(forms)* preserve optional model form state
+- *(forms)* enforce model form overrides
+- *(forms)* reserve generated form namespaces
+- *(pages)* keep model form controls in sync
+- *(forms)* preserve native range defaults
+- *(forms)* synchronize defaults and persistence state
+- *(forms)* preserve transactional retry semantics
+- *(forms)* preserve model form control semantics
+- *(forms)* validate inline formset retries
+- *(forms)* align native form validation
+- *(pages)* preserve server function fallback syntax
+- *(forms)* restore model form CI coverage
+- *(forms)* address model form review feedback
+
+### Testing
+
+- *(forms)* align generated model form expectations
+
 ## [0.4.0-alpha.2](https://github.com/kent8192/reinhardt-web/compare/reinhardt-pages-macros@v0.4.0-alpha.1...reinhardt-pages-macros@v0.4.0-alpha.2) - 2026-07-23
 
 ### Fixed

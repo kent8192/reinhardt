@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.0-alpha.4](https://github.com/kent8192/reinhardt-web/compare/reinhardt-admin@v0.4.0-alpha.3...reinhardt-admin@v0.4.0-alpha.4) - 2026-08-01
+
+### Fixed
+
+- *(db)* validate typed queryset ordering fields
+
+### Other
+
+- sync develop/0.4.0 into pgvector branch
+
 ## [0.4.0-alpha.2](https://github.com/kent8192/reinhardt-web/compare/reinhardt-admin@v0.4.0-alpha.1...reinhardt-admin@v0.4.0-alpha.2) - 2026-07-23
 
 ### Added

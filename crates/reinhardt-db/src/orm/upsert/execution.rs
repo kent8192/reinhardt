@@ -119,7 +119,12 @@ where
 	validate_writable_create_assignments::<C::Model>(&plan.create)?;
 	let backend = transaction.backend();
 	let insert = sql::insert(&plan, backend)?;
-	match transaction.execute(&insert.sql, insert.params).await {
+	let insert_result = if backend == DatabaseBackend::Postgres {
+		execute_postgres_insert_in_savepoint(transaction, &insert).await
+	} else {
+		transaction.execute(&insert.sql, insert.params).await
+	};
+	match insert_result {
 		Ok(result) => {
 			let created = match (backend, result.rows_affected) {
 				(DatabaseBackend::Postgres | DatabaseBackend::Sqlite, 0) => false,
@@ -144,7 +149,7 @@ where
 			}
 		}
 		Err(error)
-			if backend == DatabaseBackend::MySql
+			if matches!(backend, DatabaseBackend::MySql | DatabaseBackend::Postgres)
 				&& error.database_kind() == Some(DatabaseErrorKind::UniqueViolation) =>
 		{
 			match load_locked(&plan, transaction).await? {
@@ -154,6 +159,17 @@ where
 		}
 		Err(error) => Err(error),
 	}
+}
+
+async fn execute_postgres_insert_in_savepoint(
+	transaction: &mut AtomicTransaction,
+	insert: &sql::BoundSql,
+) -> Result<crate::backends::types::QueryResult> {
+	let sql = insert.sql.clone();
+	let params = insert.params.clone();
+	transaction
+		.atomic(async move |savepoint| savepoint.execute(&sql, params).await)
+		.await
 }
 
 async fn load_locked<M: Model>(
@@ -1258,6 +1274,79 @@ mod tests {
 				.contains(&QueryValue::String("create only".to_owned()))
 		);
 		assert!(!calls[3].sql.contains("computed"));
+	}
+
+	#[tokio::test]
+	async fn update_or_create_postgres_unique_violation_reloads_after_savepoint() {
+		let (mut transaction, state) = Recorder::transaction(
+			DatabaseType::Postgres,
+			vec![
+				Err(DatabaseError::new(
+					DatabaseErrorKind::UniqueViolation,
+					"duplicate alternate unique field",
+				)
+				.into()),
+				Ok(QueryResult {
+					rows_affected: 1,
+					last_insert_id: None,
+				}),
+			],
+			vec![
+				Ok(Vec::new()),
+				Ok(vec![article_row(10, "rust", 1, "winner", 13)]),
+			],
+		);
+
+		let (article, created) =
+			execute_update_or_create(&Manager::<Article>::new(), plan(2, None), &mut transaction)
+				.await
+				.expect("unique race winner should be reloaded and updated");
+
+		assert!(!created);
+		assert_eq!(article.rank, 2);
+		let calls = &state.lock().unwrap().calls;
+		assert_eq!(
+			calls.iter().map(|call| call.operation).collect::<Vec<_>>(),
+			["fetch_all", "execute", "fetch_all", "execute"]
+		);
+		assert!(calls[2].sql.ends_with("LIMIT 2 FOR UPDATE"));
+		assert_eq!(
+			calls[3].params,
+			vec![QueryValue::Int(2), QueryValue::Int(10)]
+		);
+	}
+
+	#[tokio::test]
+	async fn update_or_create_postgres_unique_violation_without_lookup_match_preserves_error() {
+		let (mut transaction, state) = Recorder::transaction(
+			DatabaseType::Postgres,
+			vec![Err(DatabaseError::new(
+				DatabaseErrorKind::UniqueViolation,
+				"duplicate alternate unique field",
+			)
+			.into())],
+			vec![Ok(Vec::new()), Ok(Vec::new())],
+		);
+
+		let error =
+			execute_update_or_create(&Manager::<Article>::new(), plan(2, None), &mut transaction)
+				.await
+				.expect_err("an unrelated unique violation must not be converted into a conflict");
+
+		assert_eq!(
+			error.database_kind(),
+			Some(DatabaseErrorKind::UniqueViolation)
+		);
+		assert_eq!(
+			state
+				.lock()
+				.unwrap()
+				.calls
+				.iter()
+				.map(|call| call.operation)
+				.collect::<Vec<_>>(),
+			["fetch_all", "execute", "fetch_all"]
+		);
 	}
 
 	#[tokio::test]

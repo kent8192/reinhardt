@@ -1423,6 +1423,20 @@ tokio = {{ version = "1", features = ["macros", "rt-multi-thread", "time"] }}
 [features]
 default = []
 commands-shell = ["reinhardt/commands-shell"]
+
+# Match evcxr's generated evaluator profile so the fixture prebuild warms the
+# same artifact cache used by `manage shell`.
+[profile.dev]
+opt-level = 2
+debug = false
+strip = "debuginfo"
+rpath = true
+lto = false
+debug-assertions = true
+codegen-units = 16
+panic = "unwind"
+incremental = true
+overflow-checks = true
 "#,
 			repository_root.display()
 		),

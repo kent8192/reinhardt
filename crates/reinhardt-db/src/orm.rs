@@ -76,9 +76,9 @@
 //! use `of_model`; relation targets require a generated [`RelationPathLike`]
 //! rooted at the queryset model. Unlike Django, ordinary connection evaluation
 //! and SQLite return explicit errors instead of silently degrading to an
-//! unlocked query. Derived `FROM` sources, LATERAL joins, raw aggregate
-//! projections, and aggregate annotations are rejected before execution so the
-//! lock scope remains unambiguous.
+//! unlocked query. CTE-backed querysets, derived `FROM` sources, LATERAL joins,
+//! raw aggregate projections, and aggregate annotations are rejected before
+//! execution so the lock scope remains unambiguous.
 //!
 //! PostgreSQL 9.3 adds `no_key`, PostgreSQL 9.5 adds `skip_locked`, and the
 //! built-in MySQL profile requires 8.0.1 or newer. Older/custom servers report

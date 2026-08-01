@@ -22,6 +22,7 @@ use reinhardt_db::orm::connection::{BackendsConnection, DatabaseConnectionLease}
 use reinhardt_db::orm::connection::{
 	DatabaseBackend, OrmExecutor, QueryResult, QueryValue, Row, TransactionExecutor,
 };
+use reinhardt_db::orm::cte::CTE;
 use reinhardt_db::orm::custom_manager::CustomManager;
 use reinhardt_db::orm::events::{EventRegistry, EventResult, MapperEvents, set_active_registry};
 use reinhardt_db::orm::execution::{QueryExecution, SelectExecution};
@@ -730,6 +731,28 @@ async fn select_for_update_rejects_raw_aggregate_projections_without_querying() 
 		Err(error) => error,
 	};
 
+	assert_eq!(error.kind(), DatabaseErrorKind::Unsupported);
+	assert!(executor.calls.is_empty());
+}
+
+#[tokio::test]
+async fn select_for_update_rejects_cte_backed_querysets_without_querying() {
+	// Arrange
+	let query = QuerySet::<Article>::new()
+		.with_cte(CTE::new(
+			"locked_articles",
+			"SELECT * FROM articles WHERE id > 0",
+		))
+		.select_for_update();
+	let mut executor = RowLockTransactionExecutor::postgres(Vec::new());
+
+	// Act
+	let error = query
+		.rows_with_executor(&mut executor)
+		.await
+		.expect_err("row locking CTE-backed querysets must be rejected before execution");
+
+	// Assert
 	assert_eq!(error.kind(), DatabaseErrorKind::Unsupported);
 	assert!(executor.calls.is_empty());
 }

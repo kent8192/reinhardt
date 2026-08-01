@@ -217,10 +217,10 @@ MySQL capability profile requires MySQL 8.0.1 or newer and does not support
 target lists. Custom transaction executors connected to servers with different
 capabilities must override `TransactionExecutor::row_lock_capabilities`.
 
-To preserve the statement's lock scope, row locking rejects querysets backed by
-derived `FROM` sources or LATERAL joins, raw aggregate projections passed to
-`values`, and aggregate annotations. Use a direct non-aggregate queryset for
-locking reads.
+To preserve the statement's lock scope, row locking rejects CTE-backed
+querysets, derived `FROM` sources, LATERAL joins, raw aggregate projections
+passed to `values`, and aggregate annotations. Use a direct non-aggregate
+queryset for locking reads.
 
 - **Database Replication and Routing**
   - Read/write splitting via DatabaseRouter

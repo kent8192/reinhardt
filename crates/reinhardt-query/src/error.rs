@@ -298,7 +298,7 @@ fn validate_select_lock_for_backend_with_union_context(
 					backend,
 				));
 			}
-			if lock.is_some_and(|lock| lock.tables.is_empty())
+			if (inherited_lock || lock.is_some_and(|lock| lock.tables.is_empty()))
 				&& statement.join.iter().any(|join| {
 					matches!(
 						join.join,
@@ -341,6 +341,9 @@ fn validate_select_lock_for_backend_with_union_context(
 			let Some(lock) = lock else {
 				return Ok(());
 			};
+			if matches!(lock.r#type, crate::query::LockType::NoKeyUpdate) {
+				return Err(unsupported("the requested row lock strength", backend));
+			}
 			if matches!(lock.behavior, Some(crate::query::LockBehavior::SkipLocked)) {
 				return Err(unsupported("SKIP LOCKED row locking", backend));
 			}

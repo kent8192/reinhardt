@@ -159,8 +159,8 @@ assert_eq!(
 PostgreSQL supports all four lock strengths, table targets, and both wait
 behaviors. MySQL supports `FOR UPDATE`, `FOR SHARE`, table targets, and both
 wait behaviors; its checked builder rejects the PostgreSQL-specific strengths.
-CockroachDB supports all strengths (with `NO KEY UPDATE` and `KEY SHARE` as
-aliases) and both wait behaviors, but its checked builder rejects table targets.
+CockroachDB supports `FOR UPDATE`, `FOR SHARE`, `FOR KEY SHARE`, and `NOWAIT`.
+Its checked builder rejects `NO KEY UPDATE`, `SKIP LOCKED`, and table targets.
 SQLite does not support locking reads, so its checked builder returns
 `QueryBuildError::UnsupportedBackendFeature` instead of silently omitting the
 lock.

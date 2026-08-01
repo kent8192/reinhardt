@@ -1834,12 +1834,7 @@ where
 			self.add_default_select_columns(&mut stmt);
 		}
 		self.apply_typed_select_expressions(&mut stmt);
-		for annotation in &self.annotations {
-			stmt.expr_as(
-				Expr::cust(self.annotation_value_to_select_sql(&annotation.value)),
-				Alias::new(&annotation.alias),
-			);
-		}
+		self.apply_annotations_to_select(&mut stmt);
 		self.apply_relation_joins(&mut stmt);
 		self.apply_manual_joins(&mut stmt);
 
@@ -1856,6 +1851,15 @@ where
 		}
 		self.apply_select_for_update(&mut stmt);
 		Ok(stmt.to_owned())
+	}
+
+	fn apply_annotations_to_select(&self, stmt: &mut SelectStatement) {
+		for annotation in &self.annotations {
+			stmt.expr_as(
+				Expr::cust(self.annotation_value_to_select_sql(&annotation.value)),
+				Alias::new(&annotation.alias),
+			);
+		}
 	}
 
 	fn apply_grouping_and_having(&self, stmt: &mut SelectStatement) {
@@ -1943,6 +1947,12 @@ where
 		let Some(spec) = &self.select_for_update else {
 			return Ok(());
 		};
+		if !self.ctes.is_empty() {
+			return Err(DatabaseError::new(
+				DatabaseErrorKind::Unsupported,
+				"SELECT FOR UPDATE does not support CTE-backed querysets",
+			));
+		}
 		if self.from_subquery_sql.is_some() {
 			return Err(DatabaseError::new(
 				DatabaseErrorKind::Unsupported,
@@ -2377,9 +2387,9 @@ where
 	///
 	/// The returned typestate builder prevents combining `NOWAIT` and
 	/// `SKIP LOCKED`. Locking queries must be evaluated with a caller-owned
-	/// [`TransactionExecutor`](super::connection::TransactionExecutor). Derived
-	/// `FROM` sources, LATERAL joins, raw aggregate projections from
-	/// [`Self::values`], and aggregate annotations are rejected before query
+	/// [`TransactionExecutor`](super::connection::TransactionExecutor). CTE-backed
+	/// querysets, derived `FROM` sources, LATERAL joins, raw aggregate projections
+	/// from [`Self::values`], and aggregate annotations are rejected before query
 	/// execution to preserve lock scope.
 	pub fn select_for_update(mut self) -> SelectForUpdate<T> {
 		self.select_for_update = Some(SelectForUpdateSpec::default());
@@ -6278,7 +6288,9 @@ where
 	/// //   WHERE posts.published = $1
 	/// ```
 	pub fn select_related_query(&self) -> reinhardt_core::exception::Result<SelectStatement> {
-		Ok(self.select_related_query_with_condition(self.build_where_condition()?))
+		let mut stmt = self.select_related_query_with_condition(self.build_where_condition()?);
+		self.apply_annotations_to_select(&mut stmt);
+		Ok(stmt)
 	}
 
 	fn select_related_query_with_condition(
@@ -6310,12 +6322,6 @@ where
 		// Add main table columns while preserving explicit projections.
 		self.add_select_related_root_columns(&mut stmt);
 		self.apply_typed_select_expressions(&mut stmt);
-		for annotation in &self.annotations {
-			stmt.expr_as(
-				Expr::cust(self.annotation_value_to_select_sql(&annotation.value)),
-				Alias::new(&annotation.alias),
-			);
-		}
 
 		// Add LEFT JOIN for each legacy related field that is not already covered
 		// by a typed join. The typed graph owns its aliases and join order.
@@ -8930,26 +8936,10 @@ where
 			stmt.to_owned()
 		} else {
 			// SELECT with JOINs for select_related
-			self.select_related_query()?
+			self.select_related_query_with_condition(self.build_where_condition()?)
 		};
 
-		// Add annotations to SELECT clause if any using reinhardt-query API
-		// Collect annotation SQL strings first to handle lifetime issues
-		// Note: Use to_sql_expr() to get expression without alias (reinhardt-query adds alias via expr_as)
-		let annotation_exprs: Vec<_> = self
-			.annotations
-			.iter()
-			.map(|a| {
-				(
-					self.annotation_value_to_select_sql(&a.value),
-					a.alias.clone(),
-				)
-			})
-			.collect();
-
-		for (value_sql, alias) in annotation_exprs {
-			stmt.expr_as(Expr::cust(value_sql), Alias::new(alias));
-		}
+		self.apply_annotations_to_select(&mut stmt);
 
 		use reinhardt_query::prelude::PostgresQueryBuilder;
 		let mut select_sql = stmt.to_string(PostgresQueryBuilder);
@@ -12207,6 +12197,27 @@ mod tests {
 		assert!(sql.contains("SELECT"));
 		assert!(sql.contains("test_users"));
 		assert!(sql.contains("LEFT JOIN"));
+	}
+
+	#[test]
+	fn select_related_to_sql_includes_each_annotation_once() {
+		use crate::orm::annotation::{Annotation, AnnotationValue, Value};
+
+		// Arrange
+		let queryset = QuerySet::<TestUser>::new()
+			.select_related(&["profile"])
+			.annotate(Annotation::new(
+				"relation_marker",
+				AnnotationValue::Value(Value::Int(1)),
+			));
+
+		// Act
+		let sql = queryset
+			.to_sql()
+			.expect("select-related query SQL should compile");
+
+		// Assert
+		assert_eq!(sql.matches(r#"1 AS "relation_marker""#).count(), 1);
 	}
 
 	#[test]

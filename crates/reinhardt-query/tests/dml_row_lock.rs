@@ -378,6 +378,28 @@ fn postgres_checked_builder_propagates_targetless_locks_to_derived_union_queries
 }
 
 #[rstest]
+fn postgres_checked_builder_propagates_targetless_locks_to_derived_outer_joins() {
+	// Arrange
+	let mut derived = Query::select();
+	derived.column(("parents", "id")).from("parents").left_join(
+		"children",
+		Expr::col(("parents", "id")).equals(("children", "parent_id")),
+	);
+
+	// Act
+	let result = validate_postgres_outer_lock_on_derived(derived);
+
+	// Assert
+	assert_eq!(
+		result,
+		Err(QueryBuildError::UnsupportedBackendFeature {
+			feature: "row locking across outer joins without explicit targets",
+			backend: "PostgreSQL",
+		})
+	);
+}
+
+#[rstest]
 #[case(LockType::Update, "FOR UPDATE")]
 #[case(LockType::Share, "FOR SHARE")]
 fn mysql_renders_supported_lock_strengths(#[case] lock_type: LockType, #[case] suffix: &str) {
@@ -472,10 +494,11 @@ fn sqlite_checked_builder_rejects_row_locking() {
 
 #[rstest]
 #[case(LockType::Update)]
-#[case(LockType::NoKeyUpdate)]
 #[case(LockType::Share)]
 #[case(LockType::KeyShare)]
-fn cockroach_checked_builder_explicitly_accepts_lock_strengths(#[case] lock_type: LockType) {
+fn cockroach_checked_builder_explicitly_accepts_supported_lock_strengths(
+	#[case] lock_type: LockType,
+) {
 	let mut statement = locked_select(lock_type);
 	statement.lock_behavior(LockBehavior::Nowait);
 
@@ -485,7 +508,6 @@ fn cockroach_checked_builder_explicitly_accepts_lock_strengths(#[case] lock_type
 
 	let expected_lock = match lock_type {
 		LockType::Update => "FOR UPDATE",
-		LockType::NoKeyUpdate => "FOR NO KEY UPDATE",
 		LockType::Share => "FOR SHARE",
 		LockType::KeyShare => "FOR KEY SHARE",
 		_ => unreachable!("the test cases cover every supported lock type"),
@@ -493,6 +515,24 @@ fn cockroach_checked_builder_explicitly_accepts_lock_strengths(#[case] lock_type
 	assert_eq!(
 		sql,
 		format!(r#"SELECT "id" FROM "users" {expected_lock} NOWAIT"#)
+	);
+}
+
+#[rstest]
+fn cockroach_checked_builder_rejects_no_key_update() {
+	// Arrange
+	let statement = locked_select(LockType::NoKeyUpdate);
+
+	// Act
+	let result = CockroachDBQueryBuilder::new().build_select_checked(&statement);
+
+	// Assert
+	assert_eq!(
+		result,
+		Err(QueryBuildError::UnsupportedBackendFeature {
+			feature: "the requested row lock strength",
+			backend: "CockroachDB",
+		})
 	);
 }
 

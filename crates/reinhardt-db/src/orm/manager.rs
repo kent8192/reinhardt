@@ -1124,6 +1124,121 @@ impl<M: Model> Manager<M> {
 		QuerySet::new()
 	}
 
+	/// Return distinct truncated values from a generated date field.
+	///
+	/// Querysets created from subqueries, querysets with CTEs, querysets with
+	/// lateral joins, and grouped or HAVING querysets are not supported.
+	pub async fn dates<F>(
+		&self,
+		field: super::expressions::FieldRef<M, F>,
+		kind: super::query::DateTruncKind,
+		order: super::query::DateProjectionOrder,
+	) -> reinhardt_core::exception::Result<Vec<chrono::NaiveDate>>
+	where
+		F: super::query::DateProjectionField,
+	{
+		QuerySet::new().dates(field, kind, order).await
+	}
+
+	/// Return distinct truncated dates through a caller-owned ORM executor.
+	///
+	/// Querysets created from subqueries, querysets with CTEs, querysets with
+	/// lateral joins, and grouped or HAVING querysets are not supported.
+	pub async fn dates_with_db<E, F>(
+		&self,
+		conn: &mut E,
+		field: super::expressions::FieldRef<M, F>,
+		kind: super::query::DateTruncKind,
+		order: super::query::DateProjectionOrder,
+	) -> reinhardt_core::exception::Result<Vec<chrono::NaiveDate>>
+	where
+		E: super::connection::OrmExecutor,
+		F: super::query::DateProjectionField,
+	{
+		QuerySet::new()
+			.dates_with_db(conn, field, kind, order)
+			.await
+	}
+
+	/// Return distinct truncated dates through an active transaction executor.
+	///
+	/// Querysets created from subqueries, querysets with CTEs, querysets with
+	/// lateral joins, and grouped or HAVING querysets are not supported.
+	pub async fn dates_with_executor<F>(
+		&self,
+		executor: &mut dyn super::connection::TransactionExecutor,
+		field: super::expressions::FieldRef<M, F>,
+		kind: super::query::DateTruncKind,
+		order: super::query::DateProjectionOrder,
+	) -> Result<Vec<chrono::NaiveDate>, crate::backends::error::DatabaseError>
+	where
+		F: super::query::DateProjectionField,
+	{
+		QuerySet::new()
+			.dates_with_executor(executor, field, kind, order)
+			.await
+	}
+
+	/// Return distinct truncated values from a generated UTC datetime field.
+	///
+	/// Querysets created from subqueries, querysets with CTEs, querysets with
+	/// lateral joins, and grouped or HAVING querysets are not supported.
+	pub async fn datetimes<F>(
+		&self,
+		field: super::expressions::FieldRef<M, F>,
+		kind: super::query::DateTimeTruncKind,
+		order: super::query::DateProjectionOrder,
+		time_zone: Option<chrono_tz::Tz>,
+	) -> reinhardt_core::exception::Result<Vec<chrono::DateTime<chrono_tz::Tz>>>
+	where
+		F: super::query::DateTimeProjectionField,
+	{
+		QuerySet::new()
+			.datetimes(field, kind, order, time_zone)
+			.await
+	}
+
+	/// Return distinct truncated datetimes through a caller-owned ORM executor.
+	///
+	/// Querysets created from subqueries, querysets with CTEs, querysets with
+	/// lateral joins, and grouped or HAVING querysets are not supported.
+	pub async fn datetimes_with_db<E, F>(
+		&self,
+		conn: &mut E,
+		field: super::expressions::FieldRef<M, F>,
+		kind: super::query::DateTimeTruncKind,
+		order: super::query::DateProjectionOrder,
+		time_zone: Option<chrono_tz::Tz>,
+	) -> reinhardt_core::exception::Result<Vec<chrono::DateTime<chrono_tz::Tz>>>
+	where
+		E: super::connection::OrmExecutor,
+		F: super::query::DateTimeProjectionField,
+	{
+		QuerySet::new()
+			.datetimes_with_db(conn, field, kind, order, time_zone)
+			.await
+	}
+
+	/// Return distinct truncated datetimes through an active transaction executor.
+	///
+	/// Querysets created from subqueries, querysets with CTEs, querysets with
+	/// lateral joins, and grouped or HAVING querysets are not supported.
+	pub async fn datetimes_with_executor<F>(
+		&self,
+		executor: &mut dyn super::connection::TransactionExecutor,
+		field: super::expressions::FieldRef<M, F>,
+		kind: super::query::DateTimeTruncKind,
+		order: super::query::DateProjectionOrder,
+		time_zone: Option<chrono_tz::Tz>,
+	) -> Result<Vec<chrono::DateTime<chrono_tz::Tz>>, crate::backends::error::DatabaseError>
+	where
+		F: super::query::DateTimeProjectionField,
+	{
+		QuerySet::new()
+			.datetimes_with_executor(executor, field, kind, order, time_zone)
+			.await
+	}
+
 	/// Filter records by a typed filter expression.
 	///
 	/// Accepts typed and untyped inputs through

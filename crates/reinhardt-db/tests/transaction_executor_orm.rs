@@ -14,6 +14,7 @@ use serde::{Deserialize, Serialize};
 use reinhardt_core::exception::{DatabaseError, DatabaseErrorKind, Error};
 use reinhardt_db::associations::markers::ManyToManyConfig;
 use reinhardt_db::associations::{ManyToManyField, ManyToManyManager};
+use reinhardt_db::orm::aggregation::Aggregate;
 use reinhardt_db::orm::annotation::{AnnotationValue, Expression, Value};
 use reinhardt_db::orm::composite_pk::{CompositePrimaryKey, PkValue};
 #[cfg(feature = "sqlite")]
@@ -569,6 +570,44 @@ async fn select_for_update_rejects_an_ordinary_executor_without_querying() {
 		.expect_err("row locks require an active transaction executor");
 
 	assert_eq!(error.database_kind(), Some(DatabaseErrorKind::Transaction));
+	assert!(executor.calls.is_empty());
+}
+
+#[tokio::test]
+async fn select_for_update_rows_with_executor_short_circuits_empty_querysets() {
+	// Arrange
+	let query = QuerySet::<Article>::new().none().select_for_update();
+	let mut executor = RowLockTransactionExecutor::postgres(Vec::new());
+
+	// Act
+	let rows = query
+		.rows_with_executor(&mut executor)
+		.await
+		.expect("empty locking queryset must not execute a query");
+
+	// Assert
+	assert_eq!(rows, Vec::new());
+	assert!(executor.calls.is_empty());
+}
+
+#[tokio::test]
+async fn select_for_update_rejects_select_related_aggregate_annotations_without_querying() {
+	// Arrange
+	let query = QuerySet::<Article>::new()
+		.select_related(&["author"])
+		.aggregate(Aggregate::count_all().with_alias("article_count"))
+		.select_for_update()
+		.of_model();
+	let mut executor = RowLockTransactionExecutor::postgres(Vec::new());
+
+	// Act
+	let error = query
+		.rows_with_executor(&mut executor)
+		.await
+		.expect_err("PostgreSQL must reject row locking with aggregate annotations");
+
+	// Assert
+	assert_eq!(error.kind(), DatabaseErrorKind::Unsupported);
 	assert!(executor.calls.is_empty());
 }
 

@@ -12,6 +12,11 @@
 //! records the SQL joins required by the filter, so application code does not
 //! need raw join builders for common FK, reverse, or M2M lookups.
 //!
+//! [`QuerySet::dates`] and [`QuerySet::datetimes`] accept generated typed field
+//! references. They exclude nulls and perform truncation, distinct projection,
+//! and ordering in the database. Named-zone conversion is supported by
+//! PostgreSQL; MySQL and SQLite return an explicit capability error.
+//!
 //! ## Streaming QuerySets
 //!
 //! [`QuerySet::iterator_with_db`] and [`QuerySet::iterator_with_executor`]
@@ -71,7 +76,9 @@
 //! use `of_model`; relation targets require a generated [`RelationPathLike`]
 //! rooted at the queryset model. Unlike Django, ordinary connection evaluation
 //! and SQLite return explicit errors instead of silently degrading to an
-//! unlocked query.
+//! unlocked query. Derived `FROM` sources, LATERAL joins, raw aggregate
+//! projections, and aggregate annotations are rejected before execution so the
+//! lock scope remains unambiguous.
 //!
 //! PostgreSQL 9.3 adds `no_key`, PostgreSQL 9.5 adds `skip_locked`, and the
 //! built-in MySQL profile requires 8.0.1 or newer. Older/custom servers report
@@ -320,8 +327,10 @@ pub use reverse_accessor::ReverseAccessor;
 pub use manager::Manager;
 // Query types are always available
 pub use query::{
-	Blocking, FieldAssignment, Filter, FilterCondition, FilterOperator, FilterValue, IntoOrderBy,
-	Nowait, OrmQuery, QuerySet, QuerySetStream, SelectForUpdate, SkipLocked, UpdateValue,
+	Blocking, DateProjectionField, DateProjectionOrder, DateTimeProjectionField, DateTimeTruncKind,
+	DateTruncKind, FieldAssignment, Filter, FilterCondition, FilterOperator, FilterValue,
+	IntoOrderBy, Nowait, OrmQuery, QuerySet, QuerySetStream, SelectForUpdate, SkipLocked,
+	UpdateValue,
 };
 
 // Advanced ORM features

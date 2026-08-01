@@ -3,7 +3,7 @@
 //! This module provides the [`Func`] struct with static methods for
 //! constructing common SQL aggregate function calls.
 
-use super::simple_expr::SimpleExpr;
+use super::simple_expr::{SimpleExpr, TemporalTimeZone, TemporalTruncKind, TemporalTruncOutput};
 use crate::types::IntoIden;
 
 /// SQL aggregate function builder.
@@ -61,6 +61,36 @@ impl Func {
 	pub fn coalesce(exprs: Vec<SimpleExpr>) -> SimpleExpr {
 		SimpleExpr::FunctionCall("COALESCE".into_iden(), exprs)
 	}
+
+	/// Create a typed temporal truncation expression.
+	///
+	/// For PostgreSQL [`TemporalTruncOutput::DateTime`] output, `expr` must
+	/// produce `TIMESTAMP WITH TIME ZONE`. Convert a `TIMESTAMP WITHOUT TIME
+	/// ZONE` source explicitly before constructing the expression.
+	pub fn temporal_trunc(
+		expr: SimpleExpr,
+		kind: TemporalTruncKind,
+		time_zone: Option<TemporalTimeZone>,
+		output: TemporalTruncOutput,
+	) -> Result<SimpleExpr, crate::QueryBuildError> {
+		if output == TemporalTruncOutput::Date
+			&& matches!(
+				kind,
+				TemporalTruncKind::Hour | TemporalTruncKind::Minute | TemporalTruncKind::Second
+			) {
+			return Err(crate::QueryBuildError::InvalidTemporalTruncation {
+				kind: kind.as_str(),
+				output: "date",
+			});
+		}
+
+		Ok(SimpleExpr::TemporalTrunc {
+			expr: Box::new(expr),
+			kind,
+			time_zone,
+			output,
+		})
+	}
 }
 
 #[cfg(test)]
@@ -69,6 +99,29 @@ mod tests {
 	use crate::expr::Expr;
 	use crate::value::Value;
 	use rstest::rstest;
+
+	#[rstest]
+	fn test_temporal_trunc_rejects_time_units_for_date_output() {
+		// Arrange
+		let expr = Expr::col("occurred_at").into_simple_expr();
+
+		// Act
+		let result = Func::temporal_trunc(
+			expr,
+			TemporalTruncKind::Hour,
+			None,
+			TemporalTruncOutput::Date,
+		);
+
+		// Assert
+		assert!(matches!(
+			result,
+			Err(crate::QueryBuildError::InvalidTemporalTruncation {
+				kind: "hour",
+				output: "date"
+			})
+		));
+	}
 
 	#[rstest]
 	fn test_func_count_creates_function_call() {

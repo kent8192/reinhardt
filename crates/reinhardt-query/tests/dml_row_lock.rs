@@ -13,6 +13,19 @@ fn locked_select(lock_type: LockType) -> SelectStatement {
 	statement
 }
 
+fn validate_postgres_outer_lock_on_derived(
+	derived: SelectStatement,
+) -> Result<(), QueryBuildError> {
+	let mut statement = Query::select();
+	statement
+		.column("id")
+		.from_subquery(derived, "derived")
+		.lock(LockType::Update);
+	PostgresQueryBuilder::new()
+		.build_select_checked(&statement)
+		.map(|_| ())
+}
+
 #[rstest]
 #[case(LockType::Update, "FOR UPDATE")]
 #[case(LockType::NoKeyUpdate, "FOR NO KEY UPDATE")]
@@ -111,6 +124,32 @@ fn sqlite_checked_builder_rejects_locks_in_expression_subqueries() {
 }
 
 #[rstest]
+fn sqlite_checked_builder_rejects_locks_in_temporal_expression_subqueries() {
+	// Arrange
+	let projection = Func::temporal_trunc(
+		Expr::subquery(locked_select(LockType::Update)).into_simple_expr(),
+		TemporalTruncKind::Day,
+		None,
+		TemporalTruncOutput::Date,
+	)
+	.expect("a day projection can wrap a scalar subquery");
+	let mut statement = Query::select();
+	statement.expr(projection);
+
+	// Act
+	let result = SqliteQueryBuilder::new().build_select_checked(&statement);
+
+	// Assert
+	assert_eq!(
+		result,
+		Err(QueryBuildError::UnsupportedBackendFeature {
+			feature: "row locking",
+			backend: "SQLite",
+		})
+	);
+}
+
+#[rstest]
 fn lock_behavior_is_mutually_exclusive() {
 	let mut statement = locked_select(LockType::Update);
 	statement
@@ -201,6 +240,138 @@ fn postgres_checked_builder_rejects_outer_locks_on_cte_backed_queries() {
 		result,
 		Err(QueryBuildError::UnsupportedBackendFeature {
 			feature: "row locking on CTE-backed queries",
+			backend: "PostgreSQL",
+		})
+	);
+}
+
+#[rstest]
+fn postgres_checked_builder_rejects_locks_in_later_ctes_that_read_earlier_ctes() {
+	// Arrange
+	let mut earlier_cte = Query::select();
+	earlier_cte.column("id").from("jobs");
+	let mut later_cte = Query::select();
+	later_cte
+		.column("id")
+		.from("earlier_jobs")
+		.lock(LockType::Update);
+	let mut statement = Query::select();
+	statement
+		.with_cte("earlier_jobs", earlier_cte)
+		.with_cte("later_jobs", later_cte)
+		.column("id")
+		.from("later_jobs");
+
+	// Act
+	let result = PostgresQueryBuilder::new().build_select_checked(&statement);
+
+	// Assert
+	assert_eq!(
+		result,
+		Err(QueryBuildError::UnsupportedBackendFeature {
+			feature: "row locking on CTE-backed queries",
+			backend: "PostgreSQL",
+		})
+	);
+}
+
+#[rstest]
+fn postgres_checked_builder_propagates_targetless_locks_to_derived_aggregate_queries() {
+	// Arrange
+	let mut derived = Query::select();
+	derived
+		.expr(Func::count(Expr::col("id").into_simple_expr()))
+		.from("jobs");
+
+	// Act
+	let result = validate_postgres_outer_lock_on_derived(derived);
+
+	// Assert
+	assert_eq!(
+		result,
+		Err(QueryBuildError::UnsupportedBackendFeature {
+			feature: "row locking with aggregate queries",
+			backend: "PostgreSQL",
+		})
+	);
+}
+
+#[rstest]
+fn postgres_checked_builder_propagates_targetless_locks_to_derived_grouped_queries() {
+	// Arrange
+	let mut derived = Query::select();
+	derived.column("state").from("jobs").group_by("state");
+
+	// Act
+	let result = validate_postgres_outer_lock_on_derived(derived);
+
+	// Assert
+	assert_eq!(
+		result,
+		Err(QueryBuildError::UnsupportedBackendFeature {
+			feature: "row locking with GROUP BY or HAVING queries",
+			backend: "PostgreSQL",
+		})
+	);
+}
+
+#[rstest]
+fn postgres_checked_builder_propagates_targetless_locks_to_derived_distinct_queries() {
+	// Arrange
+	let mut derived = Query::select();
+	derived.column("id").from("jobs").distinct();
+
+	// Act
+	let result = validate_postgres_outer_lock_on_derived(derived);
+
+	// Assert
+	assert_eq!(
+		result,
+		Err(QueryBuildError::UnsupportedBackendFeature {
+			feature: "row locking with DISTINCT queries",
+			backend: "PostgreSQL",
+		})
+	);
+}
+
+#[rstest]
+fn postgres_checked_builder_propagates_targetless_locks_to_derived_window_queries() {
+	// Arrange
+	let mut derived = Query::select();
+	derived
+		.expr(Expr::row_number().over(reinhardt_query::types::WindowStatement::default()))
+		.from("jobs");
+
+	// Act
+	let result = validate_postgres_outer_lock_on_derived(derived);
+
+	// Assert
+	assert_eq!(
+		result,
+		Err(QueryBuildError::UnsupportedBackendFeature {
+			feature: "row locking with window-function queries",
+			backend: "PostgreSQL",
+		})
+	);
+}
+
+#[rstest]
+fn postgres_checked_builder_propagates_targetless_locks_to_derived_union_queries() {
+	// Arrange
+	let mut derived = Query::select();
+	derived.column("id").from("jobs");
+	let mut union = Query::select();
+	union.column("id").from("archived_jobs");
+	derived.union(union);
+
+	// Act
+	let result = validate_postgres_outer_lock_on_derived(derived);
+
+	// Assert
+	assert_eq!(
+		result,
+		Err(QueryBuildError::UnsupportedBackendFeature {
+			feature: "row locking on UNION queries",
 			backend: "PostgreSQL",
 		})
 	);
@@ -334,6 +505,30 @@ fn cockroach_checked_builder_rejects_lock_targets() {
 		CockroachDBQueryBuilder::new().build_select_checked(&statement),
 		Err(QueryBuildError::UnsupportedBackendFeature {
 			feature: "row lock table targets",
+			backend: "CockroachDB",
+		})
+	);
+}
+
+#[rstest]
+#[case::without_table_targets(false)]
+#[case::with_table_targets(true)]
+fn cockroach_checked_builder_rejects_skip_locked(#[case] with_table_targets: bool) {
+	// Arrange
+	let mut statement = locked_select(LockType::Update);
+	statement.lock_behavior(LockBehavior::SkipLocked);
+	if with_table_targets {
+		statement.lock_tables([TableRef::table("users")]);
+	}
+
+	// Act
+	let result = CockroachDBQueryBuilder::new().build_select_checked(&statement);
+
+	// Assert
+	assert_eq!(
+		result,
+		Err(QueryBuildError::UnsupportedBackendFeature {
+			feature: "SKIP LOCKED row locking",
 			backend: "CockroachDB",
 		})
 	);

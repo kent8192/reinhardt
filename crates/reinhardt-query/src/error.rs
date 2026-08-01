@@ -19,6 +19,14 @@ use crate::{
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 #[non_exhaustive]
 pub enum QueryBuildError {
+	/// A temporal truncation unit cannot produce the requested result type.
+	#[error("temporal truncation {kind} cannot produce a {output} value")]
+	InvalidTemporalTruncation {
+		/// The requested truncation unit.
+		kind: &'static str,
+		/// The requested result type.
+		output: &'static str,
+	},
 	/// A query requires a feature unavailable in the selected backend.
 	#[error("{feature} is not supported by the {backend} backend")]
 	UnsupportedBackendFeature {
@@ -127,6 +135,7 @@ fn pgvector_feature_from_validation(
 			"pgvector values" => Some(PgvectorFeature::VectorValue),
 			_ => None,
 		},
+		Err(QueryBuildError::InvalidTemporalTruncation { .. }) => None,
 		Err(QueryBuildError::InvalidPgvectorDimensions { .. }) => None,
 		Ok(()) => None,
 	}
@@ -178,56 +187,85 @@ pub(crate) fn validate_select_lock_for_backend(
 	statement: &SelectStatement,
 	backend: &'static str,
 ) -> Result<(), QueryBuildError> {
-	validate_select_lock_for_backend_with_union_context(statement, backend, false)
+	validate_select_lock_for_backend_with_union_context(statement, backend, &[], false, false)
 }
 
 fn validate_select_lock_for_backend_with_union_context(
 	statement: &SelectStatement,
 	backend: &'static str,
+	visible_cte_names: &[String],
 	in_union_arm: bool,
+	inherited_lock: bool,
 ) -> Result<(), QueryBuildError> {
+	let mut visible_cte_names = visible_cte_names.to_vec();
 	for cte in &statement.ctes {
-		validate_select_lock_for_backend_with_union_context(&cte.query, backend, false)?;
+		validate_select_lock_for_backend_with_union_context(
+			&cte.query,
+			backend,
+			&visible_cte_names,
+			false,
+			false,
+		)?;
+		visible_cte_names.push(cte.name.to_string());
 	}
+	let lock_applies_to_derived = backend == "PostgreSQL"
+		&& (inherited_lock
+			|| statement
+				.lock
+				.as_ref()
+				.is_some_and(|lock| lock.tables.is_empty()));
 	for select in &statement.selects {
-		validate_simple_expr_lock(&select.expr, backend)?;
+		validate_simple_expr_lock(&select.expr, backend, &visible_cte_names)?;
 	}
 	for table in &statement.from {
-		validate_table_ref_lock(table, backend)?;
+		validate_table_ref_lock(table, backend, &visible_cte_names, lock_applies_to_derived)?;
 	}
 	for join in &statement.join {
-		validate_table_ref_lock(&join.table, backend)?;
+		validate_table_ref_lock(
+			&join.table,
+			backend,
+			&visible_cte_names,
+			lock_applies_to_derived,
+		)?;
 		if let Some(crate::types::JoinOn::Condition(condition)) = &join.on {
-			validate_condition_lock(condition, backend)?;
+			validate_condition_lock(condition, backend, &visible_cte_names)?;
 		}
 	}
-	validate_condition_holder_lock(&statement.r#where, backend)?;
+	validate_condition_holder_lock(&statement.r#where, backend, &visible_cte_names)?;
 	for group in &statement.groups {
-		validate_simple_expr_lock(group, backend)?;
+		validate_simple_expr_lock(group, backend, &visible_cte_names)?;
 	}
-	validate_condition_holder_lock(&statement.having, backend)?;
+	validate_condition_holder_lock(&statement.having, backend, &visible_cte_names)?;
 	for (_, union) in &statement.unions {
-		validate_select_lock_for_backend_with_union_context(union, backend, true)?;
+		validate_select_lock_for_backend_with_union_context(
+			union,
+			backend,
+			&visible_cte_names,
+			true,
+			false,
+		)?;
 	}
 	for order in &statement.orders {
 		if let OrderExprKind::Expr(expr) = &order.expr {
-			validate_simple_expr_lock(expr, backend)?;
+			validate_simple_expr_lock(expr, backend, &visible_cte_names)?;
 		}
 	}
 	for (_, window) in &statement.windows {
-		validate_window_lock(window, backend)?;
+		validate_window_lock(window, backend, &visible_cte_names)?;
 	}
 
-	let Some(lock) = &statement.lock else {
+	let lock = statement.lock.as_ref();
+	if lock.is_none() && !inherited_lock {
 		return Ok(());
-	};
+	}
 
 	match backend {
 		"PostgreSQL" => {
+			let lock_tables = lock.map_or(&[][..], |lock| lock.tables.as_slice());
 			if in_union_arm || !statement.unions.is_empty() {
 				return Err(unsupported("row locking on UNION queries", backend));
 			}
-			if statement_lock_targets_cte(statement, lock.tables.as_slice()) {
+			if statement_lock_targets_cte(statement, lock_tables, &visible_cte_names) {
 				return Err(unsupported("row locking on CTE-backed queries", backend));
 			}
 			if statement.distinct.is_some() {
@@ -260,7 +298,7 @@ fn validate_select_lock_for_backend_with_union_context(
 					backend,
 				));
 			}
-			if lock.tables.is_empty()
+			if lock.is_some_and(|lock| lock.tables.is_empty())
 				&& statement.join.iter().any(|join| {
 					matches!(
 						join.join,
@@ -272,11 +310,20 @@ fn validate_select_lock_for_backend_with_union_context(
 					backend,
 				));
 			}
-			validate_lock_tables_belong_to_statement(statement, lock.tables.as_slice(), backend)?;
-			validate_lock_tables_are_not_nullable(statement, lock.tables.as_slice(), backend)?;
+			if let Some(lock) = lock {
+				validate_lock_tables_belong_to_statement(
+					statement,
+					lock.tables.as_slice(),
+					backend,
+				)?;
+				validate_lock_tables_are_not_nullable(statement, lock.tables.as_slice(), backend)?;
+			}
 			Ok(())
 		}
 		"MySQL" => {
+			let Some(lock) = lock else {
+				return Ok(());
+			};
 			if in_union_arm || !statement.unions.is_empty() {
 				return Err(unsupported("row locking on UNION queries", backend));
 			}
@@ -291,6 +338,12 @@ fn validate_select_lock_for_backend_with_union_context(
 		}
 		"SQLite" => Err(unsupported("row locking", backend)),
 		"CockroachDB" => {
+			let Some(lock) = lock else {
+				return Ok(());
+			};
+			if matches!(lock.behavior, Some(crate::query::LockBehavior::SkipLocked)) {
+				return Err(unsupported("SKIP LOCKED row locking", backend));
+			}
 			if lock.tables.is_empty() {
 				Ok(())
 			} else {
@@ -301,17 +354,16 @@ fn validate_select_lock_for_backend_with_union_context(
 	}
 }
 
-fn statement_lock_targets_cte(statement: &SelectStatement, targets: &[TableRef]) -> bool {
-	let cte_names = statement
-		.ctes
-		.iter()
-		.map(|cte| cte.name.to_string())
-		.collect::<Vec<_>>();
+fn statement_lock_targets_cte(
+	statement: &SelectStatement,
+	targets: &[TableRef],
+	visible_cte_names: &[String],
+) -> bool {
 	let cte_relations = statement
 		.from
 		.iter()
 		.chain(statement.join.iter().map(|join| &join.table))
-		.filter(|table| table_ref_references_cte(table, &cte_names))
+		.filter(|table| table_ref_references_cte(table, visible_cte_names))
 		.collect::<Vec<_>>();
 	if cte_relations.is_empty() {
 		return false;
@@ -356,7 +408,10 @@ fn contains_aggregate(expr: &SimpleExpr) -> bool {
 		SimpleExpr::Unary(_, expression)
 		| SimpleExpr::AsEnum(_, expression)
 		| SimpleExpr::ExprAlias(expression, _)
-		| SimpleExpr::Cast(expression, _) => contains_aggregate(expression),
+		| SimpleExpr::Cast(expression, _)
+		| SimpleExpr::TemporalTrunc {
+			expr: expression, ..
+		} => contains_aggregate(expression),
 		SimpleExpr::Binary(left, _, right) => contains_aggregate(left) || contains_aggregate(right),
 		SimpleExpr::Tuple(expressions) | SimpleExpr::CustomWithExpr(_, expressions) => {
 			expressions.iter().any(contains_aggregate)
@@ -390,7 +445,10 @@ fn contains_window(expr: &SimpleExpr) -> bool {
 		SimpleExpr::Unary(_, expression)
 		| SimpleExpr::AsEnum(_, expression)
 		| SimpleExpr::ExprAlias(expression, _)
-		| SimpleExpr::Cast(expression, _) => contains_window(expression),
+		| SimpleExpr::Cast(expression, _)
+		| SimpleExpr::TemporalTrunc {
+			expr: expression, ..
+		} => contains_window(expression),
 		SimpleExpr::Binary(left, _, right) => contains_window(left) || contains_window(right),
 		SimpleExpr::FunctionCall(_, arguments)
 		| SimpleExpr::Tuple(arguments)
@@ -513,9 +571,10 @@ fn table_ref_is_derived(table: &TableRef) -> bool {
 fn validate_condition_holder_lock(
 	holder: &ConditionHolder,
 	backend: &'static str,
+	visible_cte_names: &[String],
 ) -> Result<(), QueryBuildError> {
 	for condition in &holder.conditions {
-		validate_condition_expression_lock(condition, backend)?;
+		validate_condition_expression_lock(condition, backend, visible_cte_names)?;
 	}
 	Ok(())
 }
@@ -523,9 +582,10 @@ fn validate_condition_holder_lock(
 fn validate_condition_lock(
 	condition: &Condition,
 	backend: &'static str,
+	visible_cte_names: &[String],
 ) -> Result<(), QueryBuildError> {
 	for expression in &condition.conditions {
-		validate_condition_expression_lock(expression, backend)?;
+		validate_condition_expression_lock(expression, backend, visible_cte_names)?;
 	}
 	Ok(())
 }
@@ -533,16 +593,22 @@ fn validate_condition_lock(
 fn validate_condition_expression_lock(
 	expression: &ConditionExpression,
 	backend: &'static str,
+	visible_cte_names: &[String],
 ) -> Result<(), QueryBuildError> {
 	match expression {
-		ConditionExpression::SimpleExpr(expr) => validate_simple_expr_lock(expr, backend),
-		ConditionExpression::Condition(condition) => validate_condition_lock(condition, backend),
+		ConditionExpression::SimpleExpr(expr) => {
+			validate_simple_expr_lock(expr, backend, visible_cte_names)
+		}
+		ConditionExpression::Condition(condition) => {
+			validate_condition_lock(condition, backend, visible_cte_names)
+		}
 	}
 }
 
 fn validate_simple_expr_lock(
 	expr: &SimpleExpr,
 	backend: &'static str,
+	visible_cte_names: &[String],
 ) -> Result<(), QueryBuildError> {
 	match expr {
 		SimpleExpr::Column(_)
@@ -554,47 +620,67 @@ fn validate_simple_expr_lock(
 		SimpleExpr::Unary(_, expression)
 		| SimpleExpr::AsEnum(_, expression)
 		| SimpleExpr::ExprAlias(expression, _)
-		| SimpleExpr::Cast(expression, _) => validate_simple_expr_lock(expression, backend),
+		| SimpleExpr::Cast(expression, _)
+		| SimpleExpr::TemporalTrunc {
+			expr: expression, ..
+		} => validate_simple_expr_lock(expression, backend, visible_cte_names),
 		SimpleExpr::Binary(left, _, right) => {
-			validate_simple_expr_lock(left, backend)?;
-			validate_simple_expr_lock(right, backend)
+			validate_simple_expr_lock(left, backend, visible_cte_names)?;
+			validate_simple_expr_lock(right, backend, visible_cte_names)
 		}
 		SimpleExpr::FunctionCall(_, args) | SimpleExpr::Tuple(args) => {
 			for arg in args {
-				validate_simple_expr_lock(arg, backend)?;
+				validate_simple_expr_lock(arg, backend, visible_cte_names)?;
 			}
 			Ok(())
 		}
-		SimpleExpr::SubQuery(_, query) => {
-			validate_select_lock_for_backend_with_union_context(query, backend, false)
-		}
+		SimpleExpr::SubQuery(_, query) => validate_select_lock_for_backend_with_union_context(
+			query,
+			backend,
+			visible_cte_names,
+			false,
+			false,
+		),
 		SimpleExpr::CustomWithExpr(_, expressions) => {
 			for expression in expressions {
-				validate_simple_expr_lock(expression, backend)?;
+				validate_simple_expr_lock(expression, backend, visible_cte_names)?;
 			}
 			Ok(())
 		}
 		SimpleExpr::Case(case) => {
 			for (condition, result) in &case.when_clauses {
-				validate_simple_expr_lock(condition, backend)?;
-				validate_simple_expr_lock(result, backend)?;
+				validate_simple_expr_lock(condition, backend, visible_cte_names)?;
+				validate_simple_expr_lock(result, backend, visible_cte_names)?;
 			}
 			if let Some(result) = &case.else_clause {
-				validate_simple_expr_lock(result, backend)?;
+				validate_simple_expr_lock(result, backend, visible_cte_names)?;
 			}
 			Ok(())
 		}
 		SimpleExpr::Window { func, window } => {
-			validate_simple_expr_lock(func, backend)?;
-			validate_window_lock(window, backend)
+			validate_simple_expr_lock(func, backend, visible_cte_names)?;
+			validate_window_lock(window, backend, visible_cte_names)
 		}
-		SimpleExpr::WindowNamed { func, .. } => validate_simple_expr_lock(func, backend),
+		SimpleExpr::WindowNamed { func, .. } => {
+			validate_simple_expr_lock(func, backend, visible_cte_names)
+		}
 	}
 }
 
-fn validate_table_ref_lock(table: &TableRef, backend: &'static str) -> Result<(), QueryBuildError> {
+fn validate_table_ref_lock(
+	table: &TableRef,
+	backend: &'static str,
+	visible_cte_names: &[String],
+	inherited_lock: bool,
+) -> Result<(), QueryBuildError> {
 	if let TableRef::SubQuery(query, _) = table {
-		validate_select_lock_for_backend_with_union_context(query, backend, false)?;
+		validate_select_lock_for_backend_with_union_context(
+			query,
+			backend,
+			visible_cte_names,
+			false,
+			inherited_lock,
+		)?;
 	}
 	Ok(())
 }
@@ -602,13 +688,14 @@ fn validate_table_ref_lock(table: &TableRef, backend: &'static str) -> Result<()
 fn validate_window_lock(
 	window: &WindowStatement,
 	backend: &'static str,
+	visible_cte_names: &[String],
 ) -> Result<(), QueryBuildError> {
 	for partition in &window.partition_by {
-		validate_simple_expr_lock(partition, backend)?;
+		validate_simple_expr_lock(partition, backend, visible_cte_names)?;
 	}
 	for order in &window.order_by {
 		if let OrderExprKind::Expr(expr) = &order.expr {
-			validate_simple_expr_lock(expr, backend)?;
+			validate_simple_expr_lock(expr, backend, visible_cte_names)?;
 		}
 	}
 	Ok(())
@@ -668,7 +755,7 @@ pub(crate) fn validate_insert_for_backend(
 	if let Some(expressions) = &statement.returning_exprs {
 		for expression in expressions {
 			validate_simple_expr(expression, backend)?;
-			validate_simple_expr_lock(expression, backend)?;
+			validate_simple_expr_lock(expression, backend, &[])?;
 		}
 	}
 	Ok(())
@@ -683,7 +770,7 @@ pub(crate) fn validate_insert_lock_for_backend(
 	}
 	if let Some(expressions) = &statement.returning_exprs {
 		for expression in expressions {
-			validate_simple_expr_lock(expression, backend)?;
+			validate_simple_expr_lock(expression, backend, &[])?;
 		}
 	}
 	Ok(())
@@ -698,14 +785,14 @@ pub(crate) fn validate_update_for_backend(
 	}
 	for (_, expression) in &statement.values {
 		validate_simple_expr(expression, backend)?;
-		validate_simple_expr_lock(expression, backend)?;
+		validate_simple_expr_lock(expression, backend, &[])?;
 	}
 	validate_condition_holder(&statement.r#where, backend)?;
-	validate_condition_holder_lock(&statement.r#where, backend)?;
+	validate_condition_holder_lock(&statement.r#where, backend, &[])?;
 	if let Some(expressions) = &statement.returning_exprs {
 		for expression in expressions {
 			validate_simple_expr(expression, backend)?;
-			validate_simple_expr_lock(expression, backend)?;
+			validate_simple_expr_lock(expression, backend, &[])?;
 		}
 	}
 	Ok(())
@@ -716,15 +803,15 @@ pub(crate) fn validate_update_lock_for_backend(
 	backend: &'static str,
 ) -> Result<(), QueryBuildError> {
 	if let Some(table) = &statement.table {
-		validate_table_ref_lock(table, backend)?;
+		validate_table_ref_lock(table, backend, &[], false)?;
 	}
 	for (_, expression) in &statement.values {
-		validate_simple_expr_lock(expression, backend)?;
+		validate_simple_expr_lock(expression, backend, &[])?;
 	}
-	validate_condition_holder_lock(&statement.r#where, backend)?;
+	validate_condition_holder_lock(&statement.r#where, backend, &[])?;
 	if let Some(expressions) = &statement.returning_exprs {
 		for expression in expressions {
-			validate_simple_expr_lock(expression, backend)?;
+			validate_simple_expr_lock(expression, backend, &[])?;
 		}
 	}
 	Ok(())
@@ -738,11 +825,11 @@ pub(crate) fn validate_delete_for_backend(
 		validate_table_ref(table, backend)?;
 	}
 	validate_condition_holder(&statement.r#where, backend)?;
-	validate_condition_holder_lock(&statement.r#where, backend)?;
+	validate_condition_holder_lock(&statement.r#where, backend, &[])?;
 	if let Some(expressions) = &statement.returning_exprs {
 		for expression in expressions {
 			validate_simple_expr(expression, backend)?;
-			validate_simple_expr_lock(expression, backend)?;
+			validate_simple_expr_lock(expression, backend, &[])?;
 		}
 	}
 	Ok(())
@@ -753,12 +840,12 @@ pub(crate) fn validate_delete_lock_for_backend(
 	backend: &'static str,
 ) -> Result<(), QueryBuildError> {
 	if let Some(table) = &statement.table {
-		validate_table_ref_lock(table, backend)?;
+		validate_table_ref_lock(table, backend, &[], false)?;
 	}
-	validate_condition_holder_lock(&statement.r#where, backend)?;
+	validate_condition_holder_lock(&statement.r#where, backend, &[])?;
 	if let Some(expressions) = &statement.returning_exprs {
 		for expression in expressions {
-			validate_simple_expr_lock(expression, backend)?;
+			validate_simple_expr_lock(expression, backend, &[])?;
 		}
 	}
 	Ok(())
@@ -934,16 +1021,42 @@ fn validate_simple_expr(expr: &SimpleExpr, backend: &'static str) -> Result<(), 
 		| SimpleExpr::AsEnum(_, expression)
 		| SimpleExpr::ExprAlias(expression, _)
 		| SimpleExpr::Cast(expression, _) => validate_simple_expr(expression, backend),
+		SimpleExpr::TemporalTrunc {
+			expr,
+			kind,
+			time_zone,
+			output,
+		} => {
+			if *output == crate::expr::TemporalTruncOutput::Date
+				&& matches!(
+					kind,
+					crate::expr::TemporalTruncKind::Hour
+						| crate::expr::TemporalTruncKind::Minute
+						| crate::expr::TemporalTruncKind::Second
+				) {
+				return Err(QueryBuildError::InvalidTemporalTruncation {
+					kind: kind.as_str(),
+					output: "date",
+				});
+			}
+			if matches!(backend, "MySQL" | "SQLite")
+				&& matches!(time_zone, Some(crate::expr::TemporalTimeZone::Named(_)))
+			{
+				return Err(unsupported("named time-zone conversion", backend));
+			}
+			validate_simple_expr(expr, backend)
+		}
 		SimpleExpr::Binary(left, _operator, right) => {
 			#[cfg(feature = "pgvector")]
-			if matches!(
-				_operator,
-				BinOper::PgOperator(
-					PgBinOper::L2Distance
-						| PgBinOper::NegativeInnerProduct
-						| PgBinOper::CosineDistance
-				)
-			) {
+			if backend != "PostgreSQL"
+				&& matches!(
+					_operator,
+					BinOper::PgOperator(
+						PgBinOper::L2Distance
+							| PgBinOper::NegativeInnerProduct
+							| PgBinOper::CosineDistance
+					)
+				) {
 				return Err(unsupported("pgvector distance operators", backend));
 			}
 			validate_simple_expr(left, backend)?;
@@ -983,7 +1096,7 @@ fn validate_simple_expr(expr: &SimpleExpr, backend: &'static str) -> Result<(), 
 fn validate_value(value: &Value, _backend: &'static str) -> Result<(), QueryBuildError> {
 	match value {
 		#[cfg(feature = "pgvector")]
-		Value::Vector(_) => Err(unsupported("pgvector values", _backend)),
+		Value::Vector(_) if _backend != "PostgreSQL" => Err(unsupported("pgvector values", _backend)),
 		Value::Array(_, Some(values)) => {
 			for value in values.iter() {
 				validate_value(value, _backend)?;
@@ -1155,7 +1268,10 @@ fn collect_simple_expr_pgvector_features_with_values(
 		SimpleExpr::Unary(_, expression)
 		| SimpleExpr::AsEnum(_, expression)
 		| SimpleExpr::ExprAlias(expression, _)
-		| SimpleExpr::Cast(expression, _) => {
+		| SimpleExpr::Cast(expression, _)
+		| SimpleExpr::TemporalTrunc {
+			expr: expression, ..
+		} => {
 			collect_simple_expr_pgvector_features_with_values(
 				expression,
 				features,

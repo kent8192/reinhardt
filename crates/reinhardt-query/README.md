@@ -17,6 +17,8 @@ A type-safe SQL query builder for the Reinhardt framework.
 - **Parameterized queries** - `$1` for PostgreSQL/CockroachDB, `?` for MySQL/SQLite
 - **CASE WHEN expressions** - Conditional expressions in queries
 - **Subqueries** - EXISTS, IN, ALL, ANY, SOME operators
+- **Temporal projections** - Typed date/datetime truncation with backend-specific
+  time-zone lowering
 
 ### DDL (Data Definition Language)
 - **Table operations** - CREATE TABLE, ALTER TABLE, DROP TABLE
@@ -67,6 +69,22 @@ stmt.column("name")
 let builder = PostgresQueryBuilder::new();
 let (sql, values) = builder.build_select(&stmt);
 // sql = r#"SELECT "name", "email" FROM "users" WHERE "active" = $1 ORDER BY "name" ASC LIMIT $2"#
+```
+
+Temporal projections remain structural expressions instead of raw SQL:
+
+```rust
+use reinhardt_query::prelude::*;
+
+let projection = Func::temporal_trunc(
+    Expr::col("occurred_at").into_simple_expr(),
+    TemporalTruncKind::Hour,
+    Some(TemporalTimeZone::Utc),
+    TemporalTruncOutput::DateTime,
+)
+.expect("hour truncation produces a datetime");
+let mut stmt = Query::select();
+stmt.expr_as(projection, "value").from("events").distinct();
 ```
 
 ## Usage Examples

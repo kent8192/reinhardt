@@ -851,6 +851,11 @@ they do not resolve a connection or invoke an executor. The equivalent
 caller-owned connection or transaction executor. These contracts are
 backend-neutral across PostgreSQL, MySQL, and SQLite.
 
+Bulk retrieval accounts for bind parameters already used by the source
+queryset when splitting lookup keys into backend-safe batches. It returns a
+validation error when the source query has exhausted the backend's bind
+parameter limit and no lookup key can be added safely.
+
 When a retrieval ordering field is nullable, its relative NULL placement follows
 the connected database. Filter nulls explicitly before calling `latest*` or
 `earliest*` when that placement is part of the application contract.

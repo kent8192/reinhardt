@@ -7356,13 +7356,21 @@ where
 		keys: BTreeSet<K>,
 		backend: super::connection::DatabaseBackend,
 		reserved_binds: usize,
-	) -> Vec<Vec<K>> {
+	) -> reinhardt_core::exception::Result<Vec<Vec<K>>> {
 		let parameter_limit: usize = match backend {
 			super::connection::DatabaseBackend::Sqlite => 900,
 			super::connection::DatabaseBackend::Postgres
 			| super::connection::DatabaseBackend::MySql => 65_535,
 		};
-		let limit = parameter_limit.saturating_sub(reserved_binds).max(1);
+		if keys.is_empty() {
+			return Ok(Vec::new());
+		}
+		if reserved_binds >= parameter_limit {
+			return Err(Error::Validation(format!(
+				"QuerySet bulk retrieval cannot add lookup keys because the source query uses all {parameter_limit} available bind parameters"
+			)));
+		}
+		let limit = parameter_limit - reserved_binds;
 		let mut batches = Vec::with_capacity(keys.len().div_ceil(limit));
 		let mut batch = Vec::with_capacity(limit);
 		for key in keys {
@@ -7375,7 +7383,7 @@ where
 		if !batch.is_empty() {
 			batches.push(batch);
 		}
-		batches
+		Ok(batches)
 	}
 
 	fn select_bind_count(
@@ -7577,7 +7585,7 @@ where
 		>::new(T::primary_key_column());
 		let reserved_binds = self.select_bind_count(conn.backend(), conn.is_cockroachdb())?;
 		let mut result = BTreeMap::new();
-		for keys in Self::bulk_key_batches(keys, conn.backend(), reserved_binds) {
+		for keys in Self::bulk_key_batches(keys, conn.backend(), reserved_binds)? {
 			let rows = self
 				.clone()
 				.with_bulk_lookup_column(T::primary_key_column())
@@ -7604,7 +7612,7 @@ where
 		let backend = Self::executor_backend(executor);
 		let reserved_binds = self.select_bind_count(backend, executor.is_cockroachdb())?;
 		let mut result = BTreeMap::new();
-		for keys in Self::bulk_key_batches(keys, backend, reserved_binds) {
+		for keys in Self::bulk_key_batches(keys, backend, reserved_binds)? {
 			let filter = super::expressions::FieldRef::<
 				T,
 				T::PrimaryKey,
@@ -7639,7 +7647,7 @@ where
 	{
 		let reserved_binds = self.select_bind_count(conn.backend(), conn.is_cockroachdb())?;
 		let mut result = BTreeMap::new();
-		for keys in Self::bulk_key_batches(keys, conn.backend(), reserved_binds) {
+		for keys in Self::bulk_key_batches(keys, conn.backend(), reserved_binds)? {
 			let rows = self
 				.clone()
 				.with_bulk_lookup_column(unique_field.name())
@@ -7668,7 +7676,7 @@ where
 		let backend = Self::executor_backend(executor);
 		let reserved_binds = self.select_bind_count(backend, executor.is_cockroachdb())?;
 		let mut result = BTreeMap::new();
-		for keys in Self::bulk_key_batches(keys, backend, reserved_binds) {
+		for keys in Self::bulk_key_batches(keys, backend, reserved_binds)? {
 			let rows = self
 				.clone()
 				.with_bulk_lookup_column(unique_field.name())
@@ -12348,12 +12356,34 @@ mod tests {
 		let keys = (0_i64..901).collect::<BTreeSet<_>>();
 
 		// Act
-		let batches = QuerySet::<TestUser>::bulk_key_batches(keys, DatabaseBackend::Sqlite, 0);
+		let batches = QuerySet::<TestUser>::bulk_key_batches(keys, DatabaseBackend::Sqlite, 0)
+			.expect("SQLite should have bind slots available");
 
 		// Assert
 		assert_eq!(batches.len(), 2);
 		assert_eq!(batches[0], (0_i64..900).collect::<Vec<_>>());
 		assert_eq!(batches[1], vec![900]);
+	}
+
+	#[rstest]
+	#[case(DatabaseBackend::Postgres)]
+	#[case(DatabaseBackend::MySql)]
+	fn bulk_key_batches_reject_exhausted_server_bind_limit(#[case] backend: DatabaseBackend) {
+		// Arrange
+		let keys = BTreeSet::from([1_i64]);
+
+		// Act
+		let error = QuerySet::<TestUser>::bulk_key_batches(keys, backend, 65_535)
+			.expect_err("an exhausted bind budget should reject bulk retrieval");
+
+		// Assert
+		let reinhardt_core::exception::Error::Validation(message) = error else {
+			panic!("expected validation error, got {error:?}");
+		};
+		assert_eq!(
+			message,
+			"QuerySet bulk retrieval cannot add lookup keys because the source query uses all 65535 available bind parameters"
+		);
 	}
 
 	#[test]
@@ -13310,8 +13340,10 @@ mod tests {
 			.to_sql()
 			.expect("query SQL should compile");
 
-		assert!(sql.contains(r#"ORDER BY "other_age" ASC"#));
-		assert!(!sql.contains(r#"ORDER BY "test_users"."other_age" ASC"#));
+		assert_eq!(
+			sql,
+			r#"SELECT *, 42 AS "other_age" FROM "test_users" INNER JOIN "test_projects" ON test_users.id = test_projects.user_id ORDER BY "other_age" ASC"#
+		);
 	}
 
 	#[test]

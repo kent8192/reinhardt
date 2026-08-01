@@ -105,6 +105,42 @@ pub trait Model: Serialize + for<'de> Deserialize<'de> + Send + Sync + Clone {
 		Self::primary_key_field()
 	}
 
+	/// Encodes a primary key into its canonical database representation.
+	///
+	/// Macro-generated models route this through the primary-key field's
+	/// [`DatabaseField`](super::DatabaseField) implementation. Manual model
+	/// implementations retain the legacy numeric, UUID, or string fallback and
+	/// can override this method for custom primary-key codecs.
+	fn primary_key_database_value(pk: &Self::PrimaryKey) -> Result<DatabaseValue, FieldCodecError> {
+		let value = pk.to_string();
+		let field_type = Self::field_metadata()
+			.into_iter()
+			.find(|field| field.name == Self::primary_key_field())
+			.map(|field| field.field_type);
+
+		let value = match field_type
+			.as_deref()
+			.and_then(|value| value.rsplit('.').next())
+		{
+			Some("AutoField")
+			| Some("IntegerField")
+			| Some("BigAutoField")
+			| Some("BigIntegerField") => value
+				.parse::<i64>()
+				.map(DatabaseValue::I64)
+				.unwrap_or_else(|_| DatabaseValue::String(value.clone())),
+			Some("UuidField") => uuid::Uuid::parse_str(&value)
+				.map(DatabaseValue::Uuid)
+				.unwrap_or_else(|_| DatabaseValue::String(value.clone())),
+			_ => value
+				.parse::<i64>()
+				.map(DatabaseValue::I64)
+				.unwrap_or(DatabaseValue::String(value)),
+		};
+
+		Ok(value)
+	}
+
 	/// Get the primary key value
 	///
 	/// Returns an owned copy of the primary key. For composite primary keys,

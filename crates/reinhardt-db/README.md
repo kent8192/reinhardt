@@ -66,6 +66,40 @@ This crate provides the following modules:
   - Only/Defer field optimization for reduced data transfer
   - Aggregate pushdown optimization
 
+### Streaming QuerySets
+
+`QuerySet::iterator_with_db` and `QuerySet::iterator_with_executor` decode one
+model at a time from a lifetime-bound driver stream. The stream borrows the
+caller-owned executor, returns `Result<Model>` for every item, and releases its
+driver resources when it completes, fails, is cancelled, or is dropped early.
+
+```rust
+use futures::StreamExt;
+use reinhardt_db::orm::{Model, OrmExecutor, QuerySet};
+use serde::de::DeserializeOwned;
+
+async fn stream_models<M, E>(connection: &mut E) -> reinhardt_core::exception::Result<()>
+where
+    M: Model + DeserializeOwned,
+    E: OrmExecutor,
+{
+	let mut models = QuerySet::<M>::new().iterator_with_db(connection, 128)?;
+	while let Some(model) = models.next().await {
+		let model = model?;
+		// Process the typed model without a QuerySet-level result cache.
+		let _ = model;
+	}
+	Ok(())
+}
+```
+
+PostgreSQL, MySQL, and SQLite support driver-backed streaming. Custom executors
+must implement the row-stream capability or the iterator returns an explicit
+`Unsupported` database error. `chunk_size` is a driver fetch or bounded-buffer
+hint rather than a promise about server internals. Unlike Django's compatibility
+fallbacks, Reinhardt intentionally rejects eager `fetch_all` materialization and
+repeated `LIMIT`/`OFFSET` pagination for this API.
+
 - **Enhanced Transaction Management**
   - Nested transactions with savepoint support
   - Isolation level control (ReadUncommitted, ReadCommitted, RepeatableRead, Serializable)
@@ -213,6 +247,7 @@ Add this to your `Cargo.toml`:
 ```toml
 [dependencies]
 reinhardt-db = "0.4.0-alpha.3"
+chrono-tz = "0.10"
 ```
 
 ### Optional Features
@@ -418,7 +453,7 @@ explicit plural table names because they represent an existing schema.
 ```rust
 use reinhardt_db::prelude::*;
 use serde::{Serialize, Deserialize};
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, NaiveDate, Utc};
 
 #[derive(Serialize, Deserialize)]
 #[model(app_label = "myapp", table_name = "users")]
@@ -437,6 +472,9 @@ pub struct User {
 
     /// User's age
     pub age: i32,
+
+    /// Calendar date when the account was opened
+    pub signup_date: NaiveDate,
 
     /// Account creation timestamp (auto-populated on insert)
     #[field(auto_now_add = true)]
@@ -621,7 +659,11 @@ pub full_name: String,
 ### Query with QuerySet
 
 ```rust
-use reinhardt_db::orm::Model;
+use chrono::Utc;
+use futures::StreamExt;
+use reinhardt_db::orm::{
+    DateProjectionOrder, DateTimeTruncKind, DateTruncKind, Model,
+};
 
 // Get all users
 let users = User::objects().all().await?;
@@ -652,6 +694,40 @@ let recent = User::objects()
     .all()
     .await?;
 
+// Distinct database-side temporal projections
+let signup_months = User::objects()
+    .dates(
+        User::field_signup_date(),
+        DateTruncKind::Month,
+        DateProjectionOrder::Asc,
+    )
+    .await?;
+let mut connection = reinhardt_db::orm::manager::get_connection().await?;
+let signup_days = User::objects()
+    .dates_with_db(
+        &mut connection,
+        User::field_signup_date(),
+        DateTruncKind::Day,
+        DateProjectionOrder::Asc,
+    )
+    .await?;
+let local_hours = User::objects()
+    .datetimes(
+        User::field_created_at(),
+        DateTimeTruncKind::Hour,
+        DateProjectionOrder::Desc,
+        Some(chrono_tz::Asia::Tokyo),
+    )
+    .await?;
+
+// Stream typed-field results through the caller-owned executor.
+let mut streamed_adults = User::objects()
+    .filter(User::field_age().gte(18))
+    .iterator_with_db(&mut connection, 128)?;
+while let Some(user) = streamed_adults.next().await {
+    let _user = user?;
+}
+
 // Atomic conditional partial update
 let updated = User::objects()
     .filter(User::field_id().eq(user_id))
@@ -659,6 +735,18 @@ let updated = User::objects()
     .update_fields([User::field_updated_at().assign(Utc::now())])
     .await?;
 ```
+
+`dates` and `datetimes` exclude nulls and perform truncation, distinct
+projection, and ordering in the database. ISO weeks begin on Monday.
+`datetimes` defaults to UTC and converts to the requested zone before
+truncation. PostgreSQL supports IANA named zones. MySQL and SQLite return an
+explicit capability error for named zones because Reinhardt cannot guarantee
+MySQL time-zone tables or correct SQLite named-zone conversion. This is
+intentionally stricter than Django's environment-dependent fallback behavior.
+Global ORM time-zone configuration is intentionally outside this API; pass the
+zone explicitly when UTC is not the desired projection.
+Use `dates_with_db` / `datetimes_with_db` or the corresponding
+`*_with_executor` variants to retain a caller-owned connection or transaction.
 
 ### Scoped N+1 Query Detection
 

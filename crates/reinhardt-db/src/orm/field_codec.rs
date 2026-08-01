@@ -5,6 +5,10 @@
 //! [`ModelEnum`] provides a derive-generated contract for unit enums with
 //! explicit persistent values.
 //!
+//! Macro-generated models also use this contract when managers bind primary
+//! keys for updates and deletions. Database column aliases remain model
+//! metadata, while the bound scalar comes from the primary-key field codec.
+//!
 //! # Native model enums
 //!
 //! A model enum must choose either `"string"` or `"i32"` storage and assign a

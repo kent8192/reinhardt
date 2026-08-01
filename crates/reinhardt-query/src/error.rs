@@ -19,6 +19,14 @@ use crate::{
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 #[non_exhaustive]
 pub enum QueryBuildError {
+	/// A temporal truncation unit cannot produce the requested result type.
+	#[error("temporal truncation {kind} cannot produce a {output} value")]
+	InvalidTemporalTruncation {
+		/// The requested truncation unit.
+		kind: &'static str,
+		/// The requested result type.
+		output: &'static str,
+	},
 	/// A query requires a feature unavailable in the selected backend.
 	#[error("{feature} is not supported by the {backend} backend")]
 	UnsupportedBackendFeature {
@@ -127,6 +135,7 @@ fn pgvector_feature_from_validation(
 			"pgvector values" => Some(PgvectorFeature::VectorValue),
 			_ => None,
 		},
+		Err(QueryBuildError::InvalidTemporalTruncation { .. }) => None,
 		Err(QueryBuildError::InvalidPgvectorDimensions { .. }) => None,
 		Ok(()) => None,
 	}
@@ -331,7 +340,6 @@ fn validate_postgres_column_type_dimensions(
 	}
 }
 
-#[cfg(feature = "pgvector")]
 fn unsupported(feature: &'static str, backend: &'static str) -> QueryBuildError {
 	QueryBuildError::UnsupportedBackendFeature { feature, backend }
 }
@@ -436,16 +444,42 @@ fn validate_simple_expr(expr: &SimpleExpr, backend: &'static str) -> Result<(), 
 		| SimpleExpr::AsEnum(_, expression)
 		| SimpleExpr::ExprAlias(expression, _)
 		| SimpleExpr::Cast(expression, _) => validate_simple_expr(expression, backend),
+		SimpleExpr::TemporalTrunc {
+			expr,
+			kind,
+			time_zone,
+			output,
+		} => {
+			if *output == crate::expr::TemporalTruncOutput::Date
+				&& matches!(
+					kind,
+					crate::expr::TemporalTruncKind::Hour
+						| crate::expr::TemporalTruncKind::Minute
+						| crate::expr::TemporalTruncKind::Second
+				) {
+				return Err(QueryBuildError::InvalidTemporalTruncation {
+					kind: kind.as_str(),
+					output: "date",
+				});
+			}
+			if matches!(backend, "MySQL" | "SQLite")
+				&& matches!(time_zone, Some(crate::expr::TemporalTimeZone::Named(_)))
+			{
+				return Err(unsupported("named time-zone conversion", backend));
+			}
+			validate_simple_expr(expr, backend)
+		}
 		SimpleExpr::Binary(left, _operator, right) => {
 			#[cfg(feature = "pgvector")]
-			if matches!(
-				_operator,
-				BinOper::PgOperator(
-					PgBinOper::L2Distance
-						| PgBinOper::NegativeInnerProduct
-						| PgBinOper::CosineDistance
-				)
-			) {
+			if backend != "PostgreSQL"
+				&& matches!(
+					_operator,
+					BinOper::PgOperator(
+						PgBinOper::L2Distance
+							| PgBinOper::NegativeInnerProduct
+							| PgBinOper::CosineDistance
+					)
+				) {
 				return Err(unsupported("pgvector distance operators", backend));
 			}
 			validate_simple_expr(left, backend)?;
@@ -485,7 +519,7 @@ fn validate_simple_expr(expr: &SimpleExpr, backend: &'static str) -> Result<(), 
 fn validate_value(value: &Value, _backend: &'static str) -> Result<(), QueryBuildError> {
 	match value {
 		#[cfg(feature = "pgvector")]
-		Value::Vector(_) => Err(unsupported("pgvector values", _backend)),
+		Value::Vector(_) if _backend != "PostgreSQL" => Err(unsupported("pgvector values", _backend)),
 		Value::Array(_, Some(values)) => {
 			for value in values.iter() {
 				validate_value(value, _backend)?;
@@ -657,7 +691,10 @@ fn collect_simple_expr_pgvector_features_with_values(
 		SimpleExpr::Unary(_, expression)
 		| SimpleExpr::AsEnum(_, expression)
 		| SimpleExpr::ExprAlias(expression, _)
-		| SimpleExpr::Cast(expression, _) => {
+		| SimpleExpr::Cast(expression, _)
+		| SimpleExpr::TemporalTrunc {
+			expr: expression, ..
+		} => {
 			collect_simple_expr_pgvector_features_with_values(
 				expression,
 				features,

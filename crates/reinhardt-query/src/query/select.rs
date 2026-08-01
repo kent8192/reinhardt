@@ -757,6 +757,10 @@ impl SelectStatement {
 	///
 	/// Calling this method replaces the complete existing lock clause, including
 	/// its behavior and table targets.
+	///
+	/// Backend support for locking query shapes differs. Use a checked backend
+	/// builder to receive a [`QueryBuildError`](crate::QueryBuildError) before
+	/// emitting unsupported SQL.
 	pub fn lock(&mut self, lock_type: LockType) -> &mut Self {
 		self.lock = Some(LockClause {
 			r#type: lock_type,

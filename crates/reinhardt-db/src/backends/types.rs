@@ -786,13 +786,18 @@ impl RowLockCapabilities {
 		Self::mysql_for_version(8, 0, 1)
 	}
 
-	/// Capabilities for CockroachDB's PostgreSQL-compatible lock syntax.
+	/// Capabilities for the built-in CockroachDB v23.1 lock profile.
+	///
+	/// CockroachDB v23.1 supports `FOR UPDATE` and `NOWAIT`, but not
+	/// `SKIP LOCKED` or explicit lock targets. Custom transaction executors for
+	/// servers with different capabilities should override
+	/// [`TransactionExecutor::row_lock_capabilities`].
 	pub const fn cockroachdb() -> Self {
 		Self {
 			update: true,
 			no_key_update: false,
 			nowait: true,
-			skip_locked: true,
+			skip_locked: false,
 			targets: false,
 		}
 	}

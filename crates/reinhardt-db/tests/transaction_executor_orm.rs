@@ -617,6 +617,85 @@ async fn select_for_update_rejects_missing_server_capability_without_querying() 
 }
 
 #[tokio::test]
+async fn select_for_update_rejects_cockroachdb_skip_locked_without_querying() {
+	let query = QuerySet::<Article>::new().select_for_update().skip_locked();
+	let mut executor = RowLockTransactionExecutor {
+		backend: reinhardt_db::backends::DatabaseType::Postgres,
+		capabilities: reinhardt_db::orm::RowLockCapabilities::cockroachdb(),
+		calls: Vec::new(),
+		rows: Vec::new(),
+	};
+
+	let error = match query.rows_with_executor(&mut executor).await {
+		Ok(_) => panic!("CockroachDB v23.1 must reject SKIP LOCKED before query execution"),
+		Err(error) => error,
+	};
+
+	assert_eq!(error.kind(), DatabaseErrorKind::Unsupported);
+	assert!(executor.calls.is_empty());
+}
+
+#[tokio::test]
+async fn select_for_update_rejects_derived_table_sources_without_querying() {
+	let query = QuerySet::<Article>::from_subquery(
+		|query: QuerySet<Article>| {
+			query.filter(Filter::new(
+				"article_id",
+				FilterOperator::Eq,
+				FilterValue::Integer(7),
+			))
+		},
+		"locked_articles",
+	)
+	.expect("derived queryset should compile")
+	.select_for_update();
+	let mut executor = RowLockTransactionExecutor::postgres(Vec::new());
+
+	let error = match query.rows_with_executor(&mut executor).await {
+		Ok(_) => panic!("row locking a derived table must be rejected before query execution"),
+		Err(error) => error,
+	};
+
+	assert_eq!(error.kind(), DatabaseErrorKind::Unsupported);
+	assert!(executor.calls.is_empty());
+}
+
+#[tokio::test]
+async fn select_for_update_rejects_lateral_join_sources_without_querying() {
+	let query = QuerySet::<Article>::new()
+		.with_lateral_join(reinhardt_db::orm::lateral_join::LateralJoin::new(
+			"latest_article",
+			"SELECT 1",
+		))
+		.select_for_update();
+	let mut executor = RowLockTransactionExecutor::postgres(Vec::new());
+
+	let error = match query.rows_with_executor(&mut executor).await {
+		Ok(_) => panic!("row locking with a lateral join must be rejected before query execution"),
+		Err(error) => error,
+	};
+
+	assert_eq!(error.kind(), DatabaseErrorKind::Unsupported);
+	assert!(executor.calls.is_empty());
+}
+
+#[tokio::test]
+async fn select_for_update_rejects_raw_aggregate_projections_without_querying() {
+	let query = QuerySet::<Article>::new()
+		.values(&["COUNT(*)"])
+		.select_for_update();
+	let mut executor = RowLockTransactionExecutor::postgres(Vec::new());
+
+	let error = match query.rows_with_executor(&mut executor).await {
+		Ok(_) => panic!("row locking with a raw aggregate must be rejected before query execution"),
+		Err(error) => error,
+	};
+
+	assert_eq!(error.kind(), DatabaseErrorKind::Unsupported);
+	assert!(executor.calls.is_empty());
+}
+
+#[tokio::test]
 async fn select_for_update_rejects_sqlite_instead_of_degrading_to_a_no_op() {
 	let query = QuerySet::<Article>::new().select_for_update();
 	let mut executor = RowLockTransactionExecutor {

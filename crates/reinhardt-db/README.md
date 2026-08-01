@@ -178,9 +178,14 @@ dropping the lock.
 PostgreSQL supports target lists and `no_key`; `NO KEY UPDATE` requires
 PostgreSQL 9.3 or newer and `SKIP LOCKED` requires 9.5 or newer. The built-in
 MySQL capability profile requires MySQL 8.0.1 or newer and does not support
-`no_key`. CockroachDB does not expose PostgreSQL-distinct `no_key` or explicit
-target-list capability. Custom transaction executors connected to older server
-versions must override `TransactionExecutor::row_lock_capabilities`.
+`no_key`. The built-in CockroachDB v23.1 profile supports `FOR UPDATE` and
+`NOWAIT`, but not `SKIP LOCKED`, PostgreSQL-distinct `no_key`, or explicit
+target lists. Custom transaction executors connected to servers with different
+capabilities must override `TransactionExecutor::row_lock_capabilities`.
+
+To preserve the statement's lock scope, row locking rejects querysets backed by
+derived `FROM` sources or LATERAL joins, and raw aggregate projections passed to
+`values`. Use a direct non-aggregate queryset for locking reads.
 
 - **Database Replication and Routing**
   - Read/write splitting via DatabaseRouter

@@ -1653,6 +1653,24 @@ where
 		let Some(spec) = &self.select_for_update else {
 			return Ok(());
 		};
+		if self.from_subquery_sql.is_some() {
+			return Err(DatabaseError::new(
+				DatabaseErrorKind::Unsupported,
+				"SELECT FOR UPDATE does not support derived table sources",
+			));
+		}
+		if !self.lateral_joins.is_empty() {
+			return Err(DatabaseError::new(
+				DatabaseErrorKind::Unsupported,
+				"SELECT FOR UPDATE does not support LATERAL joins",
+			));
+		}
+		if self.has_raw_aggregate_projection() {
+			return Err(DatabaseError::new(
+				DatabaseErrorKind::Unsupported,
+				"SELECT FOR UPDATE does not support raw aggregate projections",
+			));
+		}
 		if !capabilities.update {
 			return Err(DatabaseError::new(
 				DatabaseErrorKind::Unsupported,
@@ -1742,6 +1760,14 @@ where
 		Ok(())
 	}
 
+	fn has_raw_aggregate_projection(&self) -> bool {
+		self.selected_fields.as_ref().is_some_and(|fields| {
+			fields
+				.iter()
+				.any(|field| contains_known_raw_aggregate(field))
+		})
+	}
+
 	fn ensure_not_locking_without_transaction(&self) -> reinhardt_core::exception::Result<()> {
 		if self.select_for_update.is_some() {
 			return Err(DatabaseError::new(
@@ -1808,7 +1834,10 @@ where
 	///
 	/// The returned typestate builder prevents combining `NOWAIT` and
 	/// `SKIP LOCKED`. Locking queries must be evaluated with a caller-owned
-	/// [`TransactionExecutor`](super::connection::TransactionExecutor).
+	/// [`TransactionExecutor`](super::connection::TransactionExecutor). Derived
+	/// `FROM` sources, LATERAL joins, and raw aggregate projections from
+	/// [`Self::values`] are rejected before query execution to preserve lock
+	/// scope.
 	pub fn select_for_update(mut self) -> SelectForUpdate<T> {
 		self.select_for_update = Some(SelectForUpdateSpec::default());
 		SelectForUpdate {
@@ -8860,6 +8889,54 @@ fn parse_column_reference(field: &str) -> reinhardt_query::prelude::ColumnRef {
 		// Simple column reference
 		ColumnRef::column(Alias::new(field))
 	}
+}
+
+fn contains_known_raw_aggregate(projection: &str) -> bool {
+	const AGGREGATE_FUNCTIONS: &[&str] = &[
+		"COUNT",
+		"SUM",
+		"AVG",
+		"MIN",
+		"MAX",
+		"ARRAY_AGG",
+		"JSON_AGG",
+		"JSONB_AGG",
+		"STRING_AGG",
+		"BOOL_AND",
+		"BOOL_OR",
+		"EVERY",
+		"XMLAGG",
+	];
+
+	let bytes = projection.as_bytes();
+	let mut index = 0;
+	while index < bytes.len() {
+		if bytes[index].is_ascii_alphabetic() || bytes[index] == b'_' {
+			let start = index;
+			index += 1;
+			while index < bytes.len()
+				&& (bytes[index].is_ascii_alphanumeric() || bytes[index] == b'_')
+			{
+				index += 1;
+			}
+
+			let function = &projection[start..index];
+			let mut next = index;
+			while next < bytes.len() && bytes[next].is_ascii_whitespace() {
+				next += 1;
+			}
+			if bytes.get(next) == Some(&b'(')
+				&& AGGREGATE_FUNCTIONS
+					.iter()
+					.any(|aggregate| function.eq_ignore_ascii_case(aggregate))
+			{
+				return true;
+			}
+		} else {
+			index += 1;
+		}
+	}
+	false
 }
 
 #[derive(Debug, Clone, Copy)]

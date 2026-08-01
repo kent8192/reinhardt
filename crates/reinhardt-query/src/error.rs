@@ -227,6 +227,9 @@ fn validate_select_lock_for_backend_with_union_context(
 			if in_union_arm || !statement.unions.is_empty() {
 				return Err(unsupported("row locking on UNION queries", backend));
 			}
+			if statement_lock_targets_cte(statement, lock.tables.as_slice()) {
+				return Err(unsupported("row locking on CTE-backed queries", backend));
+			}
 			if statement.distinct.is_some() {
 				return Err(unsupported("row locking with DISTINCT queries", backend));
 			}
@@ -274,6 +277,9 @@ fn validate_select_lock_for_backend_with_union_context(
 			Ok(())
 		}
 		"MySQL" => {
+			if in_union_arm || !statement.unions.is_empty() {
+				return Err(unsupported("row locking on UNION queries", backend));
+			}
 			if matches!(
 				lock.r#type,
 				crate::query::LockType::NoKeyUpdate | crate::query::LockType::KeyShare
@@ -293,6 +299,44 @@ fn validate_select_lock_for_backend_with_union_context(
 		}
 		_ => Ok(()),
 	}
+}
+
+fn statement_lock_targets_cte(statement: &SelectStatement, targets: &[TableRef]) -> bool {
+	let cte_names = statement
+		.ctes
+		.iter()
+		.map(|cte| cte.name.to_string())
+		.collect::<Vec<_>>();
+	let cte_relations = statement
+		.from
+		.iter()
+		.chain(statement.join.iter().map(|join| &join.table))
+		.filter(|table| table_ref_references_cte(table, &cte_names))
+		.collect::<Vec<_>>();
+	if cte_relations.is_empty() {
+		return false;
+	}
+	if targets.is_empty() {
+		return true;
+	}
+	targets.iter().flat_map(table_ref_lock_names).any(|target| {
+		cte_relations.iter().any(|cte_relation| {
+			table_ref_lock_names(cte_relation)
+				.iter()
+				.any(|cte_name| cte_name == &target)
+		})
+	})
+}
+
+fn table_ref_references_cte(table: &TableRef, cte_names: &[String]) -> bool {
+	let source_name = match table {
+		TableRef::Table(name) | TableRef::TableAlias(name, _) => name.to_string(),
+		TableRef::SchemaTable(_, _)
+		| TableRef::DatabaseSchemaTable(_, _, _)
+		| TableRef::SchemaTableAlias(_, _, _)
+		| TableRef::SubQuery(_, _) => return false,
+	};
+	cte_names.iter().any(|cte_name| cte_name == &source_name)
 }
 
 fn contains_aggregate(expr: &SimpleExpr) -> bool {
@@ -443,7 +487,10 @@ fn table_ref_lock_names(table: &TableRef) -> Vec<String> {
 	match table {
 		TableRef::Table(table) => vec![table.to_string()],
 		TableRef::SchemaTable(schema, table) => {
-			vec![format!("{}.{}", schema.to_string(), table.to_string())]
+			vec![
+				format!("{}.{}", schema.to_string(), table.to_string()),
+				table.to_string(),
+			]
 		}
 		TableRef::DatabaseSchemaTable(database, schema, table) => {
 			vec![format!(
@@ -620,6 +667,7 @@ pub(crate) fn validate_insert_for_backend(
 	}
 	if let Some(expressions) = &statement.returning_exprs {
 		for expression in expressions {
+			validate_simple_expr(expression, backend)?;
 			validate_simple_expr_lock(expression, backend)?;
 		}
 	}

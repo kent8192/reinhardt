@@ -1,8 +1,9 @@
 //! Real-database contracts for transaction-scoped `QuerySet` row locking.
 //!
 //! PostgreSQL and MySQL exercise their native `FOR UPDATE`, `NOWAIT`, and
-//! `SKIP LOCKED` forms. CockroachDB exercises the PostgreSQL-compatible forms
-//! without explicit `OF` targets, which its checked capability contract rejects.
+//! `SKIP LOCKED` forms. The pinned CockroachDB v23.1 fixture exercises
+//! PostgreSQL-compatible `FOR UPDATE` and `NOWAIT` without explicit `OF`
+//! targets, while its checked capability contract rejects `SKIP LOCKED`.
 //! Every locking read goes through `QuerySet::select_for_update` and a
 //! caller-owned `AtomicTransaction`.
 
@@ -240,7 +241,33 @@ async fn assert_skip_locked_omits_locked_row(connection: reinhardt_db::orm::Data
 	);
 }
 
-async fn run_row_lock_contract(url: &str, expected_nowait_sqlstate: &str) {
+async fn assert_skip_locked_is_rejected(connection: reinhardt_db::orm::DatabaseConnection) {
+	let error = connection
+		.atomic(async |transaction| {
+			QuerySet::<RowLockItem>::new()
+				.select_for_update()
+				.skip_locked()
+				.all_with_executor(transaction)
+				.await
+				.map_err(Error::from)
+		})
+		.await
+		.expect_err("unsupported SKIP LOCKED must fail before execution");
+	let database_error = error
+		.database_error()
+		.expect("unsupported SKIP LOCKED must retain its database error");
+	assert_eq!(database_error.kind(), DatabaseErrorKind::Unsupported);
+	assert_eq!(
+		database_error.message(),
+		"SKIP LOCKED row locking is not supported by this backend or server version"
+	);
+}
+
+async fn run_row_lock_contract(
+	url: &str,
+	expected_nowait_sqlstate: &str,
+	supports_skip_locked: bool,
+) {
 	let (_lease, connection) = connect(url).await;
 	connection
 		.execute(
@@ -253,26 +280,30 @@ async fn run_row_lock_contract(url: &str, expected_nowait_sqlstate: &str) {
 	assert_blocking_until_transaction_end(connection, false).await;
 	assert_blocking_until_transaction_end(connection, true).await;
 	assert_nowait_fails_immediately(connection, expected_nowait_sqlstate).await;
-	assert_skip_locked_omits_locked_row(connection).await;
+	if supports_skip_locked {
+		assert_skip_locked_omits_locked_row(connection).await;
+	} else {
+		assert_skip_locked_is_rejected(connection).await;
+	}
 }
 
 #[tokio::test]
 #[serial(row_locking_integration)]
 async fn postgres_row_locks_follow_transaction_boundaries_and_wait_policies() {
 	let (_container, _pool, _port, url) = postgres_container().await;
-	run_row_lock_contract(&url, "55P03").await;
+	run_row_lock_contract(&url, "55P03", true).await;
 }
 
 #[tokio::test]
 #[serial(row_locking_integration)]
 async fn mysql_row_locks_follow_transaction_boundaries_and_wait_policies() {
 	let (_container, _pool, _port, url) = mysql_container().await;
-	run_row_lock_contract(&url, "HY000").await;
+	run_row_lock_contract(&url, "HY000", true).await;
 }
 
 #[tokio::test]
 #[serial(row_locking_integration)]
 async fn cockroachdb_row_locks_follow_transaction_boundaries_and_wait_policies() {
 	let (_container, _pool, _port, url) = cockroachdb_container().await;
-	run_row_lock_contract(&url, "55P03").await;
+	run_row_lock_contract(&url, "55P03", false).await;
 }

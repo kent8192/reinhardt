@@ -4,6 +4,9 @@ use reinhardt_query::QueryBuildError;
 use reinhardt_query::prelude::*;
 use rstest::rstest;
 
+#[cfg(feature = "pgvector")]
+use reinhardt_query::error::{PgvectorFeature, insert_pgvector_feature};
+
 fn locked_select(lock_type: LockType) -> SelectStatement {
 	let mut statement = Query::select();
 	statement.column("id").from("users").lock(lock_type);
@@ -156,6 +159,54 @@ fn postgres_checked_builder_rejects_lock_target_absent_from_query() {
 }
 
 #[rstest]
+fn postgres_checked_builder_accepts_unqualified_target_for_schema_qualified_table() {
+	// Arrange
+	let mut statement = Query::select();
+	statement
+		.column("id")
+		.from(TableRef::schema_table("audit", "events"))
+		.lock(LockType::Update)
+		.lock_tables([TableRef::table("events")]);
+
+	// Act
+	let (sql, values) = PostgresQueryBuilder::new()
+		.build_select_checked(&statement)
+		.expect("the unqualified relation name is valid for an unaliased schema-qualified table");
+
+	// Assert
+	assert_eq!(
+		sql,
+		r#"SELECT "id" FROM "audit"."events" FOR UPDATE OF "events""#
+	);
+	assert_eq!(values.len(), 0);
+}
+
+#[rstest]
+fn postgres_checked_builder_rejects_outer_locks_on_cte_backed_queries() {
+	// Arrange
+	let mut cte = Query::select();
+	cte.column("id").from("jobs");
+	let mut statement = Query::select();
+	statement
+		.with_cte("locked_jobs", cte)
+		.column("id")
+		.from("locked_jobs")
+		.lock(LockType::Update);
+
+	// Act
+	let result = PostgresQueryBuilder::new().build_select_checked(&statement);
+
+	// Assert
+	assert_eq!(
+		result,
+		Err(QueryBuildError::UnsupportedBackendFeature {
+			feature: "row locking on CTE-backed queries",
+			backend: "PostgreSQL",
+		})
+	);
+}
+
+#[rstest]
 #[case(LockType::Update, "FOR UPDATE")]
 #[case(LockType::Share, "FOR SHARE")]
 fn mysql_renders_supported_lock_strengths(#[case] lock_type: LockType, #[case] suffix: &str) {
@@ -184,6 +235,52 @@ fn mysql_checked_builder_rejects_postgres_only_lock_strength(#[case] lock_type: 
 		MySqlQueryBuilder::new().build_select_checked(&statement),
 		Err(QueryBuildError::UnsupportedBackendFeature {
 			feature: "the requested row lock strength",
+			backend: "MySQL",
+		})
+	);
+}
+
+#[rstest]
+fn mysql_checked_builder_rejects_locks_on_union_queries() {
+	// Arrange
+	let mut statement = locked_select(LockType::Update);
+	let mut union = Query::select();
+	union.column("id").from("archived_users");
+	statement.union(union);
+
+	// Act
+	let result = MySqlQueryBuilder::new().build_select_checked(&statement);
+
+	// Assert
+	assert_eq!(
+		result,
+		Err(QueryBuildError::UnsupportedBackendFeature {
+			feature: "row locking on UNION queries",
+			backend: "MySQL",
+		})
+	);
+}
+
+#[rstest]
+fn mysql_checked_builder_rejects_lock_on_union_arm() {
+	// Arrange
+	let mut statement = Query::select();
+	statement.column("id").from("users");
+	let mut union = Query::select();
+	union
+		.column("id")
+		.from("archived_users")
+		.lock(LockType::Update);
+	statement.union(union);
+
+	// Act
+	let result = MySqlQueryBuilder::new().build_select_checked(&statement);
+
+	// Assert
+	assert_eq!(
+		result,
+		Err(QueryBuildError::UnsupportedBackendFeature {
+			feature: "row locking on UNION queries",
 			backend: "MySQL",
 		})
 	);
@@ -240,4 +337,47 @@ fn cockroach_checked_builder_rejects_lock_targets() {
 			backend: "CockroachDB",
 		})
 	);
+}
+
+#[cfg(feature = "pgvector")]
+#[rstest]
+fn checked_insert_builders_reject_pgvector_returning_values() {
+	// Arrange
+	let returning_value = SimpleExpr::Value(Value::Vector(Some(Box::new(vec![1.0, 2.0, 3.0]))));
+	let mut statement = Query::insert();
+	statement
+		.into_table("documents")
+		.column("name")
+		.values_panic(["document"])
+		.returning_exprs([returning_value]);
+
+	// Act
+	let mysql_result = MySqlQueryBuilder::new().build_insert_checked(&statement);
+	let sqlite_result = SqliteQueryBuilder::new().build_insert_checked(&statement);
+	let cockroach_result = CockroachDBQueryBuilder::new().build_insert_checked(&statement);
+	let detected_feature = insert_pgvector_feature(&statement);
+
+	// Assert
+	assert_eq!(
+		mysql_result,
+		Err(QueryBuildError::UnsupportedBackendFeature {
+			feature: "pgvector values",
+			backend: "MySQL",
+		})
+	);
+	assert_eq!(
+		sqlite_result,
+		Err(QueryBuildError::UnsupportedBackendFeature {
+			feature: "pgvector values",
+			backend: "SQLite",
+		})
+	);
+	assert_eq!(
+		cockroach_result,
+		Err(QueryBuildError::UnsupportedBackendFeature {
+			feature: "pgvector values",
+			backend: "CockroachDB",
+		})
+	);
+	assert_eq!(detected_feature, Some(PgvectorFeature::VectorValue));
 }

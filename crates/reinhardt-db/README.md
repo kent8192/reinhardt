@@ -247,6 +247,7 @@ Add this to your `Cargo.toml`:
 ```toml
 [dependencies]
 reinhardt-db = "0.4.0-alpha.3"
+chrono-tz = "0.10"
 ```
 
 ### Optional Features
@@ -452,7 +453,7 @@ explicit plural table names because they represent an existing schema.
 ```rust
 use reinhardt_db::prelude::*;
 use serde::{Serialize, Deserialize};
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, NaiveDate, Utc};
 
 #[derive(Serialize, Deserialize)]
 #[model(app_label = "myapp", table_name = "users")]
@@ -471,6 +472,9 @@ pub struct User {
 
     /// User's age
     pub age: i32,
+
+    /// Calendar date when the account was opened
+    pub signup_date: NaiveDate,
 
     /// Account creation timestamp (auto-populated on insert)
     #[field(auto_now_add = true)]
@@ -655,8 +659,11 @@ pub full_name: String,
 ### Query with QuerySet
 
 ```rust
+use chrono::Utc;
 use futures::StreamExt;
-use reinhardt_db::orm::Model;
+use reinhardt_db::orm::{
+    DateProjectionOrder, DateTimeTruncKind, DateTruncKind, Model,
+};
 
 // Get all users
 let users = User::objects().all().await?;
@@ -687,6 +694,32 @@ let recent = User::objects()
     .all()
     .await?;
 
+// Distinct database-side temporal projections
+let signup_months = User::objects()
+    .dates(
+        User::field_signup_date(),
+        DateTruncKind::Month,
+        DateProjectionOrder::Asc,
+    )
+    .await?;
+let mut connection = reinhardt_db::orm::manager::get_connection().await?;
+let signup_days = User::objects()
+    .dates_with_db(
+        &mut connection,
+        User::field_signup_date(),
+        DateTruncKind::Day,
+        DateProjectionOrder::Asc,
+    )
+    .await?;
+let local_hours = User::objects()
+    .datetimes(
+        User::field_created_at(),
+        DateTimeTruncKind::Hour,
+        DateProjectionOrder::Desc,
+        Some(chrono_tz::Asia::Tokyo),
+    )
+    .await?;
+
 // Stream typed-field results through the caller-owned executor.
 let mut streamed_adults = User::objects()
     .filter(User::field_age().gte(18))
@@ -702,6 +735,18 @@ let updated = User::objects()
     .update_fields([User::field_updated_at().assign(Utc::now())])
     .await?;
 ```
+
+`dates` and `datetimes` exclude nulls and perform truncation, distinct
+projection, and ordering in the database. ISO weeks begin on Monday.
+`datetimes` defaults to UTC and converts to the requested zone before
+truncation. PostgreSQL supports IANA named zones. MySQL and SQLite return an
+explicit capability error for named zones because Reinhardt cannot guarantee
+MySQL time-zone tables or correct SQLite named-zone conversion. This is
+intentionally stricter than Django's environment-dependent fallback behavior.
+Global ORM time-zone configuration is intentionally outside this API; pass the
+zone explicitly when UTC is not the desired projection.
+Use `dates_with_db` / `datetimes_with_db` or the corresponding
+`*_with_executor` variants to retain a caller-owned connection or transaction.
 
 ### Scoped N+1 Query Detection
 

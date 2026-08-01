@@ -3,7 +3,7 @@
 //! This module provides a unified entry point for querying functionality.
 //! By default, it exports the expression-based query API (SQLAlchemy-style).
 
-use super::connection::{OrmExecutor, QueryRow};
+use super::connection::{OrmExecutor, QueryRow, RowStream};
 use super::field_codec::{
 	DatabaseField, DatabaseValue, FieldCodecError, IntoFieldValue, database_value_to_query_value,
 };
@@ -14,6 +14,7 @@ use crate::orm::query_fields::comparison::FieldComparison;
 use crate::orm::query_fields::compiler::QueryFieldCompiler;
 use crate::orm::query_fields::{GroupByFields, OrderedExpression, TypedExpression};
 use crate::orm::relations::{RelationJoinGraph, RelationJoinKind, RelationPathLike, RelationStep};
+use futures::{Stream, StreamExt};
 use reinhardt_core::exception::{DatabaseError, DatabaseErrorKind, Error};
 use reinhardt_query::prelude::{
 	Alias, BinOper, CockroachDBQueryBuilder, ColumnRef, Condition, Expr, ExprTrait, Func,
@@ -26,11 +27,192 @@ use serde::{Deserialize, Serialize};
 use smallvec::SmallVec;
 use std::collections::HashMap;
 use std::marker::PhantomData;
+use std::pin::Pin;
+use std::sync::{Arc, Mutex};
+use std::task::{Context, Poll, Wake, Waker};
 use std::time::Instant;
 use uuid::Uuid;
 
 fn executor_error(error: reinhardt_core::exception::Error) -> DatabaseError {
 	crate::backends::error::into_database_error(error)
+}
+
+/// A lifetime-bound stream of decoded QuerySet models.
+pub type QuerySetStream<'a, T> =
+	Pin<Box<dyn Stream<Item = reinhardt_core::exception::Result<T>> + Send + 'a>>;
+
+struct PendingRowPoll {
+	generation: u64,
+	started_at: Instant,
+	wake_duration: Option<std::time::Duration>,
+}
+
+#[derive(Default)]
+struct RowStreamTiming {
+	next_generation: u64,
+	pending: Option<PendingRowPoll>,
+}
+
+/// Records a streaming query when its generator finishes or is dropped.
+struct StreamQueryAccounting {
+	sql: String,
+	params: Vec<String>,
+	duration: std::time::Duration,
+	completed: bool,
+	timing: Arc<Mutex<RowStreamTiming>>,
+}
+
+impl StreamQueryAccounting {
+	fn new(sql: String, params: Vec<String>) -> Self {
+		Self {
+			sql,
+			params,
+			duration: std::time::Duration::ZERO,
+			completed: true,
+			timing: Arc::new(Mutex::new(RowStreamTiming::default())),
+		}
+	}
+
+	fn record_poll(&mut self, duration: std::time::Duration) {
+		self.duration += duration;
+	}
+
+	fn disarm_completion(&mut self) {
+		self.completed = false;
+	}
+
+	fn take_woken_duration(&mut self) -> Option<std::time::Duration> {
+		let mut timing = self
+			.timing
+			.lock()
+			.unwrap_or_else(|poisoned| poisoned.into_inner());
+		let pending = timing.pending.take()?;
+		pending.wake_duration
+	}
+
+	fn record_woken_duration(&mut self) {
+		if let Some(duration) = self.take_woken_duration() {
+			self.record_poll(duration);
+		}
+	}
+}
+
+impl Drop for StreamQueryAccounting {
+	fn drop(&mut self) {
+		self.record_woken_duration();
+		if !self.completed {
+			return;
+		}
+		super::instrumentation::instrumentation().orm_query_end_with_params_sync(
+			&self.sql,
+			&self.params,
+			self.duration,
+		);
+	}
+}
+struct RowStreamWake {
+	timing: Arc<Mutex<RowStreamTiming>>,
+	generation: u64,
+	target: Waker,
+}
+
+impl RowStreamWake {
+	fn record_wake(&self) {
+		let mut timing = self
+			.timing
+			.lock()
+			.unwrap_or_else(|poisoned| poisoned.into_inner());
+		if let Some(pending) = timing.pending.as_mut()
+			&& pending.generation == self.generation
+			&& pending.wake_duration.is_none()
+		{
+			pending.wake_duration = Some(pending.started_at.elapsed());
+		}
+	}
+}
+
+impl Wake for RowStreamWake {
+	fn wake(self: Arc<Self>) {
+		self.record_wake();
+		self.target.wake_by_ref();
+	}
+
+	fn wake_by_ref(self: &Arc<Self>) {
+		self.record_wake();
+		self.target.wake_by_ref();
+	}
+}
+
+/// Times backend-stream polls through their wakeup without charging consumer idle time.
+///
+/// A wrapped waker records a pending poll when the backend wakes the task. If
+/// the consumer cancels that poll and later polls again without a wakeup, the
+/// stale pending interval is discarded before the next backend poll.
+struct TimedRowStream<'rows, 'accounting> {
+	rows: RowStream<'rows>,
+	accounting: &'accounting mut StreamQueryAccounting,
+}
+
+impl<'rows, 'accounting> TimedRowStream<'rows, 'accounting> {
+	fn new(rows: RowStream<'rows>, accounting: &'accounting mut StreamQueryAccounting) -> Self {
+		Self { rows, accounting }
+	}
+
+	fn start_pending_poll(&mut self, started_at: Instant, target: Waker) -> (u64, Waker) {
+		let generation = {
+			let mut timing = self
+				.accounting
+				.timing
+				.lock()
+				.unwrap_or_else(|poisoned| poisoned.into_inner());
+			let generation = timing.next_generation;
+			timing.next_generation = timing.next_generation.wrapping_add(1);
+			timing.pending = Some(PendingRowPoll {
+				generation,
+				started_at,
+				wake_duration: None,
+			});
+			generation
+		};
+		let waker = Waker::from(Arc::new(RowStreamWake {
+			timing: Arc::clone(&self.accounting.timing),
+			generation,
+			target,
+		}));
+		(generation, waker)
+	}
+
+	fn clear_pending_poll(&mut self, generation: u64) {
+		let mut timing = self
+			.accounting
+			.timing
+			.lock()
+			.unwrap_or_else(|poisoned| poisoned.into_inner());
+		if timing
+			.pending
+			.as_ref()
+			.is_some_and(|pending| pending.generation == generation)
+		{
+			timing.pending = None;
+		}
+	}
+}
+
+impl Stream for TimedRowStream<'_, '_> {
+	type Item = reinhardt_core::exception::Result<crate::backends::types::Row>;
+
+	fn poll_next(mut self: Pin<&mut Self>, context: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+		self.accounting.record_woken_duration();
+		let started_at = Instant::now();
+		let (generation, waker) = self.start_pending_poll(started_at, context.waker().clone());
+		let mut timing_context = Context::from_waker(&waker);
+		let result = self.rows.as_mut().poll_next(&mut timing_context);
+		if result.is_ready() {
+			self.clear_pending_poll(generation);
+			self.accounting.record_poll(started_at.elapsed());
+		}
+		result
+	}
 }
 
 // Django QuerySet API types
@@ -1266,6 +1448,7 @@ where
 	having_conditions: Vec<HavingCondition>,
 	subquery_conditions: Vec<SubqueryCondition>,
 	from_alias: Option<String>,
+	empty_result: bool,
 	/// Subquery SQL for FROM clause (derived table)
 	/// When set, the FROM clause will use this subquery instead of the model's table
 	from_subquery_sql: Option<String>,
@@ -1304,8 +1487,17 @@ where
 			having_conditions: Vec::new(),
 			subquery_conditions: Vec::new(),
 			from_alias: None,
+			empty_result: false,
 			from_subquery_sql: None,
 		}
+	}
+
+	/// Returns a QuerySet that is known to contain no rows.
+	///
+	/// Execution methods can use this marker to avoid invoking an executor.
+	pub fn none(mut self) -> Self {
+		self.empty_result = true;
+		self
 	}
 
 	fn executor_backend(
@@ -1411,6 +1603,7 @@ where
 			having_conditions: Vec::new(),
 			subquery_conditions: Vec::new(),
 			from_alias: None,
+			empty_result: false,
 			from_subquery_sql: None,
 		}
 	}
@@ -1526,6 +1719,9 @@ where
 	fn build_where_condition_for_write(
 		&self,
 	) -> reinhardt_core::exception::Result<Option<Condition>> {
+		if self.empty_result {
+			return Ok(Some(Condition::all().add(Expr::val(false))));
+		}
 		let mut queryset = self.clone();
 		queryset.relation_joins = RelationJoinGraph::new(T::table_name());
 		queryset.from_alias = None;
@@ -1596,6 +1792,7 @@ where
 		let subquery_qs = QuerySet::<M>::new();
 		// Apply the builder to configure the subquery
 		let configured_subquery = builder(subquery_qs);
+		let empty_result = configured_subquery.empty_result;
 		// Generate SQL for the subquery (wrapped in parentheses)
 		let subquery_sql = configured_subquery.as_subquery()?;
 
@@ -1627,6 +1824,7 @@ where
 			having_conditions: Vec::new(),
 			subquery_conditions: Vec::new(),
 			from_alias: Some(alias.to_string()),
+			empty_result,
 			from_subquery_sql: Some(subquery_sql),
 		})
 	}
@@ -5421,6 +5619,9 @@ where
 		if let Some(cond) = where_condition {
 			stmt.cond_where(cond);
 		}
+		if self.empty_result {
+			stmt.and_where(Expr::val(false));
+		}
 
 		// Apply GROUP BY
 		for group_field in &self.group_by_fields {
@@ -5475,7 +5676,9 @@ where
 		self.apply_ordering(&mut stmt);
 
 		// Apply LIMIT/OFFSET
-		if let Some(limit) = self.limit {
+		if self.empty_result {
+			stmt.limit(0);
+		} else if let Some(limit) = self.limit {
 			stmt.limit(limit as u64);
 		}
 		if let Some(offset) = self.offset {
@@ -5894,6 +6097,9 @@ where
 	where
 		T: serde::de::DeserializeOwned,
 	{
+		if self.empty_result {
+			return Ok(Vec::new());
+		}
 		let mut conn = super::manager::get_connection().await?;
 		self.all_with_db(&mut conn).await
 	}
@@ -5946,6 +6152,9 @@ where
 	where
 		T: serde::de::DeserializeOwned,
 	{
+		if self.empty_result {
+			return Ok(None);
+		}
 		let mut conn = super::manager::get_connection().await?;
 		self.first_with_db(&mut conn).await
 	}
@@ -6000,6 +6209,11 @@ where
 	where
 		T: serde::de::DeserializeOwned,
 	{
+		if self.empty_result {
+			return Err(reinhardt_core::exception::Error::NotFound(
+				"No record found matching the query".to_string(),
+			));
+		}
 		let mut conn = super::manager::get_connection().await?;
 		self.get_with_db(&mut conn).await
 	}
@@ -6041,6 +6255,9 @@ where
 		T: serde::de::DeserializeOwned,
 		E: OrmExecutor,
 	{
+		if self.empty_result {
+			return Ok(Vec::new());
+		}
 		let stmt = self.build_select_statement()?;
 		let context = super::execution::pgvector_context_for_select(&stmt);
 		let (sql, values) =
@@ -6096,6 +6313,9 @@ where
 	where
 		E: OrmExecutor,
 	{
+		if self.empty_result {
+			return Ok(Vec::new());
+		}
 		let stmt = self.build_select_statement()?;
 		let context = super::execution::pgvector_context_for_select(&stmt);
 		let (sql, values) =
@@ -6126,6 +6346,157 @@ where
 		}
 	}
 
+	/// Streams decoded models through a caller-owned ORM executor.
+	///
+	/// The returned stream borrows `conn`, so the executor cannot be reused
+	/// until the stream completes or is dropped. `chunk_size` is a bounded
+	/// driver fetch or buffering hint and must be greater than zero.
+	pub fn iterator_with_db<'a, E>(
+		&self,
+		conn: &'a mut E,
+		chunk_size: usize,
+	) -> reinhardt_core::exception::Result<QuerySetStream<'a, T>>
+	where
+		T: serde::de::DeserializeOwned + 'a,
+		E: OrmExecutor + 'a,
+	{
+		if chunk_size == 0 {
+			return Err(DatabaseError::new(
+				DatabaseErrorKind::Configuration,
+				"QuerySet iterator chunk_size must be greater than zero",
+			)
+			.into());
+		}
+		if self.empty_result {
+			return Ok(Box::pin(futures::stream::empty()));
+		}
+
+		let stmt = self.build_select_statement()?;
+		let context = super::execution::pgvector_context_for_select(&stmt);
+		let (sql, values) =
+			Self::build_select_for_backend(&stmt, conn.backend(), conn.is_cockroachdb())?;
+		let param_samples = values
+			.iter()
+			.map(|value| value.to_sql_literal())
+			.collect::<Vec<_>>();
+		let params = super::execution::convert_values(values);
+		let rows = conn.fetch_stream_with_context(sql.clone(), params, chunk_size, context)?;
+
+		Ok(Box::pin(async_stream::stream! {
+			let mut accounting = StreamQueryAccounting::new(sql.clone(), param_samples);
+			let mut rows = Some(TimedRowStream::new(rows, &mut accounting));
+			loop {
+				let row = rows.as_mut().expect("row stream is available").next().await;
+				let Some(row) = row else {
+					break;
+				};
+				let row = match row {
+					Ok(row) => row,
+					Err(error) => {
+						super::instrumentation::instrumentation()
+							.orm_query_error(&sql, &format!("{error:?}"))
+							.await;
+						drop(rows.take());
+						accounting.disarm_completion();
+						yield Err(error);
+						return;
+					}
+				};
+				match QueryRow::from_backend_row(row).deserialize_model::<T>() {
+					Ok(model) => yield Ok(model),
+					Err(error) => {
+						let error = Error::from(DatabaseError::new(
+							DatabaseErrorKind::Serialization,
+							format!("Deserialization error: {error}"),
+						));
+						super::instrumentation::instrumentation()
+							.orm_query_error(&sql, &format!("{error:?}"))
+							.await;
+						drop(rows.take());
+						yield Err(error);
+						return;
+					}
+				}
+			}
+		}))
+	}
+
+	/// Streams decoded models through an active transaction executor.
+	///
+	/// This caller-owned-executor path never reacquires a pooled connection and
+	/// never falls back to eager materialization or pagination.
+	pub fn iterator_with_executor<'a>(
+		&self,
+		executor: &'a mut dyn super::connection::TransactionExecutor,
+		chunk_size: usize,
+	) -> reinhardt_core::exception::Result<QuerySetStream<'a, T>>
+	where
+		T: serde::de::DeserializeOwned + 'a,
+	{
+		if chunk_size == 0 {
+			return Err(DatabaseError::new(
+				DatabaseErrorKind::Configuration,
+				"QuerySet iterator chunk_size must be greater than zero",
+			)
+			.into());
+		}
+		if self.empty_result {
+			return Ok(Box::pin(futures::stream::empty()));
+		}
+
+		let stmt = self.build_select_statement()?;
+		let context = super::execution::pgvector_context_for_select(&stmt);
+		let (sql, values) = Self::build_select_for_backend(
+			&stmt,
+			Self::executor_backend(executor),
+			executor.is_cockroachdb(),
+		)?;
+		let param_samples = values
+			.iter()
+			.map(|value| value.to_sql_literal())
+			.collect::<Vec<_>>();
+		let params = super::execution::convert_values(values);
+		let rows = executor.fetch_stream_with_context(sql.clone(), params, chunk_size, context)?;
+
+		Ok(Box::pin(async_stream::stream! {
+			let mut accounting = StreamQueryAccounting::new(sql.clone(), param_samples);
+			let mut rows = Some(TimedRowStream::new(rows, &mut accounting));
+			loop {
+				let row = rows.as_mut().expect("row stream is available").next().await;
+				let Some(row) = row else {
+					break;
+				};
+				let row = match row {
+					Ok(row) => row,
+					Err(error) => {
+						super::instrumentation::instrumentation()
+							.orm_query_error(&sql, &format!("{error:?}"))
+							.await;
+						drop(rows.take());
+						accounting.disarm_completion();
+						yield Err(error);
+						return;
+					}
+				};
+				match QueryRow::from_backend_row(row).deserialize_model::<T>() {
+					Ok(model) => yield Ok(model),
+					Err(error) => {
+						let error = Error::from(DatabaseError::new(
+							DatabaseErrorKind::Serialization,
+							format!("Deserialization error: {error}"),
+						));
+						super::instrumentation::instrumentation()
+							.orm_query_error(&sql, &format!("{error:?}"))
+							.await;
+						drop(rows.take());
+						yield Err(error);
+						return;
+					}
+				}
+			}
+		}))
+	}
+
 	/// Execute the queryset through an active transaction executor and return all records.
 	pub async fn all_with_executor(
 		&self,
@@ -6134,6 +6505,9 @@ where
 	where
 		T: serde::de::DeserializeOwned,
 	{
+		if self.empty_result {
+			return Ok(Vec::new());
+		}
 		let stmt = self.build_select_statement().map_err(executor_error)?;
 		let context = super::execution::pgvector_context_for_select(&stmt);
 		let (sql, values) = Self::build_select_for_backend(
@@ -6174,6 +6548,9 @@ where
 		&self,
 		executor: &mut dyn super::connection::TransactionExecutor,
 	) -> Result<usize, crate::backends::error::DatabaseError> {
+		if self.empty_result {
+			return Ok(0);
+		}
 		let stmt = self.count_select_query().map_err(executor_error)?;
 		let context = super::execution::pgvector_context_for_select(&stmt);
 		let (sql, values) = Self::build_select_for_backend(
@@ -6356,6 +6733,9 @@ where
 	/// # }
 	/// ```
 	pub async fn count(&self) -> reinhardt_core::exception::Result<usize> {
+		if self.empty_result {
+			return Ok(0);
+		}
 		let mut conn = super::manager::get_connection().await?;
 		self.count_with_db(&mut conn).await
 	}
@@ -6365,6 +6745,9 @@ where
 	where
 		E: OrmExecutor,
 	{
+		if self.empty_result {
+			return Ok(0);
+		}
 		let stmt = self.count_select_query()?;
 		let context = super::execution::pgvector_context_for_select(&stmt);
 		let (sql, values) =
@@ -6502,6 +6885,9 @@ where
 	/// # }
 	/// ```
 	pub async fn exists(&self) -> reinhardt_core::exception::Result<bool> {
+		if self.empty_result {
+			return Ok(false);
+		}
 		let mut conn = super::manager::get_connection().await?;
 		self.exists_with_db(&mut conn).await
 	}
@@ -6655,6 +7041,9 @@ where
 		I: IntoIterator<Item = A>,
 		A: Into<FieldAssignment>,
 	{
+		if self.empty_result {
+			return Ok(0);
+		}
 		let mut conn = super::manager::get_connection().await?;
 		self.update_fields_with_conn(&mut conn, values).await
 	}
@@ -6670,6 +7059,9 @@ where
 		I: IntoIterator<Item = A>,
 		A: Into<FieldAssignment>,
 	{
+		if self.empty_result {
+			return Ok(0);
+		}
 		let stmt = self.update_fields_query(values)?;
 		let context = super::execution::pgvector_context_for_update(&stmt);
 		let (sql, values) =
@@ -7055,6 +7447,13 @@ where
 		T: super::Model + Clone,
 	{
 		Self::composite_primary_key_for_values(pk_values)?;
+		if self.empty_result {
+			return Err(DatabaseError::new(
+				DatabaseErrorKind::Query,
+				"No record found matching the composite primary key",
+			)
+			.into());
+		}
 		let mut conn = super::manager::get_connection().await?;
 		self.get_composite_with_db(&mut conn, pk_values).await
 	}
@@ -7095,6 +7494,13 @@ where
 		use reinhardt_query::prelude::{Alias, BinOper, ColumnRef, Expr, Value};
 
 		let composite_pk = Self::composite_primary_key_for_values(pk_values)?;
+		if self.empty_result {
+			return Err(DatabaseError::new(
+				DatabaseErrorKind::Query,
+				"No record found matching the composite primary key",
+			)
+			.into());
+		}
 
 		// Build SELECT query using reinhardt-query
 		let table_name = T::table_name();
@@ -7508,6 +7914,9 @@ where
 			if let Some(cond) = self.build_where_condition()? {
 				stmt.cond_where(cond);
 			}
+			if self.empty_result {
+				stmt.and_where(Expr::val(false));
+			}
 
 			// Apply GROUP BY
 			for group_field in &self.group_by_fields {
@@ -7561,7 +7970,9 @@ where
 			self.apply_ordering(&mut stmt);
 
 			// Apply LIMIT/OFFSET
-			if let Some(limit) = self.limit {
+			if self.empty_result {
+				stmt.limit(0);
+			} else if let Some(limit) = self.limit {
 				stmt.limit(limit as u64);
 			}
 			if let Some(offset) = self.offset {
@@ -8498,7 +8909,8 @@ fn escape_like_pattern(value: &str) -> String {
 mod tests {
 	use super::{
 		AggregateFunc, AggregateValue, ComparisonOp, FilterCondition, HavingCondition,
-		MAX_FILTER_CONDITION_DEPTH, QueryFilterInput,
+		MAX_FILTER_CONDITION_DEPTH, QueryFilterInput, RowStream, StreamQueryAccounting,
+		TimedRowStream,
 	};
 	#[cfg(feature = "pgvector")]
 	use crate::orm::Field;
@@ -8508,6 +8920,7 @@ mod tests {
 		DatabaseValue, FieldCodecError, FilterOperator, FilterValue, Manager, Model, QuerySet,
 		query::Filter,
 	};
+	use futures::Stream;
 	use reinhardt_query::{
 		QueryBuilder,
 		prelude::{PostgresQueryBuilder, QueryStatementBuilder, SqliteQueryBuilder},
@@ -8519,6 +8932,130 @@ mod tests {
 	use std::collections::HashMap;
 	#[cfg(feature = "pgvector")]
 	use std::fmt;
+	use std::pin::Pin;
+	use std::sync::{Arc, Mutex};
+	use std::task::{Context, Poll, Waker};
+	use std::time::Duration;
+
+	#[derive(Default)]
+	struct WakeDrivenRowStreamState {
+		ready: bool,
+		waker: Option<Waker>,
+	}
+
+	struct WakeDrivenRowStream {
+		state: Arc<Mutex<WakeDrivenRowStreamState>>,
+	}
+
+	impl Stream for WakeDrivenRowStream {
+		type Item = reinhardt_core::exception::Result<crate::backends::types::Row>;
+
+		fn poll_next(self: Pin<&mut Self>, context: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+			let mut state = self
+				.state
+				.lock()
+				.unwrap_or_else(|poisoned| poisoned.into_inner());
+			if state.ready {
+				return Poll::Ready(None);
+			}
+			state.waker = Some(context.waker().clone());
+			Poll::Pending
+		}
+	}
+
+	struct PendingThenReadyRowStream {
+		first_poll: bool,
+		waker: Option<Waker>,
+	}
+
+	impl Stream for PendingThenReadyRowStream {
+		type Item = reinhardt_core::exception::Result<crate::backends::types::Row>;
+
+		fn poll_next(
+			mut self: Pin<&mut Self>,
+			context: &mut Context<'_>,
+		) -> Poll<Option<Self::Item>> {
+			if self.first_poll {
+				self.first_poll = false;
+				self.waker = Some(context.waker().clone());
+				return Poll::Pending;
+			}
+			assert!(
+				self.waker.take().is_some(),
+				"pending row stream must retain its registered waker"
+			);
+			Poll::Ready(None)
+		}
+	}
+
+	#[rstest]
+	fn timed_row_stream_records_pending_io_when_the_backend_wakes() {
+		// Arrange
+		let state = Arc::new(Mutex::new(WakeDrivenRowStreamState::default()));
+		let rows: RowStream<'_> = Box::pin(WakeDrivenRowStream {
+			state: Arc::clone(&state),
+		});
+		let mut accounting = StreamQueryAccounting::new("SELECT 1".to_owned(), Vec::new());
+		let waker = futures::task::noop_waker();
+		let mut context = Context::from_waker(&waker);
+
+		// Act
+		{
+			let mut stream = TimedRowStream::new(rows, &mut accounting);
+			assert!(matches!(
+				Pin::new(&mut stream).poll_next(&mut context),
+				Poll::Pending
+			));
+			std::thread::sleep(Duration::from_millis(20));
+			let waker = {
+				let mut state = state
+					.lock()
+					.unwrap_or_else(|poisoned| poisoned.into_inner());
+				state.ready = true;
+				state
+					.waker
+					.take()
+					.expect("pending row stream must register a waker")
+			};
+			waker.wake();
+			assert!(matches!(
+				Pin::new(&mut stream).poll_next(&mut context),
+				Poll::Ready(None)
+			));
+		}
+
+		// Assert
+		assert!(accounting.duration >= Duration::from_millis(10));
+	}
+
+	#[rstest]
+	fn timed_row_stream_discards_unwoken_pending_time_after_cancellation() {
+		// Arrange
+		let rows: RowStream<'_> = Box::pin(PendingThenReadyRowStream {
+			first_poll: true,
+			waker: None,
+		});
+		let mut accounting = StreamQueryAccounting::new("SELECT 1".to_owned(), Vec::new());
+		let waker = futures::task::noop_waker();
+		let mut context = Context::from_waker(&waker);
+
+		// Act
+		{
+			let mut stream = TimedRowStream::new(rows, &mut accounting);
+			assert!(matches!(
+				Pin::new(&mut stream).poll_next(&mut context),
+				Poll::Pending
+			));
+			std::thread::sleep(Duration::from_millis(20));
+			assert!(matches!(
+				Pin::new(&mut stream).poll_next(&mut context),
+				Poll::Ready(None)
+			));
+		}
+
+		// Assert
+		assert!(accounting.duration < Duration::from_millis(10));
+	}
 
 	#[cfg(feature = "pgvector")]
 	struct RecordingExecutor {
@@ -9135,6 +9672,70 @@ mod tests {
 			]
 		);
 		assert_eq!(executor.contexts, vec![Some(distance_and_vector_context())]);
+	}
+
+	#[cfg(feature = "pgvector")]
+	#[rstest]
+	#[tokio::test]
+	async fn none_short_circuits_read_and_write_execution_paths() {
+		// Arrange
+		let mut executor = RecordingExecutor::default();
+
+		// Act
+		let rows = QuerySet::<TestUser>::new()
+			.none()
+			.all_with_db(&mut executor)
+			.await
+			.expect("none queryset should not execute a select");
+		// Assert
+		assert_eq!(rows, Vec::<TestUser>::new());
+
+		let rows = QuerySet::<TestUser>::new()
+			.none()
+			.rows_with_db(&mut executor)
+			.await
+			.expect("none queryset should not execute a row select");
+		assert_eq!(rows, Vec::<crate::orm::QueryRow>::new());
+
+		let count = QuerySet::<TestUser>::new()
+			.none()
+			.count_with_db(&mut executor)
+			.await
+			.expect("none queryset should not execute a count");
+		assert_eq!(count, 0);
+
+		let exists = QuerySet::<TestUser>::new()
+			.none()
+			.exists_with_db(&mut executor)
+			.await
+			.expect("none queryset should not execute an existence check");
+		assert!(!exists);
+
+		let rows_affected = QuerySet::<TestUser>::new()
+			.none()
+			.update_fields_with_conn(&mut executor, [("username", "alice")])
+			.await
+			.expect("none queryset should not execute an update");
+		assert_eq!(rows_affected, 0);
+		assert!(executor.calls.is_empty());
+		assert!(executor.contexts.is_empty());
+	}
+
+	#[rstest]
+	fn none_aggregate_subquery_limits_output_rows() {
+		// Arrange
+		let queryset = QuerySet::<TestUser>::new().none().values(&["COUNT(*)"]);
+
+		// Act
+		let sql = queryset
+			.as_subquery()
+			.expect("empty aggregate subquery should compile");
+
+		// Assert
+		assert_eq!(
+			sql,
+			r#"(SELECT COUNT(*) FROM "test_users" WHERE FALSE LIMIT 0)"#
+		);
 	}
 
 	#[cfg(feature = "pgvector")]

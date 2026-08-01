@@ -1,9 +1,17 @@
 //! Common type definitions for database abstraction
 
 use super::error::{DatabaseError, DatabaseErrorKind};
+use futures::{Stream, StreamExt};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use std::pin::Pin;
 use uuid::Uuid;
+
+/// A lifetime-bound stream of database rows.
+///
+/// Dropping the stream releases any driver cursor, transaction borrow, or pool
+/// connection retained by the backend.
+pub type RowStream<'a> = Pin<Box<dyn Stream<Item = super::error::Result<Row>> + Send + 'a>>;
 
 /// Database type
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -613,6 +621,45 @@ pub trait TransactionExecutor: Send + Sync {
 				.map_err(|error| super::error::decorate_error_with_pgvector_context(error, context))
 		} else {
 			result
+		}
+	}
+
+	/// Streams matching rows without eager materialization.
+	///
+	/// `chunk_size` is a driver fetch or bounded-buffer hint. Implementations
+	/// must not emulate streaming with repeated `LIMIT` and `OFFSET` queries.
+	fn fetch_stream<'a>(
+		&'a mut self,
+		_sql: String,
+		_params: Vec<QueryValue>,
+		_chunk_size: usize,
+	) -> super::error::Result<RowStream<'a>> {
+		Err(DatabaseError::new(
+			DatabaseErrorKind::Unsupported,
+			"Row streaming is not supported by this transaction executor",
+		)
+		.into())
+	}
+
+	/// Streams rows with structural pgvector operation context.
+	fn fetch_stream_with_context<'a>(
+		&'a mut self,
+		sql: String,
+		params: Vec<QueryValue>,
+		chunk_size: usize,
+		context: Option<super::error::PgvectorOperationKind>,
+	) -> super::error::Result<RowStream<'a>> {
+		let decorate =
+			self.backend() == DatabaseType::Postgres && self.supports_pgvector_error_hints();
+		let stream = self.fetch_stream(sql, params, chunk_size)?;
+		if decorate {
+			Ok(Box::pin(stream.map(move |result| {
+				result.map_err(|error| {
+					super::error::decorate_error_with_pgvector_context(error, context)
+				})
+			})))
+		} else {
+			Ok(stream)
 		}
 	}
 

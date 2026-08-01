@@ -31,9 +31,16 @@ use rexpect::session::PtySession;
 use tempfile::TempDir;
 
 // The evaluator builds its dependencies outside the fixture target directory.
-const COMMAND_TIMEOUT: Duration = Duration::from_secs(600);
+const COMMAND_TIMEOUT: Duration = Duration::from_secs(1200);
 const FIXTURE_BUILD_TIMEOUT: Duration = Duration::from_secs(600);
 const FIXTURE_BUILD_JOBS: &str = "2";
+// Workaround for evcxr/evcxr#487 (tracked in reinhardt-web#5817).
+// Remove this override when evcxr derives the generated library path from
+// Cargo's emitted artifact metadata instead of assuming target/.../deps.
+//
+// Ideal implementation (without workaround):
+//   EvalContext should consume Cargo's emitted artifact path directly.
+const EVALUATOR_BUILD_DIR: &str = "target";
 const PTY_TIMEOUT: Duration = Duration::from_secs(60);
 const CLEANUP_TIMEOUT: Duration = Duration::from_secs(5);
 const READER_TIMEOUT: Duration = Duration::from_secs(2);
@@ -725,6 +732,7 @@ impl ShellProject {
 		let mut command = Command::new(&self.manage_binary);
 		command
 			.current_dir(&self.project_root)
+			.env("CARGO_BUILD_BUILD_DIR", EVALUATOR_BUILD_DIR)
 			.env("EVCXR_TMPDIR", self._evcxr_dir.path())
 			.env("EVCXR_CACHE_ENABLED", "1")
 			.env(
@@ -747,6 +755,7 @@ impl ShellProject {
 		command
 			.arg("shell")
 			.current_dir(&self.project_root)
+			.env("CARGO_BUILD_BUILD_DIR", EVALUATOR_BUILD_DIR)
 			.env("EVCXR_TMPDIR", self._evcxr_dir.path())
 			.env("EVCXR_CACHE_ENABLED", "1")
 			.env(
@@ -1414,6 +1423,20 @@ tokio = {{ version = "1", features = ["macros", "rt-multi-thread", "time"] }}
 [features]
 default = []
 commands-shell = ["reinhardt/commands-shell"]
+
+# Match evcxr's generated evaluator profile so the fixture prebuild warms the
+# same artifact cache used by `manage shell`.
+[profile.dev]
+opt-level = 2
+debug = false
+strip = "debuginfo"
+rpath = true
+lto = false
+debug-assertions = true
+codegen-units = 16
+panic = "unwind"
+incremental = true
+overflow-checks = true
 "#,
 			repository_root.display()
 		),

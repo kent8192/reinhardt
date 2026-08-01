@@ -64,10 +64,7 @@ async fn assert_retrieval_contract(url: &str) {
 	);
 	assert_eq!(
 		queryset
-			.earliest_by_with_db(
-				&mut connection,
-				&[RetrievalEvent::field_created_at().ordering()],
-			)
+			.earliest_by_with_db(&mut connection, &[RetrievalEvent::ordering_created_at()],)
 			.await
 			.expect("earliest typed row should load")
 			.id,

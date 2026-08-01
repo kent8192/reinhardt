@@ -443,6 +443,15 @@ pub mod db {
 			fn primary_key_uses_zero_sentinel() -> bool {
 				false
 			}
+			fn primary_key_database_value(
+				pk: &Self::PrimaryKey,
+			) -> Result<DatabaseValue, FieldCodecError>
+			where
+				Self::PrimaryKey: DatabaseField,
+			{
+				<Self::PrimaryKey as DatabaseField>::encode_database(pk)
+					.map(DatabaseScalar::into_database_value)
+			}
 
 			fn objects() -> Self::Objects
 			where

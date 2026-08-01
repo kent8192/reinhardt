@@ -14,11 +14,11 @@ help: `&str` implements trait `IntoFieldValue<T>`
 ...
    | impl IntoFieldValue<Option<String>> for &str {
    | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `IntoFieldValue<std::option::Option<std::string::String>>`
-note: required by a bound in `reinhardt::FieldRef::<M, T>::eq`
+note: required by a bound in `reinhardt::FieldRef::<M, T, Origin>::eq`
   --> $WORKSPACE/crates/reinhardt-db/src/orm/expressions.rs
    |
    |     pub fn eq<V>(&self, value: V) -> Filter
    |            -- required by a bound in this associated function
 ...
    |         V: IntoFieldValue<T>,
-   |            ^^^^^^^^^^^^^^^^^ required by this bound in `FieldRef::<M, T>::eq`
+   |            ^^^^^^^^^^^^^^^^^ required by this bound in `FieldRef::<M, T, Origin>::eq`

@@ -14,6 +14,7 @@ use serde::{Deserialize, Serialize};
 use reinhardt_core::exception::{DatabaseError, DatabaseErrorKind, Error};
 use reinhardt_db::associations::markers::ManyToManyConfig;
 use reinhardt_db::associations::{ManyToManyField, ManyToManyManager};
+use reinhardt_db::orm::aggregation::Aggregate;
 use reinhardt_db::orm::annotation::{AnnotationValue, Expression, Value};
 use reinhardt_db::orm::composite_pk::{CompositePrimaryKey, PkValue};
 #[cfg(feature = "sqlite")]
@@ -21,10 +22,11 @@ use reinhardt_db::orm::connection::{BackendsConnection, DatabaseConnectionLease}
 use reinhardt_db::orm::connection::{
 	DatabaseBackend, OrmExecutor, QueryResult, QueryValue, Row, TransactionExecutor,
 };
+use reinhardt_db::orm::cte::CTE;
 use reinhardt_db::orm::custom_manager::CustomManager;
 use reinhardt_db::orm::events::{EventRegistry, EventResult, MapperEvents, set_active_registry};
 use reinhardt_db::orm::execution::{QueryExecution, SelectExecution};
-use reinhardt_db::orm::expressions::{F, FieldRef, UniqueFieldRef};
+use reinhardt_db::orm::expressions::{F, OrderingField, UniqueFieldRef};
 use reinhardt_db::orm::inspection::FieldInfo;
 use reinhardt_db::orm::manager::Manager;
 use reinhardt_db::orm::model::{FieldSelector, Model};
@@ -258,6 +260,80 @@ impl OrmExecutor for RecordingExecutor {
 	) -> reinhardt_core::exception::Result<Option<Row>> {
 		self.fetch_optional_contexts.push(context);
 		self.fetch_optional(sql, params).await
+	}
+}
+
+struct RowLockTransactionExecutor {
+	backend: reinhardt_db::backends::DatabaseType,
+	capabilities: reinhardt_db::orm::RowLockCapabilities,
+	calls: Vec<RecordedCall>,
+	rows: Vec<Row>,
+}
+
+impl RowLockTransactionExecutor {
+	fn postgres(rows: Vec<Row>) -> Self {
+		Self {
+			backend: reinhardt_db::backends::DatabaseType::Postgres,
+			capabilities: reinhardt_db::orm::RowLockCapabilities::postgres(),
+			calls: Vec::new(),
+			rows,
+		}
+	}
+}
+
+#[async_trait]
+impl TransactionExecutor for RowLockTransactionExecutor {
+	fn backend(&self) -> reinhardt_db::backends::DatabaseType {
+		self.backend
+	}
+
+	fn row_lock_capabilities(&self) -> reinhardt_db::orm::RowLockCapabilities {
+		self.capabilities
+	}
+
+	async fn execute(
+		&mut self,
+		_sql: &str,
+		_params: Vec<QueryValue>,
+	) -> reinhardt_core::exception::Result<QueryResult> {
+		panic!("row-lock SELECT test does not execute mutations")
+	}
+
+	async fn fetch_one(
+		&mut self,
+		_sql: &str,
+		_params: Vec<QueryValue>,
+	) -> reinhardt_core::exception::Result<Row> {
+		panic!("row-lock SELECT test does not fetch one row")
+	}
+
+	async fn fetch_all(
+		&mut self,
+		sql: &str,
+		params: Vec<QueryValue>,
+	) -> reinhardt_core::exception::Result<Vec<Row>> {
+		self.calls.push(RecordedCall {
+			kind: "fetch_all",
+			sql: sql.to_owned(),
+			params,
+		});
+		Ok(std::mem::take(&mut self.rows))
+	}
+
+	async fn fetch_optional(
+		&mut self,
+		_sql: &str,
+		_params: Vec<QueryValue>,
+	) -> reinhardt_core::exception::Result<Option<Row>> {
+		panic!("row-lock SELECT test does not fetch an optional row")
+	}
+
+	async fn commit(self: Box<Self>) -> reinhardt_core::exception::Result<()> {
+		Ok(())
+	}
+
+	async fn rollback(self: Box<Self>) -> reinhardt_core::exception::Result<()> {
+		Ok(())
 	}
 }
 
@@ -581,6 +657,222 @@ fn article_locale_row(article_id: i64, locale: &str, title: &str) -> Row {
 	row
 }
 
+#[tokio::test]
+async fn select_for_update_rejects_an_ordinary_executor_without_querying() {
+	let query = QuerySet::<Article>::new().select_for_update().nowait();
+	let mut executor = RecordingExecutor::new(DatabaseBackend::Postgres);
+
+	let error = query
+		.all_with_db(&mut executor)
+		.await
+		.expect_err("row locks require an active transaction executor");
+
+	assert_eq!(error.database_kind(), Some(DatabaseErrorKind::Transaction));
+	assert!(executor.calls.is_empty());
+}
+
+#[tokio::test]
+async fn select_for_update_rows_with_executor_short_circuits_empty_querysets() {
+	// Arrange
+	let query = QuerySet::<Article>::new().none().select_for_update();
+	let mut executor = RowLockTransactionExecutor::postgres(Vec::new());
+
+	// Act
+	let rows = query
+		.rows_with_executor(&mut executor)
+		.await
+		.expect("empty locking queryset must not execute a query");
+
+	// Assert
+	assert_eq!(rows, Vec::new());
+	assert!(executor.calls.is_empty());
+}
+
+#[tokio::test]
+async fn select_for_update_rejects_select_related_aggregate_annotations_without_querying() {
+	// Arrange
+	let query = QuerySet::<Article>::new()
+		.select_related(&["author"])
+		.aggregate(Aggregate::count_all().with_alias("article_count"))
+		.select_for_update()
+		.of_model();
+	let mut executor = RowLockTransactionExecutor::postgres(Vec::new());
+
+	// Act
+	let error = query
+		.rows_with_executor(&mut executor)
+		.await
+		.expect_err("PostgreSQL must reject row locking with aggregate annotations");
+
+	// Assert
+	assert_eq!(error.kind(), DatabaseErrorKind::Unsupported);
+	assert!(executor.calls.is_empty());
+}
+
+#[tokio::test]
+async fn select_for_update_renders_postgres_lock_options_in_a_transaction() {
+	let query = QuerySet::<Article>::new()
+		.select_for_update()
+		.nowait()
+		.no_key()
+		.of_model();
+	let mut executor = RowLockTransactionExecutor::postgres(vec![article_row(7, "locked")]);
+
+	let articles = query
+		.all_with_executor(&mut executor)
+		.await
+		.expect("PostgreSQL transaction should support every requested lock option");
+
+	assert_eq!(
+		articles,
+		vec![Article {
+			id: Some(7),
+			title: "locked".to_string(),
+		}]
+	);
+	assert_eq!(executor.calls.len(), 1);
+	assert_eq!(
+		executor.calls[0].sql,
+		"SELECT * FROM \"articles\" FOR NO KEY UPDATE OF \"articles\" NOWAIT"
+	);
+	assert!(executor.calls[0].params.is_empty());
+}
+
+#[tokio::test]
+async fn select_for_update_rejects_missing_server_capability_without_querying() {
+	let query = QuerySet::<Article>::new().select_for_update().skip_locked();
+	let mut executor = RowLockTransactionExecutor::postgres(Vec::new());
+	executor.capabilities.skip_locked = false;
+
+	let error = match query.rows_with_executor(&mut executor).await {
+		Ok(_) => panic!("an older PostgreSQL server must reject SKIP LOCKED"),
+		Err(error) => error,
+	};
+
+	assert_eq!(error.kind(), DatabaseErrorKind::Unsupported);
+	assert!(executor.calls.is_empty());
+}
+
+#[tokio::test]
+async fn select_for_update_rejects_cockroachdb_skip_locked_without_querying() {
+	let query = QuerySet::<Article>::new().select_for_update().skip_locked();
+	let mut executor = RowLockTransactionExecutor {
+		backend: reinhardt_db::backends::DatabaseType::Postgres,
+		capabilities: reinhardt_db::orm::RowLockCapabilities::cockroachdb(),
+		calls: Vec::new(),
+		rows: Vec::new(),
+	};
+
+	let error = match query.rows_with_executor(&mut executor).await {
+		Ok(_) => panic!("CockroachDB v23.1 must reject SKIP LOCKED before query execution"),
+		Err(error) => error,
+	};
+
+	assert_eq!(error.kind(), DatabaseErrorKind::Unsupported);
+	assert!(executor.calls.is_empty());
+}
+
+#[tokio::test]
+async fn select_for_update_rejects_derived_table_sources_without_querying() {
+	let query = QuerySet::<Article>::from_subquery(
+		|query: QuerySet<Article>| {
+			query.filter(Filter::new(
+				"article_id",
+				FilterOperator::Eq,
+				FilterValue::Integer(7),
+			))
+		},
+		"locked_articles",
+	)
+	.expect("derived queryset should compile")
+	.select_for_update();
+	let mut executor = RowLockTransactionExecutor::postgres(Vec::new());
+
+	let error = match query.rows_with_executor(&mut executor).await {
+		Ok(_) => panic!("row locking a derived table must be rejected before query execution"),
+		Err(error) => error,
+	};
+
+	assert_eq!(error.kind(), DatabaseErrorKind::Unsupported);
+	assert!(executor.calls.is_empty());
+}
+
+#[tokio::test]
+async fn select_for_update_rejects_lateral_join_sources_without_querying() {
+	let query = QuerySet::<Article>::new()
+		.with_lateral_join(reinhardt_db::orm::lateral_join::LateralJoin::new(
+			"latest_article",
+			"SELECT 1",
+		))
+		.select_for_update();
+	let mut executor = RowLockTransactionExecutor::postgres(Vec::new());
+
+	let error = match query.rows_with_executor(&mut executor).await {
+		Ok(_) => panic!("row locking with a lateral join must be rejected before query execution"),
+		Err(error) => error,
+	};
+
+	assert_eq!(error.kind(), DatabaseErrorKind::Unsupported);
+	assert!(executor.calls.is_empty());
+}
+
+#[tokio::test]
+async fn select_for_update_rejects_raw_aggregate_projections_without_querying() {
+	let query = QuerySet::<Article>::new()
+		.values(&["COUNT(*)"])
+		.select_for_update();
+	let mut executor = RowLockTransactionExecutor::postgres(Vec::new());
+
+	let error = match query.rows_with_executor(&mut executor).await {
+		Ok(_) => panic!("row locking with a raw aggregate must be rejected before query execution"),
+		Err(error) => error,
+	};
+
+	assert_eq!(error.kind(), DatabaseErrorKind::Unsupported);
+	assert!(executor.calls.is_empty());
+}
+
+#[tokio::test]
+async fn select_for_update_rejects_cte_backed_querysets_without_querying() {
+	// Arrange
+	let query = QuerySet::<Article>::new()
+		.with_cte(CTE::new(
+			"locked_articles",
+			"SELECT * FROM articles WHERE id > 0",
+		))
+		.select_for_update();
+	let mut executor = RowLockTransactionExecutor::postgres(Vec::new());
+
+	// Act
+	let error = query
+		.rows_with_executor(&mut executor)
+		.await
+		.expect_err("row locking CTE-backed querysets must be rejected before execution");
+
+	// Assert
+	assert_eq!(error.kind(), DatabaseErrorKind::Unsupported);
+	assert!(executor.calls.is_empty());
+}
+
+#[tokio::test]
+async fn select_for_update_rejects_sqlite_instead_of_degrading_to_a_no_op() {
+	let query = QuerySet::<Article>::new().select_for_update();
+	let mut executor = RowLockTransactionExecutor {
+		backend: reinhardt_db::backends::DatabaseType::Sqlite,
+		capabilities: reinhardt_db::orm::RowLockCapabilities::unsupported(),
+		calls: Vec::new(),
+		rows: Vec::new(),
+	};
+
+	let error = match query.rows_with_executor(&mut executor).await {
+		Ok(_) => panic!("SQLite does not support SELECT row locks"),
+		Err(error) => error,
+	};
+
+	assert_eq!(error.kind(), DatabaseErrorKind::Unsupported);
+	assert!(executor.calls.is_empty());
+}
+
 async fn save_article(
 	executor: &mut dyn OrmExecutor,
 	article: &Article,
@@ -706,9 +998,9 @@ async fn none_short_circuits_owned_and_transaction_executors() {
 async fn latest_and_earliest_use_typed_ordering_with_caller_owned_executors() {
 	let ordering = [
 		// SAFETY: these columns are declared by the Article test model below.
-		unsafe { FieldRef::<Article, i64>::from_model_field("article_id") }.ordering(),
+		unsafe { OrderingField::<Article>::from_model_field("article_id") },
 		// SAFETY: these columns are declared by the Article test model below.
-		unsafe { FieldRef::<Article, String>::from_model_field("article_title") }.ordering(),
+		unsafe { OrderingField::<Article>::from_model_field("article_title") },
 	];
 	let queryset = QuerySet::<Article>::new();
 	let mut executor = RecordingExecutor::new(DatabaseBackend::Postgres)
@@ -856,7 +1148,8 @@ async fn in_bulk_uses_one_typed_in_query_and_returns_ordered_maps() {
 	let queryset = QuerySet::<Article>::new();
 	let mut executor = RecordingExecutor::new(DatabaseBackend::Postgres)
 		.with_fetch_all(vec![article_row(3, "third"), article_row(1, "first")])
-		.with_fetch_all(vec![article_row(2, "second"), article_row(1, "first")]);
+		.with_fetch_all(vec![article_row(2, "second"), article_row(1, "first")])
+		.with_fetch_all(vec![article_row(1, "first")]);
 	let primary = queryset
 		.in_bulk_with_db(&mut executor, [3_i64, 1, 3, 99])
 		.await
@@ -878,7 +1171,14 @@ async fn in_bulk_uses_one_typed_in_query_and_returns_ordered_maps() {
 		unique.keys().cloned().collect::<Vec<_>>(),
 		vec!["first".to_string(), "second".to_string()]
 	);
-	assert_eq!(executor.calls.len(), 2);
+	let deferred = queryset
+		.clone()
+		.defer(&["id", "title"])
+		.in_bulk_with_db(&mut executor, [1_i64])
+		.await
+		.unwrap();
+	assert_eq!(deferred.keys().copied().collect::<Vec<_>>(), vec![1]);
+	assert_eq!(executor.calls.len(), 3);
 	assert!(executor.calls.iter().all(|call| call.kind == "fetch_all"));
 	assert!(executor.calls.iter().all(|call| call.sql.contains(" IN ")));
 	assert!(
@@ -906,6 +1206,11 @@ async fn in_bulk_uses_one_typed_in_query_and_returns_ordered_maps() {
 			QueryValue::String("second".to_string())
 		]
 	);
+	assert_eq!(
+		executor.calls[2].sql,
+		"SELECT \"article_id\" FROM \"articles\" WHERE \"article_id\" IN ($1)"
+	);
+	assert_eq!(executor.calls[2].params, vec![QueryValue::Int(1)]);
 
 	let mut transaction_executor =
 		RecordingTransactionExecutor::new(reinhardt_db::backends::types::DatabaseType::Postgres)

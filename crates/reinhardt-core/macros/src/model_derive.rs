@@ -3383,10 +3383,10 @@ fn resolve_latest_by_fields(
 /// // The #[model] attribute macro automatically generates:
 /// impl User {
 ///     pub const fn field_id() -> FieldRef<User, i64> {
-///         unsafe { FieldRef::from_model_field("id") }
+///         FieldRef::new("id")
 ///     }
 ///     pub const fn field_name() -> FieldRef<User, String> {
-///         unsafe { FieldRef::from_model_field("name") }
+///         FieldRef::new("name")
 ///     }
 /// }
 /// ```
@@ -3442,8 +3442,32 @@ fn generate_field_accessors(
 				/// Returns a `FieldRef<#struct_name, #field_type>` that provides compile-time
 				/// type safety for field operations.
 				pub const fn #method_name() -> #orm_crate::expressions::FieldRef<#struct_name, #field_type> {
+					#orm_crate::expressions::FieldRef::new(#column_name)
+				}
+			}
+		})
+		.collect();
+	let ordering_accessor_methods: Vec<_> = field_infos
+		.iter()
+		.filter(|field| !field.config.skip)
+		.filter(|field| field.rel.is_none())
+		.filter(|field| !is_relationship_field_type(&field.ty))
+		.filter(|field| !is_many_to_many_field_type(&field.ty))
+		.map(|field| {
+			let field_name = &field.name;
+			let method_name =
+				syn::Ident::new(&format!("ordering_{}", field_name), field_name.span());
+			let column_name = field
+				.config
+				.db_column
+				.clone()
+				.unwrap_or_else(|| field_name.to_string());
+
+			quote! {
+				/// Ordering proof for a persisted scalar model field.
+				pub const fn #method_name() -> #orm_crate::expressions::OrderingField<#struct_name> {
 					// SAFETY: `#[model]` emits this accessor only for a persisted scalar model field.
-					unsafe { #orm_crate::expressions::FieldRef::from_model_field(#column_name) }
+					unsafe { #orm_crate::expressions::OrderingField::from_model_field(#column_name) }
 				}
 			}
 		})
@@ -3496,6 +3520,7 @@ fn generate_field_accessors(
 	quote! {
 		impl #struct_name {
 			#(#accessor_methods)*
+			#(#ordering_accessor_methods)*
 			#(#unique_accessor_methods)*
 		}
 	}
@@ -4904,6 +4929,22 @@ pub(crate) fn model_derive_impl(mut input: DeriveInput) -> Result<TokenStream> {
 			);
 		}
 	});
+	let primary_key_database_value = if is_composite_pk {
+		quote! {}
+	} else {
+		quote! {
+			fn primary_key_database_value(
+				pk: &Self::PrimaryKey,
+			) -> ::core::result::Result<
+				#orm_crate::DatabaseValue,
+				#orm_crate::FieldCodecError,
+			> {
+				<#pk_type as #orm_crate::DatabaseField>::encode_database(pk).map(
+					<<#pk_type as #orm_crate::DatabaseField>::Storage as #orm_crate::DatabaseScalar>::into_database_value
+				)
+			}
+		}
+	};
 	let decode_database_fields = database_codec_fields.iter().map(|field| {
 		let field_name = &field.name;
 		let field_ty = &field.ty;
@@ -5016,6 +5057,8 @@ pub(crate) fn model_derive_impl(mut input: DeriveInput) -> Result<TokenStream> {
 			fn primary_key_uses_zero_sentinel() -> bool {
 				#primary_key_uses_zero_sentinel
 			}
+
+			#primary_key_database_value
 
 			fn field_is_none(&self, field_name: &str) -> bool {
 				match field_name {
@@ -8979,6 +9022,29 @@ mod tests {
 	}
 
 	#[test]
+	fn test_model_routes_primary_key_values_through_database_field_codec() {
+		let input = quote! {
+			#[model(app_label = "test", table_name = "external_users", info = false)]
+			struct ExternalUser {
+				#[field(primary_key = true, max_length = 64)]
+				external_id: String,
+				#[field(max_length = 120)]
+				name: String,
+			}
+		};
+
+		let output = model_derive_impl(syn::parse2(input).unwrap())
+			.expect("string primary key model must generate")
+			.to_string();
+		let compact = output.split_whitespace().collect::<String>();
+
+		assert!(compact.contains("fnprimary_key_database_value(pk:&Self::PrimaryKey"));
+		assert!(compact.contains("<Stringas"));
+		assert!(compact.contains("DatabaseField>::encode_database(pk)"));
+		assert!(compact.contains("DatabaseScalar>::into_database_value"));
+	}
+
+	#[test]
 	fn test_model_disables_zero_sentinel_for_non_auto_increment_primary_key() {
 		let input = quote! {
 			#[model(app_label = "test", table_name = "manual_users", info = false)]
@@ -9711,6 +9777,28 @@ mod tests {
 		assert!(output_str.contains(
 			"fn __reinhardt_unique_get_email (model : & User) -> :: core :: option :: Option < String >"
 		));
+	}
+
+	#[test]
+	fn test_ordering_accessors_are_separate_from_compatible_field_refs() {
+		let input = quote! {
+			#[model(app_label = "test", table_name = "events")]
+			pub struct Event {
+				#[field(primary_key = true, db_column = "event_id")]
+				pub id: i64,
+				#[rel(foreign_key)]
+				pub owner: ForeignKeyField<User>,
+			}
+		};
+
+		let output = model_derive_impl(syn::parse2(input).unwrap()).unwrap();
+		let output_str = output.to_string();
+
+		assert!(output_str.contains("pub const fn field_id"));
+		assert!(output_str.contains("FieldRef :: new (\"event_id\")"));
+		assert!(output_str.contains("pub const fn ordering_id"));
+		assert!(output_str.contains("OrderingField :: from_model_field (\"event_id\")"));
+		assert!(!output_str.contains("pub const fn ordering_owner"));
 	}
 
 	#[test]

@@ -18,6 +18,24 @@
 //! deterministically ordered `BTreeMap`; [`query::QuerySet::none`] and empty
 //! bulk inputs remain lazy and do not resolve or call an executor.
 //!
+//! [`QuerySet::dates`] and [`QuerySet::datetimes`] accept generated typed field
+//! references. They exclude nulls and perform truncation, distinct projection,
+//! and ordering in the database. Named-zone conversion is supported by
+//! PostgreSQL; MySQL and SQLite return an explicit capability error.
+//!
+//! ## Streaming QuerySets
+//!
+//! [`QuerySet::iterator_with_db`] and [`QuerySet::iterator_with_executor`]
+//! return lifetime-bound streams that decode one model per item. The borrowed
+//! executor remains in use until the stream completes or is dropped, and each
+//! item retains backend or model-decoding failures in its `Result`.
+//!
+//! PostgreSQL, MySQL, and SQLite use driver streams. Custom executors without
+//! that capability return `DatabaseErrorKind::Unsupported`; the ORM never
+//! substitutes `fetch_all` or repeated `LIMIT`/`OFFSET` queries. `chunk_size`
+//! is a driver fetch or bounded-buffer hint, and dropping or cancelling the
+//! stream releases driver resources through RAII.
+//!
 //! ## Transaction Management
 //!
 //! ORM writes run inside closure-scoped transactions. Start an outer operation
@@ -54,6 +72,23 @@
 //! values only. They may generate SQL but cannot control a live ORM transaction.
 //! [`AtomicTransaction`] is also intentionally non-`Copy` and stays bound to
 //! the callback and dedicated connection created by [`DatabaseConnection::atomic`].
+//!
+//! ## Row Locking
+//!
+//! [`QuerySet::select_for_update`](query::QuerySet::select_for_update) returns a
+//! typed builder whose `nowait` and `skip_locked` states are mutually exclusive.
+//! Evaluate it through a caller-owned [`TransactionExecutor`] so the same
+//! physical connection retains locks through commit or rollback. Root targets
+//! use `of_model`; relation targets require a generated [`RelationPathLike`]
+//! rooted at the queryset model. Unlike Django, ordinary connection evaluation
+//! and SQLite return explicit errors instead of silently degrading to an
+//! unlocked query. CTE-backed querysets, derived `FROM` sources, LATERAL joins,
+//! raw aggregate projections, and aggregate annotations are rejected before
+//! execution so the lock scope remains unambiguous.
+//!
+//! PostgreSQL 9.3 adds `no_key`, PostgreSQL 9.5 adds `skip_locked`, and the
+//! built-in MySQL profile requires 8.0.1 or newer. Older/custom servers report
+//! their exact feature set through [`TransactionExecutor::row_lock_capabilities`].
 
 // Core modules - always available
 pub mod aggregation;
@@ -181,7 +216,7 @@ pub use aggregation::{Aggregate, AggregateFunc, AggregateResult, AggregateValue}
 pub use annotation::{Annotation, AnnotationValue, Expression, Value, When};
 pub use connection::{
 	DatabaseBackend, DatabaseConnection, DatabaseConnectionLease, OrmExecutor, QueryResult,
-	QueryRow, QueryValue, Row, TransactionExecutor,
+	QueryRow, QueryValue, Row, RowLockCapabilities, RowStream, TransactionExecutor,
 };
 pub use constraints::{
 	CheckConstraint, Constraint, ForeignKeyConstraint, OnDelete, OnUpdate, UniqueConstraint,
@@ -300,8 +335,10 @@ pub use reverse_accessor::ReverseAccessor;
 pub use manager::Manager;
 // Query types are always available
 pub use query::{
-	FieldAssignment, Filter, FilterCondition, FilterOperator, FilterValue, IntoOrderBy, OrmQuery,
-	QuerySet, UpdateValue,
+	Blocking, DateProjectionField, DateProjectionOrder, DateTimeProjectionField, DateTimeTruncKind,
+	DateTruncKind, FieldAssignment, Filter, FilterCondition, FilterOperator, FilterValue,
+	IntoOrderBy, Nowait, OrmQuery, QuerySet, QuerySetStream, SelectForUpdate, SkipLocked,
+	UpdateValue,
 };
 
 // Advanced ORM features

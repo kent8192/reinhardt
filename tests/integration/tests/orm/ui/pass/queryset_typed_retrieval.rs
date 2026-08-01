@@ -27,8 +27,8 @@ fn accepts_event_unique(_: UniqueFieldRef<Event, String>) {}
 
 fn main() {
 	accepts_event_ordering(&[
-		Event::field_created_at().ordering(),
-		Event::field_id().ordering(),
+		Event::ordering_created_at(),
+		Event::ordering_id(),
 	]);
 	accepts_event_unique(Event::unique_email());
 	assert_eq!(<Event as Model>::latest_by_fields(), ["created_on", "id"]);

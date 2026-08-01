@@ -94,13 +94,13 @@ impl fmt::Display for F {
 /// // The #[model] attribute macro automatically generates:
 /// // impl User {
 /// //     pub const fn field_id() -> FieldRef<User, i64> {
-/// //         unsafe { FieldRef::from_model_field("id") }
+/// //         FieldRef::new("id")
 /// //     }
 /// //     pub const fn field_name() -> FieldRef<User, String> {
-/// //         unsafe { FieldRef::from_model_field("name") }
+/// //         FieldRef::new("name")
 /// //     }
 /// //     pub const fn field_email() -> FieldRef<User, String> {
-/// //         unsafe { FieldRef::from_model_field("email") }
+/// //         FieldRef::new("email")
 /// //     }
 /// // }
 ///
@@ -132,15 +132,16 @@ pub enum UnverifiedModelField {}
 
 #[derive(Debug, Clone, Copy)]
 /// A typed model field reference whose origin controls ordering eligibility.
-pub struct FieldRef<M, T, Origin = GeneratedModelField> {
+pub struct FieldRef<M, T, Origin = UnverifiedModelField> {
 	name: &'static str,
 	_phantom: PhantomData<(M, T, Origin)>,
 }
 
 /// Type-safe proof that a physical database column belongs to model `M`.
 ///
-/// `OrderingField<M>` intentionally has no public constructor. Obtain one from
-/// [`FieldRef::ordering`] so the model identity remains coupled to the column.
+/// `OrderingField<M>` intentionally has no safe public constructor. Model
+/// macros expose persisted scalar proofs through `ordering_<field>()`
+/// accessors so the model identity remains coupled to the column.
 #[derive(Debug, Clone, Copy)]
 pub struct OrderingField<M> {
 	// The QuerySet retrieval layer reads this crate-internal column accessor.
@@ -150,6 +151,19 @@ pub struct OrderingField<M> {
 }
 
 impl<M> OrderingField<M> {
+	/// Construct an ordering proof emitted by the model derive macro.
+	///
+	/// # Safety
+	///
+	/// `name` must identify a persisted scalar database column of `M`.
+	#[doc(hidden)]
+	pub const unsafe fn from_model_field(name: &'static str) -> Self {
+		Self {
+			name,
+			_phantom: PhantomData,
+		}
+	}
+
 	/// Get the physical database column name.
 	#[doc(hidden)]
 	// The QuerySet retrieval layer reads ordering columns internally.
@@ -166,7 +180,7 @@ impl<M> OrderingField<M> {
 /// unique constraints. Nullable fields use their inner type for lookups.
 #[derive(Debug, Clone, Copy)]
 pub struct UniqueFieldRef<M, T> {
-	field: FieldRef<M, T, GeneratedModelField>,
+	field: FieldRef<M, T>,
 	// The QuerySet retrieval layer calls the generated getter internally.
 	#[allow(dead_code)]
 	getter: Option<fn(&M) -> Option<T>>,
@@ -182,7 +196,7 @@ impl<M, T: DatabaseField> UniqueFieldRef<M, T> {
 	#[doc(hidden)]
 	pub const unsafe fn from_model_field(name: &'static str) -> Self {
 		Self {
-			field: unsafe { FieldRef::from_model_field(name) },
+			field: FieldRef::new(name),
 			getter: None,
 		}
 	}
@@ -200,7 +214,7 @@ impl<M, T: DatabaseField> UniqueFieldRef<M, T> {
 		getter: fn(&M) -> Option<T>,
 	) -> Self {
 		Self {
-			field: unsafe { FieldRef::from_model_field(name) },
+			field: FieldRef::new(name),
 			getter: Some(getter),
 		}
 	}
@@ -250,7 +264,7 @@ impl<M, T> FieldRef<M, T, UnverifiedModelField> {
 	///
 	/// This constructor is for dynamically composed filters. It deliberately
 	/// does not permit conversion into [`OrderingField`]. Generated model
-	/// accessors use [`FieldRef::from_model_field`] instead.
+	/// accessors expose ordering proofs separately.
 	///
 	/// # Arguments
 	///
@@ -262,7 +276,7 @@ impl<M, T> FieldRef<M, T, UnverifiedModelField> {
 	/// # struct User;
 	/// use reinhardt_db::orm::expressions::FieldRef;
 	///
-	/// const USER_ID: FieldRef<User, i64, UnverifiedModelField> = FieldRef::new("id");
+	/// const USER_ID: FieldRef<User, i64> = FieldRef::new("id");
 	/// ```
 	///
 	/// ```compile_fail
@@ -280,18 +294,6 @@ impl<M, T> FieldRef<M, T, UnverifiedModelField> {
 }
 
 impl<M, T> FieldRef<M, T, GeneratedModelField> {
-	/// Create an unverified field reference for a dynamically composed filter.
-	///
-	/// This preserves the historical two-parameter `FieldRef::<M, T>::new`
-	/// call shape while preventing dynamic field names from becoming ordering
-	/// proofs.
-	pub const fn new(name: &'static str) -> FieldRef<M, T, UnverifiedModelField> {
-		FieldRef {
-			name,
-			_phantom: PhantomData,
-		}
-	}
-
 	/// Construct a field reference proven to come from a model definition.
 	///
 	/// # Safety
@@ -1645,18 +1647,15 @@ mod tests {
 	// Simulating what #[derive(Model)] macro would generate
 	impl TestUser {
 		const fn field_id() -> FieldRef<TestUser, i64> {
-			// SAFETY: this mirrors a generated accessor for the persisted `id` field.
-			unsafe { FieldRef::from_model_field("id") }
+			FieldRef::new("id")
 		}
 
 		const fn field_name() -> FieldRef<TestUser, String> {
-			// SAFETY: this mirrors a generated accessor for the persisted `name` field.
-			unsafe { FieldRef::from_model_field("name") }
+			FieldRef::new("name")
 		}
 
 		const fn field_created_at() -> FieldRef<TestUser, i64> {
-			// SAFETY: this mirrors a generated accessor for the persisted `created_at` field.
-			unsafe { FieldRef::from_model_field("created_at") }
+			FieldRef::new("created_at")
 		}
 	}
 
@@ -1899,7 +1898,7 @@ mod tests {
 	#[test]
 	fn test_field_ref_const_to_f_conversion() {
 		// Verify const FieldRef can be converted to F
-		const ID_FIELD: FieldRef<TestUser, i64> = unsafe { FieldRef::from_model_field("id") };
+		const ID_FIELD: FieldRef<TestUser, i64> = FieldRef::new("id");
 		let f: F = ID_FIELD.into();
 
 		assert_eq!(f.to_sql(), "\"id\"");

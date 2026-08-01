@@ -1463,7 +1463,7 @@ fn test_none_keeps_builder_chains_empty_and_statement_inspection_deterministic()
 
 	assert_eq!(
 		before_none,
-		"SELECT * FROM \"products\" WHERE 1 = 0 ORDER BY \"price\" DESC LIMIT 3"
+		"SELECT * FROM \"products\" WHERE 1 = 0 ORDER BY \"price\" DESC LIMIT 0"
 	);
 	assert_eq!(after_none, before_none);
 }

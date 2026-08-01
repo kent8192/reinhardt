@@ -22,7 +22,10 @@ pub use condition::{
 pub use expr::{CaseExprBuilder, Expr};
 pub use expr_trait::ExprTrait;
 pub use func::Func;
-pub use simple_expr::{CaseStatement, Keyword, SimpleExpr, SubQueryOper};
+pub use simple_expr::{
+	CaseStatement, Keyword, SimpleExpr, SubQueryOper, TemporalTimeZone, TemporalTruncKind,
+	TemporalTruncOutput,
+};
 
 #[cfg(test)]
 mod tests;

@@ -24,7 +24,7 @@ fn accepts_event_ordering(_: &[OrderingField<Event>]) {}
 
 fn main() {
 	accepts_event_ordering(&[
-		Event::field_id().ordering(),
-		Project::field_id().ordering(),
+		Event::ordering_id(),
+		Project::ordering_id(),
 	]);
 }

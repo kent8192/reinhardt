@@ -1,7 +1,7 @@
 error[E0308]: mismatched types
-  --> tests/orm/ui/fail/queryset_in_bulk_non_unique_field.rs:20:17
+  --> tests/orm/ui/fail/queryset_in_bulk_non_unique_field.rs:21:17
    |
-20 |     accepts_unique(Event::field_name());
+21 |     accepts_unique(Event::field_name());
    |     -------------- ^^^^^^^^^^^^^^^^^^^ expected `UniqueFieldRef<Event, String>`, found `FieldRef<Event, String>`
    |     |
    |     arguments to this function are incorrect
@@ -9,7 +9,7 @@ error[E0308]: mismatched types
    = note: expected struct `UniqueFieldRef<Event, std::string::String>`
               found struct `reinhardt::FieldRef<Event, std::string::String>`
 note: function defined here
-  --> tests/orm/ui/fail/queryset_in_bulk_non_unique_field.rs:17:4
+  --> tests/orm/ui/fail/queryset_in_bulk_non_unique_field.rs:18:4
    |
-17 | fn accepts_unique(_: UniqueFieldRef<Event, String>) {}
+18 | fn accepts_unique(_: UniqueFieldRef<Event, String>) {}
    |    ^^^^^^^^^^^^^^ --------------------------------

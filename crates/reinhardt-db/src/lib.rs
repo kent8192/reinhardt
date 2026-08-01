@@ -33,13 +33,17 @@
 //!
 //! - **Django-style Models**: Define database models with structs
 //! - **QuerySet API**: Chainable query builder with typed latest/earliest,
-//!   deterministic bulk retrieval, lazy empty querysets, and conditional partial updates
+//!   deterministic bulk retrieval, lazy empty querysets, conditional partial updates,
+//!   and lifetime-bound row-by-row model streaming
+//! - **Typed Date Projections**: Database-side truncation, time-zone conversion,
+//!   distinctness, and deterministic ordering
 //! - **Field Types**: Rich set of field types with validation
 //! - **Relationships**: ForeignKey, ManyToMany, OneToOne
 //! - **Fixtures**: Django-compatible model fixture dump/load runtime with upsert,
 //!   binary base64 values, SQL/JSON null provenance, foreign key, many-to-many,
 //!   nullable foreign-key omission, and PostgreSQL sequence handling
 //! - **Typed Relation Traversal**: Compile-time checked relation paths for SELECT filters and eager loading
+//! - **Transaction-safe Row Locking**: Typed `select_for_update` targets and caller-owned transaction execution
 //! - **Scoped N+1 Detection**: Opt-in query shape detection for focused diagnostics and tests
 //!
 //! ### Migrations (`migrations` module)

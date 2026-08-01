@@ -3,7 +3,7 @@
 //! This module provides a unified entry point for querying functionality.
 //! By default, it exports the expression-based query API (SQLAlchemy-style).
 
-use super::connection::{OrmExecutor, QueryRow};
+use super::connection::{OrmExecutor, QueryRow, RowStream};
 use super::expressions::{OrderingField, UniqueFieldRef};
 use super::field_codec::{
 	DatabaseField, DatabaseValue, FieldCodecError, IntoFieldValue, database_value_to_query_value,
@@ -15,11 +15,13 @@ use crate::orm::query_fields::comparison::FieldComparison;
 use crate::orm::query_fields::compiler::QueryFieldCompiler;
 use crate::orm::query_fields::{GroupByFields, OrderedExpression, TypedExpression};
 use crate::orm::relations::{RelationJoinGraph, RelationJoinKind, RelationPathLike, RelationStep};
+use futures::{Stream, StreamExt};
 use reinhardt_core::exception::{DatabaseError, DatabaseErrorKind, Error};
 use reinhardt_query::prelude::{
 	Alias, BinOper, CockroachDBQueryBuilder, ColumnRef, Condition, Expr, ExprTrait, Func,
-	JoinType as SeaJoinType, MySqlQueryBuilder, Order, PostgresQueryBuilder, Query, QueryBuilder,
-	QueryStatementBuilder, SelectStatement, SimpleExpr, SqliteQueryBuilder, TableRef,
+	JoinType as SeaJoinType, LockBehavior, LockType, MySqlQueryBuilder, Order,
+	PostgresQueryBuilder, Query, QueryBuilder, QueryStatementBuilder, SelectStatement, SimpleExpr,
+	SqliteQueryBuilder, TableRef, TemporalTimeZone, TemporalTruncKind, TemporalTruncOutput,
 	UpdateStatement,
 };
 use reinhardt_query::types::PgBinOper;
@@ -27,11 +29,289 @@ use serde::{Deserialize, Serialize};
 use smallvec::SmallVec;
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::marker::PhantomData;
+use std::pin::Pin;
+use std::sync::{Arc, Mutex};
+use std::task::{Context, Poll, Wake, Waker};
 use std::time::Instant;
 use uuid::Uuid;
 
 fn executor_error(error: reinhardt_core::exception::Error) -> DatabaseError {
 	crate::backends::error::into_database_error(error)
+}
+
+mod temporal_projection_field {
+	pub trait Sealed {}
+
+	impl Sealed for chrono::NaiveDate {}
+	impl Sealed for Option<chrono::NaiveDate> {}
+	impl Sealed for chrono::DateTime<chrono::Utc> {}
+	impl Sealed for Option<chrono::DateTime<chrono::Utc>> {}
+}
+
+/// Field types accepted by [`QuerySet::dates`].
+pub trait DateProjectionField: temporal_projection_field::Sealed {}
+
+impl DateProjectionField for chrono::NaiveDate {}
+impl DateProjectionField for Option<chrono::NaiveDate> {}
+
+/// Field types accepted by [`QuerySet::datetimes`].
+pub trait DateTimeProjectionField: temporal_projection_field::Sealed {}
+
+impl DateTimeProjectionField for chrono::DateTime<chrono::Utc> {}
+impl DateTimeProjectionField for Option<chrono::DateTime<chrono::Utc>> {}
+
+/// Truncation unit for date projections.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DateTruncKind {
+	/// First day of the calendar year.
+	Year,
+	/// First day of the calendar month.
+	Month,
+	/// Monday of the ISO week.
+	Week,
+	/// Calendar day.
+	Day,
+}
+
+impl From<DateTruncKind> for TemporalTruncKind {
+	fn from(kind: DateTruncKind) -> Self {
+		match kind {
+			DateTruncKind::Year => Self::Year,
+			DateTruncKind::Month => Self::Month,
+			DateTruncKind::Week => Self::Week,
+			DateTruncKind::Day => Self::Day,
+		}
+	}
+}
+
+/// Truncation unit for datetime projections.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DateTimeTruncKind {
+	/// First instant of the calendar year.
+	Year,
+	/// First instant of the calendar month.
+	Month,
+	/// Monday at midnight of the ISO week.
+	Week,
+	/// Midnight of the calendar day.
+	Day,
+	/// Start of the hour.
+	Hour,
+	/// Start of the minute.
+	Minute,
+	/// Start of the second.
+	Second,
+}
+
+impl From<DateTimeTruncKind> for TemporalTruncKind {
+	fn from(kind: DateTimeTruncKind) -> Self {
+		match kind {
+			DateTimeTruncKind::Year => Self::Year,
+			DateTimeTruncKind::Month => Self::Month,
+			DateTimeTruncKind::Week => Self::Week,
+			DateTimeTruncKind::Day => Self::Day,
+			DateTimeTruncKind::Hour => Self::Hour,
+			DateTimeTruncKind::Minute => Self::Minute,
+			DateTimeTruncKind::Second => Self::Second,
+		}
+	}
+}
+
+/// Ordering direction for date and datetime projections.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum DateProjectionOrder {
+	/// Ascending chronological order.
+	#[default]
+	Asc,
+	/// Descending chronological order.
+	Desc,
+}
+
+impl From<DateProjectionOrder> for Order {
+	fn from(order: DateProjectionOrder) -> Self {
+		match order {
+			DateProjectionOrder::Asc => Self::Asc,
+			DateProjectionOrder::Desc => Self::Desc,
+		}
+	}
+}
+
+/// A lifetime-bound stream of decoded QuerySet models.
+pub type QuerySetStream<'a, T> =
+	Pin<Box<dyn Stream<Item = reinhardt_core::exception::Result<T>> + Send + 'a>>;
+
+struct PendingRowPoll {
+	generation: u64,
+	started_at: Instant,
+	wake_duration: Option<std::time::Duration>,
+}
+
+#[derive(Default)]
+struct RowStreamTiming {
+	next_generation: u64,
+	pending: Option<PendingRowPoll>,
+}
+
+/// Records a streaming query when its generator finishes or is dropped.
+struct StreamQueryAccounting {
+	sql: String,
+	params: Vec<String>,
+	duration: std::time::Duration,
+	completed: bool,
+	timing: Arc<Mutex<RowStreamTiming>>,
+}
+
+impl StreamQueryAccounting {
+	fn new(sql: String, params: Vec<String>) -> Self {
+		Self {
+			sql,
+			params,
+			duration: std::time::Duration::ZERO,
+			completed: true,
+			timing: Arc::new(Mutex::new(RowStreamTiming::default())),
+		}
+	}
+
+	fn record_poll(&mut self, duration: std::time::Duration) {
+		self.duration += duration;
+	}
+
+	fn disarm_completion(&mut self) {
+		self.completed = false;
+	}
+
+	fn take_woken_duration(&mut self) -> Option<std::time::Duration> {
+		let mut timing = self
+			.timing
+			.lock()
+			.unwrap_or_else(|poisoned| poisoned.into_inner());
+		let pending = timing.pending.take()?;
+		pending.wake_duration
+	}
+
+	fn record_woken_duration(&mut self) {
+		if let Some(duration) = self.take_woken_duration() {
+			self.record_poll(duration);
+		}
+	}
+}
+
+impl Drop for StreamQueryAccounting {
+	fn drop(&mut self) {
+		self.record_woken_duration();
+		if !self.completed {
+			return;
+		}
+		super::instrumentation::instrumentation().orm_query_end_with_params_sync(
+			&self.sql,
+			&self.params,
+			self.duration,
+		);
+	}
+}
+struct RowStreamWake {
+	timing: Arc<Mutex<RowStreamTiming>>,
+	generation: u64,
+	target: Waker,
+}
+
+impl RowStreamWake {
+	fn record_wake(&self) {
+		let mut timing = self
+			.timing
+			.lock()
+			.unwrap_or_else(|poisoned| poisoned.into_inner());
+		if let Some(pending) = timing.pending.as_mut()
+			&& pending.generation == self.generation
+			&& pending.wake_duration.is_none()
+		{
+			pending.wake_duration = Some(pending.started_at.elapsed());
+		}
+	}
+}
+
+impl Wake for RowStreamWake {
+	fn wake(self: Arc<Self>) {
+		self.record_wake();
+		self.target.wake_by_ref();
+	}
+
+	fn wake_by_ref(self: &Arc<Self>) {
+		self.record_wake();
+		self.target.wake_by_ref();
+	}
+}
+
+/// Times backend-stream polls through their wakeup without charging consumer idle time.
+///
+/// A wrapped waker records a pending poll when the backend wakes the task. If
+/// the consumer cancels that poll and later polls again without a wakeup, the
+/// stale pending interval is discarded before the next backend poll.
+struct TimedRowStream<'rows, 'accounting> {
+	rows: RowStream<'rows>,
+	accounting: &'accounting mut StreamQueryAccounting,
+}
+
+impl<'rows, 'accounting> TimedRowStream<'rows, 'accounting> {
+	fn new(rows: RowStream<'rows>, accounting: &'accounting mut StreamQueryAccounting) -> Self {
+		Self { rows, accounting }
+	}
+
+	fn start_pending_poll(&mut self, started_at: Instant, target: Waker) -> (u64, Waker) {
+		let generation = {
+			let mut timing = self
+				.accounting
+				.timing
+				.lock()
+				.unwrap_or_else(|poisoned| poisoned.into_inner());
+			let generation = timing.next_generation;
+			timing.next_generation = timing.next_generation.wrapping_add(1);
+			timing.pending = Some(PendingRowPoll {
+				generation,
+				started_at,
+				wake_duration: None,
+			});
+			generation
+		};
+		let waker = Waker::from(Arc::new(RowStreamWake {
+			timing: Arc::clone(&self.accounting.timing),
+			generation,
+			target,
+		}));
+		(generation, waker)
+	}
+
+	fn clear_pending_poll(&mut self, generation: u64) {
+		let mut timing = self
+			.accounting
+			.timing
+			.lock()
+			.unwrap_or_else(|poisoned| poisoned.into_inner());
+		if timing
+			.pending
+			.as_ref()
+			.is_some_and(|pending| pending.generation == generation)
+		{
+			timing.pending = None;
+		}
+	}
+}
+
+impl Stream for TimedRowStream<'_, '_> {
+	type Item = reinhardt_core::exception::Result<crate::backends::types::Row>;
+
+	fn poll_next(mut self: Pin<&mut Self>, context: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+		self.accounting.record_woken_duration();
+		let started_at = Instant::now();
+		let (generation, waker) = self.start_pending_poll(started_at, context.waker().clone());
+		let mut timing_context = Context::from_waker(&waker);
+		let result = self.rows.as_mut().poll_next(&mut timing_context);
+		if result.is_ready() {
+			self.clear_pending_poll(generation);
+			self.accounting.record_poll(started_at.elapsed());
+		}
+		result
+	}
 }
 
 // Django QuerySet API types
@@ -1174,6 +1454,196 @@ struct TypedSelectRelation {
 	steps: SmallVec<[RelationStep; 4]>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SelectForUpdateBehavior {
+	Blocking,
+	Nowait,
+	SkipLocked,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum SelectForUpdateTarget {
+	Root,
+	Relation(Box<SmallVec<[RelationStep; 4]>>),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct SelectForUpdateSpec {
+	behavior: SelectForUpdateBehavior,
+	no_key: bool,
+	targets: Vec<SelectForUpdateTarget>,
+}
+
+impl Default for SelectForUpdateSpec {
+	fn default() -> Self {
+		Self {
+			behavior: SelectForUpdateBehavior::Blocking,
+			no_key: false,
+			targets: Vec::new(),
+		}
+	}
+}
+
+/// Type state for a blocking row lock.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct Blocking;
+
+/// Type state for a row lock that fails immediately when a row is unavailable.
+#[derive(Debug, Clone, Copy)]
+pub struct Nowait;
+
+/// Type state for a row lock that omits rows which cannot be locked immediately.
+#[derive(Debug, Clone, Copy)]
+pub struct SkipLocked;
+
+/// Typed builder for a transaction-scoped `SELECT ... FOR UPDATE`.
+///
+/// `nowait` and `skip_locked` are transitions from [`Blocking`] to distinct
+/// type states, so they cannot be combined. Evaluate the builder with
+/// [`Self::all_with_executor`] or [`Self::rows_with_executor`] using a
+/// caller-owned active transaction executor.
+pub struct SelectForUpdate<M, Behavior = Blocking>
+where
+	M: super::Model,
+{
+	queryset: QuerySet<M>,
+	_behavior: PhantomData<Behavior>,
+}
+
+impl<M, Behavior> SelectForUpdate<M, Behavior>
+where
+	M: super::Model,
+{
+	/// Requests PostgreSQL's weaker `FOR NO KEY UPDATE` lock strength.
+	///
+	/// Other backends return an explicit unsupported-capability error.
+	pub fn no_key(mut self) -> Self {
+		self.queryset
+			.select_for_update
+			.as_mut()
+			.expect("select-for-update builder always contains a lock specification")
+			.no_key = true;
+		self
+	}
+
+	/// Restricts locking to the root model table.
+	pub fn of_model(mut self) -> Self {
+		let spec = self
+			.queryset
+			.select_for_update
+			.as_mut()
+			.expect("select-for-update builder always contains a lock specification");
+		if !spec.targets.contains(&SelectForUpdateTarget::Root) {
+			spec.targets.push(SelectForUpdateTarget::Root);
+		}
+		self
+	}
+
+	/// Restricts locking to a typed relation target and adds its required joins.
+	pub fn of_relation<P>(mut self, path: P) -> Self
+	where
+		P: RelationPathLike<Root = M>,
+	{
+		let mut steps: SmallVec<[RelationStep; 4]> = SmallVec::new();
+		steps.extend(path.steps().iter().cloned());
+		self.queryset
+			.relation_joins
+			.add_steps_with_override(&steps, path.join_kind_override());
+		let target = SelectForUpdateTarget::Relation(Box::new(steps));
+		let spec = self
+			.queryset
+			.select_for_update
+			.as_mut()
+			.expect("select-for-update builder always contains a lock specification");
+		if !spec.targets.contains(&target) {
+			spec.targets.push(target);
+		}
+		self
+	}
+
+	/// Rejects evaluation without an explicit active transaction.
+	pub async fn all(&self) -> reinhardt_core::exception::Result<Vec<M>>
+	where
+		M: serde::de::DeserializeOwned,
+	{
+		self.queryset.ensure_not_locking_without_transaction()?;
+		unreachable!("locking queryset validation always returns an error")
+	}
+
+	/// Rejects evaluation through an ordinary ORM executor.
+	pub async fn all_with_db<E>(
+		&self,
+		executor: &mut E,
+	) -> reinhardt_core::exception::Result<Vec<M>>
+	where
+		M: serde::de::DeserializeOwned,
+		E: OrmExecutor,
+	{
+		self.queryset.all_with_db(executor).await
+	}
+
+	/// Rejects raw-row evaluation through an ordinary ORM executor.
+	pub async fn rows_with_db<E>(
+		&self,
+		executor: &mut E,
+	) -> reinhardt_core::exception::Result<Vec<QueryRow>>
+	where
+		E: OrmExecutor,
+	{
+		self.queryset.rows_with_db(executor).await
+	}
+
+	/// Executes the locking query through a caller-owned active transaction.
+	pub async fn all_with_executor(
+		&self,
+		executor: &mut dyn super::connection::TransactionExecutor,
+	) -> Result<Vec<M>, crate::backends::error::DatabaseError>
+	where
+		M: serde::de::DeserializeOwned,
+	{
+		self.queryset.all_with_executor(executor).await
+	}
+
+	/// Executes the locking query and returns undecoded rows.
+	pub async fn rows_with_executor(
+		&self,
+		executor: &mut dyn super::connection::TransactionExecutor,
+	) -> Result<Vec<QueryRow>, crate::backends::error::DatabaseError> {
+		self.queryset.rows_with_executor(executor).await
+	}
+}
+
+impl<M> SelectForUpdate<M, Blocking>
+where
+	M: super::Model,
+{
+	/// Changes blocking behavior to `NOWAIT`.
+	pub fn nowait(mut self) -> SelectForUpdate<M, Nowait> {
+		self.queryset
+			.select_for_update
+			.as_mut()
+			.expect("select-for-update builder always contains a lock specification")
+			.behavior = SelectForUpdateBehavior::Nowait;
+		SelectForUpdate {
+			queryset: self.queryset,
+			_behavior: PhantomData,
+		}
+	}
+
+	/// Changes blocking behavior to `SKIP LOCKED`.
+	pub fn skip_locked(mut self) -> SelectForUpdate<M, SkipLocked> {
+		self.queryset
+			.select_for_update
+			.as_mut()
+			.expect("select-for-update builder always contains a lock specification")
+			.behavior = SelectForUpdateBehavior::SkipLocked;
+		SelectForUpdate {
+			queryset: self.queryset,
+			_behavior: PhantomData,
+		}
+	}
+}
+
 impl TypedSelectRelation {
 	fn from_path<P>(path: &P) -> Self
 	where
@@ -1267,10 +1737,11 @@ where
 	having_conditions: Vec<HavingCondition>,
 	subquery_conditions: Vec<SubqueryCondition>,
 	from_alias: Option<String>,
-	empty: bool,
+	empty_result: bool,
 	/// Subquery SQL for FROM clause (derived table)
 	/// When set, the FROM clause will use this subquery instead of the model's table
 	from_subquery_sql: Option<String>,
+	select_for_update: Option<SelectForUpdateSpec>,
 }
 
 impl<T> QuerySet<T>
@@ -1306,9 +1777,18 @@ where
 			having_conditions: Vec::new(),
 			subquery_conditions: Vec::new(),
 			from_alias: None,
-			empty: false,
+			empty_result: false,
 			from_subquery_sql: None,
+			select_for_update: None,
 		}
+	}
+
+	/// Returns a QuerySet that is known to contain no rows.
+	///
+	/// Execution methods can use this marker to avoid invoking an executor.
+	pub fn none(mut self) -> Self {
+		self.empty_result = true;
+		self
 	}
 
 	fn executor_backend(
@@ -1334,6 +1814,9 @@ where
 
 		let mut stmt = Query::select();
 		self.apply_model_from(&mut stmt);
+		if self.distinct_enabled {
+			stmt.distinct();
+		}
 		if let Some(ref fields) = self.selected_fields {
 			for field in fields {
 				if field.contains('(') && field.contains(')') {
@@ -1345,19 +1828,21 @@ where
 		} else if !self.deferred_fields.is_empty() {
 			for field in T::field_metadata() {
 				if !self.deferred_fields.contains(&field.name) {
-					stmt.column(self.root_column_reference(&field.name));
+					stmt.column(self.root_column_reference(field.db_column_name()));
 				}
 			}
 		} else {
 			self.add_default_select_columns(&mut stmt);
 		}
 		self.apply_typed_select_expressions(&mut stmt);
+		self.apply_annotations_to_select(&mut stmt);
 		self.apply_relation_joins(&mut stmt);
 		self.apply_manual_joins(&mut stmt);
 
 		if let Some(condition) = self.build_where_condition()? {
 			stmt.cond_where(condition);
 		}
+		self.apply_grouping_and_having(&mut stmt);
 		self.apply_ordering(&mut stmt);
 		if let Some(limit) = self.limit {
 			stmt.limit(limit as u64);
@@ -1365,7 +1850,278 @@ where
 		if let Some(offset) = self.offset {
 			stmt.offset(offset as u64);
 		}
+		self.apply_select_for_update(&mut stmt);
 		Ok(stmt.to_owned())
+	}
+
+	fn apply_annotations_to_select(&self, stmt: &mut SelectStatement) {
+		for annotation in &self.annotations {
+			stmt.expr_as(
+				Expr::cust(self.annotation_value_to_select_sql(&annotation.value)),
+				Alias::new(&annotation.alias),
+			);
+		}
+	}
+
+	fn apply_grouping_and_having(&self, stmt: &mut SelectStatement) {
+		for group_field in &self.group_by_fields {
+			stmt.group_by_col(self.root_column_reference(group_field));
+		}
+
+		for having_cond in &self.having_conditions {
+			let HavingCondition::AggregateCompare {
+				func,
+				field,
+				operator,
+				value,
+			} = having_cond;
+			let aggregate = self.having_aggregate_expr(func, field);
+			let expression = match operator {
+				ComparisonOp::Eq => match value {
+					AggregateValue::Int(value) => aggregate.eq(*value),
+					AggregateValue::Float(value) => aggregate.eq(*value),
+				},
+				ComparisonOp::Ne => match value {
+					AggregateValue::Int(value) => aggregate.ne(*value),
+					AggregateValue::Float(value) => aggregate.ne(*value),
+				},
+				ComparisonOp::Gt => match value {
+					AggregateValue::Int(value) => aggregate.gt(*value),
+					AggregateValue::Float(value) => aggregate.gt(*value),
+				},
+				ComparisonOp::Gte => match value {
+					AggregateValue::Int(value) => aggregate.gte(*value),
+					AggregateValue::Float(value) => aggregate.gte(*value),
+				},
+				ComparisonOp::Lt => match value {
+					AggregateValue::Int(value) => aggregate.lt(*value),
+					AggregateValue::Float(value) => aggregate.lt(*value),
+				},
+				ComparisonOp::Lte => match value {
+					AggregateValue::Int(value) => aggregate.lte(*value),
+					AggregateValue::Float(value) => aggregate.lte(*value),
+				},
+			};
+			stmt.and_having(expression);
+		}
+	}
+
+	fn apply_select_for_update(&self, stmt: &mut SelectStatement) {
+		let Some(spec) = &self.select_for_update else {
+			return;
+		};
+
+		stmt.lock(if spec.no_key {
+			LockType::NoKeyUpdate
+		} else {
+			LockType::Update
+		});
+		match spec.behavior {
+			SelectForUpdateBehavior::Blocking => {}
+			SelectForUpdateBehavior::Nowait => {
+				stmt.lock_behavior(LockBehavior::Nowait);
+			}
+			SelectForUpdateBehavior::SkipLocked => {
+				stmt.lock_behavior(LockBehavior::SkipLocked);
+			}
+		}
+
+		if spec.targets.is_empty() {
+			return;
+		}
+
+		let graph = self.relation_join_graph_for_query();
+		let aliases = spec.targets.iter().filter_map(|target| match target {
+			SelectForUpdateTarget::Root => Some(self.root_alias().to_string()),
+			SelectForUpdateTarget::Relation(steps) => graph
+				.aliases_for_steps(steps)
+				.and_then(|aliases| aliases.last().cloned()),
+		});
+		stmt.lock_tables(aliases.map(Alias::new));
+	}
+
+	fn validate_select_for_update(
+		&self,
+		capabilities: crate::backends::types::RowLockCapabilities,
+		backend: crate::backends::types::DatabaseType,
+	) -> Result<(), crate::backends::error::DatabaseError> {
+		let Some(spec) = &self.select_for_update else {
+			return Ok(());
+		};
+		if !self.ctes.is_empty() {
+			return Err(DatabaseError::new(
+				DatabaseErrorKind::Unsupported,
+				"SELECT FOR UPDATE does not support CTE-backed querysets",
+			));
+		}
+		if self.from_subquery_sql.is_some() {
+			return Err(DatabaseError::new(
+				DatabaseErrorKind::Unsupported,
+				"SELECT FOR UPDATE does not support derived table sources",
+			));
+		}
+		if !self.lateral_joins.is_empty() {
+			return Err(DatabaseError::new(
+				DatabaseErrorKind::Unsupported,
+				"SELECT FOR UPDATE does not support LATERAL joins",
+			));
+		}
+		if self.has_raw_aggregate_projection() {
+			return Err(DatabaseError::new(
+				DatabaseErrorKind::Unsupported,
+				"SELECT FOR UPDATE does not support raw aggregate projections",
+			));
+		}
+		if self.has_aggregate_annotation() {
+			return Err(DatabaseError::new(
+				DatabaseErrorKind::Unsupported,
+				"SELECT FOR UPDATE does not support aggregate annotations",
+			));
+		}
+		if !capabilities.update {
+			return Err(DatabaseError::new(
+				DatabaseErrorKind::Unsupported,
+				"SELECT FOR UPDATE is not supported by this backend or server version",
+			));
+		}
+		if spec.no_key && !capabilities.no_key_update {
+			return Err(DatabaseError::new(
+				DatabaseErrorKind::Unsupported,
+				"FOR NO KEY UPDATE is only supported by PostgreSQL 9.3 or newer",
+			));
+		}
+		if spec.behavior == SelectForUpdateBehavior::Nowait && !capabilities.nowait {
+			return Err(DatabaseError::new(
+				DatabaseErrorKind::Unsupported,
+				"NOWAIT row locking is not supported by this backend or server version",
+			));
+		}
+		if spec.behavior == SelectForUpdateBehavior::SkipLocked && !capabilities.skip_locked {
+			return Err(DatabaseError::new(
+				DatabaseErrorKind::Unsupported,
+				"SKIP LOCKED row locking is not supported by this backend or server version",
+			));
+		}
+		if !spec.targets.is_empty() && !capabilities.targets {
+			return Err(DatabaseError::new(
+				DatabaseErrorKind::Unsupported,
+				"explicit row-lock targets are not supported by this backend or server version",
+			));
+		}
+		let graph = self.relation_join_graph_for_query();
+		let has_outer_join = graph
+			.joins()
+			.iter()
+			.any(|join| join.join_kind == RelationJoinKind::Left)
+			|| !self.select_related_fields.is_empty()
+			|| self.joins.iter().any(|join| {
+				!join.on_condition.is_empty()
+					&& matches!(
+						join.join_type,
+						super::sqlalchemy_query::JoinType::Left
+							| super::sqlalchemy_query::JoinType::Right
+							| super::sqlalchemy_query::JoinType::Full
+					)
+			});
+		if backend == crate::backends::types::DatabaseType::Postgres
+			&& spec.targets.is_empty()
+			&& has_outer_join
+		{
+			return Err(DatabaseError::new(
+				DatabaseErrorKind::Query,
+				"SELECT FOR UPDATE with an outer join requires explicit non-nullable lock targets",
+			));
+		}
+		for target in &spec.targets {
+			let SelectForUpdateTarget::Relation(steps) = target else {
+				continue;
+			};
+			if steps.is_empty() {
+				return Err(DatabaseError::new(
+					DatabaseErrorKind::Query,
+					"SELECT FOR UPDATE relation lock target must contain at least one relation step",
+				));
+			}
+			let aliases = graph.aliases_for_steps(steps).ok_or_else(|| {
+				DatabaseError::new(
+					DatabaseErrorKind::Query,
+					"SELECT FOR UPDATE relation lock target could not be resolved",
+				)
+			})?;
+			for alias in aliases {
+				let join = graph
+					.joins()
+					.iter()
+					.find(|join| join.alias == alias)
+					.expect("resolved relation aliases always have a planned join");
+				if backend == crate::backends::types::DatabaseType::Postgres
+					&& join.join_kind == RelationJoinKind::Left
+				{
+					return Err(DatabaseError::new(
+						DatabaseErrorKind::Query,
+						"SELECT FOR UPDATE cannot lock a relation reached through an outer join",
+					));
+				}
+			}
+		}
+		Ok(())
+	}
+
+	fn has_raw_aggregate_projection(&self) -> bool {
+		self.selected_fields.as_ref().is_some_and(|fields| {
+			fields
+				.iter()
+				.any(|field| contains_known_raw_aggregate(field))
+		})
+	}
+
+	fn has_aggregate_annotation(&self) -> bool {
+		self.annotations
+			.iter()
+			.any(|annotation| Self::annotation_value_contains_aggregate(&annotation.value))
+	}
+
+	fn annotation_value_contains_aggregate(value: &super::annotation::AnnotationValue) -> bool {
+		use super::annotation::{AnnotationValue, Expression};
+
+		match value {
+			AnnotationValue::Aggregate(_)
+			| AnnotationValue::ArrayAgg(_)
+			| AnnotationValue::StringAgg(_)
+			| AnnotationValue::JsonbAgg(_) => true,
+			AnnotationValue::Expression(expression) => match expression {
+				Expression::Add(left, right)
+				| Expression::Subtract(left, right)
+				| Expression::Multiply(left, right)
+				| Expression::Divide(left, right) => {
+					Self::annotation_value_contains_aggregate(left)
+						|| Self::annotation_value_contains_aggregate(right)
+				}
+				Expression::Case { whens, default } => {
+					whens
+						.iter()
+						.any(|when| Self::annotation_value_contains_aggregate(&when.then))
+						|| default
+							.as_deref()
+							.is_some_and(Self::annotation_value_contains_aggregate)
+				}
+				Expression::Coalesce(values) => {
+					values.iter().any(Self::annotation_value_contains_aggregate)
+				}
+			},
+			_ => false,
+		}
+	}
+
+	fn ensure_not_locking_without_transaction(&self) -> reinhardt_core::exception::Result<()> {
+		if self.select_for_update.is_some() {
+			return Err(DatabaseError::new(
+				DatabaseErrorKind::Transaction,
+				"select_for_update requires all_with_executor or rows_with_executor with a caller-owned active transaction",
+			)
+			.into());
+		}
+		Ok(())
 	}
 
 	fn decode_backend_rows(
@@ -1383,6 +2139,214 @@ where
 					})
 			})
 			.collect()
+	}
+
+	fn temporal_projection_statement(
+		&self,
+		field: &str,
+		kind: TemporalTruncKind,
+		order: DateProjectionOrder,
+		time_zone: Option<TemporalTimeZone>,
+		output: TemporalTruncOutput,
+	) -> reinhardt_core::exception::Result<SelectStatement> {
+		if self.from_subquery_sql.is_some() {
+			return Err(DatabaseError::new(
+				DatabaseErrorKind::Unsupported,
+				"date and datetime projections are not supported on querysets created from subqueries",
+			)
+			.into());
+		}
+		if !self.ctes.is_empty() {
+			return Err(DatabaseError::new(
+				DatabaseErrorKind::Unsupported,
+				"date and datetime projections are not supported on querysets with CTEs",
+			)
+			.into());
+		}
+		if !self.lateral_joins.is_empty() {
+			return Err(DatabaseError::new(
+				DatabaseErrorKind::Unsupported,
+				"date and datetime projections are not supported on querysets with lateral joins",
+			)
+			.into());
+		}
+		if !self.group_by_fields.is_empty() || !self.having_conditions.is_empty() {
+			return Err(DatabaseError::new(
+				DatabaseErrorKind::Unsupported,
+				"date and datetime projections are not supported on grouped querysets",
+			)
+			.into());
+		}
+		let source = Expr::col(self.root_column_reference(field)).into_simple_expr();
+		let projection =
+			Func::temporal_trunc(source.clone(), kind, time_zone, output).map_err(|error| {
+				DatabaseError::new(DatabaseErrorKind::Unsupported, error.to_string())
+			})?;
+		let mut stmt = Query::select();
+		self.apply_model_from(&mut stmt);
+		stmt.expr_as(projection.clone(), Alias::new("value"));
+		self.apply_relation_joins(&mut stmt);
+		self.apply_manual_joins(&mut stmt);
+		if let Some(condition) = self.build_where_condition()? {
+			stmt.cond_where(condition);
+		}
+		stmt.and_where(source.is_not_null());
+		stmt.distinct();
+		stmt.order_by_expr(Expr::col(Alias::new("value")), order.into());
+		if let Some(limit) = self.limit {
+			stmt.limit(limit as u64);
+		}
+		if let Some(offset) = self.offset {
+			stmt.offset(offset as u64);
+		}
+		Ok(stmt.to_owned())
+	}
+
+	async fn temporal_rows_with_db<E>(
+		stmt: &SelectStatement,
+		conn: &mut E,
+	) -> reinhardt_core::exception::Result<Vec<crate::backends::types::Row>>
+	where
+		E: OrmExecutor,
+	{
+		let context = super::execution::pgvector_context_for_select(stmt);
+		let (sql, values) =
+			Self::build_select_for_backend(stmt, conn.backend(), conn.is_cockroachdb())?;
+		let param_samples = values
+			.iter()
+			.map(|value| value.to_sql_literal())
+			.collect::<Vec<_>>();
+		let params = super::execution::convert_values(values);
+		let started_at = Instant::now();
+		let result = conn.fetch_all_with_context(&sql, params, context).await;
+		let duration = started_at.elapsed();
+		match result {
+			Ok(rows) => {
+				super::instrumentation::instrumentation()
+					.orm_query_end_with_params(&sql, &param_samples, duration)
+					.await;
+				Ok(rows)
+			}
+			Err(error) => {
+				super::instrumentation::instrumentation()
+					.orm_query_error(&sql, &format!("{error:?}"))
+					.await;
+				Err(error)
+			}
+		}
+	}
+
+	async fn temporal_rows_with_executor(
+		stmt: &SelectStatement,
+		executor: &mut dyn super::connection::TransactionExecutor,
+	) -> Result<Vec<crate::backends::types::Row>, crate::backends::error::DatabaseError> {
+		let context = super::execution::pgvector_context_for_select(stmt);
+		let (sql, values) = Self::build_select_for_backend(
+			stmt,
+			Self::executor_backend(executor),
+			executor.is_cockroachdb(),
+		)?;
+		let param_samples = values
+			.iter()
+			.map(|value| value.to_sql_literal())
+			.collect::<Vec<_>>();
+		let params = super::execution::convert_values(values);
+		let started_at = Instant::now();
+		let result = executor
+			.fetch_all_with_context(&sql, params, context)
+			.await
+			.map_err(executor_error);
+		let duration = started_at.elapsed();
+		match result {
+			Ok(rows) => {
+				super::instrumentation::instrumentation()
+					.orm_query_end_with_params(&sql, &param_samples, duration)
+					.await;
+				Ok(rows)
+			}
+			Err(error) => {
+				super::instrumentation::instrumentation()
+					.orm_query_error(&sql, &format!("{error:?}"))
+					.await;
+				Err(error)
+			}
+		}
+	}
+
+	fn projection_value(
+		row: crate::backends::types::Row,
+	) -> Result<crate::backends::types::QueryValue, DatabaseError> {
+		row.data.get("value").cloned().ok_or_else(|| {
+			DatabaseError::new(
+				DatabaseErrorKind::ColumnNotFound,
+				"date projection did not return the `value` column",
+			)
+		})
+	}
+
+	fn decode_date_projection(
+		rows: Vec<crate::backends::types::Row>,
+	) -> Result<Vec<chrono::NaiveDate>, DatabaseError> {
+		let mut values = Vec::with_capacity(rows.len());
+		for row in rows {
+			let date = match Self::projection_value(row)? {
+				crate::backends::types::QueryValue::Null => continue,
+				crate::backends::types::QueryValue::String(value) => {
+					chrono::NaiveDate::parse_from_str(&value, "%Y-%m-%d").map_err(|error| {
+						DatabaseError::new(
+							DatabaseErrorKind::Serialization,
+							format!("invalid projected date `{value}`: {error}"),
+						)
+					})?
+				}
+				crate::backends::types::QueryValue::NaiveTimestamp(value) => value.date(),
+				crate::backends::types::QueryValue::Timestamp(value) => value.date_naive(),
+				value => {
+					return Err(DatabaseError::new(
+						DatabaseErrorKind::Type,
+						format!("cannot decode projected date from {value:?}"),
+					));
+				}
+			};
+			values.push(date);
+		}
+		Ok(values)
+	}
+
+	fn decode_datetime_projection(
+		rows: Vec<crate::backends::types::Row>,
+		time_zone: chrono_tz::Tz,
+	) -> Result<Vec<chrono::DateTime<chrono_tz::Tz>>, DatabaseError> {
+		let mut values = Vec::with_capacity(rows.len());
+		for row in rows {
+			let utc = match Self::projection_value(row)? {
+				crate::backends::types::QueryValue::Null => continue,
+				crate::backends::types::QueryValue::Timestamp(value) => value,
+				crate::backends::types::QueryValue::NaiveTimestamp(value) => value.and_utc(),
+				crate::backends::types::QueryValue::String(value) => {
+					if let Ok(value) = chrono::DateTime::parse_from_rfc3339(&value) {
+						value.with_timezone(&chrono::Utc)
+					} else {
+						chrono::NaiveDateTime::parse_from_str(&value, "%Y-%m-%d %H:%M:%S%.f")
+							.map(|value| value.and_utc())
+							.map_err(|error| {
+								DatabaseError::new(
+									DatabaseErrorKind::Serialization,
+									format!("invalid projected datetime `{value}`: {error}"),
+								)
+							})?
+					}
+				}
+				value => {
+					return Err(DatabaseError::new(
+						DatabaseErrorKind::Type,
+						format!("cannot decode projected datetime from {value:?}"),
+					));
+				}
+			};
+			values.push(utc.with_timezone(&time_zone));
+		}
+		Ok(values)
 	}
 
 	/// Sets the manager and returns self for chaining.
@@ -1414,8 +2378,25 @@ where
 			having_conditions: Vec::new(),
 			subquery_conditions: Vec::new(),
 			from_alias: None,
-			empty: false,
+			empty_result: false,
 			from_subquery_sql: None,
+			select_for_update: None,
+		}
+	}
+
+	/// Configures this queryset to lock selected rows until transaction completion.
+	///
+	/// The returned typestate builder prevents combining `NOWAIT` and
+	/// `SKIP LOCKED`. Locking queries must be evaluated with a caller-owned
+	/// [`TransactionExecutor`](super::connection::TransactionExecutor). CTE-backed
+	/// querysets, derived `FROM` sources, LATERAL joins, raw aggregate projections
+	/// from [`Self::values`], and aggregate annotations are rejected before query
+	/// execution to preserve lock scope.
+	pub fn select_for_update(mut self) -> SelectForUpdate<T> {
+		self.select_for_update = Some(SelectForUpdateSpec::default());
+		SelectForUpdate {
+			queryset: self,
+			_behavior: PhantomData,
 		}
 	}
 
@@ -1530,6 +2511,9 @@ where
 	fn build_where_condition_for_write(
 		&self,
 	) -> reinhardt_core::exception::Result<Option<Condition>> {
+		if self.empty_result {
+			return Ok(Some(Condition::all().add(Expr::val(false))));
+		}
 		let mut queryset = self.clone();
 		queryset.relation_joins = RelationJoinGraph::new(T::table_name());
 		queryset.from_alias = None;
@@ -1600,6 +2584,7 @@ where
 		let subquery_qs = QuerySet::<M>::new();
 		// Apply the builder to configure the subquery
 		let configured_subquery = builder(subquery_qs);
+		let empty_result = configured_subquery.empty_result;
 		// Generate SQL for the subquery (wrapped in parentheses)
 		let subquery_sql = configured_subquery.as_subquery()?;
 
@@ -1631,15 +2616,10 @@ where
 			having_conditions: Vec::new(),
 			subquery_conditions: Vec::new(),
 			from_alias: Some(alias.to_string()),
-			empty: false,
+			empty_result,
 			from_subquery_sql: Some(subquery_sql),
+			select_for_update: None,
 		})
-	}
-
-	/// Marks this queryset as empty without resolving a database connection.
-	pub fn none(mut self) -> Self {
-		self.empty = true;
-		self
 	}
 
 	/// Add an INNER JOIN to the query
@@ -3597,7 +4577,7 @@ where
 				if !self.deferred_fields.contains(&field.name) {
 					stmt.column(ColumnRef::table_column(
 						Alias::new(self.root_alias()),
-						Alias::new(&field.name),
+						Alias::new(field.db_column_name()),
 					));
 				}
 			}
@@ -3609,11 +4589,23 @@ where
 	fn root_column_reference(&self, field: &str) -> ColumnRef {
 		if (!self.relation_joins.is_empty() || !self.joins.is_empty() || self.has_select_related())
 			&& !field.contains('.')
+			&& !self.is_projection_alias(field)
 		{
 			ColumnRef::table_column(Alias::new(self.root_alias()), Alias::new(field))
 		} else {
 			parse_column_reference(field)
 		}
+	}
+
+	fn is_projection_alias(&self, field: &str) -> bool {
+		self.annotations
+			.iter()
+			.any(|annotation| annotation.alias == field)
+			|| self
+				.selected_expressions
+				.iter()
+				.chain(&self.typed_annotations)
+				.any(|(alias, _)| alias == field)
 	}
 
 	fn database_column_for_field(field: &str) -> String {
@@ -3956,7 +4948,7 @@ where
 
 	/// Build WHERE condition using reinhardt-query from accumulated filters
 	fn build_where_condition(&self) -> reinhardt_core::exception::Result<Option<Condition>> {
-		if self.empty {
+		if self.empty_result {
 			return Ok(Some(Condition::all().add(Expr::val(1).eq(0))));
 		}
 
@@ -4822,7 +5814,7 @@ where
 	}
 
 	fn filter_lhs_expr(&self, filter: &Filter) -> Expr {
-		if !self.relation_joins.is_empty() && filter.relation_alias().is_none() {
+		if self.has_joined_tables() && filter.relation_alias().is_none() {
 			match &filter.field_source {
 				FilterField::Column if !filter.field.contains('.') => {
 					return Expr::col((Alias::new(self.root_alias()), Alias::new(&filter.field)));
@@ -4838,7 +5830,7 @@ where
 	}
 
 	fn filter_lhs_sql(&self, filter: &Filter) -> String {
-		if !self.relation_joins.is_empty() && filter.relation_alias().is_none() {
+		if self.has_joined_tables() && filter.relation_alias().is_none() {
 			match &filter.field_source {
 				FilterField::Column if !filter.field.contains('.') => {
 					return quote_identifier(&format!("{}.{}", self.root_alias(), filter.field));
@@ -5315,7 +6307,9 @@ where
 	/// //   WHERE posts.published = $1
 	/// ```
 	pub fn select_related_query(&self) -> reinhardt_core::exception::Result<SelectStatement> {
-		Ok(self.select_related_query_with_condition(self.build_where_condition()?))
+		let mut stmt = self.select_related_query_with_condition(self.build_where_condition()?);
+		self.apply_annotations_to_select(&mut stmt);
+		Ok(stmt)
 	}
 
 	fn select_related_query_with_condition(
@@ -5438,67 +6432,21 @@ where
 		if let Some(cond) = where_condition {
 			stmt.cond_where(cond);
 		}
-
-		// Apply GROUP BY
-		for group_field in &self.group_by_fields {
-			let col_ref = self.root_column_reference(group_field);
-			stmt.group_by_col(col_ref);
-		}
-
-		// Apply HAVING
-		for having_cond in &self.having_conditions {
-			match having_cond {
-				HavingCondition::AggregateCompare {
-					func,
-					field,
-					operator,
-					value,
-				} => {
-					let agg_expr = self.having_aggregate_expr(func, field);
-
-					// Build comparison expression
-					let having_expr = match operator {
-						ComparisonOp::Eq => match value {
-							AggregateValue::Int(v) => agg_expr.eq(*v),
-							AggregateValue::Float(v) => agg_expr.eq(*v),
-						},
-						ComparisonOp::Ne => match value {
-							AggregateValue::Int(v) => agg_expr.ne(*v),
-							AggregateValue::Float(v) => agg_expr.ne(*v),
-						},
-						ComparisonOp::Gt => match value {
-							AggregateValue::Int(v) => agg_expr.gt(*v),
-							AggregateValue::Float(v) => agg_expr.gt(*v),
-						},
-						ComparisonOp::Gte => match value {
-							AggregateValue::Int(v) => agg_expr.gte(*v),
-							AggregateValue::Float(v) => agg_expr.gte(*v),
-						},
-						ComparisonOp::Lt => match value {
-							AggregateValue::Int(v) => agg_expr.lt(*v),
-							AggregateValue::Float(v) => agg_expr.lt(*v),
-						},
-						ComparisonOp::Lte => match value {
-							AggregateValue::Int(v) => agg_expr.lte(*v),
-							AggregateValue::Float(v) => agg_expr.lte(*v),
-						},
-					};
-
-					stmt.and_having(having_expr);
-				}
-			}
-		}
+		self.apply_grouping_and_having(&mut stmt);
 
 		self.apply_ordering(&mut stmt);
 
 		// Apply LIMIT/OFFSET
-		if let Some(limit) = self.limit {
+		if self.empty_result {
+			stmt.limit(0);
+		} else if let Some(limit) = self.limit {
 			stmt.limit(limit as u64);
 		}
 		if let Some(offset) = self.offset {
 			stmt.offset(offset as u64);
 		}
 
+		self.apply_select_for_update(&mut stmt);
 		stmt.to_owned()
 	}
 
@@ -5856,6 +6804,167 @@ where
 		stmt.to_owned()
 	}
 
+	/// Return distinct truncated values from a generated date field.
+	///
+	/// Truncation, `DISTINCT`, null exclusion, and ordering are performed by the
+	/// database. ISO weeks begin on Monday. Querysets created from subqueries,
+	/// querysets with CTEs, querysets with lateral joins, and grouped or HAVING
+	/// querysets are not supported.
+	pub async fn dates<F>(
+		&self,
+		field: super::expressions::FieldRef<T, F>,
+		kind: DateTruncKind,
+		order: DateProjectionOrder,
+	) -> reinhardt_core::exception::Result<Vec<chrono::NaiveDate>>
+	where
+		F: DateProjectionField,
+	{
+		let mut conn = super::manager::get_connection().await?;
+		self.dates_with_db(&mut conn, field, kind, order).await
+	}
+
+	/// Return distinct truncated dates through a caller-owned ORM executor.
+	///
+	/// Querysets created from subqueries, querysets with CTEs, querysets with
+	/// lateral joins, and grouped or HAVING querysets are not supported.
+	pub async fn dates_with_db<E, F>(
+		&self,
+		conn: &mut E,
+		field: super::expressions::FieldRef<T, F>,
+		kind: DateTruncKind,
+		order: DateProjectionOrder,
+	) -> reinhardt_core::exception::Result<Vec<chrono::NaiveDate>>
+	where
+		E: OrmExecutor,
+		F: DateProjectionField,
+	{
+		let stmt = self.temporal_projection_statement(
+			field.name(),
+			kind.into(),
+			order,
+			None,
+			TemporalTruncOutput::Date,
+		)?;
+		let rows = Self::temporal_rows_with_db(&stmt, conn).await?;
+		Self::decode_date_projection(rows).map_err(Error::from)
+	}
+
+	/// Return distinct truncated dates through an active transaction executor.
+	///
+	/// Querysets created from subqueries, querysets with CTEs, querysets with
+	/// lateral joins, and grouped or HAVING querysets are not supported.
+	pub async fn dates_with_executor<F>(
+		&self,
+		executor: &mut dyn super::connection::TransactionExecutor,
+		field: super::expressions::FieldRef<T, F>,
+		kind: DateTruncKind,
+		order: DateProjectionOrder,
+	) -> Result<Vec<chrono::NaiveDate>, crate::backends::error::DatabaseError>
+	where
+		F: DateProjectionField,
+	{
+		let stmt = self
+			.temporal_projection_statement(
+				field.name(),
+				kind.into(),
+				order,
+				None,
+				TemporalTruncOutput::Date,
+			)
+			.map_err(executor_error)?;
+		let rows = Self::temporal_rows_with_executor(&stmt, executor).await?;
+		Self::decode_date_projection(rows)
+	}
+
+	/// Return distinct truncated values from a generated UTC datetime field.
+	///
+	/// `time_zone` defaults to UTC. The database converts each source instant
+	/// before truncation. SQLite and MySQL return an `Unsupported` capability
+	/// error for named zones; PostgreSQL performs named-zone conversion. Querysets
+	/// created from subqueries, querysets with CTEs, querysets with lateral joins,
+	/// and grouped or HAVING querysets are not supported.
+	pub async fn datetimes<F>(
+		&self,
+		field: super::expressions::FieldRef<T, F>,
+		kind: DateTimeTruncKind,
+		order: DateProjectionOrder,
+		time_zone: Option<chrono_tz::Tz>,
+	) -> reinhardt_core::exception::Result<Vec<chrono::DateTime<chrono_tz::Tz>>>
+	where
+		F: DateTimeProjectionField,
+	{
+		let mut conn = super::manager::get_connection().await?;
+		self.datetimes_with_db(&mut conn, field, kind, order, time_zone)
+			.await
+	}
+
+	/// Return distinct truncated datetimes through a caller-owned ORM executor.
+	///
+	/// Querysets created from subqueries, querysets with CTEs, querysets with
+	/// lateral joins, and grouped or HAVING querysets are not supported.
+	pub async fn datetimes_with_db<E, F>(
+		&self,
+		conn: &mut E,
+		field: super::expressions::FieldRef<T, F>,
+		kind: DateTimeTruncKind,
+		order: DateProjectionOrder,
+		time_zone: Option<chrono_tz::Tz>,
+	) -> reinhardt_core::exception::Result<Vec<chrono::DateTime<chrono_tz::Tz>>>
+	where
+		E: OrmExecutor,
+		F: DateTimeProjectionField,
+	{
+		let time_zone = time_zone.unwrap_or(chrono_tz::Tz::UTC);
+		let query_time_zone = if time_zone == chrono_tz::Tz::UTC {
+			TemporalTimeZone::Utc
+		} else {
+			TemporalTimeZone::Named(time_zone.name().to_string())
+		};
+		let stmt = self.temporal_projection_statement(
+			field.name(),
+			kind.into(),
+			order,
+			Some(query_time_zone),
+			TemporalTruncOutput::DateTime,
+		)?;
+		let rows = Self::temporal_rows_with_db(&stmt, conn).await?;
+		Self::decode_datetime_projection(rows, time_zone).map_err(Error::from)
+	}
+
+	/// Return distinct truncated datetimes through an active transaction executor.
+	///
+	/// Querysets created from subqueries, querysets with CTEs, querysets with
+	/// lateral joins, and grouped or HAVING querysets are not supported.
+	pub async fn datetimes_with_executor<F>(
+		&self,
+		executor: &mut dyn super::connection::TransactionExecutor,
+		field: super::expressions::FieldRef<T, F>,
+		kind: DateTimeTruncKind,
+		order: DateProjectionOrder,
+		time_zone: Option<chrono_tz::Tz>,
+	) -> Result<Vec<chrono::DateTime<chrono_tz::Tz>>, crate::backends::error::DatabaseError>
+	where
+		F: DateTimeProjectionField,
+	{
+		let time_zone = time_zone.unwrap_or(chrono_tz::Tz::UTC);
+		let query_time_zone = if time_zone == chrono_tz::Tz::UTC {
+			TemporalTimeZone::Utc
+		} else {
+			TemporalTimeZone::Named(time_zone.name().to_string())
+		};
+		let stmt = self
+			.temporal_projection_statement(
+				field.name(),
+				kind.into(),
+				order,
+				Some(query_time_zone),
+				TemporalTruncOutput::DateTime,
+			)
+			.map_err(executor_error)?;
+		let rows = Self::temporal_rows_with_executor(&stmt, executor).await?;
+		Self::decode_datetime_projection(rows, time_zone)
+	}
+
 	/// Execute the queryset and return all matching records
 	///
 	/// Fetches all records from the database that match the accumulated filters.
@@ -5911,10 +7020,9 @@ where
 	where
 		T: serde::de::DeserializeOwned,
 	{
-		if self.empty {
+		if self.empty_result {
 			return Ok(Vec::new());
 		}
-
 		let mut conn = super::manager::get_connection().await?;
 		self.all_with_db(&mut conn).await
 	}
@@ -5967,10 +7075,9 @@ where
 	where
 		T: serde::de::DeserializeOwned,
 	{
-		if self.empty {
+		if self.empty_result {
 			return Ok(None);
 		}
-
 		let mut conn = super::manager::get_connection().await?;
 		self.first_with_db(&mut conn).await
 	}
@@ -5981,7 +7088,7 @@ where
 		T: serde::de::DeserializeOwned,
 	{
 		let ordering = self.metadata_retrieval_ordering(true)?;
-		if self.empty {
+		if self.empty_result {
 			return Err(Error::NotFound(
 				"No record found matching the query".to_string(),
 			));
@@ -5997,7 +7104,7 @@ where
 		T: serde::de::DeserializeOwned,
 	{
 		let ordering = self.metadata_retrieval_ordering(false)?;
-		if self.empty {
+		if self.empty_result {
 			return Err(Error::NotFound(
 				"No record found matching the query".to_string(),
 			));
@@ -6016,7 +7123,7 @@ where
 		T: serde::de::DeserializeOwned,
 	{
 		let ordering = Self::typed_retrieval_ordering(fields, true)?;
-		if self.empty {
+		if self.empty_result {
 			return Err(Error::NotFound(
 				"No record found matching the query".to_string(),
 			));
@@ -6035,7 +7142,7 @@ where
 		T: serde::de::DeserializeOwned,
 	{
 		let ordering = Self::typed_retrieval_ordering(fields, false)?;
-		if self.empty {
+		if self.empty_result {
 			return Err(Error::NotFound(
 				"No record found matching the query".to_string(),
 			));
@@ -6326,7 +7433,7 @@ where
 	{
 		self.ensure_unsliced_retrieval()?;
 		let keys = keys.into_iter().collect::<BTreeSet<_>>();
-		if self.empty || keys.is_empty() {
+		if self.empty_result || keys.is_empty() {
 			return Ok(BTreeMap::new());
 		}
 		let mut conn = super::manager::get_connection().await?;
@@ -6347,7 +7454,7 @@ where
 	{
 		self.ensure_unsliced_retrieval()?;
 		let keys = keys.into_iter().collect::<BTreeSet<_>>();
-		if self.empty || keys.is_empty() {
+		if self.empty_result || keys.is_empty() {
 			return Ok(BTreeMap::new());
 		}
 		self.in_bulk_with_keys_db(conn, keys).await
@@ -6366,7 +7473,7 @@ where
 	{
 		self.ensure_unsliced_retrieval().map_err(executor_error)?;
 		let keys = keys.into_iter().collect::<BTreeSet<_>>();
-		if self.empty || keys.is_empty() {
+		if self.empty_result || keys.is_empty() {
 			return Ok(BTreeMap::new());
 		}
 		self.in_bulk_with_keys_executor(executor, keys).await
@@ -6385,7 +7492,7 @@ where
 	{
 		self.ensure_unsliced_retrieval()?;
 		let keys = keys.into_iter().collect::<BTreeSet<_>>();
-		if self.empty || keys.is_empty() {
+		if self.empty_result || keys.is_empty() {
 			return Ok(BTreeMap::new());
 		}
 		let getter = Self::unique_getter(&unique_field)?;
@@ -6409,7 +7516,7 @@ where
 	{
 		self.ensure_unsliced_retrieval()?;
 		let keys = keys.into_iter().collect::<BTreeSet<_>>();
-		if self.empty || keys.is_empty() {
+		if self.empty_result || keys.is_empty() {
 			return Ok(BTreeMap::new());
 		}
 		let getter = Self::unique_getter(&unique_field)?;
@@ -6431,7 +7538,7 @@ where
 	{
 		self.ensure_unsliced_retrieval().map_err(executor_error)?;
 		let keys = keys.into_iter().collect::<BTreeSet<_>>();
-		if self.empty || keys.is_empty() {
+		if self.empty_result || keys.is_empty() {
 			return Ok(BTreeMap::new());
 		}
 		let getter = Self::unique_getter(&unique_field)?;
@@ -6626,12 +7733,11 @@ where
 	where
 		T: serde::de::DeserializeOwned,
 	{
-		if self.empty {
+		if self.empty_result {
 			return Err(reinhardt_core::exception::Error::NotFound(
 				"No record found matching the query".to_string(),
 			));
 		}
-
 		let mut conn = super::manager::get_connection().await?;
 		self.get_with_db(&mut conn).await
 	}
@@ -6673,10 +7779,10 @@ where
 		T: serde::de::DeserializeOwned,
 		E: OrmExecutor,
 	{
-		if self.empty {
+		if self.empty_result {
 			return Ok(Vec::new());
 		}
-
+		self.ensure_not_locking_without_transaction()?;
 		let stmt = self.build_select_statement()?;
 		let context = super::execution::pgvector_context_for_select(&stmt);
 		let (sql, values) =
@@ -6732,9 +7838,10 @@ where
 	where
 		E: OrmExecutor,
 	{
-		if self.empty {
+		if self.empty_result {
 			return Ok(Vec::new());
 		}
+		self.ensure_not_locking_without_transaction()?;
 		let stmt = self.build_select_statement()?;
 		let context = super::execution::pgvector_context_for_select(&stmt);
 		let (sql, values) =
@@ -6765,6 +7872,157 @@ where
 		}
 	}
 
+	/// Streams decoded models through a caller-owned ORM executor.
+	///
+	/// The returned stream borrows `conn`, so the executor cannot be reused
+	/// until the stream completes or is dropped. `chunk_size` is a bounded
+	/// driver fetch or buffering hint and must be greater than zero.
+	pub fn iterator_with_db<'a, E>(
+		&self,
+		conn: &'a mut E,
+		chunk_size: usize,
+	) -> reinhardt_core::exception::Result<QuerySetStream<'a, T>>
+	where
+		T: serde::de::DeserializeOwned + 'a,
+		E: OrmExecutor + 'a,
+	{
+		if chunk_size == 0 {
+			return Err(DatabaseError::new(
+				DatabaseErrorKind::Configuration,
+				"QuerySet iterator chunk_size must be greater than zero",
+			)
+			.into());
+		}
+		if self.empty_result {
+			return Ok(Box::pin(futures::stream::empty()));
+		}
+
+		let stmt = self.build_select_statement()?;
+		let context = super::execution::pgvector_context_for_select(&stmt);
+		let (sql, values) =
+			Self::build_select_for_backend(&stmt, conn.backend(), conn.is_cockroachdb())?;
+		let param_samples = values
+			.iter()
+			.map(|value| value.to_sql_literal())
+			.collect::<Vec<_>>();
+		let params = super::execution::convert_values(values);
+		let rows = conn.fetch_stream_with_context(sql.clone(), params, chunk_size, context)?;
+
+		Ok(Box::pin(async_stream::stream! {
+			let mut accounting = StreamQueryAccounting::new(sql.clone(), param_samples);
+			let mut rows = Some(TimedRowStream::new(rows, &mut accounting));
+			loop {
+				let row = rows.as_mut().expect("row stream is available").next().await;
+				let Some(row) = row else {
+					break;
+				};
+				let row = match row {
+					Ok(row) => row,
+					Err(error) => {
+						super::instrumentation::instrumentation()
+							.orm_query_error(&sql, &format!("{error:?}"))
+							.await;
+						drop(rows.take());
+						accounting.disarm_completion();
+						yield Err(error);
+						return;
+					}
+				};
+				match QueryRow::from_backend_row(row).deserialize_model::<T>() {
+					Ok(model) => yield Ok(model),
+					Err(error) => {
+						let error = Error::from(DatabaseError::new(
+							DatabaseErrorKind::Serialization,
+							format!("Deserialization error: {error}"),
+						));
+						super::instrumentation::instrumentation()
+							.orm_query_error(&sql, &format!("{error:?}"))
+							.await;
+						drop(rows.take());
+						yield Err(error);
+						return;
+					}
+				}
+			}
+		}))
+	}
+
+	/// Streams decoded models through an active transaction executor.
+	///
+	/// This caller-owned-executor path never reacquires a pooled connection and
+	/// never falls back to eager materialization or pagination.
+	pub fn iterator_with_executor<'a>(
+		&self,
+		executor: &'a mut dyn super::connection::TransactionExecutor,
+		chunk_size: usize,
+	) -> reinhardt_core::exception::Result<QuerySetStream<'a, T>>
+	where
+		T: serde::de::DeserializeOwned + 'a,
+	{
+		if chunk_size == 0 {
+			return Err(DatabaseError::new(
+				DatabaseErrorKind::Configuration,
+				"QuerySet iterator chunk_size must be greater than zero",
+			)
+			.into());
+		}
+		if self.empty_result {
+			return Ok(Box::pin(futures::stream::empty()));
+		}
+
+		let stmt = self.build_select_statement()?;
+		let context = super::execution::pgvector_context_for_select(&stmt);
+		let (sql, values) = Self::build_select_for_backend(
+			&stmt,
+			Self::executor_backend(executor),
+			executor.is_cockroachdb(),
+		)?;
+		let param_samples = values
+			.iter()
+			.map(|value| value.to_sql_literal())
+			.collect::<Vec<_>>();
+		let params = super::execution::convert_values(values);
+		let rows = executor.fetch_stream_with_context(sql.clone(), params, chunk_size, context)?;
+
+		Ok(Box::pin(async_stream::stream! {
+			let mut accounting = StreamQueryAccounting::new(sql.clone(), param_samples);
+			let mut rows = Some(TimedRowStream::new(rows, &mut accounting));
+			loop {
+				let row = rows.as_mut().expect("row stream is available").next().await;
+				let Some(row) = row else {
+					break;
+				};
+				let row = match row {
+					Ok(row) => row,
+					Err(error) => {
+						super::instrumentation::instrumentation()
+							.orm_query_error(&sql, &format!("{error:?}"))
+							.await;
+						drop(rows.take());
+						accounting.disarm_completion();
+						yield Err(error);
+						return;
+					}
+				};
+				match QueryRow::from_backend_row(row).deserialize_model::<T>() {
+					Ok(model) => yield Ok(model),
+					Err(error) => {
+						let error = Error::from(DatabaseError::new(
+							DatabaseErrorKind::Serialization,
+							format!("Deserialization error: {error}"),
+						));
+						super::instrumentation::instrumentation()
+							.orm_query_error(&sql, &format!("{error:?}"))
+							.await;
+						drop(rows.take());
+						yield Err(error);
+						return;
+					}
+				}
+			}
+		}))
+	}
+
 	/// Execute the queryset through an active transaction executor and return all records.
 	pub async fn all_with_executor(
 		&self,
@@ -6773,10 +8031,10 @@ where
 	where
 		T: serde::de::DeserializeOwned,
 	{
-		if self.empty {
+		if self.empty_result {
 			return Ok(Vec::new());
 		}
-
+		self.validate_select_for_update(executor.row_lock_capabilities(), executor.backend())?;
 		let stmt = self.build_select_statement().map_err(executor_error)?;
 		let context = super::execution::pgvector_context_for_select(&stmt);
 		let (sql, values) = Self::build_select_for_backend(
@@ -6812,15 +8070,57 @@ where
 		Self::decode_backend_rows(rows)
 	}
 
+	/// Executes the queryset through an active transaction and returns raw rows.
+	pub async fn rows_with_executor(
+		&self,
+		executor: &mut dyn super::connection::TransactionExecutor,
+	) -> Result<Vec<QueryRow>, crate::backends::error::DatabaseError> {
+		if self.empty_result {
+			return Ok(Vec::new());
+		}
+		self.validate_select_for_update(executor.row_lock_capabilities(), executor.backend())?;
+		let stmt = self.build_select_statement().map_err(executor_error)?;
+		let context = super::execution::pgvector_context_for_select(&stmt);
+		let (sql, values) = Self::build_select_for_backend(
+			&stmt,
+			Self::executor_backend(executor),
+			executor.is_cockroachdb(),
+		)?;
+		let param_samples = values
+			.iter()
+			.map(|value| value.to_sql_literal())
+			.collect::<Vec<_>>();
+		let params = super::execution::convert_values(values);
+		let started = Instant::now();
+		let result = executor
+			.fetch_all_with_context(&sql, params, context)
+			.await
+			.map_err(executor_error);
+		let duration = started.elapsed();
+		match result {
+			Ok(rows) => {
+				super::instrumentation::instrumentation()
+					.orm_query_end_with_params(&sql, &param_samples, duration)
+					.await;
+				Ok(rows.into_iter().map(QueryRow::from_backend_row).collect())
+			}
+			Err(error) => {
+				super::instrumentation::instrumentation()
+					.orm_query_error(&sql, &format!("{error:?}"))
+					.await;
+				Err(error)
+			}
+		}
+	}
+
 	/// Execute the count query through an active transaction executor.
 	pub async fn count_with_executor(
 		&self,
 		executor: &mut dyn super::connection::TransactionExecutor,
 	) -> Result<usize, crate::backends::error::DatabaseError> {
-		if self.empty {
+		if self.empty_result {
 			return Ok(0);
 		}
-
 		let stmt = self.count_select_query().map_err(executor_error)?;
 		let context = super::execution::pgvector_context_for_select(&stmt);
 		let (sql, values) = Self::build_select_for_backend(
@@ -6845,7 +8145,7 @@ where
 	where
 		T: serde::de::DeserializeOwned,
 	{
-		if self.empty {
+		if self.empty_result {
 			return Ok(Vec::new());
 		}
 
@@ -6892,7 +8192,7 @@ where
 		T: serde::de::DeserializeOwned,
 		E: OrmExecutor,
 	{
-		if self.empty {
+		if self.empty_result {
 			return Err(reinhardt_core::exception::Error::NotFound(
 				"No record found matching the query".to_string(),
 			));
@@ -6967,7 +8267,7 @@ where
 		T: serde::de::DeserializeOwned,
 		E: OrmExecutor,
 	{
-		if self.empty {
+		if self.empty_result {
 			return Ok(None);
 		}
 
@@ -7017,10 +8317,9 @@ where
 	/// # }
 	/// ```
 	pub async fn count(&self) -> reinhardt_core::exception::Result<usize> {
-		if self.empty {
+		if self.empty_result {
 			return Ok(0);
 		}
-
 		let mut conn = super::manager::get_connection().await?;
 		self.count_with_db(&mut conn).await
 	}
@@ -7030,10 +8329,9 @@ where
 	where
 		E: OrmExecutor,
 	{
-		if self.empty {
+		if self.empty_result {
 			return Ok(0);
 		}
-
 		let stmt = self.count_select_query()?;
 		let context = super::execution::pgvector_context_for_select(&stmt);
 		let (sql, values) =
@@ -7171,10 +8469,9 @@ where
 	/// # }
 	/// ```
 	pub async fn exists(&self) -> reinhardt_core::exception::Result<bool> {
-		if self.empty {
+		if self.empty_result {
 			return Ok(false);
 		}
-
 		let mut conn = super::manager::get_connection().await?;
 		self.exists_with_db(&mut conn).await
 	}
@@ -7184,7 +8481,7 @@ where
 	where
 		E: OrmExecutor,
 	{
-		if self.empty {
+		if self.empty_result {
 			return Ok(false);
 		}
 
@@ -7332,7 +8629,7 @@ where
 		I: IntoIterator<Item = A>,
 		A: Into<FieldAssignment>,
 	{
-		if self.empty {
+		if self.empty_result {
 			return Ok(0);
 		}
 		let mut conn = super::manager::get_connection().await?;
@@ -7350,7 +8647,7 @@ where
 		I: IntoIterator<Item = A>,
 		A: Into<FieldAssignment>,
 	{
-		if self.empty {
+		if self.empty_result {
 			return Ok(0);
 		}
 		let stmt = self.update_fields_query(values)?;
@@ -7738,10 +9035,12 @@ where
 		T: super::Model + Clone,
 	{
 		Self::composite_primary_key_for_values(pk_values)?;
-		if self.empty {
-			return Err(Error::NotFound(
-				"No record found matching the query".to_string(),
-			));
+		if self.empty_result {
+			return Err(DatabaseError::new(
+				DatabaseErrorKind::Query,
+				"No record found matching the composite primary key",
+			)
+			.into());
 		}
 		let mut conn = super::manager::get_connection().await?;
 		self.get_composite_with_db(&mut conn, pk_values).await
@@ -7780,7 +9079,7 @@ where
 		T: super::Model + Clone,
 		E: OrmExecutor,
 	{
-		if self.empty {
+		if self.empty_result {
 			return Err(Error::NotFound(
 				"No record found matching the query".to_string(),
 			));
@@ -7788,6 +9087,13 @@ where
 		use reinhardt_query::prelude::{Alias, BinOper, ColumnRef, Expr, Value};
 
 		let composite_pk = Self::composite_primary_key_for_values(pk_values)?;
+		if self.empty_result {
+			return Err(DatabaseError::new(
+				DatabaseErrorKind::Query,
+				"No record found matching the composite primary key",
+			)
+			.into());
+		}
 
 		// Build SELECT query using reinhardt-query
 		let table_name = T::table_name();
@@ -8201,7 +9507,6 @@ where
 			if let Some(cond) = self.build_where_condition()? {
 				stmt.cond_where(cond);
 			}
-
 			// Apply GROUP BY
 			for group_field in &self.group_by_fields {
 				stmt.group_by_col(self.root_column_reference(group_field));
@@ -8254,7 +9559,9 @@ where
 			self.apply_ordering(&mut stmt);
 
 			// Apply LIMIT/OFFSET
-			if let Some(limit) = self.limit {
+			if self.empty_result {
+				stmt.limit(0);
+			} else if let Some(limit) = self.limit {
 				stmt.limit(limit as u64);
 			}
 			if let Some(offset) = self.offset {
@@ -8264,26 +9571,10 @@ where
 			stmt.to_owned()
 		} else {
 			// SELECT with JOINs for select_related
-			self.select_related_query()?
+			self.select_related_query_with_condition(self.build_where_condition()?)
 		};
 
-		// Add annotations to SELECT clause if any using reinhardt-query API
-		// Collect annotation SQL strings first to handle lifetime issues
-		// Note: Use to_sql_expr() to get expression without alias (reinhardt-query adds alias via expr_as)
-		let annotation_exprs: Vec<_> = self
-			.annotations
-			.iter()
-			.map(|a| {
-				(
-					self.annotation_value_to_select_sql(&a.value),
-					a.alias.clone(),
-				)
-			})
-			.collect();
-
-		for (value_sql, alias) in annotation_exprs {
-			stmt.expr_as(Expr::cust(value_sql), Alias::new(alias));
-		}
+		self.apply_annotations_to_select(&mut stmt);
 
 		use reinhardt_query::prelude::PostgresQueryBuilder;
 		let mut select_sql = stmt.to_string(PostgresQueryBuilder);
@@ -9156,6 +10447,54 @@ fn parse_column_reference(field: &str) -> reinhardt_query::prelude::ColumnRef {
 	}
 }
 
+fn contains_known_raw_aggregate(projection: &str) -> bool {
+	const AGGREGATE_FUNCTIONS: &[&str] = &[
+		"COUNT",
+		"SUM",
+		"AVG",
+		"MIN",
+		"MAX",
+		"ARRAY_AGG",
+		"JSON_AGG",
+		"JSONB_AGG",
+		"STRING_AGG",
+		"BOOL_AND",
+		"BOOL_OR",
+		"EVERY",
+		"XMLAGG",
+	];
+
+	let bytes = projection.as_bytes();
+	let mut index = 0;
+	while index < bytes.len() {
+		if bytes[index].is_ascii_alphabetic() || bytes[index] == b'_' {
+			let start = index;
+			index += 1;
+			while index < bytes.len()
+				&& (bytes[index].is_ascii_alphanumeric() || bytes[index] == b'_')
+			{
+				index += 1;
+			}
+
+			let function = &projection[start..index];
+			let mut next = index;
+			while next < bytes.len() && bytes[next].is_ascii_whitespace() {
+				next += 1;
+			}
+			if bytes.get(next) == Some(&b'(')
+				&& AGGREGATE_FUNCTIONS
+					.iter()
+					.any(|aggregate| function.eq_ignore_ascii_case(aggregate))
+			{
+				return true;
+			}
+		} else {
+			index += 1;
+		}
+	}
+	false
+}
+
 #[derive(Debug, Clone, Copy)]
 enum LikePattern {
 	Exact,
@@ -9190,8 +10529,9 @@ fn escape_like_pattern(value: &str) -> String {
 #[cfg(test)]
 mod tests {
 	use super::{
-		AggregateFunc, AggregateValue, ComparisonOp, FilterCondition, HavingCondition,
-		MAX_FILTER_CONDITION_DEPTH, QueryFilterInput,
+		AggregateFunc, AggregateValue, ComparisonOp, DateProjectionOrder, FilterCondition,
+		HavingCondition, MAX_FILTER_CONDITION_DEPTH, QueryFilterInput, RowStream,
+		StreamQueryAccounting, TimedRowStream,
 	};
 	#[cfg(feature = "pgvector")]
 	use crate::orm::Field;
@@ -9201,9 +10541,13 @@ mod tests {
 		DatabaseValue, FieldCodecError, FilterOperator, FilterValue, Manager, Model, QuerySet,
 		query::Filter,
 	};
+	use futures::Stream;
 	use reinhardt_query::{
 		QueryBuilder,
-		prelude::{PostgresQueryBuilder, QueryStatementBuilder, SqliteQueryBuilder},
+		prelude::{
+			PostgresQueryBuilder, QueryStatementBuilder, SqliteQueryBuilder, TemporalTruncKind,
+			TemporalTruncOutput,
+		},
 	};
 	use rstest::rstest;
 	use serde::{Deserialize, Serialize};
@@ -9212,6 +10556,130 @@ mod tests {
 	use std::collections::{BTreeSet, HashMap};
 	#[cfg(feature = "pgvector")]
 	use std::fmt;
+	use std::pin::Pin;
+	use std::sync::{Arc, Mutex};
+	use std::task::{Context, Poll, Waker};
+	use std::time::Duration;
+
+	#[derive(Default)]
+	struct WakeDrivenRowStreamState {
+		ready: bool,
+		waker: Option<Waker>,
+	}
+
+	struct WakeDrivenRowStream {
+		state: Arc<Mutex<WakeDrivenRowStreamState>>,
+	}
+
+	impl Stream for WakeDrivenRowStream {
+		type Item = reinhardt_core::exception::Result<crate::backends::types::Row>;
+
+		fn poll_next(self: Pin<&mut Self>, context: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+			let mut state = self
+				.state
+				.lock()
+				.unwrap_or_else(|poisoned| poisoned.into_inner());
+			if state.ready {
+				return Poll::Ready(None);
+			}
+			state.waker = Some(context.waker().clone());
+			Poll::Pending
+		}
+	}
+
+	struct PendingThenReadyRowStream {
+		first_poll: bool,
+		waker: Option<Waker>,
+	}
+
+	impl Stream for PendingThenReadyRowStream {
+		type Item = reinhardt_core::exception::Result<crate::backends::types::Row>;
+
+		fn poll_next(
+			mut self: Pin<&mut Self>,
+			context: &mut Context<'_>,
+		) -> Poll<Option<Self::Item>> {
+			if self.first_poll {
+				self.first_poll = false;
+				self.waker = Some(context.waker().clone());
+				return Poll::Pending;
+			}
+			assert!(
+				self.waker.take().is_some(),
+				"pending row stream must retain its registered waker"
+			);
+			Poll::Ready(None)
+		}
+	}
+
+	#[rstest]
+	fn timed_row_stream_records_pending_io_when_the_backend_wakes() {
+		// Arrange
+		let state = Arc::new(Mutex::new(WakeDrivenRowStreamState::default()));
+		let rows: RowStream<'_> = Box::pin(WakeDrivenRowStream {
+			state: Arc::clone(&state),
+		});
+		let mut accounting = StreamQueryAccounting::new("SELECT 1".to_owned(), Vec::new());
+		let waker = futures::task::noop_waker();
+		let mut context = Context::from_waker(&waker);
+
+		// Act
+		{
+			let mut stream = TimedRowStream::new(rows, &mut accounting);
+			assert!(matches!(
+				Pin::new(&mut stream).poll_next(&mut context),
+				Poll::Pending
+			));
+			std::thread::sleep(Duration::from_millis(20));
+			let waker = {
+				let mut state = state
+					.lock()
+					.unwrap_or_else(|poisoned| poisoned.into_inner());
+				state.ready = true;
+				state
+					.waker
+					.take()
+					.expect("pending row stream must register a waker")
+			};
+			waker.wake();
+			assert!(matches!(
+				Pin::new(&mut stream).poll_next(&mut context),
+				Poll::Ready(None)
+			));
+		}
+
+		// Assert
+		assert!(accounting.duration >= Duration::from_millis(10));
+	}
+
+	#[rstest]
+	fn timed_row_stream_discards_unwoken_pending_time_after_cancellation() {
+		// Arrange
+		let rows: RowStream<'_> = Box::pin(PendingThenReadyRowStream {
+			first_poll: true,
+			waker: None,
+		});
+		let mut accounting = StreamQueryAccounting::new("SELECT 1".to_owned(), Vec::new());
+		let waker = futures::task::noop_waker();
+		let mut context = Context::from_waker(&waker);
+
+		// Act
+		{
+			let mut stream = TimedRowStream::new(rows, &mut accounting);
+			assert!(matches!(
+				Pin::new(&mut stream).poll_next(&mut context),
+				Poll::Pending
+			));
+			std::thread::sleep(Duration::from_millis(20));
+			assert!(matches!(
+				Pin::new(&mut stream).poll_next(&mut context),
+				Poll::Ready(None)
+			));
+		}
+
+		// Assert
+		assert!(accounting.duration < Duration::from_millis(10));
+	}
 
 	#[cfg(feature = "pgvector")]
 	struct RecordingExecutor {
@@ -9788,10 +11256,6 @@ mod tests {
 		.expect_err("SQLite must reject PostgreSQL vector distance operators");
 
 		assert_eq!(
-			error.kind(),
-			reinhardt_core::exception::DatabaseErrorKind::Unsupported
-		);
-		assert_eq!(
 			error.to_string(),
 			"pgvector distance operators is not supported by the SQLite backend"
 		);
@@ -9828,6 +11292,70 @@ mod tests {
 			]
 		);
 		assert_eq!(executor.contexts, vec![Some(distance_and_vector_context())]);
+	}
+
+	#[cfg(feature = "pgvector")]
+	#[rstest]
+	#[tokio::test]
+	async fn none_short_circuits_read_and_write_execution_paths() {
+		// Arrange
+		let mut executor = RecordingExecutor::default();
+
+		// Act
+		let rows = QuerySet::<TestUser>::new()
+			.none()
+			.all_with_db(&mut executor)
+			.await
+			.expect("none queryset should not execute a select");
+		// Assert
+		assert_eq!(rows, Vec::<TestUser>::new());
+
+		let rows = QuerySet::<TestUser>::new()
+			.none()
+			.rows_with_db(&mut executor)
+			.await
+			.expect("none queryset should not execute a row select");
+		assert_eq!(rows, Vec::<crate::orm::QueryRow>::new());
+
+		let count = QuerySet::<TestUser>::new()
+			.none()
+			.count_with_db(&mut executor)
+			.await
+			.expect("none queryset should not execute a count");
+		assert_eq!(count, 0);
+
+		let exists = QuerySet::<TestUser>::new()
+			.none()
+			.exists_with_db(&mut executor)
+			.await
+			.expect("none queryset should not execute an existence check");
+		assert!(!exists);
+
+		let rows_affected = QuerySet::<TestUser>::new()
+			.none()
+			.update_fields_with_conn(&mut executor, [("username", "alice")])
+			.await
+			.expect("none queryset should not execute an update");
+		assert_eq!(rows_affected, 0);
+		assert!(executor.calls.is_empty());
+		assert!(executor.contexts.is_empty());
+	}
+
+	#[rstest]
+	fn none_aggregate_subquery_limits_output_rows() {
+		// Arrange
+		let queryset = QuerySet::<TestUser>::new().none().values(&["COUNT(*)"]);
+
+		// Act
+		let sql = queryset
+			.as_subquery()
+			.expect("empty aggregate subquery should compile");
+
+		// Assert
+		assert_eq!(
+			sql,
+			r#"(SELECT COUNT(*) FROM "test_users" WHERE FALSE LIMIT 0)"#
+		);
 	}
 
 	#[cfg(feature = "pgvector")]
@@ -11404,6 +12932,27 @@ mod tests {
 	}
 
 	#[test]
+	fn select_related_to_sql_includes_each_annotation_once() {
+		use crate::orm::annotation::{Annotation, AnnotationValue, Value};
+
+		// Arrange
+		let queryset = QuerySet::<TestUser>::new()
+			.select_related(&["profile"])
+			.annotate(Annotation::new(
+				"relation_marker",
+				AnnotationValue::Value(Value::Int(1)),
+			));
+
+		// Act
+		let sql = queryset
+			.to_sql()
+			.expect("select-related query SQL should compile");
+
+		// Assert
+		assert_eq!(sql.matches(r#"1 AS "relation_marker""#).count(), 1);
+	}
+
+	#[test]
 	fn test_string_relation_loaders_accept_vec_references() {
 		let fields = vec!["corpus_file"];
 
@@ -11711,6 +13260,31 @@ mod tests {
 		assert!(sql.contains(r#"WHERE "test_projects"."name" = 'reinhardt'"#));
 	}
 
+	#[rstest]
+	fn temporal_projection_qualifies_root_filters_with_manual_joins() {
+		let queryset = QuerySet::<TestUser>::new()
+			.inner_join_on::<TestProject>("test_users.id = test_projects.user_id")
+			.filter(Filter::new(
+				"created_at",
+				FilterOperator::Eq,
+				FilterValue::String("2026-01-01".to_owned()),
+			));
+		let statement = queryset
+			.temporal_projection_statement(
+				"created_at",
+				TemporalTruncKind::Day,
+				DateProjectionOrder::Asc,
+				None,
+				TemporalTruncOutput::Date,
+			)
+			.expect("temporal projection should compile with a manual join");
+
+		assert_eq!(
+			statement.to_string(PostgresQueryBuilder),
+			r#"SELECT DISTINCT DATE_TRUNC('day', "test_users"."created_at")::date AS "value" FROM "test_users" INNER JOIN "test_projects" ON test_users.id = test_projects.user_id WHERE "test_users"."created_at" = '2026-01-01' AND "test_users"."created_at" IS NOT NULL ORDER BY "value" ASC"#
+		);
+	}
+
 	#[test]
 	fn test_manual_join_qualifies_root_ordering_columns() {
 		let sql = QuerySet::<TestUser>::new()
@@ -11720,6 +13294,24 @@ mod tests {
 			.expect("query SQL should compile");
 
 		assert!(sql.contains(r#"ORDER BY "test_users"."id" ASC"#));
+	}
+
+	#[test]
+	fn test_manual_join_preserves_annotation_ordering_aliases() {
+		let sql = QuerySet::<TestUser>::new()
+			.annotate(crate::orm::annotation::Annotation::new(
+				"other_age",
+				crate::orm::annotation::AnnotationValue::Value(crate::orm::annotation::Value::Int(
+					42,
+				)),
+			))
+			.inner_join_on::<TestProject>("test_users.id = test_projects.user_id")
+			.order_by(&["other_age"])
+			.to_sql()
+			.expect("query SQL should compile");
+
+		assert!(sql.contains(r#"ORDER BY "other_age" ASC"#));
+		assert!(!sql.contains(r#"ORDER BY "test_users"."other_age" ASC"#));
 	}
 
 	#[test]
@@ -12338,6 +13930,120 @@ mod tests {
 		assert_eq!(
 			sql,
 			r#"SELECT "test_users".* FROM "test_users" INNER JOIN "test_corpus_files" AS "corpus_file" ON "test_users"."corpus_file_id" = "corpus_file"."id" WHERE "corpus_file"."normalized_path" = '/docs/index.md' GROUP BY "test_users"."id""#
+		);
+	}
+
+	#[test]
+	fn temporal_projection_rejects_grouped_querysets() {
+		let mut queryset = QuerySet::<TestUser>::new();
+		queryset.group_by_fields = vec!["id".to_string()];
+		queryset
+			.having_conditions
+			.push(HavingCondition::AggregateCompare {
+				func: AggregateFunc::Count,
+				field: "*".to_string(),
+				operator: ComparisonOp::Gt,
+				value: AggregateValue::Int(1),
+			});
+
+		let error = queryset
+			.temporal_projection_statement(
+				"created_at",
+				TemporalTruncKind::Day,
+				DateProjectionOrder::Asc,
+				None,
+				TemporalTruncOutput::Date,
+			)
+			.expect_err("temporal projections must reject grouped querysets");
+
+		assert_eq!(
+			error.database_kind(),
+			Some(reinhardt_core::exception::DatabaseErrorKind::Unsupported)
+		);
+		assert_eq!(
+			error.to_string(),
+			"Database error: date and datetime projections are not supported on grouped querysets"
+		);
+	}
+
+	#[test]
+	fn temporal_projection_rejects_having_only_querysets() {
+		let mut queryset = QuerySet::<TestUser>::new();
+		queryset
+			.having_conditions
+			.push(HavingCondition::AggregateCompare {
+				func: AggregateFunc::Count,
+				field: "*".to_string(),
+				operator: ComparisonOp::Gt,
+				value: AggregateValue::Int(1),
+			});
+
+		let error = queryset
+			.temporal_projection_statement(
+				"created_at",
+				TemporalTruncKind::Day,
+				DateProjectionOrder::Asc,
+				None,
+				TemporalTruncOutput::Date,
+			)
+			.expect_err("temporal projections must reject HAVING-only querysets");
+
+		assert_eq!(
+			error.to_string(),
+			"Database error: date and datetime projections are not supported on grouped querysets"
+		);
+	}
+
+	#[test]
+	fn temporal_projection_rejects_querysets_with_lateral_joins() {
+		let queryset = QuerySet::<TestUser>::new().with_lateral_join(
+			crate::orm::lateral_join::LateralJoin::new("latest_event", "SELECT 1").inner(),
+		);
+
+		let error = queryset
+			.temporal_projection_statement(
+				"created_at",
+				TemporalTruncKind::Day,
+				DateProjectionOrder::Asc,
+				None,
+				TemporalTruncOutput::Date,
+			)
+			.expect_err("temporal projections must reject querysets with lateral joins");
+
+		assert_eq!(
+			error.database_kind(),
+			Some(reinhardt_core::exception::DatabaseErrorKind::Unsupported)
+		);
+		assert_eq!(
+			error.to_string(),
+			"Database error: date and datetime projections are not supported on querysets with lateral joins"
+		);
+	}
+
+	#[rstest]
+	fn temporal_projection_rejects_querysets_with_ctes() {
+		let queryset = QuerySet::<TestUser>::new().with_cte(crate::orm::cte::CTE::new(
+			"recent_users",
+			"SELECT * FROM test_users",
+		));
+
+		let error = queryset
+			.temporal_projection_statement(
+				"created_at",
+				TemporalTruncKind::Day,
+				DateProjectionOrder::Asc,
+				None,
+				TemporalTruncOutput::Date,
+			)
+			.expect_err("temporal projections must reject querysets with CTEs");
+
+		assert_eq!(
+			error.database_kind(),
+			Some(reinhardt_core::exception::DatabaseErrorKind::Unsupported)
+		);
+		assert_eq!(
+			error.to_string(),
+			"Database error: date and datetime projections are not supported on querysets with CTEs"
 		);
 	}
 

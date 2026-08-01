@@ -32,8 +32,9 @@
 //! ### ORM (`orm` module)
 //!
 //! - **Django-style Models**: Define database models with structs
-//! - **QuerySet API**: Chainable query builder with conditional partial updates
-//!   and lifetime-bound, row-by-row model streaming
+//! - **QuerySet API**: Chainable query builder with typed latest/earliest,
+//!   deterministic bulk retrieval, lazy empty querysets, conditional partial updates,
+//!   and lifetime-bound row-by-row model streaming
 //! - **Typed Date Projections**: Database-side truncation, time-zone conversion,
 //!   distinctness, and deterministic ordering
 //! - **Field Types**: Rich set of field types with validation

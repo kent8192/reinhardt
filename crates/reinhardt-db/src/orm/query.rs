@@ -4,6 +4,7 @@
 //! By default, it exports the expression-based query API (SQLAlchemy-style).
 
 use super::connection::{OrmExecutor, QueryRow, RowStream};
+use super::expressions::{OrderingField, UniqueFieldRef};
 use super::field_codec::{
 	DatabaseField, DatabaseValue, FieldCodecError, IntoFieldValue, database_value_to_query_value,
 };
@@ -26,7 +27,7 @@ use reinhardt_query::prelude::{
 use reinhardt_query::types::PgBinOper;
 use serde::{Deserialize, Serialize};
 use smallvec::SmallVec;
-use std::collections::HashMap;
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::marker::PhantomData;
 use std::pin::Pin;
 use std::sync::{Arc, Mutex};
@@ -800,12 +801,12 @@ impl FieldAssignment {
 	}
 }
 
-impl<M, T, V> From<(super::expressions::FieldRef<M, T>, V)> for FieldAssignment
+impl<M, T, Origin, V> From<(super::expressions::FieldRef<M, T, Origin>, V)> for FieldAssignment
 where
 	T: DatabaseField,
 	V: IntoFieldValue<T>,
 {
-	fn from((field, value): (super::expressions::FieldRef<M, T>, V)) -> Self {
+	fn from((field, value): (super::expressions::FieldRef<M, T, Origin>, V)) -> Self {
 		Self {
 			field: field.name().to_owned(),
 			value: UpdateValue::Typed(value.into_field_value()),
@@ -1827,7 +1828,7 @@ where
 		} else if !self.deferred_fields.is_empty() {
 			for field in T::field_metadata() {
 				if !self.deferred_fields.contains(&field.name) {
-					stmt.column(self.root_column_reference(&field.name));
+					stmt.column(self.root_column_reference(field.db_column_name()));
 				}
 			}
 		} else {
@@ -4576,7 +4577,7 @@ where
 				if !self.deferred_fields.contains(&field.name) {
 					stmt.column(ColumnRef::table_column(
 						Alias::new(self.root_alias()),
-						Alias::new(&field.name),
+						Alias::new(field.db_column_name()),
 					));
 				}
 			}
@@ -4586,11 +4587,25 @@ where
 	}
 
 	fn root_column_reference(&self, field: &str) -> ColumnRef {
-		if (!self.relation_joins.is_empty() || !self.joins.is_empty()) && !field.contains('.') {
+		if (!self.relation_joins.is_empty() || !self.joins.is_empty() || self.has_select_related())
+			&& !field.contains('.')
+			&& !self.is_projection_alias(field)
+		{
 			ColumnRef::table_column(Alias::new(self.root_alias()), Alias::new(field))
 		} else {
 			parse_column_reference(field)
 		}
+	}
+
+	fn is_projection_alias(&self, field: &str) -> bool {
+		self.annotations
+			.iter()
+			.any(|annotation| annotation.alias == field)
+			|| self
+				.selected_expressions
+				.iter()
+				.chain(&self.typed_annotations)
+				.any(|(alias, _)| alias == field)
 	}
 
 	fn database_column_for_field(field: &str) -> String {
@@ -4933,6 +4948,10 @@ where
 
 	/// Build WHERE condition using reinhardt-query from accumulated filters
 	fn build_where_condition(&self) -> reinhardt_core::exception::Result<Option<Condition>> {
+		if self.empty_result {
+			return Ok(Some(Condition::all().add(Expr::val(1).eq(0))));
+		}
+
 		if !self.has_where_predicates() {
 			return Ok(None);
 		}
@@ -6413,10 +6432,6 @@ where
 		if let Some(cond) = where_condition {
 			stmt.cond_where(cond);
 		}
-		if self.empty_result {
-			stmt.and_where(Expr::val(false));
-		}
-
 		self.apply_grouping_and_having(&mut stmt);
 
 		self.apply_ordering(&mut stmt);
@@ -7067,6 +7082,615 @@ where
 		self.first_with_db(&mut conn).await
 	}
 
+	/// Return the newest row using the model's `get_latest_by` metadata.
+	pub async fn latest(&self) -> reinhardt_core::exception::Result<T>
+	where
+		T: serde::de::DeserializeOwned,
+	{
+		let ordering = self.metadata_retrieval_ordering(true)?;
+		if self.empty_result {
+			return Err(Error::NotFound(
+				"No record found matching the query".to_string(),
+			));
+		}
+		self.ensure_unsliced_retrieval()?;
+		let mut conn = super::manager::get_connection().await?;
+		self.single_with_db(&mut conn, ordering).await
+	}
+
+	/// Return the oldest row using the model's `get_latest_by` metadata.
+	pub async fn earliest(&self) -> reinhardt_core::exception::Result<T>
+	where
+		T: serde::de::DeserializeOwned,
+	{
+		let ordering = self.metadata_retrieval_ordering(false)?;
+		if self.empty_result {
+			return Err(Error::NotFound(
+				"No record found matching the query".to_string(),
+			));
+		}
+		self.ensure_unsliced_retrieval()?;
+		let mut conn = super::manager::get_connection().await?;
+		self.single_with_db(&mut conn, ordering).await
+	}
+
+	/// Return the newest row ordered by the supplied typed model fields.
+	pub async fn latest_by(
+		&self,
+		fields: &[OrderingField<T>],
+	) -> reinhardt_core::exception::Result<T>
+	where
+		T: serde::de::DeserializeOwned,
+	{
+		let ordering = Self::typed_retrieval_ordering(fields, true)?;
+		if self.empty_result {
+			return Err(Error::NotFound(
+				"No record found matching the query".to_string(),
+			));
+		}
+		self.ensure_unsliced_retrieval()?;
+		let mut conn = super::manager::get_connection().await?;
+		self.single_with_db(&mut conn, ordering).await
+	}
+
+	/// Return the oldest row ordered by the supplied typed model fields.
+	pub async fn earliest_by(
+		&self,
+		fields: &[OrderingField<T>],
+	) -> reinhardt_core::exception::Result<T>
+	where
+		T: serde::de::DeserializeOwned,
+	{
+		let ordering = Self::typed_retrieval_ordering(fields, false)?;
+		if self.empty_result {
+			return Err(Error::NotFound(
+				"No record found matching the query".to_string(),
+			));
+		}
+		self.ensure_unsliced_retrieval()?;
+		let mut conn = super::manager::get_connection().await?;
+		self.single_with_db(&mut conn, ordering).await
+	}
+
+	/// Return the newest row through a caller-owned ORM executor.
+	pub async fn latest_with_db<E>(&self, conn: &mut E) -> reinhardt_core::exception::Result<T>
+	where
+		T: serde::de::DeserializeOwned,
+		E: OrmExecutor,
+	{
+		let ordering = self.metadata_retrieval_ordering(true)?;
+		self.single_with_db(conn, ordering).await
+	}
+
+	/// Return the oldest row through a caller-owned ORM executor.
+	pub async fn earliest_with_db<E>(&self, conn: &mut E) -> reinhardt_core::exception::Result<T>
+	where
+		T: serde::de::DeserializeOwned,
+		E: OrmExecutor,
+	{
+		let ordering = self.metadata_retrieval_ordering(false)?;
+		self.single_with_db(conn, ordering).await
+	}
+
+	/// Return the newest row ordered by typed fields through a caller-owned ORM executor.
+	pub async fn latest_by_with_db<E>(
+		&self,
+		conn: &mut E,
+		fields: &[OrderingField<T>],
+	) -> reinhardt_core::exception::Result<T>
+	where
+		T: serde::de::DeserializeOwned,
+		E: OrmExecutor,
+	{
+		let ordering = Self::typed_retrieval_ordering(fields, true)?;
+		self.single_with_db(conn, ordering).await
+	}
+
+	/// Return the oldest row ordered by typed fields through a caller-owned ORM executor.
+	pub async fn earliest_by_with_db<E>(
+		&self,
+		conn: &mut E,
+		fields: &[OrderingField<T>],
+	) -> reinhardt_core::exception::Result<T>
+	where
+		T: serde::de::DeserializeOwned,
+		E: OrmExecutor,
+	{
+		let ordering = Self::typed_retrieval_ordering(fields, false)?;
+		self.single_with_db(conn, ordering).await
+	}
+
+	/// Return the newest row through an active transaction executor.
+	pub async fn latest_with_executor(
+		&self,
+		executor: &mut dyn super::connection::TransactionExecutor,
+	) -> crate::backends::Result<T>
+	where
+		T: serde::de::DeserializeOwned,
+	{
+		let ordering = self.metadata_retrieval_ordering(true)?;
+		self.single_with_executor(executor, ordering).await
+	}
+
+	/// Return the oldest row through an active transaction executor.
+	pub async fn earliest_with_executor(
+		&self,
+		executor: &mut dyn super::connection::TransactionExecutor,
+	) -> crate::backends::Result<T>
+	where
+		T: serde::de::DeserializeOwned,
+	{
+		let ordering = self.metadata_retrieval_ordering(false)?;
+		self.single_with_executor(executor, ordering).await
+	}
+
+	/// Return the newest row ordered by typed fields through an active transaction executor.
+	pub async fn latest_by_with_executor(
+		&self,
+		executor: &mut dyn super::connection::TransactionExecutor,
+		fields: &[OrderingField<T>],
+	) -> crate::backends::Result<T>
+	where
+		T: serde::de::DeserializeOwned,
+	{
+		let ordering = Self::typed_retrieval_ordering(fields, true)?;
+		self.single_with_executor(executor, ordering).await
+	}
+
+	/// Return the oldest row ordered by typed fields through an active transaction executor.
+	pub async fn earliest_by_with_executor(
+		&self,
+		executor: &mut dyn super::connection::TransactionExecutor,
+		fields: &[OrderingField<T>],
+	) -> crate::backends::Result<T>
+	where
+		T: serde::de::DeserializeOwned,
+	{
+		let ordering = Self::typed_retrieval_ordering(fields, false)?;
+		self.single_with_executor(executor, ordering).await
+	}
+
+	fn metadata_retrieval_ordering(
+		&self,
+		latest: bool,
+	) -> reinhardt_core::exception::Result<Vec<String>> {
+		let fields = T::latest_by_fields();
+		if fields.is_empty() {
+			return Err(Error::Validation(format!(
+				"{} requires Model::latest_by_fields() metadata or an explicit typed field",
+				if latest {
+					"QuerySet::latest"
+				} else {
+					"QuerySet::earliest"
+				}
+			)));
+		}
+		Ok(fields
+			.iter()
+			.map(|field| {
+				if latest {
+					field
+						.strip_prefix('-')
+						.map_or_else(|| format!("-{field}"), ToOwned::to_owned)
+				} else {
+					(*field).to_owned()
+				}
+			})
+			.collect())
+	}
+
+	fn typed_retrieval_ordering(
+		fields: &[OrderingField<T>],
+		latest: bool,
+	) -> reinhardt_core::exception::Result<Vec<String>> {
+		if fields.is_empty() {
+			return Err(Error::Validation(
+				"QuerySet retrieval requires at least one typed ordering field".to_string(),
+			));
+		}
+		Ok(fields
+			.iter()
+			.map(|field| {
+				if latest {
+					format!("-{}", field.name())
+				} else {
+					field.name().to_owned()
+				}
+			})
+			.collect())
+	}
+
+	async fn single_with_db<E>(
+		&self,
+		conn: &mut E,
+		ordering: Vec<String>,
+	) -> reinhardt_core::exception::Result<T>
+	where
+		T: serde::de::DeserializeOwned,
+		E: OrmExecutor,
+	{
+		self.ensure_unsliced_retrieval()?;
+		let mut queryset = self.clone();
+		queryset.order_by_fields = ordering;
+		queryset.order_by_expressions.clear();
+		queryset.limit = Some(1);
+		queryset
+			.all_with_db(conn)
+			.await?
+			.into_iter()
+			.next()
+			.ok_or_else(|| Error::NotFound("No record found matching the query".to_string()))
+	}
+
+	async fn single_with_executor(
+		&self,
+		executor: &mut dyn super::connection::TransactionExecutor,
+		ordering: Vec<String>,
+	) -> crate::backends::Result<T>
+	where
+		T: serde::de::DeserializeOwned,
+	{
+		self.ensure_unsliced_retrieval().map_err(executor_error)?;
+		let mut queryset = self.clone();
+		queryset.order_by_fields = ordering;
+		queryset.order_by_expressions.clear();
+		queryset.limit = Some(1);
+		queryset
+			.all_with_executor(executor)
+			.await?
+			.into_iter()
+			.next()
+			.ok_or_else(|| Error::NotFound("No record found matching the query".to_string()))
+	}
+
+	fn ensure_unsliced_retrieval(&self) -> reinhardt_core::exception::Result<()> {
+		if self.limit.is_some() || self.offset.is_some() {
+			return Err(Error::Validation(
+				"QuerySet retrieval helpers cannot be called on a sliced queryset".to_string(),
+			));
+		}
+		Ok(())
+	}
+
+	fn bulk_key_batches<K>(
+		keys: BTreeSet<K>,
+		backend: super::connection::DatabaseBackend,
+		reserved_binds: usize,
+	) -> reinhardt_core::exception::Result<Vec<Vec<K>>> {
+		let parameter_limit: usize = match backend {
+			super::connection::DatabaseBackend::Sqlite => 900,
+			super::connection::DatabaseBackend::Postgres
+			| super::connection::DatabaseBackend::MySql => 65_535,
+		};
+		if keys.is_empty() {
+			return Ok(Vec::new());
+		}
+		if reserved_binds >= parameter_limit {
+			return Err(Error::Validation(format!(
+				"QuerySet bulk retrieval cannot add lookup keys because the source query uses all {parameter_limit} available bind parameters"
+			)));
+		}
+		let limit = parameter_limit - reserved_binds;
+		let mut batches = Vec::with_capacity(keys.len().div_ceil(limit));
+		let mut batch = Vec::with_capacity(limit);
+		for key in keys {
+			batch.push(key);
+			if batch.len() == limit {
+				batches.push(batch);
+				batch = Vec::with_capacity(limit);
+			}
+		}
+		if !batch.is_empty() {
+			batches.push(batch);
+		}
+		Ok(batches)
+	}
+
+	fn select_bind_count(
+		&self,
+		backend: super::connection::DatabaseBackend,
+		is_cockroachdb: bool,
+	) -> reinhardt_core::exception::Result<usize> {
+		let statement = self.build_select_statement()?;
+		let (_, values) = Self::build_select_for_backend(&statement, backend, is_cockroachdb)?;
+		Ok(values.len())
+	}
+
+	fn with_bulk_lookup_column(mut self, column: &str) -> Self {
+		if let Some(fields) = &mut self.selected_fields {
+			if !fields
+				.iter()
+				.any(|field| Self::projection_includes_column(field, column))
+			{
+				fields.push(column.to_string());
+			}
+		} else {
+			let field_name = Self::logical_field_name_for_column(column);
+			self.deferred_fields
+				.retain(|field| !Self::projection_includes_column(field, &field_name));
+		}
+		self
+	}
+
+	fn projection_includes_column(field: &str, column: &str) -> bool {
+		field == column
+			|| field
+				.rsplit_once('.')
+				.is_some_and(|(_, field_name)| field_name == column)
+	}
+
+	fn logical_field_name_for_column(column: &str) -> String {
+		T::field_metadata()
+			.iter()
+			.find(|metadata| metadata.db_column_name() == column)
+			.map_or_else(|| column.to_owned(), |metadata| metadata.name.clone())
+	}
+
+	/// Fetch rows by primary key and return them in deterministic key order.
+	///
+	/// When the queryset uses a field projection, the primary-key column is
+	/// selected automatically so every returned model can be indexed.
+	pub async fn in_bulk<I>(
+		&self,
+		keys: I,
+	) -> reinhardt_core::exception::Result<BTreeMap<T::PrimaryKey, T>>
+	where
+		T: serde::de::DeserializeOwned,
+		T::PrimaryKey: DatabaseField + Ord,
+		I: IntoIterator<Item = T::PrimaryKey>,
+	{
+		self.ensure_unsliced_retrieval()?;
+		let keys = keys.into_iter().collect::<BTreeSet<_>>();
+		if self.empty_result || keys.is_empty() {
+			return Ok(BTreeMap::new());
+		}
+		let mut conn = super::manager::get_connection().await?;
+		self.in_bulk_with_keys_db(&mut conn, keys).await
+	}
+
+	/// Fetch rows by primary key through a caller-owned ORM executor.
+	pub async fn in_bulk_with_db<E, I>(
+		&self,
+		conn: &mut E,
+		keys: I,
+	) -> reinhardt_core::exception::Result<BTreeMap<T::PrimaryKey, T>>
+	where
+		T: serde::de::DeserializeOwned,
+		T::PrimaryKey: DatabaseField + Ord,
+		E: OrmExecutor,
+		I: IntoIterator<Item = T::PrimaryKey>,
+	{
+		self.ensure_unsliced_retrieval()?;
+		let keys = keys.into_iter().collect::<BTreeSet<_>>();
+		if self.empty_result || keys.is_empty() {
+			return Ok(BTreeMap::new());
+		}
+		self.in_bulk_with_keys_db(conn, keys).await
+	}
+
+	/// Fetch rows by primary key through an active transaction executor.
+	pub async fn in_bulk_with_executor<I>(
+		&self,
+		executor: &mut dyn super::connection::TransactionExecutor,
+		keys: I,
+	) -> crate::backends::Result<BTreeMap<T::PrimaryKey, T>>
+	where
+		T: serde::de::DeserializeOwned,
+		T::PrimaryKey: DatabaseField + Ord,
+		I: IntoIterator<Item = T::PrimaryKey>,
+	{
+		self.ensure_unsliced_retrieval().map_err(executor_error)?;
+		let keys = keys.into_iter().collect::<BTreeSet<_>>();
+		if self.empty_result || keys.is_empty() {
+			return Ok(BTreeMap::new());
+		}
+		self.in_bulk_with_keys_executor(executor, keys).await
+	}
+
+	/// Fetch rows by a metadata-proven unique field in deterministic key order.
+	pub async fn in_bulk_by<K, I>(
+		&self,
+		unique_field: UniqueFieldRef<T, K>,
+		keys: I,
+	) -> reinhardt_core::exception::Result<BTreeMap<K, T>>
+	where
+		T: serde::de::DeserializeOwned,
+		K: DatabaseField + Ord,
+		I: IntoIterator<Item = K>,
+	{
+		self.ensure_unsliced_retrieval()?;
+		let keys = keys.into_iter().collect::<BTreeSet<_>>();
+		if self.empty_result || keys.is_empty() {
+			return Ok(BTreeMap::new());
+		}
+		let getter = Self::unique_getter(&unique_field)?;
+		let mut conn = super::manager::get_connection().await?;
+		self.in_bulk_by_keys_db(&mut conn, unique_field, getter, keys)
+			.await
+	}
+
+	/// Fetch rows by a metadata-proven unique field through a caller-owned ORM executor.
+	pub async fn in_bulk_by_with_db<E, K, I>(
+		&self,
+		conn: &mut E,
+		unique_field: UniqueFieldRef<T, K>,
+		keys: I,
+	) -> reinhardt_core::exception::Result<BTreeMap<K, T>>
+	where
+		T: serde::de::DeserializeOwned,
+		E: OrmExecutor,
+		K: DatabaseField + Ord,
+		I: IntoIterator<Item = K>,
+	{
+		self.ensure_unsliced_retrieval()?;
+		let keys = keys.into_iter().collect::<BTreeSet<_>>();
+		if self.empty_result || keys.is_empty() {
+			return Ok(BTreeMap::new());
+		}
+		let getter = Self::unique_getter(&unique_field)?;
+		self.in_bulk_by_keys_db(conn, unique_field, getter, keys)
+			.await
+	}
+
+	/// Fetch rows by a metadata-proven unique field through an active transaction executor.
+	pub async fn in_bulk_by_with_executor<K, I>(
+		&self,
+		executor: &mut dyn super::connection::TransactionExecutor,
+		unique_field: UniqueFieldRef<T, K>,
+		keys: I,
+	) -> crate::backends::Result<BTreeMap<K, T>>
+	where
+		T: serde::de::DeserializeOwned,
+		K: DatabaseField + Ord,
+		I: IntoIterator<Item = K>,
+	{
+		self.ensure_unsliced_retrieval().map_err(executor_error)?;
+		let keys = keys.into_iter().collect::<BTreeSet<_>>();
+		if self.empty_result || keys.is_empty() {
+			return Ok(BTreeMap::new());
+		}
+		let getter = Self::unique_getter(&unique_field)?;
+		self.in_bulk_by_keys_executor(executor, unique_field, getter, keys)
+			.await
+	}
+
+	fn unique_getter<K>(
+		unique_field: &UniqueFieldRef<T, K>,
+	) -> reinhardt_core::exception::Result<fn(&T) -> Option<K>>
+	where
+		K: DatabaseField,
+	{
+		unique_field.getter().ok_or_else(|| {
+			Error::Validation(format!(
+				"QuerySet::in_bulk_by requires a generated getter for unique field `{}`",
+				unique_field.name()
+			))
+		})
+	}
+
+	async fn in_bulk_with_keys_db<E>(
+		&self,
+		conn: &mut E,
+		keys: BTreeSet<T::PrimaryKey>,
+	) -> reinhardt_core::exception::Result<BTreeMap<T::PrimaryKey, T>>
+	where
+		T: serde::de::DeserializeOwned,
+		T::PrimaryKey: DatabaseField + Ord,
+		E: OrmExecutor,
+	{
+		let field = super::expressions::FieldRef::<
+			T,
+			T::PrimaryKey,
+			super::expressions::UnverifiedModelField,
+		>::new(T::primary_key_column());
+		let reserved_binds = self.select_bind_count(conn.backend(), conn.is_cockroachdb())?;
+		let mut result = BTreeMap::new();
+		for keys in Self::bulk_key_batches(keys, conn.backend(), reserved_binds)? {
+			let rows = self
+				.clone()
+				.with_bulk_lookup_column(T::primary_key_column())
+				.filter(field.is_in(keys))
+				.all_with_db(conn)
+				.await?;
+			result.extend(
+				rows.into_iter()
+					.filter_map(|model| model.primary_key().map(|key| (key, model))),
+			);
+		}
+		Ok(result)
+	}
+
+	async fn in_bulk_with_keys_executor(
+		&self,
+		executor: &mut dyn super::connection::TransactionExecutor,
+		keys: BTreeSet<T::PrimaryKey>,
+	) -> crate::backends::Result<BTreeMap<T::PrimaryKey, T>>
+	where
+		T: serde::de::DeserializeOwned,
+		T::PrimaryKey: DatabaseField + Ord,
+	{
+		let backend = Self::executor_backend(executor);
+		let reserved_binds = self.select_bind_count(backend, executor.is_cockroachdb())?;
+		let mut result = BTreeMap::new();
+		for keys in Self::bulk_key_batches(keys, backend, reserved_binds)? {
+			let filter = super::expressions::FieldRef::<
+				T,
+				T::PrimaryKey,
+				super::expressions::UnverifiedModelField,
+			>::new(T::primary_key_column())
+			.is_in(keys);
+			let rows = self
+				.clone()
+				.with_bulk_lookup_column(T::primary_key_column())
+				.filter(filter)
+				.all_with_executor(executor)
+				.await?;
+			result.extend(
+				rows.into_iter()
+					.filter_map(|model| model.primary_key().map(|key| (key, model))),
+			);
+		}
+		Ok(result)
+	}
+
+	async fn in_bulk_by_keys_db<E, K>(
+		&self,
+		conn: &mut E,
+		unique_field: UniqueFieldRef<T, K>,
+		getter: fn(&T) -> Option<K>,
+		keys: BTreeSet<K>,
+	) -> reinhardt_core::exception::Result<BTreeMap<K, T>>
+	where
+		T: serde::de::DeserializeOwned,
+		E: OrmExecutor,
+		K: DatabaseField + Ord,
+	{
+		let reserved_binds = self.select_bind_count(conn.backend(), conn.is_cockroachdb())?;
+		let mut result = BTreeMap::new();
+		for keys in Self::bulk_key_batches(keys, conn.backend(), reserved_binds)? {
+			let rows = self
+				.clone()
+				.with_bulk_lookup_column(unique_field.name())
+				.filter(unique_field.is_in(keys))
+				.all_with_db(conn)
+				.await?;
+			result.extend(
+				rows.into_iter()
+					.filter_map(|model| getter(&model).map(|key| (key, model))),
+			);
+		}
+		Ok(result)
+	}
+
+	async fn in_bulk_by_keys_executor<K>(
+		&self,
+		executor: &mut dyn super::connection::TransactionExecutor,
+		unique_field: UniqueFieldRef<T, K>,
+		getter: fn(&T) -> Option<K>,
+		keys: BTreeSet<K>,
+	) -> crate::backends::Result<BTreeMap<K, T>>
+	where
+		T: serde::de::DeserializeOwned,
+		K: DatabaseField + Ord,
+	{
+		let backend = Self::executor_backend(executor);
+		let reserved_binds = self.select_bind_count(backend, executor.is_cockroachdb())?;
+		let mut result = BTreeMap::new();
+		for keys in Self::bulk_key_batches(keys, backend, reserved_binds)? {
+			let rows = self
+				.clone()
+				.with_bulk_lookup_column(unique_field.name())
+				.filter(unique_field.is_in(keys))
+				.all_with_executor(executor)
+				.await?;
+			result.extend(
+				rows.into_iter()
+					.filter_map(|model| getter(&model).map(|key| (key, model))),
+			);
+		}
+		Ok(result)
+	}
+
 	/// Execute the queryset and return a single matching record
 	///
 	/// Returns an error if zero or multiple records are found.
@@ -7529,6 +8153,10 @@ where
 	where
 		T: serde::de::DeserializeOwned,
 	{
+		if self.empty_result {
+			return Ok(Vec::new());
+		}
+
 		let mut queryset = self.clone();
 		queryset.limit = Some(queryset.limit.map_or(2, |limit| limit.min(2)));
 		queryset.all_with_executor(executor).await
@@ -7572,6 +8200,12 @@ where
 		T: serde::de::DeserializeOwned,
 		E: OrmExecutor,
 	{
+		if self.empty_result {
+			return Err(reinhardt_core::exception::Error::NotFound(
+				"No record found matching the query".to_string(),
+			));
+		}
+
 		let results = self.all_with_db(conn).await?;
 		match results.len() {
 			0 => Err(reinhardt_core::exception::Error::NotFound(
@@ -7641,6 +8275,10 @@ where
 		T: serde::de::DeserializeOwned,
 		E: OrmExecutor,
 	{
+		if self.empty_result {
+			return Ok(None);
+		}
+
 		let mut results = self.all_with_db(conn).await?;
 		Ok(results.drain(..).next())
 	}
@@ -7851,6 +8489,10 @@ where
 	where
 		E: OrmExecutor,
 	{
+		if self.empty_result {
+			return Ok(false);
+		}
+
 		Ok(self.count_with_db(conn).await? > 0)
 	}
 
@@ -8445,6 +9087,11 @@ where
 		T: super::Model + Clone,
 		E: OrmExecutor,
 	{
+		if self.empty_result {
+			return Err(Error::NotFound(
+				"No record found matching the query".to_string(),
+			));
+		}
 		use reinhardt_query::prelude::{Alias, BinOper, ColumnRef, Expr, Value};
 
 		let composite_pk = Self::composite_primary_key_for_values(pk_values)?;
@@ -8868,10 +9515,6 @@ where
 			if let Some(cond) = self.build_where_condition()? {
 				stmt.cond_where(cond);
 			}
-			if self.empty_result {
-				stmt.and_where(Expr::val(false));
-			}
-
 			// Apply GROUP BY
 			for group_field in &self.group_by_fields {
 				stmt.group_by_col(self.root_column_reference(group_field));
@@ -9918,7 +10561,7 @@ mod tests {
 	use serde::{Deserialize, Serialize};
 	#[cfg(feature = "pgvector")]
 	use std::borrow::Cow;
-	use std::collections::HashMap;
+	use std::collections::{BTreeSet, HashMap};
 	#[cfg(feature = "pgvector")]
 	use std::fmt;
 	use std::pin::Pin;
@@ -10892,8 +11535,11 @@ mod tests {
 				.cosine_distance(typed_vector_target(&[1.0, 2.0, 3.0]))
 				.lt(0.25),
 		);
-		let assignment_field =
-			crate::orm::expressions::FieldRef::<TestUser, crate::orm::Vector<3>>::new("embedding");
+		let assignment_field = crate::orm::expressions::FieldRef::<
+			TestUser,
+			crate::orm::Vector<3>,
+			crate::orm::expressions::UnverifiedModelField,
+		>::new("embedding");
 		let mut executor = PgvectorUpdateErrorExecutor { code, message };
 
 		let error = queryset
@@ -10924,8 +11570,11 @@ mod tests {
 				.cosine_distance(typed_vector_target(&[1.0, 2.0, 3.0]))
 				.lt(0.25),
 		);
-		let assignment_field =
-			crate::orm::expressions::FieldRef::<TestUser, crate::orm::Vector<3>>::new("embedding");
+		let assignment_field = crate::orm::expressions::FieldRef::<
+			TestUser,
+			crate::orm::Vector<3>,
+			crate::orm::expressions::UnverifiedModelField,
+		>::new("embedding");
 
 		let (sql, params) = queryset
 			.update_fields_sql([(assignment_field, typed_vector_target(&[4.0, 5.0, 6.0]))])
@@ -11081,41 +11730,85 @@ mod tests {
 			}
 		}
 
-		const fn field_id() -> crate::orm::expressions::FieldRef<TestUser, i64> {
-			crate::orm::expressions::FieldRef::new("id")
+		const fn field_id() -> crate::orm::expressions::FieldRef<
+			TestUser,
+			i64,
+			crate::orm::expressions::GeneratedModelField,
+		> {
+			// SAFETY: this test accessor names TestUser's persisted `id` field.
+			unsafe { crate::orm::expressions::FieldRef::from_model_field("id") }
 		}
 
-		const fn field_username() -> crate::orm::expressions::FieldRef<TestUser, String> {
-			crate::orm::expressions::FieldRef::new("username")
+		const fn field_username() -> crate::orm::expressions::FieldRef<
+			TestUser,
+			String,
+			crate::orm::expressions::GeneratedModelField,
+		> {
+			// SAFETY: this test accessor names TestUser's persisted `username` field.
+			unsafe { crate::orm::expressions::FieldRef::from_model_field("username") }
 		}
 
-		const fn field_email() -> crate::orm::expressions::FieldRef<TestUser, String> {
-			crate::orm::expressions::FieldRef::new("email")
+		const fn field_email() -> crate::orm::expressions::FieldRef<
+			TestUser,
+			String,
+			crate::orm::expressions::GeneratedModelField,
+		> {
+			// SAFETY: this test accessor names TestUser's persisted `email` field.
+			unsafe { crate::orm::expressions::FieldRef::from_model_field("email") }
 		}
 
-		const fn field_full_name() -> crate::orm::expressions::FieldRef<TestUser, String> {
-			crate::orm::expressions::FieldRef::new("full_name")
+		const fn field_full_name() -> crate::orm::expressions::FieldRef<
+			TestUser,
+			String,
+			crate::orm::expressions::GeneratedModelField,
+		> {
+			// SAFETY: this test accessor names TestUser's persisted `full_name` field.
+			unsafe { crate::orm::expressions::FieldRef::from_model_field("full_name") }
 		}
 
-		const fn field_display_name() -> crate::orm::expressions::FieldRef<TestUser, String> {
-			crate::orm::expressions::FieldRef::new("display_name")
+		const fn field_display_name() -> crate::orm::expressions::FieldRef<
+			TestUser,
+			String,
+			crate::orm::expressions::GeneratedModelField,
+		> {
+			// SAFETY: this test accessor names TestUser's persisted `display_name` field.
+			unsafe { crate::orm::expressions::FieldRef::from_model_field("display_name") }
 		}
 
-		const fn field_created_at()
-		-> crate::orm::expressions::FieldRef<TestUser, chrono::DateTime<chrono::Utc>> {
-			crate::orm::expressions::FieldRef::new("created_at")
+		const fn field_created_at() -> crate::orm::expressions::FieldRef<
+			TestUser,
+			chrono::DateTime<chrono::Utc>,
+			crate::orm::expressions::GeneratedModelField,
+		> {
+			// SAFETY: this test accessor names TestUser's persisted `created_at` field.
+			unsafe { crate::orm::expressions::FieldRef::from_model_field("created_at") }
 		}
 
-		const fn field_tags() -> crate::orm::expressions::FieldRef<TestUser, Vec<String>> {
-			crate::orm::expressions::FieldRef::new("tags")
+		const fn field_tags() -> crate::orm::expressions::FieldRef<
+			TestUser,
+			Vec<String>,
+			crate::orm::expressions::GeneratedModelField,
+		> {
+			// SAFETY: this test accessor names TestUser's persisted `tags` field.
+			unsafe { crate::orm::expressions::FieldRef::from_model_field("tags") }
 		}
 
-		const fn field_metadata() -> crate::orm::expressions::FieldRef<TestUser, String> {
-			crate::orm::expressions::FieldRef::new("metadata")
+		const fn field_metadata() -> crate::orm::expressions::FieldRef<
+			TestUser,
+			String,
+			crate::orm::expressions::GeneratedModelField,
+		> {
+			// SAFETY: this test accessor names TestUser's persisted `metadata` field.
+			unsafe { crate::orm::expressions::FieldRef::from_model_field("metadata") }
 		}
 
-		const fn field_active_period() -> crate::orm::expressions::FieldRef<TestUser, String> {
-			crate::orm::expressions::FieldRef::new("active_period")
+		const fn field_active_period() -> crate::orm::expressions::FieldRef<
+			TestUser,
+			String,
+			crate::orm::expressions::GeneratedModelField,
+		> {
+			// SAFETY: this test accessor names TestUser's persisted `active_period` field.
+			unsafe { crate::orm::expressions::FieldRef::from_model_field("active_period") }
 		}
 	}
 
@@ -11291,13 +11984,22 @@ mod tests {
 	}
 
 	impl TestCorpusFile {
-		const fn field_normalized_path() -> crate::orm::expressions::FieldRef<TestCorpusFile, String>
-		{
-			crate::orm::expressions::FieldRef::new("normalized_path")
+		const fn field_normalized_path() -> crate::orm::expressions::FieldRef<
+			TestCorpusFile,
+			String,
+			crate::orm::expressions::GeneratedModelField,
+		> {
+			// SAFETY: this test accessor names TestCorpusFile's persisted `normalized_path` field.
+			unsafe { crate::orm::expressions::FieldRef::from_model_field("normalized_path") }
 		}
 
-		const fn field_email() -> crate::orm::expressions::FieldRef<TestCorpusFile, String> {
-			crate::orm::expressions::FieldRef::new("email")
+		const fn field_email() -> crate::orm::expressions::FieldRef<
+			TestCorpusFile,
+			String,
+			crate::orm::expressions::GeneratedModelField,
+		> {
+			// SAFETY: this test accessor names TestCorpusFile's persisted `email` field.
+			unsafe { crate::orm::expressions::FieldRef::from_model_field("email") }
 		}
 	}
 
@@ -11518,7 +12220,14 @@ mod tests {
 			TestUserCorpusFile,
 		>()
 		.then::<TestCorpusFileProject, TestProject>()
-		.field(crate::orm::expressions::FieldRef::<TestProject, String>::new("name"))
+		.field(unsafe {
+			// SAFETY: `name` is a persisted TestProject field in this query fixture.
+			crate::orm::expressions::FieldRef::<
+				TestProject,
+				String,
+				crate::orm::expressions::GeneratedModelField,
+			>::from_model_field("name")
+		})
 		.eq("reinhardt")
 	}
 
@@ -11639,6 +12348,42 @@ mod tests {
 				multiplicity: crate::orm::relations::RelationMultiplicity::Multiple,
 			}]
 		}
+	}
+
+	#[test]
+	fn bulk_key_batches_split_sqlite_keys_without_reordering() {
+		// Arrange
+		let keys = (0_i64..901).collect::<BTreeSet<_>>();
+
+		// Act
+		let batches = QuerySet::<TestUser>::bulk_key_batches(keys, DatabaseBackend::Sqlite, 0)
+			.expect("SQLite should have bind slots available");
+
+		// Assert
+		assert_eq!(batches.len(), 2);
+		assert_eq!(batches[0], (0_i64..900).collect::<Vec<_>>());
+		assert_eq!(batches[1], vec![900]);
+	}
+
+	#[rstest]
+	#[case(DatabaseBackend::Postgres)]
+	#[case(DatabaseBackend::MySql)]
+	fn bulk_key_batches_reject_exhausted_server_bind_limit(#[case] backend: DatabaseBackend) {
+		// Arrange
+		let keys = BTreeSet::from([1_i64]);
+
+		// Act
+		let error = QuerySet::<TestUser>::bulk_key_batches(keys, backend, 65_535)
+			.expect_err("an exhausted bind budget should reject bulk retrieval");
+
+		// Assert
+		let reinhardt_core::exception::Error::Validation(message) = error else {
+			panic!("expected validation error, got {error:?}");
+		};
+		assert_eq!(
+			message,
+			"QuerySet bulk retrieval cannot add lookup keys because the source query uses all 65535 available bind parameters"
+		);
 	}
 
 	#[test]
@@ -12200,6 +12945,23 @@ mod tests {
 	}
 
 	#[test]
+	fn select_related_qualifies_root_ordering_columns() {
+		// Arrange
+		let mut queryset = QuerySet::<TestUser>::new().select_related(&["profile"]);
+		queryset.order_by_fields.push("id".to_string());
+
+		// Act
+		let statement = queryset
+			.select_related_query()
+			.expect("select-related query should compile");
+		use reinhardt_query::prelude::{PostgresQueryBuilder, QueryStatementBuilder};
+		let sql = statement.build(PostgresQueryBuilder).0;
+
+		// Assert
+		assert!(sql.contains("ORDER BY \"test_users\".\"id\" ASC"));
+	}
+
+	#[test]
 	fn select_related_to_sql_includes_each_annotation_once() {
 		use crate::orm::annotation::{Annotation, AnnotationValue, Value};
 
@@ -12348,7 +13110,14 @@ mod tests {
 				TestUserCorpusFile,
 			>()
 			.then::<TestCorpusFileProject, TestProject>()
-			.field(crate::orm::expressions::FieldRef::<TestProject, String>::new("name"))
+			.field(unsafe {
+				// SAFETY: `name` is a persisted TestProject field in this query fixture.
+				crate::orm::expressions::FieldRef::<
+					TestProject,
+					String,
+					crate::orm::expressions::GeneratedModelField,
+				>::from_model_field("name")
+			})
 			.eq("reinhardt");
 
 		let sql = QuerySet::<TestUser>::new()
@@ -12451,14 +13220,20 @@ mod tests {
 
 	#[test]
 	fn test_aliasless_manual_joins_rebase_typed_filter_aliases() {
-		let make_filter =
-			|| {
-				crate::orm::relations::RelationPath::<TestProjects, TestProjects>::from_descriptor::<
+		let make_filter = || {
+			crate::orm::relations::RelationPath::<TestProjects, TestProjects>::from_descriptor::<
 				TestProjectsChildren,
 			>()
-			.field(crate::orm::expressions::FieldRef::<TestProjects, i64>::new("id"))
+			.field(unsafe {
+				// SAFETY: `id` is a persisted TestProjects field in this query fixture.
+				crate::orm::expressions::FieldRef::<
+					TestProjects,
+					i64,
+					crate::orm::expressions::GeneratedModelField,
+				>::from_model_field("id")
+			})
 			.eq(1)
-			};
+		};
 
 		let sql = QuerySet::<TestProjects>::new()
 			.filter(make_filter())
@@ -12538,6 +13313,45 @@ mod tests {
 			statement.to_string(PostgresQueryBuilder),
 			r#"SELECT DISTINCT DATE_TRUNC('day', "test_users"."created_at")::date AS "value" FROM "test_users" INNER JOIN "test_projects" ON test_users.id = test_projects.user_id WHERE "test_users"."created_at" = '2026-01-01' AND "test_users"."created_at" IS NOT NULL ORDER BY "value" ASC"#
 		);
+	}
+
+	#[test]
+	fn test_manual_join_qualifies_root_ordering_columns() {
+		let sql = QuerySet::<TestUser>::new()
+			.inner_join_on::<TestProject>("test_users.id = test_projects.user_id")
+			.order_by(&["id"])
+			.to_sql()
+			.expect("query SQL should compile");
+
+		assert!(sql.contains(r#"ORDER BY "test_users"."id" ASC"#));
+	}
+
+	#[test]
+	fn test_manual_join_preserves_annotation_ordering_aliases() {
+		let sql = QuerySet::<TestUser>::new()
+			.annotate(crate::orm::annotation::Annotation::new(
+				"other_age",
+				crate::orm::annotation::AnnotationValue::Value(crate::orm::annotation::Value::Int(
+					42,
+				)),
+			))
+			.inner_join_on::<TestProject>("test_users.id = test_projects.user_id")
+			.order_by(&["other_age"])
+			.to_sql()
+			.expect("query SQL should compile");
+
+		assert_eq!(
+			sql,
+			r#"SELECT *, 42 AS "other_age" FROM "test_users" INNER JOIN "test_projects" ON test_users.id = test_projects.user_id ORDER BY "other_age" ASC"#
+		);
+	}
+
+	#[test]
+	fn test_bulk_lookup_restores_deferred_logical_name_for_custom_column() {
+		let queryset = QuerySet::<TestCorpusFile>::new().defer(&["email"]);
+		let queryset = queryset.with_bulk_lookup_column("email_addr");
+
+		assert!(queryset.deferred_fields.is_empty());
 	}
 
 	#[test]
@@ -13385,7 +14199,14 @@ mod tests {
 			crate::orm::relations::RelationPath::<TestUser, TestProject>::from_descriptor::<
 				TestUserProjects,
 			>()
-			.field(crate::orm::expressions::FieldRef::<TestProject, String>::new("name"))
+			.field(unsafe {
+				// SAFETY: `name` is a persisted TestProject field in this query fixture.
+				crate::orm::expressions::FieldRef::<
+					TestProject,
+					String,
+					crate::orm::expressions::GeneratedModelField,
+				>::from_model_field("name")
+			})
 			.icontains("rust");
 
 		let sql = QuerySet::<TestUser>::new()
@@ -13405,7 +14226,14 @@ mod tests {
 			crate::orm::relations::RelationPath::<TestMembership, TestProject>::from_descriptor::<
 				TestMembershipProjects,
 			>()
-			.field(crate::orm::expressions::FieldRef::<TestProject, String>::new("name"))
+			.field(unsafe {
+				// SAFETY: `name` is a persisted TestProject field in this query fixture.
+				crate::orm::expressions::FieldRef::<
+					TestProject,
+					String,
+					crate::orm::expressions::GeneratedModelField,
+				>::from_model_field("name")
+			})
 			.icontains("rust");
 
 		let sql = QuerySet::<TestMembership>::new()

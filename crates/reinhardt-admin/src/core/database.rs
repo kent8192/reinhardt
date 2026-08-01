@@ -2105,9 +2105,13 @@ mod tests {
 	#[test]
 	fn test_build_single_filter_expr_uses_transformed_filter_lhs() {
 		// Arrange
-		let filter = reinhardt_db::orm::expressions::FieldRef::<(), i64>::new("created_at")
-			.year()
-			.range(2024, 2026);
+		let filter = reinhardt_db::orm::expressions::FieldRef::<
+			(),
+			i64,
+			reinhardt_db::orm::expressions::UnverifiedModelField,
+		>::new("created_at")
+		.year()
+		.range(2024, 2026);
 
 		// Act
 		let result = build_single_filter_expr(&filter).expect("filter should compile");

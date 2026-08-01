@@ -115,6 +115,34 @@ pub(crate) fn model_attribute_impl(
 		})
 	}
 
+	fn relation_db_column(attrs: &[Attribute]) -> Option<syn::LitStr> {
+		attrs.iter().find_map(|attr| {
+			if !attr.path().is_ident("rel") {
+				return None;
+			}
+			let syn::Meta::List(meta_list) = &attr.meta else {
+				return None;
+			};
+			let values = meta_list
+				.parse_args_with(
+					syn::punctuated::Punctuated::<syn::Meta, syn::Token![,]>::parse_terminated,
+				)
+				.ok()?;
+			values.into_iter().find_map(|value| match value {
+				syn::Meta::NameValue(name_value) if name_value.path.is_ident("db_column") => {
+					match name_value.value {
+						syn::Expr::Lit(syn::ExprLit {
+							lit: syn::Lit::Str(value),
+							..
+						}) => Some(value),
+						_ => None,
+					}
+				}
+				_ => None,
+			})
+		})
+	}
+
 	// Collect existing field names to avoid duplicates
 	let existing_field_names: std::collections::HashSet<String> =
 		if let syn::Fields::Named(ref fields) = input.fields {
@@ -162,6 +190,7 @@ pub(crate) fn model_attribute_impl(
 				&& let Some(target_ty) = extract_fk_target_type(&field.ty)
 			{
 				let id_field_name_str = format!("{}_id", field_name);
+				let db_column = relation_db_column(&field.attrs);
 
 				// Only add if not already defined by user OR already generated
 				if !existing_field_names.contains(&id_field_name_str)
@@ -172,16 +201,21 @@ pub(crate) fn model_attribute_impl(
 					// Generate _id field with the target model's primary-key type.
 					// `InfoModel` is target-neutral, so generated DTO companions can
 					// compile on WASM without the native ORM surface.
+					let db_column_attr = db_column.map(|column| {
+						quote! { #[field(db_column = #column)] }
+					});
 					let new_field: Field = if model_forms_enabled
 						&& relation_is_nullable(&field.attrs)
 					{
 						syn::parse_quote! {
 							#[serde(default)]
+							#db_column_attr
 							#id_field_name: ::core::option::Option<<#target_ty as #reinhardt::model_info::InfoModel>::PrimaryKey>
 						}
 					} else {
 						syn::parse_quote! {
 							#[serde(default)]
+							#db_column_attr
 							#id_field_name: <#target_ty as #reinhardt::model_info::InfoModel>::PrimaryKey
 						}
 					};
@@ -266,7 +300,8 @@ pub(crate) fn model_attribute_impl(
 		}
 	};
 
-	// Create a #[model_config(...)] helper attribute with the arguments
+	// Create a #[model_config(...)] helper attribute with the original arguments.
+	// `get_latest_by` is resolved against the generated model fields by the derive macro.
 	// Using model_config instead of model to avoid name collision with the attribute macro
 	let config_attr: Attribute = if args.is_empty() && serde_flags.is_empty() {
 		syn::parse_quote! { #[model_config] }

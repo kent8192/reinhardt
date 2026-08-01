@@ -12,6 +12,12 @@
 //! records the SQL joins required by the filter, so application code does not
 //! need raw join builders for common FK, reverse, or M2M lookups.
 //!
+//! QuerySet retrieval keeps the same generated-field guarantees:
+//! `latest_by`/`earliest_by` accept [`OrderingField`] values, while
+//! unique-field bulk retrieval accepts [`UniqueFieldRef`]. Bulk results use a
+//! deterministically ordered `BTreeMap`; [`query::QuerySet::none`] and empty
+//! bulk inputs remain lazy and do not resolve or call an executor.
+//!
 //! [`QuerySet::dates`] and [`QuerySet::datetimes`] accept generated typed field
 //! references. They exclude nulls and perform truncation, distinct projection,
 //! and ordering in the database. Named-zone conversion is supported by
@@ -215,7 +221,9 @@ pub use connection::{
 pub use constraints::{
 	CheckConstraint, Constraint, ForeignKeyConstraint, OnDelete, OnUpdate, UniqueConstraint,
 };
-pub use expressions::{Exists, F, FieldRef, OuterRef, Q, QOperator, Subquery, UniqueFieldRef};
+pub use expressions::{
+	Exists, F, FieldRef, OrderingField, OuterRef, Q, QOperator, Subquery, UniqueFieldRef,
+};
 pub use functions::{
 	Abs, Cast, Ceil, Concat, CurrentDate, CurrentTime, Extract, ExtractComponent, Floor, Greatest,
 	Least, Length, Lower, Mod, Now, NullIf, Power, Round, SqlType, Sqrt, Substr, Trim, TrimType,

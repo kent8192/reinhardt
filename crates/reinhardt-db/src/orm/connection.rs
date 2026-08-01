@@ -17,7 +17,8 @@ use super::transaction::AtomicTransaction;
 pub use crate::backends::connection::DatabaseConnection as BackendsConnection;
 use crate::backends::types::DatabaseType;
 pub use crate::backends::types::{
-	IsolationLevel, QueryResult, QueryValue, Row, RowStream, TransactionExecutor,
+	IsolationLevel, QueryResult, QueryValue, Row, RowLockCapabilities, RowStream,
+	TransactionExecutor,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]

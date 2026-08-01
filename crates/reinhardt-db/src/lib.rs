@@ -42,6 +42,7 @@
 //!   binary base64 values, SQL/JSON null provenance, foreign key, many-to-many,
 //!   nullable foreign-key omission, and PostgreSQL sequence handling
 //! - **Typed Relation Traversal**: Compile-time checked relation paths for SELECT filters and eager loading
+//! - **Transaction-safe Row Locking**: Typed `select_for_update` targets and caller-owned transaction execution
 //! - **Scoped N+1 Detection**: Opt-in query shape detection for focused diagnostics and tests
 //!
 //! ### Migrations (`migrations` module)

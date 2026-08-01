@@ -9,8 +9,8 @@ use crate::{
 		DeleteStatement, InsertSource, InsertStatement, SelectStatement, UpdateStatement,
 	},
 	types::{
-		ColumnDef, ColumnType, OrderExpr, OrderExprKind, SchemaExpr, TableConstraint, TableRef,
-		WindowStatement,
+		ColumnDef, ColumnType, JoinType, OrderExpr, OrderExprKind, SchemaExpr, TableConstraint,
+		TableRef, WindowStatement,
 	},
 	value::Value,
 };
@@ -183,6 +183,527 @@ pub(crate) fn validate_select_for_backend(
 	Ok(())
 }
 
+pub(crate) fn validate_select_lock_for_backend(
+	statement: &SelectStatement,
+	backend: &'static str,
+) -> Result<(), QueryBuildError> {
+	validate_select_lock_for_backend_with_union_context(statement, backend, &[], false, false)
+}
+
+fn validate_select_lock_for_backend_with_union_context(
+	statement: &SelectStatement,
+	backend: &'static str,
+	visible_cte_names: &[String],
+	in_union_arm: bool,
+	inherited_lock: bool,
+) -> Result<(), QueryBuildError> {
+	let mut visible_cte_names = visible_cte_names.to_vec();
+	for cte in &statement.ctes {
+		validate_select_lock_for_backend_with_union_context(
+			&cte.query,
+			backend,
+			&visible_cte_names,
+			false,
+			false,
+		)?;
+		visible_cte_names.push(cte.name.to_string());
+	}
+	let lock_applies_to_derived = backend == "PostgreSQL"
+		&& (inherited_lock
+			|| statement
+				.lock
+				.as_ref()
+				.is_some_and(|lock| lock.tables.is_empty()));
+	for select in &statement.selects {
+		validate_simple_expr_lock(&select.expr, backend, &visible_cte_names)?;
+	}
+	for table in &statement.from {
+		validate_table_ref_lock(table, backend, &visible_cte_names, lock_applies_to_derived)?;
+	}
+	for join in &statement.join {
+		validate_table_ref_lock(
+			&join.table,
+			backend,
+			&visible_cte_names,
+			lock_applies_to_derived,
+		)?;
+		if let Some(crate::types::JoinOn::Condition(condition)) = &join.on {
+			validate_condition_lock(condition, backend, &visible_cte_names)?;
+		}
+	}
+	validate_condition_holder_lock(&statement.r#where, backend, &visible_cte_names)?;
+	for group in &statement.groups {
+		validate_simple_expr_lock(group, backend, &visible_cte_names)?;
+	}
+	validate_condition_holder_lock(&statement.having, backend, &visible_cte_names)?;
+	for (_, union) in &statement.unions {
+		validate_select_lock_for_backend_with_union_context(
+			union,
+			backend,
+			&visible_cte_names,
+			true,
+			false,
+		)?;
+	}
+	for order in &statement.orders {
+		if let OrderExprKind::Expr(expr) = &order.expr {
+			validate_simple_expr_lock(expr, backend, &visible_cte_names)?;
+		}
+	}
+	for (_, window) in &statement.windows {
+		validate_window_lock(window, backend, &visible_cte_names)?;
+	}
+
+	let lock = statement.lock.as_ref();
+	if lock.is_none() && !inherited_lock {
+		return Ok(());
+	}
+
+	match backend {
+		"PostgreSQL" => {
+			let lock_tables = lock.map_or(&[][..], |lock| lock.tables.as_slice());
+			if in_union_arm || !statement.unions.is_empty() {
+				return Err(unsupported("row locking on UNION queries", backend));
+			}
+			if statement_lock_targets_cte(statement, lock_tables, &visible_cte_names) {
+				return Err(unsupported("row locking on CTE-backed queries", backend));
+			}
+			if statement.distinct.is_some() {
+				return Err(unsupported("row locking with DISTINCT queries", backend));
+			}
+			if !statement.groups.is_empty() || !statement.having.conditions.is_empty() {
+				return Err(unsupported(
+					"row locking with GROUP BY or HAVING queries",
+					backend,
+				));
+			}
+			if statement
+				.selects
+				.iter()
+				.any(|select| contains_aggregate(&select.expr))
+				|| statement.orders.iter().any(
+					|order| matches!(&order.expr, OrderExprKind::Expr(expr) if contains_aggregate(expr)),
+				) {
+				return Err(unsupported("row locking with aggregate queries", backend));
+			}
+			if statement
+				.selects
+				.iter()
+				.any(|select| contains_window(&select.expr))
+				|| statement.orders.iter().any(
+					|order| matches!(&order.expr, OrderExprKind::Expr(expr) if contains_window(expr)),
+				) {
+				return Err(unsupported(
+					"row locking with window-function queries",
+					backend,
+				));
+			}
+			if (inherited_lock || lock.is_some_and(|lock| lock.tables.is_empty()))
+				&& statement.join.iter().any(|join| {
+					matches!(
+						join.join,
+						JoinType::LeftJoin | JoinType::RightJoin | JoinType::FullOuterJoin
+					)
+				}) {
+				return Err(unsupported(
+					"row locking across outer joins without explicit targets",
+					backend,
+				));
+			}
+			if let Some(lock) = lock {
+				validate_lock_tables_belong_to_statement(
+					statement,
+					lock.tables.as_slice(),
+					backend,
+				)?;
+				validate_lock_tables_are_not_nullable(statement, lock.tables.as_slice(), backend)?;
+			}
+			Ok(())
+		}
+		"MySQL" => {
+			let Some(lock) = lock else {
+				return Ok(());
+			};
+			if in_union_arm || !statement.unions.is_empty() {
+				return Err(unsupported("row locking on UNION queries", backend));
+			}
+			if matches!(
+				lock.r#type,
+				crate::query::LockType::NoKeyUpdate | crate::query::LockType::KeyShare
+			) {
+				return Err(unsupported("the requested row lock strength", backend));
+			}
+			validate_lock_tables_belong_to_statement(statement, lock.tables.as_slice(), backend)?;
+			Ok(())
+		}
+		"SQLite" => Err(unsupported("row locking", backend)),
+		"CockroachDB" => {
+			let Some(lock) = lock else {
+				return Ok(());
+			};
+			if matches!(lock.r#type, crate::query::LockType::NoKeyUpdate) {
+				return Err(unsupported("the requested row lock strength", backend));
+			}
+			if matches!(lock.behavior, Some(crate::query::LockBehavior::SkipLocked)) {
+				return Err(unsupported("SKIP LOCKED row locking", backend));
+			}
+			if lock.tables.is_empty() {
+				Ok(())
+			} else {
+				Err(unsupported("row lock table targets", backend))
+			}
+		}
+		_ => Ok(()),
+	}
+}
+
+fn statement_lock_targets_cte(
+	statement: &SelectStatement,
+	targets: &[TableRef],
+	visible_cte_names: &[String],
+) -> bool {
+	let cte_relations = statement
+		.from
+		.iter()
+		.chain(statement.join.iter().map(|join| &join.table))
+		.filter(|table| table_ref_references_cte(table, visible_cte_names))
+		.collect::<Vec<_>>();
+	if cte_relations.is_empty() {
+		return false;
+	}
+	if targets.is_empty() {
+		return true;
+	}
+	targets.iter().flat_map(table_ref_lock_names).any(|target| {
+		cte_relations.iter().any(|cte_relation| {
+			table_ref_lock_names(cte_relation)
+				.iter()
+				.any(|cte_name| cte_name == &target)
+		})
+	})
+}
+
+fn table_ref_references_cte(table: &TableRef, cte_names: &[String]) -> bool {
+	let source_name = match table {
+		TableRef::Table(name) | TableRef::TableAlias(name, _) => name.to_string(),
+		TableRef::SchemaTable(_, _)
+		| TableRef::DatabaseSchemaTable(_, _, _)
+		| TableRef::SchemaTableAlias(_, _, _)
+		| TableRef::SubQuery(_, _) => return false,
+	};
+	cte_names.iter().any(|cte_name| cte_name == &source_name)
+}
+
+fn contains_aggregate(expr: &SimpleExpr) -> bool {
+	match expr {
+		SimpleExpr::FunctionCall(name, arguments) => {
+			matches!(
+				name.to_string().to_ascii_uppercase().as_str(),
+				"COUNT"
+					| "SUM" | "AVG" | "MIN"
+					| "MAX" | "ARRAY_AGG"
+					| "JSON_AGG" | "JSONB_AGG"
+					| "STRING_AGG" | "BOOL_AND"
+					| "BOOL_OR" | "EVERY"
+					| "XMLAGG"
+			) || arguments.iter().any(contains_aggregate)
+		}
+		SimpleExpr::Unary(_, expression)
+		| SimpleExpr::AsEnum(_, expression)
+		| SimpleExpr::ExprAlias(expression, _)
+		| SimpleExpr::Cast(expression, _)
+		| SimpleExpr::TemporalTrunc {
+			expr: expression, ..
+		} => contains_aggregate(expression),
+		SimpleExpr::Binary(left, _, right) => contains_aggregate(left) || contains_aggregate(right),
+		SimpleExpr::Tuple(expressions) | SimpleExpr::CustomWithExpr(_, expressions) => {
+			expressions.iter().any(contains_aggregate)
+		}
+		SimpleExpr::Case(case) => {
+			case.when_clauses.iter().any(|(condition, result)| {
+				contains_aggregate(condition) || contains_aggregate(result)
+			}) || case.else_clause.as_ref().is_some_and(contains_aggregate)
+		}
+		SimpleExpr::Window { func, window } => {
+			contains_aggregate(func)
+				|| window.partition_by.iter().any(contains_aggregate)
+				|| window.order_by.iter().any(
+					|order| matches!(&order.expr, OrderExprKind::Expr(expr) if contains_aggregate(expr)),
+				)
+		}
+		SimpleExpr::WindowNamed { func, .. } => contains_aggregate(func),
+		SimpleExpr::Column(_)
+		| SimpleExpr::TableColumn(_, _)
+		| SimpleExpr::Value(_)
+		| SimpleExpr::Custom(_)
+		| SimpleExpr::Constant(_)
+		| SimpleExpr::Asterisk
+		| SimpleExpr::SubQuery(_, _) => false,
+	}
+}
+
+fn contains_window(expr: &SimpleExpr) -> bool {
+	match expr {
+		SimpleExpr::Window { .. } | SimpleExpr::WindowNamed { .. } => true,
+		SimpleExpr::Unary(_, expression)
+		| SimpleExpr::AsEnum(_, expression)
+		| SimpleExpr::ExprAlias(expression, _)
+		| SimpleExpr::Cast(expression, _)
+		| SimpleExpr::TemporalTrunc {
+			expr: expression, ..
+		} => contains_window(expression),
+		SimpleExpr::Binary(left, _, right) => contains_window(left) || contains_window(right),
+		SimpleExpr::FunctionCall(_, arguments)
+		| SimpleExpr::Tuple(arguments)
+		| SimpleExpr::CustomWithExpr(_, arguments) => arguments.iter().any(contains_window),
+		SimpleExpr::Case(case) => {
+			case.when_clauses
+				.iter()
+				.any(|(condition, result)| contains_window(condition) || contains_window(result))
+				|| case.else_clause.as_ref().is_some_and(contains_window)
+		}
+		SimpleExpr::Column(_)
+		| SimpleExpr::TableColumn(_, _)
+		| SimpleExpr::Value(_)
+		| SimpleExpr::Custom(_)
+		| SimpleExpr::Constant(_)
+		| SimpleExpr::Asterisk
+		| SimpleExpr::SubQuery(_, _) => false,
+	}
+}
+
+fn validate_lock_tables_belong_to_statement(
+	statement: &SelectStatement,
+	targets: &[TableRef],
+	backend: &'static str,
+) -> Result<(), QueryBuildError> {
+	let mut relations = Vec::with_capacity(statement.from.len() + statement.join.len());
+	for table in &statement.from {
+		relations.extend(
+			table_ref_lock_names(table)
+				.into_iter()
+				.map(|name| (name, table_ref_is_derived(table))),
+		);
+	}
+	for join in &statement.join {
+		relations.extend(
+			table_ref_lock_names(&join.table)
+				.into_iter()
+				.map(|name| (name, table_ref_is_derived(&join.table))),
+		);
+	}
+	for target in targets {
+		if table_ref_is_derived(target)
+			|| !table_ref_lock_names(target).iter().any(|target_name| {
+				relations
+					.iter()
+					.any(|(relation, derived)| relation == target_name && !derived)
+			}) {
+			return Err(unsupported(
+				"row lock target absent from the query",
+				backend,
+			));
+		}
+	}
+	Ok(())
+}
+
+fn validate_lock_tables_are_not_nullable(
+	statement: &SelectStatement,
+	targets: &[TableRef],
+	backend: &'static str,
+) -> Result<(), QueryBuildError> {
+	let mut relations = Vec::new();
+	for table in &statement.from {
+		relations.extend(table_ref_lock_names(table));
+	}
+	let mut nullable_relations = Vec::new();
+	for join in &statement.join {
+		let joined_relations = table_ref_lock_names(&join.table);
+		match join.join {
+			JoinType::LeftJoin => nullable_relations.extend(joined_relations.iter().cloned()),
+			JoinType::RightJoin => nullable_relations.extend(relations.iter().cloned()),
+			JoinType::FullOuterJoin => {
+				nullable_relations.extend(relations.iter().cloned());
+				nullable_relations.extend(joined_relations.iter().cloned());
+			}
+			JoinType::Join | JoinType::InnerJoin | JoinType::CrossJoin => {}
+		}
+		relations.extend(joined_relations);
+	}
+	if targets.iter().flat_map(table_ref_lock_names).any(|target| {
+		nullable_relations
+			.iter()
+			.any(|nullable_relation| nullable_relation == &target)
+	}) {
+		return Err(unsupported(
+			"row lock target on nullable outer-join side",
+			backend,
+		));
+	}
+	Ok(())
+}
+
+fn table_ref_lock_names(table: &TableRef) -> Vec<String> {
+	match table {
+		TableRef::Table(table) => vec![table.to_string()],
+		TableRef::SchemaTable(schema, table) => {
+			vec![
+				format!("{}.{}", schema.to_string(), table.to_string()),
+				table.to_string(),
+			]
+		}
+		TableRef::DatabaseSchemaTable(database, schema, table) => {
+			vec![format!(
+				"{}.{}.{}",
+				database.to_string(),
+				schema.to_string(),
+				table.to_string()
+			)]
+		}
+		TableRef::TableAlias(_, alias)
+		| TableRef::SchemaTableAlias(_, _, alias)
+		| TableRef::SubQuery(_, alias) => vec![alias.to_string()],
+	}
+}
+
+fn table_ref_is_derived(table: &TableRef) -> bool {
+	matches!(table, TableRef::SubQuery(_, _))
+}
+
+fn validate_condition_holder_lock(
+	holder: &ConditionHolder,
+	backend: &'static str,
+	visible_cte_names: &[String],
+) -> Result<(), QueryBuildError> {
+	for condition in &holder.conditions {
+		validate_condition_expression_lock(condition, backend, visible_cte_names)?;
+	}
+	Ok(())
+}
+
+fn validate_condition_lock(
+	condition: &Condition,
+	backend: &'static str,
+	visible_cte_names: &[String],
+) -> Result<(), QueryBuildError> {
+	for expression in &condition.conditions {
+		validate_condition_expression_lock(expression, backend, visible_cte_names)?;
+	}
+	Ok(())
+}
+
+fn validate_condition_expression_lock(
+	expression: &ConditionExpression,
+	backend: &'static str,
+	visible_cte_names: &[String],
+) -> Result<(), QueryBuildError> {
+	match expression {
+		ConditionExpression::SimpleExpr(expr) => {
+			validate_simple_expr_lock(expr, backend, visible_cte_names)
+		}
+		ConditionExpression::Condition(condition) => {
+			validate_condition_lock(condition, backend, visible_cte_names)
+		}
+	}
+}
+
+fn validate_simple_expr_lock(
+	expr: &SimpleExpr,
+	backend: &'static str,
+	visible_cte_names: &[String],
+) -> Result<(), QueryBuildError> {
+	match expr {
+		SimpleExpr::Column(_)
+		| SimpleExpr::TableColumn(_, _)
+		| SimpleExpr::Value(_)
+		| SimpleExpr::Custom(_)
+		| SimpleExpr::Constant(_)
+		| SimpleExpr::Asterisk => Ok(()),
+		SimpleExpr::Unary(_, expression)
+		| SimpleExpr::AsEnum(_, expression)
+		| SimpleExpr::ExprAlias(expression, _)
+		| SimpleExpr::Cast(expression, _)
+		| SimpleExpr::TemporalTrunc {
+			expr: expression, ..
+		} => validate_simple_expr_lock(expression, backend, visible_cte_names),
+		SimpleExpr::Binary(left, _, right) => {
+			validate_simple_expr_lock(left, backend, visible_cte_names)?;
+			validate_simple_expr_lock(right, backend, visible_cte_names)
+		}
+		SimpleExpr::FunctionCall(_, args) | SimpleExpr::Tuple(args) => {
+			for arg in args {
+				validate_simple_expr_lock(arg, backend, visible_cte_names)?;
+			}
+			Ok(())
+		}
+		SimpleExpr::SubQuery(_, query) => validate_select_lock_for_backend_with_union_context(
+			query,
+			backend,
+			visible_cte_names,
+			false,
+			false,
+		),
+		SimpleExpr::CustomWithExpr(_, expressions) => {
+			for expression in expressions {
+				validate_simple_expr_lock(expression, backend, visible_cte_names)?;
+			}
+			Ok(())
+		}
+		SimpleExpr::Case(case) => {
+			for (condition, result) in &case.when_clauses {
+				validate_simple_expr_lock(condition, backend, visible_cte_names)?;
+				validate_simple_expr_lock(result, backend, visible_cte_names)?;
+			}
+			if let Some(result) = &case.else_clause {
+				validate_simple_expr_lock(result, backend, visible_cte_names)?;
+			}
+			Ok(())
+		}
+		SimpleExpr::Window { func, window } => {
+			validate_simple_expr_lock(func, backend, visible_cte_names)?;
+			validate_window_lock(window, backend, visible_cte_names)
+		}
+		SimpleExpr::WindowNamed { func, .. } => {
+			validate_simple_expr_lock(func, backend, visible_cte_names)
+		}
+	}
+}
+
+fn validate_table_ref_lock(
+	table: &TableRef,
+	backend: &'static str,
+	visible_cte_names: &[String],
+	inherited_lock: bool,
+) -> Result<(), QueryBuildError> {
+	if let TableRef::SubQuery(query, _) = table {
+		validate_select_lock_for_backend_with_union_context(
+			query,
+			backend,
+			visible_cte_names,
+			false,
+			inherited_lock,
+		)?;
+	}
+	Ok(())
+}
+
+fn validate_window_lock(
+	window: &WindowStatement,
+	backend: &'static str,
+	visible_cte_names: &[String],
+) -> Result<(), QueryBuildError> {
+	for partition in &window.partition_by {
+		validate_simple_expr_lock(partition, backend, visible_cte_names)?;
+	}
+	for order in &window.order_by {
+		if let OrderExprKind::Expr(expr) = &order.expr {
+			validate_simple_expr_lock(expr, backend, visible_cte_names)?;
+		}
+	}
+	Ok(())
+}
+
 pub(crate) fn validate_create_table_for_backend(
 	statement: &CreateTableStatement,
 	backend: &'static str,
@@ -231,9 +752,28 @@ pub(crate) fn validate_insert_for_backend(
 		}
 		InsertSource::Subquery(query) => validate_select_for_backend(query, backend)?,
 	}
+	if let InsertSource::Subquery(query) = &statement.source {
+		validate_select_lock_for_backend(query, backend)?;
+	}
 	if let Some(expressions) = &statement.returning_exprs {
 		for expression in expressions {
 			validate_simple_expr(expression, backend)?;
+			validate_simple_expr_lock(expression, backend, &[])?;
+		}
+	}
+	Ok(())
+}
+
+pub(crate) fn validate_insert_lock_for_backend(
+	statement: &InsertStatement,
+	backend: &'static str,
+) -> Result<(), QueryBuildError> {
+	if let InsertSource::Subquery(query) = &statement.source {
+		validate_select_lock_for_backend(query, backend)?;
+	}
+	if let Some(expressions) = &statement.returning_exprs {
+		for expression in expressions {
+			validate_simple_expr_lock(expression, backend, &[])?;
 		}
 	}
 	Ok(())
@@ -248,11 +788,33 @@ pub(crate) fn validate_update_for_backend(
 	}
 	for (_, expression) in &statement.values {
 		validate_simple_expr(expression, backend)?;
+		validate_simple_expr_lock(expression, backend, &[])?;
 	}
 	validate_condition_holder(&statement.r#where, backend)?;
+	validate_condition_holder_lock(&statement.r#where, backend, &[])?;
 	if let Some(expressions) = &statement.returning_exprs {
 		for expression in expressions {
 			validate_simple_expr(expression, backend)?;
+			validate_simple_expr_lock(expression, backend, &[])?;
+		}
+	}
+	Ok(())
+}
+
+pub(crate) fn validate_update_lock_for_backend(
+	statement: &UpdateStatement,
+	backend: &'static str,
+) -> Result<(), QueryBuildError> {
+	if let Some(table) = &statement.table {
+		validate_table_ref_lock(table, backend, &[], false)?;
+	}
+	for (_, expression) in &statement.values {
+		validate_simple_expr_lock(expression, backend, &[])?;
+	}
+	validate_condition_holder_lock(&statement.r#where, backend, &[])?;
+	if let Some(expressions) = &statement.returning_exprs {
+		for expression in expressions {
+			validate_simple_expr_lock(expression, backend, &[])?;
 		}
 	}
 	Ok(())
@@ -266,9 +828,27 @@ pub(crate) fn validate_delete_for_backend(
 		validate_table_ref(table, backend)?;
 	}
 	validate_condition_holder(&statement.r#where, backend)?;
+	validate_condition_holder_lock(&statement.r#where, backend, &[])?;
 	if let Some(expressions) = &statement.returning_exprs {
 		for expression in expressions {
 			validate_simple_expr(expression, backend)?;
+			validate_simple_expr_lock(expression, backend, &[])?;
+		}
+	}
+	Ok(())
+}
+
+pub(crate) fn validate_delete_lock_for_backend(
+	statement: &DeleteStatement,
+	backend: &'static str,
+) -> Result<(), QueryBuildError> {
+	if let Some(table) = &statement.table {
+		validate_table_ref_lock(table, backend, &[], false)?;
+	}
+	validate_condition_holder_lock(&statement.r#where, backend, &[])?;
+	if let Some(expressions) = &statement.returning_exprs {
+		for expression in expressions {
+			validate_simple_expr_lock(expression, backend, &[])?;
 		}
 	}
 	Ok(())

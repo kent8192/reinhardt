@@ -18,9 +18,10 @@ use futures::{Stream, StreamExt};
 use reinhardt_core::exception::{DatabaseError, DatabaseErrorKind, Error};
 use reinhardt_query::prelude::{
 	Alias, BinOper, CockroachDBQueryBuilder, ColumnRef, Condition, Expr, ExprTrait, Func,
-	JoinType as SeaJoinType, MySqlQueryBuilder, Order, PostgresQueryBuilder, Query, QueryBuilder,
-	QueryStatementBuilder, SelectStatement, SimpleExpr, SqliteQueryBuilder, TableRef,
-	TemporalTimeZone, TemporalTruncKind, TemporalTruncOutput, UpdateStatement,
+	JoinType as SeaJoinType, LockBehavior, LockType, MySqlQueryBuilder, Order,
+	PostgresQueryBuilder, Query, QueryBuilder, QueryStatementBuilder, SelectStatement, SimpleExpr,
+	SqliteQueryBuilder, TableRef, TemporalTimeZone, TemporalTruncKind, TemporalTruncOutput,
+	UpdateStatement,
 };
 use reinhardt_query::types::PgBinOper;
 use serde::{Deserialize, Serialize};
@@ -1452,6 +1453,196 @@ struct TypedSelectRelation {
 	steps: SmallVec<[RelationStep; 4]>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SelectForUpdateBehavior {
+	Blocking,
+	Nowait,
+	SkipLocked,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum SelectForUpdateTarget {
+	Root,
+	Relation(Box<SmallVec<[RelationStep; 4]>>),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct SelectForUpdateSpec {
+	behavior: SelectForUpdateBehavior,
+	no_key: bool,
+	targets: Vec<SelectForUpdateTarget>,
+}
+
+impl Default for SelectForUpdateSpec {
+	fn default() -> Self {
+		Self {
+			behavior: SelectForUpdateBehavior::Blocking,
+			no_key: false,
+			targets: Vec::new(),
+		}
+	}
+}
+
+/// Type state for a blocking row lock.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct Blocking;
+
+/// Type state for a row lock that fails immediately when a row is unavailable.
+#[derive(Debug, Clone, Copy)]
+pub struct Nowait;
+
+/// Type state for a row lock that omits rows which cannot be locked immediately.
+#[derive(Debug, Clone, Copy)]
+pub struct SkipLocked;
+
+/// Typed builder for a transaction-scoped `SELECT ... FOR UPDATE`.
+///
+/// `nowait` and `skip_locked` are transitions from [`Blocking`] to distinct
+/// type states, so they cannot be combined. Evaluate the builder with
+/// [`Self::all_with_executor`] or [`Self::rows_with_executor`] using a
+/// caller-owned active transaction executor.
+pub struct SelectForUpdate<M, Behavior = Blocking>
+where
+	M: super::Model,
+{
+	queryset: QuerySet<M>,
+	_behavior: PhantomData<Behavior>,
+}
+
+impl<M, Behavior> SelectForUpdate<M, Behavior>
+where
+	M: super::Model,
+{
+	/// Requests PostgreSQL's weaker `FOR NO KEY UPDATE` lock strength.
+	///
+	/// Other backends return an explicit unsupported-capability error.
+	pub fn no_key(mut self) -> Self {
+		self.queryset
+			.select_for_update
+			.as_mut()
+			.expect("select-for-update builder always contains a lock specification")
+			.no_key = true;
+		self
+	}
+
+	/// Restricts locking to the root model table.
+	pub fn of_model(mut self) -> Self {
+		let spec = self
+			.queryset
+			.select_for_update
+			.as_mut()
+			.expect("select-for-update builder always contains a lock specification");
+		if !spec.targets.contains(&SelectForUpdateTarget::Root) {
+			spec.targets.push(SelectForUpdateTarget::Root);
+		}
+		self
+	}
+
+	/// Restricts locking to a typed relation target and adds its required joins.
+	pub fn of_relation<P>(mut self, path: P) -> Self
+	where
+		P: RelationPathLike<Root = M>,
+	{
+		let mut steps: SmallVec<[RelationStep; 4]> = SmallVec::new();
+		steps.extend(path.steps().iter().cloned());
+		self.queryset
+			.relation_joins
+			.add_steps_with_override(&steps, path.join_kind_override());
+		let target = SelectForUpdateTarget::Relation(Box::new(steps));
+		let spec = self
+			.queryset
+			.select_for_update
+			.as_mut()
+			.expect("select-for-update builder always contains a lock specification");
+		if !spec.targets.contains(&target) {
+			spec.targets.push(target);
+		}
+		self
+	}
+
+	/// Rejects evaluation without an explicit active transaction.
+	pub async fn all(&self) -> reinhardt_core::exception::Result<Vec<M>>
+	where
+		M: serde::de::DeserializeOwned,
+	{
+		self.queryset.ensure_not_locking_without_transaction()?;
+		unreachable!("locking queryset validation always returns an error")
+	}
+
+	/// Rejects evaluation through an ordinary ORM executor.
+	pub async fn all_with_db<E>(
+		&self,
+		executor: &mut E,
+	) -> reinhardt_core::exception::Result<Vec<M>>
+	where
+		M: serde::de::DeserializeOwned,
+		E: OrmExecutor,
+	{
+		self.queryset.all_with_db(executor).await
+	}
+
+	/// Rejects raw-row evaluation through an ordinary ORM executor.
+	pub async fn rows_with_db<E>(
+		&self,
+		executor: &mut E,
+	) -> reinhardt_core::exception::Result<Vec<QueryRow>>
+	where
+		E: OrmExecutor,
+	{
+		self.queryset.rows_with_db(executor).await
+	}
+
+	/// Executes the locking query through a caller-owned active transaction.
+	pub async fn all_with_executor(
+		&self,
+		executor: &mut dyn super::connection::TransactionExecutor,
+	) -> Result<Vec<M>, crate::backends::error::DatabaseError>
+	where
+		M: serde::de::DeserializeOwned,
+	{
+		self.queryset.all_with_executor(executor).await
+	}
+
+	/// Executes the locking query and returns undecoded rows.
+	pub async fn rows_with_executor(
+		&self,
+		executor: &mut dyn super::connection::TransactionExecutor,
+	) -> Result<Vec<QueryRow>, crate::backends::error::DatabaseError> {
+		self.queryset.rows_with_executor(executor).await
+	}
+}
+
+impl<M> SelectForUpdate<M, Blocking>
+where
+	M: super::Model,
+{
+	/// Changes blocking behavior to `NOWAIT`.
+	pub fn nowait(mut self) -> SelectForUpdate<M, Nowait> {
+		self.queryset
+			.select_for_update
+			.as_mut()
+			.expect("select-for-update builder always contains a lock specification")
+			.behavior = SelectForUpdateBehavior::Nowait;
+		SelectForUpdate {
+			queryset: self.queryset,
+			_behavior: PhantomData,
+		}
+	}
+
+	/// Changes blocking behavior to `SKIP LOCKED`.
+	pub fn skip_locked(mut self) -> SelectForUpdate<M, SkipLocked> {
+		self.queryset
+			.select_for_update
+			.as_mut()
+			.expect("select-for-update builder always contains a lock specification")
+			.behavior = SelectForUpdateBehavior::SkipLocked;
+		SelectForUpdate {
+			queryset: self.queryset,
+			_behavior: PhantomData,
+		}
+	}
+}
+
 impl TypedSelectRelation {
 	fn from_path<P>(path: &P) -> Self
 	where
@@ -1549,6 +1740,7 @@ where
 	/// Subquery SQL for FROM clause (derived table)
 	/// When set, the FROM clause will use this subquery instead of the model's table
 	from_subquery_sql: Option<String>,
+	select_for_update: Option<SelectForUpdateSpec>,
 }
 
 impl<T> QuerySet<T>
@@ -1586,6 +1778,7 @@ where
 			from_alias: None,
 			empty_result: false,
 			from_subquery_sql: None,
+			select_for_update: None,
 		}
 	}
 
@@ -1620,6 +1813,9 @@ where
 
 		let mut stmt = Query::select();
 		self.apply_model_from(&mut stmt);
+		if self.distinct_enabled {
+			stmt.distinct();
+		}
 		if let Some(ref fields) = self.selected_fields {
 			for field in fields {
 				if field.contains('(') && field.contains(')') {
@@ -1638,12 +1834,14 @@ where
 			self.add_default_select_columns(&mut stmt);
 		}
 		self.apply_typed_select_expressions(&mut stmt);
+		self.apply_annotations_to_select(&mut stmt);
 		self.apply_relation_joins(&mut stmt);
 		self.apply_manual_joins(&mut stmt);
 
 		if let Some(condition) = self.build_where_condition()? {
 			stmt.cond_where(condition);
 		}
+		self.apply_grouping_and_having(&mut stmt);
 		self.apply_ordering(&mut stmt);
 		if let Some(limit) = self.limit {
 			stmt.limit(limit as u64);
@@ -1651,7 +1849,278 @@ where
 		if let Some(offset) = self.offset {
 			stmt.offset(offset as u64);
 		}
+		self.apply_select_for_update(&mut stmt);
 		Ok(stmt.to_owned())
+	}
+
+	fn apply_annotations_to_select(&self, stmt: &mut SelectStatement) {
+		for annotation in &self.annotations {
+			stmt.expr_as(
+				Expr::cust(self.annotation_value_to_select_sql(&annotation.value)),
+				Alias::new(&annotation.alias),
+			);
+		}
+	}
+
+	fn apply_grouping_and_having(&self, stmt: &mut SelectStatement) {
+		for group_field in &self.group_by_fields {
+			stmt.group_by_col(self.root_column_reference(group_field));
+		}
+
+		for having_cond in &self.having_conditions {
+			let HavingCondition::AggregateCompare {
+				func,
+				field,
+				operator,
+				value,
+			} = having_cond;
+			let aggregate = self.having_aggregate_expr(func, field);
+			let expression = match operator {
+				ComparisonOp::Eq => match value {
+					AggregateValue::Int(value) => aggregate.eq(*value),
+					AggregateValue::Float(value) => aggregate.eq(*value),
+				},
+				ComparisonOp::Ne => match value {
+					AggregateValue::Int(value) => aggregate.ne(*value),
+					AggregateValue::Float(value) => aggregate.ne(*value),
+				},
+				ComparisonOp::Gt => match value {
+					AggregateValue::Int(value) => aggregate.gt(*value),
+					AggregateValue::Float(value) => aggregate.gt(*value),
+				},
+				ComparisonOp::Gte => match value {
+					AggregateValue::Int(value) => aggregate.gte(*value),
+					AggregateValue::Float(value) => aggregate.gte(*value),
+				},
+				ComparisonOp::Lt => match value {
+					AggregateValue::Int(value) => aggregate.lt(*value),
+					AggregateValue::Float(value) => aggregate.lt(*value),
+				},
+				ComparisonOp::Lte => match value {
+					AggregateValue::Int(value) => aggregate.lte(*value),
+					AggregateValue::Float(value) => aggregate.lte(*value),
+				},
+			};
+			stmt.and_having(expression);
+		}
+	}
+
+	fn apply_select_for_update(&self, stmt: &mut SelectStatement) {
+		let Some(spec) = &self.select_for_update else {
+			return;
+		};
+
+		stmt.lock(if spec.no_key {
+			LockType::NoKeyUpdate
+		} else {
+			LockType::Update
+		});
+		match spec.behavior {
+			SelectForUpdateBehavior::Blocking => {}
+			SelectForUpdateBehavior::Nowait => {
+				stmt.lock_behavior(LockBehavior::Nowait);
+			}
+			SelectForUpdateBehavior::SkipLocked => {
+				stmt.lock_behavior(LockBehavior::SkipLocked);
+			}
+		}
+
+		if spec.targets.is_empty() {
+			return;
+		}
+
+		let graph = self.relation_join_graph_for_query();
+		let aliases = spec.targets.iter().filter_map(|target| match target {
+			SelectForUpdateTarget::Root => Some(self.root_alias().to_string()),
+			SelectForUpdateTarget::Relation(steps) => graph
+				.aliases_for_steps(steps)
+				.and_then(|aliases| aliases.last().cloned()),
+		});
+		stmt.lock_tables(aliases.map(Alias::new));
+	}
+
+	fn validate_select_for_update(
+		&self,
+		capabilities: crate::backends::types::RowLockCapabilities,
+		backend: crate::backends::types::DatabaseType,
+	) -> Result<(), crate::backends::error::DatabaseError> {
+		let Some(spec) = &self.select_for_update else {
+			return Ok(());
+		};
+		if !self.ctes.is_empty() {
+			return Err(DatabaseError::new(
+				DatabaseErrorKind::Unsupported,
+				"SELECT FOR UPDATE does not support CTE-backed querysets",
+			));
+		}
+		if self.from_subquery_sql.is_some() {
+			return Err(DatabaseError::new(
+				DatabaseErrorKind::Unsupported,
+				"SELECT FOR UPDATE does not support derived table sources",
+			));
+		}
+		if !self.lateral_joins.is_empty() {
+			return Err(DatabaseError::new(
+				DatabaseErrorKind::Unsupported,
+				"SELECT FOR UPDATE does not support LATERAL joins",
+			));
+		}
+		if self.has_raw_aggregate_projection() {
+			return Err(DatabaseError::new(
+				DatabaseErrorKind::Unsupported,
+				"SELECT FOR UPDATE does not support raw aggregate projections",
+			));
+		}
+		if self.has_aggregate_annotation() {
+			return Err(DatabaseError::new(
+				DatabaseErrorKind::Unsupported,
+				"SELECT FOR UPDATE does not support aggregate annotations",
+			));
+		}
+		if !capabilities.update {
+			return Err(DatabaseError::new(
+				DatabaseErrorKind::Unsupported,
+				"SELECT FOR UPDATE is not supported by this backend or server version",
+			));
+		}
+		if spec.no_key && !capabilities.no_key_update {
+			return Err(DatabaseError::new(
+				DatabaseErrorKind::Unsupported,
+				"FOR NO KEY UPDATE is only supported by PostgreSQL 9.3 or newer",
+			));
+		}
+		if spec.behavior == SelectForUpdateBehavior::Nowait && !capabilities.nowait {
+			return Err(DatabaseError::new(
+				DatabaseErrorKind::Unsupported,
+				"NOWAIT row locking is not supported by this backend or server version",
+			));
+		}
+		if spec.behavior == SelectForUpdateBehavior::SkipLocked && !capabilities.skip_locked {
+			return Err(DatabaseError::new(
+				DatabaseErrorKind::Unsupported,
+				"SKIP LOCKED row locking is not supported by this backend or server version",
+			));
+		}
+		if !spec.targets.is_empty() && !capabilities.targets {
+			return Err(DatabaseError::new(
+				DatabaseErrorKind::Unsupported,
+				"explicit row-lock targets are not supported by this backend or server version",
+			));
+		}
+		let graph = self.relation_join_graph_for_query();
+		let has_outer_join = graph
+			.joins()
+			.iter()
+			.any(|join| join.join_kind == RelationJoinKind::Left)
+			|| !self.select_related_fields.is_empty()
+			|| self.joins.iter().any(|join| {
+				!join.on_condition.is_empty()
+					&& matches!(
+						join.join_type,
+						super::sqlalchemy_query::JoinType::Left
+							| super::sqlalchemy_query::JoinType::Right
+							| super::sqlalchemy_query::JoinType::Full
+					)
+			});
+		if backend == crate::backends::types::DatabaseType::Postgres
+			&& spec.targets.is_empty()
+			&& has_outer_join
+		{
+			return Err(DatabaseError::new(
+				DatabaseErrorKind::Query,
+				"SELECT FOR UPDATE with an outer join requires explicit non-nullable lock targets",
+			));
+		}
+		for target in &spec.targets {
+			let SelectForUpdateTarget::Relation(steps) = target else {
+				continue;
+			};
+			if steps.is_empty() {
+				return Err(DatabaseError::new(
+					DatabaseErrorKind::Query,
+					"SELECT FOR UPDATE relation lock target must contain at least one relation step",
+				));
+			}
+			let aliases = graph.aliases_for_steps(steps).ok_or_else(|| {
+				DatabaseError::new(
+					DatabaseErrorKind::Query,
+					"SELECT FOR UPDATE relation lock target could not be resolved",
+				)
+			})?;
+			for alias in aliases {
+				let join = graph
+					.joins()
+					.iter()
+					.find(|join| join.alias == alias)
+					.expect("resolved relation aliases always have a planned join");
+				if backend == crate::backends::types::DatabaseType::Postgres
+					&& join.join_kind == RelationJoinKind::Left
+				{
+					return Err(DatabaseError::new(
+						DatabaseErrorKind::Query,
+						"SELECT FOR UPDATE cannot lock a relation reached through an outer join",
+					));
+				}
+			}
+		}
+		Ok(())
+	}
+
+	fn has_raw_aggregate_projection(&self) -> bool {
+		self.selected_fields.as_ref().is_some_and(|fields| {
+			fields
+				.iter()
+				.any(|field| contains_known_raw_aggregate(field))
+		})
+	}
+
+	fn has_aggregate_annotation(&self) -> bool {
+		self.annotations
+			.iter()
+			.any(|annotation| Self::annotation_value_contains_aggregate(&annotation.value))
+	}
+
+	fn annotation_value_contains_aggregate(value: &super::annotation::AnnotationValue) -> bool {
+		use super::annotation::{AnnotationValue, Expression};
+
+		match value {
+			AnnotationValue::Aggregate(_)
+			| AnnotationValue::ArrayAgg(_)
+			| AnnotationValue::StringAgg(_)
+			| AnnotationValue::JsonbAgg(_) => true,
+			AnnotationValue::Expression(expression) => match expression {
+				Expression::Add(left, right)
+				| Expression::Subtract(left, right)
+				| Expression::Multiply(left, right)
+				| Expression::Divide(left, right) => {
+					Self::annotation_value_contains_aggregate(left)
+						|| Self::annotation_value_contains_aggregate(right)
+				}
+				Expression::Case { whens, default } => {
+					whens
+						.iter()
+						.any(|when| Self::annotation_value_contains_aggregate(&when.then))
+						|| default
+							.as_deref()
+							.is_some_and(Self::annotation_value_contains_aggregate)
+				}
+				Expression::Coalesce(values) => {
+					values.iter().any(Self::annotation_value_contains_aggregate)
+				}
+			},
+			_ => false,
+		}
+	}
+
+	fn ensure_not_locking_without_transaction(&self) -> reinhardt_core::exception::Result<()> {
+		if self.select_for_update.is_some() {
+			return Err(DatabaseError::new(
+				DatabaseErrorKind::Transaction,
+				"select_for_update requires all_with_executor or rows_with_executor with a caller-owned active transaction",
+			)
+			.into());
+		}
+		Ok(())
 	}
 
 	fn decode_backend_rows(
@@ -1910,6 +2379,23 @@ where
 			from_alias: None,
 			empty_result: false,
 			from_subquery_sql: None,
+			select_for_update: None,
+		}
+	}
+
+	/// Configures this queryset to lock selected rows until transaction completion.
+	///
+	/// The returned typestate builder prevents combining `NOWAIT` and
+	/// `SKIP LOCKED`. Locking queries must be evaluated with a caller-owned
+	/// [`TransactionExecutor`](super::connection::TransactionExecutor). CTE-backed
+	/// querysets, derived `FROM` sources, LATERAL joins, raw aggregate projections
+	/// from [`Self::values`], and aggregate annotations are rejected before query
+	/// execution to preserve lock scope.
+	pub fn select_for_update(mut self) -> SelectForUpdate<T> {
+		self.select_for_update = Some(SelectForUpdateSpec::default());
+		SelectForUpdate {
+			queryset: self,
+			_behavior: PhantomData,
 		}
 	}
 
@@ -2131,6 +2617,7 @@ where
 			from_alias: Some(alias.to_string()),
 			empty_result,
 			from_subquery_sql: Some(subquery_sql),
+			select_for_update: None,
 		})
 	}
 
@@ -5801,7 +6288,9 @@ where
 	/// //   WHERE posts.published = $1
 	/// ```
 	pub fn select_related_query(&self) -> reinhardt_core::exception::Result<SelectStatement> {
-		Ok(self.select_related_query_with_condition(self.build_where_condition()?))
+		let mut stmt = self.select_related_query_with_condition(self.build_where_condition()?);
+		self.apply_annotations_to_select(&mut stmt);
+		Ok(stmt)
 	}
 
 	fn select_related_query_with_condition(
@@ -5928,55 +6417,7 @@ where
 			stmt.and_where(Expr::val(false));
 		}
 
-		// Apply GROUP BY
-		for group_field in &self.group_by_fields {
-			let col_ref = self.root_column_reference(group_field);
-			stmt.group_by_col(col_ref);
-		}
-
-		// Apply HAVING
-		for having_cond in &self.having_conditions {
-			match having_cond {
-				HavingCondition::AggregateCompare {
-					func,
-					field,
-					operator,
-					value,
-				} => {
-					let agg_expr = self.having_aggregate_expr(func, field);
-
-					// Build comparison expression
-					let having_expr = match operator {
-						ComparisonOp::Eq => match value {
-							AggregateValue::Int(v) => agg_expr.eq(*v),
-							AggregateValue::Float(v) => agg_expr.eq(*v),
-						},
-						ComparisonOp::Ne => match value {
-							AggregateValue::Int(v) => agg_expr.ne(*v),
-							AggregateValue::Float(v) => agg_expr.ne(*v),
-						},
-						ComparisonOp::Gt => match value {
-							AggregateValue::Int(v) => agg_expr.gt(*v),
-							AggregateValue::Float(v) => agg_expr.gt(*v),
-						},
-						ComparisonOp::Gte => match value {
-							AggregateValue::Int(v) => agg_expr.gte(*v),
-							AggregateValue::Float(v) => agg_expr.gte(*v),
-						},
-						ComparisonOp::Lt => match value {
-							AggregateValue::Int(v) => agg_expr.lt(*v),
-							AggregateValue::Float(v) => agg_expr.lt(*v),
-						},
-						ComparisonOp::Lte => match value {
-							AggregateValue::Int(v) => agg_expr.lte(*v),
-							AggregateValue::Float(v) => agg_expr.lte(*v),
-						},
-					};
-
-					stmt.and_having(having_expr);
-				}
-			}
-		}
+		self.apply_grouping_and_having(&mut stmt);
 
 		self.apply_ordering(&mut stmt);
 
@@ -5990,6 +6431,7 @@ where
 			stmt.offset(offset as u64);
 		}
 
+		self.apply_select_for_update(&mut stmt);
 		stmt.to_owned()
 	}
 
@@ -6724,6 +7166,7 @@ where
 		if self.empty_result {
 			return Ok(Vec::new());
 		}
+		self.ensure_not_locking_without_transaction()?;
 		let stmt = self.build_select_statement()?;
 		let context = super::execution::pgvector_context_for_select(&stmt);
 		let (sql, values) =
@@ -6782,6 +7225,7 @@ where
 		if self.empty_result {
 			return Ok(Vec::new());
 		}
+		self.ensure_not_locking_without_transaction()?;
 		let stmt = self.build_select_statement()?;
 		let context = super::execution::pgvector_context_for_select(&stmt);
 		let (sql, values) =
@@ -6974,6 +7418,7 @@ where
 		if self.empty_result {
 			return Ok(Vec::new());
 		}
+		self.validate_select_for_update(executor.row_lock_capabilities(), executor.backend())?;
 		let stmt = self.build_select_statement().map_err(executor_error)?;
 		let context = super::execution::pgvector_context_for_select(&stmt);
 		let (sql, values) = Self::build_select_for_backend(
@@ -7007,6 +7452,49 @@ where
 			}
 		};
 		Self::decode_backend_rows(rows)
+	}
+
+	/// Executes the queryset through an active transaction and returns raw rows.
+	pub async fn rows_with_executor(
+		&self,
+		executor: &mut dyn super::connection::TransactionExecutor,
+	) -> Result<Vec<QueryRow>, crate::backends::error::DatabaseError> {
+		if self.empty_result {
+			return Ok(Vec::new());
+		}
+		self.validate_select_for_update(executor.row_lock_capabilities(), executor.backend())?;
+		let stmt = self.build_select_statement().map_err(executor_error)?;
+		let context = super::execution::pgvector_context_for_select(&stmt);
+		let (sql, values) = Self::build_select_for_backend(
+			&stmt,
+			Self::executor_backend(executor),
+			executor.is_cockroachdb(),
+		)?;
+		let param_samples = values
+			.iter()
+			.map(|value| value.to_sql_literal())
+			.collect::<Vec<_>>();
+		let params = super::execution::convert_values(values);
+		let started = Instant::now();
+		let result = executor
+			.fetch_all_with_context(&sql, params, context)
+			.await
+			.map_err(executor_error);
+		let duration = started.elapsed();
+		match result {
+			Ok(rows) => {
+				super::instrumentation::instrumentation()
+					.orm_query_end_with_params(&sql, &param_samples, duration)
+					.await;
+				Ok(rows.into_iter().map(QueryRow::from_backend_row).collect())
+			}
+			Err(error) => {
+				super::instrumentation::instrumentation()
+					.orm_query_error(&sql, &format!("{error:?}"))
+					.await;
+				Err(error)
+			}
+		}
 	}
 
 	/// Execute the count query through an active transaction executor.
@@ -8448,26 +8936,10 @@ where
 			stmt.to_owned()
 		} else {
 			// SELECT with JOINs for select_related
-			self.select_related_query()?
+			self.select_related_query_with_condition(self.build_where_condition()?)
 		};
 
-		// Add annotations to SELECT clause if any using reinhardt-query API
-		// Collect annotation SQL strings first to handle lifetime issues
-		// Note: Use to_sql_expr() to get expression without alias (reinhardt-query adds alias via expr_as)
-		let annotation_exprs: Vec<_> = self
-			.annotations
-			.iter()
-			.map(|a| {
-				(
-					self.annotation_value_to_select_sql(&a.value),
-					a.alias.clone(),
-				)
-			})
-			.collect();
-
-		for (value_sql, alias) in annotation_exprs {
-			stmt.expr_as(Expr::cust(value_sql), Alias::new(alias));
-		}
+		self.apply_annotations_to_select(&mut stmt);
 
 		use reinhardt_query::prelude::PostgresQueryBuilder;
 		let mut select_sql = stmt.to_string(PostgresQueryBuilder);
@@ -9338,6 +9810,54 @@ fn parse_column_reference(field: &str) -> reinhardt_query::prelude::ColumnRef {
 		// Simple column reference
 		ColumnRef::column(Alias::new(field))
 	}
+}
+
+fn contains_known_raw_aggregate(projection: &str) -> bool {
+	const AGGREGATE_FUNCTIONS: &[&str] = &[
+		"COUNT",
+		"SUM",
+		"AVG",
+		"MIN",
+		"MAX",
+		"ARRAY_AGG",
+		"JSON_AGG",
+		"JSONB_AGG",
+		"STRING_AGG",
+		"BOOL_AND",
+		"BOOL_OR",
+		"EVERY",
+		"XMLAGG",
+	];
+
+	let bytes = projection.as_bytes();
+	let mut index = 0;
+	while index < bytes.len() {
+		if bytes[index].is_ascii_alphabetic() || bytes[index] == b'_' {
+			let start = index;
+			index += 1;
+			while index < bytes.len()
+				&& (bytes[index].is_ascii_alphanumeric() || bytes[index] == b'_')
+			{
+				index += 1;
+			}
+
+			let function = &projection[start..index];
+			let mut next = index;
+			while next < bytes.len() && bytes[next].is_ascii_whitespace() {
+				next += 1;
+			}
+			if bytes.get(next) == Some(&b'(')
+				&& AGGREGATE_FUNCTIONS
+					.iter()
+					.any(|aggregate| function.eq_ignore_ascii_case(aggregate))
+			{
+				return true;
+			}
+		} else {
+			index += 1;
+		}
+	}
+	false
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -11677,6 +12197,27 @@ mod tests {
 		assert!(sql.contains("SELECT"));
 		assert!(sql.contains("test_users"));
 		assert!(sql.contains("LEFT JOIN"));
+	}
+
+	#[test]
+	fn select_related_to_sql_includes_each_annotation_once() {
+		use crate::orm::annotation::{Annotation, AnnotationValue, Value};
+
+		// Arrange
+		let queryset = QuerySet::<TestUser>::new()
+			.select_related(&["profile"])
+			.annotate(Annotation::new(
+				"relation_marker",
+				AnnotationValue::Value(Value::Int(1)),
+			));
+
+		// Act
+		let sql = queryset
+			.to_sql()
+			.expect("select-related query SQL should compile");
+
+		// Assert
+		assert_eq!(sql.matches(r#"1 AS "relation_marker""#).count(), 1);
 	}
 
 	#[test]

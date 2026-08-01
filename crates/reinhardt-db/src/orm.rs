@@ -66,6 +66,23 @@
 //! values only. They may generate SQL but cannot control a live ORM transaction.
 //! [`AtomicTransaction`] is also intentionally non-`Copy` and stays bound to
 //! the callback and dedicated connection created by [`DatabaseConnection::atomic`].
+//!
+//! ## Row Locking
+//!
+//! [`QuerySet::select_for_update`](query::QuerySet::select_for_update) returns a
+//! typed builder whose `nowait` and `skip_locked` states are mutually exclusive.
+//! Evaluate it through a caller-owned [`TransactionExecutor`] so the same
+//! physical connection retains locks through commit or rollback. Root targets
+//! use `of_model`; relation targets require a generated [`RelationPathLike`]
+//! rooted at the queryset model. Unlike Django, ordinary connection evaluation
+//! and SQLite return explicit errors instead of silently degrading to an
+//! unlocked query. CTE-backed querysets, derived `FROM` sources, LATERAL joins,
+//! raw aggregate projections, and aggregate annotations are rejected before
+//! execution so the lock scope remains unambiguous.
+//!
+//! PostgreSQL 9.3 adds `no_key`, PostgreSQL 9.5 adds `skip_locked`, and the
+//! built-in MySQL profile requires 8.0.1 or newer. Older/custom servers report
+//! their exact feature set through [`TransactionExecutor::row_lock_capabilities`].
 
 // Core modules - always available
 pub mod aggregation;
@@ -193,7 +210,7 @@ pub use aggregation::{Aggregate, AggregateFunc, AggregateResult, AggregateValue}
 pub use annotation::{Annotation, AnnotationValue, Expression, Value, When};
 pub use connection::{
 	DatabaseBackend, DatabaseConnection, DatabaseConnectionLease, OrmExecutor, QueryResult,
-	QueryRow, QueryValue, Row, RowStream, TransactionExecutor,
+	QueryRow, QueryValue, Row, RowLockCapabilities, RowStream, TransactionExecutor,
 };
 pub use constraints::{
 	CheckConstraint, Constraint, ForeignKeyConstraint, OnDelete, OnUpdate, UniqueConstraint,
@@ -310,9 +327,10 @@ pub use reverse_accessor::ReverseAccessor;
 pub use manager::Manager;
 // Query types are always available
 pub use query::{
-	DateProjectionField, DateProjectionOrder, DateTimeProjectionField, DateTimeTruncKind,
+	Blocking, DateProjectionField, DateProjectionOrder, DateTimeProjectionField, DateTimeTruncKind,
 	DateTruncKind, FieldAssignment, Filter, FilterCondition, FilterOperator, FilterValue,
-	IntoOrderBy, OrmQuery, QuerySet, QuerySetStream, UpdateValue,
+	IntoOrderBy, Nowait, OrmQuery, QuerySet, QuerySetStream, SelectForUpdate, SkipLocked,
+	UpdateValue,
 };
 
 // Advanced ORM features

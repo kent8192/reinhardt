@@ -66,6 +66,40 @@ This crate provides the following modules:
   - Only/Defer field optimization for reduced data transfer
   - Aggregate pushdown optimization
 
+### Streaming QuerySets
+
+`QuerySet::iterator_with_db` and `QuerySet::iterator_with_executor` decode one
+model at a time from a lifetime-bound driver stream. The stream borrows the
+caller-owned executor, returns `Result<Model>` for every item, and releases its
+driver resources when it completes, fails, is cancelled, or is dropped early.
+
+```rust
+use futures::StreamExt;
+use reinhardt_db::orm::{Model, OrmExecutor, QuerySet};
+use serde::de::DeserializeOwned;
+
+async fn stream_models<M, E>(connection: &mut E) -> reinhardt_core::exception::Result<()>
+where
+    M: Model + DeserializeOwned,
+    E: OrmExecutor,
+{
+	let mut models = QuerySet::<M>::new().iterator_with_db(connection, 128)?;
+	while let Some(model) = models.next().await {
+		let model = model?;
+		// Process the typed model without a QuerySet-level result cache.
+		let _ = model;
+	}
+	Ok(())
+}
+```
+
+PostgreSQL, MySQL, and SQLite support driver-backed streaming. Custom executors
+must implement the row-stream capability or the iterator returns an explicit
+`Unsupported` database error. `chunk_size` is a driver fetch or bounded-buffer
+hint rather than a promise about server internals. Unlike Django's compatibility
+fallbacks, Reinhardt intentionally rejects eager `fetch_all` materialization and
+repeated `LIMIT`/`OFFSET` pagination for this API.
+
 - **Enhanced Transaction Management**
   - Nested transactions with savepoint support
   - Isolation level control (ReadUncommitted, ReadCommitted, RepeatableRead, Serializable)
@@ -626,6 +660,7 @@ pub full_name: String,
 
 ```rust
 use chrono::Utc;
+use futures::StreamExt;
 use reinhardt_db::orm::{
     DateProjectionOrder, DateTimeTruncKind, DateTruncKind, Model,
 };
@@ -684,6 +719,14 @@ let local_hours = User::objects()
         Some(chrono_tz::Asia::Tokyo),
     )
     .await?;
+
+// Stream typed-field results through the caller-owned executor.
+let mut streamed_adults = User::objects()
+    .filter(User::field_age().gte(18))
+    .iterator_with_db(&mut connection, 128)?;
+while let Some(user) = streamed_adults.next().await {
+    let _user = user?;
+}
 
 // Atomic conditional partial update
 let updated = User::objects()

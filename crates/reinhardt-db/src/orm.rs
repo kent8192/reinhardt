@@ -17,6 +17,19 @@
 //! and ordering in the database. Named-zone conversion is supported by
 //! PostgreSQL; MySQL and SQLite return an explicit capability error.
 //!
+//! ## Streaming QuerySets
+//!
+//! [`QuerySet::iterator_with_db`] and [`QuerySet::iterator_with_executor`]
+//! return lifetime-bound streams that decode one model per item. The borrowed
+//! executor remains in use until the stream completes or is dropped, and each
+//! item retains backend or model-decoding failures in its `Result`.
+//!
+//! PostgreSQL, MySQL, and SQLite use driver streams. Custom executors without
+//! that capability return `DatabaseErrorKind::Unsupported`; the ORM never
+//! substitutes `fetch_all` or repeated `LIMIT`/`OFFSET` queries. `chunk_size`
+//! is a driver fetch or bounded-buffer hint, and dropping or cancelling the
+//! stream releases driver resources through RAII.
+//!
 //! ## Transaction Management
 //!
 //! ORM writes run inside closure-scoped transactions. Start an outer operation
@@ -180,7 +193,7 @@ pub use aggregation::{Aggregate, AggregateFunc, AggregateResult, AggregateValue}
 pub use annotation::{Annotation, AnnotationValue, Expression, Value, When};
 pub use connection::{
 	DatabaseBackend, DatabaseConnection, DatabaseConnectionLease, OrmExecutor, QueryResult,
-	QueryRow, QueryValue, Row, TransactionExecutor,
+	QueryRow, QueryValue, Row, RowStream, TransactionExecutor,
 };
 pub use constraints::{
 	CheckConstraint, Constraint, ForeignKeyConstraint, OnDelete, OnUpdate, UniqueConstraint,
@@ -299,7 +312,7 @@ pub use manager::Manager;
 pub use query::{
 	DateProjectionField, DateProjectionOrder, DateTimeProjectionField, DateTimeTruncKind,
 	DateTruncKind, FieldAssignment, Filter, FilterCondition, FilterOperator, FilterValue,
-	IntoOrderBy, OrmQuery, QuerySet, UpdateValue,
+	IntoOrderBy, OrmQuery, QuerySet, QuerySetStream, UpdateValue,
 };
 
 // Advanced ORM features

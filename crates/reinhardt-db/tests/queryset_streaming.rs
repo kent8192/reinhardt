@@ -5,7 +5,7 @@ use reinhardt_db::backends::types::{
 };
 #[cfg(feature = "sqlite")]
 use reinhardt_db::orm::DatabaseConnectionLease;
-use reinhardt_db::orm::{Model, QuerySet};
+use reinhardt_db::orm::{Model, NPlusOneConfig, NPlusOneScope, QuerySet};
 use reinhardt_query::prelude::{
 	Alias, ColumnDef, Expr, Query, QueryStatementBuilder, SqliteQueryBuilder,
 };
@@ -357,6 +357,37 @@ async fn iterator_with_executor_surfaces_midstream_decode_error() {
 		Some(DatabaseErrorKind::Serialization)
 	);
 	assert!(dropped.load(Ordering::SeqCst));
+}
+
+#[rstest]
+#[tokio::test]
+async fn iterator_with_executor_records_completed_query_after_decode_error() {
+	// Arrange
+	let mut executor = StreamingExecutor::new(vec![Ok(article_row(1, QueryValue::Int(42)))]);
+
+	// Act
+	let (error, report) =
+		NPlusOneScope::warn("queryset-streaming-decode-error", NPlusOneConfig::default())
+			.run_with_report(async {
+				let mut stream = QuerySet::<StreamedArticle>::new()
+					.iterator_with_executor(&mut executor, 1)
+					.expect("streaming executor should support row streams");
+				let error = stream
+					.next()
+					.await
+					.expect("stream should yield the decode error")
+					.expect_err("invalid title value must fail model decoding");
+				drop(stream);
+				error
+			})
+			.await;
+
+	// Assert
+	assert_eq!(
+		error.database_kind(),
+		Some(DatabaseErrorKind::Serialization)
+	);
+	assert_eq!(report.total_recorded_queries, 1);
 }
 
 #[rstest]

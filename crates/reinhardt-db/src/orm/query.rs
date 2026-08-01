@@ -28,7 +28,8 @@ use smallvec::SmallVec;
 use std::collections::HashMap;
 use std::marker::PhantomData;
 use std::pin::Pin;
-use std::task::{Context, Poll};
+use std::sync::{Arc, Mutex};
+use std::task::{Context, Poll, Wake, Waker};
 use std::time::Instant;
 use uuid::Uuid;
 
@@ -40,12 +41,25 @@ fn executor_error(error: reinhardt_core::exception::Error) -> DatabaseError {
 pub type QuerySetStream<'a, T> =
 	Pin<Box<dyn Stream<Item = reinhardt_core::exception::Result<T>> + Send + 'a>>;
 
+struct PendingRowPoll {
+	generation: u64,
+	started_at: Instant,
+	wake_duration: Option<std::time::Duration>,
+}
+
+#[derive(Default)]
+struct RowStreamTiming {
+	next_generation: u64,
+	pending: Option<PendingRowPoll>,
+}
+
 /// Records a streaming query when its generator finishes or is dropped.
 struct StreamQueryAccounting {
 	sql: String,
 	params: Vec<String>,
 	duration: std::time::Duration,
 	completed: bool,
+	timing: Arc<Mutex<RowStreamTiming>>,
 }
 
 impl StreamQueryAccounting {
@@ -55,6 +69,7 @@ impl StreamQueryAccounting {
 			params,
 			duration: std::time::Duration::ZERO,
 			completed: true,
+			timing: Arc::new(Mutex::new(RowStreamTiming::default())),
 		}
 	}
 
@@ -65,10 +80,26 @@ impl StreamQueryAccounting {
 	fn disarm_completion(&mut self) {
 		self.completed = false;
 	}
+
+	fn take_woken_duration(&mut self) -> Option<std::time::Duration> {
+		let mut timing = self
+			.timing
+			.lock()
+			.unwrap_or_else(|poisoned| poisoned.into_inner());
+		let pending = timing.pending.take()?;
+		pending.wake_duration
+	}
+
+	fn record_woken_duration(&mut self) {
+		if let Some(duration) = self.take_woken_duration() {
+			self.record_poll(duration);
+		}
+	}
 }
 
 impl Drop for StreamQueryAccounting {
 	fn drop(&mut self) {
+		self.record_woken_duration();
 		if !self.completed {
 			return;
 		}
@@ -79,12 +110,44 @@ impl Drop for StreamQueryAccounting {
 		);
 	}
 }
+struct RowStreamWake {
+	timing: Arc<Mutex<RowStreamTiming>>,
+	generation: u64,
+	target: Waker,
+}
 
-/// Times individual backend-stream polls without spanning consumer idle time.
+impl RowStreamWake {
+	fn record_wake(&self) {
+		let mut timing = self
+			.timing
+			.lock()
+			.unwrap_or_else(|poisoned| poisoned.into_inner());
+		if let Some(pending) = timing.pending.as_mut()
+			&& pending.generation == self.generation
+			&& pending.wake_duration.is_none()
+		{
+			pending.wake_duration = Some(pending.started_at.elapsed());
+		}
+	}
+}
+
+impl Wake for RowStreamWake {
+	fn wake(self: Arc<Self>) {
+		self.record_wake();
+		self.target.wake_by_ref();
+	}
+
+	fn wake_by_ref(self: &Arc<Self>) {
+		self.record_wake();
+		self.target.wake_by_ref();
+	}
+}
+
+/// Times backend-stream polls through their wakeup without charging consumer idle time.
 ///
-/// A pending poll is deliberately not retained as elapsed state: cancelling a
-/// consumer poll therefore resets its timing instead of charging later
-/// application backpressure to the database query.
+/// A wrapped waker records a pending poll when the backend wakes the task. If
+/// the consumer cancels that poll and later polls again without a wakeup, the
+/// stale pending interval is discarded before the next backend poll.
 struct TimedRowStream<'rows, 'accounting> {
 	rows: RowStream<'rows>,
 	accounting: &'accounting mut StreamQueryAccounting,
@@ -94,15 +157,60 @@ impl<'rows, 'accounting> TimedRowStream<'rows, 'accounting> {
 	fn new(rows: RowStream<'rows>, accounting: &'accounting mut StreamQueryAccounting) -> Self {
 		Self { rows, accounting }
 	}
+
+	fn start_pending_poll(&mut self, started_at: Instant, target: Waker) -> (u64, Waker) {
+		let generation = {
+			let mut timing = self
+				.accounting
+				.timing
+				.lock()
+				.unwrap_or_else(|poisoned| poisoned.into_inner());
+			let generation = timing.next_generation;
+			timing.next_generation = timing.next_generation.wrapping_add(1);
+			timing.pending = Some(PendingRowPoll {
+				generation,
+				started_at,
+				wake_duration: None,
+			});
+			generation
+		};
+		let waker = Waker::from(Arc::new(RowStreamWake {
+			timing: Arc::clone(&self.accounting.timing),
+			generation,
+			target,
+		}));
+		(generation, waker)
+	}
+
+	fn clear_pending_poll(&mut self, generation: u64) {
+		let mut timing = self
+			.accounting
+			.timing
+			.lock()
+			.unwrap_or_else(|poisoned| poisoned.into_inner());
+		if timing
+			.pending
+			.as_ref()
+			.is_some_and(|pending| pending.generation == generation)
+		{
+			timing.pending = None;
+		}
+	}
 }
 
 impl Stream for TimedRowStream<'_, '_> {
 	type Item = reinhardt_core::exception::Result<crate::backends::types::Row>;
 
 	fn poll_next(mut self: Pin<&mut Self>, context: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+		self.accounting.record_woken_duration();
 		let started_at = Instant::now();
-		let result = self.rows.as_mut().poll_next(context);
-		self.accounting.record_poll(started_at.elapsed());
+		let (generation, waker) = self.start_pending_poll(started_at, context.waker().clone());
+		let mut timing_context = Context::from_waker(&waker);
+		let result = self.rows.as_mut().poll_next(&mut timing_context);
+		if result.is_ready() {
+			self.clear_pending_poll(generation);
+			self.accounting.record_poll(started_at.elapsed());
+		}
 		result
 	}
 }
@@ -5568,7 +5676,9 @@ where
 		self.apply_ordering(&mut stmt);
 
 		// Apply LIMIT/OFFSET
-		if let Some(limit) = self.limit {
+		if self.empty_result {
+			stmt.limit(0);
+		} else if let Some(limit) = self.limit {
 			stmt.limit(limit as u64);
 		}
 		if let Some(offset) = self.offset {
@@ -6379,7 +6489,6 @@ where
 							.orm_query_error(&sql, &format!("{error:?}"))
 							.await;
 						drop(rows.take());
-						accounting.disarm_completion();
 						yield Err(error);
 						return;
 					}
@@ -7861,7 +7970,9 @@ where
 			self.apply_ordering(&mut stmt);
 
 			// Apply LIMIT/OFFSET
-			if let Some(limit) = self.limit {
+			if self.empty_result {
+				stmt.limit(0);
+			} else if let Some(limit) = self.limit {
 				stmt.limit(limit as u64);
 			}
 			if let Some(offset) = self.offset {
@@ -8798,7 +8909,8 @@ fn escape_like_pattern(value: &str) -> String {
 mod tests {
 	use super::{
 		AggregateFunc, AggregateValue, ComparisonOp, FilterCondition, HavingCondition,
-		MAX_FILTER_CONDITION_DEPTH, QueryFilterInput,
+		MAX_FILTER_CONDITION_DEPTH, QueryFilterInput, RowStream, StreamQueryAccounting,
+		TimedRowStream,
 	};
 	#[cfg(feature = "pgvector")]
 	use crate::orm::Field;
@@ -8808,6 +8920,7 @@ mod tests {
 		DatabaseValue, FieldCodecError, FilterOperator, FilterValue, Manager, Model, QuerySet,
 		query::Filter,
 	};
+	use futures::Stream;
 	use reinhardt_query::{
 		QueryBuilder,
 		prelude::{PostgresQueryBuilder, QueryStatementBuilder, SqliteQueryBuilder},
@@ -8819,6 +8932,130 @@ mod tests {
 	use std::collections::HashMap;
 	#[cfg(feature = "pgvector")]
 	use std::fmt;
+	use std::pin::Pin;
+	use std::sync::{Arc, Mutex};
+	use std::task::{Context, Poll, Waker};
+	use std::time::Duration;
+
+	#[derive(Default)]
+	struct WakeDrivenRowStreamState {
+		ready: bool,
+		waker: Option<Waker>,
+	}
+
+	struct WakeDrivenRowStream {
+		state: Arc<Mutex<WakeDrivenRowStreamState>>,
+	}
+
+	impl Stream for WakeDrivenRowStream {
+		type Item = reinhardt_core::exception::Result<crate::backends::types::Row>;
+
+		fn poll_next(self: Pin<&mut Self>, context: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+			let mut state = self
+				.state
+				.lock()
+				.unwrap_or_else(|poisoned| poisoned.into_inner());
+			if state.ready {
+				return Poll::Ready(None);
+			}
+			state.waker = Some(context.waker().clone());
+			Poll::Pending
+		}
+	}
+
+	struct PendingThenReadyRowStream {
+		first_poll: bool,
+		waker: Option<Waker>,
+	}
+
+	impl Stream for PendingThenReadyRowStream {
+		type Item = reinhardt_core::exception::Result<crate::backends::types::Row>;
+
+		fn poll_next(
+			mut self: Pin<&mut Self>,
+			context: &mut Context<'_>,
+		) -> Poll<Option<Self::Item>> {
+			if self.first_poll {
+				self.first_poll = false;
+				self.waker = Some(context.waker().clone());
+				return Poll::Pending;
+			}
+			assert!(
+				self.waker.take().is_some(),
+				"pending row stream must retain its registered waker"
+			);
+			Poll::Ready(None)
+		}
+	}
+
+	#[rstest]
+	fn timed_row_stream_records_pending_io_when_the_backend_wakes() {
+		// Arrange
+		let state = Arc::new(Mutex::new(WakeDrivenRowStreamState::default()));
+		let rows: RowStream<'_> = Box::pin(WakeDrivenRowStream {
+			state: Arc::clone(&state),
+		});
+		let mut accounting = StreamQueryAccounting::new("SELECT 1".to_owned(), Vec::new());
+		let waker = futures::task::noop_waker();
+		let mut context = Context::from_waker(&waker);
+
+		// Act
+		{
+			let mut stream = TimedRowStream::new(rows, &mut accounting);
+			assert!(matches!(
+				Pin::new(&mut stream).poll_next(&mut context),
+				Poll::Pending
+			));
+			std::thread::sleep(Duration::from_millis(20));
+			let waker = {
+				let mut state = state
+					.lock()
+					.unwrap_or_else(|poisoned| poisoned.into_inner());
+				state.ready = true;
+				state
+					.waker
+					.take()
+					.expect("pending row stream must register a waker")
+			};
+			waker.wake();
+			assert!(matches!(
+				Pin::new(&mut stream).poll_next(&mut context),
+				Poll::Ready(None)
+			));
+		}
+
+		// Assert
+		assert!(accounting.duration >= Duration::from_millis(10));
+	}
+
+	#[rstest]
+	fn timed_row_stream_discards_unwoken_pending_time_after_cancellation() {
+		// Arrange
+		let rows: RowStream<'_> = Box::pin(PendingThenReadyRowStream {
+			first_poll: true,
+			waker: None,
+		});
+		let mut accounting = StreamQueryAccounting::new("SELECT 1".to_owned(), Vec::new());
+		let waker = futures::task::noop_waker();
+		let mut context = Context::from_waker(&waker);
+
+		// Act
+		{
+			let mut stream = TimedRowStream::new(rows, &mut accounting);
+			assert!(matches!(
+				Pin::new(&mut stream).poll_next(&mut context),
+				Poll::Pending
+			));
+			std::thread::sleep(Duration::from_millis(20));
+			assert!(matches!(
+				Pin::new(&mut stream).poll_next(&mut context),
+				Poll::Ready(None)
+			));
+		}
+
+		// Assert
+		assert!(accounting.duration < Duration::from_millis(10));
+	}
 
 	#[cfg(feature = "pgvector")]
 	struct RecordingExecutor {
@@ -9482,6 +9719,23 @@ mod tests {
 		assert_eq!(rows_affected, 0);
 		assert!(executor.calls.is_empty());
 		assert!(executor.contexts.is_empty());
+	}
+
+	#[rstest]
+	fn none_aggregate_subquery_limits_output_rows() {
+		// Arrange
+		let queryset = QuerySet::<TestUser>::new().none().values(&["COUNT(*)"]);
+
+		// Act
+		let sql = queryset
+			.as_subquery()
+			.expect("empty aggregate subquery should compile");
+
+		// Assert
+		assert_eq!(
+			sql,
+			r#"(SELECT COUNT(*) FROM "test_users" WHERE FALSE LIMIT 0)"#
+		);
 	}
 
 	#[cfg(feature = "pgvector")]

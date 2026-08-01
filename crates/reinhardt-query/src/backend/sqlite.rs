@@ -55,12 +55,22 @@ impl SqliteQueryBuilder {
 		Self
 	}
 
-	fn write_monday_date(&self, writer: &mut SqlWriter, expr: &SimpleExpr) {
-		writer.push("DATE(");
+	fn write_monday_date(
+		&self,
+		writer: &mut SqlWriter,
+		expr: &SimpleExpr,
+		output: TemporalTruncOutput,
+	) {
+		writer.push(match output {
+			TemporalTruncOutput::Date => "DATE(",
+			TemporalTruncOutput::DateTime => "DATETIME(",
+		});
 		self.write_simple_expr(writer, expr);
-		writer.push(", '-' || ((CAST(strftime('%w', ");
-		self.write_simple_expr(writer, expr);
-		writer.push(") AS INTEGER) + 6) % 7) || ' days')");
+		writer.push(", '-6 days', 'weekday 1'");
+		if output == TemporalTruncOutput::DateTime {
+			writer.push(", 'start of day'");
+		}
+		writer.push(")");
 	}
 
 	fn write_temporal_trunc(
@@ -71,13 +81,7 @@ impl SqliteQueryBuilder {
 		output: TemporalTruncOutput,
 	) {
 		if kind == TemporalTruncKind::Week {
-			if output == TemporalTruncOutput::DateTime {
-				writer.push("DATETIME(");
-			}
-			self.write_monday_date(writer, expr);
-			if output == TemporalTruncOutput::DateTime {
-				writer.push(")");
-			}
+			self.write_monday_date(writer, expr, output);
 			return;
 		}
 
@@ -1536,8 +1540,10 @@ impl QueryBuilder for SqliteQueryBuilder {
 		if let Some(select) = &stmt.select {
 			let (select_sql, select_values) = self.build_select(select);
 			writer.push_space();
-			writer.push(&select_sql);
-			writer.append_values(&select_values);
+			writer.push(&crate::query::traits::inline_params(
+				&select_sql,
+				&select_values,
+			));
 		}
 
 		writer.finish()

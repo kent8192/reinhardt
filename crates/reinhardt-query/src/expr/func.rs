@@ -63,6 +63,10 @@ impl Func {
 	}
 
 	/// Create a typed temporal truncation expression.
+	///
+	/// For PostgreSQL [`TemporalTruncOutput::DateTime`] output, `expr` must
+	/// produce `TIMESTAMP WITH TIME ZONE`. Convert a `TIMESTAMP WITHOUT TIME
+	/// ZONE` source explicitly before constructing the expression.
 	pub fn temporal_trunc(
 		expr: SimpleExpr,
 		kind: TemporalTruncKind,

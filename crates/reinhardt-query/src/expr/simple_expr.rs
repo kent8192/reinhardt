@@ -166,6 +166,11 @@ pub enum SimpleExpr {
 	/// A typed backend-specific temporal truncation expression.
 	TemporalTrunc {
 		/// Source date or datetime expression.
+		///
+		/// For PostgreSQL [`TemporalTruncOutput::DateTime`] projections, this
+		/// expression must produce `TIMESTAMP WITH TIME ZONE`. Convert a
+		/// `TIMESTAMP WITHOUT TIME ZONE` expression explicitly before constructing
+		/// this variant.
 		expr: Box<SimpleExpr>,
 		/// Truncation unit.
 		kind: TemporalTruncKind,

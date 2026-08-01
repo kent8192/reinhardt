@@ -112,6 +112,22 @@ impl MySqlQueryBuilder {
 		writer.push(")");
 	}
 
+	fn write_week_start(
+		&self,
+		writer: &mut SqlWriter,
+		expr: &SimpleExpr,
+		time_zone: Option<&TemporalTimeZone>,
+		output: TemporalTruncOutput,
+	) {
+		writer.push("STR_TO_DATE(DATE_FORMAT(");
+		if output == TemporalTruncOutput::DateTime {
+			self.write_datetime_in_zone(writer, expr, time_zone);
+		} else {
+			self.write_simple_expr(writer, expr);
+		}
+		writer.push(", '%x-%v Monday'), '%x-%v %W')");
+	}
+
 	fn write_temporal_trunc(
 		&self,
 		writer: &mut SqlWriter,
@@ -121,25 +137,12 @@ impl MySqlQueryBuilder {
 		output: TemporalTruncOutput,
 	) {
 		if kind == TemporalTruncKind::Week {
-			if output == TemporalTruncOutput::DateTime {
-				writer.push("CAST(");
-			}
-			writer.push("DATE_SUB(DATE(");
-			if output == TemporalTruncOutput::DateTime {
-				self.write_datetime_in_zone(writer, expr, time_zone);
-			} else {
-				self.write_simple_expr(writer, expr);
-			}
-			writer.push("), INTERVAL WEEKDAY(");
-			if output == TemporalTruncOutput::DateTime {
-				self.write_datetime_in_zone(writer, expr, time_zone);
-			} else {
-				self.write_simple_expr(writer, expr);
-			}
-			writer.push(") DAY)");
-			if output == TemporalTruncOutput::DateTime {
-				writer.push(" AS DATETIME)");
-			}
+			writer.push("CAST(");
+			self.write_week_start(writer, expr, time_zone, output);
+			writer.push(match output {
+				TemporalTruncOutput::Date => " AS DATE)",
+				TemporalTruncOutput::DateTime => " AS DATETIME)",
+			});
 			return;
 		}
 
@@ -1624,8 +1627,10 @@ impl QueryBuilder for MySqlQueryBuilder {
 		if let Some(select) = &stmt.select {
 			let (select_sql, select_values) = self.build_select(select);
 			writer.push_space();
-			writer.push(&select_sql);
-			writer.append_values(&select_values);
+			writer.push(&crate::query::traits::inline_params(
+				&select_sql,
+				&select_values,
+			));
 		}
 
 		writer.finish()

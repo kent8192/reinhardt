@@ -153,6 +153,7 @@ impl PostgresQueryBuilder {
 		&self,
 		stmt: &CreateTableStatement,
 	) -> Result<(String, Values), crate::QueryBuildError> {
+		crate::error::validate_create_table_for_backend(stmt, "PostgreSQL")?;
 		#[cfg(feature = "pgvector")]
 		crate::error::validate_postgres_create_table_dimensions(stmt)?;
 		Ok(self.build_create_table(stmt))
@@ -190,6 +191,7 @@ impl PostgresQueryBuilder {
 		&self,
 		stmt: &AlterTableStatement,
 	) -> Result<(String, Values), crate::QueryBuildError> {
+		crate::error::validate_alter_table_for_backend(stmt, "PostgreSQL")?;
 		#[cfg(feature = "pgvector")]
 		crate::error::validate_postgres_alter_table_dimensions(stmt)?;
 		Ok(self.build_alter_table(stmt))
@@ -2122,8 +2124,10 @@ impl QueryBuilder for PostgresQueryBuilder {
 		if let Some(select) = &stmt.select {
 			let (select_sql, select_values) = self.build_select(select);
 			writer.push_space();
-			writer.push(&select_sql);
-			writer.append_values(&select_values);
+			writer.push(&crate::query::traits::inline_params(
+				&select_sql,
+				&select_values,
+			));
 		}
 
 		writer.finish()
@@ -4942,6 +4946,39 @@ mod tests {
 				output: "date"
 			}
 		));
+	}
+
+	#[rstest]
+	fn checked_ddl_builders_reject_direct_invalid_temporal_date_truncation() {
+		let invalid_projection = SimpleExpr::TemporalTrunc {
+			expr: Box::new(Expr::col("occurred_on").into_simple_expr()),
+			kind: TemporalTruncKind::Hour,
+			time_zone: None,
+			output: TemporalTruncOutput::Date,
+		};
+		let mut create = Query::create_table();
+		create.table("events").col(
+			ColumnDef::new("bucket")
+				.date()
+				.default(invalid_projection.clone()),
+		);
+		let mut alter = Query::alter_table();
+		alter
+			.table("events")
+			.add_column(ColumnDef::new("bucket").date().default(invalid_projection));
+
+		let expected_error = crate::QueryBuildError::InvalidTemporalTruncation {
+			kind: "hour",
+			output: "date",
+		};
+		assert_eq!(
+			PostgresQueryBuilder.build_create_table_checked(&create),
+			Err(expected_error.clone())
+		);
+		assert_eq!(
+			PostgresQueryBuilder.build_alter_table_checked(&alter),
+			Err(expected_error)
+		);
 	}
 
 	#[test]

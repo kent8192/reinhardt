@@ -12,6 +12,7 @@ use reinhardt_db::orm::{
 	DateProjectionOrder, DateTimeTruncKind, DateTruncKind, FieldRef, FieldSelector, Model,
 	OrmExecutor,
 };
+use rstest::rstest;
 use serde::{Deserialize, Serialize};
 #[cfg(feature = "sqlite")]
 use serial_test::serial;
@@ -166,6 +167,7 @@ fn value_row(value: QueryValue) -> Row {
 	row
 }
 
+#[rstest]
 #[tokio::test]
 async fn dates_with_db_decodes_iso_week_boundaries_and_orders_in_sql() {
 	let rows = vec![
@@ -194,8 +196,7 @@ async fn dates_with_db_decodes_iso_week_boundaries_and_orders_in_sql() {
 	assert_eq!(
 		executor.sql.unwrap(),
 		concat!(
-			"SELECT DISTINCT DATE(\"event_date\", '-' || ((CAST(strftime('%w', ",
-			"\"event_date\") AS INTEGER) + 6) % 7) || ' days') AS \"value\" ",
+			"SELECT DISTINCT DATE(\"event_date\", '-6 days', 'weekday 1') AS \"value\" ",
 			"FROM \"projection_events\" WHERE \"event_date\" IS NOT NULL ORDER BY ",
 			"\"value\" ASC"
 		)
@@ -203,6 +204,7 @@ async fn dates_with_db_decodes_iso_week_boundaries_and_orders_in_sql() {
 	assert_eq!(executor.params, Vec::<QueryValue>::new());
 }
 
+#[rstest]
 #[tokio::test]
 async fn datetimes_with_db_returns_named_zone_values_across_dst_gap_and_fold() {
 	let rows = vec![
@@ -237,6 +239,7 @@ async fn datetimes_with_db_returns_named_zone_values_across_dst_gap_and_fold() {
 	);
 }
 
+#[rstest]
 #[tokio::test]
 async fn sqlite_named_time_zone_returns_capability_error_without_querying() {
 	let mut executor =
@@ -268,6 +271,7 @@ async fn sqlite_named_time_zone_returns_capability_error_without_querying() {
 	assert_eq!(executor.sql, None);
 }
 
+#[rstest]
 #[tokio::test]
 async fn dates_with_executor_uses_the_caller_owned_transaction() {
 	let rows = vec![value_row(QueryValue::String("2026-01-01".to_string()))];
@@ -294,6 +298,7 @@ async fn dates_with_executor_uses_the_caller_owned_transaction() {
 	);
 }
 
+#[rstest]
 #[tokio::test]
 #[cfg(feature = "sqlite")]
 #[serial(date_projection_database)]

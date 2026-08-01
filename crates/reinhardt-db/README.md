@@ -213,6 +213,7 @@ Add this to your `Cargo.toml`:
 ```toml
 [dependencies]
 reinhardt-db = "0.4.0-alpha.3"
+chrono-tz = "0.10"
 ```
 
 ### Optional Features

@@ -1140,6 +1140,9 @@ impl<M: Model> Manager<M> {
 	}
 
 	/// Return distinct truncated values from a generated date field.
+	///
+	/// Querysets created from subqueries, querysets with CTEs, querysets with
+	/// lateral joins, and grouped or HAVING querysets are not supported.
 	pub async fn dates<F>(
 		&self,
 		field: super::expressions::FieldRef<M, F>,
@@ -1153,6 +1156,9 @@ impl<M: Model> Manager<M> {
 	}
 
 	/// Return distinct truncated dates through a caller-owned ORM executor.
+	///
+	/// Querysets created from subqueries, querysets with CTEs, querysets with
+	/// lateral joins, and grouped or HAVING querysets are not supported.
 	pub async fn dates_with_db<E, F>(
 		&self,
 		conn: &mut E,
@@ -1170,6 +1176,9 @@ impl<M: Model> Manager<M> {
 	}
 
 	/// Return distinct truncated dates through an active transaction executor.
+	///
+	/// Querysets created from subqueries, querysets with CTEs, querysets with
+	/// lateral joins, and grouped or HAVING querysets are not supported.
 	pub async fn dates_with_executor<F>(
 		&self,
 		executor: &mut dyn super::connection::TransactionExecutor,
@@ -1186,6 +1195,9 @@ impl<M: Model> Manager<M> {
 	}
 
 	/// Return distinct truncated values from a generated UTC datetime field.
+	///
+	/// Querysets created from subqueries, querysets with CTEs, querysets with
+	/// lateral joins, and grouped or HAVING querysets are not supported.
 	pub async fn datetimes<F>(
 		&self,
 		field: super::expressions::FieldRef<M, F>,
@@ -1202,6 +1214,9 @@ impl<M: Model> Manager<M> {
 	}
 
 	/// Return distinct truncated datetimes through a caller-owned ORM executor.
+	///
+	/// Querysets created from subqueries, querysets with CTEs, querysets with
+	/// lateral joins, and grouped or HAVING querysets are not supported.
 	pub async fn datetimes_with_db<E, F>(
 		&self,
 		conn: &mut E,
@@ -1220,6 +1235,9 @@ impl<M: Model> Manager<M> {
 	}
 
 	/// Return distinct truncated datetimes through an active transaction executor.
+	///
+	/// Querysets created from subqueries, querysets with CTEs, querysets with
+	/// lateral joins, and grouped or HAVING querysets are not supported.
 	pub async fn datetimes_with_executor<F>(
 		&self,
 		executor: &mut dyn super::connection::TransactionExecutor,

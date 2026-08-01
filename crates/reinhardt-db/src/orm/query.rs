@@ -1529,45 +1529,6 @@ where
 			stmt.cond_where(condition);
 		}
 		stmt.and_where(source.is_not_null());
-		for having_cond in &self.having_conditions {
-			match having_cond {
-				HavingCondition::AggregateCompare {
-					func,
-					field,
-					operator,
-					value,
-				} => {
-					let aggregate = self.having_aggregate_expr(func, field);
-					let condition = match operator {
-						ComparisonOp::Eq => match value {
-							AggregateValue::Int(value) => aggregate.eq(*value),
-							AggregateValue::Float(value) => aggregate.eq(*value),
-						},
-						ComparisonOp::Ne => match value {
-							AggregateValue::Int(value) => aggregate.ne(*value),
-							AggregateValue::Float(value) => aggregate.ne(*value),
-						},
-						ComparisonOp::Gt => match value {
-							AggregateValue::Int(value) => aggregate.gt(*value),
-							AggregateValue::Float(value) => aggregate.gt(*value),
-						},
-						ComparisonOp::Gte => match value {
-							AggregateValue::Int(value) => aggregate.gte(*value),
-							AggregateValue::Float(value) => aggregate.gte(*value),
-						},
-						ComparisonOp::Lt => match value {
-							AggregateValue::Int(value) => aggregate.lt(*value),
-							AggregateValue::Float(value) => aggregate.lt(*value),
-						},
-						ComparisonOp::Lte => match value {
-							AggregateValue::Int(value) => aggregate.lte(*value),
-							AggregateValue::Float(value) => aggregate.lte(*value),
-						},
-					};
-					stmt.and_having(condition);
-				}
-			}
-		}
 		stmt.distinct();
 		stmt.order_by_expr(Expr::col(Alias::new("value")), order.into());
 		if let Some(limit) = self.limit {
@@ -5149,7 +5110,7 @@ where
 	}
 
 	fn filter_lhs_expr(&self, filter: &Filter) -> Expr {
-		if !self.relation_joins.is_empty() && filter.relation_alias().is_none() {
+		if self.has_joined_tables() && filter.relation_alias().is_none() {
 			match &filter.field_source {
 				FilterField::Column if !filter.field.contains('.') => {
 					return Expr::col((Alias::new(self.root_alias()), Alias::new(&filter.field)));
@@ -5165,7 +5126,7 @@ where
 	}
 
 	fn filter_lhs_sql(&self, filter: &Filter) -> String {
-		if !self.relation_joins.is_empty() && filter.relation_alias().is_none() {
+		if self.has_joined_tables() && filter.relation_alias().is_none() {
 			match &filter.field_source {
 				FilterField::Column if !filter.field.contains('.') => {
 					return quote_identifier(&format!("{}.{}", self.root_alias(), filter.field));
@@ -6186,8 +6147,9 @@ where
 	/// Return distinct truncated values from a generated date field.
 	///
 	/// Truncation, `DISTINCT`, null exclusion, and ordering are performed by the
-	/// database. ISO weeks begin on Monday. Grouped querysets and querysets with
-	/// lateral joins are not supported.
+	/// database. ISO weeks begin on Monday. Querysets created from subqueries,
+	/// querysets with CTEs, querysets with lateral joins, and grouped or HAVING
+	/// querysets are not supported.
 	pub async fn dates<F>(
 		&self,
 		field: super::expressions::FieldRef<T, F>,
@@ -6203,7 +6165,8 @@ where
 
 	/// Return distinct truncated dates through a caller-owned ORM executor.
 	///
-	/// Grouped querysets and querysets with lateral joins are not supported.
+	/// Querysets created from subqueries, querysets with CTEs, querysets with
+	/// lateral joins, and grouped or HAVING querysets are not supported.
 	pub async fn dates_with_db<E, F>(
 		&self,
 		conn: &mut E,
@@ -6228,7 +6191,8 @@ where
 
 	/// Return distinct truncated dates through an active transaction executor.
 	///
-	/// Grouped querysets and querysets with lateral joins are not supported.
+	/// Querysets created from subqueries, querysets with CTEs, querysets with
+	/// lateral joins, and grouped or HAVING querysets are not supported.
 	pub async fn dates_with_executor<F>(
 		&self,
 		executor: &mut dyn super::connection::TransactionExecutor,
@@ -6256,8 +6220,9 @@ where
 	///
 	/// `time_zone` defaults to UTC. The database converts each source instant
 	/// before truncation. SQLite and MySQL return an `Unsupported` capability
-	/// error for named zones; PostgreSQL performs named-zone conversion. Grouped
-	/// querysets and querysets with lateral joins are not supported.
+	/// error for named zones; PostgreSQL performs named-zone conversion. Querysets
+	/// created from subqueries, querysets with CTEs, querysets with lateral joins,
+	/// and grouped or HAVING querysets are not supported.
 	pub async fn datetimes<F>(
 		&self,
 		field: super::expressions::FieldRef<T, F>,
@@ -6275,7 +6240,8 @@ where
 
 	/// Return distinct truncated datetimes through a caller-owned ORM executor.
 	///
-	/// Grouped querysets and querysets with lateral joins are not supported.
+	/// Querysets created from subqueries, querysets with CTEs, querysets with
+	/// lateral joins, and grouped or HAVING querysets are not supported.
 	pub async fn datetimes_with_db<E, F>(
 		&self,
 		conn: &mut E,
@@ -6307,7 +6273,8 @@ where
 
 	/// Return distinct truncated datetimes through an active transaction executor.
 	///
-	/// Grouped querysets and querysets with lateral joins are not supported.
+	/// Querysets created from subqueries, querysets with CTEs, querysets with
+	/// lateral joins, and grouped or HAVING querysets are not supported.
 	pub async fn datetimes_with_executor<F>(
 		&self,
 		executor: &mut dyn super::connection::TransactionExecutor,
@@ -11404,6 +11371,31 @@ mod tests {
 			sql.contains(r#"INNER JOIN "test_projects" ON test_users.id = test_projects.user_id"#)
 		);
 		assert!(sql.contains(r#"WHERE "test_projects"."name" = 'reinhardt'"#));
+	}
+
+	#[rstest]
+	fn temporal_projection_qualifies_root_filters_with_manual_joins() {
+		let queryset = QuerySet::<TestUser>::new()
+			.inner_join_on::<TestProject>("test_users.id = test_projects.user_id")
+			.filter(Filter::new(
+				"created_at",
+				FilterOperator::Eq,
+				FilterValue::String("2026-01-01".to_owned()),
+			));
+		let statement = queryset
+			.temporal_projection_statement(
+				"created_at",
+				TemporalTruncKind::Day,
+				DateProjectionOrder::Asc,
+				None,
+				TemporalTruncOutput::Date,
+			)
+			.expect("temporal projection should compile with a manual join");
+
+		assert_eq!(
+			statement.to_string(PostgresQueryBuilder),
+			r#"SELECT DISTINCT DATE_TRUNC('day', "test_users"."created_at")::date AS "value" FROM "test_users" INNER JOIN "test_projects" ON test_users.id = test_projects.user_id WHERE "test_users"."created_at" = '2026-01-01' AND "test_users"."created_at" IS NOT NULL ORDER BY "value" ASC"#
+		);
 	}
 
 	#[test]

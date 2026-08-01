@@ -6,7 +6,10 @@ use super::{
 	backend::DatabaseBackend,
 	error::Result,
 	query_builder::{DeleteBuilder, InsertBuilder, SelectBuilder, UpdateBuilder},
-	types::{DatabaseType, QueryResult, QueryValue, Row, RowLockCapabilities, TransactionExecutor},
+	types::{
+		DatabaseType, QueryResult, QueryValue, Row, RowLockCapabilities, RowStream,
+		TransactionExecutor,
+	},
 };
 
 #[cfg(any(feature = "postgres", feature = "sqlite", feature = "mysql"))]
@@ -165,6 +168,26 @@ impl TransactionExecutor for FlavoredTransactionExecutor {
 		self.inner
 			.fetch_all_with_context(sql, params, context)
 			.await
+	}
+
+	fn fetch_stream<'a>(
+		&'a mut self,
+		sql: String,
+		params: Vec<QueryValue>,
+		chunk_size: usize,
+	) -> Result<RowStream<'a>> {
+		self.inner.fetch_stream(sql, params, chunk_size)
+	}
+
+	fn fetch_stream_with_context<'a>(
+		&'a mut self,
+		sql: String,
+		params: Vec<QueryValue>,
+		chunk_size: usize,
+		context: Option<super::error::PgvectorOperationKind>,
+	) -> Result<RowStream<'a>> {
+		self.inner
+			.fetch_stream_with_context(sql, params, chunk_size, context)
 	}
 
 	async fn fetch_optional(&mut self, sql: &str, params: Vec<QueryValue>) -> Result<Option<Row>> {
@@ -887,6 +910,31 @@ impl DatabaseConnection {
 		params: Vec<super::types::QueryValue>,
 	) -> Result<Vec<super::types::Row>> {
 		self.backend.fetch_all(sql, params).await
+	}
+
+	/// Streams rows without eagerly materializing the result set.
+	pub fn fetch_stream(
+		&self,
+		sql: String,
+		params: Vec<super::types::QueryValue>,
+		chunk_size: usize,
+	) -> Result<RowStream<'_>> {
+		self.backend.fetch_stream(sql, params, chunk_size)
+	}
+
+	pub(crate) fn fetch_stream_with_context(
+		&self,
+		sql: String,
+		params: Vec<super::types::QueryValue>,
+		chunk_size: usize,
+		context: Option<super::error::PgvectorOperationKind>,
+	) -> Result<RowStream<'_>> {
+		self.backend
+			.fetch_stream_with_context(sql, params, chunk_size, context)
+	}
+
+	pub(crate) fn supports_row_streaming(&self) -> bool {
+		self.backend.supports_row_streaming()
 	}
 
 	pub(crate) async fn fetch_all_with_context(

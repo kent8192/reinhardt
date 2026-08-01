@@ -33,6 +33,7 @@
 //!
 //! - **Django-style Models**: Define database models with structs
 //! - **QuerySet API**: Chainable query builder with conditional partial updates
+//!   and lifetime-bound, row-by-row model streaming
 //! - **Field Types**: Rich set of field types with validation
 //! - **Relationships**: ForeignKey, ManyToMany, OneToOne
 //! - **Fixtures**: Django-compatible model fixture dump/load runtime with upsert,

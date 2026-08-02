@@ -611,7 +611,7 @@ mod tests {
 	use super::*;
 	use crate::migrations::fields::FieldType;
 	use crate::migrations::introspection::{
-		ColumnInfo, ForeignKeyInfo, TableInfo, UniqueConstraintInfo,
+		ColumnInfo, ForeignKeyInfo, IndexInfo, TableInfo, UniqueConstraintInfo,
 	};
 	use crate::migrations::{GeneratedColumnDefinition, GeneratedStorage, SchemaExpr};
 	use std::collections::HashMap;
@@ -693,6 +693,40 @@ mod tests {
 		assert!(code.contains("pub id: i64"));
 		assert!(code.contains("pub name: String"));
 		assert!(code.contains("pub email: Option<String>"));
+	}
+
+	#[test]
+	fn generate_model_rejects_composite_indexes() {
+		let generator = SchemaCodeGenerator::new(IntrospectConfig::default());
+		let mut table = create_test_table();
+		table.indexes.insert(
+			"users_name_email_idx".to_string(),
+			IndexInfo {
+				name: "users_name_email_idx".to_string(),
+				columns: vec!["name".to_string(), "email".to_string()],
+				unique: false,
+				#[cfg(feature = "pgvector")]
+				access_method: None,
+				index_type: None,
+				#[cfg(feature = "pgvector")]
+				expressions: None,
+				#[cfg(feature = "pgvector")]
+				operator_class: None,
+				#[cfg(feature = "pgvector")]
+				operator_class_is_default: false,
+			},
+		);
+		let schema = DatabaseSchema {
+			tables: [("users".to_string(), table.clone())].into(),
+		};
+
+		let error = generator
+			.generate_model(&table, &HashMap::new(), &schema)
+			.expect_err("composite indexes must not be silently discarded");
+		assert_eq!(
+			error.to_string(),
+			"Introspection error: index `users_name_email_idx` on `users` has 2 columns and cannot be represented by a field attribute"
+		);
 	}
 
 	#[test]

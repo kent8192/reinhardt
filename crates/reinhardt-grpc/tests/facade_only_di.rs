@@ -8,6 +8,18 @@ use std::process::Command;
 fn facade_only_dependency_compiles_grpc_handler_di() {
 	run_facade_fixture("renamed", "reinhardt", true, "reinhardt");
 	run_facade_fixture("package-only", "reinhardt-web", false, "reinhardt");
+	run_facade_fixture(
+		"explicit-package-alias",
+		"reinhardt-web",
+		true,
+		"reinhardt_web",
+	);
+	run_facade_fixture(
+		"normalized-package-alias",
+		"reinhardt_web",
+		true,
+		"reinhardt_web",
+	);
 }
 
 fn run_facade_fixture(case: &str, dependency_key: &str, package_alias: bool, crate_ident: &str) {

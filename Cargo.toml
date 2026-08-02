@@ -332,7 +332,12 @@ db-sqlite = [
   "reinhardt-commands?/sqlite",
   "reinhardt-macros/db-sqlite",
 ]
-db-cockroachdb = ["database", "reinhardt-db/cockroachdb-backend", "reinhardt-commands?/postgres"]
+db-cockroachdb = [
+  "database",
+  "reinhardt-db/cockroachdb-backend",
+  "reinhardt-commands?/postgres",
+  "reinhardt-macros/db-postgres",
+]
 
 # Fine-grained middleware
 middleware-cors = ["reinhardt-middleware", "reinhardt-middleware/cors"]

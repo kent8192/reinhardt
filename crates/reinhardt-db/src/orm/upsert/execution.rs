@@ -249,7 +249,13 @@ where
 			result.rows_affected
 		)));
 	}
-	Ok((candidate, false))
+	let Some(reloaded) = load_locked(plan, transaction).await? else {
+		return Err(Error::Conflict(
+			"update_or_create UPDATE completed without exactly one row matching the full lookup"
+				.to_owned(),
+		));
+	};
+	Ok((reloaded, false))
 }
 
 fn validate_writable_update_fields<M: Model>(
@@ -1177,7 +1183,10 @@ mod tests {
 				rows_affected: 1,
 				last_insert_id: None,
 			})],
-			vec![Ok(vec![article_row(7, "rust", 1, "old", 10)])],
+			vec![
+				Ok(vec![article_row(7, "rust", 1, "old", 10)]),
+				Ok(vec![article_row(7, "rust", 2, "old", 10)]),
+			],
 		);
 
 		let (article, created) =
@@ -1202,6 +1211,15 @@ mod tests {
 					sql: "UPDATE \"articles\" SET \"rank\" = $1 WHERE \"id\" = $2".to_owned(),
 					params: vec![QueryValue::Int(2), QueryValue::Int(7)],
 				},
+				Call {
+					operation: "fetch_all",
+					sql: concat!(
+						"SELECT \"id\", \"slug\", \"rank\", \"headline\", \"computed\", \"readonly\" FROM ",
+						"\"articles\" WHERE \"slug\" = $1 LIMIT 2 FOR UPDATE",
+					)
+					.to_owned(),
+					params: vec![QueryValue::String("rust".to_owned())],
+				},
 			]
 		);
 	}
@@ -1214,7 +1232,10 @@ mod tests {
 				rows_affected: 1,
 				last_insert_id: None,
 			})],
-			vec![Ok(vec![article_row(7, "rust", 1, "old", 10)])],
+			vec![
+				Ok(vec![article_row(7, "rust", 1, "old", 10)]),
+				Ok(vec![article_row(8, "rust", 2, "old", 10)]),
+			],
 		);
 		let mut mutation_plan = plan(2, None);
 		mutation_plan.update.push(
@@ -1247,7 +1268,10 @@ mod tests {
 				rows_affected: 1,
 				last_insert_id: None,
 			})],
-			vec![Ok(vec![composite_article_row(7, 9, "rust", 1)])],
+			vec![
+				Ok(vec![composite_article_row(7, 9, "rust", 1)]),
+				Ok(vec![composite_article_row(8, 10, "rust", 2)]),
+			],
 		);
 
 		let (article, created) =
@@ -1356,6 +1380,7 @@ mod tests {
 			vec![
 				Ok(Vec::new()),
 				Ok(vec![article_row(9, "rust", 5, "winner", 12)]),
+				Ok(vec![article_row(9, "rust", 2, "hooked", 12)]),
 			],
 		);
 		let manager = RaceHookManager::default();
@@ -1411,6 +1436,7 @@ mod tests {
 			vec![
 				Ok(Vec::new()),
 				Ok(vec![article_row(10, "rust", 1, "winner", 13)]),
+				Ok(vec![article_row(10, "rust", 2, "winner", 13)]),
 			],
 		);
 
@@ -1424,7 +1450,7 @@ mod tests {
 		let calls = &state.lock().unwrap().calls;
 		assert_eq!(
 			calls.iter().map(|call| call.operation).collect::<Vec<_>>(),
-			["fetch_all", "execute", "fetch_all", "execute"]
+			["fetch_all", "execute", "fetch_all", "execute", "fetch_all"]
 		);
 		assert!(calls[2].sql.ends_with("LIMIT 2 FOR UPDATE"));
 		assert_eq!(
@@ -1495,7 +1521,10 @@ mod tests {
 				rows_affected: 0,
 				last_insert_id: None,
 			})],
-			vec![Ok(vec![article_row(10, "rust", 1, "old", 13)])],
+			vec![
+				Ok(vec![article_row(10, "rust", 1, "old", 13)]),
+				Ok(vec![article_row(10, "rust", 2, "old", 13)]),
+			],
 		);
 
 		let (article, created) =
@@ -1513,7 +1542,7 @@ mod tests {
 				.iter()
 				.map(|call| call.operation)
 				.collect::<Vec<_>>(),
-			["fetch_all", "execute"]
+			["fetch_all", "execute", "fetch_all"]
 		);
 	}
 
@@ -1546,7 +1575,10 @@ mod tests {
 				rows_affected: 1,
 				last_insert_id: None,
 			})],
-			vec![Ok(vec![article_row(11, "rust", 1, "old", 14)])],
+			vec![
+				Ok(vec![article_row(11, "rust", 1, "old", 14)]),
+				Ok(vec![article_row(11, "rust", 2, "old", 14)]),
+			],
 		);
 		let success = success
 			.run(async |transaction| {

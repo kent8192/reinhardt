@@ -919,7 +919,7 @@ async fn verify_basic_cases(connection: &mut DatabaseConnection) -> Result<()> {
 	);
 
 	let rollback = connection
-		.atomic(async |transaction| {
+		.atomic_write(async |transaction| {
 			Tag::objects()
 				.get_or_create()
 				.lookup(Tag::field_slug(), "rolled-back")

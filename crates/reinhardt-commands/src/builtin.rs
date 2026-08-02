@@ -561,7 +561,11 @@ impl BaseCommand for MigrateCommand {
 					.iter()
 					.filter(|m| !applied_names.contains(m.name.as_str()))
 					.collect();
-				let pending = dependency_ordered_migrations(pending)?;
+				let pending = dependency_ordered_migrations_with_partial_replacement_dependencies(
+					pending,
+					&all_migrations,
+					&applied_for_app,
+				)?;
 
 				if pending.is_empty() {
 					ctx.info(&format!(
@@ -914,7 +918,94 @@ fn dependency_ordered_migrations_with_applied_history<'a>(
 				.contains(&(migration.app_label.as_str(), migration.name.as_str()))
 	});
 
-	dependency_ordered_migrations(selected)
+	dependency_ordered_migrations_with_partial_replacement_dependencies(
+		selected, migrations, applied,
+	)
+}
+
+/// Sort selected migrations while preserving dependencies on a partially applied
+/// replacement's remaining original chain.
+#[cfg(feature = "migrations")]
+fn dependency_ordered_migrations_with_partial_replacement_dependencies<'a>(
+	migrations: impl IntoIterator<Item = &'a reinhardt_db::migrations::Migration>,
+	all_migrations: &[reinhardt_db::migrations::Migration],
+	applied: &[reinhardt_db::migrations::recorder::MigrationRecord],
+) -> CommandResult<Vec<&'a reinhardt_db::migrations::Migration>> {
+	use reinhardt_db::migrations::{MigrationGraph, MigrationKey};
+	use std::collections::{HashMap, HashSet};
+
+	let applied_keys: HashSet<_> = applied
+		.iter()
+		.map(|record| (record.app.as_str(), record.name.as_str()))
+		.collect();
+	let partial_replacement_dependencies: HashMap<_, Vec<_>> = all_migrations
+		.iter()
+		.filter(|migration| {
+			!migration.replaces.is_empty()
+				&& !replacement_history_is_fully_applied(
+					all_migrations,
+					&migration.app_label,
+					&migration.name,
+					applied,
+				) && migration
+				.replaces
+				.iter()
+				.any(|(app, name)| applied_keys.contains(&(app.as_str(), name.as_str())))
+		})
+		.map(|migration| {
+			(
+				(migration.app_label.clone(), migration.name.clone()),
+				migration
+					.replaces
+					.iter()
+					.map(|(app, name)| MigrationKey::new(app.as_str(), name.as_str()))
+					.collect(),
+			)
+		})
+		.collect();
+	let migrations: Vec<_> = migrations.into_iter().collect();
+	let mut by_key = HashMap::with_capacity(migrations.len());
+	let mut graph = MigrationGraph::new();
+
+	for migration in &migrations {
+		let key = MigrationKey::new(migration.app_label.as_str(), migration.name.as_str());
+		let dependencies = migration
+			.dependencies
+			.iter()
+			.flat_map(|(app, name)| {
+				partial_replacement_dependencies
+					.get(&(app.clone(), name.clone()))
+					.cloned()
+					.unwrap_or_else(|| vec![MigrationKey::new(app.as_str(), name.as_str())])
+			})
+			.collect();
+		let replaces = migration
+			.replaces
+			.iter()
+			.map(|(app, name)| MigrationKey::new(app.as_str(), name.as_str()))
+			.collect();
+		by_key.insert(key.clone(), *migration);
+		graph.add_migration_with_replaces(key, dependencies, replaces);
+	}
+
+	graph
+		.resolve_execution_order_with_replaces()
+		.map_err(|e| {
+			crate::CommandError::ExecutionError(format!(
+				"Failed to sort migration plan by dependencies: {}",
+				e
+			))
+		})?
+		.into_iter()
+		.map(|key| {
+			by_key.get(&key).copied().ok_or_else(|| {
+				crate::CommandError::ExecutionError(format!(
+					"Dependency-sorted migration not found: {}",
+					key.id()
+				))
+			})
+		})
+		.collect()
 }
 
 #[cfg(feature = "migrations")]

@@ -188,9 +188,17 @@ use reinhardt::grpc::proto::common::{Empty, Timestamp, PageInfo};
 
 ### Dependency Injection
 
-Enable the `di` feature to use dependency injection in gRPC handlers:
+Facade consumers can enable `grpc` alongside a preset that includes DI:
 
 <!-- reinhardt-version-sync:2 -->
+```toml
+[dependencies]
+reinhardt = { version = "0.3.4", package = "reinhardt-web", default-features = false, features = ["minimal", "grpc"] }
+```
+
+Direct `reinhardt-grpc` consumers can instead enable this crate's `di`
+feature explicitly and depend on `reinhardt-di` for DI types:
+
 ```toml
 [dependencies]
 reinhardt-grpc = { version = "0.3.4", features = ["di"] }
@@ -200,8 +208,8 @@ reinhardt-di = "0.3.4"
 #### Basic Usage
 
 ```rust
+use reinhardt::di::InjectionContext;
 use reinhardt::grpc::{GrpcRequestExt, grpc_handler};
-use reinhardt_di::InjectionContext;
 use tonic::{Request, Response, Status};
 use std::sync::Arc;
 

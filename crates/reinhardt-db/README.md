@@ -687,8 +687,9 @@ let (profile, created) = Profile::objects()
 
 Lookups must cover a primary key, a `unique = true` field, or an immediate,
 unconditional unique constraint. Lookup fields cannot also be defaults or
-updates. `get_or_create().execute_with(...)` accepts any caller-owned
-`OrmExecutor`; `update_or_create().execute_with(...)` requires an
+updates. `get_or_create().execute_with(...)` accepts a `DatabaseConnection` or
+an `AtomicTransaction` created by `DatabaseConnection::atomic_write`;
+`update_or_create().execute_with(...)` requires an
 `AtomicTransaction` created by `DatabaseConnection::atomic_write`.
 
 The returned `created` flag is true only when this invocation inserted the row.

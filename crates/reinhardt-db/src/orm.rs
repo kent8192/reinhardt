@@ -61,8 +61,9 @@
 //! key, a `unique = true` field, or an immediate, unconditional unique
 //! constraint. Defaults and updates cannot replace lookup fields.
 //!
-//! `get_or_create().execute_with(...)` accepts any [`OrmExecutor`].
-//! `update_or_create().execute_with(...)` requires an [`AtomicTransaction`]
+//! `get_or_create().execute_with(...)` accepts a [`DatabaseConnection`] or an
+//! [`AtomicTransaction`] created by [`DatabaseConnection::atomic_write`].
+//! `update_or_create().execute_with(...)` also requires an [`AtomicTransaction`]
 //! created by [`DatabaseConnection::atomic_write`]; a transaction from
 //! [`DatabaseConnection::atomic`] is rejected before SQL execution.
 

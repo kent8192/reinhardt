@@ -212,6 +212,7 @@ where
 	let final_values = candidate
 		.encode_database_fields()
 		.map_err(field_codec_error)?;
+	validate_writable_update_fields::<C::Model>(&original, &final_values)?;
 	let generated = C::Model::generated_field_names();
 	let values = C::Model::field_metadata()
 		.into_iter()
@@ -233,13 +234,41 @@ where
 	}
 	let update = sql::update_values_by_primary_key(&locked, &values, transaction.backend())?;
 	let result = transaction.execute(&update.sql, update.params).await?;
-	if result.rows_affected != 1 {
+	if result.rows_affected != 1
+		&& !(transaction.backend() == DatabaseBackend::MySql && result.rows_affected == 0)
+	{
 		return Err(Error::Conflict(format!(
 			"update_or_create UPDATE affected {} rows; expected one",
 			result.rows_affected
 		)));
 	}
 	Ok((candidate, false))
+}
+
+fn validate_writable_update_fields<M: Model>(
+	original: &BTreeMap<String, DatabaseValue>,
+	updated: &BTreeMap<String, DatabaseValue>,
+) -> Result<()> {
+	let generated = M::generated_field_names();
+	for field in M::field_metadata() {
+		let generated_field = generated
+			.iter()
+			.any(|generated| *generated == field.name || *generated == field.db_column_name());
+		if (!field.editable || generated_field)
+			&& original.get(&field.name) != updated.get(&field.name)
+		{
+			let reason = if generated_field {
+				"database-generated"
+			} else {
+				"not writable"
+			};
+			return Err(Error::Validation(format!(
+				"before_upsert_write cannot modify {reason} field `{}` during an update",
+				field.name
+			)));
+		}
+	}
+	Ok(())
 }
 
 fn build_update_candidate<M: Model>(
@@ -859,6 +888,33 @@ mod tests {
 		}
 	}
 
+	struct InvalidUpdateHookManager {
+		field: InvalidCreateField,
+	}
+
+	impl CustomManager for InvalidUpdateHookManager {
+		type Model = Article;
+
+		fn new() -> Self {
+			Self {
+				field: InvalidCreateField::Generated,
+			}
+		}
+
+		fn before_upsert_write(
+			&self,
+			write: &mut UpsertWrite<'_, Article>,
+		) -> reinhardt_core::exception::Result<()> {
+			if let UpsertWrite::Update(article) = write {
+				match self.field {
+					InvalidCreateField::Generated => article.computed += 1,
+					InvalidCreateField::Noneditable => article.readonly = "changed".to_owned(),
+				}
+			}
+			Ok(())
+		}
+	}
+
 	#[tokio::test]
 	async fn get_or_create_rejects_invalid_create_hook_fields_before_write() {
 		for (field, diagnostic) in [
@@ -900,6 +956,37 @@ mod tests {
 			let error = execute_update_or_create(&manager, plan(2, None), &mut transaction)
 				.await
 				.expect_err("invalid update-or-create hook assignment must fail");
+
+			assert!(error.to_string().contains(diagnostic));
+			assert_eq!(
+				state
+					.lock()
+					.unwrap()
+					.calls
+					.iter()
+					.map(|call| call.operation)
+					.collect::<Vec<_>>(),
+				["fetch_all"]
+			);
+		}
+	}
+
+	#[tokio::test]
+	async fn update_or_create_rejects_invalid_update_hook_fields_before_write() {
+		for (field, diagnostic) in [
+			(InvalidCreateField::Generated, "database-generated"),
+			(InvalidCreateField::Noneditable, "not writable"),
+		] {
+			let (mut transaction, state) = Recorder::transaction(
+				DatabaseType::Postgres,
+				Vec::new(),
+				vec![Ok(vec![article_row(1, "rust", 1, "old", 10)])],
+			);
+			let manager = InvalidUpdateHookManager { field };
+
+			let error = execute_update_or_create(&manager, plan(2, None), &mut transaction)
+				.await
+				.expect_err("invalid update hook mutation must fail");
 
 			assert!(error.to_string().contains(diagnostic));
 			assert_eq!(
@@ -1239,7 +1326,6 @@ mod tests {
 				UpsertWrite::Update(article) => {
 					counts.1 += 1;
 					article.headline = "hooked".to_owned();
-					article.computed += 100;
 				}
 			}
 			Ok(())
@@ -1392,6 +1478,36 @@ mod tests {
 		assert_eq!(calls.len(), 1);
 		assert!(!calls[0].sql.contains("FOR UPDATE"));
 		assert_eq!(calls[0].operation, "fetch_all");
+	}
+
+	#[tokio::test]
+	async fn update_or_create_accepts_a_matched_but_unchanged_mysql_update() {
+		let (mut transaction, state) = Recorder::transaction(
+			DatabaseType::Mysql,
+			vec![Ok(QueryResult {
+				rows_affected: 0,
+				last_insert_id: None,
+			})],
+			vec![Ok(vec![article_row(10, "rust", 1, "old", 13)])],
+		);
+
+		let (article, created) =
+			execute_update_or_create(&Manager::<Article>::new(), plan(2, None), &mut transaction)
+				.await
+				.expect("a locked MySQL row may report no changed values");
+
+		assert_eq!(article.rank, 2);
+		assert!(!created);
+		assert_eq!(
+			state
+				.lock()
+				.unwrap()
+				.calls
+				.iter()
+				.map(|call| call.operation)
+				.collect::<Vec<_>>(),
+			["fetch_all", "execute"]
+		);
 	}
 
 	#[derive(Default)]

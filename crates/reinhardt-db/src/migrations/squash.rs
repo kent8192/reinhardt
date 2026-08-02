@@ -27,6 +27,7 @@
 //! assert_eq!(squashed.replaces.len(), 3);
 //! ```
 
+use super::dependency::{DependencyResolutionContext, DependencyResolver, MigrationDependency};
 use super::{Migration, MigrationError, Operation, Result, SquashRange};
 use reinhardt_query::prelude::SchemaExpr;
 use std::collections::HashSet;
@@ -122,6 +123,25 @@ impl MigrationSquasher {
 		name: impl Into<String>,
 		optimize: bool,
 	) -> Result<SquashResult> {
+		self.squash_range_with_context(
+			range,
+			name,
+			optimize,
+			&DependencyResolutionContext::default(),
+		)
+	}
+
+	/// Squash a validated migration range using the active dependency context.
+	///
+	/// Swappable dependencies that resolve to selected migrations are omitted,
+	/// preventing the replacement from depending on itself after graph rewrite.
+	pub fn squash_range_with_context(
+		&self,
+		range: &SquashRange,
+		name: impl Into<String>,
+		optimize: bool,
+		context: &DependencyResolutionContext,
+	) -> Result<SquashResult> {
 		let first = range.migrations.first().ok_or_else(|| {
 			MigrationError::InvalidMigration("Cannot squash empty migration range".to_string())
 		})?;
@@ -169,6 +189,7 @@ impl MigrationSquasher {
 		let mut replaces = Vec::new();
 		let mut swappable_dependencies = Vec::new();
 		let mut optional_dependencies = Vec::new();
+		let dependency_resolver = DependencyResolver::new(context);
 		let selected_migrations: HashSet<_> = range
 			.migrations
 			.iter()
@@ -186,7 +207,12 @@ impl MigrationSquasher {
 				replaces.push(identity);
 			}
 			for dependency in &migration.swappable_dependencies {
-				if !swappable_dependencies.contains(dependency) {
+				let target = dependency_resolver
+					.resolve(&MigrationDependency::Swappable(dependency.clone()))
+					.expect("swappable dependencies always resolve to a target");
+				let target_is_selected =
+					selected_migrations.contains(&(target.0.as_str(), target.1.as_str()));
+				if !target_is_selected && !swappable_dependencies.contains(dependency) {
 					swappable_dependencies.push(dependency.clone());
 				}
 			}
@@ -827,6 +853,32 @@ mod tests {
 
 		// Assert
 		assert!(result.migration.optional_dependencies.is_empty());
+	}
+
+	#[test]
+	fn squash_range_excludes_selected_swappable_dependency_with_active_setting() {
+		let mut first = Migration::new("0001_initial", "auth");
+		first
+			.swappable_dependencies
+			.push(crate::migrations::dependency::SwappableDependency::new(
+				"AUTH_USER_MODEL",
+				"accounts",
+				"User",
+				"0002_user",
+			));
+		let second = Migration::new("0002_user", "auth");
+		let range = SquashRange {
+			migrations: vec![first, second],
+			external_dependencies: vec![],
+		};
+		let context =
+			DependencyResolutionContext::new().with_setting("AUTH_USER_MODEL", "auth.User");
+
+		let result = MigrationSquasher::new()
+			.squash_range_with_context(&range, "0001_squashed_0002", false, &context)
+			.unwrap();
+
+		assert!(result.migration.swappable_dependencies.is_empty());
 	}
 
 	#[test]

@@ -848,7 +848,7 @@ impl BaseCommand for MigrateCommand {
 }
 
 /// Sort migrations with the same dependency rules used by the migration executor.
-#[cfg(feature = "migrations")]
+#[cfg(all(feature = "migrations", test))]
 fn dependency_ordered_migrations<'a>(
 	migrations: impl IntoIterator<Item = &'a reinhardt_db::migrations::Migration>,
 ) -> CommandResult<Vec<&'a reinhardt_db::migrations::Migration>> {

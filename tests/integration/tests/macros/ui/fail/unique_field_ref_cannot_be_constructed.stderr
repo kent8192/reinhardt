@@ -4,17 +4,31 @@ error[E0599]: no associated function or constant named `new` found for struct `U
 6 |     let _ = UniqueFieldRef::<Article, String>::new("title");
   |                                                ^^^ associated function or constant not found in `UniqueFieldRef<Article, std::string::String>`
   |
- note: if you're trying to build a new `UniqueFieldRef<Article, std::string::String>` consider using one of the following associated functions:
-       UniqueFieldRef::<M, T>::from_model_field
-       UniqueFieldRef::<M, T>::from_model_field_with_names
-       UniqueFieldRef::<M, T>::from_model_field_with_getter
-       UniqueFieldRef::<M, T>::from_model_field_with_names_and_getter
+note: if you're trying to build a new `UniqueFieldRef<Article, std::string::String>` consider using one of the following associated functions:
+      UniqueFieldRef::<M, T>::from_model_field
+      UniqueFieldRef::<M, T>::from_model_field_with_names
+      UniqueFieldRef::<M, T>::from_model_field_with_getter
+      UniqueFieldRef::<M, T>::from_model_field_with_names_and_getter
  --> $WORKSPACE/crates/reinhardt-db/src/orm/expressions.rs
   |
-   |       pub const unsafe fn from_model_field(name: &'static str) -> Self {
-   |       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-   | /     pub const unsafe fn from_model_field_with_names(
-   | |         logical_name: &'static str,
-   | |         column_name: &'static str,
-   | |     ) -> Self {
-   | |_____________^
+  |       pub const unsafe fn from_model_field(name: &'static str) -> Self {
+  |       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+...
+  | /     pub const unsafe fn from_model_field_with_names(
+  | |         logical_name: &'static str,
+  | |         column_name: &'static str,
+  | |     ) -> Self {
+  | |_____________^
+...
+  | /     pub const unsafe fn from_model_field_with_getter(
+  | |         name: &'static str,
+  | |         getter: fn(&M) -> Option<T>,
+  | |     ) -> Self {
+  | |_____________^
+...
+  | /     pub const unsafe fn from_model_field_with_names_and_getter(
+  | |         logical_name: &'static str,
+  | |         column_name: &'static str,
+  | |         getter: fn(&M) -> Option<T>,
+  | |     ) -> Self {
+  | |_____________^

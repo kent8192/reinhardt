@@ -773,6 +773,45 @@ impl TransactionExecutor for SqliteRawTransactionExecutor {
 		rows.into_iter().map(SqliteBackend::convert_row).collect()
 	}
 
+	fn fetch_stream<'a>(
+		&'a mut self,
+		sql: String,
+		params: Vec<QueryValue>,
+		chunk_size: usize,
+	) -> Result<RowStream<'a>> {
+		if chunk_size == 0 {
+			return Err(DatabaseError::new(
+				DatabaseErrorKind::Configuration,
+				"Row stream chunk_size must be greater than zero",
+			)
+			.into());
+		}
+		let conn = self.connection_mut()?;
+		Ok(Box::pin(async_stream::stream! {
+			let mut query = sqlx::query(&sql);
+			for param in &params {
+				query = match SqliteBackend::bind_value(query, param) {
+					Ok(query) => query,
+					Err(error) => {
+						yield Err(error);
+						return;
+					}
+				};
+			}
+			let rows = query.fetch(&mut **conn);
+			futures::pin_mut!(rows);
+			let rows = rows.ready_chunks(chunk_size);
+			futures::pin_mut!(rows);
+			while let Some(chunk) = rows.next().await {
+				for row in chunk {
+					yield row
+						.map_err(|error| map_sqlx_error(error).into())
+						.and_then(SqliteBackend::convert_row);
+				}
+			}
+		}))
+	}
+
 	async fn fetch_optional(&mut self, sql: &str, params: Vec<QueryValue>) -> Result<Option<Row>> {
 		let conn = self.connection_mut()?;
 		let mut query = sqlx::query(sql);

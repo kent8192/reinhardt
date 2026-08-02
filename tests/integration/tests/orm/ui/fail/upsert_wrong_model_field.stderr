@@ -2,14 +2,14 @@ error[E0308]: mismatched types
   --> tests/orm/ui/fail/upsert_wrong_model_field.rs:31:11
    |
 31 |         .lookup(User::field_email(), "a@example.com");
-   |          ------ ^^^^^^^^^^^^^^^^^^^ expected `FieldRef<Tag, _>`, found `FieldRef<User, String>`
+   |          ------ ^^^^^^^^^^^^^^^^^^^ expected `FieldRef<Tag, _, GeneratedModelField>`, found `FieldRef<User, String, ...>`
    |          |
    |          arguments to this method are incorrect
    |
-   = note: expected struct `reinhardt::FieldRef<Tag, _>`
-              found struct `reinhardt::FieldRef<User, std::string::String>`
+   = note: expected struct `reinhardt::FieldRef<Tag, _, reinhardt_db::orm::expressions::GeneratedModelField>`
+              found struct `reinhardt::FieldRef<User, std::string::String, reinhardt_db::orm::expressions::GeneratedModelField>`
 note: method defined here
   --> $WORKSPACE/crates/reinhardt-db/src/orm/upsert.rs
    |
-   |     pub fn lookup<T, V>(self, field: FieldRef<C::Model, T>, value: V) -> Self
+   |     pub fn lookup<T, V>(self, field: FieldRef<C::Model, T, GeneratedModelField>, value: V) -> Self
    |            ^^^^^^

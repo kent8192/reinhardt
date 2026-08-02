@@ -609,12 +609,37 @@ impl BaseCommand for MigrateCommand {
 					return Ok(());
 				}
 
+				let replacement_dependencies: HashSet<_> = to_apply
+					.iter()
+					.flat_map(|migration| {
+						migration
+							.dependencies
+							.iter()
+							.map(|(dependency_app, dependency_name)| {
+								(dependency_app.as_str(), dependency_name.as_str())
+							})
+					})
+					.collect();
 				let mut execution_migrations = to_apply.clone();
 				for migration in &all_migrations {
+					let is_partial_dependency = replacement_dependencies
+						.contains(&(migration.app_label.as_str(), migration.name.as_str()))
+						&& replacement_history_has_applied_records(
+							&all_migrations,
+							&migration.app_label,
+							&migration.name,
+							&applied_for_app,
+						) && !replacement_history_is_fully_applied(
+						&all_migrations,
+						&migration.app_label,
+						&migration.name,
+						&applied_for_app,
+					);
 					if !migration.replaces.is_empty()
-						&& applied_for_app.iter().any(|record| {
-							record.app == migration.app_label && record.name == migration.name
-						}) && !execution_migrations.iter().any(|candidate| {
+						&& (is_partial_dependency
+							|| applied_for_app.iter().any(|record| {
+								record.app == migration.app_label && record.name == migration.name
+							})) && !execution_migrations.iter().any(|candidate| {
 						candidate.app_label == migration.app_label
 							&& candidate.name == migration.name
 					}) {

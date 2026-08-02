@@ -321,20 +321,42 @@ impl DatabaseMigrationExecutor {
 				continue;
 			}
 			if !migration.replaces.is_empty() {
-				let mut applied_replacements = 0usize;
-				for (app_label, name) in &migration.replaces {
-					if self.recorder.is_applied(app_label, name).await? {
-						applied_replacements += 1;
+				let applied_records = self.recorder.get_applied_migrations().await?;
+				let applied_records_set: HashSet<_> = applied_records
+					.iter()
+					.map(|record| (record.app.as_str(), record.name.as_str()))
+					.collect();
+				let mut covered = applied_records_set.clone();
+				for known in migrations {
+					if applied_records_set
+						.contains(&(known.app_label.as_str(), known.name.as_str()))
+					{
+						covered.extend(
+							known
+								.replaces
+								.iter()
+								.map(|(app, name)| (app.as_str(), name.as_str())),
+						);
 					}
 				}
-				if applied_replacements == migration.replaces.len() {
+				let replaced: HashSet<_> = migration
+					.replaces
+					.iter()
+					.map(|(app, name)| (app.as_str(), name.as_str()))
+					.collect();
+				if replaced.is_subset(&covered) {
 					self.recorder
 						.record_applied(&migration.app_label, &migration.name)
 						.await?;
+					for (app_label, name) in &migration.replaces {
+						if applied_records_set.contains(&(app_label.as_str(), name.as_str())) {
+							self.recorder.unapply(app_label, name).await?;
+						}
+					}
 					applied.push(migration.id());
 					continue;
 				}
-				if applied_replacements != 0 {
+				if !replaced.is_disjoint(&covered) {
 					return Err(MigrationError::InvalidMigration(format!(
 						"cannot apply replacement {} because only some replaced migrations are recorded",
 						migration.id()
@@ -4089,6 +4111,44 @@ mod rollback_orchestration_tests {
 			vec![m3.id(), m2.id(), m1.id()],
 			"rollback_migrations must iterate input in reverse"
 		);
+	}
+
+	#[rstest]
+	#[tokio::test]
+	async fn replacement_history_is_recorded_as_a_single_rollback_unit() {
+		// Arrange
+		let initial = make_create_table_migration("0001_initial", "rolltest_replaced");
+		let mut add_column = Migration::new("0002_add_name", "rolltest");
+		add_column.operations.push(Operation::AddColumn {
+			table: "rolltest_replaced".to_string(),
+			column: ColumnDefinition::new("name", FieldType::VarChar(32)),
+			mysql_options: None,
+		});
+		let mut replacement = initial.clone();
+		replacement.name = "0001_squashed_0002".to_string();
+		replacement.operations.extend(add_column.operations.clone());
+		replacement.replaces = vec![
+			(initial.app_label.clone(), initial.name.clone()),
+			(add_column.app_label.clone(), add_column.name.clone()),
+		];
+		let mut executor = make_executor().await;
+		executor
+			.apply_migrations(&[initial.clone(), add_column.clone()])
+			.await
+			.expect("apply original history");
+
+		// Act
+		executor
+			.apply_migrations(&[initial.clone(), add_column.clone(), replacement.clone()])
+			.await
+			.expect("record equivalent replacement history");
+		let result = executor
+			.rollback_migrations(&[initial, add_column, replacement.clone()])
+			.await
+			.expect("rollback replacement history");
+
+		// Assert
+		assert_eq!(result.applied, vec![replacement.id()]);
 	}
 
 	#[rstest]

@@ -1,4 +1,4 @@
-use crate::orm::expressions::FieldRef;
+use crate::orm::expressions::{FieldRef, GeneratedModelField};
 use crate::orm::field_codec::{
 	DatabaseField, DatabaseScalar, DatabaseValue, FieldCodecContext, FieldCodecError,
 	IntoFieldValue,
@@ -17,7 +17,7 @@ pub(crate) struct TypedAssignment<M> {
 }
 
 impl<M> TypedAssignment<M> {
-	pub(crate) fn new<T, V>(field: FieldRef<M, T>, value: V) -> Result<Self>
+	pub(crate) fn new<T, V, Origin>(field: FieldRef<M, T, Origin>, value: V) -> Result<Self>
 	where
 		T: DatabaseField,
 		V: IntoFieldValue<T>,
@@ -85,7 +85,7 @@ pub struct UpsertCreate<'a, M> {
 
 impl<M: Model> UpsertCreate<'_, M> {
 	/// Reads a typed value from the pending create values or immutable lookup.
-	pub fn get<T>(&self, field: FieldRef<M, T>) -> Result<Option<T>>
+	pub fn get<T>(&self, field: FieldRef<M, T, GeneratedModelField>) -> Result<Option<T>>
 	where
 		T: DatabaseField,
 	{
@@ -112,7 +112,7 @@ impl<M: Model> UpsertCreate<'_, M> {
 	}
 
 	/// Sets a typed create value while preserving immutable lookup fields.
-	pub fn set<T, V>(&mut self, field: FieldRef<M, T>, value: V) -> Result<()>
+	pub fn set<T, V>(&mut self, field: FieldRef<M, T, GeneratedModelField>, value: V) -> Result<()>
 	where
 		T: DatabaseField,
 		V: IntoFieldValue<T>,

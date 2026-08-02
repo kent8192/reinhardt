@@ -43,16 +43,12 @@ pub(crate) fn select_by_lookup<M: Model>(
 			statement.and_where(column.eq(database_value_to_query_value(assignment.value.clone())));
 		}
 	}
-	if lock && matches!(backend, DatabaseBackend::Postgres | DatabaseBackend::MySql) {
-		statement.lock_exclusive();
-	}
-
 	let (mut sql, values) = build_select_sql(&statement, backend);
-	// Workaround for missing reinhardt-query LockClause rendering
+	// Workaround for reinhardt-query lock and inline LIMIT ordering
 	// (tracked in reinhardt-web#5813). Keep LIMIT and FOR UPDATE together here because
 	// SelectStatement::limit(2) currently adds a bound parameter, which would change
-	// BoundSql.params. Remove both manual suffixes once LockClause rendering and the
-	// inline LIMIT contract can be expressed by the builder.
+	// BoundSql.params. Remove both manual suffixes once the builder can express an inline
+	// LIMIT followed by a lock clause.
 	//
 	// Ideal implementation (without workaround):
 	//   statement.limit(2);
@@ -114,9 +110,6 @@ pub(crate) fn select_by_primary_key<M: Model>(
 				.eq(database_value_to_query_value(value.clone())),
 		);
 	}
-	if lock && matches!(backend, DatabaseBackend::Postgres | DatabaseBackend::MySql) {
-		statement.lock_exclusive();
-	}
 	let (mut sql, values) = build_select_sql(&statement, backend);
 	sql.push_str(" LIMIT 2");
 	if lock && matches!(backend, DatabaseBackend::Postgres | DatabaseBackend::MySql) {
@@ -150,6 +143,7 @@ pub(crate) fn insert<M: Model>(plan: &UpsertPlan<M>, backend: DatabaseBackend) -
 				.do_nothing()
 				.to_owned(),
 		);
+		statement.returning_all();
 	}
 
 	let (sql, values) = build_insert_sql(&statement, backend);
@@ -701,7 +695,7 @@ mod tests {
 	#[rstest]
 	#[case(
 		DatabaseBackend::Postgres,
-		"INSERT INTO \"articles\" (\"tenant_id\", \"article_slug\", \"headline\") VALUES ($1, $2, $3) ON CONFLICT (\"tenant_id\", \"article_slug\") DO NOTHING"
+		"INSERT INTO \"articles\" (\"tenant_id\", \"article_slug\", \"headline\") VALUES ($1, $2, $3) ON CONFLICT (\"tenant_id\", \"article_slug\") DO NOTHING RETURNING *"
 	)]
 	#[case(
 		DatabaseBackend::MySql,
@@ -709,7 +703,7 @@ mod tests {
 	)]
 	#[case(
 		DatabaseBackend::Sqlite,
-		"INSERT INTO \"articles\" (\"tenant_id\", \"article_slug\", \"headline\") VALUES (?, ?, ?) ON CONFLICT (\"tenant_id\", \"article_slug\") DO NOTHING"
+		"INSERT INTO \"articles\" (\"tenant_id\", \"article_slug\", \"headline\") VALUES (?, ?, ?) ON CONFLICT (\"tenant_id\", \"article_slug\") DO NOTHING RETURNING *"
 	)]
 	fn insert_uses_backend_conflict_handling(
 		#[case] backend: DatabaseBackend,

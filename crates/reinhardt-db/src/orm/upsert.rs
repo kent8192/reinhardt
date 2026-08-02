@@ -47,7 +47,7 @@ pub(crate) mod sql;
 
 use crate::orm::connection::OrmExecutor;
 use crate::orm::custom_manager::CustomManager;
-use crate::orm::expressions::FieldRef;
+use crate::orm::expressions::{FieldRef, GeneratedModelField};
 use crate::orm::field_codec::{DatabaseField, IntoFieldValue};
 use crate::orm::transaction::AtomicTransaction;
 use crate::orm::upsert::assignment::TypedAssignment;
@@ -86,7 +86,7 @@ impl<C: CustomManager> GetOrCreateBuilder<C> {
 	/// Adds a field whose value identifies the row.
 	///
 	/// The complete lookup must cover supported immediate uniqueness.
-	pub fn lookup<T, V>(self, field: FieldRef<C::Model, T>, value: V) -> Self
+	pub fn lookup<T, V>(self, field: FieldRef<C::Model, T, GeneratedModelField>, value: V) -> Self
 	where
 		T: DatabaseField,
 		V: IntoFieldValue<T>,
@@ -100,7 +100,7 @@ impl<C: CustomManager> GetOrCreateBuilder<C> {
 	/// Adds a value used only when the row must be created.
 	///
 	/// A default cannot target a lookup field.
-	pub fn default<T, V>(self, field: FieldRef<C::Model, T>, value: V) -> Self
+	pub fn default<T, V>(self, field: FieldRef<C::Model, T, GeneratedModelField>, value: V) -> Self
 	where
 		T: DatabaseField,
 		V: IntoFieldValue<T>,
@@ -244,7 +244,7 @@ impl<C: CustomManager> UpdateOrCreateBuilder<C> {
 	/// Adds a field whose value identifies the row.
 	///
 	/// The complete lookup must cover supported immediate uniqueness.
-	pub fn lookup<T, V>(self, field: FieldRef<C::Model, T>, value: V) -> Self
+	pub fn lookup<T, V>(self, field: FieldRef<C::Model, T, GeneratedModelField>, value: V) -> Self
 	where
 		T: DatabaseField,
 		V: IntoFieldValue<T>,
@@ -258,7 +258,7 @@ impl<C: CustomManager> UpdateOrCreateBuilder<C> {
 	/// Adds a value applied to both the update and create branches.
 	///
 	/// A set assignment cannot target a lookup field.
-	pub fn set<T, V>(self, field: FieldRef<C::Model, T>, value: V) -> Self
+	pub fn set<T, V>(self, field: FieldRef<C::Model, T, GeneratedModelField>, value: V) -> Self
 	where
 		T: DatabaseField,
 		V: IntoFieldValue<T>,
@@ -272,7 +272,11 @@ impl<C: CustomManager> UpdateOrCreateBuilder<C> {
 	/// Adds a value used only by the create branch.
 	///
 	/// A create default cannot target a lookup field.
-	pub fn create_default<T, V>(self, field: FieldRef<C::Model, T>, value: V) -> Self
+	pub fn create_default<T, V>(
+		self,
+		field: FieldRef<C::Model, T, GeneratedModelField>,
+		value: V,
+	) -> Self
 	where
 		T: DatabaseField,
 		V: IntoFieldValue<T>,

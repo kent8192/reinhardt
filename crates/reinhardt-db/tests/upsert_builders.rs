@@ -8,7 +8,7 @@ use async_trait::async_trait;
 use reinhardt_core::exception::{DatabaseError, DatabaseErrorKind, Error, Result};
 use reinhardt_db::orm::connection::{DatabaseBackend, OrmExecutor, QueryResult, QueryValue, Row};
 use reinhardt_db::orm::custom_manager::CustomManager;
-use reinhardt_db::orm::expressions::FieldRef;
+use reinhardt_db::orm::expressions::{FieldRef, GeneratedModelField};
 use reinhardt_db::orm::field_codec::{DatabaseValue, FieldCodecError, IntoFieldValue};
 use reinhardt_db::orm::inspection::FieldInfo;
 use reinhardt_db::orm::manager::Manager;
@@ -66,19 +66,33 @@ impl Model for Article {
 }
 
 impl Article {
-	fn field_slug() -> FieldRef<Self, String> {
+	fn field_slug() -> FieldRef<Self, String, GeneratedModelField> {
 		// SAFETY: the names and type match Article's declared slug field.
-		unsafe { FieldRef::from_model_field_with_names("slug", "article_slug") }
+		unsafe {
+			FieldRef::<Self, _, GeneratedModelField>::from_generated_model_field_with_names(
+				"slug",
+				"article_slug",
+			)
+		}
 	}
 
-	fn field_rank() -> FieldRef<Self, i32> {
+	fn field_rank() -> FieldRef<Self, i32, GeneratedModelField> {
 		// SAFETY: the names and type match Article's declared rank field.
-		unsafe { FieldRef::from_model_field_with_names("rank", "article_rank") }
+		unsafe {
+			FieldRef::<Self, _, GeneratedModelField>::from_generated_model_field_with_names(
+				"rank",
+				"article_rank",
+			)
+		}
 	}
 
-	fn field_id() -> FieldRef<Self, i64> {
+	fn field_id() -> FieldRef<Self, i64, GeneratedModelField> {
 		// SAFETY: the names and type match Article's declared primary-key field.
-		unsafe { FieldRef::from_model_field_with_names("id", "id") }
+		unsafe {
+			FieldRef::<Self, _, GeneratedModelField>::from_generated_model_field_with_names(
+				"id", "id",
+			)
+		}
 	}
 }
 
@@ -126,19 +140,33 @@ impl Model for LookupArticle {
 }
 
 impl LookupArticle {
-	fn field_tenant_id() -> FieldRef<Self, i64> {
+	fn field_tenant_id() -> FieldRef<Self, i64, GeneratedModelField> {
 		// SAFETY: the names and type match LookupArticle's declared tenant field.
-		unsafe { FieldRef::from_model_field_with_names("tenant_id", "tenant_key") }
+		unsafe {
+			FieldRef::<Self, _, GeneratedModelField>::from_generated_model_field_with_names(
+				"tenant_id",
+				"tenant_key",
+			)
+		}
 	}
 
-	fn field_slug() -> FieldRef<Self, String> {
+	fn field_slug() -> FieldRef<Self, String, GeneratedModelField> {
 		// SAFETY: the names and type match LookupArticle's declared slug field.
-		unsafe { FieldRef::from_model_field_with_names("slug", "slug_key") }
+		unsafe {
+			FieldRef::<Self, _, GeneratedModelField>::from_generated_model_field_with_names(
+				"slug", "slug_key",
+			)
+		}
 	}
 
-	fn field_headline() -> FieldRef<Self, String> {
+	fn field_headline() -> FieldRef<Self, String, GeneratedModelField> {
 		// SAFETY: the names and type match LookupArticle's declared headline field.
-		unsafe { FieldRef::from_model_field_with_names("headline", "headline_text") }
+		unsafe {
+			FieldRef::<Self, _, GeneratedModelField>::from_generated_model_field_with_names(
+				"headline",
+				"headline_text",
+			)
+		}
 	}
 }
 
@@ -398,26 +426,23 @@ async fn get_or_create_existing_row_skips_hook_and_insert() {
 }
 
 #[tokio::test]
-async fn get_or_create_absent_row_inserts_and_reloads() {
+async fn get_or_create_absent_row_returns_the_inserted_row() {
 	let mut executor = RecordingExecutor::new(DatabaseBackend::Postgres)
 		.with_fetch_all(Ok(Vec::new()))
-		.with_execute(Ok(QueryResult {
-			rows_affected: 1,
-			last_insert_id: None,
-		}))
 		.with_fetch_all(Ok(vec![article_row(2, "rust", 1)]));
 
 	let (article, created) = Manager::<Article>::new()
 		.get_or_create()
-		.lookup(Article::field_slug(), "rust")
+		.lookup(Article::field_slug(), "RUST")
 		.default(Article::field_rank(), 1)
 		.execute_with(&mut executor)
 		.await
-		.expect("an absent row must be inserted and reloaded");
+		.expect("an absent row must be inserted and returned");
 
 	assert_eq!(article.id, Some(2));
+	assert_eq!(article.slug, "rust");
 	assert!(created);
-	assert_eq!(executor.operations(), ["fetch_all", "execute", "fetch_all"]);
+	assert_eq!(executor.operations(), ["fetch_all", "fetch_all"]);
 }
 
 fn exact_multi_lookup_calls() -> Vec<RecordedCall> {
@@ -430,10 +455,10 @@ fn exact_multi_lookup_calls() -> Vec<RecordedCall> {
 			params: vec![QueryValue::Int(7), QueryValue::String("rust".to_owned())],
 		},
 		RecordedCall {
-			operation: "execute",
+			operation: "fetch_all",
 			sql: "INSERT INTO \"lookup_articles\" (\"tenant_key\", \"slug_key\", \
 				\"headline_text\") VALUES ($1, $2, $3) \
-				ON CONFLICT (\"tenant_key\") DO NOTHING"
+				ON CONFLICT (\"tenant_key\") DO NOTHING RETURNING *"
 				.to_owned(),
 			params: vec![
 				QueryValue::Int(7),
@@ -453,10 +478,6 @@ fn exact_multi_lookup_calls() -> Vec<RecordedCall> {
 async fn get_or_create_create_path_uses_complete_lookup_and_excludes_defaults_from_reload() {
 	let mut executor = RecordingExecutor::new(DatabaseBackend::Postgres)
 		.with_fetch_all(Ok(Vec::new()))
-		.with_execute(Ok(QueryResult {
-			rows_affected: 1,
-			last_insert_id: None,
-		}))
 		.with_fetch_all(Ok(vec![lookup_article_row(
 			11,
 			7,
@@ -471,21 +492,18 @@ async fn get_or_create_create_path_uses_complete_lookup_and_excludes_defaults_fr
 		.default(LookupArticle::field_headline(), "typed builders")
 		.execute_with(&mut executor)
 		.await
-		.expect("multi-field create and complete-lookup reload must succeed");
+		.expect("multi-field create must return the inserted row");
 
 	assert!(created);
-	assert_eq!(executor.operations(), ["fetch_all", "execute", "fetch_all"]);
-	assert_eq!(executor.calls, exact_multi_lookup_calls());
+	assert_eq!(executor.operations(), ["fetch_all", "fetch_all"]);
+	assert_eq!(&executor.calls[..], &exact_multi_lookup_calls()[..2]);
 }
 
 #[tokio::test]
 async fn get_or_create_conflict_path_reloads_with_the_complete_lookup_only() {
 	let mut executor = RecordingExecutor::new(DatabaseBackend::Postgres)
 		.with_fetch_all(Ok(Vec::new()))
-		.with_execute(Ok(QueryResult {
-			rows_affected: 0,
-			last_insert_id: None,
-		}))
+		.with_fetch_all(Ok(Vec::new()))
 		.with_fetch_all(Ok(vec![lookup_article_row(12, 7, "rust", "race winner")]));
 
 	let (article, created) = Manager::<LookupArticle>::new()
@@ -499,7 +517,10 @@ async fn get_or_create_conflict_path_reloads_with_the_complete_lookup_only() {
 
 	assert!(!created);
 	assert_eq!(article.headline, "race winner");
-	assert_eq!(executor.operations(), ["fetch_all", "execute", "fetch_all"]);
+	assert_eq!(
+		executor.operations(),
+		["fetch_all", "fetch_all", "fetch_all"]
+	);
 	assert_eq!(executor.calls, exact_multi_lookup_calls());
 }
 
@@ -512,10 +533,7 @@ async fn get_or_create_zero_affected_conflict_reloads_existing_row(
 ) {
 	let mut executor = RecordingExecutor::new(backend)
 		.with_fetch_all(Ok(Vec::new()))
-		.with_execute(Ok(QueryResult {
-			rows_affected: 0,
-			last_insert_id: None,
-		}))
+		.with_fetch_all(Ok(Vec::new()))
 		.with_fetch_all(Ok(vec![article_row(3, "rust", 9)]));
 
 	let (article, created) = Manager::<Article>::new()
@@ -528,7 +546,10 @@ async fn get_or_create_zero_affected_conflict_reloads_existing_row(
 
 	assert_eq!(article.rank, 9);
 	assert!(!created);
-	assert_eq!(executor.operations(), ["fetch_all", "execute", "fetch_all"]);
+	assert_eq!(
+		executor.operations(),
+		["fetch_all", "fetch_all", "fetch_all"]
+	);
 }
 
 #[rstest]
@@ -538,10 +559,7 @@ async fn get_or_create_zero_affected_conflict_reloads_existing_row(
 async fn get_or_create_conflict_requires_exactly_one_lookup_row(#[case] rows: Vec<Row>) {
 	let mut executor = RecordingExecutor::new(DatabaseBackend::Postgres)
 		.with_fetch_all(Ok(Vec::new()))
-		.with_execute(Ok(QueryResult {
-			rows_affected: 0,
-			last_insert_id: None,
-		}))
+		.with_fetch_all(Ok(Vec::new()))
 		.with_fetch_all(Ok(rows));
 
 	let error = Manager::<Article>::new()
@@ -552,7 +570,10 @@ async fn get_or_create_conflict_requires_exactly_one_lookup_row(#[case] rows: Ve
 		.expect_err("a conflict reload mismatch must fail");
 
 	assert!(matches!(error, Error::Conflict(_)));
-	assert_eq!(executor.operations(), ["fetch_all", "execute", "fetch_all"]);
+	assert_eq!(
+		executor.operations(),
+		["fetch_all", "fetch_all", "fetch_all"]
+	);
 }
 
 #[tokio::test]
@@ -635,17 +656,9 @@ async fn mysql_zero_affected_success_is_not_classified_as_a_race() {
 async fn custom_and_standard_managers_use_the_same_create_sequence() {
 	let mut standard = RecordingExecutor::new(DatabaseBackend::Postgres)
 		.with_fetch_all(Ok(Vec::new()))
-		.with_execute(Ok(QueryResult {
-			rows_affected: 1,
-			last_insert_id: None,
-		}))
 		.with_fetch_all(Ok(vec![article_row(6, "rust", 1)]));
 	let mut custom = RecordingExecutor::new(DatabaseBackend::Postgres)
 		.with_fetch_all(Ok(Vec::new()))
-		.with_execute(Ok(QueryResult {
-			rows_affected: 1,
-			last_insert_id: None,
-		}))
 		.with_fetch_all(Ok(vec![article_row(6, "rust", 1)]));
 
 	let _ = Manager::<Article>::new()
@@ -662,17 +675,13 @@ async fn custom_and_standard_managers_use_the_same_create_sequence() {
 		.expect("custom manager path must succeed");
 
 	assert_eq!(standard.calls, custom.calls);
-	assert_eq!(standard.operations(), ["fetch_all", "execute", "fetch_all"]);
+	assert_eq!(standard.operations(), ["fetch_all", "fetch_all"]);
 }
 
 #[tokio::test]
 async fn create_hook_mutation_changes_insert_parameters() {
 	let mut executor = RecordingExecutor::new(DatabaseBackend::Postgres)
 		.with_fetch_all(Ok(Vec::new()))
-		.with_execute(Ok(QueryResult {
-			rows_affected: 1,
-			last_insert_id: None,
-		}))
 		.with_fetch_all(Ok(vec![article_row(7, "rust", 42)]));
 
 	let (_, created) = MutatingManager

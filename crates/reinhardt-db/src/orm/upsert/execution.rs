@@ -42,18 +42,17 @@ where
 	validate_writable_create_assignments::<C::Model>(&plan.create)?;
 
 	let insert = sql::insert(&plan, backend)?;
-	let insert_result = if backend == DatabaseBackend::Postgres {
-		executor
-			.execute_in_savepoint(&insert.sql, insert.params)
-			.await
-	} else {
-		executor.execute(&insert.sql, insert.params).await
-	};
-	match insert_result {
+	if matches!(backend, DatabaseBackend::Postgres | DatabaseBackend::Sqlite) {
+		return match decode_lookup_rows(executor.fetch_all(&insert.sql, insert.params).await?)? {
+			Some(model) => Ok((model, true)),
+			None => reload_lookup(&plan, executor, false, None).await,
+		};
+	}
+
+	match executor.execute(&insert.sql, insert.params).await {
 		Ok(result) => {
-			let created = match (backend, result.rows_affected) {
-				(DatabaseBackend::Postgres | DatabaseBackend::Sqlite, 0) => false,
-				(_, 1) => true,
+			let created = match result.rows_affected {
+				1 => true,
 				_ => {
 					return Err(Error::Conflict(format!(
 						"get_or_create INSERT affected {} rows for {backend:?}; expected one",
@@ -133,16 +132,19 @@ where
 	validate_writable_create_assignments::<C::Model>(&plan.create)?;
 	let backend = transaction.backend();
 	let insert = sql::insert(&plan, backend)?;
-	let insert_result = if backend == DatabaseBackend::Postgres {
-		execute_postgres_insert_in_savepoint(transaction, &insert).await
-	} else {
-		transaction.execute(&insert.sql, insert.params).await
-	};
-	match insert_result {
+	if matches!(backend, DatabaseBackend::Postgres | DatabaseBackend::Sqlite) {
+		let insert_rows = if backend == DatabaseBackend::Postgres {
+			fetch_postgres_insert_in_savepoint(transaction, &insert).await
+		} else {
+			transaction.fetch_all(&insert.sql, insert.params).await
+		};
+		return resolve_returning_insert(manager, &plan, transaction, insert_rows).await;
+	}
+
+	match transaction.execute(&insert.sql, insert.params).await {
 		Ok(result) => {
-			let created = match (backend, result.rows_affected) {
-				(DatabaseBackend::Postgres | DatabaseBackend::Sqlite, 0) => false,
-				(_, 1) => true,
+			let created = match result.rows_affected {
+				1 => true,
 				_ => {
 					return Err(Error::Conflict(format!(
 						"update_or_create INSERT affected {} rows for {backend:?}; expected one",
@@ -175,14 +177,47 @@ where
 	}
 }
 
-async fn execute_postgres_insert_in_savepoint(
+async fn resolve_returning_insert<C>(
+	manager: &C,
+	plan: &UpsertPlan<C::Model>,
+	transaction: &mut AtomicTransaction,
+	insert_rows: Result<Vec<Row>>,
+) -> Result<(C::Model, bool)>
+where
+	C: CustomManager,
+{
+	match insert_rows {
+		Ok(rows) => match decode_update_lookup_rows(rows)? {
+			Some(model) => Ok((model, true)),
+			None => match load_locked(plan, transaction).await? {
+				Some(model) => update_locked(manager, plan, model, transaction).await,
+				None => Err(Error::Conflict(
+					"update_or_create INSERT completed without a returned row or a race winner"
+						.to_owned(),
+				)),
+			},
+		},
+		Err(error)
+			if transaction.backend() == DatabaseBackend::Postgres
+				&& error.database_kind() == Some(DatabaseErrorKind::UniqueViolation) =>
+		{
+			match load_locked(plan, transaction).await? {
+				Some(model) => update_locked(manager, plan, model, transaction).await,
+				None => Err(error),
+			}
+		}
+		Err(error) => Err(error),
+	}
+}
+
+async fn fetch_postgres_insert_in_savepoint(
 	transaction: &mut AtomicTransaction,
 	insert: &sql::BoundSql,
-) -> Result<crate::backends::types::QueryResult> {
+) -> Result<Vec<Row>> {
 	let sql = insert.sql.clone();
 	let params = insert.params.clone();
 	transaction
-		.atomic(async move |savepoint| savepoint.execute(&sql, params).await)
+		.atomic(async move |savepoint| savepoint.fetch_all(&sql, params).await)
 		.await
 }
 
@@ -345,7 +380,7 @@ mod tests {
 	#[cfg(feature = "sqlite")]
 	use crate::orm::connection::{BackendsConnection, DatabaseConnectionLease};
 	use crate::orm::custom_manager::CustomManager;
-	use crate::orm::expressions::FieldRef;
+	use crate::orm::expressions::{FieldRef, GeneratedModelField};
 	use crate::orm::field_codec::{DatabaseStorageKind, DatabaseValue, FieldCodecError};
 	use crate::orm::inspection::FieldInfo;
 	use crate::orm::json::Json;
@@ -423,34 +458,58 @@ mod tests {
 	}
 
 	impl Article {
-		fn id_field() -> FieldRef<Self, Option<i64>> {
+		fn id_field() -> FieldRef<Self, Option<i64>, GeneratedModelField> {
 			// SAFETY: the logical and physical names match Article's nullable primary key.
-			unsafe { FieldRef::from_model_field_with_names("id", "id") }
+			unsafe {
+				FieldRef::<Self, _, GeneratedModelField>::from_generated_model_field_with_names(
+					"id", "id",
+				)
+			}
 		}
 
-		fn slug_field() -> FieldRef<Self, String> {
+		fn slug_field() -> FieldRef<Self, String, GeneratedModelField> {
 			// SAFETY: the logical and physical names match Article's string field.
-			unsafe { FieldRef::from_model_field_with_names("slug", "slug") }
+			unsafe {
+				FieldRef::<Self, _, GeneratedModelField>::from_generated_model_field_with_names(
+					"slug", "slug",
+				)
+			}
 		}
 
-		fn rank_field() -> FieldRef<Self, i32> {
+		fn rank_field() -> FieldRef<Self, i32, GeneratedModelField> {
 			// SAFETY: the logical and physical names match Article's i32 field.
-			unsafe { FieldRef::from_model_field_with_names("rank", "rank") }
+			unsafe {
+				FieldRef::<Self, _, GeneratedModelField>::from_generated_model_field_with_names(
+					"rank", "rank",
+				)
+			}
 		}
 
-		fn headline_field() -> FieldRef<Self, String> {
+		fn headline_field() -> FieldRef<Self, String, GeneratedModelField> {
 			// SAFETY: the logical and physical names match Article's string field.
-			unsafe { FieldRef::from_model_field_with_names("headline", "headline") }
+			unsafe {
+				FieldRef::<Self, _, GeneratedModelField>::from_generated_model_field_with_names(
+					"headline", "headline",
+				)
+			}
 		}
 
-		fn computed_field() -> FieldRef<Self, i32> {
+		fn computed_field() -> FieldRef<Self, i32, GeneratedModelField> {
 			// SAFETY: the logical and physical names match Article's generated i32 field.
-			unsafe { FieldRef::from_model_field_with_names("computed", "computed") }
+			unsafe {
+				FieldRef::<Self, _, GeneratedModelField>::from_generated_model_field_with_names(
+					"computed", "computed",
+				)
+			}
 		}
 
-		fn readonly_field() -> FieldRef<Self, String> {
+		fn readonly_field() -> FieldRef<Self, String, GeneratedModelField> {
 			// SAFETY: the logical and physical names match Article's noneditable string field.
-			unsafe { FieldRef::from_model_field_with_names("readonly", "readonly") }
+			unsafe {
+				FieldRef::<Self, _, GeneratedModelField>::from_generated_model_field_with_names(
+					"readonly", "readonly",
+				)
+			}
 		}
 	}
 
@@ -529,9 +588,13 @@ mod tests {
 	}
 
 	impl JsonArticle {
-		fn rank_field() -> FieldRef<Self, i32> {
+		fn rank_field() -> FieldRef<Self, i32, GeneratedModelField> {
 			// SAFETY: the logical and physical names match JsonArticle's i32 field.
-			unsafe { FieldRef::from_model_field_with_names("rank", "rank") }
+			unsafe {
+				FieldRef::<Self, _, GeneratedModelField>::from_generated_model_field_with_names(
+					"rank", "rank",
+				)
+			}
 		}
 	}
 
@@ -577,14 +640,22 @@ mod tests {
 	}
 
 	impl CompositeArticle {
-		fn slug_field() -> FieldRef<Self, String> {
+		fn slug_field() -> FieldRef<Self, String, GeneratedModelField> {
 			// SAFETY: the logical and physical names match CompositeArticle's string field.
-			unsafe { FieldRef::from_model_field_with_names("slug", "slug") }
+			unsafe {
+				FieldRef::<Self, _, GeneratedModelField>::from_generated_model_field_with_names(
+					"slug", "slug",
+				)
+			}
 		}
 
-		fn rank_field() -> FieldRef<Self, i32> {
+		fn rank_field() -> FieldRef<Self, i32, GeneratedModelField> {
 			// SAFETY: the logical and physical names match CompositeArticle's i32 field.
-			unsafe { FieldRef::from_model_field_with_names("rank", "rank") }
+			unsafe {
+				FieldRef::<Self, _, GeneratedModelField>::from_generated_model_field_with_names(
+					"rank", "rank",
+				)
+			}
 		}
 	}
 
@@ -1217,10 +1288,10 @@ mod tests {
 					operation: "fetch_all",
 					sql: concat!(
 						"SELECT \"id\", \"slug\", \"rank\", \"headline\", \"computed\", \"readonly\" FROM ",
-						"\"articles\" WHERE \"slug\" = $1 LIMIT 2 FOR UPDATE",
+						"\"articles\" WHERE \"id\" = $1 LIMIT 2 FOR UPDATE",
 					)
 					.to_owned(),
-					params: vec![QueryValue::String("rust".to_owned())],
+					params: vec![QueryValue::Int(7)],
 				},
 			]
 		);
@@ -1336,7 +1407,9 @@ mod tests {
 		assert!(created);
 		assert_eq!(article.headline, "created");
 		let calls = &state.lock().unwrap().calls;
-		assert_eq!(calls[1].operation, "execute");
+		assert_eq!(calls.len(), 2);
+		assert_eq!(calls[1].operation, "fetch_all");
+		assert!(calls[1].sql.ends_with("RETURNING *"));
 		assert_eq!(
 			calls[1].params,
 			vec![
@@ -1379,17 +1452,12 @@ mod tests {
 	async fn update_or_create_lost_race_relocks_and_diffs_hook_changes() {
 		let (mut transaction, state) = Recorder::transaction(
 			DatabaseType::Postgres,
+			vec![Ok(QueryResult {
+				rows_affected: 1,
+				last_insert_id: None,
+			})],
 			vec![
-				Ok(QueryResult {
-					rows_affected: 0,
-					last_insert_id: None,
-				}),
-				Ok(QueryResult {
-					rows_affected: 1,
-					last_insert_id: None,
-				}),
-			],
-			vec![
+				Ok(Vec::new()),
 				Ok(Vec::new()),
 				Ok(vec![article_row(9, "rust", 5, "winner", 12)]),
 				Ok(vec![article_row(9, "rust", 2, "hooked", 12)]),
@@ -1434,19 +1502,17 @@ mod tests {
 	async fn update_or_create_postgres_unique_violation_reloads_after_savepoint() {
 		let (mut transaction, state) = Recorder::transaction(
 			DatabaseType::Postgres,
+			vec![Ok(QueryResult {
+				rows_affected: 1,
+				last_insert_id: None,
+			})],
 			vec![
+				Ok(Vec::new()),
 				Err(DatabaseError::new(
 					DatabaseErrorKind::UniqueViolation,
 					"duplicate alternate unique field",
 				)
 				.into()),
-				Ok(QueryResult {
-					rows_affected: 1,
-					last_insert_id: None,
-				}),
-			],
-			vec![
-				Ok(Vec::new()),
 				Ok(vec![article_row(10, "rust", 1, "winner", 13)]),
 				Ok(vec![article_row(10, "rust", 2, "winner", 13)]),
 			],
@@ -1462,7 +1528,13 @@ mod tests {
 		let calls = &state.lock().unwrap().calls;
 		assert_eq!(
 			calls.iter().map(|call| call.operation).collect::<Vec<_>>(),
-			["fetch_all", "execute", "fetch_all", "execute", "fetch_all"]
+			[
+				"fetch_all",
+				"fetch_all",
+				"fetch_all",
+				"execute",
+				"fetch_all"
+			]
 		);
 		assert!(calls[2].sql.ends_with("LIMIT 2 FOR UPDATE"));
 		assert_eq!(
@@ -1475,12 +1547,16 @@ mod tests {
 	async fn update_or_create_postgres_unique_violation_without_lookup_match_preserves_error() {
 		let (mut transaction, state) = Recorder::transaction(
 			DatabaseType::Postgres,
-			vec![Err(DatabaseError::new(
-				DatabaseErrorKind::UniqueViolation,
-				"duplicate alternate unique field",
-			)
-			.into())],
-			vec![Ok(Vec::new()), Ok(Vec::new())],
+			Vec::new(),
+			vec![
+				Ok(Vec::new()),
+				Err(DatabaseError::new(
+					DatabaseErrorKind::UniqueViolation,
+					"duplicate alternate unique field",
+				)
+				.into()),
+				Ok(Vec::new()),
+			],
 		);
 
 		let error =
@@ -1500,7 +1576,7 @@ mod tests {
 				.iter()
 				.map(|call| call.operation)
 				.collect::<Vec<_>>(),
-			["fetch_all", "execute", "fetch_all"]
+			["fetch_all", "fetch_all", "fetch_all"]
 		);
 	}
 

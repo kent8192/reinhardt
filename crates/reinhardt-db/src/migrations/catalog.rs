@@ -50,6 +50,15 @@ impl MigrationCatalog {
 
 		let mut migration_keys: Vec<MigrationKey> = migrations.keys().cloned().collect();
 		migration_keys.sort_by(Self::compare_keys);
+		let mut replacement_owners: HashMap<MigrationKey, Vec<MigrationKey>> = HashMap::new();
+		for (key, migration) in &migrations {
+			for (app, name) in &migration.replaces {
+				replacement_owners
+					.entry(MigrationKey::new(app, name))
+					.or_default()
+					.push(key.clone());
+			}
+		}
 		for key in &migration_keys {
 			let migration = migrations
 				.get(key)
@@ -58,7 +67,8 @@ impl MigrationCatalog {
 			dependencies.sort();
 			for (dependency_app, dependency_name) in dependencies {
 				let dependency = MigrationKey::new(dependency_app, dependency_name);
-				if !migrations.contains_key(&dependency) {
+				let replacement_count = replacement_owners.get(&dependency).map_or(0, Vec::len);
+				if !migrations.contains_key(&dependency) && replacement_count != 1 {
 					return Err(MigrationError::DependencyError(format!(
 						"Missing dependency {} required by {}",
 						dependency, key
@@ -169,6 +179,16 @@ impl MigrationCatalog {
 				.cloned()
 				.collect();
 			app_parents.sort_by(|left, right| left.name.cmp(&right.name));
+			let direct_parents = app_parents
+				.iter()
+				.filter(|candidate| {
+					!app_parents
+						.iter()
+						.any(|other| other != *candidate && self.depends_on(other, candidate))
+				})
+				.cloned()
+				.collect();
+			app_parents = direct_parents;
 
 			match app_parents.as_slice() {
 				[] if start_key.is_some() => {
@@ -214,6 +234,35 @@ impl MigrationCatalog {
 			})
 			.cloned()
 			.collect();
+
+		for (key, migration) in &self.migrations {
+			if !selected.contains(key)
+				&& migration
+					.replaces
+					.iter()
+					.any(|(replacement_app, replacement_name)| {
+						selected.contains(&MigrationKey::new(replacement_app, replacement_name))
+					}) {
+				return Err(MigrationError::InvalidMigration(format!(
+					"Cannot squash range: {} already replaces a selected migration",
+					key
+				)));
+			}
+		}
+
+		for selected_key in &selected {
+			for child in self.graph.get_dependents(selected_key) {
+				if child.app_label == app
+					&& !selected.contains(child)
+					&& !self.is_descendant_of(child, &end_key)
+				{
+					return Err(MigrationError::InvalidMigration(format!(
+						"Cannot squash range: {} branches from selected migration {}",
+						child, selected_key
+					)));
+				}
+			}
+		}
 
 		for (dependency_app, dependency_name) in &external_dependencies {
 			let dependency = MigrationKey::new(dependency_app, dependency_name);
@@ -334,6 +383,42 @@ impl MigrationCatalog {
 
 		reachable_selected.sort_by(Self::compare_keys);
 		reachable_selected.into_iter().next()
+	}
+
+	fn depends_on(&self, start: &MigrationKey, target: &MigrationKey) -> bool {
+		let mut stack = vec![start.clone()];
+		let mut visited = HashSet::new();
+		while let Some(current) = stack.pop() {
+			if !visited.insert(current.clone()) {
+				continue;
+			}
+			if &current == target {
+				return true;
+			}
+			stack.extend(
+				self.graph
+					.get_dependencies(&current)
+					.unwrap_or_default()
+					.iter()
+					.cloned(),
+			);
+		}
+		false
+	}
+
+	fn is_descendant_of(&self, start: &MigrationKey, ancestor: &MigrationKey) -> bool {
+		let mut stack = vec![ancestor.clone()];
+		let mut visited = HashSet::new();
+		while let Some(current) = stack.pop() {
+			if !visited.insert(current.clone()) {
+				continue;
+			}
+			if &current == start {
+				return true;
+			}
+			stack.extend(self.graph.get_dependents(&current).into_iter().cloned());
+		}
+		false
 	}
 
 	fn same_app_ancestors_before_start(

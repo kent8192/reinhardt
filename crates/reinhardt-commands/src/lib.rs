@@ -35,7 +35,9 @@
 //! or its `--noinput` alias for automation, `--no-optimize` to preserve the
 //! exact operation sequence, and `--no-header` to omit the generated-file
 //! header. A descriptive `--squashed-name release_window` becomes a name such
-//! as `0001_release_window`.
+//! as `0001_release_window`. In a Cargo workspace, pass
+//! `--migrations-dir path/to/member/migrations` to select the target member's
+//! migration root explicitly.
 //!
 //! Optimization never crosses an operation barrier. Data operations, renames,
 //! constraints, indexes, bulk operations, custom operations, and any operation

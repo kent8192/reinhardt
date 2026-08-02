@@ -162,6 +162,29 @@ async fn load_strict_rejects_a_missing_dependency() {
 
 #[rstest]
 #[tokio::test]
+async fn load_strict_accepts_a_missing_dependency_replaced_by_one_loaded_migration() {
+	// Arrange
+	let mut squashed = migration("blog", "0001_squashed_0002", &[]);
+	squashed.replaces = vec![
+		("blog".to_string(), "0001_initial".to_string()),
+		("blog".to_string(), "0002_add_title".to_string()),
+	];
+	let source = TestSource {
+		migrations: vec![
+			squashed,
+			migration("blog", "0003_publish", &[("blog", "0002_add_title")]),
+		],
+	};
+
+	// Act
+	let catalog = MigrationCatalog::load_strict(&source).await;
+
+	// Assert
+	assert!(catalog.is_ok());
+}
+
+#[rstest]
+#[tokio::test]
 async fn load_strict_rejects_cycles() {
 	// Arrange
 	let source = TestSource {
@@ -688,6 +711,85 @@ async fn squash_range_rejects_branched_ancestry() {
 		error.to_string(),
 		"Invalid migration: Ambiguous migration ancestry for blog.0003_merge; parents: \
 		 0002_left, 0002_right"
+	);
+}
+
+#[rstest]
+#[tokio::test]
+async fn squash_range_ignores_transitive_same_app_parents() {
+	// Arrange
+	let catalog = catalog(vec![
+		migration("blog", "0001_initial", &[]),
+		migration("blog", "0002_add_title", &[("blog", "0001_initial")]),
+		migration(
+			"blog",
+			"0003_publish",
+			&[("blog", "0002_add_title"), ("blog", "0001_initial")],
+		),
+	])
+	.await;
+
+	// Act
+	let range = catalog.squash_range("blog", None, "0003_publish").unwrap();
+
+	// Assert
+	let names: Vec<&str> = range
+		.migrations
+		.iter()
+		.map(|migration| migration.name.as_str())
+		.collect();
+	assert_eq!(
+		names,
+		vec!["0001_initial", "0002_add_title", "0003_publish"]
+	);
+}
+
+#[rstest]
+#[tokio::test]
+async fn squash_range_rejects_a_range_already_covered_by_an_outside_replacement() {
+	// Arrange
+	let mut squashed = migration("blog", "0001_squashed_0002", &[]);
+	squashed.replaces = vec![
+		("blog".to_string(), "0001_initial".to_string()),
+		("blog".to_string(), "0002_add_title".to_string()),
+	];
+	let catalog = catalog(vec![
+		migration("blog", "0001_initial", &[]),
+		migration("blog", "0002_add_title", &[("blog", "0001_initial")]),
+		squashed,
+	])
+	.await;
+
+	// Act
+	let error = catalog
+		.squash_range("blog", None, "0002_add_title")
+		.unwrap_err();
+
+	// Assert
+	assert_eq!(
+		error.to_string(),
+		"Invalid migration: Cannot squash range: blog.0001_squashed_0002 already replaces a selected migration"
+	);
+}
+
+#[rstest]
+#[tokio::test]
+async fn squash_range_rejects_an_outside_child_branch() {
+	// Arrange
+	let catalog = catalog(vec![
+		migration("blog", "0001_initial", &[]),
+		migration("blog", "0002_left", &[("blog", "0001_initial")]),
+		migration("blog", "0002_right", &[("blog", "0001_initial")]),
+	])
+	.await;
+
+	// Act
+	let error = catalog.squash_range("blog", None, "0002_left").unwrap_err();
+
+	// Assert
+	assert_eq!(
+		error.to_string(),
+		"Invalid migration: Cannot squash range: blog.0002_right branches from selected migration blog.0001_initial"
 	);
 }
 

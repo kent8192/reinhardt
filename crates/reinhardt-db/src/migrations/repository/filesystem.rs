@@ -48,9 +48,9 @@ struct DirectoryIdentity {
 }
 
 #[cfg(all(unix, not(target_os = "vxworks")))]
-fn root_directory_identity(path: &Path) -> std::io::Result<DirectoryIdentity> {
-	let metadata = std::fs::symlink_metadata(path)?;
-	use std::os::unix::fs::MetadataExt;
+fn root_directory_identity(root: &Dir, _path: &Path) -> std::io::Result<DirectoryIdentity> {
+	let metadata = root.metadata(".")?;
+	use cap_std::fs::MetadataExt;
 
 	Ok(DirectoryIdentity {
 		device: metadata.dev(),
@@ -59,7 +59,7 @@ fn root_directory_identity(path: &Path) -> std::io::Result<DirectoryIdentity> {
 }
 
 #[cfg(windows)]
-fn root_directory_identity(path: &Path) -> std::io::Result<DirectoryIdentity> {
+fn root_directory_identity(_root: &Dir, path: &Path) -> std::io::Result<DirectoryIdentity> {
 	use std::collections::hash_map::DefaultHasher;
 	use std::hash::{Hash, Hasher};
 
@@ -74,9 +74,9 @@ fn root_directory_identity(path: &Path) -> std::io::Result<DirectoryIdentity> {
 }
 
 #[cfg(target_os = "wasi")]
-fn root_directory_identity(path: &Path) -> std::io::Result<DirectoryIdentity> {
-	let metadata = std::fs::symlink_metadata(path)?;
-	use std::os::wasi::fs::MetadataExt;
+fn root_directory_identity(root: &Dir, _path: &Path) -> std::io::Result<DirectoryIdentity> {
+	let metadata = root.metadata(".")?;
+	use cap_std::fs::MetadataExt;
 
 	Ok(DirectoryIdentity {
 		device: metadata.dev(),
@@ -85,8 +85,8 @@ fn root_directory_identity(path: &Path) -> std::io::Result<DirectoryIdentity> {
 }
 
 #[cfg(target_os = "vxworks")]
-fn root_directory_identity(path: &Path) -> std::io::Result<DirectoryIdentity> {
-	let metadata = std::fs::symlink_metadata(path)?;
+fn root_directory_identity(root: &Dir, _path: &Path) -> std::io::Result<DirectoryIdentity> {
+	let metadata = root.metadata(".")?;
 	use std::os::vxworks::fs::MetadataExt;
 
 	Ok(DirectoryIdentity {
@@ -96,8 +96,7 @@ fn root_directory_identity(path: &Path) -> std::io::Result<DirectoryIdentity> {
 }
 
 #[cfg(not(any(unix, windows, target_os = "wasi", target_os = "vxworks")))]
-fn root_directory_identity(path: &Path) -> std::io::Result<DirectoryIdentity> {
-	let _ = path;
+fn root_directory_identity(_root: &Dir, _path: &Path) -> std::io::Result<DirectoryIdentity> {
 	Err(std::io::Error::new(
 		std::io::ErrorKind::Unsupported,
 		"root directory identity is unavailable on this platform",
@@ -280,7 +279,7 @@ impl FilesystemRepository {
 			component
 				.as_bytes()
 				.first()
-				.is_some_and(u8::is_ascii_alphabetic)
+				.is_some_and(|byte| byte.is_ascii_alphabetic() || *byte == b'_')
 				&& component
 					.bytes()
 					.all(|byte| byte.is_ascii_alphanumeric() || byte == b'_')
@@ -599,12 +598,9 @@ impl FilesystemRepository {
 			| Operation::AlterModelOptions { .. }
 			| Operation::CreateInheritedTable { .. }
 			| Operation::AddDiscriminatorColumn { .. }
-			| Operation::MoveModel { .. }
 			| Operation::CreateSchema { .. }
 			| Operation::DropSchema { .. }
-			| Operation::BulkLoad { .. }
-			| Operation::SetAutoIncrementValue { .. }
-			| Operation::CreateCompositePrimaryKey { .. } => {
+			| Operation::BulkLoad { .. } => {
 				Err(MigrationError::UnsupportedMigrationRendering { operation: context })
 			}
 			_ => Ok(()),
@@ -824,7 +820,7 @@ impl FilesystemRepository {
 		let formatted = Self::format_with_rustfmt(source)?;
 		std::fs::create_dir_all(&self.root_dir)?;
 		let root = Dir::open_ambient_dir(&self.root_dir, ambient_authority())?;
-		let root_identity = root_directory_identity(&self.root_dir)?;
+		let root_identity = root_directory_identity(&root, &self.root_dir)?;
 		before_open()?;
 		self.validate_root_identity(root_identity, || Ok(()))?;
 		root.create_dir_all(app_label)?;
@@ -876,8 +872,7 @@ impl FilesystemRepository {
 					"Migration root directory identity is unavailable: {error}"
 				))
 			})?;
-		let _ = ambient;
-		let actual = root_directory_identity(&self.root_dir).map_err(|error| {
+		let actual = root_directory_identity(&ambient, &self.root_dir).map_err(|error| {
 			MigrationError::PathTraversal(format!(
 				"Migration root directory identity is unavailable: {error}"
 			))
@@ -894,11 +889,18 @@ impl FilesystemRepository {
 				 {expected:?}, found {actual:?}"
 			)));
 		}
-		let after_open_identity = root_directory_identity(&self.root_dir).map_err(|error| {
-			MigrationError::PathTraversal(format!(
-				"Migration root directory identity is unavailable: {error}"
-			))
-		})?;
+		let after_open_root =
+			Dir::open_ambient_dir(&self.root_dir, ambient_authority()).map_err(|error| {
+				MigrationError::PathTraversal(format!(
+					"Migration root directory identity is unavailable: {error}"
+				))
+			})?;
+		let after_open_identity = root_directory_identity(&after_open_root, &self.root_dir)
+			.map_err(|error| {
+				MigrationError::PathTraversal(format!(
+					"Migration root directory identity is unavailable: {error}"
+				))
+			})?;
 		if after_open_identity != expected {
 			return Err(MigrationError::PathTraversal(format!(
 				"Migration root directory identity changed during source creation: expected \
@@ -1197,6 +1199,44 @@ mod tests {
 		// Assert
 		assert_eq!(retrieved.app_label, "polls");
 		assert_eq!(retrieved.name, "0001_initial");
+	}
+
+	#[rstest]
+	#[tokio::test]
+	#[serial(filesystem_repository)]
+	async fn test_filesystem_repository_round_trips_supported_operations() {
+		// Arrange
+		let temp_dir = TempDir::new().unwrap();
+		let mut repo = FilesystemRepository::new(temp_dir.path());
+		let migration = Migration::new("0001_supported_operations", "_internal")
+			.add_operation(Operation::MoveModel {
+				model_name: "User".to_string(),
+				from_app: "accounts".to_string(),
+				to_app: "_internal".to_string(),
+				rename_table: true,
+				old_table_name: Some("accounts_user".to_string()),
+				new_table_name: Some("internal_user".to_string()),
+			})
+			.add_operation(Operation::SetAutoIncrementValue {
+				table: "internal_user".to_string(),
+				column: "id".to_string(),
+				value: -7,
+			})
+			.add_operation(Operation::CreateCompositePrimaryKey {
+				table: "membership".to_string(),
+				columns: vec!["user_id".to_string(), "group_id".to_string()],
+				constraint_name: Some("membership_pkey".to_string()),
+			});
+
+		// Act
+		repo.save(&migration).await.unwrap();
+		let retrieved = repo
+			.get("_internal", "0001_supported_operations")
+			.await
+			.unwrap();
+
+		// Assert
+		assert_eq!(retrieved.operations, migration.operations);
 	}
 
 	#[rstest]

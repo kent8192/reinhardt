@@ -19,7 +19,7 @@ use reinhardt_conf::HasCommonSettings;
 use reinhardt_conf::settings::builder::SettingsBuilder;
 use reinhardt_conf::settings::profile::Profile;
 use reinhardt_conf::settings::sources::{DefaultSource, LowPriorityEnvSource, TomlFileSource};
-use reinhardt_utils::staticfiles::StaticFilesConfig;
+use reinhardt_utils::staticfiles::{PathResolver, StaticFilesConfig};
 use serde_json::Value;
 use std::env;
 use std::path::{Path, PathBuf};
@@ -44,6 +44,13 @@ pub struct Cli {
 	/// Verbosity level (can be repeated for more output)
 	#[arg(short, long, action = clap::ArgAction::Count)]
 	pub verbosity: u8,
+}
+
+#[cfg(feature = "migrations")]
+fn default_migrations_dir() -> PathBuf {
+	PathResolver::find_project_root()
+		.unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")))
+		.join("migrations")
 }
 
 /// Output format for the introspect command
@@ -128,6 +135,10 @@ pub enum Commands {
 		/// Explicit name for the new squashed migration
 		#[arg(long, value_name = "NAME")]
 		squashed_name: Option<String>,
+
+		/// Root directory containing migration files
+		#[arg(long, value_name = "DIR")]
+		migrations_dir: Option<PathBuf>,
 	},
 
 	/// Apply database migrations
@@ -906,14 +917,16 @@ async fn run_command_core(
 			no_input,
 			no_header,
 			squashed_name,
+			migrations_dir,
 		} => {
 			let mut confirmation = crate::StdinConfirmationReader;
 			let standard_output = std::io::stdout();
 			let standard_error = std::io::stderr();
 			let mut stdout = standard_output.lock();
 			let mut stderr = standard_error.lock();
+			let migrations_dir = migrations_dir.unwrap_or_else(default_migrations_dir);
 			crate::execute_squashmigrations_with_io(
-				Path::new("./migrations"),
+				&migrations_dir,
 				crate::SquashMigrationsOptions {
 					app_label,
 					start_migration,
@@ -2803,6 +2816,7 @@ mod tests {
 			no_input: true,
 			no_header: false,
 			squashed_name: None,
+			migrations_dir: None,
 		};
 
 		// Act

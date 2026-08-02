@@ -680,6 +680,76 @@ fn parse_single_operation_strict(expr: &Expr, index: usize) -> Result<super::Ope
 					)?,
 				});
 			}
+			"MoveModel" => {
+				validate_exact_named_fields(
+					&operation.fields,
+					&[
+						"model_name",
+						"from_app",
+						"to_app",
+						"rename_table",
+						"old_table_name",
+						"new_table_name",
+					],
+					&context,
+				)?;
+				return Ok(super::Operation::MoveModel {
+					model_name: parse_string_field_strict(
+						&operation.fields,
+						"model_name",
+						&context,
+					)?,
+					from_app: parse_string_field_strict(&operation.fields, "from_app", &context)?,
+					to_app: parse_string_field_strict(&operation.fields, "to_app", &context)?,
+					rename_table: parse_bool_field_strict(
+						&operation.fields,
+						"rename_table",
+						&context,
+					)?,
+					old_table_name: parse_optional_string_field_strict(
+						&operation.fields,
+						"old_table_name",
+						&context,
+					)?,
+					new_table_name: parse_optional_string_field_strict(
+						&operation.fields,
+						"new_table_name",
+						&context,
+					)?,
+				});
+			}
+			"SetAutoIncrementValue" => {
+				validate_exact_named_fields(
+					&operation.fields,
+					&["table", "column", "value"],
+					&context,
+				)?;
+				return Ok(super::Operation::SetAutoIncrementValue {
+					table: parse_string_field_strict(&operation.fields, "table", &context)?,
+					column: parse_string_field_strict(&operation.fields, "column", &context)?,
+					value: parse_i64_field_strict(&operation.fields, "value", &context)?,
+				});
+			}
+			"CreateCompositePrimaryKey" => {
+				validate_exact_named_fields(
+					&operation.fields,
+					&["table", "columns", "constraint_name"],
+					&context,
+				)?;
+				return Ok(super::Operation::CreateCompositePrimaryKey {
+					table: parse_string_field_strict(&operation.fields, "table", &context)?,
+					columns: parse_string_vector_field_strict(
+						&operation.fields,
+						"columns",
+						&context,
+					)?,
+					constraint_name: parse_optional_string_field_strict(
+						&operation.fields,
+						"constraint_name",
+						&context,
+					)?,
+				});
+			}
 			_ => {}
 		}
 	}
@@ -1392,6 +1462,49 @@ fn parse_single_operation(expr: &Expr) -> Option<super::Operation> {
 				let sql = extract_string_field(&expr_struct.fields, "sql")?;
 				let reverse_sql = extract_optional_str_field(&expr_struct.fields, "reverse_sql");
 				return Some(super::Operation::RunSQL { sql, reverse_sql });
+			}
+			"MoveModel" => {
+				let model_name = extract_string_field(&expr_struct.fields, "model_name")?;
+				let from_app = extract_string_field(&expr_struct.fields, "from_app")?;
+				let to_app = extract_string_field(&expr_struct.fields, "to_app")?;
+				let rename_table = extract_bool_field(&expr_struct.fields, "rename_table")?;
+				let old_table_name =
+					extract_optional_str_field(&expr_struct.fields, "old_table_name");
+				let new_table_name =
+					extract_optional_str_field(&expr_struct.fields, "new_table_name");
+				return Some(super::Operation::MoveModel {
+					model_name,
+					from_app,
+					to_app,
+					rename_table,
+					old_table_name,
+					new_table_name,
+				});
+			}
+			"SetAutoIncrementValue" => {
+				let table = extract_string_field(&expr_struct.fields, "table")?;
+				let column = extract_string_field(&expr_struct.fields, "column")?;
+				let value = expr_struct.fields.iter().find_map(|field| {
+					matches!(&field.member, syn::Member::Named(ident) if ident == "value")
+						.then(|| parse_i64_expression(&field.expr))
+						.flatten()
+				})?;
+				return Some(super::Operation::SetAutoIncrementValue {
+					table,
+					column,
+					value,
+				});
+			}
+			"CreateCompositePrimaryKey" => {
+				let table = extract_string_field(&expr_struct.fields, "table")?;
+				let columns = extract_string_vec_field(&expr_struct.fields, "columns");
+				let constraint_name =
+					extract_optional_str_field(&expr_struct.fields, "constraint_name");
+				return Some(super::Operation::CreateCompositePrimaryKey {
+					table,
+					columns,
+					constraint_name,
+				});
 			}
 			_ => {
 				// Log unhandled operation types
@@ -2254,6 +2367,36 @@ fn parse_bool_field_strict(
 		return Err(strict_payload_error(context, field_name));
 	};
 	Ok(value.value)
+}
+
+fn parse_i64_field_strict(
+	fields: &syn::punctuated::Punctuated<syn::FieldValue, syn::token::Comma>,
+	field_name: &str,
+	context: &str,
+) -> Result<i64> {
+	let expression = strict_field_expression(fields, field_name)
+		.ok_or_else(|| strict_payload_error(context, field_name))?;
+	parse_i64_expression(expression).ok_or_else(|| strict_payload_error(context, field_name))
+}
+
+fn parse_i64_expression(expression: &Expr) -> Option<i64> {
+	match expression {
+		Expr::Lit(syn::ExprLit {
+			lit: syn::Lit::Int(value),
+			..
+		}) => value.base10_parse().ok(),
+		Expr::Unary(unary) if matches!(unary.op, syn::UnOp::Neg(_)) => {
+			let Expr::Lit(syn::ExprLit {
+				lit: syn::Lit::Int(value),
+				..
+			}) = &*unary.expr
+			else {
+				return None;
+			};
+			value.base10_parse::<i64>().ok()?.checked_neg()
+		}
+		_ => None,
+	}
 }
 
 fn parse_optional_string_field_strict(

@@ -28,6 +28,7 @@
 //! ```
 
 use super::{Migration, MigrationError, Operation, Result, SquashRange};
+use reinhardt_query::prelude::SchemaExpr;
 use std::collections::HashSet;
 
 /// Options for migration squashing
@@ -159,6 +160,11 @@ impl MigrationSquasher {
 		let mut replaces = Vec::new();
 		let mut swappable_dependencies = Vec::new();
 		let mut optional_dependencies = Vec::new();
+		let selected_migrations: HashSet<_> = range
+			.migrations
+			.iter()
+			.map(|migration| (migration.app_label.as_str(), migration.name.as_str()))
+			.collect();
 		for migration in &range.migrations {
 			operations.extend(migration.operations.clone());
 			for replacement in &migration.replaces {
@@ -176,7 +182,11 @@ impl MigrationSquasher {
 				}
 			}
 			for dependency in &migration.optional_dependencies {
-				if !optional_dependencies.contains(dependency) {
+				let target_is_selected = selected_migrations.contains(&(
+					dependency.app_label.as_str(),
+					dependency.migration_name.as_str(),
+				));
+				if !target_is_selected && !optional_dependencies.contains(dependency) {
 					optional_dependencies.push(dependency.clone());
 				}
 			}
@@ -433,7 +443,7 @@ impl MigrationSquasher {
 								column: candidate_column,
 								..
 							} if candidate_table == table && candidate_column == column
-						)
+						) || Self::operation_references_column(candidate, table, column)
 					}) {
 						optimized = optimized
 							.into_iter()
@@ -499,6 +509,67 @@ impl MigrationSquasher {
 		optimized
 	}
 
+	fn operation_references_column(operation: &Operation, table: &str, column: &str) -> bool {
+		match operation {
+			Operation::AddColumn {
+				table: candidate_table,
+				column: candidate_column,
+				..
+			} if candidate_table == table => Self::column_references_column(candidate_column, column),
+			Operation::AlterColumn {
+				table: candidate_table,
+				old_definition,
+				new_definition,
+				..
+			} if candidate_table == table => {
+				Self::column_references_column(new_definition, column)
+					|| old_definition.as_ref().is_some_and(|definition| {
+						Self::column_references_column(definition, column)
+					})
+			}
+			_ => false,
+		}
+	}
+
+	fn column_references_column(
+		definition: &crate::migrations::ColumnDefinition,
+		column: &str,
+	) -> bool {
+		let Some(generated) = definition.generated.as_ref() else {
+			return false;
+		};
+		if let Some(expression) = generated.expr.as_deref() {
+			return Self::schema_expr_references_column(expression, column);
+		}
+		generated
+			.raw_sql
+			.as_deref()
+			.or(generated.expr_tokens.as_deref())
+			.is_some_and(|expression| Self::expression_text_references_column(expression, column))
+	}
+
+	fn schema_expr_references_column(expression: &SchemaExpr, column: &str) -> bool {
+		match expression {
+			SchemaExpr::Column(identifier) => identifier.to_string() == column,
+			SchemaExpr::Value(_) => false,
+			SchemaExpr::Binary { left, right, .. } => {
+				Self::schema_expr_references_column(left, column)
+					|| Self::schema_expr_references_column(right, column)
+			}
+			SchemaExpr::Function { args, .. } => args
+				.iter()
+				.any(|argument| Self::schema_expr_references_column(argument, column)),
+			SchemaExpr::Cast { expr, .. } => Self::schema_expr_references_column(expr, column),
+			_ => false,
+		}
+	}
+
+	fn expression_text_references_column(expression: &str, column: &str) -> bool {
+		expression
+			.split(|character: char| !(character.is_ascii_alphanumeric() || character == '_'))
+			.any(|token| token.eq_ignore_ascii_case(column))
+	}
+
 	fn operation_table(operation: &Operation) -> Option<&String> {
 		match operation {
 			Operation::CreateTable { name, .. } | Operation::DropTable { name } => Some(name),
@@ -519,7 +590,11 @@ impl Default for MigrationSquasher {
 #[cfg(test)]
 mod tests {
 	use super::*;
-	use crate::migrations::{ColumnDefinition, FieldType};
+	use crate::migrations::{
+		ColumnDefinition, DependencyCondition, FieldType, GeneratedColumnDefinition,
+		OptionalDependency,
+	};
+	use reinhardt_query::prelude::GeneratedStorage;
 
 	#[test]
 	fn test_squash_basic() {
@@ -604,6 +679,47 @@ mod tests {
 	}
 
 	#[test]
+	fn test_optimize_add_drop_column_preserves_generated_column_dependency() {
+		// Arrange
+		let squasher = MigrationSquasher::new();
+		let mut derived = ColumnDefinition::new("derived", FieldType::Integer);
+		derived.generated = Some(GeneratedColumnDefinition::raw_sql(
+			"temp + 1",
+			GeneratedStorage::Stored,
+		));
+		let ops = vec![
+			Operation::AddColumn {
+				table: "users".to_string(),
+				column: ColumnDefinition::new("temp", FieldType::Integer),
+				mysql_options: None,
+			},
+			Operation::AddColumn {
+				table: "users".to_string(),
+				column: derived.clone(),
+				mysql_options: None,
+			},
+			Operation::AlterColumn {
+				table: "users".to_string(),
+				column: "derived".to_string(),
+				old_definition: Some(derived),
+				new_definition: ColumnDefinition::new("derived", FieldType::Integer),
+				mysql_options: None,
+			},
+			Operation::DropColumn {
+				table: "users".to_string(),
+				column: "temp".to_string(),
+				old_definition: None,
+			},
+		];
+
+		// Act
+		let optimized = squasher.optimize_operations(ops.clone());
+
+		// Assert
+		assert_eq!(optimized, ops);
+	}
+
+	#[test]
 	fn test_optimize_no_optimization() {
 		let squasher = MigrationSquasher::new();
 
@@ -678,5 +794,29 @@ mod tests {
 		// Should keep external dependency
 		assert_eq!(squashed.dependencies.len(), 1);
 		assert_eq!(squashed.dependencies[0].0, "other_app");
+	}
+
+	#[test]
+	fn test_squash_range_excludes_optional_dependencies_within_range() {
+		// Arrange
+		let mut first = Migration::new("0001_initial", "myapp");
+		first.optional_dependencies.push(OptionalDependency::new(
+			"myapp",
+			"0002_add_field",
+			DependencyCondition::AppInstalled("myapp".to_string()),
+		));
+		let second = Migration::new("0002_add_field", "myapp");
+		let range = SquashRange {
+			migrations: vec![first, second],
+			external_dependencies: vec![],
+		};
+
+		// Act
+		let result = MigrationSquasher::new()
+			.squash_range(&range, "0001_squashed_0002", false)
+			.unwrap();
+
+		// Assert
+		assert!(result.migration.optional_dependencies.is_empty());
 	}
 }

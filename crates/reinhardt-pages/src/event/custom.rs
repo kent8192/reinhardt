@@ -8,6 +8,9 @@ use crate::platform;
 
 /// Typed wrapper for a browser `CustomEvent` detail payload.
 ///
+/// This is a P2 API. Native events decode the stored JSON detail, while WASM
+/// events deserialize the browser `CustomEvent.detail` value.
+///
 /// Detail decoding is deferred until [`Self::detail`] or [`Self::into_detail`]
 /// is called and its result, including a decoding failure, is cached.
 pub struct CustomEvent<T> {

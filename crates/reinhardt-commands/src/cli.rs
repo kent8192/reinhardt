@@ -339,7 +339,7 @@ pub enum Commands {
 
 		/// One-off database URL override
 		#[arg(long)]
-		database_url: Option<String>,
+		database_url: Option<RedactedDatabaseUrl>,
 
 		/// Include database views
 		#[arg(long)]
@@ -1403,7 +1403,7 @@ struct MigrateParams {
 struct InspectDbParams {
 	tables: Vec<String>,
 	database: String,
-	database_url: Option<String>,
+	database_url: Option<RedactedDatabaseUrl>,
 	include_views: bool,
 	include_partitions: bool,
 	output: Option<PathBuf>,
@@ -1421,7 +1421,7 @@ async fn execute_inspectdb(
 	ctx.set_verbosity(params.verbosity);
 	ctx.set_option("database".to_string(), params.database);
 	if let Some(database_url) = params.database_url {
-		ctx.set_option("database-url".to_string(), database_url);
+		ctx.set_option("database-url".to_string(), database_url.into_inner());
 	}
 	if params.include_views {
 		ctx.set_option("include-views".to_string(), "true".to_string());
@@ -2176,6 +2176,26 @@ mod tests {
 		};
 
 		assert!(!requires_database(&command, &CommandRegistry::new()));
+	}
+
+	#[cfg(feature = "migrations")]
+	#[rstest]
+	fn inspectdb_debug_redacts_database_url() {
+		let secret_url = "postgres://user:secret@example.test/database";
+		let command = Commands::Inspectdb {
+			tables: Vec::new(),
+			database: "default".to_string(),
+			database_url: Some(secret_url.parse().unwrap()),
+			include_views: false,
+			include_partitions: false,
+			output: None,
+			config: None,
+			force: false,
+		};
+
+		let debug = format!("{command:?}");
+		assert!(!debug.contains(secret_url));
+		assert!(debug.contains("[REDACTED]"));
 	}
 
 	#[cfg(all(feature = "reinhardt-db", unix))]

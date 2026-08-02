@@ -5,6 +5,8 @@
 //! to CommandContext for command execution.
 
 use clap::{CommandFactory, Parser};
+#[cfg(feature = "migrations")]
+use reinhardt_commands::cli::RedactedDatabaseUrl;
 use reinhardt_commands::{Cli, CommandContext, Commands};
 use rstest::*;
 use std::ffi::OsString;
@@ -1576,7 +1578,10 @@ fn inspectdb_parses_complete_form() {
 		} => {
 			assert_eq!(tables, vec!["users", "audit_log"]);
 			assert_eq!(database, "replica");
-			assert_eq!(database_url.as_deref(), Some("sqlite:inspectdb.db"));
+			assert_eq!(
+				database_url.as_ref().map(RedactedDatabaseUrl::as_str),
+				Some("sqlite:inspectdb.db")
+			);
 			assert!(include_views);
 			assert!(include_partitions);
 			assert_eq!(output, Some(PathBuf::from("src/models/generated")));

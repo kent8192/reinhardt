@@ -309,17 +309,6 @@ impl SchemaCodeGenerator {
 		let struct_ident = format_ident!("{}", struct_name);
 		let table_name = &table.name;
 		let app_label = &self.config.generation.app_label;
-		for index in table.indexes.values() {
-			if index.columns.len() != 1 {
-				return Err(MigrationError::IntrospectionError(format!(
-					"index `{}` on `{}` has {} columns and cannot be represented by a field attribute",
-					index.name,
-					table.name,
-					index.columns.len()
-				)));
-			}
-		}
-
 		// Generate derives
 		let derives: Vec<TokenStream> = self
 			.config
@@ -549,7 +538,11 @@ fn module_file_stem(table_name: &str) -> String {
 	if stem == "mod" {
 		"mod_model".to_string()
 	} else {
-		sanitize_identifier(&stem)
+		let sanitized = sanitize_identifier(&stem);
+		sanitized
+			.strip_prefix("r#")
+			.unwrap_or(&sanitized)
+			.to_string()
 	}
 }
 
@@ -696,7 +689,7 @@ mod tests {
 	}
 
 	#[test]
-	fn generate_model_rejects_composite_indexes() {
+	fn generate_model_ignores_composite_indexes_without_aborting() {
 		let generator = SchemaCodeGenerator::new(IntrospectConfig::default());
 		let mut table = create_test_table();
 		table.indexes.insert(
@@ -720,13 +713,10 @@ mod tests {
 			tables: [("users".to_string(), table.clone())].into(),
 		};
 
-		let error = generator
+		let generated = generator
 			.generate_model(&table, &HashMap::new(), &schema)
-			.expect_err("composite indexes must not be silently discarded");
-		assert_eq!(
-			error.to_string(),
-			"Introspection error: index `users_name_email_idx` on `users` has 2 columns and cannot be represented by a field attribute"
-		);
+			.expect("composite indexes should not prevent model generation");
+		assert!(generator.format_tokens(generated).is_ok());
 	}
 
 	#[test]

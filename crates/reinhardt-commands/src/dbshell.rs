@@ -329,13 +329,15 @@ fn build_sqlite_spec(database_url: &str) -> CommandResult<DbClientSpec> {
 		});
 	let encoded_path =
 		if url_without_query == "sqlite::memory:" || url_without_query == "sqlite://:memory:" {
-			":memory:"
+			":memory:".to_string()
+		} else if let Some(path) = url_without_query.strip_prefix("sqlite:////") {
+			format!("/{path}")
 		} else if let Some(path) = url_without_query.strip_prefix("sqlite:///") {
-			path
+			format!("/{path}")
 		} else if let Some(path) = url_without_query.strip_prefix("sqlite://") {
-			path
+			path.to_string()
 		} else if let Some(path) = url_without_query.strip_prefix("sqlite:") {
-			path
+			path.to_string()
 		} else {
 			return Err(malformed_url("SQLite"));
 		};
@@ -351,7 +353,7 @@ fn build_sqlite_spec(database_url: &str) -> CommandResult<DbClientSpec> {
 			};
 			OsString::from(uri)
 		}
-		None => decode_component(encoded_path, "SQLite")?,
+		None => decode_component(&encoded_path, "SQLite")?,
 	};
 
 	Ok(DbClientSpec {
@@ -1122,10 +1124,13 @@ mod tests {
 	#[test]
 	fn sqlite_preserves_relative_and_absolute_file_paths_without_query_parameters() {
 		let relative = resolved_database("sqlite:data/report%20cache.sqlite3");
+		let three_slash_absolute = resolved_database("sqlite:///tmp/report%20cache.sqlite3");
 		let absolute = resolved_database("sqlite:////tmp/report%20cache.sqlite3");
 
 		let relative_spec =
 			build_client_spec(&relative, &[]).expect("build relative SQLite client");
+		let three_slash_absolute_spec = build_client_spec(&three_slash_absolute, &[])
+			.expect("build three-slash absolute SQLite client");
 		let absolute_spec =
 			build_client_spec(&absolute, &[]).expect("build absolute SQLite client");
 
@@ -1135,6 +1140,15 @@ mod tests {
 			vec![OsString::from("data/report cache.sqlite3")]
 		);
 		assert!(relative_spec.secret_environment.is_empty());
+		assert_eq!(
+			three_slash_absolute_spec.executable,
+			OsString::from("sqlite3")
+		);
+		assert_eq!(
+			three_slash_absolute_spec.arguments,
+			vec![OsString::from("/tmp/report cache.sqlite3")]
+		);
+		assert!(three_slash_absolute_spec.secret_environment.is_empty());
 		assert_eq!(absolute_spec.executable, OsString::from("sqlite3"));
 		assert_eq!(
 			absolute_spec.arguments,

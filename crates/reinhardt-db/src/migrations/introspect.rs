@@ -151,7 +151,6 @@ pub fn render_models_module(config: &IntrospectConfig, schema: &DatabaseSchema) 
 fn canonicalize_schema(schema: &DatabaseSchema) -> DatabaseSchema {
 	let mut schema = schema.clone();
 	for table in schema.tables.values_mut() {
-		table.primary_key.sort();
 		for index in table.indexes.values_mut() {
 			index.columns.sort();
 		}

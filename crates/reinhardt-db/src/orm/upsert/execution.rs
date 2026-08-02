@@ -67,15 +67,12 @@ where
 					)));
 				}
 			};
-			if backend == DatabaseBackend::MySql {
-				if let Some(last_insert_id) = result.last_insert_id {
-					return reload_generated_mysql_primary_key::<C::Model, _>(
-						last_insert_id,
-						executor,
-					)
+			if backend == DatabaseBackend::MySql
+				&& let Some(last_insert_id) = result.last_insert_id
+			{
+				return reload_generated_mysql_primary_key::<C::Model, _>(last_insert_id, executor)
 					.await
 					.map(|model| (model, created));
-				}
 			}
 			reload_lookup(&plan, executor, created, None).await
 		}

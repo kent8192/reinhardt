@@ -927,7 +927,7 @@ impl ToTokens for Operation {
 			}
 			Operation::AlterModelOptions { table, options } => {
 				let mut entries: Vec<_> = options.iter().collect();
-				entries.sort_unstable_by(|(left_key, _), (right_key, _)| left_key.cmp(right_key));
+				entries.sort_unstable_by_key(|(key, _)| *key);
 				let entries = entries.iter().map(|(key, value)| {
 					quote! { map.insert(#key.to_string(), #value.to_string()); }
 				});

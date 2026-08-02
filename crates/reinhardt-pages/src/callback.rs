@@ -41,7 +41,7 @@ use std::pin::Pin;
 use std::task::{Context, Poll};
 
 use crate::component::PageEventHandler;
-use crate::event::EventPayload;
+use crate::event::{CustomEvent, EventPayload};
 use crate::platform::spawn_task;
 use crate::reactive::pages_arena::{
 	PageNodeKey, PageNodeKind, allocate_page_node, dispose_page_node, with_page_node,
@@ -49,6 +49,7 @@ use crate::reactive::pages_arena::{
 use reinhardt_core::reactive::ReactiveScope;
 #[cfg(wasm)]
 use reinhardt_core::reactive::current_scope_id;
+use serde::de::DeserializeOwned;
 
 #[cfg(wasm)]
 struct ScopedAsyncEventFuture<Fut> {
@@ -698,6 +699,23 @@ where
 	})
 }
 
+/// Converts a synchronous typed custom-event handler into raw event storage.
+///
+/// This is a P2 API. Both targets invoke the typed handler for each event;
+/// native dispatches its stored event payload and WASM dispatches the browser
+/// event received by the listener.
+///
+/// The handler is invoked for every raw event. Call [`CustomEvent::detail`]
+/// inside it to inspect the lazily decoded custom-event payload.
+pub fn typed_custom_event_handler<T, H>(handler: H) -> PageEventHandler
+where
+	T: DeserializeOwned + 'static,
+	H: IntoTypedEventHandler<CustomEvent<T>>,
+{
+	let handler = handler.into_typed_event_handler();
+	scoped_event_handler(move |event| handler(CustomEvent::from_raw(event)))
+}
+
 /// Converts an asynchronous typed payload handler into raw event storage.
 #[cfg(wasm)]
 pub fn typed_async_event_handler<P, H, Fut>(handler: H) -> PageEventHandler
@@ -731,6 +749,29 @@ where
 	})
 }
 
+/// Converts an asynchronous typed custom-event handler into raw event storage.
+///
+/// This is a P2 API. Both targets schedule the typed handler asynchronously;
+/// WASM preserves the listener's reactive scope while scheduling, while native
+/// schedules the handler on the native task runner.
+#[cfg(wasm)]
+pub fn typed_async_custom_event_handler<T, H, Fut>(handler: H) -> PageEventHandler
+where
+	T: DeserializeOwned + 'static,
+	H: Fn(CustomEvent<T>) -> Fut + 'static,
+	Fut: Future<Output = ()> + 'static,
+{
+	let scope = current_scope_id();
+	Arc::new(move |event| {
+		#[cfg(feature = "i18n")]
+		let i18n_context = crate::i18n::current_i18n_callback_context();
+		let future = handler(CustomEvent::from_raw(event));
+		#[cfg(feature = "i18n")]
+		let future = crate::i18n::with_optional_i18n_context_async(i18n_context, future);
+		spawn_task(scope_async_event_future(scope, future));
+	})
+}
+
 /// Converts an asynchronous typed payload handler into raw event storage.
 #[cfg(native)]
 pub fn typed_async_event_handler<P, H, Fut>(handler: H) -> PageEventHandler
@@ -753,6 +794,23 @@ where
 				_error
 			),
 		}
+	})
+}
+
+/// Converts an asynchronous typed custom-event handler into raw event storage.
+///
+/// This is a P2 API. Both targets schedule the typed handler asynchronously;
+/// WASM preserves the listener's reactive scope while scheduling, while native
+/// schedules the handler on the native task runner.
+#[cfg(native)]
+pub fn typed_async_custom_event_handler<T, H, Fut>(handler: H) -> PageEventHandler
+where
+	T: DeserializeOwned + 'static,
+	H: Fn(CustomEvent<T>) -> Fut + 'static,
+	Fut: Future<Output = ()> + 'static,
+{
+	Arc::new(move |event| {
+		spawn_task(handler(CustomEvent::from_raw(event)));
 	})
 }
 
@@ -1043,6 +1101,44 @@ mod tests {
 			EventType::Click,
 			NativeEventPayload::default(),
 		));
+	}
+
+	#[cfg(native)]
+	#[rstest]
+	fn typed_custom_adapter_always_invokes_handler() {
+		use std::borrow::Cow;
+		use std::sync::atomic::{AtomicUsize, Ordering};
+
+		use reinhardt_core::types::page::{BaseEventData, NativeEventPayload};
+		use reinhardt_event_catalog::EventName;
+		use serde::Deserialize;
+
+		use crate::event::CustomEventDetailError;
+
+		#[derive(Deserialize)]
+		struct SelectedDetail;
+
+		fn raw_plain_custom_name() -> crate::component::NativeEvent {
+			crate::component::NativeEvent::new(
+				EventName::Custom(Cow::Borrowed("item-selected")),
+				BaseEventData::default(),
+				NativeEventPayload::default(),
+			)
+		}
+
+		let calls = Arc::new(AtomicUsize::new(0));
+		let handler = typed_custom_event_handler::<SelectedDetail, _>({
+			let calls = Arc::clone(&calls);
+			move |event: CustomEvent<SelectedDetail>| {
+				assert!(matches!(
+					event.detail(),
+					Err(CustomEventDetailError::NotCustomEvent { .. })
+				));
+				calls.fetch_add(1, Ordering::SeqCst);
+			}
+		});
+		handler(raw_plain_custom_name());
+		assert_eq!(calls.load(Ordering::SeqCst), 1);
 	}
 }
 

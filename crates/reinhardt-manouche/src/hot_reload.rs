@@ -258,12 +258,12 @@ impl LoweringContext {
 			});
 		}
 		for event in &element.events {
-			let (name, handler) = event_parts(event);
+			let (name, canonical_tokens) = event_parts(event)?;
 			let slot_id = self.allocate_slot_id();
 			structural_slot = Some(slot_id);
 			slots.push(CompilerDynamicSlotSignature {
 				slot_id,
-				canonical_tokens: vec![canonical_tokens(handler)?],
+				canonical_tokens,
 				semantic_kind: CompilerSlotKind::Event { name },
 			});
 		}
@@ -372,10 +372,28 @@ impl LoweringContext {
 	}
 }
 
-fn event_parts(event: &IntrinsicEvent) -> (String, &syn::Expr) {
+fn event_parts(event: &IntrinsicEvent) -> Result<(String, Vec<String>), HotReloadError> {
 	match event {
-		IntrinsicEvent::Standard { event, handler } => (event.to_string(), handler),
-		IntrinsicEvent::Custom { name, handler } => (name.value(), handler),
+		IntrinsicEvent::Standard { event, handler } => Ok((
+			event.to_string(),
+			vec!["variant:standard".to_owned(), canonical_tokens(handler)?],
+		)),
+		IntrinsicEvent::RawCustom { name, handler } => Ok((
+			name.value(),
+			vec!["variant:raw_custom".to_owned(), canonical_tokens(handler)?],
+		)),
+		IntrinsicEvent::TypedCustom {
+			name,
+			payload_type,
+			handler,
+		} => Ok((
+			name.value(),
+			vec![
+				"variant:typed_custom".to_owned(),
+				format!("payload_type:{}", canonical_tokens(payload_type)?),
+				canonical_tokens(handler)?,
+			],
+		)),
 	}
 }
 
@@ -483,6 +501,7 @@ mod tests {
 	use super::*;
 	use crate::{parser::parse_page, validator::validate_page};
 	use quote::quote;
+	use rstest::rstest;
 
 	fn lower(input: TokenStream) -> ManoucheHotReloadTemplate {
 		let parsed = parse_page(input).expect("page syntax should parse");
@@ -532,6 +551,33 @@ mod tests {
 		assert_eq!(
 			template.static_tree,
 			CompilerStaticTemplateNode::Slot(CompilerDynamicSlotId(1))
+		);
+	}
+
+	#[rstest]
+	fn event_variants_have_distinct_stable_dynamic_abis() {
+		let standard = lower(quote! {
+			{ button { @click: |_| {}, "Click" } }
+		});
+		let raw = lower(quote! {
+			{ button { @custom("click"): |_| {}, "Click" } }
+		});
+		let typed_u64 = lower(quote! {
+			{ button { @custom::<u64>("click"): |_| {}, "Click" } }
+		});
+		let typed_string = lower(quote! {
+			{ button { @custom::<String>("click"): |_| {}, "Click" } }
+		});
+
+		assert_ne!(standard.abi_hash, raw.abi_hash);
+		assert_ne!(raw.abi_hash, typed_u64.abi_hash);
+		assert_ne!(typed_u64.abi_hash, typed_string.abi_hash);
+		assert_eq!(
+			typed_u64.abi_hash,
+			lower(quote! {
+				{ button { @custom::<u64>("click"): |_| {}, "Click" } }
+			})
+			.abi_hash
 		);
 	}
 

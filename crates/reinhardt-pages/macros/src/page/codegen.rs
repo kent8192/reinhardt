@@ -1047,7 +1047,7 @@ fn generate_event(
 				}
 			}
 		}
-		IntrinsicEvent::Custom { name, handler } => {
+		IntrinsicEvent::RawCustom { name, handler } => {
 			let raw_type = quote! { #pages_crate::platform::Event };
 			let lowered_handler = lower_intrinsic_closure(handler, raw_type);
 			let lowered_handler = if matches!(handler, syn::Expr::Closure(_)) {
@@ -1059,6 +1059,37 @@ fn generate_event(
 				quote! { #pages_crate::callback::raw_async_event_handler(#lowered_handler) }
 			} else {
 				quote! { #pages_crate::callback::raw_event_handler(#lowered_handler) }
+			};
+
+			quote! {
+				.on(
+					#pages_crate::event::EventName::Custom(::std::borrow::Cow::Borrowed(#name)),
+					#adapter
+				)
+			}
+		}
+		IntrinsicEvent::TypedCustom {
+			name,
+			payload_type,
+			handler,
+		} => {
+			let event_type = quote! {
+				#pages_crate::event::CustomEvent<#payload_type>
+			};
+			let lowered_handler = lower_intrinsic_closure(handler, event_type.clone());
+			let lowered_handler = if matches!(handler, syn::Expr::Closure(_)) {
+				closure_expr_with_move_captures(&lowered_handler, pages_crate, ctx)
+			} else {
+				wrap_expr_with_captures(handler, pages_crate, ctx)
+			};
+			let adapter = if is_async_closure(handler) {
+				quote_spanned! {handler.span()=>
+					#pages_crate::callback::typed_async_custom_event_handler::<#payload_type, _, _>(#lowered_handler)
+				}
+			} else {
+				quote_spanned! {handler.span()=>
+					#pages_crate::callback::typed_custom_event_handler::<#payload_type, _>(#lowered_handler)
+				}
 			};
 
 			quote! {
@@ -1574,6 +1605,25 @@ fn pascal_to_snake(s: &str) -> String {
 #[cfg(test)]
 mod tests {
 	use super::*;
+	use rstest::rstest;
+
+	fn assert_generated_expression(input: TokenStream, expected: TokenStream) {
+		let actual: syn::Expr =
+			syn::parse2(parse_and_generate(input)).expect("generated page expression should parse");
+		let expected: syn::Expr =
+			syn::parse2(expected).expect("expected page expression should parse");
+
+		let normalize = |expression: &syn::Expr| {
+			quote!(#expression)
+				.to_string()
+				.chars()
+				.filter(|character| !character.is_whitespace())
+				.collect::<String>()
+				.replace(",)", ")")
+				.replace(",>", ">")
+		};
+		assert_eq!(normalize(&actual), normalize(&expected));
+	}
 
 	fn parse_and_generate(input: TokenStream) -> TokenStream {
 		use reinhardt_manouche::core::PageMacro;
@@ -1695,6 +1745,102 @@ mod tests {
 		assert!(output.contains("event :: EventName :: Custom"));
 		assert!(output.contains("\"item-selected\""));
 		assert!(output.contains("callback :: raw_event_handler"));
+	}
+
+	#[rstest]
+	fn test_generate_typed_custom_event_uses_custom_adapter() {
+		assert_generated_expression(
+			quote::quote!(|| {
+				div {
+					@custom::<crate::Selected>("item-selected"): |event| {
+						let _ = event;
+					},
+				}
+			}),
+			quote::quote!({
+				#[allow(unused_variables)]
+				|| -> ::reinhardt_pages::component::Page {
+					::reinhardt_pages::component::IntoPage::into_page(
+						::reinhardt_pages::component::PageElement::new("div").on(
+							::reinhardt_pages::event::EventName::Custom(
+								::std::borrow::Cow::Borrowed("item-selected"),
+							),
+							::reinhardt_pages::callback::typed_custom_event_handler::<
+								crate::Selected,
+								_,
+							>(
+								|event: ::reinhardt_pages::event::CustomEvent<crate::Selected>| {
+									let _ = event;
+								},
+							),
+						),
+					)
+				}
+			}),
+		);
+	}
+
+	#[rstest]
+	fn test_generate_async_typed_custom_event_uses_custom_adapter() {
+		assert_generated_expression(
+			quote::quote!(|| {
+				div {
+					@custom::<crate::Selected>("item-loaded"): async |event| {
+						let _ = event;
+					},
+				}
+			}),
+			quote::quote!({
+				#[allow(unused_variables)]
+				|| -> ::reinhardt_pages::component::Page {
+					::reinhardt_pages::component::IntoPage::into_page(
+						::reinhardt_pages::component::PageElement::new("div").on(
+							::reinhardt_pages::event::EventName::Custom(
+								::std::borrow::Cow::Borrowed("item-loaded"),
+							),
+							::reinhardt_pages::callback::typed_async_custom_event_handler::<
+								crate::Selected,
+								_,
+								_,
+							>(
+								async |event: ::reinhardt_pages::event::CustomEvent<
+									crate::Selected,
+								>| {
+									let _ = event;
+								},
+							),
+						),
+					)
+				}
+			}),
+		);
+	}
+
+	#[rstest]
+	fn test_generate_zero_argument_typed_custom_event_adds_typed_parameter() {
+		assert_generated_expression(
+			quote::quote!(|| {
+				div { @custom::<crate::Selected>("item-focused"): || {}, }
+			}),
+			quote::quote!({
+				#[allow(unused_variables)]
+				|| -> ::reinhardt_pages::component::Page {
+					::reinhardt_pages::component::IntoPage::into_page(
+						::reinhardt_pages::component::PageElement::new("div").on(
+							::reinhardt_pages::event::EventName::Custom(
+								::std::borrow::Cow::Borrowed("item-focused"),
+							),
+							::reinhardt_pages::callback::typed_custom_event_handler::<
+								crate::Selected,
+								_,
+							>(
+								|_event: ::reinhardt_pages::event::CustomEvent<crate::Selected>| {}
+							),
+						),
+					)
+				}
+			}),
+		);
 	}
 
 	#[test]

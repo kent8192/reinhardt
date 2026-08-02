@@ -58,6 +58,8 @@ details.
 
 - **makemigrations** - Create new database migrations based on model changes
 - **migrate** - Apply database migrations
+- **inspectdb** - Generate deterministic Reinhardt models from an existing
+  PostgreSQL, MySQL, or SQLite schema
 - **dumpdata** - Export model rows as Django-compatible JSON fixtures
 - **loaddata** - Load Django-compatible JSON fixtures into the database
 - **seed** - Run idempotent per-application development seed hooks
@@ -218,6 +220,51 @@ cargo run --bin manage makemigrations
 cargo run --bin manage migrate
 cargo run --bin manage runserver
 ```
+
+### Database schema inspection
+
+`inspectdb` follows Django's positional-table form:
+
+```bash
+cargo run --bin manage -- inspectdb [TABLE ...]
+```
+
+Table arguments are exact names rather than patterns. Without table arguments,
+the command inspects every table; pass `--include-views` to include views or
+`--include-partitions` for PostgreSQL partitions.
+
+`--database` selects a configured database alias and defaults to `default`. It
+never accepts a connection URL. Use `--database-url` for an explicit one-off
+URL that takes precedence over the selected alias:
+
+```bash
+cargo run --bin manage -- inspectdb accounts --database reporting
+cargo run --bin manage -- inspectdb accounts \
+  --database-url 'sqlite:///var/lib/example.sqlite3'
+```
+
+Generated Rust is the only stdout content by default, so it can be redirected
+directly:
+
+```bash
+cargo run --bin manage -- inspectdb > src/models.rs
+```
+
+Use `--output DIRECTORY` for a generated Rust 2024 multi-file module. It writes
+`DIRECTORY/models.rs` and one child module per table beneath
+`DIRECTORY/models/`; it never generates `mod.rs`. The command preflights the
+complete file set and refuses to overwrite any existing file. Add `--force`
+only with `--output` to replace existing generated files. File publication is
+rollback-safe and all-or-nothing when the command reports a failure: replaced
+files are restored and newly created partial output is removed.
+
+`inspectdb` preserves supported relationship targets, referential actions,
+identity modes, scalar defaults, and explicit JSON versus JSONB field metadata.
+It rejects schema features that cannot be represented by generated model
+attributes (including composite unique constraints or foreign keys,
+shared-primary-key relationships, partial indexes, table-level CHECK constraints,
+and storage-width-specific integer, text, binary, or enum types) instead of
+silently generating a lossy migration model.
 
 ### Rust Management Shell
 

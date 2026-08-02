@@ -43,6 +43,15 @@ pub enum EventFixtureError {
 		/// Fixture interface.
 		actual: EventInterface,
 	},
+	/// Custom detail serialization failed.
+	DetailSerialization {
+		/// Exact event name.
+		event: String,
+		/// Type that could not be serialized.
+		target_type: &'static str,
+		/// Serialization error message.
+		message: String,
+	},
 	/// Target state cannot be represented by the selected element.
 	UnsupportedTargetState {
 		/// Unsupported target property.
@@ -76,6 +85,14 @@ impl fmt::Display for EventFixtureError {
 				formatter,
 				"`{field}` is incompatible with {actual:?} fixture data for `{event}`"
 			),
+			Self::DetailSerialization {
+				event,
+				target_type,
+				message,
+			} => write!(
+				formatter,
+				"failed to serialize custom detail for `{event}` as `{target_type}`: {message}"
+			),
 			Self::UnsupportedTargetState {
 				property,
 				actual_tag,
@@ -98,12 +115,20 @@ pub(crate) struct TargetStatePatch {
 	pub content_editable: Option<bool>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct DetailSerializationFailure {
+	target_type: &'static str,
+	message: String,
+}
+
 /// Builder for one validated native synthetic event.
 #[derive(Debug, Clone)]
 pub struct EventFixture {
 	name: EventName,
 	base: BaseEventData,
 	payload: NativeEventPayload,
+	custom_detail: Option<serde_json::Value>,
+	detail_serialization_error: Option<DetailSerializationFailure>,
 	target: TargetStatePatch,
 	invalid_field: Option<&'static str>,
 }
@@ -124,6 +149,8 @@ impl EventFixture {
 				is_trusted: false,
 			},
 			payload: default_payload(Some(event), interface),
+			custom_detail: None,
+			detail_serialization_error: None,
 			target: TargetStatePatch::default(),
 			invalid_field: None,
 		}
@@ -173,6 +200,8 @@ impl EventFixture {
 			name: EventName::Custom(Cow::Owned(name)),
 			base: BaseEventData::default(),
 			payload: NativeEventPayload::default(),
+			custom_detail: None,
+			detail_serialization_error: None,
 			target: TargetStatePatch::default(),
 			invalid_field: None,
 		}
@@ -217,6 +246,42 @@ impl EventFixture {
 	#[must_use]
 	pub const fn is_trusted(mut self, is_trusted: bool) -> Self {
 		self.base.is_trusted = is_trusted;
+		self
+	}
+
+	/// Serializes and sets a custom event detail payload.
+	#[must_use]
+	pub fn custom_detail<T>(mut self, detail: &T) -> Self
+	where
+		T: serde::Serialize + ?Sized,
+	{
+		if self.name.known().is_some() {
+			self.reject_field("custom_detail");
+			return self;
+		}
+		self.custom_detail = None;
+		self.detail_serialization_error = None;
+		match serde_json::to_value(detail) {
+			Ok(value) => self.custom_detail = Some(value),
+			Err(error) => {
+				self.detail_serialization_error = Some(DetailSerializationFailure {
+					target_type: std::any::type_name::<T>(),
+					message: error.to_string(),
+				});
+			}
+		}
+		self
+	}
+
+	/// Sets a pre-serialized custom event detail payload.
+	#[must_use]
+	pub fn custom_detail_value(mut self, detail: serde_json::Value) -> Self {
+		if self.name.known().is_some() {
+			self.reject_field("custom_detail");
+			return self;
+		}
+		self.custom_detail = Some(detail);
+		self.detail_serialization_error = None;
 		self
 	}
 
@@ -803,11 +868,11 @@ impl EventFixture {
 	/// Validates the fixture and constructs its raw native event.
 	pub fn build(&self) -> Result<NativeEvent, EventFixtureError> {
 		self.validate()?;
-		Ok(NativeEvent::new(
-			self.name.clone(),
-			self.base,
-			self.payload.clone(),
-		))
+		let event = NativeEvent::new(self.name.clone(), self.base, self.payload.clone());
+		Ok(match &self.custom_detail {
+			Some(detail) => event.with_custom_detail(detail.clone()),
+			None => event,
+		})
 	}
 
 	pub(crate) fn name(&self) -> &EventName {
@@ -848,6 +913,13 @@ impl EventFixture {
 				event: self.name.as_str().to_string(),
 				field,
 				actual,
+			});
+		}
+		if let Some(error) = &self.detail_serialization_error {
+			return Err(EventFixtureError::DetailSerialization {
+				event: self.name.as_str().to_string(),
+				target_type: error.target_type,
+				message: error.message.clone(),
 			});
 		}
 		Ok(())
@@ -909,5 +981,101 @@ fn mouse_button_code(button: MouseButton) -> i16 {
 		MouseButton::Fourth => 3,
 		MouseButton::Fifth => 4,
 		MouseButton::Other(code) => code,
+	}
+}
+
+#[cfg(test)]
+mod tests {
+	use rstest::rstest;
+	use serde::ser::Error as _;
+
+	use super::{EventFixture, EventFixtureError};
+
+	#[derive(serde::Serialize)]
+	struct SelectedDetail {
+		id: u64,
+	}
+
+	struct FailingDetail;
+
+	impl serde::Serialize for FailingDetail {
+		fn serialize<S>(&self, _serializer: S) -> Result<S::Ok, S::Error>
+		where
+			S: serde::Serializer,
+		{
+			Err(S::Error::custom("fixture serialization failed"))
+		}
+	}
+
+	#[rstest]
+	fn custom_detail_serializes_into_native_event() {
+		let event = EventFixture::custom("item-selected")
+			.custom_detail(&SelectedDetail { id: 42 })
+			.build()
+			.expect("typed custom fixture");
+
+		assert_eq!(
+			event.custom_detail(),
+			Some(&serde_json::json!({ "id": 42 }))
+		);
+	}
+
+	#[rstest]
+	fn raw_custom_fixture_has_no_custom_detail() {
+		let event = EventFixture::custom("item-selected")
+			.build()
+			.expect("raw custom fixture");
+		assert_eq!(event.custom_detail(), None);
+	}
+
+	#[rstest]
+	fn custom_detail_reports_serialization_failure() {
+		let error = EventFixture::custom("item-selected")
+			.custom_detail(&FailingDetail)
+			.build()
+			.expect_err("failing detail serialization");
+
+		assert_eq!(
+			error,
+			EventFixtureError::DetailSerialization {
+				event: "item-selected".to_string(),
+				target_type: std::any::type_name::<FailingDetail>(),
+				message: "fixture serialization failed".to_string(),
+			}
+		);
+		assert_eq!(
+			error.to_string(),
+			format!(
+				"failed to serialize custom detail for `item-selected` as `{}`: fixture serialization failed",
+				std::any::type_name::<FailingDetail>()
+			)
+		);
+	}
+
+	#[rstest]
+	fn standard_fixture_rejects_custom_detail() {
+		let error = EventFixture::click()
+			.custom_detail_value(serde_json::Value::Null)
+			.build()
+			.expect_err("standard event custom detail");
+
+		assert!(matches!(
+			error,
+			EventFixtureError::IncompatibleField {
+				field: "custom_detail",
+				..
+			}
+		));
+	}
+
+	#[rstest]
+	fn second_custom_detail_setter_replaces_first() {
+		let event = EventFixture::custom("item-selected")
+			.custom_detail(&SelectedDetail { id: 1 })
+			.custom_detail_value(serde_json::json!({ "id": 2 }))
+			.build()
+			.expect("replacement custom detail");
+
+		assert_eq!(event.custom_detail(), Some(&serde_json::json!({ "id": 2 })));
 	}
 }

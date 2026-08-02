@@ -500,30 +500,56 @@ pub mod db {
 		}
 
 		pub mod expressions {
+			#[derive(Debug, Clone, Copy)]
+			pub enum GeneratedModelField {}
+
+			#[derive(Debug, Clone, Copy)]
+			pub enum UnverifiedModelField {}
+
 			#[derive(Debug, Clone)]
-			pub struct FieldRef<Model, Type> {
+			pub struct FieldRef<Model, Type, Origin = UnverifiedModelField> {
 				pub name: &'static str,
-				_marker: core::marker::PhantomData<(Model, Type)>,
+				_marker: core::marker::PhantomData<(Model, Type, Origin)>,
 			}
 
-			impl<Model, Type> FieldRef<Model, Type> {
+			impl<Model, Type> FieldRef<Model, Type, UnverifiedModelField> {
 				pub const fn new(name: &'static str) -> Self {
 					Self {
 						name,
 						_marker: core::marker::PhantomData,
 					}
 				}
+			}
 
+			impl<Model, Type> FieldRef<Model, Type, GeneratedModelField> {
 				pub const unsafe fn from_model_field(name: &'static str) -> Self {
-					Self::new(name)
+					Self {
+						name,
+						_marker: core::marker::PhantomData,
+					}
 				}
+			}
 
+			impl<Model, Type, Origin> FieldRef<Model, Type, Origin> {
 				pub const fn name(&self) -> &'static str {
 					self.name
 				}
 
 				pub fn eq(self, _value: impl Into<Type>) -> bool {
 					true
+				}
+			}
+
+			#[derive(Debug, Clone, Copy)]
+			pub struct OrderingField<Model> {
+				_marker: core::marker::PhantomData<Model>,
+			}
+
+			impl<Model> OrderingField<Model> {
+				pub const unsafe fn from_model_field(_name: &'static str) -> Self {
+					Self {
+						_marker: core::marker::PhantomData,
+					}
 				}
 			}
 
@@ -652,9 +678,9 @@ pub mod db {
 					}
 				}
 
-				pub fn field<Value>(
+				pub fn field<Value, Origin>(
 					self,
-					field: super::expressions::FieldRef<Target, Value>,
+					field: super::expressions::FieldRef<Target, Value, Origin>,
 				) -> RelatedFieldRef<Root, Target, Value> {
 					RelatedFieldRef {
 						field: field.name(),

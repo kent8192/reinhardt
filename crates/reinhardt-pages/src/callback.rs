@@ -701,6 +701,10 @@ where
 
 /// Converts a synchronous typed custom-event handler into raw event storage.
 ///
+/// This is a P2 API. Both targets invoke the typed handler for each event;
+/// native dispatches its stored event payload and WASM dispatches the browser
+/// event received by the listener.
+///
 /// The handler is invoked for every raw event. Call [`CustomEvent::detail`]
 /// inside it to inspect the lazily decoded custom-event payload.
 pub fn typed_custom_event_handler<T, H>(handler: H) -> PageEventHandler
@@ -746,6 +750,10 @@ where
 }
 
 /// Converts an asynchronous typed custom-event handler into raw event storage.
+///
+/// This is a P2 API. Both targets schedule the typed handler asynchronously;
+/// WASM preserves the listener's reactive scope while scheduling, while native
+/// schedules the handler on the native task runner.
 #[cfg(wasm)]
 pub fn typed_async_custom_event_handler<T, H, Fut>(handler: H) -> PageEventHandler
 where
@@ -790,6 +798,10 @@ where
 }
 
 /// Converts an asynchronous typed custom-event handler into raw event storage.
+///
+/// This is a P2 API. Both targets schedule the typed handler asynchronously;
+/// WASM preserves the listener's reactive scope while scheduling, while native
+/// schedules the handler on the native task runner.
 #[cfg(native)]
 pub fn typed_async_custom_event_handler<T, H, Fut>(handler: H) -> PageEventHandler
 where

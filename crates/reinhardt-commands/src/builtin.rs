@@ -468,10 +468,19 @@ impl BaseCommand for MigrateCommand {
 					{
 						for (da, dn) in &migration.dependencies {
 							if *da == *app {
-								let normalized = (
-									da.clone(),
-									terminal_replacement_target(&all_migrations, da, dn)?,
-								);
+								let terminal = terminal_replacement_target(&all_migrations, da, dn)?;
+								let normalized = if terminal != *dn
+									&& replacement_history_is_fully_applied(
+										&all_migrations,
+										da,
+										&terminal,
+										&applied_for_app,
+									)
+								{
+									(da.clone(), terminal)
+								} else {
+									(da.clone(), dn.clone())
+								};
 								stack.push(normalized);
 							}
 						}
@@ -537,7 +546,9 @@ impl BaseCommand for MigrateCommand {
 				let mut execution_migrations = to_apply.clone();
 				for migration in &all_migrations {
 					if !migration.replaces.is_empty()
-						&& applied_for_app.iter().any(|record| record.name == migration.name)
+						&& applied_for_app.iter().any(|record| {
+							record.app == migration.app_label && record.name == migration.name
+						})
 						&& !execution_migrations.iter().any(|candidate| {
 							candidate.app_label == migration.app_label && candidate.name == migration.name
 						})
@@ -756,60 +767,35 @@ fn terminal_replacement_target(
 	target_name: &str,
 ) -> CommandResult<String> {
 	use std::collections::HashSet;
-
-	let mut current = target_name.to_string();
-	let mut visited = HashSet::new();
-	loop {
-		if !visited.insert(current.clone()) {
+	fn collect(
+		current: &str,
+		migrations: &[reinhardt_db::migrations::Migration],
+		app: &str,
+		path: &mut HashSet<String>,
+		terminals: &mut HashSet<String>,
+	) -> CommandResult<()> {
+		if !path.insert(current.to_string()) {
 			return Err(crate::CommandError::ExecutionError(format!(
-				"Replacement cycle detected while resolving {app_label}:{target_name}"
+				"Replacement cycle detected while resolving {app}:{current}"
 			)));
 		}
-		let owners: Vec<_> = migrations
-			.iter()
-			.filter(|migration| {
-				migration.app_label == app_label
-					&& migration
-						.replaces
-						.iter()
-						.any(|(replaced_app, replaced_name)| {
-							replaced_app == app_label && replaced_name == &current
-						})
+		let owners: Vec<_> = migrations.iter().filter(|migration| {
+			migration.app_label == app && migration.replaces.iter().any(|(owner_app, name)| {
+				owner_app == app && name == current
 			})
-			.collect();
-		if owners.is_empty() {
-			return Ok(current);
-		}
-		let terminal: Vec<_> = owners
-			.iter()
-			.filter(|owner| {
-				!migrations.iter().any(|migration| {
-					migration.app_label == app_label
-						&& migration
-							.replaces
-							.iter()
-							.any(|(replaced_app, replaced_name)| {
-								replaced_app == app_label && replaced_name == &owner.name
-							})
-				})
-			})
-			.collect();
-		match terminal.as_slice() {
-			[owner] => return Ok(owner.name.clone()),
-			[] => {
-				current = owners
-					.iter()
-					.max_by(|left, right| left.name.cmp(&right.name))
-					.expect("replacement owner set is not empty")
-					.name
-					.clone();
-			}
-			_ => {
-				return Err(crate::CommandError::ExecutionError(format!(
-					"Migration {app_label}:{target_name} has multiple terminal replacements"
-				)));
-			}
-		}
+		}).collect();
+		if owners.is_empty() { terminals.insert(current.to_string()); }
+		for owner in owners { collect(&owner.name, migrations, app, path, terminals)?; }
+		path.remove(current);
+		Ok(())
+	}
+	let mut terminals = HashSet::new();
+	collect(target_name, migrations, app_label, &mut HashSet::new(), &mut terminals)?;
+	match terminals.len() {
+		1 => Ok(terminals.into_iter().next().expect("single terminal replacement")),
+		_ => Err(crate::CommandError::ExecutionError(format!(
+			"Migration {app_label}:{target_name} has multiple terminal replacements"
+		))),
 	}
 }
 

@@ -316,6 +316,18 @@ impl SchemaCodeGenerator {
 				)));
 			}
 		}
+		if let Some(constraint) = table
+			.unique_constraints
+			.iter()
+			.find(|constraint| constraint.columns.len() != 1)
+		{
+			return Err(MigrationError::IntrospectionError(format!(
+				"unique constraint `{}` on `{}` has {} columns and cannot be represented by a field attribute",
+				constraint.name,
+				table.name,
+				constraint.columns.len()
+			)));
+		}
 		if let Some(foreign_key) = table.foreign_keys.iter().find(|foreign_key| {
 			foreign_key.columns.len() != 1 || foreign_key.referenced_columns.len() != 1
 		}) {
@@ -325,6 +337,16 @@ impl SchemaCodeGenerator {
 				table.name,
 				foreign_key.columns.len(),
 				foreign_key.referenced_columns.len(),
+			)));
+		}
+		if self.config.generation.detect_relationships
+			&& let Some(foreign_key) = table.foreign_keys.iter().find(|foreign_key| {
+				foreign_key.columns.len() == 1
+					&& table.primary_key.contains(&foreign_key.columns[0])
+			}) {
+			return Err(MigrationError::IntrospectionError(format!(
+				"foreign key `{}` on `{}` is also the primary key; shared-primary-key relationships cannot be represented by a relationship field",
+				foreign_key.name, table.name
 			)));
 		}
 		if let Some(constraint) = table.check_constraints.first() {
@@ -537,13 +559,18 @@ impl SchemaCodeGenerator {
 		}
 		if matches!(
 			column.column_type,
-			crate::migrations::fields::FieldType::Char(_)
-				| crate::migrations::fields::FieldType::Text
-				| crate::migrations::fields::FieldType::TinyText
-				| crate::migrations::fields::FieldType::MediumText
-				| crate::migrations::fields::FieldType::LongText
+			crate::migrations::fields::FieldType::Text
 		) {
 			attrs.push(quote! { field_type = "text" });
+		}
+		match column.column_type {
+			crate::migrations::fields::FieldType::Json => {
+				attrs.push(quote! { field_type = "json" });
+			}
+			crate::migrations::fields::FieldType::JsonBinary => {
+				attrs.push(quote! { field_type = "jsonb" });
+			}
+			_ => {}
 		}
 
 		// Default value
@@ -672,10 +699,15 @@ fn ensure_field_type_is_representable(table: &TableInfo, column: &ColumnInfo) ->
 		FieldType::SmallInteger => Some("SMALLINT"),
 		FieldType::TinyInt => Some("TINYINT"),
 		FieldType::MediumInt => Some("MEDIUMINT"),
+		FieldType::Char(_) => Some("CHAR"),
+		FieldType::TinyText => Some("TINYTEXT"),
+		FieldType::MediumText => Some("MEDIUMTEXT"),
+		FieldType::LongText => Some("LONGTEXT"),
 		FieldType::Blob => Some("BLOB"),
 		FieldType::TinyBlob => Some("TINYBLOB"),
 		FieldType::MediumBlob => Some("MEDIUMBLOB"),
 		FieldType::LongBlob => Some("LONGBLOB"),
+		FieldType::Enum { .. } => Some("ENUM"),
 		_ => None,
 	};
 	if let Some(storage_type) = storage_type {
@@ -877,6 +909,27 @@ mod tests {
 	}
 
 	#[test]
+	fn generate_model_rejects_composite_unique_constraints() {
+		let generator = SchemaCodeGenerator::new(IntrospectConfig::default());
+		let mut table = create_test_table();
+		table.unique_constraints.push(UniqueConstraintInfo {
+			name: "users_name_email_key".to_string(),
+			columns: vec!["name".to_string(), "email".to_string()],
+		});
+		let schema = DatabaseSchema {
+			tables: [("users".to_string(), table.clone())].into(),
+		};
+
+		let error = generator
+			.generate_model(&table, &HashMap::new(), &schema)
+			.expect_err("composite unique constraints must not be silently discarded");
+		assert_eq!(
+			error.to_string(),
+			"Introspection error: unique constraint `users_name_email_key` on `users` has 2 columns and cannot be represented by a field attribute"
+		);
+	}
+
+	#[test]
 	fn generate_model_emits_typed_literals_for_scalar_defaults() {
 		let config = IntrospectConfig::default().with_app_label("test");
 		let generator = SchemaCodeGenerator::new(config);
@@ -955,7 +1008,53 @@ mod tests {
 			)
 			.expect("model should format");
 		assert!(code.contains("identity_always = true"));
+		assert!(code.contains("field_type = \"jsonb\""));
 		assert!(code.contains("default = \"{}\""));
+	}
+
+	#[test]
+	fn generate_model_preserves_json_metadata() {
+		let generator = SchemaCodeGenerator::new(IntrospectConfig::default());
+		let mut table = create_test_table();
+		table.columns.insert(
+			"payload".to_string(),
+			ColumnInfo {
+				name: "payload".to_string(),
+				column_type: FieldType::Json,
+				nullable: false,
+				default: None,
+				auto_increment: false,
+				identity_generation: None,
+				generated: None,
+			},
+		);
+		table.columns.insert(
+			"metadata".to_string(),
+			ColumnInfo {
+				name: "metadata".to_string(),
+				column_type: FieldType::JsonBinary,
+				nullable: false,
+				default: None,
+				auto_increment: false,
+				identity_generation: None,
+				generated: None,
+			},
+		);
+		let code = generator
+			.format_tokens(
+				generator
+					.generate_model(
+						&table,
+						&HashMap::new(),
+						&DatabaseSchema {
+							tables: [("users".to_string(), table.clone())].into(),
+						},
+					)
+					.expect("JSON types should be representable"),
+			)
+			.expect("generated model should format");
+		assert!(code.contains("field_type = \"json\""));
+		assert!(code.contains("field_type = \"jsonb\""));
 	}
 
 	#[test]
@@ -1264,6 +1363,33 @@ mod tests {
 	}
 
 	#[test]
+	fn generate_model_rejects_shared_primary_key_relationships() {
+		let generator = SchemaCodeGenerator::new(IntrospectConfig::default());
+		let mut profile = create_test_table();
+		profile.name = "profiles".to_string();
+		profile.foreign_keys = vec![ForeignKeyInfo {
+			name: "profiles_id_fkey".to_string(),
+			columns: vec!["id".to_string()],
+			referenced_table: "users".to_string(),
+			referenced_columns: vec!["id".to_string()],
+			on_delete: None,
+			on_update: None,
+		}];
+		let schema = DatabaseSchema {
+			tables: [("profiles".to_string(), profile.clone())].into(),
+		};
+
+		let error = generator
+			.generate_model(&profile, &HashMap::new(), &schema)
+			.expect_err("shared primary-key relationships must not generate marker primary keys");
+		assert!(
+			error
+				.to_string()
+				.contains("shared-primary-key relationships")
+		);
+	}
+
+	#[test]
 	fn generate_model_rejects_lossy_constraints_and_storage_types() {
 		let generator = SchemaCodeGenerator::new(IntrospectConfig::default());
 		let mut table = create_test_table();
@@ -1282,18 +1408,32 @@ mod tests {
 				.contains("CHECK constraint")
 		);
 		table.check_constraints.clear();
-		table
-			.columns
-			.get_mut("name")
-			.expect("name column")
-			.column_type = FieldType::TinyBlob;
-		assert!(
-			generator
-				.generate_model(&table, &HashMap::new(), &schema)
-				.expect_err("BLOB width must not be silently widened")
-				.to_string()
-				.contains("TINYBLOB")
-		);
+		for (field_type, storage_type) in [
+			(FieldType::TinyBlob, "TINYBLOB"),
+			(FieldType::Char(4), "CHAR"),
+			(FieldType::TinyText, "TINYTEXT"),
+			(FieldType::MediumText, "MEDIUMTEXT"),
+			(FieldType::LongText, "LONGTEXT"),
+			(
+				FieldType::Enum {
+					values: vec!["active".to_string(), "inactive".to_string()],
+				},
+				"ENUM",
+			),
+		] {
+			table
+				.columns
+				.get_mut("name")
+				.expect("name column")
+				.column_type = field_type;
+			assert!(
+				generator
+					.generate_model(&table, &HashMap::new(), &schema)
+					.expect_err("storage type must not be silently widened")
+					.to_string()
+					.contains(storage_type)
+			);
+		}
 	}
 
 	#[test]

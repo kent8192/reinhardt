@@ -852,7 +852,24 @@ async fn fake_record_migration(
 				"Failed to inspect fake migration {}:{}: {}",
 				migration.app_label, migration.name, error
 			))
-		})? {
+	})? {
+		if !migration.replaces.is_empty() {
+			let applied = recorder.get_applied_migrations().await.map_err(|error| {
+				crate::CommandError::ExecutionError(format!(
+					"Failed to inspect replacement cleanup for {}:{}: {}",
+					migration.app_label, migration.name, error
+				))
+			})?;
+			for (app, name) in &migration.replaces {
+				if applied.iter().any(|record| record.app == *app && record.name == *name) {
+					recorder.unapply(app, name).await.map_err(|error| {
+						crate::CommandError::ExecutionError(format!(
+							"Failed to resume fake replacement cleanup for {}:{}: {}", app, name, error
+						))
+					})?;
+				}
+			}
+		}
 		return Ok(());
 	}
 

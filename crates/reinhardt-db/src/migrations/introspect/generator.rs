@@ -615,7 +615,9 @@ fn render_default_expression(
 		return Some(quote! { #unquoted });
 	}
 
-	default.trim().parse::<TokenStream>().ok()
+	syn::parse_str::<syn::Expr>(default.trim())
+		.ok()
+		.map(|expression| quote! { #expression })
 }
 
 #[cfg(test)]
@@ -680,6 +682,17 @@ mod tests {
 			}],
 			check_constraints: vec![],
 		}
+	}
+
+	#[rstest]
+	fn render_default_expression_skips_sql_only_array_defaults() {
+		assert!(
+			render_default_expression(
+				"ARRAY[]::text[]",
+				&FieldType::Array(Box::new(FieldType::Text)),
+			)
+			.is_none()
+		);
 	}
 
 	#[test]

@@ -1,7 +1,8 @@
 use async_trait::async_trait;
+use reinhardt_db::backends::DatabaseConnection;
 use reinhardt_db::migrations::{
-	FilesystemSource, Migration, MigrationCatalog, MigrationError, MigrationKey, MigrationSource,
-	Result,
+	DatabaseMigrationRecorder, FilesystemSource, Migration, MigrationCatalog, MigrationError,
+	MigrationKey, MigrationSource, Result,
 };
 use rstest::*;
 use std::fs;
@@ -47,6 +48,28 @@ async fn catalog(migrations: Vec<Migration>) -> MigrationCatalog {
 	MigrationCatalog::load_strict(&TestSource { migrations })
 		.await
 		.unwrap()
+}
+
+#[rstest]
+#[tokio::test]
+async fn snapshot_excludes_migrations_replaced_by_a_squash() {
+	// Arrange
+	let original = migration("blog", "0001_initial", &[]);
+	let mut replacement = migration("blog", "0001_squashed_0002", &[]);
+	replacement.replaces = vec![("blog".to_string(), "0001_initial".to_string())];
+	let catalog = catalog(vec![original, replacement]).await;
+	let recorder = DatabaseMigrationRecorder::new(
+		DatabaseConnection::connect_sqlite("sqlite::memory:")
+			.await
+			.expect("connect to SQLite"),
+	);
+
+	// Act
+	let snapshot = catalog.snapshot(&recorder, &[]).await.unwrap();
+
+	// Assert
+	assert_eq!(snapshot.ordered.len(), 1);
+	assert_eq!(snapshot.ordered[0].name, "0001_squashed_0002");
 }
 
 #[rstest]
@@ -688,6 +711,30 @@ async fn squash_range_rejects_branched_ancestry() {
 		error.to_string(),
 		"Invalid migration: Ambiguous migration ancestry for blog.0003_merge; parents: \
 		 0002_left, 0002_right"
+	);
+}
+
+#[rstest]
+#[tokio::test]
+async fn squash_range_rejects_an_unselected_outgoing_branch() {
+	// Arrange
+	let catalog = catalog(vec![
+		migration("blog", "0001_initial", &[]),
+		migration("blog", "0002_left", &[("blog", "0001_initial")]),
+		migration("blog", "0002_right", &[("blog", "0001_initial")]),
+	])
+	.await;
+
+	// Act
+	let error = catalog
+		.squash_range("blog", Some("0001"), "0002_left")
+		.unwrap_err();
+
+	// Assert
+	assert_eq!(
+		error.to_string(),
+		"Invalid migration: Cannot squash range: blog.0002_right branches from selected migration \
+		 blog.0001_initial"
 	);
 }
 

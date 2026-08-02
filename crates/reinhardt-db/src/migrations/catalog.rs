@@ -143,7 +143,7 @@ impl MigrationCatalog {
 			}
 		}
 
-		let ordered_keys = self.graph.topological_sort()?;
+		let ordered_keys = self.graph.resolve_execution_order_with_replaces()?;
 		let selected = if apps.is_empty() {
 			self.migrations.keys().cloned().collect()
 		} else {
@@ -328,6 +328,20 @@ impl MigrationCatalog {
 			.cloned()
 			.collect();
 
+		for selected_key in &selected {
+			for child in self.graph.get_dependents(selected_key) {
+				if child.app_label == app
+					&& !selected.contains(child)
+					&& !self.is_descendant_of(child, &end_key)
+				{
+					return Err(MigrationError::InvalidMigration(format!(
+						"Cannot squash range: {} branches from selected migration {}",
+						child, selected_key
+					)));
+				}
+			}
+		}
+
 		for (dependency_app, dependency_name) in &external_dependencies {
 			let dependency = MigrationKey::new(dependency_app, dependency_name);
 			if let Some(selected_ancestor) =
@@ -374,6 +388,21 @@ impl MigrationCatalog {
 		left.app_label
 			.cmp(&right.app_label)
 			.then_with(|| left.name.cmp(&right.name))
+	}
+
+	fn is_descendant_of(&self, start: &MigrationKey, ancestor: &MigrationKey) -> bool {
+		let mut stack = vec![ancestor.clone()];
+		let mut visited = HashSet::new();
+		while let Some(current) = stack.pop() {
+			if !visited.insert(current.clone()) {
+				continue;
+			}
+			if &current == start {
+				return true;
+			}
+			stack.extend(self.graph.get_dependents(&current).into_iter().cloned());
+		}
+		false
 	}
 
 	fn reconstruct_state(

@@ -1747,14 +1747,7 @@ impl Operation {
 				let mut model = ModelState::new(app_label, name.clone());
 				model.table_name = name.clone();
 				for column in columns {
-					let mut field = FieldState::new(
-						column.name.to_string(),
-						column.type_definition.clone(),
-						false,
-					);
-					field.generated = column.generated.clone();
-					field.domain = column.domain.clone();
-					model.add_field(field);
+					model.add_field(field_state_from_column(column));
 				}
 				model.constraints = constraints
 					.iter()
@@ -1767,14 +1760,7 @@ impl Operation {
 			}
 			Operation::AddColumn { table, column, .. } => {
 				if let Some(model) = state.get_model_by_table_mut(app_label, table) {
-					let mut field = FieldState::new(
-						column.name.to_string(),
-						column.type_definition.clone(),
-						false,
-					);
-					field.generated = column.generated.clone();
-					field.domain = column.domain.clone();
-					model.add_field(field);
+					model.add_field(field_state_from_column(column));
 				}
 			}
 			Operation::DropColumn { table, column, .. } => {
@@ -1789,14 +1775,7 @@ impl Operation {
 				..
 			} => {
 				if let Some(model) = state.get_model_by_table_mut(app_label, table) {
-					let mut field = FieldState::new(
-						column.to_string(),
-						new_definition.type_definition.clone(),
-						false,
-					);
-					field.generated = new_definition.generated.clone();
-					field.domain = new_definition.domain.clone();
-					model.alter_field(column, field);
+					model.alter_field(column, field_state_from_column(new_definition));
 				}
 			}
 			Operation::RenameTable { old_name, new_name } => {
@@ -4391,6 +4370,30 @@ pub(crate) enum PlannedOperationOutput {
 	Sql(String),
 	/// Non-executable information retained in collected plans.
 	Comment(String),
+}
+
+fn field_state_from_column(column: &ColumnDefinition) -> FieldState {
+	let mut field = FieldState::new(
+		column.name.to_string(),
+		column.type_definition.clone(),
+		!column.not_null && !column.primary_key,
+	);
+	field
+		.params
+		.insert("primary_key".to_string(), column.primary_key.to_string());
+	field
+		.params
+		.insert("unique".to_string(), column.unique.to_string());
+	field.params.insert(
+		"auto_increment".to_string(),
+		column.auto_increment.to_string(),
+	);
+	if let Some(default) = &column.default {
+		field.params.insert("default".to_string(), default.clone());
+	}
+	field.generated = column.generated.clone();
+	field.domain = column.domain.clone();
+	field
 }
 
 /// Column definition for legacy operations
@@ -8053,6 +8056,51 @@ mod tests {
 		assert_eq!(
 			state.get_model("tasks", "jobs").unwrap().fields["status"].domain,
 			Some(domain)
+		);
+	}
+
+	#[test]
+	fn state_forwards_preserves_column_attributes() {
+		let column = ColumnDefinition {
+			name: "id".to_string(),
+			type_definition: FieldType::Integer,
+			not_null: true,
+			unique: true,
+			primary_key: true,
+			auto_increment: true,
+			default: Some("42".to_string()),
+			generated: None,
+			domain: None,
+		};
+		let mut state = ProjectState::new();
+		let create_table = Operation::CreateTable {
+			name: "jobs".to_string(),
+			columns: vec![column.clone()],
+			constraints: vec![],
+			without_rowid: None,
+			interleave_in_parent: None,
+			partition: None,
+		};
+
+		create_table.state_forwards("tasks", &mut state);
+		let field = &state.get_model("tasks", "jobs").unwrap().fields["id"];
+		assert!(!field.nullable);
+		assert_eq!(ColumnDefinition::from_field_state("id", field), column);
+
+		let additional_column = ColumnDefinition {
+			name: "sequence".to_string(),
+			..column.clone()
+		};
+		let add_column = Operation::AddColumn {
+			table: "jobs".to_string(),
+			column: additional_column.clone(),
+			mysql_options: None,
+		};
+		add_column.state_forwards("tasks", &mut state);
+		let field = &state.get_model("tasks", "jobs").unwrap().fields["sequence"];
+		assert_eq!(
+			ColumnDefinition::from_field_state("sequence", field),
+			additional_column
 		);
 	}
 

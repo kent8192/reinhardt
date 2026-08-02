@@ -754,8 +754,9 @@ mod tests {
 
 	use super::{BaseEventData, NativeEvent, NativeEventPayload};
 	use reinhardt_event_catalog::EventName;
+	use rstest::rstest;
 
-	#[test]
+	#[rstest]
 	fn native_event_distinguishes_plain_event_from_null_custom_detail() {
 		let plain = NativeEvent::new(
 			EventName::Custom(Cow::Borrowed("item-selected")),

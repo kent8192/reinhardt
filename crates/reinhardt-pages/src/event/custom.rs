@@ -161,6 +161,10 @@ where
 }
 
 /// Failure to decode a typed custom-event detail payload.
+///
+/// This is a P2 API. Both targets report a missing `CustomEvent` or a detail
+/// deserialization failure; native error messages come from JSON decoding and
+/// WASM error messages come from `CustomEvent.detail` deserialization.
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum CustomEventDetailError {
@@ -209,6 +213,7 @@ mod tests {
 		BaseEventData, NativeEvent, NativeEventPayload, NativeEventTarget,
 	};
 	use reinhardt_event_catalog::EventName;
+	use rstest::rstest;
 	use serde::Deserialize;
 	use serial_test::serial;
 
@@ -259,7 +264,7 @@ mod tests {
 		.with_custom_detail(detail)
 	}
 
-	#[test]
+	#[rstest]
 	fn plain_named_event_reports_not_custom_event() {
 		let raw = NativeEvent::new(
 			EventName::Custom(Cow::Borrowed("item-selected")),
@@ -276,7 +281,7 @@ mod tests {
 		);
 	}
 
-	#[test]
+	#[rstest]
 	fn custom_event_detail_borrows_and_into_detail_owns_the_same_payload() {
 		let raw = custom_native_event(serde_json::json!({ "id": 42 }));
 		let event = CustomEvent::<SelectedDetail>::from_raw(raw);
@@ -284,7 +289,7 @@ mod tests {
 		assert_eq!(event.into_detail().expect("owned detail").id, 42);
 	}
 
-	#[test]
+	#[rstest]
 	#[serial(custom_event_decode)]
 	fn custom_event_detail_decodes_success_only_once() {
 		SUCCESSFUL_DECODE_COUNT.store(0, Ordering::SeqCst);
@@ -296,7 +301,7 @@ mod tests {
 		assert_eq!(SUCCESSFUL_DECODE_COUNT.load(Ordering::SeqCst), 1);
 	}
 
-	#[test]
+	#[rstest]
 	#[serial(custom_event_decode)]
 	fn custom_event_detail_caches_deserialization_failure() {
 		FAILING_DECODE_COUNT.store(0, Ordering::SeqCst);
@@ -314,7 +319,7 @@ mod tests {
 		assert_eq!(FAILING_DECODE_COUNT.load(Ordering::SeqCst), 1);
 	}
 
-	#[test]
+	#[rstest]
 	fn custom_event_exposes_base_event_state_and_target_snapshots() {
 		let raw = custom_native_event(serde_json::json!({ "id": 42 }))
 			.with_target(NativeEventTarget::new("span").with_text_content("Save"))
@@ -342,7 +347,7 @@ mod tests {
 		assert!(event.raw().immediate_propagation_stopped());
 	}
 
-	#[test]
+	#[rstest]
 	fn custom_event_detail_error_display_is_stable() {
 		assert_eq!(
 			CustomEventDetailError::NotCustomEvent {

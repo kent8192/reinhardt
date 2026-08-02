@@ -660,6 +660,21 @@ fn parse_single_operation_strict(expr: &Expr, index: usize) -> Result<super::Ope
 					)?,
 				});
 			}
+			"RunRust" => {
+				validate_exact_named_fields(
+					&operation.fields,
+					&["code", "reverse_code"],
+					&context,
+				)?;
+				return Ok(super::Operation::RunRust {
+					code: parse_string_field_strict(&operation.fields, "code", &context)?,
+					reverse_code: parse_optional_string_field_strict(
+						&operation.fields,
+						"reverse_code",
+						&context,
+					)?,
+				});
+			}
 			"CreateExtension" => {
 				validate_exact_named_fields(
 					&operation.fields,
@@ -1382,6 +1397,11 @@ fn parse_single_operation(expr: &Expr) -> Option<super::Operation> {
 				let sql = extract_string_field(&expr_struct.fields, "sql")?;
 				let reverse_sql = extract_optional_str_field(&expr_struct.fields, "reverse_sql");
 				return Some(super::Operation::RunSQL { sql, reverse_sql });
+			}
+			"RunRust" => {
+				let code = extract_string_field(&expr_struct.fields, "code")?;
+				let reverse_code = extract_optional_str_field(&expr_struct.fields, "reverse_code");
+				return Some(super::Operation::RunRust { code, reverse_code });
 			}
 			_ => {
 				// Log unhandled operation types
@@ -3570,13 +3590,6 @@ mod tests {
 		r#"Operation::DropTable { wrong_name: "posts".to_string() }"#,
 		"Invalid migration: operations[0].DropTable.wrong_name is unsupported or malformed"
 	)]
-	#[case(
-		r#"Operation::RunRust {
-			code: "seed_data()".to_string(),
-			reverse_code: None,
-		}"#,
-		"Invalid migration: operations[0].RunRust is unsupported or malformed"
-	)]
 	fn strict_metadata_rejects_unknown_and_malformed_operations(
 		#[case] operation: &str,
 		#[case] expected: &str,
@@ -3598,6 +3611,34 @@ mod tests {
 
 		// Assert
 		assert_eq!(error.to_string(), expected);
+	}
+
+	#[test]
+	fn strict_metadata_round_trips_run_rust_operations() {
+		// Arrange
+		let source = r#"pub fn migration() -> Migration {
+			Migration {
+				operations: vec![Operation::RunRust {
+					code: "seed_data()".to_string(),
+					reverse_code: Some("remove_seed_data()".to_string()),
+				}],
+				dependencies: vec![],
+				replaces: vec![],
+			}
+		}"#;
+		let ast = syn::parse_file(source).unwrap();
+
+		// Act
+		let metadata = extract_migration_metadata_strict(&ast, "blog", "0001_initial").unwrap();
+
+		// Assert
+		assert_eq!(
+			metadata.operations,
+			vec![Operation::RunRust {
+				code: "seed_data()".to_string(),
+				reverse_code: Some("remove_seed_data()".to_string()),
+			}]
+		);
 	}
 
 	#[rstest]

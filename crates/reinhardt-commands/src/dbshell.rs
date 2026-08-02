@@ -8,7 +8,7 @@ use std::env;
 use std::ffi::{OsStr, OsString};
 use std::fmt;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
+use std::process::{Child, Command, ExitStatus, Stdio};
 use url::{Host, Url};
 
 pub(crate) struct DbClientSpec {
@@ -65,7 +65,7 @@ impl DbClientRunner for PortableDbClientRunner {
 				.stderr(Stdio::inherit())
 				.spawn();
 			match child {
-				Ok(mut child) => return wait_for_client(&mut child, spec),
+				Ok(child) => return wait_for_client(ManagedDbClient::new(child), spec),
 				Err(error)
 					if matches!(
 						error.kind(),
@@ -85,8 +85,37 @@ impl DbClientRunner for PortableDbClientRunner {
 	}
 }
 
+struct ManagedDbClient {
+	child: Child,
+	has_exited: bool,
+}
+
+impl ManagedDbClient {
+	fn new(child: Child) -> Self {
+		Self {
+			child,
+			has_exited: false,
+		}
+	}
+
+	fn wait(&mut self) -> std::io::Result<ExitStatus> {
+		let status = self.child.wait()?;
+		self.has_exited = true;
+		Ok(status)
+	}
+}
+
+impl Drop for ManagedDbClient {
+	fn drop(&mut self) {
+		if !self.has_exited {
+			let _ = self.child.kill();
+			let _ = self.child.wait();
+		}
+	}
+}
+
 fn wait_for_client(
-	child: &mut std::process::Child,
+	mut child: ManagedDbClient,
 	spec: &DbClientSpec,
 ) -> CommandResult<DbShellOutcome> {
 	let status = child.wait().map_err(|error| {

@@ -195,6 +195,16 @@ impl MigrationSource for FilesystemSource {
 			if path.extension().and_then(|s| s.to_str()) != Some("rs") {
 				continue;
 			}
+			// Migration source files begin with their numeric migration sequence.
+			// Rust 2024 module files such as `migrations.rs` share the extension
+			// but have no migration entrypoint and must not be parsed as migrations.
+			if !path
+				.file_stem()
+				.and_then(|stem| stem.to_str())
+				.is_some_and(|stem| stem.starts_with(|character: char| character.is_ascii_digit()))
+			{
+				continue;
+			}
 
 			// Skip files directly in root_dir (need at least one subdirectory for app_label)
 			let relative_path = match path.strip_prefix(&self.root_dir) {
@@ -513,6 +523,39 @@ pub fn migration() -> Migration {
 			"Only .rs files should be loaded as migrations"
 		);
 		assert_eq!(migrations[0].app_label, "polls");
+		assert_eq!(migrations[0].name, "0001_initial");
+	}
+
+	#[rstest]
+	#[tokio::test]
+	#[serial(filesystem_source)]
+	async fn skips_rust_module_files_beside_numbered_migrations() {
+		// Arrange
+		let temp_dir = TempDir::new().unwrap();
+		create_migration_file(
+			temp_dir.path(),
+			"polls",
+			"0001_initial",
+			r#"
+pub fn migration() -> Migration {
+	Migration { operations: vec![], dependencies: vec![], replaces: vec![] }
+}
+"#,
+		);
+		fs::write(
+			temp_dir.path().join("polls").join("migrations.rs"),
+			"pub mod migrations;",
+		)
+		.unwrap();
+
+		// Act
+		let migrations = FilesystemSource::new(temp_dir.path())
+			.all_migrations()
+			.await
+			.expect("module files must be ignored");
+
+		// Assert
+		assert_eq!(migrations.len(), 1);
 		assert_eq!(migrations[0].name, "0001_initial");
 	}
 

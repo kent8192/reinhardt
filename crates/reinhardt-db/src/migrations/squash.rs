@@ -568,6 +568,24 @@ impl MigrationSquasher {
 			)
 		};
 		match operation {
+			Operation::CreateTable {
+				columns,
+				constraints,
+				..
+			} => {
+				columns.iter().any(references_foreign_key)
+					|| constraints.iter().any(|constraint| {
+						matches!(
+							constraint,
+							crate::migrations::Constraint::ForeignKey {
+								referenced_table,
+								referenced_columns,
+								..
+							} if referenced_table == table
+								&& referenced_columns.iter().any(|referenced| referenced == column)
+						)
+					})
+			}
 			Operation::AddColumn {
 				table: candidate_table,
 				column: candidate_column,
@@ -941,6 +959,47 @@ mod tests {
 
 		// Assert
 		assert_eq!(squashed.operations.len(), 4);
+	}
+
+	#[test]
+	fn optimize_operations_preserves_create_table_foreign_key_to_transient_column() {
+		// Arrange
+		let migrations = vec![
+			Migration::new("0001_initial", "app")
+				.add_operation(Operation::AddColumn {
+					table: "accounts".to_string(),
+					column: ColumnDefinition::new("temp", FieldType::Integer),
+					mysql_options: None,
+				})
+				.add_operation(Operation::CreateTable {
+					name: "audit".to_string(),
+					columns: vec![ColumnDefinition::new(
+						"account_temp",
+						FieldType::ForeignKey {
+							to_table: "accounts".to_string(),
+							to_field: "temp".to_string(),
+							on_delete: ForeignKeyAction::NoAction,
+						},
+					)],
+					constraints: Vec::new(),
+					without_rowid: None,
+					interleave_in_parent: None,
+					partition: None,
+				})
+				.add_operation(Operation::DropColumn {
+					table: "accounts".to_string(),
+					column: "temp".to_string(),
+					old_definition: None,
+				}),
+		];
+
+		// Act
+		let squashed = MigrationSquasher::new()
+			.squash(&migrations, "0001_squashed", SquashOptions::default())
+			.unwrap();
+
+		// Assert
+		assert_eq!(squashed.operations.len(), 3);
 	}
 
 	#[test]

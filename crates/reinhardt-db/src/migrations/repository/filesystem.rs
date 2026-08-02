@@ -271,7 +271,8 @@ impl FilesystemRepository {
 					label, component
 				)));
 			};
-			number.bytes().all(|byte| byte.is_ascii_digit())
+			!number.is_empty()
+				&& number.bytes().all(|byte| byte.is_ascii_digit())
 				&& !description.is_empty()
 				&& description
 					.bytes()
@@ -1920,6 +1921,21 @@ mod tests {
 
 		assert!(error.to_string().contains("injected write failure"));
 		assert!(error.to_string().contains("injected cleanup failure"));
+	}
+
+	#[test]
+	fn create_new_source_rejects_empty_migration_number_prefix() {
+		// Arrange
+		let temp_dir = TempDir::new().unwrap();
+		let repository = FilesystemRepository::new(temp_dir.path());
+
+		// Act
+		let error = repository
+			.create_new_source("polls", "_initial", "pub fn migration() {}")
+			.unwrap_err();
+
+		// Assert
+		assert!(matches!(error, MigrationError::PathTraversal(_)));
 	}
 
 	#[cfg(unix)]

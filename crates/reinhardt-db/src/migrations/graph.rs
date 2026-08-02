@@ -147,6 +147,43 @@ pub struct MigrationGraph {
 	nodes: HashMap<MigrationKey, MigrationNode>,
 }
 
+fn terminal_replacement_owner(
+	replaced_key: &MigrationKey,
+	owners: &HashMap<MigrationKey, Vec<MigrationKey>>,
+	replaced: &HashSet<MigrationKey>,
+) -> Result<MigrationKey> {
+	let mut current = replaced_key.clone();
+	let mut visited = HashSet::new();
+	while let Some(candidates) = owners.get(&current) {
+		if !visited.insert(current.clone()) {
+			return Err(MigrationError::CircularDependency {
+				cycle: current.id(),
+			});
+		}
+		let mut terminal: Vec<_> = candidates
+			.iter()
+			.filter(|candidate| !replaced.contains(*candidate))
+			.cloned()
+			.collect();
+		terminal.sort_by_key(MigrationKey::id);
+		match terminal.as_slice() {
+			[owner] => return Ok(owner.clone()),
+			[] => {
+				let mut candidates = candidates.clone();
+				candidates.sort_by_key(MigrationKey::id);
+				current = candidates.pop().expect("replacement owner set is not empty");
+			}
+			_ => {
+				return Err(MigrationError::InvalidMigration(format!(
+					"Replacement {} has multiple terminal owners",
+					replaced_key
+				)));
+			}
+		}
+	}
+	Ok(current)
+}
+
 impl MigrationGraph {
 	/// Create a new empty migration graph
 	///
@@ -774,14 +811,24 @@ impl MigrationGraph {
 	pub fn resolve_execution_order_with_replaces(&self) -> Result<Vec<MigrationKey>> {
 		// Find all migrations that are replaced by others
 		let mut replaced: HashSet<MigrationKey> = HashSet::new();
-		let mut replacement_map: HashMap<MigrationKey, MigrationKey> = HashMap::new();
+		let mut replacement_owners: HashMap<MigrationKey, Vec<MigrationKey>> = HashMap::new();
 
 		for (key, node) in &self.nodes {
 			for replaced_key in &node.replaces {
 				replaced.insert(replaced_key.clone());
-				replacement_map.insert(replaced_key.clone(), key.clone());
+				replacement_owners
+					.entry(replaced_key.clone())
+					.or_default()
+					.push(key.clone());
 			}
 		}
+		let replacement_map: HashMap<MigrationKey, MigrationKey> = replacement_owners
+			.keys()
+			.map(|replaced_key| {
+				terminal_replacement_owner(replaced_key, &replacement_owners, &replaced)
+					.map(|owner| (replaced_key.clone(), owner))
+			})
+			.collect::<Result<_>>()?;
 
 		// Create a filtered graph without replaced migrations
 		let mut filtered_graph = MigrationGraph::new();

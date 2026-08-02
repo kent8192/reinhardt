@@ -254,18 +254,9 @@ impl BaseCommand for MigrateCommand {
 				let applied_for_app: Vec<_> =
 					applied.iter().filter(|r| r.app == *app).cloned().collect();
 				let target_name = if target_name == "zero" {
-					target_name
+					target_name.to_string()
 				} else {
-					all_migrations
-						.iter()
-						.find(|migration| {
-							migration.app_label == *app
-								&& migration.replaces.iter().any(|(replaced_app, replaced_name)| {
-									*replaced_app == *app && *replaced_name == target_name
-								})
-						})
-						.map(|migration| migration.name.as_str())
-						.unwrap_or(target_name)
+					terminal_replacement_target(&all_migrations, app, target_name)?
 				};
 
 				// Branch (a): `migrate <app> zero` -> unapply ALL applied migrations.
@@ -608,7 +599,19 @@ impl BaseCommand for MigrateCommand {
 							.any(|r| r.app == m.app_label && r.name == m.name)
 					})
 					.collect();
-				if pending.is_empty() {
+				let cleanup: Vec<_> = migrations_to_apply
+					.iter()
+					.filter(|migration| {
+						!migration.replaces.is_empty()
+							&& applied.iter().any(|record| {
+								record.app == migration.app_label && record.name == migration.name
+							})
+							&& migration.replaces.iter().any(|(app, name)| {
+								applied.iter().any(|record| record.app == *app && record.name == *name)
+							})
+					})
+					.collect();
+				if pending.is_empty() && cleanup.is_empty() {
 					ctx.info("[plan] No unapplied migrations.");
 					return Ok(());
 				}
@@ -621,6 +624,13 @@ impl BaseCommand for MigrateCommand {
 						"  - {}:{} (apply)",
 						migration.app_label, migration.name
 					));
+				}
+				for migration in cleanup {
+					for (app, name) in &migration.replaces {
+						if applied.iter().any(|record| record.app == *app && record.name == *name) {
+							ctx.info(&format!("  - {app}:{name} (unapply superseded record)"));
+						}
+					}
 				}
 				return Ok(());
 			}
@@ -736,6 +746,64 @@ fn dependency_ordered_migrations<'a>(
 			})
 		})
 		.collect()
+}
+
+#[cfg(feature = "migrations")]
+fn terminal_replacement_target(
+	migrations: &[reinhardt_db::migrations::Migration],
+	app_label: &str,
+	target_name: &str,
+) -> CommandResult<String> {
+	use std::collections::HashSet;
+
+	let mut current = target_name.to_string();
+	let mut visited = HashSet::new();
+	loop {
+		if !visited.insert(current.clone()) {
+			return Err(crate::CommandError::ExecutionError(format!(
+				"Replacement cycle detected while resolving {app_label}:{target_name}"
+			)));
+		}
+		let owners: Vec<_> = migrations
+			.iter()
+			.filter(|migration| {
+				migration.app_label == app_label
+					&& migration.replaces.iter().any(|(replaced_app, replaced_name)| {
+						replaced_app == app_label && replaced_name == &current
+					})
+			})
+			.collect();
+		if owners.is_empty() {
+			return Ok(current);
+		}
+		let terminal: Vec<_> = owners
+			.iter()
+			.filter(|owner| {
+				!migrations.iter().any(|migration| {
+					migration.app_label == app_label
+						&& migration.replaces.iter().any(|(replaced_app, replaced_name)| {
+							replaced_app == app_label && replaced_name == &owner.name
+						})
+				})
+			})
+			.collect();
+		match terminal.as_slice() {
+			[owner] => return Ok(owner.name.clone()),
+			[] => {
+				current = owners
+					.iter()
+					.max_by(|left, right| left.name.cmp(&right.name))
+					.expect("replacement owner set is not empty")
+					.name
+					.clone();
+			}
+			_ => {
+				return Err(crate::CommandError::ExecutionError(format!(
+					"Migration {app_label}:{target_name} has multiple terminal replacements"
+				)));
+			}
+		}
+	}
 }
 
 /// Resolve the applied-migration set for a `--plan` preview without creating the

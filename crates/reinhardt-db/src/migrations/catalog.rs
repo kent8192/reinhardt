@@ -197,8 +197,8 @@ impl MigrationCatalog {
 		replacement_owners: &HashMap<MigrationKey, Vec<MigrationKey>>,
 		dependent: &MigrationKey,
 	) -> Result<MigrationKey> {
-		if dependency.name == "__first__" {
-			return migrations
+		let dependency = if dependency.name == "__first__" {
+			migrations
 				.keys()
 				.filter(|candidate| candidate.app_label == dependency.app_label)
 				.min_by(|left, right| Self::compare_migration_names(&left.name, &right.name))
@@ -208,13 +208,13 @@ impl MigrationCatalog {
 						"Missing first migration for app {} required by {}",
 						dependency.app_label, dependent
 					))
-				});
-		}
-		if migrations.contains_key(dependency) {
-			return Ok(dependency.clone());
-		}
-		match replacement_owners.get(dependency) {
+				})?
+		} else {
+			dependency.clone()
+		};
+		match replacement_owners.get(&dependency) {
 			Some(owners) if owners.len() == 1 => Ok(owners[0].clone()),
+			None if migrations.contains_key(&dependency) => Ok(dependency),
 			_ => Err(MigrationError::DependencyError(format!(
 				"Missing dependency {} required by {}",
 				dependency, dependent

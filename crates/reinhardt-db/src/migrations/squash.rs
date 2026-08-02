@@ -537,7 +537,7 @@ impl MigrationSquasher {
 					}) = optimized.last_mut()
 						&& *previous_table == table
 						&& *previous_column == column
-						&& previous_new_definition.type_definition == new_definition.type_definition
+						&& *previous_new_definition == new_definition
 					{
 						*previous_new_definition = new_definition;
 						*previous_mysql_options = mysql_options;
@@ -574,16 +574,21 @@ impl MigrationSquasher {
 				..
 			} => {
 				columns.iter().any(references_foreign_key)
-					|| constraints.iter().any(|constraint| {
-						matches!(
-							constraint,
-							crate::migrations::Constraint::ForeignKey {
-								referenced_table,
-								referenced_columns,
-								..
-							} if referenced_table == table
+					|| constraints.iter().any(|constraint| match constraint {
+						crate::migrations::Constraint::ForeignKey {
+							referenced_table,
+							referenced_columns,
+							..
+						} => {
+							referenced_table == table
 								&& referenced_columns.iter().any(|referenced| referenced == column)
-						)
+						}
+						crate::migrations::Constraint::OneToOne {
+							referenced_table,
+							referenced_column,
+							..
+						} => referenced_table == table && referenced_column == column,
+						_ => false,
 					})
 			}
 			Operation::AddColumn {

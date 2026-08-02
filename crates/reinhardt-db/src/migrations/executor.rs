@@ -361,7 +361,12 @@ impl DatabaseMigrationExecutor {
 						})
 						.map(|record| record.applied)
 						.min()
-						.expect("a covered replacement history must contain a record");
+						.ok_or_else(|| {
+							MigrationError::InvalidMigration(format!(
+								"cannot apply replacement {} because a competing replacement already covers its history",
+								migration.id()
+							))
+						})?;
 					self.recorder
 						.record_applied_at(
 							&migration.app_label,

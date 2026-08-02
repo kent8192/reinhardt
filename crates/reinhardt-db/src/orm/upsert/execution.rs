@@ -68,14 +68,12 @@ where
 				}
 			};
 			if backend == DatabaseBackend::MySql
-				&& let Some(last_insert_id) = result.last_insert_id {
-					return reload_generated_mysql_primary_key::<C::Model, _>(
-						last_insert_id,
-						executor,
-					)
+				&& let Some(last_insert_id) = result.last_insert_id
+			{
+				return reload_generated_mysql_primary_key::<C::Model, _>(last_insert_id, executor)
 					.await
 					.map(|model| (model, created));
-				}
+			}
 			reload_lookup(&plan, executor, created, None).await
 		}
 		Err(error)
@@ -196,14 +194,13 @@ where
 				}
 			};
 			if backend == DatabaseBackend::MySql
-				&& let Some(last_insert_id) = result.last_insert_id {
-					let model = reload_generated_mysql_primary_key::<C::Model, _>(
-						last_insert_id,
-						transaction,
-					)
-					.await?;
-					return Ok((model, created));
-				}
+				&& let Some(last_insert_id) = result.last_insert_id
+			{
+				let model =
+					reload_generated_mysql_primary_key::<C::Model, _>(last_insert_id, transaction)
+						.await?;
+				return Ok((model, created));
+			}
 			let Some(model) = load_locked(&plan, transaction).await? else {
 				return Err(Error::Conflict(
 					"update_or_create write completed without exactly one row matching the full lookup"

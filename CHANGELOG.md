@@ -7,6 +7,155 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.0-alpha.4](https://github.com/kent8192/reinhardt-web/compare/reinhardt-web@v0.4.0-alpha.3...reinhardt-web@v0.4.0-alpha.4) - 2026-08-02
+
+### Added
+
+- *(core)* add model form schema contracts
+- *(macros)* generate typed model form schemas
+- *(manouche)* parse model-backed forms
+- *(pages)* generate model-backed forms
+- *(forms)* [**breaking**] make generated model forms async
+
+### Changed
+
+- *(db)* accept dynamic ORM executors
+
+### Documentation
+
+- *(forms)* document generated model forms
+- *(forms)* correct facade and formset guidance
+- *(db)* document atomic transaction outcomes
+
+### Fixed
+
+- *(macros)* preserve model form relation schemas
+- *(macros)* reject repeated setter name collisions
+- *(pages)* handle unsigned and cleared model inputs
+- *(forms)* enforce model form persistence invariants
+- *(forms)* align model form automatic defaults
+- *(forms)* harden generated form persistence semantics
+- *(forms)* close residual model form review gaps
+- *(pages)* keep forms dev dependency native-only
+- *(macros)* expose model form core paths on WASM
+- *(pages)* clear rejected model form values
+- *(forms)* expose model validation errors
+- *(pages)* preserve valid boolean and fractional controls
+- *(pages)* render stored model form values
+- *(macros)* omit generated fields from model forms
+- *(pages)* reject unsupported model form widgets
+- *(forms)* retain fractional time precision
+- *(forms)* synchronize replacement field values
+- *(forms)* defer inline parent key validation
+- *(forms)* make direct model saves insert explicitly
+- *(forms)* preserve native model field values
+- *(forms)* enforce generated model constraints
+- *(db)* preserve naive timestamp wall-clock values
+- *(forms)* handle temporal and assigned model inputs
+- *(forms)* preserve model form field contracts
+- *(forms)* preserve specialized field constraints
+- *(forms)* preserve exact generated constraints
+- *(pages)* retain native model form submission
+- *(pages)* validate model widget overrides
+- *(forms)* complete model-backed form submission
+- *(forms)* enforce model form submission policies
+- *(forms)* harden native model form decoding
+- *(forms)* preserve model form defaults
+- *(forms)* harden model form input handling
+- *(forms)* preserve secure model form defaults
+- *(forms)* preserve untouched model controls
+- *(forms)* honor relation form editability
+- *(forms)* preserve nullable relation clears
+- *(forms)* synchronize hydrated model submits
+- *(forms)* complete model form submission contracts
+- *(forms)* validate model form submission boundaries
+- *(forms)* align shared model form validation
+- *(forms)* reject unsupported model reactivity
+- *(db)* preserve naive datetime query parameters
+- *(forms)* preserve native model form semantics
+- *(forms)* validate inline and runtime model form state
+- *(forms)* prevalidate inline foreign keys
+- *(forms)* preserve native defaults and control values
+- *(forms)* preserve model-backed form state
+- *(forms)* reset omitted model form fields
+- *(forms)* reserve the native csrf field name
+- *(forms)* retain untouched boolean defaults
+- *(forms)* enforce policy in typed setters
+- *(pages)* reject unsupported model form callbacks
+- *(forms)* harden generated model form boundaries
+- *(forms)* preserve optional model form state
+- *(forms)* enforce model form overrides
+- *(forms)* reserve generated form namespaces
+- *(forms)* preflight deferred child validators
+- *(forms)* require generated relation ids
+- *(pages)* keep model form controls in sync
+- *(forms)* prevent duplicate MySQL form inserts
+- *(forms)* preserve native range defaults
+- *(forms)* prevent duplicate create retries
+- *(forms)* defer uncertain generated keys
+- *(forms)* synchronize defaults and persistence state
+- *(forms)* synchronize transaction-backed form state
+- *(forms)* preserve transactional retry semantics
+- *(forms)* support trusted inline foreign keys
+- *(forms)* preserve inline uncertain create state
+- *(db)* scope atomic outcomes to savepoints
+- *(forms)* preserve model form control semantics
+- *(db)* decode MySQL UTC fields with model metadata
+- *(forms)* preserve nested form retries
+- *(forms)* validate inline formset retries
+- *(forms)* align native form validation
+- *(pages)* preserve server function fallback syntax
+- *(forms)* use serde-json for trusted fields
+- *(forms)* support nullable model form relations
+- *(db)* read PostgreSQL naive migration timestamps
+- *(forms)* preserve trusted non-editable model values
+- *(forms)* restore model form CI coverage
+- *(forms)* address model form review feedback
+- *(pgvector)* preserve vector index metadata
+- *(orm)* preserve typed vector NULL bindings
+- *(ci)* repair pgvector test coverage
+- *(pgvector)* close migration and binding gaps
+- *(db)* restore pgvector test registration with snapshot
+- *(release)* sync integration test package version
+- *(commands)* isolate Pages shell dependency
+- *(ci)* isolate long-running integration fixtures
+- *(db)* qualify temporal projections with manual joins
+- *(query)* reject invalid temporal date truncation
+- *(db)* validate temporal projection query shapes
+- *(orm)* preserve temporal projection grouping
+- *(orm)* reject incompatible temporal projections
+- *(db)* reject temporal projections with ctes
+- *(db)* reject HAVING date projections
+- *(query)* validate PostgreSQL temporal expressions
+- *(db)* use ErrorKind in queryset date projection assertions
+- *(db)* temporal projection date tests use database kind
+- *(db)* match temporal projection error display
+- *(test)* stabilize shell evaluator artifacts
+- *(query)* address temporal projection review feedback
+- *(db)* resolve row lock review findings
+- *(orm)* close row locking review gaps
+- *(db)* resolve typed retrieval review feedback
+- *(db)* reject exhausted bulk bind budgets
+
+### Maintenance
+
+- *(pgvector)* propagate native vector feature flags
+
+### Other
+
+- sync develop/0.4.0 into pgvector branch
+- sync develop/0.4.0 into pgvector branch
+- sync shared CI repairs
+- sync develop/0.4.0 into typed date projections
+
+### Testing
+
+- *(forms)* cover generated model form flows
+- *(forms)* preserve non-default audit values
+- *(forms)* cover uncertain insert persistence state
+- *(forms)* align generated model form expectations
+- *(macros)* align model support with field proofs
+
 ## [0.4.0-alpha.3](https://github.com/kent8192/reinhardt-web/compare/reinhardt-web@v0.4.0-alpha.2...reinhardt-web@v0.4.0-alpha.3) - 2026-07-27
 
 ### Added

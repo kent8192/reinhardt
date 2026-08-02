@@ -2914,6 +2914,7 @@ mod tests {
 	}
 
 	#[cfg(feature = "sqlite")]
+	#[rstest::rstest]
 	#[tokio::test]
 	async fn sqlite_descending_integer_primary_key_is_not_generated() {
 		use sqlx::SqlitePool;

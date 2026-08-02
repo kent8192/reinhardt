@@ -8898,7 +8898,7 @@ mod tests {
 		assert!(output.contains("fn primary_key_uses_zero_sentinel () -> bool { true }"));
 	}
 
-	#[test]
+	#[rstest::rstest]
 	fn test_model_routes_primary_key_values_through_database_field_codec() {
 		let input = quote! {
 			#[model(app_label = "test", table_name = "external_users", info = false)]

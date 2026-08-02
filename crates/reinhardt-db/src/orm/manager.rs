@@ -4098,7 +4098,7 @@ mod tests {
 		}
 	}
 
-	#[test]
+	#[rstest::rstest]
 	fn delete_uses_primary_key_column_and_database_field_binding() {
 		let cases = [
 			(

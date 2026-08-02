@@ -1674,7 +1674,9 @@ fn validate_intrinsic_event_handler(event: &IntrinsicEvent) -> Result<()> {
 			let _spec = event.spec();
 			handler
 		}
-		IntrinsicEvent::Custom { handler, .. } => handler,
+		IntrinsicEvent::RawCustom { handler, .. } | IntrinsicEvent::TypedCustom { handler, .. } => {
+			handler
+		}
 	};
 	validate_event_handler_expr(handler)
 }

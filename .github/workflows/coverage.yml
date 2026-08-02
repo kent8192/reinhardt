@@ -240,6 +240,39 @@ jobs:
         with:
           tool: nextest
 
+      # Required by Tier 3 E2E tests (e.g. spa_navigation_full_layout_e2e in
+      # crates/reinhardt-pages) which build a fixture WASM bundle via
+      # `wasm-pack build`. The test refuses to skip silently when CI=true.
+      # Tracked in #4134.
+      - name: Install wasm-pack
+        uses: taiki-e/install-action@v2
+        with:
+          tool: wasm-pack
+
+      # Required by hot-reload tests in crates/reinhardt-commands
+      # (runserver_hot_reload.rs::detect_wasm_bindgen_cli_version) which
+      # shell out to `wasm-bindgen --version` to pin the fixture's
+      # wasm-bindgen dep to the installed CLI version. Tracked in #4180.
+      #
+      # Build from source instead of using the prebuilt release artifact:
+      # the latter requires GLIBC_2.38+ and cannot start on the Ubuntu 22.04
+      # ARM self-hosted runners. A job-local root also prevents stale runner
+      # state from masking an incompatible CLI. See #5644.
+      - name: Install wasm-bindgen-cli
+        run: |
+          install_root="$RUNNER_TEMP/wasm-bindgen-cli"
+          CARGO_TARGET_DIR="$RUNNER_TEMP/wasm-bindgen-cli-target" \
+            cargo install --locked --root "$install_root" wasm-bindgen-cli
+          export PATH="$install_root/bin:$PATH"
+          echo "$install_root/bin" >> "$GITHUB_PATH"
+          wasm-bindgen --version
+          wasm-bindgen-test-runner -V
+
+      # Required by WASM macro-parity and hot-reload tests that compile
+      # fixture crates for wasm32-unknown-unknown. Tracked in #4192.
+      - name: Install wasm32-unknown-unknown target
+        run: rustup target add wasm32-unknown-unknown
+
       - name: Install cargo-llvm-cov
         uses: taiki-e/install-action@v2
         with:

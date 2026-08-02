@@ -1,18 +1,21 @@
 //! Typed payloads for standardized page events.
 
+mod custom;
 mod payload;
 mod target;
 mod value;
 
 use std::fmt;
 
+pub use custom::{CustomEvent, CustomEventDetailError};
 pub use payload::*;
 pub use reinhardt_event_catalog::{EventInterface, EventName, KnownEvent};
 pub use target::{EventTarget, EventTargetError};
 pub use value::{EventFile, Modifiers, MouseButton, MouseButtons, Point, PointerKind};
 
 pub use crate::callback::{
-	IntoTypedEventHandler, raw_async_event_handler, raw_event_handler, typed_async_event_handler,
+	IntoTypedEventHandler, raw_async_event_handler, raw_event_handler,
+	typed_async_custom_event_handler, typed_async_event_handler, typed_custom_event_handler,
 	typed_event_handler,
 };
 

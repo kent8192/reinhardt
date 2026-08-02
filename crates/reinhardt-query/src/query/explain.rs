@@ -142,11 +142,9 @@ impl ExplainStatement {
 				return Err(unsupported("EXPLAIN FORMAT YAML", "MySQL"));
 			}
 		};
-		let (select, values) = MySqlQueryBuilder.build_select_checked(&self.select)?;
-		// The only allowed custom expression is the ORM-generated LIKE predicate.
-		// Its column path is PostgreSQL-quoted, so convert it after checked MySQL
-		// rendering to preserve the predicate's identifier semantics.
-		let select = select.replace('"', "`");
+		let mut select_statement = self.select.clone();
+		quote_mysql_like_templates(&mut select_statement);
+		let (select, values) = MySqlQueryBuilder.build_select_checked(&select_statement)?;
 		Ok((format!("{prefix} {select}"), values))
 	}
 
@@ -235,6 +233,20 @@ impl ExplainStatement {
 			return Err(unsupported("ILIKE", "MySQL"));
 		}
 		if statement_has_expression(&self.select, &|expression| {
+			matches!(
+				expression,
+				SimpleExpr::Binary(
+					_,
+					BinOper::SimilarTo
+						| BinOper::NotSimilarTo
+						| BinOper::Matches | BinOper::NotMatches,
+					_
+				)
+			)
+		}) {
+			return Err(unsupported("PostgreSQL pattern operators", "MySQL"));
+		}
+		if statement_has_expression(&self.select, &|expression| {
 			matches!(expression, SimpleExpr::Binary(_, BinOper::PgOperator(_), _))
 		}) {
 			return Err(unsupported("PostgreSQL operators", "MySQL"));
@@ -269,6 +281,20 @@ impl ExplainStatement {
 			) || matches!(expression, SimpleExpr::CustomWithExpr(template, _) if template.to_ascii_uppercase().contains("ILIKE"))
 		}) {
 			return Err(unsupported("ILIKE", "SQLite"));
+		}
+		if statement_has_expression(&self.select, &|expression| {
+			matches!(
+				expression,
+				SimpleExpr::Binary(
+					_,
+					BinOper::SimilarTo
+						| BinOper::NotSimilarTo
+						| BinOper::Matches | BinOper::NotMatches,
+					_
+				)
+			)
+		}) {
+			return Err(unsupported("PostgreSQL pattern operators", "SQLite"));
 		}
 		Ok(())
 	}
@@ -663,6 +689,121 @@ fn is_generated_like_template(template: &str) -> bool {
 	}
 }
 
+fn quote_mysql_like_templates(statement: &mut SelectStatement) {
+	for cte in &mut statement.ctes {
+		quote_mysql_like_templates(&mut cte.query);
+	}
+	for select in &mut statement.selects {
+		quote_mysql_like_template_expr(&mut select.expr);
+	}
+	for table in &mut statement.from {
+		quote_mysql_like_template_table(table);
+	}
+	for join in &mut statement.join {
+		quote_mysql_like_template_table(&mut join.table);
+		if let Some(JoinOn::Condition(condition)) = &mut join.on {
+			quote_mysql_like_template_conditions(&mut condition.conditions);
+		}
+	}
+	quote_mysql_like_template_conditions(&mut statement.r#where.conditions);
+	for group in &mut statement.groups {
+		quote_mysql_like_template_expr(group);
+	}
+	quote_mysql_like_template_conditions(&mut statement.having.conditions);
+	for (_, union) in &mut statement.unions {
+		quote_mysql_like_templates(union);
+	}
+	for order in &mut statement.orders {
+		quote_mysql_like_template_order(order);
+	}
+	for (_, window) in &mut statement.windows {
+		quote_mysql_like_template_window(window);
+	}
+}
+
+fn quote_mysql_like_template_table(table: &mut TableRef) {
+	if let TableRef::SubQuery(query, _) = table {
+		quote_mysql_like_templates(query);
+	}
+}
+
+fn quote_mysql_like_template_conditions(conditions: &mut [ConditionExpression]) {
+	for condition in conditions {
+		match condition {
+			ConditionExpression::SimpleExpr(expression) => {
+				quote_mysql_like_template_expr(expression)
+			}
+			ConditionExpression::Condition(condition) => {
+				quote_mysql_like_template_conditions(&mut condition.conditions);
+			}
+		}
+	}
+}
+
+fn quote_mysql_like_template_order(order: &mut OrderExpr) {
+	if let OrderExprKind::Expr(expression) = &mut order.expr {
+		quote_mysql_like_template_expr(expression);
+	}
+}
+
+fn quote_mysql_like_template_window(window: &mut WindowStatement) {
+	for partition in &mut window.partition_by {
+		quote_mysql_like_template_expr(partition);
+	}
+	for order in &mut window.order_by {
+		quote_mysql_like_template_order(order);
+	}
+}
+
+fn quote_mysql_like_template_expr(expression: &mut SimpleExpr) {
+	match expression {
+		SimpleExpr::Unary(_, expression)
+		| SimpleExpr::AsEnum(_, expression)
+		| SimpleExpr::ExprAlias(expression, _)
+		| SimpleExpr::Cast(expression, _)
+		| SimpleExpr::WindowNamed {
+			func: expression, ..
+		} => quote_mysql_like_template_expr(expression),
+		SimpleExpr::Binary(left, _, right) => {
+			quote_mysql_like_template_expr(left);
+			quote_mysql_like_template_expr(right);
+		}
+		SimpleExpr::FunctionCall(_, expressions) | SimpleExpr::Tuple(expressions) => {
+			for expression in expressions {
+				quote_mysql_like_template_expr(expression);
+			}
+		}
+		SimpleExpr::SubQuery(_, query) => quote_mysql_like_templates(query),
+		SimpleExpr::CustomWithExpr(template, expressions) => {
+			for expression in expressions {
+				quote_mysql_like_template_expr(expression);
+			}
+			if is_generated_like_template(template) {
+				*template = template.replace('"', "`");
+			}
+		}
+		SimpleExpr::Case(case) => {
+			for (condition, result) in &mut case.when_clauses {
+				quote_mysql_like_template_expr(condition);
+				quote_mysql_like_template_expr(result);
+			}
+			if let Some(result) = &mut case.else_clause {
+				quote_mysql_like_template_expr(result);
+			}
+		}
+		SimpleExpr::Window { func, window } => {
+			quote_mysql_like_template_expr(func);
+			quote_mysql_like_template_window(window);
+		}
+		SimpleExpr::Column(_)
+		| SimpleExpr::TableColumn(_, _)
+		| SimpleExpr::Value(_)
+		| SimpleExpr::Custom(_)
+		| SimpleExpr::Constant(_)
+		| SimpleExpr::Asterisk => {}
+	}
+}
+
 #[cfg(test)]
 mod tests {
 	use super::*;
@@ -1008,6 +1149,68 @@ mod tests {
 				.expect("typed LIKE lookup should be safe to explain")
 				.0,
 			"EXPLAIN SELECT `id` FROM `users` WHERE `username` LIKE ? ESCAPE '\\'"
+		);
+	}
+
+	#[rstest]
+	fn mysql_explain_requotes_only_generated_like_templates() {
+		let select = Query::select()
+			.column(crate::types::Alias::new("id\"value"))
+			.from(crate::types::Alias::new("users\"archive"))
+			.and_where(Expr::cust_with_values(
+				"\"user\"\"name\" LIKE ? ESCAPE '\\'",
+				["ada"],
+			))
+			.to_owned();
+
+		assert_eq!(
+			ExplainStatement::new(select, ExplainOptions::default())
+				.build_mysql_checked()
+				.expect("typed LIKE lookup should be safe to explain")
+				.0,
+			"EXPLAIN SELECT `id\"value` FROM `users\"archive` WHERE `user``name` LIKE ? ESCAPE '\\'"
+		);
+	}
+
+	#[rstest]
+	fn mysql_explain_rejects_postgres_pattern_operators_before_rendering() {
+		let select = Query::select()
+			.column("id")
+			.from("users")
+			.and_where(SimpleExpr::Binary(
+				Box::new(Expr::col("username").into_simple_expr()),
+				BinOper::SimilarTo,
+				Box::new(Expr::val("ada").into_simple_expr()),
+			))
+			.to_owned();
+
+		assert_eq!(
+			ExplainStatement::new(select, ExplainOptions::default()).build_mysql_checked(),
+			Err(QueryBuildError::UnsupportedBackendFeature {
+				feature: "PostgreSQL pattern operators",
+				backend: "MySQL",
+			})
+		);
+	}
+
+	#[rstest]
+	fn sqlite_explain_rejects_postgres_pattern_operators_before_rendering() {
+		let select = Query::select()
+			.column("id")
+			.from("users")
+			.and_where(SimpleExpr::Binary(
+				Box::new(Expr::col("username").into_simple_expr()),
+				BinOper::Matches,
+				Box::new(Expr::val("ada").into_simple_expr()),
+			))
+			.to_owned();
+
+		assert_eq!(
+			ExplainStatement::new(select, ExplainOptions::default()).build_sqlite_checked(),
+			Err(QueryBuildError::UnsupportedBackendFeature {
+				feature: "PostgreSQL pattern operators",
+				backend: "SQLite",
+			})
 		);
 	}
 

@@ -7,6 +7,64 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.0-alpha.4](https://github.com/kent8192/reinhardt-web/compare/reinhardt-db@v0.4.0-alpha.3...reinhardt-db@v0.4.0-alpha.4) - 2026-08-02
+
+### Added
+
+- *(db)* add scoped database registration
+- *(db)* add reusable inspectdb rendering
+- *(db)* add atomic inspectdb output
+
+### Fixed
+
+- release shell and scoped database resources
+- *(db)* retain initialization below scoped registrations
+- *(orm)* initialize baselines beneath scoped registrations
+- *(shell)* harden evaluator lifecycle
+- *(shell)* preserve test database scopes
+- *(db)* skip inactive scoped registration snapshots
+- *(db)* restore test registrations with RAII
+- *(ci)* replace test database state through Option API
+- *(commands)* address shell review findings
+- *(db)* sanitize inspectdb rendering
+- *(db)* harden atomic inspectdb output
+- *(db)* respect filesystem output semantics
+- *(db)* preserve unowned probe entries
+- *(db)* harden filesystem probe ownership
+- *(db)* preserve concurrent force output
+- *(commands)* harden inspectdb output
+- *(commands)* strengthen inspectdb backend verification
+- *(db)* generate Rust 2024 inspectdb modules
+- *(ci)* address inspectdb CodeQL findings
+- *(commands)* harden inspectdb generation
+- *(commands)* harden inspectdb review cases
+- *(commands)* harden inspectdb generated models
+- *(commands)* harden inspectdb schema generation
+- *(commands)* harden inspectdb generation
+- *(commands)* preserve inspectdb schema semantics
+- *(db)* drop unused MySQL integer decode helper
+- *(db)* support MySQL inspectdb metadata
+- *(db)* normalize missing introspection table errors
+- preserve inspectdb schema semantics
+- *(inspectdb)* reject remaining lossy schema shapes
+- *(introspect)* retain table name in validation errors
+- *(db)* integrate develop/0.4.0 with typed upsert builders
+- *(db)* merge concurrent upsert review updates
+- *(db)* harden typed upsert builders
+- *(orm)* preserve streamed SQLite write transactions
+- *(orm)* preserve upsert insert isolation
+
+### Other
+
+- sync shared CI repairs
+- sync develop/0.4.0 into inspectdb
+- sync develop/0.4.0 into queryset explain
+
+### Testing
+
+- *(commands)* cover inspectdb backend contracts
+- *(db)* cover unsupported inspectdb composite indexes
+
 ### Breaking Changes
 
 - Replace the string-map `Manager::get_or_create` API and remove

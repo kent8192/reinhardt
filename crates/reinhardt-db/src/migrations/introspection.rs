@@ -59,6 +59,8 @@ pub struct ColumnInfo {
 	pub default: Option<String>,
 	/// Whether this is an auto-increment column
 	pub auto_increment: bool,
+	/// PostgreSQL identity generation mode, when the column is an identity column.
+	pub identity_generation: Option<String>,
 	/// Generated-column metadata, when the backend exposes it.
 	pub generated: Option<super::GeneratedColumnDefinition>,
 }
@@ -656,6 +658,13 @@ impl PostgresIntrospector {
 			let is_identity: String = row.try_get("is_identity").map_err(|e| {
 				MigrationError::IntrospectionError(format!("Failed to get is_identity: {}", e))
 			})?;
+			let identity_generation: Option<String> =
+				row.try_get("identity_generation").map_err(|e| {
+					MigrationError::IntrospectionError(format!(
+						"Failed to get identity_generation: {}",
+						e
+					))
+				})?;
 			let is_generated: String = row.try_get("is_generated").map_err(|e| {
 				MigrationError::IntrospectionError(format!("Failed to get is_generated: {}", e))
 			})?;
@@ -709,6 +718,9 @@ impl PostgresIntrospector {
 					nullable: is_nullable == "YES",
 					default: column_default,
 					auto_increment: is_auto || is_serial,
+					identity_generation: (is_identity == "YES")
+						.then_some(identity_generation)
+						.flatten(),
 					generated: generation_expression
 						.filter(|expression| is_generated == "ALWAYS" && !expression.is_empty())
 						.map(|expression| {
@@ -880,6 +892,7 @@ impl PostgresIntrospector {
 					ARRAY[]::name[]
 				) AS column_names,
 				ix.indisunique AS is_unique,
+				ix.indpred IS NOT NULL AS is_partial,
 				am.amname AS access_method,
 				i.reloptions AS index_options,
 				array_agg(
@@ -922,6 +935,7 @@ impl PostgresIntrospector {
 				i.relname,
 				i.reloptions,
 				ix.indisunique,
+				ix.indpred,
 				am.amname
 			ORDER BY i.relname
 		"#;
@@ -948,6 +962,14 @@ impl PostgresIntrospector {
 			let is_unique: bool = row.try_get("is_unique").map_err(|e| {
 				MigrationError::IntrospectionError(format!("Failed to get is_unique: {}", e))
 			})?;
+			let is_partial: bool = row.try_get("is_partial").map_err(|e| {
+				MigrationError::IntrospectionError(format!("Failed to get is_partial: {}", e))
+			})?;
+			if is_partial {
+				return Err(MigrationError::IntrospectionError(format!(
+					"PostgreSQL partial index `{index_name}` cannot be represented by a model field attribute"
+				)));
+			}
 			let access_method: String = row.try_get("access_method").map_err(|e| {
 				MigrationError::IntrospectionError(format!("Failed to get access_method: {}", e))
 			})?;
@@ -1343,6 +1365,7 @@ impl MySQLIntrospector {
 					nullable: is_nullable == "YES",
 					default: column_default,
 					auto_increment: is_auto,
+					identity_generation: None,
 					generated: generation_expression
 						.filter(|expression| !expression.is_empty())
 						.map(|expression| {
@@ -1814,6 +1837,12 @@ impl SQLiteIntrospector {
 			.map_err(|e| MigrationError::IntrospectionError(e.to_string()))?;
 
 		for index_row in index_list {
+			if index_row.partial != 0 {
+				return Err(MigrationError::IntrospectionError(format!(
+					"SQLite partial index `{}` on `{table_name}` cannot be represented by a model field attribute",
+					index_row.name
+				)));
+			}
 			// Get columns for this index.
 			// nosemgrep: rust.actix.sql.sqlx-taint.sqlx-taint
 			let info_query = format!(
@@ -2131,9 +2160,8 @@ impl SQLiteIntrospector {
 		// Check whether the table opts out of SQLite's rowid storage.
 		let create_sql = Self::get_create_table_sql(&self.pool, table_name).await?;
 		let without_rowid = create_sql
-			.as_ref()
-			.map(|sql| sql.to_uppercase().contains("WITHOUT ROWID"))
-			.unwrap_or(false);
+			.as_deref()
+			.is_some_and(sqlite_create_table_is_without_rowid);
 		let has_autoincrement = create_sql
 			.as_ref()
 			.map(|sql| sql.to_uppercase().contains("AUTOINCREMENT"))
@@ -2187,6 +2215,7 @@ impl SQLiteIntrospector {
 					nullable,
 					default,
 					auto_increment: is_auto,
+					identity_generation: None,
 					generated: super::executor::parse_sqlite_generated_column(
 						create_sql.as_deref(),
 						&row.name,
@@ -2217,6 +2246,27 @@ impl SQLiteIntrospector {
 			unique_constraints,
 			check_constraints,
 		})
+	}
+}
+
+#[cfg(feature = "sqlite")]
+fn sqlite_create_table_is_without_rowid(create_sql: &str) -> bool {
+	let statement = create_sql.trim().trim_end_matches(';').trim_end();
+	statement.to_ascii_uppercase().ends_with("WITHOUT ROWID")
+}
+
+#[cfg(all(test, feature = "sqlite"))]
+mod sqlite_without_rowid_tests {
+	use super::sqlite_create_table_is_without_rowid;
+
+	#[test]
+	fn detects_only_the_terminal_without_rowid_table_option() {
+		assert!(sqlite_create_table_is_without_rowid(
+			"CREATE TABLE entries (id INTEGER PRIMARY KEY) WITHOUT ROWID"
+		));
+		assert!(!sqlite_create_table_is_without_rowid(
+			"CREATE TABLE entries (id INTEGER PRIMARY KEY, marker TEXT DEFAULT 'WITHOUT ROWID')"
+		));
 	}
 }
 

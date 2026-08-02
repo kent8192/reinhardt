@@ -1682,6 +1682,7 @@ mod tests {
 				nullable: false,
 				default: None,
 				auto_increment: false,
+				identity_generation: None,
 				generated: Some(generated.clone()),
 			},
 		);

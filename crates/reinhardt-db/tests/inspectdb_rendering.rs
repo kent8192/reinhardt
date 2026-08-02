@@ -20,6 +20,7 @@ fn table(name: &str, columns: &[&str]) -> TableInfo {
 					nullable: false,
 					default: None,
 					auto_increment: false,
+					identity_generation: None,
 					generated: None,
 				},
 			)
@@ -161,6 +162,24 @@ fn render_models_module_is_stable_and_parses_as_one_rust_module() {
 	assert!(
 		source.find("use std::collections::BTreeMap;").unwrap()
 			< source.find("use std::collections::BTreeSet;").unwrap()
+	);
+}
+
+#[test]
+fn canonical_generation_preserves_composite_primary_key_order() {
+	let mut composite = table("tenants", &["tenant_id", "id", "label"]);
+	composite.primary_key = vec!["tenant_id".to_string(), "id".to_string()];
+	let output = generate_models_canonical(
+		&IntrospectConfig::default(),
+		&DatabaseSchema {
+			tables: [("tenants".to_string(), composite)].into(),
+		},
+	)
+	.expect("canonical generation should succeed");
+	let source = &output.files[0].content;
+	assert!(
+		source.find("pub tenant_id").expect("tenant key field")
+			< source.find("pub id").expect("id key field")
 	);
 }
 

@@ -23,6 +23,7 @@ required-features = ["with-reinhardt"]
 
 [dependencies]
 chrono = { version = "0.4", features = ["serde"] }
+rust_decimal = "1"
 uuid = { version = "1.11", features = ["v4", "serde"] }
 ctor = "0.6"
 linkme = "0.3"

@@ -339,7 +339,7 @@ impl DatabaseMigrationExecutor {
 			requires_sqlite_recreation,
 		)
 		.await?;
-		let plan = self
+		let plan_result = self
 			.planner
 			.plan(
 				&self.connection,
@@ -348,8 +348,23 @@ impl DatabaseMigrationExecutor {
 				MigrationDirection::Backward,
 				&mut editor,
 			)
-			.await?;
-		self.execute_sql_plan(migration, plan, editor).await?;
+			.await;
+		match plan_result {
+			Ok(plan) => self.execute_sql_plan(migration, plan, editor).await?,
+			#[cfg(feature = "sqlite")]
+			Err(error) if can_execute_sqlite_recreation_sequentially(&error) => {
+				tracing::debug!(
+					"Falling back to reverse sequential SQLite migration execution after opaque operation: {error}"
+				);
+				self.execute_sqlite_migration_sequentially(
+					migration,
+					editor,
+					MigrationDirection::Backward,
+				)
+				.await?;
+			}
+			Err(error) => return Err(error),
+		}
 
 		Ok(())
 	}
@@ -415,8 +430,12 @@ impl DatabaseMigrationExecutor {
 				tracing::debug!(
 					"Falling back to sequential SQLite migration execution after opaque operation: {error}"
 				);
-				self.execute_sqlite_migration_sequentially(migration, editor)
-					.await?;
+				self.execute_sqlite_migration_sequentially(
+					migration,
+					editor,
+					MigrationDirection::Forward,
+				)
+				.await?;
 			}
 			Err(error) => return Err(error),
 		}
@@ -524,17 +543,22 @@ impl DatabaseMigrationExecutor {
 		&self,
 		migration: &Migration,
 		mut editor: SchemaEditor,
+		direction: MigrationDirection,
 	) -> Result<()> {
-		for operation in &migration.operations {
+		let mut operations = migration.operations.clone();
+		if direction == MigrationDirection::Backward {
+			operations.reverse();
+		}
+		for operation in operations {
 			let mut single_operation = migration.clone();
-			single_operation.operations = vec![operation.clone()];
+			single_operation.operations = vec![operation];
 			let plan = self
 				.planner
 				.plan(
 					&self.connection,
 					&single_operation,
 					&ProjectState::default(),
-					MigrationDirection::Forward,
+					direction,
 					&mut editor,
 				)
 				.await?;
@@ -3941,6 +3965,71 @@ mod rollback_orchestration_tests {
 				.await
 				.expect("query recorder after"),
 			"recorder must reflect unapplied state after warn-and-skip rollback"
+		);
+	}
+
+	#[rstest]
+	#[tokio::test]
+	async fn rollback_falls_back_to_reverse_sqlite_execution_after_opaque_sql() {
+		// Arrange - rolling this migration back requires a SQLite table
+		// recreation for `AddColumn`, while the RunSQL step is opaque to the
+		// recreation planner. The planner must therefore fall back to the
+		// inverse operation order instead of failing the rollback.
+		let mut migration = Migration::new("0001_opaque_sqlite_rollback", "rolltest");
+		migration.operations = vec![
+			Operation::CreateTable {
+				name: "opaque_sqlite_rollback".to_string(),
+				columns: vec![ColumnDefinition::new("id", FieldType::Integer)],
+				constraints: vec![],
+				without_rowid: None,
+				interleave_in_parent: None,
+				partition: None,
+			},
+			Operation::RunSQL {
+				sql: "PRAGMA user_version = 7".to_string(),
+				reverse_sql: Some("PRAGMA user_version = 0".to_string()),
+			},
+			Operation::AddColumn {
+				table: "opaque_sqlite_rollback".to_string(),
+				column: ColumnDefinition::new("name", FieldType::Text),
+				mysql_options: None,
+			},
+		];
+
+		let mut executor = make_executor().await;
+		executor
+			.apply_migrations(std::slice::from_ref(&migration))
+			.await
+			.expect("apply migration containing opaque SQL");
+
+		// Act
+		executor
+			.rollback_migrations(std::slice::from_ref(&migration))
+			.await
+			.expect("rollback should use reverse sequential SQLite execution");
+
+		// Assert - both the recreated table and the opaque operation are undone.
+		let table = executor
+			.connection()
+			.fetch_optional(
+				"SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?",
+				vec!["opaque_sqlite_rollback".into()],
+			)
+			.await
+			.expect("inspect sqlite_master");
+		assert!(table.is_none());
+
+		let user_version = executor
+			.connection()
+			.fetch_optional("PRAGMA user_version", vec![])
+			.await
+			.expect("read SQLite user version")
+			.expect("SQLite user_version always returns a row");
+		assert_eq!(
+			user_version
+				.get::<i64>("user_version")
+				.expect("read user_version column"),
+			0
 		);
 	}
 

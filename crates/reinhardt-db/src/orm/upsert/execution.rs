@@ -249,9 +249,11 @@ where
 			result.rows_affected
 		)));
 	}
-	let Some(reloaded) = load_locked(plan, transaction).await? else {
+	let select = sql::select_by_primary_key(&candidate, transaction.backend(), true)?;
+	let rows = transaction.fetch_all(&select.sql, select.params).await?;
+	let Some(reloaded) = decode_update_lookup_rows(rows)? else {
 		return Err(Error::Conflict(
-			"update_or_create UPDATE completed without exactly one row matching the full lookup"
+			"update_or_create UPDATE completed without exactly one row matching its final primary key"
 				.to_owned(),
 		));
 	};
@@ -1256,6 +1258,16 @@ mod tests {
 				sql: "UPDATE \"articles\" SET \"id\" = $1, \"rank\" = $2 WHERE \"id\" = $3"
 					.to_owned(),
 				params: vec![QueryValue::Int(8), QueryValue::Int(2), QueryValue::Int(7)],
+			}
+		);
+		assert_eq!(
+			state.lock().unwrap().calls[2],
+			Call {
+				operation: "fetch_all",
+				sql: "SELECT \"id\", \"slug\", \"rank\", \"headline\", \"computed\", \"readonly\" FROM \
+					\"articles\" WHERE \"id\" = $1 LIMIT 2 FOR UPDATE"
+					.to_owned(),
+				params: vec![QueryValue::Int(8)],
 			}
 		);
 	}

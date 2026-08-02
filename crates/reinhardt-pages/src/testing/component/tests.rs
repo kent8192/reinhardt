@@ -606,7 +606,7 @@ struct ItemSelected {
 type CustomEventDispatchResult = Result<u64, CustomEventDetailError>;
 type CustomEventSnapshot = (u64, String, String, String, bool);
 
-#[test]
+#[rstest]
 #[serial(reactive_runtime)]
 fn typed_custom_detail_dispatches_through_page_dsl() {
 	let selected = Rc::new(Cell::new(0_u64));
@@ -628,7 +628,7 @@ fn typed_custom_detail_dispatches_through_page_dsl() {
 	assert_eq!(selected.get(), 42);
 }
 
-#[test]
+#[rstest]
 #[serial(reactive_runtime)]
 fn typed_custom_detail_reports_plain_and_malformed_dispatches() {
 	let observed = Rc::<RefCell<Vec<CustomEventDispatchResult>>>::default();
@@ -677,7 +677,7 @@ fn typed_custom_detail_reports_plain_and_malformed_dispatches() {
 	));
 }
 
-#[test]
+#[rstest]
 #[serial(reactive_runtime)]
 fn custom_event_bubbling_preserves_target_snapshots_and_cancelable_state() {
 	let observed = Rc::<RefCell<Vec<CustomEventSnapshot>>>::default();
@@ -744,7 +744,7 @@ fn custom_event_bubbling_preserves_target_snapshots_and_cancelable_state() {
 	);
 }
 
-#[test]
+#[rstest]
 #[serial(reactive_runtime)]
 fn custom_event_bubbling_stops_before_the_next_ancestor() {
 	let parent_calls = Rc::new(Cell::new(0_u8));

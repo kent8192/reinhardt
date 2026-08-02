@@ -1104,7 +1104,7 @@ mod tests {
 	}
 
 	#[cfg(native)]
-	#[test]
+	#[rstest]
 	fn typed_custom_adapter_always_invokes_handler() {
 		use std::borrow::Cow;
 		use std::sync::atomic::{AtomicUsize, Ordering};

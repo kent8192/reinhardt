@@ -986,6 +986,7 @@ fn mouse_button_code(button: MouseButton) -> i16 {
 
 #[cfg(test)]
 mod tests {
+	use rstest::rstest;
 	use serde::ser::Error as _;
 
 	use super::{EventFixture, EventFixtureError};
@@ -1006,7 +1007,7 @@ mod tests {
 		}
 	}
 
-	#[test]
+	#[rstest]
 	fn custom_detail_serializes_into_native_event() {
 		let event = EventFixture::custom("item-selected")
 			.custom_detail(&SelectedDetail { id: 42 })
@@ -1019,7 +1020,7 @@ mod tests {
 		);
 	}
 
-	#[test]
+	#[rstest]
 	fn raw_custom_fixture_has_no_custom_detail() {
 		let event = EventFixture::custom("item-selected")
 			.build()
@@ -1027,7 +1028,7 @@ mod tests {
 		assert_eq!(event.custom_detail(), None);
 	}
 
-	#[test]
+	#[rstest]
 	fn custom_detail_reports_serialization_failure() {
 		let error = EventFixture::custom("item-selected")
 			.custom_detail(&FailingDetail)
@@ -1051,7 +1052,7 @@ mod tests {
 		);
 	}
 
-	#[test]
+	#[rstest]
 	fn standard_fixture_rejects_custom_detail() {
 		let error = EventFixture::click()
 			.custom_detail_value(serde_json::Value::Null)
@@ -1067,7 +1068,7 @@ mod tests {
 		));
 	}
 
-	#[test]
+	#[rstest]
 	fn second_custom_detail_setter_replaces_first() {
 		let event = EventFixture::custom("item-selected")
 			.custom_detail(&SelectedDetail { id: 1 })

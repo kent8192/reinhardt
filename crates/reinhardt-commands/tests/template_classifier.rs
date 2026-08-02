@@ -8,6 +8,7 @@ use reinhardt_commands::{
 	classify_source_change,
 };
 use reinhardt_pages::hmr::{CompiledBuildId, SourceId, StaticTemplateNode};
+use rstest::rstest;
 use tempfile::TempDir;
 
 fn fixture_source(static_text: &str) -> String {
@@ -152,7 +153,7 @@ fn render() {
 	);
 }
 
-#[test]
+#[rstest]
 fn typed_custom_payload_change_with_static_edit_requires_dynamic_abi_rebuild() {
 	let original = r#"
 fn render() {

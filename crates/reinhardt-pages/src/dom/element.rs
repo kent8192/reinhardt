@@ -1024,12 +1024,13 @@ impl Drop for EventHandle {
 #[cfg(test)]
 mod tests {
 	use super::*;
+	use rstest::rstest;
 	use wasm_bindgen_test::*;
 
 	wasm_bindgen_test_configure!(run_in_browser);
 
 	#[cfg(native)]
-	#[test]
+	#[rstest]
 	fn typed_custom_event_listener_preserves_native_raw_event() {
 		use std::borrow::Cow;
 

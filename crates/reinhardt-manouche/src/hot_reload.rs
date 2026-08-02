@@ -501,6 +501,7 @@ mod tests {
 	use super::*;
 	use crate::{parser::parse_page, validator::validate_page};
 	use quote::quote;
+	use rstest::rstest;
 
 	fn lower(input: TokenStream) -> ManoucheHotReloadTemplate {
 		let parsed = parse_page(input).expect("page syntax should parse");
@@ -553,7 +554,7 @@ mod tests {
 		);
 	}
 
-	#[test]
+	#[rstest]
 	fn event_variants_have_distinct_stable_dynamic_abis() {
 		let standard = lower(quote! {
 			{ button { @click: |_| {}, "Click" } }

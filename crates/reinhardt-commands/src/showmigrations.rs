@@ -7,7 +7,8 @@ use crate::{
 };
 use async_trait::async_trait;
 use reinhardt_db::migrations::{
-	DatabaseMigrationRecorder, FilesystemSource, MigrationCatalog, MigrationKey, MigrationSnapshot,
+	DatabaseMigrationRecorder, DependencyResolutionContext, FilesystemSource, MigrationCatalog,
+	MigrationKey, MigrationSnapshot,
 };
 use std::collections::BTreeMap;
 use std::io::{self, Write as _};
@@ -194,7 +195,22 @@ impl BaseCommand for ShowMigrationsCommand {
 				.map(PathBuf::from)
 				.unwrap_or_else(|| PathBuf::from("./migrations")),
 		);
-		let catalog = MigrationCatalog::load_strict(&source)
+		let dependency_context =
+			ctx.settings
+				.as_ref()
+				.map_or_else(DependencyResolutionContext::new, |settings| {
+					let core = settings.core();
+					let mut dependency_context = DependencyResolutionContext::new()
+						.with_apps(core.installed_apps.iter().cloned());
+					for (key, value) in &core.migration_swappable_settings {
+						dependency_context = dependency_context.with_setting(key, value);
+					}
+					for feature in &core.migration_features {
+						dependency_context = dependency_context.with_feature(feature);
+					}
+					dependency_context
+				});
+		let catalog = MigrationCatalog::load_strict_with_context(&source, &dependency_context)
 			.await
 			.map_err(crate::squashmigrations::migration_error_to_command_error)
 			.map_err(|error| with_command_context(error, &command_context))?;

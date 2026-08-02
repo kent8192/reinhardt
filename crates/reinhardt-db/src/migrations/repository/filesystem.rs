@@ -59,17 +59,19 @@ fn root_directory_identity(root: &Dir, _path: &Path) -> std::io::Result<Director
 }
 
 #[cfg(windows)]
-fn root_directory_identity(_root: &Dir, path: &Path) -> std::io::Result<DirectoryIdentity> {
-	use std::collections::hash_map::DefaultHasher;
-	use std::hash::{Hash, Hasher};
+fn root_directory_identity(root: &Dir, _path: &Path) -> std::io::Result<DirectoryIdentity> {
+	use cap_std::fs::MetadataExt;
 
-	let canonical = std::fs::canonicalize(path)?;
-	let mut hasher = DefaultHasher::new();
-	canonical.to_string_lossy().hash(&mut hasher);
-	let key = hasher.finish();
+	let metadata = root.metadata(".")?;
+	let device = metadata
+		.volume_serial_number()
+		.ok_or_else(|| std::io::Error::other("directory volume serial number is unavailable"))?;
+	let file = metadata
+		.file_index()
+		.ok_or_else(|| std::io::Error::other("directory file index is unavailable"))?;
 	Ok(DirectoryIdentity {
-		device: key,
-		file: key,
+		device: u64::from(device),
+		file,
 	})
 }
 
@@ -824,6 +826,8 @@ impl FilesystemRepository {
 		self.validate_root_identity(root_identity, || Ok(()))?;
 		root.create_dir_all(app_label)?;
 		let app_directory = root.open_dir(app_label)?;
+		let app_directory_path = self.root_dir.join(app_label);
+		let app_directory_identity = root_directory_identity(&app_directory, &app_directory_path)?;
 		let file_name = format!("{migration_name}.rs");
 		let mut options = OpenOptions::new();
 		options.write(true).create_new(true);
@@ -848,6 +852,20 @@ impl FilesystemRepository {
 				)))),
 			};
 		}
+		if let Err(identity_error) = self.validate_directory_identity(
+			&app_directory_path,
+			app_directory_identity,
+			"Migration application directory",
+			|| Ok(()),
+		) {
+			return match incomplete.cleanup_now() {
+				Ok(()) => Err(identity_error),
+				Err(cleanup_error) => Err(MigrationError::IoError(std::io::Error::other(format!(
+					"{identity_error}; failed to remove incomplete file after application directory \
+					 identity validation: {cleanup_error}"
+				)))),
+			};
+		}
 		Ok(incomplete.complete())
 	}
 
@@ -855,54 +873,59 @@ impl FilesystemRepository {
 	where
 		V: FnOnce() -> std::io::Result<()>,
 	{
-		let before_open = std::fs::symlink_metadata(&self.root_dir).map_err(|error| {
-			MigrationError::PathTraversal(format!(
-				"Migration root directory identity is unavailable: {error}"
-			))
+		self.validate_directory_identity(
+			&self.root_dir,
+			expected,
+			"Migration root directory",
+			after_open,
+		)
+	}
+
+	fn validate_directory_identity<V>(
+		&self,
+		path: &Path,
+		expected: DirectoryIdentity,
+		label: &str,
+		after_open: V,
+	) -> Result<()>
+	where
+		V: FnOnce() -> std::io::Result<()>,
+	{
+		let before_open = std::fs::symlink_metadata(path).map_err(|error| {
+			MigrationError::PathTraversal(format!("{label} identity is unavailable: {error}"))
 		})?;
 		if before_open.file_type().is_symlink() {
-			return Err(MigrationError::PathTraversal(
-				"Migration root directory identity changed to a symbolic link".to_string(),
-			));
+			return Err(MigrationError::PathTraversal(format!(
+				"{label} identity changed to a symbolic link"
+			)));
 		}
-		let ambient =
-			Dir::open_ambient_dir(&self.root_dir, ambient_authority()).map_err(|error| {
-				MigrationError::PathTraversal(format!(
-					"Migration root directory identity is unavailable: {error}"
-				))
-			})?;
-		let actual = root_directory_identity(&ambient, &self.root_dir).map_err(|error| {
-			MigrationError::PathTraversal(format!(
-				"Migration root directory identity is unavailable: {error}"
-			))
+		let ambient = Dir::open_ambient_dir(path, ambient_authority()).map_err(|error| {
+			MigrationError::PathTraversal(format!("{label} identity is unavailable: {error}"))
+		})?;
+		let actual = root_directory_identity(&ambient, path).map_err(|error| {
+			MigrationError::PathTraversal(format!("{label} identity is unavailable: {error}"))
 		})?;
 		after_open()?;
-		let after_open = std::fs::symlink_metadata(&self.root_dir).map_err(|error| {
-			MigrationError::PathTraversal(format!(
-				"Migration root directory identity is unavailable: {error}"
-			))
+		let after_open = std::fs::symlink_metadata(path).map_err(|error| {
+			MigrationError::PathTraversal(format!("{label} identity is unavailable: {error}"))
 		})?;
 		if after_open.file_type().is_symlink() || actual != expected {
 			return Err(MigrationError::PathTraversal(format!(
-				"Migration root directory identity changed during source creation: expected \
+				"{label} identity changed during source creation: expected \
 				 {expected:?}, found {actual:?}"
 			)));
 		}
-		let after_open_root =
-			Dir::open_ambient_dir(&self.root_dir, ambient_authority()).map_err(|error| {
-				MigrationError::PathTraversal(format!(
-					"Migration root directory identity is unavailable: {error}"
-				))
+		let after_open_directory =
+			Dir::open_ambient_dir(path, ambient_authority()).map_err(|error| {
+				MigrationError::PathTraversal(format!("{label} identity is unavailable: {error}"))
 			})?;
-		let after_open_identity = root_directory_identity(&after_open_root, &self.root_dir)
-			.map_err(|error| {
-				MigrationError::PathTraversal(format!(
-					"Migration root directory identity is unavailable: {error}"
-				))
+		let after_open_identity =
+			root_directory_identity(&after_open_directory, path).map_err(|error| {
+				MigrationError::PathTraversal(format!("{label} identity is unavailable: {error}"))
 			})?;
 		if after_open_identity != expected {
 			return Err(MigrationError::PathTraversal(format!(
-				"Migration root directory identity changed during source creation: expected \
+				"{label} identity changed during source creation: expected \
 				 {expected:?}, found {after_open_identity:?}"
 			)));
 		}
@@ -1887,5 +1910,46 @@ mod tests {
 			 exists: {}",
 			anchored_file.exists()
 		);
+	}
+
+	#[cfg(unix)]
+	#[test]
+	fn create_new_source_rejects_application_directory_swap_after_open() {
+		let container = TempDir::new().unwrap();
+		let root = container.path().join("migrations");
+		let anchored_app = container.path().join("anchored-polls");
+		let replacement_app = container.path().join("replacement-polls");
+		std::fs::create_dir_all(root.join("polls")).unwrap();
+		std::fs::create_dir(&replacement_app).unwrap();
+		let repo = FilesystemRepository::new(&root);
+		let source = repo
+			.render(
+				&create_test_migration("polls", "0001_squashed"),
+				MigrationRenderOptions {
+					include_header: false,
+				},
+			)
+			.unwrap();
+
+		let result = repo.create_new_source_with_hooks(
+			"polls",
+			"0001_squashed",
+			&source,
+			RootValidationHooks {
+				before_open: || Ok(()),
+				after_identity_open: || Ok(()),
+			},
+			|file, formatted| {
+				file.write_all(formatted.as_bytes())?;
+				file.sync_all()?;
+				std::fs::rename(root.join("polls"), &anchored_app)?;
+				std::fs::rename(&replacement_app, root.join("polls"))
+			},
+			|directory, name| directory.remove_file(name),
+		);
+
+		assert!(matches!(result, Err(MigrationError::PathTraversal(_))));
+		assert!(!root.join("polls/0001_squashed.rs").exists());
+		assert!(!anchored_app.join("0001_squashed.rs").exists());
 	}
 }

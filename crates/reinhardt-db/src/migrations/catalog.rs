@@ -201,7 +201,12 @@ impl MigrationCatalog {
 						.get_dependencies(&key)
 						.unwrap_or_default()
 						.iter()
-						.cloned(),
+						.map(|dependency| {
+							self.graph
+								.get_replacement(dependency)
+								.cloned()
+								.unwrap_or_else(|| dependency.clone())
+						}),
 				);
 			}
 			selected

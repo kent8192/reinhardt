@@ -251,6 +251,11 @@ impl ExplainStatement {
 		}) {
 			return Err(unsupported("PostgreSQL operators", "MySQL"));
 		}
+		if statement_has_expression(&self.select, &|expression| {
+			matches!(expression, SimpleExpr::Cast(_, _))
+		}) {
+			return Err(unsupported("CAST expressions", "MySQL"));
+		}
 		Ok(())
 	}
 
@@ -294,6 +299,12 @@ impl ExplainStatement {
 				)
 			)
 		}) {
+			return Err(unsupported("PostgreSQL pattern operators", "SQLite"));
+		}
+		if statement_has_expression(
+			&self.select,
+			&|expression| matches!(expression, SimpleExpr::CustomWithExpr(template, _) if is_generated_regex_template(template)),
+		) {
 			return Err(unsupported("PostgreSQL pattern operators", "SQLite"));
 		}
 		if statement_has_expression(&self.select, &|expression| {
@@ -671,7 +682,19 @@ fn is_generated_like_template(template: &str) -> bool {
 	let Some(column_path) = template.strip_suffix(" LIKE ? ESCAPE '\\'") else {
 		return false;
 	};
-	let mut remaining = column_path;
+	is_quoted_identifier_path(column_path)
+}
+
+/// Returns whether `template` is the PostgreSQL regex shape emitted by typed
+/// queryset `regex` and `iregex` lookups.
+fn is_generated_regex_template(template: &str) -> bool {
+	let column_path = template
+		.strip_suffix(" ~* ?")
+		.or_else(|| template.strip_suffix(" ~ ?"));
+	column_path.is_some_and(is_quoted_identifier_path)
+}
+
+fn is_quoted_identifier_path(mut remaining: &str) -> bool {
 	loop {
 		let Some(after_opening_quote) = remaining.strip_prefix('"') else {
 			return false;
@@ -1379,6 +1402,25 @@ mod tests {
 	}
 
 	#[rstest]
+	#[case("\"username\" ~ ?")]
+	#[case("\"username\" ~* ?")]
+	fn sqlite_explain_rejects_generated_regex_templates_before_rendering(#[case] template: &str) {
+		let select = Query::select()
+			.column("id")
+			.from("users")
+			.and_where(Expr::cust_with_values(template, ["^ada$"]))
+			.to_owned();
+
+		assert_eq!(
+			ExplainStatement::new(select, ExplainOptions::default()).build_sqlite_checked(),
+			Err(QueryBuildError::UnsupportedBackendFeature {
+				feature: "PostgreSQL pattern operators",
+				backend: "SQLite",
+			})
+		);
+	}
+
+	#[rstest]
 	fn sqlite_explain_rejects_postgres_operators_before_rendering() {
 		let select = Query::select()
 			.column("id")
@@ -1415,6 +1457,22 @@ mod tests {
 			ExplainStatement::new(select, ExplainOptions::default()).build_mysql_checked(),
 			Err(QueryBuildError::UnsupportedBackendFeature {
 				feature: "PostgreSQL operators",
+				backend: "MySQL",
+			})
+		);
+	}
+
+	#[rstest]
+	fn mysql_explain_rejects_cast_expressions_before_rendering() {
+		let select = Query::select()
+			.expr(Expr::col("age").cast_as("SIGNED"))
+			.from("users")
+			.to_owned();
+
+		assert_eq!(
+			ExplainStatement::new(select, ExplainOptions::default()).build_mysql_checked(),
+			Err(QueryBuildError::UnsupportedBackendFeature {
+				feature: "CAST expressions",
 				backend: "MySQL",
 			})
 		);

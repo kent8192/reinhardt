@@ -103,7 +103,15 @@ pub fn select_pgvector_features(statement: &SelectStatement) -> PgvectorFeatureS
 
 /// Returns the first pgvector feature found in an insert AST.
 pub fn insert_pgvector_feature(statement: &InsertStatement) -> Option<PgvectorFeature> {
-	pgvector_feature_from_validation(validate_insert_for_backend(statement, "feature inspection"))
+	let features = insert_pgvector_features(statement);
+	[
+		PgvectorFeature::ColumnType,
+		PgvectorFeature::DistanceOperator,
+		PgvectorFeature::ApproximateIndex,
+		PgvectorFeature::VectorValue,
+	]
+	.into_iter()
+	.find(|feature| features.contains(*feature))
 }
 
 /// Returns every pgvector feature found in an insert AST.
@@ -812,7 +820,9 @@ mod pgvector_feature_tests {
 	use crate::value::Value;
 	use rstest::rstest;
 
-	use super::{PgvectorFeature, insert_pgvector_features, select_pgvector_feature};
+	use super::{
+		PgvectorFeature, insert_pgvector_feature, insert_pgvector_features, select_pgvector_feature,
+	};
 
 	fn vector_value(values: &[f32]) -> Value {
 		Value::Vector(Some(Box::new(values.to_vec())))
@@ -853,6 +863,30 @@ mod pgvector_feature_tests {
 
 		assert!(features.contains(PgvectorFeature::DistanceOperator));
 		assert!(features.contains(PgvectorFeature::VectorValue));
+	}
+
+	#[rstest]
+	fn insert_feature_inspection_ignores_unrelated_backend_validation() {
+		let distance = SimpleExpr::Binary(
+			Box::new(Expr::col(Alias::new("embedding")).into_simple_expr()),
+			BinOper::PgOperator(PgBinOper::CosineDistance),
+			Box::new(SimpleExpr::Value(vector_value(&[1.0, 2.0, 3.0]))),
+		);
+		let select = Query::select()
+			.expr(distance)
+			.from(Alias::new("source_items"))
+			.distinct_on([Alias::new("id")])
+			.to_owned();
+		let statement = Query::insert()
+			.into_table(Alias::new("distances"))
+			.columns([Alias::new("distance")])
+			.from_subquery(select)
+			.to_owned();
+
+		assert_eq!(
+			insert_pgvector_feature(&statement),
+			Some(PgvectorFeature::DistanceOperator)
+		);
 	}
 
 	#[test]

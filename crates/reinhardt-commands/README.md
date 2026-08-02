@@ -102,8 +102,9 @@ Conditional migration dependencies are resolved from the active core settings.
 `"app.Model"` target, while `migration_features` enables optional dependencies
 whose feature condition matches an entry in the list. `installed_apps` enables
 optional dependencies gated on application presence. Inactive optional
-dependencies are omitted from the generated replacement rather than requiring
-their target application to be installed.
+dependencies remain in the generated replacement without resolving their
+target application, so the migration graph is correct if the condition is
+enabled in another environment.
 
 ```toml
 [core]

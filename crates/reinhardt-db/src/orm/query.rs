@@ -3806,7 +3806,7 @@ where
 	}
 
 	fn root_column_reference(&self, field: &str) -> ColumnRef {
-		if !self.relation_joins.is_empty() && !field.contains('.') {
+		if (!self.relation_joins.is_empty() || !self.joins.is_empty()) && !field.contains('.') {
 			ColumnRef::table_column(Alias::new(self.root_alias()), Alias::new(field))
 		} else {
 			parse_column_reference(field)
@@ -4816,26 +4816,21 @@ where
 				Some(Expr::col(self.root_column_reference(&field.field)).into_simple_expr())
 			}
 			super::annotation::AnnotationValue::Aggregate(aggregate) => {
+				let field_expression = |field: Option<&str>| match field {
+					None | Some("*") => Expr::asterisk().into_simple_expr(),
+					Some(field) => Expr::col(self.root_column_reference(field)).into_simple_expr(),
+				};
 				if aggregate.distinct {
 					let field = aggregate.field.as_deref()?;
 					return Some(SimpleExpr::CustomWithExpr(
-						"COUNT(DISTINCT ?)".to_string(),
-						vec![Expr::col(self.root_column_reference(field)).into_simple_expr()],
+						format!("{}(DISTINCT ?)", aggregate.func),
+						vec![field_expression(Some(field))],
 					));
 				}
-				let field_expression = |field: Option<&str>| {
-					field.map_or_else(
-						|| Expr::asterisk().into_simple_expr(),
-						|field| Expr::col(self.root_column_reference(field)).into_simple_expr(),
-					)
-				};
 				let expression = match &aggregate.func {
-					super::aggregation::AggregateFunc::Count => match aggregate.field.as_deref() {
-						Some(field) => Func::count(
-							Expr::col(self.root_column_reference(field)).into_simple_expr(),
-						),
-						None => Func::count(Expr::asterisk().into_simple_expr()),
-					},
+					super::aggregation::AggregateFunc::Count => {
+						Func::count(field_expression(aggregate.field.as_deref()))
+					}
 					super::aggregation::AggregateFunc::Sum => {
 						Func::sum(field_expression(aggregate.field.as_deref()))
 					}
@@ -12102,6 +12097,50 @@ mod tests {
 
 		assert!(sql.contains(r#"COUNT(*) AS "user_count""#));
 		assert!(!sql.contains(r#""test_users"."*""#));
+	}
+
+	#[test]
+	fn test_structural_aggregates_preserve_wildcards_and_distinct_functions() {
+		use crate::orm::aggregation::Aggregate;
+
+		let queryset = QuerySet::<TestUser>::new()
+			.aggregate(Aggregate::count(Some("*")).with_alias("user_count"))
+			.aggregate(Aggregate {
+				func: crate::orm::aggregation::AggregateFunc::Sum,
+				field: Some("id".to_string()),
+				alias: Some("distinct_id_sum".to_string()),
+				distinct: true,
+			});
+
+		let sql = queryset
+			.build_select_statement()
+			.expect("query statement should build")
+			.to_string(reinhardt_query::prelude::PostgresQueryBuilder);
+
+		assert!(sql.contains(r#"COUNT(*) AS "user_count""#));
+		assert!(sql.contains(r#"SUM(DISTINCT "id") AS "distinct_id_sum""#));
+		assert!(!sql.contains(r#""test_users"."*""#));
+		assert!(!sql.contains(r#"COUNT(DISTINCT "id") AS "distinct_id_sum""#));
+	}
+
+	#[test]
+	fn test_manual_join_qualifies_root_field_annotation() {
+		use crate::orm::annotation::{Annotation, AnnotationValue};
+		use crate::orm::expressions::F;
+
+		let queryset = QuerySet::<TestUser>::new()
+			.inner_join::<TestCorpusFile>("id", "id")
+			.annotate(Annotation::field(
+				"user_id",
+				AnnotationValue::Field(F::new("id")),
+			));
+
+		let sql = queryset
+			.build_select_statement()
+			.expect("query statement should build")
+			.to_string(reinhardt_query::prelude::PostgresQueryBuilder);
+
+		assert!(sql.contains(r#""test_users"."id" AS "user_id""#));
 	}
 
 	#[test]

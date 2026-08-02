@@ -709,11 +709,18 @@ fn is_generated_like_template(template: &str) -> bool {
 }
 
 /// Returns whether `template` is the static AST template used for a typed
-/// `COUNT(DISTINCT column)` annotation. Its sole expression is still checked
+/// distinct aggregate annotation. Its sole expression is still checked
 /// recursively, so this exception cannot make a custom expression executable
 /// during MySQL EXPLAIN.
 fn is_structural_aggregate_template(template: &str) -> bool {
-	template == "COUNT(DISTINCT ?)"
+	matches!(
+		template,
+		"COUNT(DISTINCT ?)"
+			| "SUM(DISTINCT ?)"
+			| "AVG(DISTINCT ?)"
+			| "MIN(DISTINCT ?)"
+			| "MAX(DISTINCT ?)"
+	)
 }
 
 /// Returns whether a function is one of the side-effect-free aggregate forms
@@ -842,16 +849,49 @@ fn quote_mysql_like_template_expr(expression: &mut SimpleExpr) {
 ///
 /// `is_generated_like_template` has already validated the input as a sequence
 /// of SQL-standard quoted identifier components followed by the fixed LIKE
-/// suffix. Replacing delimiters after doubling embedded backticks preserves
-/// identifier boundaries and prevents an embedded backtick from terminating a
-/// MySQL identifier. MySQL's default backslash-escape mode also requires two
-/// backslashes in the ESCAPE string literal.
+/// suffix. Parsing those components preserves a doubled double quote as a
+/// literal identifier character, while doubling embedded backticks prevents
+/// them from terminating a MySQL identifier. MySQL's default backslash-escape
+/// mode also requires two backslashes in the ESCAPE string literal.
 fn translate_generated_like_template_to_mysql(template: &str) -> String {
 	let column_path = template
 		.strip_suffix(" LIKE ? ESCAPE '\\'")
 		.expect("generated LIKE templates have the validated suffix");
-	let quoted_columns = column_path.replace('`', "``").replace('"', "`");
+	let quoted_columns = parse_generated_like_identifier_components(column_path)
+		.expect("generated LIKE templates contain validated identifier components")
+		.into_iter()
+		.map(|component| format!("`{}`", component.replace('`', "``")))
+		.collect::<Vec<_>>()
+		.join(".");
 	format!("{quoted_columns} LIKE ? ESCAPE '\\\\'")
+}
+
+/// Parses SQL-standard quoted identifier components from a validated LIKE
+/// template, unescaping doubled double quotes within each component.
+fn parse_generated_like_identifier_components(column_path: &str) -> Option<Vec<String>> {
+	let mut components = Vec::new();
+	let mut remaining = column_path;
+
+	loop {
+		let mut characters = remaining.strip_prefix('"')?.chars();
+		let mut component = String::new();
+		loop {
+			match characters.next()? {
+				'"' if characters.as_str().starts_with('"') => {
+					component.push('"');
+					characters.next();
+				}
+				'"' => break,
+				character => component.push(character),
+			}
+		}
+		components.push(component);
+		remaining = characters.as_str();
+		if remaining.is_empty() {
+			return Some(components);
+		}
+		remaining = remaining.strip_prefix('.')?;
+	}
 }
 
 #[cfg(test)]
@@ -1203,7 +1243,7 @@ mod tests {
 	}
 
 	#[rstest]
-	fn mysql_explain_requotes_only_generated_like_templates() {
+	fn mysql_explain_preserves_embedded_double_quotes_in_typed_like_identifiers() {
 		let select = Query::select()
 			.column(crate::types::Alias::new("id\"value"))
 			.from(crate::types::Alias::new("users\"archive"))
@@ -1218,7 +1258,7 @@ mod tests {
 				.build_mysql_checked()
 				.expect("typed LIKE lookup should be safe to explain")
 				.0,
-			"EXPLAIN SELECT `id\"value` FROM `users\"archive` WHERE `user``name` LIKE ? ESCAPE '\\\\'"
+			"EXPLAIN SELECT `id\"value` FROM `users\"archive` WHERE `user\"name` LIKE ? ESCAPE '\\\\'"
 		);
 	}
 

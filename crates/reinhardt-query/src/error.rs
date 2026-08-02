@@ -810,6 +810,7 @@ mod pgvector_feature_tests {
 	use crate::prelude::{Alias, BinOper, Expr, Query, SimpleExpr};
 	use crate::types::PgBinOper;
 	use crate::value::Value;
+	use rstest::rstest;
 
 	use super::{PgvectorFeature, insert_pgvector_features, select_pgvector_feature};
 
@@ -831,7 +832,7 @@ mod pgvector_feature_tests {
 		assert!(!features.contains(PgvectorFeature::DistanceOperator));
 	}
 
-	#[test]
+	#[rstest]
 	fn insert_feature_set_collects_nested_insert_select_features() {
 		let distance = SimpleExpr::Binary(
 			Box::new(Expr::col(Alias::new("embedding")).into_simple_expr()),

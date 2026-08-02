@@ -31,6 +31,15 @@ runs:
       with:
         version: "v0.10.0"
 
+    # sccache-action installs the binary and reports statistics, but Rust and the
+    # GitHub Actions cache backend must be enabled explicitly.
+    - name: Enable sccache for Rust builds
+      if: inputs.cache == 'true'
+      shell: bash
+      run: |
+        echo "SCCACHE_GHA_ENABLED=true" >> "$GITHUB_ENV"
+        echo "RUSTC_WRAPPER=$SCCACHE_PATH" >> "$GITHUB_ENV"
+
     # Issue #1831: Detect the actual CARGO_TARGET_DIR from the calling workflow's
     # environment. Workflows set CARGO_TARGET_DIR to an absolute path (e.g.
     # /tmp/cargo_target or $RUNNER_TEMP/cargo_target) to conserve workspace disk

@@ -28,6 +28,42 @@ pub struct SquashRange {
 	pub migrations: Vec<Migration>,
 	/// Dependencies that cross into the selected range.
 	pub external_dependencies: Vec<(String, String)>,
+	pub(crate) available_migrations: Vec<MigrationKey>,
+	pub(crate) replacement_owners: HashMap<MigrationKey, MigrationKey>,
+}
+
+impl SquashRange {
+	pub(crate) fn normalize_dependency(
+		&self,
+		app_label: &str,
+		migration_name: &str,
+	) -> Result<MigrationKey> {
+		let dependency = MigrationKey::new(app_label, migration_name);
+		if self.available_migrations.is_empty() {
+			return Ok(dependency);
+		}
+		if dependency.name == "__first__" {
+			return self
+				.available_migrations
+				.iter()
+				.filter(|candidate| candidate.app_label == dependency.app_label)
+				.min_by(|left, right| {
+					MigrationCatalog::compare_migration_names(&left.name, &right.name)
+				})
+				.cloned()
+				.ok_or_else(|| {
+					MigrationError::DependencyError(format!(
+						"Missing first migration for app {}",
+						app_label
+					))
+				});
+		}
+		Ok(self
+			.replacement_owners
+			.get(&dependency)
+			.cloned()
+			.unwrap_or(dependency))
+	}
 }
 
 impl MigrationCatalog {
@@ -374,6 +410,17 @@ impl MigrationCatalog {
 		Ok(SquashRange {
 			migrations,
 			external_dependencies: external_dependencies.into_iter().collect(),
+			available_migrations: self.migrations.keys().cloned().collect(),
+			replacement_owners: self
+				.migrations
+				.iter()
+				.flat_map(|(owner, migration)| {
+					migration
+						.replaces
+						.iter()
+						.map(move |(app, name)| (MigrationKey::new(app, name), owner.clone()))
+				})
+				.collect(),
 		})
 	}
 

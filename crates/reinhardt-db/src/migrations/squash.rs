@@ -199,10 +199,12 @@ impl MigrationSquasher {
 		for migration in &range.migrations {
 			operations.extend(migration.operations.clone());
 			for dependency in &migration.dependencies {
-				if !selected.contains(&(dependency.0.as_str(), dependency.1.as_str()))
-					&& !dependencies.contains(dependency)
+				let normalized = range.normalize_dependency(&dependency.0, &dependency.1)?;
+				let normalized = (normalized.app_label, normalized.name);
+				if !selected.contains(&(normalized.0.as_str(), normalized.1.as_str()))
+					&& !dependencies.contains(&normalized)
 				{
-					dependencies.push(dependency.clone());
+					dependencies.push(normalized);
 				}
 			}
 			for replacement in &migration.replaces {
@@ -218,17 +220,18 @@ impl MigrationSquasher {
 				let target = dependency_resolver
 					.resolve(&MigrationDependency::Swappable(dependency.clone()))
 					.expect("swappable dependencies always resolve to a target");
-				if !selected.contains(&(target.0.as_str(), target.1.as_str()))
+				let normalized = range.normalize_dependency(&target.0, &target.1)?;
+				if !selected.contains(&(normalized.app_label.as_str(), normalized.name.as_str()))
 					&& !swappable_dependencies.contains(dependency)
 				{
 					swappable_dependencies.push(dependency.clone());
 				}
 			}
 			for dependency in &migration.optional_dependencies {
-				if !selected.contains(&(
-					dependency.app_label.as_str(),
-					dependency.migration_name.as_str(),
-				)) && !optional_dependencies.contains(dependency)
+				let normalized = range
+					.normalize_dependency(&dependency.app_label, &dependency.migration_name)?;
+				if !selected.contains(&(normalized.app_label.as_str(), normalized.name.as_str()))
+					&& !optional_dependencies.contains(dependency)
 				{
 					optional_dependencies.push(dependency.clone());
 				}
@@ -953,6 +956,8 @@ mod tests {
 		let range = SquashRange {
 			migrations: vec![first, second],
 			external_dependencies: vec![],
+			available_migrations: Vec::new(),
+			replacement_owners: std::collections::HashMap::new(),
 		};
 
 		// Act
@@ -979,6 +984,8 @@ mod tests {
 		let range = SquashRange {
 			migrations: vec![first, second],
 			external_dependencies: vec![],
+			available_migrations: Vec::new(),
+			replacement_owners: std::collections::HashMap::new(),
 		};
 		let context =
 			DependencyResolutionContext::new().with_setting("AUTH_USER_MODEL", "auth.User");
@@ -998,6 +1005,8 @@ mod tests {
 		let range = SquashRange {
 			migrations: vec![first, second],
 			external_dependencies: vec![],
+			available_migrations: Vec::new(),
+			replacement_owners: std::collections::HashMap::new(),
 		};
 
 		let error = MigrationSquasher::new()
@@ -1008,5 +1017,57 @@ mod tests {
 			error.to_string(),
 			"Invalid migration: Cannot squash migrations with mixed atomic flags"
 		);
+	}
+
+	#[test]
+	fn squash_range_normalizes_required_dependencies_owned_by_selected_replacement() {
+		let first = Migration::new("0001_squashed_0002", "myapp");
+		let second = Migration::new("0003_more", "myapp").add_dependency("myapp", "0002_old");
+		let range = SquashRange {
+			migrations: vec![first, second],
+			external_dependencies: vec![],
+			available_migrations: vec![
+				crate::migrations::MigrationKey::new("myapp", "0001_squashed_0002"),
+				crate::migrations::MigrationKey::new("myapp", "0003_more"),
+			],
+			replacement_owners: std::collections::HashMap::from([(
+				crate::migrations::MigrationKey::new("myapp", "0002_old"),
+				crate::migrations::MigrationKey::new("myapp", "0001_squashed_0002"),
+			)]),
+		};
+
+		let result = MigrationSquasher::new()
+			.squash_range(&range, "0001_squashed_0003", false)
+			.unwrap();
+
+		assert!(result.migration.dependencies.is_empty());
+	}
+
+	#[test]
+	fn squash_range_normalizes_optional_dependency_before_retaining_metadata() {
+		let mut first = Migration::new("0001_squashed_0002", "myapp");
+		first.optional_dependencies.push(OptionalDependency::new(
+			"myapp",
+			"0002_old",
+			DependencyCondition::AppInstalled("myapp".to_string()),
+		));
+		let range = SquashRange {
+			migrations: vec![first],
+			external_dependencies: vec![],
+			available_migrations: vec![crate::migrations::MigrationKey::new(
+				"myapp",
+				"0001_squashed_0002",
+			)],
+			replacement_owners: std::collections::HashMap::from([(
+				crate::migrations::MigrationKey::new("myapp", "0002_old"),
+				crate::migrations::MigrationKey::new("myapp", "0001_squashed_0002"),
+			)]),
+		};
+
+		let result = MigrationSquasher::new()
+			.squash_range(&range, "0001_squashed_0002_again", false)
+			.unwrap();
+
+		assert!(result.migration.optional_dependencies.is_empty());
 	}
 }

@@ -3932,12 +3932,12 @@ impl Operation {
 		match self {
 			Operation::CreateTable { name, .. } => Ok(Some(vec![format!(
 				"DROP TABLE {};",
-				quote_identifier(name)
+				Self::quote_schema_identifier(name, dialect)
 			)])),
 			Operation::AddColumn { table, column, .. } => Ok(Some(vec![format!(
 				"ALTER TABLE {} DROP COLUMN {};",
-				quote_identifier(table),
-				quote_identifier(&column.name)
+				Self::quote_schema_identifier(table, dialect),
+				Self::quote_dialect_identifier(&column.name, dialect)
 			)])),
 			Operation::RunSQL { reverse_sql, .. } => {
 				Ok(reverse_sql.as_ref().map(|s| vec![s.to_string()]))
@@ -3951,8 +3951,8 @@ impl Operation {
 			// Phase 1: Simple reverse operations
 			Operation::RenameTable { old_name, new_name } => Ok(Some(vec![format!(
 				"ALTER TABLE {} RENAME TO {};",
-				quote_identifier(new_name),
-				quote_identifier(old_name)
+				Self::quote_schema_identifier(new_name, dialect),
+				Self::quote_dialect_identifier(old_name, dialect)
 			)])),
 			Operation::RenameColumn {
 				table,
@@ -3960,9 +3960,9 @@ impl Operation {
 				new_name,
 			} => Ok(Some(vec![format!(
 				"ALTER TABLE {} RENAME COLUMN {} TO {};",
-				quote_identifier(table),
-				quote_identifier(new_name),
-				quote_identifier(old_name)
+				Self::quote_schema_identifier(table, dialect),
+				Self::quote_dialect_identifier(new_name, dialect),
+				Self::quote_dialect_identifier(old_name, dialect)
 			)])),
 			Operation::CreateIndex {
 				table,
@@ -3987,11 +3987,14 @@ impl Operation {
 				let sql = match dialect {
 					SqlDialect::Mysql => format!(
 						"DROP INDEX {} ON {};",
-						quote_identifier(&index_name),
-						quote_identifier(table)
+						Self::quote_dialect_identifier(&index_name, dialect),
+						Self::quote_schema_identifier(table, dialect)
 					),
 					SqlDialect::Postgres | SqlDialect::Sqlite | SqlDialect::Cockroachdb => {
-						format!("DROP INDEX {};", quote_identifier(&index_name))
+						format!(
+							"DROP INDEX {};",
+							Self::quote_dialect_identifier(&index_name, dialect)
+						)
 					}
 				};
 				Ok(Some(vec![sql]))

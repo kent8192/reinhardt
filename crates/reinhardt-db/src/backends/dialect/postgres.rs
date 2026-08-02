@@ -290,6 +290,11 @@ impl DatabaseBackend for PostgresBackend {
 		Ok(Box::new(PgTransactionExecutor::new(tx)))
 	}
 
+	async fn begin_write(&self) -> Result<Box<dyn TransactionExecutor>> {
+		self.begin_with_isolation(IsolationLevel::ReadCommitted)
+			.await
+	}
+
 	async fn begin_with_isolation(
 		&self,
 		isolation_level: IsolationLevel,

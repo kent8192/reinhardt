@@ -17,6 +17,7 @@ This crate provides the following modules:
 - **ORM**: Object-Relational Mapping system
   - Django-inspired Model trait
   - QuerySet API for chainable queries
+  - Typed `get_or_create` and `update_or_create` builders
   - Field types (AutoField, CharField, IntegerField, DateTimeField, etc.)
   - Timestamped and SoftDeletable traits
   - Relationship management
@@ -794,6 +795,45 @@ let updated = User::objects()
     .update_fields([User::field_updated_at().assign(Utc::now())])
     .await?;
 ```
+
+### Typed Manager Upserts
+
+Generated field accessors provide compile-time checked model and value types
+for atomic get/create and update/create operations:
+
+```rust,ignore
+let (tag, created) = Tag::objects()
+    .get_or_create()
+    .lookup(Tag::field_slug(), "rust")
+    .default(Tag::field_display_order(), 10_i32)
+    .execute()
+    .await?;
+```
+
+```rust,ignore
+let (profile, created) = Profile::objects()
+    .update_or_create()
+    .lookup(Profile::field_user_id(), user.id)
+    .set(Profile::field_last_seen(), now)
+    .create_default(Profile::field_created_at(), now)
+    .execute()
+    .await?;
+```
+
+Lookups must cover a primary key, a `unique = true` field, or an immediate,
+unconditional unique constraint. Lookup fields cannot also be defaults or
+updates. `get_or_create().execute_with(...)` accepts a `DatabaseConnection` or
+an `AtomicTransaction` created by `DatabaseConnection::atomic_write`;
+`update_or_create().execute_with(...)` requires an
+`AtomicTransaction` created by `DatabaseConnection::atomic_write`.
+
+The returned `created` flag is true only when this invocation inserted the row.
+A losing get/create race reloads the winner with `false`; a losing
+update/create race locks and updates the winner before returning `false`.
+
+See the
+[typed manager upsert migration guide](../../docs/migration/0.4.0-typed-manager-upserts.md)
+for map-API replacement, backend behavior, and custom-manager hook guidance.
 
 ### Plan-only QuerySet diagnostics
 

@@ -1,7 +1,12 @@
 # Migration Guide: 0.3.x to 0.4.0
 
 This guide covers the Rust management-shell migration, breaking Reinhardt Pages
-event API, and closure-scoped ORM transaction API introduced for 0.4.
+event API, closure-scoped ORM transaction API, and typed manager upsert API
+introduced for 0.4.
+
+For the complete `get_or_create` and `update_or_create` migration, including
+transaction, uniqueness, race, and custom-manager hook semantics, see
+[`0.4.0-typed-manager-upserts.md`](../docs/migration/0.4.0-typed-manager-upserts.md).
 
 ## Rust management shell
 

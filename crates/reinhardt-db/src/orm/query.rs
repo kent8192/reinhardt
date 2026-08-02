@@ -10890,6 +10890,8 @@ mod tests {
 		query::Filter,
 	};
 	use futures::Stream;
+	#[cfg(feature = "pgvector")]
+	use reinhardt_core::macros::model;
 	use reinhardt_query::{
 		QueryBuilder,
 		prelude::{
@@ -11869,17 +11871,13 @@ mod tests {
 		#[case] code: &'static str,
 		#[case] message: &'static str,
 	) {
-		let field = Field::<TestUser, crate::orm::Vector<3>>::new(vec!["embedding"]);
-		let queryset = QuerySet::<TestUser>::new().filter(
+		let field = Field::<TestVectorUser, crate::orm::Vector<3>>::new(vec!["embedding"]);
+		let queryset = QuerySet::<TestVectorUser>::new().filter(
 			field
 				.cosine_distance(typed_vector_target(&[1.0, 2.0, 3.0]))
 				.lt(0.25),
 		);
-		let assignment_field = crate::orm::expressions::FieldRef::<
-			TestUser,
-			crate::orm::Vector<3>,
-			crate::orm::expressions::UnverifiedModelField,
-		>::new("embedding");
+		let assignment_field = TestVectorUser::field_embedding();
 		let mut executor = PgvectorUpdateErrorExecutor { code, message };
 
 		let error = queryset
@@ -11904,17 +11902,13 @@ mod tests {
 	#[cfg(feature = "pgvector")]
 	#[test]
 	fn typed_vector_update_fields_sql_reports_assignment_and_predicate_params() {
-		let field = Field::<TestUser, crate::orm::Vector<3>>::new(vec!["embedding"]);
-		let queryset = QuerySet::<TestUser>::new().filter(
+		let field = Field::<TestVectorUser, crate::orm::Vector<3>>::new(vec!["embedding"]);
+		let queryset = QuerySet::<TestVectorUser>::new().filter(
 			field
 				.cosine_distance(typed_vector_target(&[1.0, 2.0, 3.0]))
 				.lt(0.25),
 		);
-		let assignment_field = crate::orm::expressions::FieldRef::<
-			TestUser,
-			crate::orm::Vector<3>,
-			crate::orm::expressions::UnverifiedModelField,
-		>::new("embedding");
+		let assignment_field = TestVectorUser::field_embedding();
 
 		let (sql, params) = queryset
 			.update_fields_sql([(assignment_field, typed_vector_target(&[4.0, 5.0, 6.0]))])
@@ -12620,6 +12614,16 @@ mod tests {
 				]
 			))])
 		);
+	}
+
+	#[cfg(feature = "pgvector")]
+	#[model(app_label = "query_tests", table_name = "test_users")]
+	#[derive(Debug, Clone, Serialize, Deserialize)]
+	struct TestVectorUser {
+		#[field(primary_key = true)]
+		id: Option<i64>,
+		#[field]
+		embedding: crate::orm::Vector<3>,
 	}
 
 	#[cfg(feature = "pgvector")]

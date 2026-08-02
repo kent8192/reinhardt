@@ -52,6 +52,13 @@ enum ConstraintSpec {
 	},
 }
 
+struct UniqueConstraintMetadata {
+	logical_fields: Vec<String>,
+	column_names: Vec<String>,
+	name: Option<String>,
+	condition: Option<String>,
+}
+
 /// Parsed model attributes (intermediate representation)
 struct ModelAttributesParsed {
 	app_label: Option<String>,
@@ -3392,10 +3399,10 @@ fn resolve_latest_by_fields(
 /// // The #[model] attribute macro automatically generates:
 /// impl User {
 ///     pub const fn field_id() -> FieldRef<User, i64> {
-///         FieldRef::new("id")
+///         unsafe { FieldRef::from_generated_model_field_with_names("id", "id") }
 ///     }
 ///     pub const fn field_name() -> FieldRef<User, String> {
-///         FieldRef::new("name")
+///         unsafe { FieldRef::from_generated_model_field_with_names("name", "name") }
 ///     }
 /// }
 /// ```
@@ -3437,6 +3444,7 @@ fn generate_field_accessors(
 		.filter(|field| !field.config.skip)
 		.map(|field| {
 			let field_name = &field.name;
+			let logical_name = field_name.to_string();
 			let field_type = &field.ty;
 			let method_name = syn::Ident::new(&format!("field_{}", field_name), field_name.span());
 			let column_name = field
@@ -3448,10 +3456,25 @@ fn generate_field_accessors(
 			quote! {
 				/// Field accessor for type-safe field references
 				///
-				/// Returns a `FieldRef<#struct_name, #field_type>` that provides compile-time
+				/// Returns a generated `FieldRef<#struct_name, #field_type>` that provides compile-time
 				/// type safety for field operations.
-				pub const fn #method_name() -> #orm_crate::expressions::FieldRef<#struct_name, #field_type> {
-					#orm_crate::expressions::FieldRef::new(#column_name)
+				pub const fn #method_name() -> #orm_crate::expressions::FieldRef<
+					#struct_name,
+					#field_type,
+					#orm_crate::expressions::GeneratedModelField,
+				> {
+					// SAFETY: the model macro derives both names and the Rust field type
+					// from the same declared model field.
+					unsafe {
+						#orm_crate::expressions::FieldRef::<
+							#struct_name,
+							#field_type,
+							#orm_crate::expressions::GeneratedModelField,
+						>::from_generated_model_field_with_names(
+							#logical_name,
+							#column_name,
+						)
+					}
 				}
 			}
 		})
@@ -3490,6 +3513,7 @@ fn generate_field_accessors(
 		.iter()
 		.map(|field| {
 			let field_name = &field.name;
+			let logical_name = field_name.to_string();
 			let (is_option, lookup_type) = extract_option_type(&field.ty);
 			let field_name_str = field
 				.config
@@ -3516,7 +3540,8 @@ fn generate_field_accessors(
 				pub const fn #method_name() -> #orm_crate::expressions::UniqueFieldRef<#struct_name, #lookup_type> {
 					// SAFETY: This accessor is generated only for fields proven unique by model metadata.
 					unsafe {
-						#orm_crate::expressions::UniqueFieldRef::from_model_field_with_getter(
+						#orm_crate::expressions::UniqueFieldRef::from_model_field_with_names_and_getter(
+							#logical_name,
 							#field_name_str,
 							Self::#getter_name,
 						)
@@ -3585,17 +3610,30 @@ fn generate_relation_traversal_accessors(
 		.filter(|field| !is_many_to_many_field_type(&field.ty))
 		.map(|field| {
 			let field_name = &field.name;
-			let field_name_str = field_name.to_string();
+			let logical_name = field_name.to_string();
+			let column_name = field
+				.config
+				.db_column
+				.clone()
+				.unwrap_or_else(|| logical_name.clone());
 			let field_type = &field.ty;
 			let method_name = syn::Ident::new(&format!("field_{}", field_name), field_name.span());
-			let doc_comment = format!("Reference the `{field_name_str}` field through this relation path.");
+			let doc_comment = format!("Reference the `{logical_name}` field through this relation path.");
 
 			quote! {
 				#[doc = #doc_comment]
 				pub fn #method_name(self) -> #orm_crate::relations::RelatedFieldRef<Root, #struct_name, #field_type> {
-					// SAFETY: this accessor is generated only for a persisted scalar model field.
+					// SAFETY: the model macro derives both names and the Rust field type
+					// from the same declared model field.
 					self.field(unsafe {
-						#orm_crate::expressions::FieldRef::from_model_field(#field_name_str)
+						#orm_crate::expressions::FieldRef::<
+							#struct_name,
+							#field_type,
+							#orm_crate::expressions::GeneratedModelField,
+						>::from_generated_model_field_with_names(
+							#logical_name,
+							#column_name,
+						)
 					})
 				}
 			}
@@ -4574,7 +4612,7 @@ pub(crate) fn model_derive_impl(mut input: DeriveInput) -> Result<TokenStream> {
 			.and_then(|field| field.config.db_column.clone())
 			.unwrap_or_else(|| field_name.to_string())
 	};
-	let unique_constraints: Vec<(Vec<String>, Option<String>, Option<String>)> = model_config
+	let unique_constraints: Vec<UniqueConstraintMetadata> = model_config
 		.constraints
 		.iter()
 		.map(|c| match c {
@@ -4582,35 +4620,36 @@ pub(crate) fn model_derive_impl(mut input: DeriveInput) -> Result<TokenStream> {
 				fields,
 				name,
 				condition,
-			} => (
-				fields
+			} => UniqueConstraintMetadata {
+				logical_fields: fields.clone(),
+				column_names: fields
 					.iter()
 					.map(|field| resolve_db_column(field))
 					.collect(),
-				name.clone(),
-				condition.clone(),
-			),
+				name: name.clone(),
+				condition: condition.clone(),
+			},
 		})
 		.collect();
 
 	// Generate unique constraint names and definitions for code generation
 	let unique_constraint_names: Vec<String> = unique_constraints
 		.iter()
-		.map(|(fields, name, _)| {
-			if let Some(n) = name {
+		.map(|constraint| {
+			if let Some(n) = &constraint.name {
 				n.clone()
 			} else {
 				// Auto-generate name: {table_name}_{field1}_{field2}_uniq
-				format!("{}_{}_uniq", table_name, fields.join("_"))
+				format!("{}_{}_uniq", table_name, constraint.column_names.join("_"))
 			}
 		})
 		.collect();
 
 	let unique_constraint_definitions: Vec<String> = unique_constraints
 		.iter()
-		.map(|(fields, _, condition)| {
-			let fields_str = fields.join(", ");
-			if let Some(cond) = condition {
+		.map(|constraint| {
+			let fields_str = constraint.column_names.join(", ");
+			if let Some(cond) = &constraint.condition {
 				format!("UNIQUE ({}) WHERE {}", fields_str, cond)
 			} else {
 				format!("UNIQUE ({})", fields_str)
@@ -4624,7 +4663,18 @@ pub(crate) fn model_derive_impl(mut input: DeriveInput) -> Result<TokenStream> {
 	// See reinhardt-web#4022.
 	let unique_constraint_field_lists: Vec<Vec<String>> = unique_constraints
 		.iter()
-		.map(|(fields, _, _)| fields.clone())
+		.map(|constraint| constraint.column_names.clone())
+		.collect();
+	let unique_constraint_logical_field_lists: Vec<Vec<String>> = unique_constraints
+		.iter()
+		.map(|constraint| constraint.logical_fields.clone())
+		.collect();
+	let unique_constraint_conditions: Vec<TokenStream> = unique_constraints
+		.iter()
+		.map(|constraint| match &constraint.condition {
+			Some(condition) => quote! { Some(#condition.to_string()) },
+			None => quote! { None },
+		})
 		.collect();
 
 	// Define composite_pk_type_def and holder for code generation
@@ -5134,6 +5184,10 @@ pub(crate) fn model_derive_impl(mut input: DeriveInput) -> Result<TokenStream> {
 						name: #check_constraint_names.to_string(),
 						constraint_type: #orm_crate::inspection::ConstraintType::Check,
 						definition: #check_constraint_expressions.to_string(),
+						fields: Vec::new(),
+						condition: None,
+						deferrable: false,
+						nulls_distinct: None,
 					});
 				)*
 				// Unique constraints
@@ -5142,6 +5196,10 @@ pub(crate) fn model_derive_impl(mut input: DeriveInput) -> Result<TokenStream> {
 						name: #unique_constraint_names.to_string(),
 						constraint_type: #orm_crate::inspection::ConstraintType::Unique,
 						definition: #unique_constraint_definitions.to_string(),
+						fields: vec![#(#unique_constraint_logical_field_lists.to_string()),*],
+						condition: #unique_constraint_conditions,
+						deferrable: false,
+						nulls_distinct: None,
 					});
 				)*
 				constraints
@@ -9213,12 +9271,50 @@ mod tests {
 
 		let output = model_derive_impl(syn::parse2(input).unwrap()).unwrap();
 		let compact = output.to_string().replace(' ', "");
+		let file: syn::File = syn::parse2(output).expect("model expansion should parse as a file");
+		let constraint_field_lists = file
+			.items
+			.iter()
+			.filter_map(|item| {
+				let syn::Item::Impl(item_impl) = item else {
+					return None;
+				};
+				item_impl.items.iter().find_map(|item| {
+					let syn::ImplItem::Fn(method) = item else {
+						return None;
+					};
+					(method.sig.ident == "constraint_metadata").then_some(method)
+				})
+			})
+			.flat_map(|method| method.block.stmts.iter())
+			.filter_map(|statement| {
+				let syn::Stmt::Expr(syn::Expr::MethodCall(call), _) = statement else {
+					return None;
+				};
+				if call.method != "push" || call.args.len() != 1 {
+					return None;
+				}
+				let syn::Expr::Struct(constraint) = &call.args[0] else {
+					return None;
+				};
+				constraint.fields.iter().find_map(|field| {
+					let syn::Member::Named(name) = &field.member else {
+						return None;
+					};
+					(name == "fields").then(|| field.expr.to_token_stream().to_string())
+				})
+			})
+			.collect::<Vec<_>>();
 
 		assert!(compact.contains("stringify!(owner_id).to_string()"));
 		assert!(compact.contains("\"full_name\",\"display_name\""));
 		assert!(
 			compact
 				.contains("fields:vec![\"email_addr\".to_string(),\"display_name\".to_string()]")
+		);
+		assert_eq!(
+			constraint_field_lists,
+			vec!["vec ! [\"email\" . to_string () , \"full_name\" . to_string ()]"]
 		);
 		assert!(compact.contains("Field::new(vec![\"email_addr\"])"));
 	}
@@ -9736,7 +9832,7 @@ mod tests {
 	}
 
 	#[test]
-	fn test_relation_traversal_field_accessors_use_rust_field_names() {
+	fn test_relation_traversal_field_accessors_preserve_logical_and_physical_names() {
 		let input = quote! {
 			#[model(app_label = "test", table_name = "projects")]
 			pub struct Project {
@@ -9757,8 +9853,14 @@ mod tests {
 			.and_then(|output| output.split("pub fn field_email").next())
 			.expect("generated relation traversal slug accessor");
 
-		assert!(slug_accessor.contains("FieldRef :: new (\"slug\")"));
-		assert!(!slug_accessor.contains("FieldRef :: new (\"email\")"));
+		assert!(
+			slug_accessor
+				.contains("from_generated_model_field_with_names (\"slug\" , \"email\" ,)")
+		);
+		assert!(
+			!slug_accessor
+				.contains("from_generated_model_field_with_names (\"slug\" , \"slug\" ,)")
+		);
 	}
 
 	#[test]
@@ -9780,7 +9882,10 @@ mod tests {
 			.nth(1)
 			.expect("generated unique email accessor");
 
-		assert!(unique_accessor.contains("UniqueFieldRef :: from_model_field_with_getter"));
+		assert!(
+			unique_accessor.contains("UniqueFieldRef :: from_model_field_with_names_and_getter")
+		);
+		assert!(unique_accessor.contains("\"email\""));
 		assert!(unique_accessor.contains("\"email_addr\""));
 		assert!(unique_accessor.contains("Self :: __reinhardt_unique_get_email"));
 		assert!(output_str.contains(
@@ -9804,7 +9909,8 @@ mod tests {
 		let output_str = output.to_string();
 
 		assert!(output_str.contains("pub const fn field_id"));
-		assert!(output_str.contains("FieldRef :: new (\"event_id\")"));
+		assert!(output_str.contains("from_generated_model_field_with_names"));
+		assert!(output_str.contains("\"id\" , \"event_id\""));
 		assert!(output_str.contains("pub const fn ordering_id"));
 		assert!(output_str.contains("OrderingField :: from_model_field (\"event_id\")"));
 		assert!(!output_str.contains("pub const fn ordering_owner"));

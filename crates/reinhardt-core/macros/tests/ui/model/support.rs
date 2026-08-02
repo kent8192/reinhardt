@@ -508,14 +508,16 @@ pub mod db {
 
 			#[derive(Debug, Clone)]
 			pub struct FieldRef<Model, Type, Origin = UnverifiedModelField> {
-				pub name: &'static str,
+				logical_name: &'static str,
+				column_name: &'static str,
 				_marker: core::marker::PhantomData<(Model, Type, Origin)>,
 			}
 
 			impl<Model, Type> FieldRef<Model, Type, UnverifiedModelField> {
 				pub const fn new(name: &'static str) -> Self {
 					Self {
-						name,
+						logical_name: name,
+						column_name: name,
 						_marker: core::marker::PhantomData,
 					}
 				}
@@ -524,15 +526,31 @@ pub mod db {
 			impl<Model, Type> FieldRef<Model, Type, GeneratedModelField> {
 				pub const unsafe fn from_model_field(name: &'static str) -> Self {
 					Self {
-						name,
+						logical_name: name,
+						column_name: name,
+						_marker: core::marker::PhantomData,
+					}
+				}
+
+				pub const unsafe fn from_generated_model_field_with_names(
+					logical_name: &'static str,
+					column_name: &'static str,
+				) -> Self {
+					Self {
+						logical_name,
+						column_name,
 						_marker: core::marker::PhantomData,
 					}
 				}
 			}
 
 			impl<Model, Type, Origin> FieldRef<Model, Type, Origin> {
+				pub const fn logical_name(&self) -> &'static str {
+					self.logical_name
+				}
+
 				pub const fn name(&self) -> &'static str {
-					self.name
+					self.column_name
 				}
 
 				pub fn eq(self, _value: impl Into<Type>) -> bool {
@@ -565,8 +583,27 @@ pub mod db {
 					}
 				}
 
+				pub const unsafe fn from_model_field_with_names(
+					_logical_name: &'static str,
+					_column_name: &'static str,
+				) -> Self {
+					Self {
+						_marker: core::marker::PhantomData,
+					}
+				}
+
 				pub const unsafe fn from_model_field_with_getter(
 					_name: &'static str,
+					_getter: fn(&Model) -> Option<Type>,
+				) -> Self {
+					Self {
+						_marker: core::marker::PhantomData,
+					}
+				}
+
+				pub const unsafe fn from_model_field_with_names_and_getter(
+					_logical_name: &'static str,
+					_column_name: &'static str,
 					_getter: fn(&Model) -> Option<Type>,
 				) -> Self {
 					Self {
@@ -1131,6 +1168,10 @@ pub mod db {
 				pub name: String,
 				pub constraint_type: ConstraintType,
 				pub definition: String,
+				pub fields: Vec<String>,
+				pub condition: Option<String>,
+				pub deferrable: bool,
+				pub nulls_distinct: Option<bool>,
 			}
 
 			#[derive(Debug, Clone, PartialEq)]

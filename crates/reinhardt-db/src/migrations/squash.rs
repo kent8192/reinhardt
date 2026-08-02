@@ -233,7 +233,17 @@ impl MigrationSquasher {
 
 		let mut migration = Migration::new(name, first.app_label.clone());
 		migration.operations = operations;
-		migration.dependencies = range.external_dependencies.clone();
+		migration.dependencies = range
+			.migrations
+			.iter()
+			.flat_map(|source| source.dependencies.iter().cloned())
+			.filter(|dependency| {
+				!range
+					.migrations
+					.iter()
+					.any(|source| source.app_label == dependency.0 && source.name == dependency.1)
+			})
+			.collect();
 		migration.replaces = replaces;
 		migration.atomic = first.atomic;
 		migration.initial = first.initial;
@@ -548,22 +558,36 @@ impl MigrationSquasher {
 	}
 
 	fn operation_references_column(operation: &Operation, table: &str, column: &str) -> bool {
+		let references_foreign_key = |definition: &crate::migrations::ColumnDefinition| {
+			matches!(
+				&definition.type_definition,
+				crate::migrations::FieldType::ForeignKey { to_table, to_field, .. }
+					if to_table == table && to_field == column
+			)
+		};
 		match operation {
 			Operation::AddColumn {
 				table: candidate_table,
 				column: candidate_column,
 				..
-			} if candidate_table == table => Self::column_references_column(candidate_column, column),
+			} => {
+				references_foreign_key(candidate_column)
+					|| (candidate_table == table
+						&& Self::column_references_column(candidate_column, column))
+			}
 			Operation::AlterColumn {
 				table: candidate_table,
 				old_definition,
 				new_definition,
 				..
-			} if candidate_table == table => {
-				Self::column_references_column(new_definition, column)
-					|| old_definition.as_ref().is_some_and(|definition| {
-						Self::column_references_column(definition, column)
-					})
+			} => {
+				references_foreign_key(new_definition)
+					|| old_definition.as_ref().is_some_and(references_foreign_key)
+					|| (candidate_table == table
+						&& (Self::column_references_column(new_definition, column)
+							|| old_definition.as_ref().is_some_and(|definition| {
+								Self::column_references_column(definition, column)
+							})))
 			}
 			_ => false,
 		}

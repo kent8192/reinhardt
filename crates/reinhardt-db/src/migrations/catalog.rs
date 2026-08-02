@@ -105,19 +105,36 @@ impl MigrationCatalog {
 				.unwrap_or_default();
 			dependencies.sort_by(Self::compare_keys);
 			for dependency in dependencies {
-				let replacement_count = replacement_owners.get(&dependency).map_or(0, Vec::len);
-				if !migrations.contains_key(&dependency) && replacement_count != 1 {
-					return Err(MigrationError::DependencyError(format!(
-						"Missing dependency {} required by {}",
-						dependency, key
-					)));
-				}
+				Self::resolve_graph_dependency(&dependency, &migrations, &replacement_owners, key)?;
 			}
 		}
 
 		let mut graph = MigrationGraph::new();
-		for migration in migrations.values() {
-			graph.add_migration_with_context(migration, context);
+		for key in &migration_keys {
+			let migration = migrations
+				.get(key)
+				.expect("collected catalog key must have a migration");
+			let mut graph_for_migration = MigrationGraph::new();
+			graph_for_migration.add_migration_with_context(migration, context);
+			let dependencies = graph_for_migration
+				.get_dependencies(key)
+				.unwrap_or_default()
+				.iter()
+				.map(|dependency| {
+					Self::resolve_graph_dependency(
+						dependency,
+						&migrations,
+						&replacement_owners,
+						key,
+					)
+				})
+				.collect::<Result<Vec<_>>>()?;
+			let replaces = migration
+				.replaces
+				.iter()
+				.map(|(app, name)| MigrationKey::new(app, name))
+				.collect();
+			graph.add_migration_with_replaces(key.clone(), dependencies, replaces);
 		}
 
 		let mut cycle_nodes: Vec<String> = graph
@@ -136,6 +153,37 @@ impl MigrationCatalog {
 		graph.topological_sort()?;
 
 		Ok(Self { migrations, graph })
+	}
+
+	fn resolve_graph_dependency(
+		dependency: &MigrationKey,
+		migrations: &HashMap<MigrationKey, Migration>,
+		replacement_owners: &HashMap<MigrationKey, Vec<MigrationKey>>,
+		dependent: &MigrationKey,
+	) -> Result<MigrationKey> {
+		if dependency.name == "__first__" {
+			return migrations
+				.keys()
+				.filter(|candidate| candidate.app_label == dependency.app_label)
+				.min_by(|left, right| left.name.cmp(&right.name))
+				.cloned()
+				.ok_or_else(|| {
+					MigrationError::DependencyError(format!(
+						"Missing first migration for app {} required by {}",
+						dependency.app_label, dependent
+					))
+				});
+		}
+		if migrations.contains_key(dependency) {
+			return Ok(dependency.clone());
+		}
+		match replacement_owners.get(dependency) {
+			Some(owners) if owners.len() == 1 => Ok(owners[0].clone()),
+			_ => Err(MigrationError::DependencyError(format!(
+				"Missing dependency {} required by {}",
+				dependency, dependent
+			))),
+		}
 	}
 
 	/// Resolve an exact migration name or an unambiguous name prefix.

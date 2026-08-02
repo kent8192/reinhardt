@@ -604,16 +604,25 @@ fn parse_single_operation_strict(expr: &Expr, index: usize) -> Result<super::Ope
 					"constraints",
 					&context,
 				)?;
-				for field_name in ["without_rowid", "interleave_in_parent", "partition"] {
-					validate_unsupported_optional_field(&operation.fields, field_name, &context)?;
-				}
 				return Ok(super::Operation::CreateTable {
 					name,
 					columns,
 					constraints,
-					without_rowid: None,
-					interleave_in_parent: None,
-					partition: None,
+					without_rowid: parse_optional_bool_field_strict(
+						&operation.fields,
+						"without_rowid",
+						&context,
+					)?,
+					interleave_in_parent: parse_optional_interleave_spec_field_strict(
+						&operation.fields,
+						"interleave_in_parent",
+						&context,
+					)?,
+					partition: parse_optional_partition_options_field_strict(
+						&operation.fields,
+						"partition",
+						&context,
+					)?,
 				});
 			}
 			"DropTable" => {
@@ -1224,15 +1233,402 @@ fn is_none_expression(expr: &Expr) -> bool {
 	matches!(expr, Expr::Path(path) if path.path.is_ident("None"))
 }
 
-fn validate_unsupported_optional_field(
+fn parse_optional_bool_field_strict(
 	fields: &syn::punctuated::Punctuated<syn::FieldValue, syn::token::Comma>,
 	field_name: &str,
 	context: &str,
-) -> Result<()> {
-	if strict_field_expression(fields, field_name).is_some_and(is_none_expression) {
-		Ok(())
-	} else {
-		Err(strict_payload_error(context, field_name))
+) -> Result<Option<bool>> {
+	let expression = strict_field_expression(fields, field_name)
+		.ok_or_else(|| strict_payload_error(context, field_name))?;
+	if is_none_expression(expression) {
+		return Ok(None);
+	}
+	let Expr::Call(call) = expression else {
+		return Err(strict_payload_error(context, field_name));
+	};
+	let Expr::Path(some) = &*call.func else {
+		return Err(strict_payload_error(context, field_name));
+	};
+	if !some.path.is_ident("Some") || call.args.len() != 1 {
+		return Err(strict_payload_error(context, field_name));
+	}
+	parse_bool_expression(&call.args[0])
+		.ok_or_else(|| strict_payload_error(context, field_name))
+		.map(Some)
+}
+
+fn parse_optional_interleave_spec_field_strict(
+	fields: &syn::punctuated::Punctuated<syn::FieldValue, syn::token::Comma>,
+	field_name: &str,
+	context: &str,
+) -> Result<Option<super::InterleaveSpec>> {
+	let expression = strict_field_expression(fields, field_name)
+		.ok_or_else(|| strict_payload_error(context, field_name))?;
+	if is_none_expression(expression) {
+		return Ok(None);
+	}
+	let Expr::Call(call) = expression else {
+		return Err(strict_payload_error(context, field_name));
+	};
+	let Expr::Path(some) = &*call.func else {
+		return Err(strict_payload_error(context, field_name));
+	};
+	if !some.path.is_ident("Some") || call.args.len() != 1 {
+		return Err(strict_payload_error(context, field_name));
+	}
+	parse_interleave_spec_strict(&call.args[0], &format!("{context}.{field_name}")).map(Some)
+}
+
+fn parse_interleave_spec_strict(expr: &Expr, context: &str) -> Result<super::InterleaveSpec> {
+	let Expr::Struct(specification) = expr else {
+		return Err(MigrationError::InvalidMigration(format!(
+			"{context} is unsupported or malformed"
+		)));
+	};
+	if !path_ends_with(&specification.path, "InterleaveSpec") {
+		return Err(MigrationError::InvalidMigration(format!(
+			"{context} is unsupported or malformed"
+		)));
+	}
+	validate_exact_named_fields(
+		&specification.fields,
+		&["parent_table", "parent_columns"],
+		context,
+	)?;
+	Ok(super::InterleaveSpec {
+		parent_table: parse_string_field_strict(&specification.fields, "parent_table", context)?,
+		parent_columns: parse_string_vector_field_strict(
+			&specification.fields,
+			"parent_columns",
+			context,
+		)?,
+	})
+}
+
+fn parse_optional_partition_options_field_strict(
+	fields: &syn::punctuated::Punctuated<syn::FieldValue, syn::token::Comma>,
+	field_name: &str,
+	context: &str,
+) -> Result<Option<super::PartitionOptions>> {
+	let expression = strict_field_expression(fields, field_name)
+		.ok_or_else(|| strict_payload_error(context, field_name))?;
+	if is_none_expression(expression) {
+		return Ok(None);
+	}
+	let Expr::Call(call) = expression else {
+		return Err(strict_payload_error(context, field_name));
+	};
+	let Expr::Path(some) = &*call.func else {
+		return Err(strict_payload_error(context, field_name));
+	};
+	if !some.path.is_ident("Some") || call.args.len() != 1 {
+		return Err(strict_payload_error(context, field_name));
+	}
+	parse_partition_options_strict(&call.args[0], &format!("{context}.{field_name}")).map(Some)
+}
+
+fn parse_partition_options_strict(expr: &Expr, context: &str) -> Result<super::PartitionOptions> {
+	match expr {
+		Expr::Struct(options) => parse_partition_options_struct_strict(options, context),
+		Expr::Call(call) => parse_partition_options_constructor_strict(call, context),
+		_ => Err(MigrationError::InvalidMigration(format!(
+			"{context} is unsupported or malformed"
+		))),
+	}
+}
+
+fn parse_partition_options_struct_strict(
+	options: &syn::ExprStruct,
+	context: &str,
+) -> Result<super::PartitionOptions> {
+	if !path_ends_with(&options.path, "PartitionOptions") {
+		return Err(MigrationError::InvalidMigration(format!(
+			"{context} is unsupported or malformed"
+		)));
+	}
+	validate_exact_named_fields(
+		&options.fields,
+		&["partition_type", "column", "partitions"],
+		context,
+	)?;
+	let partition_type =
+		parse_partition_type_field_strict(&options.fields, "partition_type", context)?;
+	let column = parse_string_field_strict(&options.fields, "column", context)?;
+	let partitions =
+		parse_partition_definition_vector_field_strict(&options.fields, "partitions", context)?;
+	Ok(super::PartitionOptions {
+		partition_type,
+		column,
+		partitions,
+	})
+}
+
+fn parse_partition_options_constructor_strict(
+	call: &syn::ExprCall,
+	context: &str,
+) -> Result<super::PartitionOptions> {
+	let Expr::Path(function) = &*call.func else {
+		return Err(MigrationError::InvalidMigration(format!(
+			"{context} is unsupported or malformed"
+		)));
+	};
+	let mut segments = function.path.segments.iter().rev();
+	let Some(method) = segments.next() else {
+		return Err(MigrationError::InvalidMigration(format!(
+			"{context} is unsupported or malformed"
+		)));
+	};
+	if segments
+		.next()
+		.is_none_or(|segment| segment.ident != "PartitionOptions")
+	{
+		return Err(MigrationError::InvalidMigration(format!(
+			"{context} is unsupported or malformed"
+		)));
+	}
+
+	match method.ident.to_string().as_str() {
+		"new" if call.args.len() == 3 => {
+			let partition_type =
+				parse_partition_type_strict(&call.args[0], &format!("{context}.partition_type"))?;
+			parse_partition_options_parts_strict(
+				partition_type,
+				&call.args[1],
+				&call.args[2],
+				context,
+			)
+		}
+		"range" if call.args.len() == 2 => parse_partition_options_parts_strict(
+			super::PartitionType::Range,
+			&call.args[0],
+			&call.args[1],
+			context,
+		),
+		"list" if call.args.len() == 2 => parse_partition_options_parts_strict(
+			super::PartitionType::List,
+			&call.args[0],
+			&call.args[1],
+			context,
+		),
+		"hash" if call.args.len() == 2 => {
+			parse_partition_options_count_strict(super::PartitionType::Hash, call, context)
+		}
+		"key" if call.args.len() == 2 => {
+			parse_partition_options_count_strict(super::PartitionType::Key, call, context)
+		}
+		_ => Err(MigrationError::InvalidMigration(format!(
+			"{context} is unsupported or malformed"
+		))),
+	}
+}
+
+fn parse_partition_options_parts_strict(
+	partition_type: super::PartitionType,
+	column_expression: &Expr,
+	partitions_expression: &Expr,
+	context: &str,
+) -> Result<super::PartitionOptions> {
+	let column = extract_string_expr(column_expression)
+		.ok_or_else(|| strict_payload_error(context, "column"))?;
+	let partitions = parse_partition_definition_vector_strict(
+		partitions_expression,
+		&format!("{context}.partitions"),
+	)?;
+	Ok(super::PartitionOptions {
+		partition_type,
+		column,
+		partitions,
+	})
+}
+
+fn parse_partition_options_count_strict(
+	partition_type: super::PartitionType,
+	call: &syn::ExprCall,
+	context: &str,
+) -> Result<super::PartitionOptions> {
+	let column = extract_string_expr(&call.args[0])
+		.ok_or_else(|| strict_payload_error(context, "column"))?;
+	let count = parse_u32_literal(&call.args[1])
+		.ok_or_else(|| strict_payload_error(context, "partitions"))?;
+	Ok(super::PartitionOptions {
+		partition_type,
+		column,
+		partitions: vec![super::PartitionDef::new(
+			"",
+			super::PartitionValues::ModuloCount(count),
+		)],
+	})
+}
+
+fn parse_partition_type_field_strict(
+	fields: &syn::punctuated::Punctuated<syn::FieldValue, syn::token::Comma>,
+	field_name: &str,
+	context: &str,
+) -> Result<super::PartitionType> {
+	let expression = strict_field_expression(fields, field_name)
+		.ok_or_else(|| strict_payload_error(context, field_name))?;
+	parse_partition_type_strict(expression, &format!("{context}.{field_name}"))
+}
+
+fn parse_partition_type_strict(expression: &Expr, context: &str) -> Result<super::PartitionType> {
+	match extract_path_variant(expression).as_deref() {
+		Some("Range") => Ok(super::PartitionType::Range),
+		Some("List") => Ok(super::PartitionType::List),
+		Some("Hash") => Ok(super::PartitionType::Hash),
+		Some("Key") => Ok(super::PartitionType::Key),
+		_ => Err(MigrationError::InvalidMigration(format!(
+			"{context} is unsupported or malformed"
+		))),
+	}
+}
+
+fn parse_partition_definition_vector_field_strict(
+	fields: &syn::punctuated::Punctuated<syn::FieldValue, syn::token::Comma>,
+	field_name: &str,
+	context: &str,
+) -> Result<Vec<super::PartitionDef>> {
+	let expression = strict_field_expression(fields, field_name)
+		.ok_or_else(|| strict_payload_error(context, field_name))?;
+	parse_partition_definition_vector_strict(expression, &format!("{context}.{field_name}"))
+}
+
+fn parse_partition_definition_vector_strict(
+	expr: &Expr,
+	context: &str,
+) -> Result<Vec<super::PartitionDef>> {
+	parse_vec_expressions(expr, context)
+		.map_err(|_| {
+			MigrationError::InvalidMigration(format!("{context} is unsupported or malformed"))
+		})?
+		.iter()
+		.enumerate()
+		.map(|(index, expression)| {
+			parse_partition_definition_strict(expression, &format!("{context}[{index}]"))
+		})
+		.collect()
+}
+
+fn parse_partition_definition_strict(expr: &Expr, context: &str) -> Result<super::PartitionDef> {
+	match expr {
+		Expr::Struct(definition) => parse_partition_definition_struct_strict(definition, context),
+		Expr::Call(call) => parse_partition_definition_constructor_strict(call, context),
+		_ => Err(MigrationError::InvalidMigration(format!(
+			"{context} is unsupported or malformed"
+		))),
+	}
+}
+
+fn parse_partition_definition_struct_strict(
+	definition: &syn::ExprStruct,
+	context: &str,
+) -> Result<super::PartitionDef> {
+	if !path_ends_with(&definition.path, "PartitionDef") {
+		return Err(MigrationError::InvalidMigration(format!(
+			"{context} is unsupported or malformed"
+		)));
+	}
+	validate_exact_named_fields(&definition.fields, &["name", "values"], context)?;
+	Ok(super::PartitionDef {
+		name: parse_string_field_strict(&definition.fields, "name", context)?,
+		values: parse_partition_values_field_strict(&definition.fields, "values", context)?,
+	})
+}
+
+fn parse_partition_definition_constructor_strict(
+	call: &syn::ExprCall,
+	context: &str,
+) -> Result<super::PartitionDef> {
+	let Expr::Path(function) = &*call.func else {
+		return Err(MigrationError::InvalidMigration(format!(
+			"{context} is unsupported or malformed"
+		)));
+	};
+	let mut segments = function.path.segments.iter().rev();
+	let Some(method) = segments.next() else {
+		return Err(MigrationError::InvalidMigration(format!(
+			"{context} is unsupported or malformed"
+		)));
+	};
+	if segments
+		.next()
+		.is_none_or(|segment| segment.ident != "PartitionDef")
+	{
+		return Err(MigrationError::InvalidMigration(format!(
+			"{context} is unsupported or malformed"
+		)));
+	}
+
+	match method.ident.to_string().as_str() {
+		"new" if call.args.len() == 2 => Ok(super::PartitionDef {
+			name: extract_string_expr(&call.args[0])
+				.ok_or_else(|| strict_payload_error(context, "name"))?,
+			values: parse_partition_values_strict(&call.args[1], &format!("{context}.values"))?,
+		}),
+		"less_than" if call.args.len() == 2 => Ok(super::PartitionDef::less_than(
+			extract_string_expr(&call.args[0])
+				.ok_or_else(|| strict_payload_error(context, "name"))?,
+			extract_string_expr(&call.args[1])
+				.ok_or_else(|| strict_payload_error(context, "values"))?,
+		)),
+		"maxvalue" if call.args.len() == 1 => Ok(super::PartitionDef::maxvalue(
+			extract_string_expr(&call.args[0])
+				.ok_or_else(|| strict_payload_error(context, "name"))?,
+		)),
+		"list_in" if call.args.len() == 2 => Ok(super::PartitionDef::list_in(
+			extract_string_expr(&call.args[0])
+				.ok_or_else(|| strict_payload_error(context, "name"))?,
+			parse_string_vector_strict(&call.args[1], &format!("{context}.values"))?,
+		)),
+		_ => Err(MigrationError::InvalidMigration(format!(
+			"{context} is unsupported or malformed"
+		))),
+	}
+}
+
+fn parse_partition_values_field_strict(
+	fields: &syn::punctuated::Punctuated<syn::FieldValue, syn::token::Comma>,
+	field_name: &str,
+	context: &str,
+) -> Result<super::PartitionValues> {
+	let expression = strict_field_expression(fields, field_name)
+		.ok_or_else(|| strict_payload_error(context, field_name))?;
+	parse_partition_values_strict(expression, &format!("{context}.{field_name}"))
+}
+
+fn parse_partition_values_strict(expr: &Expr, context: &str) -> Result<super::PartitionValues> {
+	let Expr::Call(call) = expr else {
+		return Err(MigrationError::InvalidMigration(format!(
+			"{context} is unsupported or malformed"
+		)));
+	};
+	let Expr::Path(path) = &*call.func else {
+		return Err(MigrationError::InvalidMigration(format!(
+			"{context} is unsupported or malformed"
+		)));
+	};
+	match path
+		.path
+		.segments
+		.last()
+		.map(|segment| segment.ident.to_string())
+		.as_deref()
+	{
+		Some("LessThan") if call.args.len() == 1 => extract_string_expr(&call.args[0])
+			.map(super::PartitionValues::LessThan)
+			.ok_or_else(|| {
+				MigrationError::InvalidMigration(format!("{context} is unsupported or malformed"))
+			}),
+		Some("In") if call.args.len() == 1 => {
+			parse_string_vector_strict(&call.args[0], context).map(super::PartitionValues::In)
+		}
+		Some("ModuloCount") if call.args.len() == 1 => parse_u32_literal(&call.args[0])
+			.map(super::PartitionValues::ModuloCount)
+			.ok_or_else(|| {
+				MigrationError::InvalidMigration(format!("{context} is unsupported or malformed"))
+			}),
+		_ => Err(MigrationError::InvalidMigration(format!(
+			"{context} is unsupported or malformed"
+		))),
 	}
 }
 
@@ -4157,7 +4553,8 @@ mod tests {
 	use crate::field_domain::{FieldDomain, ModelEnumRepr, ModelEnumValue};
 	use crate::migrations::{
 		AlterTableOptions, ColumnDefinition, ColumnType, Constraint, FieldType, GeneratedStorage,
-		IndexType, MigrationError, MySqlAlgorithm, MySqlLock, Operation, SchemaExpr,
+		IndexType, InterleaveSpec, MigrationError, MySqlAlgorithm, MySqlLock, Operation,
+		PartitionDef, PartitionOptions, PartitionType, PartitionValues, SchemaExpr,
 	};
 
 	#[rstest]
@@ -4503,17 +4900,6 @@ mod tests {
 		"Invalid migration: operations[0].CreateTable.constraints[1] is unsupported or malformed"
 	)]
 	#[case(
-		r#"Operation::CreateTable {
-			name: "posts".to_string(),
-			columns: vec![],
-			constraints: vec![],
-			without_rowid: Some(true),
-			interleave_in_parent: None,
-			partition: None,
-		}"#,
-		"Invalid migration: operations[0].CreateTable.without_rowid is unsupported or malformed"
-	)]
-	#[case(
 		r#"Operation::AddColumn {
 			table: "posts".to_string(),
 			column: ColumnDefinition {
@@ -4552,6 +4938,79 @@ mod tests {
 
 		// Assert
 		assert_eq!(error.to_string(), expected);
+	}
+
+	#[test]
+	fn strict_metadata_preserves_create_table_backend_options() {
+		// Arrange
+		let ast = syn::parse_file(
+			r#"pub fn migration() -> Migration {
+				Migration {
+					operations: vec![Operation::CreateTable {
+						name: "events".to_string(),
+						columns: vec![],
+						constraints: vec![],
+						without_rowid: Some(true),
+						interleave_in_parent: Some(InterleaveSpec {
+							parent_table: "accounts".to_string(),
+							parent_columns: vec!["id".to_string()],
+						}),
+						partition: Some(PartitionOptions::new(
+							PartitionType::Range,
+							"created_at",
+							vec![PartitionDef::new(
+								"before_2026",
+								PartitionValues::LessThan("2026-01-01".to_string()),
+							)],
+						)),
+					}],
+					dependencies: vec![],
+					replaces: vec![],
+				}
+			}"#,
+		)
+		.unwrap();
+
+		// Act
+		let metadata = extract_migration_metadata_strict(&ast, "blog", "0001_initial").unwrap();
+
+		// Assert
+		assert_eq!(
+			metadata.operations,
+			vec![Operation::CreateTable {
+				name: "events".to_string(),
+				columns: vec![],
+				constraints: vec![],
+				without_rowid: Some(true),
+				interleave_in_parent: Some(InterleaveSpec {
+					parent_table: "accounts".to_string(),
+					parent_columns: vec!["id".to_string()],
+				}),
+				partition: Some(PartitionOptions {
+					partition_type: PartitionType::Range,
+					column: "created_at".to_string(),
+					partitions: vec![PartitionDef {
+						name: "before_2026".to_string(),
+						values: PartitionValues::LessThan("2026-01-01".to_string()),
+					}],
+				}),
+			}]
+		);
+
+		let operation = metadata
+			.operations
+			.into_iter()
+			.next()
+			.expect("migration must contain the create-table operation");
+		let tokens = operation.to_token_stream().to_string();
+		let expression: syn::Expr =
+			syn::parse_str(&tokens).expect("generated operation tokens must parse");
+
+		assert_eq!(
+			super::parse_single_operation_strict(&expression, 0).unwrap(),
+			operation,
+			"generated operation tokens must preserve CreateTable backend options: {tokens}"
+		);
 	}
 
 	#[rstest]

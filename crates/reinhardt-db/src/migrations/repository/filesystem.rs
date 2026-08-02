@@ -593,17 +593,7 @@ impl FilesystemRepository {
 			| Operation::AlterColumn {
 				mysql_options: Some(_),
 				..
-			}
-			| Operation::AlterTableComment { .. }
-			| Operation::AlterUniqueTogether { .. }
-			| Operation::AlterModelOptions { .. }
-			| Operation::CreateInheritedTable { .. }
-			| Operation::AddDiscriminatorColumn { .. }
-			| Operation::CreateSchema { .. }
-			| Operation::DropSchema { .. }
-			| Operation::BulkLoad { .. } => {
-				Err(MigrationError::UnsupportedMigrationRendering { operation: context })
-			}
+			} => Err(MigrationError::UnsupportedMigrationRendering { operation: context }),
 			_ => Ok(()),
 		}
 	}
@@ -1192,6 +1182,72 @@ mod tests {
 		// Assert
 		assert!(rendered.contains("Operation::RunRust"));
 		assert!(rendered.contains("seed_data()"));
+	}
+
+	#[test]
+	fn render_round_trips_supported_public_operations() {
+		let repository = FilesystemRepository::new(TempDir::new().unwrap().path());
+		let mut migration = Migration::new("0001_public_operations", "polls");
+		migration.operations = vec![
+			Operation::AlterTableComment {
+				table: "polls".to_string(),
+				comment: Some("poll questions".to_string()),
+			},
+			Operation::AlterUniqueTogether {
+				table: "polls".to_string(),
+				unique_together: vec![vec!["question".to_string(), "position".to_string()]],
+			},
+			Operation::AlterModelOptions {
+				table: "polls".to_string(),
+				options: std::collections::HashMap::from([(
+					"verbose_name".to_string(),
+					"poll".to_string(),
+				)]),
+			},
+			Operation::CreateInheritedTable {
+				name: "featured_polls".to_string(),
+				columns: vec![ColumnDefinition::new("id", FieldType::Integer)],
+				base_table: "polls".to_string(),
+				join_column: "poll_id".to_string(),
+			},
+			Operation::AddDiscriminatorColumn {
+				table: "polls".to_string(),
+				column_name: "kind".to_string(),
+				default_value: "poll".to_string(),
+			},
+			Operation::CreateSchema {
+				name: "analytics".to_string(),
+				if_not_exists: true,
+			},
+			Operation::DropSchema {
+				name: "archive".to_string(),
+				cascade: true,
+				if_exists: true,
+			},
+			Operation::BulkLoad {
+				table: "polls".to_string(),
+				source: crate::migrations::operations::BulkLoadSource::File(
+					"polls.csv".to_string(),
+				),
+				format: crate::migrations::operations::BulkLoadFormat::Csv,
+				options: crate::migrations::operations::BulkLoadOptions::new()
+					.with_delimiter(',')
+					.with_header(true)
+					.with_columns(vec!["id".to_string(), "question".to_string()]),
+			},
+		];
+
+		let rendered = repository
+			.render(
+				&migration,
+				MigrationRenderOptions {
+					include_header: false,
+				},
+			)
+			.expect("public operations should render and strict-round-trip");
+
+		assert!(rendered.contains("Operation::CreateInheritedTable"));
+		assert!(rendered.contains("Operation::DropSchema"));
 	}
 
 	#[rstest]

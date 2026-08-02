@@ -675,6 +675,136 @@ fn parse_single_operation_strict(expr: &Expr, index: usize) -> Result<super::Ope
 					)?,
 				});
 			}
+			"AlterTableComment" => {
+				validate_exact_named_fields(&operation.fields, &["table", "comment"], &context)?;
+				return Ok(super::Operation::AlterTableComment {
+					table: parse_string_field_strict(&operation.fields, "table", &context)?,
+					comment: parse_optional_string_field_strict(
+						&operation.fields,
+						"comment",
+						&context,
+					)?,
+				});
+			}
+			"AlterUniqueTogether" => {
+				validate_exact_named_fields(
+					&operation.fields,
+					&["table", "unique_together"],
+					&context,
+				)?;
+				return Ok(super::Operation::AlterUniqueTogether {
+					table: parse_string_field_strict(&operation.fields, "table", &context)?,
+					unique_together: parse_string_matrix_field_strict(
+						&operation.fields,
+						"unique_together",
+						&context,
+					)?,
+				});
+			}
+			"AlterModelOptions" => {
+				validate_exact_named_fields(&operation.fields, &["table", "options"], &context)?;
+				return Ok(super::Operation::AlterModelOptions {
+					table: parse_string_field_strict(&operation.fields, "table", &context)?,
+					options: parse_string_map_field_strict(&operation.fields, "options", &context)?,
+				});
+			}
+			"CreateInheritedTable" => {
+				validate_exact_named_fields(
+					&operation.fields,
+					&["name", "columns", "base_table", "join_column"],
+					&context,
+				)?;
+				return Ok(super::Operation::CreateInheritedTable {
+					name: parse_string_field_strict(&operation.fields, "name", &context)?,
+					columns: parse_column_vector_field_strict(
+						&operation.fields,
+						"columns",
+						&context,
+					)?,
+					base_table: parse_string_field_strict(
+						&operation.fields,
+						"base_table",
+						&context,
+					)?,
+					join_column: parse_string_field_strict(
+						&operation.fields,
+						"join_column",
+						&context,
+					)?,
+				});
+			}
+			"AddDiscriminatorColumn" => {
+				validate_exact_named_fields(
+					&operation.fields,
+					&["table", "column_name", "default_value"],
+					&context,
+				)?;
+				return Ok(super::Operation::AddDiscriminatorColumn {
+					table: parse_string_field_strict(&operation.fields, "table", &context)?,
+					column_name: parse_string_field_strict(
+						&operation.fields,
+						"column_name",
+						&context,
+					)?,
+					default_value: parse_string_field_strict(
+						&operation.fields,
+						"default_value",
+						&context,
+					)?,
+				});
+			}
+			"CreateSchema" => {
+				validate_exact_named_fields(
+					&operation.fields,
+					&["name", "if_not_exists"],
+					&context,
+				)?;
+				return Ok(super::Operation::CreateSchema {
+					name: parse_string_field_strict(&operation.fields, "name", &context)?,
+					if_not_exists: parse_bool_field_strict(
+						&operation.fields,
+						"if_not_exists",
+						&context,
+					)?,
+				});
+			}
+			"DropSchema" => {
+				validate_exact_named_fields(
+					&operation.fields,
+					&["name", "cascade", "if_exists"],
+					&context,
+				)?;
+				return Ok(super::Operation::DropSchema {
+					name: parse_string_field_strict(&operation.fields, "name", &context)?,
+					cascade: parse_bool_field_strict(&operation.fields, "cascade", &context)?,
+					if_exists: parse_bool_field_strict(&operation.fields, "if_exists", &context)?,
+				});
+			}
+			"BulkLoad" => {
+				validate_exact_named_fields(
+					&operation.fields,
+					&["table", "source", "format", "options"],
+					&context,
+				)?;
+				return Ok(super::Operation::BulkLoad {
+					table: parse_string_field_strict(&operation.fields, "table", &context)?,
+					source: parse_bulk_load_source_field_strict(
+						&operation.fields,
+						"source",
+						&context,
+					)?,
+					format: parse_bulk_load_format_field_strict(
+						&operation.fields,
+						"format",
+						&context,
+					)?,
+					options: parse_bulk_load_options_field_strict(
+						&operation.fields,
+						"options",
+						&context,
+					)?,
+				});
+			}
 			"CreateExtension" => {
 				validate_exact_named_fields(
 					&operation.fields,
@@ -2516,6 +2646,190 @@ fn parse_string_vector_field_strict(
 	let expression = strict_field_expression(fields, field_name)
 		.ok_or_else(|| strict_payload_error(context, field_name))?;
 	parse_string_vector_strict(expression, &format!("{context}.{field_name}"))
+}
+
+fn parse_string_matrix_field_strict(
+	fields: &syn::punctuated::Punctuated<syn::FieldValue, syn::token::Comma>,
+	field_name: &str,
+	context: &str,
+) -> Result<Vec<Vec<String>>> {
+	let expression = strict_field_expression(fields, field_name)
+		.ok_or_else(|| strict_payload_error(context, field_name))?;
+	let nested = parse_vec_expressions(expression, &format!("{context}.{field_name}"))
+		.map_err(|_| strict_payload_error(context, field_name))?;
+	nested
+		.iter()
+		.enumerate()
+		.map(|(index, expression)| {
+			parse_string_vector_strict(expression, &format!("{context}.{field_name}[{index}]"))
+		})
+		.collect()
+}
+
+fn parse_string_map_field_strict(
+	fields: &syn::punctuated::Punctuated<syn::FieldValue, syn::token::Comma>,
+	field_name: &str,
+	context: &str,
+) -> Result<std::collections::HashMap<String, String>> {
+	let expression = strict_field_expression(fields, field_name)
+		.ok_or_else(|| strict_payload_error(context, field_name))?;
+	let Expr::Block(block) = expression else {
+		return Err(strict_payload_error(context, field_name));
+	};
+	let mut options = std::collections::HashMap::new();
+	for statement in &block.block.stmts {
+		let syn::Stmt::Expr(Expr::MethodCall(call), _) = statement else {
+			continue;
+		};
+		if call.method != "insert" || call.args.len() != 2 {
+			continue;
+		}
+		let Some(key) = extract_string_expr(&call.args[0]) else {
+			return Err(strict_payload_error(context, field_name));
+		};
+		let Some(value) = extract_string_expr(&call.args[1]) else {
+			return Err(strict_payload_error(context, field_name));
+		};
+		options.insert(key, value);
+	}
+	Ok(options)
+}
+
+fn path_ends_with(path: &syn::Path, name: &str) -> bool {
+	path.segments
+		.last()
+		.is_some_and(|segment| segment.ident == name)
+}
+
+fn parse_bulk_load_source_field_strict(
+	fields: &syn::punctuated::Punctuated<syn::FieldValue, syn::token::Comma>,
+	field_name: &str,
+	context: &str,
+) -> Result<super::BulkLoadSource> {
+	let expression = strict_field_expression(fields, field_name)
+		.ok_or_else(|| strict_payload_error(context, field_name))?;
+	if let Expr::Path(path) = expression
+		&& path_ends_with(&path.path, "Stdin")
+	{
+		return Ok(super::BulkLoadSource::Stdin);
+	}
+	let Expr::Call(call) = expression else {
+		return Err(strict_payload_error(context, field_name));
+	};
+	let Expr::Path(path) = &*call.func else {
+		return Err(strict_payload_error(context, field_name));
+	};
+	if call.args.len() != 1 {
+		return Err(strict_payload_error(context, field_name));
+	}
+	let value = extract_string_expr(&call.args[0])
+		.ok_or_else(|| strict_payload_error(context, field_name))?;
+	if path_ends_with(&path.path, "File") {
+		Ok(super::BulkLoadSource::File(value))
+	} else if path_ends_with(&path.path, "Program") {
+		Ok(super::BulkLoadSource::Program(value))
+	} else {
+		Err(strict_payload_error(context, field_name))
+	}
+}
+
+fn parse_bulk_load_format_field_strict(
+	fields: &syn::punctuated::Punctuated<syn::FieldValue, syn::token::Comma>,
+	field_name: &str,
+	context: &str,
+) -> Result<super::BulkLoadFormat> {
+	let expression = strict_field_expression(fields, field_name)
+		.ok_or_else(|| strict_payload_error(context, field_name))?;
+	let Expr::Path(path) = expression else {
+		return Err(strict_payload_error(context, field_name));
+	};
+	if path_ends_with(&path.path, "Text") {
+		Ok(super::BulkLoadFormat::Text)
+	} else if path_ends_with(&path.path, "Csv") {
+		Ok(super::BulkLoadFormat::Csv)
+	} else if path_ends_with(&path.path, "Binary") {
+		Ok(super::BulkLoadFormat::Binary)
+	} else {
+		Err(strict_payload_error(context, field_name))
+	}
+}
+
+fn parse_optional_char_strict(expr: &Expr) -> Option<Option<char>> {
+	if is_none_expression(expr) {
+		return Some(None);
+	}
+	let Expr::Call(call) = expr else {
+		return None;
+	};
+	let Expr::Path(path) = &*call.func else {
+		return None;
+	};
+	if !path.path.is_ident("Some") || call.args.len() != 1 {
+		return None;
+	}
+	let Expr::Lit(syn::ExprLit {
+		lit: syn::Lit::Char(value),
+		..
+	}) = &call.args[0]
+	else {
+		return None;
+	};
+	Some(Some(value.value()))
+}
+
+fn parse_optional_char_field_strict(
+	fields: &syn::punctuated::Punctuated<syn::FieldValue, syn::token::Comma>,
+	field_name: &str,
+	context: &str,
+) -> Result<Option<char>> {
+	let expression = strict_field_expression(fields, field_name)
+		.ok_or_else(|| strict_payload_error(context, field_name))?;
+	parse_optional_char_strict(expression).ok_or_else(|| strict_payload_error(context, field_name))
+}
+
+fn parse_bulk_load_options_field_strict(
+	fields: &syn::punctuated::Punctuated<syn::FieldValue, syn::token::Comma>,
+	field_name: &str,
+	context: &str,
+) -> Result<super::BulkLoadOptions> {
+	let expression = strict_field_expression(fields, field_name)
+		.ok_or_else(|| strict_payload_error(context, field_name))?;
+	let Expr::Struct(options) = expression else {
+		return Err(strict_payload_error(context, field_name));
+	};
+	if !path_ends_with(&options.path, "BulkLoadOptions") {
+		return Err(strict_payload_error(context, field_name));
+	}
+	validate_exact_named_fields(
+		&options.fields,
+		&[
+			"delimiter",
+			"null_string",
+			"header",
+			"columns",
+			"local",
+			"quote",
+			"escape",
+			"line_terminator",
+			"encoding",
+		],
+		context,
+	)?;
+	Ok(super::BulkLoadOptions {
+		delimiter: parse_optional_char_field_strict(&options.fields, "delimiter", context)?,
+		null_string: parse_optional_string_field_strict(&options.fields, "null_string", context)?,
+		header: parse_bool_field_strict(&options.fields, "header", context)?,
+		columns: parse_optional_string_vector_field_strict(&options.fields, "columns", context)?,
+		local: parse_bool_field_strict(&options.fields, "local", context)?,
+		quote: parse_optional_char_field_strict(&options.fields, "quote", context)?,
+		escape: parse_optional_char_field_strict(&options.fields, "escape", context)?,
+		line_terminator: parse_optional_string_field_strict(
+			&options.fields,
+			"line_terminator",
+			context,
+		)?,
+		encoding: parse_optional_string_field_strict(&options.fields, "encoding", context)?,
+	})
 }
 
 fn parse_optional_string_vector_field_strict(

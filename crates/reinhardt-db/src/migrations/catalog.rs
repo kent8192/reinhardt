@@ -163,6 +163,21 @@ impl MigrationCatalog {
 				.unwrap_or_default();
 			dependencies.sort_by(Self::compare_keys);
 			for dependency in dependencies {
+				let dependency = if dependency.name == "__first__" {
+					migrations
+						.keys()
+						.filter(|candidate| candidate.app_label == dependency.app_label)
+						.min_by(|left, right| Self::compare_keys(left, right))
+						.cloned()
+						.ok_or_else(|| {
+							MigrationError::DependencyError(format!(
+								"Missing first migration for app {} required by {}",
+								dependency.app_label, key
+							))
+						})?
+				} else {
+					dependency
+				};
 				let dependency = replacement_owners
 					.get(&dependency)
 					.cloned()
@@ -280,12 +295,34 @@ impl MigrationCatalog {
 					.clone()
 			})
 			.collect();
-		let applied = recorder
+		let recorded = recorder
 			.get_applied_migrations_if_present()
-			.await?
-			.into_iter()
-			.map(|record| (MigrationKey::new(record.app, record.name), record.applied))
+			.await?;
+		let mut applied: HashMap<MigrationKey, _> = recorded
+			.iter()
+			.map(|record| {
+				(
+					MigrationKey::new(record.app.clone(), record.name.clone()),
+					record.applied,
+				)
+			})
 			.collect();
+		for (key, migration) in &self.migrations {
+			if !migration.replaces.is_empty()
+				&& migration.replaces.iter().all(|(app, name)| {
+					applied.contains_key(&MigrationKey::new(app, name))
+				})
+			{
+				let applied_at = migration
+					.replaces
+					.iter()
+					.filter_map(|(app, name)| applied.get(&MigrationKey::new(app, name)))
+					.min()
+					.copied()
+					.expect("complete replacement history has applied records");
+				applied.insert(key.clone(), applied_at);
+			}
+		}
 
 		Ok(MigrationSnapshot { ordered, applied })
 	}

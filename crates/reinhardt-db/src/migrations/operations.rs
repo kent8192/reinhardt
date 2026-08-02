@@ -1742,6 +1742,8 @@ impl Operation {
 				columns,
 				constraints,
 				without_rowid,
+				interleave_in_parent,
+				partition,
 				..
 			} => {
 				let mut model = ModelState::new(app_label, name.clone());
@@ -1757,6 +1759,9 @@ impl Operation {
 					model
 						.options
 						.insert("without_rowid".to_string(), "true".to_string());
+				}
+				if interleave_in_parent.is_some() || partition.is_some() {
+					state.has_opaque_schema_operations = true;
 				}
 				state.add_model(model);
 			}
@@ -1943,8 +1948,10 @@ impl Operation {
 			| Operation::RestoreConstraintOnRollback { .. } => {
 				state.has_opaque_schema_operations = true;
 			}
+			Operation::RunSQL { .. } => {
+				state.has_opaque_schema_operations = true;
+			}
 			Operation::RestoreIndexOnRollback { .. }
-			| Operation::RunSQL { .. }
 			| Operation::RunRust { .. }
 			| Operation::AlterTableComment { .. }
 			| Operation::AlterUniqueTogether { .. }

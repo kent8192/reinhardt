@@ -212,11 +212,6 @@ impl MigrationSquasher {
 					dependencies.push(normalized);
 				}
 			}
-			for replacement in &migration.replaces {
-				if !replaces.contains(replacement) {
-					replaces.push(replacement.clone());
-				}
-			}
 			let identity = (migration.app_label.clone(), migration.name.clone());
 			if !replaces.contains(&identity) {
 				replaces.push(identity);

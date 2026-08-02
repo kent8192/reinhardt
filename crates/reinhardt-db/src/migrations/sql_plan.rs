@@ -67,7 +67,7 @@ impl MigrationSqlPlan {
 		for statement in &self.statements {
 			match statement {
 				PlannedStatement::Sql(sql) => {
-					rendered.push_str(&render_sql_statement(sql));
+					rendered.push_str(&render_sql_statement(sql, dialect));
 				}
 				PlannedStatement::Comment(comment) => {
 					rendered.push_str("-- ");
@@ -88,27 +88,39 @@ impl MigrationSqlPlan {
 	}
 }
 
-fn render_sql_statement(sql: &str) -> String {
+fn render_sql_statement(sql: &str, dialect: SqlDialect) -> String {
 	let sql = sql.trim().trim_end_matches(';').trim_end();
-	if let Some(comment_start) = trailing_line_comment_start(sql) {
+	if let Some(comment_start) = trailing_line_comment_start(sql, dialect) {
 		let (statement, comment) = sql.split_at(comment_start);
 		return format!("{}; {}\n", statement.trim_end(), comment.trim_start());
 	}
 	format!("{sql};\n")
 }
 
-fn trailing_line_comment_start(sql: &str) -> Option<usize> {
+fn trailing_line_comment_start(sql: &str, dialect: SqlDialect) -> Option<usize> {
 	let line_start = sql.rfind('\n').map_or(0, |index| index + 1);
 	let line = &sql[line_start..];
-	let comment = [line.find("--"), line.find('#')]
-		.into_iter()
-		.flatten()
-		.min()?;
-	let before_comment = &line[..comment];
-	if before_comment.contains('"') || before_comment.matches('\'').count() % 2 != 0 {
-		return None;
+	let mut quote = None;
+	let mut chars = line.char_indices().peekable();
+	while let Some((index, character)) = chars.next() {
+		if let Some(delimiter) = quote {
+			if character == delimiter {
+				if chars.peek().is_some_and(|(_, next)| *next == delimiter) {
+					chars.next();
+				} else {
+					quote = None;
+				}
+			}
+			continue;
+		}
+		match character {
+			'\'' | '"' | '`' => quote = Some(character),
+			'-' if chars.peek().is_some_and(|(_, next)| *next == '-') => return Some(line_start + index),
+			'#' if matches!(dialect, SqlDialect::Mysql) => return Some(line_start + index),
+			_ => {}
+		}
 	}
-	Some(line_start + comment)
+	None
 }
 
 fn migration_sql_dialect(connection: &DatabaseConnection) -> SqlDialect {
@@ -134,6 +146,7 @@ pub(crate) fn split_sql_statements(sql: &str) -> Vec<String> {
 		Normal,
 		SingleQuote,
 		DoubleQuote,
+		BacktickQuote,
 		LineComment,
 		BlockComment,
 		DollarQuote(String),
@@ -150,6 +163,9 @@ pub(crate) fn split_sql_statements(sql: &str) -> Vec<String> {
 				} else if ch == '"' {
 					current.push(ch);
 					state = State::DoubleQuote;
+				} else if ch == '`' {
+					current.push(ch);
+					state = State::BacktickQuote;
 				} else if ch == '-' && chars.peek() == Some(&'-') {
 					current.push(ch);
 					current.push(chars.next().expect("peeked SQL comment marker"));
@@ -202,6 +218,16 @@ pub(crate) fn split_sql_statements(sql: &str) -> Vec<String> {
 					state = State::Normal;
 				} else if ch == '\\' && chars.peek().is_some() {
 					current.push(chars.next().expect("peeked escaped character"));
+				}
+			}
+			State::BacktickQuote => {
+				current.push(ch);
+				if ch == '`' {
+					if chars.peek() == Some(&'`') {
+						current.push(chars.next().expect("peeked escaped backtick"));
+					} else {
+						state = State::Normal;
+					}
 				}
 			}
 			State::LineComment => {

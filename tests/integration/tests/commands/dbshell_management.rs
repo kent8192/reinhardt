@@ -150,7 +150,7 @@ fn assert_child_success(output: &Output, case: &str) {
 	);
 }
 
-#[test]
+#[rstest::rstest]
 fn dbshell_management_records_exact_backend_arguments_and_credentials() {
 	struct BackendCase {
 		name: &'static str,
@@ -193,7 +193,7 @@ fn dbshell_management_records_exact_backend_arguments_and_credentials() {
 	}
 }
 
-#[test]
+#[rstest::rstest]
 fn dbshell_management_propagates_nonzero_status_without_credentials() {
 	let clients = FakeClients::new(&["psql"]);
 	let record = clients.path.join("nonzero.record");
@@ -219,7 +219,7 @@ fn dbshell_management_propagates_nonzero_status_without_credentials() {
 	assert!(!diagnostics.contains(database_url));
 }
 
-#[test]
+#[rstest::rstest]
 fn dbshell_management_reports_missing_native_client_without_credentials() {
 	let clients = FakeClients::empty();
 	let record = clients.path.join("missing.record");
@@ -247,7 +247,7 @@ fn dbshell_management_reports_missing_native_client_without_credentials() {
 	assert!(!record.exists());
 }
 
-#[test]
+#[rstest::rstest]
 fn dbshell_management_child() {
 	let Some(case) = std::env::var_os(CHILD_CASE_ENV) else {
 		return;

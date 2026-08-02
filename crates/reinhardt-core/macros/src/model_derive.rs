@@ -2064,6 +2064,14 @@ fn map_explicit_field_type(
 	field_type_str: &str,
 	migrations_crate: &proc_macro2::TokenStream,
 ) -> Result<TokenStream> {
+	let normalized = field_type_str.trim().to_ascii_lowercase();
+	if let Some(length) = normalized
+		.strip_prefix("char(")
+		.and_then(|value| value.strip_suffix(')'))
+		.and_then(|value| value.parse::<u32>().ok())
+	{
+		return Ok(quote! { #migrations_crate::FieldType::Char(#length) });
+	}
 	let field_type = match field_type_str.to_lowercase().as_str() {
 		"jsonb" => quote! { #migrations_crate::FieldType::JsonBinary },
 		"json" => quote! { #migrations_crate::FieldType::Json },
@@ -10037,4 +10045,17 @@ mod tests {
 		assert!(output.contains("bound"));
 		assert!(output.contains("__reinhardt_validate_defaulted_fixture_field"));
 	}
+}
+#[cfg(any(feature = "db-postgres", feature = "db-mysql", feature = "db-sqlite"))]
+#[rstest::rstest]
+fn explicit_char_field_type_preserves_length() {
+	let migrations_crate = quote! { reinhardt_db::migrations };
+
+	let field_type = map_explicit_field_type("char(2)", &migrations_crate)
+		.expect("CHAR field type should parse");
+
+	assert_eq!(
+		field_type.to_string(),
+		"reinhardt_db :: migrations :: FieldType :: Char (2)"
+	);
 }

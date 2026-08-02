@@ -2144,6 +2144,13 @@ impl SQLiteIntrospector {
 			.as_ref()
 			.map(|sql| sql.to_uppercase().contains("AUTOINCREMENT"))
 			.unwrap_or(false);
+		let has_descending_primary_key = create_sql.as_ref().is_some_and(|sql| {
+			let upper = sql.to_uppercase();
+			let tokens: Vec<_> = upper.split_whitespace().collect();
+			tokens.windows(3).any(|tokens| {
+				tokens[0] == "PRIMARY" && tokens[1] == "KEY" && tokens[2].starts_with("DESC")
+			})
+		});
 
 		let mut columns = HashMap::new();
 
@@ -2164,7 +2171,8 @@ impl SQLiteIntrospector {
 			let is_rowid_alias = primary_key.len() == 1
 				&& row.pk == 1
 				&& row.r#type.trim().eq_ignore_ascii_case("INTEGER")
-				&& !without_rowid;
+				&& !without_rowid
+				&& !has_descending_primary_key;
 			let is_auto = is_pk && (has_autoincrement || is_rowid_alias);
 
 			// Primary key columns are implicitly NOT NULL in SQLite
@@ -2708,7 +2716,7 @@ mod tests {
 	use crate::migrations::FieldType;
 	use std::collections::HashSet;
 
-	#[test]
+	#[rstest::rstest]
 	fn partition_validation_rejects_mysql_without_connecting() {
 		let error = validate_partition_option(DatabaseType::Mysql, true)
 			.expect_err("MySQL must reject PostgreSQL-only partitions before database I/O");
@@ -2718,7 +2726,7 @@ mod tests {
 		);
 	}
 
-	#[test]
+	#[rstest::rstest]
 	#[cfg(feature = "mysql")]
 	fn mysql_catalog_integer_conversion_rejects_values_outside_u32() {
 		let negative = mysql_catalog_u32(Some(-1), 255, "character maximum length")
@@ -2736,7 +2744,7 @@ mod tests {
 		);
 	}
 
-	#[test]
+	#[rstest::rstest]
 	#[cfg(feature = "mysql")]
 	fn mysql_unsigned_integer_columns_map_to_unsigned_rust_types() {
 		assert_eq!(
@@ -2751,7 +2759,7 @@ mod tests {
 		);
 	}
 
-	#[test]
+	#[rstest::rstest]
 	fn sqlite_type_affinity_handles_legal_noncanonical_declarations() {
 		assert_eq!(
 			SQLiteIntrospector::parse_sqlite_type("UNSIGNED BIG INT"),
@@ -2767,7 +2775,7 @@ mod tests {
 		);
 	}
 
-	#[test]
+	#[rstest::rstest]
 	#[cfg(feature = "postgres")]
 	fn postgres_partition_filter_excludes_only_partition_children() {
 		let mut tables = HashMap::new();
@@ -2832,7 +2840,10 @@ mod tests {
 		);
 	}
 
+	use rstest::rstest;
+
 	#[cfg(feature = "sqlite")]
+	#[rstest]
 	#[tokio::test]
 	async fn test_sqlite_introspector_read_schema() {
 		use sqlx::SqlitePool;
@@ -2882,6 +2893,7 @@ mod tests {
 	}
 
 	#[cfg(feature = "sqlite")]
+	#[rstest::rstest]
 	#[tokio::test]
 	async fn sqlite_integer_primary_key_without_autoincrement_is_generated() {
 		use sqlx::SqlitePool;
@@ -2899,6 +2911,26 @@ mod tests {
 			.await
 			.expect("schema should be introspected");
 		assert!(schema.tables["users"].columns["id"].auto_increment);
+	}
+
+	#[cfg(feature = "sqlite")]
+	#[tokio::test]
+	async fn sqlite_descending_integer_primary_key_is_not_generated() {
+		use sqlx::SqlitePool;
+
+		let pool = SqlitePool::connect("sqlite::memory:")
+			.await
+			.expect("in-memory SQLite pool should connect");
+		sqlx::query("CREATE TABLE users (id INTEGER PRIMARY KEY DESC, name TEXT NOT NULL)")
+			.execute(&pool)
+			.await
+			.expect("test table should be created");
+
+		let schema = SQLiteIntrospector::new(pool)
+			.read_schema()
+			.await
+			.expect("schema should be introspected");
+		assert!(!schema.tables["users"].columns["id"].auto_increment);
 	}
 
 	#[cfg(feature = "sqlite")]

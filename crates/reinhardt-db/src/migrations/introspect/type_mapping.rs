@@ -412,7 +412,7 @@ mod tests {
 		assert!(error.to_string().contains("BIGINT UNSIGNED"));
 	}
 
-	#[test]
+	#[rstest::rstest]
 	fn maps_mysql_year_to_a_supported_integer_type_and_rejects_ranges() {
 		let mapper = TypeMapper::default();
 		assert_eq!(
@@ -450,7 +450,7 @@ mod tests {
 		assert_eq!(result.unwrap(), "String");
 	}
 
-	#[test]
+	#[rstest::rstest]
 	fn maps_decimal_within_rust_decimal_limits() {
 		let mapper = TypeMapper::default();
 

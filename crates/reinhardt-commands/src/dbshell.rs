@@ -279,15 +279,46 @@ fn build_postgres_spec(database_url: &str) -> CommandResult<DbClientSpec> {
 	)?;
 	append_database_name(&mut arguments, &parsed, "PostgreSQL")?;
 
-	let secret_environment = decoded_password(&parsed, "PostgreSQL")?
+	let mut secret_environment = decoded_password(&parsed, "PostgreSQL")?
 		.map(|password| vec![(OsString::from("PGPASSWORD"), password)])
 		.unwrap_or_default();
+	append_postgres_query_environment(&parsed, &mut secret_environment)?;
 
 	Ok(DbClientSpec {
 		executable: OsString::from("psql"),
 		arguments,
 		secret_environment,
 	})
+}
+
+fn append_postgres_query_environment(
+	parsed: &Url,
+	environment: &mut Vec<(OsString, OsString)>,
+) -> CommandResult<()> {
+	for (key, value) in parsed.query_pairs() {
+		let name = match key.as_ref() {
+			"application_name" => "PGAPPNAME",
+			"channel_binding" => "PGCHANNELBINDING",
+			"connect_timeout" => "PGCONNECT_TIMEOUT",
+			"gssencmode" => "PGGSSENCMODE",
+			"options" => "PGOPTIONS",
+			"sslcert" => "PGSSLCERT",
+			"sslcrl" => "PGSSLCRL",
+			"sslcrldir" => "PGSSLCRLDIR",
+			"sslkey" => "PGSSLKEY",
+			"sslmode" => "PGSSLMODE",
+			"sslpassword" => "PGSSLPASSWORD",
+			"sslrootcert" => "PGSSLROOTCERT",
+			"target_session_attrs" => "PGTARGETSESSIONATTRS",
+			unsupported => {
+				return Err(CommandError::InvalidArguments(format!(
+					"The PostgreSQL database URL contains unsupported libpq parameter `{unsupported}`."
+				)));
+			}
+		};
+		environment.push((OsString::from(name), OsString::from(value.as_ref())));
+	}
+	Ok(())
 }
 
 fn build_mysql_spec(database_url: &str) -> CommandResult<DbClientSpec> {
@@ -456,7 +487,7 @@ mod tests {
 		}
 	}
 
-	#[test]
+	#[rstest::rstest]
 	fn command_adapter_accepts_zero_exit_status() {
 		let database =
 			resolved_database("postgresql://operator:do-not-print-this@db.example:5432/private");
@@ -470,7 +501,7 @@ mod tests {
 		assert!(result.is_ok());
 	}
 
-	#[test]
+	#[rstest::rstest]
 	fn command_adapter_reports_nonzero_status_without_secrets() {
 		let password = "do-not-print-this";
 		let raw_url = format!("postgresql://operator:{password}@db.example:5432/private");
@@ -492,7 +523,7 @@ mod tests {
 		assert!(!diagnostic.contains(&raw_url));
 	}
 
-	#[test]
+	#[rstest::rstest]
 	fn command_adapter_reports_signal_termination_distinctly_without_secrets() {
 		let password = "do-not-print-this";
 		let raw_url = format!("mysql://operator:{password}@db.example:3306/private");
@@ -575,7 +606,7 @@ mod tests {
 		assert!(output.status.success(), "{case}: {output:?}");
 	}
 
-	#[test]
+	#[rstest::rstest]
 	fn windows_executable_extensions_reject_shell_scripts_case_insensitively() {
 		let extensions =
 			super::windows_executable_extensions(Some(OsStr::new(".BAT;.eXe;.CMD;.COM;.EXE")));
@@ -591,7 +622,7 @@ mod tests {
 	}
 
 	#[cfg(windows)]
-	#[test]
+	#[rstest::rstest]
 	fn executable_resolution_uses_windows_pathext_entries() {
 		let directory = TempDir::new().expect("create fake client directory");
 		let batch_file = directory.path().join("psql.BAT");
@@ -608,7 +639,7 @@ mod tests {
 		);
 	}
 
-	#[test]
+	#[rstest::rstest]
 	fn portable_runner_isolated_case_child() {
 		let Some(case) = std::env::var_os("DBSHELL_RUNNER_CASE") else {
 			return;
@@ -733,7 +764,7 @@ mod tests {
 	}
 
 	#[cfg(unix)]
-	#[test]
+	#[rstest::rstest]
 	fn portable_runner_skips_non_executable_files_in_earlier_path_entries() {
 		let non_executable_directory =
 			TempDir::new().expect("create non-executable client directory");
@@ -752,7 +783,7 @@ mod tests {
 	}
 
 	#[cfg(unix)]
-	#[test]
+	#[rstest::rstest]
 	fn portable_runner_skips_owner_inaccessible_execute_bits() {
 		use std::os::unix::fs::PermissionsExt;
 
@@ -774,7 +805,7 @@ mod tests {
 	}
 
 	#[cfg(unix)]
-	#[test]
+	#[rstest::rstest]
 	fn portable_runner_falls_back_after_a_retryable_spawn_error() {
 		use std::os::unix::fs::PermissionsExt;
 
@@ -793,7 +824,7 @@ mod tests {
 	}
 
 	#[cfg(unix)]
-	#[test]
+	#[rstest::rstest]
 	fn portable_runner_reports_only_owner_inaccessible_client_as_missing() {
 		use std::os::unix::fs::PermissionsExt;
 
@@ -807,7 +838,7 @@ mod tests {
 	}
 
 	#[cfg(unix)]
-	#[test]
+	#[rstest::rstest]
 	fn portable_runner_follows_symlinks_to_executable_files() {
 		use std::os::unix::fs::symlink;
 
@@ -824,7 +855,7 @@ mod tests {
 	}
 
 	#[cfg(unix)]
-	#[test]
+	#[rstest::rstest]
 	fn portable_runner_reports_non_executable_files_as_missing() {
 		let directory = TempDir::new().expect("create fake client directory");
 		fs::write(directory.path().join("sqlite3"), "#!/bin/sh\nexit 0\n")
@@ -834,7 +865,7 @@ mod tests {
 	}
 
 	#[cfg(unix)]
-	#[test]
+	#[rstest::rstest]
 	fn portable_runner_path_semantics_are_isolated_in_child_processes() {
 		let directory = TempDir::new().expect("create fake client directory");
 		write_fake_client(directory.path(), "sqlite3", "exit 0");
@@ -873,7 +904,7 @@ mod tests {
 	}
 
 	#[cfg(unix)]
-	#[test]
+	#[rstest::rstest]
 	fn portable_runner_path_semantics_child() {
 		let Some(case) = std::env::var_os("DBSHELL_PATH_CASE") else {
 			return;
@@ -898,7 +929,7 @@ mod tests {
 	}
 
 	#[cfg(unix)]
-	#[test]
+	#[rstest::rstest]
 	fn portable_runner_resolves_each_client_and_forwards_exact_arguments_and_environment() {
 		let directory = TempDir::new().expect("create fake client directory");
 		let empty_directory = TempDir::new().expect("create empty PATH directory");
@@ -925,7 +956,7 @@ mod tests {
 	}
 
 	#[cfg(unix)]
-	#[test]
+	#[rstest::rstest]
 	fn portable_runner_scopes_secret_environment_to_the_child() {
 		let directory = TempDir::new().expect("create fake client directory");
 		let record = directory.path().join("record");
@@ -945,7 +976,7 @@ mod tests {
 		);
 	}
 
-	#[test]
+	#[rstest::rstest]
 	fn portable_runner_reports_a_missing_executable_without_leaking_arguments() {
 		let directory = TempDir::new().expect("create empty client directory");
 
@@ -953,7 +984,7 @@ mod tests {
 	}
 
 	#[cfg(unix)]
-	#[test]
+	#[rstest::rstest]
 	fn portable_runner_preserves_nonzero_exit_status() {
 		let directory = TempDir::new().expect("create fake client directory");
 		write_fake_client(directory.path(), "sqlite3", "exit 23");
@@ -962,7 +993,7 @@ mod tests {
 	}
 
 	#[cfg(unix)]
-	#[test]
+	#[rstest::rstest]
 	fn portable_runner_distinguishes_signal_termination_from_an_exit_code() {
 		let directory = TempDir::new().expect("create fake client directory");
 		write_fake_client(directory.path(), "sqlite3", "kill -TERM $$");
@@ -970,7 +1001,7 @@ mod tests {
 		run_isolated_runner_case("signal", directory.path().as_os_str(), &[]);
 	}
 
-	#[test]
+	#[rstest::rstest]
 	fn portable_runner_inherits_standard_streams() {
 		let directory = TempDir::new().expect("create fake client directory");
 		copy_test_executable_as_client(directory.path(), "sqlite3");
@@ -1013,7 +1044,7 @@ mod tests {
 		);
 	}
 
-	#[test]
+	#[rstest::rstest]
 	fn portable_runner_inherits_standard_streams_child() {
 		if std::env::var_os("DBSHELL_STREAM_CHILD").is_none() {
 			return;
@@ -1039,7 +1070,7 @@ mod tests {
 		assert_eq!(outcome, DbShellOutcome::Exited(0));
 	}
 
-	#[test]
+	#[rstest::rstest]
 	fn portable_runner_fake_client_child() {
 		if std::env::var_os("DBSHELL_FAKE_CLIENT").is_none() {
 			return;
@@ -1057,7 +1088,7 @@ mod tests {
 		eprint!("fake-stderr:{input}");
 	}
 
-	#[test]
+	#[rstest::rstest]
 	fn postgres_decodes_connection_fields_and_appends_passthrough_arguments() {
 		let password = "p@ss/word";
 		let database = resolved_database(
@@ -1087,11 +1118,28 @@ mod tests {
 		);
 		assert_eq!(
 			spec.secret_environment,
-			vec![(OsString::from("PGPASSWORD"), OsString::from(password))]
+			vec![
+				(OsString::from("PGPASSWORD"), OsString::from(password)),
+				(OsString::from("PGSSLMODE"), OsString::from("require")),
+			]
 		);
 	}
 
-	#[test]
+	#[rstest::rstest]
+	fn postgres_rejects_unsupported_connection_parameters() {
+		let database = resolved_database("postgresql://operator@db.example/reporting?unknown=yes");
+
+		let error = build_client_spec(&database, &[])
+			.err()
+			.expect("unsupported parameter should fail");
+
+		assert_eq!(
+			error.to_string(),
+			"Invalid arguments: The PostgreSQL database URL contains unsupported libpq parameter `unknown`."
+		);
+	}
+
+	#[rstest::rstest]
 	fn mysql_decodes_connection_fields_and_ignores_url_query_parameters() {
 		let password = "s ecret?";
 		let database = resolved_database(
@@ -1121,7 +1169,7 @@ mod tests {
 		);
 	}
 
-	#[test]
+	#[rstest::rstest]
 	fn sqlite_preserves_relative_and_absolute_file_paths_without_query_parameters() {
 		let relative = resolved_database("sqlite:data/report%20cache.sqlite3");
 		let three_slash_absolute = resolved_database("sqlite:///tmp/report%20cache.sqlite3");
@@ -1157,7 +1205,7 @@ mod tests {
 		assert!(absolute_spec.secret_environment.is_empty());
 	}
 
-	#[test]
+	#[rstest::rstest]
 	fn sqlite_preserves_named_memory_mode_and_cache_as_a_uri_filename() {
 		let database = resolved_database("sqlite:file:shared?mode=memory&cache=shared");
 
@@ -1171,7 +1219,7 @@ mod tests {
 		assert!(spec.secret_environment.is_empty());
 	}
 
-	#[test]
+	#[rstest::rstest]
 	fn sqlite_preserves_absolute_read_only_mode_as_a_uri_filename() {
 		let database =
 			resolved_database("sqlite:////tmp/report%20cache.sqlite3?mode=ro&immutable=1");
@@ -1186,7 +1234,7 @@ mod tests {
 		);
 	}
 
-	#[test]
+	#[rstest::rstest]
 	fn sqlite_uri_preserves_query_order_and_percent_encoding() {
 		let database = resolved_database(
 			"sqlite:data/report%20cache.sqlite3?cache=private&vfs=unix%2Ddotfile&mode=rw",
@@ -1202,7 +1250,7 @@ mod tests {
 		);
 	}
 
-	#[test]
+	#[rstest::rstest]
 	fn sqlite_uri_is_redacted_from_debug_output() {
 		let raw_url = "sqlite:file:shared?mode=memory&cache=shared&token=do-not-print-this";
 		let database = resolved_database(raw_url);
@@ -1218,7 +1266,7 @@ mod tests {
 		);
 	}
 
-	#[test]
+	#[rstest::rstest]
 	fn sqlite_appends_passthrough_arguments_without_reinterpretation() {
 		let database = resolved_database("sqlite:db.sqlite3");
 		let passthrough = vec![
@@ -1240,7 +1288,7 @@ mod tests {
 		);
 	}
 
-	#[test]
+	#[rstest::rstest]
 	fn debug_output_redacts_password_and_connection_url() {
 		let password = "do-not-print-this";
 		let raw_url =
@@ -1258,7 +1306,7 @@ mod tests {
 		);
 	}
 
-	#[test]
+	#[rstest::rstest]
 	fn malformed_url_error_omits_password_and_connection_url() {
 		let password = "invalid-secret";
 		let raw_url = format!("postgresql://operator:{password}@[not-an-ipv6/private");

@@ -224,7 +224,7 @@ mod tests {
 		}
 	}
 
-	#[test]
+	#[rstest::rstest]
 	fn resolve_database_uses_default_alias_from_settings() {
 		let settings = settings();
 		let selector = DatabaseSelector {
@@ -241,7 +241,7 @@ mod tests {
 		assert!(resolved.url().ends_with("/primary"));
 	}
 
-	#[test]
+	#[rstest::rstest]
 	fn resolve_database_uses_explicit_alias_from_settings() {
 		let settings = settings();
 		let selector = DatabaseSelector {
@@ -258,7 +258,7 @@ mod tests {
 		assert!(resolved.url().ends_with("/replica"));
 	}
 
-	#[test]
+	#[rstest::rstest]
 	fn resolve_database_allows_configured_colon_alias() {
 		let settings = settings();
 		let selector = DatabaseSelector {
@@ -276,7 +276,7 @@ mod tests {
 		assert!(resolved.url().ends_with("reporting.db"));
 	}
 
-	#[test]
+	#[rstest::rstest]
 	fn resolve_database_allows_configured_sqlite_colon_alias() {
 		let settings = settings();
 		let selector = DatabaseSelector {
@@ -294,7 +294,7 @@ mod tests {
 		assert!(resolved.url().ends_with("sqlite-reporting.db"));
 	}
 
-	#[test]
+	#[rstest::rstest]
 	fn resolve_database_prefers_url_override_over_selected_alias() {
 		let settings = settings();
 		let selector = DatabaseSelector {
@@ -309,7 +309,7 @@ mod tests {
 		assert!(resolved.url().starts_with("sqlite:"));
 	}
 
-	#[test]
+	#[rstest::rstest]
 	fn resolve_database_rejects_unknown_alias_without_disclosing_urls() {
 		let settings = settings();
 		let alias = "archive".to_string();
@@ -327,7 +327,7 @@ mod tests {
 		assert!(!diagnostic.contains("replica-secret"));
 	}
 
-	#[test]
+	#[rstest::rstest]
 	fn url_like_alias_resolves_override_and_debug_redacts_it() {
 		let alias = "postgresql://admin:alias-secret@db.example/app".to_string();
 		let selector = DatabaseSelector {
@@ -348,7 +348,7 @@ mod tests {
 		assert!(resolved_debug.contains("[REDACTED]"));
 	}
 
-	#[test]
+	#[rstest::rstest]
 	fn unsupported_case_variant_url_alias_is_redacted_from_debug_and_errors() {
 		let alias = "ORACLE://user:case-secret@db.example/app".to_string();
 		let override_selector = DatabaseSelector {
@@ -381,7 +381,7 @@ mod tests {
 		assert!(unknown_diagnostic.contains("alias"));
 	}
 
-	#[test]
+	#[rstest::rstest]
 	fn resolve_database_requires_settings_without_url_override() {
 		let selector = DatabaseSelector {
 			alias: "default".to_string(),
@@ -393,7 +393,7 @@ mod tests {
 		assert!(error.to_string().contains("settings"));
 	}
 
-	#[test]
+	#[rstest::rstest]
 	fn resolve_database_rejects_unsupported_url_scheme_without_disclosing_url() {
 		let selector = DatabaseSelector {
 			alias: "default".to_string(),
@@ -408,7 +408,7 @@ mod tests {
 		assert!(!diagnostic.contains("db.example"));
 	}
 
-	#[test]
+	#[rstest::rstest]
 	fn resolved_database_debug_redacts_url() {
 		let settings = settings();
 		let selector = DatabaseSelector {

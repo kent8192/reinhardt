@@ -65,6 +65,7 @@ async fn sqlite_connection() -> DatabaseConnection {
 	connection
 }
 
+#[rstest::rstest]
 #[tokio::test]
 async fn inspect_database_filters_exact_requested_tables_and_rejects_unknown_names() {
 	let connection = sqlite_connection().await;
@@ -99,6 +100,7 @@ async fn inspect_database_filters_exact_requested_tables_and_rejects_unknown_nam
 	);
 }
 
+#[rstest::rstest]
 #[tokio::test]
 async fn inspect_database_includes_views_only_when_requested() {
 	let connection = sqlite_connection().await;
@@ -119,6 +121,7 @@ async fn inspect_database_includes_views_only_when_requested() {
 	assert!(with_views.tables.contains_key("alpha_view"));
 }
 
+#[rstest::rstest]
 #[tokio::test]
 async fn inspect_database_rejects_partitions_for_non_postgres_backends() {
 	let connection = sqlite_connection().await;
@@ -137,7 +140,7 @@ async fn inspect_database_rejects_partitions_for_non_postgres_backends() {
 	);
 }
 
-#[test]
+#[rstest::rstest]
 fn render_models_module_is_stable_and_parses_as_one_rust_module() {
 	let mut tables = HashMap::new();
 	tables.insert("zebra".to_string(), table("zebra", &["zeta", "alpha"]));
@@ -164,7 +167,7 @@ fn render_models_module_is_stable_and_parses_as_one_rust_module() {
 	);
 }
 
-#[test]
+#[rstest::rstest]
 fn render_models_module_never_emits_database_credentials() {
 	let mut tables = HashMap::new();
 	tables.insert("accounts".to_string(), table("accounts", &["id"]));
@@ -181,7 +184,7 @@ fn render_models_module_never_emits_database_credentials() {
 	assert!(!source.contains("localhost/accounts"));
 }
 
-#[test]
+#[rstest::rstest]
 fn canonical_stdout_and_directory_output_are_fully_repeatable() {
 	let mut first_tables = HashMap::new();
 	first_tables.insert("zebra".to_string(), table("zebra", &["zeta", "alpha"]));

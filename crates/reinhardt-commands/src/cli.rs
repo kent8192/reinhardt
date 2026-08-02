@@ -2139,7 +2139,7 @@ mod tests {
 	static REGISTERED_FIXTURE_NAME_COMMAND_EXECUTED: AtomicBool = AtomicBool::new(false);
 
 	#[cfg(feature = "reinhardt-db")]
-	#[test]
+	#[rstest::rstest]
 	fn dbshell_dispatch_resolves_url_override_without_settings() {
 		let runner = RecordingDbClientRunner {
 			called: Cell::new(false),
@@ -2163,7 +2163,7 @@ mod tests {
 	}
 
 	#[cfg(feature = "reinhardt-db")]
-	#[test]
+	#[rstest::rstest]
 	fn dbshell_does_not_require_orm_initialization() {
 		let command = Commands::Dbshell {
 			database: "default".to_string(),
@@ -2199,7 +2199,7 @@ mod tests {
 	}
 
 	#[cfg(all(feature = "reinhardt-db", unix))]
-	#[test]
+	#[rstest::rstest]
 	fn driver_parser_preserves_non_utf8_dbshell_passthrough() {
 		use std::os::unix::ffi::OsStringExt;
 
@@ -2226,7 +2226,7 @@ mod tests {
 	}
 
 	#[cfg(feature = "reinhardt-db")]
-	#[test]
+	#[rstest::rstest]
 	fn driver_parser_does_not_normalize_dbshell_passthrough_verbosity() {
 		let raw_args = vec![
 			OsString::from("manage"),
@@ -2255,7 +2255,7 @@ mod tests {
 	}
 
 	#[cfg(all(feature = "reinhardt-db", unix))]
-	#[test]
+	#[rstest::rstest]
 	fn custom_command_non_utf8_error_omits_raw_argument_bytes() {
 		use std::os::unix::ffi::OsStringExt;
 

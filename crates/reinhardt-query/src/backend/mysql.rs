@@ -4,7 +4,7 @@
 
 use super::{QueryBuilder, SqlWriter};
 use crate::{
-	expr::{Condition, SimpleExpr},
+	expr::{Condition, SimpleExpr, TemporalTimeZone, TemporalTruncKind, TemporalTruncOutput},
 	query::{
 		AlterIndexStatement, AlterTableOperation, AlterTableStatement, CheckTableStatement,
 		CreateIndexStatement, CreateTableStatement, CreateTriggerStatement, CreateViewStatement,
@@ -92,11 +92,93 @@ impl MySqlQueryBuilder {
 		Self
 	}
 
+	fn write_datetime_in_zone(
+		&self,
+		writer: &mut SqlWriter,
+		expr: &SimpleExpr,
+		time_zone: Option<&TemporalTimeZone>,
+	) {
+		writer.push("CONVERT_TZ(");
+		self.write_simple_expr(writer, expr);
+		writer.push(", '+00:00', ");
+		let zone = match time_zone {
+			Some(TemporalTimeZone::Named(zone)) => zone.clone(),
+			Some(TemporalTimeZone::Utc) | None => "+00:00".to_string(),
+		};
+		writer.push_value(
+			crate::value::Value::String(Some(Box::new(zone))),
+			|_index| self.placeholder(0),
+		);
+		writer.push(")");
+	}
+
+	fn write_week_start(
+		&self,
+		writer: &mut SqlWriter,
+		expr: &SimpleExpr,
+		time_zone: Option<&TemporalTimeZone>,
+		output: TemporalTruncOutput,
+	) {
+		writer.push("STR_TO_DATE(DATE_FORMAT(");
+		if output == TemporalTruncOutput::DateTime {
+			self.write_datetime_in_zone(writer, expr, time_zone);
+		} else {
+			self.write_simple_expr(writer, expr);
+		}
+		writer.push(", '%x-%v Monday'), '%x-%v %W')");
+	}
+
+	fn write_temporal_trunc(
+		&self,
+		writer: &mut SqlWriter,
+		expr: &SimpleExpr,
+		kind: TemporalTruncKind,
+		time_zone: Option<&TemporalTimeZone>,
+		output: TemporalTruncOutput,
+	) {
+		if kind == TemporalTruncKind::Week {
+			writer.push("CAST(");
+			self.write_week_start(writer, expr, time_zone, output);
+			writer.push(match output {
+				TemporalTruncOutput::Date => " AS DATE)",
+				TemporalTruncOutput::DateTime => " AS DATETIME)",
+			});
+			return;
+		}
+
+		let format = match (kind, output) {
+			(TemporalTruncKind::Year, TemporalTruncOutput::Date) => "%Y-01-01",
+			(TemporalTruncKind::Month, TemporalTruncOutput::Date) => "%Y-%m-01",
+			(TemporalTruncKind::Day, TemporalTruncOutput::Date) => "%Y-%m-%d",
+			(TemporalTruncKind::Year, TemporalTruncOutput::DateTime) => "%Y-01-01 00:00:00",
+			(TemporalTruncKind::Month, TemporalTruncOutput::DateTime) => "%Y-%m-01 00:00:00",
+			(TemporalTruncKind::Day, TemporalTruncOutput::DateTime) => "%Y-%m-%d 00:00:00",
+			(TemporalTruncKind::Hour, TemporalTruncOutput::DateTime) => "%Y-%m-%d %H:00:00",
+			(TemporalTruncKind::Minute, TemporalTruncOutput::DateTime) => "%Y-%m-%d %H:%i:00",
+			(TemporalTruncKind::Second, TemporalTruncOutput::DateTime) => "%Y-%m-%d %H:%i:%s",
+			_ => unreachable!("invalid temporal truncation kind and output"),
+		};
+		writer.push("CAST(DATE_FORMAT(");
+		if output == TemporalTruncOutput::DateTime {
+			self.write_datetime_in_zone(writer, expr, time_zone);
+		} else {
+			self.write_simple_expr(writer, expr);
+		}
+		writer.push(", '");
+		writer.push(format);
+		writer.push("') AS ");
+		writer.push(match output {
+			TemporalTruncOutput::Date => "DATE)",
+			TemporalTruncOutput::DateTime => "DATETIME)",
+		});
+	}
+
 	/// Build a SELECT statement after rejecting PostgreSQL-only vector features.
 	pub fn build_select_checked(
 		&self,
 		stmt: &SelectStatement,
 	) -> Result<(String, Values), crate::QueryBuildError> {
+		crate::error::validate_select_lock_for_backend(stmt, "MySQL")?;
 		crate::error::validate_select_for_backend(stmt, "MySQL")?;
 		Ok(self.build_select(stmt))
 	}
@@ -234,6 +316,32 @@ impl MySqlQueryBuilder {
 
 				// Merge the values from the subquery
 				writer.append_values(&subquery_values);
+			}
+		}
+	}
+
+	/// Write a table target in a row-lock `OF` clause.
+	fn write_lock_table_target(&self, writer: &mut SqlWriter, table_ref: &TableRef) {
+		match table_ref {
+			TableRef::TableAlias(_, alias)
+			| TableRef::SchemaTableAlias(_, _, alias)
+			| TableRef::SubQuery(_, alias) => {
+				writer.push_identifier(&alias.to_string(), |s| self.escape_iden(s));
+			}
+			TableRef::Table(iden) => {
+				writer.push_identifier(&iden.to_string(), |s| self.escape_iden(s));
+			}
+			TableRef::SchemaTable(schema, table) => {
+				writer.push_identifier(&schema.to_string(), |s| self.escape_iden(s));
+				writer.push(".");
+				writer.push_identifier(&table.to_string(), |s| self.escape_iden(s));
+			}
+			TableRef::DatabaseSchemaTable(db, schema, table) => {
+				writer.push_identifier(&db.to_string(), |s| self.escape_iden(s));
+				writer.push(".");
+				writer.push_identifier(&schema.to_string(), |s| self.escape_iden(s));
+				writer.push(".");
+				writer.push_identifier(&table.to_string(), |s| self.escape_iden(s));
 			}
 		}
 	}
@@ -518,6 +626,12 @@ impl MySqlQueryBuilder {
 				writer.push_identifier(&type_name.to_string(), |s| self.escape_iden(s));
 				writer.push(")");
 			}
+			SimpleExpr::TemporalTrunc {
+				expr,
+				kind,
+				time_zone,
+				output,
+			} => self.write_temporal_trunc(writer, expr, *kind, time_zone.as_ref(), *output),
 		}
 	}
 
@@ -949,6 +1063,30 @@ impl QueryBuilder for MySqlQueryBuilder {
 
 			// Merge the values from the union query
 			writer.append_values(&union_values);
+		}
+
+		if let Some(lock) = &stmt.lock {
+			use crate::query::{LockBehavior, LockType};
+
+			writer.push_keyword(match lock.r#type {
+				LockType::Update => "FOR UPDATE",
+				LockType::NoKeyUpdate => "FOR NO KEY UPDATE",
+				LockType::Share => "FOR SHARE",
+				LockType::KeyShare => "FOR KEY SHARE",
+			});
+			if !lock.tables.is_empty() {
+				writer.push_keyword("OF");
+				writer.push_space();
+				writer.push_list(&lock.tables, ", ", |w, table| {
+					self.write_lock_table_target(w, table);
+				});
+			}
+			if let Some(behavior) = lock.behavior {
+				writer.push_keyword(match behavior {
+					LockBehavior::Nowait => "NOWAIT",
+					LockBehavior::SkipLocked => "SKIP LOCKED",
+				});
+			}
 		}
 
 		writer.finish()
@@ -1540,8 +1678,10 @@ impl QueryBuilder for MySqlQueryBuilder {
 		if let Some(select) = &stmt.select {
 			let (select_sql, select_values) = self.build_select(select);
 			writer.push_space();
-			writer.push(&select_sql);
-			writer.append_values(&select_values);
+			writer.push(&crate::query::traits::inline_params(
+				&select_sql,
+				&select_values,
+			));
 		}
 
 		writer.finish()

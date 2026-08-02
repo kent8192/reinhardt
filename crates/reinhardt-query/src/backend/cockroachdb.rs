@@ -66,6 +66,7 @@ impl CockroachDBQueryBuilder {
 		&self,
 		stmt: &SelectStatement,
 	) -> Result<(String, Values), crate::QueryBuildError> {
+		crate::error::validate_select_lock_for_backend(stmt, "CockroachDB")?;
 		crate::error::validate_select_for_backend(stmt, "CockroachDB")?;
 		Ok(self.build_select(stmt))
 	}

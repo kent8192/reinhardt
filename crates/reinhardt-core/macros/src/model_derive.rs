@@ -56,6 +56,7 @@ enum ConstraintSpec {
 struct ModelAttributesParsed {
 	app_label: Option<String>,
 	table_name: Option<String>,
+	get_latest_by: Option<Vec<String>>,
 	constraints: Option<Vec<ConstraintSpec>>,
 	unique_together: Vec<Vec<String>>, // Multiple Django-style unique_together constraints
 	/// Optional custom manager path: `manager = MyManager` (Issue #3980).
@@ -384,6 +385,7 @@ fn generated_u32_literal_is_supported(expr: &syn::Expr) -> bool {
 struct ModelConfig {
 	app_label: String,
 	table_name: String,
+	get_latest_by: Option<Vec<String>>,
 	constraints: Vec<ConstraintSpec>,
 	/// Custom manager type path from `manager = MyManager` (Issue #3980, #3984).
 	///
@@ -408,6 +410,7 @@ impl ModelConfig {
 	fn from_attrs(attrs: &[syn::Attribute], struct_name: &syn::Ident) -> Result<Self> {
 		let mut app_label = None;
 		let mut table_name = None;
+		let mut get_latest_by = None;
 		let mut constraints = Vec::new();
 		let mut manager: Option<syn::Path> = None;
 		let mut info: Option<bool> = None;
@@ -448,6 +451,9 @@ impl ModelConfig {
 			if let Some(tn) = model_attr.table_name {
 				table_name = Some(tn);
 			}
+			if let Some(fields) = model_attr.get_latest_by {
+				get_latest_by = Some(fields);
+			}
 			if let Some(m) = model_attr.manager {
 				if manager.is_some() {
 					return Err(syn::Error::new_spanned(
@@ -487,6 +493,7 @@ impl ModelConfig {
 		Ok(Self {
 			app_label,
 			table_name,
+			get_latest_by,
 			constraints,
 			manager,
 			info: info.unwrap_or(true),
@@ -503,6 +510,7 @@ impl ModelConfig {
 
 		let mut app_label = None;
 		let mut table_name = None;
+		let mut get_latest_by = None;
 		let mut constraints = None;
 		let mut unique_together = Vec::new();
 		let mut manager: Option<syn::Path> = None;
@@ -550,6 +558,12 @@ impl ModelConfig {
 			} else if ident == "table_name" {
 				let value: LitStr = input.parse()?;
 				table_name = Some(value.value());
+			} else if ident == "get_latest_by" {
+				let content;
+				parenthesized!(content in input);
+				let fields: Punctuated<LitStr, Token![,]> =
+					content.call(Punctuated::parse_terminated)?;
+				get_latest_by = Some(fields.iter().map(LitStr::value).collect());
 			} else if ident == "manager" {
 				// Custom object manager type: `manager = MyManager` (Issue #3980).
 				let path: syn::Path = input.parse()?;
@@ -602,6 +616,7 @@ impl ModelConfig {
 		Ok(ModelAttributesParsed {
 			app_label,
 			table_name,
+			get_latest_by,
 			constraints,
 			unique_together,
 			manager,
@@ -3283,6 +3298,83 @@ fn generate_model_form_support(
 	})
 }
 
+/// Resolve `get_latest_by` Rust field names to physical database columns.
+fn resolve_latest_by_fields(
+	field_names: &[String],
+	field_infos: &[FieldInfo],
+	struct_name: &syn::Ident,
+) -> Result<Vec<String>> {
+	if field_names.is_empty() {
+		return Err(syn::Error::new_spanned(
+			struct_name,
+			"get_latest_by must contain at least one field",
+		));
+	}
+
+	field_names
+		.iter()
+		.map(|field_name| {
+			let (descending, rust_field_name) = field_name
+				.strip_prefix('-')
+				.map_or((false, field_name.as_str()), |name| (true, name));
+			let field = field_infos
+				.iter()
+				.find(|field| field.name == rust_field_name)
+				.ok_or_else(|| {
+					syn::Error::new_spanned(
+						struct_name,
+						format!("get_latest_by references unknown field '{field_name}'"),
+					)
+				})?;
+
+			if field.config.skip {
+				return Err(syn::Error::new_spanned(
+					struct_name,
+					format!("get_latest_by cannot include skipped field '{field_name}'"),
+				));
+			}
+
+			if field.rel.is_some() || is_relationship_field_type(&field.ty) {
+				let message = if field.rel.as_ref().is_some_and(|relation| {
+					relation.rel_type == crate::rel::RelationType::ManyToMany
+				}) || is_many_to_many_field_type(&field.ty)
+				{
+					format!("get_latest_by cannot include many-to-many field '{field_name}'")
+				} else {
+					format!("get_latest_by cannot include relation field '{field_name}'")
+				};
+				return Err(syn::Error::new_spanned(struct_name, message));
+			}
+
+			let column = field
+				.config
+				.db_column
+				.clone()
+				.or_else(|| {
+					field
+						.is_fk_id_field
+						.then(|| {
+							let relation_name = rust_field_name
+								.strip_suffix("_id")
+								.expect("foreign-key ID fields always end with `_id`");
+							field_infos
+								.iter()
+								.find(|candidate| candidate.name == relation_name)
+								.and_then(|candidate| candidate.rel.as_ref())
+								.and_then(|relation| relation.db_column.clone())
+						})
+						.flatten()
+				})
+				.unwrap_or_else(|| rust_field_name.to_owned());
+			Ok(if descending {
+				format!("-{column}")
+			} else {
+				column
+			})
+		})
+		.collect()
+}
+
 /// Generate field accessor methods that return FieldRef<M, T>
 ///
 /// Generates const methods like:
@@ -3299,8 +3391,12 @@ fn generate_model_form_support(
 ///
 /// // The #[model] attribute macro automatically generates:
 /// impl User {
-///     pub const fn field_id() -> FieldRef<User, i64> { FieldRef::new("id") }
-///     pub const fn field_name() -> FieldRef<User, String> { FieldRef::new("name") }
+///     pub const fn field_id() -> FieldRef<User, i64> {
+///         FieldRef::new("id")
+///     }
+///     pub const fn field_name() -> FieldRef<User, String> {
+///         FieldRef::new("name")
+///     }
 /// }
 /// ```
 fn generate_field_accessors(
@@ -3360,6 +3456,31 @@ fn generate_field_accessors(
 			}
 		})
 		.collect();
+	let ordering_accessor_methods: Vec<_> = field_infos
+		.iter()
+		.filter(|field| !field.config.skip)
+		.filter(|field| field.rel.is_none())
+		.filter(|field| !is_relationship_field_type(&field.ty))
+		.filter(|field| !is_many_to_many_field_type(&field.ty))
+		.map(|field| {
+			let field_name = &field.name;
+			let method_name =
+				syn::Ident::new(&format!("ordering_{}", field_name), field_name.span());
+			let column_name = field
+				.config
+				.db_column
+				.clone()
+				.unwrap_or_else(|| field_name.to_string());
+
+			quote! {
+				/// Ordering proof for a persisted scalar model field.
+				pub const fn #method_name() -> #orm_crate::expressions::OrderingField<#struct_name> {
+					// SAFETY: `#[model]` emits this accessor only for a persisted scalar model field.
+					unsafe { #orm_crate::expressions::OrderingField::from_model_field(#column_name) }
+				}
+			}
+		})
+		.collect();
 	let unique_fields: Vec<_> = field_infos
 		.iter()
 		.filter(|field| !field.config.skip)
@@ -3369,19 +3490,37 @@ fn generate_field_accessors(
 		.iter()
 		.map(|field| {
 			let field_name = &field.name;
-			let (_, lookup_type) = extract_option_type(&field.ty);
+			let (is_option, lookup_type) = extract_option_type(&field.ty);
 			let field_name_str = field
 				.config
 				.db_column
 				.clone()
 				.unwrap_or_else(|| field_name.to_string());
 			let method_name = syn::Ident::new(&format!("unique_{}", field_name), field_name.span());
+			let getter_name = syn::Ident::new(
+				&format!("__reinhardt_unique_get_{}", field_name),
+				field_name.span(),
+			);
+			let getter_body = if is_option {
+				quote! { model.#field_name.clone() }
+			} else {
+				quote! { ::core::option::Option::Some(model.#field_name.clone()) }
+			};
 
 			quote! {
+				fn #getter_name(model: &#struct_name) -> ::core::option::Option<#lookup_type> {
+					#getter_body
+				}
+
 				/// Unique-field accessor for type-safe single-row lookups.
 				pub const fn #method_name() -> #orm_crate::expressions::UniqueFieldRef<#struct_name, #lookup_type> {
 					// SAFETY: This accessor is generated only for fields proven unique by model metadata.
-					unsafe { #orm_crate::expressions::UniqueFieldRef::from_model_field(#field_name_str) }
+					unsafe {
+						#orm_crate::expressions::UniqueFieldRef::from_model_field_with_getter(
+							#field_name_str,
+							Self::#getter_name,
+						)
+					}
 				}
 			}
 		})
@@ -3390,6 +3529,7 @@ fn generate_field_accessors(
 	quote! {
 		impl #struct_name {
 			#(#accessor_methods)*
+			#(#ordering_accessor_methods)*
 			#(#unique_accessor_methods)*
 		}
 	}
@@ -3453,7 +3593,10 @@ fn generate_relation_traversal_accessors(
 			quote! {
 				#[doc = #doc_comment]
 				pub fn #method_name(self) -> #orm_crate::relations::RelatedFieldRef<Root, #struct_name, #field_type> {
-					self.field(#orm_crate::expressions::FieldRef::new(#field_name_str))
+					// SAFETY: this accessor is generated only for a persisted scalar model field.
+					self.field(unsafe {
+						#orm_crate::expressions::FieldRef::from_model_field(#field_name_str)
+					})
 				}
 			}
 		})
@@ -3724,9 +3867,9 @@ fn generate_relation_traversal_accessors(
 			}
 
 			#[doc = #wrapper_field_doc]
-			pub fn field<Value>(
+			pub fn field<Value, Origin>(
 				self,
-				field: #orm_crate::expressions::FieldRef<#struct_name, Value>,
+				field: #orm_crate::expressions::FieldRef<#struct_name, Value, Origin>,
 			) -> #orm_crate::relations::RelatedFieldRef<Root, #struct_name, Value> {
 				self.inner.field(field)
 			}
@@ -4267,6 +4410,13 @@ pub(crate) fn model_derive_impl(mut input: DeriveInput) -> Result<TokenStream> {
 		});
 	}
 
+	let latest_by_fields = model_config
+		.get_latest_by
+		.as_deref()
+		.map(|fields| resolve_latest_by_fields(fields, &field_infos, struct_name))
+		.transpose()?
+		.unwrap_or_default();
+
 	let mut structured_index_names = HashMap::new();
 	for field in &field_infos {
 		let Some(config) = field.config.structured_index.as_ref() else {
@@ -4788,6 +4938,22 @@ pub(crate) fn model_derive_impl(mut input: DeriveInput) -> Result<TokenStream> {
 			);
 		}
 	});
+	let primary_key_database_value = if is_composite_pk {
+		quote! {}
+	} else {
+		quote! {
+			fn primary_key_database_value(
+				pk: &Self::PrimaryKey,
+			) -> ::core::result::Result<
+				#orm_crate::DatabaseValue,
+				#orm_crate::FieldCodecError,
+			> {
+				<#pk_type as #orm_crate::DatabaseField>::encode_database(pk).map(
+					<<#pk_type as #orm_crate::DatabaseField>::Storage as #orm_crate::DatabaseScalar>::into_database_value
+				)
+			}
+		}
+	};
 	let decode_database_fields = database_codec_fields.iter().map(|field| {
 		let field_name = &field.name;
 		let field_ty = &field.ty;
@@ -4893,9 +5059,15 @@ pub(crate) fn model_derive_impl(mut input: DeriveInput) -> Result<TokenStream> {
 				#pk_column_name
 			}
 
+			fn latest_by_fields() -> &'static [&'static str] {
+				&[#(#latest_by_fields),*]
+			}
+
 			fn primary_key_uses_zero_sentinel() -> bool {
 				#primary_key_uses_zero_sentinel
 			}
+
+			#primary_key_database_value
 
 			fn field_is_none(&self, field_name: &str) -> bool {
 				match field_name {
@@ -8859,6 +9031,29 @@ mod tests {
 	}
 
 	#[test]
+	fn test_model_routes_primary_key_values_through_database_field_codec() {
+		let input = quote! {
+			#[model(app_label = "test", table_name = "external_users", info = false)]
+			struct ExternalUser {
+				#[field(primary_key = true, max_length = 64)]
+				external_id: String,
+				#[field(max_length = 120)]
+				name: String,
+			}
+		};
+
+		let output = model_derive_impl(syn::parse2(input).unwrap())
+			.expect("string primary key model must generate")
+			.to_string();
+		let compact = output.split_whitespace().collect::<String>();
+
+		assert!(compact.contains("fnprimary_key_database_value(pk:&Self::PrimaryKey"));
+		assert!(compact.contains("<Stringas"));
+		assert!(compact.contains("DatabaseField>::encode_database(pk)"));
+		assert!(compact.contains("DatabaseScalar>::into_database_value"));
+	}
+
+	#[test]
 	fn test_model_disables_zero_sentinel_for_non_auto_increment_primary_key() {
 		let input = quote! {
 			#[model(app_label = "test", table_name = "manual_users", info = false)]
@@ -9158,6 +9353,170 @@ mod tests {
 	}
 
 	#[test]
+	fn test_get_latest_by_parses_tuple_fields() {
+		let struct_name = parse_quote! { Event };
+		let attrs = vec![parse_quote! {
+			#[model(app_label = "events", get_latest_by = ("created_at", "id"))]
+		}];
+
+		let config = ModelConfig::from_attrs(&attrs, &struct_name)
+			.expect("get_latest_by should parse as field names");
+
+		assert_eq!(
+			config.get_latest_by.as_deref(),
+			Some(vec!["created_at".to_string(), "id".to_string()].as_slice())
+		);
+	}
+
+	#[test]
+	fn test_get_latest_by_uses_physical_database_columns() {
+		let input = quote! {
+			#[model(
+				app_label = "events",
+				table_name = "events",
+				get_latest_by = ("created_at", "id")
+			)]
+			pub struct Event {
+				#[field(primary_key = true)]
+				pub id: i64,
+				#[field(db_column = "created_on")]
+				pub created_at: i64,
+			}
+		};
+
+		let output = model_derive_impl(syn::parse2(input).unwrap())
+			.expect("get_latest_by fields should resolve");
+		let compact = output.to_string().replace(' ', "");
+
+		assert!(
+			compact
+				.contains("fnlatest_by_fields()->&'static[&'staticstr]{&[\"created_on\",\"id\"]}")
+		);
+	}
+
+	#[test]
+	fn test_get_latest_by_uses_custom_column_for_relationship_named_with_id_suffix() {
+		let input = quote! {
+			#[model(
+				app_label = "events",
+				table_name = "events",
+				get_latest_by = ("user_id_id",)
+			)]
+			pub struct Event {
+				#[field(primary_key = true)]
+				pub id: i64,
+				#[rel(foreign_key, db_column = "user_fk")]
+				pub user_id: db::associations::ForeignKeyField<User>,
+				#[serde(default)]
+				user_id_id: <User as reinhardt::model_info::InfoModel>::PrimaryKey,
+			}
+		};
+
+		let output = model_derive_impl(syn::parse2(input).unwrap())
+			.expect("get_latest_by fields should resolve");
+		let compact = output.to_string().replace(' ', "");
+
+		assert!(compact.contains("fnlatest_by_fields()->&'static[&'staticstr]{&[\"user_fk\"]}"));
+	}
+
+	#[test]
+	fn test_get_latest_by_preserves_descending_direction() {
+		let input = quote! {
+			#[model(
+				app_label = "events",
+				table_name = "events",
+				get_latest_by = ("-priority", "created_at")
+			)]
+			pub struct Event {
+				#[field(primary_key = true)]
+				pub id: i64,
+				#[field(db_column = "event_priority")]
+				pub priority: i64,
+				pub created_at: i64,
+			}
+		};
+
+		let output = model_derive_impl(syn::parse2(input).unwrap())
+			.expect("descending get_latest_by fields should resolve");
+		let compact = output.to_string().replace(' ', "");
+
+		assert!(compact.contains(
+			"fnlatest_by_fields()->&'static[&'staticstr]{&[\"-event_priority\",\"created_at\"]}"
+		));
+	}
+
+	#[test]
+	fn test_get_latest_by_rejects_empty_and_unknown_fields() {
+		let empty_input = quote! {
+			#[model(app_label = "events", get_latest_by = ())]
+			pub struct Event {
+				#[field(primary_key = true)]
+				pub id: i64,
+			}
+		};
+		let empty_error = model_derive_impl(syn::parse2(empty_input).unwrap())
+			.expect_err("an empty get_latest_by tuple must fail");
+		assert_eq!(
+			empty_error.to_string(),
+			"get_latest_by must contain at least one field"
+		);
+
+		let unknown_input = quote! {
+			#[model(app_label = "events", get_latest_by = ("missing",))]
+			pub struct Event {
+				#[field(primary_key = true)]
+				pub id: i64,
+			}
+		};
+		let unknown_error = model_derive_impl(syn::parse2(unknown_input).unwrap())
+			.expect_err("unknown get_latest_by fields must fail");
+		assert_eq!(
+			unknown_error.to_string(),
+			"get_latest_by references unknown field 'missing'"
+		);
+	}
+
+	#[test]
+	fn test_get_latest_by_rejects_relation_fields() {
+		let input = quote! {
+			#[model(app_label = "events", get_latest_by = ("owner",))]
+			pub struct Event {
+				#[field(primary_key = true)]
+				pub id: i64,
+				#[rel(foreign_key)]
+				pub owner: db::associations::ForeignKeyField<User>,
+			}
+		};
+
+		let error = model_derive_impl(syn::parse2(input).unwrap())
+			.expect_err("relation fields cannot define latest ordering");
+		assert_eq!(
+			error.to_string(),
+			"get_latest_by cannot include relation field 'owner'"
+		);
+	}
+
+	#[test]
+	fn test_get_latest_by_rejects_many_to_many_fields() {
+		let input = quote! {
+			#[model(app_label = "events", get_latest_by = ("tags",))]
+			pub struct Event {
+				#[field(primary_key = true)]
+				pub id: i64,
+				#[rel(many_to_many)]
+				pub tags: db::associations::ManyToManyField<Event, Tag>,
+			}
+		};
+
+		let error = model_derive_impl(syn::parse2(input).unwrap())
+			.expect_err("many-to-many fields cannot define latest ordering");
+		assert_eq!(
+			error.to_string(),
+			"get_latest_by cannot include many-to-many field 'tags'"
+		);
+	}
+
+	#[test]
 	fn test_qualified_foreign_key_registration_preserves_target_identity() {
 		let input = quote! {
 			#[model(app_label = "comments", table_name = "comments")]
@@ -9421,7 +9780,34 @@ mod tests {
 			.nth(1)
 			.expect("generated unique email accessor");
 
-		assert!(unique_accessor.contains("UniqueFieldRef :: from_model_field (\"email_addr\")"));
+		assert!(unique_accessor.contains("UniqueFieldRef :: from_model_field_with_getter"));
+		assert!(unique_accessor.contains("\"email_addr\""));
+		assert!(unique_accessor.contains("Self :: __reinhardt_unique_get_email"));
+		assert!(output_str.contains(
+			"fn __reinhardt_unique_get_email (model : & User) -> :: core :: option :: Option < String >"
+		));
+	}
+
+	#[test]
+	fn test_ordering_accessors_are_separate_from_compatible_field_refs() {
+		let input = quote! {
+			#[model(app_label = "test", table_name = "events")]
+			pub struct Event {
+				#[field(primary_key = true, db_column = "event_id")]
+				pub id: i64,
+				#[rel(foreign_key)]
+				pub owner: ForeignKeyField<User>,
+			}
+		};
+
+		let output = model_derive_impl(syn::parse2(input).unwrap()).unwrap();
+		let output_str = output.to_string();
+
+		assert!(output_str.contains("pub const fn field_id"));
+		assert!(output_str.contains("FieldRef :: new (\"event_id\")"));
+		assert!(output_str.contains("pub const fn ordering_id"));
+		assert!(output_str.contains("OrderingField :: from_model_field (\"event_id\")"));
+		assert!(!output_str.contains("pub const fn ordering_owner"));
 	}
 
 	#[test]

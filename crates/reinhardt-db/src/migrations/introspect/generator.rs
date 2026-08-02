@@ -472,14 +472,14 @@ impl SchemaCodeGenerator {
 		if let Some(ref default) = column.default {
 			// Skip auto-generated defaults like NOW() or sequences
 			if !is_auto_default(default) {
-				let default_expression = render_default_expression(default, &column.column_type)
-					.map_err(|error| {
-						MigrationError::IntrospectionError(format!(
-							"Failed to render default expression for {}.{}: {error}",
-							table.name, column.name
-						))
-					})?;
-				attrs.push(quote! { default = #default_expression });
+				match render_default_expression(default, &column.column_type) {
+					Ok(default_expression) => attrs.push(quote! { default = #default_expression }),
+					Err(error) => tracing::warn!(
+						table = %table.name,
+						column = %column.name,
+						"omitting an inspectdb default that cannot be represented in generated Rust: {error}"
+					),
+				}
 			}
 		}
 

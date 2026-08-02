@@ -42,7 +42,14 @@ where
 	validate_writable_create_assignments::<C::Model>(&plan.create)?;
 
 	let insert = sql::insert(&plan, backend)?;
-	match executor.execute(&insert.sql, insert.params).await {
+	let insert_result = if backend == DatabaseBackend::Postgres {
+		executor
+			.execute_in_savepoint(&insert.sql, insert.params)
+			.await
+	} else {
+		executor.execute(&insert.sql, insert.params).await
+	};
+	match insert_result {
 		Ok(result) => {
 			let created = match (backend, result.rows_affected) {
 				(DatabaseBackend::Postgres | DatabaseBackend::Sqlite, 0) => false,

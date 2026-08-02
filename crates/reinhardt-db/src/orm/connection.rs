@@ -228,6 +228,15 @@ pub trait OrmExecutor: Send {
 	/// Executes a SQL statement and preserves backend-specific result metadata.
 	async fn execute(&mut self, sql: &str, params: Vec<QueryValue>) -> Result<QueryResult>;
 
+	/// Executes a statement within an executor-provided savepoint when available.
+	async fn execute_in_savepoint(
+		&mut self,
+		sql: &str,
+		params: Vec<QueryValue>,
+	) -> Result<QueryResult> {
+		self.execute(sql, params).await
+	}
+
 	/// Executes a SQL statement with structural pgvector operation context.
 	async fn execute_with_context(
 		&mut self,

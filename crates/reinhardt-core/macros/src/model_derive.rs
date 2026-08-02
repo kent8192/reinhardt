@@ -8678,6 +8678,20 @@ fn generate_info_builder(
 mod tests {
 	use super::*;
 
+	#[cfg(any(feature = "db-postgres", feature = "db-mysql", feature = "db-sqlite"))]
+	#[rstest::rstest]
+	fn explicit_char_field_type_preserves_length() {
+		let migrations_crate = quote! { reinhardt_db::migrations };
+
+		let field_type = map_explicit_field_type("char(2)", &migrations_crate)
+			.expect("CHAR field type should parse");
+
+		assert_eq!(
+			field_type.to_string(),
+			"reinhardt_db :: migrations :: FieldType :: Char (2u32)"
+		);
+	}
+
 	#[test]
 	#[cfg(not(feature = "pgvector"))]
 	fn vector_named_custom_fields_are_not_claimed_without_pgvector() {
@@ -10045,17 +10059,4 @@ mod tests {
 		assert!(output.contains("bound"));
 		assert!(output.contains("__reinhardt_validate_defaulted_fixture_field"));
 	}
-}
-#[cfg(any(feature = "db-postgres", feature = "db-mysql", feature = "db-sqlite"))]
-#[rstest::rstest]
-fn explicit_char_field_type_preserves_length() {
-	let migrations_crate = quote! { reinhardt_db::migrations };
-
-	let field_type = map_explicit_field_type("char(2)", &migrations_crate)
-		.expect("CHAR field type should parse");
-
-	assert_eq!(
-		field_type.to_string(),
-		"reinhardt_db :: migrations :: FieldType :: Char (2)"
-	);
 }

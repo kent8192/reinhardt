@@ -384,6 +384,7 @@ fn build_sqlite_spec(database_url: &str) -> CommandResult<DbClientSpec> {
 			};
 			OsString::from(uri)
 		}
+		None if encoded_path.starts_with('-') => OsString::from(format!("file:{encoded_path}")),
 		None => decode_component(&encoded_path, "SQLite")?,
 	};
 
@@ -1203,6 +1204,15 @@ mod tests {
 			vec![OsString::from("/tmp/report cache.sqlite3")]
 		);
 		assert!(absolute_spec.secret_environment.is_empty());
+	}
+
+	#[rstest::rstest]
+	fn sqlite_disambiguates_relative_filenames_that_start_with_a_hyphen() {
+		let database = resolved_database("sqlite:-archive.db");
+
+		let spec = build_client_spec(&database, &[]).expect("build SQLite client");
+
+		assert_eq!(spec.arguments, vec![OsString::from("file:-archive.db")]);
 	}
 
 	#[rstest::rstest]

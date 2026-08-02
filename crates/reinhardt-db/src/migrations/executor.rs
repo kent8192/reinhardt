@@ -354,13 +354,11 @@ impl DatabaseMigrationExecutor {
 					.map(|(app, name)| (app.as_str(), name.as_str()))
 					.collect();
 				if replaced.is_subset(&covered) {
-					let historical_position = applied_records
+					let historical_record = applied_records
 						.iter()
-						.filter(|record| {
+						.find(|record| {
 							replaced.contains(&(record.app.as_str(), record.name.as_str()))
 						})
-						.map(|record| record.applied)
-						.min()
 						.ok_or_else(|| {
 							MigrationError::InvalidMigration(format!(
 								"cannot apply replacement {} because a competing replacement already covers its history",
@@ -368,14 +366,17 @@ impl DatabaseMigrationExecutor {
 							))
 						})?;
 					self.recorder
-						.record_applied_at(
+						.rename_applied(
+							&historical_record.app,
+							&historical_record.name,
 							&migration.app_label,
 							&migration.name,
-							historical_position,
 						)
 						.await?;
 					for (app_label, name) in &migration.replaces {
-						if applied_records_set.contains(&(app_label.as_str(), name.as_str())) {
+						if applied_records_set.contains(&(app_label.as_str(), name.as_str()))
+							&& (app_label != &historical_record.app || name != &historical_record.name)
+						{
 							self.recorder.unapply(app_label, name).await?;
 						}
 					}

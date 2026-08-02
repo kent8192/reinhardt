@@ -813,6 +813,7 @@ impl DatabaseMigrationRecorder {
 			.columns([Alias::new("app"), Alias::new("name"), Alias::new("applied")])
 			.from(Alias::new("reinhardt_migrations"))
 			.order_by(Alias::new("applied"), Order::Asc)
+			.order_by(Alias::new("id"), Order::Asc)
 			.to_owned();
 
 		let sql = match self.connection.database_type() {
@@ -880,6 +881,39 @@ impl DatabaseMigrationRecorder {
 		Ok(records)
 	}
 
+	/// Rename an applied migration while retaining its original recorder row.
+	pub(crate) async fn rename_applied(
+		&self,
+		old_app: &str,
+		old_name: &str,
+		new_app: &str,
+		new_name: &str,
+	) -> super::Result<()> {
+		use crate::backends::types::DatabaseType;
+		use reinhardt_query::prelude::{
+			Alias, Expr, ExprTrait, MySqlQueryBuilder, PostgresQueryBuilder, Query,
+			QueryStatementBuilder, SqliteQueryBuilder,
+		};
+
+		let stmt = Query::update()
+			.table(Alias::new("reinhardt_migrations"))
+			.value(Alias::new("app"), new_app.to_string())
+			.value(Alias::new("name"), new_name.to_string())
+			.and_where(Expr::col(Alias::new("app")).eq(old_app))
+			.and_where(Expr::col(Alias::new("name")).eq(old_name))
+			.to_owned();
+		let sql = match self.connection.database_type() {
+			DatabaseType::Postgres => stmt.to_string(PostgresQueryBuilder),
+			DatabaseType::Mysql => stmt.to_string(MySqlQueryBuilder),
+			DatabaseType::Sqlite => stmt.to_string(SqliteQueryBuilder),
+		};
+		self.connection
+			.execute(&sql, vec![])
+			.await
+			.map_err(map_framework_database_error)?;
+		Ok(())
+	}
+
 	/// Unapply a migration (remove from records)
 	///
 	/// Used when rolling back migrations.
@@ -944,6 +978,7 @@ impl DatabaseMigrationRecorder {
 			.from(Alias::new("reinhardt_migrations"))
 			.and_where(Expr::col(Alias::new("app")).eq(app))
 			.order_by(Alias::new("applied"), Order::Asc)
+			.order_by(Alias::new("id"), Order::Asc)
 			.to_owned();
 
 		let sql = match self.connection.database_type() {

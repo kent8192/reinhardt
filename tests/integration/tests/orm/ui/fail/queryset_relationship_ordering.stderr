@@ -1,0 +1,7 @@
+error[E0599]: no method named `ordering` found for struct `reinhardt::FieldRef<Job, ForeignKeyField<Project>>` in the current scope
+  --> tests/orm/ui/fail/queryset_relationship_ordering.rs:29:46
+   |
+29 |     accepts_job_ordering(&[Job::field_project().ordering()]);
+   |                                                 ^^^^^^^^ method not found in `reinhardt::FieldRef<Job, ForeignKeyField<Project>>`
+   |
+   = note: the method was found for `reinhardt::FieldRef<M, T, reinhardt_db::orm::expressions::GeneratedModelField>`

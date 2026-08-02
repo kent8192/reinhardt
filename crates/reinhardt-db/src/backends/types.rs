@@ -554,6 +554,20 @@ pub trait TransactionExecutor: Send + Sync {
 		false
 	}
 
+	/// Reports the row-locking features supported by this server.
+	///
+	/// Executors connected to older server versions should override this method.
+	/// PostgreSQL gained `NO KEY UPDATE` in 9.3 and `SKIP LOCKED` in 9.5.
+	/// MySQL row-lock options require 8.0.1 or newer.
+	fn row_lock_capabilities(&self) -> RowLockCapabilities {
+		match self.backend() {
+			DatabaseType::Postgres if self.is_cockroachdb() => RowLockCapabilities::cockroachdb(),
+			DatabaseType::Postgres => RowLockCapabilities::postgres(),
+			DatabaseType::Mysql => RowLockCapabilities::mysql(),
+			DatabaseType::Sqlite => RowLockCapabilities::unsupported(),
+		}
+	}
+
 	/// Returns whether contextual pgvector error hints are supported.
 	fn supports_pgvector_error_hints(&self) -> bool {
 		false
@@ -754,6 +768,96 @@ pub trait TransactionExecutor: Send + Sync {
 			"Savepoints are not supported by this backend",
 		)
 		.into())
+	}
+}
+
+/// Server capabilities used to validate `QuerySet` row-lock clauses.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RowLockCapabilities {
+	/// Whether blocking `FOR UPDATE` is supported.
+	pub update: bool,
+	/// Whether `FOR NO KEY UPDATE` is supported as a distinct lock strength.
+	pub no_key_update: bool,
+	/// Whether `NOWAIT` is supported.
+	pub nowait: bool,
+	/// Whether `SKIP LOCKED` is supported.
+	pub skip_locked: bool,
+	/// Whether an explicit lock target list is supported.
+	pub targets: bool,
+}
+
+impl RowLockCapabilities {
+	/// Capabilities for a PostgreSQL server with the supplied major and minor version.
+	pub const fn postgres_for_version(major: u16, minor: u16) -> Self {
+		let version = major * 100 + minor;
+		Self {
+			update: true,
+			no_key_update: version >= 903,
+			nowait: version >= 801,
+			skip_locked: version >= 905,
+			targets: true,
+		}
+	}
+
+	/// Capabilities for a MySQL server with the supplied semantic version.
+	pub const fn mysql_for_version(major: u16, minor: u16, patch: u16) -> Self {
+		let supports_wait_options = major > 8 || (major == 8 && (minor > 0 || patch >= 1));
+		Self {
+			update: true,
+			no_key_update: false,
+			nowait: supports_wait_options,
+			skip_locked: supports_wait_options,
+			targets: supports_wait_options,
+		}
+	}
+
+	/// Capabilities for a MariaDB server with the supplied semantic version.
+	pub const fn mariadb_for_version(major: u16, minor: u16, _patch: u16) -> Self {
+		let version = major * 100 + minor;
+		Self {
+			update: true,
+			no_key_update: false,
+			nowait: version >= 1003,
+			skip_locked: version >= 1006,
+			targets: false,
+		}
+	}
+
+	/// Capabilities for PostgreSQL 9.5 and newer.
+	pub const fn postgres() -> Self {
+		Self::postgres_for_version(9, 5)
+	}
+
+	/// Capabilities for MySQL 8.0.1 and newer.
+	pub const fn mysql() -> Self {
+		Self::mysql_for_version(8, 0, 1)
+	}
+
+	/// Capabilities for the built-in CockroachDB v23.1 lock profile.
+	///
+	/// CockroachDB v23.1 supports `FOR UPDATE` and `NOWAIT`, but not
+	/// `SKIP LOCKED` or explicit lock targets. Custom transaction executors for
+	/// servers with different capabilities should override
+	/// [`TransactionExecutor::row_lock_capabilities`].
+	pub const fn cockroachdb() -> Self {
+		Self {
+			update: true,
+			no_key_update: false,
+			nowait: true,
+			skip_locked: false,
+			targets: false,
+		}
+	}
+
+	/// Capabilities for a backend or server version without row locking.
+	pub const fn unsupported() -> Self {
+		Self {
+			update: false,
+			no_key_update: false,
+			nowait: false,
+			skip_locked: false,
+			targets: false,
+		}
 	}
 }
 

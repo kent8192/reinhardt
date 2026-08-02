@@ -139,6 +139,7 @@ impl SqliteQueryBuilder {
 		&self,
 		stmt: &SelectStatement,
 	) -> Result<(String, Values), crate::QueryBuildError> {
+		crate::error::validate_select_lock_for_backend(stmt, "SQLite")?;
 		crate::error::validate_select_for_backend(stmt, "SQLite")?;
 		Ok(self.build_select(stmt))
 	}
@@ -2390,6 +2391,26 @@ mod tests {
 			"INSERT INTO \"users\" (\"display_name\") VALUES (?) RETURNING \"display_name\" AS \"name\""
 		);
 		assert_eq!(values.len(), 1);
+	}
+
+	#[test]
+	fn checked_insert_rejects_nested_locked_select_in_returning_expression() {
+		let mut locked = Query::select();
+		locked
+			.column("id")
+			.from("accounts")
+			.lock(crate::query::LockType::Update);
+		let insert = Query::insert()
+			.into_table("archive")
+			.column("account_id")
+			.values_panic([1_i32])
+			.returning_exprs([Expr::subquery(locked)])
+			.to_owned();
+
+		let error = SqliteQueryBuilder::new()
+			.build_insert_checked(&insert)
+			.expect_err("SQLite must reject a nested row lock in INSERT RETURNING");
+		assert!(error.to_string().contains("row locking"));
 	}
 
 	#[test]

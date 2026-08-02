@@ -109,6 +109,7 @@ repeated `LIMIT`/`OFFSET` pagination for this API.
   - Closure-scoped atomic transactions with nested savepoints
   - Mutable executor ownership for transaction-scoped ORM work
   - Typed callback errors with automatic conversion from framework failures
+  - Typed, transaction-safe `QuerySet::select_for_update` row locking
 
 - **Structured Database Errors**
   - `DatabaseErrorKind` provides portable connection, constraint, transaction, serialization, and query categories
@@ -162,6 +163,64 @@ let result: Result<(), ApplicationError> = connection.atomic(async |_transaction
 result
 # }
 ```
+
+### Transaction-safe row locking
+
+Build row locks after configuring a `QuerySet`, then evaluate them with
+`SelectForUpdate::all_with_executor` or `rows_with_executor` inside
+`DatabaseConnection::atomic`. The executor remains owned by the caller, so the
+lock stays on the same physical connection until commit or rollback. Ordinary
+`all`, `all_with_db`, and `rows_with_db` evaluation returns a transaction error
+without executing SQL.
+
+```rust,no_run
+use reinhardt_db::{
+    backends::error::DatabaseError,
+    orm::{QuerySet, TransactionExecutor},
+};
+use reinhardt_macros::model;
+use serde::{Deserialize, Serialize};
+
+#[model(app_label = "jobs", table_name = "jobs")]
+#[derive(Clone, Debug, Deserialize, Serialize)]
+struct Job {
+    #[field(primary_key = true)]
+    id: i64,
+    state: String,
+}
+
+async fn claim_queued(
+    transaction: &mut dyn TransactionExecutor,
+) -> Result<Vec<Job>, DatabaseError> {
+    QuerySet::<Job>::new()
+        .filter(Job::field_state().eq("queued".to_owned()))
+        .select_for_update()
+        .skip_locked()
+        .of_model()
+        .all_with_executor(transaction)
+        .await
+}
+```
+
+`nowait` and `skip_locked` are mutually exclusive type states. `of_model`
+targets the root model, while `of_relation` accepts only a typed relation path
+rooted at that model and automatically adds the required joins. Reinhardt is
+intentionally stricter than Django: unchecked table-name targets are not
+accepted, and SQLite returns an unsupported-capability error instead of silently
+dropping the lock.
+
+PostgreSQL supports target lists and `no_key`; `NO KEY UPDATE` requires
+PostgreSQL 9.3 or newer and `SKIP LOCKED` requires 9.5 or newer. The built-in
+MySQL capability profile requires MySQL 8.0.1 or newer and does not support
+`no_key`. The built-in CockroachDB v23.1 profile supports `FOR UPDATE` and
+`NOWAIT`, but not `SKIP LOCKED`, PostgreSQL-distinct `no_key`, or explicit
+target lists. Custom transaction executors connected to servers with different
+capabilities must override `TransactionExecutor::row_lock_capabilities`.
+
+To preserve the statement's lock scope, row locking rejects CTE-backed
+querysets, derived `FROM` sources, LATERAL joins, raw aggregate projections
+passed to `values`, and aggregate annotations. Use a direct non-aggregate
+queryset for locking reads.
 
 - **Database Replication and Routing**
   - Read/write splitting via DatabaseRouter
@@ -735,6 +794,71 @@ let updated = User::objects()
     .update_fields([User::field_updated_at().assign(Utc::now())])
     .await?;
 ```
+
+### Typed retrieval helpers
+
+Models can define their default latest/earliest ordering with generated field
+metadata:
+
+```rust
+use chrono::{DateTime, Utc};
+use reinhardt_db::model;
+use reinhardt_db::orm::Model;
+use serde::{Deserialize, Serialize};
+
+#[derive(Serialize, Deserialize)]
+#[model(
+    app_label = "events",
+    table_name = "events",
+    get_latest_by = ("created_at", "id")
+)]
+struct Event {
+    #[field(primary_key = true)]
+    id: i64,
+    created_at: DateTime<Utc>,
+    #[field(max_length = 255, unique = true)]
+    slug: String,
+}
+
+let latest = Event::objects().all().latest().await?;
+let earliest = Event::objects()
+    .all()
+    .earliest_by(&[
+		Event::ordering_created_at(),
+		Event::ordering_id(),
+    ])
+    .await?;
+
+let by_id = Event::objects().all().in_bulk([3_i64, 1, 3]).await?;
+let by_slug = Event::objects()
+    .all()
+    .in_bulk_by(
+        Event::unique_slug(),
+        ["launch".to_string(), "archive".to_string()],
+    )
+    .await?;
+
+let empty = Event::objects().all().none();
+assert_eq!(empty.count().await?, 0);
+```
+
+Unlike Django's string field names, explicit ordering and unique-field bulk
+lookups accept only generated typed field proofs for the same model. Bulk
+retrieval returns a `BTreeMap`, so iteration is sorted by key; duplicate input
+keys collapse and missing keys are omitted. Empty input and `none()` are lazy:
+they do not resolve a connection or invoke an executor. The equivalent
+`*_with_db` and `*_with_executor` methods keep retrieval bound to a
+caller-owned connection or transaction executor. These contracts are
+backend-neutral across PostgreSQL, MySQL, and SQLite.
+
+Bulk retrieval accounts for bind parameters already used by the source
+queryset when splitting lookup keys into backend-safe batches. It returns a
+validation error when the source query has exhausted the backend's bind
+parameter limit and no lookup key can be added safely.
+
+When a retrieval ordering field is nullable, its relative NULL placement follows
+the connected database. Filter nulls explicitly before calling `latest*` or
+`earliest*` when that placement is part of the application contract.
 
 `dates` and `datetimes` exclude nulls and perform truncation, distinct
 projection, and ordering in the database. ISO weeks begin on Monday.

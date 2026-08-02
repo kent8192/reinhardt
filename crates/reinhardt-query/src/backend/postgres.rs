@@ -144,6 +144,7 @@ impl PostgresQueryBuilder {
 		&self,
 		stmt: &SelectStatement,
 	) -> Result<(String, Values), crate::QueryBuildError> {
+		crate::error::validate_select_lock_for_backend(stmt, "PostgreSQL")?;
 		crate::error::validate_select_for_backend(stmt, "PostgreSQL")?;
 		Ok(self.build_select(stmt))
 	}
@@ -164,6 +165,7 @@ impl PostgresQueryBuilder {
 		&self,
 		stmt: &InsertStatement,
 	) -> Result<(String, Values), crate::QueryBuildError> {
+		crate::error::validate_insert_lock_for_backend(stmt, "PostgreSQL")?;
 		crate::error::validate_insert_for_backend(stmt, "PostgreSQL")?;
 		Ok(self.build_insert(stmt))
 	}
@@ -173,6 +175,7 @@ impl PostgresQueryBuilder {
 		&self,
 		stmt: &UpdateStatement,
 	) -> Result<(String, Values), crate::QueryBuildError> {
+		crate::error::validate_update_lock_for_backend(stmt, "PostgreSQL")?;
 		crate::error::validate_update_for_backend(stmt, "PostgreSQL")?;
 		Ok(self.build_update(stmt))
 	}
@@ -182,6 +185,7 @@ impl PostgresQueryBuilder {
 		&self,
 		stmt: &DeleteStatement,
 	) -> Result<(String, Values), crate::QueryBuildError> {
+		crate::error::validate_delete_lock_for_backend(stmt, "PostgreSQL")?;
 		crate::error::validate_delete_for_backend(stmt, "PostgreSQL")?;
 		Ok(self.build_delete(stmt))
 	}
@@ -489,6 +493,32 @@ impl PostgresQueryBuilder {
 
 				// Merge the values from the subquery
 				writer.append_values(&subquery_values);
+			}
+		}
+	}
+
+	/// Write a table target in a row-lock `OF` clause.
+	fn write_lock_table_target(&self, writer: &mut SqlWriter, table_ref: &TableRef) {
+		match table_ref {
+			TableRef::TableAlias(_, alias)
+			| TableRef::SchemaTableAlias(_, _, alias)
+			| TableRef::SubQuery(_, alias) => {
+				writer.push_identifier(&alias.to_string(), |s| self.escape_iden(s));
+			}
+			TableRef::Table(iden) => {
+				writer.push_identifier(&iden.to_string(), |s| self.escape_iden(s));
+			}
+			TableRef::SchemaTable(schema, table) => {
+				writer.push_identifier(&schema.to_string(), |s| self.escape_iden(s));
+				writer.push(".");
+				writer.push_identifier(&table.to_string(), |s| self.escape_iden(s));
+			}
+			TableRef::DatabaseSchemaTable(db, schema, table) => {
+				writer.push_identifier(&db.to_string(), |s| self.escape_iden(s));
+				writer.push(".");
+				writer.push_identifier(&schema.to_string(), |s| self.escape_iden(s));
+				writer.push(".");
+				writer.push_identifier(&table.to_string(), |s| self.escape_iden(s));
 			}
 		}
 	}
@@ -1528,6 +1558,30 @@ impl QueryBuilder for PostgresQueryBuilder {
 
 			// Merge the values from the union query
 			writer.append_values(&union_values);
+		}
+
+		if let Some(lock) = &stmt.lock {
+			use crate::query::{LockBehavior, LockType};
+
+			writer.push_keyword(match lock.r#type {
+				LockType::Update => "FOR UPDATE",
+				LockType::NoKeyUpdate => "FOR NO KEY UPDATE",
+				LockType::Share => "FOR SHARE",
+				LockType::KeyShare => "FOR KEY SHARE",
+			});
+			if !lock.tables.is_empty() {
+				writer.push_keyword("OF");
+				writer.push_space();
+				writer.push_list(&lock.tables, ", ", |w, table| {
+					self.write_lock_table_target(w, table);
+				});
+			}
+			if let Some(behavior) = lock.behavior {
+				writer.push_keyword(match behavior {
+					LockBehavior::Nowait => "NOWAIT",
+					LockBehavior::SkipLocked => "SKIP LOCKED",
+				});
+			}
 		}
 
 		writer.finish()
@@ -4885,12 +4939,181 @@ mod tests {
 	#[cfg(feature = "pgvector")]
 	use crate::types::{BinOper, PgBinOper};
 	use crate::{
-		expr::{Expr, ExprTrait, SimpleExpr, TemporalTruncKind, TemporalTruncOutput},
-		query::Query,
+		expr::{Expr, ExprTrait, Func, SimpleExpr, TemporalTruncKind, TemporalTruncOutput},
+		query::{LockType, Query},
 		types::{Alias, ColumnDef, IntoIden},
 		value::Value,
 	};
 	use rstest::rstest;
+
+	#[test]
+	fn checked_select_rejects_row_locking_with_group_by_or_having() {
+		let builder = PostgresQueryBuilder::new();
+		let mut grouped = Query::select();
+		grouped
+			.column("account_id")
+			.from("ledger_entries")
+			.group_by_col("account_id")
+			.lock(LockType::Update);
+		assert_eq!(
+			builder.build_select_checked(&grouped),
+			Err(crate::QueryBuildError::UnsupportedBackendFeature {
+				feature: "row locking with GROUP BY or HAVING queries",
+				backend: "PostgreSQL",
+			})
+		);
+
+		let mut having = Query::select();
+		having
+			.column("account_id")
+			.from("ledger_entries")
+			.and_having(Expr::col("account_id").gt(0))
+			.lock(LockType::Update);
+		assert_eq!(
+			builder.build_select_checked(&having),
+			Err(crate::QueryBuildError::UnsupportedBackendFeature {
+				feature: "row locking with GROUP BY or HAVING queries",
+				backend: "PostgreSQL",
+			})
+		);
+	}
+
+	#[test]
+	fn checked_select_rejects_row_locking_with_aggregate_projection() {
+		let builder = PostgresQueryBuilder::new();
+		let mut statement = Query::select();
+		statement
+			.expr(Func::count(Expr::col("id").into_simple_expr()))
+			.from("accounts")
+			.lock(LockType::Update);
+
+		assert_eq!(
+			builder.build_select_checked(&statement),
+			Err(crate::QueryBuildError::UnsupportedBackendFeature {
+				feature: "row locking with aggregate queries",
+				backend: "PostgreSQL",
+			})
+		);
+	}
+
+	#[test]
+	fn checked_select_rejects_row_locking_with_window_projection() {
+		let builder = PostgresQueryBuilder::new();
+		let mut statement = Query::select();
+		statement
+			.expr(Expr::row_number().over(crate::types::WindowStatement::default()))
+			.from("accounts")
+			.lock(LockType::Update);
+
+		assert_eq!(
+			builder.build_select_checked(&statement),
+			Err(crate::QueryBuildError::UnsupportedBackendFeature {
+				feature: "row locking with window-function queries",
+				backend: "PostgreSQL",
+			})
+		);
+	}
+
+	#[test]
+	fn checked_select_rejects_lock_targets_on_nullable_outer_join_sides() {
+		let builder = PostgresQueryBuilder::new();
+		let mut statement = Query::select();
+		statement
+			.column(("parents", "id"))
+			.from("parents")
+			.left_join(
+				"children",
+				Expr::col(("parents", "id")).equals(("children", "parent_id")),
+			)
+			.lock_tables(["children"]);
+
+		assert_eq!(
+			builder.build_select_checked(&statement),
+			Err(crate::QueryBuildError::UnsupportedBackendFeature {
+				feature: "row lock target on nullable outer-join side",
+				backend: "PostgreSQL",
+			})
+		);
+	}
+
+	#[test]
+	fn checked_select_rejects_targetless_locking_across_outer_joins() {
+		let builder = PostgresQueryBuilder::new();
+		let mut statement = Query::select();
+		statement
+			.column(("parents", "id"))
+			.from("parents")
+			.left_join(
+				"children",
+				Expr::col(("parents", "id")).equals(("children", "parent_id")),
+			)
+			.lock(LockType::Update);
+
+		assert_eq!(
+			builder.build_select_checked(&statement),
+			Err(crate::QueryBuildError::UnsupportedBackendFeature {
+				feature: "row locking across outer joins without explicit targets",
+				backend: "PostgreSQL",
+			})
+		);
+	}
+
+	#[test]
+	fn checked_dml_rejects_nested_locked_selects() {
+		let builder = PostgresQueryBuilder::new();
+		let mut source = Query::select();
+		source.column("id").from("accounts").lock(LockType::Update);
+		let insert = Query::insert()
+			.into_table("archive")
+			.columns(["account_id"])
+			.from_subquery(source.to_owned())
+			.to_owned();
+
+		assert!(builder.build_insert_checked(&insert).is_ok());
+
+		let mut invalid_source = Query::select();
+		invalid_source
+			.expr(Func::count(Expr::col("id").into_simple_expr()))
+			.from("accounts")
+			.lock(LockType::Update);
+		let invalid_insert = Query::insert()
+			.into_table("archive")
+			.columns(["account_id"])
+			.from_subquery(invalid_source.to_owned())
+			.to_owned();
+
+		assert_eq!(
+			builder.build_insert_checked(&invalid_insert),
+			Err(crate::QueryBuildError::UnsupportedBackendFeature {
+				feature: "row locking with aggregate queries",
+				backend: "PostgreSQL",
+			})
+		);
+
+		let update = Query::update()
+			.table("archive")
+			.value_expr("account_id", Expr::subquery(invalid_source.clone()))
+			.to_owned();
+		assert_eq!(
+			builder.build_update_checked(&update),
+			Err(crate::QueryBuildError::UnsupportedBackendFeature {
+				feature: "row locking with aggregate queries",
+				backend: "PostgreSQL",
+			})
+		);
+
+		let delete = Query::delete()
+			.from_table("archive")
+			.and_where(Expr::exists(invalid_source))
+			.to_owned();
+		assert_eq!(
+			builder.build_delete_checked(&delete),
+			Err(crate::QueryBuildError::UnsupportedBackendFeature {
+				feature: "row locking with aggregate queries",
+				backend: "PostgreSQL",
+			})
+		);
+	}
 
 	#[test]
 	fn test_escape_identifier() {

@@ -882,7 +882,7 @@ impl DatabaseMigrationRecorder {
 	}
 
 	/// Rename an applied migration while retaining its original recorder row.
-	pub(crate) async fn rename_applied(
+	pub async fn rename_applied(
 		&self,
 		old_app: &str,
 		old_name: &str,

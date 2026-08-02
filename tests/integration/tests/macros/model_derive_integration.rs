@@ -386,6 +386,12 @@ fn test_field_metadata_generation() {
 
 #[test]
 fn test_relationship_metadata_uses_generated_fk_columns_and_targets() {
+	assert_eq!(MetadataWriter::field_writer_id().name(), "writer_pk");
+	assert_eq!(
+		NullableMetadataWriter::field_writer_id().name(),
+		"nullable_writer_pk"
+	);
+
 	let writer = MetadataWriter::relationship_metadata()
 		.into_iter()
 		.next()
@@ -405,13 +411,10 @@ fn test_relationship_metadata_uses_generated_fk_columns_and_targets() {
 
 #[test]
 fn test_related_field_accessor_uses_physical_column_in_filter() {
+	let related_email = TraversalPost::rel_author().into_typed().field_email();
+	assert_eq!(related_email.name(), "email");
 	let sql = QuerySet::<TraversalPost>::new()
-		.filter(
-			TraversalPost::rel_author()
-				.into_typed()
-				.field_email()
-				.exact("person@example.com"),
-		)
+		.filter(related_email.exact("person@example.com"))
 		.to_sql()
 		.expect("query with a valid relationship path should generate SQL");
 

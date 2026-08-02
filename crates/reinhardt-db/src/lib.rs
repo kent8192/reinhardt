@@ -32,14 +32,23 @@
 //! ### ORM (`orm` module)
 //!
 //! - **Django-style Models**: Define database models with structs
-//! - **QuerySet API**: Chainable query builder with conditional partial updates
+//! - **QuerySet API**: Chainable query builder with typed latest/earliest,
+//!   deterministic bulk retrieval, lazy empty querysets, conditional partial updates,
+//!   and lifetime-bound row-by-row model streaming
+//! - **Typed Manager Upserts**: Compile-time checked `get_or_create` and
+//!   `update_or_create` builders with explicit transaction semantics
+//! - **Typed Date Projections**: Database-side truncation, time-zone conversion,
+//!   distinctness, and deterministic ordering
 //! - **Field Types**: Rich set of field types with validation
 //! - **Relationships**: ForeignKey, ManyToMany, OneToOne
 //! - **Fixtures**: Django-compatible model fixture dump/load runtime with upsert,
 //!   binary base64 values, SQL/JSON null provenance, foreign key, many-to-many,
 //!   nullable foreign-key omission, and PostgreSQL sequence handling
 //! - **Typed Relation Traversal**: Compile-time checked relation paths for SELECT filters and eager loading
+//! - **Transaction-safe Row Locking**: Typed `select_for_update` targets and caller-owned transaction execution
 //! - **Scoped N+1 Detection**: Opt-in query shape detection for focused diagnostics and tests
+//! - **Plan-only Query Diagnostics**: Backend-aware `QuerySet::explain` with
+//!   typed formats and no data-executing options
 //!
 //! ### Migrations (`migrations` module)
 //!
@@ -96,9 +105,13 @@
 //! expressions; every target vector remains a bound query value.
 //!
 //! ```rust
+//! # #[cfg(feature = "pgvector")]
 //! # mod migrations { pub use reinhardt_db::migrations::*; }
+//! # #[cfg(feature = "pgvector")]
 //! # mod orm { pub use reinhardt_db::orm::*; }
+//! # #[cfg(feature = "pgvector")]
 //! use reinhardt_core::macros::model;
+//! # #[cfg(feature = "pgvector")]
 //! use reinhardt_db::{
 //!     migrations::{
 //!         MigrationAutodetector, Operation, ProjectState, model_registry::global_registry,
@@ -106,8 +119,10 @@
 //!     },
 //!     orm::{Model, QuerySet, Vector},
 //! };
+//! # #[cfg(feature = "pgvector")]
 //! use serde::{Deserialize, Serialize};
 //!
+//! # #[cfg(feature = "pgvector")]
 //! #[model(app_label = "search", table_name = "documents")]
 //! #[derive(Clone, Debug, Serialize, Deserialize)]
 //! struct Document {
@@ -130,6 +145,7 @@
 //!     summary: Vector<3>,
 //! }
 //!
+//! # #[cfg(feature = "pgvector")]
 //! fn main() -> Result<(), Box<dyn std::error::Error>> {
 //!     let metadata = global_registry()
 //!         .get_model("search", "Document")
@@ -188,6 +204,8 @@
 //!     let _ = nearest;
 //!     Ok(())
 //! }
+//! # #[cfg(not(feature = "pgvector"))]
+//! # fn main() {}
 //! ```
 //!
 //! `DatabaseMigrationExecutor` applies these operations in vector order.
@@ -298,6 +316,7 @@
 //!     Framework(#[from] Error),
 //! }
 //!
+//! # #[cfg(feature = "sqlite")]
 //! # async fn example() -> Result<(), ApplicationError> {
 //! let owner = BackendsConnection::connect_sqlite("sqlite::memory:").await?;
 //! let lease = DatabaseConnectionLease::register(owner)?;

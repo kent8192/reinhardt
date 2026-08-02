@@ -10,6 +10,7 @@ use std::collections::{BTreeSet, HashMap, HashSet};
 pub struct MigrationCatalog {
 	migrations: HashMap<MigrationKey, Migration>,
 	graph: MigrationGraph,
+	replacement_owners: HashMap<MigrationKey, MigrationKey>,
 }
 
 impl std::fmt::Debug for MigrationCatalog {
@@ -196,7 +197,11 @@ impl MigrationCatalog {
 		}
 		graph.topological_sort()?;
 
-		Ok(Self { migrations, graph })
+		Ok(Self {
+			migrations,
+			graph,
+			replacement_owners,
+		})
 	}
 
 	fn resolve_graph_dependency(
@@ -461,16 +466,7 @@ impl MigrationCatalog {
 			migrations,
 			external_dependencies: external_dependencies.into_iter().collect(),
 			available_migrations: self.migrations.keys().cloned().collect(),
-			replacement_owners: self
-				.migrations
-				.iter()
-				.flat_map(|(owner, migration)| {
-					migration
-						.replaces
-						.iter()
-						.map(move |(app, name)| (MigrationKey::new(app, name), owner.clone()))
-				})
-				.collect(),
+			replacement_owners: self.replacement_owners.clone(),
 		})
 	}
 

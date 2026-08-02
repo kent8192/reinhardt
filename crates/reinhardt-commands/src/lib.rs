@@ -13,6 +13,8 @@
 //! - **Colored Output**: Rich terminal output
 //! - **Data Fixtures**: Django-compatible `dumpdata`, transaction-safe `loaddata`,
 //!   binary fixture values, many-to-many arrays, and seed hooks
+//! - **Schema Inspection**: Django-compatible `inspectdb` with deterministic
+//!   PostgreSQL, MySQL, and SQLite model generation
 //! - **AST-Based Code Generation**: Robust code generation using Abstract Syntax Trees
 //! - **Auto-Reload**: Built-in hot-reload for the development server (server + wasm)
 //! - **Tera Template Engine**: Powerful template rendering for project/app generation
@@ -192,6 +194,20 @@
 //!
 //! `shell-rhai` has been removed: `shell` now means the Rust evaluator. Existing
 //! settings-only entry points remain compatible with non-shell commands.
+//!
+//! ## Database Schema Inspection
+//!
+//! `manage inspectdb [TABLE ...]` accepts exact table names and writes one
+//! parseable Rust module to stdout by default. The `--database` option selects
+//! a configured alias and defaults to `default`; use `--database-url` only for
+//! an explicit URL override. Human-readable progress is written to stderr.
+//!
+//! Explicit `--output DIRECTORY` mode generates `DIRECTORY/models.rs` plus
+//! `DIRECTORY/models/<table>.rs` child modules and never generates `mod.rs`.
+//! Existing destinations are rejected unless `--force` is also present, and a
+//! failed publication is rollback-safe and all-or-nothing when the command
+//! reports failure: replaced files are restored and newly created partial
+//! output is removed. The `--force` option is invalid without `--output`.
 
 /// Base command trait and argument/option definitions.
 pub mod base;
@@ -211,6 +227,8 @@ pub(crate) mod createsuperuser;
 /// Data fixture and development seeding commands.
 #[cfg(feature = "reinhardt-db")]
 pub mod data_commands;
+#[cfg(feature = "reinhardt-db")]
+pub(crate) mod database_selector;
 /// Debounced file-system watcher for hot-reload (replaces inline watcher).
 #[cfg(feature = "autoreload")]
 #[doc(hidden)]
@@ -221,6 +239,9 @@ pub mod embedded_templates;
 pub mod formatter;
 /// Internationalization commands (makemessages, compilemessages).
 pub mod i18n_commands;
+/// Database schema inspection command.
+#[cfg(feature = "migrations")]
+pub mod inspectdb;
 /// Project introspection command for platform metadata discovery.
 #[cfg(feature = "introspect")]
 pub mod introspect;
@@ -345,6 +366,8 @@ pub use data_commands::{
 	execute_loaddata, execute_seed,
 };
 pub use i18n_commands::{CompileMessagesCommand, MakeMessagesCommand};
+#[cfg(feature = "migrations")]
+pub use inspectdb::{InspectDbCommand, InspectDbWriter};
 #[cfg(feature = "introspect")]
 pub use introspect::IntrospectCommand;
 pub use mail_commands::SendTestEmailCommand;

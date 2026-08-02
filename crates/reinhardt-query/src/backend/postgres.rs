@@ -44,7 +44,7 @@ use std::fmt::Write as FmtWrite;
 
 use super::{QueryBuilder, SqlWriter};
 use crate::{
-	expr::{Condition, SimpleExpr},
+	expr::{Condition, SimpleExpr, TemporalTimeZone, TemporalTruncKind, TemporalTruncOutput},
 	query::{
 		AlterIndexStatement, AlterTableOperation, AlterTableStatement, CheckTableStatement,
 		CreateIndexStatement, CreateTableStatement, CreateTriggerStatement, CreateViewStatement,
@@ -88,11 +88,64 @@ impl PostgresQueryBuilder {
 		Self
 	}
 
+	fn write_temporal_zone(&self, writer: &mut SqlWriter, zone: String, unquoted: bool) {
+		if unquoted {
+			writer.push("'");
+			writer.push(&zone.replace('\'', "''"));
+			writer.push("'");
+		} else {
+			writer.push_value(crate::value::Value::String(Some(Box::new(zone))), |index| {
+				self.placeholder(index)
+			});
+		}
+	}
+
+	fn write_temporal_trunc(
+		&self,
+		writer: &mut SqlWriter,
+		expr: &SimpleExpr,
+		kind: TemporalTruncKind,
+		time_zone: Option<&TemporalTimeZone>,
+		output: TemporalTruncOutput,
+		unquoted: bool,
+	) {
+		writer.push("DATE_TRUNC('");
+		writer.push(kind.as_str());
+		writer.push("', ");
+		if unquoted {
+			self.write_simple_expr_unquoted(writer, expr);
+		} else {
+			self.write_simple_expr(writer, expr);
+		}
+		if output == TemporalTruncOutput::DateTime {
+			writer.push(" AT TIME ZONE ");
+			let zone = match time_zone {
+				Some(TemporalTimeZone::Named(zone)) => zone.clone(),
+				Some(TemporalTimeZone::Utc) | None => "UTC".to_string(),
+			};
+			self.write_temporal_zone(writer, zone, unquoted);
+		}
+		writer.push(")");
+		match output {
+			TemporalTruncOutput::Date => writer.push("::date"),
+			TemporalTruncOutput::DateTime => {
+				writer.push(" AT TIME ZONE ");
+				let zone = match time_zone {
+					Some(TemporalTimeZone::Named(zone)) => zone.clone(),
+					Some(TemporalTimeZone::Utc) | None => "UTC".to_string(),
+				};
+				self.write_temporal_zone(writer, zone, unquoted);
+			}
+		}
+	}
+
 	/// Build a SELECT statement through the checked query-building API.
 	pub fn build_select_checked(
 		&self,
 		stmt: &SelectStatement,
 	) -> Result<(String, Values), crate::QueryBuildError> {
+		crate::error::validate_select_lock_for_backend(stmt, "PostgreSQL")?;
+		crate::error::validate_select_for_backend(stmt, "PostgreSQL")?;
 		Ok(self.build_select(stmt))
 	}
 
@@ -101,6 +154,7 @@ impl PostgresQueryBuilder {
 		&self,
 		stmt: &CreateTableStatement,
 	) -> Result<(String, Values), crate::QueryBuildError> {
+		crate::error::validate_create_table_for_backend(stmt, "PostgreSQL")?;
 		#[cfg(feature = "pgvector")]
 		crate::error::validate_postgres_create_table_dimensions(stmt)?;
 		Ok(self.build_create_table(stmt))
@@ -111,6 +165,8 @@ impl PostgresQueryBuilder {
 		&self,
 		stmt: &InsertStatement,
 	) -> Result<(String, Values), crate::QueryBuildError> {
+		crate::error::validate_insert_lock_for_backend(stmt, "PostgreSQL")?;
+		crate::error::validate_insert_for_backend(stmt, "PostgreSQL")?;
 		Ok(self.build_insert(stmt))
 	}
 
@@ -119,6 +175,8 @@ impl PostgresQueryBuilder {
 		&self,
 		stmt: &UpdateStatement,
 	) -> Result<(String, Values), crate::QueryBuildError> {
+		crate::error::validate_update_lock_for_backend(stmt, "PostgreSQL")?;
+		crate::error::validate_update_for_backend(stmt, "PostgreSQL")?;
 		Ok(self.build_update(stmt))
 	}
 
@@ -127,6 +185,8 @@ impl PostgresQueryBuilder {
 		&self,
 		stmt: &DeleteStatement,
 	) -> Result<(String, Values), crate::QueryBuildError> {
+		crate::error::validate_delete_lock_for_backend(stmt, "PostgreSQL")?;
+		crate::error::validate_delete_for_backend(stmt, "PostgreSQL")?;
 		Ok(self.build_delete(stmt))
 	}
 
@@ -135,6 +195,7 @@ impl PostgresQueryBuilder {
 		&self,
 		stmt: &AlterTableStatement,
 	) -> Result<(String, Values), crate::QueryBuildError> {
+		crate::error::validate_alter_table_for_backend(stmt, "PostgreSQL")?;
 		#[cfg(feature = "pgvector")]
 		crate::error::validate_postgres_alter_table_dimensions(stmt)?;
 		Ok(self.build_alter_table(stmt))
@@ -432,6 +493,32 @@ impl PostgresQueryBuilder {
 
 				// Merge the values from the subquery
 				writer.append_values(&subquery_values);
+			}
+		}
+	}
+
+	/// Write a table target in a row-lock `OF` clause.
+	fn write_lock_table_target(&self, writer: &mut SqlWriter, table_ref: &TableRef) {
+		match table_ref {
+			TableRef::TableAlias(_, alias)
+			| TableRef::SchemaTableAlias(_, _, alias)
+			| TableRef::SubQuery(_, alias) => {
+				writer.push_identifier(&alias.to_string(), |s| self.escape_iden(s));
+			}
+			TableRef::Table(iden) => {
+				writer.push_identifier(&iden.to_string(), |s| self.escape_iden(s));
+			}
+			TableRef::SchemaTable(schema, table) => {
+				writer.push_identifier(&schema.to_string(), |s| self.escape_iden(s));
+				writer.push(".");
+				writer.push_identifier(&table.to_string(), |s| self.escape_iden(s));
+			}
+			TableRef::DatabaseSchemaTable(db, schema, table) => {
+				writer.push_identifier(&db.to_string(), |s| self.escape_iden(s));
+				writer.push(".");
+				writer.push_identifier(&schema.to_string(), |s| self.escape_iden(s));
+				writer.push(".");
+				writer.push_identifier(&table.to_string(), |s| self.escape_iden(s));
 			}
 		}
 	}
@@ -783,6 +870,12 @@ impl PostgresQueryBuilder {
 				writer.push_identifier(&type_name.to_string(), |s| self.escape_iden(s));
 				writer.push(")");
 			}
+			SimpleExpr::TemporalTrunc {
+				expr,
+				kind,
+				time_zone,
+				output,
+			} => self.write_temporal_trunc(writer, expr, *kind, time_zone.as_ref(), *output, false),
 		}
 	}
 
@@ -1022,6 +1115,12 @@ impl PostgresQueryBuilder {
 				writer.push_identifier(&type_name.to_string(), |s| self.escape_iden(s));
 				writer.push(")");
 			}
+			SimpleExpr::TemporalTrunc {
+				expr,
+				kind,
+				time_zone,
+				output,
+			} => self.write_temporal_trunc(writer, expr, *kind, time_zone.as_ref(), *output, true),
 		}
 	}
 
@@ -1459,6 +1558,30 @@ impl QueryBuilder for PostgresQueryBuilder {
 
 			// Merge the values from the union query
 			writer.append_values(&union_values);
+		}
+
+		if let Some(lock) = &stmt.lock {
+			use crate::query::{LockBehavior, LockType};
+
+			writer.push_keyword(match lock.r#type {
+				LockType::Update => "FOR UPDATE",
+				LockType::NoKeyUpdate => "FOR NO KEY UPDATE",
+				LockType::Share => "FOR SHARE",
+				LockType::KeyShare => "FOR KEY SHARE",
+			});
+			if !lock.tables.is_empty() {
+				writer.push_keyword("OF");
+				writer.push_space();
+				writer.push_list(&lock.tables, ", ", |w, table| {
+					self.write_lock_table_target(w, table);
+				});
+			}
+			if let Some(behavior) = lock.behavior {
+				writer.push_keyword(match behavior {
+					LockBehavior::Nowait => "NOWAIT",
+					LockBehavior::SkipLocked => "SKIP LOCKED",
+				});
+			}
 		}
 
 		writer.finish()
@@ -2055,8 +2178,10 @@ impl QueryBuilder for PostgresQueryBuilder {
 		if let Some(select) = &stmt.select {
 			let (select_sql, select_values) = self.build_select(select);
 			writer.push_space();
-			writer.push(&select_sql);
-			writer.append_values(&select_values);
+			writer.push(&crate::query::traits::inline_params(
+				&select_sql,
+				&select_values,
+			));
 		}
 
 		writer.finish()
@@ -4814,12 +4939,181 @@ mod tests {
 	#[cfg(feature = "pgvector")]
 	use crate::types::{BinOper, PgBinOper};
 	use crate::{
-		expr::{Expr, ExprTrait},
-		query::Query,
+		expr::{Expr, ExprTrait, Func, SimpleExpr, TemporalTruncKind, TemporalTruncOutput},
+		query::{LockType, Query},
 		types::{Alias, ColumnDef, IntoIden},
 		value::Value,
 	};
 	use rstest::rstest;
+
+	#[test]
+	fn checked_select_rejects_row_locking_with_group_by_or_having() {
+		let builder = PostgresQueryBuilder::new();
+		let mut grouped = Query::select();
+		grouped
+			.column("account_id")
+			.from("ledger_entries")
+			.group_by_col("account_id")
+			.lock(LockType::Update);
+		assert_eq!(
+			builder.build_select_checked(&grouped),
+			Err(crate::QueryBuildError::UnsupportedBackendFeature {
+				feature: "row locking with GROUP BY or HAVING queries",
+				backend: "PostgreSQL",
+			})
+		);
+
+		let mut having = Query::select();
+		having
+			.column("account_id")
+			.from("ledger_entries")
+			.and_having(Expr::col("account_id").gt(0))
+			.lock(LockType::Update);
+		assert_eq!(
+			builder.build_select_checked(&having),
+			Err(crate::QueryBuildError::UnsupportedBackendFeature {
+				feature: "row locking with GROUP BY or HAVING queries",
+				backend: "PostgreSQL",
+			})
+		);
+	}
+
+	#[test]
+	fn checked_select_rejects_row_locking_with_aggregate_projection() {
+		let builder = PostgresQueryBuilder::new();
+		let mut statement = Query::select();
+		statement
+			.expr(Func::count(Expr::col("id").into_simple_expr()))
+			.from("accounts")
+			.lock(LockType::Update);
+
+		assert_eq!(
+			builder.build_select_checked(&statement),
+			Err(crate::QueryBuildError::UnsupportedBackendFeature {
+				feature: "row locking with aggregate queries",
+				backend: "PostgreSQL",
+			})
+		);
+	}
+
+	#[test]
+	fn checked_select_rejects_row_locking_with_window_projection() {
+		let builder = PostgresQueryBuilder::new();
+		let mut statement = Query::select();
+		statement
+			.expr(Expr::row_number().over(crate::types::WindowStatement::default()))
+			.from("accounts")
+			.lock(LockType::Update);
+
+		assert_eq!(
+			builder.build_select_checked(&statement),
+			Err(crate::QueryBuildError::UnsupportedBackendFeature {
+				feature: "row locking with window-function queries",
+				backend: "PostgreSQL",
+			})
+		);
+	}
+
+	#[test]
+	fn checked_select_rejects_lock_targets_on_nullable_outer_join_sides() {
+		let builder = PostgresQueryBuilder::new();
+		let mut statement = Query::select();
+		statement
+			.column(("parents", "id"))
+			.from("parents")
+			.left_join(
+				"children",
+				Expr::col(("parents", "id")).equals(("children", "parent_id")),
+			)
+			.lock_tables(["children"]);
+
+		assert_eq!(
+			builder.build_select_checked(&statement),
+			Err(crate::QueryBuildError::UnsupportedBackendFeature {
+				feature: "row lock target on nullable outer-join side",
+				backend: "PostgreSQL",
+			})
+		);
+	}
+
+	#[test]
+	fn checked_select_rejects_targetless_locking_across_outer_joins() {
+		let builder = PostgresQueryBuilder::new();
+		let mut statement = Query::select();
+		statement
+			.column(("parents", "id"))
+			.from("parents")
+			.left_join(
+				"children",
+				Expr::col(("parents", "id")).equals(("children", "parent_id")),
+			)
+			.lock(LockType::Update);
+
+		assert_eq!(
+			builder.build_select_checked(&statement),
+			Err(crate::QueryBuildError::UnsupportedBackendFeature {
+				feature: "row locking across outer joins without explicit targets",
+				backend: "PostgreSQL",
+			})
+		);
+	}
+
+	#[test]
+	fn checked_dml_rejects_nested_locked_selects() {
+		let builder = PostgresQueryBuilder::new();
+		let mut source = Query::select();
+		source.column("id").from("accounts").lock(LockType::Update);
+		let insert = Query::insert()
+			.into_table("archive")
+			.columns(["account_id"])
+			.from_subquery(source.to_owned())
+			.to_owned();
+
+		assert!(builder.build_insert_checked(&insert).is_ok());
+
+		let mut invalid_source = Query::select();
+		invalid_source
+			.expr(Func::count(Expr::col("id").into_simple_expr()))
+			.from("accounts")
+			.lock(LockType::Update);
+		let invalid_insert = Query::insert()
+			.into_table("archive")
+			.columns(["account_id"])
+			.from_subquery(invalid_source.to_owned())
+			.to_owned();
+
+		assert_eq!(
+			builder.build_insert_checked(&invalid_insert),
+			Err(crate::QueryBuildError::UnsupportedBackendFeature {
+				feature: "row locking with aggregate queries",
+				backend: "PostgreSQL",
+			})
+		);
+
+		let update = Query::update()
+			.table("archive")
+			.value_expr("account_id", Expr::subquery(invalid_source.clone()))
+			.to_owned();
+		assert_eq!(
+			builder.build_update_checked(&update),
+			Err(crate::QueryBuildError::UnsupportedBackendFeature {
+				feature: "row locking with aggregate queries",
+				backend: "PostgreSQL",
+			})
+		);
+
+		let delete = Query::delete()
+			.from_table("archive")
+			.and_where(Expr::exists(invalid_source))
+			.to_owned();
+		assert_eq!(
+			builder.build_delete_checked(&delete),
+			Err(crate::QueryBuildError::UnsupportedBackendFeature {
+				feature: "row locking with aggregate queries",
+				backend: "PostgreSQL",
+			})
+		);
+	}
 
 	#[test]
 	fn test_escape_identifier() {
@@ -4851,6 +5145,63 @@ mod tests {
 		let (sql, values) = builder.build_select(&stmt);
 		assert_eq!(sql, "SELECT \"id\", \"name\" FROM \"users\"");
 		assert_eq!(values.len(), 0);
+	}
+
+	#[test]
+	fn test_checked_select_rejects_direct_invalid_temporal_date_truncation() {
+		let mut stmt = Query::select();
+		stmt.expr(SimpleExpr::TemporalTrunc {
+			expr: Box::new(Expr::col("occurred_on").into_simple_expr()),
+			kind: TemporalTruncKind::Hour,
+			time_zone: None,
+			output: TemporalTruncOutput::Date,
+		})
+		.from("events");
+
+		let error = PostgresQueryBuilder
+			.build_select_checked(&stmt.to_owned())
+			.expect_err("PostgreSQL must reject hourly date truncation");
+
+		assert!(matches!(
+			error,
+			crate::QueryBuildError::InvalidTemporalTruncation {
+				kind: "hour",
+				output: "date"
+			}
+		));
+	}
+
+	#[rstest]
+	fn checked_ddl_builders_reject_direct_invalid_temporal_date_truncation() {
+		let invalid_projection = SimpleExpr::TemporalTrunc {
+			expr: Box::new(Expr::col("occurred_on").into_simple_expr()),
+			kind: TemporalTruncKind::Hour,
+			time_zone: None,
+			output: TemporalTruncOutput::Date,
+		};
+		let mut create = Query::create_table();
+		create.table("events").col(
+			ColumnDef::new("bucket")
+				.date()
+				.default(invalid_projection.clone()),
+		);
+		let mut alter = Query::alter_table();
+		alter
+			.table("events")
+			.add_column(ColumnDef::new("bucket").date().default(invalid_projection));
+
+		let expected_error = crate::QueryBuildError::InvalidTemporalTruncation {
+			kind: "hour",
+			output: "date",
+		};
+		assert_eq!(
+			PostgresQueryBuilder.build_create_table_checked(&create),
+			Err(expected_error.clone())
+		);
+		assert_eq!(
+			PostgresQueryBuilder.build_alter_table_checked(&alter),
+			Err(expected_error)
+		);
 	}
 
 	#[test]

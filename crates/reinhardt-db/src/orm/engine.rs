@@ -445,6 +445,7 @@ impl DatabaseEngine {
 	/// # Examples
 	///
 	/// ```no_run
+	/// # #[cfg(feature = "sqlite")]
 	/// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
 	/// use reinhardt_db::orm::engine::DatabaseEngine;
 	///
@@ -457,6 +458,7 @@ impl DatabaseEngine {
 	///     .await?;
 	/// # Ok(())
 	/// # }
+	/// # #[cfg(feature = "sqlite")]
 	/// # tokio::runtime::Runtime::new().unwrap().block_on(example());
 	/// ```
 	pub async fn execute(&self, sql: &str) -> Result<u64> {

@@ -38,8 +38,41 @@ assert_eq!(name.get(), "Ada");
 `EventFixture::new(KnownEvent)` derives its payload family, bubbling,
 cancelability, composition, and deterministic mouse defaults from the event
 catalog. Convenience constructors cover `click`, `submit`, `input`, `change`,
-`key_down`, and `pointer_move`. `EventFixture::custom(name)` dispatches a raw
-custom event.
+`key_down`, and `pointer_move`. `EventFixture::custom(name)` dispatches a plain
+named event unless a custom detail setter is used.
+
+Use `.custom_detail(&detail)` to serialize a typed browser `CustomEvent.detail`
+payload for a typed `@custom::<Detail>("name")` handler:
+
+```rust,ignore
+use reinhardt_pages::testing::component::EventFixture;
+use serde::Serialize;
+
+#[derive(Serialize)]
+struct ItemSelected {
+    id: u64,
+}
+
+button.dispatch(
+    EventFixture::custom("item-selected")
+        .custom_detail(&ItemSelected { id: 42 }),
+)?;
+```
+
+The absence of `.custom_detail(...)` is not the same as JSON `null`:
+`EventFixture::custom("item-selected")` represents a same-named plain event,
+whereas `.custom_detail_value(Value::Null)` represents the browser
+`CustomEvent` default detail. Use `json!(...)` to supply malformed detail when
+testing a structured decode error:
+
+```rust,ignore
+use serde_json::{Value, json};
+
+let default_detail = EventFixture::custom("item-selected")
+    .custom_detail_value(Value::Null);
+let malformed_detail = EventFixture::custom("item-selected")
+    .custom_detail_value(json!({ "id": "not-a-number" }));
+```
 
 Target-state setters include `value`, `checked`, `selected_values`, `files`,
 and `content_editable`. Validation is atomic: an invalid compound target patch
@@ -59,6 +92,7 @@ method continues until tasks created by other tasks are also complete.
 ## Raw and component events
 
 Use a standard `EventFixture` for intrinsic catalog events. Use
-`EventFixture::custom` only with `@custom("name")` or another raw listener.
+`EventFixture::custom` with `@custom("name")` for raw listeners, or add
+`.custom_detail(...)` for typed `@custom::<Detail>("name")` listeners.
 Component event props keep the argument type declared by the component prop;
 they are not converted through the intrinsic event catalog.

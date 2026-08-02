@@ -150,38 +150,45 @@ pub struct MigrationGraph {
 fn terminal_replacement_owner(
 	replaced_key: &MigrationKey,
 	owners: &HashMap<MigrationKey, Vec<MigrationKey>>,
-	replaced: &HashSet<MigrationKey>,
 ) -> Result<MigrationKey> {
-	let mut current = replaced_key.clone();
-	let mut visited = HashSet::new();
-	while let Some(candidates) = owners.get(&current) {
-		if !visited.insert(current.clone()) {
+	fn collect_terminal_owners(
+		current: &MigrationKey,
+		owners: &HashMap<MigrationKey, Vec<MigrationKey>>,
+		path: &mut HashSet<MigrationKey>,
+		terminals: &mut HashSet<MigrationKey>,
+	) -> Result<()> {
+		if !path.insert(current.clone()) {
 			return Err(MigrationError::CircularDependency {
 				cycle: current.id(),
 			});
 		}
-		let mut terminal: Vec<_> = candidates
-			.iter()
-			.filter(|candidate| !replaced.contains(*candidate))
-			.cloned()
-			.collect();
-		terminal.sort_by_key(MigrationKey::id);
-		match terminal.as_slice() {
-			[owner] => return Ok(owner.clone()),
-			[] => {
-				let mut candidates = candidates.clone();
-				candidates.sort_by_key(MigrationKey::id);
-				current = candidates.pop().expect("replacement owner set is not empty");
+		if let Some(candidates) = owners.get(current) {
+			for candidate in candidates {
+				collect_terminal_owners(candidate, owners, path, terminals)?;
 			}
-			_ => {
-				return Err(MigrationError::InvalidMigration(format!(
-					"Replacement {} has multiple terminal owners",
-					replaced_key
-				)));
-			}
+		} else {
+			terminals.insert(current.clone());
 		}
+		path.remove(current);
+		Ok(())
 	}
-	Ok(current)
+
+	let mut terminals = HashSet::new();
+	collect_terminal_owners(
+		replaced_key,
+		owners,
+		&mut HashSet::new(),
+		&mut terminals,
+	)?;
+	let mut terminals: Vec<_> = terminals.into_iter().collect();
+	terminals.sort_by_key(MigrationKey::id);
+	match terminals.as_slice() {
+		[owner] => Ok(owner.clone()),
+		_ => Err(MigrationError::InvalidMigration(format!(
+			"Replacement {} has multiple terminal owners",
+			replaced_key
+		))),
+	}
 }
 
 impl MigrationGraph {
@@ -825,7 +832,7 @@ impl MigrationGraph {
 		let replacement_map: HashMap<MigrationKey, MigrationKey> = replacement_owners
 			.keys()
 			.map(|replaced_key| {
-				terminal_replacement_owner(replaced_key, &replacement_owners, &replaced)
+				terminal_replacement_owner(replaced_key, &replacement_owners)
 					.map(|owner| (replaced_key.clone(), owner))
 			})
 			.collect::<Result<_>>()?;

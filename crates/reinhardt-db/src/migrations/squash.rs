@@ -581,7 +581,9 @@ impl MigrationSquasher {
 							..
 						} => {
 							referenced_table == table
-								&& referenced_columns.iter().any(|referenced| referenced == column)
+								&& referenced_columns
+									.iter()
+									.any(|referenced| referenced == column)
 						}
 						crate::migrations::Constraint::OneToOne {
 							referenced_table,

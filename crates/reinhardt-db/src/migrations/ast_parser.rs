@@ -152,7 +152,9 @@ pub fn extract_migration_metadata_strict(
 
 fn builder_declares_atomic(expr: &Expr) -> bool {
 	match expr {
-		Expr::MethodCall(call) => call.method == "atomic" || builder_declares_atomic(&call.receiver),
+		Expr::MethodCall(call) => {
+			call.method == "atomic" || builder_declares_atomic(&call.receiver)
+		}
 		_ => false,
 	}
 }

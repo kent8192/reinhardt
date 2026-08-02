@@ -375,7 +375,8 @@ impl DatabaseMigrationExecutor {
 						.await?;
 					for (app_label, name) in &migration.replaces {
 						if applied_records_set.contains(&(app_label.as_str(), name.as_str()))
-							&& (app_label != &historical_record.app || name != &historical_record.name)
+							&& (app_label != &historical_record.app
+								|| name != &historical_record.name)
 						{
 							self.recorder.unapply(app_label, name).await?;
 						}

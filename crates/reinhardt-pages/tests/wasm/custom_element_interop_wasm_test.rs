@@ -8,8 +8,9 @@ use std::cell::RefCell;
 use std::rc::Rc;
 
 use reinhardt_pages::dom::{CustomEventOptions, Element};
+use reinhardt_pages::event::CustomEventDetailError;
 use serde::{Deserialize, Serialize};
-use wasm_bindgen::JsValue;
+use wasm_bindgen::{JsCast, JsValue};
 use wasm_bindgen_test::*;
 
 wasm_bindgen_test_configure!(run_in_browser);
@@ -92,8 +93,10 @@ fn typed_custom_event_listener_decodes_detail_and_drops_cleanly() {
 
 	let handle = element.add_typed_custom_event_listener::<WidgetDetail, _>("widget-change", {
 		let received = Rc::clone(&received);
-		move |payload| {
-			*received.borrow_mut() = Some(payload.expect("typed detail"));
+		move |event| {
+			assert_eq!(event.event_type(), "widget-change");
+			assert!(event.raw().dyn_ref::<web_sys::CustomEvent>().is_some());
+			*received.borrow_mut() = Some(event.into_detail().expect("typed detail"));
 		}
 	});
 
@@ -125,4 +128,60 @@ fn typed_custom_event_listener_decodes_detail_and_drops_cleanly() {
 		.expect("dispatch after drop");
 
 	assert_eq!(*received.borrow(), None);
+}
+
+#[wasm_bindgen_test]
+fn typed_custom_event_listener_defers_malformed_detail_error() {
+	let document = web_sys::window()
+		.expect("window")
+		.document()
+		.expect("document");
+	let element = Element::new(document.create_element("rh-widget").expect("element"));
+	let received_error = Rc::new(RefCell::new(None));
+
+	let handle = element.add_typed_custom_event_listener::<WidgetDetail, _>("widget-change", {
+		let received_error = Rc::clone(&received_error);
+		move |event| {
+			*received_error.borrow_mut() = Some(event.into_detail().expect_err("malformed detail"));
+		}
+	});
+
+	element
+		.dispatch_custom_event("widget-change", &JsValue::from_str("not a widget detail"))
+		.expect("dispatch malformed custom event");
+
+	assert!(matches!(
+		received_error.borrow().as_ref(),
+		Some(CustomEventDetailError::Deserialize { event_type, .. }) if event_type == "widget-change"
+	));
+	drop(handle);
+}
+
+#[wasm_bindgen_test]
+fn typed_custom_event_listener_receives_same_named_plain_event() {
+	let document = web_sys::window()
+		.expect("window")
+		.document()
+		.expect("document");
+	let element = Element::new(document.create_element("rh-widget").expect("element"));
+	let received_error = Rc::new(RefCell::new(None));
+
+	let handle = element.add_typed_custom_event_listener::<WidgetDetail, _>("widget-change", {
+		let received_error = Rc::clone(&received_error);
+		move |event| {
+			*received_error.borrow_mut() = Some(event.into_detail().expect_err("plain event"));
+		}
+	});
+
+	let plain = web_sys::Event::new("widget-change").expect("plain event");
+	element
+		.as_web_sys()
+		.dispatch_event(&plain)
+		.expect("dispatch plain event");
+	assert!(matches!(
+		received_error.borrow().as_ref(),
+		Some(CustomEventDetailError::NotCustomEvent { event_type })
+			if event_type == "widget-change"
+	));
+	drop(handle);
 }

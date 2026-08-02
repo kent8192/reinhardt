@@ -4,6 +4,14 @@ error: REST-only action options are not supported by server function sets
 9 |     #[action(detail = true, methods = ["POST"])]
   |                             ^^^^^^^
 
+warning: unused import: `article_fns`
+ --> tests/ui/server_fnset/fail/action_rest_key.rs:5:4
+  |
+5 | fn article_fns() -> ModelServerFnSet<ArticleResource> { ModelServerFnSet::new() }
+  |    ^^^^^^^^^^^
+  |
+  = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
+
 error[E0277]: the trait bound `Actions: ServerFnSetActions<ArticleResource>` is not satisfied
  --> tests/ui/server_fnset/fail/action_rest_key.rs:4:44
   |

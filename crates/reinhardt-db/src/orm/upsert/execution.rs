@@ -196,6 +196,16 @@ where
 					)));
 				}
 			};
+			if backend == DatabaseBackend::MySql {
+				if let Some(last_insert_id) = result.last_insert_id {
+					let model = reload_generated_mysql_primary_key::<C::Model, _>(
+						last_insert_id,
+						transaction,
+					)
+					.await?;
+					return Ok((model, created));
+				}
+			}
 			let Some(model) = load_locked(&plan, transaction).await? else {
 				return Err(Error::Conflict(
 					"update_or_create write completed without exactly one row matching the full lookup"
@@ -319,7 +329,13 @@ where
 		return Ok((candidate, false));
 	}
 	let update = sql::update_values_by_primary_key(&locked, &values, transaction.backend())?;
-	let result = transaction.execute(&update.sql, update.params).await?;
+	let result = if transaction.backend() == DatabaseBackend::Postgres {
+		transaction
+			.execute_in_savepoint(&update.sql, update.params)
+			.await?
+	} else {
+		transaction.execute(&update.sql, update.params).await?
+	};
 	if result.rows_affected != 1
 		&& !(transaction.backend() == DatabaseBackend::MySql && result.rows_affected == 0)
 	{

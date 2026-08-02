@@ -9,6 +9,19 @@
 //! - **AST-Based Entry Points**: Generates Rust 2024 Edition-compliant module files
 //! - **State Reconstruction**: Django-style `ProjectState` building from migration history
 //! - **Zero Downtime**: Support for safe schema changes in production
+//! - **Schema Inspection**: Deterministic PostgreSQL, MySQL, and SQLite model
+//!   generation with exact object selection
+//!
+//! ## Schema Inspection
+//!
+//! [`inspect_database`] reads exact table selections and optionally includes
+//! backend views or PostgreSQL partitions. [`render_models_module`] produces a
+//! single parseable Rust module for stdout, while
+//! [`generate_models_canonical`] produces a deterministic Rust 2024 multi-file
+//! set rooted at `models.rs` with child modules beneath `models/`; no `mod.rs`
+//! is generated.
+//! Management-command directory output validates the complete set before using
+//! rollback-safe, all-or-nothing publication when the command reports failure.
 //!
 //! ## AST-Based Entry Point Generation
 //!
@@ -157,12 +170,12 @@ pub use zero_downtime::{MigrationPhase, Strategy, ZeroDowntimeMigration};
 pub use introspect::{
 	GeneratedFile, GeneratedOutput, GenerationConfig, IntrospectConfig, NamingConvention,
 	OutputConfig, SchemaCodeGenerator, TableFilterConfig, TypeMapper, TypeMappingError,
-	escape_rust_keyword, generate_models, preview_output, sanitize_identifier, to_pascal_case,
-	write_output,
+	escape_rust_keyword, generate_models, generate_models_canonical, preview_output,
+	render_models_module, sanitize_identifier, to_pascal_case, write_output,
 };
 pub use introspection::{
 	ColumnInfo, DatabaseIntrospector, ForeignKeyInfo as IntrospectionForeignKeyInfo, IndexInfo,
-	TableInfo, UniqueConstraintInfo,
+	InspectDbOptions, TableInfo, UniqueConstraintInfo, inspect_database,
 };
 
 // Re-export types from reinhardt-backends for convenience

@@ -1,7 +1,7 @@
 //! Command execution context
 
 use reinhardt_conf::HasCommonSettings;
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;
 
 const SUPPRESS_OUTPUT_OPTION: &str = "__reinhardt_suppress_output";
@@ -28,15 +28,76 @@ pub struct CommandContext {
 
 impl std::fmt::Debug for CommandContext {
 	fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+		let args = redact_arguments(&self.args);
+		let options: BTreeMap<_, _> = self
+			.options
+			.iter()
+			.map(|(key, values)| {
+				let displayed_values = if option_values_are_sensitive(key, values) {
+					vec!["[REDACTED]"]
+				} else {
+					values.iter().map(String::as_str).collect()
+				};
+				(key.as_str(), displayed_values)
+			})
+			.collect();
 		// `dyn HasCommonSettings` is not Debug, so render its presence only.
 		f.debug_struct("CommandContext")
-			.field("args", &self.args)
-			.field("options", &self.options)
+			.field("args", &args)
+			.field("options", &options)
 			.field("verbosity", &self.verbosity)
 			.field("suppress_output", &self.output_is_suppressed())
 			.field("settings", &self.settings.as_ref().map(|_| "<settings>"))
 			.finish()
 	}
+}
+
+fn option_values_are_sensitive(key: &str, values: &[String]) -> bool {
+	option_name_is_sensitive(key) || values.iter().any(|value| value_is_sensitive(value))
+}
+
+fn option_name_is_sensitive(key: &str) -> bool {
+	let normalized_key = key.to_ascii_lowercase().replace('_', "-");
+	normalized_key == "url"
+		|| normalized_key.ends_with("-url")
+		|| normalized_key.contains("password")
+		|| normalized_key.contains("passwd")
+		|| normalized_key.contains("secret")
+		|| normalized_key.contains("token")
+		|| normalized_key.contains("api-key")
+		|| normalized_key.contains("credential")
+}
+
+fn value_is_sensitive(value: &str) -> bool {
+	value.contains("://") || value.contains('@')
+}
+
+fn argument_is_sensitive(argument: &str) -> bool {
+	if value_is_sensitive(argument) {
+		return true;
+	}
+	argument
+		.strip_prefix("--")
+		.and_then(|flag| flag.split_once('='))
+		.is_some_and(|(name, _)| option_name_is_sensitive(name))
+}
+
+fn redact_arguments(arguments: &[String]) -> Vec<&str> {
+	let mut redact_next = false;
+	arguments
+		.iter()
+		.map(|argument| {
+			let is_sensitive = redact_next || argument_is_sensitive(argument);
+			redact_next = argument
+				.strip_prefix("--")
+				.is_some_and(|flag| !flag.contains('=') && option_name_is_sensitive(flag));
+			if is_sensitive {
+				"[REDACTED]"
+			} else {
+				argument.as_str()
+			}
+		})
+		.collect()
 }
 
 impl CommandContext {
@@ -322,6 +383,22 @@ mod tests {
 
 		assert!(ctx.has_option("key"));
 		assert_eq!(ctx.option("key"), Some(&"value".to_string()));
+	}
+
+	#[rstest]
+	fn debug_redacts_positional_values_after_sensitive_flags() {
+		let context = CommandContext::new(vec![
+			"--password".to_string(),
+			"hunter2".to_string(),
+			"--token".to_string(),
+			"abc123".to_string(),
+			"safe".to_string(),
+		]);
+
+		assert_eq!(
+			format!("{context:?}"),
+			"CommandContext { args: [\"--password\", \"[REDACTED]\", \"--token\", \"[REDACTED]\", \"safe\"], options: {}, verbosity: 0, suppress_output: false, settings: None }"
+		);
 	}
 
 	#[rstest]

@@ -269,6 +269,10 @@ impl PageAttr {
 /// @input: |e| { handle_input(e) }
 /// @submit: |e| { e.prevent_default(); submit() }
 /// ```
+// The typed variant intentionally preserves concrete syn::Type and syn::Expr fields.
+// Boxing payload_type or handler would change the public AST field contract and add
+// indirection to a parse-only structure.
+#[allow(clippy::large_enum_variant)]
 #[derive(Debug, Clone)]
 pub enum IntrinsicEvent {
 	/// A standardized element event resolved through the event catalog.
@@ -279,9 +283,18 @@ pub enum IntrinsicEvent {
 		handler: Expr,
 	},
 	/// An explicitly named raw custom DOM event.
-	Custom {
+	RawCustom {
 		/// Exact custom DOM event name.
 		name: LitStr,
+		/// Handler expression.
+		handler: Expr,
+	},
+	/// An explicitly named custom DOM event with a typed payload.
+	TypedCustom {
+		/// Exact custom DOM event name.
+		name: LitStr,
+		/// Payload type carried by the custom event.
+		payload_type: Type,
 		/// Handler expression.
 		handler: Expr,
 	},
@@ -292,7 +305,9 @@ impl IntrinsicEvent {
 	#[must_use]
 	pub const fn handler(&self) -> &Expr {
 		match self {
-			Self::Standard { handler, .. } | Self::Custom { handler, .. } => handler,
+			Self::Standard { handler, .. }
+			| Self::RawCustom { handler, .. }
+			| Self::TypedCustom { handler, .. } => handler,
 		}
 	}
 }
@@ -616,7 +631,9 @@ mod tests {
 		// Act
 		let result = match event {
 			IntrinsicEvent::Standard { event, .. } => event,
-			IntrinsicEvent::Custom { .. } => panic!("expected standard event"),
+			IntrinsicEvent::RawCustom { .. } | IntrinsicEvent::TypedCustom { .. } => {
+				panic!("expected standard event")
+			}
 		};
 
 		// Assert

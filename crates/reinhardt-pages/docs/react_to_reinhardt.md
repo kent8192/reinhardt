@@ -203,10 +203,40 @@ page!({
 })
 ```
 
-Use `@custom("widget-change")` for an arbitrary raw intrinsic event. Component
-event props are not DOM events: their argument type comes from the component's
-declared prop. Native component tests execute standard handlers with
-`EventFixture`, including bubbling, target state, and async settling.
+Custom intrinsic events have adjacent raw and typed forms:
+
+```rust,ignore
+use reinhardt_pages::prelude::*;
+use serde::Deserialize;
+
+#[derive(Deserialize)]
+struct ItemSelected {
+    id: u64,
+}
+
+page!({
+    // Raw event transport for arbitrary DOM interop.
+    button { @custom("item-selected"): |event: Event| { inspect(event); } }
+
+    // Typed browser CustomEvent.detail decoding.
+    button { @custom::<ItemSelected>("item-selected"): |event| {
+        if let Ok(detail) = event.detail() {
+            select(detail.id);
+        }
+    } }
+})
+```
+
+`CustomEvent::detail()` borrows the cached decoded detail, while
+`CustomEvent::into_detail()` consumes the event and returns the owned detail.
+Decode failures are structured as `CustomEventDetailError::NotCustomEvent` for
+a same-named plain event and `CustomEventDetailError::Deserialize` for an
+invalid detail; the latter includes the event name and target Rust type. Its
+decoder-provided message is not stable across native and WASM targets.
+
+Component event props are not DOM events: their argument type comes from the
+component's declared prop. Native component tests execute standard handlers
+with `EventFixture`, including bubbling, target state, and async settling.
 
 ## Controlled and uncontrolled form controls
 
@@ -472,14 +502,44 @@ widget.set_property("value", &JsValue::from_str("selected"))?;
 Custom element events use normal DOM event listener handles. Use
 `add_custom_event_listener` for raw `JsValue` payloads, or
 `add_typed_custom_event_listener` when `CustomEvent.detail` should deserialize
-into a Rust type with `serde_wasm_bindgen`.
+into a Rust type. The typed callback now receives the complete event rather
+than a `Result` detail value:
 
 ```rust,ignore
-let handle = widget.add_typed_custom_event_listener("widget-change", |payload| {
-    let detail: Result<WidgetChange, String> = payload;
-    // Keep the returned handle alive while the listener should remain active.
+use reinhardt_pages::prelude::CustomEvent;
+
+// Before
+|detail: Result<ItemSelected, String>| match detail {
+    Ok(detail) => consume(detail),
+    Err(error) => report(error),
+}
+
+// After
+|event: CustomEvent<ItemSelected>| match event.into_detail() {
+    Ok(detail) => consume(detail),
+    Err(error) => report(error),
+}
+```
+
+Use `detail()` instead when the handler should retain the event and borrow the
+cached decoded detail. The error is a `CustomEventDetailError`, so callers can
+match `NotCustomEvent` and `Deserialize` instead of parsing a string; the
+decoder-specific `Deserialize::message` is not cross-target stable.
+
+`CustomEvent::raw()` retains the original platform event for low-level DOM
+interop. On WASM it is a `web_sys::Event`, including for typed listeners:
+
+```rust,ignore
+let handle = widget.add_typed_custom_event_listener("widget-change", |event| {
+    let raw_event: &web_sys::Event = event.raw();
+    inspect_browser_event(raw_event);
+    if let Ok(detail) = event.detail() {
+        consume(detail);
+    }
 });
 ```
+
+Keep the returned handle alive while the listener should remain active.
 
 `ref` is not a special prop in Reinhardt components. Pass explicit typed props
 or callbacks when a component should expose behavior. Store mutable values in

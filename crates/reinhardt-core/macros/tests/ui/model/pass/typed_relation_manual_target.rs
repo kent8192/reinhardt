@@ -14,7 +14,8 @@ impl crate::model_info::InfoModel for ManualTarget {
 
 impl ManualTarget {
 	const fn field_id() -> db::orm::expressions::FieldRef<Self, i64> {
-		db::orm::expressions::FieldRef::new("id")
+		// SAFETY: `id` is the persisted primary-key column declared below.
+		unsafe { db::orm::expressions::FieldRef::from_model_field("id") }
 	}
 }
 

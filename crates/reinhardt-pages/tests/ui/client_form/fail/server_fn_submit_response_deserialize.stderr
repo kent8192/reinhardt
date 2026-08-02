@@ -4,20 +4,20 @@ error[E0277]: the trait bound `SettingsResponse: serde::de::DeserializeOwned` is
  4 | #[derive(Clone, PartialEq, Serialize, Deserialize, ClientForm)]
    |                                                    ^^^^^^^^^^ unsatisfied trait bound
    |
-help: the trait `for<'de> _::_serde::Deserialize<'de>` is not implemented for `SettingsResponse`
+help: the trait `for<'de> Deserialize<'de>` is not implemented for `SettingsResponse`
   --> tests/ui/client_form/fail/server_fn_submit_response_deserialize.rs:11:1
    |
 11 | pub struct SettingsResponse {
    | ^^^^^^^^^^^^^^^^^^^^^^^^^^^
-   = help: the following other types implement trait `_::_serde::Deserialize<'de>`:
-             `&'a [u8]` implements `_::_serde::Deserialize<'de>`
-             `&'a reinhardt_pages::__private::serde_json::raw::RawValue` implements `_::_serde::Deserialize<'de>`
-             `&'a std::path::Path` implements `_::_serde::Deserialize<'de>`
-             `&'a str` implements `_::_serde::Deserialize<'de>`
-             `()` implements `_::_serde::Deserialize<'de>`
-             `(T,)` implements `_::_serde::Deserialize<'de>`
-             `(T0, T1)` implements `_::_serde::Deserialize<'de>`
-             `(T0, T1, T2)` implements `_::_serde::Deserialize<'de>`
+   = help: the following other types implement trait `Deserialize<'de>`:
+             `&'a [u8]` implements `Deserialize<'de>`
+             `&'a reinhardt_pages::__private::serde_json::raw::RawValue` implements `Deserialize<'de>`
+             `&'a std::path::Path` implements `Deserialize<'de>`
+             `&'a str` implements `Deserialize<'de>`
+             `()` implements `Deserialize<'de>`
+             `(T,)` implements `Deserialize<'de>`
+             `(T0, T1)` implements `Deserialize<'de>`
+             `(T0, T1, T2)` implements `Deserialize<'de>`
            and $N others
    = note: required for `SettingsResponse` to implement `DeserializeOwned`
    = note: this error originates in the derive macro `ClientForm` (in Nightly builds, run with -Z macro-backtrace for more info)

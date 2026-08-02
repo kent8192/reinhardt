@@ -90,7 +90,19 @@ impl MigrationCatalog {
 		}
 
 		let mut graph = MigrationGraph::new();
+		let mut replacement_owners = HashMap::new();
 		for (key, migration) in &migrations {
+			for (app, name) in &migration.replaces {
+				let replaced = MigrationKey::new(app, name);
+				if let Some(owner) = replacement_owners.insert(replaced.clone(), key.clone())
+					&& owner != *key
+				{
+					return Err(MigrationError::InvalidMigration(format!(
+						"Replacement {} is claimed by both {} and {}",
+						replaced, owner, key
+					)));
+				}
+			}
 			let dependencies = migration
 				.dependencies
 				.iter()

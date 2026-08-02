@@ -206,6 +206,9 @@ impl DatabaseMigrationExecutor {
 					}),
 				);
 			} else if replaced_applied == replacement.replaces.len() {
+				self.recorder
+					.record_applied(&replacement.app_label, &replacement.name)
+					.await?;
 				excluded.insert(replacement_key);
 			} else {
 				return Err(MigrationError::InvalidMigration(format!(

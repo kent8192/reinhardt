@@ -46,7 +46,18 @@ impl MigrationSqlPlan {
 	/// the selected backend supports transactional DDL.
 	pub fn render(&self, dialect: SqlDialect) -> String {
 		let transactional_ddl = !matches!(dialect, SqlDialect::Mysql);
-		let wrapped = self.atomic && transactional_ddl;
+		let has_concurrent_index =
+			matches!(dialect, SqlDialect::Postgres | SqlDialect::Cockroachdb)
+				&& self.planned_operations.iter().flatten().any(|operation| {
+					matches!(
+						operation,
+						Operation::CreateIndex {
+							concurrently: true,
+							..
+						}
+					)
+				});
+		let wrapped = self.atomic && transactional_ddl && !has_concurrent_index;
 		let mut rendered = String::new();
 
 		if wrapped {

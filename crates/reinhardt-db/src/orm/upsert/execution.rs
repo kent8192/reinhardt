@@ -43,7 +43,14 @@ where
 
 	let insert = sql::insert(&plan, backend)?;
 	if matches!(backend, DatabaseBackend::Postgres | DatabaseBackend::Sqlite) {
-		return match decode_lookup_rows(executor.fetch_all(&insert.sql, insert.params).await?)? {
+		let insert_rows = if backend == DatabaseBackend::Postgres {
+			executor
+				.fetch_all_in_savepoint(&insert.sql, insert.params)
+				.await?
+		} else {
+			executor.fetch_all(&insert.sql, insert.params).await?
+		};
+		return match decode_lookup_rows(insert_rows)? {
 			Some(model) => Ok((model, true)),
 			None => reload_lookup(&plan, executor, false, None).await,
 		};
@@ -60,6 +67,16 @@ where
 					)));
 				}
 			};
+			if backend == DatabaseBackend::MySql {
+				if let Some(last_insert_id) = result.last_insert_id {
+					return reload_generated_mysql_primary_key::<C::Model, _>(
+						last_insert_id,
+						executor,
+					)
+					.await
+					.map(|model| (model, created));
+				}
+			}
 			reload_lookup(&plan, executor, created, None).await
 		}
 		Err(error)
@@ -70,6 +87,33 @@ where
 		}
 		Err(error) => Err(error),
 	}
+}
+
+async fn reload_generated_mysql_primary_key<M, E>(
+	last_insert_id: u64,
+	executor: &mut E,
+) -> Result<M>
+where
+	M: Model,
+	E: OrmExecutor + ?Sized,
+{
+	let generated_primary_key = i64::try_from(last_insert_id).map_err(|_| {
+		Error::Conflict(
+			"MySQL generated primary key exceeds the supported integer range".to_owned(),
+		)
+	})?;
+	if generated_primary_key <= 0 {
+		return Err(Error::Conflict(
+			"MySQL INSERT completed without a generated primary key".to_owned(),
+		));
+	}
+	let select = sql::select_by_generated_mysql_primary_key::<M>(generated_primary_key)?;
+	let rows = executor.fetch_all(&select.sql, select.params).await?;
+	decode_lookup_rows(rows)?.ok_or_else(|| {
+		Error::Conflict(
+			"MySQL INSERT completed without a row matching its generated primary key".to_owned(),
+		)
+	})
 }
 
 async fn reload_lookup<M, E>(
@@ -1599,6 +1643,42 @@ mod tests {
 		assert_eq!(calls.len(), 1);
 		assert!(!calls[0].sql.contains("FOR UPDATE"));
 		assert_eq!(calls[0].operation, "fetch_all");
+	}
+
+	#[tokio::test]
+	async fn get_or_create_mysql_reloads_by_generated_primary_key() {
+		let (mut transaction, state) = Recorder::transaction(
+			DatabaseType::Mysql,
+			vec![Ok(QueryResult {
+				rows_affected: 1,
+				last_insert_id: Some(17),
+			})],
+			vec![
+				Ok(Vec::new()),
+				Ok(vec![article_row(17, "stored-slug", 1, "created", 13)]),
+			],
+		);
+
+		let (article, created) =
+			execute_get_or_create(&Manager::<Article>::new(), get_plan(), &mut transaction)
+				.await
+				.expect("reload MySQL insert by generated primary key");
+
+		assert!(created);
+		assert_eq!(article.slug, "stored-slug");
+		let calls = &state.lock().unwrap().calls;
+		assert_eq!(calls.len(), 3);
+		assert_eq!(calls[2].operation, "fetch_all");
+		assert!(
+			calls[2].sql.contains("WHERE `id` = ? LIMIT 2"),
+			"{}",
+			calls[2].sql
+		);
+		assert!(
+			!calls[2].sql.contains("WHERE `slug` = ?"),
+			"{}",
+			calls[2].sql
+		);
 	}
 
 	#[tokio::test]

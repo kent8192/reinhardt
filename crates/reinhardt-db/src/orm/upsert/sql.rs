@@ -118,6 +118,40 @@ pub(crate) fn select_by_primary_key<M: Model>(
 	Ok(bound_sql(sql, values))
 }
 
+pub(crate) fn select_by_generated_mysql_primary_key<M: Model>(
+	last_insert_id: i64,
+) -> Result<BoundSql> {
+	if M::composite_primary_key().is_some() {
+		return Err(Error::Validation(format!(
+			"typed upsert cannot reload a composite primary key from MySQL last_insert_id for '{}'",
+			M::table_name()
+		)));
+	}
+	let field_metadata = M::field_metadata();
+	let primary_key = field_metadata
+		.iter()
+		.find(|field| field.name == M::primary_key_field())
+		.ok_or_else(|| {
+			Error::Validation(format!(
+				"typed upsert SELECT primary-key field '{}' is missing model metadata",
+				M::primary_key_field()
+			))
+		})?;
+	let mut statement = Query::select();
+	statement.from(Alias::new(M::table_name())).columns(
+		field_metadata
+			.iter()
+			.map(|field| Alias::new(field.db_column_name())),
+	);
+	statement.and_where(
+		Expr::col(Alias::new(primary_key.db_column_name()))
+			.eq(reinhardt_query::value::Value::BigInt(Some(last_insert_id))),
+	);
+	let (mut sql, values) = build_select_sql(&statement, DatabaseBackend::MySql);
+	sql.push_str(" LIMIT 2");
+	Ok(bound_sql(sql, values))
+}
+
 pub(crate) fn insert<M: Model>(plan: &UpsertPlan<M>, backend: DatabaseBackend) -> Result<BoundSql> {
 	let mut statement = Query::insert();
 	statement.into_table(Alias::new(M::table_name())).columns(

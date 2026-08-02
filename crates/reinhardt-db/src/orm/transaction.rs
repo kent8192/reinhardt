@@ -1042,6 +1042,16 @@ impl OrmExecutor for AtomicTransaction {
 		self.executor_mut()?.fetch_all(sql, params).await
 	}
 
+	async fn fetch_all_in_savepoint(
+		&mut self,
+		sql: &str,
+		params: Vec<QueryValue>,
+	) -> reinhardt_core::exception::Result<Vec<Row>> {
+		let sql = sql.to_owned();
+		self.atomic(async move |savepoint| OrmExecutor::fetch_all(savepoint, &sql, params).await)
+			.await
+	}
+
 	async fn fetch_all_with_context(
 		&mut self,
 		sql: &str,

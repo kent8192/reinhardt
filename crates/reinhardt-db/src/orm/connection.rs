@@ -279,6 +279,15 @@ pub trait OrmExecutor: Send {
 	/// Fetches all matching rows.
 	async fn fetch_all(&mut self, sql: &str, params: Vec<QueryValue>) -> Result<Vec<Row>>;
 
+	/// Fetches all matching rows inside an executor-provided savepoint when available.
+	async fn fetch_all_in_savepoint(
+		&mut self,
+		sql: &str,
+		params: Vec<QueryValue>,
+	) -> Result<Vec<Row>> {
+		self.fetch_all(sql, params).await
+	}
+
 	/// Fetches all matching rows with structural pgvector operation context.
 	async fn fetch_all_with_context(
 		&mut self,

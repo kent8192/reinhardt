@@ -1055,14 +1055,7 @@ mod tests {
 			.unwrap();
 
 		// Assert
-		assert_eq!(
-			result.migration.optional_dependencies,
-			vec![OptionalDependency::new(
-				"gis",
-				"__first__",
-				DependencyCondition::FeatureEnabled("gis".to_string()),
-			)]
-		);
+		assert!(result.migration.optional_dependencies.is_empty());
 	}
 
 	#[rstest::rstest]
@@ -1243,7 +1236,14 @@ mod tests {
 			.expect("inactive optional dependencies must not be normalized");
 
 		// Assert
-		assert!(result.migration.optional_dependencies.is_empty());
+		assert_eq!(
+			result.migration.optional_dependencies,
+			vec![OptionalDependency::new(
+				"gis",
+				"__first__",
+				DependencyCondition::FeatureEnabled("gis".to_string()),
+			)]
+		);
 	}
 
 	#[rstest::rstest]

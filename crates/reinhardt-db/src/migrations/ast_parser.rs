@@ -157,6 +157,16 @@ fn parse_builder_migration(expression: &Expr, app_label: &str, name: &str) -> Re
 					);
 					migration.dependencies.push(dependency);
 				}
+				"add_swappable_dependency" if call.args.len() == 1 => {
+					migration
+						.swappable_dependencies
+						.push(parse_swappable_dependency_expression(&call.args[0])?);
+				}
+				"add_optional_dependency" if call.args.len() == 1 => {
+					migration
+						.optional_dependencies
+						.push(parse_optional_dependency_expression(&call.args[0])?);
+				}
 				"atomic" if call.args.len() == 1 => {
 					migration.atomic = extract_bool_expr(&call.args[0])
 						.ok_or_else(|| malformed_builder_call("atomic"))?;
@@ -221,25 +231,29 @@ fn parse_swappable_dependencies(
 ) -> Result<Vec<super::dependency::SwappableDependency>> {
 	dependency_metadata_expressions(fields, field_name)?
 		.iter()
-		.map(|expression| {
-			let Expr::Call(call) = expression else {
-				return Err(malformed_dependency_metadata(field_name));
-			};
-			if !call_path_is(&call.func, "SwappableDependency", "new") || call.args.len() != 4 {
-				return Err(malformed_dependency_metadata(field_name));
-			}
-			Ok(super::dependency::SwappableDependency::new(
-				extract_string_expr(&call.args[0])
-					.ok_or_else(|| malformed_dependency_metadata(field_name))?,
-				extract_string_expr(&call.args[1])
-					.ok_or_else(|| malformed_dependency_metadata(field_name))?,
-				extract_string_expr(&call.args[2])
-					.ok_or_else(|| malformed_dependency_metadata(field_name))?,
-				extract_string_expr(&call.args[3])
-					.ok_or_else(|| malformed_dependency_metadata(field_name))?,
-			))
-		})
+		.map(parse_swappable_dependency_expression)
 		.collect()
+}
+
+fn parse_swappable_dependency_expression(
+	expression: &Expr,
+) -> Result<super::dependency::SwappableDependency> {
+	let Expr::Call(call) = expression else {
+		return Err(malformed_dependency_metadata("swappable_dependencies"));
+	};
+	if !call_path_is(&call.func, "SwappableDependency", "new") || call.args.len() != 4 {
+		return Err(malformed_dependency_metadata("swappable_dependencies"));
+	}
+	Ok(super::dependency::SwappableDependency::new(
+		extract_string_expr(&call.args[0])
+			.ok_or_else(|| malformed_dependency_metadata("swappable_dependencies"))?,
+		extract_string_expr(&call.args[1])
+			.ok_or_else(|| malformed_dependency_metadata("swappable_dependencies"))?,
+		extract_string_expr(&call.args[2])
+			.ok_or_else(|| malformed_dependency_metadata("swappable_dependencies"))?,
+		extract_string_expr(&call.args[3])
+			.ok_or_else(|| malformed_dependency_metadata("swappable_dependencies"))?,
+	))
 }
 
 fn parse_optional_dependencies(
@@ -248,23 +262,27 @@ fn parse_optional_dependencies(
 ) -> Result<Vec<super::dependency::OptionalDependency>> {
 	dependency_metadata_expressions(fields, field_name)?
 		.iter()
-		.map(|expression| {
-			let Expr::Call(call) = expression else {
-				return Err(malformed_dependency_metadata(field_name));
-			};
-			if !call_path_is(&call.func, "OptionalDependency", "new") || call.args.len() != 3 {
-				return Err(malformed_dependency_metadata(field_name));
-			}
-			Ok(super::dependency::OptionalDependency::new(
-				extract_string_expr(&call.args[0])
-					.ok_or_else(|| malformed_dependency_metadata(field_name))?,
-				extract_string_expr(&call.args[1])
-					.ok_or_else(|| malformed_dependency_metadata(field_name))?,
-				parse_dependency_condition(&call.args[2])
-					.ok_or_else(|| malformed_dependency_metadata(field_name))?,
-			))
-		})
+		.map(parse_optional_dependency_expression)
 		.collect()
+}
+
+fn parse_optional_dependency_expression(
+	expression: &Expr,
+) -> Result<super::dependency::OptionalDependency> {
+	let Expr::Call(call) = expression else {
+		return Err(malformed_dependency_metadata("optional_dependencies"));
+	};
+	if !call_path_is(&call.func, "OptionalDependency", "new") || call.args.len() != 3 {
+		return Err(malformed_dependency_metadata("optional_dependencies"));
+	}
+	Ok(super::dependency::OptionalDependency::new(
+		extract_string_expr(&call.args[0])
+			.ok_or_else(|| malformed_dependency_metadata("optional_dependencies"))?,
+		extract_string_expr(&call.args[1])
+			.ok_or_else(|| malformed_dependency_metadata("optional_dependencies"))?,
+		parse_dependency_condition(&call.args[2])
+			.ok_or_else(|| malformed_dependency_metadata("optional_dependencies"))?,
+	))
 }
 
 fn parse_dependency_condition(expr: &Expr) -> Option<super::dependency::DependencyCondition> {

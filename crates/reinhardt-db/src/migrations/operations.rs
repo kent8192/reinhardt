@@ -1879,13 +1879,66 @@ impl Operation {
 						.retain(|definition| definition.name != constraint.name());
 				}
 			}
+			Operation::CreateIndex {
+				table,
+				columns,
+				unique,
+				..
+			} => {
+				if let Some(model) = state.find_model_by_table_mut(table) {
+					let name = format!("idx_{}_{}", table, columns.join("_"));
+					model.indexes.retain(|index| index.name != name);
+					model.indexes.push(IndexDefinition {
+						name,
+						fields: columns.clone(),
+						unique: *unique,
+						#[cfg(feature = "pgvector")]
+						index_type: None,
+						#[cfg(feature = "pgvector")]
+						operator_class: None,
+						#[cfg(feature = "pgvector")]
+						expressions: None,
+					});
+				}
+			}
+			Operation::CreateIndexRepair {
+				table,
+				name,
+				columns,
+				unique,
+				index_type,
+				expressions,
+				operator_class,
+				..
+			} => {
+				if let Some(model) = state.find_model_by_table_mut(table) {
+					let name = name
+						.clone()
+						.unwrap_or_else(|| format!("idx_{}_{}", table, columns.join("_")));
+					model.indexes.retain(|index| index.name != name);
+					model.indexes.push(IndexDefinition {
+						name,
+						fields: columns.clone(),
+						unique: *unique,
+						#[cfg(feature = "pgvector")]
+						index_type: *index_type,
+						#[cfg(feature = "pgvector")]
+						operator_class: operator_class.clone(),
+						#[cfg(feature = "pgvector")]
+						expressions: expressions.clone(),
+					});
+				}
+			}
+			Operation::DropIndex { table, columns } => {
+				if let Some(model) = state.find_model_by_table_mut(table) {
+					let name = format!("idx_{}_{}", table, columns.join("_"));
+					model.indexes.retain(|index| index.name != name);
+				}
+			}
 			Operation::AddConstraint { .. }
 			| Operation::AddConstraintRepair { .. }
 			| Operation::RestoreConstraintOnRollback { .. }
-			| Operation::CreateIndex { .. }
-			| Operation::CreateIndexRepair { .. }
 			| Operation::RestoreIndexOnRollback { .. }
-			| Operation::DropIndex { .. }
 			| Operation::RunSQL { .. }
 			| Operation::RunRust { .. }
 			| Operation::AlterTableComment { .. }
@@ -2553,6 +2606,26 @@ impl Operation {
 		format!("{dialect_identifier}{rest}")
 	}
 
+	/// Returns whether this operation creates an index outside a transaction.
+	pub(crate) fn creates_index_concurrently(&self) -> bool {
+		match self {
+			Operation::CreateIndex {
+				concurrently: true, ..
+			}
+			| Operation::CreateIndexRepair {
+				concurrently: true, ..
+			}
+			| Operation::RestoreIndexOnRollback {
+				concurrently: true, ..
+			} => true,
+			#[cfg(feature = "pgvector")]
+			Operation::CreateNamedIndex {
+				concurrently: true, ..
+			} => true,
+			_ => false,
+		}
+	}
+
 	/// Generate forward SQL
 	pub fn to_sql(&self, dialect: &SqlDialect) -> String {
 		match self {
@@ -2643,7 +2716,10 @@ impl Operation {
 				sql.push(';');
 				sql
 			}
-			Operation::DropTable { name } => format!("DROP TABLE {};", quote_identifier(name)),
+			Operation::DropTable { name } => format!(
+				"DROP TABLE {};",
+				Self::quote_schema_identifier(name, dialect)
+			),
 			Operation::AddColumn {
 				table,
 				column,
@@ -2660,8 +2736,8 @@ impl Operation {
 
 				let base_sql = format!(
 					"ALTER TABLE {} ADD COLUMN {}",
-					quote_identifier(table),
-					Self::column_to_sql(column, dialect)
+					Self::quote_schema_identifier(table, dialect),
+					Self::create_table_column_to_sql(column, dialect, false)
 				);
 
 				// MySQL: Add ALGORITHM/LOCK options
@@ -2679,8 +2755,8 @@ impl Operation {
 			Operation::DropColumn { table, column, .. } => {
 				format!(
 					"ALTER TABLE {} DROP COLUMN {};",
-					quote_identifier(table),
-					quote_identifier(column)
+					Self::quote_schema_identifier(table, dialect),
+					Self::quote_schema_identifier(column, dialect)
 				)
 			}
 			Operation::AlterColumn {
@@ -2701,21 +2777,21 @@ impl Operation {
 						{
 							statements.push(format!(
 								"ALTER TABLE {} ALTER COLUMN {} DROP DEFAULT;",
-								quote_identifier(table),
-								quote_identifier(column)
+								Self::quote_schema_identifier(table, dialect),
+								Self::quote_schema_identifier(column, dialect)
 							));
 						}
 						statements.push(format!(
 							"ALTER TABLE {} ALTER COLUMN {} TYPE {};",
-							quote_identifier(table),
-							quote_identifier(column),
+							Self::quote_schema_identifier(table, dialect),
+							Self::quote_schema_identifier(column, dialect),
 							sql_type
 						));
 						if let Some(default) = &new_definition.default {
 							statements.push(format!(
 								"ALTER TABLE {} ALTER COLUMN {} SET DEFAULT {};",
-								quote_identifier(table),
-								quote_identifier(column),
+								Self::quote_schema_identifier(table, dialect),
+								Self::quote_schema_identifier(column, dialect),
 								default
 							));
 						}
@@ -2724,8 +2800,8 @@ impl Operation {
 					SqlDialect::Mysql => {
 						let base_sql = format!(
 							"ALTER TABLE {} MODIFY COLUMN {}",
-							quote_identifier(table),
-							Self::column_to_sql(new_definition, dialect)
+							Self::quote_schema_identifier(table, dialect),
+							Self::create_table_column_to_sql(new_definition, dialect, false)
 						);
 
 						// MySQL: Add ALGORITHM/LOCK options
@@ -2753,16 +2829,16 @@ impl Operation {
 			} => {
 				format!(
 					"ALTER TABLE {} RENAME COLUMN {} TO {};",
-					quote_identifier(table),
-					quote_identifier(old_name),
-					quote_identifier(new_name)
+					Self::quote_schema_identifier(table, dialect),
+					Self::quote_schema_identifier(old_name, dialect),
+					Self::quote_schema_identifier(new_name, dialect)
 				)
 			}
 			Operation::RenameTable { old_name, new_name } => {
 				format!(
 					"ALTER TABLE {} RENAME TO {};",
-					quote_identifier(old_name),
-					quote_identifier(new_name)
+					Self::quote_schema_identifier(old_name, dialect),
+					Self::quote_schema_identifier(new_name, dialect)
 				)
 			}
 			Operation::AddConstraint {
@@ -2793,8 +2869,8 @@ impl Operation {
 			} => {
 				format!(
 					"ALTER TABLE {} DROP CONSTRAINT {};",
-					quote_identifier(table),
-					quote_identifier(constraint_name)
+					Self::quote_schema_identifier(table, dialect),
+					Self::quote_schema_identifier(constraint_name, dialect)
 				)
 			}
 			Operation::DropConstraintDefinition { table, constraint } => format!(
@@ -2866,14 +2942,20 @@ impl Operation {
 							if matches!(dialect, SqlDialect::Postgres) {
 								columns
 									.iter()
-									.map(|c| format!("{} {}", quote_identifier(c), op_class))
+									.map(|c| {
+										format!(
+											"{} {}",
+											Self::quote_schema_identifier(c, dialect),
+											op_class
+										)
+									})
 									.collect::<Vec<_>>()
 									.join(", ")
 							} else {
 								// Quote column names for safety (reserved words, special chars)
 								columns
 									.iter()
-									.map(|c| quote_identifier(c).to_string())
+									.map(|c| Self::quote_schema_identifier(c, dialect))
 									.collect::<Vec<_>>()
 									.join(", ")
 							}
@@ -2881,7 +2963,7 @@ impl Operation {
 							// Quote column names for safety (reserved words, special chars)
 							columns
 								.iter()
-								.map(|c| quote_identifier(c).to_string())
+								.map(|c| Self::quote_schema_identifier(c, dialect))
 								.collect::<Vec<_>>()
 								.join(", ")
 						};
@@ -2919,7 +3001,7 @@ impl Operation {
 							"CREATE {}INDEX {}{}",
 							effective_unique,
 							concurrent_str,
-							quote_identifier(&idx_name)
+							Self::quote_schema_identifier(&idx_name, dialect)
 						)
 					}
 					SqlDialect::Mysql => {
@@ -2928,7 +3010,7 @@ impl Operation {
 							"CREATE {}{}INDEX {}",
 							mysql_prefix,
 							effective_unique,
-							quote_identifier(&idx_name)
+							Self::quote_schema_identifier(&idx_name, dialect)
 						)
 					}
 					SqlDialect::Sqlite => {
@@ -2936,7 +3018,7 @@ impl Operation {
 						format!(
 							"CREATE {}INDEX {}",
 							effective_unique,
-							quote_identifier(&idx_name)
+							Self::quote_schema_identifier(&idx_name, dialect)
 						)
 					}
 				};
@@ -2945,7 +3027,7 @@ impl Operation {
 				// Quote table name for safety (reserved words, special chars)
 				sql.push_str(&format!(
 					" ON {}{} ({})",
-					quote_identifier(table),
+					Self::quote_schema_identifier(table, dialect),
 					using_clause,
 					index_content
 				));
@@ -3008,12 +3090,15 @@ impl Operation {
 					SqlDialect::Mysql => {
 						format!(
 							"DROP INDEX {} ON {};",
-							quote_identifier(&idx_name),
-							quote_identifier(table)
+							Self::quote_schema_identifier(&idx_name, dialect),
+							Self::quote_schema_identifier(table, dialect)
 						)
 					}
 					SqlDialect::Postgres | SqlDialect::Sqlite | SqlDialect::Cockroachdb => {
-						format!("DROP INDEX {};", quote_identifier(&idx_name))
+						format!(
+							"DROP INDEX {};",
+							Self::quote_schema_identifier(&idx_name, dialect)
+						)
 					}
 				}
 			}
@@ -3021,11 +3106,14 @@ impl Operation {
 			Operation::DropNamedIndex { table, name, .. } => match dialect {
 				SqlDialect::Mysql => format!(
 					"DROP INDEX {} ON {};",
-					quote_identifier(name),
-					quote_identifier(table)
+					Self::quote_schema_identifier(name, dialect),
+					Self::quote_schema_identifier(table, dialect)
 				),
 				SqlDialect::Postgres | SqlDialect::Sqlite | SqlDialect::Cockroachdb => {
-					format!("DROP INDEX {};", quote_identifier(name))
+					format!(
+						"DROP INDEX {};",
+						Self::quote_schema_identifier(name, dialect)
+					)
 				}
 			},
 			Operation::RunSQL { sql, .. } => sql.to_string(),
@@ -3038,22 +3126,28 @@ impl Operation {
 					if let Some(comment_text) = comment {
 						format!(
 							"COMMENT ON TABLE {} IS '{}';",
-							quote_identifier(table),
+							Self::quote_schema_identifier(table, dialect),
 							comment_text
 						)
 					} else {
-						format!("COMMENT ON TABLE {} IS NULL;", quote_identifier(table))
+						format!(
+							"COMMENT ON TABLE {} IS NULL;",
+							Self::quote_schema_identifier(table, dialect)
+						)
 					}
 				}
 				SqlDialect::Mysql => {
 					if let Some(comment_text) = comment {
 						format!(
 							"ALTER TABLE {} COMMENT='{}';",
-							quote_identifier(table),
+							Self::quote_schema_identifier(table, dialect),
 							comment_text
 						)
 					} else {
-						format!("ALTER TABLE {} COMMENT='';", quote_identifier(table))
+						format!(
+							"ALTER TABLE {} COMMENT='';",
+							Self::quote_schema_identifier(table, dialect)
+						)
 					}
 				}
 				SqlDialect::Sqlite => String::new(),
@@ -3067,13 +3161,13 @@ impl Operation {
 					let constraint_name = format!("{}_{}_uniq", table, idx);
 					let fields_str = fields
 						.iter()
-						.map(|f| quote_identifier(f))
+						.map(|f| Self::quote_schema_identifier(f, dialect))
 						.collect::<Vec<_>>()
 						.join(", ");
 					sql.push(format!(
 						"ALTER TABLE {} ADD CONSTRAINT {} UNIQUE ({});",
-						quote_identifier(table),
-						quote_identifier(&constraint_name),
+						Self::quote_schema_identifier(table, dialect),
+						Self::quote_schema_identifier(&constraint_name, dialect),
 						fields_str
 					));
 				}
@@ -3089,15 +3183,15 @@ impl Operation {
 				let mut parts = Vec::new();
 				parts.push(format!(
 					"  {} INTEGER REFERENCES {}(id)",
-					quote_identifier(join_column),
-					quote_identifier(base_table)
+					Self::quote_schema_identifier(join_column, dialect),
+					Self::quote_schema_identifier(base_table, dialect)
 				));
 				for col in columns {
 					parts.push(format!("  {}", Self::column_to_sql(col, dialect)));
 				}
 				format!(
 					"CREATE TABLE {} (\n{}\n);",
-					quote_identifier(name),
+					Self::quote_schema_identifier(name, dialect),
 					parts.join(",\n")
 				)
 			}
@@ -3108,8 +3202,8 @@ impl Operation {
 			} => {
 				format!(
 					"ALTER TABLE {} ADD COLUMN {} VARCHAR(50) DEFAULT '{}';",
-					quote_identifier(table),
-					quote_identifier(column_name),
+					Self::quote_schema_identifier(table, dialect),
+					Self::quote_schema_identifier(column_name, dialect),
 					default_value
 				)
 			}
@@ -3127,15 +3221,15 @@ impl Operation {
 							SqlDialect::Postgres | SqlDialect::Sqlite | SqlDialect::Cockroachdb => {
 								format!(
 									"ALTER TABLE {} RENAME TO {};",
-									quote_identifier(old_name),
-									quote_identifier(new_name)
+									Self::quote_schema_identifier(old_name, dialect),
+									Self::quote_schema_identifier(new_name, dialect)
 								)
 							}
 							SqlDialect::Mysql => {
 								format!(
 									"RENAME TABLE {} TO {};",
-									quote_identifier(old_name),
-									quote_identifier(new_name)
+									Self::quote_schema_identifier(old_name, dialect),
+									Self::quote_schema_identifier(new_name, dialect)
 								)
 							}
 						}
@@ -3155,7 +3249,7 @@ impl Operation {
 				format!(
 					"CREATE SCHEMA{} {};",
 					if_not_exists_clause,
-					quote_identifier(name)
+					Self::quote_schema_identifier(name, dialect)
 				)
 			}
 			Operation::DropSchema {
@@ -3168,7 +3262,7 @@ impl Operation {
 				format!(
 					"DROP SCHEMA{} {}{};",
 					if_exists_clause,
-					quote_identifier(name),
+					Self::quote_schema_identifier(name, dialect),
 					cascade_clause
 				)
 			}
@@ -3180,14 +3274,14 @@ impl Operation {
 				// PostgreSQL-specific
 				let if_not_exists_clause = if *if_not_exists { " IF NOT EXISTS" } else { "" };
 				let schema_clause = if let Some(s) = schema {
-					format!(" SCHEMA {}", quote_identifier(s))
+					format!(" SCHEMA {}", Self::quote_schema_identifier(s, dialect))
 				} else {
 					String::new()
 				};
 				format!(
 					"CREATE EXTENSION{} {}{};",
 					if_not_exists_clause,
-					quote_identifier(name),
+					Self::quote_schema_identifier(name, dialect),
 					schema_clause
 				)
 			}
@@ -4176,11 +4270,54 @@ impl Operation {
 						parts.push(format!("  {}", constraint.to_sql_for_dialect(dialect)));
 					}
 
-					return Ok(Some(vec![format!(
+					let mut statements = vec![format!(
 						"CREATE TABLE {} (\n{}\n);",
-						quote_identifier(name),
+						Self::quote_schema_identifier(name, dialect),
 						parts.join(",\n")
-					)]));
+					)];
+					for index in &model.indexes {
+						let operation = Operation::CreateIndexRepair {
+							table: name.clone(),
+							name: Some(index.name.clone()),
+							columns: index.fields.clone(),
+							unique: index.unique,
+							index_type: {
+								#[cfg(feature = "pgvector")]
+								{
+									index.index_type
+								}
+								#[cfg(not(feature = "pgvector"))]
+								{
+									None
+								}
+							},
+							where_clause: None,
+							concurrently: false,
+							expressions: {
+								#[cfg(feature = "pgvector")]
+								{
+									index.expressions.clone()
+								}
+								#[cfg(not(feature = "pgvector"))]
+								{
+									None
+								}
+							},
+							mysql_options: None,
+							operator_class: {
+								#[cfg(feature = "pgvector")]
+								{
+									index.operator_class.clone()
+								}
+								#[cfg(not(feature = "pgvector"))]
+								{
+									None
+								}
+							},
+						};
+						statements.push(operation.to_sql(dialect));
+					}
+					return Ok(Some(statements));
 				}
 				// Cannot reconstruct without state
 				Ok(None)
@@ -9200,6 +9337,99 @@ mod tests {
 	}
 
 	#[test]
+	fn mysql_planned_operations_quote_identifiers_with_backticks() {
+		let add_column = Operation::AddColumn {
+			table: "order-items".to_string(),
+			column: ColumnDefinition::new("select", FieldType::Text),
+			mysql_options: None,
+		};
+		let rename_table = Operation::RenameTable {
+			old_name: "order-items".to_string(),
+			new_name: "group-items".to_string(),
+		};
+		let index = Operation::CreateIndex {
+			table: "order-items".to_string(),
+			columns: vec!["select".to_string()],
+			unique: false,
+			index_type: None,
+			where_clause: None,
+			concurrently: false,
+			expressions: None,
+			mysql_options: None,
+			operator_class: None,
+		};
+
+		assert_eq!(
+			add_column.to_sql(&SqlDialect::Mysql),
+			"ALTER TABLE `order-items` ADD COLUMN `select` TEXT;"
+		);
+		assert_eq!(
+			rename_table.to_sql(&SqlDialect::Mysql),
+			"ALTER TABLE `order-items` RENAME TO `group-items`;"
+		);
+		assert_eq!(
+			index.to_sql(&SqlDialect::Mysql),
+			"CREATE INDEX `idx_order-items_select` ON `order-items` (`select`);"
+		);
+	}
+
+	#[test]
+	fn drop_table_reverse_sql_restores_regular_and_unique_indexes() {
+		let create = Operation::CreateTable {
+			name: "books".to_string(),
+			columns: vec![ColumnDefinition::new("title", FieldType::Text)],
+			constraints: vec![],
+			without_rowid: None,
+			interleave_in_parent: None,
+			partition: None,
+		};
+		let regular_index = Operation::CreateIndex {
+			table: "books".to_string(),
+			columns: vec!["title".to_string()],
+			unique: false,
+			index_type: None,
+			where_clause: None,
+			concurrently: false,
+			expressions: None,
+			mysql_options: None,
+			operator_class: None,
+		};
+		let unique_index = Operation::CreateIndexRepair {
+			table: "books".to_string(),
+			name: Some("books_title_unique".to_string()),
+			columns: vec!["title".to_string()],
+			unique: true,
+			index_type: None,
+			where_clause: None,
+			concurrently: false,
+			expressions: None,
+			mysql_options: None,
+			operator_class: None,
+		};
+		let mut state = ProjectState::new();
+		create.state_forwards("library", &mut state);
+		regular_index.state_forwards("library", &mut state);
+		unique_index.state_forwards("library", &mut state);
+
+		let reverse = Operation::DropTable {
+			name: "books".to_string(),
+		}
+		.to_reverse_sql(&SqlDialect::Postgres, &state)
+		.expect("reverse SQL")
+		.expect("drop table is reversible with historical state")
+		.join("\n");
+
+		assert!(
+			reverse.contains("CREATE INDEX idx_books_title ON books (title);"),
+			"{reverse}"
+		);
+		assert!(
+			reverse.contains("CREATE UNIQUE INDEX books_title_unique ON books (title);"),
+			"{reverse}"
+		);
+	}
+
+	#[test]
 	fn test_to_reverse_sql_drop_table() {
 		let op = Operation::DropTable {
 			name: "users".to_string(),
@@ -9490,7 +9720,7 @@ mod tests {
 
 		// Assert
 		assert!(
-			sql.contains("MODIFY COLUMN is_active TINYINT(1) NOT NULL DEFAULT true"),
+			sql.contains("MODIFY COLUMN `is_active` TINYINT(1) NOT NULL DEFAULT true"),
 			"MySQL AlterColumn must include type, nullability, and default, got: {}",
 			sql
 		);
@@ -10820,7 +11050,7 @@ mod tests {
 
 	#[cfg(feature = "pgvector")]
 	#[rstest]
-	#[case(SqlDialect::Mysql, "DROP INDEX source_embedding_ann ON source;")]
+	#[case(SqlDialect::Mysql, "DROP INDEX `source_embedding_ann` ON `source`;")]
 	#[case(SqlDialect::Sqlite, "DROP INDEX source_embedding_ann;")]
 	fn legacy_named_index_drop_without_type_remains_backend_agnostic(
 		#[case] dialect: SqlDialect,

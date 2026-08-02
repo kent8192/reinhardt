@@ -48,15 +48,11 @@ impl MigrationSqlPlan {
 		let transactional_ddl = !matches!(dialect, SqlDialect::Mysql);
 		let has_concurrent_index =
 			matches!(dialect, SqlDialect::Postgres | SqlDialect::Cockroachdb)
-				&& self.planned_operations.iter().flatten().any(|operation| {
-					matches!(
-						operation,
-						Operation::CreateIndex {
-							concurrently: true,
-							..
-						}
-					)
-				});
+				&& self
+					.planned_operations
+					.iter()
+					.flatten()
+					.any(Operation::creates_index_concurrently);
 		let wrapped = self.atomic && transactional_ddl && !has_concurrent_index;
 		let sqlite_recreation = matches!(dialect, SqlDialect::Sqlite)
 			&& self.sqlite_recreation_groups.iter().any(Option::is_some);
@@ -1890,6 +1886,35 @@ mod tests {
 	use crate::migrations::{
 		BulkLoadFormat, BulkLoadOptions, BulkLoadSource, ColumnDefinition, FieldType,
 	};
+
+	#[test]
+	fn render_omits_transaction_for_all_concurrent_index_variants() {
+		let plan = MigrationSqlPlan {
+			atomic: true,
+			statements: vec![PlannedStatement::Sql(
+				"CREATE INDEX CONCURRENTLY idx ON books (id)".to_string(),
+			)],
+			planned_operations: vec![Some(Operation::CreateIndexRepair {
+				table: "books".to_string(),
+				name: Some("idx".to_string()),
+				columns: vec!["id".to_string()],
+				unique: false,
+				index_type: None,
+				where_clause: None,
+				concurrently: true,
+				expressions: None,
+				mysql_options: None,
+				operator_class: None,
+			})],
+			sqlite_recreation_groups: vec![None],
+			direction: MigrationDirection::Forward,
+		};
+
+		let rendered = plan.render(SqlDialect::Postgres);
+
+		assert!(!rendered.contains("BEGIN;"), "{rendered}");
+		assert!(!rendered.contains("COMMIT;"), "{rendered}");
+	}
 
 	#[test]
 	fn sqlite_virtual_effect_classifies_special_schema_operations() {

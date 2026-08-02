@@ -159,6 +159,11 @@ impl MigrationSquasher {
 		let mut replaces = Vec::new();
 		let mut swappable_dependencies = Vec::new();
 		let mut optional_dependencies = Vec::new();
+		let external_dependencies: HashSet<(&str, &str)> = range
+			.external_dependencies
+			.iter()
+			.map(|(app, name)| (app.as_str(), name.as_str()))
+			.collect();
 		for migration in &range.migrations {
 			operations.extend(migration.operations.clone());
 			for replacement in &migration.replaces {
@@ -171,12 +176,24 @@ impl MigrationSquasher {
 				replaces.push(identity);
 			}
 			for dependency in &migration.swappable_dependencies {
-				if !swappable_dependencies.contains(dependency) {
+				let target = (
+					dependency.default_app.as_str(),
+					dependency.migration_name.as_str(),
+				);
+				if external_dependencies.contains(&target)
+					&& !swappable_dependencies.contains(dependency)
+				{
 					swappable_dependencies.push(dependency.clone());
 				}
 			}
 			for dependency in &migration.optional_dependencies {
-				if !optional_dependencies.contains(dependency) {
+				let target = (
+					dependency.app_label.as_str(),
+					dependency.migration_name.as_str(),
+				);
+				if external_dependencies.contains(&target)
+					&& !optional_dependencies.contains(dependency)
+				{
 					optional_dependencies.push(dependency.clone());
 				}
 			}
@@ -519,7 +536,38 @@ impl Default for MigrationSquasher {
 #[cfg(test)]
 mod tests {
 	use super::*;
-	use crate::migrations::{ColumnDefinition, FieldType};
+	use crate::migrations::{
+		ColumnDefinition, DependencyCondition, FieldType, OptionalDependency, SquashRange,
+		SwappableDependency,
+	};
+
+	#[test]
+	fn squash_range_omits_conditional_dependencies_resolved_within_the_range() {
+		let first = Migration::new("0001_initial", "accounts");
+		let second = Migration::new("0002_profiles", "accounts")
+			.add_swappable_dependency(SwappableDependency::new(
+				"AUTH_USER_MODEL",
+				"accounts",
+				"User",
+				"0001_initial",
+			))
+			.add_optional_dependency(OptionalDependency::new(
+				"accounts",
+				"0001_initial",
+				DependencyCondition::AppInstalled("accounts".to_string()),
+			));
+		let range = SquashRange {
+			migrations: vec![first, second],
+			external_dependencies: vec![],
+		};
+
+		let result = MigrationSquasher::new()
+			.squash_range(&range, "0001_squashed", true)
+			.expect("squash internal conditional dependencies");
+
+		assert!(result.migration.swappable_dependencies.is_empty());
+		assert!(result.migration.optional_dependencies.is_empty());
+	}
 
 	#[test]
 	fn test_squash_basic() {

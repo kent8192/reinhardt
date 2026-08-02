@@ -826,6 +826,70 @@ impl DatabaseMigrationRecorder {
 		Ok(())
 	}
 
+	/// Atomically adopt a complete replacement migration set.
+	///
+	/// The replacement record and every replaced record are changed in one
+	/// transaction so an interrupted adoption cannot leave the recorder in a
+	/// mixed state.
+	pub async fn adopt_replacement(
+		&self,
+		replacement_app: &str,
+		replacement_name: &str,
+		replaces: &[(String, String)],
+	) -> super::Result<()> {
+		use crate::backends::types::DatabaseType;
+		use reinhardt_query::prelude::{
+			Alias, Expr, ExprTrait, MySqlQueryBuilder, PostgresQueryBuilder, Query,
+			QueryStatementBuilder, SqliteQueryBuilder,
+		};
+
+		let now = Utc::now().format("%Y-%m-%d %H:%M:%S").to_string();
+		let record = Query::insert()
+			.into_table(Alias::new("reinhardt_migrations"))
+			.columns([Alias::new("app"), Alias::new("name"), Alias::new("applied")])
+			.values_panic([
+				replacement_app.to_string(),
+				replacement_name.to_string(),
+				now,
+			])
+			.to_owned();
+		let record_sql = match self.connection.database_type() {
+			DatabaseType::Postgres => format!(
+				"{} ON CONFLICT (app, name) DO NOTHING",
+				record.to_string(PostgresQueryBuilder::new())
+			),
+			DatabaseType::Mysql => {
+				record
+					.to_string(MySqlQueryBuilder::new())
+					.replacen("INSERT", "INSERT IGNORE", 1)
+			}
+			DatabaseType::Sqlite => record.to_string(SqliteQueryBuilder::new()).replacen(
+				"INSERT",
+				"INSERT OR IGNORE",
+				1,
+			),
+		};
+
+		let mut transaction = self.connection.begin().await?;
+		transaction.execute(&record_sql, vec![]).await?;
+		for (app, name) in replaces {
+			let delete = Query::delete()
+				.from_table(Alias::new("reinhardt_migrations"))
+				.and_where(Expr::col(Alias::new("app")).eq(app.as_str()))
+				.and_where(Expr::col(Alias::new("name")).eq(name.as_str()))
+				.to_owned();
+			let delete_sql = match self.connection.database_type() {
+				DatabaseType::Postgres => delete.to_string(PostgresQueryBuilder::new()),
+				DatabaseType::Mysql => delete.to_string(MySqlQueryBuilder::new()),
+				DatabaseType::Sqlite => delete.to_string(SqliteQueryBuilder::new()),
+			};
+			transaction.execute(&delete_sql, vec![]).await?;
+		}
+		transaction.commit().await?;
+
+		Ok(())
+	}
+
 	/// Get all applied migrations
 	///
 	/// # Examples

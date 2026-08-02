@@ -191,11 +191,7 @@ impl DatabaseMigrationExecutor {
 				.await?;
 			let mut replaced_applied = 0;
 			for (app, name) in &replacement.replaces {
-				if migrations
-					.iter()
-					.any(|migration| migration.app_label == *app && migration.name == *name)
-					&& self.recorder.is_applied(app, name).await?
-				{
+				if self.recorder.is_applied(app, name).await? {
 					replaced_applied += 1;
 				}
 			}
@@ -207,11 +203,12 @@ impl DatabaseMigrationExecutor {
 				);
 			} else if replaced_applied == replacement.replaces.len() {
 				self.recorder
-					.record_applied(&replacement.app_label, &replacement.name)
+					.adopt_replacement(
+						&replacement.app_label,
+						&replacement.name,
+						&replacement.replaces,
+					)
 					.await?;
-				for (app, name) in &replacement.replaces {
-					self.recorder.unapply(app, name).await?;
-				}
 				excluded.extend(
 					replacement.replaces.iter().map(|(app, name)| {
 						super::graph::MigrationKey::new(app.clone(), name.clone())
@@ -4030,9 +4027,9 @@ mod rollback_orchestration_tests {
 			.await
 			.expect("apply original migration");
 		existing
-			.apply_migrations(&[original.clone(), replacement.clone()])
+			.apply_migrations(std::slice::from_ref(&replacement))
 			.await
-			.expect("adopt an existing original replacement set");
+			.expect("adopt an existing original replacement set after its source file is removed");
 		let existing_recorder = DatabaseMigrationRecorder::new(existing.connection().clone());
 		assert!(
 			existing_recorder

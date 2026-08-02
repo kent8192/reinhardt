@@ -103,7 +103,11 @@ fn trailing_line_comment_start(sql: &str, dialect: SqlDialect) -> Option<usize> 
 	let mut quote = None;
 	let mut chars = line.char_indices().peekable();
 	while let Some((index, character)) = chars.next() {
-		if let Some(delimiter) = quote {
+	if let Some(delimiter) = quote {
+			if matches!(dialect, SqlDialect::Mysql) && character == '\\' && chars.peek().is_some() {
+				chars.next();
+				continue;
+			}
 			if character == delimiter {
 				if chars.peek().is_some_and(|(_, next)| *next == delimiter) {
 					chars.next();
@@ -1661,7 +1665,10 @@ async fn plan_migration_sql_for_inspection(
 	backward_operation_states: Option<&[ProjectState]>,
 	historical_state_only: bool,
 ) -> Result<MigrationSqlPlan> {
-	if historical_state_only && state.has_opaque_schema_operations {
+	if historical_state_only
+		&& matches!(direction, MigrationDirection::Backward)
+		&& state.has_opaque_schema_operations
+	{
 		return Err(MigrationError::InvalidMigration(format!(
 			"cannot safely plan {} from historical state containing opaque schema operations",
 			migration.id()

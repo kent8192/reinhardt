@@ -200,12 +200,22 @@ impl MigrationCatalog {
 				.unwrap_or_default()
 				.iter()
 				.map(|dependency| {
-					replacement_owners
-						.get(dependency)
-						.cloned()
-						.unwrap_or_else(|| dependency.clone())
+					let dependency = if dependency.name == "__first__" {
+						migrations
+							.keys()
+							.filter(|candidate| candidate.app_label == dependency.app_label)
+							.min_by(|left, right| Self::compare_keys(left, right))
+							.cloned()
+							.ok_or_else(|| MigrationError::DependencyError(format!(
+								"Missing first migration for app {} required by {}",
+								dependency.app_label, key
+							)))?
+					} else {
+						dependency.clone()
+					};
+					Ok(replacement_owners.get(&dependency).cloned().unwrap_or(dependency))
 				})
-				.collect();
+				.collect::<Result<Vec<_>>>()?;
 			let replaces = migration
 				.replaces
 				.iter()
@@ -317,7 +327,7 @@ impl MigrationCatalog {
 					.replaces
 					.iter()
 					.filter_map(|(app, name)| applied.get(&MigrationKey::new(app, name)))
-					.min()
+					.max()
 					.copied()
 					.expect("complete replacement history has applied records");
 				applied.insert(key.clone(), applied_at);

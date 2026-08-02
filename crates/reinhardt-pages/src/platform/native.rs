@@ -206,6 +206,17 @@ where
 	})
 }
 
+pub(crate) fn spawn_task_unscoped<F>(fut: F)
+where
+	F: Future<Output = ()> + 'static,
+{
+	TASK_SINK.with(|slot| {
+		if let Some(sink) = slot.borrow().as_ref() {
+			sink(Box::pin(fut));
+		}
+	});
+}
+
 #[cfg(test)]
 pub(crate) fn has_task_sink() -> bool {
 	TASK_SINK.with(|slot| slot.borrow().is_some())

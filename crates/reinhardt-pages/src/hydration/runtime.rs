@@ -1600,9 +1600,7 @@ mod tests {
 			state.add_resource_state(
 				key.hydration_id(),
 				serde_json::json!({
-					"status": "Success",
-					"data": "server-value",
-					"error": null,
+					"state": { "Success": "server-value" },
 					"refetch_error": null,
 					"is_fetching": false,
 					"is_stale": false
@@ -1645,9 +1643,7 @@ mod tests {
 			malformed_state.add_resource_state(
 				key.hydration_id(),
 				serde_json::json!({
-					"status": status,
-					"data": null,
-					"error": null,
+					"state": { status: null },
 					"refetch_error": null,
 					"is_fetching": false,
 					"is_stale": false
@@ -1660,19 +1656,14 @@ mod tests {
 				.seed_query(&client, key.clone())
 				.expect_err("unsettled SSR query snapshots must be rejected");
 
-			assert_eq!(
-				error.to_string(),
-				"unsettled query hydration snapshot cannot be restored"
-			);
+			assert!(error.is_data());
 			assert_eq!(fetch_count.get(), 0);
 
 			let mut valid_state = SsrState::new();
 			valid_state.add_resource_state(
 				key.hydration_id(),
 				serde_json::json!({
-					"status": "Success",
-					"data": "server-value",
-					"error": null,
+					"state": { "Success": "server-value" },
 					"refetch_error": null,
 					"is_fetching": false,
 					"is_stale": false

@@ -431,9 +431,7 @@ async fn pending_ssr_query_reuse_does_not_create_duplicate_fetcher() {
 			.state()
 			.get_resource_state(&format!("query:{query_id}")),
 		Some(&serde_json::json!({
-			"status": "Success",
-			"data": "shared",
-			"error": null,
+			"state": { "Success": "shared" },
 			"refetch_error": null,
 			"is_fetching": false,
 			"is_stale": false

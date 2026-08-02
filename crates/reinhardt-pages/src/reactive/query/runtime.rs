@@ -100,7 +100,7 @@ fn schedule_query_task<F>(fut: F)
 where
 	F: Future<Output = ()> + 'static,
 {
-	crate::platform::spawn_task(async move {
+	crate::platform::spawn_task_unscoped(async move {
 		crate::platform::defer_yield().await;
 		fut.await;
 	});

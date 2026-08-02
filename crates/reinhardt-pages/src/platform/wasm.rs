@@ -291,6 +291,13 @@ where
 	}
 }
 
+pub(crate) fn spawn_task_unscoped<F>(fut: F)
+where
+	F: Future<Output = ()> + 'static,
+{
+	wasm_bindgen_futures::spawn_local(fut);
+}
+
 /// Yields to the event loop by queuing a microtask.
 ///
 /// On WASM, this resolves a `JsFuture` wrapping a `Promise.resolve()`,

@@ -719,6 +719,7 @@ impl<T: Clone + 'static, E: Clone + 'static> QueryEntry<T, E> {
 		policy
 			.refetch_interval
 			.filter(|interval| !interval.is_zero())
+			.map(|interval| interval.max(Duration::from_millis(1)))
 	}
 
 	fn polling_is_visible(&self) -> bool {

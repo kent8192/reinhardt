@@ -204,8 +204,7 @@ impl<T, E> Eq for QueryKey<T, E> {}
 
 impl<T, E> QueryKey<T, E> {
 	/// Returns the type-erased exact identity.
-	#[allow(private_interfaces)]
-	pub fn identity(&self) -> &QueryIdentity {
+	pub(crate) fn identity(&self) -> &QueryIdentity {
 		&self.identity
 	}
 

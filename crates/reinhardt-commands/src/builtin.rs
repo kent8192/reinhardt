@@ -507,15 +507,20 @@ impl BaseCommand for MigrateCommand {
 					{
 						for (da, dn) in &migration.dependencies {
 							if *da == *app {
-								let terminal = terminal_replacement_target(&all_migrations, da, dn)?;
+								let terminal =
+									terminal_replacement_target(&all_migrations, da, dn)?;
 								let normalized = if terminal != *dn
-									&& replacement_history_is_fully_applied(
+									&& (!replacement_history_has_applied_records(
 										&all_migrations,
 										da,
 										&terminal,
 										&applied_for_app,
-									)
-								{
+									) || replacement_history_is_fully_applied(
+										&all_migrations,
+										da,
+										&terminal,
+										&applied_for_app,
+									)) {
 									(da.clone(), terminal)
 								} else {
 									(da.clone(), dn.clone())
@@ -587,21 +592,23 @@ impl BaseCommand for MigrateCommand {
 					if !migration.replaces.is_empty()
 						&& applied_for_app.iter().any(|record| {
 							record.app == migration.app_label && record.name == migration.name
-						})
-						&& !execution_migrations.iter().any(|candidate| {
-							candidate.app_label == migration.app_label && candidate.name == migration.name
-						})
-					{
+						}) && !execution_migrations.iter().any(|candidate| {
+						candidate.app_label == migration.app_label
+							&& candidate.name == migration.name
+					}) {
 						execution_migrations.push(migration.clone());
 					}
 				}
 				let mut executor = DatabaseMigrationExecutor::new(connection);
-				let result = executor.apply_migrations(&execution_migrations).await.map_err(|e| {
-					crate::CommandError::ExecutionError(format!(
-						"Failed to apply migrations: {:?}",
-						e
-					))
-				})?;
+				let result = executor
+					.apply_migrations(&execution_migrations)
+					.await
+					.map_err(|e| {
+						crate::CommandError::ExecutionError(format!(
+							"Failed to apply migrations: {:?}",
+							e
+						))
+					})?;
 				for id in &result.applied {
 					ctx.success(&format!("  ✓ Applied: {}", id));
 				}
@@ -853,20 +860,38 @@ fn terminal_replacement_target(
 				"Replacement cycle detected while resolving {app}:{current}"
 			)));
 		}
-		let owners: Vec<_> = migrations.iter().filter(|migration| {
-			migration.app_label == app && migration.replaces.iter().any(|(owner_app, name)| {
-				owner_app == app && name == current
+		let owners: Vec<_> = migrations
+			.iter()
+			.filter(|migration| {
+				migration.app_label == app
+					&& migration
+						.replaces
+						.iter()
+						.any(|(owner_app, name)| owner_app == app && name == current)
 			})
-		}).collect();
-		if owners.is_empty() { terminals.insert(current.to_string()); }
-		for owner in owners { collect(&owner.name, migrations, app, path, terminals)?; }
+			.collect();
+		if owners.is_empty() {
+			terminals.insert(current.to_string());
+		}
+		for owner in owners {
+			collect(&owner.name, migrations, app, path, terminals)?;
+		}
 		path.remove(current);
 		Ok(())
 	}
 	let mut terminals = HashSet::new();
-	collect(target_name, migrations, app_label, &mut HashSet::new(), &mut terminals)?;
+	collect(
+		target_name,
+		migrations,
+		app_label,
+		&mut HashSet::new(),
+		&mut terminals,
+	)?;
 	match terminals.len() {
-		1 => Ok(terminals.into_iter().next().expect("single terminal replacement")),
+		1 => Ok(terminals
+			.into_iter()
+			.next()
+			.expect("single terminal replacement")),
 		_ => Err(crate::CommandError::ExecutionError(format!(
 			"Migration {app_label}:{target_name} has multiple terminal replacements"
 		))),
@@ -911,6 +936,46 @@ fn replacement_history_is_fully_applied(
 			.replaces
 			.iter()
 			.all(|(app, name)| covered.contains(&(app.as_str(), name.as_str())))
+}
+
+#[cfg(feature = "migrations")]
+fn replacement_history_has_applied_records(
+	migrations: &[reinhardt_db::migrations::Migration],
+	app_label: &str,
+	migration_name: &str,
+	applied: &[reinhardt_db::migrations::recorder::MigrationRecord],
+) -> bool {
+	fn collect_replaced_names(
+		migrations: &[reinhardt_db::migrations::Migration],
+		app_label: &str,
+		migration_name: &str,
+		visited: &mut std::collections::HashSet<(String, String)>,
+	) {
+		let key = (app_label.to_string(), migration_name.to_string());
+		if !visited.insert(key) {
+			return;
+		}
+		if let Some(migration) = migrations
+			.iter()
+			.find(|migration| migration.app_label == app_label && migration.name == migration_name)
+		{
+			for (replaced_app, replaced_name) in &migration.replaces {
+				collect_replaced_names(migrations, replaced_app, replaced_name, visited);
+			}
+		}
+	}
+
+	let mut replacement_history = std::collections::HashSet::new();
+	collect_replaced_names(
+		migrations,
+		app_label,
+		migration_name,
+		&mut replacement_history,
+	);
+	replacement_history.remove(&(app_label.to_string(), migration_name.to_string()));
+	applied
+		.iter()
+		.any(|record| replacement_history.contains(&(record.app.clone(), record.name.clone())))
 }
 
 #[cfg(feature = "migrations")]
@@ -4877,6 +4942,12 @@ mod tests {
 			.expect("replacement target should resolve");
 
 		assert_eq!(terminal, "0001_squashed_0002");
+		assert!(replacement_history_has_applied_records(
+			&migrations,
+			"app",
+			&terminal,
+			&partial
+		));
 		assert!(!replacement_history_is_fully_applied(
 			&migrations,
 			"app",

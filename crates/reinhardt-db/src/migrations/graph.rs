@@ -174,12 +174,7 @@ fn terminal_replacement_owner(
 	}
 
 	let mut terminals = HashSet::new();
-	collect_terminal_owners(
-		replaced_key,
-		owners,
-		&mut HashSet::new(),
-		&mut terminals,
-	)?;
+	collect_terminal_owners(replaced_key, owners, &mut HashSet::new(), &mut terminals)?;
 	let mut terminals: Vec<_> = terminals.into_iter().collect();
 	terminals.sort_by_key(MigrationKey::id);
 	match terminals.as_slice() {

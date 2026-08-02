@@ -228,6 +228,12 @@ impl MigrationSquasher {
 				}
 			}
 			for dependency in &migration.optional_dependencies {
+				if dependency_resolver
+					.resolve(&MigrationDependency::Optional(dependency.clone()))
+					.is_none()
+				{
+					continue;
+				}
 				let normalized = range
 					.normalize_dependency(&dependency.app_label, &dependency.migration_name)?;
 				if !selected.contains(&(normalized.app_label.as_str(), normalized.name.as_str()))
@@ -1139,9 +1145,49 @@ mod tests {
 		};
 
 		let result = MigrationSquasher::new()
-			.squash_range(&range, "0001_squashed_0002_again", false)
+			.squash_range_with_context(
+				&range,
+				"0001_squashed_0002_again",
+				false,
+				&DependencyResolutionContext::new().with_app("myapp"),
+			)
 			.unwrap();
 
+		assert!(result.migration.optional_dependencies.is_empty());
+	}
+
+	#[rstest::rstest]
+	fn squash_range_skips_inactive_optional_dependencies_before_normalization() {
+		// Arrange
+		let mut migration = Migration::new("0001_initial", "myapp");
+		migration
+			.optional_dependencies
+			.push(OptionalDependency::new(
+				"gis",
+				"__first__",
+				DependencyCondition::FeatureEnabled("gis".to_string()),
+			));
+		let range = SquashRange {
+			migrations: vec![migration],
+			external_dependencies: vec![],
+			available_migrations: vec![crate::migrations::MigrationKey::new(
+				"myapp",
+				"0001_initial",
+			)],
+			replacement_owners: std::collections::HashMap::new(),
+		};
+
+		// Act
+		let result = MigrationSquasher::new()
+			.squash_range_with_context(
+				&range,
+				"0001_squashed",
+				false,
+				&DependencyResolutionContext::default(),
+			)
+			.expect("inactive optional dependencies must not be normalized");
+
+		// Assert
 		assert!(result.migration.optional_dependencies.is_empty());
 	}
 }

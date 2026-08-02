@@ -784,3 +784,53 @@ async fn fake_target_rejects_indirectly_covered_competing_replacement(
 		"Execution error: Cannot fake replacement myapp:0001_squashed_0002_a because a competing replacement already covers its history"
 	);
 }
+
+#[rstest]
+#[tokio::test]
+#[serial(migrate_target_e2e)]
+async fn target_applies_replacement_for_deleted_original_dependency(
+	#[future] migration_executor: MigrationExecutorFixture,
+) {
+	// Arrange — the original files have been removed after introducing a squash,
+	// but a later migration still declares a dependency on the former terminal.
+	let (_executor, _container, _pool, _port, url) = migration_executor.await;
+	let tempdir = tempfile::tempdir().expect("create tempdir");
+	let migrations_root = tempdir.path().join("migrations");
+	write_test_migration_with_replaces(
+		&migrations_root,
+		"myapp",
+		"0001_squashed_0002",
+		&[],
+		&[("myapp", "0001_first"), ("myapp", "0002_second")],
+	)
+	.expect("write replacement migration");
+	write_test_migration(
+		&migrations_root,
+		"myapp",
+		"0003_after_squash",
+		&[("myapp", "0002_second")],
+	)
+	.expect("write later migration");
+
+	// Act
+	let ctx = build_ctx(
+		&migrations_root,
+		&url,
+		Some("myapp"),
+		Some("0003_after_squash"),
+		false,
+	);
+	MigrateCommand
+		.execute(&ctx)
+		.await
+		.expect("targeting the later migration must resolve its deleted original dependency");
+
+	// Assert
+	assert_eq!(
+		applied_for_app(&url, "myapp").await,
+		vec![
+			"0001_squashed_0002".to_string(),
+			"0003_after_squash".to_string(),
+		]
+	);
+}

@@ -9,11 +9,54 @@
 //! optimistic UI state. [`Resource::latest_after`] and
 //! [`use_latest_resource_value`] compose loaded resource state with action
 //! success values so screens can render the latest loaded or mutated data.
-//! [`use_query`] and [`use_mutation`] add a keyed, app-wide cache layer for
-//! server-function reads and invalidating mutations. Generated query keys
-//! canonicalize JSON object arguments, hydrated success and error states remain
-//! visible through the first client mount, and query handles distinguish initial
-//! pending state from background fetching.
+//! [`use_query`] and [`use_action`] provide application-owned keyed reads and
+//! explicit mutation workflows. A browser [`ClientLauncher`] owns one
+//! [`QueryClient`], while SSR requests and native component-test screens use
+//! isolated clients. Generated [`QueryFamily`], [`QueryKey`], and
+//! [`QueryDescriptor`] helpers canonicalize JSON object arguments, hydrated
+//! settled state is reused by the first client observer, and [`QuerySnapshot`]
+//! distinguishes initial pending state from background fetching.
+//!
+//! ## Query client v2
+//!
+//! Configure application defaults on the launcher and observer behavior when
+//! mounting a query:
+//!
+//! ```ignore
+//! use std::time::Duration;
+//! use reinhardt_pages::prelude::*;
+//! use reinhardt_pages::ClientLauncher;
+//!
+//! ClientLauncher::new("#root")
+//!     .query_defaults(
+//!         QueryDefaults::new()
+//!             .stale_time(Duration::from_secs(30))
+//!             .gc_time(Duration::from_secs(300)),
+//!     );
+//!
+//! let jobs = use_query(
+//!     list_project_jobs::query(project_id),
+//!     QueryOptions::new().refetch_interval(Duration::from_secs(5)),
+//! );
+//! ```
+//!
+//! The generated server-function module exposes `family()`, `key(args...)`,
+//! and `query(args...)`. Non-server-function reads can use
+//! [`QueryFamily::new`] and [`QueryFamily::query`] directly. Call
+//! [`QueryClient::invalidate`] for one exact key or
+//! [`QueryClient::invalidate_family`] after a successful [`use_action`]
+//! mutation. Disabled uncached observers report [`QueryStatus::Idle`];
+//! enabled observers progress through [`QueryStatus::Pending`],
+//! [`QueryStatus::Success`], or [`QueryStatus::Error`]. Successful data remains
+//! visible if a background fetch fails, with the error available through the
+//! `QuerySnapshot::refetch_error` field.
+//!
+//! Observer polling suspends while the browser document is hidden and resumes
+//! according to freshness. SSR query state is request-local and is serialized
+//! for hydration before the browser's first observer mounts. Query client v2
+//! removes `QueryKey::new`, query-handle policy builders, `use_mutation`, and
+//! `Action::invalidates`. Entity normalization (#5843) and retry policy (#5844)
+//! remain separate non-goals.
 //!
 //! ## Features
 //!
@@ -565,12 +608,6 @@ pub mod callback;
 #[allow(dead_code)]
 mod cancellation;
 pub use cancellation::{CancellationHandle, CancellationToken, Cancelled};
-// Internal query lease symbols are re-exported for the loader runtime added
-// in subsequent implementation tasks.
-#[allow(unused_imports)]
-pub(crate) use reactive::{
-	QueryAcquireOptions, QueryConsumer, QueryErrorPolicy, QueryLease, acquire_query,
-};
 pub mod control_binding;
 #[allow(dead_code)] // SSR and browser adapters consume this staged crate-private contract.
 pub(crate) mod document_head;
@@ -713,8 +750,9 @@ pub use hydration::{HydrationContext, HydrationError, hydrate};
 pub use portal::{Portal, PortalError, PortalHandle, PortalTarget, mount_portal};
 pub use reactive::{
 	Effect, ExplicitDeps, LatestResourceState, LatestResourceValue, LatestResourceValueBuilder,
-	Memo, QueryHandle, QueryKey, QueryPhase, ReactiveDeps, Resource, ResourceState, Signal,
-	Trackable, use_latest_resource_value, use_resource, use_resource_with_key,
+	Memo, QueryClient, QueryDefaults, QueryDescriptor, QueryFamily, QueryHandle, QueryKey,
+	QueryOptions, QuerySnapshot, QueryStatus, ReactiveDeps, Resource, ResourceState, Signal,
+	Trackable, queries, use_latest_resource_value, use_resource, use_resource_with_key,
 };
 // Re-export Context system
 pub use reactive::{
@@ -722,6 +760,7 @@ pub use reactive::{
 };
 // Re-export Hooks API
 pub use app::{ClientLauncher, LaunchCtx, PathCtx, PathParams};
+pub use reactive::use_query;
 pub use reactive::{Action, ActionPhase, ActionStateBuilder, use_action, use_action_state};
 pub use reactive::{
 	Dispatch, EffectReturn, OptimisticState, Ref, SetState, SetStateExt, SharedSetState,
@@ -730,7 +769,6 @@ pub use reactive::{
 	use_reducer, use_ref, use_retained_effect, use_retained_layout_effect, use_shared_state,
 	use_state, use_sync_external_store, use_transition,
 };
-pub use reactive::{use_mutation, use_query};
 #[cfg(native)]
 pub use reinhardt_forms::{
 	Widget,

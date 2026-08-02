@@ -191,9 +191,14 @@ pub(crate) fn try_spawn_task<F>(fut: F) -> bool
 where
 	F: Future<Output = ()> + 'static,
 {
+	let task: BoxedTask = if let Some(client) = crate::reactive::query::current_query_client() {
+		Box::pin(crate::reactive::query::with_query_client_async(client, fut))
+	} else {
+		Box::pin(fut)
+	};
 	TASK_SINK.with(|slot| {
 		if let Some(sink) = slot.borrow().as_ref() {
-			sink(Box::pin(fut));
+			sink(task);
 			true
 		} else {
 			false
@@ -201,8 +206,15 @@ where
 	})
 }
 
-pub(crate) fn has_native_task_sink() -> bool {
-	TASK_SINK.with(|slot| slot.borrow().is_some())
+pub(crate) fn spawn_task_unscoped<F>(fut: F)
+where
+	F: Future<Output = ()> + 'static,
+{
+	TASK_SINK.with(|slot| {
+		if let Some(sink) = slot.borrow().as_ref() {
+			sink(Box::pin(fut));
+		}
+	});
 }
 
 #[cfg(test)]

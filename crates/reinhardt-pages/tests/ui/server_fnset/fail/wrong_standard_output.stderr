@@ -6,4 +6,4 @@ error[E0308]: mismatched types
   |
   = note: expected enum `Result<ArticleDto, reinhardt_pages::server_fn::ServerFnSetError>`
              found enum `Result<std::string::String, reinhardt_pages::server_fn::ServerFnSetError>`
-  = note: this error originates in the macro `__reinhardt_generate_server_fnset_Actions` which comes from the expansion of the attribute macro `server_fnset` (in Nightly builds, run with -Z macro-backtrace for more info)
+  = note: this error originates in the macro `__reinhardt_generate_server_fnset_article_fns` which comes from the expansion of the attribute macro `server_fnset` (in Nightly builds, run with -Z macro-backtrace for more info)

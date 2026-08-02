@@ -3,7 +3,8 @@
 use reinhardt_pages::router::loader::{loader_cache_id, route_context};
 use reinhardt_pages::router::loader_registry::LoaderRegistry;
 use reinhardt_pages::{
-	Loader, Outlet, Page, Path, RouteLoader, SsrRenderer, component, layout, loader, page,
+	HydrationContext, Loader, Outlet, Page, Path, QueryClient, QueryDefaults, RouteLoader,
+	SsrRenderer, component, layout, loader, page,
 };
 use reinhardt_urls::routers::ClientRouter;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -166,15 +167,11 @@ fn route_loader_is_prepared_before_ssr_render() {
 			Some(&serde_json::json!({ "Success": "prepared on server" }))
 		);
 		let registry = LoaderRegistry::global().expect("loader registry is available");
+		let client = QueryClient::new(QueryDefaults::default());
+		let hydration = HydrationContext::from_state(renderer.state().clone());
 		registry
-			.hydrate(
-				loader_id,
-				renderer
-					.state()
-					.get_route_loader_state(loader_id.as_str())
-					.expect("route-loader state is present"),
-			)
-			.expect("loader value deserializes for hydration");
+			.seed_hydrated_query(&client, loader_id, &route_context(&matched), &hydration)
+			.expect("loader value and query lease hydrate together");
 	});
 }
 

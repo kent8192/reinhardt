@@ -10,6 +10,8 @@ use reinhardt_core::types::page::{
 	is_boolean_attr_truthy,
 };
 
+use crate::reactive::query::QueryClient;
+
 use super::fixture::{EventFixtureError, TargetStatePatch};
 use super::scheduler::SchedulerScope;
 #[cfg(feature = "msw")]
@@ -26,6 +28,8 @@ pub(crate) struct ScreenInner {
 	pub reactive_scope: ReactiveScope,
 	/// Harness scheduler active for this screen.
 	pub scheduler: Rc<SchedulerScope>,
+	/// Query client owned by this screen.
+	pub query_client: QueryClient,
 	/// Server function mocks registered for this screen.
 	#[cfg(feature = "msw")]
 	pub mocks: SharedServerFnMocks,
@@ -1382,12 +1386,14 @@ pub(crate) fn shared_screen_inner(
 	dom: TestDom,
 	reactive_scope: ReactiveScope,
 	scheduler: Rc<SchedulerScope>,
+	query_client: QueryClient,
 	mocks: SharedServerFnMocks,
 ) -> Rc<RefCell<ScreenInner>> {
 	Rc::new(RefCell::new(ScreenInner {
 		dom,
 		reactive_scope,
 		scheduler,
+		query_client,
 		mocks,
 	}))
 }
@@ -1397,10 +1403,12 @@ pub(crate) fn shared_screen_inner(
 	dom: TestDom,
 	reactive_scope: ReactiveScope,
 	scheduler: Rc<SchedulerScope>,
+	query_client: QueryClient,
 ) -> Rc<RefCell<ScreenInner>> {
 	Rc::new(RefCell::new(ScreenInner {
 		dom,
 		reactive_scope,
 		scheduler,
+		query_client,
 	}))
 }

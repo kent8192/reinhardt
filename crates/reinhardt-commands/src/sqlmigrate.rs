@@ -1,6 +1,7 @@
 //! Read-only migration SQL rendering.
 
 use crate::database_selector::{DatabaseSelector, resolve_database};
+use crate::inspectdb::ensure_sqlite_database_exists;
 use crate::showmigrations::{
 	MigrationVisibilityWriter, StandardMigrationVisibilityWriter, with_command_context,
 };
@@ -118,6 +119,10 @@ impl BaseCommand for SqlMigrateCommand {
 		);
 		let resolved = resolve_database(&selector, ctx.settings.as_deref())
 			.map_err(|error| with_command_context(error, &command_context))?;
+		if resolved.backend() == DatabaseType::Sqlite {
+			ensure_sqlite_database_exists(resolved.url())
+				.map_err(|error| with_command_context(error, &command_context))?;
+		}
 		let source = FilesystemSource::new(
 			ctx.option("migrations-dir")
 				.map(PathBuf::from)

@@ -212,7 +212,7 @@ impl BaseCommand for InspectDbCommand {
 	}
 }
 
-fn ensure_sqlite_database_exists(url: &str) -> CommandResult<()> {
+pub(crate) fn ensure_sqlite_database_exists(url: &str) -> CommandResult<()> {
 	let Some(path_and_query) = url.strip_prefix("sqlite:") else {
 		return Ok(());
 	};

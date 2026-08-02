@@ -336,6 +336,7 @@ fn build_mysql_spec(database_url: &str) -> CommandResult<DbClientSpec> {
 		nonempty(parsed.username()),
 		"MySQL",
 	)?;
+	append_mysql_query_arguments(&parsed, &mut arguments)?;
 	append_database_name(&mut arguments, &parsed, "MySQL")?;
 
 	let secret_environment = decoded_password(&parsed, "MySQL")?
@@ -347,6 +348,33 @@ fn build_mysql_spec(database_url: &str) -> CommandResult<DbClientSpec> {
 		arguments,
 		secret_environment,
 	})
+}
+
+fn append_mysql_query_arguments(parsed: &Url, arguments: &mut Vec<OsString>) -> CommandResult<()> {
+	for (key, value) in parsed.query_pairs() {
+		let option = match key.as_ref() {
+			"charset" => "--default-character-set",
+			"connect-timeout" => "--connect-timeout",
+			"ssl-ca" => "--ssl-ca",
+			"ssl-capath" => "--ssl-capath",
+			"ssl-cert" => "--ssl-cert",
+			"ssl-cipher" => "--ssl-cipher",
+			"ssl-crl" => "--ssl-crl",
+			"ssl-crlpath" => "--ssl-crlpath",
+			"ssl-key" => "--ssl-key",
+			"ssl-mode" => "--ssl-mode",
+			"tls-ciphersuites" => "--tls-ciphersuites",
+			"tls-version" => "--tls-version",
+			unsupported => {
+				return Err(CommandError::InvalidArguments(format!(
+					"The MySQL database URL contains unsupported client parameter `{unsupported}`."
+				)));
+			}
+		};
+		arguments.push(OsString::from(option));
+		arguments.push(OsString::from(value.as_ref()));
+	}
+	Ok(())
 }
 
 fn build_sqlite_spec(database_url: &str) -> CommandResult<DbClientSpec> {
@@ -1141,10 +1169,10 @@ mod tests {
 	}
 
 	#[rstest::rstest]
-	fn mysql_decodes_connection_fields_and_ignores_url_query_parameters() {
+	fn mysql_decodes_connection_fields_and_preserves_supported_url_query_parameters() {
 		let password = "s ecret?";
 		let database = resolved_database(
-			"mysql://report%2Buser:s%20ecret%3F@db.example:4406/analytics%2Fdaily?charset=utf8mb4",
+			"mysql://report%2Buser:s%20ecret%3F@db.example:4406/analytics%2Fdaily?charset=utf8mb4&ssl-mode=REQUIRED",
 		);
 		let passthrough = vec![OsString::from("--skip-column-names")];
 
@@ -1160,6 +1188,10 @@ mod tests {
 				OsString::from("4406"),
 				OsString::from("--user"),
 				OsString::from("report+user"),
+				OsString::from("--default-character-set"),
+				OsString::from("utf8mb4"),
+				OsString::from("--ssl-mode"),
+				OsString::from("REQUIRED"),
 				OsString::from("analytics/daily"),
 				OsString::from("--skip-column-names"),
 			]
@@ -1167,6 +1199,20 @@ mod tests {
 		assert_eq!(
 			spec.secret_environment,
 			vec![(OsString::from("MYSQL_PWD"), OsString::from(password))]
+		);
+	}
+
+	#[rstest::rstest]
+	fn mysql_rejects_unsupported_connection_parameters() {
+		let database = resolved_database("mysql://operator@db.example/reporting?unknown=yes");
+
+		let error = build_client_spec(&database, &[])
+			.err()
+			.expect("unsupported parameter should fail");
+
+		assert_eq!(
+			error.to_string(),
+			"Invalid arguments: The MySQL database URL contains unsupported client parameter `unknown`."
 		);
 	}
 

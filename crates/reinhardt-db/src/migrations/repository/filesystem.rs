@@ -1144,6 +1144,7 @@ mod tests {
 	use crate::migrations::operations::{
 		ColumnDefinition, InterleaveSpec, Operation, PartitionOptions,
 	};
+	use crate::migrations::{FilesystemSource, MigrationSource};
 	use rstest::rstest;
 	use serial_test::serial;
 	use tempfile::TempDir;
@@ -1264,9 +1265,9 @@ mod tests {
 	#[rstest]
 	#[tokio::test]
 	#[serial(filesystem_repository)]
-	async fn save_round_trips_supported_create_table_backend_options() {
+	async fn render_round_trips_supported_create_table_backend_options() {
 		let temp_dir = TempDir::new().unwrap();
-		let mut repository = FilesystemRepository::new(temp_dir.path());
+		let repository = FilesystemRepository::new(temp_dir.path());
 		let mut migration = Migration::new("0001_backend_options", "polls");
 		migration.operations = vec![Operation::CreateTable {
 			name: "events".to_string(),
@@ -1280,13 +1281,25 @@ mod tests {
 			partition: Some(PartitionOptions::hash("id", 4)),
 		}];
 
-		repository.save(&migration).await.unwrap();
-		let loaded = repository
-			.get("polls", "0001_backend_options")
+		let rendered = repository
+			.render(
+				&migration,
+				MigrationRenderOptions {
+					include_header: false,
+				},
+			)
+			.expect("backend-specific CreateTable options should render");
+		let app_dir = temp_dir.path().join("polls");
+		std::fs::create_dir_all(&app_dir).unwrap();
+		std::fs::write(app_dir.join("0001_backend_options.rs"), rendered).unwrap();
+
+		let loaded = FilesystemSource::new(temp_dir.path())
+			.all_migrations()
 			.await
 			.unwrap();
 
-		assert_eq!(loaded.operations, migration.operations);
+		assert_eq!(loaded.len(), 1);
+		assert_eq!(loaded[0].operations, migration.operations);
 	}
 
 	#[rstest]

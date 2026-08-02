@@ -631,11 +631,15 @@ impl MigrationSquasher {
 			Operation::CreateTable {
 				columns,
 				constraints,
+				interleave_in_parent,
 				..
 			} => {
 				columns
 					.iter()
 					.any(|column| Self::column_references_table(column, table))
+					|| interleave_in_parent
+						.as_ref()
+						.is_some_and(|interleave| interleave.parent_table == table)
 					|| constraints.iter().any(|constraint| {
 						matches!(
 							constraint,
@@ -1189,5 +1193,38 @@ mod tests {
 
 		// Assert
 		assert!(result.migration.optional_dependencies.is_empty());
+	}
+
+	#[rstest::rstest]
+	fn optimize_operations_preserves_interleaved_parent_table() {
+		let operations = vec![
+			Operation::CreateTable {
+				name: "parent".to_string(),
+				columns: vec![ColumnDefinition::new("id", FieldType::Integer)],
+				constraints: vec![],
+				without_rowid: None,
+				interleave_in_parent: None,
+				partition: None,
+			},
+			Operation::CreateTable {
+				name: "child".to_string(),
+				columns: vec![ColumnDefinition::new("id", FieldType::Integer)],
+				constraints: vec![],
+				without_rowid: None,
+				interleave_in_parent: Some(crate::migrations::operations::InterleaveSpec {
+					parent_table: "parent".to_string(),
+					parent_columns: vec!["id".to_string()],
+				}),
+				partition: None,
+			},
+			Operation::DropTable {
+				name: "parent".to_string(),
+			},
+		];
+
+		assert_eq!(
+			MigrationSquasher::new().optimize_operations(operations.clone()),
+			operations
+		);
 	}
 }

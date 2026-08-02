@@ -834,3 +834,135 @@ async fn target_applies_replacement_for_deleted_original_dependency(
 		]
 	);
 }
+
+#[rstest]
+#[tokio::test]
+#[serial(migrate_target_e2e)]
+async fn target_descendant_applies_remaining_originals_after_partial_squash(
+	#[future] migration_executor: MigrationExecutorFixture,
+) {
+	let (_executor, _container, _pool, _port, url) = migration_executor.await;
+	let tempdir = tempfile::tempdir().expect("create tempdir");
+	let migrations_root = tempdir.path().join("migrations");
+	write_test_migration(&migrations_root, "myapp", "0001_first", &[])
+		.expect("write first original migration");
+	write_test_migration(
+		&migrations_root,
+		"myapp",
+		"0002_second",
+		&[("myapp", "0001_first")],
+	)
+	.expect("write second original migration");
+	write_test_migration_with_replaces(
+		&migrations_root,
+		"myapp",
+		"0001_squashed_0002",
+		&[],
+		&[("myapp", "0001_first"), ("myapp", "0002_second")],
+	)
+	.expect("write replacement migration");
+	write_test_migration(
+		&migrations_root,
+		"myapp",
+		"0003_after_squash",
+		&[("myapp", "0001_squashed_0002")],
+	)
+	.expect("write descendant migration");
+
+	MigrateCommand
+		.execute(&build_ctx(
+			&migrations_root,
+			&url,
+			Some("myapp"),
+			Some("0001_first"),
+			false,
+		))
+		.await
+		.expect("apply the first original migration");
+	MigrateCommand
+		.execute(&build_ctx(
+			&migrations_root,
+			&url,
+			Some("myapp"),
+			Some("0003_after_squash"),
+			false,
+		))
+		.await
+		.expect("targeting a descendant must continue on the original chain");
+
+	assert_eq!(
+		applied_for_app(&url, "myapp").await,
+		vec![
+			"0001_first".to_string(),
+			"0002_second".to_string(),
+			"0003_after_squash".to_string(),
+		]
+	);
+}
+
+#[rstest]
+#[tokio::test]
+#[serial(migrate_target_e2e)]
+async fn fake_target_reconciles_nested_replacement_from_available_history(
+	#[future] migration_executor: MigrationExecutorFixture,
+) {
+	let (mut executor, _container, _pool, _port, url) = migration_executor.await;
+	let tempdir = tempfile::tempdir().expect("create tempdir");
+	let migrations_root = tempdir.path().join("migrations");
+	write_test_migration(&migrations_root, "myapp", "0001_first", &[])
+		.expect("write first original migration");
+	write_test_migration(
+		&migrations_root,
+		"myapp",
+		"0002_second",
+		&[("myapp", "0001_first")],
+	)
+	.expect("write second original migration");
+	write_test_migration_with_replaces(
+		&migrations_root,
+		"myapp",
+		"0001_squashed_0002",
+		&[],
+		&[("myapp", "0001_first"), ("myapp", "0002_second")],
+	)
+	.expect("write older replacement migration");
+	write_test_migration_with_replaces(
+		&migrations_root,
+		"myapp",
+		"0001_squashed_0002_again",
+		&[],
+		&[
+			("myapp", "0001_first"),
+			("myapp", "0002_second"),
+			("myapp", "0001_squashed_0002"),
+		],
+	)
+	.expect("write newer replacement migration");
+	let recorder = DatabaseMigrationRecorder::new(executor.connection().clone());
+	recorder
+		.ensure_schema_table()
+		.await
+		.expect("ensure recorder table");
+	executor
+		.record_migration("myapp", "0001_squashed_0002")
+		.await
+		.expect("record older replacement");
+
+	let mut ctx = build_ctx(
+		&migrations_root,
+		&url,
+		Some("myapp"),
+		Some("0001_squashed_0002_again"),
+		false,
+	);
+	ctx.set_option("fake".to_string(), "true".to_string());
+	MigrateCommand
+		.execute(&ctx)
+		.await
+		.expect("nested replacement history must reconcile through its recorded squash");
+
+	assert_eq!(
+		applied_for_app(&url, "myapp").await,
+		vec!["0001_squashed_0002_again".to_string()]
+	);
+}

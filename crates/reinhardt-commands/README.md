@@ -97,6 +97,23 @@ ambiguous prefix, a branched ancestry, or a range that is not a continuous
 same-application ancestor chain. Dependencies entering the selected range from
 other applications remain dependencies of the generated migration.
 
+Conditional migration dependencies are resolved from the active core settings.
+`migration_swappable_settings` maps each swappable dependency key to its
+`"app.Model"` target, while `migration_features` enables optional dependencies
+whose feature condition matches an entry in the list. `installed_apps` enables
+optional dependencies gated on application presence. Inactive optional
+dependencies are omitted from the generated replacement rather than requiring
+their target application to be installed.
+
+```toml
+[core]
+installed_apps = ["accounts"]
+migration_features = ["gis"]
+
+[core.migration_swappable_settings]
+AUTH_USER_MODEL = "accounts.User"
+```
+
 By default, Reinhardt prompts before writing. Use `--no-input` (or the
 Django-compatible `--noinput` alias) in non-interactive environments. Use
 `--no-optimize` to preserve the exact source operation order, and `--no-header`

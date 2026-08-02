@@ -294,6 +294,8 @@ These fields are actively consumed by the framework and affect runtime behavior:
 | `debug` | Debug mode toggle |
 | `allowed_hosts` | List of allowed host/domain names |
 | `installed_apps` | List of installed applications |
+| `migration_swappable_settings` | Mapping of swappable migration setting keys to `"app.Model"` targets used by `squashmigrations` |
+| `migration_features` | Feature names that enable conditional migration dependencies while running `squashmigrations` |
 | `middleware` | List of middleware classes |
 | `root_urlconf` | Root URL configuration module |
 | `databases` | Database configurations |
@@ -312,6 +314,24 @@ These fields are actively consumed by the framework and affect runtime behavior:
 | `append_slash` | Trailing slash auto-append toggle |
 | `admins` | Administrator contact list |
 | `managers` | Manager contact list |
+
+### Migration dependency settings
+
+`squashmigrations` reads conditional dependency settings from the `core`
+section. Use `migration_swappable_settings` for a migration metadata key such
+as `AUTH_USER_MODEL`; its value must be the selected `"app.Model"` target.
+Use `migration_features` to enable dependencies declared with a matching
+feature name. `installed_apps` similarly controls dependencies declared as
+application-conditional.
+
+```toml
+[core]
+installed_apps = ["accounts"]
+migration_features = ["gis"]
+
+[core.migration_swappable_settings]
+AUTH_USER_MODEL = "accounts.User"
+```
 
 ### Reserved for Future Implementation
 

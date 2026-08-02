@@ -601,20 +601,7 @@ impl FilesystemRepository {
 				operation: format!("{context}.Constraint::Exclude"),
 			});
 		}
-		match operation {
-			Operation::CreateTable {
-				without_rowid,
-				interleave_in_parent,
-				partition,
-				..
-			} if without_rowid.is_some()
-				|| interleave_in_parent.is_some()
-				|| partition.is_some() =>
-			{
-				Err(MigrationError::UnsupportedMigrationRendering { operation: context })
-			}
-			_ => Ok(()),
-		}
+		Ok(())
 	}
 
 	fn validate_renderable_column(
@@ -1154,7 +1141,9 @@ impl MigrationRepository for FilesystemRepository {
 mod tests {
 	use super::*;
 	use crate::migrations::fields::FieldType;
-	use crate::migrations::operations::{ColumnDefinition, Operation};
+	use crate::migrations::operations::{
+		ColumnDefinition, InterleaveSpec, Operation, PartitionOptions,
+	};
 	use rstest::rstest;
 	use serial_test::serial;
 	use tempfile::TempDir;
@@ -1270,6 +1259,34 @@ mod tests {
 		assert!(rendered.contains("BulkLoadSource"));
 		assert!(rendered.contains("BulkLoadFormat"));
 		assert!(rendered.contains("BulkLoadOptions"));
+	}
+
+	#[rstest]
+	#[tokio::test]
+	#[serial(filesystem_repository)]
+	async fn save_round_trips_supported_create_table_backend_options() {
+		let temp_dir = TempDir::new().unwrap();
+		let mut repository = FilesystemRepository::new(temp_dir.path());
+		let mut migration = Migration::new("0001_backend_options", "polls");
+		migration.operations = vec![Operation::CreateTable {
+			name: "events".to_string(),
+			columns: vec![ColumnDefinition::new("id", FieldType::Integer)],
+			constraints: vec![],
+			without_rowid: Some(true),
+			interleave_in_parent: Some(InterleaveSpec {
+				parent_table: "accounts".to_string(),
+				parent_columns: vec!["id".to_string()],
+			}),
+			partition: Some(PartitionOptions::hash("id", 4)),
+		}];
+
+		repository.save(&migration).await.unwrap();
+		let loaded = repository
+			.get("polls", "0001_backend_options")
+			.await
+			.unwrap();
+
+		assert_eq!(loaded.operations, migration.operations);
 	}
 
 	#[rstest]

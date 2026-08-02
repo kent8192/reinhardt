@@ -90,7 +90,7 @@ mod fixture {
 
 		fn lookup_field() -> UniqueFieldRef<Article, i64> {
 			// SAFETY: The handwritten test model declares `id` as its unique primary key.
-			unsafe { UniqueFieldRef::from_model_field("id", "id") }
+			unsafe { UniqueFieldRef::from_model_field_with_names("id", "id") }
 		}
 
 		async fn to_read(
@@ -168,7 +168,7 @@ mod fixture {
 
 		fn lookup_field() -> UniqueFieldRef<Article, i64> {
 			// SAFETY: The handwritten test model declares `id` as its unique primary key.
-			unsafe { UniqueFieldRef::from_model_field("id", "id") }
+			unsafe { UniqueFieldRef::from_model_field_with_names("id", "id") }
 		}
 
 		async fn to_read(

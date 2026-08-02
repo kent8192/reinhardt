@@ -745,6 +745,13 @@ async fn create_user_with_transaction(
 }
 ```
 
+Typed date projections use generated date or UTC datetime field references.
+`dates` and `datetimes` perform truncation, null exclusion, distinctness, and
+ordering in the database; ISO weeks begin on Monday. Datetime projections
+default to UTC and PostgreSQL additionally supports IANA named zones. MySQL and
+SQLite report an explicit capability error for named-zone requests instead of
+falling back to UTC or server-local time.
+
 **Note**: Reinhardt uses reinhardt-query for SQL operations. The `#[model(...)]` attribute automatically generates Model trait implementations, type-safe field accessors, and global model registry registration.
 
 Register in `src/config/apps.rs`:

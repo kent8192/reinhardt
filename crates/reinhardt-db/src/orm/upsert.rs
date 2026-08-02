@@ -177,6 +177,7 @@ impl<C: CustomManager> GetOrCreateBuilder<C> {
 /// # Example
 ///
 /// ```no_run
+/// # // The isolated doctest crate does not declare the model macro's `native` cfg.
 /// # #![allow(unexpected_cfgs)]
 /// # mod migrations { pub use reinhardt_db::migrations::*; }
 /// # mod orm { pub use reinhardt_db::orm::*; }

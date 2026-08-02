@@ -413,6 +413,9 @@ pub mod db {
 			fn primary_key_column() -> &'static str {
 				Self::primary_key_field()
 			}
+			fn latest_by_fields() -> &'static [&'static str] {
+				&[]
+			}
 			fn primary_key(&self) -> Option<Self::PrimaryKey>;
 			fn set_primary_key(&mut self, value: Self::PrimaryKey);
 			fn field_is_none(&self, field_name: &str) -> bool;
@@ -497,15 +500,39 @@ pub mod db {
 		}
 
 		pub mod expressions {
+			#[derive(Debug, Clone, Copy)]
+			pub enum GeneratedModelField {}
+
+			#[derive(Debug, Clone, Copy)]
+			pub enum UnverifiedModelField {}
+
 			#[derive(Debug, Clone)]
-			pub struct FieldRef<Model, Type> {
+			pub struct FieldRef<Model, Type, Origin = UnverifiedModelField> {
 				logical_name: &'static str,
 				column_name: &'static str,
-				_marker: core::marker::PhantomData<(Model, Type)>,
+				_marker: core::marker::PhantomData<(Model, Type, Origin)>,
 			}
 
-			impl<Model, Type> FieldRef<Model, Type> {
-				pub const unsafe fn from_model_field(
+			impl<Model, Type> FieldRef<Model, Type, UnverifiedModelField> {
+				pub const fn new(name: &'static str) -> Self {
+					Self {
+						logical_name: name,
+						column_name: name,
+						_marker: core::marker::PhantomData,
+					}
+				}
+			}
+
+			impl<Model, Type> FieldRef<Model, Type, GeneratedModelField> {
+				pub const unsafe fn from_model_field(name: &'static str) -> Self {
+					Self {
+						logical_name: name,
+						column_name: name,
+						_marker: core::marker::PhantomData,
+					}
+				}
+
+				pub const unsafe fn from_generated_model_field_with_names(
 					logical_name: &'static str,
 					column_name: &'static str,
 				) -> Self {
@@ -515,7 +542,9 @@ pub mod db {
 						_marker: core::marker::PhantomData,
 					}
 				}
+			}
 
+			impl<Model, Type, Origin> FieldRef<Model, Type, Origin> {
 				pub const fn logical_name(&self) -> &'static str {
 					self.logical_name
 				}
@@ -529,15 +558,53 @@ pub mod db {
 				}
 			}
 
+			#[derive(Debug, Clone, Copy)]
+			pub struct OrderingField<Model> {
+				_marker: core::marker::PhantomData<Model>,
+			}
+
+			impl<Model> OrderingField<Model> {
+				pub const unsafe fn from_model_field(_name: &'static str) -> Self {
+					Self {
+						_marker: core::marker::PhantomData,
+					}
+				}
+			}
+
 			#[derive(Debug, Clone)]
 			pub struct UniqueFieldRef<Model, Type> {
 				_marker: core::marker::PhantomData<(Model, Type)>,
 			}
 
 			impl<Model, Type> UniqueFieldRef<Model, Type> {
-				pub const unsafe fn from_model_field(
+				pub const unsafe fn from_model_field(_name: &'static str) -> Self {
+					Self {
+						_marker: core::marker::PhantomData,
+					}
+				}
+
+				pub const unsafe fn from_model_field_with_names(
 					_logical_name: &'static str,
 					_column_name: &'static str,
+				) -> Self {
+					Self {
+						_marker: core::marker::PhantomData,
+					}
+				}
+
+				pub const unsafe fn from_model_field_with_getter(
+					_name: &'static str,
+					_getter: fn(&Model) -> Option<Type>,
+				) -> Self {
+					Self {
+						_marker: core::marker::PhantomData,
+					}
+				}
+
+				pub const unsafe fn from_model_field_with_names_and_getter(
+					_logical_name: &'static str,
+					_column_name: &'static str,
+					_getter: fn(&Model) -> Option<Type>,
 				) -> Self {
 					Self {
 						_marker: core::marker::PhantomData,
@@ -648,9 +715,9 @@ pub mod db {
 					}
 				}
 
-				pub fn field<Value>(
+				pub fn field<Value, Origin>(
 					self,
-					field: super::expressions::FieldRef<Target, Value>,
+					field: super::expressions::FieldRef<Target, Value, Origin>,
 				) -> RelatedFieldRef<Root, Target, Value> {
 					RelatedFieldRef {
 						field: field.name(),

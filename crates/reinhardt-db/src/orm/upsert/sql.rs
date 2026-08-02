@@ -408,17 +408,17 @@ mod tests {
 	impl Article {
 		fn tenant_field() -> FieldRef<Self, i64> {
 			// SAFETY: the logical and physical names match Article's declared i64 field.
-			unsafe { FieldRef::from_model_field("tenant_id", "tenant_id") }
+			unsafe { FieldRef::from_model_field_with_names("tenant_id", "tenant_id") }
 		}
 
 		fn slug_field() -> FieldRef<Self, Option<String>> {
 			// SAFETY: the names match Article's declared optional string field and db_column.
-			unsafe { FieldRef::from_model_field("slug", "article_slug") }
+			unsafe { FieldRef::from_model_field_with_names("slug", "article_slug") }
 		}
 
 		fn headline_field() -> FieldRef<Self, String> {
 			// SAFETY: the logical and physical names match Article's declared string field.
-			unsafe { FieldRef::from_model_field("headline", "headline") }
+			unsafe { FieldRef::from_model_field_with_names("headline", "headline") }
 		}
 	}
 
@@ -473,7 +473,7 @@ mod tests {
 	impl ArticleRevision {
 		fn headline_field() -> FieldRef<Self, String> {
 			// SAFETY: the names match ArticleRevision's declared string field and db_column.
-			unsafe { FieldRef::from_model_field("headline", "display_headline") }
+			unsafe { FieldRef::from_model_field_with_names("headline", "display_headline") }
 		}
 	}
 
@@ -518,7 +518,7 @@ mod tests {
 	impl MissingCompositeMetadata {
 		fn headline_field() -> FieldRef<Self, String> {
 			// SAFETY: the names match the model's declared headline field.
-			unsafe { FieldRef::from_model_field("headline", "headline") }
+			unsafe { FieldRef::from_model_field_with_names("headline", "headline") }
 		}
 	}
 
@@ -558,7 +558,7 @@ mod tests {
 	impl MissingPrimaryKeyValue {
 		fn headline_field() -> FieldRef<Self, String> {
 			// SAFETY: the names match the model's declared headline field.
-			unsafe { FieldRef::from_model_field("headline", "headline") }
+			unsafe { FieldRef::from_model_field_with_names("headline", "headline") }
 		}
 	}
 

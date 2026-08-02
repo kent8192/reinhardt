@@ -68,17 +68,17 @@ impl Model for Article {
 impl Article {
 	fn field_slug() -> FieldRef<Self, String> {
 		// SAFETY: the names and type match Article's declared slug field.
-		unsafe { FieldRef::from_model_field("slug", "article_slug") }
+		unsafe { FieldRef::from_model_field_with_names("slug", "article_slug") }
 	}
 
 	fn field_rank() -> FieldRef<Self, i32> {
 		// SAFETY: the names and type match Article's declared rank field.
-		unsafe { FieldRef::from_model_field("rank", "article_rank") }
+		unsafe { FieldRef::from_model_field_with_names("rank", "article_rank") }
 	}
 
 	fn field_id() -> FieldRef<Self, i64> {
 		// SAFETY: the names and type match Article's declared primary-key field.
-		unsafe { FieldRef::from_model_field("id", "id") }
+		unsafe { FieldRef::from_model_field_with_names("id", "id") }
 	}
 }
 
@@ -128,17 +128,17 @@ impl Model for LookupArticle {
 impl LookupArticle {
 	fn field_tenant_id() -> FieldRef<Self, i64> {
 		// SAFETY: the names and type match LookupArticle's declared tenant field.
-		unsafe { FieldRef::from_model_field("tenant_id", "tenant_key") }
+		unsafe { FieldRef::from_model_field_with_names("tenant_id", "tenant_key") }
 	}
 
 	fn field_slug() -> FieldRef<Self, String> {
 		// SAFETY: the names and type match LookupArticle's declared slug field.
-		unsafe { FieldRef::from_model_field("slug", "slug_key") }
+		unsafe { FieldRef::from_model_field_with_names("slug", "slug_key") }
 	}
 
 	fn field_headline() -> FieldRef<Self, String> {
 		// SAFETY: the names and type match LookupArticle's declared headline field.
-		unsafe { FieldRef::from_model_field("headline", "headline_text") }
+		unsafe { FieldRef::from_model_field_with_names("headline", "headline_text") }
 	}
 }
 

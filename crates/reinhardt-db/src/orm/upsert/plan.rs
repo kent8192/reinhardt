@@ -481,7 +481,9 @@ mod tests {
 	{
 		// SAFETY: test descriptors use the matching declared field type unless a test
 		// intentionally verifies forged descriptor rejection.
-		let field = unsafe { FieldRef::<Article, T>::from_model_field(logical_name, column_name) };
+		let field = unsafe {
+			FieldRef::<Article, T>::from_model_field_with_names(logical_name, column_name)
+		};
 		TypedAssignment::new(field, value).expect("encode test assignment")
 	}
 

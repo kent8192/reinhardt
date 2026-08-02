@@ -8,6 +8,7 @@ use reinhardt_commands::{
 	classify_source_change,
 };
 use reinhardt_pages::hmr::{CompiledBuildId, SourceId, StaticTemplateNode};
+use rstest::rstest;
 use tempfile::TempDir;
 
 fn fixture_source(static_text: &str) -> String {
@@ -135,6 +136,44 @@ fn render() {
 	let changed = r#"
 fn render() {
     let page = page!(|count: i32| { div { { count + 1 } } });
+    page
+}
+"#;
+	let (root, path) = write_fixture(changed);
+	let baseline = baseline(&root, &path, original);
+
+	assert_eq!(
+		classify_source_change(
+			root.path(),
+			std::slice::from_ref(&path),
+			&baseline,
+			&StaticOverlayStore::new(),
+		),
+		TemplateClassification::RebuildRequired(RebuildReason::DynamicAbiChanged)
+	);
+}
+
+#[rstest]
+fn typed_custom_payload_change_with_static_edit_requires_dynamic_abi_rebuild() {
+	let original = r#"
+fn render() {
+    let page = page!(|| {
+        button {
+            @custom::<u64>("item-selected"): |_| {},
+            "Before"
+        }
+    });
+    page
+}
+"#;
+	let changed = r#"
+fn render() {
+    let page = page!(|| {
+        button {
+            @custom::<String>("item-selected"): |_| {},
+            "After"
+        }
+    });
     page
 }
 "#;

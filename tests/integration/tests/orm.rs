@@ -45,3 +45,9 @@ mod queryset_docs_ui;
 
 #[path = "orm/upsert_builder_ui.rs"]
 mod upsert_builder_ui;
+
+#[path = "orm/queryset_retrieval_integration.rs"]
+mod queryset_retrieval_integration;
+
+#[path = "orm/row_locking_integration.rs"]
+mod row_locking_integration;

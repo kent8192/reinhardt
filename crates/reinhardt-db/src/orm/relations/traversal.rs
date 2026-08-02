@@ -185,9 +185,9 @@ impl<Root: Model, Target: Model> RelationPath<Root, Target> {
 	}
 
 	/// Select a field on the target model through this relation path.
-	pub fn field<Value>(
+	pub fn field<Value, Origin>(
 		self,
-		field: FieldRef<Target, Value>,
+		field: FieldRef<Target, Value, Origin>,
 	) -> RelatedFieldRef<Root, Target, Value> {
 		RelatedFieldRef::from_names(self, field.logical_name(), field.name())
 	}

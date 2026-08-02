@@ -318,27 +318,27 @@ impl Model for Tag {
 impl Tag {
 	fn field_slug() -> FieldRef<Self, String> {
 		// SAFETY: the logical and physical names match Tag::field_metadata.
-		unsafe { FieldRef::from_model_field("slug", "slug") }
+		unsafe { FieldRef::from_model_field_with_names("slug", "slug") }
 	}
 
 	fn field_email() -> FieldRef<Self, String> {
 		// SAFETY: the logical and physical names match Tag::field_metadata.
-		unsafe { FieldRef::from_model_field("email", "email") }
+		unsafe { FieldRef::from_model_field_with_names("email", "email") }
 	}
 
 	fn field_value() -> FieldRef<Self, i32> {
 		// SAFETY: the logical and physical names match Tag::field_metadata.
-		unsafe { FieldRef::from_model_field("value", "value") }
+		unsafe { FieldRef::from_model_field_with_names("value", "value") }
 	}
 
 	fn field_create_marker() -> FieldRef<Self, String> {
 		// SAFETY: the logical and physical names match Tag::field_metadata.
-		unsafe { FieldRef::from_model_field("create_marker", "create_marker") }
+		unsafe { FieldRef::from_model_field_with_names("create_marker", "create_marker") }
 	}
 
 	fn field_optional_note() -> FieldRef<Self, Option<String>> {
 		// SAFETY: the logical and physical names match Tag::field_metadata.
-		unsafe { FieldRef::from_model_field("optional_note", "optional_note") }
+		unsafe { FieldRef::from_model_field_with_names("optional_note", "optional_note") }
 	}
 }
 
@@ -400,17 +400,17 @@ impl Model for TenantTag {
 impl TenantTag {
 	fn field_tenant_id() -> FieldRef<Self, i64> {
 		// SAFETY: the logical and physical names match TenantTag::field_metadata.
-		unsafe { FieldRef::from_model_field("tenant_id", "tenant_id") }
+		unsafe { FieldRef::from_model_field_with_names("tenant_id", "tenant_id") }
 	}
 
 	fn field_slug() -> FieldRef<Self, String> {
 		// SAFETY: the logical and physical names match TenantTag::field_metadata.
-		unsafe { FieldRef::from_model_field("slug", "slug") }
+		unsafe { FieldRef::from_model_field_with_names("slug", "slug") }
 	}
 
 	fn field_value() -> FieldRef<Self, i32> {
 		// SAFETY: the logical and physical names match TenantTag::field_metadata.
-		unsafe { FieldRef::from_model_field("value", "value") }
+		unsafe { FieldRef::from_model_field_with_names("value", "value") }
 	}
 }
 

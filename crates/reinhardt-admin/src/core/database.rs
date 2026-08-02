@@ -2112,7 +2112,11 @@ mod tests {
 		// SAFETY: the test model declares `created_at` as an `i64` field mapped to the
 		// `created_at` column.
 		let filter = unsafe {
-			FieldRef::<TransformedFilterModel, i64>::from_model_field("created_at", "created_at")
+			FieldRef::<
+				TransformedFilterModel,
+				i64,
+				reinhardt_db::orm::expressions::GeneratedModelField,
+			>::from_generated_model_field_with_names("created_at", "created_at")
 		}
 		.year()
 		.range(2024, 2026);

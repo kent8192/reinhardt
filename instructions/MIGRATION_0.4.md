@@ -300,11 +300,69 @@ use reinhardt_pages::{raw_event_handler, platform};
 let handler = raw_event_handler(|event: platform::Event| inspect(event));
 ```
 
-Arbitrary intrinsic names use `@custom("name")` and receive
-`platform::Event`. The 0.4 event API does not add typed custom detail values;
-that follow-up is tracked by #5636. Browser-only raw APIs remain available
-through `payload.raw()` on WASM, but portable code should prefer payload
-methods and owned target snapshots.
+Arbitrary intrinsic names have adjacent raw and typed forms:
+
+```rust,ignore
+// Raw event transport.
+button { @custom("item-selected"): |event: platform::Event| { inspect(event); } }
+
+// Typed browser CustomEvent.detail decoding.
+button { @custom::<ItemSelected>("item-selected"): |event| {
+    if let Ok(detail) = event.detail() {
+        select(detail.id);
+    }
+} }
+```
+
+`@custom("name")` receives the unmodified `platform::Event`, while
+`@custom::<T>("name")` receives `CustomEvent<T>`. `detail()` borrows the
+cached decoded detail; `into_detail()` consumes the event and returns the owned
+detail. Decode failures are structured `CustomEventDetailError` values, so
+match `NotCustomEvent` and `Deserialize` instead of parsing strings. The
+decoder-specific `Deserialize::message` is not stable across native and WASM
+targets.
+
+Manouche integrations that match the public `IntrinsicEvent` AST must rename
+the raw custom-event arm from `IntrinsicEvent::Custom` to
+`IntrinsicEvent::RawCustom`. The new `IntrinsicEvent::TypedCustom` arm
+represents `@custom::<T>("name")` and carries its payload type separately:
+
+```rust,ignore
+match event {
+    // Before
+    IntrinsicEvent::Custom { name, handler } => inspect_raw(name, handler),
+
+    // After
+    IntrinsicEvent::RawCustom { name, handler } => inspect_raw(name, handler),
+    IntrinsicEvent::TypedCustom {
+        name,
+        payload_type,
+        handler,
+    } => inspect_typed(name, payload_type, handler),
+    IntrinsicEvent::Standard { event, handler } => inspect_standard(event, handler),
+}
+```
+
+`Element::add_typed_custom_event_listener` callbacks now receive the complete
+event rather than a `Result<T, String>` detail value:
+
+```rust,ignore
+// Before
+|detail: Result<ItemSelected, String>| match detail {
+    Ok(detail) => consume(detail),
+    Err(error) => report(error),
+}
+
+// After
+|event: CustomEvent<ItemSelected>| match event.into_detail() {
+    Ok(detail) => consume(detail),
+    Err(error) => report(error),
+}
+```
+
+For browser-only DOM interop, `CustomEvent::raw()` retains the underlying
+`web_sys::Event` on WASM. Portable code should otherwise prefer payload methods
+and owned target snapshots.
 
 ## Target extraction
 

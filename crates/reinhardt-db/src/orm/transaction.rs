@@ -55,7 +55,7 @@ use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 use std::sync::{Arc, Mutex};
 
 use super::connection::{
-	DatabaseBackend, OrmExecutor, QueryResult, QueryValue, Row, TransactionExecutor,
+	DatabaseBackend, OrmExecutor, QueryResult, QueryValue, Row, RowStream, TransactionExecutor,
 };
 use crate::backends::types::DatabaseType;
 
@@ -1053,6 +1053,26 @@ impl OrmExecutor for AtomicTransaction {
 			.await
 	}
 
+	fn fetch_stream<'a>(
+		&'a mut self,
+		sql: String,
+		params: Vec<QueryValue>,
+		chunk_size: usize,
+	) -> reinhardt_core::exception::Result<RowStream<'a>> {
+		self.executor_mut()?.fetch_stream(sql, params, chunk_size)
+	}
+
+	fn fetch_stream_with_context<'a>(
+		&'a mut self,
+		sql: String,
+		params: Vec<QueryValue>,
+		chunk_size: usize,
+		context: Option<crate::backends::error::PgvectorOperationKind>,
+	) -> reinhardt_core::exception::Result<RowStream<'a>> {
+		self.executor_mut()?
+			.fetch_stream_with_context(sql, params, chunk_size, context)
+	}
+
 	async fn fetch_optional(
 		&mut self,
 		sql: &str,
@@ -1097,6 +1117,13 @@ impl TransactionExecutor for AtomicTransaction {
 		self.executor_ref()
 			.map(TransactionExecutor::is_cockroachdb)
 			.unwrap_or(self.is_cockroachdb)
+	}
+
+	fn row_lock_capabilities(&self) -> crate::backends::types::RowLockCapabilities {
+		self.executor_ref().map_or_else(
+			crate::backends::types::RowLockCapabilities::unsupported,
+			TransactionExecutor::row_lock_capabilities,
+		)
 	}
 
 	async fn execute(
@@ -1154,6 +1181,26 @@ impl TransactionExecutor for AtomicTransaction {
 		self.executor_mut()?
 			.fetch_all_with_context(sql, params, context)
 			.await
+	}
+
+	fn fetch_stream<'a>(
+		&'a mut self,
+		sql: String,
+		params: Vec<QueryValue>,
+		chunk_size: usize,
+	) -> reinhardt_core::exception::Result<RowStream<'a>> {
+		self.executor_mut()?.fetch_stream(sql, params, chunk_size)
+	}
+
+	fn fetch_stream_with_context<'a>(
+		&'a mut self,
+		sql: String,
+		params: Vec<QueryValue>,
+		chunk_size: usize,
+		context: Option<crate::backends::error::PgvectorOperationKind>,
+	) -> reinhardt_core::exception::Result<RowStream<'a>> {
+		self.executor_mut()?
+			.fetch_stream_with_context(sql, params, chunk_size, context)
 	}
 
 	async fn fetch_optional(

@@ -425,32 +425,32 @@ mod tests {
 	impl Article {
 		fn id_field() -> FieldRef<Self, Option<i64>> {
 			// SAFETY: the logical and physical names match Article's nullable primary key.
-			unsafe { FieldRef::from_model_field("id", "id") }
+			unsafe { FieldRef::from_model_field_with_names("id", "id") }
 		}
 
 		fn slug_field() -> FieldRef<Self, String> {
 			// SAFETY: the logical and physical names match Article's string field.
-			unsafe { FieldRef::from_model_field("slug", "slug") }
+			unsafe { FieldRef::from_model_field_with_names("slug", "slug") }
 		}
 
 		fn rank_field() -> FieldRef<Self, i32> {
 			// SAFETY: the logical and physical names match Article's i32 field.
-			unsafe { FieldRef::from_model_field("rank", "rank") }
+			unsafe { FieldRef::from_model_field_with_names("rank", "rank") }
 		}
 
 		fn headline_field() -> FieldRef<Self, String> {
 			// SAFETY: the logical and physical names match Article's string field.
-			unsafe { FieldRef::from_model_field("headline", "headline") }
+			unsafe { FieldRef::from_model_field_with_names("headline", "headline") }
 		}
 
 		fn computed_field() -> FieldRef<Self, i32> {
 			// SAFETY: the logical and physical names match Article's generated i32 field.
-			unsafe { FieldRef::from_model_field("computed", "computed") }
+			unsafe { FieldRef::from_model_field_with_names("computed", "computed") }
 		}
 
 		fn readonly_field() -> FieldRef<Self, String> {
 			// SAFETY: the logical and physical names match Article's noneditable string field.
-			unsafe { FieldRef::from_model_field("readonly", "readonly") }
+			unsafe { FieldRef::from_model_field_with_names("readonly", "readonly") }
 		}
 	}
 
@@ -531,7 +531,7 @@ mod tests {
 	impl JsonArticle {
 		fn rank_field() -> FieldRef<Self, i32> {
 			// SAFETY: the logical and physical names match JsonArticle's i32 field.
-			unsafe { FieldRef::from_model_field("rank", "rank") }
+			unsafe { FieldRef::from_model_field_with_names("rank", "rank") }
 		}
 	}
 
@@ -579,12 +579,12 @@ mod tests {
 	impl CompositeArticle {
 		fn slug_field() -> FieldRef<Self, String> {
 			// SAFETY: the logical and physical names match CompositeArticle's string field.
-			unsafe { FieldRef::from_model_field("slug", "slug") }
+			unsafe { FieldRef::from_model_field_with_names("slug", "slug") }
 		}
 
 		fn rank_field() -> FieldRef<Self, i32> {
 			// SAFETY: the logical and physical names match CompositeArticle's i32 field.
-			unsafe { FieldRef::from_model_field("rank", "rank") }
+			unsafe { FieldRef::from_model_field_with_names("rank", "rank") }
 		}
 	}
 

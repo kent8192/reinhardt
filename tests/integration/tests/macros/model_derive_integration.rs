@@ -386,6 +386,12 @@ fn test_field_metadata_generation() {
 
 #[test]
 fn test_relationship_metadata_uses_generated_fk_columns_and_targets() {
+	assert_eq!(MetadataWriter::field_writer_id().name(), "writer_pk");
+	assert_eq!(
+		NullableMetadataWriter::field_writer_id().name(),
+		"nullable_writer_pk"
+	);
+
 	let writer = MetadataWriter::relationship_metadata()
 		.into_iter()
 		.next()

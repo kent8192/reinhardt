@@ -170,10 +170,35 @@
 //! })
 //! ```
 //!
-//! Arbitrary intrinsic events use `@custom("name")` and the raw
-//! [`platform::Event`] transport. Typed custom detail values are outside this
-//! contract and tracked by #5636. Component `@event` props retain the type of
-//! their declared component prop instead of using the intrinsic event catalog.
+//! Arbitrary intrinsic events have adjacent raw and typed forms. Use
+//! `@custom("name")` when the handler needs the unmodified
+//! [`platform::Event`], or `@custom::<Detail>("name")` when a browser
+//! `CustomEvent.detail` payload should deserialize into `Detail`.
+//!
+//! ```ignore
+//! use reinhardt_pages::prelude::*;
+//! use serde::Deserialize;
+//!
+//! #[derive(Deserialize)]
+//! struct ItemSelected {
+//!     id: u64,
+//! }
+//!
+//! page!({
+//!     // Raw custom-event transport.
+//!     button { @custom("item-selected"): |event: Event| { inspect(event); } }
+//!
+//!     // Typed custom-event detail, inferred from the DSL.
+//!     button { @custom::<ItemSelected>("item-selected"): |event| {
+//!         if let Ok(detail) = event.detail() {
+//!             select(detail.id);
+//!         }
+//!     } }
+//! })
+//! ```
+//!
+//! Component `@event` props retain the type of their declared component prop
+//! instead of using the intrinsic event catalog.
 //!
 //! ## Controlled form elements
 //!
@@ -652,7 +677,8 @@ pub use builder::{
 };
 pub use callback::{
 	Callback, IntoEventHandler, IntoTypedEventHandler, event_handler, into_event_handler,
-	raw_async_event_handler, raw_event_handler, typed_async_event_handler, typed_event_handler,
+	raw_async_event_handler, raw_event_handler, typed_async_custom_event_handler,
+	typed_async_event_handler, typed_custom_event_handler, typed_event_handler,
 };
 pub use client_form::{ClientFormChoice, ClientFormChoiceSource};
 #[cfg(native)]

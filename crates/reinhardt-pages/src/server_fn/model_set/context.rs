@@ -346,7 +346,7 @@ mod tests {
 
 		fn lookup_field() -> reinhardt_db::orm::UniqueFieldRef<Self::Model, Self::Lookup> {
 			// SAFETY: The handwritten test model declares `id` as its unique primary key.
-			unsafe { reinhardt_db::orm::UniqueFieldRef::from_model_field("id", "id") }
+			unsafe { reinhardt_db::orm::UniqueFieldRef::from_model_field_with_names("id", "id") }
 		}
 
 		async fn to_read(

@@ -12,6 +12,35 @@
 //! records the SQL joins required by the filter, so application code does not
 //! need raw join builders for common FK, reverse, or M2M lookups.
 //!
+//! [`QuerySet::explain`](crate::orm::QuerySet::explain) wraps the existing
+//! typed SELECT in a backend-aware, plan-only diagnostic statement. Its typed
+//! options intentionally exclude `ANALYZE`, arbitrary strings, and every
+//! option that could execute the data-producing query.
+//!
+//! QuerySet retrieval keeps the same generated-field guarantees:
+//! `latest_by`/`earliest_by` accept [`OrderingField`] values, while
+//! unique-field bulk retrieval accepts [`UniqueFieldRef`]. Bulk results use a
+//! deterministically ordered `BTreeMap`; [`query::QuerySet::none`] and empty
+//! bulk inputs remain lazy and do not resolve or call an executor.
+//!
+//! [`QuerySet::dates`] and [`QuerySet::datetimes`] accept generated typed field
+//! references. They exclude nulls and perform truncation, distinct projection,
+//! and ordering in the database. Named-zone conversion is supported by
+//! PostgreSQL; MySQL and SQLite return an explicit capability error.
+//!
+//! ## Streaming QuerySets
+//!
+//! [`QuerySet::iterator_with_db`] and [`QuerySet::iterator_with_executor`]
+//! return lifetime-bound streams that decode one model per item. The borrowed
+//! executor remains in use until the stream completes or is dropped, and each
+//! item retains backend or model-decoding failures in its `Result`.
+//!
+//! PostgreSQL, MySQL, and SQLite use driver streams. Custom executors without
+//! that capability return `DatabaseErrorKind::Unsupported`; the ORM never
+//! substitutes `fetch_all` or repeated `LIMIT`/`OFFSET` queries. `chunk_size`
+//! is a driver fetch or bounded-buffer hint, and dropping or cancelling the
+//! stream releases driver resources through RAII.
+//!
 //! ## Transaction Management
 //!
 //! ORM writes run inside closure-scoped transactions. Start an outer operation
@@ -66,6 +95,23 @@
 //! `update_or_create().execute_with(...)` also requires an [`AtomicTransaction`]
 //! created by [`DatabaseConnection::atomic_write`]; a transaction from
 //! [`DatabaseConnection::atomic`] is rejected before SQL execution.
+//!
+//! ## Row Locking
+//!
+//! [`QuerySet::select_for_update`](query::QuerySet::select_for_update) returns a
+//! typed builder whose `nowait` and `skip_locked` states are mutually exclusive.
+//! Evaluate it through a caller-owned [`TransactionExecutor`] so the same
+//! physical connection retains locks through commit or rollback. Root targets
+//! use `of_model`; relation targets require a generated [`RelationPathLike`]
+//! rooted at the queryset model. Unlike Django, ordinary connection evaluation
+//! and SQLite return explicit errors instead of silently degrading to an
+//! unlocked query. CTE-backed querysets, derived `FROM` sources, LATERAL joins,
+//! raw aggregate projections, and aggregate annotations are rejected before
+//! execution so the lock scope remains unambiguous.
+//!
+//! PostgreSQL 9.3 adds `no_key`, PostgreSQL 9.5 adds `skip_locked`, and the
+//! built-in MySQL profile requires 8.0.1 or newer. Older/custom servers report
+//! their exact feature set through [`TransactionExecutor::row_lock_capabilities`].
 
 // Core modules - always available
 pub mod aggregation;
@@ -195,12 +241,14 @@ pub use aggregation::{Aggregate, AggregateFunc, AggregateResult, AggregateValue}
 pub use annotation::{Annotation, AnnotationValue, Expression, Value, When};
 pub use connection::{
 	DatabaseBackend, DatabaseConnection, DatabaseConnectionLease, OrmExecutor, QueryResult,
-	QueryRow, QueryValue, Row, TransactionExecutor,
+	QueryRow, QueryValue, Row, RowLockCapabilities, RowStream, TransactionExecutor,
 };
 pub use constraints::{
 	CheckConstraint, Constraint, ForeignKeyConstraint, OnDelete, OnUpdate, UniqueConstraint,
 };
-pub use expressions::{Exists, F, FieldRef, OuterRef, Q, QOperator, Subquery, UniqueFieldRef};
+pub use expressions::{
+	Exists, F, FieldRef, OrderingField, OuterRef, Q, QOperator, Subquery, UniqueFieldRef,
+};
 pub use functions::{
 	Abs, Cast, Ceil, Concat, CurrentDate, CurrentTime, Extract, ExtractComponent, Floor, Greatest,
 	Least, Length, Lower, Mod, Now, NullIf, Power, Round, SqlType, Sqrt, Substr, Trim, TrimType,
@@ -312,8 +360,10 @@ pub use reverse_accessor::ReverseAccessor;
 pub use manager::Manager;
 // Query types are always available
 pub use query::{
-	FieldAssignment, Filter, FilterCondition, FilterOperator, FilterValue, IntoOrderBy, OrmQuery,
-	QuerySet, UpdateValue,
+	Blocking, DateProjectionField, DateProjectionOrder, DateTimeProjectionField, DateTimeTruncKind,
+	DateTruncKind, ExplainBackend, ExplainBody, ExplainFormat, ExplainOptions, ExplainOutput,
+	FieldAssignment, Filter, FilterCondition, FilterOperator, FilterValue, IntoOrderBy, Nowait,
+	OrmQuery, QuerySet, QuerySetStream, SelectForUpdate, SkipLocked, UpdateValue,
 };
 
 // Advanced ORM features

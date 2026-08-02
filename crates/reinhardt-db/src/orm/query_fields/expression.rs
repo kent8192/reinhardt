@@ -25,6 +25,9 @@ fn qualify_model_root_in_place(expr: &mut SimpleExpr, root_alias: &str) {
 		| SimpleExpr::AsEnum(_, expression)
 		| SimpleExpr::ExprAlias(expression, _)
 		| SimpleExpr::Cast(expression, _)
+		| SimpleExpr::TemporalTrunc {
+			expr: expression, ..
+		}
 		| SimpleExpr::WindowNamed {
 			func: expression, ..
 		} => qualify_model_root_in_place(expression, root_alias),

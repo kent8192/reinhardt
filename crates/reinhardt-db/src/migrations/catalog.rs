@@ -137,28 +137,6 @@ impl MigrationCatalog {
 
 		let mut migration_keys: Vec<MigrationKey> = migrations.keys().cloned().collect();
 		migration_keys.sort_by(Self::compare_keys);
-		for key in &migration_keys {
-			let migration = migrations
-				.get(key)
-				.expect("collected catalog key must have a migration");
-			let mut graph_for_migration = MigrationGraph::new();
-			graph_for_migration.add_migration_with_context(migration, context);
-			let mut dependencies = graph_for_migration
-				.get_dependencies(key)
-				.map(<[MigrationKey]>::to_vec)
-				.unwrap_or_default();
-			dependencies.sort_by(Self::compare_keys);
-			for dependency in dependencies {
-				if !migrations.contains_key(&dependency) {
-					return Err(MigrationError::DependencyError(format!(
-						"Missing dependency {} required by {}",
-						dependency, key
-					)));
-				}
-			}
-		}
-
-		let mut graph = MigrationGraph::new();
 		let mut replacement_owners = HashMap::new();
 		for (key, migration) in &migrations {
 			for (app, name) in &migration.replaces {
@@ -172,7 +150,53 @@ impl MigrationCatalog {
 					)));
 				}
 			}
-			graph.add_migration_with_context(migration, context);
+		}
+		for key in &migration_keys {
+			let migration = migrations
+				.get(key)
+				.expect("collected catalog key must have a migration");
+			let mut graph_for_migration = MigrationGraph::new();
+			graph_for_migration.add_migration_with_context(migration, context);
+			let mut dependencies = graph_for_migration
+				.get_dependencies(key)
+				.map(<[MigrationKey]>::to_vec)
+				.unwrap_or_default();
+			dependencies.sort_by(Self::compare_keys);
+			for dependency in dependencies {
+				let dependency = replacement_owners
+					.get(&dependency)
+					.cloned()
+					.unwrap_or(dependency);
+				if !migrations.contains_key(&dependency) {
+					return Err(MigrationError::DependencyError(format!(
+						"Missing dependency {} required by {}",
+						dependency, key
+					)));
+				}
+			}
+		}
+
+		let mut graph = MigrationGraph::new();
+		for (key, migration) in &migrations {
+			let mut graph_for_migration = MigrationGraph::new();
+			graph_for_migration.add_migration_with_context(migration, context);
+			let dependencies = graph_for_migration
+				.get_dependencies(key)
+				.unwrap_or_default()
+				.iter()
+				.map(|dependency| {
+					replacement_owners
+						.get(dependency)
+						.cloned()
+						.unwrap_or_else(|| dependency.clone())
+				})
+				.collect();
+			let replaces = migration
+				.replaces
+				.iter()
+				.map(|(app, name)| MigrationKey::new(app, name))
+				.collect();
+			graph.add_migration_with_replaces(key.clone(), dependencies, replaces);
 		}
 
 		let mut cycle_nodes: Vec<String> = graph

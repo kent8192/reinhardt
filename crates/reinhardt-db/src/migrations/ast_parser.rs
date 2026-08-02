@@ -771,6 +771,90 @@ fn parse_single_operation_strict(expr: &Expr, index: usize) -> Result<super::Ope
 					)?,
 				});
 			}
+			"AlterTableComment" => {
+				validate_exact_named_fields(&operation.fields, &["table", "comment"], &context)?;
+				return Ok(super::Operation::AlterTableComment {
+					table: parse_string_field_strict(&operation.fields, "table", &context)?,
+					comment: parse_optional_string_field_strict(
+						&operation.fields,
+						"comment",
+						&context,
+					)?,
+				});
+			}
+			"AlterUniqueTogether" => {
+				validate_exact_named_fields(&operation.fields, &["table", "unique_together"], &context)?;
+				return Ok(super::Operation::AlterUniqueTogether {
+					table: parse_string_field_strict(&operation.fields, "table", &context)?,
+					unique_together: parse_string_vector_vector_field_strict(
+						&operation.fields,
+						"unique_together",
+						&context,
+					)?,
+				});
+			}
+			"AlterModelOptions" => {
+				validate_exact_named_fields(&operation.fields, &["table", "options"], &context)?;
+				return Ok(super::Operation::AlterModelOptions {
+					table: parse_string_field_strict(&operation.fields, "table", &context)?,
+					options: parse_string_map_field_strict(&operation.fields, "options", &context)?,
+				});
+			}
+			"CreateInheritedTable" => {
+				validate_exact_named_fields(
+					&operation.fields,
+					&["name", "columns", "base_table", "join_column"],
+					&context,
+				)?;
+				return Ok(super::Operation::CreateInheritedTable {
+					name: parse_string_field_strict(&operation.fields, "name", &context)?,
+					columns: parse_column_vector_field_strict(&operation.fields, "columns", &context)?,
+					base_table: parse_string_field_strict(&operation.fields, "base_table", &context)?,
+					join_column: parse_string_field_strict(&operation.fields, "join_column", &context)?,
+				});
+			}
+			"AddDiscriminatorColumn" => {
+				validate_exact_named_fields(
+					&operation.fields,
+					&["table", "column_name", "default_value"],
+					&context,
+				)?;
+				return Ok(super::Operation::AddDiscriminatorColumn {
+					table: parse_string_field_strict(&operation.fields, "table", &context)?,
+					column_name: parse_string_field_strict(&operation.fields, "column_name", &context)?,
+					default_value: parse_string_field_strict(&operation.fields, "default_value", &context)?,
+				});
+			}
+			"MoveModel" => {
+				validate_exact_named_fields(
+					&operation.fields,
+					&[
+						"model_name",
+						"from_app",
+						"to_app",
+						"rename_table",
+						"old_table_name",
+						"new_table_name",
+					],
+					&context,
+				)?;
+				return Ok(super::Operation::MoveModel {
+					model_name: parse_string_field_strict(&operation.fields, "model_name", &context)?,
+					from_app: parse_string_field_strict(&operation.fields, "from_app", &context)?,
+					to_app: parse_string_field_strict(&operation.fields, "to_app", &context)?,
+					rename_table: parse_bool_field_strict(&operation.fields, "rename_table", &context)?,
+					old_table_name: parse_optional_string_field_strict(
+						&operation.fields,
+						"old_table_name",
+						&context,
+					)?,
+					new_table_name: parse_optional_string_field_strict(
+						&operation.fields,
+						"new_table_name",
+						&context,
+					)?,
+				});
+			}
 			"CreateExtension" => {
 				validate_exact_named_fields(
 					&operation.fields,
@@ -2704,6 +2788,49 @@ fn parse_string_vector_field_strict(
 	let expression = strict_field_expression(fields, field_name)
 		.ok_or_else(|| strict_payload_error(context, field_name))?;
 	parse_string_vector_strict(expression, &format!("{context}.{field_name}"))
+}
+
+fn parse_string_vector_vector_field_strict(
+	fields: &syn::punctuated::Punctuated<syn::FieldValue, syn::token::Comma>,
+	field_name: &str,
+	context: &str,
+) -> Result<Vec<Vec<String>>> {
+	let expression = strict_field_expression(fields, field_name)
+		.ok_or_else(|| strict_payload_error(context, field_name))?;
+	parse_vec_expressions(expression, &format!("{context}.{field_name}"))?
+		.iter()
+		.enumerate()
+		.map(|(index, expression)| {
+			parse_string_vector_strict(expression, &format!("{context}.{field_name}[{index}]"))
+		})
+		.collect()
+}
+
+fn parse_string_map_field_strict(
+	fields: &syn::punctuated::Punctuated<syn::FieldValue, syn::token::Comma>,
+	field_name: &str,
+	context: &str,
+) -> Result<std::collections::HashMap<String, String>> {
+	let expression = strict_field_expression(fields, field_name)
+		.ok_or_else(|| strict_payload_error(context, field_name))?;
+	let Expr::Block(block) = expression else {
+		return Err(strict_payload_error(context, field_name));
+	};
+	let mut options = std::collections::HashMap::new();
+	for statement in &block.block.stmts {
+		let Stmt::Expr(Expr::MethodCall(call), _) = statement else {
+			continue;
+		};
+		if call.method != "insert" || call.args.len() != 2 {
+			continue;
+		}
+		let key = extract_string_expr(&call.args[0])
+			.ok_or_else(|| strict_payload_error(context, field_name))?;
+		let value = extract_string_expr(&call.args[1])
+			.ok_or_else(|| strict_payload_error(context, field_name))?;
+		options.insert(key, value);
+	}
+	Ok(options)
 }
 
 fn parse_optional_string_vector_field_strict(

@@ -100,7 +100,10 @@ fn render_sql_statement(sql: &str) -> String {
 fn trailing_line_comment_start(sql: &str) -> Option<usize> {
 	let line_start = sql.rfind('\n').map_or(0, |index| index + 1);
 	let line = &sql[line_start..];
-	let comment = line.find("--")?;
+	let comment = [line.find("--"), line.find('#')]
+		.into_iter()
+		.flatten()
+		.min()?;
 	let before_comment = &line[..comment];
 	if before_comment.contains('"') || before_comment.matches('\'').count() % 2 != 0 {
 		return None;
@@ -1764,6 +1767,14 @@ async fn plan_migration_sql_with_irreversible_policy(
 	for (operation_index, operation) in operations {
 		let first_statement = statements.len();
 		operation.validate_for_dialect(&dialect)?;
+		if matches!(direction, MigrationDirection::Backward)
+			&& matches!(operation, Operation::BulkLoad { .. })
+		{
+			return Err(MigrationError::IrreversibleError(format!(
+				"{} contains an irreversible BulkLoad operation",
+				migration.id()
+			)));
+		}
 		let operation_state = backward_operation_states
 			.and_then(|states| states.get(operation_index))
 			.unwrap_or(state);

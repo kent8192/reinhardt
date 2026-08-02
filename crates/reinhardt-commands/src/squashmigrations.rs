@@ -207,7 +207,12 @@ pub async fn execute_squashmigrations_with_io_and_context(
 		.map(|suffix| format!("{}_{}", numbered_prefix(&start_migration), suffix))
 		.unwrap_or_else(|| default_squashed_name(&start_migration, &end_migration));
 	let result = MigrationSquasher::new()
-		.squash_range(&range, &squashed_name, !options.no_optimize)
+		.squash_range_with_context(
+			&range,
+			&squashed_name,
+			!options.no_optimize,
+			dependency_context,
+		)
 		.map_err(migration_error_to_command_error)?;
 	let repository = FilesystemRepository::new(migrations_root);
 	let rendered = repository

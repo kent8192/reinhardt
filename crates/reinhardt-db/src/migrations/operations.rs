@@ -1882,6 +1882,7 @@ impl Operation {
 				table,
 				columns,
 				unique,
+				where_clause,
 				..
 			} => {
 				if let Some(model) = state.find_model_by_table_mut(table) {
@@ -1891,6 +1892,7 @@ impl Operation {
 						name,
 						fields: columns.clone(),
 						unique: *unique,
+						where_clause: where_clause.clone(),
 						#[cfg(feature = "pgvector")]
 						index_type: None,
 						#[cfg(feature = "pgvector")]
@@ -1908,6 +1910,7 @@ impl Operation {
 				index_type,
 				expressions,
 				operator_class,
+				where_clause,
 				..
 			} => {
 				if let Some(model) = state.find_model_by_table_mut(table) {
@@ -1919,6 +1922,7 @@ impl Operation {
 						name,
 						fields: columns.clone(),
 						unique: *unique,
+						where_clause: where_clause.clone(),
 						#[cfg(feature = "pgvector")]
 						index_type: *index_type,
 						#[cfg(feature = "pgvector")]
@@ -1957,6 +1961,7 @@ impl Operation {
 				index_type,
 				expressions,
 				operator_class,
+				where_clause,
 				..
 			} => {
 				if let Some(model) = state.find_model_by_table_mut(table) {
@@ -1967,6 +1972,7 @@ impl Operation {
 						name: name.clone(),
 						fields: columns.clone(),
 						unique: *unique,
+						where_clause: where_clause.clone(),
 						#[cfg(feature = "pgvector")]
 						index_type: *index_type,
 						#[cfg(feature = "pgvector")]
@@ -4290,7 +4296,7 @@ impl Operation {
 									None
 								}
 							},
-							where_clause: None,
+							where_clause: index.where_clause.clone(),
 							concurrently: false,
 							expressions: {
 								#[cfg(feature = "pgvector")]
@@ -4456,6 +4462,7 @@ impl Operation {
 				index_type,
 				expressions,
 				operator_class,
+				where_clause,
 				..
 			} => {
 				if !named_index_has_target(columns, expressions.as_deref()) {
@@ -4469,6 +4476,7 @@ impl Operation {
 						name: name.clone(),
 						fields: columns.clone(),
 						unique: *unique,
+						where_clause: where_clause.clone(),
 						#[cfg(feature = "pgvector")]
 						index_type: *index_type,
 						#[cfg(feature = "pgvector")]
@@ -6018,7 +6026,7 @@ impl Operation {
 					columns: columns.clone(),
 					unique: false,
 					index_type: None,
-					where_clause: None,
+							where_clause: None,
 					concurrently: false,
 					expressions: None,
 					mysql_options: None,

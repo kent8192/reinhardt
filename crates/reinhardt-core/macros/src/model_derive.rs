@@ -9271,6 +9271,40 @@ mod tests {
 
 		let output = model_derive_impl(syn::parse2(input).unwrap()).unwrap();
 		let compact = output.to_string().replace(' ', "");
+		let file: syn::File = syn::parse2(output).expect("model expansion should parse as a file");
+		let constraint_field_lists = file
+			.items
+			.iter()
+			.filter_map(|item| {
+				let syn::Item::Impl(item_impl) = item else {
+					return None;
+				};
+				item_impl.items.iter().find_map(|item| {
+					let syn::ImplItem::Fn(method) = item else {
+						return None;
+					};
+					(method.sig.ident == "constraint_metadata").then_some(method)
+				})
+			})
+			.flat_map(|method| method.block.stmts.iter())
+			.filter_map(|statement| {
+				let syn::Stmt::Expr(syn::Expr::MethodCall(call), _) = statement else {
+					return None;
+				};
+				if call.method != "push" || call.args.len() != 1 {
+					return None;
+				}
+				let syn::Expr::Struct(constraint) = &call.args[0] else {
+					return None;
+				};
+				constraint.fields.iter().find_map(|field| {
+					let syn::Member::Named(name) = &field.member else {
+						return None;
+					};
+					(name == "fields").then(|| field.expr.to_token_stream().to_string())
+				})
+			})
+			.collect::<Vec<_>>();
 
 		assert!(compact.contains("stringify!(owner_id).to_string()"));
 		assert!(compact.contains("\"full_name\",\"display_name\""));
@@ -9278,7 +9312,10 @@ mod tests {
 			compact
 				.contains("fields:vec![\"email_addr\".to_string(),\"display_name\".to_string()]")
 		);
-		assert!(compact.contains("fields:vec![\"email\".to_string(),\"full_name\".to_string()]"));
+		assert_eq!(
+			constraint_field_lists,
+			vec!["vec ! [\"email\" . to_string () , \"full_name\" . to_string ()]"]
+		);
 		assert!(compact.contains("Field::new(vec![\"email_addr\"])"));
 	}
 

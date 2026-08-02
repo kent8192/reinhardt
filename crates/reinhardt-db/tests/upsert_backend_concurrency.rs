@@ -936,7 +936,7 @@ async fn verify_basic_cases(connection: &mut DatabaseConnection) -> Result<()> {
 	assert_eq!(tag_by_slug(connection, "rolled-back").await?, None);
 
 	connection
-		.atomic(async |outer| {
+		.atomic_write(async |outer| {
 			let nested_error = outer
 				.atomic(async |savepoint| {
 					Tag::objects()

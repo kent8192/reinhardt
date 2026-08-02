@@ -103,7 +103,20 @@ pub fn extract_migration_metadata_strict(
 		.map(|expression| parse_tuple_vec_expr_strict(&expression, "replaces"))
 		.transpose()?
 		.unwrap_or_default();
-	let atomic = parse_optional_bool_field(&migration_struct.fields, "atomic", true)?;
+	let atomic_in_struct = parse_optional_bool_field(&migration_struct.fields, "atomic", true)?;
+	let has_atomic_field = migration_struct
+		.fields
+		.iter()
+		.any(|field| matches!(&field.member, syn::Member::Named(ident) if ident == "atomic"));
+	let atomic = match extract_atomic(ast) {
+		Some(standalone_atomic) if has_atomic_field && standalone_atomic != atomic_in_struct => {
+			return Err(MigrationError::InvalidMigration(
+				"Migration atomic field conflicts with atomic() entrypoint".to_string(),
+			));
+		}
+		Some(standalone_atomic) => standalone_atomic,
+		None => atomic_in_struct,
+	};
 	let initial = parse_optional_initial_field(&migration_struct.fields)?;
 	let state_only = parse_optional_bool_field(&migration_struct.fields, "state_only", false)?;
 	let database_only =

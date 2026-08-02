@@ -165,7 +165,7 @@ impl MigrationCatalog {
 			return migrations
 				.keys()
 				.filter(|candidate| candidate.app_label == dependency.app_label)
-				.min_by(|left, right| left.name.cmp(&right.name))
+				.min_by(|left, right| Self::compare_migration_names(&left.name, &right.name))
 				.cloned()
 				.ok_or_else(|| {
 					MigrationError::DependencyError(format!(
@@ -381,6 +381,21 @@ impl MigrationCatalog {
 		left.app_label
 			.cmp(&right.app_label)
 			.then_with(|| left.name.cmp(&right.name))
+	}
+
+	fn compare_migration_names(left: &str, right: &str) -> std::cmp::Ordering {
+		let numeric_prefix = |name: &str| {
+			name.split_once('_')
+				.and_then(|(prefix, _)| prefix.parse::<u64>().ok())
+		};
+		match (numeric_prefix(left), numeric_prefix(right)) {
+			(Some(left_prefix), Some(right_prefix)) => {
+				left_prefix.cmp(&right_prefix).then_with(|| left.cmp(right))
+			}
+			(Some(_), None) => std::cmp::Ordering::Less,
+			(None, Some(_)) => std::cmp::Ordering::Greater,
+			(None, None) => left.cmp(right),
+		}
 	}
 
 	fn external_ancestry_paths(

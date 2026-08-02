@@ -1714,6 +1714,9 @@ mod tests {
 			options: second_options,
 		};
 
-		assert_eq!(first.to_token_stream().to_string(), second.to_token_stream().to_string());
+		assert_eq!(
+			first.to_token_stream().to_string(),
+			second.to_token_stream().to_string()
+		);
 	}
 }

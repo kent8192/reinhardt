@@ -289,11 +289,17 @@ impl DatabaseMigrationExecutor {
 				.map(|(app, name)| super::graph::MigrationKey::new(app.clone(), name.clone()))
 				.collect();
 
-			graph.add_migration(key, deps);
+			let replaces = migration
+				.replaces
+				.iter()
+				.map(|(app, name)| super::graph::MigrationKey::new(app.clone(), name.clone()))
+				.collect();
+			graph.add_migration_with_replaces(key, deps, replaces);
 		}
 
-		// Perform topological sort (automatically detects circular dependencies)
-		let sorted_keys = graph.topological_sort()?;
+		// Resolve replacements before sorting so a squashed migration is selected
+		// instead of reapplying every migration it supersedes.
+		let sorted_keys = graph.resolve_execution_order_with_replaces()?;
 
 		// Apply migrations in dependency-resolved order
 		for key in sorted_keys {
@@ -313,6 +319,27 @@ impl DatabaseMigrationExecutor {
 				.await?
 			{
 				continue;
+			}
+			if !migration.replaces.is_empty() {
+				let mut applied_replacements = 0usize;
+				for (app_label, name) in &migration.replaces {
+					if self.recorder.is_applied(app_label, name).await? {
+						applied_replacements += 1;
+					}
+				}
+				if applied_replacements == migration.replaces.len() {
+					self.recorder
+						.record_applied(&migration.app_label, &migration.name)
+						.await?;
+					applied.push(migration.id());
+					continue;
+				}
+				if applied_replacements != 0 {
+					return Err(MigrationError::InvalidMigration(format!(
+						"cannot apply replacement {} because only some replaced migrations are recorded",
+						migration.id()
+					)));
+				}
 			}
 
 			// Apply migration operations

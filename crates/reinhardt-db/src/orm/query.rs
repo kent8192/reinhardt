@@ -1437,10 +1437,13 @@ where
 			stmt.and_having(expression);
 		}
 		for annotation in &self.annotations {
-			stmt.expr_as(
-				Expr::cust(self.annotation_value_to_select_sql(&annotation.value)),
-				Alias::new(&annotation.alias),
-			);
+			let expression = self
+				.annotation_value_to_select_expr(&annotation.value)
+				.unwrap_or_else(|| {
+					Expr::cust(self.annotation_value_to_select_sql(&annotation.value))
+						.into_simple_expr()
+				});
+			stmt.expr_as(expression, Alias::new(&annotation.alias));
 		}
 		self.apply_ordering(&mut stmt);
 		if let Some(limit) = self.limit {
@@ -4796,6 +4799,63 @@ where
 	/// complete SQL generation for all annotation value types.
 	fn annotation_value_to_sql(value: &super::annotation::AnnotationValue) -> String {
 		value.to_sql()
+	}
+
+	/// Builds the annotation forms represented by the query AST structurally.
+	///
+	/// Field and standard aggregate annotations must remain AST nodes so the
+	/// selected backend, rather than PostgreSQL-style pre-rendered SQL, quotes
+	/// their identifiers. Other legacy annotation forms still require their
+	/// established SQL rendering path.
+	fn annotation_value_to_select_expr(
+		&self,
+		value: &super::annotation::AnnotationValue,
+	) -> Option<SimpleExpr> {
+		match value {
+			super::annotation::AnnotationValue::Field(field) => {
+				Some(Expr::col(self.root_column_reference(&field.field)).into_simple_expr())
+			}
+			super::annotation::AnnotationValue::Aggregate(aggregate) => {
+				if aggregate.distinct {
+					let field = aggregate.field.as_deref()?;
+					return Some(SimpleExpr::CustomWithExpr(
+						"COUNT(DISTINCT ?)".to_string(),
+						vec![Expr::col(self.root_column_reference(field)).into_simple_expr()],
+					));
+				}
+				let field_expression = |field: Option<&str>| {
+					field.map_or_else(
+						|| Expr::asterisk().into_simple_expr(),
+						|field| Expr::col(self.root_column_reference(field)).into_simple_expr(),
+					)
+				};
+				let expression = match &aggregate.func {
+					super::aggregation::AggregateFunc::Count => match aggregate.field.as_deref() {
+						Some(field) => Func::count(
+							Expr::col(self.root_column_reference(field)).into_simple_expr(),
+						),
+						None => Func::count(Expr::asterisk().into_simple_expr()),
+					},
+					super::aggregation::AggregateFunc::Sum => {
+						Func::sum(field_expression(aggregate.field.as_deref()))
+					}
+					super::aggregation::AggregateFunc::Avg => {
+						Func::avg(field_expression(aggregate.field.as_deref()))
+					}
+					super::aggregation::AggregateFunc::Max => {
+						Func::max(field_expression(aggregate.field.as_deref()))
+					}
+					super::aggregation::AggregateFunc::Min => {
+						Func::min(field_expression(aggregate.field.as_deref()))
+					}
+					super::aggregation::AggregateFunc::CountDistinct => {
+						Func::count(field_expression(aggregate.field.as_deref()))
+					}
+				};
+				Some(expression)
+			}
+			_ => None,
+		}
 	}
 
 	fn annotation_value_to_select_sql(&self, value: &super::annotation::AnnotationValue) -> String {
@@ -10160,6 +10220,49 @@ mod tests {
 			executor.calls[0].0,
 			"EXPLAIN FORMAT=JSON SELECT * FROM `test_users` WHERE `id` = ?"
 		);
+	}
+
+	#[rstest]
+	#[tokio::test]
+	async fn mysql_explain_renders_field_and_aggregate_annotations_with_mysql_identifiers() {
+		use crate::orm::aggregation::Aggregate;
+		use crate::orm::annotation::{Annotation, AnnotationValue};
+		use crate::orm::expressions::F;
+
+		let queryset = QuerySet::<TestUser>::new()
+			.annotate(Annotation::new(
+				"username_copy",
+				AnnotationValue::Field(F::new("username")),
+			))
+			.annotate(Annotation::new(
+				"user_count",
+				AnnotationValue::Aggregate(Aggregate::count(Some("id"))),
+			))
+			.annotate(Annotation::new(
+				"distinct_user_count",
+				AnnotationValue::Aggregate(Aggregate::count_distinct("id")),
+			));
+		let mut executor = ExplainRecordingExecutor::new(DatabaseBackend::MySql, Vec::new());
+
+		queryset
+			.explain_with_db(&mut executor, super::ExplainOptions::default())
+			.await
+			.expect("MySQL EXPLAIN should render structural annotations");
+
+		assert_eq!(executor.calls.len(), 1);
+		assert!(
+			executor.calls[0]
+				.0
+				.contains("`username` AS `username_copy`")
+		);
+		assert!(executor.calls[0].0.contains("COUNT(`id`) AS `user_count`"));
+		assert!(
+			executor.calls[0]
+				.0
+				.contains("COUNT(DISTINCT `id`) AS `distinct_user_count`")
+		);
+		assert!(!executor.calls[0].0.contains("\"username\""));
+		assert!(!executor.calls[0].0.contains("COUNT(\"id\")"));
 	}
 
 	#[rstest]

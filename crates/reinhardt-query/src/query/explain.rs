@@ -296,6 +296,11 @@ impl ExplainStatement {
 		}) {
 			return Err(unsupported("PostgreSQL pattern operators", "SQLite"));
 		}
+		if statement_has_expression(&self.select, &|expression| {
+			matches!(expression, SimpleExpr::Binary(_, BinOper::PgOperator(_), _))
+		}) {
+			return Err(unsupported("PostgreSQL operators", "SQLite"));
+		}
 		Ok(())
 	}
 }
@@ -480,7 +485,16 @@ fn expression_matches(expression: &SimpleExpr, predicate: &impl Fn(&SimpleExpr) 
 			| SimpleExpr::WindowNamed {
 				func: expression, ..
 			} => expression_matches(expression, predicate),
-			SimpleExpr::Window { func, .. } => expression_matches(func, predicate),
+		SimpleExpr::Window { func, window } => {
+			expression_matches(func, predicate)
+				|| window
+					.partition_by
+					.iter()
+					.any(|expression| expression_matches(expression, predicate))
+				|| window.order_by.iter().any(|order| {
+					matches!(&order.expr, OrderExprKind::Expr(expression) if expression_matches(expression, predicate))
+				})
+		}
 			SimpleExpr::SubQuery(_, query) => statement_has_expression(query, predicate),
 			SimpleExpr::Binary(left, _, right) => {
 				expression_matches(left, predicate) || expression_matches(right, predicate)
@@ -616,9 +630,14 @@ fn unsafe_window(window: &WindowStatement) -> bool {
 
 fn unsafe_expr(expression: &SimpleExpr) -> bool {
 	match expression {
-		SimpleExpr::SubQuery(_, _) | SimpleExpr::Custom(_) | SimpleExpr::FunctionCall(_, _) => true,
+		SimpleExpr::SubQuery(_, _) | SimpleExpr::Custom(_) => true,
+		SimpleExpr::FunctionCall(function, expressions) => {
+			!is_safe_aggregate_function(&function.to_string())
+				|| expressions.iter().any(unsafe_expr)
+		}
 		SimpleExpr::CustomWithExpr(template, expressions) => {
-			!is_generated_like_template(template) || expressions.iter().any(unsafe_expr)
+			(!is_generated_like_template(template) && !is_structural_aggregate_template(template))
+				|| expressions.iter().any(unsafe_expr)
 		}
 		SimpleExpr::Unary(_, expression)
 		| SimpleExpr::AsEnum(_, expression)
@@ -687,6 +706,21 @@ fn is_generated_like_template(template: &str) -> bool {
 		};
 		remaining = after_separator;
 	}
+}
+
+/// Returns whether `template` is the static AST template used for a typed
+/// `COUNT(DISTINCT column)` annotation. Its sole expression is still checked
+/// recursively, so this exception cannot make a custom expression executable
+/// during MySQL EXPLAIN.
+fn is_structural_aggregate_template(template: &str) -> bool {
+	template == "COUNT(DISTINCT ?)"
+}
+
+/// Returns whether a function is one of the side-effect-free aggregate forms
+/// emitted by typed annotations. Its arguments remain subject to the regular
+/// recursive safety check.
+fn is_safe_aggregate_function(function: &str) -> bool {
+	matches!(function, "COUNT" | "SUM" | "AVG" | "MIN" | "MAX")
 }
 
 fn quote_mysql_like_templates(statement: &mut SelectStatement) {
@@ -779,7 +813,7 @@ fn quote_mysql_like_template_expr(expression: &mut SimpleExpr) {
 				quote_mysql_like_template_expr(expression);
 			}
 			if is_generated_like_template(template) {
-				*template = template.replace('"', "`");
+				*template = translate_generated_like_template_to_mysql(template);
 			}
 		}
 		SimpleExpr::Case(case) => {
@@ -804,13 +838,29 @@ fn quote_mysql_like_template_expr(expression: &mut SimpleExpr) {
 	}
 }
 
+/// Converts a validated ORM LIKE template to MySQL syntax.
+///
+/// `is_generated_like_template` has already validated the input as a sequence
+/// of SQL-standard quoted identifier components followed by the fixed LIKE
+/// suffix. Replacing delimiters after doubling embedded backticks preserves
+/// identifier boundaries and prevents an embedded backtick from terminating a
+/// MySQL identifier. MySQL's default backslash-escape mode also requires two
+/// backslashes in the ESCAPE string literal.
+fn translate_generated_like_template_to_mysql(template: &str) -> String {
+	let column_path = template
+		.strip_suffix(" LIKE ? ESCAPE '\\'")
+		.expect("generated LIKE templates have the validated suffix");
+	let quoted_columns = column_path.replace('`', "``").replace('"', "`");
+	format!("{quoted_columns} LIKE ? ESCAPE '\\\\'")
+}
+
 #[cfg(test)]
 mod tests {
 	use super::*;
 	use crate::{
 		expr::{Expr, ExprTrait},
 		query::Query,
-		types::{Frame, FrameClause, FrameType, WindowStatement},
+		types::{Frame, FrameClause, FrameType, Order, OrderExpr, OrderExprKind, WindowStatement},
 	};
 	use rstest::rstest;
 
@@ -1148,7 +1198,7 @@ mod tests {
 				.build_mysql_checked()
 				.expect("typed LIKE lookup should be safe to explain")
 				.0,
-			"EXPLAIN SELECT `id` FROM `users` WHERE `username` LIKE ? ESCAPE '\\'"
+			"EXPLAIN SELECT `id` FROM `users` WHERE `username` LIKE ? ESCAPE '\\\\'"
 		);
 	}
 
@@ -1168,7 +1218,81 @@ mod tests {
 				.build_mysql_checked()
 				.expect("typed LIKE lookup should be safe to explain")
 				.0,
-			"EXPLAIN SELECT `id\"value` FROM `users\"archive` WHERE `user``name` LIKE ? ESCAPE '\\'"
+			"EXPLAIN SELECT `id\"value` FROM `users\"archive` WHERE `user``name` LIKE ? ESCAPE '\\\\'"
+		);
+	}
+
+	#[rstest]
+	fn mysql_explain_escapes_embedded_backticks_in_typed_like_identifiers() {
+		let select = Query::select()
+			.column("id")
+			.from("users")
+			.and_where(Expr::cust_with_values(
+				"\"user`name\" LIKE ? ESCAPE '\\'",
+				["ada"],
+			))
+			.to_owned();
+
+		assert_eq!(
+			ExplainStatement::new(select, ExplainOptions::default())
+				.build_mysql_checked()
+				.expect("typed LIKE lookup should be safe to explain")
+				.0,
+			"EXPLAIN SELECT `id` FROM `users` WHERE `user``name` LIKE ? ESCAPE '\\\\'"
+		);
+	}
+
+	#[rstest]
+	fn mysql_explain_rejects_ilike_in_inline_window_partition_before_rendering() {
+		let window = WindowStatement {
+			partition_by: vec![SimpleExpr::Binary(
+				Box::new(Expr::col("username").into_simple_expr()),
+				BinOper::ILike,
+				Box::new(Expr::val("ada").into_simple_expr()),
+			)],
+			order_by: Vec::new(),
+			frame: None,
+		};
+		let select = Query::select()
+			.expr(Expr::row_number().over(window))
+			.from("users")
+			.to_owned();
+
+		assert_eq!(
+			ExplainStatement::new(select, ExplainOptions::default()).build_mysql_checked(),
+			Err(QueryBuildError::UnsupportedBackendFeature {
+				feature: "ILIKE",
+				backend: "MySQL",
+			})
+		);
+	}
+
+	#[rstest]
+	fn sqlite_explain_rejects_postgres_operator_in_inline_window_ordering_before_rendering() {
+		let window = WindowStatement {
+			partition_by: Vec::new(),
+			order_by: vec![OrderExpr {
+				expr: OrderExprKind::Expr(Box::new(SimpleExpr::Binary(
+					Box::new(Expr::col("attributes").into_simple_expr()),
+					BinOper::PgOperator(crate::types::PgBinOper::Contains),
+					Box::new(Expr::val("admin").into_simple_expr()),
+				))),
+				order: Order::Asc,
+				nulls: None,
+			}],
+			frame: None,
+		};
+		let select = Query::select()
+			.expr(Expr::row_number().over(window))
+			.from("users")
+			.to_owned();
+
+		assert_eq!(
+			ExplainStatement::new(select, ExplainOptions::default()).build_sqlite_checked(),
+			Err(QueryBuildError::UnsupportedBackendFeature {
+				feature: "PostgreSQL operators",
+				backend: "SQLite",
+			})
 		);
 	}
 
@@ -1209,6 +1333,27 @@ mod tests {
 			ExplainStatement::new(select, ExplainOptions::default()).build_sqlite_checked(),
 			Err(QueryBuildError::UnsupportedBackendFeature {
 				feature: "PostgreSQL pattern operators",
+				backend: "SQLite",
+			})
+		);
+	}
+
+	#[rstest]
+	fn sqlite_explain_rejects_postgres_operators_before_rendering() {
+		let select = Query::select()
+			.column("id")
+			.from("users")
+			.and_where(SimpleExpr::Binary(
+				Box::new(Expr::col("attributes").into_simple_expr()),
+				BinOper::PgOperator(crate::types::PgBinOper::Contains),
+				Box::new(Expr::val("admin").into_simple_expr()),
+			))
+			.to_owned();
+
+		assert_eq!(
+			ExplainStatement::new(select, ExplainOptions::default()).build_sqlite_checked(),
+			Err(QueryBuildError::UnsupportedBackendFeature {
+				feature: "PostgreSQL operators",
 				backend: "SQLite",
 			})
 		);

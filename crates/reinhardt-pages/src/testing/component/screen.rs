@@ -227,20 +227,12 @@ impl Screen {
 
 	/// Tries to settle scheduled native component work.
 	pub async fn try_settle(&self) -> Result<(), SettleError> {
-		#[cfg(feature = "msw")]
-		let (scheduler, mocks, query_client) = {
+		let (scheduler, query_client) = {
 			let inner = self.inner.borrow();
-			(
-				Rc::clone(&inner.scheduler),
-				inner.mocks.clone(),
-				inner.query_client.clone(),
-			)
+			(Rc::clone(&inner.scheduler), inner.query_client.clone())
 		};
-		#[cfg(not(feature = "msw"))]
-		let (scheduler, query_client) = (
-			Rc::clone(&self.inner.borrow().scheduler),
-			self.inner.borrow().query_client.clone(),
-		);
+		#[cfg(feature = "msw")]
+		let mocks = self.inner.borrow().mocks.clone();
 
 		for _ in 0..100 {
 			#[cfg(feature = "msw")]

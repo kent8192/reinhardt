@@ -226,6 +226,37 @@ fn refetch_after_initial_error_transitions_through_pending() {
 	assert!(!query.snapshot().is_fetching);
 }
 
+#[rstest]
+fn stale_cached_error_refetches_when_observer_remounts() {
+	// Arrange
+	let runtime = TestQueryRuntime::new();
+	let client = QueryClient::with_runtime(QueryDefaults::default(), runtime.handle());
+	let family = QueryFamily::<(), String, String>::new("tests.stale-error-remount");
+	let fetch_count = Rc::new(Cell::new(0));
+	let descriptor = family.query((), {
+		let fetch_count = Rc::clone(&fetch_count);
+		move || {
+			fetch_count.set(fetch_count.get() + 1);
+			async { Err::<String, _>("offline".to_string()) }
+		}
+	});
+	let options = QueryOptions::new()
+		.stale_time(Duration::from_secs(5))
+		.gc_time(Duration::from_secs(30));
+	let first = client.observe(descriptor.clone(), options.clone());
+	runtime.run_until_stalled();
+	drop(first);
+	runtime.advance(Duration::from_secs(5));
+
+	// Act
+	let remounted = client.observe(descriptor, options);
+	runtime.run_until_stalled();
+
+	// Assert
+	assert_eq!(fetch_count.get(), 2);
+	assert_eq!(remounted.error(), Some("offline".to_string()));
+}
+
 #[test]
 fn background_failure_preserves_data_and_clears_on_next_request() {
 	let runtime = TestQueryRuntime::new();
@@ -1866,9 +1897,7 @@ fn hydration_snapshot_is_consumed_once_after_entry_eviction() {
 	let family = QueryFamily::<(), String, String>::new("tests.hydration-consumption");
 	let key = family.key(());
 	let snapshot = serde_json::json!({
-		"status": "Success",
-		"data": "server-value",
-		"error": null,
+		"state": { "Success": "server-value" },
 		"refetch_error": null,
 		"is_fetching": false,
 		"is_stale": false
@@ -1900,6 +1929,68 @@ fn hydration_snapshot_is_consumed_once_after_entry_eviction() {
 
 	assert_eq!(fetch_count.get(), 1);
 	assert_eq!(remounted.data(), Some("client-value".to_string()));
+}
+
+#[rstest]
+fn successful_null_snapshot_preserves_present_data_during_hydration() {
+	// Arrange
+	let runtime = TestQueryRuntime::new();
+	let client = QueryClient::with_runtime(QueryDefaults::default(), runtime.handle());
+	let family = QueryFamily::<(), Option<String>, String>::new("tests.hydration-null-success");
+	let key = family.key(());
+	let snapshot = serde_json::json!({
+		"state": { "Success": null },
+		"refetch_error": null,
+		"is_fetching": false,
+		"is_stale": false
+	});
+
+	// Act
+	client
+		.seed_query_snapshot(key, &snapshot)
+		.expect("a successful null value should hydrate");
+	let hydrated = client.observe(
+		family.query((), || async { Ok::<_, String>(Some("client".to_string())) }),
+		QueryOptions::default(),
+	);
+
+	// Assert
+	assert_eq!(hydrated.snapshot().status, QueryStatus::Success);
+	assert_eq!(hydrated.data(), Some(None));
+}
+
+#[rstest]
+fn promoted_navigation_lease_refetches_on_invalidation() {
+	// Arrange
+	let runtime = TestQueryRuntime::new();
+	let client = QueryClient::with_runtime(QueryDefaults::default(), runtime.handle());
+	let family = QueryFamily::<(), String, String>::new("tests.promoted-navigation-lease");
+	let key = family.key(());
+	let fetch_count = Rc::new(Cell::new(0));
+	let descriptor = family.query((), {
+		let fetch_count = Rc::clone(&fetch_count);
+		move || {
+			let call = fetch_count.get() + 1;
+			fetch_count.set(call);
+			async move { Ok::<_, String>(format!("value-{call}")) }
+		}
+	});
+	let lease = client.acquire(
+		descriptor,
+		QueryAcquireOptions {
+			consumer: QueryConsumer::Navigation(7),
+			error_policy: QueryErrorPolicy::Discard,
+		},
+	);
+	runtime.run_until_stalled();
+	lease.promote_to_mounted_route(7);
+
+	// Act
+	client.invalidate(&key);
+	runtime.run_until_stalled();
+
+	// Assert
+	assert_eq!(fetch_count.get(), 2);
 }
 
 #[tokio::test]

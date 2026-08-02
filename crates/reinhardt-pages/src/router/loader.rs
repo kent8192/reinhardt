@@ -419,7 +419,10 @@ impl PreparedLoader {
 }
 
 #[derive(Clone)]
-pub(crate) struct ErasedQueryLease(Rc<dyn Any>);
+pub(crate) struct ErasedQueryLease {
+	lease: Rc<dyn Any>,
+	promote_to_mounted_route: Rc<dyn Fn(u64)>,
+}
 
 impl ErasedQueryLease {
 	fn new<T, E>(lease: QueryLease<T, E>) -> Self
@@ -427,12 +430,22 @@ impl ErasedQueryLease {
 		T: Clone + 'static,
 		E: Clone + 'static,
 	{
-		Self(Rc::new(lease))
+		let promote_lease = lease.clone();
+		Self {
+			lease: Rc::new(lease),
+			promote_to_mounted_route: Rc::new(move |generation| {
+				promote_lease.promote_to_mounted_route(generation);
+			}),
+		}
+	}
+
+	fn promote_to_mounted_route(&self, generation: u64) {
+		(self.promote_to_mounted_route)(generation);
 	}
 
 	#[allow(dead_code)]
 	fn as_any(&self) -> &dyn Any {
-		self.0.as_ref()
+		self.lease.as_ref()
 	}
 }
 
@@ -513,6 +526,14 @@ impl LoaderStore {
 				lease: Some(lease),
 			},
 		);
+	}
+
+	pub(crate) fn promote_navigation_leases(&self, generation: u64) {
+		for stored in self.values.borrow().values() {
+			if let Some(lease) = &stored.lease {
+				lease.promote_to_mounted_route(generation);
+			}
+		}
 	}
 }
 

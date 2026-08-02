@@ -25,7 +25,7 @@ use super::identity::{
 use super::runtime::{ScopedQueryFuture, duration_ms, now_ms, spawn_query_task};
 use super::state::{QueryDefaults, QueryOptions};
 #[cfg(any(wasm, test))]
-use super::state::{QuerySnapshot, QueryStatus};
+use super::state::{QueryHydrationSnapshot, QueryHydrationState};
 use crate::cancellation::{AbortableTaskGuard, CancellationSource, scope_cancellation};
 use reinhardt_core::reactive::ReactiveScope;
 
@@ -569,7 +569,7 @@ pub(super) struct QueryLeaseInner<T: Clone + 'static, E: Clone + 'static> {
 	pub(super) entry: Rc<QueryEntry<T, E>>,
 	generation: Cell<Option<u64>>,
 	retains_errors: bool,
-	consumer: QueryConsumer,
+	consumer: Cell<QueryConsumer>,
 	pub(super) policy: ObserverPolicy,
 	pub(super) fetcher: Rc<QueryFetcher<T, E>>,
 	pub(super) manual_refetch_pending: Cell<bool>,
@@ -704,9 +704,7 @@ impl<T: Clone + 'static, E: Clone + 'static> QueryEntry<T, E> {
 		self.state.with_untracked(|state| match state {
 			ResourceState::Loading => true,
 			ResourceState::Success(_) => self.is_stale(stale_time),
-			ResourceState::Error(_) => {
-				self.invalidated.get() || self.last_fetched_ms.get().is_none()
-			}
+			ResourceState::Error(_) => self.is_stale(stale_time),
 		})
 	}
 
@@ -740,7 +738,7 @@ impl<T: Clone + 'static, E: Clone + 'static> QueryEntry<T, E> {
 		self.live_observers()
 			.into_iter()
 			.filter(|observer| {
-				observer.policy.enabled && observer.consumer == QueryConsumer::MountedQuery
+				observer.policy.enabled && observer.consumer.get() == QueryConsumer::MountedQuery
 			})
 			.collect()
 	}
@@ -767,7 +765,7 @@ impl<T: Clone + 'static, E: Clone + 'static> QueryEntry<T, E> {
 			.live_observers()
 			.into_iter()
 			.filter_map(|observer| {
-				Self::poll_interval_for(observer.policy, observer.consumer)
+				Self::poll_interval_for(observer.policy, observer.consumer.get())
 					.and(observer.poll_deadline_ms.get())
 			})
 			.min();
@@ -796,7 +794,7 @@ impl<T: Clone + 'static, E: Clone + 'static> QueryEntry<T, E> {
 		}
 		for observer in self.live_observers() {
 			observer.poll_deadline_ms.set(
-				Self::poll_interval_for(observer.policy, observer.consumer)
+				Self::poll_interval_for(observer.policy, observer.consumer.get())
 					.map(|interval| now_ms.saturating_add(duration_ms(interval))),
 			);
 		}
@@ -937,7 +935,7 @@ impl<T: Clone + 'static, E: Clone + 'static> QueryEntry<T, E> {
 			entry: Rc::clone(self),
 			generation: Cell::new(generation),
 			retains_errors,
-			consumer,
+			consumer: Cell::new(consumer),
 			policy,
 			fetcher,
 			manual_refetch_pending: Cell::new(false),
@@ -1013,7 +1011,7 @@ impl<T: Clone + 'static, E: Clone + 'static> QueryEntry<T, E> {
 		observers.iter().filter_map(Weak::upgrade).any(|observer| {
 			observer.policy.enabled
 				&& matches!(
-					observer.consumer,
+					observer.consumer.get(),
 					QueryConsumer::MountedRoute(_)
 						| QueryConsumer::MountedQuery
 						| QueryConsumer::Maintenance
@@ -1262,6 +1260,14 @@ impl<T: Clone + 'static, E: Clone + 'static> Future for QueryResultFuture<T, E> 
 }
 
 impl<T: Clone + 'static, E: Clone + 'static> QueryLease<T, E> {
+	pub(crate) fn promote_to_mounted_route(&self, generation: u64) {
+		if matches!(self.inner.consumer.get(), QueryConsumer::Navigation(_)) {
+			self.inner
+				.consumer
+				.set(QueryConsumer::MountedRoute(generation));
+		}
+	}
+
 	// Route preparation awaits this result while the public hook remains
 	// synchronous.
 	pub(crate) async fn result(&self) -> Result<T, E> {
@@ -1390,45 +1396,22 @@ impl QueryClient {
 		{
 			return Ok(());
 		}
-		let snapshot: QuerySnapshot<T, E> = serde_json::from_value(serialized.clone())?;
+		let snapshot: QueryHydrationSnapshot<T, E> = serde_json::from_value(serialized.clone())?;
 		if snapshot.is_fetching {
 			return Err(invalid_hydration_snapshot(
 				"settled query hydration snapshot is still fetching",
 			));
 		}
 		let refetch_error = snapshot.refetch_error;
-		let hydrated_state = match snapshot.status {
-			QueryStatus::Success => {
-				let value = snapshot.data.ok_or_else(|| {
-					invalid_hydration_snapshot("successful query snapshot is missing data")
-				})?;
-				if snapshot.error.is_some() {
-					return Err(invalid_hydration_snapshot(
-						"successful query snapshot contains an initial error",
-					));
-				}
-				ResourceState::Success(value)
-			}
-			QueryStatus::Error => {
+		let hydrated_state = match snapshot.state {
+			QueryHydrationState::Success(value) => ResourceState::Success(value),
+			QueryHydrationState::Error(error) => {
 				if refetch_error.is_some() {
 					return Err(invalid_hydration_snapshot(
 						"initial error query snapshot contains a refetch error",
 					));
 				}
-				let error = snapshot.error.ok_or_else(|| {
-					invalid_hydration_snapshot("error query snapshot is missing its error")
-				})?;
-				if snapshot.data.is_some() {
-					return Err(invalid_hydration_snapshot(
-						"error query snapshot contains successful data",
-					));
-				}
 				ResourceState::Error(error)
-			}
-			QueryStatus::Idle | QueryStatus::Pending => {
-				return Err(invalid_hydration_snapshot(
-					"unsettled query hydration snapshot cannot be restored",
-				));
 			}
 		};
 		self.inner

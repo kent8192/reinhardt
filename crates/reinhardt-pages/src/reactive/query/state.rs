@@ -142,3 +142,17 @@ pub struct QuerySnapshot<T, E> {
 	/// Whether this observer considers the cached state stale.
 	pub is_stale: bool,
 }
+
+#[derive(Deserialize, Serialize)]
+pub(crate) struct QueryHydrationSnapshot<T, E> {
+	pub(crate) state: QueryHydrationState<T, E>,
+	pub(crate) refetch_error: Option<E>,
+	pub(crate) is_fetching: bool,
+	pub(crate) is_stale: bool,
+}
+
+#[derive(Deserialize, Serialize)]
+pub(crate) enum QueryHydrationState<T, E> {
+	Success(T),
+	Error(E),
+}

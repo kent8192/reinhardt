@@ -9,7 +9,9 @@ use super::client::{
 };
 use super::context::queries;
 use super::identity::QueryDescriptor;
-use super::state::{QueryOptions, QuerySnapshot, QueryStatus};
+use super::state::{
+	QueryHydrationSnapshot, QueryHydrationState, QueryOptions, QuerySnapshot, QueryStatus,
+};
 
 /// Reactive handle returned by [`use_query`].
 pub struct QueryHandle<T: Clone + 'static, E: Clone + 'static> {
@@ -73,6 +75,31 @@ impl<T: Clone + 'static, E: Clone + 'static> QueryHandle<T, E> {
 				is_fetching,
 				is_stale,
 			},
+		}
+	}
+
+	fn hydration_snapshot(&self) -> QueryHydrationSnapshot<T, E> {
+		let snapshot = self.snapshot();
+		let state = match snapshot.status {
+			QueryStatus::Success => QueryHydrationState::Success(
+				snapshot
+					.data
+					.expect("successful query hydration requires settled data"),
+			),
+			QueryStatus::Error => QueryHydrationState::Error(
+				snapshot
+					.error
+					.expect("error query hydration requires a settled error"),
+			),
+			QueryStatus::Idle | QueryStatus::Pending => {
+				panic!("query hydration requires a settled query")
+			}
+		};
+		QueryHydrationSnapshot {
+			state,
+			refetch_error: snapshot.refetch_error,
+			is_fetching: snapshot.is_fetching,
+			is_stale: snapshot.is_stale,
 		}
 	}
 
@@ -164,7 +191,7 @@ where
 					hydration_id,
 					move || async move {
 						let _ = query_for_resource.lease.result().await;
-						serde_json::to_value(query_for_resource.snapshot())
+						serde_json::to_value(query_for_resource.hydration_snapshot())
 							.expect("query snapshots must serialize for hydration")
 					},
 					owner,

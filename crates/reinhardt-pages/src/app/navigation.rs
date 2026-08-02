@@ -363,6 +363,7 @@ impl NavigationCoordinator {
 		if !matched.guards_allow() {
 			return self.commit_unmatched(generation, path, intent);
 		}
+		store.promote_navigation_leases(generation);
 		let entry_index = match intent {
 			NavigationIntent::Push => self.committed_index.get().saturating_add(1),
 			NavigationIntent::Replace | NavigationIntent::Initial => self.committed_index.get(),

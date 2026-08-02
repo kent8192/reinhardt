@@ -83,7 +83,15 @@ impl PgvectorFeatureSet {
 
 /// Returns the first pgvector feature found in a select AST.
 pub fn select_pgvector_feature(statement: &SelectStatement) -> Option<PgvectorFeature> {
-	pgvector_feature_from_validation(validate_select_for_backend(statement, "feature inspection"))
+	let features = select_pgvector_features(statement);
+	[
+		PgvectorFeature::ColumnType,
+		PgvectorFeature::DistanceOperator,
+		PgvectorFeature::ApproximateIndex,
+		PgvectorFeature::VectorValue,
+	]
+	.into_iter()
+	.find(|feature| features.contains(*feature))
 }
 
 /// Returns every pgvector feature found in a select AST.
@@ -803,7 +811,7 @@ mod pgvector_feature_tests {
 	use crate::types::PgBinOper;
 	use crate::value::Value;
 
-	use super::{PgvectorFeature, insert_pgvector_features};
+	use super::{PgvectorFeature, insert_pgvector_features, select_pgvector_feature};
 
 	fn vector_value(values: &[f32]) -> Value {
 		Value::Vector(Some(Box::new(values.to_vec())))
@@ -858,5 +866,25 @@ mod pgvector_feature_tests {
 		let features = insert_pgvector_features(&statement);
 
 		assert!(features.contains(PgvectorFeature::VectorValue));
+	}
+
+	#[test]
+	fn select_feature_inspection_ignores_unrelated_backend_validation() {
+		let distance = SimpleExpr::Binary(
+			Box::new(Expr::col(Alias::new("embedding")).into_simple_expr()),
+			BinOper::PgOperator(PgBinOper::CosineDistance),
+			Box::new(SimpleExpr::Value(vector_value(&[1.0, 2.0, 3.0]))),
+		);
+		let statement = Query::select()
+			.column(Alias::new("id"))
+			.from(Alias::new("items"))
+			.distinct_on([Alias::new("id")])
+			.and_where(distance)
+			.to_owned();
+
+		assert_eq!(
+			select_pgvector_feature(&statement),
+			Some(PgvectorFeature::DistanceOperator)
+		);
 	}
 }

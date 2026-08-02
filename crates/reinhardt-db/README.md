@@ -695,7 +695,7 @@ Backend capabilities are explicit:
 | Backend | Formats | Additional plan-only options |
 |---------|---------|------------------------------|
 | PostgreSQL | `Text`, `Json`, `Xml`, `Yaml` | `verbose`, `costs`, `settings` |
-| MySQL | `Text` (traditional), `Json`, `Tree` | none |
+| MySQL/MariaDB | `Text` (traditional), `Json` | none |
 | SQLite | `Text` (`EXPLAIN QUERY PLAN`) | none |
 | CockroachDB | `Text` | none |
 
@@ -705,9 +705,9 @@ than Django: `ANALYZE`, arbitrary option strings, buffer/timing statistics, and
 every other data-executing explain option are rejected by construction.
 MySQL additionally rejects subqueries, CTEs, unions, and unchecked or function
 expressions because its optimizer may evaluate them while producing a plan;
-plain typed filters, joins, ordering, and limits remain supported. MySQL
-`Tree` output requires MySQL 8.0.16 or newer. SQLite plan row fields are
-diagnostic data whose exact shape may change between SQLite releases.
+plain typed filters, joins, ordering, and limits remain supported. SQLite plan
+row fields are diagnostic data whose exact shape may change between SQLite
+releases.
 
 ### Scoped N+1 Query Detection
 

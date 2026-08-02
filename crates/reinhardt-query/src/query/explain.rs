@@ -119,15 +119,18 @@ impl ExplainStatement {
 		self.reject_select_lock("MySQL")?;
 		self.reject_postgres_options("MySQL")?;
 		self.reject_mysql_window_null_ordering()?;
+		self.reject_mysql_unsupported_operators()?;
 		if mysql_explain_may_evaluate_query(&self.select) {
 			return Err(unsupported(
 				"plan-only EXPLAIN for subqueries or unchecked expressions",
 				"MySQL",
 			));
 		}
-		let format = match self.options.format {
-			ExplainFormat::Text => "TRADITIONAL",
-			ExplainFormat::Json => "JSON",
+		let prefix = match self.options.format {
+			// Plain EXPLAIN selects the traditional tabular output on both MySQL and
+			// MariaDB. MariaDB does not accept `FORMAT=TRADITIONAL`.
+			ExplainFormat::Text => "EXPLAIN",
+			ExplainFormat::Json => "EXPLAIN FORMAT=JSON",
 			ExplainFormat::Tree => {
 				// MySqlBackend also represents MariaDB, which does not support TREE output.
 				return Err(unsupported("EXPLAIN FORMAT TREE", "MySQL/MariaDB"));
@@ -140,7 +143,11 @@ impl ExplainStatement {
 			}
 		};
 		let (select, values) = MySqlQueryBuilder.build_select_checked(&self.select)?;
-		Ok((format!("EXPLAIN FORMAT={format} {select}"), values))
+		// The only allowed custom expression is the ORM-generated LIKE predicate.
+		// Its column path is PostgreSQL-quoted, so convert it after checked MySQL
+		// rendering to preserve the predicate's identifier semantics.
+		let select = select.replace('"', "`");
+		Ok((format!("{prefix} {select}"), values))
 	}
 
 	/// Builds SQLite EXPLAIN QUERY PLAN SQL after validating backend capabilities.
@@ -210,31 +217,40 @@ impl ExplainStatement {
 	}
 
 	fn reject_mysql_window_null_ordering(&self) -> Result<(), QueryBuildError> {
-		if self
-			.select
-			.windows
-			.iter()
-			.any(|(_, window)| window.order_by.iter().any(|order| order.nulls.is_some()))
-		{
+		if statement_has_window_feature(&self.select, |window| {
+			window.order_by.iter().any(|order| order.nulls.is_some())
+		}) {
 			return Err(unsupported("NULLS FIRST/LAST in window ordering", "MySQL"));
 		}
 		Ok(())
 	}
 
+	fn reject_mysql_unsupported_operators(&self) -> Result<(), QueryBuildError> {
+		if statement_has_expression(&self.select, &|expression| {
+			matches!(
+				expression,
+				SimpleExpr::Binary(_, BinOper::ILike | BinOper::NotILike, _)
+			)
+		}) {
+			return Err(unsupported("ILIKE", "MySQL"));
+		}
+		if statement_has_expression(&self.select, &|expression| {
+			matches!(expression, SimpleExpr::Binary(_, BinOper::PgOperator(_), _))
+		}) {
+			return Err(unsupported("PostgreSQL operators", "MySQL"));
+		}
+		Ok(())
+	}
+
 	fn reject_select_lock(&self, backend: &'static str) -> Result<(), QueryBuildError> {
-		if self.select.lock.is_some() {
+		if statement_has_select(&self.select, &|statement| statement.lock.is_some()) {
 			return Err(unsupported("SELECT lock clauses in EXPLAIN", backend));
 		}
 		Ok(())
 	}
 
 	fn reject_sqlite_groups_window_frames(&self) -> Result<(), QueryBuildError> {
-		if self.select.windows.iter().any(|(_, window)| {
-			matches!(
-				window.frame.as_ref().map(|frame| frame.frame_type.clone()),
-				Some(FrameType::Groups)
-			)
-		}) || statement_has_window_feature(&self.select, |window| {
+		if statement_has_window_feature(&self.select, |window| {
 			matches!(
 				window.frame.as_ref().map(|frame| frame.frame_type.clone()),
 				Some(FrameType::Groups)
@@ -247,7 +263,10 @@ impl ExplainStatement {
 
 	fn reject_sqlite_ilike(&self) -> Result<(), QueryBuildError> {
 		if statement_has_expression(&self.select, &|expression| {
-			matches!(expression, SimpleExpr::Binary(_, BinOper::ILike, _))
+			matches!(
+				expression,
+				SimpleExpr::Binary(_, BinOper::ILike | BinOper::NotILike, _)
+			) || matches!(expression, SimpleExpr::CustomWithExpr(template, _) if template.to_ascii_uppercase().contains("ILIKE"))
 		}) {
 			return Err(unsupported("ILIKE", "SQLite"));
 		}
@@ -259,11 +278,51 @@ fn statement_has_window_feature(
 	statement: &SelectStatement,
 	predicate: impl Fn(&WindowStatement) -> bool + Copy,
 ) -> bool {
-	statement_has_expression(statement, &|expression| match expression {
+	statement
+		.windows
+		.iter()
+		.any(|(_, window)| predicate(window))
+		|| statement_has_expression(statement, &|expression| match expression {
 		SimpleExpr::Window { func, window } => {
 			predicate(window) || expression_has_window_feature(func, predicate)
 		}
 		_ => expression_has_window_feature(expression, predicate),
+	}) || statement
+		.ctes
+		.iter()
+		.any(|cte| statement_has_window_feature(&cte.query, predicate))
+		|| statement
+			.unions
+			.iter()
+			.any(|(_, union)| statement_has_window_feature(union, predicate))
+		|| statement
+			.from
+			.iter()
+			.any(|table| table_has_window_feature(table, predicate))
+		|| statement.join.iter().any(|join| {
+			table_has_window_feature(&join.table, predicate)
+				|| matches!(&join.on, Some(JoinOn::Condition(condition)) if conditions_have_window_feature(&condition.conditions, predicate))
+		})
+}
+
+fn table_has_window_feature(
+	table: &TableRef,
+	predicate: impl Fn(&WindowStatement) -> bool + Copy,
+) -> bool {
+	matches!(table, TableRef::SubQuery(query, _) if statement_has_window_feature(query, predicate))
+}
+
+fn conditions_have_window_feature(
+	conditions: &[ConditionExpression],
+	predicate: impl Fn(&WindowStatement) -> bool + Copy,
+) -> bool {
+	conditions.iter().any(|condition| match condition {
+		ConditionExpression::SimpleExpr(expression) => {
+			expression_has_window_feature(expression, predicate)
+		}
+		ConditionExpression::Condition(condition) => {
+			conditions_have_window_feature(&condition.conditions, predicate)
+		}
 	})
 }
 
@@ -298,6 +357,7 @@ fn expression_has_window_feature(
 				.as_ref()
 				.is_some_and(|result| expression_has_window_feature(result, predicate))
 		}
+		SimpleExpr::SubQuery(_, query) => statement_has_window_feature(query, predicate),
 		_ => false,
 	}
 }
@@ -319,7 +379,57 @@ fn statement_has_expression(
 				|| window.order_by.iter().any(|order| {
 					matches!(&order.expr, OrderExprKind::Expr(expression) if expression_matches(expression, predicate))
 				})
+			})
+		|| statement.ctes.iter().any(|cte| statement_has_expression(&cte.query, predicate))
+		|| statement.unions.iter().any(|(_, union)| statement_has_expression(union, predicate))
+		|| statement.from.iter().any(|table| table_has_expression(table, predicate))
+		|| statement.join.iter().any(|join| {
+			table_has_expression(&join.table, predicate)
+				|| matches!(&join.on, Some(JoinOn::Condition(condition)) if conditions_match(&condition.conditions, predicate))
 		})
+}
+
+fn statement_has_select(
+	statement: &SelectStatement,
+	predicate: &impl Fn(&SelectStatement) -> bool,
+) -> bool {
+	predicate(statement)
+		|| statement.ctes.iter().any(|cte| statement_has_select(&cte.query, predicate))
+		|| statement.unions.iter().any(|(_, union)| statement_has_select(union, predicate))
+		|| statement.from.iter().any(|table| table_has_select(table, predicate))
+		|| statement.join.iter().any(|join| {
+			table_has_select(&join.table, predicate)
+				|| matches!(&join.on, Some(JoinOn::Condition(condition)) if conditions_have_select(&condition.conditions, predicate))
+		})
+		|| statement.selects.iter().any(|select| expression_has_select(&select.expr, predicate))
+		|| statement.groups.iter().any(|expression| expression_has_select(expression, predicate))
+		|| conditions_have_select(&statement.r#where.conditions, predicate)
+		|| conditions_have_select(&statement.having.conditions, predicate)
+		|| statement.orders.iter().any(|order| matches!(&order.expr, OrderExprKind::Expr(expression) if expression_has_select(expression, predicate)))
+		|| statement.windows.iter().any(|(_, window)| {
+			window.partition_by.iter().any(|expression| expression_has_select(expression, predicate))
+				|| window.order_by.iter().any(|order| matches!(&order.expr, OrderExprKind::Expr(expression) if expression_has_select(expression, predicate)))
+		})
+}
+
+fn table_has_expression(table: &TableRef, predicate: &impl Fn(&SimpleExpr) -> bool) -> bool {
+	matches!(table, TableRef::SubQuery(query, _) if statement_has_expression(query, predicate))
+}
+
+fn table_has_select(table: &TableRef, predicate: &impl Fn(&SelectStatement) -> bool) -> bool {
+	matches!(table, TableRef::SubQuery(query, _) if statement_has_select(query, predicate))
+}
+
+fn conditions_have_select(
+	conditions: &[ConditionExpression],
+	predicate: &impl Fn(&SelectStatement) -> bool,
+) -> bool {
+	conditions.iter().any(|condition| match condition {
+		ConditionExpression::SimpleExpr(expression) => expression_has_select(expression, predicate),
+		ConditionExpression::Condition(condition) => {
+			conditions_have_select(&condition.conditions, predicate)
+		}
+	})
 }
 
 fn conditions_match(
@@ -345,6 +455,7 @@ fn expression_matches(expression: &SimpleExpr, predicate: &impl Fn(&SimpleExpr) 
 				func: expression, ..
 			} => expression_matches(expression, predicate),
 			SimpleExpr::Window { func, .. } => expression_matches(func, predicate),
+			SimpleExpr::SubQuery(_, query) => statement_has_expression(query, predicate),
 			SimpleExpr::Binary(left, _, right) => {
 				expression_matches(left, predicate) || expression_matches(right, predicate)
 			}
@@ -377,6 +488,55 @@ fn format_feature(format: ExplainFormat) -> &'static str {
 		ExplainFormat::Xml => "EXPLAIN FORMAT XML",
 		ExplainFormat::Yaml => "EXPLAIN FORMAT YAML",
 		ExplainFormat::Tree => "EXPLAIN FORMAT TREE",
+	}
+}
+
+fn expression_has_select(
+	expression: &SimpleExpr,
+	predicate: &impl Fn(&SelectStatement) -> bool,
+) -> bool {
+	match expression {
+		SimpleExpr::SubQuery(_, query) => statement_has_select(query, predicate),
+		SimpleExpr::Unary(_, expression)
+		| SimpleExpr::AsEnum(_, expression)
+		| SimpleExpr::ExprAlias(expression, _)
+		| SimpleExpr::Cast(expression, _)
+		| SimpleExpr::WindowNamed {
+			func: expression, ..
+		} => expression_has_select(expression, predicate),
+		SimpleExpr::Binary(left, _, right) => {
+			expression_has_select(left, predicate) || expression_has_select(right, predicate)
+		}
+		SimpleExpr::FunctionCall(_, expressions)
+		| SimpleExpr::Tuple(expressions)
+		| SimpleExpr::CustomWithExpr(_, expressions) => expressions
+			.iter()
+			.any(|expression| expression_has_select(expression, predicate)),
+		SimpleExpr::Case(case) => {
+			case.when_clauses.iter().any(|(condition, result)| {
+				expression_has_select(condition, predicate)
+					|| expression_has_select(result, predicate)
+			}) || case
+				.else_clause
+				.as_ref()
+				.is_some_and(|result| expression_has_select(result, predicate))
+		}
+		SimpleExpr::Window { func, window } => {
+			expression_has_select(func, predicate)
+				|| window
+					.partition_by
+					.iter()
+					.any(|expression| expression_has_select(expression, predicate))
+				|| window.order_by.iter().any(|order| {
+					matches!(&order.expr, OrderExprKind::Expr(expression) if expression_has_select(expression, predicate))
+				})
+		}
+		SimpleExpr::Column(_)
+		| SimpleExpr::TableColumn(_, _)
+		| SimpleExpr::Value(_)
+		| SimpleExpr::Custom(_)
+		| SimpleExpr::Constant(_)
+		| SimpleExpr::Asterisk => false,
 	}
 }
 
@@ -684,6 +844,94 @@ mod tests {
 	}
 
 	#[rstest]
+	fn mysql_explain_rejects_inline_nulls_window_ordering_before_rendering() {
+		let window = WindowStatement {
+			partition_by: Vec::new(),
+			order_by: vec![OrderExpr::new("id").nulls(crate::types::NullOrdering::Last)],
+			frame: None,
+		};
+		let select = Query::select()
+			.expr(Expr::row_number().over(window))
+			.from("users")
+			.to_owned();
+
+		assert_eq!(
+			ExplainStatement::new(select, ExplainOptions::default()).build_mysql_checked(),
+			Err(QueryBuildError::UnsupportedBackendFeature {
+				feature: "NULLS FIRST/LAST in window ordering",
+				backend: "MySQL",
+			})
+		);
+	}
+
+	#[rstest]
+	fn sqlite_explain_rejects_groups_window_frame_in_nested_select() {
+		let mut nested = filtered_select();
+		nested.window_as(
+			"ranked",
+			WindowStatement {
+				partition_by: Vec::new(),
+				order_by: Vec::new(),
+				frame: Some(FrameClause {
+					frame_type: FrameType::Groups,
+					start: Frame::CurrentRow,
+					end: None,
+				}),
+			},
+		);
+		let select = Query::select()
+			.column("id")
+			.from_subquery(nested, "ranked_users")
+			.to_owned();
+
+		assert_eq!(
+			ExplainStatement::new(select, ExplainOptions::default()).build_sqlite_checked(),
+			Err(QueryBuildError::UnsupportedBackendFeature {
+				feature: "GROUPS window frames",
+				backend: "SQLite",
+			})
+		);
+	}
+
+	#[rstest]
+	fn sqlite_explain_rejects_generated_ilike_template_before_rendering() {
+		let select = Query::select()
+			.column("id")
+			.from("users")
+			.and_where(Expr::cust_with_values(
+				"\"username\" ILIKE ? ESCAPE '\\'",
+				["ada"],
+			))
+			.to_owned();
+
+		assert_eq!(
+			ExplainStatement::new(select, ExplainOptions::default()).build_sqlite_checked(),
+			Err(QueryBuildError::UnsupportedBackendFeature {
+				feature: "ILIKE",
+				backend: "SQLite",
+			})
+		);
+	}
+
+	#[rstest]
+	fn postgres_explain_rejects_lock_in_nested_select() {
+		let mut nested = filtered_select();
+		nested.lock_exclusive();
+		let select = Query::select()
+			.column("id")
+			.from_subquery(nested, "locked_users")
+			.to_owned();
+
+		assert_eq!(
+			ExplainStatement::new(select, ExplainOptions::default()).build_postgres_checked(),
+			Err(QueryBuildError::UnsupportedBackendFeature {
+				feature: "SELECT lock clauses in EXPLAIN",
+				backend: "PostgreSQL",
+			})
+		);
+	}
+
+	#[rstest]
 	fn mysql_explain_rejects_full_outer_joins_before_rendering() {
 		let select = Query::select()
 			.column(("users", "id"))
@@ -759,7 +1007,28 @@ mod tests {
 				.build_mysql_checked()
 				.expect("typed LIKE lookup should be safe to explain")
 				.0,
-			"EXPLAIN FORMAT=TRADITIONAL SELECT `id` FROM `users` WHERE \"username\" LIKE ? ESCAPE '\\'"
+			"EXPLAIN SELECT `id` FROM `users` WHERE `username` LIKE ? ESCAPE '\\'"
+		);
+	}
+
+	#[rstest]
+	fn mysql_explain_rejects_postgres_operators_before_rendering() {
+		let select = Query::select()
+			.column("id")
+			.from("users")
+			.and_where(SimpleExpr::Binary(
+				Box::new(Expr::col("attributes").into_simple_expr()),
+				BinOper::PgOperator(crate::types::PgBinOper::Contains),
+				Box::new(Expr::val("admin").into_simple_expr()),
+			))
+			.to_owned();
+
+		assert_eq!(
+			ExplainStatement::new(select, ExplainOptions::default()).build_mysql_checked(),
+			Err(QueryBuildError::UnsupportedBackendFeature {
+				feature: "PostgreSQL operators",
+				backend: "MySQL",
+			})
 		);
 	}
 

@@ -255,6 +255,49 @@ are not recoverable callback results; do not rely on them for rollback control
 flow. MySQL implicitly commits many DDL statements, so do not put schema changes
 inside an atomic callback and expect them to roll back.
 
+## JSONB column and field type naming
+
+The JSONB type variants and the DDL builder method are renamed for consistency
+with PostgreSQL's `jsonb`/`JSONB` spelling and the surrounding type enums.
+Generated SQL is unchanged: PostgreSQL and CockroachDB still emit `JSONB`, MySQL
+still maps to `JSON`, and SQLite still maps to `TEXT`. Only the Rust names change.
+
+| Previous API | New API |
+| --- | --- |
+| `reinhardt_query::types::ColumnType::JsonBinary` | `reinhardt_query::types::ColumnType::Jsonb` |
+| `reinhardt_query::types::ColumnDef::json_binary()` | `reinhardt_query::types::ColumnDef::jsonb()` |
+| `reinhardt_db::migrations::FieldType::JsonBinary` | `reinhardt_db::migrations::FieldType::Jsonb` |
+
+Update the `ColumnDef` builder call and any `ColumnType` references:
+
+```rust,ignore
+use reinhardt_query::types::{ColumnDef, ColumnType};
+
+// Before
+let column = ColumnDef::new("metadata").json_binary();
+let is_jsonb = matches!(column_type, ColumnType::JsonBinary);
+
+// After
+let column = ColumnDef::new("metadata").jsonb();
+let is_jsonb = matches!(column_type, ColumnType::Jsonb);
+```
+
+Migration field types rename the same way:
+
+```rust,ignore
+use reinhardt_db::migrations::FieldType;
+
+// Before
+let field = FieldType::JsonBinary;
+
+// After
+let field = FieldType::Jsonb;
+```
+
+The `#[model]` field-type strings `"jsonb"` and `"JSONB"` are unchanged; only the
+Rust variant they resolve to is renamed. No schema regeneration or data migration
+is required, because the emitted column types are identical.
+
 ## Typed intrinsic events
 
 Standard intrinsic `page!` handlers no longer receive one raw event type.

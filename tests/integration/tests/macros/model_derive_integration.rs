@@ -722,14 +722,14 @@ fn test_typed_json_field_registry_metadata_generation() {
 		.fields
 		.get("settings")
 		.expect("settings field should be registered");
-	assert_eq!(settings_field.field_type, FieldType::JsonBinary);
+	assert_eq!(settings_field.field_type, FieldType::Jsonb);
 	assert!(!settings_field.nullable, "settings should not be nullable");
 
 	let raw_field = json_model
 		.fields
 		.get("raw")
 		.expect("raw field should be registered");
-	assert_eq!(raw_field.field_type, FieldType::JsonBinary);
+	assert_eq!(raw_field.field_type, FieldType::Jsonb);
 	assert!(raw_field.nullable, "raw should be nullable");
 }
 

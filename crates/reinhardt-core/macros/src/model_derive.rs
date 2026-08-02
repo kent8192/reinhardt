@@ -262,7 +262,7 @@ fn generated_column_type_is_supported(expr: &syn::Expr) -> bool {
 					| "Time" | "DateTime"
 					| "Timestamp" | "TimestampWithTimeZone"
 					| "Blob" | "Uuid"
-					| "Json" | "JsonBinary"
+					| "Json" | "Jsonb"
 			)
 		}),
 		syn::Expr::Call(expr_call) => {
@@ -1838,14 +1838,14 @@ fn map_type_to_field_type(ty: &Type, config: &FieldConfig) -> Result<TokenStream
 				}
 				// Json<T> and serde_json::Value -> JSONB on PostgreSQL, JSON/TEXT elsewhere.
 				"Json" => {
-					quote! { #migrations_crate::FieldType::JsonBinary }
+					quote! { #migrations_crate::FieldType::Jsonb }
 				}
 				"Value" => {
-					quote! { #migrations_crate::FieldType::JsonBinary }
+					quote! { #migrations_crate::FieldType::Jsonb }
 				}
 				// Hash maps use the JSON field codec on every database backend.
 				"HashMap" => {
-					quote! { #migrations_crate::FieldType::JsonBinary }
+					quote! { #migrations_crate::FieldType::Jsonb }
 				}
 				_ => {
 					let max_length = config
@@ -2071,7 +2071,7 @@ fn map_explicit_field_type(
 	migrations_crate: &proc_macro2::TokenStream,
 ) -> Result<TokenStream> {
 	let field_type = match field_type_str.to_lowercase().as_str() {
-		"jsonb" => quote! { #migrations_crate::FieldType::JsonBinary },
+		"jsonb" => quote! { #migrations_crate::FieldType::Jsonb },
 		"json" => quote! { #migrations_crate::FieldType::Json },
 		"hstore" => quote! { #migrations_crate::FieldType::HStore },
 		"citext" => quote! { #migrations_crate::FieldType::CIText },
@@ -2215,7 +2215,7 @@ fn parse_base_type_string(
 		"DATE" => quote! { #migrations_crate::FieldType::Date },
 		"TIME" => quote! { #migrations_crate::FieldType::Time },
 		"TIMESTAMP" => quote! { #migrations_crate::FieldType::DateTime },
-		"JSONB" => quote! { #migrations_crate::FieldType::JsonBinary },
+		"JSONB" => quote! { #migrations_crate::FieldType::Jsonb },
 		"JSON" => quote! { #migrations_crate::FieldType::Json },
 		_ => {
 			return Err(syn::Error::new(
@@ -8901,7 +8901,7 @@ mod tests {
 			map_type_to_field_type(&hash_map, &config)
 				.expect("HashMap migration type should generate")
 				.to_string(),
-			quote! { #migrations_crate::FieldType::JsonBinary }.to_string()
+			quote! { #migrations_crate::FieldType::Jsonb }.to_string()
 		);
 
 		assert_eq!(

@@ -4667,7 +4667,7 @@ impl PostgresQueryBuilder {
 			ColumnType::Blob => "BYTEA".to_string(),
 			ColumnType::Boolean => "BOOLEAN".to_string(),
 			ColumnType::Json => "JSON".to_string(),
-			ColumnType::JsonBinary => "JSONB".to_string(),
+			ColumnType::Jsonb => "JSONB".to_string(),
 			ColumnType::Uuid => "UUID".to_string(),
 			ColumnType::Array(inner_type) => {
 				format!("{}[]", self.column_type_to_sql(inner_type))

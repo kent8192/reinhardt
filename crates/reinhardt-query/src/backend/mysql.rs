@@ -3450,8 +3450,8 @@ impl MySqlQueryBuilder {
 			Blob => "BLOB".to_string(),
 			Uuid => "CHAR(36)".to_string(), // UUID as CHAR(36) in MySQL
 			Json => "JSON".to_string(),
-			JsonBinary => "JSON".to_string(), // MySQL JSON is binary
-			Array(_) => "JSON".to_string(),   // MySQL doesn't have ARRAY, use JSON
+			Jsonb => "JSON".to_string(),    // MySQL JSON is binary
+			Array(_) => "JSON".to_string(), // MySQL doesn't have ARRAY, use JSON
 			#[cfg(feature = "pgvector")]
 			Vector(_) => "JSON".to_string(),
 			Custom(name) => name.clone(),
@@ -3479,7 +3479,7 @@ impl MySqlQueryBuilder {
 			Binary(None) | Blob => "BINARY".to_string(),
 			VarBinary(len) => format!("BINARY({len})"),
 			Uuid => "CHAR(36)".to_string(),
-			Json | JsonBinary | Array(_) => "JSON".to_string(),
+			Json | Jsonb | Array(_) => "JSON".to_string(),
 			#[cfg(feature = "pgvector")]
 			Vector(_) => "JSON".to_string(),
 			Custom(name) => name.clone(),

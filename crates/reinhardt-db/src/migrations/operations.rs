@@ -2343,7 +2343,7 @@ impl Operation {
 					"JSON".to_string()
 				}
 			}
-			QueryColumnType::JsonBinary => {
+			QueryColumnType::Jsonb => {
 				if matches!(dialect, SqlDialect::Postgres | SqlDialect::Cockroachdb) {
 					"JSONB".to_string()
 				} else if matches!(dialect, SqlDialect::Sqlite) {
@@ -2397,7 +2397,7 @@ impl Operation {
 			QueryColumnType::Binary(None) | QueryColumnType::Blob => "BINARY".to_string(),
 			QueryColumnType::VarBinary(len) => format!("BINARY({len})"),
 			QueryColumnType::Uuid => "CHAR(36)".to_string(),
-			QueryColumnType::Json | QueryColumnType::JsonBinary | QueryColumnType::Array(_) => {
+			QueryColumnType::Json | QueryColumnType::Jsonb | QueryColumnType::Array(_) => {
 				"JSON".to_string()
 			}
 			#[cfg(feature = "pgvector")]
@@ -5009,7 +5009,7 @@ pub fn field_type_string_to_field_type(
 
 		// JSON types
 		"JSONField" => Ok(FieldType::Json),
-		"JsonField" => Ok(FieldType::JsonBinary),
+		"JsonField" => Ok(FieldType::Jsonb),
 
 		// File fields (stored as path strings)
 		"FileField" | "ImageField" => {
@@ -6608,7 +6608,7 @@ impl Operation {
 			FieldType::Float => col_def.float(),
 			FieldType::Double | FieldType::Real => col_def.double(),
 			FieldType::Json => col_def.json(),
-			FieldType::JsonBinary => col_def.json_binary(),
+			FieldType::Jsonb => col_def.jsonb(),
 			FieldType::Uuid => col_def.uuid(),
 			FieldType::Binary | FieldType::Bytea => col_def.binary(0),
 			FieldType::Blob | FieldType::TinyBlob | FieldType::MediumBlob | FieldType::LongBlob => {

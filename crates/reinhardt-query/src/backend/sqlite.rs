@@ -2078,7 +2078,7 @@ impl SqliteQueryBuilder {
 			Blob => "BLOB".to_string(),
 			Uuid => "TEXT".to_string(), // UUID as TEXT (36 chars)
 			Json => "TEXT".to_string(), // SQLite JSON1 extension stores JSON as TEXT
-			JsonBinary => "TEXT".to_string(),
+			Jsonb => "TEXT".to_string(),
 			Array(_) => "TEXT".to_string(), // SQLite doesn't have ARRAY, use TEXT (JSON)
 			#[cfg(feature = "pgvector")]
 			Vector(_) => "TEXT".to_string(),

@@ -122,7 +122,7 @@ fn field_type(value: FieldType) {
         | FieldType::Decimal { .. } | FieldType::Float | FieldType::Double
         | FieldType::Real | FieldType::Boolean | FieldType::Binary | FieldType::Blob
         | FieldType::TinyBlob | FieldType::MediumBlob | FieldType::LongBlob
-        | FieldType::Bytea | FieldType::Json | FieldType::JsonBinary
+        | FieldType::Bytea | FieldType::Json | FieldType::Jsonb
         | FieldType::Array(_) | FieldType::HStore | FieldType::CIText
         | FieldType::Int4Range | FieldType::Int8Range | FieldType::NumRange
         | FieldType::DateRange | FieldType::TsRange | FieldType::TsTzRange

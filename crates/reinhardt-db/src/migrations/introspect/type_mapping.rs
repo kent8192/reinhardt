@@ -141,7 +141,7 @@ impl TypeMapper {
 
 			// JSON types
 			FieldType::Json => quote! { serde_json::Value },
-			FieldType::JsonBinary => quote! { serde_json::Value },
+			FieldType::Jsonb => quote! { serde_json::Value },
 
 			// PostgreSQL-specific types
 			FieldType::Array(inner) => {
@@ -223,7 +223,7 @@ impl TypeMapper {
 			FieldType::Boolean => "bool",
 			FieldType::Binary | FieldType::Blob | FieldType::Bytea => "Vec<u8>",
 			FieldType::TinyBlob | FieldType::MediumBlob | FieldType::LongBlob => "Vec<u8>",
-			FieldType::Json | FieldType::JsonBinary => "serde_json::Value",
+			FieldType::Json | FieldType::Jsonb => "serde_json::Value",
 			FieldType::Uuid => "uuid::Uuid",
 			FieldType::Year => "i16",
 			FieldType::HStore => "std::collections::HashMap<String, String>",

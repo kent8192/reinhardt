@@ -100,7 +100,7 @@ pub fn infer_admin_field_type(db_type: &DbFieldType) -> AdminFieldType {
 		| DbFieldType::Bytea => AdminFieldType::File,
 
 		// JSON types → TextArea (for JSON editing)
-		DbFieldType::Json | DbFieldType::JsonBinary => AdminFieldType::TextArea,
+		DbFieldType::Json | DbFieldType::Jsonb => AdminFieldType::TextArea,
 
 		// Year → Number input
 		DbFieldType::Year => AdminFieldType::Number,
@@ -574,7 +574,7 @@ mod tests {
 			AdminFieldType::TextArea
 		);
 		assert_eq!(
-			infer_admin_field_type(&DbFieldType::JsonBinary),
+			infer_admin_field_type(&DbFieldType::Jsonb),
 			AdminFieldType::TextArea
 		);
 	}

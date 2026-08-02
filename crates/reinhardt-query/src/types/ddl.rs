@@ -63,7 +63,7 @@ pub enum ColumnType {
 	/// JSON - JSON data
 	Json,
 	/// JSONB - Binary JSON (PostgreSQL)
-	JsonBinary,
+	Jsonb,
 	/// ARRAY - Array type (PostgreSQL)
 	Array(Box<ColumnType>),
 	/// VECTOR(n) - pgvector dense vector type (PostgreSQL)
@@ -325,8 +325,8 @@ impl ColumnDef {
 	}
 
 	/// Set column type to JSONB
-	pub fn json_binary(self) -> Self {
-		self.column_type(ColumnType::JsonBinary)
+	pub fn jsonb(self) -> Self {
+		self.column_type(ColumnType::Jsonb)
 	}
 
 	/// Set column type to BLOB
@@ -592,12 +592,12 @@ mod tests {
 	}
 
 	#[rstest]
-	fn test_column_def_json_binary() {
+	fn test_column_def_jsonb() {
 		// Arrange & Act
-		let col = ColumnDef::new("data").json_binary();
+		let col = ColumnDef::new("data").jsonb();
 
 		// Assert
-		assert_eq!(col.column_type, Some(ColumnType::JsonBinary));
+		assert_eq!(col.column_type, Some(ColumnType::Jsonb));
 	}
 
 	#[rstest]

@@ -592,7 +592,6 @@ impl FilesystemRepository {
 				mysql_options: Some(_),
 				..
 			}
-			| Operation::RunRust { .. }
 			| Operation::AlterTableComment { .. }
 			| Operation::AlterUniqueTogether { .. }
 			| Operation::AlterModelOptions { .. }
@@ -1145,6 +1144,31 @@ mod tests {
 		});
 
 		migration
+	}
+
+	#[test]
+	fn render_round_trips_run_rust_operations() {
+		// Arrange
+		let repository = FilesystemRepository::new(TempDir::new().unwrap().path());
+		let mut migration = Migration::new("0001_seed_data", "polls");
+		migration.operations.push(Operation::RunRust {
+			code: "seed_data()".to_string(),
+			reverse_code: Some("remove_seed_data()".to_string()),
+		});
+
+		// Act
+		let rendered = repository
+			.render(
+				&migration,
+				MigrationRenderOptions {
+					include_header: false,
+				},
+			)
+			.expect("RunRust migration should render");
+
+		// Assert
+		assert!(rendered.contains("Operation::RunRust"));
+		assert!(rendered.contains("seed_data()"));
 	}
 
 	#[rstest]

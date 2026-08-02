@@ -1507,3 +1507,94 @@ fn test_makemigrations_merge_with_name() {
 		_ => panic!("Expected Makemigrations command"),
 	}
 }
+
+#[cfg(feature = "migrations")]
+#[rstest]
+fn inspectdb_parses_minimal_form() {
+	let command = Cli::try_parse_from(["manage", "inspectdb"])
+		.expect("minimal inspectdb arguments should parse")
+		.command;
+
+	match command {
+		Commands::Inspectdb {
+			tables,
+			database,
+			database_url,
+			include_views,
+			include_partitions,
+			output,
+			config,
+			force,
+		} => {
+			assert_eq!(tables, Vec::<String>::new());
+			assert_eq!(database, "default");
+			assert_eq!(database_url, None);
+			assert!(!include_views);
+			assert!(!include_partitions);
+			assert_eq!(output, None);
+			assert_eq!(config, None);
+			assert!(!force);
+		}
+		other => panic!("Expected Inspectdb command, got {other:?}"),
+	}
+}
+
+#[cfg(feature = "migrations")]
+#[rstest]
+fn inspectdb_parses_complete_form() {
+	let command = Cli::try_parse_from([
+		"manage",
+		"inspectdb",
+		"users",
+		"audit_log",
+		"--database",
+		"replica",
+		"--database-url",
+		"sqlite:inspectdb.db",
+		"--include-views",
+		"--include-partitions",
+		"--output",
+		"src/models/generated",
+		"--config",
+		"inspectdb.toml",
+		"--force",
+	])
+	.expect("complete inspectdb arguments should parse")
+	.command;
+
+	match command {
+		Commands::Inspectdb {
+			tables,
+			database,
+			database_url,
+			include_views,
+			include_partitions,
+			output,
+			config,
+			force,
+		} => {
+			assert_eq!(tables, vec!["users", "audit_log"]);
+			assert_eq!(database, "replica");
+			assert_eq!(database_url.as_deref(), Some("sqlite:inspectdb.db"));
+			assert!(include_views);
+			assert!(include_partitions);
+			assert_eq!(output, Some(PathBuf::from("src/models/generated")));
+			assert_eq!(config, Some(PathBuf::from("inspectdb.toml")));
+			assert!(force);
+		}
+		other => panic!("Expected Inspectdb command, got {other:?}"),
+	}
+}
+
+#[cfg(feature = "migrations")]
+#[rstest]
+fn inspectdb_rejects_force_without_output() {
+	let error = Cli::try_parse_from(["manage", "inspectdb", "--force"])
+		.expect_err("--force without --output must be rejected");
+
+	assert_eq!(
+		error.kind(),
+		clap::error::ErrorKind::MissingRequiredArgument
+	);
+	assert!(error.to_string().contains("--output"));
+}

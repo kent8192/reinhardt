@@ -305,7 +305,12 @@ auth-social = ["auth-oauth", "reinhardt-auth/social"]
 auth-token = ["auth", "reinhardt-auth/token"]
 
 # Fine-grained database support
-db-postgres = ["database", "reinhardt-db/postgres", "reinhardt-commands?/postgres"]
+db-postgres = [
+  "database",
+  "reinhardt-db/postgres",
+  "reinhardt-commands?/postgres",
+  "reinhardt-macros/db-postgres",
+]
 db-pgvector = [
   "database",
   "db-postgres",
@@ -315,8 +320,18 @@ db-pgvector = [
   "reinhardt-macros/pgvector",
   "reinhardt-test?/pgvector",
 ]
-db-mysql = ["database", "reinhardt-db/mysql", "reinhardt-commands?/mysql"]
-db-sqlite = ["database", "reinhardt-db/sqlite", "reinhardt-commands?/sqlite"]
+db-mysql = [
+  "database",
+  "reinhardt-db/mysql",
+  "reinhardt-commands?/mysql",
+  "reinhardt-macros/db-mysql",
+]
+db-sqlite = [
+  "database",
+  "reinhardt-db/sqlite",
+  "reinhardt-commands?/sqlite",
+  "reinhardt-macros/db-sqlite",
+]
 db-cockroachdb = ["database", "reinhardt-db/cockroachdb-backend", "reinhardt-commands?/postgres"]
 
 # Fine-grained middleware
@@ -646,6 +661,7 @@ async-trait = "0.1.89"
 
 # Error handling
 thiserror = "2.0.18"
+libc = "0.2.189"
 
 # Routing
 regex = "1.12.3"
@@ -752,6 +768,7 @@ clap = { version = "4.6.0", features = ["derive", "cargo"] }
 mockall = "0.14.0"
 assert-json-diff = "2.0.2"
 predicates = "3.1.4"
+same-file = "1.0.6"
 scopeguard = "1.2.0"
 tempfile = "3.27.0"
 trybuild = "1.0.116"

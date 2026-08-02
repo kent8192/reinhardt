@@ -282,6 +282,42 @@ pub enum Commands {
 		names: bool,
 	},
 
+	/// Generate Reinhardt models from an existing database schema
+	#[cfg(feature = "migrations")]
+	Inspectdb {
+		/// Exact table names to inspect
+		#[arg(value_name = "TABLE")]
+		tables: Vec<String>,
+
+		/// Configured database alias
+		#[arg(long, default_value = "default")]
+		database: String,
+
+		/// One-off database URL override
+		#[arg(long)]
+		database_url: Option<String>,
+
+		/// Include database views
+		#[arg(long)]
+		include_views: bool,
+
+		/// Include PostgreSQL partitions
+		#[arg(long)]
+		include_partitions: bool,
+
+		/// Output directory for the existing multi-file generator layout
+		#[arg(short = 'o', long)]
+		output: Option<PathBuf>,
+
+		/// Path to inspectdb generation configuration
+		#[arg(short = 'c', long)]
+		config: Option<PathBuf>,
+
+		/// Overwrite existing generated files
+		#[arg(long, requires = "output")]
+		force: bool,
+	},
+
 	/// Output structured project metadata for platform introspection
 	#[cfg(feature = "introspect")]
 	Introspect {
@@ -962,6 +998,33 @@ async fn run_command_core(
 			.await
 		}
 		Commands::Showurls { names } => execute_showurls(names, verbosity).await,
+		#[cfg(feature = "migrations")]
+		Commands::Inspectdb {
+			tables,
+			database,
+			database_url,
+			include_views,
+			include_partitions,
+			output,
+			config,
+			force,
+		} => {
+			execute_inspectdb(
+				InspectDbParams {
+					tables,
+					database,
+					database_url,
+					include_views,
+					include_partitions,
+					output,
+					config,
+					force,
+					verbosity,
+				},
+				settings.clone(),
+			)
+			.await
+		}
 		#[cfg(feature = "introspect")]
 		Commands::Introspect { format, section } => execute_introspect(format, section, verbosity).await,
 		#[cfg(feature = "openapi")]
@@ -1180,6 +1243,55 @@ struct MigrateParams {
 	plan: bool,
 	migrations_dir: Option<PathBuf>,
 	verbosity: u8,
+}
+
+#[cfg(feature = "migrations")]
+struct InspectDbParams {
+	tables: Vec<String>,
+	database: String,
+	database_url: Option<String>,
+	include_views: bool,
+	include_partitions: bool,
+	output: Option<PathBuf>,
+	config: Option<PathBuf>,
+	force: bool,
+	verbosity: u8,
+}
+
+#[cfg(feature = "migrations")]
+async fn execute_inspectdb(
+	params: InspectDbParams,
+	settings: Option<Arc<dyn HasCommonSettings>>,
+) -> Result<(), Box<dyn std::error::Error>> {
+	let mut ctx = CommandContext::new(params.tables);
+	ctx.set_verbosity(params.verbosity);
+	ctx.set_option("database".to_string(), params.database);
+	if let Some(database_url) = params.database_url {
+		ctx.set_option("database-url".to_string(), database_url);
+	}
+	if params.include_views {
+		ctx.set_option("include-views".to_string(), "true".to_string());
+	}
+	if params.include_partitions {
+		ctx.set_option("include-partitions".to_string(), "true".to_string());
+	}
+	if let Some(output) = params.output {
+		ctx.set_option("output".to_string(), output.to_string_lossy().into_owned());
+	}
+	if let Some(config) = params.config {
+		ctx.set_option("config".to_string(), config.to_string_lossy().into_owned());
+	}
+	if params.force {
+		ctx.set_option("force".to_string(), "true".to_string());
+	}
+	if let Some(settings) = settings {
+		ctx = ctx.with_settings(settings);
+	}
+
+	crate::InspectDbCommand::default()
+		.execute(&ctx)
+		.await
+		.map_err(Into::into)
 }
 
 /// Execute the migrate command

@@ -452,7 +452,19 @@ impl BaseCommand for MigrateCommand {
 					{
 						for (da, dn) in &migration.dependencies {
 							if *da == *app {
-								stack.push((da.clone(), dn.clone()));
+								let normalized = all_migrations
+									.iter()
+									.find(|candidate| {
+										candidate.app_label == *da
+											&& candidate.replaces.iter().any(
+												|(replaced_app, replaced_name)| {
+													*replaced_app == *da && *replaced_name == *dn
+												},
+											)
+									})
+									.map(|owner| (owner.app_label.clone(), owner.name.clone()))
+									.unwrap_or_else(|| (da.clone(), dn.clone()));
+								stack.push(normalized);
 							}
 						}
 					}
@@ -683,12 +695,17 @@ fn dependency_ordered_migrations<'a>(
 			.map(|(app, name)| MigrationKey::new(app.as_str(), name.as_str()))
 			.collect();
 
+		let replaces = migration
+			.replaces
+			.iter()
+			.map(|(app, name)| MigrationKey::new(app.as_str(), name.as_str()))
+			.collect();
 		by_key.insert(key.clone(), *migration);
-		graph.add_migration(key, dependencies);
+		graph.add_migration_with_replaces(key, dependencies, replaces);
 	}
 
 	graph
-		.topological_sort()
+		.resolve_execution_order_with_replaces()
 		.map_err(|e| {
 			crate::CommandError::ExecutionError(format!(
 				"Failed to sort migration plan by dependencies: {}",

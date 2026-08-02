@@ -120,15 +120,23 @@ impl MigrationCatalog {
 
 		let mut migration_keys: Vec<MigrationKey> = migrations.keys().cloned().collect();
 		migration_keys.sort_by(Self::compare_keys);
-		let mut replacement_owners: HashMap<MigrationKey, Vec<MigrationKey>> = HashMap::new();
+		let mut replacement_owner_candidates: HashMap<MigrationKey, Vec<MigrationKey>> =
+			HashMap::new();
 		for (key, migration) in &migrations {
 			for (app, name) in &migration.replaces {
-				replacement_owners
+				replacement_owner_candidates
 					.entry(MigrationKey::new(app, name))
 					.or_default()
 					.push(key.clone());
 			}
 		}
+		let replacement_owners = replacement_owner_candidates
+			.iter()
+			.map(|(replaced, owners)| {
+				Self::terminal_replacement_owner(replaced, owners, &replacement_owner_candidates)
+					.map(|owner| (replaced.clone(), owner))
+			})
+			.collect::<Result<HashMap<_, _>>>()?;
 		for key in &migration_keys {
 			let migration = migrations
 				.get(key)
@@ -194,7 +202,7 @@ impl MigrationCatalog {
 	fn resolve_graph_dependency(
 		dependency: &MigrationKey,
 		migrations: &HashMap<MigrationKey, Migration>,
-		replacement_owners: &HashMap<MigrationKey, Vec<MigrationKey>>,
+		replacement_owners: &HashMap<MigrationKey, MigrationKey>,
 		dependent: &MigrationKey,
 	) -> Result<MigrationKey> {
 		let dependency = if dependency.name == "__first__" {
@@ -213,12 +221,54 @@ impl MigrationCatalog {
 			dependency.clone()
 		};
 		match replacement_owners.get(&dependency) {
-			Some(owners) if owners.len() == 1 => Ok(owners[0].clone()),
+			Some(owner) => Ok(owner.clone()),
 			None if migrations.contains_key(&dependency) => Ok(dependency),
 			_ => Err(MigrationError::DependencyError(format!(
 				"Missing dependency {} required by {}",
 				dependency, dependent
 			))),
+		}
+	}
+
+	fn terminal_replacement_owner(
+		replaced: &MigrationKey,
+		owners: &[MigrationKey],
+		replacement_owner_candidates: &HashMap<MigrationKey, Vec<MigrationKey>>,
+	) -> Result<MigrationKey> {
+		let mut current = replaced.clone();
+		let mut candidates = owners.to_vec();
+		let mut visited = HashSet::new();
+		loop {
+			if !visited.insert(current.clone()) {
+				return Err(MigrationError::CircularDependency {
+					cycle: current.id(),
+				});
+			}
+			let mut terminal: Vec<_> = candidates
+				.iter()
+				.filter(|candidate| !replacement_owner_candidates.contains_key(*candidate))
+				.cloned()
+				.collect();
+			terminal.sort_by_key(MigrationKey::id);
+			match terminal.as_slice() {
+				[owner] => return Ok(owner.clone()),
+				[] => {
+					candidates.sort_by_key(MigrationKey::id);
+					current = candidates
+						.pop()
+						.expect("replacement owner candidates are not empty");
+					candidates = replacement_owner_candidates
+						.get(&current)
+						.cloned()
+						.unwrap_or_default();
+				}
+				_ => {
+					return Err(MigrationError::InvalidMigration(format!(
+						"Replacement {} has multiple terminal owners",
+						replaced
+					)));
+				}
+			}
 		}
 	}
 
@@ -588,5 +638,41 @@ impl MigrationCatalog {
 			stack.extend(dependencies.into_iter().rev());
 		}
 		same_app_ancestors
+	}
+}
+
+#[cfg(test)]
+mod tests {
+	use super::*;
+
+	#[test]
+	fn resolves_nested_replacement_dependencies_to_the_terminal_owner() {
+		let original = Migration::new("0001_initial", "app");
+		let mut older = Migration::new("0001_squashed_0002", "app");
+		older.replaces = vec![("app".to_string(), "0001_initial".to_string())];
+		let mut newer = Migration::new("0001_squashed_0003", "app");
+		newer.replaces = vec![
+			("app".to_string(), "0001_initial".to_string()),
+			("app".to_string(), "0001_squashed_0002".to_string()),
+		];
+		let mut dependent = Migration::new("0004_dependent", "app");
+		dependent.dependencies = vec![("app".to_string(), "0001_initial".to_string())];
+
+		let context = DependencyResolutionContext::new().with_apps(["app".to_string()]);
+		let catalog = MigrationCatalog::from_loaded_with_context(
+			vec![original, older, newer, dependent],
+			&context,
+		)
+		.expect("nested replacements should be valid");
+		let dependent_key = MigrationKey::new("app", "0004_dependent");
+		let dependencies = catalog
+			.graph
+			.get_dependencies(&dependent_key)
+			.expect("dependent migration must be present");
+
+		assert_eq!(
+			dependencies,
+			&[MigrationKey::new("app", "0001_squashed_0003")]
+		);
 	}
 }

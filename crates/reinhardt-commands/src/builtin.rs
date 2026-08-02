@@ -256,7 +256,18 @@ impl BaseCommand for MigrateCommand {
 				let target_name = if target_name == "zero" {
 					target_name.to_string()
 				} else {
-					terminal_replacement_target(&all_migrations, app, target_name)?
+					let terminal = terminal_replacement_target(&all_migrations, app, target_name)?;
+					if terminal == target_name
+						|| replacement_history_is_fully_applied(
+							&all_migrations,
+							app,
+							&terminal,
+							&applied_for_app,
+						) {
+						terminal
+					} else {
+						target_name.to_string()
+					}
 				};
 
 				// Branch (a): `migrate <app> zero` -> unapply ALL applied migrations.
@@ -457,18 +468,10 @@ impl BaseCommand for MigrateCommand {
 					{
 						for (da, dn) in &migration.dependencies {
 							if *da == *app {
-								let normalized = all_migrations
-									.iter()
-									.find(|candidate| {
-										candidate.app_label == *da
-											&& candidate.replaces.iter().any(
-												|(replaced_app, replaced_name)| {
-													*replaced_app == *da && *replaced_name == *dn
-												},
-											)
-									})
-									.map(|owner| (owner.app_label.clone(), owner.name.clone()))
-									.unwrap_or_else(|| (da.clone(), dn.clone()));
+								let normalized = (
+									da.clone(),
+									terminal_replacement_target(&all_migrations, da, dn)?,
+								);
 								stack.push(normalized);
 							}
 						}
@@ -516,15 +519,7 @@ impl BaseCommand for MigrateCommand {
 				if is_fake {
 					ctx.info("Faking migrations (marking as applied without executing):");
 					for migration in &pending {
-						recorder
-							.record_applied(&migration.app_label, &migration.name)
-							.await
-							.map_err(|e| {
-								crate::CommandError::ExecutionError(format!(
-									"Failed to record fake migration {}:{}: {}",
-									migration.app_label, migration.name, e
-								))
-							})?;
+						fake_record_migration(&recorder, migration).await?;
 						ctx.success(&format!(
 							"  ✓ Faked: {}:{}",
 							migration.app_label, migration.name
@@ -605,10 +600,11 @@ impl BaseCommand for MigrateCommand {
 						!migration.replaces.is_empty()
 							&& applied.iter().any(|record| {
 								record.app == migration.app_label && record.name == migration.name
-							})
-							&& migration.replaces.iter().any(|(app, name)| {
-								applied.iter().any(|record| record.app == *app && record.name == *name)
-							})
+							}) && migration.replaces.iter().any(|(app, name)| {
+							applied
+								.iter()
+								.any(|record| record.app == *app && record.name == *name)
+						})
 					})
 					.collect();
 				if pending.is_empty() && cleanup.is_empty() {
@@ -627,7 +623,10 @@ impl BaseCommand for MigrateCommand {
 				}
 				for migration in cleanup {
 					for (app, name) in &migration.replaces {
-						if applied.iter().any(|record| record.app == *app && record.name == *name) {
+						if applied
+							.iter()
+							.any(|record| record.app == *app && record.name == *name)
+						{
 							ctx.info(&format!("  - {app}:{name} (unapply superseded record)"));
 						}
 					}
@@ -639,21 +638,12 @@ impl BaseCommand for MigrateCommand {
 			if is_fake {
 				ctx.info("Faking migrations (marking as applied without execution):");
 
-				// Create migration executor for fake migrations
-				let mut executor = DatabaseMigrationExecutor::new(connection);
+				let recorder = reinhardt_db::migrations::DatabaseMigrationRecorder::new(connection);
 				let migrations_to_fake = dependency_ordered_migrations(migrations_to_apply.iter())?;
 
 				// Record each migration as applied without executing
 				for migration in migrations_to_fake {
-					executor
-						.record_migration(&migration.app_label, &migration.name)
-						.await
-						.map_err(|e| {
-							crate::CommandError::ExecutionError(format!(
-								"Failed to record fake migration {}:{}: {:?}",
-								migration.app_label, migration.name, e
-							))
-						})?;
+					fake_record_migration(&recorder, migration).await?;
 					ctx.success(&format!(
 						"  ✓ Faked: {}:{}",
 						migration.app_label, migration.name
@@ -768,9 +758,12 @@ fn terminal_replacement_target(
 			.iter()
 			.filter(|migration| {
 				migration.app_label == app_label
-					&& migration.replaces.iter().any(|(replaced_app, replaced_name)| {
-						replaced_app == app_label && replaced_name == &current
-					})
+					&& migration
+						.replaces
+						.iter()
+						.any(|(replaced_app, replaced_name)| {
+							replaced_app == app_label && replaced_name == &current
+						})
 			})
 			.collect();
 		if owners.is_empty() {
@@ -781,9 +774,12 @@ fn terminal_replacement_target(
 			.filter(|owner| {
 				!migrations.iter().any(|migration| {
 					migration.app_label == app_label
-						&& migration.replaces.iter().any(|(replaced_app, replaced_name)| {
-							replaced_app == app_label && replaced_name == &owner.name
-						})
+						&& migration
+							.replaces
+							.iter()
+							.any(|(replaced_app, replaced_name)| {
+								replaced_app == app_label && replaced_name == &owner.name
+							})
 				})
 			})
 			.collect();
@@ -804,6 +800,96 @@ fn terminal_replacement_target(
 			}
 		}
 	}
+}
+
+#[cfg(feature = "migrations")]
+fn replacement_history_is_fully_applied(
+	migrations: &[reinhardt_db::migrations::Migration],
+	app_label: &str,
+	migration_name: &str,
+	applied: &[reinhardt_db::migrations::recorder::MigrationRecord],
+) -> bool {
+	let Some(replacement) = migrations
+		.iter()
+		.find(|migration| migration.app_label == app_label && migration.name == migration_name)
+	else {
+		return false;
+	};
+	!replacement.replaces.is_empty()
+		&& replacement.replaces.iter().all(|(app, name)| {
+			applied
+				.iter()
+				.any(|record| record.app == *app && record.name == *name)
+		})
+}
+
+#[cfg(feature = "migrations")]
+async fn fake_record_migration(
+	recorder: &reinhardt_db::migrations::DatabaseMigrationRecorder,
+	migration: &reinhardt_db::migrations::Migration,
+) -> CommandResult<()> {
+	if recorder
+		.is_applied(&migration.app_label, &migration.name)
+		.await
+		.map_err(|error| {
+			crate::CommandError::ExecutionError(format!(
+				"Failed to inspect fake migration {}:{}: {}",
+				migration.app_label, migration.name, error
+			))
+		})? {
+		return Ok(());
+	}
+
+	if !migration.replaces.is_empty() {
+		let applied = recorder.get_applied_migrations().await.map_err(|error| {
+			crate::CommandError::ExecutionError(format!(
+				"Failed to inspect replacement history for {}:{}: {}",
+				migration.app_label, migration.name, error
+			))
+		})?;
+		let covered = migration.replaces.iter().filter(|(app, name)| {
+			applied
+				.iter()
+				.any(|record| record.app == *app && record.name == *name)
+		});
+		let covered_count = covered.count();
+		if covered_count == migration.replaces.len() {
+			recorder
+				.record_applied(&migration.app_label, &migration.name)
+				.await
+				.map_err(|error| {
+					crate::CommandError::ExecutionError(format!(
+						"Failed to record fake replacement {}:{}: {}",
+						migration.app_label, migration.name, error
+					))
+				})?;
+			for (app, name) in &migration.replaces {
+				recorder.unapply(app, name).await.map_err(|error| {
+					crate::CommandError::ExecutionError(format!(
+						"Failed to reconcile fake replacement record {}:{}: {}",
+						app, name, error
+					))
+				})?;
+			}
+			return Ok(());
+		}
+		if covered_count > 0 {
+			return Err(crate::CommandError::ExecutionError(format!(
+				"Cannot fake replacement {}:{} because only some replaced migrations are recorded",
+				migration.app_label, migration.name
+			)));
+		}
+	}
+
+	recorder
+		.record_applied(&migration.app_label, &migration.name)
+		.await
+		.map_err(|error| {
+			crate::CommandError::ExecutionError(format!(
+				"Failed to record fake migration {}:{}: {}",
+				migration.app_label, migration.name, error
+			))
+		})
 }
 
 /// Resolve the applied-migration set for a `--plan` preview without creating the
@@ -4876,6 +4962,35 @@ fn detect_database_type(url: &str) -> Result<DatabaseType, crate::CommandError> 
 #[cfg(test)]
 mod tests {
 	use super::*;
+
+	#[cfg(feature = "migrations")]
+	#[test]
+	fn replacement_target_stays_original_for_partial_history() {
+		use chrono::Utc;
+		use reinhardt_db::migrations::{Migration, recorder::MigrationRecord};
+
+		let first = Migration::new("0001_initial", "app");
+		let second = Migration::new("0002_add_field", "app");
+		let mut squashed = Migration::new("0001_squashed_0002", "app");
+		squashed.replaces = vec![
+			("app".to_string(), "0001_initial".to_string()),
+			("app".to_string(), "0002_add_field".to_string()),
+		];
+		let migrations = vec![first, second, squashed];
+		let partial = vec![MigrationRecord {
+			app: "app".to_string(),
+			name: "0001_initial".to_string(),
+			applied: Utc::now(),
+		}];
+
+		let terminal = terminal_replacement_target(&migrations, "app", "0001_initial")
+			.expect("replacement target should resolve");
+
+		assert_eq!(terminal, "0001_squashed_0002");
+		assert!(!replacement_history_is_fully_applied(
+			&migrations, "app", &terminal, &partial
+		));
+	}
 
 	#[test]
 	#[cfg(feature = "migrations")]

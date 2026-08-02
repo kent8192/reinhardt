@@ -65,6 +65,10 @@ pub fn extract_migration_metadata_strict(
 			MigrationError::InvalidMigration("Missing migration() entrypoint".to_string())
 		})?;
 
+	if matches!(migration_expr, Expr::MethodCall(_)) {
+		return parse_migration_builder_strict(migration_expr, app_label, name);
+	}
+
 	let Expr::Struct(migration_struct) = migration_expr else {
 		return Err(MigrationError::InvalidMigration(
 			"migration() must return a Migration struct literal".to_string(),
@@ -122,6 +126,71 @@ pub fn extract_migration_metadata_strict(
 		swappable_dependencies,
 		optional_dependencies,
 	})
+}
+
+fn parse_migration_builder_strict(expr: &Expr, app_label: &str, name: &str) -> Result<Migration> {
+	match expr {
+		Expr::Call(call)
+			if call_path_is(&call.func, "Migration", "new") && call.args.len() == 2 =>
+		{
+			Ok(Migration::new(name, app_label))
+		}
+		Expr::MethodCall(call) => {
+			let mut migration = parse_migration_builder_strict(&call.receiver, app_label, name)?;
+			match call.method.to_string().as_str() {
+				"add_operation" if call.args.len() == 1 => {
+					let index = migration.operations.len();
+					migration
+						.operations
+						.push(parse_single_operation_strict(&call.args[0], index)?);
+				}
+				"add_dependency" if call.args.len() == 2 => {
+					let dependency_app = extract_string_expr(&call.args[0]).ok_or_else(|| {
+						MigrationError::InvalidMigration(
+							"Migration builder dependency app label must be a string literal"
+								.to_string(),
+						)
+					})?;
+					let dependency_name = extract_string_expr(&call.args[1]).ok_or_else(|| {
+						MigrationError::InvalidMigration(
+							"Migration builder dependency name must be a string literal"
+								.to_string(),
+						)
+					})?;
+					migration
+						.dependencies
+						.push((dependency_app, dependency_name));
+				}
+				"atomic" if call.args.len() == 1 => {
+					migration.atomic = parse_bool_expression(&call.args[0]).ok_or_else(|| {
+						MigrationError::InvalidMigration(
+							"Migration builder atomic flag must be a boolean literal".to_string(),
+						)
+					})?;
+				}
+				unsupported => {
+					return Err(MigrationError::InvalidMigration(format!(
+						"Migration builder method '{unsupported}' is unsupported or malformed"
+					)));
+				}
+			}
+			Ok(migration)
+		}
+		_ => Err(MigrationError::InvalidMigration(
+			"migration() must return a Migration struct literal or supported builder chain"
+				.to_string(),
+		)),
+	}
+}
+
+fn parse_bool_expression(expr: &Expr) -> Option<bool> {
+	let Expr::Lit(literal) = expr else {
+		return None;
+	};
+	let syn::Lit::Bool(value) = &literal.lit else {
+		return None;
+	};
+	Some(value.value)
 }
 
 fn dependency_metadata_expressions(
@@ -4080,6 +4149,32 @@ mod tests {
 
 		// Assert
 		assert_eq!(error.to_string(), expected);
+	}
+
+	#[rstest]
+	fn strict_metadata_accepts_builder_style_migrations() {
+		// Arrange
+		let source = r#"pub fn migration() -> Migration {
+			Migration::new("0001_initial", "blog")
+				.add_operation(Operation::RunSQL {
+					sql: "CREATE TABLE posts (id INTEGER)".to_string(),
+					reverse_sql: None,
+				})
+				.add_dependency("core", "0001_initial")
+				.atomic(false)
+		}"#;
+		let ast = syn::parse_file(source).unwrap();
+
+		// Act
+		let migration = extract_migration_metadata_strict(&ast, "blog", "0001_initial").unwrap();
+
+		// Assert
+		assert_eq!(
+			migration.dependencies,
+			vec![("core".to_string(), "0001_initial".to_string())]
+		);
+		assert_eq!(migration.operations.len(), 1);
+		assert!(!migration.atomic);
 	}
 
 	#[test]

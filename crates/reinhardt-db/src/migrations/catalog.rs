@@ -1,6 +1,9 @@
 //! Strict migration catalog loading and squash range resolution.
 
-use super::{Migration, MigrationError, MigrationGraph, MigrationKey, MigrationSource, Result};
+use super::{
+	DependencyResolutionContext, Migration, MigrationError, MigrationGraph, MigrationKey,
+	MigrationSource, Result,
+};
 use std::collections::{BTreeSet, HashMap, HashSet};
 
 /// A validated snapshot of all migrations from a migration source.
@@ -36,6 +39,37 @@ impl MigrationCatalog {
 				.cmp(&right.app_label)
 				.then_with(|| left.name.cmp(&right.name))
 		});
+		let context = DependencyResolutionContext::new()
+			.with_apps(loaded.iter().map(|migration| migration.app_label.clone()));
+		Self::from_loaded_with_context(loaded, &context)
+	}
+
+	/// Load and validate every migration exposed by a source with dependency settings.
+	///
+	/// The context resolves swappable dependencies and activates optional
+	/// dependencies. Its installed applications are combined with the labels
+	/// discovered from the source, so a local optional dependency is not silently
+	/// omitted.
+	pub async fn load_strict_with_context(
+		source: &dyn MigrationSource,
+		context: &DependencyResolutionContext,
+	) -> Result<Self> {
+		let mut loaded = source.all_migrations().await?;
+		loaded.sort_by(|left, right| {
+			left.app_label
+				.cmp(&right.app_label)
+				.then_with(|| left.name.cmp(&right.name))
+		});
+		let context = context
+			.clone()
+			.with_apps(loaded.iter().map(|migration| migration.app_label.clone()));
+		Self::from_loaded_with_context(loaded, &context)
+	}
+
+	fn from_loaded_with_context(
+		loaded: Vec<Migration>,
+		context: &DependencyResolutionContext,
+	) -> Result<Self> {
 		let mut migrations = HashMap::with_capacity(loaded.len());
 
 		for migration in loaded {
@@ -63,10 +97,14 @@ impl MigrationCatalog {
 			let migration = migrations
 				.get(key)
 				.expect("collected catalog key must have a migration");
-			let mut dependencies = migration.dependencies.clone();
-			dependencies.sort();
-			for (dependency_app, dependency_name) in dependencies {
-				let dependency = MigrationKey::new(dependency_app, dependency_name);
+			let mut graph_for_migration = MigrationGraph::new();
+			graph_for_migration.add_migration_with_context(migration, context);
+			let mut dependencies = graph_for_migration
+				.get_dependencies(key)
+				.map(<[MigrationKey]>::to_vec)
+				.unwrap_or_default();
+			dependencies.sort_by(Self::compare_keys);
+			for dependency in dependencies {
 				let replacement_count = replacement_owners.get(&dependency).map_or(0, Vec::len);
 				if !migrations.contains_key(&dependency) && replacement_count != 1 {
 					return Err(MigrationError::DependencyError(format!(
@@ -78,18 +116,8 @@ impl MigrationCatalog {
 		}
 
 		let mut graph = MigrationGraph::new();
-		for (key, migration) in &migrations {
-			let dependencies = migration
-				.dependencies
-				.iter()
-				.map(|(app, name)| MigrationKey::new(app, name))
-				.collect();
-			let replaces = migration
-				.replaces
-				.iter()
-				.map(|(app, name)| MigrationKey::new(app, name))
-				.collect();
-			graph.add_migration_with_replaces(key.clone(), dependencies, replaces);
+		for migration in migrations.values() {
+			graph.add_migration_with_context(migration, context);
 		}
 
 		let mut cycle_nodes: Vec<String> = graph
@@ -226,13 +254,11 @@ impl MigrationCatalog {
 			})
 			.collect();
 
-		let external_dependencies: BTreeSet<(String, String)> = migrations
+		let external_dependencies: BTreeSet<(String, String)> = selected
 			.iter()
-			.flat_map(|migration| migration.dependencies.iter())
-			.filter(|(dependency_app, dependency_name)| {
-				!selected.contains(&MigrationKey::new(dependency_app, dependency_name))
-			})
-			.cloned()
+			.flat_map(|key| self.graph.get_dependencies(key).unwrap_or_default())
+			.filter(|dependency| !selected.contains(*dependency))
+			.map(|dependency| (dependency.app_label.clone(), dependency.name.clone()))
 			.collect();
 
 		for (key, migration) in &self.migrations {
@@ -250,20 +276,6 @@ impl MigrationCatalog {
 			}
 		}
 
-		for selected_key in &selected {
-			for child in self.graph.get_dependents(selected_key) {
-				if child.app_label == app
-					&& !selected.contains(child)
-					&& !self.is_descendant_of(child, &end_key)
-				{
-					return Err(MigrationError::InvalidMigration(format!(
-						"Cannot squash range: {} branches from selected migration {}",
-						child, selected_key
-					)));
-				}
-			}
-		}
-
 		for (dependency_app, dependency_name) in &external_dependencies {
 			let dependency = MigrationKey::new(dependency_app, dependency_name);
 			if let Some(selected_ancestor) =
@@ -276,25 +288,12 @@ impl MigrationCatalog {
 			}
 		}
 
-		for migration in &migrations {
-			let conditional_dependencies = migration
-				.optional_dependencies
-				.iter()
-				.map(|dependency| {
-					MigrationKey::new(&dependency.app_label, &dependency.migration_name)
-				})
-				.chain(migration.swappable_dependencies.iter().map(|dependency| {
-					MigrationKey::new(&dependency.default_app, &dependency.migration_name)
-				}));
-			for dependency in conditional_dependencies {
-				if !selected.contains(&dependency)
-					&& self.migrations.contains_key(&dependency)
-					&& let Some(selected_ancestor) =
-						self.first_reachable_selected_dependency(&dependency, &selected)
-				{
+		for selected_key in &selected {
+			for child in self.graph.get_dependents(selected_key) {
+				if !selected.contains(child) && !self.is_descendant_of(child, &end_key) {
 					return Err(MigrationError::InvalidMigration(format!(
-						"Cannot squash range: conditional dependency {} of {} depends on selected migration {}",
-						dependency, migration.app_label, selected_ancestor
+						"Cannot squash range: {} branches from selected migration {}",
+						child, selected_key
 					)));
 				}
 			}

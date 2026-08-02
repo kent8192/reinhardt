@@ -359,7 +359,7 @@ pub use shell::{ShellConfig, shell_runtime_hook};
 #[cfg(feature = "migrations")]
 pub use squashmigrations::{
 	ConfirmationReader, SquashMigrationsOptions, SquashMigrationsSummary, StdinConfirmationReader,
-	execute_squashmigrations_with_io,
+	execute_squashmigrations_with_context_and_io, execute_squashmigrations_with_io,
 };
 pub use start_commands::{StartAppCommand, StartProjectCommand};
 pub use static_asset_settings::StaticAssetSettings;

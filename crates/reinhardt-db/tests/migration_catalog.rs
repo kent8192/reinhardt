@@ -1,7 +1,8 @@
 use async_trait::async_trait;
 use reinhardt_db::migrations::{
-	DependencyCondition, FilesystemSource, Migration, MigrationCatalog, MigrationError,
-	MigrationKey, MigrationSource, OptionalDependency, Result,
+	DependencyCondition, DependencyResolutionContext, FilesystemSource, Migration,
+	MigrationCatalog, MigrationError, MigrationKey, MigrationSource, OptionalDependency, Result,
+	SwappableDependency,
 };
 use rstest::*;
 use std::fs;
@@ -157,6 +158,40 @@ async fn load_strict_rejects_a_missing_dependency() {
 	assert_eq!(
 		error.to_string(),
 		"Dependency error: Missing dependency blog.0001_initial required by blog.0002_add_title"
+	);
+}
+
+#[rstest]
+#[tokio::test]
+async fn load_strict_with_context_resolves_swappable_dependencies() {
+	// Arrange
+	let mut profiles = migration("profiles", "0001_initial", &[]);
+	profiles
+		.swappable_dependencies
+		.push(SwappableDependency::new(
+			"AUTH_USER_MODEL",
+			"auth",
+			"User",
+			"0001_initial",
+		));
+	let source = TestSource {
+		migrations: vec![migration("custom_auth", "0001_initial", &[]), profiles],
+	};
+	let context =
+		DependencyResolutionContext::new().with_setting("AUTH_USER_MODEL", "custom_auth.User");
+
+	// Act
+	let catalog = MigrationCatalog::load_strict_with_context(&source, &context)
+		.await
+		.unwrap();
+	let range = catalog
+		.squash_range("profiles", None, "0001_initial")
+		.unwrap();
+
+	// Assert
+	assert_eq!(
+		range.external_dependencies,
+		vec![("custom_auth".to_string(), "0001_initial".to_string())]
 	);
 }
 
@@ -795,6 +830,29 @@ async fn squash_range_rejects_an_outside_child_branch() {
 
 #[rstest]
 #[tokio::test]
+async fn squash_range_rejects_a_cross_application_child_branch() {
+	// Arrange
+	let catalog = catalog(vec![
+		migration("blog", "0001_initial", &[]),
+		migration("blog", "0002_drop_posts", &[("blog", "0001_initial")]),
+		migration("comments", "0001_initial", &[("blog", "0001_initial")]),
+	])
+	.await;
+
+	// Act
+	let error = catalog
+		.squash_range("blog", None, "0002_drop_posts")
+		.unwrap_err();
+
+	// Assert
+	assert_eq!(
+		error.to_string(),
+		"Invalid migration: Cannot squash range: comments.0001_initial branches from selected migration blog.0001_initial"
+	);
+}
+
+#[rstest]
+#[tokio::test]
 async fn squash_range_rejects_a_start_outside_the_end_ancestry() {
 	// Arrange
 	let catalog = catalog(vec![
@@ -833,9 +891,9 @@ async fn squash_range_rejects_conditional_dependency_cycles() {
 		.squash_range("app_a", Some("0001_initial"), "0002_optional")
 		.unwrap_err();
 
-	assert!(
-		error
-			.to_string()
-			.contains("conditional dependency app_b.0001_requires_a")
+	assert_eq!(
+		error.to_string(),
+		"Invalid migration: Cannot squash range: external dependency \
+		 app_b.0001_requires_a depends on selected migration app_a.0001_initial"
 	);
 }

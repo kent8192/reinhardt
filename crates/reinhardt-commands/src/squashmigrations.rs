@@ -2,8 +2,8 @@
 
 use crate::{CommandError, CommandResult};
 use reinhardt_db::migrations::{
-	FilesystemRepository, FilesystemSource, MigrationCatalog, MigrationError,
-	MigrationRenderOptions, MigrationSquasher,
+	DependencyResolutionContext, FilesystemRepository, FilesystemSource, MigrationCatalog,
+	MigrationError, MigrationRenderOptions, MigrationSquasher,
 };
 use std::io::{self, BufRead, IsTerminal, Write};
 use std::path::{Path, PathBuf};
@@ -150,6 +150,29 @@ pub async fn execute_squashmigrations_with_io(
 	stdout: &mut dyn Write,
 	stderr: &mut dyn Write,
 ) -> CommandResult<Option<SquashMigrationsSummary>> {
+	execute_squashmigrations_with_context_and_io(
+		migrations_root,
+		options,
+		&DependencyResolutionContext::new(),
+		confirmation,
+		stdout,
+		stderr,
+	)
+	.await
+}
+
+/// Resolve, render, confirm, and create a squashed migration source using dependency settings.
+///
+/// The context resolves swappable dependencies and activates optional dependencies
+/// consistently while loading, validating, and optimizing the selected range.
+pub async fn execute_squashmigrations_with_context_and_io(
+	migrations_root: &Path,
+	options: SquashMigrationsOptions,
+	dependency_context: &DependencyResolutionContext,
+	confirmation: &mut dyn ConfirmationReader,
+	stdout: &mut dyn Write,
+	stderr: &mut dyn Write,
+) -> CommandResult<Option<SquashMigrationsSummary>> {
 	if let Some(name) = options.squashed_name.as_deref()
 		&& !is_safe_migration_suffix(name)
 	{
@@ -159,7 +182,7 @@ pub async fn execute_squashmigrations_with_io(
 	}
 
 	let source = FilesystemSource::new(migrations_root);
-	let catalog = MigrationCatalog::load_strict(&source)
+	let catalog = MigrationCatalog::load_strict_with_context(&source, dependency_context)
 		.await
 		.map_err(migration_error_to_command_error)?;
 	let range = catalog
@@ -187,7 +210,12 @@ pub async fn execute_squashmigrations_with_io(
 		.map(|suffix| format!("{}_{}", numbered_prefix(&start_migration), suffix))
 		.unwrap_or_else(|| default_squashed_name(&start_migration, &end_migration));
 	let result = MigrationSquasher::new()
-		.squash_range(&range, &squashed_name, !options.no_optimize)
+		.squash_range_with_context(
+			&range,
+			&squashed_name,
+			!options.no_optimize,
+			dependency_context,
+		)
 		.map_err(migration_error_to_command_error)?;
 	let repository = FilesystemRepository::new(migrations_root);
 	let rendered = repository

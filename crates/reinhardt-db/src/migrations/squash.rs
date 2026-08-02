@@ -430,6 +430,9 @@ impl MigrationSquasher {
 										| Operation::AlterColumn { .. }
 								)
 							})
+							&& !optimized[create_index + 1..]
+								.iter()
+								.any(|candidate| Self::operation_references_table(candidate, name))
 					{
 						optimized = optimized
 							.into_iter()
@@ -566,6 +569,42 @@ impl MigrationSquasher {
 		}
 	}
 
+	fn operation_references_table(operation: &Operation, table: &str) -> bool {
+		let column_references_table = |definition: &crate::migrations::ColumnDefinition| {
+			matches!(
+				&definition.type_definition,
+				crate::migrations::FieldType::ForeignKey { to_table, .. } if to_table == table
+			)
+		};
+		match operation {
+			Operation::CreateTable {
+				columns,
+				constraints,
+				..
+			} => {
+				columns.iter().any(column_references_table)
+					|| constraints.iter().any(|constraint| {
+						matches!(
+							constraint,
+							crate::migrations::Constraint::ForeignKey { referenced_table, .. }
+								| crate::migrations::Constraint::OneToOne { referenced_table, .. }
+								if referenced_table == table
+						)
+					})
+			}
+			Operation::AddColumn { column, .. } => column_references_table(column),
+			Operation::AlterColumn {
+				old_definition,
+				new_definition,
+				..
+			} => {
+				column_references_table(new_definition)
+					|| old_definition.as_ref().is_some_and(column_references_table)
+			}
+			_ => false,
+		}
+	}
+
 	fn column_references_column(
 		definition: &crate::migrations::ColumnDefinition,
 		column: &str,
@@ -626,8 +665,8 @@ impl Default for MigrationSquasher {
 mod tests {
 	use super::*;
 	use crate::migrations::{
-		ColumnDefinition, DependencyCondition, FieldType, GeneratedColumnDefinition,
-		OptionalDependency,
+		ColumnDefinition, DependencyCondition, FieldType, ForeignKeyAction,
+		GeneratedColumnDefinition, OptionalDependency,
 	};
 	use reinhardt_query::prelude::GeneratedStorage;
 
@@ -829,6 +868,53 @@ mod tests {
 		// Should keep external dependency
 		assert_eq!(squashed.dependencies.len(), 1);
 		assert_eq!(squashed.dependencies[0].0, "other_app");
+	}
+
+	#[rstest::rstest]
+	fn optimize_operations_preserves_foreign_key_references_to_transient_tables() {
+		// Arrange
+		let foreign_key = ColumnDefinition::new(
+			"temp_id",
+			FieldType::ForeignKey {
+				to_table: "temp".to_string(),
+				to_field: "id".to_string(),
+				on_delete: ForeignKeyAction::NoAction,
+			},
+		);
+		let migrations = vec![
+			Migration::new("0001_initial", "app")
+				.add_operation(Operation::CreateTable {
+					name: "temp".to_string(),
+					columns: vec![ColumnDefinition::new("id", FieldType::Integer)],
+					constraints: Vec::new(),
+					without_rowid: None,
+					interleave_in_parent: None,
+					partition: None,
+				})
+				.add_operation(Operation::AddColumn {
+					table: "accounts".to_string(),
+					column: foreign_key.clone(),
+					mysql_options: None,
+				})
+				.add_operation(Operation::AlterColumn {
+					table: "accounts".to_string(),
+					column: "temp_id".to_string(),
+					old_definition: Some(foreign_key),
+					new_definition: ColumnDefinition::new("temp_id", FieldType::Integer),
+					mysql_options: None,
+				})
+				.add_operation(Operation::DropTable {
+					name: "temp".to_string(),
+				}),
+		];
+
+		// Act
+		let squashed = MigrationSquasher::new()
+			.squash(&migrations, "0001_squashed", SquashOptions::default())
+			.unwrap();
+
+		// Assert
+		assert_eq!(squashed.operations.len(), 4);
 	}
 
 	#[test]

@@ -19,6 +19,8 @@ use reinhardt_conf::HasCommonSettings;
 use reinhardt_conf::settings::builder::SettingsBuilder;
 use reinhardt_conf::settings::profile::Profile;
 use reinhardt_conf::settings::sources::{DefaultSource, LowPriorityEnvSource, TomlFileSource};
+#[cfg(feature = "migrations")]
+use reinhardt_db::migrations::DependencyResolutionContext;
 use reinhardt_utils::staticfiles::{PathResolver, StaticFilesConfig};
 use serde_json::Value;
 use std::env;
@@ -919,13 +921,20 @@ async fn run_command_core(
 			squashed_name,
 			migrations_dir,
 		} => {
+			let dependency_context =
+				settings
+					.as_ref()
+					.map_or_else(DependencyResolutionContext::new, |settings| {
+						DependencyResolutionContext::new()
+							.with_apps(settings.core().installed_apps.iter().cloned())
+					});
 			let mut confirmation = crate::StdinConfirmationReader;
 			let standard_output = std::io::stdout();
 			let standard_error = std::io::stderr();
 			let mut stdout = standard_output.lock();
 			let mut stderr = standard_error.lock();
 			let migrations_dir = migrations_dir.unwrap_or_else(default_migrations_dir);
-			crate::execute_squashmigrations_with_io(
+			crate::execute_squashmigrations_with_context_and_io(
 				&migrations_dir,
 				crate::SquashMigrationsOptions {
 					app_label,
@@ -936,6 +945,7 @@ async fn run_command_core(
 					no_header,
 					squashed_name,
 				},
+				&dependency_context,
 				&mut confirmation,
 				&mut stdout,
 				&mut stderr,

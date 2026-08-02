@@ -6,7 +6,8 @@ use crate::{
 	expr::{Condition, ConditionExpression, ConditionHolder, SimpleExpr},
 	query::{
 		AlterTableOperation, AlterTableStatement, CreateIndexStatement, CreateTableStatement,
-		DeleteStatement, InsertSource, InsertStatement, SelectStatement, UpdateStatement,
+		DeleteStatement, InsertSource, InsertStatement, SelectDistinct, SelectStatement,
+		UpdateStatement,
 	},
 	types::{
 		ColumnDef, ColumnType, JoinType, OrderExpr, OrderExprKind, SchemaExpr, TableConstraint,
@@ -90,7 +91,15 @@ impl PgvectorFeatureSet {
 
 /// Returns the first pgvector feature found in a select AST.
 pub fn select_pgvector_feature(statement: &SelectStatement) -> Option<PgvectorFeature> {
-	pgvector_feature_from_validation(validate_select_for_backend(statement, "feature inspection"))
+	let features = select_pgvector_features(statement);
+	[
+		PgvectorFeature::ColumnType,
+		PgvectorFeature::DistanceOperator,
+		PgvectorFeature::ApproximateIndex,
+		PgvectorFeature::VectorValue,
+	]
+	.into_iter()
+	.find(|feature| features.contains(*feature))
 }
 
 /// Returns every pgvector feature found in a select AST.
@@ -102,7 +111,15 @@ pub fn select_pgvector_features(statement: &SelectStatement) -> PgvectorFeatureS
 
 /// Returns the first pgvector feature found in an insert AST.
 pub fn insert_pgvector_feature(statement: &InsertStatement) -> Option<PgvectorFeature> {
-	pgvector_feature_from_validation(validate_insert_for_backend(statement, "feature inspection"))
+	let features = insert_pgvector_features(statement);
+	[
+		PgvectorFeature::ColumnType,
+		PgvectorFeature::DistanceOperator,
+		PgvectorFeature::ApproximateIndex,
+		PgvectorFeature::VectorValue,
+	]
+	.into_iter()
+	.find(|feature| features.contains(*feature))
 }
 
 /// Returns every pgvector feature found in an insert AST.
@@ -114,7 +131,15 @@ pub fn insert_pgvector_features(statement: &InsertStatement) -> PgvectorFeatureS
 
 /// Returns the first pgvector feature found in an update AST.
 pub fn update_pgvector_feature(statement: &UpdateStatement) -> Option<PgvectorFeature> {
-	pgvector_feature_from_validation(validate_update_for_backend(statement, "feature inspection"))
+	let features = update_pgvector_features(statement);
+	[
+		PgvectorFeature::ColumnType,
+		PgvectorFeature::DistanceOperator,
+		PgvectorFeature::ApproximateIndex,
+		PgvectorFeature::VectorValue,
+	]
+	.into_iter()
+	.find(|feature| features.contains(*feature))
 }
 
 /// Returns every pgvector feature found in an update AST.
@@ -124,27 +149,19 @@ pub fn update_pgvector_features(statement: &UpdateStatement) -> PgvectorFeatureS
 	features
 }
 
-fn pgvector_feature_from_validation(
-	result: Result<(), QueryBuildError>,
-) -> Option<PgvectorFeature> {
-	match result {
-		Err(QueryBuildError::UnsupportedBackendFeature { feature, .. }) => match feature {
-			"pgvector column types" => Some(PgvectorFeature::ColumnType),
-			"pgvector distance operators" => Some(PgvectorFeature::DistanceOperator),
-			"approximate vector indexes" => Some(PgvectorFeature::ApproximateIndex),
-			"pgvector values" => Some(PgvectorFeature::VectorValue),
-			_ => None,
-		},
-		Err(QueryBuildError::InvalidTemporalTruncation { .. }) => None,
-		Err(QueryBuildError::InvalidPgvectorDimensions { .. }) => None,
-		Ok(()) => None,
-	}
-}
-
 pub(crate) fn validate_select_for_backend(
 	statement: &SelectStatement,
 	backend: &'static str,
 ) -> Result<(), QueryBuildError> {
+	if backend != "PostgreSQL"
+		&& matches!(statement.distinct, Some(SelectDistinct::DistinctOn(_)))
+		&& backend != "CockroachDB"
+	{
+		return Err(QueryBuildError::UnsupportedBackendFeature {
+			feature: "DISTINCT ON",
+			backend,
+		});
+	}
 	for cte in &statement.ctes {
 		validate_select_for_backend(&cte.query, backend)?;
 	}
@@ -155,6 +172,9 @@ pub(crate) fn validate_select_for_backend(
 		validate_table_ref(table, backend)?;
 	}
 	for join in &statement.join {
+		if backend == "MySQL" && matches!(join.join, crate::types::JoinType::FullOuterJoin) {
+			return Err(unsupported("FULL OUTER JOIN", backend));
+		}
 		validate_table_ref(&join.table, backend)?;
 		if let Some(crate::types::JoinOn::Condition(condition)) = &join.on {
 			validate_condition(condition, backend)?;
@@ -1125,6 +1145,13 @@ fn validate_order_expr(order: &OrderExpr, backend: &'static str) -> Result<(), Q
 }
 
 fn validate_window(window: &WindowStatement, backend: &'static str) -> Result<(), QueryBuildError> {
+	if backend == "MySQL"
+		&& matches!(
+			window.frame.as_ref().map(|frame| &frame.frame_type),
+			Some(crate::types::FrameType::Groups)
+		) {
+		return Err(unsupported("GROUPS window frames", backend));
+	}
 	for partition in &window.partition_by {
 		validate_simple_expr(partition, backend)?;
 	}
@@ -1400,8 +1427,12 @@ mod pgvector_feature_tests {
 	use crate::prelude::{Alias, BinOper, Expr, Query, SimpleExpr};
 	use crate::types::PgBinOper;
 	use crate::value::Value;
+	use rstest::rstest;
 
-	use super::{PgvectorFeature, insert_pgvector_features};
+	use super::{
+		PgvectorFeature, insert_pgvector_feature, insert_pgvector_features,
+		select_pgvector_feature, update_pgvector_feature,
+	};
 
 	fn vector_value(values: &[f32]) -> Value {
 		Value::Vector(Some(Box::new(values.to_vec())))
@@ -1421,7 +1452,7 @@ mod pgvector_feature_tests {
 		assert!(!features.contains(PgvectorFeature::DistanceOperator));
 	}
 
-	#[test]
+	#[rstest]
 	fn insert_feature_set_collects_nested_insert_select_features() {
 		let distance = SimpleExpr::Binary(
 			Box::new(Expr::col(Alias::new("embedding")).into_simple_expr()),
@@ -1444,6 +1475,53 @@ mod pgvector_feature_tests {
 		assert!(features.contains(PgvectorFeature::VectorValue));
 	}
 
+	#[rstest]
+	fn insert_feature_inspection_ignores_unrelated_backend_validation() {
+		let distance = SimpleExpr::Binary(
+			Box::new(Expr::col(Alias::new("embedding")).into_simple_expr()),
+			BinOper::PgOperator(PgBinOper::CosineDistance),
+			Box::new(SimpleExpr::Value(vector_value(&[1.0, 2.0, 3.0]))),
+		);
+		let select = Query::select()
+			.expr(distance)
+			.from(Alias::new("source_items"))
+			.distinct_on([Alias::new("id")])
+			.to_owned();
+		let statement = Query::insert()
+			.into_table(Alias::new("distances"))
+			.columns([Alias::new("distance")])
+			.from_subquery(select)
+			.to_owned();
+
+		assert_eq!(
+			insert_pgvector_feature(&statement),
+			Some(PgvectorFeature::DistanceOperator)
+		);
+	}
+
+	#[rstest]
+	fn update_feature_inspection_ignores_unrelated_backend_validation() {
+		let distance = SimpleExpr::Binary(
+			Box::new(Expr::col(Alias::new("embedding")).into_simple_expr()),
+			BinOper::PgOperator(PgBinOper::CosineDistance),
+			Box::new(SimpleExpr::Value(vector_value(&[1.0, 2.0, 3.0]))),
+		);
+		let subquery = Query::select()
+			.expr(distance)
+			.from(Alias::new("source_items"))
+			.distinct_on([Alias::new("id")])
+			.to_owned();
+		let statement = Query::update()
+			.table(Alias::new("items"))
+			.value_expr(Alias::new("distance"), Expr::subquery(subquery))
+			.to_owned();
+
+		assert_eq!(
+			update_pgvector_feature(&statement),
+			Some(PgvectorFeature::DistanceOperator)
+		);
+	}
+
 	#[test]
 	fn insert_feature_set_collects_returning_expressions() {
 		let statement = Query::insert()
@@ -1456,5 +1534,25 @@ mod pgvector_feature_tests {
 		let features = insert_pgvector_features(&statement);
 
 		assert!(features.contains(PgvectorFeature::VectorValue));
+	}
+
+	#[test]
+	fn select_feature_inspection_ignores_unrelated_backend_validation() {
+		let distance = SimpleExpr::Binary(
+			Box::new(Expr::col(Alias::new("embedding")).into_simple_expr()),
+			BinOper::PgOperator(PgBinOper::CosineDistance),
+			Box::new(SimpleExpr::Value(vector_value(&[1.0, 2.0, 3.0]))),
+		);
+		let statement = Query::select()
+			.column(Alias::new("id"))
+			.from(Alias::new("items"))
+			.distinct_on([Alias::new("id")])
+			.and_where(distance)
+			.to_owned();
+
+		assert_eq!(
+			select_pgvector_feature(&statement),
+			Some(PgvectorFeature::DistanceOperator)
+		);
 	}
 }

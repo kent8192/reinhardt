@@ -9,7 +9,7 @@ A type-safe SQL query builder for the Reinhardt framework.
 ## Features
 
 ### DML (Data Manipulation Language)
-- **Type-safe query construction** - SELECT, INSERT, UPDATE, DELETE
+- **Type-safe query construction** - SELECT, INSERT, UPDATE, DELETE, and plan-only EXPLAIN
 - **DCL (Data Control Language) support** - GRANT and REVOKE statements
 - **Expression system** - Arithmetic, comparison, logical, and pattern matching operators
 - **Advanced SQL** - JOINs, GROUP BY, HAVING, DISTINCT, UNION, CTEs, Window functions

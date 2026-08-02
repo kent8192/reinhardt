@@ -12,6 +12,11 @@
 //! records the SQL joins required by the filter, so application code does not
 //! need raw join builders for common FK, reverse, or M2M lookups.
 //!
+//! [`QuerySet::explain`](crate::orm::QuerySet::explain) wraps the existing
+//! typed SELECT in a backend-aware, plan-only diagnostic statement. Its typed
+//! options intentionally exclude `ANALYZE`, arbitrary strings, and every
+//! option that could execute the data-producing query.
+//!
 //! QuerySet retrieval keeps the same generated-field guarantees:
 //! `latest_by`/`earliest_by` accept [`OrderingField`] values, while
 //! unique-field bulk retrieval accepts [`UniqueFieldRef`]. Bulk results use a
@@ -336,9 +341,9 @@ pub use manager::Manager;
 // Query types are always available
 pub use query::{
 	Blocking, DateProjectionField, DateProjectionOrder, DateTimeProjectionField, DateTimeTruncKind,
-	DateTruncKind, FieldAssignment, Filter, FilterCondition, FilterOperator, FilterValue,
-	IntoOrderBy, Nowait, OrmQuery, QuerySet, QuerySetStream, SelectForUpdate, SkipLocked,
-	UpdateValue,
+	DateTruncKind, ExplainBackend, ExplainBody, ExplainFormat, ExplainOptions, ExplainOutput,
+	FieldAssignment, Filter, FilterCondition, FilterOperator, FilterValue, IntoOrderBy, Nowait,
+	OrmQuery, QuerySet, QuerySetStream, SelectForUpdate, SkipLocked, UpdateValue,
 };
 
 // Advanced ORM features

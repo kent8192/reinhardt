@@ -45,6 +45,8 @@
 //! - **Typed Relation Traversal**: Compile-time checked relation paths for SELECT filters and eager loading
 //! - **Transaction-safe Row Locking**: Typed `select_for_update` targets and caller-owned transaction execution
 //! - **Scoped N+1 Detection**: Opt-in query shape detection for focused diagnostics and tests
+//! - **Plan-only Query Diagnostics**: Backend-aware `QuerySet::explain` with
+//!   typed formats and no data-executing options
 //!
 //! ### Migrations (`migrations` module)
 //!

@@ -1085,8 +1085,11 @@ impl ClientLauncher {
 			}
 		});
 
-		let _query_client_activation = provide_query_client(query_client.clone());
-		let mut root_context_guards: Vec<Box<dyn Any>> = vec![Box::new(query_client.clone())];
+		let query_client_activation = provide_query_client(query_client.clone());
+		let mut root_context_guards: Vec<Box<dyn Any>> = vec![
+			Box::new(query_client.clone()),
+			Box::new(query_client_activation),
+		];
 		root_context_guards.extend(
 			self.root_context_providers
 				.drain(..)

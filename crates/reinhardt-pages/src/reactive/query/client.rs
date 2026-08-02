@@ -529,7 +529,7 @@ pub(super) struct QueryEntry<T: Clone + 'static, E: Clone + 'static> {
 	pub(super) request: RefCell<Option<QueryRequest<T, E>>>,
 	next_generation: Cell<u64>,
 	invalidation_generation: Cell<u64>,
-	invalidated: Cell<bool>,
+	invalidated: Signal<bool>,
 	pub(super) completed: RefCell<Option<(u64, Result<T, E>)>>,
 	waiters: RefCell<Vec<Waker>>,
 	pub(super) lease_count: Cell<usize>,
@@ -653,10 +653,11 @@ impl<T: Clone + 'static, E: Clone + 'static> QueryEntry<T, E> {
 		let identity = key.identity().clone();
 		let family_id = key.family_id();
 		let scope = Rc::new(ReactiveScope::new());
-		let (state, refetch_error, is_fetching) = scope.enter(|| {
+		let (state, refetch_error, is_fetching, invalidated) = scope.enter(|| {
 			(
 				Signal::new(initial_state),
 				Signal::new(None),
+				Signal::new(false),
 				Signal::new(false),
 			)
 		});
@@ -672,7 +673,7 @@ impl<T: Clone + 'static, E: Clone + 'static> QueryEntry<T, E> {
 			request: RefCell::new(None),
 			next_generation: Cell::new(0),
 			invalidation_generation: Cell::new(0),
-			invalidated: Cell::new(false),
+			invalidated,
 			completed: RefCell::new(None),
 			waiters: RefCell::new(Vec::new()),
 			lease_count: Cell::new(0),
@@ -1194,6 +1195,10 @@ impl<T: Clone + 'static, E: Clone + 'static> QueryEntry<T, E> {
 			self.invalidation_generation.get() > request_invalidation_generation;
 		let manual_refetch_queued = self.refetch_after_in_flight.replace(false);
 		let queued_manual_observer = self.queued_manual_refetch.borrow_mut().take();
+		let queued_manual_observer_was_present = queued_manual_observer.is_some();
+		let queued_manual_observer_is_live = queued_manual_observer
+			.as_ref()
+			.is_some_and(|observer| observer.strong_count() > 0);
 		let same_observer_is_queued = manual_observer.as_ref().is_some_and(|active| {
 			queued_manual_observer
 				.as_ref()
@@ -1207,7 +1212,8 @@ impl<T: Clone + 'static, E: Clone + 'static> QueryEntry<T, E> {
 			&& self.lease_count.get() > 0
 		{
 			self.start_fetch_with(true, Some(observer));
-		} else if (manual_refetch_queued
+		} else if ((manual_refetch_queued
+			&& (!queued_manual_observer_was_present || queued_manual_observer_is_live))
 			|| (invalidated_during_request && self.has_active_invalidation_interest()))
 			&& self.lease_count.get() > 0
 		{
@@ -1266,6 +1272,9 @@ impl<T: Clone + 'static, E: Clone + 'static> QueryLease<T, E> {
 			self.inner
 				.consumer
 				.set(QueryConsumer::MountedRoute(generation));
+			if self.inner.entry.invalidated.get() && !self.inner.entry.has_request() {
+				self.inner.entry.start_fetch(true);
+			}
 		}
 	}
 

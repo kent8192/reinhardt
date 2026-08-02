@@ -338,6 +338,35 @@ fn disabled_observer_reads_cache_and_can_refetch_explicitly() {
 }
 
 #[test]
+fn invalidation_notifies_a_disabled_observer_of_staleness() {
+	ReactiveScope::run(|| {
+		let runtime = TestQueryRuntime::new();
+		let client = QueryClient::with_runtime(QueryDefaults::default(), runtime.handle());
+		let family =
+			QueryFamily::<(), String, String>::new("tests.disabled-invalidation-notification");
+		let descriptor = family.query((), || async { Ok("cached".to_string()) });
+		let key = descriptor.key().clone();
+		let enabled = client.observe(descriptor.clone(), QueryOptions::default());
+		runtime.run_until_stalled();
+		drop(enabled);
+		let disabled = client.observe(descriptor, QueryOptions::new().enabled(false));
+		let observed_staleness = Rc::new(Cell::new(false));
+		let observed_staleness_for_effect = Rc::clone(&observed_staleness);
+		let query_for_effect = disabled.clone();
+		let _effect = reinhardt_core::reactive::Effect::new(move || {
+			observed_staleness_for_effect.set(query_for_effect.is_stale());
+		});
+		assert!(!observed_staleness.get());
+
+		client.invalidate(&key);
+		reinhardt_core::reactive::runtime::with_runtime(|runtime| runtime.flush_updates());
+
+		assert!(observed_staleness.get());
+		assert_eq!(disabled.data(), Some("cached".to_string()));
+	});
+}
+
+#[test]
 fn disabled_refetch_prefers_the_earliest_live_enabled_observer_fetcher() {
 	let runtime = TestQueryRuntime::new();
 	let client = QueryClient::with_runtime(QueryDefaults::default(), runtime.handle());
@@ -1830,6 +1859,77 @@ fn invalidation_during_in_flight_fetch_runs_after_completion() {
 		assert_eq!(calls.get(), 2);
 		assert_eq!(query.data(), Some(2));
 	});
+}
+
+#[rstest]
+fn promoted_navigation_lease_refetches_if_invalidated_while_loading() {
+	let runtime = TestQueryRuntime::new();
+	let client = QueryClient::with_runtime(QueryDefaults::default(), runtime.handle());
+	let family = QueryFamily::<(), i32, String>::new("tests.promoted-navigation-invalidation");
+	let key = family.key(());
+	let fetch_count = Rc::new(Cell::new(0));
+	let descriptor = family.query((), {
+		let client = client.clone();
+		let key = key.clone();
+		let fetch_count = Rc::clone(&fetch_count);
+		move || {
+			let client = client.clone();
+			let key = key.clone();
+			let call = fetch_count.get() + 1;
+			fetch_count.set(call);
+			async move {
+				if call == 1 {
+					client.invalidate(&key);
+				}
+				Ok::<_, String>(call)
+			}
+		}
+	});
+	let lease = client.acquire(
+		descriptor,
+		QueryAcquireOptions {
+			consumer: QueryConsumer::Navigation(8),
+			error_policy: QueryErrorPolicy::Discard,
+		},
+	);
+	runtime.run_until_stalled();
+	assert_eq!(fetch_count.get(), 1);
+
+	lease.promote_to_mounted_route(8);
+	runtime.run_until_stalled();
+
+	assert_eq!(fetch_count.get(), 2);
+}
+
+#[test]
+fn dropping_a_queued_manual_refetch_observer_does_not_start_a_fallback_fetch() {
+	let runtime = TestQueryRuntime::new();
+	let client = QueryClient::with_runtime(QueryDefaults::default(), runtime.handle());
+	let family = QueryFamily::<(), String, String>::new("tests.dropped-manual-refetch");
+	let ready = Rc::new(Cell::new(false));
+	let calls = Rc::new(Cell::new(0));
+	let descriptor = family.query((), {
+		let ready = Rc::clone(&ready);
+		let calls = Rc::clone(&calls);
+		move || {
+			calls.set(calls.get() + 1);
+			TestGate {
+				ready: Rc::clone(&ready),
+				dropped: Rc::new(Cell::new(0)),
+				result: Some(Ok("initial".to_string())),
+			}
+		}
+	});
+	let queued_observer = client.observe(descriptor.clone(), QueryOptions::default());
+	let remaining_observer = client.observe(descriptor, QueryOptions::default());
+	queued_observer.refetch();
+	drop(queued_observer);
+
+	ready.set(true);
+	runtime.run_until_stalled();
+
+	assert_eq!(calls.get(), 1);
+	assert_eq!(remaining_observer.data(), Some("initial".to_string()));
 }
 
 #[test]

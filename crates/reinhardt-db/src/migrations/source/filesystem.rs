@@ -195,6 +195,12 @@ impl MigrationSource for FilesystemSource {
 			if path.extension().and_then(|s| s.to_str()) != Some("rs") {
 				continue;
 			}
+			if matches!(
+				path.file_name().and_then(|name| name.to_str()),
+				Some("migrations.rs" | "mod.rs")
+			) {
+				continue;
+			}
 
 			// Skip files directly in root_dir (need at least one subdirectory for app_label)
 			let relative_path = match path.strip_prefix(&self.root_dir) {
@@ -323,6 +329,41 @@ pub fn migration() -> Migration {
 		assert_eq!(migrations.len(), 2);
 		assert!(migrations.iter().any(|m| m.app_label == "polls"));
 		assert!(migrations.iter().any(|m| m.app_label == "users"));
+	}
+
+	#[rstest]
+	#[tokio::test]
+	#[serial(filesystem_source)]
+	async fn filesystem_source_skips_rust_migration_module_entry_points() {
+		// Arrange
+		let temp_dir = TempDir::new().unwrap();
+		create_migration_file(
+			temp_dir.path(),
+			"polls",
+			"0001_initial",
+			r#"
+use reinhardt_db::migrations::prelude::*;
+
+pub fn migration() -> Migration {
+	Migration::new("0001_initial", "polls")
+}
+"#,
+		);
+		fs::write(
+			temp_dir.path().join("polls/migrations.rs"),
+			"pub mod _0001_initial;",
+		)
+		.expect("write a Rust module entry point");
+
+		// Act
+		let migrations = FilesystemSource::new(temp_dir.path())
+			.all_migrations()
+			.await
+			.expect("load migration files");
+
+		// Assert
+		assert_eq!(migrations.len(), 1);
+		assert_eq!(migrations[0].name, "0001_initial");
 	}
 
 	#[rstest]

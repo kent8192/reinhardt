@@ -97,14 +97,35 @@ fn render_sql_statement(sql: &str, dialect: SqlDialect) -> String {
 	format!("{sql};\n")
 }
 
+fn quote_uses_backslash_escapes(dialect: SqlDialect, delimiter: char, prefix: &str) -> bool {
+	if matches!(dialect, SqlDialect::Mysql) {
+		return true;
+	}
+
+	if !matches!(dialect, SqlDialect::Postgres | SqlDialect::Cockroachdb) || delimiter != '\'' {
+		return false;
+	}
+
+	let Some((escape_prefix_index, escape_prefix)) = prefix.char_indices().last() else {
+		return false;
+	};
+	if !matches!(escape_prefix, 'E' | 'e') {
+		return false;
+	}
+	prefix[..escape_prefix_index]
+		.chars()
+		.last()
+		.is_none_or(|character| !(character.is_ascii_alphanumeric() || character == '_'))
+}
+
 fn trailing_line_comment_start(sql: &str, dialect: SqlDialect) -> Option<usize> {
 	let line_start = sql.rfind('\n').map_or(0, |index| index + 1);
 	let line = &sql[line_start..];
 	let mut quote = None;
 	let mut chars = line.char_indices().peekable();
 	while let Some((index, character)) = chars.next() {
-		if let Some(delimiter) = quote {
-			if matches!(dialect, SqlDialect::Mysql) && character == '\\' && chars.peek().is_some() {
+		if let Some((delimiter, backslash_escapes)) = quote {
+			if backslash_escapes && character == '\\' && chars.peek().is_some() {
 				chars.next();
 				continue;
 			}
@@ -118,7 +139,12 @@ fn trailing_line_comment_start(sql: &str, dialect: SqlDialect) -> Option<usize> 
 			continue;
 		}
 		match character {
-			'\'' | '"' | '`' => quote = Some(character),
+			'\'' | '"' | '`' => {
+				quote = Some((
+					character,
+					quote_uses_backslash_escapes(dialect, character, &line[..index]),
+				));
+			}
 			'-' if chars.peek().is_some_and(|(_, next)| *next == '-') => {
 				return Some(line_start + index);
 			}
@@ -156,8 +182,8 @@ fn split_sql_statements_for_dialect(sql: &str, dialect: SqlDialect) -> Vec<Strin
 	#[derive(Debug, PartialEq)]
 	enum State {
 		Normal,
-		SingleQuote,
-		DoubleQuote,
+		SingleQuote { backslash_escapes: bool },
+		DoubleQuote { backslash_escapes: bool },
 		BacktickQuote,
 		LineComment,
 		BlockComment,
@@ -170,11 +196,13 @@ fn split_sql_statements_for_dialect(sql: &str, dialect: SqlDialect) -> Vec<Strin
 		match state {
 			State::Normal => {
 				if ch == '\'' {
+					let backslash_escapes = quote_uses_backslash_escapes(dialect, ch, &current);
 					current.push(ch);
-					state = State::SingleQuote;
+					state = State::SingleQuote { backslash_escapes };
 				} else if ch == '"' {
+					let backslash_escapes = quote_uses_backslash_escapes(dialect, ch, &current);
 					current.push(ch);
-					state = State::DoubleQuote;
+					state = State::DoubleQuote { backslash_escapes };
 				} else if ch == '`' {
 					current.push(ch);
 					state = State::BacktickQuote;
@@ -215,7 +243,7 @@ fn split_sql_statements_for_dialect(sql: &str, dialect: SqlDialect) -> Vec<Strin
 					current.push(ch);
 				}
 			}
-			State::SingleQuote => {
+			State::SingleQuote { backslash_escapes } => {
 				current.push(ch);
 				if ch == '\'' {
 					if chars.peek() == Some(&'\'') {
@@ -223,15 +251,15 @@ fn split_sql_statements_for_dialect(sql: &str, dialect: SqlDialect) -> Vec<Strin
 					} else {
 						state = State::Normal;
 					}
-				} else if ch == '\\' && chars.peek().is_some() {
+				} else if backslash_escapes && ch == '\\' && chars.peek().is_some() {
 					current.push(chars.next().expect("peeked escaped character"));
 				}
 			}
-			State::DoubleQuote => {
+			State::DoubleQuote { backslash_escapes } => {
 				current.push(ch);
 				if ch == '"' {
 					state = State::Normal;
-				} else if ch == '\\' && chars.peek().is_some() {
+				} else if backslash_escapes && ch == '\\' && chars.peek().is_some() {
 					current.push(chars.next().expect("peeked escaped character"));
 				}
 			}
@@ -1983,6 +2011,51 @@ mod tests {
 	use crate::migrations::{
 		BulkLoadFormat, BulkLoadOptions, BulkLoadSource, ColumnDefinition, FieldType,
 	};
+	use rstest::rstest;
+
+	#[rstest]
+	#[case(
+		SqlDialect::Postgres,
+		r"SELECT 'C:\\'; SELECT 2;",
+		&[r"SELECT 'C:\\'", "SELECT 2"]
+	)]
+	#[case(
+		SqlDialect::Sqlite,
+		r"SELECT 'C:\\'; SELECT 2;",
+		&[r"SELECT 'C:\\'", "SELECT 2"]
+	)]
+	#[case(
+		SqlDialect::Mysql,
+		r"SELECT 'it\'s; still'; SELECT 2;",
+		&[r"SELECT 'it\'s; still'", "SELECT 2"]
+	)]
+	#[case(
+		SqlDialect::Postgres,
+		r"SELECT E'it\'s; still'; SELECT 2;",
+		&[r"SELECT E'it\'s; still'", "SELECT 2"]
+	)]
+	fn split_sql_statements_uses_dialect_specific_backslash_rules(
+		#[case] dialect: SqlDialect,
+		#[case] sql: &str,
+		#[case] expected: &[&str],
+	) {
+		let statements = split_sql_statements_for_dialect(sql, dialect);
+
+		assert_eq!(
+			statements.iter().map(String::as_str).collect::<Vec<_>>(),
+			expected
+		);
+	}
+
+	#[rstest]
+	fn trailing_line_comment_detection_uses_standard_postgres_quote_rules() {
+		let sql = r"SELECT 'C:\\'; -- comment";
+
+		assert_eq!(
+			trailing_line_comment_start(sql, SqlDialect::Postgres),
+			sql.find("--")
+		);
+	}
 
 	#[test]
 	fn mysql_hash_comment_does_not_split_on_its_semicolon() {

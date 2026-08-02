@@ -1,6 +1,7 @@
 use reinhardt_db::migrations::{
-	ColumnDefinition, FieldType, FilesystemRepository, Migration, MigrationError,
-	MigrationRenderOptions, MigrationSource, Operation,
+	BulkLoadFormat, BulkLoadOptions, BulkLoadSource, ColumnDefinition, FieldType,
+	FilesystemRepository, Migration, MigrationError, MigrationRenderOptions, MigrationSource,
+	Operation,
 	dependency::{DependencyCondition, OptionalDependency, SwappableDependency},
 };
 use std::fs;
@@ -73,6 +74,12 @@ async fn render_preserves_dependencies_replacements_flags_and_conditional_metada
 		"0001_initial",
 		DependencyCondition::FeatureEnabled("audit".to_string()),
 	)];
+	migration.operations.push(Operation::BulkLoad {
+		table: "accounts".to_string(),
+		source: BulkLoadSource::Stdin,
+		format: BulkLoadFormat::Csv,
+		options: BulkLoadOptions::default(),
+	});
 
 	let source = repository
 		.render(

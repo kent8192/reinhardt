@@ -550,7 +550,6 @@ impl FilesystemRepository {
 			| Operation::MoveModel { .. }
 			| Operation::CreateSchema { .. }
 			| Operation::DropSchema { .. }
-			| Operation::BulkLoad { .. }
 			| Operation::SetAutoIncrementValue { .. }
 			| Operation::CreateCompositePrimaryKey { .. } => {
 				Err(MigrationError::UnsupportedMigrationRendering { operation: context })

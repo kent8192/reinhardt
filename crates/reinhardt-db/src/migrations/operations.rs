@@ -53,7 +53,7 @@ pub use special::{RunCode, RunSQL, StateOperation};
 // Legacy types for backward compatibility
 // These are maintained from the original operations.rs
 use super::IndexDefinition;
-use super::{FieldState, FieldType, ModelState, ProjectState};
+use super::{ConstraintDefinition, FieldState, FieldType, ModelState, ProjectState};
 use pg_escape::{quote_identifier, quote_literal};
 use reinhardt_query::prelude::{
 	Alias, AlterTableStatement, CockroachDBQueryBuilder, ColumnDef, ColumnType as QueryColumnType,
@@ -1819,12 +1819,7 @@ impl Operation {
 				model.add_field(join_field);
 
 				for column in columns {
-					let field = FieldState::new(
-						column.name.to_string(),
-						column.type_definition.clone(),
-						false,
-					);
-					model.add_field(field);
+					model.add_field(field_state_from_column(column));
 				}
 				state.add_model(model);
 			}
@@ -1951,10 +1946,37 @@ impl Operation {
 			Operation::RunSQL { .. } => {
 				state.has_opaque_schema_operations = true;
 			}
+			Operation::AlterUniqueTogether {
+				table,
+				unique_together,
+			} => {
+				if let Some(model) = state.find_model_by_table_mut(table) {
+					let prefix = format!("{table}_");
+					model.constraints.retain(|constraint| {
+						let generated_unique_together_name = constraint
+							.name
+							.strip_prefix(&prefix)
+							.and_then(|suffix| suffix.strip_suffix("_uniq"))
+							.is_some_and(|index| index.parse::<usize>().is_ok());
+						!(constraint.constraint_type.eq_ignore_ascii_case("unique")
+							&& generated_unique_together_name)
+					});
+					model
+						.constraints
+						.extend(unique_together.iter().enumerate().map(|(index, fields)| {
+							ConstraintDefinition {
+								name: format!("{table}_{index}_uniq"),
+								constraint_type: "unique".to_string(),
+								fields: fields.clone(),
+								expression: None,
+								foreign_key_info: None,
+							}
+						}));
+				}
+			}
 			Operation::RestoreIndexOnRollback { .. }
 			| Operation::RunRust { .. }
 			| Operation::AlterTableComment { .. }
-			| Operation::AlterUniqueTogether { .. }
 			| Operation::AlterModelOptions { .. }
 			| Operation::SetAutoIncrementValue { .. } => {
 				// Counter/constraint-level ops do not affect ProjectState
@@ -11411,7 +11433,7 @@ mod tests {
 		);
 	}
 
-	#[test]
+	#[rstest]
 	fn test_state_forwards_create_inherited_table() {
 		let mut state = ProjectState::new();
 		let op = Operation::CreateInheritedTable {
@@ -11423,7 +11445,7 @@ mod tests {
 				unique: false,
 				primary_key: false,
 				auto_increment: false,
-				default: None,
+				default: Some("1".to_string()),
 				generated: None,
 				domain: None,
 			}],
@@ -11448,6 +11470,48 @@ mod tests {
 			Some("joined_table".to_string()),
 			"inheritance_type should be 'joined_table'"
 		);
+		let field = model
+			.fields
+			.get("admin_level")
+			.expect("inherited field should be present");
+		assert!(!field.nullable);
+		assert_eq!(field.params.get("default"), Some(&"1".to_string()));
+		assert_eq!(field.params.get("unique"), Some(&"false".to_string()));
+	}
+
+	#[rstest]
+	fn state_forwards_alter_unique_together_replaces_previous_generated_constraints() {
+		// Arrange
+		let mut state = ProjectState::new();
+		Operation::CreateTable {
+			name: "users".to_string(),
+			columns: vec![ColumnDefinition::new("id", FieldType::Integer)],
+			constraints: vec![],
+			without_rowid: None,
+			interleave_in_parent: None,
+			partition: None,
+		}
+		.state_forwards("myapp", &mut state);
+		Operation::AlterUniqueTogether {
+			table: "users".to_string(),
+			unique_together: vec![vec!["email".to_string(), "username".to_string()]],
+		}
+		.state_forwards("myapp", &mut state);
+
+		// Act
+		Operation::AlterUniqueTogether {
+			table: "users".to_string(),
+			unique_together: vec![vec!["email".to_string()]],
+		}
+		.state_forwards("myapp", &mut state);
+
+		// Assert
+		let model = state
+			.find_model_by_table("users")
+			.expect("users model should be present");
+		assert_eq!(model.constraints.len(), 1);
+		assert_eq!(model.constraints[0].name, "users_0_uniq");
+		assert_eq!(model.constraints[0].fields, vec!["email"]);
 	}
 
 	#[test]

@@ -29,6 +29,7 @@ pub struct MigrationSnapshot {
 pub struct MigrationCatalog {
 	migrations: HashMap<MigrationKey, Migration>,
 	graph: MigrationGraph,
+	raw_graph: MigrationGraph,
 }
 
 impl std::fmt::Debug for MigrationCatalog {
@@ -151,6 +152,25 @@ impl MigrationCatalog {
 				}
 			}
 		}
+		let resolve_first_dependency =
+			|dependency: MigrationKey, key: &MigrationKey| -> Result<MigrationKey> {
+				if dependency.name == "__first__" {
+					migrations
+						.keys()
+						.filter(|candidate| candidate.app_label == dependency.app_label)
+						.min_by(|left, right| Self::compare_keys(left, right))
+						.cloned()
+						.ok_or_else(|| {
+							MigrationError::DependencyError(format!(
+								"Missing first migration for app {} required by {}",
+								dependency.app_label, key
+							))
+						})
+				} else {
+					Ok(dependency)
+				}
+			};
+
 		for key in &migration_keys {
 			let migration = migrations
 				.get(key)
@@ -163,21 +183,7 @@ impl MigrationCatalog {
 				.unwrap_or_default();
 			dependencies.sort_by(Self::compare_keys);
 			for dependency in dependencies {
-				let dependency = if dependency.name == "__first__" {
-					migrations
-						.keys()
-						.filter(|candidate| candidate.app_label == dependency.app_label)
-						.min_by(|left, right| Self::compare_keys(left, right))
-						.cloned()
-						.ok_or_else(|| {
-							MigrationError::DependencyError(format!(
-								"Missing first migration for app {} required by {}",
-								dependency.app_label, key
-							))
-						})?
-				} else {
-					dependency
-				};
+				let dependency = resolve_first_dependency(dependency, key)?;
 				let dependency = replacement_owners
 					.get(&dependency)
 					.cloned()
@@ -192,46 +198,48 @@ impl MigrationCatalog {
 		}
 
 		let mut graph = MigrationGraph::new();
+		let mut raw_graph = MigrationGraph::new();
 		for (key, migration) in &migrations {
 			let mut graph_for_migration = MigrationGraph::new();
 			graph_for_migration.add_migration_with_context(migration, context);
-			let dependencies = graph_for_migration
+			let raw_dependencies = graph_for_migration
 				.get_dependencies(key)
 				.unwrap_or_default()
 				.iter()
 				.map(|dependency| {
-					let dependency = if dependency.name == "__first__" {
-						migrations
-							.keys()
-							.filter(|candidate| candidate.app_label == dependency.app_label)
-							.min_by(|left, right| Self::compare_keys(left, right))
-							.cloned()
-							.ok_or_else(|| {
-								MigrationError::DependencyError(format!(
-									"Missing first migration for app {} required by {}",
-									dependency.app_label, key
-								))
-							})?
+					let dependency = resolve_first_dependency(dependency.clone(), key)?;
+					Ok(if migrations.contains_key(&dependency) {
+						dependency
 					} else {
-						dependency.clone()
-					};
-					Ok(replacement_owners
-						.get(&dependency)
-						.cloned()
-						.unwrap_or(dependency))
+						replacement_owners
+							.get(&dependency)
+							.cloned()
+							.unwrap_or(dependency)
+					})
 				})
 				.collect::<Result<Vec<_>>>()?;
+			let dependencies = raw_dependencies
+				.iter()
+				.map(|dependency| {
+					replacement_owners
+						.get(dependency)
+						.cloned()
+						.unwrap_or_else(|| dependency.clone())
+				})
+				.collect();
 			let replaces = migration
 				.replaces
 				.iter()
 				.map(|(app, name)| MigrationKey::new(app, name))
 				.collect();
 			graph.add_migration_with_replaces(key.clone(), dependencies, replaces);
+			raw_graph.add_migration(key.clone(), raw_dependencies);
 		}
 
 		let mut cycle_nodes: Vec<String> = graph
 			.detect_all_cycles()
 			.into_iter()
+			.chain(raw_graph.detect_all_cycles())
 			.flatten()
 			.map(|key| key.id())
 			.collect();
@@ -243,8 +251,13 @@ impl MigrationCatalog {
 			});
 		}
 		graph.topological_sort()?;
+		raw_graph.topological_sort()?;
 
-		Ok(Self { migrations, graph })
+		Ok(Self {
+			migrations,
+			graph,
+			raw_graph,
+		})
 	}
 
 	/// Build an immutable applied-state snapshot for selected applications.
@@ -576,7 +589,7 @@ impl MigrationCatalog {
 
 		let mut selected = HashSet::new();
 		let mut pending = self
-			.graph
+			.raw_graph
 			.get_dependencies(target)
 			.unwrap_or_default()
 			.to_vec();
@@ -589,7 +602,7 @@ impl MigrationCatalog {
 				continue;
 			}
 			pending.extend(
-				self.graph
+				self.raw_graph
 					.get_dependencies(&key)
 					.unwrap_or_default()
 					.iter()
@@ -598,7 +611,7 @@ impl MigrationCatalog {
 		}
 
 		let mut state = ProjectState::default();
-		for key in self.graph.topological_sort()? {
+		for key in self.raw_graph.topological_sort()? {
 			if !selected.contains(&key) {
 				continue;
 			}

@@ -41,6 +41,10 @@
 //! returns a continuous, same-application ancestor range in dependency order,
 //! preserves dependencies entering that range, and rejects ambiguous or
 //! externally re-entering ancestry.
+//! Filesystem discovery loads Rust migration implementations while ignoring
+//! Rust module entry points such as `migrations.rs`.
+//! Historical state reconstruction preserves original dependency chains when
+//! the requested target is an original migration that a squash replaces.
 //!
 //! [`MigrationSquasher`] combines the selected range while retaining exact
 //! replacement identities and stable metadata. Its optimizer applies only
@@ -169,7 +173,10 @@ pub use dependency::{
 	OptionalDependency, SwappableDependency,
 };
 pub use di_support::{MigrationConfig, MigrationService as DIMigrationService};
-pub use executor::{DatabaseMigrationExecutor, ExecutionResult, OperationOptimizer};
+pub use executor::{
+	DatabaseMigrationExecutor, ExecutionResult, OperationOptimizer, ReplacementMigrationSelection,
+	select_replacement_migrations,
+};
 pub use fields::FieldType;
 pub use graph::{MigrationGraph, MigrationKey, MigrationNode};
 pub use migration::Migration;

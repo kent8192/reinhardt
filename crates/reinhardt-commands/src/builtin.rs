@@ -7,7 +7,9 @@ use async_trait::async_trait;
 use std::path::PathBuf;
 
 #[cfg(feature = "migrations")]
-use reinhardt_db::migrations::DatabaseMigrationExecutor;
+use reinhardt_db::migrations::{
+	DatabaseMigrationExecutor, MigrationKey, select_replacement_migrations,
+};
 
 #[cfg(feature = "migrations")]
 use reinhardt_db::backends::{DatabaseConnection, DatabaseType};
@@ -463,16 +465,39 @@ impl BaseCommand for MigrateCommand {
 					.filter(|m| needed.contains(&(m.app_label.clone(), m.name.clone())))
 					.cloned()
 					.collect();
+				let applied_keys = applied
+					.iter()
+					.map(|record| MigrationKey::new(&record.app, &record.name))
+					.collect();
+				let replacement_selection = select_replacement_migrations(&to_apply, &applied_keys)
+					.map_err(|error| {
+						crate::CommandError::ExecutionError(format!(
+							"Failed to select replacement migrations: {}",
+							error
+						))
+					})?;
+				let replacement_adoptions: Vec<_> = replacement_selection
+					.replacements_to_adopt()
+					.iter()
+					.copied()
+					.cloned()
+					.collect();
+				let selected_to_apply: Vec<_> = replacement_selection
+					.migrations()
+					.iter()
+					.copied()
+					.cloned()
+					.collect();
 
 				let applied_names: HashSet<&str> =
 					applied_for_app.iter().map(|r| r.name.as_str()).collect();
-				let pending: Vec<_> = to_apply
+				let pending: Vec<_> = selected_to_apply
 					.iter()
 					.filter(|m| !applied_names.contains(m.name.as_str()))
 					.collect();
 				let pending = dependency_ordered_migrations(pending)?;
 
-				if pending.is_empty() {
+				if pending.is_empty() && replacement_adoptions.is_empty() {
 					ctx.info(&format!(
 						"Already at or past {}:{}; nothing to apply.",
 						app, target_name
@@ -481,6 +506,12 @@ impl BaseCommand for MigrateCommand {
 				}
 
 				if is_plan {
+					for replacement in &replacement_adoptions {
+						ctx.info(&format!(
+							"  - {}:{} (adopt replacement)",
+							replacement.app_label, replacement.name
+						));
+					}
 					ctx.info(&format!(
 						"[plan] Would apply {} migration(s) for app '{}' to reach target '{}':",
 						pending.len(),
@@ -498,6 +529,25 @@ impl BaseCommand for MigrateCommand {
 
 				if is_fake {
 					ctx.info("Faking migrations (marking as applied without executing):");
+					for replacement in &replacement_adoptions {
+						recorder
+							.adopt_replacement(
+								&replacement.app_label,
+								&replacement.name,
+								&replacement.replaces,
+							)
+							.await
+							.map_err(|e| {
+								crate::CommandError::ExecutionError(format!(
+									"Failed to adopt fake replacement {}:{}: {}",
+									replacement.app_label, replacement.name, e
+								))
+							})?;
+						ctx.success(&format!(
+							"  ✓ Adopted replacement: {}:{}",
+							replacement.app_label, replacement.name
+						));
+					}
 					for migration in &pending {
 						recorder
 							.record_applied(&migration.app_label, &migration.name)
@@ -573,8 +623,23 @@ impl BaseCommand for MigrateCommand {
 				use reinhardt_db::migrations::DatabaseMigrationRecorder;
 				let recorder = DatabaseMigrationRecorder::new(connection.clone());
 				let applied = plan_applied_migrations(&connection, &recorder).await?;
-				let pending: Vec<_> = migrations_to_apply
+				let applied_keys = applied
 					.iter()
+					.map(|record| MigrationKey::new(&record.app, &record.name))
+					.collect();
+				let replacement_selection =
+					select_replacement_migrations(&migrations_to_apply, &applied_keys).map_err(
+						|error| {
+							crate::CommandError::ExecutionError(format!(
+								"Failed to select replacement migrations: {}",
+								error
+							))
+						},
+					)?;
+				let pending: Vec<_> = replacement_selection
+					.migrations()
+					.iter()
+					.copied()
 					.filter(|m| {
 						!applied
 							.iter()
@@ -582,9 +647,15 @@ impl BaseCommand for MigrateCommand {
 					})
 					.collect();
 				let pending = dependency_ordered_migrations(pending)?;
-				if pending.is_empty() {
+				if pending.is_empty() && replacement_selection.replacements_to_adopt().is_empty() {
 					ctx.info("[plan] No unapplied migrations.");
 					return Ok(());
+				}
+				for replacement in replacement_selection.replacements_to_adopt() {
+					ctx.info(&format!(
+						"  - {}:{} (adopt replacement)",
+						replacement.app_label, replacement.name
+					));
 				}
 				ctx.info(&format!(
 					"[plan] Would apply {} migration(s):",
@@ -602,10 +673,58 @@ impl BaseCommand for MigrateCommand {
 			// 6. Apply migrations (or fake them
 			if is_fake {
 				ctx.info("Faking migrations (marking as applied without execution):");
+				use reinhardt_db::migrations::DatabaseMigrationRecorder;
+				let recorder = DatabaseMigrationRecorder::new(connection.clone());
+				recorder.ensure_schema_table().await.map_err(|error| {
+					crate::CommandError::ExecutionError(format!(
+						"Failed to ensure migration recorder table: {}",
+						error
+					))
+				})?;
+				let applied = recorder.get_applied_migrations().await.map_err(|error| {
+					crate::CommandError::ExecutionError(format!(
+						"Failed to query applied migrations: {}",
+						error
+					))
+				})?;
+				let applied_keys = applied
+					.iter()
+					.map(|record| MigrationKey::new(&record.app, &record.name))
+					.collect();
+				let replacement_selection =
+					select_replacement_migrations(&migrations_to_apply, &applied_keys).map_err(
+						|error| {
+							crate::CommandError::ExecutionError(format!(
+								"Failed to select replacement migrations: {}",
+								error
+							))
+						},
+					)?;
+				for replacement in replacement_selection.replacements_to_adopt() {
+					recorder
+						.adopt_replacement(
+							&replacement.app_label,
+							&replacement.name,
+							&replacement.replaces,
+						)
+						.await
+						.map_err(|error| {
+							crate::CommandError::ExecutionError(format!(
+								"Failed to adopt fake replacement {}:{}: {}",
+								replacement.app_label, replacement.name, error
+							))
+						})?;
+					ctx.success(&format!(
+						"  ✓ Adopted replacement: {}:{}",
+						replacement.app_label, replacement.name
+					));
+				}
 
 				// Create migration executor for fake migrations
 				let mut executor = DatabaseMigrationExecutor::new(connection);
-				let migrations_to_fake = dependency_ordered_migrations(migrations_to_apply.iter())?;
+				let migrations_to_fake = dependency_ordered_migrations(
+					replacement_selection.migrations().iter().copied(),
+				)?;
 
 				// Record each migration as applied without executing
 				for migration in migrations_to_fake {

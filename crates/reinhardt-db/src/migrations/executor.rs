@@ -58,6 +58,98 @@ pub struct ExecutionResult {
 	pub failed: Option<String>,
 }
 
+/// A replacement-aware subset of migrations selected for execution or display.
+///
+/// Replacement migrations supersede their replaced migrations on a fresh
+/// database. When every replaced migration is already recorded, the
+/// replacement is selected for recorder adoption instead. A partially applied
+/// replacement set is invalid because neither history can be chosen safely.
+#[derive(Debug)]
+pub struct ReplacementMigrationSelection<'a> {
+	migrations: Vec<&'a Migration>,
+	replacements_to_adopt: Vec<&'a Migration>,
+}
+
+impl<'a> ReplacementMigrationSelection<'a> {
+	/// Return migrations that remain after replacement selection.
+	pub fn migrations(&self) -> &[&'a Migration] {
+		&self.migrations
+	}
+
+	/// Return replacements whose complete original history must be adopted.
+	pub fn replacements_to_adopt(&self) -> &[&'a Migration] {
+		&self.replacements_to_adopt
+	}
+}
+
+/// Select one side of each replacement set from the supplied migration list.
+///
+/// This function is shared by the executor and command previews so `--plan`,
+/// `--fake`, and real execution report the same migration history.
+pub fn select_replacement_migrations<'a>(
+	migrations: &'a [Migration],
+	applied: &HashSet<super::graph::MigrationKey>,
+) -> Result<ReplacementMigrationSelection<'a>> {
+	let mut excluded = HashSet::new();
+	let mut replacements_to_adopt = Vec::new();
+
+	for replacement in migrations
+		.iter()
+		.filter(|migration| !migration.replaces.is_empty())
+	{
+		let replacement_key = super::graph::MigrationKey::new(
+			replacement.app_label.clone(),
+			replacement.name.clone(),
+		);
+		let replacement_is_applied = applied.contains(&replacement_key);
+		let replaced_applied = replacement
+			.replaces
+			.iter()
+			.filter(|(app, name)| {
+				applied.contains(&super::graph::MigrationKey::new(app.clone(), name.clone()))
+			})
+			.count();
+
+		if replacement_is_applied || replaced_applied == 0 {
+			excluded.extend(
+				replacement
+					.replaces
+					.iter()
+					.map(|(app, name)| super::graph::MigrationKey::new(app.clone(), name.clone())),
+			);
+		} else if replaced_applied == replacement.replaces.len() {
+			replacements_to_adopt.push(replacement);
+			excluded.extend(
+				replacement
+					.replaces
+					.iter()
+					.map(|(app, name)| super::graph::MigrationKey::new(app.clone(), name.clone())),
+			);
+			excluded.insert(replacement_key);
+		} else {
+			return Err(MigrationError::InvalidMigration(format!(
+				"Cannot apply replacement {} with a partially applied replacement set",
+				replacement.id()
+			)));
+		}
+	}
+
+	let migrations = migrations
+		.iter()
+		.filter(|migration| {
+			!excluded.contains(&super::graph::MigrationKey::new(
+				migration.app_label.clone(),
+				migration.name.clone(),
+			))
+		})
+		.collect();
+
+	Ok(ReplacementMigrationSelection {
+		migrations,
+		replacements_to_adopt,
+	})
+}
+
 #[async_trait]
 trait SqlPlanner: Send + Sync {
 	async fn plan(
@@ -175,67 +267,20 @@ impl DatabaseMigrationExecutor {
 	) -> Result<ExecutionResult> {
 		let mut applied = Vec::new();
 		let mut validation_state = super::ProjectState::new();
-		let mut excluded = HashSet::new();
-
-		for replacement in migrations
-			.iter()
-			.filter(|migration| !migration.replaces.is_empty())
-		{
-			let replacement_key = super::graph::MigrationKey::new(
-				replacement.app_label.clone(),
-				replacement.name.clone(),
-			);
-			let replacement_is_applied = self
-				.recorder
-				.is_applied(&replacement.app_label, &replacement.name)
-				.await?;
-			let mut replaced_applied = 0;
-			for (app, name) in &replacement.replaces {
-				if self.recorder.is_applied(app, name).await? {
-					replaced_applied += 1;
-				}
-			}
-			if replacement_is_applied || replaced_applied == 0 {
-				excluded.extend(
-					replacement.replaces.iter().map(|(app, name)| {
-						super::graph::MigrationKey::new(app.clone(), name.clone())
-					}),
-				);
-			} else if replaced_applied == replacement.replaces.len() {
-				self.recorder
-					.adopt_replacement(
-						&replacement.app_label,
-						&replacement.name,
-						&replacement.replaces,
-					)
-					.await?;
-				excluded.extend(
-					replacement.replaces.iter().map(|(app, name)| {
-						super::graph::MigrationKey::new(app.clone(), name.clone())
-					}),
-				);
-				excluded.insert(replacement_key);
-			} else {
-				return Err(MigrationError::InvalidMigration(format!(
-					"Cannot apply replacement {} with a partially applied replacement set",
-					replacement.id()
-				)));
-			}
-		}
-		let migrations: Vec<&Migration> = migrations
-			.iter()
-			.filter(|migration| {
-				!excluded.contains(&super::graph::MigrationKey::new(
-					migration.app_label.clone(),
-					migration.name.clone(),
-				))
-			})
+		let applied_keys = self
+			.recorder
+			.get_applied_migrations()
+			.await?
+			.into_iter()
+			.map(|record| super::graph::MigrationKey::new(record.app, record.name))
 			.collect();
+		let selection = select_replacement_migrations(migrations, &applied_keys)?;
+		let migrations = selection.migrations();
 
 		// Build MigrationGraph for dependency resolution
 		let mut graph = super::graph::MigrationGraph::new();
 
-		for migration in &migrations {
+		for migration in migrations {
 			let key = super::graph::MigrationKey::new(
 				migration.app_label.clone(),
 				migration.name.clone(),
@@ -256,6 +301,19 @@ impl DatabaseMigrationExecutor {
 
 		// Perform topological sort (automatically detects circular dependencies)
 		let sorted_keys = graph.resolve_execution_order_with_replaces()?;
+
+		// Adopt only after every replacement set and the final dependency graph
+		// have been validated. This prevents an earlier adoption from mutating
+		// recorder state when a later replacement is partial or cyclic.
+		for replacement in selection.replacements_to_adopt() {
+			self.recorder
+				.adopt_replacement(
+					&replacement.app_label,
+					&replacement.name,
+					&replacement.replaces,
+				)
+				.await?;
+		}
 
 		// Apply migrations in dependency-resolved order
 		for key in sorted_keys {
@@ -4049,6 +4107,68 @@ mod rollback_orchestration_tests {
 			.await
 			.expect("rollback the adopted replacement once");
 		assert_eq!(rollback.applied, vec!["rolltest.0001_squashed"]);
+	}
+
+	#[rstest]
+	#[tokio::test]
+	async fn apply_migrations_does_not_adopt_before_validating_all_replacement_sets() {
+		// Arrange - the first replacement can be adopted, while the second has
+		// only one of two original migrations recorded.
+		let original_one = make_create_table_migration("0001_initial", "replacement_one");
+		let original_two = make_create_table_migration("0002_second", "replacement_two");
+		let original_three = make_create_table_migration("0003_third", "replacement_three");
+
+		let mut first_replacement = original_one.clone();
+		first_replacement.name = "0001_squashed".to_string();
+		first_replacement.replaces = vec![("rolltest".to_string(), "0001_initial".to_string())];
+
+		let mut partial_replacement = original_two.clone();
+		partial_replacement.name = "0002_squashed".to_string();
+		partial_replacement.replaces = vec![
+			("rolltest".to_string(), "0002_second".to_string()),
+			("rolltest".to_string(), "0003_third".to_string()),
+		];
+
+		let mut executor = make_executor().await;
+		executor
+			.apply_migrations(std::slice::from_ref(&original_one))
+			.await
+			.expect("apply the first original migration");
+		executor
+			.apply_migrations(std::slice::from_ref(&original_two))
+			.await
+			.expect("apply one source migration from the partial set");
+
+		// Act
+		let error = executor
+			.apply_migrations(&[
+				original_one.clone(),
+				original_two.clone(),
+				original_three,
+				first_replacement.clone(),
+				partial_replacement,
+			])
+			.await
+			.expect_err("a partial replacement set must fail");
+
+		// Assert - no earlier adoption changed recorder state before the whole
+		// replacement configuration was validated.
+		assert!(matches!(error, MigrationError::InvalidMigration(_)));
+		let recorder = DatabaseMigrationRecorder::new(executor.connection().clone());
+		assert!(
+			recorder
+				.is_applied("rolltest", "0001_initial")
+				.await
+				.expect("query original recorder state"),
+			"the original must remain recorded after a later replacement validation error"
+		);
+		assert!(
+			!recorder
+				.is_applied("rolltest", "0001_squashed")
+				.await
+				.expect("query replacement recorder state"),
+			"the replacement must not be adopted before all replacement sets validate"
+		);
 	}
 
 	#[rstest]

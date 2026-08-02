@@ -175,11 +175,59 @@ impl DatabaseMigrationExecutor {
 	) -> Result<ExecutionResult> {
 		let mut applied = Vec::new();
 		let mut validation_state = super::ProjectState::new();
+		let mut excluded = HashSet::new();
+
+		for replacement in migrations
+			.iter()
+			.filter(|migration| !migration.replaces.is_empty())
+		{
+			let replacement_key = super::graph::MigrationKey::new(
+				replacement.app_label.clone(),
+				replacement.name.clone(),
+			);
+			let replacement_is_applied = self
+				.recorder
+				.is_applied(&replacement.app_label, &replacement.name)
+				.await?;
+			let mut replaced_applied = 0;
+			for (app, name) in &replacement.replaces {
+				if migrations
+					.iter()
+					.any(|migration| migration.app_label == *app && migration.name == *name)
+					&& self.recorder.is_applied(app, name).await?
+				{
+					replaced_applied += 1;
+				}
+			}
+			if replacement_is_applied || replaced_applied == 0 {
+				excluded.extend(
+					replacement.replaces.iter().map(|(app, name)| {
+						super::graph::MigrationKey::new(app.clone(), name.clone())
+					}),
+				);
+			} else if replaced_applied == replacement.replaces.len() {
+				excluded.insert(replacement_key);
+			} else {
+				return Err(MigrationError::InvalidMigration(format!(
+					"Cannot apply replacement {} with a partially applied replacement set",
+					replacement.id()
+				)));
+			}
+		}
+		let migrations: Vec<&Migration> = migrations
+			.iter()
+			.filter(|migration| {
+				!excluded.contains(&super::graph::MigrationKey::new(
+					migration.app_label.clone(),
+					migration.name.clone(),
+				))
+			})
+			.collect();
 
 		// Build MigrationGraph for dependency resolution
 		let mut graph = super::graph::MigrationGraph::new();
 
-		for migration in migrations {
+		for migration in &migrations {
 			let key = super::graph::MigrationKey::new(
 				migration.app_label.clone(),
 				migration.name.clone(),
@@ -190,11 +238,16 @@ impl DatabaseMigrationExecutor {
 				.map(|(app, name)| super::graph::MigrationKey::new(app.clone(), name.clone()))
 				.collect();
 
-			graph.add_migration(key, deps);
+			let replaces = migration
+				.replaces
+				.iter()
+				.map(|(app, name)| super::graph::MigrationKey::new(app.clone(), name.clone()))
+				.collect();
+			graph.add_migration_with_replaces(key, deps, replaces);
 		}
 
 		// Perform topological sort (automatically detects circular dependencies)
-		let sorted_keys = graph.topological_sort()?;
+		let sorted_keys = graph.resolve_execution_order_with_replaces()?;
 
 		// Apply migrations in dependency-resolved order
 		for key in sorted_keys {
@@ -3924,6 +3977,58 @@ mod rollback_orchestration_tests {
 		assert!(
 			table_still_present,
 			"state_only rollback must not execute schema operations"
+		);
+	}
+
+	#[rstest]
+	#[tokio::test]
+	async fn apply_migrations_uses_one_side_of_a_replacement_set() {
+		// Arrange
+		let original = make_create_table_migration("0001_initial", "replacement");
+		let mut replacement = original.clone();
+		replacement.name = "0001_squashed".to_string();
+		replacement.replaces = vec![("rolltest".to_string(), "0001_initial".to_string())];
+
+		// Act - a fresh database must apply only the replacement migration.
+		let mut fresh = make_executor().await;
+		let fresh_result = fresh
+			.apply_migrations(&[original.clone(), replacement.clone()])
+			.await
+			.expect("apply a fresh replacement set");
+
+		// Assert
+		let fresh_recorder = DatabaseMigrationRecorder::new(fresh.connection().clone());
+		assert_eq!(fresh_result.applied, vec![replacement.id()]);
+		assert!(
+			fresh_recorder
+				.is_applied("rolltest", "0001_squashed")
+				.await
+				.expect("query replacement recorder state")
+		);
+		assert!(
+			!fresh_recorder
+				.is_applied("rolltest", "0001_initial")
+				.await
+				.expect("query original recorder state")
+		);
+
+		// Act - an existing original must keep its already-applied history and
+		// must not replay the replacement over it.
+		let mut existing = make_executor().await;
+		existing
+			.apply_migrations(std::slice::from_ref(&original))
+			.await
+			.expect("apply original migration");
+		existing
+			.apply_migrations(&[original.clone(), replacement.clone()])
+			.await
+			.expect("retain an existing original replacement set");
+		let existing_recorder = DatabaseMigrationRecorder::new(existing.connection().clone());
+		assert!(
+			!existing_recorder
+				.is_applied("rolltest", "0001_squashed")
+				.await
+				.expect("query replacement recorder state")
 		);
 	}
 

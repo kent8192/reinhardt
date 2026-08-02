@@ -102,7 +102,11 @@ impl BaseCommand for InspectDbCommand {
 			CommandOption::option(None, "database", "Configured database alias")
 				.with_default("default"),
 			CommandOption::option(None, "database-url", "One-off database URL override"),
-			CommandOption::flag(None, "include-views", "Include database views"),
+			CommandOption::flag(
+				None,
+				"include-views",
+				"Request database views (currently unsupported for model generation)",
+			),
 			CommandOption::flag(None, "include-partitions", "Include PostgreSQL partitions"),
 			CommandOption::option(Some('o'), "output", "Output directory for generated files"),
 			CommandOption::option(Some('c'), "config", "Path to configuration TOML file"),
@@ -115,6 +119,12 @@ impl BaseCommand for InspectDbCommand {
 	}
 
 	async fn execute(&self, ctx: &CommandContext) -> CommandResult<()> {
+		if ctx.has_option("include-views") {
+			return Err(CommandError::InvalidArguments(
+				"--include-views is not supported because generated models require a primary key."
+					.to_string(),
+			));
+		}
 		let output_directory = ctx.option("output").map(PathBuf::from);
 		if ctx.has_option("force") && output_directory.is_none() {
 			return Err(CommandError::InvalidArguments(
@@ -229,6 +239,28 @@ pub(crate) fn ensure_sqlite_database_exists(url: &str) -> CommandResult<()> {
 	Err(CommandError::ExecutionError(
 		"SQLite database file does not exist.".to_string(),
 	))
+}
+
+#[cfg(test)]
+mod tests {
+	use super::*;
+
+	#[tokio::test]
+	async fn include_views_is_rejected_before_database_introspection() {
+		// Arrange
+		let command = InspectDbCommand::default();
+		let mut context = CommandContext::new(vec![]);
+		context.set_option("include-views".to_string(), "true".to_string());
+
+		// Act
+		let error = command.execute(&context).await.unwrap_err();
+
+		// Assert
+		assert_eq!(
+			error.to_string(),
+			"Invalid arguments: --include-views is not supported because generated models require a primary key."
+		);
+	}
 }
 
 fn load_config(path: PathBuf) -> CommandResult<IntrospectConfig> {

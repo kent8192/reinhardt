@@ -161,6 +161,7 @@ pub async fn execute_squashmigrations_with_io(
 	.await
 }
 
+/// Resolve, render, confirm, and create a squashed migration with settings-aware dependencies.
 pub async fn execute_squashmigrations_with_io_and_context(
 	migrations_root: &Path,
 	options: SquashMigrationsOptions,

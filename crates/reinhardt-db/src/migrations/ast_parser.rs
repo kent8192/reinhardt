@@ -791,6 +791,90 @@ fn parse_single_operation_strict(expr: &Expr, index: usize) -> Result<super::Ope
 					)?,
 				});
 			}
+			"CreateSchema" => {
+				validate_exact_named_fields(
+					&operation.fields,
+					&["name", "if_not_exists"],
+					&context,
+				)?;
+				return Ok(super::Operation::CreateSchema {
+					name: parse_string_field_strict(&operation.fields, "name", &context)?,
+					if_not_exists: parse_bool_field_strict(
+						&operation.fields,
+						"if_not_exists",
+						&context,
+					)?,
+				});
+			}
+			"DropSchema" => {
+				validate_exact_named_fields(
+					&operation.fields,
+					&["name", "cascade", "if_exists"],
+					&context,
+				)?;
+				return Ok(super::Operation::DropSchema {
+					name: parse_string_field_strict(&operation.fields, "name", &context)?,
+					cascade: parse_bool_field_strict(&operation.fields, "cascade", &context)?,
+					if_exists: parse_bool_field_strict(&operation.fields, "if_exists", &context)?,
+				});
+			}
+			"SetAutoIncrementValue" => {
+				validate_exact_named_fields(
+					&operation.fields,
+					&["table", "column", "value"],
+					&context,
+				)?;
+				return Ok(super::Operation::SetAutoIncrementValue {
+					table: parse_string_field_strict(&operation.fields, "table", &context)?,
+					column: parse_string_field_strict(&operation.fields, "column", &context)?,
+					value: parse_i64_field_strict(&operation.fields, "value", &context)?,
+				});
+			}
+			"CreateCompositePrimaryKey" => {
+				validate_exact_named_fields(
+					&operation.fields,
+					&["table", "columns", "constraint_name"],
+					&context,
+				)?;
+				return Ok(super::Operation::CreateCompositePrimaryKey {
+					table: parse_string_field_strict(&operation.fields, "table", &context)?,
+					columns: parse_string_vector_field_strict(
+						&operation.fields,
+						"columns",
+						&context,
+					)?,
+					constraint_name: parse_optional_string_field_strict(
+						&operation.fields,
+						"constraint_name",
+						&context,
+					)?,
+				});
+			}
+			"BulkLoad" => {
+				validate_exact_named_fields(
+					&operation.fields,
+					&["table", "source", "format", "options"],
+					&context,
+				)?;
+				return Ok(super::Operation::BulkLoad {
+					table: parse_string_field_strict(&operation.fields, "table", &context)?,
+					source: parse_bulk_load_source_strict(
+						strict_field_expression(&operation.fields, "source")
+							.ok_or_else(|| strict_payload_error(&context, "source"))?,
+						&format!("{context}.source"),
+					)?,
+					format: parse_bulk_load_format_strict(
+						strict_field_expression(&operation.fields, "format")
+							.ok_or_else(|| strict_payload_error(&context, "format"))?,
+						&format!("{context}.format"),
+					)?,
+					options: parse_bulk_load_options_strict(
+						strict_field_expression(&operation.fields, "options")
+							.ok_or_else(|| strict_payload_error(&context, "options"))?,
+						&format!("{context}.options"),
+					)?,
+				});
+			}
 			_ => {}
 		}
 	}
@@ -798,6 +882,169 @@ fn parse_single_operation_strict(expr: &Expr, index: usize) -> Result<super::Ope
 	Err(MigrationError::InvalidMigration(format!(
 		"{context} is unsupported or malformed"
 	)))
+}
+
+fn parse_i64_field_strict(
+	fields: &syn::punctuated::Punctuated<syn::FieldValue, syn::token::Comma>,
+	field_name: &str,
+	context: &str,
+) -> Result<i64> {
+	let expression = strict_field_expression(fields, field_name)
+		.ok_or_else(|| strict_payload_error(context, field_name))?;
+	parse_i64_strict(expression).ok_or_else(|| strict_payload_error(context, field_name))
+}
+
+fn parse_i64_strict(expr: &Expr) -> Option<i64> {
+	match expr {
+		Expr::Lit(syn::ExprLit {
+			lit: syn::Lit::Int(value),
+			..
+		}) => value.base10_parse().ok(),
+		Expr::Unary(unary) if matches!(unary.op, syn::UnOp::Neg(_)) => {
+			let Expr::Lit(syn::ExprLit {
+				lit: syn::Lit::Int(value),
+				..
+			}) = &*unary.expr
+			else {
+				return None;
+			};
+			value.base10_parse::<i64>().ok()?.checked_neg()
+		}
+		_ => None,
+	}
+}
+
+fn parse_bulk_load_source_strict(expr: &Expr, context: &str) -> Result<super::BulkLoadSource> {
+	let source_name = match expr {
+		Expr::Path(path) => path
+			.path
+			.segments
+			.last()
+			.map(|segment| segment.ident.to_string()),
+		Expr::Call(call) => match &*call.func {
+			Expr::Path(path) => path
+				.path
+				.segments
+				.last()
+				.map(|segment| segment.ident.to_string()),
+			_ => None,
+		},
+		_ => None,
+	};
+	match source_name.as_deref() {
+		Some("Stdin") if matches!(expr, Expr::Path(_)) => Ok(super::BulkLoadSource::Stdin),
+		Some("File") | Some("Program") => {
+			let Expr::Call(call) = expr else {
+				return Err(MigrationError::InvalidMigration(format!(
+					"{context} is unsupported or malformed"
+				)));
+			};
+			if call.args.len() != 1 {
+				return Err(MigrationError::InvalidMigration(format!(
+					"{context} is unsupported or malformed"
+				)));
+			}
+			let value = extract_string_expr(&call.args[0]).ok_or_else(|| {
+				MigrationError::InvalidMigration(format!("{context} is unsupported or malformed"))
+			})?;
+			if source_name.as_deref() == Some("File") {
+				Ok(super::BulkLoadSource::File(value))
+			} else {
+				Ok(super::BulkLoadSource::Program(value))
+			}
+		}
+		_ => Err(MigrationError::InvalidMigration(format!(
+			"{context} is unsupported or malformed"
+		))),
+	}
+}
+
+fn parse_bulk_load_format_strict(expr: &Expr, context: &str) -> Result<super::BulkLoadFormat> {
+	let Expr::Path(path) = expr else {
+		return Err(MigrationError::InvalidMigration(format!(
+			"{context} is unsupported or malformed"
+		)));
+	};
+	match path
+		.path
+		.segments
+		.last()
+		.map(|segment| segment.ident.to_string())
+		.as_deref()
+	{
+		Some("Text") => Ok(super::BulkLoadFormat::Text),
+		Some("Csv") => Ok(super::BulkLoadFormat::Csv),
+		Some("Binary") => Ok(super::BulkLoadFormat::Binary),
+		_ => Err(MigrationError::InvalidMigration(format!(
+			"{context} is unsupported or malformed"
+		))),
+	}
+}
+
+fn parse_bulk_load_options_strict(expr: &Expr, context: &str) -> Result<super::BulkLoadOptions> {
+	let Expr::Struct(options) = expr else {
+		return Err(MigrationError::InvalidMigration(format!(
+			"{context} is unsupported or malformed"
+		)));
+	};
+	validate_exact_named_fields(
+		&options.fields,
+		&[
+			"delimiter",
+			"null_string",
+			"header",
+			"columns",
+			"local",
+			"quote",
+			"escape",
+			"line_terminator",
+			"encoding",
+		],
+		context,
+	)?;
+	Ok(super::BulkLoadOptions {
+		delimiter: parse_optional_char_field_strict(&options.fields, "delimiter", context)?,
+		null_string: parse_optional_string_field_strict(&options.fields, "null_string", context)?,
+		header: parse_bool_field_strict(&options.fields, "header", context)?,
+		columns: parse_optional_string_vector_field_strict(&options.fields, "columns", context)?,
+		local: parse_bool_field_strict(&options.fields, "local", context)?,
+		quote: parse_optional_char_field_strict(&options.fields, "quote", context)?,
+		escape: parse_optional_char_field_strict(&options.fields, "escape", context)?,
+		line_terminator: parse_optional_string_field_strict(
+			&options.fields,
+			"line_terminator",
+			context,
+		)?,
+		encoding: parse_optional_string_field_strict(&options.fields, "encoding", context)?,
+	})
+}
+
+fn parse_optional_char_field_strict(
+	fields: &syn::punctuated::Punctuated<syn::FieldValue, syn::token::Comma>,
+	field_name: &str,
+	context: &str,
+) -> Result<Option<char>> {
+	let expression = strict_field_expression(fields, field_name)
+		.ok_or_else(|| strict_payload_error(context, field_name))?;
+	if is_none_expression(expression) {
+		return Ok(None);
+	}
+	let Expr::Call(call) = expression else {
+		return Err(strict_payload_error(context, field_name));
+	};
+	if !matches!(&*call.func, Expr::Path(path) if path.path.is_ident("Some"))
+		|| call.args.len() != 1
+	{
+		return Err(strict_payload_error(context, field_name));
+	}
+	let Expr::Lit(syn::ExprLit {
+		lit: syn::Lit::Char(value),
+		..
+	}) = &call.args[0]
+	else {
+		return Err(strict_payload_error(context, field_name));
+	};
+	Ok(Some(value.value()))
 }
 
 fn parse_index_operation_strict(
@@ -3735,6 +3982,61 @@ mod tests {
 				reverse_code: Some("remove_seed_data()".to_string()),
 			}]
 		);
+	}
+
+	#[test]
+	fn strict_metadata_round_trips_filesystem_executable_operations() {
+		// Arrange
+		let source = r#"pub fn migration() -> Migration {
+			Migration {
+				operations: vec![
+					Operation::CreateSchema { name: "analytics".to_string(), if_not_exists: true },
+					Operation::DropSchema { name: "obsolete".to_string(), cascade: true, if_exists: false },
+					Operation::BulkLoad {
+						table: "events".to_string(),
+						source: BulkLoadSource::File("/tmp/events.csv".to_string()),
+						format: BulkLoadFormat::Csv,
+						options: BulkLoadOptions {
+							delimiter: Some(','), null_string: None, header: true, columns: None,
+							local: false, quote: Some('"'), escape: None,
+							line_terminator: None, encoding: Some("utf8".to_string()),
+						},
+					},
+					Operation::SetAutoIncrementValue {
+						table: "events".to_string(), column: "id".to_string(), value: 42,
+					},
+					Operation::CreateCompositePrimaryKey {
+						table: "events".to_string(), columns: vec!["tenant_id".to_string(), "id".to_string()],
+						constraint_name: Some("events_pkey".to_string()),
+					},
+				],
+				dependencies: vec![], replaces: vec![],
+			}
+		}"#;
+		let ast = syn::parse_file(source).unwrap();
+
+		// Act
+		let metadata = extract_migration_metadata_strict(&ast, "blog", "0001_initial").unwrap();
+
+		// Assert
+		assert_eq!(metadata.operations.len(), 5);
+		assert!(matches!(
+			metadata.operations[0],
+			Operation::CreateSchema { .. }
+		));
+		assert!(matches!(
+			metadata.operations[1],
+			Operation::DropSchema { .. }
+		));
+		assert!(matches!(metadata.operations[2], Operation::BulkLoad { .. }));
+		assert!(matches!(
+			metadata.operations[3],
+			Operation::SetAutoIncrementValue { .. }
+		));
+		assert!(matches!(
+			metadata.operations[4],
+			Operation::CreateCompositePrimaryKey { .. }
+		));
 	}
 
 	#[test]

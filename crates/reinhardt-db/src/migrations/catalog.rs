@@ -66,9 +66,7 @@ impl SquashRange {
 				.available_migrations
 				.iter()
 				.filter(|candidate| candidate.app_label == dependency.app_label)
-				.min_by(|left, right| {
-					MigrationCatalog::compare_migration_names(&left.name, &right.name)
-				})
+				.min_by(|left, right| left.name.cmp(&right.name))
 				.cloned()
 				.ok_or_else(|| {
 					MigrationError::DependencyError(format!(
@@ -397,13 +395,11 @@ impl MigrationCatalog {
 			})
 			.collect();
 
-		let external_dependencies: BTreeSet<(String, String)> = migrations
+		let external_dependencies: BTreeSet<(String, String)> = selected
 			.iter()
-			.flat_map(|migration| migration.dependencies.iter())
-			.filter(|(dependency_app, dependency_name)| {
-				!selected.contains(&MigrationKey::new(dependency_app, dependency_name))
-			})
-			.cloned()
+			.flat_map(|migration| self.graph.get_dependencies(migration).into_iter().flatten())
+			.filter(|dependency| !selected.contains(dependency))
+			.map(|dependency| (dependency.app_label.clone(), dependency.name.clone()))
 			.collect();
 
 		for selected_key in &selected {
@@ -653,5 +649,37 @@ impl MigrationCatalog {
 			stack.extend(dependencies.into_iter().rev());
 		}
 		same_app_ancestors
+	}
+}
+
+#[cfg(test)]
+mod tests {
+	use super::*;
+	use crate::migrations::dependency::{DependencyCondition, OptionalDependency};
+
+	#[test]
+	fn squash_range_collects_active_external_conditional_dependencies_from_graph() {
+		// Arrange
+		let mut reports = Migration::new("0001_initial", "reports");
+		reports.optional_dependencies.push(OptionalDependency::new(
+			"extensions",
+			"0001_postgis",
+			DependencyCondition::FeatureEnabled("postgis".to_string()),
+		));
+		let extension = Migration::new("0001_postgis", "extensions");
+		let context = DependencyResolutionContext::new().with_feature("postgis");
+		let catalog =
+			MigrationCatalog::from_loaded_with_context(vec![reports, extension], &context).unwrap();
+
+		// Act
+		let range = catalog
+			.squash_range("reports", None, "0001_initial")
+			.unwrap();
+
+		// Assert
+		assert_eq!(
+			range.external_dependencies,
+			[("extensions".to_string(), "0001_postgis".to_string())]
+		);
 	}
 }

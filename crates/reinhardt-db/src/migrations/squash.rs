@@ -195,6 +195,11 @@ impl MigrationSquasher {
 			.iter()
 			.map(|migration| (migration.app_label.as_str(), migration.name.as_str()))
 			.collect();
+		let external_dependencies: HashSet<_> = range
+			.external_dependencies
+			.iter()
+			.map(|(app_label, migration_name)| (app_label.as_str(), migration_name.as_str()))
+			.collect();
 		let mut dependencies = Vec::new();
 		for migration in &range.migrations {
 			operations.extend(migration.operations.clone());
@@ -221,7 +226,8 @@ impl MigrationSquasher {
 					.resolve(&MigrationDependency::Swappable(dependency.clone()))
 					.expect("swappable dependencies always resolve to a target");
 				let normalized = range.normalize_dependency(&target.0, &target.1)?;
-				if !selected.contains(&(normalized.app_label.as_str(), normalized.name.as_str()))
+				if external_dependencies
+					.contains(&(normalized.app_label.as_str(), normalized.name.as_str()))
 					&& !swappable_dependencies.contains(dependency)
 				{
 					swappable_dependencies.push(dependency.clone());
@@ -230,7 +236,8 @@ impl MigrationSquasher {
 			for dependency in &migration.optional_dependencies {
 				let normalized = range
 					.normalize_dependency(&dependency.app_label, &dependency.migration_name)?;
-				if !selected.contains(&(normalized.app_label.as_str(), normalized.name.as_str()))
+				if external_dependencies
+					.contains(&(normalized.app_label.as_str(), normalized.name.as_str()))
 					&& !optional_dependencies.contains(dependency)
 				{
 					optional_dependencies.push(dependency.clone());
@@ -1069,5 +1076,35 @@ mod tests {
 			.unwrap();
 
 		assert!(result.migration.optional_dependencies.is_empty());
+	}
+
+	#[test]
+	fn squash_range_preserves_external_optional_dependency_metadata() {
+		// Arrange
+		let mut migration = Migration::new("0001_initial", "reports");
+		migration
+			.optional_dependencies
+			.push(OptionalDependency::new(
+				"extensions",
+				"0001_postgis",
+				DependencyCondition::FeatureEnabled("postgis".to_string()),
+			));
+		let range = SquashRange {
+			migrations: vec![migration],
+			external_dependencies: vec![("extensions".to_string(), "0001_postgis".to_string())],
+			available_migrations: vec![crate::migrations::MigrationKey::new(
+				"extensions",
+				"0001_postgis",
+			)],
+			replacement_owners: std::collections::HashMap::new(),
+		};
+
+		// Act
+		let result = MigrationSquasher::new()
+			.squash_range(&range, "0001_squashed", false)
+			.unwrap();
+
+		// Assert
+		assert_eq!(result.migration.optional_dependencies.len(), 1);
 	}
 }

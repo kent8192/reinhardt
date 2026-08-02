@@ -52,7 +52,6 @@ pub use special::{RunCode, RunSQL, StateOperation};
 
 // Legacy types for backward compatibility
 // These are maintained from the original operations.rs
-#[cfg(feature = "pgvector")]
 use super::IndexDefinition;
 use super::{FieldState, FieldType, ModelState, ProjectState};
 use pg_escape::{quote_identifier, quote_literal};

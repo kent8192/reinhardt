@@ -396,7 +396,7 @@ pub enum Commands {
 		#[arg(long)]
 		database_url: Option<String>,
 
-		/// Include database views
+		/// Request database views (currently unsupported for model generation)
 		#[arg(long)]
 		include_views: bool,
 

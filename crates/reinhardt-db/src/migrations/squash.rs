@@ -190,13 +190,21 @@ impl MigrationSquasher {
 		let mut swappable_dependencies = Vec::new();
 		let mut optional_dependencies = Vec::new();
 		let dependency_resolver = DependencyResolver::new(context);
-		let external_dependencies: HashSet<_> = range
-			.external_dependencies
+		let selected: HashSet<_> = range
+			.migrations
 			.iter()
-			.map(|dependency| (dependency.0.as_str(), dependency.1.as_str()))
+			.map(|migration| (migration.app_label.as_str(), migration.name.as_str()))
 			.collect();
+		let mut dependencies = Vec::new();
 		for migration in &range.migrations {
 			operations.extend(migration.operations.clone());
+			for dependency in &migration.dependencies {
+				if !selected.contains(&(dependency.0.as_str(), dependency.1.as_str()))
+					&& !dependencies.contains(dependency)
+				{
+					dependencies.push(dependency.clone());
+				}
+			}
 			for replacement in &migration.replaces {
 				if !replaces.contains(replacement) {
 					replaces.push(replacement.clone());
@@ -210,14 +218,14 @@ impl MigrationSquasher {
 				let target = dependency_resolver
 					.resolve(&MigrationDependency::Swappable(dependency.clone()))
 					.expect("swappable dependencies always resolve to a target");
-				if external_dependencies.contains(&(target.0.as_str(), target.1.as_str()))
+				if !selected.contains(&(target.0.as_str(), target.1.as_str()))
 					&& !swappable_dependencies.contains(dependency)
 				{
 					swappable_dependencies.push(dependency.clone());
 				}
 			}
 			for dependency in &migration.optional_dependencies {
-				if external_dependencies.contains(&(
+				if !selected.contains(&(
 					dependency.app_label.as_str(),
 					dependency.migration_name.as_str(),
 				)) && !optional_dependencies.contains(dependency)
@@ -233,7 +241,7 @@ impl MigrationSquasher {
 
 		let mut migration = Migration::new(name, first.app_label.clone());
 		migration.operations = operations;
-		migration.dependencies = range.external_dependencies.clone();
+		migration.dependencies = dependencies;
 		migration.replaces = replaces;
 		migration.atomic = first.atomic;
 		migration.initial = first.initial;
@@ -526,6 +534,7 @@ impl MigrationSquasher {
 					}) = optimized.last_mut()
 						&& *previous_table == table
 						&& *previous_column == column
+						&& previous_new_definition.type_definition == new_definition.type_definition
 					{
 						*previous_new_definition = new_definition;
 						*previous_mysql_options = mysql_options;

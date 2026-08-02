@@ -271,8 +271,7 @@ impl FilesystemRepository {
 					label, component
 				)));
 			};
-			number.len() >= 4
-				&& number.bytes().all(|byte| byte.is_ascii_digit())
+			number.bytes().all(|byte| byte.is_ascii_digit())
 				&& !description.is_empty()
 				&& description
 					.bytes()
@@ -379,16 +378,22 @@ impl FilesystemRepository {
 				OptionalDependency::new(#app_label, #migration_name, #condition)
 			}
 		});
-		let dependency_imports = if migration.swappable_dependencies.is_empty()
-			&& migration.optional_dependencies.is_empty()
-		{
-			quote! {}
-		} else {
-			quote! {
+		let dependency_imports = match (
+			migration.swappable_dependencies.is_empty(),
+			migration.optional_dependencies.is_empty(),
+		) {
+			(true, true) => quote! {},
+			(false, true) => quote! {
+				use reinhardt::db::migrations::dependency::SwappableDependency;
+			},
+			(true, false) => quote! {
+				use reinhardt::db::migrations::dependency::{DependencyCondition, OptionalDependency};
+			},
+			(false, false) => quote! {
 				use reinhardt::db::migrations::dependency::{
 					DependencyCondition, OptionalDependency, SwappableDependency,
 				};
-			}
+			},
 		};
 
 		let app_label = &migration.app_label;

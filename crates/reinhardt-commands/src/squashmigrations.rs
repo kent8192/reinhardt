@@ -250,6 +250,39 @@ pub async fn execute_squashmigrations_with_context_and_io(
 		}
 	}
 
+	let confirmed_catalog = MigrationCatalog::load_strict_with_context(&source, dependency_context)
+		.await
+		.map_err(migration_error_to_command_error)?;
+	let confirmed_range = confirmed_catalog
+		.squash_range(
+			&options.app_label,
+			options.start_migration.as_deref(),
+			&options.migration_name,
+		)
+		.map_err(migration_error_to_command_error)?;
+	let confirmed_result = MigrationSquasher::new()
+		.squash_range_with_context(
+			&confirmed_range,
+			&squashed_name,
+			!options.no_optimize,
+			dependency_context,
+		)
+		.map_err(migration_error_to_command_error)?;
+	let confirmed_rendered = repository
+		.render(
+			&confirmed_result.migration,
+			MigrationRenderOptions {
+				include_header: !options.no_header,
+			},
+		)
+		.map_err(migration_error_to_command_error)?;
+	if confirmed_rendered != rendered {
+		return Err(CommandError::InvalidArguments(
+			"migration files or dependency graph changed while awaiting confirmation; rerun squashmigrations"
+				.to_string(),
+		));
+	}
+
 	let path = repository
 		.create_new_source(&options.app_label, &squashed_name, &rendered)
 		.map_err(migration_error_to_command_error)?;
@@ -263,7 +296,11 @@ pub async fn execute_squashmigrations_with_context_and_io(
 		optimized_operation_count: result.optimized_operation_count,
 		path,
 	};
-	write_summary(stdout, &summary)?;
+	if let Err(error) = write_summary(stdout, &summary)
+		&& error.kind() != io::ErrorKind::BrokenPipe
+	{
+		return Err(CommandError::IoError(error));
+	}
 	Ok(Some(summary))
 }
 

@@ -925,8 +925,18 @@ async fn run_command_core(
 				settings
 					.as_ref()
 					.map_or_else(DependencyResolutionContext::new, |settings| {
-						DependencyResolutionContext::new()
-							.with_apps(settings.core().installed_apps.iter().cloned())
+						let core = settings.core();
+						let context = core.migration_features.iter().fold(
+							DependencyResolutionContext::new()
+								.with_apps(core.installed_apps.iter().cloned()),
+							|context, feature| context.with_feature(feature.clone()),
+						);
+						core.migration_swappable_settings.iter().fold(
+							context,
+							|context, (key, value)| {
+								context.with_setting(key.clone(), value.clone())
+							},
+						)
 					});
 			let mut confirmation = crate::StdinConfirmationReader;
 			let standard_output = std::io::stdout();

@@ -379,6 +379,17 @@ impl FilesystemRepository {
 				OptionalDependency::new(#app_label, #migration_name, #condition)
 			}
 		});
+		let dependency_imports = if migration.swappable_dependencies.is_empty()
+			&& migration.optional_dependencies.is_empty()
+		{
+			quote! {}
+		} else {
+			quote! {
+				use reinhardt::db::migrations::dependency::{
+					DependencyCondition, OptionalDependency, SwappableDependency,
+				};
+			}
+		};
 
 		let app_label = &migration.app_label;
 		let name = &migration.name;
@@ -400,9 +411,7 @@ impl FilesystemRepository {
 		// Generate full migration file
 		let file: syn::File = parse_quote! {
 			use reinhardt::db::migrations::prelude::*;
-			use reinhardt::db::migrations::dependency::{
-				DependencyCondition, OptionalDependency, SwappableDependency,
-			};
+			#dependency_imports
 			use reinhardt::db::migrations::FieldType;
 
 			pub(super) fn migration() -> Migration {
@@ -586,14 +595,6 @@ impl FilesystemRepository {
 			{
 				Err(MigrationError::UnsupportedMigrationRendering { operation: context })
 			}
-			Operation::AddColumn {
-				mysql_options: Some(_),
-				..
-			}
-			| Operation::AlterColumn {
-				mysql_options: Some(_),
-				..
-			} => Err(MigrationError::UnsupportedMigrationRendering { operation: context }),
 			_ => Ok(()),
 		}
 	}

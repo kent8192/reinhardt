@@ -161,12 +161,49 @@ fn parse_migration_builder_strict(expr: &Expr, app_label: &str, name: &str) -> R
 						.dependencies
 						.push((dependency_app, dependency_name));
 				}
+				"add_swappable_dependency" if call.args.len() == 1 => {
+					migration
+						.swappable_dependencies
+						.push(parse_swappable_dependency_expr(&call.args[0], "builder")?);
+				}
+				"add_optional_dependency" if call.args.len() == 1 => {
+					migration
+						.optional_dependencies
+						.push(parse_optional_dependency_expr(&call.args[0], "builder")?);
+				}
 				"atomic" if call.args.len() == 1 => {
 					migration.atomic = parse_bool_expression(&call.args[0]).ok_or_else(|| {
 						MigrationError::InvalidMigration(
 							"Migration builder atomic flag must be a boolean literal".to_string(),
 						)
 					})?;
+				}
+				"initial" if call.args.len() == 1 => {
+					migration.initial =
+						Some(parse_bool_expression(&call.args[0]).ok_or_else(|| {
+							MigrationError::InvalidMigration(
+								"Migration builder initial flag must be a boolean literal"
+									.to_string(),
+							)
+						})?);
+				}
+				"state_only" if call.args.len() == 1 => {
+					migration.state_only =
+						parse_bool_expression(&call.args[0]).ok_or_else(|| {
+							MigrationError::InvalidMigration(
+								"Migration builder state_only flag must be a boolean literal"
+									.to_string(),
+							)
+						})?;
+				}
+				"database_only" if call.args.len() == 1 => {
+					migration.database_only =
+						parse_bool_expression(&call.args[0]).ok_or_else(|| {
+							MigrationError::InvalidMigration(
+								"Migration builder database_only flag must be a boolean literal"
+									.to_string(),
+							)
+						})?;
 				}
 				unsupported => {
 					return Err(MigrationError::InvalidMigration(format!(
@@ -212,25 +249,26 @@ fn parse_swappable_dependencies(
 ) -> Result<Vec<super::dependency::SwappableDependency>> {
 	dependency_metadata_expressions(fields, field_name)?
 		.iter()
-		.map(|expression| {
-			let Expr::Call(call) = expression else {
-				return Err(malformed_dependency_metadata(field_name));
-			};
-			if !call_path_is(&call.func, "SwappableDependency", "new") || call.args.len() != 4 {
-				return Err(malformed_dependency_metadata(field_name));
-			}
-			Ok(super::dependency::SwappableDependency::new(
-				extract_string_expr(&call.args[0])
-					.ok_or_else(|| malformed_dependency_metadata(field_name))?,
-				extract_string_expr(&call.args[1])
-					.ok_or_else(|| malformed_dependency_metadata(field_name))?,
-				extract_string_expr(&call.args[2])
-					.ok_or_else(|| malformed_dependency_metadata(field_name))?,
-				extract_string_expr(&call.args[3])
-					.ok_or_else(|| malformed_dependency_metadata(field_name))?,
-			))
-		})
+		.map(|expression| parse_swappable_dependency_expr(expression, field_name))
 		.collect()
+}
+
+fn parse_swappable_dependency_expr(
+	expression: &Expr,
+	context: &str,
+) -> Result<super::dependency::SwappableDependency> {
+	let Expr::Call(call) = expression else {
+		return Err(malformed_dependency_metadata(context));
+	};
+	if !call_path_is(&call.func, "SwappableDependency", "new") || call.args.len() != 4 {
+		return Err(malformed_dependency_metadata(context));
+	}
+	Ok(super::dependency::SwappableDependency::new(
+		extract_string_expr(&call.args[0]).ok_or_else(|| malformed_dependency_metadata(context))?,
+		extract_string_expr(&call.args[1]).ok_or_else(|| malformed_dependency_metadata(context))?,
+		extract_string_expr(&call.args[2]).ok_or_else(|| malformed_dependency_metadata(context))?,
+		extract_string_expr(&call.args[3]).ok_or_else(|| malformed_dependency_metadata(context))?,
+	))
 }
 
 fn parse_optional_dependencies(
@@ -239,23 +277,26 @@ fn parse_optional_dependencies(
 ) -> Result<Vec<super::dependency::OptionalDependency>> {
 	dependency_metadata_expressions(fields, field_name)?
 		.iter()
-		.map(|expression| {
-			let Expr::Call(call) = expression else {
-				return Err(malformed_dependency_metadata(field_name));
-			};
-			if !call_path_is(&call.func, "OptionalDependency", "new") || call.args.len() != 3 {
-				return Err(malformed_dependency_metadata(field_name));
-			}
-			Ok(super::dependency::OptionalDependency::new(
-				extract_string_expr(&call.args[0])
-					.ok_or_else(|| malformed_dependency_metadata(field_name))?,
-				extract_string_expr(&call.args[1])
-					.ok_or_else(|| malformed_dependency_metadata(field_name))?,
-				parse_dependency_condition(&call.args[2])
-					.ok_or_else(|| malformed_dependency_metadata(field_name))?,
-			))
-		})
+		.map(|expression| parse_optional_dependency_expr(expression, field_name))
 		.collect()
+}
+
+fn parse_optional_dependency_expr(
+	expression: &Expr,
+	context: &str,
+) -> Result<super::dependency::OptionalDependency> {
+	let Expr::Call(call) = expression else {
+		return Err(malformed_dependency_metadata(context));
+	};
+	if !call_path_is(&call.func, "OptionalDependency", "new") || call.args.len() != 3 {
+		return Err(malformed_dependency_metadata(context));
+	}
+	Ok(super::dependency::OptionalDependency::new(
+		extract_string_expr(&call.args[0]).ok_or_else(|| malformed_dependency_metadata(context))?,
+		extract_string_expr(&call.args[1]).ok_or_else(|| malformed_dependency_metadata(context))?,
+		parse_dependency_condition(&call.args[2])
+			.ok_or_else(|| malformed_dependency_metadata(context))?,
+	))
 }
 
 fn parse_dependency_condition(expr: &Expr) -> Option<super::dependency::DependencyCondition> {
@@ -4161,7 +4202,16 @@ mod tests {
 					reverse_sql: None,
 				})
 				.add_dependency("core", "0001_initial")
+				.add_swappable_dependency(SwappableDependency::new(
+					"AUTH_USER_MODEL", "auth", "User", "0001_initial",
+				))
+				.add_optional_dependency(OptionalDependency::new(
+					"gis", "0001_initial", DependencyCondition::FeatureEnabled("gis".to_string()),
+				))
 				.atomic(false)
+				.initial(true)
+				.state_only(true)
+				.database_only(false)
 		}"#;
 		let ast = syn::parse_file(source).unwrap();
 
@@ -4175,6 +4225,11 @@ mod tests {
 		);
 		assert_eq!(migration.operations.len(), 1);
 		assert!(!migration.atomic);
+		assert_eq!(migration.initial, Some(true));
+		assert!(migration.state_only);
+		assert!(!migration.database_only);
+		assert_eq!(migration.swappable_dependencies.len(), 1);
+		assert_eq!(migration.optional_dependencies.len(), 1);
 	}
 
 	#[test]

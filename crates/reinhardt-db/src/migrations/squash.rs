@@ -190,10 +190,10 @@ impl MigrationSquasher {
 		let mut swappable_dependencies = Vec::new();
 		let mut optional_dependencies = Vec::new();
 		let dependency_resolver = DependencyResolver::new(context);
-		let selected_migrations: HashSet<_> = range
-			.migrations
+		let external_dependencies: HashSet<_> = range
+			.external_dependencies
 			.iter()
-			.map(|migration| (migration.app_label.as_str(), migration.name.as_str()))
+			.map(|dependency| (dependency.0.as_str(), dependency.1.as_str()))
 			.collect();
 		for migration in &range.migrations {
 			operations.extend(migration.operations.clone());
@@ -210,18 +210,18 @@ impl MigrationSquasher {
 				let target = dependency_resolver
 					.resolve(&MigrationDependency::Swappable(dependency.clone()))
 					.expect("swappable dependencies always resolve to a target");
-				let target_is_selected =
-					selected_migrations.contains(&(target.0.as_str(), target.1.as_str()));
-				if !target_is_selected && !swappable_dependencies.contains(dependency) {
+				if external_dependencies.contains(&(target.0.as_str(), target.1.as_str()))
+					&& !swappable_dependencies.contains(dependency)
+				{
 					swappable_dependencies.push(dependency.clone());
 				}
 			}
 			for dependency in &migration.optional_dependencies {
-				let target_is_selected = selected_migrations.contains(&(
+				if external_dependencies.contains(&(
 					dependency.app_label.as_str(),
 					dependency.migration_name.as_str(),
-				));
-				if !target_is_selected && !optional_dependencies.contains(dependency) {
+				)) && !optional_dependencies.contains(dependency)
+				{
 					optional_dependencies.push(dependency.clone());
 				}
 			}
@@ -233,17 +233,7 @@ impl MigrationSquasher {
 
 		let mut migration = Migration::new(name, first.app_label.clone());
 		migration.operations = operations;
-		migration.dependencies = range
-			.migrations
-			.iter()
-			.flat_map(|source| source.dependencies.iter().cloned())
-			.filter(|dependency| {
-				!range
-					.migrations
-					.iter()
-					.any(|source| source.app_label == dependency.0 && source.name == dependency.1)
-			})
-			.collect();
+		migration.dependencies = range.external_dependencies.clone();
 		migration.replaces = replaces;
 		migration.atomic = first.atomic;
 		migration.initial = first.initial;

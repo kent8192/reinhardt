@@ -11,18 +11,22 @@ use std::sync::{Arc, Mutex};
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 
-use reinhardt_core::exception::{DatabaseError, DatabaseErrorKind, Error};
+use reinhardt_core::exception::{DatabaseError, DatabaseErrorKind};
 use reinhardt_db::associations::markers::ManyToManyConfig;
 use reinhardt_db::associations::{ManyToManyField, ManyToManyManager};
+use reinhardt_db::orm::aggregation::Aggregate;
 use reinhardt_db::orm::annotation::{AnnotationValue, Expression, Value};
 use reinhardt_db::orm::composite_pk::{CompositePrimaryKey, PkValue};
 #[cfg(feature = "sqlite")]
 use reinhardt_db::orm::connection::{BackendsConnection, DatabaseConnectionLease};
-use reinhardt_db::orm::connection::{DatabaseBackend, OrmExecutor, QueryResult, QueryValue, Row};
+use reinhardt_db::orm::connection::{
+	DatabaseBackend, OrmExecutor, QueryResult, QueryValue, Row, TransactionExecutor,
+};
+use reinhardt_db::orm::cte::CTE;
 use reinhardt_db::orm::custom_manager::CustomManager;
 use reinhardt_db::orm::events::{EventRegistry, EventResult, MapperEvents, set_active_registry};
 use reinhardt_db::orm::execution::{QueryExecution, SelectExecution};
-use reinhardt_db::orm::expressions::F;
+use reinhardt_db::orm::expressions::{F, OrderingField, UniqueFieldRef};
 use reinhardt_db::orm::inspection::FieldInfo;
 use reinhardt_db::orm::manager::Manager;
 use reinhardt_db::orm::model::{FieldSelector, Model};
@@ -62,6 +66,90 @@ struct RecordingExecutor {
 	fetch_all_rows: VecDeque<Vec<Row>>,
 	fetch_optional_rows: VecDeque<Option<Row>>,
 	fetch_optional_contexts: Vec<Option<reinhardt_db::backends::error::PgvectorOperationKind>>,
+}
+
+#[derive(Debug)]
+struct RecordingTransactionExecutor {
+	backend: reinhardt_db::backends::types::DatabaseType,
+	calls: Vec<RecordedCall>,
+	fetch_all_rows: VecDeque<Vec<Row>>,
+}
+
+impl RecordingTransactionExecutor {
+	fn new(backend: reinhardt_db::backends::types::DatabaseType) -> Self {
+		Self {
+			backend,
+			calls: Vec::new(),
+			fetch_all_rows: VecDeque::new(),
+		}
+	}
+
+	fn with_fetch_all(mut self, rows: Vec<Row>) -> Self {
+		self.fetch_all_rows.push_back(rows);
+		self
+	}
+
+	fn record(&mut self, kind: &'static str, sql: &str, params: Vec<QueryValue>) {
+		self.calls.push(RecordedCall {
+			kind,
+			sql: sql.to_string(),
+			params,
+		});
+	}
+}
+
+#[async_trait]
+impl TransactionExecutor for RecordingTransactionExecutor {
+	fn backend(&self) -> reinhardt_db::backends::types::DatabaseType {
+		self.backend
+	}
+
+	async fn execute(
+		&mut self,
+		sql: &str,
+		params: Vec<QueryValue>,
+	) -> reinhardt_db::backends::Result<QueryResult> {
+		self.record("execute", sql, params);
+		Ok(QueryResult {
+			rows_affected: 0,
+			last_insert_id: None,
+		})
+	}
+
+	async fn fetch_one(
+		&mut self,
+		sql: &str,
+		params: Vec<QueryValue>,
+	) -> reinhardt_db::backends::Result<Row> {
+		self.record("fetch_one", sql, params);
+		Ok(Row::new())
+	}
+
+	async fn fetch_all(
+		&mut self,
+		sql: &str,
+		params: Vec<QueryValue>,
+	) -> reinhardt_db::backends::Result<Vec<Row>> {
+		self.record("fetch_all", sql, params);
+		Ok(self.fetch_all_rows.pop_front().unwrap_or_default())
+	}
+
+	async fn fetch_optional(
+		&mut self,
+		sql: &str,
+		params: Vec<QueryValue>,
+	) -> reinhardt_db::backends::Result<Option<Row>> {
+		self.record("fetch_optional", sql, params);
+		Ok(None)
+	}
+
+	async fn commit(self: Box<Self>) -> reinhardt_db::backends::Result<()> {
+		Ok(())
+	}
+
+	async fn rollback(self: Box<Self>) -> reinhardt_db::backends::Result<()> {
+		Ok(())
+	}
 }
 
 impl RecordingExecutor {
@@ -175,6 +263,80 @@ impl OrmExecutor for RecordingExecutor {
 	}
 }
 
+struct RowLockTransactionExecutor {
+	backend: reinhardt_db::backends::DatabaseType,
+	capabilities: reinhardt_db::orm::RowLockCapabilities,
+	calls: Vec<RecordedCall>,
+	rows: Vec<Row>,
+}
+
+impl RowLockTransactionExecutor {
+	fn postgres(rows: Vec<Row>) -> Self {
+		Self {
+			backend: reinhardt_db::backends::DatabaseType::Postgres,
+			capabilities: reinhardt_db::orm::RowLockCapabilities::postgres(),
+			calls: Vec::new(),
+			rows,
+		}
+	}
+}
+
+#[async_trait]
+impl TransactionExecutor for RowLockTransactionExecutor {
+	fn backend(&self) -> reinhardt_db::backends::DatabaseType {
+		self.backend
+	}
+
+	fn row_lock_capabilities(&self) -> reinhardt_db::orm::RowLockCapabilities {
+		self.capabilities
+	}
+
+	async fn execute(
+		&mut self,
+		_sql: &str,
+		_params: Vec<QueryValue>,
+	) -> reinhardt_core::exception::Result<QueryResult> {
+		panic!("row-lock SELECT test does not execute mutations")
+	}
+
+	async fn fetch_one(
+		&mut self,
+		_sql: &str,
+		_params: Vec<QueryValue>,
+	) -> reinhardt_core::exception::Result<Row> {
+		panic!("row-lock SELECT test does not fetch one row")
+	}
+
+	async fn fetch_all(
+		&mut self,
+		sql: &str,
+		params: Vec<QueryValue>,
+	) -> reinhardt_core::exception::Result<Vec<Row>> {
+		self.calls.push(RecordedCall {
+			kind: "fetch_all",
+			sql: sql.to_owned(),
+			params,
+		});
+		Ok(std::mem::take(&mut self.rows))
+	}
+
+	async fn fetch_optional(
+		&mut self,
+		_sql: &str,
+		_params: Vec<QueryValue>,
+	) -> reinhardt_core::exception::Result<Option<Row>> {
+		panic!("row-lock SELECT test does not fetch an optional row")
+	}
+
+	async fn commit(self: Box<Self>) -> reinhardt_core::exception::Result<()> {
+		Ok(())
+	}
+
+	async fn rollback(self: Box<Self>) -> reinhardt_core::exception::Result<()> {
+		Ok(())
+	}
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 struct Article {
 	#[serde(rename(serialize = "id", deserialize = "article_id"))]
@@ -217,6 +379,10 @@ impl Model for Article {
 		"article_id"
 	}
 
+	fn latest_by_fields() -> &'static [&'static str] {
+		&["article_id"]
+	}
+
 	fn field_metadata() -> Vec<FieldInfo> {
 		vec![
 			FieldInfo {
@@ -255,6 +421,15 @@ impl Model for Article {
 	}
 }
 
+fn article_title_unique() -> UniqueFieldRef<Article, String> {
+	fn getter(article: &Article) -> Option<String> {
+		Some(article.title.clone())
+	}
+
+	// SAFETY: `article_title` is the test fixture's unique lookup column and the getter reads it.
+	unsafe { UniqueFieldRef::from_model_field_with_getter("article_title", getter) }
+}
+
 struct MarkerSource;
 
 impl std::fmt::Display for MarkerSource {
@@ -268,48 +443,6 @@ struct MarkerTarget;
 impl std::fmt::Display for MarkerTarget {
 	fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
 		formatter.write_str("marker-target")
-	}
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-struct MetadataFreeArticle {
-	#[serde(rename(serialize = "id", deserialize = "article_id"))]
-	id: Option<i64>,
-	title: String,
-}
-
-#[derive(Clone)]
-struct MetadataFreeArticleFields;
-
-impl FieldSelector for MetadataFreeArticleFields {
-	fn with_alias(self, _alias: &str) -> Self {
-		self
-	}
-}
-
-impl Model for MetadataFreeArticle {
-	type PrimaryKey = i64;
-	type Fields = MetadataFreeArticleFields;
-	type Objects = Manager<Self>;
-
-	fn table_name() -> &'static str {
-		"metadata_free_articles"
-	}
-
-	fn new_fields() -> Self::Fields {
-		MetadataFreeArticleFields
-	}
-
-	fn primary_key(&self) -> Option<Self::PrimaryKey> {
-		self.id
-	}
-
-	fn set_primary_key(&mut self, value: Self::PrimaryKey) {
-		self.id = Some(value);
-	}
-
-	fn primary_key_column() -> &'static str {
-		"article_id"
 	}
 }
 
@@ -393,26 +526,6 @@ impl CustomManager for ExecutorBorrowingArticleManager {
 		}
 	}
 
-	fn get_or_create_with_conn<'a, E>(
-		&'a self,
-		conn: &'a mut E,
-		lookup_fields: HashMap<String, String>,
-		defaults: Option<HashMap<String, String>>,
-	) -> impl std::future::Future<Output = reinhardt_core::exception::Result<(Self::Model, bool)>>
-	+ Send
-	+ 'a
-	where
-		E: OrmExecutor + 'a,
-	{
-		async move {
-			let result = Manager::<Self::Model>::new()
-				.get_or_create_with_conn(conn, lookup_fields, defaults)
-				.await?;
-			let _backend_after_await = conn.backend();
-			Ok(result)
-		}
-	}
-
 	fn before_bulk_update(
 		&self,
 		models: &mut [Self::Model],
@@ -467,19 +580,228 @@ fn article_row(id: i64, title: &str) -> Row {
 	row
 }
 
-fn metadata_free_article_row(id: i64, title: &str) -> Row {
-	let mut row = Row::new();
-	row.insert("article_id".to_string(), QueryValue::Int(id));
-	row.insert("title".to_string(), QueryValue::String(title.to_string()));
-	row
-}
-
 fn article_locale_row(article_id: i64, locale: &str, title: &str) -> Row {
 	let mut row = Row::new();
 	row.insert("article_id".to_string(), QueryValue::Int(article_id));
 	row.insert("locale".to_string(), QueryValue::String(locale.to_string()));
 	row.insert("title".to_string(), QueryValue::String(title.to_string()));
 	row
+}
+
+#[tokio::test]
+async fn select_for_update_rejects_an_ordinary_executor_without_querying() {
+	let query = QuerySet::<Article>::new().select_for_update().nowait();
+	let mut executor = RecordingExecutor::new(DatabaseBackend::Postgres);
+
+	let error = query
+		.all_with_db(&mut executor)
+		.await
+		.expect_err("row locks require an active transaction executor");
+
+	assert_eq!(error.database_kind(), Some(DatabaseErrorKind::Transaction));
+	assert!(executor.calls.is_empty());
+}
+
+#[tokio::test]
+async fn select_for_update_rows_with_executor_short_circuits_empty_querysets() {
+	// Arrange
+	let query = QuerySet::<Article>::new().none().select_for_update();
+	let mut executor = RowLockTransactionExecutor::postgres(Vec::new());
+
+	// Act
+	let rows = query
+		.rows_with_executor(&mut executor)
+		.await
+		.expect("empty locking queryset must not execute a query");
+
+	// Assert
+	assert_eq!(rows, Vec::new());
+	assert!(executor.calls.is_empty());
+}
+
+#[tokio::test]
+async fn select_for_update_rejects_select_related_aggregate_annotations_without_querying() {
+	// Arrange
+	let query = QuerySet::<Article>::new()
+		.select_related(&["author"])
+		.aggregate(Aggregate::count_all().with_alias("article_count"))
+		.select_for_update()
+		.of_model();
+	let mut executor = RowLockTransactionExecutor::postgres(Vec::new());
+
+	// Act
+	let error = query
+		.rows_with_executor(&mut executor)
+		.await
+		.expect_err("PostgreSQL must reject row locking with aggregate annotations");
+
+	// Assert
+	assert_eq!(error.kind(), DatabaseErrorKind::Unsupported);
+	assert!(executor.calls.is_empty());
+}
+
+#[tokio::test]
+async fn select_for_update_renders_postgres_lock_options_in_a_transaction() {
+	let query = QuerySet::<Article>::new()
+		.select_for_update()
+		.nowait()
+		.no_key()
+		.of_model();
+	let mut executor = RowLockTransactionExecutor::postgres(vec![article_row(7, "locked")]);
+
+	let articles = query
+		.all_with_executor(&mut executor)
+		.await
+		.expect("PostgreSQL transaction should support every requested lock option");
+
+	assert_eq!(
+		articles,
+		vec![Article {
+			id: Some(7),
+			title: "locked".to_string(),
+		}]
+	);
+	assert_eq!(executor.calls.len(), 1);
+	assert_eq!(
+		executor.calls[0].sql,
+		"SELECT * FROM \"articles\" FOR NO KEY UPDATE OF \"articles\" NOWAIT"
+	);
+	assert!(executor.calls[0].params.is_empty());
+}
+
+#[tokio::test]
+async fn select_for_update_rejects_missing_server_capability_without_querying() {
+	let query = QuerySet::<Article>::new().select_for_update().skip_locked();
+	let mut executor = RowLockTransactionExecutor::postgres(Vec::new());
+	executor.capabilities.skip_locked = false;
+
+	let error = match query.rows_with_executor(&mut executor).await {
+		Ok(_) => panic!("an older PostgreSQL server must reject SKIP LOCKED"),
+		Err(error) => error,
+	};
+
+	assert_eq!(error.kind(), DatabaseErrorKind::Unsupported);
+	assert!(executor.calls.is_empty());
+}
+
+#[tokio::test]
+async fn select_for_update_rejects_cockroachdb_skip_locked_without_querying() {
+	let query = QuerySet::<Article>::new().select_for_update().skip_locked();
+	let mut executor = RowLockTransactionExecutor {
+		backend: reinhardt_db::backends::DatabaseType::Postgres,
+		capabilities: reinhardt_db::orm::RowLockCapabilities::cockroachdb(),
+		calls: Vec::new(),
+		rows: Vec::new(),
+	};
+
+	let error = match query.rows_with_executor(&mut executor).await {
+		Ok(_) => panic!("CockroachDB v23.1 must reject SKIP LOCKED before query execution"),
+		Err(error) => error,
+	};
+
+	assert_eq!(error.kind(), DatabaseErrorKind::Unsupported);
+	assert!(executor.calls.is_empty());
+}
+
+#[tokio::test]
+async fn select_for_update_rejects_derived_table_sources_without_querying() {
+	let query = QuerySet::<Article>::from_subquery(
+		|query: QuerySet<Article>| {
+			query.filter(Filter::new(
+				"article_id",
+				FilterOperator::Eq,
+				FilterValue::Integer(7),
+			))
+		},
+		"locked_articles",
+	)
+	.expect("derived queryset should compile")
+	.select_for_update();
+	let mut executor = RowLockTransactionExecutor::postgres(Vec::new());
+
+	let error = match query.rows_with_executor(&mut executor).await {
+		Ok(_) => panic!("row locking a derived table must be rejected before query execution"),
+		Err(error) => error,
+	};
+
+	assert_eq!(error.kind(), DatabaseErrorKind::Unsupported);
+	assert!(executor.calls.is_empty());
+}
+
+#[tokio::test]
+async fn select_for_update_rejects_lateral_join_sources_without_querying() {
+	let query = QuerySet::<Article>::new()
+		.with_lateral_join(reinhardt_db::orm::lateral_join::LateralJoin::new(
+			"latest_article",
+			"SELECT 1",
+		))
+		.select_for_update();
+	let mut executor = RowLockTransactionExecutor::postgres(Vec::new());
+
+	let error = match query.rows_with_executor(&mut executor).await {
+		Ok(_) => panic!("row locking with a lateral join must be rejected before query execution"),
+		Err(error) => error,
+	};
+
+	assert_eq!(error.kind(), DatabaseErrorKind::Unsupported);
+	assert!(executor.calls.is_empty());
+}
+
+#[tokio::test]
+async fn select_for_update_rejects_raw_aggregate_projections_without_querying() {
+	let query = QuerySet::<Article>::new()
+		.values(&["COUNT(*)"])
+		.select_for_update();
+	let mut executor = RowLockTransactionExecutor::postgres(Vec::new());
+
+	let error = match query.rows_with_executor(&mut executor).await {
+		Ok(_) => panic!("row locking with a raw aggregate must be rejected before query execution"),
+		Err(error) => error,
+	};
+
+	assert_eq!(error.kind(), DatabaseErrorKind::Unsupported);
+	assert!(executor.calls.is_empty());
+}
+
+#[tokio::test]
+async fn select_for_update_rejects_cte_backed_querysets_without_querying() {
+	// Arrange
+	let query = QuerySet::<Article>::new()
+		.with_cte(CTE::new(
+			"locked_articles",
+			"SELECT * FROM articles WHERE id > 0",
+		))
+		.select_for_update();
+	let mut executor = RowLockTransactionExecutor::postgres(Vec::new());
+
+	// Act
+	let error = query
+		.rows_with_executor(&mut executor)
+		.await
+		.expect_err("row locking CTE-backed querysets must be rejected before execution");
+
+	// Assert
+	assert_eq!(error.kind(), DatabaseErrorKind::Unsupported);
+	assert!(executor.calls.is_empty());
+}
+
+#[tokio::test]
+async fn select_for_update_rejects_sqlite_instead_of_degrading_to_a_no_op() {
+	let query = QuerySet::<Article>::new().select_for_update();
+	let mut executor = RowLockTransactionExecutor {
+		backend: reinhardt_db::backends::DatabaseType::Sqlite,
+		capabilities: reinhardt_db::orm::RowLockCapabilities::unsupported(),
+		calls: Vec::new(),
+		rows: Vec::new(),
+	};
+
+	let error = match query.rows_with_executor(&mut executor).await {
+		Ok(_) => panic!("SQLite does not support SELECT row locks"),
+		Err(error) => error,
+	};
+
+	assert_eq!(error.kind(), DatabaseErrorKind::Unsupported);
+	assert!(executor.calls.is_empty());
 }
 
 async fn save_article(
@@ -536,6 +858,342 @@ async fn dyn_orm_executor_saves_new_and_existing_articles() {
 			.params
 			.contains(&QueryValue::String("updated".to_string()))
 	);
+}
+
+#[tokio::test]
+async fn none_short_circuits_owned_and_transaction_executors() {
+	let queryset = QuerySet::<Article>::new()
+		.filter(Filter::new(
+			"title",
+			FilterOperator::Eq,
+			FilterValue::String("unreachable".to_string()),
+		))
+		.order_by(&["-article_id"])
+		.limit(1)
+		.none()
+		.filter(Filter::new(
+			"article_id",
+			FilterOperator::Eq,
+			FilterValue::Int(1),
+		))
+		.order_by(&["article_title"])
+		.limit(2);
+	let mut owned_executor = RecordingExecutor::new(DatabaseBackend::Postgres);
+
+	assert_eq!(
+		queryset.all_with_db(&mut owned_executor).await.unwrap(),
+		Vec::<Article>::new()
+	);
+	assert_eq!(
+		queryset.first_with_db(&mut owned_executor).await.unwrap(),
+		None
+	);
+	assert!(matches!(
+		queryset.get_with_db(&mut owned_executor).await,
+		Err(Error::NotFound(_))
+	));
+	assert_eq!(
+		queryset.count_with_db(&mut owned_executor).await.unwrap(),
+		0
+	);
+	assert!(!queryset.exists_with_db(&mut owned_executor).await.unwrap());
+	assert!(owned_executor.calls.is_empty());
+
+	let mut transaction_executor =
+		RecordingTransactionExecutor::new(reinhardt_db::backends::types::DatabaseType::Postgres);
+	assert_eq!(
+		queryset
+			.all_with_executor(&mut transaction_executor)
+			.await
+			.unwrap(),
+		Vec::<Article>::new()
+	);
+	assert_eq!(
+		queryset
+			.one_with_executor(&mut transaction_executor)
+			.await
+			.unwrap(),
+		Vec::<Article>::new()
+	);
+	assert_eq!(
+		queryset
+			.count_with_executor(&mut transaction_executor)
+			.await
+			.unwrap(),
+		0
+	);
+	assert!(transaction_executor.calls.is_empty());
+}
+
+#[tokio::test]
+async fn latest_and_earliest_use_typed_ordering_with_caller_owned_executors() {
+	let ordering = [
+		// SAFETY: these columns are declared by the Article test model below.
+		unsafe { OrderingField::<Article>::from_model_field("article_id") },
+		// SAFETY: these columns are declared by the Article test model below.
+		unsafe { OrderingField::<Article>::from_model_field("article_title") },
+	];
+	let queryset = QuerySet::<Article>::new();
+	let mut executor = RecordingExecutor::new(DatabaseBackend::Postgres)
+		.with_fetch_all(vec![article_row(3, "latest")])
+		.with_fetch_all(vec![article_row(1, "earliest")])
+		.with_fetch_all(vec![article_row(4, "explicit-latest")])
+		.with_fetch_all(vec![article_row(2, "explicit-earliest")]);
+
+	assert_eq!(
+		queryset.latest_with_db(&mut executor).await.unwrap().id,
+		Some(3)
+	);
+	assert_eq!(
+		queryset.earliest_with_db(&mut executor).await.unwrap().id,
+		Some(1)
+	);
+	assert_eq!(
+		queryset
+			.latest_by_with_db(&mut executor, &ordering)
+			.await
+			.unwrap()
+			.id,
+		Some(4)
+	);
+	assert_eq!(
+		queryset
+			.earliest_by_with_db(&mut executor, &ordering)
+			.await
+			.unwrap()
+			.id,
+		Some(2)
+	);
+	assert_eq!(executor.calls.len(), 4);
+	assert_eq!(
+		executor
+			.calls
+			.iter()
+			.map(|call| call.sql.as_str())
+			.collect::<Vec<_>>(),
+		vec![
+			"SELECT * FROM \"articles\" ORDER BY \"article_id\" DESC LIMIT $1",
+			"SELECT * FROM \"articles\" ORDER BY \"article_id\" ASC LIMIT $1",
+			"SELECT * FROM \"articles\" ORDER BY \"article_id\" DESC, \"article_title\" DESC LIMIT $1",
+			"SELECT * FROM \"articles\" ORDER BY \"article_id\" ASC, \"article_title\" ASC LIMIT $1",
+		]
+	);
+	assert!(
+		executor
+			.calls
+			.iter()
+			.all(|call| call.params == vec![QueryValue::Int(1)])
+	);
+
+	let mut transaction_executor =
+		RecordingTransactionExecutor::new(reinhardt_db::backends::types::DatabaseType::Postgres)
+			.with_fetch_all(vec![article_row(3, "latest")])
+			.with_fetch_all(vec![article_row(1, "earliest")])
+			.with_fetch_all(vec![article_row(4, "explicit-latest")])
+			.with_fetch_all(vec![article_row(2, "explicit-earliest")]);
+	assert_eq!(
+		queryset
+			.latest_with_executor(&mut transaction_executor)
+			.await
+			.unwrap()
+			.id,
+		Some(3)
+	);
+	assert_eq!(
+		queryset
+			.earliest_with_executor(&mut transaction_executor)
+			.await
+			.unwrap()
+			.id,
+		Some(1)
+	);
+	assert_eq!(
+		queryset
+			.latest_by_with_executor(&mut transaction_executor, &ordering)
+			.await
+			.unwrap()
+			.id,
+		Some(4)
+	);
+	assert_eq!(
+		queryset
+			.earliest_by_with_executor(&mut transaction_executor, &ordering)
+			.await
+			.unwrap()
+			.id,
+		Some(2)
+	);
+	assert_eq!(transaction_executor.calls.len(), 4);
+	assert!(
+		transaction_executor
+			.calls
+			.iter()
+			.all(|call| call.sql.contains("LIMIT $1"))
+	);
+	assert!(
+		transaction_executor
+			.calls
+			.iter()
+			.all(|call| call.params == vec![QueryValue::Int(1)])
+	);
+}
+
+#[tokio::test]
+async fn retrieval_helpers_return_not_found_or_validation_without_extra_queries() {
+	let mut executor = RecordingExecutor::new(DatabaseBackend::Postgres).with_fetch_all(Vec::new());
+	assert!(matches!(
+		QuerySet::<Article>::new()
+			.latest_with_db(&mut executor)
+			.await,
+		Err(Error::NotFound(_))
+	));
+	assert_eq!(executor.calls.len(), 1);
+
+	let mut metadata_free_executor = RecordingExecutor::new(DatabaseBackend::Postgres);
+	assert!(matches!(
+		QuerySet::<MetadataFreeArticle>::new()
+			.latest_with_db(&mut metadata_free_executor)
+			.await,
+		Err(Error::Validation(_))
+	));
+	assert!(metadata_free_executor.calls.is_empty());
+	assert!(matches!(
+		QuerySet::<Article>::new()
+			.latest_by_with_db(&mut metadata_free_executor, &[])
+			.await,
+		Err(Error::Validation(_))
+	));
+	assert!(matches!(
+		QuerySet::<MetadataFreeArticle>::new().none().latest().await,
+		Err(Error::Validation(_))
+	));
+	assert!(matches!(
+		QuerySet::<Article>::new().none().latest_by(&[]).await,
+		Err(Error::Validation(_))
+	));
+	assert!(metadata_free_executor.calls.is_empty());
+}
+
+#[tokio::test]
+async fn in_bulk_uses_one_typed_in_query_and_returns_ordered_maps() {
+	let queryset = QuerySet::<Article>::new();
+	let mut executor = RecordingExecutor::new(DatabaseBackend::Postgres)
+		.with_fetch_all(vec![article_row(3, "third"), article_row(1, "first")])
+		.with_fetch_all(vec![article_row(2, "second"), article_row(1, "first")])
+		.with_fetch_all(vec![article_row(1, "first")]);
+	let primary = queryset
+		.in_bulk_with_db(&mut executor, [3_i64, 1, 3, 99])
+		.await
+		.unwrap();
+	assert_eq!(primary.keys().copied().collect::<Vec<_>>(), vec![1, 3]);
+	let unique = queryset
+		.in_bulk_by_with_db(
+			&mut executor,
+			article_title_unique(),
+			[
+				"second".to_string(),
+				"first".to_string(),
+				"second".to_string(),
+			],
+		)
+		.await
+		.unwrap();
+	assert_eq!(
+		unique.keys().cloned().collect::<Vec<_>>(),
+		vec!["first".to_string(), "second".to_string()]
+	);
+	let deferred = queryset
+		.clone()
+		.defer(&["id", "title"])
+		.in_bulk_with_db(&mut executor, [1_i64])
+		.await
+		.unwrap();
+	assert_eq!(deferred.keys().copied().collect::<Vec<_>>(), vec![1]);
+	assert_eq!(executor.calls.len(), 3);
+	assert!(executor.calls.iter().all(|call| call.kind == "fetch_all"));
+	assert!(executor.calls.iter().all(|call| call.sql.contains(" IN ")));
+	assert!(
+		executor
+			.calls
+			.iter()
+			.all(|call| !call.sql.contains("Expr::cust"))
+	);
+	assert_eq!(
+		executor.calls[0].sql,
+		"SELECT * FROM \"articles\" WHERE \"article_id\" IN ($1, $2, $3)"
+	);
+	assert_eq!(
+		executor.calls[1].sql,
+		"SELECT * FROM \"articles\" WHERE \"article_title\" IN ($1, $2)"
+	);
+	assert_eq!(
+		executor.calls[0].params,
+		vec![QueryValue::Int(1), QueryValue::Int(3), QueryValue::Int(99)]
+	);
+	assert_eq!(
+		executor.calls[1].params,
+		vec![
+			QueryValue::String("first".to_string()),
+			QueryValue::String("second".to_string())
+		]
+	);
+	assert_eq!(
+		executor.calls[2].sql,
+		"SELECT \"article_id\" FROM \"articles\" WHERE \"article_id\" IN ($1)"
+	);
+	assert_eq!(executor.calls[2].params, vec![QueryValue::Int(1)]);
+
+	let mut transaction_executor =
+		RecordingTransactionExecutor::new(reinhardt_db::backends::types::DatabaseType::Postgres)
+			.with_fetch_all(vec![article_row(2, "second")])
+			.with_fetch_all(vec![article_row(1, "first")]);
+	assert_eq!(
+		queryset
+			.in_bulk_with_executor(&mut transaction_executor, [2_i64, 2])
+			.await
+			.unwrap()
+			.keys()
+			.copied()
+			.collect::<Vec<_>>(),
+		vec![2]
+	);
+	assert_eq!(
+		queryset
+			.in_bulk_by_with_executor(
+				&mut transaction_executor,
+				article_title_unique(),
+				["first".to_string()],
+			)
+			.await
+			.unwrap()
+			.keys()
+			.cloned()
+			.collect::<Vec<_>>(),
+		vec!["first".to_string()]
+	);
+	assert_eq!(transaction_executor.calls.len(), 2);
+
+	let mut empty_executor = RecordingExecutor::new(DatabaseBackend::Postgres);
+	assert!(
+		queryset
+			.in_bulk_with_db(&mut empty_executor, Vec::<i64>::new())
+			.await
+			.unwrap()
+			.is_empty()
+	);
+	assert!(
+		queryset
+			.none()
+			.in_bulk_by_with_db(
+				&mut empty_executor,
+				article_title_unique(),
+				["unreachable".to_string()],
+			)
+			.await
+			.unwrap()
+			.is_empty()
+	);
+	assert!(empty_executor.calls.is_empty());
 }
 
 #[tokio::test]
@@ -811,379 +1469,8 @@ async fn mysql_generated_id_failures_are_unsupported_before_reload() {
 }
 
 #[tokio::test]
-async fn get_or_create_uses_the_caller_owned_executor() {
-	let mut lookup_fields = HashMap::new();
-	lookup_fields.insert("title".to_string(), "lookup".to_string());
-	let mut executor = RecordingExecutor::new(DatabaseBackend::Postgres)
-		.with_fetch_optional(None)
-		.with_fetch_one(article_row(9, "lookup"));
-
-	let (article, created) = Manager::<Article>::new()
-		.get_or_create_with_conn(&mut executor, lookup_fields, None)
-		.await
-		.expect("get_or_create should use the supplied executor");
-
-	assert!(created);
-	assert_eq!(article.id, Some(9));
-	assert_eq!(executor.calls.len(), 2);
-	assert_eq!(executor.calls[0].kind, "fetch_optional");
-	assert_eq!(executor.calls[1].kind, "fetch_one");
-	assert!(
-		executor
-			.calls
-			.iter()
-			.all(|call| call.sql.contains("articles"))
-	);
-
-	let mut defaults = HashMap::new();
-	defaults.insert("id".to_string(), "007".to_string());
-	let mut mysql_executor = RecordingExecutor::new(DatabaseBackend::MySql)
-		.with_fetch_optional(None)
-		.with_execute_result(QueryResult {
-			rows_affected: 1,
-			last_insert_id: None,
-		})
-		.with_fetch_one(article_row(7, "lookup"));
-	let mut mysql_lookup_fields = HashMap::new();
-	mysql_lookup_fields.insert("title".to_string(), "lookup".to_string());
-	let (article, created) = Manager::<Article>::new()
-		.get_or_create_with_conn(&mut mysql_executor, mysql_lookup_fields, Some(defaults))
-		.await
-		.expect("an explicit MySQL primary key from defaults must bypass generated IDs");
-
-	assert!(created);
-	assert_eq!(article.id, Some(7));
-	assert_eq!(mysql_executor.calls.len(), 3);
-	assert_eq!(mysql_executor.calls[0].kind, "fetch_optional");
-	assert_eq!(mysql_executor.calls[1].kind, "execute");
-	assert_eq!(mysql_executor.calls[2].kind, "fetch_one");
-	assert!(mysql_executor.calls[1].sql.contains("article_id"));
-	assert!(mysql_executor.calls[2].sql.contains("article_id"));
-	assert_eq!(
-		mysql_executor.calls[2].params,
-		vec![QueryValue::String("007".to_string())]
-	);
-}
-
-#[tokio::test]
-async fn mysql_get_or_create_with_physical_primary_key_defaults_bypasses_generated_id() {
-	let mut lookup_fields = HashMap::new();
-	lookup_fields.insert("title".to_string(), "physical-default".to_string());
-	let mut defaults = HashMap::new();
-	defaults.insert("article_id".to_string(), "007".to_string());
-	let mut executor = RecordingExecutor::new(DatabaseBackend::MySql)
-		.with_fetch_optional(None)
-		.with_execute_result(QueryResult {
-			rows_affected: 1,
-			last_insert_id: None,
-		})
-		.with_fetch_one(article_row(7, "physical-default"));
-
-	let (article, created) = Manager::<Article>::new()
-		.get_or_create_with_conn(&mut executor, lookup_fields, Some(defaults))
-		.await
-		.expect("a physical primary key from defaults must bypass generated IDs");
-
-	assert!(created);
-	assert_eq!(article.id, Some(7));
-	assert_eq!(executor.calls.len(), 3);
-	assert_eq!(executor.calls[0].kind, "fetch_optional");
-	assert_eq!(executor.calls[1].kind, "execute");
-	assert_eq!(executor.calls[2].kind, "fetch_one");
-	assert!(executor.calls[1].sql.contains("article_id"));
-	assert!(executor.calls[2].sql.contains("article_id"));
-	assert_eq!(
-		executor.calls[2].params,
-		vec![QueryValue::String("007".to_string())]
-	);
-}
-
-#[tokio::test]
-async fn mysql_get_or_create_with_physical_primary_key_lookup_bypasses_generated_id() {
-	let mut lookup_fields = HashMap::new();
-	lookup_fields.insert("article_id".to_string(), "007".to_string());
-	lookup_fields.insert("title".to_string(), "physical-lookup".to_string());
-	let mut executor = RecordingExecutor::new(DatabaseBackend::MySql)
-		.with_fetch_optional(None)
-		.with_execute_result(QueryResult {
-			rows_affected: 1,
-			last_insert_id: Some(0),
-		})
-		.with_fetch_one(article_row(7, "physical-lookup"));
-
-	let (article, created) = Manager::<Article>::new()
-		.get_or_create_with_conn(&mut executor, lookup_fields, None)
-		.await
-		.expect("a physical primary key from lookup fields must bypass generated IDs");
-
-	assert!(created);
-	assert_eq!(article.id, Some(7));
-	assert_eq!(executor.calls.len(), 3);
-	assert_eq!(executor.calls[0].kind, "fetch_optional");
-	assert_eq!(executor.calls[1].kind, "execute");
-	assert_eq!(executor.calls[2].kind, "fetch_one");
-	assert!(executor.calls[0].sql.contains("article_id"));
-	assert!(executor.calls[1].sql.contains("article_id"));
-	assert!(executor.calls[2].sql.contains("article_id"));
-	assert_eq!(
-		executor.calls[2].params,
-		vec![QueryValue::String("007".to_string())]
-	);
-}
-
-#[tokio::test]
-async fn mysql_get_or_create_coalesces_equal_primary_key_aliases_in_defaults() {
-	let lookup_fields = HashMap::from([("title".to_string(), "alias-defaults".to_string())]);
-	let defaults = HashMap::from([
-		("id".to_string(), "007".to_string()),
-		("article_id".to_string(), "007".to_string()),
-	]);
-	let mut executor = RecordingExecutor::new(DatabaseBackend::MySql)
-		.with_fetch_optional(None)
-		.with_execute_result(QueryResult {
-			rows_affected: 1,
-			last_insert_id: None,
-		})
-		.with_fetch_one(article_row(7, "alias-defaults"));
-
-	let (article, created) = Manager::<Article>::new()
-		.get_or_create_with_conn(&mut executor, lookup_fields, Some(defaults))
-		.await
-		.expect("equal primary-key aliases should coalesce before the insert");
-
-	assert!(created);
-	assert_eq!(article.id, Some(7));
-	assert_eq!(executor.calls.len(), 3);
-	assert_eq!(executor.calls[1].kind, "execute");
-	assert_eq!(executor.calls[1].sql.matches("`article_id`").count(), 1);
-	assert_eq!(executor.calls[2].kind, "fetch_one");
-	assert_eq!(
-		executor.calls[2].params,
-		vec![QueryValue::String("007".to_string())]
-	);
-}
-
-#[tokio::test]
-async fn mysql_get_or_create_defaults_override_primary_key_aliases_across_maps() {
-	let lookup_fields = HashMap::from([("id".to_string(), "001".to_string())]);
-	let defaults = HashMap::from([("article_id".to_string(), "007".to_string())]);
-	let mut executor = RecordingExecutor::new(DatabaseBackend::MySql)
-		.with_fetch_optional(None)
-		.with_execute_result(QueryResult {
-			rows_affected: 1,
-			last_insert_id: None,
-		})
-		.with_fetch_one(article_row(7, "alias-split"));
-
-	let (article, created) = Manager::<Article>::new()
-		.get_or_create_with_conn(&mut executor, lookup_fields, Some(defaults))
-		.await
-		.expect("defaults should override lookup values after primary-key canonicalization");
-
-	assert!(created);
-	assert_eq!(article.id, Some(7));
-	assert_eq!(executor.calls.len(), 3);
-	assert_eq!(executor.calls[0].kind, "fetch_optional");
-	assert_eq!(
-		executor.calls[0].params,
-		vec![QueryValue::String("001".to_string())]
-	);
-	assert_eq!(executor.calls[1].kind, "execute");
-	assert_eq!(executor.calls[1].sql.matches("`article_id`").count(), 1);
-	assert_eq!(
-		executor.calls[1].params,
-		vec![QueryValue::String("007".to_string())]
-	);
-	assert_eq!(
-		executor.calls[2].params,
-		vec![QueryValue::String("007".to_string())]
-	);
-}
-
-#[tokio::test]
-async fn get_or_create_rejects_conflicting_primary_key_aliases_before_executor_use() {
-	let lookup_fields = HashMap::from([("title".to_string(), "alias-conflict".to_string())]);
-	let defaults = HashMap::from([
-		("id".to_string(), "007".to_string()),
-		("article_id".to_string(), "008".to_string()),
-	]);
-	let mut executor = RecordingExecutor::new(DatabaseBackend::MySql);
-
-	let error = Manager::<Article>::new()
-		.get_or_create_with_conn(&mut executor, lookup_fields, Some(defaults))
-		.await
-		.expect_err("conflicting logical and physical primary-key aliases must be rejected");
-
-	assert!(matches!(error, Error::Validation(_)));
-	assert!(executor.calls.is_empty());
-}
-
-#[test]
-fn get_or_create_sql_builders_coalesce_equal_primary_key_aliases() {
-	let manager = Manager::<Article>::new();
-	let lookup_fields = HashMap::from([("title".to_string(), "alias-builder".to_string())]);
-	let defaults = HashMap::from([
-		("id".to_string(), "007".to_string()),
-		("article_id".to_string(), "007".to_string()),
-	]);
-
-	let (_, manager_insert) = manager
-		.get_or_create_sql(&lookup_fields, &defaults, DatabaseBackend::MySql)
-		.expect("the manager SQL builder should normalize equal primary-key aliases");
-	let _ = manager
-		.get_or_create_queries(&lookup_fields, &defaults)
-		.expect("the manager statement builder should normalize equal primary-key aliases");
-	let (_, custom_manager_insert) = CustomManager::get_or_create_sql(
-		&manager,
-		&lookup_fields,
-		&defaults,
-		DatabaseBackend::MySql,
-	)
-	.expect("the CustomManager SQL builder should normalize equal primary-key aliases");
-	let _ = CustomManager::get_or_create_queries(&manager, &lookup_fields, &defaults)
-		.expect("the CustomManager statement builder should normalize equal primary-key aliases");
-
-	assert_eq!(manager_insert.matches("`article_id`").count(), 1);
-	assert_eq!(custom_manager_insert.matches("`article_id`").count(), 1);
-	assert_eq!(manager_insert, custom_manager_insert);
-}
-
-#[test]
-fn get_or_create_sql_builders_reject_conflicting_primary_key_aliases() {
-	let manager = Manager::<Article>::new();
-	let lookup_fields = HashMap::new();
-	let defaults = HashMap::from([
-		("id".to_string(), "007".to_string()),
-		("article_id".to_string(), "008".to_string()),
-	]);
-
-	let manager_error = manager
-		.get_or_create_queries(&lookup_fields, &defaults)
-		.err()
-		.expect("the manager statement builder should reject conflicting aliases");
-	let manager_sql_error = manager
-		.get_or_create_sql(&lookup_fields, &defaults, DatabaseBackend::MySql)
-		.err()
-		.expect("the manager SQL builder should reject conflicting aliases");
-	let custom_manager_query_error =
-		CustomManager::get_or_create_queries(&manager, &lookup_fields, &defaults)
-			.err()
-			.expect("the CustomManager statement builder should reject conflicting aliases");
-	let custom_manager_error = CustomManager::get_or_create_sql(
-		&manager,
-		&lookup_fields,
-		&defaults,
-		DatabaseBackend::MySql,
-	)
-	.err()
-	.expect("the CustomManager SQL builder should reject conflicting aliases");
-
-	assert!(matches!(manager_error, Error::Validation(_)));
-	assert!(matches!(manager_sql_error, Error::Validation(_)));
-	assert!(matches!(custom_manager_query_error, Error::Validation(_)));
-	assert!(matches!(custom_manager_error, Error::Validation(_)));
-}
-
-#[test]
-fn metadata_free_primary_key_override_is_used_by_get_or_create_sql_builders() {
-	let manager = Manager::<MetadataFreeArticle>::new();
-	let lookup_fields = HashMap::from([("title".to_string(), "manual-builder".to_string())]);
-	let defaults = HashMap::from([("article_id".to_string(), "007".to_string())]);
-
-	let (_, manager_insert) = manager
-		.get_or_create_sql(&lookup_fields, &defaults, DatabaseBackend::MySql)
-		.expect("the manager SQL builder should support a metadata-free primary-key override");
-	let (_, custom_manager_insert) = CustomManager::get_or_create_sql(
-		&manager,
-		&lookup_fields,
-		&defaults,
-		DatabaseBackend::MySql,
-	)
-	.expect("the CustomManager SQL builder should support a metadata-free primary-key override");
-
-	assert!(manager_insert.contains("`article_id`"));
-	assert!(!manager_insert.contains("`id`"));
-	assert_eq!(manager_insert, custom_manager_insert);
-}
-
-#[tokio::test]
-async fn metadata_free_primary_key_override_is_used_by_mysql_get_or_create() {
-	let manager = Manager::<MetadataFreeArticle>::new();
-	let lookup_fields = HashMap::from([("title".to_string(), "manual-runtime".to_string())]);
-	let defaults = Some(HashMap::from([(
-		"article_id".to_string(),
-		"007".to_string(),
-	)]));
-	let mut manager_executor = RecordingExecutor::new(DatabaseBackend::MySql)
-		.with_fetch_optional(None)
-		.with_execute_result(QueryResult {
-			rows_affected: 1,
-			last_insert_id: None,
-		})
-		.with_fetch_one(metadata_free_article_row(7, "manual-runtime"));
-	let mut custom_manager_executor = RecordingExecutor::new(DatabaseBackend::MySql)
-		.with_fetch_optional(None)
-		.with_execute_result(QueryResult {
-			rows_affected: 1,
-			last_insert_id: None,
-		})
-		.with_fetch_one(metadata_free_article_row(7, "manual-runtime"));
-
-	let (manager_article, manager_created) = manager
-		.get_or_create_with_conn(
-			&mut manager_executor,
-			lookup_fields.clone(),
-			defaults.clone(),
-		)
-		.await
-		.expect("the manager runtime should support a metadata-free primary-key override");
-	let (custom_manager_article, custom_manager_created) = CustomManager::get_or_create_with_conn(
-		&manager,
-		&mut custom_manager_executor,
-		lookup_fields,
-		defaults,
-	)
-	.await
-	.expect("the CustomManager runtime should support a metadata-free primary-key override");
-
-	assert!(manager_created);
-	assert!(custom_manager_created);
-	assert_eq!(manager_article.id, Some(7));
-	assert_eq!(custom_manager_article.id, Some(7));
-	assert!(manager_executor.calls[1].sql.contains("`article_id`"));
-	assert!(!manager_executor.calls[1].sql.contains("`id`"));
-	assert!(
-		custom_manager_executor.calls[1]
-			.sql
-			.contains("`article_id`")
-	);
-	assert!(!custom_manager_executor.calls[1].sql.contains("`id`"));
-	assert_eq!(
-		manager_executor.calls[2].params,
-		vec![QueryValue::String("007".to_string())]
-	);
-	assert_eq!(
-		custom_manager_executor.calls[2].params,
-		vec![QueryValue::String("007".to_string())]
-	);
-}
-
-#[tokio::test]
-async fn custom_manager_explicit_terminals_preserve_executor_borrows_and_hooks() {
+async fn custom_manager_bulk_terminals_preserve_executor_borrows_and_hooks() {
 	let manager = ExecutorBorrowingArticleManager::new();
-	let mut lookup_fields = HashMap::new();
-	lookup_fields.insert("title".to_string(), "custom-lookup".to_string());
-	let mut get_or_create_executor = RecordingExecutor::new(DatabaseBackend::Postgres)
-		.with_fetch_optional(None)
-		.with_fetch_one(article_row(31, "custom-lookup"));
-
-	let (article, created) = manager
-		.get_or_create_with_conn(&mut get_or_create_executor, lookup_fields, None)
-		.await
-		.expect("an explicit CustomManager override must retain the executor across await");
-	assert!(created);
-	assert_eq!(article.id, Some(31));
-	assert_eq!(get_or_create_executor.calls.len(), 2);
 
 	let mut bulk_create_executor = RecordingExecutor::new(DatabaseBackend::MySql)
 		.with_execute_result(QueryResult {

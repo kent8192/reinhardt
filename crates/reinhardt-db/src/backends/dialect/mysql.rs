@@ -1,8 +1,10 @@
 //! MySQL dialect implementation
 
 use async_trait::async_trait;
+use futures::StreamExt;
 use sqlx::{
-	Column, Executor, MySql, MySqlPool, Row as SqlxRow, Transaction, TypeInfo, mysql::MySqlRow,
+	Column, Executor, MySql, MySqlPool, Row as SqlxRow, Transaction, TypeInfo, ValueRef,
+	mysql::MySqlRow,
 };
 use std::sync::Arc;
 
@@ -10,7 +12,8 @@ use crate::backends::{
 	backend::DatabaseBackend,
 	error::{DatabaseError, DatabaseErrorKind, Result, map_sqlx_error},
 	types::{
-		DatabaseType, IsolationLevel, QueryResult, QueryValue, Row, Savepoint, TransactionExecutor,
+		DatabaseType, IsolationLevel, QueryResult, QueryValue, Row, RowStream, Savepoint,
+		TransactionExecutor,
 	},
 };
 
@@ -146,6 +149,14 @@ impl MySqlBackend {
 		let mut row = Row::new();
 		for column in mysql_row.columns() {
 			let column_name = column.name();
+			if mysql_row
+				.try_get_raw(column_name)
+				.map_err(map_sqlx_error)?
+				.is_null()
+			{
+				row.insert(column_name.to_string(), QueryValue::Null);
+				continue;
+			}
 			let type_name = column.type_info().name().to_uppercase();
 			if type_name == "JSON" {
 				match mysql_row.try_get::<Option<serde_json::Value>, _>(column_name) {
@@ -175,6 +186,12 @@ impl MySqlBackend {
 				&& let Ok(value) = mysql_row.try_get::<bool, _>(column_name)
 			{
 				row.insert(column_name.to_string(), QueryValue::Bool(value));
+			} else if let Ok(value) = mysql_row.try_get::<u64, _>(column_name) {
+				let value = match i64::try_from(value) {
+					Ok(value) => QueryValue::Int(value),
+					Err(_) => QueryValue::String(value.to_string()),
+				};
+				row.insert(column_name.to_string(), value);
 			} else if let Ok(value) = mysql_row.try_get::<i64, _>(column_name) {
 				row.insert(column_name.to_string(), QueryValue::Int(value));
 			} else if let Ok(value) = mysql_row.try_get::<i32, _>(column_name) {
@@ -219,6 +236,10 @@ impl MySqlBackend {
 impl DatabaseBackend for MySqlBackend {
 	fn database_type(&self) -> DatabaseType {
 		DatabaseType::Mysql
+	}
+
+	fn supports_row_streaming(&self) -> bool {
+		true
 	}
 
 	fn placeholder(&self, _index: usize) -> String {
@@ -273,6 +294,45 @@ impl DatabaseBackend for MySqlBackend {
 		mysql_rows.into_iter().map(Self::convert_row).collect()
 	}
 
+	fn fetch_stream<'a>(
+		&'a self,
+		sql: String,
+		params: Vec<QueryValue>,
+		chunk_size: usize,
+	) -> Result<RowStream<'a>> {
+		if chunk_size == 0 {
+			return Err(DatabaseError::new(
+				DatabaseErrorKind::Configuration,
+				"Row stream chunk_size must be greater than zero",
+			)
+			.into());
+		}
+		let pool = Arc::clone(&self.pool);
+		Ok(Box::pin(async_stream::stream! {
+			let mut query = sqlx::query(&sql);
+			for param in &params {
+				query = match Self::bind_value(query, param) {
+					Ok(query) => query,
+					Err(error) => {
+						yield Err(error);
+						return;
+					}
+				};
+			}
+			let rows = query.fetch(pool.as_ref());
+			futures::pin_mut!(rows);
+			let rows = rows.ready_chunks(chunk_size);
+			futures::pin_mut!(rows);
+			while let Some(chunk) = rows.next().await {
+				for row in chunk {
+					yield row
+						.map_err(|error| map_sqlx_error(error).into())
+						.and_then(Self::convert_row);
+				}
+			}
+		}))
+	}
+
 	async fn fetch_optional(&self, sql: &str, params: Vec<QueryValue>) -> Result<Option<Row>> {
 		let mut query = sqlx::query(sql);
 		for param in &params {
@@ -288,6 +348,14 @@ impl DatabaseBackend for MySqlBackend {
 	async fn begin(&self) -> Result<Box<dyn TransactionExecutor>> {
 		let tx = self.pool.begin().await.map_err(map_sqlx_error)?;
 		Ok(Box::new(MySqlTransactionExecutor::new(tx)))
+	}
+
+	async fn begin_write(&self) -> Result<Box<dyn TransactionExecutor>> {
+		// READ COMMITTED avoids InnoDB next-key gap locks for missing-row
+		// SELECT ... FOR UPDATE lookups. Unique constraints still serialize
+		// competing inserts, after which the loser can lock and update the winner.
+		self.begin_with_isolation(IsolationLevel::ReadCommitted)
+			.await
 	}
 
 	async fn begin_with_isolation(
@@ -424,6 +492,45 @@ impl TransactionExecutor for MySqlTransactionExecutor {
 		}
 		let rows = query.fetch_all(&mut **tx).await.map_err(map_sqlx_error)?;
 		rows.into_iter().map(Self::convert_row).collect()
+	}
+
+	fn fetch_stream<'a>(
+		&'a mut self,
+		sql: String,
+		params: Vec<QueryValue>,
+		chunk_size: usize,
+	) -> Result<RowStream<'a>> {
+		if chunk_size == 0 {
+			return Err(DatabaseError::new(
+				DatabaseErrorKind::Configuration,
+				"Row stream chunk_size must be greater than zero",
+			)
+			.into());
+		}
+		let tx = self.tx.as_mut().ok_or_else(transaction_consumed_error)?;
+		Ok(Box::pin(async_stream::stream! {
+			let mut query = sqlx::query(&sql);
+			for param in &params {
+				query = match Self::bind_value(query, param) {
+					Ok(query) => query,
+					Err(error) => {
+						yield Err(error);
+						return;
+					}
+				};
+			}
+			let rows = query.fetch(&mut **tx);
+			futures::pin_mut!(rows);
+			let rows = rows.ready_chunks(chunk_size);
+			futures::pin_mut!(rows);
+			while let Some(chunk) = rows.next().await {
+				for row in chunk {
+					yield row
+						.map_err(|error| map_sqlx_error(error).into())
+						.and_then(Self::convert_row);
+				}
+			}
+		}))
 	}
 
 	async fn fetch_optional(&mut self, sql: &str, params: Vec<QueryValue>) -> Result<Option<Row>> {
@@ -625,6 +732,45 @@ impl TransactionExecutor for MySqlRawTransactionExecutor {
 		}
 		let rows = query.fetch_all(&mut **conn).await.map_err(map_sqlx_error)?;
 		rows.into_iter().map(Self::convert_row).collect()
+	}
+
+	fn fetch_stream<'a>(
+		&'a mut self,
+		sql: String,
+		params: Vec<QueryValue>,
+		chunk_size: usize,
+	) -> Result<RowStream<'a>> {
+		if chunk_size == 0 {
+			return Err(DatabaseError::new(
+				DatabaseErrorKind::Configuration,
+				"Row stream chunk_size must be greater than zero",
+			)
+			.into());
+		}
+		let conn = self.connection_mut()?;
+		Ok(Box::pin(async_stream::stream! {
+			let mut query = sqlx::query(&sql);
+			for param in &params {
+				query = match Self::bind_value(query, param) {
+					Ok(query) => query,
+					Err(error) => {
+						yield Err(error);
+						return;
+					}
+				};
+			}
+			let rows = query.fetch(&mut **conn);
+			futures::pin_mut!(rows);
+			let rows = rows.ready_chunks(chunk_size);
+			futures::pin_mut!(rows);
+			while let Some(chunk) = rows.next().await {
+				for row in chunk {
+					yield row
+						.map_err(|error| map_sqlx_error(error).into())
+						.and_then(Self::convert_row);
+				}
+			}
+		}))
 	}
 
 	async fn fetch_optional(&mut self, sql: &str, params: Vec<QueryValue>) -> Result<Option<Row>> {

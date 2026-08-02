@@ -1,10 +1,13 @@
 //! Database backend abstraction
 
 use async_trait::async_trait;
+use futures::StreamExt;
 
 use super::{
 	error::Result,
-	types::{DatabaseType, IsolationLevel, QueryResult, QueryValue, Row, TransactionExecutor},
+	types::{
+		DatabaseType, IsolationLevel, QueryResult, QueryValue, Row, RowStream, TransactionExecutor,
+	},
 };
 
 /// Core database backend trait
@@ -15,6 +18,11 @@ pub trait DatabaseBackend: Send + Sync {
 
 	/// Returns whether contextual pgvector error hints are supported.
 	fn supports_pgvector_error_hints(&self) -> bool {
+		false
+	}
+
+	/// Returns whether this backend can stream rows without eager materialization.
+	fn supports_row_streaming(&self) -> bool {
 		false
 	}
 
@@ -96,6 +104,45 @@ pub trait DatabaseBackend: Send + Sync {
 		}
 	}
 
+	/// Streams matching rows without eager materialization.
+	///
+	/// `chunk_size` is a driver fetch or bounded-buffer hint. Implementations
+	/// must not emulate streaming with repeated `LIMIT` and `OFFSET` queries.
+	fn fetch_stream<'a>(
+		&'a self,
+		_sql: String,
+		_params: Vec<QueryValue>,
+		_chunk_size: usize,
+	) -> Result<RowStream<'a>> {
+		Err(super::error::DatabaseError::new(
+			super::error::DatabaseErrorKind::Unsupported,
+			"Row streaming is not supported by this database backend",
+		)
+		.into())
+	}
+
+	/// Streams rows with structural pgvector operation context.
+	fn fetch_stream_with_context<'a>(
+		&'a self,
+		sql: String,
+		params: Vec<QueryValue>,
+		chunk_size: usize,
+		context: Option<super::error::PgvectorOperationKind>,
+	) -> Result<RowStream<'a>> {
+		let decorate =
+			self.database_type() == DatabaseType::Postgres && self.supports_pgvector_error_hints();
+		let stream = self.fetch_stream(sql, params, chunk_size)?;
+		if decorate {
+			Ok(Box::pin(stream.map(move |result| {
+				result.map_err(|error| {
+					super::error::decorate_error_with_pgvector_context(error, context)
+				})
+			})))
+		} else {
+			Ok(stream)
+		}
+	}
+
 	/// Fetches an optional single row from the database
 	async fn fetch_optional(&self, sql: &str, params: Vec<QueryValue>) -> Result<Option<Row>>;
 
@@ -127,6 +174,14 @@ pub trait DatabaseBackend: Send + Sync {
 	/// A boxed `TransactionExecutor` that holds the dedicated connection
 	/// and provides methods for executing queries within the transaction.
 	async fn begin(&self) -> Result<Box<dyn TransactionExecutor>>;
+
+	/// Begins a transaction that acquires write intent before reading.
+	///
+	/// Backends whose ordinary transaction already provides the required
+	/// locking semantics may use the default implementation.
+	async fn begin_write(&self) -> Result<Box<dyn TransactionExecutor>> {
+		self.begin().await
+	}
 
 	/// Begin a database transaction with a specific isolation level
 	///

@@ -17,6 +17,7 @@ This crate provides the following modules:
 - **ORM**: Object-Relational Mapping system
   - Django-inspired Model trait
   - QuerySet API for chainable queries
+  - Typed `get_or_create` and `update_or_create` builders
   - Field types (AutoField, CharField, IntegerField, DateTimeField, etc.)
   - Timestamped and SoftDeletable traits
   - Relationship management
@@ -66,6 +67,40 @@ This crate provides the following modules:
   - Only/Defer field optimization for reduced data transfer
   - Aggregate pushdown optimization
 
+### Streaming QuerySets
+
+`QuerySet::iterator_with_db` and `QuerySet::iterator_with_executor` decode one
+model at a time from a lifetime-bound driver stream. The stream borrows the
+caller-owned executor, returns `Result<Model>` for every item, and releases its
+driver resources when it completes, fails, is cancelled, or is dropped early.
+
+```rust
+use futures::StreamExt;
+use reinhardt_db::orm::{Model, OrmExecutor, QuerySet};
+use serde::de::DeserializeOwned;
+
+async fn stream_models<M, E>(connection: &mut E) -> reinhardt_core::exception::Result<()>
+where
+    M: Model + DeserializeOwned,
+    E: OrmExecutor,
+{
+	let mut models = QuerySet::<M>::new().iterator_with_db(connection, 128)?;
+	while let Some(model) = models.next().await {
+		let model = model?;
+		// Process the typed model without a QuerySet-level result cache.
+		let _ = model;
+	}
+	Ok(())
+}
+```
+
+PostgreSQL, MySQL, and SQLite support driver-backed streaming. Custom executors
+must implement the row-stream capability or the iterator returns an explicit
+`Unsupported` database error. `chunk_size` is a driver fetch or bounded-buffer
+hint rather than a promise about server internals. Unlike Django's compatibility
+fallbacks, Reinhardt intentionally rejects eager `fetch_all` materialization and
+repeated `LIMIT`/`OFFSET` pagination for this API.
+
 - **Enhanced Transaction Management**
   - Nested transactions with savepoint support
   - Isolation level control (ReadUncommitted, ReadCommitted, RepeatableRead, Serializable)
@@ -75,6 +110,7 @@ This crate provides the following modules:
   - Closure-scoped atomic transactions with nested savepoints
   - Mutable executor ownership for transaction-scoped ORM work
   - Typed callback errors with automatic conversion from framework failures
+  - Typed, transaction-safe `QuerySet::select_for_update` row locking
 
 - **Structured Database Errors**
   - `DatabaseErrorKind` provides portable connection, constraint, transaction, serialization, and query categories
@@ -128,6 +164,64 @@ let result: Result<(), ApplicationError> = connection.atomic(async |_transaction
 result
 # }
 ```
+
+### Transaction-safe row locking
+
+Build row locks after configuring a `QuerySet`, then evaluate them with
+`SelectForUpdate::all_with_executor` or `rows_with_executor` inside
+`DatabaseConnection::atomic`. The executor remains owned by the caller, so the
+lock stays on the same physical connection until commit or rollback. Ordinary
+`all`, `all_with_db`, and `rows_with_db` evaluation returns a transaction error
+without executing SQL.
+
+```rust,no_run
+use reinhardt_db::{
+    backends::error::DatabaseError,
+    orm::{QuerySet, TransactionExecutor},
+};
+use reinhardt_macros::model;
+use serde::{Deserialize, Serialize};
+
+#[model(app_label = "jobs", table_name = "jobs")]
+#[derive(Clone, Debug, Deserialize, Serialize)]
+struct Job {
+    #[field(primary_key = true)]
+    id: i64,
+    state: String,
+}
+
+async fn claim_queued(
+    transaction: &mut dyn TransactionExecutor,
+) -> Result<Vec<Job>, DatabaseError> {
+    QuerySet::<Job>::new()
+        .filter(Job::field_state().eq("queued".to_owned()))
+        .select_for_update()
+        .skip_locked()
+        .of_model()
+        .all_with_executor(transaction)
+        .await
+}
+```
+
+`nowait` and `skip_locked` are mutually exclusive type states. `of_model`
+targets the root model, while `of_relation` accepts only a typed relation path
+rooted at that model and automatically adds the required joins. Reinhardt is
+intentionally stricter than Django: unchecked table-name targets are not
+accepted, and SQLite returns an unsupported-capability error instead of silently
+dropping the lock.
+
+PostgreSQL supports target lists and `no_key`; `NO KEY UPDATE` requires
+PostgreSQL 9.3 or newer and `SKIP LOCKED` requires 9.5 or newer. The built-in
+MySQL capability profile requires MySQL 8.0.1 or newer and does not support
+`no_key`. The built-in CockroachDB v23.1 profile supports `FOR UPDATE` and
+`NOWAIT`, but not `SKIP LOCKED`, PostgreSQL-distinct `no_key`, or explicit
+target lists. Custom transaction executors connected to servers with different
+capabilities must override `TransactionExecutor::row_lock_capabilities`.
+
+To preserve the statement's lock scope, row locking rejects CTE-backed
+querysets, derived `FROM` sources, LATERAL joins, raw aggregate projections
+passed to `values`, and aggregate annotations. Use a direct non-aggregate
+queryset for locking reads.
 
 - **Database Replication and Routing**
   - Read/write splitting via DatabaseRouter
@@ -213,6 +307,7 @@ Add this to your `Cargo.toml`:
 ```toml
 [dependencies]
 reinhardt-db = "0.4.0-alpha.3"
+chrono-tz = "0.10"
 ```
 
 ### Optional Features
@@ -418,7 +513,7 @@ explicit plural table names because they represent an existing schema.
 ```rust
 use reinhardt_db::prelude::*;
 use serde::{Serialize, Deserialize};
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, NaiveDate, Utc};
 
 #[derive(Serialize, Deserialize)]
 #[model(app_label = "myapp", table_name = "users")]
@@ -437,6 +532,9 @@ pub struct User {
 
     /// User's age
     pub age: i32,
+
+    /// Calendar date when the account was opened
+    pub signup_date: NaiveDate,
 
     /// Account creation timestamp (auto-populated on insert)
     #[field(auto_now_add = true)]
@@ -621,7 +719,11 @@ pub full_name: String,
 ### Query with QuerySet
 
 ```rust
-use reinhardt_db::orm::Model;
+use chrono::Utc;
+use futures::StreamExt;
+use reinhardt_db::orm::{
+    DateProjectionOrder, DateTimeTruncKind, DateTruncKind, Model,
+};
 
 // Get all users
 let users = User::objects().all().await?;
@@ -652,6 +754,40 @@ let recent = User::objects()
     .all()
     .await?;
 
+// Distinct database-side temporal projections
+let signup_months = User::objects()
+    .dates(
+        User::field_signup_date(),
+        DateTruncKind::Month,
+        DateProjectionOrder::Asc,
+    )
+    .await?;
+let mut connection = reinhardt_db::orm::manager::get_connection().await?;
+let signup_days = User::objects()
+    .dates_with_db(
+        &mut connection,
+        User::field_signup_date(),
+        DateTruncKind::Day,
+        DateProjectionOrder::Asc,
+    )
+    .await?;
+let local_hours = User::objects()
+    .datetimes(
+        User::field_created_at(),
+        DateTimeTruncKind::Hour,
+        DateProjectionOrder::Desc,
+        Some(chrono_tz::Asia::Tokyo),
+    )
+    .await?;
+
+// Stream typed-field results through the caller-owned executor.
+let mut streamed_adults = User::objects()
+    .filter(User::field_age().gte(18))
+    .iterator_with_db(&mut connection, 128)?;
+while let Some(user) = streamed_adults.next().await {
+    let _user = user?;
+}
+
 // Atomic conditional partial update
 let updated = User::objects()
     .filter(User::field_id().eq(user_id))
@@ -659,6 +795,171 @@ let updated = User::objects()
     .update_fields([User::field_updated_at().assign(Utc::now())])
     .await?;
 ```
+
+### Typed Manager Upserts
+
+Generated field accessors provide compile-time checked model and value types
+for atomic get/create and update/create operations:
+
+```rust,ignore
+let (tag, created) = Tag::objects()
+    .get_or_create()
+    .lookup(Tag::field_slug(), "rust")
+    .default(Tag::field_display_order(), 10_i32)
+    .execute()
+    .await?;
+```
+
+```rust,ignore
+let (profile, created) = Profile::objects()
+    .update_or_create()
+    .lookup(Profile::field_user_id(), user.id)
+    .set(Profile::field_last_seen(), now)
+    .create_default(Profile::field_created_at(), now)
+    .execute()
+    .await?;
+```
+
+Lookups must cover a primary key, a `unique = true` field, or an immediate,
+unconditional unique constraint. Lookup fields cannot also be defaults or
+updates. `get_or_create().execute_with(...)` accepts a `DatabaseConnection` or
+an `AtomicTransaction` created by `DatabaseConnection::atomic_write`;
+`update_or_create().execute_with(...)` requires an
+`AtomicTransaction` created by `DatabaseConnection::atomic_write`.
+
+The returned `created` flag is true only when this invocation inserted the row.
+A losing get/create race reloads the winner with `false`; a losing
+update/create race locks and updates the winner before returning `false`.
+
+See the
+[typed manager upsert migration guide](../../docs/migration/0.4.0-typed-manager-upserts.md)
+for map-API replacement, backend behavior, and custom-manager hook guidance.
+
+### Plan-only QuerySet diagnostics
+
+Use typed generated fields to build the queryset, then call `explain` with
+`ExplainOptions`. The returned `ExplainOutput` records the backend, effective
+format, and a separately decoded plan body; it never deserializes diagnostic
+rows as models.
+
+```rust
+use reinhardt_db::orm::{ExplainFormat, ExplainOptions};
+
+let plan = User::objects()
+    .filter(User::field_email().eq("ada@example.com"))
+    .order_by(User::field_created_at().desc())
+    .explain(ExplainOptions::default().format(ExplainFormat::Json))
+    .await?;
+```
+
+When the equivalent query must stay on a caller-owned connection, use
+`explain_with_db`. Active transactions can use `explain_with_executor`.
+
+```rust
+let plan = connection.atomic(async |transaction| {
+    User::objects()
+        .filter(User::field_id().eq(user_id))
+        .explain_with_executor(transaction, ExplainOptions::default())
+        .await
+        .map_err(reinhardt_core::exception::Error::from)
+}).await?;
+```
+
+Backend capabilities are explicit:
+
+| Backend | Formats | Additional plan-only options |
+|---------|---------|------------------------------|
+| PostgreSQL | `Text`, `Json`, `Xml`, `Yaml` | `verbose`, `costs`, `settings` |
+| MySQL/MariaDB | `Text` (traditional), `Json` | none |
+| SQLite | `Text` (`EXPLAIN QUERY PLAN`) | none |
+| CockroachDB | `Text` | none |
+
+Unsupported combinations return a database error classified as `Unsupported`
+before the executor is called. Reinhardt intentionally exposes a stricter API
+than Django: `ANALYZE`, arbitrary option strings, buffer/timing statistics, and
+every other data-executing explain option are rejected by construction.
+MySQL additionally rejects subqueries, CTEs, unions, and unchecked or function
+expressions because its optimizer may evaluate them while producing a plan;
+plain typed filters, joins, ordering, and limits remain supported. SQLite plan
+row fields are diagnostic data whose exact shape may change between SQLite
+releases.
+
+### Typed retrieval helpers
+
+Models can define their default latest/earliest ordering with generated field
+metadata:
+
+```rust
+use chrono::{DateTime, Utc};
+use reinhardt_db::model;
+use reinhardt_db::orm::Model;
+use serde::{Deserialize, Serialize};
+
+#[derive(Serialize, Deserialize)]
+#[model(
+    app_label = "events",
+    table_name = "events",
+    get_latest_by = ("created_at", "id")
+)]
+struct Event {
+    #[field(primary_key = true)]
+    id: i64,
+    created_at: DateTime<Utc>,
+    #[field(max_length = 255, unique = true)]
+    slug: String,
+}
+
+let latest = Event::objects().all().latest().await?;
+let earliest = Event::objects()
+    .all()
+    .earliest_by(&[
+		Event::ordering_created_at(),
+		Event::ordering_id(),
+    ])
+    .await?;
+
+let by_id = Event::objects().all().in_bulk([3_i64, 1, 3]).await?;
+let by_slug = Event::objects()
+    .all()
+    .in_bulk_by(
+        Event::unique_slug(),
+        ["launch".to_string(), "archive".to_string()],
+    )
+    .await?;
+
+let empty = Event::objects().all().none();
+assert_eq!(empty.count().await?, 0);
+```
+
+Unlike Django's string field names, explicit ordering and unique-field bulk
+lookups accept only generated typed field proofs for the same model. Bulk
+retrieval returns a `BTreeMap`, so iteration is sorted by key; duplicate input
+keys collapse and missing keys are omitted. Empty input and `none()` are lazy:
+they do not resolve a connection or invoke an executor. The equivalent
+`*_with_db` and `*_with_executor` methods keep retrieval bound to a
+caller-owned connection or transaction executor. These contracts are
+backend-neutral across PostgreSQL, MySQL, and SQLite.
+
+Bulk retrieval accounts for bind parameters already used by the source
+queryset when splitting lookup keys into backend-safe batches. It returns a
+validation error when the source query has exhausted the backend's bind
+parameter limit and no lookup key can be added safely.
+
+When a retrieval ordering field is nullable, its relative NULL placement follows
+the connected database. Filter nulls explicitly before calling `latest*` or
+`earliest*` when that placement is part of the application contract.
+
+`dates` and `datetimes` exclude nulls and perform truncation, distinct
+projection, and ordering in the database. ISO weeks begin on Monday.
+`datetimes` defaults to UTC and converts to the requested zone before
+truncation. PostgreSQL supports IANA named zones. MySQL and SQLite return an
+explicit capability error for named zones because Reinhardt cannot guarantee
+MySQL time-zone tables or correct SQLite named-zone conversion. This is
+intentionally stricter than Django's environment-dependent fallback behavior.
+Global ORM time-zone configuration is intentionally outside this API; pass the
+zone explicitly when UTC is not the desired projection.
+Use `dates_with_db` / `datetimes_with_db` or the corresponding
+`*_with_executor` variants to retain a caller-owned connection or transaction.
 
 ### Scoped N+1 Query Detection
 

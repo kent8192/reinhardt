@@ -28,6 +28,42 @@ use web_sys;
 
 use crate::reactive::{Effect, Signal};
 
+#[cfg(any(wasm, test))]
+fn dispatch_typed_custom_event<T, F>(callback: &mut F, event: crate::platform::Event)
+where
+	F: FnMut(crate::event::CustomEvent<T>),
+{
+	callback(crate::event::CustomEvent::from_raw(event));
+}
+
+#[cfg(wasm)]
+fn dispatch_typed_custom_event_from_browser_listener<T, F>(callback: &mut F, event: web_sys::Event)
+where
+	F: FnMut(crate::event::CustomEvent<T>),
+{
+	dispatch_typed_custom_event(callback, event);
+}
+
+#[cfg(native)]
+fn dispatch_typed_custom_event_from_browser_listener<T, F>(
+	_callback: &mut F,
+	_event: web_sys::Event,
+) where
+	F: FnMut(crate::event::CustomEvent<T>),
+{
+	panic!("browser event listeners are unavailable on native targets")
+}
+
+#[cfg(all(native, test))]
+fn dispatch_typed_custom_event_from_native_listener<T, F>(
+	callback: &mut F,
+	event: crate::platform::Event,
+) where
+	F: FnMut(crate::event::CustomEvent<T>),
+{
+	dispatch_typed_custom_event(callback, event);
+}
+
 /// Options used when dispatching a custom DOM event.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct CustomEventOptions {
@@ -398,11 +434,12 @@ impl Element {
 		}
 	}
 
-	/// Add a custom event listener that deserializes `CustomEvent.detail`.
+	/// Add a typed custom event listener that retains the raw browser event.
 	///
-	/// Payloads are decoded with `serde_wasm_bindgen`, so callers can receive
-	/// Rust structs from web component event payloads while still handling
-	/// malformed detail values explicitly.
+	/// The callback receives [`crate::event::CustomEvent`], which defers detail
+	/// decoding until the callback calls `detail` or `into_detail`. This lets
+	/// callers inspect event metadata and distinguish malformed custom-event
+	/// details from same-named plain browser events.
 	pub fn add_typed_custom_event_listener<T, F>(
 		&self,
 		event_type: &str,
@@ -410,11 +447,21 @@ impl Element {
 	) -> EventHandle
 	where
 		T: DeserializeOwned + 'static,
-		F: FnMut(Result<T, String>) + 'static,
+		F: FnMut(crate::event::CustomEvent<T>) + 'static,
 	{
-		self.add_custom_event_listener(event_type, move |detail| {
-			callback(serde_wasm_bindgen::from_value(detail).map_err(|err| err.to_string()));
-		})
+		let closure = Closure::wrap(Box::new(move |event: web_sys::Event| {
+			dispatch_typed_custom_event_from_browser_listener(&mut callback, event);
+		}) as Box<dyn FnMut(web_sys::Event)>);
+
+		self.inner
+			.add_event_listener_with_callback(event_type, closure.as_ref().unchecked_ref())
+			.expect("Failed to add typed custom event listener");
+
+		EventHandle {
+			element: self.inner.clone(),
+			event_type: event_type.to_string(),
+			closure: Some(closure),
+		}
 	}
 
 	/// Dispatch a custom event with `detail` using browser default options.
@@ -993,9 +1040,70 @@ impl Drop for EventHandle {
 #[cfg(test)]
 mod tests {
 	use super::*;
+	use rstest::rstest;
 	use wasm_bindgen_test::*;
 
 	wasm_bindgen_test_configure!(run_in_browser);
+
+	#[cfg(native)]
+	#[rstest]
+	fn typed_custom_event_listener_preserves_native_raw_event() {
+		use std::borrow::Cow;
+
+		use reinhardt_core::types::page::{
+			BaseEventData, NativeEvent, NativeEventPayload, NativeEventTarget,
+		};
+
+		#[derive(serde::Deserialize)]
+		struct Detail {
+			id: u64,
+		}
+
+		let raw = NativeEvent::new(
+			crate::event::EventName::Custom(Cow::Borrowed("widget-change")),
+			BaseEventData {
+				bubbles: true,
+				cancelable: true,
+				composed: true,
+				time_stamp: 42.5,
+				is_trusted: true,
+			},
+			NativeEventPayload::default(),
+		)
+		.with_custom_detail(serde_json::json!({ "id": 7 }))
+		.with_target(NativeEventTarget::new("rh-widget"))
+		.with_current_target(NativeEventTarget::new("section"));
+		let original = raw.clone();
+		let mut called = false;
+
+		dispatch_typed_custom_event_from_native_listener::<Detail, _>(
+			&mut |event| {
+				called = true;
+				assert_eq!(event.detail().expect("custom detail").id, 7);
+				assert_eq!(event.event_type(), "widget-change");
+				assert_eq!(event.target().expect("target").tag_name(), "rh-widget");
+				assert_eq!(
+					event.current_target().expect("current target").tag_name(),
+					"section"
+				);
+				assert!(event.bubbles());
+				assert!(event.cancelable());
+				assert!(event.composed());
+				assert_eq!(event.time_stamp(), 42.5);
+				assert!(event.is_trusted());
+
+				event.prevent_default();
+				event.stop_propagation();
+				event.stop_immediate_propagation();
+			},
+			raw,
+		);
+
+		assert!(called);
+		assert!(original.default_prevented());
+		assert!(original.propagation_stopped());
+		assert!(original.immediate_propagation_stopped());
+	}
 
 	#[wasm_bindgen_test]
 	fn test_element_set_attribute() {

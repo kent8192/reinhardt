@@ -733,6 +733,13 @@ impl ShellProject {
 		command
 			.current_dir(&self.project_root)
 			.env("CARGO_BUILD_BUILD_DIR", EVALUATOR_BUILD_DIR)
+			// Keep evaluator artifacts with the dynamic fixture binary. CI exports a
+			// workspace-wide CARGO_TARGET_DIR, which would otherwise separate evcxr's
+			// artifacts from the fixture's dynamic-library search path.
+			.env(
+				"CARGO_TARGET_DIR",
+				self._evcxr_dir.path().join(EVALUATOR_BUILD_DIR),
+			)
 			.env("EVCXR_TMPDIR", self._evcxr_dir.path())
 			.env("EVCXR_CACHE_ENABLED", "1")
 			.env(
@@ -756,6 +763,13 @@ impl ShellProject {
 			.arg("shell")
 			.current_dir(&self.project_root)
 			.env("CARGO_BUILD_BUILD_DIR", EVALUATOR_BUILD_DIR)
+			// Keep evaluator artifacts with the dynamic fixture binary. CI exports a
+			// workspace-wide CARGO_TARGET_DIR, which would otherwise separate evcxr's
+			// artifacts from the fixture's dynamic-library search path.
+			.env(
+				"CARGO_TARGET_DIR",
+				self._evcxr_dir.path().join(EVALUATOR_BUILD_DIR),
+			)
 			.env("EVCXR_TMPDIR", self._evcxr_dir.path())
 			.env("EVCXR_CACHE_ENABLED", "1")
 			.env(

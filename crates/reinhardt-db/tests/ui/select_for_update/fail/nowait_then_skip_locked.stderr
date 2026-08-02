@@ -1,0 +1,13 @@
+error[E0599]: no method named `skip_locked` found for struct `SelectForUpdate<Article, Nowait>` in the current scope
+  --> tests/ui/select_for_update/fail/nowait_then_skip_locked.rs:11:4
+   |
+ 8 |       let _query = QuerySet::<Article>::new()
+   |  __________________-
+ 9 | |         .select_for_update()
+10 | |         .nowait()
+11 | |         .skip_locked();
+   | |         -^^^^^^^^^^^ method not found in `SelectForUpdate<Article, Nowait>`
+   | |_________|
+   |
+   |
+   = note: the method was found for `SelectForUpdate<M>`

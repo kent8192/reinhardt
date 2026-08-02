@@ -428,6 +428,19 @@ impl Instrumentation {
 		params: &[String],
 		duration: Duration,
 	) {
+		self.orm_query_end_with_params_sync(query, params, duration);
+	}
+
+	/// Records an ORM query without requiring an async context.
+	///
+	/// Streaming query accounting invokes this from a drop guard so partially
+	/// consumed streams remain visible to N+1 detection.
+	pub(crate) fn orm_query_end_with_params_sync(
+		&self,
+		query: &str,
+		params: &[String],
+		duration: Duration,
+	) {
 		super::n_plus_one::record_query(query, params, duration);
 	}
 

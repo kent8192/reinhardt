@@ -552,6 +552,9 @@ fn expression_has_select(
 		| SimpleExpr::AsEnum(_, expression)
 		| SimpleExpr::ExprAlias(expression, _)
 		| SimpleExpr::Cast(expression, _)
+		| SimpleExpr::TemporalTrunc {
+			expr: expression, ..
+		}
 		| SimpleExpr::WindowNamed {
 			func: expression, ..
 		} => expression_has_select(expression, predicate),
@@ -653,7 +656,10 @@ fn unsafe_expr(expression: &SimpleExpr) -> bool {
 		SimpleExpr::Unary(_, expression)
 		| SimpleExpr::AsEnum(_, expression)
 		| SimpleExpr::ExprAlias(expression, _)
-		| SimpleExpr::Cast(expression, _) => unsafe_expr(expression),
+		| SimpleExpr::Cast(expression, _)
+		| SimpleExpr::TemporalTrunc {
+			expr: expression, ..
+		} => unsafe_expr(expression),
 		SimpleExpr::Binary(left, _, right) => unsafe_expr(left) || unsafe_expr(right),
 		SimpleExpr::Tuple(expressions) => expressions.iter().any(unsafe_expr),
 		SimpleExpr::Case(statement) => {
@@ -825,6 +831,9 @@ fn quote_mysql_like_template_expr(expression: &mut SimpleExpr) {
 		| SimpleExpr::AsEnum(_, expression)
 		| SimpleExpr::ExprAlias(expression, _)
 		| SimpleExpr::Cast(expression, _)
+		| SimpleExpr::TemporalTrunc {
+			expr: expression, ..
+		}
 		| SimpleExpr::WindowNamed {
 			func: expression, ..
 		} => quote_mysql_like_template_expr(expression),

@@ -104,8 +104,7 @@ impl TypeMapper {
 			// Integer types
 			FieldType::BigInteger => quote! { i64 },
 			FieldType::Integer => quote! { i32 },
-			FieldType::SmallInteger => quote! { i16 },
-			FieldType::TinyInt => quote! { i8 },
+			FieldType::SmallInteger | FieldType::TinyInt => quote! { i32 },
 			FieldType::MediumInt => quote! { i32 },
 
 			// String types
@@ -123,7 +122,14 @@ impl TypeMapper {
 			FieldType::TimestampTz => quote! { chrono::DateTime<chrono::Utc> },
 
 			// Numeric types
-			FieldType::Decimal { .. } => quote! { rust_decimal::Decimal },
+			FieldType::Decimal { precision, scale } if *precision <= 28 && *scale <= 28 => {
+				quote! { rust_decimal::Decimal }
+			}
+			FieldType::Decimal { precision, scale } => {
+				return Err(TypeMappingError::UnsupportedType(format!(
+					"DECIMAL({precision}, {scale}) exceeds rust_decimal's lossless precision or scale limits; configure a type override"
+				)));
+			}
 			FieldType::Float => quote! { f32 },
 			FieldType::Double => quote! { f64 },
 			FieldType::Real => quote! { f32 },
@@ -144,19 +150,48 @@ impl TypeMapper {
 			FieldType::JsonBinary => quote! { serde_json::Value },
 
 			// PostgreSQL-specific types
-			FieldType::Array(inner) => {
+			FieldType::Array(inner)
+				if matches!(
+					inner.as_ref(),
+					FieldType::Char(_)
+						| FieldType::VarChar(_)
+						| FieldType::Text | FieldType::TinyText
+						| FieldType::MediumText
+						| FieldType::LongText
+						| FieldType::BigInteger
+						| FieldType::Integer
+						| FieldType::SmallInteger
+						| FieldType::TinyInt
+						| FieldType::MediumInt
+						| FieldType::Float | FieldType::Double
+						| FieldType::Real | FieldType::Boolean
+						| FieldType::Uuid
+				) =>
+			{
 				let inner_type = self.field_type_to_rust(inner)?;
 				quote! { Vec<#inner_type> }
 			}
-			FieldType::HStore => quote! { std::collections::HashMap<String, String> },
+			FieldType::Array(_) => {
+				return Err(TypeMappingError::UnsupportedType(
+					"PostgreSQL array element type has no supported model field codec; configure a type override".to_string(),
+				));
+			}
+			FieldType::HStore => {
+				return Err(TypeMappingError::UnsupportedType(
+					"PostgreSQL HSTORE requires a dedicated field codec; configure a type override"
+						.to_string(),
+				));
+			}
 			FieldType::CIText => quote! { String },
-			FieldType::Int4Range => quote! { (i32, i32) },
-			FieldType::Int8Range => quote! { (i64, i64) },
-			FieldType::NumRange => quote! { (rust_decimal::Decimal, rust_decimal::Decimal) },
-			FieldType::DateRange => quote! { (chrono::NaiveDate, chrono::NaiveDate) },
-			FieldType::TsRange => quote! { (chrono::NaiveDateTime, chrono::NaiveDateTime) },
-			FieldType::TsTzRange => {
-				quote! { (chrono::DateTime<chrono::Utc>, chrono::DateTime<chrono::Utc>) }
+			FieldType::Int4Range
+			| FieldType::Int8Range
+			| FieldType::NumRange
+			| FieldType::DateRange
+			| FieldType::TsRange
+			| FieldType::TsTzRange => {
+				return Err(TypeMappingError::UnsupportedType(
+					"PostgreSQL range columns require a custom type override because generated models cannot represent range bounds losslessly".to_string(),
+				));
 			}
 			FieldType::TsVector => quote! { String },
 			FieldType::TsQuery => quote! { String },
@@ -169,11 +204,16 @@ impl TypeMapper {
 			FieldType::Uuid => quote! { uuid::Uuid },
 
 			// Year (MySQL)
-			FieldType::Year => quote! { i16 },
+			FieldType::Year => quote! { i32 },
 
 			// Enum/Set (MySQL)
 			FieldType::Enum { .. } => quote! { String },
-			FieldType::Set { .. } => quote! { Vec<String> },
+			FieldType::Set { .. } => {
+				return Err(TypeMappingError::UnsupportedType(
+					"MySQL SET requires a dedicated field codec; configure a type override"
+						.to_string(),
+				));
+			}
 
 			// Relationship types - these are handled specially by the generator
 			FieldType::ForeignKey { .. } => {
@@ -189,9 +229,17 @@ impl TypeMapper {
 			}
 
 			// Custom type
-			FieldType::Custom(type_name) => {
-				// Try to parse as Rust type, fallback to String
-				type_name.parse().unwrap_or_else(|_| quote! { String })
+			FieldType::Custom(name) if name == "u8" || name == "u16" => quote! { i32 },
+			FieldType::Custom(name) if name == "u32" => quote! { i64 },
+			FieldType::Custom(name) if name == "u64" => {
+				return Err(TypeMappingError::UnsupportedType(
+					"MySQL BIGINT UNSIGNED exceeds the supported signed integer binding range; configure a type override".to_string(),
+				));
+			}
+			FieldType::Custom(name) => {
+				return Err(TypeMappingError::UnsupportedType(format!(
+					"custom SQL type `{name}` cannot be represented without an explicit type override"
+				)));
 			}
 		};
 
@@ -208,8 +256,7 @@ impl TypeMapper {
 		let base_type = match field_type {
 			FieldType::BigInteger => "i64",
 			FieldType::Integer => "i32",
-			FieldType::SmallInteger => "i16",
-			FieldType::TinyInt => "i8",
+			FieldType::SmallInteger | FieldType::TinyInt => "i32",
 			FieldType::MediumInt => "i32",
 			FieldType::Char(_) | FieldType::VarChar(_) | FieldType::Text => "String",
 			FieldType::TinyText | FieldType::MediumText | FieldType::LongText => "String",
@@ -225,7 +272,7 @@ impl TypeMapper {
 			FieldType::TinyBlob | FieldType::MediumBlob | FieldType::LongBlob => "Vec<u8>",
 			FieldType::Json | FieldType::JsonBinary => "serde_json::Value",
 			FieldType::Uuid => "uuid::Uuid",
-			FieldType::Year => "i16",
+			FieldType::Year => "i32",
 			FieldType::HStore => "std::collections::HashMap<String, String>",
 			FieldType::CIText => "String",
 			FieldType::TsVector | FieldType::TsQuery => "String",
@@ -241,12 +288,23 @@ impl TypeMapper {
 			FieldType::Array(_) => "Vec<_>",
 			FieldType::Enum { .. } => "String",
 			FieldType::Set { .. } => "Vec<String>",
-			FieldType::Int4Range => "(i32, i32)",
-			FieldType::Int8Range => "(i64, i64)",
-			FieldType::NumRange => "(Decimal, Decimal)",
-			FieldType::DateRange => "(NaiveDate, NaiveDate)",
-			FieldType::TsRange => "(NaiveDateTime, NaiveDateTime)",
-			FieldType::TsTzRange => "(DateTime<Utc>, DateTime<Utc>)",
+			FieldType::Int4Range
+			| FieldType::Int8Range
+			| FieldType::NumRange
+			| FieldType::DateRange
+			| FieldType::TsRange
+			| FieldType::TsTzRange => {
+				return Err(TypeMappingError::UnsupportedType(
+					"PostgreSQL range columns require a custom type override because generated models cannot represent range bounds losslessly".to_string(),
+				));
+			}
+			FieldType::Custom(name) if name == "u8" || name == "u16" => "i32",
+			FieldType::Custom(name) if name == "u32" => "i64",
+			FieldType::Custom(name) if name == "u64" => {
+				return Err(TypeMappingError::UnsupportedType(
+					"MySQL BIGINT UNSIGNED exceeds the supported signed integer binding range; configure a type override".to_string(),
+				));
+			}
 			FieldType::Custom(name) => name.as_str(),
 			FieldType::ManyToMany { .. } => {
 				return Err(TypeMappingError::UnsupportedType("ManyToMany".to_string()));
@@ -346,7 +404,27 @@ mod tests {
 		assert_eq!(result.unwrap(), "i32");
 
 		let result = mapper.field_type_to_rust_string(&FieldType::SmallInteger, false, false);
-		assert_eq!(result.unwrap(), "i16");
+		assert_eq!(result.unwrap(), "i32");
+
+		let error = mapper
+			.field_type_to_rust(&FieldType::Custom("u64".to_string()))
+			.expect_err("BIGINT UNSIGNED must not be represented as lossless u64");
+		assert!(error.to_string().contains("BIGINT UNSIGNED"));
+	}
+
+	#[test]
+	fn maps_mysql_year_to_a_supported_integer_type_and_rejects_ranges() {
+		let mapper = TypeMapper::default();
+		assert_eq!(
+			mapper
+				.field_type_to_rust_string(&FieldType::Year, false, false)
+				.expect("YEAR should be supported"),
+			"i32"
+		);
+		let error = mapper
+			.field_type_to_rust(&FieldType::Int4Range)
+			.expect_err("range types require a custom override");
+		assert!(error.to_string().contains("range columns"));
 	}
 
 	#[test]
@@ -370,6 +448,27 @@ mod tests {
 
 		let result = mapper.field_type_to_rust_string(&FieldType::Text, false, false);
 		assert_eq!(result.unwrap(), "String");
+	}
+
+	#[test]
+	fn maps_decimal_within_rust_decimal_limits() {
+		let mapper = TypeMapper::default();
+
+		let tokens = mapper
+			.field_type_to_rust(&FieldType::Decimal {
+				precision: 12,
+				scale: 4,
+			})
+			.expect("supported decimal precision should map to rust_decimal");
+		assert_eq!(tokens.to_string(), "rust_decimal :: Decimal");
+
+		let error = mapper
+			.field_type_to_rust(&FieldType::Decimal {
+				precision: 29,
+				scale: 4,
+			})
+			.expect_err("precision beyond rust_decimal limits should require an override");
+		assert!(error.to_string().contains("lossless precision"));
 	}
 
 	#[test]

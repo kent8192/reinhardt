@@ -4,7 +4,7 @@
 
 use super::{QueryBuilder, SqlWriter};
 use crate::{
-	expr::{Condition, SimpleExpr},
+	expr::{Condition, SimpleExpr, TemporalTruncKind, TemporalTruncOutput},
 	query::{
 		AlterIndexStatement, AlterTableOperation, AlterTableStatement, CheckTableStatement,
 		CreateIndexStatement, CreateTableStatement, CreateTriggerStatement, CreateViewStatement,
@@ -55,11 +55,91 @@ impl SqliteQueryBuilder {
 		Self
 	}
 
+	fn write_monday_date(
+		&self,
+		writer: &mut SqlWriter,
+		expr: &SimpleExpr,
+		output: TemporalTruncOutput,
+	) {
+		writer.push(match output {
+			TemporalTruncOutput::Date => "DATE(",
+			TemporalTruncOutput::DateTime => "DATETIME(",
+		});
+		self.write_simple_expr(writer, expr);
+		writer.push(", '-6 days', 'weekday 1'");
+		if output == TemporalTruncOutput::DateTime {
+			writer.push(", 'start of day'");
+		}
+		writer.push(")");
+	}
+
+	fn write_temporal_trunc(
+		&self,
+		writer: &mut SqlWriter,
+		expr: &SimpleExpr,
+		kind: TemporalTruncKind,
+		output: TemporalTruncOutput,
+	) {
+		if kind == TemporalTruncKind::Week {
+			self.write_monday_date(writer, expr, output);
+			return;
+		}
+
+		match (kind, output) {
+			(TemporalTruncKind::Year, _) => {
+				writer.push(match output {
+					TemporalTruncOutput::Date => "DATE(",
+					TemporalTruncOutput::DateTime => "DATETIME(",
+				});
+				self.write_simple_expr(writer, expr);
+				writer.push(", 'start of year')");
+			}
+			(TemporalTruncKind::Month, _) => {
+				writer.push(match output {
+					TemporalTruncOutput::Date => "DATE(",
+					TemporalTruncOutput::DateTime => "DATETIME(",
+				});
+				self.write_simple_expr(writer, expr);
+				writer.push(", 'start of month')");
+			}
+			(TemporalTruncKind::Day, _) => {
+				writer.push(match output {
+					TemporalTruncOutput::Date => "DATE(",
+					TemporalTruncOutput::DateTime => "DATETIME(",
+				});
+				self.write_simple_expr(writer, expr);
+				if output == TemporalTruncOutput::DateTime {
+					writer.push(", 'start of day')");
+				} else {
+					writer.push(")");
+				}
+			}
+			(
+				TemporalTruncKind::Hour | TemporalTruncKind::Minute | TemporalTruncKind::Second,
+				TemporalTruncOutput::DateTime,
+			) => {
+				let format = match kind {
+					TemporalTruncKind::Hour => "%Y-%m-%d %H:00:00",
+					TemporalTruncKind::Minute => "%Y-%m-%d %H:%M:00",
+					TemporalTruncKind::Second => "%Y-%m-%d %H:%M:%S",
+					_ => unreachable!("matched datetime truncation kind"),
+				};
+				writer.push("DATETIME(strftime('");
+				writer.push(format);
+				writer.push("', ");
+				self.write_simple_expr(writer, expr);
+				writer.push("))");
+			}
+			_ => unreachable!("invalid temporal truncation kind and output"),
+		}
+	}
+
 	/// Build a SELECT statement after rejecting PostgreSQL-only vector features.
 	pub fn build_select_checked(
 		&self,
 		stmt: &SelectStatement,
 	) -> Result<(String, Values), crate::QueryBuildError> {
+		crate::error::validate_select_lock_for_backend(stmt, "SQLite")?;
 		crate::error::validate_select_for_backend(stmt, "SQLite")?;
 		Ok(self.build_select(stmt))
 	}
@@ -493,6 +573,9 @@ impl SqliteQueryBuilder {
 				writer.push_identifier(&type_name.to_string(), |s| self.escape_iden(s));
 				writer.push(")");
 			}
+			SimpleExpr::TemporalTrunc {
+				expr, kind, output, ..
+			} => self.write_temporal_trunc(writer, expr, *kind, *output),
 		}
 	}
 
@@ -1458,8 +1541,10 @@ impl QueryBuilder for SqliteQueryBuilder {
 		if let Some(select) = &stmt.select {
 			let (select_sql, select_values) = self.build_select(select);
 			writer.push_space();
-			writer.push(&select_sql);
-			writer.append_values(&select_values);
+			writer.push(&crate::query::traits::inline_params(
+				&select_sql,
+				&select_values,
+			));
 		}
 
 		writer.finish()
@@ -2306,6 +2391,26 @@ mod tests {
 			"INSERT INTO \"users\" (\"display_name\") VALUES (?) RETURNING \"display_name\" AS \"name\""
 		);
 		assert_eq!(values.len(), 1);
+	}
+
+	#[test]
+	fn checked_insert_rejects_nested_locked_select_in_returning_expression() {
+		let mut locked = Query::select();
+		locked
+			.column("id")
+			.from("accounts")
+			.lock(crate::query::LockType::Update);
+		let insert = Query::insert()
+			.into_table("archive")
+			.column("account_id")
+			.values_panic([1_i32])
+			.returning_exprs([Expr::subquery(locked)])
+			.to_owned();
+
+		let error = SqliteQueryBuilder::new()
+			.build_insert_checked(&insert)
+			.expect_err("SQLite must reject a nested row lock in INSERT RETURNING");
+		assert!(error.to_string().contains("row locking"));
 	}
 
 	#[test]

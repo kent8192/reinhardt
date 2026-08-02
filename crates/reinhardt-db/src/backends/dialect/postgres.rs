@@ -1,6 +1,7 @@
 //! PostgreSQL dialect implementation
 
 use async_trait::async_trait;
+use futures::StreamExt;
 use sqlx::{Column, PgPool, Postgres, Transaction, TypeInfo, postgres::PgRow};
 use std::sync::Arc;
 use uuid::Uuid;
@@ -12,7 +13,8 @@ use crate::backends::{
 		map_sqlx_error_with_pgvector_context,
 	},
 	types::{
-		DatabaseType, IsolationLevel, QueryResult, QueryValue, Row, Savepoint, TransactionExecutor,
+		DatabaseType, IsolationLevel, QueryResult, QueryValue, Row, RowStream, Savepoint,
+		TransactionExecutor,
 	},
 };
 #[cfg(feature = "pgvector")]
@@ -166,6 +168,10 @@ impl DatabaseBackend for PostgresBackend {
 		true
 	}
 
+	fn supports_row_streaming(&self) -> bool {
+		true
+	}
+
 	fn placeholder(&self, index: usize) -> String {
 		format!("${}", index)
 	}
@@ -215,6 +221,55 @@ impl DatabaseBackend for PostgresBackend {
 		context: Option<PgvectorOperationKind>,
 	) -> Result<Vec<Row>> {
 		PostgresBackend::fetch_all_with_context(self, sql, params, context).await
+	}
+
+	fn fetch_stream<'a>(
+		&'a self,
+		sql: String,
+		params: Vec<QueryValue>,
+		chunk_size: usize,
+	) -> Result<RowStream<'a>> {
+		self.fetch_stream_with_context(sql, params, chunk_size, None)
+	}
+
+	fn fetch_stream_with_context<'a>(
+		&'a self,
+		sql: String,
+		params: Vec<QueryValue>,
+		chunk_size: usize,
+		context: Option<PgvectorOperationKind>,
+	) -> Result<RowStream<'a>> {
+		if chunk_size == 0 {
+			return Err(DatabaseError::new(
+				DatabaseErrorKind::Configuration,
+				"Row stream chunk_size must be greater than zero",
+			)
+			.into());
+		}
+		let pool = Arc::clone(&self.pool);
+		Ok(Box::pin(async_stream::stream! {
+			let mut query = sqlx::query(&sql);
+			for param in &params {
+				query = match Self::bind_value(query, param) {
+					Ok(query) => query,
+					Err(error) => {
+						yield Err(error);
+						return;
+					}
+				};
+			}
+			let rows = query.fetch(pool.as_ref());
+			futures::pin_mut!(rows);
+			let rows = rows.ready_chunks(chunk_size);
+			futures::pin_mut!(rows);
+			while let Some(chunk) = rows.next().await {
+				for row in chunk {
+					yield row
+						.map_err(|error| map_sqlx_error_with_pgvector_context(error, context))
+						.and_then(Self::convert_row);
+				}
+			}
+		}))
 	}
 
 	async fn fetch_optional(&self, sql: &str, params: Vec<QueryValue>) -> Result<Option<Row>> {
@@ -601,6 +656,60 @@ impl TransactionExecutor for PgTransactionExecutor {
 			.await
 			.map_err(|error| map_sqlx_error_with_pgvector_context(error, context))?;
 		rows.into_iter().map(Self::convert_row).collect()
+	}
+
+	fn fetch_stream<'a>(
+		&'a mut self,
+		sql: String,
+		params: Vec<QueryValue>,
+		chunk_size: usize,
+	) -> Result<RowStream<'a>> {
+		self.fetch_stream_with_context(sql, params, chunk_size, None)
+	}
+
+	fn fetch_stream_with_context<'a>(
+		&'a mut self,
+		sql: String,
+		params: Vec<QueryValue>,
+		chunk_size: usize,
+		context: Option<PgvectorOperationKind>,
+	) -> Result<RowStream<'a>> {
+		if chunk_size == 0 {
+			return Err(DatabaseError::new(
+				DatabaseErrorKind::Configuration,
+				"Row stream chunk_size must be greater than zero",
+			)
+			.into());
+		}
+		let tx = self.tx.as_mut().ok_or_else(|| {
+			DatabaseError::new(
+				DatabaseErrorKind::Transaction,
+				"Transaction already consumed",
+			)
+		})?;
+		Ok(Box::pin(async_stream::stream! {
+			let mut query = sqlx::query(&sql);
+			for param in &params {
+				query = match Self::bind_value(query, param) {
+					Ok(query) => query,
+					Err(error) => {
+						yield Err(error);
+						return;
+					}
+				};
+			}
+			let rows = query.fetch(&mut **tx);
+			futures::pin_mut!(rows);
+			let rows = rows.ready_chunks(chunk_size);
+			futures::pin_mut!(rows);
+			while let Some(chunk) = rows.next().await {
+				for row in chunk {
+					yield row
+						.map_err(|error| map_sqlx_error_with_pgvector_context(error, context))
+						.and_then(Self::convert_row);
+				}
+			}
+		}))
 	}
 
 	async fn fetch_optional(&mut self, sql: &str, params: Vec<QueryValue>) -> Result<Option<Row>> {

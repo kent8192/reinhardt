@@ -4,6 +4,10 @@
 //!
 //! A type-safe SQL query builder for the Reinhardt framework.
 //!
+//! Temporal projection expressions model truncation kind, output type, and
+//! time-zone conversion structurally so each backend can lower them without
+//! unchecked SQL fragments in callers.
+//!
 //! This crate provides a fluent API for constructing SQL queries that target
 //! PostgreSQL, MySQL, and SQLite databases. It generates parameterized queries
 //! with proper identifier escaping and value placeholders for each backend.
@@ -17,6 +21,7 @@
 //! - **DCL (Data Control Language) support** - Build GRANT and REVOKE statements
 //! - **Expression system** - Rich expression API with arithmetic, comparison, and logical operators
 //! - **Advanced SQL features** - JOINs, GROUP BY, HAVING, DISTINCT, UNION, CTEs, Window functions
+//! - **Typed row locking** - Lock strengths, mutually exclusive wait behavior, and table targets
 //!
 //! ### DDL (Data Definition Language)
 //! - **Typed generated columns** - DDL-safe [`types::SchemaExpr`] builders for generated column bodies
@@ -375,13 +380,15 @@ pub mod prelude {
 	// Expression system
 	pub use crate::expr::{
 		CaseExprBuilder, CaseStatement, Cond, Condition, ConditionExpression, ConditionHolder,
-		ConditionType, Expr, ExprTrait, Func, IntoCondition, Keyword, SimpleExpr,
+		ConditionType, Expr, ExprTrait, Func, IntoCondition, Keyword, SimpleExpr, TemporalTimeZone,
+		TemporalTruncKind, TemporalTruncOutput,
 	};
 	// DML query builders
 	pub use crate::query::{
 		DeleteStatement, ExplainFormat, ExplainOptions, ExplainStatement, ForeignKey,
-		ForeignKeyCreateStatement, InsertStatement, OnConflict, Query, QueryBuilderTrait,
-		QueryStatementBuilder, QueryStatementWriter, SelectStatement, UpdateStatement,
+		ForeignKeyCreateStatement, InsertStatement, LockBehavior, LockType, OnConflict, Query,
+		QueryBuilderTrait, QueryStatementBuilder, QueryStatementWriter, SelectStatement,
+		UpdateStatement,
 	};
 	// DDL query builders
 	pub use crate::query::{

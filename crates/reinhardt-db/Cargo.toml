@@ -44,11 +44,13 @@ reinhardt-query = { workspace = true, features = [
 # Async runtime
 tokio = { version = "1.41", features = ["full", "macros", "rt", "sync"], optional = true }
 async-trait = { version = "0.1", optional = true }
+async-stream = { version = "0.3", optional = true }
 
 # Serialization
 serde = { version = "1.0", features = ["derive"], optional = true }
 serde_json = { version = "1.0", optional = true }
 chrono = { version = "0.4", features = ["serde"], optional = true }
+chrono-tz = { workspace = true, optional = true }
 uuid = { version = "1.11", features = ["v4", "v7", "serde"], optional = true }
 
 # Error handling
@@ -119,8 +121,10 @@ db-deps = [
   "dep:aho-corasick",
   "dep:aquamarine",
   "dep:async-trait",
+  "dep:async-stream",
   "dep:base64",
   "dep:chrono",
+  "dep:chrono-tz",
   "dep:clap",
   "dep:console",
   "dep:dashmap",
@@ -161,7 +165,7 @@ backends = ["db-deps", "pool"]
 backends-pool = ["db-deps", "pool"]
 pool = ["db-deps"]
 orm = ["backends", "db-deps", "hybrid"]
-migrations = ["db-deps", "dep:refinery"]
+migrations = ["db-deps", "dep:libc", "dep:refinery", "dep:same-file"]
 hybrid = ["db-deps"]
 associations = ["db-deps"]
 contenttypes = ["db-deps"]
@@ -245,6 +249,12 @@ proptest = { workspace = true }
 trybuild = "1.0"
 ctor = "0.6.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+[target.'cfg(any(target_os = "linux", target_os = "android"))'.dependencies]
+libc = { workspace = true, optional = true }
+
+[target.'cfg(any(unix, windows, target_os = "redox"))'.dependencies]
+same-file = { workspace = true, optional = true }
 
 [[test]]
 name = "contenttypes_registry"

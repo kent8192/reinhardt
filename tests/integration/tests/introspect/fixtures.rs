@@ -44,8 +44,8 @@ const INTROSPECT_STATEMENTS: &[&str] = &[
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     view_count INTEGER NOT NULL DEFAULT 0
 )"#,
-	// Create composite index
-	r#"CREATE INDEX idx_posts_author_created ON posts(author_id, created_at)"#,
+	// Create index on post author
+	r#"CREATE INDEX idx_posts_author ON posts(author_id)"#,
 	// Comments table with self-reference
 	r#"CREATE TABLE comments (
     id BIGSERIAL PRIMARY KEY,

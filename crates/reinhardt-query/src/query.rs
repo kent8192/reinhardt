@@ -149,7 +149,8 @@ pub use schema::{
 	AlterSchemaOperation, AlterSchemaStatement, CreateSchemaStatement, DropSchemaStatement,
 };
 pub use select::{
-	CommonTableExpr, LockClause, SelectDistinct, SelectExpr, SelectStatement, UnionType,
+	CommonTableExpr, LockBehavior, LockClause, LockType, SelectDistinct, SelectExpr,
+	SelectStatement, UnionType,
 };
 pub use sequence::{AlterSequenceStatement, CreateSequenceStatement, DropSequenceStatement};
 pub use traits::{QueryBuilderTrait, QueryStatementBuilder, QueryStatementWriter};

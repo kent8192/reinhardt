@@ -300,7 +300,7 @@ impl SchemaCodeGenerator {
 		&self,
 		table: &TableInfo,
 		table_to_struct: &HashMap<String, String>,
-		_schema: &DatabaseSchema,
+		schema: &DatabaseSchema,
 	) -> Result<TokenStream> {
 		let struct_name = sanitize_identifier(&table_to_struct_name(
 			&table.name,
@@ -353,7 +353,7 @@ impl SchemaCodeGenerator {
 					table.name
 				)));
 			}
-			let field = self.generate_field(table, column, table_to_struct)?;
+			let field = self.generate_field(table, column, table_to_struct, schema)?;
 			fields.push(field);
 		}
 
@@ -376,6 +376,7 @@ impl SchemaCodeGenerator {
 		table: &TableInfo,
 		column: &ColumnInfo,
 		table_to_struct: &HashMap<String, String>,
+		schema: &DatabaseSchema,
 	) -> Result<TokenStream> {
 		let field_name = column_to_field_name(
 			&column.name,
@@ -390,14 +391,16 @@ impl SchemaCodeGenerator {
 			.then(|| {
 				table.foreign_keys.iter().find_map(|foreign_key| {
 					if foreign_key.columns.as_slice() == [column.name.as_str()] {
-						table_to_struct.get(&foreign_key.referenced_table)
+						table_to_struct
+							.get(&foreign_key.referenced_table)
+							.map(|target| (target, foreign_key))
 					} else {
 						None
 					}
 				})
 			})
 			.flatten();
-		let rust_type = if let Some(target) = relationship {
+		let rust_type = if let Some((target, _)) = relationship {
 			let target_ident = format_ident!("{}", target);
 			quote! { ForeignKeyField<#target_ident> }
 		} else {
@@ -413,10 +416,37 @@ impl SchemaCodeGenerator {
 
 		// Generate field attributes
 		let mut attrs = Vec::new();
-		let relationship_attr = relationship.as_ref().map(|_| {
+		let relationship_attr = relationship.as_ref().map(|(_, foreign_key)| {
 			let column_name = column.name.as_str();
 			let nullable = column.nullable;
-			quote! { #[rel(foreign_key, db_column = #column_name, null = #nullable)] }
+			let to_field = (foreign_key.referenced_columns.len() == 1)
+				.then(|| &foreign_key.referenced_columns[0])
+				.and_then(|referenced_column| {
+					schema
+						.tables
+						.get(&foreign_key.referenced_table)
+						.filter(|target_table| {
+							!target_table.primary_key.contains(referenced_column)
+						})
+						.map(|_| {
+							column_to_field_name(
+								referenced_column,
+								self.config.generation.field_naming_convention(),
+							)
+						})
+				});
+			if let Some(to_field) = to_field {
+				quote! {
+					#[rel(
+						foreign_key,
+						db_column = #column_name,
+						to_field = #to_field,
+						null = #nullable
+					)]
+				}
+			} else {
+				quote! { #[rel(foreign_key, db_column = #column_name, null = #nullable)] }
+			}
 		});
 		if relationship.is_none() && field_name != column.name {
 			let column_name = column.name.as_str();
@@ -452,15 +482,19 @@ impl SchemaCodeGenerator {
 			attrs.push(quote! { index = true });
 		}
 
-		// Max length for varchar
+		// Preserve bounded string types in generated model metadata.
 		if let crate::migrations::fields::FieldType::VarChar(len) = &column.column_type {
 			let len = *len;
 			attrs.push(quote! { max_length = #len });
 		}
+		if let crate::migrations::fields::FieldType::Char(len) = &column.column_type {
+			let len = *len;
+			let field_type = format!("char({len})");
+			attrs.push(quote! { max_length = #len, field_type = #field_type });
+		}
 		if matches!(
 			column.column_type,
-			crate::migrations::fields::FieldType::Char(_)
-				| crate::migrations::fields::FieldType::Text
+			crate::migrations::fields::FieldType::Text
 				| crate::migrations::fields::FieldType::TinyText
 				| crate::migrations::fields::FieldType::MediumText
 				| crate::migrations::fields::FieldType::LongText
@@ -853,6 +887,102 @@ mod tests {
 
 		assert!(code.contains("#[rel(foreign_key, db_column = \"project\", null = false)]"));
 		assert!(code.contains("pub project: ForeignKeyField<Projects>"));
+	}
+
+	#[test]
+	fn generate_model_emits_to_field_for_non_primary_key_foreign_keys() {
+		let generator = SchemaCodeGenerator::new(IntrospectConfig::default());
+		let mut project = create_test_table();
+		project.name = "projects".to_string();
+		project.columns.insert(
+			"external-key".to_string(),
+			ColumnInfo {
+				name: "external-key".to_string(),
+				column_type: FieldType::VarChar(32),
+				nullable: false,
+				default: None,
+				auto_increment: false,
+				generated: None,
+			},
+		);
+		project.unique_constraints.push(UniqueConstraintInfo {
+			name: "projects_external_key_unique".to_string(),
+			columns: vec!["external-key".to_string()],
+		});
+		let mut job = create_test_table();
+		job.name = "jobs".to_string();
+		job.columns.insert(
+			"project-key".to_string(),
+			ColumnInfo {
+				name: "project-key".to_string(),
+				column_type: FieldType::VarChar(32),
+				nullable: false,
+				default: None,
+				auto_increment: false,
+				generated: None,
+			},
+		);
+		job.foreign_keys = vec![ForeignKeyInfo {
+			name: "jobs_project_key_fk".to_string(),
+			columns: vec!["project-key".to_string()],
+			referenced_table: "projects".to_string(),
+			referenced_columns: vec!["external-key".to_string()],
+			on_delete: None,
+			on_update: None,
+		}];
+		let schema = DatabaseSchema {
+			tables: [
+				("projects".to_string(), project),
+				("jobs".to_string(), job.clone()),
+			]
+			.into(),
+		};
+
+		let code = generator
+			.format_tokens(
+				generator
+					.generate_model(
+						&job,
+						&[("projects".to_string(), "Projects".to_string())].into(),
+						&schema,
+					)
+					.expect("model generation should succeed"),
+			)
+			.expect("generated model should format");
+
+		assert!(code.contains("to_field = \"external_key\""));
+		assert!(code.contains("pub project_key: ForeignKeyField<Projects>"));
+	}
+
+	#[test]
+	fn generate_model_preserves_fixed_length_char_metadata() {
+		let generator = SchemaCodeGenerator::new(IntrospectConfig::default());
+		let mut table = create_test_table();
+		table.columns.insert(
+			"code".to_string(),
+			ColumnInfo {
+				name: "code".to_string(),
+				column_type: FieldType::Char(12),
+				nullable: false,
+				default: None,
+				auto_increment: false,
+				generated: None,
+			},
+		);
+		let schema = DatabaseSchema {
+			tables: [("users".to_string(), table.clone())].into(),
+		};
+
+		let code = generator
+			.format_tokens(
+				generator
+					.generate_model(&table, &HashMap::new(), &schema)
+					.expect("model generation should succeed"),
+			)
+			.expect("generated model should format");
+
+		assert!(code.contains("max_length = 12"));
+		assert!(code.contains("field_type = \"char(12)\""));
 	}
 
 	#[test]

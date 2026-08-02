@@ -674,7 +674,8 @@ fn module_identifier(table_name: &str) -> String {
 fn validate_generated_identifier(table_name: &str, identifier: &str) -> Result<()> {
 	syn::parse_str::<syn::Ident>(identifier).map_err(|_| {
 		MigrationError::IntrospectionError(format!(
-			"table `{table_name}` does not normalize to a valid Rust model identifier"
+			"table `{}` does not normalize to a valid Rust model identifier",
+			table_name
 		))
 	})?;
 	Ok(())

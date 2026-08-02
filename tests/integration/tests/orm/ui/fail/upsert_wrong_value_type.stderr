@@ -17,7 +17,7 @@ help: `&str` implements trait `IntoFieldValue<T>`
 note: required by a bound in `GetOrCreateBuilder::<C>::lookup`
   --> $WORKSPACE/crates/reinhardt-db/src/orm/upsert.rs
    |
-   |     pub fn lookup<T, V>(self, field: FieldRef<C::Model, T>, value: V) -> Self
+   |     pub fn lookup<T, V>(self, field: FieldRef<C::Model, T, GeneratedModelField>, value: V) -> Self
    |            ------ required by a bound in this associated function
 ...
    |         V: IntoFieldValue<T>,

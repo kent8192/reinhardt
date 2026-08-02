@@ -1,4 +1,5 @@
-use reinhardt_db::orm::{FieldRef, GeneratedModelField};
+use reinhardt_db::orm::FieldRef;
+use reinhardt_db::orm::expressions::GeneratedModelField;
 
 struct User;
 

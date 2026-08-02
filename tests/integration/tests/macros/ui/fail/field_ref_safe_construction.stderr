@@ -1,19 +1,25 @@
-error[E0599]: no associated function or constant named `new` found for struct `reinhardt_db::orm::FieldRef<M, T>` in the current scope
- --> tests/macros/ui/fail/field_ref_safe_construction.rs:6:36
+error[E0599]: no associated function or constant named `new` found for struct `reinhardt_db::orm::FieldRef<User, std::string::String, reinhardt_db::orm::expressions::GeneratedModelField>` in the current scope
+ --> tests/macros/ui/fail/field_ref_safe_construction.rs:7:57
   |
-6 |     let _ = FieldRef::<User, String>::new("forged");
-  |                                       ^^^ associated function or constant not found in `reinhardt_db::orm::FieldRef<User, std::string::String>`
+7 |     let _ = FieldRef::<User, String, GeneratedModelField>::new("forged");
+  |                                                            ^^^ associated function or constant not found in `reinhardt_db::orm::FieldRef<User, std::string::String, reinhardt_db::orm::expressions::GeneratedModelField>`
   |
-note: if you're trying to build a new `reinhardt_db::orm::FieldRef<User, std::string::String>`, consider using `reinhardt_db::orm::FieldRef::<M, T>::from_model_field` which returns `reinhardt_db::orm::FieldRef<_, _>`
+note: if you're trying to build a new `reinhardt_db::orm::FieldRef<User, std::string::String, reinhardt_db::orm::expressions::GeneratedModelField>` consider using one of the following associated functions:
+      reinhardt_db::orm::FieldRef::<M, T, reinhardt_db::orm::expressions::GeneratedModelField>::from_model_field
+      reinhardt_db::orm::FieldRef::<M, T, reinhardt_db::orm::expressions::GeneratedModelField>::from_generated_model_field_with_names
  --> $WORKSPACE/crates/reinhardt-db/src/orm/expressions.rs
   |
-  | /     pub const unsafe fn from_model_field(
+  |       pub const unsafe fn from_model_field(name: &'static str) -> Self {
+  |       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+...
+  | /     pub const unsafe fn from_generated_model_field_with_names(
   | |         logical_name: &'static str,
   | |         column_name: &'static str,
   | |     ) -> Self {
   | |_____________^
+  = note: the associated function or constant was found for `reinhardt_db::orm::FieldRef<M, T>`
 help: there is a method `ne` with a similar name
   |
-6 -     let _ = FieldRef::<User, String>::new("forged");
-6 +     let _ = FieldRef::<User, String>::ne("forged");
+7 -     let _ = FieldRef::<User, String, GeneratedModelField>::new("forged");
+7 +     let _ = FieldRef::<User, String, GeneratedModelField>::ne("forged");
   |

@@ -7131,9 +7131,9 @@ where
 	/// database. ISO weeks begin on Monday. Querysets created from subqueries,
 	/// querysets with CTEs, querysets with lateral joins, and grouped or HAVING
 	/// querysets are not supported.
-	pub async fn dates<F>(
+	pub async fn dates<F, Origin>(
 		&self,
-		field: super::expressions::FieldRef<T, F>,
+		field: super::expressions::FieldRef<T, F, Origin>,
 		kind: DateTruncKind,
 		order: DateProjectionOrder,
 	) -> reinhardt_core::exception::Result<Vec<chrono::NaiveDate>>
@@ -7148,10 +7148,10 @@ where
 	///
 	/// Querysets created from subqueries, querysets with CTEs, querysets with
 	/// lateral joins, and grouped or HAVING querysets are not supported.
-	pub async fn dates_with_db<E, F>(
+	pub async fn dates_with_db<E, F, Origin>(
 		&self,
 		conn: &mut E,
-		field: super::expressions::FieldRef<T, F>,
+		field: super::expressions::FieldRef<T, F, Origin>,
 		kind: DateTruncKind,
 		order: DateProjectionOrder,
 	) -> reinhardt_core::exception::Result<Vec<chrono::NaiveDate>>
@@ -7174,10 +7174,10 @@ where
 	///
 	/// Querysets created from subqueries, querysets with CTEs, querysets with
 	/// lateral joins, and grouped or HAVING querysets are not supported.
-	pub async fn dates_with_executor<F>(
+	pub async fn dates_with_executor<F, Origin>(
 		&self,
 		executor: &mut dyn super::connection::TransactionExecutor,
-		field: super::expressions::FieldRef<T, F>,
+		field: super::expressions::FieldRef<T, F, Origin>,
 		kind: DateTruncKind,
 		order: DateProjectionOrder,
 	) -> Result<Vec<chrono::NaiveDate>, crate::backends::error::DatabaseError>
@@ -7204,9 +7204,9 @@ where
 	/// error for named zones; PostgreSQL performs named-zone conversion. Querysets
 	/// created from subqueries, querysets with CTEs, querysets with lateral joins,
 	/// and grouped or HAVING querysets are not supported.
-	pub async fn datetimes<F>(
+	pub async fn datetimes<F, Origin>(
 		&self,
-		field: super::expressions::FieldRef<T, F>,
+		field: super::expressions::FieldRef<T, F, Origin>,
 		kind: DateTimeTruncKind,
 		order: DateProjectionOrder,
 		time_zone: Option<chrono_tz::Tz>,
@@ -7223,10 +7223,10 @@ where
 	///
 	/// Querysets created from subqueries, querysets with CTEs, querysets with
 	/// lateral joins, and grouped or HAVING querysets are not supported.
-	pub async fn datetimes_with_db<E, F>(
+	pub async fn datetimes_with_db<E, F, Origin>(
 		&self,
 		conn: &mut E,
-		field: super::expressions::FieldRef<T, F>,
+		field: super::expressions::FieldRef<T, F, Origin>,
 		kind: DateTimeTruncKind,
 		order: DateProjectionOrder,
 		time_zone: Option<chrono_tz::Tz>,
@@ -7256,10 +7256,10 @@ where
 	///
 	/// Querysets created from subqueries, querysets with CTEs, querysets with
 	/// lateral joins, and grouped or HAVING querysets are not supported.
-	pub async fn datetimes_with_executor<F>(
+	pub async fn datetimes_with_executor<F, Origin>(
 		&self,
 		executor: &mut dyn super::connection::TransactionExecutor,
-		field: super::expressions::FieldRef<T, F>,
+		field: super::expressions::FieldRef<T, F, Origin>,
 		kind: DateTimeTruncKind,
 		order: DateProjectionOrder,
 		time_zone: Option<chrono_tz::Tz>,
@@ -11704,7 +11704,7 @@ mod tests {
 		// Assert
 		assert_eq!(
 			sql,
-			r#"(SELECT COUNT(*) FROM "test_users" WHERE FALSE LIMIT 0)"#
+			r#"(SELECT COUNT(*) FROM "test_users" WHERE 1 = 0 LIMIT 0)"#
 		);
 	}
 
@@ -12750,7 +12750,12 @@ mod tests {
 			crate::orm::expressions::GeneratedModelField,
 		> {
 			// SAFETY: this test accessor names TestCorpusFile's persisted `email` field.
-			unsafe { crate::orm::expressions::FieldRef::from_model_field("email") }
+			unsafe {
+				crate::orm::expressions::FieldRef::from_generated_model_field_with_names(
+					"email",
+					"email_addr",
+				)
+			}
 		}
 	}
 

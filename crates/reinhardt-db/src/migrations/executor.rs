@@ -11,7 +11,7 @@ use super::{
 };
 use crate::backends::{connection::DatabaseConnection, types::DatabaseType};
 use indexmap::IndexMap;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 #[cfg(feature = "sqlite")]
 use super::introspection::SQLiteIntrospector;
@@ -358,6 +358,23 @@ impl DatabaseMigrationExecutor {
 						.contains(&(migration.app_label.as_str(), migration.name.as_str()))
 			})
 			.collect();
+		let partial_replacement_dependencies: HashMap<_, Vec<_>> = migrations
+			.iter()
+			.filter(|migration| {
+				partial_replacements
+					.contains(&(migration.app_label.as_str(), migration.name.as_str()))
+			})
+			.map(|migration| {
+				(
+					(migration.app_label.clone(), migration.name.clone()),
+					migration
+						.replaces
+						.iter()
+						.map(|(app, name)| super::graph::MigrationKey::new(app.clone(), name.clone()))
+						.collect(),
+				)
+			})
+			.collect();
 
 		// Build MigrationGraph for dependency resolution
 		let mut graph = super::graph::MigrationGraph::new();
@@ -370,7 +387,14 @@ impl DatabaseMigrationExecutor {
 			let deps: Vec<super::graph::MigrationKey> = migration
 				.dependencies
 				.iter()
-				.map(|(app, name)| super::graph::MigrationKey::new(app.clone(), name.clone()))
+				.flat_map(|(app, name)| {
+					partial_replacement_dependencies
+						.get(&(app.clone(), name.clone()))
+						.cloned()
+						.unwrap_or_else(|| {
+							vec![super::graph::MigrationKey::new(app.clone(), name.clone())]
+						})
+				})
 				.collect();
 
 			let replaces = migration
@@ -4301,6 +4325,58 @@ mod rollback_orchestration_tests {
 				.expect("query replacement recorder state"),
 			false
 		);
+	}
+
+	#[rstest]
+	#[tokio::test]
+	async fn partial_replacement_history_orders_descendants_after_remaining_originals() {
+		// Arrange
+		let initial = make_create_table_migration("0001_initial", "partial_descendant");
+		let mut remaining = Migration::new("0003_add_name", "partial_descendant");
+		remaining
+			.dependencies
+			.push((initial.app_label.clone(), initial.name.clone()));
+		remaining.operations.push(Operation::AddColumn {
+			table: "partial_descendant".to_string(),
+			column: ColumnDefinition::new("name", FieldType::VarChar(32)),
+			mysql_options: None,
+		});
+		let mut replacement = initial.clone();
+		replacement.name = "0001_squashed_0003".to_string();
+		replacement.operations.extend(remaining.operations.clone());
+		replacement.replaces = vec![
+			(initial.app_label.clone(), initial.name.clone()),
+			(remaining.app_label.clone(), remaining.name.clone()),
+		];
+		let mut descendant = Migration::new("0002_after_squash", "partial_descendant");
+		descendant.dependencies.push((
+			replacement.app_label.clone(),
+			replacement.name.clone(),
+		));
+		descendant.operations.push(Operation::AddColumn {
+			table: "partial_descendant".to_string(),
+			column: ColumnDefinition::new("after_squash", FieldType::VarChar(32)),
+			mysql_options: None,
+		});
+		let mut executor = make_executor().await;
+		executor
+			.apply_migrations(std::slice::from_ref(&initial))
+			.await
+			.expect("apply the first original migration");
+
+		// Act
+		let result = executor
+			.apply_migrations(&[
+				initial,
+				remaining.clone(),
+				replacement,
+				descendant.clone(),
+			])
+			.await
+			.expect("a descendant must wait for the remaining original migration");
+
+		// Assert
+		assert_eq!(result.applied, vec![remaining.id(), descendant.id()]);
 	}
 
 	#[rstest]

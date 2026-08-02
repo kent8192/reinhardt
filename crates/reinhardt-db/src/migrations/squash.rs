@@ -232,6 +232,9 @@ impl MigrationSquasher {
 					.resolve(&MigrationDependency::Optional(dependency.clone()))
 					.is_none()
 				{
+					if !optional_dependencies.contains(dependency) {
+						optional_dependencies.push(dependency.clone());
+					}
 					continue;
 				}
 				let normalized = range
@@ -543,7 +546,9 @@ impl MigrationSquasher {
 					}) = optimized.last_mut()
 						&& *previous_table == table
 						&& *previous_column == column
-						&& *previous_new_definition == new_definition
+						&& old_definition
+							.as_ref()
+							.is_some_and(|old| *previous_new_definition == *old)
 					{
 						*previous_new_definition = new_definition;
 						*previous_mysql_options = mysql_options;
@@ -1050,7 +1055,53 @@ mod tests {
 			.unwrap();
 
 		// Assert
-		assert!(result.migration.optional_dependencies.is_empty());
+		assert_eq!(
+			result.migration.optional_dependencies,
+			vec![OptionalDependency::new(
+				"gis",
+				"__first__",
+				DependencyCondition::FeatureEnabled("gis".to_string()),
+			)]
+		);
+	}
+
+	#[rstest::rstest]
+	fn optimize_operations_coalesces_adjacent_alters_with_matching_definitions() {
+		// Arrange
+		let initial = ColumnDefinition::new("name", FieldType::VarChar(40));
+		let intermediate = ColumnDefinition::new("name", FieldType::VarChar(80));
+		let final_definition = ColumnDefinition::new("name", FieldType::VarChar(160));
+		let operations = vec![
+			Operation::AlterColumn {
+				table: "users".to_string(),
+				column: "name".to_string(),
+				old_definition: Some(initial.clone()),
+				new_definition: intermediate.clone(),
+				mysql_options: None,
+			},
+			Operation::AlterColumn {
+				table: "users".to_string(),
+				column: "name".to_string(),
+				old_definition: Some(intermediate),
+				new_definition: final_definition.clone(),
+				mysql_options: None,
+			},
+		];
+
+		// Act
+		let optimized = MigrationSquasher::new().optimize_operations(operations);
+
+		// Assert
+		assert_eq!(
+			optimized,
+			vec![Operation::AlterColumn {
+				table: "users".to_string(),
+				column: "name".to_string(),
+				old_definition: Some(initial),
+				new_definition: final_definition,
+				mysql_options: None,
+			}]
+		);
 	}
 
 	#[test]

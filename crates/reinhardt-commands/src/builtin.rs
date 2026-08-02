@@ -762,8 +762,13 @@ impl BaseCommand for MigrateCommand {
 			if is_fake {
 				ctx.info("Faking migrations (marking as applied without execution):");
 
-				let recorder = reinhardt_db::migrations::DatabaseMigrationRecorder::new(connection);
-				let migrations_to_fake = dependency_ordered_migrations(migrations_to_apply.iter())?;
+				let recorder =
+					reinhardt_db::migrations::DatabaseMigrationRecorder::new(connection.clone());
+				let applied = plan_applied_migrations(&connection, &recorder).await?;
+				let migrations_to_fake = dependency_ordered_migrations_with_applied_history(
+					&migrations_to_apply,
+					&applied,
+				)?;
 
 				// Record each migration as applied without executing
 				for migration in migrations_to_fake {

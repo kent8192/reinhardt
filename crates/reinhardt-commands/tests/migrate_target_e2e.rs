@@ -640,6 +640,58 @@ async fn fake_forward_records_target_closure(
 #[rstest]
 #[tokio::test]
 #[serial(migrate_target_e2e)]
+async fn fake_apply_all_keeps_the_remaining_original_partial_squash_history(
+	#[future] migration_executor: MigrationExecutorFixture,
+) {
+	// Arrange
+	let (mut executor, _container, _pool, _port, url) = migration_executor.await;
+	let tempdir = tempfile::tempdir().expect("create tempdir");
+	let migrations_root = tempdir.path().join("migrations");
+	write_test_migration(&migrations_root, "myapp", "0001_first", &[])
+		.expect("write first original migration");
+	write_test_migration(
+		&migrations_root,
+		"myapp",
+		"0002_second",
+		&[("myapp", "0001_first")],
+	)
+	.expect("write second original migration");
+	write_test_migration_with_replaces(
+		&migrations_root,
+		"myapp",
+		"0001_squashed_0002",
+		&[],
+		&[("myapp", "0001_first"), ("myapp", "0002_second")],
+	)
+	.expect("write replacement migration");
+	let recorder = DatabaseMigrationRecorder::new(executor.connection().clone());
+	recorder
+		.ensure_schema_table()
+		.await
+		.expect("ensure migration recorder table");
+	executor
+		.record_migration("myapp", "0001_first")
+		.await
+		.expect("record the first original migration");
+	let mut ctx = build_ctx(&migrations_root, &url, Some("myapp"), None, false);
+	ctx.set_option("fake".to_string(), "true".to_string());
+
+	// Act
+	MigrateCommand
+		.execute(&ctx)
+		.await
+		.expect("fake apply-all must retain the remaining original history");
+
+	// Assert
+	assert_eq!(
+		applied_for_app(&url, "myapp").await,
+		vec!["0001_first".to_string(), "0002_second".to_string()]
+	);
+}
+
+#[rstest]
+#[tokio::test]
+#[serial(migrate_target_e2e)]
 async fn plan_apply_all_does_not_modify_db(#[future] migration_executor: MigrationExecutorFixture) {
 	// Arrange — one migration on disk, fresh database, no target argument.
 	let (_executor, _container, _pool, _port, url) = migration_executor.await;

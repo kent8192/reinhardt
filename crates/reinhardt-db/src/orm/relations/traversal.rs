@@ -189,7 +189,7 @@ impl<Root: Model, Target: Model> RelationPath<Root, Target> {
 		self,
 		field: FieldRef<Target, Value>,
 	) -> RelatedFieldRef<Root, Target, Value> {
-		RelatedFieldRef::new(self, field.name())
+		RelatedFieldRef::from_names(self, field.logical_name(), field.name())
 	}
 }
 
@@ -479,6 +479,19 @@ impl<Root: Model, Target: Model, Value> RelatedFieldRef<Root, Target, Value> {
 			path,
 			field,
 			column,
+			_phantom: PhantomData,
+		}
+	}
+
+	fn from_names(
+		path: RelationPath<Root, Target>,
+		field: &'static str,
+		column: &'static str,
+	) -> Self {
+		Self {
+			path,
+			field,
+			column: column.to_string(),
 			_phantom: PhantomData,
 		}
 	}

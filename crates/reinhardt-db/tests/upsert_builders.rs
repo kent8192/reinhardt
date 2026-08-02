@@ -249,6 +249,10 @@ impl OrmExecutor for RecordingExecutor {
 		self.backend
 	}
 
+	fn supports_get_or_create_race_recovery(&self) -> bool {
+		true
+	}
+
 	async fn execute(&mut self, sql: &str, params: Vec<QueryValue>) -> Result<QueryResult> {
 		self.record("execute", sql, params);
 		self.execute_results

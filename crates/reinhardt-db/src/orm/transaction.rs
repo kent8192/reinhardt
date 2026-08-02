@@ -974,6 +974,10 @@ impl OrmExecutor for AtomicTransaction {
 			.unwrap_or(self.is_cockroachdb)
 	}
 
+	fn supports_get_or_create_race_recovery(&self) -> bool {
+		self.has_write_intent()
+	}
+
 	fn rolls_back_on_error(&self) -> bool {
 		true
 	}

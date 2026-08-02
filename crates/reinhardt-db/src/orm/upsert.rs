@@ -121,8 +121,10 @@ impl<C: CustomManager> GetOrCreateBuilder<C> {
 
 	/// Executes through a caller-owned ORM executor.
 	///
-	/// The executor may be a connection, transaction, or savepoint that
-	/// implements [`OrmExecutor`].
+	/// An autocommit connection is accepted directly. A caller-owned transaction
+	/// must have been obtained from
+	/// [`crate::orm::connection::DatabaseConnection::atomic_write`]; ordinary
+	/// atomic transactions are rejected before the initial lookup.
 	pub async fn execute_with<E>(self, executor: &mut E) -> Result<(C::Model, bool)>
 	where
 		E: OrmExecutor + ?Sized,

@@ -210,6 +210,11 @@ pub trait OrmExecutor: Send {
 		false
 	}
 
+	/// Returns whether missing-row reads and duplicate-key recovery observe current data.
+	fn supports_get_or_create_race_recovery(&self) -> bool {
+		false
+	}
+
 	/// Whether propagating an operation failure rolls back the current work.
 	fn rolls_back_on_error(&self) -> bool {
 		false
@@ -470,6 +475,10 @@ impl OrmExecutor for DatabaseConnection {
 
 	fn is_cockroachdb(&self) -> bool {
 		self.resolve().is_ok_and(|owner| owner.is_cockroachdb())
+	}
+
+	fn supports_get_or_create_race_recovery(&self) -> bool {
+		true
 	}
 
 	async fn execute(&mut self, sql: &str, params: Vec<QueryValue>) -> Result<QueryResult> {

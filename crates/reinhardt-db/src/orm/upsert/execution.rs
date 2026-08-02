@@ -21,6 +21,13 @@ where
 	C: CustomManager,
 	E: OrmExecutor + ?Sized,
 {
+	if !executor.supports_get_or_create_race_recovery() {
+		return Err(crate::backends::DatabaseError::new(
+			DatabaseErrorKind::Transaction,
+			"get_or_create requires an autocommit connection or write-intent atomic transaction",
+		)
+		.into());
+	}
 	let backend = executor.backend();
 	let select = sql::select_by_lookup(&plan, backend, false)?;
 	let rows = executor.fetch_all(&select.sql, select.params).await?;
@@ -306,6 +313,7 @@ mod tests {
 	use crate::orm::upsert::plan::{UpsertMode, normalize};
 	use async_trait::async_trait;
 	use reinhardt_core::exception::Error;
+	use rstest::rstest;
 	use serde::{Deserialize, Serialize};
 	use std::collections::{BTreeMap, HashMap, VecDeque};
 	use std::sync::{Arc, Mutex};
@@ -924,6 +932,22 @@ mod tests {
 			"Database error: update_or_create requires a write-intent atomic transaction"
 		);
 		assert_eq!(state.lock().unwrap().calls, Vec::<Call>::new());
+	}
+
+	#[rstest]
+	#[tokio::test]
+	async fn get_or_create_rejects_non_write_intent_transaction_before_sql() {
+		let (mut transaction, state) = Recorder::ordinary_transaction(DatabaseType::Mysql);
+
+		let error = execute_get_or_create(&Manager::<Article>::new(), get_plan(), &mut transaction)
+			.await
+			.expect_err("ordinary transactions must not promise race recovery");
+
+		assert_eq!(
+			error.to_string(),
+			"Database error: get_or_create requires an autocommit connection or write-intent atomic transaction"
+		);
+		assert!(state.lock().unwrap().calls.is_empty());
 	}
 
 	#[cfg(feature = "sqlite")]

@@ -312,12 +312,21 @@ impl DatabaseMigrationExecutor {
 				})?;
 			validate_and_advance_migration_state(migration, &mut validation_state)?;
 
-			// Check if already applied
+			// A previous replacement reconciliation can have recorded the replacement
+			// before removing the records it supersedes. Resume that cleanup here so a
+			// retry cannot leave both histories applied indefinitely.
 			if self
 				.recorder
 				.is_applied(&migration.app_label, &migration.name)
 				.await?
 			{
+				if !migration.replaces.is_empty() {
+					for (app_label, name) in &migration.replaces {
+						if self.recorder.is_applied(app_label, name).await? {
+							self.recorder.unapply(app_label, name).await?;
+						}
+					}
+				}
 				continue;
 			}
 			if !migration.replaces.is_empty() {
@@ -345,8 +354,20 @@ impl DatabaseMigrationExecutor {
 					.map(|(app, name)| (app.as_str(), name.as_str()))
 					.collect();
 				if replaced.is_subset(&covered) {
+					let historical_position = applied_records
+						.iter()
+						.filter(|record| {
+							replaced.contains(&(record.app.as_str(), record.name.as_str()))
+						})
+						.map(|record| record.applied)
+						.min()
+						.expect("a covered replacement history must contain a record");
 					self.recorder
-						.record_applied(&migration.app_label, &migration.name)
+						.record_applied_at(
+							&migration.app_label,
+							&migration.name,
+							historical_position,
+						)
 						.await?;
 					for (app_label, name) in &migration.replaces {
 						if applied_records_set.contains(&(app_label.as_str(), name.as_str())) {

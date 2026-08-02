@@ -715,6 +715,15 @@ impl DatabaseMigrationRecorder {
 	/// # tokio::runtime::Runtime::new().unwrap().block_on(example());
 	/// ```
 	pub async fn record_applied(&self, app: &str, name: &str) -> super::Result<()> {
+		self.record_applied_at(app, name, Utc::now()).await
+	}
+
+	pub(crate) async fn record_applied_at(
+		&self,
+		app: &str,
+		name: &str,
+		applied_at: DateTime<Utc>,
+	) -> super::Result<()> {
 		use crate::backends::types::DatabaseType;
 		use reinhardt_query::prelude::{
 			Alias, MySqlQueryBuilder, PostgresQueryBuilder, Query, QueryStatementBuilder,
@@ -722,11 +731,11 @@ impl DatabaseMigrationRecorder {
 		};
 
 		// Build INSERT query using reinhardt-query
-		let now = Utc::now().format("%Y-%m-%d %H:%M:%S").to_string();
+		let applied_at = applied_at.format("%Y-%m-%d %H:%M:%S").to_string();
 		let stmt = Query::insert()
 			.into_table(Alias::new("reinhardt_migrations"))
 			.columns([Alias::new("app"), Alias::new("name"), Alias::new("applied")])
-			.values_panic([app.to_string(), name.to_string(), now])
+			.values_panic([app.to_string(), name.to_string(), applied_at])
 			.to_owned();
 
 		// Add conflict resolution for concurrent execution.

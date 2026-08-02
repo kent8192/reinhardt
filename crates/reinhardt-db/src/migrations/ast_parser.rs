@@ -65,8 +65,17 @@ pub fn extract_migration_metadata_strict(
 			MigrationError::InvalidMigration("Missing migration() entrypoint".to_string())
 		})?;
 
-	if matches!(migration_expr, Expr::MethodCall(_)) {
-		return parse_migration_builder_strict(migration_expr, app_label, name);
+	if matches!(migration_expr, Expr::Call(_) | Expr::MethodCall(_)) {
+		let mut migration = parse_migration_builder_strict(migration_expr, app_label, name)?;
+		if let Some(standalone_atomic) = extract_atomic(ast) {
+			if builder_declares_atomic(migration_expr) && migration.atomic != standalone_atomic {
+				return Err(MigrationError::InvalidMigration(
+					"Migration builder atomic flag conflicts with atomic() entrypoint".to_string(),
+				));
+			}
+			migration.atomic = standalone_atomic;
+		}
+		return Ok(migration);
 	}
 
 	let Expr::Struct(migration_struct) = migration_expr else {
@@ -139,6 +148,13 @@ pub fn extract_migration_metadata_strict(
 		swappable_dependencies,
 		optional_dependencies,
 	})
+}
+
+fn builder_declares_atomic(expr: &Expr) -> bool {
+	match expr {
+		Expr::MethodCall(call) => call.method == "atomic" || builder_declares_atomic(&call.receiver),
+		_ => false,
+	}
 }
 
 fn parse_migration_builder_strict(expr: &Expr, app_label: &str, name: &str) -> Result<Migration> {

@@ -253,6 +253,20 @@ impl BaseCommand for MigrateCommand {
 				};
 				let applied_for_app: Vec<_> =
 					applied.iter().filter(|r| r.app == *app).cloned().collect();
+				let target_name = if target_name == "zero" {
+					target_name
+				} else {
+					all_migrations
+						.iter()
+						.find(|migration| {
+							migration.app_label == *app
+								&& migration.replaces.iter().any(|(replaced_app, replaced_name)| {
+									*replaced_app == *app && *replaced_name == target_name
+								})
+						})
+						.map(|migration| migration.name.as_str())
+						.unwrap_or(target_name)
+				};
 
 				// Branch (a): `migrate <app> zero` -> unapply ALL applied migrations.
 				if target_name == "zero" {
@@ -585,15 +599,15 @@ impl BaseCommand for MigrateCommand {
 				use reinhardt_db::migrations::DatabaseMigrationRecorder;
 				let recorder = DatabaseMigrationRecorder::new(connection.clone());
 				let applied = plan_applied_migrations(&connection, &recorder).await?;
-				let pending: Vec<_> = migrations_to_apply
-					.iter()
+				let ordered = dependency_ordered_migrations(migrations_to_apply.iter())?;
+				let pending: Vec<_> = ordered
+					.into_iter()
 					.filter(|m| {
 						!applied
 							.iter()
 							.any(|r| r.app == m.app_label && r.name == m.name)
 					})
 					.collect();
-				let pending = dependency_ordered_migrations(pending)?;
 				if pending.is_empty() {
 					ctx.info("[plan] No unapplied migrations.");
 					return Ok(());

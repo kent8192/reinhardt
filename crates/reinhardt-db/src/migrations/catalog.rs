@@ -38,12 +38,12 @@ impl SquashRange {
 		app_label: &str,
 		migration_name: &str,
 	) -> Result<MigrationKey> {
-		let dependency = MigrationKey::new(app_label, migration_name);
+		let mut dependency = MigrationKey::new(app_label, migration_name);
 		if self.available_migrations.is_empty() {
 			return Ok(dependency);
 		}
 		if dependency.name == "__first__" {
-			return self
+			dependency = self
 				.available_migrations
 				.iter()
 				.filter(|candidate| candidate.app_label == dependency.app_label)
@@ -56,7 +56,7 @@ impl SquashRange {
 						"Missing first migration for app {}",
 						app_label
 					))
-				});
+				})?;
 		}
 		Ok(self
 			.replacement_owners

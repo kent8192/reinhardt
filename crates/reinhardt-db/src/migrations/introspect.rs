@@ -154,10 +154,8 @@ fn canonicalize_schema(schema: &DatabaseSchema) -> DatabaseSchema {
 		for index in table.indexes.values_mut() {
 			index.columns.sort();
 		}
-		for foreign_key in &mut table.foreign_keys {
-			foreign_key.columns.sort();
-			foreign_key.referenced_columns.sort();
-		}
+		// Catalog ordinal positions define the pairing of foreign-key columns.
+		// Sorting either side would change a composite foreign key's meaning.
 		table
 			.foreign_keys
 			.sort_by(|left, right| left.name.cmp(&right.name));
@@ -179,15 +177,7 @@ fn canonicalize_schema(schema: &DatabaseSchema) -> DatabaseSchema {
 fn canonicalize_module(syntax: &mut syn::File) {
 	let mut imports = Vec::new();
 	let mut items = Vec::new();
-	for mut item in std::mem::take(&mut syntax.items) {
-		if let syn::Item::Struct(model) = &mut item
-			&& let syn::Fields::Named(fields) = &mut model.fields
-		{
-			let mut named: Vec<_> = std::mem::take(&mut fields.named).into_iter().collect();
-			named.sort_by(|left, right| left.ident.cmp(&right.ident));
-			fields.named = named.into_iter().collect();
-		}
-
+	for item in std::mem::take(&mut syntax.items) {
 		if matches!(item, syn::Item::Use(_)) {
 			imports.push(item);
 		} else {

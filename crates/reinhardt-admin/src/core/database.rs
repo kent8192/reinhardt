@@ -1576,7 +1576,7 @@ mod tests {
 
 	use super::*;
 	use reinhardt_db::orm::annotation::Expression;
-	use reinhardt_db::orm::expressions::{F, OuterRef};
+	use reinhardt_db::orm::expressions::{F, FieldRef, OuterRef};
 	use rstest::rstest;
 
 	#[test]
@@ -2105,9 +2105,21 @@ mod tests {
 	#[test]
 	fn test_build_single_filter_expr_uses_transformed_filter_lhs() {
 		// Arrange
-		let filter = reinhardt_db::orm::expressions::FieldRef::<(), i64>::new("created_at")
-			.year()
-			.range(2024, 2026);
+		struct TransformedFilterModel {
+			created_at: i64,
+		}
+
+		// SAFETY: the test model declares `created_at` as an `i64` field mapped to the
+		// `created_at` column.
+		let filter = unsafe {
+			FieldRef::<
+				TransformedFilterModel,
+				i64,
+				reinhardt_db::orm::expressions::GeneratedModelField,
+			>::from_generated_model_field_with_names("created_at", "created_at")
+		}
+		.year()
+		.range(2024, 2026);
 
 		// Act
 		let result = build_single_filter_expr(&filter).expect("filter should compile");

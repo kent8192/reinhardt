@@ -22,7 +22,7 @@ mod component_brace;
 
 use proc_macro2::TokenStream;
 use syn::{
-	Expr, Ident, LitStr, Pat, Result, Token, braced,
+	Expr, Ident, LitStr, Pat, Result, Token, Type, braced,
 	ext::IdentExt,
 	parenthesized,
 	parse::{Parse, ParseStream},
@@ -331,11 +331,35 @@ fn parse_event(input: ParseStream) -> Result<IntrinsicEvent> {
 	let event_name: Ident = input.parse()?;
 
 	if event_name == "custom" {
+		let payload_type = if input.peek(Token![::]) {
+			input.parse::<Token![::]>()?;
+			input.parse::<Token![<]>()?;
+			if input.peek(Token![>]) {
+				return Err(syn::Error::new(
+					input.span(),
+					"`@custom` requires exactly one payload type",
+				));
+			}
+			let payload_type: Type = input.parse()?;
+			if input.peek(Token![,]) {
+				return Err(syn::Error::new(
+					input.span(),
+					"`@custom` accepts exactly one payload type",
+				));
+			}
+			input.parse::<Token![>]>()?;
+			Some(payload_type)
+		} else {
+			None
+		};
+
 		if !input.peek(token::Paren) {
-			return Err(syn::Error::new(
-				event_name.span(),
-				"`@custom` requires syntax `@custom(\"event-name\"): handler`",
-			));
+			let syntax = if payload_type.is_some() {
+				"`@custom::<T>` requires syntax `@custom::<T>(\"event-name\"): handler`"
+			} else {
+				"`@custom` requires syntax `@custom(\"event-name\"): handler`"
+			};
+			return Err(syn::Error::new(event_name.span(), syntax));
 		}
 
 		let content;
@@ -360,7 +384,14 @@ fn parse_event(input: ParseStream) -> Result<IntrinsicEvent> {
 			input.parse::<Token![,]>()?;
 		}
 
-		return Ok(IntrinsicEvent::Custom { name, handler });
+		return match payload_type {
+			Some(payload_type) => Ok(IntrinsicEvent::TypedCustom {
+				name,
+				payload_type,
+				handler,
+			}),
+			None => Ok(IntrinsicEvent::RawCustom { name, handler }),
+		};
 	}
 
 	let event = reinhardt_event_catalog::event_spec(&event_name.to_string())
@@ -938,7 +969,7 @@ mod tests {
 	}
 
 	#[rstest]
-	fn test_parse_custom_intrinsic_event() {
+	fn test_parse_raw_custom_intrinsic_event() {
 		// Arrange
 		let input = quote!(|| { div { @custom("item-selected"): |_| {}, } });
 
@@ -948,13 +979,66 @@ mod tests {
 		// Assert
 		match &result.body().nodes[0] {
 			PageNode::Element(elem) => match &elem.events[0] {
-				crate::core::IntrinsicEvent::Custom { name, .. } => {
+				crate::core::IntrinsicEvent::RawCustom { name, .. } => {
 					assert_eq!(name.value(), "item-selected");
 				}
-				other => panic!("expected custom intrinsic event, got {other:?}"),
+				other => panic!("expected raw custom intrinsic event, got {other:?}"),
 			},
 			_ => panic!("expected Element"),
 		}
+	}
+
+	#[rstest]
+	fn test_parse_typed_custom_intrinsic_event() {
+		// Arrange
+		let input = quote!(|| {
+			div {
+				@custom::<crate::events::Envelope<Vec<u64>>>("item-selected"): |_| {},
+			}
+		});
+
+		// Act
+		let result: PageMacro = syn::parse2(input).expect("typed custom event");
+
+		// Assert
+		let PageNode::Element(element) = &result.body().nodes[0] else {
+			panic!("expected element");
+		};
+		let crate::core::IntrinsicEvent::TypedCustom {
+			name, payload_type, ..
+		} = &element.events[0]
+		else {
+			panic!("expected typed custom event");
+		};
+		assert_eq!(name.value(), "item-selected");
+		assert_eq!(
+			quote!(#payload_type).to_string(),
+			"crate :: events :: Envelope < Vec < u64 > >"
+		);
+	}
+
+	#[rstest]
+	#[case(
+		quote!(|| { div { @custom::<>("name"): |_| {}, } }),
+		"`@custom` requires exactly one payload type"
+	)]
+	#[case(
+		quote!(|| { div { @custom::<A, B>("name"): |_| {}, } }),
+		"`@custom` accepts exactly one payload type"
+	)]
+	#[case(
+		quote!(|| { div { @custom::<Payload>(name): |_| {}, } }),
+		"`@custom` event name must be a string literal"
+	)]
+	fn test_parse_typed_custom_intrinsic_event_diagnostics(
+		#[case] input: proc_macro2::TokenStream,
+		#[case] expected: &str,
+	) {
+		// Act
+		let error = syn::parse2::<PageMacro>(input).expect_err("invalid custom event must fail");
+
+		// Assert
+		assert_eq!(error.to_string(), expected);
 	}
 
 	#[rstest]
@@ -985,6 +1069,22 @@ mod tests {
 		assert_eq!(
 			error.to_string(),
 			"`@custom(\"...\")` is only valid on intrinsic elements"
+		);
+	}
+
+	#[rstest]
+	fn test_parse_typed_custom_event_call_is_rejected_on_components() {
+		// Arrange
+		let input = quote!(|| { Card { @custom::<Payload>("item-selected"): |_| {}, } });
+
+		// Act
+		let error = syn::parse2::<PageMacro>(input)
+			.expect_err("typed custom intrinsic syntax must not parse as a component prop");
+
+		// Assert
+		assert_eq!(
+			error.to_string(),
+			"`@custom::<T>(\"...\")` is only valid on intrinsic elements"
 		);
 	}
 

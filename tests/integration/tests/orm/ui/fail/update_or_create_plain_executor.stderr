@@ -1,0 +1,18 @@
+error[E0308]: mismatched types
+  --> tests/orm/ui/fail/update_or_create_plain_executor.rs:23:17
+   |
+19 | async fn update_with_plain_executor<E: OrmExecutor + ?Sized>(executor: &mut E) {
+   |                                     - found this type parameter
+...
+23 |         .execute_with(executor)
+   |          ------------ ^^^^^^^^ expected `&mut AtomicTransaction`, found `&mut E`
+   |          |
+   |          arguments to this method are incorrect
+   |
+   = note: expected mutable reference `&mut AtomicTransaction`
+              found mutable reference `&mut E`
+note: method defined here
+  --> $WORKSPACE/crates/reinhardt-db/src/orm/upsert.rs
+   |
+   |     pub async fn execute_with(
+   |                  ^^^^^^^^^^^^

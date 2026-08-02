@@ -122,9 +122,12 @@ impl TypeMapper {
 			FieldType::TimestampTz => quote! { chrono::DateTime<chrono::Utc> },
 
 			// Numeric types
+			FieldType::Decimal { precision, scale } if *precision <= 28 && *scale <= 28 => {
+				quote! { rust_decimal::Decimal }
+			}
 			FieldType::Decimal { precision, scale } => {
 				return Err(TypeMappingError::UnsupportedType(format!(
-					"DECIMAL({precision}, {scale}) cannot be generated without losing its precision and scale metadata; configure a type override"
+					"DECIMAL({precision}, {scale}) exceeds rust_decimal's lossless precision or scale limits; configure a type override"
 				)));
 			}
 			FieldType::Float => quote! { f32 },
@@ -261,7 +264,7 @@ impl TypeMapper {
 			FieldType::Time => "chrono::NaiveTime",
 			FieldType::DateTime => "chrono::NaiveDateTime",
 			FieldType::TimestampTz => "chrono::DateTime<chrono::Utc>",
-			FieldType::Decimal { .. } => "unsupported decimal type",
+			FieldType::Decimal { .. } => "rust_decimal::Decimal",
 			FieldType::Float | FieldType::Real => "f32",
 			FieldType::Double => "f64",
 			FieldType::Boolean => "bool",
@@ -448,6 +451,27 @@ mod tests {
 	}
 
 	#[test]
+	fn maps_decimal_within_rust_decimal_limits() {
+		let mapper = TypeMapper::default();
+
+		let tokens = mapper
+			.field_type_to_rust(&FieldType::Decimal {
+				precision: 12,
+				scale: 4,
+			})
+			.expect("supported decimal precision should map to rust_decimal");
+		assert_eq!(tokens.to_string(), "rust_decimal :: Decimal");
+
+		let error = mapper
+			.field_type_to_rust(&FieldType::Decimal {
+				precision: 29,
+				scale: 4,
+			})
+			.expect_err("precision beyond rust_decimal limits should require an override");
+		assert!(error.to_string().contains("lossless precision"));
+	}
+
+	#[test]
 	fn test_datetime_type_mapping() {
 		let mapper = TypeMapper::default();
 
@@ -483,26 +507,5 @@ mod tests {
 
 		assert_eq!(mapper.get_override("users", "status"), Some("UserStatus"));
 		assert_eq!(mapper.get_override("users", "name"), None);
-	}
-
-	#[test]
-	fn rejects_decimal_without_precision_and_scale_metadata() {
-		let mapper = TypeMapper::default();
-
-		let error = mapper
-			.field_type_to_rust(&FieldType::Decimal {
-				precision: 12,
-				scale: 4,
-			})
-			.expect_err("decimal precision and scale must not be discarded");
-		assert!(error.to_string().contains("precision and scale metadata"));
-
-		let error = mapper
-			.field_type_to_rust(&FieldType::Decimal {
-				precision: 29,
-				scale: 4,
-			})
-			.expect_err("decimal precision beyond the supported range should require an override");
-		assert!(error.to_string().contains("precision and scale metadata"));
 	}
 }

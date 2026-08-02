@@ -200,15 +200,15 @@ impl MigrationSquasher {
 			.iter()
 			.map(|(app_label, migration_name)| (app_label.as_str(), migration_name.as_str()))
 			.collect();
-	let mut dependencies = Vec::new();
-	for migration in &range.migrations {
-		if !migration.replaces.is_empty() {
-			return Err(MigrationError::InvalidMigration(format!(
-				"Cannot squash replacement migration {} because nested replacement ownership is not representable safely",
-				migration.id()
-			)));
-		}
-		operations.extend(migration.operations.clone());
+		let mut dependencies = Vec::new();
+		for migration in &range.migrations {
+			if !migration.replaces.is_empty() {
+				return Err(MigrationError::InvalidMigration(format!(
+					"Cannot squash replacement migration {} because nested replacement ownership is not representable safely",
+					migration.id()
+				)));
+			}
+			operations.extend(migration.operations.clone());
 			for dependency in &migration.dependencies {
 				let normalized = range.normalize_dependency(&dependency.0, &dependency.1)?;
 				let normalized = (normalized.app_label, normalized.name);

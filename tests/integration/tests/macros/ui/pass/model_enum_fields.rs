@@ -1,6 +1,6 @@
 #![allow(unexpected_cfgs)]
 
-use reinhardt::db::orm::expressions::FieldRef;
+use reinhardt::db::orm::expressions::{FieldRef, GeneratedModelField};
 use reinhardt::{ModelEnum, model};
 use serde::{Deserialize, Serialize};
 
@@ -51,7 +51,7 @@ struct GlyphRecord {
 }
 
 fn main() {
-	let _: FieldRef<Job, Status> = Job::field_status();
-	let _: FieldRef<Job, Option<Priority>> = Job::field_priority();
-	let _: FieldRef<GlyphRecord, Glyph> = GlyphRecord::field_glyph();
+	let _: FieldRef<Job, Status, GeneratedModelField> = Job::field_status();
+	let _: FieldRef<Job, Option<Priority>, GeneratedModelField> = Job::field_priority();
+	let _: FieldRef<GlyphRecord, Glyph, GeneratedModelField> = GlyphRecord::field_glyph();
 }

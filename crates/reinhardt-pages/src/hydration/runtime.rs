@@ -4,7 +4,11 @@
 //! connecting reactive state with SSR-rendered DOM elements.
 
 use crate::component::Component;
+#[cfg(any(wasm, test))]
+use crate::reactive::{QueryClient, QueryKey};
 use crate::ssr::SsrState;
+#[cfg(any(wasm, test))]
+use serde::{Serialize, de::DeserializeOwned};
 use std::collections::HashMap;
 
 #[cfg(wasm)]
@@ -175,6 +179,23 @@ impl HydrationContext {
 	/// on call-order resource identifiers.
 	pub fn get_route_loader_state(&self, id: impl AsRef<str>) -> Option<&serde_json::Value> {
 		self.state.get_route_loader_state(id)
+	}
+
+	#[cfg(any(wasm, test))]
+	pub(crate) fn seed_query<T, E>(
+		&self,
+		client: &QueryClient,
+		key: QueryKey<T, E>,
+	) -> Result<bool, serde_json::Error>
+	where
+		T: Clone + Serialize + DeserializeOwned + 'static,
+		E: Clone + Serialize + DeserializeOwned + 'static,
+	{
+		let Some(serialized) = self.get_resource_state(&key.hydration_id()) else {
+			return Ok(false);
+		};
+		client.seed_query_snapshot(key, serialized)?;
+		Ok(true)
 	}
 
 	/// Marks hydration as complete.
@@ -1382,13 +1403,17 @@ mod tests {
 	};
 	#[cfg(wasm)]
 	use crate::reactive::hooks::{use_head, use_page_title, use_retained_effect};
+	#[cfg(native)]
+	use crate::reactive::{QueryClient, QueryDefaults, QueryFamily, QueryOptions, ReactiveScope};
 	#[cfg(wasm)]
 	use crate::reactive::{ReactiveScope, Signal, with_runtime};
 	#[cfg(wasm)]
 	use reinhardt_core::deps;
+	#[cfg(any(native, wasm))]
+	use std::cell::Cell;
 	#[cfg(wasm)]
-	use std::cell::{Cell, RefCell};
-	#[cfg(wasm)]
+	use std::cell::RefCell;
+	#[cfg(any(native, wasm))]
 	use std::rc::Rc;
 	#[cfg(wasm)]
 	use wasm_bindgen::JsCast;
@@ -1563,6 +1588,116 @@ mod tests {
 			context.get_route_loader_state("app::loader"),
 			Some(&serde_json::json!({"name": "Ada"}))
 		);
+	}
+
+	#[cfg(native)]
+	#[test]
+	fn query_snapshot_seeds_client_before_first_observer_mount() {
+		ReactiveScope::run(|| {
+			let family = QueryFamily::<(), String, String>::new("tests::hydrated-query");
+			let key = family.key(());
+			let mut state = SsrState::new();
+			state.add_resource_state(
+				key.hydration_id(),
+				serde_json::json!({
+					"state": { "Success": "server-value" },
+					"refetch_error": null,
+					"is_fetching": false,
+					"is_stale": false
+				}),
+			);
+			let context = HydrationContext::from_state(state);
+			let client = QueryClient::new(QueryDefaults::default());
+			let fetch_count = Rc::new(Cell::new(0));
+
+			context
+				.seed_query(&client, key)
+				.expect("typed query snapshot should hydrate");
+			let hydrated = client.observe(
+				family.query((), {
+					let fetch_count = Rc::clone(&fetch_count);
+					move || {
+						fetch_count.set(fetch_count.get() + 1);
+						async { Ok::<_, String>("client-value".to_string()) }
+					}
+				}),
+				QueryOptions::default(),
+			);
+
+			assert_eq!(hydrated.data(), Some("server-value".to_string()));
+			assert_eq!(fetch_count.get(), 0);
+		});
+	}
+
+	#[cfg(native)]
+	fn assert_unsettled_query_snapshot_is_rejected(status: &'static str) {
+		ReactiveScope::run(|| {
+			let family_id = match status {
+				"Idle" => "tests::invalid-idle-hydrated-query",
+				"Pending" => "tests::invalid-pending-hydrated-query",
+				_ => panic!("unsupported unsettled query status"),
+			};
+			let family = QueryFamily::<(), String, String>::new(family_id);
+			let key = family.key(());
+			let mut malformed_state = SsrState::new();
+			malformed_state.add_resource_state(
+				key.hydration_id(),
+				serde_json::json!({
+					"state": { status: null },
+					"refetch_error": null,
+					"is_fetching": false,
+					"is_stale": false
+				}),
+			);
+			let client = QueryClient::new(QueryDefaults::default());
+			let fetch_count = Rc::new(Cell::new(0));
+
+			let error = HydrationContext::from_state(malformed_state)
+				.seed_query(&client, key.clone())
+				.expect_err("unsettled SSR query snapshots must be rejected");
+
+			assert!(error.is_data());
+			assert_eq!(fetch_count.get(), 0);
+
+			let mut valid_state = SsrState::new();
+			valid_state.add_resource_state(
+				key.hydration_id(),
+				serde_json::json!({
+					"state": { "Success": "server-value" },
+					"refetch_error": null,
+					"is_fetching": false,
+					"is_stale": false
+				}),
+			);
+			HydrationContext::from_state(valid_state)
+				.seed_query(&client, key)
+				.expect("a valid snapshot should seed after malformed input is rejected");
+			let hydrated = client.observe(
+				family.query((), {
+					let fetch_count = Rc::clone(&fetch_count);
+					move || {
+						fetch_count.set(fetch_count.get() + 1);
+						async { Ok::<_, String>("client-value".to_string()) }
+					}
+				}),
+				QueryOptions::default(),
+			);
+
+			assert_eq!(hydrated.data(), Some("server-value".to_string()));
+			assert_eq!(fetch_count.get(), 0);
+		});
+	}
+
+	#[cfg(native)]
+	#[test]
+	fn idle_query_snapshot_does_not_seed_cache_or_start_fetch() {
+		assert_unsettled_query_snapshot_is_rejected("Idle");
+	}
+
+	#[cfg(native)]
+	#[test]
+	fn pending_query_snapshot_does_not_seed_cache_or_start_fetch() {
+		assert_unsettled_query_snapshot_is_rejected("Pending");
 	}
 
 	#[test]

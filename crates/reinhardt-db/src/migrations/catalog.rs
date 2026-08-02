@@ -206,14 +206,19 @@ impl MigrationCatalog {
 							.filter(|candidate| candidate.app_label == dependency.app_label)
 							.min_by(|left, right| Self::compare_keys(left, right))
 							.cloned()
-							.ok_or_else(|| MigrationError::DependencyError(format!(
-								"Missing first migration for app {} required by {}",
-								dependency.app_label, key
-							)))?
+							.ok_or_else(|| {
+								MigrationError::DependencyError(format!(
+									"Missing first migration for app {} required by {}",
+									dependency.app_label, key
+								))
+							})?
 					} else {
 						dependency.clone()
 					};
-					Ok(replacement_owners.get(&dependency).cloned().unwrap_or(dependency))
+					Ok(replacement_owners
+						.get(&dependency)
+						.cloned()
+						.unwrap_or(dependency))
 				})
 				.collect::<Result<Vec<_>>>()?;
 			let replaces = migration
@@ -305,9 +310,7 @@ impl MigrationCatalog {
 					.clone()
 			})
 			.collect();
-		let recorded = recorder
-			.get_applied_migrations_if_present()
-			.await?;
+		let recorded = recorder.get_applied_migrations_if_present().await?;
 		let mut applied: HashMap<MigrationKey, _> = recorded
 			.iter()
 			.map(|record| {
@@ -319,9 +322,10 @@ impl MigrationCatalog {
 			.collect();
 		for (key, migration) in &self.migrations {
 			if !migration.replaces.is_empty()
-				&& migration.replaces.iter().all(|(app, name)| {
-					applied.contains_key(&MigrationKey::new(app, name))
-				})
+				&& migration
+					.replaces
+					.iter()
+					.all(|(app, name)| applied.contains_key(&MigrationKey::new(app, name)))
 			{
 				let applied_at = migration
 					.replaces

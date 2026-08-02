@@ -39,7 +39,9 @@
 //! - [`use_id`], [`use_layout_effect`], [`use_debug_value`]
 //! - [`use_optimistic`], [`use_shared_state`]
 //! - [`use_action`], [`use_action_state`], [`use_sync_external_store`]
-//! - [`use_query`], [`use_mutation`], [`use_head`], [`use_page_title`]
+//! - [`use_query`], [`queries`], [`use_action`], [`use_head`], [`use_page_title`]
+//! - Query cache: [`QueryClient`], [`QueryFamily`], [`QueryKey`],
+//!   [`QueryDescriptor`], [`QueryOptions`], [`QuerySnapshot`], [`QueryStatus`]
 //!
 //! ## Component System
 //! - [`Component`], [`PageElement`], [`IntoPage`], [`Page`], [`Props`]
@@ -53,6 +55,7 @@
 //! ## Events and Callbacks
 //! - [`Callback`], [`IntoEventHandler`], [`into_event_handler`]
 //! - [`Event`] (platform-agnostic event type)
+//! - Custom event detail: [`CustomEvent`], [`CustomEventDetailError`]
 //! - Controlled form support: [`ControlBindingError`], [`NumberParseError`],
 //!   [`NumberParseErrorKind`], [`NumberValue`]
 //!
@@ -94,7 +97,8 @@
 
 pub use crate::reactive::{
 	Effect, LatestResourceState, LatestResourceValue, LatestResourceValueBuilder, Memo,
-	QueryHandle, QueryKey, QueryPhase, Resource, ResourceState, Signal, use_latest_resource_value,
+	QueryClient, QueryDefaults, QueryDescriptor, QueryFamily, QueryHandle, QueryKey, QueryOptions,
+	QuerySnapshot, QueryStatus, Resource, ResourceState, Signal, use_latest_resource_value,
 };
 
 // Context system
@@ -111,7 +115,7 @@ pub use crate::reactive::{
 	use_reducer, use_ref, use_retained_effect, use_retained_layout_effect, use_shared_state,
 	use_state, use_sync_external_store, use_transition,
 };
-pub use crate::reactive::{use_mutation, use_query};
+pub use crate::reactive::{queries, use_query};
 
 // Unified resource hooks (available on all targets)
 pub use crate::reactive::{use_resource, use_resource_with_key};
@@ -141,12 +145,13 @@ pub use crate::ui::{
 
 pub use crate::callback::{
 	Callback, IntoEventHandler, IntoTypedEventHandler, into_event_handler, raw_async_event_handler,
-	raw_event_handler, typed_async_event_handler, typed_event_handler,
+	raw_event_handler, typed_async_custom_event_handler, typed_async_event_handler,
+	typed_custom_event_handler, typed_event_handler,
 };
 
 pub use crate::event::{
-	EventConversionError, EventFile, EventPayload, EventTarget, EventTargetError, Modifiers,
-	MouseButton, MouseButtons, Point, PointerKind,
+	CustomEvent, CustomEventDetailError, EventConversionError, EventFile, EventPayload,
+	EventTarget, EventTargetError, Modifiers, MouseButton, MouseButtons, Point, PointerKind,
 };
 
 pub use crate::control_binding::{

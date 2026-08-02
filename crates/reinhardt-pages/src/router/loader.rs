@@ -4,8 +4,8 @@ use super::loader_registry::LoaderConsumer;
 use crate::cancellation::CancellationHandle;
 use crate::hydration::HydrationContext;
 use crate::reactive::{
-	QueryAcquireOptions, QueryErrorPolicy, QueryKey, QueryLease, acquire_query,
-	seed_query_from_serialized,
+	QueryAcquireOptions, QueryClient, QueryConsumer, QueryErrorPolicy, QueryFamily, QueryLease,
+	queries,
 };
 use reinhardt_urls::routers::client_router::{ClientRouteTreeMatch, RouteContext, RouteLoaderId};
 use serde::{Deserialize, Deserializer, Serialize, Serializer, de::DeserializeOwned};
@@ -365,49 +365,6 @@ pub struct PreparedLoader {
 // handoff contract for the registry and coordinator.
 #[allow(dead_code)]
 impl PreparedLoader {
-	/// Reconstructs a prepared value from a successful SSR payload.
-	#[doc(hidden)]
-	pub fn from_serialized<T>(
-		id: RouteLoaderId,
-		serialized: &serde_json::Value,
-	) -> Result<Self, RouteLoaderError>
-	where
-		T: Clone + Serialize + DeserializeOwned + 'static,
-	{
-		let value: T = serde_json::from_value(serialized.clone()).map_err(|error| {
-			RouteLoaderError::from_diagnostic(
-				"route loader hydration value is invalid",
-				Some(500),
-				error,
-			)
-		})?;
-		Ok(Self {
-			id,
-			type_id: TypeId::of::<T>(),
-			value: Rc::new(value),
-			serialized: serialized.clone(),
-			lease: ErasedQueryLease(Rc::new(())),
-		})
-	}
-
-	#[cfg(native)]
-	pub(crate) fn without_lease<T>(
-		id: RouteLoaderId,
-		value: T,
-		serialized: serde_json::Value,
-	) -> Self
-	where
-		T: Clone + Serialize + DeserializeOwned + 'static,
-	{
-		Self {
-			id,
-			type_id: TypeId::of::<T>(),
-			value: Rc::new(value),
-			serialized,
-			lease: ErasedQueryLease(Rc::new(())),
-		}
-	}
-
 	pub(crate) fn new<T>(
 		id: RouteLoaderId,
 		value: T,
@@ -462,7 +419,10 @@ impl PreparedLoader {
 }
 
 #[derive(Clone)]
-pub(crate) struct ErasedQueryLease(Rc<dyn Any>);
+pub(crate) struct ErasedQueryLease {
+	lease: Rc<dyn Any>,
+	promote_to_mounted_route: Rc<dyn Fn(u64)>,
+}
 
 impl ErasedQueryLease {
 	fn new<T, E>(lease: QueryLease<T, E>) -> Self
@@ -470,12 +430,22 @@ impl ErasedQueryLease {
 		T: Clone + 'static,
 		E: Clone + 'static,
 	{
-		Self(Rc::new(lease))
+		let promote_lease = lease.clone();
+		Self {
+			lease: Rc::new(lease),
+			promote_to_mounted_route: Rc::new(move |generation| {
+				promote_lease.promote_to_mounted_route(generation);
+			}),
+		}
+	}
+
+	fn promote_to_mounted_route(&self, generation: u64) {
+		(self.promote_to_mounted_route)(generation);
 	}
 
 	#[allow(dead_code)]
 	fn as_any(&self) -> &dyn Any {
-		self.0.as_ref()
+		self.lease.as_ref()
 	}
 }
 
@@ -491,7 +461,7 @@ struct StoredLoader {
 	serialized: serde_json::Value,
 	// The lease is intentionally retained for as long as the prepared value is mounted.
 	#[allow(dead_code)]
-	lease: ErasedQueryLease,
+	lease: Option<ErasedQueryLease>,
 }
 
 impl LoaderStore {
@@ -512,7 +482,7 @@ impl LoaderStore {
 				type_id: TypeId::of::<T>(),
 				value: Rc::new(value),
 				serialized,
-				lease: ErasedQueryLease(Rc::new(())),
+				lease: None,
 			},
 		);
 		Ok(())
@@ -553,9 +523,17 @@ impl LoaderStore {
 				type_id,
 				value,
 				serialized,
-				lease,
+				lease: Some(lease),
 			},
 		);
+	}
+
+	pub(crate) fn promote_navigation_leases(&self, generation: u64) {
+		for stored in self.values.borrow().values() {
+			if let Some(lease) = &stored.lease {
+				lease.promote_to_mounted_route(generation);
+			}
+		}
 	}
 }
 
@@ -629,6 +607,7 @@ pub fn active_loader_store() -> Option<LoaderStore> {
 /// Seeds the typed query cache entry that backs a hydrated route loader.
 #[doc(hidden)]
 pub fn seed_loader_query<T>(
+	client: &QueryClient,
 	id: RouteLoaderId,
 	context: &RouteContext,
 	specs: &[LoaderInputSpec],
@@ -638,13 +617,13 @@ pub fn seed_loader_query<T>(
 	) -> std::pin::Pin<
 		Box<dyn std::future::Future<Output = Result<T, RouteLoaderError>> + 'static>,
 	> + 'static,
-) -> Result<(), RouteLoaderError>
+) -> Result<PreparedLoader, RouteLoaderError>
 where
 	T: Clone + Serialize + DeserializeOwned + 'static,
 {
 	let cache_id = loader_cache_id(id, context, specs)
 		.map_err(|error| RouteLoaderError::with_status(error.to_string(), 400))?;
-	let serialized = hydration.get_resource_state(&cache_id).ok_or_else(|| {
+	let query_state = hydration.get_resource_state(&cache_id).ok_or_else(|| {
 		RouteLoaderError::with_status(
 			format!(
 				"route loader `{}` query state is missing from SSR state",
@@ -653,21 +632,45 @@ where
 			500,
 		)
 	})?;
-	let key = QueryKey::<T, RouteLoaderError>::new_with_cancellation(cache_id, fetcher);
-	seed_query_from_serialized(key, serialized).map_err(|error| {
+	let serialized = hydration
+		.get_route_loader_state(id.as_str())
+		.ok_or_else(|| {
+			RouteLoaderError::with_status(
+				format!("route loader `{}` is missing from SSR state", id.as_str()),
+				500,
+			)
+		})?;
+	let value: T = serde_json::from_value(serialized.clone()).map_err(|error| {
 		RouteLoaderError::from_diagnostic(
-			"route loader query hydration state is invalid",
+			"route loader hydration value is invalid",
 			Some(500),
 			error,
 		)
-	})
+	})?;
+	let descriptor = QueryFamily::<String, T, RouteLoaderError>::new(id.as_str())
+		.query_with_cancellation(cache_id, fetcher);
+	client
+		.seed_serialized(descriptor.key().clone(), query_state)
+		.map_err(|error| {
+			RouteLoaderError::from_diagnostic(
+				"route loader query hydration state is invalid",
+				Some(500),
+				error,
+			)
+		})?;
+	let lease = client.acquire(
+		descriptor,
+		QueryAcquireOptions {
+			consumer: QueryConsumer::MountedRoute(0),
+			error_policy: QueryErrorPolicy::Discard,
+		},
+	);
+	Ok(PreparedLoader::new(id, value, serialized.clone(), lease))
 }
 
 /// Acquires a registered loader using the shared query cache.
-// This is consumed by the generated `#[loader]` executor in the next macro
-// phase; keeping the implementation here makes that executor use the same
-// query cache as `use_query`.
-#[allow(dead_code)]
+// Generated `#[loader]` executors call this function so route preparation uses
+// the same query client as `use_query`.
 pub async fn acquire_loader_query<T>(
 	id: RouteLoaderId,
 	context: &RouteContext,
@@ -683,28 +686,13 @@ pub async fn acquire_loader_query<T>(
 where
 	T: Clone + Serialize + DeserializeOwned + 'static,
 {
-	#[cfg(native)]
-	if !crate::platform::has_native_task_sink() {
-		// Native SSR has no browser event-loop task sink. Run the request in the
-		// current SSR future while retaining the same query-backed path whenever
-		// a mounted task sink exists.
-		//
-		// Ideal implementation (without this fallback):
-		//   acquire_query(key, options).result().await
-		let fetch_cancellation = cancellation.clone();
-		let value =
-			crate::cancellation::scope_cancellation(cancellation, fetcher(fetch_cancellation))
-				.await?;
-		let serialized = serde_json::to_value(&value).map_err(|error| {
-			RouteLoaderError::from_diagnostic("loader value serialization failed", Some(500), error)
-		})?;
-		return Ok(PreparedLoader::without_lease(id, value, serialized));
-	}
 	let cache_id = loader_cache_id(id, context, specs)
 		.map_err(|error| RouteLoaderError::with_status(error.to_string(), 400))?;
-	let key = QueryKey::<T, RouteLoaderError>::new_with_cancellation(cache_id, fetcher);
-	let lease = acquire_query(
-		key,
+	let client = queries();
+	let descriptor = QueryFamily::<String, T, RouteLoaderError>::new(id.as_str())
+		.query_with_cancellation(cache_id, fetcher);
+	let lease = client.acquire(
+		descriptor,
 		QueryAcquireOptions {
 			consumer: consumer.into(),
 			error_policy: QueryErrorPolicy::Discard,
@@ -727,20 +715,50 @@ where
 mod tests {
 	use super::*;
 	#[cfg(native)]
-	use crate::reactive::query::clear_query_cache_for_test;
+	use crate::reactive::query::TestQueryRuntime;
 	#[cfg(native)]
-	use crate::reactive::{QueryConsumer, ResourceState};
+	use crate::reactive::{QueryConsumer, QueryDefaults};
 	#[cfg(native)]
 	use crate::{HydrationContext, SsrState};
 	#[cfg(native)]
 	use reinhardt_core::reactive::ReactiveScope;
 	#[cfg(native)]
-	use serial_test::serial;
-	#[cfg(native)]
 	use std::cell::Cell;
 	use std::collections::HashMap;
 	#[cfg(native)]
+	use std::collections::VecDeque;
+	#[cfg(native)]
+	use std::future::Future;
+	#[cfg(native)]
+	use std::pin::Pin;
+	#[cfg(native)]
 	use std::rc::Rc;
+	#[cfg(native)]
+	use std::task::{Context, Poll, Waker};
+	#[cfg(native)]
+	use std::time::Duration;
+
+	#[cfg(native)]
+	type QueryTask = Pin<Box<dyn Future<Output = ()> + 'static>>;
+
+	#[cfg(native)]
+	fn poll_query_tasks(tasks: &Rc<RefCell<VecDeque<QueryTask>>>, rounds: usize) {
+		for _ in 0..rounds {
+			let count = tasks.borrow().len();
+			if count == 0 {
+				return;
+			}
+			for _ in 0..count {
+				let Some(mut task) = tasks.borrow_mut().pop_front() else {
+					break;
+				};
+				let mut context = Context::from_waker(Waker::noop());
+				if task.as_mut().poll(&mut context) == Poll::Pending {
+					tasks.borrow_mut().push_back(task);
+				}
+			}
+		}
+	}
 
 	fn context(path_params: &[(&str, &str)], query: &str) -> RouteContext {
 		RouteContext::new(
@@ -852,11 +870,137 @@ mod tests {
 
 	#[cfg(native)]
 	#[test]
-	#[serial(query_cache)]
+	fn one_client_shares_loader_work_between_prefetch_and_navigation() {
+		ReactiveScope::run(|| {
+			// Arrange
+			let runtime = TestQueryRuntime::new();
+			let client = QueryClient::with_runtime(QueryDefaults::default(), runtime.handle());
+			let fetch_count = Rc::new(Cell::new(0));
+			let released = Rc::new(Cell::new(false));
+			let descriptor = QueryFamily::<String, String, String>::new("tests::shared_loader")
+				.query_with_cancellation("project:42".to_owned(), {
+					let fetch_count = Rc::clone(&fetch_count);
+					let released = Rc::clone(&released);
+					move |_cancellation| {
+						let fetch_count = Rc::clone(&fetch_count);
+						let released = Rc::clone(&released);
+						async move {
+							fetch_count.set(fetch_count.get() + 1);
+							std::future::poll_fn(move |_| {
+								if released.get() {
+									Poll::Ready(())
+								} else {
+									Poll::Pending
+								}
+							})
+							.await;
+							Ok("project".to_owned())
+						}
+					}
+				});
+
+			// Act
+			let prefetch = client.acquire(
+				descriptor.clone(),
+				QueryAcquireOptions {
+					consumer: QueryConsumer::Prefetch,
+					error_policy: QueryErrorPolicy::Discard,
+				},
+			);
+			let navigation = client.acquire(
+				descriptor,
+				QueryAcquireOptions {
+					consumer: QueryConsumer::Navigation(1),
+					error_policy: QueryErrorPolicy::Discard,
+				},
+			);
+			runtime.run_until_stalled();
+			let mut prefetch_result = tokio_test::task::spawn(prefetch.result());
+			let mut navigation_result = tokio_test::task::spawn(navigation.result());
+
+			// Assert
+			assert_eq!(prefetch_result.poll(), Poll::Pending);
+			assert_eq!(navigation_result.poll(), Poll::Pending);
+			assert_eq!(fetch_count.get(), 1);
+			assert_eq!(runtime.pending_task_count(), 1);
+
+			released.set(true);
+			runtime.run_until_stalled();
+
+			assert!(prefetch_result.is_woken());
+			assert!(navigation_result.is_woken());
+			assert_eq!(
+				prefetch_result.poll(),
+				Poll::Ready(Ok("project".to_owned()))
+			);
+			assert_eq!(
+				navigation_result.poll(),
+				Poll::Ready(Ok("project".to_owned()))
+			);
+		});
+	}
+
+	#[cfg(native)]
+	#[test]
+	fn separate_clients_do_not_share_loader_work() {
+		ReactiveScope::run(|| {
+			// Arrange
+			let first_client = QueryClient::new(QueryDefaults::default());
+			let second_client = QueryClient::new(QueryDefaults::default());
+			let fetch_count = Rc::new(Cell::new(0));
+			let tasks = Rc::new(RefCell::new(VecDeque::new()));
+			let tasks_for_sink = Rc::clone(&tasks);
+			let _sink = crate::platform::install_task_sink(move |task| {
+				tasks_for_sink.borrow_mut().push_back(task);
+			});
+			let descriptor = QueryFamily::<String, String, String>::new("tests::isolated_loader")
+				.query_with_cancellation("project:42".to_owned(), {
+					let fetch_count = Rc::clone(&fetch_count);
+					move |_cancellation| {
+						let fetch_count = Rc::clone(&fetch_count);
+						async move {
+							fetch_count.set(fetch_count.get() + 1);
+							Ok("project".to_owned())
+						}
+					}
+				});
+
+			// Act
+			let first = first_client.acquire(
+				descriptor.clone(),
+				QueryAcquireOptions {
+					consumer: QueryConsumer::Prefetch,
+					error_policy: QueryErrorPolicy::Discard,
+				},
+			);
+			let second = second_client.acquire(
+				descriptor,
+				QueryAcquireOptions {
+					consumer: QueryConsumer::Navigation(1),
+					error_policy: QueryErrorPolicy::Discard,
+				},
+			);
+			poll_query_tasks(&tasks, 4);
+
+			// Assert
+			tokio_test::block_on(async {
+				assert_eq!(first.result().await, Ok("project".to_owned()));
+				assert_eq!(second.result().await, Ok("project".to_owned()));
+			});
+			assert_eq!(fetch_count.get(), 2);
+		});
+	}
+
+	#[cfg(native)]
+	#[test]
 	fn hydration_seed_keeps_route_loader_query_fresh_without_refetching() {
 		ReactiveScope::run(|| {
 			// Arrange
-			clear_query_cache_for_test();
+			let runtime = TestQueryRuntime::new();
+			let query_client = QueryClient::with_runtime(
+				QueryDefaults::default().gc_time(Duration::ZERO),
+				runtime.handle(),
+			);
 			let route_context = context(&[("project_id", "42")], "tab=open");
 			let loader_id = RouteLoaderId::new("tests::hydrated_loader");
 			let inputs = [
@@ -866,45 +1010,57 @@ mod tests {
 			let cache_id = loader_cache_id(loader_id, &route_context, &inputs).expect("cache key");
 			let mut state = SsrState::new();
 			state.add_route_loader_query_state(&cache_id, "SSR loader value");
+			state.add_route_loader_state(loader_id.as_str(), "SSR loader value");
 			let hydration = HydrationContext::from_state(state);
 			let fetches = Rc::new(Cell::new(0));
 
-			seed_loader_query::<String>(loader_id, &route_context, &inputs, &hydration, {
-				let fetches = Rc::clone(&fetches);
-				move |_cancellation| {
-					let fetches = Rc::clone(&fetches);
-					Box::pin(async move {
-						fetches.set(fetches.get() + 1);
-						Ok::<_, RouteLoaderError>("client refetch".to_string())
-					})
-				}
-			})
-			.expect("seeded SSR query");
-
-			// Act
-			let lease = acquire_query(
-				QueryKey::new_with_cancellation(cache_id, {
+			let prepared = seed_loader_query::<String>(
+				&query_client,
+				loader_id,
+				&route_context,
+				&inputs,
+				&hydration,
+				{
 					let fetches = Rc::clone(&fetches);
 					move |_cancellation| {
 						let fetches = Rc::clone(&fetches);
-						async move {
+						Box::pin(async move {
 							fetches.set(fetches.get() + 1);
 							Ok::<_, RouteLoaderError>("client refetch".to_string())
-						}
+						})
 					}
-				}),
-				QueryAcquireOptions {
-					consumer: QueryConsumer::Navigation(1),
-					error_policy: QueryErrorPolicy::Discard,
 				},
+			)
+			.expect("seeded SSR query");
+			let store = LoaderStore::new();
+			store.insert_prepared(prepared);
+			assert_eq!(
+				store
+					.get::<String>(loader_id)
+					.expect("hydrated route value"),
+				Loader("SSR loader value".to_string())
 			);
+			let query_key =
+				QueryFamily::<String, String, RouteLoaderError>::new(loader_id.as_str())
+					.key(cache_id);
+			assert_eq!(fetches.get(), 0, "the hydrated query must remain fresh");
+
+			// Act
+			query_client.invalidate(&query_key);
+			runtime.run_until_stalled();
 
 			// Assert
-			let ResourceState::Success(value) = lease.state() else {
-				panic!("the seeded query must expose its SSR success state");
-			};
-			assert_eq!(value, "SSR loader value");
-			assert_eq!(fetches.get(), 0, "the hydrated query must remain fresh");
+			assert_eq!(
+				fetches.get(),
+				1,
+				"the hydrated mounted route must refetch when invalidated"
+			);
+			drop(store);
+			runtime.run_due_maintenance();
+			assert!(
+				!query_client.contains_for_test(&query_key),
+				"dropping the final mounted route owner must release the query"
+			);
 		});
 	}
 }

@@ -783,7 +783,11 @@ fn parse_single_operation_strict(expr: &Expr, index: usize) -> Result<super::Ope
 				});
 			}
 			"AlterUniqueTogether" => {
-				validate_exact_named_fields(&operation.fields, &["table", "unique_together"], &context)?;
+				validate_exact_named_fields(
+					&operation.fields,
+					&["table", "unique_together"],
+					&context,
+				)?;
 				return Ok(super::Operation::AlterUniqueTogether {
 					table: parse_string_field_strict(&operation.fields, "table", &context)?,
 					unique_together: parse_string_vector_vector_field_strict(
@@ -808,9 +812,21 @@ fn parse_single_operation_strict(expr: &Expr, index: usize) -> Result<super::Ope
 				)?;
 				return Ok(super::Operation::CreateInheritedTable {
 					name: parse_string_field_strict(&operation.fields, "name", &context)?,
-					columns: parse_column_vector_field_strict(&operation.fields, "columns", &context)?,
-					base_table: parse_string_field_strict(&operation.fields, "base_table", &context)?,
-					join_column: parse_string_field_strict(&operation.fields, "join_column", &context)?,
+					columns: parse_column_vector_field_strict(
+						&operation.fields,
+						"columns",
+						&context,
+					)?,
+					base_table: parse_string_field_strict(
+						&operation.fields,
+						"base_table",
+						&context,
+					)?,
+					join_column: parse_string_field_strict(
+						&operation.fields,
+						"join_column",
+						&context,
+					)?,
 				});
 			}
 			"AddDiscriminatorColumn" => {
@@ -821,8 +837,16 @@ fn parse_single_operation_strict(expr: &Expr, index: usize) -> Result<super::Ope
 				)?;
 				return Ok(super::Operation::AddDiscriminatorColumn {
 					table: parse_string_field_strict(&operation.fields, "table", &context)?,
-					column_name: parse_string_field_strict(&operation.fields, "column_name", &context)?,
-					default_value: parse_string_field_strict(&operation.fields, "default_value", &context)?,
+					column_name: parse_string_field_strict(
+						&operation.fields,
+						"column_name",
+						&context,
+					)?,
+					default_value: parse_string_field_strict(
+						&operation.fields,
+						"default_value",
+						&context,
+					)?,
 				});
 			}
 			"MoveModel" => {
@@ -839,10 +863,18 @@ fn parse_single_operation_strict(expr: &Expr, index: usize) -> Result<super::Ope
 					&context,
 				)?;
 				return Ok(super::Operation::MoveModel {
-					model_name: parse_string_field_strict(&operation.fields, "model_name", &context)?,
+					model_name: parse_string_field_strict(
+						&operation.fields,
+						"model_name",
+						&context,
+					)?,
 					from_app: parse_string_field_strict(&operation.fields, "from_app", &context)?,
 					to_app: parse_string_field_strict(&operation.fields, "to_app", &context)?,
-					rename_table: parse_bool_field_strict(&operation.fields, "rename_table", &context)?,
+					rename_table: parse_bool_field_strict(
+						&operation.fields,
+						"rename_table",
+						&context,
+					)?,
 					old_table_name: parse_optional_string_field_strict(
 						&operation.fields,
 						"old_table_name",

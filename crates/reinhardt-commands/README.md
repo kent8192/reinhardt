@@ -341,6 +341,14 @@ only with `--output` to replace existing generated files. File publication is
 rollback-safe and all-or-nothing when the command reports a failure: replaced
 files are restored and newly created partial output is removed.
 
+`inspectdb` preserves supported relationship targets, referential actions,
+identity modes, scalar defaults, and explicit JSON versus JSONB field metadata.
+It rejects schema features that cannot be represented by generated model
+attributes (including composite unique constraints or foreign keys,
+shared-primary-key relationships, partial indexes, table-level CHECK constraints,
+and storage-width-specific integer, text, binary, or enum types) instead of
+silently generating a lossy migration model.
+
 ### Rust Management Shell
 
 The shell is an opt-in Rust evaluator. In a generated project, enable the local

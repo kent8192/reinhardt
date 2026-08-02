@@ -3,6 +3,7 @@
 use super::SsrRenderer;
 use crate::cancellation::CancellationSource;
 use crate::component::{IntoPage, Page, PageElement};
+use crate::reactive::query::with_query_client_async;
 use crate::router::loader::{
 	LoaderStore, RouteLoaderError, loader_cache_id, route_context, with_loader_store,
 };
@@ -31,6 +32,15 @@ impl SsrRenderer {
 		path: &str,
 	) -> SsrRouteOutput {
 		self.begin_route_loader_render();
+		let query_client = self.request_query_client();
+		with_query_client_async(query_client, self.render_route_in_request(router, path)).await
+	}
+
+	async fn render_route_in_request(
+		&mut self,
+		router: &ClientRouter,
+		path: &str,
+	) -> SsrRouteOutput {
 		let Some(matched) = router.match_tree(path) else {
 			return SsrRouteOutput {
 				html: router.render_path(path).render_to_string(),

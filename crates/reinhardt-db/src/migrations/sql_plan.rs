@@ -103,7 +103,7 @@ fn trailing_line_comment_start(sql: &str, dialect: SqlDialect) -> Option<usize> 
 	let mut quote = None;
 	let mut chars = line.char_indices().peekable();
 	while let Some((index, character)) = chars.next() {
-	if let Some(delimiter) = quote {
+		if let Some(delimiter) = quote {
 			if matches!(dialect, SqlDialect::Mysql) && character == '\\' && chars.peek().is_some() {
 				chars.next();
 				continue;
@@ -119,7 +119,9 @@ fn trailing_line_comment_start(sql: &str, dialect: SqlDialect) -> Option<usize> 
 		}
 		match character {
 			'\'' | '"' | '`' => quote = Some(character),
-			'-' if chars.peek().is_some_and(|(_, next)| *next == '-') => return Some(line_start + index),
+			'-' if chars.peek().is_some_and(|(_, next)| *next == '-') => {
+				return Some(line_start + index);
+			}
 			'#' if matches!(dialect, SqlDialect::Mysql) => return Some(line_start + index),
 			_ => {}
 		}
@@ -293,13 +295,19 @@ fn split_sql_statements_for_dialect(sql: &str, dialect: SqlDialect) -> Vec<Strin
 }
 
 fn append_sql(statements: &mut Vec<PlannedStatement>, sql: &str, dialect: SqlDialect) {
-	statements.extend(split_sql_statements_for_dialect(sql, dialect).into_iter().map(|statement| {
-		if statement.trim_start().starts_with("--") && !statement.contains('\n') {
-			PlannedStatement::Comment(statement.trim_start_matches('-').trim_start().to_string())
-		} else {
-			PlannedStatement::Sql(statement)
-		}
-	}));
+	statements.extend(
+		split_sql_statements_for_dialect(sql, dialect)
+			.into_iter()
+			.map(|statement| {
+				if statement.trim_start().starts_with("--") && !statement.contains('\n') {
+					PlannedStatement::Comment(
+						statement.trim_start_matches('-').trim_start().to_string(),
+					)
+				} else {
+					PlannedStatement::Sql(statement)
+				}
+			}),
+	);
 }
 
 #[cfg(feature = "sqlite")]

@@ -308,6 +308,10 @@ async fn sqlite_recreation_is_planned_without_executing_ddl() {
 			"ALTER TABLE \"books_new\" RENAME TO \"books\";",
 		]
 	);
+	assert_eq!(
+		plan.render(reinhardt_db::migrations::SqlDialect::Sqlite),
+		"PRAGMA foreign_keys = OFF;\nBEGIN;\nCREATE TABLE \"books_new\" (\n  id INTEGER NOT NULL PRIMARY KEY,\n  title TEXT NOT NULL\n);\nINSERT INTO \"books_new\" (\"id\", \"title\") SELECT \"id\", \"title\" FROM \"books\";\nDROP TABLE \"books\";\nALTER TABLE \"books_new\" RENAME TO \"books\";\nCOMMIT;\nPRAGMA foreign_key_check;\nPRAGMA foreign_keys = ON;\n"
+	);
 	let columns = connection
 		.fetch_all("PRAGMA table_info(\"books\")", vec![])
 		.await

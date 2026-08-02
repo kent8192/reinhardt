@@ -1,8 +1,8 @@
 //! Strict migration catalog loading and squash range resolution.
 
 use super::{
-	DatabaseMigrationRecorder, Migration, MigrationError, MigrationGraph, MigrationKey,
-	MigrationSource, ProjectState, Result,
+	DatabaseMigrationRecorder, DependencyResolutionContext, Migration, MigrationError,
+	MigrationGraph, MigrationKey, MigrationSource, ProjectState, Result,
 };
 use chrono::{DateTime, Utc};
 use std::collections::{BTreeSet, HashMap, HashSet};
@@ -58,6 +58,37 @@ impl MigrationCatalog {
 				.cmp(&right.app_label)
 				.then_with(|| left.name.cmp(&right.name))
 		});
+		let context = DependencyResolutionContext::new()
+			.with_apps(loaded.iter().map(|migration| migration.app_label.clone()));
+		Self::from_loaded_with_context(loaded, &context)
+	}
+
+	/// Load and validate every migration exposed by a source with dependency settings.
+	///
+	/// The context resolves swappable dependencies and activates optional
+	/// dependencies. Its installed applications are combined with the labels
+	/// discovered from the source, so an optional dependency on a local
+	/// application is never silently omitted.
+	pub async fn load_strict_with_context(
+		source: &dyn MigrationSource,
+		context: &DependencyResolutionContext,
+	) -> Result<Self> {
+		let mut loaded = source.all_migrations().await?;
+		loaded.sort_by(|left, right| {
+			left.app_label
+				.cmp(&right.app_label)
+				.then_with(|| left.name.cmp(&right.name))
+		});
+		let context = context
+			.clone()
+			.with_apps(loaded.iter().map(|migration| migration.app_label.clone()));
+		Self::from_loaded_with_context(loaded, &context)
+	}
+
+	fn from_loaded_with_context(
+		loaded: Vec<Migration>,
+		context: &DependencyResolutionContext,
+	) -> Result<Self> {
 		let mut migrations = HashMap::with_capacity(loaded.len());
 
 		for migration in loaded {
@@ -76,10 +107,14 @@ impl MigrationCatalog {
 			let migration = migrations
 				.get(key)
 				.expect("collected catalog key must have a migration");
-			let mut dependencies = migration.dependencies.clone();
-			dependencies.sort();
-			for (dependency_app, dependency_name) in dependencies {
-				let dependency = MigrationKey::new(dependency_app, dependency_name);
+			let mut graph_for_migration = MigrationGraph::new();
+			graph_for_migration.add_migration_with_context(migration, context);
+			let mut dependencies = graph_for_migration
+				.get_dependencies(key)
+				.map(<[MigrationKey]>::to_vec)
+				.unwrap_or_default();
+			dependencies.sort_by(Self::compare_keys);
+			for dependency in dependencies {
 				if !migrations.contains_key(&dependency) {
 					return Err(MigrationError::DependencyError(format!(
 						"Missing dependency {} required by {}",
@@ -103,17 +138,7 @@ impl MigrationCatalog {
 					)));
 				}
 			}
-			let dependencies = migration
-				.dependencies
-				.iter()
-				.map(|(app, name)| MigrationKey::new(app, name))
-				.collect();
-			let replaces = migration
-				.replaces
-				.iter()
-				.map(|(app, name)| MigrationKey::new(app, name))
-				.collect();
-			graph.add_migration_with_replaces(key.clone(), dependencies, replaces);
+			graph.add_migration_with_context(migration, context);
 		}
 
 		let mut cycle_nodes: Vec<String> = graph

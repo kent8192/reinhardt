@@ -58,8 +58,13 @@ impl MigrationSqlPlan {
 					)
 				});
 		let wrapped = self.atomic && transactional_ddl && !has_concurrent_index;
+		let sqlite_recreation = matches!(dialect, SqlDialect::Sqlite)
+			&& self.sqlite_recreation_groups.iter().any(Option::is_some);
 		let mut rendered = String::new();
 
+		if sqlite_recreation {
+			rendered.push_str("PRAGMA foreign_keys = OFF;\n");
+		}
 		if wrapped {
 			rendered.push_str("BEGIN;\n");
 		}
@@ -78,6 +83,10 @@ impl MigrationSqlPlan {
 		}
 		if wrapped {
 			rendered.push_str("COMMIT;\n");
+		}
+		if sqlite_recreation {
+			rendered.push_str("PRAGMA foreign_key_check;\n");
+			rendered.push_str("PRAGMA foreign_keys = ON;\n");
 		}
 
 		rendered
@@ -487,6 +496,55 @@ fn sqlite_virtual_from_metadata(
 		without_rowid: metadata.6,
 		strict: metadata.7,
 	}
+}
+
+#[cfg(feature = "sqlite")]
+fn sqlite_virtual_from_project_state(
+	state: &ProjectState,
+	table: &str,
+) -> Option<SqliteTableRecreation> {
+	let model = state
+		.models
+		.values()
+		.find(|model| model.table_name == table)?;
+	let new_columns = model
+		.fields
+		.iter()
+		.map(|(name, field)| super::ColumnDefinition::from_field_state(name, field))
+		.collect::<Vec<_>>();
+	let columns_to_copy = new_columns
+		.iter()
+		.filter(|column| column.generated.is_none())
+		.map(|column| column.name.clone())
+		.collect();
+	let constraints = model
+		.constraints
+		.iter()
+		.map(super::ConstraintDefinition::to_constraint)
+		.collect();
+	let indexes = model
+		.indexes
+		.iter()
+		.map(|index| super::operations::SqliteRecreatedIndex {
+			name: index.name.clone(),
+			columns: index.fields.clone(),
+			unique: index.unique,
+			sql: None,
+		})
+		.collect();
+	Some(SqliteTableRecreation {
+		table_name: table.to_string(),
+		new_columns,
+		columns_to_copy,
+		constraints,
+		raw_constraint_sqls: Vec::new(),
+		raw_constraints: Vec::new(),
+		column_collations: Vec::new(),
+		indexes,
+		triggers: Vec::new(),
+		without_rowid: false,
+		strict: false,
+	})
 }
 
 #[cfg(feature = "sqlite")]
@@ -1449,7 +1507,7 @@ pub async fn plan_migration_sql(
 	state: &ProjectState,
 	direction: MigrationDirection,
 ) -> Result<MigrationSqlPlan> {
-	plan_migration_sql_for_inspection(connection, migration, state, direction, None).await
+	plan_migration_sql_for_inspection(connection, migration, state, direction, None, false).await
 }
 
 /// Builds a SQL plan from explicit states on both sides of a migration.
@@ -1490,6 +1548,7 @@ pub async fn plan_migration_sql_with_states(
 		state,
 		direction,
 		backward_operation_states.as_deref(),
+		true,
 	)
 	.await
 }
@@ -1544,6 +1603,7 @@ async fn plan_migration_sql_for_inspection(
 	state: &ProjectState,
 	direction: MigrationDirection,
 	backward_operation_states: Option<&[ProjectState]>,
+	historical_state_only: bool,
 ) -> Result<MigrationSqlPlan> {
 	#[cfg(feature = "sqlite")]
 	if migration_requires_sqlite_recreation(connection, migration, direction) {
@@ -1562,6 +1622,7 @@ async fn plan_migration_sql_for_inspection(
 			true,
 			Some(&mut editor),
 			backward_operation_states,
+			historical_state_only,
 		)
 		.await?;
 		editor.finish().await?;
@@ -1575,6 +1636,7 @@ async fn plan_migration_sql_for_inspection(
 		true,
 		None,
 		backward_operation_states,
+		historical_state_only,
 	)
 	.await
 }
@@ -1594,6 +1656,7 @@ pub(crate) async fn plan_migration_sql_for_execution(
 		false,
 		Some(editor),
 		None,
+		false,
 	)
 	.await
 }
@@ -1623,6 +1686,7 @@ async fn plan_migration_sql_with_irreversible_policy(
 		&mut SchemaEditor,
 	>,
 	backward_operation_states: Option<&[ProjectState]>,
+	historical_state_only: bool,
 ) -> Result<MigrationSqlPlan> {
 	if migration.state_only {
 		return Ok(MigrationSqlPlan {
@@ -1643,6 +1707,21 @@ async fn plan_migration_sql_with_irreversible_policy(
 	let needs_sqlite_editor = migration_requires_sqlite_recreation(connection, migration, direction);
 	#[cfg(feature = "sqlite")]
 	let mut sqlite_virtual_schemas = HashMap::<String, Option<SqliteTableRecreation>>::new();
+	#[cfg(feature = "sqlite")]
+	if historical_state_only && matches!(dialect, SqlDialect::Sqlite) {
+		for model in state.models.values() {
+			let table = model.table_name.clone();
+			let schema = sqlite_virtual_from_project_state(state, &table);
+			sqlite_virtual_schemas.insert(table, schema);
+		}
+		for operation in &migration.operations {
+			if let Some(table) = sqlite_recreation_table(operation) {
+				sqlite_virtual_schemas
+					.entry(table.to_string())
+					.or_insert(None);
+			}
+		}
+	}
 	#[cfg(feature = "sqlite")]
 	let mut sqlite_rename_transforms = Vec::<SqliteRenameTransform>::new();
 	#[cfg(feature = "sqlite")]
@@ -1720,6 +1799,11 @@ async fn plan_migration_sql_with_irreversible_policy(
 			)
 			.await?;
 			let previous = sqlite_virtual_schemas.remove(table).flatten();
+			if historical_state_only && previous.is_none() {
+				return Err(MigrationError::InvalidMigration(format!(
+					"cannot plan SQLite recreation for '{table}' because the historical project state does not define it"
+				)));
+			}
 			let (recreation_statements, recreation) =
 				sqlite_recreation_statements(editor, operation, previous, &[]).await?;
 			statements.extend(recreation_statements.into_iter().map(PlannedStatement::Sql));

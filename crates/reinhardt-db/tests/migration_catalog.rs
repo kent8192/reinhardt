@@ -1,8 +1,9 @@
 use async_trait::async_trait;
 use reinhardt_db::backends::DatabaseConnection;
 use reinhardt_db::migrations::{
-	DatabaseMigrationRecorder, FilesystemSource, Migration, MigrationCatalog, MigrationError,
-	MigrationKey, MigrationSource, Result,
+	ColumnDefinition, DatabaseMigrationRecorder, DependencyResolutionContext, FieldType,
+	FilesystemSource, Migration, MigrationCatalog, MigrationError, MigrationKey, MigrationSource,
+	Operation, Result, SwappableDependency,
 };
 use rstest::*;
 use std::fs;
@@ -48,6 +49,42 @@ async fn catalog(migrations: Vec<Migration>) -> MigrationCatalog {
 	MigrationCatalog::load_strict(&TestSource { migrations })
 		.await
 		.unwrap()
+}
+
+#[rstest]
+#[tokio::test]
+async fn catalog_resolves_swappable_dependencies_with_the_provided_context() {
+	// Arrange
+	let custom_user =
+		Migration::new("0001_initial", "custom_auth").add_operation(Operation::CreateTable {
+			name: "custom_auth_user".to_string(),
+			columns: vec![ColumnDefinition::new("id", FieldType::Integer)],
+			constraints: Vec::new(),
+			without_rowid: None,
+			interleave_in_parent: None,
+			partition: None,
+		});
+	let profile = Migration::new("0001_initial", "profiles").add_swappable_dependency(
+		SwappableDependency::new("AUTH_USER_MODEL", "auth", "User", "0001_initial"),
+	);
+	let context =
+		DependencyResolutionContext::new().with_setting("AUTH_USER_MODEL", "custom_auth.User");
+
+	// Act
+	let catalog = MigrationCatalog::load_strict_with_context(
+		&TestSource {
+			migrations: vec![profile, custom_user],
+		},
+		&context,
+	)
+	.await
+	.unwrap();
+	let state = catalog
+		.state_before(&MigrationKey::new("profiles", "0001_initial"))
+		.unwrap();
+
+	// Assert
+	assert!(state.find_model_by_table("custom_auth_user").is_some());
 }
 
 #[rstest]

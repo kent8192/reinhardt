@@ -149,11 +149,13 @@ fn parse_named_prop(input: ParseStream) -> Result<PageComponentArg> {
 fn parse_event_inline(input: ParseStream) -> Result<ComponentEventProp> {
 	input.parse::<Token![@]>()?;
 	let name: Ident = input.parse()?;
-	if name == "custom" && input.peek(syn::token::Paren) {
-		return Err(syn::Error::new(
-			name.span(),
-			"`@custom(\"...\")` is only valid on intrinsic elements",
-		));
+	if name == "custom" && (input.peek(syn::token::Paren) || input.peek(syn::Token![::])) {
+		let syntax = if input.peek(syn::Token![::]) {
+			"`@custom::<T>(\"...\")` is only valid on intrinsic elements"
+		} else {
+			"`@custom(\"...\")` is only valid on intrinsic elements"
+		};
+		return Err(syn::Error::new(name.span(), syntax));
 	}
 	input.parse::<Token![:]>()?;
 	let handler: Expr = input.parse()?;

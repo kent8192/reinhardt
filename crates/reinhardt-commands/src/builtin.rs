@@ -528,7 +528,7 @@ impl BaseCommand for MigrateCommand {
 				if is_fake {
 					ctx.info("Faking migrations (marking as applied without executing):");
 					for migration in &pending {
-						fake_record_migration(&recorder, migration).await?;
+						fake_record_migration(&recorder, migration, &all_migrations).await?;
 						ctx.success(&format!(
 							"  ✓ Faked: {}:{}",
 							migration.app_label, migration.name
@@ -665,7 +665,7 @@ impl BaseCommand for MigrateCommand {
 
 				// Record each migration as applied without executing
 				for migration in migrations_to_fake {
-					fake_record_migration(&recorder, migration).await?;
+					fake_record_migration(&recorder, migration, &migrations_to_apply).await?;
 					ctx.success(&format!(
 						"  ✓ Faked: {}:{}",
 						migration.app_label, migration.name
@@ -843,6 +843,7 @@ fn replacement_history_is_fully_applied(
 async fn fake_record_migration(
 	recorder: &reinhardt_db::migrations::DatabaseMigrationRecorder,
 	migration: &reinhardt_db::migrations::Migration,
+	migrations: &[reinhardt_db::migrations::Migration],
 ) -> CommandResult<()> {
 	if recorder
 		.is_applied(&migration.app_label, &migration.name)
@@ -886,7 +887,12 @@ async fn fake_record_migration(
 				.any(|record| record.app == *app && record.name == *name)
 		});
 		let covered_count = covered.count();
-		if covered_count == migration.replaces.len() {
+		if replacement_history_is_fully_applied(
+			migrations,
+			&migration.app_label,
+			&migration.name,
+			&applied,
+		) {
 			let historical_record = applied
 				.iter()
 				.find(|record| {

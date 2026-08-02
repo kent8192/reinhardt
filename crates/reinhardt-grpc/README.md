@@ -190,7 +190,7 @@ use reinhardt::grpc::proto::common::{Empty, Timestamp, PageInfo};
 
 Facade consumers can enable `grpc` alongside a preset that includes DI:
 
-<!-- reinhardt-version-sync:2 -->
+<!-- reinhardt-version-sync -->
 ```toml
 [dependencies]
 reinhardt = { version = "0.3.4", package = "reinhardt-web", default-features = false, features = ["minimal", "grpc"] }
@@ -203,6 +203,14 @@ feature explicitly and depend on `reinhardt-di` for DI types:
 [dependencies]
 reinhardt-grpc = { version = "0.3.4", features = ["di"] }
 reinhardt-di = "0.3.4"
+```
+
+The basic example below uses the facade configuration. Direct consumers should
+use the following imports instead:
+
+```rust
+use reinhardt_di::InjectionContext;
+use reinhardt_grpc::{GrpcRequestExt, grpc_handler};
 ```
 
 #### Basic Usage

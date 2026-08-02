@@ -23,6 +23,11 @@ fn facade_module_path(module: &str) -> Option<TokenStream> {
 
 	match crate_name("reinhardt-web") {
 		Ok(FoundCrate::Itself) => Some(quote!(crate::#module_ident)),
+		// The facade package exposes the `reinhardt` library target when it is
+		// declared without an explicit `package` alias.
+		Ok(FoundCrate::Name(name)) if name == "reinhardt_web" => {
+			Some(quote!(::reinhardt::#module_ident))
+		}
 		Ok(FoundCrate::Name(name)) => {
 			let ident = syn::Ident::new(&name, proc_macro2::Span::call_site());
 			Some(quote!(::#ident::#module_ident))

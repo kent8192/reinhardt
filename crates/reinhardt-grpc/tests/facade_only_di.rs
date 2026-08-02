@@ -6,17 +6,22 @@ use std::process::Command;
 
 #[test]
 fn facade_only_dependency_compiles_grpc_handler_di() {
-	run_facade_fixture("renamed", "reinhardt", "reinhardt");
-	run_facade_fixture("unrenamed", "reinhardt-web", "reinhardt_web");
+	run_facade_fixture("renamed", "reinhardt", true, "reinhardt");
+	run_facade_fixture("package-only", "reinhardt-web", false, "reinhardt");
 }
 
-fn run_facade_fixture(case: &str, dependency_key: &str, crate_ident: &str) {
+fn run_facade_fixture(case: &str, dependency_key: &str, package_alias: bool, crate_ident: &str) {
 	let crate_dir = tempfile::tempdir().expect("create downstream fixture directory");
 	let repo_root = Path::new(env!("CARGO_MANIFEST_DIR"))
 		.join("../..")
 		.canonicalize()
 		.expect("resolve repository root");
 	let repo_root_toml = toml::Value::String(repo_root.to_string_lossy().into_owned()).to_string();
+	let package_spec = if package_alias {
+		", package = \"reinhardt-web\""
+	} else {
+		""
+	};
 	let target_dir = shared_target_dir(&repo_root);
 
 	fs::create_dir(crate_dir.path().join("src")).expect("create downstream src directory");
@@ -32,7 +37,7 @@ publish = false
 [workspace]
 
 [dependencies]
-{dependency_key} = {{ path = {repo_root_toml}, package = "reinhardt-web", default-features = false, features = ["minimal", "grpc"] }}
+{dependency_key} = {{ path = {repo_root_toml}{package_spec}, default-features = false, features = ["minimal", "grpc"] }}
 tonic = "0.14.2"
 "#
 		),

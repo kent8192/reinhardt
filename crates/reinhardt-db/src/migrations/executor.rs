@@ -370,7 +370,9 @@ impl DatabaseMigrationExecutor {
 					migration
 						.replaces
 						.iter()
-						.map(|(app, name)| super::graph::MigrationKey::new(app.clone(), name.clone()))
+						.map(|(app, name)| {
+							super::graph::MigrationKey::new(app.clone(), name.clone())
+						})
 						.collect(),
 				)
 			})
@@ -4349,10 +4351,9 @@ mod rollback_orchestration_tests {
 			(remaining.app_label.clone(), remaining.name.clone()),
 		];
 		let mut descendant = Migration::new("0002_after_squash", "partial_descendant");
-		descendant.dependencies.push((
-			replacement.app_label.clone(),
-			replacement.name.clone(),
-		));
+		descendant
+			.dependencies
+			.push((replacement.app_label.clone(), replacement.name.clone()));
 		descendant.operations.push(Operation::AddColumn {
 			table: "partial_descendant".to_string(),
 			column: ColumnDefinition::new("after_squash", FieldType::VarChar(32)),
@@ -4366,12 +4367,7 @@ mod rollback_orchestration_tests {
 
 		// Act
 		let result = executor
-			.apply_migrations(&[
-				initial,
-				remaining.clone(),
-				replacement,
-				descendant.clone(),
-			])
+			.apply_migrations(&[initial, remaining.clone(), replacement, descendant.clone()])
 			.await
 			.expect("a descendant must wait for the remaining original migration");
 

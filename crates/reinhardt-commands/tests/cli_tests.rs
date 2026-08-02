@@ -185,6 +185,7 @@ fn squashmigrations_parses_django_compatible_forms_and_options(
 		no_input,
 		no_header,
 		squashed_name,
+		migrations_dir,
 	} = parsed.command
 	else {
 		panic!("expected squashmigrations command");
@@ -196,6 +197,7 @@ fn squashmigrations_parses_django_compatible_forms_and_options(
 	assert_eq!(no_input, expected_no_input);
 	assert_eq!(no_header, expected_no_header);
 	assert_eq!(squashed_name.as_deref(), expected_name);
+	assert_eq!(migrations_dir, None);
 }
 
 #[cfg(feature = "migrations")]

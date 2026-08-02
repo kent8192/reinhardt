@@ -9,8 +9,8 @@ use crate::{BaseCommand, CommandArgument, CommandContext, CommandOption, Command
 use async_trait::async_trait;
 use reinhardt_db::backends::{DatabaseConnection, DatabaseType};
 use reinhardt_db::migrations::{
-	FilesystemSource, Migration, MigrationCatalog, MigrationDirection, MigrationKey, SqlDialect,
-	plan_migration_sql_with_states,
+	DependencyResolutionContext, FilesystemSource, Migration, MigrationCatalog, MigrationDirection,
+	MigrationKey, SqlDialect, plan_migration_sql_with_states,
 };
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -133,7 +133,14 @@ impl BaseCommand for SqlMigrateCommand {
 				.map(PathBuf::from)
 				.unwrap_or_else(|| PathBuf::from("./migrations")),
 		);
-		let catalog = MigrationCatalog::load_strict(&source)
+		let dependency_context =
+			ctx.settings
+				.as_ref()
+				.map_or_else(DependencyResolutionContext::new, |settings| {
+					DependencyResolutionContext::new()
+						.with_apps(settings.core().installed_apps.iter().cloned())
+				});
+		let catalog = MigrationCatalog::load_strict_with_context(&source, &dependency_context)
 			.await
 			.map_err(crate::squashmigrations::migration_error_to_command_error)
 			.map_err(|error| with_command_context(error, &command_context))?;

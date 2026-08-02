@@ -128,6 +128,10 @@ pub enum Commands {
 		/// Explicit name for the new squashed migration
 		#[arg(long, value_name = "NAME")]
 		squashed_name: Option<String>,
+
+		/// Root directory containing migration files
+		#[arg(long, value_name = "DIR")]
+		migrations_dir: Option<PathBuf>,
 	},
 
 	/// Display migration application state or dependency order
@@ -1004,14 +1008,16 @@ async fn run_command_core(
 			no_input,
 			no_header,
 			squashed_name,
+			migrations_dir,
 		} => {
 			let mut confirmation = crate::StdinConfirmationReader;
 			let standard_output = std::io::stdout();
 			let standard_error = std::io::stderr();
 			let mut stdout = standard_output.lock();
 			let mut stderr = standard_error.lock();
+			let migrations_dir = migrations_dir.unwrap_or_else(|| PathBuf::from("./migrations"));
 			crate::execute_squashmigrations_with_io(
-				Path::new("./migrations"),
+				&migrations_dir,
 				crate::SquashMigrationsOptions {
 					app_label,
 					start_migration,
@@ -3044,6 +3050,7 @@ mod tests {
 			no_input: true,
 			no_header: false,
 			squashed_name: None,
+			migrations_dir: None,
 		};
 
 		// Act

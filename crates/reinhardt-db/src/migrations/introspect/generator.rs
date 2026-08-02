@@ -591,6 +591,7 @@ fn render_default_expression(
 		field_type,
 		FieldType::Char(_)
 			| FieldType::VarChar(_)
+			| FieldType::Enum { .. }
 			| FieldType::Text
 			| FieldType::TinyText
 			| FieldType::MediumText
@@ -1158,5 +1159,20 @@ mod tests {
 		assert!(is_auto_default("nextval('seq')"));
 		assert!(!is_auto_default("true"));
 		assert!(!is_auto_default("'default_value'"));
+	}
+
+	#[test]
+	fn enum_defaults_are_rendered_as_rust_strings() {
+		// Arrange / Act
+		let default = render_default_expression(
+			"pending",
+			&FieldType::Enum {
+				values: vec!["pending".to_string(), "active".to_string()],
+			},
+		)
+		.unwrap();
+
+		// Assert
+		assert_eq!(default.to_string(), "\"pending\"");
 	}
 }

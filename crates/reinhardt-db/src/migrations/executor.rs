@@ -209,6 +209,14 @@ impl DatabaseMigrationExecutor {
 				self.recorder
 					.record_applied(&replacement.app_label, &replacement.name)
 					.await?;
+				for (app, name) in &replacement.replaces {
+					self.recorder.unapply(app, name).await?;
+				}
+				excluded.extend(
+					replacement.replaces.iter().map(|(app, name)| {
+						super::graph::MigrationKey::new(app.clone(), name.clone())
+					}),
+				);
 				excluded.insert(replacement_key);
 			} else {
 				return Err(MigrationError::InvalidMigration(format!(
@@ -4015,8 +4023,7 @@ mod rollback_orchestration_tests {
 				.expect("query original recorder state")
 		);
 
-		// Act - an existing original must keep its already-applied history and
-		// must not replay the replacement over it.
+		// Act - an existing complete original set is adopted by the replacement.
 		let mut existing = make_executor().await;
 		existing
 			.apply_migrations(std::slice::from_ref(&original))
@@ -4025,14 +4032,26 @@ mod rollback_orchestration_tests {
 		existing
 			.apply_migrations(&[original.clone(), replacement.clone()])
 			.await
-			.expect("retain an existing original replacement set");
+			.expect("adopt an existing original replacement set");
 		let existing_recorder = DatabaseMigrationRecorder::new(existing.connection().clone());
 		assert!(
-			!existing_recorder
+			existing_recorder
 				.is_applied("rolltest", "0001_squashed")
 				.await
 				.expect("query replacement recorder state")
 		);
+		assert!(
+			!existing_recorder
+				.is_applied("rolltest", "0001_initial")
+				.await
+				.expect("query original recorder state")
+		);
+
+		let rollback = existing
+			.rollback_migrations(&[original, replacement])
+			.await
+			.expect("rollback the adopted replacement once");
+		assert_eq!(rollback.applied, vec!["rolltest.0001_squashed"]);
 	}
 
 	#[rstest]

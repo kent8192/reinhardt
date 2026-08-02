@@ -1742,6 +1742,7 @@ impl Operation {
 				name,
 				columns,
 				constraints,
+				without_rowid,
 				..
 			} => {
 				let mut model = ModelState::new(app_label, name.clone());
@@ -1753,6 +1754,11 @@ impl Operation {
 					.iter()
 					.map(ProjectState::constraint_to_definition)
 					.collect();
+				if without_rowid == &Some(true) {
+					model
+						.options
+						.insert("without_rowid".to_string(), "true".to_string());
+				}
 				state.add_model(model);
 			}
 			Operation::DropTable { name } => {
@@ -8056,6 +8062,33 @@ mod tests {
 		assert_eq!(
 			state.get_model("tasks", "jobs").unwrap().fields["status"].domain,
 			Some(domain)
+		);
+	}
+
+	#[test]
+	fn create_table_state_forwards_preserves_without_rowid() {
+		// Arrange
+		let operation = Operation::CreateTable {
+			name: "jobs".to_string(),
+			columns: vec![ColumnDefinition::new("id", FieldType::Integer)],
+			constraints: vec![],
+			without_rowid: Some(true),
+			interleave_in_parent: None,
+			partition: None,
+		};
+		let mut state = ProjectState::new();
+
+		// Act
+		operation.state_forwards("tasks", &mut state);
+
+		// Assert
+		assert_eq!(
+			state
+				.get_model("tasks", "jobs")
+				.unwrap()
+				.options
+				.get("without_rowid"),
+			Some(&"true".to_string())
 		);
 	}
 

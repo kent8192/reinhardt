@@ -542,7 +542,10 @@ fn sqlite_virtual_from_project_state(
 		column_collations: Vec::new(),
 		indexes,
 		triggers: Vec::new(),
-		without_rowid: false,
+		without_rowid: model
+			.options
+			.get("without_rowid")
+			.is_some_and(|value| value == "true"),
 		strict: false,
 	})
 }

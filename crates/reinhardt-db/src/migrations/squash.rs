@@ -107,15 +107,15 @@ impl MigrationSquasher {
 	///
 	/// External dependencies retain the range's stable order. Replacement and
 	/// conditional dependency metadata is deduplicated in source order.
-	/// Atomicity is disabled when any source migration is non-atomic, while the
-	/// initial marker comes from the first migration.
+	/// Source migrations must agree on atomicity, and the initial marker comes
+	/// from the first migration.
 	///
 	/// # Errors
 	///
 	/// Returns an error for an empty range, when source migrations belong to
-	/// different apps, or when `state_only` or `database_only` differs between
-	/// source migrations. Mixed whole-migration execution modes cannot be
-	/// represented safely after combining their operations.
+	/// different apps, or when `atomic`, `state_only`, or `database_only`
+	/// differs between source migrations. Mixed whole-migration execution modes
+	/// cannot be represented safely after combining their operations.
 	pub fn squash_range(
 		&self,
 		range: &SquashRange,
@@ -153,6 +153,15 @@ impl MigrationSquasher {
 		{
 			return Err(MigrationError::InvalidMigration(
 				"Cannot squash migrations with mixed database_only flags".to_string(),
+			));
+		}
+		if range
+			.migrations
+			.iter()
+			.any(|migration| migration.atomic != first.atomic)
+		{
+			return Err(MigrationError::InvalidMigration(
+				"Cannot squash migrations with mixed atomic flags".to_string(),
 			));
 		}
 
@@ -200,7 +209,7 @@ impl MigrationSquasher {
 		migration.operations = operations;
 		migration.dependencies = range.external_dependencies.clone();
 		migration.replaces = replaces;
-		migration.atomic = range.migrations.iter().all(|source| source.atomic);
+		migration.atomic = first.atomic;
 		migration.initial = first.initial;
 		migration.state_only = state_only;
 		migration.database_only = database_only;
@@ -818,5 +827,25 @@ mod tests {
 
 		// Assert
 		assert!(result.migration.optional_dependencies.is_empty());
+	}
+
+	#[test]
+	fn test_squash_range_rejects_mixed_atomicity() {
+		let first = Migration::new("0001_initial", "myapp");
+		let mut second = Migration::new("0002_non_atomic", "myapp");
+		second.atomic = false;
+		let range = SquashRange {
+			migrations: vec![first, second],
+			external_dependencies: vec![],
+		};
+
+		let error = MigrationSquasher::new()
+			.squash_range(&range, "0001_squashed_0002", false)
+			.unwrap_err();
+
+		assert_eq!(
+			error.to_string(),
+			"Invalid migration: Cannot squash migrations with mixed atomic flags"
+		);
 	}
 }

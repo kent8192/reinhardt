@@ -276,6 +276,30 @@ impl MigrationCatalog {
 			}
 		}
 
+		for migration in &migrations {
+			let conditional_dependencies = migration
+				.optional_dependencies
+				.iter()
+				.map(|dependency| {
+					MigrationKey::new(&dependency.app_label, &dependency.migration_name)
+				})
+				.chain(migration.swappable_dependencies.iter().map(|dependency| {
+					MigrationKey::new(&dependency.default_app, &dependency.migration_name)
+				}));
+			for dependency in conditional_dependencies {
+				if !selected.contains(&dependency)
+					&& self.migrations.contains_key(&dependency)
+					&& let Some(selected_ancestor) =
+						self.first_reachable_selected_dependency(&dependency, &selected)
+				{
+					return Err(MigrationError::InvalidMigration(format!(
+						"Cannot squash range: conditional dependency {} of {} depends on selected migration {}",
+						dependency, migration.app_label, selected_ancestor
+					)));
+				}
+			}
+		}
+
 		external_ancestry_paths.sort_by(|(left_origin, left_path), (right_origin, right_path)| {
 			Self::compare_keys(left_origin, right_origin).then_with(|| {
 				left_path

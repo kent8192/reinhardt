@@ -1,7 +1,7 @@
 use async_trait::async_trait;
 use reinhardt_db::migrations::{
-	FilesystemSource, Migration, MigrationCatalog, MigrationError, MigrationKey, MigrationSource,
-	Result,
+	DependencyCondition, FilesystemSource, Migration, MigrationCatalog, MigrationError,
+	MigrationKey, MigrationSource, OptionalDependency, Result,
 };
 use rstest::*;
 use std::fs;
@@ -813,5 +813,29 @@ async fn squash_range_rejects_a_start_outside_the_end_ancestry() {
 	assert_eq!(
 		error.to_string(),
 		"Invalid migration: blog.0002_left is not an ancestor of blog.0002_right"
+	);
+}
+
+#[rstest]
+#[tokio::test]
+async fn squash_range_rejects_conditional_dependency_cycles() {
+	let first = migration("app_a", "0001_initial", &[]);
+	let mut second = migration("app_a", "0002_optional", &[("app_a", "0001_initial")]);
+	second.optional_dependencies.push(OptionalDependency::new(
+		"app_b",
+		"0001_requires_a",
+		DependencyCondition::AppInstalled("app_b".to_string()),
+	));
+	let external = migration("app_b", "0001_requires_a", &[("app_a", "0001_initial")]);
+	let catalog = catalog(vec![first, second, external]).await;
+
+	let error = catalog
+		.squash_range("app_a", Some("0001_initial"), "0002_optional")
+		.unwrap_err();
+
+	assert!(
+		error
+			.to_string()
+			.contains("conditional dependency app_b.0001_requires_a")
 	);
 }

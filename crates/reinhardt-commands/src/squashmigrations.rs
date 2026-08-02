@@ -2,8 +2,8 @@
 
 use crate::{CommandError, CommandResult};
 use reinhardt_db::migrations::{
-	FilesystemRepository, FilesystemSource, MigrationCatalog, MigrationError,
-	MigrationRenderOptions, MigrationSquasher,
+	DependencyResolutionContext, FilesystemRepository, FilesystemSource, MigrationCatalog,
+	MigrationError, MigrationRenderOptions, MigrationSquasher,
 };
 use std::io::{self, BufRead, IsTerminal, Write};
 use std::path::{Path, PathBuf};
@@ -150,6 +150,25 @@ pub async fn execute_squashmigrations_with_io(
 	stdout: &mut dyn Write,
 	stderr: &mut dyn Write,
 ) -> CommandResult<Option<SquashMigrationsSummary>> {
+	execute_squashmigrations_with_io_and_context(
+		migrations_root,
+		options,
+		&DependencyResolutionContext::new(),
+		confirmation,
+		stdout,
+		stderr,
+	)
+	.await
+}
+
+pub async fn execute_squashmigrations_with_io_and_context(
+	migrations_root: &Path,
+	options: SquashMigrationsOptions,
+	dependency_context: &DependencyResolutionContext,
+	confirmation: &mut dyn ConfirmationReader,
+	stdout: &mut dyn Write,
+	stderr: &mut dyn Write,
+) -> CommandResult<Option<SquashMigrationsSummary>> {
 	if let Some(name) = options.squashed_name.as_deref()
 		&& !is_safe_migration_suffix(name)
 	{
@@ -159,7 +178,7 @@ pub async fn execute_squashmigrations_with_io(
 	}
 
 	let source = FilesystemSource::new(migrations_root);
-	let catalog = MigrationCatalog::load_strict(&source)
+	let catalog = MigrationCatalog::load_strict_with_context(&source, dependency_context)
 		.await
 		.map_err(migration_error_to_command_error)?;
 	let range = catalog

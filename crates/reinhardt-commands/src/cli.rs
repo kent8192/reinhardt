@@ -1010,13 +1010,29 @@ async fn run_command_core(
 			squashed_name,
 			migrations_dir,
 		} => {
+			let dependency_context = settings.as_ref().map_or_else(
+				reinhardt_db::migrations::DependencyResolutionContext::new,
+				|settings| {
+					let core = settings.core();
+					let mut dependency_context =
+						reinhardt_db::migrations::DependencyResolutionContext::new()
+							.with_apps(core.installed_apps.iter().cloned());
+					for (key, value) in &core.migration_swappable_settings {
+						dependency_context = dependency_context.with_setting(key, value);
+					}
+					for feature in &core.migration_features {
+						dependency_context = dependency_context.with_feature(feature);
+					}
+					dependency_context
+				},
+			);
 			let mut confirmation = crate::StdinConfirmationReader;
 			let standard_output = std::io::stdout();
 			let standard_error = std::io::stderr();
 			let mut stdout = standard_output.lock();
 			let mut stderr = standard_error.lock();
 			let migrations_dir = migrations_dir.unwrap_or_else(|| PathBuf::from("./migrations"));
-			crate::execute_squashmigrations_with_io(
+			crate::execute_squashmigrations_with_io_and_context(
 				&migrations_dir,
 				crate::SquashMigrationsOptions {
 					app_label,
@@ -1027,6 +1043,7 @@ async fn run_command_core(
 					no_header,
 					squashed_name,
 				},
+				&dependency_context,
 				&mut confirmation,
 				&mut stdout,
 				&mut stderr,

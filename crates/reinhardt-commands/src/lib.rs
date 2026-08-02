@@ -424,7 +424,7 @@ pub use sqlmigrate::{SqlMigrateCommand, render_migration_sql};
 #[cfg(feature = "migrations")]
 pub use squashmigrations::{
 	ConfirmationReader, SquashMigrationsOptions, SquashMigrationsSummary, StdinConfirmationReader,
-	execute_squashmigrations_with_io,
+	execute_squashmigrations_with_io, execute_squashmigrations_with_io_and_context,
 };
 pub use start_commands::{StartAppCommand, StartProjectCommand};
 pub use static_asset_settings::StaticAssetSettings;

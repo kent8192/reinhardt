@@ -52,9 +52,26 @@ fn write_test_migration(
 	name: &str,
 	deps: &[(&str, &str)],
 ) -> std::io::Result<()> {
+	write_test_migration_with_replaces(root, app, name, deps, &[])
+}
+
+/// Write a minimally valid migration that replaces the supplied historical
+/// migration rows.
+fn write_test_migration_with_replaces(
+	root: &Path,
+	app: &str,
+	name: &str,
+	deps: &[(&str, &str)],
+	replaces: &[(&str, &str)],
+) -> std::io::Result<()> {
 	let app_dir = root.join(app);
 	std::fs::create_dir_all(&app_dir)?;
 	let deps_literal = deps
+		.iter()
+		.map(|(a, n)| format!("(\"{}\".to_string(), \"{}\".to_string())", a, n))
+		.collect::<Vec<_>>()
+		.join(", ");
+	let replaces_literal = replaces
 		.iter()
 		.map(|(a, n)| format!("(\"{}\".to_string(), \"{}\".to_string())", a, n))
 		.collect::<Vec<_>>()
@@ -68,7 +85,7 @@ fn write_test_migration(
 		 \t\toperations: vec![],\n\
 		 \t\tdependencies: vec![{deps_literal}],\n\
 		 \t\tatomic: true,\n\
-		 \t\treplaces: vec![],\n\
+		 \t\treplaces: vec![{replaces_literal}],\n\
 		 \t\tinitial: None,\n\
 		 \t\tstate_only: false,\n\
 		 \t\tdatabase_only: false,\n\
@@ -649,5 +666,121 @@ async fn plan_apply_all_does_not_modify_db(#[future] migration_executor: Migrati
 		"apply-all `--plan` must NOT create the recorder table; \
 		 got Ok({:?}) — table appears to exist after dry-run",
 		result.ok()
+	);
+}
+
+#[rstest]
+#[tokio::test]
+#[serial(migrate_target_e2e)]
+async fn target_reconciliation_removes_stale_replacement_rows_before_rollback(
+	#[future] migration_executor: MigrationExecutorFixture,
+) {
+	// Arrange — an interrupted reconciliation has renamed the first original
+	// row to the squash but left a later original recorder row behind. Its source
+	// file is intentionally absent so a rollback would prove the stale row was
+	// interpreted as a real later migration.
+	let (mut executor, _container, _pool, _port, url) = migration_executor.await;
+	let tempdir = tempfile::tempdir().expect("create tempdir");
+	let migrations_root = tempdir.path().join("migrations");
+	write_test_migration(&migrations_root, "myapp", "0001_first", &[])
+		.expect("write initial migration");
+	write_test_migration_with_replaces(
+		&migrations_root,
+		"myapp",
+		"0001_squashed_0002",
+		&[],
+		&[("myapp", "0001_first"), ("myapp", "0002_second")],
+	)
+	.expect("write replacement migration");
+	let recorder = DatabaseMigrationRecorder::new(executor.connection().clone());
+	recorder
+		.ensure_schema_table()
+		.await
+		.expect("ensure recorder table");
+	executor
+		.record_migration("myapp", "0001_first")
+		.await
+		.expect("record first original migration");
+	recorder
+		.rename_applied("myapp", "0001_first", "myapp", "0001_squashed_0002")
+		.await
+		.expect("simulate the first reconciliation step");
+	executor
+		.record_migration("myapp", "0002_second")
+		.await
+		.expect("record stale superseded migration");
+
+	// Act — targeting the original must reconcile the stale row instead of
+	// attempting to roll it back.
+	let ctx = build_ctx(
+		&migrations_root,
+		&url,
+		Some("myapp"),
+		Some("0001_first"),
+		false,
+	);
+	MigrateCommand
+		.execute(&ctx)
+		.await
+		.expect("stale recorder rows must be reconciled before rollback selection");
+
+	// Assert
+	assert_eq!(
+		applied_for_app(&url, "myapp").await,
+		vec!["0001_squashed_0002".to_string()]
+	);
+}
+
+#[rstest]
+#[tokio::test]
+#[serial(migrate_target_e2e)]
+async fn fake_target_rejects_indirectly_covered_competing_replacement(
+	#[future] migration_executor: MigrationExecutorFixture,
+) {
+	// Arrange — a competing replacement is already recorded, so it covers the
+	// original history without providing an exact historical row for the target.
+	let (mut executor, _container, _pool, _port, url) = migration_executor.await;
+	let tempdir = tempfile::tempdir().expect("create tempdir");
+	let migrations_root = tempdir.path().join("migrations");
+	write_test_migration(&migrations_root, "myapp", "0001_first", &[])
+		.expect("write original migration");
+	for name in ["0001_squashed_0002_a", "0001_squashed_0002_b"] {
+		write_test_migration_with_replaces(
+			&migrations_root,
+			"myapp",
+			name,
+			&[],
+			&[("myapp", "0001_first")],
+		)
+		.expect("write competing replacement migration");
+	}
+	let recorder = DatabaseMigrationRecorder::new(executor.connection().clone());
+	recorder
+		.ensure_schema_table()
+		.await
+		.expect("ensure recorder table");
+	executor
+		.record_migration("myapp", "0001_squashed_0002_b")
+		.await
+		.expect("record competing replacement");
+
+	// Act
+	let mut ctx = build_ctx(
+		&migrations_root,
+		&url,
+		Some("myapp"),
+		Some("0001_squashed_0002_a"),
+		false,
+	);
+	ctx.set_option("fake".to_string(), "true".to_string());
+	let error = MigrateCommand
+		.execute(&ctx)
+		.await
+		.expect_err("fake application must reject indirect competing coverage");
+
+	// Assert
+	assert_eq!(
+		error.to_string(),
+		"Execution error: Cannot fake replacement myapp:0001_squashed_0002_a because a competing replacement already covers its history"
 	);
 }

@@ -621,19 +621,15 @@ impl MigrationSquasher {
 	}
 
 	fn operation_references_table(operation: &Operation, table: &str) -> bool {
-		let column_references_table = |definition: &crate::migrations::ColumnDefinition| {
-			matches!(
-				&definition.type_definition,
-				crate::migrations::FieldType::ForeignKey { to_table, .. } if to_table == table
-			)
-		};
 		match operation {
 			Operation::CreateTable {
 				columns,
 				constraints,
 				..
 			} => {
-				columns.iter().any(column_references_table)
+				columns
+					.iter()
+					.any(|column| Self::column_references_table(column, table))
 					|| constraints.iter().any(|constraint| {
 						matches!(
 							constraint,
@@ -643,17 +639,29 @@ impl MigrationSquasher {
 						)
 					})
 			}
-			Operation::AddColumn { column, .. } => column_references_table(column),
+			Operation::AddColumn { column, .. } => Self::column_references_table(column, table),
 			Operation::AlterColumn {
 				old_definition,
 				new_definition,
 				..
 			} => {
-				column_references_table(new_definition)
-					|| old_definition.as_ref().is_some_and(column_references_table)
+				Self::column_references_table(new_definition, table)
+					|| old_definition
+						.as_ref()
+						.is_some_and(|definition| Self::column_references_table(definition, table))
 			}
 			_ => false,
 		}
+	}
+
+	fn column_references_table(
+		definition: &crate::migrations::ColumnDefinition,
+		table: &str,
+	) -> bool {
+		matches!(
+			&definition.type_definition,
+			crate::migrations::FieldType::ForeignKey { to_table, .. } if to_table == table
+		)
 	}
 
 	fn column_references_column(

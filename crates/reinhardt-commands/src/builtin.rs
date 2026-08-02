@@ -235,7 +235,7 @@ impl BaseCommand for MigrateCommand {
 				// `plan_applied_migrations` probes for it: a missing table on a fresh DB
 				// degrades to an empty set, while a genuine DB error fails fast so the
 				// preview never misreports the applied state.
-				let applied = if is_plan {
+				let mut applied = if is_plan {
 					plan_applied_migrations(&connection, &recorder).await?
 				} else {
 					recorder.ensure_schema_table().await.map_err(|e| {
@@ -251,8 +251,47 @@ impl BaseCommand for MigrateCommand {
 						))
 					})?
 				};
-				let applied_for_app: Vec<_> =
-					applied.iter().filter(|r| r.app == *app).cloned().collect();
+				let stale_records = stale_replacement_records(&all_migrations, app, &applied);
+				if is_plan {
+					for record in &stale_records {
+						ctx.info(&format!(
+							"[plan] Would unapply superseded record {}:{} before resolving the target",
+							record.app, record.name
+						));
+					}
+				} else if !stale_records.is_empty() {
+					for record in &stale_records {
+						recorder
+							.unapply(&record.app, &record.name)
+							.await
+							.map_err(|error| {
+								crate::CommandError::ExecutionError(format!(
+									"Failed to reconcile superseded replacement record {}:{}: {}",
+									record.app, record.name, error
+								))
+							})?;
+					}
+					applied = recorder.get_applied_migrations().await.map_err(|error| {
+						crate::CommandError::ExecutionError(format!(
+							"Failed to re-read reconciled migration history: {}",
+							error
+						))
+					})?;
+				}
+				let stale_record_names: HashSet<_> = stale_records
+					.iter()
+					.map(|record| (record.app.as_str(), record.name.as_str()))
+					.collect();
+				let applied_for_app: Vec<_> = applied
+					.iter()
+					.filter(|record| {
+						record.app == *app
+							&& (!is_plan
+								|| !stale_record_names
+									.contains(&(record.app.as_str(), record.name.as_str())))
+					})
+					.cloned()
+					.collect();
 				let target_name = if target_name == "zero" {
 					target_name.to_string()
 				} else {
@@ -608,12 +647,29 @@ impl BaseCommand for MigrateCommand {
 				let recorder = DatabaseMigrationRecorder::new(connection.clone());
 				let applied = plan_applied_migrations(&connection, &recorder).await?;
 				let ordered = dependency_ordered_migrations(migrations_to_apply.iter())?;
+				let reconciliations: Vec<_> = migrations_to_apply
+					.iter()
+					.filter_map(|migration| {
+						(!applied.iter().any(|record| {
+							record.app == migration.app_label && record.name == migration.name
+						}))
+						.then(|| direct_replacement_history_records(migration, &applied))
+						.flatten()
+						.map(|records| (migration, records))
+					})
+					.collect();
+				let reconciled_replacements: std::collections::HashSet<_> = reconciliations
+					.iter()
+					.map(|(migration, _)| (migration.app_label.as_str(), migration.name.as_str()))
+					.collect();
 				let pending: Vec<_> = ordered
 					.into_iter()
 					.filter(|m| {
 						!applied
 							.iter()
 							.any(|r| r.app == m.app_label && r.name == m.name)
+							&& !reconciled_replacements
+								.contains(&(m.app_label.as_str(), m.name.as_str()))
 					})
 					.collect();
 				let cleanup: Vec<_> = migrations_to_apply
@@ -629,7 +685,7 @@ impl BaseCommand for MigrateCommand {
 						})
 					})
 					.collect();
-				if pending.is_empty() && cleanup.is_empty() {
+				if pending.is_empty() && cleanup.is_empty() && reconciliations.is_empty() {
 					ctx.info("[plan] No unapplied migrations.");
 					return Ok(());
 				}
@@ -651,6 +707,24 @@ impl BaseCommand for MigrateCommand {
 						{
 							ctx.info(&format!("  - {app}:{name} (unapply superseded record)"));
 						}
+					}
+				}
+				for (migration, records) in reconciliations {
+					let historical_record = records
+						.first()
+						.expect("replacement reconciliation requires a historical record");
+					ctx.info(&format!(
+						"  - {}:{} (rename as {}:{})",
+						historical_record.app,
+						historical_record.name,
+						migration.app_label,
+						migration.name
+					));
+					for record in records.iter().skip(1) {
+						ctx.info(&format!(
+							"  - {}:{} (unapply superseded record)",
+							record.app, record.name
+						));
 					}
 				}
 				return Ok(());
@@ -840,6 +914,55 @@ fn replacement_history_is_fully_applied(
 }
 
 #[cfg(feature = "migrations")]
+fn direct_replacement_history_records<'a>(
+	migration: &reinhardt_db::migrations::Migration,
+	applied: &'a [reinhardt_db::migrations::recorder::MigrationRecord],
+) -> Option<Vec<&'a reinhardt_db::migrations::recorder::MigrationRecord>> {
+	if migration.replaces.is_empty() {
+		return None;
+	}
+	let records: Vec<_> = applied
+		.iter()
+		.filter(|record| {
+			migration
+				.replaces
+				.iter()
+				.any(|(app, name)| record.app == *app && record.name == *name)
+		})
+		.collect();
+	(migration.replaces.len() == records.len()).then_some(records)
+}
+
+#[cfg(feature = "migrations")]
+fn stale_replacement_records(
+	migrations: &[reinhardt_db::migrations::Migration],
+	app_label: &str,
+	applied: &[reinhardt_db::migrations::recorder::MigrationRecord],
+) -> Vec<reinhardt_db::migrations::recorder::MigrationRecord> {
+	let stale_names: std::collections::HashSet<_> = migrations
+		.iter()
+		.filter(|migration| {
+			migration.app_label == app_label
+				&& !migration.replaces.is_empty()
+				&& applied.iter().any(|record| {
+					record.app == migration.app_label && record.name == migration.name
+				})
+		})
+		.flat_map(|migration| {
+			migration
+				.replaces
+				.iter()
+				.map(|(app, name)| (app.as_str(), name.as_str()))
+		})
+		.collect();
+	applied
+		.iter()
+		.filter(|record| stale_names.contains(&(record.app.as_str(), record.name.as_str())))
+		.cloned()
+		.collect()
+}
+
+#[cfg(feature = "migrations")]
 async fn fake_record_migration(
 	recorder: &reinhardt_db::migrations::DatabaseMigrationRecorder,
 	migration: &reinhardt_db::migrations::Migration,
@@ -853,7 +976,7 @@ async fn fake_record_migration(
 				"Failed to inspect fake migration {}:{}: {}",
 				migration.app_label, migration.name, error
 			))
-	})? {
+		})? {
 		if !migration.replaces.is_empty() {
 			let applied = recorder.get_applied_migrations().await.map_err(|error| {
 				crate::CommandError::ExecutionError(format!(
@@ -862,10 +985,14 @@ async fn fake_record_migration(
 				))
 			})?;
 			for (app, name) in &migration.replaces {
-				if applied.iter().any(|record| record.app == *app && record.name == *name) {
+				if applied
+					.iter()
+					.any(|record| record.app == *app && record.name == *name)
+				{
 					recorder.unapply(app, name).await.map_err(|error| {
 						crate::CommandError::ExecutionError(format!(
-							"Failed to resume fake replacement cleanup for {}:{}: {}", app, name, error
+							"Failed to resume fake replacement cleanup for {}:{}: {}",
+							app, name, error
 						))
 					})?;
 				}
@@ -893,14 +1020,14 @@ async fn fake_record_migration(
 			&migration.name,
 			&applied,
 		) {
-			let historical_record = applied
-				.iter()
-				.find(|record| {
-					migration.replaces.iter().any(|(app, name)| {
-						record.app == *app && record.name == *name
-					})
-				})
-				.expect("complete replacement history has an exact recorder row");
+			let historical_record = direct_replacement_history_records(migration, &applied)
+				.and_then(|records| records.into_iter().next())
+				.ok_or_else(|| {
+					crate::CommandError::ExecutionError(format!(
+						"Cannot fake replacement {}:{} because a competing replacement already covers its history",
+						migration.app_label, migration.name
+					))
+				})?;
 			recorder
 				.rename_applied(
 					&historical_record.app,
@@ -919,7 +1046,10 @@ async fn fake_record_migration(
 				if app == &historical_record.app && name == &historical_record.name {
 					continue;
 				}
-				if !applied.iter().any(|record| record.app == *app && record.name == *name) {
+				if !applied
+					.iter()
+					.any(|record| record.app == *app && record.name == *name)
+				{
 					continue;
 				}
 				recorder.unapply(app, name).await.map_err(|error| {

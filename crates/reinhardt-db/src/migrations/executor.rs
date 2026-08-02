@@ -27,6 +27,40 @@ fn validate_and_advance_migration_state(
 	Ok(())
 }
 
+fn replacement_history_is_fully_covered(
+	migration: &Migration,
+	migrations: &[Migration],
+	applied_records: &[(String, String)],
+) -> bool {
+	if migration.replaces.is_empty() {
+		return false;
+	}
+	let mut covered: HashSet<(&str, &str)> = applied_records
+		.iter()
+		.map(|(app, name)| (app.as_str(), name.as_str()))
+		.collect();
+	loop {
+		let covered_before = covered.len();
+		for known in migrations {
+			if covered.contains(&(known.app_label.as_str(), known.name.as_str())) {
+				covered.extend(
+					known
+						.replaces
+						.iter()
+						.map(|(app, name)| (app.as_str(), name.as_str())),
+				);
+			}
+		}
+		if covered.len() == covered_before {
+			break;
+		}
+	}
+	migration
+		.replaces
+		.iter()
+		.all(|(app, name)| covered.contains(&(app.as_str(), name.as_str())))
+}
+
 fn migration_sql_dialect(connection: &DatabaseConnection) -> SqlDialect {
 	if connection.is_cockroachdb() {
 		return SqlDialect::Cockroachdb;
@@ -274,11 +308,61 @@ impl DatabaseMigrationExecutor {
 	) -> Result<ExecutionResult> {
 		let mut applied = Vec::new();
 		let mut validation_state = super::ProjectState::new();
+		let applied_records = self.recorder.get_applied_migrations().await?;
+		let applied_record_keys: Vec<_> = applied_records
+			.iter()
+			.map(|record| (record.app.clone(), record.name.clone()))
+			.collect();
+		let applied_record_set: HashSet<_> = applied_record_keys
+			.iter()
+			.map(|(app, name)| (app.as_str(), name.as_str()))
+			.collect();
+
+		// A partly applied original history must continue on the original chain.
+		// Once every original is recorded (or no original is recorded), select the
+		// replacement so the normal reconciliation path can reduce it to one row.
+		let partial_replacements: HashSet<_> = migrations
+			.iter()
+			.filter(|migration| {
+				!migration.replaces.is_empty()
+					&& !replacement_history_is_fully_covered(
+						migration,
+						migrations,
+						&applied_record_keys,
+					) && migration
+					.replaces
+					.iter()
+					.any(|(app, name)| applied_record_set.contains(&(app.as_str(), name.as_str())))
+			})
+			.map(|migration| (migration.app_label.as_str(), migration.name.as_str()))
+			.collect();
+		let replaced_by_selected_replacements: HashSet<_> = migrations
+			.iter()
+			.filter(|migration| {
+				!partial_replacements
+					.contains(&(migration.app_label.as_str(), migration.name.as_str()))
+			})
+			.flat_map(|migration| {
+				migration
+					.replaces
+					.iter()
+					.map(|(app, name)| (app.as_str(), name.as_str()))
+			})
+			.collect();
+		let selected_migrations: Vec<_> = migrations
+			.iter()
+			.filter(|migration| {
+				!partial_replacements
+					.contains(&(migration.app_label.as_str(), migration.name.as_str()))
+					&& !replaced_by_selected_replacements
+						.contains(&(migration.app_label.as_str(), migration.name.as_str()))
+			})
+			.collect();
 
 		// Build MigrationGraph for dependency resolution
 		let mut graph = super::graph::MigrationGraph::new();
 
-		for migration in migrations {
+		for migration in &selected_migrations {
 			let key = super::graph::MigrationKey::new(
 				migration.app_label.clone(),
 				migration.name.clone(),
@@ -304,9 +388,10 @@ impl DatabaseMigrationExecutor {
 		// Apply migrations in dependency-resolved order
 		for key in sorted_keys {
 			// Find the migration corresponding to this key
-			let migration = migrations
+			let migration = selected_migrations
 				.iter()
 				.find(|m| m.app_label == key.app_label && m.name == key.name)
+				.copied()
 				.ok_or_else(|| {
 					MigrationError::DependencyError(format!("Migration not found: {}", key.id()))
 				})?;
@@ -335,25 +420,19 @@ impl DatabaseMigrationExecutor {
 					.iter()
 					.map(|record| (record.app.as_str(), record.name.as_str()))
 					.collect();
-				let mut covered = applied_records_set.clone();
-				for known in migrations {
-					if applied_records_set
-						.contains(&(known.app_label.as_str(), known.name.as_str()))
-					{
-						covered.extend(
-							known
-								.replaces
-								.iter()
-								.map(|(app, name)| (app.as_str(), name.as_str())),
-						);
-					}
-				}
 				let replaced: HashSet<_> = migration
 					.replaces
 					.iter()
 					.map(|(app, name)| (app.as_str(), name.as_str()))
 					.collect();
-				if replaced.is_subset(&covered) {
+				if replacement_history_is_fully_covered(
+					migration,
+					migrations,
+					&applied_records
+						.iter()
+						.map(|record| (record.app.clone(), record.name.clone()))
+						.collect::<Vec<_>>(),
+				) {
 					let historical_record = applied_records
 						.iter()
 						.find(|record| {
@@ -384,7 +463,7 @@ impl DatabaseMigrationExecutor {
 					applied.push(migration.id());
 					continue;
 				}
-				if !replaced.is_disjoint(&covered) {
+				if !replaced.is_disjoint(&applied_records_set) {
 					return Err(MigrationError::InvalidMigration(format!(
 						"cannot apply replacement {} because only some replaced migrations are recorded",
 						migration.id()
@@ -4177,6 +4256,51 @@ mod rollback_orchestration_tests {
 
 		// Assert
 		assert_eq!(result.applied, vec![replacement.id()]);
+	}
+
+	#[rstest]
+	#[tokio::test]
+	async fn partial_replacement_history_applies_the_remaining_original_migration() {
+		// Arrange
+		let initial = make_create_table_migration("0001_initial", "partial_replacement");
+		let mut add_column = Migration::new("0002_add_name", "rolltest");
+		add_column
+			.dependencies
+			.push((initial.app_label.clone(), initial.name.clone()));
+		add_column.operations.push(Operation::AddColumn {
+			table: "partial_replacement".to_string(),
+			column: ColumnDefinition::new("name", FieldType::VarChar(32)),
+			mysql_options: None,
+		});
+		let mut replacement = initial.clone();
+		replacement.name = "0001_squashed_0002".to_string();
+		replacement.operations.extend(add_column.operations.clone());
+		replacement.replaces = vec![
+			(initial.app_label.clone(), initial.name.clone()),
+			(add_column.app_label.clone(), add_column.name.clone()),
+		];
+		let mut executor = make_executor().await;
+		executor
+			.apply_migrations(std::slice::from_ref(&initial))
+			.await
+			.expect("apply the first original migration");
+
+		// Act
+		let result = executor
+			.apply_migrations(&[initial.clone(), add_column.clone(), replacement.clone()])
+			.await
+			.expect("a partial original history must continue on the original chain");
+
+		// Assert
+		assert_eq!(result.applied, vec![add_column.id()]);
+		let recorder = DatabaseMigrationRecorder::new(executor.connection().clone());
+		assert_eq!(
+			recorder
+				.is_applied(&replacement.app_label, &replacement.name)
+				.await
+				.expect("query replacement recorder state"),
+			false
+		);
 	}
 
 	#[rstest]

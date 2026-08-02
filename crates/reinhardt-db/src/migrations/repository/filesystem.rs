@@ -396,6 +396,17 @@ impl FilesystemRepository {
 				};
 			},
 		};
+		let bulk_load_imports = if migration
+			.operations
+			.iter()
+			.any(|operation| matches!(operation, crate::migrations::Operation::BulkLoad { .. }))
+		{
+			quote! {
+				use reinhardt::db::migrations::{BulkLoadFormat, BulkLoadOptions, BulkLoadSource};
+			}
+		} else {
+			quote! {}
+		};
 
 		let app_label = &migration.app_label;
 		let name = &migration.name;
@@ -418,6 +429,7 @@ impl FilesystemRepository {
 		let file: syn::File = parse_quote! {
 			use reinhardt::db::migrations::prelude::*;
 			#dependency_imports
+			#bulk_load_imports
 			use reinhardt::db::migrations::FieldType;
 
 			pub(super) fn migration() -> Migration {
@@ -1255,6 +1267,9 @@ mod tests {
 
 		assert!(rendered.contains("Operation::CreateInheritedTable"));
 		assert!(rendered.contains("Operation::DropSchema"));
+		assert!(rendered.contains("BulkLoadSource"));
+		assert!(rendered.contains("BulkLoadFormat"));
+		assert!(rendered.contains("BulkLoadOptions"));
 	}
 
 	#[rstest]

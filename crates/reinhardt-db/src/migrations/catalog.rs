@@ -240,40 +240,45 @@ impl MigrationCatalog {
 		owners: &[MigrationKey],
 		replacement_owner_candidates: &HashMap<MigrationKey, Vec<MigrationKey>>,
 	) -> Result<MigrationKey> {
-		let mut current = replaced.clone();
-		let mut candidates = owners.to_vec();
-		let mut visited = HashSet::new();
-		loop {
-			if !visited.insert(current.clone()) {
+		fn collect_terminal_owners(
+			current: &MigrationKey,
+			owners: &HashMap<MigrationKey, Vec<MigrationKey>>,
+			path: &mut HashSet<MigrationKey>,
+			terminals: &mut HashSet<MigrationKey>,
+		) -> Result<()> {
+			if !path.insert(current.clone()) {
 				return Err(MigrationError::CircularDependency {
 					cycle: current.id(),
 				});
 			}
-			let mut terminal: Vec<_> = candidates
-				.iter()
-				.filter(|candidate| !replacement_owner_candidates.contains_key(*candidate))
-				.cloned()
-				.collect();
-			terminal.sort_by_key(MigrationKey::id);
-			match terminal.as_slice() {
-				[owner] => return Ok(owner.clone()),
-				[] => {
-					candidates.sort_by_key(MigrationKey::id);
-					current = candidates
-						.pop()
-						.expect("replacement owner candidates are not empty");
-					candidates = replacement_owner_candidates
-						.get(&current)
-						.cloned()
-						.unwrap_or_default();
+			if let Some(candidates) = owners.get(current) {
+				for candidate in candidates {
+					collect_terminal_owners(candidate, owners, path, terminals)?;
 				}
-				_ => {
-					return Err(MigrationError::InvalidMigration(format!(
-						"Replacement {} has multiple terminal owners",
-						replaced
-					)));
-				}
+			} else {
+				terminals.insert(current.clone());
 			}
+			path.remove(current);
+			Ok(())
+		}
+
+		let mut terminals = HashSet::new();
+		for owner in owners {
+			collect_terminal_owners(
+				owner,
+				replacement_owner_candidates,
+				&mut HashSet::new(),
+				&mut terminals,
+			)?;
+		}
+		let mut terminals: Vec<_> = terminals.into_iter().collect();
+		terminals.sort_by_key(MigrationKey::id);
+		match terminals.as_slice() {
+			[owner] => Ok(owner.clone()),
+			_ => Err(MigrationError::InvalidMigration(format!(
+				"Replacement {} has multiple terminal owners",
+				replaced
+			))),
 		}
 	}
 
@@ -670,5 +675,40 @@ mod tests {
 			dependencies,
 			&[MigrationKey::new("app", "0001_squashed_0003")]
 		);
+	}
+
+	#[rstest::rstest]
+	fn rejects_divergent_nested_replacement_owners() {
+		// Arrange
+		let original = Migration::new("0001_initial", "app");
+		let mut first_replacement = Migration::new("0001_squashed_0002_a", "app");
+		first_replacement.replaces = vec![("app".to_string(), "0001_initial".to_string())];
+		let mut first_terminal = Migration::new("0001_squashed_0003_a", "app");
+		first_terminal.replaces = vec![("app".to_string(), "0001_squashed_0002_a".to_string())];
+		let mut second_replacement = Migration::new("0001_squashed_0002_b", "app");
+		second_replacement.replaces = vec![("app".to_string(), "0001_initial".to_string())];
+		let mut second_terminal = Migration::new("0001_squashed_0003_b", "app");
+		second_terminal.replaces = vec![("app".to_string(), "0001_squashed_0002_b".to_string())];
+		let context = DependencyResolutionContext::new().with_apps(["app".to_string()]);
+
+		// Act
+		let error = MigrationCatalog::from_loaded_with_context(
+			vec![
+				original,
+				first_replacement,
+				first_terminal,
+				second_replacement,
+				second_terminal,
+			],
+			&context,
+		)
+		.expect_err("divergent replacement branches must be rejected");
+
+		// Assert
+		assert!(matches!(
+			error,
+			MigrationError::InvalidMigration(message)
+				if message == "Replacement app.0001_initial has multiple terminal owners"
+		));
 	}
 }

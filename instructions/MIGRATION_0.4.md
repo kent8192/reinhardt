@@ -317,6 +317,27 @@ match `NotCustomEvent` and `Deserialize` instead of parsing strings. The
 decoder-specific `Deserialize::message` is not stable across native and WASM
 targets.
 
+Manouche integrations that match the public `IntrinsicEvent` AST must rename
+the raw custom-event arm from `IntrinsicEvent::Custom` to
+`IntrinsicEvent::RawCustom`. The new `IntrinsicEvent::TypedCustom` arm
+represents `@custom::<T>("name")` and carries its payload type separately:
+
+```rust,ignore
+match event {
+    // Before
+    IntrinsicEvent::Custom { name, handler } => inspect_raw(name, handler),
+
+    // After
+    IntrinsicEvent::RawCustom { name, handler } => inspect_raw(name, handler),
+    IntrinsicEvent::TypedCustom {
+        name,
+        payload_type,
+        handler,
+    } => inspect_typed(name, payload_type, handler),
+    IntrinsicEvent::Standard { event, handler } => inspect_standard(event, handler),
+}
+```
+
 `Element::add_typed_custom_event_listener` callbacks now receive the complete
 event rather than a `Result<T, String>` detail value:
 

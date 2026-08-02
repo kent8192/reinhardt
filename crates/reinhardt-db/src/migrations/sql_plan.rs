@@ -67,8 +67,7 @@ impl MigrationSqlPlan {
 		for statement in &self.statements {
 			match statement {
 				PlannedStatement::Sql(sql) => {
-					rendered.push_str(sql.trim().trim_end_matches(';').trim_end());
-					rendered.push_str(";\n");
+					rendered.push_str(&render_sql_statement(sql));
 				}
 				PlannedStatement::Comment(comment) => {
 					rendered.push_str("-- ");
@@ -87,6 +86,26 @@ impl MigrationSqlPlan {
 
 		rendered
 	}
+}
+
+fn render_sql_statement(sql: &str) -> String {
+	let sql = sql.trim().trim_end_matches(';').trim_end();
+	if let Some(comment_start) = trailing_line_comment_start(sql) {
+		let (statement, comment) = sql.split_at(comment_start);
+		return format!("{}; {}\n", statement.trim_end(), comment.trim_start());
+	}
+	format!("{sql};\n")
+}
+
+fn trailing_line_comment_start(sql: &str) -> Option<usize> {
+	let line_start = sql.rfind('\n').map_or(0, |index| index + 1);
+	let line = &sql[line_start..];
+	let comment = line.find("--")?;
+	let before_comment = &line[..comment];
+	if before_comment.contains('"') || before_comment.matches('\'').count() % 2 != 0 {
+		return None;
+	}
+	Some(line_start + comment)
 }
 
 fn migration_sql_dialect(connection: &DatabaseConnection) -> SqlDialect {
@@ -1705,6 +1724,17 @@ async fn plan_migration_sql_with_irreversible_policy(
 	#[cfg(feature = "sqlite")]
 	let needs_sqlite_editor = migration_requires_sqlite_recreation(connection, migration, direction);
 	#[cfg(feature = "sqlite")]
+	if historical_state_only
+		&& matches!(dialect, SqlDialect::Sqlite)
+		&& needs_sqlite_editor
+		&& state.has_opaque_schema_operations
+	{
+		return Err(MigrationError::InvalidMigration(
+			"cannot safely plan SQLite table recreation from historical state containing opaque SQL"
+				.to_string(),
+		));
+	}
+	#[cfg(feature = "sqlite")]
 	let mut sqlite_virtual_schemas = HashMap::<String, Option<SqliteTableRecreation>>::new();
 	#[cfg(feature = "sqlite")]
 	if historical_state_only && matches!(dialect, SqlDialect::Sqlite) {
@@ -1914,6 +1944,22 @@ mod tests {
 
 		assert!(!rendered.contains("BEGIN;"), "{rendered}");
 		assert!(!rendered.contains("COMMIT;"), "{rendered}");
+	}
+
+	#[test]
+	fn render_keeps_terminator_outside_trailing_line_comment() {
+		let plan = MigrationSqlPlan {
+			atomic: false,
+			statements: vec![PlannedStatement::Sql("SELECT 1 -- explanation".to_string())],
+			planned_operations: vec![None],
+			sqlite_recreation_groups: vec![None],
+			direction: MigrationDirection::Forward,
+		};
+
+		assert_eq!(
+			plan.render(SqlDialect::Postgres),
+			"SELECT 1; -- explanation\n"
+		);
 	}
 
 	#[test]

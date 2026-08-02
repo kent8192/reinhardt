@@ -137,8 +137,16 @@ impl BaseCommand for SqlMigrateCommand {
 			ctx.settings
 				.as_ref()
 				.map_or_else(DependencyResolutionContext::new, |settings| {
-					DependencyResolutionContext::new()
-						.with_apps(settings.core().installed_apps.iter().cloned())
+					let core = settings.core();
+					let mut dependency_context = DependencyResolutionContext::new()
+						.with_apps(core.installed_apps.iter().cloned());
+					for (key, value) in &core.migration_swappable_settings {
+						dependency_context = dependency_context.with_setting(key, value);
+					}
+					for feature in &core.migration_features {
+						dependency_context = dependency_context.with_feature(feature);
+					}
+					dependency_context
 				});
 		let catalog = MigrationCatalog::load_strict_with_context(&source, &dependency_context)
 			.await

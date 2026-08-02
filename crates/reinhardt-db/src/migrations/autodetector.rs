@@ -689,6 +689,9 @@ impl ModelState {
 pub struct ProjectState {
 	/// Models: (app_label, model_name) -> ModelState
 	pub models: std::collections::BTreeMap<(String, String), ModelState>,
+
+	/// Whether prior migrations contain opaque SQL that this state cannot model.
+	pub has_opaque_schema_operations: bool,
 }
 
 impl Default for ProjectState {
@@ -916,6 +919,7 @@ impl ProjectState {
 	pub fn new() -> Self {
 		Self {
 			models: std::collections::BTreeMap::new(),
+			has_opaque_schema_operations: false,
 		}
 	}
 
@@ -1494,6 +1498,9 @@ impl ProjectState {
 
 		for op in operations {
 			match op {
+				Operation::RunSQL { .. } => {
+					self.has_opaque_schema_operations = true;
+				}
 				Operation::CreateTable {
 					name,
 					columns,

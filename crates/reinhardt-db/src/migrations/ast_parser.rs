@@ -65,10 +65,11 @@ pub fn extract_migration_metadata_strict(
 			MigrationError::InvalidMigration("Missing migration() entrypoint".to_string())
 		})?;
 
+	if !matches!(migration_expr, Expr::Struct(_)) {
+		return parse_builder_migration(migration_expr, app_label, name);
+	}
 	let Expr::Struct(migration_struct) = migration_expr else {
-		return Err(MigrationError::InvalidMigration(
-			"migration() must return a Migration struct literal".to_string(),
-		));
+		unreachable!("struct expressions are handled above")
 	};
 	if migration_struct
 		.path
@@ -122,6 +123,83 @@ pub fn extract_migration_metadata_strict(
 		swappable_dependencies,
 		optional_dependencies,
 	})
+}
+
+fn parse_builder_migration(expression: &Expr, app_label: &str, name: &str) -> Result<Migration> {
+	match expression {
+		Expr::Call(call)
+			if call_path_is(&call.func, "Migration", "new") && call.args.len() == 2 =>
+		{
+			if extract_string_expr(&call.args[0]).is_none()
+				|| extract_string_expr(&call.args[1]).is_none()
+			{
+				return Err(MigrationError::InvalidMigration(
+					"Migration::new arguments must be string literals".to_string(),
+				));
+			}
+			Ok(Migration::new(name, app_label))
+		}
+		Expr::MethodCall(call) => {
+			let mut migration = parse_builder_migration(&call.receiver, app_label, name)?;
+			match call.method.to_string().as_str() {
+				"add_operation" if call.args.len() == 1 => {
+					let index = migration.operations.len();
+					migration
+						.operations
+						.push(parse_single_operation_strict(&call.args[0], index)?);
+				}
+				"add_dependency" if call.args.len() == 2 => {
+					let dependency = (
+						extract_string_expr(&call.args[0])
+							.ok_or_else(|| malformed_builder_call("add_dependency"))?,
+						extract_string_expr(&call.args[1])
+							.ok_or_else(|| malformed_builder_call("add_dependency"))?,
+					);
+					migration.dependencies.push(dependency);
+				}
+				"atomic" if call.args.len() == 1 => {
+					migration.atomic = extract_bool_expr(&call.args[0])
+						.ok_or_else(|| malformed_builder_call("atomic"))?;
+				}
+				"initial" if call.args.len() == 1 => {
+					migration.initial = Some(
+						extract_bool_expr(&call.args[0])
+							.ok_or_else(|| malformed_builder_call("initial"))?,
+					);
+				}
+				"state_only" if call.args.len() == 1 => {
+					migration.state_only = extract_bool_expr(&call.args[0])
+						.ok_or_else(|| malformed_builder_call("state_only"))?;
+				}
+				"database_only" if call.args.len() == 1 => {
+					migration.database_only = extract_bool_expr(&call.args[0])
+						.ok_or_else(|| malformed_builder_call("database_only"))?;
+				}
+				_ => return Err(malformed_builder_call(&call.method.to_string())),
+			}
+			Ok(migration)
+		}
+		_ => Err(MigrationError::InvalidMigration(
+			"migration() must return a Migration struct literal or supported builder chain"
+				.to_string(),
+		)),
+	}
+}
+
+fn malformed_builder_call(method: &str) -> MigrationError {
+	MigrationError::InvalidMigration(format!(
+		"unsupported or malformed Migration builder call '{method}'"
+	))
+}
+
+fn extract_bool_expr(expression: &Expr) -> Option<bool> {
+	let Expr::Lit(literal) = expression else {
+		return None;
+	};
+	let syn::Lit::Bool(value) = &literal.lit else {
+		return None;
+	};
+	Some(value.value)
 }
 
 fn dependency_metadata_expressions(
@@ -3639,6 +3717,34 @@ mod tests {
 				reverse_code: Some("remove_seed_data()".to_string()),
 			}]
 		);
+	}
+
+	#[test]
+	fn strict_metadata_parses_builder_migration_entrypoint() {
+		let ast = syn::parse_file(
+			r#"pub fn migration() -> Migration {
+				Migration::new("ignored", "ignored")
+					.add_dependency("blog", "0001_initial")
+					.add_operation(Operation::RunSQL {
+						sql: "SELECT 1".to_string(),
+						reverse_sql: None,
+					})
+			}"#,
+		)
+		.unwrap();
+
+		let metadata = extract_migration_metadata_strict(&ast, "blog", "0002_seed").unwrap();
+
+		assert_eq!(metadata.app_label, "blog");
+		assert_eq!(metadata.name, "0002_seed");
+		assert_eq!(
+			metadata.dependencies,
+			[("blog".to_string(), "0001_initial".to_string())]
+		);
+		assert!(matches!(
+			metadata.operations.as_slice(),
+			[Operation::RunSQL { .. }]
+		));
 	}
 
 	#[rstest]

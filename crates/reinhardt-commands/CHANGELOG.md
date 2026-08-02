@@ -7,6 +7,85 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.0-alpha.4](https://github.com/kent8192/reinhardt-web/compare/reinhardt-commands@v0.4.0-alpha.3...reinhardt-commands@v0.4.0-alpha.4) - 2026-08-02
+
+### Added
+
+- *(commands)* add ORM-aware Rust shell
+- *(commands)* generate shell-enabled project wiring
+- *(commands)* add shared database selector
+- *(commands)* add inspectdb command
+
+### Documentation
+
+- *(commands)* document Rust management shell migration
+
+### Fixed
+
+- *(commands)* harden shell evaluator lifecycle
+- *(commands)* preserve shell evaluation output
+- release shell and scoped database resources
+- *(commands)* preserve shell bootstrap and interrupt output
+- *(commands)* retain bootstrap evaluator resources
+- *(commands)* close evaluator process trees
+- *(commands)* harden shell evaluation boundaries
+- *(commands)* harden shell bootstrap boundaries
+- *(commands)* make shell startup interruptible
+- *(commands)* await interrupted shell startup cleanup
+- *(commands)* cancel shell startup promptly
+- *(commands)* interrupt shell recovery startup
+- *(commands)* preserve evaluator diagnostics
+- *(commands)* preserve shell source prefixes
+- *(commands)* avoid duplicate boundary diagnostics
+- *(commands)* preserve shell bootstrap output and comments
+- *(commands)* preserve bootstrap output streams
+- *(commands)* preserve failed shell bootstrap output
+- *(commands)* bound shell evaluator startup and output handling
+- *(commands)* preserve shell evaluator boundary output
+- *(commands)* guard evaluator process during startup
+- *(commands)* preserve shell source and native gates
+- *(commands)* preserve shell boundary output
+- *(shell)* harden evaluator lifecycle
+- *(shell)* preserve test database scopes
+- *(commands)* preserve inner attributes after control whitespace
+- *(commands)* preserve inner attributes after Rust whitespace
+- *(commands)* gate shell-only helpers
+- *(commands)* isolate shell evaluators by worker
+- *(commands)* avoid unavailable shell prelude import
+- *(commands)* handle shell evaluator lifecycle edges
+- *(commands)* address shell review findings
+- *(commands)* redact URL-like database aliases
+- *(commands)* preserve colon database aliases
+- *(commands)* preserve database selector aliases
+- *(commands)* harden inspectdb output
+- *(commands)* redact positional credentials
+- *(commands)* strengthen inspectdb backend verification
+- *(db)* generate Rust 2024 inspectdb modules
+- *(ci)* address inspectdb CodeQL findings
+- *(commands)* harden inspectdb generation
+- *(commands)* harden inspectdb review cases
+- *(commands)* harden inspectdb generated models
+- *(commands)* harden inspectdb generation
+- *(commands)* preserve inspectdb schema semantics
+- preserve inspectdb schema semantics
+- *(inspectdb)* reject remaining lossy schema shapes
+
+### Maintenance
+
+- auto-fix fmt and clippy
+
+### Other
+
+- sync shared CI repairs
+- sync develop/0.4.0 into inspectdb
+
+### Testing
+
+- *(commands)* cover shell feature diagnostic
+- *(commands)* retain shell evaluator failure output
+- *(commands)* minimize real process exit probe
+- *(commands)* cover inspectdb backend contracts
+
 ## [0.4.0-alpha.3](https://github.com/kent8192/reinhardt-web/compare/reinhardt-commands@v0.4.0-alpha.2...reinhardt-commands@v0.4.0-alpha.3) - 2026-07-27
 
 ### Fixed

@@ -7,6 +7,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.0-alpha.4](https://github.com/kent8192/reinhardt-web/compare/reinhardt-query@v0.4.0-alpha.3...reinhardt-query@v0.4.0-alpha.4) - 2026-08-02
+
+### Added
+
+- *(orm)* add typed date projections
+
+### Fixed
+
+- *(pgvector)* preserve vector index metadata
+- *(query)* reject invalid temporal date truncation
+- *(db)* validate temporal projection query shapes
+- *(orm)* reject incompatible temporal projections
+- *(query)* validate PostgreSQL temporal expressions
+- *(query)* address temporal projection review feedback
+- *(db)* resolve row lock review findings
+- *(orm)* close row locking review gaps
+
+### Maintenance
+
+- *(pgvector)* propagate native vector feature flags
+
+### Other
+
+- sync develop/0.4.0 into pgvector branch
+
 ## [0.4.0-alpha.1](https://github.com/kent8192/reinhardt-web/compare/reinhardt-query@v0.3.2...reinhardt-query@v0.4.0-alpha.1) - 2026-07-21
 
 ### Fixed

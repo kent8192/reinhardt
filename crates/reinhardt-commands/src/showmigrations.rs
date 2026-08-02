@@ -159,6 +159,11 @@ impl BaseCommand for ShowMigrationsCommand {
 			CommandOption::option(None, "database", "Configured database alias")
 				.with_default("default"),
 			CommandOption::option(None, "database-url", "One-off database URL override"),
+			CommandOption::option(
+				None,
+				"migrations-dir",
+				"Root directory containing migration files",
+			),
 		]
 	}
 

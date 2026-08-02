@@ -158,6 +158,10 @@ pub enum Commands {
 		/// One-off database URL override
 		#[arg(long)]
 		database_url: Option<String>,
+
+		/// Root directory containing migration files
+		#[arg(long, value_name = "DIR")]
+		migrations_dir: Option<PathBuf>,
 	},
 
 	/// Render the SQL for one migration without executing it
@@ -182,6 +186,10 @@ pub enum Commands {
 		/// One-off database URL override
 		#[arg(long)]
 		database_url: Option<String>,
+
+		/// Root directory containing migration files
+		#[arg(long, value_name = "DIR")]
+		migrations_dir: Option<PathBuf>,
 	},
 
 	/// Apply database migrations
@@ -1028,6 +1036,7 @@ async fn run_command_core(
 			plan,
 			database,
 			database_url,
+			migrations_dir,
 		} => {
 			let mut ctx = CommandContext::new(app_labels);
 			ctx.set_verbosity(verbosity);
@@ -1040,6 +1049,12 @@ async fn run_command_core(
 			}
 			if let Some(database_url) = database_url {
 				ctx.set_option("database-url".to_string(), database_url);
+			}
+			if let Some(migrations_dir) = migrations_dir {
+				ctx.set_option(
+					"migrations-dir".to_string(),
+					migrations_dir.to_string_lossy().into_owned(),
+				);
 			}
 			if let Some(settings) = settings.clone() {
 				ctx = ctx.with_settings(settings);
@@ -1056,6 +1071,7 @@ async fn run_command_core(
 			backwards,
 			database,
 			database_url,
+			migrations_dir,
 		} => {
 			let mut ctx = CommandContext::new(vec![app_label, migration_name]);
 			ctx.set_verbosity(verbosity);
@@ -1065,6 +1081,12 @@ async fn run_command_core(
 			}
 			if let Some(database_url) = database_url {
 				ctx.set_option("database-url".to_string(), database_url);
+			}
+			if let Some(migrations_dir) = migrations_dir {
+				ctx.set_option(
+					"migrations-dir".to_string(),
+					migrations_dir.to_string_lossy().into_owned(),
+				);
 			}
 			if let Some(settings) = settings.clone() {
 				ctx = ctx.with_settings(settings);
@@ -3041,6 +3063,7 @@ mod tests {
 				plan: false,
 				database: "default".to_string(),
 				database_url: None,
+				migrations_dir: None,
 			},
 			Commands::Sqlmigrate {
 				app_label: "polls".to_string(),
@@ -3048,6 +3071,7 @@ mod tests {
 				backwards: false,
 				database: "default".to_string(),
 				database_url: None,
+				migrations_dir: None,
 			},
 		];
 

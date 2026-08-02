@@ -390,13 +390,12 @@ impl SchemaCodeGenerator {
 			.detect_relationships
 			.then(|| {
 				table.foreign_keys.iter().find_map(|foreign_key| {
-					if foreign_key.columns.as_slice() == [column.name.as_str()] {
-						table_to_struct
-							.get(&foreign_key.referenced_table)
-							.map(|target| (target, foreign_key))
-					} else {
-						None
-					}
+					let target = schema.tables.get(&foreign_key.referenced_table)?;
+					let struct_name = table_to_struct.get(&foreign_key.referenced_table)?;
+					(foreign_key.columns.as_slice() == [column.name.as_str()]
+						&& target.primary_key.len() == 1
+						&& foreign_key.referenced_columns == target.primary_key)
+						.then_some((struct_name, foreign_key))
 				})
 			})
 			.flatten();
@@ -416,37 +415,10 @@ impl SchemaCodeGenerator {
 
 		// Generate field attributes
 		let mut attrs = Vec::new();
-		let relationship_attr = relationship.as_ref().map(|(_, foreign_key)| {
+		let relationship_attr = relationship.as_ref().map(|_| {
 			let column_name = column.name.as_str();
 			let nullable = column.nullable;
-			let to_field = (foreign_key.referenced_columns.len() == 1)
-				.then(|| &foreign_key.referenced_columns[0])
-				.and_then(|referenced_column| {
-					schema
-						.tables
-						.get(&foreign_key.referenced_table)
-						.filter(|target_table| {
-							!target_table.primary_key.contains(referenced_column)
-						})
-						.map(|_| {
-							column_to_field_name(
-								referenced_column,
-								self.config.generation.field_naming_convention(),
-							)
-						})
-				});
-			if let Some(to_field) = to_field {
-				quote! {
-					#[rel(
-						foreign_key,
-						db_column = #column_name,
-						to_field = #to_field,
-						null = #nullable
-					)]
-				}
-			} else {
-				quote! { #[rel(foreign_key, db_column = #column_name, null = #nullable)] }
-			}
+			quote! { #[rel(foreign_key, db_column = #column_name, null = #nullable)] }
 		});
 		if relationship.is_none() && field_name != column.name {
 			let column_name = column.name.as_str();
@@ -890,7 +862,7 @@ mod tests {
 	}
 
 	#[test]
-	fn generate_model_emits_to_field_for_non_primary_key_foreign_keys() {
+	fn generate_model_keeps_non_primary_key_foreign_keys_as_scalars() {
 		let generator = SchemaCodeGenerator::new(IntrospectConfig::default());
 		let mut project = create_test_table();
 		project.name = "projects".to_string();
@@ -950,8 +922,8 @@ mod tests {
 			)
 			.expect("generated model should format");
 
-		assert!(code.contains("to_field = \"external_key\""));
-		assert!(code.contains("pub project_key: ForeignKeyField<Projects>"));
+		assert!(code.contains("pub project_key: String"));
+		assert!(!code.contains("ForeignKeyField<Projects>"));
 	}
 
 	#[test]

@@ -200,9 +200,15 @@ impl MigrationSquasher {
 			.iter()
 			.map(|(app_label, migration_name)| (app_label.as_str(), migration_name.as_str()))
 			.collect();
-		let mut dependencies = Vec::new();
-		for migration in &range.migrations {
-			operations.extend(migration.operations.clone());
+	let mut dependencies = Vec::new();
+	for migration in &range.migrations {
+		if !migration.replaces.is_empty() {
+			return Err(MigrationError::InvalidMigration(format!(
+				"Cannot squash replacement migration {} because nested replacement ownership is not representable safely",
+				migration.id()
+			)));
+		}
+		operations.extend(migration.operations.clone());
 			for dependency in &migration.dependencies {
 				let normalized = range.normalize_dependency(&dependency.0, &dependency.1)?;
 				let normalized = (normalized.app_label, normalized.name);
@@ -697,6 +703,24 @@ mod tests {
 		GeneratedColumnDefinition, OptionalDependency,
 	};
 	use reinhardt_query::prelude::GeneratedStorage;
+
+	#[test]
+	fn squash_range_rejects_nested_replacement_ownership() {
+		let mut replacement = Migration::new("0001_squashed", "myapp");
+		replacement.replaces = vec![("myapp".to_string(), "0001_initial".to_string())];
+		let range = SquashRange {
+			migrations: vec![replacement],
+			external_dependencies: vec![],
+			available_migrations: vec![],
+			replacement_owners: std::collections::HashMap::new(),
+		};
+
+		let error = MigrationSquasher::new()
+			.squash_range(&range, "0001_squashed_again", false)
+			.expect_err("nested replacement histories must be rejected");
+
+		assert!(error.to_string().contains("nested replacement ownership"));
+	}
 
 	#[test]
 	fn test_squash_basic() {

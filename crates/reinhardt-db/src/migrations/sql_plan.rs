@@ -136,7 +136,13 @@ fn migration_sql_dialect(connection: &DatabaseConnection) -> SqlDialect {
 }
 
 /// Splits SQL into payloads accepted by database prepared-statement protocols.
+// The executor reuses the PostgreSQL-default splitter for raw SQL execution.
+#[allow(dead_code)]
 pub(crate) fn split_sql_statements(sql: &str) -> Vec<String> {
+	split_sql_statements_for_dialect(sql, SqlDialect::Postgres)
+}
+
+fn split_sql_statements_for_dialect(sql: &str, dialect: SqlDialect) -> Vec<String> {
 	let mut statements = Vec::new();
 	let mut current = String::new();
 	let mut chars = sql.chars().peekable();
@@ -169,6 +175,9 @@ pub(crate) fn split_sql_statements(sql: &str) -> Vec<String> {
 				} else if ch == '-' && chars.peek() == Some(&'-') {
 					current.push(ch);
 					current.push(chars.next().expect("peeked SQL comment marker"));
+					state = State::LineComment;
+				} else if ch == '#' && matches!(dialect, SqlDialect::Mysql) {
+					current.push(ch);
 					state = State::LineComment;
 				} else if ch == '/' && chars.peek() == Some(&'*') {
 					current.push(ch);
@@ -279,8 +288,8 @@ pub(crate) fn split_sql_statements(sql: &str) -> Vec<String> {
 	statements
 }
 
-fn append_sql(statements: &mut Vec<PlannedStatement>, sql: &str) {
-	statements.extend(split_sql_statements(sql).into_iter().map(|statement| {
+fn append_sql(statements: &mut Vec<PlannedStatement>, sql: &str, dialect: SqlDialect) {
+	statements.extend(split_sql_statements_for_dialect(sql, dialect).into_iter().map(|statement| {
 		if statement.trim_start().starts_with("--") && !statement.contains('\n') {
 			PlannedStatement::Comment(statement.trim_start_matches('-').trim_start().to_string())
 		} else {
@@ -1890,7 +1899,7 @@ async fn plan_migration_sql_with_irreversible_policy(
 
 		match direction {
 			MigrationDirection::Forward => match operation.to_planned_forward_output(&dialect)? {
-				PlannedOperationOutput::Sql(sql) => append_sql(&mut statements, &sql),
+				PlannedOperationOutput::Sql(sql) => append_sql(&mut statements, &sql, dialect),
 				PlannedOperationOutput::Comment(comment) => {
 					statements.push(PlannedStatement::Comment(comment));
 				}
@@ -1922,7 +1931,7 @@ async fn plan_migration_sql_with_irreversible_policy(
 					}
 				} else {
 					for sql in reverse {
-						append_sql(&mut statements, &sql);
+						append_sql(&mut statements, &sql, dialect);
 					}
 				}
 			}
@@ -1959,6 +1968,22 @@ mod tests {
 	use crate::migrations::{
 		BulkLoadFormat, BulkLoadOptions, BulkLoadSource, ColumnDefinition, FieldType,
 	};
+
+	#[test]
+	fn mysql_hash_comment_does_not_split_on_its_semicolon() {
+		let statements = split_sql_statements_for_dialect(
+			"SELECT 1 # explanation; still comment\n; SELECT 2;",
+			SqlDialect::Mysql,
+		);
+
+		assert_eq!(
+			statements,
+			vec![
+				"SELECT 1 # explanation; still comment".to_string(),
+				"SELECT 2".to_string(),
+			]
+		);
+	}
 
 	#[test]
 	fn render_omits_transaction_for_all_concurrent_index_variants() {

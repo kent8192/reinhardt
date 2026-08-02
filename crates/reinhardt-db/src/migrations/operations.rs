@@ -1956,10 +1956,12 @@ impl Operation {
 			| Operation::AlterTableComment { .. }
 			| Operation::AlterUniqueTogether { .. }
 			| Operation::AlterModelOptions { .. }
-			| Operation::SetAutoIncrementValue { .. }
-			| Operation::CreateCompositePrimaryKey { .. } => {
+			| Operation::SetAutoIncrementValue { .. } => {
 				// Counter/constraint-level ops do not affect ProjectState
 				// (they track model-level structure only).
+			}
+			Operation::CreateCompositePrimaryKey { .. } => {
+				state.has_opaque_schema_operations = true;
 			}
 			#[cfg(feature = "pgvector")]
 			Operation::CreateNamedIndex {
@@ -6031,19 +6033,8 @@ impl Operation {
 				Ok(None)
 			}
 			Operation::DropIndex { table, columns } => {
-				// Basic index recreation (without advanced properties)
-				// Note: Cannot determine if the original index was unique from DropIndex alone
-				Ok(Some(Operation::CreateIndex {
-					table: table.clone(),
-					columns: columns.clone(),
-					unique: false,
-					index_type: None,
-							where_clause: None,
-					concurrently: false,
-					expressions: None,
-					mysql_options: None,
-					operator_class: None,
-				}))
+				let _ = (table, columns);
+				Ok(None)
 			}
 			#[cfg(feature = "pgvector")]
 			Operation::DropNamedIndex {

@@ -1626,6 +1626,12 @@ async fn plan_migration_sql_for_inspection(
 	backward_operation_states: Option<&[ProjectState]>,
 	historical_state_only: bool,
 ) -> Result<MigrationSqlPlan> {
+	if historical_state_only && state.has_opaque_schema_operations {
+		return Err(MigrationError::InvalidMigration(format!(
+			"cannot safely plan {} from historical state containing opaque schema operations",
+			migration.id()
+		)));
+	}
 	#[cfg(feature = "sqlite")]
 	if migration_requires_sqlite_recreation(connection, migration, direction) {
 		let mut editor = SchemaEditor::new_for_migration(

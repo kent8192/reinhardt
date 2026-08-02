@@ -1940,8 +1940,10 @@ impl Operation {
 			}
 			Operation::AddConstraint { .. }
 			| Operation::AddConstraintRepair { .. }
-			| Operation::RestoreConstraintOnRollback { .. }
-			| Operation::RestoreIndexOnRollback { .. }
+			| Operation::RestoreConstraintOnRollback { .. } => {
+				state.has_opaque_schema_operations = true;
+			}
+			Operation::RestoreIndexOnRollback { .. }
 			| Operation::RunSQL { .. }
 			| Operation::RunRust { .. }
 			| Operation::AlterTableComment { .. }

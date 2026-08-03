@@ -144,6 +144,68 @@ pub enum Commands {
 		migrations_dir: Option<PathBuf>,
 	},
 
+	/// Display migration application state or dependency order
+	#[cfg(feature = "migrations")]
+	Showmigrations {
+		/// Applications to include, together with their transitive dependencies
+		#[arg(value_name = "APP_LABEL")]
+		app_labels: Vec<String>,
+
+		/// Display migrations grouped by application
+		#[arg(
+			short = 'l',
+			long,
+			default_value_t = true,
+			default_value_if("plan", clap::builder::ArgPredicate::IsPresent, "false"),
+			conflicts_with = "plan"
+		)]
+		list: bool,
+
+		/// Display the complete selected dependency plan
+		#[arg(short = 'p', long, conflicts_with = "list")]
+		plan: bool,
+
+		/// Configured database alias
+		#[arg(long, default_value = "default")]
+		database: String,
+
+		/// One-off database URL override
+		#[arg(long)]
+		database_url: Option<String>,
+
+		/// Root directory containing migration files
+		#[arg(long, value_name = "DIR")]
+		migrations_dir: Option<PathBuf>,
+	},
+
+	/// Render the SQL for one migration without executing it
+	#[cfg(feature = "migrations")]
+	Sqlmigrate {
+		/// Application containing the migration
+		#[arg(value_name = "APP_LABEL")]
+		app_label: String,
+
+		/// Exact migration name or unambiguous prefix
+		#[arg(value_name = "MIGRATION_NAME")]
+		migration_name: String,
+
+		/// Render rollback SQL
+		#[arg(long)]
+		backwards: bool,
+
+		/// Configured database alias
+		#[arg(long, default_value = "default")]
+		database: String,
+
+		/// One-off database URL override
+		#[arg(long)]
+		database_url: Option<String>,
+
+		/// Root directory containing migration files
+		#[arg(long, value_name = "DIR")]
+		migrations_dir: Option<PathBuf>,
+	},
+
 	/// Apply database migrations
 	Migrate {
 		/// App label to migrate
@@ -344,7 +406,7 @@ pub enum Commands {
 		#[arg(long)]
 		database_url: Option<String>,
 
-		/// Include database views
+		/// Request database views (currently unsupported for model generation)
 		#[arg(long)]
 		include_views: bool,
 
@@ -1073,6 +1135,79 @@ async fn run_command_core(
 			.await
 			.map(|_| ())
 			.map_err(Into::into)
+		}
+		#[cfg(feature = "migrations")]
+		Commands::Showmigrations {
+			app_labels,
+			list,
+			plan,
+			database,
+			database_url,
+			migrations_dir,
+		} => {
+			let mut ctx = CommandContext::new(app_labels);
+			if let Some(migration_settings) = migration_settings.as_ref() {
+				crate::showmigrations::attach_migration_settings(&mut ctx, migration_settings);
+			}
+			ctx.set_verbosity(verbosity);
+			ctx.set_option("database".to_string(), database);
+			if list {
+				ctx.set_option("list".to_string(), "true".to_string());
+			}
+			if plan {
+				ctx.set_option("plan".to_string(), "true".to_string());
+			}
+			if let Some(database_url) = database_url {
+				ctx.set_option("database-url".to_string(), database_url);
+			}
+			if let Some(migrations_dir) = migrations_dir {
+				ctx.set_option(
+					"migrations-dir".to_string(),
+					migrations_dir.to_string_lossy().into_owned(),
+				);
+			}
+			if let Some(settings) = settings.clone() {
+				ctx = ctx.with_settings(settings);
+			}
+			crate::ShowMigrationsCommand::default()
+				.execute(&ctx)
+				.await
+				.map_err(Into::into)
+		}
+		#[cfg(feature = "migrations")]
+		Commands::Sqlmigrate {
+			app_label,
+			migration_name,
+			backwards,
+			database,
+			database_url,
+			migrations_dir,
+		} => {
+			let mut ctx = CommandContext::new(vec![app_label, migration_name]);
+			if let Some(migration_settings) = migration_settings.as_ref() {
+				crate::showmigrations::attach_migration_settings(&mut ctx, migration_settings);
+			}
+			ctx.set_verbosity(verbosity);
+			ctx.set_option("database".to_string(), database);
+			if backwards {
+				ctx.set_option("backwards".to_string(), "true".to_string());
+			}
+			if let Some(database_url) = database_url {
+				ctx.set_option("database-url".to_string(), database_url);
+			}
+			if let Some(migrations_dir) = migrations_dir {
+				ctx.set_option(
+					"migrations-dir".to_string(),
+					migrations_dir.to_string_lossy().into_owned(),
+				);
+			}
+			if let Some(settings) = settings.clone() {
+				ctx = ctx.with_settings(settings);
+			}
+			crate::SqlMigrateCommand::default()
+				.execute(&ctx)
+				.await
+				.map_err(Into::into)
 		}
 		Commands::Migrate {
 			app_label,
@@ -2249,6 +2384,36 @@ mod tests {
 
 	#[cfg(feature = "migrations")]
 	#[rstest]
+	fn migration_visibility_uses_project_path_and_migration_fragment() {
+		let project = tempfile::tempdir().expect("create temporary project");
+		let (settings, mut migration_settings) =
+			squash_test_settings(project.path(), serde_json::json!({"ENABLE_AUDIT": "true"}));
+		migration_settings.migration_features = vec!["gis".to_string()];
+		migration_settings
+			.migration_swappable_settings
+			.insert("AUTH_USER_MODEL".to_string(), "accounts.User".to_string());
+		let mut ctx = CommandContext::new(Vec::new()).with_settings(settings);
+
+		crate::showmigrations::attach_migration_settings(&mut ctx, &migration_settings);
+		let dependency_context = crate::showmigrations::migration_dependency_context(&ctx);
+
+		assert_eq!(
+			crate::showmigrations::migration_source_path(&ctx),
+			project.path().join("migrations")
+		);
+		assert_eq!(
+			dependency_context.get_setting("ENABLE_AUDIT"),
+			Some(&"true".to_string())
+		);
+		assert_eq!(
+			dependency_context.get_setting("AUTH_USER_MODEL"),
+			Some(&"accounts.User".to_string())
+		);
+		assert!(dependency_context.is_feature_enabled("gis"));
+	}
+
+	#[cfg(feature = "migrations")]
+	#[rstest]
 	#[tokio::test]
 	async fn squashmigrations_uses_general_settings_for_setting_enabled_dependencies() {
 		// Arrange
@@ -3228,6 +3393,33 @@ mod tests {
 
 		// Assert
 		assert!(!result);
+	}
+
+	#[cfg(feature = "migrations")]
+	#[rstest]
+	fn migration_visibility_commands_select_their_own_database() {
+		let commands = [
+			Commands::Showmigrations {
+				app_labels: Vec::new(),
+				list: true,
+				plan: false,
+				database: "default".to_string(),
+				database_url: None,
+				migrations_dir: None,
+			},
+			Commands::Sqlmigrate {
+				app_label: "polls".to_string(),
+				migration_name: "0001".to_string(),
+				backwards: false,
+				database: "default".to_string(),
+				database_url: None,
+				migrations_dir: None,
+			},
+		];
+
+		for command in commands {
+			assert!(!requires_database(&command, &CommandRegistry::new()));
+		}
 	}
 
 	#[cfg(feature = "reinhardt-db")]

@@ -62,6 +62,10 @@ details.
 - **migrate** - Apply database migrations
 - **inspectdb** - Generate deterministic Reinhardt models from an existing
   PostgreSQL, MySQL, or SQLite schema
+- **showmigrations** - Display applied state or the selected dependency plan
+  without creating migration history
+- **sqlmigrate** - Render backend-specific forward or rollback SQL without
+  executing schema statements
 - **dumpdata** - Export model rows as Django-compatible JSON fixtures
 - **loaddata** - Load Django-compatible JSON fixtures into the database
 - **seed** - Run idempotent per-application development seed hooks
@@ -144,6 +148,64 @@ attempts to remove the incomplete file through its anchored directory handle.
 A cleanup failure reports both the original write error and the cleanup error.
 The command only reads migration source files and does not require a database
 connection.
+
+### Inspecting migration state and SQL
+
+`showmigrations` lists migration state by application by default. Use `--plan`
+to show the complete selected dependency order; selecting an application keeps
+its transitive cross-application dependencies. `sqlmigrate APP MIGRATION`
+accepts an exact name or unique prefix and renders through the same SQL planner
+used by migration execution. Pass `--backwards` for rollback SQL.
+
+```bash
+# List every migration, or only polls plus its transitive dependencies.
+cargo run --bin manage -- showmigrations
+cargo run --bin manage -- showmigrations polls --list
+
+# Display execution order and render forward or rollback SQL.
+cargo run --bin manage -- showmigrations polls --plan
+cargo run --bin manage -- sqlmigrate polls 0002
+cargo run --bin manage -- sqlmigrate polls 0002 --backwards
+```
+
+`--list` (`-l`) and `--plan` (`-p`) are mutually exclusive; list mode is the
+default. At verbosity level two, applied entries include their recorded
+timestamps. Prefix matching is scoped to the selected application and must
+identify exactly one migration. An ambiguous or unknown prefix is rejected
+before output.
+
+Both commands accept `--database ALIAS` and a one-off `--database-url URL`.
+Without a URL override, the alias selects a configured database. With
+`--database-url`, the command connects directly to that URL without looking up
+the alias; the alias remains a safe diagnostic label and settings are not
+modified. Diagnostics redact URL credentials and sensitive-looking aliases.
+Both commands load and validate the complete migration catalog before output.
+When `--migrations-dir` is omitted, both commands read from the active
+project's `core.base_dir/migrations` directory. Conditional and swappable
+dependencies use the composed `MigrationSettings` fragment passed by the
+generated `manage.rs` entry point, together with installed applications and
+legacy migration settings from the core fragment.
+`showmigrations` reads an existing recorder table without creating it, while
+`sqlmigrate` performs no schema or migration-history writes. SQL output is
+fully buffered before its single stdout write, so an irreversible rollback or
+late planning error emits no partial script.
+
+Rendered SQL follows the selected backend. PostgreSQL uses double-quoted
+identifiers, MySQL uses backticks, and SQLite uses its table-recreation sequence
+when an alteration cannot be expressed directly. Transaction wrappers are
+emitted only when the migration plan is atomic and the backend supports
+transactional DDL; MySQL DDL is therefore never wrapped. Informational
+data-operation comments remain comments and are never executed.
+
+Statement splitting also follows the selected backend: PostgreSQL nested block
+comments, MySQL's whitespace-sensitive `--` comments, and SQLite trigger bodies
+are kept intact. This ensures that previewed SQL has the same statement
+boundaries as execution.
+
+When SQL planning reconstructs state from historical migration source, it
+fails closed if that source cannot represent required schema metadata exactly,
+including table comments, declared column order, or specialized constraints.
+This prevents a plausible but incomplete preview from being emitted.
 
 ### Pages template hot reload
 
@@ -294,8 +356,10 @@ cargo run --bin manage -- inspectdb [TABLE ...]
 ```
 
 Table arguments are exact names rather than patterns. Without table arguments,
-the command inspects every table; pass `--include-views` to include views or
-`--include-partitions` for PostgreSQL partitions.
+the command inspects every table; `--include-partitions` includes PostgreSQL
+partitions. `--include-views` is recognized but currently returns an error:
+generated ORM models require a primary key, which ordinary database views do
+not expose.
 
 `--database` selects a configured database alias and defaults to `default`. It
 never accepts a connection URL. Use `--database-url` for an explicit one-off

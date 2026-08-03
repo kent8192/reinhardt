@@ -524,6 +524,7 @@ mod tests {
 			name: "documents_embedding_ann".to_string(),
 			fields: vec!["embedding".to_string()],
 			unique: false,
+			where_clause: None,
 			index_type: Some(index_type),
 			operator_class: Some(operator_class.to_string()),
 			expressions: None,

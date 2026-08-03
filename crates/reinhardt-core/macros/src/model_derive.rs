@@ -2086,7 +2086,15 @@ fn map_explicit_field_type(
 	field_type_str: &str,
 	migrations_crate: &proc_macro2::TokenStream,
 ) -> Result<TokenStream> {
-	let field_type = match field_type_str.to_lowercase().as_str() {
+	let normalized = field_type_str.to_lowercase();
+	if let Some(length) = normalized
+		.strip_prefix("char(")
+		.and_then(|value| value.strip_suffix(')'))
+		.and_then(|value| value.parse::<u32>().ok())
+	{
+		return Ok(quote! { #migrations_crate::FieldType::Char(#length) });
+	}
+	let field_type = match normalized.as_str() {
 		"jsonb" => quote! { #migrations_crate::FieldType::JsonBinary },
 		"json" => quote! { #migrations_crate::FieldType::Json },
 		"hstore" => quote! { #migrations_crate::FieldType::HStore },
@@ -2107,7 +2115,7 @@ fn map_explicit_field_type(
 				format!(
 					"Unknown PostgreSQL field type: '{}'. Supported types: jsonb, json, hstore, \
 					 citext, int4range, int8range, numrange, daterange, tsrange, tstzrange, \
-					 tsvector, tsquery, uuid, text",
+					 tsvector, tsquery, uuid, text, char(n)",
 					other
 				),
 			));
@@ -6551,6 +6559,7 @@ fn generate_registration_code(input: RegistrationCodeInput<'_>) -> Result<TokenS
 					name: #name.to_string(),
 					fields: vec![#column.to_string()],
 					unique: false,
+					where_clause: None,
 					index_type: Some(#index_type),
 					operator_class: Some(#opclass.to_string()),
 					expressions: None,

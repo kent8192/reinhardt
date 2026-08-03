@@ -1,8 +1,9 @@
 use async_trait::async_trait;
+use reinhardt_db::backends::DatabaseConnection;
 use reinhardt_db::migrations::{
-	DependencyCondition, DependencyResolutionContext, FilesystemSource, Migration,
-	MigrationCatalog, MigrationError, MigrationKey, MigrationSource, OptionalDependency, Result,
-	SwappableDependency,
+	ColumnDefinition, DatabaseMigrationRecorder, DependencyCondition, DependencyResolutionContext,
+	FieldType, FilesystemSource, Migration, MigrationCatalog, MigrationError, MigrationKey,
+	MigrationSource, Operation, OptionalDependency, Result, SwappableDependency,
 };
 use rstest::*;
 use std::fs;
@@ -48,6 +49,108 @@ async fn catalog(migrations: Vec<Migration>) -> MigrationCatalog {
 	MigrationCatalog::load_strict(&TestSource { migrations })
 		.await
 		.unwrap()
+}
+
+#[rstest]
+#[tokio::test]
+async fn catalog_resolves_swappable_dependencies_with_the_provided_context() {
+	// Arrange
+	let custom_user =
+		Migration::new("0001_initial", "custom_auth").add_operation(Operation::CreateTable {
+			name: "custom_auth_user".to_string(),
+			columns: vec![ColumnDefinition::new("id", FieldType::Integer)],
+			constraints: Vec::new(),
+			without_rowid: None,
+			interleave_in_parent: None,
+			partition: None,
+		});
+	let profile = Migration::new("0001_initial", "profiles").add_swappable_dependency(
+		SwappableDependency::new("AUTH_USER_MODEL", "auth", "User", "0001_initial"),
+	);
+	let context =
+		DependencyResolutionContext::new().with_setting("AUTH_USER_MODEL", "custom_auth.User");
+
+	// Act
+	let catalog = MigrationCatalog::load_strict_with_context(
+		&TestSource {
+			migrations: vec![profile, custom_user],
+		},
+		&context,
+	)
+	.await
+	.unwrap();
+	let state = catalog
+		.state_before(&MigrationKey::new("profiles", "0001_initial"))
+		.unwrap();
+
+	// Assert
+	assert!(state.find_model_by_table("custom_auth_user").is_some());
+}
+
+#[rstest]
+#[tokio::test]
+async fn snapshot_excludes_migrations_replaced_by_a_squash() {
+	// Arrange
+	let original = migration("blog", "0001_initial", &[]);
+	let mut replacement = migration("blog", "0001_squashed_0002", &[]);
+	replacement.replaces = vec![("blog".to_string(), "0001_initial".to_string())];
+	let catalog = catalog(vec![original, replacement]).await;
+	let recorder = DatabaseMigrationRecorder::new(
+		DatabaseConnection::connect_sqlite("sqlite::memory:")
+			.await
+			.expect("connect to SQLite"),
+	);
+
+	// Act
+	let snapshot = catalog.snapshot(&recorder, &[]).await.unwrap();
+
+	// Assert
+	assert_eq!(snapshot.ordered.len(), 1);
+	assert_eq!(snapshot.ordered[0].name, "0001_squashed_0002");
+}
+
+#[rstest]
+#[tokio::test]
+async fn state_before_original_migration_uses_original_history_not_its_replacement() {
+	// Arrange - a squash replaces the original create/drop sequence with an
+	// unrelated table. Historical state for the original destructive migration
+	// must still replay the original sequence.
+	let initial = Migration::new("0001_initial", "catalog").add_operation(Operation::CreateTable {
+		name: "books".to_string(),
+		columns: vec![ColumnDefinition::new("id", FieldType::Integer)],
+		constraints: Vec::new(),
+		without_rowid: None,
+		interleave_in_parent: None,
+		partition: None,
+	});
+	let destructive = Migration::new("0002_drop_books", "catalog")
+		.add_dependency("catalog", "0001_initial")
+		.add_operation(Operation::DropTable {
+			name: "books".to_string(),
+		});
+	let mut replacement =
+		Migration::new("0001_squashed_0002", "catalog").add_operation(Operation::CreateTable {
+			name: "archived_books".to_string(),
+			columns: vec![ColumnDefinition::new("id", FieldType::Integer)],
+			constraints: Vec::new(),
+			without_rowid: None,
+			interleave_in_parent: None,
+			partition: None,
+		});
+	replacement.replaces = vec![
+		("catalog".to_string(), "0001_initial".to_string()),
+		("catalog".to_string(), "0002_drop_books".to_string()),
+	];
+	let catalog = catalog(vec![initial, destructive, replacement]).await;
+
+	// Act
+	let state = catalog
+		.state_before(&MigrationKey::new("catalog", "0002_drop_books"))
+		.expect("reconstruct the historical pre-drop state");
+
+	// Assert
+	assert!(state.find_model_by_table("books").is_some());
+	assert!(state.find_model_by_table("archived_books").is_none());
 }
 
 #[rstest]

@@ -97,19 +97,19 @@ impl<S: MigrationSource> MigrationStateLoader<S> {
 				.iter()
 				.find(|m| m.app_label == key.app_label && m.name == key.name)
 			{
-				eprintln!(
-					"[DEBUG] Applying migration: {}/{}",
-					migration.app_label, migration.name
+				tracing::debug!(
+					app_label = %migration.app_label,
+					migration_name = %migration.name,
+					operation_count = migration.operations.len(),
+					"Applying migration operations to project state"
 				);
-				eprintln!("[DEBUG]   Operations count: {}", migration.operations.len());
 				state.apply_migration_operations(&migration.operations, &migration.app_label);
-				eprintln!(
-					"[DEBUG]   State after applying - models count: {}",
-					state.models.len()
+				tracing::debug!(
+					app_label = %migration.app_label,
+					migration_name = %migration.name,
+					model_count = state.models.len(),
+					"Applied migration operations to project state"
 				);
-				for (app, model_name) in state.models.keys() {
-					eprintln!("[DEBUG]     - {}/{}", app, model_name);
-				}
 			}
 		}
 

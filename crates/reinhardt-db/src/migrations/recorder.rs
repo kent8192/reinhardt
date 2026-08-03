@@ -148,6 +148,59 @@ impl Default for MigrationRecorder {
 }
 
 impl DatabaseMigrationRecorder {
+	fn recorder_table_might_be_absent(&self, error: &super::MigrationError) -> bool {
+		use crate::backends::types::DatabaseType;
+
+		let super::MigrationError::DatabaseError(error) = error else {
+			return false;
+		};
+
+		match self.connection.database_type() {
+			DatabaseType::Postgres => error.code() == Some("42P01"),
+			DatabaseType::Mysql => matches!(error.code(), Some("42S02" | "1146")),
+			DatabaseType::Sqlite => {
+				error.code() == Some("1")
+					&& error
+						.message()
+						.eq_ignore_ascii_case("no such table: reinhardt_migrations")
+			}
+		}
+	}
+
+	async fn recorder_relation_exists(&self) -> super::Result<bool> {
+		use crate::backends::types::DatabaseType;
+
+		let sql = match self.connection.database_type() {
+			DatabaseType::Postgres => {
+				"SELECT to_regclass('reinhardt_migrations') IS NOT NULL AS recorder_exists"
+			}
+			DatabaseType::Mysql => {
+				"SELECT EXISTS(
+					SELECT 1
+					FROM information_schema.tables
+					WHERE table_schema = DATABASE()
+					  AND table_name = 'reinhardt_migrations'
+				) AS recorder_exists"
+			}
+			DatabaseType::Sqlite => return Ok(false),
+		};
+		let rows = self
+			.connection
+			.fetch_all(sql, vec![])
+			.await
+			.map_err(map_framework_database_error)?;
+		let row = rows.first().ok_or_else(|| {
+			super::MigrationError::DatabaseError(DatabaseError::new(
+				DatabaseErrorKind::Query,
+				"Recorder relation existence query returned no rows",
+			))
+		})?;
+
+		row.get::<bool>("recorder_exists")
+			.or_else(|_| row.get::<i64>("recorder_exists").map(|exists| exists != 0))
+			.map_err(super::MigrationError::DatabaseError)
+	}
+
 	/// Create a new database-backed migration recorder
 	///
 	/// # Examples
@@ -782,6 +835,70 @@ impl DatabaseMigrationRecorder {
 		Ok(())
 	}
 
+	/// Atomically adopt a complete replacement migration set.
+	///
+	/// The replacement record and every replaced record are changed in one
+	/// transaction so an interrupted adoption cannot leave the recorder in a
+	/// mixed state.
+	pub async fn adopt_replacement(
+		&self,
+		replacement_app: &str,
+		replacement_name: &str,
+		replaces: &[(String, String)],
+	) -> super::Result<()> {
+		use crate::backends::types::DatabaseType;
+		use reinhardt_query::prelude::{
+			Alias, Expr, ExprTrait, MySqlQueryBuilder, PostgresQueryBuilder, Query,
+			QueryStatementBuilder, SqliteQueryBuilder,
+		};
+
+		let now = Utc::now().format("%Y-%m-%d %H:%M:%S").to_string();
+		let record = Query::insert()
+			.into_table(Alias::new("reinhardt_migrations"))
+			.columns([Alias::new("app"), Alias::new("name"), Alias::new("applied")])
+			.values_panic([
+				replacement_app.to_string(),
+				replacement_name.to_string(),
+				now,
+			])
+			.to_owned();
+		let record_sql = match self.connection.database_type() {
+			DatabaseType::Postgres => format!(
+				"{} ON CONFLICT (app, name) DO NOTHING",
+				record.to_string(PostgresQueryBuilder::new())
+			),
+			DatabaseType::Mysql => {
+				record
+					.to_string(MySqlQueryBuilder::new())
+					.replacen("INSERT", "INSERT IGNORE", 1)
+			}
+			DatabaseType::Sqlite => record.to_string(SqliteQueryBuilder::new()).replacen(
+				"INSERT",
+				"INSERT OR IGNORE",
+				1,
+			),
+		};
+
+		let mut transaction = self.connection.begin().await?;
+		transaction.execute(&record_sql, vec![]).await?;
+		for (app, name) in replaces {
+			let delete = Query::delete()
+				.from_table(Alias::new("reinhardt_migrations"))
+				.and_where(Expr::col(Alias::new("app")).eq(app.as_str()))
+				.and_where(Expr::col(Alias::new("name")).eq(name.as_str()))
+				.to_owned();
+			let delete_sql = match self.connection.database_type() {
+				DatabaseType::Postgres => delete.to_string(PostgresQueryBuilder::new()),
+				DatabaseType::Mysql => delete.to_string(MySqlQueryBuilder::new()),
+				DatabaseType::Sqlite => delete.to_string(SqliteQueryBuilder::new()),
+			};
+			transaction.execute(&delete_sql, vec![]).await?;
+		}
+		transaction.commit().await?;
+
+		Ok(())
+	}
+
 	/// Get all applied migrations
 	///
 	/// # Examples
@@ -879,6 +996,26 @@ impl DatabaseMigrationRecorder {
 		}
 
 		Ok(records)
+	}
+
+	/// Return all applied migrations without creating the recorder table.
+	///
+	/// A missing recorder table means that no migrations have been applied.
+	/// Other database failures, including malformed schemas, permissions, and
+	/// timestamp decoding errors, are returned to the caller.
+	pub async fn get_applied_migrations_if_present(&self) -> super::Result<Vec<MigrationRecord>> {
+		match self.get_applied_migrations().await {
+			Err(error) if self.recorder_table_might_be_absent(&error) => {
+				if self.connection.database_type() == crate::backends::types::DatabaseType::Sqlite {
+					return Ok(Vec::new());
+				}
+				match self.recorder_relation_exists().await {
+					Ok(false) => Ok(Vec::new()),
+					Ok(true) | Err(_) => Err(error),
+				}
+			}
+			result => result,
+		}
 	}
 
 	/// Rename an applied migration while retaining its original recorder row.

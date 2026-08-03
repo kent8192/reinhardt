@@ -33,6 +33,9 @@ mod squashmigrations_management;
 #[path = "commands/inspectdb_management.rs"]
 mod inspectdb_management;
 
+#[path = "commands/migration_visibility_management.rs"]
+mod migration_visibility_management;
+
 // Built-in command integration tests
 #[path = "commands/builtin_integration.rs"]
 mod builtin_integration;

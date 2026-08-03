@@ -71,6 +71,77 @@ fn replacement_history_is_fully_covered(
 		.all(|(app, name)| covered.contains(&(app.as_str(), name.as_str())))
 }
 
+fn transitive_replacement_history<'a>(
+	migration: &'a Migration,
+	migrations: &'a [Migration],
+) -> HashSet<(&'a str, &'a str)> {
+	let known_migrations: HashMap<_, _> = migrations
+		.iter()
+		.map(|known| ((known.app_label.as_str(), known.name.as_str()), known))
+		.collect();
+	let mut history = HashSet::new();
+	let mut pending: Vec<_> = migration
+		.replaces
+		.iter()
+		.map(|(app, name)| (app.as_str(), name.as_str()))
+		.collect();
+
+	while let Some(key) = pending.pop() {
+		if !history.insert(key) {
+			continue;
+		}
+		if let Some(known) = known_migrations.get(&key) {
+			pending.extend(
+				known
+					.replaces
+					.iter()
+					.map(|(app, name)| (app.as_str(), name.as_str())),
+			);
+		}
+	}
+
+	history
+}
+
+fn transitive_original_replacement_history<'a>(
+	migration: &'a Migration,
+	migrations: &'a [Migration],
+) -> Vec<(&'a str, &'a str)> {
+	let known_migrations: HashMap<_, _> = migrations
+		.iter()
+		.map(|known| ((known.app_label.as_str(), known.name.as_str()), known))
+		.collect();
+	let mut originals = Vec::new();
+	let mut seen = HashSet::new();
+	let mut pending: Vec<_> = migration
+		.replaces
+		.iter()
+		.rev()
+		.map(|(app, name)| (app.as_str(), name.as_str()))
+		.collect();
+
+	while let Some(key) = pending.pop() {
+		if !seen.insert(key) {
+			continue;
+		}
+		if let Some(known) = known_migrations.get(&key)
+			&& !known.replaces.is_empty()
+		{
+			pending.extend(
+				known
+					.replaces
+					.iter()
+					.rev()
+					.map(|(app, name)| (app.as_str(), name.as_str())),
+			);
+		} else {
+			originals.push(key);
+		}
+	}
+
+	originals
+}
+
 #[cfg(test)]
 mod replacement_history_tests {
 	use super::*;
@@ -367,15 +438,13 @@ impl DatabaseMigrationExecutor {
 		let partial_replacements: HashSet<_> = migrations
 			.iter()
 			.filter(|migration| {
+				let replacement_history = transitive_replacement_history(migration, migrations);
 				!migration.replaces.is_empty()
 					&& !replacement_history_is_fully_covered(
 						migration,
 						migrations,
 						&applied_record_keys,
-					) && migration
-					.replaces
-					.iter()
-					.any(|(app, name)| applied_record_set.contains(&(app.as_str(), name.as_str())))
+					) && !replacement_history.is_disjoint(&applied_record_set)
 			})
 			.map(|migration| (migration.app_label.as_str(), migration.name.as_str()))
 			.collect();
@@ -410,11 +479,10 @@ impl DatabaseMigrationExecutor {
 			.map(|migration| {
 				(
 					(migration.app_label.clone(), migration.name.clone()),
-					migration
-						.replaces
-						.iter()
+					transitive_original_replacement_history(migration, migrations)
+						.into_iter()
 						.map(|(app, name)| {
-							super::graph::MigrationKey::new(app.clone(), name.clone())
+							super::graph::MigrationKey::new(app.to_string(), name.to_string())
 						})
 						.collect(),
 				)
@@ -475,7 +543,7 @@ impl DatabaseMigrationExecutor {
 				.await?
 			{
 				if !migration.replaces.is_empty() {
-					for (app_label, name) in &migration.replaces {
+					for (app_label, name) in transitive_replacement_history(migration, migrations) {
 						if self.recorder.is_applied(app_label, name).await? {
 							self.recorder.unapply(app_label, name).await?;
 						}
@@ -489,11 +557,7 @@ impl DatabaseMigrationExecutor {
 					.iter()
 					.map(|record| (record.app.as_str(), record.name.as_str()))
 					.collect();
-				let replaced: HashSet<_> = migration
-					.replaces
-					.iter()
-					.map(|(app, name)| (app.as_str(), name.as_str()))
-					.collect();
+				let replaced = transitive_replacement_history(migration, migrations);
 				if replacement_history_is_fully_covered(
 					migration,
 					migrations,
@@ -521,10 +585,10 @@ impl DatabaseMigrationExecutor {
 							&migration.name,
 						)
 						.await?;
-					for (app_label, name) in &migration.replaces {
-						if applied_records_set.contains(&(app_label.as_str(), name.as_str()))
-							&& (app_label != &historical_record.app
-								|| name != &historical_record.name)
+					for &(app_label, name) in &replaced {
+						if applied_records_set.contains(&(app_label, name))
+							&& (app_label != historical_record.app
+								|| name != historical_record.name)
 						{
 							self.recorder.unapply(app_label, name).await?;
 						}
@@ -4241,6 +4305,38 @@ mod rollback_orchestration_tests {
 		migration
 	}
 
+	fn make_nested_replacement_history(
+		table: &str,
+	) -> (Migration, Migration, Migration, Migration) {
+		let initial = make_create_table_migration("0001_initial", table);
+		let mut add_column = Migration::new("0002_add_name", "rolltest");
+		add_column
+			.dependencies
+			.push((initial.app_label.clone(), initial.name.clone()));
+		add_column.operations.push(Operation::AddColumn {
+			table: table.to_string(),
+			column: ColumnDefinition::new("name", FieldType::VarChar(32)),
+			mysql_options: None,
+		});
+		let mut first_replacement = initial.clone();
+		first_replacement.name = "0001_squashed_0002".to_string();
+		first_replacement
+			.operations
+			.extend(add_column.operations.clone());
+		first_replacement.replaces = vec![
+			(initial.app_label.clone(), initial.name.clone()),
+			(add_column.app_label.clone(), add_column.name.clone()),
+		];
+		let mut second_replacement = first_replacement.clone();
+		second_replacement.name = "0001_squashed_0002_v2".to_string();
+		second_replacement.replaces = vec![(
+			first_replacement.app_label.clone(),
+			first_replacement.name.clone(),
+		)];
+
+		(initial, add_column, first_replacement, second_replacement)
+	}
+
 	#[rstest]
 	#[tokio::test]
 	async fn rollback_with_empty_input_returns_empty_result() {
@@ -4325,6 +4421,114 @@ mod rollback_orchestration_tests {
 
 		// Assert
 		assert_eq!(result.applied, vec![replacement.id()]);
+	}
+
+	#[rstest]
+	#[tokio::test]
+	async fn nested_partial_replacement_history_continues_on_the_original_chain() {
+		// Arrange
+		let (initial, add_column, first_replacement, second_replacement) =
+			make_nested_replacement_history("nested_partial");
+		let mut executor = make_executor().await;
+		executor
+			.apply_migrations(std::slice::from_ref(&initial))
+			.await
+			.expect("apply the first original migration");
+
+		// Act
+		let result = executor
+			.apply_migrations(&[
+				initial.clone(),
+				add_column.clone(),
+				first_replacement.clone(),
+				second_replacement.clone(),
+			])
+			.await
+			.expect("a nested partial history must continue on the original chain");
+
+		// Assert
+		assert_eq!(result.applied, vec![add_column.id()]);
+		let recorder = DatabaseMigrationRecorder::new(executor.connection().clone());
+		assert_eq!(
+			recorder
+				.is_applied(&second_replacement.app_label, &second_replacement.name)
+				.await
+				.expect("query newest replacement recorder state"),
+			false
+		);
+	}
+
+	#[rstest]
+	#[tokio::test]
+	async fn nested_partial_replacement_orders_descendants_after_remaining_originals() {
+		// Arrange
+		let (initial, add_column, first_replacement, second_replacement) =
+			make_nested_replacement_history("nested_partial_descendant");
+		let mut descendant = Migration::new("0003_after_squash", "rolltest");
+		descendant.dependencies.push((
+			second_replacement.app_label.clone(),
+			second_replacement.name.clone(),
+		));
+		descendant.operations.push(Operation::AddColumn {
+			table: "nested_partial_descendant".to_string(),
+			column: ColumnDefinition::new("after_squash", FieldType::VarChar(32)),
+			mysql_options: None,
+		});
+		let mut executor = make_executor().await;
+		executor
+			.apply_migrations(std::slice::from_ref(&initial))
+			.await
+			.expect("apply the first original migration");
+
+		// Act
+		let result = executor
+			.apply_migrations(&[
+				initial,
+				add_column.clone(),
+				first_replacement,
+				second_replacement,
+				descendant.clone(),
+			])
+			.await
+			.expect("a nested descendant must wait for every remaining original migration");
+
+		// Assert
+		assert_eq!(result.applied, vec![add_column.id(), descendant.id()]);
+	}
+
+	#[rstest]
+	#[tokio::test]
+	async fn nested_fully_applied_history_reconciles_from_original_recorder_rows() {
+		// Arrange
+		let (initial, add_column, first_replacement, second_replacement) =
+			make_nested_replacement_history("nested_reconciliation");
+		let mut executor = make_executor().await;
+		executor
+			.apply_migrations(&[initial.clone(), add_column.clone()])
+			.await
+			.expect("apply the complete original history");
+
+		// Act
+		let result = executor
+			.apply_migrations(&[
+				initial.clone(),
+				add_column.clone(),
+				first_replacement.clone(),
+				second_replacement.clone(),
+			])
+			.await
+			.expect("the newest replacement must reconcile through original recorder rows");
+
+		// Assert
+		assert_eq!(result.applied, vec![second_replacement.id()]);
+		let recorder = DatabaseMigrationRecorder::new(executor.connection().clone());
+		let applied_records = recorder
+			.get_applied_migrations()
+			.await
+			.expect("query reconciled recorder state");
+		assert_eq!(applied_records.len(), 1);
+		assert_eq!(applied_records[0].app, second_replacement.app_label);
+		assert_eq!(applied_records[0].name, second_replacement.name);
 	}
 
 	#[rstest]

@@ -647,14 +647,8 @@ pub async fn execute_from_command_line_with_migration_settings<S>(
 where
 	S: HasCommonSettings + HasSettings<MigrationSettings> + 'static,
 {
-	let migration_settings = HasSettings::<MigrationSettings>::get_settings(&settings).clone();
-	execute_with_registry_and_optional_settings(
-		CommandRegistry::new(),
-		Some(Arc::new(settings) as Arc<dyn HasCommonSettings>),
-		Some(migration_settings),
-		None,
-	)
-	.await
+	execute_from_command_line_with_registry_and_migration_settings(CommandRegistry::new(), settings)
+		.await
 }
 
 /// Execute command-line arguments with migration settings and Rust shell configuration.
@@ -665,15 +659,12 @@ pub async fn execute_from_command_line_with_migration_settings_and_shell<S>(
 where
 	S: HasCommonSettings + HasSettings<MigrationSettings> + Clone + Send + Sync + 'static,
 {
-	let migration_settings = HasSettings::<MigrationSettings>::get_settings(&settings).clone();
-	execute_with_registry_and_optional_settings(
+	execute_from_command_line_with_registry_and_migration_settings_and_shell(
 		CommandRegistry::new(),
-		Some(Arc::new(settings) as Arc<dyn HasCommonSettings>),
-		Some(migration_settings),
-		Some(shell),
+		settings,
+		shell,
 	)
 	.await
-	.map_err(boxed_command_error)
 }
 
 /// Execute commands from command-line arguments with a custom command registry.
@@ -749,6 +740,28 @@ where
 	.await
 }
 
+/// Execute CLI arguments with a custom registry and common plus migration settings.
+///
+/// This combines a downstream [`CommandRegistry`] with the project's
+/// [`MigrationSettings`] fragment, so custom commands and conditional migration
+/// dependencies are both available during the same invocation.
+pub async fn execute_from_command_line_with_registry_and_migration_settings<S>(
+	registry: CommandRegistry,
+	settings: S,
+) -> Result<(), Box<dyn std::error::Error>>
+where
+	S: HasCommonSettings + HasSettings<MigrationSettings> + 'static,
+{
+	let migration_settings = HasSettings::<MigrationSettings>::get_settings(&settings).clone();
+	execute_with_registry_and_optional_settings(
+		registry,
+		Some(Arc::new(settings) as Arc<dyn HasCommonSettings>),
+		Some(migration_settings),
+		None,
+	)
+	.await
+}
+
 /// Execute CLI arguments with a custom registry, project settings, and shell configuration.
 pub async fn execute_from_command_line_with_registry_and_settings_and_shell<S>(
 	registry: CommandRegistry,
@@ -762,6 +775,26 @@ where
 		registry,
 		Some(Arc::new(settings) as Arc<dyn HasCommonSettings>),
 		None,
+		Some(shell),
+	)
+	.await
+	.map_err(boxed_command_error)
+}
+
+/// Execute CLI arguments with a custom registry, migration settings, and shell configuration.
+pub async fn execute_from_command_line_with_registry_and_migration_settings_and_shell<S>(
+	registry: CommandRegistry,
+	settings: S,
+	shell: ShellConfig,
+) -> crate::CommandResult<()>
+where
+	S: HasCommonSettings + HasSettings<MigrationSettings> + Clone + Send + Sync + 'static,
+{
+	let migration_settings = HasSettings::<MigrationSettings>::get_settings(&settings).clone();
+	execute_with_registry_and_optional_settings(
+		registry,
+		Some(Arc::new(settings) as Arc<dyn HasCommonSettings>),
+		Some(migration_settings),
 		Some(shell),
 	)
 	.await
@@ -2149,6 +2182,7 @@ mod tests {
 	use tempfile::TempDir;
 
 	#[cfg(feature = "migrations")]
+	#[derive(Clone)]
 	struct SquashTestSettings {
 		core: CoreSettings,
 		contacts: ContactSettings,
@@ -2245,6 +2279,41 @@ mod tests {
 			squashed_name: None,
 			migrations_dir,
 		}
+	}
+
+	#[cfg(feature = "migrations")]
+	#[test]
+	fn registry_aware_migration_settings_entry_points_accept_composed_settings() {
+		let settings = || SquashTestSettings {
+			core: serde_json::from_value(serde_json::json!({
+				"base_dir": ".",
+				"secret_key": "test-secret",
+			}))
+			.expect("deserialize core settings"),
+			contacts: ContactSettings::default(),
+			migrations: MigrationSettings::default(),
+		};
+
+		let future = crate::execute_from_command_line_with_registry_and_migration_settings(
+			CommandRegistry::new(),
+			settings(),
+		);
+		drop(future);
+
+		let shell = ShellConfig::new(
+			"test-project",
+			"test_project",
+			".",
+			"test_project::config::settings::get_settings",
+			std::iter::empty::<String>(),
+		);
+		let future =
+			crate::execute_from_command_line_with_registry_and_migration_settings_and_shell(
+				CommandRegistry::new(),
+				settings(),
+				shell,
+			);
+		drop(future);
 	}
 
 	#[cfg(feature = "migrations")]

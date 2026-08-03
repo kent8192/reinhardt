@@ -42,10 +42,12 @@
 use std::collections::HashMap;
 
 use reinhardt_db::backends::DatabaseConnection;
+#[cfg(feature = "pgvector")]
+use reinhardt_db::migrations::FieldType;
 use reinhardt_db::migrations::{
-	ColumnDefinition, Constraint, FieldType, ForeignKeyAction, GeneratedColumnDefinition,
-	GeneratedStorage, Migration, Operation, executor::DatabaseMigrationExecutor,
-	field_type_string_to_field_type, to_snake_case,
+	ColumnDefinition, Constraint, ForeignKeyAction, GeneratedColumnDefinition, GeneratedStorage,
+	Migration, Operation, executor::DatabaseMigrationExecutor, field_type_string_to_field_type,
+	to_snake_case,
 };
 use reinhardt_db::orm::Model;
 use reinhardt_db::orm::fields::FieldKwarg;

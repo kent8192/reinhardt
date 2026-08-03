@@ -505,14 +505,16 @@ async fn concurrent_ssr_requests_keep_query_clients_isolated() {
 		first_renderer
 			.state()
 			.get_resource_state(&format!("query:{query_id}"))
-			.and_then(|snapshot| snapshot.get("data")),
+			.and_then(|snapshot| snapshot.get("state"))
+			.and_then(|state| state.get("Success")),
 		Some(&serde_json::json!("first-request"))
 	);
 	assert_eq!(
 		second_renderer
 			.state()
 			.get_resource_state(&format!("query:{query_id}"))
-			.and_then(|snapshot| snapshot.get("data")),
+			.and_then(|snapshot| snapshot.get("state"))
+			.and_then(|state| state.get("Success")),
 		Some(&serde_json::json!("second-request"))
 	);
 }

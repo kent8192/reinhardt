@@ -7,6 +7,95 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.0-alpha.4](https://github.com/kent8192/reinhardt-web/compare/reinhardt-commands@v0.4.0-alpha.3...reinhardt-commands@v0.4.0-alpha.4) - 2026-08-03
+
+### Added
+
+- *(commands)* add ORM-aware Rust shell
+- *(commands)* generate shell-enabled project wiring
+- *(commands)* add squashmigrations CLI
+
+### Documentation
+
+- *(commands)* document Rust management shell migration
+- *(commands)* document safe migration squashing
+- *(commands)* clarify squash cleanup failures
+- *(commands)* clarify inactive migration dependencies
+
+### Fixed
+
+- *(commands)* harden shell evaluator lifecycle
+- *(commands)* preserve shell evaluation output
+- release shell and scoped database resources
+- *(commands)* preserve shell bootstrap and interrupt output
+- *(commands)* retain bootstrap evaluator resources
+- *(commands)* close evaluator process trees
+- *(commands)* harden shell evaluation boundaries
+- *(commands)* harden shell bootstrap boundaries
+- *(commands)* make shell startup interruptible
+- *(commands)* await interrupted shell startup cleanup
+- *(commands)* cancel shell startup promptly
+- *(commands)* interrupt shell recovery startup
+- *(commands)* preserve evaluator diagnostics
+- *(commands)* preserve shell source prefixes
+- *(commands)* avoid duplicate boundary diagnostics
+- *(commands)* preserve shell bootstrap output and comments
+- *(commands)* preserve bootstrap output streams
+- *(commands)* preserve failed shell bootstrap output
+- *(commands)* bound shell evaluator startup and output handling
+- *(commands)* preserve shell evaluator boundary output
+- *(commands)* guard evaluator process during startup
+- *(commands)* preserve shell source and native gates
+- *(commands)* preserve shell boundary output
+- *(shell)* harden evaluator lifecycle
+- *(shell)* preserve test database scopes
+- *(commands)* preserve inner attributes after control whitespace
+- *(commands)* preserve inner attributes after Rust whitespace
+- *(commands)* gate shell-only helpers
+- *(commands)* isolate shell evaluators by worker
+- *(commands)* avoid unavailable shell prelude import
+- *(commands)* handle shell evaluator lifecycle edges
+- *(commands)* address shell review findings
+- *(commands)* refine squashmigrations validation
+- *(migrations)* harden squash range resolution
+- *(migrations)* validate squash dependency context
+- *(migrations)* harden squash generation
+- *(commands)* plan replacement migrations
+- *(migrations)* preserve replacement history semantics
+- *(migrations)* resolve nested replacement histories
+- *(migrations)* reconcile nested replacement histories
+- *(migrations)* preserve replacement ancestry
+- *(migrations)* retain partial replacement dependencies
+- *(migrations)* resume fake replacement cleanup
+- *(migrations)* expand fake replacement coverage
+- *(migrations)* complete squash history reconciliation
+- *(migrations)* handle squash review edge cases
+- *(migrations)* cover squash review edge cases
+- *(migrations)* preserve partial squash ordering
+- *(migrations)* order partial squash descendants
+- *(migrations)* retain partial replacement metadata
+- *(commands)* restrict migration ordering helper to tests
+- *(commands)* reconcile transitive replacement plans
+- *(commands)* honor managed migration settings
+- *(migrations)* address visibility review feedback
+- *(ci)* restore visibility and wasm coverage
+- *(commands)* reject keyless inspectdb objects
+
+### Maintenance
+
+- auto-fix fmt and clippy
+
+### Other
+
+- sync develop/0.4.0 into pgvector branch
+- integrate develop migration updates
+
+### Testing
+
+- *(commands)* cover shell feature diagnostic
+- *(commands)* retain shell evaluator failure output
+- *(commands)* minimize real process exit probe
+
 ## [0.4.0-alpha.3](https://github.com/kent8192/reinhardt-web/compare/reinhardt-commands@v0.4.0-alpha.2...reinhardt-commands@v0.4.0-alpha.3) - 2026-07-27
 
 ### Fixed

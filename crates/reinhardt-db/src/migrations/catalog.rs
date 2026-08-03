@@ -34,6 +34,20 @@ pub struct SquashRange {
 }
 
 impl SquashRange {
+	/// Create a migration range for direct squashing.
+	///
+	/// Ranges created this way do not include catalog-only dependency
+	/// normalization metadata. Use [`MigrationCatalog::squash_range`] when
+	/// resolving replacement migrations or `__first__` dependencies.
+	pub fn new(migrations: Vec<Migration>, external_dependencies: Vec<(String, String)>) -> Self {
+		Self {
+			migrations,
+			external_dependencies,
+			available_migrations: Vec::new(),
+			replacement_owners: HashMap::new(),
+		}
+	}
+
 	pub(crate) fn normalize_dependency(
 		&self,
 		app_label: &str,

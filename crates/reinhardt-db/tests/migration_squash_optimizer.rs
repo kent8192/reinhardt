@@ -61,13 +61,13 @@ fn migration(name: &str, operations: Vec<Operation>) -> Migration {
 }
 
 fn range(migrations: Vec<Migration>) -> SquashRange {
-	SquashRange {
+	SquashRange::new(
 		migrations,
-		external_dependencies: vec![
+		vec![
 			("auth".to_string(), "0001_initial".to_string()),
 			("audit".to_string(), "0002_events".to_string()),
 		],
-	}
+	)
 }
 
 #[test]

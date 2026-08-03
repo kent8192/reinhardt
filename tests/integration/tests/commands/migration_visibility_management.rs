@@ -210,7 +210,8 @@ async fn assert_collected_sql_matches_executor(
 	)
 	.await
 	.expect("representative migration should be collectable");
-	let collected = plan.render(dialect(&connection));
+	let sql_dialect = dialect(&connection);
+	let collected = plan.render(sql_dialect);
 	let executable = plan
 		.statements
 		.iter()
@@ -229,11 +230,18 @@ async fn assert_collected_sql_matches_executor(
 		})
 		.map(ToString::to_string)
 		.collect::<Vec<_>>();
-	let expected = vec![
-		expected_create_table.to_string(),
-		"ALTER TABLE visibility_items ADD COLUMN title TEXT".to_string(),
-		"DROP TABLE visibility_archive".to_string(),
-	];
+	let expected = match sql_dialect {
+		SqlDialect::Mysql => vec![
+			expected_create_table.to_string(),
+			"ALTER TABLE `visibility_items` ADD COLUMN `title` TEXT".to_string(),
+			"DROP TABLE `visibility_archive`".to_string(),
+		],
+		_ => vec![
+			expected_create_table.to_string(),
+			"ALTER TABLE visibility_items ADD COLUMN title TEXT".to_string(),
+			"DROP TABLE visibility_archive".to_string(),
+		],
+	};
 
 	assert_eq!(executable, expected);
 	assert_eq!(rendered, executable);

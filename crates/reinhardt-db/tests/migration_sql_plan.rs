@@ -214,7 +214,7 @@ async fn backward_plan_reverses_operation_order_and_each_statement_is_separate()
 	assert_eq!(
 		sql(&plan.statements),
 		vec![
-			"ALTER TABLE catalog_books RENAME TO books",
+			"ALTER TABLE catalog_books RENAME TO \"books\"",
 			"SELECT 2",
 			"SELECT 3",
 		]
@@ -628,7 +628,7 @@ async fn sqlite_backward_recreation_uses_prior_add_and_rename_state() {
 	assert_eq!(planned_sql[0], "ALTER TABLE books ADD COLUMN obsolete TEXT");
 	assert_eq!(
 		planned_sql[1],
-		"ALTER TABLE books RENAME COLUMN new_title TO old_title"
+		"ALTER TABLE books RENAME COLUMN \"new_title\" TO \"old_title\""
 	);
 	assert!(planned_sql[2].contains("old_title TEXT"));
 	assert!(planned_sql[2].contains("obsolete TEXT"));

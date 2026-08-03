@@ -710,7 +710,13 @@ impl BaseCommand for MigrateCommand {
 						(!applied.iter().any(|record| {
 							record.app == migration.app_label && record.name == migration.name
 						}))
-						.then(|| direct_replacement_history_records(migration, &applied))
+						.then(|| {
+							direct_replacement_history_records(
+								&migrations_to_apply,
+								migration,
+								&applied,
+							)
+						})
 						.flatten()
 						.map(|records| (migration, records))
 					})
@@ -1119,6 +1125,16 @@ fn replacement_history_is_fully_applied(
 				);
 			}
 		}
+		for migration in migrations {
+			if !migration.replaces.is_empty()
+				&& migration
+					.replaces
+					.iter()
+					.all(|(app, name)| covered.contains(&(app.as_str(), name.as_str())))
+			{
+				covered.insert((migration.app_label.as_str(), migration.name.as_str()));
+			}
+		}
 		if covered.len() == covered_before {
 			break;
 		}
@@ -1172,10 +1188,16 @@ fn replacement_history_has_applied_records(
 
 #[cfg(feature = "migrations")]
 fn direct_replacement_history_records<'a>(
+	migrations: &[reinhardt_db::migrations::Migration],
 	migration: &reinhardt_db::migrations::Migration,
 	applied: &'a [reinhardt_db::migrations::recorder::MigrationRecord],
 ) -> Option<Vec<&'a reinhardt_db::migrations::recorder::MigrationRecord>> {
-	if migration.replaces.is_empty() {
+	if !replacement_history_is_fully_applied(
+		migrations,
+		&migration.app_label,
+		&migration.name,
+		applied,
+	) {
 		return None;
 	}
 	let records: Vec<_> = applied
@@ -1187,7 +1209,7 @@ fn direct_replacement_history_records<'a>(
 				.any(|(app, name)| record.app == *app && record.name == *name)
 		})
 		.collect();
-	(migration.replaces.len() == records.len()).then_some(records)
+	(!records.is_empty()).then_some(records)
 }
 
 #[cfg(feature = "migrations")]
@@ -5158,6 +5180,75 @@ mod tests {
 			"app",
 			&terminal,
 			&partial
+		));
+	}
+
+	#[cfg(feature = "migrations")]
+	#[test]
+	fn plan_reconciles_a_fully_covered_replacement_from_one_direct_squash_record() {
+		use chrono::Utc;
+		use reinhardt_db::migrations::{Migration, recorder::MigrationRecord};
+
+		let first = Migration::new("0001_initial", "app");
+		let second = Migration::new("0002_add_field", "app");
+		let mut older_squash = Migration::new("0001_squashed_0002", "app");
+		older_squash.replaces = vec![
+			("app".to_string(), "0001_initial".to_string()),
+			("app".to_string(), "0002_add_field".to_string()),
+		];
+		let mut replacement = Migration::new("0001_squashed_0002_v2", "app");
+		replacement.replaces = vec![
+			("app".to_string(), "0001_initial".to_string()),
+			("app".to_string(), "0002_add_field".to_string()),
+			("app".to_string(), "0001_squashed_0002".to_string()),
+		];
+		let migrations = vec![first, second, older_squash, replacement.clone()];
+		let applied = vec![MigrationRecord {
+			app: "app".to_string(),
+			name: "0001_squashed_0002".to_string(),
+			applied: Utc::now(),
+		}];
+
+		let records = direct_replacement_history_records(&migrations, &replacement, &applied)
+			.expect("fully covered history should provide the direct squash reconciliation anchor");
+		assert_eq!(records.len(), 1);
+		assert_eq!(records[0].name, "0001_squashed_0002");
+	}
+
+	#[cfg(feature = "migrations")]
+	#[test]
+	fn nested_replacement_is_fully_applied_when_its_replaced_squash_is_covered() {
+		use chrono::Utc;
+		use reinhardt_db::migrations::{Migration, recorder::MigrationRecord};
+
+		let first = Migration::new("0001_initial", "app");
+		let second = Migration::new("0002_add_field", "app");
+		let mut older_squash = Migration::new("0001_squashed_0002", "app");
+		older_squash.replaces = vec![
+			("app".to_string(), "0001_initial".to_string()),
+			("app".to_string(), "0002_add_field".to_string()),
+		];
+		let mut newer_squash = Migration::new("0001_squashed_0002_v2", "app");
+		newer_squash.replaces = vec![("app".to_string(), "0001_squashed_0002".to_string())];
+		let migrations = vec![first, second, older_squash, newer_squash];
+		let applied = vec![
+			MigrationRecord {
+				app: "app".to_string(),
+				name: "0001_initial".to_string(),
+				applied: Utc::now(),
+			},
+			MigrationRecord {
+				app: "app".to_string(),
+				name: "0002_add_field".to_string(),
+				applied: Utc::now(),
+			},
+		];
+
+		assert!(replacement_history_is_fully_applied(
+			&migrations,
+			"app",
+			"0001_squashed_0002_v2",
+			&applied,
 		));
 	}
 

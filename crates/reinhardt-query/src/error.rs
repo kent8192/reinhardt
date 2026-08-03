@@ -964,12 +964,14 @@ fn validate_column_def(column: &ColumnDef, backend: &'static str) -> Result<(), 
 
 fn validate_column_type(
 	column_type: &ColumnType,
-	_backend: &'static str,
+	backend: &'static str,
 ) -> Result<(), QueryBuildError> {
 	match column_type {
 		#[cfg(feature = "pgvector")]
-		ColumnType::Vector(_) => Err(unsupported("pgvector column types", _backend)),
-		ColumnType::Array(element_type) => validate_column_type(element_type, _backend),
+		ColumnType::Vector(_) if backend != "PostgreSQL" => {
+			Err(unsupported("pgvector column types", backend))
+		}
+		ColumnType::Array(element_type) => validate_column_type(element_type, backend),
 		_ => Ok(()),
 	}
 }

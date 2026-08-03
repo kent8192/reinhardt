@@ -1622,7 +1622,32 @@ mod tests {
 				.replace(",)", ")")
 				.replace(",>", ">")
 		};
-		assert_eq!(normalize(&actual), normalize(&expected));
+		let actual = normalize(&actual);
+		let expected = normalize(&expected);
+
+		#[cfg(not(feature = "hmr"))]
+		assert_eq!(actual, expected);
+
+		#[cfg(feature = "hmr")]
+		{
+			let closure_prefix =
+				"{#[allow(unused_variables)]||->::reinhardt_pages::component::Page{";
+			let instrumented_prefix = [closure_prefix, "{let__view=("].concat();
+			let instrumented_suffix = ").with_dev_slot(0u32);__view.with_dev_template_metadata(";
+			let actual_body = actual
+				.strip_prefix(&instrumented_prefix)
+				.expect("HMR output should wrap the generated page expression");
+			let (actual_body, metadata) = actual_body
+				.split_once(instrumented_suffix)
+				.expect("HMR output should attach slot and template metadata");
+			assert!(metadata.ends_with(")}}}"));
+
+			let expected_body = expected
+				.strip_prefix(closure_prefix)
+				.and_then(|body| body.strip_suffix("}}"))
+				.expect("expected output should contain the generated closure body");
+			assert_eq!(actual_body, expected_body);
+		}
 	}
 
 	fn parse_and_generate(input: TokenStream) -> TokenStream {

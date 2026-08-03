@@ -16,7 +16,7 @@ help: the following other types implement trait `DateProjectionField`
 note: required by a bound in `Manager::<M>::dates`
   --> src/orm/manager.rs
    |
-   |     pub async fn dates<F>(
+   |     pub async fn dates<F, Origin>(
    |                  ----- required by a bound in this associated function
 ...
    |         F: super::query::DateProjectionField,
@@ -44,7 +44,7 @@ help: the following other types implement trait `DateProjectionField`
 note: required by a bound in `Manager::<M>::dates`
   --> src/orm/manager.rs
    |
-   |     pub async fn dates<F>(
+   |     pub async fn dates<F, Origin>(
    |                  ----- required by a bound in this associated function
 ...
    |         F: super::query::DateProjectionField,
@@ -66,7 +66,7 @@ help: the following other types implement trait `DateProjectionField`
 note: required by a bound in `Manager::<M>::dates`
   --> src/orm/manager.rs
    |
-   |     pub async fn dates<F>(
+   |     pub async fn dates<F, Origin>(
    |                  ----- required by a bound in this associated function
 ...
    |         F: super::query::DateProjectionField,

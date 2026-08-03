@@ -1954,6 +1954,7 @@ fn generate_server_handler(
 		proc_macro2::Span::call_site(),
 	);
 	let query_argument_tuple_type = quote! { (#(#regular_param_types,)*) };
+	let query_key_argument_tuple_type = quote! { (#(#query_arg_generics,)*) };
 	let query_helper_tokens = quote! {
 		/// Returns the typed query family for this server function.
 		// The generated signature mirrors endpoints that deliberately allow private
@@ -1984,9 +1985,9 @@ fn generate_server_handler(
 		>
 			#key_where_clause
 		{
-			let __query_args = (#(#pages_crate::server_fn::ServerFnQueryArg::into_query_arg(#regular_param_idents.clone()),)*);
+			let __query_args = (#(#regular_param_idents.clone(),)*);
 			#pages_crate::reactive::QueryFamily::<
-				#query_argument_tuple_type,
+				#query_key_argument_tuple_type,
 				<#return_type as #pages_crate::server_fn::ServerFnQueryResult>::Response,
 				<#return_type as #pages_crate::server_fn::ServerFnQueryResult>::Error,
 			>::new(#query_family_id)
@@ -2004,9 +2005,9 @@ fn generate_server_handler(
 		>
 		#key_where_clause
 		{
-			let __query_args = (#(#pages_crate::server_fn::ServerFnQueryArg::into_query_arg(#regular_param_idents.clone()),)*);
+			let __query_args = (#(#regular_param_idents.clone(),)*);
 			let __query_descriptor = #pages_crate::reactive::QueryFamily::<
-				#query_argument_tuple_type,
+				#query_key_argument_tuple_type,
 				<#return_type as #pages_crate::server_fn::ServerFnQueryResult>::Response,
 				<#return_type as #pages_crate::server_fn::ServerFnQueryResult>::Error,
 			>::new(#query_family_id)

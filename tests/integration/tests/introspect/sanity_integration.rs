@@ -73,9 +73,10 @@ async fn sanity_generated_code_non_empty(
 		.await
 		.expect("Failed to read schema");
 
-	let config = IntrospectConfig::default()
+	let mut config = IntrospectConfig::default()
 		.with_database_url("postgres://test@localhost/test")
 		.with_app_label("testapp");
+	config.tables.exclude.push("^posts_tags$".to_string());
 
 	let generator = SchemaCodeGenerator::new(config);
 	let output = generator

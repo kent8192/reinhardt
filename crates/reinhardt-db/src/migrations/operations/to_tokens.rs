@@ -273,11 +273,7 @@ impl ToTokens for PartitionOptions {
 		let column = &self.column;
 		let partitions = &self.partitions;
 		tokens.extend(quote! {
-			PartitionOptions {
-				partition_type: #partition_type,
-				column: #column.to_string(),
-				partitions: vec![#(#partitions),*],
-			}
+			PartitionOptions::new(#partition_type, #column, vec![#(#partitions),*])
 		});
 	}
 }

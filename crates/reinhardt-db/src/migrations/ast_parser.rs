@@ -3213,23 +3213,79 @@ fn parse_string_map_field_strict(
 	let Expr::Block(block) = expression else {
 		return Err(strict_payload_error(context, field_name));
 	};
-	let mut options = std::collections::HashMap::new();
-	for statement in &block.block.stmts {
-		let syn::Stmt::Expr(Expr::MethodCall(call), _) = statement else {
-			continue;
-		};
-		if call.method != "insert" || call.args.len() != 2 {
-			continue;
-		}
-		let Some(key) = extract_string_expr(&call.args[0]) else {
-			return Err(strict_payload_error(context, field_name));
-		};
-		let Some(value) = extract_string_expr(&call.args[1]) else {
-			return Err(strict_payload_error(context, field_name));
-		};
-		options.insert(key, value);
+	if let [syn::Stmt::Expr(expression, None)] = block.block.stmts.as_slice()
+		&& is_empty_string_map_constructor(expression)
+	{
+		return Ok(std::collections::HashMap::new());
 	}
-	Ok(options)
+
+	let mut options = std::collections::HashMap::new();
+	let mut map_name = None;
+	for (index, statement) in block.block.stmts.iter().enumerate() {
+		match statement {
+			syn::Stmt::Local(local) if map_name.is_none() => {
+				let syn::Pat::Ident(binding) = &local.pat else {
+					return Err(strict_payload_error(context, field_name));
+				};
+				let Some(initializer) = &local.init else {
+					return Err(strict_payload_error(context, field_name));
+				};
+				if binding.mutability.is_none()
+					|| !is_empty_string_map_constructor(&initializer.expr)
+				{
+					return Err(strict_payload_error(context, field_name));
+				}
+				map_name = Some(binding.ident.to_string());
+			}
+			syn::Stmt::Expr(Expr::MethodCall(call), Some(_)) => {
+				let Some(map_name) = map_name.as_deref() else {
+					return Err(strict_payload_error(context, field_name));
+				};
+				let Expr::Path(receiver) = &*call.receiver else {
+					return Err(strict_payload_error(context, field_name));
+				};
+				if !receiver.path.is_ident(map_name)
+					|| call.method != "insert"
+					|| call.args.len() != 2
+				{
+					return Err(strict_payload_error(context, field_name));
+				}
+				let Some(key) = extract_string_expr(&call.args[0]) else {
+					return Err(strict_payload_error(context, field_name));
+				};
+				let Some(value) = extract_string_expr(&call.args[1]) else {
+					return Err(strict_payload_error(context, field_name));
+				};
+				options.insert(key, value);
+			}
+			syn::Stmt::Expr(Expr::Path(path), None)
+				if index + 1 == block.block.stmts.len()
+					&& map_name
+						.as_deref()
+						.is_some_and(|map_name| path.path.is_ident(map_name)) =>
+			{
+				return Ok(options);
+			}
+			_ => return Err(strict_payload_error(context, field_name)),
+		}
+	}
+
+	Err(strict_payload_error(context, field_name))
+}
+
+fn is_empty_string_map_constructor(expr: &Expr) -> bool {
+	let Expr::Call(call) = expr else {
+		return false;
+	};
+	let Expr::Path(constructor) = &*call.func else {
+		return false;
+	};
+	if !call.args.is_empty() {
+		return false;
+	}
+	let mut segments = constructor.path.segments.iter().rev();
+	matches!(segments.next(), Some(segment) if segment.ident == "new")
+		&& matches!(segments.next(), Some(segment) if segment.ident == "HashMap")
 }
 
 fn path_ends_with(path: &syn::Path, name: &str) -> bool {
@@ -4938,6 +4994,75 @@ mod tests {
 
 		// Assert
 		assert_eq!(error.to_string(), expected);
+	}
+
+	#[test]
+	fn strict_metadata_rejects_unparsed_model_option_map_statements() {
+		// Arrange
+		let ast = syn::parse_file(
+			r#"pub fn migration() -> Migration {
+				Migration {
+					operations: vec![Operation::AlterModelOptions {
+						table: "posts".to_string(),
+						options: {
+							std::collections::HashMap::from([(
+								"ordering".to_string(),
+								"title".to_string(),
+							)])
+						},
+					}],
+					dependencies: vec![],
+					replaces: vec![],
+				}
+			}"#,
+		)
+		.unwrap();
+
+		// Act
+		let error = extract_migration_metadata_strict(&ast, "blog", "0001_initial").unwrap_err();
+
+		// Assert
+		assert_eq!(
+			error.to_string(),
+			"Invalid migration: operations[0].AlterModelOptions.options is unsupported or malformed"
+		);
+	}
+
+	#[test]
+	fn strict_metadata_preserves_model_options_from_map_insertions() {
+		// Arrange
+		let ast = syn::parse_file(
+			r#"pub fn migration() -> Migration {
+				Migration {
+					operations: vec![Operation::AlterModelOptions {
+						table: "posts".to_string(),
+						options: {
+							let mut map = std::collections::HashMap::new();
+							map.insert("ordering".to_string(), "title".to_string());
+							map
+						},
+					}],
+					dependencies: vec![],
+					replaces: vec![],
+				}
+			}"#,
+		)
+		.unwrap();
+
+		// Act
+		let migration = extract_migration_metadata_strict(&ast, "blog", "0001_initial").unwrap();
+
+		// Assert
+		assert_eq!(
+			migration.operations,
+			vec![Operation::AlterModelOptions {
+				table: "posts".to_string(),
+				options: std::collections::HashMap::from([(
+					"ordering".to_string(),
+					"title".to_string(),
+				)]),
+			}]
+		);
 	}
 
 	#[test]

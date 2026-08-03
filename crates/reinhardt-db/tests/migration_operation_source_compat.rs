@@ -99,8 +99,8 @@ fn rendered_data_bearing_source_compiles_with_its_own_imports() {
 	use reinhardt_db::migrations::{
 		AlterTableOptions, ColumnDefinition, Constraint, DeferrableOption, FieldType,
 		FilesystemRepository, ForeignKeyAction, GeneratedColumnDefinition, GeneratedStorage,
-		IndexType, Migration, MigrationRenderOptions, MySqlAlgorithm, MySqlLock, Operation,
-		SchemaExpr,
+		IndexType, InterleaveSpec, Migration, MigrationRenderOptions, MySqlAlgorithm, MySqlLock,
+		Operation, PartitionDef, PartitionOptions, PartitionType, PartitionValues, SchemaExpr,
 	};
 	use std::{fs, process::Command};
 	use tempfile::TempDir;
@@ -129,8 +129,18 @@ fn rendered_data_bearing_source_compiles_with_its_own_imports() {
 				deferrable: Some(DeferrableOption::Deferred),
 			}],
 			without_rowid: None,
-			interleave_in_parent: None,
-			partition: None,
+			interleave_in_parent: Some(InterleaveSpec {
+				parent_table: "accounts_parent".to_string(),
+				parent_columns: vec!["id".to_string()],
+			}),
+			partition: Some(PartitionOptions::new(
+				PartitionType::Range,
+				"id",
+				vec![PartitionDef::new(
+					"before_2026",
+					PartitionValues::LessThan("2026-01-01".to_string()),
+				)],
+			)),
 		},
 		Operation::CreateIndex {
 			table: "accounts".to_string(),

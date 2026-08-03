@@ -614,6 +614,36 @@ async fn squash_range_allows_external_paths_ending_before_an_explicit_start(
 
 #[rstest]
 #[tokio::test]
+async fn squash_range_allows_a_cross_app_path_ending_before_the_explicit_start() {
+	// Arrange
+	let catalog = catalog(vec![
+		migration("blog", "0001_initial", &[]),
+		migration("audit", "0001_initial", &[("blog", "0001_initial")]),
+		migration("blog", "0002_add_posts", &[("audit", "0001_initial")]),
+		migration("blog", "0003_publish", &[("blog", "0002_add_posts")]),
+	])
+	.await;
+
+	// Act
+	let range = catalog
+		.squash_range("blog", Some("0002_add_posts"), "0003_publish")
+		.unwrap();
+
+	// Assert
+	let migration_names: Vec<&str> = range
+		.migrations
+		.iter()
+		.map(|migration| migration.name.as_str())
+		.collect();
+	assert_eq!(migration_names, vec!["0002_add_posts", "0003_publish"]);
+	assert_eq!(
+		range.external_dependencies,
+		vec![("audit".to_string(), "0001_initial".to_string())]
+	);
+}
+
+#[rstest]
+#[tokio::test]
 async fn squash_range_rejects_an_explicit_hidden_branch_not_before_start() {
 	// Arrange
 	let catalog = catalog(vec![
@@ -805,6 +835,37 @@ async fn squash_range_rejects_a_range_already_covered_by_an_outside_replacement(
 		error.to_string(),
 		"Invalid migration: Cannot squash range: blog.0001_squashed_0002 already replaces a selected migration"
 	);
+}
+
+#[rstest]
+#[tokio::test]
+async fn squash_range_allows_extending_a_squash_with_retained_original_files() {
+	// Arrange
+	let mut existing_squash = migration("blog", "0001_squashed_0002", &[]);
+	existing_squash.replaces = vec![
+		("blog".to_string(), "0001_initial".to_string()),
+		("blog".to_string(), "0002_add_title".to_string()),
+	];
+	let catalog = catalog(vec![
+		migration("blog", "0001_initial", &[]),
+		migration("blog", "0002_add_title", &[("blog", "0001_initial")]),
+		existing_squash,
+		migration("blog", "0003_publish", &[("blog", "0001_squashed_0002")]),
+	])
+	.await;
+
+	// Act
+	let range = catalog
+		.squash_range("blog", Some("0001_squashed_0002"), "0003_publish")
+		.unwrap();
+
+	// Assert
+	let migration_names: Vec<&str> = range
+		.migrations
+		.iter()
+		.map(|migration| migration.name.as_str())
+		.collect();
+	assert_eq!(migration_names, vec!["0001_squashed_0002", "0003_publish"]);
 }
 
 #[rstest]

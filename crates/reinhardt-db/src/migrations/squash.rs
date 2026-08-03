@@ -133,7 +133,8 @@ impl MigrationSquasher {
 
 	/// Squash a validated migration range using the active dependency context.
 	///
-	/// Swappable dependencies that resolve to selected migrations are omitted,
+	/// Swappable dependencies that resolve to selected migrations and optional
+	/// dependencies that explicitly target selected migrations are omitted,
 	/// preventing the replacement from depending on itself after graph rewrite.
 	pub fn squash_range_with_context(
 		&self,
@@ -228,6 +229,12 @@ impl MigrationSquasher {
 				}
 			}
 			for dependency in &migration.optional_dependencies {
+				if selected.contains(&(
+					dependency.app_label.as_str(),
+					dependency.migration_name.as_str(),
+				)) {
+					continue;
+				}
 				if dependency_resolver
 					.resolve(&MigrationDependency::Optional(dependency.clone()))
 					.is_none()
@@ -651,6 +658,13 @@ impl MigrationSquasher {
 							crate::migrations::Constraint::ForeignKey { referenced_table, .. }
 								| crate::migrations::Constraint::OneToOne { referenced_table, .. }
 								if referenced_table == table
+						) || matches!(
+							constraint,
+							crate::migrations::Constraint::ManyToMany {
+								target_table,
+								through_table,
+								..
+							} if target_table == table || through_table == table
 						)
 					})
 			}
@@ -992,6 +1006,46 @@ mod tests {
 	}
 
 	#[test]
+	fn optimize_operations_preserves_many_to_many_references_to_transient_tables() {
+		for (target_table, through_table) in [("temp", "account_roles"), ("roles", "temp")] {
+			// Arrange
+			let operations = vec![
+				Operation::CreateTable {
+					name: "temp".to_string(),
+					columns: vec![ColumnDefinition::new("id", FieldType::Integer)],
+					constraints: Vec::new(),
+					without_rowid: None,
+					interleave_in_parent: None,
+					partition: None,
+				},
+				Operation::CreateTable {
+					name: "accounts".to_string(),
+					columns: vec![ColumnDefinition::new("id", FieldType::Integer)],
+					constraints: vec![crate::migrations::Constraint::ManyToMany {
+						name: "accounts_roles".to_string(),
+						through_table: through_table.to_string(),
+						source_column: "account_id".to_string(),
+						target_column: "role_id".to_string(),
+						target_table: target_table.to_string(),
+					}],
+					without_rowid: None,
+					interleave_in_parent: None,
+					partition: None,
+				},
+				Operation::DropTable {
+					name: "temp".to_string(),
+				},
+			];
+
+			// Act
+			let optimized = MigrationSquasher::new().optimize_operations(operations.clone());
+
+			// Assert
+			assert_eq!(optimized, operations, "{target_table}/{through_table}");
+		}
+	}
+
+	#[test]
 	fn optimize_operations_preserves_create_table_foreign_key_to_transient_column() {
 		// Arrange
 		let migrations = vec![
@@ -1033,13 +1087,13 @@ mod tests {
 	}
 
 	#[test]
-	fn test_squash_range_excludes_optional_dependencies_within_range() {
+	fn squash_range_excludes_inactive_optional_dependency_targeting_selected_migration() {
 		// Arrange
 		let mut first = Migration::new("0001_initial", "myapp");
 		first.optional_dependencies.push(OptionalDependency::new(
 			"myapp",
 			"0002_add_field",
-			DependencyCondition::AppInstalled("myapp".to_string()),
+			DependencyCondition::FeatureEnabled("audit".to_string()),
 		));
 		let second = Migration::new("0002_add_field", "myapp");
 		let range = SquashRange {
@@ -1051,7 +1105,43 @@ mod tests {
 
 		// Act
 		let result = MigrationSquasher::new()
-			.squash_range(&range, "0001_squashed_0002", false)
+			.squash_range_with_context(
+				&range,
+				"0001_squashed_0002",
+				false,
+				&DependencyResolutionContext::default(),
+			)
+			.unwrap();
+
+		// Assert
+		assert!(result.migration.optional_dependencies.is_empty());
+	}
+
+	#[test]
+	fn squash_range_excludes_active_optional_dependency_targeting_selected_migration() {
+		// Arrange
+		let mut first = Migration::new("0001_initial", "myapp");
+		first.optional_dependencies.push(OptionalDependency::new(
+			"myapp",
+			"0002_add_field",
+			DependencyCondition::FeatureEnabled("audit".to_string()),
+		));
+		let second = Migration::new("0002_add_field", "myapp");
+		let range = SquashRange {
+			migrations: vec![first, second],
+			external_dependencies: vec![],
+			available_migrations: Vec::new(),
+			replacement_owners: std::collections::HashMap::new(),
+		};
+
+		// Act
+		let result = MigrationSquasher::new()
+			.squash_range_with_context(
+				&range,
+				"0001_squashed_0002",
+				false,
+				&DependencyResolutionContext::new().with_feature("audit"),
+			)
 			.unwrap();
 
 		// Assert

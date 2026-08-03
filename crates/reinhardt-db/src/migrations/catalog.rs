@@ -448,7 +448,14 @@ impl MigrationCatalog {
 
 		for selected_key in &selected {
 			for child in self.graph.get_dependents(selected_key) {
-				if !selected.contains(child) && !self.is_descendant_of(child, &end_key) {
+				let superseded_by_selected_replacement = self
+					.replacement_owners
+					.get(child)
+					.is_some_and(|owner| owner == selected_key);
+				if !selected.contains(child)
+					&& !superseded_by_selected_replacement
+					&& !self.is_descendant_of(child, &end_key)
+				{
 					return Err(MigrationError::InvalidMigration(format!(
 						"Cannot squash range: {} branches from selected migration {}",
 						child, selected_key
@@ -629,7 +636,6 @@ impl MigrationCatalog {
 			.get_dependencies(start)
 			.unwrap_or_default()
 			.iter()
-			.filter(|dependency| dependency.app_label == app)
 			.cloned()
 			.collect::<Vec<_>>();
 		stack.sort_by(Self::compare_keys);

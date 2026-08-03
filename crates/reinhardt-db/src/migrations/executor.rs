@@ -11,7 +11,7 @@ use super::{
 };
 use crate::backends::{connection::DatabaseConnection, types::DatabaseType};
 use indexmap::IndexMap;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 #[cfg(feature = "sqlite")]
 use super::introspection::SQLiteIntrospector;
@@ -25,6 +25,83 @@ fn validate_and_advance_migration_state(
 		operation.state_forwards(&migration.app_label, state);
 	}
 	Ok(())
+}
+
+fn replacement_history_is_fully_covered(
+	migration: &Migration,
+	migrations: &[Migration],
+	applied_records: &[(String, String)],
+) -> bool {
+	if migration.replaces.is_empty() {
+		return false;
+	}
+	let mut covered: HashSet<(&str, &str)> = applied_records
+		.iter()
+		.map(|(app, name)| (app.as_str(), name.as_str()))
+		.collect();
+	loop {
+		let covered_before = covered.len();
+		for known in migrations {
+			if covered.contains(&(known.app_label.as_str(), known.name.as_str())) {
+				covered.extend(
+					known
+						.replaces
+						.iter()
+						.map(|(app, name)| (app.as_str(), name.as_str())),
+				);
+			}
+		}
+		for known in migrations {
+			if !known.replaces.is_empty()
+				&& known
+					.replaces
+					.iter()
+					.all(|(app, name)| covered.contains(&(app.as_str(), name.as_str())))
+			{
+				covered.insert((known.app_label.as_str(), known.name.as_str()));
+			}
+		}
+		if covered.len() == covered_before {
+			break;
+		}
+	}
+	migration
+		.replaces
+		.iter()
+		.all(|(app, name)| covered.contains(&(app.as_str(), name.as_str())))
+}
+
+#[cfg(test)]
+mod replacement_history_tests {
+	use super::*;
+
+	#[test]
+	fn nested_replacement_is_covered_by_its_fully_applied_ancestor_history() {
+		let original_one = Migration::new("0001_initial", "app");
+		let original_two = Migration::new("0002_add_field", "app");
+		let mut first_squash = Migration::new("0001_squashed_0002", "app");
+		first_squash.replaces = vec![
+			("app".to_string(), "0001_initial".to_string()),
+			("app".to_string(), "0002_add_field".to_string()),
+		];
+		let mut second_squash = Migration::new("0001_squashed_0002_v2", "app");
+		second_squash.replaces = vec![("app".to_string(), "0001_squashed_0002".to_string())];
+		let applied_records = vec![
+			("app".to_string(), "0001_initial".to_string()),
+			("app".to_string(), "0002_add_field".to_string()),
+		];
+
+		assert!(replacement_history_is_fully_covered(
+			&second_squash,
+			&[
+				original_one,
+				original_two,
+				first_squash,
+				second_squash.clone()
+			],
+			&applied_records,
+		));
+	}
 }
 
 fn migration_sql_dialect(connection: &DatabaseConnection) -> SqlDialect {
@@ -274,11 +351,80 @@ impl DatabaseMigrationExecutor {
 	) -> Result<ExecutionResult> {
 		let mut applied = Vec::new();
 		let mut validation_state = super::ProjectState::new();
+		let applied_records = self.recorder.get_applied_migrations().await?;
+		let applied_record_keys: Vec<_> = applied_records
+			.iter()
+			.map(|record| (record.app.clone(), record.name.clone()))
+			.collect();
+		let applied_record_set: HashSet<_> = applied_record_keys
+			.iter()
+			.map(|(app, name)| (app.as_str(), name.as_str()))
+			.collect();
+
+		// A partly applied original history must continue on the original chain.
+		// Once every original is recorded (or no original is recorded), select the
+		// replacement so the normal reconciliation path can reduce it to one row.
+		let partial_replacements: HashSet<_> = migrations
+			.iter()
+			.filter(|migration| {
+				!migration.replaces.is_empty()
+					&& !replacement_history_is_fully_covered(
+						migration,
+						migrations,
+						&applied_record_keys,
+					) && migration
+					.replaces
+					.iter()
+					.any(|(app, name)| applied_record_set.contains(&(app.as_str(), name.as_str())))
+			})
+			.map(|migration| (migration.app_label.as_str(), migration.name.as_str()))
+			.collect();
+		let replaced_by_selected_replacements: HashSet<_> = migrations
+			.iter()
+			.filter(|migration| {
+				!partial_replacements
+					.contains(&(migration.app_label.as_str(), migration.name.as_str()))
+			})
+			.flat_map(|migration| {
+				migration
+					.replaces
+					.iter()
+					.map(|(app, name)| (app.as_str(), name.as_str()))
+			})
+			.collect();
+		let selected_migrations: Vec<_> = migrations
+			.iter()
+			.filter(|migration| {
+				!partial_replacements
+					.contains(&(migration.app_label.as_str(), migration.name.as_str()))
+					&& !replaced_by_selected_replacements
+						.contains(&(migration.app_label.as_str(), migration.name.as_str()))
+			})
+			.collect();
+		let partial_replacement_dependencies: HashMap<_, Vec<_>> = migrations
+			.iter()
+			.filter(|migration| {
+				partial_replacements
+					.contains(&(migration.app_label.as_str(), migration.name.as_str()))
+			})
+			.map(|migration| {
+				(
+					(migration.app_label.clone(), migration.name.clone()),
+					migration
+						.replaces
+						.iter()
+						.map(|(app, name)| {
+							super::graph::MigrationKey::new(app.clone(), name.clone())
+						})
+						.collect(),
+				)
+			})
+			.collect();
 
 		// Build MigrationGraph for dependency resolution
 		let mut graph = super::graph::MigrationGraph::new();
 
-		for migration in migrations {
+		for migration in &selected_migrations {
 			let key = super::graph::MigrationKey::new(
 				migration.app_label.clone(),
 				migration.name.clone(),
@@ -286,33 +432,112 @@ impl DatabaseMigrationExecutor {
 			let deps: Vec<super::graph::MigrationKey> = migration
 				.dependencies
 				.iter()
-				.map(|(app, name)| super::graph::MigrationKey::new(app.clone(), name.clone()))
+				.flat_map(|(app, name)| {
+					partial_replacement_dependencies
+						.get(&(app.clone(), name.clone()))
+						.cloned()
+						.unwrap_or_else(|| {
+							vec![super::graph::MigrationKey::new(app.clone(), name.clone())]
+						})
+				})
 				.collect();
 
-			graph.add_migration(key, deps);
+			let replaces = migration
+				.replaces
+				.iter()
+				.map(|(app, name)| super::graph::MigrationKey::new(app.clone(), name.clone()))
+				.collect();
+			graph.add_migration_with_replaces(key, deps, replaces);
 		}
 
-		// Perform topological sort (automatically detects circular dependencies)
-		let sorted_keys = graph.topological_sort()?;
+		// Resolve replacements before sorting so a squashed migration is selected
+		// instead of reapplying every migration it supersedes.
+		let sorted_keys = graph.resolve_execution_order_with_replaces()?;
 
 		// Apply migrations in dependency-resolved order
 		for key in sorted_keys {
 			// Find the migration corresponding to this key
-			let migration = migrations
+			let migration = selected_migrations
 				.iter()
 				.find(|m| m.app_label == key.app_label && m.name == key.name)
+				.copied()
 				.ok_or_else(|| {
 					MigrationError::DependencyError(format!("Migration not found: {}", key.id()))
 				})?;
 			validate_and_advance_migration_state(migration, &mut validation_state)?;
 
-			// Check if already applied
+			// A previous replacement reconciliation can have recorded the replacement
+			// before removing the records it supersedes. Resume that cleanup here so a
+			// retry cannot leave both histories applied indefinitely.
 			if self
 				.recorder
 				.is_applied(&migration.app_label, &migration.name)
 				.await?
 			{
+				if !migration.replaces.is_empty() {
+					for (app_label, name) in &migration.replaces {
+						if self.recorder.is_applied(app_label, name).await? {
+							self.recorder.unapply(app_label, name).await?;
+						}
+					}
+				}
 				continue;
+			}
+			if !migration.replaces.is_empty() {
+				let applied_records = self.recorder.get_applied_migrations().await?;
+				let applied_records_set: HashSet<_> = applied_records
+					.iter()
+					.map(|record| (record.app.as_str(), record.name.as_str()))
+					.collect();
+				let replaced: HashSet<_> = migration
+					.replaces
+					.iter()
+					.map(|(app, name)| (app.as_str(), name.as_str()))
+					.collect();
+				if replacement_history_is_fully_covered(
+					migration,
+					migrations,
+					&applied_records
+						.iter()
+						.map(|record| (record.app.clone(), record.name.clone()))
+						.collect::<Vec<_>>(),
+				) {
+					let historical_record = applied_records
+						.iter()
+						.find(|record| {
+							replaced.contains(&(record.app.as_str(), record.name.as_str()))
+						})
+						.ok_or_else(|| {
+							MigrationError::InvalidMigration(format!(
+								"cannot apply replacement {} because a competing replacement already covers its history",
+								migration.id()
+							))
+						})?;
+					self.recorder
+						.rename_applied(
+							&historical_record.app,
+							&historical_record.name,
+							&migration.app_label,
+							&migration.name,
+						)
+						.await?;
+					for (app_label, name) in &migration.replaces {
+						if applied_records_set.contains(&(app_label.as_str(), name.as_str()))
+							&& (app_label != &historical_record.app
+								|| name != &historical_record.name)
+						{
+							self.recorder.unapply(app_label, name).await?;
+						}
+					}
+					applied.push(migration.id());
+					continue;
+				}
+				if !replaced.is_disjoint(&applied_records_set) {
+					return Err(MigrationError::InvalidMigration(format!(
+						"cannot apply replacement {} because only some replaced migrations are recorded",
+						migration.id()
+					)));
+				}
 			}
 
 			// Apply migration operations
@@ -4062,6 +4287,135 @@ mod rollback_orchestration_tests {
 			vec![m3.id(), m2.id(), m1.id()],
 			"rollback_migrations must iterate input in reverse"
 		);
+	}
+
+	#[rstest]
+	#[tokio::test]
+	async fn replacement_history_is_recorded_as_a_single_rollback_unit() {
+		// Arrange
+		let initial = make_create_table_migration("0001_initial", "rolltest_replaced");
+		let mut add_column = Migration::new("0002_add_name", "rolltest");
+		add_column.operations.push(Operation::AddColumn {
+			table: "rolltest_replaced".to_string(),
+			column: ColumnDefinition::new("name", FieldType::VarChar(32)),
+			mysql_options: None,
+		});
+		let mut replacement = initial.clone();
+		replacement.name = "0001_squashed_0002".to_string();
+		replacement.operations.extend(add_column.operations.clone());
+		replacement.replaces = vec![
+			(initial.app_label.clone(), initial.name.clone()),
+			(add_column.app_label.clone(), add_column.name.clone()),
+		];
+		let mut executor = make_executor().await;
+		executor
+			.apply_migrations(&[initial.clone(), add_column.clone()])
+			.await
+			.expect("apply original history");
+
+		// Act
+		executor
+			.apply_migrations(&[initial.clone(), add_column.clone(), replacement.clone()])
+			.await
+			.expect("record equivalent replacement history");
+		let result = executor
+			.rollback_migrations(&[initial, add_column, replacement.clone()])
+			.await
+			.expect("rollback replacement history");
+
+		// Assert
+		assert_eq!(result.applied, vec![replacement.id()]);
+	}
+
+	#[rstest]
+	#[tokio::test]
+	async fn partial_replacement_history_applies_the_remaining_original_migration() {
+		// Arrange
+		let initial = make_create_table_migration("0001_initial", "partial_replacement");
+		let mut add_column = Migration::new("0002_add_name", "rolltest");
+		add_column
+			.dependencies
+			.push((initial.app_label.clone(), initial.name.clone()));
+		add_column.operations.push(Operation::AddColumn {
+			table: "partial_replacement".to_string(),
+			column: ColumnDefinition::new("name", FieldType::VarChar(32)),
+			mysql_options: None,
+		});
+		let mut replacement = initial.clone();
+		replacement.name = "0001_squashed_0002".to_string();
+		replacement.operations.extend(add_column.operations.clone());
+		replacement.replaces = vec![
+			(initial.app_label.clone(), initial.name.clone()),
+			(add_column.app_label.clone(), add_column.name.clone()),
+		];
+		let mut executor = make_executor().await;
+		executor
+			.apply_migrations(std::slice::from_ref(&initial))
+			.await
+			.expect("apply the first original migration");
+
+		// Act
+		let result = executor
+			.apply_migrations(&[initial.clone(), add_column.clone(), replacement.clone()])
+			.await
+			.expect("a partial original history must continue on the original chain");
+
+		// Assert
+		assert_eq!(result.applied, vec![add_column.id()]);
+		let recorder = DatabaseMigrationRecorder::new(executor.connection().clone());
+		assert_eq!(
+			recorder
+				.is_applied(&replacement.app_label, &replacement.name)
+				.await
+				.expect("query replacement recorder state"),
+			false
+		);
+	}
+
+	#[rstest]
+	#[tokio::test]
+	async fn partial_replacement_history_orders_descendants_after_remaining_originals() {
+		// Arrange
+		let initial = make_create_table_migration("0001_initial", "partial_descendant");
+		let mut remaining = Migration::new("0003_add_name", "partial_descendant");
+		remaining
+			.dependencies
+			.push((initial.app_label.clone(), initial.name.clone()));
+		remaining.operations.push(Operation::AddColumn {
+			table: "partial_descendant".to_string(),
+			column: ColumnDefinition::new("name", FieldType::VarChar(32)),
+			mysql_options: None,
+		});
+		let mut replacement = initial.clone();
+		replacement.name = "0001_squashed_0003".to_string();
+		replacement.operations.extend(remaining.operations.clone());
+		replacement.replaces = vec![
+			(initial.app_label.clone(), initial.name.clone()),
+			(remaining.app_label.clone(), remaining.name.clone()),
+		];
+		let mut descendant = Migration::new("0002_after_squash", "partial_descendant");
+		descendant
+			.dependencies
+			.push((replacement.app_label.clone(), replacement.name.clone()));
+		descendant.operations.push(Operation::AddColumn {
+			table: "partial_descendant".to_string(),
+			column: ColumnDefinition::new("after_squash", FieldType::VarChar(32)),
+			mysql_options: None,
+		});
+		let mut executor = make_executor().await;
+		executor
+			.apply_migrations(std::slice::from_ref(&initial))
+			.await
+			.expect("apply the first original migration");
+
+		// Act
+		let result = executor
+			.apply_migrations(&[initial, remaining.clone(), replacement, descendant.clone()])
+			.await
+			.expect("a descendant must wait for the remaining original migration");
+
+		// Assert
+		assert_eq!(result.applied, vec![remaining.id(), descendant.id()]);
 	}
 
 	#[rstest]

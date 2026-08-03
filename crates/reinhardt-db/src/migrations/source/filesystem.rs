@@ -12,6 +12,10 @@ use syn::File;
 ///
 /// This source scans directories for `.rs` migration files and parses them
 /// using `syn` to extract metadata like dependencies, atomic flag, and replaces.
+///
+/// The filesystem path is authoritative for migration identity. For a path
+/// `<root>/<app>/<name>.rs`, the loaded migration uses `<app>` and `<name>` even
+/// if duplicate `app_label` or `name` fields appear in the source literal.
 pub struct FilesystemSource {
 	/// Root directory containing migration files
 	root_dir: PathBuf,
@@ -70,7 +74,15 @@ impl FilesystemSource {
 		let (app_label, name) = self.extract_app_and_name(path)?;
 
 		// Extract metadata from AST using ast_parser utility
-		ast_parser::extract_migration_metadata(&ast, &app_label, &name)
+		ast_parser::extract_migration_metadata_strict(&ast, &app_label, &name).map_err(|error| {
+			MigrationError::InvalidMigration(format!(
+				"Failed to load {} as {}.{}: {}",
+				path.display(),
+				app_label,
+				name,
+				error
+			))
+		})
 	}
 
 	/// Extract app_label and migration name from file path
@@ -136,11 +148,33 @@ impl MigrationSource for FilesystemSource {
 		}
 
 		// Walk directory tree to find all .rs files
-		for entry in walkdir::WalkDir::new(&self.root_dir)
+		let mut entries = Vec::new();
+		let mut traversal_errors = Vec::new();
+		for result in walkdir::WalkDir::new(&self.root_dir)
 			.follow_links(true)
 			.into_iter()
-			.filter_map(|e| e.ok())
 		{
+			match result {
+				Ok(entry) => entries.push(entry),
+				Err(error) => {
+					let key = error
+						.path()
+						.map(|path| path.to_string_lossy().into_owned())
+						.unwrap_or_default();
+					traversal_errors.push((key, error.to_string()));
+				}
+			}
+		}
+		traversal_errors.sort();
+		if let Some((path, error)) = traversal_errors.first() {
+			return Err(MigrationError::IoError(std::io::Error::other(format!(
+				"Failed to traverse migration path {}: {}",
+				path, error
+			))));
+		}
+		entries.sort_by(|left, right| left.path().cmp(right.path()));
+
+		for entry in entries {
 			let path = entry.path();
 
 			// Warn when .sql files are found (Reinhardt uses .rs migration files)
@@ -161,6 +195,16 @@ impl MigrationSource for FilesystemSource {
 			if path.extension().and_then(|s| s.to_str()) != Some("rs") {
 				continue;
 			}
+			// Migration source files begin with their numeric migration sequence.
+			// Rust 2024 module files such as `migrations.rs` share the extension
+			// but have no migration entrypoint and must not be parsed as migrations.
+			if !path
+				.file_stem()
+				.and_then(|stem| stem.to_str())
+				.is_some_and(|stem| stem.starts_with(|character: char| character.is_ascii_digit()))
+			{
+				continue;
+			}
 
 			// Skip files directly in root_dir (need at least one subdirectory for app_label)
 			let relative_path = match path.strip_prefix(&self.root_dir) {
@@ -175,16 +219,10 @@ impl MigrationSource for FilesystemSource {
 			}
 
 			// Parse migration file
-			match self.parse_migration_file(path) {
-				Ok(migration) => migrations.push(migration),
-				Err(e) => {
-					// Log error but continue scanning
-					eprintln!("Warning: Failed to parse {}: {}", path.display(), e);
-				}
-			}
+			migrations.push(self.parse_migration_file(path)?);
 		}
 
-		// Sort by numeric prefix for deterministic ordering (#1335)
+		// Sort by app and numeric prefix for deterministic ordering (#1335)
 		migrations.sort_by(|a, b| {
 			let num_a = a
 				.name
@@ -200,7 +238,10 @@ impl MigrationSource for FilesystemSource {
 				.collect::<String>()
 				.parse::<u32>()
 				.unwrap_or(0);
-			num_a.cmp(&num_b).then_with(|| a.name.cmp(&b.name))
+			a.app_label
+				.cmp(&b.app_label)
+				.then_with(|| num_a.cmp(&num_b))
+				.then_with(|| a.name.cmp(&b.name))
 		});
 
 		Ok(migrations)
@@ -482,6 +523,39 @@ pub fn migration() -> Migration {
 			"Only .rs files should be loaded as migrations"
 		);
 		assert_eq!(migrations[0].app_label, "polls");
+		assert_eq!(migrations[0].name, "0001_initial");
+	}
+
+	#[rstest]
+	#[tokio::test]
+	#[serial(filesystem_source)]
+	async fn skips_rust_module_files_beside_numbered_migrations() {
+		// Arrange
+		let temp_dir = TempDir::new().unwrap();
+		create_migration_file(
+			temp_dir.path(),
+			"polls",
+			"0001_initial",
+			r#"
+pub fn migration() -> Migration {
+	Migration { operations: vec![], dependencies: vec![], replaces: vec![] }
+}
+"#,
+		);
+		fs::write(
+			temp_dir.path().join("polls").join("migrations.rs"),
+			"pub mod migrations;",
+		)
+		.unwrap();
+
+		// Act
+		let migrations = FilesystemSource::new(temp_dir.path())
+			.all_migrations()
+			.await
+			.expect("module files must be ignored");
+
+		// Assert
+		assert_eq!(migrations.len(), 1);
 		assert_eq!(migrations[0].name, "0001_initial");
 	}
 

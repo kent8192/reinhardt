@@ -27,7 +27,9 @@
 //! assert_eq!(squashed.replaces.len(), 3);
 //! ```
 
-use super::{Migration, MigrationError, Operation, Result};
+use super::dependency::{DependencyResolutionContext, DependencyResolver, MigrationDependency};
+use super::{Migration, MigrationError, Operation, Result, SquashRange};
+use reinhardt_query::prelude::SchemaExpr;
 use std::collections::HashSet;
 
 /// Options for migration squashing
@@ -57,6 +59,17 @@ impl Default for SquashOptions {
 			no_optimize: false,
 		}
 	}
+}
+
+/// The migration and operation counts produced by a range squash.
+#[derive(Debug)]
+pub struct SquashResult {
+	/// The combined migration.
+	pub migration: Migration,
+	/// Number of operations before optimization.
+	pub original_operation_count: usize,
+	/// Number of operations after optimization.
+	pub optimized_operation_count: usize,
 }
 
 /// Migration squasher
@@ -89,6 +102,191 @@ impl MigrationSquasher {
 	/// ```
 	pub fn new() -> Self {
 		Self { _private: () }
+	}
+
+	/// Squash a validated migration range.
+	///
+	/// External dependencies retain the range's stable order. Replacement and
+	/// conditional dependency metadata is deduplicated in source order.
+	/// Source migrations must agree on atomicity, and the initial marker comes
+	/// from the first migration.
+	///
+	/// # Errors
+	///
+	/// Returns an error for an empty range, when source migrations belong to
+	/// different apps, or when `atomic`, `state_only`, or `database_only`
+	/// differs between source migrations. It also rejects swappable dependencies
+	/// whose default target is selected by the range. Mixed whole-migration
+	/// execution modes and conditional self-dependencies cannot be represented
+	/// safely after combining their operations.
+	pub fn squash_range(
+		&self,
+		range: &SquashRange,
+		name: impl Into<String>,
+		optimize: bool,
+	) -> Result<SquashResult> {
+		self.squash_range_with_context(
+			range,
+			name,
+			optimize,
+			&DependencyResolutionContext::default(),
+		)
+	}
+
+	/// Squash a validated migration range using the active dependency context.
+	///
+	/// Optional dependencies that explicitly target selected migrations are
+	/// omitted, preventing the replacement from depending on itself after graph
+	/// rewrite.
+	///
+	/// # Errors
+	///
+	/// Returns an error under the conditions documented by [`Self::squash_range`]
+	/// and when a swappable dependency resolves to a selected migration. Dropping
+	/// that dependency would make the squashed migration depend on the active
+	/// setting at generation time instead of preserving its portable metadata.
+	pub fn squash_range_with_context(
+		&self,
+		range: &SquashRange,
+		name: impl Into<String>,
+		optimize: bool,
+		context: &DependencyResolutionContext,
+	) -> Result<SquashResult> {
+		let first = range.migrations.first().ok_or_else(|| {
+			MigrationError::InvalidMigration("Cannot squash empty migration range".to_string())
+		})?;
+		if range
+			.migrations
+			.iter()
+			.any(|migration| migration.app_label != first.app_label)
+		{
+			return Err(MigrationError::InvalidMigration(
+				"All migrations in squash range must belong to the same app".to_string(),
+			));
+		}
+		let state_only = first.state_only;
+		let database_only = first.database_only;
+
+		if range
+			.migrations
+			.iter()
+			.any(|migration| migration.state_only != state_only)
+		{
+			return Err(MigrationError::InvalidMigration(
+				"Cannot squash migrations with mixed state_only flags".to_string(),
+			));
+		}
+		if range
+			.migrations
+			.iter()
+			.any(|migration| migration.database_only != database_only)
+		{
+			return Err(MigrationError::InvalidMigration(
+				"Cannot squash migrations with mixed database_only flags".to_string(),
+			));
+		}
+		if range
+			.migrations
+			.iter()
+			.any(|migration| migration.atomic != first.atomic)
+		{
+			return Err(MigrationError::InvalidMigration(
+				"Cannot squash migrations with mixed atomic flags".to_string(),
+			));
+		}
+
+		let mut operations = Vec::new();
+		let mut replaces = Vec::new();
+		let mut swappable_dependencies = Vec::new();
+		let mut optional_dependencies = Vec::new();
+		let dependency_resolver = DependencyResolver::new(context);
+		let selected: HashSet<_> = range
+			.migrations
+			.iter()
+			.map(|migration| (migration.app_label.as_str(), migration.name.as_str()))
+			.collect();
+		let mut dependencies = Vec::new();
+		for migration in &range.migrations {
+			operations.extend(migration.operations.clone());
+			for dependency in &migration.dependencies {
+				let normalized = range.normalize_dependency(&dependency.0, &dependency.1)?;
+				let normalized = (normalized.app_label, normalized.name);
+				if !selected.contains(&(normalized.0.as_str(), normalized.1.as_str()))
+					&& !dependencies.contains(&normalized)
+				{
+					dependencies.push(normalized);
+				}
+			}
+			for replacement in &migration.replaces {
+				if !replaces.contains(replacement) {
+					replaces.push(replacement.clone());
+				}
+			}
+			let identity = (migration.app_label.clone(), migration.name.clone());
+			if !replaces.contains(&identity) {
+				replaces.push(identity);
+			}
+			for dependency in &migration.swappable_dependencies {
+				let target = dependency_resolver
+					.resolve(&MigrationDependency::Swappable(dependency.clone()))
+					.expect("swappable dependencies always resolve to a target");
+				let normalized = range.normalize_dependency(&target.0, &target.1)?;
+				if selected.contains(&(normalized.app_label.as_str(), normalized.name.as_str())) {
+					return Err(MigrationError::InvalidMigration(format!(
+						"Cannot squash range: swappable dependency {} resolves to selected migration {}.{}",
+						dependency.setting_key, normalized.app_label, normalized.name
+					)));
+				}
+				if !swappable_dependencies.contains(dependency) {
+					swappable_dependencies.push(dependency.clone());
+				}
+			}
+			for dependency in &migration.optional_dependencies {
+				if selected.contains(&(
+					dependency.app_label.as_str(),
+					dependency.migration_name.as_str(),
+				)) {
+					continue;
+				}
+				if dependency_resolver
+					.resolve(&MigrationDependency::Optional(dependency.clone()))
+					.is_none()
+				{
+					if !optional_dependencies.contains(dependency) {
+						optional_dependencies.push(dependency.clone());
+					}
+					continue;
+				}
+				let normalized = range
+					.normalize_dependency(&dependency.app_label, &dependency.migration_name)?;
+				if !selected.contains(&(normalized.app_label.as_str(), normalized.name.as_str()))
+					&& !optional_dependencies.contains(dependency)
+				{
+					optional_dependencies.push(dependency.clone());
+				}
+			}
+		}
+		let original_operation_count = operations.len();
+		if optimize {
+			operations = self.optimize_operations(operations);
+		}
+
+		let mut migration = Migration::new(name, first.app_label.clone());
+		migration.operations = operations;
+		migration.dependencies = dependencies;
+		migration.replaces = replaces;
+		migration.atomic = first.atomic;
+		migration.initial = first.initial;
+		migration.state_only = state_only;
+		migration.database_only = database_only;
+		migration.swappable_dependencies = swappable_dependencies;
+		migration.optional_dependencies = optional_dependencies;
+
+		Ok(SquashResult {
+			optimized_operation_count: migration.operations.len(),
+			migration,
+			original_operation_count,
+		})
 	}
 
 	/// Squash multiple migrations into one
@@ -183,7 +381,13 @@ impl MigrationSquasher {
 		Ok(squashed)
 	}
 
-	/// Optimize operations by removing redundant ones
+	/// Optimize operations by removing proven-equivalent schema lifecycles.
+	///
+	/// Create/drop table and add/drop column pairs reduce only inside segments
+	/// containing the five recognized table and column operations. Adjacent
+	/// alters of the same column retain the first old definition and final new
+	/// definition. Every other operation is a barrier, including data
+	/// operations and operation variants added in the future.
 	///
 	/// # Example
 	///
@@ -212,71 +416,343 @@ impl MigrationSquasher {
 	/// assert_eq!(optimized.len(), 0);
 	/// ```
 	pub fn optimize_operations(&self, operations: Vec<Operation>) -> Vec<Operation> {
-		let mut optimized = Vec::new();
-		let mut created_tables = HashSet::new();
-		let mut dropped_tables = HashSet::new();
-
+		let mut optimized = Vec::with_capacity(operations.len());
+		let mut segment = Vec::new();
 		for operation in operations {
-			let should_push = match &operation {
-				Operation::CreateTable { name, .. } => {
-					// Remove from dropped_tables if re-created
-					dropped_tables.remove(name);
-					created_tables.insert(name.clone());
-					true
-				}
-				Operation::DropTable { name } => {
-					// If table was just created, remove both operations
-					if created_tables.contains(name) {
-						optimized.retain(
-							|op| !matches!(op, Operation::CreateTable { name: table_name, .. } if table_name == name),
-						);
-						created_tables.remove(name);
-						false
-					} else {
-						dropped_tables.insert(name.clone());
-						true
-					}
-				}
-				Operation::AddColumn { table, .. } => {
-					// Skip if table was dropped
-					!dropped_tables.contains(table)
-				}
-				Operation::DropColumn { table, column, .. } => {
-					// Remove corresponding AddColumn if exists
-					let had_add = optimized.iter().any(|op| {
-						matches!(op, Operation::AddColumn { table: t, column: c, .. } if t == table && c.name == *column)
-					});
-
-					if had_add {
-						optimized.retain(|op| {
-							!matches!(op, Operation::AddColumn { table: t, column: c, .. } if t == table && c.name == *column)
-						});
-						false
-					} else {
-						!dropped_tables.contains(table)
-					}
-				}
-				Operation::AlterColumn { table, .. } => {
-					// Skip if table was dropped
-					!dropped_tables.contains(table)
-				}
-				Operation::RenameTable { old_name, .. } => {
-					// Skip if table was dropped
-					!dropped_tables.contains(old_name)
-				}
-				Operation::RenameColumn { table, .. } => {
-					// Skip if table was dropped
-					!dropped_tables.contains(table)
-				}
-				_ => true,
-			};
-
-			if should_push {
+			if Self::is_reducible(&operation) {
+				segment.push(operation);
+			} else {
+				optimized.extend(Self::optimize_segment(std::mem::take(&mut segment)));
 				optimized.push(operation);
 			}
 		}
+		optimized.extend(Self::optimize_segment(segment));
 
 		optimized
+	}
+
+	fn is_reducible(operation: &Operation) -> bool {
+		matches!(
+			operation,
+			Operation::CreateTable { .. }
+				| Operation::DropTable { .. }
+				| Operation::AddColumn { .. }
+				| Operation::DropColumn { .. }
+				| Operation::AlterColumn { .. }
+		)
+	}
+
+	fn optimize_segment(segment: Vec<Operation>) -> Vec<Operation> {
+		let mut optimized = Vec::with_capacity(segment.len());
+		let mut previous_alter = None;
+
+		for operation in segment {
+			let current_alter = match &operation {
+				Operation::AlterColumn { table, column, .. } => {
+					Some((table.clone(), column.clone()))
+				}
+				_ => None,
+			};
+			match operation {
+				Operation::DropTable { ref name } => {
+					if let Some(create_index) =
+						optimized.iter().rposition(
+							|candidate| matches!(candidate, Operation::CreateTable { name: candidate_name, .. } if candidate_name == name),
+						)
+						&& optimized[create_index + 1..]
+							.iter()
+							.filter(|candidate| Self::operation_table(candidate) == Some(name))
+							.all(|candidate| {
+								matches!(
+									candidate,
+									Operation::AddColumn { .. }
+										| Operation::DropColumn { .. }
+										| Operation::AlterColumn { .. }
+								)
+							})
+							&& !optimized[create_index + 1..]
+								.iter()
+								.any(|candidate| Self::operation_references_table(candidate, name))
+					{
+						optimized = optimized
+							.into_iter()
+							.enumerate()
+							.filter_map(|(index, candidate)| {
+								let remove_same_table =
+									index > create_index
+										&& Self::operation_table(&candidate) == Some(name);
+								(index != create_index && !remove_same_table).then_some(candidate)
+							})
+							.collect();
+					} else {
+						optimized.push(operation);
+					}
+				}
+				Operation::DropColumn {
+					ref table,
+					ref column,
+					..
+				} => {
+					if let Some(add_index) = optimized.iter().rposition(|candidate| {
+						matches!(
+							candidate,
+							Operation::AddColumn {
+								table: candidate_table,
+								column: candidate_column,
+								..
+							} if candidate_table == table && candidate_column.name == *column
+						)
+					}) && !optimized[add_index + 1..].iter().any(|candidate| {
+						matches!(
+							candidate,
+							Operation::CreateTable { name, .. } | Operation::DropTable { name }
+								if name == table
+						) || matches!(
+							candidate,
+							Operation::AddColumn {
+								table: candidate_table,
+								column: candidate_column,
+								..
+							} if candidate_table == table && candidate_column.name == *column
+						) || matches!(
+							candidate,
+							Operation::DropColumn {
+								table: candidate_table,
+								column: candidate_column,
+								..
+							} if candidate_table == table && candidate_column == column
+						) || Self::operation_references_column(candidate, table, column)
+					}) {
+						optimized = optimized
+							.into_iter()
+							.enumerate()
+							.filter_map(|(index, candidate)| {
+								let remove_matching_alter = index > add_index
+									&& matches!(
+										&candidate,
+										Operation::AlterColumn {
+											table: candidate_table,
+											column: candidate_column,
+											..
+										} if candidate_table == table && candidate_column == column
+									);
+								(index != add_index && !remove_matching_alter).then_some(candidate)
+							})
+							.collect();
+					} else {
+						optimized.push(operation);
+					}
+				}
+				Operation::AlterColumn {
+					table,
+					column,
+					old_definition,
+					new_definition,
+					mysql_options,
+				} => {
+					let follows_same_alter =
+						previous_alter
+							.as_ref()
+							.is_some_and(|(previous_table, previous_column)| {
+								previous_table == &table && previous_column == &column
+							});
+					if follows_same_alter
+						&& let Some(Operation::AlterColumn {
+						table: previous_table,
+						column: previous_column,
+						new_definition: previous_new_definition,
+						mysql_options: previous_mysql_options,
+						..
+					}) = optimized.last_mut()
+						&& *previous_table == table
+						&& *previous_column == column
+						&& old_definition
+							.as_ref()
+							.is_some_and(|old| *previous_new_definition == *old)
+					{
+						*previous_new_definition = new_definition;
+						*previous_mysql_options = mysql_options;
+					} else {
+						optimized.push(Operation::AlterColumn {
+							table,
+							column,
+							old_definition,
+							new_definition,
+							mysql_options,
+						});
+					}
+				}
+				_ => optimized.push(operation),
+			}
+			previous_alter = current_alter;
+		}
+
+		optimized
+	}
+
+	fn operation_references_column(operation: &Operation, table: &str, column: &str) -> bool {
+		let references_foreign_key = |definition: &crate::migrations::ColumnDefinition| {
+			matches!(
+				&definition.type_definition,
+				crate::migrations::FieldType::ForeignKey { to_table, to_field, .. }
+					if to_table == table && to_field == column
+			)
+		};
+		match operation {
+			Operation::CreateTable {
+				columns,
+				constraints,
+				..
+			} => {
+				columns.iter().any(references_foreign_key)
+					|| constraints.iter().any(|constraint| match constraint {
+						crate::migrations::Constraint::ForeignKey {
+							referenced_table,
+							referenced_columns,
+							..
+						} => {
+							referenced_table == table
+								&& referenced_columns
+									.iter()
+									.any(|referenced| referenced == column)
+						}
+						crate::migrations::Constraint::OneToOne {
+							referenced_table,
+							referenced_column,
+							..
+						} => referenced_table == table && referenced_column == column,
+						_ => false,
+					})
+			}
+			Operation::AddColumn {
+				table: candidate_table,
+				column: candidate_column,
+				..
+			} => {
+				references_foreign_key(candidate_column)
+					|| (candidate_table == table
+						&& Self::column_references_column(candidate_column, column))
+			}
+			Operation::AlterColumn {
+				table: candidate_table,
+				old_definition,
+				new_definition,
+				..
+			} => {
+				references_foreign_key(new_definition)
+					|| old_definition.as_ref().is_some_and(references_foreign_key)
+					|| (candidate_table == table
+						&& (Self::column_references_column(new_definition, column)
+							|| old_definition.as_ref().is_some_and(|definition| {
+								Self::column_references_column(definition, column)
+							})))
+			}
+			_ => false,
+		}
+	}
+
+	fn operation_references_table(operation: &Operation, table: &str) -> bool {
+		match operation {
+			Operation::CreateTable {
+				columns,
+				constraints,
+				interleave_in_parent,
+				..
+			} => {
+				columns
+					.iter()
+					.any(|column| Self::column_references_table(column, table))
+					|| interleave_in_parent
+						.as_ref()
+						.is_some_and(|interleave| interleave.parent_table == table)
+					|| constraints.iter().any(|constraint| {
+						matches!(
+							constraint,
+							crate::migrations::Constraint::ForeignKey { referenced_table, .. }
+								| crate::migrations::Constraint::OneToOne { referenced_table, .. }
+								if referenced_table == table
+						) || matches!(
+							constraint,
+							crate::migrations::Constraint::ManyToMany {
+								target_table,
+								through_table,
+								..
+							} if target_table == table || through_table == table
+						)
+					})
+			}
+			Operation::AddColumn { column, .. } => Self::column_references_table(column, table),
+			Operation::AlterColumn {
+				old_definition,
+				new_definition,
+				..
+			} => {
+				Self::column_references_table(new_definition, table)
+					|| old_definition
+						.as_ref()
+						.is_some_and(|definition| Self::column_references_table(definition, table))
+			}
+			_ => false,
+		}
+	}
+
+	fn column_references_table(
+		definition: &crate::migrations::ColumnDefinition,
+		table: &str,
+	) -> bool {
+		matches!(
+			&definition.type_definition,
+			crate::migrations::FieldType::ForeignKey { to_table, .. } if to_table == table
+		)
+	}
+
+	fn column_references_column(
+		definition: &crate::migrations::ColumnDefinition,
+		column: &str,
+	) -> bool {
+		let Some(generated) = definition.generated.as_ref() else {
+			return false;
+		};
+		if let Some(expression) = generated.expr.as_deref() {
+			return Self::schema_expr_references_column(expression, column);
+		}
+		generated
+			.raw_sql
+			.as_deref()
+			.or(generated.expr_tokens.as_deref())
+			.is_some_and(|expression| Self::expression_text_references_column(expression, column))
+	}
+
+	fn schema_expr_references_column(expression: &SchemaExpr, column: &str) -> bool {
+		match expression {
+			SchemaExpr::Column(identifier) => identifier.to_string() == column,
+			SchemaExpr::Value(_) => false,
+			SchemaExpr::Binary { left, right, .. } => {
+				Self::schema_expr_references_column(left, column)
+					|| Self::schema_expr_references_column(right, column)
+			}
+			SchemaExpr::Function { args, .. } => args
+				.iter()
+				.any(|argument| Self::schema_expr_references_column(argument, column)),
+			SchemaExpr::Cast { expr, .. } => Self::schema_expr_references_column(expr, column),
+			_ => false,
+		}
+	}
+
+	fn expression_text_references_column(expression: &str, column: &str) -> bool {
+		expression
+			.split(|character: char| !(character.is_ascii_alphanumeric() || character == '_'))
+			.any(|token| token.eq_ignore_ascii_case(column))
+	}
+
+	fn operation_table(operation: &Operation) -> Option<&String> {
+		match operation {
+			Operation::CreateTable { name, .. } | Operation::DropTable { name } => Some(name),
+			Operation::AddColumn { table, .. }
+			| Operation::DropColumn { table, .. }
+			| Operation::AlterColumn { table, .. } => Some(table),
+			_ => None,
+		}
 	}
 }
 
@@ -289,7 +765,11 @@ impl Default for MigrationSquasher {
 #[cfg(test)]
 mod tests {
 	use super::*;
-	use crate::migrations::{ColumnDefinition, FieldType};
+	use crate::migrations::{
+		ColumnDefinition, DependencyCondition, FieldType, ForeignKeyAction,
+		GeneratedColumnDefinition, OptionalDependency,
+	};
+	use reinhardt_query::prelude::GeneratedStorage;
 
 	#[test]
 	fn test_squash_basic() {
@@ -374,6 +854,47 @@ mod tests {
 	}
 
 	#[test]
+	fn test_optimize_add_drop_column_preserves_generated_column_dependency() {
+		// Arrange
+		let squasher = MigrationSquasher::new();
+		let mut derived = ColumnDefinition::new("derived", FieldType::Integer);
+		derived.generated = Some(GeneratedColumnDefinition::raw_sql(
+			"temp + 1",
+			GeneratedStorage::Stored,
+		));
+		let ops = vec![
+			Operation::AddColumn {
+				table: "users".to_string(),
+				column: ColumnDefinition::new("temp", FieldType::Integer),
+				mysql_options: None,
+			},
+			Operation::AddColumn {
+				table: "users".to_string(),
+				column: derived.clone(),
+				mysql_options: None,
+			},
+			Operation::AlterColumn {
+				table: "users".to_string(),
+				column: "derived".to_string(),
+				old_definition: Some(derived),
+				new_definition: ColumnDefinition::new("derived", FieldType::Integer),
+				mysql_options: None,
+			},
+			Operation::DropColumn {
+				table: "users".to_string(),
+				column: "temp".to_string(),
+				old_definition: None,
+			},
+		];
+
+		// Act
+		let optimized = squasher.optimize_operations(ops.clone());
+
+		// Assert
+		assert_eq!(optimized, ops);
+	}
+
+	#[test]
 	fn test_optimize_no_optimization() {
 		let squasher = MigrationSquasher::new();
 
@@ -448,5 +969,422 @@ mod tests {
 		// Should keep external dependency
 		assert_eq!(squashed.dependencies.len(), 1);
 		assert_eq!(squashed.dependencies[0].0, "other_app");
+	}
+
+	#[rstest::rstest]
+	fn optimize_operations_preserves_foreign_key_references_to_transient_tables() {
+		// Arrange
+		let foreign_key = ColumnDefinition::new(
+			"temp_id",
+			FieldType::ForeignKey {
+				to_table: "temp".to_string(),
+				to_field: "id".to_string(),
+				on_delete: ForeignKeyAction::NoAction,
+			},
+		);
+		let migrations = vec![
+			Migration::new("0001_initial", "app")
+				.add_operation(Operation::CreateTable {
+					name: "temp".to_string(),
+					columns: vec![ColumnDefinition::new("id", FieldType::Integer)],
+					constraints: Vec::new(),
+					without_rowid: None,
+					interleave_in_parent: None,
+					partition: None,
+				})
+				.add_operation(Operation::AddColumn {
+					table: "accounts".to_string(),
+					column: foreign_key.clone(),
+					mysql_options: None,
+				})
+				.add_operation(Operation::AlterColumn {
+					table: "accounts".to_string(),
+					column: "temp_id".to_string(),
+					old_definition: Some(foreign_key),
+					new_definition: ColumnDefinition::new("temp_id", FieldType::Integer),
+					mysql_options: None,
+				})
+				.add_operation(Operation::DropTable {
+					name: "temp".to_string(),
+				}),
+		];
+
+		// Act
+		let squashed = MigrationSquasher::new()
+			.squash(&migrations, "0001_squashed", SquashOptions::default())
+			.unwrap();
+
+		// Assert
+		assert_eq!(squashed.operations.len(), 4);
+	}
+
+	#[test]
+	fn optimize_operations_preserves_many_to_many_references_to_transient_tables() {
+		for (target_table, through_table) in [("temp", "account_roles"), ("roles", "temp")] {
+			// Arrange
+			let operations = vec![
+				Operation::CreateTable {
+					name: "temp".to_string(),
+					columns: vec![ColumnDefinition::new("id", FieldType::Integer)],
+					constraints: Vec::new(),
+					without_rowid: None,
+					interleave_in_parent: None,
+					partition: None,
+				},
+				Operation::CreateTable {
+					name: "accounts".to_string(),
+					columns: vec![ColumnDefinition::new("id", FieldType::Integer)],
+					constraints: vec![crate::migrations::Constraint::ManyToMany {
+						name: "accounts_roles".to_string(),
+						through_table: through_table.to_string(),
+						source_column: "account_id".to_string(),
+						target_column: "role_id".to_string(),
+						target_table: target_table.to_string(),
+					}],
+					without_rowid: None,
+					interleave_in_parent: None,
+					partition: None,
+				},
+				Operation::DropTable {
+					name: "temp".to_string(),
+				},
+			];
+
+			// Act
+			let optimized = MigrationSquasher::new().optimize_operations(operations.clone());
+
+			// Assert
+			assert_eq!(optimized, operations, "{target_table}/{through_table}");
+		}
+	}
+
+	#[test]
+	fn optimize_operations_preserves_create_table_foreign_key_to_transient_column() {
+		// Arrange
+		let migrations = vec![
+			Migration::new("0001_initial", "app")
+				.add_operation(Operation::AddColumn {
+					table: "accounts".to_string(),
+					column: ColumnDefinition::new("temp", FieldType::Integer),
+					mysql_options: None,
+				})
+				.add_operation(Operation::CreateTable {
+					name: "audit".to_string(),
+					columns: vec![ColumnDefinition::new(
+						"account_temp",
+						FieldType::ForeignKey {
+							to_table: "accounts".to_string(),
+							to_field: "temp".to_string(),
+							on_delete: ForeignKeyAction::NoAction,
+						},
+					)],
+					constraints: Vec::new(),
+					without_rowid: None,
+					interleave_in_parent: None,
+					partition: None,
+				})
+				.add_operation(Operation::DropColumn {
+					table: "accounts".to_string(),
+					column: "temp".to_string(),
+					old_definition: None,
+				}),
+		];
+
+		// Act
+		let squashed = MigrationSquasher::new()
+			.squash(&migrations, "0001_squashed", SquashOptions::default())
+			.unwrap();
+
+		// Assert
+		assert_eq!(squashed.operations.len(), 3);
+	}
+
+	#[test]
+	fn squash_range_excludes_inactive_optional_dependency_targeting_selected_migration() {
+		// Arrange
+		let mut first = Migration::new("0001_initial", "myapp");
+		first.optional_dependencies.push(OptionalDependency::new(
+			"myapp",
+			"0002_add_field",
+			DependencyCondition::FeatureEnabled("audit".to_string()),
+		));
+		let second = Migration::new("0002_add_field", "myapp");
+		let range = SquashRange {
+			migrations: vec![first, second],
+			external_dependencies: vec![],
+			available_migrations: Vec::new(),
+			replacement_owners: std::collections::HashMap::new(),
+		};
+
+		// Act
+		let result = MigrationSquasher::new()
+			.squash_range_with_context(
+				&range,
+				"0001_squashed_0002",
+				false,
+				&DependencyResolutionContext::default(),
+			)
+			.unwrap();
+
+		// Assert
+		assert!(result.migration.optional_dependencies.is_empty());
+	}
+
+	#[test]
+	fn squash_range_excludes_active_optional_dependency_targeting_selected_migration() {
+		// Arrange
+		let mut first = Migration::new("0001_initial", "myapp");
+		first.optional_dependencies.push(OptionalDependency::new(
+			"myapp",
+			"0002_add_field",
+			DependencyCondition::FeatureEnabled("audit".to_string()),
+		));
+		let second = Migration::new("0002_add_field", "myapp");
+		let range = SquashRange {
+			migrations: vec![first, second],
+			external_dependencies: vec![],
+			available_migrations: Vec::new(),
+			replacement_owners: std::collections::HashMap::new(),
+		};
+
+		// Act
+		let result = MigrationSquasher::new()
+			.squash_range_with_context(
+				&range,
+				"0001_squashed_0002",
+				false,
+				&DependencyResolutionContext::new().with_feature("audit"),
+			)
+			.unwrap();
+
+		// Assert
+		assert!(result.migration.optional_dependencies.is_empty());
+	}
+
+	#[rstest::rstest]
+	fn optimize_operations_coalesces_adjacent_alters_with_matching_definitions() {
+		// Arrange
+		let initial = ColumnDefinition::new("name", FieldType::VarChar(40));
+		let intermediate = ColumnDefinition::new("name", FieldType::VarChar(80));
+		let final_definition = ColumnDefinition::new("name", FieldType::VarChar(160));
+		let operations = vec![
+			Operation::AlterColumn {
+				table: "users".to_string(),
+				column: "name".to_string(),
+				old_definition: Some(initial.clone()),
+				new_definition: intermediate.clone(),
+				mysql_options: None,
+			},
+			Operation::AlterColumn {
+				table: "users".to_string(),
+				column: "name".to_string(),
+				old_definition: Some(intermediate),
+				new_definition: final_definition.clone(),
+				mysql_options: None,
+			},
+		];
+
+		// Act
+		let optimized = MigrationSquasher::new().optimize_operations(operations);
+
+		// Assert
+		assert_eq!(
+			optimized,
+			vec![Operation::AlterColumn {
+				table: "users".to_string(),
+				column: "name".to_string(),
+				old_definition: Some(initial),
+				new_definition: final_definition,
+				mysql_options: None,
+			}]
+		);
+	}
+
+	#[rstest::rstest]
+	fn squash_range_rejects_selected_swappable_dependency_with_active_setting() {
+		// Arrange
+		let mut first = Migration::new("0001_initial", "auth");
+		first
+			.swappable_dependencies
+			.push(crate::migrations::dependency::SwappableDependency::new(
+				"AUTH_USER_MODEL",
+				"accounts",
+				"User",
+				"0002_user",
+			));
+		let second = Migration::new("0002_user", "auth");
+		let range = SquashRange {
+			migrations: vec![first, second],
+			external_dependencies: vec![],
+			available_migrations: Vec::new(),
+			replacement_owners: std::collections::HashMap::new(),
+		};
+		let context =
+			DependencyResolutionContext::new().with_setting("AUTH_USER_MODEL", "auth.User");
+
+		// Act
+		let error = MigrationSquasher::new()
+			.squash_range_with_context(&range, "0001_squashed_0002", false, &context)
+			.unwrap_err();
+
+		// Assert
+		assert_eq!(
+			error.to_string(),
+			"Invalid migration: Cannot squash range: swappable dependency AUTH_USER_MODEL resolves to selected migration auth.0002_user"
+		);
+	}
+
+	#[test]
+	fn test_squash_range_rejects_mixed_atomicity() {
+		let first = Migration::new("0001_initial", "myapp");
+		let mut second = Migration::new("0002_non_atomic", "myapp");
+		second.atomic = false;
+		let range = SquashRange {
+			migrations: vec![first, second],
+			external_dependencies: vec![],
+			available_migrations: Vec::new(),
+			replacement_owners: std::collections::HashMap::new(),
+		};
+
+		let error = MigrationSquasher::new()
+			.squash_range(&range, "0001_squashed_0002", false)
+			.unwrap_err();
+
+		assert_eq!(
+			error.to_string(),
+			"Invalid migration: Cannot squash migrations with mixed atomic flags"
+		);
+	}
+
+	#[test]
+	fn squash_range_normalizes_required_dependencies_owned_by_selected_replacement() {
+		let first = Migration::new("0001_squashed_0002", "myapp");
+		let second = Migration::new("0003_more", "myapp").add_dependency("myapp", "0002_old");
+		let range = SquashRange {
+			migrations: vec![first, second],
+			external_dependencies: vec![],
+			available_migrations: vec![
+				crate::migrations::MigrationKey::new("myapp", "0001_squashed_0002"),
+				crate::migrations::MigrationKey::new("myapp", "0003_more"),
+			],
+			replacement_owners: std::collections::HashMap::from([(
+				crate::migrations::MigrationKey::new("myapp", "0002_old"),
+				crate::migrations::MigrationKey::new("myapp", "0001_squashed_0002"),
+			)]),
+		};
+
+		let result = MigrationSquasher::new()
+			.squash_range(&range, "0001_squashed_0003", false)
+			.unwrap();
+
+		assert!(result.migration.dependencies.is_empty());
+	}
+
+	#[test]
+	fn squash_range_normalizes_optional_dependency_before_retaining_metadata() {
+		let mut first = Migration::new("0001_squashed_0002", "myapp");
+		first.optional_dependencies.push(OptionalDependency::new(
+			"myapp",
+			"0002_old",
+			DependencyCondition::AppInstalled("myapp".to_string()),
+		));
+		let range = SquashRange {
+			migrations: vec![first],
+			external_dependencies: vec![],
+			available_migrations: vec![crate::migrations::MigrationKey::new(
+				"myapp",
+				"0001_squashed_0002",
+			)],
+			replacement_owners: std::collections::HashMap::from([(
+				crate::migrations::MigrationKey::new("myapp", "0002_old"),
+				crate::migrations::MigrationKey::new("myapp", "0001_squashed_0002"),
+			)]),
+		};
+
+		let result = MigrationSquasher::new()
+			.squash_range_with_context(
+				&range,
+				"0001_squashed_0002_again",
+				false,
+				&DependencyResolutionContext::new().with_app("myapp"),
+			)
+			.unwrap();
+
+		assert!(result.migration.optional_dependencies.is_empty());
+	}
+
+	#[rstest::rstest]
+	fn squash_range_skips_inactive_optional_dependencies_before_normalization() {
+		// Arrange
+		let mut migration = Migration::new("0001_initial", "myapp");
+		migration
+			.optional_dependencies
+			.push(OptionalDependency::new(
+				"gis",
+				"__first__",
+				DependencyCondition::FeatureEnabled("gis".to_string()),
+			));
+		let range = SquashRange {
+			migrations: vec![migration],
+			external_dependencies: vec![],
+			available_migrations: vec![crate::migrations::MigrationKey::new(
+				"myapp",
+				"0001_initial",
+			)],
+			replacement_owners: std::collections::HashMap::new(),
+		};
+
+		// Act
+		let result = MigrationSquasher::new()
+			.squash_range_with_context(
+				&range,
+				"0001_squashed",
+				false,
+				&DependencyResolutionContext::default(),
+			)
+			.expect("inactive optional dependencies must not be normalized");
+
+		// Assert
+		assert_eq!(
+			result.migration.optional_dependencies,
+			vec![OptionalDependency::new(
+				"gis",
+				"__first__",
+				DependencyCondition::FeatureEnabled("gis".to_string()),
+			)]
+		);
+	}
+
+	#[rstest::rstest]
+	fn optimize_operations_preserves_interleaved_parent_table() {
+		let operations = vec![
+			Operation::CreateTable {
+				name: "parent".to_string(),
+				columns: vec![ColumnDefinition::new("id", FieldType::Integer)],
+				constraints: vec![],
+				without_rowid: None,
+				interleave_in_parent: None,
+				partition: None,
+			},
+			Operation::CreateTable {
+				name: "child".to_string(),
+				columns: vec![ColumnDefinition::new("id", FieldType::Integer)],
+				constraints: vec![],
+				without_rowid: None,
+				interleave_in_parent: Some(crate::migrations::operations::InterleaveSpec {
+					parent_table: "parent".to_string(),
+					parent_columns: vec!["id".to_string()],
+				}),
+				partition: None,
+			},
+			Operation::DropTable {
+				name: "parent".to_string(),
+			},
+		];
+
+		assert_eq!(
+			MigrationSquasher::new().optimize_operations(operations.clone()),
+			operations
+		);
 	}
 }

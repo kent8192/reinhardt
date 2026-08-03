@@ -57,6 +57,8 @@ details.
 ### Built-in Commands
 
 - **makemigrations** - Create new database migrations based on model changes
+- **squashmigrations** - Combine a safe migration range into one replacement
+  migration without connecting to a database
 - **migrate** - Apply database migrations
 - **inspectdb** - Generate deterministic Reinhardt models from an existing
   PostgreSQL, MySQL, or SQLite schema
@@ -80,6 +82,68 @@ details.
 - `routers` - Enable URL-related commands (requires `reinhardt-urls`)
 - `shell` - Enable the stateful Rust management shell. The facade exposes this
   as the project-facing `commands-shell` feature.
+
+### Squashing migrations
+
+`squashmigrations` accepts Django-compatible two- and three-positional forms:
+
+```bash
+cargo run --bin manage -- squashmigrations APP_LABEL MIGRATION_NAME
+cargo run --bin manage -- squashmigrations APP_LABEL START_MIGRATION MIGRATION_NAME
+```
+
+Migration names may be exact names or unique prefixes. The command rejects an
+ambiguous prefix, a branched ancestry, or a range that is not a continuous
+same-application ancestor chain. Dependencies entering the selected range from
+other applications remain dependencies of the generated migration.
+
+Conditional migration dependencies are resolved from the active project's
+`MigrationSettings` fragment.
+`migration_swappable_settings` maps each swappable dependency key to its
+`"app.Model"` target, `migration_settings` supplies values for optional
+dependencies using `SettingEnabled`, and `migration_features` enables optional
+dependencies whose feature condition matches an entry in the list.
+`installed_apps` enables optional dependencies gated on application presence.
+Inactive optional dependencies remain in the generated replacement without
+resolving their target application, so the migration graph is correct if the
+condition is enabled in another environment.
+
+```toml
+[core]
+installed_apps = ["accounts"]
+
+[migrations]
+migration_features = ["gis"]
+
+[migrations.migration_swappable_settings]
+AUTH_USER_MODEL = "accounts.User"
+
+[migrations.migration_settings]
+ENABLE_AUDIT = "true"
+```
+
+When `--migrations-dir` is omitted, the command reads migrations from the
+active project's `core.base_dir/migrations` directory. The explicit option
+always takes precedence. Entry points without project settings retain the
+project-root/current-directory fallback.
+
+By default, Reinhardt prompts before writing. Use `--no-input` (or the
+Django-compatible `--noinput` alias) in non-interactive environments. Use
+`--no-optimize` to preserve the exact source operation order, and `--no-header`
+to omit the generated-file header. `--squashed-name descriptive_name` supplies
+a descriptive suffix; Reinhardt keeps the range's starting number, for example
+`0001_descriptive_name`.
+
+The optimizer performs only proven schema reductions. Data operations,
+renames, constraints, indexes, bulk operations, custom operations, and other
+non-reducible operations are barriers: optimization never crosses them.
+Reinhardt validates and renders the complete result before prompting. It then
+creates a new migration file without overwriting an existing destination.
+Invalid source is rejected before file creation. If a write fails, Reinhardt
+attempts to remove the incomplete file through its anchored directory handle.
+A cleanup failure reports both the original write error and the cleanup error.
+The command only reads migration source files and does not require a database
+connection.
 
 ### Pages template hot reload
 
@@ -302,9 +366,9 @@ mod native {
     use my_project::config::shell::get_shell_config;
     use my_project::config::settings::get_settings;
     #[cfg(not(feature = "commands-shell"))]
-    use reinhardt::commands::execute_from_command_line_with_settings;
+    use reinhardt::commands::execute_from_command_line_with_migration_settings;
     #[cfg(feature = "commands-shell")]
-    use reinhardt::commands::execute_from_command_line_with_settings_and_shell;
+    use reinhardt::commands::execute_from_command_line_with_migration_settings_and_shell;
 
     #[tokio::main]
     pub(super) async fn main() {
@@ -319,13 +383,13 @@ mod native {
 
         #[cfg(feature = "commands-shell")]
         let result =
-            execute_from_command_line_with_settings_and_shell(
+            execute_from_command_line_with_migration_settings_and_shell(
                 get_settings(),
                 get_shell_config(),
             )
             .await;
         #[cfg(not(feature = "commands-shell"))]
-        let result = execute_from_command_line_with_settings(get_settings()).await;
+        let result = execute_from_command_line_with_migration_settings(get_settings()).await;
 
         if let Err(error) = result {
             eprintln!("Error: {error}");

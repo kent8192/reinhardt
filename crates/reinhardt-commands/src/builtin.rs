@@ -235,7 +235,7 @@ impl BaseCommand for MigrateCommand {
 				// `plan_applied_migrations` probes for it: a missing table on a fresh DB
 				// degrades to an empty set, while a genuine DB error fails fast so the
 				// preview never misreports the applied state.
-				let applied = if is_plan {
+				let mut applied = if is_plan {
 					plan_applied_migrations(&connection, &recorder).await?
 				} else {
 					recorder.ensure_schema_table().await.map_err(|e| {
@@ -251,8 +251,63 @@ impl BaseCommand for MigrateCommand {
 						))
 					})?
 				};
-				let applied_for_app: Vec<_> =
-					applied.iter().filter(|r| r.app == *app).cloned().collect();
+				let stale_records = stale_replacement_records(&all_migrations, app, &applied);
+				if is_plan {
+					for record in &stale_records {
+						ctx.info(&format!(
+							"[plan] Would unapply superseded record {}:{} before resolving the target",
+							record.app, record.name
+						));
+					}
+				} else if !stale_records.is_empty() {
+					for record in &stale_records {
+						recorder
+							.unapply(&record.app, &record.name)
+							.await
+							.map_err(|error| {
+								crate::CommandError::ExecutionError(format!(
+									"Failed to reconcile superseded replacement record {}:{}: {}",
+									record.app, record.name, error
+								))
+							})?;
+					}
+					applied = recorder.get_applied_migrations().await.map_err(|error| {
+						crate::CommandError::ExecutionError(format!(
+							"Failed to re-read reconciled migration history: {}",
+							error
+						))
+					})?;
+				}
+				let stale_record_names: HashSet<_> = stale_records
+					.iter()
+					.map(|record| (record.app.as_str(), record.name.as_str()))
+					.collect();
+				let applied_for_app: Vec<_> = applied
+					.iter()
+					.filter(|record| {
+						record.app == *app
+							&& (!is_plan
+								|| !stale_record_names
+									.contains(&(record.app.as_str(), record.name.as_str())))
+					})
+					.cloned()
+					.collect();
+				let target_name = if target_name == "zero" {
+					target_name.to_string()
+				} else {
+					let terminal = terminal_replacement_target(&all_migrations, app, target_name)?;
+					if terminal == target_name
+						|| replacement_history_is_fully_applied(
+							&all_migrations,
+							app,
+							&terminal,
+							&applied_for_app,
+						) {
+						terminal
+					} else {
+						target_name.to_string()
+					}
+				};
 
 				// Branch (a): `migrate <app> zero` -> unapply ALL applied migrations.
 				if target_name == "zero" {
@@ -443,17 +498,53 @@ impl BaseCommand for MigrateCommand {
 				let mut needed: HashSet<(String, String)> = HashSet::new();
 				let mut stack: Vec<(String, String)> = vec![(app.clone(), target_name.to_string())];
 				while let Some((dep_app, dep_name)) = stack.pop() {
+					let Some(migration) = all_migrations.iter().find(|migration| {
+						migration.app_label == dep_app && migration.name == dep_name
+					}) else {
+						continue;
+					};
+					if !migration.replaces.is_empty()
+						&& replacement_history_has_applied_records(
+							&all_migrations,
+							&dep_app,
+							&dep_name,
+							&applied_for_app,
+						) && !replacement_history_is_fully_applied(
+						&all_migrations,
+						&dep_app,
+						&dep_name,
+						&applied_for_app,
+					) {
+						for (original_app, original_name) in &migration.replaces {
+							if *original_app == *app {
+								stack.push((original_app.clone(), original_name.clone()));
+							}
+						}
+						continue;
+					}
 					if !needed.insert((dep_app.clone(), dep_name.clone())) {
 						continue;
 					}
-					if let Some(migration) = all_migrations
-						.iter()
-						.find(|m| m.app_label == dep_app && m.name == dep_name)
-					{
-						for (da, dn) in &migration.dependencies {
-							if *da == *app {
-								stack.push((da.clone(), dn.clone()));
-							}
+					for (da, dn) in &migration.dependencies {
+						if *da == *app {
+							let terminal = terminal_replacement_target(&all_migrations, da, dn)?;
+							let normalized = if terminal != *dn
+								&& (!replacement_history_has_applied_records(
+									&all_migrations,
+									da,
+									&terminal,
+									&applied_for_app,
+								) || replacement_history_is_fully_applied(
+									&all_migrations,
+									da,
+									&terminal,
+									&applied_for_app,
+								)) {
+								(da.clone(), terminal)
+							} else {
+								(da.clone(), dn.clone())
+							};
+							stack.push(normalized);
 						}
 					}
 				}
@@ -470,7 +561,11 @@ impl BaseCommand for MigrateCommand {
 					.iter()
 					.filter(|m| !applied_names.contains(m.name.as_str()))
 					.collect();
-				let pending = dependency_ordered_migrations(pending)?;
+				let pending = dependency_ordered_migrations_with_partial_replacement_dependencies(
+					pending,
+					&all_migrations,
+					&applied_for_app,
+				)?;
 
 				if pending.is_empty() {
 					ctx.info(&format!(
@@ -499,15 +594,7 @@ impl BaseCommand for MigrateCommand {
 				if is_fake {
 					ctx.info("Faking migrations (marking as applied without executing):");
 					for migration in &pending {
-						recorder
-							.record_applied(&migration.app_label, &migration.name)
-							.await
-							.map_err(|e| {
-								crate::CommandError::ExecutionError(format!(
-									"Failed to record fake migration {}:{}: {}",
-									migration.app_label, migration.name, e
-								))
-							})?;
+						fake_record_migration(&recorder, migration, &all_migrations).await?;
 						ctx.success(&format!(
 							"  ✓ Faked: {}:{}",
 							migration.app_label, migration.name
@@ -522,13 +609,53 @@ impl BaseCommand for MigrateCommand {
 					return Ok(());
 				}
 
+				let replacement_dependencies: HashSet<_> = to_apply
+					.iter()
+					.flat_map(|migration| {
+						migration
+							.dependencies
+							.iter()
+							.map(|(dependency_app, dependency_name)| {
+								(dependency_app.as_str(), dependency_name.as_str())
+							})
+					})
+					.collect();
+				let mut execution_migrations = to_apply.clone();
+				for migration in &all_migrations {
+					let is_partial_dependency = replacement_dependencies
+						.contains(&(migration.app_label.as_str(), migration.name.as_str()))
+						&& replacement_history_has_applied_records(
+							&all_migrations,
+							&migration.app_label,
+							&migration.name,
+							&applied_for_app,
+						) && !replacement_history_is_fully_applied(
+						&all_migrations,
+						&migration.app_label,
+						&migration.name,
+						&applied_for_app,
+					);
+					if !migration.replaces.is_empty()
+						&& (is_partial_dependency
+							|| applied_for_app.iter().any(|record| {
+								record.app == migration.app_label && record.name == migration.name
+							})) && !execution_migrations.iter().any(|candidate| {
+						candidate.app_label == migration.app_label
+							&& candidate.name == migration.name
+					}) {
+						execution_migrations.push(migration.clone());
+					}
+				}
 				let mut executor = DatabaseMigrationExecutor::new(connection);
-				let result = executor.apply_migrations(&to_apply).await.map_err(|e| {
-					crate::CommandError::ExecutionError(format!(
-						"Failed to apply migrations: {:?}",
-						e
-					))
-				})?;
+				let result = executor
+					.apply_migrations(&execution_migrations)
+					.await
+					.map_err(|e| {
+						crate::CommandError::ExecutionError(format!(
+							"Failed to apply migrations: {:?}",
+							e
+						))
+					})?;
 				for id in &result.applied {
 					ctx.success(&format!("  ✓ Applied: {}", id));
 				}
@@ -573,16 +700,55 @@ impl BaseCommand for MigrateCommand {
 				use reinhardt_db::migrations::DatabaseMigrationRecorder;
 				let recorder = DatabaseMigrationRecorder::new(connection.clone());
 				let applied = plan_applied_migrations(&connection, &recorder).await?;
-				let pending: Vec<_> = migrations_to_apply
+				let ordered = dependency_ordered_migrations_with_applied_history(
+					&migrations_to_apply,
+					&applied,
+				)?;
+				let reconciliations: Vec<_> = migrations_to_apply
 					.iter()
+					.filter_map(|migration| {
+						(!applied.iter().any(|record| {
+							record.app == migration.app_label && record.name == migration.name
+						}))
+						.then(|| {
+							direct_replacement_history_records(
+								&migrations_to_apply,
+								migration,
+								&applied,
+							)
+						})
+						.flatten()
+						.map(|records| (migration, records))
+					})
+					.collect();
+				let reconciled_replacements: std::collections::HashSet<_> = reconciliations
+					.iter()
+					.map(|(migration, _)| (migration.app_label.as_str(), migration.name.as_str()))
+					.collect();
+				let pending: Vec<_> = ordered
+					.into_iter()
 					.filter(|m| {
 						!applied
 							.iter()
 							.any(|r| r.app == m.app_label && r.name == m.name)
+							&& !reconciled_replacements
+								.contains(&(m.app_label.as_str(), m.name.as_str()))
 					})
 					.collect();
-				let pending = dependency_ordered_migrations(pending)?;
-				if pending.is_empty() {
+				let cleanup: Vec<_> = migrations_to_apply
+					.iter()
+					.filter(|migration| {
+						!migration.replaces.is_empty()
+							&& applied.iter().any(|record| {
+								record.app == migration.app_label && record.name == migration.name
+							}) && migration.replaces.iter().any(|(app, name)| {
+							applied
+								.iter()
+								.any(|record| record.app == *app && record.name == *name)
+						})
+					})
+					.collect();
+				if pending.is_empty() && cleanup.is_empty() && reconciliations.is_empty() {
 					ctx.info("[plan] No unapplied migrations.");
 					return Ok(());
 				}
@@ -596,6 +762,34 @@ impl BaseCommand for MigrateCommand {
 						migration.app_label, migration.name
 					));
 				}
+				for migration in cleanup {
+					for (app, name) in &migration.replaces {
+						if applied
+							.iter()
+							.any(|record| record.app == *app && record.name == *name)
+						{
+							ctx.info(&format!("  - {app}:{name} (unapply superseded record)"));
+						}
+					}
+				}
+				for (migration, records) in reconciliations {
+					let historical_record = records
+						.first()
+						.expect("replacement reconciliation requires a historical record");
+					ctx.info(&format!(
+						"  - {}:{} (rename as {}:{})",
+						historical_record.app,
+						historical_record.name,
+						migration.app_label,
+						migration.name
+					));
+					for record in records.iter().skip(1) {
+						ctx.info(&format!(
+							"  - {}:{} (unapply superseded record)",
+							record.app, record.name
+						));
+					}
+				}
 				return Ok(());
 			}
 
@@ -603,21 +797,17 @@ impl BaseCommand for MigrateCommand {
 			if is_fake {
 				ctx.info("Faking migrations (marking as applied without execution):");
 
-				// Create migration executor for fake migrations
-				let mut executor = DatabaseMigrationExecutor::new(connection);
-				let migrations_to_fake = dependency_ordered_migrations(migrations_to_apply.iter())?;
+				let recorder =
+					reinhardt_db::migrations::DatabaseMigrationRecorder::new(connection.clone());
+				let applied = plan_applied_migrations(&connection, &recorder).await?;
+				let migrations_to_fake = dependency_ordered_migrations_with_applied_history(
+					&migrations_to_apply,
+					&applied,
+				)?;
 
 				// Record each migration as applied without executing
 				for migration in migrations_to_fake {
-					executor
-						.record_migration(&migration.app_label, &migration.name)
-						.await
-						.map_err(|e| {
-							crate::CommandError::ExecutionError(format!(
-								"Failed to record fake migration {}:{}: {:?}",
-								migration.app_label, migration.name, e
-							))
-						})?;
+					fake_record_migration(&recorder, migration, &migrations_to_apply).await?;
 					ctx.success(&format!(
 						"  ✓ Faked: {}:{}",
 						migration.app_label, migration.name
@@ -664,7 +854,7 @@ impl BaseCommand for MigrateCommand {
 }
 
 /// Sort migrations with the same dependency rules used by the migration executor.
-#[cfg(feature = "migrations")]
+#[cfg(all(feature = "migrations", test))]
 fn dependency_ordered_migrations<'a>(
 	migrations: impl IntoIterator<Item = &'a reinhardt_db::migrations::Migration>,
 ) -> CommandResult<Vec<&'a reinhardt_db::migrations::Migration>> {
@@ -683,12 +873,17 @@ fn dependency_ordered_migrations<'a>(
 			.map(|(app, name)| MigrationKey::new(app.as_str(), name.as_str()))
 			.collect();
 
+		let replaces = migration
+			.replaces
+			.iter()
+			.map(|(app, name)| MigrationKey::new(app.as_str(), name.as_str()))
+			.collect();
 		by_key.insert(key.clone(), *migration);
-		graph.add_migration(key, dependencies);
+		graph.add_migration_with_replaces(key, dependencies, replaces);
 	}
 
 	graph
-		.topological_sort()
+		.resolve_execution_order_with_replaces()
 		.map_err(|e| {
 			crate::CommandError::ExecutionError(format!(
 				"Failed to sort migration plan by dependencies: {}",
@@ -705,6 +900,476 @@ fn dependency_ordered_migrations<'a>(
 			})
 		})
 		.collect()
+}
+
+/// Sort an apply-all preview with the same partial-replacement selection that
+/// the executor uses after reading recorder state.
+#[cfg(feature = "migrations")]
+fn dependency_ordered_migrations_with_applied_history<'a>(
+	migrations: &'a [reinhardt_db::migrations::Migration],
+	applied: &[reinhardt_db::migrations::recorder::MigrationRecord],
+) -> CommandResult<Vec<&'a reinhardt_db::migrations::Migration>> {
+	use std::collections::HashSet;
+
+	let applied_keys: HashSet<_> = applied
+		.iter()
+		.map(|record| (record.app.as_str(), record.name.as_str()))
+		.collect();
+	let partial_replacements: HashSet<_> = migrations
+		.iter()
+		.filter(|migration| {
+			!migration.replaces.is_empty()
+				&& !replacement_history_is_fully_applied(
+					migrations,
+					&migration.app_label,
+					&migration.name,
+					applied,
+				) && migration
+				.replaces
+				.iter()
+				.any(|(app, name)| applied_keys.contains(&(app.as_str(), name.as_str())))
+		})
+		.map(|migration| (migration.app_label.as_str(), migration.name.as_str()))
+		.collect();
+	let replaced_by_selected_replacements: HashSet<_> = migrations
+		.iter()
+		.filter(|migration| {
+			!partial_replacements.contains(&(migration.app_label.as_str(), migration.name.as_str()))
+		})
+		.flat_map(|migration| {
+			migration
+				.replaces
+				.iter()
+				.map(|(app, name)| (app.as_str(), name.as_str()))
+		})
+		.collect();
+	let selected = migrations.iter().filter(|migration| {
+		!partial_replacements.contains(&(migration.app_label.as_str(), migration.name.as_str()))
+			&& !replaced_by_selected_replacements
+				.contains(&(migration.app_label.as_str(), migration.name.as_str()))
+	});
+
+	dependency_ordered_migrations_with_partial_replacement_dependencies(
+		selected, migrations, applied,
+	)
+}
+
+/// Sort selected migrations while preserving dependencies on a partially applied
+/// replacement's remaining original chain.
+#[cfg(feature = "migrations")]
+fn dependency_ordered_migrations_with_partial_replacement_dependencies<'a>(
+	migrations: impl IntoIterator<Item = &'a reinhardt_db::migrations::Migration>,
+	all_migrations: &[reinhardt_db::migrations::Migration],
+	applied: &[reinhardt_db::migrations::recorder::MigrationRecord],
+) -> CommandResult<Vec<&'a reinhardt_db::migrations::Migration>> {
+	use reinhardt_db::migrations::{MigrationGraph, MigrationKey};
+	use std::collections::{HashMap, HashSet};
+
+	let applied_keys: HashSet<_> = applied
+		.iter()
+		.map(|record| (record.app.as_str(), record.name.as_str()))
+		.collect();
+	let partial_replacement_dependencies: HashMap<_, Vec<_>> = all_migrations
+		.iter()
+		.filter(|migration| {
+			!migration.replaces.is_empty()
+				&& !replacement_history_is_fully_applied(
+					all_migrations,
+					&migration.app_label,
+					&migration.name,
+					applied,
+				) && migration
+				.replaces
+				.iter()
+				.any(|(app, name)| applied_keys.contains(&(app.as_str(), name.as_str())))
+		})
+		.map(|migration| {
+			(
+				(migration.app_label.clone(), migration.name.clone()),
+				migration
+					.replaces
+					.iter()
+					.map(|(app, name)| MigrationKey::new(app.as_str(), name.as_str()))
+					.collect(),
+			)
+		})
+		.collect();
+	let migrations: Vec<_> = migrations.into_iter().collect();
+	let mut by_key = HashMap::with_capacity(migrations.len());
+	let mut graph = MigrationGraph::new();
+
+	for migration in &migrations {
+		let key = MigrationKey::new(migration.app_label.as_str(), migration.name.as_str());
+		let dependencies = migration
+			.dependencies
+			.iter()
+			.flat_map(|(app, name)| {
+				partial_replacement_dependencies
+					.get(&(app.clone(), name.clone()))
+					.cloned()
+					.unwrap_or_else(|| vec![MigrationKey::new(app.as_str(), name.as_str())])
+			})
+			.collect();
+		let replaces = migration
+			.replaces
+			.iter()
+			.map(|(app, name)| MigrationKey::new(app.as_str(), name.as_str()))
+			.collect();
+		by_key.insert(key.clone(), *migration);
+		graph.add_migration_with_replaces(key, dependencies, replaces);
+	}
+
+	graph
+		.resolve_execution_order_with_replaces()
+		.map_err(|e| {
+			crate::CommandError::ExecutionError(format!(
+				"Failed to sort migration plan by dependencies: {}",
+				e
+			))
+		})?
+		.into_iter()
+		.map(|key| {
+			by_key.get(&key).copied().ok_or_else(|| {
+				crate::CommandError::ExecutionError(format!(
+					"Dependency-sorted migration not found: {}",
+					key.id()
+				))
+			})
+		})
+		.collect()
+}
+
+#[cfg(feature = "migrations")]
+fn terminal_replacement_target(
+	migrations: &[reinhardt_db::migrations::Migration],
+	app_label: &str,
+	target_name: &str,
+) -> CommandResult<String> {
+	use std::collections::HashSet;
+	fn collect(
+		current: &str,
+		migrations: &[reinhardt_db::migrations::Migration],
+		app: &str,
+		path: &mut HashSet<String>,
+		terminals: &mut HashSet<String>,
+	) -> CommandResult<()> {
+		if !path.insert(current.to_string()) {
+			return Err(crate::CommandError::ExecutionError(format!(
+				"Replacement cycle detected while resolving {app}:{current}"
+			)));
+		}
+		let owners: Vec<_> = migrations
+			.iter()
+			.filter(|migration| {
+				migration.app_label == app
+					&& migration
+						.replaces
+						.iter()
+						.any(|(owner_app, name)| owner_app == app && name == current)
+			})
+			.collect();
+		if owners.is_empty() {
+			terminals.insert(current.to_string());
+		}
+		for owner in owners {
+			collect(&owner.name, migrations, app, path, terminals)?;
+		}
+		path.remove(current);
+		Ok(())
+	}
+	let mut terminals = HashSet::new();
+	collect(
+		target_name,
+		migrations,
+		app_label,
+		&mut HashSet::new(),
+		&mut terminals,
+	)?;
+	match terminals.len() {
+		1 => Ok(terminals
+			.into_iter()
+			.next()
+			.expect("single terminal replacement")),
+		_ => Err(crate::CommandError::ExecutionError(format!(
+			"Migration {app_label}:{target_name} has multiple terminal replacements"
+		))),
+	}
+}
+
+#[cfg(feature = "migrations")]
+fn replacement_history_is_fully_applied(
+	migrations: &[reinhardt_db::migrations::Migration],
+	app_label: &str,
+	migration_name: &str,
+	applied: &[reinhardt_db::migrations::recorder::MigrationRecord],
+) -> bool {
+	let Some(replacement) = migrations
+		.iter()
+		.find(|migration| migration.app_label == app_label && migration.name == migration_name)
+	else {
+		return false;
+	};
+	let mut covered: std::collections::HashSet<_> = applied
+		.iter()
+		.map(|record| (record.app.as_str(), record.name.as_str()))
+		.collect();
+	loop {
+		let covered_before = covered.len();
+		for migration in migrations {
+			if covered.contains(&(migration.app_label.as_str(), migration.name.as_str())) {
+				covered.extend(
+					migration
+						.replaces
+						.iter()
+						.map(|(app, name)| (app.as_str(), name.as_str())),
+				);
+			}
+		}
+		for migration in migrations {
+			if !migration.replaces.is_empty()
+				&& migration
+					.replaces
+					.iter()
+					.all(|(app, name)| covered.contains(&(app.as_str(), name.as_str())))
+			{
+				covered.insert((migration.app_label.as_str(), migration.name.as_str()));
+			}
+		}
+		if covered.len() == covered_before {
+			break;
+		}
+	}
+	!replacement.replaces.is_empty()
+		&& replacement
+			.replaces
+			.iter()
+			.all(|(app, name)| covered.contains(&(app.as_str(), name.as_str())))
+}
+
+#[cfg(feature = "migrations")]
+fn replacement_history_has_applied_records(
+	migrations: &[reinhardt_db::migrations::Migration],
+	app_label: &str,
+	migration_name: &str,
+	applied: &[reinhardt_db::migrations::recorder::MigrationRecord],
+) -> bool {
+	fn collect_replaced_names(
+		migrations: &[reinhardt_db::migrations::Migration],
+		app_label: &str,
+		migration_name: &str,
+		visited: &mut std::collections::HashSet<(String, String)>,
+	) {
+		let key = (app_label.to_string(), migration_name.to_string());
+		if !visited.insert(key) {
+			return;
+		}
+		if let Some(migration) = migrations
+			.iter()
+			.find(|migration| migration.app_label == app_label && migration.name == migration_name)
+		{
+			for (replaced_app, replaced_name) in &migration.replaces {
+				collect_replaced_names(migrations, replaced_app, replaced_name, visited);
+			}
+		}
+	}
+
+	let mut replacement_history = std::collections::HashSet::new();
+	collect_replaced_names(
+		migrations,
+		app_label,
+		migration_name,
+		&mut replacement_history,
+	);
+	replacement_history.remove(&(app_label.to_string(), migration_name.to_string()));
+	applied
+		.iter()
+		.any(|record| replacement_history.contains(&(record.app.clone(), record.name.clone())))
+}
+
+#[cfg(feature = "migrations")]
+fn direct_replacement_history_records<'a>(
+	migrations: &[reinhardt_db::migrations::Migration],
+	migration: &reinhardt_db::migrations::Migration,
+	applied: &'a [reinhardt_db::migrations::recorder::MigrationRecord],
+) -> Option<Vec<&'a reinhardt_db::migrations::recorder::MigrationRecord>> {
+	if !replacement_history_is_fully_applied(
+		migrations,
+		&migration.app_label,
+		&migration.name,
+		applied,
+	) {
+		return None;
+	}
+	let records: Vec<_> = applied
+		.iter()
+		.filter(|record| {
+			migration
+				.replaces
+				.iter()
+				.any(|(app, name)| record.app == *app && record.name == *name)
+		})
+		.collect();
+	(!records.is_empty()).then_some(records)
+}
+
+#[cfg(feature = "migrations")]
+fn available_direct_replacement_history_record<'a>(
+	migration: &reinhardt_db::migrations::Migration,
+	applied: &'a [reinhardt_db::migrations::recorder::MigrationRecord],
+) -> Option<&'a reinhardt_db::migrations::recorder::MigrationRecord> {
+	migration.replaces.iter().find_map(|(app, name)| {
+		applied
+			.iter()
+			.find(|record| record.app == *app && record.name == *name)
+	})
+}
+
+#[cfg(feature = "migrations")]
+fn stale_replacement_records(
+	migrations: &[reinhardt_db::migrations::Migration],
+	app_label: &str,
+	applied: &[reinhardt_db::migrations::recorder::MigrationRecord],
+) -> Vec<reinhardt_db::migrations::recorder::MigrationRecord> {
+	let stale_names: std::collections::HashSet<_> = migrations
+		.iter()
+		.filter(|migration| {
+			migration.app_label == app_label
+				&& !migration.replaces.is_empty()
+				&& applied.iter().any(|record| {
+					record.app == migration.app_label && record.name == migration.name
+				})
+		})
+		.flat_map(|migration| {
+			migration
+				.replaces
+				.iter()
+				.map(|(app, name)| (app.as_str(), name.as_str()))
+		})
+		.collect();
+	applied
+		.iter()
+		.filter(|record| stale_names.contains(&(record.app.as_str(), record.name.as_str())))
+		.cloned()
+		.collect()
+}
+
+#[cfg(feature = "migrations")]
+async fn fake_record_migration(
+	recorder: &reinhardt_db::migrations::DatabaseMigrationRecorder,
+	migration: &reinhardt_db::migrations::Migration,
+	migrations: &[reinhardt_db::migrations::Migration],
+) -> CommandResult<()> {
+	if recorder
+		.is_applied(&migration.app_label, &migration.name)
+		.await
+		.map_err(|error| {
+			crate::CommandError::ExecutionError(format!(
+				"Failed to inspect fake migration {}:{}: {}",
+				migration.app_label, migration.name, error
+			))
+		})? {
+		if !migration.replaces.is_empty() {
+			let applied = recorder.get_applied_migrations().await.map_err(|error| {
+				crate::CommandError::ExecutionError(format!(
+					"Failed to inspect replacement cleanup for {}:{}: {}",
+					migration.app_label, migration.name, error
+				))
+			})?;
+			for (app, name) in &migration.replaces {
+				if applied
+					.iter()
+					.any(|record| record.app == *app && record.name == *name)
+				{
+					recorder.unapply(app, name).await.map_err(|error| {
+						crate::CommandError::ExecutionError(format!(
+							"Failed to resume fake replacement cleanup for {}:{}: {}",
+							app, name, error
+						))
+					})?;
+				}
+			}
+		}
+		return Ok(());
+	}
+
+	if !migration.replaces.is_empty() {
+		let applied = recorder.get_applied_migrations().await.map_err(|error| {
+			crate::CommandError::ExecutionError(format!(
+				"Failed to inspect replacement history for {}:{}: {}",
+				migration.app_label, migration.name, error
+			))
+		})?;
+		let covered = migration.replaces.iter().filter(|(app, name)| {
+			applied
+				.iter()
+				.any(|record| record.app == *app && record.name == *name)
+		});
+		let covered_count = covered.count();
+		if replacement_history_is_fully_applied(
+			migrations,
+			&migration.app_label,
+			&migration.name,
+			&applied,
+		) {
+			let historical_record = available_direct_replacement_history_record(
+				migration, &applied,
+			)
+			.ok_or_else(|| {
+				crate::CommandError::ExecutionError(format!(
+					"Cannot fake replacement {}:{} because a competing replacement already covers its history",
+					migration.app_label, migration.name
+				))
+			})?;
+			recorder
+				.rename_applied(
+					&historical_record.app,
+					&historical_record.name,
+					&migration.app_label,
+					&migration.name,
+				)
+				.await
+				.map_err(|error| {
+					crate::CommandError::ExecutionError(format!(
+						"Failed to reconcile fake replacement {}:{}: {}",
+						migration.app_label, migration.name, error
+					))
+				})?;
+			for (app, name) in &migration.replaces {
+				if app == &historical_record.app && name == &historical_record.name {
+					continue;
+				}
+				if !applied
+					.iter()
+					.any(|record| record.app == *app && record.name == *name)
+				{
+					continue;
+				}
+				recorder.unapply(app, name).await.map_err(|error| {
+					crate::CommandError::ExecutionError(format!(
+						"Failed to reconcile fake replacement record {}:{}: {}",
+						app, name, error
+					))
+				})?;
+			}
+			return Ok(());
+		}
+		if covered_count > 0 {
+			return Err(crate::CommandError::ExecutionError(format!(
+				"Cannot fake replacement {}:{} because only some replaced migrations are recorded",
+				migration.app_label, migration.name
+			)));
+		}
+	}
+
+	recorder
+		.record_applied(&migration.app_label, &migration.name)
+		.await
+		.map_err(|error| {
+			crate::CommandError::ExecutionError(format!(
+				"Failed to record fake migration {}:{}: {}",
+				migration.app_label, migration.name, error
+			))
+		})
 }
 
 /// Resolve the applied-migration set for a `--plan` preview without creating the
@@ -1878,7 +2543,7 @@ impl BaseCommand for ShellCommand {
 			let config = self.config.as_ref().ok_or_else(|| {
 				crate::CommandError::ExecutionError(
 					"Shell configuration is missing. Use \
-					 `execute_from_command_line_with_settings_and_shell` from the generated manage.rs."
+					 `execute_from_command_line_with_migration_settings_and_shell` from the generated manage.rs."
 						.to_string(),
 				)
 			})?;
@@ -4480,6 +5145,147 @@ impl BaseCommand for CheckDiCommand {
 mod tests {
 	use super::*;
 
+	#[cfg(feature = "migrations")]
+	#[test]
+	fn replacement_target_stays_original_for_partial_history() {
+		use chrono::Utc;
+		use reinhardt_db::migrations::{Migration, recorder::MigrationRecord};
+
+		let first = Migration::new("0001_initial", "app");
+		let second = Migration::new("0002_add_field", "app");
+		let mut squashed = Migration::new("0001_squashed_0002", "app");
+		squashed.replaces = vec![
+			("app".to_string(), "0001_initial".to_string()),
+			("app".to_string(), "0002_add_field".to_string()),
+		];
+		let migrations = vec![first, second, squashed];
+		let partial = vec![MigrationRecord {
+			app: "app".to_string(),
+			name: "0001_initial".to_string(),
+			applied: Utc::now(),
+		}];
+
+		let terminal = terminal_replacement_target(&migrations, "app", "0001_initial")
+			.expect("replacement target should resolve");
+
+		assert_eq!(terminal, "0001_squashed_0002");
+		assert!(replacement_history_has_applied_records(
+			&migrations,
+			"app",
+			&terminal,
+			&partial
+		));
+		assert!(!replacement_history_is_fully_applied(
+			&migrations,
+			"app",
+			&terminal,
+			&partial
+		));
+	}
+
+	#[cfg(feature = "migrations")]
+	#[test]
+	fn plan_reconciles_a_fully_covered_replacement_from_one_direct_squash_record() {
+		use chrono::Utc;
+		use reinhardt_db::migrations::{Migration, recorder::MigrationRecord};
+
+		let first = Migration::new("0001_initial", "app");
+		let second = Migration::new("0002_add_field", "app");
+		let mut older_squash = Migration::new("0001_squashed_0002", "app");
+		older_squash.replaces = vec![
+			("app".to_string(), "0001_initial".to_string()),
+			("app".to_string(), "0002_add_field".to_string()),
+		];
+		let mut replacement = Migration::new("0001_squashed_0002_v2", "app");
+		replacement.replaces = vec![
+			("app".to_string(), "0001_initial".to_string()),
+			("app".to_string(), "0002_add_field".to_string()),
+			("app".to_string(), "0001_squashed_0002".to_string()),
+		];
+		let migrations = vec![first, second, older_squash, replacement.clone()];
+		let applied = vec![MigrationRecord {
+			app: "app".to_string(),
+			name: "0001_squashed_0002".to_string(),
+			applied: Utc::now(),
+		}];
+
+		let records = direct_replacement_history_records(&migrations, &replacement, &applied)
+			.expect("fully covered history should provide the direct squash reconciliation anchor");
+		assert_eq!(records.len(), 1);
+		assert_eq!(records[0].name, "0001_squashed_0002");
+	}
+
+	#[cfg(feature = "migrations")]
+	#[test]
+	fn nested_replacement_is_fully_applied_when_its_replaced_squash_is_covered() {
+		use chrono::Utc;
+		use reinhardt_db::migrations::{Migration, recorder::MigrationRecord};
+
+		let first = Migration::new("0001_initial", "app");
+		let second = Migration::new("0002_add_field", "app");
+		let mut older_squash = Migration::new("0001_squashed_0002", "app");
+		older_squash.replaces = vec![
+			("app".to_string(), "0001_initial".to_string()),
+			("app".to_string(), "0002_add_field".to_string()),
+		];
+		let mut newer_squash = Migration::new("0001_squashed_0002_v2", "app");
+		newer_squash.replaces = vec![("app".to_string(), "0001_squashed_0002".to_string())];
+		let migrations = vec![first, second, older_squash, newer_squash];
+		let applied = vec![
+			MigrationRecord {
+				app: "app".to_string(),
+				name: "0001_initial".to_string(),
+				applied: Utc::now(),
+			},
+			MigrationRecord {
+				app: "app".to_string(),
+				name: "0002_add_field".to_string(),
+				applied: Utc::now(),
+			},
+		];
+
+		assert!(replacement_history_is_fully_applied(
+			&migrations,
+			"app",
+			"0001_squashed_0002_v2",
+			&applied,
+		));
+	}
+
+	#[cfg(feature = "migrations")]
+	#[rstest::rstest]
+	fn plan_order_keeps_originals_for_partial_replacement_history() {
+		use chrono::Utc;
+		use reinhardt_db::migrations::{Migration, recorder::MigrationRecord};
+
+		let first = Migration::new("0001_initial", "app");
+		let second = Migration::new("0002_add_field", "app").add_dependency("app", "0001_initial");
+		let mut squashed = Migration::new("0001_squashed_0002", "app");
+		squashed.replaces = vec![
+			("app".to_string(), "0001_initial".to_string()),
+			("app".to_string(), "0002_add_field".to_string()),
+		];
+		let third =
+			Migration::new("0003_after_squash", "app").add_dependency("app", "0001_squashed_0002");
+		let migrations = vec![first, second, squashed, third];
+		let applied = vec![MigrationRecord {
+			app: "app".to_string(),
+			name: "0001_initial".to_string(),
+			applied: Utc::now(),
+		}];
+
+		let ordered = dependency_ordered_migrations_with_applied_history(&migrations, &applied)
+			.expect("partial replacement history should retain original migrations in the plan");
+
+		assert_eq!(
+			ordered
+				.iter()
+				.map(|migration| migration.name.as_str())
+				.collect::<Vec<_>>(),
+			vec!["0001_initial", "0002_add_field", "0003_after_squash"]
+		);
+	}
+
 	#[test]
 	#[cfg(feature = "migrations")]
 	fn makemigrations_reports_enum_domain_warnings_to_the_command_sink() {
@@ -5378,7 +6184,7 @@ name = "db.sqlite3"
 		assert_eq!(
 			error.to_string(),
 			"Execution error: Shell configuration is missing. Use \
-			 `execute_from_command_line_with_settings_and_shell` from the generated manage.rs."
+			 `execute_from_command_line_with_migration_settings_and_shell` from the generated manage.rs."
 		);
 	}
 

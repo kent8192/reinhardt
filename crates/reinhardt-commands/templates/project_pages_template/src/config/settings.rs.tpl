@@ -48,7 +48,7 @@ use reinhardt::settings;
 use std::env;
 
 // Add fragments to extend settings: e.g. `#[settings(core: CoreSettings | cache: CacheSettings)]`
-#[settings(core: CoreSettings | contacts: ContactSettings)]
+#[settings(core: CoreSettings | contacts: ContactSettings | migrations: MigrationSettings)]
 pub struct ProjectSettings;
 
 /// Get settings based on environment variable
@@ -74,8 +74,8 @@ pub fn get_settings() -> ProjectSettings {
     let profile_str = env::var("REINHARDT_ENV").unwrap_or_else(|_| "local".to_string());
     let profile = Profile::parse(&profile_str);
 
-    // Get the project root directory (parent of src/)
-    let base_dir = env::current_dir().expect("Failed to get current directory");
+    // Resolve the managed project root independently of the caller's working directory.
+    let base_dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let settings_dir = base_dir.join("settings");
 
     // Build settings by merging sources in priority order.
@@ -85,7 +85,11 @@ pub fn get_settings() -> ProjectSettings {
     SettingsBuilder::new()
         .profile(profile)
         // Lowest priority: Default values
-        .add_source(DefaultSource::new())
+        .add_source(
+            DefaultSource::new()
+                .with_value("core", serde_json::json!({ "base_dir": base_dir }))
+                .with_value("migrations", serde_json::json!({})),
+        )
         // Medium priority: Base TOML file
         .add_source(TomlFileSource::new(settings_dir.join("base.toml")))
         // Profile priority: Environment-specific TOML file

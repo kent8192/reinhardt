@@ -294,8 +294,9 @@ These fields are actively consumed by the framework and affect runtime behavior:
 | `debug` | Debug mode toggle |
 | `allowed_hosts` | List of allowed host/domain names |
 | `installed_apps` | List of installed applications |
-| `migration_swappable_settings` | Mapping of swappable migration setting keys to `"app.Model"` targets used by `squashmigrations` |
-| `migration_features` | Feature names that enable conditional migration dependencies while running `squashmigrations` |
+| `migrations.migration_swappable_settings` | Mapping of swappable migration setting keys to `"app.Model"` targets used by `squashmigrations` |
+| `migrations.migration_settings` | Mapping of setting keys to values used by setting-gated optional migration dependencies |
+| `migrations.migration_features` | Feature names that enable conditional migration dependencies while running `squashmigrations` |
 | `middleware` | List of middleware classes |
 | `root_urlconf` | Root URL configuration module |
 | `databases` | Database configurations |
@@ -317,9 +318,11 @@ These fields are actively consumed by the framework and affect runtime behavior:
 
 ### Migration dependency settings
 
-`squashmigrations` reads conditional dependency settings from the `core`
-section. Use `migration_swappable_settings` for a migration metadata key such
+`squashmigrations` reads conditional dependency settings from the independent
+`MigrationSettings` fragment in the `migrations` section. Use
+`migration_swappable_settings` for a migration metadata key such
 as `AUTH_USER_MODEL`; its value must be the selected `"app.Model"` target.
+Use `migration_settings` for values read by `SettingEnabled` conditions.
 Use `migration_features` to enable dependencies declared with a matching
 feature name. `installed_apps` similarly controls dependencies declared as
 application-conditional.
@@ -327,10 +330,15 @@ application-conditional.
 ```toml
 [core]
 installed_apps = ["accounts"]
+
+[migrations]
 migration_features = ["gis"]
 
-[core.migration_swappable_settings]
+[migrations.migration_swappable_settings]
 AUTH_USER_MODEL = "accounts.User"
+
+[migrations.migration_settings]
+ENABLE_AUDIT = "true"
 ```
 
 ### Reserved for Future Implementation

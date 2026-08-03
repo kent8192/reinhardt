@@ -2543,7 +2543,7 @@ impl BaseCommand for ShellCommand {
 			let config = self.config.as_ref().ok_or_else(|| {
 				crate::CommandError::ExecutionError(
 					"Shell configuration is missing. Use \
-					 `execute_from_command_line_with_settings_and_shell` from the generated manage.rs."
+					 `execute_from_command_line_with_migration_settings_and_shell` from the generated manage.rs."
 						.to_string(),
 				)
 			})?;
@@ -6184,7 +6184,7 @@ name = "db.sqlite3"
 		assert_eq!(
 			error.to_string(),
 			"Execution error: Shell configuration is missing. Use \
-			 `execute_from_command_line_with_settings_and_shell` from the generated manage.rs."
+			 `execute_from_command_line_with_migration_settings_and_shell` from the generated manage.rs."
 		);
 	}
 

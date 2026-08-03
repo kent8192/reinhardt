@@ -100,8 +100,8 @@ cargo run --bin manage --features commands-shell -- shell -c \
 
 `src/config/shell.rs` supplies `get_shell_config()`. The outer native `main`
 calls `shell_runtime_hook()` before the Tokio-backed `native::main`, and the
-feature selects `execute_from_command_line_with_settings_and_shell`. Without
-the feature, the existing settings-only dispatcher remains compatible with
+feature selects `execute_from_command_line_with_migration_settings_and_shell`. Without
+the feature, the migration-aware dispatcher remains active for
 non-shell commands.
 
 The Rust evaluator binds `settings`, the ORM `db` handle, the application `di`

@@ -162,7 +162,7 @@
 //! defaults intentionally omit it. Projects opting in provide a
 //! [`ShellConfig`], call [`shell_runtime_hook`] from the outer native `main`
 //! before constructing Tokio, and dispatch through
-//! [`execute_from_command_line_with_settings_and_shell`].
+//! [`execute_from_command_line_with_migration_settings_and_shell`].
 //!
 //! ```rust,ignore
 //! #[cfg(not(target_arch = "wasm32"))]
@@ -348,6 +348,8 @@ pub use builtin::{CheckCommand, CheckDiCommand, MigrateCommand, RunServerCommand
 pub use cli::start_server;
 pub use cli::{
 	Cli, Commands, auto_register_router, execute_from_command_line,
+	execute_from_command_line_with_migration_settings,
+	execute_from_command_line_with_migration_settings_and_shell,
 	execute_from_command_line_with_registry, execute_from_command_line_with_registry_and_settings,
 	execute_from_command_line_with_registry_and_settings_and_shell,
 	execute_from_command_line_with_settings, execute_from_command_line_with_settings_and_shell,

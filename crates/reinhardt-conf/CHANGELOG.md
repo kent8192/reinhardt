@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.0-alpha.4](https://github.com/kent8192/reinhardt-web/compare/reinhardt-conf@v0.4.0-alpha.3...reinhardt-conf@v0.4.0-alpha.4) - 2026-08-03
+
+### Fixed
+
+- *(migrations)* harden squash generation
+- *(migrations)* cover squash review edge cases
+- *(commands)* honor managed migration settings
+
+### Other
+
+- integrate develop migration updates
+
 ## [0.4.0-alpha.1](https://github.com/kent8192/reinhardt-web/compare/reinhardt-conf@v0.3.2...reinhardt-conf@v0.4.0-alpha.1) - 2026-07-21
 
 ### Changed

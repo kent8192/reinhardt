@@ -41,68 +41,16 @@ pub struct FilesystemRepository {
 	root_dir: PathBuf,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-struct DirectoryIdentity {
-	device: u64,
-	file: u64,
+#[derive(Debug, Eq, PartialEq)]
+struct DirectoryIdentity(same_file::Handle);
+
+fn directory_identity(directory: &Dir) -> std::io::Result<DirectoryIdentity> {
+	let file = directory.try_clone()?.into_std_file();
+	same_file::Handle::from_file(file).map(DirectoryIdentity)
 }
 
-#[cfg(all(unix, not(target_os = "vxworks")))]
 fn root_directory_identity(root: &Dir, _path: &Path) -> std::io::Result<DirectoryIdentity> {
-	let metadata = root.metadata(".")?;
-	use cap_std::fs::MetadataExt;
-
-	Ok(DirectoryIdentity {
-		device: metadata.dev(),
-		file: metadata.ino(),
-	})
-}
-
-#[cfg(windows)]
-fn root_directory_identity(root: &Dir, _path: &Path) -> std::io::Result<DirectoryIdentity> {
-	use cap_std::fs::MetadataExt;
-
-	let metadata = root.metadata(".")?;
-	let device = metadata
-		.volume_serial_number()
-		.ok_or_else(|| std::io::Error::other("directory volume serial number is unavailable"))?;
-	let file = metadata
-		.file_index()
-		.ok_or_else(|| std::io::Error::other("directory file index is unavailable"))?;
-	Ok(DirectoryIdentity {
-		device: u64::from(device),
-		file,
-	})
-}
-
-#[cfg(target_os = "wasi")]
-fn root_directory_identity(root: &Dir, _path: &Path) -> std::io::Result<DirectoryIdentity> {
-	let metadata = root.metadata(".")?;
-	use cap_std::fs::MetadataExt;
-
-	Ok(DirectoryIdentity {
-		device: metadata.dev(),
-		file: metadata.ino(),
-	})
-}
-
-#[cfg(target_os = "vxworks")]
-fn root_directory_identity(root: &Dir, _path: &Path) -> std::io::Result<DirectoryIdentity> {
-	let metadata = root.metadata(".")?;
-	use std::os::vxworks::fs::MetadataExt;
-
-	Ok(DirectoryIdentity {
-		device: metadata.st_dev(),
-		file: metadata.st_ino(),
-	})
-}
-
-#[cfg(not(any(unix, windows, target_os = "wasi", target_os = "vxworks")))]
-fn root_directory_identity(_root: &Dir, _path: &Path) -> std::io::Result<DirectoryIdentity> {
-	Err(std::io::Error::new(
-		std::io::ErrorKind::Unsupported,
-		"root directory identity is unavailable on this platform",
-	))
+	directory_identity(root)
 }
 
 struct RootValidationHooks<B, V> {
@@ -819,7 +767,7 @@ impl FilesystemRepository {
 		let root = Dir::open_ambient_dir(&self.root_dir, ambient_authority())?;
 		let root_identity = root_directory_identity(&root, &self.root_dir)?;
 		before_open()?;
-		self.validate_root_identity(root_identity, || Ok(()))?;
+		self.validate_root_identity(&root_identity, || Ok(()))?;
 		root.create_dir_all(app_label)?;
 		let app_directory = root.open_dir(app_label)?;
 		let app_directory_path = self.root_dir.join(app_label);
@@ -838,7 +786,8 @@ impl FilesystemRepository {
 				)))),
 			};
 		}
-		if let Err(identity_error) = self.validate_root_identity(root_identity, after_identity_open)
+		if let Err(identity_error) =
+			self.validate_root_identity(&root_identity, after_identity_open)
 		{
 			return match incomplete.cleanup_now() {
 				Ok(()) => Err(identity_error),
@@ -850,7 +799,7 @@ impl FilesystemRepository {
 		}
 		if let Err(identity_error) = self.validate_directory_identity(
 			&app_directory_path,
-			app_directory_identity,
+			&app_directory_identity,
 			"Migration application directory",
 			|| Ok(()),
 		) {
@@ -865,7 +814,7 @@ impl FilesystemRepository {
 		Ok(incomplete.complete())
 	}
 
-	fn validate_root_identity<V>(&self, expected: DirectoryIdentity, after_open: V) -> Result<()>
+	fn validate_root_identity<V>(&self, expected: &DirectoryIdentity, after_open: V) -> Result<()>
 	where
 		V: FnOnce() -> std::io::Result<()>,
 	{
@@ -880,7 +829,7 @@ impl FilesystemRepository {
 	fn validate_directory_identity<V>(
 		&self,
 		path: &Path,
-		expected: DirectoryIdentity,
+		expected: &DirectoryIdentity,
 		label: &str,
 		after_open: V,
 	) -> Result<()>
@@ -905,7 +854,7 @@ impl FilesystemRepository {
 		let after_open = std::fs::symlink_metadata(path).map_err(|error| {
 			MigrationError::PathTraversal(format!("{label} identity is unavailable: {error}"))
 		})?;
-		if after_open.file_type().is_symlink() || actual != expected {
+		if after_open.file_type().is_symlink() || &actual != expected {
 			return Err(MigrationError::PathTraversal(format!(
 				"{label} identity changed during source creation: expected \
 				 {expected:?}, found {actual:?}"
@@ -919,7 +868,7 @@ impl FilesystemRepository {
 			root_directory_identity(&after_open_directory, path).map_err(|error| {
 				MigrationError::PathTraversal(format!("{label} identity is unavailable: {error}"))
 			})?;
-		if after_open_identity != expected {
+		if &after_open_identity != expected {
 			return Err(MigrationError::PathTraversal(format!(
 				"{label} identity changed during source creation: expected \
 				 {expected:?}, found {after_open_identity:?}"

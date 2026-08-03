@@ -338,6 +338,41 @@ pub fn migration() -> Migration {
 	#[rstest]
 	#[tokio::test]
 	#[serial(filesystem_source)]
+	async fn filesystem_source_skips_rust_migration_module_entry_points() {
+		// Arrange
+		let temp_dir = TempDir::new().unwrap();
+		create_migration_file(
+			temp_dir.path(),
+			"polls",
+			"0001_initial",
+			r#"
+use reinhardt_db::migrations::prelude::*;
+
+pub fn migration() -> Migration {
+	Migration::new("0001_initial", "polls")
+}
+"#,
+		);
+		fs::write(
+			temp_dir.path().join("polls/migrations.rs"),
+			"pub mod _0001_initial;",
+		)
+		.expect("write a Rust module entry point");
+
+		// Act
+		let migrations = FilesystemSource::new(temp_dir.path())
+			.all_migrations()
+			.await
+			.expect("load migration files");
+
+		// Assert
+		assert_eq!(migrations.len(), 1);
+		assert_eq!(migrations[0].name, "0001_initial");
+	}
+
+	#[rstest]
+	#[tokio::test]
+	#[serial(filesystem_source)]
 	async fn test_filesystem_source_migrations_for_app() {
 		// Arrange
 		let temp_dir = TempDir::new().unwrap();

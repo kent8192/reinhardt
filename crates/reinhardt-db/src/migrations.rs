@@ -6,6 +6,7 @@
 //!
 //! - **Auto-detection**: Detects model changes and generates migrations
 //! - **Migration Graph**: Manages dependencies between migrations
+//! - **Shared SQL Planning**: Previews the same ordered statements consumed by execution
 //! - **AST-Based Entry Points**: Generates Rust 2024 Edition-compliant module files
 //! - **State Reconstruction**: Django-style `ProjectState` building from migration history
 //! - **Zero Downtime**: Support for safe schema changes in production
@@ -40,6 +41,10 @@
 //! returns a continuous, same-application ancestor range in dependency order,
 //! preserves dependencies entering that range, and rejects ambiguous or
 //! externally re-entering ancestry.
+//! Filesystem discovery loads Rust migration implementations while ignoring
+//! Rust module entry points such as `migrations.rs`.
+//! Historical state reconstruction preserves original dependency chains when
+//! the requested target is an original migration that a squash replaces.
 //!
 //! [`MigrationSquasher`] combines the selected range while retaining exact
 //! replacement identities and stable metadata. Its optimizer applies only
@@ -56,6 +61,35 @@
 //! the anchored application directory. A cleanup failure reports both the
 //! original error and the cleanup error. Catalog loading, range selection,
 //! squashing, and source creation do not require a database connection.
+//!
+//! ## Shared SQL Planning
+//!
+//! [`plan_migration_sql`] creates a read-only [`MigrationSqlPlan`] for forward
+//! or backward execution. Each item is either executable [`PlannedStatement::Sql`]
+//! or a non-executable [`PlannedStatement::Comment`], so Rust data operations
+//! remain visible without being sent to the database. The migration executor
+//! consumes this same plan and keeps table-existence checks as execution policy.
+//! SQLite recreation planning may read schema metadata through the supplied
+//! connection, but it does not execute DDL.
+//! [`MigrationSqlPlan::render`] preserves statement order and emits
+//! backend-specific SQL. Transaction wrappers are emitted only when the
+//! migration plan is atomic and the selected backend supports transactional
+//! DDL; MySQL DDL is never wrapped. SQLite includes the full temporary-table
+//! copy, drop, and rename sequence when recreation is required. Rendering is
+//! complete and uncolored, so callers can buffer the whole script before
+//! publishing it.
+//! Backward inspection of destructive operations must use
+//! [`plan_migration_sql_with_states`] with
+//! [`MigrationCatalog::state_before`] and [`MigrationCatalog::state_after`].
+//! Both states are required because a post-migration state cannot retain a
+//! dropped table or legacy dropped-column definition.
+//!
+//! [`MigrationCatalog::snapshot`] reads existing recorder state without
+//! creating the recorder table. An absent backend-specific recorder relation
+//! is an empty applied set; permission, query, and type errors remain errors.
+//! Filtering by application retains transitive cross-application dependencies
+//! in topological order and preserves applied timestamps in the immutable
+//! snapshot.
 //!
 //! ### Generated Entry Point Example
 //!
@@ -98,6 +132,7 @@ pub mod schema_diff;
 pub mod schema_editor;
 pub mod service;
 pub mod source;
+pub mod sql_plan;
 #[cfg(feature = "sqlite")]
 pub(crate) mod sqlite_pragma;
 pub mod squash;
@@ -138,7 +173,10 @@ pub use dependency::{
 	OptionalDependency, SwappableDependency,
 };
 pub use di_support::{MigrationConfig, MigrationService as DIMigrationService};
-pub use executor::{DatabaseMigrationExecutor, ExecutionResult, OperationOptimizer};
+pub use executor::{
+	DatabaseMigrationExecutor, ExecutionResult, OperationOptimizer, ReplacementMigrationSelection,
+	select_replacement_migrations,
+};
 pub use fields::FieldType;
 pub use graph::{MigrationGraph, MigrationKey, MigrationNode};
 pub use migration::Migration;
@@ -171,7 +209,7 @@ pub use reinhardt_query::prelude::{
 pub use auto_migration::{
 	AutoMigrationError, AutoMigrationGenerator, AutoMigrationResult, ValidationResult,
 };
-pub use catalog::{MigrationCatalog, SquashRange};
+pub use catalog::{AppliedMigration, MigrationCatalog, MigrationSnapshot, SquashRange};
 pub use operations::{
 	AddField, AlterField, CreateCollation, CreateExtension, CreateModel, DeleteModel,
 	DropExtension, FieldDefinition, MoveModel, RemoveField, RenameField, RenameModel, RunCode,
@@ -191,6 +229,10 @@ pub use service::MigrationService;
 pub use source::{
 	MigrationSource, composite::CompositeSource, filesystem::FilesystemSource,
 	registry::RegistrySource,
+};
+pub use sql_plan::{
+	MigrationDirection, MigrationSqlPlan, PlannedStatement, plan_migration_sql,
+	plan_migration_sql_with_states,
 };
 pub use squash::{MigrationSquasher, SquashOptions, SquashResult};
 pub use state_loader::{MigrationStateLoader, build_state_from_files};

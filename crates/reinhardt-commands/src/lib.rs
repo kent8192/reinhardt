@@ -50,6 +50,38 @@
 //! failures. It reads migration sources only, so no database connection is
 //! required.
 //!
+//! ## Migration Visibility
+//!
+//! `showmigrations` reads one immutable catalog and recorder snapshot, then
+//! displays either application-grouped `[X]` / `[ ]` state or the selected
+//! dependency order. It treats an absent recorder table as an empty applied
+//! set and never creates migration history. `--list` / `-l` and `--plan` /
+//! `-p` are mutually exclusive, list mode is the default, and verbosity level
+//! two includes recorded timestamps. Application filtering retains transitive
+//! cross-application dependencies.
+//!
+//! `sqlmigrate APP MIGRATION` accepts an exact name or unique prefix and uses
+//! the SQL planner shared with migration execution. `--backwards` reconstructs
+//! both sides of the migration before rendering rollback SQL. The complete
+//! uncolored script is buffered before one stdout write; no schema or history
+//! statement is executed. An irreversible rollback or late planning error
+//! therefore emits no partial script.
+//!
+//! Both commands accept `--database ALIAS`. Without `--database-url`, the alias
+//! is looked up in configured settings. A URL override bypasses alias lookup
+//! and connects directly while retaining the alias as a safe diagnostic label;
+//! settings are not modified. Diagnostics redact URL credentials and
+//! sensitive-looking aliases. Transaction wrappers are emitted only for an
+//! atomic migration plan on a backend that supports transactional DDL, so
+//! MySQL DDL remains unwrapped. SQLite emits table recreation SQL when the
+//! requested alteration requires it.
+//!
+//! ```text
+//! manage showmigrations polls --plan --database default
+//! manage sqlmigrate polls 0002 --database default
+//! manage sqlmigrate polls 0002 --backwards --database default
+//! ```
+//!
 //! ## Example
 //!
 //! ```rust,no_run
@@ -266,10 +298,16 @@ pub mod runserver_hooks;
 #[doc(hidden)]
 pub mod server_rebuild_pipeline;
 mod shell;
+/// Read-only migration state display.
+#[cfg(feature = "migrations")]
+pub mod showmigrations;
 /// Source-tree enumeration for hot-reload watch targets.
 #[cfg(feature = "autoreload")]
 #[doc(hidden)]
 pub mod source_roots;
+/// Read-only migration SQL rendering.
+#[cfg(feature = "migrations")]
+pub mod sqlmigrate;
 /// Migration squashing command orchestration.
 #[cfg(feature = "migrations")]
 pub mod squashmigrations;
@@ -381,6 +419,12 @@ pub use runserver_hooks::{RunserverContext, RunserverHook, RunserverHookRegistra
 #[cfg(feature = "shell")]
 pub use shell::ShellEnvironment;
 pub use shell::{ShellConfig, shell_runtime_hook};
+#[cfg(feature = "migrations")]
+pub use showmigrations::{
+	MigrationVisibilityWriter, ShowMigrationsCommand, ShowMigrationsMode, format_migration_snapshot,
+};
+#[cfg(feature = "migrations")]
+pub use sqlmigrate::{SqlMigrateCommand, render_migration_sql};
 #[cfg(feature = "migrations")]
 pub use squashmigrations::{
 	ConfirmationReader, SquashMigrationsOptions, SquashMigrationsSummary, StdinConfirmationReader,

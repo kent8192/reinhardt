@@ -206,6 +206,15 @@ impl MigrationSquasher {
 			.map(|migration| (migration.app_label.as_str(), migration.name.as_str()))
 			.collect();
 		let mut dependencies = Vec::new();
+		for dependency in &range.external_dependencies {
+			let normalized = range.normalize_dependency(&dependency.0, &dependency.1)?;
+			let normalized = (normalized.app_label, normalized.name);
+			if !selected.contains(&(normalized.0.as_str(), normalized.1.as_str()))
+				&& !dependencies.contains(&normalized)
+			{
+				dependencies.push(normalized);
+			}
+		}
 		for migration in &range.migrations {
 			operations.extend(migration.operations.clone());
 			for dependency in &migration.dependencies {

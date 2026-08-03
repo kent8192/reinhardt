@@ -80,7 +80,7 @@ pub fn extract_migration_metadata_strict(
 
 	let Expr::Struct(migration_struct) = migration_expr else {
 		return Err(MigrationError::InvalidMigration(
-			"migration() must return a Migration struct literal".to_string(),
+			"migration() must return a Migration struct literal or builder expression".to_string(),
 		));
 	};
 	if migration_struct
@@ -4630,6 +4630,13 @@ mod tests {
 		}"#,
 		"Invalid migration: Migration metadata is missing required 'operations' field"
 	)]
+	#[case(
+		r#"pub fn migration() -> Migration {
+			let migration = Migration::new("0001_initial", "blog");
+			migration
+		}"#,
+		"Invalid migration: migration() must return a Migration struct literal or builder expression"
+	)]
 	fn strict_metadata_rejects_missing_entrypoint_and_required_fields(
 		#[case] source: &str,
 		#[case] expected: &str,
@@ -4674,6 +4681,89 @@ mod tests {
 
 		// Assert
 		assert_eq!(error.to_string(), expected);
+	}
+
+	#[test]
+	fn strict_metadata_round_trips_filesystem_executable_operations() {
+		// Arrange
+		let source = r#"pub fn migration() -> Migration {
+			Migration {
+				operations: vec![
+					Operation::CreateSchema { name: "analytics".to_string(), if_not_exists: true },
+					Operation::DropSchema { name: "obsolete".to_string(), cascade: true, if_exists: false },
+					Operation::BulkLoad {
+						table: "events".to_string(),
+						source: BulkLoadSource::File("/tmp/events.csv".to_string()),
+						format: BulkLoadFormat::Csv,
+						options: BulkLoadOptions {
+							delimiter: Some(','), null_string: None, header: true, columns: None,
+							local: false, quote: Some('"'), escape: None,
+							line_terminator: None, encoding: Some("utf8".to_string()),
+						},
+					},
+					Operation::SetAutoIncrementValue {
+						table: "events".to_string(), column: "id".to_string(), value: 42,
+					},
+					Operation::CreateCompositePrimaryKey {
+						table: "events".to_string(), columns: vec!["tenant_id".to_string(), "id".to_string()],
+						constraint_name: Some("events_pkey".to_string()),
+					},
+				],
+				dependencies: vec![], replaces: vec![],
+			}
+		}"#;
+		let ast = syn::parse_file(source).unwrap();
+
+		// Act
+		let metadata = extract_migration_metadata_strict(&ast, "blog", "0001_initial").unwrap();
+
+		// Assert
+		assert_eq!(metadata.operations.len(), 5);
+		assert!(matches!(
+			metadata.operations[0],
+			Operation::CreateSchema { .. }
+		));
+		assert!(matches!(
+			metadata.operations[1],
+			Operation::DropSchema { .. }
+		));
+		assert!(matches!(metadata.operations[2], Operation::BulkLoad { .. }));
+		assert!(matches!(
+			metadata.operations[3],
+			Operation::SetAutoIncrementValue { .. }
+		));
+		assert!(matches!(
+			metadata.operations[4],
+			Operation::CreateCompositePrimaryKey { .. }
+		));
+	}
+
+	#[test]
+	fn strict_metadata_parses_builder_migration_entrypoint() {
+		let ast = syn::parse_file(
+			r#"pub fn migration() -> Migration {
+				Migration::new("ignored", "ignored")
+					.add_dependency("blog", "0001_initial")
+					.add_operation(Operation::RunSQL {
+						sql: "SELECT 1".to_string(),
+						reverse_sql: None,
+					})
+			}"#,
+		)
+		.unwrap();
+
+		let metadata = extract_migration_metadata_strict(&ast, "blog", "0002_seed").unwrap();
+
+		assert_eq!(metadata.app_label, "blog");
+		assert_eq!(metadata.name, "0002_seed");
+		assert_eq!(
+			metadata.dependencies,
+			[("blog".to_string(), "0001_initial".to_string())]
+		);
+		assert!(matches!(
+			metadata.operations.as_slice(),
+			[Operation::RunSQL { .. }]
+		));
 	}
 
 	#[rstest]
@@ -6023,9 +6113,10 @@ fn parse_field_type_strict(expr: &Expr) -> Option<super::FieldType> {
 
 	match expr {
 		Expr::Path(path) => match path.path.segments.last()?.ident.to_string().as_str() {
-			"Serial" => Some(FieldType::Integer),
 			"BigInteger" => Some(FieldType::BigInteger),
 			"Integer" => Some(FieldType::Integer),
+			// Legacy migration sources represented auto-incrementing integers as Serial.
+			"Serial" => Some(FieldType::Integer),
 			"SmallInteger" => Some(FieldType::SmallInteger),
 			"TinyInt" => Some(FieldType::TinyInt),
 			"MediumInt" => Some(FieldType::MediumInt),

@@ -112,6 +112,14 @@ async fn project_pages_layout_matches_tutorial() {
 	let src = project.join("src");
 
 	let cargo_toml = fs::read_to_string(project.join("Cargo.toml")).expect("read Cargo.toml");
+	assert_eq!(
+		cargo_toml
+			.lines()
+			.filter(|line| line.trim() == "rust_decimal = \"1\"")
+			.count(),
+		1,
+		"Pages project Cargo.toml must declare rust_decimal exactly once:\n{cargo_toml}"
+	);
 	assert!(
 		cargo_toml.contains("[workspace]") && cargo_toml.contains("resolver = \"3\""),
 		"Pages projects must be standalone Cargo workspace roots so they build inside another workspace:\n{cargo_toml}"

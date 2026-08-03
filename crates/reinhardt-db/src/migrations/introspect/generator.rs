@@ -421,21 +421,28 @@ impl SchemaCodeGenerator {
 		);
 		let field_ident = format_ident!("{}", field_name);
 
-		let relationship = self
-			.config
-			.generation
-			.detect_relationships
-			.then(|| {
-				table.foreign_keys.iter().find(|foreign_key| {
-					let Some(target) = schema.tables.get(&foreign_key.referenced_table) else {
-						return false;
-					};
-					foreign_key.columns.as_slice() == [column.name.as_str()]
-						&& target.primary_key.len() == 1
-						&& foreign_key.referenced_columns == target.primary_key
+		let relationship =
+			self.config
+				.generation
+				.detect_relationships
+				.then(|| {
+					table.foreign_keys.iter().find(|foreign_key| {
+						let Some(target) = schema.tables.get(&foreign_key.referenced_table) else {
+							return false;
+						};
+						let targets_unique_column =
+							target.unique_constraints.iter().any(|constraint| {
+								constraint.columns == foreign_key.referenced_columns
+							}) || target.indexes.values().any(|index| {
+								index.unique && index.columns == foreign_key.referenced_columns
+							});
+						foreign_key.columns.as_slice() == [column.name.as_str()]
+							&& foreign_key.referenced_columns.len() == 1
+							&& (foreign_key.referenced_columns == target.primary_key
+								|| targets_unique_column)
+					})
 				})
-			})
-			.flatten();
+				.flatten();
 		let relationship_target = if let Some(foreign_key) = relationship {
 			let target = table_to_struct
 				.get(&foreign_key.referenced_table)

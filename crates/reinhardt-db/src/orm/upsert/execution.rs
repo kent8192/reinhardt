@@ -68,6 +68,7 @@ where
 				}
 			};
 			if backend == DatabaseBackend::MySql
+				&& C::Model::composite_primary_key().is_none()
 				&& let Some(last_insert_id) = result.last_insert_id
 			{
 				return reload_generated_mysql_primary_key::<C::Model, _>(last_insert_id, executor)
@@ -194,6 +195,7 @@ where
 				}
 			};
 			if backend == DatabaseBackend::MySql
+				&& C::Model::composite_primary_key().is_none()
 				&& let Some(last_insert_id) = result.last_insert_id
 			{
 				let model =
@@ -1690,6 +1692,37 @@ mod tests {
 			"{}",
 			calls[2].sql
 		);
+	}
+
+	#[tokio::test]
+	async fn update_or_create_mysql_composite_primary_key_reloads_by_lookup() {
+		let (mut transaction, state) = Recorder::transaction(
+			DatabaseType::Mysql,
+			vec![Ok(QueryResult {
+				rows_affected: 1,
+				last_insert_id: Some(17),
+			})],
+			vec![
+				Ok(Vec::new()),
+				Ok(vec![composite_article_row(7, 17, "rust", 2)]),
+			],
+		);
+
+		let (article, created) = execute_update_or_create(
+			&Manager::<CompositeArticle>::new(),
+			composite_plan(),
+			&mut transaction,
+		)
+		.await
+		.expect("reload a composite MySQL insert by its lookup fields");
+
+		assert!(created);
+		assert_eq!((article.tenant_id, article.article_id), (7, 17));
+		let calls = &state.lock().unwrap().calls;
+		assert_eq!(calls.len(), 3);
+		assert_eq!(calls[2].operation, "fetch_all");
+		assert!(calls[2].sql.contains("WHERE `slug` = ? LIMIT 2 FOR UPDATE"));
+		assert!(!calls[2].sql.contains("WHERE `id` = ?"));
 	}
 
 	#[tokio::test]

@@ -30,7 +30,6 @@ linkme = "0.3"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 inventory = "0.3"
-rust_decimal = "1"
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 reinhardt = { version = "{{ reinhardt_version }}", package = "reinhardt-web", default-features = false, features = ["pages", "client-router"] }

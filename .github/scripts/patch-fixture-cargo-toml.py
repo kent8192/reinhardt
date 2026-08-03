@@ -11,7 +11,9 @@ Tracks: kent8192/reinhardt-web#4161
 from __future__ import annotations
 
 import argparse
+import json
 import re
+import subprocess
 import sys
 import tarfile
 from pathlib import Path
@@ -66,16 +68,29 @@ def workspace_form(manifest: Path, reinhardt_path: Path) -> None:
 	Leaving a direct crate or renamed alias on crates.io also makes the fixture
 	resolve it against the last published feature set instead of PR HEAD.
 	"""
-	def dependency_path(name: str, body: str) -> Path | None:
+	metadata = subprocess.run(
+		[
+			"cargo",
+			"metadata",
+			"--format-version",
+			"1",
+			"--no-deps",
+			"--manifest-path",
+			str(reinhardt_path / "Cargo.toml"),
+		],
+		capture_output=True,
+		check=True,
+		text=True,
+	)
+	package_paths = {
+		package["name"]: Path(package["manifest_path"]).parent
+		for package in json.loads(metadata.stdout)["packages"]
+		if package["name"].startswith("reinhardt-")
+	}
+
+	def dependency_package(name: str, body: str) -> str:
 		package_match = re.search(r'\bpackage\s*=\s*"([^"]+)"', body)
-		package = package_match.group(1) if package_match else name
-		if package == "reinhardt-web":
-			return reinhardt_path
-		if package.startswith("reinhardt-"):
-			crate_path = reinhardt_path / "crates" / package
-			if crate_path.is_dir():
-				return crate_path
-		return None
+		return package_match.group(1) if package_match else name
 
 	text = manifest.read_text()
 	# Inline dependencies, including renamed dependencies identified by `package`.
@@ -84,12 +99,20 @@ def workspace_form(manifest: Path, reinhardt_path: Path) -> None:
 		re.MULTILINE,
 	)
 	inline_count = 0
+	unresolved_packages: set[str] = set()
 
 	def rewrite_inline(match: re.Match[str]) -> str:
 		nonlocal inline_count
 		body = match.group("body")
-		path = dependency_path(match.group("name"), body)
-		if path is None or re.search(r'\bversion\s*=\s*"[^"]*"', body) is None:
+		package = dependency_package(match.group("name"), body)
+		if (
+			not package.startswith("reinhardt-")
+			or re.search(r'\bversion\s*=\s*"[^"]*"', body) is None
+		):
+			return match.group(0)
+		path = package_paths.get(package)
+		if path is None:
+			unresolved_packages.add(package)
 			return match.group(0)
 		inline_count += 1
 		new_body = re.sub(
@@ -112,8 +135,15 @@ def workspace_form(manifest: Path, reinhardt_path: Path) -> None:
 	def rewrite_table(match: re.Match[str]) -> str:
 		nonlocal table_count
 		body = match.group("body")
-		path = dependency_path(match.group("name"), body)
-		if path is None or re.search(r'^version\s*=\s*"[^"]*"', body, re.MULTILINE) is None:
+		package = dependency_package(match.group("name"), body)
+		if (
+			not package.startswith("reinhardt-")
+			or re.search(r'^version\s*=\s*"[^"]*"', body, re.MULTILINE) is None
+		):
+			return match.group(0)
+		path = package_paths.get(package)
+		if path is None:
+			unresolved_packages.add(package)
 			return match.group(0)
 		table_count += 1
 		new_body = re.sub(
@@ -126,6 +156,13 @@ def workspace_form(manifest: Path, reinhardt_path: Path) -> None:
 		return match.group("header") + new_body
 
 	new_text = table_pattern.sub(rewrite_table, new_text)
+	if unresolved_packages:
+		print(
+			"error: unresolved versioned Reinhardt dependencies: "
+			+ ", ".join(sorted(unresolved_packages)),
+			file=sys.stderr,
+		)
+		sys.exit(2)
 	if inline_count == 0 and table_count == 0:
 		print(
 			"error: no versioned Reinhardt dependency found in manifest",

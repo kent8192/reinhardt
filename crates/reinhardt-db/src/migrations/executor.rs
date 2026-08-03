@@ -51,6 +51,16 @@ fn replacement_history_is_fully_covered(
 				);
 			}
 		}
+		for known in migrations {
+			if !known.replaces.is_empty()
+				&& known
+					.replaces
+					.iter()
+					.all(|(app, name)| covered.contains(&(app.as_str(), name.as_str())))
+			{
+				covered.insert((known.app_label.as_str(), known.name.as_str()));
+			}
+		}
 		if covered.len() == covered_before {
 			break;
 		}
@@ -59,6 +69,39 @@ fn replacement_history_is_fully_covered(
 		.replaces
 		.iter()
 		.all(|(app, name)| covered.contains(&(app.as_str(), name.as_str())))
+}
+
+#[cfg(test)]
+mod replacement_history_tests {
+	use super::*;
+
+	#[test]
+	fn nested_replacement_is_covered_by_its_fully_applied_ancestor_history() {
+		let original_one = Migration::new("0001_initial", "app");
+		let original_two = Migration::new("0002_add_field", "app");
+		let mut first_squash = Migration::new("0001_squashed_0002", "app");
+		first_squash.replaces = vec![
+			("app".to_string(), "0001_initial".to_string()),
+			("app".to_string(), "0002_add_field".to_string()),
+		];
+		let mut second_squash = Migration::new("0001_squashed_0002_v2", "app");
+		second_squash.replaces = vec![("app".to_string(), "0001_squashed_0002".to_string())];
+		let applied_records = vec![
+			("app".to_string(), "0001_initial".to_string()),
+			("app".to_string(), "0002_add_field".to_string()),
+		];
+
+		assert!(replacement_history_is_fully_covered(
+			&second_squash,
+			&[
+				original_one,
+				original_two,
+				first_squash,
+				second_squash.clone()
+			],
+			&applied_records,
+		));
+	}
 }
 
 fn migration_sql_dialect(connection: &DatabaseConnection) -> SqlDialect {

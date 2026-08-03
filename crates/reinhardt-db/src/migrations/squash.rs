@@ -203,7 +203,14 @@ impl MigrationSquasher {
 		let selected: HashSet<_> = range
 			.migrations
 			.iter()
-			.map(|migration| (migration.app_label.as_str(), migration.name.as_str()))
+			.flat_map(|migration| {
+				std::iter::once((migration.app_label.as_str(), migration.name.as_str())).chain(
+					migration
+						.replaces
+						.iter()
+						.map(|(app, name)| (app.as_str(), name.as_str())),
+				)
+			})
 			.collect();
 		let mut dependencies = Vec::new();
 		for migration in &range.migrations {
@@ -740,9 +747,28 @@ impl MigrationSquasher {
 	}
 
 	fn expression_text_references_column(expression: &str, column: &str) -> bool {
-		expression
-			.split(|character: char| !(character.is_ascii_alphanumeric() || character == '_'))
-			.any(|token| token.eq_ignore_ascii_case(column))
+		if column.is_empty() {
+			return false;
+		}
+
+		expression.char_indices().any(|(start, _)| {
+			let Some(end) = start.checked_add(column.len()) else {
+				return false;
+			};
+			let Some(candidate) = expression.get(start..end) else {
+				return false;
+			};
+
+			candidate.eq_ignore_ascii_case(column)
+				&& expression[..start]
+					.chars()
+					.next_back()
+					.is_none_or(|character| !(character.is_alphanumeric() || character == '_'))
+				&& expression[end..]
+					.chars()
+					.next()
+					.is_none_or(|character| !(character.is_alphanumeric() || character == '_'))
+		})
 	}
 
 	fn operation_table(operation: &Operation) -> Option<&String> {
@@ -883,6 +909,108 @@ mod tests {
 			Operation::DropColumn {
 				table: "users".to_string(),
 				column: "temp".to_string(),
+				old_definition: None,
+			},
+		];
+
+		// Act
+		let optimized = squasher.optimize_operations(ops.clone());
+
+		// Assert
+		assert_eq!(optimized, ops);
+	}
+
+	#[test]
+	fn test_optimize_add_drop_column_preserves_unicode_raw_sql_generated_dependency() {
+		// Arrange
+		let squasher = MigrationSquasher::new();
+		let mut derived = ColumnDefinition::new("taxed_price", FieldType::Integer);
+		derived.generated = Some(GeneratedColumnDefinition::raw_sql(
+			"価格 * 2",
+			GeneratedStorage::Stored,
+		));
+		let ops = vec![
+			Operation::AddColumn {
+				table: "products".to_string(),
+				column: ColumnDefinition::new("価格", FieldType::Integer),
+				mysql_options: None,
+			},
+			Operation::AddColumn {
+				table: "products".to_string(),
+				column: derived,
+				mysql_options: None,
+			},
+			Operation::DropColumn {
+				table: "products".to_string(),
+				column: "価格".to_string(),
+				old_definition: None,
+			},
+		];
+
+		// Act
+		let optimized = squasher.optimize_operations(ops.clone());
+
+		// Assert
+		assert_eq!(optimized, ops);
+	}
+
+	#[test]
+	fn test_optimize_add_drop_column_preserves_nfd_quoted_generated_dependency() {
+		// Arrange
+		let squasher = MigrationSquasher::new();
+		let mut derived = ColumnDefinition::new("normalized_price", FieldType::Integer);
+		derived.generated = Some(GeneratedColumnDefinition::raw_sql(
+			"\"e\u{301}\" + 1",
+			GeneratedStorage::Stored,
+		));
+		let ops = vec![
+			Operation::AddColumn {
+				table: "products".to_string(),
+				column: ColumnDefinition::new("e\u{301}", FieldType::Integer),
+				mysql_options: None,
+			},
+			Operation::AddColumn {
+				table: "products".to_string(),
+				column: derived,
+				mysql_options: None,
+			},
+			Operation::DropColumn {
+				table: "products".to_string(),
+				column: "e\u{301}".to_string(),
+				old_definition: None,
+			},
+		];
+
+		// Act
+		let optimized = squasher.optimize_operations(ops.clone());
+
+		// Assert
+		assert_eq!(optimized, ops);
+	}
+
+	#[test]
+	fn test_optimize_add_drop_column_preserves_unicode_expr_tokens_generated_dependency() {
+		// Arrange
+		let squasher = MigrationSquasher::new();
+		let mut derived = ColumnDefinition::new("taxed_price", FieldType::Integer);
+		derived.generated = Some(GeneratedColumnDefinition::tokens(
+			"SchemaExpr::col(\"価格\").binary(BinaryOperator::Multiply, SchemaExpr::val(2))",
+			GeneratedStorage::Stored,
+		));
+		let ops = vec![
+			Operation::AddColumn {
+				table: "products".to_string(),
+				column: ColumnDefinition::new("価格", FieldType::Integer),
+				mysql_options: None,
+			},
+			Operation::AddColumn {
+				table: "products".to_string(),
+				column: derived,
+				mysql_options: None,
+			},
+			Operation::DropColumn {
+				table: "products".to_string(),
+				column: "価格".to_string(),
 				old_definition: None,
 			},
 		];
@@ -1311,6 +1439,36 @@ mod tests {
 			.unwrap();
 
 		assert!(result.migration.optional_dependencies.is_empty());
+	}
+
+	#[test]
+	fn squash_range_excludes_inactive_optional_dependency_owned_by_selected_replacement() {
+		// Arrange
+		let mut replacement = Migration::new("0001_squashed_0002", "myapp");
+		replacement
+			.replaces
+			.push(("myapp".to_string(), "0001_initial".to_string()));
+		replacement
+			.optional_dependencies
+			.push(OptionalDependency::new(
+				"myapp",
+				"0001_initial",
+				DependencyCondition::FeatureEnabled("audit".to_string()),
+			));
+		let range = SquashRange::new(vec![replacement], vec![]);
+
+		// Act
+		let result = MigrationSquasher::new()
+			.squash_range_with_context(
+				&range,
+				"0001_squashed_0002_again",
+				false,
+				&DependencyResolutionContext::default(),
+			)
+			.unwrap();
+
+		// Assert
+		assert_eq!(result.migration.optional_dependencies, Vec::new());
 	}
 
 	#[rstest::rstest]

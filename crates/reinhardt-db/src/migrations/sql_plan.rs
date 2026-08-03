@@ -1724,10 +1724,12 @@ async fn plan_migration_sql_for_inspection(
 			migration,
 			state,
 			direction,
-			true,
-			Some(&mut editor),
-			backward_operation_states,
-			historical_state_only,
+			MigrationSqlPlanningOptions {
+				strict_irreversible: true,
+				sqlite_editor: Some(&mut editor),
+				backward_operation_states,
+				historical_state_only,
+			},
 		)
 		.await?;
 		editor.finish().await?;
@@ -1738,10 +1740,12 @@ async fn plan_migration_sql_for_inspection(
 		migration,
 		state,
 		direction,
-		true,
-		None,
-		backward_operation_states,
-		historical_state_only,
+		MigrationSqlPlanningOptions {
+			strict_irreversible: true,
+			sqlite_editor: None,
+			backward_operation_states,
+			historical_state_only,
+		},
 	)
 	.await
 }
@@ -1758,10 +1762,12 @@ pub(crate) async fn plan_migration_sql_for_execution(
 		migration,
 		state,
 		direction,
-		false,
-		Some(editor),
-		None,
-		false,
+		MigrationSqlPlanningOptions {
+			strict_irreversible: false,
+			sqlite_editor: Some(editor),
+			backward_operation_states: None,
+			historical_state_only: false,
+		},
 	)
 	.await
 }
@@ -1781,18 +1787,26 @@ pub(crate) fn migration_requires_sqlite_recreation(
 			})
 }
 
+struct MigrationSqlPlanningOptions<'a> {
+	strict_irreversible: bool,
+	sqlite_editor: Option<&'a mut SchemaEditor>,
+	backward_operation_states: Option<&'a [ProjectState]>,
+	historical_state_only: bool,
+}
+
 async fn plan_migration_sql_with_irreversible_policy(
 	connection: &DatabaseConnection,
 	migration: &Migration,
 	state: &ProjectState,
 	direction: MigrationDirection,
-	strict_irreversible: bool,
-	#[cfg_attr(not(feature = "sqlite"), allow(unused_variables))] mut sqlite_editor: Option<
-		&mut SchemaEditor,
-	>,
-	backward_operation_states: Option<&[ProjectState]>,
-	historical_state_only: bool,
+	options: MigrationSqlPlanningOptions<'_>,
 ) -> Result<MigrationSqlPlan> {
+	let strict_irreversible = options.strict_irreversible;
+	let backward_operation_states = options.backward_operation_states;
+	let historical_state_only = options.historical_state_only;
+	#[cfg_attr(not(feature = "sqlite"), allow(unused_variables))]
+	let mut sqlite_editor = options.sqlite_editor;
+
 	if migration.state_only {
 		return Ok(MigrationSqlPlan {
 			atomic: migration.atomic,

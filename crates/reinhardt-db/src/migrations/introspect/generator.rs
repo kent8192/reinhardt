@@ -599,9 +599,9 @@ impl SchemaCodeGenerator {
 			if !is_auto_default(default)
 				&& let Some(default_expression) =
 					render_default_expression(default, &column.column_type)
-				{
-					attrs.push(quote! { default = #default_expression });
-				}
+			{
+				attrs.push(quote! { default = #default_expression });
+			}
 		}
 
 		if let Some(generated) = column.generated.as_ref() {

@@ -42,8 +42,8 @@ cargo run --bin manage --features commands-shell -- shell -c \
 
 `src/config/shell.rs` supplies `get_shell_config()`. The generated native
 entry calls `shell_runtime_hook()` before Tokio starts, then selects
-`execute_from_command_line_with_settings_and_shell` when the feature is
-enabled; without it, the settings-only dispatcher remains active for
+`execute_from_command_line_with_migration_settings_and_shell` when the feature is
+enabled; without it, the migration-aware dispatcher remains active for
 non-shell commands.
 
 The shell binds concrete project `settings`, the copyable ORM `db` handle,

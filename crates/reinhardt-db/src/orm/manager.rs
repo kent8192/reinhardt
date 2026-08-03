@@ -1102,9 +1102,9 @@ impl<M: Model> Manager<M> {
 	///
 	/// Querysets created from subqueries, querysets with CTEs, querysets with
 	/// lateral joins, and grouped or HAVING querysets are not supported.
-	pub async fn dates<F>(
+	pub async fn dates<F, Origin>(
 		&self,
-		field: super::expressions::FieldRef<M, F>,
+		field: super::expressions::FieldRef<M, F, Origin>,
 		kind: super::query::DateTruncKind,
 		order: super::query::DateProjectionOrder,
 	) -> reinhardt_core::exception::Result<Vec<chrono::NaiveDate>>
@@ -1118,10 +1118,10 @@ impl<M: Model> Manager<M> {
 	///
 	/// Querysets created from subqueries, querysets with CTEs, querysets with
 	/// lateral joins, and grouped or HAVING querysets are not supported.
-	pub async fn dates_with_db<E, F>(
+	pub async fn dates_with_db<E, F, Origin>(
 		&self,
 		conn: &mut E,
-		field: super::expressions::FieldRef<M, F>,
+		field: super::expressions::FieldRef<M, F, Origin>,
 		kind: super::query::DateTruncKind,
 		order: super::query::DateProjectionOrder,
 	) -> reinhardt_core::exception::Result<Vec<chrono::NaiveDate>>
@@ -1138,10 +1138,10 @@ impl<M: Model> Manager<M> {
 	///
 	/// Querysets created from subqueries, querysets with CTEs, querysets with
 	/// lateral joins, and grouped or HAVING querysets are not supported.
-	pub async fn dates_with_executor<F>(
+	pub async fn dates_with_executor<F, Origin>(
 		&self,
 		executor: &mut dyn super::connection::TransactionExecutor,
-		field: super::expressions::FieldRef<M, F>,
+		field: super::expressions::FieldRef<M, F, Origin>,
 		kind: super::query::DateTruncKind,
 		order: super::query::DateProjectionOrder,
 	) -> Result<Vec<chrono::NaiveDate>, crate::backends::error::DatabaseError>
@@ -1157,9 +1157,9 @@ impl<M: Model> Manager<M> {
 	///
 	/// Querysets created from subqueries, querysets with CTEs, querysets with
 	/// lateral joins, and grouped or HAVING querysets are not supported.
-	pub async fn datetimes<F>(
+	pub async fn datetimes<F, Origin>(
 		&self,
-		field: super::expressions::FieldRef<M, F>,
+		field: super::expressions::FieldRef<M, F, Origin>,
 		kind: super::query::DateTimeTruncKind,
 		order: super::query::DateProjectionOrder,
 		time_zone: Option<chrono_tz::Tz>,
@@ -1176,10 +1176,10 @@ impl<M: Model> Manager<M> {
 	///
 	/// Querysets created from subqueries, querysets with CTEs, querysets with
 	/// lateral joins, and grouped or HAVING querysets are not supported.
-	pub async fn datetimes_with_db<E, F>(
+	pub async fn datetimes_with_db<E, F, Origin>(
 		&self,
 		conn: &mut E,
-		field: super::expressions::FieldRef<M, F>,
+		field: super::expressions::FieldRef<M, F, Origin>,
 		kind: super::query::DateTimeTruncKind,
 		order: super::query::DateProjectionOrder,
 		time_zone: Option<chrono_tz::Tz>,
@@ -1197,10 +1197,10 @@ impl<M: Model> Manager<M> {
 	///
 	/// Querysets created from subqueries, querysets with CTEs, querysets with
 	/// lateral joins, and grouped or HAVING querysets are not supported.
-	pub async fn datetimes_with_executor<F>(
+	pub async fn datetimes_with_executor<F, Origin>(
 		&self,
 		executor: &mut dyn super::connection::TransactionExecutor,
-		field: super::expressions::FieldRef<M, F>,
+		field: super::expressions::FieldRef<M, F, Origin>,
 		kind: super::query::DateTimeTruncKind,
 		order: super::query::DateProjectionOrder,
 		time_zone: Option<chrono_tz::Tz>,

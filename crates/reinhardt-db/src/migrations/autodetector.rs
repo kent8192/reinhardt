@@ -129,7 +129,7 @@ pub struct ForeignKeyInfo {
 }
 
 /// Field state for migration detection
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct FieldState {
 	/// The name.
 	pub name: String,
@@ -189,7 +189,7 @@ impl FieldState {
 /// Model state for migration detection
 ///
 /// Django equivalent: `ModelState` in django/db/migrations/state.py
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct ModelState {
 	/// Application label (e.g., "auth", "blog")
 	pub app_label: String,
@@ -231,6 +231,8 @@ pub struct IndexDefinition {
 	pub fields: Vec<String>,
 	/// Whether this is a unique index
 	pub unique: bool,
+	/// Predicate for a partial index.
+	pub where_clause: Option<String>,
 	/// Typed index method and options.
 	#[cfg(feature = "pgvector")]
 	pub index_type: Option<super::operations::IndexType>,
@@ -249,6 +251,7 @@ impl IndexDefinition {
 			name: name.into(),
 			fields,
 			unique,
+			where_clause: None,
 			#[cfg(feature = "pgvector")]
 			index_type: None,
 			#[cfg(feature = "pgvector")]
@@ -685,10 +688,13 @@ impl ModelState {
 ///
 /// assert!(state.get_model("myapp", "User").is_some());
 /// ```
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct ProjectState {
 	/// Models: (app_label, model_name) -> ModelState
 	pub models: std::collections::BTreeMap<(String, String), ModelState>,
+
+	/// Whether prior migrations contain opaque SQL that this state cannot model.
+	pub has_opaque_schema_operations: bool,
 }
 
 impl Default for ProjectState {
@@ -916,6 +922,7 @@ impl ProjectState {
 	pub fn new() -> Self {
 		Self {
 			models: std::collections::BTreeMap::new(),
+			has_opaque_schema_operations: false,
 		}
 	}
 
@@ -1494,6 +1501,9 @@ impl ProjectState {
 
 		for op in operations {
 			match op {
+				Operation::RunSQL { .. } => {
+					self.has_opaque_schema_operations = true;
+				}
 				Operation::CreateTable {
 					name,
 					columns,
@@ -1669,6 +1679,7 @@ impl ProjectState {
 							name: name.clone(),
 							fields: columns.clone(),
 							unique: *unique,
+							where_clause: None,
 							#[cfg(feature = "pgvector")]
 							index_type: *index_type,
 							#[cfg(feature = "pgvector")]
@@ -8952,6 +8963,7 @@ mod tests {
 			name: "documents_embedding_ann".to_string(),
 			fields: vec!["embedding".to_string()],
 			unique: false,
+			where_clause: None,
 			index_type: Some(index_type),
 			operator_class: Some(operator_class.to_string()),
 			expressions: None,
@@ -9046,6 +9058,7 @@ mod tests {
 			name: "billing_invoice".to_string(),
 			fields: vec!["embedding".to_string()],
 			unique: false,
+			where_clause: None,
 			index_type: Some(crate::migrations::operations::IndexType::Hnsw {
 				m: Some(16),
 				ef_construction: Some(64),
@@ -10447,6 +10460,7 @@ mod tests {
 				name: "idx_title".to_string(),
 				fields: vec!["title".to_string()],
 				unique: false,
+				where_clause: None,
 				#[cfg(feature = "pgvector")]
 				index_type: None,
 				#[cfg(feature = "pgvector")]
@@ -10458,6 +10472,7 @@ mod tests {
 				name: "idx_slug_unique".to_string(),
 				fields: vec!["slug".to_string()],
 				unique: true,
+				where_clause: None,
 				#[cfg(feature = "pgvector")]
 				index_type: None,
 				#[cfg(feature = "pgvector")]
@@ -10622,6 +10637,7 @@ mod tests {
 			name: "idx_created".to_string(),
 			fields: vec!["created_at".to_string()],
 			unique: false,
+			where_clause: None,
 			#[cfg(feature = "pgvector")]
 			index_type: None,
 			#[cfg(feature = "pgvector")]
@@ -13151,6 +13167,7 @@ mod tests {
 			name: "idx_accounts_user_full_name".to_string(),
 			fields: vec!["full_name".to_string()],
 			unique: false,
+			where_clause: None,
 			index_type: Some(crate::migrations::operations::IndexType::Hnsw {
 				m: Some(24),
 				ef_construction: Some(96),

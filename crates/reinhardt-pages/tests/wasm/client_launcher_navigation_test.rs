@@ -21,14 +21,19 @@
 #![cfg(wasm)]
 
 use reinhardt_core::page::Outlet;
-use reinhardt_core::reactive::ReactiveScope;
+use reinhardt_core::reactive::{Effect, ReactiveScope};
 use reinhardt_pages::app::{ClientLauncher, with_spa_router};
 use reinhardt_pages::component::{Head, IntoPage, Page, PageElement};
 use reinhardt_pages::deps;
-use reinhardt_pages::reactive::hooks::use_retained_effect;
-use reinhardt_pages::reactive::{Signal, with_runtime};
+use reinhardt_pages::deps_auto;
+use reinhardt_pages::dom::{Element, EventHandle};
+use reinhardt_pages::reactive::hooks::{use_effect, use_retained_effect};
+use reinhardt_pages::reactive::{
+	QueryFamily, QueryOptions, Signal, queries, use_query, with_runtime,
+};
 use reinhardt_urls::routers::{ClientRouter, RouteMetadata};
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
+use std::rc::Rc;
 use wasm_bindgen::JsCast;
 use wasm_bindgen_test::*;
 
@@ -40,7 +45,11 @@ thread_local! {
 	static RETAINED_REACTIVE_RENDER_TICK: RefCell<Option<Signal<i32>>> = const { RefCell::new(None) };
 	static RETAINED_REACTIVE_EFFECT_TICK: RefCell<Option<Signal<i32>>> = const { RefCell::new(None) };
 	static RETAINED_REACTIVE_LOG: RefCell<Vec<String>> = const { RefCell::new(Vec::new()) };
+	static QUERY_OWNER_EVENT_HANDLES: RefCell<Vec<EventHandle>> = const { RefCell::new(Vec::new()) };
+	static QUERY_OWNER_EFFECTS: RefCell<Vec<Effect>> = const { RefCell::new(Vec::new()) };
 }
+
+const LAUNCHER_OWNER_QUERY: QueryFamily<(), u32, String> = QueryFamily::new("tests.launcher-owner");
 
 // Each route renders a div with a stable id and a unique text marker so the
 // assertions can be tight regardless of how `Page::Text` serialises into
@@ -256,6 +265,17 @@ fn install_app_root() -> web_sys::Element {
 	root
 }
 
+fn install_named_app_root(id: &str) -> web_sys::Element {
+	let document = web_sys::window().unwrap().document().unwrap();
+	if let Some(previous) = document.get_element_by_id(id) {
+		previous.remove();
+	}
+	let root = document.create_element("div").unwrap();
+	root.set_id(id);
+	document.body().unwrap().append_child(&root).unwrap();
+	root
+}
+
 fn replace_history_path(path: &str) {
 	let history = web_sys::window().unwrap().history().unwrap();
 	history
@@ -267,6 +287,113 @@ fn replace_history_path(path: &str) {
 /// `wasm_bindgen_futures::spawn_local`) can drain queued work.
 async fn yield_to_microtasks() {
 	gloo_timers::future::TimeoutFuture::new(0).await;
+}
+
+fn install_launcher_query_owner_probe(
+	root: &web_sys::Element,
+	event_type: &'static str,
+	fetch_count: Rc<Cell<u32>>,
+) {
+	let query = use_query(
+		LAUNCHER_OWNER_QUERY.query((), move || {
+			let fetch_count = Rc::clone(&fetch_count);
+			async move {
+				let call = fetch_count.get() + 1;
+				fetch_count.set(call);
+				Ok(call)
+			}
+		}),
+		QueryOptions::default(),
+	);
+	let render_root = root.clone();
+	let effect = use_effect(
+		move || {
+			let _owning_client = queries();
+			if let Some(value) = query.data() {
+				render_root
+					.set_attribute("data-query-value", &value.to_string())
+					.expect("query probe render attribute");
+			}
+			None::<fn()>
+		},
+		deps_auto!(),
+	);
+	let event = Element::new(root.clone()).add_event_listener(event_type, move || {
+		queries().invalidate_family(LAUNCHER_OWNER_QUERY);
+	});
+	QUERY_OWNER_EFFECTS.with(|effects| effects.borrow_mut().push(effect));
+	QUERY_OWNER_EVENT_HANDLES.with(|events| events.borrow_mut().push(event));
+}
+
+#[wasm_bindgen_test]
+async fn late_event_and_render_reenter_the_first_launcher_query_client() {
+	replace_history_path("/");
+	QUERY_OWNER_EVENT_HANDLES.with(|events| events.borrow_mut().clear());
+	QUERY_OWNER_EFFECTS.with(|effects| effects.borrow_mut().clear());
+	let first_root = install_named_app_root("query-owner-app-a");
+	let second_root = install_named_app_root("query-owner-app-b");
+	let first_fetches = Rc::new(Cell::new(0_u32));
+	let second_fetches = Rc::new(Cell::new(0_u32));
+
+	ClientLauncher::new("#query-owner-app-a")
+		.router_client(|| ClientRouter::new().route("root-a", "/", page_root))
+		.after_launch({
+			let first_fetches = Rc::clone(&first_fetches);
+			move |ctx| {
+				install_launcher_query_owner_probe(
+					ctx.root_element(),
+					"reinhardt-query-owner-a",
+					first_fetches,
+				);
+			}
+		})
+		.launch()
+		.expect("launch first app");
+	yield_to_microtasks().await;
+	yield_to_microtasks().await;
+	assert_eq!(first_fetches.get(), 1);
+	assert_eq!(
+		first_root.get_attribute("data-query-value").as_deref(),
+		Some("1")
+	);
+
+	ClientLauncher::new("#query-owner-app-b")
+		.router_client(|| ClientRouter::new().route("root-b", "/", page_root))
+		.after_launch({
+			let second_fetches = Rc::clone(&second_fetches);
+			move |ctx| {
+				install_launcher_query_owner_probe(
+					ctx.root_element(),
+					"reinhardt-query-owner-b",
+					second_fetches,
+				);
+			}
+		})
+		.launch()
+		.expect("launch second app");
+	yield_to_microtasks().await;
+	yield_to_microtasks().await;
+	assert_eq!(first_fetches.get(), 1);
+	assert_eq!(second_fetches.get(), 1);
+
+	first_root
+		.dispatch_event(&web_sys::Event::new("reinhardt-query-owner-a").expect("owner event"))
+		.expect("dispatch owner event");
+	yield_to_microtasks().await;
+	yield_to_microtasks().await;
+
+	assert_eq!(first_fetches.get(), 2);
+	assert_eq!(second_fetches.get(), 1);
+	assert_eq!(
+		first_root.get_attribute("data-query-value").as_deref(),
+		Some("2"),
+		"the first launcher's late render must use its original query client"
+	);
+
+	QUERY_OWNER_EVENT_HANDLES.with(|events| events.borrow_mut().clear());
+	QUERY_OWNER_EFFECTS.with(|effects| effects.borrow_mut().clear());
+	first_root.remove();
+	second_root.remove();
 }
 
 #[wasm_bindgen_test]

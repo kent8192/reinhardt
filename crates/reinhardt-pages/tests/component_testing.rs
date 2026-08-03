@@ -17,7 +17,9 @@ use reinhardt_pages::event::{ClickEvent, EventPayload, FocusEvent, typed_event_h
 use reinhardt_pages::prelude::spawn_task;
 use reinhardt_pages::reactive::hooks::use_action;
 #[cfg(feature = "msw")]
-use reinhardt_pages::reactive::use_query;
+use reinhardt_pages::reactive::{
+	QueryFamily, QueryOptions, QuerySnapshot, QueryStatus, queries, use_query,
+};
 use reinhardt_pages::reactive::{ResourceState, Signal, use_resource};
 #[cfg(feature = "msw")]
 use reinhardt_pages::server_fn::{ServerFnError, server_fn};
@@ -383,6 +385,46 @@ async fn click_action_uses_own_screen_scheduler() {
 	assert!(first.query_by_text("Saved").is_some());
 	assert!(second.query_by_text("Saved").is_none());
 	assert!(second.query_by_text("Idle").is_some());
+}
+
+#[cfg(feature = "msw")]
+#[tokio::test]
+async fn late_event_reenters_the_originating_screen_query_client() {
+	const FAMILY: QueryFamily<(), usize, String> = QueryFamily::new("tests.screen-owner");
+	let render_owner = |fetches: Rc<Cell<usize>>| {
+		move || {
+			let query = use_query(
+				FAMILY.query((), {
+					let fetches = Rc::clone(&fetches);
+					move || {
+						let value = fetches.get() + 1;
+						fetches.set(value);
+						async move { Ok::<_, String>(value) }
+					}
+				}),
+				QueryOptions::default(),
+			);
+			Page::fragment([
+				PageElement::new("button")
+					.listener("click", move |_| queries().invalidate_family(FAMILY))
+					.child("Refresh owner")
+					.into_page(),
+				Page::reactive(move || query.data().unwrap_or_default().to_string().into_page()),
+			])
+		}
+	};
+	let first_fetches = Rc::new(Cell::new(0));
+	let second_fetches = Rc::new(Cell::new(0));
+	let first = render(render_owner(Rc::clone(&first_fetches)));
+	let second = render(render_owner(Rc::clone(&second_fetches)));
+	first.settle().await;
+	second.settle().await;
+
+	first.get_by_role(Role::Button, "Refresh owner").click();
+	first.settle().await;
+
+	assert_eq!(first_fetches.get(), 2);
+	assert_eq!(second_fetches.get(), 1);
 }
 
 #[tokio::test]
@@ -878,35 +920,67 @@ fn jobs_resource_page(state: ResourceState<Vec<String>, ServerFnError>) -> Page 
 }
 
 #[cfg(feature = "msw")]
+fn jobs_query_page(snapshot: QuerySnapshot<Vec<String>, ServerFnError>) -> Page {
+	match snapshot.status {
+		QueryStatus::Idle | QueryStatus::Pending => text_page("Loading"),
+		QueryStatus::Success => text_page(
+			snapshot
+				.data
+				.expect("a successful query snapshot contains data")
+				.join(", "),
+		),
+		QueryStatus::Error => text_page(
+			snapshot
+				.error
+				.expect("an error query snapshot contains an error")
+				.to_string(),
+		),
+	}
+}
+
+#[cfg(feature = "msw")]
 fn jobs_component() -> Page {
 	let jobs = use_resource(|| async { load_jobs().await }, deps![]);
 	Page::reactive(move || jobs_resource_page(jobs.get()))
 }
 
 #[cfg(feature = "msw")]
+async fn retry_job_for_component_test() -> Result<(), String> {
+	Ok(())
+}
+
+#[cfg(feature = "msw")]
 fn jobs_query_component() -> Page {
-	let jobs = use_query(load_jobs::key());
-	let refetch_jobs = jobs.clone();
+	let jobs = use_query(load_jobs::query(), QueryOptions::default());
+	let client = queries();
+	let retry = use_action(move |_: ()| {
+		let client = client.clone();
+		async move {
+			retry_job_for_component_test().await?;
+			client.invalidate_family(load_jobs::family());
+			Ok::<(), String>(())
+		}
+	});
 	PageElement::new("div")
 		.child(
 			PageElement::new("button")
-				.listener("click", move |_| refetch_jobs.refetch())
-				.child("Refresh"),
+				.listener("click", move |_| retry.dispatch(()))
+				.child("Retry job"),
 		)
-		.child(Page::reactive(move || jobs_resource_page(jobs.get())))
+		.child(Page::reactive(move || jobs_query_page(jobs.snapshot())))
 		.into_page()
 }
 
 #[cfg(feature = "msw")]
 fn injected_jobs_query_component() -> Page {
-	let jobs = use_query(load_injected_jobs::key());
-	Page::reactive(move || jobs_resource_page(jobs.get()))
+	let jobs = use_query(load_injected_jobs::query(), QueryOptions::default());
+	Page::reactive(move || jobs_query_page(jobs.snapshot()))
 }
 
 #[cfg(feature = "msw")]
 fn injected_alias_jobs_query_component() -> Page {
-	let jobs = use_query(load_injected_alias_jobs::key());
-	Page::reactive(move || jobs_resource_page(jobs.get()))
+	let jobs = use_query(load_injected_alias_jobs::query(), QueryOptions::default());
+	Page::reactive(move || jobs_query_page(jobs.snapshot()))
 }
 
 #[cfg(feature = "msw")]
@@ -946,8 +1020,8 @@ async fn server_fn_query_cache_is_scoped_per_screen() {
 	let second = render(jobs_query_component);
 	second.mock_server_fn::<load_jobs::marker>(|_args| Ok(vec!["Second job".to_string()]));
 
-	first.get_by_role(Role::Button, "Refresh").click();
-	second.get_by_role(Role::Button, "Refresh").click();
+	first.get_by_role(Role::Button, "Retry job").click();
+	second.get_by_role(Role::Button, "Retry job").click();
 	first.settle().await;
 	second.settle().await;
 
@@ -964,7 +1038,7 @@ async fn server_fn_query_cache_does_not_leak_after_screen_drop() {
 		let first = render(jobs_query_component);
 		first.mock_server_fn::<load_jobs::marker>(|_args| Ok(vec!["First job".to_string()]));
 
-		first.get_by_role(Role::Button, "Refresh").click();
+		first.get_by_role(Role::Button, "Retry job").click();
 		first.settle().await;
 
 		assert!(first.query_by_text("First job").is_some());
@@ -974,7 +1048,7 @@ async fn server_fn_query_cache_does_not_leak_after_screen_drop() {
 	let second = render(jobs_query_component);
 	second.mock_server_fn::<load_jobs::marker>(|_args| Ok(vec!["Second job".to_string()]));
 
-	second.get_by_role(Role::Button, "Refresh").click();
+	second.get_by_role(Role::Button, "Retry job").click();
 	second.settle().await;
 
 	assert!(second.query_by_text("Second job").is_some());

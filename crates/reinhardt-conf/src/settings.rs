@@ -24,6 +24,7 @@ pub mod interpolation;
 pub mod logging;
 pub mod media;
 pub(crate) mod merge;
+pub mod migrations;
 /// OpenAPI documentation endpoint configuration.
 pub mod openapi;
 /// Field-level policy types for settings fragments.

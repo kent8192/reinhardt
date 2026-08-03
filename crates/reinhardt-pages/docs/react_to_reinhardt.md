@@ -735,14 +735,37 @@ fn todo_form() -> Page {
 }
 ```
 
-## Keyed queries and invalidating mutations
+## Keyed queries and invalidating actions
 
-React Query and SWR patterns map to `use_query` and `use_mutation` when the
-read operation is a `#[server_fn]`. The server-function macro emits a typed key
-helper whose cache ID is derived from the generated marker metadata and a
-SHA-256 digest of canonical JSON arguments. The fetcher and key therefore
-cannot drift into unrelated strings, raw arguments do not appear in hydration
-keys, and logically equivalent object arguments share the same cache entry.
+React Query and SWR patterns map to `use_query` for reads and `use_action` for
+mutations. `ClientLauncher` creates and owns one `QueryClient` for a browser
+application. Every SSR request and every native component-test screen creates
+an isolated client, so data and in-flight requests do not leak between users or
+tests.
+
+Set application-wide freshness and retention defaults on the launcher:
+
+```rust,ignore
+ClientLauncher::new("#root")
+    .query_defaults(
+        QueryDefaults::new()
+            .stale_time(Duration::from_secs(30))
+            .gc_time(Duration::from_secs(300)),
+    )
+    .router(app_router)
+    .launch()?;
+```
+
+The server-function macro emits three typed helpers:
+
+- `family()` identifies every argument set for one endpoint.
+- `key(args...)` identifies one exact cached argument set.
+- `query(args...)` pairs that key with the generated fetcher.
+
+The cache ID is derived from the generated marker metadata and a SHA-256 digest
+of canonical JSON arguments. The fetcher and key therefore cannot drift into
+unrelated strings, raw arguments do not appear in hydration keys, and logically
+equivalent object arguments share the same cache entry.
 
 ```rust,ignore
 use std::time::Duration;
@@ -767,11 +790,20 @@ pub async fn retry_job(project_id: i64, job_id: i64) -> Result<(), ServerFnError
 }
 
 fn jobs_panel(project_id: i64, failed_job_id: i64) -> Page {
-    let jobs = use_query(list_project_jobs::key(project_id)).poll(Duration::from_secs(5));
-    let retry = use_mutation(move |job_id: i64| async move {
-        retry_job(project_id, job_id).await
-    })
-    .invalidates(list_project_jobs::key(project_id));
+    let jobs = use_query(
+        list_project_jobs::query(project_id),
+        QueryOptions::new().refetch_interval(Duration::from_secs(5)),
+    );
+
+    let client = queries();
+    let retry = use_action(move |job_id: i64| {
+        let client = client.clone();
+        async move {
+            let result = retry_job(project_id, job_id).await?;
+            client.invalidate_family(list_project_jobs::family());
+            Ok::<_, ServerFnError>(result)
+        }
+    });
 
     page!({
         button {
@@ -779,28 +811,107 @@ fn jobs_panel(project_id: i64, failed_job_id: i64) -> Page {
             @click: retry.dispatching(failed_job_id),
             "Retry"
         }
-        if let Some(items) = jobs.data() {
-            p { { format!("{} jobs", items.len()) } }
-        }
-        if jobs.is_pending() {
-            p { role: "status", "Loading" }
-        }
-        if jobs.is_fetching() && !jobs.is_pending() {
-            p { role: "status", "Refreshing" }
+        match jobs.snapshot().status {
+            QueryStatus::Idle => p { role: "status", "Not requested" },
+            QueryStatus::Pending => p { role: "status", "Loading" },
+            QueryStatus::Success => p {
+                { format!("{} jobs", jobs.data().unwrap_or_default().len()) }
+            },
+            QueryStatus::Error => p { role: "alert", "Could not load jobs" },
         }
     })
 }
 ```
 
-Use `server_fn_module::key(args...)` to build generated query keys. Keeping the
-helper in the marker module binds every key to exactly one server function,
-including when multiple functions have identical signatures.
+Use exact invalidation when only one argument set changed:
+
+```rust,ignore
+client.invalidate(&list_project_jobs::key(project_id));
+```
+
+Use family invalidation when the mutation can affect several project filters or
+pages:
+
+```rust,ignore
+client.invalidate_family(list_project_jobs::family());
+```
+
+Keep invalidation after the mutation's `await?`, as shown above, so a failed
+action does not refetch unchanged server state.
+
+For reads that are not server functions, define a manual family. The family
+owns identity and argument types; each descriptor supplies its fetcher:
+
+```rust,ignore
+const AUDIT_EVENTS: QueryFamily<u64, Vec<AuditEvent>, ApiError> =
+    QueryFamily::new("audit-events.by-project");
+
+let events = use_query(
+    AUDIT_EVENTS.query(project_id, move || fetch_audit_events(project_id)),
+    QueryOptions::new()
+        .enabled(can_view_audit)
+        .stale_time(Duration::from_secs(60))
+        .gc_time(Duration::from_secs(600)),
+);
+```
+
+The manual family ID and `Args` encoding are a persistent cache contract.
+Descriptors that reuse the same family ID and argument type must describe the
+same semantic operation and serialize arguments to the same canonical JSON
+shape. Version the ID, for example `audit-events.by-project.v2`, whenever the
+operation meaning or canonical encoding changes, even if the Rust types do not.
+
+`QueryOptions` belong to the mounted observer. `enabled(false)` with no cached
+result reports `QueryStatus::Idle`; an enabled initial request reports
+`Pending`, followed by `Success` or `Error`. A background refetch preserves
+successful `data`, sets `is_fetching`, and reports any failure through
+`refetch_error`; it does not replace the screen with an initial-load error.
+`is_stale` is observer-specific because observers may choose different
+`stale_time` values for the same shared entry.
 
 `QueryHandle` implements the same Suspense tracking interface as `Resource`, so
 `SuspenseBoundary::track(jobs.clone())` can associate a keyed query with the
 boundary for SSR streaming and native component tests. Queries keep prior
 successful data visible during background refetches; use `is_fetching()` when a
 UI needs to distinguish refresh work from the initial pending state.
+
+Polling is observer-owned through `QueryOptions::refetch_interval`. Reinhardt
+suspends polling while `document.visibilityState` is hidden. When the document
+becomes visible, stale data refetches immediately and fresh data waits for its
+next interval.
+
+During SSR, one request-local client deduplicates query reads from route loaders
+and components. Only settled snapshots are serialized. Hydration seeds the
+browser application's client before its first observer mounts, so matching
+generated keys reuse server data without a duplicate initial request.
+
+### Migrating to query client v2
+
+Move the fetcher into a descriptor and observer policy into `QueryOptions`:
+
+```rust,ignore
+// Before
+let jobs = use_query(list_project_jobs::key(project_id)).poll(Duration::from_secs(5));
+
+// After
+let jobs = use_query(
+    list_project_jobs::query(project_id),
+    QueryOptions::new().refetch_interval(Duration::from_secs(5)),
+);
+```
+
+The following before-only APIs were removed:
+
+- Before: `QueryKey::new(...)`. After: generated `family`, `key`, and `query`
+  helpers, or a manual `QueryFamily`.
+- Before: query-handle `.poll(...)`, `.stale_time(...)`, and `.gc_time(...)`.
+  After: mount-time `QueryOptions`.
+- Before: `use_mutation(...)`. After: `use_action(...)`.
+- Before: `Action::invalidates(...)`. After: call exact or family invalidation
+  explicitly after mutation success.
+
+Entity normalization (#5843) and retry policy (#5844) are explicit non-goals
+for query client v2.
 
 For generated forms, read submit state from the runtime returned by `use_form`:
 

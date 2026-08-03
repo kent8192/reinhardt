@@ -421,16 +421,21 @@ impl SchemaCodeGenerator {
 		);
 		let field_ident = format_ident!("{}", field_name);
 
-		let relationship =
-			self.config
-				.generation
-				.detect_relationships
-				.then(|| {
-					table.foreign_keys.iter().find(|foreign_key| {
-						foreign_key.columns.as_slice() == [column.name.as_str()]
-					})
+		let relationship = self
+			.config
+			.generation
+			.detect_relationships
+			.then(|| {
+				table.foreign_keys.iter().find(|foreign_key| {
+					let Some(target) = schema.tables.get(&foreign_key.referenced_table) else {
+						return false;
+					};
+					foreign_key.columns.as_slice() == [column.name.as_str()]
+						&& target.primary_key.len() == 1
+						&& foreign_key.referenced_columns == target.primary_key
 				})
-				.flatten();
+			})
+			.flatten();
 		let relationship_target = if let Some(foreign_key) = relationship {
 			let target = table_to_struct
 				.get(&foreign_key.referenced_table)
@@ -557,9 +562,17 @@ impl SchemaCodeGenerator {
 			let len = *len;
 			attrs.push(quote! { max_length = #len });
 		}
+		if let crate::migrations::fields::FieldType::Char(len) = &column.column_type {
+			let len = *len;
+			let field_type = format!("char({len})");
+			attrs.push(quote! { max_length = #len, field_type = #field_type });
+		}
 		if matches!(
 			column.column_type,
 			crate::migrations::fields::FieldType::Text
+				| crate::migrations::fields::FieldType::TinyText
+				| crate::migrations::fields::FieldType::MediumText
+				| crate::migrations::fields::FieldType::LongText
 		) {
 			attrs.push(quote! { field_type = "text" });
 		}

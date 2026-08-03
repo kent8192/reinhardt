@@ -12,7 +12,6 @@ use rstest::rstest;
 
 use super::{EventError, EventFixture, EventFixtureError, QueryError, Role, render};
 use crate::Callback;
-use crate::deps;
 use crate::event::{
 	ChangeEvent, ClickEvent, CustomEventDetailError, EventPayload, InputEvent, KeyDownEvent,
 	Modifiers, Point, PointerKind, PointerMoveEvent, typed_event_handler,
@@ -20,28 +19,50 @@ use crate::event::{
 use crate::reactive::hooks::use_effect;
 use serial_test::serial;
 
-use crate::reactive::{QueryKey, ResourceState, use_query};
+use crate::reactive::{QueryFamily, QueryOptions, QueryStatus, use_query};
 
 fn scheduled_query_component() -> Page {
-	let query = use_query(QueryKey::new("scheduled-query", || async {
-		Ok::<_, String>("Scheduled query result".to_string())
-	}));
-	Page::reactive(move || match query.get() {
-		ResourceState::Loading => Page::text("Loading"),
-		ResourceState::Success(value) => Page::text(value),
-		ResourceState::Error(error) => Page::text(error.to_string()),
+	let query = use_query(
+		QueryFamily::<(), _, _>::new("scheduled-query").query((), || async {
+			Ok::<_, String>("Scheduled query result".to_string())
+		}),
+		QueryOptions::default(),
+	);
+	Page::reactive(move || match query.snapshot().status {
+		QueryStatus::Idle | QueryStatus::Pending => Page::text("Loading"),
+		QueryStatus::Success => Page::text(
+			query
+				.data()
+				.expect("a successful query snapshot contains data"),
+		),
+		QueryStatus::Error => Page::text(
+			query
+				.error()
+				.expect("an error query snapshot contains an error"),
+		),
 	})
 }
 
 #[cfg(not(feature = "msw"))]
 fn screen_scoped_query_component(value: &'static str) -> Page {
-	let query = use_query(QueryKey::new("screen-scoped-query", move || async move {
-		Ok::<_, String>(value.to_string())
-	}));
-	Page::reactive(move || match query.get() {
-		ResourceState::Loading => Page::text("Loading"),
-		ResourceState::Success(value) => Page::text(value),
-		ResourceState::Error(error) => Page::text(error),
+	let query = use_query(
+		QueryFamily::<(), _, _>::new("screen-scoped-query").query((), move || async move {
+			Ok::<_, String>(value.to_string())
+		}),
+		QueryOptions::default(),
+	);
+	Page::reactive(move || match query.snapshot().status {
+		QueryStatus::Idle | QueryStatus::Pending => Page::text("Loading"),
+		QueryStatus::Success => Page::text(
+			query
+				.data()
+				.expect("a successful query snapshot contains data"),
+		),
+		QueryStatus::Error => Page::text(
+			query
+				.error()
+				.expect("an error query snapshot contains an error"),
+		),
 	})
 }
 
@@ -62,10 +83,8 @@ async fn query_fetches_are_scheduled_until_screen_settles() {
 
 #[cfg(not(feature = "msw"))]
 #[tokio::test]
-#[serial_test::serial(query_cache)]
 async fn query_cache_is_scoped_per_screen_without_msw() {
 	// Arrange
-	crate::reactive::query::clear_query_cache_for_test();
 	let first = render(|| screen_scoped_query_component("first"));
 	first.settle().await;
 
@@ -73,7 +92,6 @@ async fn query_cache_is_scoped_per_screen_without_msw() {
 	let second = render(|| screen_scoped_query_component("second"));
 	second.settle().await;
 	let second_output = second.pretty();
-	crate::reactive::query::clear_query_cache_for_test();
 
 	// Assert
 	assert_eq!(first.pretty(), "first\n");

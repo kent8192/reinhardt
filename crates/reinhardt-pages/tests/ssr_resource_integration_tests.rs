@@ -3,13 +3,38 @@
 use reinhardt_pages::component::{Component, IntoPage, Page, PageElement};
 use reinhardt_pages::deps;
 use reinhardt_pages::reactive::{
-	QueryKey, ResourceState, Signal, use_id, use_query, use_resource, use_resource_with_key,
+	QueryFamily, QueryOptions, QueryStatus, ResourceState, Signal, queries, use_id, use_query,
+	use_resource, use_resource_with_key,
 };
+use reinhardt_pages::server_fn::{ServerFnError, server_fn};
 use reinhardt_pages::ssr::{SsrOptions, SsrRenderer};
 use rstest::rstest;
 use std::cell::Cell;
 use std::rc::Rc;
+use std::sync::Arc;
 use std::time::Duration;
+use tokio::sync::Barrier;
+
+#[derive(Clone)]
+struct SsrQueryDependency;
+
+struct SsrQueryDependencyKey;
+
+impl reinhardt_di::InjectableKey for SsrQueryDependencyKey {}
+
+#[server_fn]
+async fn ssr_injected_prefetch_guard(
+	#[inject] _dependency: reinhardt_di::KeyedDepends<SsrQueryDependencyKey, SsrQueryDependency>,
+) -> Result<String, ServerFnError> {
+	Ok("unexpected injected query".to_string())
+}
+
+#[server_fn]
+async fn ssr_extractor_prefetch_guard(
+	_header: reinhardt_di::params::Header<String>,
+) -> Result<String, ServerFnError> {
+	Ok("unexpected extractor query".to_string())
+}
 
 fn resource_view() -> Page {
 	Page::reactive(|| {
@@ -327,35 +352,70 @@ async fn pending_ssr_resource_reuse_does_not_create_duplicate_fetcher() {
 #[tokio::test]
 async fn pending_ssr_query_reuse_does_not_create_duplicate_fetcher() {
 	let fetcher_calls = Rc::new(Cell::new(0));
+	let query_id = QueryFamily::<(), String, String>::new("shared-query")
+		.key(())
+		.id();
 	let first_calls = Rc::clone(&fetcher_calls);
 	let second_calls = Rc::clone(&fetcher_calls);
 	let view = Page::reactive(move || {
 		let first_calls = Rc::clone(&first_calls);
-		let first = use_query(QueryKey::new("shared-query", move || {
-			first_calls.set(first_calls.get() + 1);
-			async { Ok::<_, String>("shared".to_string()) }
-		}));
+		let first = use_query(
+			QueryFamily::<(), _, _>::new("shared-query").query((), move || {
+				first_calls.set(first_calls.get() + 1);
+				async { Ok::<_, String>("shared".to_string()) }
+			}),
+			QueryOptions::default(),
+		);
 
 		let second_calls = Rc::clone(&second_calls);
-		let second = use_query(QueryKey::new("shared-query", move || {
-			second_calls.set(second_calls.get() + 1);
-			async { Ok::<_, String>("shared".to_string()) }
-		}));
+		let second = use_query(
+			QueryFamily::<(), _, _>::new("shared-query").query((), move || {
+				second_calls.set(second_calls.get() + 1);
+				async { Ok::<_, String>("shared".to_string()) }
+			}),
+			QueryOptions::default(),
+		);
 
 		Page::fragment([
-			match first.get() {
-				ResourceState::Success(value) => PageElement::new("p")
-					.child(format!("first-{value}"))
+			match first.snapshot().status {
+				QueryStatus::Idle | QueryStatus::Pending => {
+					PageElement::new("p").child("first-loading").into_page()
+				}
+				QueryStatus::Success => PageElement::new("p")
+					.child(format!(
+						"first-{}",
+						first
+							.data()
+							.expect("a successful query snapshot contains data")
+					))
 					.into_page(),
-				ResourceState::Loading => PageElement::new("p").child("first-loading").into_page(),
-				ResourceState::Error(error) => PageElement::new("p").child(error).into_page(),
+				QueryStatus::Error => PageElement::new("p")
+					.child(
+						first
+							.error()
+							.expect("an error query snapshot contains an error"),
+					)
+					.into_page(),
 			},
-			match second.get() {
-				ResourceState::Success(value) => PageElement::new("p")
-					.child(format!("second-{value}"))
+			match second.snapshot().status {
+				QueryStatus::Idle | QueryStatus::Pending => {
+					PageElement::new("p").child("second-loading").into_page()
+				}
+				QueryStatus::Success => PageElement::new("p")
+					.child(format!(
+						"second-{}",
+						second
+							.data()
+							.expect("a successful query snapshot contains data")
+					))
 					.into_page(),
-				ResourceState::Loading => PageElement::new("p").child("second-loading").into_page(),
-				ResourceState::Error(error) => PageElement::new("p").child(error).into_page(),
+				QueryStatus::Error => PageElement::new("p")
+					.child(
+						second
+							.error()
+							.expect("an error query snapshot contains an error"),
+					)
+					.into_page(),
 			},
 		])
 	});
@@ -366,13 +426,163 @@ async fn pending_ssr_query_reuse_does_not_create_duplicate_fetcher() {
 	assert!(html.contains("first-shared"));
 	assert!(html.contains("second-shared"));
 	assert_eq!(fetcher_calls.get(), 1);
-	assert!(
+	assert_eq!(
 		renderer
 			.state()
-			.get_resource_state("shared-query")
-			.is_some()
+			.get_resource_state(&format!("query:{query_id}")),
+		Some(&serde_json::json!({
+			"state": { "Success": "shared" },
+			"refetch_error": null,
+			"is_fetching": false,
+			"is_stale": false
+		}))
 	);
 	assert_eq!(renderer.state().resource_count(), 1);
+}
+
+fn request_query_view(value: &'static str, fetch_barrier: Arc<Barrier>) -> Page {
+	Page::reactive(move || {
+		let _request_client = queries();
+		let fetch_barrier = Arc::clone(&fetch_barrier);
+		let query = use_query(
+			QueryFamily::<(), String, String>::new("tests::request-isolation").query(
+				(),
+				move || {
+					let fetch_barrier = Arc::clone(&fetch_barrier);
+					async move {
+						fetch_barrier.wait().await;
+						Ok::<_, String>(value.to_string())
+					}
+				},
+			),
+			QueryOptions::default(),
+		);
+
+		match query.snapshot().status {
+			QueryStatus::Idle | QueryStatus::Pending => {
+				PageElement::new("p").child("loading").into_page()
+			}
+			QueryStatus::Success => PageElement::new("p")
+				.child(query.data().expect("successful query data"))
+				.into_page(),
+			QueryStatus::Error => PageElement::new("p")
+				.child(query.error().expect("failed query error"))
+				.into_page(),
+		}
+	})
+}
+
+#[tokio::test]
+async fn concurrent_ssr_requests_keep_query_clients_isolated() {
+	let isolation_options = SsrOptions::new().resource_timeout(Duration::from_secs(30));
+	let mut first_renderer = SsrRenderer::with_options(isolation_options.clone());
+	let mut second_renderer = SsrRenderer::with_options(isolation_options);
+	let fetch_barrier = Arc::new(Barrier::new(2));
+	let query_id = QueryFamily::<(), String, String>::new("tests::request-isolation")
+		.key(())
+		.id();
+
+	let (first_html, second_html) = tokio::time::timeout(Duration::from_secs(5), async {
+		tokio::join!(
+			first_renderer.render_page_with_view_head_to_string(request_query_view(
+				"first-request",
+				Arc::clone(&fetch_barrier),
+			)),
+			second_renderer.render_page_with_view_head_to_string(request_query_view(
+				"second-request",
+				fetch_barrier,
+			)),
+		)
+	})
+	.await
+	.expect("concurrent SSR query fetches must both reach the request-isolation barrier");
+
+	assert!(first_html.contains("first-request"));
+	assert!(!first_html.contains("second-request"));
+	assert!(second_html.contains("second-request"));
+	assert!(!second_html.contains("first-request"));
+	assert_eq!(
+		first_renderer
+			.state()
+			.get_resource_state(&format!("query:{query_id}"))
+			.and_then(|snapshot| snapshot.get("state"))
+			.and_then(|state| state.get("Success")),
+		Some(&serde_json::json!("first-request"))
+	);
+	assert_eq!(
+		second_renderer
+			.state()
+			.get_resource_state(&format!("query:{query_id}"))
+			.and_then(|snapshot| snapshot.get("state"))
+			.and_then(|state| state.get("Success")),
+		Some(&serde_json::json!("second-request"))
+	);
+}
+
+#[tokio::test]
+async fn disabled_ssr_query_does_not_register_fetch_work() {
+	let fetch_count = Rc::new(Cell::new(0));
+	let fetch_count_for_view = Rc::clone(&fetch_count);
+	let view = Page::reactive(move || {
+		let fetch_count = Rc::clone(&fetch_count_for_view);
+		let query = use_query(
+			QueryFamily::<(), String, String>::new("tests::disabled-ssr").query((), move || {
+				let fetch_count = Rc::clone(&fetch_count);
+				async move {
+					fetch_count.set(fetch_count.get() + 1);
+					Ok::<_, String>("unexpected".to_string())
+				}
+			}),
+			QueryOptions::default().enabled(false),
+		);
+		assert_eq!(query.snapshot().status, QueryStatus::Idle);
+		PageElement::new("p").child("disabled").into_page()
+	});
+	let mut renderer = SsrRenderer::new();
+
+	let html = renderer.render_page_with_view_head_to_string(view).await;
+
+	assert!(html.contains(">disabled<"));
+	assert_eq!(fetch_count.get(), 0);
+	assert_eq!(renderer.state().resource_count(), 0);
+}
+
+#[tokio::test]
+async fn injected_server_fn_query_cannot_be_reenabled_for_ssr_prefetch() {
+	let view = Page::reactive(|| {
+		let query = use_query(
+			ssr_injected_prefetch_guard::query().with_ssr_prefetch(true),
+			QueryOptions::default(),
+		);
+		assert_eq!(query.snapshot().status, QueryStatus::Pending);
+		PageElement::new("p").child("injected-disabled").into_page()
+	});
+	let mut renderer = SsrRenderer::new();
+
+	let html = renderer.render_page_with_view_head_to_string(view).await;
+
+	assert!(html.contains(">injected-disabled<"));
+	assert_eq!(renderer.state().resource_count(), 0);
+}
+
+#[tokio::test]
+async fn extractor_server_fn_query_cannot_be_reenabled_for_ssr_prefetch() {
+	let view = Page::reactive(|| {
+		let query = use_query(
+			ssr_extractor_prefetch_guard::query().with_ssr_prefetch(true),
+			QueryOptions::default(),
+		);
+		assert_eq!(query.snapshot().status, QueryStatus::Pending);
+		PageElement::new("p")
+			.child("extractor-disabled")
+			.into_page()
+	});
+	let mut renderer = SsrRenderer::new();
+
+	let html = renderer.render_page_with_view_head_to_string(view).await;
+
+	assert!(html.contains(">extractor-disabled<"));
+	assert_eq!(renderer.state().resource_count(), 0);
 }
 
 #[tokio::test]

@@ -316,6 +316,7 @@ db-pgvector = [
   "db-postgres",
   "reinhardt-db/pgvector",
   "reinhardt-admin?/pgvector",
+  "reinhardt-commands?/pgvector",
   "reinhardt-core/pgvector",
   "reinhardt-macros/pgvector",
   "reinhardt-test?/pgvector",
@@ -332,7 +333,12 @@ db-sqlite = [
   "reinhardt-commands?/sqlite",
   "reinhardt-macros/db-sqlite",
 ]
-db-cockroachdb = ["database", "reinhardt-db/cockroachdb-backend", "reinhardt-commands?/postgres"]
+db-cockroachdb = [
+  "database",
+  "reinhardt-db/cockroachdb-backend",
+  "reinhardt-commands?/postgres",
+  "reinhardt-macros/db-postgres",
+]
 
 # Fine-grained middleware
 middleware-cors = ["reinhardt-middleware", "reinhardt-middleware/cors"]

@@ -21,6 +21,69 @@
 //! - **Auto-Reload**: Built-in hot-reload for the development server (server + wasm)
 //! - **Tera Template Engine**: Powerful template rendering for project/app generation
 //!
+//! ## Squashing Migrations
+//!
+//! The `squashmigrations` command supports Django-compatible range syntax:
+//!
+//! ```text
+//! manage squashmigrations APP_LABEL MIGRATION_NAME
+//! manage squashmigrations APP_LABEL START_MIGRATION MIGRATION_NAME
+//! ```
+//!
+//! Exact migration names and unambiguous prefixes are accepted. Resolution
+//! rejects ambiguous prefixes, branched ancestry, and ranges that are not
+//! continuous same-application ancestor chains. Dependencies entering the
+//! selected range are preserved.
+//!
+//! Interactive execution prompts before creating the file. Pass `--no-input`
+//! or its `--noinput` alias for automation, `--no-optimize` to preserve the
+//! exact operation sequence, and `--no-header` to omit the generated-file
+//! header. A descriptive `--squashed-name release_window` becomes a name such
+//! as `0001_release_window`. In a Cargo workspace, pass
+//! `--migrations-dir path/to/member/migrations` to select the target member's
+//! migration root explicitly.
+//!
+//! Optimization never crosses an operation barrier. Data operations, renames,
+//! constraints, indexes, bulk operations, custom operations, and any operation
+//! without a proven schema reduction retain their order. The command validates
+//! and renders the entire migration before prompting, creates a new file
+//! without overwriting an existing destination, and attempts anchored cleanup
+//! after a failed write. If cleanup also fails, the error reports both
+//! failures. It reads migration sources only, so no database connection is
+//! required.
+//!
+//! ## Migration Visibility
+//!
+//! `showmigrations` reads one immutable catalog and recorder snapshot, then
+//! displays either application-grouped `[X]` / `[ ]` state or the selected
+//! dependency order. It treats an absent recorder table as an empty applied
+//! set and never creates migration history. `--list` / `-l` and `--plan` /
+//! `-p` are mutually exclusive, list mode is the default, and verbosity level
+//! two includes recorded timestamps. Application filtering retains transitive
+//! cross-application dependencies.
+//!
+//! `sqlmigrate APP MIGRATION` accepts an exact name or unique prefix and uses
+//! the SQL planner shared with migration execution. `--backwards` reconstructs
+//! both sides of the migration before rendering rollback SQL. The complete
+//! uncolored script is buffered before one stdout write; no schema or history
+//! statement is executed. An irreversible rollback or late planning error
+//! therefore emits no partial script.
+//!
+//! Both commands accept `--database ALIAS`. Without `--database-url`, the alias
+//! is looked up in configured settings. A URL override bypasses alias lookup
+//! and connects directly while retaining the alias as a safe diagnostic label;
+//! settings are not modified. Diagnostics redact URL credentials and
+//! sensitive-looking aliases. Transaction wrappers are emitted only for an
+//! atomic migration plan on a backend that supports transactional DDL, so
+//! MySQL DDL remains unwrapped. SQLite emits table recreation SQL when the
+//! requested alteration requires it.
+//!
+//! ```text
+//! manage showmigrations polls --plan --database default
+//! manage sqlmigrate polls 0002 --database default
+//! manage sqlmigrate polls 0002 --backwards --database default
+//! ```
+//!
 //! ## Example
 //!
 //! ```rust,no_run
@@ -133,7 +196,7 @@
 //! defaults intentionally omit it. Projects opting in provide a
 //! [`ShellConfig`], call [`shell_runtime_hook`] from the outer native `main`
 //! before constructing Tokio, and dispatch through
-//! [`execute_from_command_line_with_settings_and_shell`].
+//! [`execute_from_command_line_with_migration_settings_and_shell`].
 //!
 //! ```rust,ignore
 //! #[cfg(not(target_arch = "wasm32"))]
@@ -261,10 +324,19 @@ pub mod runserver_hooks;
 #[doc(hidden)]
 pub mod server_rebuild_pipeline;
 mod shell;
+/// Read-only migration state display.
+#[cfg(feature = "migrations")]
+pub mod showmigrations;
 /// Source-tree enumeration for hot-reload watch targets.
 #[cfg(feature = "autoreload")]
 #[doc(hidden)]
 pub mod source_roots;
+/// Read-only migration SQL rendering.
+#[cfg(feature = "migrations")]
+pub mod sqlmigrate;
+/// Migration squashing command orchestration.
+#[cfg(feature = "migrations")]
+pub mod squashmigrations;
 /// Project and app scaffolding commands (startproject, startapp).
 pub mod start_commands;
 /// Shared static asset settings resolution.
@@ -340,6 +412,8 @@ pub use builtin::{CheckCommand, CheckDiCommand, MigrateCommand, RunServerCommand
 pub use cli::start_server;
 pub use cli::{
 	Cli, Commands, auto_register_router, execute_from_command_line,
+	execute_from_command_line_with_migration_settings,
+	execute_from_command_line_with_migration_settings_and_shell,
 	execute_from_command_line_with_registry, execute_from_command_line_with_registry_and_settings,
 	execute_from_command_line_with_registry_and_settings_and_shell,
 	execute_from_command_line_with_settings, execute_from_command_line_with_settings_and_shell,
@@ -371,6 +445,17 @@ pub use runserver_hooks::{RunserverContext, RunserverHook, RunserverHookRegistra
 #[cfg(feature = "shell")]
 pub use shell::ShellEnvironment;
 pub use shell::{ShellConfig, shell_runtime_hook};
+#[cfg(feature = "migrations")]
+pub use showmigrations::{
+	MigrationVisibilityWriter, ShowMigrationsCommand, ShowMigrationsMode, format_migration_snapshot,
+};
+#[cfg(feature = "migrations")]
+pub use sqlmigrate::{SqlMigrateCommand, render_migration_sql};
+#[cfg(feature = "migrations")]
+pub use squashmigrations::{
+	ConfirmationReader, SquashMigrationsOptions, SquashMigrationsSummary, StdinConfirmationReader,
+	execute_squashmigrations_with_context_and_io, execute_squashmigrations_with_io,
+};
 pub use start_commands::{StartAppCommand, StartProjectCommand};
 pub use static_asset_settings::StaticAssetSettings;
 pub use style_extractor::{

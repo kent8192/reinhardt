@@ -1387,7 +1387,7 @@ mod tests {
 		assert!(!debug.contains(&raw_url));
 		assert_eq!(
 			debug,
-			"DbClientSpec { executable: \"psql\", arguments: [\"--host\", \"db.example\", \"--port\", \"5432\", \"--username\", \"operator\", \"private\"], secret_environment: [(\"PGPASSWORD\", \"[REDACTED]\")] }"
+			"DbClientSpec { executable: \"psql\", arguments: [\"--host\", \"db.example\", \"--port\", \"5432\", \"--username\", \"operator\", \"private\"], secret_environment: [(\"PGPASSWORD\", \"[REDACTED]\"), (\"PGSSLMODE\", \"[REDACTED]\")] }"
 		);
 	}
 

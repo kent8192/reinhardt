@@ -1,8 +1,10 @@
 //! Pages-owned navigation preparation and commit coordination.
 
 use crate::cancellation::{AbortableTaskGuard, CancellationSource};
+use crate::reactive::QueryDefaults;
 use crate::reactive::Signal;
 use crate::reactive::hooks::router::NavigateError;
+use crate::reactive::query::{QueryClient, current_query_client, with_query_client};
 use crate::router::NavigationType;
 use crate::router::loader::{LoaderStore, RouteLoaderError, route_context};
 use crate::router::loader_registry::{LoaderConsumer, LoaderRegistry, execute_loader};
@@ -50,6 +52,7 @@ struct NavigationAttempt {
 /// matching and commit operations.
 pub(crate) struct NavigationCoordinator {
 	router: Rc<ClientRouter>,
+	query_client: QueryClient,
 	registry: LoaderRegistry,
 	next_generation: Cell<u64>,
 	next_prefetch_id: Cell<u64>,
@@ -68,10 +71,13 @@ pub(crate) struct NavigationCoordinator {
 #[allow(dead_code)]
 impl NavigationCoordinator {
 	pub(crate) fn new(router: Rc<ClientRouter>) -> Result<Rc<Self>, RouteLoaderError> {
+		let query_client =
+			current_query_client().unwrap_or_else(|| QueryClient::new(QueryDefaults::default()));
 		let registry = LoaderRegistry::global()
 			.map_err(|error| RouteLoaderError::with_status(error.to_string(), 500))?;
 		Ok(Rc::new(Self {
 			router,
+			query_client,
 			registry,
 			next_generation: Cell::new(0),
 			next_prefetch_id: Cell::new(0),
@@ -130,7 +136,11 @@ impl NavigationCoordinator {
 	/// binding to panic. Without an SSR state script, the caller prepares the
 	/// initial route on the client before mounting it.
 	#[cfg(wasm)]
-	pub(crate) fn hydrate_initial_store(&self, path: &str) -> Result<bool, RouteLoaderError> {
+	pub(crate) fn hydrate_initial_store(
+		&self,
+		client: &QueryClient,
+		path: &str,
+	) -> Result<bool, RouteLoaderError> {
 		let Some(matched) = self.router.match_tree(path) else {
 			return Ok(true);
 		};
@@ -160,17 +170,9 @@ impl NavigationCoordinator {
 			return Ok(false);
 		}
 		for id in matched.loader_ids() {
-			let value = hydration
-				.get_route_loader_state(id.as_str())
-				.ok_or_else(|| {
-					RouteLoaderError::with_status(
-						format!("route loader `{}` is missing from SSR state", id.as_str()),
-						500,
-					)
-				})?;
-			self.registry
-				.seed_hydrated_query(*id, &loader_context, &hydration)?;
-			let prepared = self.registry.hydrate(*id, value)?;
+			let prepared =
+				self.registry
+					.seed_hydrated_query(client, *id, &loader_context, &hydration)?;
 			store.insert_prepared(prepared);
 		}
 		self.mounted_store.borrow_mut().replace(store);
@@ -178,6 +180,15 @@ impl NavigationCoordinator {
 	}
 
 	pub(crate) fn navigate(
+		self: &Rc<Self>,
+		path: String,
+		intent: NavigationIntent,
+	) -> Result<(), NavigateError> {
+		let query_client = self.query_client.clone();
+		with_query_client(&query_client, || self.navigate_in_context(path, intent))
+	}
+
+	fn navigate_in_context(
 		self: &Rc<Self>,
 		path: String,
 		intent: NavigationIntent,
@@ -255,6 +266,11 @@ impl NavigationCoordinator {
 	}
 
 	pub(crate) fn prefetch(self: &Rc<Self>, path: String) -> Result<(), NavigateError> {
+		let query_client = self.query_client.clone();
+		with_query_client(&query_client, || self.prefetch_in_context(path))
+	}
+
+	fn prefetch_in_context(self: &Rc<Self>, path: String) -> Result<(), NavigateError> {
 		let Some(matched) = self.router.match_tree(&path) else {
 			return Ok(());
 		};
@@ -347,6 +363,7 @@ impl NavigationCoordinator {
 		if !matched.guards_allow() {
 			return self.commit_unmatched(generation, path, intent);
 		}
+		store.promote_navigation_leases(generation);
 		let entry_index = match intent {
 			NavigationIntent::Push => self.committed_index.get().saturating_add(1),
 			NavigationIntent::Replace | NavigationIntent::Initial => self.committed_index.get(),
@@ -460,6 +477,9 @@ mod tests {
 	#[cfg(native)]
 	mod native_async_tests {
 		use super::*;
+		use crate::reactive::query::{
+			QueryClient, QueryClientGuard, QueryDefaults, provide_query_client,
+		};
 		use crate::router::loader::with_loader_store;
 		use crate::{Loader, Page, component, layout, loader};
 		use reinhardt_core::page::{IntoPage, Outlet};
@@ -606,6 +626,10 @@ mod tests {
 			LEAF_LOADER_STARTS.with(|starts| starts.set(0));
 		}
 
+		fn provide_test_query_client() -> QueryClientGuard {
+			provide_query_client(QueryClient::new(QueryDefaults::default()))
+		}
+
 		fn router_with_loaded_routes() -> ClientRouter {
 			ClientRouter::new()
 				.route("root", "/", || Page::text("old route"))
@@ -626,6 +650,7 @@ mod tests {
 		fn navigation_keeps_old_route_until_loader_commit() {
 			ReactiveScope::run(|| {
 				reset_test_state();
+				let _query_client = provide_test_query_client();
 				let tasks = Rc::new(RefCell::new(VecDeque::new()));
 				let tasks_for_sink = Rc::clone(&tasks);
 				let _sink = crate::platform::install_task_sink(move |task| {
@@ -664,6 +689,7 @@ mod tests {
 		fn loader_navigation_rechecks_guards_before_commit() {
 			ReactiveScope::run(|| {
 				reset_test_state();
+				let _query_client = provide_test_query_client();
 				let tasks = Rc::new(RefCell::new(VecDeque::new()));
 				let tasks_for_sink = Rc::clone(&tasks);
 				let _sink = crate::platform::install_task_sink(move |task| {
@@ -698,6 +724,7 @@ mod tests {
 		fn nested_layout_and_leaf_loaders_start_in_parallel() {
 			ReactiveScope::run(|| {
 				reset_test_state();
+				let _query_client = provide_test_query_client();
 				let tasks = Rc::new(RefCell::new(VecDeque::new()));
 				let tasks_for_sink = Rc::clone(&tasks);
 				let _sink = crate::platform::install_task_sink(move |task| {
@@ -732,6 +759,7 @@ mod tests {
 		fn superseded_generation_cannot_commit_obsolete_loader_result() {
 			ReactiveScope::run(|| {
 				reset_test_state();
+				let _query_client = provide_test_query_client();
 				let tasks = Rc::new(RefCell::new(VecDeque::new()));
 				let tasks_for_sink = Rc::clone(&tasks);
 				let _sink = crate::platform::install_task_sink(move |task| {
@@ -761,6 +789,7 @@ mod tests {
 		fn failed_loader_retains_route_and_publishes_safe_error() {
 			ReactiveScope::run(|| {
 				reset_test_state();
+				let _query_client = provide_test_query_client();
 				let tasks = Rc::new(RefCell::new(VecDeque::new()));
 				let tasks_for_sink = Rc::clone(&tasks);
 				let _sink = crate::platform::install_task_sink(move |task| {
@@ -793,6 +822,7 @@ mod tests {
 		fn failed_loader_does_not_wait_for_a_slow_sibling() {
 			ReactiveScope::run(|| {
 				reset_test_state();
+				let _query_client = provide_test_query_client();
 				let tasks = Rc::new(RefCell::new(VecDeque::new()));
 				let tasks_for_sink = Rc::clone(&tasks);
 				let _sink = crate::platform::install_task_sink(move |task| {
@@ -821,6 +851,7 @@ mod tests {
 		fn completed_prefetch_releases_its_task_guard() {
 			ReactiveScope::run(|| {
 				reset_test_state();
+				let _query_client = provide_test_query_client();
 				let tasks = Rc::new(RefCell::new(VecDeque::new()));
 				let tasks_for_sink = Rc::clone(&tasks);
 				let _sink = crate::platform::install_task_sink(move |task| {
@@ -842,6 +873,7 @@ mod tests {
 		fn failed_forward_pop_requests_history_restoration() {
 			ReactiveScope::run(|| {
 				reset_test_state();
+				let _query_client = provide_test_query_client();
 				let tasks = Rc::new(RefCell::new(VecDeque::new()));
 				let tasks_for_sink = Rc::clone(&tasks);
 				let _sink = crate::platform::install_task_sink(move |task| {

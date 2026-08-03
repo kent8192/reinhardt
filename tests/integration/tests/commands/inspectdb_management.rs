@@ -489,24 +489,26 @@ async fn assert_backend_contract(
 		"stderr must not expose the database URL",
 	);
 
-	let (with_views, _) = run_inspectdb(url, &[], true).await;
+	let view_output = Arc::new(CapturedOutput::default());
+	let view_command = InspectDbCommand::with_writer(view_output);
+	let mut view_context = CommandContext::new(Vec::new());
+	view_context.set_option("database".to_string(), "default".to_string());
+	view_context.set_option("database-url".to_string(), url.to_string());
+	view_context.set_option("include-views".to_string(), "true".to_string());
+	let view_error = view_command
+		.execute(&view_context)
+		.await
+		.expect_err("views without primary keys must not generate lossy models");
 	assert_eq!(
-		struct_fields(&with_views)
-			.keys()
-			.cloned()
-			.collect::<Vec<_>>(),
-		vec![
-			"Accounts".to_string(),
-			"ActiveAccounts".to_string(),
-			"AuditLog".to_string(),
-		],
-		"`--include-views` must add the view while retaining tables",
+		view_error.to_string(),
+		"Execution error: Cannot generate model for `active_accounts` because it has no primary key.",
+		"include-views must reject views that cannot produce a model",
 	);
 }
 
 #[rstest]
 #[tokio::test]
-async fn postgres_inspectdb_selects_exact_tables_and_includes_views(
+async fn postgres_inspectdb_selects_exact_tables_and_rejects_views_without_primary_keys(
 	#[future] postgres_container: (ContainerAsync<GenericImage>, Arc<PgPool>, u16, String),
 ) {
 	let (_container, pool, _port, url) = postgres_container.await;
@@ -524,7 +526,7 @@ async fn postgres_inspectdb_selects_exact_tables_and_includes_views(
 
 #[rstest]
 #[tokio::test]
-async fn mysql_inspectdb_selects_exact_tables_and_includes_views(
+async fn mysql_inspectdb_selects_exact_tables_and_rejects_views_without_primary_keys(
 	#[future] mysql_container: (ContainerAsync<GenericImage>, Arc<MySqlPool>, u16, String),
 ) {
 	let (_container, pool, _port, url) = mysql_container.await;
@@ -618,7 +620,7 @@ async fn mysql_inspectdb_selects_exact_tables_and_includes_views(
 
 #[rstest]
 #[tokio::test]
-async fn sqlite_inspectdb_selects_exact_tables_and_includes_views(
+async fn sqlite_inspectdb_selects_exact_tables_and_rejects_views_without_primary_keys(
 	#[future] sqlite_inspectdb_fixture: SqliteInspectDbFixture,
 ) {
 	let fixture = sqlite_inspectdb_fixture.await;

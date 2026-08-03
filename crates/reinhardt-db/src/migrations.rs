@@ -6,6 +6,7 @@
 //!
 //! - **Auto-detection**: Detects model changes and generates migrations
 //! - **Migration Graph**: Manages dependencies between migrations
+//! - **Shared SQL Planning**: Previews the same ordered statements consumed by execution
 //! - **AST-Based Entry Points**: Generates Rust 2024 Edition-compliant module files
 //! - **State Reconstruction**: Django-style `ProjectState` building from migration history
 //! - **Zero Downtime**: Support for safe schema changes in production
@@ -32,6 +33,64 @@
 //! 2. **Robust Module Detection**: Structurally identifies existing migration modules
 //! 3. **Consistent Formatting**: Standardized output via `prettyplease`
 //!
+//! ## Strict Migration Squashing
+//!
+//! [`MigrationCatalog`] loads the complete source tree and validates duplicate
+//! identities, missing dependencies, and cycles before range selection.
+//! Migration names may be exact or unique prefixes. [`MigrationCatalog::squash_range`]
+//! returns a continuous, same-application ancestor range in dependency order,
+//! preserves dependencies entering that range, and rejects ambiguous or
+//! externally re-entering ancestry.
+//! Filesystem discovery loads Rust migration implementations while ignoring
+//! Rust module entry points such as `migrations.rs`.
+//! Historical state reconstruction preserves original dependency chains when
+//! the requested target is an original migration that a squash replaces.
+//!
+//! [`MigrationSquasher`] combines the selected range while retaining exact
+//! replacement identities and stable metadata. Its optimizer applies only
+//! proven schema reductions and treats data operations, renames, constraints,
+//! indexes, bulk operations, custom operations, and unsupported future
+//! operations as ordering barriers. Disabling optimization preserves every
+//! operation in source order.
+//!
+//! [`FilesystemRepository::render`] validates that the combined migration can
+//! be represented as Rust source and emits parseable Rust 2024 code.
+//! [`FilesystemRepository::create_new_source`] validates names and source
+//! before writing and never overwrites an existing destination. If writing or
+//! synchronization fails, it attempts to remove the incomplete file through
+//! the anchored application directory. A cleanup failure reports both the
+//! original error and the cleanup error. Catalog loading, range selection,
+//! squashing, and source creation do not require a database connection.
+//!
+//! ## Shared SQL Planning
+//!
+//! [`plan_migration_sql`] creates a read-only [`MigrationSqlPlan`] for forward
+//! or backward execution. Each item is either executable [`PlannedStatement::Sql`]
+//! or a non-executable [`PlannedStatement::Comment`], so Rust data operations
+//! remain visible without being sent to the database. The migration executor
+//! consumes this same plan and keeps table-existence checks as execution policy.
+//! SQLite recreation planning may read schema metadata through the supplied
+//! connection, but it does not execute DDL.
+//! [`MigrationSqlPlan::render`] preserves statement order and emits
+//! backend-specific SQL. Transaction wrappers are emitted only when the
+//! migration plan is atomic and the selected backend supports transactional
+//! DDL; MySQL DDL is never wrapped. SQLite includes the full temporary-table
+//! copy, drop, and rename sequence when recreation is required. Rendering is
+//! complete and uncolored, so callers can buffer the whole script before
+//! publishing it.
+//! Backward inspection of destructive operations must use
+//! [`plan_migration_sql_with_states`] with
+//! [`MigrationCatalog::state_before`] and [`MigrationCatalog::state_after`].
+//! Both states are required because a post-migration state cannot retain a
+//! dropped table or legacy dropped-column definition.
+//!
+//! [`MigrationCatalog::snapshot`] reads existing recorder state without
+//! creating the recorder table. An absent backend-specific recorder relation
+//! is an empty applied set; permission, query, and type errors remain errors.
+//! Filtering by application retains transitive cross-application dependencies
+//! in topological order and preserves applied timestamps in the immutable
+//! snapshot.
+//!
 //! ### Generated Entry Point Example
 //!
 //! The migration system automatically generates entry point files:
@@ -51,6 +110,7 @@
 pub mod ast_parser;
 pub mod auto_migration;
 pub mod autodetector;
+pub mod catalog;
 pub mod dependency;
 pub mod di_support;
 pub mod executor;
@@ -72,6 +132,7 @@ pub mod schema_diff;
 pub mod schema_editor;
 pub mod service;
 pub mod source;
+pub mod sql_plan;
 #[cfg(feature = "sqlite")]
 pub(crate) mod sqlite_pragma;
 pub mod squash;
@@ -112,7 +173,10 @@ pub use dependency::{
 	OptionalDependency, SwappableDependency,
 };
 pub use di_support::{MigrationConfig, MigrationService as DIMigrationService};
-pub use executor::{DatabaseMigrationExecutor, ExecutionResult, OperationOptimizer};
+pub use executor::{
+	DatabaseMigrationExecutor, ExecutionResult, OperationOptimizer, ReplacementMigrationSelection,
+	select_replacement_migrations,
+};
 pub use fields::FieldType;
 pub use graph::{MigrationGraph, MigrationKey, MigrationNode};
 pub use migration::Migration;
@@ -145,13 +209,17 @@ pub use reinhardt_query::prelude::{
 pub use auto_migration::{
 	AutoMigrationError, AutoMigrationGenerator, AutoMigrationResult, ValidationResult,
 };
+pub use catalog::{AppliedMigration, MigrationCatalog, MigrationSnapshot, SquashRange};
 pub use operations::{
 	AddField, AlterField, CreateCollation, CreateExtension, CreateModel, DeleteModel,
 	DropExtension, FieldDefinition, MoveModel, RemoveField, RenameField, RenameModel, RunCode,
 	RunSQL, StateOperation, special::DataMigration,
 };
 pub use recorder::{DatabaseMigrationRecorder, MigrationRecorder};
-pub use repository::{MigrationRepository, filesystem::FilesystemRepository};
+pub use repository::{
+	MigrationRepository,
+	filesystem::{FilesystemRepository, MigrationRenderOptions},
+};
 pub use schema_diff::{
 	ColumnSchema, ConstraintSchema, DatabaseSchema, ForeignKeySchemaInfo, IndexSchema, SchemaDiff,
 	SchemaDiffResult, TableSchema,
@@ -162,7 +230,11 @@ pub use source::{
 	MigrationSource, composite::CompositeSource, filesystem::FilesystemSource,
 	registry::RegistrySource,
 };
-pub use squash::{MigrationSquasher, SquashOptions};
+pub use sql_plan::{
+	MigrationDirection, MigrationSqlPlan, PlannedStatement, plan_migration_sql,
+	plan_migration_sql_with_states,
+};
+pub use squash::{MigrationSquasher, SquashOptions, SquashResult};
 pub use state_loader::{MigrationStateLoader, build_state_from_files};
 pub use visualization::{HistoryEntry, MigrationStats, MigrationVisualizer, OutputFormat};
 pub use zero_downtime::{MigrationPhase, Strategy, ZeroDowntimeMigration};
@@ -317,6 +389,13 @@ pub enum MigrationError {
 	/// migration root directory.
 	#[error("Path traversal detected: {0}")]
 	PathTraversal(String),
+
+	/// A migration operation cannot be represented by the source renderer.
+	#[error("Unsupported migration rendering: {operation}")]
+	UnsupportedMigrationRendering {
+		/// Description of the operation or metadata that cannot be rendered.
+		operation: String,
+	},
 }
 
 impl From<reinhardt_core::exception::Error> for MigrationError {
@@ -472,8 +551,10 @@ mod tests {
 pub mod prelude {
 	pub use super::fields::prelude::*;
 	pub use super::{
-		ColumnDefinition, ColumnType, Constraint, ForeignKeyAction, GeneratedColumnDefinition,
-		GeneratedStorage, Migration, Operation, SchemaBinOper, SchemaExpr, SchemaFunc,
+		AlterTableOptions, ColumnDefinition, ColumnType, Constraint, DeferrableOption,
+		ForeignKeyAction, GeneratedColumnDefinition, GeneratedStorage, IndexType, InterleaveSpec,
+		Migration, MySqlAlgorithm, MySqlLock, Operation, PartitionDef, PartitionOptions,
+		PartitionType, PartitionValues, SchemaBinOper, SchemaExpr, SchemaFunc,
 	};
 	pub use crate::field_domain::{FieldDomain, ModelEnumRepr, ModelEnumValue};
 }

@@ -4,10 +4,15 @@
 
 use reinhardt_pages::app::ClientLauncher;
 use reinhardt_pages::component::{Component, IntoPage, Page, PageElement};
+use reinhardt_pages::router::request::RouteContext;
 use reinhardt_pages::router::{Link, PrefetchMode};
-use reinhardt_pages::{Loader, component, loader};
+use reinhardt_pages::{
+	Loader, QueryFamily, QueryOptions, RouteLoader, RouteLoaderError, component, loader,
+	loader_cache_id, use_query,
+};
 use reinhardt_urls::routers::ClientRouter;
 use std::cell::Cell;
+use std::collections::HashMap;
 use wasm_bindgen::JsCast;
 use wasm_bindgen::JsValue;
 use wasm_bindgen_test::*;
@@ -26,6 +31,23 @@ async fn prefetched_loader() -> Result<String, String> {
 
 #[component("/prefetched", name = "prefetched-page", loader = prefetched_loader)]
 fn prefetched_page(Loader(data): Loader<String>) -> Page {
+	let context = RouteContext::new("/prefetched".to_owned(), HashMap::new(), String::new());
+	let cache_id = loader_cache_id(
+		<prefetched_loader::marker as RouteLoader>::ID,
+		&context,
+		prefetched_loader::INPUTS,
+	)
+	.expect("prefetched loader cache ID");
+	let query = use_query(
+		QueryFamily::<String, String, RouteLoaderError>::new(
+			<prefetched_loader::marker as RouteLoader>::ID.as_str(),
+		)
+		.query_with_cancellation(cache_id, |_cancellation| async {
+			prefetched_loader().await.map_err(RouteLoaderError::new)
+		}),
+		QueryOptions::default(),
+	);
+	assert_eq!(query.data().as_deref(), Some(data.as_str()));
 	PageElement::new("div")
 		.attr("id", "route-prefetched")
 		.child(data)
@@ -182,7 +204,11 @@ async fn hover_prefetch_is_side_effect_free_and_shared_by_navigation() {
 		Some("hover")
 	);
 
-	let pointerover = web_sys::PointerEvent::new("pointerover").expect("pointerover event");
+	let pointerover_init = web_sys::PointerEventInit::new();
+	pointerover_init.set_bubbles(true);
+	let pointerover =
+		web_sys::PointerEvent::new_with_event_init_dict("pointerover", &pointerover_init)
+			.expect("pointerover event");
 	anchor
 		.dispatch_event(&pointerover)
 		.expect("dispatch pointerover");

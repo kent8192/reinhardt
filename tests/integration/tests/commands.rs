@@ -27,11 +27,17 @@ mod makemigrations_command_boundary;
 #[path = "commands/introspect_integration.rs"]
 mod introspect_integration;
 
+#[path = "commands/squashmigrations_management.rs"]
+mod squashmigrations_management;
+
 #[path = "commands/inspectdb_management.rs"]
 mod inspectdb_management;
 
 #[path = "commands/dbshell_management.rs"]
 mod dbshell_management;
+
+#[path = "commands/migration_visibility_management.rs"]
+mod migration_visibility_management;
 
 // Built-in command integration tests
 #[path = "commands/builtin_integration.rs"]

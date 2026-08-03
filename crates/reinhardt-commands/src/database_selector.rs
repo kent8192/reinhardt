@@ -10,6 +10,12 @@ pub(crate) struct DatabaseSelector {
 	pub url_override: Option<String>,
 }
 
+impl DatabaseSelector {
+	pub(crate) fn display_alias(&self) -> &str {
+		safe_alias(&self.alias)
+	}
+}
+
 impl fmt::Debug for DatabaseSelector {
 	fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
 		f.debug_struct("DatabaseSelector")

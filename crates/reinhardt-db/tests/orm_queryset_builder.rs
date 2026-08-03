@@ -3,6 +3,8 @@
 //! Tests the Django-style QuerySet builder pattern for constructing
 //! SQL queries with filters, ordering, pagination, and DML operations.
 
+use reinhardt_core::exception::Error;
+use reinhardt_db::orm::expressions::UniqueFieldRef;
 use reinhardt_db::orm::model::FieldSelector;
 use reinhardt_db::orm::query::{Filter, FilterCondition, OrmQuery, UpdateValue};
 use reinhardt_db::orm::{FilterOperator, FilterValue, Manager, Model, QuerySet};
@@ -54,6 +56,15 @@ impl Model for TestProduct {
 	fn new_fields() -> Self::Fields {
 		TestProductFields
 	}
+}
+
+fn test_product_name_unique() -> UniqueFieldRef<TestProduct, String> {
+	fn getter(product: &TestProduct) -> Option<String> {
+		Some(product.name.clone())
+	}
+
+	// SAFETY: The fixture models an application-level unique product name for typed query tests.
+	unsafe { UniqueFieldRef::from_model_field_with_getter("name", getter) }
 }
 
 // -- Basic Filter Tests --
@@ -1423,4 +1434,65 @@ fn test_paginate_page_zero_saturates() {
 		sql
 	);
 	assert!(sql.contains("10"), "Page size should be 10: {}", sql);
+}
+
+#[rstest]
+fn test_none_keeps_builder_chains_empty_and_statement_inspection_deterministic() {
+	let before_none = QuerySet::<TestProduct>::new()
+		.filter(Filter::new(
+			"category",
+			FilterOperator::Eq,
+			FilterValue::String("electronics".to_string()),
+		))
+		.order_by(&["-price"])
+		.limit(3)
+		.none()
+		.to_sql()
+		.expect("empty queryset SQL should compile");
+	let after_none = QuerySet::<TestProduct>::new()
+		.none()
+		.filter(Filter::new(
+			"category",
+			FilterOperator::Eq,
+			FilterValue::String("electronics".to_string()),
+		))
+		.order_by(&["-price"])
+		.limit(3)
+		.to_sql()
+		.expect("empty queryset SQL should compile");
+
+	assert_eq!(
+		before_none,
+		"SELECT * FROM \"products\" WHERE 1 = 0 ORDER BY \"price\" DESC LIMIT 0"
+	);
+	assert_eq!(after_none, before_none);
+}
+
+#[tokio::test]
+async fn none_short_circuits_global_query_methods_without_a_connection() {
+	let queryset = QuerySet::<TestProduct>::new().none();
+
+	assert_eq!(queryset.all().await.unwrap(), Vec::<TestProduct>::new());
+	assert_eq!(queryset.first().await.unwrap(), None);
+	assert!(matches!(queryset.get().await, Err(Error::NotFound(_))));
+	assert_eq!(queryset.count().await.unwrap(), 0);
+	assert!(!queryset.exists().await.unwrap());
+}
+
+#[rstest]
+fn typed_unique_in_filter_compiles_to_one_bound_in_predicate() {
+	let sql = QuerySet::<TestProduct>::new()
+		.filter(test_product_name_unique().is_in(["second".to_string(), "first".to_string()]))
+		.order_by(&["-price", "category"])
+		.limit(1)
+		.to_sql()
+		.expect("typed IN query should compile");
+
+	assert!(sql.contains("\"name\" IN"), "SQL was: {sql}");
+	assert!(
+		sql.contains("ORDER BY \"price\" DESC, \"category\" ASC"),
+		"SQL was: {sql}"
+	);
+	assert!(sql.contains("LIMIT 1"), "SQL was: {sql}");
+	assert!(!sql.contains("Expr::cust"), "SQL was: {sql}");
 }

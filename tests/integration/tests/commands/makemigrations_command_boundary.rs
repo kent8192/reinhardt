@@ -140,7 +140,7 @@ fn read_migration_file(migrations_dir: &Path, app_label: &str, name: &str) -> St
 
 #[rstest]
 #[tokio::test]
-#[serial(makemigrations_command_boundary)]
+#[serial(command_current_dir)]
 async fn execute_generates_initial_migration_file_from_registered_model() {
 	let _registry = ModelRegistryGuard::clear();
 	let project_dir = create_project_root();
@@ -175,7 +175,7 @@ async fn execute_generates_initial_migration_file_from_registered_model() {
 
 #[rstest]
 #[tokio::test]
-#[serial(makemigrations_command_boundary)]
+#[serial(command_current_dir)]
 async fn execute_dry_run_does_not_write_migration_file() {
 	let _registry = ModelRegistryGuard::clear();
 	let project_dir = create_project_root();
@@ -199,7 +199,7 @@ async fn execute_dry_run_does_not_write_migration_file() {
 
 #[rstest]
 #[tokio::test]
-#[serial(makemigrations_command_boundary)]
+#[serial(command_current_dir)]
 async fn execute_empty_requires_app_label() {
 	let _registry = ModelRegistryGuard::clear();
 	let project_dir = create_project_root();
@@ -226,7 +226,7 @@ async fn execute_empty_requires_app_label() {
 
 #[rstest]
 #[tokio::test]
-#[serial(makemigrations_command_boundary)]
+#[serial(command_current_dir)]
 async fn execute_empty_writes_empty_migration_with_previous_dependency() {
 	let _registry = ModelRegistryGuard::clear();
 	let project_dir = create_project_root();
@@ -249,7 +249,7 @@ async fn execute_empty_writes_empty_migration_with_previous_dependency() {
 
 #[rstest]
 #[tokio::test]
-#[serial(makemigrations_command_boundary)]
+#[serial(command_current_dir)]
 async fn execute_conflict_without_merge_returns_actionable_error() {
 	let _registry = ModelRegistryGuard::clear();
 	let project_dir = create_project_root();
@@ -287,7 +287,7 @@ async fn execute_conflict_without_merge_returns_actionable_error() {
 
 #[rstest]
 #[tokio::test]
-#[serial(makemigrations_command_boundary)]
+#[serial(command_current_dir)]
 async fn execute_merge_writes_merge_migration() {
 	let _registry = ModelRegistryGuard::clear();
 	let project_dir = create_project_root();
@@ -323,7 +323,7 @@ async fn execute_merge_writes_merge_migration() {
 
 #[rstest]
 #[tokio::test]
-#[serial(makemigrations_command_boundary)]
+#[serial(command_current_dir)]
 async fn execute_merge_dry_run_writes_no_merge_file() {
 	let _registry = ModelRegistryGuard::clear();
 	let project_dir = create_project_root();
@@ -363,7 +363,7 @@ async fn execute_merge_dry_run_writes_no_merge_file() {
 
 #[rstest]
 #[tokio::test]
-#[serial(makemigrations_command_boundary)]
+#[serial(command_current_dir)]
 async fn execute_outside_project_root_errors_before_writing() {
 	let _registry = ModelRegistryGuard::clear();
 	let project_dir = TempDir::new().expect("temporary non-project dir should be created");

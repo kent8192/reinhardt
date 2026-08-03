@@ -22,6 +22,247 @@ fn empty_context() -> CommandContext {
 	CommandContext::default()
 }
 
+#[cfg(feature = "migrations")]
+#[rstest]
+#[case(&["manage", "showmigrations"], true, false)]
+#[case(&["manage", "showmigrations", "-l"], true, false)]
+#[case(&["manage", "showmigrations", "--list"], true, false)]
+#[case(&["manage", "showmigrations", "-p"], false, true)]
+#[case(&["manage", "showmigrations", "--plan"], false, true)]
+fn showmigrations_parses_modes(
+	#[case] arguments: &[&str],
+	#[case] expected_list: bool,
+	#[case] expected_plan: bool,
+) {
+	let parsed = Cli::try_parse_from(arguments).expect("showmigrations parses");
+
+	let Commands::Showmigrations {
+		app_labels,
+		list,
+		plan,
+		database,
+		database_url,
+		migrations_dir,
+	} = parsed.command
+	else {
+		panic!("expected showmigrations command");
+	};
+	assert!(app_labels.is_empty());
+	assert_eq!(list, expected_list);
+	assert_eq!(plan, expected_plan);
+	assert_eq!(database, "default");
+	assert_eq!(database_url, None);
+	assert_eq!(migrations_dir, None);
+}
+
+#[cfg(feature = "migrations")]
+#[test]
+fn showmigrations_parses_apps_and_database_selection() {
+	let parsed = Cli::try_parse_from([
+		"manage",
+		"showmigrations",
+		"polls",
+		"auth",
+		"--database",
+		"replica",
+		"--database-url",
+		"sqlite::memory:",
+	])
+	.expect("showmigrations parses");
+
+	let Commands::Showmigrations {
+		app_labels,
+		list,
+		plan,
+		database,
+		database_url,
+		migrations_dir,
+	} = parsed.command
+	else {
+		panic!("expected showmigrations command");
+	};
+	assert_eq!(app_labels, ["polls", "auth"]);
+	assert!(list);
+	assert!(!plan);
+	assert_eq!(database, "replica");
+	assert_eq!(database_url.as_deref(), Some("sqlite::memory:"));
+	assert_eq!(migrations_dir, None);
+}
+
+#[cfg(feature = "migrations")]
+#[test]
+fn showmigrations_rejects_list_and_plan_together() {
+	let error = Cli::try_parse_from(["manage", "showmigrations", "--list", "--plan"])
+		.expect_err("modes conflict");
+
+	assert_eq!(error.kind(), clap::error::ErrorKind::ArgumentConflict);
+}
+
+#[cfg(feature = "migrations")]
+#[test]
+fn sqlmigrate_parses_complete_form() {
+	let parsed = Cli::try_parse_from([
+		"manage",
+		"sqlmigrate",
+		"polls",
+		"0002",
+		"--backwards",
+		"--database",
+		"replica",
+		"--database-url",
+		"sqlite::memory:",
+	])
+	.expect("sqlmigrate parses");
+
+	let Commands::Sqlmigrate {
+		app_label,
+		migration_name,
+		backwards,
+		database,
+		database_url,
+		migrations_dir,
+	} = parsed.command
+	else {
+		panic!("expected sqlmigrate command");
+	};
+	assert_eq!(app_label, "polls");
+	assert_eq!(migration_name, "0002");
+	assert!(backwards);
+	assert_eq!(database, "replica");
+	assert_eq!(database_url.as_deref(), Some("sqlite::memory:"));
+	assert_eq!(migrations_dir, None);
+}
+
+#[cfg(feature = "migrations")]
+#[rstest]
+#[case(
+	&["manage", "squashmigrations", "polls", "0004"],
+	None,
+	"0004",
+	false,
+	false,
+	false,
+	None
+)]
+#[case(
+	&[
+		"manage",
+		"squashmigrations",
+		"polls",
+		"0002",
+		"0004",
+		"--no-optimize",
+		"--no-input",
+		"--no-header",
+		"--squashed-name",
+		"0002_compacted"
+	],
+	Some("0002"),
+	"0004",
+	true,
+	true,
+	true,
+	Some("0002_compacted")
+)]
+#[case(
+	&["manage", "squashmigrations", "polls", "0004", "--noinput"],
+	None,
+	"0004",
+	false,
+	true,
+	false,
+	None
+)]
+fn squashmigrations_parses_django_compatible_forms_and_options(
+	#[case] arguments: &[&str],
+	#[case] expected_start: Option<&str>,
+	#[case] expected_end: &str,
+	#[case] expected_no_optimize: bool,
+	#[case] expected_no_input: bool,
+	#[case] expected_no_header: bool,
+	#[case] expected_name: Option<&str>,
+) {
+	// Act
+	let parsed = Cli::try_parse_from(arguments).unwrap();
+
+	// Assert
+	let Commands::Squashmigrations {
+		app_label,
+		start_migration,
+		migration_name,
+		no_optimize,
+		no_input,
+		no_header,
+		squashed_name,
+		migrations_dir,
+	} = parsed.command
+	else {
+		panic!("expected squashmigrations command");
+	};
+	assert_eq!(app_label, "polls");
+	assert_eq!(start_migration.as_deref(), expected_start);
+	assert_eq!(migration_name, expected_end);
+	assert_eq!(no_optimize, expected_no_optimize);
+	assert_eq!(no_input, expected_no_input);
+	assert_eq!(no_header, expected_no_header);
+	assert_eq!(squashed_name.as_deref(), expected_name);
+	assert_eq!(migrations_dir, None);
+}
+
+#[rstest]
+fn squashmigrations_accepts_an_explicit_migrations_root() {
+	// Act
+	let parsed = Cli::try_parse_from([
+		"manage",
+		"squashmigrations",
+		"polls",
+		"0002",
+		"--migrations-dir",
+		"members/polls/migrations",
+	])
+	.unwrap();
+
+	// Assert
+	let Commands::Squashmigrations { migrations_dir, .. } = parsed.command else {
+		panic!("expected squashmigrations command");
+	};
+	assert_eq!(migrations_dir, Some("members/polls/migrations".into()));
+}
+
+#[cfg(feature = "migrations")]
+#[test]
+fn squashmigrations_rejects_extra_positional_arguments() {
+	// Act
+	let error = Cli::try_parse_from([
+		"manage",
+		"squashmigrations",
+		"polls",
+		"0001",
+		"0004",
+		"unexpected",
+	])
+	.unwrap_err();
+
+	// Assert
+	assert_eq!(error.kind(), clap::error::ErrorKind::UnknownArgument);
+	assert!(error.to_string().contains("unexpected"));
+}
+
+#[cfg(feature = "migrations")]
+#[rstest]
+#[case(&["manage", "squashmigrations"])]
+#[case(&["manage", "squashmigrations", "polls"])]
+fn squashmigrations_rejects_missing_required_positionals(#[case] arguments: &[&str]) {
+	// Act
+	let error = Cli::try_parse_from(arguments).unwrap_err();
+
+	// Assert
+	assert_eq!(
+		error.kind(),
+		clap::error::ErrorKind::MissingRequiredArgument
+	);
+}
+
 // ============================================================================
 // Test Helper Functions for Runserver Command
 // ============================================================================

@@ -71,6 +71,12 @@ pub struct CoreSettings {
 	/// List of installed application paths.
 	#[serde(default)]
 	pub installed_apps: Vec<String>,
+	/// Values used to resolve swappable migration dependencies.
+	#[serde(default)]
+	pub migration_swappable_settings: HashMap<String, String>,
+	/// Feature flags used to resolve conditional migration dependencies.
+	#[serde(default)]
+	pub migration_features: Vec<String>,
 }
 
 fn default_base_dir() -> PathBuf {
@@ -99,6 +105,8 @@ impl Default for CoreSettings {
 			middleware: Vec::new(),
 			root_urlconf: String::new(),
 			installed_apps: Vec::new(),
+			migration_swappable_settings: HashMap::new(),
+			migration_features: Vec::new(),
 		}
 	}
 }

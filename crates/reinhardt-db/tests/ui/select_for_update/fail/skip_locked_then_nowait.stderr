@@ -1,0 +1,13 @@
+error[E0599]: no method named `nowait` found for struct `SelectForUpdate<Article, reinhardt_db::orm::SkipLocked>` in the current scope
+  --> tests/ui/select_for_update/fail/skip_locked_then_nowait.rs:11:4
+   |
+ 8 |       let _query = QuerySet::<Article>::new()
+   |  __________________-
+ 9 | |         .select_for_update()
+10 | |         .skip_locked()
+11 | |         .nowait();
+   | |         -^^^^^^ method not found in `SelectForUpdate<Article, reinhardt_db::orm::SkipLocked>`
+   | |_________|
+   |
+   |
+   = note: the method was found for `SelectForUpdate<M>`

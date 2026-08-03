@@ -22,6 +22,7 @@ const BUILTIN_FRAGMENTS: &[&str] = &[
 	"I18nSettings",
 	"LoggingSettings",
 	"MediaSettings",
+	"MigrationSettings",
 	"SecuritySettings",
 	"SessionSettings",
 	"StaticSettings",

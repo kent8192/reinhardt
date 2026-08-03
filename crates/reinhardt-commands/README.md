@@ -357,7 +357,9 @@ cargo run --bin manage -- inspectdb [TABLE ...]
 
 Table arguments are exact names rather than patterns. Without table arguments,
 the command inspects every table; pass `--include-views` to include views or
-`--include-partitions` for PostgreSQL partitions.
+`--include-partitions` for PostgreSQL partitions. Any selected schema object
+without primary-key metadata is rejected because it cannot produce a lossless
+ORM model.
 
 `--database` selects a configured database alias and defaults to `default`. It
 never accepts a connection URL. Use `--database-url` for an explicit one-off

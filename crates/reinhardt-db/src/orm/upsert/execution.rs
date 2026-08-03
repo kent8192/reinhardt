@@ -1,6 +1,7 @@
 use crate::orm::connection::{DatabaseBackend, OrmExecutor, Row};
 use crate::orm::custom_manager::CustomManager;
 use crate::orm::field_codec::{DatabaseValue, FieldCodecError};
+use crate::orm::fields::FieldKwarg;
 use crate::orm::manager::decode_model_row;
 use crate::orm::model::Model;
 use crate::orm::transaction::AtomicTransaction;
@@ -68,6 +69,7 @@ where
 				}
 			};
 			if backend == DatabaseBackend::MySql
+				&& mysql_last_insert_id_targets_primary_key::<C::Model>()
 				&& let Some(last_insert_id) = result.last_insert_id
 			{
 				return reload_generated_mysql_primary_key::<C::Model, _>(last_insert_id, executor)
@@ -111,6 +113,25 @@ where
 			"MySQL INSERT completed without a row matching its generated primary key".to_owned(),
 		)
 	})
+}
+
+fn mysql_last_insert_id_targets_primary_key<M: Model>() -> bool {
+	if M::composite_primary_key().is_some() {
+		return false;
+	}
+
+	M::field_metadata()
+		.into_iter()
+		.find(|field| field.name == M::primary_key_field())
+		.is_some_and(|field| match field.attributes.get("auto_increment") {
+			Some(FieldKwarg::Bool(auto_increment)) => *auto_increment,
+			Some(_) => false,
+			None => matches!(
+				field.storage_kind,
+				Some(crate::orm::field_codec::DatabaseStorageKind::I32)
+					| Some(crate::orm::field_codec::DatabaseStorageKind::I64)
+			),
+		})
 }
 
 async fn reload_lookup<M, E>(
@@ -193,6 +214,15 @@ where
 					)));
 				}
 			};
+			if backend == DatabaseBackend::MySql
+				&& mysql_last_insert_id_targets_primary_key::<C::Model>()
+				&& let Some(last_insert_id) = result.last_insert_id
+			{
+				let model =
+					reload_generated_mysql_primary_key::<C::Model, _>(last_insert_id, transaction)
+						.await?;
+				return Ok((model, created));
+			}
 			let Some(model) = load_locked(&plan, transaction).await? else {
 				return Err(Error::Conflict(
 					"update_or_create write completed without exactly one row matching the full lookup"
@@ -316,7 +346,13 @@ where
 		return Ok((candidate, false));
 	}
 	let update = sql::update_values_by_primary_key(&locked, &values, transaction.backend())?;
-	let result = transaction.execute(&update.sql, update.params).await?;
+	let result = if transaction.backend() == DatabaseBackend::Postgres {
+		transaction
+			.execute_in_savepoint(&update.sql, update.params)
+			.await?
+	} else {
+		transaction.execute(&update.sql, update.params).await?
+	};
 	if result.rows_affected != 1
 		&& !(transaction.backend() == DatabaseBackend::MySql && result.rows_affected == 0)
 	{
@@ -484,7 +520,7 @@ mod tests {
 
 		fn field_metadata() -> Vec<FieldInfo> {
 			vec![
-				field("id", true, false),
+				auto_increment_primary_key_field("id"),
 				field("slug", false, true),
 				field("rank", false, false),
 				field("headline", false, false),
@@ -700,6 +736,77 @@ mod tests {
 		}
 	}
 
+	#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+	struct SecondaryAutoIncrementArticle {
+		id: i64,
+		sequence: Option<i64>,
+		slug: String,
+		rank: i32,
+	}
+
+	impl Model for SecondaryAutoIncrementArticle {
+		type PrimaryKey = i64;
+		type Fields = ArticleFields;
+		type Objects = Manager<Self>;
+
+		fn table_name() -> &'static str {
+			"secondary_auto_increment_articles"
+		}
+
+		fn new_fields() -> Self::Fields {
+			ArticleFields
+		}
+
+		fn primary_key(&self) -> Option<Self::PrimaryKey> {
+			Some(self.id)
+		}
+
+		fn set_primary_key(&mut self, value: Self::PrimaryKey) {
+			self.id = value;
+		}
+
+		fn field_metadata() -> Vec<FieldInfo> {
+			let mut id = field("id", true, false);
+			id.storage_kind = Some(DatabaseStorageKind::I64);
+			id.attributes.insert(
+				"auto_increment".to_owned(),
+				crate::orm::fields::FieldKwarg::Bool(false),
+			);
+			let mut sequence = field("sequence", false, true);
+			sequence.storage_kind = Some(DatabaseStorageKind::I64);
+			sequence.attributes.insert(
+				"auto_increment".to_owned(),
+				crate::orm::fields::FieldKwarg::Bool(true),
+			);
+			vec![
+				id,
+				sequence,
+				field("slug", false, true),
+				field("rank", false, false),
+			]
+		}
+	}
+
+	impl SecondaryAutoIncrementArticle {
+		fn slug_field() -> FieldRef<Self, String, GeneratedModelField> {
+			// SAFETY: the logical and physical names match the model's string field.
+			unsafe {
+				FieldRef::<Self, _, GeneratedModelField>::from_generated_model_field_with_names(
+					"slug", "slug",
+				)
+			}
+		}
+
+		fn rank_field() -> FieldRef<Self, i32, GeneratedModelField> {
+			// SAFETY: the logical and physical names match the model's i32 field.
+			unsafe {
+				FieldRef::<Self, _, GeneratedModelField>::from_generated_model_field_with_names(
+					"rank", "rank",
+				)
+			}
+		}
+	}
+
 	fn field(name: &str, primary_key: bool, unique: bool) -> FieldInfo {
 		FieldInfo {
 			name: name.to_owned(),
@@ -717,6 +824,16 @@ mod tests {
 			choices: None,
 			attributes: HashMap::new(),
 		}
+	}
+
+	fn auto_increment_primary_key_field(name: &str) -> FieldInfo {
+		let mut field = field(name, true, false);
+		field.storage_kind = Some(DatabaseStorageKind::I64);
+		field.attributes.insert(
+			"auto_increment".to_owned(),
+			crate::orm::fields::FieldKwarg::Bool(true),
+		);
+		field
 	}
 
 	fn noneditable_field(name: &str) -> FieldInfo {
@@ -763,6 +880,17 @@ mod tests {
 			data: HashMap::from([
 				("tenant_key".to_owned(), QueryValue::Int(tenant_id)),
 				("article_key".to_owned(), QueryValue::Int(article_id)),
+				("slug".to_owned(), QueryValue::String(slug.to_owned())),
+				("rank".to_owned(), QueryValue::Int(i64::from(rank))),
+			]),
+		}
+	}
+
+	fn secondary_auto_increment_article_row(id: i64, sequence: i64, slug: &str, rank: i32) -> Row {
+		Row {
+			data: HashMap::from([
+				("id".to_owned(), QueryValue::Int(id)),
+				("sequence".to_owned(), QueryValue::Int(sequence)),
 				("slug".to_owned(), QueryValue::String(slug.to_owned())),
 				("rank".to_owned(), QueryValue::Int(i64::from(rank))),
 			]),
@@ -955,6 +1083,22 @@ mod tests {
 			UpsertMode::UpdateOrCreate,
 		)
 		.expect("normalize composite update-or-create plan")
+	}
+
+	fn secondary_auto_increment_plan() -> super::UpsertPlan<SecondaryAutoIncrementArticle> {
+		normalize(
+			vec![
+				TypedAssignment::new(SecondaryAutoIncrementArticle::slug_field(), "rust")
+					.expect("encode manual-key lookup"),
+			],
+			Vec::new(),
+			vec![
+				TypedAssignment::new(SecondaryAutoIncrementArticle::rank_field(), 2)
+					.expect("encode manual-key update"),
+			],
+			UpsertMode::UpdateOrCreate,
+		)
+		.expect("normalize manual-key update-or-create plan")
 	}
 
 	struct CompositePkHookManager;
@@ -1675,6 +1819,72 @@ mod tests {
 			!calls[2].sql.contains("WHERE `slug` = ?"),
 			"{}",
 			calls[2].sql
+		);
+	}
+
+	#[tokio::test]
+	async fn update_or_create_mysql_composite_primary_key_reloads_by_lookup() {
+		let (mut transaction, state) = Recorder::transaction(
+			DatabaseType::Mysql,
+			vec![Ok(QueryResult {
+				rows_affected: 1,
+				last_insert_id: Some(17),
+			})],
+			vec![
+				Ok(Vec::new()),
+				Ok(vec![composite_article_row(7, 17, "rust", 2)]),
+			],
+		);
+
+		let (article, created) = execute_update_or_create(
+			&Manager::<CompositeArticle>::new(),
+			composite_plan(),
+			&mut transaction,
+		)
+		.await
+		.expect("reload a composite MySQL insert by its lookup fields");
+
+		assert!(created);
+		assert_eq!((article.tenant_id, article.article_id), (7, 17));
+		let calls = &state.lock().unwrap().calls;
+		assert_eq!(calls.len(), 3);
+		assert_eq!(calls[2].operation, "fetch_all");
+		assert_eq!(
+			calls[2].sql,
+			"SELECT `tenant_key`, `article_key`, `slug`, `rank` FROM `composite_articles` WHERE `slug` = ? LIMIT 2 FOR UPDATE"
+		);
+	}
+
+	#[tokio::test]
+	async fn update_or_create_mysql_secondary_auto_increment_reloads_by_lookup() {
+		let (mut transaction, state) = Recorder::transaction(
+			DatabaseType::Mysql,
+			vec![Ok(QueryResult {
+				rows_affected: 1,
+				last_insert_id: Some(99),
+			})],
+			vec![
+				Ok(Vec::new()),
+				Ok(vec![secondary_auto_increment_article_row(7, 99, "rust", 2)]),
+			],
+		);
+
+		let (article, created) = execute_update_or_create(
+			&Manager::<SecondaryAutoIncrementArticle>::new(),
+			secondary_auto_increment_plan(),
+			&mut transaction,
+		)
+		.await
+		.expect("reload a manual-primary-key MySQL insert by its lookup fields");
+
+		assert!(created);
+		assert_eq!((article.id, article.sequence), (7, Some(99)));
+		let calls = &state.lock().unwrap().calls;
+		assert_eq!(calls.len(), 3);
+		assert_eq!(calls[2].operation, "fetch_all");
+		assert_eq!(
+			calls[2].sql,
+			"SELECT `id`, `sequence`, `slug`, `rank` FROM `secondary_auto_increment_articles` WHERE `slug` = ? LIMIT 2 FOR UPDATE"
 		);
 	}
 

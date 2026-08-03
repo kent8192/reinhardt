@@ -115,8 +115,10 @@ impl MigrationSquasher {
 	///
 	/// Returns an error for an empty range, when source migrations belong to
 	/// different apps, or when `atomic`, `state_only`, or `database_only`
-	/// differs between source migrations. Mixed whole-migration execution modes
-	/// cannot be represented safely after combining their operations.
+	/// differs between source migrations. It also rejects swappable dependencies
+	/// whose default target is selected by the range. Mixed whole-migration
+	/// execution modes and conditional self-dependencies cannot be represented
+	/// safely after combining their operations.
 	pub fn squash_range(
 		&self,
 		range: &SquashRange,
@@ -133,9 +135,16 @@ impl MigrationSquasher {
 
 	/// Squash a validated migration range using the active dependency context.
 	///
-	/// Swappable dependencies that resolve to selected migrations and optional
-	/// dependencies that explicitly target selected migrations are omitted,
-	/// preventing the replacement from depending on itself after graph rewrite.
+	/// Optional dependencies that explicitly target selected migrations are
+	/// omitted, preventing the replacement from depending on itself after graph
+	/// rewrite.
+	///
+	/// # Errors
+	///
+	/// Returns an error under the conditions documented by [`Self::squash_range`]
+	/// and when a swappable dependency resolves to a selected migration. Dropping
+	/// that dependency would make the squashed migration depend on the active
+	/// setting at generation time instead of preserving its portable metadata.
 	pub fn squash_range_with_context(
 		&self,
 		range: &SquashRange,
@@ -222,9 +231,13 @@ impl MigrationSquasher {
 					.resolve(&MigrationDependency::Swappable(dependency.clone()))
 					.expect("swappable dependencies always resolve to a target");
 				let normalized = range.normalize_dependency(&target.0, &target.1)?;
-				if !selected.contains(&(normalized.app_label.as_str(), normalized.name.as_str()))
-					&& !swappable_dependencies.contains(dependency)
-				{
+				if selected.contains(&(normalized.app_label.as_str(), normalized.name.as_str())) {
+					return Err(MigrationError::InvalidMigration(format!(
+						"Cannot squash range: swappable dependency {} resolves to selected migration {}.{}",
+						dependency.setting_key, normalized.app_label, normalized.name
+					)));
+				}
+				if !swappable_dependencies.contains(dependency) {
 					swappable_dependencies.push(dependency.clone());
 				}
 			}
@@ -1187,8 +1200,9 @@ mod tests {
 		);
 	}
 
-	#[test]
-	fn squash_range_excludes_selected_swappable_dependency_with_active_setting() {
+	#[rstest::rstest]
+	fn squash_range_rejects_selected_swappable_dependency_with_active_setting() {
+		// Arrange
 		let mut first = Migration::new("0001_initial", "auth");
 		first
 			.swappable_dependencies
@@ -1208,11 +1222,16 @@ mod tests {
 		let context =
 			DependencyResolutionContext::new().with_setting("AUTH_USER_MODEL", "auth.User");
 
-		let result = MigrationSquasher::new()
+		// Act
+		let error = MigrationSquasher::new()
 			.squash_range_with_context(&range, "0001_squashed_0002", false, &context)
-			.unwrap();
+			.unwrap_err();
 
-		assert!(result.migration.swappable_dependencies.is_empty());
+		// Assert
+		assert_eq!(
+			error.to_string(),
+			"Invalid migration: Cannot squash range: swappable dependency AUTH_USER_MODEL resolves to selected migration auth.0002_user"
+		);
 	}
 
 	#[test]

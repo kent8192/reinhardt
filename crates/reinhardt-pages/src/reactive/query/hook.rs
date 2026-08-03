@@ -9,9 +9,9 @@ use super::client::{
 };
 use super::context::queries;
 use super::identity::QueryDescriptor;
-use super::state::{
-	QueryHydrationSnapshot, QueryHydrationState, QueryOptions, QuerySnapshot, QueryStatus,
-};
+#[cfg(native)]
+use super::state::{QueryHydrationSnapshot, QueryHydrationState};
+use super::state::{QueryOptions, QuerySnapshot, QueryStatus};
 
 /// Reactive handle returned by [`use_query`].
 pub struct QueryHandle<T: Clone + 'static, E: Clone + 'static> {
@@ -78,6 +78,7 @@ impl<T: Clone + 'static, E: Clone + 'static> QueryHandle<T, E> {
 		}
 	}
 
+	#[cfg(native)]
 	fn hydration_snapshot(&self) -> QueryHydrationSnapshot<T, E> {
 		let snapshot = self.snapshot();
 		let state = match snapshot.status {

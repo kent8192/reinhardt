@@ -15,11 +15,14 @@ use crate::{
 #[cfg(feature = "introspect")]
 use clap::ValueEnum;
 use clap::{Parser, Subcommand};
-use reinhardt_conf::HasCommonSettings;
 use reinhardt_conf::settings::builder::SettingsBuilder;
+use reinhardt_conf::settings::fragment::HasSettings;
 use reinhardt_conf::settings::profile::Profile;
 use reinhardt_conf::settings::sources::{DefaultSource, LowPriorityEnvSource, TomlFileSource};
-use reinhardt_utils::staticfiles::StaticFilesConfig;
+use reinhardt_conf::{HasCommonSettings, MigrationSettings};
+#[cfg(feature = "migrations")]
+use reinhardt_db::migrations::DependencyResolutionContext;
+use reinhardt_utils::staticfiles::{PathResolver, StaticFilesConfig};
 use serde_json::Value;
 use std::env;
 use std::path::{Path, PathBuf};
@@ -44,6 +47,13 @@ pub struct Cli {
 	/// Verbosity level (can be repeated for more output)
 	#[arg(short, long, action = clap::ArgAction::Count)]
 	pub verbosity: u8,
+}
+
+#[cfg(feature = "migrations")]
+fn default_migrations_dir() -> PathBuf {
+	PathResolver::find_project_root()
+		.unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")))
+		.join("migrations")
 }
 
 /// Output format for the introspect command
@@ -95,6 +105,43 @@ pub enum Commands {
 		/// Migration directory
 		#[arg(long, default_value = "./migrations")]
 		migration_dir: PathBuf,
+	},
+
+	/// Squash a continuous range of migrations into one migration
+	#[cfg(feature = "migrations")]
+	#[command(allow_missing_positional = true)]
+	Squashmigrations {
+		/// Application whose migrations will be squashed
+		#[arg(value_name = "APP_LABEL")]
+		app_label: String,
+
+		/// Optional first migration in the squash range
+		#[arg(value_name = "START_MIGRATION")]
+		start_migration: Option<String>,
+
+		/// Last migration in the squash range
+		#[arg(value_name = "MIGRATION_NAME")]
+		migration_name: String,
+
+		/// Preserve the exact source operation order
+		#[arg(long)]
+		no_optimize: bool,
+
+		/// Do not prompt for confirmation
+		#[arg(long, visible_alias = "noinput")]
+		no_input: bool,
+
+		/// Omit the generated-file header
+		#[arg(long)]
+		no_header: bool,
+
+		/// Explicit name for the new squashed migration
+		#[arg(long, value_name = "NAME")]
+		squashed_name: Option<String>,
+
+		/// Root directory containing migration files
+		#[arg(long, value_name = "DIR")]
+		migrations_dir: Option<PathBuf>,
 	},
 
 	/// Apply database migrations
@@ -589,6 +636,46 @@ where
 	.await
 }
 
+/// Execute command-line arguments with common and migration project settings.
+///
+/// Unlike [`execute_from_command_line_with_settings`], this entry point also
+/// reads the project's [`MigrationSettings`] fragment and uses it to resolve
+/// conditional dependencies for migration commands.
+pub async fn execute_from_command_line_with_migration_settings<S>(
+	settings: S,
+) -> Result<(), Box<dyn std::error::Error>>
+where
+	S: HasCommonSettings + HasSettings<MigrationSettings> + 'static,
+{
+	let migration_settings = HasSettings::<MigrationSettings>::get_settings(&settings).clone();
+	execute_with_registry_and_optional_settings(
+		CommandRegistry::new(),
+		Some(Arc::new(settings) as Arc<dyn HasCommonSettings>),
+		Some(migration_settings),
+		None,
+	)
+	.await
+}
+
+/// Execute command-line arguments with migration settings and Rust shell configuration.
+pub async fn execute_from_command_line_with_migration_settings_and_shell<S>(
+	settings: S,
+	shell: ShellConfig,
+) -> crate::CommandResult<()>
+where
+	S: HasCommonSettings + HasSettings<MigrationSettings> + Clone + Send + Sync + 'static,
+{
+	let migration_settings = HasSettings::<MigrationSettings>::get_settings(&settings).clone();
+	execute_with_registry_and_optional_settings(
+		CommandRegistry::new(),
+		Some(Arc::new(settings) as Arc<dyn HasCommonSettings>),
+		Some(migration_settings),
+		Some(shell),
+	)
+	.await
+	.map_err(boxed_command_error)
+}
+
 /// Execute commands from command-line arguments with a custom command registry.
 ///
 /// This entry point works like [`execute_from_command_line`] but additionally
@@ -628,7 +715,7 @@ where
 pub async fn execute_from_command_line_with_registry(
 	registry: CommandRegistry,
 ) -> Result<(), Box<dyn std::error::Error>> {
-	execute_with_registry_and_optional_settings(registry, None, None).await
+	execute_with_registry_and_optional_settings(registry, None, None, None).await
 }
 
 /// Execute commands from CLI arguments with a custom command registry **and** the
@@ -657,6 +744,7 @@ where
 		registry,
 		Some(Arc::new(settings) as Arc<dyn HasCommonSettings>),
 		None,
+		None,
 	)
 	.await
 }
@@ -673,6 +761,7 @@ where
 	execute_with_registry_and_optional_settings(
 		registry,
 		Some(Arc::new(settings) as Arc<dyn HasCommonSettings>),
+		None,
 		Some(shell),
 	)
 	.await
@@ -692,6 +781,7 @@ fn boxed_command_error(error: Box<dyn std::error::Error>) -> crate::CommandError
 async fn execute_with_registry_and_optional_settings(
 	registry: CommandRegistry,
 	settings: Option<Arc<dyn HasCommonSettings>>,
+	migration_settings: Option<MigrationSettings>,
 	shell: Option<ShellConfig>,
 ) -> Result<(), Box<dyn std::error::Error>> {
 	// Attempt normal clap parsing first. If it fails (e.g., unknown subcommand),
@@ -740,7 +830,15 @@ async fn execute_with_registry_and_optional_settings(
 	#[cfg(feature = "auth")]
 	reinhardt_auth::auto_register_superuser_creator();
 
-	run_command_core(command, verbosity, registry, settings, shell).await
+	run_command_core(
+		command,
+		verbosity,
+		registry,
+		settings,
+		migration_settings,
+		shell,
+	)
+	.await
 }
 
 /// Returns `true` for commands that need URL patterns registered **before**
@@ -830,7 +928,7 @@ pub async fn run_command_with_registry(
 	verbosity: u8,
 	registry: CommandRegistry,
 ) -> Result<(), Box<dyn std::error::Error>> {
-	run_command_core(command, verbosity, registry, None, None).await
+	run_command_core(command, verbosity, registry, None, None, None).await
 }
 
 /// Execute a command with optional composed settings threaded into the context.
@@ -847,6 +945,7 @@ async fn run_command_core(
 	verbosity: u8,
 	registry: CommandRegistry,
 	settings: Option<Arc<dyn HasCommonSettings>>,
+	migration_settings: Option<MigrationSettings>,
 	shell: Option<ShellConfig>,
 ) -> Result<(), Box<dyn std::error::Error>> {
 	// Initialize ORM database for commands that require it.
@@ -874,6 +973,8 @@ async fn run_command_core(
 	// path is compiled so it does not trip the unused-variable lint.
 	#[cfg(not(any(feature = "reinhardt-db", feature = "migrations")))]
 	let _ = &settings;
+	#[cfg(not(feature = "migrations"))]
+	let _ = &migration_settings;
 
 	match command {
 		#[cfg(feature = "migrations")]
@@ -899,6 +1000,79 @@ async fn run_command_core(
 				settings.clone(),
 			)
 			.await
+		}
+		#[cfg(feature = "migrations")]
+		Commands::Squashmigrations {
+			app_label,
+			start_migration,
+			migration_name,
+			no_optimize,
+			no_input,
+			no_header,
+			squashed_name,
+			migrations_dir,
+		} => {
+			let dependency_context =
+				settings
+					.as_ref()
+					.map_or_else(DependencyResolutionContext::new, |settings| {
+						DependencyResolutionContext::new()
+							.with_apps(settings.core().installed_apps.iter().cloned())
+					});
+			let dependency_context = match migration_settings.as_ref() {
+				Some(migration_settings) => {
+					let context = migration_settings
+						.migration_features
+						.iter()
+						.fold(dependency_context, |context, feature| {
+							context.with_feature(feature.clone())
+						});
+					let context = migration_settings
+						.migration_settings
+						.iter()
+						.fold(context, |context, (key, value)| {
+							context.with_setting(key.clone(), value.clone())
+						});
+					migration_settings
+						.migration_swappable_settings
+						.iter()
+						.fold(context, |context, (key, value)| {
+							context.with_setting(key.clone(), value.clone())
+						})
+				}
+				None => dependency_context,
+			};
+			let mut confirmation = crate::StdinConfirmationReader;
+			let standard_output = std::io::stdout();
+			let standard_error = std::io::stderr();
+			let mut stdout = standard_output.lock();
+			let mut stderr = standard_error.lock();
+			let migrations_dir = migrations_dir.unwrap_or_else(|| {
+				settings
+					.as_ref()
+					.map_or_else(default_migrations_dir, |settings| {
+						settings.core().base_dir.join("migrations")
+					})
+			});
+			crate::execute_squashmigrations_with_context_and_io(
+				&migrations_dir,
+				crate::SquashMigrationsOptions {
+					app_label,
+					start_migration,
+					migration_name,
+					no_optimize,
+					no_input,
+					no_header,
+					squashed_name,
+				},
+				&dependency_context,
+				&mut confirmation,
+				&mut stdout,
+				&mut stderr,
+			)
+			.await
+			.map(|_| ())
+			.map_err(Into::into)
 		}
 		Commands::Migrate {
 			app_label,
@@ -1955,9 +2129,207 @@ pub(crate) fn generate_random_secret_key() -> String {
 #[cfg(test)]
 mod tests {
 	use super::*;
+	#[cfg(feature = "migrations")]
+	use reinhardt_conf::MigrationSettings;
+	#[cfg(feature = "migrations")]
+	use reinhardt_conf::settings::contacts::ContactSettings;
+	#[cfg(feature = "migrations")]
+	use reinhardt_conf::settings::core_settings::CoreSettings;
+	#[cfg(feature = "migrations")]
+	use reinhardt_conf::settings::fragment::HasSettings;
+	#[cfg(feature = "migrations")]
+	use reinhardt_db::migrations::{
+		DependencyCondition, FilesystemRepository, Migration, MigrationRenderOptions,
+		OptionalDependency,
+	};
 	use rstest::rstest;
 	#[cfg(feature = "reinhardt-db")]
 	use std::sync::atomic::{AtomicBool, Ordering};
+	#[cfg(feature = "migrations")]
+	use tempfile::TempDir;
+
+	#[cfg(feature = "migrations")]
+	struct SquashTestSettings {
+		core: CoreSettings,
+		contacts: ContactSettings,
+		migrations: MigrationSettings,
+	}
+
+	#[cfg(feature = "migrations")]
+	impl HasSettings<CoreSettings> for SquashTestSettings {
+		fn get_settings(&self) -> &CoreSettings {
+			&self.core
+		}
+	}
+
+	#[cfg(feature = "migrations")]
+	impl HasSettings<ContactSettings> for SquashTestSettings {
+		fn get_settings(&self) -> &ContactSettings {
+			&self.contacts
+		}
+	}
+
+	#[cfg(feature = "migrations")]
+	impl HasSettings<MigrationSettings> for SquashTestSettings {
+		fn get_settings(&self) -> &MigrationSettings {
+			&self.migrations
+		}
+	}
+
+	#[cfg(feature = "migrations")]
+	fn create_cli_squash_project(setting_condition: Option<&str>) -> TempDir {
+		let project = tempfile::tempdir().expect("create temporary project");
+		let migrations_dir = project.path().join("migrations");
+		let repository = FilesystemRepository::new(&migrations_dir);
+		let first = Migration::new("0001_initial", "polls");
+		let mut second = Migration::new("0002_follow_up", "polls");
+		second.dependencies = vec![("polls".to_string(), "0001_initial".to_string())];
+		if let Some(setting_key) = setting_condition {
+			second.optional_dependencies.push(OptionalDependency::new(
+				"audit",
+				"0001_initial",
+				DependencyCondition::SettingEnabled(setting_key.to_string()),
+			));
+		}
+
+		for migration in [&first, &second] {
+			let source = repository
+				.render(
+					migration,
+					MigrationRenderOptions {
+						include_header: true,
+					},
+				)
+				.expect("render migration");
+			repository
+				.create_new_source(&migration.app_label, &migration.name, &source)
+				.expect("write migration");
+		}
+
+		project
+	}
+
+	#[cfg(feature = "migrations")]
+	fn squash_test_settings(
+		base_dir: &Path,
+		migration_settings: serde_json::Value,
+	) -> (Arc<dyn HasCommonSettings>, MigrationSettings) {
+		let core = serde_json::from_value(serde_json::json!({
+			"base_dir": base_dir,
+			"secret_key": "test-secret",
+		}))
+		.expect("deserialize squash test settings");
+		let migrations: MigrationSettings = serde_json::from_value(serde_json::json!({
+			"migration_settings": migration_settings,
+		}))
+		.expect("deserialize migration settings");
+		(
+			Arc::new(SquashTestSettings {
+				core,
+				contacts: ContactSettings::default(),
+				migrations: migrations.clone(),
+			}),
+			migrations,
+		)
+	}
+
+	#[cfg(feature = "migrations")]
+	fn squash_command(migrations_dir: Option<PathBuf>) -> Commands {
+		Commands::Squashmigrations {
+			app_label: "polls".to_string(),
+			start_migration: None,
+			migration_name: "0002".to_string(),
+			no_optimize: false,
+			no_input: true,
+			no_header: false,
+			squashed_name: None,
+			migrations_dir,
+		}
+	}
+
+	#[cfg(feature = "migrations")]
+	#[rstest]
+	#[tokio::test]
+	async fn squashmigrations_uses_general_settings_for_setting_enabled_dependencies() {
+		// Arrange
+		let project = create_cli_squash_project(Some("ENABLE_AUDIT"));
+		let migrations_dir = project.path().join("migrations");
+		let (settings, migration_settings) =
+			squash_test_settings(project.path(), serde_json::json!({"ENABLE_AUDIT": "true"}));
+
+		// Act
+		let error = run_command_core(
+			squash_command(Some(migrations_dir)),
+			0,
+			CommandRegistry::new(),
+			Some(settings),
+			Some(migration_settings),
+			None,
+		)
+		.await
+		.expect_err("enabled optional dependency must be validated");
+
+		// Assert
+		assert_eq!(
+			error.to_string(),
+			"Invalid arguments: Dependency error: Missing dependency audit.0001_initial required by \
+			 polls.0002_follow_up"
+		);
+	}
+
+	#[cfg(feature = "migrations")]
+	#[rstest]
+	#[tokio::test]
+	async fn squashmigrations_uses_project_base_dir_for_default_migrations_path() {
+		// Arrange
+		let project = create_cli_squash_project(None);
+		let migrations_dir = project.path().join("migrations");
+		let (settings, migration_settings) =
+			squash_test_settings(project.path(), serde_json::json!({}));
+
+		// Act
+		run_command_core(
+			squash_command(None),
+			0,
+			CommandRegistry::new(),
+			Some(settings),
+			Some(migration_settings),
+			None,
+		)
+		.await
+		.expect("project base directory must supply the default migrations path");
+
+		// Assert
+		assert!(migrations_dir.join("polls/0001_squashed_0002.rs").is_file());
+	}
+
+	#[cfg(feature = "migrations")]
+	#[rstest]
+	#[tokio::test]
+	async fn squashmigrations_explicit_migrations_path_overrides_project_base_dir() {
+		// Arrange
+		let project = create_cli_squash_project(None);
+		let migrations_dir = project.path().join("migrations");
+		let (settings, migration_settings) = squash_test_settings(
+			&project.path().join("different-project"),
+			serde_json::json!({}),
+		);
+
+		// Act
+		run_command_core(
+			squash_command(Some(migrations_dir.clone())),
+			0,
+			CommandRegistry::new(),
+			Some(settings),
+			Some(migration_settings),
+			None,
+		)
+		.await
+		.expect("explicit migrations path must remain authoritative");
+
+		// Assert
+		assert!(migrations_dir.join("polls/0001_squashed_0002.rs").is_file());
+	}
 
 	#[cfg(feature = "reinhardt-db")]
 	struct RegisteredFixtureNameCommand;
@@ -2834,6 +3206,28 @@ mod tests {
 
 		// Assert
 		assert!(result);
+	}
+
+	#[cfg(feature = "migrations")]
+	#[rstest]
+	fn test_squashmigrations_does_not_require_database_initialization() {
+		// Arrange
+		let command = Commands::Squashmigrations {
+			app_label: "polls".to_string(),
+			start_migration: None,
+			migration_name: "0002".to_string(),
+			no_optimize: false,
+			no_input: true,
+			no_header: false,
+			squashed_name: None,
+			migrations_dir: None,
+		};
+
+		// Act
+		let result = requires_database(&command, &CommandRegistry::new());
+
+		// Assert
+		assert!(!result);
 	}
 
 	#[cfg(feature = "reinhardt-db")]

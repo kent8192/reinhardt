@@ -173,7 +173,9 @@ async fn project_pages_layout_matches_tutorial() {
 	let settings_rs =
 		fs::read_to_string(src.join("config").join("settings.rs")).expect("read settings.rs");
 	assert!(
-		settings_rs.contains("core: CoreSettings | contacts: ContactSettings"),
+		settings_rs.contains(
+			"core: CoreSettings | contacts: ContactSettings | migrations: MigrationSettings"
+		),
 		"ProjectSettings must compose common settings required by management commands:\n{settings_rs}"
 	);
 	let base_toml =

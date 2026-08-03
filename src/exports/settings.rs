@@ -13,6 +13,6 @@ pub use reinhardt_conf::settings::sources::{
 #[allow(deprecated)]
 pub use reinhardt_conf::settings::{DatabaseConfig, MiddlewareConfig, TemplateConfig};
 pub use reinhardt_conf::{
-	CacheSettings, CorsSettings, EmailSettings, LoggingSettings, MediaSettings, SessionSettings,
-	StaticSettings,
+	CacheSettings, CorsSettings, EmailSettings, LoggingSettings, MediaSettings, MigrationSettings,
+	SessionSettings, StaticSettings,
 };

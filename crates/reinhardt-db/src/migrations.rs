@@ -32,6 +32,31 @@
 //! 2. **Robust Module Detection**: Structurally identifies existing migration modules
 //! 3. **Consistent Formatting**: Standardized output via `prettyplease`
 //!
+//! ## Strict Migration Squashing
+//!
+//! [`MigrationCatalog`] loads the complete source tree and validates duplicate
+//! identities, missing dependencies, and cycles before range selection.
+//! Migration names may be exact or unique prefixes. [`MigrationCatalog::squash_range`]
+//! returns a continuous, same-application ancestor range in dependency order,
+//! preserves dependencies entering that range, and rejects ambiguous or
+//! externally re-entering ancestry.
+//!
+//! [`MigrationSquasher`] combines the selected range while retaining exact
+//! replacement identities and stable metadata. Its optimizer applies only
+//! proven schema reductions and treats data operations, renames, constraints,
+//! indexes, bulk operations, custom operations, and unsupported future
+//! operations as ordering barriers. Disabling optimization preserves every
+//! operation in source order.
+//!
+//! [`FilesystemRepository::render`] validates that the combined migration can
+//! be represented as Rust source and emits parseable Rust 2024 code.
+//! [`FilesystemRepository::create_new_source`] validates names and source
+//! before writing and never overwrites an existing destination. If writing or
+//! synchronization fails, it attempts to remove the incomplete file through
+//! the anchored application directory. A cleanup failure reports both the
+//! original error and the cleanup error. Catalog loading, range selection,
+//! squashing, and source creation do not require a database connection.
+//!
 //! ### Generated Entry Point Example
 //!
 //! The migration system automatically generates entry point files:
@@ -51,6 +76,7 @@
 pub mod ast_parser;
 pub mod auto_migration;
 pub mod autodetector;
+pub mod catalog;
 pub mod dependency;
 pub mod di_support;
 pub mod executor;
@@ -145,13 +171,17 @@ pub use reinhardt_query::prelude::{
 pub use auto_migration::{
 	AutoMigrationError, AutoMigrationGenerator, AutoMigrationResult, ValidationResult,
 };
+pub use catalog::{MigrationCatalog, SquashRange};
 pub use operations::{
 	AddField, AlterField, CreateCollation, CreateExtension, CreateModel, DeleteModel,
 	DropExtension, FieldDefinition, MoveModel, RemoveField, RenameField, RenameModel, RunCode,
 	RunSQL, StateOperation, special::DataMigration,
 };
 pub use recorder::{DatabaseMigrationRecorder, MigrationRecorder};
-pub use repository::{MigrationRepository, filesystem::FilesystemRepository};
+pub use repository::{
+	MigrationRepository,
+	filesystem::{FilesystemRepository, MigrationRenderOptions},
+};
 pub use schema_diff::{
 	ColumnSchema, ConstraintSchema, DatabaseSchema, ForeignKeySchemaInfo, IndexSchema, SchemaDiff,
 	SchemaDiffResult, TableSchema,
@@ -162,7 +192,7 @@ pub use source::{
 	MigrationSource, composite::CompositeSource, filesystem::FilesystemSource,
 	registry::RegistrySource,
 };
-pub use squash::{MigrationSquasher, SquashOptions};
+pub use squash::{MigrationSquasher, SquashOptions, SquashResult};
 pub use state_loader::{MigrationStateLoader, build_state_from_files};
 pub use visualization::{HistoryEntry, MigrationStats, MigrationVisualizer, OutputFormat};
 pub use zero_downtime::{MigrationPhase, Strategy, ZeroDowntimeMigration};
@@ -317,6 +347,13 @@ pub enum MigrationError {
 	/// migration root directory.
 	#[error("Path traversal detected: {0}")]
 	PathTraversal(String),
+
+	/// A migration operation cannot be represented by the source renderer.
+	#[error("Unsupported migration rendering: {operation}")]
+	UnsupportedMigrationRendering {
+		/// Description of the operation or metadata that cannot be rendered.
+		operation: String,
+	},
 }
 
 impl From<reinhardt_core::exception::Error> for MigrationError {
@@ -472,8 +509,10 @@ mod tests {
 pub mod prelude {
 	pub use super::fields::prelude::*;
 	pub use super::{
-		ColumnDefinition, ColumnType, Constraint, ForeignKeyAction, GeneratedColumnDefinition,
-		GeneratedStorage, Migration, Operation, SchemaBinOper, SchemaExpr, SchemaFunc,
+		AlterTableOptions, ColumnDefinition, ColumnType, Constraint, DeferrableOption,
+		ForeignKeyAction, GeneratedColumnDefinition, GeneratedStorage, IndexType, InterleaveSpec,
+		Migration, MySqlAlgorithm, MySqlLock, Operation, PartitionDef, PartitionOptions,
+		PartitionType, PartitionValues, SchemaBinOper, SchemaExpr, SchemaFunc,
 	};
 	pub use crate::field_domain::{FieldDomain, ModelEnumRepr, ModelEnumValue};
 }

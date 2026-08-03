@@ -223,10 +223,35 @@ fn split_sql_statements_for_dialect(sql: &str, dialect: SqlDialect) -> Vec<Strin
 	}
 
 	let mut state = State::Normal;
+	let mut sqlite_token = String::new();
+	let mut sqlite_create_seen = false;
+	let mut sqlite_trigger_seen = false;
+	let mut sqlite_trigger_depth = 0usize;
 
 	while let Some(ch) = chars.next() {
 		match state {
 			State::Normal => {
+				if matches!(dialect, SqlDialect::Sqlite)
+					&& (ch.is_ascii_alphanumeric() || ch == '_')
+				{
+					current.push(ch);
+					sqlite_token.push(ch.to_ascii_uppercase());
+					continue;
+				}
+				if matches!(dialect, SqlDialect::Sqlite) && !sqlite_token.is_empty() {
+					match sqlite_token.as_str() {
+						"CREATE" => sqlite_create_seen = true,
+						"TRIGGER" if sqlite_create_seen => sqlite_trigger_seen = true,
+						"BEGIN" | "CASE" if sqlite_trigger_seen => {
+							sqlite_trigger_depth += 1;
+						}
+						"END" if sqlite_trigger_seen => {
+							sqlite_trigger_depth = sqlite_trigger_depth.saturating_sub(1);
+						}
+						_ => {}
+					}
+					sqlite_token.clear();
+				}
 				if ch == '\'' {
 					let backslash_escapes = quote_uses_backslash_escapes(dialect, ch, &current);
 					current.push(ch);
@@ -274,15 +299,7 @@ fn split_sql_statements_for_dialect(sql: &str, dialect: SqlDialect) -> Vec<Strin
 						}
 					}
 				} else if ch == ';' {
-					let sqlite_trigger = matches!(dialect, SqlDialect::Sqlite) && {
-						let normalized = current.to_ascii_uppercase();
-						normalized.trim_start().starts_with("CREATE ")
-							&& normalized
-								.split_whitespace()
-								.any(|token| token == "TRIGGER")
-							&& normalized.split_whitespace().any(|token| token == "BEGIN")
-					};
-					if sqlite_trigger && !current.trim_end().to_ascii_uppercase().ends_with("END") {
+					if sqlite_trigger_seen && sqlite_trigger_depth > 0 {
 						current.push(ch);
 						continue;
 					}
@@ -291,6 +308,10 @@ fn split_sql_statements_for_dialect(sql: &str, dialect: SqlDialect) -> Vec<Strin
 						statements.push(trimmed.to_string());
 					}
 					current.clear();
+					sqlite_token.clear();
+					sqlite_create_seen = false;
+					sqlite_trigger_seen = false;
+					sqlite_trigger_depth = 0;
 				} else {
 					current.push(ch);
 				}
@@ -2185,6 +2206,23 @@ mod tests {
 			statements,
 			vec![
 				"CREATE TRIGGER audit AFTER INSERT ON users BEGIN INSERT INTO log VALUES (NEW.id); END"
+					.to_string(),
+				"SELECT 2".to_string(),
+			]
+		);
+	}
+
+	#[rstest]
+	fn sqlite_splitter_tracks_nested_case_end_in_trigger_bodies() {
+		let statements = split_sql_statements_for_dialect(
+			"CREATE TRIGGER audit AFTER UPDATE ON users BEGIN UPDATE log SET value = CASE WHEN NEW.value > 0 THEN 1 ELSE 0 END; INSERT INTO log VALUES (NEW.id); END; SELECT 2;",
+			SqlDialect::Sqlite,
+		);
+
+		assert_eq!(
+			statements,
+			vec![
+				"CREATE TRIGGER audit AFTER UPDATE ON users BEGIN UPDATE log SET value = CASE WHEN NEW.value > 0 THEN 1 ELSE 0 END; INSERT INTO log VALUES (NEW.id); END"
 					.to_string(),
 				"SELECT 2".to_string(),
 			]

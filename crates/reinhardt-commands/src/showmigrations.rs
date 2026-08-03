@@ -6,6 +6,7 @@ use crate::{
 	BaseCommand, CommandArgument, CommandContext, CommandError, CommandOption, CommandResult,
 };
 use async_trait::async_trait;
+use reinhardt_conf::MigrationSettings;
 use reinhardt_db::migrations::{
 	DatabaseMigrationRecorder, DependencyResolutionContext, FilesystemSource, MigrationCatalog,
 	MigrationKey, MigrationSnapshot,
@@ -14,6 +15,69 @@ use std::collections::BTreeMap;
 use std::io::{self, Write as _};
 use std::path::PathBuf;
 use std::sync::Arc;
+
+const MIGRATION_FEATURES_OPTION: &str = "__reinhardt_migration_features";
+const MIGRATION_SETTING_OPTION_PREFIX: &str = "__reinhardt_migration_setting:";
+
+pub(crate) fn attach_migration_settings(ctx: &mut CommandContext, settings: &MigrationSettings) {
+	ctx.set_option_multi(
+		MIGRATION_FEATURES_OPTION.to_string(),
+		settings.migration_features.clone(),
+	);
+	for (key, value) in settings
+		.migration_settings
+		.iter()
+		.chain(&settings.migration_swappable_settings)
+	{
+		ctx.set_option(
+			format!("{MIGRATION_SETTING_OPTION_PREFIX}{key}"),
+			value.clone(),
+		);
+	}
+}
+
+pub(crate) fn migration_source_path(ctx: &CommandContext) -> PathBuf {
+	ctx.option("migrations-dir")
+		.map(PathBuf::from)
+		.unwrap_or_else(|| {
+			ctx.settings.as_ref().map_or_else(
+				|| PathBuf::from("./migrations"),
+				|settings| settings.core().base_dir.join("migrations"),
+			)
+		})
+}
+
+pub(crate) fn migration_dependency_context(ctx: &CommandContext) -> DependencyResolutionContext {
+	let mut dependency_context =
+		ctx.settings
+			.as_ref()
+			.map_or_else(DependencyResolutionContext::new, |settings| {
+				let core = settings.core();
+				let mut context = DependencyResolutionContext::new()
+					.with_apps(core.installed_apps.iter().cloned());
+				for (key, value) in &core.migration_swappable_settings {
+					context = context.with_setting(key, value);
+				}
+				for feature in &core.migration_features {
+					context = context.with_feature(feature);
+				}
+				context
+			});
+	for feature in ctx
+		.option_values(MIGRATION_FEATURES_OPTION)
+		.unwrap_or_default()
+	{
+		dependency_context = dependency_context.with_feature(feature);
+	}
+	for (option, values) in &ctx.options {
+		if let Some(key) = option.strip_prefix(MIGRATION_SETTING_OPTION_PREFIX)
+			&& let Some(value) = values.first()
+		{
+			dependency_context = dependency_context.with_setting(key, value);
+		}
+	}
+	dependency_context
+}
 
 /// Output mode for `showmigrations`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -190,26 +254,8 @@ impl BaseCommand for ShowMigrationsCommand {
 			ensure_sqlite_database_exists(resolved.url())
 				.map_err(|error| with_command_context(error, &command_context))?;
 		}
-		let source = FilesystemSource::new(
-			ctx.option("migrations-dir")
-				.map(PathBuf::from)
-				.unwrap_or_else(|| PathBuf::from("./migrations")),
-		);
-		let dependency_context =
-			ctx.settings
-				.as_ref()
-				.map_or_else(DependencyResolutionContext::new, |settings| {
-					let core = settings.core();
-					let mut dependency_context = DependencyResolutionContext::new()
-						.with_apps(core.installed_apps.iter().cloned());
-					for (key, value) in &core.migration_swappable_settings {
-						dependency_context = dependency_context.with_setting(key, value);
-					}
-					for feature in &core.migration_features {
-						dependency_context = dependency_context.with_feature(feature);
-					}
-					dependency_context
-				});
+		let source = FilesystemSource::new(migration_source_path(ctx));
+		let dependency_context = migration_dependency_context(ctx);
 		let catalog = MigrationCatalog::load_strict_with_context(&source, &dependency_context)
 			.await
 			.map_err(crate::squashmigrations::migration_error_to_command_error)

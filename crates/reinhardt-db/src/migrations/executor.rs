@@ -50,6 +50,15 @@ fn validate_and_advance_migration_state(
 	Ok(())
 }
 
+fn migration_is_atomic(migration: &Migration, database_type: DatabaseType) -> bool {
+	migration.atomic
+		&& !(database_type == DatabaseType::Postgres
+			&& migration
+				.operations
+				.iter()
+				.any(Operation::creates_index_concurrently))
+}
+
 fn replacement_history_is_fully_covered(
 	migration: &Migration,
 	migrations: &[Migration],
@@ -668,7 +677,7 @@ impl DatabaseMigrationExecutor {
 		);
 		let mut editor = SchemaEditor::new_for_migration(
 			self.connection.clone(),
-			migration.atomic,
+			migration_is_atomic(migration, self.db_type),
 			self.db_type,
 			requires_sqlite_recreation,
 		)
@@ -707,7 +716,8 @@ impl DatabaseMigrationExecutor {
 	///
 	/// If the migration's `atomic` flag is true and the database supports
 	/// transactional DDL (PostgreSQL, SQLite), all operations are wrapped
-	/// in a transaction that can be rolled back on failure.
+	/// in a transaction that can be rolled back on failure. PostgreSQL migrations
+	/// containing a concurrent index operation are always planned as non-atomic.
 	///
 	/// For databases that don't support transactional DDL (MySQL), operations
 	/// are executed directly without transaction wrapping, and a warning is logged.
@@ -742,7 +752,7 @@ impl DatabaseMigrationExecutor {
 		);
 		let mut editor = SchemaEditor::new_for_migration(
 			self.connection.clone(),
-			migration.atomic,
+			migration_is_atomic(migration, self.db_type),
 			self.db_type,
 			requires_sqlite_recreation,
 		)
@@ -3235,6 +3245,25 @@ mod optimizer_tests {
 	use crate::{backends::error::PgvectorOperationKind, migrations::IndexType};
 
 	struct SentinelPlanner;
+
+	#[test]
+	fn concurrent_postgres_index_disables_atomic_planning() {
+		let mut migration = Migration::new("0001_index", "search");
+		migration.operations.push(Operation::CreateIndex {
+			table: "documents".to_string(),
+			columns: vec!["title".to_string()],
+			unique: false,
+			index_type: None,
+			where_clause: None,
+			concurrently: true,
+			expressions: None,
+			mysql_options: None,
+			operator_class: None,
+		});
+
+		assert!(!migration_is_atomic(&migration, DatabaseType::Postgres));
+		assert!(migration_is_atomic(&migration, DatabaseType::Sqlite));
+	}
 
 	#[async_trait]
 	impl SqlPlanner for SentinelPlanner {

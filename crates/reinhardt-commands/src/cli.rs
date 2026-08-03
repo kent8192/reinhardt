@@ -1146,6 +1146,9 @@ async fn run_command_core(
 			migrations_dir,
 		} => {
 			let mut ctx = CommandContext::new(app_labels);
+			if let Some(migration_settings) = migration_settings.as_ref() {
+				crate::showmigrations::attach_migration_settings(&mut ctx, migration_settings);
+			}
 			ctx.set_verbosity(verbosity);
 			ctx.set_option("database".to_string(), database);
 			if list {
@@ -1181,6 +1184,9 @@ async fn run_command_core(
 			migrations_dir,
 		} => {
 			let mut ctx = CommandContext::new(vec![app_label, migration_name]);
+			if let Some(migration_settings) = migration_settings.as_ref() {
+				crate::showmigrations::attach_migration_settings(&mut ctx, migration_settings);
+			}
 			ctx.set_verbosity(verbosity);
 			ctx.set_option("database".to_string(), database);
 			if backwards {
@@ -2374,6 +2380,36 @@ mod tests {
 			squashed_name: None,
 			migrations_dir,
 		}
+	}
+
+	#[cfg(feature = "migrations")]
+	#[rstest]
+	fn migration_visibility_uses_project_path_and_migration_fragment() {
+		let project = tempfile::tempdir().expect("create temporary project");
+		let (settings, mut migration_settings) =
+			squash_test_settings(project.path(), serde_json::json!({"ENABLE_AUDIT": "true"}));
+		migration_settings.migration_features = vec!["gis".to_string()];
+		migration_settings
+			.migration_swappable_settings
+			.insert("AUTH_USER_MODEL".to_string(), "accounts.User".to_string());
+		let mut ctx = CommandContext::new(Vec::new()).with_settings(settings);
+
+		crate::showmigrations::attach_migration_settings(&mut ctx, &migration_settings);
+		let dependency_context = crate::showmigrations::migration_dependency_context(&ctx);
+
+		assert_eq!(
+			crate::showmigrations::migration_source_path(&ctx),
+			project.path().join("migrations")
+		);
+		assert_eq!(
+			dependency_context.get_setting("ENABLE_AUDIT"),
+			Some(&"true".to_string())
+		);
+		assert_eq!(
+			dependency_context.get_setting("AUTH_USER_MODEL"),
+			Some(&"accounts.User".to_string())
+		);
+		assert!(dependency_context.is_feature_enabled("gis"));
 	}
 
 	#[cfg(feature = "migrations")]

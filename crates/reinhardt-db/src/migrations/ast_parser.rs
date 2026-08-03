@@ -79,7 +79,9 @@ pub fn extract_migration_metadata_strict(
 	}
 
 	let Expr::Struct(migration_struct) = migration_expr else {
-		unreachable!("struct expressions are handled above")
+		return Err(MigrationError::InvalidMigration(
+			"migration() must return a Migration struct literal or builder expression".to_string(),
+		));
 	};
 	if migration_struct
 		.path
@@ -4627,6 +4629,13 @@ mod tests {
 			Migration { dependencies: vec![], replaces: vec![] }
 		}"#,
 		"Invalid migration: Migration metadata is missing required 'operations' field"
+	)]
+	#[case(
+		r#"pub fn migration() -> Migration {
+			let migration = Migration::new("0001_initial", "blog");
+			migration
+		}"#,
+		"Invalid migration: migration() must return a Migration struct literal or builder expression"
 	)]
 	fn strict_metadata_rejects_missing_entrypoint_and_required_fields(
 		#[case] source: &str,

@@ -180,6 +180,11 @@ Without a URL override, the alias selects a configured database. With
 the alias; the alias remains a safe diagnostic label and settings are not
 modified. Diagnostics redact URL credentials and sensitive-looking aliases.
 Both commands load and validate the complete migration catalog before output.
+When `--migrations-dir` is omitted, both commands read from the active
+project's `core.base_dir/migrations` directory. Conditional and swappable
+dependencies use the composed `MigrationSettings` fragment passed by the
+generated `manage.rs` entry point, together with installed applications and
+legacy migration settings from the core fragment.
 `showmigrations` reads an existing recorder table without creating it, while
 `sqlmigrate` performs no schema or migration-history writes. SQL output is
 fully buffered before its single stdout write, so an irreversible rollback or

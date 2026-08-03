@@ -3,16 +3,16 @@
 use crate::database_selector::{DatabaseSelector, resolve_database};
 use crate::inspectdb::ensure_sqlite_database_exists;
 use crate::showmigrations::{
-	MigrationVisibilityWriter, StandardMigrationVisibilityWriter, with_command_context,
+	MigrationVisibilityWriter, StandardMigrationVisibilityWriter, migration_dependency_context,
+	migration_source_path, with_command_context,
 };
 use crate::{BaseCommand, CommandArgument, CommandContext, CommandOption, CommandResult};
 use async_trait::async_trait;
 use reinhardt_db::backends::{DatabaseConnection, DatabaseType};
 use reinhardt_db::migrations::{
-	DependencyResolutionContext, FilesystemSource, Migration, MigrationCatalog, MigrationDirection,
-	MigrationKey, SqlDialect, plan_migration_sql_with_states,
+	FilesystemSource, Migration, MigrationCatalog, MigrationDirection, MigrationKey, SqlDialect,
+	plan_migration_sql_with_states,
 };
-use std::path::PathBuf;
 use std::sync::Arc;
 
 /// Render one migration through the SQL planner shared with migration execution.
@@ -23,8 +23,10 @@ pub async fn render_migration_sql(
 	key: &MigrationKey,
 	direction: MigrationDirection,
 ) -> reinhardt_db::migrations::Result<String> {
-	let state_before = catalog.state_before(key)?;
-	let state_after = catalog.state_after(key)?;
+	let (state_before, state_after) = match direction {
+		MigrationDirection::Forward => (catalog.state_before(key)?, catalog.state_after(key)?),
+		MigrationDirection::Backward => catalog.states_for_rollback(key)?,
+	};
 	let plan = plan_migration_sql_with_states(
 		connection,
 		migration,
@@ -128,26 +130,8 @@ impl BaseCommand for SqlMigrateCommand {
 			ensure_sqlite_database_exists(resolved.url())
 				.map_err(|error| with_command_context(error, &command_context))?;
 		}
-		let source = FilesystemSource::new(
-			ctx.option("migrations-dir")
-				.map(PathBuf::from)
-				.unwrap_or_else(|| PathBuf::from("./migrations")),
-		);
-		let dependency_context =
-			ctx.settings
-				.as_ref()
-				.map_or_else(DependencyResolutionContext::new, |settings| {
-					let core = settings.core();
-					let mut dependency_context = DependencyResolutionContext::new()
-						.with_apps(core.installed_apps.iter().cloned());
-					for (key, value) in &core.migration_swappable_settings {
-						dependency_context = dependency_context.with_setting(key, value);
-					}
-					for feature in &core.migration_features {
-						dependency_context = dependency_context.with_feature(feature);
-					}
-					dependency_context
-				});
+		let source = FilesystemSource::new(migration_source_path(ctx));
+		let dependency_context = migration_dependency_context(ctx);
 		let catalog = MigrationCatalog::load_strict_with_context(&source, &dependency_context)
 			.await
 			.map_err(crate::squashmigrations::migration_error_to_command_error)

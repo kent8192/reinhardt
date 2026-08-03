@@ -305,9 +305,55 @@ impl MigrationCatalog {
 			}
 		}
 
-		let ordered_keys = self.graph.resolve_execution_order_with_replaces()?;
+		let recorded = recorder.get_applied_migrations_if_present().await?;
+		let mut applied: HashMap<MigrationKey, _> = recorded
+			.iter()
+			.map(|record| {
+				(
+					MigrationKey::new(record.app.clone(), record.name.clone()),
+					record.applied,
+				)
+			})
+			.collect();
+		let partial_replacements: HashSet<MigrationKey> = self
+			.migrations
+			.iter()
+			.filter(|(key, migration)| {
+				if migration.replaces.is_empty() || applied.contains_key(*key) {
+					return false;
+				}
+				let applied_count = migration
+					.replaces
+					.iter()
+					.filter(|(app, name)| applied.contains_key(&MigrationKey::new(app, name)))
+					.count();
+				applied_count > 0 && applied_count < migration.replaces.len()
+			})
+			.map(|(key, _)| key.clone())
+			.collect();
+		let raw_order = self.raw_graph.topological_sort()?;
+		let ordered_keys: Vec<_> = self
+			.graph
+			.resolve_execution_order_with_replaces()?
+			.into_iter()
+			.flat_map(|key| {
+				if !partial_replacements.contains(&key) {
+					return vec![key];
+				}
+				let replaced: HashSet<_> = self.migrations[&key]
+					.replaces
+					.iter()
+					.map(|(app, name)| MigrationKey::new(app, name))
+					.collect();
+				raw_order
+					.iter()
+					.filter(|candidate| replaced.contains(*candidate))
+					.cloned()
+					.collect()
+			})
+			.collect();
 		let selected = if apps.is_empty() {
-			self.migrations.keys().cloned().collect()
+			ordered_keys.iter().cloned().collect()
 		} else {
 			let requested_apps: HashSet<&str> = apps.iter().map(String::as_str).collect();
 			let mut selected = HashSet::new();
@@ -347,16 +393,6 @@ impl MigrationCatalog {
 					.clone()
 			})
 			.collect();
-		let recorded = recorder.get_applied_migrations_if_present().await?;
-		let mut applied: HashMap<MigrationKey, _> = recorded
-			.iter()
-			.map(|record| {
-				(
-					MigrationKey::new(record.app.clone(), record.name.clone()),
-					record.applied,
-				)
-			})
-			.collect();
 		for (key, migration) in &self.migrations {
 			if !migration.replaces.is_empty()
 				&& migration
@@ -380,12 +416,37 @@ impl MigrationCatalog {
 
 	/// Reconstruct the project state immediately before a migration.
 	pub fn state_before(&self, key: &MigrationKey) -> Result<ProjectState> {
-		self.reconstruct_state(key, false)
+		self.reconstruct_state(key, false, false)
 	}
 
 	/// Reconstruct the project state immediately after a migration.
 	pub fn state_after(&self, key: &MigrationKey) -> Result<ProjectState> {
-		self.reconstruct_state(key, true)
+		self.reconstruct_state(key, true, false)
+	}
+
+	/// Reconstruct both states needed to inspect a rollback plan.
+	///
+	/// Lossy historical metadata is rejected only when the target contains a
+	/// destructive operation whose reverse SQL must reconstruct that metadata.
+	pub fn states_for_rollback(&self, key: &MigrationKey) -> Result<(ProjectState, ProjectState)> {
+		let migration = self.migration(key)?;
+		let validate_losslessness = migration.operations.iter().any(|operation| {
+			matches!(
+				operation,
+				super::Operation::DropTable { .. }
+					| super::Operation::DropColumn {
+						old_definition: None,
+						..
+					} | super::Operation::AlterColumn {
+					old_definition: None,
+					..
+				} | super::Operation::DropConstraint { .. }
+			)
+		});
+		Ok((
+			self.reconstruct_state(key, false, validate_losslessness)?,
+			self.reconstruct_state(key, true, validate_losslessness)?,
+		))
 	}
 
 	fn resolve_graph_dependency(
@@ -807,6 +868,7 @@ impl MigrationCatalog {
 		&self,
 		target: &MigrationKey,
 		include_target: bool,
+		validate_losslessness: bool,
 	) -> Result<ProjectState> {
 		if !self.migrations.contains_key(target) {
 			return Err(MigrationError::NotFound(target.id()));
@@ -848,7 +910,9 @@ impl MigrationCatalog {
 				continue;
 			}
 			for operation in &migration.operations {
-				Self::validate_historical_replay_losslessness(operation)?;
+				if validate_losslessness {
+					Self::validate_historical_replay_losslessness(operation)?;
+				}
 				operation.validate_for_partial_state(&state)?;
 				operation.state_forwards(&migration.app_label, &mut state);
 			}
@@ -1093,5 +1157,39 @@ mod tests {
 			constraint_error.to_string(),
 			"Invalid migration: historical state cannot preserve specialized constraints for table `reservations`"
 		);
+	}
+
+	#[rstest::rstest]
+	fn ordinary_column_order_is_allowed_when_no_destructive_rollback_needs_reconstruction() {
+		let mut migration = Migration::new("0001_initial", "blog");
+		migration.operations = vec![super::super::Operation::CreateTable {
+			name: "posts".to_string(),
+			columns: vec![
+				super::super::ColumnDefinition::new("id", super::super::FieldType::Integer),
+				super::super::ColumnDefinition::new("title", super::super::FieldType::Text),
+				super::super::ColumnDefinition::new(
+					"created_at",
+					super::super::FieldType::DateTime,
+				),
+			],
+			constraints: Vec::new(),
+			without_rowid: None,
+			interleave_in_parent: None,
+			partition: None,
+		}];
+		let context = DependencyResolutionContext::new().with_apps(["blog".to_string()]);
+		let catalog = MigrationCatalog::from_loaded_with_context(vec![migration], &context)
+			.expect("ordinary migration must load");
+		let key = MigrationKey::new("blog", "0001_initial");
+
+		let state = catalog
+			.state_after(&key)
+			.expect("forward reconstruction must retain semantic column order");
+		let rollback_states = catalog
+			.states_for_rollback(&key)
+			.expect("dropping a newly created table does not reconstruct its columns");
+
+		assert!(state.find_model_by_table("posts").is_some());
+		assert_eq!(rollback_states.1, state);
 	}
 }

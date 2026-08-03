@@ -385,6 +385,54 @@ async fn snapshot_filters_apps_with_transitive_cross_app_dependencies() {
 }
 
 #[tokio::test]
+async fn snapshot_keeps_originals_visible_during_partial_replacement_history() {
+	let first = migration("blog", "0001_initial", &[]);
+	let second = migration("blog", "0002_posts", &[("blog", "0001_initial")]);
+	let mut replacement = migration("blog", "0001_squashed_0002_posts", &[]);
+	replacement.replaces = vec![
+		("blog".to_string(), "0001_initial".to_string()),
+		("blog".to_string(), "0002_posts".to_string()),
+	];
+	let catalog = MigrationCatalog::load_strict(&TestSource {
+		migrations: vec![first, second, replacement],
+	})
+	.await
+	.unwrap();
+	let (_directory, connection) = sqlite_connection().await;
+	let recorder = DatabaseMigrationRecorder::new(connection);
+	recorder.ensure_schema_table().await.unwrap();
+	recorder
+		.record_applied("blog", "0001_initial")
+		.await
+		.unwrap();
+
+	let snapshot = catalog.snapshot(&recorder, &[]).await.unwrap();
+	let ordered_keys: Vec<_> = snapshot
+		.ordered
+		.iter()
+		.map(|migration| MigrationKey::new(&migration.app_label, &migration.name))
+		.collect();
+
+	assert_eq!(
+		ordered_keys,
+		vec![
+			MigrationKey::new("blog", "0001_initial"),
+			MigrationKey::new("blog", "0002_posts"),
+		]
+	);
+	assert!(
+		snapshot
+			.applied
+			.contains_key(&MigrationKey::new("blog", "0001_initial"))
+	);
+	assert!(
+		!snapshot
+			.applied
+			.contains_key(&MigrationKey::new("blog", "0002_posts"))
+	);
+}
+
+#[tokio::test]
 async fn snapshot_rejects_an_unknown_app() {
 	let catalog = MigrationCatalog::load_strict(&TestSource {
 		migrations: vec![migration("blog", "0001_initial", &[])],

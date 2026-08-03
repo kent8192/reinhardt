@@ -635,9 +635,7 @@ impl MigrationCatalog {
 			.graph
 			.get_dependencies(start)
 			.unwrap_or_default()
-			.iter()
-			.cloned()
-			.collect::<Vec<_>>();
+			.to_vec();
 		stack.sort_by(Self::compare_keys);
 		stack.reverse();
 

@@ -596,13 +596,12 @@ impl SchemaCodeGenerator {
 		// Default value
 		if let Some(ref default) = column.default {
 			// Skip auto-generated defaults like NOW() or sequences
-			if !is_auto_default(default) {
-				if let Some(default_expression) =
+			if !is_auto_default(default)
+				&& let Some(default_expression) =
 					render_default_expression(default, &column.column_type)
 				{
 					attrs.push(quote! { default = #default_expression });
 				}
-			}
 		}
 
 		if let Some(generated) = column.generated.as_ref() {

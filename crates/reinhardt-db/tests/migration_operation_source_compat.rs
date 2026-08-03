@@ -20,21 +20,16 @@ fn migration_renderer_round_trips_rust_callback_source() {
 	});
 	let repository = FilesystemRepository::new("/unused");
 
-	let error = repository
+	let rendered = repository
 		.render(
 			&migration,
 			MigrationRenderOptions {
 				include_header: true,
 			},
 		)
-		.unwrap_err();
+		.unwrap();
 
-	assert!(matches!(
-		error,
-		reinhardt_db::migrations::MigrationError::UnsupportedMigrationRendering {
-			operation
-		} if operation == "operations[0].RunRust"
-	));
+	assert!(rendered.contains("Operation::RunRust"));
 }
 
 #[cfg(feature = "migrations")]
@@ -104,8 +99,8 @@ fn rendered_data_bearing_source_compiles_with_its_own_imports() {
 	use reinhardt_db::migrations::{
 		AlterTableOptions, ColumnDefinition, Constraint, DeferrableOption, FieldType,
 		FilesystemRepository, ForeignKeyAction, GeneratedColumnDefinition, GeneratedStorage,
-		IndexType, Migration, MigrationRenderOptions, MySqlAlgorithm, MySqlLock, Operation,
-		SchemaExpr,
+		IndexType, InterleaveSpec, Migration, MigrationRenderOptions, MySqlAlgorithm, MySqlLock,
+		Operation, PartitionDef, PartitionOptions, PartitionType, PartitionValues, SchemaExpr,
 	};
 	use std::{fs, process::Command};
 	use tempfile::TempDir;
@@ -134,8 +129,18 @@ fn rendered_data_bearing_source_compiles_with_its_own_imports() {
 				deferrable: Some(DeferrableOption::Deferred),
 			}],
 			without_rowid: None,
-			interleave_in_parent: None,
-			partition: None,
+			interleave_in_parent: Some(InterleaveSpec {
+				parent_table: "accounts_parent".to_string(),
+				parent_columns: vec!["id".to_string()],
+			}),
+			partition: Some(PartitionOptions::new(
+				PartitionType::Range,
+				"id",
+				vec![PartitionDef::new(
+					"before_2026",
+					PartitionValues::LessThan("2026-01-01".to_string()),
+				)],
+			)),
 		},
 		Operation::CreateIndex {
 			table: "accounts".to_string(),
@@ -625,19 +630,19 @@ async fn migration_renderer_compatibility_matrix_covers_every_operation_variant(
 			#[cfg(feature = "pgvector")]
 			Operation::DropNamedIndex { .. } => ("DropNamedIndex", true),
 			Operation::RunSQL { .. } => ("RunSQL", true),
-			Operation::RunRust { .. } => ("RunRust", false),
-			Operation::AlterTableComment { .. } => ("AlterTableComment", false),
-			Operation::AlterUniqueTogether { .. } => ("AlterUniqueTogether", false),
-			Operation::AlterModelOptions { .. } => ("AlterModelOptions", false),
-			Operation::CreateInheritedTable { .. } => ("CreateInheritedTable", false),
-			Operation::AddDiscriminatorColumn { .. } => ("AddDiscriminatorColumn", false),
-			Operation::MoveModel { .. } => ("MoveModel", false),
-			Operation::CreateSchema { .. } => ("CreateSchema", false),
-			Operation::DropSchema { .. } => ("DropSchema", false),
+			Operation::RunRust { .. } => ("RunRust", true),
+			Operation::AlterTableComment { .. } => ("AlterTableComment", true),
+			Operation::AlterUniqueTogether { .. } => ("AlterUniqueTogether", true),
+			Operation::AlterModelOptions { .. } => ("AlterModelOptions", true),
+			Operation::CreateInheritedTable { .. } => ("CreateInheritedTable", true),
+			Operation::AddDiscriminatorColumn { .. } => ("AddDiscriminatorColumn", true),
+			Operation::MoveModel { .. } => ("MoveModel", true),
+			Operation::CreateSchema { .. } => ("CreateSchema", true),
+			Operation::DropSchema { .. } => ("DropSchema", true),
 			Operation::CreateExtension { .. } => ("CreateExtension", true),
-			Operation::BulkLoad { .. } => ("BulkLoad", false),
-			Operation::SetAutoIncrementValue { .. } => ("SetAutoIncrementValue", false),
-			Operation::CreateCompositePrimaryKey { .. } => ("CreateCompositePrimaryKey", false),
+			Operation::BulkLoad { .. } => ("BulkLoad", true),
+			Operation::SetAutoIncrementValue { .. } => ("SetAutoIncrementValue", true),
+			Operation::CreateCompositePrimaryKey { .. } => ("CreateCompositePrimaryKey", true),
 		};
 		let temp_dir = TempDir::new().unwrap();
 		let repository = FilesystemRepository::new(temp_dir.path());

@@ -101,6 +101,36 @@ ambiguous prefix, a branched ancestry, or a range that is not a continuous
 same-application ancestor chain. Dependencies entering the selected range from
 other applications remain dependencies of the generated migration.
 
+Conditional migration dependencies are resolved from the active project's
+`MigrationSettings` fragment.
+`migration_swappable_settings` maps each swappable dependency key to its
+`"app.Model"` target, `migration_settings` supplies values for optional
+dependencies using `SettingEnabled`, and `migration_features` enables optional
+dependencies whose feature condition matches an entry in the list.
+`installed_apps` enables optional dependencies gated on application presence.
+Inactive optional dependencies remain in the generated replacement without
+resolving their target application, so the migration graph is correct if the
+condition is enabled in another environment.
+
+```toml
+[core]
+installed_apps = ["accounts"]
+
+[migrations]
+migration_features = ["gis"]
+
+[migrations.migration_swappable_settings]
+AUTH_USER_MODEL = "accounts.User"
+
+[migrations.migration_settings]
+ENABLE_AUDIT = "true"
+```
+
+When `--migrations-dir` is omitted, the command reads migrations from the
+active project's `core.base_dir/migrations` directory. The explicit option
+always takes precedence. Entry points without project settings retain the
+project-root/current-directory fallback.
+
 By default, Reinhardt prompts before writing. Use `--no-input` (or the
 Django-compatible `--noinput` alias) in non-interactive environments. Use
 `--no-optimize` to preserve the exact source operation order, and `--no-header`
@@ -161,6 +191,16 @@ when an alteration cannot be expressed directly. Transaction wrappers are
 emitted only when the migration plan is atomic and the backend supports
 transactional DDL; MySQL DDL is therefore never wrapped. Informational
 data-operation comments remain comments and are never executed.
+
+Statement splitting also follows the selected backend: PostgreSQL nested block
+comments, MySQL's whitespace-sensitive `--` comments, and SQLite trigger bodies
+are kept intact. This ensures that previewed SQL has the same statement
+boundaries as execution.
+
+When SQL planning reconstructs state from historical migration source, it
+fails closed if that source cannot represent required schema metadata exactly,
+including table comments, declared column order, or specialized constraints.
+This prevents a plausible but incomplete preview from being emitted.
 
 ### Pages template hot reload
 
@@ -385,9 +425,9 @@ mod native {
     use my_project::config::shell::get_shell_config;
     use my_project::config::settings::get_settings;
     #[cfg(not(feature = "commands-shell"))]
-    use reinhardt::commands::execute_from_command_line_with_settings;
+    use reinhardt::commands::execute_from_command_line_with_migration_settings;
     #[cfg(feature = "commands-shell")]
-    use reinhardt::commands::execute_from_command_line_with_settings_and_shell;
+    use reinhardt::commands::execute_from_command_line_with_migration_settings_and_shell;
 
     #[tokio::main]
     pub(super) async fn main() {
@@ -402,13 +442,13 @@ mod native {
 
         #[cfg(feature = "commands-shell")]
         let result =
-            execute_from_command_line_with_settings_and_shell(
+            execute_from_command_line_with_migration_settings_and_shell(
                 get_settings(),
                 get_shell_config(),
             )
             .await;
         #[cfg(not(feature = "commands-shell"))]
-        let result = execute_from_command_line_with_settings(get_settings()).await;
+        let result = execute_from_command_line_with_migration_settings(get_settings()).await;
 
         if let Err(error) = result {
             eprintln!("Error: {error}");

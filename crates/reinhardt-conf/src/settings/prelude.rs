@@ -14,6 +14,7 @@ pub use super::env_parser::{
 pub use super::interpolation::InterpolationError;
 pub use super::logging::{HasLoggingSettings, LoggingSettings};
 pub use super::media::{HasMediaSettings, MediaSettings};
+pub use super::migrations::{HasMigrationSettings, MigrationSettings};
 pub use super::profile::Profile;
 pub use super::schema::{
 	FieldRef, HasSettingsSchema, MapRef, OptionalRef, SecretFieldRef, SequenceRef, SettingsNode,

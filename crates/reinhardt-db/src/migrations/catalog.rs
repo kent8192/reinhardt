@@ -30,6 +30,7 @@ pub struct MigrationCatalog {
 	migrations: HashMap<MigrationKey, Migration>,
 	graph: MigrationGraph,
 	raw_graph: MigrationGraph,
+	replacement_owners: HashMap<MigrationKey, MigrationKey>,
 }
 
 impl std::fmt::Debug for MigrationCatalog {
@@ -53,28 +54,44 @@ pub struct SquashRange {
 }
 
 impl SquashRange {
+	/// Create a migration range for direct squashing.
+	///
+	/// Ranges created this way do not include catalog-only dependency
+	/// normalization metadata. Use [`MigrationCatalog::squash_range`] when
+	/// resolving replacement migrations or `__first__` dependencies.
+	pub fn new(migrations: Vec<Migration>, external_dependencies: Vec<(String, String)>) -> Self {
+		Self {
+			migrations,
+			external_dependencies,
+			available_migrations: Vec::new(),
+			replacement_owners: HashMap::new(),
+		}
+	}
+
 	pub(crate) fn normalize_dependency(
 		&self,
 		app_label: &str,
 		migration_name: &str,
 	) -> Result<MigrationKey> {
-		let dependency = MigrationKey::new(app_label, migration_name);
+		let mut dependency = MigrationKey::new(app_label, migration_name);
 		if self.available_migrations.is_empty() {
 			return Ok(dependency);
 		}
 		if dependency.name == "__first__" {
-			return self
+			dependency = self
 				.available_migrations
 				.iter()
 				.filter(|candidate| candidate.app_label == dependency.app_label)
-				.min_by(|left, right| left.name.cmp(&right.name))
+				.min_by(|left, right| {
+					MigrationCatalog::compare_migration_names(&left.name, &right.name)
+				})
 				.cloned()
 				.ok_or_else(|| {
 					MigrationError::DependencyError(format!(
 						"Missing first migration for app {}",
 						app_label
 					))
-				});
+				})?;
 		}
 		Ok(self
 			.replacement_owners
@@ -102,8 +119,8 @@ impl MigrationCatalog {
 	///
 	/// The context resolves swappable dependencies and activates optional
 	/// dependencies. Its installed applications are combined with the labels
-	/// discovered from the source, so an optional dependency on a local
-	/// application is never silently omitted.
+	/// discovered from the source, so a local optional dependency is not silently
+	/// omitted.
 	pub async fn load_strict_with_context(
 		source: &dyn MigrationSource,
 		context: &DependencyResolutionContext,
@@ -138,39 +155,30 @@ impl MigrationCatalog {
 
 		let mut migration_keys: Vec<MigrationKey> = migrations.keys().cloned().collect();
 		migration_keys.sort_by(Self::compare_keys);
-		let mut replacement_owners = HashMap::new();
+		let mut replacement_owner_candidates: HashMap<MigrationKey, Vec<MigrationKey>> =
+			HashMap::new();
 		for (key, migration) in &migrations {
 			for (app, name) in &migration.replaces {
 				let replaced = MigrationKey::new(app, name);
-				if let Some(owner) = replacement_owners.insert(replaced.clone(), key.clone())
-					&& owner != *key
-				{
+				if replaced == *key {
 					return Err(MigrationError::InvalidMigration(format!(
-						"Replacement {} is claimed by both {} and {}",
-						replaced, owner, key
+						"Migration {} cannot replace itself",
+						key
 					)));
 				}
+				replacement_owner_candidates
+					.entry(replaced)
+					.or_default()
+					.push(key.clone());
 			}
 		}
-		let resolve_first_dependency =
-			|dependency: MigrationKey, key: &MigrationKey| -> Result<MigrationKey> {
-				if dependency.name == "__first__" {
-					migrations
-						.keys()
-						.filter(|candidate| candidate.app_label == dependency.app_label)
-						.min_by(|left, right| Self::compare_keys(left, right))
-						.cloned()
-						.ok_or_else(|| {
-							MigrationError::DependencyError(format!(
-								"Missing first migration for app {} required by {}",
-								dependency.app_label, key
-							))
-						})
-				} else {
-					Ok(dependency)
-				}
-			};
-
+		let replacement_owners = replacement_owner_candidates
+			.iter()
+			.map(|(replaced, owners)| {
+				Self::terminal_replacement_owner(replaced, owners, &replacement_owner_candidates)
+					.map(|owner| (replaced.clone(), owner))
+			})
+			.collect::<Result<HashMap<_, _>>>()?;
 		for key in &migration_keys {
 			let migration = migrations
 				.get(key)
@@ -183,23 +191,16 @@ impl MigrationCatalog {
 				.unwrap_or_default();
 			dependencies.sort_by(Self::compare_keys);
 			for dependency in dependencies {
-				let dependency = resolve_first_dependency(dependency, key)?;
-				let dependency = replacement_owners
-					.get(&dependency)
-					.cloned()
-					.unwrap_or(dependency);
-				if !migrations.contains_key(&dependency) {
-					return Err(MigrationError::DependencyError(format!(
-						"Missing dependency {} required by {}",
-						dependency, key
-					)));
-				}
+				Self::resolve_graph_dependency(&dependency, &migrations, &replacement_owners, key)?;
 			}
 		}
 
 		let mut graph = MigrationGraph::new();
 		let mut raw_graph = MigrationGraph::new();
-		for (key, migration) in &migrations {
+		for key in &migration_keys {
+			let migration = migrations
+				.get(key)
+				.expect("collected catalog key must have a migration");
 			let mut graph_for_migration = MigrationGraph::new();
 			graph_for_migration.add_migration_with_context(migration, context);
 			let raw_dependencies = graph_for_migration
@@ -207,26 +208,48 @@ impl MigrationCatalog {
 				.unwrap_or_default()
 				.iter()
 				.map(|dependency| {
-					let dependency = resolve_first_dependency(dependency.clone(), key)?;
-					Ok(if migrations.contains_key(&dependency) {
-						dependency
-					} else {
-						replacement_owners
-							.get(&dependency)
+					let dependency = if dependency.name == "__first__" {
+						migrations
+							.keys()
+							.filter(|candidate| candidate.app_label == dependency.app_label)
+							.min_by(|left, right| {
+								Self::compare_migration_names(&left.name, &right.name)
+							})
 							.cloned()
-							.unwrap_or(dependency)
-					})
+							.ok_or_else(|| {
+								MigrationError::DependencyError(format!(
+									"Missing first migration for app {} required by {}",
+									dependency.app_label, key
+								))
+							})?
+					} else {
+						dependency.clone()
+					};
+					if migrations.contains_key(&dependency) {
+						Ok(dependency)
+					} else if let Some(owner) = replacement_owners.get(&dependency) {
+						Ok(owner.clone())
+					} else {
+						Err(MigrationError::DependencyError(format!(
+							"Missing dependency {} required by {}",
+							dependency, key
+						)))
+					}
 				})
 				.collect::<Result<Vec<_>>>()?;
-			let dependencies = raw_dependencies
+			let dependencies = graph_for_migration
+				.get_dependencies(key)
+				.unwrap_or_default()
 				.iter()
 				.map(|dependency| {
-					replacement_owners
-						.get(dependency)
-						.cloned()
-						.unwrap_or_else(|| dependency.clone())
+					Self::resolve_graph_dependency(
+						dependency,
+						&migrations,
+						&replacement_owners,
+						key,
+					)
 				})
-				.collect();
+				.collect::<Result<Vec<_>>>()?;
 			let replaces = migration
 				.replaces
 				.iter()
@@ -257,6 +280,7 @@ impl MigrationCatalog {
 			migrations,
 			graph,
 			raw_graph,
+			replacement_owners,
 		})
 	}
 
@@ -355,19 +379,91 @@ impl MigrationCatalog {
 	}
 
 	/// Reconstruct the project state immediately before a migration.
-	///
-	/// Only the target migration's transitive dependencies are replayed. This
-	/// excludes unrelated migrations while preserving both sides of a merge.
 	pub fn state_before(&self, key: &MigrationKey) -> Result<ProjectState> {
 		self.reconstruct_state(key, false)
 	}
 
 	/// Reconstruct the project state immediately after a migration.
-	///
-	/// The target migration and all of its transitive dependencies are replayed
-	/// in topological order.
 	pub fn state_after(&self, key: &MigrationKey) -> Result<ProjectState> {
 		self.reconstruct_state(key, true)
+	}
+
+	fn resolve_graph_dependency(
+		dependency: &MigrationKey,
+		migrations: &HashMap<MigrationKey, Migration>,
+		replacement_owners: &HashMap<MigrationKey, MigrationKey>,
+		dependent: &MigrationKey,
+	) -> Result<MigrationKey> {
+		let dependency = if dependency.name == "__first__" {
+			migrations
+				.keys()
+				.filter(|candidate| candidate.app_label == dependency.app_label)
+				.min_by(|left, right| Self::compare_migration_names(&left.name, &right.name))
+				.cloned()
+				.ok_or_else(|| {
+					MigrationError::DependencyError(format!(
+						"Missing first migration for app {} required by {}",
+						dependency.app_label, dependent
+					))
+				})?
+		} else {
+			dependency.clone()
+		};
+		match replacement_owners.get(&dependency) {
+			Some(owner) => Ok(owner.clone()),
+			None if migrations.contains_key(&dependency) => Ok(dependency),
+			_ => Err(MigrationError::DependencyError(format!(
+				"Missing dependency {} required by {}",
+				dependency, dependent
+			))),
+		}
+	}
+
+	fn terminal_replacement_owner(
+		replaced: &MigrationKey,
+		owners: &[MigrationKey],
+		replacement_owner_candidates: &HashMap<MigrationKey, Vec<MigrationKey>>,
+	) -> Result<MigrationKey> {
+		fn collect_terminal_owners(
+			current: &MigrationKey,
+			owners: &HashMap<MigrationKey, Vec<MigrationKey>>,
+			path: &mut HashSet<MigrationKey>,
+			terminals: &mut HashSet<MigrationKey>,
+		) -> Result<()> {
+			if !path.insert(current.clone()) {
+				return Err(MigrationError::CircularDependency {
+					cycle: current.id(),
+				});
+			}
+			if let Some(candidates) = owners.get(current) {
+				for candidate in candidates {
+					collect_terminal_owners(candidate, owners, path, terminals)?;
+				}
+			} else {
+				terminals.insert(current.clone());
+			}
+			path.remove(current);
+			Ok(())
+		}
+
+		let mut terminals = HashSet::new();
+		for owner in owners {
+			collect_terminal_owners(
+				owner,
+				replacement_owner_candidates,
+				&mut HashSet::new(),
+				&mut terminals,
+			)?;
+		}
+		let mut terminals: Vec<_> = terminals.into_iter().collect();
+		terminals.sort_by_key(MigrationKey::id);
+		match terminals.as_slice() {
+			[owner] => Ok(owner.clone()),
+			_ => Err(MigrationError::InvalidMigration(format!(
+				"Replacement {} has multiple terminal owners",
+				replaced
+			))),
+		}
 	}
 
 	/// Resolve an exact migration name or an unambiguous name prefix.
@@ -438,7 +534,7 @@ impl MigrationCatalog {
 			}
 
 			let mut app_parents: Vec<MigrationKey> = self
-				.graph
+				.raw_graph
 				.get_dependencies(&current)
 				.unwrap_or_default()
 				.iter()
@@ -446,6 +542,16 @@ impl MigrationCatalog {
 				.cloned()
 				.collect();
 			app_parents.sort_by(|left, right| left.name.cmp(&right.name));
+			let direct_parents = app_parents
+				.iter()
+				.filter(|candidate| {
+					!app_parents
+						.iter()
+						.any(|other| other != *candidate && self.depends_on(other, candidate))
+				})
+				.cloned()
+				.collect();
+			app_parents = direct_parents;
 
 			match app_parents.as_slice() {
 				[] if start_key.is_some() => {
@@ -471,7 +577,7 @@ impl MigrationCatalog {
 			}
 		}
 
-		let ordered_keys = self.graph.topological_sort()?;
+		let ordered_keys = self.raw_graph.topological_sort()?;
 		let migrations: Vec<Migration> = ordered_keys
 			.into_iter()
 			.filter(|key| selected.contains(key))
@@ -485,22 +591,23 @@ impl MigrationCatalog {
 
 		let external_dependencies: BTreeSet<(String, String)> = selected
 			.iter()
-			.flat_map(|migration| self.graph.get_dependencies(migration).into_iter().flatten())
-			.filter(|dependency| !selected.contains(dependency))
+			.flat_map(|key| self.raw_graph.get_dependencies(key).unwrap_or_default())
+			.filter(|dependency| !selected.contains(*dependency))
 			.map(|dependency| (dependency.app_label.clone(), dependency.name.clone()))
 			.collect();
 
-		for selected_key in &selected {
-			for child in self.graph.get_dependents(selected_key) {
-				if child.app_label == app
-					&& !selected.contains(child)
-					&& !self.is_descendant_of(child, &end_key)
-				{
-					return Err(MigrationError::InvalidMigration(format!(
-						"Cannot squash range: {} branches from selected migration {}",
-						child, selected_key
-					)));
-				}
+		for (key, migration) in &self.migrations {
+			if !selected.contains(key)
+				&& migration
+					.replaces
+					.iter()
+					.any(|(replacement_app, replacement_name)| {
+						selected.contains(&MigrationKey::new(replacement_app, replacement_name))
+					}) {
+				return Err(MigrationError::InvalidMigration(format!(
+					"Cannot squash range: {} already replaces a selected migration",
+					key
+				)));
 			}
 		}
 
@@ -513,6 +620,24 @@ impl MigrationCatalog {
 					"Cannot squash range: external dependency {} depends on selected migration {}",
 					dependency, selected_ancestor
 				)));
+			}
+		}
+
+		for selected_key in &selected {
+			for child in self.raw_graph.get_dependents(selected_key) {
+				let superseded_by_selected_replacement = self
+					.replacement_owners
+					.get(child)
+					.is_some_and(|owner| owner == selected_key);
+				if !selected.contains(child)
+					&& !superseded_by_selected_replacement
+					&& !self.is_descendant_of(child, &end_key)
+				{
+					return Err(MigrationError::InvalidMigration(format!(
+						"Cannot squash range: {} branches from selected migration {}",
+						child, selected_key
+					)));
+				}
 			}
 		}
 
@@ -544,16 +669,7 @@ impl MigrationCatalog {
 			migrations,
 			external_dependencies: external_dependencies.into_iter().collect(),
 			available_migrations: self.migrations.keys().cloned().collect(),
-			replacement_owners: self
-				.migrations
-				.iter()
-				.flat_map(|(owner, migration)| {
-					migration
-						.replaces
-						.iter()
-						.map(move |(app, name)| (MigrationKey::new(app, name), owner.clone()))
-				})
-				.collect(),
+			replacement_owners: self.replacement_owners.clone(),
 		})
 	}
 
@@ -561,6 +677,115 @@ impl MigrationCatalog {
 		left.app_label
 			.cmp(&right.app_label)
 			.then_with(|| left.name.cmp(&right.name))
+	}
+
+	fn compare_migration_names(left: &str, right: &str) -> std::cmp::Ordering {
+		let numeric_prefix = |name: &str| {
+			name.split_once('_')
+				.and_then(|(prefix, _)| prefix.parse::<u64>().ok())
+		};
+		match (numeric_prefix(left), numeric_prefix(right)) {
+			(Some(left_prefix), Some(right_prefix)) => {
+				left_prefix.cmp(&right_prefix).then_with(|| left.cmp(right))
+			}
+			(Some(_), None) => std::cmp::Ordering::Less,
+			(None, Some(_)) => std::cmp::Ordering::Greater,
+			(None, None) => left.cmp(right),
+		}
+	}
+
+	fn external_ancestry_paths(
+		&self,
+		origin: &MigrationKey,
+		app: &str,
+	) -> Result<Vec<Vec<MigrationKey>>> {
+		let mut paths = Vec::new();
+		let mut dependencies = self
+			.raw_graph
+			.get_dependencies(origin)
+			.unwrap_or_default()
+			.iter()
+			.filter(|dependency| dependency.app_label != app)
+			.cloned()
+			.collect::<Vec<_>>();
+		dependencies.sort_by(Self::compare_keys);
+
+		for dependency in dependencies {
+			let mut stack = vec![(dependency.clone(), vec![dependency])];
+			let mut visited = HashSet::new();
+			while let Some((current, path)) = stack.pop() {
+				if !visited.insert(current.clone()) {
+					continue;
+				}
+				if current.app_label == app {
+					paths.push(path);
+					continue;
+				}
+				let mut parents = self
+					.raw_graph
+					.get_dependencies(&current)
+					.unwrap_or_default()
+					.to_vec();
+				parents.sort_by(Self::compare_keys);
+				for parent in parents.into_iter().rev() {
+					let mut next_path = path.clone();
+					next_path.push(parent.clone());
+					stack.push((parent, next_path));
+				}
+			}
+		}
+
+		Ok(paths)
+	}
+
+	fn first_reachable_selected_dependency(
+		&self,
+		start: &MigrationKey,
+		selected: &HashSet<MigrationKey>,
+	) -> Option<MigrationKey> {
+		let mut stack = vec![start.clone()];
+		let mut visited = HashSet::new();
+		let mut reachable_selected = Vec::new();
+
+		while let Some(current) = stack.pop() {
+			if !visited.insert(current.clone()) {
+				continue;
+			}
+			if selected.contains(&current) {
+				reachable_selected.push(current.clone());
+			}
+			let mut dependencies = self
+				.raw_graph
+				.get_dependencies(&current)
+				.unwrap_or_default()
+				.to_vec();
+			dependencies.sort_by(Self::compare_keys);
+			stack.extend(dependencies.into_iter().rev());
+		}
+
+		reachable_selected.sort_by(Self::compare_keys);
+		reachable_selected.into_iter().next()
+	}
+
+	fn depends_on(&self, start: &MigrationKey, target: &MigrationKey) -> bool {
+		let mut stack = vec![start.clone()];
+		let mut visited = HashSet::new();
+		while let Some(current) = stack.pop() {
+			if !visited.insert(current.clone()) {
+				continue;
+			}
+			if &current == target {
+				return true;
+			}
+			stack.extend(
+				self.raw_graph
+					.get_dependencies(&current)
+					.unwrap_or_default()
+					.iter()
+					.cloned(),
+			);
+		}
+		false
 	}
 
 	fn is_descendant_of(&self, start: &MigrationKey, ancestor: &MigrationKey) -> bool {
@@ -573,7 +798,7 @@ impl MigrationCatalog {
 			if &current == start {
 				return true;
 			}
-			stack.extend(self.graph.get_dependents(&current).into_iter().cloned());
+			stack.extend(self.raw_graph.get_dependents(&current).into_iter().cloned());
 		}
 		false
 	}
@@ -623,6 +848,7 @@ impl MigrationCatalog {
 				continue;
 			}
 			for operation in &migration.operations {
+				Self::validate_historical_replay_losslessness(operation)?;
 				operation.validate_for_partial_state(&state)?;
 				operation.state_forwards(&migration.app_label, &mut state);
 			}
@@ -630,77 +856,59 @@ impl MigrationCatalog {
 		Ok(state)
 	}
 
-	fn external_ancestry_paths(
-		&self,
-		origin: &MigrationKey,
-		app: &str,
-	) -> Result<Vec<Vec<MigrationKey>>> {
-		let mut paths = Vec::new();
-		let mut dependencies = self
-			.graph
-			.get_dependencies(origin)
-			.unwrap_or_default()
-			.iter()
-			.filter(|dependency| dependency.app_label != app)
-			.cloned()
-			.collect::<Vec<_>>();
-		dependencies.sort_by(Self::compare_keys);
-
-		for dependency in dependencies {
-			let mut stack = vec![(dependency.clone(), vec![dependency])];
-			let mut visited = HashSet::new();
-			while let Some((current, path)) = stack.pop() {
-				if !visited.insert(current.clone()) {
-					continue;
+	fn validate_historical_replay_losslessness(operation: &super::Operation) -> Result<()> {
+		match operation {
+			super::Operation::AlterTableComment { table, .. } => {
+				return Err(MigrationError::InvalidMigration(format!(
+					"historical state cannot preserve table comments for `{table}`"
+				)));
+			}
+			super::Operation::CreateTable {
+				name,
+				columns,
+				constraints,
+				..
+			} => {
+				let declared: Vec<&str> =
+					columns.iter().map(|column| column.name.as_str()).collect();
+				let mut sorted = declared.clone();
+				sorted.sort_unstable();
+				if declared != sorted {
+					return Err(MigrationError::InvalidMigration(format!(
+						"historical state cannot preserve column order for table `{name}`"
+					)));
 				}
-				if current.app_label == app {
-					paths.push(path);
-					continue;
-				}
-				let mut parents = self
-					.graph
-					.get_dependencies(&current)
-					.unwrap_or_default()
-					.to_vec();
-				parents.sort_by(Self::compare_keys);
-				for parent in parents.into_iter().rev() {
-					let mut next_path = path.clone();
-					next_path.push(parent.clone());
-					stack.push((parent, next_path));
+				if constraints.iter().any(|constraint| {
+					matches!(
+						constraint,
+						super::Constraint::ForeignKey {
+							deferrable: Some(_),
+							..
+						} | super::Constraint::OneToOne {
+							deferrable: Some(_),
+							..
+						} | super::Constraint::Exclude { .. }
+					)
+				}) {
+					return Err(MigrationError::InvalidMigration(format!(
+						"historical state cannot preserve specialized constraints for table `{name}`"
+					)));
 				}
 			}
+			super::Operation::CreateInheritedTable { name, columns, .. } => {
+				let declared: Vec<&str> =
+					columns.iter().map(|column| column.name.as_str()).collect();
+				let mut sorted = declared.clone();
+				sorted.sort_unstable();
+				if declared != sorted {
+					return Err(MigrationError::InvalidMigration(format!(
+						"historical state cannot preserve column order for inherited table `{name}`"
+					)));
+				}
+			}
+			_ => {}
 		}
-
-		Ok(paths)
-	}
-
-	fn first_reachable_selected_dependency(
-		&self,
-		start: &MigrationKey,
-		selected: &HashSet<MigrationKey>,
-	) -> Option<MigrationKey> {
-		let mut stack = vec![start.clone()];
-		let mut visited = HashSet::new();
-		let mut reachable_selected = Vec::new();
-
-		while let Some(current) = stack.pop() {
-			if !visited.insert(current.clone()) {
-				continue;
-			}
-			if selected.contains(&current) {
-				reachable_selected.push(current.clone());
-			}
-			let mut dependencies = self
-				.graph
-				.get_dependencies(&current)
-				.unwrap_or_default()
-				.to_vec();
-			dependencies.sort_by(Self::compare_keys);
-			stack.extend(dependencies.into_iter().rev());
-		}
-
-		reachable_selected.sort_by(Self::compare_keys);
-		reachable_selected.into_iter().next()
+		Ok(())
 	}
 
 	fn same_app_ancestors_before_start(
@@ -708,14 +916,19 @@ impl MigrationCatalog {
 		start: &MigrationKey,
 		app: &str,
 	) -> HashSet<MigrationKey> {
-		let mut stack = self
-			.graph
-			.get_dependencies(start)
-			.unwrap_or_default()
-			.iter()
-			.filter(|dependency| dependency.app_label == app)
-			.cloned()
-			.collect::<Vec<_>>();
+		let select_ancestry = |dependencies: &[MigrationKey]| {
+			let same_app = dependencies
+				.iter()
+				.filter(|dependency| dependency.app_label == app)
+				.cloned()
+				.collect::<Vec<_>>();
+			if same_app.is_empty() {
+				dependencies.to_vec()
+			} else {
+				same_app
+			}
+		};
+		let mut stack = select_ancestry(self.raw_graph.get_dependencies(start).unwrap_or_default());
 		stack.sort_by(Self::compare_keys);
 		stack.reverse();
 
@@ -728,11 +941,11 @@ impl MigrationCatalog {
 			if current.app_label == app {
 				same_app_ancestors.insert(current.clone());
 			}
-			let mut dependencies = self
-				.graph
-				.get_dependencies(&current)
-				.unwrap_or_default()
-				.to_vec();
+			let mut dependencies = select_ancestry(
+				self.raw_graph
+					.get_dependencies(&current)
+					.unwrap_or_default(),
+			);
 			dependencies.sort_by(Self::compare_keys);
 			stack.extend(dependencies.into_iter().rev());
 		}
@@ -743,31 +956,142 @@ impl MigrationCatalog {
 #[cfg(test)]
 mod tests {
 	use super::*;
-	use crate::migrations::dependency::{DependencyCondition, OptionalDependency};
 
 	#[test]
-	fn squash_range_collects_active_external_conditional_dependencies_from_graph() {
+	fn resolves_nested_replacement_dependencies_to_the_terminal_owner() {
+		let original = Migration::new("0001_initial", "app");
+		let mut older = Migration::new("0001_squashed_0002", "app");
+		older.replaces = vec![("app".to_string(), "0001_initial".to_string())];
+		let mut newer = Migration::new("0001_squashed_0003", "app");
+		newer.replaces = vec![
+			("app".to_string(), "0001_initial".to_string()),
+			("app".to_string(), "0001_squashed_0002".to_string()),
+		];
+		let mut dependent = Migration::new("0004_dependent", "app");
+		dependent.dependencies = vec![("app".to_string(), "0001_initial".to_string())];
+
+		let context = DependencyResolutionContext::new().with_apps(["app".to_string()]);
+		let catalog = MigrationCatalog::from_loaded_with_context(
+			vec![original, older, newer, dependent],
+			&context,
+		)
+		.expect("nested replacements should be valid");
+		let dependent_key = MigrationKey::new("app", "0004_dependent");
+		let dependencies = catalog
+			.graph
+			.get_dependencies(&dependent_key)
+			.expect("dependent migration must be present");
+
+		assert_eq!(
+			dependencies,
+			&[MigrationKey::new("app", "0001_squashed_0003")]
+		);
+	}
+
+	#[rstest::rstest]
+	fn rejects_divergent_nested_replacement_owners() {
 		// Arrange
-		let mut reports = Migration::new("0001_initial", "reports");
-		reports.optional_dependencies.push(OptionalDependency::new(
-			"extensions",
-			"0001_postgis",
-			DependencyCondition::FeatureEnabled("postgis".to_string()),
-		));
-		let extension = Migration::new("0001_postgis", "extensions");
-		let context = DependencyResolutionContext::new().with_feature("postgis");
-		let catalog =
-			MigrationCatalog::from_loaded_with_context(vec![reports, extension], &context).unwrap();
+		let original = Migration::new("0001_initial", "app");
+		let mut first_replacement = Migration::new("0001_squashed_0002_a", "app");
+		first_replacement.replaces = vec![("app".to_string(), "0001_initial".to_string())];
+		let mut first_terminal = Migration::new("0001_squashed_0003_a", "app");
+		first_terminal.replaces = vec![("app".to_string(), "0001_squashed_0002_a".to_string())];
+		let mut second_replacement = Migration::new("0001_squashed_0002_b", "app");
+		second_replacement.replaces = vec![("app".to_string(), "0001_initial".to_string())];
+		let mut second_terminal = Migration::new("0001_squashed_0003_b", "app");
+		second_terminal.replaces = vec![("app".to_string(), "0001_squashed_0002_b".to_string())];
+		let context = DependencyResolutionContext::new().with_apps(["app".to_string()]);
 
 		// Act
-		let range = catalog
-			.squash_range("reports", None, "0001_initial")
-			.unwrap();
+		let error = MigrationCatalog::from_loaded_with_context(
+			vec![
+				original,
+				first_replacement,
+				first_terminal,
+				second_replacement,
+				second_terminal,
+			],
+			&context,
+		)
+		.expect_err("divergent replacement branches must be rejected");
 
 		// Assert
+		assert!(matches!(
+			error,
+			MigrationError::InvalidMigration(message)
+				if message == "Replacement app.0001_initial has multiple terminal owners"
+		));
+	}
+
+	#[rstest::rstest]
+	fn rejects_self_replacing_migrations() {
+		let mut migration = Migration::new("0001_initial", "app");
+		migration.replaces = vec![("app".to_string(), "0001_initial".to_string())];
+		let context = DependencyResolutionContext::new().with_apps(["app".to_string()]);
+
+		let error = MigrationCatalog::from_loaded_with_context(vec![migration], &context)
+			.expect_err("self replacement must be rejected");
+
+		assert!(matches!(
+			error,
+			MigrationError::InvalidMigration(message)
+				if message == "Migration app.0001_initial cannot replace itself"
+		));
+	}
+
+	#[rstest::rstest]
+	fn historical_replay_rejects_lossy_table_metadata() {
+		let comment = super::super::Operation::AlterTableComment {
+			table: "posts".to_string(),
+			comment: Some("Published posts".to_string()),
+		};
+		let unordered = super::super::Operation::CreateTable {
+			name: "posts".to_string(),
+			columns: vec![
+				super::super::ColumnDefinition::new("title", super::super::FieldType::Text),
+				super::super::ColumnDefinition::new("id", super::super::FieldType::Integer),
+			],
+			constraints: Vec::new(),
+			without_rowid: None,
+			interleave_in_parent: None,
+			partition: None,
+		};
+		let specialized = super::super::Operation::CreateTable {
+			name: "reservations".to_string(),
+			columns: vec![super::super::ColumnDefinition::new(
+				"room",
+				super::super::FieldType::Integer,
+			)],
+			constraints: vec![super::super::Constraint::Exclude {
+				name: "exclude_room".to_string(),
+				elements: vec![("room".to_string(), "=".to_string())],
+				using: Some("gist".to_string()),
+				where_clause: None,
+			}],
+			without_rowid: None,
+			interleave_in_parent: None,
+			partition: None,
+		};
+
+		let comment_error = MigrationCatalog::validate_historical_replay_losslessness(&comment)
+			.expect_err("table comments are not represented in ProjectState");
+		let order_error = MigrationCatalog::validate_historical_replay_losslessness(&unordered)
+			.expect_err("column order is not represented in ProjectState");
+		let constraint_error =
+			MigrationCatalog::validate_historical_replay_losslessness(&specialized)
+				.expect_err("specialized constraints are not represented losslessly");
+
 		assert_eq!(
-			range.external_dependencies,
-			[("extensions".to_string(), "0001_postgis".to_string())]
+			comment_error.to_string(),
+			"Invalid migration: historical state cannot preserve table comments for `posts`"
+		);
+		assert_eq!(
+			order_error.to_string(),
+			"Invalid migration: historical state cannot preserve column order for table `posts`"
+		);
+		assert_eq!(
+			constraint_error.to_string(),
+			"Invalid migration: historical state cannot preserve specialized constraints for table `reservations`"
 		);
 	}
 }

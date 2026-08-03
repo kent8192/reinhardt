@@ -119,11 +119,30 @@ fn quote_uses_backslash_escapes(dialect: SqlDialect, delimiter: char, prefix: &s
 }
 
 fn trailing_line_comment_start(sql: &str, dialect: SqlDialect) -> Option<usize> {
-	let line_start = sql.rfind('\n').map_or(0, |index| index + 1);
-	let line = &sql[line_start..];
 	let mut quote = None;
-	let mut chars = line.char_indices().peekable();
+	let mut block_comment_depth = 0usize;
+	let mut line_comment_start = None;
+	let mut chars = sql.char_indices().peekable();
 	while let Some((index, character)) = chars.next() {
+		if line_comment_start.is_some() {
+			if character == '\n' {
+				line_comment_start = None;
+			}
+			continue;
+		}
+		if block_comment_depth > 0 {
+			if matches!(dialect, SqlDialect::Postgres | SqlDialect::Cockroachdb)
+				&& character == '/'
+				&& chars.peek().is_some_and(|(_, next)| *next == '*')
+			{
+				chars.next();
+				block_comment_depth += 1;
+			} else if character == '*' && chars.peek().is_some_and(|(_, next)| *next == '/') {
+				chars.next();
+				block_comment_depth -= 1;
+			}
+			continue;
+		}
 		if let Some((delimiter, backslash_escapes)) = quote {
 			if backslash_escapes && character == '\\' && chars.peek().is_some() {
 				chars.next();
@@ -142,17 +161,30 @@ fn trailing_line_comment_start(sql: &str, dialect: SqlDialect) -> Option<usize> 
 			'\'' | '"' | '`' => {
 				quote = Some((
 					character,
-					quote_uses_backslash_escapes(dialect, character, &line[..index]),
+					quote_uses_backslash_escapes(dialect, character, &sql[..index]),
 				));
 			}
-			'-' if chars.peek().is_some_and(|(_, next)| *next == '-') => {
-				return Some(line_start + index);
+			'/' if chars.peek().is_some_and(|(_, next)| *next == '*') => {
+				chars.next();
+				block_comment_depth = 1;
 			}
-			'#' if matches!(dialect, SqlDialect::Mysql) => return Some(line_start + index),
+			'-' if chars.peek().is_some_and(|(_, next)| *next == '-') => {
+				let mut lookahead = chars.clone();
+				lookahead.next();
+				let mysql_comment = !matches!(dialect, SqlDialect::Mysql)
+					|| lookahead
+						.next()
+						.is_none_or(|(_, next)| next.is_ascii_whitespace() || next.is_control());
+				if mysql_comment {
+					chars.next();
+					line_comment_start = Some(index);
+				}
+			}
+			'#' if matches!(dialect, SqlDialect::Mysql) => line_comment_start = Some(index),
 			_ => {}
 		}
 	}
-	None
+	line_comment_start
 }
 
 fn migration_sql_dialect(connection: &DatabaseConnection) -> SqlDialect {
@@ -186,7 +218,7 @@ fn split_sql_statements_for_dialect(sql: &str, dialect: SqlDialect) -> Vec<Strin
 		DoubleQuote { backslash_escapes: bool },
 		BacktickQuote,
 		LineComment,
-		BlockComment,
+		BlockComment { depth: usize },
 		DollarQuote(String),
 	}
 
@@ -207,16 +239,24 @@ fn split_sql_statements_for_dialect(sql: &str, dialect: SqlDialect) -> Vec<Strin
 					current.push(ch);
 					state = State::BacktickQuote;
 				} else if ch == '-' && chars.peek() == Some(&'-') {
+					let mut lookahead = chars.clone();
+					lookahead.next();
+					let mysql_comment = !matches!(dialect, SqlDialect::Mysql)
+						|| lookahead
+							.next()
+							.is_none_or(|next| next.is_ascii_whitespace() || next.is_control());
 					current.push(ch);
-					current.push(chars.next().expect("peeked SQL comment marker"));
-					state = State::LineComment;
+					if mysql_comment {
+						current.push(chars.next().expect("peeked SQL comment marker"));
+						state = State::LineComment;
+					}
 				} else if ch == '#' && matches!(dialect, SqlDialect::Mysql) {
 					current.push(ch);
 					state = State::LineComment;
 				} else if ch == '/' && chars.peek() == Some(&'*') {
 					current.push(ch);
 					current.push(chars.next().expect("peeked SQL comment marker"));
-					state = State::BlockComment;
+					state = State::BlockComment { depth: 1 };
 				} else if ch == '$' {
 					let mut tag = String::from("$");
 					current.push(ch);
@@ -234,6 +274,18 @@ fn split_sql_statements_for_dialect(sql: &str, dialect: SqlDialect) -> Vec<Strin
 						}
 					}
 				} else if ch == ';' {
+					let sqlite_trigger = matches!(dialect, SqlDialect::Sqlite) && {
+						let normalized = current.to_ascii_uppercase();
+						normalized.trim_start().starts_with("CREATE ")
+							&& normalized
+								.split_whitespace()
+								.any(|token| token == "TRIGGER")
+							&& normalized.split_whitespace().any(|token| token == "BEGIN")
+					};
+					if sqlite_trigger && !current.trim_end().to_ascii_uppercase().ends_with("END") {
+						current.push(ch);
+						continue;
+					}
 					let trimmed = current.trim();
 					if !trimmed.is_empty() {
 						statements.push(trimmed.to_string());
@@ -279,11 +331,24 @@ fn split_sql_statements_for_dialect(sql: &str, dialect: SqlDialect) -> Vec<Strin
 					state = State::Normal;
 				}
 			}
-			State::BlockComment => {
+			State::BlockComment { mut depth } => {
 				current.push(ch);
-				if ch == '*' && chars.peek() == Some(&'/') {
+				if matches!(dialect, SqlDialect::Postgres | SqlDialect::Cockroachdb)
+					&& ch == '/' && chars.peek() == Some(&'*')
+				{
+					current.push(chars.next().expect("peeked nested block comment marker"));
+					depth += 1;
+					state = State::BlockComment { depth };
+				} else if ch == '*' && chars.peek() == Some(&'/') {
 					current.push(chars.next().expect("peeked block comment terminator"));
-					state = State::Normal;
+					depth -= 1;
+					state = if depth == 0 {
+						State::Normal
+					} else {
+						State::BlockComment { depth }
+					};
+				} else {
+					state = State::BlockComment { depth };
 				}
 			}
 			State::DollarQuote(ref tag) => {
@@ -2068,6 +2133,61 @@ mod tests {
 		assert_eq!(
 			trailing_line_comment_start(sql, SqlDialect::Postgres),
 			sql.find("--")
+		);
+	}
+
+	#[rstest]
+	fn mysql_dash_comment_requires_following_whitespace() {
+		let sql = "SELECT 5--2";
+
+		assert_eq!(trailing_line_comment_start(sql, SqlDialect::Mysql), None);
+		assert_eq!(
+			split_sql_statements_for_dialect("SELECT 5--2; SELECT 3;", SqlDialect::Mysql),
+			vec!["SELECT 5--2".to_string(), "SELECT 3".to_string()]
+		);
+	}
+
+	#[rstest]
+	fn trailing_comment_detection_ignores_markers_inside_block_comments() {
+		let sql = "SELECT 1 /* -- note */";
+
+		assert_eq!(trailing_line_comment_start(sql, SqlDialect::Postgres), None);
+		assert_eq!(
+			render_sql_statement(sql, SqlDialect::Postgres),
+			"SELECT 1 /* -- note */;\n"
+		);
+	}
+
+	#[rstest]
+	fn postgres_splitter_tracks_nested_block_comments() {
+		let statements = split_sql_statements_for_dialect(
+			"SELECT 1 /* outer /* inner */ still outer; */; SELECT 2;",
+			SqlDialect::Postgres,
+		);
+
+		assert_eq!(
+			statements,
+			vec![
+				"SELECT 1 /* outer /* inner */ still outer; */".to_string(),
+				"SELECT 2".to_string(),
+			]
+		);
+	}
+
+	#[rstest]
+	fn sqlite_splitter_keeps_trigger_bodies_together() {
+		let statements = split_sql_statements_for_dialect(
+			"CREATE TRIGGER audit AFTER INSERT ON users BEGIN INSERT INTO log VALUES (NEW.id); END; SELECT 2;",
+			SqlDialect::Sqlite,
+		);
+
+		assert_eq!(
+			statements,
+			vec![
+				"CREATE TRIGGER audit AFTER INSERT ON users BEGIN INSERT INTO log VALUES (NEW.id); END"
+					.to_string(),
+				"SELECT 2".to_string(),
+			]
 		);
 	}
 

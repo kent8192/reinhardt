@@ -37,7 +37,9 @@
 //! or its `--noinput` alias for automation, `--no-optimize` to preserve the
 //! exact operation sequence, and `--no-header` to omit the generated-file
 //! header. A descriptive `--squashed-name release_window` becomes a name such
-//! as `0001_release_window`.
+//! as `0001_release_window`. In a Cargo workspace, pass
+//! `--migrations-dir path/to/member/migrations` to select the target member's
+//! migration root explicitly.
 //!
 //! Optimization never crosses an operation barrier. Data operations, renames,
 //! constraints, indexes, bulk operations, custom operations, and any operation
@@ -192,7 +194,7 @@
 //! defaults intentionally omit it. Projects opting in provide a
 //! [`ShellConfig`], call [`shell_runtime_hook`] from the outer native `main`
 //! before constructing Tokio, and dispatch through
-//! [`execute_from_command_line_with_settings_and_shell`].
+//! [`execute_from_command_line_with_migration_settings_and_shell`].
 //!
 //! ```rust,ignore
 //! #[cfg(not(target_arch = "wasm32"))]
@@ -384,6 +386,8 @@ pub use builtin::{CheckCommand, CheckDiCommand, MigrateCommand, RunServerCommand
 pub use cli::start_server;
 pub use cli::{
 	Cli, Commands, auto_register_router, execute_from_command_line,
+	execute_from_command_line_with_migration_settings,
+	execute_from_command_line_with_migration_settings_and_shell,
 	execute_from_command_line_with_registry, execute_from_command_line_with_registry_and_settings,
 	execute_from_command_line_with_registry_and_settings_and_shell,
 	execute_from_command_line_with_settings, execute_from_command_line_with_settings_and_shell,
@@ -424,7 +428,7 @@ pub use sqlmigrate::{SqlMigrateCommand, render_migration_sql};
 #[cfg(feature = "migrations")]
 pub use squashmigrations::{
 	ConfirmationReader, SquashMigrationsOptions, SquashMigrationsSummary, StdinConfirmationReader,
-	execute_squashmigrations_with_io, execute_squashmigrations_with_io_and_context,
+	execute_squashmigrations_with_context_and_io, execute_squashmigrations_with_io,
 };
 pub use start_commands::{StartAppCommand, StartProjectCommand};
 pub use static_asset_settings::StaticAssetSettings;

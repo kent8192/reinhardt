@@ -39,6 +39,7 @@ fn showmigrations_parses_modes(
 		plan,
 		database,
 		database_url,
+		migrations_dir,
 	} = parsed.command
 	else {
 		panic!("expected showmigrations command");
@@ -48,6 +49,7 @@ fn showmigrations_parses_modes(
 	assert_eq!(plan, expected_plan);
 	assert_eq!(database, "default");
 	assert_eq!(database_url, None);
+	assert_eq!(migrations_dir, None);
 }
 
 #[cfg(feature = "migrations")]
@@ -71,6 +73,7 @@ fn showmigrations_parses_apps_and_database_selection() {
 		plan,
 		database,
 		database_url,
+		migrations_dir,
 	} = parsed.command
 	else {
 		panic!("expected showmigrations command");
@@ -80,6 +83,7 @@ fn showmigrations_parses_apps_and_database_selection() {
 	assert!(!plan);
 	assert_eq!(database, "replica");
 	assert_eq!(database_url.as_deref(), Some("sqlite::memory:"));
+	assert_eq!(migrations_dir, None);
 }
 
 #[cfg(feature = "migrations")]
@@ -113,6 +117,7 @@ fn sqlmigrate_parses_complete_form() {
 		backwards,
 		database,
 		database_url,
+		migrations_dir,
 	} = parsed.command
 	else {
 		panic!("expected sqlmigrate command");
@@ -122,6 +127,7 @@ fn sqlmigrate_parses_complete_form() {
 	assert!(backwards);
 	assert_eq!(database, "replica");
 	assert_eq!(database_url.as_deref(), Some("sqlite::memory:"));
+	assert_eq!(migrations_dir, None);
 }
 
 #[cfg(feature = "migrations")]
@@ -198,6 +204,26 @@ fn squashmigrations_parses_django_compatible_forms_and_options(
 	assert_eq!(no_header, expected_no_header);
 	assert_eq!(squashed_name.as_deref(), expected_name);
 	assert_eq!(migrations_dir, None);
+}
+
+#[rstest]
+fn squashmigrations_accepts_an_explicit_migrations_root() {
+	// Act
+	let parsed = Cli::try_parse_from([
+		"manage",
+		"squashmigrations",
+		"polls",
+		"0002",
+		"--migrations-dir",
+		"members/polls/migrations",
+	])
+	.unwrap();
+
+	// Assert
+	let Commands::Squashmigrations { migrations_dir, .. } = parsed.command else {
+		panic!("expected squashmigrations command");
+	};
+	assert_eq!(migrations_dir, Some("members/polls/migrations".into()));
 }
 
 #[cfg(feature = "migrations")]

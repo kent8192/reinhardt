@@ -11,7 +11,7 @@ use std::sync::{Arc, Mutex};
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 
-use reinhardt_core::exception::{DatabaseError, DatabaseErrorKind};
+use reinhardt_core::exception::{DatabaseError, DatabaseErrorKind, Error};
 use reinhardt_db::associations::markers::ManyToManyConfig;
 use reinhardt_db::associations::{ManyToManyField, ManyToManyManager};
 use reinhardt_db::orm::aggregation::Aggregate;
@@ -443,6 +443,48 @@ struct MarkerTarget;
 impl std::fmt::Display for MarkerTarget {
 	fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
 		formatter.write_str("marker-target")
+	}
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+struct MetadataFreeArticle {
+	#[serde(rename(serialize = "id", deserialize = "article_id"))]
+	id: Option<i64>,
+	title: String,
+}
+
+#[derive(Clone)]
+struct MetadataFreeArticleFields;
+
+impl FieldSelector for MetadataFreeArticleFields {
+	fn with_alias(self, _alias: &str) -> Self {
+		self
+	}
+}
+
+impl Model for MetadataFreeArticle {
+	type PrimaryKey = i64;
+	type Fields = MetadataFreeArticleFields;
+	type Objects = Manager<Self>;
+
+	fn table_name() -> &'static str {
+		"metadata_free_articles"
+	}
+
+	fn new_fields() -> Self::Fields {
+		MetadataFreeArticleFields
+	}
+
+	fn primary_key(&self) -> Option<Self::PrimaryKey> {
+		self.id
+	}
+
+	fn set_primary_key(&mut self, value: Self::PrimaryKey) {
+		self.id = Some(value);
+	}
+
+	fn primary_key_column() -> &'static str {
+		"article_id"
 	}
 }
 

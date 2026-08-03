@@ -6559,6 +6559,7 @@ fn generate_registration_code(input: RegistrationCodeInput<'_>) -> Result<TokenS
 					name: #name.to_string(),
 					fields: vec![#column.to_string()],
 					unique: false,
+					where_clause: None,
 					index_type: Some(#index_type),
 					operator_class: Some(#opclass.to_string()),
 					expressions: None,

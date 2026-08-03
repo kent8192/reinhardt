@@ -316,6 +316,7 @@ db-pgvector = [
   "db-postgres",
   "reinhardt-db/pgvector",
   "reinhardt-admin?/pgvector",
+  "reinhardt-commands?/pgvector",
   "reinhardt-core/pgvector",
   "reinhardt-macros/pgvector",
   "reinhardt-test?/pgvector",

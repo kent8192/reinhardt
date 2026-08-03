@@ -61,13 +61,13 @@ fn migration(name: &str, operations: Vec<Operation>) -> Migration {
 }
 
 fn range(migrations: Vec<Migration>) -> SquashRange {
-	SquashRange {
+	SquashRange::new(
 		migrations,
-		external_dependencies: vec![
+		vec![
 			("auth".to_string(), "0001_initial".to_string()),
 			("audit".to_string(), "0002_events".to_string()),
 		],
-	}
+	)
 }
 
 #[test]
@@ -319,7 +319,7 @@ fn squash_range_preserves_order_metadata_replacements_and_flags() {
 		"0004_backfill",
 		vec![barrier.clone(), last_operation.clone()],
 	);
-	second.atomic = false;
+	second.atomic = true;
 	second.state_only = true;
 	second.swappable_dependencies = vec![swappable.clone()];
 	second.optional_dependencies = vec![optional.clone()];
@@ -350,7 +350,7 @@ fn squash_range_preserves_order_metadata_replacements_and_flags() {
 			("accounts".to_string(), "0004_backfill".to_string()),
 		]
 	);
-	assert!(!result.migration.atomic);
+	assert!(result.migration.atomic);
 	assert_eq!(result.migration.initial, Some(true));
 	assert!(result.migration.state_only);
 	assert!(!result.migration.database_only);

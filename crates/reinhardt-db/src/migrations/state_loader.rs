@@ -295,8 +295,8 @@ pub async fn build_state_from_files<S: MigrationSource>(source: &S) -> Result<Pr
 		graph.add_migration_with_replaces(key, dependencies, replaces);
 	}
 
-	// 3. Get topologically sorted order
-	let sorted_keys = graph.topological_sort()?;
+	// 3. Select one valid replacement history before ordering migrations.
+	let sorted_keys = graph.resolve_execution_order_with_replaces()?;
 
 	// 4. Build ProjectState by replaying all migrations in order
 	let mut state = ProjectState::default();

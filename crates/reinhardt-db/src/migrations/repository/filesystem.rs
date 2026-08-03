@@ -49,8 +49,8 @@ fn directory_identity(directory: &Dir) -> std::io::Result<DirectoryIdentity> {
 	same_file::Handle::from_file(file).map(DirectoryIdentity)
 }
 
-fn path_directory_identity(path: &Path) -> std::io::Result<DirectoryIdentity> {
-	same_file::Handle::from_path(path).map(DirectoryIdentity)
+fn root_directory_identity(root: &Dir, _path: &Path) -> std::io::Result<DirectoryIdentity> {
+	directory_identity(root)
 }
 
 struct RootValidationHooks<B, V> {
@@ -219,7 +219,7 @@ impl FilesystemRepository {
 					label, component
 				)));
 			};
-			number.len() >= 4
+			!number.is_empty()
 				&& number.bytes().all(|byte| byte.is_ascii_digit())
 				&& !description.is_empty()
 				&& description
@@ -229,7 +229,7 @@ impl FilesystemRepository {
 			component
 				.as_bytes()
 				.first()
-				.is_some_and(u8::is_ascii_alphabetic)
+				.is_some_and(|byte| byte.is_ascii_alphabetic() || *byte == b'_')
 				&& component
 					.bytes()
 					.all(|byte| byte.is_ascii_alphanumeric() || byte == b'_')
@@ -327,6 +327,34 @@ impl FilesystemRepository {
 				OptionalDependency::new(#app_label, #migration_name, #condition)
 			}
 		});
+		let dependency_imports = match (
+			migration.swappable_dependencies.is_empty(),
+			migration.optional_dependencies.is_empty(),
+		) {
+			(true, true) => quote! {},
+			(false, true) => quote! {
+				use reinhardt::db::migrations::dependency::SwappableDependency;
+			},
+			(true, false) => quote! {
+				use reinhardt::db::migrations::dependency::{DependencyCondition, OptionalDependency};
+			},
+			(false, false) => quote! {
+				use reinhardt::db::migrations::dependency::{
+					DependencyCondition, OptionalDependency, SwappableDependency,
+				};
+			},
+		};
+		let bulk_load_imports = if migration
+			.operations
+			.iter()
+			.any(|operation| matches!(operation, crate::migrations::Operation::BulkLoad { .. }))
+		{
+			quote! {
+				use reinhardt::db::migrations::{BulkLoadFormat, BulkLoadOptions, BulkLoadSource};
+			}
+		} else {
+			quote! {}
+		};
 
 		let app_label = &migration.app_label;
 		let name = &migration.name;
@@ -348,9 +376,8 @@ impl FilesystemRepository {
 		// Generate full migration file
 		let file: syn::File = parse_quote! {
 			use reinhardt::db::migrations::prelude::*;
-			use reinhardt::db::migrations::dependency::{
-				DependencyCondition, OptionalDependency, SwappableDependency,
-			};
+			#dependency_imports
+			#bulk_load_imports
 			use reinhardt::db::migrations::FieldType;
 
 			pub(super) fn migration() -> Migration {
@@ -522,40 +549,7 @@ impl FilesystemRepository {
 				operation: format!("{context}.Constraint::Exclude"),
 			});
 		}
-		match operation {
-			Operation::CreateTable {
-				without_rowid,
-				interleave_in_parent,
-				partition,
-				..
-			} if without_rowid.is_some()
-				|| interleave_in_parent.is_some()
-				|| partition.is_some() =>
-			{
-				Err(MigrationError::UnsupportedMigrationRendering { operation: context })
-			}
-			Operation::AddColumn {
-				mysql_options: Some(_),
-				..
-			}
-			| Operation::AlterColumn {
-				mysql_options: Some(_),
-				..
-			}
-			| Operation::AlterTableComment { .. }
-			| Operation::AlterUniqueTogether { .. }
-			| Operation::AlterModelOptions { .. }
-			| Operation::CreateInheritedTable { .. }
-			| Operation::AddDiscriminatorColumn { .. }
-			| Operation::MoveModel { .. }
-			| Operation::CreateSchema { .. }
-			| Operation::DropSchema { .. }
-			| Operation::SetAutoIncrementValue { .. }
-			| Operation::CreateCompositePrimaryKey { .. } => {
-				Err(MigrationError::UnsupportedMigrationRendering { operation: context })
-			}
-			_ => Ok(()),
-		}
+		Ok(())
 	}
 
 	fn validate_renderable_column(
@@ -771,11 +765,13 @@ impl FilesystemRepository {
 		let formatted = Self::format_with_rustfmt(source)?;
 		std::fs::create_dir_all(&self.root_dir)?;
 		let root = Dir::open_ambient_dir(&self.root_dir, ambient_authority())?;
-		let root_identity = directory_identity(&root)?;
+		let root_identity = root_directory_identity(&root, &self.root_dir)?;
 		before_open()?;
 		self.validate_root_identity(&root_identity, || Ok(()))?;
 		root.create_dir_all(app_label)?;
 		let app_directory = root.open_dir(app_label)?;
+		let app_directory_path = self.root_dir.join(app_label);
+		let app_directory_identity = root_directory_identity(&app_directory, &app_directory_path)?;
 		let file_name = format!("{migration_name}.rs");
 		let mut options = OpenOptions::new();
 		options.write(true).create_new(true);
@@ -801,6 +797,20 @@ impl FilesystemRepository {
 				)))),
 			};
 		}
+		if let Err(identity_error) = self.validate_directory_identity(
+			&app_directory_path,
+			&app_directory_identity,
+			"Migration application directory",
+			|| Ok(()),
+		) {
+			return match incomplete.cleanup_now() {
+				Ok(()) => Err(identity_error),
+				Err(cleanup_error) => Err(MigrationError::IoError(std::io::Error::other(format!(
+					"{identity_error}; failed to remove incomplete file after application directory \
+					 identity validation: {cleanup_error}"
+				)))),
+			};
+		}
 		Ok(incomplete.complete())
 	}
 
@@ -808,47 +818,59 @@ impl FilesystemRepository {
 	where
 		V: FnOnce() -> std::io::Result<()>,
 	{
-		let before_open = std::fs::symlink_metadata(&self.root_dir).map_err(|error| {
-			MigrationError::PathTraversal(format!(
-				"Migration root directory identity is unavailable: {error}"
-			))
+		self.validate_directory_identity(
+			&self.root_dir,
+			expected,
+			"Migration root directory",
+			after_open,
+		)
+	}
+
+	fn validate_directory_identity<V>(
+		&self,
+		path: &Path,
+		expected: &DirectoryIdentity,
+		label: &str,
+		after_open: V,
+	) -> Result<()>
+	where
+		V: FnOnce() -> std::io::Result<()>,
+	{
+		let before_open = std::fs::symlink_metadata(path).map_err(|error| {
+			MigrationError::PathTraversal(format!("{label} identity is unavailable: {error}"))
 		})?;
 		if before_open.file_type().is_symlink() {
-			return Err(MigrationError::PathTraversal(
-				"Migration root directory identity changed to a symbolic link".to_string(),
-			));
+			return Err(MigrationError::PathTraversal(format!(
+				"{label} identity changed to a symbolic link"
+			)));
 		}
-		let ambient =
-			Dir::open_ambient_dir(&self.root_dir, ambient_authority()).map_err(|error| {
-				MigrationError::PathTraversal(format!(
-					"Migration root directory identity is unavailable: {error}"
-				))
-			})?;
-		let actual = directory_identity(&ambient).map_err(|error| {
-			MigrationError::PathTraversal(format!(
-				"Migration root directory identity is unavailable: {error}"
-			))
+		let ambient = Dir::open_ambient_dir(path, ambient_authority()).map_err(|error| {
+			MigrationError::PathTraversal(format!("{label} identity is unavailable: {error}"))
+		})?;
+		let actual = root_directory_identity(&ambient, path).map_err(|error| {
+			MigrationError::PathTraversal(format!("{label} identity is unavailable: {error}"))
 		})?;
 		after_open()?;
-		let after_open = std::fs::symlink_metadata(&self.root_dir).map_err(|error| {
-			MigrationError::PathTraversal(format!(
-				"Migration root directory identity is unavailable: {error}"
-			))
+		let after_open = std::fs::symlink_metadata(path).map_err(|error| {
+			MigrationError::PathTraversal(format!("{label} identity is unavailable: {error}"))
 		})?;
 		if after_open.file_type().is_symlink() || &actual != expected {
 			return Err(MigrationError::PathTraversal(format!(
-				"Migration root directory identity changed during source creation: expected \
+				"{label} identity changed during source creation: expected \
 				 {expected:?}, found {actual:?}"
 			)));
 		}
-		let after_open_identity = path_directory_identity(&self.root_dir).map_err(|error| {
-			MigrationError::PathTraversal(format!(
-				"Migration root directory identity is unavailable: {error}"
-			))
-		})?;
+		let after_open_directory =
+			Dir::open_ambient_dir(path, ambient_authority()).map_err(|error| {
+				MigrationError::PathTraversal(format!("{label} identity is unavailable: {error}"))
+			})?;
+		let after_open_identity =
+			root_directory_identity(&after_open_directory, path).map_err(|error| {
+				MigrationError::PathTraversal(format!("{label} identity is unavailable: {error}"))
+			})?;
 		if &after_open_identity != expected {
 			return Err(MigrationError::PathTraversal(format!(
-				"Migration root directory identity changed during source creation: expected \
+				"{label} identity changed during source creation: expected \
 				 {expected:?}, found {after_open_identity:?}"
 			)));
 		}
@@ -1068,7 +1090,10 @@ impl MigrationRepository for FilesystemRepository {
 mod tests {
 	use super::*;
 	use crate::migrations::fields::FieldType;
-	use crate::migrations::operations::{ColumnDefinition, Operation};
+	use crate::migrations::operations::{
+		ColumnDefinition, InterleaveSpec, Operation, PartitionOptions,
+	};
+	use crate::migrations::{FilesystemSource, MigrationSource};
 	use rstest::rstest;
 	use serial_test::serial;
 	use tempfile::TempDir;
@@ -1115,6 +1140,115 @@ mod tests {
 		// Assert
 		assert!(rendered.contains("Operation::RunRust"));
 		assert!(rendered.contains("seed_data()"));
+	}
+
+	#[test]
+	fn render_round_trips_supported_public_operations() {
+		let repository = FilesystemRepository::new(TempDir::new().unwrap().path());
+		let mut migration = Migration::new("0001_public_operations", "polls");
+		migration.operations = vec![
+			Operation::AlterTableComment {
+				table: "polls".to_string(),
+				comment: Some("poll questions".to_string()),
+			},
+			Operation::AlterUniqueTogether {
+				table: "polls".to_string(),
+				unique_together: vec![vec!["question".to_string(), "position".to_string()]],
+			},
+			Operation::AlterModelOptions {
+				table: "polls".to_string(),
+				options: std::collections::HashMap::from([(
+					"verbose_name".to_string(),
+					"poll".to_string(),
+				)]),
+			},
+			Operation::CreateInheritedTable {
+				name: "featured_polls".to_string(),
+				columns: vec![ColumnDefinition::new("id", FieldType::Integer)],
+				base_table: "polls".to_string(),
+				join_column: "poll_id".to_string(),
+			},
+			Operation::AddDiscriminatorColumn {
+				table: "polls".to_string(),
+				column_name: "kind".to_string(),
+				default_value: "poll".to_string(),
+			},
+			Operation::CreateSchema {
+				name: "analytics".to_string(),
+				if_not_exists: true,
+			},
+			Operation::DropSchema {
+				name: "archive".to_string(),
+				cascade: true,
+				if_exists: true,
+			},
+			Operation::BulkLoad {
+				table: "polls".to_string(),
+				source: crate::migrations::operations::BulkLoadSource::File(
+					"polls.csv".to_string(),
+				),
+				format: crate::migrations::operations::BulkLoadFormat::Csv,
+				options: crate::migrations::operations::BulkLoadOptions::new()
+					.with_delimiter(',')
+					.with_header(true)
+					.with_columns(vec!["id".to_string(), "question".to_string()]),
+			},
+		];
+
+		let rendered = repository
+			.render(
+				&migration,
+				MigrationRenderOptions {
+					include_header: false,
+				},
+			)
+			.expect("public operations should render and strict-round-trip");
+
+		assert!(rendered.contains("Operation::CreateInheritedTable"));
+		assert!(rendered.contains("Operation::DropSchema"));
+		assert!(rendered.contains("BulkLoadSource"));
+		assert!(rendered.contains("BulkLoadFormat"));
+		assert!(rendered.contains("BulkLoadOptions"));
+	}
+
+	#[rstest]
+	#[tokio::test]
+	#[serial(filesystem_repository)]
+	async fn render_round_trips_supported_create_table_backend_options() {
+		let temp_dir = TempDir::new().unwrap();
+		let repository = FilesystemRepository::new(temp_dir.path());
+		let mut migration = Migration::new("0001_backend_options", "polls");
+		migration.operations = vec![Operation::CreateTable {
+			name: "events".to_string(),
+			columns: vec![ColumnDefinition::new("id", FieldType::Integer)],
+			constraints: vec![],
+			without_rowid: Some(true),
+			interleave_in_parent: Some(InterleaveSpec {
+				parent_table: "accounts".to_string(),
+				parent_columns: vec!["id".to_string()],
+			}),
+			partition: Some(PartitionOptions::hash("id", 4)),
+		}];
+
+		let rendered = repository
+			.render(
+				&migration,
+				MigrationRenderOptions {
+					include_header: false,
+				},
+			)
+			.expect("backend-specific CreateTable options should render");
+		let app_dir = temp_dir.path().join("polls");
+		std::fs::create_dir_all(&app_dir).unwrap();
+		std::fs::write(app_dir.join("0001_backend_options.rs"), rendered).unwrap();
+
+		let loaded = FilesystemSource::new(temp_dir.path())
+			.all_migrations()
+			.await
+			.unwrap();
+
+		assert_eq!(loaded.len(), 1);
+		assert_eq!(loaded[0].operations, migration.operations);
 	}
 
 	#[rstest]
@@ -1169,6 +1303,44 @@ mod tests {
 		// Assert
 		assert_eq!(retrieved.app_label, "polls");
 		assert_eq!(retrieved.name, "0001_initial");
+	}
+
+	#[rstest]
+	#[tokio::test]
+	#[serial(filesystem_repository)]
+	async fn test_filesystem_repository_round_trips_supported_operations() {
+		// Arrange
+		let temp_dir = TempDir::new().unwrap();
+		let mut repo = FilesystemRepository::new(temp_dir.path());
+		let migration = Migration::new("0001_supported_operations", "_internal")
+			.add_operation(Operation::MoveModel {
+				model_name: "User".to_string(),
+				from_app: "accounts".to_string(),
+				to_app: "_internal".to_string(),
+				rename_table: true,
+				old_table_name: Some("accounts_user".to_string()),
+				new_table_name: Some("internal_user".to_string()),
+			})
+			.add_operation(Operation::SetAutoIncrementValue {
+				table: "internal_user".to_string(),
+				column: "id".to_string(),
+				value: -7,
+			})
+			.add_operation(Operation::CreateCompositePrimaryKey {
+				table: "membership".to_string(),
+				columns: vec!["user_id".to_string(), "group_id".to_string()],
+				constraint_name: Some("membership_pkey".to_string()),
+			});
+
+		// Act
+		repo.save(&migration).await.unwrap();
+		let retrieved = repo
+			.get("_internal", "0001_supported_operations")
+			.await
+			.unwrap();
+
+		// Assert
+		assert_eq!(retrieved.operations, migration.operations);
 	}
 
 	#[rstest]
@@ -1745,6 +1917,21 @@ mod tests {
 		assert!(error.to_string().contains("injected cleanup failure"));
 	}
 
+	#[test]
+	fn create_new_source_rejects_empty_migration_number_prefix() {
+		// Arrange
+		let temp_dir = TempDir::new().unwrap();
+		let repository = FilesystemRepository::new(temp_dir.path());
+
+		// Act
+		let error = repository
+			.create_new_source("polls", "_initial", "pub fn migration() {}")
+			.unwrap_err();
+
+		// Assert
+		assert!(matches!(error, MigrationError::PathTraversal(_)));
+	}
+
 	#[cfg(unix)]
 	#[test]
 	fn create_new_source_rejects_root_directory_swap_after_identity_open() {
@@ -1795,5 +1982,46 @@ mod tests {
 			 exists: {}",
 			anchored_file.exists()
 		);
+	}
+
+	#[cfg(unix)]
+	#[test]
+	fn create_new_source_rejects_application_directory_swap_after_open() {
+		let container = TempDir::new().unwrap();
+		let root = container.path().join("migrations");
+		let anchored_app = container.path().join("anchored-polls");
+		let replacement_app = container.path().join("replacement-polls");
+		std::fs::create_dir_all(root.join("polls")).unwrap();
+		std::fs::create_dir(&replacement_app).unwrap();
+		let repo = FilesystemRepository::new(&root);
+		let source = repo
+			.render(
+				&create_test_migration("polls", "0001_squashed"),
+				MigrationRenderOptions {
+					include_header: false,
+				},
+			)
+			.unwrap();
+
+		let result = repo.create_new_source_with_hooks(
+			"polls",
+			"0001_squashed",
+			&source,
+			RootValidationHooks {
+				before_open: || Ok(()),
+				after_identity_open: || Ok(()),
+			},
+			|file, formatted| {
+				file.write_all(formatted.as_bytes())?;
+				file.sync_all()?;
+				std::fs::rename(root.join("polls"), &anchored_app)?;
+				std::fs::rename(&replacement_app, root.join("polls"))
+			},
+			|directory, name| directory.remove_file(name),
+		);
+
+		assert!(matches!(result, Err(MigrationError::PathTraversal(_))));
+		assert!(!root.join("polls/0001_squashed.rs").exists());
+		assert!(!anchored_app.join("0001_squashed.rs").exists());
 	}
 }

@@ -552,8 +552,9 @@ pub mod prelude {
 	pub use super::fields::prelude::*;
 	pub use super::{
 		AlterTableOptions, ColumnDefinition, ColumnType, Constraint, DeferrableOption,
-		ForeignKeyAction, GeneratedColumnDefinition, GeneratedStorage, IndexType, Migration,
-		MySqlAlgorithm, MySqlLock, Operation, SchemaBinOper, SchemaExpr, SchemaFunc,
+		ForeignKeyAction, GeneratedColumnDefinition, GeneratedStorage, IndexType, InterleaveSpec,
+		Migration, MySqlAlgorithm, MySqlLock, Operation, PartitionDef, PartitionOptions,
+		PartitionType, PartitionValues, SchemaBinOper, SchemaExpr, SchemaFunc,
 	};
 	pub use crate::field_domain::{FieldDomain, ModelEnumRepr, ModelEnumValue};
 }

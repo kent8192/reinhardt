@@ -356,10 +356,8 @@ cargo run --bin manage -- inspectdb [TABLE ...]
 ```
 
 Table arguments are exact names rather than patterns. Without table arguments,
-the command inspects every table; `--include-partitions` includes PostgreSQL
-partitions. `--include-views` is recognized but currently returns an error:
-generated ORM models require a primary key, which ordinary database views do
-not expose.
+the command inspects every table; pass `--include-views` to include views or
+`--include-partitions` for PostgreSQL partitions.
 
 `--database` selects a configured database alias and defaults to `default`. It
 never accepts a connection URL. Use `--database-url` for an explicit one-off

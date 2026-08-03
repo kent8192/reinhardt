@@ -1,7 +1,6 @@
 //! Read-only migration state display.
 
 use crate::database_selector::{DatabaseSelector, resolve_database};
-use crate::inspectdb::ensure_sqlite_database_exists;
 use crate::{
 	BaseCommand, CommandArgument, CommandContext, CommandError, CommandOption, CommandResult,
 };
@@ -250,10 +249,6 @@ impl BaseCommand for ShowMigrationsCommand {
 		);
 		let resolved = resolve_database(&selector, ctx.settings.as_deref())
 			.map_err(|error| with_command_context(error, &command_context))?;
-		if resolved.backend() == reinhardt_db::backends::DatabaseType::Sqlite {
-			ensure_sqlite_database_exists(resolved.url())
-				.map_err(|error| with_command_context(error, &command_context))?;
-		}
 		let source = FilesystemSource::new(migration_source_path(ctx));
 		let dependency_context = migration_dependency_context(ctx);
 		let catalog = MigrationCatalog::load_strict_with_context(&source, &dependency_context)

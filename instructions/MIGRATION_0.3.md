@@ -95,15 +95,17 @@ async fn profile(CurrentUser(user): CurrentUser<MyUser>) -> Response {
 }
 ```
 
-Cookie-backed session apps should register `SessionMiddleware` once in
-`urls.rs`. In 0.3, `SessionMiddleware` derives `AuthState` from
-`USER_ID_SESSION_KEY` when the active session is authenticated and preserves an
-existing `AuthState` inserted by earlier middleware. Standard
-`SessionData` + `SessionAuthExt` + `CurrentUser<U>` setups do not need an
-additional session-auth middleware layer.
+Cookie-backed session apps should register `SessionMiddleware` in `urls.rs` for
+session storage and DI registration. `USER_ID_SESSION_KEY` is an identity
+reference, not authentication proof: account status and privileges must be
+validated by an authentication middleware before it populates `AuthState`.
+This prevents deactivated accounts with unexpired sessions from being
+authorized.
 
-`CookieSessionAuthMiddleware` remains available for projects that plug a
-custom `AsyncSessionBackend` directly.
+`CookieSessionAuthMiddleware` remains available for projects that plug a custom
+`AsyncSessionBackend` directly; configure it or another authentication
+middleware to validate the current account before using `CurrentUser<U>` or
+authorization guards.
 
 ## Keyed dependency providers
 

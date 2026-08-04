@@ -966,6 +966,8 @@ fn validate_column_type(
 	column_type: &ColumnType,
 	backend: &'static str,
 ) -> Result<(), QueryBuildError> {
+	#[cfg(not(feature = "pgvector"))]
+	let _ = backend;
 	match column_type {
 		#[cfg(feature = "pgvector")]
 		ColumnType::Vector(_) if backend != "PostgreSQL" => {

@@ -210,7 +210,8 @@ async fn assert_collected_sql_matches_executor(
 	)
 	.await
 	.expect("representative migration should be collectable");
-	let collected = plan.render(dialect(&connection));
+	let sql_dialect = dialect(&connection);
+	let collected = plan.render(sql_dialect);
 	let executable = plan
 		.statements
 		.iter()
@@ -229,11 +230,18 @@ async fn assert_collected_sql_matches_executor(
 		})
 		.map(ToString::to_string)
 		.collect::<Vec<_>>();
-	let expected = vec![
-		expected_create_table.to_string(),
-		"ALTER TABLE visibility_items ADD COLUMN title TEXT".to_string(),
-		"DROP TABLE visibility_archive".to_string(),
-	];
+	let expected = match sql_dialect {
+		SqlDialect::Mysql => vec![
+			expected_create_table.to_string(),
+			"ALTER TABLE `visibility_items` ADD COLUMN `title` TEXT".to_string(),
+			"DROP TABLE `visibility_archive`".to_string(),
+		],
+		_ => vec![
+			expected_create_table.to_string(),
+			"ALTER TABLE visibility_items ADD COLUMN title TEXT".to_string(),
+			"DROP TABLE visibility_archive".to_string(),
+		],
+	};
 
 	assert_eq!(executable, expected);
 	assert_eq!(rendered, executable);
@@ -445,12 +453,14 @@ async fn sqlite_recreation_is_collected_and_consumed_by_execution() {
 async fn irreversible_rollback_produces_no_partial_sql_or_history_write() {
 	let project = TempDir::new().expect("visibility fixture directory should be created");
 	let repository = FilesystemRepository::new(project.path().join("migrations"));
-	let migration = Migration::new("0001_irreversible", "audit").add_operation(Operation::RunSQL {
-		sql: "SELECT 1".to_string(),
-		reverse_sql: None,
-	});
+	let migration =
+		Migration::new("0001_irreversible", "audit").add_operation(Operation::RunRust {
+			code: "noop".to_string(),
+			reverse_code: None,
+		});
 	write_migration(&repository, &migration);
 	let database = project.path().join("visibility.sqlite3");
+	std::fs::write(&database, b"").expect("SQLite visibility fixture should be created");
 	let url = format!("sqlite:///{}", database.display());
 	let writer = Arc::new(RecordingWriter::default());
 	let command = SqlMigrateCommand::with_writer(writer.clone());

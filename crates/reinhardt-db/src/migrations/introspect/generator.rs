@@ -421,21 +421,28 @@ impl SchemaCodeGenerator {
 		);
 		let field_ident = format_ident!("{}", field_name);
 
-		let relationship = self
-			.config
-			.generation
-			.detect_relationships
-			.then(|| {
-				table.foreign_keys.iter().find(|foreign_key| {
-					let Some(target) = schema.tables.get(&foreign_key.referenced_table) else {
-						return false;
-					};
-					foreign_key.columns.as_slice() == [column.name.as_str()]
-						&& target.primary_key.len() == 1
-						&& foreign_key.referenced_columns == target.primary_key
+		let relationship =
+			self.config
+				.generation
+				.detect_relationships
+				.then(|| {
+					table.foreign_keys.iter().find(|foreign_key| {
+						let Some(target) = schema.tables.get(&foreign_key.referenced_table) else {
+							return false;
+						};
+						let targets_unique_column =
+							target.unique_constraints.iter().any(|constraint| {
+								constraint.columns == foreign_key.referenced_columns
+							}) || target.indexes.values().any(|index| {
+								index.unique && index.columns == foreign_key.referenced_columns
+							});
+						foreign_key.columns.as_slice() == [column.name.as_str()]
+							&& foreign_key.referenced_columns.len() == 1
+							&& (foreign_key.referenced_columns == target.primary_key
+								|| targets_unique_column)
+					})
 				})
-			})
-			.flatten();
+				.flatten();
 		let relationship_target = if let Some(foreign_key) = relationship {
 			let target = table_to_struct
 				.get(&foreign_key.referenced_table)
@@ -1308,8 +1315,10 @@ mod tests {
 		assert!(output.files[0].path.ends_with("models.rs"));
 	}
 
-	#[test]
-	fn generate_model_preserves_foreign_key_target_actions_and_uniqueness() {
+	fn generate_email_relationship(
+		target_uses_unique_index: bool,
+		source_is_unique: bool,
+	) -> String {
 		let generator = SchemaCodeGenerator::new(IntrospectConfig::default());
 		let mut users = create_test_table();
 		users.name = "users".to_string();
@@ -1325,6 +1334,26 @@ mod tests {
 				generated: None,
 			},
 		);
+		if target_uses_unique_index {
+			users.unique_constraints.clear();
+			users.indexes.insert(
+				"users_email_unique_idx".to_string(),
+				IndexInfo {
+					name: "users_email_unique_idx".to_string(),
+					columns: vec!["email".to_string()],
+					unique: true,
+					#[cfg(feature = "pgvector")]
+					access_method: None,
+					index_type: None,
+					#[cfg(feature = "pgvector")]
+					expressions: None,
+					#[cfg(feature = "pgvector")]
+					operator_class: None,
+					#[cfg(feature = "pgvector")]
+					operator_class_is_default: false,
+				},
+			);
+		}
 		let mut profiles = create_test_table();
 		profiles.name = "profiles".to_string();
 		profiles.columns.remove("name");
@@ -1348,10 +1377,12 @@ mod tests {
 			on_delete: Some("RESTRICT".to_string()),
 			on_update: Some("SET NULL".to_string()),
 		}];
-		profiles.unique_constraints.push(UniqueConstraintInfo {
-			name: "profiles_user_email_key".to_string(),
-			columns: vec!["user_email".to_string()],
-		});
+		if source_is_unique {
+			profiles.unique_constraints.push(UniqueConstraintInfo {
+				name: "profiles_user_email_key".to_string(),
+				columns: vec!["user_email".to_string()],
+			});
+		}
 		let schema = DatabaseSchema {
 			tables: [
 				("users".to_string(), users),
@@ -1359,7 +1390,7 @@ mod tests {
 			]
 			.into(),
 		};
-		let code = generator
+		generator
 			.format_tokens(
 				generator
 					.generate_model(
@@ -1369,11 +1400,52 @@ mod tests {
 					)
 					.expect("single-column unique foreign key should be representable"),
 			)
-			.expect("model should format");
-		assert!(code.contains("OneToOneField<Users>"));
-		assert!(code.contains("to_field = \"email\""));
-		assert!(code.contains("on_delete = Restrict"));
-		assert!(code.contains("on_update = SetNull"));
+			.expect("model should format")
+	}
+
+	fn relationship_block(code: &str) -> String {
+		let mut block = Vec::new();
+		for line in code
+			.lines()
+			.map(str::trim)
+			.skip_while(|line| *line != "#[rel(")
+		{
+			block.push(line);
+			if line.starts_with("pub user_email:") {
+				break;
+			}
+		}
+		block.join("\n")
+	}
+
+	#[rstest::rstest]
+	fn generate_model_preserves_foreign_key_to_unique_target_index() {
+		// Arrange
+		let code = generate_email_relationship(true, false);
+
+		// Act
+		let relationship = relationship_block(&code);
+
+		// Assert
+		assert_eq!(
+			relationship,
+			"#[rel(\nforeign_key,\ndb_column = \"user_email\",\nto_field = \"email\",\non_delete = Restrict,\non_update = SetNull,\nnull = false\n)]\n#[field(max_length = 255u32)]\npub user_email: ForeignKeyField<Users>,"
+		);
+	}
+
+	#[rstest::rstest]
+	fn generate_model_preserves_one_to_one_to_unique_target_column() {
+		// Arrange
+		let code = generate_email_relationship(false, true);
+
+		// Act
+		let relationship = relationship_block(&code);
+
+		// Assert
+		assert_eq!(
+			relationship,
+			"#[rel(\none_to_one,\ndb_column = \"user_email\",\nto_field = \"email\",\non_delete = Restrict,\non_update = SetNull,\nnull = false\n)]\n#[field(max_length = 255u32)]\npub user_email: OneToOneField<Users>,"
+		);
 	}
 
 	#[test]

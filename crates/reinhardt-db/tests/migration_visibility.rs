@@ -189,12 +189,12 @@ async fn postgres_missing_relation_inside_recorder_view_remains_an_error() {
 	connection
 		.execute(
 			"CREATE FUNCTION migration_visibility_records()
-			 RETURNS TABLE (app TEXT, name TEXT, applied TIMESTAMPTZ)
+			 RETURNS TABLE (id BIGINT, app TEXT, name TEXT, applied TIMESTAMPTZ)
 			 LANGUAGE plpgsql
 			 AS $$
 			 BEGIN
 			     RETURN QUERY EXECUTE
-			         'SELECT app, name, applied FROM visibility_missing_dependency';
+			         'SELECT id, app, name, applied FROM visibility_missing_dependency';
 			 END
 			 $$",
 			vec![],
@@ -250,6 +250,7 @@ async fn mysql_missing_table_inside_recorder_view_remains_an_error() {
 		.execute(
 			"CREATE VIEW reinhardt_migrations AS
 			 SELECT
+			     1 AS id,
 			     'blog' AS app,
 			     '0001_initial' AS name,
 			     migration_visibility_timestamp() AS applied",

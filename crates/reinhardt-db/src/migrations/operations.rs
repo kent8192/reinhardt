@@ -10757,7 +10757,7 @@ mod tests {
 			"CREATE INDEX idx_source_embedding ON source USING hnsw (embedding vector_cosine_ops) WITH (m = 16, ef_construction = 64);"
 		);
 		assert_eq!(statement_sql, forward_sql);
-		assert_eq!(backward_sql, vec!["DROP INDEX idx_source_embedding;"]);
+		assert_eq!(backward_sql, vec!["DROP INDEX \"idx_source_embedding\";"]);
 	}
 
 	#[cfg(feature = "pgvector")]
@@ -11337,7 +11337,7 @@ mod tests {
 			forward_sql,
 			"CREATE INDEX idx_source_expr ON source USING hnsw (normalize(embedding) vector_ip_ops);"
 		);
-		assert_eq!(backward_sql, vec!["DROP INDEX idx_source_expr;"]);
+		assert_eq!(backward_sql, vec!["DROP INDEX \"idx_source_expr\";"]);
 	}
 
 	#[rstest]
@@ -11738,12 +11738,9 @@ mod tests {
 			.unwrap()
 			.join("\n");
 
-		// Assert: `quote_identifier` is `pg_escape::quote_identifier`, which only
-		// adds quotes when the identifier contains reserved or non-lowercase
-		// characters. For plain ASCII names, the output is unquoted. What matters
-		// for regression is the presence of the `ON <table>` suffix.
+		// Assert
 		assert_eq!(
-			sql, "DROP INDEX idx_users_email ON users;",
+			sql, "DROP INDEX `idx_users_email` ON `users`;",
 			"MySQL reverse SQL must include `ON <table>` clause"
 		);
 	}
@@ -11751,9 +11748,9 @@ mod tests {
 	/// Verify Postgres / SQLite / CockroachDB continue to emit the bare
 	/// `DROP INDEX <name>;` form without an `ON <table>` clause.
 	#[rstest]
-	#[case(SqlDialect::Postgres, "DROP INDEX idx_users_email;")]
-	#[case(SqlDialect::Sqlite, "DROP INDEX idx_users_email;")]
-	#[case(SqlDialect::Cockroachdb, "DROP INDEX idx_users_email;")]
+	#[case(SqlDialect::Postgres, "DROP INDEX \"idx_users_email\";")]
+	#[case(SqlDialect::Sqlite, "DROP INDEX \"idx_users_email\";")]
+	#[case(SqlDialect::Cockroachdb, "DROP INDEX \"idx_users_email\";")]
 	fn test_to_reverse_sql_create_index_omits_on_table_for_non_mysql(
 		#[case] dialect: SqlDialect,
 		#[case] expected: &str,

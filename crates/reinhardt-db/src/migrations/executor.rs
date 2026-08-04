@@ -379,6 +379,24 @@ impl DatabaseMigrationExecutor {
 			.iter()
 			.map(|(app, name)| (app.as_str(), name.as_str()))
 			.collect();
+		let applied_keys: HashSet<_> = applied_record_keys
+			.iter()
+			.map(|(app, name)| super::graph::MigrationKey::new(app, name))
+			.collect();
+		let adopts_replacement = migrations.iter().any(|migration| {
+			!migration.replaces.is_empty()
+				&& !applied_keys.contains(&super::graph::MigrationKey::new(
+					&migration.app_label,
+					&migration.name,
+				)) && replacement_history_is_fully_covered(migration, migrations, &applied_record_keys)
+		});
+		if adopts_replacement {
+			// Validate every replacement set before recorder reconciliation mutates
+			// any complete history. A lone partial history can continue through its
+			// original migrations, but it cannot be combined atomically with an
+			// adoption that rewrites another replacement set.
+			select_replacement_migrations(migrations, &applied_keys)?;
+		}
 
 		// A partly applied original history must continue on the original chain.
 		// Once every original is recorded (or no original is recorded), select the

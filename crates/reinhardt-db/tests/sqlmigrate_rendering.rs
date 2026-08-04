@@ -248,7 +248,16 @@ async fn non_atomic_plan_never_renders_transaction_wrappers() {
 
 #[tokio::test]
 async fn backward_drop_table_uses_the_catalog_target_state() {
-	let initial = create_table("catalog", "0001_initial", "books");
+	let mut id = ColumnDefinition::new("id", FieldType::Integer);
+	id.not_null = true;
+	let initial = Migration::new("0001_initial", "catalog").add_operation(Operation::CreateTable {
+		name: "books".to_string(),
+		columns: vec![id],
+		constraints: Vec::new(),
+		without_rowid: None,
+		interleave_in_parent: None,
+		partition: None,
+	});
 	let mut drop_books =
 		Migration::new("0002_drop_books", "catalog").add_operation(Operation::DropTable {
 			name: "books".to_string(),

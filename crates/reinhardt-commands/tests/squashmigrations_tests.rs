@@ -351,7 +351,7 @@ async fn no_optimize_preserves_operation_order_and_no_header_omits_header() {
 		.unwrap();
 	assert_eq!(
 		source.lines().next(),
-		Some("use reinhardt::db::migrations::prelude::*;")
+		Some("use reinhardt::db::migrations::FieldType;")
 	);
 	assert_eq!(
 		summary,

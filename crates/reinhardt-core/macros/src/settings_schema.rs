@@ -628,6 +628,7 @@ fn schema_builder_init(shape: &TypeShape, conf_crate: &TokenStream) -> TokenStre
 #[cfg(test)]
 mod tests {
 	use super::*;
+	use rstest::rstest;
 
 	fn parse_single_field(input: ItemStruct) -> ParsedField {
 		parse_fields(&input)
@@ -718,7 +719,7 @@ mod tests {
 		));
 	}
 
-	#[test]
+	#[rstest]
 	fn parse_fields_marks_plain_string_as_secret_with_explicit_hint() {
 		let input: ItemStruct = syn::parse_quote! {
 			struct TestSettings {
@@ -743,7 +744,7 @@ mod tests {
 		);
 	}
 
-	#[test]
+	#[rstest]
 	fn parse_fields_treats_inferred_node_as_leaf_with_secret_hint() {
 		let input: ItemStruct = syn::parse_quote! {
 			struct TestSettings {

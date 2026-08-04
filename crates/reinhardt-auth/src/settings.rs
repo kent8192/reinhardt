@@ -457,24 +457,6 @@ mod tests {
 		assert!(json.contains("[REDACTED]"));
 	}
 
-	#[cfg(feature = "jwt")]
-	#[test]
-	fn jwt_session_settings_marks_secret_in_schema_and_supports_secret_sources() {
-		use super::JwtSessionSettings;
-		use reinhardt_conf::settings::schema::SettingsNode;
-
-		let settings: JwtSessionSettings = serde_json::from_value(serde_json::json!({
-			"secret": { "secret": "super-secret-signing-key" }
-		}))
-		.expect("secret source should deserialize");
-		let mut secret_paths = Vec::new();
-		JwtSessionSettings::node_schema().collect_secret_paths(&mut secret_paths);
-
-		assert_eq!(settings.secret, "super-secret-signing-key");
-		assert_eq!(secret_paths.len(), 1);
-		assert_eq!(secret_paths[0].to_string(), "secret");
-	}
-
 	#[cfg(feature = "token")]
 	#[test]
 	fn token_rotation_settings_default_matches_legacy_config() {

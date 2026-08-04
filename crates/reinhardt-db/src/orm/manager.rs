@@ -1649,10 +1649,6 @@ mod tests {
 			self.id
 		}
 
-		fn primary_key_filter_value(pk: Self::PrimaryKey) -> FilterValue {
-			FilterValue::Integer(pk)
-		}
-
 		fn set_primary_key(&mut self, value: Self::PrimaryKey) {
 			self.id = Some(value);
 		}
@@ -1761,13 +1757,26 @@ mod tests {
 	}
 
 	#[rstest]
-	fn test_get_preserves_explicit_numeric_primary_key_binding() {
+	fn test_get_preserves_default_numeric_primary_key_binding() {
 		// Arrange and Act
 		let query = TestUser::objects().get(42);
 
 		// Assert
 		assert_eq!(query.filters().len(), 1);
 		assert!(matches!(query.filters()[0].value, FilterValue::Integer(42)));
+	}
+
+	#[rstest]
+	fn test_delete_preserves_default_numeric_primary_key_binding() {
+		// Arrange and Act
+		let statement = Manager::<TestUser>::build_delete_statement(42);
+		let (_sql, values) = build_delete_sql(&statement, DatabaseBackend::Postgres);
+
+		// Assert
+		assert_eq!(
+			values.0,
+			vec![reinhardt_query::value::Value::BigInt(Some(42))]
+		);
 	}
 
 	#[rstest]

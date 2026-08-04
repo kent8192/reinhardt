@@ -1,4 +1,5 @@
 use serde::{Deserialize, Serialize};
+use std::any::TypeId;
 use std::collections::HashMap;
 
 /// Trait for type-safe field selectors
@@ -22,7 +23,7 @@ pub trait FieldSelector: Clone {
 /// When using the `#[model(...)]` macro, this implementation is automatically generated.
 pub trait Model: Serialize + for<'de> Deserialize<'de> + Send + Sync + Clone {
 	/// The primary key type
-	type PrimaryKey: Send + Sync + Clone + std::fmt::Display;
+	type PrimaryKey: Send + Sync + Clone + std::fmt::Display + 'static;
 
 	/// Type-safe field selector
 	///
@@ -62,12 +63,46 @@ pub trait Model: Serialize + for<'de> Deserialize<'de> + Send + Sync + Clone {
 
 	/// Converts a primary key into a query filter value.
 	///
-	/// Custom primary-key types default to an exact string binding so their
-	/// display representation is not coerced to a different database type.
+	/// Primitive integer primary keys retain numeric bindings. Custom primary-key
+	/// types default to an exact string binding so their display representation is
+	/// not coerced to a different database type.
 	/// Derived models override this conversion for declared primary-key types with
 	/// a dedicated database binding, such as strings, UUIDs, and timestamps.
 	fn primary_key_filter_value(pk: Self::PrimaryKey) -> super::query::FilterValue {
-		super::query::FilterValue::String(pk.to_string())
+		let value = pk.to_string();
+		let type_id = TypeId::of::<Self::PrimaryKey>();
+
+		if matches!(
+			type_id,
+			id if id == TypeId::of::<i8>()
+				|| id == TypeId::of::<i16>()
+				|| id == TypeId::of::<i32>()
+				|| id == TypeId::of::<i64>()
+				|| id == TypeId::of::<isize>()
+				|| id == TypeId::of::<i128>()
+		) {
+			return value
+				.parse::<i128>()
+				.map(super::query::FilterValue::from)
+				.unwrap_or(super::query::FilterValue::String(value));
+		}
+
+		if matches!(
+			type_id,
+			id if id == TypeId::of::<u8>()
+				|| id == TypeId::of::<u16>()
+				|| id == TypeId::of::<u32>()
+				|| id == TypeId::of::<u64>()
+				|| id == TypeId::of::<usize>()
+				|| id == TypeId::of::<u128>()
+		) {
+			return value
+				.parse::<u128>()
+				.map(super::query::FilterValue::from)
+				.unwrap_or(super::query::FilterValue::String(value));
+		}
+
+		super::query::FilterValue::String(value)
 	}
 
 	/// Get the primary key value

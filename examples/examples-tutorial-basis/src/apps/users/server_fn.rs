@@ -195,5 +195,5 @@ pub async fn current_user(
 		.await
 		.map_err(|e| ServerFnError::application(format!("Database error: {}", e)))?;
 
-	Ok(user.map(UserInfo::from))
+	Ok(user.filter(BaseUser::is_active).map(UserInfo::from))
 }

@@ -103,9 +103,10 @@ This prevents deactivated accounts with unexpired sessions from being
 authorized.
 
 `CookieSessionAuthMiddleware` remains available for projects that plug a custom
-`AsyncSessionBackend` directly; configure it or another authentication
-middleware to validate the current account before using `CurrentUser<U>` or
-authorization guards.
+`AsyncSessionBackend` directly, but it only reconstructs authentication flags
+stored in the session. It does not load the current account record. Follow it
+with account-resolving middleware (or use an authentication backend that does
+so) before relying on `CurrentUser<U>` or authorization guards.
 
 ## Keyed dependency providers
 

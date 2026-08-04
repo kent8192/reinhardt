@@ -262,7 +262,8 @@ an identity reference; it does not establish `AuthState` because account status
 and privileges can change after a session is created. Configure an
 authentication middleware that validates the current user record before using
 `CurrentUser<U>` or authorization guards. `CookieSessionAuthMiddleware` remains
-available for applications that use a custom `AsyncSessionBackend` directly.
+available for custom `AsyncSessionBackend` integrations, but it only restores
+flags stored in the session and must not be treated as an account validator.
 
 - `USER_ID_SESSION_KEY` — the canonical session-store key (`"user_id"`)
   every handler should read from / write to instead of hardcoding a literal.

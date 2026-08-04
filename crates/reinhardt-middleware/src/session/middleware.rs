@@ -243,11 +243,11 @@ impl Middleware for SessionMiddleware {
 
 #[cfg(test)]
 mod tests {
-	use super::data::USER_ID_SESSION_KEY;
 	use super::*;
+	use crate::session::data::USER_ID_SESSION_KEY;
 	use bytes::Bytes;
 	use hyper::{HeaderMap, Method, Version};
-	use reinhardt_http::{AuthState, Handler, Request};
+	use reinhardt_http::{AuthState, Handler, IsActive, IsAdmin, IsAuthenticated, Request};
 	use rstest::rstest;
 	use std::sync::Mutex;
 	use std::time::Duration;

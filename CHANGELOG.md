@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.6](https://github.com/kent8192/reinhardt-web/compare/reinhardt-web@v0.3.5...reinhardt-web@v0.3.6) - 2026-08-04
+
+### Fixed
+
+- *(settings)* preserve explicit secret references
+
+### Security
+
+- *(auth)* restore JWT secret wrapper
+- *(auth)* preserve JWT secret field compatibility
+
+### Testing
+
+- *(settings)* move JWT secret contract integration
+
 ## [0.3.5](https://github.com/kent8192/reinhardt-web/compare/reinhardt-web@v0.3.4...reinhardt-web@v0.3.5) - 2026-08-02
 
 ### Documentation

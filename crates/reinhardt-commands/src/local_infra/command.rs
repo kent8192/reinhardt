@@ -6,7 +6,7 @@ use std::error::Error;
 use std::path::Path;
 use std::process::Command;
 
-use super::state::project_id;
+use super::state::{is_valid_profile, project_id};
 use super::{
 	BollardDockerEngine, DatabaseInfraInput, DockerEngine, DockerRunSpec, LocalInfraConfig,
 	LocalInfraState, PortAllocator, ServiceSpec, StateStore,
@@ -50,6 +50,9 @@ pub enum InfraSubcommand {
 	},
 	/// Run a management command with local infrastructure settings applied.
 	Run {
+		/// Settings profile whose state should be used.
+		#[arg(long)]
+		profile: Option<String>,
 		/// Command and arguments to dispatch after `--`.
 		#[arg(last = true, required = true)]
 		command: Vec<String>,
@@ -93,8 +96,15 @@ impl InfraCommand {
 					.await
 					.map(|_| ())
 			}
-			InfraSubcommand::Run { command } => {
-				Self::run_with_local_env(project_root, command, settings)
+			InfraSubcommand::Run { profile, command } => {
+				Self::run_with_local_env(
+					project_root,
+					profile.as_deref(),
+					command,
+					settings,
+					docker,
+				)
+				.await
 			}
 			other => Self::execute_with_runner(other, project_root, docker).await,
 		}
@@ -125,6 +135,9 @@ impl InfraCommand {
 			}
 			InfraSubcommand::Status { profile, json } => {
 				let state = store.load_for_profile(&resolved_profile(profile.as_deref()))?;
+				if let Some(state) = &state {
+					Self::validate_runtime_bindings(state, &docker).await?;
+				}
 				if json {
 					println!("{}", serde_json::to_string_pretty(&state)?);
 				} else if let Some(state) = state {
@@ -160,6 +173,11 @@ impl InfraCommand {
 		R: DockerEngine,
 	{
 		let docker = runner;
+		if !is_valid_profile(&config.profile) {
+			return Err("local infrastructure profile is invalid".into());
+		}
+		let mut config = config;
+		config.project_id = project_id(project_root);
 		let ports = PortAllocator;
 		let mut states = Vec::new();
 
@@ -207,14 +225,21 @@ impl InfraCommand {
 		Ok(state)
 	}
 
-	fn run_with_local_env(
+	async fn run_with_local_env<R>(
 		project_root: &Path,
+		profile: Option<&str>,
 		args: Vec<String>,
 		settings: Option<&dyn HasCommonSettings>,
-	) -> Result<(), Box<dyn Error>> {
+		docker: R,
+	) -> Result<(), Box<dyn Error>>
+	where
+		R: DockerEngine,
+	{
 		Self::validate_run_command(&args)?;
-		let state = StateStore::new(project_root)
-			.load_for_profile(&resolved_profile(None))?
+		let store = StateStore::new(project_root);
+		let env_profile = std::env::var("REINHARDT_ENV").ok();
+		let state = load_validated_run_state(&store, profile, env_profile.as_deref(), &docker)
+			.await?
 			.ok_or("local infrastructure state does not exist; run `manage infra up` first")?;
 		let current_exe = std::env::current_exe()?;
 		let status = Command::new(current_exe)
@@ -227,6 +252,28 @@ impl InfraCommand {
 		} else {
 			Err(format!("local infrastructure command exited with {status}").into())
 		}
+	}
+
+	async fn validate_runtime_bindings<R>(
+		state: &LocalInfraState,
+		docker: &R,
+	) -> Result<(), Box<dyn Error>>
+	where
+		R: DockerEngine,
+	{
+		for service in &state.services {
+			let actual_port = docker
+				.container_port_binding(&service.container_name, service.container_port)
+				.await?;
+			if actual_port != Some(service.host_port) {
+				return Err(format!(
+					"local infrastructure state host port for `{}` does not match the Docker binding",
+					service.name
+				)
+				.into());
+			}
+		}
+		Ok(())
 	}
 
 	/// Build process environment overrides from persisted local infrastructure state.
@@ -355,6 +402,33 @@ fn resolved_profile(profile: Option<&str>) -> String {
 		.unwrap_or_else(|| "local".to_string())
 }
 
+fn load_run_state(
+	store: &StateStore,
+	profile: Option<&str>,
+	env_profile: Option<&str>,
+) -> std::io::Result<Option<LocalInfraState>> {
+	match profile.or(env_profile) {
+		Some(profile) => store.load_for_profile(profile),
+		None => store.load(),
+	}
+}
+
+async fn load_validated_run_state<R>(
+	store: &StateStore,
+	profile: Option<&str>,
+	env_profile: Option<&str>,
+	docker: &R,
+) -> Result<Option<LocalInfraState>, Box<dyn Error>>
+where
+	R: DockerEngine,
+{
+	let state = load_run_state(store, profile, env_profile)?;
+	if let Some(state) = &state {
+		InfraCommand::validate_runtime_bindings(state, docker).await?;
+	}
+	Ok(state)
+}
+
 fn print_up_result(
 	state: &LocalInfraState,
 	json: bool,
@@ -391,4 +465,61 @@ fn shell_quote(value: &str) -> String {
 		return value.to_string();
 	}
 	format!("'{}'", value.replace('\'', "'\\''"))
+}
+
+#[cfg(test)]
+mod tests {
+	use super::*;
+	use tempfile::TempDir;
+
+	#[test]
+	fn run_state_uses_persisted_profile_without_explicit_selection() {
+		let temp = TempDir::new().unwrap();
+		let store = StateStore::new(temp.path());
+		store
+			.save(&LocalInfraState {
+				project_id: project_id(temp.path()),
+				profile: "staging".to_string(),
+				services: vec![],
+			})
+			.unwrap();
+
+		let state = load_run_state(&store, None, None).unwrap().unwrap();
+
+		assert_eq!(state.profile, "staging");
+	}
+
+	#[tokio::test]
+	async fn run_state_rejects_host_port_that_differs_from_docker_binding() {
+		let temp = TempDir::new().unwrap();
+		let store = StateStore::new(temp.path());
+		store
+			.save(&LocalInfraState {
+				project_id: project_id(temp.path()),
+				profile: "local".to_string(),
+				services: vec![super::super::LocalServiceState {
+					name: "postgres".to_string(),
+					container_name: format!("reinhardt-{}-local-postgres", project_id(temp.path())),
+					image: "postgres:17-alpine".to_string(),
+					host: "127.0.0.1".to_string(),
+					host_port: 55432,
+					container_port: 5432,
+					status: super::super::ServiceRuntimeStatus::Running,
+					metadata: serde_json::json!({"database": "app", "user": "postgres"}),
+				}],
+			})
+			.unwrap();
+		let docker =
+			super::super::FakeDockerEngine::new(vec![]).with_port_bindings(vec![Some(55433)]);
+
+		let error = load_validated_run_state(&store, None, None, &docker)
+			.await
+			.unwrap_err();
+
+		assert!(
+			error
+				.to_string()
+				.contains("does not match the Docker binding")
+		);
+	}
 }

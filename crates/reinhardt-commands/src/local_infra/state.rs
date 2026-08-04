@@ -202,7 +202,7 @@ fn stable_container_name(project_id: &str, profile: &str, service: &str) -> Stri
 	format!("reinhardt-{project_id}-{profile}-{service}")
 }
 
-fn is_valid_profile(profile: &str) -> bool {
+pub(crate) fn is_valid_profile(profile: &str) -> bool {
 	!profile.is_empty()
 		&& profile
 			.chars()

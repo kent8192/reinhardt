@@ -311,7 +311,7 @@ async fn infra_up_writes_state_for_started_services() {
 	let docker = FakeDockerEngine::new(vec![]);
 
 	let config = LocalInfraConfig::derive(
-		project_id(temp.path()),
+		"caller-supplied-project",
 		"local",
 		Some(DatabaseInfraInput {
 			engine: "postgresql".to_string(),
@@ -330,6 +330,67 @@ async fn infra_up_writes_state_for_started_services() {
 		.unwrap();
 
 	let state = StateStore::new(temp.path()).load().unwrap().unwrap();
+	assert_ne!(state.project_id, "caller-supplied-project");
 	assert_eq!(state.services.len(), 1);
 	assert_eq!(state.services[0].name, "postgres");
+}
+
+#[tokio::test]
+async fn infra_up_rejects_invalid_profile_before_docker_operations() {
+	let temp = TempDir::new().unwrap();
+	let docker = FakeDockerEngine::new(vec![]);
+	let config = LocalInfraConfig::derive(
+		"caller-supplied-project",
+		"qa.eu",
+		Some(DatabaseInfraInput {
+			engine: "postgresql".to_string(),
+			host: "localhost".to_string(),
+			port: 5432,
+			name: "app".to_string(),
+			user: "postgres".to_string(),
+			password: Some("postgres".to_string()),
+		}),
+		None,
+	)
+	.unwrap();
+
+	let result = InfraCommand::up_with_config(temp.path(), config, docker.clone()).await;
+
+	assert!(result.is_err());
+	assert_eq!(docker.calls(), Vec::new());
+}
+
+#[tokio::test]
+async fn infra_status_rejects_host_port_that_differs_from_docker_binding() {
+	let temp = TempDir::new().unwrap();
+	let store = StateStore::new(temp.path());
+	store
+		.save(&LocalInfraState {
+			project_id: project_id(temp.path()),
+			profile: "local".to_string(),
+			services: vec![LocalServiceState {
+				name: "postgres".to_string(),
+				container_name: format!("reinhardt-{}-local-postgres", project_id(temp.path())),
+				image: "postgres:17-alpine".to_string(),
+				host: "127.0.0.1".to_string(),
+				host_port: 55432,
+				container_port: 5432,
+				status: ServiceRuntimeStatus::Running,
+				metadata: serde_json::json!({"database": "app", "user": "postgres"}),
+			}],
+		})
+		.unwrap();
+	let docker = FakeDockerEngine::new(vec![]).with_port_bindings(vec![Some(55433)]);
+
+	let result = InfraCommand::execute_with_runner(
+		reinhardt_commands::local_infra::InfraSubcommand::Status {
+			profile: None,
+			json: false,
+		},
+		temp.path(),
+		docker,
+	)
+	.await;
+
+	assert!(result.is_err());
 }

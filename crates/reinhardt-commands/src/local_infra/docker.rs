@@ -52,6 +52,13 @@ pub enum DockerCall {
 		/// Container name.
 		name: String,
 	},
+	/// Container port binding lookup.
+	ContainerPortBinding {
+		/// Container name.
+		name: String,
+		/// Container port whose host binding is requested.
+		container_port: u16,
+	},
 	/// Forced container removal.
 	RemoveContainer {
 		/// Container name.
@@ -69,6 +76,17 @@ pub enum DockerCall {
 pub trait DockerEngine: Clone + Send + Sync + 'static {
 	/// Return whether a container with this exact name exists.
 	async fn container_exists(&self, name: &str) -> DockerResult<bool>;
+
+	/// Return the loopback host port bound to a container port.
+	async fn container_port_binding(
+		&self,
+		name: &str,
+		container_port: u16,
+	) -> DockerResult<Option<u16>> {
+		Err(DockerError::Backend(format!(
+			"Docker backend does not support inspecting `{name}` port {container_port}"
+		)))
+	}
 
 	/// Remove a container by name, ignoring missing containers.
 	async fn remove_container(&self, name: &str) -> DockerResult<()>;
@@ -184,6 +202,36 @@ impl DockerEngine for BollardDockerEngine {
 				.iter()
 				.any(|container_name| container_name == &format!("/{name}"))
 		}))
+	}
+
+	async fn container_port_binding(
+		&self,
+		name: &str,
+		container_port: u16,
+	) -> DockerResult<Option<u16>> {
+		let inspected = self
+			.docker
+			.inspect_container(name, None)
+			.await
+			.map_err(DockerError::from)?;
+		let port = format!("{container_port}/tcp");
+		let bindings = inspected
+			.network_settings
+			.and_then(|settings| settings.ports)
+			.and_then(|mut ports| ports.remove(&port))
+			.flatten()
+			.unwrap_or_default();
+		if bindings.len() != 1 {
+			return Ok(None);
+		}
+		let binding = &bindings[0];
+		if binding.host_ip.as_deref() != Some("127.0.0.1") {
+			return Ok(None);
+		}
+		Ok(binding
+			.host_port
+			.as_deref()
+			.and_then(|port| port.parse().ok()))
 	}
 
 	async fn remove_container(&self, name: &str) -> DockerResult<()> {
@@ -339,6 +387,7 @@ mod tests {
 pub struct FakeDockerEngine {
 	calls: Arc<Mutex<Vec<DockerCall>>>,
 	exists: Arc<Mutex<Vec<bool>>>,
+	port_bindings: Arc<Mutex<Vec<Option<u16>>>>,
 }
 
 impl FakeDockerEngine {
@@ -347,7 +396,14 @@ impl FakeDockerEngine {
 		Self {
 			calls: Arc::new(Mutex::new(Vec::new())),
 			exists: Arc::new(Mutex::new(exists)),
+			port_bindings: Arc::new(Mutex::new(Vec::new())),
 		}
+	}
+
+	/// Configure container port binding results in lookup order.
+	pub fn with_port_bindings(self, port_bindings: Vec<Option<u16>>) -> Self {
+		*self.port_bindings.lock().expect("port bindings lock") = port_bindings;
+		self
 	}
 
 	/// Return captured Docker API operations.
@@ -370,6 +426,26 @@ impl DockerEngine for FakeDockerEngine {
 			false
 		} else {
 			exists.remove(0)
+		})
+	}
+
+	async fn container_port_binding(
+		&self,
+		name: &str,
+		container_port: u16,
+	) -> DockerResult<Option<u16>> {
+		self.calls
+			.lock()
+			.expect("calls lock")
+			.push(DockerCall::ContainerPortBinding {
+				name: name.to_string(),
+				container_port,
+			});
+		let mut port_bindings = self.port_bindings.lock().expect("port bindings lock");
+		Ok(if port_bindings.is_empty() {
+			None
+		} else {
+			port_bindings.remove(0)
 		})
 	}
 

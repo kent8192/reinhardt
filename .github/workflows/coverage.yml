@@ -163,9 +163,14 @@ jobs:
 
       - name: Generate unit coverage report
         run: |
+          report_metadata=$(cargo metadata --no-deps --format-version 1)
+          report_args=()
+          while IFS= read -r package; do
+            report_args+=(--package "$package")
+          done < <(jq -r '.packages[].name' <<< "$report_metadata")
           cargo llvm-cov \
-            --workspace \
-            --no-run \
+            report \
+            "${report_args[@]}" \
             --lcov \
             --output-path /tmp/unit-lcov.info
 
@@ -353,9 +358,14 @@ jobs:
 
       - name: Generate intra-crate coverage report
         run: |
+          report_metadata=$(cargo metadata --no-deps --format-version 1)
+          report_args=()
+          while IFS= read -r package; do
+            report_args+=(--package "$package")
+          done < <(jq -r '.packages[].name' <<< "$report_metadata")
           cargo llvm-cov \
-            --workspace \
-            --no-run \
+            report \
+            "${report_args[@]}" \
             --lcov \
             --output-path /tmp/intra-crate-lcov.info
 
@@ -511,9 +521,14 @@ jobs:
 
       - name: Generate cross-crate coverage report
         run: |
+          report_metadata=$(cargo metadata --no-deps --format-version 1)
+          report_args=()
+          while IFS= read -r package; do
+            report_args+=(--package "$package")
+          done < <(jq -r '.packages[].name' <<< "$report_metadata")
           cargo llvm-cov \
-            --workspace \
-            --no-run \
+            report \
+            "${report_args[@]}" \
             --lcov \
             --output-path /tmp/cross-crate-lcov.info
 

@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.0-alpha.4](https://github.com/kent8192/reinhardt-web/compare/reinhardt-testkit@v0.4.0-alpha.3...reinhardt-testkit@v0.4.0-alpha.4) - 2026-08-04
+
+### Added
+
+- *(db)* expose structured unique constraint metadata
+
+### Fixed
+
+- *(shell)* preserve test database scopes
+- *(commands)* address shell review findings
+- *(pgvector)* close migration and binding gaps
+- *(testkit)* gate pgvector field type import
+
+### Other
+
+- sync develop/0.4.0 into pgvector branch
+
 ## [0.4.0-alpha.2](https://github.com/kent8192/reinhardt-web/compare/reinhardt-testkit@v0.4.0-alpha.1...reinhardt-testkit@v0.4.0-alpha.2) - 2026-07-23
 
 ### Added

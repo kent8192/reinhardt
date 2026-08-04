@@ -7,6 +7,65 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.0-alpha.5](https://github.com/kent8192/reinhardt-web/compare/reinhardt-forms@v0.4.0-alpha.3...reinhardt-forms@v0.4.0-alpha.5) - 2026-08-04
+
+### Added
+
+- *(forms)* [**breaking**] make generated model forms async
+
+### Documentation
+
+- *(forms)* document generated model forms
+- *(forms)* correct facade and formset guidance
+- update version references to v0.4.0-alpha.4
+
+### Fixed
+
+- *(forms)* enforce model form persistence invariants
+- *(forms)* align model form automatic defaults
+- *(forms)* harden generated form persistence semantics
+- *(forms)* close residual model form review gaps
+- *(forms)* expose model validation errors
+- *(forms)* retain fractional time precision
+- *(forms)* synchronize replacement field values
+- *(forms)* defer inline parent key validation
+- *(forms)* make direct model saves insert explicitly
+- *(forms)* preserve native model field values
+- *(forms)* enforce generated model constraints
+- *(forms)* preserve model form field contracts
+- *(forms)* preserve specialized field constraints
+- *(forms)* preserve exact generated constraints
+- *(forms)* complete model-backed form submission
+- *(forms)* harden native model form decoding
+- *(forms)* preserve model form defaults
+- *(forms)* harden model form input handling
+- *(forms)* preserve untouched model controls
+- *(forms)* validate model form submission boundaries
+- *(forms)* validate inline and runtime model form state
+- *(forms)* prevalidate inline foreign keys
+- *(forms)* preserve model-backed form state
+- *(forms)* preflight deferred child validators
+- *(forms)* prevent duplicate MySQL form inserts
+- *(forms)* preserve native range defaults
+- *(forms)* prevent duplicate create retries
+- *(forms)* defer uncertain generated keys
+- *(forms)* synchronize defaults and persistence state
+- *(forms)* synchronize transaction-backed form state
+- *(forms)* preserve transactional retry semantics
+- *(forms)* support trusted inline foreign keys
+- *(forms)* preserve inline uncertain create state
+- *(forms)* preserve model form control semantics
+- *(forms)* preserve nested form retries
+- *(forms)* validate inline formset retries
+- *(forms)* align native form validation
+- *(forms)* use serde-json for trusted fields
+- *(forms)* preserve trusted non-editable model values
+- *(forms)* address model form review feedback
+
+### Testing
+
+- *(forms)* cover uncertain insert persistence state
+
 ## [0.4.0-alpha.4](https://github.com/kent8192/reinhardt-web/compare/reinhardt-forms@v0.4.0-alpha.3...reinhardt-forms@v0.4.0-alpha.4) - 2026-08-04
 
 ### Added

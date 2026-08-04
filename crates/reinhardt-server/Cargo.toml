@@ -1,6 +1,6 @@
 [package]
 name = "reinhardt-server"
-version = "0.4.0-alpha.4"
+version = "0.4.0-alpha.5"
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true

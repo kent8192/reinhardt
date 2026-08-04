@@ -46,6 +46,7 @@ pub(crate) enum TypeShape {
 	Leaf {
 		ty: syn::Type,
 		secret: bool,
+		secret_ref: bool,
 	},
 	Node {
 		ty: syn::Type,
@@ -183,7 +184,7 @@ pub(crate) fn schema_type_name(struct_name: &syn::Ident) -> syn::Ident {
 
 pub(crate) fn value_schema_tokens(shape: &TypeShape, conf_crate: &TokenStream) -> TokenStream {
 	match shape {
-		TypeShape::Leaf { ty, secret } => {
+		TypeShape::Leaf { ty, secret, .. } => {
 			quote! {
 				#conf_crate::settings::schema::SettingsValueSchema::Leaf {
 					type_name: ::std::any::type_name::<#ty>(),
@@ -464,6 +465,7 @@ fn analyze_type(ty: &syn::Type, shape_hint: Option<ShapeHint>, secret: bool) -> 
 		return TypeShape::Leaf {
 			ty: ty.clone(),
 			secret,
+			secret_ref: false,
 		};
 	};
 
@@ -505,13 +507,15 @@ fn analyze_type(ty: &syn::Type, shape_hint: Option<ShapeHint>, secret: bool) -> 
 	}
 
 	if shape_hint == Some(ShapeHint::Node)
-		|| (shape_hint.is_none() && segment_name.ends_with("Config"))
+		|| (!secret && shape_hint.is_none() && segment_name.ends_with("Config"))
 	{
 		TypeShape::Node { ty: ty.clone() }
 	} else {
+		let inherently_secret = segment_name == "SecretString" || segment_name == "SecretValue";
 		TypeShape::Leaf {
 			ty: ty.clone(),
-			secret: secret || segment_name == "SecretString" || segment_name == "SecretValue",
+			secret: secret || inherently_secret,
+			secret_ref: inherently_secret,
 		}
 	}
 }
@@ -558,8 +562,8 @@ fn second_type_arg(args: &syn::PathArguments) -> Option<&syn::Type> {
 
 fn schema_ref_type(shape: &TypeShape, conf_crate: &TokenStream) -> TokenStream {
 	match shape {
-		TypeShape::Leaf { ty, secret } => {
-			if *secret {
+		TypeShape::Leaf { ty, secret_ref, .. } => {
+			if *secret_ref {
 				quote! { #conf_crate::settings::schema::SecretFieldRef<Root, #ty> }
 			} else {
 				quote! { #conf_crate::settings::schema::FieldRef<Root, #ty> }
@@ -590,8 +594,8 @@ fn schema_ref_init(
 	conf_crate: &TokenStream,
 ) -> TokenStream {
 	match shape {
-		TypeShape::Leaf { secret, .. } => {
-			if *secret {
+		TypeShape::Leaf { secret_ref, .. } => {
+			if *secret_ref {
 				quote! { #conf_crate::settings::schema::SecretFieldRef::new(#path_tokens) }
 			} else {
 				quote! { #conf_crate::settings::schema::FieldRef::new(#path_tokens) }
@@ -725,7 +729,47 @@ mod tests {
 
 		let field = parse_single_field(input);
 
-		assert!(matches!(field.shape, TypeShape::Leaf { secret: true, .. }));
+		assert!(matches!(
+			field.shape,
+			TypeShape::Leaf {
+				secret: true,
+				secret_ref: false,
+				..
+			}
+		));
+		assert_eq!(
+			schema_ref_type(&field.shape, &quote! { reinhardt_conf }).to_string(),
+			"reinhardt_conf :: settings :: schema :: FieldRef < Root , String >"
+		);
+	}
+
+	#[test]
+	fn parse_fields_treats_inferred_node_as_leaf_with_secret_hint() {
+		let input: ItemStruct = syn::parse_quote! {
+			struct TestSettings {
+				#[setting(secret)]
+				value: Option<Vec<NestedConfig>>,
+			}
+		};
+
+		let field = parse_single_field(input);
+
+		assert!(matches!(
+			field.shape,
+			TypeShape::Optional { ref inner, .. }
+				if matches!(
+					inner.as_ref(),
+					TypeShape::Sequence { inner, .. }
+						if matches!(
+							inner.as_ref(),
+							TypeShape::Leaf {
+								secret: true,
+								secret_ref: false,
+								..
+							}
+						)
+				)
+		));
 	}
 
 	#[test]

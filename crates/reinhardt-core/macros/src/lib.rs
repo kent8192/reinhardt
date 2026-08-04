@@ -1167,7 +1167,8 @@ pub fn dto(args: TokenStream, input: TokenStream) -> TokenStream {
 ///
 /// Fields whose released Rust type cannot use a secret wrapper can opt into
 /// secret schema classification explicitly. The generated schema then exposes
-/// a `SecretFieldRef` and includes the field in redaction paths:
+/// a leaf in settings metadata and includes the field in redaction paths while
+/// preserving its ordinary typed `FieldRef`:
 ///
 /// ```rust,ignore
 /// #[settings(fragment = true, section = "service")]

@@ -48,11 +48,9 @@ impl TutorialSessionAuthMiddleware {
 		let mut db = *db;
 
 		match User::objects().get(user_id).first_with_db(&mut db).await {
-			Ok(Some(user)) if user.is_active() => AuthState::authenticated(
-				user.id().to_string(),
-				user.is_superuser,
-				true,
-			),
+			Ok(Some(user)) if user.is_active() => {
+				AuthState::authenticated(user.id().to_string(), user.is_superuser, true)
+			}
 			Ok(Some(_)) | Ok(None) => AuthState::anonymous(),
 			Err(error) => {
 				tracing::warn!(?error, "Tutorial session account validation failed");
@@ -146,8 +144,8 @@ mod tests {
 		let owner = BackendsConnection::connect_sqlite(&orm_url)
 			.await
 			.expect("ORM connection should connect");
-		let lease = DatabaseConnectionLease::register(owner)
-			.expect("ORM connection should be registered");
+		let lease =
+			DatabaseConnectionLease::register(owner).expect("ORM connection should be registered");
 		let db = lease.handle();
 		let singleton = Arc::new(SingletonScope::new());
 		singleton.set(db);

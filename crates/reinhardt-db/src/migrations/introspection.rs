@@ -2166,6 +2166,9 @@ impl SQLiteIntrospector {
 			.as_ref()
 			.map(|sql| sql.to_uppercase().contains("AUTOINCREMENT"))
 			.unwrap_or(false);
+		let has_descending_primary_key = create_sql
+			.as_deref()
+			.is_some_and(sqlite_create_table_has_descending_primary_key);
 
 		let mut columns = HashMap::new();
 
@@ -2186,7 +2189,8 @@ impl SQLiteIntrospector {
 			let is_rowid_alias = primary_key.len() == 1
 				&& row.pk == 1
 				&& row.r#type.trim().eq_ignore_ascii_case("INTEGER")
-				&& !without_rowid;
+				&& !without_rowid
+				&& !has_descending_primary_key;
 			let is_auto = is_pk && (has_autoincrement || is_rowid_alias);
 
 			// Primary key columns are implicitly NOT NULL in SQLite
@@ -2255,9 +2259,76 @@ fn sqlite_create_table_is_without_rowid(create_sql: &str) -> bool {
 	statement.to_ascii_uppercase().ends_with("WITHOUT ROWID")
 }
 
+#[cfg(feature = "sqlite")]
+fn sqlite_create_table_has_descending_primary_key(create_sql: &str) -> bool {
+	let mut tokens = Vec::new();
+	let mut token = String::new();
+	let mut chars = create_sql.chars().peekable();
+
+	while let Some(ch) = chars.next() {
+		if ch.is_ascii_alphanumeric() || ch == '_' {
+			token.push(ch.to_ascii_uppercase());
+			continue;
+		}
+
+		if !token.is_empty() {
+			tokens.push(std::mem::take(&mut token));
+		}
+
+		match ch {
+			'-' if chars.peek() == Some(&'-') => {
+				chars.next();
+				for comment_ch in chars.by_ref() {
+					if comment_ch == '\n' || comment_ch == '\r' {
+						break;
+					}
+				}
+			}
+			'/' if chars.peek() == Some(&'*') => {
+				chars.next();
+				while let Some(comment_ch) = chars.next() {
+					if comment_ch == '*' && chars.peek() == Some(&'/') {
+						chars.next();
+						break;
+					}
+				}
+			}
+			quote @ ('\'' | '"' | '`') => {
+				while let Some(quoted_ch) = chars.next() {
+					if quoted_ch == quote {
+						if chars.peek() == Some(&quote) {
+							chars.next();
+						} else {
+							break;
+						}
+					}
+				}
+			}
+			'[' => {
+				for quoted_ch in chars.by_ref() {
+					if quoted_ch == ']' {
+						break;
+					}
+				}
+			}
+			_ => {}
+		}
+	}
+
+	if !token.is_empty() {
+		tokens.push(token);
+	}
+
+	tokens
+		.windows(3)
+		.any(|tokens| tokens == ["PRIMARY", "KEY", "DESC"])
+}
+
 #[cfg(all(test, feature = "sqlite"))]
-mod sqlite_without_rowid_tests {
-	use super::sqlite_create_table_is_without_rowid;
+mod sqlite_create_table_sql_tests {
+	use super::{
+		sqlite_create_table_has_descending_primary_key, sqlite_create_table_is_without_rowid,
+	};
 
 	#[test]
 	fn detects_only_the_terminal_without_rowid_table_option() {
@@ -2267,6 +2338,43 @@ mod sqlite_without_rowid_tests {
 		assert!(!sqlite_create_table_is_without_rowid(
 			"CREATE TABLE entries (id INTEGER PRIMARY KEY, marker TEXT DEFAULT 'WITHOUT ROWID')"
 		));
+	}
+
+	#[rstest::rstest]
+	fn detects_descending_primary_keys_across_sql_comments() {
+		// Arrange
+		let statements = [
+			"CREATE TABLE entries (id INTEGER PRIMARY KEY /* ordering */ DESC)",
+			"CREATE TABLE entries (id INTEGER PRIMARY KEY -- ordering\n DESC)",
+		];
+
+		// Act
+		let detected: Vec<_> = statements
+			.into_iter()
+			.map(sqlite_create_table_has_descending_primary_key)
+			.collect();
+
+		// Assert
+		assert_eq!(detected, vec![true, true]);
+	}
+
+	#[rstest::rstest]
+	fn ignores_primary_key_keywords_inside_sql_comments_and_literals() {
+		// Arrange
+		let statements = [
+			"CREATE TABLE entries (id INTEGER PRIMARY KEY /* PRIMARY KEY DESC */)",
+			"CREATE TABLE entries (id INTEGER PRIMARY KEY -- PRIMARY KEY DESC\n)",
+			"CREATE TABLE entries (id INTEGER PRIMARY KEY, marker TEXT DEFAULT 'PRIMARY KEY DESC')",
+		];
+
+		// Act
+		let detected: Vec<_> = statements
+			.into_iter()
+			.map(sqlite_create_table_has_descending_primary_key)
+			.collect();
+
+		// Assert
+		assert_eq!(detected, vec![false, false, false]);
 	}
 }
 
@@ -2752,7 +2860,7 @@ mod tests {
 	use crate::migrations::FieldType;
 	use std::collections::HashSet;
 
-	#[test]
+	#[rstest::rstest]
 	fn partition_validation_rejects_mysql_without_connecting() {
 		let error = validate_partition_option(DatabaseType::Mysql, true)
 			.expect_err("MySQL must reject PostgreSQL-only partitions before database I/O");
@@ -2762,7 +2870,7 @@ mod tests {
 		);
 	}
 
-	#[test]
+	#[rstest::rstest]
 	#[cfg(feature = "mysql")]
 	fn mysql_catalog_integer_conversion_rejects_values_outside_u32() {
 		let negative = mysql_catalog_u32(Some(-1), 255, "character maximum length")
@@ -2780,7 +2888,7 @@ mod tests {
 		);
 	}
 
-	#[test]
+	#[rstest::rstest]
 	#[cfg(feature = "mysql")]
 	fn mysql_unsigned_integer_columns_map_to_unsigned_rust_types() {
 		assert_eq!(
@@ -2795,7 +2903,7 @@ mod tests {
 		);
 	}
 
-	#[test]
+	#[rstest::rstest]
 	fn sqlite_type_affinity_handles_legal_noncanonical_declarations() {
 		assert_eq!(
 			SQLiteIntrospector::parse_sqlite_type("UNSIGNED BIG INT"),
@@ -2811,7 +2919,7 @@ mod tests {
 		);
 	}
 
-	#[test]
+	#[rstest::rstest]
 	#[cfg(feature = "postgres")]
 	fn postgres_partition_filter_excludes_only_partition_children() {
 		let mut tables = HashMap::new();
@@ -2876,7 +2984,10 @@ mod tests {
 		);
 	}
 
+	use rstest::rstest;
+
 	#[cfg(feature = "sqlite")]
+	#[rstest]
 	#[tokio::test]
 	async fn test_sqlite_introspector_read_schema() {
 		use sqlx::SqlitePool;
@@ -2926,6 +3037,7 @@ mod tests {
 	}
 
 	#[cfg(feature = "sqlite")]
+	#[rstest::rstest]
 	#[tokio::test]
 	async fn sqlite_integer_primary_key_without_autoincrement_is_generated() {
 		use sqlx::SqlitePool;
@@ -2943,6 +3055,60 @@ mod tests {
 			.await
 			.expect("schema should be introspected");
 		assert!(schema.tables["users"].columns["id"].auto_increment);
+	}
+
+	#[cfg(feature = "sqlite")]
+	#[rstest::rstest]
+	#[tokio::test]
+	async fn sqlite_descending_integer_primary_key_is_not_generated() {
+		use sqlx::SqlitePool;
+
+		// Arrange
+		let pool = SqlitePool::connect("sqlite::memory:")
+			.await
+			.expect("in-memory SQLite pool should connect");
+		sqlx::query(
+			"CREATE TABLE users (id INTEGER PRIMARY KEY /* ordering */ DESC, name TEXT NOT NULL)",
+		)
+		.execute(&pool)
+		.await
+		.expect("test table should be created");
+
+		// Act
+		let schema = SQLiteIntrospector::new(pool)
+			.read_schema()
+			.await
+			.expect("schema should be introspected");
+
+		// Assert
+		assert_eq!(schema.tables["users"].columns["id"].auto_increment, false);
+	}
+
+	#[cfg(feature = "sqlite")]
+	#[rstest::rstest]
+	#[tokio::test]
+	async fn sqlite_primary_key_keywords_in_comments_do_not_disable_generation() {
+		use sqlx::SqlitePool;
+
+		// Arrange
+		let pool = SqlitePool::connect("sqlite::memory:")
+			.await
+			.expect("in-memory SQLite pool should connect");
+		sqlx::query(
+			"CREATE TABLE users (id INTEGER PRIMARY KEY /* PRIMARY KEY DESC */, name TEXT NOT NULL)",
+		)
+		.execute(&pool)
+		.await
+		.expect("test table should be created");
+
+		// Act
+		let schema = SQLiteIntrospector::new(pool)
+			.read_schema()
+			.await
+			.expect("schema should be introspected");
+
+		// Assert
+		assert_eq!(schema.tables["users"].columns["id"].auto_increment, true);
 	}
 
 	#[cfg(feature = "sqlite")]

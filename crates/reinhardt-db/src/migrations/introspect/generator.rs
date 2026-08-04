@@ -5,7 +5,7 @@
 use super::config::IntrospectConfig;
 use super::naming::{column_to_field_name, sanitize_identifier, table_to_struct_name};
 use super::type_mapping::TypeMapper;
-use crate::migrations::introspection::{ColumnInfo, DatabaseSchema, TableInfo};
+use crate::migrations::introspection::{ColumnInfo, DatabaseSchema, ForeignKeyInfo, TableInfo};
 use crate::migrations::{GeneratedColumnDefinition, GeneratedStorage, MigrationError, Result};
 use proc_macro2::TokenStream;
 use quote::{format_ident, quote};
@@ -172,7 +172,8 @@ impl SchemaCodeGenerator {
 	) -> Result<GeneratedFile> {
 		let header = self.generate_header();
 		let imports = self.generate_imports();
-		let relationship_imports = self.generate_relationship_imports(table, table_to_struct);
+		let relationship_imports =
+			self.generate_relationship_imports(table, table_to_struct, schema);
 		let model = self.generate_model(table, table_to_struct, schema)?;
 
 		let tokens = quote! {
@@ -196,6 +197,7 @@ impl SchemaCodeGenerator {
 		&self,
 		table: &TableInfo,
 		table_to_struct: &HashMap<String, String>,
+		schema: &DatabaseSchema,
 	) -> TokenStream {
 		if self.config.output.single_file || !self.config.generation.detect_relationships {
 			return TokenStream::new();
@@ -205,6 +207,7 @@ impl SchemaCodeGenerator {
 		let imports: Vec<_> = table
 			.foreign_keys
 			.iter()
+			.filter(|foreign_key| self.is_relationship_foreign_key(table, foreign_key, schema))
 			.filter_map(|foreign_key| {
 				let target = table_to_struct.get(&foreign_key.referenced_table)?;
 				let module = module_identifier(&foreign_key.referenced_table);
@@ -216,6 +219,26 @@ impl SchemaCodeGenerator {
 			})
 			.collect();
 		quote! { #(#imports)* }
+	}
+
+	fn is_relationship_foreign_key(
+		&self,
+		table: &TableInfo,
+		foreign_key: &ForeignKeyInfo,
+		schema: &DatabaseSchema,
+	) -> bool {
+		if !self.config.generation.detect_relationships || foreign_key.columns.len() != 1 {
+			return false;
+		}
+		let Some(source_column) = foreign_key.columns.first() else {
+			return false;
+		};
+		let Some(target) = schema.tables.get(&foreign_key.referenced_table) else {
+			return false;
+		};
+		table.columns.contains_key(source_column)
+			&& target.primary_key.len() == 1
+			&& foreign_key.referenced_columns == target.primary_key
 	}
 
 	/// Generate `models.rs`, which declares and re-exports all model modules.
@@ -421,28 +444,10 @@ impl SchemaCodeGenerator {
 		);
 		let field_ident = format_ident!("{}", field_name);
 
-		let relationship =
-			self.config
-				.generation
-				.detect_relationships
-				.then(|| {
-					table.foreign_keys.iter().find(|foreign_key| {
-						let Some(target) = schema.tables.get(&foreign_key.referenced_table) else {
-							return false;
-						};
-						let targets_unique_column =
-							target.unique_constraints.iter().any(|constraint| {
-								constraint.columns == foreign_key.referenced_columns
-							}) || target.indexes.values().any(|index| {
-								index.unique && index.columns == foreign_key.referenced_columns
-							});
-						foreign_key.columns.as_slice() == [column.name.as_str()]
-							&& foreign_key.referenced_columns.len() == 1
-							&& (foreign_key.referenced_columns == target.primary_key
-								|| targets_unique_column)
-					})
-				})
-				.flatten();
+		let relationship = table.foreign_keys.iter().find(|foreign_key| {
+			self.is_relationship_foreign_key(table, foreign_key, schema)
+				&& foreign_key.columns.as_slice() == [column.name.as_str()]
+		});
 		let relationship_target = if let Some(foreign_key) = relationship {
 			let target = table_to_struct
 				.get(&foreign_key.referenced_table)
@@ -596,14 +601,10 @@ impl SchemaCodeGenerator {
 		// Default value
 		if let Some(ref default) = column.default {
 			// Skip auto-generated defaults like NOW() or sequences
-			if !is_auto_default(default) {
-				let default_expression = render_default_expression(default, &column.column_type)
-					.map_err(|error| {
-						MigrationError::IntrospectionError(format!(
-							"Failed to render default expression for {}.{}: {error}",
-							table.name, column.name
-						))
-					})?;
+			if !is_auto_default(default)
+				&& let Some(default_expression) =
+					render_default_expression(default, &column.column_type)
+			{
 				attrs.push(quote! { default = #default_expression });
 			}
 		}
@@ -755,7 +756,7 @@ fn is_auto_default(default: &str) -> bool {
 fn render_default_expression(
 	default: &str,
 	field_type: &crate::migrations::fields::FieldType,
-) -> Result<TokenStream> {
+) -> Option<TokenStream> {
 	use crate::migrations::fields::FieldType;
 	let normalized = default
 		.trim()
@@ -767,16 +768,16 @@ fn render_default_expression(
 		.and_then(|value| value.strip_suffix('\''))
 	{
 		let value = value.replace("''", "'");
-		return Ok(quote! { #value });
+		return Some(quote! { #value });
 	}
 
 	if matches!(field_type, FieldType::Boolean) {
 		return match normalized {
-			"0" | "false" | "FALSE" => Ok(quote! { false }),
-			"1" | "true" | "TRUE" => Ok(quote! { true }),
-			value => value
-				.parse::<TokenStream>()
-				.map_err(|error| MigrationError::IntrospectionError(error.to_string())),
+			"0" | "false" | "FALSE" => Some(quote! { false }),
+			"1" | "true" | "TRUE" => Some(quote! { true }),
+			value => syn::parse_str::<syn::Expr>(value)
+				.ok()
+				.map(|expression| quote! { #expression }),
 		};
 	}
 
@@ -795,12 +796,12 @@ fn render_default_expression(
 			.and_then(|value| value.strip_suffix('\''))
 			.unwrap_or(value)
 			.replace("''", "'");
-		return Ok(quote! { #unquoted });
+		return Some(quote! { #unquoted });
 	}
 
-	normalized
-		.parse::<TokenStream>()
-		.map_err(|error| MigrationError::IntrospectionError(error.to_string()))
+	syn::parse_str::<syn::Expr>(normalized)
+		.ok()
+		.map(|expression| quote! { #expression })
 }
 
 #[cfg(test)]
@@ -811,6 +812,7 @@ mod tests {
 		CheckConstraintInfo, ColumnInfo, ForeignKeyInfo, IndexInfo, TableInfo, UniqueConstraintInfo,
 	};
 	use crate::migrations::{GeneratedColumnDefinition, GeneratedStorage, SchemaExpr};
+	use rstest::rstest;
 	use std::collections::HashMap;
 
 	fn create_test_table() -> TableInfo {
@@ -867,6 +869,17 @@ mod tests {
 			}],
 			check_constraints: vec![],
 		}
+	}
+
+	#[rstest]
+	fn render_default_expression_skips_sql_only_array_defaults() {
+		assert!(
+			render_default_expression(
+				"ARRAY[]::text[]",
+				&FieldType::Array(Box::new(FieldType::Text)),
+			)
+			.is_none()
+		);
 	}
 
 	#[test]
@@ -950,7 +963,7 @@ mod tests {
 		);
 	}
 
-	#[test]
+	#[rstest]
 	fn generate_model_emits_typed_literals_for_scalar_defaults() {
 		let config = IntrospectConfig::default().with_app_label("test");
 		let generator = SchemaCodeGenerator::new(config);
@@ -1078,7 +1091,7 @@ mod tests {
 		assert!(code.contains("field_type = \"jsonb\""));
 	}
 
-	#[test]
+	#[rstest]
 	fn generate_model_preserves_primary_key_order_and_text_metadata() {
 		let generator = SchemaCodeGenerator::new(IntrospectConfig::default());
 		let mut table = create_test_table();
@@ -1113,7 +1126,7 @@ mod tests {
 		);
 	}
 
-	#[test]
+	#[rstest]
 	fn generate_model_emits_enabled_foreign_key_relationships() {
 		let generator = SchemaCodeGenerator::new(IntrospectConfig::default());
 		let mut project = create_test_table();
@@ -1138,8 +1151,8 @@ mod tests {
 			columns: vec!["project".to_string()],
 			referenced_table: "projects".to_string(),
 			referenced_columns: vec!["id".to_string()],
-			on_delete: None,
-			on_update: None,
+			on_delete: Some("CASCADE".to_string()),
+			on_update: Some("SET NULL".to_string()),
 		}];
 		let schema = DatabaseSchema {
 			tables: [
@@ -1163,12 +1176,107 @@ mod tests {
 		assert!(code.contains("foreign_key"));
 		assert!(code.contains("db_column = \"project\""));
 		assert!(code.contains("to_field = \"id\""));
-		assert!(code.contains("on_delete = NoAction"));
-		assert!(code.contains("on_update = NoAction"));
+		assert!(code.contains("on_delete = Cascade"));
+		assert!(code.contains("on_update = SetNull"));
 		assert!(code.contains("pub project: ForeignKeyField<Projects>"));
 	}
 
-	#[test]
+	#[rstest]
+	fn generate_model_keeps_non_primary_foreign_keys_as_scalars() {
+		let generator = SchemaCodeGenerator::new(IntrospectConfig::default());
+		let mut accounts = create_test_table();
+		accounts.name = "accounts".to_string();
+		accounts.columns.insert(
+			"external_id".to_string(),
+			ColumnInfo {
+				name: "external_id".to_string(),
+				column_type: FieldType::BigInteger,
+				nullable: false,
+				default: None,
+				auto_increment: false,
+				identity_generation: None,
+				generated: None,
+			},
+		);
+		let mut invoices = create_test_table();
+		invoices.name = "invoices".to_string();
+		invoices.columns.insert(
+			"account_external_id".to_string(),
+			ColumnInfo {
+				name: "account_external_id".to_string(),
+				column_type: FieldType::BigInteger,
+				nullable: false,
+				default: None,
+				auto_increment: false,
+				identity_generation: None,
+				generated: None,
+			},
+		);
+		invoices.foreign_keys = vec![ForeignKeyInfo {
+			name: "invoices_account_external_id_fk".to_string(),
+			columns: vec!["account_external_id".to_string()],
+			referenced_table: "accounts".to_string(),
+			referenced_columns: vec!["external_id".to_string()],
+			on_delete: Some("CASCADE".to_string()),
+			on_update: Some("CASCADE".to_string()),
+		}];
+		let schema = DatabaseSchema {
+			tables: [
+				("accounts".to_string(), accounts),
+				("invoices".to_string(), invoices.clone()),
+			]
+			.into(),
+		};
+
+		let code = generator
+			.format_tokens(
+				generator
+					.generate_model(
+						&invoices,
+						&[("accounts".to_string(), "Accounts".to_string())].into(),
+						&schema,
+					)
+					.expect("model generation should succeed"),
+			)
+			.expect("generated model should format");
+
+		assert!(code.contains("pub account_external_id: i64"));
+		assert!(!code.contains("ForeignKeyField<Accounts>"));
+	}
+
+	#[rstest]
+	fn generate_model_omits_unrepresentable_sql_defaults() {
+		let generator = SchemaCodeGenerator::new(IntrospectConfig::default());
+		let mut table = create_test_table();
+		table.columns.insert(
+			"token".to_string(),
+			ColumnInfo {
+				name: "token".to_string(),
+				column_type: FieldType::Uuid,
+				nullable: false,
+				default: Some("uuid_generate_v4()".to_string()),
+				auto_increment: false,
+				identity_generation: None,
+				generated: None,
+			},
+		);
+		let schema = DatabaseSchema {
+			tables: [("users".to_string(), table.clone())].into(),
+		};
+
+		let code = generator
+			.format_tokens(
+				generator
+					.generate_model(&table, &HashMap::new(), &schema)
+					.expect("model generation should succeed"),
+			)
+			.expect("generated model should format");
+
+		assert!(code.contains("pub token: uuid::Uuid"));
+		assert!(!code.contains("default = uuid_generate_v4"));
+	}
+
+	#[rstest]
 	fn generate_model_rejects_normalized_field_name_collisions() {
 		let config = IntrospectConfig::default().with_app_label("test");
 		let generator = SchemaCodeGenerator::new(config);
@@ -1211,7 +1319,7 @@ mod tests {
 		);
 	}
 
-	#[test]
+	#[rstest]
 	fn generate_rejects_normalized_model_name_collisions() {
 		let config = IntrospectConfig::default().with_app_label("test");
 		let generator = SchemaCodeGenerator::new(config);
@@ -1233,7 +1341,7 @@ mod tests {
 		assert!(error.to_string().contains("generated model name"));
 	}
 
-	#[test]
+	#[rstest]
 	fn multi_file_generation_uses_rust_2024_module_layout() {
 		let mut config = IntrospectConfig::default().with_app_label("test");
 		config.output.directory = PathBuf::from("/tmp/reinhardt-inspectdb-layout");
@@ -1277,6 +1385,71 @@ mod tests {
 	}
 
 	#[test]
+	fn multi_file_generation_omits_scalar_foreign_key_imports() {
+		let mut config = IntrospectConfig::default();
+		config.output.directory = PathBuf::from("/tmp/reinhardt-inspectdb-scalar-fk-imports");
+		let generator = SchemaCodeGenerator::new(config);
+		let mut accounts = create_test_table();
+		accounts.name = "string".to_string();
+		accounts.columns.insert(
+			"external_id".to_string(),
+			ColumnInfo {
+				name: "external_id".to_string(),
+				column_type: FieldType::BigInteger,
+				nullable: false,
+				default: None,
+				auto_increment: false,
+				identity_generation: None,
+				generated: None,
+			},
+		);
+		let mut invoices = create_test_table();
+		invoices.name = "invoices".to_string();
+		invoices.columns.insert(
+			"account_external_id".to_string(),
+			ColumnInfo {
+				name: "account_external_id".to_string(),
+				column_type: FieldType::BigInteger,
+				nullable: false,
+				default: None,
+				auto_increment: false,
+				identity_generation: None,
+				generated: None,
+			},
+		);
+		invoices.foreign_keys = vec![ForeignKeyInfo {
+			name: "invoices_account_external_id_fk".to_string(),
+			columns: vec!["account_external_id".to_string()],
+			referenced_table: "string".to_string(),
+			referenced_columns: vec!["external_id".to_string()],
+			on_delete: Some("CASCADE".to_string()),
+			on_update: Some("CASCADE".to_string()),
+		}];
+
+		let output = generator
+			.generate(&DatabaseSchema {
+				tables: [
+					("string".to_string(), accounts),
+					("invoices".to_string(), invoices),
+				]
+				.into(),
+			})
+			.expect("multi-file generation should succeed");
+		let invoice_file = output
+			.files
+			.iter()
+			.find(|file| file.path.ends_with("models/invoices.rs"))
+			.expect("invoice model file should be generated");
+
+		assert!(
+			invoice_file
+				.content
+				.contains("pub account_external_id: i64")
+		);
+		assert!(!invoice_file.content.contains("use super::string::String;"));
+	}
+
+	#[test]
 	fn multi_file_generation_uses_raw_identifier_only_in_module_declaration() {
 		let mut config = IntrospectConfig::default().with_app_label("test");
 		config.output.directory = PathBuf::from("/tmp/reinhardt-inspectdb-keyword-layout");
@@ -1315,10 +1488,7 @@ mod tests {
 		assert!(output.files[0].path.ends_with("models.rs"));
 	}
 
-	fn generate_email_relationship(
-		target_uses_unique_index: bool,
-		source_is_unique: bool,
-	) -> String {
+	fn generate_email_reference(target_uses_unique_index: bool, source_is_unique: bool) -> String {
 		let generator = SchemaCodeGenerator::new(IntrospectConfig::default());
 		let mut users = create_test_table();
 		users.name = "users".to_string();
@@ -1403,49 +1573,38 @@ mod tests {
 			.expect("model should format")
 	}
 
-	fn relationship_block(code: &str) -> String {
-		let mut block = Vec::new();
-		for line in code
+	#[rstest::rstest]
+	fn generate_model_keeps_foreign_key_to_unique_target_index_scalar() {
+		// Arrange
+		let code = generate_email_reference(true, false);
+
+		// Act
+		let field = code
 			.lines()
-			.map(str::trim)
-			.skip_while(|line| *line != "#[rel(")
-		{
-			block.push(line);
-			if line.starts_with("pub user_email:") {
-				break;
-			}
-		}
-		block.join("\n")
+			.find(|line| line.trim_start().starts_with("pub user_email:"))
+			.map(str::trim);
+		let relationship_count = code.matches("#[rel(").count();
+
+		// Assert
+		assert_eq!(field, Some("pub user_email: String,"));
+		assert_eq!(relationship_count, 0);
 	}
 
 	#[rstest::rstest]
-	fn generate_model_preserves_foreign_key_to_unique_target_index() {
+	fn generate_model_keeps_unique_source_to_non_primary_target_scalar() {
 		// Arrange
-		let code = generate_email_relationship(true, false);
+		let code = generate_email_reference(false, true);
 
 		// Act
-		let relationship = relationship_block(&code);
+		let field = code
+			.lines()
+			.find(|line| line.trim_start().starts_with("pub user_email:"))
+			.map(str::trim);
+		let relationship_count = code.matches("#[rel(").count();
 
 		// Assert
-		assert_eq!(
-			relationship,
-			"#[rel(\nforeign_key,\ndb_column = \"user_email\",\nto_field = \"email\",\non_delete = Restrict,\non_update = SetNull,\nnull = false\n)]\n#[field(max_length = 255u32)]\npub user_email: ForeignKeyField<Users>,"
-		);
-	}
-
-	#[rstest::rstest]
-	fn generate_model_preserves_one_to_one_to_unique_target_column() {
-		// Arrange
-		let code = generate_email_relationship(false, true);
-
-		// Act
-		let relationship = relationship_block(&code);
-
-		// Assert
-		assert_eq!(
-			relationship,
-			"#[rel(\none_to_one,\ndb_column = \"user_email\",\nto_field = \"email\",\non_delete = Restrict,\non_update = SetNull,\nnull = false\n)]\n#[field(max_length = 255u32)]\npub user_email: OneToOneField<Users>,"
-		);
+		assert_eq!(field, Some("pub user_email: String,"));
+		assert_eq!(relationship_count, 0);
 	}
 
 	#[test]

@@ -23,7 +23,7 @@ fn directory_entries(path: &Path) -> Vec<String> {
 	entries
 }
 
-#[test]
+#[rstest::rstest]
 fn existing_destination_without_force_is_rejected_before_any_mutation() {
 	let temp_dir = tempfile::Builder::new()
 		.prefix("inspectdb-output-")
@@ -57,7 +57,7 @@ fn existing_destination_without_force_is_rejected_before_any_mutation() {
 	);
 }
 
-#[test]
+#[rstest::rstest]
 fn current_directory_aliases_are_rejected_before_mutation() {
 	let temp_dir = tempfile::Builder::new()
 		.prefix("inspectdb-output-")
@@ -83,7 +83,7 @@ fn current_directory_aliases_are_rejected_before_mutation() {
 	assert_eq!(directory_entries(temp_dir.path()), Vec::<String>::new());
 }
 
-#[test]
+#[rstest::rstest]
 fn existing_case_aliases_are_rejected_before_mutation_on_case_insensitive_filesystems() {
 	let temp_dir = tempfile::Builder::new()
 		.prefix("inspectdb-output-")
@@ -119,7 +119,7 @@ fn existing_case_aliases_are_rejected_before_mutation_on_case_insensitive_filesy
 	);
 }
 
-#[test]
+#[rstest::rstest]
 fn absent_case_aliases_are_rejected_before_destination_mutation() {
 	let temp_dir = tempfile::Builder::new()
 		.prefix("inspectdb-output-")
@@ -153,7 +153,7 @@ fn absent_case_aliases_are_rejected_before_destination_mutation() {
 }
 
 #[cfg(unix)]
-#[test]
+#[rstest::rstest]
 fn symlink_parent_aliases_are_rejected_before_mutation() {
 	use std::os::unix::fs::symlink;
 
@@ -185,7 +185,7 @@ fn symlink_parent_aliases_are_rejected_before_mutation() {
 	assert_eq!(directory_entries(&real_parent), Vec::<String>::new());
 }
 
-#[test]
+#[rstest::rstest]
 fn parent_traversal_destination_is_rejected_before_mutation() {
 	let temp_dir = tempfile::Builder::new()
 		.prefix("inspectdb-output-")
@@ -215,7 +215,7 @@ fn parent_traversal_destination_is_rejected_before_mutation() {
 	);
 }
 
-#[test]
+#[rstest::rstest]
 fn normalized_ancestor_destinations_are_rejected_before_mutation() {
 	let temp_dir = tempfile::Builder::new()
 		.prefix("inspectdb-output-")
@@ -242,7 +242,7 @@ fn normalized_ancestor_destinations_are_rejected_before_mutation() {
 }
 
 #[cfg(unix)]
-#[test]
+#[rstest::rstest]
 fn successful_force_write_preserves_permissions_and_removes_artifacts() {
 	use std::os::unix::fs::PermissionsExt;
 
@@ -285,7 +285,7 @@ fn successful_force_write_preserves_permissions_and_removes_artifacts() {
 }
 
 #[cfg(unix)]
-#[test]
+#[rstest::rstest]
 fn successful_force_write_preserves_unix_special_permission_bits() {
 	use std::os::unix::fs::PermissionsExt;
 

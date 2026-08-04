@@ -8,10 +8,9 @@
 //! - **Schema Reading**: Uses `DatabaseIntrospector` to read existing database schemas
 //! - **Type Mapping**: Maps SQL types to Rust types with proper nullable handling
 //! - **Code Generation**: Generates `#[model(...)]` annotated Rust structs
-//! - **Relationship Detection**: Automatically detects single-column foreign keys to primary
-//!   keys and unique columns. Relationships to unique non-primary columns include `to_field` in
-//!   the generated `#[rel(...)]` attribute; a unique source column produces a one-to-one field,
-//!   while a non-unique source column produces a foreign-key field.
+//! - **Relationship Detection**: Automatically detects single-column foreign keys to scalar
+//!   primary keys. References to non-primary columns remain scalar until relationship storage
+//!   metadata can derive its type from `to_field`.
 //! - **Configuration**: TOML-based configuration for customization
 //!
 //! ## Usage
@@ -1528,7 +1527,7 @@ mod atomic_write_tests {
 	}
 
 	#[cfg(any(unix, windows, target_os = "redox"))]
-	#[test]
+	#[rstest::rstest]
 	fn filesystem_probe_cleanup_preserves_unowned_replacement() {
 		let temp_dir = tempfile::Builder::new()
 			.prefix("inspectdb-output-")
@@ -1578,7 +1577,7 @@ mod atomic_write_tests {
 	}
 
 	#[cfg(any(unix, windows, target_os = "redox"))]
-	#[test]
+	#[rstest::rstest]
 	fn filesystem_probe_root_uses_an_unpredictable_token() {
 		let temp_dir = tempfile::Builder::new()
 			.prefix("inspectdb-output-")
@@ -1604,7 +1603,7 @@ mod atomic_write_tests {
 	}
 
 	#[cfg(any(unix, windows, target_os = "redox"))]
-	#[test]
+	#[rstest::rstest]
 	fn probe_identity_failure_retains_created_file() {
 		let temp_dir = tempfile::Builder::new()
 			.prefix("inspectdb-output-")
@@ -1634,7 +1633,7 @@ mod atomic_write_tests {
 		fs::remove_file(path).expect("test-owned retained file should be removed");
 	}
 
-	#[test]
+	#[rstest::rstest]
 	fn unsupported_probe_error_is_precise() {
 		let error = unsupported_filesystem_probe_error();
 
@@ -1646,7 +1645,7 @@ mod atomic_write_tests {
 		);
 	}
 
-	#[test]
+	#[rstest::rstest]
 	fn non_force_race_does_not_overwrite_concurrent_destination() {
 		let temp_dir = tempfile::Builder::new()
 			.prefix("inspectdb-output-")
@@ -1677,7 +1676,7 @@ mod atomic_write_tests {
 		assert_eq!(entries(temp_dir.path()), vec!["concurrent.rs".to_string()]);
 	}
 
-	#[test]
+	#[rstest::rstest]
 	fn non_force_publish_reserves_destination_before_replacement() {
 		let temp_dir = tempfile::Builder::new()
 			.prefix("inspectdb-output-")
@@ -1715,7 +1714,7 @@ mod atomic_write_tests {
 		assert_eq!(entries(temp_dir.path()), Vec::<String>::new());
 	}
 
-	#[test]
+	#[rstest::rstest]
 	fn rollback_restores_original_after_failure_after_original_move() {
 		let temp_dir = tempfile::Builder::new()
 			.prefix("inspectdb-output-")
@@ -1746,7 +1745,7 @@ mod atomic_write_tests {
 		assert_eq!(entries(temp_dir.path()), vec!["existing.rs".to_string()]);
 	}
 
-	#[test]
+	#[rstest::rstest]
 	fn rollback_removes_new_file_after_install_failure() {
 		let temp_dir = tempfile::Builder::new()
 			.prefix("inspectdb-output-")
@@ -1773,7 +1772,7 @@ mod atomic_write_tests {
 		assert_eq!(entries(temp_dir.path()), Vec::<String>::new());
 	}
 
-	#[test]
+	#[rstest::rstest]
 	fn rollback_restores_original_after_backup_cleanup_failure() {
 		let temp_dir = tempfile::Builder::new()
 			.prefix("inspectdb-output-")
@@ -1808,7 +1807,7 @@ mod atomic_write_tests {
 	}
 
 	#[cfg(unix)]
-	#[test]
+	#[rstest::rstest]
 	fn rollback_after_all_installs_removes_new_and_restores_existing_file() {
 		use std::os::unix::fs::PermissionsExt;
 
@@ -1860,7 +1859,7 @@ mod atomic_write_tests {
 	}
 
 	#[cfg(unix)]
-	#[test]
+	#[rstest::rstest]
 	fn rollback_preserves_a_later_successful_force_writer() {
 		use std::os::unix::fs::PermissionsExt;
 
@@ -1930,7 +1929,7 @@ mod atomic_write_tests {
 		assert_eq!(error.to_string(), expected);
 	}
 
-	#[test]
+	#[rstest::rstest]
 	fn rollback_failure_is_reported_and_backup_is_retained() {
 		let temp_dir = tempfile::Builder::new()
 			.prefix("inspectdb-output-")
@@ -1982,7 +1981,7 @@ mod atomic_write_tests {
 		);
 	}
 
-	#[test]
+	#[rstest::rstest]
 	fn temporary_sibling_collision_is_not_overwritten() {
 		let temp_dir = tempfile::Builder::new()
 			.prefix("inspectdb-output-")
@@ -2026,7 +2025,7 @@ mod atomic_write_tests {
 		assert_eq!(entries(temp_dir.path()), expected_entries);
 	}
 
-	#[test]
+	#[rstest::rstest]
 	fn backup_sibling_collision_is_not_overwritten() {
 		let temp_dir = tempfile::Builder::new()
 			.prefix("inspectdb-output-")

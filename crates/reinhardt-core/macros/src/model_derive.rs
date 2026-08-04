@@ -2086,7 +2086,7 @@ fn map_explicit_field_type(
 	field_type_str: &str,
 	migrations_crate: &proc_macro2::TokenStream,
 ) -> Result<TokenStream> {
-	let normalized = field_type_str.to_lowercase();
+	let normalized = field_type_str.trim().to_ascii_lowercase();
 	if let Some(length) = normalized
 		.strip_prefix("char(")
 		.and_then(|value| value.strip_suffix(')'))
@@ -8891,6 +8891,20 @@ fn generate_info_builder(
 mod tests {
 	use super::*;
 
+	#[cfg(any(feature = "db-postgres", feature = "db-mysql", feature = "db-sqlite"))]
+	#[rstest::rstest]
+	fn explicit_char_field_type_preserves_length() {
+		let migrations_crate = quote! { reinhardt_db::migrations };
+
+		let field_type = map_explicit_field_type("char(2)", &migrations_crate)
+			.expect("CHAR field type should parse");
+
+		assert_eq!(
+			field_type.to_string(),
+			"reinhardt_db :: migrations :: FieldType :: Char (2u32)"
+		);
+	}
+
 	#[test]
 	#[cfg(not(feature = "pgvector"))]
 	fn vector_named_custom_fields_are_not_claimed_without_pgvector() {
@@ -9097,7 +9111,7 @@ mod tests {
 		assert!(output.contains("fn primary_key_uses_zero_sentinel () -> bool { true }"));
 	}
 
-	#[test]
+	#[rstest::rstest]
 	fn test_model_routes_primary_key_values_through_database_field_codec() {
 		let input = quote! {
 			#[model(app_label = "test", table_name = "external_users", info = false)]

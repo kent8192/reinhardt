@@ -63,6 +63,7 @@ async fn sqlite_fixture() -> (TempDir, String) {
 	(temp, database_url)
 }
 
+#[rstest::rstest]
 #[tokio::test]
 async fn stdout_mode_writes_one_parseable_module_and_sends_progress_to_stderr() {
 	let (temp, database_url) = sqlite_fixture().await;
@@ -95,6 +96,7 @@ async fn stdout_mode_writes_one_parseable_module_and_sends_progress_to_stderr() 
 	temp.close().expect("remove temporary database directory");
 }
 
+#[rstest::rstest]
 #[tokio::test]
 async fn directory_mode_keeps_stdout_clean_and_writes_generated_files() {
 	let (temp, database_url) = sqlite_fixture().await;
@@ -132,6 +134,7 @@ async fn directory_mode_keeps_stdout_clean_and_writes_generated_files() {
 	temp.close().expect("remove temporary output directory");
 }
 
+#[rstest::rstest]
 #[tokio::test]
 async fn include_partitions_is_rejected_before_sqlite_connection() {
 	let output = Arc::new(CapturedOutput::default());
@@ -169,7 +172,7 @@ async fn include_partitions_is_rejected_before_sqlite_connection() {
 	);
 }
 
-#[test]
+#[rstest::rstest]
 fn command_context_debug_redacts_database_url_credentials() {
 	let credential = "postgres://debug-user:debug-password@db.example/app?token=query-secret";
 	let mut context = CommandContext::default();
@@ -188,7 +191,7 @@ fn command_context_debug_redacts_database_url_credentials() {
 	assert!(!debug.contains("query-secret"));
 }
 
-#[test]
+#[rstest::rstest]
 fn command_context_debug_redacts_credential_bearing_positional_arguments() {
 	let credential =
 		"postgres://positional-user:positional-password@db.example/app?token=query-secret";
@@ -212,6 +215,7 @@ fn command_context_debug_redacts_credential_bearing_positional_arguments() {
 	assert!(!debug.contains("inline-secret"));
 }
 
+#[rstest::rstest]
 #[tokio::test]
 async fn malformed_config_error_preserves_path_and_redacts_source_credentials() {
 	let temp = tempfile::Builder::new()
@@ -246,7 +250,7 @@ async fn malformed_config_error_preserves_path_and_redacts_source_credentials() 
 		.expect("remove temporary configuration directory");
 }
 
-#[test]
+#[rstest::rstest]
 fn base_command_metadata_exposes_output_and_config_short_aliases() {
 	let options: BTreeMap<_, _> = InspectDbCommand::default()
 		.options()
@@ -258,6 +262,7 @@ fn base_command_metadata_exposes_output_and_config_short_aliases() {
 	assert_eq!(options["config"].short, Some('c'));
 }
 
+#[rstest::rstest]
 #[tokio::test]
 async fn atomic_writer_failure_is_returned_without_partial_output() {
 	let (temp, database_url) = sqlite_fixture().await;

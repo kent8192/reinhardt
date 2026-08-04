@@ -62,6 +62,8 @@ details.
 - **migrate** - Apply database migrations
 - **inspectdb** - Generate deterministic Reinhardt models from an existing
   PostgreSQL, MySQL, or SQLite schema
+- **dbshell** - Launch the native client for a configured PostgreSQL, MySQL, or
+  SQLite database
 - **showmigrations** - Display applied state or the selected dependency plan
   without creating migration history
 - **sqlmigrate** - Render backend-specific forward or rollback SQL without
@@ -393,6 +395,38 @@ attributes (including composite unique constraints or foreign keys,
 shared-primary-key relationships, partial indexes, table-level CHECK constraints,
 and storage-width-specific integer, text, binary, or enum types) instead of
 silently generating a lossy migration model.
+
+### Native database shell
+
+`dbshell` launches the database vendor's native interactive client. PostgreSQL
+requires `psql`, MySQL requires `mysql`, and SQLite requires `sqlite3`; the
+selected executable must be available on `PATH`.
+
+The command uses the `default` configured database alias unless `--database`
+selects another alias. An explicit `--database-url` takes precedence over the
+selected alias:
+
+```bash
+cargo run --bin manage -- dbshell
+cargo run --bin manage -- dbshell --database reporting
+cargo run --bin manage -- dbshell \
+  --database-url 'postgresql://operator@example.internal/reporting'
+```
+
+Arguments after `--` are passed to the native client without reinterpretation:
+
+```bash
+cargo run --bin manage -- dbshell -- --expanded
+```
+
+The client inherits the terminal's standard input, output, and error streams,
+so prompts and interactive features continue to work. Database passwords are
+not placed in the native client's arguments. Reinhardt adds `PGPASSWORD` or
+`MYSQL_PWD` only to the child process environment; it does not add those
+variables to the parent process or expose their values in its diagnostics. A
+MySQL URL with a host uses TCP explicitly so a `localhost` port is honored;
+add the supported `socket` query parameter when Unix-socket transport is
+required.
 
 ### Rust Management Shell
 

@@ -10,11 +10,11 @@ fn state_store_round_trips_local_infra_state() {
 	let temp = TempDir::new().unwrap();
 	let store = StateStore::new(temp.path());
 	let state = LocalInfraState {
-		project_id: "project123".to_string(),
+		project_id: project_id(temp.path()),
 		profile: "local".to_string(),
 		services: vec![LocalServiceState {
 			name: "postgres".to_string(),
-			container_name: "reinhardt-project123-local-postgres".to_string(),
+			container_name: format!("reinhardt-{}-local-postgres", project_id(temp.path())),
 			image: "postgres:17-alpine".to_string(),
 			host: "127.0.0.1".to_string(),
 			host_port: 55432,
@@ -27,7 +27,7 @@ fn state_store_round_trips_local_infra_state() {
 	store.save(&state).unwrap();
 	let loaded = store.load().unwrap().expect("state should exist");
 
-	assert_eq!(loaded.project_id, "project123");
+	assert_eq!(loaded.project_id, project_id(temp.path()));
 	assert_eq!(loaded.profile, "local");
 	assert_eq!(loaded.services.len(), 1);
 	assert_eq!(loaded.services[0].host_port, 55432);
@@ -185,7 +185,7 @@ async fn infra_down_removes_state_even_when_containers_are_missing() {
 	let store = StateStore::new(temp.path());
 	store
 		.save(&LocalInfraState {
-			project_id: "project123".to_string(),
+			project_id: project_id(temp.path()),
 			profile: "local".to_string(),
 			services: vec![],
 		})
@@ -203,13 +203,115 @@ async fn infra_down_removes_state_even_when_containers_are_missing() {
 	assert!(store.load().unwrap().is_none());
 }
 
+#[test]
+fn state_store_rejects_tampered_remote_service_endpoint() {
+	let temp = TempDir::new().unwrap();
+	let state_path = temp.path().join(".reinhardt/local-infra.json");
+	std::fs::create_dir_all(state_path.parent().unwrap()).unwrap();
+	std::fs::write(
+		&state_path,
+		serde_json::to_vec(&LocalInfraState {
+			project_id: project_id(temp.path()),
+			profile: "local".to_string(),
+			services: vec![LocalServiceState {
+				name: "postgres".to_string(),
+				container_name: format!("reinhardt-{}-local-postgres", project_id(temp.path())),
+				image: "postgres:17-alpine".to_string(),
+				host: "203.0.113.10".to_string(),
+				host_port: 5432,
+				container_port: 5432,
+				status: ServiceRuntimeStatus::Running,
+				metadata: serde_json::json!({"database": "app", "user": "postgres"}),
+			}],
+		})
+		.unwrap(),
+	)
+	.unwrap();
+
+	let error = StateStore::new(temp.path()).load().unwrap_err();
+
+	assert_eq!(error.kind(), std::io::ErrorKind::InvalidData);
+}
+
+#[tokio::test]
+async fn infra_down_rejects_tampered_container_name() {
+	let temp = TempDir::new().unwrap();
+	let state_path = temp.path().join(".reinhardt/local-infra.json");
+	std::fs::create_dir_all(state_path.parent().unwrap()).unwrap();
+	std::fs::write(
+		&state_path,
+		serde_json::to_vec(&LocalInfraState {
+			project_id: project_id(temp.path()),
+			profile: "local".to_string(),
+			services: vec![LocalServiceState {
+				name: "redis".to_string(),
+				container_name: "unrelated-container".to_string(),
+				image: "redis:7-alpine".to_string(),
+				host: "127.0.0.1".to_string(),
+				host_port: 6379,
+				container_port: 6379,
+				status: ServiceRuntimeStatus::Running,
+				metadata: serde_json::json!({"database": 0}),
+			}],
+		})
+		.unwrap(),
+	)
+	.unwrap();
+	let docker = FakeDockerEngine::new(vec![]);
+
+	let result = InfraCommand::execute_with_runner(
+		reinhardt_commands::local_infra::InfraSubcommand::Down { profile: None },
+		temp.path(),
+		docker.clone(),
+	)
+	.await;
+
+	assert!(result.is_err());
+	assert_eq!(docker.calls(), Vec::new());
+}
+
+#[tokio::test]
+async fn infra_down_rejects_state_for_another_profile() {
+	let temp = TempDir::new().unwrap();
+	let store = StateStore::new(temp.path());
+	store
+		.save(&LocalInfraState {
+			project_id: project_id(temp.path()),
+			profile: "development".to_string(),
+			services: vec![],
+		})
+		.unwrap();
+	let docker = FakeDockerEngine::new(vec![]);
+
+	let result = InfraCommand::execute_with_runner(
+		reinhardt_commands::local_infra::InfraSubcommand::Down {
+			profile: Some("local".to_string()),
+		},
+		temp.path(),
+		docker,
+	)
+	.await;
+
+	assert!(result.is_err());
+	assert!(store.load().unwrap().is_some());
+}
+
+fn project_id(path: &std::path::Path) -> String {
+	use sha2::{Digest, Sha256};
+
+	let mut hasher = Sha256::new();
+	hasher.update(path.to_string_lossy().as_bytes());
+	let digest = hasher.finalize();
+	format!("{digest:x}")[..12].to_string()
+}
+
 #[tokio::test]
 async fn infra_up_writes_state_for_started_services() {
 	let temp = TempDir::new().unwrap();
 	let docker = FakeDockerEngine::new(vec![]);
 
 	let config = LocalInfraConfig::derive(
-		"project123",
+		"caller-supplied-project",
 		"local",
 		Some(DatabaseInfraInput {
 			engine: "postgresql".to_string(),
@@ -228,6 +330,67 @@ async fn infra_up_writes_state_for_started_services() {
 		.unwrap();
 
 	let state = StateStore::new(temp.path()).load().unwrap().unwrap();
+	assert_ne!(state.project_id, "caller-supplied-project");
 	assert_eq!(state.services.len(), 1);
 	assert_eq!(state.services[0].name, "postgres");
+}
+
+#[tokio::test]
+async fn infra_up_rejects_invalid_profile_before_docker_operations() {
+	let temp = TempDir::new().unwrap();
+	let docker = FakeDockerEngine::new(vec![]);
+	let config = LocalInfraConfig::derive(
+		"caller-supplied-project",
+		"qa.eu",
+		Some(DatabaseInfraInput {
+			engine: "postgresql".to_string(),
+			host: "localhost".to_string(),
+			port: 5432,
+			name: "app".to_string(),
+			user: "postgres".to_string(),
+			password: Some("postgres".to_string()),
+		}),
+		None,
+	)
+	.unwrap();
+
+	let result = InfraCommand::up_with_config(temp.path(), config, docker.clone()).await;
+
+	assert!(result.is_err());
+	assert_eq!(docker.calls(), Vec::new());
+}
+
+#[tokio::test]
+async fn infra_status_rejects_host_port_that_differs_from_docker_binding() {
+	let temp = TempDir::new().unwrap();
+	let store = StateStore::new(temp.path());
+	store
+		.save(&LocalInfraState {
+			project_id: project_id(temp.path()),
+			profile: "local".to_string(),
+			services: vec![LocalServiceState {
+				name: "postgres".to_string(),
+				container_name: format!("reinhardt-{}-local-postgres", project_id(temp.path())),
+				image: "postgres:17-alpine".to_string(),
+				host: "127.0.0.1".to_string(),
+				host_port: 55432,
+				container_port: 5432,
+				status: ServiceRuntimeStatus::Running,
+				metadata: serde_json::json!({"database": "app", "user": "postgres"}),
+			}],
+		})
+		.unwrap();
+	let docker = FakeDockerEngine::new(vec![]).with_port_bindings(vec![Some(55433)]);
+
+	let result = InfraCommand::execute_with_runner(
+		reinhardt_commands::local_infra::InfraSubcommand::Status {
+			profile: None,
+			json: false,
+		},
+		temp.path(),
+		docker,
+	)
+	.await;
+
+	assert!(result.is_err());
 }

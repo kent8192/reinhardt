@@ -423,9 +423,9 @@ docker run --rm -v "$(pwd):/src" semgrep/semgrep semgrep scan --config .semgrep/
 cargo make audit  # Check for known vulnerabilities in dependencies
 ```
 
-**SemVer Check (Local, mirrors CI):**
+**SemVer Check (Local):**
 ```bash
-# Run the same cargo-semver-checks command as CI semver-check.yml (normal PR path).
+# Run the same cargo-semver-checks command as the shared semver-check workflow.
 # Capture output ONCE — semver-check is slow (typically 1.5–2 h) and running it twice
 # can also yield inconsistent results if `main` advances between invocations.
 OUT=$(cargo make semver-check 2>&1) || true
@@ -436,7 +436,7 @@ OUT=$(cargo make semver-check 2>&1) || true
 PR=<PR number>
 OWNER=<owner>
 REPO=<repo>
-BODY=$(printf '<!-- local-semver-check -->\n## Local SemVer Check Result\n\n````text\n%s\n````\n\n*Generated locally via `cargo make semver-check` (mirrors CI semver-check.yml).*' "$OUT")
+BODY=$(printf '<!-- local-semver-check -->\n## Local SemVer Check Result\n\n````text\n%s\n````\n\n*Generated locally via `cargo make semver-check` (mirrors the shared semver-check workflow).*' "$OUT")
 
 # Look up an existing marked comment, then PATCH it; otherwise create a new one.
 EXISTING=$(gh api "repos/$OWNER/$REPO/issues/$PR/comments" --paginate \

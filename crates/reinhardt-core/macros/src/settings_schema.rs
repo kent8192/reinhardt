@@ -22,6 +22,7 @@ pub(crate) enum ShapeHint {
 struct ParsedSettingAttr {
 	requirement: Option<SettingAttr>,
 	shape_hint: Option<ShapeHint>,
+	secret: bool,
 }
 
 #[derive(Debug)]
@@ -45,6 +46,7 @@ pub(crate) enum TypeShape {
 	Leaf {
 		ty: syn::Type,
 		secret: bool,
+		secret_ref: bool,
 	},
 	Node {
 		ty: syn::Type,
@@ -170,7 +172,7 @@ pub(crate) fn parse_fields(input: &ItemStruct) -> Result<Vec<ParsedField>> {
 				has_serde_default: has_serde_default(field),
 				cleaned_attrs: strip_setting_attrs(&field.attrs),
 				cfg_attrs: cfg_attrs(&field.attrs),
-				shape: analyze_type(&field.ty, setting_attr.shape_hint),
+				shape: analyze_type(&field.ty, setting_attr.shape_hint, setting_attr.secret),
 			})
 		})
 		.collect()
@@ -182,7 +184,7 @@ pub(crate) fn schema_type_name(struct_name: &syn::Ident) -> syn::Ident {
 
 pub(crate) fn value_schema_tokens(shape: &TypeShape, conf_crate: &TokenStream) -> TokenStream {
 	match shape {
-		TypeShape::Leaf { ty, secret } => {
+		TypeShape::Leaf { ty, secret, .. } => {
 			quote! {
 				#conf_crate::settings::schema::SettingsValueSchema::Leaf {
 					type_name: ::std::any::type_name::<#ty>(),
@@ -271,6 +273,7 @@ fn parse_setting_attr(field: &syn::Field) -> Result<ParsedSettingAttr> {
 	let mut has_default = false;
 	let mut has_node = false;
 	let mut has_leaf = false;
+	let mut has_secret = false;
 	let mut default_expr: Option<String> = None;
 
 	for attr in &field.attrs {
@@ -291,6 +294,9 @@ fn parse_setting_attr(field: &syn::Field) -> Result<ParsedSettingAttr> {
 			} else if meta.path.is_ident("leaf") {
 				has_leaf = true;
 				Ok(())
+			} else if meta.path.is_ident("secret") {
+				has_secret = true;
+				Ok(())
 			} else if meta.path.is_ident("default") {
 				has_default = true;
 				let lit: LitStr = meta.value()?.parse()?;
@@ -298,7 +304,7 @@ fn parse_setting_attr(field: &syn::Field) -> Result<ParsedSettingAttr> {
 				Ok(())
 			} else {
 				Err(meta.error(
-					"unknown setting attribute, expected one of: `required`, `optional`, `default`, `node`, `leaf`",
+					"unknown setting attribute, expected one of: `required`, `optional`, `default`, `node`, `leaf`, `secret`",
 				))
 			}
 		})?;
@@ -325,6 +331,13 @@ fn parse_setting_attr(field: &syn::Field) -> Result<ParsedSettingAttr> {
 		));
 	}
 
+	if has_node && has_secret {
+		return Err(syn::Error::new(
+			setting_attr_span(field),
+			"`node` and `secret` are mutually exclusive in `#[setting(...)]`",
+		));
+	}
+
 	let requirement = if has_required {
 		Some(SettingAttr::Required)
 	} else if has_default {
@@ -346,6 +359,7 @@ fn parse_setting_attr(field: &syn::Field) -> Result<ParsedSettingAttr> {
 	Ok(ParsedSettingAttr {
 		requirement,
 		shape_hint,
+		secret: has_secret,
 	})
 }
 
@@ -446,11 +460,12 @@ fn consume_serde_meta(meta: syn::meta::ParseNestedMeta<'_>) -> Result<()> {
 	Ok(())
 }
 
-fn analyze_type(ty: &syn::Type, shape_hint: Option<ShapeHint>) -> TypeShape {
+fn analyze_type(ty: &syn::Type, shape_hint: Option<ShapeHint>, secret: bool) -> TypeShape {
 	let Some((last_segment, args)) = type_last_segment(ty) else {
 		return TypeShape::Leaf {
 			ty: ty.clone(),
-			secret: false,
+			secret,
+			secret_ref: false,
 		};
 	};
 
@@ -461,7 +476,7 @@ fn analyze_type(ty: &syn::Type, shape_hint: Option<ShapeHint>) -> TypeShape {
 			if let Some(inner_ty) = single_type_arg(args) {
 				return TypeShape::Optional {
 					original: ty.clone(),
-					inner: Box::new(analyze_type(inner_ty, shape_hint)),
+					inner: Box::new(analyze_type(inner_ty, shape_hint, secret)),
 				};
 			}
 		}
@@ -469,7 +484,7 @@ fn analyze_type(ty: &syn::Type, shape_hint: Option<ShapeHint>) -> TypeShape {
 			if let Some(inner_ty) = single_type_arg(args) {
 				return TypeShape::Sequence {
 					original: ty.clone(),
-					inner: Box::new(analyze_type(inner_ty, shape_hint)),
+					inner: Box::new(analyze_type(inner_ty, shape_hint, secret)),
 				};
 			}
 		}
@@ -477,14 +492,14 @@ fn analyze_type(ty: &syn::Type, shape_hint: Option<ShapeHint>) -> TypeShape {
 			if let Some(inner_ty) = second_type_arg(args) {
 				return TypeShape::Map {
 					original: ty.clone(),
-					inner: Box::new(analyze_type(inner_ty, shape_hint)),
+					inner: Box::new(analyze_type(inner_ty, shape_hint, secret)),
 				};
 			}
 		}
 		"Box" => {
 			if let Some(inner_ty) = single_type_arg(args) {
 				return TypeShape::Transparent {
-					inner: Box::new(analyze_type(inner_ty, shape_hint)),
+					inner: Box::new(analyze_type(inner_ty, shape_hint, secret)),
 				};
 			}
 		}
@@ -492,13 +507,15 @@ fn analyze_type(ty: &syn::Type, shape_hint: Option<ShapeHint>) -> TypeShape {
 	}
 
 	if shape_hint == Some(ShapeHint::Node)
-		|| (shape_hint.is_none() && segment_name.ends_with("Config"))
+		|| (!secret && shape_hint.is_none() && segment_name.ends_with("Config"))
 	{
 		TypeShape::Node { ty: ty.clone() }
 	} else {
+		let inherently_secret = segment_name == "SecretString" || segment_name == "SecretValue";
 		TypeShape::Leaf {
 			ty: ty.clone(),
-			secret: segment_name == "SecretString" || segment_name == "SecretValue",
+			secret: secret || inherently_secret,
+			secret_ref: inherently_secret,
 		}
 	}
 }
@@ -545,8 +562,8 @@ fn second_type_arg(args: &syn::PathArguments) -> Option<&syn::Type> {
 
 fn schema_ref_type(shape: &TypeShape, conf_crate: &TokenStream) -> TokenStream {
 	match shape {
-		TypeShape::Leaf { ty, secret } => {
-			if *secret {
+		TypeShape::Leaf { ty, secret_ref, .. } => {
+			if *secret_ref {
 				quote! { #conf_crate::settings::schema::SecretFieldRef<Root, #ty> }
 			} else {
 				quote! { #conf_crate::settings::schema::FieldRef<Root, #ty> }
@@ -577,8 +594,8 @@ fn schema_ref_init(
 	conf_crate: &TokenStream,
 ) -> TokenStream {
 	match shape {
-		TypeShape::Leaf { secret, .. } => {
-			if *secret {
+		TypeShape::Leaf { secret_ref, .. } => {
+			if *secret_ref {
 				quote! { #conf_crate::settings::schema::SecretFieldRef::new(#path_tokens) }
 			} else {
 				quote! { #conf_crate::settings::schema::FieldRef::new(#path_tokens) }
@@ -611,6 +628,7 @@ fn schema_builder_init(shape: &TypeShape, conf_crate: &TokenStream) -> TokenStre
 #[cfg(test)]
 mod tests {
 	use super::*;
+	use rstest::rstest;
 
 	fn parse_single_field(input: ItemStruct) -> ParsedField {
 		parse_fields(&input)
@@ -701,6 +719,60 @@ mod tests {
 		));
 	}
 
+	#[rstest]
+	fn parse_fields_marks_plain_string_as_secret_with_explicit_hint() {
+		let input: ItemStruct = syn::parse_quote! {
+			struct TestSettings {
+				#[setting(secret)]
+				value: String,
+			}
+		};
+
+		let field = parse_single_field(input);
+
+		assert!(matches!(
+			field.shape,
+			TypeShape::Leaf {
+				secret: true,
+				secret_ref: false,
+				..
+			}
+		));
+		assert_eq!(
+			schema_ref_type(&field.shape, &quote! { reinhardt_conf }).to_string(),
+			"reinhardt_conf :: settings :: schema :: FieldRef < Root , String >"
+		);
+	}
+
+	#[rstest]
+	fn parse_fields_treats_inferred_node_as_leaf_with_secret_hint() {
+		let input: ItemStruct = syn::parse_quote! {
+			struct TestSettings {
+				#[setting(secret)]
+				value: Option<Vec<NestedConfig>>,
+			}
+		};
+
+		let field = parse_single_field(input);
+
+		assert!(matches!(
+			field.shape,
+			TypeShape::Optional { ref inner, .. }
+				if matches!(
+					inner.as_ref(),
+					TypeShape::Sequence { inner, .. }
+						if matches!(
+							inner.as_ref(),
+							TypeShape::Leaf {
+								secret: true,
+								secret_ref: false,
+								..
+							}
+						)
+				)
+		));
+	}
+
 	#[test]
 	fn parse_fields_rejects_node_and_leaf_hints() {
 		let input: ItemStruct = syn::parse_quote! {
@@ -722,7 +794,7 @@ mod tests {
 	fn analyze_type_treats_config_suffix_as_node() {
 		let ty: syn::Type = syn::parse_quote! { DatabaseConfig };
 
-		let shape = analyze_type(&ty, None);
+		let shape = analyze_type(&ty, None, false);
 
 		assert!(matches!(shape, TypeShape::Node { .. }));
 	}
@@ -731,7 +803,7 @@ mod tests {
 	fn analyze_type_treats_settings_suffix_as_leaf_without_hint() {
 		let ty: syn::Type = syn::parse_quote! { DatabaseSettings };
 
-		let shape = analyze_type(&ty, None);
+		let shape = analyze_type(&ty, None, false);
 
 		assert!(matches!(shape, TypeShape::Leaf { .. }));
 	}

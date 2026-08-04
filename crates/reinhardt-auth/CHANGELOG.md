@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Security
+
+- *(auth)* preserve the public JWT secret string API while classifying and redacting it as a secret
+
+## [0.3.3](https://github.com/kent8192/reinhardt-web/compare/reinhardt-auth@v0.3.2...reinhardt-auth@v0.3.3) - 2026-07-28
+
+### Fixed
+
+- *(auth)* use injected connection for session reads
+- *(auth)* use injected connection for session cleanup reads
+- *(auth)* count prefixed sessions in database
+
+### Testing
+
+- *(auth)* cover injected session connections in integration
+
 ## [0.3.2](https://github.com/kent8192/reinhardt-web/compare/reinhardt-auth@v0.3.1...reinhardt-auth@v0.3.2) - 2026-07-14
 
 ### Fixed

@@ -746,6 +746,14 @@ pub fn model(args: TokenStream, input: TokenStream) -> TokenStream {
 /// - `username_field`: Name of the field used as username (required)
 /// - `full`: Generate `FullUser` impl (default: `false`)
 ///
+/// # Password Hash Info Exclusion
+///
+/// When `#[user]` is combined with `#[model]`, the mapped password-hash field
+/// is automatically excluded from the generated `{User}Info` companion on both
+/// native and WASM targets. Converting `{User}Info` back into the model uses the
+/// password-hash field's default value. No explicit
+/// `#[field(skip_info = true)]` annotation is required for that mapped field.
+///
 /// # Examples
 ///
 /// ```rust,ignore

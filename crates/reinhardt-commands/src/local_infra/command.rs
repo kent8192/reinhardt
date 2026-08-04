@@ -6,6 +6,7 @@ use std::error::Error;
 use std::path::Path;
 use std::process::Command;
 
+use super::state::project_id;
 use super::{
 	BollardDockerEngine, DatabaseInfraInput, DockerEngine, DockerRunSpec, LocalInfraConfig,
 	LocalInfraState, PortAllocator, ServiceSpec, StateStore,
@@ -111,8 +112,10 @@ impl InfraCommand {
 		let store = StateStore::new(project_root);
 
 		match command {
-			InfraSubcommand::Down { profile: _ } => {
-				if let Some(state) = store.load()? {
+			InfraSubcommand::Down { profile } => {
+				if let Some(state) =
+					store.load_for_profile(&resolved_profile(profile.as_deref()))?
+				{
 					for service in state.services {
 						docker.remove_container(&service.container_name).await?;
 					}
@@ -120,8 +123,8 @@ impl InfraCommand {
 				store.remove()?;
 				Ok(())
 			}
-			InfraSubcommand::Status { profile: _, json } => {
-				let state = store.load()?;
+			InfraSubcommand::Status { profile, json } => {
+				let state = store.load_for_profile(&resolved_profile(profile.as_deref()))?;
 				if json {
 					println!("{}", serde_json::to_string_pretty(&state)?);
 				} else if let Some(state) = state {
@@ -162,8 +165,12 @@ impl InfraCommand {
 
 		for service in &config.services {
 			let host_port = ports.select_port(service.requested_port())?;
-			let container_name =
-				stable_container_name(&config.project_id, &config.profile, service.name());
+			let container_name = format!(
+				"reinhardt-{}-{}-{}",
+				config.project_id,
+				config.profile,
+				service.name()
+			);
 			let env = match service {
 				ServiceSpec::Postgres(pg) => vec![
 					("POSTGRES_USER", pg.user.as_str()),
@@ -207,7 +214,7 @@ impl InfraCommand {
 	) -> Result<(), Box<dyn Error>> {
 		Self::validate_run_command(&args)?;
 		let state = StateStore::new(project_root)
-			.load()?
+			.load_for_profile(&resolved_profile(None))?
 			.ok_or("local infrastructure state does not exist; run `manage infra up` first")?;
 		let current_exe = std::env::current_exe()?;
 		let status = Command::new(current_exe)
@@ -317,9 +324,7 @@ fn derive_config(
 	settings: Option<&dyn HasCommonSettings>,
 ) -> Result<LocalInfraConfig, Box<dyn Error>> {
 	let project_id = project_id(project_root);
-	let profile = profile
-		.or_else(|| std::env::var("REINHARDT_ENV").ok())
-		.unwrap_or_else(|| "local".to_string());
+	let profile = resolved_profile(profile.as_deref());
 	let database = settings
 		.and_then(|settings| settings.core().databases.get("default"))
 		.map(|database| DatabaseInfraInput {
@@ -343,17 +348,11 @@ fn derive_config(
 	LocalInfraConfig::derive(project_id, profile, database, None).map_err(Into::into)
 }
 
-fn project_id(project_root: &Path) -> String {
-	use sha2::{Digest, Sha256};
-
-	let mut hasher = Sha256::new();
-	hasher.update(project_root.to_string_lossy().as_bytes());
-	let digest = hasher.finalize();
-	format!("{:x}", digest)[..12].to_string()
-}
-
-fn stable_container_name(project_id: &str, profile: &str, service: &str) -> String {
-	format!("reinhardt-{project_id}-{profile}-{service}")
+fn resolved_profile(profile: Option<&str>) -> String {
+	profile
+		.map(ToOwned::to_owned)
+		.or_else(|| std::env::var("REINHARDT_ENV").ok())
+		.unwrap_or_else(|| "local".to_string())
 }
 
 fn print_up_result(

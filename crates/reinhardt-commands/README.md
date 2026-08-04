@@ -214,6 +214,9 @@ cargo run --bin manage infra down
 ```
 
 State is stored under `.reinhardt/local-infra.json` in the project directory.
+Before it is used, the command verifies that it belongs to the current workspace
+and contains only the expected loopback services and project-scoped container
+names. Delete the file and run `infra up` again if this validation fails.
 The child process receives `DATABASE_URL`, `REDIS_URL`, and compatible
 `REINHARDT_` environment variables for discovered local services.
 `infra run -- runserver` is intentionally unsupported; start infrastructure

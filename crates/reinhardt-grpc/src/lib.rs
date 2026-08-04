@@ -34,17 +34,21 @@
 //!
 //! ## Dependency Injection
 //!
-//! Enable the `di` feature to use dependency injection in gRPC handlers:
+//! Facade consumers can enable `grpc` alongside a preset that includes DI:
 //!
 //! ```toml
 //! [dependencies]
-//! reinhardt-grpc = { version = "0.1", features = ["di"] }
+//! reinhardt = { version = "0.3.4", package = "reinhardt-web", default-features = false, features = ["minimal", "grpc"] }
 //! ```
+//!
+//! Direct `reinhardt-grpc` consumers can instead enable this crate's `di`
+//! feature explicitly and depend on `reinhardt-di` for DI types.
 //!
 //! Then use the `#[grpc_handler]` macro:
 //!
 //! ```rust,ignore
-//! # use reinhardt_grpc::{GrpcRequestExt, grpc_handler};
+//! # use reinhardt::di::InjectionContext;
+//! # use reinhardt::grpc::{GrpcRequestExt, grpc_handler};
 //! # use tonic::{Request, Response, Status};
 //! # struct GetUserRequest;
 //! # struct User;

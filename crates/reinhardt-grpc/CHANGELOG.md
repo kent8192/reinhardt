@@ -7,6 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.5](https://github.com/kent8192/reinhardt-web/compare/reinhardt-grpc@v0.3.4...reinhardt-grpc@v0.3.5) - 2026-08-02
+
+### Fixed
+
+- *(grpc)* restore facade-only handler DI
+- *(grpc)* support package-only facade dependencies
+- *(grpc)* preserve explicit facade aliases
+
+## [0.3.4](https://github.com/kent8192/reinhardt-web/compare/reinhardt-grpc@v0.3.3...reinhardt-grpc@v0.3.4) - 2026-07-30
+
+### Maintenance
+
+- update Cargo.toml dependencies
+
+## [0.3.3](https://github.com/kent8192/reinhardt-web/compare/reinhardt-grpc@v0.3.2...reinhardt-grpc@v0.3.3) - 2026-07-28
+
+### Maintenance
+
+- update Cargo.toml dependencies
+
 ## [0.3.2](https://github.com/kent8192/reinhardt-web/compare/reinhardt-grpc@v0.3.1...reinhardt-grpc@v0.3.2) - 2026-07-14
 
 ### Fixed

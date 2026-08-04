@@ -20,8 +20,7 @@ concurrency:
   # Use false to prevent the long-running wasm-test (~10 min headless Chrome)
   # from being cancelled by a follow-up push. With false, a new run queues
   # behind the current one, ensuring at least one run always completes per
-  # main-branch state. Matches semver-check-standalone.yml /
-  # examples-test-standalone.yml.
+  # main-branch state. Matches examples-test-standalone.yml.
   cancel-in-progress: false
 
 jobs:

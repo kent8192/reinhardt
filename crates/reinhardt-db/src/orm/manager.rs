@@ -228,14 +228,7 @@ impl<M: Model> Manager<M> {
 	/// Returns a QuerySet filtered by the primary key field
 	pub fn get(&self, pk: M::PrimaryKey) -> QuerySet<M> {
 		let pk_field = M::primary_key_field();
-		let pk_str = pk.to_string();
-
-		// Try to parse as i64 first (common for primary keys), fallback to string
-		let pk_value = if let Ok(int_value) = pk_str.parse::<i64>() {
-			super::query::FilterValue::Integer(int_value)
-		} else {
-			super::query::FilterValue::String(pk_str)
-		};
+		let pk_value = M::primary_key_filter_value(pk);
 
 		let filter = super::query::Filter::new(
 			pk_field.to_string(),
@@ -1023,10 +1016,27 @@ impl<M: Model> Manager<M> {
 		self.delete_with_conn(&conn, pk).await
 	}
 
+	fn build_delete_statement(pk: M::PrimaryKey) -> DeleteStatement {
+		let primary_key_field = M::primary_key_field();
+		let primary_key_column = M::field_metadata()
+			.into_iter()
+			.find(|field| field.name == primary_key_field)
+			.map(|field| field.db_column_name().to_owned())
+			.unwrap_or_else(|| primary_key_field.to_owned());
+		let primary_key_value = M::primary_key_filter_value(pk);
+		let primary_key_value = QuerySet::<M>::filter_value_to_sea_value(&primary_key_value);
+
+		let mut stmt = Query::delete();
+		stmt.from_table(Alias::new(M::table_name()))
+			.and_where(Expr::col(Alias::new(primary_key_column)).eq(primary_key_value));
+		stmt
+	}
+
 	/// Delete a record with an explicit database connection
 	///
 	/// This method allows using a specific connection, which is essential for
-	/// transaction support.
+	/// transaction support. Primary-key columns are resolved from model field
+	/// metadata, and values use the model's typed primary-key binding.
 	///
 	/// # Arguments
 	///
@@ -1055,21 +1065,7 @@ impl<M: Model> Manager<M> {
 		conn: &DatabaseConnection,
 		pk: M::PrimaryKey,
 	) -> reinhardt_core::exception::Result<()> {
-		// Build reinhardt-query DELETE statement
-		let mut stmt = Query::delete();
-
-		// Try to parse as i64 first (common for primary keys), fallback to string
-		let pk_str = pk.to_string();
-		let pk_value = if let Ok(int_value) = pk_str.parse::<i64>() {
-			reinhardt_query::value::Value::BigInt(Some(int_value))
-		} else if let Ok(uuid) = Uuid::parse_str(&pk_str) {
-			reinhardt_query::value::Value::Uuid(Some(Box::new(uuid)))
-		} else {
-			reinhardt_query::value::Value::String(Some(Box::new(pk_str)))
-		};
-
-		stmt.from_table(Alias::new(M::table_name()))
-			.and_where(Expr::col(Alias::new(M::primary_key_field())).eq(pk_value));
+		let stmt = Self::build_delete_statement(pk);
 
 		let (sql, values) = build_delete_sql(&stmt, conn.backend());
 		let values: Vec<_> = values
@@ -1599,12 +1595,18 @@ impl<M: Model> Default for Manager<M> {
 
 #[cfg(test)]
 mod tests {
-	use super::Manager;
+	use super::{Manager, build_delete_sql};
 	use crate::orm::FieldSelector;
 	use crate::orm::Model;
 	use crate::orm::connection::DatabaseBackend;
+	use crate::orm::fields::{CharField, Field};
+	use crate::orm::inspection::FieldInfo;
+	use crate::orm::query::FilterValue;
+	use rstest::rstest;
 	use serde::{Deserialize, Serialize};
 	use std::collections::HashMap;
+	use std::fmt;
+	use uuid::Uuid;
 
 	#[derive(Debug, Clone, Serialize, Deserialize)]
 	struct TestUser {
@@ -1658,6 +1660,167 @@ mod tests {
 		fn new_fields() -> Self::Fields {
 			TestUserFields
 		}
+	}
+
+	#[derive(Debug, Clone, Serialize, Deserialize)]
+	struct TestUuidUser {
+		id: Uuid,
+	}
+
+	#[derive(Debug, Clone)]
+	struct TestUuidUserFields;
+
+	impl FieldSelector for TestUuidUserFields {
+		fn with_alias(self, _alias: &str) -> Self {
+			self
+		}
+	}
+
+	impl Model for TestUuidUser {
+		type PrimaryKey = Uuid;
+		type Fields = TestUuidUserFields;
+		type Objects = Manager<Self>;
+
+		fn table_name() -> &'static str {
+			"test_uuid_user"
+		}
+
+		fn primary_key(&self) -> Option<Self::PrimaryKey> {
+			Some(self.id)
+		}
+
+		fn primary_key_filter_value(pk: Self::PrimaryKey) -> FilterValue {
+			FilterValue::Uuid(pk)
+		}
+
+		fn set_primary_key(&mut self, value: Self::PrimaryKey) {
+			self.id = value;
+		}
+
+		fn primary_key_field() -> &'static str {
+			"id"
+		}
+
+		fn new_fields() -> Self::Fields {
+			TestUuidUserFields
+		}
+	}
+
+	#[rstest]
+	fn test_get_preserves_uuid_primary_key_binding() {
+		// Arrange
+		let id = Uuid::parse_str("123e4567-e89b-12d3-a456-426614174000")
+			.expect("UUID literal should be valid");
+
+		// Act
+		let query = TestUuidUser::objects().get(id);
+
+		// Assert
+		assert_eq!(query.filters().len(), 1);
+		assert!(matches!(&query.filters()[0].value, FilterValue::Uuid(value) if *value == id));
+	}
+
+	#[rstest]
+	fn test_get_preserves_numeric_fallback_primary_key_binding() {
+		let query = TestUser::objects().get(42);
+
+		assert_eq!(query.filters().len(), 1);
+		assert!(matches!(query.filters()[0].value, FilterValue::Integer(42)));
+	}
+
+	#[derive(Debug, Clone, Serialize, Deserialize)]
+	struct ExternalId(String);
+
+	impl fmt::Display for ExternalId {
+		fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+			formatter.write_str(&self.0)
+		}
+	}
+
+	#[derive(Debug, Clone, Serialize, Deserialize)]
+	struct TypedKeyUser {
+		external_id: ExternalId,
+	}
+
+	#[derive(Debug, Clone)]
+	struct TypedKeyUserFields;
+
+	impl FieldSelector for TypedKeyUserFields {
+		fn with_alias(self, _alias: &str) -> Self {
+			self
+		}
+	}
+
+	impl Model for TypedKeyUser {
+		type PrimaryKey = ExternalId;
+		type Fields = TypedKeyUserFields;
+		type Objects = Manager<Self>;
+
+		fn table_name() -> &'static str {
+			"typed_key_user"
+		}
+
+		fn primary_key(&self) -> Option<Self::PrimaryKey> {
+			Some(self.external_id.clone())
+		}
+
+		fn primary_key_filter_value(pk: Self::PrimaryKey) -> FilterValue {
+			FilterValue::String(format!("external:{}", pk.0))
+		}
+
+		fn set_primary_key(&mut self, value: Self::PrimaryKey) {
+			self.external_id = value;
+		}
+
+		fn primary_key_field() -> &'static str {
+			"external_id"
+		}
+
+		fn new_fields() -> Self::Fields {
+			TypedKeyUserFields
+		}
+
+		fn field_metadata() -> Vec<FieldInfo> {
+			let mut field = CharField::new(64);
+			field.base.primary_key = true;
+			field.base.db_column = Some("external_key".to_owned());
+			field.set_attributes_from_name(Self::primary_key_field());
+			vec![FieldInfo::from_field(&field)]
+		}
+	}
+
+	#[rstest]
+	#[case(
+		DatabaseBackend::Postgres,
+		"DELETE FROM \"typed_key_user\" WHERE \"external_key\" = $1"
+	)]
+	#[case(
+		DatabaseBackend::MySql,
+		"DELETE FROM `typed_key_user` WHERE `external_key` = ?"
+	)]
+	#[case(
+		DatabaseBackend::Sqlite,
+		"DELETE FROM \"typed_key_user\" WHERE \"external_key\" = ?"
+	)]
+	fn delete_uses_primary_key_column_and_typed_binding(
+		#[case] backend: DatabaseBackend,
+		#[case] expected_sql: &str,
+	) {
+		// Arrange
+		let primary_key = ExternalId("42".to_owned());
+
+		// Act
+		let statement = Manager::<TypedKeyUser>::build_delete_statement(primary_key);
+		let (sql, values) = build_delete_sql(&statement, backend);
+
+		// Assert
+		assert_eq!(sql, expected_sql);
+		assert_eq!(
+			values.0,
+			vec![reinhardt_query::value::Value::String(Some(Box::new(
+				"external:42".to_owned()
+			)))]
+		);
 	}
 
 	#[test]

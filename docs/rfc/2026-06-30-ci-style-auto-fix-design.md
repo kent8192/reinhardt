@@ -69,7 +69,10 @@ the eligibility code that guards the write path.
 
 The fix job checks out the pull-request head branch, installs the same tools
 used by the style gates, runs the matching fix command, and uploads a binary
-patch only when the fix command leaves a worktree diff.
+patch only when the fix command leaves a worktree diff. Patch export and patch
+application both exclude `.auto-fix-policy/**`, and the write job fails closed if
+that trusted policy checkout path is ever staged. This prevents an untrusted
+auto-fix artifact from replacing the policy code that gates token generation.
 
 ## 5. Execution Flow
 
@@ -88,9 +91,12 @@ patch only when the fix command leaves a worktree diff.
    - `cargo make auto-fix` when both failed.
 7. If there is no diff after the fix command, the workflow exits without
    committing.
-8. If there is a diff, the fix job uploads a binary patch artifact.
+8. If there is a diff, the fix job uploads a binary patch artifact excluding
+   `.auto-fix-policy/**`.
 9. `commit-auto-fix-style` checks out a clean copy of the PR head branch and
-   applies the patch without executing PR-controlled build or make code.
+   applies the patch without executing PR-controlled build or make code. The
+   apply step also excludes `.auto-fix-policy/**` and rejects any staged change
+   under that trusted checkout path before policy execution.
 10. The write job reloads the policy from the trusted base commit and rechecks
     the target branch protection and active rule state before generating a
     write-capable token.
@@ -104,10 +110,14 @@ available to the checkout. The checkout uses `persist-credentials: false`, and
 the job exports only a patch artifact.
 
 The write job starts from a clean checkout, downloads the patch, and applies it
-with `git apply --index`. It does not run `cargo make`, build scripts,
-proc-macros, repository hooks, or policy code from the pull-request head before
-generating the write token. The eligibility policy is sparse-checked out from
-the pull request's base commit into an isolated path.
+with `git apply --index --exclude='.auto-fix-policy/**'`. It does not run
+`cargo make`, build scripts, proc-macros, repository hooks, or policy code from
+the pull-request head before generating the write token. The eligibility policy
+is sparse-checked out from the pull request's base commit into an isolated path,
+and the untrusted patch artifact is not allowed to modify that path.
+
+GraphQL additions are read from staged blobs and streamed through `base64` and
+`jq`, so large auto-fix files never need to be passed through process arguments.
 
 The GitHub App token is generated only in the write job after the patch is
 applied and the target branch protection and active rules are rechecked. The

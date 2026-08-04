@@ -1104,7 +1104,7 @@ mod tests {
 
 	#[rstest]
 	#[tokio::test]
-	async fn test_list_allows_legacy_user_id_extensions_for_active_permissions() {
+	async fn test_list_denies_bare_user_id_extensions_for_active_permissions() {
 		// Arrange
 		let handler = build_model_handler(vec![TestItem {
 			id: Some(1),
@@ -1119,8 +1119,8 @@ mod tests {
 		let result = handler.list(&request).await;
 
 		// Assert
-		let response = result.expect("legacy authenticated requests should remain authorized");
-		assert_eq!(response.status, hyper::StatusCode::OK);
+		let error = result.expect_err("bare user ID extensions must not grant authorization");
+		assert!(matches!(error, ViewError::Permission(_)));
 	}
 
 	#[rstest]

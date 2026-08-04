@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.6](https://github.com/kent8192/reinhardt-web/compare/reinhardt-auth@v0.3.5...reinhardt-auth@v0.3.6) - 2026-08-04
+
+### Fixed
+
+- fix!(auth): require validated account state for sessions
+
+### Reverted
+
+- *(auth)* revert session authentication changes from [[#5905](https://github.com/kent8192/reinhardt-web/issues/5905)](https://github.com/kent8192/reinhardt-web/issues/5905)
+
 ## [0.3.3](https://github.com/kent8192/reinhardt-web/compare/reinhardt-auth@v0.3.2...reinhardt-auth@v0.3.3) - 2026-07-28
 
 ### Fixed

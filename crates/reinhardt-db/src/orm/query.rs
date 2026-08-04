@@ -3364,7 +3364,7 @@ where
 		.into_simple_expr()
 	}
 
-	fn filter_value_to_sea_value(v: &FilterValue) -> reinhardt_query::value::Value {
+	pub(crate) fn filter_value_to_sea_value(v: &FilterValue) -> reinhardt_query::value::Value {
 		match v {
 			FilterValue::String(s) => s.clone().into(),
 			FilterValue::Timestamp(value) => (*value).into(),

@@ -116,6 +116,9 @@ the pull-request head before generating the write token. The eligibility policy
 is sparse-checked out from the pull request's base commit into an isolated path,
 and the untrusted patch artifact is not allowed to modify that path.
 
+GraphQL additions are read from staged blobs and streamed through `base64` and
+`jq`, so large auto-fix files never need to be passed through process arguments.
+
 The GitHub App token is generated only in the write job after the patch is
 applied and the target branch protection and active rules are rechecked. The
 token requests only `permission-contents: write`.

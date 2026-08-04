@@ -16,8 +16,8 @@
 //! # Example
 //!
 //! ```rust,no_run,ignore
-//! # use reinhardt_grpc::{GrpcRequestExt, grpc_handler};
-//! # use reinhardt_di::InjectionContext;
+//! # use reinhardt::di::InjectionContext;
+//! # use reinhardt::grpc::{GrpcRequestExt, grpc_handler};
 //! # use tonic::{Request, Response, Status};
 //! # use std::sync::Arc;
 //! # struct GetUserRequest { id: i64 }
@@ -70,8 +70,8 @@ pub trait GrpcRequestExt {
 	/// # Example
 	///
 	/// ```rust,no_run
-	/// # use reinhardt_grpc::GrpcRequestExt;
 	/// # use reinhardt_di::InjectionContext;
+	/// # use reinhardt_grpc::GrpcRequestExt;
 	/// # use std::sync::Arc;
 	/// # use tonic::Request;
 	/// # fn example<T>(request: &Request<T>) -> Option<Arc<InjectionContext>> {

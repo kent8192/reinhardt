@@ -291,10 +291,7 @@ pub(crate) fn expand_grpc_handler(input: ItemFn) -> Result<TokenStream> {
 		let __di_ctx = {
 			let __shared_ctx = #request_pat
 				.get_di_context::<::std::sync::Arc<#di_crate::InjectionContext>>()
-				.ok_or_else(|| {
-					::tracing::error!("DI context not found in request extensions");
-					::tonic::Status::internal("Internal server error")
-				})?;
+				.ok_or_else(|| #grpc_crate::di::sanitize_missing_context())?;
 			::std::sync::Arc::new((*__shared_ctx).fork())
 		};
 	};
@@ -316,10 +313,7 @@ pub(crate) fn expand_grpc_handler(input: ItemFn) -> Result<TokenStream> {
 					#di_crate::__InjectResolver::<#ty>::new()
 						.__resolve_inject_parameter(&__di_ctx, #use_cache)
 						.await
-						.map_err(|e| {
-							::tracing::error!("DI resolution failed for {}: {:?}", stringify!(#ty), e);
-							::tonic::Status::internal("Internal server error")
-						})?
+						.map_err(|e| #grpc_crate::di::sanitize_di_error(&e))?
 				};
 			}
 		})

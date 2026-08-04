@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- *(settings)* support explicit secret schema hints for compatibility fields
+
 ## [0.3.2](https://github.com/kent8192/reinhardt-web/compare/reinhardt-macros@v0.3.1...reinhardt-macros@v0.3.2) - 2026-07-14
 
 ### Fixed

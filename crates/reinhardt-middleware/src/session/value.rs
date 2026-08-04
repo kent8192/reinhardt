@@ -2,8 +2,8 @@
 //!
 //! Four flavours mirror the rest of the Reinhardt extractor surface:
 //!
-//! - [`SessionValue<T>`] reads the identity reference at `session["user_id"]`
-//!   and deserialises it as `T`; 401 when the session or key is missing.
+//! - [`SessionValue<T>`] reads `session["user_id"]` and deserialises it as
+//!   `T`; 401 when the session or key is missing.
 //! - [`OptionalSessionValue<T>`] is the optional variant: any failure
 //!   collapses to `OptionalSessionValue(None)` rather than propagating.
 //! - [`SessionValueNamed<K, T>`] reads a custom session key chosen at
@@ -22,21 +22,16 @@
 //!
 //! // Auto-extraction (no `#[inject]`, matches `Path(...)` ergonomics).
 //! #[server_fn]
-//! pub async fn session_identity(
+//! pub async fn current_user(
 //!     SessionValue(user_id): SessionValue<i64>,
-//! ) -> Result<i64, ServerFnError> { Ok(user_id) }
+//! ) -> Result<UserInfo, ServerFnError> { /* ... */ }
 //!
 //! // Equivalent legacy form with `#[inject]`.
 //! #[server_fn]
-//! pub async fn session_identity(
+//! pub async fn current_user(
 //!     #[inject] SessionValue(user_id): SessionValue<i64>,
-//! ) -> Result<i64, ServerFnError> { Ok(user_id) }
+//! ) -> Result<UserInfo, ServerFnError> { /* ... */ }
 //! ```
-//!
-//! A stored identity is not proof of current authentication or authorization.
-//! Before granting access, resolve the account and validate its current active
-//! and privilege state, or consume an [`reinhardt_http::AuthState`] populated by
-//! middleware that performs that validation.
 //!
 //! See issue #4446 for the motivating discussion.
 
@@ -75,8 +70,8 @@ pub trait SessionKey: Send + Sync + 'static {
 	const KEY: &'static str;
 }
 
-/// Default marker pointing at [`USER_ID_SESSION_KEY`], which stores an identity
-/// reference and does not by itself establish current authentication.
+/// Default marker pointing at [`USER_ID_SESSION_KEY`] — the authenticated
+/// user's primary key in every Reinhardt example app.
 #[derive(Debug, Clone, Copy)]
 pub struct UserIdKey;
 
@@ -89,10 +84,8 @@ impl SessionKey for UserIdKey {
 /// Resolves the [`USER_ID_SESSION_KEY`] entry from the active
 /// [`SessionData`], deserialises it as `T`, and fails extraction when the
 /// key is missing or the value cannot be deserialised. Use this extractor
-/// to retrieve an identity reference. The absent case surfaces as HTTP 401 via
-/// `CoreError::Authentication`. This extractor does not load or validate the
-/// referenced account; authorization requires a separate current-account
-/// check or validated [`reinhardt_http::AuthState`].
+/// on server functions that require an authenticated session — the
+/// absent case surfaces as HTTP 401 via `CoreError::Authentication`.
 ///
 /// # Usage
 ///
@@ -100,11 +93,11 @@ impl SessionKey for UserIdKey {
 /// use reinhardt::middleware::session::SessionValue;
 ///
 /// #[server_fn]
-/// pub async fn session_identity(
+/// pub async fn current_user(
 ///     SessionValue(user_id): SessionValue<i64>,
-/// ) -> Result<i64, ServerFnError> {
-///     // Resolve and validate the account before using this identity for access.
-///     Ok(user_id)
+/// ) -> Result<UserInfo, ServerFnError> {
+///     // user_id is the authenticated user's primary key
+///     // ...
 /// }
 /// ```
 ///

@@ -1,13 +1,16 @@
 //! `SessionMiddleware`: cookie parsing, store wiring, and `Set-Cookie` writeback.
 
 use async_trait::async_trait;
-use reinhardt_http::{Handler, Middleware, MiddlewareDiRegistration, Request, Response, Result};
+use reinhardt_http::{
+	AuthState, Handler, IsActive, IsAdmin, IsAuthenticated, Middleware, MiddlewareDiRegistration,
+	Request, Response, Result,
+};
 use std::any::TypeId;
 use std::sync::Arc;
 
 use super::config::SessionConfig;
 use super::cookie::find_cookie_value;
-use super::data::SessionData;
+use super::data::{SessionData, USER_ID_SESSION_KEY};
 use super::id::{ActiveSessionId, SessionCookieName, SessionId};
 use super::store::{SessionStore, SessionStoreKey};
 
@@ -148,6 +151,49 @@ impl SessionMiddleware {
 
 		parts.join("; ")
 	}
+
+	fn user_id_from_session(session: &SessionData) -> Option<String> {
+		let value = session.data.get(USER_ID_SESSION_KEY)?;
+		let user_id = match value {
+			serde_json::Value::String(s) => s.clone(),
+			serde_json::Value::Number(n) => n.to_string(),
+			serde_json::Value::Bool(b) => b.to_string(),
+			_ => return None,
+		};
+
+		if user_id.is_empty() {
+			None
+		} else {
+			Some(user_id)
+		}
+	}
+
+	fn populate_auth_extensions(request: &Request, session: &SessionData) {
+		if request.extensions.contains::<AuthState>() {
+			return;
+		}
+
+		let Some(user_id) = Self::user_id_from_session(session) else {
+			request.extensions.insert(IsAuthenticated(false));
+			request.extensions.insert(IsAdmin(false));
+			request.extensions.insert(IsActive(false));
+			request.extensions.insert(AuthState::anonymous());
+			return;
+		};
+
+		let is_staff = session.get::<bool>("is_staff").unwrap_or(false);
+		let is_superuser = session.get::<bool>("is_superuser").unwrap_or(false);
+		let is_admin = is_staff || is_superuser;
+		let is_active = true;
+
+		request.extensions.insert(user_id.clone());
+		request.extensions.insert(IsAuthenticated(true));
+		request.extensions.insert(IsAdmin(is_admin));
+		request.extensions.insert(IsActive(is_active));
+		request
+			.extensions
+			.insert(AuthState::authenticated(user_id, is_admin, is_active));
+	}
 }
 
 impl Default for SessionMiddleware {
@@ -212,6 +258,7 @@ impl Middleware for SessionMiddleware {
 		// (`SessionData::regenerate_id`) keep `Set-Cookie` in sync. See #3827.
 		let active_id = ActiveSessionId::new(session.id.clone());
 		request.extensions.insert(active_id.clone());
+		Self::populate_auth_extensions(&request, &session);
 
 		// Call the handler
 		// Convert errors to responses so post-processing (e.g., security headers)
@@ -244,10 +291,9 @@ impl Middleware for SessionMiddleware {
 #[cfg(test)]
 mod tests {
 	use super::*;
-	use crate::session::data::USER_ID_SESSION_KEY;
 	use bytes::Bytes;
 	use hyper::{HeaderMap, Method, Version};
-	use reinhardt_http::{AuthState, Handler, IsActive, IsAdmin, IsAuthenticated, Request};
+	use reinhardt_http::{AuthState, Handler, Request};
 	use rstest::rstest;
 	use std::sync::Mutex;
 	use std::time::Duration;
@@ -388,15 +434,14 @@ mod tests {
 	}
 
 	#[tokio::test]
-	async fn session_middleware_does_not_authenticate_session_user_id() {
-		// Arrange: a valid session can contain an identity, but it cannot prove the
-		// account remains active or authorized.
+	async fn session_middleware_populates_auth_state_from_session_user_id() {
 		let middleware = make_middleware();
 		let store = middleware.store_arc();
 		let mut session = SessionData::new(Duration::from_secs(3600));
 		session
 			.set(USER_ID_SESSION_KEY.to_string(), 42_i64)
 			.unwrap();
+		session.set("is_staff".to_string(), true).unwrap();
 		let session_id = session.id.clone();
 		store.save(session);
 
@@ -406,13 +451,41 @@ mod tests {
 			.await
 			.unwrap();
 
-		// Assert: an authentication middleware must validate the current account.
 		let captured = captured.lock().unwrap();
-		assert!(captured.auth_state.is_none());
+		let auth_state = captured
+			.auth_state
+			.as_ref()
+			.expect("SessionMiddleware must insert AuthState");
+		assert!(auth_state.is_authenticated());
+		assert_eq!(auth_state.user_id(), "42");
+		assert!(auth_state.is_admin());
+		assert!(auth_state.is_active());
+		assert_eq!(captured.user_id.as_deref(), Some("42"));
+		assert_eq!(captured.is_authenticated, Some(IsAuthenticated(true)));
+		assert_eq!(captured.is_admin, Some(IsAdmin(true)));
+		assert_eq!(captured.is_active, Some(IsActive(true)));
+	}
+
+	#[tokio::test]
+	async fn session_middleware_populates_anonymous_auth_state_without_user_id() {
+		let middleware = make_middleware();
+		let (captured, handler) = capture_handler();
+
+		middleware
+			.process(request_without_cookie(), handler)
+			.await
+			.unwrap();
+
+		let captured = captured.lock().unwrap();
+		let auth_state = captured
+			.auth_state
+			.as_ref()
+			.expect("SessionMiddleware must insert anonymous AuthState");
+		assert!(auth_state.is_anonymous());
 		assert!(captured.user_id.is_none());
-		assert!(captured.is_authenticated.is_none());
-		assert!(captured.is_admin.is_none());
-		assert!(captured.is_active.is_none());
+		assert_eq!(captured.is_authenticated, Some(IsAuthenticated(false)));
+		assert_eq!(captured.is_admin, Some(IsAdmin(false)));
+		assert_eq!(captured.is_active, Some(IsActive(false)));
 	}
 
 	#[tokio::test]

@@ -5,6 +5,8 @@
 //! Middleware stack (server-only):
 //! 1. `SessionMiddleware` — cookie-based session management used by the
 //!    `users` app's login/logout server functions
+//! 2. `TutorialSessionAuthMiddleware` — resolves the session identity against
+//!    the current user record before publishing `AuthState`
 
 use crate::apps::{polls::urls as polls_urls, users::urls as users_urls};
 use reinhardt::UnifiedRouter;
@@ -14,6 +16,8 @@ use reinhardt::routes;
 
 #[cfg(server)]
 use crate::config::admin::configure_admin;
+#[cfg(server)]
+use crate::config::session_auth::TutorialSessionAuthMiddleware;
 
 #[cfg(server)]
 use reinhardt::middleware::session::{SessionConfig, SessionMiddleware};
@@ -89,11 +93,13 @@ pub fn routes() -> UnifiedRouter {
 	// `#[inject] store: KeyedDepends<SessionStoreKey, Arc<SessionStore>>`
 	// can resolve the same store the middleware writes to without a parallel
 	// `with_di_registrations(...)` call. A session user ID is not sufficient to
-	// establish `AuthState`; protected handlers must use authentication
-	// middleware that validates the current account. See #4426 (and the original
-	// #4423 regression that motivated the auto-registration hook).
+	// establish `AuthState`, so the tutorial follows session loading with
+	// account validation against the current `User` record. See #4426 (and the
+	// original #4423 regression that motivated the auto-registration hook).
 	#[cfg(server)]
-	let router = router.with_middleware(create_session_middleware());
+	let router = router
+		.with_middleware(create_session_middleware())
+		.with_middleware(TutorialSessionAuthMiddleware::new());
 
 	router
 }

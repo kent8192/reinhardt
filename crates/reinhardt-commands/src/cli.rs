@@ -769,7 +769,10 @@ impl fmt::Debug for Commands {
 				.debug_struct("Dbshell")
 				.field("database", database)
 				.field("database_url", database_url)
-				.field("client_arguments", client_arguments)
+				.field(
+					"client_arguments",
+					&crate::dbshell::RedactedArguments(client_arguments),
+				)
 				.finish(),
 			#[cfg(feature = "introspect")]
 			Self::Introspect { format, section } => {
@@ -2966,6 +2969,36 @@ mod tests {
 		};
 
 		assert!(!requires_database(&command, &CommandRegistry::new()));
+	}
+
+	#[cfg(feature = "reinhardt-db")]
+	#[rstest::rstest]
+	fn dbshell_debug_redacts_sensitive_passthrough_arguments() {
+		// Arrange
+		let command = Commands::Dbshell {
+			database: "default".to_string(),
+			database_url: None,
+			client_arguments: vec![
+				OsString::from("--password=cli-secret"),
+				OsString::from("--token"),
+				OsString::from("token-secret"),
+				OsString::from("--database-url"),
+				OsString::from("mysql://operator:database-secret@localhost/app"),
+				OsString::from("--safe-option"),
+			],
+		};
+
+		// Act
+		let debug = format!("{command:?}");
+
+		// Assert
+		assert_eq!(
+			debug,
+			"Dbshell { database: \"default\", database_url: None, client_arguments: [\"[REDACTED]\", \"--token\", \"[REDACTED]\", \"--database-url\", \"[REDACTED]\", \"--safe-option\"] }"
+		);
+		assert!(!debug.contains("cli-secret"));
+		assert!(!debug.contains("token-secret"));
+		assert!(!debug.contains("database-secret"));
 	}
 
 	#[cfg(feature = "migrations")]

@@ -423,7 +423,10 @@ The client inherits the terminal's standard input, output, and error streams,
 so prompts and interactive features continue to work. Database passwords are
 not placed in the native client's arguments. Reinhardt adds `PGPASSWORD` or
 `MYSQL_PWD` only to the child process environment; it does not add those
-variables to the parent process or expose their values in its diagnostics.
+variables to the parent process or expose their values in its diagnostics. A
+MySQL URL with a host uses TCP explicitly so a `localhost` port is honored;
+add the supported `socket` query parameter when Unix-socket transport is
+required.
 
 ### Rust Management Shell
 

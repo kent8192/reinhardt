@@ -242,13 +242,21 @@ impl fmt::Debug for DbClientSpec {
 	}
 }
 
-struct RedactedArguments<'a>(&'a [OsString]);
+pub(crate) struct RedactedArguments<'a>(pub(crate) &'a [OsString]);
 
 impl fmt::Debug for RedactedArguments<'_> {
 	fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
 		let mut list = f.debug_list();
+		let mut redact_next = false;
 		for argument in self.0 {
-			if argument.to_string_lossy().starts_with("file:") {
+			let argument_text = argument.to_string_lossy();
+			let is_sensitive = redact_next
+				|| argument_text.starts_with("file:")
+				|| argument_is_sensitive(&argument_text);
+			redact_next = argument_text
+				.strip_prefix("--")
+				.is_some_and(|flag| !flag.contains('=') && option_name_is_sensitive(flag));
+			if is_sensitive {
 				list.entry(&RedactedValue);
 			} else {
 				list.entry(argument);
@@ -276,6 +284,28 @@ impl fmt::Debug for RedactedValue {
 	fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
 		f.write_str("\"[REDACTED]\"")
 	}
+}
+
+fn option_name_is_sensitive(name: &str) -> bool {
+	let normalized_name = name.to_ascii_lowercase().replace('_', "-");
+	normalized_name == "url"
+		|| normalized_name.ends_with("-url")
+		|| normalized_name.contains("password")
+		|| normalized_name.contains("passwd")
+		|| normalized_name.contains("secret")
+		|| normalized_name.contains("token")
+		|| normalized_name.contains("api-key")
+		|| normalized_name.contains("credential")
+}
+
+fn argument_is_sensitive(argument: &str) -> bool {
+	if argument.contains("://") || argument.contains('@') {
+		return true;
+	}
+	argument
+		.strip_prefix("--")
+		.and_then(|flag| flag.split_once('='))
+		.is_some_and(|(name, _)| option_name_is_sensitive(name))
 }
 
 pub(crate) fn build_client_spec(
@@ -353,6 +383,10 @@ fn append_postgres_query_environment(
 fn build_mysql_spec(database_url: &str) -> CommandResult<DbClientSpec> {
 	let parsed = parse_network_url(database_url, "MySQL")?;
 	let mut arguments = Vec::new();
+	let uses_socket = parsed.query_pairs().any(|(key, _)| key == "socket");
+	if parsed.host().is_some() && !uses_socket {
+		arguments.push(OsString::from("--protocol=TCP"));
+	}
 	append_host(&mut arguments, &parsed);
 	append_option(
 		&mut arguments,
@@ -392,6 +426,7 @@ fn append_mysql_query_arguments(parsed: &Url, arguments: &mut Vec<OsString>) -> 
 			"ssl-crlpath" => "--ssl-crlpath",
 			"ssl-key" => "--ssl-key",
 			"ssl-mode" => "--ssl-mode",
+			"socket" => "--socket",
 			"tls-ciphersuites" => "--tls-ciphersuites",
 			"tls-version" => "--tls-version",
 			unsupported => {
@@ -732,7 +767,7 @@ mod tests {
 					),
 					"exact-mysql" => (
 						"mysql://operator:mysql-secret@db.example:4406/reporting",
-						"client=mysql\nargument=--host\nargument=db.example\nargument=--port\nargument=4406\nargument=--user\nargument=operator\nargument=reporting\nargument=--expanded\nPGPASSWORD=unset\nMYSQL_PWD=mysql-secret\n",
+						"client=mysql\nargument=--protocol=TCP\nargument=--host\nargument=db.example\nargument=--port\nargument=4406\nargument=--user\nargument=operator\nargument=reporting\nargument=--expanded\nPGPASSWORD=unset\nMYSQL_PWD=mysql-secret\n",
 					),
 					"exact-sqlite" => (
 						"sqlite:data/report.sqlite3",
@@ -1228,6 +1263,7 @@ mod tests {
 		assert_eq!(
 			spec.arguments,
 			vec![
+				OsString::from("--protocol=TCP"),
 				OsString::from("--host"),
 				OsString::from("db.example"),
 				OsString::from("--port"),
@@ -1246,6 +1282,56 @@ mod tests {
 			spec.secret_environment,
 			vec![(OsString::from("MYSQL_PWD"), OsString::from(password))]
 		);
+	}
+
+	#[rstest::rstest]
+	fn mysql_uses_socket_query_parameter_without_forcing_tcp() {
+		let database = resolved_database(
+			"mysql://operator@localhost:4406/reporting?socket=%2Fvar%2Frun%2Fmysql.sock",
+		);
+
+		let spec = build_client_spec(&database, &[]).expect("build MySQL socket client");
+
+		assert_eq!(
+			spec.arguments,
+			vec![
+				OsString::from("--host"),
+				OsString::from("localhost"),
+				OsString::from("--port"),
+				OsString::from("4406"),
+				OsString::from("--user"),
+				OsString::from("operator"),
+				OsString::from("--socket"),
+				OsString::from("/var/run/mysql.sock"),
+				OsString::from("reporting"),
+			]
+		);
+	}
+
+	#[rstest::rstest]
+	fn db_client_debug_redacts_sensitive_passthrough_arguments() {
+		let spec = super::DbClientSpec {
+			executable: OsString::from("mysql"),
+			arguments: vec![
+				OsString::from("--password=cli-secret"),
+				OsString::from("--token"),
+				OsString::from("token-secret"),
+				OsString::from("--database-url"),
+				OsString::from("mysql://operator:database-secret@localhost/app"),
+				OsString::from("--safe-option"),
+			],
+			secret_environment: Vec::new(),
+		};
+
+		let debug = format!("{spec:?}");
+
+		assert_eq!(
+			debug,
+			"DbClientSpec { executable: \"mysql\", arguments: [\"[REDACTED]\", \"--token\", \"[REDACTED]\", \"--database-url\", \"[REDACTED]\", \"--safe-option\"], secret_environment: [] }"
+		);
+		assert!(!debug.contains("cli-secret"));
+		assert!(!debug.contains("token-secret"));
+		assert!(!debug.contains("database-secret"));
 	}
 
 	#[rstest::rstest]

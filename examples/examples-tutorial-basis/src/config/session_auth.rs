@@ -45,8 +45,9 @@ impl TutorialSessionAuthMiddleware {
 			tracing::warn!("Tutorial session authentication has no database connection");
 			return AuthState::anonymous();
 		};
+		let mut db = *db;
 
-		match User::objects().get(user_id).first_with_db(&db).await {
+		match User::objects().get(user_id).first_with_db(&mut db).await {
 			Ok(Some(user)) if user.is_active() => AuthState::authenticated(
 				user.id().to_string(),
 				user.is_superuser,
@@ -83,12 +84,14 @@ impl Middleware for TutorialSessionAuthMiddleware {
 mod tests {
 	use super::TutorialSessionAuthMiddleware;
 	use reinhardt::core::async_trait;
+	use reinhardt::db::backends::DatabaseConnection as BackendsConnection;
+	use reinhardt::db::orm::DatabaseConnectionLease;
 	use reinhardt::di::{InjectionContext, SingletonScope};
 	use reinhardt::http::AuthState;
 	use reinhardt::middleware::session::{
 		SessionData, SessionId, SessionStore, USER_ID_SESSION_KEY,
 	};
-	use reinhardt::{DatabaseConnection, Handler, Middleware, Request, Response};
+	use reinhardt::{Handler, Middleware, Request, Response};
 	use sqlx::SqlitePool;
 	use std::sync::{Arc, Mutex};
 	use std::time::Duration;
@@ -108,7 +111,12 @@ mod tests {
 	async fn request_for_user(
 		user_id: i64,
 		is_active: bool,
-	) -> (NamedTempFile, Arc<SessionStore>, Request) {
+	) -> (
+		NamedTempFile,
+		DatabaseConnectionLease,
+		Arc<SessionStore>,
+		Request,
+	) {
 		let database_file = NamedTempFile::new().expect("temporary database should be created");
 		let database_path = database_file
 			.path()
@@ -135,9 +143,12 @@ mod tests {
 		.await
 		.expect("tutorial user should be inserted");
 
-		let db = DatabaseConnection::connect_sqlite(&orm_url)
+		let owner = BackendsConnection::connect_sqlite(&orm_url)
 			.await
 			.expect("ORM connection should connect");
+		let lease = DatabaseConnectionLease::register(owner)
+			.expect("ORM connection should be registered");
+		let db = lease.handle();
 		let singleton = Arc::new(SingletonScope::new());
 		singleton.set(db);
 		let context = InjectionContext::builder(singleton).build();
@@ -158,12 +169,12 @@ mod tests {
 		let mut request = request;
 		request.set_di_context(Arc::new(context));
 
-		(database_file, store, request)
+		(database_file, lease, store, request)
 	}
 
 	#[tokio::test]
 	async fn active_session_user_populates_validated_auth_state() {
-		let (_database_file, store, request) = request_for_user(7, true).await;
+		let (_database_file, _lease, store, request) = request_for_user(7, true).await;
 		let captured = Arc::new(Mutex::new(None));
 		let handler = Arc::new(CaptureAuthState(Arc::clone(&captured)));
 
@@ -184,7 +195,7 @@ mod tests {
 
 	#[tokio::test]
 	async fn inactive_session_user_is_anonymous() {
-		let (_database_file, store, request) = request_for_user(8, false).await;
+		let (_database_file, _lease, store, request) = request_for_user(8, false).await;
 		let captured = Arc::new(Mutex::new(None));
 		let handler = Arc::new(CaptureAuthState(Arc::clone(&captured)));
 

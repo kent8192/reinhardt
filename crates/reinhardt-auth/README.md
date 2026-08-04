@@ -15,11 +15,11 @@ Add `reinhardt` to your `Cargo.toml`:
 <!-- reinhardt-version-sync:3 -->
 ```toml
 [dependencies]
-reinhardt = { version = "0.3.2", features = ["auth"] }
+reinhardt = { version = "0.3.5", features = ["auth"] }
 
 # Or use a preset:
-# reinhardt = { version = "0.3.2", features = ["standard"] }  # Recommended
-# reinhardt = { version = "0.3.2", features = ["full"] }      # All features
+# reinhardt = { version = "0.3.5", features = ["standard"] }  # Recommended
+# reinhardt = { version = "0.3.5", features = ["full"] }      # All features
 ```
 
 Then import authentication features:
@@ -819,6 +819,7 @@ impl AuthBackend for MyAuthBackend {
 #### Storage Backends
 
 - **DatabaseSessionBackend** (feature: `database`) - Persistent session storage in database
+  - Uses the connection supplied to `from_connection()` for load, save, delete, and existence checks
   - Session model with expiration timestamps
   - Automatic session cleanup with `cleanup_expired()`
   - SQLite, PostgreSQL, and MySQL support via sqlx

@@ -117,7 +117,7 @@ args = [
 ]
 
 [tasks.semver-check]
-description = "Run cargo-semver-checks locally (mirrors CI semver-check.yml). Override baseline via BASELINE_REV; set SEMVER_PACKAGE=<name> to check a single crate (mirrors CI's per-crate matrix shard); override release-type via SEMVER_RELEASE_TYPE (e.g. SEMVER_RELEASE_TYPE=major for SP-3 breaking-change PRs, SEMVER_RELEASE_TYPE= [empty] to omit --release-type and let cargo-semver-checks auto-detect from Cargo.toml version bumps as on release-plz PRs). Defaults to --release-type minor when unset."
+description = "Run cargo-semver-checks locally (mirrors the shared semver-check workflow). Override baseline via BASELINE_REV; set SEMVER_PACKAGE=<name> to check a single crate (mirrors the workflow's per-crate matrix shard); override release-type via SEMVER_RELEASE_TYPE (e.g. SEMVER_RELEASE_TYPE=major for SP-3 breaking-change PRs, SEMVER_RELEASE_TYPE= [empty] to omit --release-type and let cargo-semver-checks auto-detect from Cargo.toml version bumps as on release-plz PRs). Defaults to --release-type minor when unset."
 script_runner = "sh"
 script = '''
 set -e
@@ -125,7 +125,7 @@ set -e
 # both on the canonical repo (where origin/main exists) and on forks or
 # differently-named remotes:
 #   1. $BASELINE_REV  - explicit user override
-#   2. origin/main    - default, matches CI normal-PR path
+#   2. origin/main    - default, matches the normal PR baseline
 #   3. main           - local fallback when no `origin` remote is configured
 #   4. HEAD~1         - last-resort so the command never fails on a fresh clone
 if [ -n "${BASELINE_REV:-}" ]; then
@@ -144,7 +144,7 @@ echo "semver-check: using baseline-rev=${BASELINE}"
 # pitfalls. POSIX sh: `set --` resets positional params, then we append.
 set -- check-release --all-features --baseline-rev "$BASELINE"
 
-# When SEMVER_PACKAGE is set, target a single crate (mirrors the CI per-crate
+# When SEMVER_PACKAGE is set, target a single crate (mirrors the workflow's per-crate
 # matrix shard introduced by reinhardt-web#4529). Otherwise fall back to the
 # workspace-wide invocation, preserving backward compatibility for callers
 # that run the task without arguments.
@@ -155,7 +155,7 @@ else
   set -- "$@" --workspace --exclude reinhardt-web --exclude reinhardt-pages
 fi
 
-# SEMVER_RELEASE_TYPE mirrors the CI release-type matrix: empty (variable set
+# SEMVER_RELEASE_TYPE mirrors the workflow release-type matrix: empty (variable set
 # but blank) → omit --release-type entirely so cargo-semver-checks auto-detects
 # from Cargo.toml version bumps (release-plz PR path); explicit value → pass
 # through (e.g. SEMVER_RELEASE_TYPE=major for SP-3 breaking-change PRs); unset
@@ -528,9 +528,9 @@ dependencies = ["docker-cleanup-force", "test-only"]
 # ============================================================================
 
 [tasks.coverage-unit]
-description = "Run unit tests with coverage (generates Codecov JSON report)"
+description = "Run unit tests with coverage (generates LCOV report)"
 command = "cargo"
-args = ["llvm-cov", "nextest", "--workspace", "--lib", "--all-features", "--no-fail-fast", "--codecov", "--output-path", "/tmp/reinhardt-unit-codecov.json"]
+args = ["llvm-cov", "nextest", "--workspace", "--lib", "--all-features", "--no-fail-fast", "--lcov", "--output-path", "/tmp/reinhardt-unit-lcov.info"]
 
 [tasks.coverage-html]
 description = "Run unit tests with coverage and open HTML report"

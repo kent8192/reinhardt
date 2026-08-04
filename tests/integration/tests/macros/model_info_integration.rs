@@ -4,7 +4,7 @@
 //! - Basic Info struct generation with correct fields
 //! - Bidirectional `From` conversions (Model ↔ Info)
 //! - Opt-out via `#[model(info = false)]`
-//! - Field exclusion via `#[field(skip_info = true)]`
+//! - Field exclusion via `#[field(skip_info = true)]` and `#[field(skip_getter = true)]`
 //! - Lightweight relation field inclusion for FK, OneToOne, and ManyToMany
 //! - Builder with relation-aware setters
 //! - Validation attribute generation from `#[field(...)]` config
@@ -177,6 +177,32 @@ fn test_info_skip_field_default_on_roundtrip() {
 
 	// Assert — excluded field gets Default::default()
 	assert_eq!(*model.password_hash(), "");
+}
+
+#[model(app_label = "test", table_name = "users_with_hidden_fields")]
+struct UserWithHiddenField {
+	#[field(primary_key = true)]
+	id: Option<i64>,
+
+	username: String,
+
+	#[field(skip_getter = true)]
+	password_hash: String,
+}
+
+#[test]
+fn test_info_excludes_skip_getter_field() {
+	// Arrange — the skipped field must not be part of the public Info DTO.
+	let info = UserWithHiddenFieldInfo {
+		id: Some(1),
+		username: "alice".to_string(),
+	};
+
+	// Act
+	let model: UserWithHiddenField = info.into();
+
+	// Assert — the hidden field is initialized safely when converting from Info.
+	assert_eq!(model.password_hash, "");
 }
 
 #[model(app_label = "test", table_name = "serde_redacted_users")]

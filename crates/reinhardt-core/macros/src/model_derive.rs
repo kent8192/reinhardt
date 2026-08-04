@@ -541,7 +541,9 @@ struct FieldConfig {
 
 	// Getter/setter generation control
 	/// Skip getter and setter generation for this field.
-	/// Used by `#[user]` macro to avoid conflicts with trait method signatures.
+	/// The field is also excluded from the generated Info companion struct.
+	/// Used by `#[user]` macro to avoid conflicts with trait method signatures
+	/// and to keep authentication fields out of public data-transfer types.
 	skip_getter: bool,
 
 	/// Completely skip this field from model processing.
@@ -4861,7 +4863,7 @@ fn generate_info_struct(
 
 	let mut info_fields = Vec::new();
 	for f in field_infos {
-		if f.config.skip || f.config.skip_info || f.is_fk_id_field {
+		if f.config.skip || f.config.skip_getter || f.config.skip_info || f.is_fk_id_field {
 			continue;
 		}
 

@@ -718,8 +718,8 @@ pub fn injectable(args: TokenStream, input: TokenStream) -> TokenStream {
 /// payloads instead of ORM marker fields or flattened `*_id` fields. FK and
 /// OneToOne builder setters accept `impl IntoPrimaryKey<T>`. Validation
 /// attributes are derived from `#[field(...)]` config. Opt out with
-/// `#[model(info = false)]`. Exclude individual fields with
-/// `#[field(skip_info = true)]`.
+/// `#[model(info = false)]`. Fields marked `#[field(skip_getter = true)]` or
+/// `#[field(skip_info = true)]` are excluded from the Info companion type.
 ///
 /// # Model Attributes
 ///

@@ -185,7 +185,7 @@ struct Post {
 - `ManyToManyField<Source, Target>`: included as `ManyToManyInfo<Source, Target>`
 - FK `_id` fields (auto-generated): not exposed directly; use `info.author.id`
 - Relationship marker types are not exposed directly because they do not carry values
-- `#[field(skip = true)]`, `#[field(skip_getter = true)]`, or `#[field(skip_info = true)]` fields: excluded
+- `#[field(skip = true)]` or `#[field(skip_info = true)]` fields: excluded
 
 **Builder with relationship payload support:**
 ```rust
@@ -319,7 +319,7 @@ the label is rendered as a `<legend>` inside the fieldset.
 - Prefer `Model::build()` over the zero-argument `Model::new()` alias in tutorials, examples, and call sites where the model schema is expected to evolve (MU-3)
 - Pass FK values via `.<related>(&model)` in `build()` setters when the related instance is already in scope (composes with #4398)
 - Use `{Model}Info` for API DTOs and cross-layer data transfer instead of hand-writing parallel structs (MU-4)
-- Use `#[field(skip_getter = true)]` or `#[field(skip_info = true)]` to exclude sensitive fields (e.g., password hashes) from the Info struct
+- Use `#[field(skip_info = true)]` to exclude sensitive fields (e.g., password hashes) from the Info struct
 - Use `#[model(info = false)]` only when the Info struct would be genuinely unused, but the model may still be referenced by shared relationship metadata
 - Use `#[model(server_only)]` only for models that are intentionally native-only and should not participate in WASM/shared type contracts
 

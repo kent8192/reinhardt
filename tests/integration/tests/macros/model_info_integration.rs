@@ -4,14 +4,15 @@
 //! - Basic Info struct generation with correct fields
 //! - Bidirectional `From` conversions (Model ↔ Info)
 //! - Opt-out via `#[model(info = false)]`
-//! - Field exclusion via `#[field(skip_info = true)]` and `#[field(skip_getter = true)]`
+//! - Field exclusion via `#[field(skip_info = true)]`
 //! - Lightweight relation field inclusion for FK, OneToOne, and ManyToMany
 //! - Builder with relation-aware setters
 //! - Validation attribute generation from `#[field(...)]` config
 
+use chrono::{DateTime, Utc};
 use reinhardt::db::associations::{ForeignKeyField, ManyToManyField, OneToOneField};
-use reinhardt::model;
 use reinhardt::model_info::{ManyToManyInfo, RelationInfo};
+use reinhardt::{Argon2Hasher, model, user};
 use serde::{Deserialize, Serialize};
 
 // --- Basic Info generation ---
@@ -180,29 +181,74 @@ fn test_info_skip_field_default_on_roundtrip() {
 }
 
 #[model(app_label = "test", table_name = "users_with_hidden_fields")]
+#[derive(Serialize, Deserialize)]
 struct UserWithHiddenField {
 	#[field(primary_key = true)]
 	id: Option<i64>,
 
+	#[field(max_length = 100)]
 	username: String,
 
-	#[field(skip_getter = true)]
+	#[field(max_length = 255, skip_getter = true)]
 	password_hash: String,
 }
 
 #[test]
-fn test_info_excludes_skip_getter_field() {
-	// Arrange — the skipped field must not be part of the public Info DTO.
+fn test_info_includes_skip_getter_field() {
+	// Arrange — accessor suppression must not change the public Info DTO.
 	let info = UserWithHiddenFieldInfo {
 		id: Some(1),
 		username: "alice".to_string(),
+		password_hash: "HASHED_SECRET".to_string(),
 	};
 
 	// Act
 	let model: UserWithHiddenField = info.into();
 
-	// Assert — the hidden field is initialized safely when converting from Info.
-	assert_eq!(model.password_hash, "");
+	// Assert — the field remains available even though no getter was generated.
+	assert_eq!(model.password_hash, "HASHED_SECRET");
+}
+
+#[user(
+	hasher = Argon2Hasher,
+	username_field = "username",
+	manager = false
+)]
+#[model(app_label = "test", table_name = "info_session_users")]
+#[derive(Default, Serialize, Deserialize)]
+struct InfoSessionUser {
+	#[field(primary_key = true)]
+	id: i64,
+	#[field(max_length = 100)]
+	username: String,
+	#[field(max_length = 255)]
+	password_hash: Option<String>,
+	last_login: Option<DateTime<Utc>>,
+	is_active: bool,
+	is_superuser: bool,
+}
+
+#[test]
+fn test_user_macro_excludes_only_password_hash_from_info() {
+	// Arrange — `#[user]` suppresses accessors for all authentication fields,
+	// but only the password hash is implicitly sensitive.
+	let info = InfoSessionUserInfo {
+		id: 7,
+		username: "alice".to_string(),
+		last_login: None,
+		is_active: true,
+		is_superuser: false,
+	};
+
+	// Act
+	let json = serde_json::to_value(&info).unwrap();
+	let model: InfoSessionUser = info.into();
+
+	// Assert
+	assert_eq!(json["username"], "alice");
+	assert_eq!(json["is_active"], true);
+	assert_eq!(json.get("password_hash"), None);
+	assert_eq!(model.password_hash, None);
 }
 
 #[model(app_label = "test", table_name = "serde_redacted_users")]

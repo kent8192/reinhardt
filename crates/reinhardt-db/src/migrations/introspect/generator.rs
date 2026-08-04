@@ -5,7 +5,7 @@
 use super::config::IntrospectConfig;
 use super::naming::{column_to_field_name, sanitize_identifier, table_to_struct_name};
 use super::type_mapping::TypeMapper;
-use crate::migrations::introspection::{ColumnInfo, DatabaseSchema, TableInfo};
+use crate::migrations::introspection::{ColumnInfo, DatabaseSchema, ForeignKeyInfo, TableInfo};
 use crate::migrations::{GeneratedColumnDefinition, GeneratedStorage, MigrationError, Result};
 use proc_macro2::TokenStream;
 use quote::{format_ident, quote};
@@ -172,7 +172,8 @@ impl SchemaCodeGenerator {
 	) -> Result<GeneratedFile> {
 		let header = self.generate_header();
 		let imports = self.generate_imports();
-		let relationship_imports = self.generate_relationship_imports(table, table_to_struct);
+		let relationship_imports =
+			self.generate_relationship_imports(table, table_to_struct, schema);
 		let model = self.generate_model(table, table_to_struct, schema)?;
 
 		let tokens = quote! {
@@ -196,6 +197,7 @@ impl SchemaCodeGenerator {
 		&self,
 		table: &TableInfo,
 		table_to_struct: &HashMap<String, String>,
+		schema: &DatabaseSchema,
 	) -> TokenStream {
 		if self.config.output.single_file || !self.config.generation.detect_relationships {
 			return TokenStream::new();
@@ -205,6 +207,7 @@ impl SchemaCodeGenerator {
 		let imports: Vec<_> = table
 			.foreign_keys
 			.iter()
+			.filter(|foreign_key| self.is_relationship_foreign_key(table, foreign_key, schema))
 			.filter_map(|foreign_key| {
 				let target = table_to_struct.get(&foreign_key.referenced_table)?;
 				let module = module_identifier(&foreign_key.referenced_table);
@@ -216,6 +219,26 @@ impl SchemaCodeGenerator {
 			})
 			.collect();
 		quote! { #(#imports)* }
+	}
+
+	fn is_relationship_foreign_key(
+		&self,
+		table: &TableInfo,
+		foreign_key: &ForeignKeyInfo,
+		schema: &DatabaseSchema,
+	) -> bool {
+		if !self.config.generation.detect_relationships || foreign_key.columns.len() != 1 {
+			return false;
+		}
+		let Some(source_column) = foreign_key.columns.first() else {
+			return false;
+		};
+		let Some(target) = schema.tables.get(&foreign_key.referenced_table) else {
+			return false;
+		};
+		table.columns.contains_key(source_column)
+			&& target.primary_key.len() == 1
+			&& foreign_key.referenced_columns == target.primary_key
 	}
 
 	/// Generate `models.rs`, which declares and re-exports all model modules.
@@ -421,21 +444,10 @@ impl SchemaCodeGenerator {
 		);
 		let field_ident = format_ident!("{}", field_name);
 
-		let relationship = self
-			.config
-			.generation
-			.detect_relationships
-			.then(|| {
-				table.foreign_keys.iter().find(|foreign_key| {
-					let Some(target) = schema.tables.get(&foreign_key.referenced_table) else {
-						return false;
-					};
-					foreign_key.columns.as_slice() == [column.name.as_str()]
-						&& target.primary_key.len() == 1
-						&& foreign_key.referenced_columns == target.primary_key
-				})
-			})
-			.flatten();
+		let relationship = table.foreign_keys.iter().find(|foreign_key| {
+			self.is_relationship_foreign_key(table, foreign_key, schema)
+				&& foreign_key.columns.as_slice() == [column.name.as_str()]
+		});
 		let relationship_target = if let Some(foreign_key) = relationship {
 			let target = table_to_struct
 				.get(&foreign_key.referenced_table)
@@ -1370,6 +1382,71 @@ mod tests {
 		syn::parse_file(&module.content).expect("models.rs should be parseable Rust");
 		assert!(module.content.contains("pub mod users;"));
 		assert!(module.content.contains("pub use users::Users;"));
+	}
+
+	#[test]
+	fn multi_file_generation_omits_scalar_foreign_key_imports() {
+		let mut config = IntrospectConfig::default();
+		config.output.directory = PathBuf::from("/tmp/reinhardt-inspectdb-scalar-fk-imports");
+		let generator = SchemaCodeGenerator::new(config);
+		let mut accounts = create_test_table();
+		accounts.name = "string".to_string();
+		accounts.columns.insert(
+			"external_id".to_string(),
+			ColumnInfo {
+				name: "external_id".to_string(),
+				column_type: FieldType::BigInteger,
+				nullable: false,
+				default: None,
+				auto_increment: false,
+				identity_generation: None,
+				generated: None,
+			},
+		);
+		let mut invoices = create_test_table();
+		invoices.name = "invoices".to_string();
+		invoices.columns.insert(
+			"account_external_id".to_string(),
+			ColumnInfo {
+				name: "account_external_id".to_string(),
+				column_type: FieldType::BigInteger,
+				nullable: false,
+				default: None,
+				auto_increment: false,
+				identity_generation: None,
+				generated: None,
+			},
+		);
+		invoices.foreign_keys = vec![ForeignKeyInfo {
+			name: "invoices_account_external_id_fk".to_string(),
+			columns: vec!["account_external_id".to_string()],
+			referenced_table: "string".to_string(),
+			referenced_columns: vec!["external_id".to_string()],
+			on_delete: Some("CASCADE".to_string()),
+			on_update: Some("CASCADE".to_string()),
+		}];
+
+		let output = generator
+			.generate(&DatabaseSchema {
+				tables: [
+					("string".to_string(), accounts),
+					("invoices".to_string(), invoices),
+				]
+				.into(),
+			})
+			.expect("multi-file generation should succeed");
+		let invoice_file = output
+			.files
+			.iter()
+			.find(|file| file.path.ends_with("models/invoices.rs"))
+			.expect("invoice model file should be generated");
+
+		assert!(
+			invoice_file
+				.content
+				.contains("pub account_external_id: i64")
+		);
+		assert!(!invoice_file.content.contains("use super::string::String;"));
 	}
 
 	#[test]

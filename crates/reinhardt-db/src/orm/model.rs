@@ -1,5 +1,4 @@
 use serde::{Deserialize, Serialize};
-use std::any::TypeId;
 use std::collections::HashMap;
 
 /// Trait for type-safe field selectors
@@ -23,7 +22,7 @@ pub trait FieldSelector: Clone {
 /// When using the `#[model(...)]` macro, this implementation is automatically generated.
 pub trait Model: Serialize + for<'de> Deserialize<'de> + Send + Sync + Clone {
 	/// The primary key type
-	type PrimaryKey: Send + Sync + Clone + std::fmt::Display + 'static;
+	type PrimaryKey: Send + Sync + Clone + std::fmt::Display;
 
 	/// Type-safe field selector
 	///
@@ -63,46 +62,61 @@ pub trait Model: Serialize + for<'de> Deserialize<'de> + Send + Sync + Clone {
 
 	/// Converts a primary key into a query filter value.
 	///
-	/// Primitive integer primary keys retain numeric bindings. Custom primary-key
-	/// types default to an exact string binding so their display representation is
-	/// not coerced to a different database type.
+	/// Primitive integer primary keys retain numeric bindings, while standard
+	/// string primary keys retain exact string bindings. Other hand-written key
+	/// types retain the historical numeric-or-string fallback for compatibility;
+	/// custom string-like newtypes should override this method for exact binding.
 	/// Derived models override this conversion for declared primary-key types with
 	/// a dedicated database binding, such as strings, UUIDs, and timestamps.
 	fn primary_key_filter_value(pk: Self::PrimaryKey) -> super::query::FilterValue {
 		let value = pk.to_string();
-		let type_id = TypeId::of::<Self::PrimaryKey>();
+		let type_name = std::any::type_name::<Self::PrimaryKey>();
 
-		if matches!(
-			type_id,
-			id if id == TypeId::of::<i8>()
-				|| id == TypeId::of::<i16>()
-				|| id == TypeId::of::<i32>()
-				|| id == TypeId::of::<i64>()
-				|| id == TypeId::of::<isize>()
-				|| id == TypeId::of::<i128>()
-		) {
+		if [
+			std::any::type_name::<i8>(),
+			std::any::type_name::<i16>(),
+			std::any::type_name::<i32>(),
+			std::any::type_name::<i64>(),
+			std::any::type_name::<isize>(),
+			std::any::type_name::<i128>(),
+		]
+		.contains(&type_name)
+		{
 			return value
 				.parse::<i128>()
 				.map(super::query::FilterValue::from)
 				.unwrap_or(super::query::FilterValue::String(value));
 		}
 
-		if matches!(
-			type_id,
-			id if id == TypeId::of::<u8>()
-				|| id == TypeId::of::<u16>()
-				|| id == TypeId::of::<u32>()
-				|| id == TypeId::of::<u64>()
-				|| id == TypeId::of::<usize>()
-				|| id == TypeId::of::<u128>()
-		) {
+		if [
+			std::any::type_name::<u8>(),
+			std::any::type_name::<u16>(),
+			std::any::type_name::<u32>(),
+			std::any::type_name::<u64>(),
+			std::any::type_name::<usize>(),
+			std::any::type_name::<u128>(),
+		]
+		.contains(&type_name)
+		{
 			return value
 				.parse::<u128>()
 				.map(super::query::FilterValue::from)
 				.unwrap_or(super::query::FilterValue::String(value));
 		}
 
-		super::query::FilterValue::String(value)
+		if matches!(
+			type_name,
+			name if name == std::any::type_name::<String>()
+				|| name == std::any::type_name::<&str>()
+				|| name == std::any::type_name::<std::borrow::Cow<'static, str>>()
+		) {
+			return super::query::FilterValue::String(value);
+		}
+
+		value
+			.parse::<i64>()
+			.map(super::query::FilterValue::Integer)
+			.unwrap_or(super::query::FilterValue::String(value))
 	}
 
 	/// Get the primary key value

@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.6](https://github.com/kent8192/reinhardt-web/compare/reinhardt-db@v0.3.5...reinhardt-db@v0.3.6) - 2026-08-04
+
+### Fixed
+
+- *(orm)* preserve manual numeric primary key bindings
+- *(orm)* retain primary key newtype compatibility
+
+### Maintenance
+
+- merge main into primary key binding fix
+
+### Security
+
+- *(orm)* preserve exact custom primary key bindings
+
 ## [0.3.5](https://github.com/kent8192/reinhardt-web/compare/reinhardt-db@v0.3.4...reinhardt-db@v0.3.5) - 2026-08-02
 
 ### Maintenance

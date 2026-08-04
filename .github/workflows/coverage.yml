@@ -337,8 +337,14 @@ jobs:
           else
             FILTER_EXPR="not binary(/ui/)"
           fi
+          # Restrict LLVM coverage instrumentation to the native test target.
+          # Nested fixture builds target wasm32-unknown-unknown, whose toolchain
+          # does not include the profiler runtime required by instrument-coverage.
+          HOST_TARGET="$(rustc -vV | awk '/^host:/{print $2}')"
           set +e
           cargo llvm-cov nextest \
+            --target "$HOST_TARGET" \
+            --coverage-target-only \
             --no-report \
             --workspace \
             --test "*" \

@@ -4,7 +4,7 @@
 //!
 //! Middleware stack (server-only):
 //! 1. `SessionMiddleware` — cookie-based session management used by the
-//!    `users` app's login/logout server functions and `CurrentUser` auth state
+//!    `users` app's login/logout server functions
 
 use crate::apps::{polls::urls as polls_urls, users::urls as users_urls};
 use reinhardt::UnifiedRouter;
@@ -88,11 +88,10 @@ pub fn routes() -> UnifiedRouter {
 	// `#[inject] session: SessionData` or
 	// `#[inject] store: KeyedDepends<SessionStoreKey, Arc<SessionStore>>`
 	// can resolve the same store the middleware writes to without a parallel
-	// `with_di_registrations(...)` call. The same middleware also derives
-	// `AuthState` from `USER_ID_SESSION_KEY`, so authenticated handlers can use
-	// `CurrentUser<U>` without adding a second cookie-session auth layer.
-	// See #4426 (and the original #4423 regression that motivated the
-	// auto-registration hook) and #4740.
+	// `with_di_registrations(...)` call. A session user ID is not sufficient to
+	// establish `AuthState`; protected handlers must use authentication
+	// middleware that validates the current account. See #4426 (and the original
+	// #4423 regression that motivated the auto-registration hook).
 	#[cfg(server)]
 	let router = router.with_middleware(create_session_middleware());
 

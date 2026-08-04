@@ -2193,7 +2193,13 @@ pub(crate) fn model_derive_impl(mut input: DeriveInput) -> Result<TokenStream> {
 
 		(pk_getter, pk_setter, quote! {})
 	};
-	let pk_filter_value_impl = if !is_composite_pk && is_fully_qualified_uuid_type(pk_type) {
+	let pk_filter_value_impl = if !is_composite_pk && is_integer_primary_key_type(pk_type) {
+		quote! {
+			fn primary_key_filter_value(pk: Self::PrimaryKey) -> #orm_crate::query::FilterValue {
+				#orm_crate::query::FilterValue::from(pk)
+			}
+		}
+	} else if !is_composite_pk && is_fully_qualified_uuid_type(pk_type) {
 		quote! {
 			fn primary_key_filter_value(pk: Self::PrimaryKey) -> #orm_crate::query::FilterValue {
 				#orm_crate::query::FilterValue::Uuid(pk)
@@ -5360,7 +5366,7 @@ mod tests {
 		let output = output.to_string();
 		let start = output
 			.find("fn primary_key_filter_value")
-			.expect("UUID and timestamp primary keys should override the filter conversion");
+			.expect("typed primary keys should override the filter conversion");
 		let function = &output[start..];
 		let end = function
 			.find('}')
@@ -5538,6 +5544,32 @@ mod tests {
 			quote! {
 				fn primary_key_filter_value(pk: Self::PrimaryKey) -> #orm_crate::query::FilterValue {
 					#orm_crate::query::FilterValue::Uuid(pk)
+				}
+			}
+			.to_string()
+		);
+	}
+
+	#[rstest]
+	#[case(quote!(i32))]
+	#[case(quote!(i64))]
+	fn integer_primary_key_uses_integer_filter_value(#[case] primary_key_type: TokenStream) {
+		let input = quote! {
+			#[model(app_label = "test", table_name = "integer_models")]
+			pub struct IntegerModel {
+				#[field(primary_key = true)]
+				pub id: #primary_key_type,
+			}
+		};
+
+		let output = model_derive_impl(syn::parse2(input).unwrap()).unwrap();
+		let orm_crate = get_reinhardt_orm_crate();
+
+		assert_eq!(
+			generated_primary_key_filter_value(&output),
+			quote! {
+				fn primary_key_filter_value(pk: Self::PrimaryKey) -> #orm_crate::query::FilterValue {
+					#orm_crate::query::FilterValue::from(pk)
 				}
 			}
 			.to_string()

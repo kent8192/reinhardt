@@ -15,11 +15,11 @@ Add `reinhardt` to your `Cargo.toml`:
 <!-- reinhardt-version-sync:3 -->
 ```toml
 [dependencies]
-reinhardt = { version = "0.3.2", features = ["commands"] }
+reinhardt = { version = "0.3.5", features = ["commands"] }
 
 # Or use a preset:
-# reinhardt = { version = "0.3.2", features = ["standard"] }  # Recommended
-# reinhardt = { version = "0.3.2", features = ["full"] }      # All features
+# reinhardt = { version = "0.3.5", features = ["standard"] }  # Recommended
+# reinhardt = { version = "0.3.5", features = ["full"] }      # All features
 ```
 
 Then import command features:
@@ -39,7 +39,7 @@ package:
 ```bash
 # Pin the documented Reinhardt release for reproducibility.
 # Omit --version to let Cargo choose the latest stable release.
-cargo install reinhardt-admin-cli --version "0.3.2"
+cargo install reinhardt-admin-cli --version "0.3.5"
 ```
 
 This installs the `reinhardt-admin` command:
@@ -129,7 +129,7 @@ use reinhardt::commands::TemplateContext;
 
 let mut context = TemplateContext::new();
 context.insert("project_name", "my_project");
-context.insert("version", "0.3.2");
+context.insert("version", "0.3.5");
 context.insert("features", vec!["auth", "admin"]);  // Any Serialize type
 ```
 
@@ -204,6 +204,9 @@ cargo run --bin manage infra up --json
 # Run a short-lived management command with local infrastructure settings applied
 cargo run --bin manage infra run -- migrate
 
+# Select the state created by `infra up --profile staging`
+cargo run --bin manage infra run --profile staging -- migrate
+
 # Run the development server separately after exporting local infrastructure env
 eval "$(cargo run --bin manage infra up --print-env)"
 cargo run --bin manage runserver
@@ -214,6 +217,14 @@ cargo run --bin manage infra down
 ```
 
 State is stored under `.reinhardt/local-infra.json` in the project directory.
+Before it is used, the command verifies that it belongs to the current workspace,
+contains only the expected loopback services and project-scoped container names,
+and still matches each container's Docker port binding. Public callers of
+`InfraCommand::up_with_config` may provide any project identifier because the
+command binds the persisted state to `project_root` before provisioning. Delete
+the state file and run `infra up` again if validation fails.
+When neither `infra run --profile` nor `REINHARDT_ENV` selects a profile,
+`infra run` uses the validated profile persisted by `infra up`.
 The child process receives `DATABASE_URL`, `REDIS_URL`, and compatible
 `REINHARDT_` environment variables for discovered local services.
 `infra run -- runserver` is intentionally unsupported; start infrastructure
@@ -325,7 +336,7 @@ Projects using `collect_migrations!` must add `linkme` as a dependency:
 <!-- reinhardt-version-sync -->
 ```toml
 [dependencies]
-reinhardt = { version = "0.3.2", features = ["standard"] }
+reinhardt = { version = "0.3.5", features = ["standard"] }
 linkme = "0.3"
 ```
 

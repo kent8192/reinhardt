@@ -10,6 +10,9 @@ mod database_backend_concurrency;
 #[path = "sessions/database_backend_integration.rs"]
 mod database_backend_integration;
 
+#[path = "sessions/database_backend_injected_connection.rs"]
+mod database_backend_injected_connection;
+
 #[path = "sessions/session_auth_advanced.rs"]
 mod session_auth_advanced;
 

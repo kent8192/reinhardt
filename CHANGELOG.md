@@ -7,6 +7,50 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.5](https://github.com/kent8192/reinhardt-web/compare/reinhardt-web@v0.3.4...reinhardt-web@v0.3.5) - 2026-08-02
+
+### Documentation
+
+- add release announcement(s)
+
+### Fixed
+
+- *(ci)* restore Codecov LCOV uploads
+- *(ci)* enable sccache for Rust builds
+- *(grpc)* restore facade-only handler DI
+- *(grpc)* support package-only facade dependencies
+- *(grpc)* preserve explicit facade aliases
+
+## [0.3.4](https://github.com/kent8192/reinhardt-web/compare/reinhardt-web@v0.3.3...reinhardt-web@v0.3.4) - 2026-07-30
+
+### Documentation
+
+- add release announcement(s)
+
+### Fixed
+
+- *(ci)* stream auto-fix additions from staged blobs
+- *(orm)* preserve typed keys in manager deletion
+
+## [0.3.3](https://github.com/kent8192/reinhardt-web/compare/reinhardt-web@v0.3.2...reinhardt-web@v0.3.3) - 2026-07-28
+
+### Fixed
+
+- *(ci)* allow auto-fix on non-fast-forward-only branches
+- *(ci)* paginate auto-fix branch-rule checks
+- *(ci)* allow syn major-version duplicates
+- *(orm)* reject oversized queryset bind values
+- *(orm)* keep UUID-looking filters as text
+- *(orm)* bind typed temporal filter values
+- *(orm)* retain UUID filter bindings
+- *(admin)* support typed filter values
+- *(ci)* allow base64 0.23 duplicate on main
+- *(ci)* inherit base64 duplicate policy
+
+### Maintenance
+
+- remove standalone SemVer Check workflow
+
 ## [0.3.2](https://github.com/kent8192/reinhardt-web/compare/reinhardt-web@v0.3.1...reinhardt-web@v0.3.2) - 2026-07-14
 
 ### Fixed

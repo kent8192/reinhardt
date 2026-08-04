@@ -48,7 +48,7 @@ use reinhardt_core::macros::model;
 use reinhardt_db::DatabaseConnection;
 use reinhardt_db::orm::{DatabaseBackend, Filter, FilterOperator, FilterValue, Model};
 use reinhardt_query::prelude::{
-	Alias, ColumnDef, CreateIndexStatement, Expr, ExprTrait, IntoValue, MySqlQueryBuilder,
+	Alias, ColumnDef, CreateIndexStatement, Expr, ExprTrait, Func, IntoValue, MySqlQueryBuilder,
 	OnConflict, PostgresQueryBuilder, Query, QueryStatementBuilder, SqliteQueryBuilder,
 };
 use serde::{Deserialize, Serialize};
@@ -183,6 +183,10 @@ impl DatabaseSessionBackend {
 	}
 
 	/// Create a new backend from an existing database connection
+	///
+	/// Session loads, saves, deletions, and existence checks all use the
+	/// injected connection. The global ORM connection does not need to be
+	/// initialized.
 	///
 	/// # Examples
 	///
@@ -347,17 +351,16 @@ impl SessionBackend for DatabaseSessionBackend {
 	where
 		T: for<'de> Deserialize<'de> + Send,
 	{
-		// Use ORM to load session
+		// Use ORM to load the session through the backend's injected connection.
 		let session = Session::objects()
 			.filter(Filter::new(
 				"session_key".to_string(),
 				FilterOperator::Eq,
 				FilterValue::String(session_key.to_string()),
 			))
-			.first()
+			.first_with_db(self.connection.as_ref())
 			.await
-			.ok()
-			.flatten();
+			.map_err(|e| SessionError::CacheError(format!("Failed to load session: {}", e)))?;
 
 		match session {
 			Some(session) => {
@@ -459,7 +462,7 @@ impl SessionBackend for DatabaseSessionBackend {
 	async fn exists(&self, session_key: &str) -> Result<bool, SessionError> {
 		let now_timestamp = Utc::now().timestamp_millis();
 
-		// Use ORM to check if session exists and is not expired
+		// Use ORM to check the backend's injected connection.
 		let session = Session::objects()
 			.filter(Filter::new(
 				"session_key".to_string(),
@@ -471,10 +474,11 @@ impl SessionBackend for DatabaseSessionBackend {
 				FilterOperator::Gt,
 				FilterValue::Integer(now_timestamp),
 			))
-			.first()
+			.first_with_db(self.connection.as_ref())
 			.await
-			.ok()
-			.flatten();
+			.map_err(|e| {
+				SessionError::CacheError(format!("Failed to check session existence: {}", e))
+			})?;
 
 		Ok(session.is_some())
 	}
@@ -487,7 +491,7 @@ impl CleanupableBackend for DatabaseSessionBackend {
 		// Manager::all() returns QuerySet, QuerySet::all() executes and returns Vec<T>
 		let sessions = Session::objects()
 			.all()
-			.all()
+			.all_with_db(self.connection.as_ref())
 			.await
 			.map_err(|e| SessionError::CacheError(format!("Failed to get all keys: {}", e)))?;
 
@@ -507,7 +511,7 @@ impl CleanupableBackend for DatabaseSessionBackend {
 				FilterOperator::Eq,
 				FilterValue::String(session_key.to_string()),
 			))
-			.first()
+			.first_with_db(self.connection.as_ref())
 			.await
 			.ok()
 			.flatten();
@@ -538,7 +542,7 @@ impl CleanupableBackend for DatabaseSessionBackend {
 				FilterOperator::StartsWith,
 				FilterValue::String(prefix.to_string()),
 			))
-			.all()
+			.all_with_db(self.connection.as_ref())
 			.await
 			.map_err(|e| SessionError::CacheError(format!("Failed to list session keys: {}", e)))?;
 
@@ -548,20 +552,26 @@ impl CleanupableBackend for DatabaseSessionBackend {
 	}
 
 	async fn count_keys_with_prefix(&self, prefix: &str) -> Result<usize, SessionError> {
-		// Use ORM to count session keys with prefix
-		let count = Session::objects()
-			.filter(Filter::new(
-				"session_key".to_string(),
-				FilterOperator::StartsWith,
-				FilterValue::String(prefix.to_string()),
-			))
-			.count()
+		// Count matching keys in the database without loading session payloads.
+		let stmt = Query::select()
+			.from(Alias::new("sessions"))
+			.expr_as(Func::count(Expr::asterisk().into()), Alias::new("count"))
+			.and_where(Expr::col(Alias::new("session_key")).starts_with(prefix))
+			.to_owned();
+		let sql = self.build_sql(stmt);
+		let count: i64 = self
+			.connection
+			.query_one(&sql, vec![])
 			.await
-			.map_err(|e| {
-				SessionError::CacheError(format!("Failed to count session keys: {}", e))
+			.map_err(|e| SessionError::CacheError(format!("Failed to count session keys: {}", e)))?
+			.get("count")
+			.ok_or_else(|| {
+				SessionError::CacheError("Failed to read session key count".to_string())
 			})?;
 
-		Ok(count)
+		usize::try_from(count).map_err(|e| {
+			SessionError::CacheError(format!("Failed to convert session key count: {}", e))
+		})
 	}
 
 	async fn delete_keys_with_prefix(&self, prefix: &str) -> Result<usize, SessionError> {

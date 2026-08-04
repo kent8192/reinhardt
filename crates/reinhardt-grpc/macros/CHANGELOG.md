@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.5](https://github.com/kent8192/reinhardt-web/compare/reinhardt-grpc-macros@v0.3.4...reinhardt-grpc-macros@v0.3.5) - 2026-08-02
+
+### Fixed
+
+- *(grpc)* restore facade-only handler DI
+- *(grpc)* support package-only facade dependencies
+- *(grpc)* preserve explicit facade aliases
+
 ## [0.3.0](https://github.com/kent8192/reinhardt-web/compare/reinhardt-grpc-macros@v0.2.0...reinhardt-grpc-macros@v0.3.0) - 2026-06-28
 
 Stable release of `reinhardt-grpc-macros` for the Reinhardt 0.3.0 line. This

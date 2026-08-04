@@ -264,7 +264,9 @@ impl TypeMapper {
 			FieldType::Time => "chrono::NaiveTime",
 			FieldType::DateTime => "chrono::NaiveDateTime",
 			FieldType::TimestampTz => "chrono::DateTime<chrono::Utc>",
-			FieldType::Decimal { .. } => "unsupported decimal type",
+			FieldType::Decimal { .. } => {
+				return Err(TypeMappingError::UnsupportedType("Decimal".to_string()));
+			}
 			FieldType::Float | FieldType::Real => "f32",
 			FieldType::Double => "f64",
 			FieldType::Boolean => "bool",
@@ -469,6 +471,32 @@ mod tests {
 			})
 			.expect_err("precision beyond rust_decimal limits should require an override");
 		assert!(error.to_string().contains("lossless precision"));
+	}
+
+	#[rstest::rstest]
+	fn decimal_string_mapping_returns_unsupported_type_error() {
+		// Arrange
+		let mapper = TypeMapper::default();
+
+		// Act
+		let error = mapper
+			.field_type_to_rust_string(
+				&FieldType::Decimal {
+					precision: 12,
+					scale: 4,
+				},
+				false,
+				false,
+			)
+			.expect_err("decimal string mappings must require an explicit type override");
+
+		// Assert
+		match error {
+			TypeMappingError::UnsupportedType(type_name) => {
+				assert_eq!(type_name, "Decimal");
+			}
+			other => panic!("expected UnsupportedType, got {other:?}"),
+		}
 	}
 
 	#[test]

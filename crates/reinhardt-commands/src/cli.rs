@@ -26,7 +26,6 @@ use reinhardt_utils::staticfiles::{PathResolver, StaticFilesConfig};
 use serde_json::Value;
 use std::env;
 use std::ffi::{OsStr, OsString};
-#[cfg(feature = "reinhardt-db")]
 use std::fmt;
 use std::path::{Path, PathBuf};
 #[cfg(feature = "reinhardt-db")]
@@ -113,7 +112,7 @@ pub enum OutputFormat {
 /// Command-line interface commands
 ///
 /// This enum defines all available management commands.
-#[derive(Debug, Clone, Subcommand)]
+#[derive(Clone, Subcommand)]
 pub enum Commands {
 	/// Create new migrations based on model changes
 	#[cfg(feature = "migrations")]
@@ -448,7 +447,7 @@ pub enum Commands {
 
 		/// One-off database URL override
 		#[arg(long)]
-		database_url: Option<RedactedDatabaseUrl>,
+		database_url: Option<String>,
 
 		/// Request database views (currently unsupported for model generation)
 		#[arg(long)]
@@ -560,6 +559,260 @@ pub enum Commands {
 		/// Positional arguments forwarded to the custom command.
 		args: Vec<String>,
 	},
+}
+
+macro_rules! debug_command_fields {
+	($formatter:expr, $name:literal, $($field:ident),* $(,)?) => {{
+		let mut debug = $formatter.debug_struct($name);
+		$(debug.field(stringify!($field), $field);)*
+		debug.finish()
+	}};
+}
+
+impl fmt::Debug for Commands {
+	fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+		match self {
+			#[cfg(feature = "migrations")]
+			Self::Makemigrations {
+				app_labels,
+				dry_run,
+				name,
+				check,
+				empty,
+				merge,
+				force_empty_state,
+				migration_dir,
+			} => debug_command_fields!(
+				formatter,
+				"Makemigrations",
+				app_labels,
+				dry_run,
+				name,
+				check,
+				empty,
+				merge,
+				force_empty_state,
+				migration_dir,
+			),
+			#[cfg(feature = "migrations")]
+			Self::Squashmigrations {
+				app_label,
+				start_migration,
+				migration_name,
+				no_optimize,
+				no_input,
+				no_header,
+				squashed_name,
+				migrations_dir,
+			} => debug_command_fields!(
+				formatter,
+				"Squashmigrations",
+				app_label,
+				start_migration,
+				migration_name,
+				no_optimize,
+				no_input,
+				no_header,
+				squashed_name,
+				migrations_dir,
+			),
+			#[cfg(feature = "migrations")]
+			Self::Showmigrations {
+				app_labels,
+				list,
+				plan,
+				database,
+				database_url,
+				migrations_dir,
+			} => debug_command_fields!(
+				formatter,
+				"Showmigrations",
+				app_labels,
+				list,
+				plan,
+				database,
+				database_url,
+				migrations_dir,
+			),
+			#[cfg(feature = "migrations")]
+			Self::Sqlmigrate {
+				app_label,
+				migration_name,
+				backwards,
+				database,
+				database_url,
+				migrations_dir,
+			} => debug_command_fields!(
+				formatter,
+				"Sqlmigrate",
+				app_label,
+				migration_name,
+				backwards,
+				database,
+				database_url,
+				migrations_dir,
+			),
+			Self::Migrate {
+				app_label,
+				migration_name,
+				database,
+				fake,
+				fake_initial,
+				plan,
+				migrations_dir,
+			} => debug_command_fields!(
+				formatter,
+				"Migrate",
+				app_label,
+				migration_name,
+				database,
+				fake,
+				fake_initial,
+				plan,
+				migrations_dir,
+			),
+			Self::Infra { command } => debug_command_fields!(formatter, "Infra", command),
+			Self::Runserver {
+				address,
+				noreload,
+				watch_delay,
+				no_wasm_rebuild,
+				no_wasm,
+				no_override_wasm,
+				force_wasm,
+				wasm_optional,
+				insecure,
+				no_docs,
+				with_pages,
+				static_dir,
+				no_spa,
+				index,
+				package,
+				features,
+				all_features,
+			} => debug_command_fields!(
+				formatter,
+				"Runserver",
+				address,
+				noreload,
+				watch_delay,
+				no_wasm_rebuild,
+				no_wasm,
+				no_override_wasm,
+				force_wasm,
+				wasm_optional,
+				insecure,
+				no_docs,
+				with_pages,
+				static_dir,
+				no_spa,
+				index,
+				package,
+				features,
+				all_features,
+			),
+			Self::Shell { command } => debug_command_fields!(formatter, "Shell", command),
+			Self::Check { app_label, deploy } => {
+				debug_command_fields!(formatter, "Check", app_label, deploy)
+			}
+			Self::Collectstatic {
+				clear,
+				no_input,
+				dry_run,
+				link,
+				ignore,
+				index,
+				package,
+				features,
+				all_features,
+			} => debug_command_fields!(
+				formatter,
+				"Collectstatic",
+				clear,
+				no_input,
+				dry_run,
+				link,
+				ignore,
+				index,
+				package,
+				features,
+				all_features,
+			),
+			Self::Showurls { names } => debug_command_fields!(formatter, "Showurls", names),
+			#[cfg(feature = "migrations")]
+			Self::Inspectdb {
+				tables,
+				database,
+				database_url,
+				include_views,
+				include_partitions,
+				output,
+				config,
+				force,
+			} => formatter
+				.debug_struct("Inspectdb")
+				.field("tables", tables)
+				.field("database", database)
+				.field("database_url", &RedactedStringOption(database_url))
+				.field("include_views", include_views)
+				.field("include_partitions", include_partitions)
+				.field("output", output)
+				.field("config", config)
+				.field("force", force)
+				.finish(),
+			#[cfg(feature = "reinhardt-db")]
+			Self::Dbshell {
+				database,
+				database_url,
+				client_arguments,
+			} => formatter
+				.debug_struct("Dbshell")
+				.field("database", database)
+				.field("database_url", database_url)
+				.field("client_arguments", client_arguments)
+				.finish(),
+			#[cfg(feature = "introspect")]
+			Self::Introspect { format, section } => {
+				debug_command_fields!(formatter, "Introspect", format, section)
+			}
+			#[cfg(feature = "openapi")]
+			Self::Generateopenapi {
+				format,
+				output,
+				postman,
+			} => debug_command_fields!(formatter, "Generateopenapi", format, output, postman),
+			#[cfg(feature = "auth")]
+			Self::Createsuperuser {
+				username,
+				email,
+				no_password,
+				noinput,
+				database,
+			} => debug_command_fields!(
+				formatter,
+				"Createsuperuser",
+				username,
+				email,
+				no_password,
+				noinput,
+				database,
+			),
+			Self::Custom { name, args } => debug_command_fields!(formatter, "Custom", name, args),
+		}
+	}
+}
+
+#[cfg(feature = "migrations")]
+struct RedactedStringOption<'a>(&'a Option<String>);
+
+#[cfg(feature = "migrations")]
+impl fmt::Debug for RedactedStringOption<'_> {
+	fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+		match self.0 {
+			Some(_) => formatter.debug_tuple("Some").field(&"[REDACTED]").finish(),
+			None => formatter.write_str("None"),
+		}
+	}
 }
 
 #[cfg(feature = "reinhardt-db")]
@@ -1712,7 +1965,7 @@ struct MigrateParams {
 struct InspectDbParams {
 	tables: Vec<String>,
 	database: String,
-	database_url: Option<RedactedDatabaseUrl>,
+	database_url: Option<String>,
 	include_views: bool,
 	include_partitions: bool,
 	output: Option<PathBuf>,
@@ -1730,7 +1983,7 @@ async fn execute_inspectdb(
 	ctx.set_verbosity(params.verbosity);
 	ctx.set_option("database".to_string(), params.database);
 	if let Some(database_url) = params.database_url {
-		ctx.set_option("database-url".to_string(), database_url.into_inner());
+		ctx.set_option("database-url".to_string(), database_url);
 	}
 	if params.include_views {
 		ctx.set_option("include-views".to_string(), "true".to_string());
@@ -2718,11 +2971,12 @@ mod tests {
 	#[cfg(feature = "migrations")]
 	#[rstest]
 	fn inspectdb_debug_redacts_database_url() {
+		// Arrange
 		let secret_url = "postgres://user:secret@example.test/database";
 		let command = Commands::Inspectdb {
 			tables: Vec::new(),
 			database: "default".to_string(),
-			database_url: Some(secret_url.parse().unwrap()),
+			database_url: Some(secret_url.to_string()),
 			include_views: false,
 			include_partitions: false,
 			output: None,
@@ -2730,9 +2984,14 @@ mod tests {
 			force: false,
 		};
 
+		// Act
 		let debug = format!("{command:?}");
-		assert!(!debug.contains(secret_url));
-		assert!(debug.contains("[REDACTED]"));
+
+		// Assert
+		assert_eq!(
+			debug,
+			"Inspectdb { tables: [], database: \"default\", database_url: Some(\"[REDACTED]\"), include_views: false, include_partitions: false, output: None, config: None, force: false }"
+		);
 	}
 
 	#[cfg(all(feature = "reinhardt-db", unix))]

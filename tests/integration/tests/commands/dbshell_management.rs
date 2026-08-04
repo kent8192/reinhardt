@@ -142,8 +142,9 @@ fn run_child(
 }
 
 fn assert_child_success(output: &Output, case: &str) {
-	assert!(
-		output.status.success(),
+	assert_eq!(
+		output.status.code(),
+		Some(0),
 		"{case} child failed\nstdout:\n{}\nstderr:\n{}",
 		String::from_utf8_lossy(&output.stdout),
 		String::from_utf8_lossy(&output.stderr)
@@ -152,6 +153,7 @@ fn assert_child_success(output: &Output, case: &str) {
 
 #[rstest::rstest]
 fn dbshell_management_records_exact_backend_arguments_and_credentials() {
+	// Arrange
 	struct BackendCase {
 		name: &'static str,
 		client: &'static str,
@@ -181,10 +183,14 @@ fn dbshell_management_records_exact_backend_arguments_and_credentials() {
 	];
 
 	for backend in cases {
+		// Arrange
 		let clients = FakeClients::new(&[backend.client]);
 		let record = clients.path.join(format!("{}.record", backend.name));
+
+		// Act
 		let output = run_child(backend.name, backend.url, &clients, &record, 0, None);
 
+		// Assert
 		assert_child_success(&output, backend.name);
 		assert_eq!(
 			fs::read_to_string(record).expect("read fake database client record"),
@@ -195,11 +201,13 @@ fn dbshell_management_records_exact_backend_arguments_and_credentials() {
 
 #[rstest::rstest]
 fn dbshell_management_propagates_nonzero_status_without_credentials() {
+	// Arrange
 	let clients = FakeClients::new(&["psql"]);
 	let record = clients.path.join("nonzero.record");
 	let database_url = "postgresql://operator:nonzero-secret@db.example/reporting";
 	let expected_error = "Execution error: Database client `psql` exited with status 23.";
 
+	// Act
 	let output = run_child(
 		"nonzero",
 		database_url,
@@ -209,6 +217,7 @@ fn dbshell_management_propagates_nonzero_status_without_credentials() {
 		Some(expected_error),
 	);
 
+	// Assert
 	assert_child_success(&output, "nonzero");
 	let diagnostics = format!(
 		"{}{}",
@@ -221,12 +230,14 @@ fn dbshell_management_propagates_nonzero_status_without_credentials() {
 
 #[rstest::rstest]
 fn dbshell_management_reports_missing_native_client_without_credentials() {
+	// Arrange
 	let clients = FakeClients::empty();
 	let record = clients.path.join("missing.record");
 	let database_url = "mysql://operator:missing-secret@db.example/reporting";
 	let expected_error =
 		"Execution error: Database client executable `mysql` was not found on PATH.";
 
+	// Act
 	let output = run_child(
 		"missing",
 		database_url,
@@ -236,6 +247,7 @@ fn dbshell_management_reports_missing_native_client_without_credentials() {
 		Some(expected_error),
 	);
 
+	// Assert
 	assert_child_success(&output, "missing");
 	let diagnostics = format!(
 		"{}{}",
@@ -249,6 +261,7 @@ fn dbshell_management_reports_missing_native_client_without_credentials() {
 
 #[rstest::rstest]
 fn dbshell_management_child() {
+	// Arrange
 	let Some(case) = std::env::var_os(CHILD_CASE_ENV) else {
 		return;
 	};
@@ -267,8 +280,11 @@ fn dbshell_management_child() {
 		],
 	};
 	let runtime = tokio::runtime::Runtime::new().expect("create isolated child runtime");
+
+	// Act
 	let result = runtime.block_on(run_command(command, 0));
 
+	// Assert
 	match std::env::var(EXPECTED_ERROR_ENV) {
 		Ok(expected_error) => assert_eq!(
 			result

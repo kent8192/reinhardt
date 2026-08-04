@@ -1061,6 +1061,7 @@ mod tests {
 
 	#[rstest::rstest]
 	fn portable_runner_inherits_standard_streams() {
+		// Arrange
 		let directory = TempDir::new().expect("create fake client directory");
 		copy_test_executable_as_client(directory.path(), "sqlite3");
 		let executable = std::env::current_exe().expect("resolve test executable");
@@ -1085,21 +1086,33 @@ mod tests {
 			.write_all(b"terminal-input\n")
 			.expect("write child stdin");
 
+		// Act
 		let output = child.wait_with_output().expect("wait for test child");
 
-		assert!(output.status.success(), "{output:?}");
-		assert!(
-			String::from_utf8_lossy(&output.stdout).contains("fake-stdout:terminal-input"),
-			"{output:?}"
+		// Assert
+		assert_eq!(output.status.code(), Some(0), "{output:?}");
+		let stdout = String::from_utf8(output.stdout).expect("child stdout should be UTF-8");
+		let stderr = String::from_utf8(output.stderr).expect("child stderr should be UTF-8");
+		assert_eq!(
+			extract_forwarded_output(&stdout, "fake-stdout-begin\n", "fake-stdout-end\n"),
+			"fake-stdout:terminal-input\nfake-secret:child-secret\n"
 		);
-		assert!(
-			String::from_utf8_lossy(&output.stdout).contains("fake-secret:child-secret"),
-			"{output:?}"
+		assert_eq!(
+			extract_forwarded_output(&stderr, "fake-stderr-begin\n", "fake-stderr-end\n"),
+			"fake-stderr:terminal-input\n"
 		);
-		assert!(
-			String::from_utf8_lossy(&output.stderr).contains("fake-stderr:terminal-input"),
-			"{output:?}"
-		);
+	}
+
+	fn extract_forwarded_output<'a>(output: &'a str, begin: &str, end: &str) -> &'a str {
+		assert_eq!(output.matches(begin).count(), 1, "{output}");
+		assert_eq!(output.matches(end).count(), 1, "{output}");
+		let (_, forwarded) = output
+			.split_once(begin)
+			.expect("forwarded output should have a start marker");
+		let (forwarded, _) = forwarded
+			.split_once(end)
+			.expect("forwarded output should have an end marker");
+		forwarded
 	}
 
 	#[rstest::rstest]
@@ -1138,12 +1151,16 @@ mod tests {
 			.read_line(&mut input)
 			.expect("read inherited stdin");
 
+		println!("fake-stdout-begin");
 		print!("fake-stdout:{input}");
 		println!(
 			"fake-secret:{}",
 			std::env::var("DBSHELL_FAKE_SECRET").expect("read child-only secret")
 		);
+		println!("fake-stdout-end");
+		eprintln!("fake-stderr-begin");
 		eprint!("fake-stderr:{input}");
+		eprintln!("fake-stderr-end");
 	}
 
 	#[rstest::rstest]

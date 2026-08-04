@@ -8,7 +8,9 @@
 //! - **Schema Reading**: Uses `DatabaseIntrospector` to read existing database schemas
 //! - **Type Mapping**: Maps SQL types to Rust types with proper nullable handling
 //! - **Code Generation**: Generates `#[model(...)]` annotated Rust structs
-//! - **Relationship Detection**: Automatically detects FK relationships
+//! - **Relationship Detection**: Automatically detects single-column foreign keys to scalar
+//!   primary keys. References to non-primary columns remain scalar until relationship storage
+//!   metadata can derive its type from `to_field`.
 //! - **Configuration**: TOML-based configuration for customization
 //!
 //! ## Usage

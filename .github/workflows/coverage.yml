@@ -164,17 +164,24 @@ jobs:
 
       - name: Generate unit coverage report
         run: |
-          cargo llvm-cov report \
-            --codecov \
-            --output-path /tmp/unit-codecov.json
+          report_metadata=$(cargo metadata --no-deps --format-version 1)
+          report_args=()
+          while IFS= read -r package; do
+            report_args+=(--package "$package")
+          done < <(jq -r '.packages[].name' <<< "$report_metadata")
+          cargo llvm-cov \
+            report \
+            "${report_args[@]}" \
+            --lcov \
+            --output-path /tmp/unit-lcov.info
 
       - name: Upload coverage to Codecov
         if: always()
         uses: codecov/codecov-action@v5
         with:
-          files: /tmp/unit-codecov.json
+          files: /tmp/unit-lcov.info
           flags: unit
-          fail_ci_if_error: false
+          fail_ci_if_error: true
           use_oidc: true
 
       - name: Docker cleanup after tests
@@ -363,17 +370,24 @@ jobs:
 
       - name: Generate intra-crate coverage report
         run: |
-          cargo llvm-cov report \
-            --codecov \
-            --output-path /tmp/intra-crate-codecov.json
+          report_metadata=$(cargo metadata --no-deps --format-version 1)
+          report_args=()
+          while IFS= read -r package; do
+            report_args+=(--package "$package")
+          done < <(jq -r '.packages[].name' <<< "$report_metadata")
+          cargo llvm-cov \
+            report \
+            "${report_args[@]}" \
+            --lcov \
+            --output-path /tmp/intra-crate-lcov.info
 
       - name: Upload coverage to Codecov
         if: always()
         uses: codecov/codecov-action@v5
         with:
-          files: /tmp/intra-crate-codecov.json
+          files: /tmp/intra-crate-lcov.info
           flags: intra-crate-integration
-          fail_ci_if_error: false
+          fail_ci_if_error: true
           use_oidc: true
 
       - name: Docker cleanup after tests
@@ -520,17 +534,24 @@ jobs:
 
       - name: Generate cross-crate coverage report
         run: |
-          cargo llvm-cov report \
-            --codecov \
-            --output-path /tmp/cross-crate-codecov.json
+          report_metadata=$(cargo metadata --no-deps --format-version 1)
+          report_args=()
+          while IFS= read -r package; do
+            report_args+=(--package "$package")
+          done < <(jq -r '.packages[].name' <<< "$report_metadata")
+          cargo llvm-cov \
+            report \
+            "${report_args[@]}" \
+            --lcov \
+            --output-path /tmp/cross-crate-lcov.info
 
       - name: Upload coverage to Codecov
         if: always()
         uses: codecov/codecov-action@v5
         with:
-          files: /tmp/cross-crate-codecov.json
+          files: /tmp/cross-crate-lcov.info
           flags: cross-crate-integration
-          fail_ci_if_error: false
+          fail_ci_if_error: true
           use_oidc: true
 
       - name: Docker cleanup after tests

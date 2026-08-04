@@ -133,7 +133,7 @@
 //! 4. `SecurityMiddleware` - Apply security headers
 //! 5. `CorsMiddleware` - Handle CORS preflight
 //! 6. `SessionMiddleware` - Load and manage session data
-//! 7. `AuthenticationMiddleware` or `JwtAuthMiddleware` - Validate and populate authentication state
+//! 7. A session-store-compatible account validator, or `JwtAuthMiddleware` - Resolve the current account and populate authentication state
 //! 8. `LoginRequiredMiddleware` - Enforce login (optional)
 //! 9. `CsrfMiddleware` - Validate CSRF token
 //! 10. `RateLimitMiddleware` - Apply rate limits

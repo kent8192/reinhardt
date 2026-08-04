@@ -4,7 +4,7 @@ use crate::apps::users::models::User;
 use reinhardt::core::async_trait;
 use reinhardt::di::InjectionContext;
 use reinhardt::http::{AuthState, IsActive, IsAdmin, IsAuthenticated};
-use reinhardt::middleware::session::{SessionData, USER_ID_SESSION_KEY};
+use reinhardt::middleware::session::{SessionId, SessionStore, USER_ID_SESSION_KEY};
 use reinhardt::{BaseUser, DatabaseConnection, Handler, Middleware, Model, Request, Response};
 use std::sync::Arc;
 
@@ -13,23 +13,28 @@ use std::sync::Arc;
 /// `SessionMiddleware` owns cookie/session storage. This middleware runs after
 /// it, loads the referenced user through the request DI connection, and only
 /// then publishes authentication and authorization state.
-#[derive(Debug, Default)]
-pub struct TutorialSessionAuthMiddleware;
+#[derive(Debug)]
+pub struct TutorialSessionAuthMiddleware {
+	store: Arc<SessionStore>,
+}
 
 impl TutorialSessionAuthMiddleware {
 	/// Create account-validating session authentication middleware.
-	pub fn new() -> Self {
-		Self
+	pub fn new(store: Arc<SessionStore>) -> Self {
+		Self { store }
 	}
 
 	async fn validated_auth_state(&self, request: &Request) -> AuthState {
-		let Some(session) = request.extensions.get::<SessionData>() else {
+		let Some(session_id) = request.extensions.get::<SessionId>() else {
+			return AuthState::anonymous();
+		};
+		let Some(session) = self.store.get(session_id.as_str()) else {
 			return AuthState::anonymous();
 		};
 		let Some(user_id) = session.get::<i64>(USER_ID_SESSION_KEY) else {
 			return AuthState::anonymous();
 		};
-		let Some(context) = request.get_di_context::<InjectionContext>() else {
+		let Some(context) = request.get_di_context::<Arc<InjectionContext>>() else {
 			tracing::warn!("Tutorial session authentication has no DI context");
 			return AuthState::anonymous();
 		};
@@ -80,7 +85,9 @@ mod tests {
 	use reinhardt::core::async_trait;
 	use reinhardt::di::{InjectionContext, SingletonScope};
 	use reinhardt::http::AuthState;
-	use reinhardt::middleware::session::{SessionData, USER_ID_SESSION_KEY};
+	use reinhardt::middleware::session::{
+		SessionData, SessionId, SessionStore, USER_ID_SESSION_KEY,
+	};
 	use reinhardt::{DatabaseConnection, Handler, Middleware, Request, Response};
 	use sqlx::SqlitePool;
 	use std::sync::{Arc, Mutex};
@@ -98,7 +105,10 @@ mod tests {
 		}
 	}
 
-	async fn request_for_user(user_id: i64, is_active: bool) -> (NamedTempFile, Request) {
+	async fn request_for_user(
+		user_id: i64,
+		is_active: bool,
+	) -> (NamedTempFile, Arc<SessionStore>, Request) {
 		let database_file = NamedTempFile::new().expect("temporary database should be created");
 		let database_path = database_file
 			.path()
@@ -136,24 +146,28 @@ mod tests {
 		session
 			.set(USER_ID_SESSION_KEY.to_string(), user_id)
 			.expect("session user ID should serialize");
+		let session_id = session.id.clone();
+		let store = Arc::new(SessionStore::new());
+		store.save(session);
 		let request = Request::builder()
 			.uri("/")
 			.body(Vec::new().into())
 			.build()
 			.unwrap();
-		request.extensions.insert(session);
-		request.extensions.insert(Arc::new(context));
+		request.extensions.insert(SessionId::new(session_id));
+		let mut request = request;
+		request.set_di_context(Arc::new(context));
 
-		(database_file, request)
+		(database_file, store, request)
 	}
 
 	#[tokio::test]
 	async fn active_session_user_populates_validated_auth_state() {
-		let (_database_file, request) = request_for_user(7, true).await;
+		let (_database_file, store, request) = request_for_user(7, true).await;
 		let captured = Arc::new(Mutex::new(None));
 		let handler = Arc::new(CaptureAuthState(Arc::clone(&captured)));
 
-		TutorialSessionAuthMiddleware::new()
+		TutorialSessionAuthMiddleware::new(store)
 			.process(request, handler)
 			.await
 			.expect("authentication middleware should continue");
@@ -170,11 +184,11 @@ mod tests {
 
 	#[tokio::test]
 	async fn inactive_session_user_is_anonymous() {
-		let (_database_file, request) = request_for_user(8, false).await;
+		let (_database_file, store, request) = request_for_user(8, false).await;
 		let captured = Arc::new(Mutex::new(None));
 		let handler = Arc::new(CaptureAuthState(Arc::clone(&captured)));
 
-		TutorialSessionAuthMiddleware::new()
+		TutorialSessionAuthMiddleware::new(store)
 			.process(request, handler)
 			.await
 			.expect("authentication middleware should fail closed and continue");

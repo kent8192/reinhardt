@@ -15,3 +15,6 @@ mod composable_macro_pass;
 
 #[path = "settings/schema_trybuild.rs"]
 mod schema_trybuild;
+
+#[path = "settings/jwt_secret_settings.rs"]
+mod jwt_secret_settings;

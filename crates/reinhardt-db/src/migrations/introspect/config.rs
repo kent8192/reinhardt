@@ -444,7 +444,7 @@ exclude = ["^pg_"]
 		assert!(!config.should_include_table("pg_tables"));
 	}
 
-	#[test]
+	#[rstest::rstest]
 	fn rejects_invalid_table_filter_pattern_during_config_loading() {
 		let error = IntrospectConfig::from_toml("[tables]\nexclude = [\"[\"]")
 			.expect_err("invalid table filter must be rejected");

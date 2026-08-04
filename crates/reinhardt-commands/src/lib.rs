@@ -15,6 +15,8 @@
 //!   binary fixture values, many-to-many arrays, and seed hooks
 //! - **Schema Inspection**: Django-compatible `inspectdb` with deterministic
 //!   PostgreSQL, MySQL, and SQLite model generation
+//! - **Native Database Shell**: `dbshell` launches `psql`, `mysql`, or `sqlite3`
+//!   with inherited terminal streams and child-scoped credentials
 //! - **AST-Based Code Generation**: Robust code generation using Abstract Syntax Trees
 //! - **Auto-Reload**: Built-in hot-reload for the development server (server + wasm)
 //! - **Tera Template Engine**: Powerful template rendering for project/app generation
@@ -240,6 +242,28 @@
 //! failed publication is rollback-safe and all-or-nothing when the command
 //! reports failure: replaced files are restored and newly created partial
 //! output is removed. The `--force` option is invalid without `--output`.
+//!
+//! ## Native Database Shell
+//!
+//! `manage dbshell` launches the native client for the selected database:
+//! `psql` for PostgreSQL, `mysql` for MySQL, or `sqlite3` for SQLite. The
+//! matching client executable must be available on `PATH`.
+//!
+//! The configured alias defaults to `default`; pass `--database ALIAS` to
+//! select another alias. `--database-url URL` is an explicit one-off override
+//! and takes precedence over the alias. Arguments following `--` are passed to
+//! the native client unchanged:
+//!
+//! ```text
+//! cargo run --bin manage -- dbshell --database reporting
+//! cargo run --bin manage -- dbshell -- --expanded
+//! ```
+//!
+//! The client inherits standard input, output, and error so it remains
+//! interactive. Passwords are excluded from the native client argv and
+//! Reinhardt diagnostics. PostgreSQL and MySQL credentials are supplied only
+//! in the child process environment through `PGPASSWORD` and `MYSQL_PWD`,
+//! respectively.
 
 /// Base command trait and argument/option definitions.
 pub mod base;
@@ -261,6 +285,8 @@ pub(crate) mod createsuperuser;
 pub mod data_commands;
 #[cfg(feature = "reinhardt-db")]
 pub(crate) mod database_selector;
+#[cfg(feature = "reinhardt-db")]
+pub(crate) mod dbshell;
 /// Debounced file-system watcher for hot-reload (replaces inline watcher).
 #[cfg(feature = "autoreload")]
 #[doc(hidden)]

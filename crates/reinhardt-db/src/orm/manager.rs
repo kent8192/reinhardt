@@ -1643,6 +1643,10 @@ mod tests {
 			self.id
 		}
 
+		fn primary_key_filter_value(pk: Self::PrimaryKey) -> FilterValue {
+			FilterValue::Integer(pk)
+		}
+
 		fn set_primary_key(&mut self, value: Self::PrimaryKey) {
 			self.id = Some(value);
 		}
@@ -1653,6 +1657,42 @@ mod tests {
 
 		fn new_fields() -> Self::Fields {
 			TestUserFields
+		}
+	}
+
+	#[derive(Debug, Clone, Serialize, Deserialize)]
+	struct TestStringUser {
+		id: String,
+	}
+
+	#[derive(Debug, Clone)]
+	struct TestStringUserFields;
+
+	impl FieldSelector for TestStringUserFields {
+		fn with_alias(self, _alias: &str) -> Self {
+			self
+		}
+	}
+
+	impl Model for TestStringUser {
+		type PrimaryKey = String;
+		type Fields = TestStringUserFields;
+		type Objects = Manager<Self>;
+
+		fn table_name() -> &'static str {
+			"test_string_user"
+		}
+
+		fn primary_key(&self) -> Option<Self::PrimaryKey> {
+			Some(self.id.clone())
+		}
+
+		fn set_primary_key(&mut self, value: Self::PrimaryKey) {
+			self.id = value;
+		}
+
+		fn new_fields() -> Self::Fields {
+			TestStringUserFields
 		}
 	}
 
@@ -1715,11 +1755,29 @@ mod tests {
 	}
 
 	#[rstest]
-	fn test_get_preserves_numeric_fallback_primary_key_binding() {
+	fn test_get_preserves_explicit_numeric_primary_key_binding() {
+		// Arrange and Act
 		let query = TestUser::objects().get(42);
 
+		// Assert
 		assert_eq!(query.filters().len(), 1);
 		assert!(matches!(query.filters()[0].value, FilterValue::Integer(42)));
+	}
+
+	#[rstest]
+	#[case("01")]
+	#[case("+1")]
+	#[case("0001")]
+	fn test_get_preserves_exact_custom_primary_key_string(#[case] id: &str) {
+		// Arrange and Act
+		let query = TestStringUser::objects().get(id.to_owned());
+
+		// Assert
+		assert_eq!(query.filters().len(), 1);
+		let FilterValue::String(value) = &query.filters()[0].value else {
+			panic!("custom primary key should use an exact string binding");
+		};
+		assert_eq!(value, id);
 	}
 
 	#[test]

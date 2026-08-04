@@ -62,15 +62,12 @@ pub trait Model: Serialize + for<'de> Deserialize<'de> + Send + Sync + Clone {
 
 	/// Converts a primary key into a query filter value.
 	///
-	/// Custom primary-key types retain the historical numeric-or-string fallback.
+	/// Custom primary-key types default to an exact string binding so their
+	/// display representation is not coerced to a different database type.
 	/// Derived models override this conversion for declared primary-key types with
 	/// a dedicated database binding, such as strings, UUIDs, and timestamps.
 	fn primary_key_filter_value(pk: Self::PrimaryKey) -> super::query::FilterValue {
-		let value = pk.to_string();
-		value
-			.parse::<i64>()
-			.map(super::query::FilterValue::Integer)
-			.unwrap_or(super::query::FilterValue::String(value))
+		super::query::FilterValue::String(pk.to_string())
 	}
 
 	/// Get the primary key value

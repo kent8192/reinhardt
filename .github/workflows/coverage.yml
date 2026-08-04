@@ -163,7 +163,9 @@ jobs:
 
       - name: Generate unit coverage report
         run: |
-          cargo llvm-cov report \
+          cargo llvm-cov \
+            --workspace \
+            --no-run \
             --lcov \
             --output-path /tmp/unit-lcov.info
 
@@ -351,7 +353,9 @@ jobs:
 
       - name: Generate intra-crate coverage report
         run: |
-          cargo llvm-cov report \
+          cargo llvm-cov \
+            --workspace \
+            --no-run \
             --lcov \
             --output-path /tmp/intra-crate-lcov.info
 
@@ -507,7 +511,9 @@ jobs:
 
       - name: Generate cross-crate coverage report
         run: |
-          cargo llvm-cov report \
+          cargo llvm-cov \
+            --workspace \
+            --no-run \
             --lcov \
             --output-path /tmp/cross-crate-lcov.info
 

@@ -247,8 +247,34 @@ fn test_commands_infra_run_preserves_command_args_after_separator() {
 
 	match cmd {
 		Commands::Infra { command } => match command {
-			reinhardt_commands::local_infra::InfraSubcommand::Run { command } => {
+			reinhardt_commands::local_infra::InfraSubcommand::Run { profile, command } => {
+				assert!(profile.is_none());
 				assert_eq!(command, vec!["runserver", "--with-pages", "127.0.0.1:9000"]);
+			}
+			other => panic!("Expected infra run, got {other:?}"),
+		},
+		other => panic!("Expected Commands::Infra, got {other:?}"),
+	}
+}
+
+#[rstest]
+fn test_commands_infra_run_accepts_profile_before_separator() {
+	let cmd = Cli::parse_from([
+		"manage",
+		"infra",
+		"run",
+		"--profile",
+		"staging",
+		"--",
+		"migrate",
+	])
+	.command;
+
+	match cmd {
+		Commands::Infra { command } => match command {
+			reinhardt_commands::local_infra::InfraSubcommand::Run { profile, command } => {
+				assert_eq!(profile.as_deref(), Some("staging"));
+				assert_eq!(command, vec!["migrate"]);
 			}
 			other => panic!("Expected infra run, got {other:?}"),
 		},

@@ -4,6 +4,7 @@ on:
   push:
     branches:
       - main
+      - 'develop/*'
   workflow_dispatch:
 
 permissions:
@@ -11,7 +12,7 @@ permissions:
   id-token: write
 
 concurrency:
-  group: coverage-main
+  group: coverage-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
@@ -22,4 +23,3 @@ jobs:
     with:
       runner: '"ubuntu-latest"'
       cargo-build-jobs: '1'
-      run-all: 'true'

@@ -144,6 +144,7 @@ mod jwt_session_settings {
 	use super::*;
 	use crate::sessions::backends::jwt::{JwtConfig, JwtSessionBackend, JwtSessionError};
 	use jsonwebtoken::Algorithm;
+	use reinhardt_conf::settings::secret_types::SecretString;
 	use reinhardt_core::macros::settings;
 	use serde::ser::SerializeStruct;
 	use std::fmt;
@@ -154,6 +155,13 @@ mod jwt_session_settings {
 
 	fn default_expiration() -> u64 {
 		3600 // 1 hour
+	}
+
+	fn deserialize_secret_string<'de, D>(deserializer: D) -> Result<String, D::Error>
+	where
+		D: serde::Deserializer<'de>,
+	{
+		SecretString::deserialize(deserializer).map(SecretString::into_inner)
 	}
 
 	/// Parse a JWT algorithm string into the [`Algorithm`] enum.
@@ -185,7 +193,8 @@ mod jwt_session_settings {
 	#[derive(Clone, Deserialize)]
 	pub struct JwtSessionSettings {
 		/// Secret key used for HMAC signing.
-		#[serde(default)]
+		#[setting(secret)]
+		#[serde(default, deserialize_with = "deserialize_secret_string")]
 		pub secret: String,
 		/// JWT signing algorithm: `"HS256"`, `"HS384"`, or `"HS512"`.
 		#[serde(default = "default_algorithm")]

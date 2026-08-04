@@ -18,7 +18,7 @@ pub struct SharedUser {
 	pub username: String,
 
 	#[user_field(password_hash)]
-	#[field(max_length = 255, skip_info = true)]
+	#[field(max_length = 255)]
 	pub password: Option<String>,
 
 	#[user_field(last_login)]
@@ -40,4 +40,12 @@ pub struct SharedUser {
 
 pub fn construct_shared_user() -> SharedUser {
 	SharedUser::default()
+}
+
+pub fn construct_shared_user_info() -> SharedUserInfo {
+	SharedUserInfo {
+		id: 1,
+		username: "alice".to_string(),
+		is_active: true,
+	}
 }

@@ -97,9 +97,13 @@ pub fn routes() -> UnifiedRouter {
 	// account validation against the current `User` record. See #4426 (and the
 	// original #4423 regression that motivated the auto-registration hook).
 	#[cfg(server)]
-	let session_middleware = create_session_middleware();
-	let session_store = session_middleware.store_arc();
+	let router = {
+		let session_middleware = create_session_middleware();
+		let session_store = session_middleware.store_arc();
+		router
+			.with_middleware(session_middleware)
+			.with_middleware(TutorialSessionAuthMiddleware::new(session_store))
+	};
+
 	router
-		.with_middleware(session_middleware)
-		.with_middleware(TutorialSessionAuthMiddleware::new(session_store))
 }

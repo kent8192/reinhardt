@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.0-alpha.5](https://github.com/kent8192/reinhardt-web/compare/reinhardt-db@v0.4.0-alpha.4...reinhardt-db@v0.4.0-alpha.5) - 2026-08-05
+
+### Fixed
+
+- *(db)* align relationship imports with generated fields
+
+### Other
+
+- sync develop/0.4.0 and resolve review feedback
+
 ## [0.4.0-alpha.4](https://github.com/kent8192/reinhardt-web/compare/reinhardt-db@v0.4.0-alpha.3...reinhardt-db@v0.4.0-alpha.4) - 2026-08-04
 
 ### Added

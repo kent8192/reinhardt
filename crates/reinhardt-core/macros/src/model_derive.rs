@@ -34,9 +34,9 @@ use syn::{Data, DeriveInput, Fields, GenericArgument, PathArguments, Result, Typ
 use syn::{Ident, LitBool, LitStr, bracketed, parenthesized};
 
 use crate::crate_paths::{
-	get_linkme_crate, get_reinhardt_core_crate, get_reinhardt_crate, get_reinhardt_db_crate,
-	get_reinhardt_forms_crate, get_reinhardt_migrations_crate, get_reinhardt_orm_crate,
-	get_serde_crate, get_serde_json_crate,
+	get_linkme_crate, get_reinhardt_apps_crate, get_reinhardt_core_crate, get_reinhardt_crate,
+	get_reinhardt_db_crate, get_reinhardt_forms_crate, get_reinhardt_migrations_crate,
+	get_reinhardt_orm_crate, get_serde_crate, get_serde_json_crate,
 };
 use crate::identifier_case::to_snake_case;
 use crate::rel::RelAttribute;
@@ -6631,7 +6631,7 @@ fn generate_relationship_registrations(
 	field_infos: &[FieldInfo],
 	fk_field_infos: &[ForeignKeyFieldInfo],
 ) -> TokenStream {
-	let reinhardt = get_reinhardt_crate();
+	let apps = get_reinhardt_apps_crate();
 	let _orm_crate = get_reinhardt_orm_crate();
 	// Fixes #793: Use dynamic crate path resolution instead of hardcoded ::linkme
 	let linkme = get_linkme_crate();
@@ -6675,9 +6675,9 @@ fn generate_relationship_registrations(
 
 		// Determine relationship type
 		let relationship_type = if is_one_to_one {
-			quote! { #reinhardt::apps::registry::RelationshipType::OneToOne }
+			quote! { #apps::registry::RelationshipType::OneToOne }
 		} else {
-			quote! { #reinhardt::apps::registry::RelationshipType::ForeignKey }
+			quote! { #apps::registry::RelationshipType::ForeignKey }
 		};
 
 		// Generate unique static variable name for forward relationship
@@ -6694,9 +6694,9 @@ fn generate_relationship_registrations(
 		// Generate registration code for forward relationship
 		registrations.push(quote! {
 			#[cfg(not(all(target_family = "wasm", target_os = "unknown")))]
-			#[#linkme::distributed_slice(#reinhardt::apps::registry::RELATIONSHIPS)]
-			static #static_var_name: #reinhardt::apps::registry::RelationshipMetadata =
-				#reinhardt::apps::registry::RelationshipMetadata {
+			#[#linkme::distributed_slice(#apps::registry::RELATIONSHIPS)]
+			static #static_var_name: #apps::registry::RelationshipMetadata =
+				#apps::registry::RelationshipMetadata {
 					from_model: concat!(#app_label, ".", #model_name),
 					to_model: #target_model_name,
 					relationship_type: #relationship_type,
@@ -6711,10 +6711,10 @@ fn generate_relationship_registrations(
 		if let Some(related_name_str) = related_name_opt {
 			// Determine reverse relationship type
 			let reverse_relationship_type = if is_one_to_one {
-				quote! { #reinhardt::apps::registry::RelationshipType::OneToOne }
+				quote! { #apps::registry::RelationshipType::OneToOne }
 			} else {
 				// ForeignKey reverse is also ForeignKey (direction determined by from_model/to_model)
-				quote! { #reinhardt::apps::registry::RelationshipType::ForeignKey }
+				quote! { #apps::registry::RelationshipType::ForeignKey }
 			};
 
 			// Generate unique static variable name for reverse relationship
@@ -6731,9 +6731,9 @@ fn generate_relationship_registrations(
 			// Generate registration code for reverse relationship
 			registrations.push(quote! {
 				#[cfg(not(all(target_family = "wasm", target_os = "unknown")))]
-				#[#linkme::distributed_slice(#reinhardt::apps::registry::RELATIONSHIPS)]
-				static #reverse_static_var_name: #reinhardt::apps::registry::RelationshipMetadata =
-					#reinhardt::apps::registry::RelationshipMetadata {
+				#[#linkme::distributed_slice(#apps::registry::RELATIONSHIPS)]
+				static #reverse_static_var_name: #apps::registry::RelationshipMetadata =
+					#apps::registry::RelationshipMetadata {
 						from_model: #target_model_name,
 						to_model: concat!(#app_label, ".", #model_name),
 						relationship_type: #reverse_relationship_type,
@@ -6807,12 +6807,12 @@ fn generate_relationship_registrations(
 		// Generate registration code for forward M2M relationship
 		registrations.push(quote! {
 			#[cfg(not(all(target_family = "wasm", target_os = "unknown")))]
-			#[#linkme::distributed_slice(#reinhardt::apps::registry::RELATIONSHIPS)]
-			static #static_var_name: #reinhardt::apps::registry::RelationshipMetadata =
-				#reinhardt::apps::registry::RelationshipMetadata {
+			#[#linkme::distributed_slice(#apps::registry::RELATIONSHIPS)]
+			static #static_var_name: #apps::registry::RelationshipMetadata =
+				#apps::registry::RelationshipMetadata {
 					from_model: concat!(#app_label, ".", #model_name),
 					to_model: #target_model_name,
-					relationship_type: #reinhardt::apps::registry::RelationshipType::ManyToMany,
+					relationship_type: #apps::registry::RelationshipType::ManyToMany,
 					field_name: #field_name_str,
 					related_name: #related_name,
 					db_column: None,
@@ -6836,12 +6836,12 @@ fn generate_relationship_registrations(
 			// Generate registration code for reverse M2M relationship
 			registrations.push(quote! {
 				#[cfg(not(all(target_family = "wasm", target_os = "unknown")))]
-				#[#linkme::distributed_slice(#reinhardt::apps::registry::RELATIONSHIPS)]
-				static #reverse_static_var_name: #reinhardt::apps::registry::RelationshipMetadata =
-					#reinhardt::apps::registry::RelationshipMetadata {
+				#[#linkme::distributed_slice(#apps::registry::RELATIONSHIPS)]
+				static #reverse_static_var_name: #apps::registry::RelationshipMetadata =
+					#apps::registry::RelationshipMetadata {
 						from_model: #target_model_name,
 						to_model: concat!(#app_label, ".", #model_name),
-						relationship_type: #reinhardt::apps::registry::RelationshipType::ManyToMany,
+						relationship_type: #apps::registry::RelationshipType::ManyToMany,
 						field_name: #related_name_str,
 						related_name: Some(#field_name_str),
 						db_column: None,

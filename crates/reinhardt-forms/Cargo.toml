@@ -40,7 +40,8 @@ full = []
 [dev-dependencies]
 insta = { workspace = true }
 linkme = { workspace = true }
-reinhardt = { workspace = true, features = ["core", "database"] }
+reinhardt-apps = { path = "../reinhardt-apps" }
+reinhardt-db = { path = "../reinhardt-db", features = ["associations"] }
 tokio-test = "0.4"
 rstest = { workspace = true }
 proptest = { workspace = true }

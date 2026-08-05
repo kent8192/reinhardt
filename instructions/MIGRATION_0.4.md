@@ -8,6 +8,22 @@ For the complete `get_or_create` and `update_or_create` migration, including
 transaction, uniqueness, race, and custom-manager hook semantics, see
 [`0.4.0-typed-manager-upserts.md`](../docs/migration/0.4.0-typed-manager-upserts.md).
 
+## Validated session authentication
+
+`SessionMiddleware` now manages session storage and DI registration only. A
+`USER_ID_SESSION_KEY` value is an identity reference, not proof that the
+account remains active or authorized. Projects using cookie-backed sessions
+must follow it with authentication middleware that loads the current account
+record and publishes `AuthState` before using `CurrentUser<U>` or
+authorization guards. This prevents deactivated accounts with unexpired
+sessions from being authorized.
+
+`CookieSessionAuthMiddleware` remains available for custom
+`AsyncSessionBackend` integrations, but it only restores flags stored in the
+session and does not validate the current account. Follow it with
+account-resolving middleware, or use an authentication backend that performs
+that validation.
+
 ## Rust management shell
 
 The former Rhai evaluator was replaced by a stateful Rust evaluator backed by

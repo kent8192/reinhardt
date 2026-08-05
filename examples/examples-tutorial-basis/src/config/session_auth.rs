@@ -68,6 +68,9 @@ impl Middleware for TutorialSessionAuthMiddleware {
 		next: Arc<dyn Handler>,
 	) -> reinhardt::Result<Response> {
 		let auth_state = self.validated_auth_state(&request).await;
+		if auth_state.is_authenticated() {
+			request.extensions.insert(auth_state.user_id().to_owned());
+		}
 		request
 			.extensions
 			.insert(IsAuthenticated(auth_state.is_authenticated()));
@@ -90,18 +93,26 @@ mod tests {
 		SessionData, SessionId, SessionStore, USER_ID_SESSION_KEY,
 	};
 	use reinhardt::{Handler, Middleware, Request, Response};
+	use serial_test::serial;
 	use sqlx::SqlitePool;
 	use std::sync::{Arc, Mutex};
 	use std::time::Duration;
 	use tempfile::NamedTempFile;
 
-	struct CaptureAuthState(Arc<Mutex<Option<AuthState>>>);
+	#[derive(Default)]
+	struct CapturedAuthState {
+		auth_state: Option<AuthState>,
+		user_id: Option<String>,
+	}
+
+	struct CaptureAuthState(Arc<Mutex<CapturedAuthState>>);
 
 	#[async_trait]
 	impl Handler for CaptureAuthState {
 		async fn handle(&self, request: Request) -> reinhardt::Result<Response> {
-			*self.0.lock().expect("capture lock should remain available") =
-				request.extensions.get::<AuthState>();
+			let mut captured = self.0.lock().expect("capture lock should remain available");
+			captured.auth_state = request.extensions.get::<AuthState>();
+			captured.user_id = request.extensions.get::<String>();
 			Ok(Response::ok())
 		}
 	}
@@ -171,9 +182,10 @@ mod tests {
 	}
 
 	#[tokio::test]
+	#[serial(tutorial_session_auth_database)]
 	async fn active_session_user_populates_validated_auth_state() {
 		let (_database_file, _lease, store, request) = request_for_user(7, true).await;
-		let captured = Arc::new(Mutex::new(None));
+		let captured = Arc::new(Mutex::new(CapturedAuthState::default()));
 		let handler = Arc::new(CaptureAuthState(Arc::clone(&captured)));
 
 		TutorialSessionAuthMiddleware::new(store)
@@ -181,20 +193,24 @@ mod tests {
 			.await
 			.expect("authentication middleware should continue");
 
-		let auth_state = captured
+		let captured = captured
 			.lock()
-			.expect("capture lock should remain available")
-			.clone()
+			.expect("capture lock should remain available");
+		let auth_state = captured
+			.auth_state
+			.as_ref()
 			.expect("active account should produce AuthState");
 		assert!(auth_state.is_authenticated());
 		assert!(auth_state.is_active());
 		assert_eq!(auth_state.user_id(), "7");
+		assert_eq!(captured.user_id.as_deref(), Some(auth_state.user_id()));
 	}
 
 	#[tokio::test]
+	#[serial(tutorial_session_auth_database)]
 	async fn inactive_session_user_is_anonymous() {
 		let (_database_file, _lease, store, request) = request_for_user(8, false).await;
-		let captured = Arc::new(Mutex::new(None));
+		let captured = Arc::new(Mutex::new(CapturedAuthState::default()));
 		let handler = Arc::new(CaptureAuthState(Arc::clone(&captured)));
 
 		TutorialSessionAuthMiddleware::new(store)
@@ -202,11 +218,14 @@ mod tests {
 			.await
 			.expect("authentication middleware should fail closed and continue");
 
-		let auth_state = captured
+		let captured = captured
 			.lock()
-			.expect("capture lock should remain available")
-			.clone()
+			.expect("capture lock should remain available");
+		let auth_state = captured
+			.auth_state
+			.as_ref()
 			.expect("middleware should always populate AuthState");
 		assert!(auth_state.is_anonymous());
+		assert!(captured.user_id.is_none());
 	}
 }

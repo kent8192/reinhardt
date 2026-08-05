@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.0-alpha.6](https://github.com/kent8192/reinhardt-web/compare/reinhardt-admin@v0.4.0-alpha.3...reinhardt-admin@v0.4.0-alpha.6) - 2026-08-05
+
+### Documentation
+
+- update version references to v0.4.0-alpha.4
+- update version references to v0.4.0-alpha.5
+
+### Fixed
+
+- *(db)* validate typed queryset ordering fields
+- *(db)* integrate develop/0.4.0 with typed upsert builders
+
+### Other
+
+- sync develop/0.4.0 into pgvector branch
+
 ## [0.4.0-alpha.5](https://github.com/kent8192/reinhardt-web/compare/reinhardt-admin@v0.4.0-alpha.3...reinhardt-admin@v0.4.0-alpha.5) - 2026-08-05
 
 ### Documentation

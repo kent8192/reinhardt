@@ -7,12 +7,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [0.4.0-alpha.5](https://github.com/kent8192/reinhardt-web/compare/reinhardt-admin-cli@v0.4.0-alpha.3...reinhardt-admin-cli@v0.4.0-alpha.5) - 2026-08-05
-
-### Documentation
-
-- update version references to v0.4.0-alpha.4
-
 ## [0.4.0-alpha.1](https://github.com/kent8192/reinhardt-web/compare/reinhardt-admin-cli@v0.3.2...reinhardt-admin-cli@v0.4.0-alpha.1) - 2026-07-21
 
 ### Changed

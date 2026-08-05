@@ -13,11 +13,11 @@ Add `reinhardt` to your `Cargo.toml`:
 <!-- reinhardt-version-sync:3 -->
 ```toml
 [dependencies]
-reinhardt = { version = "0.4.0-alpha.5", features = ["middleware"] }
+reinhardt = { version = "0.4.0-alpha.6", features = ["middleware"] }
 
 # Or use a preset:
-# reinhardt = { version = "0.4.0-alpha.5", features = ["standard"] }  # Recommended
-# reinhardt = { version = "0.4.0-alpha.5", features = ["full"] }      # All features
+# reinhardt = { version = "0.4.0-alpha.6", features = ["standard"] }  # Recommended
+# reinhardt = { version = "0.4.0-alpha.6", features = ["full"] }      # All features
 ```
 
 Then import middleware features:

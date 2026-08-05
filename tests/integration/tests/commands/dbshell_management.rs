@@ -172,7 +172,7 @@ fn dbshell_management_records_exact_backend_arguments_and_credentials() {
 			name: "mysql",
 			client: "mysql",
 			url: "mysql://ops%20user:mysql-secret@db.example:4406/reporting%20data",
-			expected: "argument=--host\nargument=db.example\nargument=--port\nargument=4406\nargument=--user\nargument=ops user\nargument=reporting data\nargument=--expanded\nargument=value with spaces\nPGPASSWORD=unset\nMYSQL_PWD=mysql-secret\n",
+			expected: "argument=--protocol=TCP\nargument=--host\nargument=db.example\nargument=--port\nargument=4406\nargument=--user\nargument=ops user\nargument=reporting data\nargument=--expanded\nargument=value with spaces\nPGPASSWORD=unset\nMYSQL_PWD=mysql-secret\n",
 		},
 		BackendCase {
 			name: "sqlite",

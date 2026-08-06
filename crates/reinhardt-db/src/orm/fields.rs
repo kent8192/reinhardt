@@ -2247,8 +2247,10 @@ mod tests {
 			)]),
 		);
 
-		let mut roles =
-			ManyToManyField::with_related_name("auth.Permission".to_string(), "roles".to_string());
+		let mut roles = ManyToManyField::with_related_name(
+			"auth.Permission".to_string(),
+			"RoleAssignments".to_string(),
+		);
 		roles.through = Some("auth.RolePermission".to_string());
 		assert_deconstruction(
 			roles.deconstruct(),
@@ -2261,7 +2263,7 @@ mod tests {
 				),
 				(
 					"related_name".to_string(),
-					FieldKwarg::String("roles".to_string()),
+					FieldKwarg::String("RoleAssignments".to_string()),
 				),
 				(
 					"through".to_string(),

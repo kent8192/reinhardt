@@ -16,6 +16,8 @@
 //!
 //! ### DML (Data Manipulation Language)
 //! - **Type-safe query construction** - Build SELECT, INSERT, UPDATE, DELETE statements
+//! - **Plan-only diagnostics** - Wrap typed SELECT statements in backend-aware
+//!   [`ExplainStatement`] values without exposing `ANALYZE`
 //! - **DCL (Data Control Language) support** - Build GRANT and REVOKE statements
 //! - **Expression system** - Rich expression API with arithmetic, comparison, and logical operators
 //! - **Advanced SQL features** - JOINs, GROUP BY, HAVING, DISTINCT, UNION, CTEs, Window functions
@@ -47,7 +49,7 @@
 //! - [`value`]: Core value types for representing SQL values
 //! - [`types`]: Identifier, column reference, table reference, and operator types
 //! - [`expr`]: Expression building with the [`ExprTrait`] system
-//! - [`query`]: Query builders ([`SelectStatement`],
+//! - [`query`]: Query builders ([`SelectStatement`], [`ExplainStatement`],
 //!   [`InsertStatement`], [`UpdateStatement`],
 //!   [`DeleteStatement`])
 //! - [`dcl`]: DCL (Data Control Language) builders ([`GrantStatement`],
@@ -383,9 +385,10 @@ pub mod prelude {
 	};
 	// DML query builders
 	pub use crate::query::{
-		DeleteStatement, ForeignKey, ForeignKeyCreateStatement, InsertStatement, LockBehavior,
-		LockType, OnConflict, Query, QueryBuilderTrait, QueryStatementBuilder,
-		QueryStatementWriter, SelectStatement, UpdateStatement,
+		DeleteStatement, ExplainFormat, ExplainOptions, ExplainStatement, ForeignKey,
+		ForeignKeyCreateStatement, InsertStatement, LockBehavior, LockType, OnConflict, Query,
+		QueryBuilderTrait, QueryStatementBuilder, QueryStatementWriter, SelectStatement,
+		UpdateStatement,
 	};
 	// DDL query builders
 	pub use crate::query::{

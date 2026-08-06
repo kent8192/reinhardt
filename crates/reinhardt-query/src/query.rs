@@ -93,6 +93,7 @@ pub mod drop_table;
 pub mod drop_trigger;
 pub mod drop_view;
 pub mod event;
+pub mod explain;
 pub mod foreign_key;
 pub mod function;
 pub mod insert;
@@ -128,6 +129,7 @@ pub use drop_table::DropTableStatement;
 pub use drop_trigger::DropTriggerStatement;
 pub use drop_view::DropViewStatement;
 pub use event::{AlterEventStatement, CreateEventStatement, DropEventStatement};
+pub use explain::{ExplainFormat, ExplainOptions, ExplainStatement};
 pub use foreign_key::{ForeignKey, ForeignKeyCreateStatement};
 pub use function::{AlterFunctionStatement, CreateFunctionStatement, DropFunctionStatement};
 pub use insert::{InsertSource, InsertStatement};
@@ -206,6 +208,13 @@ impl Query {
 	/// ```
 	pub fn select() -> SelectStatement {
 		SelectStatement::new()
+	}
+
+	/// Wraps a SELECT in a typed, plan-only [`ExplainStatement`].
+	///
+	/// The options intentionally do not expose `ANALYZE` or arbitrary strings.
+	pub fn explain(select: SelectStatement, options: ExplainOptions) -> ExplainStatement {
+		ExplainStatement::new(select, options)
 	}
 
 	/// Construct a new [`InsertStatement`]

@@ -7,6 +7,8 @@ use reinhardt_core::types::page::{
 	NativeEvent, NativeEventPayload, NativeEventTarget, PageEventHandler,
 };
 
+use crate::reactive::query::with_query_client;
+
 use super::error::EventError;
 use super::fixture::EventFixture;
 #[cfg(feature = "msw")]
@@ -134,6 +136,11 @@ impl ElementHandle {
 
 	/// Dispatches one validated synthetic event fixture.
 	pub fn dispatch(&self, fixture: EventFixture) -> Result<(), EventError> {
+		let query_client = self.inner.borrow().query_client.clone();
+		with_query_client(&query_client, || self.dispatch_in_query_context(fixture))
+	}
+
+	fn dispatch_in_query_context(&self, fixture: EventFixture) -> Result<(), EventError> {
 		let event = fixture.build()?;
 		let input_is_composing = matches!(
 			event.payload(),

@@ -3,7 +3,8 @@
 use async_trait::async_trait;
 use futures::StreamExt;
 use sqlx::{
-	Column, Executor, MySql, MySqlPool, Row as SqlxRow, Transaction, TypeInfo, mysql::MySqlRow,
+	Column, Executor, MySql, MySqlPool, Row as SqlxRow, Transaction, TypeInfo, ValueRef,
+	mysql::MySqlRow,
 };
 use std::sync::Arc;
 
@@ -148,6 +149,14 @@ impl MySqlBackend {
 		let mut row = Row::new();
 		for column in mysql_row.columns() {
 			let column_name = column.name();
+			if mysql_row
+				.try_get_raw(column_name)
+				.map_err(map_sqlx_error)?
+				.is_null()
+			{
+				row.insert(column_name.to_string(), QueryValue::Null);
+				continue;
+			}
 			let type_name = column.type_info().name().to_uppercase();
 			if type_name == "JSON" {
 				match mysql_row.try_get::<Option<serde_json::Value>, _>(column_name) {
@@ -177,6 +186,12 @@ impl MySqlBackend {
 				&& let Ok(value) = mysql_row.try_get::<bool, _>(column_name)
 			{
 				row.insert(column_name.to_string(), QueryValue::Bool(value));
+			} else if let Ok(value) = mysql_row.try_get::<u64, _>(column_name) {
+				let value = match i64::try_from(value) {
+					Ok(value) => QueryValue::Int(value),
+					Err(_) => QueryValue::String(value.to_string()),
+				};
+				row.insert(column_name.to_string(), value);
 			} else if let Ok(value) = mysql_row.try_get::<i64, _>(column_name) {
 				row.insert(column_name.to_string(), QueryValue::Int(value));
 			} else if let Ok(value) = mysql_row.try_get::<i32, _>(column_name) {
@@ -333,6 +348,14 @@ impl DatabaseBackend for MySqlBackend {
 	async fn begin(&self) -> Result<Box<dyn TransactionExecutor>> {
 		let tx = self.pool.begin().await.map_err(map_sqlx_error)?;
 		Ok(Box::new(MySqlTransactionExecutor::new(tx)))
+	}
+
+	async fn begin_write(&self) -> Result<Box<dyn TransactionExecutor>> {
+		// READ COMMITTED avoids InnoDB next-key gap locks for missing-row
+		// SELECT ... FOR UPDATE lookups. Unique constraints still serialize
+		// competing inserts, after which the loser can lock and update the winner.
+		self.begin_with_isolation(IsolationLevel::ReadCommitted)
+			.await
 	}
 
 	async fn begin_with_isolation(

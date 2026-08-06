@@ -18,8 +18,8 @@ use crate::orm::relations::{RelationJoinGraph, RelationJoinKind, RelationPathLik
 use futures::{Stream, StreamExt};
 use reinhardt_core::exception::{DatabaseError, DatabaseErrorKind, Error};
 use reinhardt_query::prelude::{
-	Alias, BinOper, CockroachDBQueryBuilder, ColumnRef, Condition, Expr, ExprTrait, Func,
-	JoinType as SeaJoinType, LockBehavior, LockType, MySqlQueryBuilder, Order,
+	Alias, BinOper, CockroachDBQueryBuilder, ColumnRef, Condition, ExplainStatement, Expr,
+	ExprTrait, Func, JoinType as SeaJoinType, LockBehavior, LockType, MySqlQueryBuilder, Order,
 	PostgresQueryBuilder, Query, QueryBuilder, QueryStatementBuilder, SelectStatement, SimpleExpr,
 	SqliteQueryBuilder, TableRef, TemporalTimeZone, TemporalTruncKind, TemporalTruncOutput,
 	UpdateStatement,
@@ -35,8 +35,47 @@ use std::task::{Context, Poll, Wake, Waker};
 use std::time::Instant;
 use uuid::Uuid;
 
+pub use reinhardt_query::query::{ExplainFormat, ExplainOptions};
+
 fn executor_error(error: reinhardt_core::exception::Error) -> DatabaseError {
 	crate::backends::error::into_database_error(error)
+}
+
+/// Backend-independent body returned by a plan-only EXPLAIN operation.
+#[derive(Debug, Clone, PartialEq)]
+#[non_exhaustive]
+pub enum ExplainBody {
+	/// Single-column human-readable output joined with newlines.
+	Text(String),
+	/// Machine-readable JSON output.
+	Json(serde_json::Value),
+	/// Backend tabular output retained as JSON objects.
+	Rows(Vec<serde_json::Value>),
+}
+
+/// Database dialect that generated an EXPLAIN plan.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum ExplainBackend {
+	/// PostgreSQL.
+	Postgres,
+	/// MySQL or MariaDB.
+	MySql,
+	/// SQLite.
+	Sqlite,
+	/// CockroachDB's PostgreSQL-compatible dialect.
+	CockroachDb,
+}
+
+/// Structured output from a backend-aware plan-only EXPLAIN operation.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ExplainOutput {
+	/// Backend that generated the plan.
+	pub backend: ExplainBackend,
+	/// Effective output format.
+	pub format: ExplainFormat,
+	/// Decoded plan body, separate from model-row deserialization.
+	pub body: ExplainBody,
 }
 
 mod temporal_projection_field {
@@ -1854,12 +1893,29 @@ where
 		Ok(stmt.to_owned())
 	}
 
+	fn ensure_explainable_shape(&self) -> reinhardt_core::exception::Result<()> {
+		if !self.ctes.is_empty()
+			|| !self.lateral_joins.is_empty()
+			|| self.from_subquery_sql.is_some()
+		{
+			return Err(DatabaseError::new(
+				DatabaseErrorKind::Unsupported,
+				"EXPLAIN does not support QuerySets with CTEs, lateral joins, or a subquery source.",
+			)
+			.into());
+		}
+		Ok(())
+	}
+
 	fn apply_annotations_to_select(&self, stmt: &mut SelectStatement) {
 		for annotation in &self.annotations {
-			stmt.expr_as(
-				Expr::cust(self.annotation_value_to_select_sql(&annotation.value)),
-				Alias::new(&annotation.alias),
-			);
+			let expression = self
+				.annotation_value_to_select_expr(&annotation.value)
+				.unwrap_or_else(|| {
+					Expr::cust(self.annotation_value_to_select_sql(&annotation.value))
+						.into_simple_expr()
+				});
+			stmt.expr_as(expression, Alias::new(&annotation.alias));
 		}
 	}
 
@@ -2139,6 +2195,112 @@ where
 					})
 			})
 			.collect()
+	}
+
+	fn build_explain_for_backend(
+		stmt: &ExplainStatement,
+		backend: super::connection::DatabaseBackend,
+		is_cockroachdb: bool,
+	) -> Result<(String, reinhardt_query::prelude::Values, ExplainBackend), DatabaseError> {
+		let (result, explain_backend) = if is_cockroachdb {
+			if backend != super::connection::DatabaseBackend::Postgres {
+				return Err(DatabaseError::new(
+					DatabaseErrorKind::Unsupported,
+					"CockroachDB EXPLAIN requires a PostgreSQL-compatible executor",
+				));
+			}
+			(
+				stmt.build_cockroachdb_checked(),
+				ExplainBackend::CockroachDb,
+			)
+		} else {
+			match backend {
+				super::connection::DatabaseBackend::Postgres => {
+					(stmt.build_postgres_checked(), ExplainBackend::Postgres)
+				}
+				super::connection::DatabaseBackend::MySql => {
+					(stmt.build_mysql_checked(), ExplainBackend::MySql)
+				}
+				super::connection::DatabaseBackend::Sqlite => {
+					(stmt.build_sqlite_checked(), ExplainBackend::Sqlite)
+				}
+			}
+		};
+		result
+			.map(|(sql, values)| (sql, values, explain_backend))
+			.map_err(|error| DatabaseError::new(DatabaseErrorKind::Unsupported, error.to_string()))
+	}
+
+	fn decode_explain_rows(
+		rows: Vec<crate::backends::types::Row>,
+		backend: ExplainBackend,
+		format: ExplainFormat,
+	) -> Result<ExplainOutput, DatabaseError> {
+		let rows = rows
+			.into_iter()
+			.map(|row| QueryRow::from_backend_row(row).data)
+			.collect::<Vec<_>>();
+		let body = if format == ExplainFormat::Json {
+			ExplainBody::Json(Self::decode_json_explain_body(rows)?)
+		} else if rows.iter().all(|row| {
+			row.as_object().is_some_and(|values| {
+				values.len() == 1 && values.values().all(is_scalar_plan_value)
+			})
+		}) {
+			let lines = rows
+				.into_iter()
+				.filter_map(|row| {
+					row.as_object()
+						.and_then(|values| values.values().next().cloned())
+				})
+				.map(plan_value_to_text)
+				.collect::<Vec<_>>();
+			ExplainBody::Text(lines.join("\n"))
+		} else {
+			ExplainBody::Rows(rows)
+		};
+
+		Ok(ExplainOutput {
+			backend,
+			format,
+			body,
+		})
+	}
+
+	fn decode_json_explain_body(
+		rows: Vec<serde_json::Value>,
+	) -> Result<serde_json::Value, DatabaseError> {
+		let mut plans = Vec::with_capacity(rows.len());
+		for row in rows {
+			let value = row
+				.as_object()
+				.and_then(|values| {
+					if values.len() == 1 {
+						values.values().next().cloned()
+					} else {
+						None
+					}
+				})
+				.unwrap_or(row);
+			let value = match value {
+				serde_json::Value::String(value) => {
+					serde_json::from_str(&value).map_err(|error| {
+						DatabaseError::new(
+							DatabaseErrorKind::Serialization,
+							format!("EXPLAIN JSON output could not be decoded: {error}"),
+						)
+					})?
+				}
+				value => value,
+			};
+			plans.push(value);
+		}
+
+		Ok(if plans.len() == 1 {
+			plans.pop().expect("one plan was recorded")
+		} else {
+			serde_json::Value::Array(plans)
+		})
 	}
 
 	fn temporal_projection_statement(
@@ -5600,6 +5762,58 @@ where
 		value.to_sql()
 	}
 
+	/// Builds the annotation forms represented by the query AST structurally.
+	///
+	/// Field and standard aggregate annotations must remain AST nodes so the
+	/// selected backend, rather than PostgreSQL-style pre-rendered SQL, quotes
+	/// their identifiers. Other legacy annotation forms still require their
+	/// established SQL rendering path.
+	fn annotation_value_to_select_expr(
+		&self,
+		value: &super::annotation::AnnotationValue,
+	) -> Option<SimpleExpr> {
+		match value {
+			super::annotation::AnnotationValue::Field(field) => {
+				Some(Expr::col(self.root_column_reference(&field.field)).into_simple_expr())
+			}
+			super::annotation::AnnotationValue::Aggregate(aggregate) => {
+				let field_expression = |field: Option<&str>| match field {
+					None | Some("*") => Expr::asterisk().into_simple_expr(),
+					Some(field) => Expr::col(self.root_column_reference(field)).into_simple_expr(),
+				};
+				if aggregate.distinct {
+					let field = aggregate.field.as_deref()?;
+					return Some(SimpleExpr::CustomWithExpr(
+						format!("{}(DISTINCT ?)", aggregate.func),
+						vec![field_expression(Some(field))],
+					));
+				}
+				let expression = match &aggregate.func {
+					super::aggregation::AggregateFunc::Count => {
+						Func::count(field_expression(aggregate.field.as_deref()))
+					}
+					super::aggregation::AggregateFunc::Sum => {
+						Func::sum(field_expression(aggregate.field.as_deref()))
+					}
+					super::aggregation::AggregateFunc::Avg => {
+						Func::avg(field_expression(aggregate.field.as_deref()))
+					}
+					super::aggregation::AggregateFunc::Max => {
+						Func::max(field_expression(aggregate.field.as_deref()))
+					}
+					super::aggregation::AggregateFunc::Min => {
+						Func::min(field_expression(aggregate.field.as_deref()))
+					}
+					super::aggregation::AggregateFunc::CountDistinct => {
+						Func::count(field_expression(aggregate.field.as_deref()))
+					}
+				};
+				Some(expression)
+			}
+			_ => None,
+		}
+	}
+
 	fn annotation_value_to_select_sql(&self, value: &super::annotation::AnnotationValue) -> String {
 		if self.has_joined_tables() {
 			match value {
@@ -6307,9 +6521,7 @@ where
 	/// //   WHERE posts.published = $1
 	/// ```
 	pub fn select_related_query(&self) -> reinhardt_core::exception::Result<SelectStatement> {
-		let mut stmt = self.select_related_query_with_condition(self.build_where_condition()?);
-		self.apply_annotations_to_select(&mut stmt);
-		Ok(stmt)
+		Ok(self.select_related_query_with_condition(self.build_where_condition()?))
 	}
 
 	fn select_related_query_with_condition(
@@ -6432,6 +6644,7 @@ where
 		if let Some(cond) = where_condition {
 			stmt.cond_where(cond);
 		}
+		self.apply_annotations_to_select(&mut stmt);
 		self.apply_grouping_and_having(&mut stmt);
 
 		self.apply_ordering(&mut stmt);
@@ -6804,15 +7017,123 @@ where
 		stmt.to_owned()
 	}
 
+	/// Returns the backend's estimated plan for this queryset without executing
+	/// the data-producing SELECT.
+	///
+	/// Only typed plan-only options are accepted. `ANALYZE`, arbitrary option
+	/// strings, and execution statistics are intentionally unavailable.
+	///
+	/// # Errors
+	///
+	/// Returns an unsupported database error when the requested format or option
+	/// is unavailable on the active backend.
+	pub async fn explain(
+		&self,
+		options: ExplainOptions,
+	) -> reinhardt_core::exception::Result<ExplainOutput> {
+		let mut conn = super::manager::get_connection().await?;
+		self.explain_with_db(&mut conn, options).await
+	}
+
+	/// Returns the estimated plan through a caller-owned ORM executor.
+	///
+	/// This is the diagnostic counterpart to [`Self::all_with_db`]. The existing
+	/// filtered, joined, and ordered SELECT is wrapped in one EXPLAIN statement;
+	/// the unwrapped SELECT is never submitted separately.
+	pub async fn explain_with_db<E>(
+		&self,
+		conn: &mut E,
+		options: ExplainOptions,
+	) -> reinhardt_core::exception::Result<ExplainOutput>
+	where
+		E: OrmExecutor,
+	{
+		self.ensure_explainable_shape()?;
+		let select = self.build_select_statement()?;
+		let context = super::execution::pgvector_context_for_select(&select);
+		let statement = ExplainStatement::new(select, options);
+		let (sql, values, backend) =
+			Self::build_explain_for_backend(&statement, conn.backend(), conn.is_cockroachdb())?;
+		let param_samples = values
+			.iter()
+			.map(|value| value.to_sql_literal())
+			.collect::<Vec<_>>();
+		let params = super::execution::convert_values(values);
+		let started_at = Instant::now();
+		let result = conn.fetch_all_with_context(&sql, params, context).await;
+		let duration = started_at.elapsed();
+		let rows = match result {
+			Ok(rows) => {
+				super::instrumentation::instrumentation()
+					.orm_query_end_with_params(&sql, &param_samples, duration)
+					.await;
+				rows
+			}
+			Err(error) => {
+				super::instrumentation::instrumentation()
+					.orm_query_error(&sql, &format!("{error:?}"))
+					.await;
+				return Err(error);
+			}
+		};
+		Self::decode_explain_rows(rows, backend, options.format).map_err(Into::into)
+	}
+
+	/// Returns the estimated plan through an active transaction executor.
+	///
+	/// This caller-owned executor path mirrors [`Self::all_with_executor`] and
+	/// keeps the diagnostic on the transaction's dedicated connection.
+	pub async fn explain_with_executor(
+		&self,
+		executor: &mut dyn super::connection::TransactionExecutor,
+		options: ExplainOptions,
+	) -> Result<ExplainOutput, crate::backends::error::DatabaseError> {
+		self.ensure_explainable_shape().map_err(executor_error)?;
+		let select = self.build_select_statement().map_err(executor_error)?;
+		let context = super::execution::pgvector_context_for_select(&select);
+		let statement = ExplainStatement::new(select, options);
+		let (sql, values, backend) = Self::build_explain_for_backend(
+			&statement,
+			Self::executor_backend(executor),
+			executor.is_cockroachdb(),
+		)?;
+		let param_samples = values
+			.iter()
+			.map(|value| value.to_sql_literal())
+			.collect::<Vec<_>>();
+		let params = super::execution::convert_values(values);
+		let started_at = Instant::now();
+		let result = executor
+			.fetch_all_with_context(&sql, params, context)
+			.await
+			.map_err(executor_error);
+		let duration = started_at.elapsed();
+		let rows = match result {
+			Ok(rows) => {
+				super::instrumentation::instrumentation()
+					.orm_query_end_with_params(&sql, &param_samples, duration)
+					.await;
+				rows
+			}
+			Err(error) => {
+				super::instrumentation::instrumentation()
+					.orm_query_error(&sql, &format!("{error:?}"))
+					.await;
+				return Err(error);
+			}
+		};
+		Self::decode_explain_rows(rows, backend, options.format)
+	}
+
 	/// Return distinct truncated values from a generated date field.
 	///
 	/// Truncation, `DISTINCT`, null exclusion, and ordering are performed by the
 	/// database. ISO weeks begin on Monday. Querysets created from subqueries,
 	/// querysets with CTEs, querysets with lateral joins, and grouped or HAVING
 	/// querysets are not supported.
-	pub async fn dates<F>(
+	pub async fn dates<F, Origin>(
 		&self,
-		field: super::expressions::FieldRef<T, F>,
+		field: super::expressions::FieldRef<T, F, Origin>,
 		kind: DateTruncKind,
 		order: DateProjectionOrder,
 	) -> reinhardt_core::exception::Result<Vec<chrono::NaiveDate>>
@@ -6827,10 +7148,10 @@ where
 	///
 	/// Querysets created from subqueries, querysets with CTEs, querysets with
 	/// lateral joins, and grouped or HAVING querysets are not supported.
-	pub async fn dates_with_db<E, F>(
+	pub async fn dates_with_db<E, F, Origin>(
 		&self,
 		conn: &mut E,
-		field: super::expressions::FieldRef<T, F>,
+		field: super::expressions::FieldRef<T, F, Origin>,
 		kind: DateTruncKind,
 		order: DateProjectionOrder,
 	) -> reinhardt_core::exception::Result<Vec<chrono::NaiveDate>>
@@ -6853,10 +7174,10 @@ where
 	///
 	/// Querysets created from subqueries, querysets with CTEs, querysets with
 	/// lateral joins, and grouped or HAVING querysets are not supported.
-	pub async fn dates_with_executor<F>(
+	pub async fn dates_with_executor<F, Origin>(
 		&self,
 		executor: &mut dyn super::connection::TransactionExecutor,
-		field: super::expressions::FieldRef<T, F>,
+		field: super::expressions::FieldRef<T, F, Origin>,
 		kind: DateTruncKind,
 		order: DateProjectionOrder,
 	) -> Result<Vec<chrono::NaiveDate>, crate::backends::error::DatabaseError>
@@ -6883,9 +7204,9 @@ where
 	/// error for named zones; PostgreSQL performs named-zone conversion. Querysets
 	/// created from subqueries, querysets with CTEs, querysets with lateral joins,
 	/// and grouped or HAVING querysets are not supported.
-	pub async fn datetimes<F>(
+	pub async fn datetimes<F, Origin>(
 		&self,
-		field: super::expressions::FieldRef<T, F>,
+		field: super::expressions::FieldRef<T, F, Origin>,
 		kind: DateTimeTruncKind,
 		order: DateProjectionOrder,
 		time_zone: Option<chrono_tz::Tz>,
@@ -6902,10 +7223,10 @@ where
 	///
 	/// Querysets created from subqueries, querysets with CTEs, querysets with
 	/// lateral joins, and grouped or HAVING querysets are not supported.
-	pub async fn datetimes_with_db<E, F>(
+	pub async fn datetimes_with_db<E, F, Origin>(
 		&self,
 		conn: &mut E,
-		field: super::expressions::FieldRef<T, F>,
+		field: super::expressions::FieldRef<T, F, Origin>,
 		kind: DateTimeTruncKind,
 		order: DateProjectionOrder,
 		time_zone: Option<chrono_tz::Tz>,
@@ -6935,10 +7256,10 @@ where
 	///
 	/// Querysets created from subqueries, querysets with CTEs, querysets with
 	/// lateral joins, and grouped or HAVING querysets are not supported.
-	pub async fn datetimes_with_executor<F>(
+	pub async fn datetimes_with_executor<F, Origin>(
 		&self,
 		executor: &mut dyn super::connection::TransactionExecutor,
-		field: super::expressions::FieldRef<T, F>,
+		field: super::expressions::FieldRef<T, F, Origin>,
 		kind: DateTimeTruncKind,
 		order: DateProjectionOrder,
 		time_zone: Option<chrono_tz::Tz>,
@@ -9582,7 +9903,9 @@ where
 			self.select_related_query_with_condition(self.build_where_condition()?)
 		};
 
-		self.apply_annotations_to_select(&mut stmt);
+		if !self.has_select_related() {
+			self.apply_annotations_to_select(&mut stmt);
+		}
 
 		use reinhardt_query::prelude::PostgresQueryBuilder;
 		let mut select_sql = stmt.to_string(PostgresQueryBuilder);
@@ -10534,6 +10857,23 @@ fn escape_like_pattern(value: &str) -> String {
 	escaped
 }
 
+fn is_scalar_plan_value(value: &serde_json::Value) -> bool {
+	matches!(
+		value,
+		serde_json::Value::Null
+			| serde_json::Value::Bool(_)
+			| serde_json::Value::Number(_)
+			| serde_json::Value::String(_)
+	)
+}
+
+fn plan_value_to_text(value: serde_json::Value) -> String {
+	match value {
+		serde_json::Value::String(value) => value,
+		value => value.to_string(),
+	}
+}
+
 #[cfg(test)]
 mod tests {
 	use super::{
@@ -10550,6 +10890,8 @@ mod tests {
 		query::Filter,
 	};
 	use futures::Stream;
+	#[cfg(feature = "pgvector")]
+	use reinhardt_core::macros::model;
 	use reinhardt_query::{
 		QueryBuilder,
 		prelude::{
@@ -11362,7 +11704,7 @@ mod tests {
 		// Assert
 		assert_eq!(
 			sql,
-			r#"(SELECT COUNT(*) FROM "test_users" WHERE FALSE LIMIT 0)"#
+			r#"(SELECT COUNT(*) FROM "test_users" WHERE 1 = 0 LIMIT 0)"#
 		);
 	}
 
@@ -11529,17 +11871,13 @@ mod tests {
 		#[case] code: &'static str,
 		#[case] message: &'static str,
 	) {
-		let field = Field::<TestUser, crate::orm::Vector<3>>::new(vec!["embedding"]);
-		let queryset = QuerySet::<TestUser>::new().filter(
+		let field = Field::<TestVectorUser, crate::orm::Vector<3>>::new(vec!["embedding"]);
+		let queryset = QuerySet::<TestVectorUser>::new().filter(
 			field
 				.cosine_distance(typed_vector_target(&[1.0, 2.0, 3.0]))
 				.lt(0.25),
 		);
-		let assignment_field = crate::orm::expressions::FieldRef::<
-			TestUser,
-			crate::orm::Vector<3>,
-			crate::orm::expressions::UnverifiedModelField,
-		>::new("embedding");
+		let assignment_field = TestVectorUser::field_embedding();
 		let mut executor = PgvectorUpdateErrorExecutor { code, message };
 
 		let error = queryset
@@ -11564,17 +11902,13 @@ mod tests {
 	#[cfg(feature = "pgvector")]
 	#[test]
 	fn typed_vector_update_fields_sql_reports_assignment_and_predicate_params() {
-		let field = Field::<TestUser, crate::orm::Vector<3>>::new(vec!["embedding"]);
-		let queryset = QuerySet::<TestUser>::new().filter(
+		let field = Field::<TestVectorUser, crate::orm::Vector<3>>::new(vec!["embedding"]);
+		let queryset = QuerySet::<TestVectorUser>::new().filter(
 			field
 				.cosine_distance(typed_vector_target(&[1.0, 2.0, 3.0]))
 				.lt(0.25),
 		);
-		let assignment_field = crate::orm::expressions::FieldRef::<
-			TestUser,
-			crate::orm::Vector<3>,
-			crate::orm::expressions::UnverifiedModelField,
-		>::new("embedding");
+		let assignment_field = TestVectorUser::field_embedding();
 
 		let (sql, params) = queryset
 			.update_fields_sql([(assignment_field, typed_vector_target(&[4.0, 5.0, 6.0]))])
@@ -11875,6 +12209,423 @@ mod tests {
 		}
 	}
 
+	struct ExplainRecordingExecutor {
+		backend: DatabaseBackend,
+		is_cockroachdb: bool,
+		calls: Vec<(String, Vec<crate::orm::QueryValue>)>,
+		rows: Vec<crate::orm::Row>,
+	}
+
+	impl ExplainRecordingExecutor {
+		fn new(backend: DatabaseBackend, rows: Vec<crate::orm::Row>) -> Self {
+			Self {
+				backend,
+				is_cockroachdb: false,
+				calls: Vec::new(),
+				rows,
+			}
+		}
+
+		fn cockroachdb(rows: Vec<crate::orm::Row>) -> Self {
+			Self {
+				backend: DatabaseBackend::Postgres,
+				is_cockroachdb: true,
+				calls: Vec::new(),
+				rows,
+			}
+		}
+	}
+
+	#[async_trait::async_trait]
+	impl crate::orm::OrmExecutor for ExplainRecordingExecutor {
+		fn backend(&self) -> DatabaseBackend {
+			self.backend
+		}
+
+		fn is_cockroachdb(&self) -> bool {
+			self.is_cockroachdb
+		}
+
+		async fn execute(
+			&mut self,
+			_sql: &str,
+			_params: Vec<crate::orm::QueryValue>,
+		) -> reinhardt_core::exception::Result<crate::orm::QueryResult> {
+			panic!("plan-only EXPLAIN must not execute a statement")
+		}
+
+		async fn fetch_one(
+			&mut self,
+			_sql: &str,
+			_params: Vec<crate::orm::QueryValue>,
+		) -> reinhardt_core::exception::Result<crate::orm::Row> {
+			panic!("plan-only EXPLAIN fetches its diagnostic rows together")
+		}
+
+		async fn fetch_all(
+			&mut self,
+			sql: &str,
+			params: Vec<crate::orm::QueryValue>,
+		) -> reinhardt_core::exception::Result<Vec<crate::orm::Row>> {
+			self.calls.push((sql.to_owned(), params));
+			Ok(std::mem::take(&mut self.rows))
+		}
+
+		async fn fetch_optional(
+			&mut self,
+			_sql: &str,
+			_params: Vec<crate::orm::QueryValue>,
+		) -> reinhardt_core::exception::Result<Option<crate::orm::Row>> {
+			panic!("plan-only EXPLAIN does not fetch an optional model row")
+		}
+	}
+
+	struct ExplainTransactionExecutor {
+		calls: Vec<(String, Vec<crate::orm::QueryValue>)>,
+		rows: Vec<crate::orm::Row>,
+	}
+
+	#[async_trait::async_trait]
+	impl crate::orm::TransactionExecutor for ExplainTransactionExecutor {
+		fn backend(&self) -> crate::backends::types::DatabaseType {
+			crate::backends::types::DatabaseType::Postgres
+		}
+
+		async fn execute(
+			&mut self,
+			_sql: &str,
+			_params: Vec<crate::orm::QueryValue>,
+		) -> crate::backends::error::Result<crate::orm::QueryResult> {
+			panic!("plan-only EXPLAIN must not execute a statement")
+		}
+
+		async fn fetch_one(
+			&mut self,
+			_sql: &str,
+			_params: Vec<crate::orm::QueryValue>,
+		) -> crate::backends::error::Result<crate::orm::Row> {
+			panic!("plan-only EXPLAIN fetches its diagnostic rows together")
+		}
+
+		async fn fetch_all(
+			&mut self,
+			sql: &str,
+			params: Vec<crate::orm::QueryValue>,
+		) -> crate::backends::error::Result<Vec<crate::orm::Row>> {
+			self.calls.push((sql.to_owned(), params));
+			Ok(std::mem::take(&mut self.rows))
+		}
+
+		async fn fetch_optional(
+			&mut self,
+			_sql: &str,
+			_params: Vec<crate::orm::QueryValue>,
+		) -> crate::backends::error::Result<Option<crate::orm::Row>> {
+			panic!("plan-only EXPLAIN does not fetch an optional model row")
+		}
+
+		async fn commit(self: Box<Self>) -> crate::backends::error::Result<()> {
+			Ok(())
+		}
+
+		async fn rollback(self: Box<Self>) -> crate::backends::error::Result<()> {
+			Ok(())
+		}
+	}
+
+	#[rstest]
+	#[tokio::test]
+	async fn explain_wraps_typed_filtered_select_without_executing_it_separately() {
+		let queryset = QuerySet::<TestUser>::new()
+			.filter(TestUser::field_username().exact("alice"))
+			.order_by(&["-id"]);
+		let plan = serde_json::json!([{
+			"Plan": {
+				"Node Type": "Index Scan",
+				"Relation Name": "test_users"
+			}
+		}]);
+		let mut executor = ExplainRecordingExecutor::new(
+			DatabaseBackend::Postgres,
+			vec![crate::orm::Row {
+				data: HashMap::from([(
+					"QUERY PLAN".to_owned(),
+					crate::orm::QueryValue::Json(Some(Box::new(plan.clone()))),
+				)]),
+			}],
+		);
+
+		let output = queryset
+			.explain_with_db(
+				&mut executor,
+				super::ExplainOptions::default().format(super::ExplainFormat::Json),
+			)
+			.await
+			.expect("PostgreSQL JSON plan should decode");
+
+		assert_eq!(executor.calls.len(), 1);
+		assert_eq!(
+			executor.calls[0].0,
+			r#"EXPLAIN (FORMAT JSON) SELECT * FROM "test_users" WHERE "username" = $1 ORDER BY "id" DESC"#
+		);
+		assert_eq!(
+			executor.calls[0].1,
+			vec![crate::orm::QueryValue::String("alice".to_owned())]
+		);
+		assert_eq!(output.backend, super::ExplainBackend::Postgres);
+		assert_eq!(output.format, super::ExplainFormat::Json);
+		assert_eq!(output.body, super::ExplainBody::Json(plan));
+	}
+
+	#[rstest]
+	#[tokio::test]
+	async fn cockroachdb_explain_reports_its_effective_backend() {
+		let mut executor = ExplainRecordingExecutor::cockroachdb(vec![crate::orm::Row {
+			data: HashMap::from([(
+				"info".to_owned(),
+				crate::orm::QueryValue::String("scan test_users".to_owned()),
+			)]),
+		}]);
+
+		let output = QuerySet::<TestUser>::new()
+			.explain_with_db(&mut executor, super::ExplainOptions::default())
+			.await
+			.expect("CockroachDB text plan should decode");
+
+		assert_eq!(output.backend, super::ExplainBackend::CockroachDb);
+		assert_eq!(executor.calls[0].0, r#"EXPLAIN SELECT * FROM "test_users""#);
+	}
+
+	#[rstest]
+	#[tokio::test]
+	async fn mysql_json_explain_decodes_supported_plan() {
+		let plan = serde_json::json!({
+			"query_block": {
+				"table": {
+					"table_name": "test_users",
+					"access_type": "ALL"
+				}
+			}
+		});
+		let mut executor = ExplainRecordingExecutor::new(
+			DatabaseBackend::MySql,
+			vec![crate::orm::Row {
+				data: HashMap::from([(
+					"EXPLAIN".to_owned(),
+					crate::orm::QueryValue::String(plan.to_string()),
+				)]),
+			}],
+		);
+
+		let output = QuerySet::<TestUser>::new()
+			.filter(TestUser::field_id().eq(7))
+			.explain_with_db(
+				&mut executor,
+				super::ExplainOptions::default().format(super::ExplainFormat::Json),
+			)
+			.await
+			.expect("MySQL JSON plan should decode");
+
+		assert_eq!(output.backend, super::ExplainBackend::MySql);
+		assert_eq!(output.body, super::ExplainBody::Json(plan));
+		assert_eq!(
+			executor.calls[0].0,
+			"EXPLAIN FORMAT=JSON SELECT * FROM `test_users` WHERE `id` = ?"
+		);
+	}
+
+	#[rstest]
+	#[tokio::test]
+	async fn mysql_explain_renders_field_and_aggregate_annotations_with_mysql_identifiers() {
+		use crate::orm::aggregation::Aggregate;
+		use crate::orm::annotation::{Annotation, AnnotationValue};
+		use crate::orm::expressions::F;
+
+		let queryset = QuerySet::<TestUser>::new()
+			.annotate(Annotation::new(
+				"username_copy",
+				AnnotationValue::Field(F::new("username")),
+			))
+			.annotate(Annotation::new(
+				"user_count",
+				AnnotationValue::Aggregate(Aggregate::count(Some("id"))),
+			))
+			.annotate(Annotation::new(
+				"distinct_user_count",
+				AnnotationValue::Aggregate(Aggregate::count_distinct("id")),
+			));
+		let mut executor = ExplainRecordingExecutor::new(DatabaseBackend::MySql, Vec::new());
+
+		queryset
+			.explain_with_db(&mut executor, super::ExplainOptions::default())
+			.await
+			.expect("MySQL EXPLAIN should render structural annotations");
+
+		assert_eq!(executor.calls.len(), 1);
+		assert!(
+			executor.calls[0]
+				.0
+				.contains("`username` AS `username_copy`")
+		);
+		assert!(executor.calls[0].0.contains("COUNT(`id`) AS `user_count`"));
+		assert!(
+			executor.calls[0]
+				.0
+				.contains("COUNT(DISTINCT `id`) AS `distinct_user_count`")
+		);
+		assert!(!executor.calls[0].0.contains("\"username\""));
+		assert!(!executor.calls[0].0.contains("COUNT(\"id\")"));
+	}
+
+	#[rstest]
+	#[tokio::test]
+	async fn explain_with_executor_uses_one_transaction_connection_call() {
+		let mut executor = ExplainTransactionExecutor {
+			calls: Vec::new(),
+			rows: vec![crate::orm::Row {
+				data: HashMap::from([(
+					"QUERY PLAN".to_owned(),
+					crate::orm::QueryValue::String("Seq Scan on test_users".to_owned()),
+				)]),
+			}],
+		};
+
+		let output = QuerySet::<TestUser>::new()
+			.filter(TestUser::field_id().eq(7))
+			.explain_with_executor(&mut executor, super::ExplainOptions::default())
+			.await
+			.expect("transaction executor plan should decode");
+
+		assert_eq!(
+			output.body,
+			super::ExplainBody::Text("Seq Scan on test_users".to_owned())
+		);
+		assert_eq!(executor.calls.len(), 1);
+		assert_eq!(
+			executor.calls[0].0,
+			r#"EXPLAIN SELECT * FROM "test_users" WHERE "id" = $1"#
+		);
+		assert_eq!(executor.calls[0].1, vec![crate::orm::QueryValue::Int(7)]);
+	}
+
+	#[rstest]
+	#[case(
+		DatabaseBackend::Postgres,
+		reinhardt_query::query::ExplainOptions::default()
+			.format(reinhardt_query::query::ExplainFormat::Tree),
+		"Database error: EXPLAIN FORMAT TREE is not supported by the PostgreSQL backend"
+	)]
+	#[case(
+		DatabaseBackend::MySql,
+		reinhardt_query::query::ExplainOptions::default().verbose(),
+		"Database error: EXPLAIN VERBOSE is not supported by the MySQL backend"
+	)]
+	#[case(
+		DatabaseBackend::Sqlite,
+		reinhardt_query::query::ExplainOptions::default()
+			.format(reinhardt_query::query::ExplainFormat::Json),
+		"Database error: EXPLAIN FORMAT JSON is not supported by the SQLite backend"
+	)]
+	#[tokio::test]
+	async fn explain_rejects_unsupported_capability_before_executor_call(
+		#[case] backend: DatabaseBackend,
+		#[case] options: reinhardt_query::query::ExplainOptions,
+		#[case] expected_message: &str,
+	) {
+		let queryset = QuerySet::<TestUser>::new();
+		let mut executor = ExplainRecordingExecutor::new(backend, Vec::new());
+
+		let error = queryset
+			.explain_with_db(&mut executor, options)
+			.await
+			.expect_err("unsupported EXPLAIN capability should fail");
+
+		assert_eq!(
+			error.database_kind(),
+			Some(reinhardt_core::exception::DatabaseErrorKind::Unsupported)
+		);
+		assert_eq!(error.to_string(), expected_message);
+		assert!(executor.calls.is_empty());
+	}
+
+	#[rstest]
+	#[tokio::test]
+	async fn mysql_explain_rejects_subquery_before_executor_call() {
+		let queryset = QuerySet::<TestUser>::new()
+			.filter_in_subquery("id", |subquery: QuerySet<TestUser>| {
+				subquery.values(&["id"])
+			})
+			.expect("subquery should compile");
+		let mut executor = ExplainRecordingExecutor::new(DatabaseBackend::MySql, Vec::new());
+
+		let error = queryset
+			.explain_with_db(&mut executor, super::ExplainOptions::default())
+			.await
+			.expect_err("MySQL subqueries must be rejected for plan-only safety");
+
+		assert_eq!(
+			error.database_kind(),
+			Some(reinhardt_core::exception::DatabaseErrorKind::Unsupported)
+		);
+		assert_eq!(
+			error.to_string(),
+			"Database error: plan-only EXPLAIN for subqueries or unchecked expressions is not supported by the MySQL backend"
+		);
+		assert!(executor.calls.is_empty());
+	}
+
+	#[rstest]
+	#[tokio::test]
+	async fn sqlite_explain_retains_tabular_plan_rows() {
+		let rows = vec![crate::orm::Row {
+			data: HashMap::from([
+				("id".to_owned(), crate::orm::QueryValue::Int(2)),
+				("parent".to_owned(), crate::orm::QueryValue::Int(0)),
+				("notused".to_owned(), crate::orm::QueryValue::Int(0)),
+				(
+					"detail".to_owned(),
+					crate::orm::QueryValue::String("SCAN test_users".to_owned()),
+				),
+			]),
+		}];
+		let mut executor = ExplainRecordingExecutor::new(DatabaseBackend::Sqlite, rows);
+
+		let output = QuerySet::<TestUser>::new()
+			.explain_with_db(&mut executor, super::ExplainOptions::default())
+			.await
+			.expect("SQLite plan should decode");
+
+		assert_eq!(executor.calls.len(), 1);
+		assert_eq!(
+			executor.calls[0].0,
+			r#"EXPLAIN QUERY PLAN SELECT * FROM "test_users""#
+		);
+		assert_eq!(
+			output.body,
+			super::ExplainBody::Rows(vec![serde_json::Value::Object(serde_json::Map::from_iter(
+				[
+					("id".to_owned(), serde_json::Value::from(2)),
+					("parent".to_owned(), serde_json::Value::from(0)),
+					("notused".to_owned(), serde_json::Value::from(0)),
+					(
+						"detail".to_owned(),
+						serde_json::Value::String("SCAN test_users".to_owned()),
+					),
+				]
+			))])
+		);
+	}
+
+	#[cfg(feature = "pgvector")]
+	#[model(app_label = "query_tests", table_name = "test_users")]
+	#[derive(Debug, Clone, Serialize, Deserialize)]
+	struct TestVectorUser {
+		#[field(primary_key = true)]
+		id: Option<i64>,
+		#[field]
+		embedding: crate::orm::Vector<3>,
+	}
+
 	#[cfg(feature = "pgvector")]
 	#[derive(Debug, Clone, Serialize, Deserialize)]
 	struct TestVectorPeer {
@@ -11999,7 +12750,12 @@ mod tests {
 			crate::orm::expressions::GeneratedModelField,
 		> {
 			// SAFETY: this test accessor names TestCorpusFile's persisted `email` field.
-			unsafe { crate::orm::expressions::FieldRef::from_model_field("email") }
+			unsafe {
+				crate::orm::expressions::FieldRef::from_generated_model_field_with_names(
+					"email",
+					"email_addr",
+				)
+			}
 		}
 	}
 
@@ -12982,6 +13738,26 @@ mod tests {
 		assert_eq!(sql.matches(r#"1 AS "relation_marker""#).count(), 1);
 	}
 
+	#[rstest]
+	fn select_related_uses_structural_annotations_for_mysql() {
+		use crate::orm::annotation::{Annotation, AnnotationValue};
+		use crate::orm::expressions::F;
+		use reinhardt_query::prelude::MySqlQueryBuilder;
+
+		let statement = QuerySet::<TestUser>::new()
+			.select_related(&["profile"])
+			.annotate(Annotation::field(
+				"user_id",
+				AnnotationValue::Field(F::new("id")),
+			))
+			.select_related_query()
+			.expect("select-related query should compile");
+		let sql = statement.to_string(MySqlQueryBuilder);
+
+		assert!(sql.contains("`test_users`.`id` AS `user_id`"));
+		assert!(!sql.contains("\"test_users\".\"id\""));
+	}
+
 	#[test]
 	fn test_string_relation_loaders_accept_vec_references() {
 		let fields = vec!["corpus_file"];
@@ -13721,7 +14497,7 @@ mod tests {
 		assert!(sql.contains(r#"COUNT("test_users"."id") AS "user_count""#));
 	}
 
-	#[test]
+	#[rstest]
 	fn test_relation_filter_keeps_count_wildcard_unqualified() {
 		let related_filter =
 			crate::orm::relations::RelationPath::<TestUser, TestCorpusFile>::from_descriptor::<
@@ -13740,6 +14516,50 @@ mod tests {
 
 		assert!(sql.contains(r#"COUNT(*) AS "user_count""#));
 		assert!(!sql.contains(r#""test_users"."*""#));
+	}
+
+	#[test]
+	fn test_structural_aggregates_preserve_wildcards_and_distinct_functions() {
+		use crate::orm::aggregation::Aggregate;
+
+		let queryset = QuerySet::<TestUser>::new()
+			.aggregate(Aggregate::count(Some("*")).with_alias("user_count"))
+			.aggregate(Aggregate {
+				func: crate::orm::aggregation::AggregateFunc::Sum,
+				field: Some("id".to_string()),
+				alias: Some("distinct_id_sum".to_string()),
+				distinct: true,
+			});
+
+		let sql = queryset
+			.build_select_statement()
+			.expect("query statement should build")
+			.to_string(reinhardt_query::prelude::PostgresQueryBuilder);
+
+		assert!(sql.contains(r#"COUNT(*) AS "user_count""#));
+		assert!(sql.contains(r#"SUM(DISTINCT "id") AS "distinct_id_sum""#));
+		assert!(!sql.contains(r#""test_users"."*""#));
+		assert!(!sql.contains(r#"COUNT(DISTINCT "id") AS "distinct_id_sum""#));
+	}
+
+	#[rstest]
+	fn test_manual_join_qualifies_root_field_annotation() {
+		use crate::orm::annotation::{Annotation, AnnotationValue};
+		use crate::orm::expressions::F;
+
+		let queryset = QuerySet::<TestUser>::new()
+			.inner_join::<TestCorpusFile>("id", "id")
+			.annotate(Annotation::field(
+				"user_id",
+				AnnotationValue::Field(F::new("id")),
+			));
+
+		let sql = queryset
+			.build_select_statement()
+			.expect("query statement should build")
+			.to_string(reinhardt_query::prelude::PostgresQueryBuilder);
+
+		assert!(sql.contains(r#""test_users"."id" AS "user_id""#));
 	}
 
 	#[test]

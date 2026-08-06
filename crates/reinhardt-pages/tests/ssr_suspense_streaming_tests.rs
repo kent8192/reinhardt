@@ -6,13 +6,16 @@ use reinhardt_pages::component::suspense::SuspenseBoundary;
 use reinhardt_pages::component::{Component, ControlBinding, IntoPage, Page, PageElement};
 use reinhardt_pages::deps;
 use reinhardt_pages::reactive::{
-	ReactiveScope, ResourceState, Signal, use_head, use_id, use_resource, use_resource_with_key,
+	QueryFamily, QueryOptions, QueryStatus, ReactiveScope, ResourceState, Signal, queries,
+	use_head, use_id, use_query, use_resource, use_resource_with_key,
 };
 use reinhardt_pages::ssr::{SsrChunk, SsrOptions, SsrRenderer, SsrStream};
 use rstest::rstest;
-use std::cell::Cell;
+use std::cell::{Cell, RefCell};
 use std::rc::Rc;
+use std::sync::Arc;
 use std::time::Duration;
+use tokio::sync::{Barrier, oneshot};
 
 fn suspense_resource_view() -> Page {
 	Page::reactive(|| {
@@ -59,6 +62,76 @@ fn delayed_suspense_resource_view(delay: Duration, value: &'static str) -> Page 
 				resource_to_page(content_resource.get(), "em", "loading", |value| {
 					PageElement::new("strong").child(value).into_page()
 				})
+			})
+			.into_page()
+	})
+}
+
+fn late_stream_query_view(
+	value: &'static str,
+	gate: Rc<RefCell<Option<oneshot::Receiver<()>>>>,
+	query_barrier: Arc<Barrier>,
+	fetch_count: Rc<Cell<usize>>,
+) -> Page {
+	Page::reactive(move || {
+		let gate_for_fetch = Rc::clone(&gate);
+		let gate_resource = use_resource_with_key(
+			format!("tests::stream-gate::{value}"),
+			move || {
+				let receiver = gate_for_fetch
+					.borrow_mut()
+					.take()
+					.expect("the stream gate fetcher must start exactly once");
+				async move {
+					receiver
+						.await
+						.expect("the stream gate sender must remain open");
+					Ok::<_, String>(())
+				}
+			},
+			deps![],
+		);
+		let gate_for_content = gate_resource;
+		let query_barrier = Arc::clone(&query_barrier);
+		let fetch_count = Rc::clone(&fetch_count);
+
+		SuspenseBoundary::new()
+			.fallback(|| PageElement::new("span").child("stream-gated").into_page())
+			.track(gate_resource)
+			.content(move || match gate_for_content.get() {
+				ResourceState::Success(()) => {
+					let _request_client = queries();
+					let query_barrier = Arc::clone(&query_barrier);
+					let fetch_count = Rc::clone(&fetch_count);
+					let query =
+						use_query(
+							QueryFamily::<(), String, String>::new("tests::late-stream-query")
+								.query((), move || {
+									let query_barrier = Arc::clone(&query_barrier);
+									let fetch_count = Rc::clone(&fetch_count);
+									async move {
+										fetch_count.set(fetch_count.get() + 1);
+										query_barrier.wait().await;
+										Ok::<_, String>(value.to_string())
+									}
+								}),
+							QueryOptions::default(),
+						);
+
+					match query.snapshot().status {
+						QueryStatus::Idle | QueryStatus::Pending => PageElement::new("em")
+							.child("late-query-loading")
+							.into_page(),
+						QueryStatus::Success => PageElement::new("strong")
+							.child(query.data().expect("successful late query data"))
+							.into_page(),
+						QueryStatus::Error => PageElement::new("em")
+							.child(query.error().expect("failed late query error"))
+							.into_page(),
+					}
+				}
+				ResourceState::Loading => PageElement::new("em").child("gate-loading").into_page(),
+				ResourceState::Error(error) => PageElement::new("em").child(error).into_page(),
 			})
 			.into_page()
 	})
@@ -1150,6 +1223,92 @@ async fn suspense_stream_returns_shell_before_resource_resolves() {
 
 	assert!(replacement.contains(r#"data-rh-suspense-chunk="rh-suspense-0""#));
 	assert!(replacement.contains("resolved-later"));
+}
+
+#[tokio::test]
+async fn concurrent_streams_scope_queries_created_after_suspense_resumes() {
+	let (first_gate_sender, first_gate_receiver) = oneshot::channel();
+	let (second_gate_sender, second_gate_receiver) = oneshot::channel();
+	let query_barrier = Arc::new(Barrier::new(2));
+	let first_fetch_count = Rc::new(Cell::new(0));
+	let second_fetch_count = Rc::new(Cell::new(0));
+	let isolation_options = SsrOptions::new().resource_timeout(Duration::from_secs(30));
+	let mut first_renderer = SsrRenderer::with_options(isolation_options.clone());
+	let mut second_renderer = SsrRenderer::with_options(isolation_options);
+	let mut first_stream = first_renderer
+		.render_page_with_view_head(late_stream_query_view(
+			"first-late-query",
+			Rc::new(RefCell::new(Some(first_gate_receiver))),
+			Arc::clone(&query_barrier),
+			Rc::clone(&first_fetch_count),
+		))
+		.await;
+	let mut second_stream = second_renderer
+		.render_page_with_view_head(late_stream_query_view(
+			"second-late-query",
+			Rc::new(RefCell::new(Some(second_gate_receiver))),
+			query_barrier,
+			Rc::clone(&second_fetch_count),
+		))
+		.await;
+
+	let first_shell = first_stream
+		.next()
+		.await
+		.expect("first stream shell")
+		.into_string();
+	let second_shell = second_stream
+		.next()
+		.await
+		.expect("second stream shell")
+		.into_string();
+	assert!(first_shell.contains("stream-gated"));
+	assert!(second_shell.contains("stream-gated"));
+	assert_eq!(first_fetch_count.get(), 0);
+	assert_eq!(second_fetch_count.get(), 0);
+
+	first_gate_sender
+		.send(())
+		.expect("first stream gate receiver");
+	second_gate_sender
+		.send(())
+		.expect("second stream gate receiver");
+	let (first_replacement, second_replacement) =
+		tokio::time::timeout(Duration::from_secs(5), async {
+			tokio::join!(first_stream.next(), second_stream.next())
+		})
+		.await
+		.expect("resumed streaming queries must both reach the request-isolation barrier");
+	let first_replacement = first_replacement
+		.expect("first stream replacement")
+		.into_string();
+	let second_replacement = second_replacement
+		.expect("second stream replacement")
+		.into_string();
+
+	assert!(first_replacement.contains("first-late-query"));
+	assert!(!first_replacement.contains("second-late-query"));
+	assert!(second_replacement.contains("second-late-query"));
+	assert!(!second_replacement.contains("first-late-query"));
+	assert_eq!(first_fetch_count.get(), 1);
+	assert_eq!(second_fetch_count.get(), 1);
+
+	let first_closing = first_stream
+		.next()
+		.await
+		.expect("first stream closing chunk")
+		.into_string();
+	let second_closing = second_stream
+		.next()
+		.await
+		.expect("second stream closing chunk")
+		.into_string();
+	assert!(first_closing.contains("first-late-query"));
+	assert!(!first_closing.contains("second-late-query"));
+	assert!(second_closing.contains("second-late-query"));
+	assert!(!second_closing.contains("first-late-query"));
+	assert!(first_stream.next().await.is_none());
+	assert!(second_stream.next().await.is_none());
 }
 
 #[tokio::test]

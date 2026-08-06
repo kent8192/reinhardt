@@ -5,6 +5,11 @@ use std::any::Any;
 use std::cell::RefCell;
 use std::collections::HashMap;
 
+use crate::reactive::query::QueryDefaults;
+#[cfg(wasm)]
+use crate::reactive::query::{
+	QueryClient, provide_query_client, with_query_client, with_query_client_async,
+};
 use crate::reactive::{Context, ContextGuard};
 
 #[cfg(wasm)]
@@ -338,6 +343,8 @@ fn common_loader_prefix_len(previous: &[Option<String>], next: &[Option<String>]
 pub struct ClientLauncher {
 	#[cfg_attr(not(wasm), allow(dead_code))]
 	pub(super) root_selector: &'static str,
+	#[cfg_attr(not(wasm), allow(dead_code))]
+	pub(super) query_defaults: QueryDefaults,
 	/// Optional `ClientRouter` initialiser registered via
 	/// [`ClientLauncher::router_client`]. Mutually exclusive with
 	/// `launch()` rejects the launcher if neither source is set.
@@ -598,6 +605,7 @@ impl ClientLauncher {
 	pub fn new(root_selector: &'static str) -> Self {
 		Self {
 			root_selector,
+			query_defaults: QueryDefaults::default(),
 			client_router_init: None,
 			intercept_links: true,
 			before_launch_hooks: Vec::new(),
@@ -606,6 +614,12 @@ impl ClientLauncher {
 			path_subscriptions: Vec::new(),
 			use_inventory: false,
 		}
+	}
+
+	/// Configures the defaults used by the application query client.
+	pub fn query_defaults(mut self, defaults: QueryDefaults) -> Self {
+		self.query_defaults = defaults;
+		self
 	}
 
 	/// Provide a root context for the lifetime of the launched application.
@@ -927,6 +941,7 @@ impl ClientLauncher {
 		document: &web_sys::Document,
 		root_el: &web_sys::Element,
 		scope: &std::rc::Rc<reinhardt_core::reactive::ReactiveScope>,
+		query_client: &QueryClient,
 	) {
 		let ctx = LaunchCtx {
 			window,
@@ -953,20 +968,23 @@ impl ClientLauncher {
 			let last_params_for_listener = last_params.clone();
 			let document_for_listener = document.clone();
 			let scope_for_listener = std::rc::Rc::clone(scope);
+			let query_client_for_listener = query_client.clone();
 			let listener_subscription = with_spa_router(|r| {
 				r.on_navigate_dyn(Box::new(move |path, _params_from_router| {
-					if let Some(params) = next_path_subscription_match(
-						&pattern_for_listener,
-						path,
-						&last_params_for_listener,
-					) {
-						let ctx = PathCtx {
-							document: &document_for_listener,
+					with_query_client(&query_client_for_listener, || {
+						if let Some(params) = next_path_subscription_match(
+							&pattern_for_listener,
 							path,
-							params: &params,
-						};
-						scope_for_listener.enter(|| callback_for_listener(&ctx));
-					}
+							&last_params_for_listener,
+						) {
+							let ctx = PathCtx {
+								document: &document_for_listener,
+								path,
+								params: &params,
+							};
+							scope_for_listener.enter(|| callback_for_listener(&ctx));
+						}
+					});
 				}))
 			});
 			std::mem::forget(listener_subscription);
@@ -1056,15 +1074,27 @@ impl ClientLauncher {
 		#[cfg(feature = "console_error_panic_hook")]
 		console_error_panic_hook::set_once();
 
+		let query_client = QueryClient::new(self.query_defaults.clone());
 		crate::reactive::runtime::set_scheduler(|task| {
-			wasm_bindgen_futures::spawn_local(async move { task() });
+			if let Some(client) = crate::reactive::query::current_query_client() {
+				wasm_bindgen_futures::spawn_local(with_query_client_async(client, async move {
+					task()
+				}));
+			} else {
+				wasm_bindgen_futures::spawn_local(async move { task() });
+			}
 		});
 
-		let root_context_guards = self
-			.root_context_providers
-			.drain(..)
-			.map(|provider| provider())
-			.collect::<Vec<_>>();
+		let query_client_activation = provide_query_client(query_client.clone());
+		let mut root_context_guards: Vec<Box<dyn Any>> = vec![
+			Box::new(query_client.clone()),
+			Box::new(query_client_activation),
+		];
+		root_context_guards.extend(
+			self.root_context_providers
+				.drain(..)
+				.map(|provider| provider()),
+		);
 
 		// Step 3: drain before_launch callbacks before any router or DOM work.
 		for hook in self.before_launch_hooks.drain(..) {
@@ -1155,25 +1185,27 @@ impl ClientLauncher {
 					))
 				})?;
 			coordinator.initialize_committed_index(initial_state.entry_index().unwrap_or(0));
-			let initial_store_hydrated =
-				coordinator
-					.hydrate_initial_store(&initial_path)
-					.map_err(|error| {
-						wasm_bindgen::JsValue::from_str(&format!(
-							"initial route-loader hydration failed: {error}"
-						))
-					})?;
+			let initial_store_hydrated = coordinator
+				.hydrate_initial_store(&query_client, &initial_path)
+				.map_err(|error| {
+					wasm_bindgen::JsValue::from_str(&format!(
+						"initial route-loader hydration failed: {error}"
+					))
+				})?;
 			if !initial_store_hydrated {
 				initial_preparation_path = Some(initial_path.clone());
 			}
 			let pop_coordinator = std::rc::Rc::clone(&coordinator);
+			let pop_query_client = query_client.clone();
 			let pop_subscription = listen_pop_requests(move |request| {
-				if pop_coordinator.consume_restoration_pop() {
-					return;
-				}
-				let target_index = request.state.entry_index();
-				let _ = pop_coordinator
-					.navigate(request.path, super::NavigationIntent::Pop { target_index });
+				with_query_client(&pop_query_client, || {
+					if pop_coordinator.consume_restoration_pop() {
+						return;
+					}
+					let target_index = request.state.entry_index();
+					let _ = pop_coordinator
+						.navigate(request.path, super::NavigationIntent::Pop { target_index });
+				});
 			})?;
 			store_navigation_coordinator(coordinator);
 			store_popstate_subscription(pop_subscription);
@@ -1239,31 +1271,32 @@ impl ClientLauncher {
 		let document_for_render = document.clone();
 		let scope_for_render = std::rc::Rc::clone(&scope);
 		let document_head_manager_for_render = document_head_manager.clone();
+		let query_client_for_render = query_client.clone();
 		let render_subscription = with_spa_router(|r| {
-			r.on_navigate_dyn(Box::new(
-				move |_path, _params| match Self::render_and_mount(
-					&render_root,
-					&document_head_manager_for_render,
-				) {
-					Ok(()) => {
-						if let Some((after_launch_hooks, path_subscriptions)) =
-							lifecycle_for_render.borrow_mut().take()
-						{
-							Self::activate_post_mount_lifecycle(
-								after_launch_hooks,
-								path_subscriptions,
-								&window_for_render,
-								&document_for_render,
-								&render_root,
-								&scope_for_render,
-							);
+			r.on_navigate_dyn(Box::new(move |_path, _params| {
+				with_query_client(&query_client_for_render, || {
+					match Self::render_and_mount(&render_root, &document_head_manager_for_render) {
+						Ok(()) => {
+							if let Some((after_launch_hooks, path_subscriptions)) =
+								lifecycle_for_render.borrow_mut().take()
+							{
+								Self::activate_post_mount_lifecycle(
+									after_launch_hooks,
+									path_subscriptions,
+									&window_for_render,
+									&document_for_render,
+									&render_root,
+									&scope_for_render,
+									&query_client_for_render,
+								);
+							}
+						}
+						Err(error) => {
+							web_sys::console::error_1(&format!("re-render failed: {error}").into());
 						}
 					}
-					Err(error) => {
-						web_sys::console::error_1(&format!("re-render failed: {error}").into());
-					}
-				},
-			))
+				});
+			}))
 		});
 		std::mem::forget(render_subscription);
 
@@ -1293,6 +1326,7 @@ impl ClientLauncher {
 				&document,
 				&root_el,
 				&scope,
+				&query_client,
 			);
 		}
 
@@ -1328,7 +1362,19 @@ mod tests {
 		let launcher = ClientLauncher::new("#root");
 
 		assert_eq!(launcher.root_selector, "#root");
+		assert_eq!(launcher.query_defaults, QueryDefaults::default());
 		assert!(launcher.client_router_init.is_none());
+	}
+
+	#[test]
+	fn query_defaults_replaces_the_application_client_defaults() {
+		let defaults = QueryDefaults::new()
+			.stale_time(std::time::Duration::from_secs(5))
+			.gc_time(std::time::Duration::from_secs(60));
+
+		let launcher = ClientLauncher::new("#root").query_defaults(defaults.clone());
+
+		assert_eq!(launcher.query_defaults, defaults);
 	}
 
 	// (Refs #4234) Mirrors `test_client_launcher_router_stores_init_fn`

@@ -4,8 +4,8 @@ error[E0308]: mismatched types
 16 |     fn lookup_field() -> UniqueFieldRef<Article, String> {
    |                          ------------------------------- expected `UniqueFieldRef<Article, std::string::String>` because of return type
 17 |         // SAFETY: The handwritten test model declares `id` as its unique primary key.
-18 |         unsafe { UniqueFieldRef::<Article, i64>::from_model_field("id") }
-   |                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ expected `UniqueFieldRef<Article, String>`, found `UniqueFieldRef<Article, i64>`
+18 |         unsafe { UniqueFieldRef::<Article, i64>::from_model_field_with_names("id", "id") }
+   |                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ expected `UniqueFieldRef<Article, String>`, found `UniqueFieldRef<Article, i64>`
    |
    = note: expected struct `UniqueFieldRef<Article, std::string::String>`
               found struct `UniqueFieldRef<Article, i64>`

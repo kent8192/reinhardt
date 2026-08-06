@@ -59,7 +59,7 @@ async fn test_introspect_empty_database(
 /// **Test Intent**: Verify code generator handles empty schema gracefully
 ///
 /// **Expected Behavior**:
-/// - Returns empty output
+/// - Generates only the empty models module entry point
 /// - No panics or errors
 #[rstest]
 #[tokio::test]
@@ -83,11 +83,20 @@ async fn test_generate_from_empty_database(
 		.generate(&schema)
 		.expect("Should handle empty schema");
 
-	// Should generate no files
-	assert!(
-		output.files.is_empty(),
-		"Empty schema should produce no files"
+	assert_eq!(
+		output.files.len(),
+		1,
+		"Empty schema should produce one module entry point"
 	);
+	let module_file = output
+		.files
+		.first()
+		.expect("empty schema module entry point");
+	assert_eq!(
+		module_file.path.file_name().and_then(|name| name.to_str()),
+		Some("models.rs")
+	);
+	assert_eq!(module_file.content.contains("pub mod "), false);
 }
 
 // ============================================================================
@@ -166,7 +175,7 @@ async fn test_reserved_keyword_column(
 /// **Test Intent**: Verify graceful handling when filtering removes all tables
 ///
 /// **Expected Behavior**:
-/// - Returns empty output
+/// - Generates only the empty models module entry point
 /// - No errors
 #[rstest]
 #[tokio::test]
@@ -193,11 +202,20 @@ async fn test_all_tables_filtered_out(
 		.generate(&schema)
 		.expect("Should handle filtered tables");
 
-	// Should generate no files when all tables filtered
-	assert!(
-		output.files.is_empty(),
-		"Should produce no files when all tables filtered"
+	assert_eq!(
+		output.files.len(),
+		1,
+		"Fully filtered schemas should produce one module entry point"
 	);
+	let module_file = output
+		.files
+		.first()
+		.expect("filtered schema module entry point");
+	assert_eq!(
+		module_file.path.file_name().and_then(|name| name.to_str()),
+		Some("models.rs")
+	);
+	assert_eq!(module_file.content.contains("pub mod "), false);
 }
 
 // ============================================================================

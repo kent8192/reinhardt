@@ -72,11 +72,35 @@ fn assert_restful_runtime_dependencies(cargo_toml: &str) {
 	);
 }
 
-fn assert_restful_common_settings(root: &Path) {
+fn assert_generated_common_and_migration_settings(root: &Path) {
 	let settings = std::fs::read_to_string(root.join("src/config/settings.rs")).unwrap();
 	assert!(
-		settings.contains("#[settings(core: CoreSettings | contacts: ContactSettings)]"),
-		"generated REST settings must satisfy HasCommonSettings:\n{settings}"
+		settings.contains(
+			"#[settings(core: CoreSettings | contacts: ContactSettings | migrations: MigrationSettings)]"
+		),
+		"generated settings must satisfy common and migration settings bounds:\n{settings}"
+	);
+}
+
+fn assert_generated_settings_use_manifest_dir(root: &Path) {
+	let settings = std::fs::read_to_string(root.join("src/config/settings.rs")).unwrap();
+	let compact_settings = settings.split_whitespace().collect::<String>();
+	assert!(
+		settings.contains("let base_dir = std::path::PathBuf::from(env!(\"CARGO_MANIFEST_DIR\"));"),
+		"generated settings must resolve the managed project directory independently of caller cwd:\n{settings}"
+	);
+	assert!(
+		!settings.contains("env::current_dir()"),
+		"generated settings must not derive the project directory from caller cwd:\n{settings}"
+	);
+	assert!(
+		compact_settings
+			.contains(".with_value(\"core\",serde_json::json!({\"base_dir\":base_dir}))"),
+		"generated settings must expose the managed project directory through core.base_dir:\n{settings}"
+	);
+	assert!(
+		compact_settings.contains(".with_value(\"migrations\",serde_json::json!({}))"),
+		"generated settings must provide a default migrations fragment:\n{settings}"
 	);
 }
 
@@ -182,10 +206,10 @@ fn assert_generated_shell_wiring(root: &Path, crate_name: &str) {
 	);
 	for required in [
 		"#[cfg(feature = \"commands-shell\")]",
-		"execute_from_command_line_with_settings_and_shell(",
+		"execute_from_command_line_with_migration_settings_and_shell(",
 		"get_shell_config()",
 		"#[cfg(not(feature = \"commands-shell\"))]",
-		"execute_from_command_line_with_settings(get_settings()).await",
+		"execute_from_command_line_with_migration_settings(get_settings()).await",
 		"#[cfg(target_arch = \"wasm32\")]\nfn main() {}",
 	] {
 		assert!(
@@ -226,7 +250,8 @@ async fn startproject_restful_from_embedded_only() {
 	);
 	let cargo_toml = std::fs::read_to_string(generated.join("Cargo.toml")).unwrap();
 	assert_restful_runtime_dependencies(&cargo_toml);
-	assert_restful_common_settings(&generated);
+	assert_generated_common_and_migration_settings(&generated);
+	assert_generated_settings_use_manifest_dir(&generated);
 	assert_generated_shell_wiring(&generated, "sample_proj");
 	assert_manifest_parses(&generated.join("Cargo.toml"));
 }
@@ -392,6 +417,7 @@ async fn startproject_pages_from_embedded_only() {
 		"generated pages project must not create a root shared module"
 	);
 	assert_generated_shell_wiring(&generated, "sample_pages_proj");
+	assert_generated_common_and_migration_settings(&generated);
 	let document = cargo_toml
 		.parse::<toml_edit::DocumentMut>()
 		.expect("generated Cargo.toml must parse as TOML");
@@ -416,6 +442,7 @@ async fn startproject_pages_from_embedded_only() {
 			.is_inline_table(),
 		"Pages projects must declare the shell dependency only for native targets"
 	);
+	assert_generated_settings_use_manifest_dir(&generated);
 	assert_generated_rust_sources_do_not_use_tab_indents(&generated);
 	assert_manifest_parses(&generated.join("Cargo.toml"));
 }

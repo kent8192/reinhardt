@@ -1,6 +1,6 @@
 //! Native async scheduler for component tests.
 
-use std::cell::{Cell, RefCell};
+use std::cell::RefCell;
 use std::collections::VecDeque;
 use std::future::Future;
 use std::pin::Pin;
@@ -13,43 +13,6 @@ use crate::platform;
 type BoxedTask = Pin<Box<dyn Future<Output = ()> + 'static>>;
 const SETTLE_BACKOFF_AFTER_YIELDS: usize = 4;
 const SETTLE_BACKOFF: Duration = Duration::from_millis(1);
-
-thread_local! {
-	static ACTIVE_SCOPE_ID: Cell<Option<u64>> = const { Cell::new(None) };
-	static NEXT_SCOPE_ID: Cell<u64> = const { Cell::new(0) };
-}
-
-struct SchedulerScopeActivation {
-	previous_scope_id: Option<u64>,
-}
-
-impl Drop for SchedulerScopeActivation {
-	fn drop(&mut self) {
-		ACTIVE_SCOPE_ID.with(|active| active.set(self.previous_scope_id));
-	}
-}
-
-fn next_scope_id() -> u64 {
-	NEXT_SCOPE_ID.with(|next| {
-		let scope_id = next.get();
-		next.set(
-			scope_id
-				.checked_add(1)
-				.expect("component test scope IDs are exhausted"),
-		);
-		scope_id
-	})
-}
-
-fn activate_scope(scope_id: u64) -> SchedulerScopeActivation {
-	let previous_scope_id = ACTIVE_SCOPE_ID.with(|active| active.replace(Some(scope_id)));
-	SchedulerScopeActivation { previous_scope_id }
-}
-
-#[cfg(not(feature = "msw"))]
-pub(crate) fn active_scope_id() -> Option<u64> {
-	ACTIVE_SCOPE_ID.with(|active| active.get())
-}
 
 /// Error returned when the native component scheduler cannot settle.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -89,20 +52,15 @@ pub(crate) struct TestScheduler {
 
 pub(crate) struct SchedulerScope {
 	scheduler: Rc<RefCell<TestScheduler>>,
-	scope_id: u64,
 }
 
 impl SchedulerScope {
 	pub(crate) fn new() -> Self {
 		let scheduler = Rc::new(RefCell::new(TestScheduler::default()));
-		Self {
-			scheduler,
-			scope_id: next_scope_id(),
-		}
+		Self { scheduler }
 	}
 
 	pub(crate) fn with_current<R>(&self, f: impl FnOnce() -> R) -> R {
-		let _scope = activate_scope(self.scope_id);
 		let scheduler = Rc::clone(&self.scheduler);
 		let _guard = platform::install_task_sink(move |task| {
 			scheduler.borrow_mut().tasks.push_back(task);

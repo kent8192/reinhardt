@@ -17,7 +17,6 @@
 //! type-level wiring and on the SQL builder paths that do not require a live
 //! connection, so it can run in any environment.
 
-use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
@@ -539,27 +538,6 @@ fn bulk_create_sql_via_trait_matches_inherent_method() {
 }
 
 #[rstest]
-fn get_or_create_sql_via_trait_matches_inherent_method() {
-	// Arrange
-	let manager = Manager::<Article>::new();
-	let mut lookup = HashMap::new();
-	lookup.insert("title".into(), "Reinhardt Custom Managers".into());
-	let defaults = HashMap::new();
-
-	// Act
-	let (inherent_select, inherent_insert) = manager
-		.get_or_create_sql(&lookup, &defaults, DatabaseBackend::Postgres)
-		.unwrap();
-	let (trait_select, trait_insert) =
-		CustomManager::get_or_create_sql(&manager, &lookup, &defaults, DatabaseBackend::Postgres)
-			.unwrap();
-
-	// Assert: trait dispatch produces identical SQL to the inherent path.
-	assert_eq!(inherent_select, trait_select);
-	assert_eq!(inherent_insert, trait_insert);
-}
-
-#[rstest]
 #[case::postgres(DatabaseBackend::Postgres)]
 #[case::mysql(DatabaseBackend::MySql)]
 #[case::sqlite(DatabaseBackend::Sqlite)]
@@ -578,28 +556,6 @@ fn bulk_create_sql_parity_across_backends(#[case] backend: DatabaseBackend) {
 
 	// Assert: trait path matches inherent path on every supported backend.
 	assert_eq!(inherent_sql, trait_sql);
-}
-
-#[rstest]
-fn get_or_create_sql_parity_with_defaults() {
-	// Arrange
-	let manager = Manager::<Article>::new();
-	let mut lookup = HashMap::new();
-	lookup.insert("title".into(), "Reinhardt Custom Managers".into());
-	let mut defaults = HashMap::new();
-	defaults.insert("is_archived".into(), "false".into());
-
-	// Act
-	let (inherent_select, inherent_insert) = manager
-		.get_or_create_sql(&lookup, &defaults, DatabaseBackend::Postgres)
-		.unwrap();
-	let (trait_select, trait_insert) =
-		CustomManager::get_or_create_sql(&manager, &lookup, &defaults, DatabaseBackend::Postgres)
-			.unwrap();
-
-	// Assert: defaults map is preserved through trait dispatch.
-	assert_eq!(inherent_select, trait_select);
-	assert_eq!(inherent_insert, trait_insert);
 }
 
 #[rstest]

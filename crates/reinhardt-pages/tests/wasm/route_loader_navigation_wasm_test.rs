@@ -10,9 +10,14 @@
 use reinhardt_pages::app::ClientLauncher;
 use reinhardt_pages::component::{Head, IntoPage, Page, PageElement};
 use reinhardt_pages::reactive::hooks::RouterHandle;
-use reinhardt_pages::{Loader, Outlet, Query, component, layout, loader};
+use reinhardt_pages::router::request::RouteContext;
+use reinhardt_pages::{
+	Loader, Outlet, Query, QueryFamily, QueryOptions, RouteLoader, RouteLoaderError, component,
+	layout, loader, loader_cache_id, use_query,
+};
 use reinhardt_urls::routers::{ClientRouter, RouteMetadata};
 use std::cell::Cell;
+use std::collections::HashMap;
 use wasm_bindgen::JsValue;
 use wasm_bindgen_test::*;
 
@@ -39,6 +44,23 @@ async fn loaded_loader() -> Result<String, String> {
 
 #[component("/loaded", name = "loader-navigation-loaded", loader = loaded_loader)]
 fn loaded_page(Loader(data): Loader<String>) -> Page {
+	let context = RouteContext::new("/loaded".to_owned(), HashMap::new(), String::new());
+	let cache_id = loader_cache_id(
+		<loaded_loader::marker as RouteLoader>::ID,
+		&context,
+		loaded_loader::INPUTS,
+	)
+	.expect("loaded loader cache ID");
+	let query = use_query(
+		QueryFamily::<String, String, RouteLoaderError>::new(
+			<loaded_loader::marker as RouteLoader>::ID.as_str(),
+		)
+		.query_with_cancellation(cache_id, |_cancellation| async {
+			loaded_loader().await.map_err(RouteLoaderError::new)
+		}),
+		QueryOptions::default(),
+	);
+	assert_eq!(query.data().as_deref(), Some(data.as_str()));
 	PageElement::new("div")
 		.attr("id", "route-loaded")
 		.child(data)

@@ -97,19 +97,19 @@ impl<S: MigrationSource> MigrationStateLoader<S> {
 				.iter()
 				.find(|m| m.app_label == key.app_label && m.name == key.name)
 			{
-				eprintln!(
-					"[DEBUG] Applying migration: {}/{}",
-					migration.app_label, migration.name
+				tracing::debug!(
+					app_label = %migration.app_label,
+					migration_name = %migration.name,
+					operation_count = migration.operations.len(),
+					"Applying migration operations to project state"
 				);
-				eprintln!("[DEBUG]   Operations count: {}", migration.operations.len());
 				state.apply_migration_operations(&migration.operations, &migration.app_label);
-				eprintln!(
-					"[DEBUG]   State after applying - models count: {}",
-					state.models.len()
+				tracing::debug!(
+					app_label = %migration.app_label,
+					migration_name = %migration.name,
+					model_count = state.models.len(),
+					"Applied migration operations to project state"
 				);
-				for (app, model_name) in state.models.keys() {
-					eprintln!("[DEBUG]     - {}/{}", app, model_name);
-				}
 			}
 		}
 
@@ -295,8 +295,8 @@ pub async fn build_state_from_files<S: MigrationSource>(source: &S) -> Result<Pr
 		graph.add_migration_with_replaces(key, dependencies, replaces);
 	}
 
-	// 3. Get topologically sorted order
-	let sorted_keys = graph.topological_sort()?;
+	// 3. Select one valid replacement history before ordering migrations.
+	let sorted_keys = graph.resolve_execution_order_with_replaces()?;
 
 	// 4. Build ProjectState by replaying all migrations in order
 	let mut state = ProjectState::default();

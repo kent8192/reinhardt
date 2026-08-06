@@ -4675,7 +4675,7 @@ name = "db.sqlite3"
 	}
 
 	#[tokio::test]
-	#[serial_test::serial(env_change)]
+	#[serial_test::serial(builtin_env)]
 	#[cfg(feature = "migrations")]
 	async fn test_makemigrations_command() {
 		use reinhardt_db::migrations::model_registry::{
@@ -4688,8 +4688,8 @@ name = "db.sqlite3"
 		let project_dir = TempDir::new().unwrap();
 		std::fs::create_dir_all(project_dir.path().join("src/bin")).unwrap();
 		std::fs::write(project_dir.path().join("src/bin/manage.rs"), "fn main() {}").unwrap();
-		let original_dir = std::env::current_dir().unwrap();
-		std::env::set_current_dir(project_dir.path()).unwrap();
+		let _database_url = EnvVarGuard::capture("DATABASE_URL");
+		let _cwd = CurrentDirGuard::enter(project_dir.path());
 
 		// Create a temporary directory for migrations
 		let temp_dir = TempDir::new().unwrap();
@@ -4709,7 +4709,7 @@ name = "db.sqlite3"
 		);
 		registry.register_model(metadata);
 
-		// Set up test environment
+		// SAFETY: env mutation in this test is protected by #[serial(builtin_env)].
 		unsafe { std::env::set_var("DATABASE_URL", "sqlite::memory:") };
 
 		let cmd = MakeMigrationsCommand;
@@ -4722,15 +4722,13 @@ name = "db.sqlite3"
 		ctx.set_option("empty".to_string(), "true".to_string());
 
 		let result = cmd.execute(&ctx).await;
-		unsafe { std::env::remove_var("DATABASE_URL") };
-		std::env::set_current_dir(&original_dir).unwrap();
 
 		// Should succeed (creates an empty migration)
 		assert!(result.is_ok(), "Failed with: {:?}", result.err());
 	}
 
 	#[tokio::test]
-	#[serial_test::serial(env_change)]
+	#[serial_test::serial(builtin_env)]
 	#[cfg(feature = "migrations")]
 	async fn test_makemigrations_with_dry_run() {
 		use reinhardt_db::{
@@ -4743,8 +4741,8 @@ name = "db.sqlite3"
 		let project_dir = TempDir::new().unwrap();
 		std::fs::create_dir_all(project_dir.path().join("src/bin")).unwrap();
 		std::fs::write(project_dir.path().join("src/bin/manage.rs"), "fn main() {}").unwrap();
-		let original_dir = std::env::current_dir().unwrap();
-		std::env::set_current_dir(project_dir.path()).unwrap();
+		let _database_url = EnvVarGuard::capture("DATABASE_URL");
+		let _cwd = CurrentDirGuard::enter(project_dir.path());
 
 		// Create a temporary directory for migrations
 		let temp_dir = TempDir::new().unwrap();
@@ -4764,7 +4762,7 @@ name = "db.sqlite3"
 		);
 		registry.register_model(metadata);
 
-		// Set up test environment
+		// SAFETY: env mutation in this test is protected by #[serial(builtin_env)].
 		unsafe { std::env::set_var("DATABASE_URL", "sqlite::memory:") };
 
 		let cmd = MakeMigrationsCommand;
@@ -4778,8 +4776,6 @@ name = "db.sqlite3"
 		ctx.set_option("empty".to_string(), "true".to_string());
 
 		let result = cmd.execute(&ctx).await;
-		unsafe { std::env::remove_var("DATABASE_URL") };
-		std::env::set_current_dir(&original_dir).unwrap();
 
 		// Should succeed (dry-run mode, no actual files created)
 		assert!(result.is_ok(), "Failed with: {:?}", result.err());
@@ -5331,54 +5327,17 @@ port = 5432
 	// the real loader so that regression fails loudly.
 	//
 	// The loader reads cwd via `env::current_dir()`. Tests change cwd
-	// under `#[serial(env)]` and restore it via the drop guard.
+	// under `#[serial(builtin_env)]` and restore it via the shared drop guard.
 	#[cfg(feature = "reinhardt-db")]
 	mod interpolation_4247 {
 		use super::super::get_database_url_from_settings;
+		use super::{CurrentDirGuard, EnvVarGuard};
 		use rstest::rstest;
 		use serial_test::serial;
 		use std::env;
 		use std::io::Write;
-		use std::path::{Path, PathBuf};
+		use std::path::Path;
 		use tempfile::TempDir;
-
-		// Captures each key's value on construction and restores it (or
-		// removes it if previously unset) on drop. This prevents the
-		// guard from leaking state into ambient env vars that existed
-		// before the test ran.
-		struct EnvGuard(Vec<(&'static str, Option<std::ffi::OsString>)>);
-
-		impl EnvGuard {
-			fn new(keys: Vec<&'static str>) -> Self {
-				let captured = keys.into_iter().map(|k| (k, env::var_os(k))).collect();
-				Self(captured)
-			}
-		}
-
-		impl Drop for EnvGuard {
-			fn drop(&mut self) {
-				for (key, prev) in &self.0 {
-					// SAFETY: env mutation in tests is protected by #[serial(env)].
-					unsafe {
-						match prev {
-							Some(value) => env::set_var(key, value),
-							None => env::remove_var(key),
-						}
-					}
-				}
-			}
-		}
-
-		struct CwdGuard(PathBuf);
-
-		impl Drop for CwdGuard {
-			fn drop(&mut self) {
-				// Best-effort restore; if the original cwd vanished there is
-				// nothing the test process can do, and dropping silently is
-				// preferable to panicking from Drop.
-				let _ = env::set_current_dir(&self.0);
-			}
-		}
 
 		fn write_settings_dir(profile: &str, base_toml: &str) -> TempDir {
 			let temp = TempDir::new().expect("create temp dir");
@@ -5395,11 +5354,12 @@ port = 5432
 		}
 
 		#[rstest]
-		#[serial(env)]
+		#[serial(builtin_env)]
 		fn loader_expands_env_var_in_host() {
 			// Arrange
-			let _env = EnvGuard::new(vec!["IT4247C_DB_HOST", "REINHARDT_ENV"]);
-			// SAFETY: serial-protected.
+			let _database_host = EnvVarGuard::capture("IT4247C_DB_HOST");
+			let _reinhardt_env = EnvVarGuard::capture("REINHARDT_ENV");
+			// SAFETY: env mutation in this test is protected by #[serial(builtin_env)].
 			unsafe {
 				env::set_var("REINHARDT_ENV", "local");
 				env::set_var("IT4247C_DB_HOST", "production-db.example.com");
@@ -5416,9 +5376,7 @@ host = "${IT4247C_DB_HOST}"
 port = 5432
 "#,
 			);
-			let original_cwd = env::current_dir().expect("read cwd");
-			let _cwd = CwdGuard(original_cwd);
-			env::set_current_dir(temp.path()).expect("set cwd");
+			let _cwd = CurrentDirGuard::enter(temp.path());
 
 			// Act
 			let url = get_database_url_from_settings().expect("loader returns a URL");
@@ -5435,12 +5393,13 @@ port = 5432
 		}
 
 		#[rstest]
-		#[serial(env)]
+		#[serial(builtin_env)]
 		fn loader_uses_inline_default_when_var_unset() {
 			// Arrange — declare the var in the guard even though we never set
 			// it, so an ambient value cannot silence the inline `:-fallback`.
-			let _env = EnvGuard::new(vec!["IT4247C_DB_HOST_OPT", "REINHARDT_ENV"]);
-			// SAFETY: serial-protected.
+			let _database_host = EnvVarGuard::capture("IT4247C_DB_HOST_OPT");
+			let _reinhardt_env = EnvVarGuard::capture("REINHARDT_ENV");
+			// SAFETY: env mutation in this test is protected by #[serial(builtin_env)].
 			unsafe {
 				env::remove_var("IT4247C_DB_HOST_OPT");
 				env::set_var("REINHARDT_ENV", "local");
@@ -5457,9 +5416,7 @@ host = "${IT4247C_DB_HOST_OPT:-fallback-host}"
 port = 5432
 "#,
 			);
-			let original_cwd = env::current_dir().expect("read cwd");
-			let _cwd = CwdGuard(original_cwd);
-			env::set_current_dir(temp.path()).expect("set cwd");
+			let _cwd = CurrentDirGuard::enter(temp.path());
 
 			// Act
 			let url = get_database_url_from_settings().expect("loader returns a URL");

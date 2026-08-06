@@ -203,10 +203,10 @@ where
 			])
 			.to_owned();
 
-		let (sql, _values) = build_insert_sql(&query, self.db.backend());
+		let (sql, values) = build_insert_sql(&query, self.db.backend());
 
 		self.db
-			.execute(&sql, vec![])
+			.execute(&sql, super::execution::convert_values(values))
 			.await
 			.map_err(|e| e.to_string())?;
 
@@ -249,10 +249,10 @@ where
 			)
 			.to_owned();
 
-		let (sql, _values) = build_delete_sql(&query, self.db.backend());
+		let (sql, values) = build_delete_sql(&query, self.db.backend());
 
 		self.db
-			.execute(&sql, vec![])
+			.execute(&sql, super::execution::convert_values(values))
 			.await
 			.map_err(|e| e.to_string())?;
 
@@ -320,7 +320,10 @@ where
 		let mut query = Query::select();
 		query
 			.from(Alias::new(&self.through_table))
-			.expr(Func::count(Expr::asterisk().into_simple_expr()))
+			.expr_as(
+				Func::count(Expr::asterisk().into_simple_expr()),
+				Alias::new("count"),
+			)
 			.and_where(
 				Expr::col(Alias::new(&self.source_field))
 					.binary(BinOper::Equal, Expr::val(self.source_id.to_string())),
@@ -330,7 +333,10 @@ where
 		let (sql, values) = build_select_sql(&query, self.db.backend());
 		let params = value_samples(&values);
 		let started_at = Instant::now();
-		let query_result = self.db.query(&sql, vec![]).await;
+		let query_result = self
+			.db
+			.query(&sql, super::execution::convert_values(values))
+			.await;
 		let duration = started_at.elapsed();
 		let rows = match query_result {
 			Ok(rows) => {
@@ -414,7 +420,10 @@ where
 		let (sql, values) = build_select_sql(&query, self.db.backend());
 		let params = value_samples(&values);
 		let started_at = Instant::now();
-		let query_result = self.db.query(&sql, vec![]).await;
+		let query_result = self
+			.db
+			.query(&sql, super::execution::convert_values(values))
+			.await;
 		let duration = started_at.elapsed();
 		let rows = match query_result {
 			Ok(rows) => {
@@ -453,10 +462,10 @@ where
 			)
 			.to_owned();
 
-		let (sql, _values) = build_delete_sql(&query, self.db.backend());
+		let (sql, values) = build_delete_sql(&query, self.db.backend());
 
 		self.db
-			.execute(&sql, vec![])
+			.execute(&sql, super::execution::convert_values(values))
 			.await
 			.map_err(|e| e.to_string())?;
 
@@ -495,8 +504,8 @@ where
 					.binary(BinOper::Equal, Expr::val(self.source_id.to_string())),
 			)
 			.to_owned();
-		let (clear_sql, _) = build_delete_sql(&clear_query, backend);
-		tx.execute(&clear_sql, vec![])
+		let (clear_sql, clear_values) = build_delete_sql(&clear_query, backend);
+		tx.execute(&clear_sql, super::execution::convert_values(clear_values))
 			.await
 			.map_err(|e| e.to_string())?;
 
@@ -518,8 +527,8 @@ where
 				])
 				.to_owned();
 
-			let (insert_sql, _) = build_insert_sql(&insert_query, backend);
-			tx.execute(&insert_sql, vec![])
+			let (insert_sql, insert_values) = build_insert_sql(&insert_query, backend);
+			tx.execute(&insert_sql, super::execution::convert_values(insert_values))
 				.await
 				.map_err(|e| e.to_string())?;
 		}
@@ -645,7 +654,9 @@ where
 		let (sql, values) = build_select_sql(&query, db.backend());
 		let params = value_samples(&values);
 		let started_at = Instant::now();
-		let query_result = db.query(&sql, vec![]).await;
+		let query_result = db
+			.query(&sql, super::execution::convert_values(values))
+			.await;
 		let duration = started_at.elapsed();
 		let rows = match query_result {
 			Ok(rows) => {

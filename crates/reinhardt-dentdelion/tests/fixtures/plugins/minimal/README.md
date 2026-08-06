@@ -25,45 +25,29 @@ The plugin implements the `reinhardt:dentdelion/plugin` interface with minimal f
   - `on_disable()`: No-op, returns Ok
   - `on_unload()`: No-op, returns Ok
 
-## Building
+## Test Contract
 
-```bash
-cd crates/reinhardt-dentdelion/tests/fixtures/plugins/minimal
-cargo component build --release
-```
+`tests/wasm_integration.rs` builds this crate with `cargo component build
+--release` every time the mandatory lifecycle integration test runs. The test
+sets `CARGO_TARGET_DIR` to a temporary directory, loads the generated Component,
+and removes the directory through RAII when the test exits.
 
-The WASM component will be generated at:
-```
-target/wasm32-wasip1/release/minimal_plugin.wasm
-```
-
-Copy to test fixtures:
-```bash
-cp target/wasm32-wasip1/release/minimal_plugin.wasm ../../minimal_plugin.wasm
-```
-
-## Dependencies
-
-- `wit-bindgen 0.44` - WIT bindings generator
-- `wit-bindgen-rt 0.44` - Runtime support for bindings
+The repository does not store a generated `minimal_plugin.wasm`. A missing
+`cargo-component` command, missing `wasm32-wasip1` target, compilation failure,
+or missing Component output fails the test.
 
 ## Requirements
 
-- `cargo-component` tool for building WASM components
-- Rust toolchain with `wasm32-wasip1` target
+```bash
+cargo install cargo-component
+rustup target add wasm32-wasip1
+```
 
-## Usage in Tests
+## Focused Test
 
-```rust
-use reinhardt_dentdelion::wasm::{WasmPluginInstance, WasmRuntime};
-
-let plugin_wasm = std::fs::read("tests/fixtures/minimal_plugin.wasm")?;
-let runtime = WasmRuntime::new(Default::default())?;
-let instance = WasmPluginInstance::load("minimal", &plugin_wasm, runtime).await?;
-
-// Test lifecycle
-instance.on_load(&config).await?;
-instance.on_enable(&ctx).await?;
-instance.on_disable(&ctx).await?;
-instance.on_unload(&ctx).await?;
+```bash
+cargo nextest run -p reinhardt-dentdelion \
+  --test wasm_integration \
+  --all-features \
+  -E 'test(source_built_minimal_component_enforces_lifecycle_contract)'
 ```

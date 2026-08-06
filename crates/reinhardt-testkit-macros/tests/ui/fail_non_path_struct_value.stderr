@@ -1,0 +1,5 @@
+error: expected a plain type path before the struct literal body
+ --> tests/ui/fail_non_path_struct_value.rs:7:42
+  |
+7 |         let _ = with_di_overrides! { singleton (Service) {} };
+  |                                                ^^^^^^^^^

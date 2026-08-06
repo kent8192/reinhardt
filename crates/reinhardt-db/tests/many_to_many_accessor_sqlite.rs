@@ -165,12 +165,19 @@ async fn lifecycle_binds_values_and_preserves_exact_relationship_state() {
 		vec![1, 2, 3]
 	);
 
+	let seeded_ids = [1, 2, 3];
+	let limited = ManyToManyAccessor::<User, Group>::new(&user, "groups", db.clone()).limit(2);
+	let limited_ids = sorted_group_ids(&limited.all().await.unwrap());
+	assert_eq!(limited_ids.len(), 2);
+	assert!(limited_ids.len() < seeded_ids.len());
+	assert!(limited_ids.iter().all(|id| seeded_ids.contains(id)));
+	assert_ne!(limited_ids[0], limited_ids[1]);
+
 	let second_page =
-		ManyToManyAccessor::<User, Group>::new(&user, "groups", db.clone()).paginate(2, 10);
-	assert_eq!(
-		sorted_group_ids(&second_page.all().await.unwrap()),
-		Vec::<i64>::new()
-	);
+		ManyToManyAccessor::<User, Group>::new(&user, "groups", db.clone()).paginate(2, 2);
+	let second_page_ids = sorted_group_ids(&second_page.all().await.unwrap());
+	assert_eq!(second_page_ids.len(), 1);
+	assert!(seeded_ids.contains(&second_page_ids[0]));
 
 	accessor
 		.clear()

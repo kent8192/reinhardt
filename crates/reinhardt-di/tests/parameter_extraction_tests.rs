@@ -4,9 +4,11 @@
 
 use bytes::Bytes;
 use http::header::{CONTENT_TYPE, COOKIE};
+#[cfg(feature = "multipart")]
+use reinhardt_di::params::Multipart;
 use reinhardt_di::params::{
-	Body, Cookie, CookieStruct, Form, FromRequest, Header, HeaderStruct, Json, Multipart,
-	ParamContext, ParamError, Query,
+	Body, Cookie, CookieStruct, Form, FromRequest, Header, HeaderStruct, Json, ParamContext,
+	ParamError, Query,
 };
 use reinhardt_http::{Error as CoreError, Request};
 use serde::Deserialize;
@@ -17,6 +19,7 @@ struct LoginForm {
 	age: u32,
 }
 
+#[cfg(feature = "multipart")]
 #[derive(Clone, Debug, Deserialize, PartialEq)]
 struct MultipartForm {
 	username: String,
@@ -293,6 +296,7 @@ async fn urlencoded_form_enforces_the_body_size_limit() {
 }
 
 #[tokio::test]
+#[cfg(feature = "multipart")]
 async fn multipart_form_extracts_text_fields_and_ignores_files() {
 	// Arrange
 	let boundary = "coverage-boundary";
@@ -323,6 +327,7 @@ async fn multipart_form_extracts_text_fields_and_ignores_files() {
 }
 
 #[tokio::test]
+#[cfg(feature = "multipart")]
 async fn multipart_form_reports_invalid_boundaries() {
 	// Arrange
 	let request = request_with_body(Some("multipart/form-data"), Bytes::new());
@@ -337,6 +342,7 @@ async fn multipart_form_reports_invalid_boundaries() {
 }
 
 #[tokio::test]
+#[cfg(feature = "multipart")]
 async fn multipart_extractor_streams_named_fields() {
 	// Arrange
 	let boundary = "stream-boundary";
@@ -364,6 +370,7 @@ async fn multipart_extractor_streams_named_fields() {
 }
 
 #[tokio::test]
+#[cfg(feature = "multipart")]
 async fn multipart_extractor_requires_a_valid_content_type() {
 	// Arrange
 	let missing = request_with_body(None, Bytes::new());

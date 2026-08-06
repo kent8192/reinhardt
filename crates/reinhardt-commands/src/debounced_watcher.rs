@@ -231,6 +231,20 @@ fn wasm_rebuild_succeeded(outcome: &crate::wasm_rebuild_pipeline::WasmRebuildOut
 	)
 }
 
+#[cfg(feature = "pages")]
+fn browser_reload_reason(
+	targets: RebuildTargets,
+	wasm_succeeded: bool,
+	server_ready: bool,
+) -> Option<&'static str> {
+	match (targets.server, targets.wasm, wasm_succeeded, server_ready) {
+		(true, true, true, true) => Some("Rust rebuild completed successfully"),
+		(false, true, true, _) => Some("WASM rebuild completed successfully"),
+		(true, false, _, true) => Some("Server rebuild completed successfully"),
+		_ => None,
+	}
+}
+
 fn server_rebuild_succeeded(
 	outcome: &crate::server_rebuild_pipeline::ServerRebuildOutcome,
 ) -> bool {
@@ -365,22 +379,16 @@ pub async fn run_rebuild_for_paths(
 			false
 		};
 		#[cfg(feature = "pages")]
-		if wasm_ok && server_ready {
-			notify_browser_reload(
-				config.hmr_tx.as_ref(),
-				"Rust rebuild completed successfully",
-			);
+		if let Some(reason) = browser_reload_reason(targets, wasm_ok, server_ready) {
+			notify_browser_reload(config.hmr_tx.as_ref(), reason);
 		}
 		#[cfg(not(feature = "pages"))]
 		let _ = (wasm_ok, server_ready);
 	} else if targets.wasm {
 		let wasm_ok = wasm_fut.await;
 		#[cfg(feature = "pages")]
-		if wasm_ok {
-			notify_browser_reload(
-				config.hmr_tx.as_ref(),
-				"WASM rebuild completed successfully",
-			);
+		if let Some(reason) = browser_reload_reason(targets, wasm_ok, false) {
+			notify_browser_reload(config.hmr_tx.as_ref(), reason);
 		}
 		#[cfg(not(feature = "pages"))]
 		let _ = wasm_ok;
@@ -403,11 +411,8 @@ pub async fn run_rebuild_for_paths(
 			false
 		};
 		#[cfg(feature = "pages")]
-		if server_ready {
-			notify_browser_reload(
-				config.hmr_tx.as_ref(),
-				"Server rebuild completed successfully",
-			);
+		if let Some(reason) = browser_reload_reason(targets, false, server_ready) {
+			notify_browser_reload(config.hmr_tx.as_ref(), reason);
 		}
 		#[cfg(not(feature = "pages"))]
 		let _ = server_ready;
@@ -608,12 +613,12 @@ mod tests {
 		let mut pending = Box::pin(debounce_next(&mut rx, window));
 
 		// Act: the debounce future must not complete before the configured
-		// window expires.
+		// window expires. Paused time keeps this deterministic without a real sleep.
 		tokio::select! {
 			result = &mut pending => panic!("debounce completed too early: {result:?}"),
-			_ = tokio::time::sleep(window - Duration::from_millis(1)) => {}
+			_ = tokio::task::yield_now() => {}
 		}
-		assert_eq!(Instant::now() - started_at, Duration::from_millis(119));
+		tokio::time::advance(window).await;
 
 		let result = pending.await;
 
@@ -634,6 +639,60 @@ mod tests {
 
 		// Assert
 		assert!(result.is_none());
+	}
+
+	#[tokio::test(flavor = "current_thread", start_paused = true)]
+	async fn debounce_returns_sorted_unique_paths_when_channel_closes_after_first_event() {
+		// Arrange
+		let (tx, mut rx) = mpsc::channel::<Event>(4);
+		tx.send(ev(EventKind::Modify(ModifyKind::Any), "/p/src/z.rs"))
+			.await
+			.expect("first event is queued");
+		tx.send(ev(EventKind::Modify(ModifyKind::Any), "/p/src/a.rs"))
+			.await
+			.expect("second event is queued");
+		tx.send(ev(EventKind::Modify(ModifyKind::Any), "/p/src/z.rs"))
+			.await
+			.expect("duplicate event is queued");
+		drop(tx);
+
+		// Act
+		let paths = debounce_next(&mut rx, DEBOUNCE_WINDOW).await;
+
+		// Assert
+		assert_eq!(
+			paths,
+			Some(vec![
+				PathBuf::from("/p/src/a.rs"),
+				PathBuf::from("/p/src/z.rs"),
+			]),
+		);
+	}
+
+	#[cfg(feature = "pages")]
+	#[rstest]
+	#[case::workspace_manifest("/project/Cargo.toml", RebuildTargets { server: true, wasm: true })]
+	#[case::nested_manifest("/project/apps/store/Cargo.toml", RebuildTargets { server: true, wasm: true })]
+	#[case::static_asset("/project/static/site.css", RebuildTargets { server: true, wasm: true })]
+	#[case::page_route("/project/src/apps/store/routes.rs", RebuildTargets { server: true, wasm: true })]
+	#[case::page_component("/project/src/apps/store/client/components/cart.rs", RebuildTargets { server: false, wasm: true })]
+	#[case::page_template("/project/src/client/templates/store.rs", RebuildTargets { server: false, wasm: true })]
+	#[case::hidden_rust_file("/project/src/.generated.rs", RebuildTargets { server: true, wasm: true })]
+	#[case::target_artifact("/project/target/debug/app.rs", RebuildTargets { server: true, wasm: true })]
+	#[case::editor_swap("/project/src/lib.rs.swp", RebuildTargets { server: true, wasm: true })]
+	#[case::unrelated_extension("/project/README.md", RebuildTargets { server: true, wasm: true })]
+	fn rebuild_targets_classification_table_covers_path_kinds(
+		#[case] path: &str,
+		#[case] expected: RebuildTargets,
+	) {
+		// Arrange
+		let config = pages_config(false);
+
+		// Act
+		let actual = rebuild_targets_for_paths(&[PathBuf::from(path)], &config);
+
+		// Assert
+		assert_eq!(actual, expected, "unexpected targets for {path}");
 	}
 
 	#[cfg(feature = "pages")]
@@ -724,6 +783,86 @@ mod tests {
 				wasm: false,
 			},
 		);
+	}
+
+	#[test]
+	fn rebuild_targets_without_pages_only_restart_the_server() {
+		// Arrange
+		let config = WatcherConfig {
+			bin_name: "manage".to_string(),
+			address: "127.0.0.1:8000".to_string(),
+			roots: SourceRoots {
+				src_dirs: vec![PathBuf::from("/project/src")],
+				manifest_files: vec![PathBuf::from("/project/Cargo.toml")],
+				lockfile: Some(PathBuf::from("/project/Cargo.lock")),
+			},
+			debounce_window: DEBOUNCE_WINDOW,
+			server_address: None,
+			no_wasm_rebuild: false,
+			#[cfg(feature = "pages")]
+			pages_enabled: false,
+			#[cfg(feature = "pages")]
+			hmr_tx: None,
+		};
+
+		// Act
+		let actual = rebuild_targets_for_paths(&[PathBuf::from("/project/src/lib.rs")], &config);
+
+		// Assert
+		assert_eq!(
+			actual,
+			RebuildTargets {
+				server: true,
+				wasm: false,
+			},
+		);
+	}
+
+	#[cfg(feature = "pages")]
+	#[rstest]
+	#[case::both_pipelines_succeed(
+		RebuildTargets { server: true, wasm: true },
+		true,
+		true,
+		Some("Rust rebuild completed successfully")
+	)]
+	#[case::wasm_failure_blocks_combined_reload(
+		RebuildTargets { server: true, wasm: true },
+		false,
+		true,
+		None
+	)]
+	#[case::server_failure_blocks_combined_reload(
+		RebuildTargets { server: true, wasm: true },
+		true,
+		false,
+		None
+	)]
+	#[case::wasm_only_success(
+		RebuildTargets { server: false, wasm: true },
+		true,
+		false,
+		Some("WASM rebuild completed successfully")
+	)]
+	#[case::server_only_success(
+		RebuildTargets { server: true, wasm: false },
+		false,
+		true,
+		Some("Server rebuild completed successfully")
+	)]
+	fn browser_reload_requires_each_selected_pipeline(
+		#[case] targets: RebuildTargets,
+		#[case] wasm_succeeded: bool,
+		#[case] server_ready: bool,
+		#[case] expected: Option<&str>,
+	) {
+		// Arrange
+
+		// Act
+		let actual = browser_reload_reason(targets, wasm_succeeded, server_ready);
+
+		// Assert
+		assert_eq!(actual, expected);
 	}
 
 	#[cfg(feature = "pages")]

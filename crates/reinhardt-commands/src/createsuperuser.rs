@@ -14,6 +14,17 @@ pub(crate) const SUPERUSER_PASSWORD_ENV: &str = "REINHARDT_SUPERUSER_PASSWORD";
 /// Minimum password length, mirrored from the interactive prompt validator.
 const MIN_PASSWORD_LEN: usize = 8;
 
+const MISSING_SUPERUSER_CREATOR_ERROR: &str = "No SuperuserCreator registered. Ensure your user model has \
+	 both #[user(hasher = ..., username_field = \"...\")] and \
+	 #[model(...)]. Auto-registration happens automatically for any \
+	 user struct that combines these two attributes — `full = true` \
+	 is not required.\n\
+	 \n\
+	 If implementing BaseUser manually, also implement SuperuserInit \
+	 and call register_superuser_creator(superuser_creator_for::<YourUser>()) \
+	 before execute_from_command_line().\n\
+	 See reinhardt_auth::SuperuserInit documentation for details.";
+
 fn validate_email(email: &str) -> bool {
 	email.contains('@') && email.contains('.')
 }
@@ -61,6 +72,48 @@ pub(crate) enum NoninteractivePassword {
 	None,
 }
 
+/// Errors that can occur while validating non-interactive account details.
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) enum NoninteractiveIdentityError {
+	/// The required username was not supplied.
+	MissingUsername,
+	/// The supplied username does not meet the minimum length.
+	InvalidUsername,
+	/// The required email address was not supplied.
+	MissingEmail,
+	/// The supplied email address is not valid.
+	InvalidEmail,
+}
+
+impl std::fmt::Display for NoninteractiveIdentityError {
+	fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+		match self {
+			Self::MissingUsername => write!(f, "--username is required in non-interactive mode"),
+			Self::InvalidUsername => write!(f, "Username must be at least 3 characters"),
+			Self::MissingEmail => write!(f, "--email is required in non-interactive mode"),
+			Self::InvalidEmail => write!(f, "Invalid email address"),
+		}
+	}
+}
+
+/// Validate and retain identity values supplied to `--noinput`.
+pub(crate) fn resolve_noninteractive_identity(
+	username: Option<String>,
+	email: Option<String>,
+) -> Result<(String, String), NoninteractiveIdentityError> {
+	let username = username.ok_or(NoninteractiveIdentityError::MissingUsername)?;
+	if !validate_username(&username) {
+		return Err(NoninteractiveIdentityError::InvalidUsername);
+	}
+
+	let email = email.ok_or(NoninteractiveIdentityError::MissingEmail)?;
+	if !validate_email(&email) {
+		return Err(NoninteractiveIdentityError::InvalidEmail);
+	}
+
+	Ok((username, email))
+}
+
 /// Resolve the password to use under `--noinput` or `--no-password`.
 ///
 /// Empty env-var strings are treated as unset to avoid surprising the caller
@@ -80,6 +133,12 @@ pub(crate) fn resolve_noninteractive_password(
 	}
 }
 
+fn registered_superuser_creator(
+	creator: Option<&'static dyn reinhardt_auth::SuperuserCreator>,
+) -> Result<&'static dyn reinhardt_auth::SuperuserCreator, Box<dyn std::error::Error>> {
+	creator.ok_or_else(|| MISSING_SUPERUSER_CREATOR_ERROR.into())
+}
+
 /// Execute the `createsuperuser` management command.
 ///
 /// Collects username, email, and password via interactive prompts or
@@ -95,59 +154,48 @@ pub(crate) async fn execute_createsuperuser(
 	println!("{}", style("Creating superuser account").cyan().bold());
 	println!();
 
-	// Get username
-	let username = if let Some(username) = username {
-		if noinput && !validate_username(&username) {
-			eprintln!(
-				"{}",
-				style("Error: Username must be at least 3 characters").red()
-			);
-			std::process::exit(1);
+	let (username, email) = if noinput {
+		match resolve_noninteractive_identity(username, email) {
+			Ok(identity) => identity,
+			Err(error) => {
+				eprintln!("{}", style(format!("Error: {error}")).red());
+				std::process::exit(1);
+			}
 		}
-		username
-	} else if noinput {
-		eprintln!(
-			"{}",
-			style("Error: --username is required in non-interactive mode").red()
-		);
-		std::process::exit(1);
 	} else {
-		Input::<String>::new()
-			.with_prompt("Username")
-			.validate_with(|input: &String| -> Result<(), &str> {
-				if validate_username(input) {
-					Ok(())
-				} else {
-					Err("Username must be at least 3 characters")
-				}
-			})
-			.interact_text()?
-	};
+		// Get username.
+		let username = if let Some(username) = username {
+			username
+		} else {
+			Input::<String>::new()
+				.with_prompt("Username")
+				.validate_with(|input: &String| -> Result<(), &str> {
+					if validate_username(input) {
+						Ok(())
+					} else {
+						Err("Username must be at least 3 characters")
+					}
+				})
+				.interact_text()?
+		};
 
-	// Get email
-	let email = if let Some(email) = email {
-		if noinput && !validate_email(&email) {
-			eprintln!("{}", style("Error: Invalid email address").red());
-			std::process::exit(1);
-		}
-		email
-	} else if noinput {
-		eprintln!(
-			"{}",
-			style("Error: --email is required in non-interactive mode").red()
-		);
-		std::process::exit(1);
-	} else {
-		Input::<String>::new()
-			.with_prompt("Email address")
-			.validate_with(|input: &String| -> Result<(), &str> {
-				if validate_email(input) {
-					Ok(())
-				} else {
-					Err("Invalid email address")
-				}
-			})
-			.interact_text()?
+		// Get email.
+		let email = if let Some(email) = email {
+			email
+		} else {
+			Input::<String>::new()
+				.with_prompt("Email address")
+				.validate_with(|input: &String| -> Result<(), &str> {
+					if validate_email(input) {
+						Ok(())
+					} else {
+						Err("Invalid email address")
+					}
+				})
+				.interact_text()?
+		};
+
+		(username, email)
 	};
 
 	// Get password.
@@ -224,18 +272,7 @@ pub(crate) async fn execute_createsuperuser(
 	println!();
 	println!("{}", style("Creating user in database...").cyan());
 
-	let creator = reinhardt_auth::get_superuser_creator().ok_or(
-		"No SuperuserCreator registered. Ensure your user model has \
-		 both #[user(hasher = ..., username_field = \"...\")] and \
-		 #[model(...)]. Auto-registration happens automatically for any \
-		 user struct that combines these two attributes — `full = true` \
-		 is not required.\n\
-		 \n\
-		 If implementing BaseUser manually, also implement SuperuserInit \
-		 and call register_superuser_creator(superuser_creator_for::<YourUser>()) \
-		 before execute_from_command_line().\n\
-		 See reinhardt_auth::SuperuserInit documentation for details.",
-	)?;
+	let creator = registered_superuser_creator(reinhardt_auth::get_superuser_creator())?;
 
 	match creator
 		.create_superuser(&username, &email, password.as_deref())
@@ -262,8 +299,9 @@ pub(crate) async fn execute_createsuperuser(
 #[cfg(test)]
 mod tests {
 	use super::{
-		MIN_PASSWORD_LEN, NoninteractivePassword, PasswordResolutionError, SUPERUSER_PASSWORD_ENV,
-		resolve_noninteractive_password,
+		MIN_PASSWORD_LEN, MISSING_SUPERUSER_CREATOR_ERROR, NoninteractivePassword,
+		PasswordResolutionError, SUPERUSER_PASSWORD_ENV, registered_superuser_creator,
+		resolve_noninteractive_identity, resolve_noninteractive_password,
 	};
 	use rstest::rstest;
 
@@ -395,5 +433,50 @@ mod tests {
 			too_short.contains(&min_len),
 			"TooShort must mention the {MIN_PASSWORD_LEN}-char minimum, got: {too_short}"
 		);
+	}
+
+	#[rstest]
+	#[case::missing_username(
+		None,
+		Some("admin@example.com"),
+		"--username is required in non-interactive mode"
+	)]
+	#[case::short_username(
+		Some("ab"),
+		Some("admin@example.com"),
+		"Username must be at least 3 characters"
+	)]
+	#[case::missing_email(Some("admin"), None, "--email is required in non-interactive mode")]
+	#[case::invalid_email(Some("admin"), Some("not-an-email"), "Invalid email address")]
+	fn noninteractive_identity_rejects_invalid_input_without_database_access(
+		#[case] username: Option<&str>,
+		#[case] email: Option<&str>,
+		#[case] expected_error: &str,
+	) {
+		// Arrange
+		let username = username.map(str::to_string);
+		let email = email.map(str::to_string);
+
+		// Act
+		let error = resolve_noninteractive_identity(username, email)
+			.expect_err("invalid non-interactive identity must be rejected before creation");
+
+		// Assert
+		assert_eq!(error.to_string(), expected_error);
+	}
+
+	#[test]
+	fn missing_creator_returns_actionable_error_without_database_access() {
+		// Arrange
+		let creator = None;
+
+		// Act
+		let error = match registered_superuser_creator(creator) {
+			Ok(_) => panic!("missing registration must stop before database creation"),
+			Err(error) => error,
+		};
+
+		// Assert
+		assert_eq!(error.to_string(), MISSING_SUPERUSER_CREATOR_ERROR);
 	}
 }

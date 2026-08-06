@@ -1231,10 +1231,12 @@ mod tests {
 			.with_no_client_auth()
 			.with_single_cert(certificates, key);
 		let invalid = load_tls_config(&cert_path, &key_path);
+		let missing = load_tls_config(&temp_dir.path().join("missing-cert.pem"), &key_path);
 
 		// Assert
 		assert!(generated.is_ok());
 		assert!(invalid.is_err());
+		assert!(missing.is_err());
 	}
 
 	async fn response_text(
@@ -1387,6 +1389,7 @@ mod tests {
 		assert_eq!(malformed.static_root, None);
 		assert!(malformed.staticfiles_dirs.is_empty());
 		build_wasm_targets(true, false, false);
+		assert!(resolve_spa_index(&missing).is_none());
 		assert!(run_collectstatic(&missing));
 		assert!(Path::new("staticfiles/manifest.json").is_file());
 	}

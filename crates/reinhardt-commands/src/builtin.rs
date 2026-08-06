@@ -4374,13 +4374,11 @@ fn detect_database_type(url: &str) -> Result<DatabaseType, crate::CommandError> 
 mod tests {
 	use super::*;
 
-	#[cfg(feature = "reinhardt-db")]
 	struct EnvVarGuard {
 		key: &'static str,
 		original: Option<std::ffi::OsString>,
 	}
 
-	#[cfg(feature = "reinhardt-db")]
 	impl EnvVarGuard {
 		fn capture(key: &'static str) -> Self {
 			Self {
@@ -4390,7 +4388,6 @@ mod tests {
 		}
 	}
 
-	#[cfg(feature = "reinhardt-db")]
 	impl Drop for EnvVarGuard {
 		fn drop(&mut self) {
 			// SAFETY: tests that mutate process environment are serial-protected.

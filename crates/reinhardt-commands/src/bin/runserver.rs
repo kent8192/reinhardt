@@ -1288,8 +1288,15 @@ mod tests {
 	async fn path_resolution_reports_missing_and_traversal_static_assets_without_exposing_files() {
 		// Arrange
 		let temp_dir = tempfile::TempDir::new().expect("create isolated static root");
+		let static_root = temp_dir.path().join("public");
+		std::fs::create_dir_all(&static_root).expect("create static root");
+		std::fs::write(
+			temp_dir.path().join("secret.txt"),
+			"coverage sentinel secret",
+		)
+		.expect("write protected sibling sentinel");
 		let settings = RunServerSettings {
-			static_root: Some(temp_dir.path().join("empty")),
+			static_root: Some(static_root),
 			..RunServerSettings::default()
 		};
 
@@ -1311,6 +1318,7 @@ mod tests {
 		);
 		assert_eq!(traversal_status, StatusCode::NOT_FOUND);
 		assert_eq!(traversal_body, "Static file not found: ../secret.txt");
+		assert_ne!(traversal_body, "coverage sentinel secret");
 	}
 
 	#[tokio::test]
@@ -1323,10 +1331,13 @@ mod tests {
 			.await
 			.expect("welcome response builds");
 		let (status, headers, body) = response_text(welcome).await;
+		let component = WelcomePage::new(env!("CARGO_PKG_VERSION"));
+		let mut renderer = SsrRenderer::new();
+		let expected = renderer.render_page_with_view_head(component.render());
 
 		// Assert
 		assert_eq!(status, StatusCode::OK);
 		assert_eq!(headers["Content-Type"], "text/html; charset=utf-8");
-		assert!(body.contains("Reinhardt"));
+		assert_eq!(body, expected);
 	}
 }

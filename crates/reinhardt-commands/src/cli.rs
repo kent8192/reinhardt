@@ -1609,6 +1609,35 @@ mod tests {
 	use rstest::rstest;
 	use std::sync::{Arc, Mutex};
 
+	#[cfg(feature = "openapi")]
+	struct EnvVarGuard {
+		key: &'static str,
+		original: Option<std::ffi::OsString>,
+	}
+
+	#[cfg(feature = "openapi")]
+	impl EnvVarGuard {
+		fn capture(key: &'static str) -> Self {
+			Self {
+				key,
+				original: std::env::var_os(key),
+			}
+		}
+	}
+
+	#[cfg(feature = "openapi")]
+	impl Drop for EnvVarGuard {
+		fn drop(&mut self) {
+			// SAFETY: tests that mutate process environment are serial-protected.
+			unsafe {
+				match &self.original {
+					Some(value) => std::env::set_var(self.key, value),
+					None => std::env::remove_var(self.key),
+				}
+			}
+		}
+	}
+
 	struct RecordingCommand {
 		name: String,
 		recorded: Arc<Mutex<Option<CommandContext>>>,
@@ -1909,8 +1938,17 @@ mod tests {
 
 	#[tokio::test]
 	#[cfg(feature = "openapi")]
+	#[serial_test::serial(cli_openapi_env)]
 	async fn generateopenapi_writes_parseable_json_and_yaml_without_postman_converter() {
 		// Arrange
+		let _title = EnvVarGuard::capture("OPENAPI_TITLE");
+		let _version = EnvVarGuard::capture("OPENAPI_VERSION");
+		let _description = EnvVarGuard::capture("OPENAPI_DESCRIPTION");
+		unsafe {
+			std::env::remove_var("OPENAPI_TITLE");
+			std::env::remove_var("OPENAPI_VERSION");
+			std::env::remove_var("OPENAPI_DESCRIPTION");
+		}
 		let temp_dir = tempfile::tempdir().expect("temporary API output directory");
 		let json_output = temp_dir.path().join("openapi.json");
 		let yaml_output = temp_dir.path().join("openapi.yaml");

@@ -145,13 +145,17 @@ fn canonical_host_uses_the_expected_port(#[case] input: &str, #[case] expected: 
 
 #[rstest]
 fn canonical_host_rejects_urls_without_a_host() {
+	// Arrange
 	let url = Url::parse("file:///tmp/object").expect("URL is valid");
-	assert_eq!(
-		canonical_host(&url)
-			.expect_err("file URL has no host")
-			.to_string(),
-		"provider configuration error: S3 URL is missing a host"
-	);
+
+	// Act
+	let error = canonical_host(&url).expect_err("file URL has no host");
+
+	// Assert
+	match error {
+		ProviderError::Config(message) => assert_eq!(message, "S3 URL is missing a host"),
+		other => panic!("unexpected host validation error: {other:?}"),
+	}
 }
 
 #[rstest]
@@ -175,11 +179,18 @@ fn sha256_hashes_fixed_vectors(#[case] input: &[u8], #[case] expected: &str) {
 
 #[rstest]
 fn insert_header_reports_invalid_header_values() {
+	// Arrange
 	let mut headers = reqwest::header::HeaderMap::new();
-	assert!(matches!(
-		insert_header(&mut headers, "x-amz-meta-test", "line\nbreak"),
-		Err(ProviderError::Header(_))
-	));
+
+	// Act
+	let error = insert_header(&mut headers, "x-amz-meta-test", "line\nbreak")
+		.expect_err("newline is not a valid HTTP header value");
+
+	// Assert
+	match error {
+		ProviderError::Header(message) => assert_eq!(message, "failed to parse header value"),
+		other => panic!("unexpected header validation error: {other:?}"),
+	}
 }
 
 #[rstest]

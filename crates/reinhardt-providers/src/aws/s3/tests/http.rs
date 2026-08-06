@@ -2,6 +2,9 @@ use bytes::Bytes;
 use chrono::{DateTime, Utc};
 use reqwest::Client;
 use rstest::rstest;
+use tokio::io::AsyncWriteExt;
+use tokio::net::TcpListener;
+use tokio::task::JoinHandle;
 use wiremock::matchers::any;
 use wiremock::{Mock, MockServer, Request, ResponseTemplate};
 
@@ -10,6 +13,39 @@ use super::{fixed_now, test_config};
 
 struct TestS3Server {
 	server: MockServer,
+}
+
+struct RawHttpServer {
+	endpoint: String,
+	task: JoinHandle<()>,
+}
+
+impl RawHttpServer {
+	async fn truncated_error_body() -> Self {
+		let listener = TcpListener::bind("127.0.0.1:0")
+			.await
+			.expect("bind raw HTTP fixture");
+		let address = listener.local_addr().expect("fixture address");
+		let task = tokio::spawn(async move {
+			let (mut socket, _) = listener.accept().await.expect("accept one request");
+			socket
+				.write_all(
+					b"HTTP/1.1 500 Internal Server Error\r\nContent-Length: 100\r\nConnection: close\r\n\r\nshort",
+				)
+				.await
+				.expect("write truncated response");
+		});
+		Self {
+			endpoint: format!("http://{address}"),
+			task,
+		}
+	}
+}
+
+impl Drop for RawHttpServer {
+	fn drop(&mut self) {
+		self.task.abort();
+	}
 }
 
 impl TestS3Server {
@@ -316,4 +352,179 @@ async fn get_object_signs_and_sends_the_session_token() {
 		&request,
 		"AWS4-HMAC-SHA256 Credential=AKIAIOSFODNN7EXAMPLE/20130524/us-east-1/s3/aws4_request, SignedHeaders=host;x-amz-content-sha256;x-amz-date;x-amz-security-token",
 	);
+}
+
+#[rstest]
+#[tokio::test]
+async fn get_object_maps_a_missing_object_to_not_found() {
+	// Arrange
+	let server = TestS3Server::start().await;
+	server.respond(ResponseTemplate::new(404)).await;
+
+	// Act
+	let result = server.client().get_object("missing.txt").await;
+
+	// Assert
+	match result {
+		Err(ProviderError::NotFound(key)) => assert_eq!(key, "missing.txt"),
+		other => panic!("unexpected GET result: {other:?}"),
+	}
+	let request = server.single_request().await;
+	assert_eq!(request.method.as_str(), "GET");
+}
+
+#[rstest]
+#[tokio::test]
+async fn put_object_maps_a_missing_object_to_not_found() {
+	// Arrange
+	let server = TestS3Server::start().await;
+	server.respond(ResponseTemplate::new(404)).await;
+
+	// Act
+	let result = server
+		.client()
+		.put_object("missing.txt", Bytes::from_static(b"body"))
+		.await;
+
+	// Assert
+	match result {
+		Err(ProviderError::NotFound(key)) => assert_eq!(key, "missing.txt"),
+		other => panic!("unexpected PUT result: {other:?}"),
+	}
+	let request = server.single_request().await;
+	assert_eq!(request.method.as_str(), "PUT");
+}
+
+#[rstest]
+#[tokio::test]
+async fn delete_object_maps_a_missing_object_to_not_found() {
+	// Arrange
+	let server = TestS3Server::start().await;
+	server.respond(ResponseTemplate::new(404)).await;
+
+	// Act
+	let result = server.client().delete_object("missing.txt").await;
+
+	// Assert
+	match result {
+		Err(ProviderError::NotFound(key)) => assert_eq!(key, "missing.txt"),
+		other => panic!("unexpected DELETE result: {other:?}"),
+	}
+	let request = server.single_request().await;
+	assert_eq!(request.method.as_str(), "DELETE");
+}
+
+#[rstest]
+#[tokio::test]
+async fn head_object_maps_a_missing_object_to_none() {
+	// Arrange
+	let server = TestS3Server::start().await;
+	server.respond(ResponseTemplate::new(404)).await;
+
+	// Act
+	let metadata = server
+		.client()
+		.head_object("missing.txt")
+		.await
+		.expect("HEAD maps 404");
+
+	// Assert
+	assert_eq!(metadata, None);
+	let request = server.single_request().await;
+	assert_eq!(request.method.as_str(), "HEAD");
+}
+
+#[rstest]
+#[tokio::test]
+async fn get_object_maps_forbidden_responses_to_permission_denied() {
+	// Arrange
+	let server = TestS3Server::start().await;
+	server
+		.respond(ResponseTemplate::new(403).set_body_string("access denied"))
+		.await;
+
+	// Act
+	let result = server.client().get_object("secret.txt").await;
+
+	// Assert
+	match result {
+		Err(ProviderError::PermissionDenied(message)) => assert_eq!(message, "access denied"),
+		other => panic!("unexpected 403 result: {other:?}"),
+	}
+	let request = server.single_request().await;
+	assert_eq!(request.method.as_str(), "GET");
+}
+
+#[rstest]
+#[tokio::test]
+async fn put_object_maps_general_service_errors() {
+	// Arrange
+	let server = TestS3Server::start().await;
+	server
+		.respond(ResponseTemplate::new(500).set_body_string("temporary failure"))
+		.await;
+
+	// Act
+	let result = server
+		.client()
+		.put_object("unavailable.txt", Bytes::new())
+		.await;
+
+	// Assert
+	match result {
+		Err(ProviderError::Service { status, message }) => {
+			assert_eq!(status, 500);
+			assert_eq!(message, "temporary failure");
+		}
+		other => panic!("unexpected service error: {other:?}"),
+	}
+	let request = server.single_request().await;
+	assert_eq!(request.method.as_str(), "PUT");
+}
+
+#[rstest]
+#[tokio::test]
+async fn get_object_maps_connection_refusals_to_http_errors() {
+	// Arrange
+	let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind loopback port");
+	let address = listener.local_addr().expect("loopback address");
+	drop(listener);
+	let mut config = test_config(Some(format!("http://{address}")));
+	config.force_path_style = true;
+	let http = Client::builder()
+		.connect_timeout(std::time::Duration::from_millis(200))
+		.timeout(std::time::Duration::from_secs(1))
+		.build()
+		.expect("test HTTP client");
+	let client = S3Client::with_test_dependencies(config, http, fixed_now());
+
+	// Act
+	let result = client.get_object("unreachable.txt").await;
+
+	// Assert
+	// The OS connection diagnostic differs by platform, so only the stable Reinhardt variant is asserted.
+	assert!(matches!(result, Err(ProviderError::Http(_))));
+}
+
+#[rstest]
+#[tokio::test]
+async fn get_object_preserves_the_service_variant_when_an_error_body_is_truncated() {
+	// Arrange
+	let server = RawHttpServer::truncated_error_body().await;
+	let mut config = test_config(Some(server.endpoint.clone()));
+	config.force_path_style = true;
+	let client = S3Client::with_test_dependencies(config, Client::new(), fixed_now());
+
+	// Act
+	let result = client.get_object("truncated.txt").await;
+
+	// Assert
+	match result {
+		Err(ProviderError::Service { status, message }) => {
+			assert_eq!(status, 500);
+			// The nested reqwest/hyper diagnostic varies by platform and version, so its stable prefix is asserted.
+			assert!(message.starts_with("failed to read provider error body:"));
+		}
+		other => panic!("unexpected truncated-body result: {other:?}"),
+	}
 }

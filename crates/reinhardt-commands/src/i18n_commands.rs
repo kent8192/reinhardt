@@ -115,6 +115,12 @@ fn is_excluded_i18n_path(path: &Path) -> bool {
 	})
 }
 
+fn find_po_directive_start(content: &str, directive: &str) -> Option<usize> {
+	content.match_indices(directive).find_map(|(offset, _)| {
+		(offset == 0 || content.as_bytes()[offset - 1] == b'\n').then_some(offset)
+	})
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct TranslatableMessage {
 	msgid: String,
@@ -469,10 +475,13 @@ impl MakeMessagesCommand {
 	}
 
 	fn extract_po_header(content: &str) -> String {
-		if let Some(header_start) = content.find("msgid \"\"") {
-			let next_msgid = content[header_start + "msgid \"\"".len()..]
-				.find("\nmsgid ")
-				.map(|offset| header_start + "msgid \"\"".len() + offset + 1);
+		if let Some(header_start) = find_po_directive_start(content, "msgid \"\"") {
+			let header_directive_length = "msgid \"\"".len();
+			let next_msgid = find_po_directive_start(
+				&content[header_start + header_directive_length..],
+				"msgid ",
+			)
+			.map(|offset| header_start + header_directive_length + offset);
 			let header_end = next_msgid.unwrap_or(content.len());
 			return format!("{}\n", content[..header_end].trim_end_matches('\n'));
 		}
@@ -967,6 +976,39 @@ mod tests {
 		assert_eq!(
 			fs::read_to_string(po_file).expect("merged PO file"),
 			concat!(
+				"# Translator note\nmsgid \"\"\nmsgstr \"\"\n\"Language: ja\\n\"\n\n",
+				"msgid \"Hello\"\nmsgstr \"こんにちは\"\n\n",
+				"msgid \"New\"\nmsgstr \"\"\n"
+			)
+		);
+	}
+
+	#[test]
+	fn po_merge_ignores_header_like_text_inside_comments() {
+		// Arrange
+		let temp_dir = TempDir::new().expect("temporary locale");
+		let po_file = temp_dir.path().join("reinhardt.po");
+		fs::write(
+			&po_file,
+			concat!(
+				"# See msgid \"\" below for the catalog header.\n",
+				"# Translator note\nmsgid \"\"\nmsgstr \"\"\n\"Language: ja\\n\"\n",
+				"msgid \"Hello\"\nmsgstr \"こんにちは\"\n",
+				"msgid \"Stale\"\nmsgstr \"古い\"\n"
+			),
+		)
+		.expect("existing PO file");
+		let ctx = CommandContext::new(vec![]);
+
+		// Act
+		MakeMessagesCommand::update_po_file(&po_file, &[message("Hello"), message("New")], &ctx)
+			.expect("PO merge");
+
+		// Assert
+		assert_eq!(
+			fs::read_to_string(po_file).expect("merged PO file"),
+			concat!(
+				"# See msgid \"\" below for the catalog header.\n",
 				"# Translator note\nmsgid \"\"\nmsgstr \"\"\n\"Language: ja\\n\"\n\n",
 				"msgid \"Hello\"\nmsgstr \"こんにちは\"\n\n",
 				"msgid \"New\"\nmsgstr \"\"\n"

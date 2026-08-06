@@ -1324,6 +1324,47 @@ mod tests {
 		assert_eq!(settings.staticfiles_dirs, vec![PathBuf::from("assets")]);
 	}
 
+	#[test]
+	#[serial_test::serial(runserver_settings_environment)]
+	fn run_collectstatic_copies_configured_assets_and_dist_index() {
+		let project = tempfile::TempDir::new().expect("create temporary project");
+		std::fs::create_dir_all(project.path().join("assets")).expect("create assets directory");
+		std::fs::create_dir_all(project.path().join("dist")).expect("create dist directory");
+		std::fs::write(
+			project.path().join("assets/site.css"),
+			"body { color: teal; }",
+		)
+		.expect("write static asset");
+		std::fs::write(
+			project.path().join("dist/index.html"),
+			"<main>coverage app</main>",
+		)
+		.expect("write SPA index");
+		let _cwd = CurrentDirGuard::enter(project.path());
+
+		assert!(run_collectstatic(&RunServerSettings {
+			static_url: "/assets/".to_string(),
+			static_root: Some(PathBuf::from("public")),
+			staticfiles_dirs: vec![PathBuf::from("assets")],
+			..RunServerSettings::default()
+		}));
+		let manifest: serde_json::Value = serde_json::from_str(
+			&std::fs::read_to_string("public/manifest.json").expect("read asset manifest"),
+		)
+		.expect("parse asset manifest");
+		let emitted_asset = manifest["paths"]["site.css"]
+			.as_str()
+			.expect("hashed asset entry");
+		assert_eq!(
+			std::fs::read_to_string(format!("public/{emitted_asset}")).expect("read copied asset"),
+			"body { color: teal; }"
+		);
+		assert_eq!(
+			std::fs::read_to_string("public/index.html").expect("read copied index"),
+			"<main>coverage app</main>"
+		);
+	}
+
 	#[tokio::test]
 	async fn path_resolution_serves_static_directory_assets_and_rejects_conflicts() {
 		// Arrange

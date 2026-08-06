@@ -1193,6 +1193,27 @@ mod tests {
 		assert!(secret.bytes().all(|byte| byte.is_ascii_hexdigit()));
 	}
 
+	#[tokio::test]
+	#[cfg(feature = "routers")]
+	async fn router_response_conversion_preserves_success_and_skips_not_found() {
+		// Act
+		let converted = convert_to_hyper_response(
+			reinhardt_http::Response::ok()
+				.with_header("X-Route", "matched")
+				.with_body("router body"),
+		)
+		.expect("handled route converts to Hyper response");
+		let missing =
+			convert_to_hyper_response(reinhardt_http::Response::new(StatusCode::NOT_FOUND));
+		let (status, headers, body) = response_text(converted).await;
+
+		// Assert
+		assert_eq!(status, StatusCode::OK);
+		assert_eq!(headers["X-Route"], "matched");
+		assert_eq!(body, "router body");
+		assert!(missing.is_none());
+	}
+
 	#[test]
 	fn self_signed_tls_material_builds_a_server_configuration_and_rejects_invalid_pem() {
 		// Arrange

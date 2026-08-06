@@ -358,6 +358,7 @@ jobs:
 
       - name: Generate intra-crate coverage report
         run: |
+          HOST_TARGET="$(rustc -vV | awk '/^host:/{print $2}')"
           report_metadata=$(cargo metadata --no-deps --format-version 1)
           report_args=()
           while IFS= read -r package; do
@@ -365,6 +366,7 @@ jobs:
           done < <(jq -r '.packages[].name' <<< "$report_metadata")
           cargo llvm-cov \
             report \
+            --target "$HOST_TARGET" \
             "${report_args[@]}" \
             --lcov \
             --output-path /tmp/intra-crate-lcov.info

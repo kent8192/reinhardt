@@ -1,8 +1,11 @@
+use async_trait::async_trait;
 use reinhardt_commands::local_infra::{
-	DatabaseInfraInput, DockerCall, DockerEngine, FakeDockerEngine, InfraCommand, LocalInfraConfig,
-	LocalInfraState, LocalServiceState, PortAllocator, RedisInfraInput, ServiceRuntimeStatus,
-	StateStore,
+	DatabaseInfraInput, DockerCall, DockerEngine, DockerError, DockerRunSpec, FakeDockerEngine,
+	InfraCommand, InfraSubcommand, LocalInfraConfig, LocalInfraState, LocalServiceState,
+	PortAllocator, RedisInfraInput, ServiceRuntimeStatus, StateStore,
 };
+use rstest::rstest;
+use std::sync::{Arc, Mutex};
 use tempfile::TempDir;
 
 #[test]
@@ -393,4 +396,346 @@ async fn infra_status_rejects_host_port_that_differs_from_docker_binding() {
 	.await;
 
 	assert!(result.is_err());
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum FailingDockerOperation {
+	Remove,
+	Run,
+	Binding,
+}
+
+#[derive(Debug, Clone)]
+struct FailingDockerEngine {
+	calls: Arc<Mutex<Vec<DockerCall>>>,
+	failing_operation: FailingDockerOperation,
+}
+
+impl FailingDockerEngine {
+	fn new(failing_operation: FailingDockerOperation) -> Self {
+		Self {
+			calls: Arc::new(Mutex::new(Vec::new())),
+			failing_operation,
+		}
+	}
+
+	fn calls(&self) -> Vec<DockerCall> {
+		self.calls.lock().expect("calls lock").clone()
+	}
+
+	fn record(&self, call: DockerCall) {
+		self.calls.lock().expect("calls lock").push(call);
+	}
+}
+
+#[async_trait]
+impl DockerEngine for FailingDockerEngine {
+	async fn container_exists(&self, name: &str) -> Result<bool, DockerError> {
+		self.record(DockerCall::ContainerExists {
+			name: name.to_string(),
+		});
+		Ok(false)
+	}
+
+	async fn container_port_binding(
+		&self,
+		name: &str,
+		container_port: u16,
+	) -> Result<Option<u16>, DockerError> {
+		self.record(DockerCall::ContainerPortBinding {
+			name: name.to_string(),
+			container_port,
+		});
+		if self.failing_operation == FailingDockerOperation::Binding {
+			return Err(DockerError::Backend("scripted binding failure".to_string()));
+		}
+		Ok(Some(55432))
+	}
+
+	async fn remove_container(&self, name: &str) -> Result<(), DockerError> {
+		self.record(DockerCall::RemoveContainer {
+			name: name.to_string(),
+		});
+		if self.failing_operation == FailingDockerOperation::Remove {
+			return Err(DockerError::Backend("scripted removal failure".to_string()));
+		}
+		Ok(())
+	}
+
+	async fn run_detached(&self, spec: DockerRunSpec) -> Result<(), DockerError> {
+		self.record(DockerCall::RunDetached { spec });
+		if self.failing_operation == FailingDockerOperation::Run {
+			return Err(DockerError::Backend("scripted run failure".to_string()));
+		}
+		Ok(())
+	}
+}
+
+#[tokio::test]
+async fn infra_up_stops_after_remove_failure_without_persisting_state() {
+	let temp = TempDir::new().expect("create temporary project");
+	let docker = FailingDockerEngine::new(FailingDockerOperation::Remove);
+
+	let error = InfraCommand::up_with_config(temp.path(), postgres_config(), docker.clone())
+		.await
+		.expect_err("removal failures must stop provisioning");
+
+	assert_eq!(error.to_string(), "scripted removal failure");
+	assert_eq!(
+		docker.calls(),
+		vec![DockerCall::RemoveContainer {
+			name: postgres_container_name(temp.path()),
+		}]
+	);
+	assert!(
+		StateStore::new(temp.path())
+			.load()
+			.expect("read state")
+			.is_none()
+	);
+}
+
+#[tokio::test]
+async fn infra_up_stops_after_run_failure_without_persisting_state() {
+	let temp = TempDir::new().expect("create temporary project");
+	let docker = FailingDockerEngine::new(FailingDockerOperation::Run);
+
+	let error = InfraCommand::up_with_config(temp.path(), postgres_config(), docker.clone())
+		.await
+		.expect_err("run failures must stop provisioning");
+
+	assert_eq!(error.to_string(), "scripted run failure");
+	assert_eq!(
+		docker.calls(),
+		vec![
+			DockerCall::RemoveContainer {
+				name: postgres_container_name(temp.path()),
+			},
+			DockerCall::RunDetached {
+				spec: DockerRunSpec {
+					name: postgres_container_name(temp.path()),
+					image: "postgres:17-alpine".to_string(),
+					host_port: 55432,
+					container_port: 5432,
+					env: vec![
+						("POSTGRES_USER".to_string(), "postgres".to_string()),
+						("POSTGRES_PASSWORD".to_string(), "postgres".to_string()),
+						("POSTGRES_DB".to_string(), "app".to_string()),
+					],
+				},
+			},
+		]
+	);
+	assert!(
+		StateStore::new(temp.path())
+			.load()
+			.expect("read state")
+			.is_none()
+	);
+}
+
+#[tokio::test]
+async fn infra_down_stops_after_first_removal_failure_and_retains_state() {
+	let temp = TempDir::new().expect("create temporary project");
+	let state = valid_state(temp.path());
+	StateStore::new(temp.path())
+		.save(&state)
+		.expect("save state");
+	let docker = FailingDockerEngine::new(FailingDockerOperation::Remove);
+
+	let error = InfraCommand::execute_with_runner(
+		InfraSubcommand::Down { profile: None },
+		temp.path(),
+		docker.clone(),
+	)
+	.await
+	.expect_err("removal failure must stop down");
+
+	assert_eq!(error.to_string(), "scripted removal failure");
+	assert_eq!(
+		docker.calls(),
+		vec![DockerCall::RemoveContainer {
+			name: postgres_container_name(temp.path()),
+		}]
+	);
+	assert_eq!(
+		StateStore::new(temp.path()).load().expect("read state"),
+		Some(state)
+	);
+}
+
+#[tokio::test]
+async fn infra_status_reports_the_service_when_binding_lookup_fails() {
+	let temp = TempDir::new().expect("create temporary project");
+	StateStore::new(temp.path())
+		.save(&valid_state(temp.path()))
+		.expect("save state");
+	let docker = FailingDockerEngine::new(FailingDockerOperation::Binding);
+
+	let error = InfraCommand::execute_with_runner(
+		InfraSubcommand::Status {
+			profile: None,
+			json: true,
+		},
+		temp.path(),
+		docker.clone(),
+	)
+	.await
+	.expect_err("binding lookup failures must name the service");
+
+	assert_eq!(
+		error.to_string(),
+		"failed to inspect local infrastructure service `postgres` binding: scripted binding failure"
+	);
+	assert_eq!(
+		docker.calls(),
+		vec![DockerCall::ContainerPortBinding {
+			name: postgres_container_name(temp.path()),
+			container_port: 5432,
+		}]
+	);
+}
+
+#[rstest]
+#[case::wrong_project_id(
+	|state: &mut LocalInfraState| state.project_id = "other-project".to_string(),
+	"project identifier does not match this workspace"
+)]
+#[case::invalid_profile(
+	|state: &mut LocalInfraState| state.profile = "qa.eu".to_string(),
+	"profile is invalid"
+)]
+#[case::unknown_service(
+	|state: &mut LocalInfraState| state.services[0].name = "mysql".to_string(),
+	"service name is invalid"
+)]
+#[case::duplicate_service(
+	|state: &mut LocalInfraState| state.services.push(state.services[0].clone()),
+	"service is duplicated"
+)]
+#[case::wrong_image(
+	|state: &mut LocalInfraState| state.services[0].image = "postgres:latest".to_string(),
+	"service does not match local infrastructure configuration"
+)]
+#[case::remote_host(
+	|state: &mut LocalInfraState| state.services[0].host = "203.0.113.10".to_string(),
+	"service does not match local infrastructure configuration"
+)]
+#[case::zero_host_port(
+	|state: &mut LocalInfraState| state.services[0].host_port = 0,
+	"service does not match local infrastructure configuration"
+)]
+#[case::wrong_container_port(
+	|state: &mut LocalInfraState| state.services[0].container_port = 5433,
+	"service does not match local infrastructure configuration"
+)]
+#[case::unstable_container_name(
+	|state: &mut LocalInfraState| state.services[0].container_name = "unrelated-container".to_string(),
+	"service does not match local infrastructure configuration"
+)]
+#[case::missing_postgres_database(
+	|state: &mut LocalInfraState| state.services[0].metadata = serde_json::json!({"user": "postgres"}),
+	"service does not match local infrastructure configuration"
+)]
+#[case::missing_postgres_user(
+	|state: &mut LocalInfraState| state.services[0].metadata = serde_json::json!({"database": "app"}),
+	"service does not match local infrastructure configuration"
+)]
+#[case::redis_database_above_u16_max(
+	|state: &mut LocalInfraState| {
+		state.services[0] = LocalServiceState {
+			name: "redis".to_string(),
+			container_name: format!("reinhardt-{}-local-redis", state.project_id),
+			image: "redis:7-alpine".to_string(),
+			host: "127.0.0.1".to_string(),
+			host_port: 56379,
+			container_port: 6379,
+			status: ServiceRuntimeStatus::Running,
+			metadata: serde_json::json!({"database": u32::from(u16::MAX) + 1}),
+		};
+	},
+	"service does not match local infrastructure configuration"
+)]
+fn state_store_rejects_every_invalid_persisted_state_mutation(
+	#[case] mutate: fn(&mut LocalInfraState),
+	#[case] category: &str,
+) {
+	let temp = TempDir::new().expect("create temporary project");
+	let store = StateStore::new(temp.path());
+	let mut state = valid_state(temp.path());
+	mutate(&mut state);
+	std::fs::create_dir_all(store.path().parent().expect("state directory"))
+		.expect("create state directory");
+	std::fs::write(
+		store.path(),
+		serde_json::to_vec(&state).expect("serialize state"),
+	)
+	.expect("write tampered state");
+
+	let error = store.load().expect_err("tampered state must be rejected");
+
+	assert_eq!(error.kind(), std::io::ErrorKind::InvalidData);
+	assert_eq!(
+		error.to_string(),
+		format!("local infrastructure state {category}")
+	);
+}
+
+#[test]
+fn state_store_save_failure_preserves_existing_valid_state() {
+	let temp = TempDir::new().expect("create temporary project");
+	let store = StateStore::new(temp.path());
+	let original = valid_state(temp.path());
+	store.save(&original).expect("save original state");
+	std::fs::create_dir(store.path().with_extension("json.tmp"))
+		.expect("create temporary-file failure sentinel");
+	let mut replacement = valid_state(temp.path());
+	replacement.profile = "staging".to_string();
+	replacement.services[0].container_name =
+		format!("reinhardt-{}-staging-postgres", project_id(temp.path()));
+
+	let error = store
+		.save(&replacement)
+		.expect_err("temporary write must fail");
+
+	assert_eq!(error.kind(), std::io::ErrorKind::IsADirectory);
+	assert_eq!(store.load().expect("reload original state"), Some(original));
+}
+
+fn postgres_config() -> LocalInfraConfig {
+	LocalInfraConfig::derive(
+		"caller-supplied-project",
+		"local",
+		Some(DatabaseInfraInput {
+			engine: "postgresql".to_string(),
+			host: "localhost".to_string(),
+			port: 55432,
+			name: "app".to_string(),
+			user: "postgres".to_string(),
+			password: Some("postgres".to_string()),
+		}),
+		None,
+	)
+	.expect("derive postgres configuration")
+}
+
+fn valid_state(project_root: &std::path::Path) -> LocalInfraState {
+	LocalInfraState {
+		project_id: project_id(project_root),
+		profile: "local".to_string(),
+		services: vec![LocalServiceState {
+			name: "postgres".to_string(),
+			container_name: postgres_container_name(project_root),
+			image: "postgres:17-alpine".to_string(),
+			host: "127.0.0.1".to_string(),
+			host_port: 55432,
+			container_port: 5432,
+			status: ServiceRuntimeStatus::Running,
+			metadata: serde_json::json!({"database": "app", "user": "postgres"}),
+		}],
+	}
+}
+
+fn postgres_container_name(project_root: &std::path::Path) -> String {
+	format!("reinhardt-{}-local-postgres", project_id(project_root))
 }

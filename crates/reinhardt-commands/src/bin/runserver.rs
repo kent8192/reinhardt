@@ -1193,6 +1193,29 @@ mod tests {
 		assert!(secret.bytes().all(|byte| byte.is_ascii_hexdigit()));
 	}
 
+	#[test]
+	fn self_signed_tls_material_builds_a_server_configuration_and_rejects_invalid_pem() {
+		// Arrange
+		let _ = rustls::crypto::ring::default_provider().install_default();
+		let temp_dir = tempfile::TempDir::new().expect("create TLS fixture directory");
+		let cert_path = temp_dir.path().join("invalid-cert.pem");
+		let key_path = temp_dir.path().join("invalid-key.pem");
+		std::fs::write(&cert_path, "not a certificate").expect("write invalid certificate");
+		std::fs::write(&key_path, "not a key").expect("write invalid key");
+
+		// Act
+		let (certificates, key) =
+			generate_self_signed_cert().expect("generate development TLS material");
+		let generated = ServerConfig::builder()
+			.with_no_client_auth()
+			.with_single_cert(certificates, key);
+		let invalid = load_tls_config(&cert_path, &key_path);
+
+		// Assert
+		assert!(generated.is_ok());
+		assert!(invalid.is_err());
+	}
+
 	async fn response_text(
 		response: Response<Full<Bytes>>,
 	) -> (StatusCode, hyper::HeaderMap, String) {

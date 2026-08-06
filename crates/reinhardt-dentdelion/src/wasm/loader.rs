@@ -244,7 +244,7 @@ impl WasmPluginLoader {
 		})?;
 
 		// Parse as TOML - look for [wasm] section
-		let value: toml::Value = content.parse().map_err(|e| {
+		let value: toml::Value = toml::from_str(&content).map_err(|e| {
 			PluginError::ManifestParseError(format!("Failed to parse {}: {}", path.display(), e))
 		})?;
 
@@ -398,22 +398,228 @@ impl std::fmt::Debug for WasmPluginLoader {
 mod tests {
 	use super::*;
 	use crate::wasm::runtime::WasmRuntimeConfig;
+	use std::fs;
+	use tempfile::TempDir;
+
+	fn new_test_loader(plugin_dir: &Path) -> WasmPluginLoader {
+		let runtime = Arc::new(
+			WasmRuntime::new(WasmRuntimeConfig::default()).expect("test runtime should initialize"),
+		);
+		WasmPluginLoader::new(plugin_dir, runtime)
+	}
+
+	fn write_valid_wasm(path: &Path) {
+		fs::write(path, b"\0asm\x01\0\0\0").expect("test WASM should be written");
+	}
 
 	#[tokio::test]
 	async fn test_discover_empty_dir() {
-		let runtime = Arc::new(WasmRuntime::new(WasmRuntimeConfig::default()).unwrap());
-		let loader = WasmPluginLoader::new("/nonexistent/path", runtime);
+		let temp = TempDir::new().expect("temporary directory should be created");
+		let loader = new_test_loader(&temp.path().join("missing"));
 
-		let plugins = loader.discover().await.unwrap();
+		let plugins = loader
+			.discover()
+			.await
+			.expect("missing directory discovery should succeed");
 		assert!(plugins.is_empty());
 	}
 
 	#[tokio::test]
 	async fn test_load_nonexistent_plugin() {
-		let runtime = Arc::new(WasmRuntime::new(WasmRuntimeConfig::default()).unwrap());
-		let loader = WasmPluginLoader::new("/tmp", runtime);
+		let temp = TempDir::new().expect("temporary plugin directory should be created");
+		let loader = new_test_loader(temp.path());
 
 		let result = loader.load_by_name("nonexistent-plugin").await;
 		assert!(matches!(result, Err(PluginError::NotFound(_))));
+	}
+
+	#[tokio::test]
+	async fn discover_flat_wasm_uses_filename_and_defaults() {
+		let temp = TempDir::new().expect("temporary plugin directory should be created");
+		let wasm_path = temp.path().join("alpha.wasm");
+		write_valid_wasm(&wasm_path);
+
+		let plugins = new_test_loader(temp.path())
+			.discover()
+			.await
+			.expect("plugin discovery should succeed");
+
+		assert_eq!(plugins.len(), 1);
+		assert_eq!(plugins[0].name, "alpha");
+		assert_eq!(plugins[0].wasm_path, wasm_path);
+		assert_eq!(plugins[0].manifest_path, None);
+		assert!(plugins[0].config.is_none());
+	}
+
+	#[tokio::test]
+	async fn discover_flat_wasm_parses_explicit_manifest_values() {
+		let temp = TempDir::new().expect("temporary plugin directory should be created");
+		let wasm_path = temp.path().join("configured.wasm");
+		let manifest_path = temp.path().join("configured.toml");
+		write_valid_wasm(&wasm_path);
+		fs::write(
+			&manifest_path,
+			"[wasm]\nmemory_limit_mb = 64\ntimeout_secs = 9\ncapabilities = [\"commands\", \"routing\"]\n",
+		)
+		.expect("test manifest should be written");
+
+		let plugins = new_test_loader(temp.path())
+			.discover()
+			.await
+			.expect("plugin discovery should succeed");
+		let config = plugins[0]
+			.config
+			.as_ref()
+			.expect("valid manifest should produce configuration");
+
+		assert_eq!(plugins.len(), 1);
+		assert_eq!(plugins[0].manifest_path.as_ref(), Some(&manifest_path));
+		assert_eq!(config.memory_limit_mb, 64);
+		assert_eq!(config.timeout_secs, 9);
+		assert_eq!(config.capabilities, vec!["commands", "routing"]);
+	}
+
+	#[tokio::test]
+	async fn discover_nested_plugin_honors_manifest_precedence() {
+		let temp = TempDir::new().expect("temporary plugin directory should be created");
+		let plugin_dir = temp.path().join("nested");
+		fs::create_dir(&plugin_dir).expect("nested plugin directory should be created");
+		let preferred_wasm = plugin_dir.join("plugin.wasm");
+		let preferred_manifest = plugin_dir.join("plugin.toml");
+		write_valid_wasm(&preferred_wasm);
+		write_valid_wasm(&plugin_dir.join("nested.wasm"));
+		fs::write(
+			&preferred_manifest,
+			"[wasm]\nmemory_limit_mb = 32\ntimeout_secs = 7\ncapabilities = [\"handlers\"]\n",
+		)
+		.expect("preferred manifest should be written");
+		fs::write(
+			plugin_dir.join("nested.toml"),
+			"[wasm]\nmemory_limit_mb = 99\ntimeout_secs = 99\n",
+		)
+		.expect("fallback manifest should be written");
+
+		let plugins = new_test_loader(temp.path())
+			.discover()
+			.await
+			.expect("plugin discovery should succeed");
+		let config = plugins[0]
+			.config
+			.as_ref()
+			.expect("preferred manifest should produce configuration");
+
+		assert_eq!(plugins.len(), 1);
+		assert_eq!(plugins[0].name, "nested");
+		assert_eq!(plugins[0].wasm_path, preferred_wasm);
+		assert_eq!(plugins[0].manifest_path.as_ref(), Some(&preferred_manifest));
+		assert_eq!(config.memory_limit_mb, 32);
+		assert_eq!(config.timeout_secs, 7);
+		assert_eq!(config.capabilities, vec!["handlers"]);
+	}
+
+	#[tokio::test]
+	async fn discover_nested_plugin_falls_back_to_directory_names() {
+		let temp = TempDir::new().expect("temporary plugin directory should be created");
+		let plugin_dir = temp.path().join("fallback");
+		fs::create_dir(&plugin_dir).expect("nested plugin directory should be created");
+		let wasm_path = plugin_dir.join("fallback.wasm");
+		let manifest_path = plugin_dir.join("fallback.toml");
+		write_valid_wasm(&wasm_path);
+		fs::write(
+			&manifest_path,
+			"[wasm]\nmemory_limit_mb = 128\ntimeout_secs = 11\n",
+		)
+		.expect("fallback manifest should be written");
+
+		let plugins = new_test_loader(temp.path())
+			.discover()
+			.await
+			.expect("plugin discovery should succeed");
+		let config = plugins[0]
+			.config
+			.as_ref()
+			.expect("fallback manifest should produce configuration");
+
+		assert_eq!(plugins.len(), 1);
+		assert_eq!(plugins[0].name, "fallback");
+		assert_eq!(plugins[0].wasm_path, wasm_path);
+		assert_eq!(plugins[0].manifest_path.as_ref(), Some(&manifest_path));
+		assert_eq!(config.memory_limit_mb, 128);
+		assert_eq!(config.timeout_secs, 11);
+		assert_eq!(config.capabilities, Vec::<String>::new());
+	}
+
+	#[tokio::test]
+	async fn discover_ignores_invalid_wasm_magic() {
+		let temp = TempDir::new().expect("temporary plugin directory should be created");
+		fs::write(temp.path().join("invalid.wasm"), b"not wasm")
+			.expect("invalid WASM fixture should be written");
+
+		let plugins = new_test_loader(temp.path())
+			.discover()
+			.await
+			.expect("plugin discovery should succeed");
+
+		assert_eq!(plugins.len(), 0);
+	}
+
+	#[tokio::test]
+	async fn discover_retains_plugin_when_manifest_is_invalid() {
+		let temp = TempDir::new().expect("temporary plugin directory should be created");
+		let wasm_path = temp.path().join("invalid-manifest.wasm");
+		write_valid_wasm(&wasm_path);
+		fs::write(temp.path().join("invalid-manifest.toml"), "[wasm\n")
+			.expect("invalid manifest fixture should be written");
+
+		let plugins = new_test_loader(temp.path())
+			.discover()
+			.await
+			.expect("plugin discovery should succeed");
+
+		assert_eq!(plugins.len(), 1);
+		assert_eq!(plugins[0].wasm_path, wasm_path);
+		assert_eq!(plugins[0].manifest_path, None);
+		assert!(plugins[0].config.is_none());
+	}
+
+	#[tokio::test]
+	async fn parse_plugin_manifest_rejects_memory_limit_outside_u32_range() {
+		let temp = TempDir::new().expect("temporary plugin directory should be created");
+		let manifest_path = temp.path().join("memory-limit.toml");
+		fs::write(&manifest_path, "[wasm]\nmemory_limit_mb = 4294967296\n")
+			.expect("test manifest should be written");
+
+		let error = new_test_loader(temp.path())
+			.parse_plugin_manifest(&manifest_path)
+			.await
+			.expect_err("out-of-range memory limit should be rejected");
+
+		match error {
+			PluginError::ConfigError(message) => assert_eq!(
+				message,
+				"memory_limit_mb value 4294967296 is out of u32 range"
+			),
+			other => panic!("expected ConfigError, got {other:?}"),
+		}
+	}
+
+	#[tokio::test]
+	async fn parse_plugin_manifest_rejects_timeout_outside_u32_range() {
+		let temp = TempDir::new().expect("temporary plugin directory should be created");
+		let manifest_path = temp.path().join("timeout.toml");
+		fs::write(&manifest_path, "[wasm]\ntimeout_secs = 4294967296\n")
+			.expect("test manifest should be written");
+
+		let error = new_test_loader(temp.path())
+			.parse_plugin_manifest(&manifest_path)
+			.await
+			.expect_err("out-of-range timeout should be rejected");
+
+		match error {
+			PluginError::ConfigError(message) => {
+				assert_eq!(message, "timeout_secs value 4294967296 is out of u32 range")
+			}
+			other => panic!("expected ConfigError, got {other:?}"),
+		}
 	}
 }

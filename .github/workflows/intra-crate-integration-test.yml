@@ -98,6 +98,13 @@ jobs:
         with:
           tool: nextest
 
+      # Required by reinhardt-dentdelion's source-built minimal Component
+      # lifecycle test. The test fails instead of skipping when unavailable.
+      - name: Install cargo-component
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-component
+
       # Required by Tier 3 E2E tests (e.g. spa_navigation_full_layout_e2e in
       # crates/reinhardt-pages) which build a fixture WASM bundle via
       # `wasm-pack build`. The test refuses to skip silently when CI=true.
@@ -116,13 +123,15 @@ jobs:
         with:
           tool: wasm-bindgen-cli
 
+      # wasm32-unknown-unknown supports Pages and command fixtures;
+      # wasm32-wasip1 supports the Dentdelion Component fixture. Tracked in #5933.
       # Required by hot-reload tests in crates/reinhardt-commands
       # (runserver_hot_reload.rs::hr_1_wasm_change_triggers_wasm_rebuild,
       # hr_6_issue_4128_reproduction) which invoke an in-process
       # `cargo build --target wasm32-unknown-unknown` and panic with
       # TargetNotInstalled when the target is missing. Tracked in #4192.
-      - name: Install wasm32-unknown-unknown target
-        run: rustup target add wasm32-unknown-unknown
+      - name: Install WASM targets
+        run: rustup target add wasm32-unknown-unknown wasm32-wasip1
 
       # Scope mold to the host target only. A global `RUSTFLAGS=...-fuse-ld=mold`
       # leaks into wasm32 builds (e.g. wasm-pack fixtures) and clang rejects

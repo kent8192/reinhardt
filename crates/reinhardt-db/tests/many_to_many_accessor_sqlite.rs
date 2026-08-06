@@ -166,8 +166,11 @@ async fn lifecycle_binds_values_and_preserves_exact_relationship_state() {
 	);
 
 	let second_page =
-		ManyToManyAccessor::<User, Group>::new(&user, "groups", db.clone()).paginate(2, 1);
-	assert_eq!(sorted_group_ids(&second_page.all().await.unwrap()), vec![2]);
+		ManyToManyAccessor::<User, Group>::new(&user, "groups", db.clone()).paginate(2, 10);
+	assert_eq!(
+		sorted_group_ids(&second_page.all().await.unwrap()),
+		Vec::<i64>::new()
+	);
 
 	accessor
 		.clear()

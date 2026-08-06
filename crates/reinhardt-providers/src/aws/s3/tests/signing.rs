@@ -195,41 +195,57 @@ fn insert_header_reports_invalid_header_values() {
 
 #[rstest]
 fn invalid_endpoint_returns_a_url_error() {
+	// Arrange
 	let client = S3Client::new(test_config(Some("://not-a-url".to_string())));
-	assert!(matches!(
-		client.object_url("test.txt", "us-east-1"),
-		Err(ProviderError::Url(_))
-	));
+
+	// Act
+	let error = client
+		.object_url("test.txt", "us-east-1")
+		.expect_err("invalid endpoint must not build an object URL");
+
+	// Assert
+	match error {
+		ProviderError::Url(error) => assert_eq!(error, url::ParseError::RelativeUrlWithoutBase),
+		other => panic!("unexpected endpoint validation error: {other:?}"),
+	}
 }
 
 #[rstest]
 #[tokio::test]
-#[case(604_800, None)]
-#[case(
-	604_801,
-	Some(
-		"provider configuration error: S3 presigned URLs cannot expire after more than seven days"
-	)
-)]
-async fn presigning_enforces_the_seven_day_expiry_limit(
-	#[case] seconds: u64,
-	#[case] expected_error: Option<&str>,
-) {
+async fn presigning_accepts_the_seven_day_expiry_limit() {
+	// Arrange
 	let client = S3Client::with_test_dependencies(test_config(None), Client::new(), fixed_now());
-	let result = client
-		.presigned_get_url("test.txt", Duration::from_secs(seconds))
+
+	// Act
+	let url = client
+		.presigned_get_url("test.txt", Duration::from_secs(604_800))
 		.await;
 
-	if let Some(expected_error) = expected_error {
-		assert_eq!(
-			result.expect_err("expiry must be rejected").to_string(),
-			expected_error
-		);
-	} else {
-		let url = result.expect("seven-day expiry is accepted");
-		let parsed = Url::parse(&url).expect("presigned URL is valid");
-		let query = parsed.query_pairs().collect::<BTreeMap<_, _>>();
-		assert_eq!(query["X-Amz-Expires"], "604800");
+	// Assert
+	let parsed =
+		Url::parse(&url.expect("seven-day expiry is accepted")).expect("presigned URL is valid");
+	let query = parsed.query_pairs().collect::<BTreeMap<_, _>>();
+	assert_eq!(query["X-Amz-Expires"], "604800");
+}
+
+#[rstest]
+#[tokio::test]
+async fn presigning_rejects_expiries_longer_than_seven_days() {
+	// Arrange
+	let client = S3Client::with_test_dependencies(test_config(None), Client::new(), fixed_now());
+
+	// Act
+	let result = client
+		.presigned_get_url("test.txt", Duration::from_secs(604_801))
+		.await;
+
+	// Assert
+	match result.expect_err("expiry must be rejected") {
+		ProviderError::Config(message) => assert_eq!(
+			message,
+			"S3 presigned URLs cannot expire after more than seven days"
+		),
+		other => panic!("unexpected expiry validation error: {other:?}"),
 	}
 }
 

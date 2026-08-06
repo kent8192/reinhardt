@@ -6,6 +6,7 @@ This is a minimal test plugin that implements all required lifecycle functions w
 
 ```
 minimal/
+├── Cargo.lock          # Locked fixture dependencies used by --locked builds
 ├── Cargo.toml          # Plugin manifest with WASM component metadata
 ├── wit/
 │   └── dentdelion.wit  # WIT interface definition (copy from crates/reinhardt-dentdelion/wit/)
@@ -27,10 +28,13 @@ The plugin implements the `reinhardt:dentdelion/plugin` interface with minimal f
 
 ## Test Contract
 
-`tests/wasm_integration.rs` builds this crate with `cargo component build
---release` every time the mandatory lifecycle integration test runs. The test
-sets `CARGO_TARGET_DIR` to a temporary directory, loads the generated Component,
-and removes the directory through RAII when the test exits.
+`tests/wasm_integration.rs` copies this complete source tree, except any stale
+`target/` artifacts, into a temporary root every time the mandatory lifecycle
+integration test runs. It builds the copied manifest with `cargo component build
+--release --locked`, places `CARGO_TARGET_DIR` under the same temporary root,
+and loads the generated Component. The copied source, any generated source or
+lockfile changes, and all target artifacts are removed through RAII when the
+test exits.
 
 The repository does not store a generated `minimal_plugin.wasm`. A missing
 `cargo-component` command, missing `wasm32-wasip1` target, compilation failure,

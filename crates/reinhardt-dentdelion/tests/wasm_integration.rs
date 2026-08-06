@@ -12,6 +12,9 @@ mod wasm_tests {
 		wasm::{WasmPluginInstance, WasmPluginLoader, WasmRuntime, WasmRuntimeConfig},
 	};
 	use semver::Version;
+	use std::ffi::OsStr;
+	use std::fs;
+	use std::io;
 	use std::path::{Path, PathBuf};
 	use std::process::Command;
 	use std::sync::Arc;
@@ -113,10 +116,17 @@ mod wasm_tests {
 		let runtime = Arc::new(
 			WasmRuntime::new(WasmRuntimeConfig::default()).expect("WASM runtime should initialize"),
 		);
-		let loader = WasmPluginLoader::new(PathBuf::from(env!("CARGO_MANIFEST_DIR")), runtime);
+		let fixture_dir = TempDir::new().expect("temporary fixture directory should be created");
+		let fixture_root = fixture_dir
+			.path()
+			.canonicalize()
+			.expect("temporary fixture directory should have an absolute path");
+		let missing_path = fixture_root.join("nonexistent_plugin.wasm");
+		assert!(!missing_path.exists());
+		let loader = WasmPluginLoader::new(fixture_root, runtime);
 
 		let error = loader
-			.load_from_path("nonexistent_plugin.wasm")
+			.load_from_path(&missing_path)
 			.await
 			.expect_err("loading a missing plugin should fail");
 		match error {
@@ -133,7 +143,7 @@ mod wasm_tests {
 	}
 
 	struct BuiltMinimalFixture {
-		_target_dir: TempDir,
+		_root_dir: TempDir,
 		component_path: PathBuf,
 	}
 
@@ -167,13 +177,24 @@ mod wasm_tests {
 			);
 		}
 
-		let manifest_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-			.join("tests/fixtures/plugins/minimal/Cargo.toml");
-		let target_dir = TempDir::new().expect("temporary Component target should be created");
+		let source_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+			.join("tests/fixtures/plugins/minimal");
+		let root_dir = TempDir::new().expect("temporary Component root should be created");
+		let fixture_dir = root_dir.path().join("minimal");
+		copy_fixture_tree(&source_dir, &fixture_dir)
+			.expect("minimal Component fixture should be copied to the temporary root");
+		let manifest_path = fixture_dir.join("Cargo.toml");
+		let target_dir = root_dir.path().join("target");
 		let output = Command::new("cargo")
-			.args(["component", "build", "--release", "--manifest-path"])
+			.args([
+				"component",
+				"build",
+				"--release",
+				"--locked",
+				"--manifest-path",
+			])
 			.arg(&manifest_path)
-			.env("CARGO_TARGET_DIR", target_dir.path())
+			.env("CARGO_TARGET_DIR", &target_dir)
 			.output()
 			.expect("cargo component build should start");
 		if !output.status.success() {
@@ -185,9 +206,7 @@ mod wasm_tests {
 			);
 		}
 
-		let component_path = target_dir
-			.path()
-			.join("wasm32-wasip1/release/minimal_plugin.wasm");
+		let component_path = target_dir.join("wasm32-wasip1/release/minimal_plugin.wasm");
 		if !component_path.is_file() {
 			panic!(
 				"minimal Component build succeeded without expected output: wasm32-wasip1/release/minimal_plugin.wasm"
@@ -195,9 +214,29 @@ mod wasm_tests {
 		}
 
 		BuiltMinimalFixture {
-			_target_dir: target_dir,
+			_root_dir: root_dir,
 			component_path,
 		}
+	}
+
+	fn copy_fixture_tree(source: &Path, destination: &Path) -> io::Result<()> {
+		fs::create_dir_all(destination)?;
+		for entry in fs::read_dir(source)? {
+			let entry = entry?;
+			let file_type = entry.file_type()?;
+			if file_type.is_dir() && entry.file_name() == OsStr::new("target") {
+				continue;
+			}
+
+			let destination_path = destination.join(entry.file_name());
+			if file_type.is_dir() {
+				copy_fixture_tree(&entry.path(), &destination_path)?;
+			} else {
+				fs::copy(entry.path(), destination_path)?;
+			}
+		}
+
+		Ok(())
 	}
 
 	fn assert_invalid_transition(

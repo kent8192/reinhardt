@@ -1393,6 +1393,11 @@ mod tests {
 		assert!(resolve_spa_index(&missing).is_none());
 		assert!(run_collectstatic(&missing));
 		assert!(Path::new("staticfiles/manifest.json").is_file());
+		std::fs::write("blocked", "not a directory").expect("write static-root blocker");
+		assert!(!run_collectstatic(&RunServerSettings {
+			static_root: Some(PathBuf::from("blocked/child")),
+			..missing
+		}));
 	}
 
 	#[tokio::test]

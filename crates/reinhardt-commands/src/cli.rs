@@ -1977,6 +1977,23 @@ mod tests {
 	}
 
 	#[tokio::test]
+	#[cfg(feature = "openapi")]
+	#[serial_test::serial(cli_openapi_env)]
+	async fn generateopenapi_propagates_output_path_failures() {
+		// Arrange
+		let temp_dir = tempfile::tempdir().expect("temporary API output directory");
+
+		// Act
+		let error =
+			execute_generateopenapi("json".to_string(), temp_dir.path().to_path_buf(), false, 0)
+				.await
+				.expect_err("schema cannot overwrite an output directory");
+
+		// Assert
+		assert!(error.to_string().contains("Is a directory"));
+	}
+
+	#[tokio::test]
 	async fn run_command_with_registry_forwards_custom_context() {
 		let recorded = Arc::new(Mutex::new(None));
 		let mut registry = CommandRegistry::new();

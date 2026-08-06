@@ -374,7 +374,6 @@ jobs:
           bash scripts/validate-lcov-hits.sh /tmp/intra-crate-lcov.info
 
       - name: Upload coverage to Codecov
-        if: always()
         uses: codecov/codecov-action@v5
         with:
           files: /tmp/intra-crate-lcov.info

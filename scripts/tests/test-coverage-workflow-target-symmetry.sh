@@ -20,7 +20,9 @@ end
 configure = step.call("Configure mold linker for coverage").fetch("run")
 test_run = step.call("Run intra-crate integration tests with coverage").fetch("run")
 report = step.call("Generate intra-crate coverage report").fetch("run")
-upload_index = steps.index { |candidate| candidate["uses"] == "codecov/codecov-action@v5" }
+upload = steps.find { |candidate| candidate["uses"] == "codecov/codecov-action@v5" } ||
+  raise("missing intra-crate Codecov upload step")
+upload_index = steps.index(upload)
 report_index = steps.index { |candidate| candidate["name"] == "Generate intra-crate coverage report" }
 
 raise "intra-crate job must export COVERAGE_HOST_TARGET exactly once" unless
@@ -37,6 +39,7 @@ raise "intra-crate LCOV must be validated exactly once" unless
   report.scan("bash scripts/validate-lcov-hits.sh /tmp/intra-crate-lcov.info").length == 1
 raise "LCOV validation must run before Codecov upload" unless
   report_index && upload_index && report_index < upload_index
+raise "intra-crate Codecov upload must remain fail-closed" if upload.key?("if")
 
 puts "PASS: intra-crate coverage target symmetry"
 RUBY

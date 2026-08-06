@@ -24,3 +24,13 @@ The S3 client supports the object operations required by
 
 Credentials and region are loaded through `aws-config`, preserving the AWS SDK
 default provider chain without constructing an `aws-sdk-s3` service client.
+
+### Credentials and endpoints
+
+`S3ClientConfig` accepts either static `AwsCredentials` or the AWS SDK default
+credential provider chain. Custom S3-compatible endpoints use path-style
+addressing and preserve any endpoint base path when constructing object URLs.
+
+Presigned `GET` URLs use SigV4 and accept expirations up to the S3 limit of
+seven days. Object operations map missing objects, permission failures, and
+other service responses to the corresponding `ProviderError` variants.

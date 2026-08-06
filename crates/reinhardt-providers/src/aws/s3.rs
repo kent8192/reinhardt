@@ -133,7 +133,10 @@ impl S3Client {
 	///
 	/// # Errors
 	///
-	/// Returns an error when request signing, HTTP transport, or S3 fails.
+	/// Returns `ProviderError::NotFound` when S3 reports `404 Not Found` and
+	/// `ProviderError::PermissionDenied` when S3 reports `403 Forbidden`.
+	/// Returns `ProviderError::Service` for other unsuccessful S3 responses, or
+	/// an error when request signing or HTTP transport fails.
 	pub async fn put_object(&self, key: &str, body: impl Into<Bytes>) -> Result<()> {
 		let response = self.signed_request(Method::PUT, key, body.into()).await?;
 		self.expect_success(response, key).await
@@ -143,8 +146,10 @@ impl S3Client {
 	///
 	/// # Errors
 	///
-	/// Returns [`ProviderError::NotFound`] for missing objects and transport or
-	/// service errors for other failures.
+	/// Returns `ProviderError::NotFound` when S3 reports `404 Not Found` and
+	/// `ProviderError::PermissionDenied` when S3 reports `403 Forbidden`.
+	/// Returns `ProviderError::Service` for other unsuccessful S3 responses, or
+	/// an error when request signing or HTTP transport fails.
 	pub async fn get_object(&self, key: &str) -> Result<Bytes> {
 		let response = self.signed_request(Method::GET, key, Bytes::new()).await?;
 
@@ -162,7 +167,10 @@ impl S3Client {
 	///
 	/// # Errors
 	///
-	/// Returns an error when request signing, HTTP transport, or S3 fails.
+	/// Returns `ProviderError::NotFound` when S3 reports `404 Not Found` and
+	/// `ProviderError::PermissionDenied` when S3 reports `403 Forbidden`.
+	/// Returns `ProviderError::Service` for other unsuccessful S3 responses, or
+	/// an error when request signing or HTTP transport fails.
 	pub async fn delete_object(&self, key: &str) -> Result<()> {
 		let response = self
 			.signed_request(Method::DELETE, key, Bytes::new())
@@ -172,11 +180,13 @@ impl S3Client {
 
 	/// Fetch object metadata.
 	///
-	/// Returns `Ok(None)` for missing objects.
+	/// Returns `Ok(None)` when S3 reports `404 Not Found`.
 	///
 	/// # Errors
 	///
-	/// Returns an error when request signing, HTTP transport, or S3 fails.
+	/// Returns `ProviderError::PermissionDenied` when S3 reports `403 Forbidden`
+	/// and `ProviderError::Service` for other unsuccessful S3 responses, or an
+	/// error when request signing or HTTP transport fails.
 	pub async fn head_object(&self, key: &str) -> Result<Option<ObjectMetadata>> {
 		let response = self.signed_request(Method::HEAD, key, Bytes::new()).await?;
 
@@ -194,8 +204,9 @@ impl S3Client {
 	///
 	/// # Errors
 	///
-	/// Returns an error when credentials are missing, the URL cannot be built, or
-	/// the expiry exceeds S3's seven-day SigV4 limit.
+	/// Returns `ProviderError::Config` when the expiry exceeds 604,800 seconds.
+	/// Also returns an error when credentials are missing or the URL cannot be
+	/// built.
 	pub async fn presigned_get_url(&self, key: &str, expires: Duration) -> Result<String> {
 		if expires.as_secs() > 604_800 {
 			return Err(ProviderError::Config(

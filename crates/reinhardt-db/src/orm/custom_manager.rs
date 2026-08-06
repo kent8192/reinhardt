@@ -603,6 +603,8 @@ impl<M: Model> CustomManager for Manager<M> {
 #[cfg(test)]
 mod tests {
 	use super::*;
+	use crate::orm::fields::{CharField, Field};
+	use crate::orm::inspection::FieldInfo;
 	use crate::orm::model::FieldSelector;
 	use crate::orm::query::{Filter, FilterOperator, FilterValue};
 	use serde::{Deserialize, Serialize};
@@ -642,6 +644,14 @@ mod tests {
 
 		fn set_primary_key(&mut self, value: Self::PrimaryKey) {
 			self.id = Some(value);
+		}
+
+		fn field_metadata() -> Vec<FieldInfo> {
+			let mut id = CharField::new(20);
+			id.set_attributes_from_name("id");
+			let mut title = CharField::new(255);
+			title.set_attributes_from_name("title");
+			vec![FieldInfo::from_field(&id), FieldInfo::from_field(&title)]
 		}
 	}
 
@@ -728,7 +738,7 @@ mod tests {
 		);
 		assert_eq!(
 			manager.defer(&["title"]).to_sql(),
-			"SELECT * FROM \"articles\""
+			"SELECT \"id\" FROM \"articles\""
 		);
 		assert_eq!(
 			manager.only(&["id", "title"]).to_sql(),

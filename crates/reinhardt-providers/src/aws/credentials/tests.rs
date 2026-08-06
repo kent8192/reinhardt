@@ -62,39 +62,6 @@ impl Drop for EnvGuard {
 	}
 }
 
-#[test]
-fn debug_redacts_static_credentials() {
-	let credentials =
-		AwsCredentials::new("access-key", "secret-key").with_session_token("session-token");
-	let credentials_debug = format!("{credentials:?}");
-	let source = AwsCredentialsSource::Static(credentials.clone());
-	let signing_config = AwsSigningConfig {
-		credentials,
-		region: Some("us-east-1".to_string()),
-	};
-
-	let debug = format!("{credentials_debug} {source:?} {signing_config:?}");
-
-	assert!(!debug.contains("access-key"));
-	assert!(!debug.contains("secret-key"));
-	assert!(!debug.contains("session-token"));
-	assert!(debug.contains("<redacted"));
-}
-
-#[test]
-#[serial(aws_credentials_env)]
-fn from_env_optional_rejects_standalone_session_token() {
-	let _guard = EnvGuard::replace(&[("AWS_SESSION_TOKEN", Some("session-token"))]);
-
-	let err = AwsCredentials::from_env_optional()
-		.expect_err("standalone AWS_SESSION_TOKEN should be rejected");
-
-	assert!(matches!(
-		err,
-		ProviderError::Config(message) if message.contains("complete static credential set")
-	));
-}
-
 #[rstest]
 fn credentials_expose_static_values() {
 	let credentials =

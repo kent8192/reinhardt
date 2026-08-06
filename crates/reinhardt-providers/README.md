@@ -22,8 +22,10 @@ The S3 client supports the object operations required by
 - `HEAD Object`
 - presigned `GET` URLs
 
-Credentials and region are loaded through `aws-config`, preserving the AWS SDK
-default provider chain without constructing an `aws-sdk-s3` service client.
+When `S3ClientConfig` uses the AWS SDK default provider chain, `aws-config`
+loads credentials and region without constructing an `aws-sdk-s3` service
+client. Static `AwsCredentials` bypass `aws-config` and use the configured
+region, falling back to `us-east-1` when none is configured.
 
 ### Credentials and endpoints
 
@@ -32,5 +34,8 @@ credential provider chain. Custom S3-compatible endpoints use path-style
 addressing and preserve any endpoint base path when constructing object URLs.
 
 Presigned `GET` URLs use SigV4 and accept expirations up to the S3 limit of
-seven days. Object operations map missing objects, permission failures, and
-other service responses to the corresponding `ProviderError` variants.
+seven days. `GET`, `PUT`, and `DELETE` map a `404 Not Found` response to
+`ProviderError::NotFound`, while `HEAD` maps it to `Ok(None)`. All object
+operations map `403 Forbidden` to `ProviderError::PermissionDenied` and other
+unsuccessful service responses to `ProviderError::Service`; request-signing and
+transport failures return their corresponding `ProviderError` variants.

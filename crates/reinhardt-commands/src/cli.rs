@@ -1293,7 +1293,7 @@ async fn execute_introspect(
 	section: Option<String>,
 	verbosity: u8,
 ) -> Result<(), Box<dyn std::error::Error>> {
-	use crate::introspect::{collect_introspect_data, format_json, format_yaml};
+	use crate::introspect::collect_introspect_data;
 	use colored::Colorize;
 
 	if verbosity > 0 {
@@ -1301,9 +1301,21 @@ async fn execute_introspect(
 	}
 
 	let output = collect_introspect_data()?;
+	let content = format_introspection_output(&output, section.as_deref(), format)?;
 
-	// If a section filter is specified, extract just that section
-	let content = if let Some(ref section_name) = section {
+	println!("{}", content);
+
+	Ok(())
+}
+
+/// Format an introspection result or one of its named sections.
+#[cfg(feature = "introspect")]
+fn format_introspection_output(
+	output: &crate::introspect::IntrospectOutput,
+	section: Option<&str>,
+	format: OutputFormat,
+) -> Result<String, Box<dyn std::error::Error>> {
+	Ok(if let Some(section_name) = section {
 		let valid_sections = [
 			"app",
 			"databases",
@@ -1312,7 +1324,7 @@ async fn execute_introspect(
 			"settings",
 			"features",
 		];
-		if !valid_sections.contains(&section_name.as_str()) {
+		if !valid_sections.contains(&section_name) {
 			return Err(format!(
 				"Invalid section '{}'. Valid sections: {}",
 				section_name,
@@ -1333,14 +1345,10 @@ async fn execute_introspect(
 		}
 	} else {
 		match format {
-			OutputFormat::Json => format_json(&output)?,
-			OutputFormat::Yaml => format_yaml(&output)?,
+			OutputFormat::Json => crate::introspect::format_json(output)?,
+			OutputFormat::Yaml => crate::introspect::format_yaml(output)?,
 		}
-	};
-
-	println!("{}", content);
-
-	Ok(())
+	})
 }
 
 // Stub when introspect feature is disabled — not reachable because the
@@ -1613,6 +1621,91 @@ mod tests {
 				recorded,
 			}
 		}
+	}
+
+	#[cfg(feature = "introspect")]
+	fn fixed_introspection_output() -> crate::introspect::IntrospectOutput {
+		crate::introspect::IntrospectOutput {
+			app: crate::introspect::AppMetadata {
+				name: "fixture".to_string(),
+				version: "1.0.0".to_string(),
+			},
+			databases: vec![],
+			routes: vec![],
+			middleware: vec![],
+			settings: crate::introspect::SettingsMetadata {
+				server: crate::introspect::ServerSettings {
+					default_port: 8000,
+					debug: true,
+				},
+				security: crate::introspect::SecuritySettings {
+					ssl_redirect: false,
+					session_cookie_secure: false,
+					csrf_cookie_secure: false,
+					hsts_enabled: false,
+				},
+			},
+			features: crate::introspect::FeaturesMetadata {
+				declared: vec![],
+				resolved: vec![],
+				infrastructure_signals: crate::introspect::InfraSignals {
+					database: "none".to_string(),
+					cache: "none".to_string(),
+					websocket: false,
+					background_worker: false,
+					grpc: false,
+					storage: None,
+					mail: None,
+					session_backend: None,
+					graphql: false,
+					admin_panel: false,
+					i18n: false,
+				},
+			},
+		}
+	}
+
+	#[cfg(feature = "introspect")]
+	#[rstest]
+	#[case("app")]
+	#[case("databases")]
+	#[case("routes")]
+	#[case("middleware")]
+	#[case("settings")]
+	#[case("features")]
+	fn format_introspection_section_selects_each_known_section(#[case] section: &str) {
+		// Arrange
+		let output = fixed_introspection_output();
+		let expected = serde_json::to_value(&output)
+			.expect("fixed output serializes")
+			.get(section)
+			.cloned()
+			.expect("known section exists");
+
+		// Act
+		let json = format_introspection_output(&output, Some(section), OutputFormat::Json)
+			.expect("known section formats");
+
+		// Assert
+		let actual: serde_json::Value = serde_json::from_str(&json).expect("JSON is valid");
+		assert_eq!(actual, expected);
+	}
+
+	#[cfg(feature = "introspect")]
+	#[rstest]
+	fn format_introspection_section_rejects_unknown_name_with_exact_error() {
+		// Arrange
+		let output = fixed_introspection_output();
+
+		// Act
+		let error = format_introspection_output(&output, Some("missing"), OutputFormat::Yaml)
+			.expect_err("unknown section is rejected");
+
+		// Assert
+		assert_eq!(
+			error.to_string(),
+			"Invalid section 'missing'. Valid sections: app, databases, routes, middleware, settings, features"
+		);
 	}
 
 	#[async_trait]

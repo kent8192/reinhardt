@@ -120,6 +120,7 @@ impl CollectStaticCommand {
 
 		// Validate configuration
 		self.validate_config()?;
+		self.validate_index_source()?;
 
 		// Clear destination if requested
 		if self.options.clear {
@@ -303,6 +304,20 @@ impl CollectStaticCommand {
 			return Err(io::Error::new(
 				io::ErrorKind::InvalidInput,
 				"STATIC_ROOT is not configured",
+			));
+		}
+
+		Ok(())
+	}
+
+	/// Validate explicit index input before collection can mutate static output.
+	fn validate_index_source(&self) -> Result<(), io::Error> {
+		if let Some(index_source) = &self.index_source
+			&& !index_source.exists()
+		{
+			return Err(io::Error::new(
+				io::ErrorKind::NotFound,
+				format!("Index source file not found: {}", index_source.display()),
 			));
 		}
 

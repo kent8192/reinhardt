@@ -551,6 +551,89 @@ fn test_collectstatic_file_collision(temp_dir: TempDir) {
 	);
 }
 
+/// Hashing stores the fingerprinted asset path in the manifest.
+#[rstest]
+fn test_collectstatic_hashes_assets_and_records_exact_manifest_entry(temp_dir: TempDir) {
+	// Arrange
+	let source_dir = temp_dir.path().join("source");
+	let static_root = temp_dir.path().join("staticfiles");
+	fs::create_dir_all(&source_dir).expect("source directory is created");
+	fs::write(source_dir.join("app.js"), "hello").expect("asset is written");
+	let config = StaticFilesConfig {
+		static_root: static_root.clone(),
+		static_url: "/static/".to_string(),
+		staticfiles_dirs: vec![source_dir],
+		media_url: None,
+	};
+	let mut command = CollectStaticCommand::new(
+		config,
+		CollectStaticOptions {
+			verbosity: 0,
+			..Default::default()
+		},
+	);
+
+	// Act
+	let stats = command.execute().expect("collection succeeds");
+	let manifest: serde_json::Value = serde_json::from_str(
+		&fs::read_to_string(static_root.join("manifest.json")).expect("manifest is readable"),
+	)
+	.expect("manifest is valid JSON");
+
+	// Assert
+	assert!(stats.copied >= 1);
+	assert_eq!(
+		manifest
+			.get("paths")
+			.and_then(serde_json::Value::as_object)
+			.and_then(|paths| paths.get("app.js")),
+		Some(&serde_json::Value::String("app.2cf24dba.js".to_string()))
+	);
+	assert_eq!(
+		fs::read_to_string(static_root.join("app.2cf24dba.js")).expect("hashed asset is readable"),
+		"hello"
+	);
+}
+
+/// Fast comparison treats large same-size assets as unchanged without reading their contents.
+#[rstest]
+fn test_collectstatic_fast_compare_preserves_existing_same_size_asset(temp_dir: TempDir) {
+	// Arrange
+	let source_dir = temp_dir.path().join("source");
+	let static_root = temp_dir.path().join("staticfiles");
+	fs::create_dir_all(&source_dir).expect("source directory is created");
+	fs::create_dir_all(&static_root).expect("static root is created");
+	fs::write(source_dir.join("asset.js"), vec![b'f'; 1024 * 1024 + 1])
+		.expect("source asset is written");
+	fs::write(static_root.join("asset.js"), vec![b's'; 1024 * 1024 + 1])
+		.expect("destination asset is written");
+	let config = StaticFilesConfig {
+		static_root: static_root.clone(),
+		static_url: "/static/".to_string(),
+		staticfiles_dirs: vec![source_dir],
+		media_url: None,
+	};
+	let mut command = CollectStaticCommand::new(
+		config,
+		CollectStaticOptions {
+			enable_hashing: false,
+			fast_compare: true,
+			verbosity: 0,
+			..Default::default()
+		},
+	);
+
+	// Act
+	let stats = command.execute().expect("collection succeeds");
+
+	// Assert
+	assert_eq!(stats.unmodified, 1);
+	assert_eq!(
+		fs::read(static_root.join("asset.js")).expect("destination asset is readable"),
+		vec![b's'; 1024 * 1024 + 1]
+	);
+}
+
 /// Test: CollectStaticCommand no user-configured sources
 ///
 /// Category: Edge Case
@@ -1154,6 +1237,47 @@ fn test_collectstatic_index_source_not_found_returns_error() {
 
 	// Assert
 	assert!(result.is_err());
+}
+
+/// A missing explicit index source must fail before collection mutates existing output.
+#[rstest]
+fn test_collectstatic_missing_index_source_preserves_existing_manifest(temp_dir: TempDir) {
+	// Arrange
+	let source_dir = temp_dir.path().join("source");
+	let static_root = temp_dir.path().join("staticfiles");
+	fs::create_dir_all(&source_dir).expect("source directory is created");
+	fs::create_dir_all(&static_root).expect("static root is created");
+	fs::write(source_dir.join("app.js"), "new asset").expect("asset is written");
+	fs::write(
+		static_root.join("manifest.json"),
+		"{\"paths\":{\"old.js\":\"old.hash.js\"}}",
+	)
+	.expect("existing manifest is written");
+	let config = StaticFilesConfig {
+		static_root: static_root.clone(),
+		static_url: "/static/".to_string(),
+		staticfiles_dirs: vec![source_dir],
+		media_url: None,
+	};
+	let mut command = CollectStaticCommand::new(
+		config,
+		CollectStaticOptions {
+			verbosity: 0,
+			..Default::default()
+		},
+	);
+	command.set_index_source(Some(temp_dir.path().join("missing-index.html")));
+
+	// Act
+	let error = command.execute().expect_err("missing index source fails");
+
+	// Assert
+	assert_eq!(error.kind(), std::io::ErrorKind::NotFound);
+	assert_eq!(
+		fs::read_to_string(static_root.join("manifest.json")).expect("manifest remains readable"),
+		"{\"paths\":{\"old.js\":\"old.hash.js\"}}"
+	);
+	assert!(!static_root.join("app.js").exists());
 }
 
 /// Test: collectstatic without index_source uses existing behavior

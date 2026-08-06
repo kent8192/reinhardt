@@ -7,22 +7,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [0.4.0-alpha.5](https://github.com/kent8192/reinhardt-web/compare/reinhardt-test@v0.4.0-alpha.3...reinhardt-test@v0.4.0-alpha.5) - 2026-08-05
-
-### Documentation
-
-- update version references to v0.4.0-alpha.4
-
-### Fixed
-
-- *(pgvector)* close migration and binding gaps
-
-## [0.4.0-alpha.4](https://github.com/kent8192/reinhardt-web/compare/reinhardt-test@v0.4.0-alpha.3...reinhardt-test@v0.4.0-alpha.4) - 2026-08-04
-
-### Fixed
-
-- *(pgvector)* close migration and binding gaps
-
 ## [0.4.0-alpha.2](https://github.com/kent8192/reinhardt-web/compare/reinhardt-test@v0.4.0-alpha.1...reinhardt-test@v0.4.0-alpha.2) - 2026-07-23
 
 ### Added

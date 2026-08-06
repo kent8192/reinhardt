@@ -316,6 +316,8 @@ jobs:
             exit 1
           fi
           echo "${ENV_KEY}=/tmp/clang-mold-wrapper" >> "$GITHUB_ENV"
+          HOST_TARGET="$(rustc -vV | awk '/^host:/{print $2}')"
+          echo "COVERAGE_HOST_TARGET=$HOST_TARGET" >> "$GITHUB_ENV"
 
       - name: Clean coverage artifacts
         run: |
@@ -335,10 +337,9 @@ jobs:
           # Restrict LLVM coverage instrumentation to the native test target.
           # Nested fixture builds target wasm32-unknown-unknown, whose toolchain
           # does not include the profiler runtime required by instrument-coverage.
-          HOST_TARGET="$(rustc -vV | awk '/^host:/{print $2}')"
           set +e
           cargo llvm-cov nextest \
-            --target "$HOST_TARGET" \
+            --target "$COVERAGE_HOST_TARGET" \
             --coverage-target-only \
             --no-report \
             --workspace \
@@ -365,9 +366,12 @@ jobs:
           done < <(jq -r '.packages[].name' <<< "$report_metadata")
           cargo llvm-cov \
             report \
+            --target "$COVERAGE_HOST_TARGET" \
+            --coverage-target-only \
             "${report_args[@]}" \
             --lcov \
             --output-path /tmp/intra-crate-lcov.info
+          bash scripts/validate-lcov-hits.sh /tmp/intra-crate-lcov.info
 
       - name: Upload coverage to Codecov
         if: always()

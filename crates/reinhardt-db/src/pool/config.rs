@@ -161,6 +161,14 @@ mod tests {
 
 	#[test]
 	fn builder_chain_updates_every_supported_setting() {
+		let connection_timeout_config =
+			PoolConfig::new().with_connection_timeout(Duration::from_secs(15));
+
+		assert_eq!(
+			connection_timeout_config.connect_timeout,
+			Duration::from_secs(15)
+		);
+
 		let config = PoolConfig::new()
 			.with_max_connections(12)
 			.with_min_connections(4)

@@ -1546,6 +1546,26 @@ mod tests {
 				}),
 			),
 			(
+				Constraint::ForeignKey {
+					name: "fk_booking_room_optional".to_string(),
+					columns: vec!["room_id".to_string()],
+					referenced_table: "rooms".to_string(),
+					referenced_columns: vec!["id".to_string()],
+					on_delete: ForeignKeyAction::SetNull,
+					on_update: ForeignKeyAction::SetDefault,
+					deferrable: None,
+				},
+				quote!(Constraint::ForeignKey {
+					name: "fk_booking_room_optional".to_string(),
+					columns: vec!["room_id".to_string()],
+					referenced_table: "rooms".to_string(),
+					referenced_columns: vec!["id".to_string()],
+					on_delete: ForeignKeyAction::SetNull,
+					on_update: ForeignKeyAction::SetDefault,
+					deferrable: None,
+				}),
+			),
+			(
 				Constraint::Unique {
 					name: "uq_booking".to_string(),
 					columns: vec!["room_id".to_string(), "starts_at".to_string()],
@@ -1583,6 +1603,26 @@ mod tests {
 					on_delete: ForeignKeyAction::Cascade,
 					on_update: ForeignKeyAction::NoAction,
 					deferrable: Some(DeferrableOption::Immediate),
+				}),
+			),
+			(
+				Constraint::OneToOne {
+					name: "fk_profile_user_optional".to_string(),
+					column: "user_id".to_string(),
+					referenced_table: "users".to_string(),
+					referenced_column: "id".to_string(),
+					on_delete: ForeignKeyAction::Restrict,
+					on_update: ForeignKeyAction::Cascade,
+					deferrable: None,
+				},
+				quote!(Constraint::OneToOne {
+					name: "fk_profile_user_optional".to_string(),
+					column: "user_id".to_string(),
+					referenced_table: "users".to_string(),
+					referenced_column: "id".to_string(),
+					on_delete: ForeignKeyAction::Restrict,
+					on_update: ForeignKeyAction::Cascade,
+					deferrable: None,
 				}),
 			),
 			(
@@ -1699,6 +1739,25 @@ mod tests {
 				columns: vec![],
 				constraints: vec![],
 				without_rowid: None,
+				interleave_in_parent: None,
+				partition: None,
+			}),
+		);
+		let rowid_create = Operation::CreateTable {
+			name: "with_rowid".to_string(),
+			columns: vec![],
+			constraints: vec![],
+			without_rowid: Some(false),
+			interleave_in_parent: None,
+			partition: None,
+		};
+		assert_tokens(
+			&rowid_create,
+			quote!(Operation::CreateTable {
+				name: "with_rowid".to_string(),
+				columns: vec![],
+				constraints: vec![],
+				without_rowid: Some(false),
 				interleave_in_parent: None,
 				partition: None,
 			}),
@@ -2188,6 +2247,58 @@ mod tests {
 					line_terminator: Some("\n".to_string()),
 					encoding: Some("UTF-8".to_string()),
 				},
+			}),
+		);
+
+		let source_cases = [
+			(
+				BulkLoadSource::File("/tmp/events.csv".to_string()),
+				quote!(BulkLoadSource::File("/tmp/events.csv".to_string())),
+			),
+			(BulkLoadSource::Stdin, quote!(BulkLoadSource::Stdin)),
+			(
+				BulkLoadSource::Program("gzip -dc events.csv.gz".to_string()),
+				quote!(BulkLoadSource::Program(
+					"gzip -dc events.csv.gz".to_string()
+				)),
+			),
+		];
+		for (source, expected) in source_cases {
+			assert_tokens(&source, expected);
+		}
+
+		let format_cases = [
+			(BulkLoadFormat::Text, quote!(BulkLoadFormat::Text)),
+			(BulkLoadFormat::Csv, quote!(BulkLoadFormat::Csv)),
+			(BulkLoadFormat::Binary, quote!(BulkLoadFormat::Binary)),
+		];
+		for (format, expected) in format_cases {
+			assert_tokens(&format, expected);
+		}
+
+		let no_option_values = BulkLoadOptions {
+			delimiter: None,
+			null_string: None,
+			header: false,
+			columns: None,
+			local: true,
+			quote: None,
+			escape: None,
+			line_terminator: None,
+			encoding: None,
+		};
+		assert_tokens(
+			&no_option_values,
+			quote!(BulkLoadOptions {
+				delimiter: None,
+				null_string: None,
+				header: false,
+				columns: None,
+				local: true,
+				quote: None,
+				escape: None,
+				line_terminator: None,
+				encoding: None,
 			}),
 		);
 		assert_tokens(

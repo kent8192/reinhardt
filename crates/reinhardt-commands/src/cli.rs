@@ -1425,7 +1425,7 @@ fn format_introspection_output(
 		}
 
 		// Serialize to serde_json::Value, then extract the section
-		let full_value = serde_json::to_value(&output)?;
+		let full_value = serde_json::to_value(output)?;
 		let section_value = full_value
 			.get(section_name)
 			.ok_or_else(|| format!("Section '{}' not found in output", section_name))?;

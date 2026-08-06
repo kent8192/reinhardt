@@ -341,7 +341,6 @@ async fn wait_for_server_ready(address: Option<&str>) -> bool {
 }
 
 #[cfg(feature = "pages")]
-
 fn notify_browser_reload(hmr_tx: Option<&broadcast::Sender<String>>, reason: &str) -> bool {
 	let Some(tx) = hmr_tx else {
 		return false;
@@ -471,7 +470,6 @@ pub async fn run_rebuild_for_paths(
 	}
 	if matches!(outcome, RebuildDispatchOutcome::StaticPatchSent) {
 		ctx.info("[hot-reload] static page patch sent without rebuilding WASM");
-		return;
 	}
 	// Pipeline failures are recorded as log lines and never propagate as Err;
 	// the caller's loop continues unconditionally.

@@ -110,9 +110,12 @@ async fn spa_navigation_link_click_re_renders_view(#[future] cdp_browser: CdpBro
 	eprintln!("[e2e] base_url = {base_url}");
 	let browser = cdp_browser.await;
 	let page = browser
-		.new_page(&base_url)
+		.new_page("about:blank")
 		.await
-		.expect("open new page at fixture URL");
+		.expect("open blank browser page");
+	page.navigate(&base_url)
+		.await
+		.expect("navigate to fixture URL");
 
 	// Boot mount: home page is rendered with the link to /login.
 	// On failure, dump the URL Chrome actually navigated to and the page

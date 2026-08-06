@@ -836,6 +836,7 @@ mod tests {
 			name: "shared_embedding_ann".to_string(),
 			fields: vec!["embedding".to_string()],
 			unique: false,
+			where_clause: None,
 			index_type: Some(super::super::operations::IndexType::Hnsw {
 				m: Some(16),
 				ef_construction: Some(64),
@@ -848,6 +849,7 @@ mod tests {
 			name: "shared_embedding_ann".to_string(),
 			fields: vec!["embedding".to_string()],
 			unique: false,
+			where_clause: None,
 			index_type: Some(super::super::operations::IndexType::Ivfflat { lists: Some(100) }),
 			operator_class: Some("vector_l2_ops".to_string()),
 			expressions: None,
@@ -880,6 +882,7 @@ mod tests {
 			name: "search_document".to_string(),
 			fields: vec!["embedding".to_string()],
 			unique: false,
+			where_clause: None,
 			index_type: Some(super::super::operations::IndexType::Hnsw {
 				m: Some(16),
 				ef_construction: Some(64),

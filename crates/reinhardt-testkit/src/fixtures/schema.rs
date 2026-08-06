@@ -42,10 +42,12 @@
 use std::collections::HashMap;
 
 use reinhardt_db::backends::DatabaseConnection;
+#[cfg(feature = "pgvector")]
+use reinhardt_db::migrations::FieldType;
 use reinhardt_db::migrations::{
-	ColumnDefinition, Constraint, FieldType, ForeignKeyAction, GeneratedColumnDefinition,
-	GeneratedStorage, Migration, Operation, executor::DatabaseMigrationExecutor,
-	field_type_string_to_field_type, to_snake_case,
+	ColumnDefinition, Constraint, ForeignKeyAction, GeneratedColumnDefinition, GeneratedStorage,
+	Migration, Operation, executor::DatabaseMigrationExecutor, field_type_string_to_field_type,
+	to_snake_case,
 };
 use reinhardt_db::orm::Model;
 use reinhardt_db::orm::fields::FieldKwarg;
@@ -1247,6 +1249,10 @@ mod tests {
 			name: "age_check".to_string(),
 			constraint_type: ConstraintType::Check,
 			definition: "CONSTRAINT age_check CHECK (age >= 18)".to_string(),
+			fields: Vec::new(),
+			condition: None,
+			deferrable: false,
+			nulls_distinct: None,
 		}]);
 
 		assert!(matches!(
@@ -1267,6 +1273,10 @@ mod tests {
 				name: "active_email_unique".to_string(),
 				constraint_type: ConstraintType::Unique,
 				definition: "UNIQUE (email) WHERE deleted_at IS NULL".to_string(),
+				fields: vec!["email".to_string()],
+				condition: Some("deleted_at IS NULL".to_string()),
+				deferrable: false,
+				nulls_distinct: None,
 			}],
 			indexes: vec![],
 		};

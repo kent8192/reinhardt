@@ -15,11 +15,11 @@ Add `reinhardt` to your `Cargo.toml`:
 <!-- reinhardt-version-sync:3 -->
 ```toml
 [dependencies]
-reinhardt = { version = "0.4.0-alpha.3", features = ["commands"] }
+reinhardt = { version = "0.4.0-alpha.6", features = ["commands"] }
 
 # Or use a preset:
-# reinhardt = { version = "0.4.0-alpha.3", features = ["standard"] }  # Recommended
-# reinhardt = { version = "0.4.0-alpha.3", features = ["full"] }      # All features
+# reinhardt = { version = "0.4.0-alpha.6", features = ["standard"] }  # Recommended
+# reinhardt = { version = "0.4.0-alpha.6", features = ["full"] }      # All features
 ```
 
 Then import command features:
@@ -39,7 +39,7 @@ package:
 ```bash
 # Pin the documented Reinhardt release for reproducibility.
 # Omit --version to let Cargo choose the latest stable release.
-cargo install reinhardt-admin-cli --version "0.4.0-alpha.3"
+cargo install reinhardt-admin-cli --version "0.4.0-alpha.6"
 ```
 
 This installs the `reinhardt-admin` command:
@@ -57,7 +57,17 @@ details.
 ### Built-in Commands
 
 - **makemigrations** - Create new database migrations based on model changes
+- **squashmigrations** - Combine a safe migration range into one replacement
+  migration without connecting to a database
 - **migrate** - Apply database migrations
+- **inspectdb** - Generate deterministic Reinhardt models from an existing
+  PostgreSQL, MySQL, or SQLite schema
+- **dbshell** - Launch the native client for a configured PostgreSQL, MySQL, or
+  SQLite database
+- **showmigrations** - Display applied state or the selected dependency plan
+  without creating migration history
+- **sqlmigrate** - Render backend-specific forward or rollback SQL without
+  executing schema statements
 - **dumpdata** - Export model rows as Django-compatible JSON fixtures
 - **loaddata** - Load Django-compatible JSON fixtures into the database
 - **seed** - Run idempotent per-application development seed hooks
@@ -78,6 +88,126 @@ details.
 - `routers` - Enable URL-related commands (requires `reinhardt-urls`)
 - `shell` - Enable the stateful Rust management shell. The facade exposes this
   as the project-facing `commands-shell` feature.
+
+### Squashing migrations
+
+`squashmigrations` accepts Django-compatible two- and three-positional forms:
+
+```bash
+cargo run --bin manage -- squashmigrations APP_LABEL MIGRATION_NAME
+cargo run --bin manage -- squashmigrations APP_LABEL START_MIGRATION MIGRATION_NAME
+```
+
+Migration names may be exact names or unique prefixes. The command rejects an
+ambiguous prefix, a branched ancestry, or a range that is not a continuous
+same-application ancestor chain. Dependencies entering the selected range from
+other applications remain dependencies of the generated migration.
+
+Conditional migration dependencies are resolved from the active project's
+`MigrationSettings` fragment.
+`migration_swappable_settings` maps each swappable dependency key to its
+`"app.Model"` target, `migration_settings` supplies values for optional
+dependencies using `SettingEnabled`, and `migration_features` enables optional
+dependencies whose feature condition matches an entry in the list.
+`installed_apps` enables optional dependencies gated on application presence.
+Inactive optional dependencies remain in the generated replacement without
+resolving their target application, so the migration graph is correct if the
+condition is enabled in another environment.
+
+```toml
+[core]
+installed_apps = ["accounts"]
+
+[migrations]
+migration_features = ["gis"]
+
+[migrations.migration_swappable_settings]
+AUTH_USER_MODEL = "accounts.User"
+
+[migrations.migration_settings]
+ENABLE_AUDIT = "true"
+```
+
+When `--migrations-dir` is omitted, the command reads migrations from the
+active project's `core.base_dir/migrations` directory. The explicit option
+always takes precedence. Entry points without project settings retain the
+project-root/current-directory fallback.
+
+By default, Reinhardt prompts before writing. Use `--no-input` (or the
+Django-compatible `--noinput` alias) in non-interactive environments. Use
+`--no-optimize` to preserve the exact source operation order, and `--no-header`
+to omit the generated-file header. `--squashed-name descriptive_name` supplies
+a descriptive suffix; Reinhardt keeps the range's starting number, for example
+`0001_descriptive_name`.
+
+The optimizer performs only proven schema reductions. Data operations,
+renames, constraints, indexes, bulk operations, custom operations, and other
+non-reducible operations are barriers: optimization never crosses them.
+Reinhardt validates and renders the complete result before prompting. It then
+creates a new migration file without overwriting an existing destination.
+Invalid source is rejected before file creation. If a write fails, Reinhardt
+attempts to remove the incomplete file through its anchored directory handle.
+A cleanup failure reports both the original write error and the cleanup error.
+The command only reads migration source files and does not require a database
+connection.
+
+### Inspecting migration state and SQL
+
+`showmigrations` lists migration state by application by default. Use `--plan`
+to show the complete selected dependency order; selecting an application keeps
+its transitive cross-application dependencies. `sqlmigrate APP MIGRATION`
+accepts an exact name or unique prefix and renders through the same SQL planner
+used by migration execution. Pass `--backwards` for rollback SQL.
+
+```bash
+# List every migration, or only polls plus its transitive dependencies.
+cargo run --bin manage -- showmigrations
+cargo run --bin manage -- showmigrations polls --list
+
+# Display execution order and render forward or rollback SQL.
+cargo run --bin manage -- showmigrations polls --plan
+cargo run --bin manage -- sqlmigrate polls 0002
+cargo run --bin manage -- sqlmigrate polls 0002 --backwards
+```
+
+`--list` (`-l`) and `--plan` (`-p`) are mutually exclusive; list mode is the
+default. At verbosity level two, applied entries include their recorded
+timestamps. Prefix matching is scoped to the selected application and must
+identify exactly one migration. An ambiguous or unknown prefix is rejected
+before output.
+
+Both commands accept `--database ALIAS` and a one-off `--database-url URL`.
+Without a URL override, the alias selects a configured database. With
+`--database-url`, the command connects directly to that URL without looking up
+the alias; the alias remains a safe diagnostic label and settings are not
+modified. Diagnostics redact URL credentials and sensitive-looking aliases.
+Both commands load and validate the complete migration catalog before output.
+When `--migrations-dir` is omitted, both commands read from the active
+project's `core.base_dir/migrations` directory. Conditional and swappable
+dependencies use the composed `MigrationSettings` fragment passed by the
+generated `manage.rs` entry point, together with installed applications and
+legacy migration settings from the core fragment.
+`showmigrations` reads an existing recorder table without creating it, while
+`sqlmigrate` performs no schema or migration-history writes. SQL output is
+fully buffered before its single stdout write, so an irreversible rollback or
+late planning error emits no partial script.
+
+Rendered SQL follows the selected backend. PostgreSQL uses double-quoted
+identifiers, MySQL uses backticks, and SQLite uses its table-recreation sequence
+when an alteration cannot be expressed directly. Transaction wrappers are
+emitted only when the migration plan is atomic and the backend supports
+transactional DDL; MySQL DDL is therefore never wrapped. Informational
+data-operation comments remain comments and are never executed.
+
+Statement splitting also follows the selected backend: PostgreSQL nested block
+comments, MySQL's whitespace-sensitive `--` comments, and SQLite trigger bodies
+are kept intact. This ensures that previewed SQL has the same statement
+boundaries as execution.
+
+When SQL planning reconstructs state from historical migration source, it
+fails closed if that source cannot represent required schema metadata exactly,
+including table comments, declared column order, or specialized constraints.
+This prevents a plausible but incomplete preview from being emitted.
 
 ### Pages template hot reload
 
@@ -164,7 +294,7 @@ use reinhardt::commands::TemplateContext;
 
 let mut context = TemplateContext::new();
 context.insert("project_name", "my_project");
-context.insert("version", "0.4.0-alpha.3");
+context.insert("version", "0.4.0-alpha.6");
 context.insert("features", vec!["auth", "admin"]);  // Any Serialize type
 ```
 
@@ -219,6 +349,85 @@ cargo run --bin manage migrate
 cargo run --bin manage runserver
 ```
 
+### Database schema inspection
+
+`inspectdb` follows Django's positional-table form:
+
+```bash
+cargo run --bin manage -- inspectdb [TABLE ...]
+```
+
+Table arguments are exact names rather than patterns. Without table arguments,
+the command inspects every table; pass `--include-views` to include views or
+`--include-partitions` for PostgreSQL partitions. Any selected schema object
+without primary-key metadata is rejected because it cannot produce a lossless
+ORM model.
+
+`--database` selects a configured database alias and defaults to `default`. It
+never accepts a connection URL. Use `--database-url` for an explicit one-off
+URL that takes precedence over the selected alias:
+
+```bash
+cargo run --bin manage -- inspectdb accounts --database reporting
+cargo run --bin manage -- inspectdb accounts \
+  --database-url 'sqlite:///var/lib/example.sqlite3'
+```
+
+Generated Rust is the only stdout content by default, so it can be redirected
+directly:
+
+```bash
+cargo run --bin manage -- inspectdb > src/models.rs
+```
+
+Use `--output DIRECTORY` for a generated Rust 2024 multi-file module. It writes
+`DIRECTORY/models.rs` and one child module per table beneath
+`DIRECTORY/models/`; it never generates `mod.rs`. The command preflights the
+complete file set and refuses to overwrite any existing file. Add `--force`
+only with `--output` to replace existing generated files. File publication is
+rollback-safe and all-or-nothing when the command reports a failure: replaced
+files are restored and newly created partial output is removed.
+
+`inspectdb` preserves supported relationship targets, referential actions,
+identity modes, scalar defaults, and explicit JSON versus JSONB field metadata.
+It rejects schema features that cannot be represented by generated model
+attributes (including composite unique constraints or foreign keys,
+shared-primary-key relationships, partial indexes, table-level CHECK constraints,
+and storage-width-specific integer, text, binary, or enum types) instead of
+silently generating a lossy migration model.
+
+### Native database shell
+
+`dbshell` launches the database vendor's native interactive client. PostgreSQL
+requires `psql`, MySQL requires `mysql`, and SQLite requires `sqlite3`; the
+selected executable must be available on `PATH`.
+
+The command uses the `default` configured database alias unless `--database`
+selects another alias. An explicit `--database-url` takes precedence over the
+selected alias:
+
+```bash
+cargo run --bin manage -- dbshell
+cargo run --bin manage -- dbshell --database reporting
+cargo run --bin manage -- dbshell \
+  --database-url 'postgresql://operator@example.internal/reporting'
+```
+
+Arguments after `--` are passed to the native client without reinterpretation:
+
+```bash
+cargo run --bin manage -- dbshell -- --expanded
+```
+
+The client inherits the terminal's standard input, output, and error streams,
+so prompts and interactive features continue to work. Database passwords are
+not placed in the native client's arguments. Reinhardt adds `PGPASSWORD` or
+`MYSQL_PWD` only to the child process environment; it does not add those
+variables to the parent process or expose their values in its diagnostics. A
+MySQL URL with a host uses TCP explicitly so a `localhost` port is honored;
+add the supported `socket` query parameter when Unix-socket transport is
+required.
+
 ### Rust Management Shell
 
 The shell is an opt-in Rust evaluator. In a generated project, enable the local
@@ -255,9 +464,9 @@ mod native {
     use my_project::config::shell::get_shell_config;
     use my_project::config::settings::get_settings;
     #[cfg(not(feature = "commands-shell"))]
-    use reinhardt::commands::execute_from_command_line_with_settings;
+    use reinhardt::commands::execute_from_command_line_with_migration_settings;
     #[cfg(feature = "commands-shell")]
-    use reinhardt::commands::execute_from_command_line_with_settings_and_shell;
+    use reinhardt::commands::execute_from_command_line_with_migration_settings_and_shell;
 
     #[tokio::main]
     pub(super) async fn main() {
@@ -272,13 +481,13 @@ mod native {
 
         #[cfg(feature = "commands-shell")]
         let result =
-            execute_from_command_line_with_settings_and_shell(
+            execute_from_command_line_with_migration_settings_and_shell(
                 get_settings(),
                 get_shell_config(),
             )
             .await;
         #[cfg(not(feature = "commands-shell"))]
-        let result = execute_from_command_line_with_settings(get_settings()).await;
+        let result = execute_from_command_line_with_migration_settings(get_settings()).await;
 
         if let Err(error) = result {
             eprintln!("Error: {error}");
@@ -554,7 +763,7 @@ Projects using `collect_migrations!` must add `linkme` as a dependency:
 <!-- reinhardt-version-sync -->
 ```toml
 [dependencies]
-reinhardt = { version = "0.4.0-alpha.3", features = ["standard"] }
+reinhardt = { version = "0.4.0-alpha.6", features = ["standard"] }
 linkme = "0.3"
 ```
 

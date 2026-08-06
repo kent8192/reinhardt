@@ -17,6 +17,7 @@ This crate provides the following modules:
 - **ORM**: Object-Relational Mapping system
   - Django-inspired Model trait
   - QuerySet API for chainable queries
+  - Typed `get_or_create` and `update_or_create` builders
   - Field types (AutoField, CharField, IntegerField, DateTimeField, etc.)
   - Timestamped and SoftDeletable traits
   - Relationship management
@@ -305,7 +306,7 @@ Add this to your `Cargo.toml`:
 <!-- reinhardt-version-sync -->
 ```toml
 [dependencies]
-reinhardt-db = "0.4.0-alpha.3"
+reinhardt-db = "0.4.0-alpha.6"
 chrono-tz = "0.10"
 ```
 
@@ -316,7 +317,7 @@ Enable specific features based on your needs:
 <!-- reinhardt-version-sync -->
 ```toml
 [dependencies]
-reinhardt-db = { version = "0.4.0-alpha.3", features = ["postgres", "orm", "migrations"] }
+reinhardt-db = { version = "0.4.0-alpha.6", features = ["postgres", "orm", "migrations"] }
 ```
 
 Available features:
@@ -343,7 +344,7 @@ Enable native dense-vector storage directly on `reinhardt-db`:
 <!-- reinhardt-version-sync -->
 ```toml
 [dependencies]
-reinhardt-db = { version = "0.4.0-alpha.2", features = ["pgvector"] }
+reinhardt-db = { version = "0.4.0-alpha.6", features = ["pgvector"] }
 reinhardt-core = { version = "0.4.0-alpha.2", features = ["macros"] }
 serde = { version = "1", features = ["derive"] }
 ```
@@ -354,7 +355,7 @@ Applications using the facade enable `db-pgvector` instead and import
 <!-- reinhardt-version-sync -->
 ```toml
 [dependencies]
-reinhardt = { package = "reinhardt-web", version = "0.4.0-alpha.2", features = ["db-pgvector"] }
+reinhardt = { package = "reinhardt-web", version = "0.4.0-alpha.6", features = ["db-pgvector"] }
 ```
 
 Reinhardt never installs the PostgreSQL extension automatically. Add
@@ -794,6 +795,94 @@ let updated = User::objects()
     .update_fields([User::field_updated_at().assign(Utc::now())])
     .await?;
 ```
+
+### Typed Manager Upserts
+
+Generated field accessors provide compile-time checked model and value types
+for atomic get/create and update/create operations:
+
+```rust,ignore
+let (tag, created) = Tag::objects()
+    .get_or_create()
+    .lookup(Tag::field_slug(), "rust")
+    .default(Tag::field_display_order(), 10_i32)
+    .execute()
+    .await?;
+```
+
+```rust,ignore
+let (profile, created) = Profile::objects()
+    .update_or_create()
+    .lookup(Profile::field_user_id(), user.id)
+    .set(Profile::field_last_seen(), now)
+    .create_default(Profile::field_created_at(), now)
+    .execute()
+    .await?;
+```
+
+Lookups must cover a primary key, a `unique = true` field, or an immediate,
+unconditional unique constraint. Lookup fields cannot also be defaults or
+updates. `get_or_create().execute_with(...)` accepts a `DatabaseConnection` or
+an `AtomicTransaction` created by `DatabaseConnection::atomic_write`;
+`update_or_create().execute_with(...)` requires an
+`AtomicTransaction` created by `DatabaseConnection::atomic_write`.
+
+The returned `created` flag is true only when this invocation inserted the row.
+A losing get/create race reloads the winner with `false`; a losing
+update/create race locks and updates the winner before returning `false`.
+
+See the
+[typed manager upsert migration guide](../../docs/migration/0.4.0-typed-manager-upserts.md)
+for map-API replacement, backend behavior, and custom-manager hook guidance.
+
+### Plan-only QuerySet diagnostics
+
+Use typed generated fields to build the queryset, then call `explain` with
+`ExplainOptions`. The returned `ExplainOutput` records the backend, effective
+format, and a separately decoded plan body; it never deserializes diagnostic
+rows as models.
+
+```rust
+use reinhardt_db::orm::{ExplainFormat, ExplainOptions};
+
+let plan = User::objects()
+    .filter(User::field_email().eq("ada@example.com"))
+    .order_by(User::field_created_at().desc())
+    .explain(ExplainOptions::default().format(ExplainFormat::Json))
+    .await?;
+```
+
+When the equivalent query must stay on a caller-owned connection, use
+`explain_with_db`. Active transactions can use `explain_with_executor`.
+
+```rust
+let plan = connection.atomic(async |transaction| {
+    User::objects()
+        .filter(User::field_id().eq(user_id))
+        .explain_with_executor(transaction, ExplainOptions::default())
+        .await
+        .map_err(reinhardt_core::exception::Error::from)
+}).await?;
+```
+
+Backend capabilities are explicit:
+
+| Backend | Formats | Additional plan-only options |
+|---------|---------|------------------------------|
+| PostgreSQL | `Text`, `Json`, `Xml`, `Yaml` | `verbose`, `costs`, `settings` |
+| MySQL/MariaDB | `Text` (traditional), `Json` | none |
+| SQLite | `Text` (`EXPLAIN QUERY PLAN`) | none |
+| CockroachDB | `Text` | none |
+
+Unsupported combinations return a database error classified as `Unsupported`
+before the executor is called. Reinhardt intentionally exposes a stricter API
+than Django: `ANALYZE`, arbitrary option strings, buffer/timing statistics, and
+every other data-executing explain option are rejected by construction.
+MySQL additionally rejects subqueries, CTEs, unions, and unchecked or function
+expressions because its optimizer may evaluate them while producing a plan;
+plain typed filters, joins, ordering, and limits remain supported. SQLite plan
+row fields are diagnostic data whose exact shape may change between SQLite
+releases.
 
 ### Typed retrieval helpers
 

@@ -12,6 +12,11 @@
 //! records the SQL joins required by the filter, so application code does not
 //! need raw join builders for common FK, reverse, or M2M lookups.
 //!
+//! [`QuerySet::explain`](crate::orm::QuerySet::explain) wraps the existing
+//! typed SELECT in a backend-aware, plan-only diagnostic statement. Its typed
+//! options intentionally exclude `ANALYZE`, arbitrary strings, and every
+//! option that could execute the data-producing query.
+//!
 //! QuerySet retrieval keeps the same generated-field guarantees:
 //! `latest_by`/`earliest_by` accept [`OrderingField`] values, while
 //! unique-field bulk retrieval accepts [`UniqueFieldRef`]. Bulk results use a
@@ -48,6 +53,7 @@
 //! use reinhardt_core::exception::Error;
 //! use reinhardt_db::{backends::DatabaseConnection as BackendsConnection, orm::DatabaseConnectionLease};
 //!
+//! # #[cfg(feature = "sqlite")]
 //! # async fn example() -> Result<(), Error> {
 //! let owner = BackendsConnection::connect_sqlite("sqlite::memory:").await?;
 //! let lease = DatabaseConnectionLease::register(owner)?;
@@ -71,7 +77,24 @@
 //! [`Transaction`], [`Savepoint`], and [`IsolationLevel`] remain SQL-builder
 //! values only. They may generate SQL but cannot control a live ORM transaction.
 //! [`AtomicTransaction`] is also intentionally non-`Copy` and stays bound to
-//! the callback and dedicated connection created by [`DatabaseConnection::atomic`].
+//! the callback and dedicated connection created by
+//! [`DatabaseConnection::atomic`] or the public write-intent variant
+//! [`DatabaseConnection::atomic_write`]. Caller-owned `update_or_create`
+//! execution specifically requires the latter.
+//!
+//! ## Typed Manager Upserts
+//!
+//! [`CustomManager::get_or_create`] and [`CustomManager::update_or_create`]
+//! start builders whose generated [`FieldRef`] values check the model and
+//! assignment value types during compilation. A lookup must cover a primary
+//! key, a `unique = true` field, or an immediate, unconditional unique
+//! constraint. Defaults and updates cannot replace lookup fields.
+//!
+//! `get_or_create().execute_with(...)` accepts a [`DatabaseConnection`] or an
+//! [`AtomicTransaction`] created by [`DatabaseConnection::atomic_write`].
+//! `update_or_create().execute_with(...)` also requires an [`AtomicTransaction`]
+//! created by [`DatabaseConnection::atomic_write`]; a transaction from
+//! [`DatabaseConnection::atomic`] is rejected before SQL execution.
 //!
 //! ## Row Locking
 //!
@@ -127,6 +150,8 @@ pub mod set_operations;
 pub mod sql_condition_parser;
 pub mod transaction;
 pub mod typed_join;
+/// Typed get-or-create and update-or-create support.
+pub mod upsert;
 /// Validators module.
 pub mod validators;
 /// Validated pgvector value types.
@@ -336,9 +361,9 @@ pub use manager::Manager;
 // Query types are always available
 pub use query::{
 	Blocking, DateProjectionField, DateProjectionOrder, DateTimeProjectionField, DateTimeTruncKind,
-	DateTruncKind, FieldAssignment, Filter, FilterCondition, FilterOperator, FilterValue,
-	IntoOrderBy, Nowait, OrmQuery, QuerySet, QuerySetStream, SelectForUpdate, SkipLocked,
-	UpdateValue,
+	DateTruncKind, ExplainBackend, ExplainBody, ExplainFormat, ExplainOptions, ExplainOutput,
+	FieldAssignment, Filter, FilterCondition, FilterOperator, FilterValue, IntoOrderBy, Nowait,
+	OrmQuery, QuerySet, QuerySetStream, SelectForUpdate, SkipLocked, UpdateValue,
 };
 
 // Advanced ORM features

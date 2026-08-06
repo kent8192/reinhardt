@@ -206,20 +206,12 @@ impl ToTokens for MySqlLock {
 
 impl ToTokens for AlterTableOptions {
 	fn to_tokens(&self, tokens: &mut TokenStream) {
-		let algorithm_token = match &self.algorithm {
-			Some(algo) => quote! { Some(#algo) },
-			None => quote! { None },
-		};
-		let lock_token = match &self.lock {
-			Some(lock) => quote! { Some(#lock) },
-			None => quote! { None },
-		};
-		tokens.extend(quote! {
-			AlterTableOptions {
-				algorithm: #algorithm_token,
-				lock: #lock_token,
-			}
-		});
+		let algorithm_token = self
+			.algorithm
+			.as_ref()
+			.map(|algorithm| quote! { .with_algorithm(#algorithm) });
+		let lock_token = self.lock.as_ref().map(|lock| quote! { .with_lock(#lock) });
+		tokens.extend(quote! { AlterTableOptions::new() #algorithm_token #lock_token });
 	}
 }
 
@@ -281,11 +273,7 @@ impl ToTokens for PartitionOptions {
 		let column = &self.column;
 		let partitions = &self.partitions;
 		tokens.extend(quote! {
-			PartitionOptions {
-				partition_type: #partition_type,
-				column: #column.to_string(),
-				partitions: vec![#(#partitions),*],
-			}
+			PartitionOptions::new(#partition_type, #column, vec![#(#partitions),*])
 		});
 	}
 }
@@ -934,14 +922,17 @@ impl ToTokens for Operation {
 				});
 			}
 			Operation::AlterModelOptions { table, options } => {
-				let keys = options.keys();
-				let values = options.values();
+				let mut entries: Vec<_> = options.iter().collect();
+				entries.sort_unstable_by_key(|(key, _)| *key);
+				let entries = entries.iter().map(|(key, value)| {
+					quote! { map.insert(#key.to_string(), #value.to_string()); }
+				});
 				tokens.extend(quote! {
 					Operation::AlterModelOptions {
 						table: #table.to_string(),
 						options: {
 							let mut map = std::collections::HashMap::new();
-							#(map.insert(#keys.to_string(), #values.to_string());)*
+							#(#entries)*
 							map
 						},
 					}
@@ -1326,7 +1317,7 @@ impl ToTokens for GeneratedColumnDefinition {
 		let storage_token = match self.storage {
 			GeneratedStorage::Stored => quote! { GeneratedStorage::Stored },
 			GeneratedStorage::Virtual => quote! { GeneratedStorage::Virtual },
-			_ => quote! { GeneratedStorage::Stored },
+			_ => panic!("unsupported generated-column storage: {:?}", self.storage),
 		};
 
 		let canonical_expr = self.typed_expr();
@@ -1699,5 +1690,29 @@ mod tests {
 				"tokens must preserve suffixed literal types: {tokens}"
 			);
 		}
+	}
+
+	#[test]
+	fn alter_model_options_tokens_are_order_independent() {
+		let mut first_options = std::collections::HashMap::new();
+		first_options.insert("managed".to_string(), "true".to_string());
+		first_options.insert("verbose_name".to_string(), "Job".to_string());
+		let mut second_options = std::collections::HashMap::new();
+		second_options.insert("verbose_name".to_string(), "Job".to_string());
+		second_options.insert("managed".to_string(), "true".to_string());
+
+		let first = Operation::AlterModelOptions {
+			table: "jobs".to_string(),
+			options: first_options,
+		};
+		let second = Operation::AlterModelOptions {
+			table: "jobs".to_string(),
+			options: second_options,
+		};
+
+		assert_eq!(
+			first.to_token_stream().to_string(),
+			second.to_token_stream().to_string()
+		);
 	}
 }

@@ -282,6 +282,19 @@ pub fn spawn_task<F>(fut: F)
 where
 	F: Future<Output = ()> + 'static,
 {
+	if let Some(client) = crate::reactive::query::current_query_client() {
+		wasm_bindgen_futures::spawn_local(crate::reactive::query::with_query_client_async(
+			client, fut,
+		));
+	} else {
+		wasm_bindgen_futures::spawn_local(fut);
+	}
+}
+
+pub(crate) fn spawn_task_unscoped<F>(fut: F)
+where
+	F: Future<Output = ()> + 'static,
+{
 	wasm_bindgen_futures::spawn_local(fut);
 }
 

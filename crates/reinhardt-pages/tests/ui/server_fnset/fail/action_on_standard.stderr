@@ -4,6 +4,14 @@ error: standard action overrides must not use `#[action]`
 10 |     async fn update(lookup: i64, input: UpdateArticle, #[inject] context: DetailActionContext<ArticleResource>) -> Result<ArticleDto...
    |              ^^^^^^
 
+warning: unused import: `article_fns`
+ --> tests/ui/server_fnset/fail/action_on_standard.rs:5:4
+  |
+5 | fn article_fns() -> ModelServerFnSet<ArticleResource> { ModelServerFnSet::new() }
+  |    ^^^^^^^^^^^
+  |
+  = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
+
 error[E0277]: the trait bound `Actions: ServerFnSetActions<ArticleResource>` is not satisfied
  --> tests/ui/server_fnset/fail/action_on_standard.rs:4:44
   |

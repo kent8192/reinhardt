@@ -207,7 +207,7 @@ async fn test_shell_command_without_config_returns_actionable_error() {
 	assert_eq!(
 		error.to_string(),
 		"Execution error: Shell configuration is missing. Use \
-		 `execute_from_command_line_with_settings_and_shell` from the generated manage.rs."
+		 `execute_from_command_line_with_migration_settings_and_shell` from the generated manage.rs."
 	);
 }
 

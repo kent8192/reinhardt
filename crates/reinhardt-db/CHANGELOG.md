@@ -7,6 +7,156 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.0-alpha.6](https://github.com/kent8192/reinhardt-web/compare/reinhardt-db@v0.4.0-alpha.5...reinhardt-db@v0.4.0-alpha.6) - 2026-08-06
+
+### Documentation
+
+- *(release)* restore coherent alpha.3 references
+
+## [0.4.0-alpha.5](https://github.com/kent8192/reinhardt-web/compare/reinhardt-db@v0.4.0-alpha.4...reinhardt-db@v0.4.0-alpha.5) - 2026-08-05
+
+### Fixed
+
+- *(db)* align relationship imports with generated fields
+
+### Other
+
+- sync develop/0.4.0 and resolve review feedback
+
+## [0.4.0-alpha.4](https://github.com/kent8192/reinhardt-web/compare/reinhardt-db@v0.4.0-alpha.3...reinhardt-db@v0.4.0-alpha.4) - 2026-08-04
+
+### Added
+
+- *(migrations)* add strict squash catalog
+- *(migrations)* make squash optimization barrier-aware
+- *(migrations)* render and safely write squash sources
+
+### Changed
+
+- *(db)* accept dynamic ORM executors
+
+### Documentation
+
+- *(db)* document atomic transaction outcomes
+- *(migrations)* document squash app validation
+- *(commands)* document safe migration squashing
+- *(commands)* clarify squash cleanup failures
+- *(inspectdb)* describe unique target relationships
+
+### Fixed
+
+- *(forms)* harden generated form persistence semantics
+- *(db)* preserve naive timestamp wall-clock values
+- *(forms)* complete model-backed form submission
+- *(forms)* harden native model form decoding
+- *(db)* preserve naive datetime query parameters
+- *(forms)* prevent duplicate MySQL form inserts
+- *(forms)* prevent duplicate create retries
+- *(forms)* defer uncertain generated keys
+- *(forms)* synchronize defaults and persistence state
+- *(forms)* synchronize transaction-backed form state
+- *(forms)* preserve transactional retry semantics
+- *(forms)* preserve inline uncertain create state
+- *(db)* scope atomic outcomes to savepoints
+- *(db)* decode MySQL UTC fields with model metadata
+- *(forms)* preserve nested form retries
+- *(forms)* align native form validation
+- *(db)* read PostgreSQL naive migration timestamps
+- *(forms)* address model form review feedback
+- *(pgvector)* preserve vector index metadata
+- *(orm)* preserve typed vector NULL bindings
+- *(ci)* repair pgvector test coverage
+- *(pgvector)* close migration and binding gaps
+- *(migrations)* harden squash catalog validation
+- *(migrations)* refine squash range boundaries
+- *(migrations)* preserve squash alter boundaries
+- *(migrations)* harden squash source persistence
+- *(migrations)* validate rendered source payloads
+- *(migrations)* reject root identity changes
+- *(migrations)* verify root snapshot identity
+- *(migrations)* reject lossy strict parsing
+- *(migrations)* validate squash root before writes
+- *(migrations)* strictly parse nested column payloads
+- *(db)* make squash operation parsing lossless
+- *(db)* validate nested squash domain metadata
+- *(migrations)* reject duplicate strict fields
+- *(db)* parse legacy migration metadata and serial fields
+- *(db)* use explicit empty segment check
+- *(db)* mark standard alter-column rendering as supported
+- *(migrations)* harden squash range resolution
+- *(migrations)* validate squash execution contracts
+- *(migrations)* ignore Rust module files
+- *(migrations)* preserve RunRust source operations
+- *(migrations)* validate migration directory identity
+- *(migrations)* omit selected swappable dependencies
+- *(migrations)* preserve public source operations
+- *(migrations)* validate squash dependency context
+- *(migrations)* preserve squash dependency semantics
+- *(migrations)* harden squash generation
+- *(migrations)* preserve squash dependency semantics
+- *(migrations)* honor replacement execution
+- *(migrations)* normalize squash dependencies
+- *(migrations)* preserve squash reduction barriers
+- *(migrations)* resolve replacement state history
+- *(migrations)* normalize replacement histories
+- *(migrations)* preserve replacement history semantics
+- *(migrations)* resolve nested replacement histories
+- *(migrations)* retain replacement rollback order
+- *(migrations)* reconcile nested replacement histories
+- *(migrations)* preserve replacement ancestry
+- *(migrations)* preserve CreateTable backend options
+- *(migrations)* complete squash history reconciliation
+- *(migrations)* handle squash review edge cases
+- *(migrations)* cover squash review edge cases
+- *(migrations)* preserve partial squash ordering
+- *(ci)* restore test fixture and lint compliance
+- *(migrations)* restore public squash range construction
+- *(migrations)* cover nested replacement histories
+- *(migrations)* preserve squash source semantics
+- *(migrations)* reject non-portable swappable squashes
+- *(migrations)* address visibility review feedback
+- *(orm)* reload composite MySQL upserts by lookup
+- *(orm)* gate MySQL reload on generated primary key
+- *(migrations)* validate replacement sets before adoption
+- *(inspectdb)* preserve unique target relationships
+
+### Maintenance
+
+- *(pgvector)* propagate native vector feature flags
+
+### Other
+
+- sync develop/0.4.0 into pgvector branch
+- sync develop/0.4.0 into pgvector branch
+- integrate develop migration updates
+
+### Styling
+
+- *(migrations)* format squash execution tests
+- *(migrations)* simplify dependency collection
+
+### Testing
+
+- *(migrations)* align strict parser diagnostic
+- *(migrations)* verify backend option rendering
+- *(migrations)* correct optional dependency assertions
+- *(orm)* mark upsert fixture fields as generated
+- *(migrations)* align SQL fixtures with safe rendering
+- *(inspectdb)* cover unique relationship variants
+- *(migrations)* assert complete MySQL table comment SQL
+
+### Breaking Changes
+
+- Replace the string-map `Manager::get_or_create` API and remove
+  `get_or_create_with_conn`, `get_or_create_queries`, and `get_or_create_sql`.
+  Use the typed `get_or_create` and `update_or_create` builders with generated
+  model field accessors; caller-owned update/create execution requires a
+  write-intent `AtomicTransaction`.
+- Typed upsert builders now require model-generated `field_*()` accessors.
+  The safe `FieldRef::new` constructor remains available for validated,
+  lower-level dynamic filtering, but its unverified result cannot be supplied
+  to proof-requiring APIs.
+
 ## [0.4.0-alpha.2](https://github.com/kent8192/reinhardt-web/compare/reinhardt-db@v0.4.0-alpha.1...reinhardt-db@v0.4.0-alpha.2) - 2026-07-23
 
 ### Added

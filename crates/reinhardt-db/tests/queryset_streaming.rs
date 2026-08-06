@@ -5,6 +5,8 @@ use reinhardt_db::backends::types::{
 };
 #[cfg(feature = "sqlite")]
 use reinhardt_db::orm::DatabaseConnectionLease;
+#[cfg(feature = "sqlite")]
+use reinhardt_db::orm::connection::DatabaseConnection;
 use reinhardt_db::orm::{Model, NPlusOneConfig, NPlusOneScope, QuerySet};
 use reinhardt_query::prelude::{
 	Alias, ColumnDef, Expr, Query, QueryStatementBuilder, SqliteQueryBuilder,
@@ -62,6 +64,35 @@ fn article_row(id: i64, title: QueryValue) -> Row {
 	row.insert("id".to_owned(), QueryValue::Int(id));
 	row.insert("title".to_owned(), title);
 	row
+}
+
+#[cfg(feature = "sqlite")]
+async fn sqlite_streaming_connection() -> (DatabaseConnectionLease, DatabaseConnection) {
+	let owner = reinhardt_db::backends::DatabaseConnection::connect_sqlite("sqlite::memory:")
+		.await
+		.unwrap();
+	let create_table = Query::create_table()
+		.table(Alias::new("streamed_articles"))
+		.col(
+			ColumnDef::new(Alias::new("id"))
+				.integer()
+				.not_null(true)
+				.primary_key(true),
+		)
+		.col(ColumnDef::new(Alias::new("title")).string().not_null(true))
+		.to_string(SqliteQueryBuilder);
+	owner.execute(&create_table, vec![]).await.unwrap();
+	for (id, title) in [(1, "first"), (2, "second"), (3, "third")] {
+		let insert = Query::insert()
+			.into_table(Alias::new("streamed_articles"))
+			.columns([Alias::new("id"), Alias::new("title")])
+			.values_panic([Expr::val(id), Expr::val(title)])
+			.to_string(SqliteQueryBuilder);
+		owner.execute(&insert, vec![]).await.unwrap();
+	}
+	let lease = DatabaseConnectionLease::register(owner).unwrap();
+	let connection = lease.handle();
+	(lease, connection)
 }
 
 struct BoundedMockStream {
@@ -453,30 +484,7 @@ fn iterator_with_executor_rejects_invalid_chunks_and_unsupported_executors() {
 #[serial(queryset_streaming_connection_registry)]
 async fn sqlite_queryset_iterator_delivers_rows_without_query_cache() {
 	// Arrange
-	let owner = reinhardt_db::backends::DatabaseConnection::connect_sqlite("sqlite::memory:")
-		.await
-		.unwrap();
-	let create_table = Query::create_table()
-		.table(Alias::new("streamed_articles"))
-		.col(
-			ColumnDef::new(Alias::new("id"))
-				.integer()
-				.not_null(true)
-				.primary_key(true),
-		)
-		.col(ColumnDef::new(Alias::new("title")).string().not_null(true))
-		.to_string(SqliteQueryBuilder);
-	owner.execute(&create_table, vec![]).await.unwrap();
-	for (id, title) in [(1, "first"), (2, "second"), (3, "third")] {
-		let insert = Query::insert()
-			.into_table(Alias::new("streamed_articles"))
-			.columns([Alias::new("id"), Alias::new("title")])
-			.values_panic([Expr::val(id), Expr::val(title)])
-			.to_string(SqliteQueryBuilder);
-		owner.execute(&insert, vec![]).await.unwrap();
-	}
-	let lease = DatabaseConnectionLease::register(owner).unwrap();
-	let mut connection = lease.handle();
+	let (_lease, mut connection) = sqlite_streaming_connection().await;
 
 	// Act
 	let models = QuerySet::<StreamedArticle>::new()
@@ -486,6 +494,47 @@ async fn sqlite_queryset_iterator_delivers_rows_without_query_cache() {
 		.await
 		.into_iter()
 		.collect::<reinhardt_core::exception::Result<Vec<_>>>()
+		.unwrap();
+
+	// Assert
+	assert_eq!(
+		models,
+		vec![
+			StreamedArticle {
+				id: Some(1),
+				title: "first".to_owned(),
+			},
+			StreamedArticle {
+				id: Some(2),
+				title: "second".to_owned(),
+			},
+			StreamedArticle {
+				id: Some(3),
+				title: "third".to_owned(),
+			},
+		]
+	);
+}
+
+#[cfg(feature = "sqlite")]
+#[rstest]
+#[tokio::test]
+#[serial(queryset_streaming_connection_registry)]
+async fn sqlite_write_intent_queryset_iterator_streams_rows() {
+	// Arrange
+	let (_lease, connection) = sqlite_streaming_connection().await;
+
+	// Act
+	let models = connection
+		.atomic_write(async |transaction| {
+			QuerySet::<StreamedArticle>::new()
+				.iterator_with_db(transaction, 1)?
+				.collect::<Vec<_>>()
+				.await
+				.into_iter()
+				.collect::<reinhardt_core::exception::Result<Vec<_>>>()
+		})
+		.await
 		.unwrap();
 
 	// Assert

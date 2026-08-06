@@ -7,14 +7,37 @@
 #[allow(unused_imports)]
 use super::{
 	DatabaseMigrationRecorder, ForeignKeyAction, Migration, MigrationError, MigrationPlan,
-	MigrationService, Operation, Result, SchemaEditor, operations::SqlDialect,
+	MigrationService, MigrationSqlPlan, Operation, PlannedStatement, ProjectState, Result,
+	SchemaEditor,
+	operations::SqlDialect,
+	sql_plan::{
+		MigrationDirection, migration_requires_sqlite_recreation, plan_migration_sql_for_execution,
+		split_sql_statements,
+	},
 };
 use crate::backends::{connection::DatabaseConnection, types::DatabaseType};
+use async_trait::async_trait;
 use indexmap::IndexMap;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
+use std::sync::Arc;
 
 #[cfg(feature = "sqlite")]
 use super::introspection::SQLiteIntrospector;
+
+fn planned_operation_context(
+	operation: Option<&Operation>,
+) -> Option<crate::backends::error::PgvectorOperationKind> {
+	operation.and_then(Operation::pgvector_operation_kind)
+}
+
+#[cfg(feature = "sqlite")]
+fn can_execute_sqlite_recreation_sequentially(error: &MigrationError) -> bool {
+	matches!(
+		error,
+		MigrationError::InvalidMigration(message)
+			if message.starts_with("cannot safely plan SQLite recreation after opaque ")
+	)
+}
 
 fn validate_and_advance_migration_state(
 	migration: &Migration,
@@ -27,167 +50,90 @@ fn validate_and_advance_migration_state(
 	Ok(())
 }
 
-fn migration_sql_dialect(connection: &DatabaseConnection) -> SqlDialect {
-	if connection.is_cockroachdb() {
-		return SqlDialect::Cockroachdb;
-	}
-
-	match connection.database_type() {
-		DatabaseType::Postgres => SqlDialect::Postgres,
-		DatabaseType::Mysql => SqlDialect::Mysql,
-		DatabaseType::Sqlite => SqlDialect::Sqlite,
-	}
+fn migration_is_atomic(migration: &Migration, database_type: DatabaseType) -> bool {
+	migration.atomic
+		&& !(database_type == DatabaseType::Postgres
+			&& migration
+				.operations
+				.iter()
+				.any(Operation::creates_index_concurrently))
 }
 
-/// Split SQL string into individual statements while handling:
-/// - String literals (single/double quotes)
-/// - Comments (line and block)
-/// - PostgreSQL dollar-quotes ($$...$$)
-fn split_sql_statements(sql: &str) -> Vec<String> {
-	let mut statements = Vec::new();
-	let mut current = String::new();
-	let mut chars = sql.chars().peekable();
-
-	#[derive(Debug, PartialEq)]
-	enum State {
-		Normal,
-		SingleQuote,
-		DoubleQuote,
-		LineComment,
-		BlockComment,
-		DollarQuote(String),
+fn replacement_history_is_fully_covered(
+	migration: &Migration,
+	migrations: &[Migration],
+	applied_records: &[(String, String)],
+) -> bool {
+	if migration.replaces.is_empty() {
+		return false;
 	}
-
-	let mut state = State::Normal;
-
-	while let Some(ch) = chars.next() {
-		match state {
-			State::Normal => {
-				if ch == '\'' {
-					current.push(ch);
-					state = State::SingleQuote;
-				} else if ch == '"' {
-					current.push(ch);
-					state = State::DoubleQuote;
-				} else if ch == '-' && chars.peek() == Some(&'-') {
-					current.push(ch);
-					current.push(chars.next().unwrap());
-					state = State::LineComment;
-				} else if ch == '/' && chars.peek() == Some(&'*') {
-					current.push(ch);
-					current.push(chars.next().unwrap());
-					state = State::BlockComment;
-				} else if ch == '$' {
-					// Potential dollar-quote start
-					let mut tag = String::from("$");
-					current.push(ch);
-
-					// Collect tag until next $
-					while let Some(&next_ch) = chars.peek() {
-						if next_ch == '$' {
-							tag.push(chars.next().unwrap());
-							current.push('$');
-							state = State::DollarQuote(tag);
-							break;
-						} else if next_ch.is_alphanumeric() || next_ch == '_' {
-							tag.push(chars.next().unwrap());
-							current.push(next_ch);
-						} else {
-							// Not a valid dollar-quote tag
-							break;
-						}
-					}
-				} else if ch == ';' {
-					// Statement separator - save current statement if non-empty
-					let trimmed = current.trim();
-					if !trimmed.is_empty() {
-						statements.push(trimmed.to_string());
-					}
-					current.clear();
-				} else {
-					current.push(ch);
-				}
-			}
-			State::SingleQuote => {
-				current.push(ch);
-				if ch == '\'' {
-					// Check for escaped quote ''
-					if chars.peek() == Some(&'\'') {
-						current.push(chars.next().unwrap());
-					} else {
-						state = State::Normal;
-					}
-				} else if ch == '\\' && chars.peek().is_some() {
-					// Escaped character
-					current.push(chars.next().unwrap());
-				}
-			}
-			State::DoubleQuote => {
-				current.push(ch);
-				if ch == '"' {
-					state = State::Normal;
-				} else if ch == '\\' && chars.peek().is_some() {
-					// Escaped character
-					current.push(chars.next().unwrap());
-				}
-			}
-			State::LineComment => {
-				current.push(ch);
-				if ch == '\n' {
-					state = State::Normal;
-				}
-			}
-			State::BlockComment => {
-				current.push(ch);
-				if ch == '*' && chars.peek() == Some(&'/') {
-					current.push(chars.next().unwrap());
-					state = State::Normal;
-				}
-			}
-			State::DollarQuote(ref tag) => {
-				current.push(ch);
-				// Check if we're at the closing tag
-				if ch == '$' {
-					let mut potential_close = String::from("$");
-					let mut temp_chars = vec![];
-
-					// Collect potential closing tag
-					while let Some(&next_ch) = chars.peek() {
-						if next_ch == '$' {
-							potential_close.push(chars.next().unwrap());
-							temp_chars.push('$');
-							break;
-						} else if potential_close.len() < tag.len()
-							&& (next_ch.is_alphanumeric() || next_ch == '_')
-						{
-							potential_close.push(chars.next().unwrap());
-							temp_chars.push(next_ch);
-						} else {
-							break;
-						}
-					}
-
-					// Add collected characters to current
-					for temp_ch in &temp_chars {
-						current.push(*temp_ch);
-					}
-
-					// Check if it matches the opening tag
-					if potential_close == *tag {
-						state = State::Normal;
-					}
-				}
+	let mut covered: HashSet<(&str, &str)> = applied_records
+		.iter()
+		.map(|(app, name)| (app.as_str(), name.as_str()))
+		.collect();
+	loop {
+		let covered_before = covered.len();
+		for known in migrations {
+			if covered.contains(&(known.app_label.as_str(), known.name.as_str())) {
+				covered.extend(
+					known
+						.replaces
+						.iter()
+						.map(|(app, name)| (app.as_str(), name.as_str())),
+				);
 			}
 		}
+		for known in migrations {
+			if !known.replaces.is_empty()
+				&& known
+					.replaces
+					.iter()
+					.all(|(app, name)| covered.contains(&(app.as_str(), name.as_str())))
+			{
+				covered.insert((known.app_label.as_str(), known.name.as_str()));
+			}
+		}
+		if covered.len() == covered_before {
+			break;
+		}
 	}
+	migration
+		.replaces
+		.iter()
+		.all(|(app, name)| covered.contains(&(app.as_str(), name.as_str())))
+}
 
-	// Add final statement if non-empty
-	let trimmed = current.trim();
-	if !trimmed.is_empty() {
-		statements.push(trimmed.to_string());
+#[cfg(test)]
+mod replacement_history_tests {
+	use super::*;
+
+	#[test]
+	fn nested_replacement_is_covered_by_its_fully_applied_ancestor_history() {
+		let original_one = Migration::new("0001_initial", "app");
+		let original_two = Migration::new("0002_add_field", "app");
+		let mut first_squash = Migration::new("0001_squashed_0002", "app");
+		first_squash.replaces = vec![
+			("app".to_string(), "0001_initial".to_string()),
+			("app".to_string(), "0002_add_field".to_string()),
+		];
+		let mut second_squash = Migration::new("0001_squashed_0002_v2", "app");
+		second_squash.replaces = vec![("app".to_string(), "0001_squashed_0002".to_string())];
+		let applied_records = vec![
+			("app".to_string(), "0001_initial".to_string()),
+			("app".to_string(), "0002_add_field".to_string()),
+		];
+
+		assert!(replacement_history_is_fully_covered(
+			&second_squash,
+			&[
+				original_one,
+				original_two,
+				first_squash,
+				second_squash.clone()
+			],
+			&applied_records,
+		));
 	}
-
-	statements
 }
 
 #[derive(Debug)]
@@ -199,11 +145,148 @@ pub struct ExecutionResult {
 	pub failed: Option<String>,
 }
 
+/// A replacement-aware subset of migrations selected for execution or display.
+///
+/// Replacement migrations supersede their replaced migrations on a fresh
+/// database. When every replaced migration is already recorded, the
+/// replacement is selected for recorder adoption instead. A partially applied
+/// replacement set is invalid because neither history can be chosen safely.
+#[derive(Debug)]
+pub struct ReplacementMigrationSelection<'a> {
+	migrations: Vec<&'a Migration>,
+	replacements_to_adopt: Vec<&'a Migration>,
+}
+
+impl<'a> ReplacementMigrationSelection<'a> {
+	/// Return migrations that remain after replacement selection.
+	pub fn migrations(&self) -> &[&'a Migration] {
+		&self.migrations
+	}
+
+	/// Return replacements whose complete original history must be adopted.
+	pub fn replacements_to_adopt(&self) -> &[&'a Migration] {
+		&self.replacements_to_adopt
+	}
+}
+
+/// Select one side of each replacement set from the supplied migration list.
+///
+/// This function is shared by the executor and command previews so `--plan`,
+/// `--fake`, and real execution report the same migration history.
+pub fn select_replacement_migrations<'a>(
+	migrations: &'a [Migration],
+	applied: &HashSet<super::graph::MigrationKey>,
+) -> Result<ReplacementMigrationSelection<'a>> {
+	let mut excluded = HashSet::new();
+	let mut replacements_to_adopt = Vec::new();
+	let mut covered_by_applied_history = applied.clone();
+	loop {
+		let mut changed = false;
+		for migration in migrations {
+			let key = super::graph::MigrationKey::new(&migration.app_label, &migration.name);
+			if covered_by_applied_history.contains(&key) {
+				for (app, name) in &migration.replaces {
+					changed |= covered_by_applied_history
+						.insert(super::graph::MigrationKey::new(app, name));
+				}
+			}
+		}
+		if !changed {
+			break;
+		}
+	}
+
+	for replacement in migrations
+		.iter()
+		.filter(|migration| !migration.replaces.is_empty())
+	{
+		let replacement_key = super::graph::MigrationKey::new(
+			replacement.app_label.clone(),
+			replacement.name.clone(),
+		);
+		let replacement_is_applied = applied.contains(&replacement_key);
+		let replaced_applied = replacement
+			.replaces
+			.iter()
+			.filter(|(app, name)| {
+				covered_by_applied_history.contains(&super::graph::MigrationKey::new(app, name))
+			})
+			.count();
+
+		if replacement_is_applied || replaced_applied == 0 {
+			excluded.extend(
+				replacement
+					.replaces
+					.iter()
+					.map(|(app, name)| super::graph::MigrationKey::new(app.clone(), name.clone())),
+			);
+		} else if replaced_applied == replacement.replaces.len() {
+			replacements_to_adopt.push(replacement);
+			excluded.extend(
+				replacement
+					.replaces
+					.iter()
+					.map(|(app, name)| super::graph::MigrationKey::new(app.clone(), name.clone())),
+			);
+			excluded.insert(replacement_key);
+		} else {
+			return Err(MigrationError::InvalidMigration(format!(
+				"Cannot apply replacement {} with a partially applied replacement set",
+				replacement.id()
+			)));
+		}
+	}
+
+	let migrations = migrations
+		.iter()
+		.filter(|migration| {
+			!excluded.contains(&super::graph::MigrationKey::new(
+				migration.app_label.clone(),
+				migration.name.clone(),
+			))
+		})
+		.collect();
+
+	Ok(ReplacementMigrationSelection {
+		migrations,
+		replacements_to_adopt,
+	})
+}
+
+#[async_trait]
+trait SqlPlanner: Send + Sync {
+	async fn plan(
+		&self,
+		connection: &DatabaseConnection,
+		migration: &Migration,
+		state: &ProjectState,
+		direction: MigrationDirection,
+		editor: &mut SchemaEditor,
+	) -> Result<MigrationSqlPlan>;
+}
+
+struct DefaultSqlPlanner;
+
+#[async_trait]
+impl SqlPlanner for DefaultSqlPlanner {
+	async fn plan(
+		&self,
+		connection: &DatabaseConnection,
+		migration: &Migration,
+		state: &ProjectState,
+		direction: MigrationDirection,
+		editor: &mut SchemaEditor,
+	) -> Result<MigrationSqlPlan> {
+		plan_migration_sql_for_execution(connection, migration, state, direction, editor).await
+	}
+}
+
 /// Migration executor using DatabaseConnection (supports multiple database types)
 pub struct DatabaseMigrationExecutor {
 	connection: DatabaseConnection,
 	recorder: DatabaseMigrationRecorder,
 	db_type: DatabaseType,
+	planner: Arc<dyn SqlPlanner>,
 }
 
 impl DatabaseMigrationExecutor {
@@ -231,6 +314,19 @@ impl DatabaseMigrationExecutor {
 			connection,
 			recorder,
 			db_type,
+			planner: Arc::new(DefaultSqlPlanner),
+		}
+	}
+
+	#[cfg(test)]
+	fn new_with_planner(connection: DatabaseConnection, planner: Arc<dyn SqlPlanner>) -> Self {
+		let db_type = connection.database_type();
+		let recorder = DatabaseMigrationRecorder::new(connection.clone());
+		Self {
+			connection,
+			recorder,
+			db_type,
+			planner,
 		}
 	}
 
@@ -274,11 +370,98 @@ impl DatabaseMigrationExecutor {
 	) -> Result<ExecutionResult> {
 		let mut applied = Vec::new();
 		let mut validation_state = super::ProjectState::new();
+		let applied_records = self.recorder.get_applied_migrations().await?;
+		let applied_record_keys: Vec<_> = applied_records
+			.iter()
+			.map(|record| (record.app.clone(), record.name.clone()))
+			.collect();
+		let applied_record_set: HashSet<_> = applied_record_keys
+			.iter()
+			.map(|(app, name)| (app.as_str(), name.as_str()))
+			.collect();
+		let applied_keys: HashSet<_> = applied_record_keys
+			.iter()
+			.map(|(app, name)| super::graph::MigrationKey::new(app, name))
+			.collect();
+		let adopts_replacement = migrations.iter().any(|migration| {
+			!migration.replaces.is_empty()
+				&& !applied_keys.contains(&super::graph::MigrationKey::new(
+					&migration.app_label,
+					&migration.name,
+				)) && replacement_history_is_fully_covered(migration, migrations, &applied_record_keys)
+		});
+		if adopts_replacement {
+			// Validate every replacement set before recorder reconciliation mutates
+			// any complete history. A lone partial history can continue through its
+			// original migrations, but it cannot be combined atomically with an
+			// adoption that rewrites another replacement set.
+			select_replacement_migrations(migrations, &applied_keys)?;
+		}
+
+		// A partly applied original history must continue on the original chain.
+		// Once every original is recorded (or no original is recorded), select the
+		// replacement so the normal reconciliation path can reduce it to one row.
+		let partial_replacements: HashSet<_> = migrations
+			.iter()
+			.filter(|migration| {
+				!migration.replaces.is_empty()
+					&& !replacement_history_is_fully_covered(
+						migration,
+						migrations,
+						&applied_record_keys,
+					) && migration
+					.replaces
+					.iter()
+					.any(|(app, name)| applied_record_set.contains(&(app.as_str(), name.as_str())))
+			})
+			.map(|migration| (migration.app_label.as_str(), migration.name.as_str()))
+			.collect();
+		let replaced_by_selected_replacements: HashSet<_> = migrations
+			.iter()
+			.filter(|migration| {
+				!partial_replacements
+					.contains(&(migration.app_label.as_str(), migration.name.as_str()))
+			})
+			.flat_map(|migration| {
+				migration
+					.replaces
+					.iter()
+					.map(|(app, name)| (app.as_str(), name.as_str()))
+			})
+			.collect();
+		let selected_migrations: Vec<_> = migrations
+			.iter()
+			.filter(|migration| {
+				!partial_replacements
+					.contains(&(migration.app_label.as_str(), migration.name.as_str()))
+					&& !replaced_by_selected_replacements
+						.contains(&(migration.app_label.as_str(), migration.name.as_str()))
+			})
+			.collect();
+		let partial_replacement_dependencies: HashMap<_, Vec<_>> = migrations
+			.iter()
+			.filter(|migration| {
+				partial_replacements
+					.contains(&(migration.app_label.as_str(), migration.name.as_str()))
+			})
+			.map(|migration| {
+				(
+					(migration.app_label.clone(), migration.name.clone()),
+					migration
+						.replaces
+						.iter()
+						.map(|(app, name)| {
+							super::graph::MigrationKey::new(app.clone(), name.clone())
+						})
+						.collect(),
+				)
+			})
+			.collect();
 
 		// Build MigrationGraph for dependency resolution
 		let mut graph = super::graph::MigrationGraph::new();
 
-		for migration in migrations {
+		for migration in &selected_migrations {
 			let key = super::graph::MigrationKey::new(
 				migration.app_label.clone(),
 				migration.name.clone(),
@@ -286,33 +469,112 @@ impl DatabaseMigrationExecutor {
 			let deps: Vec<super::graph::MigrationKey> = migration
 				.dependencies
 				.iter()
-				.map(|(app, name)| super::graph::MigrationKey::new(app.clone(), name.clone()))
+				.flat_map(|(app, name)| {
+					partial_replacement_dependencies
+						.get(&(app.clone(), name.clone()))
+						.cloned()
+						.unwrap_or_else(|| {
+							vec![super::graph::MigrationKey::new(app.clone(), name.clone())]
+						})
+				})
 				.collect();
 
-			graph.add_migration(key, deps);
+			let replaces = migration
+				.replaces
+				.iter()
+				.map(|(app, name)| super::graph::MigrationKey::new(app.clone(), name.clone()))
+				.collect();
+			graph.add_migration_with_replaces(key, deps, replaces);
 		}
 
-		// Perform topological sort (automatically detects circular dependencies)
-		let sorted_keys = graph.topological_sort()?;
+		// Resolve replacements before sorting so a squashed migration is selected
+		// instead of reapplying every migration it supersedes.
+		let sorted_keys = graph.resolve_execution_order_with_replaces()?;
 
 		// Apply migrations in dependency-resolved order
 		for key in sorted_keys {
 			// Find the migration corresponding to this key
-			let migration = migrations
+			let migration = selected_migrations
 				.iter()
 				.find(|m| m.app_label == key.app_label && m.name == key.name)
+				.copied()
 				.ok_or_else(|| {
 					MigrationError::DependencyError(format!("Migration not found: {}", key.id()))
 				})?;
 			validate_and_advance_migration_state(migration, &mut validation_state)?;
 
-			// Check if already applied
+			// A previous replacement reconciliation can have recorded the replacement
+			// before removing the records it supersedes. Resume that cleanup here so a
+			// retry cannot leave both histories applied indefinitely.
 			if self
 				.recorder
 				.is_applied(&migration.app_label, &migration.name)
 				.await?
 			{
+				if !migration.replaces.is_empty() {
+					for (app_label, name) in &migration.replaces {
+						if self.recorder.is_applied(app_label, name).await? {
+							self.recorder.unapply(app_label, name).await?;
+						}
+					}
+				}
 				continue;
+			}
+			if !migration.replaces.is_empty() {
+				let applied_records = self.recorder.get_applied_migrations().await?;
+				let applied_records_set: HashSet<_> = applied_records
+					.iter()
+					.map(|record| (record.app.as_str(), record.name.as_str()))
+					.collect();
+				let replaced: HashSet<_> = migration
+					.replaces
+					.iter()
+					.map(|(app, name)| (app.as_str(), name.as_str()))
+					.collect();
+				if replacement_history_is_fully_covered(
+					migration,
+					migrations,
+					&applied_records
+						.iter()
+						.map(|record| (record.app.clone(), record.name.clone()))
+						.collect::<Vec<_>>(),
+				) {
+					let historical_record = applied_records
+						.iter()
+						.find(|record| {
+							replaced.contains(&(record.app.as_str(), record.name.as_str()))
+						})
+						.ok_or_else(|| {
+							MigrationError::InvalidMigration(format!(
+								"cannot apply replacement {} because a competing replacement already covers its history",
+								migration.id()
+							))
+						})?;
+					self.recorder
+						.rename_applied(
+							&historical_record.app,
+							&historical_record.name,
+							&migration.app_label,
+							&migration.name,
+						)
+						.await?;
+					for (app_label, name) in &migration.replaces {
+						if applied_records_set.contains(&(app_label.as_str(), name.as_str()))
+							&& (app_label != &historical_record.app
+								|| name != &historical_record.name)
+						{
+							self.recorder.unapply(app_label, name).await?;
+						}
+					}
+					applied.push(migration.id());
+					continue;
+				}
+				if !replaced.is_disjoint(&applied_records_set) {
+					return Err(MigrationError::InvalidMigration(format!(
+						"cannot apply replacement {} because only some replaced migrations are recorded",
+						migration.id()
+					)));
+				}
 			}
 
 			// Apply migration operations
@@ -425,88 +687,45 @@ impl DatabaseMigrationExecutor {
 			return Ok(());
 		}
 
-		let dialect = migration_sql_dialect(&self.connection);
-
-		let requires_sqlite_recreation = matches!(dialect, SqlDialect::Sqlite)
-			&& migration
-				.operations
-				.iter()
-				.any(Operation::reverse_requires_sqlite_recreation);
-
-		// Create SchemaEditor for atomic operations
+		let project_state = super::ProjectState::default();
+		let requires_sqlite_recreation = migration_requires_sqlite_recreation(
+			&self.connection,
+			migration,
+			MigrationDirection::Backward,
+		);
 		let mut editor = SchemaEditor::new_for_migration(
 			self.connection.clone(),
-			migration.atomic,
-			self.connection.database_type(),
+			migration_is_atomic(migration, self.db_type),
+			self.db_type,
 			requires_sqlite_recreation,
 		)
 		.await?;
-
-		// Process operations in reverse order
-		let project_state = super::ProjectState::default();
-
-		for operation in migration.operations.iter().rev() {
-			operation.validate_for_dialect(&dialect)?;
-			let reverse_operation = operation.to_reverse_operation(&project_state)?;
-			if let Some(reverse_operation) = &reverse_operation {
-				reverse_operation.validate_for_dialect(&dialect)?;
-			}
-
-			// Check if SQLite and reverse operation requires recreation
+		let plan_result = self
+			.planner
+			.plan(
+				&self.connection,
+				migration,
+				&project_state,
+				MigrationDirection::Backward,
+				&mut editor,
+			)
+			.await;
+		match plan_result {
+			Ok(plan) => self.execute_sql_plan(migration, plan, editor).await?,
 			#[cfg(feature = "sqlite")]
-			if matches!(dialect, SqlDialect::Sqlite)
-				&& operation.reverse_requires_sqlite_recreation()
-			{
-				// Get the reverse operation and use table recreation
-				if let Some(reverse_op) = reverse_operation {
-					tracing::debug!("=== SQLite Recreation for reverse of {:?} ===", operation);
-					self.handle_sqlite_recreation(&reverse_op, &mut editor)
-						.await?;
-					tracing::debug!("✅ SQLite recreation for reverse operation completed");
-					continue;
-				} else {
-					tracing::warn!(
-						"Cannot generate reverse operation for SQLite recreation: {:?}",
-						operation
-					);
-					// Fall through to standard SQL execution
-				}
-			}
-
-			// Standard reverse SQL execution
-			let reverse_sql = operation.to_reverse_sql(&dialect, &project_state)?;
-
-			if let Some(statements) = reverse_sql {
+			Err(error) if can_execute_sqlite_recreation_sequentially(&error) => {
 				tracing::debug!(
-					"=== Reverse SQL for {:?} ({} statement(s)) ===",
-					operation,
-					statements.len()
+					"Falling back to reverse sequential SQLite migration execution after opaque operation: {error}"
 				);
-				// Dispatch each statement separately through SchemaEditor.
-				// SchemaEditor::execute() is backed by sqlx Extended Query, which
-				// accepts only one statement per payload — see operations.rs
-				// `Operation::to_reverse_sql` for why some DDL reversals produce
-				// multiple statements (e.g. AlterColumn on PostgreSQL/CockroachDB
-				// splits type reversion and NOT NULL restoration).
-				for sql in &statements {
-					tracing::debug!("{}", sql);
-					editor
-						.execute_with_context(sql, operation.pgvector_reverse_operation_kind())
-						.await?;
-				}
-
-				tracing::debug!("✅ Reverse operation executed successfully");
-			} else {
-				tracing::warn!(
-					"No reverse SQL available for operation in migration '{}': {:?}",
-					migration.id(),
-					operation
-				);
+				self.execute_sqlite_migration_sequentially(
+					migration,
+					editor,
+					MigrationDirection::Backward,
+				)
+				.await?;
 			}
+			Err(error) => return Err(error),
 		}
-
-		// Commit SchemaEditor changes
-		editor.finish().await?;
 
 		Ok(())
 	}
@@ -515,7 +734,8 @@ impl DatabaseMigrationExecutor {
 	///
 	/// If the migration's `atomic` flag is true and the database supports
 	/// transactional DDL (PostgreSQL, SQLite), all operations are wrapped
-	/// in a transaction that can be rolled back on failure.
+	/// in a transaction that can be rolled back on failure. PostgreSQL migrations
+	/// containing a concurrent index operation are always planned as non-atomic.
 	///
 	/// For databases that don't support transactional DDL (MySQL), operations
 	/// are executed directly without transaction wrapping, and a warning is logged.
@@ -530,23 +750,6 @@ impl DatabaseMigrationExecutor {
 			return Ok(());
 		}
 
-		let dialect = migration_sql_dialect(&self.connection);
-
-		let requires_sqlite_recreation = matches!(dialect, SqlDialect::Sqlite)
-			&& migration
-				.operations
-				.iter()
-				.any(Operation::requires_sqlite_recreation);
-
-		// Create schema editor with atomic support based on migration's atomic flag
-		let mut editor = SchemaEditor::new_for_migration(
-			self.connection.clone(),
-			migration.atomic,
-			self.db_type,
-			requires_sqlite_recreation,
-		)
-		.await?;
-
 		// Log if database_only flag is set
 		if migration.database_only {
 			tracing::debug!(
@@ -556,92 +759,175 @@ impl DatabaseMigrationExecutor {
 		}
 
 		tracing::debug!(
-			"Applying migration '{}' (atomic={}, effective_atomic={})",
+			"Planning migration '{}' (atomic={})",
 			migration.id(),
 			migration.atomic,
-			editor.is_atomic()
 		);
-
-		// Execute operations through schema editor
-		for operation in &migration.operations {
-			operation.validate_for_dialect(&dialect)?;
-
-			// Handle SQLite table recreation for incompatible operations
+		let requires_sqlite_recreation = migration_requires_sqlite_recreation(
+			&self.connection,
+			migration,
+			MigrationDirection::Forward,
+		);
+		let mut editor = SchemaEditor::new_for_migration(
+			self.connection.clone(),
+			migration_is_atomic(migration, self.db_type),
+			self.db_type,
+			requires_sqlite_recreation,
+		)
+		.await?;
+		let plan_result = self
+			.planner
+			.plan(
+				&self.connection,
+				migration,
+				&ProjectState::default(),
+				MigrationDirection::Forward,
+				&mut editor,
+			)
+			.await;
+		match plan_result {
+			Ok(plan) => self.execute_sql_plan(migration, plan, editor).await?,
 			#[cfg(feature = "sqlite")]
-			if matches!(dialect, SqlDialect::Sqlite) && operation.requires_sqlite_recreation() {
-				self.handle_sqlite_recreation(operation, &mut editor)
-					.await?;
-				continue;
+			Err(error) if can_execute_sqlite_recreation_sequentially(&error) => {
+				tracing::debug!(
+					"Falling back to sequential SQLite migration execution after opaque operation: {error}"
+				);
+				self.execute_sqlite_migration_sequentially(
+					migration,
+					editor,
+					MigrationDirection::Forward,
+				)
+				.await?;
 			}
-
-			// Check if this is a CreateTable operation and if the table already
-			// exists. The check MUST run through the schema editor (and thus
-			// through the editor's open transaction, if any) — otherwise the
-			// pool may pick a different physical connection whose schema cache
-			// is stale w.r.t. DDL committed earlier in this same migration.
-			//
-			// On SQLite, an introspection read on a separate pool connection
-			// after a DDL on the transaction's connection raises SQLITE_SCHEMA
-			// (code 262, "database schema is locked") because the schema
-			// cookie has been bumped on the writer but the reader's prepared
-			// statement cache is stale. See reinhardt-web#4584.
-			if let Operation::CreateTable { name, .. } = operation {
-				let table_exists = editor.table_exists(name).await?;
-				if table_exists {
-					tracing::info!(
-						"Table '{}' already exists, skipping CREATE TABLE operation",
-						name
-					);
-					continue;
-				}
-			}
-
-			let sql = operation.try_to_sql(&dialect)?;
-
-			tracing::debug!(
-				"Executing migration SQL (length={}, semicolons={})",
-				sql.len(),
-				sql.matches(';').count()
-			);
-
-			// Split SQL into individual statements to handle PostgreSQL's
-			// prepared statement limitation (cannot execute multiple commands)
-			let statements = split_sql_statements(&sql);
-
-			tracing::debug!("Split into {} statements", statements.len());
-
-			for (i, statement) in statements.iter().enumerate() {
-				if !statement.trim().is_empty() {
-					tracing::debug!(
-						"Statement {} (length: {} chars): {}",
-						i + 1,
-						statement.len(),
-						&statement[..statement.len().min(100)]
-					);
-
-					editor
-						.execute_with_context(statement, operation.pgvector_operation_kind())
-						.await
-						.map_err(|e| {
-							tracing::error!(
-								"Migration operation failed: {}. SQL: {}",
-								e,
-								&statement[..statement.len().min(200)]
-							);
-							e
-						})?;
-
-					tracing::debug!("Statement {} executed successfully", i + 1);
-				}
-			}
+			Err(error) => return Err(error),
 		}
-
-		// Finish (commits if atomic)
-		editor.finish().await?;
 
 		tracing::debug!("Migration '{}' applied successfully", migration.id());
 
 		Ok(())
+	}
+
+	async fn execute_sql_plan(
+		&self,
+		migration: &Migration,
+		plan: MigrationSqlPlan,
+		mut editor: SchemaEditor,
+	) -> Result<()> {
+		self.execute_sql_plan_statements(migration, &plan, &mut editor)
+			.await?;
+		editor.finish().await
+	}
+
+	async fn execute_sql_plan_statements(
+		&self,
+		migration: &Migration,
+		plan: &MigrationSqlPlan,
+		editor: &mut SchemaEditor,
+	) -> Result<()> {
+		tracing::debug!(
+			"Executing migration '{}' (atomic={}, effective_atomic={})",
+			migration.id(),
+			plan.atomic,
+			editor.is_atomic()
+		);
+
+		let mut index = 0;
+		while index < plan.statements.len() {
+			#[cfg(feature = "sqlite")]
+			if let Some(group) = plan.sqlite_recreation_groups[index] {
+				let mut sql = Vec::new();
+				while index < plan.statements.len()
+					&& plan.sqlite_recreation_groups[index] == Some(group)
+				{
+					if let PlannedStatement::Sql(statement) = &plan.statements[index] {
+						sql.push(statement.clone());
+					}
+					index += 1;
+				}
+				editor
+					.with_foreign_keys_disabled(move |editor| {
+						Box::pin(async move {
+							for statement in sql {
+								editor.execute(&statement).await?;
+							}
+							let violations = editor.check_foreign_key_integrity().await?;
+							if !violations.is_empty() {
+								return Err(MigrationError::ForeignKeyViolation(format!(
+									"Foreign key violations detected after table recreation: {}",
+									violations.join("; ")
+								)));
+							}
+							Ok(())
+						})
+					})
+					.await?;
+				continue;
+			}
+
+			let statement = &plan.statements[index];
+			let operation = plan.planned_operations[index].as_ref();
+			index += 1;
+			match statement {
+				PlannedStatement::Comment(comment) => {
+					tracing::debug!("Migration plan comment: {comment}");
+				}
+				PlannedStatement::Sql(statement) => {
+					if let Some(Operation::CreateTable { name, .. }) = operation
+						&& editor.table_exists(name).await?
+					{
+						tracing::info!(
+							"Table '{}' already exists, skipping CREATE TABLE operation",
+							name
+						);
+						continue;
+					}
+					let context = planned_operation_context(operation);
+					editor
+						.execute_with_context(statement, context)
+						.await
+						.map_err(|error| {
+							tracing::error!(
+								"Migration operation failed: {}. SQL: {}",
+								error,
+								&statement[..statement.len().min(200)]
+							);
+							error
+						})?;
+				}
+			}
+		}
+
+		Ok(())
+	}
+
+	#[cfg(feature = "sqlite")]
+	async fn execute_sqlite_migration_sequentially(
+		&self,
+		migration: &Migration,
+		mut editor: SchemaEditor,
+		direction: MigrationDirection,
+	) -> Result<()> {
+		let mut operations = migration.operations.clone();
+		if direction == MigrationDirection::Backward {
+			operations.reverse();
+		}
+		for operation in operations {
+			let mut single_operation = migration.clone();
+			single_operation.operations = vec![operation];
+			let plan = self
+				.planner
+				.plan(
+					&self.connection,
+					&single_operation,
+					&ProjectState::default(),
+					direction,
+					&mut editor,
+				)
+				.await?;
+			self.execute_sql_plan_statements(&single_operation, &plan, &mut editor)
+				.await?;
+		}
+		editor.finish().await
 	}
 
 	/// Apply migrations from a MigrationPlan
@@ -749,7 +1035,7 @@ impl DatabaseMigrationExecutor {
 	/// stale column list and silently discard the just-`ALTER`'d column.
 	/// See reinhardt-web#4447.
 	#[cfg(feature = "sqlite")]
-	async fn read_sqlite_table_via_editor(
+	pub(crate) async fn read_sqlite_table_via_editor(
 		editor: &mut SchemaEditor,
 		table_name: &str,
 	) -> Result<(
@@ -1217,292 +1503,6 @@ impl DatabaseMigrationExecutor {
 			without_rowid,
 			strict,
 		))
-	}
-
-	/// Handle SQLite table recreation for operations that require it
-	///
-	/// SQLite has limited ALTER TABLE support. Operations like DropColumn and AlterColumn
-	/// require table recreation (CREATE new table → COPY data → DROP old → RENAME).
-	///
-	/// This method handles foreign key constraints by:
-	/// 1. Disabling FK checks before recreation
-	/// 2. Executing the table recreation
-	/// 3. Re-enabling FK checks
-	/// 4. Checking for FK integrity violations
-	#[cfg(feature = "sqlite")]
-	async fn handle_sqlite_recreation(
-		&self,
-		operation: &Operation,
-		editor: &mut SchemaEditor,
-	) -> Result<()> {
-		use super::operations::SqliteTableRecreation;
-
-		operation.validate_for_dialect(&SqlDialect::Sqlite)?;
-
-		// Build the recreation plan based on operation type.
-		//
-		// Critical: introspection must run via the editor's open transaction so
-		// that DDL applied earlier in the same migration (e.g. a preceding
-		// `AddColumn`) is visible. Reading via the pool would land on a
-		// different connection that cannot see the uncommitted schema and
-		// would silently rebuild the table from a stale column set — the
-		// root cause of reinhardt-web#4447.
-		let recreation = match operation {
-			Operation::AddColumn { table, column, .. } => {
-				tracing::debug!(
-					"Handling SQLite table recreation for AddColumn: table={}, column={}",
-					table,
-					column.name
-				);
-				let (
-					columns,
-					column_collations,
-					constraints,
-					raw_constraints,
-					indexes,
-					triggers,
-					without_rowid,
-					strict,
-				) = Self::read_sqlite_table_via_editor(editor, table).await?;
-				SqliteTableRecreation::for_add_column(table, columns, column.clone(), constraints)
-					.with_column_collations(column_collations)
-					.with_raw_constraints(raw_constraints)
-					.with_indexes(indexes)
-					.with_triggers(triggers)
-					.with_without_rowid(without_rowid)
-					.with_strict(strict)
-			}
-			Operation::DropColumn { table, column, .. } => {
-				tracing::debug!(
-					"Handling SQLite table recreation for DropColumn: table={}, column={}",
-					table,
-					column
-				);
-				let (
-					columns,
-					column_collations,
-					constraints,
-					raw_constraints,
-					indexes,
-					triggers,
-					without_rowid,
-					strict,
-				) = Self::read_sqlite_table_via_editor(editor, table).await?;
-				SqliteTableRecreation::for_drop_column(table, columns, column, constraints)
-					.with_column_collations(column_collations)
-					.with_raw_constraints(raw_constraints)
-					.with_indexes(indexes)
-					.with_triggers(triggers)
-					.with_without_rowid(without_rowid)
-					.with_strict(strict)
-					.without_raw_constraints_referencing(column)
-					.without_indexes_referencing(column)
-			}
-			Operation::AlterColumn {
-				table,
-				column,
-				new_definition,
-				..
-			} => {
-				tracing::debug!(
-					"Handling SQLite table recreation for AlterColumn: table={}, column={}",
-					table,
-					column
-				);
-				let (
-					columns,
-					column_collations,
-					constraints,
-					raw_constraints,
-					indexes,
-					triggers,
-					without_rowid,
-					strict,
-				) = Self::read_sqlite_table_via_editor(editor, table).await?;
-				SqliteTableRecreation::for_alter_column(
-					table,
-					columns,
-					column,
-					new_definition.clone(),
-					constraints,
-				)
-				.with_column_collations(column_collations)
-				.with_raw_constraints(raw_constraints)
-				.with_indexes(indexes)
-				.with_triggers(triggers)
-				.with_without_rowid(without_rowid)
-				.with_strict(strict)
-			}
-			Operation::AddConstraint {
-				table,
-				constraint_sql,
-			}
-			| Operation::AddConstraintRepair {
-				table,
-				constraint_sql,
-			} => {
-				tracing::debug!(
-					"Handling SQLite table recreation for AddConstraint: table={}",
-					table
-				);
-				let (
-					columns,
-					column_collations,
-					constraints,
-					raw_constraints,
-					indexes,
-					triggers,
-					without_rowid,
-					strict,
-				) = Self::read_sqlite_table_via_editor(editor, table).await?;
-				SqliteTableRecreation::for_add_constraint(
-					table,
-					columns,
-					constraints,
-					constraint_sql.clone(),
-				)
-				.with_column_collations(column_collations)
-				.with_raw_constraints(raw_constraints)
-				.with_indexes(indexes)
-				.with_triggers(triggers)
-				.with_without_rowid(without_rowid)
-				.with_strict(strict)
-			}
-			Operation::AddConstraintDefinition { table, constraint } => {
-				tracing::debug!(
-					"Handling SQLite table recreation for typed constraint: table={}",
-					table
-				);
-				let (
-					columns,
-					column_collations,
-					constraints,
-					raw_constraints,
-					indexes,
-					triggers,
-					without_rowid,
-					strict,
-				) = Self::read_sqlite_table_via_editor(editor, table).await?;
-				SqliteTableRecreation::for_add_constraint_definition(
-					table,
-					columns,
-					constraints,
-					constraint.clone(),
-				)
-				.with_column_collations(column_collations)
-				.with_raw_constraints(raw_constraints)
-				.with_indexes(indexes)
-				.with_triggers(triggers)
-				.with_without_rowid(without_rowid)
-				.with_strict(strict)
-			}
-			Operation::DropConstraint {
-				table,
-				constraint_name,
-				..
-			} => {
-				tracing::debug!(
-					"Handling SQLite table recreation for DropConstraint: table={}, constraint={}",
-					table,
-					constraint_name
-				);
-				let (
-					columns,
-					column_collations,
-					constraints,
-					raw_constraints,
-					indexes,
-					triggers,
-					without_rowid,
-					strict,
-				) = Self::read_sqlite_table_via_editor(editor, table).await?;
-				SqliteTableRecreation::for_drop_constraint(
-					table,
-					columns,
-					constraints,
-					constraint_name,
-				)
-				.with_column_collations(column_collations)
-				.with_raw_constraints(raw_constraints)
-				.without_raw_constraint_named(constraint_name)
-				.with_indexes(indexes)
-				.with_triggers(triggers)
-				.with_without_rowid(without_rowid)
-				.with_strict(strict)
-			}
-			Operation::DropConstraintDefinition { table, constraint } => {
-				tracing::debug!(
-					"Handling SQLite table recreation for typed constraint drop: table={}, constraint={}",
-					table,
-					constraint.name()
-				);
-				let (
-					columns,
-					column_collations,
-					constraints,
-					raw_constraints,
-					indexes,
-					triggers,
-					without_rowid,
-					strict,
-				) = Self::read_sqlite_table_via_editor(editor, table).await?;
-				SqliteTableRecreation::for_drop_constraint(
-					table,
-					columns,
-					constraints,
-					constraint.name(),
-				)
-				.with_column_collations(column_collations)
-				.with_raw_constraints(raw_constraints)
-				.without_raw_constraint_named(constraint.name())
-				.with_indexes(indexes)
-				.with_triggers(triggers)
-				.with_without_rowid(without_rowid)
-				.with_strict(strict)
-			}
-			_ => {
-				// This branch should not be reached if requires_sqlite_recreation() is correct
-				tracing::warn!(
-					"Operation {:?} was passed to handle_sqlite_recreation but is not handled. \
-					Attempting to execute as-is, which may fail.",
-					std::mem::discriminant(operation)
-				);
-				// No scoped foreign-key state has been changed at this point.
-				let sql = operation.try_to_sql(&super::operations::SqlDialect::Sqlite)?;
-				editor.execute(&sql).await?;
-				return Ok(());
-			}
-		};
-
-		let statements = recreation.try_to_sql_statements()?;
-		editor
-			.with_foreign_keys_disabled(move |editor| {
-				Box::pin(async move {
-					for stmt in statements {
-						tracing::debug!(
-							"Executing recreation SQL: {}",
-							&stmt[..stmt.len().min(100)]
-						);
-						editor.execute(&stmt).await?;
-					}
-					let violations = editor.check_foreign_key_integrity().await?;
-					if !violations.is_empty() {
-						return Err(MigrationError::ForeignKeyViolation(format!(
-							"Foreign key violations detected after table recreation: {}",
-							violations.join("; ")
-						)));
-					}
-					Ok(())
-				})
-			})
-			.await?;
-
-		tracing::debug!(
-			"SQLite table recreation completed for {:?}",
-			std::mem::discriminant(operation)
-		);
-
-		Ok(())
 	}
 
 	/// Record a migration as applied without actually running it
@@ -3259,6 +3259,146 @@ impl Default for OperationOptimizer {
 mod optimizer_tests {
 	use super::*;
 	use crate::migrations::{ColumnDefinition, FieldType};
+	#[cfg(feature = "pgvector")]
+	use crate::{backends::error::PgvectorOperationKind, migrations::IndexType};
+
+	struct SentinelPlanner;
+
+	#[test]
+	fn concurrent_postgres_index_disables_atomic_planning() {
+		let mut migration = Migration::new("0001_index", "search");
+		migration.operations.push(Operation::CreateIndex {
+			table: "documents".to_string(),
+			columns: vec!["title".to_string()],
+			unique: false,
+			index_type: None,
+			where_clause: None,
+			concurrently: true,
+			expressions: None,
+			mysql_options: None,
+			operator_class: None,
+		});
+
+		assert!(!migration_is_atomic(&migration, DatabaseType::Postgres));
+		assert!(migration_is_atomic(&migration, DatabaseType::Sqlite));
+	}
+
+	#[async_trait]
+	impl SqlPlanner for SentinelPlanner {
+		async fn plan(
+			&self,
+			_connection: &DatabaseConnection,
+			migration: &Migration,
+			_state: &ProjectState,
+			direction: MigrationDirection,
+			_editor: &mut SchemaEditor,
+		) -> Result<MigrationSqlPlan> {
+			Ok(MigrationSqlPlan {
+				atomic: migration.atomic,
+				statements: vec![PlannedStatement::Sql(
+					"CREATE TABLE \"planner_sentinel\" (\"id\" INTEGER)".to_string(),
+				)],
+				planned_operations: vec![None],
+				sqlite_recreation_groups: vec![None],
+				direction,
+			})
+		}
+	}
+
+	#[cfg(feature = "sqlite")]
+	#[tokio::test]
+	async fn executor_executes_injected_plan_instead_of_compiling_operations() {
+		let connection = DatabaseConnection::connect_sqlite("sqlite::memory:")
+			.await
+			.expect("connect to SQLite");
+		let mut migration = Migration::new("0001_planner_spy", "planner");
+		migration.operations.push(Operation::RunSQL {
+			sql: "CREATE TABLE \"operation_compiler_table\" (\"id\" INTEGER)".to_string(),
+			reverse_sql: Some("DROP TABLE \"operation_compiler_table\"".to_string()),
+		});
+		let mut executor = DatabaseMigrationExecutor::new_with_planner(
+			connection.clone(),
+			Arc::new(SentinelPlanner),
+		);
+
+		executor
+			.apply_migrations(std::slice::from_ref(&migration))
+			.await
+			.expect("apply injected migration plan");
+
+		let sentinel = connection
+			.fetch_optional(
+				"SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'planner_sentinel'",
+				vec![],
+			)
+			.await
+			.expect("inspect sentinel table");
+		let operation_table = connection
+			.fetch_optional(
+				"SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'operation_compiler_table'",
+				vec![],
+			)
+			.await
+			.expect("inspect operation table");
+		assert!(sentinel.is_some());
+		assert!(operation_table.is_none());
+	}
+
+	#[cfg(feature = "pgvector")]
+	#[test]
+	fn rollback_vector_column_uses_reverse_executable_operation_context() {
+		let operation = Operation::DropColumn {
+			table: "documents".to_string(),
+			column: "embedding".to_string(),
+			old_definition: Some(ColumnDefinition::new(
+				"embedding",
+				FieldType::Vector { dimensions: 3 },
+			)),
+		};
+		let planned_operation = operation
+			.to_reverse_operation(&ProjectState::default())
+			.expect("construct reverse operation")
+			.expect("vector column drop is reversible");
+
+		assert!(matches!(planned_operation, Operation::AddColumn { .. }));
+		assert_eq!(
+			planned_operation_context(Some(&planned_operation)),
+			Some(PgvectorOperationKind::ColumnType)
+		);
+	}
+
+	#[cfg(feature = "pgvector")]
+	#[test]
+	fn rollback_vector_index_uses_reverse_executable_operation_context() {
+		let operation = Operation::DropNamedIndex {
+			table: "documents".to_string(),
+			name: "documents_embedding_hnsw".to_string(),
+			columns: vec!["embedding".to_string()],
+			unique: false,
+			index_type: Some(IndexType::Hnsw {
+				m: Some(16),
+				ef_construction: Some(64),
+			}),
+			where_clause: None,
+			concurrently: false,
+			expressions: None,
+			mysql_options: None,
+			operator_class: Some("vector_l2_ops".to_string()),
+		};
+		let planned_operation = operation
+			.to_reverse_operation(&ProjectState::default())
+			.expect("construct reverse operation")
+			.expect("named vector index drop is reversible");
+
+		assert!(matches!(
+			planned_operation,
+			Operation::CreateNamedIndex { .. }
+		));
+		assert_eq!(
+			planned_operation_context(Some(&planned_operation)),
+			Some(PgvectorOperationKind::ApproximateIndex)
+		);
+	}
 
 	#[test]
 	fn test_optimizer_creation() {
@@ -4066,6 +4206,135 @@ mod rollback_orchestration_tests {
 
 	#[rstest]
 	#[tokio::test]
+	async fn replacement_history_is_recorded_as_a_single_rollback_unit() {
+		// Arrange
+		let initial = make_create_table_migration("0001_initial", "rolltest_replaced");
+		let mut add_column = Migration::new("0002_add_name", "rolltest");
+		add_column.operations.push(Operation::AddColumn {
+			table: "rolltest_replaced".to_string(),
+			column: ColumnDefinition::new("name", FieldType::VarChar(32)),
+			mysql_options: None,
+		});
+		let mut replacement = initial.clone();
+		replacement.name = "0001_squashed_0002".to_string();
+		replacement.operations.extend(add_column.operations.clone());
+		replacement.replaces = vec![
+			(initial.app_label.clone(), initial.name.clone()),
+			(add_column.app_label.clone(), add_column.name.clone()),
+		];
+		let mut executor = make_executor().await;
+		executor
+			.apply_migrations(&[initial.clone(), add_column.clone()])
+			.await
+			.expect("apply original history");
+
+		// Act
+		executor
+			.apply_migrations(&[initial.clone(), add_column.clone(), replacement.clone()])
+			.await
+			.expect("record equivalent replacement history");
+		let result = executor
+			.rollback_migrations(&[initial, add_column, replacement.clone()])
+			.await
+			.expect("rollback replacement history");
+
+		// Assert
+		assert_eq!(result.applied, vec![replacement.id()]);
+	}
+
+	#[rstest]
+	#[tokio::test]
+	async fn partial_replacement_history_applies_the_remaining_original_migration() {
+		// Arrange
+		let initial = make_create_table_migration("0001_initial", "partial_replacement");
+		let mut add_column = Migration::new("0002_add_name", "rolltest");
+		add_column
+			.dependencies
+			.push((initial.app_label.clone(), initial.name.clone()));
+		add_column.operations.push(Operation::AddColumn {
+			table: "partial_replacement".to_string(),
+			column: ColumnDefinition::new("name", FieldType::VarChar(32)),
+			mysql_options: None,
+		});
+		let mut replacement = initial.clone();
+		replacement.name = "0001_squashed_0002".to_string();
+		replacement.operations.extend(add_column.operations.clone());
+		replacement.replaces = vec![
+			(initial.app_label.clone(), initial.name.clone()),
+			(add_column.app_label.clone(), add_column.name.clone()),
+		];
+		let mut executor = make_executor().await;
+		executor
+			.apply_migrations(std::slice::from_ref(&initial))
+			.await
+			.expect("apply the first original migration");
+
+		// Act
+		let result = executor
+			.apply_migrations(&[initial.clone(), add_column.clone(), replacement.clone()])
+			.await
+			.expect("a partial original history must continue on the original chain");
+
+		// Assert
+		assert_eq!(result.applied, vec![add_column.id()]);
+		let recorder = DatabaseMigrationRecorder::new(executor.connection().clone());
+		assert_eq!(
+			recorder
+				.is_applied(&replacement.app_label, &replacement.name)
+				.await
+				.expect("query replacement recorder state"),
+			false
+		);
+	}
+
+	#[rstest]
+	#[tokio::test]
+	async fn partial_replacement_history_orders_descendants_after_remaining_originals() {
+		// Arrange
+		let initial = make_create_table_migration("0001_initial", "partial_descendant");
+		let mut remaining = Migration::new("0003_add_name", "partial_descendant");
+		remaining
+			.dependencies
+			.push((initial.app_label.clone(), initial.name.clone()));
+		remaining.operations.push(Operation::AddColumn {
+			table: "partial_descendant".to_string(),
+			column: ColumnDefinition::new("name", FieldType::VarChar(32)),
+			mysql_options: None,
+		});
+		let mut replacement = initial.clone();
+		replacement.name = "0001_squashed_0003".to_string();
+		replacement.operations.extend(remaining.operations.clone());
+		replacement.replaces = vec![
+			(initial.app_label.clone(), initial.name.clone()),
+			(remaining.app_label.clone(), remaining.name.clone()),
+		];
+		let mut descendant = Migration::new("0002_after_squash", "partial_descendant");
+		descendant
+			.dependencies
+			.push((replacement.app_label.clone(), replacement.name.clone()));
+		descendant.operations.push(Operation::AddColumn {
+			table: "partial_descendant".to_string(),
+			column: ColumnDefinition::new("after_squash", FieldType::VarChar(32)),
+			mysql_options: None,
+		});
+		let mut executor = make_executor().await;
+		executor
+			.apply_migrations(std::slice::from_ref(&initial))
+			.await
+			.expect("apply the first original migration");
+
+		// Act
+		let result = executor
+			.apply_migrations(&[initial, remaining.clone(), replacement, descendant.clone()])
+			.await
+			.expect("a descendant must wait for the remaining original migration");
+
+		// Assert
+		assert_eq!(result.applied, vec![remaining.id(), descendant.id()]);
+	}
+
+	#[rstest]
+	#[tokio::test]
 	async fn rollback_skips_migrations_that_were_never_applied() {
 		// Arrange - apply only m1, leave m2 unrecorded.
 		let m1 = make_create_table_migration("0001_first", "rolltest_first");
@@ -4170,6 +4439,166 @@ mod rollback_orchestration_tests {
 
 	#[rstest]
 	#[tokio::test]
+	async fn apply_migrations_uses_one_side_of_a_replacement_set() {
+		// Arrange
+		let original = make_create_table_migration("0001_initial", "replacement");
+		let mut replacement = original.clone();
+		replacement.name = "0001_squashed".to_string();
+		replacement.replaces = vec![("rolltest".to_string(), "0001_initial".to_string())];
+
+		// Act - a fresh database must apply only the replacement migration.
+		let mut fresh = make_executor().await;
+		let fresh_result = fresh
+			.apply_migrations(&[original.clone(), replacement.clone()])
+			.await
+			.expect("apply a fresh replacement set");
+
+		// Assert
+		let fresh_recorder = DatabaseMigrationRecorder::new(fresh.connection().clone());
+		assert_eq!(fresh_result.applied, vec![replacement.id()]);
+		assert!(
+			fresh_recorder
+				.is_applied("rolltest", "0001_squashed")
+				.await
+				.expect("query replacement recorder state")
+		);
+		assert!(
+			!fresh_recorder
+				.is_applied("rolltest", "0001_initial")
+				.await
+				.expect("query original recorder state")
+		);
+
+		// Act - an existing complete original set is adopted by the replacement.
+		let mut existing = make_executor().await;
+		existing
+			.apply_migrations(std::slice::from_ref(&original))
+			.await
+			.expect("apply original migration");
+		existing
+			.apply_migrations(std::slice::from_ref(&replacement))
+			.await
+			.expect("adopt an existing original replacement set after its source file is removed");
+		let existing_recorder = DatabaseMigrationRecorder::new(existing.connection().clone());
+		assert!(
+			existing_recorder
+				.is_applied("rolltest", "0001_squashed")
+				.await
+				.expect("query replacement recorder state")
+		);
+		assert!(
+			!existing_recorder
+				.is_applied("rolltest", "0001_initial")
+				.await
+				.expect("query original recorder state")
+		);
+
+		let rollback = existing
+			.rollback_migrations(&[original, replacement])
+			.await
+			.expect("rollback the adopted replacement once");
+		assert_eq!(rollback.applied, vec!["rolltest.0001_squashed"]);
+	}
+
+	#[test]
+	fn replacement_selection_recognizes_applied_nested_replacement_history() {
+		let first = Migration::new("0001_first", "rolltest");
+		let second = Migration::new("0002_second", "rolltest");
+		let mut older = Migration::new("0001_squashed_0002", "rolltest");
+		older.replaces = vec![
+			("rolltest".to_string(), "0001_first".to_string()),
+			("rolltest".to_string(), "0002_second".to_string()),
+		];
+		let mut newer = Migration::new("0001_squashed_0002_again", "rolltest");
+		newer.replaces = vec![
+			("rolltest".to_string(), "0001_first".to_string()),
+			("rolltest".to_string(), "0002_second".to_string()),
+			("rolltest".to_string(), "0001_squashed_0002".to_string()),
+		];
+		let applied = HashSet::from([super::super::MigrationKey::new(
+			"rolltest",
+			"0001_squashed_0002",
+		)]);
+
+		let migrations = [first, second, older, newer];
+		let selection = select_replacement_migrations(&migrations, &applied)
+			.expect("nested replacement history is complete through the applied squash");
+
+		assert!(selection.migrations().is_empty());
+		assert_eq!(
+			selection
+				.replacements_to_adopt()
+				.iter()
+				.map(|migration| migration.id())
+				.collect::<Vec<_>>(),
+			["rolltest.0001_squashed_0002_again"]
+		);
+	}
+
+	#[rstest]
+	#[tokio::test]
+	async fn apply_migrations_does_not_adopt_before_validating_all_replacement_sets() {
+		// Arrange - the first replacement can be adopted, while the second has
+		// only one of two original migrations recorded.
+		let original_one = make_create_table_migration("0001_initial", "replacement_one");
+		let original_two = make_create_table_migration("0002_second", "replacement_two");
+		let original_three = make_create_table_migration("0003_third", "replacement_three");
+
+		let mut first_replacement = original_one.clone();
+		first_replacement.name = "0001_squashed".to_string();
+		first_replacement.replaces = vec![("rolltest".to_string(), "0001_initial".to_string())];
+
+		let mut partial_replacement = original_two.clone();
+		partial_replacement.name = "0002_squashed".to_string();
+		partial_replacement.replaces = vec![
+			("rolltest".to_string(), "0002_second".to_string()),
+			("rolltest".to_string(), "0003_third".to_string()),
+		];
+
+		let mut executor = make_executor().await;
+		executor
+			.apply_migrations(std::slice::from_ref(&original_one))
+			.await
+			.expect("apply the first original migration");
+		executor
+			.apply_migrations(std::slice::from_ref(&original_two))
+			.await
+			.expect("apply one source migration from the partial set");
+
+		// Act
+		let error = executor
+			.apply_migrations(&[
+				original_one.clone(),
+				original_two.clone(),
+				original_three,
+				first_replacement.clone(),
+				partial_replacement,
+			])
+			.await
+			.expect_err("a partial replacement set must fail");
+
+		// Assert - no earlier adoption changed recorder state before the whole
+		// replacement configuration was validated.
+		assert!(matches!(error, MigrationError::InvalidMigration(_)));
+		let recorder = DatabaseMigrationRecorder::new(executor.connection().clone());
+		assert!(
+			recorder
+				.is_applied("rolltest", "0001_initial")
+				.await
+				.expect("query original recorder state"),
+			"the original must remain recorded after a later replacement validation error"
+		);
+		assert!(
+			!recorder
+				.is_applied("rolltest", "0001_squashed")
+				.await
+				.expect("query replacement recorder state"),
+			"the replacement must not be adopted before all replacement sets validate"
+		);
+	}
+
+	#[rstest]
+	#[tokio::test]
 	async fn rollback_run_sql_without_reverse_sql_completes_without_error() {
 		// Pins the current contract of the `Operation::RunSQL` arm in
 		// `rollback_migration` when `reverse_sql` is `None`: the rollback
@@ -4206,6 +4635,71 @@ mod rollback_orchestration_tests {
 				.await
 				.expect("query recorder after"),
 			"recorder must reflect unapplied state after warn-and-skip rollback"
+		);
+	}
+
+	#[rstest]
+	#[tokio::test]
+	async fn rollback_falls_back_to_reverse_sqlite_execution_after_opaque_sql() {
+		// Arrange - rolling this migration back requires a SQLite table
+		// recreation for `AddColumn`, while the RunSQL step is opaque to the
+		// recreation planner. The planner must therefore fall back to the
+		// inverse operation order instead of failing the rollback.
+		let mut migration = Migration::new("0001_opaque_sqlite_rollback", "rolltest");
+		migration.operations = vec![
+			Operation::CreateTable {
+				name: "opaque_sqlite_rollback".to_string(),
+				columns: vec![ColumnDefinition::new("id", FieldType::Integer)],
+				constraints: vec![],
+				without_rowid: None,
+				interleave_in_parent: None,
+				partition: None,
+			},
+			Operation::RunSQL {
+				sql: "PRAGMA user_version = 7".to_string(),
+				reverse_sql: Some("PRAGMA user_version = 0".to_string()),
+			},
+			Operation::AddColumn {
+				table: "opaque_sqlite_rollback".to_string(),
+				column: ColumnDefinition::new("name", FieldType::Text),
+				mysql_options: None,
+			},
+		];
+
+		let mut executor = make_executor().await;
+		executor
+			.apply_migrations(std::slice::from_ref(&migration))
+			.await
+			.expect("apply migration containing opaque SQL");
+
+		// Act
+		executor
+			.rollback_migrations(std::slice::from_ref(&migration))
+			.await
+			.expect("rollback should use reverse sequential SQLite execution");
+
+		// Assert - both the recreated table and the opaque operation are undone.
+		let table = executor
+			.connection()
+			.fetch_optional(
+				"SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?",
+				vec!["opaque_sqlite_rollback".into()],
+			)
+			.await
+			.expect("inspect sqlite_master");
+		assert!(table.is_none());
+
+		let user_version = executor
+			.connection()
+			.fetch_optional("PRAGMA user_version", vec![])
+			.await
+			.expect("read SQLite user version")
+			.expect("SQLite user_version always returns a row");
+		assert_eq!(
+			user_version
+				.get::<i64>("user_version")
+				.expect("read user_version column"),
+			0
 		);
 	}
 

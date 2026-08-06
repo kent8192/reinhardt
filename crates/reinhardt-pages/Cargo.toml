@@ -1,6 +1,6 @@
 [package]
 name = "reinhardt-pages"
-version = "0.4.0-alpha.3"
+version = "0.4.0-alpha.6"
 edition.workspace = true
 rust-version.workspace = true
 authors.workspace = true
@@ -188,6 +188,7 @@ chrono = { version = "0.4", optional = true, default-features = false, features 
 web-sys = { version = "0.3.83", features = [
 	"Window",
 	"Document",
+	"VisibilityState",
 	"DocumentFragment",
 	"ShadowRoot",
 	"ShadowRootInit",
@@ -212,6 +213,7 @@ web-sys = { version = "0.3.83", features = [
 	"KeyboardEventInit",
 	"FocusEvent",
 	"PointerEvent",
+	"PointerEventInit",
 	"SubmitEvent",
 	"TouchEvent",
 	"WheelEvent",
@@ -382,6 +384,11 @@ required-features = ["testing"]
 [[test]]
 name = "document_head_wasm_test"
 path = "tests/wasm/document_head_wasm_test.rs"
+required-features = ["testing"]
+
+[[test]]
+name = "query_client_wasm_test"
+path = "tests/wasm/query_client_wasm_test.rs"
 required-features = ["testing"]
 
 [[test]]

@@ -413,6 +413,14 @@ pub struct ConstraintInfo {
 	pub constraint_type: ConstraintType,
 	/// SQL definition
 	pub definition: String,
+	/// Logical model fields that participate in the constraint
+	pub fields: Vec<String>,
+	/// Optional predicate for a partial constraint
+	pub condition: Option<String>,
+	/// Whether constraint enforcement can be deferred
+	pub deferrable: bool,
+	/// Whether multiple NULL values are considered distinct
+	pub nulls_distinct: Option<bool>,
 }
 
 /// Type of database constraint
@@ -446,6 +454,10 @@ impl ConstraintInfo {
 			name: constraint.name.clone(),
 			constraint_type: ConstraintType::Check,
 			definition: constraint.to_sql(),
+			fields: Vec::new(),
+			condition: None,
+			deferrable: false,
+			nulls_distinct: None,
 		}
 	}
 
@@ -455,19 +467,39 @@ impl ConstraintInfo {
 	///
 	/// ```
 	/// use reinhardt_db::orm::constraints::UniqueConstraint;
-	/// use reinhardt_db::orm::inspection::{ConstraintInfo, ConstraintType};
+	/// use reinhardt_db::orm::fields::{CharField, Field};
+	/// use reinhardt_db::orm::inspection::{ConstraintInfo, ConstraintType, FieldInfo};
 	///
-	/// let constraint = UniqueConstraint::new("email_unique", vec!["email".to_string()]);
-	/// let info = ConstraintInfo::from_unique(&constraint);
+	/// let mut email = CharField::new(255);
+	/// email.base.db_column = Some("email_addr".to_string());
+	/// email.set_attributes_from_name("email");
+	/// let model_fields = vec![FieldInfo::from_field(&email)];
+	/// let constraint = UniqueConstraint::new("email_unique", vec!["email_addr".to_string()]);
+	/// let info = ConstraintInfo::from_unique(&constraint, &model_fields);
 	///
 	/// assert_eq!(info.name, "email_unique");
 	/// assert_eq!(info.constraint_type, ConstraintType::Unique);
+	/// assert_eq!(info.fields, vec!["email"]);
 	/// ```
-	pub fn from_unique(constraint: &UniqueConstraint) -> Self {
+	pub fn from_unique(constraint: &UniqueConstraint, model_fields: &[FieldInfo]) -> Self {
+		let fields = constraint
+			.fields
+			.iter()
+			.map(|column| {
+				model_fields
+					.iter()
+					.find(|field| field.db_column_name() == column)
+					.map_or_else(|| column.clone(), |field| field.name.clone())
+			})
+			.collect();
 		Self {
 			name: constraint.name.clone(),
 			constraint_type: ConstraintType::Unique,
 			definition: constraint.to_sql(),
+			fields,
+			condition: constraint.condition.clone(),
+			deferrable: false,
+			nulls_distinct: None,
 		}
 	}
 
@@ -497,6 +529,10 @@ impl ConstraintInfo {
 			name: constraint.name.clone(),
 			constraint_type: ConstraintType::ForeignKey,
 			definition: constraint.to_sql(),
+			fields: Vec::new(),
+			condition: None,
+			deferrable: false,
+			nulls_distinct: None,
 		}
 	}
 }
@@ -1237,6 +1273,55 @@ mod tests {
 	use crate::orm::fields::{
 		AutoField, BooleanField, CharField, DecimalField, EmailField, IntegerField,
 	};
+	use crate::orm::model::FieldSelector;
+	use rstest::rstest;
+	use serde::{Deserialize, Serialize};
+
+	#[derive(Clone, Debug, Deserialize, Serialize)]
+	struct ConstraintModel {
+		id: i64,
+		email: String,
+	}
+
+	#[derive(Clone)]
+	struct ConstraintModelFields;
+
+	impl FieldSelector for ConstraintModelFields {
+		fn with_alias(self, _alias: &str) -> Self {
+			self
+		}
+	}
+
+	impl Model for ConstraintModel {
+		type PrimaryKey = i64;
+		type Fields = ConstraintModelFields;
+		type Objects = Manager<Self>;
+
+		fn table_name() -> &'static str {
+			"constraint_models"
+		}
+
+		fn new_fields() -> Self::Fields {
+			ConstraintModelFields
+		}
+
+		fn primary_key(&self) -> Option<Self::PrimaryKey> {
+			Some(self.id)
+		}
+
+		fn set_primary_key(&mut self, value: Self::PrimaryKey) {
+			self.id = value;
+		}
+
+		fn field_metadata() -> Vec<FieldInfo> {
+			let mut id = AutoField::new();
+			id.set_attributes_from_name("id");
+			let mut email = CharField::new(255);
+			email.base.db_column = Some("email_addr".to_string());
+			email.set_attributes_from_name("email");
+			vec![FieldInfo::from_field(&id), FieldInfo::from_field(&email)]
+		}
+	}
 
 	#[test]
 	fn test_field_info_from_char_field() {
@@ -1484,14 +1569,18 @@ mod tests {
 		assert!(info.definition.contains("CHECK"));
 	}
 
-	#[test]
+	#[rstest]
 	fn test_constraint_info_from_unique() {
-		let constraint = UniqueConstraint::new("email_unique", vec!["email".to_string()]);
-		let info = ConstraintInfo::from_unique(&constraint);
+		let constraint = UniqueConstraint::new("email_unique", vec!["email_addr".to_string()]);
+		let info = ConstraintInfo::from_unique(&constraint, &ConstraintModel::field_metadata());
 
 		assert_eq!(info.name, "email_unique");
 		assert_eq!(info.constraint_type, ConstraintType::Unique);
 		assert!(info.definition.contains("UNIQUE"));
+		assert_eq!(info.fields, vec!["email"]);
+		assert_eq!(info.condition, None);
+		assert!(!info.deferrable);
+		assert_eq!(info.nulls_distinct, None);
 	}
 
 	#[test]

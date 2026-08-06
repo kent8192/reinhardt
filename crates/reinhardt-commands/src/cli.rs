@@ -15,14 +15,21 @@ use crate::{
 #[cfg(feature = "introspect")]
 use clap::ValueEnum;
 use clap::{Parser, Subcommand};
-use reinhardt_conf::HasCommonSettings;
 use reinhardt_conf::settings::builder::SettingsBuilder;
+use reinhardt_conf::settings::fragment::HasSettings;
 use reinhardt_conf::settings::profile::Profile;
 use reinhardt_conf::settings::sources::{DefaultSource, LowPriorityEnvSource, TomlFileSource};
-use reinhardt_utils::staticfiles::StaticFilesConfig;
+use reinhardt_conf::{HasCommonSettings, MigrationSettings};
+#[cfg(feature = "migrations")]
+use reinhardt_db::migrations::DependencyResolutionContext;
+use reinhardt_utils::staticfiles::{PathResolver, StaticFilesConfig};
 use serde_json::Value;
 use std::env;
+use std::ffi::{OsStr, OsString};
+use std::fmt;
 use std::path::{Path, PathBuf};
+#[cfg(feature = "reinhardt-db")]
+use std::str::FromStr;
 use std::sync::Arc;
 
 #[cfg(feature = "routers")]
@@ -46,6 +53,52 @@ pub struct Cli {
 	pub verbosity: u8,
 }
 
+/// A database URL override whose debug representation never exposes its value.
+#[cfg(feature = "reinhardt-db")]
+#[derive(Clone, PartialEq, Eq)]
+pub struct RedactedDatabaseUrl(String);
+
+#[cfg(feature = "reinhardt-db")]
+impl RedactedDatabaseUrl {
+	/// Returns the database URL value.
+	///
+	/// Callers must avoid including the returned value in diagnostics because it
+	/// can contain database credentials.
+	pub fn as_str(&self) -> &str {
+		&self.0
+	}
+
+	fn into_inner(self) -> String {
+		self.0
+	}
+}
+
+#[cfg(feature = "reinhardt-db")]
+impl fmt::Debug for RedactedDatabaseUrl {
+	fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+		formatter
+			.debug_tuple("RedactedDatabaseUrl")
+			.field(&"[REDACTED]")
+			.finish()
+	}
+}
+
+#[cfg(feature = "reinhardt-db")]
+impl FromStr for RedactedDatabaseUrl {
+	type Err = std::convert::Infallible;
+
+	fn from_str(value: &str) -> Result<Self, Self::Err> {
+		Ok(Self(value.to_string()))
+	}
+}
+
+#[cfg(feature = "migrations")]
+fn default_migrations_dir() -> PathBuf {
+	PathResolver::find_project_root()
+		.unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")))
+		.join("migrations")
+}
+
 /// Output format for the introspect command
 #[cfg(feature = "introspect")]
 #[derive(Debug, Clone, Copy, ValueEnum)]
@@ -59,7 +112,7 @@ pub enum OutputFormat {
 /// Command-line interface commands
 ///
 /// This enum defines all available management commands.
-#[derive(Debug, Clone, Subcommand)]
+#[derive(Clone, Subcommand)]
 pub enum Commands {
 	/// Create new migrations based on model changes
 	#[cfg(feature = "migrations")]
@@ -95,6 +148,105 @@ pub enum Commands {
 		/// Migration directory
 		#[arg(long, default_value = "./migrations")]
 		migration_dir: PathBuf,
+	},
+
+	/// Squash a continuous range of migrations into one migration
+	#[cfg(feature = "migrations")]
+	#[command(allow_missing_positional = true)]
+	Squashmigrations {
+		/// Application whose migrations will be squashed
+		#[arg(value_name = "APP_LABEL")]
+		app_label: String,
+
+		/// Optional first migration in the squash range
+		#[arg(value_name = "START_MIGRATION")]
+		start_migration: Option<String>,
+
+		/// Last migration in the squash range
+		#[arg(value_name = "MIGRATION_NAME")]
+		migration_name: String,
+
+		/// Preserve the exact source operation order
+		#[arg(long)]
+		no_optimize: bool,
+
+		/// Do not prompt for confirmation
+		#[arg(long, visible_alias = "noinput")]
+		no_input: bool,
+
+		/// Omit the generated-file header
+		#[arg(long)]
+		no_header: bool,
+
+		/// Explicit name for the new squashed migration
+		#[arg(long, value_name = "NAME")]
+		squashed_name: Option<String>,
+
+		/// Root directory containing migration files
+		#[arg(long, value_name = "DIR")]
+		migrations_dir: Option<PathBuf>,
+	},
+
+	/// Display migration application state or dependency order
+	#[cfg(feature = "migrations")]
+	Showmigrations {
+		/// Applications to include, together with their transitive dependencies
+		#[arg(value_name = "APP_LABEL")]
+		app_labels: Vec<String>,
+
+		/// Display migrations grouped by application
+		#[arg(
+			short = 'l',
+			long,
+			default_value_t = true,
+			default_value_if("plan", clap::builder::ArgPredicate::IsPresent, "false"),
+			conflicts_with = "plan"
+		)]
+		list: bool,
+
+		/// Display the complete selected dependency plan
+		#[arg(short = 'p', long, conflicts_with = "list")]
+		plan: bool,
+
+		/// Configured database alias
+		#[arg(long, default_value = "default")]
+		database: String,
+
+		/// One-off database URL override
+		#[arg(long)]
+		database_url: Option<String>,
+
+		/// Root directory containing migration files
+		#[arg(long, value_name = "DIR")]
+		migrations_dir: Option<PathBuf>,
+	},
+
+	/// Render the SQL for one migration without executing it
+	#[cfg(feature = "migrations")]
+	Sqlmigrate {
+		/// Application containing the migration
+		#[arg(value_name = "APP_LABEL")]
+		app_label: String,
+
+		/// Exact migration name or unambiguous prefix
+		#[arg(value_name = "MIGRATION_NAME")]
+		migration_name: String,
+
+		/// Render rollback SQL
+		#[arg(long)]
+		backwards: bool,
+
+		/// Configured database alias
+		#[arg(long, default_value = "default")]
+		database: String,
+
+		/// One-off database URL override
+		#[arg(long)]
+		database_url: Option<String>,
+
+		/// Root directory containing migration files
+		#[arg(long, value_name = "DIR")]
+		migrations_dir: Option<PathBuf>,
 	},
 
 	/// Apply database migrations
@@ -282,6 +434,58 @@ pub enum Commands {
 		names: bool,
 	},
 
+	/// Generate Reinhardt models from an existing database schema
+	#[cfg(feature = "migrations")]
+	Inspectdb {
+		/// Exact table names to inspect
+		#[arg(value_name = "TABLE")]
+		tables: Vec<String>,
+
+		/// Configured database alias
+		#[arg(long, default_value = "default")]
+		database: String,
+
+		/// One-off database URL override
+		#[arg(long)]
+		database_url: Option<String>,
+
+		/// Request database views (currently unsupported for model generation)
+		#[arg(long)]
+		include_views: bool,
+
+		/// Include PostgreSQL partitions
+		#[arg(long)]
+		include_partitions: bool,
+
+		/// Output directory for the existing multi-file generator layout
+		#[arg(short = 'o', long)]
+		output: Option<PathBuf>,
+
+		/// Path to inspectdb generation configuration
+		#[arg(short = 'c', long)]
+		config: Option<PathBuf>,
+
+		/// Overwrite existing generated files
+		#[arg(long, requires = "output")]
+		force: bool,
+	},
+
+	/// Launch the native client for a configured database
+	#[cfg(feature = "reinhardt-db")]
+	Dbshell {
+		/// Configured database alias
+		#[arg(long, default_value = "default")]
+		database: String,
+
+		/// One-off database URL override
+		#[arg(long)]
+		database_url: Option<RedactedDatabaseUrl>,
+
+		/// Arguments passed directly to the native database client
+		#[arg(last = true, allow_hyphen_values = true)]
+		client_arguments: Vec<OsString>,
+	},
+
 	/// Output structured project metadata for platform introspection
 	#[cfg(feature = "introspect")]
 	Introspect {
@@ -355,6 +559,263 @@ pub enum Commands {
 		/// Positional arguments forwarded to the custom command.
 		args: Vec<String>,
 	},
+}
+
+macro_rules! debug_command_fields {
+	($formatter:expr, $name:literal, $($field:ident),* $(,)?) => {{
+		let mut debug = $formatter.debug_struct($name);
+		$(debug.field(stringify!($field), $field);)*
+		debug.finish()
+	}};
+}
+
+impl fmt::Debug for Commands {
+	fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+		match self {
+			#[cfg(feature = "migrations")]
+			Self::Makemigrations {
+				app_labels,
+				dry_run,
+				name,
+				check,
+				empty,
+				merge,
+				force_empty_state,
+				migration_dir,
+			} => debug_command_fields!(
+				formatter,
+				"Makemigrations",
+				app_labels,
+				dry_run,
+				name,
+				check,
+				empty,
+				merge,
+				force_empty_state,
+				migration_dir,
+			),
+			#[cfg(feature = "migrations")]
+			Self::Squashmigrations {
+				app_label,
+				start_migration,
+				migration_name,
+				no_optimize,
+				no_input,
+				no_header,
+				squashed_name,
+				migrations_dir,
+			} => debug_command_fields!(
+				formatter,
+				"Squashmigrations",
+				app_label,
+				start_migration,
+				migration_name,
+				no_optimize,
+				no_input,
+				no_header,
+				squashed_name,
+				migrations_dir,
+			),
+			#[cfg(feature = "migrations")]
+			Self::Showmigrations {
+				app_labels,
+				list,
+				plan,
+				database,
+				database_url,
+				migrations_dir,
+			} => debug_command_fields!(
+				formatter,
+				"Showmigrations",
+				app_labels,
+				list,
+				plan,
+				database,
+				database_url,
+				migrations_dir,
+			),
+			#[cfg(feature = "migrations")]
+			Self::Sqlmigrate {
+				app_label,
+				migration_name,
+				backwards,
+				database,
+				database_url,
+				migrations_dir,
+			} => debug_command_fields!(
+				formatter,
+				"Sqlmigrate",
+				app_label,
+				migration_name,
+				backwards,
+				database,
+				database_url,
+				migrations_dir,
+			),
+			Self::Migrate {
+				app_label,
+				migration_name,
+				database,
+				fake,
+				fake_initial,
+				plan,
+				migrations_dir,
+			} => debug_command_fields!(
+				formatter,
+				"Migrate",
+				app_label,
+				migration_name,
+				database,
+				fake,
+				fake_initial,
+				plan,
+				migrations_dir,
+			),
+			Self::Infra { command } => debug_command_fields!(formatter, "Infra", command),
+			Self::Runserver {
+				address,
+				noreload,
+				watch_delay,
+				no_wasm_rebuild,
+				no_wasm,
+				no_override_wasm,
+				force_wasm,
+				wasm_optional,
+				insecure,
+				no_docs,
+				with_pages,
+				static_dir,
+				no_spa,
+				index,
+				package,
+				features,
+				all_features,
+			} => debug_command_fields!(
+				formatter,
+				"Runserver",
+				address,
+				noreload,
+				watch_delay,
+				no_wasm_rebuild,
+				no_wasm,
+				no_override_wasm,
+				force_wasm,
+				wasm_optional,
+				insecure,
+				no_docs,
+				with_pages,
+				static_dir,
+				no_spa,
+				index,
+				package,
+				features,
+				all_features,
+			),
+			Self::Shell { command } => debug_command_fields!(formatter, "Shell", command),
+			Self::Check { app_label, deploy } => {
+				debug_command_fields!(formatter, "Check", app_label, deploy)
+			}
+			Self::Collectstatic {
+				clear,
+				no_input,
+				dry_run,
+				link,
+				ignore,
+				index,
+				package,
+				features,
+				all_features,
+			} => debug_command_fields!(
+				formatter,
+				"Collectstatic",
+				clear,
+				no_input,
+				dry_run,
+				link,
+				ignore,
+				index,
+				package,
+				features,
+				all_features,
+			),
+			Self::Showurls { names } => debug_command_fields!(formatter, "Showurls", names),
+			#[cfg(feature = "migrations")]
+			Self::Inspectdb {
+				tables,
+				database,
+				database_url,
+				include_views,
+				include_partitions,
+				output,
+				config,
+				force,
+			} => formatter
+				.debug_struct("Inspectdb")
+				.field("tables", tables)
+				.field("database", database)
+				.field("database_url", &RedactedStringOption(database_url))
+				.field("include_views", include_views)
+				.field("include_partitions", include_partitions)
+				.field("output", output)
+				.field("config", config)
+				.field("force", force)
+				.finish(),
+			#[cfg(feature = "reinhardt-db")]
+			Self::Dbshell {
+				database,
+				database_url,
+				client_arguments,
+			} => formatter
+				.debug_struct("Dbshell")
+				.field("database", database)
+				.field("database_url", database_url)
+				.field(
+					"client_arguments",
+					&crate::dbshell::RedactedArguments(client_arguments),
+				)
+				.finish(),
+			#[cfg(feature = "introspect")]
+			Self::Introspect { format, section } => {
+				debug_command_fields!(formatter, "Introspect", format, section)
+			}
+			#[cfg(feature = "openapi")]
+			Self::Generateopenapi {
+				format,
+				output,
+				postman,
+			} => debug_command_fields!(formatter, "Generateopenapi", format, output, postman),
+			#[cfg(feature = "auth")]
+			Self::Createsuperuser {
+				username,
+				email,
+				no_password,
+				noinput,
+				database,
+			} => debug_command_fields!(
+				formatter,
+				"Createsuperuser",
+				username,
+				email,
+				no_password,
+				noinput,
+				database,
+			),
+			Self::Custom { name, args } => debug_command_fields!(formatter, "Custom", name, args),
+		}
+	}
+}
+
+#[cfg(feature = "migrations")]
+struct RedactedStringOption<'a>(&'a Option<String>);
+
+#[cfg(feature = "migrations")]
+impl fmt::Debug for RedactedStringOption<'_> {
+	fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+		match self.0 {
+			Some(_) => formatter.debug_tuple("Some").field(&"[REDACTED]").finish(),
+			None => formatter.write_str("None"),
+		}
+	}
 }
 
 #[cfg(feature = "reinhardt-db")]
@@ -553,6 +1014,46 @@ where
 	.await
 }
 
+/// Execute command-line arguments with common and migration project settings.
+///
+/// Unlike [`execute_from_command_line_with_settings`], this entry point also
+/// reads the project's [`MigrationSettings`] fragment and uses it to resolve
+/// conditional dependencies for migration commands.
+pub async fn execute_from_command_line_with_migration_settings<S>(
+	settings: S,
+) -> Result<(), Box<dyn std::error::Error>>
+where
+	S: HasCommonSettings + HasSettings<MigrationSettings> + 'static,
+{
+	let migration_settings = HasSettings::<MigrationSettings>::get_settings(&settings).clone();
+	execute_with_registry_and_optional_settings(
+		CommandRegistry::new(),
+		Some(Arc::new(settings) as Arc<dyn HasCommonSettings>),
+		Some(migration_settings),
+		None,
+	)
+	.await
+}
+
+/// Execute command-line arguments with migration settings and Rust shell configuration.
+pub async fn execute_from_command_line_with_migration_settings_and_shell<S>(
+	settings: S,
+	shell: ShellConfig,
+) -> crate::CommandResult<()>
+where
+	S: HasCommonSettings + HasSettings<MigrationSettings> + Clone + Send + Sync + 'static,
+{
+	let migration_settings = HasSettings::<MigrationSettings>::get_settings(&settings).clone();
+	execute_with_registry_and_optional_settings(
+		CommandRegistry::new(),
+		Some(Arc::new(settings) as Arc<dyn HasCommonSettings>),
+		Some(migration_settings),
+		Some(shell),
+	)
+	.await
+	.map_err(boxed_command_error)
+}
+
 /// Execute commands from command-line arguments with a custom command registry.
 ///
 /// This entry point works like [`execute_from_command_line`] but additionally
@@ -592,7 +1093,7 @@ where
 pub async fn execute_from_command_line_with_registry(
 	registry: CommandRegistry,
 ) -> Result<(), Box<dyn std::error::Error>> {
-	execute_with_registry_and_optional_settings(registry, None, None).await
+	execute_with_registry_and_optional_settings(registry, None, None, None).await
 }
 
 /// Execute commands from CLI arguments with a custom command registry **and** the
@@ -621,6 +1122,7 @@ where
 		registry,
 		Some(Arc::new(settings) as Arc<dyn HasCommonSettings>),
 		None,
+		None,
 	)
 	.await
 }
@@ -637,6 +1139,7 @@ where
 	execute_with_registry_and_optional_settings(
 		registry,
 		Some(Arc::new(settings) as Arc<dyn HasCommonSettings>),
+		None,
 		Some(shell),
 	)
 	.await
@@ -656,39 +1159,16 @@ fn boxed_command_error(error: Box<dyn std::error::Error>) -> crate::CommandError
 async fn execute_with_registry_and_optional_settings(
 	registry: CommandRegistry,
 	settings: Option<Arc<dyn HasCommonSettings>>,
+	migration_settings: Option<MigrationSettings>,
 	shell: Option<ShellConfig>,
 ) -> Result<(), Box<dyn std::error::Error>> {
 	// Attempt normal clap parsing first. If it fails (e.g., unknown subcommand),
 	// fall back to checking the registry for a matching custom command.
-	let raw_args: Vec<String> = env::args().collect();
-	let normalized_args = normalize_count_style_verbosity_args(&raw_args);
-	let (command, verbosity) = match Cli::try_parse_from(&normalized_args) {
-		Ok(cli) => (cli.command, cli.verbosity),
-		Err(clap_err) => {
-			// Only intercept "unknown subcommand" errors; re-raise others (--help, --version, etc.)
-			if !is_unknown_subcommand(&clap_err) {
-				clap_err.exit();
-			}
-
-			// Resolve custom commands from the original arguments to preserve the
-			// legacy value-style verbosity convention for their command contexts.
-			match resolve_custom_command(&raw_args, &registry) {
-				Some((name, args, verbosity)) => {
-					#[cfg(feature = "reinhardt-db")]
-					if registry.get(&name).is_none()
-						&& is_fixture_command_name(&name)
-						&& let Err(error) = parse_fixture_command(&name, &args)
-					{
-						error.exit();
-					}
-					(Commands::Custom { name, args }, verbosity)
-				}
-				None => {
-					// No custom command matched either; let clap display its error.
-					clap_err.exit();
-				}
-			}
-		}
+	let raw_args: Vec<OsString> = env::args_os().collect();
+	let (command, verbosity) = match parse_cli_arguments(&raw_args, &registry) {
+		Ok(parsed) => parsed,
+		Err(DriverParseError::Clap(error)) => (*error).exit(),
+		Err(DriverParseError::Command(error)) => return Err(error.into()),
 	};
 
 	// Only register router for commands that serve HTTP traffic.
@@ -704,7 +1184,15 @@ async fn execute_with_registry_and_optional_settings(
 	#[cfg(feature = "auth")]
 	reinhardt_auth::auto_register_superuser_creator();
 
-	run_command_core(command, verbosity, registry, settings, shell).await
+	run_command_core(
+		command,
+		verbosity,
+		registry,
+		settings,
+		migration_settings,
+		shell,
+	)
+	.await
 }
 
 /// Returns `true` for commands that need URL patterns registered **before**
@@ -794,7 +1282,7 @@ pub async fn run_command_with_registry(
 	verbosity: u8,
 	registry: CommandRegistry,
 ) -> Result<(), Box<dyn std::error::Error>> {
-	run_command_core(command, verbosity, registry, None, None).await
+	run_command_core(command, verbosity, registry, None, None, None).await
 }
 
 /// Execute a command with optional composed settings threaded into the context.
@@ -811,6 +1299,7 @@ async fn run_command_core(
 	verbosity: u8,
 	registry: CommandRegistry,
 	settings: Option<Arc<dyn HasCommonSettings>>,
+	migration_settings: Option<MigrationSettings>,
 	shell: Option<ShellConfig>,
 ) -> Result<(), Box<dyn std::error::Error>> {
 	// Initialize ORM database for commands that require it.
@@ -838,6 +1327,8 @@ async fn run_command_core(
 	// path is compiled so it does not trip the unused-variable lint.
 	#[cfg(not(any(feature = "reinhardt-db", feature = "migrations")))]
 	let _ = &settings;
+	#[cfg(not(feature = "migrations"))]
+	let _ = &migration_settings;
 
 	match command {
 		#[cfg(feature = "migrations")]
@@ -863,6 +1354,152 @@ async fn run_command_core(
 				settings.clone(),
 			)
 			.await
+		}
+		#[cfg(feature = "migrations")]
+		Commands::Squashmigrations {
+			app_label,
+			start_migration,
+			migration_name,
+			no_optimize,
+			no_input,
+			no_header,
+			squashed_name,
+			migrations_dir,
+		} => {
+			let dependency_context =
+				settings
+					.as_ref()
+					.map_or_else(DependencyResolutionContext::new, |settings| {
+						DependencyResolutionContext::new()
+							.with_apps(settings.core().installed_apps.iter().cloned())
+					});
+			let dependency_context = match migration_settings.as_ref() {
+				Some(migration_settings) => {
+					let context = migration_settings
+						.migration_features
+						.iter()
+						.fold(dependency_context, |context, feature| {
+							context.with_feature(feature.clone())
+						});
+					let context = migration_settings
+						.migration_settings
+						.iter()
+						.fold(context, |context, (key, value)| {
+							context.with_setting(key.clone(), value.clone())
+						});
+					migration_settings
+						.migration_swappable_settings
+						.iter()
+						.fold(context, |context, (key, value)| {
+							context.with_setting(key.clone(), value.clone())
+						})
+				}
+				None => dependency_context,
+			};
+			let mut confirmation = crate::StdinConfirmationReader;
+			let standard_output = std::io::stdout();
+			let standard_error = std::io::stderr();
+			let mut stdout = standard_output.lock();
+			let mut stderr = standard_error.lock();
+			let migrations_dir = migrations_dir.unwrap_or_else(|| {
+				settings
+					.as_ref()
+					.map_or_else(default_migrations_dir, |settings| {
+						settings.core().base_dir.join("migrations")
+					})
+			});
+			crate::execute_squashmigrations_with_context_and_io(
+				&migrations_dir,
+				crate::SquashMigrationsOptions {
+					app_label,
+					start_migration,
+					migration_name,
+					no_optimize,
+					no_input,
+					no_header,
+					squashed_name,
+				},
+				&dependency_context,
+				&mut confirmation,
+				&mut stdout,
+				&mut stderr,
+			)
+			.await
+			.map(|_| ())
+			.map_err(Into::into)
+		}
+		#[cfg(feature = "migrations")]
+		Commands::Showmigrations {
+			app_labels,
+			list,
+			plan,
+			database,
+			database_url,
+			migrations_dir,
+		} => {
+			let mut ctx = CommandContext::new(app_labels);
+			if let Some(migration_settings) = migration_settings.as_ref() {
+				crate::showmigrations::attach_migration_settings(&mut ctx, migration_settings);
+			}
+			ctx.set_verbosity(verbosity);
+			ctx.set_option("database".to_string(), database);
+			if list {
+				ctx.set_option("list".to_string(), "true".to_string());
+			}
+			if plan {
+				ctx.set_option("plan".to_string(), "true".to_string());
+			}
+			if let Some(database_url) = database_url {
+				ctx.set_option("database-url".to_string(), database_url);
+			}
+			if let Some(migrations_dir) = migrations_dir {
+				ctx.set_option(
+					"migrations-dir".to_string(),
+					migrations_dir.to_string_lossy().into_owned(),
+				);
+			}
+			if let Some(settings) = settings.clone() {
+				ctx = ctx.with_settings(settings);
+			}
+			crate::ShowMigrationsCommand::default()
+				.execute(&ctx)
+				.await
+				.map_err(Into::into)
+		}
+		#[cfg(feature = "migrations")]
+		Commands::Sqlmigrate {
+			app_label,
+			migration_name,
+			backwards,
+			database,
+			database_url,
+			migrations_dir,
+		} => {
+			let mut ctx = CommandContext::new(vec![app_label, migration_name]);
+			if let Some(migration_settings) = migration_settings.as_ref() {
+				crate::showmigrations::attach_migration_settings(&mut ctx, migration_settings);
+			}
+			ctx.set_verbosity(verbosity);
+			ctx.set_option("database".to_string(), database);
+			if backwards {
+				ctx.set_option("backwards".to_string(), "true".to_string());
+			}
+			if let Some(database_url) = database_url {
+				ctx.set_option("database-url".to_string(), database_url);
+			}
+			if let Some(migrations_dir) = migrations_dir {
+				ctx.set_option(
+					"migrations-dir".to_string(),
+					migrations_dir.to_string_lossy().into_owned(),
+				);
+			}
+			if let Some(settings) = settings.clone() {
+				ctx = ctx.with_settings(settings);
+			}
+			crate::SqlMigrateCommand::default()
+				.execute(&ctx)
+				.await
+				.map_err(Into::into)
 		}
 		Commands::Migrate {
 			app_label,
@@ -962,6 +1599,44 @@ async fn run_command_core(
 			.await
 		}
 		Commands::Showurls { names } => execute_showurls(names, verbosity).await,
+		#[cfg(feature = "migrations")]
+		Commands::Inspectdb {
+			tables,
+			database,
+			database_url,
+			include_views,
+			include_partitions,
+			output,
+			config,
+			force,
+		} => {
+			execute_inspectdb(
+				InspectDbParams {
+					tables,
+					database,
+					database_url,
+					include_views,
+					include_partitions,
+					output,
+					config,
+					force,
+					verbosity,
+				},
+				settings.clone(),
+			)
+			.await
+		}
+		#[cfg(feature = "reinhardt-db")]
+		Commands::Dbshell {
+			database,
+			database_url,
+			client_arguments,
+		} => execute_dbshell(
+			database,
+			database_url,
+			client_arguments,
+			settings.as_deref(),
+		),
 		#[cfg(feature = "introspect")]
 		Commands::Introspect { format, section } => execute_introspect(format, section, verbosity).await,
 		#[cfg(feature = "openapi")]
@@ -1000,23 +1675,108 @@ async fn run_command_core(
 	}
 }
 
+#[cfg(feature = "reinhardt-db")]
+fn execute_dbshell(
+	database: String,
+	database_url: Option<RedactedDatabaseUrl>,
+	client_arguments: Vec<OsString>,
+	settings: Option<&dyn HasCommonSettings>,
+) -> Result<(), Box<dyn std::error::Error>> {
+	execute_dbshell_with_runner(
+		database,
+		database_url,
+		client_arguments,
+		settings,
+		&crate::dbshell::PortableDbClientRunner,
+	)
+}
+
+#[cfg(feature = "reinhardt-db")]
+fn execute_dbshell_with_runner(
+	database: String,
+	database_url: Option<RedactedDatabaseUrl>,
+	client_arguments: Vec<OsString>,
+	settings: Option<&dyn HasCommonSettings>,
+	runner: &dyn crate::dbshell::DbClientRunner,
+) -> Result<(), Box<dyn std::error::Error>> {
+	let database = crate::database_selector::resolve_database(
+		&crate::database_selector::DatabaseSelector {
+			alias: database,
+			url_override: database_url.map(RedactedDatabaseUrl::into_inner),
+		},
+		settings,
+	)?;
+	crate::dbshell::run_database_shell(&database, &client_arguments, runner).map_err(Into::into)
+}
+
+#[derive(Debug)]
+enum DriverParseError {
+	Clap(Box<clap::Error>),
+	Command(crate::CommandError),
+}
+
+fn parse_cli_arguments(
+	raw_args: &[OsString],
+	registry: &CommandRegistry,
+) -> Result<(Commands, u8), DriverParseError> {
+	let normalized_args = normalize_count_style_verbosity_args(raw_args);
+	match Cli::try_parse_from(&normalized_args) {
+		Ok(cli) => Ok((cli.command, cli.verbosity)),
+		Err(clap_error) if !is_unknown_subcommand(&clap_error) => {
+			Err(DriverParseError::Clap(Box::new(clap_error)))
+		}
+		Err(clap_error) => {
+			match resolve_custom_command(raw_args, registry).map_err(DriverParseError::Command)? {
+				Some((name, args, verbosity)) => {
+					#[cfg(feature = "reinhardt-db")]
+					if registry.get(&name).is_none()
+						&& is_fixture_command_name(&name)
+						&& let Err(error) = parse_fixture_command(&name, &args)
+					{
+						return Err(DriverParseError::Clap(Box::new(error)));
+					}
+					Ok((Commands::Custom { name, args }, verbosity))
+				}
+				None => Err(DriverParseError::Clap(Box::new(clap_error))),
+			}
+		}
+	}
+}
+
 /// Rewrite `--verbosity=N` into clap's count-style verbosity flags.
 ///
 /// This lets the standard parser reach its `InvalidSubcommand` path for a
 /// custom command, while [`resolve_custom_command`] still reads the original
 /// arguments and passes the requested numeric verbosity to that command.
-fn normalize_count_style_verbosity_args(raw_args: &[String]) -> Vec<String> {
+fn normalize_count_style_verbosity_args<T: AsRef<OsStr>>(raw_args: &[T]) -> Vec<OsString> {
 	let mut normalized = Vec::with_capacity(raw_args.len());
+	let mut reached_argument_separator = false;
 	for argument in raw_args {
-		let Some(value) = argument.strip_prefix("--verbosity=") else {
-			normalized.push(argument.clone());
+		let argument = argument.as_ref();
+		if reached_argument_separator {
+			normalized.push(argument.to_os_string());
+			continue;
+		}
+		if argument == OsStr::new("--") {
+			normalized.push(argument.to_os_string());
+			reached_argument_separator = true;
+			continue;
+		}
+		let Some(value) = argument
+			.to_str()
+			.and_then(|argument| argument.strip_prefix("--verbosity="))
+		else {
+			normalized.push(argument.to_os_string());
 			continue;
 		};
 		let Ok(count) = value.parse::<u8>() else {
-			normalized.push(argument.clone());
+			normalized.push(argument.to_os_string());
 			continue;
 		};
-		normalized.extend(std::iter::repeat_n("--verbosity".to_string(), count.into()));
+		normalized.extend(std::iter::repeat_n(
+			OsString::from("--verbosity"),
+			count.into(),
+		));
 	}
 	normalized
 }
@@ -1035,41 +1795,63 @@ fn is_unknown_subcommand(err: &clap::Error) -> bool {
 /// The convention is: `manage <subcommand> [args...]`.  Global flags that
 /// appear before the subcommand (e.g., `-v`) are skipped. Both count-style
 /// `--verbosity` and legacy value-style `--verbosity 2` are accepted.
-fn resolve_custom_command(
-	raw_args: &[String],
+fn resolve_custom_command<T: AsRef<OsStr>>(
+	raw_args: &[T],
 	registry: &CommandRegistry,
-) -> Option<(String, Vec<String>, u8)> {
+) -> crate::CommandResult<Option<(String, Vec<String>, u8)>> {
 	let mut verbosity: u8 = 0;
 
 	// Skip the binary name (argv[0]) and parse leading global flags.
 	let mut iter = raw_args.iter().skip(1).peekable();
 	while let Some(arg) = iter.peek() {
+		let arg = utf8_custom_argument(arg.as_ref())?;
 		if !arg.starts_with('-') {
 			break;
 		}
-		let flag = iter.next().unwrap(); // safe: peeked above
+		let flag = utf8_custom_argument(iter.next().unwrap().as_ref())?; // safe: peeked above
 
 		if flag == "-v" || flag == "--verbose" {
 			verbosity = verbosity.saturating_add(1);
 		} else if flag == "--verbosity" {
-			if let Some(value) = iter.peek().and_then(|value| value.parse::<u8>().ok()) {
+			if let Some(value) = iter
+				.peek()
+				.map(|value| utf8_custom_argument(value.as_ref()))
+				.transpose()?
+				.and_then(|value| value.parse::<u8>().ok())
+			{
 				verbosity = value;
 				iter.next();
 			} else {
 				verbosity = verbosity.saturating_add(1);
 			}
 		} else if let Some(value) = flag.strip_prefix("--verbosity=") {
-			verbosity = value.parse().ok()?;
+			let Ok(value) = value.parse() else {
+				return Ok(None);
+			};
+			verbosity = value;
 		}
 	}
 
-	let subcommand = iter.next()?;
+	let Some(subcommand) = iter.next() else {
+		return Ok(None);
+	};
+	let subcommand = utf8_custom_argument(subcommand.as_ref())?;
 	if registry.get(subcommand).is_some() || is_fixture_command_name(subcommand) {
-		let remaining: Vec<String> = iter.cloned().collect();
-		Some((subcommand.clone(), remaining, verbosity))
+		let remaining = iter
+			.map(|argument| utf8_custom_argument(argument.as_ref()).map(str::to_string))
+			.collect::<crate::CommandResult<Vec<_>>>()?;
+		Ok(Some((subcommand.to_string(), remaining, verbosity)))
 	} else {
-		None
+		Ok(None)
 	}
+}
+
+fn utf8_custom_argument(argument: &OsStr) -> crate::CommandResult<&str> {
+	argument.to_str().ok_or_else(|| {
+		crate::CommandError::InvalidArguments(
+			"Custom command names and arguments must be valid UTF-8.".to_string(),
+		)
+	})
 }
 
 /// Execute a custom command looked up from the registry.
@@ -1180,6 +1962,55 @@ struct MigrateParams {
 	plan: bool,
 	migrations_dir: Option<PathBuf>,
 	verbosity: u8,
+}
+
+#[cfg(feature = "migrations")]
+struct InspectDbParams {
+	tables: Vec<String>,
+	database: String,
+	database_url: Option<String>,
+	include_views: bool,
+	include_partitions: bool,
+	output: Option<PathBuf>,
+	config: Option<PathBuf>,
+	force: bool,
+	verbosity: u8,
+}
+
+#[cfg(feature = "migrations")]
+async fn execute_inspectdb(
+	params: InspectDbParams,
+	settings: Option<Arc<dyn HasCommonSettings>>,
+) -> Result<(), Box<dyn std::error::Error>> {
+	let mut ctx = CommandContext::new(params.tables);
+	ctx.set_verbosity(params.verbosity);
+	ctx.set_option("database".to_string(), params.database);
+	if let Some(database_url) = params.database_url {
+		ctx.set_option("database-url".to_string(), database_url);
+	}
+	if params.include_views {
+		ctx.set_option("include-views".to_string(), "true".to_string());
+	}
+	if params.include_partitions {
+		ctx.set_option("include-partitions".to_string(), "true".to_string());
+	}
+	if let Some(output) = params.output {
+		ctx.set_option("output".to_string(), output.to_string_lossy().into_owned());
+	}
+	if let Some(config) = params.config {
+		ctx.set_option("config".to_string(), config.to_string_lossy().into_owned());
+	}
+	if params.force {
+		ctx.set_option("force".to_string(), "true".to_string());
+	}
+	if let Some(settings) = settings {
+		ctx = ctx.with_settings(settings);
+	}
+
+	crate::InspectDbCommand::default()
+		.execute(&ctx)
+		.await
+		.map_err(Into::into)
 }
 
 /// Execute the migrate command
@@ -1843,15 +2674,438 @@ pub(crate) fn generate_random_secret_key() -> String {
 #[cfg(test)]
 mod tests {
 	use super::*;
+	#[cfg(feature = "migrations")]
+	use reinhardt_conf::MigrationSettings;
+	#[cfg(feature = "migrations")]
+	use reinhardt_conf::settings::contacts::ContactSettings;
+	#[cfg(feature = "migrations")]
+	use reinhardt_conf::settings::core_settings::CoreSettings;
+	#[cfg(feature = "migrations")]
+	use reinhardt_conf::settings::fragment::HasSettings;
+	#[cfg(feature = "migrations")]
+	use reinhardt_db::migrations::{
+		DependencyCondition, FilesystemRepository, Migration, MigrationRenderOptions,
+		OptionalDependency,
+	};
 	use rstest::rstest;
 	#[cfg(feature = "reinhardt-db")]
+	use std::cell::Cell;
+	#[cfg(feature = "reinhardt-db")]
 	use std::sync::atomic::{AtomicBool, Ordering};
+	#[cfg(feature = "migrations")]
+	use tempfile::TempDir;
+
+	#[cfg(feature = "migrations")]
+	struct SquashTestSettings {
+		core: CoreSettings,
+		contacts: ContactSettings,
+		migrations: MigrationSettings,
+	}
+
+	#[cfg(feature = "migrations")]
+	impl HasSettings<CoreSettings> for SquashTestSettings {
+		fn get_settings(&self) -> &CoreSettings {
+			&self.core
+		}
+	}
+
+	#[cfg(feature = "migrations")]
+	impl HasSettings<ContactSettings> for SquashTestSettings {
+		fn get_settings(&self) -> &ContactSettings {
+			&self.contacts
+		}
+	}
+
+	#[cfg(feature = "migrations")]
+	impl HasSettings<MigrationSettings> for SquashTestSettings {
+		fn get_settings(&self) -> &MigrationSettings {
+			&self.migrations
+		}
+	}
+
+	#[cfg(feature = "migrations")]
+	fn create_cli_squash_project(setting_condition: Option<&str>) -> TempDir {
+		let project = tempfile::tempdir().expect("create temporary project");
+		let migrations_dir = project.path().join("migrations");
+		let repository = FilesystemRepository::new(&migrations_dir);
+		let first = Migration::new("0001_initial", "polls");
+		let mut second = Migration::new("0002_follow_up", "polls");
+		second.dependencies = vec![("polls".to_string(), "0001_initial".to_string())];
+		if let Some(setting_key) = setting_condition {
+			second.optional_dependencies.push(OptionalDependency::new(
+				"audit",
+				"0001_initial",
+				DependencyCondition::SettingEnabled(setting_key.to_string()),
+			));
+		}
+
+		for migration in [&first, &second] {
+			let source = repository
+				.render(
+					migration,
+					MigrationRenderOptions {
+						include_header: true,
+					},
+				)
+				.expect("render migration");
+			repository
+				.create_new_source(&migration.app_label, &migration.name, &source)
+				.expect("write migration");
+		}
+
+		project
+	}
+
+	#[cfg(feature = "migrations")]
+	fn squash_test_settings(
+		base_dir: &Path,
+		migration_settings: serde_json::Value,
+	) -> (Arc<dyn HasCommonSettings>, MigrationSettings) {
+		let core = serde_json::from_value(serde_json::json!({
+			"base_dir": base_dir,
+			"secret_key": "test-secret",
+		}))
+		.expect("deserialize squash test settings");
+		let migrations: MigrationSettings = serde_json::from_value(serde_json::json!({
+			"migration_settings": migration_settings,
+		}))
+		.expect("deserialize migration settings");
+		(
+			Arc::new(SquashTestSettings {
+				core,
+				contacts: ContactSettings::default(),
+				migrations: migrations.clone(),
+			}),
+			migrations,
+		)
+	}
+
+	#[cfg(feature = "migrations")]
+	fn squash_command(migrations_dir: Option<PathBuf>) -> Commands {
+		Commands::Squashmigrations {
+			app_label: "polls".to_string(),
+			start_migration: None,
+			migration_name: "0002".to_string(),
+			no_optimize: false,
+			no_input: true,
+			no_header: false,
+			squashed_name: None,
+			migrations_dir,
+		}
+	}
+
+	#[cfg(feature = "migrations")]
+	#[rstest]
+	fn migration_visibility_uses_project_path_and_migration_fragment() {
+		let project = tempfile::tempdir().expect("create temporary project");
+		let (settings, mut migration_settings) =
+			squash_test_settings(project.path(), serde_json::json!({"ENABLE_AUDIT": "true"}));
+		migration_settings.migration_features = vec!["gis".to_string()];
+		migration_settings
+			.migration_swappable_settings
+			.insert("AUTH_USER_MODEL".to_string(), "accounts.User".to_string());
+		let mut ctx = CommandContext::new(Vec::new()).with_settings(settings);
+
+		crate::showmigrations::attach_migration_settings(&mut ctx, &migration_settings);
+		let dependency_context = crate::showmigrations::migration_dependency_context(&ctx);
+
+		assert_eq!(
+			crate::showmigrations::migration_source_path(&ctx),
+			project.path().join("migrations")
+		);
+		assert_eq!(
+			dependency_context.get_setting("ENABLE_AUDIT"),
+			Some(&"true".to_string())
+		);
+		assert_eq!(
+			dependency_context.get_setting("AUTH_USER_MODEL"),
+			Some(&"accounts.User".to_string())
+		);
+		assert!(dependency_context.is_feature_enabled("gis"));
+	}
+
+	#[cfg(feature = "migrations")]
+	#[rstest]
+	#[tokio::test]
+	async fn squashmigrations_uses_general_settings_for_setting_enabled_dependencies() {
+		// Arrange
+		let project = create_cli_squash_project(Some("ENABLE_AUDIT"));
+		let migrations_dir = project.path().join("migrations");
+		let (settings, migration_settings) =
+			squash_test_settings(project.path(), serde_json::json!({"ENABLE_AUDIT": "true"}));
+
+		// Act
+		let error = run_command_core(
+			squash_command(Some(migrations_dir)),
+			0,
+			CommandRegistry::new(),
+			Some(settings),
+			Some(migration_settings),
+			None,
+		)
+		.await
+		.expect_err("enabled optional dependency must be validated");
+
+		// Assert
+		assert_eq!(
+			error.to_string(),
+			"Invalid arguments: Dependency error: Missing dependency audit.0001_initial required by \
+			 polls.0002_follow_up"
+		);
+	}
+
+	#[cfg(feature = "migrations")]
+	#[rstest]
+	#[tokio::test]
+	async fn squashmigrations_uses_project_base_dir_for_default_migrations_path() {
+		// Arrange
+		let project = create_cli_squash_project(None);
+		let migrations_dir = project.path().join("migrations");
+		let (settings, migration_settings) =
+			squash_test_settings(project.path(), serde_json::json!({}));
+
+		// Act
+		run_command_core(
+			squash_command(None),
+			0,
+			CommandRegistry::new(),
+			Some(settings),
+			Some(migration_settings),
+			None,
+		)
+		.await
+		.expect("project base directory must supply the default migrations path");
+
+		// Assert
+		assert!(migrations_dir.join("polls/0001_squashed_0002.rs").is_file());
+	}
+
+	#[cfg(feature = "migrations")]
+	#[rstest]
+	#[tokio::test]
+	async fn squashmigrations_explicit_migrations_path_overrides_project_base_dir() {
+		// Arrange
+		let project = create_cli_squash_project(None);
+		let migrations_dir = project.path().join("migrations");
+		let (settings, migration_settings) = squash_test_settings(
+			&project.path().join("different-project"),
+			serde_json::json!({}),
+		);
+
+		// Act
+		run_command_core(
+			squash_command(Some(migrations_dir.clone())),
+			0,
+			CommandRegistry::new(),
+			Some(settings),
+			Some(migration_settings),
+			None,
+		)
+		.await
+		.expect("explicit migrations path must remain authoritative");
+
+		// Assert
+		assert!(migrations_dir.join("polls/0001_squashed_0002.rs").is_file());
+	}
+
+	#[cfg(feature = "reinhardt-db")]
+	struct RecordingDbClientRunner {
+		called: Cell<bool>,
+		outcome: crate::dbshell::DbShellOutcome,
+	}
+
+	#[cfg(feature = "reinhardt-db")]
+	impl crate::dbshell::DbClientRunner for RecordingDbClientRunner {
+		fn run(
+			&self,
+			_spec: &crate::dbshell::DbClientSpec,
+		) -> crate::CommandResult<crate::dbshell::DbShellOutcome> {
+			self.called.set(true);
+			Ok(self.outcome)
+		}
+	}
 
 	#[cfg(feature = "reinhardt-db")]
 	struct RegisteredFixtureNameCommand;
 
 	#[cfg(feature = "reinhardt-db")]
 	static REGISTERED_FIXTURE_NAME_COMMAND_EXECUTED: AtomicBool = AtomicBool::new(false);
+
+	#[cfg(feature = "reinhardt-db")]
+	#[rstest::rstest]
+	fn dbshell_dispatch_resolves_url_override_without_settings() {
+		let runner = RecordingDbClientRunner {
+			called: Cell::new(false),
+			outcome: crate::dbshell::DbShellOutcome::Exited(0),
+		};
+
+		let result = execute_dbshell_with_runner(
+			"default".to_string(),
+			Some(
+				"sqlite:db.sqlite3"
+					.parse()
+					.expect("database URL wrapper should parse"),
+			),
+			vec![OsString::from("-readonly")],
+			None,
+			&runner,
+		);
+
+		assert!(result.is_ok());
+		assert!(runner.called.get());
+	}
+
+	#[cfg(feature = "reinhardt-db")]
+	#[rstest::rstest]
+	fn dbshell_does_not_require_orm_initialization() {
+		let command = Commands::Dbshell {
+			database: "default".to_string(),
+			database_url: Some(
+				"sqlite:db.sqlite3"
+					.parse()
+					.expect("database URL wrapper should parse"),
+			),
+			client_arguments: Vec::new(),
+		};
+
+		assert!(!requires_database(&command, &CommandRegistry::new()));
+	}
+
+	#[cfg(feature = "reinhardt-db")]
+	#[rstest::rstest]
+	fn dbshell_debug_redacts_sensitive_passthrough_arguments() {
+		// Arrange
+		let command = Commands::Dbshell {
+			database: "default".to_string(),
+			database_url: None,
+			client_arguments: vec![
+				OsString::from("--password=cli-secret"),
+				OsString::from("--token"),
+				OsString::from("token-secret"),
+				OsString::from("--database-url"),
+				OsString::from("mysql://operator:database-secret@localhost/app"),
+				OsString::from("--safe-option"),
+			],
+		};
+
+		// Act
+		let debug = format!("{command:?}");
+
+		// Assert
+		assert_eq!(
+			debug,
+			"Dbshell { database: \"default\", database_url: None, client_arguments: [\"[REDACTED]\", \"--token\", \"[REDACTED]\", \"--database-url\", \"[REDACTED]\", \"--safe-option\"] }"
+		);
+		assert!(!debug.contains("cli-secret"));
+		assert!(!debug.contains("token-secret"));
+		assert!(!debug.contains("database-secret"));
+	}
+
+	#[cfg(feature = "migrations")]
+	#[rstest]
+	fn inspectdb_debug_redacts_database_url() {
+		// Arrange
+		let secret_url = "postgres://user:secret@example.test/database";
+		let command = Commands::Inspectdb {
+			tables: Vec::new(),
+			database: "default".to_string(),
+			database_url: Some(secret_url.to_string()),
+			include_views: false,
+			include_partitions: false,
+			output: None,
+			config: None,
+			force: false,
+		};
+
+		// Act
+		let debug = format!("{command:?}");
+
+		// Assert
+		assert_eq!(
+			debug,
+			"Inspectdb { tables: [], database: \"default\", database_url: Some(\"[REDACTED]\"), include_views: false, include_partitions: false, output: None, config: None, force: false }"
+		);
+	}
+
+	#[cfg(all(feature = "reinhardt-db", unix))]
+	#[rstest::rstest]
+	fn driver_parser_preserves_non_utf8_dbshell_passthrough() {
+		use std::os::unix::ffi::OsStringExt;
+
+		let non_utf8 = OsString::from_vec(vec![0xff, b'-', 0xfe]);
+		let raw_args = vec![
+			OsString::from("manage"),
+			OsString::from("dbshell"),
+			OsString::from("--database-url"),
+			OsString::from("sqlite:db.sqlite3"),
+			OsString::from("--"),
+			non_utf8.clone(),
+		];
+
+		let (command, verbosity) = parse_cli_arguments(&raw_args, &CommandRegistry::new())
+			.expect("parse dbshell arguments");
+
+		assert_eq!(verbosity, 0);
+		match command {
+			Commands::Dbshell {
+				client_arguments, ..
+			} => assert_eq!(client_arguments, vec![non_utf8]),
+			other => panic!("Expected Dbshell command, got {other:?}"),
+		}
+	}
+
+	#[cfg(feature = "reinhardt-db")]
+	#[rstest::rstest]
+	fn driver_parser_does_not_normalize_dbshell_passthrough_verbosity() {
+		let raw_args = vec![
+			OsString::from("manage"),
+			OsString::from("--verbosity=2"),
+			OsString::from("dbshell"),
+			OsString::from("--database-url"),
+			OsString::from("sqlite:db.sqlite3"),
+			OsString::from("--"),
+			OsString::from("--verbosity=2"),
+			OsString::from("-v"),
+		];
+
+		let (command, verbosity) = parse_cli_arguments(&raw_args, &CommandRegistry::new())
+			.expect("parse dbshell arguments");
+
+		assert_eq!(verbosity, 2);
+		match command {
+			Commands::Dbshell {
+				client_arguments, ..
+			} => assert_eq!(
+				client_arguments,
+				vec![OsString::from("--verbosity=2"), OsString::from("-v")]
+			),
+			other => panic!("Expected Dbshell command, got {other:?}"),
+		}
+	}
+
+	#[cfg(all(feature = "reinhardt-db", unix))]
+	#[rstest::rstest]
+	fn custom_command_non_utf8_error_omits_raw_argument_bytes() {
+		use std::os::unix::ffi::OsStringExt;
+
+		let raw_args = vec![
+			OsString::from("manage"),
+			OsString::from("seed"),
+			OsString::from_vec(vec![
+				0xff, b'd', b'o', b'-', b'n', b'o', b't', b'-', b'p', b'r', b'i', b'n', b't',
+			]),
+		];
+
+		let diagnostic = resolve_custom_command(&raw_args, &CommandRegistry::new())
+			.expect_err("custom command arguments must be valid UTF-8")
+			.to_string();
+
+		assert_eq!(
+			diagnostic,
+			"Invalid arguments: Custom command names and arguments must be valid UTF-8."
+		);
+		assert!(!diagnostic.contains("do-not-print"));
+	}
 
 	#[cfg(feature = "reinhardt-db")]
 	#[async_trait::async_trait]
@@ -2426,7 +3680,8 @@ mod tests {
 				"writing_sources.WritingProject".to_string(),
 			],
 			&registry,
-		);
+		)
+		.expect("fixture arguments must be valid UTF-8");
 
 		assert_eq!(
 			resolved,
@@ -2451,7 +3706,8 @@ mod tests {
 					fixture_command.to_string(),
 				],
 				&registry,
-			);
+			)
+			.expect("fixture arguments must be valid UTF-8");
 
 			assert_eq!(resolved, Some((fixture_command.to_string(), Vec::new(), 1)));
 		}
@@ -2470,7 +3726,8 @@ mod tests {
 			raw_args.extend(args);
 			raw_args.push("dumpdata".to_string());
 			assert_eq!(
-				resolve_custom_command(&raw_args, &registry),
+				resolve_custom_command(&raw_args, &registry)
+					.expect("fixture arguments must be valid UTF-8"),
 				Some(("dumpdata".to_string(), Vec::new(), 2))
 			);
 		}
@@ -2492,7 +3749,8 @@ mod tests {
 
 		assert!(is_unknown_subcommand(&clap_error));
 		assert_eq!(
-			resolve_custom_command(&raw_args, &registry),
+			resolve_custom_command(&raw_args, &registry)
+				.expect("fixture arguments must be valid UTF-8"),
 			Some(("seed".to_string(), Vec::new(), 2))
 		);
 	}
@@ -2722,6 +3980,55 @@ mod tests {
 
 		// Assert
 		assert!(result);
+	}
+
+	#[cfg(feature = "migrations")]
+	#[rstest]
+	fn test_squashmigrations_does_not_require_database_initialization() {
+		// Arrange
+		let command = Commands::Squashmigrations {
+			app_label: "polls".to_string(),
+			start_migration: None,
+			migration_name: "0002".to_string(),
+			no_optimize: false,
+			no_input: true,
+			no_header: false,
+			squashed_name: None,
+			migrations_dir: None,
+		};
+
+		// Act
+		let result = requires_database(&command, &CommandRegistry::new());
+
+		// Assert
+		assert!(!result);
+	}
+
+	#[cfg(feature = "migrations")]
+	#[rstest]
+	fn migration_visibility_commands_select_their_own_database() {
+		let commands = [
+			Commands::Showmigrations {
+				app_labels: Vec::new(),
+				list: true,
+				plan: false,
+				database: "default".to_string(),
+				database_url: None,
+				migrations_dir: None,
+			},
+			Commands::Sqlmigrate {
+				app_label: "polls".to_string(),
+				migration_name: "0001".to_string(),
+				backwards: false,
+				database: "default".to_string(),
+				database_url: None,
+				migrations_dir: None,
+			},
+		];
+
+		for command in commands {
+			assert!(!requires_database(&command, &CommandRegistry::new()));
+		}
 	}
 
 	#[cfg(feature = "reinhardt-db")]

@@ -401,7 +401,6 @@ async fn infra_status_rejects_host_port_that_differs_from_docker_binding() {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum FailingDockerOperation {
 	Remove,
-	Run,
 	Binding,
 }
 
@@ -464,9 +463,6 @@ impl DockerEngine for FailingDockerEngine {
 
 	async fn run_detached(&self, spec: DockerRunSpec) -> Result<(), DockerError> {
 		self.record(DockerCall::RunDetached { spec });
-		if self.failing_operation == FailingDockerOperation::Run {
-			return Err(DockerError::Backend("scripted run failure".to_string()));
-		}
 		Ok(())
 	}
 }
@@ -486,45 +482,6 @@ async fn infra_up_stops_after_remove_failure_without_persisting_state() {
 		vec![DockerCall::RemoveContainer {
 			name: postgres_container_name(temp.path()),
 		}]
-	);
-	assert!(
-		StateStore::new(temp.path())
-			.load()
-			.expect("read state")
-			.is_none()
-	);
-}
-
-#[tokio::test]
-async fn infra_up_stops_after_run_failure_without_persisting_state() {
-	let temp = TempDir::new().expect("create temporary project");
-	let docker = FailingDockerEngine::new(FailingDockerOperation::Run);
-
-	let error = InfraCommand::up_with_config(temp.path(), postgres_config(), docker.clone())
-		.await
-		.expect_err("run failures must stop provisioning");
-
-	assert_eq!(error.to_string(), "scripted run failure");
-	assert_eq!(
-		docker.calls(),
-		vec![
-			DockerCall::RemoveContainer {
-				name: postgres_container_name(temp.path()),
-			},
-			DockerCall::RunDetached {
-				spec: DockerRunSpec {
-					name: postgres_container_name(temp.path()),
-					image: "postgres:17-alpine".to_string(),
-					host_port: 55432,
-					container_port: 5432,
-					env: vec![
-						("POSTGRES_USER".to_string(), "postgres".to_string()),
-						("POSTGRES_PASSWORD".to_string(), "postgres".to_string()),
-						("POSTGRES_DB".to_string(), "app".to_string()),
-					],
-				},
-			},
-		]
 	);
 	assert!(
 		StateStore::new(temp.path())
@@ -698,7 +655,10 @@ fn state_store_save_failure_preserves_existing_valid_state() {
 		.save(&replacement)
 		.expect_err("temporary write must fail");
 
+	#[cfg(unix)]
 	assert_eq!(error.kind(), std::io::ErrorKind::IsADirectory);
+	#[cfg(windows)]
+	assert_eq!(error.kind(), std::io::ErrorKind::PermissionDenied);
 	assert_eq!(store.load().expect("reload original state"), Some(original));
 }
 

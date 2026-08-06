@@ -166,17 +166,33 @@ impl InfraCommand {
 	where
 		R: DockerEngine,
 	{
+		let ports = PortAllocator;
+		Self::up_with_config_and_port_selector(project_root, config, runner, |requested_port| {
+			ports.select_port(requested_port)
+		})
+		.await
+	}
+
+	async fn up_with_config_and_port_selector<R, P>(
+		project_root: &Path,
+		config: LocalInfraConfig,
+		runner: R,
+		select_port: P,
+	) -> Result<LocalInfraState, Box<dyn Error>>
+	where
+		R: DockerEngine,
+		P: Fn(u16) -> std::io::Result<u16>,
+	{
 		let docker = runner;
 		if !is_valid_profile(&config.profile) {
 			return Err("local infrastructure profile is invalid".into());
 		}
 		let mut config = config;
 		config.project_id = project_id(project_root);
-		let ports = PortAllocator;
 		let mut states = Vec::new();
 
 		for service in &config.services {
-			let host_port = ports.select_port(service.requested_port())?;
+			let host_port = select_port(service.requested_port())?;
 			let container_name = format!(
 				"reinhardt-{}-{}-{}",
 				config.project_id,
@@ -229,6 +245,29 @@ impl InfraCommand {
 		R: DockerEngine,
 		F: FnOnce() -> Result<LocalInfraConfig, Box<dyn Error>>,
 	{
+		let ports = PortAllocator;
+		Self::reset_with_config_and_port_selector(
+			project_root,
+			profile,
+			docker,
+			resolve_config,
+			|requested_port| ports.select_port(requested_port),
+		)
+		.await
+	}
+
+	async fn reset_with_config_and_port_selector<R, F, P>(
+		project_root: &Path,
+		profile: Option<String>,
+		docker: R,
+		resolve_config: F,
+		select_port: P,
+	) -> Result<(), Box<dyn Error>>
+	where
+		R: DockerEngine,
+		F: FnOnce() -> Result<LocalInfraConfig, Box<dyn Error>>,
+		P: Fn(u16) -> std::io::Result<u16>,
+	{
 		Self::execute_with_runner(
 			InfraSubcommand::Down { profile },
 			project_root,
@@ -236,7 +275,7 @@ impl InfraCommand {
 		)
 		.await?;
 		let config = resolve_config()?;
-		Self::up_with_config(project_root, config, docker)
+		Self::up_with_config_and_port_selector(project_root, config, docker, select_port)
 			.await
 			.map(|_| ())
 	}
@@ -520,8 +559,10 @@ fn shell_quote(value: &str) -> String {
 #[cfg(test)]
 mod tests {
 	use crate::process::{FakeProcessRunner, ProcessOutcome, ProcessStdio};
+	use async_trait::async_trait;
 	use std::ffi::OsString;
 	use std::io;
+	use std::sync::{Arc, Mutex};
 
 	use super::*;
 	use tempfile::TempDir;
@@ -679,6 +720,8 @@ mod tests {
 	#[tokio::test]
 	async fn run_with_local_env_rejects_runserver_before_state_docker_or_process_access() {
 		let temp = TempDir::new().expect("create temporary project");
+		std::fs::create_dir_all(StateStore::new(temp.path()).path())
+			.expect("create unreadable state path");
 		let docker = super::super::FakeDockerEngine::new(vec![]);
 		let runner = FakeProcessRunner::new([]);
 
@@ -709,7 +752,7 @@ mod tests {
 			.expect("save state");
 		let docker = super::super::FakeDockerEngine::new(vec![]);
 
-		InfraCommand::reset_with_config(
+		InfraCommand::reset_with_config_and_port_selector(
 			temp.path(),
 			Some("local".to_string()),
 			docker.clone(),
@@ -729,6 +772,7 @@ mod tests {
 				)
 				.map_err(Into::into)
 			},
+			|_| Ok(55432),
 		)
 		.await
 		.expect("reset succeeds");
@@ -757,6 +801,118 @@ mod tests {
 				},
 			]
 		);
+	}
+
+	#[tokio::test]
+	async fn infra_up_reports_run_failure_with_a_deterministic_port_selection() {
+		let temp = TempDir::new().expect("create temporary project");
+		let docker = RunFailingDockerEngine::new();
+
+		let error = InfraCommand::up_with_config_and_port_selector(
+			temp.path(),
+			postgres_config(),
+			docker.clone(),
+			|_| Ok(55432),
+		)
+		.await
+		.expect_err("run failures must stop provisioning");
+
+		assert_eq!(error.to_string(), "scripted run failure");
+		assert_eq!(
+			docker.calls(),
+			vec![
+				super::super::DockerCall::RemoveContainer {
+					name: format!("reinhardt-{}-local-postgres", project_id(temp.path())),
+				},
+				super::super::DockerCall::RunDetached {
+					spec: super::super::DockerRunSpec {
+						name: format!("reinhardt-{}-local-postgres", project_id(temp.path())),
+						image: "postgres:17-alpine".to_string(),
+						host_port: 55432,
+						container_port: 5432,
+						env: vec![
+							("POSTGRES_USER".to_string(), "postgres".to_string()),
+							("POSTGRES_PASSWORD".to_string(), "postgres".to_string()),
+							("POSTGRES_DB".to_string(), "app".to_string()),
+						],
+					},
+				},
+			]
+		);
+		assert!(
+			StateStore::new(temp.path())
+				.load()
+				.expect("read state")
+				.is_none()
+		);
+	}
+
+	#[derive(Debug, Clone)]
+	struct RunFailingDockerEngine {
+		calls: Arc<Mutex<Vec<super::super::DockerCall>>>,
+	}
+
+	impl RunFailingDockerEngine {
+		fn new() -> Self {
+			Self {
+				calls: Arc::new(Mutex::new(Vec::new())),
+			}
+		}
+
+		fn calls(&self) -> Vec<super::super::DockerCall> {
+			self.calls.lock().expect("calls lock").clone()
+		}
+	}
+
+	#[async_trait]
+	impl super::super::DockerEngine for RunFailingDockerEngine {
+		async fn container_exists(&self, name: &str) -> Result<bool, super::super::DockerError> {
+			self.calls.lock().expect("calls lock").push(
+				super::super::DockerCall::ContainerExists {
+					name: name.to_string(),
+				},
+			);
+			Ok(false)
+		}
+
+		async fn remove_container(&self, name: &str) -> Result<(), super::super::DockerError> {
+			self.calls.lock().expect("calls lock").push(
+				super::super::DockerCall::RemoveContainer {
+					name: name.to_string(),
+				},
+			);
+			Ok(())
+		}
+
+		async fn run_detached(
+			&self,
+			spec: super::super::DockerRunSpec,
+		) -> Result<(), super::super::DockerError> {
+			self.calls
+				.lock()
+				.expect("calls lock")
+				.push(super::super::DockerCall::RunDetached { spec });
+			Err(super::super::DockerError::Backend(
+				"scripted run failure".to_string(),
+			))
+		}
+	}
+
+	fn postgres_config() -> LocalInfraConfig {
+		LocalInfraConfig::derive(
+			"caller-supplied-project",
+			"local",
+			Some(DatabaseInfraInput {
+				engine: "postgresql".to_string(),
+				host: "localhost".to_string(),
+				port: 55432,
+				name: "app".to_string(),
+				user: "postgres".to_string(),
+				password: Some("postgres".to_string()),
+			}),
+			None,
+		)
+		.expect("derive postgres configuration")
 	}
 
 	fn postgres_state(project_root: &Path) -> LocalInfraState {

@@ -1777,6 +1777,62 @@ impl ShellCommand {
 /// Development server command
 pub struct RunServerCommand;
 
+/// Pure runserver settings derived from a command context before startup work.
+///
+/// Keeping this translation separate makes the option contract testable without
+/// registering routes, probing ports, or building the WASM frontend.
+struct RunServerExecutionOptions {
+	address: String,
+	noreload: bool,
+	no_wasm_rebuild: bool,
+	#[cfg(feature = "autoreload")]
+	watch_delay: std::time::Duration,
+	insecure: bool,
+	no_docs: bool,
+	with_pages: bool,
+	static_dir: String,
+	no_spa: bool,
+	no_project_static: bool,
+	no_wasm: bool,
+	no_override_wasm: bool,
+	force_wasm_legacy: bool,
+	wasm_optional: bool,
+	index: Option<String>,
+}
+
+impl RunServerExecutionOptions {
+	fn from_context(ctx: &CommandContext) -> Self {
+		Self {
+			address: ctx
+				.arg(0)
+				.map(ToString::to_string)
+				.unwrap_or_else(|| "127.0.0.1:8000".to_string()),
+			noreload: ctx.has_option("noreload"),
+			no_wasm_rebuild: ctx.has_option("no-wasm-rebuild"),
+			#[cfg(feature = "autoreload")]
+			watch_delay: ctx
+				.option("watch-delay")
+				.and_then(|raw| raw.parse::<u64>().ok())
+				.map(std::time::Duration::from_millis)
+				.unwrap_or(crate::debounced_watcher::DEBOUNCE_WINDOW),
+			insecure: ctx.has_option("insecure"),
+			no_docs: ctx.has_option("no_docs"),
+			with_pages: ctx.has_option("with-pages"),
+			static_dir: ctx
+				.option("static-dir")
+				.map(ToString::to_string)
+				.unwrap_or_else(|| "dist".to_string()),
+			no_spa: ctx.has_option("no-spa"),
+			no_project_static: ctx.has_option("no-project-static"),
+			no_wasm: ctx.has_option("no-wasm"),
+			no_override_wasm: ctx.has_option("no-override-wasm"),
+			force_wasm_legacy: ctx.has_option("force-wasm"),
+			wasm_optional: ctx.has_option("wasm-optional"),
+			index: ctx.option("index").map(ToString::to_string),
+		}
+	}
+}
+
 #[cfg(all(feature = "server", feature = "autoreload"))]
 struct AutoreloadChildOptions<'a> {
 	address: &'a str,
@@ -2006,39 +2062,25 @@ impl BaseCommand for RunServerCommand {
 			}
 		}
 
-		let address = ctx.arg(0).map(|s| s.as_str()).unwrap_or("127.0.0.1:8000");
 		#[cfg_attr(not(feature = "server"), allow(unused_variables))]
-		let noreload = ctx.has_option("noreload");
-		#[cfg_attr(not(feature = "server"), allow(unused_variables))]
-		let no_wasm_rebuild = ctx.has_option("no-wasm-rebuild");
-		#[cfg(feature = "autoreload")]
-		let watch_delay = ctx
-			.option("watch-delay")
-			.and_then(|raw| raw.parse::<u64>().ok())
-			.map(std::time::Duration::from_millis)
-			.unwrap_or(crate::debounced_watcher::DEBOUNCE_WINDOW);
-		let insecure = ctx.has_option("insecure");
-		#[cfg_attr(
-			not(any(feature = "server", feature = "openapi-router")),
-			allow(unused_variables)
-		)]
-		let no_docs = ctx.has_option("no_docs");
-		let with_pages = ctx.has_option("with-pages");
-		let static_dir_raw = ctx
-			.option("static-dir")
-			.map(|s| s.to_string())
-			.unwrap_or_else(|| "dist".to_string());
-		let no_spa = ctx.has_option("no-spa");
-		#[cfg_attr(not(feature = "server"), allow(unused_variables))]
-		let no_project_static = ctx.has_option("no-project-static");
-		#[cfg_attr(not(feature = "pages"), allow(unused_variables))]
-		let no_wasm = ctx.has_option("no-wasm");
-		#[cfg_attr(not(feature = "pages"), allow(unused_variables))]
-		let no_override_wasm = ctx.has_option("no-override-wasm");
-		#[cfg_attr(not(feature = "pages"), allow(unused_variables))]
-		let force_wasm_legacy = ctx.has_option("force-wasm");
-		#[cfg_attr(not(feature = "pages"), allow(unused_variables))]
-		let wasm_optional = ctx.has_option("wasm-optional");
+		let RunServerExecutionOptions {
+			address,
+			noreload,
+			no_wasm_rebuild,
+			#[cfg(feature = "autoreload")]
+			watch_delay,
+			insecure,
+			no_docs,
+			with_pages,
+			static_dir: static_dir_raw,
+			no_spa,
+			no_project_static,
+			no_wasm,
+			no_override_wasm,
+			force_wasm_legacy,
+			wasm_optional,
+			index,
+		} = RunServerExecutionOptions::from_context(ctx);
 		// Build WASM frontend if --with-pages and not --no-wasm
 		#[cfg(feature = "pages")]
 		{
@@ -2145,7 +2187,7 @@ impl BaseCommand for RunServerCommand {
 
 			// Display index file info (Refs #2869)
 			if with_pages
-				&& !no_spa && let Some(index_str) = ctx.option("index")
+				&& !no_spa && let Some(index_str) = index.as_deref()
 			{
 				let path = std::path::Path::new(&index_str);
 				if path.exists() {
@@ -2228,7 +2270,6 @@ impl BaseCommand for RunServerCommand {
 			#[cfg(feature = "autoreload")]
 			if !noreload {
 				Self::validate_hooks_only(ctx).await?;
-				let index_raw = ctx.option("index").map(|s| s.to_string());
 				return Self::run_with_autoreload(
 					ctx,
 					&actual_address,
@@ -2238,7 +2279,7 @@ impl BaseCommand for RunServerCommand {
 					&static_dir_raw,
 					no_spa,
 					no_project_static,
-					index_raw.as_deref(),
+					index.as_deref(),
 					no_wasm_rebuild,
 					no_wasm,
 					no_override_wasm,
@@ -4384,6 +4425,68 @@ mod tests {
 	}
 
 	#[test]
+	#[cfg(feature = "autoreload")]
+	fn runserver_execution_options_preserve_all_context_values() {
+		// Arrange
+		let mut ctx = CommandContext::new(vec!["127.0.0.1:9123".to_string()]);
+		for flag in [
+			"noreload",
+			"no-wasm-rebuild",
+			"insecure",
+			"no_docs",
+			"with-pages",
+			"no-spa",
+			"no-project-static",
+			"no-wasm",
+			"no-override-wasm",
+			"force-wasm",
+			"wasm-optional",
+		] {
+			ctx.set_option(flag.to_string(), "true".to_string());
+		}
+		ctx.set_option("watch-delay".to_string(), "275".to_string());
+		ctx.set_option("static-dir".to_string(), "web-dist".to_string());
+		ctx.set_option("index".to_string(), "shell.html".to_string());
+
+		// Act
+		let options = RunServerExecutionOptions::from_context(&ctx);
+
+		// Assert
+		assert_eq!(options.address, "127.0.0.1:9123");
+		assert_eq!(options.watch_delay, std::time::Duration::from_millis(275));
+		assert_eq!(options.static_dir, "web-dist");
+		assert_eq!(options.index.as_deref(), Some("shell.html"));
+		assert!(options.noreload && options.with_pages && options.wasm_optional);
+		assert!(
+			options.no_wasm_rebuild
+				&& options.insecure
+				&& options.no_docs
+				&& options.no_spa
+				&& options.no_project_static
+				&& options.no_wasm
+				&& options.no_override_wasm
+				&& options.force_wasm_legacy
+		);
+	}
+
+	#[test]
+	#[cfg(feature = "autoreload")]
+	fn runserver_execution_options_use_debounce_window_for_invalid_watch_delay() {
+		// Arrange
+		let mut ctx = CommandContext::default();
+		ctx.set_option("watch-delay".to_string(), "not-a-duration".to_string());
+
+		// Act
+		let options = RunServerExecutionOptions::from_context(&ctx);
+
+		// Assert
+		assert_eq!(
+			options.watch_delay,
+			crate::debounced_watcher::DEBOUNCE_WINDOW
+		);
+	}
+
+	#[test]
 	#[cfg(feature = "migrations")]
 	fn test_dependency_ordered_migrations_sorts_cross_app_plan() {
 		// Arrange
@@ -4409,25 +4512,123 @@ mod tests {
 		);
 	}
 
-	#[tokio::test]
-	async fn test_check_command_basic() {
-		let cmd = CheckCommand;
-		let ctx = CommandContext::default();
+	#[test]
+	#[cfg(feature = "migrations")]
+	fn dependency_ordered_migrations_rejects_a_cycle_with_the_exact_error() {
+		// Arrange
+		let cycle = reinhardt_db::migrations::Migration::new("0001_initial", "cycle")
+			.add_dependency("cycle", "0001_initial");
 
-		// Should succeed when no DATABASE_URL is set (skips DB check)
-		let result = cmd.execute(&ctx).await;
-		// May fail if environment has strict checks, but should handle gracefully
-		assert!(result.is_ok() || result.is_err());
+		// Act
+		let error = dependency_ordered_migrations([&cycle])
+			.expect_err("a self-referential migration must not have an execution order");
+
+		// Assert
+		assert!(matches!(error, crate::CommandError::ExecutionError(_)));
+		assert_eq!(
+			error.to_string(),
+			"Execution error: Failed to sort migration plan by dependencies: Circular dependency detected: Circular dependency detected: cycle.0001_initial"
+		);
+	}
+
+	#[test]
+	#[cfg(feature = "migrations")]
+	fn dependency_ordered_migrations_orders_branched_graph_deterministically() {
+		// Arrange
+		let base = reinhardt_db::migrations::Migration::new("0001_initial", "accounts");
+		let audit = reinhardt_db::migrations::Migration::new("0001_initial", "audit")
+			.add_dependency("accounts", "0001_initial");
+		let profiles = reinhardt_db::migrations::Migration::new("0001_initial", "profiles")
+			.add_dependency("accounts", "0001_initial");
+		let unordered = vec![profiles, base, audit];
+
+		// Act
+		let ordered = dependency_ordered_migrations(unordered.iter())
+			.expect("a branched acyclic graph must have an execution order");
+
+		// Assert
+		let ids: Vec<_> = ordered.iter().map(|migration| migration.id()).collect();
+		assert_eq!(
+			ids,
+			vec![
+				"accounts.0001_initial",
+				"audit.0001_initial",
+				"profiles.0001_initial",
+			]
+		);
+	}
+
+	#[test]
+	#[cfg(feature = "migrations")]
+	fn dependency_ordered_migrations_preserves_pending_subset_with_applied_dependency() {
+		// Arrange: migrations passed to this helper are the pending subset, so
+		// dependencies absent from that subset have already been applied.
+		let pending = reinhardt_db::migrations::Migration::new("0002_profile", "accounts")
+			.add_dependency("accounts", "0001_initial");
+
+		// Act
+		let ordered = dependency_ordered_migrations([&pending])
+			.expect("an already-applied dependency must not block the pending plan");
+
+		// Assert
+		let ids: Vec<_> = ordered.iter().map(|migration| migration.id()).collect();
+		assert_eq!(ids, vec!["accounts.0002_profile"]);
+	}
+
+	#[rstest::rstest]
+	#[cfg(feature = "migrations")]
+	#[case("postgres://user:secret@host/db", "postgres://user:****@host/db")]
+	#[case("postgresql://user:secret@host/db", "postgresql://user:****@host/db")]
+	#[case("mysql://user:secret@host/db", "mysql://user:****@host/db")]
+	#[case("sqlite:///tmp/app.db", "sqlite:///tmp/app.db")]
+	fn mask_db_password_redacts_only_passwords(#[case] url: &str, #[case] expected: &str) {
+		// Act
+		let masked = mask_db_password(url);
+
+		// Assert
+		assert_eq!(masked, expected);
+	}
+
+	#[rstest::rstest]
+	#[cfg(feature = "migrations")]
+	#[case("postgres://user:secret@host/db", DatabaseType::Postgres)]
+	#[case("postgresql://user:secret@host/db", DatabaseType::Postgres)]
+	#[case("mysql://user:secret@host/db", DatabaseType::Mysql)]
+	#[case("sqlite:///tmp/app.db", DatabaseType::Sqlite)]
+	fn detect_database_type_recognizes_supported_schemes(
+		#[case] url: &str,
+		#[case] expected: DatabaseType,
+	) {
+		// Act
+		let database_type = detect_database_type(url).expect("supported scheme must be recognized");
+
+		// Assert
+		assert_eq!(database_type, expected);
+	}
+
+	#[test]
+	#[cfg(feature = "migrations")]
+	fn detect_database_type_rejects_unknown_scheme_with_exact_error() {
+		// Act
+		let error = detect_database_type("invalid://value")
+			.expect_err("unknown scheme must not select a database backend");
+
+		// Assert
+		assert!(matches!(error, crate::CommandError::ExecutionError(_)));
+		assert_eq!(
+			error.to_string(),
+			"Execution error: Unknown database type in URL: invalid://value"
+		);
 	}
 
 	#[test]
 	#[cfg(feature = "reinhardt-db")]
-	#[serial_test::serial(env)]
+	#[serial_test::serial(builtin_env)]
 	fn test_check_resolves_database_url_from_settings_files() {
 		// Arrange
 		let _database_url = EnvVarGuard::capture("DATABASE_URL");
 		let _reinhardt_env = EnvVarGuard::capture("REINHARDT_ENV");
-		// SAFETY: env mutation in this test is protected by #[serial(env)].
+		// SAFETY: env mutation in this test is protected by #[serial(builtin_env)].
 		unsafe {
 			std::env::remove_var("DATABASE_URL");
 			std::env::set_var("REINHARDT_ENV", "local");
@@ -4464,17 +4665,6 @@ name = "db.sqlite3"
 	}
 
 	#[tokio::test]
-	async fn test_check_command_with_deploy_flag() {
-		let cmd = CheckCommand;
-		let mut ctx = CommandContext::default();
-		ctx.set_option("deploy".to_string(), "true".to_string());
-
-		// Deploy checks are stricter and may fail
-		let result = cmd.execute(&ctx).await;
-		assert!(result.is_ok() || result.is_err());
-	}
-
-	#[tokio::test]
 	#[cfg(feature = "routers")]
 	async fn test_showurls_command() {
 		let cmd = ShowUrlsCommand;
@@ -4482,25 +4672,6 @@ name = "db.sqlite3"
 
 		let result = cmd.execute(&ctx).await;
 		assert!(result.is_ok());
-	}
-
-	#[tokio::test]
-	#[serial_test::serial(env_change)]
-	async fn test_migrate_command() {
-		let cmd = MigrateCommand;
-		let ctx = CommandContext::default();
-
-		// Without migrations feature or DATABASE_URL, should handle gracefully
-		let result = cmd.execute(&ctx).await;
-		#[cfg(feature = "migrations")]
-		{
-			// May fail without DATABASE_URL, which is expected
-			assert!(result.is_ok() || result.is_err());
-		}
-		#[cfg(not(feature = "migrations"))]
-		{
-			assert!(result.is_ok());
-		}
 	}
 
 	#[tokio::test]
@@ -4868,27 +5039,23 @@ name = "db.sqlite3"
 	}
 
 	#[tokio::test]
+	#[cfg(not(feature = "di"))]
 	async fn test_checkdi_command_execution() {
+		// Arrange
 		let cmd = CheckDiCommand;
 		let ctx = CommandContext::default();
 
-		// Execute the command
-		let result = cmd.execute(&ctx).await;
+		// Act
+		let error = cmd
+			.execute(&ctx)
+			.await
+			.expect_err("the command must require the disabled DI feature");
 
-		// Without di feature, should fail with specific error
-		#[cfg(not(feature = "di"))]
-		{
-			assert!(result.is_err());
-			let err = result.unwrap_err();
-			assert!(err.to_string().contains("di"));
-		}
-
-		// With di feature, may succeed or fail based on registered dependencies
-		#[cfg(feature = "di")]
-		{
-			// Result depends on whether any dependencies are registered
-			assert!(result.is_ok() || result.is_err());
-		}
+		// Assert
+		assert_eq!(
+			error.to_string(),
+			"Execution error: check-di command requires 'di' feature to be enabled"
+		);
 	}
 
 	#[tokio::test]
@@ -4959,9 +5126,11 @@ name = "db.sqlite3"
 		}
 
 		#[rstest]
-		#[serial(env_database_url)]
+		#[serial(builtin_env)]
 		fn test_get_database_url_from_settings_with_toml() {
 			// Arrange
+			let _database_url = EnvVarGuard::capture("DATABASE_URL");
+			let _reinhardt_env = EnvVarGuard::capture("REINHARDT_ENV");
 			let temp_dir = tempfile::TempDir::new().unwrap();
 			let settings_dir = temp_dir.path().join("settings");
 			std::fs::create_dir_all(&settings_dir).unwrap();
@@ -4979,13 +5148,10 @@ port = 5432
 			std::fs::write(settings_dir.join("base.toml"), toml_content).unwrap();
 			std::fs::write(settings_dir.join("local.toml"), "").unwrap();
 
-			// Change to the temp directory
-			let original_dir = std::env::current_dir().unwrap();
-			std::env::set_current_dir(temp_dir.path()).unwrap();
-
 			// Remove DATABASE_URL to ensure settings-only resolution
-			let original_db_url = std::env::var("DATABASE_URL").ok();
 			unsafe { std::env::remove_var("DATABASE_URL") };
+			unsafe { std::env::set_var("REINHARDT_ENV", "local") };
+			let _cwd = CurrentDirGuard::enter(temp_dir.path());
 
 			// Act
 			let result = get_database_url_from_settings();
@@ -4997,25 +5163,16 @@ port = 5432
 				result.err()
 			);
 			let url = result.unwrap();
-			assert!(
-				url.starts_with("postgresql://"),
-				"Expected postgresql:// URL, got: {}",
-				url
-			);
-			assert!(url.contains("testdb"), "URL should contain database name");
-
-			// Cleanup
-			if let Some(db_url) = original_db_url {
-				unsafe { std::env::set_var("DATABASE_URL", db_url) };
-			}
-			std::env::set_current_dir(original_dir).unwrap();
+			assert_eq!(url, "postgresql://testuser:testpass@localhost:5432/testdb");
 		}
 
 		#[rstest]
-		#[serial(env_database_url)]
+		#[serial(builtin_env)]
 		fn test_get_database_url_from_settings_with_core_databases_default() {
 			// Arrange: the canonical nested schema (`[core.databases.default]`)
 			// rather than the legacy flat top-level `[database]` block (#5042).
+			let _database_url = EnvVarGuard::capture("DATABASE_URL");
+			let _reinhardt_env = EnvVarGuard::capture("REINHARDT_ENV");
 			let temp_dir = tempfile::TempDir::new().unwrap();
 			let settings_dir = temp_dir.path().join("settings");
 			std::fs::create_dir_all(&settings_dir).unwrap();
@@ -5035,13 +5192,10 @@ port = 5432
 			std::fs::write(settings_dir.join("base.toml"), toml_content).unwrap();
 			std::fs::write(settings_dir.join("local.toml"), "").unwrap();
 
-			// Change to the temp directory
-			let original_dir = std::env::current_dir().unwrap();
-			std::env::set_current_dir(temp_dir.path()).unwrap();
-
 			// Remove DATABASE_URL to ensure settings-only resolution
-			let original_db_url = std::env::var("DATABASE_URL").ok();
 			unsafe { std::env::remove_var("DATABASE_URL") };
+			unsafe { std::env::set_var("REINHARDT_ENV", "local") };
+			let _cwd = CurrentDirGuard::enter(temp_dir.path());
 
 			// Act
 			let result = get_database_url_from_settings();
@@ -5053,24 +5207,18 @@ port = 5432
 				result.err()
 			);
 			let url = result.unwrap();
-			assert!(
-				url.starts_with("postgresql://"),
-				"Expected postgresql:// URL, got: {}",
-				url
+			assert_eq!(
+				url,
+				"postgresql://testuser:testpass@localhost:5432/nesteddb"
 			);
-			assert!(url.contains("nesteddb"), "URL should contain database name");
-
-			// Cleanup
-			if let Some(db_url) = original_db_url {
-				unsafe { std::env::set_var("DATABASE_URL", db_url) };
-			}
-			std::env::set_current_dir(original_dir).unwrap();
 		}
 
 		#[rstest]
-		#[serial(env_database_url)]
+		#[serial(builtin_env)]
 		fn test_get_database_url_from_settings_returns_error_without_config() {
 			// Arrange
+			let _database_url = EnvVarGuard::capture("DATABASE_URL");
+			let _reinhardt_env = EnvVarGuard::capture("REINHARDT_ENV");
 			let temp_dir = tempfile::TempDir::new().unwrap();
 			let settings_dir = temp_dir.path().join("settings");
 			std::fs::create_dir_all(&settings_dir).unwrap();
@@ -5079,33 +5227,58 @@ port = 5432
 			std::fs::write(settings_dir.join("base.toml"), "").unwrap();
 			std::fs::write(settings_dir.join("local.toml"), "").unwrap();
 
-			let original_dir = std::env::current_dir().unwrap();
-			std::env::set_current_dir(temp_dir.path()).unwrap();
-
-			let original_db_url = std::env::var("DATABASE_URL").ok();
 			unsafe { std::env::remove_var("DATABASE_URL") };
+			unsafe { std::env::set_var("REINHARDT_ENV", "local") };
+			let _cwd = CurrentDirGuard::enter(temp_dir.path());
 
 			// Act
 			let result = get_database_url_from_settings();
 
 			// Assert
-			assert!(
-				result.is_err(),
-				"Expected error when no database config exists"
+			let error = result.expect_err("missing database settings must fail");
+			assert_eq!(
+				error.to_string(),
+				"Execution error: No database configuration found in settings files"
 			);
-
-			// Cleanup
-			if let Some(db_url) = original_db_url {
-				unsafe { std::env::set_var("DATABASE_URL", db_url) };
-			}
-			std::env::set_current_dir(original_dir).unwrap();
 		}
 
 		#[rstest]
-		#[serial(env_database_url)]
+		#[serial(builtin_env)]
+		fn test_get_database_url_from_settings_rejects_invalid_toml() {
+			// Arrange
+			let _database_url = EnvVarGuard::capture("DATABASE_URL");
+			let _reinhardt_env = EnvVarGuard::capture("REINHARDT_ENV");
+			let temp_dir = tempfile::TempDir::new().expect("create temporary project directory");
+			let settings_dir = temp_dir.path().join("settings");
+			std::fs::create_dir_all(&settings_dir).expect("create settings directory");
+			std::fs::write(settings_dir.join("base.toml"), "[database\n")
+				.expect("write invalid settings");
+			std::fs::write(settings_dir.join("local.toml"), "").expect("write local settings");
+			unsafe {
+				std::env::remove_var("DATABASE_URL");
+				std::env::set_var("REINHARDT_ENV", "local");
+			}
+			let _cwd = CurrentDirGuard::enter(temp_dir.path());
+
+			// Act
+			let error = get_database_url_from_settings()
+				.expect_err("invalid settings TOML must not be treated as missing settings");
+
+			// Assert
+			assert!(matches!(error, crate::CommandError::ExecutionError(_)));
+			assert!(
+				error
+					.to_string()
+					.starts_with("Execution error: Failed to load settings:"),
+				"invalid TOML must preserve the settings-load error: {error}"
+			);
+		}
+
+		#[rstest]
+		#[serial(builtin_env)]
 		fn test_sync_database_url_to_env_sets_env_when_not_present() {
 			// Arrange: DATABASE_URL not set
-			let original_db_url = std::env::var("DATABASE_URL").ok();
+			let _database_url = EnvVarGuard::capture("DATABASE_URL");
 			unsafe { std::env::remove_var("DATABASE_URL") };
 
 			let resolved_url = "postgresql://user:pass@localhost:5432/testdb";
@@ -5118,19 +5291,13 @@ port = 5432
 			let result = std::env::var("DATABASE_URL");
 			assert!(result.is_ok(), "DATABASE_URL should be set after sync");
 			assert_eq!(result.unwrap(), resolved_url);
-
-			// Cleanup
-			unsafe { std::env::remove_var("DATABASE_URL") };
-			if let Some(url) = original_db_url {
-				unsafe { std::env::set_var("DATABASE_URL", url) };
-			}
 		}
 
 		#[rstest]
-		#[serial(env_database_url)]
+		#[serial(builtin_env)]
 		fn test_sync_database_url_to_env_does_not_override_existing_env_var() {
 			// Arrange: DATABASE_URL already set - env var takes precedence
-			let original_db_url = std::env::var("DATABASE_URL").ok();
+			let _database_url = EnvVarGuard::capture("DATABASE_URL");
 			let existing_env_url = "postgresql://envuser:envpass@envhost:5433/envdb";
 			unsafe { std::env::set_var("DATABASE_URL", existing_env_url) };
 
@@ -5148,12 +5315,6 @@ port = 5432
 				existing_env_url,
 				"DATABASE_URL should not be changed when env var is already set"
 			);
-
-			// Cleanup
-			unsafe { std::env::remove_var("DATABASE_URL") };
-			if let Some(url) = original_db_url {
-				unsafe { std::env::set_var("DATABASE_URL", url) };
-			}
 		}
 	}
 

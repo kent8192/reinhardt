@@ -212,3 +212,24 @@ async fn forward_target_plan_keeps_recorder_empty_for_sqlite() {
 		"planning must not create the recorder table"
 	);
 }
+
+#[tokio::test]
+async fn forward_target_fake_records_only_the_sqlite_dependency_closure() {
+	let (_tempdir, migrations_dir, database_url) = arrange_chain();
+
+	MigrateCommand
+		.execute(&migration_context(
+			&migrations_dir,
+			&database_url,
+			"0002_second",
+			false,
+			true,
+		))
+		.await
+		.expect("fake forward target succeeds");
+
+	assert_eq!(
+		applied_names(&database_url).await,
+		vec!["0001_first", "0002_second"]
+	);
+}

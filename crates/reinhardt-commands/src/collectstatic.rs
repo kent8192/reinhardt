@@ -121,6 +121,7 @@ impl CollectStaticCommand {
 		// Validate configuration
 		self.validate_config()?;
 		self.validate_index_source()?;
+		self.validate_manifest_destination()?;
 
 		// Clear destination if requested
 		if self.options.clear {
@@ -318,6 +319,23 @@ impl CollectStaticCommand {
 			return Err(io::Error::new(
 				io::ErrorKind::NotFound,
 				format!("Index source file not found: {}", index_source.display()),
+			));
+		}
+
+		Ok(())
+	}
+
+	/// Reject invalid manifest destinations before collection mutates static output.
+	fn validate_manifest_destination(&self) -> Result<(), io::Error> {
+		if !self.options.enable_hashing || self.options.dry_run {
+			return Ok(());
+		}
+
+		let manifest_path = self.config.static_root.join("manifest.json");
+		if manifest_path.exists() && !manifest_path.is_file() {
+			return Err(io::Error::new(
+				io::ErrorKind::IsADirectory,
+				format!("Manifest path is not a file: {}", manifest_path.display()),
 			));
 		}
 

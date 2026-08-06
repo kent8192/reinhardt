@@ -202,27 +202,36 @@ impl BaseCommand for IntrospectCommand {
 
 /// Collect all introspect metadata into the output structure
 pub fn collect_introspect_data() -> Result<IntrospectOutput, Box<dyn std::error::Error>> {
-	let app = collect_app_metadata()?;
+	let metadata = cargo_metadata::MetadataCommand::new().exec().ok();
+	Ok(collect_introspect_data_from_metadata(metadata.as_ref()))
+}
+
+/// Collect introspection metadata using one optional Cargo metadata result.
+fn collect_introspect_data_from_metadata(
+	metadata: Option<&cargo_metadata::Metadata>,
+) -> IntrospectOutput {
+	let app = metadata
+		.map(collect_app_metadata_from)
+		.unwrap_or_else(|| AppMetadata {
+			name: "unknown".to_string(),
+			version: "0.0.0".to_string(),
+		});
 	let databases = collect_database_metadata();
 	let routes = collect_route_metadata();
 	let middleware = collect_middleware_metadata();
 	let settings = collect_settings_metadata();
-	let features = collect_features_metadata();
+	let features = metadata
+		.map(collect_features_metadata_from)
+		.unwrap_or_else(empty_features_metadata);
 
-	Ok(IntrospectOutput {
+	IntrospectOutput {
 		app,
 		databases,
 		routes,
 		middleware,
 		settings,
 		features,
-	})
-}
-
-/// Collect app metadata from cargo_metadata
-fn collect_app_metadata() -> Result<AppMetadata, Box<dyn std::error::Error>> {
-	let metadata = cargo_metadata::MetadataCommand::new().exec()?;
-	Ok(collect_app_metadata_from(&metadata))
+	}
 }
 
 /// Extract application metadata from an already-obtained Cargo metadata value.
@@ -508,15 +517,6 @@ fn load_security_settings() -> (bool, bool, bool, bool, bool) {
 	}
 }
 
-/// Collect feature metadata from cargo_metadata resolve graph
-fn collect_features_metadata() -> FeaturesMetadata {
-	let metadata = match cargo_metadata::MetadataCommand::new().exec() {
-		Ok(m) => m,
-		Err(_) => return empty_features_metadata(),
-	};
-	collect_features_metadata_from(&metadata)
-}
-
 /// Extract feature metadata from an already-obtained Cargo metadata value.
 fn collect_features_metadata_from(metadata: &cargo_metadata::Metadata) -> FeaturesMetadata {
 	let root_package = match metadata.root_package() {
@@ -762,6 +762,22 @@ mod tests {
 	}
 
 	#[rstest]
+	fn collect_introspect_data_from_metadata_keeps_app_and_features_consistent() {
+		// Arrange
+		let (_project, metadata) = metadata_fixture();
+
+		// Act
+		let output = collect_introspect_data_from_metadata(Some(&metadata));
+
+		// Assert
+		assert_eq!(output.app.name, "introspection-fixture");
+		assert_eq!(output.app.version, "1.2.3");
+		assert_eq!(output.features.declared, vec!["sqlite", "redis"]);
+		assert_eq!(output.features.infrastructure_signals.database, "sqlite");
+		assert_eq!(output.features.infrastructure_signals.cache, "redis");
+	}
+
+	#[rstest]
 	fn settings_database_helper_reads_alias_engine_without_serializing_password() {
 		// Arrange
 		let project = TempDir::new().expect("temporary project is created");
@@ -807,6 +823,25 @@ mod tests {
 			databases,
 			vec![("default".to_string(), "sqlite".to_string())]
 		);
+	}
+
+	#[rstest]
+	fn malformed_canonical_settings_do_not_fall_back_to_legacy_database_values() {
+		// Arrange
+		let project = TempDir::new().expect("temporary project is created");
+		let settings = project.path().join("settings");
+		fs::create_dir_all(&settings).expect("settings directory is created");
+		fs::write(
+			settings.join("base.toml"),
+			"secret_key = \"legacy-secret\"\n[databases.default]\nengine = \"sqlite\"\nname = \"legacy.sqlite\"\n[core]\nsecret_key = 42\n",
+		)
+		.expect("mixed settings are written");
+
+		// Act
+		let databases = load_settings_databases_from(project.path(), "local");
+
+		// Assert
+		assert!(databases.is_empty());
 	}
 
 	/// Helper to create a default FeaturesMetadata for tests

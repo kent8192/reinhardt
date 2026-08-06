@@ -861,10 +861,7 @@ fn test_collectstatic_large_file(temp_dir: TempDir) {
 // Decision Table Tests
 // ============================================================================
 
-/// Test: CollectStaticOptions flag combinations
-///
-/// Category: Decision Table
-/// Verifies various flag combinations.
+/// The collectstatic decision matrix preserves filesystem state and exact stats.
 #[rstest]
 #[case(false, false, false, "no flags")]
 #[case(true, false, false, "clear only")]
@@ -880,20 +877,143 @@ fn test_collectstatic_decision_flag_combinations(
 	#[case] link: bool,
 	#[case] description: &str,
 ) {
+	// Arrange
+	let temp_dir = TempDir::new().expect("temporary directory is created");
+	let source_dir = temp_dir.path().join("source");
+	let static_root = temp_dir.path().join("staticfiles");
+	fs::create_dir_all(&source_dir).expect("source directory is created");
+	fs::create_dir_all(&static_root).expect("static root is created");
+	fs::write(source_dir.join("app.js"), "asset").expect("source asset is written");
+	fs::write(static_root.join("old.txt"), "old").expect("existing output is written");
+	let config = StaticFilesConfig {
+		static_url: "/static/".to_string(),
+		static_root: static_root.clone(),
+		staticfiles_dirs: vec![source_dir],
+		media_url: None,
+	};
 	let options = CollectStaticOptions {
 		clear,
 		dry_run,
 		link,
+		enable_hashing: false,
+		verbosity: 0,
 		..Default::default()
 	};
+	let mut command = CollectStaticCommand::new(config, options);
 
-	assert_eq!(options.clear, clear, "{}: clear mismatch", description);
+	// Act
+	let stats = command.execute().expect("collection succeeds");
+
+	// Assert
+	if dry_run {
+		assert_eq!(stats.copied, 1, "{description}");
+		assert_eq!(stats.deleted, 0, "{description}");
+		assert_eq!(stats.unmodified, 0, "{description}");
+		assert!(static_root.join("old.txt").exists(), "{description}");
+		assert!(!static_root.join("app.js").exists(), "{description}");
+		return;
+	}
+
+	assert_eq!(stats.copied, 1, "{description}");
+	assert_eq!(stats.deleted, usize::from(clear), "{description}");
+	assert_eq!(stats.unmodified, 0, "{description}");
+	assert_eq!(stats.skipped, 0, "{description}");
 	assert_eq!(
-		options.dry_run, dry_run,
-		"{}: dry_run mismatch",
-		description
+		static_root.join("old.txt").exists(),
+		!clear,
+		"{description}"
 	);
-	assert_eq!(options.link, link, "{}: link mismatch", description);
+	#[cfg(unix)]
+	assert_eq!(
+		fs::symlink_metadata(static_root.join("app.js"))
+			.expect("collected asset exists")
+			.file_type()
+			.is_symlink(),
+		link,
+		"{description}"
+	);
+	#[cfg(not(unix))]
+	assert_eq!(
+		fs::read_to_string(static_root.join("app.js")).expect("collected asset is readable"),
+		"asset",
+		"{description}"
+	);
+}
+
+/// A destination parent file aborts collection without replacing existing output.
+#[rstest]
+fn test_collectstatic_destination_parent_file_preserves_existing_output(temp_dir: TempDir) {
+	// Arrange
+	let source_dir = temp_dir.path().join("source");
+	let static_root = temp_dir.path().join("staticfiles");
+	fs::create_dir_all(source_dir.join("nested")).expect("source directory is created");
+	fs::create_dir_all(&static_root).expect("static root is created");
+	fs::write(source_dir.join("nested/app.js"), "asset").expect("source asset is written");
+	fs::write(static_root.join("nested"), "preserve").expect("parent sentinel is written");
+	let mut command = CollectStaticCommand::new(
+		StaticFilesConfig {
+			static_url: "/static/".to_string(),
+			static_root: static_root.clone(),
+			staticfiles_dirs: vec![source_dir],
+			media_url: None,
+		},
+		CollectStaticOptions {
+			enable_hashing: false,
+			verbosity: 0,
+			..Default::default()
+		},
+	);
+
+	// Act
+	let error = command
+		.execute()
+		.expect_err("parent file rejects collection");
+
+	// Assert
+	assert_eq!(error.kind(), std::io::ErrorKind::AlreadyExists);
+	assert_eq!(
+		fs::read_to_string(static_root.join("nested")).expect("sentinel is readable"),
+		"preserve"
+	);
+	assert!(!static_root.join("nested/app.js").exists());
+}
+
+/// A non-file manifest destination aborts before collection mutates output.
+#[rstest]
+fn test_collectstatic_manifest_write_failure_preserves_existing_output(temp_dir: TempDir) {
+	// Arrange
+	let source_dir = temp_dir.path().join("source");
+	let static_root = temp_dir.path().join("staticfiles");
+	fs::create_dir_all(&source_dir).expect("source directory is created");
+	fs::create_dir_all(static_root.join("manifest.json")).expect("manifest directory is created");
+	fs::write(source_dir.join("app.js"), "hello").expect("source asset is written");
+	fs::write(static_root.join("keep.txt"), "preserve").expect("existing output is written");
+	let mut command = CollectStaticCommand::new(
+		StaticFilesConfig {
+			static_url: "/static/".to_string(),
+			static_root: static_root.clone(),
+			staticfiles_dirs: vec![source_dir],
+			media_url: None,
+		},
+		CollectStaticOptions {
+			verbosity: 0,
+			..Default::default()
+		},
+	);
+
+	// Act
+	let error = command
+		.execute()
+		.expect_err("manifest directory rejects collection");
+
+	// Assert
+	assert_eq!(error.kind(), std::io::ErrorKind::IsADirectory);
+	assert_eq!(
+		fs::read_to_string(static_root.join("keep.txt")).expect("output is readable"),
+		"preserve"
+	);
+	assert!(static_root.join("manifest.json").is_dir());
+	assert!(!static_root.join("app.2cf24dba.js").exists());
 }
 
 // ============================================================================

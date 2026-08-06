@@ -1667,13 +1667,22 @@ mod tests {
 
 	#[cfg(feature = "introspect")]
 	#[rstest]
-	#[case("app")]
-	#[case("databases")]
-	#[case("routes")]
-	#[case("middleware")]
-	#[case("settings")]
-	#[case("features")]
-	fn format_introspection_section_selects_each_known_section(#[case] section: &str) {
+	#[case("app", OutputFormat::Json)]
+	#[case("databases", OutputFormat::Json)]
+	#[case("routes", OutputFormat::Json)]
+	#[case("middleware", OutputFormat::Json)]
+	#[case("settings", OutputFormat::Json)]
+	#[case("features", OutputFormat::Json)]
+	#[case("app", OutputFormat::Yaml)]
+	#[case("databases", OutputFormat::Yaml)]
+	#[case("routes", OutputFormat::Yaml)]
+	#[case("middleware", OutputFormat::Yaml)]
+	#[case("settings", OutputFormat::Yaml)]
+	#[case("features", OutputFormat::Yaml)]
+	fn format_introspection_section_selects_each_known_section(
+		#[case] section: &str,
+		#[case] format: OutputFormat,
+	) {
 		// Arrange
 		let output = fixed_introspection_output();
 		let expected = serde_json::to_value(&output)
@@ -1683,11 +1692,14 @@ mod tests {
 			.expect("known section exists");
 
 		// Act
-		let json = format_introspection_output(&output, Some(section), OutputFormat::Json)
+		let content = format_introspection_output(&output, Some(section), format)
 			.expect("known section formats");
 
 		// Assert
-		let actual: serde_json::Value = serde_json::from_str(&json).expect("JSON is valid");
+		let actual: serde_json::Value = match format {
+			OutputFormat::Json => serde_json::from_str(&content).expect("JSON is valid"),
+			OutputFormat::Yaml => serde_yaml::from_str(&content).expect("YAML is valid"),
+		};
 		assert_eq!(actual, expected);
 	}
 

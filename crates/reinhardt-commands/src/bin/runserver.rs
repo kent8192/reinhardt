@@ -1382,7 +1382,10 @@ mod tests {
 		std::fs::write("settings/base.toml", "[invalid").expect("write malformed settings");
 		std::fs::write("settings/local.toml", "").expect("write local settings");
 		let malformed = load_settings();
+		assert!(malformed.debug);
 		assert_eq!(malformed.static_url, "/static/");
+		assert_eq!(malformed.static_root, None);
+		assert!(malformed.staticfiles_dirs.is_empty());
 		build_wasm_targets(true, false, false);
 		assert!(run_collectstatic(&missing));
 		assert!(Path::new("staticfiles/manifest.json").is_file());

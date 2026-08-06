@@ -109,6 +109,161 @@ mod env_parsing_tests {
 		.await;
 	}
 
+	#[cfg(feature = "gcs")]
+	#[rstest]
+	#[tokio::test]
+	#[serial(env)]
+	async fn test_gcs_config_from_env_with_optional_credentials() {
+		with_envs(
+			&[
+				("STORAGE_BACKEND", "gcs"),
+				("GCS_BUCKET", "assets"),
+				("GCS_PREFIX", "uploads/"),
+				("GCS_ENDPOINT", "http://localhost:4443/"),
+				(
+					"GCS_SERVICE_ACCOUNT_JSON",
+					"{\"client_email\":\"test@example.com\"}",
+				),
+			],
+			|| async {
+				let config = StorageConfig::from_env().expect("Failed to load GCS config");
+
+				match config {
+					StorageConfig::Gcs(gcs_config) => {
+						assert_eq!(gcs_config.bucket, "assets");
+						assert_eq!(gcs_config.prefix.as_deref(), Some("uploads/"));
+						assert_eq!(
+							gcs_config.endpoint.as_deref(),
+							Some("http://localhost:4443/")
+						);
+						assert_eq!(
+							gcs_config
+								.service_account_json
+								.as_ref()
+								.expect("service account should be retained")
+								.expose_secret(),
+							"{\"client_email\":\"test@example.com\"}"
+						);
+					}
+					_ => panic!("Expected GCS config"),
+				}
+			},
+		)
+		.await;
+	}
+
+	#[cfg(feature = "gcs")]
+	#[tokio::test]
+	#[serial(env)]
+	async fn test_gcs_config_requires_bucket() {
+		// SAFETY: This test is serialized with other environment-backed config tests.
+		unsafe { env::remove_var("GCS_BUCKET") };
+
+		with_env("STORAGE_BACKEND", "gcs", || async {
+			let result = StorageConfig::from_env();
+			assert!(matches!(
+				result,
+				Err(StorageError::ConfigError(message))
+					if message == "GCS_BUCKET environment variable not set"
+			));
+		})
+		.await;
+	}
+
+	#[cfg(feature = "azure")]
+	#[rstest]
+	#[tokio::test]
+	#[serial(env)]
+	async fn test_azure_config_from_env_with_optional_credentials() {
+		with_envs(
+			&[
+				("STORAGE_BACKEND", "azure"),
+				("AZURE_ACCOUNT", "storage-account"),
+				("AZURE_CONTAINER", "assets"),
+				("AZURE_PREFIX", "uploads/"),
+				("AZURE_ENDPOINT", "http://localhost:10000/account"),
+				("AZURE_ACCESS_KEY", "access-key"),
+				("AZURE_SAS_TOKEN", "?sp=rl&sig=test"),
+				("AZURE_CONNECTION_STRING", "UseDevelopmentStorage=true"),
+			],
+			|| async {
+				let config = StorageConfig::from_env().expect("Failed to load Azure config");
+
+				match config {
+					StorageConfig::Azure(azure_config) => {
+						assert_eq!(azure_config.account, "storage-account");
+						assert_eq!(azure_config.container, "assets");
+						assert_eq!(azure_config.prefix.as_deref(), Some("uploads/"));
+						assert_eq!(
+							azure_config.endpoint.as_deref(),
+							Some("http://localhost:10000/account")
+						);
+						assert_eq!(
+							azure_config.access_key.as_ref().unwrap().expose_secret(),
+							"access-key"
+						);
+						assert_eq!(
+							azure_config.sas_token.as_ref().unwrap().expose_secret(),
+							"?sp=rl&sig=test"
+						);
+						assert_eq!(
+							azure_config
+								.connection_string
+								.as_ref()
+								.unwrap()
+								.expose_secret(),
+							"UseDevelopmentStorage=true"
+						);
+					}
+					_ => panic!("Expected Azure config"),
+				}
+			},
+		)
+		.await;
+	}
+
+	#[cfg(feature = "azure")]
+	#[tokio::test]
+	#[serial(env)]
+	async fn test_azure_config_requires_account() {
+		// SAFETY: This test is serialized with other environment-backed config tests.
+		unsafe {
+			env::remove_var("AZURE_ACCOUNT");
+			env::remove_var("AZURE_CONTAINER");
+		}
+
+		with_env("STORAGE_BACKEND", "azure", || async {
+			let result = StorageConfig::from_env();
+			assert!(matches!(
+				result,
+				Err(StorageError::ConfigError(message))
+					if message == "AZURE_ACCOUNT environment variable not set"
+			));
+		})
+		.await;
+	}
+
+	#[cfg(feature = "azure")]
+	#[tokio::test]
+	#[serial(env)]
+	async fn test_azure_config_requires_container() {
+		// SAFETY: This test is serialized with other environment-backed config tests.
+		unsafe { env::remove_var("AZURE_CONTAINER") };
+
+		with_env("AZURE_ACCOUNT", "storage-account", || async {
+			with_env("STORAGE_BACKEND", "azure", || async {
+				let result = StorageConfig::from_env();
+				assert!(matches!(
+					result,
+					Err(StorageError::ConfigError(message))
+						if message == "AZURE_CONTAINER environment variable not set"
+				));
+			})
+			.await;
+		})
+		.await;
+	}
+
 	#[rstest]
 	#[tokio::test]
 	#[serial(env)]
@@ -300,6 +455,8 @@ mod backend_type_tests {
 	#[rstest]
 	fn test_backend_type_display() {
 		assert_eq!(format!("{}", BackendType::S3), "S3");
+		assert_eq!(format!("{}", BackendType::Gcs), "GCS");
+		assert_eq!(format!("{}", BackendType::Azure), "Azure");
 		assert_eq!(format!("{}", BackendType::Local), "Local");
 	}
 }

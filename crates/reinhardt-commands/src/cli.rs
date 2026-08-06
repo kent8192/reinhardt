@@ -832,8 +832,15 @@ fn resolve_custom_command(
 		}
 		let flag = iter.next().unwrap(); // safe: peeked above
 
-		if flag == "-v" || flag == "--verbose" {
+		if flag == "--verbose" {
 			verbosity = verbosity.saturating_add(1);
+		} else if let Some(short_flags) = flag.strip_prefix('-')
+			&& !flag.starts_with("--")
+			&& short_flags.chars().all(|short_flag| short_flag == 'v')
+		{
+			for _ in short_flags.chars() {
+				verbosity = verbosity.saturating_add(1);
+			}
 		} else if flag == "--verbosity" {
 			// Consume the next token as the value.
 			if let Some(val) = iter.peek()
@@ -1109,6 +1116,7 @@ struct CollectStaticRequest {
 	index_source: Option<PathBuf>,
 }
 
+// The helper mirrors every collectstatic CLI field so its side-effect-free conversion is testable.
 #[allow(clippy::too_many_arguments)]
 fn collectstatic_request(
 	base_dir: &Path,
@@ -1630,6 +1638,40 @@ mod tests {
 			&registry,
 		)
 		.expect("custom command resolves");
+
+		assert_eq!(verbosity, 3);
+		assert!(matches!(
+			command,
+			Commands::Custom { ref name, ref args }
+				if name == "audit" && args == &["--scope", "users"]
+		));
+	}
+
+	#[test]
+	fn resolve_cli_command_counts_compact_short_verbosity() {
+		let recorded = Arc::new(Mutex::new(None));
+		let mut registry = CommandRegistry::new();
+		registry.register(Box::new(RecordingCommand::new("audit", recorded)));
+
+		let (command, verbosity) = resolve_cli_command(["manage", "-vv", "audit"], &registry)
+			.expect("custom command resolves");
+
+		assert_eq!(verbosity, 2);
+		assert!(matches!(
+			command,
+			Commands::Custom { ref name, ref args } if name == "audit" && args.is_empty()
+		));
+	}
+
+	#[test]
+	fn resolve_cli_command_counts_compact_short_verbosity_with_custom_args() {
+		let recorded = Arc::new(Mutex::new(None));
+		let mut registry = CommandRegistry::new();
+		registry.register(Box::new(RecordingCommand::new("audit", recorded)));
+
+		let (command, verbosity) =
+			resolve_cli_command(["manage", "-vvv", "audit", "--scope", "users"], &registry)
+				.expect("custom command resolves");
 
 		assert_eq!(verbosity, 3);
 		assert!(matches!(

@@ -879,6 +879,7 @@ mod tests {
 		);
 	}
 
+	#[cfg(feature = "sqlite")]
 	#[tokio::test]
 	async fn custom_manager_vetoes_create_before_writing_to_sqlite() {
 		let connection = DatabaseConnection::connect_sqlite("sqlite::memory:")
@@ -911,6 +912,7 @@ mod tests {
 		assert_eq!(row.get::<i64>("count"), Some(0));
 	}
 
+	#[cfg(feature = "sqlite")]
 	#[tokio::test]
 	async fn custom_manager_vetoes_delete_without_removing_the_sqlite_row() {
 		let connection = DatabaseConnection::connect_sqlite("sqlite::memory:")

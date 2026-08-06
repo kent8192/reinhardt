@@ -762,6 +762,50 @@ mod tests {
 	}
 
 	#[rstest]
+	fn metadata_helpers_fall_back_for_virtual_workspace_without_root_package() {
+		// Arrange
+		let workspace = TempDir::new().expect("temporary workspace is created");
+		fs::write(
+			workspace.path().join("Cargo.toml"),
+			"[workspace]\nmembers = [\"member\"]\nresolver = \"3\"\n",
+		)
+		.expect("virtual workspace manifest is written");
+		let member = workspace.path().join("member");
+		fs::create_dir_all(member.join("src")).expect("workspace member directory is created");
+		fs::write(
+			member.join("Cargo.toml"),
+			"[package]\nname = \"workspace-member\"\nversion = \"0.1.0\"\nedition = \"2024\"\n",
+		)
+		.expect("workspace member manifest is written");
+		fs::write(member.join("src/lib.rs"), "").expect("workspace member source is written");
+		let metadata = cargo_metadata::MetadataCommand::new()
+			.current_dir(workspace.path())
+			.exec()
+			.expect("virtual workspace metadata is available");
+
+		// Act
+		let app = collect_app_metadata_from(&metadata);
+		let features = collect_features_metadata_from(&metadata);
+
+		// Assert
+		assert_eq!(app.name, "unknown");
+		assert_eq!(app.version, "0.0.0");
+		assert_eq!(features.declared, Vec::<String>::new());
+		assert_eq!(features.resolved, Vec::<String>::new());
+		assert_eq!(features.infrastructure_signals.database, "none");
+		assert_eq!(features.infrastructure_signals.cache, "none");
+		assert!(!features.infrastructure_signals.websocket);
+		assert!(!features.infrastructure_signals.background_worker);
+		assert!(!features.infrastructure_signals.grpc);
+		assert_eq!(features.infrastructure_signals.storage, None);
+		assert_eq!(features.infrastructure_signals.mail, None);
+		assert_eq!(features.infrastructure_signals.session_backend, None);
+		assert!(!features.infrastructure_signals.graphql);
+		assert!(!features.infrastructure_signals.admin_panel);
+		assert!(!features.infrastructure_signals.i18n);
+	}
+
+	#[rstest]
 	fn collect_introspect_data_from_metadata_keeps_app_and_features_consistent() {
 		// Arrange
 		let (_project, metadata) = metadata_fixture();

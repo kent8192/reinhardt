@@ -3,8 +3,8 @@
 //! Provides integration with code formatters like rustfmt.
 
 use crate::CommandError;
+use crate::process::{ProcessRequest, ProcessRunner, SystemProcessRunner};
 use std::path::Path;
-use std::process::Command;
 
 /// Run code formatters on the specified files
 ///
@@ -34,6 +34,14 @@ use std::process::Command;
 /// # Ok::<(), reinhardt_commands::CommandError>(())
 /// ```
 pub fn run_formatters(paths: &[&str], formatter_path: Option<&str>) -> Result<(), CommandError> {
+	run_formatters_with_runner(paths, formatter_path, &SystemProcessRunner)
+}
+
+fn run_formatters_with_runner<R: ProcessRunner>(
+	paths: &[&str],
+	formatter_path: Option<&str>,
+	runner: &R,
+) -> Result<(), CommandError> {
 	if paths.is_empty() {
 		return Ok(());
 	}
@@ -41,11 +49,11 @@ pub fn run_formatters(paths: &[&str], formatter_path: Option<&str>) -> Result<()
 	let formatter = formatter_path.unwrap_or("rustfmt");
 
 	// Check if formatter exists
-	let check_result = Command::new(formatter).arg("--version").output();
+	let check_result = runner.run(&ProcessRequest::new(formatter).arg("--version"));
 
 	match check_result {
 		Ok(output) => {
-			if !output.status.success() {
+			if !output.success {
 				return Err(CommandError::ExecutionError(format!(
 					"Formatter '{}' is not working properly",
 					formatter
@@ -76,11 +84,11 @@ pub fn run_formatters(paths: &[&str], formatter_path: Option<&str>) -> Result<()
 			)));
 		}
 
-		let result = Command::new(formatter).arg(path).output();
+		let result = runner.run(&ProcessRequest::new(formatter).arg(path));
 
 		match result {
 			Ok(output) => {
-				if !output.status.success() {
+				if !output.success {
 					let stderr = String::from_utf8_lossy(&output.stderr);
 					return Err(CommandError::ExecutionError(format!(
 						"Formatter failed for '{}': {}",
@@ -102,7 +110,47 @@ pub fn run_formatters(paths: &[&str], formatter_path: Option<&str>) -> Result<()
 
 #[cfg(test)]
 mod tests {
+	use crate::process::{FakeProcessRunner, ProcessOutcome};
+
 	use super::*;
+
+	#[test]
+	fn formatter_reports_version_check_failure_without_formatting_files() {
+		let runner = FakeProcessRunner::new([Ok(ProcessOutcome::failure(
+			"exit status: 1",
+			b"broken toolchain".to_vec(),
+		))]);
+
+		let error = run_formatters_with_runner(&["src/lib.rs"], Some("rustfmt"), &runner)
+			.expect_err("version failure must stop formatting");
+
+		assert_eq!(
+			error.to_string(),
+			"Execution error: Formatter 'rustfmt' is not working properly"
+		);
+		assert_eq!(runner.requests().len(), 1);
+	}
+
+	#[test]
+	fn formatter_includes_stderr_from_file_format_failure() {
+		let temp = tempfile::NamedTempFile::new().expect("create Rust file");
+		let runner = FakeProcessRunner::new([
+			Ok(ProcessOutcome::success(b"rustfmt 1.8".to_vec())),
+			Ok(ProcessOutcome::failure(
+				"exit status: 1",
+				b"parse error".to_vec(),
+			)),
+		]);
+
+		let error = run_formatters_with_runner(
+			&[temp.path().to_str().expect("UTF-8 path")],
+			Some("rustfmt"),
+			&runner,
+		)
+		.expect_err("format failure must propagate");
+
+		assert!(error.to_string().contains("parse error"));
+	}
 
 	#[test]
 	fn test_run_formatters_empty_paths() {

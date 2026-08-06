@@ -4,8 +4,8 @@
 //! without relying on Trunk. It uses wasm-bindgen-cli directly for maximum
 //! control over the build process.
 
+use crate::process::{ProcessRequest, ProcessRunner, SystemProcessRunner};
 use std::path::{Path, PathBuf};
-use std::process::Command;
 use std::time::SystemTime;
 
 /// Configuration for WASM builds.
@@ -144,14 +144,15 @@ impl WasmBuilder {
 	/// respects `CARGO_TARGET_DIR`, `.cargo/config.toml`, and workspace layout.
 	///
 	/// Falls back to `project_dir/target` if `cargo metadata` is unavailable.
-	fn detect_target_dir(&self) -> PathBuf {
-		let output = Command::new("cargo")
-			.args(["metadata", "--no-deps", "--format-version=1"])
-			.current_dir(&self.config.project_dir)
-			.output();
+	fn detect_target_dir_with_runner<R: ProcessRunner>(&self, runner: &R) -> PathBuf {
+		let output = runner.run(
+			&ProcessRequest::new("cargo")
+				.args(["metadata", "--no-deps", "--format-version=1"])
+				.current_dir(&self.config.project_dir),
+		);
 
 		if let Ok(output) = output
-			&& output.status.success()
+			&& output.success
 			&& let Ok(json) = serde_json::from_slice::<serde_json::Value>(&output.stdout)
 			&& let Some(target_dir) = json.get("target_directory").and_then(|v| v.as_str())
 		{
@@ -163,11 +164,25 @@ impl WasmBuilder {
 
 	/// Build the WASM target.
 	pub fn build(&self) -> Result<WasmBuildOutput, WasmBuildError> {
+		self.build_with_runner(&SystemProcessRunner)
+	}
+
+	fn build_with_runner<R: ProcessRunner>(
+		&self,
+		runner: &R,
+	) -> Result<WasmBuildOutput, WasmBuildError> {
+		let target_base = self
+			.config
+			.target_dir
+			.as_ref()
+			.cloned()
+			.unwrap_or_else(|| self.detect_target_dir_with_runner(runner));
+
 		// Ensure wasm32 target is installed
-		self.check_target_installed()?;
+		self.check_target_installed_with_runner(runner)?;
 
 		// Ensure wasm-bindgen is installed
-		self.check_wasm_bindgen_installed()?;
+		self.check_wasm_bindgen_installed_with_runner(runner)?;
 
 		// Get crate name
 		let crate_name = self.get_crate_name()?;
@@ -179,7 +194,7 @@ impl WasmBuilder {
 
 		// Run cargo build
 		println!("Running cargo build --target wasm32-unknown-unknown...");
-		self.run_cargo_build()?;
+		self.run_cargo_build_with_runner(runner)?;
 
 		// Determine the WASM file location
 		let profile = if self.config.release {
@@ -187,12 +202,6 @@ impl WasmBuilder {
 		} else {
 			"debug"
 		};
-		let target_base = self
-			.config
-			.target_dir
-			.as_ref()
-			.cloned()
-			.unwrap_or_else(|| self.detect_target_dir());
 		let wasm_path = target_base
 			.join("wasm32-unknown-unknown")
 			.join(profile)
@@ -200,13 +209,13 @@ impl WasmBuilder {
 
 		// Run wasm-bindgen
 		println!("Running wasm-bindgen...");
-		self.run_wasm_bindgen(&wasm_path, &output_dir)?;
+		self.run_wasm_bindgen_with_runner(&wasm_path, &output_dir, runner)?;
 
 		// Run wasm-opt for release builds
 		if self.config.release && self.config.optimize {
-			if self.is_wasm_opt_available() {
+			if self.is_wasm_opt_available_with_runner(runner) {
 				println!("Running wasm-opt...");
-				self.run_wasm_opt(&output_dir, &crate_name)?;
+				self.run_wasm_opt_with_runner(&output_dir, &crate_name, runner)?;
 			} else {
 				eprintln!(
 					"Warning: wasm-opt not found, skipping optimization. Install with: brew install binaryen"
@@ -230,10 +239,12 @@ impl WasmBuilder {
 		})
 	}
 
-	fn check_target_installed(&self) -> Result<(), WasmBuildError> {
-		let output = Command::new("rustup")
-			.args(["target", "list", "--installed"])
-			.output()?;
+	fn check_target_installed_with_runner<R: ProcessRunner>(
+		&self,
+		runner: &R,
+	) -> Result<(), WasmBuildError> {
+		let output =
+			runner.run(&ProcessRequest::new("rustup").args(["target", "list", "--installed"]))?;
 
 		let stdout = String::from_utf8_lossy(&output.stdout);
 		if stdout.contains("wasm32-unknown-unknown") {
@@ -244,11 +255,14 @@ impl WasmBuilder {
 		}
 	}
 
-	fn check_wasm_bindgen_installed(&self) -> Result<(), WasmBuildError> {
-		let result = Command::new("wasm-bindgen").arg("--version").output();
+	fn check_wasm_bindgen_installed_with_runner<R: ProcessRunner>(
+		&self,
+		runner: &R,
+	) -> Result<(), WasmBuildError> {
+		let result = runner.run(&ProcessRequest::new("wasm-bindgen").arg("--version"));
 
 		match result {
-			Ok(output) if output.status.success() => Ok(()),
+			Ok(output) if output.success => Ok(()),
 			_ => {
 				eprintln!("Warning: wasm-bindgen-cli not installed");
 				Err(WasmBuildError::WasmBindgenNotInstalled)
@@ -256,11 +270,10 @@ impl WasmBuilder {
 		}
 	}
 
-	fn is_wasm_opt_available(&self) -> bool {
-		Command::new("wasm-opt")
-			.arg("--version")
-			.output()
-			.map(|o| o.status.success())
+	fn is_wasm_opt_available_with_runner<R: ProcessRunner>(&self, runner: &R) -> bool {
+		runner
+			.run(&ProcessRequest::new("wasm-opt").arg("--version"))
+			.map(|outcome| outcome.success)
 			.unwrap_or(false)
 	}
 
@@ -288,21 +301,20 @@ impl WasmBuilder {
 		Err(WasmBuildError::CrateNameNotFound)
 	}
 
-	fn run_cargo_build(&self) -> Result<(), WasmBuildError> {
-		let mut cmd = Command::new("cargo");
-		cmd.arg("build")
-			.arg("--lib")
-			.arg("--target")
-			.arg("wasm32-unknown-unknown")
+	fn run_cargo_build_with_runner<R: ProcessRunner>(
+		&self,
+		runner: &R,
+	) -> Result<(), WasmBuildError> {
+		let mut request = ProcessRequest::new("cargo")
+			.args(["build", "--lib", "--target", "wasm32-unknown-unknown"])
 			.current_dir(&self.config.project_dir);
-
 		if self.config.release {
-			cmd.arg("--release");
+			request = request.arg("--release");
 		}
 
-		let output = cmd.output()?;
+		let output = runner.run(&request)?;
 
-		if output.status.success() {
+		if output.success {
 			Ok(())
 		} else {
 			let stderr = String::from_utf8_lossy(&output.stderr);
@@ -310,16 +322,20 @@ impl WasmBuilder {
 		}
 	}
 
-	fn run_wasm_bindgen(&self, wasm_path: &Path, output_dir: &Path) -> Result<(), WasmBuildError> {
-		let output = Command::new("wasm-bindgen")
-			.arg("--target")
-			.arg("web")
-			.arg("--out-dir")
-			.arg(output_dir)
-			.arg(wasm_path)
-			.output()?;
+	fn run_wasm_bindgen_with_runner<R: ProcessRunner>(
+		&self,
+		wasm_path: &Path,
+		output_dir: &Path,
+		runner: &R,
+	) -> Result<(), WasmBuildError> {
+		let output = runner.run(
+			&ProcessRequest::new("wasm-bindgen")
+				.args(["--target", "web", "--out-dir"])
+				.arg(output_dir.to_path_buf())
+				.arg(wasm_path.to_path_buf()),
+		)?;
 
-		if output.status.success() {
+		if output.success {
 			Ok(())
 		} else {
 			let stderr = String::from_utf8_lossy(&output.stderr);
@@ -327,7 +343,12 @@ impl WasmBuilder {
 		}
 	}
 
-	fn run_wasm_opt(&self, output_dir: &Path, crate_name: &str) -> Result<(), WasmBuildError> {
+	fn run_wasm_opt_with_runner<R: ProcessRunner>(
+		&self,
+		output_dir: &Path,
+		crate_name: &str,
+		runner: &R,
+	) -> Result<(), WasmBuildError> {
 		let wasm_file = output_dir.join(format!("{}_bg.wasm", crate_name.replace('-', "_")));
 
 		if !wasm_file.exists() {
@@ -337,14 +358,14 @@ impl WasmBuilder {
 		// Create temp file for optimization
 		let temp_file = output_dir.join(format!("{}_bg_opt.wasm", crate_name.replace('-', "_")));
 
-		let output = Command::new("wasm-opt")
-			.arg("-O3")
-			.arg("--output")
-			.arg(&temp_file)
-			.arg(&wasm_file)
-			.output()?;
+		let output = runner.run(
+			&ProcessRequest::new("wasm-opt")
+				.args(["-O3", "--output"])
+				.arg(temp_file.clone())
+				.arg(wasm_file.clone()),
+		)?;
 
-		if output.status.success() {
+		if output.success {
 			// Replace original with optimized version
 			std::fs::rename(&temp_file, &wasm_file)?;
 			Ok(())
@@ -359,12 +380,15 @@ impl WasmBuilder {
 
 /// Check if all WASM build tools are installed.
 pub fn check_wasm_tools_installed() -> Result<(), Vec<String>> {
+	check_wasm_tools_installed_with_runner(&SystemProcessRunner)
+}
+
+fn check_wasm_tools_installed_with_runner<R: ProcessRunner>(runner: &R) -> Result<(), Vec<String>> {
 	let mut missing = Vec::new();
 
 	// Check wasm32 target
-	if let Ok(output) = Command::new("rustup")
-		.args(["target", "list", "--installed"])
-		.output()
+	if let Ok(output) =
+		runner.run(&ProcessRequest::new("rustup").args(["target", "list", "--installed"]))
 	{
 		let stdout = String::from_utf8_lossy(&output.stdout);
 		if !stdout.contains("wasm32-unknown-unknown") {
@@ -376,10 +400,9 @@ pub fn check_wasm_tools_installed() -> Result<(), Vec<String>> {
 	}
 
 	// Check wasm-bindgen
-	if Command::new("wasm-bindgen")
-		.arg("--version")
-		.output()
-		.map(|o| !o.status.success())
+	if runner
+		.run(&ProcessRequest::new("wasm-bindgen").arg("--version"))
+		.map(|outcome| !outcome.success)
 		.unwrap_or(true)
 	{
 		missing.push("wasm-bindgen-cli (run: cargo install wasm-bindgen-cli)".to_string());
@@ -485,7 +508,258 @@ pub fn is_wasm_stale(crate_dir: &Path, artifact: &Path) -> bool {
 
 #[cfg(test)]
 mod tests {
+	use crate::process::{FakeProcessRunner, ProcessOutcome};
+	use std::ffi::OsString;
+	use std::fs;
+
 	use super::*;
+
+	fn make_wasm_crate() -> tempfile::TempDir {
+		let temp = tempfile::tempdir().expect("create temporary crate");
+		fs::create_dir(temp.path().join("src")).expect("create source directory");
+		fs::write(
+			temp.path().join("Cargo.toml"),
+			b"[package]\nname = \"demo-app\"\nversion = \"0.1.0\"\n\n[lib]\ncrate-type = [\"cdylib\"]\n",
+		)
+		.expect("write Cargo.toml");
+		temp
+	}
+
+	fn metadata_outcome(target_dir: &Path) -> ProcessOutcome {
+		ProcessOutcome::success(
+			format!(r#"{{"target_directory":"{}"}}"#, target_dir.display()).into_bytes(),
+		)
+	}
+
+	fn successful_build_outcomes(target_dir: &Path) -> [std::io::Result<ProcessOutcome>; 5] {
+		[
+			Ok(metadata_outcome(target_dir)),
+			Ok(ProcessOutcome::success(
+				b"wasm32-unknown-unknown\n".to_vec(),
+			)),
+			Ok(ProcessOutcome::success(b"wasm-bindgen 0.2".to_vec())),
+			Ok(ProcessOutcome::success(Vec::new())),
+			Ok(ProcessOutcome::success(Vec::new())),
+		]
+	}
+
+	fn request_args(requests: &[crate::process::ProcessRequest]) -> Vec<Vec<OsString>> {
+		requests
+			.iter()
+			.map(|request| request.args.clone())
+			.collect()
+	}
+
+	#[test]
+	fn build_with_runner_runs_wasm_pipeline_in_order() {
+		let project = make_wasm_crate();
+		let target_dir = project.path().join("workspace-target");
+		let runner = FakeProcessRunner::new(successful_build_outcomes(&target_dir));
+		let builder = WasmBuilder::new(WasmBuildConfig::new(project.path()));
+
+		builder
+			.build_with_runner(&runner)
+			.expect("scripted build succeeds");
+
+		let requests = runner.requests();
+		assert_eq!(
+			requests
+				.iter()
+				.map(|request| request.program.clone())
+				.collect::<Vec<_>>(),
+			vec!["cargo", "rustup", "wasm-bindgen", "cargo", "wasm-bindgen"]
+		);
+		assert_eq!(
+			request_args(&requests),
+			vec![
+				vec![
+					"metadata".into(),
+					"--no-deps".into(),
+					"--format-version=1".into()
+				],
+				vec!["target".into(), "list".into(), "--installed".into()],
+				vec!["--version".into()],
+				vec![
+					"build".into(),
+					"--lib".into(),
+					"--target".into(),
+					"wasm32-unknown-unknown".into(),
+				],
+				vec![
+					"--target".into(),
+					"web".into(),
+					"--out-dir".into(),
+					project.path().join("dist").into_os_string(),
+					target_dir
+						.join("wasm32-unknown-unknown/debug/demo_app.wasm")
+						.into_os_string(),
+				],
+			]
+		);
+		assert_eq!(requests[0].current_dir.as_deref(), Some(project.path()));
+		assert_eq!(requests[3].current_dir.as_deref(), Some(project.path()));
+	}
+
+	#[test]
+	fn build_with_runner_reports_missing_wasm_target() {
+		let project = make_wasm_crate();
+		let target_dir = project.path().join("workspace-target");
+		let runner = FakeProcessRunner::new([
+			Ok(metadata_outcome(&target_dir)),
+			Ok(ProcessOutcome::success(b"x86_64-apple-darwin\n".to_vec())),
+		]);
+		let builder = WasmBuilder::new(WasmBuildConfig::new(project.path()));
+
+		let error = builder
+			.build_with_runner(&runner)
+			.expect_err("missing target must stop the build");
+
+		assert!(matches!(error, WasmBuildError::TargetNotInstalled));
+		assert_eq!(runner.requests().len(), 2);
+	}
+
+	#[test]
+	fn build_with_runner_propagates_cargo_stderr() {
+		let project = make_wasm_crate();
+		let target_dir = project.path().join("workspace-target");
+		let runner = FakeProcessRunner::new([
+			Ok(metadata_outcome(&target_dir)),
+			Ok(ProcessOutcome::success(
+				b"wasm32-unknown-unknown\n".to_vec(),
+			)),
+			Ok(ProcessOutcome::success(b"wasm-bindgen 0.2".to_vec())),
+			Ok(ProcessOutcome::failure(
+				"exit status: 1",
+				b"cargo diagnostics".to_vec(),
+			)),
+		]);
+		let builder = WasmBuilder::new(WasmBuildConfig::new(project.path()));
+
+		let error = builder
+			.build_with_runner(&runner)
+			.expect_err("cargo failure must propagate stderr");
+
+		assert_eq!(error.to_string(), "Cargo build failed: cargo diagnostics");
+	}
+
+	#[test]
+	fn build_with_runner_propagates_wasm_bindgen_stderr() {
+		let project = make_wasm_crate();
+		let target_dir = project.path().join("workspace-target");
+		let runner = FakeProcessRunner::new([
+			Ok(metadata_outcome(&target_dir)),
+			Ok(ProcessOutcome::success(
+				b"wasm32-unknown-unknown\n".to_vec(),
+			)),
+			Ok(ProcessOutcome::success(b"wasm-bindgen 0.2".to_vec())),
+			Ok(ProcessOutcome::success(Vec::new())),
+			Ok(ProcessOutcome::failure(
+				"exit status: 1",
+				b"bindgen diagnostics".to_vec(),
+			)),
+		]);
+		let builder = WasmBuilder::new(WasmBuildConfig::new(project.path()));
+
+		let error = builder
+			.build_with_runner(&runner)
+			.expect_err("wasm-bindgen failure must propagate stderr");
+
+		assert_eq!(
+			error.to_string(),
+			"wasm-bindgen failed: bindgen diagnostics"
+		);
+	}
+
+	#[test]
+	fn release_build_runs_wasm_opt_when_available() {
+		let project = make_wasm_crate();
+		let target_dir = project.path().join("workspace-target");
+		let output_dir = project.path().join("dist");
+		fs::create_dir(&output_dir).expect("create output directory");
+		fs::write(output_dir.join("demo_app_bg.wasm"), b"wasm").expect("write WASM output");
+		fs::write(output_dir.join("demo_app_bg_opt.wasm"), b"optimized wasm")
+			.expect("write optimized WASM output");
+		let runner = FakeProcessRunner::new([
+			Ok(metadata_outcome(&target_dir)),
+			Ok(ProcessOutcome::success(
+				b"wasm32-unknown-unknown\n".to_vec(),
+			)),
+			Ok(ProcessOutcome::success(b"wasm-bindgen 0.2".to_vec())),
+			Ok(ProcessOutcome::success(Vec::new())),
+			Ok(ProcessOutcome::success(Vec::new())),
+			Ok(ProcessOutcome::success(b"wasm-opt 1.0".to_vec())),
+			Ok(ProcessOutcome::success(Vec::new())),
+		]);
+		let builder = WasmBuilder::new(WasmBuildConfig::new(project.path()).release(true));
+
+		builder
+			.build_with_runner(&runner)
+			.expect("release build succeeds with wasm-opt");
+
+		let requests = runner.requests();
+		assert_eq!(requests[5].program, "wasm-opt");
+		assert_eq!(requests[5].args, vec![OsString::from("--version")]);
+		assert_eq!(
+			requests[6].args,
+			vec![
+				OsString::from("-O3"),
+				OsString::from("--output"),
+				output_dir.join("demo_app_bg_opt.wasm").into_os_string(),
+				output_dir.join("demo_app_bg.wasm").into_os_string(),
+			]
+		);
+	}
+
+	#[test]
+	fn release_build_skips_wasm_opt_when_unavailable() {
+		let project = make_wasm_crate();
+		let target_dir = project.path().join("workspace-target");
+		let runner = FakeProcessRunner::new([
+			Ok(metadata_outcome(&target_dir)),
+			Ok(ProcessOutcome::success(
+				b"wasm32-unknown-unknown\n".to_vec(),
+			)),
+			Ok(ProcessOutcome::success(b"wasm-bindgen 0.2".to_vec())),
+			Ok(ProcessOutcome::success(Vec::new())),
+			Ok(ProcessOutcome::success(Vec::new())),
+			Ok(ProcessOutcome::failure("exit status: 1", Vec::new())),
+		]);
+		let builder = WasmBuilder::new(WasmBuildConfig::new(project.path()).release(true));
+
+		builder
+			.build_with_runner(&runner)
+			.expect("release build skips unavailable wasm-opt");
+
+		assert_eq!(runner.requests().len(), 6);
+	}
+
+	#[test]
+	fn check_tools_reports_target_and_bindgen_independently() {
+		let missing_bindgen = FakeProcessRunner::new([
+			Ok(ProcessOutcome::success(
+				b"wasm32-unknown-unknown\n".to_vec(),
+			)),
+			Ok(ProcessOutcome::failure("exit status: 1", Vec::new())),
+		]);
+		let missing_target = FakeProcessRunner::new([
+			Ok(ProcessOutcome::success(b"x86_64-apple-darwin\n".to_vec())),
+			Ok(ProcessOutcome::success(b"wasm-bindgen 0.2".to_vec())),
+		]);
+
+		assert_eq!(
+			check_wasm_tools_installed_with_runner(&missing_bindgen),
+			Err(vec![
+				"wasm-bindgen-cli (run: cargo install wasm-bindgen-cli)".to_string()
+			])
+		);
+		assert_eq!(
+			check_wasm_tools_installed_with_runner(&missing_target),
+			Err(vec![
+				"wasm32-unknown-unknown target (run: rustup target add wasm32-unknown-unknown)"
+					.to_string()
+			])
+		);
+	}
 
 	#[test]
 	fn test_config_defaults() {

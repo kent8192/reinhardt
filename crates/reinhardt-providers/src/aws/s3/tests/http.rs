@@ -436,6 +436,30 @@ async fn head_object_maps_a_missing_object_to_none() {
 
 #[rstest]
 #[tokio::test]
+async fn head_object_maps_forbidden_responses_to_permission_denied() {
+	// Arrange
+	let server = TestS3Server::start().await;
+	server
+		.respond(ResponseTemplate::new(403).set_body_string("access denied"))
+		.await;
+
+	// Act
+	let result = server.client().head_object("secret.txt").await;
+
+	// Assert
+	match result {
+		Err(ProviderError::PermissionDenied(message)) => {
+			// Reqwest correctly discards HEAD response bodies, so this branch receives an empty service message.
+			assert_eq!(message, "");
+		}
+		other => panic!("unexpected HEAD 403 result: {other:?}"),
+	}
+	let request = server.single_request().await;
+	assert_eq!(request.method.as_str(), "HEAD");
+}
+
+#[rstest]
+#[tokio::test]
 async fn get_object_maps_forbidden_responses_to_permission_denied() {
 	// Arrange
 	let server = TestS3Server::start().await;

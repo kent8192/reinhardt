@@ -14,14 +14,14 @@ use crate::{CheckCommand, CommandContext, MigrateCommand, RunServerCommand, Shel
 use clap::ValueEnum;
 use clap::{Parser, Subcommand};
 use reinhardt_conf::HasCommonSettings;
-use reinhardt_conf::settings::builder::SettingsBuilder;
+use reinhardt_conf::settings::builder::{MergedSettings, SettingsBuilder};
 use reinhardt_conf::settings::profile::Profile;
 use reinhardt_conf::settings::sources::{DefaultSource, LowPriorityEnvSource, TomlFileSource};
 use reinhardt_utils::staticfiles::StaticFilesConfig;
 use serde_json::Value;
 use std::env;
 #[allow(unused)]
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 #[cfg(feature = "routers")]
@@ -493,26 +493,9 @@ async fn execute_with_registry_and_optional_settings(
 	registry: CommandRegistry,
 	settings: Option<Arc<dyn HasCommonSettings>>,
 ) -> Result<(), Box<dyn std::error::Error>> {
-	// Attempt normal clap parsing first. If it fails (e.g., unknown subcommand),
-	// fall back to checking the registry for a matching custom command.
-	let (command, verbosity) = match Cli::try_parse() {
-		Ok(cli) => (cli.command, cli.verbosity),
-		Err(clap_err) => {
-			// Only intercept "unknown subcommand" errors; re-raise others (--help, --version, etc.)
-			if !is_unknown_subcommand(&clap_err) {
-				clap_err.exit();
-			}
-
-			// Extract the raw arguments and try to find a matching custom command.
-			let raw_args: Vec<String> = env::args().collect();
-			match resolve_custom_command(&raw_args, &registry) {
-				Some((name, args, verbosity)) => (Commands::Custom { name, args }, verbosity),
-				None => {
-					// No custom command matched either; let clap display its error.
-					clap_err.exit();
-				}
-			}
-		}
+	let (command, verbosity) = match resolve_cli_command(env::args_os(), &registry) {
+		Ok(resolved) => resolved,
+		Err(clap_err) => clap_err.exit(),
 	};
 
 	// Only register router for commands that serve HTTP traffic.
@@ -529,6 +512,31 @@ async fn execute_with_registry_and_optional_settings(
 	reinhardt_auth::auto_register_superuser_creator();
 
 	run_command_core(command, verbosity, registry, settings).await
+}
+
+/// Resolve CLI arguments into a built-in or registered custom command.
+///
+/// The resolver is deliberately side-effect free so callers can inspect clap
+/// errors without terminating the current process.
+fn resolve_cli_command<I, T>(
+	args: I,
+	registry: &CommandRegistry,
+) -> Result<(Commands, u8), clap::Error>
+where
+	I: IntoIterator<Item = T>,
+	T: Into<std::ffi::OsString> + Clone,
+{
+	let raw_args: Vec<std::ffi::OsString> = args.into_iter().map(Into::into).collect();
+
+	match Cli::try_parse_from(raw_args.clone()) {
+		Ok(cli) => Ok((cli.command, cli.verbosity)),
+		Err(clap_err) if is_unknown_subcommand(&clap_err) => {
+			resolve_custom_command(&raw_args, registry)
+				.map(|(name, args, verbosity)| (Commands::Custom { name, args }, verbosity))
+				.ok_or(clap_err)
+		}
+		Err(clap_err) => Err(clap_err),
+	}
 }
 
 /// Returns `true` for commands that need URL patterns registered **before**
@@ -807,12 +815,16 @@ const GLOBAL_OPTIONS_WITH_VALUE: &[&str] = &["--verbosity"];
 /// appear before the subcommand (e.g., `-v`) are skipped.  The function also
 /// extracts the verbosity level so it can be forwarded to the custom command.
 fn resolve_custom_command(
-	raw_args: &[String],
+	raw_args: &[std::ffi::OsString],
 	registry: &CommandRegistry,
 ) -> Option<(String, Vec<String>, u8)> {
 	let mut verbosity: u8 = 0;
 
 	// Skip the binary name (argv[0]) and parse leading global flags.
+	let raw_args: Vec<String> = raw_args
+		.iter()
+		.map(|argument| argument.to_string_lossy().into_owned())
+		.collect();
 	let mut iter = raw_args.iter().skip(1).peekable();
 	while let Some(arg) = iter.peek() {
 		if !arg.starts_with('-') {
@@ -855,10 +867,11 @@ async fn execute_custom_command(
 	registry: &CommandRegistry,
 ) -> Result<(), Box<dyn std::error::Error>> {
 	let cmd = registry.get(name).ok_or_else(|| {
+		let registered_commands = registry.list();
 		format!(
 			"Custom command '{}' not found in registry.\nRegistered commands: {}",
 			name,
-			registry.list().join(", ")
+			registered_commands.join(", ")
 		)
 	})?;
 
@@ -1048,15 +1061,20 @@ async fn execute_shell(
 	command: Option<String>,
 	verbosity: u8,
 ) -> Result<(), Box<dyn std::error::Error>> {
+	let ctx = shell_context(command, verbosity);
+	let cmd = ShellCommand;
+	cmd.execute(&ctx).await.map_err(|e| e.into())
+}
+
+fn shell_context(command: Option<String>, verbosity: u8) -> CommandContext {
 	let mut ctx = CommandContext::default();
 	ctx.set_verbosity(verbosity);
 
-	if let Some(cmd_str) = command {
-		ctx.set_option("command".to_string(), cmd_str);
+	if let Some(command) = command {
+		ctx.set_option("command".to_string(), command);
 	}
 
-	let cmd = ShellCommand;
-	cmd.execute(&ctx).await.map_err(|e| e.into())
+	ctx
 }
 
 /// Execute the check command
@@ -1065,6 +1083,12 @@ async fn execute_check(
 	deploy: bool,
 	verbosity: u8,
 ) -> Result<(), Box<dyn std::error::Error>> {
+	let ctx = check_context(app_label, deploy, verbosity);
+	let cmd = CheckCommand;
+	cmd.execute(&ctx).await.map_err(|e| e.into())
+}
+
+fn check_context(app_label: Option<String>, deploy: bool, verbosity: u8) -> CommandContext {
 	let mut ctx = CommandContext::default();
 	ctx.set_verbosity(verbosity);
 
@@ -1076,8 +1100,59 @@ async fn execute_check(
 		ctx.set_option("deploy".to_string(), "true".to_string());
 	}
 
-	let cmd = CheckCommand;
-	cmd.execute(&ctx).await.map_err(|e| e.into())
+	ctx
+}
+
+struct CollectStaticRequest {
+	config: StaticFilesConfig,
+	options: CollectStaticOptions,
+	index_source: Option<PathBuf>,
+}
+
+#[allow(clippy::too_many_arguments)]
+fn collectstatic_request(
+	base_dir: &Path,
+	merged: &MergedSettings,
+	clear: bool,
+	no_input: bool,
+	dry_run: bool,
+	link: bool,
+	ignore: Vec<String>,
+	index: Option<String>,
+	verbosity: u8,
+) -> CollectStaticRequest {
+	let static_root = merged
+		.get::<String>("static_root")
+		.ok()
+		.map(PathBuf::from)
+		.unwrap_or_else(|| base_dir.join("staticfiles"));
+	let config = StaticFilesConfig {
+		static_root,
+		static_url: merged.get_or("static_url", "/static/".to_string()),
+		staticfiles_dirs: merged.get_or("staticfiles_dirs", Vec::new()),
+		media_url: None,
+	};
+	let options = CollectStaticOptions {
+		clear,
+		no_input,
+		dry_run,
+		interactive: !no_input,
+		link,
+		ignore_patterns: ignore,
+		verbosity,
+		enable_hashing: true,
+		fast_compare: false,
+	};
+	let index_source = index.map(PathBuf::from).or_else(|| {
+		let candidate = base_dir.join("index.html");
+		candidate.exists().then_some(candidate)
+	});
+
+	CollectStaticRequest {
+		config,
+		options,
+		index_source,
+	}
 }
 
 /// Execute the collectstatic command
@@ -1161,50 +1236,13 @@ async fn execute_collectstatic(
 		))
 		.build()?;
 
-	// Construct StaticFilesConfig directly from merged settings
-	let static_root = merged
-		.get::<String>("static_root")
-		.ok()
-		.map(PathBuf::from)
-		.unwrap_or_else(|| base_dir.join("staticfiles"));
-	let config = StaticFilesConfig {
-		static_root,
-		static_url: merged.get_or("static_url", "/static/".to_string()),
-		staticfiles_dirs: merged.get_or("staticfiles_dirs", Vec::new()),
-		media_url: None,
-	};
-
-	// Create options
-	let options = CollectStaticOptions {
-		clear,
-		no_input,
-		dry_run,
-		interactive: !no_input,
-		link,
-		ignore_patterns: ignore,
-		verbosity,
-		enable_hashing: true,
-		fast_compare: false,
-	};
-
-	// Resolve index source path
-	// Refs #2869: Auto-detect index.html from project root for collectstatic
-	let index_source = match &index {
-		Some(path) => Some(PathBuf::from(path)),
-		None => {
-			// Auto-detect from project root
-			let candidate = base_dir.join("index.html");
-			if candidate.exists() {
-				Some(candidate)
-			} else {
-				None
-			}
-		}
-	};
+	let request = collectstatic_request(
+		&base_dir, &merged, clear, no_input, dry_run, link, ignore, index, verbosity,
+	);
 
 	// Create and execute command in blocking context
-	let mut cmd = CollectStaticCommand::new(config, options);
-	cmd.set_index_source(index_source);
+	let mut cmd = CollectStaticCommand::new(request.config, request.options);
+	cmd.set_index_source(request.index_source);
 	let result = tokio::task::spawn_blocking(move || {
 		// Call the sync execute() method directly (not the BaseCommand trait method)
 		CollectStaticCommand::execute(&mut cmd)
@@ -1550,7 +1588,232 @@ pub(crate) fn generate_random_secret_key() -> String {
 #[cfg(test)]
 mod tests {
 	use super::*;
+	use async_trait::async_trait;
+	use clap::error::ErrorKind;
 	use rstest::rstest;
+	use std::sync::{Arc, Mutex};
+
+	struct RecordingCommand {
+		name: String,
+		recorded: Arc<Mutex<Option<CommandContext>>>,
+	}
+
+	impl RecordingCommand {
+		fn new(name: impl Into<String>, recorded: Arc<Mutex<Option<CommandContext>>>) -> Self {
+			Self {
+				name: name.into(),
+				recorded,
+			}
+		}
+	}
+
+	#[async_trait]
+	impl BaseCommand for RecordingCommand {
+		fn name(&self) -> &str {
+			&self.name
+		}
+
+		async fn execute(&self, ctx: &CommandContext) -> crate::CommandResult<()> {
+			*self.recorded.lock().expect("recording lock is available") = Some(ctx.clone());
+			Ok(())
+		}
+	}
+
+	#[test]
+	fn resolve_cli_command_preserves_custom_args_and_verbosity() {
+		let recorded = Arc::new(Mutex::new(None));
+		let mut registry = CommandRegistry::new();
+		registry.register(Box::new(RecordingCommand::new("audit", recorded)));
+
+		let (command, verbosity) = resolve_cli_command(
+			["manage", "--verbosity", "3", "audit", "--scope", "users"],
+			&registry,
+		)
+		.expect("custom command resolves");
+
+		assert_eq!(verbosity, 3);
+		assert!(matches!(
+			command,
+			Commands::Custom { ref name, ref args }
+				if name == "audit" && args == &["--scope", "users"]
+		));
+	}
+
+	#[test]
+	fn resolve_cli_command_returns_invalid_subcommand_for_unknown_custom_name() {
+		let error = resolve_cli_command(["manage", "unknown-command"], &CommandRegistry::new())
+			.expect_err("unknown custom command remains a clap error");
+
+		assert_eq!(error.kind(), ErrorKind::InvalidSubcommand);
+	}
+
+	#[test]
+	fn resolve_cli_command_keeps_unknown_options_as_clap_errors() {
+		let recorded = Arc::new(Mutex::new(None));
+		let mut registry = CommandRegistry::new();
+		registry.register(Box::new(RecordingCommand::new("audit", recorded)));
+
+		let error = resolve_cli_command(["manage", "--unknown-option", "audit"], &registry)
+			.expect_err("unknown option does not enter custom-command fallback");
+
+		assert_eq!(error.kind(), ErrorKind::UnknownArgument);
+	}
+
+	#[test]
+	fn shell_context_preserves_command_and_verbosity() {
+		let ctx = shell_context(Some("println!(\"ready\")".to_string()), 2);
+
+		assert_eq!(
+			ctx.option("command").map(String::as_str),
+			Some("println!(\"ready\")")
+		);
+		assert_eq!(ctx.verbosity(), 2);
+	}
+
+	#[test]
+	fn shell_context_omits_command_in_interactive_mode() {
+		let ctx = shell_context(None, 1);
+
+		assert!(!ctx.has_option("command"));
+		assert_eq!(ctx.verbosity(), 1);
+	}
+
+	#[test]
+	fn check_context_maps_label_deploy_and_verbosity() {
+		let ctx = check_context(Some("accounts".to_string()), true, 2);
+
+		assert_eq!(ctx.args, vec!["accounts"]);
+		assert_eq!(ctx.option("deploy").map(String::as_str), Some("true"));
+		assert_eq!(ctx.verbosity(), 2);
+	}
+
+	#[test]
+	fn collectstatic_request_maps_settings_options_and_auto_detected_index() {
+		let base_dir = tempfile::tempdir().expect("temporary project directory");
+		let static_root = base_dir.path().join("public-assets");
+		let source_dir = base_dir.path().join("assets");
+		let index_path = base_dir.path().join("index.html");
+		std::fs::write(&index_path, "<!doctype html>").expect("write index source");
+		let merged = SettingsBuilder::new()
+			.add_source(
+				DefaultSource::new()
+					.with_value(
+						"static_root",
+						Value::String(static_root.to_string_lossy().into_owned()),
+					)
+					.with_value("static_url", Value::String("/assets/".to_string()))
+					.with_value(
+						"staticfiles_dirs",
+						serde_json::json!([source_dir.to_string_lossy()]),
+					),
+			)
+			.build()
+			.expect("settings build");
+
+		let request = collectstatic_request(
+			base_dir.path(),
+			&merged,
+			true,
+			true,
+			true,
+			true,
+			vec!["*.map".to_string(), "tmp/**".to_string()],
+			None,
+			4,
+		);
+
+		assert_eq!(request.config.static_root, static_root);
+		assert_eq!(request.config.static_url, "/assets/");
+		assert_eq!(request.config.staticfiles_dirs, vec![source_dir]);
+		assert!(request.options.clear);
+		assert!(request.options.no_input);
+		assert!(request.options.dry_run);
+		assert!(!request.options.interactive);
+		assert!(request.options.link);
+		assert_eq!(request.options.ignore_patterns, vec!["*.map", "tmp/**"]);
+		assert_eq!(request.options.verbosity, 4);
+		assert!(request.options.enable_hashing);
+		assert!(!request.options.fast_compare);
+		assert_eq!(request.index_source, Some(index_path));
+	}
+
+	#[test]
+	fn collectstatic_request_preserves_explicit_index_path() {
+		let base_dir = tempfile::tempdir().expect("temporary project directory");
+		let merged = SettingsBuilder::new().build().expect("settings build");
+
+		let request = collectstatic_request(
+			base_dir.path(),
+			&merged,
+			false,
+			false,
+			false,
+			false,
+			Vec::new(),
+			Some("frontend/index.html".to_string()),
+			0,
+		);
+
+		assert_eq!(
+			request.index_source,
+			Some(PathBuf::from("frontend/index.html"))
+		);
+	}
+
+	#[tokio::test]
+	async fn run_command_with_registry_forwards_custom_context() {
+		let recorded = Arc::new(Mutex::new(None));
+		let mut registry = CommandRegistry::new();
+		registry.register(Box::new(RecordingCommand::new("audit", recorded.clone())));
+
+		run_command_with_registry(
+			Commands::Custom {
+				name: "audit".to_string(),
+				args: vec!["--scope".to_string(), "users".to_string()],
+			},
+			3,
+			registry,
+		)
+		.await
+		.expect("registered custom command runs");
+
+		let ctx = recorded
+			.lock()
+			.expect("recording lock is available")
+			.clone()
+			.expect("command receives a context");
+		assert_eq!(ctx.args, vec!["--scope", "users"]);
+		assert_eq!(ctx.verbosity(), 3);
+	}
+
+	#[tokio::test]
+	async fn run_command_with_registry_lists_missing_commands_in_sorted_order() {
+		let mut registry = CommandRegistry::new();
+		registry.register(Box::new(RecordingCommand::new(
+			"zebra",
+			Arc::new(Mutex::new(None)),
+		)));
+		registry.register(Box::new(RecordingCommand::new(
+			"alpha",
+			Arc::new(Mutex::new(None)),
+		)));
+
+		let error = run_command_with_registry(
+			Commands::Custom {
+				name: "missing".to_string(),
+				args: Vec::new(),
+			},
+			0,
+			registry,
+		)
+		.await
+		.expect_err("missing custom command is reported");
+
+		assert_eq!(
+			error.to_string(),
+			"Custom command 'missing' not found in registry.\nRegistered commands: alpha, zebra"
+		);
+	}
 
 	/// `Runserver` is intentionally **not** in the pre-dispatch
 	/// `requires_router` list (Refs #4453): the HTTP-route inventory

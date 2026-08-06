@@ -41,3 +41,4 @@ gcp = []
 rstest = { workspace = true }
 serial_test = { workspace = true }
 tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
+wiremock = "0.6"

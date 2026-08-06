@@ -1,6 +1,7 @@
 use super::*;
 use chrono::TimeZone;
 
+mod http;
 mod signing;
 
 pub(super) fn fixed_now() -> DateTime<Utc> {

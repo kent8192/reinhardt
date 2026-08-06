@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.0-alpha.6](https://github.com/kent8192/reinhardt-web/compare/reinhardt-macros@v0.4.0-alpha.5...reinhardt-macros@v0.4.0-alpha.6) - 2026-08-06
+
+### Fixed
+
+- *(release)* break forms facade publish cycle
+
 ## [0.4.0-alpha.4](https://github.com/kent8192/reinhardt-web/compare/reinhardt-macros@v0.4.0-alpha.3...reinhardt-macros@v0.4.0-alpha.4) - 2026-08-04
 
 ### Added

@@ -106,6 +106,15 @@ fn parse_po_entries(content: &str) -> Vec<(String, String)> {
 	entries
 }
 
+fn is_excluded_i18n_path(path: &Path) -> bool {
+	path.components().any(|component| {
+		matches!(
+			component.as_os_str().to_str(),
+			Some("target" | ".git" | "locale")
+		)
+	})
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct TranslatableMessage {
 	msgid: String,
@@ -365,6 +374,7 @@ impl MakeMessagesCommand {
 		for entry in WalkDir::new(base_path)
 			.sort_by_file_name()
 			.into_iter()
+			.filter_entry(|entry| !is_excluded_i18n_path(entry.path()))
 			.filter_map(|e| e.ok())
 		{
 			let path = entry.path();
@@ -381,14 +391,6 @@ impl MakeMessagesCommand {
 					continue;
 				}
 			} else {
-				continue;
-			}
-
-			// Skip certain directories
-			if path.to_string_lossy().contains("/target/")
-				|| path.to_string_lossy().contains("/.git/")
-				|| path.to_string_lossy().contains("/locale/")
-			{
 				continue;
 			}
 
@@ -467,12 +469,18 @@ impl MakeMessagesCommand {
 	}
 
 	fn extract_po_header(content: &str) -> String {
-		if let Some(pos) = content.find("\n\nmsgid ") {
-			return format!("{}\n", content[..pos].trim_end_matches('\n'));
+		if let Some(header_start) = content.find("msgid \"\"") {
+			let next_msgid = content[header_start + "msgid \"\"".len()..]
+				.find("\nmsgid ")
+				.map(|offset| header_start + "msgid \"\"".len() + offset + 1);
+			let header_end = next_msgid.unwrap_or(content.len());
+			return format!("{}\n", content[..header_end].trim_end_matches('\n'));
 		}
 
-		if content.trim_start().starts_with("msgid \"\"") {
-			return format!("{}\n", content.trim_end_matches('\n'));
+		if let Some(pos) = content.find("\nmsgid ")
+			&& pos > 0
+		{
+			return format!("{}\n", content[..pos].trim_end_matches('\n'));
 		}
 
 		String::new()
@@ -883,6 +891,21 @@ mod tests {
 	}
 
 	#[test]
+	fn extraction_exclusion_uses_platform_path_components() {
+		// Arrange and Act
+		let target_path = Path::new("workspace").join("target").join("message.rs");
+		let git_path = Path::new("workspace").join(".git").join("message.rs");
+		let locale_path = Path::new("workspace").join("locale").join("message.rs");
+		let source_path = Path::new("workspace").join("src").join("message.rs");
+
+		// Assert
+		assert!(is_excluded_i18n_path(&target_path));
+		assert!(is_excluded_i18n_path(&git_path));
+		assert!(is_excluded_i18n_path(&locale_path));
+		assert!(!is_excluded_i18n_path(&source_path));
+	}
+
+	#[test]
 	fn po_merge_preserves_header_and_translation_while_escaping_new_entries() {
 		// Arrange
 		let temp_dir = TempDir::new().expect("temporary locale");
@@ -921,6 +944,37 @@ mod tests {
 	}
 
 	#[test]
+	fn po_merge_finds_the_first_non_header_msgid_without_a_blank_separator() {
+		// Arrange
+		let temp_dir = TempDir::new().expect("temporary locale");
+		let po_file = temp_dir.path().join("reinhardt.po");
+		fs::write(
+			&po_file,
+			concat!(
+				"# Translator note\nmsgid \"\"\nmsgstr \"\"\n\"Language: ja\\n\"\n",
+				"msgid \"Hello\"\nmsgstr \"こんにちは\"\n",
+				"msgid \"Stale\"\nmsgstr \"古い\"\n"
+			),
+		)
+		.expect("existing PO file");
+		let ctx = CommandContext::new(vec![]);
+
+		// Act
+		MakeMessagesCommand::update_po_file(&po_file, &[message("Hello"), message("New")], &ctx)
+			.expect("PO merge");
+
+		// Assert
+		assert_eq!(
+			fs::read_to_string(po_file).expect("merged PO file"),
+			concat!(
+				"# Translator note\nmsgid \"\"\nmsgstr \"\"\n\"Language: ja\\n\"\n\n",
+				"msgid \"Hello\"\nmsgstr \"こんにちは\"\n\n",
+				"msgid \"New\"\nmsgstr \"\"\n"
+			)
+		);
+	}
+
+	#[test]
 	fn po_parser_handles_headers_adjacent_entries_and_escaped_fields() {
 		// Arrange
 		let content = concat!(
@@ -928,7 +982,9 @@ mod tests {
 			"msgid \"Hello\"\nmsgstr \"Bonjour\"\n",
 			"msgid \"Untranslated\"\nmsgstr \"\"\n",
 			"msgid \"Quote \\\"and\\\" slash \\\\ tab\\tline\\n\"\n",
-			"msgstr \"Citation \\\"et\\\" barre \\\\ onglet\\tligne\\n\"\n"
+			"msgstr \"Citation \\\"et\\\" barre \\\\ onglet\\tligne\\n\"\n",
+			"msgid \"Multi \"\n\"line\\q\"\n",
+			"msgstr \"Translated \"\n\"value\\q\"\n"
 		);
 
 		// Act
@@ -942,6 +998,10 @@ mod tests {
 				(
 					"Quote \"and\" slash \\ tab\tline\n".to_string(),
 					"Citation \"et\" barre \\ onglet\tligne\n".to_string(),
+				),
+				(
+					"Multi line\\q".to_string(),
+					"Translated value\\q".to_string(),
 				),
 			]
 		);

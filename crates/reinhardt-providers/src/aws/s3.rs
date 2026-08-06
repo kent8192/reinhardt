@@ -241,9 +241,8 @@ impl S3Client {
 			&string_to_sign,
 		);
 
-		url.set_query(Some(&format!(
-			"{canonical_query_string}&X-Amz-Signature={signature}"
-		)));
+		query.insert("X-Amz-Signature".to_string(), signature);
+		url.set_query(Some(&canonical_query(&query)));
 
 		Ok(url.to_string())
 	}

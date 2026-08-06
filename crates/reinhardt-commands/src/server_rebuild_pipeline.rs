@@ -7,8 +7,10 @@
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr, ToSocketAddrs};
 use std::time::{Duration, Instant};
 
-use tokio::process::{Child, Command};
+use tokio::process::Child;
 use tokio::time::{sleep, timeout};
+
+use crate::process::{ProcessRequest, ProcessRunner, SystemProcessRunner};
 
 const READINESS_TIMEOUT: Duration = Duration::from_secs(5);
 const READINESS_INTERVAL: Duration = Duration::from_millis(50);
@@ -55,7 +57,8 @@ impl ServerRebuildPipeline {
 		current_child: &mut Child,
 		respawn: impl FnOnce() -> std::io::Result<Child>,
 	) -> (ServerRebuildOutcome, Option<Child>) {
-		Self::run_inner(bin_name, current_child, respawn, None).await
+		Self::run_inner_with_runner(bin_name, current_child, respawn, None, &SystemProcessRunner)
+			.await
 	}
 
 	/// Run `cargo build --bin <bin_name>`, swap the child, then wait until
@@ -71,22 +74,28 @@ impl ServerRebuildPipeline {
 		address: &str,
 	) -> (ServerRebuildOutcome, Option<Child>) {
 		let readiness = ServerReadinessProbe::new(address);
-		Self::run_inner(bin_name, current_child, respawn, Some(readiness)).await
+		Self::run_inner_with_runner(
+			bin_name,
+			current_child,
+			respawn,
+			Some(readiness),
+			&SystemProcessRunner,
+		)
+		.await
 	}
 
-	async fn run_inner(
+	async fn run_inner_with_runner<R: ProcessRunner>(
 		bin_name: &str,
 		current_child: &mut Child,
 		respawn: impl FnOnce() -> std::io::Result<Child>,
 		readiness: Option<ServerReadinessProbe>,
+		runner: &R,
 	) -> (ServerRebuildOutcome, Option<Child>) {
 		let start = Instant::now();
 
 		// Phase 1: invoke `cargo build --bin <bin_name>`.
-		let output_result = Command::new("cargo")
-			.args(["build", "--bin", bin_name])
-			.output()
-			.await;
+		let output_result =
+			runner.run(&ProcessRequest::new("cargo").args(["build", "--bin", bin_name]));
 
 		let output = match output_result {
 			Ok(o) => o,
@@ -102,7 +111,7 @@ impl ServerRebuildPipeline {
 			}
 		};
 
-		if !output.status.success() {
+		if !output.success {
 			let duration = start.elapsed();
 			let stderr = String::from_utf8_lossy(&output.stderr);
 			let tail = Self::tail_lines(&stderr, 20);
@@ -209,11 +218,25 @@ struct ServerReadinessProbe {
 
 impl ServerReadinessProbe {
 	fn new(address: &str) -> Self {
+		Self::with_timing(
+			address,
+			READINESS_TIMEOUT,
+			READINESS_INTERVAL,
+			CONNECT_TIMEOUT,
+		)
+	}
+
+	fn with_timing(
+		address: &str,
+		timeout: Duration,
+		interval: Duration,
+		connect_timeout: Duration,
+	) -> Self {
 		Self {
 			address: address.to_string(),
-			timeout: READINESS_TIMEOUT,
-			interval: READINESS_INTERVAL,
-			connect_timeout: CONNECT_TIMEOUT,
+			timeout,
+			interval,
+			connect_timeout,
 		}
 	}
 
@@ -288,7 +311,158 @@ fn format_duration(d: Duration) -> String {
 
 #[cfg(test)]
 mod tests {
+	use crate::process::{FakeProcessRunner, ProcessOutcome};
+
 	use super::*;
+
+	fn spawn_long_running_test_child() -> Child {
+		tokio::process::Command::new("sh")
+			.args(["-c", "exec sleep 60"])
+			.kill_on_drop(true)
+			.spawn()
+			.expect("spawn long-running test child")
+	}
+
+	#[tokio::test]
+	async fn build_failure_keeps_current_child_and_returns_stderr_tail() {
+		// Arrange
+		let runner = FakeProcessRunner::new([Ok(ProcessOutcome::failure(
+			"exit status: 101",
+			(0..25)
+				.map(|line| format!("error-{line}"))
+				.collect::<Vec<_>>()
+				.join("\n")
+				.into_bytes(),
+		))]);
+		let mut child = spawn_long_running_test_child();
+
+		// Act
+		let (outcome, replacement) = ServerRebuildPipeline::run_inner_with_runner(
+			"manage",
+			&mut child,
+			|| panic!("respawn must not run after build failure"),
+			None,
+			&runner,
+		)
+		.await;
+
+		// Assert
+		assert!(matches!(outcome, ServerRebuildOutcome::BuildFailed { .. }));
+		assert!(replacement.is_none());
+		assert!(child.try_wait().expect("read child state").is_none());
+		let ServerRebuildOutcome::BuildFailed { stderr_tail, .. } = outcome else {
+			unreachable!("outcome was asserted as a build failure")
+		};
+		assert_eq!(
+			stderr_tail,
+			(5..25)
+				.map(|line| format!("error-{line}"))
+				.collect::<Vec<_>>()
+				.join("\n")
+		);
+
+		// Cleanup
+		child.kill().await.expect("kill retained child");
+		child.wait().await.expect("reap retained child");
+	}
+
+	#[tokio::test]
+	async fn build_spawn_failure_keeps_current_child_and_skips_respawn() {
+		// Arrange
+		let runner = FakeProcessRunner::new([Err(std::io::Error::other("cargo unavailable"))]);
+		let mut child = spawn_long_running_test_child();
+
+		// Act
+		let (outcome, replacement) = ServerRebuildPipeline::run_inner_with_runner(
+			"manage",
+			&mut child,
+			|| panic!("respawn must not run after cargo spawn failure"),
+			None,
+			&runner,
+		)
+		.await;
+
+		// Assert
+		assert!(matches!(
+			outcome,
+			ServerRebuildOutcome::SpawnFailed { ref message, .. }
+				if message == "failed to invoke cargo build: cargo unavailable"
+		));
+		assert!(replacement.is_none());
+		assert!(child.try_wait().expect("read child state").is_none());
+
+		// Cleanup
+		child.kill().await.expect("kill retained child");
+		child.wait().await.expect("reap retained child");
+	}
+
+	#[tokio::test]
+	async fn successful_build_respawn_failure_reaps_current_child() {
+		// Arrange
+		let runner = FakeProcessRunner::new([Ok(ProcessOutcome::success(Vec::new()))]);
+		let mut child = spawn_long_running_test_child();
+
+		// Act
+		let (outcome, replacement) = ServerRebuildPipeline::run_inner_with_runner(
+			"manage",
+			&mut child,
+			|| Err(std::io::Error::other("new server unavailable")),
+			None,
+			&runner,
+		)
+		.await;
+
+		// Assert
+		assert!(matches!(
+			outcome,
+			ServerRebuildOutcome::SpawnFailed { ref message, .. }
+				if message == "failed to respawn server: new server unavailable"
+		));
+		assert!(replacement.is_none());
+		assert!(child.try_wait().expect("read child state").is_some());
+	}
+
+	#[tokio::test]
+	async fn successful_build_readiness_timeout_returns_replacement_child() {
+		// Arrange
+		let runner = FakeProcessRunner::new([Ok(ProcessOutcome::success(Vec::new()))]);
+		let mut child = spawn_long_running_test_child();
+		let readiness = ServerReadinessProbe::with_timing(
+			"127.0.0.1:0",
+			Duration::from_millis(20),
+			Duration::from_millis(1),
+			Duration::from_millis(2),
+		);
+
+		// Act
+		let (outcome, replacement) = ServerRebuildPipeline::run_inner_with_runner(
+			"manage",
+			&mut child,
+			|| Ok(spawn_long_running_test_child()),
+			Some(readiness),
+			&runner,
+		)
+		.await;
+
+		// Assert
+		assert!(matches!(
+			outcome,
+			ServerRebuildOutcome::SpawnFailed { ref message, .. }
+				if message.starts_with("server did not become reachable:")
+		));
+		assert!(child.try_wait().expect("read child state").is_some());
+		let mut replacement = replacement.expect("readiness failure retains replacement ownership");
+		assert!(
+			replacement
+				.try_wait()
+				.expect("read replacement state")
+				.is_none()
+		);
+
+		// Cleanup
+		replacement.kill().await.expect("kill replacement child");
+		replacement.wait().await.expect("reap replacement child");
+	}
 
 	#[test]
 	fn format_log_line_ok_includes_restart_and_duration() {

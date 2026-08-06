@@ -466,6 +466,36 @@ mod tests {
 	}
 
 	#[test]
+	fn noninteractive_identity_preserves_valid_username_and_email() {
+		// Arrange
+		let username = Some("admin".to_string());
+		let email = Some("admin@example.com".to_string());
+
+		// Act
+		let identity = resolve_noninteractive_identity(username, email)
+			.expect("valid non-interactive identity is accepted");
+
+		// Assert
+		assert_eq!(
+			identity,
+			("admin".to_string(), "admin@example.com".to_string()),
+		);
+	}
+
+	#[test]
+	fn no_password_takes_precedence_over_an_empty_environment_value() {
+		// Arrange
+		let environment_password = Some("");
+
+		// Act
+		let password = resolve_noninteractive_password(true, environment_password)
+			.expect("an empty environment value is treated as absent");
+
+		// Assert
+		assert_eq!(password, NoninteractivePassword::None);
+	}
+
+	#[test]
 	fn missing_creator_returns_actionable_error_without_database_access() {
 		// Arrange
 		let creator = None;

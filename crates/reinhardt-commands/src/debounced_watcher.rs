@@ -9,6 +9,7 @@
 //! crate (`builtin::Runserver::run_with_autoreload`).
 
 use std::collections::BTreeSet;
+use std::future::Future;
 use std::path::PathBuf;
 use std::time::Duration;
 
@@ -111,6 +112,88 @@ pub struct RebuildTargets {
 impl RebuildTargets {
 	fn has_work(self) -> bool {
 		self.server || self.wasm
+	}
+}
+
+/// Observable result of dispatching one debounced rebuild batch.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum RebuildDispatchOutcome {
+	/// No selected pipeline needed work.
+	NoTargets,
+	/// A static Pages patch was delivered without starting a rebuild pipeline.
+	StaticPatchSent,
+	/// The selected pipelines completed and may have delivered a full reload.
+	Rebuilt {
+		/// WASM pipeline result when the target was selected.
+		wasm_succeeded: Option<bool>,
+		/// Server pipeline result when the target was selected.
+		server_succeeded: Option<bool>,
+		/// Whether a browser received the full reload message.
+		browser_reloaded: bool,
+	},
+}
+
+async fn dispatch_rebuild_with<StaticPatch, BrowserReload, WasmFuture, ServerFuture>(
+	targets: RebuildTargets,
+	paths: &[PathBuf],
+	mut static_patch: StaticPatch,
+	rebuild_wasm: WasmFuture,
+	rebuild_server: ServerFuture,
+	mut browser_reload: BrowserReload,
+) -> RebuildDispatchOutcome
+where
+	StaticPatch: FnMut(&[PathBuf], RebuildTargets) -> bool,
+	BrowserReload: FnMut(&str) -> bool,
+	WasmFuture: Future<Output = bool>,
+	ServerFuture: Future<Output = bool>,
+{
+	if !targets.has_work() {
+		return RebuildDispatchOutcome::NoTargets;
+	}
+	if static_patch(paths, targets) {
+		return RebuildDispatchOutcome::StaticPatchSent;
+	}
+
+	let (wasm_succeeded, server_succeeded, browser_reloaded) = match (targets.wasm, targets.server)
+	{
+		(true, true) => {
+			let (wasm_succeeded, server_succeeded) = tokio::join!(rebuild_wasm, rebuild_server);
+			let browser_reloaded = if wasm_succeeded && server_succeeded {
+				browser_reload("Rust rebuild completed successfully")
+			} else {
+				false
+			};
+			(
+				Some(wasm_succeeded),
+				Some(server_succeeded),
+				browser_reloaded,
+			)
+		}
+		(true, false) => {
+			let wasm_succeeded = rebuild_wasm.await;
+			let browser_reloaded = if wasm_succeeded {
+				browser_reload("WASM rebuild completed successfully")
+			} else {
+				false
+			};
+			(Some(wasm_succeeded), None, browser_reloaded)
+		}
+		(false, true) => {
+			let server_succeeded = rebuild_server.await;
+			let browser_reloaded = if server_succeeded {
+				browser_reload("Server rebuild completed successfully")
+			} else {
+				false
+			};
+			(None, Some(server_succeeded), browser_reloaded)
+		}
+		(false, false) => unreachable!("has_work excludes an empty rebuild target"),
+	};
+
+	RebuildDispatchOutcome::Rebuilt {
+		wasm_succeeded,
+		server_succeeded,
+		browser_reloaded,
 	}
 }
 
@@ -231,20 +314,6 @@ fn wasm_rebuild_succeeded(outcome: &crate::wasm_rebuild_pipeline::WasmRebuildOut
 	)
 }
 
-#[cfg(feature = "pages")]
-fn browser_reload_reason(
-	targets: RebuildTargets,
-	wasm_succeeded: bool,
-	server_ready: bool,
-) -> Option<&'static str> {
-	match (targets.server, targets.wasm, wasm_succeeded, server_ready) {
-		(true, true, true, true) => Some("Rust rebuild completed successfully"),
-		(false, true, true, _) => Some("WASM rebuild completed successfully"),
-		(true, false, _, true) => Some("Server rebuild completed successfully"),
-		_ => None,
-	}
-}
-
 fn server_rebuild_succeeded(
 	outcome: &crate::server_rebuild_pipeline::ServerRebuildOutcome,
 ) -> bool {
@@ -272,16 +341,18 @@ async fn wait_for_server_ready(address: Option<&str>) -> bool {
 }
 
 #[cfg(feature = "pages")]
-fn notify_browser_reload(hmr_tx: Option<&broadcast::Sender<String>>, reason: &str) {
+
+fn notify_browser_reload(hmr_tx: Option<&broadcast::Sender<String>>, reason: &str) -> bool {
 	let Some(tx) = hmr_tx else {
-		return;
+		return false;
 	};
 	let msg = reinhardt_pages::hmr::HmrMessage::FullReload {
 		reason: reason.to_string(),
 	};
 	if let Ok(json) = msg.to_json() {
-		let _ = tx.send(json);
+		return tx.send(json).is_ok();
 	}
+	false
 }
 
 #[cfg(feature = "pages")]
@@ -325,20 +396,23 @@ pub async fn run_rebuild_for_paths(
 		paths.len()
 	));
 	let targets = rebuild_targets_for_paths(&paths, config);
-	if !targets.has_work() {
-		ctx.info("[hot-reload] no rebuild target matched; waiting for next change");
-		return;
-	}
-	#[cfg(feature = "pages")]
-	if notify_static_page_patch(config.hmr_tx.as_ref(), &paths, targets) {
-		ctx.info("[hot-reload] static page patch sent without rebuilding WASM");
-		return;
-	}
-
-	let wasm_fut = async {
-		#[cfg(feature = "pages")]
-		{
-			if targets.wasm {
+	let outcome = dispatch_rebuild_with(
+		targets,
+		&paths,
+		|paths, targets| {
+			#[cfg(feature = "pages")]
+			{
+				notify_static_page_patch(config.hmr_tx.as_ref(), paths, targets)
+			}
+			#[cfg(not(feature = "pages"))]
+			{
+				let _ = (paths, targets);
+				false
+			}
+		},
+		async {
+			#[cfg(feature = "pages")]
+			{
 				let outcome = crate::wasm_rebuild_pipeline::WasmRebuildPipeline::run(ctx).await;
 				if let Some(line) =
 					crate::wasm_rebuild_pipeline::WasmRebuildPipeline::format_log_line(&outcome)
@@ -351,71 +425,53 @@ pub async fn run_rebuild_for_paths(
 						eprintln!("[hot-reload] watching for next change...");
 					}
 				}
-				return wasm_rebuild_succeeded(&outcome);
+				wasm_rebuild_succeeded(&outcome)
 			}
-		}
-		true
-	};
+			#[cfg(not(feature = "pages"))]
+			{
+				true
+			}
+		},
+		async {
+			let (server_outcome, new_child) =
+				crate::server_rebuild_pipeline::ServerRebuildPipeline::run_with_readiness(
+					&config.bin_name,
+					current_child,
+					respawn,
+					&config.address,
+				)
+				.await;
+			let server_ok = server_rebuild_succeeded(&server_outcome);
+			if let Some(child) = new_child {
+				*current_child = child;
+			}
+			if server_ok {
+				wait_for_server_ready(config.server_address.as_deref()).await
+			} else {
+				false
+			}
+		},
+		|reason| {
+			#[cfg(feature = "pages")]
+			{
+				notify_browser_reload(config.hmr_tx.as_ref(), reason)
+			}
+			#[cfg(not(feature = "pages"))]
+			{
+				let _ = reason;
+				false
+			}
+		},
+	)
+	.await;
 
-	if targets.server && targets.wasm {
-		// Spec §4: run wasm + server pipelines in parallel. They touch
-		// disjoint cargo target directories (`wasm32-unknown-unknown` vs
-		// `debug`) and the wasm pipeline does not interact with the running
-		// child process, so concurrent execution is safe.
-		let server_fut = crate::server_rebuild_pipeline::ServerRebuildPipeline::run_with_readiness(
-			&config.bin_name,
-			current_child,
-			respawn,
-			&config.address,
-		);
-		let (wasm_ok, (server_outcome, new_child)) = tokio::join!(wasm_fut, server_fut);
-		let server_ok = server_rebuild_succeeded(&server_outcome);
-		if let Some(child) = new_child {
-			*current_child = child;
-		}
-		let server_ready = if server_ok {
-			wait_for_server_ready(config.server_address.as_deref()).await
-		} else {
-			false
-		};
-		#[cfg(feature = "pages")]
-		if let Some(reason) = browser_reload_reason(targets, wasm_ok, server_ready) {
-			notify_browser_reload(config.hmr_tx.as_ref(), reason);
-		}
-		#[cfg(not(feature = "pages"))]
-		let _ = (wasm_ok, server_ready);
-	} else if targets.wasm {
-		let wasm_ok = wasm_fut.await;
-		#[cfg(feature = "pages")]
-		if let Some(reason) = browser_reload_reason(targets, wasm_ok, false) {
-			notify_browser_reload(config.hmr_tx.as_ref(), reason);
-		}
-		#[cfg(not(feature = "pages"))]
-		let _ = wasm_ok;
-	} else {
-		let (server_outcome, new_child) =
-			crate::server_rebuild_pipeline::ServerRebuildPipeline::run_with_readiness(
-				&config.bin_name,
-				current_child,
-				respawn,
-				&config.address,
-			)
-			.await;
-		let server_ok = server_rebuild_succeeded(&server_outcome);
-		if let Some(child) = new_child {
-			*current_child = child;
-		}
-		let server_ready = if server_ok {
-			wait_for_server_ready(config.server_address.as_deref()).await
-		} else {
-			false
-		};
-		#[cfg(feature = "pages")]
-		if let Some(reason) = browser_reload_reason(targets, false, server_ready) {
-			notify_browser_reload(config.hmr_tx.as_ref(), reason);
-		}
-		#[cfg(not(feature = "pages"))]
-		let _ = server_ready;
+	if matches!(outcome, RebuildDispatchOutcome::NoTargets) {
+		ctx.info("[hot-reload] no rebuild target matched; waiting for next change");
+		return;
+	}
+	if matches!(outcome, RebuildDispatchOutcome::StaticPatchSent) {
+		ctx.info("[hot-reload] static page patch sent without rebuilding WASM");
+		return;
 	}
 	// Pipeline failures are recorded as log lines and never propagate as Err;
 	// the caller's loop continues unconditionally.
@@ -819,50 +875,207 @@ mod tests {
 	}
 
 	#[cfg(feature = "pages")]
-	#[rstest]
-	#[case::both_pipelines_succeed(
-		RebuildTargets { server: true, wasm: true },
-		true,
-		true,
-		Some("Rust rebuild completed successfully")
-	)]
-	#[case::wasm_failure_blocks_combined_reload(
-		RebuildTargets { server: true, wasm: true },
-		false,
-		true,
-		None
-	)]
-	#[case::server_failure_blocks_combined_reload(
-		RebuildTargets { server: true, wasm: true },
-		true,
-		false,
-		None
-	)]
-	#[case::wasm_only_success(
-		RebuildTargets { server: false, wasm: true },
-		true,
-		false,
-		Some("WASM rebuild completed successfully")
-	)]
-	#[case::server_only_success(
-		RebuildTargets { server: true, wasm: false },
-		false,
-		true,
-		Some("Server rebuild completed successfully")
-	)]
-	fn browser_reload_requires_each_selected_pipeline(
-		#[case] targets: RebuildTargets,
-		#[case] wasm_succeeded: bool,
-		#[case] server_ready: bool,
-		#[case] expected: Option<&str>,
-	) {
+	#[tokio::test]
+	async fn dispatcher_runs_server_when_wasm_fails_without_reloading_browser() {
 		// Arrange
+		let calls = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+		let static_calls = calls.clone();
+		let wasm_calls = calls.clone();
+		let server_calls = calls.clone();
+		let reload_calls = calls.clone();
 
 		// Act
-		let actual = browser_reload_reason(targets, wasm_succeeded, server_ready);
+		let outcome = dispatch_rebuild_with(
+			RebuildTargets {
+				server: true,
+				wasm: true,
+			},
+			&[PathBuf::from("/project/src/lib.rs")],
+			move |_, _| {
+				static_calls
+					.lock()
+					.expect("call lock is available")
+					.push("static");
+				false
+			},
+			{
+				let calls = wasm_calls.clone();
+				async move {
+					calls.lock().expect("call lock is available").push("wasm");
+					false
+				}
+			},
+			{
+				let calls = server_calls.clone();
+				async move {
+					calls.lock().expect("call lock is available").push("server");
+					true
+				}
+			},
+			move |_| {
+				reload_calls
+					.lock()
+					.expect("call lock is available")
+					.push("reload");
+				true
+			},
+		)
+		.await;
 
 		// Assert
-		assert_eq!(actual, expected);
+		assert_eq!(
+			outcome,
+			RebuildDispatchOutcome::Rebuilt {
+				wasm_succeeded: Some(false),
+				server_succeeded: Some(true),
+				browser_reloaded: false,
+			},
+		);
+		assert_eq!(
+			*calls.lock().expect("call lock is available"),
+			vec!["static", "wasm", "server"],
+		);
+	}
+
+	#[cfg(feature = "pages")]
+	#[tokio::test]
+	async fn dispatcher_keeps_failure_local_and_returns_server_failure_outcome() {
+		// Arrange
+		let calls = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+		let static_calls = calls.clone();
+		let server_calls = calls.clone();
+
+		// Act
+		let outcome = dispatch_rebuild_with(
+			RebuildTargets {
+				server: true,
+				wasm: false,
+			},
+			&[PathBuf::from("/project/src/bin/manage.rs")],
+			move |_, _| {
+				static_calls
+					.lock()
+					.expect("call lock is available")
+					.push("static");
+				false
+			},
+			async { unreachable!("server-only target must not start WASM") },
+			{
+				let calls = server_calls.clone();
+				async move {
+					calls.lock().expect("call lock is available").push("server");
+					false
+				}
+			},
+			|_| unreachable!("failed server rebuild must not reload the browser"),
+		)
+		.await;
+
+		// Assert
+		assert_eq!(
+			outcome,
+			RebuildDispatchOutcome::Rebuilt {
+				wasm_succeeded: None,
+				server_succeeded: Some(false),
+				browser_reloaded: false,
+			},
+		);
+		assert_eq!(
+			*calls.lock().expect("call lock is available"),
+			vec!["static", "server"],
+		);
+	}
+
+	#[cfg(feature = "pages")]
+	#[tokio::test]
+	async fn dispatcher_gives_successful_static_patch_precedence_over_pipelines() {
+		// Arrange
+		let calls = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+		let static_calls = calls.clone();
+
+		// Act
+		let outcome = dispatch_rebuild_with(
+			RebuildTargets {
+				server: false,
+				wasm: true,
+			},
+			&[PathBuf::from("/project/src/client.rs")],
+			move |_, _| {
+				static_calls
+					.lock()
+					.expect("call lock is available")
+					.push("static");
+				true
+			},
+			async { unreachable!("successful static patch must skip WASM rebuild") },
+			async { unreachable!("successful static patch must skip server rebuild") },
+			|_| unreachable!("static patch must not send a full browser reload"),
+		)
+		.await;
+
+		// Assert
+		assert_eq!(outcome, RebuildDispatchOutcome::StaticPatchSent);
+		assert_eq!(
+			*calls.lock().expect("call lock is available"),
+			vec!["static"],
+		);
+	}
+
+	#[cfg(feature = "pages")]
+	#[tokio::test]
+	async fn dispatcher_records_no_browser_delivery_when_hmr_sender_is_absent() {
+		// Arrange
+		let calls = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+		let static_calls = calls.clone();
+		let wasm_calls = calls.clone();
+		let reload_calls = calls.clone();
+
+		// Act
+		let outcome = dispatch_rebuild_with(
+			RebuildTargets {
+				server: false,
+				wasm: true,
+			},
+			&[PathBuf::from("/project/src/client.rs")],
+			move |_, _| {
+				static_calls
+					.lock()
+					.expect("call lock is available")
+					.push("static");
+				false
+			},
+			{
+				let calls = wasm_calls.clone();
+				async move {
+					calls.lock().expect("call lock is available").push("wasm");
+					true
+				}
+			},
+			async { unreachable!("WASM-only target must not restart the server") },
+			move |reason| {
+				assert_eq!(reason, "WASM rebuild completed successfully");
+				reload_calls
+					.lock()
+					.expect("call lock is available")
+					.push("reload");
+				false
+			},
+		)
+		.await;
+
+		// Assert
+		assert_eq!(
+			outcome,
+			RebuildDispatchOutcome::Rebuilt {
+				wasm_succeeded: Some(true),
+				server_succeeded: None,
+				browser_reloaded: false,
+			},
+		);
+		assert_eq!(
+			*calls.lock().expect("call lock is available"),
+			vec!["static", "wasm", "reload"],
+		);
 	}
 
 	#[cfg(feature = "pages")]

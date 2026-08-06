@@ -1000,6 +1000,35 @@ enabled = false
 	}
 
 	#[tokio::test]
+	async fn test_plugin_list_reports_malformed_manifest_with_load_context() {
+		// Arrange
+		let temp_dir = TempDir::new().expect("temporary project is created");
+		std::fs::write(temp_dir.path().join(MANIFEST_FILENAME), "[dentdelion\n")
+			.expect("malformed manifest fixture is written");
+		let mut ctx = CommandContext::default();
+		ctx.set_option(
+			"project-root".to_string(),
+			temp_dir.path().display().to_string(),
+		);
+		let command = PluginListCommand;
+
+		// Act
+		let error = command
+			.execute(&ctx)
+			.await
+			.expect_err("malformed manifests must not be treated as empty");
+
+		// Assert
+		let CommandError::ExecutionError(message) = error else {
+			panic!("malformed manifest returned the wrong error variant");
+		};
+		assert_eq!(
+			message,
+			"Failed to load manifest: failed to parse manifest: TOML parse error at line 1, column 12\n  |\n1 | [dentdelion\n  |            ^\nunclosed table, expected `]`\n"
+		);
+	}
+
+	#[tokio::test]
 	async fn test_plugin_list_with_plugins() {
 		let temp_dir = TempDir::new().unwrap();
 		create_test_project(temp_dir.path());

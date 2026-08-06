@@ -2,7 +2,7 @@
 
 use crate::{BaseCommand, CommandContext, CommandError, CommandResult};
 use async_trait::async_trait;
-use reinhardt_mail::backends::EmailBackend;
+use reinhardt_mail::backends::{EmailBackend, MemoryBackend};
 use reinhardt_mail::message::EmailMessage;
 
 fn test_email_message(recipients: &[String]) -> CommandResult<EmailMessage> {
@@ -34,27 +34,18 @@ impl SendTestEmailCommand {
 	pub fn new() -> Self {
 		Self
 	}
-}
 
-impl Default for SendTestEmailCommand {
-	fn default() -> Self {
-		Self::new()
-	}
-}
+	async fn execute_with_memory_backend(
+		&self,
+		ctx: &CommandContext,
+		memory_backend: &MemoryBackend,
+	) -> CommandResult<()> {
+		use reinhardt_mail::backends::{ConsoleBackend, FileBackend};
 
-#[async_trait]
-impl BaseCommand for SendTestEmailCommand {
-	fn name(&self) -> &str {
-		"sendtestemail"
-	}
-
-	async fn execute(&self, ctx: &CommandContext) -> CommandResult<()> {
-		use reinhardt_mail::backends::{ConsoleBackend, FileBackend, MemoryBackend};
-
-		// Collect recipients from command arguments
+		// Collect recipients from command arguments.
 		let mut recipients: Vec<String> = ctx.args.clone();
 
-		// Check for --managers option
+		// Check for --managers option.
 		let use_managers = ctx.has_option("managers");
 		if use_managers {
 			if let Some(settings) = &ctx.settings {
@@ -68,7 +59,7 @@ impl BaseCommand for SendTestEmailCommand {
 			}
 		}
 
-		// Check for --admins option
+		// Check for --admins option.
 		let use_admins = ctx.has_option("admins");
 		if use_admins {
 			if let Some(settings) = &ctx.settings {
@@ -82,7 +73,7 @@ impl BaseCommand for SendTestEmailCommand {
 			}
 		}
 
-		// Validate that we have at least one recipient
+		// Validate that we have at least one recipient.
 		if recipients.is_empty() {
 			return Err(CommandError::InvalidArguments(
 				"You must specify some email recipients, or pass the --managers or --admin options"
@@ -90,25 +81,22 @@ impl BaseCommand for SendTestEmailCommand {
 			));
 		}
 
-		// Get backend option (defaults to console)
+		// Get backend option (defaults to console).
 		let backend_name = ctx
 			.option("backend")
 			.map(|s| s.as_str())
 			.unwrap_or("console");
 
-		// Check verbose option
+		// Check verbose option.
 		let verbose = ctx.has_option("verbose");
 
-		// Select backend and send message
+		// Select backend and send message.
 		let sent_count = match backend_name {
 			"console" => {
 				let backend = ConsoleBackend;
 				send_test_email_with_backend(&backend, &recipients).await?
 			}
-			"memory" => {
-				let backend = MemoryBackend::new();
-				send_test_email_with_backend(&backend, &recipients).await?
-			}
+			"memory" => send_test_email_with_backend(memory_backend, &recipients).await?,
 			"file" => {
 				let backend = FileBackend::new("/tmp/reinhardt_emails");
 				send_test_email_with_backend(&backend, &recipients).await?
@@ -121,7 +109,7 @@ impl BaseCommand for SendTestEmailCommand {
 			}
 		};
 
-		// Output results
+		// Output results.
 		if verbose {
 			ctx.verbose(&format!(
 				"Successfully sent {} test email(s) to {} recipient(s) using {} backend",
@@ -143,10 +131,27 @@ impl BaseCommand for SendTestEmailCommand {
 	}
 }
 
+impl Default for SendTestEmailCommand {
+	fn default() -> Self {
+		Self::new()
+	}
+}
+
+#[async_trait]
+impl BaseCommand for SendTestEmailCommand {
+	fn name(&self) -> &str {
+		"sendtestemail"
+	}
+
+	async fn execute(&self, ctx: &CommandContext) -> CommandResult<()> {
+		let memory_backend = MemoryBackend::new();
+		self.execute_with_memory_backend(ctx, &memory_backend).await
+	}
+}
+
 #[cfg(test)]
 mod tests {
 	use super::*;
-	use reinhardt_mail::backends::MemoryBackend;
 
 	#[tokio::test]
 	async fn send_with_memory_backend_preserves_recipients_and_subject() {
@@ -158,13 +163,16 @@ mod tests {
 		];
 
 		// Act
-		let sent = send_test_email_with_backend(&backend, &recipients)
+		let mut context = CommandContext::new(recipients.clone());
+		context.set_option("backend".to_string(), "memory".to_string());
+		let command = SendTestEmailCommand::new();
+		command
+			.execute_with_memory_backend(&context, &backend)
 			.await
-			.expect("memory backend accepts the test email");
+			.expect("memory backend selection accepts the test email");
 		let messages = backend.get_messages().await;
 
 		// Assert
-		assert_eq!(sent, 1);
 		assert_eq!(messages.len(), 1);
 		assert_eq!(messages[0].to(), recipients);
 		assert_eq!(messages[0].subject(), "Test email from Reinhardt");

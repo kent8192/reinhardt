@@ -138,3 +138,84 @@ impl PoolOptions {
 		self
 	}
 }
+
+#[cfg(test)]
+mod tests {
+	use super::*;
+	use std::time::Duration;
+
+	#[test]
+	fn default_config_preserves_all_pool_limits() {
+		let config = PoolConfig::default();
+
+		assert_eq!(config.max_size, 10);
+		assert_eq!(config.min_idle, None);
+		assert_eq!(config.max_lifetime, Some(Duration::from_secs(1800)));
+		assert_eq!(config.idle_timeout, Some(Duration::from_secs(600)));
+		assert_eq!(config.connect_timeout, Duration::from_secs(30));
+		assert_eq!(config.max_connections, 10);
+		assert_eq!(config.min_connections, 1);
+		assert_eq!(config.acquire_timeout, Duration::from_secs(30));
+		assert!(!config.test_before_acquire);
+	}
+
+	#[test]
+	fn builder_chain_updates_every_supported_setting() {
+		let config = PoolConfig::new()
+			.with_max_connections(12)
+			.with_min_connections(4)
+			.with_connection_timeout(Duration::from_secs(15))
+			.with_connect_timeout(Duration::from_secs(20))
+			.with_acquire_timeout(Duration::from_secs(25))
+			.with_max_lifetime(Some(Duration::from_secs(3600)))
+			.with_idle_timeout(Some(Duration::from_secs(900)))
+			.with_test_before_acquire(true);
+
+		assert_eq!(config.max_size, 10);
+		assert_eq!(config.min_idle, None);
+		assert_eq!(config.max_lifetime, Some(Duration::from_secs(3600)));
+		assert_eq!(config.idle_timeout, Some(Duration::from_secs(900)));
+		assert_eq!(config.connect_timeout, Duration::from_secs(20));
+		assert_eq!(config.max_connections, 12);
+		assert_eq!(config.min_connections, 4);
+		assert_eq!(config.acquire_timeout, Duration::from_secs(25));
+		assert!(config.test_before_acquire);
+	}
+
+	#[test]
+	fn validation_accepts_equal_connection_bounds() {
+		let config = PoolConfig::new()
+			.with_max_connections(5)
+			.with_min_connections(5);
+
+		assert_eq!(config.validate(), Ok(()));
+	}
+
+	#[test]
+	fn validation_rejects_minimum_above_maximum() {
+		let config = PoolConfig::new()
+			.with_max_connections(4)
+			.with_min_connections(5);
+
+		assert_eq!(
+			config.validate(),
+			Err("max_connections must be >= min_connections".to_string())
+		);
+	}
+
+	#[test]
+	fn options_builder_preserves_all_other_config_defaults() {
+		let options = PoolOptions::new().max_size(20).min_idle(3);
+		let config = options.config;
+
+		assert_eq!(config.max_size, 20);
+		assert_eq!(config.min_idle, Some(3));
+		assert_eq!(config.max_lifetime, Some(Duration::from_secs(1800)));
+		assert_eq!(config.idle_timeout, Some(Duration::from_secs(600)));
+		assert_eq!(config.connect_timeout, Duration::from_secs(30));
+		assert_eq!(config.max_connections, 10);
+		assert_eq!(config.min_connections, 1);
+		assert_eq!(config.acquire_timeout, Duration::from_secs(30));
+		assert!(!config.test_before_acquire);
+	}
+}

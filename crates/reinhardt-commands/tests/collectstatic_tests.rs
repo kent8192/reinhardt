@@ -4,8 +4,9 @@
 //! These tests verify static file collection functionality.
 
 use reinhardt_commands::{CollectStaticCommand, CollectStaticOptions, CollectStaticStats};
-use reinhardt_utils::staticfiles::StaticFilesConfig;
+use reinhardt_utils::staticfiles::{StaticFilesConfig, StaticFilesFinder};
 use rstest::*;
+use std::collections::HashSet;
 use std::fs;
 use std::path::PathBuf;
 use tempfile::TempDir;
@@ -32,6 +33,44 @@ fn count_files_recursive(dir: &std::path::Path) -> usize {
 		}
 	}
 	count
+}
+
+/// Count the unique visible and hidden files that collectstatic discovers from
+/// the manually configured directory and registered application directories.
+fn expected_collected_file_counts(source_dir: &std::path::Path) -> (usize, usize) {
+	let mut directories = vec![source_dir.to_path_buf()];
+	for config in reinhardt_apps::get_app_static_files() {
+		let directory = PathBuf::from(config.static_dir);
+		if !directories.contains(&directory) {
+			directories.push(directory);
+		}
+	}
+
+	let mut seen = HashSet::new();
+	let mut visible_count = 0;
+	let mut hidden_count = 0;
+	for relative_path in StaticFilesFinder::new(directories)
+		.find_all()
+		.into_iter()
+		.rev()
+	{
+		if !seen.insert(relative_path.clone()) {
+			continue;
+		}
+
+		let visible = std::path::Path::new(&relative_path)
+			.file_name()
+			.and_then(|name| name.to_str())
+			.map(|name| !name.starts_with('.'))
+			.unwrap_or(false);
+		if visible {
+			visible_count += 1;
+		} else {
+			hidden_count += 1;
+		}
+	}
+
+	(visible_count, hidden_count)
 }
 
 // ============================================================================
@@ -888,7 +927,7 @@ fn test_collectstatic_decision_flag_combinations(
 	let config = StaticFilesConfig {
 		static_url: "/static/".to_string(),
 		static_root: static_root.clone(),
-		staticfiles_dirs: vec![source_dir],
+		staticfiles_dirs: vec![source_dir.clone()],
 		media_url: None,
 	};
 	let options = CollectStaticOptions {
@@ -903,10 +942,11 @@ fn test_collectstatic_decision_flag_combinations(
 
 	// Act
 	let stats = command.execute().expect("collection succeeds");
+	let (expected_copied, expected_skipped) = expected_collected_file_counts(&source_dir);
 
 	// Assert
 	if dry_run {
-		assert_eq!(stats.copied, 1, "{description}");
+		assert_eq!(stats.copied, expected_copied, "{description}");
 		assert_eq!(stats.deleted, 0, "{description}");
 		assert_eq!(stats.unmodified, 0, "{description}");
 		assert!(static_root.join("old.txt").exists(), "{description}");
@@ -914,10 +954,10 @@ fn test_collectstatic_decision_flag_combinations(
 		return;
 	}
 
-	assert_eq!(stats.copied, 1, "{description}");
+	assert_eq!(stats.copied, expected_copied, "{description}");
 	assert_eq!(stats.deleted, usize::from(clear), "{description}");
 	assert_eq!(stats.unmodified, 0, "{description}");
-	assert_eq!(stats.skipped, 0, "{description}");
+	assert_eq!(stats.skipped, expected_skipped, "{description}");
 	assert_eq!(
 		static_root.join("old.txt").exists(),
 		!clear,

@@ -177,8 +177,8 @@ mod wasm_tests {
 			);
 		}
 
-		let source_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-			.join("tests/fixtures/plugins/minimal");
+		let source_dir =
+			PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/plugins/minimal");
 		let root_dir = TempDir::new().expect("temporary Component root should be created");
 		let fixture_dir = root_dir.path().join("minimal");
 		copy_fixture_tree(&source_dir, &fixture_dir)

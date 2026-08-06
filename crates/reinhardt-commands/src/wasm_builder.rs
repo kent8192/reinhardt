@@ -171,13 +171,6 @@ impl WasmBuilder {
 		&self,
 		runner: &R,
 	) -> Result<WasmBuildOutput, WasmBuildError> {
-		let target_base = self
-			.config
-			.target_dir
-			.as_ref()
-			.cloned()
-			.unwrap_or_else(|| self.detect_target_dir_with_runner(runner));
-
 		// Ensure wasm32 target is installed
 		self.check_target_installed_with_runner(runner)?;
 
@@ -197,6 +190,12 @@ impl WasmBuilder {
 		self.run_cargo_build_with_runner(runner)?;
 
 		// Determine the WASM file location
+		let target_base = self
+			.config
+			.target_dir
+			.as_ref()
+			.cloned()
+			.unwrap_or_else(|| self.detect_target_dir_with_runner(runner));
 		let profile = if self.config.release {
 			"release"
 		} else {
@@ -533,14 +532,41 @@ mod tests {
 
 	fn successful_build_outcomes(target_dir: &Path) -> [std::io::Result<ProcessOutcome>; 5] {
 		[
-			Ok(metadata_outcome(target_dir)),
 			Ok(ProcessOutcome::success(
 				b"wasm32-unknown-unknown\n".to_vec(),
 			)),
 			Ok(ProcessOutcome::success(b"wasm-bindgen 0.2".to_vec())),
 			Ok(ProcessOutcome::success(Vec::new())),
+			Ok(metadata_outcome(target_dir)),
 			Ok(ProcessOutcome::success(Vec::new())),
 		]
+	}
+
+	fn assert_target_directory_fallback(metadata: std::io::Result<ProcessOutcome>) {
+		let project = make_wasm_crate();
+		let runner = FakeProcessRunner::new([
+			Ok(ProcessOutcome::success(
+				b"wasm32-unknown-unknown\n".to_vec(),
+			)),
+			Ok(ProcessOutcome::success(b"wasm-bindgen 0.2".to_vec())),
+			Ok(ProcessOutcome::success(Vec::new())),
+			metadata,
+			Ok(ProcessOutcome::success(Vec::new())),
+		]);
+		let builder = WasmBuilder::new(WasmBuildConfig::new(project.path()));
+
+		builder
+			.build_with_runner(&runner)
+			.expect("metadata fallback keeps the build running");
+
+		let requests = runner.requests();
+		assert_eq!(
+			requests[4].args[4],
+			project
+				.path()
+				.join("target/wasm32-unknown-unknown/debug/demo_app.wasm")
+				.into_os_string()
+		);
 	}
 
 	fn request_args(requests: &[crate::process::ProcessRequest]) -> Vec<Vec<OsString>> {
@@ -567,16 +593,11 @@ mod tests {
 				.iter()
 				.map(|request| request.program.clone())
 				.collect::<Vec<_>>(),
-			vec!["cargo", "rustup", "wasm-bindgen", "cargo", "wasm-bindgen"]
+			vec!["rustup", "wasm-bindgen", "cargo", "cargo", "wasm-bindgen"]
 		);
 		assert_eq!(
 			request_args(&requests),
 			vec![
-				vec![
-					"metadata".into(),
-					"--no-deps".into(),
-					"--format-version=1".into()
-				],
 				vec!["target".into(), "list".into(), "--installed".into()],
 				vec!["--version".into()],
 				vec![
@@ -584,6 +605,11 @@ mod tests {
 					"--lib".into(),
 					"--target".into(),
 					"wasm32-unknown-unknown".into(),
+				],
+				vec![
+					"metadata".into(),
+					"--no-deps".into(),
+					"--format-version=1".into()
 				],
 				vec![
 					"--target".into(),
@@ -596,18 +622,16 @@ mod tests {
 				],
 			]
 		);
-		assert_eq!(requests[0].current_dir.as_deref(), Some(project.path()));
+		assert_eq!(requests[2].current_dir.as_deref(), Some(project.path()));
 		assert_eq!(requests[3].current_dir.as_deref(), Some(project.path()));
 	}
 
 	#[test]
 	fn build_with_runner_reports_missing_wasm_target() {
 		let project = make_wasm_crate();
-		let target_dir = project.path().join("workspace-target");
-		let runner = FakeProcessRunner::new([
-			Ok(metadata_outcome(&target_dir)),
-			Ok(ProcessOutcome::success(b"x86_64-apple-darwin\n".to_vec())),
-		]);
+		let runner = FakeProcessRunner::new([Ok(ProcessOutcome::success(
+			b"x86_64-apple-darwin\n".to_vec(),
+		))]);
 		let builder = WasmBuilder::new(WasmBuildConfig::new(project.path()));
 
 		let error = builder
@@ -615,15 +639,35 @@ mod tests {
 			.expect_err("missing target must stop the build");
 
 		assert!(matches!(error, WasmBuildError::TargetNotInstalled));
-		assert_eq!(runner.requests().len(), 2);
+		assert_eq!(runner.requests().len(), 1);
+		assert_eq!(runner.requests()[0].program, "rustup");
+	}
+
+	#[test]
+	fn target_directory_detection_falls_back_after_metadata_spawn_failure() {
+		assert_target_directory_fallback(Err(std::io::Error::new(
+			std::io::ErrorKind::NotFound,
+			"cargo is unavailable",
+		)));
+	}
+
+	#[test]
+	fn target_directory_detection_falls_back_after_metadata_non_zero_status() {
+		assert_target_directory_fallback(Ok(ProcessOutcome::failure(
+			"exit status: 1",
+			b"metadata failed".to_vec(),
+		)));
+	}
+
+	#[test]
+	fn target_directory_detection_falls_back_after_invalid_metadata_json() {
+		assert_target_directory_fallback(Ok(ProcessOutcome::success(b"not JSON".to_vec())));
 	}
 
 	#[test]
 	fn build_with_runner_propagates_cargo_stderr() {
 		let project = make_wasm_crate();
-		let target_dir = project.path().join("workspace-target");
 		let runner = FakeProcessRunner::new([
-			Ok(metadata_outcome(&target_dir)),
 			Ok(ProcessOutcome::success(
 				b"wasm32-unknown-unknown\n".to_vec(),
 			)),
@@ -647,12 +691,12 @@ mod tests {
 		let project = make_wasm_crate();
 		let target_dir = project.path().join("workspace-target");
 		let runner = FakeProcessRunner::new([
-			Ok(metadata_outcome(&target_dir)),
 			Ok(ProcessOutcome::success(
 				b"wasm32-unknown-unknown\n".to_vec(),
 			)),
 			Ok(ProcessOutcome::success(b"wasm-bindgen 0.2".to_vec())),
 			Ok(ProcessOutcome::success(Vec::new())),
+			Ok(metadata_outcome(&target_dir)),
 			Ok(ProcessOutcome::failure(
 				"exit status: 1",
 				b"bindgen diagnostics".to_vec(),
@@ -680,12 +724,12 @@ mod tests {
 		fs::write(output_dir.join("demo_app_bg_opt.wasm"), b"optimized wasm")
 			.expect("write optimized WASM output");
 		let runner = FakeProcessRunner::new([
-			Ok(metadata_outcome(&target_dir)),
 			Ok(ProcessOutcome::success(
 				b"wasm32-unknown-unknown\n".to_vec(),
 			)),
 			Ok(ProcessOutcome::success(b"wasm-bindgen 0.2".to_vec())),
 			Ok(ProcessOutcome::success(Vec::new())),
+			Ok(metadata_outcome(&target_dir)),
 			Ok(ProcessOutcome::success(Vec::new())),
 			Ok(ProcessOutcome::success(b"wasm-opt 1.0".to_vec())),
 			Ok(ProcessOutcome::success(Vec::new())),
@@ -715,12 +759,12 @@ mod tests {
 		let project = make_wasm_crate();
 		let target_dir = project.path().join("workspace-target");
 		let runner = FakeProcessRunner::new([
-			Ok(metadata_outcome(&target_dir)),
 			Ok(ProcessOutcome::success(
 				b"wasm32-unknown-unknown\n".to_vec(),
 			)),
 			Ok(ProcessOutcome::success(b"wasm-bindgen 0.2".to_vec())),
 			Ok(ProcessOutcome::success(Vec::new())),
+			Ok(metadata_outcome(&target_dir)),
 			Ok(ProcessOutcome::success(Vec::new())),
 			Ok(ProcessOutcome::failure("exit status: 1", Vec::new())),
 		]);

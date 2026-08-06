@@ -1854,6 +1854,28 @@ impl Field for ManyToManyField {
 #[cfg(test)]
 mod tests {
 	use super::*;
+	use std::collections::HashMap;
+
+	fn assert_deconstruction(
+		deconstruction: FieldDeconstruction,
+		name: Option<&str>,
+		path: &str,
+		kwargs: HashMap<String, FieldKwarg>,
+	) {
+		assert_eq!(deconstruction.name.as_deref(), name);
+		assert_eq!(deconstruction.path, path);
+		assert_eq!(deconstruction.args, Vec::<FieldArg>::new());
+		assert_eq!(deconstruction.kwargs, kwargs);
+	}
+
+	fn assert_named_field_defaults(field: &mut impl Field, name: &str) {
+		field.set_attributes_from_name(name);
+
+		assert_eq!(field.name(), Some(name));
+		assert!(!field.is_null());
+		assert!(!field.is_blank());
+		assert!(!field.is_primary_key());
+	}
 
 	#[test]
 	fn test_auto_field_deconstruct() {
@@ -1975,5 +1997,277 @@ mod tests {
 		let field2 = EmailField::with_max_length(255);
 		let dec2 = field2.deconstruct();
 		assert_eq!(dec2.kwargs.get("max_length"), Some(&FieldKwarg::Uint(255)));
+	}
+
+	#[test]
+	fn base_field_deconstructs_every_non_default_kwarg() {
+		let choices = vec![("draft".to_string(), "Draft".to_string())];
+		let mut field = BaseField::new();
+		field.null = true;
+		field.blank = true;
+		field.default = Some(FieldKwarg::String("unknown".to_string()));
+		field.db_default = Some(FieldKwarg::Int(0));
+		field.db_column = Some("display_name".to_string());
+		field.db_tablespace = Some("fast".to_string());
+		field.primary_key = true;
+		field.unique = true;
+		field.editable = false;
+		field.choices = Some(choices.clone());
+
+		let expected = HashMap::from([
+			("null".to_string(), FieldKwarg::Bool(true)),
+			("blank".to_string(), FieldKwarg::Bool(true)),
+			(
+				"default".to_string(),
+				FieldKwarg::String("unknown".to_string()),
+			),
+			("db_default".to_string(), FieldKwarg::Int(0)),
+			(
+				"db_column".to_string(),
+				FieldKwarg::String("display_name".to_string()),
+			),
+			(
+				"db_tablespace".to_string(),
+				FieldKwarg::String("fast".to_string()),
+			),
+			("primary_key".to_string(), FieldKwarg::Bool(true)),
+			("unique".to_string(), FieldKwarg::Bool(true)),
+			("editable".to_string(), FieldKwarg::Bool(false)),
+			("choices".to_string(), FieldKwarg::Choices(choices)),
+		]);
+
+		assert_eq!(field.get_kwargs(), expected);
+	}
+
+	#[test]
+	fn scalar_and_temporal_fields_deconstruct_complete_contracts() {
+		assert_deconstruction(
+			IntegerField::new().deconstruct(),
+			None,
+			"reinhardt.orm.models.IntegerField",
+			HashMap::new(),
+		);
+
+		let choices = vec![("1".to_string(), "Published".to_string())];
+		assert_deconstruction(
+			IntegerField::with_choices(choices.clone()).deconstruct(),
+			None,
+			"reinhardt.orm.models.IntegerField",
+			HashMap::from([("choices".to_string(), FieldKwarg::Choices(choices))]),
+		);
+
+		assert_deconstruction(
+			FloatField::new().deconstruct(),
+			None,
+			"reinhardt.orm.models.FloatField",
+			HashMap::new(),
+		);
+		assert_deconstruction(
+			TextField::new().deconstruct(),
+			None,
+			"reinhardt.orm.models.TextField",
+			HashMap::new(),
+		);
+		assert_deconstruction(
+			TimeField::new().deconstruct(),
+			None,
+			"reinhardt.orm.models.TimeField",
+			HashMap::new(),
+		);
+		assert_deconstruction(
+			TimeField::with_auto_now().deconstruct(),
+			None,
+			"reinhardt.orm.models.TimeField",
+			HashMap::from([("auto_now".to_string(), FieldKwarg::Bool(true))]),
+		);
+		assert_deconstruction(
+			TimeField::with_auto_now_add().deconstruct(),
+			None,
+			"reinhardt.orm.models.TimeField",
+			HashMap::from([("auto_now_add".to_string(), FieldKwarg::Bool(true))]),
+		);
+		assert_deconstruction(
+			URLField::new().deconstruct(),
+			None,
+			"reinhardt.orm.models.URLField",
+			HashMap::new(),
+		);
+		assert_deconstruction(
+			URLField::with_max_length(512).deconstruct(),
+			None,
+			"reinhardt.orm.models.URLField",
+			HashMap::from([("max_length".to_string(), FieldKwarg::Uint(512))]),
+		);
+		assert_deconstruction(
+			BinaryField::new().deconstruct(),
+			None,
+			"reinhardt.orm.models.BinaryField",
+			HashMap::new(),
+		);
+		assert_deconstruction(
+			BinaryField::with_editable().deconstruct(),
+			None,
+			"reinhardt.orm.models.BinaryField",
+			HashMap::from([("editable".to_string(), FieldKwarg::Bool(true))]),
+		);
+		assert_deconstruction(
+			SlugField::new().deconstruct(),
+			None,
+			"reinhardt.orm.models.SlugField",
+			HashMap::new(),
+		);
+		assert_deconstruction(
+			SlugField::with_options(75, false).deconstruct(),
+			None,
+			"reinhardt.orm.models.SlugField",
+			HashMap::from([
+				("max_length".to_string(), FieldKwarg::Uint(75)),
+				("db_index".to_string(), FieldKwarg::Bool(false)),
+			]),
+		);
+	}
+
+	#[test]
+	fn integer_network_and_file_fields_deconstruct_complete_contracts() {
+		let mut small_integer = SmallIntegerField::new();
+		assert_named_field_defaults(&mut small_integer, "priority");
+		assert_deconstruction(
+			small_integer.deconstruct(),
+			Some("priority"),
+			"reinhardt.orm.models.SmallIntegerField",
+			HashMap::new(),
+		);
+
+		let mut positive_integer = PositiveIntegerField::new();
+		assert_named_field_defaults(&mut positive_integer, "rank");
+		assert_deconstruction(
+			positive_integer.deconstruct(),
+			Some("rank"),
+			"reinhardt.orm.models.PositiveIntegerField",
+			HashMap::new(),
+		);
+
+		let mut positive_small_integer = PositiveSmallIntegerField::new();
+		assert_named_field_defaults(&mut positive_small_integer, "attempts");
+		assert_deconstruction(
+			positive_small_integer.deconstruct(),
+			Some("attempts"),
+			"reinhardt.orm.models.PositiveSmallIntegerField",
+			HashMap::new(),
+		);
+
+		let mut positive_big_integer = PositiveBigIntegerField::new();
+		assert_named_field_defaults(&mut positive_big_integer, "views");
+		assert_deconstruction(
+			positive_big_integer.deconstruct(),
+			Some("views"),
+			"reinhardt.orm.models.PositiveBigIntegerField",
+			HashMap::new(),
+		);
+
+		let mut ip_address = GenericIPAddressField::new();
+		assert_named_field_defaults(&mut ip_address, "address");
+		assert_deconstruction(
+			ip_address.deconstruct(),
+			Some("address"),
+			"reinhardt.orm.models.GenericIPAddressField",
+			HashMap::new(),
+		);
+		assert_deconstruction(
+			GenericIPAddressField::ipv4_only().deconstruct(),
+			None,
+			"reinhardt.orm.models.GenericIPAddressField",
+			HashMap::from([(
+				"protocol".to_string(),
+				FieldKwarg::String("IPv4".to_string()),
+			)]),
+		);
+		assert_deconstruction(
+			GenericIPAddressField::ipv6_only().deconstruct(),
+			None,
+			"reinhardt.orm.models.GenericIPAddressField",
+			HashMap::from([(
+				"protocol".to_string(),
+				FieldKwarg::String("IPv6".to_string()),
+			)]),
+		);
+
+		let mut file_path = FilePathField::new("/srv/uploads".to_string());
+		assert_named_field_defaults(&mut file_path, "upload_path");
+		assert_deconstruction(
+			file_path.deconstruct(),
+			Some("upload_path"),
+			"reinhardt.orm.models.FilePathField",
+			HashMap::from([(
+				"path".to_string(),
+				FieldKwarg::String("/srv/uploads".to_string()),
+			)]),
+		);
+	}
+
+	#[test]
+	fn relationship_fields_deconstruct_complete_contracts() {
+		assert_deconstruction(
+			ForeignKey::new("auth.User".to_string(), "CASCADE".to_string()).deconstruct(),
+			None,
+			"reinhardt.orm.models.ForeignKey",
+			HashMap::from([
+				(
+					"to".to_string(),
+					FieldKwarg::String("auth.user".to_string()),
+				),
+				(
+					"on_delete".to_string(),
+					FieldKwarg::String("CASCADE".to_string()),
+				),
+			]),
+		);
+		assert_deconstruction(
+			OneToOneField::new("profiles.Profile".to_string(), "PROTECT".to_string()).deconstruct(),
+			None,
+			"reinhardt.orm.models.OneToOneField",
+			HashMap::from([
+				(
+					"to".to_string(),
+					FieldKwarg::String("profiles.profile".to_string()),
+				),
+				(
+					"on_delete".to_string(),
+					FieldKwarg::String("PROTECT".to_string()),
+				),
+			]),
+		);
+		assert_deconstruction(
+			ManyToManyField::new("auth.Permission".to_string()).deconstruct(),
+			None,
+			"reinhardt.orm.models.ManyToManyField",
+			HashMap::from([(
+				"to".to_string(),
+				FieldKwarg::String("auth.permission".to_string()),
+			)]),
+		);
+
+		let mut roles =
+			ManyToManyField::with_related_name("auth.Permission".to_string(), "roles".to_string());
+		roles.through = Some("auth.RolePermission".to_string());
+		assert_deconstruction(
+			roles.deconstruct(),
+			None,
+			"reinhardt.orm.models.ManyToManyField",
+			HashMap::from([
+				(
+					"to".to_string(),
+					FieldKwarg::String("auth.permission".to_string()),
+				),
+				(
+					"related_name".to_string(),
+					FieldKwarg::String("roles".to_string()),
+				),
+				(
+					"through".to_string(),
+					FieldKwarg::String("auth.RolePermission".to_string()),
+				),
+			]),
+		);
 	}
 }

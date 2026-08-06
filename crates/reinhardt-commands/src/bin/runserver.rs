@@ -365,28 +365,21 @@ fn convert_to_hyper_response(
 	hyper_resp.body(Full::new(response.body)).ok()
 }
 
-async fn handle_request(
-	req: Request<Incoming>,
-	settings: Arc<RunServerSettings>,
-	spa_index: Option<Arc<PathBuf>>,
-	remote_addr: SocketAddr,
+/// Resolve a non-router request path against static files, SPA fallback, or the welcome page.
+///
+/// Kept separate from Hyper request dispatch so the static-serving behavior can be exercised
+/// without opening a listener or constructing a streaming request body.
+async fn respond_to_path(
+	path: &str,
+	settings: &RunServerSettings,
+	spa_index: Option<&Path>,
 ) -> Result<Response<Full<Bytes>>, Infallible> {
-	let path = req.uri().path().to_string();
-
-	// Route dispatch through registered ServerRouter
-	#[cfg(feature = "routers")]
-	{
-		if let Some(response) = dispatch_through_router(req, remote_addr).await {
-			return Ok(response);
-		}
-	}
-
 	// Serve static files in debug mode from staticfiles_dirs
 	if settings.debug && path.starts_with(&settings.static_url) {
 		// Strip static_url prefix to get relative path
 		let relative_path = match path.strip_prefix(&settings.static_url) {
 			Some(p) => p,
-			None => path.as_str(),
+			None => path,
 		};
 		let relative_path = relative_path.trim_start_matches('/');
 
@@ -466,10 +459,29 @@ async fn handle_request(
 	}
 
 	// SPA fallback: serve index.html for non-static routes if available
-	if let Some(ref index_path) = spa_index {
+	if let Some(index_path) = spa_index {
 		return serve_static_file(index_path).await;
 	}
 	serve_welcome_page()
+}
+
+async fn handle_request(
+	req: Request<Incoming>,
+	settings: Arc<RunServerSettings>,
+	spa_index: Option<Arc<PathBuf>>,
+	remote_addr: SocketAddr,
+) -> Result<Response<Full<Bytes>>, Infallible> {
+	let path = req.uri().path().to_string();
+
+	// Route dispatch through registered ServerRouter
+	#[cfg(feature = "routers")]
+	{
+		if let Some(response) = dispatch_through_router(req, remote_addr).await {
+			return Ok(response);
+		}
+	}
+
+	respond_to_path(&path, &settings, spa_index.as_deref().map(PathBuf::as_path)).await
 }
 
 /// Serve the welcome page
@@ -1027,5 +1039,294 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 				}
 			});
 		}
+	}
+}
+
+#[cfg(test)]
+mod tests {
+	use super::*;
+	use clap::Parser;
+	use http_body_util::BodyExt;
+
+	#[test]
+	fn args_apply_documented_defaults_and_explicit_server_options() {
+		// Act
+		let defaults = Args::try_parse_from(["runserver"]).expect("default arguments parse");
+		let configured = Args::try_parse_from([
+			"runserver",
+			"0.0.0.0:9443",
+			"--noreload",
+			"--watch-delay",
+			"275",
+			"--nothreading",
+			"--insecure",
+			"--cert",
+			"server.pem",
+			"--key",
+			"server.key",
+			"--no-wasm",
+			"--no-override-wasm",
+			"--force-wasm",
+			"--no-collectstatic",
+		])
+		.expect("explicit server arguments parse");
+
+		// Assert
+		assert_eq!(defaults.address, "127.0.0.1:8000");
+		assert_eq!(defaults.watch_delay, 120);
+		assert!(!defaults.noreload && !defaults.self_signed && !defaults.no_wasm);
+		assert_eq!(configured.address, "0.0.0.0:9443");
+		assert_eq!(configured.watch_delay, 275);
+		assert_eq!(configured.cert.as_deref(), Some(Path::new("server.pem")));
+		assert_eq!(configured.key.as_deref(), Some(Path::new("server.key")));
+		assert!(
+			configured.noreload
+				&& configured.nothreading
+				&& configured.insecure
+				&& configured.no_wasm
+				&& configured.no_override_wasm
+				&& configured.force_wasm
+				&& configured.no_collectstatic
+		);
+	}
+
+	#[test]
+	fn static_file_extensions_produce_browser_content_types() {
+		// Arrange
+		let cases = [
+			("app.js", "application/javascript"),
+			("module.mjs", "application/javascript"),
+			("site.css", "text/css; charset=utf-8"),
+			("page.html", "text/html; charset=utf-8"),
+			("feed.xml", "application/xml"),
+			("photo.jpeg", "image/jpeg"),
+			("vector.svg", "image/svg+xml"),
+			("font.woff2", "font/woff2"),
+			("bundle.wasm", "application/wasm"),
+			("movie.webm", "video/webm"),
+			("sound.ogg", "audio/ogg"),
+			("guide.pdf", "application/pdf"),
+			("notes.md", "text/markdown; charset=utf-8"),
+			("unknown.bin", "application/octet-stream"),
+			("no-extension", "application/octet-stream"),
+			("UPPER.CSS", "application/octet-stream"),
+		];
+
+		for (file_name, expected) in cases {
+			// Act
+			let content_type = get_mime_type(Path::new(file_name));
+
+			// Assert
+			assert_eq!(content_type, expected, "unexpected type for {file_name}");
+		}
+	}
+
+	#[tokio::test]
+	async fn serve_static_file_returns_cacheable_content_and_not_found_response() {
+		// Arrange
+		let temp_dir = tempfile::TempDir::new().expect("create static fixture directory");
+		let asset = temp_dir.path().join("app.css");
+		tokio::fs::write(&asset, "body { color: green; }")
+			.await
+			.expect("write static fixture");
+
+		// Act
+		let served = serve_static_file(&asset)
+			.await
+			.expect("static response builds");
+		let missing = serve_static_file(&temp_dir.path().join("missing.js"))
+			.await
+			.expect("not found response builds");
+		let served_status = served.status();
+		let served_content_type = served.headers()["Content-Type"].clone();
+		let served_cache_control = served.headers()["Cache-Control"].clone();
+		let missing_status = missing.status();
+		let missing_content_type = missing.headers()["Content-Type"].clone();
+		let served_body = served
+			.into_body()
+			.collect()
+			.await
+			.expect("served body is readable")
+			.to_bytes();
+		let missing_body = missing
+			.into_body()
+			.collect()
+			.await
+			.expect("not found body is readable")
+			.to_bytes();
+
+		// Assert
+		assert_eq!(served_status, StatusCode::OK);
+		assert_eq!(served_content_type, "text/css; charset=utf-8");
+		assert_eq!(served_cache_control, "no-cache");
+		assert_eq!(served_body, Bytes::from_static(b"body { color: green; }"));
+		assert_eq!(missing_status, StatusCode::NOT_FOUND);
+		assert_eq!(missing_content_type, "text/plain");
+		assert_eq!(missing_body, Bytes::from_static(b"File not found"));
+	}
+
+	#[test]
+	fn configured_spa_index_is_selected_for_client_side_route_fallback() {
+		// Arrange
+		let temp_dir = tempfile::TempDir::new().expect("create static root");
+		let index = temp_dir.path().join("index.html");
+		std::fs::write(&index, "<!doctype html><title>SPA</title>").expect("write SPA index");
+		let settings = RunServerSettings {
+			static_root: Some(temp_dir.path().to_path_buf()),
+			..RunServerSettings::default()
+		};
+
+		// Act
+		let resolved = resolve_spa_index(&settings);
+
+		// Assert
+		assert_eq!(resolved.as_deref(), Some(index.as_path()));
+	}
+
+	#[test]
+	fn generated_fallback_secret_is_a_200_bit_hex_value() {
+		// Act
+		let secret = generate_random_secret_key();
+
+		// Assert
+		assert_eq!(secret.len(), 50);
+		assert!(secret.bytes().all(|byte| byte.is_ascii_hexdigit()));
+	}
+
+	async fn response_text(
+		response: Response<Full<Bytes>>,
+	) -> (StatusCode, hyper::HeaderMap, String) {
+		let (parts, body) = response.into_parts();
+		let body = body
+			.collect()
+			.await
+			.expect("response body is readable")
+			.to_bytes();
+		(
+			parts.status,
+			parts.headers,
+			String::from_utf8(body.to_vec()).expect("response body is UTF-8 fixture text"),
+		)
+	}
+
+	#[tokio::test]
+	async fn path_resolution_serves_static_directory_assets_and_rejects_conflicts() {
+		// Arrange
+		let temp_dir = tempfile::TempDir::new().expect("create static fixture directory");
+		let first = temp_dir.path().join("first");
+		let second = temp_dir.path().join("second");
+		std::fs::create_dir_all(&first).expect("create first static directory");
+		std::fs::create_dir_all(&second).expect("create second static directory");
+		std::fs::write(first.join("site.css"), "from-first").expect("write first asset");
+		let settings = RunServerSettings {
+			staticfiles_dirs: vec![first.clone()],
+			..RunServerSettings::default()
+		};
+
+		// Act
+		let served = respond_to_path("/static/site.css", &settings, None)
+			.await
+			.expect("static response builds");
+		std::fs::write(second.join("site.css"), "from-second").expect("write conflicting asset");
+		let conflicting_settings = RunServerSettings {
+			staticfiles_dirs: vec![first, second],
+			..RunServerSettings::default()
+		};
+		let conflict = respond_to_path("/static/site.css", &conflicting_settings, None)
+			.await
+			.expect("conflict response builds");
+		let (served_status, served_headers, served_body) = response_text(served).await;
+		let (conflict_status, conflict_headers, conflict_body) = response_text(conflict).await;
+
+		// Assert
+		assert_eq!(served_status, StatusCode::OK);
+		assert_eq!(served_headers["Content-Type"], "text/css; charset=utf-8");
+		assert_eq!(served_body, "from-first");
+		assert_eq!(conflict_status, StatusCode::INTERNAL_SERVER_ERROR);
+		assert_eq!(conflict_headers["Content-Type"], "text/plain");
+		assert_eq!(
+			conflict_body,
+			"Internal Server Error: Static file conflict for 'site.css'. Check server logs."
+		);
+	}
+
+	#[tokio::test]
+	async fn path_resolution_uses_collected_assets_then_spa_fallback() {
+		// Arrange
+		let temp_dir = tempfile::TempDir::new().expect("create collected asset root");
+		let root = temp_dir.path().join("collected");
+		std::fs::create_dir_all(&root).expect("create collected root");
+		std::fs::write(root.join("bundle.js"), "console.log('collected');")
+			.expect("write collected asset");
+		let spa_index = root.join("index.html");
+		std::fs::write(&spa_index, "<main>single-page app</main>").expect("write SPA index");
+		let settings = RunServerSettings {
+			static_root: Some(root),
+			..RunServerSettings::default()
+		};
+
+		// Act
+		let collected = respond_to_path("/static/bundle.js", &settings, None)
+			.await
+			.expect("collected asset response builds");
+		let spa = respond_to_path("/dashboard", &settings, Some(&spa_index))
+			.await
+			.expect("SPA response builds");
+		let (collected_status, collected_headers, collected_body) = response_text(collected).await;
+		let (spa_status, spa_headers, spa_body) = response_text(spa).await;
+
+		// Assert
+		assert_eq!(collected_status, StatusCode::OK);
+		assert_eq!(collected_headers["Content-Type"], "application/javascript");
+		assert_eq!(collected_body, "console.log('collected');");
+		assert_eq!(spa_status, StatusCode::OK);
+		assert_eq!(spa_headers["Content-Type"], "text/html; charset=utf-8");
+		assert_eq!(spa_body, "<main>single-page app</main>");
+	}
+
+	#[tokio::test]
+	async fn path_resolution_reports_missing_and_traversal_static_assets_without_exposing_files() {
+		// Arrange
+		let temp_dir = tempfile::TempDir::new().expect("create isolated static root");
+		let settings = RunServerSettings {
+			static_root: Some(temp_dir.path().join("empty")),
+			..RunServerSettings::default()
+		};
+
+		// Act
+		let missing = respond_to_path("/static/missing-coverage-asset.css", &settings, None)
+			.await
+			.expect("missing response builds");
+		let traversal = respond_to_path("/static/../secret.txt", &settings, None)
+			.await
+			.expect("traversal response builds");
+		let (missing_status, _, missing_body) = response_text(missing).await;
+		let (traversal_status, _, traversal_body) = response_text(traversal).await;
+
+		// Assert
+		assert_eq!(missing_status, StatusCode::NOT_FOUND);
+		assert_eq!(
+			missing_body,
+			"Static file not found: missing-coverage-asset.css"
+		);
+		assert_eq!(traversal_status, StatusCode::NOT_FOUND);
+		assert_eq!(traversal_body, "Static file not found: ../secret.txt");
+	}
+
+	#[tokio::test]
+	async fn path_resolution_serves_welcome_page_for_static_root_requests() {
+		// Arrange
+		let settings = RunServerSettings::default();
+
+		// Act
+		let welcome = respond_to_path("/static/", &settings, None)
+			.await
+			.expect("welcome response builds");
+		let (status, headers, body) = response_text(welcome).await;
+
+		// Assert
+		assert_eq!(status, StatusCode::OK);
+		assert_eq!(headers["Content-Type"], "text/html; charset=utf-8");
+		assert!(body.contains("Reinhardt"));
 	}
 }

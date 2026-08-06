@@ -1908,6 +1908,37 @@ mod tests {
 	}
 
 	#[tokio::test]
+	#[cfg(feature = "openapi")]
+	async fn generateopenapi_writes_parseable_json_and_yaml_without_postman_converter() {
+		// Arrange
+		let temp_dir = tempfile::tempdir().expect("temporary API output directory");
+		let json_output = temp_dir.path().join("openapi.json");
+		let yaml_output = temp_dir.path().join("openapi.yaml");
+
+		// Act
+		execute_generateopenapi("json".to_string(), json_output.clone(), false, 0)
+			.await
+			.expect("JSON schema generation succeeds without external converter");
+		execute_generateopenapi("yaml".to_string(), yaml_output.clone(), false, 0)
+			.await
+			.expect("YAML schema generation succeeds without external converter");
+		let json: serde_json::Value = serde_json::from_str(
+			&std::fs::read_to_string(&json_output).expect("read generated JSON schema"),
+		)
+		.expect("generated JSON is parseable");
+		let yaml: serde_json::Value = serde_yaml::from_str(
+			&std::fs::read_to_string(&yaml_output).expect("read generated YAML schema"),
+		)
+		.expect("generated YAML is parseable");
+
+		// Assert
+		assert_eq!(json["info"]["title"], "API Documentation");
+		assert_eq!(yaml["info"]["title"], "API Documentation");
+		assert!(json.get("openapi").is_some());
+		assert!(yaml.get("openapi").is_some());
+	}
+
+	#[tokio::test]
 	async fn run_command_with_registry_forwards_custom_context() {
 		let recorded = Arc::new(Mutex::new(None));
 		let mut registry = CommandRegistry::new();

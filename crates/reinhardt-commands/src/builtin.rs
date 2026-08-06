@@ -5067,6 +5067,101 @@ name = "db.sqlite3"
 		assert!(result.is_ok());
 	}
 
+	#[test]
+	#[serial_test::serial(builtin_env)]
+	fn deployment_settings_checks_count_only_safe_configuration() {
+		// Arrange
+		let _secret_key = EnvVarGuard::capture("SECRET_KEY");
+		let _debug = EnvVarGuard::capture("DEBUG");
+		let ctx = CommandContext::default();
+		unsafe {
+			std::env::set_var("SECRET_KEY", "a".repeat(32));
+			std::env::set_var("DEBUG", "false");
+		}
+
+		// Act
+		let secure_count = CheckCommand::check_settings(&ctx, true);
+		unsafe {
+			std::env::set_var("SECRET_KEY", "short");
+			std::env::set_var("DEBUG", "true");
+		}
+		let unsafe_count = CheckCommand::check_settings(&ctx, true);
+
+		// Assert
+		assert_eq!(secure_count, 2);
+		assert_eq!(unsafe_count, 0);
+	}
+
+	#[test]
+	#[serial_test::serial(builtin_env)]
+	fn deployment_security_checks_require_hosts_and_https_redirect() {
+		// Arrange
+		let _allowed_hosts = EnvVarGuard::capture("ALLOWED_HOSTS");
+		let _ssl_redirect = EnvVarGuard::capture("SECURE_SSL_REDIRECT");
+		let ctx = CommandContext::default();
+		unsafe {
+			std::env::set_var("ALLOWED_HOSTS", "example.test");
+			std::env::set_var("SECURE_SSL_REDIRECT", "true");
+		}
+
+		// Act
+		let protected_count = CheckCommand::check_security(&ctx);
+		unsafe {
+			std::env::remove_var("ALLOWED_HOSTS");
+			std::env::set_var("SECURE_SSL_REDIRECT", "false");
+		}
+		let unprotected_count = CheckCommand::check_security(&ctx);
+
+		// Assert
+		assert_eq!(protected_count, 2);
+		assert_eq!(unprotected_count, 0);
+	}
+
+	#[tokio::test]
+	async fn database_check_rejects_an_empty_connection_url_before_connecting() {
+		// Act
+		let result = CheckCommand::check_database("").await;
+
+		// Assert
+		assert_eq!(result, Err("Empty database URL".to_string()));
+	}
+
+	#[test]
+	#[serial_test::serial(builtin_env)]
+	fn static_root_configuration_reflects_environment_presence() {
+		// Arrange
+		let _static_root = EnvVarGuard::capture("STATIC_ROOT");
+		let ctx = CommandContext::default();
+		unsafe { std::env::remove_var("STATIC_ROOT") };
+
+		// Act
+		let absent = CheckCommand::resolve_static_root_configured(&ctx);
+		unsafe { std::env::set_var("STATIC_ROOT", "public-assets") };
+		let configured = CheckCommand::resolve_static_root_configured(&ctx);
+
+		// Assert
+		assert!(!absent);
+		assert!(configured);
+	}
+
+	#[test]
+	#[cfg(all(feature = "server", feature = "autoreload"))]
+	#[serial_test::serial(builtin_env)]
+	fn autoreload_debug_accepts_only_documented_truthy_values() {
+		// Arrange
+		let _debug = EnvVarGuard::capture("REINHARDT_AUTORELOAD_DEBUG");
+		unsafe { std::env::remove_var("REINHARDT_AUTORELOAD_DEBUG") };
+
+		// Act and assert
+		assert!(!RunServerCommand::autoreload_debug_enabled());
+		unsafe { std::env::set_var("REINHARDT_AUTORELOAD_DEBUG", "true") };
+		assert!(RunServerCommand::autoreload_debug_enabled());
+		unsafe { std::env::set_var("REINHARDT_AUTORELOAD_DEBUG", " 1 ") };
+		assert!(RunServerCommand::autoreload_debug_enabled());
+		unsafe { std::env::set_var("REINHARDT_AUTORELOAD_DEBUG", "yes") };
+		assert!(!RunServerCommand::autoreload_debug_enabled());
+	}
+
 	#[cfg(feature = "reinhardt-db")]
 	mod database_config_unification_tests {
 		use super::*;

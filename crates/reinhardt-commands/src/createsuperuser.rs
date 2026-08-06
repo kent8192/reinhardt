@@ -63,6 +63,8 @@ impl std::fmt::Display for PasswordResolutionError {
 	}
 }
 
+impl std::error::Error for PasswordResolutionError {}
+
 /// Outcome of [`resolve_noninteractive_password`].
 #[derive(Debug, PartialEq, Eq)]
 pub(crate) enum NoninteractivePassword {
@@ -95,6 +97,8 @@ impl std::fmt::Display for NoninteractiveIdentityError {
 		}
 	}
 }
+
+impl std::error::Error for NoninteractiveIdentityError {}
 
 /// Validate and retain identity values supplied to `--noinput`.
 pub(crate) fn resolve_noninteractive_identity(
@@ -139,6 +143,86 @@ fn registered_superuser_creator(
 	creator.ok_or_else(|| MISSING_SUPERUSER_CREATOR_ERROR.into())
 }
 
+#[derive(Debug)]
+enum ExecuteWithCreatorError {
+	Identity(NoninteractiveIdentityError),
+	Password(PasswordResolutionError),
+	Registration(Box<dyn std::error::Error>),
+	Creator(Box<dyn std::error::Error>),
+}
+
+impl std::fmt::Display for ExecuteWithCreatorError {
+	fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+		match self {
+			Self::Identity(error) => error.fmt(f),
+			Self::Password(error) => error.fmt(f),
+			Self::Registration(error) | Self::Creator(error) => error.fmt(f),
+		}
+	}
+}
+
+async fn execute_with_creator<'a, F>(
+	resolve_creator: F,
+	username: Option<String>,
+	email: Option<String>,
+	no_password: bool,
+	env_password: Option<&str>,
+	database: Option<String>,
+) -> Result<(), ExecuteWithCreatorError>
+where
+	F: FnOnce() -> Result<&'a dyn reinhardt_auth::SuperuserCreator, Box<dyn std::error::Error>>,
+{
+	let (username, email) = resolve_noninteractive_identity(username, email)
+		.map_err(ExecuteWithCreatorError::Identity)?;
+	let password = match resolve_noninteractive_password(no_password, env_password)
+		.map_err(ExecuteWithCreatorError::Password)?
+	{
+		NoninteractivePassword::Use(password) => Some(password),
+		NoninteractivePassword::None => {
+			println!(
+				"{}",
+				style("Warning: Superuser created without password").yellow()
+			);
+			None
+		}
+	};
+
+	println!();
+	println!("{}", style("Superuser details:").green().bold());
+	println!("  Username: {}", style(&username).yellow());
+	println!("  Email:    {}", style(&email).yellow());
+	if password.is_some() {
+		println!("  Password: {}", style("(set)").green());
+	} else {
+		println!("  Password: {}", style("(not set)").red());
+	}
+	if database.is_some() {
+		eprintln!(
+			"{}",
+			style(
+				"Warning: --database flag is deprecated. Database URL is resolved from reinhardt-conf settings."
+			)
+			.yellow()
+		);
+	}
+	println!();
+	println!("{}", style("Creating user in database...").cyan());
+
+	let creator = resolve_creator().map_err(ExecuteWithCreatorError::Registration)?;
+	creator
+		.create_superuser(&username, &email, password.as_deref())
+		.await
+		.map_err(ExecuteWithCreatorError::Creator)?;
+	println!(
+		"{}",
+		style("Superuser created successfully!").green().bold()
+	);
+	println!();
+	println!("  Username: {}", style(&username).yellow());
+	println!("  Email:    {}", style(&email).yellow());
+	Ok(())
+}
+
 /// Execute the `createsuperuser` management command.
 ///
 /// Collects username, email, and password via interactive prompts or
@@ -153,6 +237,34 @@ pub(crate) async fn execute_createsuperuser(
 ) -> Result<(), Box<dyn std::error::Error>> {
 	println!("{}", style("Creating superuser account").cyan().bold());
 	println!();
+	if noinput {
+		let environment_password = std::env::var(SUPERUSER_PASSWORD_ENV).ok();
+		return match execute_with_creator(
+			|| registered_superuser_creator(reinhardt_auth::get_superuser_creator()),
+			username,
+			email,
+			no_password,
+			environment_password.as_deref(),
+			database,
+		)
+		.await
+		{
+			Ok(()) => Ok(()),
+			Err(ExecuteWithCreatorError::Registration(error)) => Err(error),
+			Err(ExecuteWithCreatorError::Identity(error)) => {
+				eprintln!("{}", style(format!("Error: {error}")).red());
+				std::process::exit(1);
+			}
+			Err(ExecuteWithCreatorError::Password(error)) => {
+				eprintln!("{}", style(format!("Error: {error}")).red());
+				std::process::exit(1);
+			}
+			Err(ExecuteWithCreatorError::Creator(error)) => {
+				eprintln!("{}", style(format!("Error: {error}")).red().bold());
+				std::process::exit(1);
+			}
+		};
+	}
 
 	let (username, email) = if noinput {
 		match resolve_noninteractive_identity(username, email) {
@@ -300,10 +412,54 @@ pub(crate) async fn execute_createsuperuser(
 mod tests {
 	use super::{
 		MIN_PASSWORD_LEN, MISSING_SUPERUSER_CREATOR_ERROR, NoninteractivePassword,
-		PasswordResolutionError, SUPERUSER_PASSWORD_ENV, registered_superuser_creator,
-		resolve_noninteractive_identity, resolve_noninteractive_password,
+		PasswordResolutionError, SUPERUSER_PASSWORD_ENV, execute_with_creator,
+		registered_superuser_creator, resolve_noninteractive_identity,
+		resolve_noninteractive_password,
 	};
+	use async_trait::async_trait;
 	use rstest::rstest;
+	use std::sync::Mutex;
+
+	struct RecordingCreator {
+		calls: Mutex<Vec<(String, String, Option<String>)>>,
+		failure: Option<&'static str>,
+	}
+
+	impl RecordingCreator {
+		fn succeeds() -> Self {
+			Self {
+				calls: Mutex::new(Vec::new()),
+				failure: None,
+			}
+		}
+
+		fn fails(message: &'static str) -> Self {
+			Self {
+				calls: Mutex::new(Vec::new()),
+				failure: Some(message),
+			}
+		}
+	}
+
+	#[async_trait]
+	impl reinhardt_auth::SuperuserCreator for RecordingCreator {
+		async fn create_superuser(
+			&self,
+			username: &str,
+			email: &str,
+			password: Option<&str>,
+		) -> Result<(), Box<dyn std::error::Error>> {
+			self.calls.lock().expect("recording lock").push((
+				username.to_string(),
+				email.to_string(),
+				password.map(str::to_string),
+			));
+			match self.failure {
+				Some(message) => Err(message.into()),
+				None => Ok(()),
+			}
+		}
+	}
 
 	#[rstest]
 	fn returns_password_when_env_var_meets_length_requirement() {
@@ -508,5 +664,90 @@ mod tests {
 
 		// Assert
 		assert_eq!(error.to_string(), MISSING_SUPERUSER_CREATOR_ERROR);
+	}
+
+	#[tokio::test]
+	async fn execute_with_creator_passes_noninteractive_password_to_creator() {
+		let creator = RecordingCreator::succeeds();
+
+		execute_with_creator(
+			|| Ok(&creator),
+			Some("admin".to_string()),
+			Some("admin@example.com".to_string()),
+			false,
+			Some("correcthorsebattery"),
+			None,
+		)
+		.await
+		.expect("valid non-interactive account is created");
+
+		assert_eq!(
+			*creator.calls.lock().expect("recording lock"),
+			vec![(
+				"admin".to_string(),
+				"admin@example.com".to_string(),
+				Some("correcthorsebattery".to_string()),
+			)]
+		);
+	}
+
+	#[tokio::test]
+	async fn execute_with_creator_passes_no_password_to_creator() {
+		let creator = RecordingCreator::succeeds();
+
+		execute_with_creator(
+			|| Ok(&creator),
+			Some("admin".to_string()),
+			Some("admin@example.com".to_string()),
+			true,
+			None,
+			None,
+		)
+		.await
+		.expect("no-password account is created");
+
+		assert_eq!(creator.calls.lock().expect("recording lock")[0].2, None);
+	}
+
+	#[tokio::test]
+	async fn execute_with_creator_preserves_creator_errors() {
+		let creator = RecordingCreator::fails("username already exists");
+
+		let error = execute_with_creator(
+			|| Ok(&creator),
+			Some("admin".to_string()),
+			Some("admin@example.com".to_string()),
+			true,
+			None,
+			None,
+		)
+		.await
+		.expect_err("duplicate user is reported");
+
+		assert_eq!(error.to_string(), "username already exists");
+	}
+
+	#[tokio::test]
+	async fn execute_with_creator_validates_identity_before_resolving_creator() {
+		let creator = RecordingCreator::succeeds();
+		let mut resolved_creator = false;
+
+		let error = execute_with_creator(
+			|| {
+				resolved_creator = true;
+				Ok(&creator)
+			},
+			Some("ab".to_string()),
+			Some("admin@example.com".to_string()),
+			true,
+			None,
+			None,
+		)
+		.await
+		.expect_err("invalid identity is rejected");
+
+		assert_eq!(error.to_string(), "Username must be at least 3 characters");
+		assert!(!resolved_creator);
+		assert!(creator.calls.lock().expect("recording lock").is_empty());
 	}
 }

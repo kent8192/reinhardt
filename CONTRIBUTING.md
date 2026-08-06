@@ -88,6 +88,39 @@ cargo nextest run --workspace --all-features
 cargo test --workspace --all --all-features
 ```
 
+For a focused intra-crate coverage check, install `cargo-llvm-cov` and keep the
+host target identical between test execution and report generation:
+
+```bash
+cargo install cargo-llvm-cov
+
+export CARGO_TARGET_DIR=/tmp/reinhardt-intra-cov-target
+export CARGO_BUILD_BUILD_DIR=/tmp/reinhardt-intra-cov-build
+COVERAGE_HOST_TARGET="$(rustc -vV | awk '/^host:/{print $2}')"
+
+cargo llvm-cov nextest \
+  --target "$COVERAGE_HOST_TARGET" \
+  --coverage-target-only \
+  --no-report \
+  --package reinhardt-storages \
+  --test local_storage \
+  --no-default-features \
+  --features local
+
+cargo llvm-cov report \
+  --target "$COVERAGE_HOST_TARGET" \
+  --coverage-target-only \
+  --package reinhardt-storages \
+  --lcov \
+  --output-path /tmp/reinhardt-intra-crate-lcov.info
+
+bash scripts/validate-lcov-hits.sh /tmp/reinhardt-intra-crate-lcov.info
+```
+
+The test and report phases must use the same target options. A passing test
+process does not prove that the report found its instrumented objects, so
+validate the generated LCOV separately before comparing it with Codecov.
+
 ---
 
 ## Development Setup

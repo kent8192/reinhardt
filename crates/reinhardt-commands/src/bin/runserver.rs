@@ -1209,6 +1209,77 @@ mod tests {
 		)
 	}
 
+	struct CurrentDirGuard {
+		original: PathBuf,
+	}
+
+	impl CurrentDirGuard {
+		fn enter(path: &Path) -> Self {
+			let original = env::current_dir().expect("read working directory");
+			env::set_current_dir(path).expect("enter temporary project directory");
+			Self { original }
+		}
+	}
+
+	impl Drop for CurrentDirGuard {
+		fn drop(&mut self) {
+			env::set_current_dir(&self.original).expect("restore working directory");
+		}
+	}
+
+	struct EnvVarGuard {
+		key: &'static str,
+		original: Option<std::ffi::OsString>,
+	}
+
+	impl EnvVarGuard {
+		fn capture(key: &'static str) -> Self {
+			Self {
+				key,
+				original: env::var_os(key),
+			}
+		}
+	}
+
+	impl Drop for EnvVarGuard {
+		fn drop(&mut self) {
+			// SAFETY: this test serializes access to process-wide environment state.
+			unsafe {
+				match &self.original {
+					Some(value) => env::set_var(self.key, value),
+					None => env::remove_var(self.key),
+				}
+			}
+		}
+	}
+
+	#[test]
+	#[serial_test::serial(runserver_settings_environment)]
+	fn load_settings_applies_project_static_configuration() {
+		// Arrange
+		let temp_dir = tempfile::TempDir::new().expect("create temporary project directory");
+		let settings_dir = temp_dir.path().join("settings");
+		std::fs::create_dir_all(&settings_dir).expect("create settings directory");
+		std::fs::write(
+			settings_dir.join("base.toml"),
+			"debug = false\nstatic_url = \"/assets/\"\nstatic_root = \"public\"\nstaticfiles_dirs = [\"assets\"]\n",
+		)
+		.expect("write base settings");
+		std::fs::write(settings_dir.join("local.toml"), "").expect("write local settings");
+		let _environment = EnvVarGuard::capture("REINHARDT_ENV");
+		unsafe { env::set_var("REINHARDT_ENV", "local") };
+		let _cwd = CurrentDirGuard::enter(temp_dir.path());
+
+		// Act
+		let settings = load_settings();
+
+		// Assert
+		assert!(!settings.debug);
+		assert_eq!(settings.static_url, "/assets/");
+		assert_eq!(settings.static_root, Some(PathBuf::from("public")));
+		assert_eq!(settings.staticfiles_dirs, vec![PathBuf::from("assets")]);
+	}
+
 	#[tokio::test]
 	async fn path_resolution_serves_static_directory_assets_and_rejects_conflicts() {
 		// Arrange

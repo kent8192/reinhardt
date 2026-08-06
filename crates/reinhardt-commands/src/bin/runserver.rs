@@ -1237,6 +1237,7 @@ mod tests {
 		assert!(generated.is_ok());
 		assert!(invalid.is_err());
 		assert!(missing.is_err());
+		assert!(load_tls_config(&cert_path, &temp_dir.path().join("missing-key.pem")).is_err());
 	}
 
 	async fn response_text(

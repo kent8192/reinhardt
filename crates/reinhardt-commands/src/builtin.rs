@@ -4537,7 +4537,7 @@ mod tests {
 			.add_dependency("users", "0001_initial");
 		let articles = reinhardt_db::migrations::Migration::new("0001_initial", "articles")
 			.add_dependency("profiles", "0001_initial");
-		let unordered = vec![profiles, users, articles];
+		let unordered = [profiles, users, articles];
 
 		// Act
 		let ordered = dependency_ordered_migrations(unordered.iter()).expect("sort migration plan");
@@ -4582,7 +4582,7 @@ mod tests {
 			.add_dependency("accounts", "0001_initial");
 		let profiles = reinhardt_db::migrations::Migration::new("0001_initial", "profiles")
 			.add_dependency("accounts", "0001_initial");
-		let unordered = vec![profiles, base, audit];
+		let unordered = [profiles, base, audit];
 
 		// Act
 		let ordered = dependency_ordered_migrations(unordered.iter())

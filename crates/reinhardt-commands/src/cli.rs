@@ -633,6 +633,181 @@ pub async fn run_command_with_registry(
 /// [`initialize_orm_database`](crate::builtin::initialize_orm_database) can
 /// resolve the URL from `[core.databases.default]` even when `DATABASE_URL` is
 /// unset (#5042).
+#[derive(Debug)]
+enum BuiltinCommandPlan {
+	#[cfg(feature = "migrations")]
+	Makemigrations(CommandContext),
+	Migrate(CommandContext),
+	Infra(InfraSubcommand),
+	Runserver(CommandContext),
+	Shell(CommandContext),
+	Check(CommandContext),
+	Collectstatic {
+		clear: bool,
+		no_input: bool,
+		dry_run: bool,
+		link: bool,
+		ignore: Vec<String>,
+		index: Option<String>,
+		verbosity: u8,
+	},
+	Showurls(CommandContext),
+	#[cfg(feature = "introspect")]
+	Introspect {
+		format: OutputFormat,
+		section: Option<String>,
+		verbosity: u8,
+	},
+	#[cfg(feature = "openapi")]
+	Generateopenapi {
+		format: String,
+		output: PathBuf,
+		postman: bool,
+		verbosity: u8,
+	},
+	#[cfg(feature = "auth")]
+	Createsuperuser {
+		username: Option<String>,
+		email: Option<String>,
+		no_password: bool,
+		noinput: bool,
+		database: Option<String>,
+		verbosity: u8,
+	},
+}
+
+fn builtin_command_plan(command: Commands, verbosity: u8) -> BuiltinCommandPlan {
+	match command {
+		#[cfg(feature = "migrations")]
+		Commands::Makemigrations {
+			app_labels,
+			dry_run,
+			name,
+			check,
+			empty,
+			merge,
+			force_empty_state,
+			migration_dir: _,
+		} => BuiltinCommandPlan::Makemigrations(makemigrations_context(
+			app_labels,
+			dry_run,
+			name,
+			check,
+			empty,
+			merge,
+			force_empty_state,
+			verbosity,
+		)),
+		Commands::Migrate {
+			app_label,
+			migration_name,
+			database,
+			fake,
+			fake_initial,
+			plan,
+			migrations_dir,
+		} => BuiltinCommandPlan::Migrate(migrate_context_from_params(MigrateParams {
+			app_label,
+			migration_name,
+			database,
+			fake,
+			fake_initial,
+			plan,
+			migrations_dir,
+			verbosity,
+		})),
+		Commands::Infra { command } => BuiltinCommandPlan::Infra(command),
+		Commands::Runserver {
+			address,
+			noreload,
+			watch_delay,
+			no_wasm_rebuild,
+			no_wasm,
+			no_override_wasm,
+			force_wasm,
+			wasm_optional,
+			insecure,
+			no_docs,
+			with_pages,
+			static_dir,
+			no_spa,
+			index,
+		} => BuiltinCommandPlan::Runserver(runserver_context_from_options(&RunServerOptions {
+			address,
+			noreload,
+			watch_delay,
+			no_wasm_rebuild,
+			no_wasm,
+			no_override_wasm,
+			force_wasm,
+			wasm_optional,
+			insecure,
+			no_docs,
+			with_pages,
+			static_dir,
+			no_spa,
+			index,
+			verbosity,
+		})),
+		Commands::Shell { command } => BuiltinCommandPlan::Shell(shell_context(command, verbosity)),
+		Commands::Check { app_label, deploy } => {
+			BuiltinCommandPlan::Check(check_context(app_label, deploy, verbosity))
+		}
+		Commands::Collectstatic {
+			clear,
+			no_input,
+			dry_run,
+			link,
+			ignore,
+			index,
+		} => BuiltinCommandPlan::Collectstatic {
+			clear,
+			no_input,
+			dry_run,
+			link,
+			ignore,
+			index,
+			verbosity,
+		},
+		Commands::Showurls { names } => {
+			BuiltinCommandPlan::Showurls(showurls_context(names, verbosity))
+		}
+		#[cfg(feature = "introspect")]
+		Commands::Introspect { format, section } => BuiltinCommandPlan::Introspect {
+			format,
+			section,
+			verbosity,
+		},
+		#[cfg(feature = "openapi")]
+		Commands::Generateopenapi {
+			format,
+			output,
+			postman,
+		} => BuiltinCommandPlan::Generateopenapi {
+			format,
+			output,
+			postman,
+			verbosity,
+		},
+		#[cfg(feature = "auth")]
+		Commands::Createsuperuser {
+			username,
+			email,
+			no_password,
+			noinput,
+			database,
+		} => BuiltinCommandPlan::Createsuperuser {
+			username,
+			email,
+			no_password,
+			noinput,
+			database,
+			verbosity,
+		},
+		Commands::Custom { .. } => unreachable!("custom commands bypass built-in planning"),
+	}
+}
+
 async fn run_command_core(
 	command: Commands,
 	verbosity: u8,
@@ -655,59 +830,37 @@ async fn run_command_core(
 		crate::builtin::initialize_orm_database(&ctx).await?;
 	}
 
-	// `settings` is consumed by the database-init block above and the
-	// `makemigrations` arm below; bind it in feature combinations where neither
-	// path is compiled so it does not trip the unused-variable lint.
-	#[cfg(not(any(feature = "reinhardt-db", feature = "migrations")))]
-	let _ = &settings;
-
 	match command {
+		Commands::Custom { name, args } => {
+			execute_custom_command(&name, &args, verbosity, &registry).await
+		}
+		command => {
+			execute_builtin_command(builtin_command_plan(command, verbosity), settings).await
+		}
+	}
+}
+
+async fn execute_builtin_command(
+	plan: BuiltinCommandPlan,
+	settings: Option<Arc<dyn HasCommonSettings>>,
+) -> Result<(), Box<dyn std::error::Error>> {
+	match plan {
 		#[cfg(feature = "migrations")]
-		Commands::Makemigrations {
-			app_labels,
-			dry_run,
-			name,
-			check,
-			empty,
-			merge,
-			force_empty_state,
-			migration_dir: _,
-		} => {
-			execute_makemigrations(
-				app_labels,
-				dry_run,
-				name,
-				check,
-				empty,
-				merge,
-				force_empty_state,
-				verbosity,
-				settings.clone(),
-			)
-			.await
+		BuiltinCommandPlan::Makemigrations(mut ctx) => {
+			// `makemigrations` does not initialize the ORM database, so attach the
+			// composed settings here for database URL resolution (#5042).
+			if let Some(settings) = settings {
+				ctx = ctx.with_settings(settings);
+			}
+			MakeMigrationsCommand
+				.execute(&ctx)
+				.await
+				.map_err(|e| e.into())
 		}
-		Commands::Migrate {
-			app_label,
-			migration_name,
-			database,
-			fake,
-			fake_initial,
-			plan,
-			migrations_dir,
-		} => {
-			execute_migrate(MigrateParams {
-				app_label,
-				migration_name,
-				database,
-				fake,
-				fake_initial,
-				plan,
-				migrations_dir,
-				verbosity,
-			})
-			.await
+		BuiltinCommandPlan::Migrate(ctx) => {
+			MigrateCommand.execute(&ctx).await.map_err(|e| e.into())
 		}
-		Commands::Infra { command } => {
+		BuiltinCommandPlan::Infra(command) => {
 			crate::local_infra::InfraCommand::execute(
 				command,
 				&std::env::current_dir()?,
@@ -715,67 +868,42 @@ async fn run_command_core(
 			)
 			.await
 		}
-		Commands::Runserver {
-			address,
-			noreload,
-			watch_delay,
-			no_wasm_rebuild,
-			no_wasm,
-			no_override_wasm,
-			force_wasm,
-			wasm_optional,
-			insecure,
-			no_docs,
-			with_pages,
-			static_dir,
-			no_spa,
-			index,
-		} => {
-			execute_runserver(RunServerOptions {
-				address,
-				noreload,
-				watch_delay,
-				no_wasm_rebuild,
-				no_wasm,
-				no_override_wasm,
-				force_wasm,
-				wasm_optional,
-				insecure,
-				no_docs,
-				with_pages,
-				static_dir,
-				no_spa,
-				index,
-				verbosity,
-			})
-			.await
+		BuiltinCommandPlan::Runserver(ctx) => {
+			RunServerCommand.execute(&ctx).await.map_err(|e| e.into())
 		}
-		Commands::Shell { command } => execute_shell(command, verbosity).await,
-		Commands::Check { app_label, deploy } => execute_check(app_label, deploy, verbosity).await,
-		Commands::Collectstatic {
+		BuiltinCommandPlan::Shell(ctx) => ShellCommand.execute(&ctx).await.map_err(|e| e.into()),
+		BuiltinCommandPlan::Check(ctx) => CheckCommand.execute(&ctx).await.map_err(|e| e.into()),
+		BuiltinCommandPlan::Collectstatic {
 			clear,
 			no_input,
 			dry_run,
 			link,
 			ignore,
 			index,
+			verbosity,
 		} => execute_collectstatic(clear, no_input, dry_run, link, ignore, index, verbosity).await,
-		Commands::Showurls { names } => execute_showurls(names, verbosity).await,
+		BuiltinCommandPlan::Showurls(ctx) => execute_showurls(ctx).await,
 		#[cfg(feature = "introspect")]
-		Commands::Introspect { format, section } => execute_introspect(format, section, verbosity).await,
+		BuiltinCommandPlan::Introspect {
+			format,
+			section,
+			verbosity,
+		} => execute_introspect(format, section, verbosity).await,
 		#[cfg(feature = "openapi")]
-		Commands::Generateopenapi {
+		BuiltinCommandPlan::Generateopenapi {
 			format,
 			output,
 			postman,
+			verbosity,
 		} => execute_generateopenapi(format, output, postman, verbosity).await,
 		#[cfg(feature = "auth")]
-		Commands::Createsuperuser {
+		BuiltinCommandPlan::Createsuperuser {
 			username,
 			email,
 			no_password,
 			noinput,
 			database,
+			verbosity,
 		} => {
 			crate::createsuperuser::execute_createsuperuser(
 				username,
@@ -786,9 +914,6 @@ async fn run_command_core(
 				verbosity,
 			)
 			.await
-		}
-		Commands::Custom { name, args } => {
-			execute_custom_command(&name, &args, verbosity, &registry).await
 		}
 	}
 }
@@ -891,11 +1016,11 @@ async fn execute_custom_command(
 	cmd.execute(&ctx).await.map_err(|e| e.into())
 }
 
-/// Execute the makemigrations command
+/// Convert makemigrations CLI options into a command context.
 #[cfg(feature = "migrations")]
 // Allow too_many_arguments: CLI flags are mapped 1:1 to function parameters for clarity
 #[allow(clippy::too_many_arguments)]
-async fn execute_makemigrations(
+fn makemigrations_context(
 	app_labels: Vec<String>,
 	dry_run: bool,
 	name: Option<String>,
@@ -904,17 +1029,9 @@ async fn execute_makemigrations(
 	merge: bool,
 	force_empty_state: bool,
 	verbosity: u8,
-	settings: Option<Arc<dyn HasCommonSettings>>,
-) -> Result<(), Box<dyn std::error::Error>> {
+) -> CommandContext {
 	let mut ctx = CommandContext::default();
 	ctx.set_verbosity(verbosity);
-	// Attach the project's composed settings so `makemigrations` can resolve the
-	// database URL from `settings/*.toml` when no `--database`/`DATABASE_URL` is
-	// provided (#5042). `makemigrations` does not flow through
-	// `initialize_orm_database`, so it carries its own settings handle.
-	if let Some(s) = settings {
-		ctx = ctx.with_settings(s);
-	}
 
 	if !app_labels.is_empty() {
 		for label in app_labels {
@@ -941,8 +1058,7 @@ async fn execute_makemigrations(
 		ctx.set_option("name".to_string(), n);
 	}
 
-	let cmd = MakeMigrationsCommand;
-	cmd.execute(&ctx).await.map_err(|e| e.into())
+	ctx
 }
 
 /// Parameters for the migrate command
@@ -958,8 +1074,8 @@ struct MigrateParams {
 	verbosity: u8,
 }
 
-/// Execute the migrate command
-async fn execute_migrate(params: MigrateParams) -> Result<(), Box<dyn std::error::Error>> {
+/// Convert migrate CLI parameters into a command context.
+fn migrate_context_from_params(params: MigrateParams) -> CommandContext {
 	let mut ctx = CommandContext::default();
 	ctx.set_verbosity(params.verbosity);
 
@@ -989,8 +1105,7 @@ async fn execute_migrate(params: MigrateParams) -> Result<(), Box<dyn std::error
 		);
 	}
 
-	let cmd = MigrateCommand;
-	cmd.execute(&ctx).await.map_err(|e| e.into())
+	ctx
 }
 
 /// Options for the runserver command
@@ -1056,23 +1171,6 @@ fn runserver_context_from_options(options: &RunServerOptions) -> CommandContext 
 	ctx
 }
 
-/// Execute the runserver command
-async fn execute_runserver(options: RunServerOptions) -> Result<(), Box<dyn std::error::Error>> {
-	let ctx = runserver_context_from_options(&options);
-	let cmd = RunServerCommand;
-	cmd.execute(&ctx).await.map_err(|e| e.into())
-}
-
-/// Execute the shell command
-async fn execute_shell(
-	command: Option<String>,
-	verbosity: u8,
-) -> Result<(), Box<dyn std::error::Error>> {
-	let ctx = shell_context(command, verbosity);
-	let cmd = ShellCommand;
-	cmd.execute(&ctx).await.map_err(|e| e.into())
-}
-
 fn shell_context(command: Option<String>, verbosity: u8) -> CommandContext {
 	let mut ctx = CommandContext::default();
 	ctx.set_verbosity(verbosity);
@@ -1082,17 +1180,6 @@ fn shell_context(command: Option<String>, verbosity: u8) -> CommandContext {
 	}
 
 	ctx
-}
-
-/// Execute the check command
-async fn execute_check(
-	app_label: Option<String>,
-	deploy: bool,
-	verbosity: u8,
-) -> Result<(), Box<dyn std::error::Error>> {
-	let ctx = check_context(app_label, deploy, verbosity);
-	let cmd = CheckCommand;
-	cmd.execute(&ctx).await.map_err(|e| e.into())
 }
 
 fn check_context(app_label: Option<String>, deploy: bool, verbosity: u8) -> CommandContext {
@@ -1264,9 +1351,7 @@ async fn execute_collectstatic(
 	}
 }
 
-/// Execute the showurls command
-#[cfg(feature = "routers")]
-async fn execute_showurls(names: bool, verbosity: u8) -> Result<(), Box<dyn std::error::Error>> {
+fn showurls_context(names: bool, verbosity: u8) -> CommandContext {
 	let mut ctx = CommandContext::default();
 	ctx.set_verbosity(verbosity);
 
@@ -1274,12 +1359,18 @@ async fn execute_showurls(names: bool, verbosity: u8) -> Result<(), Box<dyn std:
 		ctx.set_option("names".to_string(), "true".to_string());
 	}
 
-	let cmd = ShowUrlsCommand;
-	cmd.execute(&ctx).await.map_err(|e| e.into())
+	ctx
 }
 
+/// Execute the showurls command.
+#[cfg(feature = "routers")]
+async fn execute_showurls(ctx: CommandContext) -> Result<(), Box<dyn std::error::Error>> {
+	ShowUrlsCommand.execute(&ctx).await.map_err(|e| e.into())
+}
+
+/// Execute the showurls command.
 #[cfg(not(feature = "routers"))]
-async fn execute_showurls(_names: bool, _verbosity: u8) -> Result<(), Box<dyn std::error::Error>> {
+async fn execute_showurls(_ctx: CommandContext) -> Result<(), Box<dyn std::error::Error>> {
 	Err("showurls command requires 'routers' feature. \
 		Enable it in your Cargo.toml: \
 		reinhardt-commands = { version = \"0.1.0\", features = [\"routers\"] }"
@@ -1861,6 +1952,287 @@ mod tests {
 		assert_eq!(ctx.args, vec!["accounts"]);
 		assert_eq!(ctx.option("deploy").map(String::as_str), Some("true"));
 		assert_eq!(ctx.verbosity(), 2);
+	}
+
+	#[test]
+	fn builtin_command_plan_maps_context_backed_commands() {
+		fn context(plan: BuiltinCommandPlan) -> CommandContext {
+			match plan {
+				BuiltinCommandPlan::Migrate(ctx)
+				| BuiltinCommandPlan::Runserver(ctx)
+				| BuiltinCommandPlan::Shell(ctx)
+				| BuiltinCommandPlan::Check(ctx)
+				| BuiltinCommandPlan::Showurls(ctx) => ctx,
+				#[cfg(feature = "migrations")]
+				BuiltinCommandPlan::Makemigrations(ctx) => ctx,
+				_ => panic!("test case must produce a context-backed plan"),
+			}
+		}
+
+		let cases = vec![
+			(
+				vec![
+					"manage",
+					"-vvv",
+					"migrate",
+					"accounts",
+					"0002_add_profile",
+					"--database",
+					"sqlite:///tmp/reinhardt.db",
+					"--fake",
+					"--fake-initial",
+					"--plan",
+					"--migrations-dir",
+					"db/migrations",
+				],
+				vec!["accounts", "0002_add_profile"],
+				vec![
+					("database", "sqlite:///tmp/reinhardt.db"),
+					("fake", "true"),
+					("fake-initial", "true"),
+					("migrations-dir", "db/migrations"),
+					("plan", "true"),
+				],
+				3,
+			),
+			(
+				vec![
+					"manage",
+					"-vv",
+					"runserver",
+					"0.0.0.0:9000",
+					"--noreload",
+					"--watch-delay",
+					"25",
+					"--no-wasm-rebuild",
+					"--no-wasm",
+					"--no-override-wasm",
+					"--force-wasm",
+					"--wasm-optional",
+					"--insecure",
+					"--no-docs",
+					"--with-pages",
+					"--static-dir",
+					"public",
+					"--no-spa",
+					"--index",
+					"frontend/index.html",
+				],
+				vec!["0.0.0.0:9000"],
+				vec![
+					("watch-delay", "25"),
+					("noreload", "true"),
+					("no-wasm-rebuild", "true"),
+					("no-wasm", "true"),
+					("no-override-wasm", "true"),
+					("force-wasm", "true"),
+					("wasm-optional", "true"),
+					("insecure", "true"),
+					("no_docs", "true"),
+					("with-pages", "true"),
+					("static-dir", "public"),
+					("no-spa", "true"),
+					("index", "frontend/index.html"),
+				],
+				2,
+			),
+			(
+				vec!["manage", "-v", "shell", "--command", "println!(\"ready\")"],
+				Vec::new(),
+				vec![("command", "println!(\"ready\")")],
+				1,
+			),
+			(
+				vec!["manage", "-vv", "check", "accounts", "--deploy"],
+				vec!["accounts"],
+				vec![("deploy", "true")],
+				2,
+			),
+			(
+				vec!["manage", "-v", "showurls", "--names"],
+				Vec::new(),
+				vec![("names", "true")],
+				1,
+			),
+		];
+
+		for (arguments, expected_args, expected_options, expected_verbosity) in cases {
+			let cli = Cli::try_parse_from(arguments).expect("CLI input parses");
+			let ctx = context(builtin_command_plan(cli.command, cli.verbosity));
+			assert_eq!(ctx.args, expected_args);
+			assert_eq!(ctx.options.len(), expected_options.len());
+			for (key, value) in expected_options {
+				assert_eq!(ctx.option(key).map(String::as_str), Some(value));
+			}
+			assert_eq!(ctx.verbosity(), expected_verbosity);
+		}
+	}
+
+	#[cfg(feature = "migrations")]
+	#[test]
+	fn builtin_command_plan_maps_makemigrations_context() {
+		let cli = Cli::try_parse_from([
+			"manage",
+			"-vvvv",
+			"makemigrations",
+			"accounts",
+			"profiles",
+			"--dry-run",
+			"--name",
+			"add_profile",
+			"--check",
+			"--empty",
+			"--merge",
+			"--force-empty-state",
+			"--migration-dir",
+			"ignored-by-command-context",
+		])
+		.expect("CLI input parses");
+		let plan = builtin_command_plan(cli.command, cli.verbosity);
+
+		let BuiltinCommandPlan::Makemigrations(ctx) = plan else {
+			panic!("makemigrations command creates a makemigrations plan");
+		};
+		assert_eq!(ctx.args, vec!["accounts", "profiles"]);
+		assert_eq!(ctx.options.len(), 6);
+		assert_eq!(ctx.option("dry-run").map(String::as_str), Some("true"));
+		assert_eq!(ctx.option("name").map(String::as_str), Some("add_profile"));
+		assert_eq!(ctx.option("check").map(String::as_str), Some("true"));
+		assert_eq!(ctx.option("empty").map(String::as_str), Some("true"));
+		assert_eq!(ctx.option("merge").map(String::as_str), Some("true"));
+		assert_eq!(
+			ctx.option("force-empty-state").map(String::as_str),
+			Some("true")
+		);
+		assert_eq!(ctx.verbosity(), 4);
+	}
+
+	#[test]
+	fn builtin_command_plan_preserves_effect_adapter_inputs() {
+		let infra = builtin_command_plan(
+			Commands::Infra {
+				command: InfraSubcommand::Status {
+					profile: Some("staging".to_string()),
+					json: true,
+				},
+			},
+			5,
+		);
+		assert!(matches!(
+			infra,
+			BuiltinCommandPlan::Infra(InfraSubcommand::Status {
+				profile: Some(ref profile),
+				json: true,
+			}) if profile == "staging"
+		));
+
+		let collectstatic = builtin_command_plan(
+			Commands::Collectstatic {
+				clear: true,
+				no_input: true,
+				dry_run: true,
+				link: true,
+				ignore: vec!["*.map".to_string()],
+				index: Some("frontend/index.html".to_string()),
+			},
+			2,
+		);
+		assert!(matches!(
+			collectstatic,
+			BuiltinCommandPlan::Collectstatic {
+				clear: true,
+				no_input: true,
+				dry_run: true,
+				link: true,
+				ignore,
+				index: Some(index),
+				verbosity: 2,
+			} if ignore == ["*.map"] && index == "frontend/index.html"
+		));
+	}
+
+	#[cfg(feature = "introspect")]
+	#[test]
+	fn builtin_command_plan_preserves_introspect_inputs() {
+		let plan = builtin_command_plan(
+			Commands::Introspect {
+				format: OutputFormat::Json,
+				section: Some("databases".to_string()),
+			},
+			2,
+		);
+
+		assert!(matches!(
+			plan,
+			BuiltinCommandPlan::Introspect {
+				format: OutputFormat::Json,
+				section: Some(ref section),
+				verbosity: 2,
+			} if section == "databases"
+		));
+	}
+
+	#[cfg(feature = "openapi")]
+	#[test]
+	fn builtin_command_plan_preserves_openapi_inputs() {
+		let plan = builtin_command_plan(
+			Commands::Generateopenapi {
+				format: "yaml".to_string(),
+				output: PathBuf::from("api/openapi.yaml"),
+				postman: true,
+			},
+			1,
+		);
+
+		assert!(matches!(
+			plan,
+			BuiltinCommandPlan::Generateopenapi {
+				format,
+				output,
+				postman: true,
+				verbosity: 1,
+			} if format == "yaml" && output.as_path() == Path::new("api/openapi.yaml")
+		));
+	}
+
+	#[cfg(feature = "auth")]
+	#[test]
+	fn builtin_command_plan_preserves_createsuperuser_inputs() {
+		let plan = builtin_command_plan(
+			Commands::Createsuperuser {
+				username: Some("admin".to_string()),
+				email: Some("admin@example.com".to_string()),
+				no_password: true,
+				noinput: true,
+				database: Some("postgres://localhost/app".to_string()),
+			},
+			4,
+		);
+
+		assert!(matches!(
+			plan,
+			BuiltinCommandPlan::Createsuperuser {
+				username: Some(ref username),
+				email: Some(ref email),
+				no_password: true,
+				noinput: true,
+				database: Some(ref database),
+				verbosity: 4,
+			} if username == "admin" && email == "admin@example.com" && database == "postgres://localhost/app"
+		));
+	}
+
+	#[cfg(not(feature = "routers"))]
+	#[tokio::test]
+	async fn execute_showurls_reports_the_feature_requirement_exactly() {
+		let error = execute_showurls(showurls_context(false, 0))
+			.await
+			.expect_err("showurls requires the routers feature");
+
+		assert_eq!(
+			error.to_string(),
+			"showurls command requires 'routers' feature. Enable it in your Cargo.toml: reinhardt-commands = { version = \"0.1.0\", features = [\"routers\"] }"
+		);
 	}
 
 	#[test]

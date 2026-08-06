@@ -1365,6 +1365,29 @@ mod tests {
 		);
 	}
 
+	#[test]
+	#[serial_test::serial(runserver_settings_environment)]
+	fn runserver_fallbacks_use_defaults_without_building_wasm() {
+		let project = tempfile::TempDir::new().expect("create temporary project");
+		let _environment = EnvVarGuard::capture("REINHARDT_ENV");
+		unsafe { env::set_var("REINHARDT_ENV", "local") };
+		let _cwd = CurrentDirGuard::enter(project.path());
+
+		let missing = load_settings();
+		assert!(missing.debug);
+		assert_eq!(missing.static_url, "/static/");
+		assert_eq!(missing.static_root, None);
+		assert!(missing.staticfiles_dirs.is_empty());
+		std::fs::create_dir("settings").expect("create settings directory");
+		std::fs::write("settings/base.toml", "[invalid").expect("write malformed settings");
+		std::fs::write("settings/local.toml", "").expect("write local settings");
+		let malformed = load_settings();
+		assert_eq!(malformed.static_url, "/static/");
+		build_wasm_targets(true, false, false);
+		assert!(run_collectstatic(&missing));
+		assert!(Path::new("staticfiles/manifest.json").is_file());
+	}
+
 	#[tokio::test]
 	async fn path_resolution_serves_static_directory_assets_and_rejects_conflicts() {
 		// Arrange

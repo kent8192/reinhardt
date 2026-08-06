@@ -112,9 +112,13 @@ cargo llvm-cov report \
   --coverage-target-only \
   --package reinhardt-storages \
   --lcov \
-  --output-path /tmp/reinhardt-intra-crate-lcov.info
+  --output-path /tmp/intra-crate-lcov.info
 
-bash scripts/validate-lcov-hits.sh /tmp/reinhardt-intra-crate-lcov.info
+bash scripts/validate-lcov-hits.sh /tmp/intra-crate-lcov.info
+
+rm -rf /tmp/reinhardt-intra-cov-target
+rm -rf /tmp/reinhardt-intra-cov-build
+rm -f /tmp/intra-crate-lcov.info
 ```
 
 The test and report phases must use the same target options. A passing test

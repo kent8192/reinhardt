@@ -468,6 +468,8 @@ async fn create_workspace_app(
 	with_pages: bool,
 	ctx: &CommandContext,
 ) -> CommandResult<()> {
+	let workspace_members_update = prepare_workspace_members_update(project_root, app_name)?;
+
 	// Create apps directory if it doesn't exist
 	let apps_dir = project_root.join("apps");
 	if !apps_dir.exists() {
@@ -476,7 +478,6 @@ async fn create_workspace_app(
 		})?;
 		ctx.verbose("Created apps/ directory");
 	}
-
 	// Set target to apps/{app_name} if no custom target is specified
 	let app_target = if let Some(t) = target {
 		t.to_path_buf()
@@ -507,7 +508,6 @@ async fn create_workspace_app(
 	let template_key = if with_pages { "pages" } else { "restful" };
 	let subdir = format!("app_{}_template", template_key);
 	let source = resolve_source(effective_template_dir_override(ctx).as_deref(), &subdir)?;
-	workspace_members_updated_content(project_root, app_name)?;
 
 	// Render template into apps/<name>/src/ so the standard crate layout is
 	// preserved (Cargo.toml sits one level above, at apps/<name>/).
@@ -521,8 +521,8 @@ async fn create_workspace_app(
 		generate_workspace_build_rs(app_name, &app_target)?;
 	}
 
-	// Update workspace Cargo.toml
-	update_workspace_members(project_root, app_name)?;
+	// Update workspace Cargo.toml with the preflighted content.
+	update_workspace_members(workspace_members_update)?;
 
 	Ok(())
 }
@@ -644,17 +644,17 @@ fn generate_workspace_build_rs(app_name: &str, app_dir: &Path) -> CommandResult<
 }
 
 /// Update workspace Cargo.toml to add new app as a member
-fn update_workspace_members(project_root: &Path, app_name: &str) -> CommandResult<()> {
+fn update_workspace_members(update: (PathBuf, String)) -> CommandResult<()> {
 	use std::fs;
 
-	let (cargo_toml_path, new_content) = workspace_members_updated_content(project_root, app_name)?;
+	let (cargo_toml_path, new_content) = update;
 	fs::write(&cargo_toml_path, new_content)
 		.map_err(|e| CommandError::ExecutionError(format!("Failed to write Cargo.toml: {}", e)))?;
 
 	Ok(())
 }
 
-fn workspace_members_updated_content(
+fn prepare_workspace_members_update(
 	project_root: &Path,
 	app_name: &str,
 ) -> CommandResult<(PathBuf, String)> {
@@ -1159,7 +1159,9 @@ mod tests {
 
 		// Act
 		for _ in 0..2 {
-			update_workspace_members(project.path(), "accounts").expect("add workspace member");
+			let update = prepare_workspace_members_update(project.path(), "accounts")
+				.expect("prepare workspace member update");
+			update_workspace_members(update).expect("add workspace member");
 			update_apps_export(project.path(), "accounts", true).expect("export workspace app");
 			update_installed_apps_block(project.path(), "accounts")
 				.expect("register installed app");
@@ -1203,7 +1205,7 @@ mod tests {
 
 		// Act & Assert
 		assert_eq!(
-			update_workspace_members(project.path(), "accounts")
+			prepare_workspace_members_update(project.path(), "accounts")
 				.expect_err("missing workspace members must fail")
 				.to_string(),
 			"Execution error: No [workspace] section with members array found in Cargo.toml. Please add one manually or use a workspace template."
@@ -1281,21 +1283,14 @@ mod tests {
 	}
 
 	#[tokio::test]
-	async fn workspace_creation_validates_manifest_before_overwriting_an_existing_app() {
+	async fn workspace_creation_rejects_invalid_manifests_without_creating_apps_directory() {
 		// Arrange
 		let project = tempdir().expect("create project directory");
-		std::fs::create_dir_all(project.path().join("apps/accounts/src"))
-			.expect("create existing app source directory");
 		std::fs::write(
 			project.path().join("Cargo.toml"),
 			"[package]\nname = \"demo\"\n",
 		)
 		.expect("write invalid workspace manifest");
-		std::fs::write(
-			project.path().join("apps/accounts/src/lib.rs"),
-			"pub const PREEXISTING: &str = \"keep\";\n",
-		)
-		.expect("write existing app source");
 		let before = snapshot_tree(project.path());
 		let ctx = CommandContext::new(Vec::new());
 
@@ -1310,6 +1305,31 @@ mod tests {
 			"Execution error: No [workspace] section with members array found in Cargo.toml. Please add one manually or use a workspace template."
 		);
 		assert_eq!(snapshot_tree(project.path()), before);
+	}
+
+	#[test]
+	fn prepared_workspace_manifest_update_is_written_without_recomputing() {
+		// Arrange
+		let project = tempdir().expect("create project directory");
+		let manifest_path = project.path().join("Cargo.toml");
+		std::fs::write(&manifest_path, "[workspace]\nmembers = [\n]\n")
+			.expect("write workspace manifest");
+		let update = prepare_workspace_members_update(project.path(), "accounts")
+			.expect("prepare workspace member update");
+		std::fs::write(
+			&manifest_path,
+			"[workspace]\nmembers = [\n    \"changed\",\n]\n",
+		)
+		.expect("change manifest after planning");
+
+		// Act
+		update_workspace_members(update).expect("write prepared workspace member update");
+
+		// Assert
+		assert_eq!(
+			std::fs::read_to_string(manifest_path).expect("read updated workspace manifest"),
+			"[workspace]\nmembers = [\n    \"apps/accounts\",\n]\n"
+		);
 	}
 
 	#[test]
@@ -1348,11 +1368,11 @@ mod tests {
 		);
 	}
 
-	fn snapshot_tree(root: &std::path::Path) -> Vec<(std::path::PathBuf, Vec<u8>)> {
+	fn snapshot_tree(root: &std::path::Path) -> Vec<(std::path::PathBuf, Option<Vec<u8>>)> {
 		fn visit(
 			root: &std::path::Path,
 			path: &std::path::Path,
-			snapshot: &mut Vec<(std::path::PathBuf, Vec<u8>)>,
+			snapshot: &mut Vec<(std::path::PathBuf, Option<Vec<u8>>)>,
 		) {
 			let mut entries = std::fs::read_dir(path)
 				.expect("read snapshot directory")
@@ -1361,19 +1381,21 @@ mod tests {
 			entries.sort_by_key(|entry| entry.file_name());
 			for entry in entries {
 				let entry_path = entry.path();
+				let relative_path = entry_path
+					.strip_prefix(root)
+					.expect("snapshot entry is below root")
+					.to_path_buf();
 				if entry
 					.file_type()
 					.expect("read snapshot entry type")
 					.is_dir()
 				{
+					snapshot.push((relative_path, None));
 					visit(root, &entry_path, snapshot);
 				} else {
 					snapshot.push((
-						entry_path
-							.strip_prefix(root)
-							.expect("snapshot entry is below root")
-							.to_path_buf(),
-						std::fs::read(entry_path).expect("read snapshot file"),
+						relative_path,
+						Some(std::fs::read(entry_path).expect("read snapshot file")),
 					));
 				}
 			}

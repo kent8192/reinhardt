@@ -20,6 +20,7 @@ struct LoginForm {
 
 #[cfg(feature = "multipart")]
 #[derive(Clone, Debug, Deserialize, PartialEq)]
+#[serde(deny_unknown_fields)]
 struct MultipartForm {
 	username: String,
 	age: String,

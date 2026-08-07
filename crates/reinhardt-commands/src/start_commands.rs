@@ -282,6 +282,11 @@ impl BaseCommand for StartAppCommand {
 			));
 		}
 
+		let project_root = env::current_dir().map_err(|e| {
+			CommandError::ExecutionError(format!("Failed to determine project root: {}", e))
+		})?;
+		let target = target.map(|path| project_root.join(path));
+
 		// Determine app type and template key
 		let (app_type, template_key) = if with_pages {
 			("Pages (WASM + SSR)", "pages")
@@ -301,7 +306,8 @@ impl BaseCommand for StartAppCommand {
 
 		if is_workspace {
 			// Create as workspace crate
-			create_workspace_app(&app_name, target.as_deref(), with_pages, ctx).await?;
+			create_workspace_app(&project_root, &app_name, target.as_deref(), with_pages, ctx)
+				.await?;
 
 			ctx.success(&format!(
 				"{} app '{}' created successfully as a workspace crate in apps/{}!",
@@ -314,7 +320,7 @@ impl BaseCommand for StartAppCommand {
 		} else {
 			// Create as module (default)
 			// Create src/apps directory if it doesn't exist
-			let apps_dir = PathBuf::from("src/apps");
+			let apps_dir = project_root.join("src/apps");
 			if !apps_dir.exists() {
 				std::fs::create_dir_all(&apps_dir).map_err(|e| {
 					CommandError::ExecutionError(format!("Failed to create apps directory: {}", e))
@@ -392,12 +398,12 @@ impl BaseCommand for StartAppCommand {
 			}
 
 			// Update or create apps.rs to export the new app
-			update_apps_export(&app_name, with_pages)?;
+			update_apps_export(&project_root, &app_name, with_pages)?;
 
 			// Append to installed_apps! { ... } block (Issue #3670).
 			// Idempotent and silently skipped if src/config/apps.rs is
 			// missing (older project structure).
-			update_installed_apps_block(&app_name)?;
+			update_installed_apps_block(&project_root, &app_name)?;
 
 			ctx.success(&format!(
 				"{} app '{}' created successfully in src/apps/{}!",
@@ -456,20 +462,22 @@ fn effective_template_dir_override(ctx: &CommandContext) -> Option<PathBuf> {
 
 /// Create a workspace-based app
 async fn create_workspace_app(
+	project_root: &Path,
 	app_name: &str,
 	target: Option<&Path>,
 	with_pages: bool,
 	ctx: &CommandContext,
 ) -> CommandResult<()> {
+	let workspace_members_update = prepare_workspace_members_update(project_root, app_name)?;
+
 	// Create apps directory if it doesn't exist
-	let apps_dir = PathBuf::from("apps");
+	let apps_dir = project_root.join("apps");
 	if !apps_dir.exists() {
 		std::fs::create_dir_all(&apps_dir).map_err(|e| {
 			CommandError::ExecutionError(format!("Failed to create apps directory: {}", e))
 		})?;
 		ctx.verbose("Created apps/ directory");
 	}
-
 	// Set target to apps/{app_name} if no custom target is specified
 	let app_target = if let Some(t) = target {
 		t.to_path_buf()
@@ -489,9 +497,9 @@ async fn create_workspace_app(
 	// the current directory (the workspace root), normalizing hyphens to
 	// underscores so the import is a valid Rust path. Falls back to
 	// `"project"` when the directory name is unavailable.
-	let project_crate_name = std::env::current_dir()
-		.ok()
-		.and_then(|p| p.file_name().map(|n| n.to_string_lossy().replace('-', "_")))
+	let project_crate_name = project_root
+		.file_name()
+		.map(|n| n.to_string_lossy().replace('-', "_"))
 		.unwrap_or_else(|| "project".to_string());
 	context.insert("project_crate_name", &project_crate_name)?;
 
@@ -513,8 +521,8 @@ async fn create_workspace_app(
 		generate_workspace_build_rs(app_name, &app_target)?;
 	}
 
-	// Update workspace Cargo.toml
-	update_workspace_members(app_name)?;
+	// Update workspace Cargo.toml with the preflighted content.
+	update_workspace_members(workspace_members_update)?;
 
 	Ok(())
 }
@@ -636,10 +644,23 @@ fn generate_workspace_build_rs(app_name: &str, app_dir: &Path) -> CommandResult<
 }
 
 /// Update workspace Cargo.toml to add new app as a member
-fn update_workspace_members(app_name: &str) -> CommandResult<()> {
+fn update_workspace_members(update: (PathBuf, String)) -> CommandResult<()> {
 	use std::fs;
 
-	let cargo_toml_path = PathBuf::from("Cargo.toml");
+	let (cargo_toml_path, new_content) = update;
+	fs::write(&cargo_toml_path, new_content)
+		.map_err(|e| CommandError::ExecutionError(format!("Failed to write Cargo.toml: {}", e)))?;
+
+	Ok(())
+}
+
+fn prepare_workspace_members_update(
+	project_root: &Path,
+	app_name: &str,
+) -> CommandResult<(PathBuf, String)> {
+	use std::fs;
+
+	let cargo_toml_path = project_root.join("Cargo.toml");
 
 	if !cargo_toml_path.exists() {
 		return Err(CommandError::ExecutionError(
@@ -702,12 +723,10 @@ fn update_workspace_members(app_name: &str) -> CommandResult<()> {
         ));
 	}
 
-	// Write back
+	// Return the normalized manifest so callers can validate it before any
+	// scaffold files are created.
 	let new_content = lines.join("\n") + "\n";
-	fs::write(&cargo_toml_path, new_content)
-		.map_err(|e| CommandError::ExecutionError(format!("Failed to write Cargo.toml: {}", e)))?;
-
-	Ok(())
+	Ok((cargo_toml_path, new_content))
 }
 
 /// Update or create apps.rs to export the new app using AST
@@ -723,11 +742,11 @@ fn update_workspace_members(app_name: &str) -> CommandResult<()> {
 /// cfg-gated, so adding `#[cfg(server)]` there would silently drop the
 /// re-export (and would emit an `unexpected_cfgs` warning) — keep it
 /// un-gated for REST.
-fn update_apps_export(app_name: &str, with_pages: bool) -> CommandResult<()> {
+fn update_apps_export(project_root: &Path, app_name: &str, with_pages: bool) -> CommandResult<()> {
 	use std::fs;
 	use syn::{File, Item, ItemMod, ItemUse, parse_file};
 
-	let apps_file = PathBuf::from("src/apps.rs");
+	let apps_file = project_root.join("src/apps.rs");
 	let camel_case_name = to_camel_case(app_name);
 
 	// Parse existing file or create default AST
@@ -821,10 +840,10 @@ fn update_apps_export(app_name: &str, with_pages: bool) -> CommandResult<()> {
 /// Silently succeeds if `src/config/apps.rs` does not exist (projects
 /// scaffolded before this change may not have it; users are expected to
 /// add it manually following the migration guide).
-fn update_installed_apps_block(app_name: &str) -> CommandResult<()> {
+fn update_installed_apps_block(project_root: &Path, app_name: &str) -> CommandResult<()> {
 	use std::fs;
 
-	let apps_file = PathBuf::from("src/config/apps.rs");
+	let apps_file = project_root.join("src/config/apps.rs");
 	if !apps_file.exists() {
 		// Pre-#3670 projects don't have this file — skip silently. Users
 		// on an older project structure can still use the new macro
@@ -1118,5 +1137,272 @@ mod tests {
 
 		// Assert
 		assert!(result.is_ok(), "should accept '{}'", name);
+	}
+
+	#[test]
+	fn workspace_mutation_helpers_are_root_explicit_and_idempotent() {
+		// Arrange
+		let project = tempdir().expect("create project directory");
+		std::fs::write(
+			project.path().join("Cargo.toml"),
+			"[workspace]\nmembers = [\n]\n",
+		)
+		.expect("write workspace manifest");
+		std::fs::create_dir_all(project.path().join("src/config"))
+			.expect("create source directories");
+		std::fs::write(project.path().join("src/apps.rs"), "").expect("write apps export");
+		std::fs::write(
+			project.path().join("src/config/apps.rs"),
+			"installed_apps! {\n}\n",
+		)
+		.expect("write installed apps block");
+
+		// Act
+		for _ in 0..2 {
+			let update = prepare_workspace_members_update(project.path(), "accounts")
+				.expect("prepare workspace member update");
+			update_workspace_members(update).expect("add workspace member");
+			update_apps_export(project.path(), "accounts", true).expect("export workspace app");
+			update_installed_apps_block(project.path(), "accounts")
+				.expect("register installed app");
+		}
+
+		// Assert
+		assert_eq!(
+			std::fs::read_to_string(project.path().join("Cargo.toml"))
+				.expect("read workspace manifest"),
+			"[workspace]\nmembers = [\n    \"apps/accounts\",\n]\n"
+		);
+		assert_eq!(
+			std::fs::read_to_string(project.path().join("src/apps.rs")).expect("read apps export"),
+			"pub mod accounts;\n#[cfg(server)]\npub use accounts::AccountsConfig;\n"
+		);
+		assert_eq!(
+			std::fs::read_to_string(project.path().join("src/config/apps.rs"))
+				.expect("read installed apps block"),
+			"installed_apps! {\n    accounts: \"accounts\",\n}\n"
+		);
+	}
+
+	#[test]
+	fn workspace_mutation_helpers_preserve_files_on_invalid_inputs() {
+		// Arrange
+		let project = tempdir().expect("create project directory");
+		std::fs::create_dir_all(project.path().join("src/config"))
+			.expect("create source directories");
+		std::fs::write(
+			project.path().join("Cargo.toml"),
+			"[package]\nname = \"demo\"\n",
+		)
+		.expect("write package manifest");
+		std::fs::write(project.path().join("src/apps.rs"), "pub mod ;\n")
+			.expect("write malformed apps export");
+		std::fs::write(
+			project.path().join("src/config/apps.rs"),
+			"not_an_apps_macro! {}\n",
+		)
+		.expect("write missing installed apps block");
+
+		// Act & Assert
+		assert_eq!(
+			prepare_workspace_members_update(project.path(), "accounts")
+				.expect_err("missing workspace members must fail")
+				.to_string(),
+			"Execution error: No [workspace] section with members array found in Cargo.toml. Please add one manually or use a workspace template."
+		);
+		assert_eq!(
+			update_apps_export(project.path(), "accounts", false)
+				.expect_err("malformed apps export must fail")
+				.to_string(),
+			"Execution error: Failed to parse apps.rs: expected identifier"
+		);
+		assert_eq!(
+			update_installed_apps_block(project.path(), "accounts")
+				.expect_err("missing installed apps macro must fail")
+				.to_string(),
+			format!(
+				"Execution error: {} does not contain `installed_apps! {{ ... }}`; cannot register new app",
+				project.path().join("src/config/apps.rs").display()
+			)
+		);
+		assert_eq!(
+			std::fs::read_to_string(project.path().join("Cargo.toml"))
+				.expect("read package manifest"),
+			"[package]\nname = \"demo\"\n"
+		);
+		assert_eq!(
+			std::fs::read_to_string(project.path().join("src/apps.rs"))
+				.expect("read malformed apps export"),
+			"pub mod ;\n"
+		);
+		assert_eq!(
+			std::fs::read_to_string(project.path().join("src/config/apps.rs"))
+				.expect("read missing installed apps block"),
+			"not_an_apps_macro! {}\n"
+		);
+	}
+
+	#[test]
+	fn workspace_mutation_helpers_report_all_installed_apps_brace_errors() {
+		// Arrange
+		let project = tempdir().expect("create project directory");
+		std::fs::create_dir_all(project.path().join("src/config"))
+			.expect("create source directories");
+		let apps_file = project.path().join("src/config/apps.rs");
+
+		// Act & Assert
+		std::fs::write(&apps_file, "installed_apps!\n").expect("write missing opening brace");
+		assert_eq!(
+			update_installed_apps_block(project.path(), "accounts")
+				.expect_err("missing opening brace must fail")
+				.to_string(),
+			format!(
+				"Execution error: malformed installed_apps! block in {} (no opening brace)",
+				apps_file.display()
+			)
+		);
+
+		std::fs::write(&apps_file, "installed_apps! {\n").expect("write unmatched brace");
+		assert_eq!(
+			update_installed_apps_block(project.path(), "accounts")
+				.expect_err("unmatched opening brace must fail")
+				.to_string(),
+			format!(
+				"Execution error: malformed installed_apps! block in {} (unmatched brace)",
+				apps_file.display()
+			)
+		);
+
+		std::fs::write(project.path().join("src/apps.rs"), "").expect("write apps export");
+		assert_eq!(
+			update_apps_export(project.path(), "1accounts", false)
+				.expect_err("invalid identifier must fail")
+				.to_string(),
+			"Invalid arguments: App name '1accounts' is not a valid Rust identifier (must start with a letter or underscore)"
+		);
+	}
+
+	#[tokio::test]
+	async fn workspace_creation_rejects_invalid_manifests_without_creating_apps_directory() {
+		// Arrange
+		let project = tempdir().expect("create project directory");
+		std::fs::write(
+			project.path().join("Cargo.toml"),
+			"[package]\nname = \"demo\"\n",
+		)
+		.expect("write invalid workspace manifest");
+		let before = snapshot_tree(project.path());
+		let ctx = CommandContext::new(Vec::new());
+
+		// Act
+		let error = create_workspace_app(project.path(), "accounts", None, false, &ctx)
+			.await
+			.expect_err("missing workspace members must stop generation");
+
+		// Assert
+		assert_eq!(
+			error.to_string(),
+			"Execution error: No [workspace] section with members array found in Cargo.toml. Please add one manually or use a workspace template."
+		);
+		assert_eq!(snapshot_tree(project.path()), before);
+	}
+
+	#[test]
+	fn prepared_workspace_manifest_update_is_written_without_recomputing() {
+		// Arrange
+		let project = tempdir().expect("create project directory");
+		let manifest_path = project.path().join("Cargo.toml");
+		std::fs::write(&manifest_path, "[workspace]\nmembers = [\n]\n")
+			.expect("write workspace manifest");
+		let update = prepare_workspace_members_update(project.path(), "accounts")
+			.expect("prepare workspace member update");
+		std::fs::write(
+			&manifest_path,
+			"[workspace]\nmembers = [\n    \"changed\",\n]\n",
+		)
+		.expect("change manifest after planning");
+
+		// Act
+		update_workspace_members(update).expect("write prepared workspace member update");
+
+		// Assert
+		assert_eq!(
+			std::fs::read_to_string(manifest_path).expect("read updated workspace manifest"),
+			"[workspace]\nmembers = [\n    \"apps/accounts\",\n]\n"
+		);
+	}
+
+	#[test]
+	fn partial_template_override_uses_embedded_files_for_missing_entries() {
+		// Arrange
+		let overrides = tempdir().expect("create template overrides");
+		let override_template = overrides.path().join("app_restful_template");
+		std::fs::create_dir_all(&override_template).expect("create app override template");
+		std::fs::write(
+			override_template.join("lib.rs.tpl"),
+			"pub const SOURCE: &str = \"override\";\n",
+		)
+		.expect("write override template");
+		let source = resolve_source(Some(overrides.path()), "app_restful_template")
+			.expect("resolve partial override source");
+		let embedded = EmbeddedSource::new("app_restful_template");
+
+		// Act
+		let overridden = source
+			.read_file(Path::new("lib.rs.tpl"))
+			.expect("read override file");
+		let fallback = source
+			.read_file(Path::new("models.rs.tpl"))
+			.expect("read fallback file");
+
+		// Assert
+		assert_eq!(
+			overridden.as_ref(),
+			b"pub const SOURCE: &str = \"override\";\n"
+		);
+		assert_eq!(
+			fallback,
+			embedded
+				.read_file(Path::new("models.rs.tpl"))
+				.expect("read embedded fallback file")
+		);
+	}
+
+	fn snapshot_tree(root: &std::path::Path) -> Vec<(std::path::PathBuf, Option<Vec<u8>>)> {
+		fn visit(
+			root: &std::path::Path,
+			path: &std::path::Path,
+			snapshot: &mut Vec<(std::path::PathBuf, Option<Vec<u8>>)>,
+		) {
+			let mut entries = std::fs::read_dir(path)
+				.expect("read snapshot directory")
+				.map(|entry| entry.expect("read snapshot entry"))
+				.collect::<Vec<_>>();
+			entries.sort_by_key(|entry| entry.file_name());
+			for entry in entries {
+				let entry_path = entry.path();
+				let relative_path = entry_path
+					.strip_prefix(root)
+					.expect("snapshot entry is below root")
+					.to_path_buf();
+				if entry
+					.file_type()
+					.expect("read snapshot entry type")
+					.is_dir()
+				{
+					snapshot.push((relative_path, None));
+					visit(root, &entry_path, snapshot);
+				} else {
+					snapshot.push((
+						relative_path,
+						Some(std::fs::read(entry_path).expect("read snapshot file")),
+					));
+				}
+			}
+		}
+
+		let mut snapshot = Vec::new();
+		visit(root, root, &mut snapshot);
+		snapshot
 	}
 }

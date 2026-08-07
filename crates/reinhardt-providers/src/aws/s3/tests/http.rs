@@ -21,6 +21,21 @@ struct RawHttpServer {
 }
 
 impl RawHttpServer {
+	async fn connection_reset() -> Self {
+		let listener = TcpListener::bind("127.0.0.1:0")
+			.await
+			.expect("bind raw HTTP fixture");
+		let address = listener.local_addr().expect("fixture address");
+		let task = tokio::spawn(async move {
+			let (socket, _) = listener.accept().await.expect("accept one request");
+			drop(socket);
+		});
+		Self {
+			endpoint: format!("http://{address}"),
+			task,
+		}
+	}
+
 	async fn truncated_error_body() -> Self {
 		let listener = TcpListener::bind("127.0.0.1:0")
 			.await
@@ -508,12 +523,10 @@ async fn put_object_maps_general_service_errors() {
 
 #[rstest]
 #[tokio::test]
-async fn get_object_maps_connection_refusals_to_http_errors() {
+async fn get_object_maps_connection_failures_to_http_errors() {
 	// Arrange
-	let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind loopback port");
-	let address = listener.local_addr().expect("loopback address");
-	drop(listener);
-	let mut config = test_config(Some(format!("http://{address}")));
+	let server = RawHttpServer::connection_reset().await;
+	let mut config = test_config(Some(server.endpoint.clone()));
 	config.force_path_style = true;
 	let http = Client::builder()
 		.connect_timeout(std::time::Duration::from_millis(200))

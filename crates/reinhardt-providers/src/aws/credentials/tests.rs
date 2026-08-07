@@ -1,4 +1,4 @@
-use std::env;
+use std::{env, ffi::OsString};
 
 use rstest::rstest;
 use serial_test::serial;
@@ -19,13 +19,13 @@ const AWS_ENV_KEYS: &[&str] = &[
 ];
 
 struct EnvGuard {
-	originals: Vec<(&'static str, Option<String>)>,
+	originals: Vec<(&'static str, Option<OsString>)>,
 }
 
 impl EnvGuard {
 	fn capture(keys: &[&'static str]) -> Self {
 		Self {
-			originals: keys.iter().map(|key| (*key, env::var(key).ok())).collect(),
+			originals: keys.iter().map(|key| (*key, env::var_os(key))).collect(),
 		}
 	}
 
@@ -60,6 +60,28 @@ impl Drop for EnvGuard {
 			}
 		}
 	}
+}
+
+#[cfg(unix)]
+#[test]
+#[serial(aws_credentials_env)]
+fn env_guard_restores_non_unicode_values() {
+	use std::os::unix::ffi::OsStringExt;
+
+	let key = "AWS_WEB_IDENTITY_TOKEN_FILE";
+	let _process_guard = EnvGuard::capture(&[key]);
+	let non_unicode = OsString::from_vec(vec![b'/', b't', b'm', b'p', 0x80]);
+	// SAFETY: The test is serialized with all other AWS environment tests.
+	unsafe { env::set_var(key, &non_unicode) };
+
+	{
+		let guard = EnvGuard::capture(&[key]);
+		// SAFETY: The test is serialized with all other AWS environment tests.
+		unsafe { env::remove_var(key) };
+		drop(guard);
+	}
+
+	assert_eq!(env::var_os(key), Some(non_unicode));
 }
 
 #[rstest]

@@ -616,7 +616,7 @@ mod tests {
 		title: String,
 	}
 
-	#[derive(Clone, Debug)]
+	#[derive(Clone, Debug, PartialEq, Eq)]
 	struct ArticleFields;
 
 	impl FieldSelector for ArticleFields {
@@ -869,6 +869,10 @@ mod tests {
 			id: Some(1),
 			title: "unchanged".to_string(),
 		};
+		assert_eq!(Article::new_fields().with_alias("articles"), ArticleFields);
+		assert_eq!(article.primary_key(), Some(1));
+		article.set_primary_key(2);
+		assert_eq!(article.primary_key(), Some(2));
 
 		assert!(manager.before_save(&mut article).is_ok());
 		assert!(manager.before_delete(&article).is_ok());

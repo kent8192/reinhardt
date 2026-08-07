@@ -685,6 +685,7 @@ where
 #[cfg(test)]
 mod tests {
 	use super::*;
+	use crate::orm::model::FieldSelector;
 	use reinhardt_query::prelude::QueryStatementBuilder;
 
 	/// Regression test for #4659: the runtime accessor's default
@@ -851,6 +852,121 @@ mod tests {
 		));
 	}
 
+	#[cfg(feature = "sqlite")]
+	#[tokio::test]
+	async fn sqlite_accessor_executes_all_relationship_queries_with_bound_values() {
+		let db = DatabaseConnection::connect_sqlite("sqlite::memory:")
+			.await
+			.expect("in-memory SQLite connection should be available");
+		for statement in [
+			"CREATE TABLE users (id INTEGER PRIMARY KEY, username TEXT NOT NULL)",
+			"CREATE TABLE groups (id INTEGER PRIMARY KEY, name TEXT NOT NULL)",
+			"CREATE TABLE users_groups (users_id INTEGER NOT NULL, groups_id INTEGER NOT NULL, PRIMARY KEY (users_id, groups_id))",
+			"INSERT INTO users (id, username) VALUES (1, 'ada')",
+			"INSERT INTO groups (id, name) VALUES (1, 'readers'), (2, 'writers')",
+		] {
+			db.execute(statement, Vec::new())
+				.await
+				.expect("SQLite relationship table should be created");
+		}
+
+		let user = TestUser {
+			id: 1,
+			username: "ada".to_string(),
+		};
+		let groups = [
+			TestGroup {
+				id: 1,
+				name: "readers".to_string(),
+			},
+			TestGroup {
+				id: 2,
+				name: "writers".to_string(),
+			},
+		];
+		let accessor = ManyToManyAccessor::<TestUser, TestGroup>::new(&user, "groups", db.clone());
+
+		accessor
+			.add(&groups[0])
+			.await
+			.expect("relationship should be inserted");
+		assert_eq!(
+			accessor
+				.count()
+				.await
+				.expect("relationship count should load"),
+			1
+		);
+		let related = accessor.all().await.expect("related groups should load");
+		assert_eq!(related.len(), 1);
+		assert_eq!(related[0].id, groups[0].id);
+
+		accessor
+			.remove(&groups[0])
+			.await
+			.expect("relationship should be removed");
+		assert_eq!(
+			accessor
+				.count()
+				.await
+				.expect("relationship count should load"),
+			0
+		);
+
+		accessor
+			.set(&groups)
+			.await
+			.expect("relationship set should be committed");
+		assert_eq!(
+			accessor
+				.count()
+				.await
+				.expect("relationship count should load"),
+			2
+		);
+
+		let related_users = ManyToManyAccessor::<TestUser, TestGroup>::filter_by_target(
+			&TestUser::objects(),
+			"groups",
+			&groups[1],
+			db.clone(),
+		)
+		.await
+		.expect("source models should be filtered by target");
+		assert_eq!(related_users.len(), 1);
+		assert_eq!(related_users[0].id, user.id);
+
+		accessor
+			.clear()
+			.await
+			.expect("relationships should be cleared");
+		assert_eq!(
+			accessor
+				.count()
+				.await
+				.expect("relationship count should load"),
+			0
+		);
+	}
+
+	#[test]
+	fn uuid_model_contract_is_usable_by_the_accessor() {
+		let first_id = uuid::Uuid::parse_str("123e4567-e89b-12d3-a456-426614174000")
+			.expect("UUID literal should be valid");
+		let second_id = uuid::Uuid::parse_str("223e4567-e89b-12d3-a456-426614174000")
+			.expect("UUID literal should be valid");
+		let mut group = TestUuidGroup { id: first_id };
+
+		assert_eq!(TestUuidGroup::table_name(), "uuid_groups");
+		assert_eq!(
+			TestUuidGroup::new_fields().with_alias("groups"),
+			TestUuidGroupFields
+		);
+		assert_eq!(group.primary_key(), Some(first_id));
+		group.set_primary_key(second_id);
+		assert_eq!(group.primary_key(), Some(second_id));
+	}
+
 	// Test models for SQL generation tests
 	#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 	struct TestUser {
@@ -942,7 +1058,7 @@ mod tests {
 		id: uuid::Uuid,
 	}
 
-	#[derive(Clone)]
+	#[derive(Clone, Debug, PartialEq, Eq)]
 	struct TestUuidGroupFields;
 
 	impl crate::orm::model::FieldSelector for TestUuidGroupFields {

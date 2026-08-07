@@ -29,7 +29,9 @@ impl CommandRegistry {
 
 	/// Returns a list of all registered command names.
 	pub fn list(&self) -> Vec<&str> {
-		self.commands.keys().map(|s| s.as_str()).collect()
+		let mut commands: Vec<&str> = self.commands.keys().map(|name| name.as_str()).collect();
+		commands.sort_unstable();
+		commands
 	}
 }
 

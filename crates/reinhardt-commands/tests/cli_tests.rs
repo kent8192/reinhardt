@@ -4,10 +4,15 @@
 //! These tests verify that CLI arguments are correctly parsed and converted
 //! to CommandContext for command execution.
 
+use async_trait::async_trait;
 use clap::{CommandFactory, Parser};
-use reinhardt_commands::{Cli, CommandContext, Commands};
+use reinhardt_commands::{
+	BaseCommand, Cli, CommandContext, CommandRegistry, CommandResult, Commands,
+	run_command_with_registry,
+};
 use rstest::*;
 use std::path::PathBuf;
+use std::sync::{Arc, Mutex};
 
 // ============================================================================
 // Fixtures
@@ -17,6 +22,58 @@ use std::path::PathBuf;
 #[fixture]
 fn empty_context() -> CommandContext {
 	CommandContext::default()
+}
+
+struct RecordingCommand {
+	name: String,
+	recorded: Arc<Mutex<Option<CommandContext>>>,
+}
+
+impl RecordingCommand {
+	fn new(name: impl Into<String>, recorded: Arc<Mutex<Option<CommandContext>>>) -> Self {
+		Self {
+			name: name.into(),
+			recorded,
+		}
+	}
+}
+
+#[async_trait]
+impl BaseCommand for RecordingCommand {
+	fn name(&self) -> &str {
+		&self.name
+	}
+
+	async fn execute(&self, ctx: &CommandContext) -> CommandResult<()> {
+		*self.recorded.lock().expect("recording lock is available") = Some(ctx.clone());
+		Ok(())
+	}
+}
+
+#[tokio::test]
+async fn run_command_with_registry_dispatches_custom_command_context() {
+	let recorded = Arc::new(Mutex::new(None));
+	let mut registry = CommandRegistry::new();
+	registry.register(Box::new(RecordingCommand::new("audit", recorded.clone())));
+
+	run_command_with_registry(
+		Commands::Custom {
+			name: "audit".to_string(),
+			args: vec!["--scope".to_string(), "users".to_string()],
+		},
+		3,
+		registry,
+	)
+	.await
+	.expect("registered custom command runs");
+
+	let ctx = recorded
+		.lock()
+		.expect("recording lock is available")
+		.clone()
+		.expect("command receives a context");
+	assert_eq!(ctx.args, vec!["--scope", "users"]);
+	assert_eq!(ctx.verbosity(), 3);
 }
 
 // ============================================================================

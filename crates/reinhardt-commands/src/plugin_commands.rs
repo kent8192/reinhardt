@@ -19,7 +19,7 @@ use crate::{
 use async_trait::async_trait;
 use reinhardt_dentdelion::crates_io::CratesIoClient;
 use reinhardt_dentdelion::installer::PluginInstaller;
-use reinhardt_dentdelion::manifest::{MANIFEST_FILENAME, ProjectManifest};
+use reinhardt_dentdelion::manifest::{InstalledPlugin, MANIFEST_FILENAME, ProjectManifest};
 use std::path::PathBuf;
 
 /// Get the project root from context or use current directory.
@@ -27,6 +27,39 @@ fn get_project_root(ctx: &CommandContext) -> PathBuf {
 	ctx.option("project-root")
 		.map(PathBuf::from)
 		.unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")))
+}
+
+fn filtered_plugins(
+	manifest: &ProjectManifest,
+	show_enabled: bool,
+	show_disabled: bool,
+) -> Vec<&InstalledPlugin> {
+	manifest
+		.plugins
+		.iter()
+		.filter(|plugin| {
+			if show_enabled && !show_disabled {
+				plugin.enabled
+			} else if show_disabled && !show_enabled {
+				!plugin.enabled
+			} else {
+				true
+			}
+		})
+		.collect()
+}
+
+fn local_plugin<'a>(
+	manifest: &'a ProjectManifest,
+	name: &str,
+) -> CommandResult<&'a InstalledPlugin> {
+	manifest
+		.plugins
+		.iter()
+		.find(|plugin| plugin.name == name)
+		.ok_or_else(|| {
+			CommandError::ExecutionError(format!("Plugin '{name}' not found in manifest"))
+		})
 }
 
 // =============================================================================
@@ -77,19 +110,7 @@ impl BaseCommand for PluginListCommand {
 		let show_disabled = ctx.has_option("disabled");
 		let verbose = ctx.has_option("verbose");
 
-		let plugins: Vec<_> = manifest
-			.plugins
-			.iter()
-			.filter(|p| {
-				if show_enabled && !show_disabled {
-					p.enabled
-				} else if show_disabled && !show_enabled {
-					!p.enabled
-				} else {
-					true
-				}
-			})
-			.collect();
+		let plugins = filtered_plugins(&manifest, show_enabled, show_disabled);
 
 		if plugins.is_empty() {
 			if show_enabled {
@@ -225,13 +246,7 @@ impl BaseCommand for PluginInfoCommand {
 				CommandError::ExecutionError(format!("Failed to load manifest: {e}"))
 			})?;
 
-			let plugin = manifest
-				.plugins
-				.iter()
-				.find(|p| &p.name == name)
-				.ok_or_else(|| {
-					CommandError::ExecutionError(format!("Plugin '{name}' not found in manifest"))
-				})?;
+			let plugin = local_plugin(&manifest, name)?;
 
 			ctx.info(&format!("{} v{}", plugin.name, plugin.version));
 			ctx.info(&format!("  Type: {}", plugin.plugin_type));
@@ -812,6 +827,84 @@ enabled = false
 		std::fs::write(dir.join("dentdelion.toml"), content).unwrap();
 	}
 
+	fn create_test_manifest_with_enabled_and_disabled(dir: &std::path::Path) {
+		let content = r#"[dentdelion]
+format_version = "1.0"
+
+[[plugins]]
+name = "enabled-delion"
+type = "static"
+version = "1.0.0"
+enabled = true
+
+[[plugins]]
+name = "disabled-delion"
+type = "static"
+version = "2.0.0"
+enabled = false
+"#;
+		std::fs::write(dir.join("dentdelion.toml"), content).expect("manifest fixture is written");
+	}
+
+	#[test]
+	fn filtered_plugins_respects_enabled_and_disabled_flags() {
+		// Arrange
+		let temp_dir = TempDir::new().expect("temporary project is created");
+		create_test_manifest_with_enabled_and_disabled(temp_dir.path());
+		let manifest = ProjectManifest::load(temp_dir.path().join(MANIFEST_FILENAME))
+			.expect("manifest fixture is parsed");
+
+		// Act
+		let enabled = filtered_plugins(&manifest, true, false);
+		let disabled = filtered_plugins(&manifest, false, true);
+		let all = filtered_plugins(&manifest, true, true);
+
+		// Assert
+		assert_eq!(
+			enabled
+				.iter()
+				.map(|plugin| plugin.name.as_str())
+				.collect::<Vec<_>>(),
+			vec!["enabled-delion"],
+		);
+		assert_eq!(
+			disabled
+				.iter()
+				.map(|plugin| plugin.name.as_str())
+				.collect::<Vec<_>>(),
+			vec!["disabled-delion"],
+		);
+		assert_eq!(
+			all.iter()
+				.map(|plugin| plugin.name.as_str())
+				.collect::<Vec<_>>(),
+			vec!["enabled-delion", "disabled-delion"],
+		);
+	}
+
+	#[test]
+	fn local_plugin_lookup_returns_exact_match_or_actionable_error() {
+		// Arrange
+		let temp_dir = TempDir::new().expect("temporary project is created");
+		create_test_manifest(temp_dir.path());
+		let manifest = ProjectManifest::load(temp_dir.path().join(MANIFEST_FILENAME))
+			.expect("manifest fixture is parsed");
+
+		// Act
+		let plugin = local_plugin(&manifest, "test-delion").expect("local plugin is found");
+		let error = local_plugin(&manifest, "missing-delion")
+			.expect_err("unknown local plugin is rejected");
+
+		// Assert
+		assert_eq!(plugin.name, "test-delion");
+		assert_eq!(plugin.version, "1.0.0");
+		assert!(matches!(
+			error,
+			CommandError::ExecutionError(message)
+				if message == "Plugin 'missing-delion' not found in manifest"
+		));
+	}
+
 	// ==========================================================================
 	// Metadata Tests (existing)
 	// ==========================================================================
@@ -904,6 +997,35 @@ enabled = false
 		// Should succeed even without manifest (just shows "no plugins" message)
 		let result = cmd.execute(&ctx).await;
 		assert!(result.is_ok());
+	}
+
+	#[tokio::test]
+	async fn test_plugin_list_reports_malformed_manifest_with_load_context() {
+		// Arrange
+		let temp_dir = TempDir::new().expect("temporary project is created");
+		std::fs::write(temp_dir.path().join(MANIFEST_FILENAME), "[dentdelion\n")
+			.expect("malformed manifest fixture is written");
+		let mut ctx = CommandContext::default();
+		ctx.set_option(
+			"project-root".to_string(),
+			temp_dir.path().display().to_string(),
+		);
+		let command = PluginListCommand;
+
+		// Act
+		let error = command
+			.execute(&ctx)
+			.await
+			.expect_err("malformed manifests must not be treated as empty");
+
+		// Assert
+		let CommandError::ExecutionError(message) = error else {
+			panic!("malformed manifest returned the wrong error variant");
+		};
+		assert_eq!(
+			message,
+			"Failed to load manifest: failed to parse manifest: TOML parse error at line 1, column 12\n  |\n1 | [dentdelion\n  |            ^\nunclosed table, expected `]`\n"
+		);
 	}
 
 	#[tokio::test]
@@ -1026,8 +1148,15 @@ enabled = false
 		ctx.add_arg("nonexistent-delion".to_string());
 
 		let cmd = PluginEnableCommand;
-		let result = cmd.execute(&ctx).await;
-		assert!(result.is_err());
+		let error = cmd
+			.execute(&ctx)
+			.await
+			.expect_err("unknown plugins cannot be enabled");
+		assert!(matches!(
+			error,
+			CommandError::ExecutionError(message)
+				if message == "Failed to enable plugin: plugin not found: nonexistent-delion"
+		));
 	}
 
 	#[tokio::test]
@@ -1075,8 +1204,15 @@ enabled = false
 		ctx.add_arg("nonexistent-delion".to_string());
 
 		let cmd = PluginDisableCommand;
-		let result = cmd.execute(&ctx).await;
-		assert!(result.is_err());
+		let error = cmd
+			.execute(&ctx)
+			.await
+			.expect_err("unknown plugins cannot be disabled");
+		assert!(matches!(
+			error,
+			CommandError::ExecutionError(message)
+				if message == "Failed to disable plugin: plugin not found: nonexistent-delion"
+		));
 	}
 
 	#[tokio::test]
@@ -1137,8 +1273,15 @@ test-delion = "1.0.0"
 		ctx.add_arg("nonexistent-delion".to_string());
 
 		let cmd = PluginRemoveCommand;
-		let result = cmd.execute(&ctx).await;
-		assert!(result.is_err());
+		let error = cmd
+			.execute(&ctx)
+			.await
+			.expect_err("unknown plugins cannot be removed");
+		assert!(matches!(
+			error,
+			CommandError::ExecutionError(message)
+				if message == "Failed to remove plugin: plugin not found: nonexistent-delion"
+		));
 	}
 
 	#[tokio::test]
@@ -1184,8 +1327,15 @@ test-delion = "1.0.0"
 		// no args, no --all flag
 
 		let cmd = PluginUpdateCommand;
-		let result = cmd.execute(&ctx).await;
-		assert!(result.is_err());
+		let error = cmd
+			.execute(&ctx)
+			.await
+			.expect_err("update needs a name or --all");
+		assert!(matches!(
+			error,
+			CommandError::InvalidArguments(message)
+				if message == "Please specify a plugin name or use --all"
+		));
 	}
 
 	// ==========================================================================

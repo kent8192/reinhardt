@@ -56,7 +56,7 @@ reinhardt-urls = { workspace = true }
 reinhardt-conf = { workspace = true }
 reinhardt-admin = { workspace = true, features = ["core"] }
 reinhardt-pages = { workspace = true, features = ["testing", "static", "urls"] }
-reinhardt-commands = { workspace = true }
+reinhardt-commands = { workspace = true, features = ["migrations", "sqlite"] }
 
 # HTTP primitives (used in lib.rs make_request helpers)
 bytes = { workspace = true }

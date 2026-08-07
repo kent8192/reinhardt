@@ -5,7 +5,47 @@
 use reinhardt_storages::{StorageConfig, StorageError};
 use rstest::rstest;
 use serial_test::serial;
-use std::env;
+use std::{env, ffi::OsString};
+
+struct EnvGuard {
+	originals: Vec<(String, Option<OsString>)>,
+}
+
+impl EnvGuard {
+	fn capture<'a>(keys: impl IntoIterator<Item = &'a str>) -> Self {
+		Self {
+			originals: keys
+				.into_iter()
+				.map(|key| (key.to_owned(), env::var_os(key)))
+				.collect(),
+		}
+	}
+
+	fn set(&self, key: &str, value: &str) {
+		// SAFETY: Callers hold the serial(env) test lock for the entire guard lifetime.
+		unsafe { env::set_var(key, value) };
+	}
+
+	fn remove(&self, key: &str) {
+		// SAFETY: Callers hold the serial(env) test lock for the entire guard lifetime.
+		unsafe { env::remove_var(key) };
+	}
+}
+
+impl Drop for EnvGuard {
+	fn drop(&mut self) {
+		for (key, value) in self.originals.iter().rev() {
+			// SAFETY: The guard is used only by tests serialized with serial(env).
+			unsafe {
+				if let Some(value) = value {
+					env::set_var(key, value);
+				} else {
+					env::remove_var(key);
+				}
+			}
+		}
+	}
+}
 
 /// Helper function to set environment variable and run closure.
 ///
@@ -17,12 +57,9 @@ where
 	F: FnOnce() -> Fut,
 	Fut: std::future::Future,
 {
-	// SAFETY: Tests run sequentially with #[serial(env)], preventing concurrent env access
-	unsafe { env::set_var(key, value) };
-	let result = f().await;
-	// SAFETY: Tests run sequentially with #[serial(env)], preventing concurrent env access
-	unsafe { env::remove_var(key) };
-	result
+	let guard = EnvGuard::capture([key]);
+	guard.set(key, value);
+	f().await
 }
 
 /// Helper function to set multiple environment variables.
@@ -35,16 +72,11 @@ where
 	F: FnOnce() -> Fut,
 	Fut: std::future::Future,
 {
+	let guard = EnvGuard::capture(vars.iter().map(|(key, _)| *key));
 	for (key, value) in vars {
-		// SAFETY: Tests run sequentially with #[serial(env)], preventing concurrent env access
-		unsafe { env::set_var(key, value) };
+		guard.set(key, value);
 	}
-	let result = f().await;
-	for (key, _) in vars {
-		// SAFETY: Tests run sequentially with #[serial(env)], preventing concurrent env access
-		unsafe { env::remove_var(key) };
-	}
-	result
+	f().await
 }
 
 // ============================================================================
@@ -156,8 +188,8 @@ mod env_parsing_tests {
 	#[tokio::test]
 	#[serial(env)]
 	async fn test_gcs_config_requires_bucket() {
-		// SAFETY: This test is serialized with other environment-backed config tests.
-		unsafe { env::remove_var("GCS_BUCKET") };
+		let guard = EnvGuard::capture(["GCS_BUCKET"]);
+		guard.remove("GCS_BUCKET");
 
 		with_env("STORAGE_BACKEND", "gcs", || async {
 			let result = StorageConfig::from_env();
@@ -226,11 +258,9 @@ mod env_parsing_tests {
 	#[tokio::test]
 	#[serial(env)]
 	async fn test_azure_config_requires_account() {
-		// SAFETY: This test is serialized with other environment-backed config tests.
-		unsafe {
-			env::remove_var("AZURE_ACCOUNT");
-			env::remove_var("AZURE_CONTAINER");
-		}
+		let guard = EnvGuard::capture(["AZURE_ACCOUNT", "AZURE_CONTAINER"]);
+		guard.remove("AZURE_ACCOUNT");
+		guard.remove("AZURE_CONTAINER");
 
 		with_env("STORAGE_BACKEND", "azure", || async {
 			let result = StorageConfig::from_env();
@@ -247,8 +277,8 @@ mod env_parsing_tests {
 	#[tokio::test]
 	#[serial(env)]
 	async fn test_azure_config_requires_container() {
-		// SAFETY: This test is serialized with other environment-backed config tests.
-		unsafe { env::remove_var("AZURE_CONTAINER") };
+		let guard = EnvGuard::capture(["AZURE_CONTAINER"]);
+		guard.remove("AZURE_CONTAINER");
 
 		with_env("AZURE_ACCOUNT", "storage-account", || async {
 			with_env("STORAGE_BACKEND", "azure", || async {
@@ -347,9 +377,8 @@ mod validation_tests {
 	#[tokio::test]
 	#[serial(env)]
 	async fn test_missing_storage_backend() {
-		// Ensure STORAGE_BACKEND is not set
-		// SAFETY: Tests run sequentially with #[serial(env)], preventing concurrent env access
-		unsafe { env::remove_var("STORAGE_BACKEND") };
+		let guard = EnvGuard::capture(["STORAGE_BACKEND"]);
+		guard.remove("STORAGE_BACKEND");
 		let result = StorageConfig::from_env();
 		assert!(result.is_err());
 		assert!(matches!(result, Err(StorageError::ConfigError(_))));

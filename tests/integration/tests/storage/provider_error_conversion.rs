@@ -1,6 +1,4 @@
-//! Provider-to-storage error mapping tests.
-
-#![cfg(feature = "s3")]
+//! Provider-to-storage error mapping integration tests.
 
 use reinhardt_providers::ProviderError;
 use reinhardt_storages::StorageError;

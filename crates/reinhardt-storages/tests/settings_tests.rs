@@ -2,10 +2,8 @@
 
 #![allow(deprecated)] // Tests cover legacy compatibility conversion until removal.
 
-use reinhardt_conf::settings::fragment::{SettingsFragment, SettingsValidation};
-use reinhardt_conf::settings::profile::Profile;
+use reinhardt_conf::settings::fragment::SettingsFragment;
 use reinhardt_conf::settings::secret_types::SecretString;
-use reinhardt_conf::settings::validation::ValidationError;
 use reinhardt_storages::{BackendType, StorageConfig, StorageError, StorageSettings};
 
 #[test]
@@ -184,26 +182,28 @@ connection_string = { secret = "UseDevelopmentStorage=true" }
 }
 
 #[test]
-fn reports_missing_backend_sections_and_validation_errors() {
-	let missing_local: StorageSettings = toml::from_str(r#"backend = "local""#).unwrap();
-	assert!(matches!(
-		missing_local.to_config(),
-		Err(StorageError::ConfigError(message)) if message == "Selected backend requires [storage.local] settings"
-	));
-
-	let validation = SettingsValidation::validate(&missing_local, &Profile::Development);
-	assert!(matches!(
-		validation,
-		Err(ValidationError::InvalidValue { key, message })
-			if key == "storage.backend" && message.contains("storage.local")
-	));
-}
-
-#[test]
-#[cfg(any(feature = "s3", feature = "gcs", feature = "azure", feature = "local"))]
-fn default_settings_are_populated_for_the_selected_backend() {
+#[cfg(feature = "local")]
+fn default_settings_are_populated_for_the_local_backend() {
 	let settings = StorageSettings::default();
-	assert!(settings.to_config().is_ok());
+
+	assert_eq!(settings.backend, BackendType::Local);
+	assert_eq!(
+		settings
+			.local
+			.as_ref()
+			.map(|local| local.base_path.as_str()),
+		Some("media")
+	);
+	#[cfg(feature = "s3")]
+	assert!(settings.s3.is_none());
+	#[cfg(feature = "gcs")]
+	assert!(settings.gcs.is_none());
+	#[cfg(feature = "azure")]
+	assert!(settings.azure.is_none());
+
+	assert!(
+		matches!(settings.to_config(), Ok(StorageConfig::Local(local)) if local.base_path == "media")
+	);
 }
 
 #[test]

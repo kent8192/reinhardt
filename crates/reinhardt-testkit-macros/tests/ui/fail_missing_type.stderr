@@ -1,0 +1,7 @@
+error: unexpected end of input, expected one of: `for`, parentheses, `fn`, `unsafe`, `extern`, identifier, `::`, `<`, `dyn`, square brackets, `*`, `&`, `!`, `impl`, `_`, lifetime
+ --> tests/ui/fail_missing_type.rs:5:11
+  |
+5 |         let _ = with_di_overrides! { singleton };
+  |                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  |
+  = note: this error originates in the macro `with_di_overrides` (in Nightly builds, run with -Z macro-backtrace for more info)

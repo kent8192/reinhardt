@@ -17,6 +17,7 @@ fn reports_missing_backend_sections_and_validation_errors() {
 	assert!(matches!(
 		validation,
 		Err(ValidationError::InvalidValue { key, message })
-			if key == "storage.backend" && message.contains("storage.local")
+			if key == "storage.backend"
+				&& message == "Configuration error: Selected backend requires [storage.local] settings"
 	));
 }

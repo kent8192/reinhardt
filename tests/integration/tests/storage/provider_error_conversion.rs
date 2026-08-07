@@ -46,9 +46,11 @@ fn maps_provider_errors_to_storage_contract() {
 	}
 
 	let url_error = reqwest::Url::parse("://invalid").expect_err("URL should be invalid");
+	let expected_message = url_error.to_string();
+	let converted = StorageError::from(ProviderError::Url(url_error));
 	assert!(matches!(
-		StorageError::from(ProviderError::Url(url_error)),
-		StorageError::ConfigError(message) if message.contains("relative URL")
+		converted,
+		StorageError::ConfigError(message) if message == expected_message
 	));
 }
 

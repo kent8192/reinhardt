@@ -202,38 +202,51 @@ impl BaseCommand for IntrospectCommand {
 
 /// Collect all introspect metadata into the output structure
 pub fn collect_introspect_data() -> Result<IntrospectOutput, Box<dyn std::error::Error>> {
-	let app = collect_app_metadata()?;
+	let metadata = cargo_metadata::MetadataCommand::new().exec()?;
+	Ok(collect_introspect_data_from_metadata(Some(&metadata)))
+}
+
+/// Collect introspection metadata using one optional Cargo metadata result.
+fn collect_introspect_data_from_metadata(
+	metadata: Option<&cargo_metadata::Metadata>,
+) -> IntrospectOutput {
+	let app = metadata
+		.map(collect_app_metadata_from)
+		.unwrap_or_else(|| AppMetadata {
+			name: "unknown".to_string(),
+			version: "0.0.0".to_string(),
+		});
 	let databases = collect_database_metadata();
 	let routes = collect_route_metadata();
 	let middleware = collect_middleware_metadata();
 	let settings = collect_settings_metadata();
-	let features = collect_features_metadata();
+	let features = metadata
+		.map(collect_features_metadata_from)
+		.unwrap_or_else(empty_features_metadata);
 
-	Ok(IntrospectOutput {
+	IntrospectOutput {
 		app,
 		databases,
 		routes,
 		middleware,
 		settings,
 		features,
-	})
+	}
 }
 
-/// Collect app metadata from cargo_metadata
-fn collect_app_metadata() -> Result<AppMetadata, Box<dyn std::error::Error>> {
-	let metadata = cargo_metadata::MetadataCommand::new().exec()?;
-
+/// Extract application metadata from an already-obtained Cargo metadata value.
+fn collect_app_metadata_from(metadata: &cargo_metadata::Metadata) -> AppMetadata {
 	if let Some(root) = metadata.root_package() {
-		Ok(AppMetadata {
+		AppMetadata {
 			name: root.name.to_string(),
 			version: root.version.to_string(),
-		})
+		}
 	} else {
 		// Fallback when running outside a cargo project
-		Ok(AppMetadata {
+		AppMetadata {
 			name: "unknown".to_string(),
 			version: "0.0.0".to_string(),
-		})
+		}
 	}
 }
 
@@ -303,7 +316,7 @@ fn build_settings(
 	profile: reinhardt_conf::settings::profile::Profile,
 	profile_str: &str,
 ) -> Result<reinhardt_conf::settings::core_settings::CoreSettings, Box<dyn std::error::Error>> {
-	use reinhardt_conf::settings::builder::SettingsBuilder;
+	use reinhardt_conf::settings::builder::{MergeStrategy, SettingsBuilder};
 	use reinhardt_conf::settings::sources::{DefaultSource, LowPriorityEnvSource, TomlFileSource};
 
 	let base_dir_str = base_dir
@@ -316,6 +329,7 @@ fn build_settings(
 
 	let merged = SettingsBuilder::new()
 		.profile(profile)
+		.with_merge_strategy(MergeStrategy::Deep)
 		.add_source(
 			DefaultSource::new()
 				.with_value(
@@ -376,24 +390,50 @@ fn build_settings(
 		))
 		.build()?;
 
+	if let Some(core) = merged.get_raw("core") {
+		let core = match core {
+			serde_json::Value::Object(canonical_core) => {
+				let mut combined_core = serde_json::Map::new();
+				for (key, value) in merged.as_map() {
+					if key != "core" {
+						combined_core.insert(key.clone(), value.clone());
+					}
+				}
+				for (key, value) in canonical_core {
+					combined_core.insert(key.clone(), value.clone());
+				}
+				serde_json::Value::Object(combined_core)
+			}
+			value => value.clone(),
+		};
+		return Ok(serde_json::from_value(core)?);
+	}
+
 	Ok(merged.into_typed::<reinhardt_conf::settings::core_settings::CoreSettings>()?)
 }
 
 /// Load database configurations from settings, returning (alias, engine) pairs.
 /// Returns empty vec if settings cannot be loaded.
 fn load_settings_databases() -> Vec<(String, String)> {
-	use reinhardt_conf::settings::profile::Profile;
-
 	let profile_str = std::env::var("REINHARDT_ENV").unwrap_or_else(|_| "local".to_string());
-	let profile = Profile::parse(&profile_str);
-
 	let base_dir = match std::env::current_dir() {
 		Ok(dir) => dir,
 		Err(_) => return Vec::new(),
 	};
+	load_settings_databases_from(&base_dir, &profile_str)
+}
+
+/// Load database aliases and engines from a supplied project directory.
+fn load_settings_databases_from(
+	base_dir: &std::path::Path,
+	profile_str: &str,
+) -> Vec<(String, String)> {
+	use reinhardt_conf::settings::profile::Profile;
+
+	let profile = Profile::parse(profile_str);
 	let settings_dir = base_dir.join("settings");
 
-	let settings = match build_settings(&base_dir, &settings_dir, profile, &profile_str) {
+	let settings = match build_settings(base_dir, &settings_dir, profile, profile_str) {
 		Ok(s) => s,
 		Err(_) => return Vec::new(),
 	};
@@ -493,52 +533,11 @@ fn load_security_settings() -> (bool, bool, bool, bool, bool) {
 	}
 }
 
-/// Collect feature metadata from cargo_metadata resolve graph
-fn collect_features_metadata() -> FeaturesMetadata {
-	let metadata = match cargo_metadata::MetadataCommand::new().exec() {
-		Ok(m) => m,
-		Err(_) => {
-			return FeaturesMetadata {
-				declared: Vec::new(),
-				resolved: Vec::new(),
-				infrastructure_signals: InfraSignals {
-					database: "none".to_string(),
-					cache: "none".to_string(),
-					websocket: false,
-					background_worker: false,
-					grpc: false,
-					storage: None,
-					mail: None,
-					session_backend: None,
-					graphql: false,
-					admin_panel: false,
-					i18n: false,
-				},
-			};
-		}
-	};
-
+/// Extract feature metadata from an already-obtained Cargo metadata value.
+fn collect_features_metadata_from(metadata: &cargo_metadata::Metadata) -> FeaturesMetadata {
 	let root_package = match metadata.root_package() {
 		Some(p) => p,
-		None => {
-			return FeaturesMetadata {
-				declared: Vec::new(),
-				resolved: Vec::new(),
-				infrastructure_signals: InfraSignals {
-					database: "none".to_string(),
-					cache: "none".to_string(),
-					websocket: false,
-					background_worker: false,
-					grpc: false,
-					storage: None,
-					mail: None,
-					session_backend: None,
-					graphql: false,
-					admin_panel: false,
-					i18n: false,
-				},
-			};
-		}
+		None => return empty_features_metadata(),
 	};
 
 	// Find reinhardt dependency and its declared features
@@ -592,6 +591,27 @@ fn collect_features_metadata() -> FeaturesMetadata {
 		declared,
 		resolved,
 		infrastructure_signals,
+	}
+}
+
+/// Create the stable feature fallback used when Cargo metadata is unavailable.
+fn empty_features_metadata() -> FeaturesMetadata {
+	FeaturesMetadata {
+		declared: Vec::new(),
+		resolved: Vec::new(),
+		infrastructure_signals: InfraSignals {
+			database: "none".to_string(),
+			cache: "none".to_string(),
+			websocket: false,
+			background_worker: false,
+			grpc: false,
+			storage: None,
+			mail: None,
+			session_backend: None,
+			graphql: false,
+			admin_panel: false,
+			i18n: false,
+		},
 	}
 }
 
@@ -711,6 +731,206 @@ pub fn format_json(output: &IntrospectOutput) -> Result<String, Box<dyn std::err
 mod tests {
 	use super::*;
 	use rstest::rstest;
+	use std::fs;
+	use tempfile::TempDir;
+
+	fn metadata_fixture() -> (TempDir, cargo_metadata::Metadata) {
+		let project = TempDir::new().expect("temporary project is created");
+		let framework = project.path().join("framework");
+		fs::create_dir_all(&framework).expect("framework directory is created");
+		fs::write(
+			framework.join("Cargo.toml"),
+			"[package]\nname = \"reinhardt\"\nversion = \"0.1.0\"\nedition = \"2024\"\n[features]\nsqlite = []\nredis = []\n",
+		)
+		.expect("framework manifest is written");
+		fs::create_dir_all(framework.join("src")).expect("framework source directory is created");
+		fs::write(framework.join("src/lib.rs"), "").expect("framework source is written");
+		fs::write(
+			project.path().join("Cargo.toml"),
+			"[package]\nname = \"introspection-fixture\"\nversion = \"1.2.3\"\nedition = \"2024\"\n[dependencies]\nreinhardt = { path = \"framework\", features = [\"sqlite\", \"redis\"] }\n",
+		)
+		.expect("project manifest is written");
+		fs::create_dir_all(project.path().join("src"))
+			.expect("project source directory is created");
+		fs::write(project.path().join("src/lib.rs"), "").expect("project source is written");
+		let metadata = cargo_metadata::MetadataCommand::new()
+			.current_dir(project.path())
+			.exec()
+			.expect("fixture metadata is available");
+		(project, metadata)
+	}
+
+	#[rstest]
+	fn metadata_helpers_collect_one_obtained_metadata_value() {
+		// Arrange
+		let (_project, metadata) = metadata_fixture();
+
+		// Act
+		let app = collect_app_metadata_from(&metadata);
+		let features = collect_features_metadata_from(&metadata);
+
+		// Assert
+		assert_eq!(app.name, "introspection-fixture");
+		assert_eq!(app.version, "1.2.3");
+		assert_eq!(features.declared, vec!["sqlite", "redis"]);
+		assert_eq!(features.infrastructure_signals.database, "sqlite");
+		assert_eq!(features.infrastructure_signals.cache, "redis");
+	}
+
+	#[rstest]
+	fn metadata_helpers_fall_back_for_virtual_workspace_without_root_package() {
+		// Arrange
+		let workspace = TempDir::new().expect("temporary workspace is created");
+		fs::write(
+			workspace.path().join("Cargo.toml"),
+			"[workspace]\nmembers = [\"member\"]\nresolver = \"3\"\n",
+		)
+		.expect("virtual workspace manifest is written");
+		let member = workspace.path().join("member");
+		fs::create_dir_all(member.join("src")).expect("workspace member directory is created");
+		fs::write(
+			member.join("Cargo.toml"),
+			"[package]\nname = \"workspace-member\"\nversion = \"0.1.0\"\nedition = \"2024\"\n",
+		)
+		.expect("workspace member manifest is written");
+		fs::write(member.join("src/lib.rs"), "").expect("workspace member source is written");
+		let metadata = cargo_metadata::MetadataCommand::new()
+			.current_dir(workspace.path())
+			.exec()
+			.expect("virtual workspace metadata is available");
+
+		// Act
+		let app = collect_app_metadata_from(&metadata);
+		let features = collect_features_metadata_from(&metadata);
+
+		// Assert
+		assert_eq!(app.name, "unknown");
+		assert_eq!(app.version, "0.0.0");
+		assert_eq!(features.declared, Vec::<String>::new());
+		assert_eq!(features.resolved, Vec::<String>::new());
+		assert_eq!(features.infrastructure_signals.database, "none");
+		assert_eq!(features.infrastructure_signals.cache, "none");
+		assert!(!features.infrastructure_signals.websocket);
+		assert!(!features.infrastructure_signals.background_worker);
+		assert!(!features.infrastructure_signals.grpc);
+		assert_eq!(features.infrastructure_signals.storage, None);
+		assert_eq!(features.infrastructure_signals.mail, None);
+		assert_eq!(features.infrastructure_signals.session_backend, None);
+		assert!(!features.infrastructure_signals.graphql);
+		assert!(!features.infrastructure_signals.admin_panel);
+		assert!(!features.infrastructure_signals.i18n);
+	}
+
+	#[rstest]
+	fn collect_introspect_data_from_metadata_keeps_app_and_features_consistent() {
+		// Arrange
+		let (_project, metadata) = metadata_fixture();
+
+		// Act
+		let output = collect_introspect_data_from_metadata(Some(&metadata));
+
+		// Assert
+		assert_eq!(output.app.name, "introspection-fixture");
+		assert_eq!(output.app.version, "1.2.3");
+		assert_eq!(output.features.declared, vec!["sqlite", "redis"]);
+		assert_eq!(output.features.infrastructure_signals.database, "sqlite");
+		assert_eq!(output.features.infrastructure_signals.cache, "redis");
+	}
+
+	#[rstest]
+	fn settings_database_helper_reads_alias_engine_without_serializing_password() {
+		// Arrange
+		let project = TempDir::new().expect("temporary project is created");
+		let settings = project.path().join("settings");
+		fs::create_dir_all(&settings).expect("settings directory is created");
+		fs::write(
+			settings.join("base.toml"),
+			"[core]\nsecret_key = \"test-secret\"\n[core.databases.default]\nengine = \"postgresql\"\nname = \"app\"\npassword = \"not-exposed\"\n[core.databases.analytics]\nengine = \"sqlite\"\nname = \"analytics.sqlite\"\n",
+		)
+		.expect("settings are written");
+
+		// Act
+		let mut databases = load_settings_databases_from(project.path(), "local");
+		databases.sort();
+
+		// Assert
+		assert_eq!(
+			databases,
+			vec![
+				("analytics".to_string(), "sqlite".to_string()),
+				("default".to_string(), "postgresql".to_string()),
+			]
+		);
+	}
+
+	#[rstest]
+	fn canonical_core_settings_preserve_flat_layered_fallbacks() {
+		// Arrange
+		let project = TempDir::new().expect("temporary project is created");
+		let settings = project.path().join("settings");
+		fs::create_dir_all(&settings).expect("settings directory is created");
+		fs::write(
+			settings.join("base.toml"),
+			"[core]\nsecret_key = \"canonical-secret\"\n",
+		)
+		.expect("canonical settings are written");
+		fs::write(settings.join("local.toml"), "debug = false\n")
+			.expect("flat fallback settings are written");
+
+		// Act
+		let settings = build_settings(
+			project.path(),
+			&settings,
+			reinhardt_conf::settings::profile::Profile::Development,
+			"local",
+		)
+		.expect("layered settings are valid");
+
+		// Assert
+		assert_eq!(settings.secret_key, "canonical-secret");
+		assert!(!settings.debug);
+	}
+
+	#[rstest]
+	fn settings_database_helper_keeps_legacy_top_level_schema() {
+		// Arrange
+		let project = TempDir::new().expect("temporary project is created");
+		let settings = project.path().join("settings");
+		fs::create_dir_all(&settings).expect("settings directory is created");
+		fs::write(
+			settings.join("base.toml"),
+			"secret_key = \"test-secret\"\n[databases.default]\nengine = \"sqlite\"\nname = \"legacy.sqlite\"\n",
+		)
+		.expect("legacy settings are written");
+
+		// Act
+		let databases = load_settings_databases_from(project.path(), "local");
+
+		// Assert
+		assert_eq!(
+			databases,
+			vec![("default".to_string(), "sqlite".to_string())]
+		);
+	}
+
+	#[rstest]
+	fn malformed_canonical_settings_do_not_fall_back_to_legacy_database_values() {
+		// Arrange
+		let project = TempDir::new().expect("temporary project is created");
+		let settings = project.path().join("settings");
+		fs::create_dir_all(&settings).expect("settings directory is created");
+		fs::write(
+			settings.join("base.toml"),
+			"secret_key = \"legacy-secret\"\n[databases.default]\nengine = \"sqlite\"\nname = \"legacy.sqlite\"\n[core]\nsecret_key = 42\n",
+		)
+		.expect("mixed settings are written");
+
+		// Act
+		let databases = load_settings_databases_from(project.path(), "local");
+
+		// Assert
+		assert!(databases.is_empty());
+	}
 
 	/// Helper to create a default FeaturesMetadata for tests
 	fn default_features() -> FeaturesMetadata {
@@ -800,13 +1020,58 @@ mod tests {
 		let json = format_json(&output);
 
 		// Assert
-		assert!(yaml.is_ok(), "YAML serialization should succeed");
-		assert!(json.is_ok(), "JSON serialization should succeed");
-		let yaml_str = yaml.unwrap();
-		assert!(yaml_str.contains("test-app"));
-		assert!(yaml_str.contains("postgresql"));
-		assert!(yaml_str.contains("/api/users/"));
-		assert!(yaml_str.contains("LoggingMiddleware"));
+		let expected = serde_json::json!({
+			"app": {"name": "test-app", "version": "1.0.0"},
+			"databases": [{
+				"alias": "default",
+				"engine": "postgresql",
+				"tables": [{"name": "users", "app": "auth"}],
+			}],
+			"routes": [{
+				"path": "/api/users/",
+				"methods": ["GET"],
+				"name": "users:list",
+				"namespace": "api",
+			}],
+			"middleware": [{
+				"name": "LoggingMiddleware",
+				"type_name": "reinhardt_middleware::LoggingMiddleware",
+			}],
+			"settings": {
+				"server": {"default_port": 8000, "debug": true},
+				"security": {
+					"ssl_redirect": false,
+					"session_cookie_secure": false,
+					"csrf_cookie_secure": false,
+					"hsts_enabled": false,
+				},
+			},
+			"features": {
+				"declared": ["full"],
+				"resolved": ["postgres", "server"],
+				"infrastructure_signals": {
+					"database": "postgresql",
+					"cache": "none",
+					"websocket": false,
+					"background_worker": false,
+					"grpc": false,
+					"storage": null,
+					"mail": null,
+					"session_backend": null,
+					"graphql": false,
+					"admin_panel": false,
+					"i18n": false,
+				},
+			},
+		});
+		let yaml_value: serde_json::Value =
+			serde_yaml::from_str(&yaml.expect("YAML serialization succeeds"))
+				.expect("YAML matches the output schema");
+		let json_value: serde_json::Value =
+			serde_json::from_str(&json.expect("JSON serialization succeeds"))
+				.expect("JSON matches the output schema");
+		assert_eq!(yaml_value, expected);
+		assert_eq!(json_value, expected);
 	}
 
 	#[rstest]

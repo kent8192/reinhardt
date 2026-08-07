@@ -7,7 +7,7 @@ use crate::{
 };
 use async_trait::async_trait;
 use regex::Regex;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::LazyLock;
 use walkdir::WalkDir;
@@ -26,6 +26,99 @@ fn escape_po_string(s: &str) -> String {
 		.replace('\n', "\\n")
 		.replace('\r', "\\r")
 		.replace('\t', "\\t")
+}
+
+fn unescape_po_string(s: &str) -> String {
+	let mut result = String::new();
+	let mut chars = s.chars();
+
+	while let Some(character) = chars.next() {
+		if character != '\\' {
+			result.push(character);
+			continue;
+		}
+
+		match chars.next() {
+			Some('n') => result.push('\n'),
+			Some('r') => result.push('\r'),
+			Some('t') => result.push('\t'),
+			Some('\\') => result.push('\\'),
+			Some('"') => result.push('"'),
+			Some(other) => {
+				result.push('\\');
+				result.push(other);
+			}
+			None => result.push('\\'),
+		}
+	}
+
+	result
+}
+
+fn parse_po_quoted_value(value: &str) -> Option<String> {
+	let value = value.trim();
+	let value = value.strip_prefix('"')?.strip_suffix('"')?;
+	Some(unescape_po_string(value))
+}
+
+fn parse_po_entries(content: &str) -> Vec<(String, String)> {
+	#[derive(Clone, Copy)]
+	enum Field {
+		Msgid,
+		Msgstr,
+	}
+
+	let mut entries = Vec::new();
+	let mut current_msgid = None;
+	let mut current_msgstr = String::new();
+	let mut current_field = None;
+
+	for line in content.lines() {
+		if let Some(value) = line.strip_prefix("msgid ") {
+			if let Some(msgid) = current_msgid.take() {
+				entries.push((msgid, std::mem::take(&mut current_msgstr)));
+			}
+			current_msgid = parse_po_quoted_value(value);
+			current_field = Some(Field::Msgid);
+		} else if let Some(value) = line.strip_prefix("msgstr ") {
+			current_msgstr = parse_po_quoted_value(value).unwrap_or_default();
+			current_field = Some(Field::Msgstr);
+		} else if line.starts_with('"') {
+			let Some(value) = parse_po_quoted_value(line) else {
+				continue;
+			};
+			match current_field {
+				Some(Field::Msgid) => {
+					if let Some(msgid) = &mut current_msgid {
+						msgid.push_str(&value);
+					}
+				}
+				Some(Field::Msgstr) => current_msgstr.push_str(&value),
+				None => {}
+			}
+		}
+	}
+
+	if let Some(msgid) = current_msgid {
+		entries.push((msgid, current_msgstr));
+	}
+
+	entries
+}
+
+fn is_excluded_i18n_path(path: &Path) -> bool {
+	path.components().any(|component| {
+		matches!(
+			component.as_os_str().to_str(),
+			Some("target" | ".git" | "locale")
+		)
+	})
+}
+
+fn find_po_directive_start(content: &str, directive: &str) -> Option<usize> {
+	content.match_indices(directive).find_map(|(offset, _)| {
+		(offset == 0 || content.as_bytes()[offset - 1] == b'\n').then_some(offset)
+	})
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -284,7 +377,12 @@ impl MakeMessagesCommand {
 		});
 		let patterns = &*I18N_PATTERNS;
 
-		for entry in WalkDir::new(base_path).into_iter().filter_map(|e| e.ok()) {
+		for entry in WalkDir::new(base_path)
+			.sort_by_file_name()
+			.into_iter()
+			.filter_entry(|entry| !is_excluded_i18n_path(entry.path()))
+			.filter_map(|e| e.ok())
+		{
 			let path = entry.path();
 
 			// Skip if not a file
@@ -299,14 +397,6 @@ impl MakeMessagesCommand {
 					continue;
 				}
 			} else {
-				continue;
-			}
-
-			// Skip certain directories
-			if path.to_string_lossy().contains("/target/")
-				|| path.to_string_lossy().contains("/.git/")
-				|| path.to_string_lossy().contains("/locale/")
-			{
 				continue;
 			}
 
@@ -349,16 +439,10 @@ impl MakeMessagesCommand {
 			.map_err(|e| CommandError::ExecutionError(format!("Failed to read PO file: {}", e)))?;
 
 		// Extract existing translations (simple approach: keep msgstr values)
-		let mut existing_translations = std::collections::HashMap::new();
-		static MSGID_MERGE_RE: LazyLock<Regex> =
-			LazyLock::new(|| Regex::new(r#"msgid "([^"]+)"\nmsgstr "([^"]*)""#).unwrap());
-
-		for cap in MSGID_MERGE_RE.captures_iter(&existing_content) {
-			if let (Some(msgid), Some(msgstr)) = (cap.get(1), cap.get(2)) {
-				existing_translations
-					.insert(msgid.as_str().to_string(), msgstr.as_str().to_string());
-			}
-		}
+		let existing_translations: HashMap<String, String> = parse_po_entries(&existing_content)
+			.into_iter()
+			.filter(|(msgid, _)| !msgid.is_empty())
+			.collect();
 
 		ctx.verbose(&format!(
 			"Merging {} new messages with {} existing translations",
@@ -391,14 +475,23 @@ impl MakeMessagesCommand {
 	}
 
 	fn extract_po_header(content: &str) -> String {
-		// Extract header (everything up to the first real msgid)
-		if let Some(pos) = content.find("\nmsgid \"")
-			&& pos > 0
-		{
-			return content[..pos].to_string() + "\n";
+		if let Some(header_start) = find_po_directive_start(content, "msgid \"\"") {
+			let header_directive_length = "msgid \"\"".len();
+			let next_msgid = find_po_directive_start(
+				&content[header_start + header_directive_length..],
+				"msgid ",
+			)
+			.map(|offset| header_start + header_directive_length + offset);
+			let header_end = next_msgid.unwrap_or(content.len());
+			return format!("{}\n", content[..header_end].trim_end_matches('\n'));
 		}
 
-		// Default header if not found
+		if let Some(pos) = content.find("\nmsgid ")
+			&& pos > 0
+		{
+			return format!("{}\n", content[..pos].trim_end_matches('\n'));
+		}
+
 		String::new()
 	}
 
@@ -572,30 +665,10 @@ impl CompileMessagesCommand {
 	}
 
 	fn parse_po_file(content: &str) -> CommandResult<Vec<(String, String)>> {
-		let mut messages = Vec::new();
-		static MSGID_PARSE_RE: LazyLock<Regex> =
-			LazyLock::new(|| Regex::new(r#"msgid "([^"]*)"\s*msgstr "([^"]*)""#).unwrap());
-
-		for cap in MSGID_PARSE_RE.captures_iter(content) {
-			if let (Some(msgid), Some(msgstr)) = (cap.get(1), cap.get(2)) {
-				let msgid_str = msgid.as_str();
-				let msgstr_str = msgstr.as_str();
-
-				// Skip empty msgid (header entry)
-				if msgid_str.is_empty() {
-					continue;
-				}
-
-				// Skip untranslated messages (empty msgstr)
-				if msgstr_str.is_empty() {
-					continue;
-				}
-
-				messages.push((msgid_str.to_string(), msgstr_str.to_string()));
-			}
-		}
-
-		Ok(messages)
+		Ok(parse_po_entries(content)
+			.into_iter()
+			.filter(|(msgid, msgstr)| !msgid.is_empty() && !msgstr.is_empty())
+			.collect())
 	}
 
 	fn generate_mo_content(messages: &[(String, String)]) -> CommandResult<Vec<u8>> {
@@ -734,6 +807,393 @@ impl CompileMessagesCommand {
 mod tests {
 	use super::*;
 	use rstest::rstest;
+	use std::fs;
+	use tempfile::TempDir;
+
+	fn message(msgid: &str) -> TranslatableMessage {
+		TranslatableMessage {
+			msgid: msgid.to_string(),
+			locations: vec![],
+		}
+	}
+
+	fn little_endian_u32(bytes: &[u8], offset: usize) -> u32 {
+		u32::from_le_bytes(
+			bytes[offset..offset + 4]
+				.try_into()
+				.expect("four-byte field"),
+		)
+	}
+
+	#[test]
+	fn extraction_recognizes_all_syntaxes_keeps_first_location_and_ignores_excluded_inputs() {
+		// Arrange
+		let temp_dir = TempDir::new().expect("temporary project");
+		let source_dir = temp_dir.path().join("src");
+		fs::create_dir_all(&source_dir).expect("source directory");
+		fs::write(
+			source_dir.join("first.rs"),
+			"gettext!(\"Shared\"); _(\"Underscore\"); t!(\"Macro\");",
+		)
+		.expect("Rust source");
+		fs::write(source_dir.join("later.rs"), "gettext!(\"Shared\");").expect("duplicate source");
+		let template_dir = temp_dir.path().join("templates");
+		fs::create_dir_all(&template_dir).expect("template directory");
+		fs::write(template_dir.join("page.html"), "{% trans \"Template\" %}")
+			.expect("HTML template");
+		fs::create_dir_all(temp_dir.path().join("target")).expect("target directory");
+		fs::write(
+			temp_dir.path().join("target/ignored.rs"),
+			"gettext!(\"Target\");",
+		)
+		.expect("target source");
+		fs::create_dir_all(temp_dir.path().join(".git")).expect("Git directory");
+		fs::write(
+			temp_dir.path().join(".git/ignored.rs"),
+			"gettext!(\"Git\");",
+		)
+		.expect("Git source");
+		fs::create_dir_all(temp_dir.path().join("locale")).expect("locale directory");
+		fs::write(
+			temp_dir.path().join("locale/ignored.rs"),
+			"gettext!(\"Locale\");",
+		)
+		.expect("locale source");
+		fs::write(
+			temp_dir.path().join("ignored.md"),
+			"gettext!(\"Extension\");",
+		)
+		.expect("ignored extension");
+		fs::write(source_dir.join("invalid.rs"), [0xff, 0xfe]).expect("invalid UTF-8 source");
+		let ctx = CommandContext::new(vec![]);
+
+		// Act
+		let messages = MakeMessagesCommand::extract_messages(
+			temp_dir.path().to_str().expect("UTF-8 temporary path"),
+			&["rs".to_string(), "html".to_string()],
+			&ctx,
+		)
+		.expect("extraction succeeds");
+
+		// Assert
+		assert_eq!(
+			messages,
+			vec![
+				TranslatableMessage {
+					msgid: "Shared".to_string(),
+					locations: vec![source_dir.join("first.rs").display().to_string()],
+				},
+				TranslatableMessage {
+					msgid: "Underscore".to_string(),
+					locations: vec![source_dir.join("first.rs").display().to_string()],
+				},
+				TranslatableMessage {
+					msgid: "Macro".to_string(),
+					locations: vec![source_dir.join("first.rs").display().to_string()],
+				},
+				TranslatableMessage {
+					msgid: "Template".to_string(),
+					locations: vec![template_dir.join("page.html").display().to_string()],
+				},
+			]
+		);
+	}
+
+	#[test]
+	fn extraction_exclusion_uses_platform_path_components() {
+		// Arrange and Act
+		let target_path = Path::new("workspace").join("target").join("message.rs");
+		let git_path = Path::new("workspace").join(".git").join("message.rs");
+		let locale_path = Path::new("workspace").join("locale").join("message.rs");
+		let source_path = Path::new("workspace").join("src").join("message.rs");
+
+		// Assert
+		assert!(is_excluded_i18n_path(&target_path));
+		assert!(is_excluded_i18n_path(&git_path));
+		assert!(is_excluded_i18n_path(&locale_path));
+		assert!(!is_excluded_i18n_path(&source_path));
+	}
+
+	#[test]
+	fn po_merge_preserves_header_and_translation_while_escaping_new_entries() {
+		// Arrange
+		let temp_dir = TempDir::new().expect("temporary locale");
+		let po_file = temp_dir.path().join("reinhardt.po");
+		fs::write(
+			&po_file,
+			concat!(
+				"msgid \"\"\nmsgstr \"\"\n\"Language: ja\\n\"\n\n",
+				"msgid \"Hello\"\nmsgstr \"こんにちは\"\n\n",
+				"msgid \"Stale\"\nmsgstr \"古い\"\n"
+			),
+		)
+		.expect("existing PO file");
+		let ctx = CommandContext::new(vec![]);
+
+		// Act
+		MakeMessagesCommand::update_po_file(
+			&po_file,
+			&[
+				message("Hello"),
+				message("New \"message\"\\path\nnext\tcolumn\rend"),
+			],
+			&ctx,
+		)
+		.expect("PO merge");
+
+		// Assert
+		assert_eq!(
+			fs::read_to_string(po_file).expect("merged PO file"),
+			concat!(
+				"msgid \"\"\nmsgstr \"\"\n\"Language: ja\\n\"\n\n",
+				"msgid \"Hello\"\nmsgstr \"こんにちは\"\n\n",
+				"msgid \"New \\\"message\\\"\\\\path\\nnext\\tcolumn\\rend\"\nmsgstr \"\"\n"
+			)
+		);
+	}
+
+	#[test]
+	fn po_merge_finds_the_first_non_header_msgid_without_a_blank_separator() {
+		// Arrange
+		let temp_dir = TempDir::new().expect("temporary locale");
+		let po_file = temp_dir.path().join("reinhardt.po");
+		fs::write(
+			&po_file,
+			concat!(
+				"# Translator note\nmsgid \"\"\nmsgstr \"\"\n\"Language: ja\\n\"\n",
+				"msgid \"Hello\"\nmsgstr \"こんにちは\"\n",
+				"msgid \"Stale\"\nmsgstr \"古い\"\n"
+			),
+		)
+		.expect("existing PO file");
+		let ctx = CommandContext::new(vec![]);
+
+		// Act
+		MakeMessagesCommand::update_po_file(&po_file, &[message("Hello"), message("New")], &ctx)
+			.expect("PO merge");
+
+		// Assert
+		assert_eq!(
+			fs::read_to_string(po_file).expect("merged PO file"),
+			concat!(
+				"# Translator note\nmsgid \"\"\nmsgstr \"\"\n\"Language: ja\\n\"\n\n",
+				"msgid \"Hello\"\nmsgstr \"こんにちは\"\n\n",
+				"msgid \"New\"\nmsgstr \"\"\n"
+			)
+		);
+	}
+
+	#[test]
+	fn po_merge_ignores_header_like_text_inside_comments() {
+		// Arrange
+		let temp_dir = TempDir::new().expect("temporary locale");
+		let po_file = temp_dir.path().join("reinhardt.po");
+		fs::write(
+			&po_file,
+			concat!(
+				"# See msgid \"\" below for the catalog header.\n",
+				"# Translator note\nmsgid \"\"\nmsgstr \"\"\n\"Language: ja\\n\"\n",
+				"msgid \"Hello\"\nmsgstr \"こんにちは\"\n",
+				"msgid \"Stale\"\nmsgstr \"古い\"\n"
+			),
+		)
+		.expect("existing PO file");
+		let ctx = CommandContext::new(vec![]);
+
+		// Act
+		MakeMessagesCommand::update_po_file(&po_file, &[message("Hello"), message("New")], &ctx)
+			.expect("PO merge");
+
+		// Assert
+		assert_eq!(
+			fs::read_to_string(po_file).expect("merged PO file"),
+			concat!(
+				"# See msgid \"\" below for the catalog header.\n",
+				"# Translator note\nmsgid \"\"\nmsgstr \"\"\n\"Language: ja\\n\"\n\n",
+				"msgid \"Hello\"\nmsgstr \"こんにちは\"\n\n",
+				"msgid \"New\"\nmsgstr \"\"\n"
+			)
+		);
+	}
+
+	#[test]
+	fn po_parser_handles_headers_adjacent_entries_and_escaped_fields() {
+		// Arrange
+		let content = concat!(
+			"msgid \"\"\nmsgstr \"\"\n\"Language: fr\\n\"\n",
+			"msgid \"Hello\"\nmsgstr \"Bonjour\"\n",
+			"msgid \"Untranslated\"\nmsgstr \"\"\n",
+			"msgid \"Quote \\\"and\\\" slash \\\\ tab\\tline\\n\"\n",
+			"msgstr \"Citation \\\"et\\\" barre \\\\ onglet\\tligne\\n\"\n",
+			"msgid \"Multi \"\n\"line\\q\"\n",
+			"msgstr \"Translated \"\n\"value\\q\"\n"
+		);
+
+		// Act
+		let messages = CompileMessagesCommand::parse_po_file(content).expect("parse PO file");
+
+		// Assert
+		assert_eq!(
+			messages,
+			vec![
+				("Hello".to_string(), "Bonjour".to_string()),
+				(
+					"Quote \"and\" slash \\ tab\tline\n".to_string(),
+					"Citation \"et\" barre \\ onglet\tligne\n".to_string(),
+				),
+				(
+					"Multi line\\q".to_string(),
+					"Translated value\\q".to_string(),
+				),
+			]
+		);
+	}
+
+	#[test]
+	fn mo_content_contains_complete_header_tables_offsets_and_terminated_strings() {
+		// Arrange
+		let messages = vec![
+			("Hello".to_string(), "Bonjour".to_string()),
+			("Save".to_string(), "Enregistrer".to_string()),
+		];
+
+		// Act
+		let bytes = CompileMessagesCommand::generate_mo_content(&messages).expect("MO content");
+
+		// Assert
+		assert_eq!(little_endian_u32(&bytes, 0), 0x9504_12de);
+		assert_eq!(little_endian_u32(&bytes, 4), 0);
+		assert_eq!(little_endian_u32(&bytes, 8), 2);
+		assert_eq!(little_endian_u32(&bytes, 12), 28);
+		assert_eq!(little_endian_u32(&bytes, 16), 44);
+		assert_eq!(little_endian_u32(&bytes, 20), 0);
+		assert_eq!(little_endian_u32(&bytes, 24), 0);
+
+		let originals = [("Hello", 60_u32), ("Save", 66_u32)];
+		let translations = [("Bonjour", 71_u32), ("Enregistrer", 79_u32)];
+		for (index, (value, offset)) in originals.into_iter().enumerate() {
+			let table_offset = 28 + index * 8;
+			assert_eq!(little_endian_u32(&bytes, table_offset), value.len() as u32);
+			assert_eq!(little_endian_u32(&bytes, table_offset + 4), offset);
+			let offset = offset as usize;
+			assert_eq!(&bytes[offset..offset + value.len()], value.as_bytes());
+			assert_eq!(bytes[offset + value.len()], 0);
+		}
+		for (index, (value, offset)) in translations.into_iter().enumerate() {
+			let table_offset = 44 + index * 8;
+			assert_eq!(little_endian_u32(&bytes, table_offset), value.len() as u32);
+			assert_eq!(little_endian_u32(&bytes, table_offset + 4), offset);
+			let offset = offset as usize;
+			assert_eq!(&bytes[offset..offset + value.len()], value.as_bytes());
+			assert_eq!(bytes[offset + value.len()], 0);
+		}
+	}
+
+	#[test]
+	fn po_and_mo_filesystem_failures_keep_operation_context() {
+		// Arrange
+		let temp_dir = TempDir::new().expect("temporary filesystem");
+		let blocking_file = temp_dir.path().join("blocking-file");
+		fs::write(&blocking_file, "not a directory").expect("blocking file");
+		let ctx = CommandContext::new(vec![]);
+
+		// Act and Assert
+		let po_read_error = MakeMessagesCommand::update_po_file(
+			&blocking_file.join("reinhardt.po"),
+			&[message("Hello")],
+			&ctx,
+		)
+		.expect_err("PO read through a file parent fails");
+		assert!(
+			po_read_error
+				.to_string()
+				.starts_with("Execution error: Failed to read PO file:")
+		);
+
+		let mo_directory_error = CompileMessagesCommand::compile_po_to_mo(
+			&temp_dir.path().join("source.po"),
+			&blocking_file.join("LC_MESSAGES/reinhardt.mo"),
+			false,
+		)
+		.expect_err("MO directory through a file parent fails");
+		assert!(
+			mo_directory_error
+				.to_string()
+				.starts_with("Execution error: Failed to read PO file:")
+		);
+
+		fs::write(
+			temp_dir.path().join("source.po"),
+			"msgid \"Hello\"\nmsgstr \"Bonjour\"\n",
+		)
+		.expect("source PO file");
+		let mo_directory_error = CompileMessagesCommand::compile_po_to_mo(
+			&temp_dir.path().join("source.po"),
+			&blocking_file.join("LC_MESSAGES/reinhardt.mo"),
+			false,
+		)
+		.expect_err("MO directory through a file parent fails");
+		assert!(
+			mo_directory_error
+				.to_string()
+				.starts_with("Execution error: Failed to create directory:")
+		);
+
+		let mo_destination = temp_dir.path().join("destination");
+		fs::create_dir_all(&mo_destination).expect("MO destination directory");
+		let mo_write_error = CompileMessagesCommand::compile_po_to_mo(
+			&temp_dir.path().join("source.po"),
+			&mo_destination,
+			false,
+		)
+		.expect_err("writing MO over a directory fails");
+		assert!(
+			mo_write_error
+				.to_string()
+				.starts_with("Execution error: Failed to write MO file:")
+		);
+	}
+
+	#[cfg(unix)]
+	#[test]
+	fn po_write_failure_keeps_operation_context_when_permissions_prevent_writing() {
+		use std::os::unix::fs::PermissionsExt;
+
+		struct PermissionsGuard {
+			path: PathBuf,
+			permissions: std::fs::Permissions,
+		}
+
+		impl Drop for PermissionsGuard {
+			fn drop(&mut self) {
+				let _ = fs::set_permissions(&self.path, self.permissions.clone());
+			}
+		}
+
+		// Arrange
+		let temp_dir = TempDir::new().expect("temporary locale");
+		let po_file = temp_dir.path().join("reinhardt.po");
+		fs::write(&po_file, "msgid \"Hello\"\nmsgstr \"Bonjour\"\n").expect("existing PO file");
+		let permissions = fs::metadata(&po_file).expect("PO metadata").permissions();
+		let _permissions_guard = PermissionsGuard {
+			path: po_file.clone(),
+			permissions,
+		};
+		fs::set_permissions(&po_file, std::fs::Permissions::from_mode(0o444))
+			.expect("read-only PO file");
+		let ctx = CommandContext::new(vec![]);
+
+		// Act
+		let error = MakeMessagesCommand::update_po_file(&po_file, &[message("Hello")], &ctx)
+			.expect_err("read-only PO file rejects writes");
+
+		// Assert
+		assert!(
+			error
+				.to_string()
+				.starts_with("Execution error: Failed to write PO file:")
+		);
+	}
 
 	#[rstest]
 	#[case("plain text", "plain text")]

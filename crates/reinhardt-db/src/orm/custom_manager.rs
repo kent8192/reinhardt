@@ -599,3 +599,373 @@ impl<M: Model> CustomManager for Manager<M> {
 		Manager::new()
 	}
 }
+
+#[cfg(test)]
+mod tests {
+	use super::*;
+	use crate::orm::fields::{CharField, Field};
+	use crate::orm::inspection::FieldInfo;
+	use crate::orm::model::FieldSelector;
+	use crate::orm::query::{Filter, FilterOperator, FilterValue};
+	use serde::{Deserialize, Serialize};
+	use std::collections::HashMap;
+
+	#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+	struct Article {
+		id: Option<i64>,
+		title: String,
+	}
+
+	#[derive(Clone, Debug, PartialEq, Eq)]
+	struct ArticleFields;
+
+	impl FieldSelector for ArticleFields {
+		fn with_alias(self, _alias: &str) -> Self {
+			self
+		}
+	}
+
+	impl Model for Article {
+		type PrimaryKey = i64;
+		type Fields = ArticleFields;
+		type Objects = ArticleManager;
+
+		fn table_name() -> &'static str {
+			"articles"
+		}
+
+		fn new_fields() -> Self::Fields {
+			ArticleFields
+		}
+
+		fn primary_key(&self) -> Option<Self::PrimaryKey> {
+			self.id
+		}
+
+		fn set_primary_key(&mut self, value: Self::PrimaryKey) {
+			self.id = Some(value);
+		}
+
+		fn field_metadata() -> Vec<FieldInfo> {
+			let mut id = CharField::new(20);
+			id.set_attributes_from_name("id");
+			let mut title = CharField::new(255);
+			title.set_attributes_from_name("title");
+			vec![FieldInfo::from_field(&id), FieldInfo::from_field(&title)]
+		}
+	}
+
+	#[derive(Default)]
+	struct ArticleManager;
+
+	impl CustomManager for ArticleManager {
+		type Model = Article;
+
+		fn new() -> Self {
+			Self
+		}
+	}
+
+	#[derive(Default)]
+	struct VetoArticleManager;
+
+	impl CustomManager for VetoArticleManager {
+		type Model = Article;
+
+		fn new() -> Self {
+			Self
+		}
+
+		fn before_save(&self, _model: &mut Article) -> reinhardt_core::exception::Result<()> {
+			Err(reinhardt_core::exception::Error::Database(
+				"save vetoed".to_string(),
+			))
+		}
+
+		fn before_delete(&self, _model: &Article) -> reinhardt_core::exception::Result<()> {
+			Err(reinhardt_core::exception::Error::Database(
+				"delete vetoed".to_string(),
+			))
+		}
+
+		fn before_bulk_update(
+			&self,
+			_models: &mut [Article],
+		) -> reinhardt_core::exception::Result<()> {
+			Err(reinhardt_core::exception::Error::Database(
+				"bulk update vetoed".to_string(),
+			))
+		}
+	}
+
+	#[test]
+	fn custom_manager_get_preserves_the_primary_key_filter() {
+		let query = ArticleManager::new().get(42);
+		assert_eq!(query.filters().len(), 1);
+		assert!(matches!(query.filters()[0].value, FilterValue::Integer(42)));
+	}
+
+	#[test]
+	fn custom_manager_builder_delegation_preserves_query_output() {
+		let manager = ArticleManager::new();
+		let filter = manager.filter(Filter::new(
+			"title",
+			FilterOperator::Eq,
+			FilterValue::String("Rust".to_string()),
+		));
+
+		assert_eq!(manager.all().to_sql(), "SELECT * FROM \"articles\"");
+		assert_eq!(filter.filters().len(), 1);
+		assert_eq!(
+			filter.to_sql(),
+			"SELECT * FROM \"articles\" WHERE \"title\" = 'Rust'"
+		);
+		assert_eq!(
+			manager.limit(3).to_sql(),
+			"SELECT * FROM \"articles\" LIMIT 3"
+		);
+		assert_eq!(
+			manager.offset(2).to_sql(),
+			"SELECT * FROM \"articles\" OFFSET 2"
+		);
+		assert_eq!(
+			manager.paginate(2, 5).to_sql(),
+			"SELECT * FROM \"articles\" LIMIT 5 OFFSET 5"
+		);
+		assert_eq!(
+			manager.order_by(&["-title", "id"]).to_sql(),
+			"SELECT * FROM \"articles\" ORDER BY \"title\" DESC, \"id\" ASC"
+		);
+		assert_eq!(
+			manager.defer(&["title"]).to_sql(),
+			"SELECT \"id\" FROM \"articles\""
+		);
+		assert_eq!(
+			manager.only(&["id", "title"]).to_sql(),
+			"SELECT \"id\", \"title\" FROM \"articles\""
+		);
+		assert_eq!(
+			manager.values(&["title"]).to_sql(),
+			"SELECT \"title\" FROM \"articles\""
+		);
+		assert_eq!(
+			manager.values_list(&["id", "title"]).to_sql(),
+			"SELECT \"id\", \"title\" FROM \"articles\""
+		);
+		assert_eq!(
+			manager
+				.filter_array_overlap("tags", &["rust", "orm"])
+				.to_sql(),
+			"SELECT * FROM \"articles\" WHERE \"tags\" && ARRAY['rust', 'orm']"
+		);
+		assert_eq!(
+			manager
+				.filter_array_contains("tags", &["rust", "orm"])
+				.to_sql(),
+			"SELECT * FROM \"articles\" WHERE \"tags\" @> ARRAY['rust', 'orm']"
+		);
+		assert_eq!(
+			manager
+				.filter_jsonb_contains("metadata", r#"{"published":true}"#)
+				.to_sql(),
+			"SELECT * FROM \"articles\" WHERE \"metadata\" @> '{\"published\":true}'::jsonb"
+		);
+		assert_eq!(
+			manager
+				.filter_jsonb_key_exists("metadata", "published")
+				.to_sql(),
+			"SELECT * FROM \"articles\" WHERE \"metadata\" ? 'published'"
+		);
+		assert_eq!(
+			manager
+				.filter_range_contains("published_range", "2026-08-06")
+				.to_sql(),
+			"SELECT * FROM \"articles\" WHERE \"published_range\" @> '2026-08-06'"
+		);
+		assert_eq!(
+			manager
+				.filter_in_subquery::<Article, _>("id", |query| query.only(&["id"]))
+				.to_sql(),
+			"SELECT * FROM \"articles\" WHERE \"id\" IN (SELECT \"id\" FROM \"articles\")"
+		);
+		assert_eq!(
+			manager
+				.filter_not_in_subquery::<Article, _>("id", |query| query.only(&["id"]))
+				.to_sql(),
+			"SELECT * FROM \"articles\" WHERE \"id\" NOT IN (SELECT \"id\" FROM \"articles\")"
+		);
+		assert_eq!(
+			manager
+				.filter_exists::<Article, _>(|query| query.filter(Filter::new(
+					"title",
+					FilterOperator::Eq,
+					FilterValue::String("Rust".to_string()),
+				)))
+				.to_sql(),
+			"SELECT * FROM \"articles\" WHERE EXISTS (SELECT * FROM \"articles\" WHERE \"title\" = 'Rust')"
+		);
+		assert_eq!(
+			manager
+				.filter_not_exists::<Article, _>(|query| query.filter(Filter::new(
+					"title",
+					FilterOperator::Eq,
+					FilterValue::String("Rust".to_string()),
+				)))
+				.to_sql(),
+			"SELECT * FROM \"articles\" WHERE NOT EXISTS (SELECT * FROM \"articles\" WHERE \"title\" = 'Rust')"
+		);
+		assert_eq!(
+			manager
+				.with_cte(CTE::new("published_articles", "SELECT id FROM articles"))
+				.to_sql(),
+			"WITH published_articles AS (SELECT id FROM articles) SELECT * FROM \"articles\""
+		);
+		assert_eq!(
+			manager.full_text_search("title", "rust orm").to_sql(),
+			"SELECT * FROM \"articles\" WHERE \"title\" @@ plainto_tsquery('english', 'rust orm')"
+		);
+	}
+
+	#[test]
+	fn custom_manager_sql_utilities_preserve_complete_statements() {
+		let manager = ArticleManager::new();
+		let queryset = manager.filter(Filter::new(
+			"title",
+			FilterOperator::Eq,
+			FilterValue::String("Rust".to_string()),
+		));
+		let mut lookup_fields = HashMap::new();
+		lookup_fields.insert("title".to_string(), "Rust".to_string());
+		let mut defaults = HashMap::new();
+		defaults.insert("title".to_string(), "Rust ORM".to_string());
+
+		assert_eq!(
+			manager.update_queryset(&queryset, &[("title", "Rust ORM")]),
+			(
+				"UPDATE \"articles\" SET \"title\" = $1 WHERE \"title\" = $2".to_string(),
+				vec!["Rust ORM".to_string(), "Rust".to_string()],
+			)
+		);
+		assert_eq!(
+			manager.delete_queryset(&queryset),
+			(
+				"DELETE FROM \"articles\" WHERE \"title\" = $1".to_string(),
+				vec!["Rust".to_string()],
+			)
+		);
+		assert_eq!(
+			manager.get_or_create_sql(&lookup_fields, &defaults, DatabaseBackend::Sqlite),
+			(
+				"SELECT * FROM \"articles\" WHERE \"title\" = ?".to_string(),
+				"INSERT INTO \"articles\" (\"title\") VALUES (?)".to_string(),
+			)
+		);
+	}
+
+	#[test]
+	fn custom_manager_default_hooks_are_noops() {
+		let manager = ArticleManager::new();
+		let mut article = Article {
+			id: Some(1),
+			title: "unchanged".to_string(),
+		};
+		assert_eq!(Article::new_fields().with_alias("articles"), ArticleFields);
+		assert_eq!(article.primary_key(), Some(1));
+		article.set_primary_key(2);
+		assert_eq!(article.primary_key(), Some(2));
+
+		assert!(manager.before_save(&mut article).is_ok());
+		assert!(manager.before_delete(&article).is_ok());
+		assert!(
+			manager
+				.before_bulk_update(std::slice::from_mut(&mut article))
+				.is_ok()
+		);
+	}
+
+	#[cfg(feature = "sqlite")]
+	#[tokio::test]
+	async fn custom_manager_vetoes_create_before_writing_to_sqlite() {
+		let connection = DatabaseConnection::connect_sqlite("sqlite::memory:")
+			.await
+			.expect("in-memory SQLite connection should be available");
+		connection
+			.execute(
+				"CREATE TABLE articles (id INTEGER PRIMARY KEY, title TEXT NOT NULL)",
+				Vec::new(),
+			)
+			.await
+			.expect("articles table should be created");
+		let article = Article {
+			id: None,
+			title: "blocked".to_string(),
+		};
+
+		let result = VetoArticleManager::new()
+			.create_with_conn(&connection, &article)
+			.await;
+
+		assert!(matches!(
+			result,
+			Err(reinhardt_core::exception::Error::Database(message)) if message == "save vetoed"
+		));
+		let row = connection
+			.query_one("SELECT COUNT(*) AS count FROM articles", Vec::new())
+			.await
+			.expect("article count should be queryable");
+		assert_eq!(row.get::<i64>("count"), Some(0));
+	}
+
+	#[cfg(feature = "sqlite")]
+	#[tokio::test]
+	async fn custom_manager_vetoes_delete_without_removing_the_sqlite_row() {
+		let connection = DatabaseConnection::connect_sqlite("sqlite::memory:")
+			.await
+			.expect("in-memory SQLite connection should be available");
+		connection
+			.execute(
+				"CREATE TABLE articles (id INTEGER PRIMARY KEY, title TEXT NOT NULL)",
+				Vec::new(),
+			)
+			.await
+			.expect("articles table should be created");
+		connection
+			.execute(
+				"INSERT INTO articles (id, title) VALUES (1, 'retained')",
+				Vec::new(),
+			)
+			.await
+			.expect("article should be inserted");
+
+		let result = VetoArticleManager::new()
+			.delete_with_conn(&connection, 1)
+			.await;
+
+		assert!(matches!(
+			result,
+			Err(reinhardt_core::exception::Error::Database(message)) if message == "delete vetoed"
+		));
+		let row = connection
+			.query_one("SELECT COUNT(*) AS count FROM articles", Vec::new())
+			.await
+			.expect("article count should be queryable");
+		assert_eq!(row.get::<i64>("count"), Some(1));
+	}
+
+	#[tokio::test]
+	async fn custom_manager_vetoes_bulk_update_before_global_database_lookup() {
+		let articles = vec![Article {
+			id: Some(1),
+			title: "blocked".to_string(),
+		}];
+
+		let result = VetoArticleManager::new()
+			.bulk_update(articles, vec!["title".to_string()], None)
+			.await;
+
+		assert!(matches!(
+			result,
+			Err(reinhardt_core::exception::Error::Database(message)) if message == "bulk update vetoed"
+		));
+	}
+}

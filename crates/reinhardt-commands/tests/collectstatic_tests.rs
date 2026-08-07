@@ -1056,6 +1056,43 @@ fn test_collectstatic_manifest_write_failure_preserves_existing_output(temp_dir:
 	assert!(!static_root.join("app.2cf24dba.js").exists());
 }
 
+/// Clear mode removes an invalid manifest destination before hashing writes it.
+#[rstest]
+fn test_collectstatic_clear_replaces_invalid_manifest_destination(temp_dir: TempDir) {
+	// Arrange
+	let source_dir = temp_dir.path().join("source");
+	let static_root = temp_dir.path().join("staticfiles");
+	fs::create_dir_all(&source_dir).expect("source directory is created");
+	fs::create_dir_all(static_root.join("manifest.json")).expect("manifest directory is created");
+	fs::write(source_dir.join("app.js"), "hello").expect("source asset is written");
+	let mut command = CollectStaticCommand::new(
+		StaticFilesConfig {
+			static_url: "/static/".to_string(),
+			static_root: static_root.clone(),
+			staticfiles_dirs: vec![source_dir],
+			media_url: None,
+		},
+		CollectStaticOptions {
+			clear: true,
+			verbosity: 0,
+			..Default::default()
+		},
+	);
+
+	// Act
+	let stats = command
+		.execute()
+		.expect("clear mode replaces the invalid manifest destination");
+
+	// Assert
+	assert_eq!(stats.deleted, 1);
+	assert!(static_root.join("manifest.json").is_file());
+	assert_eq!(
+		fs::read_to_string(static_root.join("app.2cf24dba.js")).expect("hashed asset is readable"),
+		"hello"
+	);
+}
+
 // ============================================================================
 // Sanity Tests
 // ============================================================================

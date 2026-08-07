@@ -202,8 +202,8 @@ impl BaseCommand for IntrospectCommand {
 
 /// Collect all introspect metadata into the output structure
 pub fn collect_introspect_data() -> Result<IntrospectOutput, Box<dyn std::error::Error>> {
-	let metadata = cargo_metadata::MetadataCommand::new().exec().ok();
-	Ok(collect_introspect_data_from_metadata(metadata.as_ref()))
+	let metadata = cargo_metadata::MetadataCommand::new().exec()?;
+	Ok(collect_introspect_data_from_metadata(Some(&metadata)))
 }
 
 /// Collect introspection metadata using one optional Cargo metadata result.
@@ -316,7 +316,7 @@ fn build_settings(
 	profile: reinhardt_conf::settings::profile::Profile,
 	profile_str: &str,
 ) -> Result<reinhardt_conf::settings::core_settings::CoreSettings, Box<dyn std::error::Error>> {
-	use reinhardt_conf::settings::builder::SettingsBuilder;
+	use reinhardt_conf::settings::builder::{MergeStrategy, SettingsBuilder};
 	use reinhardt_conf::settings::sources::{DefaultSource, LowPriorityEnvSource, TomlFileSource};
 
 	let base_dir_str = base_dir
@@ -329,6 +329,7 @@ fn build_settings(
 
 	let merged = SettingsBuilder::new()
 		.profile(profile)
+		.with_merge_strategy(MergeStrategy::Deep)
 		.add_source(
 			DefaultSource::new()
 				.with_value(
@@ -390,7 +391,22 @@ fn build_settings(
 		.build()?;
 
 	if let Some(core) = merged.get_raw("core") {
-		return Ok(serde_json::from_value(core.clone())?);
+		let core = match core {
+			serde_json::Value::Object(canonical_core) => {
+				let mut combined_core = serde_json::Map::new();
+				for (key, value) in merged.as_map() {
+					if key != "core" {
+						combined_core.insert(key.clone(), value.clone());
+					}
+				}
+				for (key, value) in canonical_core {
+					combined_core.insert(key.clone(), value.clone());
+				}
+				serde_json::Value::Object(combined_core)
+			}
+			value => value.clone(),
+		};
+		return Ok(serde_json::from_value(core)?);
 	}
 
 	Ok(merged.into_typed::<reinhardt_conf::settings::core_settings::CoreSettings>()?)
@@ -845,6 +861,34 @@ mod tests {
 				("default".to_string(), "postgresql".to_string()),
 			]
 		);
+	}
+
+	#[rstest]
+	fn canonical_core_settings_preserve_flat_layered_fallbacks() {
+		// Arrange
+		let project = TempDir::new().expect("temporary project is created");
+		let settings = project.path().join("settings");
+		fs::create_dir_all(&settings).expect("settings directory is created");
+		fs::write(
+			settings.join("base.toml"),
+			"[core]\nsecret_key = \"canonical-secret\"\n",
+		)
+		.expect("canonical settings are written");
+		fs::write(settings.join("local.toml"), "debug = false\n")
+			.expect("flat fallback settings are written");
+
+		// Act
+		let settings = build_settings(
+			project.path(),
+			&settings,
+			reinhardt_conf::settings::profile::Profile::Development,
+			"local",
+		)
+		.expect("layered settings are valid");
+
+		// Assert
+		assert_eq!(settings.secret_key, "canonical-secret");
+		assert!(!settings.debug);
 	}
 
 	#[rstest]

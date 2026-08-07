@@ -327,7 +327,7 @@ impl CollectStaticCommand {
 
 	/// Reject invalid manifest destinations before collection mutates static output.
 	fn validate_manifest_destination(&self) -> Result<(), io::Error> {
-		if !self.options.enable_hashing || self.options.dry_run {
+		if !self.options.enable_hashing || self.options.dry_run || self.options.clear {
 			return Ok(());
 		}
 

@@ -134,6 +134,7 @@ mod tests {
 	#[test]
 	fn formatter_includes_stderr_from_file_format_failure() {
 		let temp = tempfile::NamedTempFile::new().expect("create Rust file");
+		let path = temp.path().to_str().expect("UTF-8 path");
 		let runner = FakeProcessRunner::new([
 			Ok(ProcessOutcome::success(b"rustfmt 1.8".to_vec())),
 			Ok(ProcessOutcome::failure(
@@ -142,14 +143,13 @@ mod tests {
 			)),
 		]);
 
-		let error = run_formatters_with_runner(
-			&[temp.path().to_str().expect("UTF-8 path")],
-			Some("rustfmt"),
-			&runner,
-		)
-		.expect_err("format failure must propagate");
+		let error = run_formatters_with_runner(&[path], Some("rustfmt"), &runner)
+			.expect_err("format failure must propagate");
 
-		assert!(error.to_string().contains("parse error"));
+		assert_eq!(
+			error.to_string(),
+			format!("Execution error: Formatter failed for '{path}': parse error")
+		);
 	}
 
 	#[test]

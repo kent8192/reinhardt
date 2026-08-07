@@ -46,3 +46,7 @@ mod makemigrations_e2e_edge_cases;
 // Collectstatic admin asset auto-discovery integration tests
 #[path = "commands/collectstatic_admin_integration.rs"]
 mod collectstatic_admin_integration;
+
+// SQLite-backed target migration integration tests.
+#[path = "commands/migrate_target_sqlite_e2e.rs"]
+mod migrate_target_sqlite_e2e;

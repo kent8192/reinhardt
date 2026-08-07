@@ -469,14 +469,14 @@ async fn handle_request(
 	req: Request<Incoming>,
 	settings: Arc<RunServerSettings>,
 	spa_index: Option<Arc<PathBuf>>,
-	remote_addr: SocketAddr,
+	_remote_addr: SocketAddr,
 ) -> Result<Response<Full<Bytes>>, Infallible> {
 	let path = req.uri().path().to_string();
 
 	// Route dispatch through registered ServerRouter
 	#[cfg(feature = "routers")]
 	{
-		if let Some(response) = dispatch_through_router(req, remote_addr).await {
+		if let Some(response) = dispatch_through_router(req, _remote_addr).await {
 			return Ok(response);
 		}
 	}
@@ -1215,6 +1215,7 @@ mod tests {
 	}
 
 	#[test]
+	#[serial_test::serial(runserver_tls)]
 	fn self_signed_tls_material_builds_a_server_configuration_and_rejects_invalid_pem() {
 		// Arrange
 		let _ = rustls::crypto::ring::default_provider().install_default();

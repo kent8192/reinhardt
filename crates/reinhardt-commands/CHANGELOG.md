@@ -7,6 +7,60 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.7](https://github.com/kent8192/reinhardt-web/compare/reinhardt-commands@v0.3.6...reinhardt-commands@v0.3.7) - 2026-08-07
+
+### Changed
+
+- *(commands)* add injectable process runner
+- *(commands)* separate migration target planning
+- *(commands)* separate CLI command planning
+
+### Fixed
+
+- *(commands)* preserve wasm process ordering
+- *(commands)* yield server rebuild cargo build
+- *(commands)* count compact custom command verbosity
+- *(commands)* preserve workspace scaffold atomicity
+- *(commands)* preserve PO headers and path exclusions
+- *(commands)* detect PO header directives by line
+- *(commands)* preserve introspection and static collection state
+- *(commands)* satisfy strict clippy checks
+
+### Testing
+
+- *(commands)* cover process-backed build tooling
+- *(commands)* cover server rebuild failures
+- *(commands)* cover CLI resolution and dispatch
+- *(commands)* cover built-in command decisions
+- *(commands)* isolate built-in process state
+- *(commands)* cover local infrastructure failures
+- *(commands)* stabilize local infrastructure coverage
+- *(commands)* cover workspace scaffold mutations
+- *(commands)* cover project configuration and templates
+- *(commands)* cover message extraction and compilation
+- *(commands)* cover introspection and static collection
+- *(commands)* cover virtual workspace introspection fallback
+- *(commands)* cover watcher and feature failures
+- *(commands)* verify watcher dispatcher outcomes
+- *(commands)* raise behavior coverage above threshold
+- *(commands)* harden coverage regression cases
+- *(commands)* close remaining coverage gap
+- *(commands)* reach crate coverage baseline
+- *(commands)* cover router response conversion
+- *(commands)* cover OpenAPI output failures
+- *(commands)* cover SQLite migration targets
+- *(commands)* cover fake SQLite migration targets
+- *(commands)* cover noninteractive superuser creation
+- *(commands)* cross coverage threshold
+- *(commands)* cover runserver fallback paths
+- *(commands)* assert complete settings fallback
+- *(commands)* cover final fallback branches
+- *(commands)* cover missing TLS key
+- *(commands)* cover collectstatic failure
+- *(commands)* stabilize collectstatic coverage matrix
+- *(commands)* satisfy all-target clippy
+- *(commands)* address review edge cases
+
 ## [0.3.6](https://github.com/kent8192/reinhardt-web/compare/reinhardt-commands@v0.3.5...reinhardt-commands@v0.3.6) - 2026-08-04
 
 ### Fixed

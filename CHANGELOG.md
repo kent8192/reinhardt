@@ -7,6 +7,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.7](https://github.com/kent8192/reinhardt-web/compare/reinhardt-web@v0.3.6...reinhardt-web@v0.3.7) - 2026-08-07
+
+### Documentation
+
+- add release announcement(s)
+- *(ci)* explain intra-crate coverage reports
+- *(ci)* clean focused coverage artifacts
+
+### Fixed
+
+- *(ci)* align intra-crate coverage report target
+- *(ci)* keep intra-crate coverage upload fail-closed
+
+### Maintenance
+
+- *(ci)* merge main into coverage repair branch
+
+### Testing
+
+- *(ci)* reject empty intra-crate coverage
+- *(storages)* raise coverage above 75%
+- *(storages)* isolate cross-crate coverage tests
+- *(storages)* strengthen integration error assertions
+- *(storages)* assert mapped HTTP error details
+
 ## [0.3.6](https://github.com/kent8192/reinhardt-web/compare/reinhardt-web@v0.3.5...reinhardt-web@v0.3.6) - 2026-08-04
 
 ### Fixed

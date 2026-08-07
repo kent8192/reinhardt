@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.7](https://github.com/kent8192/reinhardt-web/compare/reinhardt-di@v0.3.6...reinhardt-di@v0.3.7) - 2026-08-07
+
+### Fixed
+
+- *(di)* gate multipart extraction tests by feature
+
+### Testing
+
+- *(di)* cover request parameter extraction
+- *(di)* make parameter extraction tests feature-safe
+- *(di)* harden multipart extraction coverage
+
 ## [0.3.0](https://github.com/kent8192/reinhardt-web/compare/reinhardt-di@v0.2.0...reinhardt-di@v0.3.0) - 2026-06-28
 
 Stable release of `reinhardt-di` for the Reinhardt 0.3.0 line. This

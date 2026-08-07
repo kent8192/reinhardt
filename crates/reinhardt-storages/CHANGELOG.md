@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.7](https://github.com/kent8192/reinhardt-web/compare/reinhardt-storages@v0.3.6...reinhardt-storages@v0.3.7) - 2026-08-07
+
+### Testing
+
+- *(storages)* raise coverage above 75%
+- *(storages)* isolate cross-crate coverage tests
+
 ## [0.3.6](https://github.com/kent8192/reinhardt-web/compare/reinhardt-storages@v0.3.5...reinhardt-storages@v0.3.6) - 2026-08-04
 
 ### Maintenance

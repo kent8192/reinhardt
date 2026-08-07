@@ -523,3 +523,26 @@ impl TransactionExecutor for MySqlRawTransactionExecutor {
 		Ok(())
 	}
 }
+
+#[cfg(test)]
+mod tests {
+	use crate::backends::{backend::DatabaseBackend, types::DatabaseType};
+	use sqlx::mysql::MySqlPoolOptions;
+
+	#[tokio::test]
+	async fn test_mysql_backend_capabilities_without_connecting() {
+		// Arrange
+		let mysql_pool = MySqlPoolOptions::new()
+			.connect_lazy("mysql://localhost/reinhardt_coverage")
+			.expect("MySQL URL must be valid");
+		let mysql = super::MySqlBackend::new(mysql_pool);
+
+		// Act and assert
+		assert_eq!(mysql.database_type(), DatabaseType::Mysql);
+		assert_eq!(mysql.placeholder(3), "?");
+		assert!(!mysql.supports_returning());
+		assert!(!mysql.supports_on_conflict());
+		assert!(!mysql.supports_transactional_ddl());
+		assert!(mysql.as_any().is::<super::MySqlBackend>());
+	}
+}

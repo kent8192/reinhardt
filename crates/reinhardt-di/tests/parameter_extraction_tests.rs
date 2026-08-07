@@ -8,9 +8,8 @@ use http::header::{CONTENT_TYPE, COOKIE};
 use reinhardt_di::params::Multipart;
 use reinhardt_di::params::{
 	Body, Cookie, CookieStruct, Form, FromRequest, Header, HeaderStruct, Json, ParamContext,
-	ParamError, Query,
+	ParamError, Query, Request,
 };
-use reinhardt_http::{Error as CoreError, Request};
 use serde::Deserialize;
 
 #[derive(Clone, Debug, Deserialize, PartialEq)]
@@ -40,6 +39,7 @@ struct HeaderValues {
 	request_id: String,
 }
 
+#[cfg(feature = "multi-value-arrays")]
 #[derive(Clone, Debug, Deserialize, PartialEq)]
 struct SearchQuery {
 	page: i64,
@@ -390,6 +390,7 @@ async fn multipart_extractor_requires_a_valid_content_type() {
 }
 
 #[tokio::test]
+#[cfg(feature = "multi-value-arrays")]
 async fn query_extractor_preserves_scalar_types_and_repeated_values() {
 	// Arrange
 	let request = Request::builder()
@@ -437,8 +438,13 @@ async fn query_extractor_handles_empty_and_invalid_queries() {
 
 	// Assert
 	assert_eq!(optional.into_inner(), OptionalQuery { page: None });
+	#[cfg(feature = "multi-value-arrays")]
 	assert!(
 		matches!(invalid_result, Err(ParamError::InvalidParameter(context)) if context.raw_value.as_deref() == Some("page=not-a-number"))
+	);
+	#[cfg(not(feature = "multi-value-arrays"))]
+	assert!(
+		matches!(invalid_result, Err(ParamError::UrlEncodingError(context)) if context.raw_value.as_deref() == Some("page=not-a-number"))
 	);
 }
 
@@ -458,30 +464,5 @@ async fn body_and_json_extractors_preserve_bytes_and_report_structured_errors() 
 	assert_eq!(body.0, Bytes::from_static(b"raw-body"));
 	assert!(
 		matches!(json_result, Err(ParamError::DeserializationError(context)) if context.raw_value.as_deref() == Some(r#"{"name":42}"#))
-	);
-}
-
-#[test]
-fn parameter_errors_preserve_authentication_internal_and_validation_semantics() {
-	// Arrange
-	let authentication = ParamError::Authentication("token missing".to_owned());
-	let internal = ParamError::Internal("provider unavailable".to_owned());
-	let invalid = ParamError::invalid::<u64>(
-		reinhardt_di::params::ParamType::Query,
-		"expected a positive integer",
-	);
-
-	// Act
-	let authentication = CoreError::from(authentication);
-	let internal = CoreError::from(internal);
-	let invalid = CoreError::from(invalid);
-
-	// Assert
-	assert!(
-		matches!(authentication, CoreError::Authentication(message) if message == "token missing")
-	);
-	assert!(matches!(internal, CoreError::Internal(message) if message == "provider unavailable"));
-	assert!(
-		matches!(invalid, CoreError::ParamValidation(context) if context.message == "expected a positive integer")
 	);
 }

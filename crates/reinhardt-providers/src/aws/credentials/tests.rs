@@ -63,13 +63,13 @@ impl Drop for EnvGuard {
 }
 
 #[cfg(unix)]
-#[test]
+#[rstest]
 #[serial(aws_credentials_env)]
-fn env_guard_restores_non_unicode_values() {
+fn from_env_optional_restores_non_unicode_values() {
 	use std::os::unix::ffi::OsStringExt;
 
 	let key = "AWS_WEB_IDENTITY_TOKEN_FILE";
-	let _process_guard = EnvGuard::capture(&[key]);
+	let _process_guard = EnvGuard::replace(&[]);
 	let non_unicode = OsString::from_vec(vec![b'/', b't', b'm', b'p', 0x80]);
 	// SAFETY: The test is serialized with all other AWS environment tests.
 	unsafe { env::set_var(key, &non_unicode) };
@@ -78,6 +78,10 @@ fn env_guard_restores_non_unicode_values() {
 		let guard = EnvGuard::capture(&[key]);
 		// SAFETY: The test is serialized with all other AWS environment tests.
 		unsafe { env::remove_var(key) };
+		assert_eq!(
+			AwsCredentials::from_env_optional().expect("absent credentials are valid"),
+			None
+		);
 		drop(guard);
 	}
 

@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.7](https://github.com/kent8192/reinhardt-web/compare/reinhardt-manouche@v0.3.6...reinhardt-manouche@v0.3.7) - 2026-08-07
+
+### Maintenance
+
+- update Cargo.toml dependencies
+
 ## [0.3.6](https://github.com/kent8192/reinhardt-web/compare/reinhardt-manouche@v0.3.5...reinhardt-manouche@v0.3.6) - 2026-08-04
 
 ### Maintenance

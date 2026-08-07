@@ -7,6 +7,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.7](https://github.com/kent8192/reinhardt-web/compare/reinhardt-db@v0.3.6...reinhardt-db@v0.3.7) - 2026-08-07
+
+### Fixed
+
+- *(orm)* bind many-to-many query values
+- *(orm)* preserve many-to-many key types
+
+### Testing
+
+- *(migrations)* cover operation token generation
+- *(migrations)* cover remaining token branches
+- *(orm)* cover typed query compilation
+- *(orm)* cover custom manager contracts
+- *(orm)* make custom manager defer observable
+- *(db)* cover backend boundaries
+- *(orm)* cover field deconstruction
+- *(orm)* preserve related field case
+- *(orm)* gate SQLite custom manager tests
+- *(db)* cover pool contracts
+- *(db)* assert connection timeout builder
+- *(orm)* make pagination assertion deterministic
+- *(db)* cover Codecov-reported ORM lines
+
 ## [0.3.6](https://github.com/kent8192/reinhardt-web/compare/reinhardt-db@v0.3.5...reinhardt-db@v0.3.6) - 2026-08-04
 
 ### Fixed

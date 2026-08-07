@@ -87,6 +87,8 @@ impl S3ClientConfig {
 pub struct S3Client {
 	http: Client,
 	config: S3ClientConfig,
+	#[cfg(test)]
+	fixed_now: Option<DateTime<Utc>>,
 }
 
 impl S3Client {
@@ -100,14 +102,41 @@ impl S3Client {
 				.build()
 				.expect("static reqwest client configuration should be valid"),
 			config,
+			#[cfg(test)]
+			fixed_now: None,
 		}
+	}
+
+	#[cfg(test)]
+	fn with_test_dependencies(
+		config: S3ClientConfig,
+		http: Client,
+		fixed_now: DateTime<Utc>,
+	) -> Self {
+		Self {
+			http,
+			config,
+			fixed_now: Some(fixed_now),
+		}
+	}
+
+	fn now(&self) -> DateTime<Utc> {
+		#[cfg(test)]
+		if let Some(fixed_now) = self.fixed_now.as_ref() {
+			return fixed_now.to_owned();
+		}
+
+		Utc::now()
 	}
 
 	/// Store an object.
 	///
 	/// # Errors
 	///
-	/// Returns an error when request signing, HTTP transport, or S3 fails.
+	/// Returns `ProviderError::NotFound` when S3 reports `404 Not Found` and
+	/// `ProviderError::PermissionDenied` when S3 reports `403 Forbidden`.
+	/// Returns `ProviderError::Service` for other unsuccessful S3 responses, or
+	/// an error when request signing or HTTP transport fails.
 	pub async fn put_object(&self, key: &str, body: impl Into<Bytes>) -> Result<()> {
 		let response = self.signed_request(Method::PUT, key, body.into()).await?;
 		self.expect_success(response, key).await
@@ -117,8 +146,10 @@ impl S3Client {
 	///
 	/// # Errors
 	///
-	/// Returns [`ProviderError::NotFound`] for missing objects and transport or
-	/// service errors for other failures.
+	/// Returns `ProviderError::NotFound` when S3 reports `404 Not Found` and
+	/// `ProviderError::PermissionDenied` when S3 reports `403 Forbidden`.
+	/// Returns `ProviderError::Service` for other unsuccessful S3 responses, or
+	/// an error when request signing or HTTP transport fails.
 	pub async fn get_object(&self, key: &str) -> Result<Bytes> {
 		let response = self.signed_request(Method::GET, key, Bytes::new()).await?;
 
@@ -136,7 +167,10 @@ impl S3Client {
 	///
 	/// # Errors
 	///
-	/// Returns an error when request signing, HTTP transport, or S3 fails.
+	/// Returns `ProviderError::NotFound` when S3 reports `404 Not Found` and
+	/// `ProviderError::PermissionDenied` when S3 reports `403 Forbidden`.
+	/// Returns `ProviderError::Service` for other unsuccessful S3 responses, or
+	/// an error when request signing or HTTP transport fails.
 	pub async fn delete_object(&self, key: &str) -> Result<()> {
 		let response = self
 			.signed_request(Method::DELETE, key, Bytes::new())
@@ -146,11 +180,13 @@ impl S3Client {
 
 	/// Fetch object metadata.
 	///
-	/// Returns `Ok(None)` for missing objects.
+	/// Returns `Ok(None)` when S3 reports `404 Not Found`.
 	///
 	/// # Errors
 	///
-	/// Returns an error when request signing, HTTP transport, or S3 fails.
+	/// Returns `ProviderError::PermissionDenied` when S3 reports `403 Forbidden`
+	/// and `ProviderError::Service` for other unsuccessful S3 responses, or an
+	/// error when request signing or HTTP transport fails.
 	pub async fn head_object(&self, key: &str) -> Result<Option<ObjectMetadata>> {
 		let response = self.signed_request(Method::HEAD, key, Bytes::new()).await?;
 
@@ -168,8 +204,9 @@ impl S3Client {
 	///
 	/// # Errors
 	///
-	/// Returns an error when credentials are missing, the URL cannot be built, or
-	/// the expiry exceeds S3's seven-day SigV4 limit.
+	/// Returns `ProviderError::Config` when the expiry exceeds 604,800 seconds.
+	/// Also returns an error when credentials are missing or the URL cannot be
+	/// built.
 	pub async fn presigned_get_url(&self, key: &str, expires: Duration) -> Result<String> {
 		if expires.as_secs() > 604_800 {
 			return Err(ProviderError::Config(
@@ -181,7 +218,7 @@ impl S3Client {
 		let credentials = &signing_config.credentials;
 		let (mut url, canonical_uri) = self.object_url(key, &signing_config.region)?;
 		let host = canonical_host(&url)?;
-		let now = Utc::now();
+		let now = self.now();
 		let date = now.format("%Y%m%d").to_string();
 		let amz_date = now.format("%Y%m%dT%H%M%SZ").to_string();
 		let credential_scope = self.credential_scope(&date, &signing_config.region);
@@ -226,7 +263,7 @@ impl S3Client {
 		let credentials = &signing_config.credentials;
 		let (url, canonical_uri) = self.object_url(key, &signing_config.region)?;
 		let host = canonical_host(&url)?;
-		let now = Utc::now();
+		let now = self.now();
 		let date = now.format("%Y%m%d").to_string();
 		let amz_date = now.format("%Y%m%dT%H%M%SZ").to_string();
 		let payload_hash = if body.is_empty() {
@@ -516,48 +553,4 @@ fn is_unreserved(byte: u8) -> bool {
 }
 
 #[cfg(test)]
-mod tests {
-	use super::*;
-
-	#[test]
-	fn uri_encode_preserves_key_slashes() {
-		assert_eq!(
-			uri_encode("path/to/file name.txt", false),
-			"path/to/file%20name.txt"
-		);
-	}
-
-	#[test]
-	fn uri_encode_escapes_query_slashes() {
-		assert_eq!(
-			uri_encode("AKIA/20260612/us-east-1/s3/aws4_request", true),
-			"AKIA%2F20260612%2Fus-east-1%2Fs3%2Faws4_request"
-		);
-	}
-
-	#[test]
-	fn empty_sha256_constant_matches_hash() {
-		assert_eq!(sha256_hex([]), EMPTY_SHA256);
-	}
-
-	#[test]
-	fn object_url_includes_endpoint_base_path_in_canonical_uri() {
-		let client = S3Client::new(S3ClientConfig {
-			bucket: "test-bucket".to_string(),
-			region: Some("us-east-1".to_string()),
-			endpoint: Some("http://127.0.0.1:9000/base/".to_string()),
-			credentials: AwsCredentialsSource::Static(AwsCredentials::new("test", "test")),
-			force_path_style: true,
-		});
-
-		let (url, canonical_uri) = client
-			.object_url("path/to/file name.txt", "us-east-1")
-			.expect("object URL should be built");
-
-		assert_eq!(canonical_uri, "/base/test-bucket/path/to/file%20name.txt");
-		assert_eq!(
-			url.as_str(),
-			"http://127.0.0.1:9000/base/test-bucket/path/to/file%20name.txt"
-		);
-	}
-}
+mod tests;

@@ -61,9 +61,11 @@ async fn maps_provider_http_errors_to_network_errors() {
 		.send()
 		.await
 		.expect_err("malformed URL should fail before a request is sent");
+	let expected_message = http_error.to_string();
+	let converted = StorageError::from(ProviderError::Http(http_error));
 
 	assert!(matches!(
-		StorageError::from(ProviderError::Http(http_error)),
-		StorageError::NetworkError(message) if !message.is_empty()
+		converted,
+		StorageError::NetworkError(message) if message == expected_message
 	));
 }

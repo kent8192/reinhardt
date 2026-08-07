@@ -1,0 +1,5 @@
+error: `transient` overrides must use the factory form: `transient <Type> => |ctx| async { ... }`
+ --> tests/ui/fail_transient_value.rs:7:32
+  |
+7 |         let _ = with_di_overrides! { transient Service };
+  |                                      ^^^^^^^^^

@@ -236,3 +236,188 @@ pub(crate) fn expand(input: TokenStream) -> Result<TokenStream> {
 
 	Ok(expanded.into_token_stream())
 }
+
+#[cfg(test)]
+mod tests {
+	use super::*;
+	use proc_macro2::TokenTree;
+
+	fn normalize_tokens(stream: TokenStream) -> String {
+		stream
+			.into_iter()
+			.map(|token| match token {
+				TokenTree::Group(group) => format!(
+					"group:{:?}[{}]",
+					group.delimiter(),
+					normalize_tokens(group.stream())
+				),
+				TokenTree::Ident(ident) => format!("ident:{ident}"),
+				TokenTree::Punct(punct) => {
+					format!("punct:{}:{:?}", punct.as_char(), punct.spacing())
+				}
+				TokenTree::Literal(literal) => format!("literal:{literal}"),
+			})
+			.collect::<Vec<_>>()
+			.join("|")
+	}
+
+	fn assert_expands_to(input: TokenStream, expected: TokenStream) {
+		let actual = expand(input).expect("valid macro input should expand");
+
+		assert_eq!(normalize_tokens(actual), normalize_tokens(expected));
+	}
+
+	#[test]
+	fn empty_invocation_expands_the_runtime_wrapper() {
+		let input = quote! {};
+		let expected = quote! {{
+			::reinhardt_testkit::fixtures::di_overrides
+				::injection_context_with_di_overrides(|__scope, __builder| {
+					let _ = __scope;
+				}).await
+		}};
+
+		assert_expands_to(input, expected);
+	}
+
+	#[test]
+	fn value_forms_preserve_struct_syntax_and_qualified_paths() {
+		let input = quote! {
+			singleton config::Cfg { key, fallback: "default", },
+			request request::Cfg { key: "override", ..base },
+			request request::Marker,
+		};
+		let expected = quote! {{
+			::reinhardt_testkit::fixtures::di_overrides
+				::injection_context_with_di_overrides(|__scope, __builder| {
+					let _ = __scope;
+					__builder.singleton::<config::Cfg>(config::Cfg {
+						key,
+						fallback: "default",
+					});
+					__builder.request_value::<request::Cfg>(request::Cfg {
+						key: "override",
+						..base
+					});
+					__builder.request_value::<request::Marker>(request::Marker);
+				}).await
+		}};
+
+		assert_expands_to(input, expected);
+	}
+
+	#[test]
+	fn factory_forms_map_every_scope_and_preserve_item_order() {
+		let input = quote! {
+			singleton services::Singleton => |_ctx| async { make_singleton() },
+			request services::Request => |_ctx| async { make_request() },
+			transient services::Transient => |_ctx| async { make_transient() },
+		};
+		let expected = quote! {{
+			::reinhardt_testkit::fixtures::di_overrides
+				::injection_context_with_di_overrides(|__scope, __builder| {
+					let _ = __scope;
+					__builder.factory::<services::Singleton, _, _>(
+						::reinhardt_testkit::DependencyScope::Singleton,
+						|_ctx| async { make_singleton() }
+					);
+					__builder.factory::<services::Request, _, _>(
+						::reinhardt_testkit::DependencyScope::Request,
+						|_ctx| async { make_request() }
+					);
+					__builder.factory::<services::Transient, _, _>(
+						::reinhardt_testkit::DependencyScope::Transient,
+						|_ctx| async { make_transient() }
+					);
+				}).await
+		}};
+
+		assert_expands_to(input, expected);
+	}
+
+	#[test]
+	fn mixed_value_and_factory_items_keep_source_order() {
+		let input = quote! {
+			singleton Cfg,
+			request RequestCfg,
+			transient Client => |_ctx| async { make_client() },
+		};
+		let expected = quote! {{
+			::reinhardt_testkit::fixtures::di_overrides
+				::injection_context_with_di_overrides(|__scope, __builder| {
+					let _ = __scope;
+					__builder.singleton::<Cfg>(Cfg);
+					__builder.request_value::<RequestCfg>(RequestCfg);
+					__builder.factory::<Client, _, _>(
+						::reinhardt_testkit::DependencyScope::Transient,
+						|_ctx| async { make_client() }
+					);
+				}).await
+		}};
+
+		assert_expands_to(input, expected);
+	}
+
+	#[test]
+	fn unknown_scope_reports_the_exact_contract() {
+		let error =
+			expand(quote! { bogus Service }).expect_err("an unknown scope should fail parsing");
+
+		assert_eq!(
+			error.to_string(),
+			"unknown override kind `bogus`; expected one of `singleton`, `request`, `transient`"
+		);
+	}
+
+	#[test]
+	fn transient_value_reports_the_exact_contract() {
+		let error = expand(quote! { transient Service })
+			.expect_err("a transient value should require a factory");
+
+		assert_eq!(
+			error.to_string(),
+			"`transient` overrides must use the factory form: `transient <Type> => |ctx| async { ... }`"
+		);
+	}
+
+	#[test]
+	fn non_path_struct_value_reports_the_exact_contract() {
+		let error = expand(quote! { singleton (Service) {} })
+			.expect_err("a struct value should require a plain type path");
+
+		assert_eq!(
+			error.to_string(),
+			"expected a plain type path before the struct literal body"
+		);
+	}
+
+	#[test]
+	fn missing_item_comma_reports_the_exact_parse_error() {
+		let error = expand(quote! { singleton First request Second })
+			.expect_err("items without a comma should fail parsing");
+
+		assert_eq!(error.to_string(), "expected `,`");
+	}
+
+	#[test]
+	fn invalid_factory_expression_reports_the_exact_parse_error() {
+		let error = expand(quote! { singleton Service => })
+			.expect_err("a factory requires an expression after the arrow");
+
+		assert_eq!(
+			error.to_string(),
+			"unexpected end of input, expected an expression"
+		);
+	}
+
+	#[test]
+	fn invalid_struct_field_reports_the_exact_parse_error() {
+		let error = expand(quote! { singleton Config { key: } })
+			.expect_err("a struct field requires a value expression");
+
+		assert_eq!(
+			error.to_string(),
+			"unexpected end of input, expected an expression"
+		);
+	}
+}

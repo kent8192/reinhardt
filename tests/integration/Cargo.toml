@@ -54,6 +54,8 @@ reinhardt-utils = { workspace = true, features = ["cache", "compression", "loggi
 reinhardt-test = { workspace = true, features = ["testcontainers"] }
 reinhardt-urls = { workspace = true }
 reinhardt-conf = { workspace = true }
+reinhardt-providers = { workspace = true, features = ["aws"] }
+reinhardt-storages = { workspace = true, features = ["s3", "local"] }
 reinhardt-admin = { workspace = true, features = ["core"] }
 reinhardt-pages = { workspace = true, features = ["testing", "static", "urls"] }
 reinhardt-commands = { workspace = true, features = ["migrations", "sqlite"] }
@@ -86,6 +88,7 @@ bson = { version = "3.0", features = ["serde"] }
 mongodb = { version = "3.0", features = ["bson-3"] }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
+toml = { workspace = true }
 
 # Template engine
 tera = { workspace = true }

@@ -6,3 +6,9 @@ mod static_processing_integration_tests;
 
 #[path = "storage/storage_orm_integration.rs"]
 mod storage_orm_integration;
+
+#[path = "storage/provider_error_conversion.rs"]
+mod provider_error_conversion;
+
+#[path = "storage/settings_validation.rs"]
+mod settings_validation;

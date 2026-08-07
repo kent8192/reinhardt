@@ -1,0 +1,5 @@
+error: expected identifier
+ --> tests/ui/fail_missing_kind.rs:5:32
+  |
+5 |         let _ = with_di_overrides! { 123 };
+  |                                      ^^^

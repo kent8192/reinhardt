@@ -1,0 +1,5 @@
+error: unexpected end of input, expected an expression
+ --> tests/ui/fail_invalid_struct_field.rs:9:56
+  |
+9 |         let _ = with_di_overrides! { singleton Config { key: } };
+  |                                                              ^

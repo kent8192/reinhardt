@@ -245,6 +245,8 @@ impl Form {
 							}
 						}
 					}
+					let submitted_name = self.add_prefix_to_field_name(field.name());
+					self.data.remove(&submitted_name);
 					self.data.insert(field.name().to_string(), cleaned);
 				}
 				Err(e) => {
@@ -864,10 +866,12 @@ impl Form {
 	}
 
 	fn data_for_field(&self, field_name: &str) -> Option<&serde_json::Value> {
-		let prefixed_name = self.add_prefix_to_field_name(field_name);
-		self.data
-			.get(&prefixed_name)
-			.or_else(|| self.data.get(field_name))
+		if self.prefix.is_empty() {
+			self.data.get(field_name)
+		} else {
+			let prefixed_name = self.add_prefix_to_field_name(field_name);
+			self.data.get(&prefixed_name)
+		}
 	}
 	/// Render CSS `<link>` tags for form media with HTML-escaped paths.
 	///
@@ -1356,6 +1360,42 @@ mod tests {
 		form.set_prefix("user".to_string());
 		assert_eq!(form.prefix(), "user");
 		assert_eq!(form.add_prefix_to_field_name("email"), "user-email");
+	}
+
+	#[test]
+	fn prefixed_forms_do_not_fallback_to_unprefixed_values() {
+		// Arrange
+		let mut form = Form::with_prefix("profile".to_string());
+		form.add_field(Box::new(CharField::new("name".to_string()).required()));
+		form.bind(HashMap::from([(String::from("name"), json!("other-form"))]));
+
+		// Act
+		let valid = form.is_valid();
+
+		// Assert
+		assert!(!valid);
+		assert!(form.errors().contains_key("name"));
+	}
+
+	#[test]
+	fn prefixed_forms_expose_only_canonical_cleaned_values() {
+		// Arrange
+		let mut form = Form::with_prefix("profile".to_string());
+		form.add_field(Box::new(CharField::new("name".to_string()).required()));
+		form.bind(HashMap::from([(
+			String::from("profile-name"),
+			json!("Ada"),
+		)]));
+
+		// Act
+		let valid = form.is_valid();
+
+		// Assert
+		assert!(valid);
+		assert_eq!(
+			form.cleaned_data(),
+			&HashMap::from([(String::from("name"), json!("Ada"))])
+		);
 	}
 
 	#[test]

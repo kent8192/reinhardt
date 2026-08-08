@@ -1,5 +1,5 @@
 use crate::bound_field::BoundField;
-use crate::field::{FieldError, FormField};
+use crate::field::{FieldError, FormField, Widget};
 use crate::wasm_compat::ValidationRule;
 use std::collections::HashMap;
 use std::ops::Index;
@@ -59,6 +59,7 @@ pub struct Form {
 	initial: HashMap<String, serde_json::Value>,
 	errors: HashMap<String, Vec<String>>,
 	is_bound: bool,
+	validation_complete: bool,
 	clean_functions: Vec<CleanFunction>,
 	field_clean_functions: HashMap<String, FieldCleanFunction>,
 	prefix: String,
@@ -92,6 +93,7 @@ impl Form {
 			initial: HashMap::new(),
 			errors: HashMap::new(),
 			is_bound: false,
+			validation_complete: false,
 			clean_functions: vec![],
 			field_clean_functions: HashMap::new(),
 			prefix: String::new(),
@@ -123,6 +125,7 @@ impl Form {
 			initial,
 			errors: HashMap::new(),
 			is_bound: false,
+			validation_complete: false,
 			clean_functions: vec![],
 			field_clean_functions: HashMap::new(),
 			prefix: String::new(),
@@ -150,6 +153,7 @@ impl Form {
 			initial: HashMap::new(),
 			errors: HashMap::new(),
 			is_bound: false,
+			validation_complete: false,
 			clean_functions: vec![],
 			field_clean_functions: HashMap::new(),
 			prefix,
@@ -193,6 +197,7 @@ impl Form {
 		self.cleaned_data = data.clone();
 		self.data = data;
 		self.is_bound = true;
+		self.validation_complete = false;
 	}
 	/// Validate the form and return true if all fields are valid
 	///
@@ -219,6 +224,7 @@ impl Form {
 			return false;
 		}
 
+		self.validation_complete = false;
 		self.errors.clear();
 		self.cleaned_data = self.data.clone();
 
@@ -292,6 +298,7 @@ impl Form {
 			}
 		}
 
+		self.validation_complete = true;
 		self.errors.is_empty()
 	}
 	/// Returns the cleaned (validated) form data.
@@ -369,7 +376,12 @@ impl Form {
 
 		for field in &self.fields {
 			let initial_val = self.initial.get(field.name());
-			let data_val = self.data_for_field(field.name());
+			let data_val = if self.validation_complete && !self.errors.contains_key(field.name()) {
+				self.cleaned_data_for_field(field.name())
+					.or_else(|| self.data_for_field(field.name()))
+			} else {
+				self.data_for_field(field.name())
+			};
 			if field.has_changed(initial_val, data_val) {
 				return true;
 			}
@@ -881,6 +893,19 @@ impl Form {
 			self.data.get(&prefixed_name)
 		}
 	}
+
+	fn cleaned_data_for_field(&self, field_name: &str) -> Option<&serde_json::Value> {
+		if let Some(value) = self.cleaned_data.get(field_name) {
+			return Some(value);
+		}
+
+		if self.prefix.is_empty() {
+			None
+		} else {
+			let prefixed_name = self.add_prefix_to_field_name(field_name);
+			self.cleaned_data.get(&prefixed_name)
+		}
+	}
 	/// Render CSS `<link>` tags for form media with HTML-escaped paths.
 	///
 	/// All paths are escaped using `escape_attribute()` to prevent XSS
@@ -944,7 +969,14 @@ impl Form {
 	/// Returns a `BoundField` with the field's submitted data and errors attached.
 	pub fn get_bound_field<'a>(&'a self, name: &str) -> Option<BoundField<'a>> {
 		let field = self.get_field(name)?;
-		let data = self.data_for_field(name);
+		let data = if matches!(field.widget(), Widget::PasswordInput)
+			&& self.validation_complete
+			&& !self.errors.contains_key(field.name())
+		{
+			self.cleaned_data_for_field(name)
+		} else {
+			self.data_for_field(name)
+		};
 		let errors = self.errors.get(name).map(|e| e.as_slice()).unwrap_or(&[]);
 
 		Some(BoundField::new(
@@ -999,7 +1031,7 @@ impl Index<&str> for Form {
 #[cfg(test)]
 mod tests {
 	use super::*;
-	use crate::fields::CharField;
+	use crate::fields::{CharField, IntegerField};
 	use rstest::rstest;
 	use serde_json::json;
 
@@ -1408,6 +1440,22 @@ mod tests {
 	}
 
 	#[rstest]
+	fn has_changed_uses_cleaned_values_after_validation() {
+		// Arrange
+		let mut form = Form::with_initial(HashMap::from([("age".to_string(), json!(1))]));
+		form.add_field(Box::new(IntegerField::new("age".to_string())));
+		form.bind(HashMap::from([("age".to_string(), json!("1"))]));
+
+		// Act
+		let valid = form.is_valid();
+
+		// Assert
+		assert!(valid);
+		assert_eq!(form.cleaned_data().get("age"), Some(&json!(1)));
+		assert!(!form.has_changed());
+	}
+
+	#[rstest]
 	fn prefixed_forms_preserve_bound_values_after_validation_failure() {
 		// Arrange
 		let mut form = Form::with_prefix("profile".to_string());
@@ -1460,7 +1508,7 @@ mod tests {
 		);
 	}
 
-	#[test]
+	#[rstest]
 	fn form_configuration_and_submission_edges_are_observable() {
 		// Arrange
 		let mut form = Form::with_prefix("profile".to_string());

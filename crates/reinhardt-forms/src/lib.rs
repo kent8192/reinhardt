@@ -50,7 +50,7 @@
 //! validated values are exposed through canonical field names, while bound
 //! fields continue to read the original submitted values for rerendering.
 //!
-//! ```rust,ignore
+//! ```rust
 //! use reinhardt_forms::{CharField, Field, Form};
 //! use serde_json::json;
 //! use std::collections::HashMap;

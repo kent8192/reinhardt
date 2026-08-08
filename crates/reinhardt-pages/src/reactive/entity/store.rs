@@ -385,6 +385,7 @@ impl<'a> EntityOverlay<'a> {
 	where
 		E: Entity,
 	{
+		self.arena.register_entity_type::<E>();
 		let identity = EntityIdentity::of::<E>(id);
 		if let Some(operation) = self
 			.operations

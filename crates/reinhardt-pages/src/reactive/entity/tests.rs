@@ -375,7 +375,7 @@ fn projection_round_trips_standard_and_composite_recipes() {
 			},
 		);
 
-		let removed = RemovedEntities::from_ids::<Project>([1, 2, 3, 9]);
+		let removed = RemovedEntities::from_ids::<Project>([1, 2, 3, 5, 9]);
 		assert_eq!(
 			direct.apply_removals(direct_recipe.borrow_mut().as_deref_mut().unwrap(), &removed),
 			ProjectionRemoval::MissingRequired,

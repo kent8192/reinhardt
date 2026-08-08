@@ -1096,8 +1096,7 @@ mod tests {
 	use reinhardt_core::exception::{Error as HttpError, Result as HttpResult};
 	use rstest::rstest;
 
-	/// Handler that echoes the request path in the response body
-	/// and reflects request headers as X-Echo-* response headers.
+	/// Handler that echoes request metadata through X-Echo-* response headers.
 	struct EchoHandler;
 
 	#[async_trait]
@@ -1112,10 +1111,24 @@ mod tests {
 				.and_then(|v| v.to_str().ok())
 				.unwrap_or("")
 				.to_string();
+			let request_header = request
+				.headers
+				.get("X-Request")
+				.and_then(|v| v.to_str().ok())
+				.unwrap_or("missing");
+			let raw_header = request
+				.headers
+				.get("X-Raw")
+				.and_then(|v| v.to_str().ok())
+				.unwrap_or("missing");
+			let body = String::from_utf8_lossy(request.body()).into_owned();
 
 			let mut response = HttpResponse::ok().with_body(path.clone());
 			response = response.try_with_header("X-Echo-Path", &path)?;
 			response = response.try_with_header("X-Echo-Method", &method)?;
+			response = response.try_with_header("X-Echo-X-Request", request_header)?;
+			response = response.try_with_header("X-Echo-X-Raw", raw_header)?;
+			response = response.try_with_header("X-Echo-Body", &body)?;
 
 			if has_custom {
 				response = response.try_with_header("X-Echo-Custom", "present")?;
@@ -1348,6 +1361,19 @@ mod tests {
 			assert_eq!(response.header("X-Echo-Custom"), Some("present"));
 		}
 		assert_eq!(post.header("X-Echo-Content-Type"), Some("application/json"));
+		assert_eq!(get.header("X-Echo-X-Request"), Some("get"));
+		assert_eq!(raw_headers.header("X-Echo-X-Raw"), Some("yes"));
+		assert_eq!(
+			post.header("X-Echo-Body"),
+			Some(r#"{"name":"Ada","count":2}"#)
+		);
+		assert_eq!(put.header("X-Echo-Body"), Some("name=Ada&count=2"));
+		assert_eq!(
+			patch.header("X-Echo-Body"),
+			Some(r#"{"name":"Ada","count":2}"#)
+		);
+		assert_eq!(raw_headers.header("X-Echo-Body"), Some("raw-body"));
+		assert_eq!(raw.header("X-Echo-Body"), Some("bytes"));
 		assert_eq!(
 			put.header("X-Echo-Content-Type"),
 			Some("application/x-www-form-urlencoded")
@@ -1400,6 +1426,10 @@ mod tests {
 		client.cleanup().await;
 		let cleaned = client.get("https://example.test/cleaned").await.unwrap();
 		client.credentials("grace", &logout_password).await.unwrap();
+		client
+			.set_cookie("session", "logout-session")
+			.await
+			.unwrap();
 		client.logout().await.unwrap();
 		let logged_out = client.get("/logged-out").await.unwrap();
 
@@ -1430,6 +1460,7 @@ mod tests {
 		assert_eq!(cleaned.header("X-Cookie"), Some("missing"));
 		assert_eq!(cleaned.header("X-Custom"), Some("missing"));
 		assert_eq!(logged_out.header("X-Authorization"), Some("missing"));
+		assert_eq!(logged_out.header("X-Cookie"), Some("missing"));
 	}
 
 	#[rstest]

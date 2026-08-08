@@ -51,7 +51,12 @@ reinhardt-throttling = { workspace = true }
 reinhardt-shortcuts = { workspace = true, features = ["database"] }
 reinhardt-forms = { workspace = true }
 reinhardt-utils = { workspace = true, features = ["cache", "compression", "logging", "staticfiles", "storage", "memcached-backend", "redis-backend", "redis-sentinel"] }
-reinhardt-test = { workspace = true, features = ["testcontainers"] }
+reinhardt-test = { workspace = true, features = [
+  "testcontainers",
+  "static",
+  "websockets",
+  "server-fn-test",
+] }
 reinhardt-urls = { workspace = true }
 reinhardt-conf = { workspace = true }
 reinhardt-providers = { workspace = true, features = ["aws"] }

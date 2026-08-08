@@ -358,7 +358,9 @@ mod tests {
 	use super::*;
 	use std::sync::{Arc, Mutex};
 
+	use rstest::rstest;
 	use tokio::net::TcpListener;
+	use tokio::sync::Notify;
 	use tokio::task::JoinHandle;
 	use tokio_tungstenite::accept_async;
 
@@ -418,13 +420,15 @@ mod tests {
 		)
 	}
 
-	async fn start_timeout_server() -> (String, WebSocketServerGuard) {
+	async fn start_timeout_server() -> (String, WebSocketServerGuard, Arc<Notify>) {
 		let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
 		let address = listener.local_addr().unwrap();
+		let release = Arc::new(Notify::new());
+		let server_release = Arc::clone(&release);
 		let handle = tokio::spawn(async move {
 			let (stream, _) = listener.accept().await.unwrap();
 			let _socket = accept_async(stream).await.unwrap();
-			tokio::time::sleep(Duration::from_millis(100)).await;
+			server_release.notified().await;
 		});
 
 		(
@@ -432,6 +436,7 @@ mod tests {
 			WebSocketServerGuard {
 				handle: Some(handle),
 			},
+			release,
 		)
 	}
 
@@ -474,6 +479,7 @@ mod tests {
 		assert_message_pong(&pong_msg);
 	}
 
+	#[rstest]
 	#[tokio::test]
 	async fn websocket_client_roundtrips_frames_and_reports_timeout_and_type_errors() {
 		// Arrange
@@ -484,7 +490,7 @@ mod tests {
 			Arc::new(Mutex::new(Vec::new())),
 		)
 		.await;
-		let (timeout_url, timeout_server) = start_timeout_server().await;
+		let (timeout_url, timeout_server, timeout_release) = start_timeout_server().await;
 		let mut client = WebSocketTestClient::connect(&url).await.unwrap();
 		let client_url = client.url().to_string();
 		let mut wrong_client = WebSocketTestClient::connect(&wrong_url).await.unwrap();
@@ -507,6 +513,7 @@ mod tests {
 			.receive_text_with_timeout(Duration::from_millis(10))
 			.await
 			.unwrap_err();
+		timeout_release.notify_one();
 		wrong_client.close().await.unwrap();
 		client.close().await.unwrap();
 

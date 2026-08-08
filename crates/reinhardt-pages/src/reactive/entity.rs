@@ -60,16 +60,19 @@
 //! ```
 //!
 //! The adapters have different removal semantics. Removing the required value
-//! makes the projection missing; removing an optional value changes it to
-//! `None`; removing an ID from an [`EntityVec`] removes that ID while preserving
-//! the remaining order. A direct [`EntityHandle::get`] likewise returns `None`
-//! for a vacant or tombstoned record.
+//! makes internal materialization report `MissingRequired`; an active enabled
+//! [`crate::reactive::QueryHandle`] retains its last successful `T` and
+//! `QueryStatus::Success` while scheduling at most one recovery refetch.
+//! Removing an optional value changes it to `None`; removing an ID from an
+//! [`EntityVec`] removes that ID while preserving the remaining order. A direct
+//! [`EntityHandle::get`] likewise returns `None` for a vacant or tombstoned
+//! record.
 //!
 //! # Custom projections
 //!
 //! Implement [`EntityProjection`] when a result contains several entities or a
-//! non-entity recipe. The adapter must be zero-sized (or otherwise have no
-//! runtime state), give its recipe a versioned non-empty [`EntityProjection::SCHEMA`],
+//! non-entity recipe. The adapter must be a zero-sized type with no runtime
+//! state, give its recipe a versioned non-empty [`EntityProjection::SCHEMA`],
 //! declare every identity it may read, and use [`EntityReader`] for all
 //! materialization reads. Upserts are complete replacements: a projection does
 //! not infer collection membership, relationships, cascades, patches, or
@@ -206,9 +209,11 @@
 //! ```
 //!
 //! Entity leases keep records alive while a query dependency or an
-//! [`EntityHandle`] exists. Once all leases and in-flight write tickets are
-//! gone, the arena schedules present records and tombstones with the client's
-//! default `gc_time`; reacquiring a handle invalidates an older deadline.
+//! [`EntityHandle`] exists. When the lease count reaches zero, the arena
+//! schedules a GC deadline for the present record or tombstone using the
+//! client's default `gc_time`. Active in-flight write tickets only block and
+//! re-check collection at that deadline; they do not postpone scheduling.
+//! Reacquiring a handle invalidates an older deadline.
 //!
 //! # SSR and hydration
 //!

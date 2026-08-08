@@ -517,8 +517,9 @@ mod tests {
 	use super::*;
 	use crate::backends::{EmailBackend, MemoryBackend};
 	use crate::{EmailError, EmailResult};
+	use rstest::rstest;
 
-	#[test]
+	#[rstest]
 	fn alternative_content_reports_exact_text_and_invalid_utf8() {
 		// Arrange
 		let html = Alternative::html("<strong>hello</strong>");
@@ -536,7 +537,7 @@ mod tests {
 		assert_eq!(invalid.content_as_string(), None);
 	}
 
-	#[test]
+	#[rstest]
 	fn attachment_file_and_inline_metadata_round_trip() {
 		// Arrange
 		let temp_dir = tempfile::tempdir().unwrap();
@@ -615,6 +616,7 @@ mod tests {
 		}
 	}
 
+	#[rstest]
 	#[tokio::test]
 	async fn email_message_send_delegates_and_propagates_failure() {
 		// Arrange

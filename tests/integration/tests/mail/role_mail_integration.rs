@@ -17,6 +17,15 @@ impl EmailBackend for TransientFailureBackend {
 	}
 }
 
+struct PermanentFailureBackend;
+
+#[async_trait]
+impl EmailBackend for PermanentFailureBackend {
+	async fn send_messages(&self, _messages: &[EmailMessage]) -> EmailResult<usize> {
+		Err(EmailError::BackendError("permanent failure".to_string()))
+	}
+}
+
 #[rstest]
 #[tokio::test]
 async fn role_mail_helpers_apply_recipient_and_failure_policy() {
@@ -67,6 +76,14 @@ async fn role_mail_helpers_apply_recipient_and_failure_policy() {
 		mail_admins(&settings, "Transient", "Suppressed", true, &transient).await;
 	let transient_propagated =
 		mail_admins(&settings, "Transient", "Propagated", false, &transient).await;
+	let permanent_suppressed = mail_admins(
+		&settings,
+		"Permanent",
+		"Must propagate",
+		true,
+		&PermanentFailureBackend,
+	)
+	.await;
 
 	// Assert
 	assert_eq!(messages.len(), 3);
@@ -92,5 +109,9 @@ async fn role_mail_helpers_apply_recipient_and_failure_policy() {
 	assert_eq!(
 		transient_propagated.unwrap_err().to_string(),
 		"IO error: transient failure"
+	);
+	assert_eq!(
+		permanent_suppressed.unwrap_err().to_string(),
+		"Backend error: permanent failure"
 	);
 }

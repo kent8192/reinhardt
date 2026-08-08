@@ -491,6 +491,19 @@ impl EntityArena {
 	}
 
 	#[cfg(test)]
+	pub(crate) fn entity_gc_due_ms_for_test<E>(&self, id: &E::Id) -> Option<u64>
+	where
+		E: Entity,
+	{
+		let bucket = self.bucket::<E>();
+		bucket
+			.borrow()
+			.records
+			.get(id)
+			.and_then(|record| record.gc_due_ms)
+	}
+
+	#[cfg(test)]
 	pub(crate) fn active_query_ticket_count(&self, ticket: EntityWriteTicket) -> usize {
 		self.inner
 			.active_query_tickets

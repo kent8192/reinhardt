@@ -2664,8 +2664,9 @@ mod entity_propagation {
 
 	thread_local! {
 		static ROLLBACK_PREPARATION_TRACE: RefCell<Vec<&'static str>> = const { RefCell::new(Vec::new()) };
-		static PANIC_AFTER_ROLLBACK_PREPARATIONS: Cell<Option<usize>> = const { Cell::new(None) };
-		static ROLLBACK_COLLECTION_MATERIALIZATIONS: Cell<usize> = const { Cell::new(0) };
+	static PANIC_AFTER_ROLLBACK_PREPARATIONS: Cell<Option<usize>> = const { Cell::new(None) };
+	static SWITCH_ROLLBACK_DEPENDENCY_TO_PROJECT_TWO: Cell<bool> = const { Cell::new(false) };
+	static ROLLBACK_COLLECTION_MATERIALIZATIONS: Cell<usize> = const { Cell::new(0) };
 		static ROLLBACK_DETAIL_MATERIALIZATIONS: Cell<usize> = const { Cell::new(0) };
 	}
 
@@ -2686,6 +2687,7 @@ mod entity_propagation {
 	fn reset_rollback_projection_state() {
 		ROLLBACK_PREPARATION_TRACE.with(|trace| trace.borrow_mut().clear());
 		PANIC_AFTER_ROLLBACK_PREPARATIONS.with(|limit| limit.set(None));
+		SWITCH_ROLLBACK_DEPENDENCY_TO_PROJECT_TWO.with(|switch| switch.set(false));
 		ROLLBACK_COLLECTION_MATERIALIZATIONS.with(|count| count.set(0));
 		ROLLBACK_DETAIL_MATERIALIZATIONS.with(|count| count.set(0));
 	}
@@ -2748,6 +2750,12 @@ mod entity_propagation {
 			recipe: &mut Self::Recipe,
 			removed: &RemovedEntities<'_>,
 		) -> ProjectionRemoval {
+			if SWITCH_ROLLBACK_DEPENDENCY_TO_PROJECT_TWO.with(Cell::get)
+				&& removed.contains::<Project>(&1)
+			{
+				recipe.project_ids = vec![2];
+				return ProjectionRemoval::Updated;
+			}
 			let previous_len = recipe.project_ids.len();
 			recipe
 				.project_ids
@@ -2803,6 +2811,12 @@ mod entity_propagation {
 			recipe: &mut Self::Recipe,
 			removed: &RemovedEntities<'_>,
 		) -> ProjectionRemoval {
+			if SWITCH_ROLLBACK_DEPENDENCY_TO_PROJECT_TWO.with(Cell::get)
+				&& removed.contains::<Project>(&1)
+			{
+				recipe.project_id = 2;
+				return ProjectionRemoval::Updated;
+			}
 			if removed.contains::<Project>(&recipe.project_id) {
 				ProjectionRemoval::MissingRequired
 			} else {
@@ -3188,6 +3202,92 @@ mod entity_propagation {
 					}),
 				)]
 			);
+		});
+	}
+
+	#[test]
+	#[serial(entity_propagation)]
+	fn failed_heterogeneous_preparation_preserves_unleased_dependency_gc_deadline() {
+		ReactiveScope::run(|| {
+			let runtime = TestQueryRuntime::new();
+			let client = QueryClient::with_runtime(
+				QueryDefaults::default().gc_time(Duration::from_secs(300)),
+				runtime.handle(),
+			);
+			reset_rollback_projection_state();
+			let arena = client.entity_arena_for_test();
+
+			// Project 2 is present but unleased, so its initial collection deadline is t=300.
+			client.upsert_entity(project(2, "unleased"));
+			assert_eq!(
+				arena.entity_gc_due_ms_for_test::<Project>(&2),
+				Some(300_000)
+			);
+
+			let collection = client.observe(
+				QueryFamily::<(), RollbackCollection, String>::new(
+					"tests.entity-propagation-rollback-gc-collection",
+				)
+				.query((), || async {
+					Ok(RollbackCollection {
+						label: "collection recipe".to_string(),
+						projects: vec![project(1, "stable")],
+					})
+				})
+				.with_entities(RollbackCollectionProjection),
+				QueryOptions::new(),
+			);
+			let detail = client.observe(
+				QueryFamily::<(), RollbackDetail, String>::new(
+					"tests.entity-propagation-rollback-gc-detail",
+				)
+				.query((), || async {
+					Ok(RollbackDetail {
+						label: "detail recipe".to_string(),
+						project: project(1, "stable"),
+					})
+				})
+				.with_entities(RollbackDetailProjection),
+				QueryOptions::new(),
+			);
+			runtime.run_until_stalled();
+			runtime.advance(Duration::from_secs(100));
+
+			SWITCH_ROLLBACK_DEPENDENCY_TO_PROJECT_TWO.with(|switch| switch.set(true));
+			set_rollback_preparation_panic_after(Some(1));
+			let preparation_panic = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+				client.remove_entity::<Project>(&1);
+			}));
+			set_rollback_preparation_panic_after(None);
+			SWITCH_ROLLBACK_DEPENDENCY_TO_PROJECT_TWO.with(|switch| switch.set(false));
+
+			assert!(preparation_panic.is_err());
+			assert_eq!(
+				client.entity_dependency_lease_count_for_test::<Project>(&2),
+				0
+			);
+			assert_eq!(
+				arena.entity_gc_due_ms_for_test::<Project>(&2),
+				Some(300_000)
+			);
+			assert_eq!(
+				collection.data(),
+				Some(RollbackCollection {
+					label: "collection recipe".to_string(),
+					projects: vec![project(1, "stable")],
+				})
+			);
+			assert_eq!(
+				detail.data(),
+				Some(RollbackDetail {
+					label: "detail recipe".to_string(),
+					project: project(1, "stable"),
+				})
+			);
+
+			runtime.advance(Duration::from_secs(200));
+			runtime.run_due_maintenance();
+			assert!(!arena.entity_record_exists_for_test::<Project>(&2));
 		});
 	}
 

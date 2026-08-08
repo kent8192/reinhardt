@@ -259,8 +259,17 @@ pub(crate) trait EntityDependent {
 }
 
 pub(crate) struct PreparedProjectionCommit {
+	pub(crate) prepare_leases: Box<dyn FnOnce()>,
 	pub(crate) commit_structure: Box<dyn FnOnce()>,
 	pub(crate) publish_signal: Box<dyn FnOnce()>,
+}
+
+impl PreparedProjectionCommit {
+	/// Acquires entity leases only after every dependent has finished preparing.
+	fn acquire_leases(&mut self) {
+		let prepare_leases = std::mem::replace(&mut self.prepare_leases, Box::new(|| {}));
+		prepare_leases();
+	}
 }
 
 #[derive(Clone, Copy)]
@@ -569,10 +578,16 @@ impl QueryClientInner {
 		}
 		drop(index);
 
-		dependents
+		let mut prepared = dependents
 			.into_values()
 			.map(|dependent| dependent.prepare_entity_change(overlay, removed))
-			.collect()
+			.collect::<Vec<_>>();
+		// Projection materialization is fallible and may panic. Defer every lease
+		// mutation until all dependent preparations have completed successfully.
+		for prepared in &mut prepared {
+			prepared.acquire_leases();
+		}
+		prepared
 	}
 
 	fn replace_reverse_dependencies(
@@ -1648,7 +1663,6 @@ impl<T: Clone + 'static, E: Clone + 'static> QueryEntry<T, E> {
 			),
 			ProjectionMaterialization::MissingRequired => (fallback, true),
 		};
-		let leases = dependencies.acquire_leases(&self.entities);
 		let next_dependencies = dependencies.identities().clone();
 		let previous_dependencies = self
 			.dependencies
@@ -1663,6 +1677,7 @@ impl<T: Clone + 'static, E: Clone + 'static> QueryEntry<T, E> {
 			.and_then(Weak::upgrade)
 			.map(|owner| owner.prepare_entity_change(&overlay, &removed, Some(&self.identity)))
 			.unwrap_or_default();
+		let leases = dependencies.acquire_leases(&self.entities);
 		let (commit_structures, publish_signals): (Vec<_>, Vec<_>) = prepared
 			.into_iter()
 			.map(|prepared| (prepared.commit_structure, prepared.publish_signal))
@@ -1761,7 +1776,6 @@ where
 			),
 			ProjectionMaterialization::MissingRequired => (None, true),
 		};
-		let leases = dependencies.acquire_leases(&self.entities);
 		let next_dependencies = dependencies.identities().clone();
 		let previous_dependencies = self
 			.dependencies
@@ -1778,8 +1792,16 @@ where
 		let structure_entry = Rc::clone(&self);
 		let signal_entry = Rc::clone(&self);
 		let normalization_recovery_needed = missing;
+		let pending_leases = Rc::new(RefCell::new(None));
+		let prepare_leases = Rc::clone(&pending_leases);
+		let entities = self.entities.clone();
 
 		PreparedProjectionCommit {
+			prepare_leases: Box::new(move || {
+				prepare_leases
+					.borrow_mut()
+					.replace(dependencies.acquire_leases(&entities));
+			}),
 			commit_structure: Box::new(move || {
 				if let Some(owner) = structure_entry.owner.as_ref().and_then(Weak::upgrade) {
 					let dependent: Rc<dyn EntityDependent> = structure_entry.clone();
@@ -1790,6 +1812,10 @@ where
 					);
 				}
 				structure_entry.recipe.borrow_mut().replace(recipe);
+				let leases = pending_leases
+					.borrow_mut()
+					.take()
+					.expect("entity leases must be acquired before commit");
 				let previous_leases =
 					std::mem::replace(&mut *structure_entry.dependencies.borrow_mut(), leases);
 				structure_entry.normalization_missing.set(missing);

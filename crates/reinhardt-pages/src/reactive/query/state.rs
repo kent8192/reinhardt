@@ -9,6 +9,7 @@ use super::retry::{NoRetry, RetryPolicy};
 pub struct QueryDefaults {
 	stale_time: Duration,
 	gc_time: Duration,
+	ssr_query_retries: bool,
 }
 
 impl QueryDefaults {
@@ -36,6 +37,15 @@ impl QueryDefaults {
 	pub(crate) fn resolved_gc_time(&self) -> Duration {
 		self.gc_time
 	}
+
+	pub(crate) fn with_ssr_query_retries(mut self, enabled: bool) -> Self {
+		self.ssr_query_retries = enabled;
+		self
+	}
+
+	pub(crate) fn ssr_query_retries_enabled(&self) -> bool {
+		self.ssr_query_retries
+	}
 }
 
 impl Default for QueryDefaults {
@@ -43,6 +53,7 @@ impl Default for QueryDefaults {
 		Self {
 			stale_time: Duration::from_secs(30),
 			gc_time: Duration::from_secs(300),
+			ssr_query_retries: false,
 		}
 	}
 }

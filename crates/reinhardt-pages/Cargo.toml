@@ -336,6 +336,7 @@ base64 = { workspace = true }
 gloo-timers = { version = "0.3", features = ["futures"] }
 
 [target.'cfg(not(all(target_family = "wasm", target_os = "unknown")))'.dev-dependencies]
+tokio = { workspace = true, features = ["test-util"] }
 reinhardt-forms = { workspace = true }
 criterion = { workspace = true }
 proptest = { workspace = true }

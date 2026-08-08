@@ -3,15 +3,18 @@
 use reinhardt_pages::component::{Component, IntoPage, Page, PageElement};
 use reinhardt_pages::deps;
 use reinhardt_pages::reactive::{
-	QueryFamily, QueryOptions, QueryStatus, ResourceState, Signal, queries, use_id, use_query,
-	use_resource, use_resource_with_key,
+	QueryFamily, QueryOptions, QueryStatus, ResourceState, RetryPolicy, Signal, queries, use_id,
+	use_query, use_resource, use_resource_with_key,
 };
 use reinhardt_pages::server_fn::{ServerFnError, server_fn};
 use reinhardt_pages::ssr::{SsrOptions, SsrRenderer};
 use rstest::rstest;
 use std::cell::Cell;
+use std::future::{Future, poll_fn};
+use std::pin::Pin;
 use std::rc::Rc;
 use std::sync::Arc;
+use std::task::Poll;
 use std::time::Duration;
 use tokio::sync::Barrier;
 
@@ -49,6 +52,400 @@ fn resource_view() -> Page {
 			ResourceState::Error(error) => PageElement::new("div").child(error).into_page(),
 		}
 	})
+}
+
+fn retrying_query_view(
+	family_id: &'static str,
+	fetch_count: Rc<Cell<u32>>,
+	fail_through: u32,
+	success_value: &'static str,
+	options: QueryOptions<RetryPolicy<String>>,
+) -> Page {
+	Page::reactive(move || {
+		let fetch_count = Rc::clone(&fetch_count);
+		let query = use_query(
+			QueryFamily::<(), String, String>::new(family_id).query((), move || {
+				let fetch_count = Rc::clone(&fetch_count);
+				async move {
+					let attempt = fetch_count.get() + 1;
+					fetch_count.set(attempt);
+					if attempt <= fail_through {
+						Err(format!("attempt-{attempt}"))
+					} else {
+						Ok(success_value.to_string())
+					}
+				}
+			}),
+			options.clone(),
+		);
+
+		match query.snapshot().status {
+			QueryStatus::Idle | QueryStatus::Pending => {
+				PageElement::new("p").child("query-loading").into_page()
+			}
+			QueryStatus::Success => PageElement::new("p")
+				.child(query.data().expect("successful query data"))
+				.into_page(),
+			QueryStatus::Error => PageElement::new("p")
+				.child(query.error().expect("failed query error"))
+				.into_page(),
+		}
+	})
+}
+
+fn retry_policy(max_attempts: u32, delay: Duration) -> RetryPolicy<String> {
+	RetryPolicy::exponential()
+		.max_attempts(max_attempts)
+		.base_delay(delay)
+		.max_delay(delay)
+}
+
+fn query_resource_key(family_id: &'static str) -> String {
+	let query_id = QueryFamily::<(), String, String>::new(family_id)
+		.key(())
+		.id();
+	format!("query:{query_id}")
+}
+
+async fn poll_once_pending<F: Future>(mut future: Pin<&mut F>) {
+	poll_fn(|context| match future.as_mut().poll(context) {
+		Poll::Pending => Poll::Ready(()),
+		Poll::Ready(_) => panic!("render unexpectedly settled before the retry boundary"),
+	})
+	.await;
+}
+
+#[tokio::test(start_paused = true)]
+async fn ssr_query_retry_policy_without_gate_performs_one_attempt() {
+	let family_id = "tests::ssr-retry-policy-only";
+	let fetch_count = Rc::new(Cell::new(0));
+	let view = retrying_query_view(
+		family_id,
+		Rc::clone(&fetch_count),
+		3,
+		"unexpected",
+		QueryOptions::new().retry(retry_policy(3, Duration::from_millis(10))),
+	);
+	let mut renderer = SsrRenderer::new();
+
+	let html = renderer.render_page_with_view_head_to_string(view).await;
+
+	assert_eq!(fetch_count.get(), 1);
+	assert!(html.contains("attempt-1"));
+	assert_eq!(
+		renderer
+			.state()
+			.get_resource_state(&query_resource_key(family_id)),
+		Some(&serde_json::json!({
+			"state": { "Error": "attempt-1" },
+			"refetch_error": null,
+			"is_fetching": false,
+			"is_stale": false
+		}))
+	);
+}
+
+#[tokio::test(start_paused = true)]
+async fn ssr_query_retry_gate_without_policy_performs_one_attempt() {
+	let family_id = "tests::ssr-retry-gate-only";
+	let fetch_count = Rc::new(Cell::new(0));
+	let fetch_count_for_view = Rc::clone(&fetch_count);
+	let view = Page::reactive(move || {
+		let fetch_count = Rc::clone(&fetch_count_for_view);
+		let query = use_query(
+			QueryFamily::<(), String, String>::new(family_id).query((), move || {
+				let fetch_count = Rc::clone(&fetch_count);
+				async move {
+					fetch_count.set(fetch_count.get() + 1);
+					Err("gate-only".to_string())
+				}
+			}),
+			QueryOptions::new(),
+		);
+		match query.snapshot().status {
+			QueryStatus::Error => PageElement::new("p")
+				.child(query.error().expect("failed query error"))
+				.into_page(),
+			_ => PageElement::new("p").child("query-loading").into_page(),
+		}
+	});
+	let mut renderer = SsrRenderer::with_options(SsrOptions::new().query_retries(true));
+
+	let html = renderer.render_page_with_view_head_to_string(view).await;
+
+	assert_eq!(fetch_count.get(), 1);
+	assert!(html.contains("gate-only"));
+	assert_eq!(
+		renderer
+			.state()
+			.get_resource_state(&query_resource_key(family_id)),
+		Some(&serde_json::json!({
+			"state": { "Error": "gate-only" },
+			"refetch_error": null,
+			"is_fetching": false,
+			"is_stale": false
+		}))
+	);
+}
+
+#[tokio::test(start_paused = true)]
+async fn ssr_query_retry_both_opt_ins_succeed_on_attempt_two() {
+	let family_id = "tests::ssr-retry-double-opt-in";
+	let fetch_count = Rc::new(Cell::new(0));
+	let view = retrying_query_view(
+		family_id,
+		Rc::clone(&fetch_count),
+		1,
+		"recovered",
+		QueryOptions::new().retry(retry_policy(2, Duration::from_millis(10))),
+	);
+	let mut renderer = SsrRenderer::with_options(SsrOptions::new().query_retries(true));
+
+	let html = {
+		let render = renderer.render_page_with_view_head_to_string(view);
+		tokio::pin!(render);
+		poll_once_pending(render.as_mut()).await;
+		tokio::time::advance(Duration::from_millis(10)).await;
+		render.await
+	};
+
+	assert_eq!(fetch_count.get(), 2);
+	assert!(html.contains("recovered"));
+	assert!(!html.contains("attempt-1"));
+	assert_eq!(
+		renderer
+			.state()
+			.get_resource_state(&query_resource_key(family_id)),
+		Some(&serde_json::json!({
+			"state": { "Success": "recovered" },
+			"refetch_error": null,
+			"is_fetching": false,
+			"is_stale": false
+		}))
+	);
+}
+
+#[tokio::test(start_paused = true)]
+async fn ssr_query_retry_predicate_rejection_settles_after_one_attempt() {
+	let family_id = "tests::ssr-retry-predicate-rejection";
+	let fetch_count = Rc::new(Cell::new(0));
+	let view = retrying_query_view(
+		family_id,
+		Rc::clone(&fetch_count),
+		3,
+		"unexpected",
+		QueryOptions::new().retry(retry_policy(3, Duration::from_millis(10)).when(|_| false)),
+	);
+	let mut renderer = SsrRenderer::with_options(SsrOptions::new().query_retries(true));
+
+	let html = renderer.render_page_with_view_head_to_string(view).await;
+
+	assert_eq!(fetch_count.get(), 1);
+	assert!(html.contains("attempt-1"));
+	assert_eq!(
+		renderer
+			.state()
+			.get_resource_state(&query_resource_key(family_id)),
+		Some(&serde_json::json!({
+			"state": { "Error": "attempt-1" },
+			"refetch_error": null,
+			"is_fetching": false,
+			"is_stale": false
+		}))
+	);
+}
+
+#[tokio::test(start_paused = true)]
+async fn ssr_query_retry_exhaustion_serializes_only_the_third_error() {
+	let family_id = "tests::ssr-retry-exhaustion";
+	let fetch_count = Rc::new(Cell::new(0));
+	let view = retrying_query_view(
+		family_id,
+		Rc::clone(&fetch_count),
+		3,
+		"unexpected",
+		QueryOptions::new().retry(retry_policy(3, Duration::from_millis(10))),
+	);
+	let mut renderer = SsrRenderer::with_options(SsrOptions::new().query_retries(true));
+
+	let html = {
+		let render = renderer.render_page_with_view_head_to_string(view);
+		tokio::pin!(render);
+		poll_once_pending(render.as_mut()).await;
+		tokio::time::advance(Duration::from_millis(10)).await;
+		poll_once_pending(render.as_mut()).await;
+		tokio::time::advance(Duration::from_millis(10)).await;
+		render.await
+	};
+
+	assert_eq!(fetch_count.get(), 3);
+	assert!(html.contains("attempt-3"));
+	assert!(!html.contains("attempt-1"));
+	assert!(!html.contains("attempt-2"));
+	assert_eq!(
+		renderer
+			.state()
+			.get_resource_state(&query_resource_key(family_id)),
+		Some(&serde_json::json!({
+			"state": { "Error": "attempt-3" },
+			"refetch_error": null,
+			"is_fetching": false,
+			"is_stale": false
+		}))
+	);
+}
+
+#[tokio::test(start_paused = true)]
+async fn ssr_query_retry_timeout_during_attempt_keeps_loading_unserialized() {
+	let family_id = "tests::ssr-retry-attempt-timeout";
+	let fetch_count = Rc::new(Cell::new(0));
+	let fetch_count_for_view = Rc::clone(&fetch_count);
+	let view = Page::reactive(move || {
+		let fetch_count = Rc::clone(&fetch_count_for_view);
+		let query = use_query(
+			QueryFamily::<(), String, String>::new(family_id).query((), move || {
+				let fetch_count = Rc::clone(&fetch_count);
+				async move {
+					fetch_count.set(fetch_count.get() + 1);
+					tokio::time::sleep(Duration::from_millis(100)).await;
+					Err("late-error".to_string())
+				}
+			}),
+			QueryOptions::new().retry(retry_policy(3, Duration::from_millis(20))),
+		);
+		match query.snapshot().status {
+			QueryStatus::Error => PageElement::new("p")
+				.child(query.error().expect("failed query error"))
+				.into_page(),
+			_ => PageElement::new("p").child("query-loading").into_page(),
+		}
+	});
+	let mut renderer = SsrRenderer::with_options(
+		SsrOptions::new()
+			.query_retries(true)
+			.resource_timeout(Duration::from_millis(50)),
+	);
+
+	let html = {
+		let render = renderer.render_page_with_view_head_to_string(view);
+		tokio::pin!(render);
+		poll_once_pending(render.as_mut()).await;
+		tokio::time::advance(Duration::from_millis(50)).await;
+		render.await
+	};
+
+	assert_eq!(fetch_count.get(), 1);
+	assert!(html.contains("query-loading"));
+	assert!(!html.contains("late-error"));
+	assert_eq!(
+		renderer
+			.state()
+			.get_resource_state(&query_resource_key(family_id)),
+		None
+	);
+}
+
+#[tokio::test(start_paused = true)]
+async fn ssr_query_retry_timeout_during_backoff_emits_no_error_snapshot() {
+	let family_id = "tests::ssr-retry-backoff-timeout";
+	let fetch_count = Rc::new(Cell::new(0));
+	let view = retrying_query_view(
+		family_id,
+		Rc::clone(&fetch_count),
+		3,
+		"unexpected",
+		QueryOptions::new().retry(retry_policy(3, Duration::from_millis(100))),
+	);
+	let mut renderer = SsrRenderer::with_options(
+		SsrOptions::new()
+			.query_retries(true)
+			.resource_timeout(Duration::from_millis(50)),
+	);
+
+	let html = {
+		let render = renderer.render_page_with_view_head_to_string(view);
+		tokio::pin!(render);
+		poll_once_pending(render.as_mut()).await;
+		tokio::time::advance(Duration::from_millis(50)).await;
+		render.await
+	};
+
+	assert_eq!(fetch_count.get(), 1);
+	assert!(html.contains("query-loading"));
+	assert!(!html.contains("attempt-1"));
+	assert_eq!(
+		renderer
+			.state()
+			.get_resource_state(&query_resource_key(family_id)),
+		None
+	);
+}
+
+#[tokio::test(start_paused = true)]
+async fn concurrent_ssr_query_retry_renderers_keep_sequences_isolated() {
+	let family_id = "tests::ssr-retry-renderer-isolation";
+	let first_count = Rc::new(Cell::new(0));
+	let second_count = Rc::new(Cell::new(0));
+	let policy = || retry_policy(2, Duration::from_millis(20)).jitter(true);
+	let first_view = retrying_query_view(
+		family_id,
+		Rc::clone(&first_count),
+		1,
+		"first-renderer",
+		QueryOptions::new().retry(policy()),
+	);
+	let second_view = retrying_query_view(
+		family_id,
+		Rc::clone(&second_count),
+		1,
+		"second-renderer",
+		QueryOptions::new().retry(policy()),
+	);
+	let options = SsrOptions::new().query_retries(true);
+	let mut first_renderer = SsrRenderer::with_options(options.clone());
+	let mut second_renderer = SsrRenderer::with_options(options);
+
+	let (first_html, second_html) = {
+		let render = async {
+			tokio::join!(
+				first_renderer.render_page_with_view_head_to_string(first_view),
+				second_renderer.render_page_with_view_head_to_string(second_view),
+			)
+		};
+		tokio::pin!(render);
+		poll_once_pending(render.as_mut()).await;
+		tokio::time::advance(Duration::from_millis(20)).await;
+		render.await
+	};
+
+	assert_eq!(first_count.get(), 2);
+	assert_eq!(second_count.get(), 2);
+	assert!(first_html.contains("first-renderer"));
+	assert!(!first_html.contains("second-renderer"));
+	assert!(second_html.contains("second-renderer"));
+	assert!(!second_html.contains("first-renderer"));
+	assert_eq!(
+		first_renderer
+			.state()
+			.get_resource_state(&query_resource_key(family_id)),
+		Some(&serde_json::json!({
+			"state": { "Success": "first-renderer" },
+			"refetch_error": null,
+			"is_fetching": false,
+			"is_stale": false
+		}))
+	);
+	assert_eq!(
+		second_renderer
+			.state()
+			.get_resource_state(&query_resource_key(family_id)),
+		Some(&serde_json::json!({
+			"state": { "Success": "second-renderer" },
+			"refetch_error": null,
+			"is_fetching": false,
+			"is_stale": false
+		}))
+	);
 }
 
 struct ResourceComponent;

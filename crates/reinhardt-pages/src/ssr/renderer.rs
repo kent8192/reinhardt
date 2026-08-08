@@ -194,7 +194,14 @@ impl SsrOptions {
 
 	/// Sets defaults for request-owned SSR queries.
 	pub fn query_defaults(mut self, defaults: QueryDefaults) -> Self {
-		self.query_defaults = defaults;
+		let retry_enabled = self.query_defaults.ssr_query_retries_enabled();
+		self.query_defaults = defaults.with_ssr_query_retries(retry_enabled);
+		self
+	}
+
+	/// Enables or disables retries for request-owned SSR queries.
+	pub fn query_retries(mut self, enabled: bool) -> Self {
+		self.query_defaults = self.query_defaults.with_ssr_query_retries(enabled);
 		self
 	}
 

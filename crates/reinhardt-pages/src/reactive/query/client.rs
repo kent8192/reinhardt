@@ -77,6 +77,11 @@ pub(crate) trait QueryRuntime {
 	fn executes_inline(&self) -> bool {
 		false
 	}
+
+	#[cfg(native)]
+	fn retry_wait(&self, delay: Duration) -> QueryTask {
+		Box::pin(async move { tokio::time::sleep(delay).await })
+	}
 }
 
 pub(crate) type QueryRuntimeHandle = Rc<dyn QueryRuntime>;
@@ -240,6 +245,7 @@ pub struct QueryClient {
 
 pub(super) struct QueryClientInner {
 	defaults: QueryDefaults,
+	retry_enabled: bool,
 	runtime: QueryRuntimeHandle,
 	entries: RefCell<HashMap<QueryIdentity, CachedQueryEntry>>,
 	#[cfg(any(wasm, test))]
@@ -298,20 +304,30 @@ impl PartialOrd for QueryDeadline {
 impl QueryClient {
 	/// Creates an empty client using the platform query runtime.
 	pub fn new(defaults: QueryDefaults) -> Self {
-		Self::with_runtime(defaults, platform_query_runtime())
+		Self::with_runtime_and_retry_enabled(defaults, platform_query_runtime(), true)
 	}
 
 	/// Creates an empty request-owned client whose work is polled inline.
 	pub fn new_ssr(defaults: QueryDefaults) -> Self {
-		Self::with_runtime(defaults, Rc::new(SsrQueryRuntime))
+		let retry_enabled = defaults.ssr_query_retries_enabled();
+		Self::with_runtime_and_retry_enabled(defaults, Rc::new(SsrQueryRuntime), retry_enabled)
 	}
 
 	pub(crate) fn with_runtime(defaults: QueryDefaults, runtime: QueryRuntimeHandle) -> Self {
+		Self::with_runtime_and_retry_enabled(defaults, runtime, true)
+	}
+
+	fn with_runtime_and_retry_enabled(
+		defaults: QueryDefaults,
+		runtime: QueryRuntimeHandle,
+		retry_enabled: bool,
+	) -> Self {
 		let supports_browser_resources = runtime.supports_browser_resources();
 		let document_visible =
 			super::browser::QueryBrowser::initial_visibility(supports_browser_resources);
 		let inner = Rc::new_cyclic(|owner| QueryClientInner {
 			defaults,
+			retry_enabled,
 			runtime,
 			entries: RefCell::new(HashMap::new()),
 			#[cfg(any(wasm, test))]
@@ -1031,6 +1047,17 @@ impl<T: Clone + 'static, E: Clone + 'static> QueryEntry<T, E> {
 		self.wake_waiters();
 	}
 
+	fn cancel_sequence_if_current(&self, completion_generation: u64) {
+		let is_current = self
+			.retry
+			.borrow()
+			.as_ref()
+			.is_some_and(|retry| retry.completion_generation == completion_generation);
+		if is_current {
+			self.cancel_active_work();
+		}
+	}
+
 	fn wake_waiters(&self) {
 		let waiters = std::mem::take(&mut *self.waiters.borrow_mut());
 		for waiter in waiters {
@@ -1604,7 +1631,7 @@ impl<T: Clone + 'static, E: Clone + 'static> QueryEntry<T, E> {
 		}
 	}
 
-	fn schedule_retry_deadline(&self, sequence_generation: u64) {
+	fn schedule_retry_deadline(self: &Rc<Self>, sequence_generation: u64) {
 		let now_ms = self.runtime.now_ms();
 		let due_ms = self.retry.borrow().as_ref().and_then(|retry| {
 			(retry.generation == sequence_generation
@@ -1612,6 +1639,20 @@ impl<T: Clone + 'static, E: Clone + 'static> QueryEntry<T, E> {
 			.then(|| retry.earliest_due_ms(now_ms))
 			.flatten()
 		});
+		#[cfg(native)]
+		if self.runtime.executes_inline() {
+			if let Some(due_ms) = due_ms {
+				let wait = self
+					.runtime
+					.retry_wait(Duration::from_millis(due_ms.saturating_sub(now_ms)));
+				let entry = Rc::clone(self);
+				self.inline_task.borrow_mut().replace(Box::pin(async move {
+					wait.await;
+					entry.handle_retry_deadline_at(sequence_generation, due_ms);
+				}));
+			}
+			return;
+		}
 		if let Some(owner) = self.owner.as_ref().and_then(Weak::upgrade) {
 			if let Some(due_ms) = due_ms {
 				owner.schedule_deadline(
@@ -1627,10 +1668,13 @@ impl<T: Clone + 'static, E: Clone + 'static> QueryEntry<T, E> {
 	}
 
 	fn handle_retry_deadline(self: &Rc<Self>, sequence_generation: u64) {
+		self.handle_retry_deadline_at(sequence_generation, self.runtime.now_ms());
+	}
+
+	fn handle_retry_deadline_at(self: &Rc<Self>, sequence_generation: u64, now_ms: u64) {
 		if !self.deadline_is_current(QueryDeadlineKind::Retry, sequence_generation) {
 			return;
 		}
-		let now_ms = self.runtime.now_ms();
 		let (candidate_observer_id, manual_observer_id) = {
 			let retry = self.retry.borrow();
 			let Some(retry) = retry
@@ -1756,6 +1800,23 @@ impl<T: Clone + 'static, E: Clone + 'static> QueryEntry<T, E> {
 struct QueryResultFuture<T: Clone + 'static, E: Clone + 'static> {
 	entry: Rc<QueryEntry<T, E>>,
 	generation: Option<u64>,
+	ssr_guard: Option<SsrRetrySequenceGuard<T, E>>,
+}
+
+struct SsrRetrySequenceGuard<T: Clone + 'static, E: Clone + 'static> {
+	entry: Weak<QueryEntry<T, E>>,
+	completion_generation: u64,
+	armed: bool,
+}
+
+impl<T: Clone + 'static, E: Clone + 'static> Drop for SsrRetrySequenceGuard<T, E> {
+	fn drop(&mut self) {
+		if self.armed
+			&& let Some(entry) = self.entry.upgrade()
+		{
+			entry.cancel_sequence_if_current(self.completion_generation);
+		}
+	}
 }
 
 impl<T: Clone + 'static, E: Clone + 'static> Future for QueryResultFuture<T, E> {
@@ -1763,23 +1824,39 @@ impl<T: Clone + 'static, E: Clone + 'static> Future for QueryResultFuture<T, E> 
 
 	fn poll(self: Pin<&mut Self>, context: &mut Context<'_>) -> Poll<Self::Output> {
 		let this = self.get_mut();
-		let inline_task = this.entry.inline_task.borrow_mut().take();
-		if let Some(mut task) = inline_task
-			&& task.as_mut().poll(context).is_pending()
-			&& this.entry.has_request()
-		{
-			this.entry.inline_task.borrow_mut().replace(task);
+		loop {
+			let inline_task = this.entry.inline_task.borrow_mut().take();
+			let Some(mut task) = inline_task else {
+				break;
+			};
+			if task.as_mut().poll(context).is_pending() {
+				this.entry.inline_task.borrow_mut().replace(task);
+				break;
+			}
 		}
 		if let Some(generation) = this.generation {
 			if let Some((completed_generation, result)) = this.entry.completed.borrow().as_ref()
 				&& *completed_generation == generation
 			{
+				if let Some(guard) = this.ssr_guard.as_mut() {
+					guard.armed = false;
+				}
 				return Poll::Ready(result.clone());
 			}
 		} else {
 			match this.entry.state.with_untracked(|state| state.clone()) {
-				ResourceState::Success(value) => return Poll::Ready(Ok(value)),
-				ResourceState::Error(error) => return Poll::Ready(Err(error)),
+				ResourceState::Success(value) => {
+					if let Some(guard) = this.ssr_guard.as_mut() {
+						guard.armed = false;
+					}
+					return Poll::Ready(Ok(value));
+				}
+				ResourceState::Error(error) => {
+					if let Some(guard) = this.ssr_guard.as_mut() {
+						guard.armed = false;
+					}
+					return Poll::Ready(Err(error));
+				}
 				ResourceState::Loading => {}
 			}
 		}
@@ -1803,9 +1880,17 @@ impl<T: Clone + 'static, E: Clone + 'static> QueryLease<T, E> {
 	// Route preparation awaits this result while the public hook remains
 	// synchronous.
 	pub(crate) async fn result(&self) -> Result<T, E> {
+		let generation = self.inner.generation.get();
 		QueryResultFuture {
 			entry: Rc::clone(&self.inner.entry),
-			generation: self.inner.generation.get(),
+			generation,
+			ssr_guard: (self.inner.entry.runtime.executes_inline()).then(|| {
+				SsrRetrySequenceGuard {
+					entry: Rc::downgrade(&self.inner.entry),
+					completion_generation: generation.unwrap_or_default(),
+					armed: generation.is_some(),
+				}
+			}),
 		}
 		.await
 	}
@@ -1870,7 +1955,11 @@ impl QueryClient {
 		E: Clone + Serialize + DeserializeOwned + 'static,
 		R: QueryRetryConfig<E>,
 	{
-		let retry_policy = query_options.retry_state().retry_policy().cloned();
+		let retry_policy = self
+			.inner
+			.retry_enabled
+			.then(|| query_options.retry_state().retry_policy().cloned())
+			.flatten();
 		let policy = ObserverPolicy::resolve(&query_options, &self.inner.defaults);
 		let (key, fetcher, _ssr_prefetch, family_types) = descriptor.into_parts();
 		self.entry_for_key(key, family_types)

@@ -3,9 +3,11 @@
 use async_trait::async_trait;
 use reinhardt_core::exception::{DatabaseErrorKind, Error};
 use reinhardt_core::macros::model;
+use reinhardt_db::orm::aggregation::Aggregate;
+use reinhardt_db::orm::annotation::{Annotation, AnnotationValue};
 use reinhardt_db::orm::{
-	AggregateDateTime, AggregateValue, DatabaseBackend, OrmExecutor, QueryResult, QuerySet,
-	QueryValue, Row, func,
+	AggregateDateTime, AggregateValue, DatabaseBackend, Filter, FilterOperator, FilterValue,
+	GroupByFields, Model, OrmExecutor, QueryResult, QuerySet, QueryValue, Row, func,
 };
 use serde::{Deserialize, Serialize};
 
@@ -709,4 +711,207 @@ async fn terminal_aggregate_preserves_null_and_none_short_circuits() {
 		&AggregateValue::Null
 	);
 	assert!(none_executor.sql.is_none());
+}
+
+#[tokio::test]
+async fn terminal_aggregate_sliced_query_uses_derived_source() {
+	let mut row = Row::new();
+	row.insert(
+		"value_total".to_owned(),
+		QueryValue::String("42".to_owned()),
+	);
+	let mut executor = RecordingExecutor::postgres().with_fetch_one(row);
+	QuerySet::<TypedAnnotationRecord>::new()
+		.filter(Filter::new(
+			"status",
+			FilterOperator::Eq,
+			FilterValue::String("paid".to_owned()),
+		))
+		.order_by(&["-value"])
+		.offset(10)
+		.limit(5)
+		.aggregate_with_db(
+			func::sum(TypedAnnotationRecord::field_value())
+				.label("value_total")
+				.expect("valid label"),
+			&mut executor,
+		)
+		.await
+		.expect("sliced aggregate should execute");
+	assert_eq!(
+		executor.sql.as_deref(),
+		Some(
+			r##"SELECT SUM("__reinhardt_aggregate_source"."__reinhardt_aggregate_operand_0") AS "value_total" FROM (SELECT "typed_annotation_records"."id", "typed_annotation_records"."value" AS "__reinhardt_aggregate_operand_0" FROM "typed_annotation_records" WHERE "status" = $1 ORDER BY "value" DESC LIMIT $2 OFFSET $3) AS "__reinhardt_aggregate_source""##
+		)
+	);
+	assert_eq!(
+		executor.params,
+		vec![
+			QueryValue::String("paid".to_owned()),
+			QueryValue::Int(5),
+			QueryValue::Int(10),
+		]
+	);
+}
+
+#[tokio::test]
+async fn terminal_aggregate_distinct_query_uses_inner_distinct() {
+	let mut row = Row::new();
+	row.insert("record_count".to_owned(), QueryValue::Int(2));
+	let mut executor = RecordingExecutor::postgres().with_fetch_one(row);
+	QuerySet::<TypedAnnotationRecord>::new()
+		.distinct()
+		.aggregate_with_db(
+			func::count_all::<TypedAnnotationRecord>()
+				.label("record_count")
+				.expect("valid label"),
+			&mut executor,
+		)
+		.await
+		.expect("distinct aggregate should execute");
+	assert_eq!(
+		executor.sql.as_deref(),
+		Some(
+			r##"SELECT COUNT(*) AS "record_count" FROM (SELECT DISTINCT "typed_annotation_records"."id" FROM "typed_annotation_records") AS "__reinhardt_aggregate_source""##
+		)
+	);
+}
+
+#[tokio::test]
+async fn terminal_aggregate_sliced_related_operand_keeps_left_join() {
+	use aggregate_support::{ModelRecord, RelatedRecord};
+	let mut row = Row::new();
+	row.insert("related_count".to_owned(), QueryValue::Int(3));
+	let mut executor = RecordingExecutor::postgres().with_fetch_one(row);
+	QuerySet::<ModelRecord>::new()
+		.limit(2)
+		.aggregate_with_db(
+			func::count(ModelRecord::rel_related().field(RelatedRecord::field_i64()))
+				.label("related_count")
+				.expect("valid relation label"),
+			&mut executor,
+		)
+		.await
+		.expect("related sliced aggregate should execute");
+	assert_eq!(
+		executor.sql.as_deref(),
+		Some(
+			r##"SELECT COUNT("__reinhardt_aggregate_source"."__reinhardt_aggregate_operand_0") AS "related_count" FROM (SELECT "model_records"."id", "related"."value_i64" AS "__reinhardt_aggregate_operand_0" FROM "model_records" LEFT JOIN "related_records" AS "related" ON "model_records"."related_id" = "related"."id" LIMIT $1) AS "__reinhardt_aggregate_source""##
+		)
+	);
+}
+
+#[tokio::test]
+async fn terminal_aggregate_rejects_annotations_and_locking_shapes() {
+	let aggregate = func::count_all::<TypedAnnotationRecord>()
+		.label("record_count")
+		.expect("valid label");
+	let annotated = TypedAnnotationRecord::objects().annotate(Annotation::new(
+		"legacy_count",
+		AnnotationValue::Aggregate(Aggregate::count_all()),
+	));
+	let mut executor = RecordingExecutor::postgres();
+	let annotation_error = annotated
+		.aggregate_with_db(aggregate.clone(), &mut executor)
+		.await
+		.expect_err("legacy annotations must be rejected");
+	assert_eq!(
+		annotation_error.database_kind(),
+		Some(DatabaseErrorKind::Unsupported)
+	);
+	assert_eq!(
+		annotation_error
+			.database_error()
+			.expect("database error")
+			.message(),
+		"terminal aggregate cannot run on a QuerySet containing annotations"
+	);
+
+	let mut executor = RecordingExecutor::postgres();
+	let locking_error = QuerySet::<TypedAnnotationRecord>::new()
+		.select_for_update()
+		.aggregate_with_db(aggregate, &mut executor)
+		.await
+		.expect_err("locking querysets must be rejected");
+	assert_eq!(
+		locking_error.database_kind(),
+		Some(DatabaseErrorKind::Unsupported)
+	);
+	assert_eq!(
+		locking_error
+			.database_error()
+			.expect("database error")
+			.message(),
+		"terminal aggregate cannot run on a QuerySet containing row locking"
+	);
+}
+
+#[tokio::test]
+async fn terminal_aggregate_rejects_grouping_and_having_shapes() {
+	let aggregate = func::count_all::<TypedAnnotationRecord>()
+		.label("record_count")
+		.expect("valid label");
+	let mut executor = RecordingExecutor::postgres();
+	let grouped = QuerySet::<TypedAnnotationRecord>::new()
+		.group_by(|fields| GroupByFields::new().add(&fields.value));
+	let grouping_error = grouped
+		.aggregate_with_db(aggregate.clone(), &mut executor)
+		.await
+		.expect_err("grouped querysets must be rejected");
+	assert_eq!(
+		grouping_error.database_kind(),
+		Some(DatabaseErrorKind::Unsupported)
+	);
+	assert_eq!(
+		grouping_error
+			.database_error()
+			.expect("database error")
+			.message(),
+		"terminal aggregate cannot run on a QuerySet containing GROUP BY"
+	);
+
+	let mut executor = RecordingExecutor::postgres();
+	let having = QuerySet::<TypedAnnotationRecord>::new()
+		.having(func::count_all::<TypedAnnotationRecord>().gt(0_i64));
+	let having_error = having
+		.aggregate_with_db(aggregate, &mut executor)
+		.await
+		.expect_err("having querysets must be rejected");
+	assert_eq!(
+		having_error.database_kind(),
+		Some(DatabaseErrorKind::Unsupported)
+	);
+	assert_eq!(
+		having_error
+			.database_error()
+			.expect("database error")
+			.message(),
+		"terminal aggregate cannot run on a QuerySet containing HAVING"
+	);
+}
+
+#[tokio::test]
+async fn terminal_aggregate_omits_eager_loading_but_keeps_manual_join() {
+	use aggregate_support::{ModelRecord, RelatedRecord};
+	let mut row = Row::new();
+	row.insert("record_count".to_owned(), QueryValue::Int(1));
+	let mut executor = RecordingExecutor::postgres().with_fetch_one(row);
+	QuerySet::<ModelRecord>::new()
+		.select_related(["related"])
+		.prefetch_related(["related"])
+		.inner_join_on::<RelatedRecord>("model_records.id = related_records.id")
+		.limit(1)
+		.aggregate_with_db(
+			func::count_all::<ModelRecord>()
+				.label("record_count")
+				.expect("valid label"),
+			&mut executor,
+		)
+		.await
+		.expect("manual joins should remain valid");
+	let sql = executor.sql.expect("recorded SQL");
+	assert!(
+		sql.contains("INNER JOIN \"related_records\" ON model_records.id = related_records.id")
+	);
+	assert!(!sql.contains("related\".*"));
 }

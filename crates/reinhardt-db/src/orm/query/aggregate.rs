@@ -11,7 +11,7 @@ use crate::orm::query_fields::expression::node::{
 use crate::orm::query_fields::{AggregateKind, LabeledExpression};
 use chrono::{DateTime, NaiveDate, NaiveDateTime, NaiveTime, Utc};
 use reinhardt_core::exception::{DatabaseError, DatabaseErrorKind, Error, Result};
-use reinhardt_query::prelude::{Alias, Query, SelectStatement};
+use reinhardt_query::prelude::{Alias, Expr, Query, SelectStatement, SimpleExpr};
 use rust_decimal::prelude::ToPrimitive;
 use std::collections::BTreeSet;
 use std::str::FromStr;
@@ -61,7 +61,7 @@ where
 		I: AggregateInput<T>,
 	{
 		let expressions = input.into_expressions();
-		validate_aggregate_input(self, &expressions)?;
+		ensure_aggregate_shape(self, &expressions)?;
 		if self.empty_result {
 			return Ok(empty_aggregate_result(&expressions));
 		}
@@ -94,7 +94,7 @@ where
 		I: AggregateInput<T>,
 	{
 		let expressions = input.into_expressions();
-		validate_aggregate_input(self, &expressions)?;
+		ensure_aggregate_shape(self, &expressions)?;
 		if self.empty_result {
 			return Ok(empty_aggregate_result(&expressions));
 		}
@@ -135,7 +135,7 @@ where
 	where
 		E: OrmExecutor,
 	{
-		validate_aggregate_input(self, &expressions)?;
+		ensure_aggregate_shape(self, &expressions)?;
 		if self.empty_result {
 			return Ok(empty_aggregate_result(&expressions));
 		}
@@ -170,7 +170,51 @@ where
 	}
 }
 
-fn validate_aggregate_input<T>(
+impl<M, Behavior> super::SelectForUpdate<M, Behavior>
+where
+	M: Model,
+{
+	/// Rejects terminal aggregation on a locking queryset before any executor call.
+	pub async fn aggregate<I>(&self, input: I) -> Result<AggregateResult>
+	where
+		I: AggregateInput<M>,
+	{
+		let expressions = input.into_expressions();
+		ensure_aggregate_shape(&self.queryset, &expressions)?;
+		unreachable!("locking queryset validation always rejects terminal aggregates")
+	}
+
+	/// Rejects terminal aggregation on a locking queryset with a caller executor.
+	pub async fn aggregate_with_db<I, E>(
+		&self,
+		input: I,
+		_executor: &mut E,
+	) -> Result<AggregateResult>
+	where
+		I: AggregateInput<M>,
+		E: OrmExecutor,
+	{
+		let expressions = input.into_expressions();
+		ensure_aggregate_shape(&self.queryset, &expressions)?;
+		unreachable!("locking queryset validation always rejects terminal aggregates")
+	}
+
+	/// Rejects terminal aggregation on a locking queryset with a transaction executor.
+	pub async fn aggregate_with_executor<I>(
+		&self,
+		input: I,
+		_executor: &mut dyn TransactionExecutor,
+	) -> Result<AggregateResult>
+	where
+		I: AggregateInput<M>,
+	{
+		let expressions = input.into_expressions();
+		ensure_aggregate_shape(&self.queryset, &expressions)?;
+		unreachable!("locking queryset validation always rejects terminal aggregates")
+	}
+}
+
+fn ensure_aggregate_shape<T>(
 	queryset: &QuerySet<T>,
 	expressions: &[LabeledExpression<T, AggregateKind>],
 ) -> Result<()>
@@ -191,13 +235,22 @@ where
 			)));
 		}
 		let stored = expression.clone().into_stored_expression();
-		if !matches!(
-			stored.node,
-			ExpressionNode::Aggregate { .. } | ExpressionNode::CountAll
-		) {
-			return Err(unsupported_aggregate_shape(
-				"terminal aggregate expressions must be a single aggregate function or COUNT(*)",
-			));
+		match &stored.node {
+			ExpressionNode::Aggregate {
+				distinct: true,
+				operand,
+				..
+			} if related_operand_has_composite_key(operand) => {
+				return Err(unsupported_aggregate_shape(
+					"COUNT(DISTINCT relation) does not support composite primary keys on PostgreSQL, MySQL, and SQLite",
+				));
+			}
+			ExpressionNode::Aggregate { .. } | ExpressionNode::CountAll => {}
+			_ => {
+				return Err(unsupported_aggregate_shape(
+					"terminal aggregate expressions must be a single aggregate function or COUNT(*)",
+				));
+			}
 		}
 	}
 	if !queryset.annotations.is_empty() || !queryset.typed_annotations.is_empty() {
@@ -205,19 +258,19 @@ where
 			"terminal aggregate cannot run on a QuerySet containing annotations",
 		));
 	}
-	if !queryset.group_by_fields.is_empty() || !queryset.typed_havings.is_empty() {
+	if !queryset.group_by_fields.is_empty() {
 		return Err(unsupported_aggregate_shape(
-			"terminal aggregate cannot run on a QuerySet containing GROUP BY or HAVING",
+			"terminal aggregate cannot run on a QuerySet containing GROUP BY",
+		));
+	}
+	if !queryset.typed_havings.is_empty() {
+		return Err(unsupported_aggregate_shape(
+			"terminal aggregate cannot run on a QuerySet containing HAVING",
 		));
 	}
 	if queryset.select_for_update.is_some() {
 		return Err(unsupported_aggregate_shape(
 			"terminal aggregate cannot run on a QuerySet containing row locking",
-		));
-	}
-	if queryset.limit.is_some() || queryset.offset.is_some() || queryset.distinct_enabled {
-		return Err(unsupported_aggregate_shape(
-			"terminal aggregate does not support LIMIT, OFFSET, or DISTINCT",
 		));
 	}
 	if !queryset.ctes.is_empty()
@@ -231,11 +284,31 @@ where
 	Ok(())
 }
 
+fn related_operand_has_composite_key(node: &ExpressionNode) -> bool {
+	match node {
+		ExpressionNode::RelatedColumn(column) => column.composite_primary_key,
+		_ => false,
+	}
+}
+
 fn unsupported_aggregate_shape(message: &str) -> Error {
 	Error::from(DatabaseError::new(DatabaseErrorKind::Unsupported, message))
 }
 
 fn build_aggregate_statement<T>(
+	queryset: &QuerySet<T>,
+	expressions: &[LabeledExpression<T, AggregateKind>],
+) -> Result<SelectStatement>
+where
+	T: Model,
+{
+	if queryset.limit.is_some() || queryset.offset.is_some() || queryset.distinct_enabled {
+		return build_sliced_aggregate_statement(queryset, expressions);
+	}
+	build_direct_aggregate_statement(queryset, expressions)
+}
+
+fn build_direct_aggregate_statement<T>(
 	queryset: &QuerySet<T>,
 	expressions: &[LabeledExpression<T, AggregateKind>],
 ) -> Result<SelectStatement>
@@ -277,6 +350,149 @@ where
 		stmt.cond_where(condition);
 	}
 	Ok(stmt.to_owned())
+}
+
+/// Builds a terminal aggregate over a sliced or distinct queryset.
+///
+/// SQL applies LIMIT/OFFSET and query-level DISTINCT before aggregate
+/// evaluation, so these query modifiers must be retained in a derived table.
+fn build_sliced_aggregate_statement<T>(
+	queryset: &QuerySet<T>,
+	expressions: &[LabeledExpression<T, AggregateKind>],
+) -> Result<SelectStatement>
+where
+	T: Model,
+{
+	const SOURCE_ALIAS: &str = "__reinhardt_aggregate_source";
+	let mut filter_graph = queryset.filter_relation_join_graph_for_query();
+	let mut operands: Vec<(StoredExpression, Option<StoredExpression>)> =
+		Vec::with_capacity(expressions.len());
+	for (index, expression) in expressions.iter().enumerate() {
+		let stored = expression.clone().into_stored_expression();
+		match &stored.node {
+			ExpressionNode::Aggregate { operand, .. } => {
+				for path in &stored.joins.paths {
+					filter_graph.add_aggregate_steps(path);
+				}
+				let operand = StoredExpression::new(
+					(*operand.clone()).clone(),
+					stored.joins.clone(),
+					Some(format!("__reinhardt_aggregate_operand_{index}")),
+				);
+				operands.push((stored, Some(operand)));
+			}
+			ExpressionNode::CountAll => operands.push((stored, None)),
+			_ => {
+				return Err(unsupported_aggregate_shape(
+					"terminal aggregate expressions must be a single aggregate function or COUNT(*)",
+				));
+			}
+		}
+	}
+	let graph = filter_graph.with_root_alias_and_reserved_aliases(
+		queryset.root_alias(),
+		queryset.manual_join_aliases(),
+	);
+
+	let mut inner = Query::select();
+	queryset.apply_model_from(&mut inner);
+	if queryset.distinct_enabled {
+		inner.distinct();
+	}
+	// Preserve root identity in the inner rowset. This also keeps DISTINCT
+	// deterministic for models with composite primary keys.
+	for column in queryset.root_primary_key_columns() {
+		inner.column(column);
+	}
+	for (_, operand) in &operands {
+		if let Some(operand) = operand {
+			let alias = operand
+				.label
+				.as_deref()
+				.expect("derived aggregate operands always have compiler labels");
+			inner.expr_as(
+				super::super::query_fields::expression::compiler::compile_expression(
+					operand,
+					queryset.root_alias(),
+					&graph,
+				)?,
+				Alias::new(alias),
+			);
+		}
+	}
+	QuerySet::<T>::apply_relation_join_graph(&mut inner, &graph);
+	queryset.apply_manual_joins(&mut inner);
+
+	// The filter graph is deliberately used here: eager-loading relations and
+	// annotations are not part of the terminal aggregate's source rowset.
+	let mut where_queryset = queryset.clone();
+	where_queryset.relation_joins = queryset.filter_relation_join_graph_for_query();
+	if let Some(condition) = where_queryset.build_where_condition()? {
+		inner.cond_where(condition);
+	}
+	queryset.apply_ordering(&mut inner);
+	if let Some(limit) = queryset.limit {
+		inner.limit(limit as u64);
+	}
+	if let Some(offset) = queryset.offset {
+		inner.offset(offset as u64);
+	}
+
+	let mut outer = Query::select();
+	outer.from_subquery(inner.to_owned(), Alias::new(SOURCE_ALIAS));
+	for (expression, operand) in &operands {
+		let alias = expression
+			.label
+			.as_deref()
+			.expect("aggregate expressions always retain validated labels");
+		let projected = match (&expression.node, operand) {
+			(ExpressionNode::CountAll, _) => Expr::cust("COUNT(*)").into_simple_expr(),
+			(
+				ExpressionNode::Aggregate {
+					operation,
+					distinct,
+					..
+				},
+				Some(operand),
+			) => {
+				let operand_alias = operand
+					.label
+					.as_deref()
+					.expect("derived aggregate operands always have compiler labels");
+				let column = Expr::col((Alias::new(SOURCE_ALIAS), Alias::new(operand_alias)))
+					.into_simple_expr();
+				let column = if *distinct {
+					SimpleExpr::CustomWithExpr("DISTINCT ?".to_owned(), vec![column])
+				} else {
+					column
+				};
+				match operation {
+					crate::orm::query_fields::expression::operand::AggregateOperation::Count => {
+						reinhardt_query::prelude::Func::count(column)
+					}
+					crate::orm::query_fields::expression::operand::AggregateOperation::Sum => {
+						reinhardt_query::prelude::Func::sum(column)
+					}
+					crate::orm::query_fields::expression::operand::AggregateOperation::Average => {
+						reinhardt_query::prelude::Func::avg(column)
+					}
+					crate::orm::query_fields::expression::operand::AggregateOperation::Minimum => {
+						reinhardt_query::prelude::Func::min(column)
+					}
+					crate::orm::query_fields::expression::operand::AggregateOperation::Maximum => {
+						reinhardt_query::prelude::Func::max(column)
+					}
+				}
+			}
+			_ => {
+				return Err(unsupported_aggregate_shape(
+					"terminal aggregate expression could not be projected through the derived table",
+				));
+			}
+		};
+		outer.expr_as(projected, Alias::new(alias));
+	}
+	Ok(outer.to_owned())
 }
 
 fn empty_aggregate_result<T>(

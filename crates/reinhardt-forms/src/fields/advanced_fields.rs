@@ -985,10 +985,7 @@ impl FormField for PasswordField {
 		let s = match value.unwrap() {
 			Value::String(s) => s,
 			_ => {
-				return Err(FieldError::validation(
-					Some(&self.name),
-					"Invalid password format.",
-				));
+				return Err(FieldError::validation(None, "Invalid password format."));
 			}
 		};
 
@@ -1436,7 +1433,7 @@ mod tests {
 		);
 		assert_eq!(
 			password.clean(Some(&json!({}))).unwrap_err().to_string(),
-			"password",
+			"Invalid password format.",
 		);
 		assert_eq!(password.clean(Some(&json!(""))).unwrap(), Value::Null);
 	}

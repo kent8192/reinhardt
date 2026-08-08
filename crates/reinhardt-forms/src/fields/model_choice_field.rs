@@ -553,6 +553,33 @@ mod tests {
 		}
 	}
 
+	struct StringKeyModel {
+		id: String,
+		name: String,
+	}
+
+	impl FormModel for StringKeyModel {
+		fn field_names() -> Vec<String> {
+			vec!["id".to_string(), "name".to_string()]
+		}
+
+		fn get_field(&self, name: &str) -> Option<Value> {
+			match name {
+				"id" => Some(Value::String(self.id.clone())),
+				"name" => Some(Value::String(self.name.clone())),
+				_ => None,
+			}
+		}
+
+		fn set_field(&mut self, _name: &str, _value: Value) -> Result<(), String> {
+			Ok(())
+		}
+
+		fn save(&mut self) -> Result<(), String> {
+			Ok(())
+		}
+	}
+
 	#[test]
 	fn test_model_choice_field_basic() {
 		let queryset = vec![
@@ -755,5 +782,36 @@ mod tests {
 		assert!(!multiple.has_changed(Some(&json!(["1", "2"])), Some(&json!(["1", "2"]))));
 		assert!(multiple.has_changed(Some(&json!(["1", "2"])), Some(&json!(["2", "1"]))));
 		assert!(multiple.has_changed(Some(&json!(["1", "1"])), Some(&json!(["1"]))));
+
+		let string_single = ModelChoiceField::new(
+			"choice",
+			vec![StringKeyModel {
+				id: "alpha-01".to_string(),
+				name: "Alpha".to_string(),
+			}],
+		);
+		let string_multiple = ModelMultipleChoiceField::new(
+			"choices",
+			vec![
+				StringKeyModel {
+					id: "alpha-01".to_string(),
+					name: "Alpha".to_string(),
+				},
+				StringKeyModel {
+					id: "beta-02".to_string(),
+					name: "Beta".to_string(),
+				},
+			],
+		);
+		assert_eq!(
+			string_single.clean(Some(&json!("alpha-01"))).unwrap(),
+			json!("alpha-01"),
+		);
+		assert_eq!(
+			string_multiple
+				.clean(Some(&json!("beta-02, alpha-01")))
+				.unwrap(),
+			json!(["beta-02", "alpha-01"]),
+		);
 	}
 }

@@ -5,7 +5,9 @@ use crate::orm::Model;
 use crate::orm::aggregation::{AggregateDateTime, AggregateResult, AggregateValue};
 use crate::orm::connection::{DatabaseBackend, OrmExecutor, QueryValue, Row, TransactionExecutor};
 use crate::orm::field_codec::DatabaseStorageKind;
-use crate::orm::query_fields::expression::node::{AggregateFunction, StoredExpression};
+use crate::orm::query_fields::expression::node::{
+	AggregateFunction, ExpressionNode, StoredExpression,
+};
 use crate::orm::query_fields::{AggregateKind, LabeledExpression};
 use chrono::{DateTime, NaiveDate, NaiveDateTime, NaiveTime, Utc};
 use reinhardt_core::exception::{DatabaseError, DatabaseErrorKind, Error, Result};
@@ -183,6 +185,15 @@ where
 				"duplicate aggregate label '{}'",
 				expression.label()
 			)));
+		}
+		let stored = expression.clone().into_stored_expression();
+		if !matches!(
+			stored.node,
+			ExpressionNode::Aggregate { .. } | ExpressionNode::CountAll
+		) {
+			return Err(unsupported_aggregate_shape(
+				"terminal aggregate expressions must be a single aggregate function or COUNT(*)",
+			));
 		}
 	}
 	if !queryset.annotations.is_empty() || !queryset.typed_annotations.is_empty() {

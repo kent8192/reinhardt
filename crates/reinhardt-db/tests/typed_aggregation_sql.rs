@@ -1,7 +1,7 @@
 #![allow(unexpected_cfgs)]
 
 use async_trait::async_trait;
-use reinhardt_core::exception::Error;
+use reinhardt_core::exception::{DatabaseErrorKind, Error};
 use reinhardt_core::macros::model;
 use reinhardt_db::orm::{
 	AggregateDateTime, AggregateValue, DatabaseBackend, OrmExecutor, QueryResult, QuerySet,
@@ -422,6 +422,28 @@ fn annotation_rejects_invalid_and_colliding_labels() {
 		duplicate.to_string(),
 		"Validation error: annotation label `first_count` is already in use"
 	);
+}
+
+#[tokio::test]
+async fn terminal_aggregate_rejects_composed_aggregate_before_fetching() {
+	let composed = (func::sum(TypedAnnotationRecord::field_value())
+		+ func::literal::<TypedAnnotationRecord, _>(1_i64).expect("integer literal should encode"))
+	.label("value_total")
+	.expect("valid aggregate label");
+	let mut executor = RecordingExecutor::postgres();
+
+	let error = QuerySet::<TypedAnnotationRecord>::new()
+		.aggregate_with_db(composed, &mut executor)
+		.await
+		.expect_err("composed aggregate roots are unsupported for terminal decoding");
+
+	assert_eq!(error.database_kind(), Some(DatabaseErrorKind::Unsupported));
+	assert_eq!(
+		error.to_string(),
+		"Database error: terminal aggregate expressions must be a single aggregate function or COUNT(*)"
+	);
+	assert!(executor.sql.is_none());
+	assert!(executor.params.is_empty());
 }
 
 #[tokio::test]

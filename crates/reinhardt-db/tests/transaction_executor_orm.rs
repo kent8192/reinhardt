@@ -71,6 +71,7 @@ struct RecordingExecutor {
 struct RecordingTransactionExecutor {
 	backend: reinhardt_db::backends::types::DatabaseType,
 	calls: Vec<RecordedCall>,
+	fetch_one_rows: VecDeque<Row>,
 	fetch_all_rows: VecDeque<Vec<Row>>,
 }
 
@@ -79,8 +80,14 @@ impl RecordingTransactionExecutor {
 		Self {
 			backend,
 			calls: Vec::new(),
+			fetch_one_rows: VecDeque::new(),
 			fetch_all_rows: VecDeque::new(),
 		}
+	}
+
+	fn with_fetch_one(mut self, row: Row) -> Self {
+		self.fetch_one_rows.push_back(row);
+		self
 	}
 
 	fn with_fetch_all(mut self, rows: Vec<Row>) -> Self {
@@ -121,7 +128,7 @@ impl TransactionExecutor for RecordingTransactionExecutor {
 		params: Vec<QueryValue>,
 	) -> reinhardt_db::backends::Result<Row> {
 		self.record("fetch_one", sql, params);
-		Ok(Row::new())
+		Ok(self.fetch_one_rows.pop_front().unwrap_or_default())
 	}
 
 	async fn fetch_all(
@@ -969,6 +976,34 @@ async fn none_short_circuits_owned_and_transaction_executors() {
 		0
 	);
 	assert!(transaction_executor.calls.is_empty());
+}
+
+#[tokio::test]
+async fn terminal_aggregate_uses_transaction_executor_fetch_one() {
+	let mut row = Row::new();
+	row.insert("article_count".to_owned(), QueryValue::Int(7));
+	let mut executor =
+		RecordingTransactionExecutor::new(reinhardt_db::backends::types::DatabaseType::Postgres)
+			.with_fetch_one(row);
+
+	let result = QuerySet::<Article>::new()
+		.aggregate_with_executor(
+			reinhardt_db::orm::func::count_all::<Article>()
+				.label("article_count")
+				.expect("valid aggregate label"),
+			&mut executor,
+		)
+		.await
+		.expect("transaction aggregate should decode fetch_one row");
+
+	assert_eq!(result.get_i64("article_count").expect("count value"), 7);
+	assert_eq!(executor.calls.len(), 1);
+	assert_eq!(executor.calls[0].kind, "fetch_one");
+	assert_eq!(
+		executor.calls[0].sql,
+		r#"SELECT COUNT(*) AS "article_count" FROM "articles""#
+	);
+	assert!(executor.calls[0].params.is_empty());
 }
 
 #[tokio::test]

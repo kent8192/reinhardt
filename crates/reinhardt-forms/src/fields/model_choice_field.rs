@@ -7,6 +7,13 @@ use serde_json::Value;
 use std::collections::HashMap;
 use std::marker::PhantomData;
 
+fn choice_value_text(value: &Value) -> String {
+	match value {
+		Value::String(value) => value.clone(),
+		_ => value.to_string(),
+	}
+}
+
 /// A field for selecting a single model instance from a queryset
 ///
 /// This field displays model instances as choices in a select widget.
@@ -513,8 +520,8 @@ impl<T: FormModel> FormField for ModelMultipleChoiceField<T> {
 					return true;
 				}
 
-				let mut initial_values: Vec<_> = a.iter().map(Value::to_string).collect();
-				let mut submitted_values: Vec<_> = b.iter().map(Value::to_string).collect();
+				let mut initial_values: Vec<_> = a.iter().map(choice_value_text).collect();
+				let mut submitted_values: Vec<_> = b.iter().map(choice_value_text).collect();
 				initial_values.sort_unstable();
 				submitted_values.sort_unstable();
 				initial_values != submitted_values
@@ -528,6 +535,7 @@ impl<T: FormModel> FormField for ModelMultipleChoiceField<T> {
 mod tests {
 	use super::*;
 	use crate::FormField;
+	use rstest::rstest;
 	use serde_json::json;
 
 	// Mock model for testing
@@ -698,8 +706,8 @@ mod tests {
 		}
 	}
 
-	#[test]
-	fn model_choice_fields_validate_supported_input_shapes() {
+	#[rstest]
+	fn model_choice_field_validates_supported_input_shapes() {
 		// Arrange
 		let single = ModelChoiceField::new(
 			"choice",
@@ -715,22 +723,6 @@ mod tests {
 			],
 		)
 		.error_message("invalid_choice", "Unknown choice.");
-		let multiple = ModelMultipleChoiceField::new(
-			"choices",
-			vec![
-				TestModel {
-					id: 1,
-					name: "One".to_string(),
-				},
-				TestModel {
-					id: 2,
-					name: "Two".to_string(),
-				},
-			],
-		)
-		.error_message("invalid_choice", "Unknown choice.")
-		.error_message("invalid_list", "Values must be a list.");
-
 		// Act and assert
 		assert_eq!(single.clean(Some(&json!("1"))).unwrap(), json!("1"));
 		assert_eq!(single.clean(Some(&json!(2))).unwrap(), json!("2"));
@@ -754,6 +746,39 @@ mod tests {
 			Value::Null,
 		);
 
+		let string_single = ModelChoiceField::new(
+			"choice",
+			vec![StringKeyModel {
+				id: "alpha-01".to_string(),
+				name: "Alpha".to_string(),
+			}],
+		);
+		assert_eq!(
+			string_single.clean(Some(&json!("alpha-01"))).unwrap(),
+			json!("alpha-01"),
+		);
+	}
+
+	#[rstest]
+	fn model_multiple_choice_field_validates_supported_input_shapes() {
+		// Arrange
+		let multiple = ModelMultipleChoiceField::new(
+			"choices",
+			vec![
+				TestModel {
+					id: 1,
+					name: "One".to_string(),
+				},
+				TestModel {
+					id: 2,
+					name: "Two".to_string(),
+				},
+			],
+		)
+		.error_message("invalid_choice", "Unknown choice.")
+		.error_message("invalid_list", "Values must be a list.");
+
+		// Act and assert
 		assert_eq!(
 			multiple.clean(Some(&json!("1, 2"))).unwrap(),
 			json!(["1", "2"])
@@ -786,15 +811,9 @@ mod tests {
 		);
 		assert!(!multiple.has_changed(Some(&json!(["1", "2"])), Some(&json!(["1", "2"]))));
 		assert!(!multiple.has_changed(Some(&json!(["1", "2"])), Some(&json!(["2", "1"]))));
+		assert!(!multiple.has_changed(Some(&json!([1, 2])), Some(&json!(["1", "2"]))));
 		assert!(multiple.has_changed(Some(&json!(["1", "1"])), Some(&json!(["1"]))));
 
-		let string_single = ModelChoiceField::new(
-			"choice",
-			vec![StringKeyModel {
-				id: "alpha-01".to_string(),
-				name: "Alpha".to_string(),
-			}],
-		);
 		let string_multiple = ModelMultipleChoiceField::new(
 			"choices",
 			vec![
@@ -807,10 +826,6 @@ mod tests {
 					name: "Beta".to_string(),
 				},
 			],
-		);
-		assert_eq!(
-			string_single.clean(Some(&json!("alpha-01"))).unwrap(),
-			json!("alpha-01"),
 		);
 		assert_eq!(
 			string_multiple

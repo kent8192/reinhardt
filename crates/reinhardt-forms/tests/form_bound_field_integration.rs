@@ -10,7 +10,10 @@ fn form_and_bound_field_integration_preserves_prefixed_invalid_values() {
 	form.add_field(Box::new(
 		CharField::new("display_name".to_string()).required(),
 	));
-	form.bind(HashMap::from([("display_name".to_string(), json!(7))]));
+	form.bind(HashMap::from([(
+		"profile-display_name".to_string(),
+		json!(7),
+	)]));
 
 	// Act
 	assert!(!form.is_valid());

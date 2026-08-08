@@ -226,7 +226,7 @@ impl Form {
 		}
 
 		for field in &self.fields {
-			let value = self.data.get(field.name());
+			let value = self.data_for_field(field.name());
 
 			match field.clean(value) {
 				Ok(mut cleaned) => {
@@ -359,7 +359,7 @@ impl Form {
 
 		for field in &self.fields {
 			let initial_val = self.initial.get(field.name());
-			let data_val = self.data.get(field.name());
+			let data_val = self.data_for_field(field.name());
 			if field.has_changed(initial_val, data_val) {
 				return true;
 			}
@@ -862,6 +862,13 @@ impl Form {
 			format!("{}-{}", self.prefix, field_name)
 		}
 	}
+
+	fn data_for_field(&self, field_name: &str) -> Option<&serde_json::Value> {
+		let prefixed_name = self.add_prefix_to_field_name(field_name);
+		self.data
+			.get(&prefixed_name)
+			.or_else(|| self.data.get(field_name))
+	}
 	/// Render CSS `<link>` tags for form media with HTML-escaped paths.
 	///
 	/// All paths are escaped using `escape_attribute()` to prevent XSS
@@ -925,7 +932,7 @@ impl Form {
 	/// Returns a `BoundField` with the field's submitted data and errors attached.
 	pub fn get_bound_field<'a>(&'a self, name: &str) -> Option<BoundField<'a>> {
 		let field = self.get_field(name)?;
-		let data = self.data.get(name);
+		let data = self.data_for_field(name);
 		let errors = self.errors.get(name).map(|e| e.as_slice()).unwrap_or(&[]);
 
 		Some(BoundField::new(

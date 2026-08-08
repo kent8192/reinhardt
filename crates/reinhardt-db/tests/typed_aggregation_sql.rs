@@ -778,6 +778,30 @@ async fn terminal_aggregate_distinct_query_uses_inner_distinct() {
 }
 
 #[tokio::test]
+async fn terminal_aggregate_distinct_query_projects_ordering_columns() {
+	let mut row = Row::new();
+	row.insert("record_count".to_owned(), QueryValue::Int(2));
+	let mut executor = RecordingExecutor::postgres().with_fetch_one(row);
+	QuerySet::<TypedAnnotationRecord>::new()
+		.distinct()
+		.order_by(&["-value"])
+		.aggregate_with_db(
+			func::count_all::<TypedAnnotationRecord>()
+				.label("record_count")
+				.expect("valid label"),
+			&mut executor,
+		)
+		.await
+		.expect("distinct ordered aggregate should execute");
+	assert_eq!(
+		executor.sql.as_deref(),
+		Some(
+			r##"SELECT COUNT(*) AS "record_count" FROM (SELECT DISTINCT "typed_annotation_records"."id", "value" FROM "typed_annotation_records" ORDER BY "value" DESC) AS "__reinhardt_aggregate_source""##
+		)
+	);
+}
+
+#[tokio::test]
 async fn terminal_aggregate_sliced_related_operand_keeps_left_join() {
 	use aggregate_support::{ModelRecord, RelatedRecord};
 	let mut row = Row::new();

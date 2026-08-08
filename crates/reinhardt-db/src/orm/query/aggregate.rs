@@ -226,33 +226,9 @@ where
 			"aggregate input must contain at least one labeled expression".to_owned(),
 		));
 	}
-	let mut labels = BTreeSet::new();
-	for expression in expressions {
-		if !labels.insert(expression.label()) {
-			return Err(Error::Validation(format!(
-				"duplicate aggregate label '{}'",
-				expression.label()
-			)));
-		}
-		let stored = expression.clone().into_stored_expression();
-		match &stored.node {
-			ExpressionNode::Aggregate {
-				distinct: true,
-				operand,
-				..
-			} if related_operand_has_composite_key(operand) => {
-				return Err(unsupported_aggregate_shape(
-					"COUNT(DISTINCT relation) does not support composite primary keys on PostgreSQL, MySQL, and SQLite",
-				));
-			}
-			ExpressionNode::Aggregate { .. } | ExpressionNode::CountAll => {}
-			_ => {
-				return Err(unsupported_aggregate_shape(
-					"terminal aggregate expressions must be a single aggregate function or COUNT(*)",
-				));
-			}
-		}
-	}
+	// Keep query-shape diagnostics deterministic: queryset state is checked
+	// before expression metadata, in the documented annotation/group/HAVING/
+	// locking order.
 	if !queryset.annotations.is_empty() || !queryset.typed_annotations.is_empty() {
 		return Err(unsupported_aggregate_shape(
 			"terminal aggregate cannot run on a QuerySet containing annotations",
@@ -273,6 +249,17 @@ where
 			"terminal aggregate cannot run on a QuerySet containing row locking",
 		));
 	}
+	let mut labels = BTreeSet::new();
+	for expression in expressions {
+		if !labels.insert(expression.label()) {
+			return Err(Error::Validation(format!(
+				"duplicate aggregate label '{}'",
+				expression.label()
+			)));
+		}
+		let stored = expression.clone().into_stored_expression();
+		ensure_supported_terminal_expression(&stored.node)?;
+	}
 	if !queryset.ctes.is_empty()
 		|| !queryset.lateral_joins.is_empty()
 		|| queryset.from_subquery_sql.is_some()
@@ -282,6 +269,22 @@ where
 		));
 	}
 	Ok(())
+}
+
+fn ensure_supported_terminal_expression(node: &ExpressionNode) -> Result<()> {
+	match node {
+		ExpressionNode::Aggregate {
+			distinct: true,
+			operand,
+			..
+		} if related_operand_has_composite_key(operand) => Err(unsupported_aggregate_shape(
+			"COUNT(DISTINCT relation) does not support composite primary keys on PostgreSQL, MySQL, and SQLite",
+		)),
+		ExpressionNode::Aggregate { .. } | ExpressionNode::CountAll => Ok(()),
+		_ => Err(unsupported_aggregate_shape(
+			"terminal aggregate expressions must be a single aggregate function or COUNT(*)",
+		)),
+	}
 }
 
 fn related_operand_has_composite_key(node: &ExpressionNode) -> bool {
@@ -418,6 +421,18 @@ where
 				)?,
 				Alias::new(alias),
 			);
+		}
+	}
+	if queryset.distinct_enabled {
+		// PostgreSQL requires every DISTINCT ordering expression to be present
+		// in the inner projection. These columns are intentionally unaliased:
+		// they are ordering support only and are not visible to the outer query.
+		for order_field in &queryset.order_by_fields {
+			let field = order_field.strip_prefix('-').unwrap_or(order_field);
+			inner.column(queryset.root_column_reference(field));
+		}
+		for ordering in &queryset.order_by_expressions {
+			inner.expr(queryset.qualify_typed_expression(&ordering.expr));
 		}
 	}
 	QuerySet::<T>::apply_relation_join_graph(&mut inner, &graph);
@@ -871,6 +886,30 @@ mod tests {
 				QueryValue::NaiveTimestamp(naive)
 			),
 			AggregateValue::DateTime(AggregateDateTime::Utc(naive.and_utc()))
+		);
+	}
+
+	#[test]
+	fn rejects_distinct_composite_relation_operand() {
+		let operand = ExpressionNode::RelatedColumn(
+			crate::orm::query_fields::expression::node::RelatedColumnOperand {
+				relation_steps: Vec::new(),
+				terminal_column: "value".to_owned(),
+				storage_kind: DatabaseStorageKind::I64,
+				composite_primary_key: true,
+			},
+		);
+		let expression = ExpressionNode::Aggregate {
+			operation: crate::orm::query_fields::expression::operand::AggregateOperation::Count,
+			operand: Box::new(operand),
+			distinct: true,
+			output_kind: None,
+		};
+		let error = ensure_supported_terminal_expression(&expression)
+			.expect_err("composite relation DISTINCT must be rejected");
+		assert_eq!(
+			error.database_error().expect("database error").message(),
+			"COUNT(DISTINCT relation) does not support composite primary keys on PostgreSQL, MySQL, and SQLite"
 		);
 	}
 }

@@ -1308,8 +1308,12 @@ impl<M: Model> Manager<M> {
 	/// ```ignore
 	/// use reinhardt_db::orm::func;
 	///
-	/// let display_name = func::literal("user").label("display_name")?;
-	/// let users = User::objects().all().annotate(display_name)?.all().await?;
+	/// let display_name = func::literal::<User, _>("user")?.label("display_name")?;
+	/// let users = User::objects()
+	///     .all()
+	///     .annotate(display_name)?
+	///     .all()
+	///     .await?;
 	/// ```
 	pub fn annotate(&self, annotation: super::annotation::Annotation) -> QuerySet<M> {
 		QuerySet::new().annotate_legacy(annotation)

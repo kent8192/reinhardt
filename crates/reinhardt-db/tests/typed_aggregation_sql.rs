@@ -3,11 +3,11 @@
 use async_trait::async_trait;
 use reinhardt_core::exception::{DatabaseErrorKind, Error};
 use reinhardt_core::macros::model;
-use reinhardt_db::orm::aggregation::Aggregate;
-use reinhardt_db::orm::annotation::{Annotation, AnnotationValue};
+use reinhardt_db::orm::annotation::{Annotation, AnnotationValue, Value};
 use reinhardt_db::orm::{
-	AggregateDateTime, AggregateValue, DatabaseBackend, Filter, FilterOperator, FilterValue,
-	GroupByFields, Model, OrmExecutor, QueryResult, QuerySet, QueryValue, Row, func,
+	AggregateDateTime, AggregateValue, BackendAnnotation, BackendAnnotationValue, DatabaseBackend,
+	Filter, FilterOperator, FilterValue, GroupByFields, Model, OrmExecutor, QueryResult, QuerySet,
+	QueryValue, Row, func,
 };
 use serde::{Deserialize, Serialize};
 
@@ -28,6 +28,7 @@ struct TypedAnnotationRecord {
 }
 
 struct RecordingExecutor {
+	backend: DatabaseBackend,
 	sql: Option<String>,
 	params: Vec<QueryValue>,
 	fetch_one_row: Option<Row>,
@@ -35,7 +36,12 @@ struct RecordingExecutor {
 
 impl RecordingExecutor {
 	fn postgres() -> Self {
+		Self::for_backend(DatabaseBackend::Postgres)
+	}
+
+	fn for_backend(backend: DatabaseBackend) -> Self {
 		Self {
+			backend,
 			sql: None,
 			params: Vec::new(),
 			fetch_one_row: None,
@@ -51,7 +57,7 @@ impl RecordingExecutor {
 #[async_trait]
 impl OrmExecutor for RecordingExecutor {
 	fn backend(&self) -> DatabaseBackend {
-		DatabaseBackend::Postgres
+		self.backend
 	}
 
 	async fn execute(
@@ -246,6 +252,35 @@ fn multiple_aggregate_annotations_render_together() {
 		query,
 		r#"SELECT *, COUNT(*) AS "record_count", SUM("typed_annotation_records"."value") AS "value_total" FROM "typed_annotation_records" GROUP BY "typed_annotation_records"."id", "typed_annotation_records"."display_name", "typed_annotation_records"."value""#
 	);
+}
+
+#[rstest::rstest]
+#[case(DatabaseBackend::MySql)]
+#[case(DatabaseBackend::Sqlite)]
+#[tokio::test]
+async fn backend_annotations_reject_non_postgres_execution(#[case] backend: DatabaseBackend) {
+	let annotation = BackendAnnotation::new(
+		"names",
+		BackendAnnotationValue::ArrayAgg(reinhardt_db::orm::ArrayAgg::<serde_json::Value>::new(
+			"display_name".to_owned(),
+		)),
+	)
+	.expect("valid backend annotation label");
+	let mut executor = RecordingExecutor::for_backend(backend);
+
+	let error = QuerySet::<TypedAnnotationRecord>::new()
+		.annotate_backend(annotation)
+		.expect("backend annotation should be accepted before execution")
+		.rows_with_db(&mut executor)
+		.await
+		.expect_err("PostgreSQL annotations must not be sent to another backend");
+
+	assert_eq!(error.database_kind(), Some(DatabaseErrorKind::Unsupported));
+	assert_eq!(
+		error.to_string(),
+		"Database error: PostgreSQL backend annotations require a PostgreSQL executor"
+	);
+	assert!(executor.sql.is_none());
 }
 
 #[test]
@@ -830,9 +865,9 @@ async fn terminal_aggregate_rejects_annotations_and_locking_shapes() {
 	let aggregate = func::count_all::<TypedAnnotationRecord>()
 		.label("record_count")
 		.expect("valid label");
-	let annotated = TypedAnnotationRecord::objects().annotate_legacy(Annotation::new(
+	let annotated = TypedAnnotationRecord::objects().annotate(Annotation::new(
 		"legacy_count",
-		AnnotationValue::Value(crate::orm::annotation::Value::Int(0)),
+		AnnotationValue::Value(Value::Int(0)),
 	));
 	let mut executor = RecordingExecutor::postgres();
 	let annotation_error = annotated

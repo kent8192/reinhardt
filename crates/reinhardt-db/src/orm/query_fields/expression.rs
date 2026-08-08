@@ -537,7 +537,7 @@ impl<M, K> LabeledExpression<M, K> {
 	}
 }
 
-fn validate_label(label: &str) -> Result<(), Error> {
+pub(crate) fn validate_label(label: &str) -> Result<(), Error> {
 	if label.is_empty() || label.len() > 63 || !label.is_ascii() {
 		return Err(Error::Validation(
 			"aggregate label must be 1 to 63 ASCII bytes".to_owned(),

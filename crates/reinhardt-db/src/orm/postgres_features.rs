@@ -65,6 +65,16 @@ impl BackendAnnotation {
 		&self.label
 	}
 
+	/// Returns whether this projection changes the cardinality of the query.
+	pub(crate) fn is_aggregate(&self) -> bool {
+		matches!(
+			self.value,
+			BackendAnnotationValue::ArrayAgg(_)
+				| BackendAnnotationValue::StringAgg(_)
+				| BackendAnnotationValue::JsonbAgg(_)
+		)
+	}
+
 	/// Renders this projection with a field mapper for the queryset root alias.
 	pub(crate) fn to_sql_with_field_mapper<F>(&self, map_field: F) -> String
 	where
@@ -797,6 +807,29 @@ impl ArrayOverlap {
 #[cfg(test)]
 mod tests {
 	use super::*;
+	use reinhardt_core::exception::Error;
+
+	#[test]
+	fn backend_annotation_uses_typed_label_validation() {
+		let value = || BackendAnnotationValue::JsonbBuildObject(JsonbBuildObject::new());
+
+		assert!(matches!(
+			BackendAnnotation::new("", value()),
+			Err(Error::Validation(message))
+				if message == "aggregate label must be 1 to 63 ASCII bytes"
+		));
+		assert!(matches!(
+			BackendAnnotation::new("合計", value()),
+			Err(Error::Validation(message))
+				if message == "aggregate label must be 1 to 63 ASCII bytes"
+		));
+		assert!(matches!(
+			BackendAnnotation::new("a".repeat(64), value()),
+			Err(Error::Validation(message))
+				if message == "aggregate label must be 1 to 63 ASCII bytes"
+		));
+		assert!(BackendAnnotation::new("total_1", value()).is_ok());
+	}
 
 	#[test]
 	fn test_array_agg_basic() {

@@ -2450,28 +2450,6 @@ mod tests {
 		);
 	}
 
-	// ==================== Aggregate safe expression tests ====================
-
-	#[test]
-	fn test_aggregate_count_uses_safe_api() {
-		assert_eq!(Value::Int(1), Value::Int(1));
-	}
-
-	#[test]
-	fn test_aggregate_sum_field_uses_quoted_identifier() {
-		assert_eq!(Value::Int(2), Value::Int(2));
-	}
-
-	#[test]
-	fn test_aggregate_count_distinct_uses_distinct_keyword() {
-		assert_eq!(Value::Int(3), Value::Int(3));
-	}
-
-	#[test]
-	fn test_aggregate_injection_attempt_is_quoted() {
-		assert_eq!(Value::Int(4), Value::Int(4));
-	}
-
 	// ==================== empty And/Or all-unsupported filter tests (#2943) ====================
 
 	#[rstest]

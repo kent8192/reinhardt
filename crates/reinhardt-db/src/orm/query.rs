@@ -2149,7 +2149,25 @@ where
 		self.typed_annotations
 			.iter()
 			.any(StoredExpression::contains_aggregate)
-			|| !self.backend_annotations.is_empty()
+			|| self
+				.backend_annotations
+				.iter()
+				.any(super::postgres_features::BackendAnnotation::is_aggregate)
+	}
+
+	fn ensure_backend_annotations_supported(
+		&self,
+		backend: super::connection::DatabaseBackend,
+	) -> Result<(), DatabaseError> {
+		if !self.backend_annotations.is_empty()
+			&& backend != super::connection::DatabaseBackend::Postgres
+		{
+			return Err(DatabaseError::new(
+				DatabaseErrorKind::Unsupported,
+				"PostgreSQL backend annotations require a PostgreSQL executor",
+			));
+		}
+		Ok(())
 	}
 
 	fn ensure_not_locking_without_transaction(&self) -> reinhardt_core::exception::Result<()> {
@@ -2686,8 +2704,7 @@ where
 	///
 	/// ```
 	/// # use reinhardt_db::orm::{Model, QuerySet};
-	/// # use reinhardt_db::orm::annotation::{Annotation, AnnotationValue};
-	/// # use reinhardt_db::orm::aggregation::Aggregate;
+	/// # use reinhardt_db::orm::func;
 	/// # use reinhardt_db::orm::{Filter, FilterOperator, FilterValue};
 	/// # use reinhardt_db::orm::GroupByFields;
 	/// # use serde::{Serialize, Deserialize};
@@ -2711,7 +2728,12 @@ where
 	/// let results = QuerySet::<Book>::from_subquery(
 	///     |subq: QuerySet<Book>| {
 	///         subq.values(&["author_id"])
-	///             .annotate_legacy(Annotation::new("book_count", AnnotationValue::Value(Value::Int(0))))
+	///             .annotate(
+	///                 func::count_all::<Book>()
+	///                     .label("book_count")
+	///                     .expect("valid annotation label"),
+	///             )
+	///             .expect("annotation should compile")
 	///     },
 	///     "book_stats"
 	/// )
@@ -6487,6 +6509,7 @@ where
 		E: OrmExecutor,
 	{
 		self.ensure_explainable_shape()?;
+		self.ensure_backend_annotations_supported(conn.backend())?;
 		let select = self.build_select_statement()?;
 		let context = super::execution::pgvector_context_for_select(&select);
 		let statement = ExplainStatement::new(select, options);
@@ -6527,6 +6550,7 @@ where
 		options: ExplainOptions,
 	) -> Result<ExplainOutput, crate::backends::error::DatabaseError> {
 		self.ensure_explainable_shape().map_err(executor_error)?;
+		self.ensure_backend_annotations_supported(Self::executor_backend(executor))?;
 		let select = self.build_select_statement().map_err(executor_error)?;
 		let context = super::execution::pgvector_context_for_select(&select);
 		let statement = ExplainStatement::new(select, options);
@@ -6597,6 +6621,7 @@ where
 		E: OrmExecutor,
 		F: DateProjectionField,
 	{
+		self.ensure_backend_annotations_supported(conn.backend())?;
 		let stmt = self.temporal_projection_statement(
 			field.name(),
 			kind.into(),
@@ -6622,6 +6647,7 @@ where
 	where
 		F: DateProjectionField,
 	{
+		self.ensure_backend_annotations_supported(Self::executor_backend(executor))?;
 		let stmt = self
 			.temporal_projection_statement(
 				field.name(),
@@ -6673,6 +6699,7 @@ where
 		E: OrmExecutor,
 		F: DateTimeProjectionField,
 	{
+		self.ensure_backend_annotations_supported(conn.backend())?;
 		let time_zone = time_zone.unwrap_or(chrono_tz::Tz::UTC);
 		let query_time_zone = if time_zone == chrono_tz::Tz::UTC {
 			TemporalTimeZone::Utc
@@ -6705,6 +6732,7 @@ where
 	where
 		F: DateTimeProjectionField,
 	{
+		self.ensure_backend_annotations_supported(Self::executor_backend(executor))?;
 		let time_zone = time_zone.unwrap_or(chrono_tz::Tz::UTC);
 		let query_time_zone = if time_zone == chrono_tz::Tz::UTC {
 			TemporalTimeZone::Utc
@@ -7150,6 +7178,7 @@ where
 		backend: super::connection::DatabaseBackend,
 		is_cockroachdb: bool,
 	) -> reinhardt_core::exception::Result<usize> {
+		self.ensure_backend_annotations_supported(backend)?;
 		let statement = self.build_select_statement()?;
 		let (_, values) = Self::build_select_for_backend(&statement, backend, is_cockroachdb)?;
 		Ok(values.len())
@@ -7549,6 +7578,7 @@ where
 		if self.empty_result {
 			return Ok(Vec::new());
 		}
+		self.ensure_backend_annotations_supported(conn.backend())?;
 		self.ensure_not_locking_without_transaction()?;
 		let stmt = self.build_select_statement()?;
 		let context = super::execution::pgvector_context_for_select(&stmt);
@@ -7608,6 +7638,7 @@ where
 		if self.empty_result {
 			return Ok(Vec::new());
 		}
+		self.ensure_backend_annotations_supported(conn.backend())?;
 		self.ensure_not_locking_without_transaction()?;
 		let stmt = self.build_select_statement()?;
 		let context = super::execution::pgvector_context_for_select(&stmt);
@@ -7663,6 +7694,7 @@ where
 		if self.empty_result {
 			return Ok(Box::pin(futures::stream::empty()));
 		}
+		self.ensure_backend_annotations_supported(conn.backend())?;
 
 		let stmt = self.build_select_statement()?;
 		let context = super::execution::pgvector_context_for_select(&stmt);
@@ -7736,6 +7768,7 @@ where
 		if self.empty_result {
 			return Ok(Box::pin(futures::stream::empty()));
 		}
+		self.ensure_backend_annotations_supported(Self::executor_backend(executor))?;
 
 		let stmt = self.build_select_statement()?;
 		let context = super::execution::pgvector_context_for_select(&stmt);
@@ -7801,6 +7834,7 @@ where
 		if self.empty_result {
 			return Ok(Vec::new());
 		}
+		self.ensure_backend_annotations_supported(Self::executor_backend(executor))?;
 		self.validate_select_for_update(executor.row_lock_capabilities(), executor.backend())?;
 		let stmt = self.build_select_statement().map_err(executor_error)?;
 		let context = super::execution::pgvector_context_for_select(&stmt);
@@ -7845,6 +7879,7 @@ where
 		if self.empty_result {
 			return Ok(Vec::new());
 		}
+		self.ensure_backend_annotations_supported(Self::executor_backend(executor))?;
 		self.validate_select_for_update(executor.row_lock_capabilities(), executor.backend())?;
 		let stmt = self.build_select_statement().map_err(executor_error)?;
 		let context = super::execution::pgvector_context_for_select(&stmt);
@@ -7888,6 +7923,7 @@ where
 		if self.empty_result {
 			return Ok(0);
 		}
+		self.ensure_backend_annotations_supported(Self::executor_backend(executor))?;
 		let stmt = self.count_select_query().map_err(executor_error)?;
 		let context = super::execution::pgvector_context_for_select(&stmt);
 		let (sql, values) = Self::build_select_for_backend(
@@ -8099,6 +8135,7 @@ where
 		if self.empty_result {
 			return Ok(0);
 		}
+		self.ensure_backend_annotations_supported(conn.backend())?;
 		let stmt = self.count_select_query()?;
 		let context = super::execution::pgvector_context_for_select(&stmt);
 		let (sql, values) =
@@ -10082,20 +10119,7 @@ pub(crate) fn quote_identifier(field: &str) -> String {
 
 /// Validates an annotation label using the same identifier policy as typed annotations.
 pub(crate) fn validate_annotation_label(label: &str) -> reinhardt_core::exception::Result<()> {
-	if label.is_empty()
-		|| !label
-			.chars()
-			.all(|character| character.is_alphanumeric() || character == '_')
-		|| label
-			.chars()
-			.next()
-			.is_some_and(|character| character.is_numeric())
-	{
-		return Err(Error::Validation(format!(
-			"annotation label `{label}` is not a valid identifier"
-		)));
-	}
-	Ok(())
+	crate::orm::query_fields::expression::validate_label(label)
 }
 
 fn filter_lhs_expr(filter: &Filter) -> Expr {

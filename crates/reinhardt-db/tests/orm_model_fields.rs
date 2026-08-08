@@ -485,7 +485,7 @@ fn annotation_with_field_reference() {
 }
 
 #[rstest]
-fn annotation_with_aggregate() {
+fn scalar_annotation_value_renders() {
 	let annotation = Annotation::new("item_count", AnnotationValue::Value(Value::Int(0)));
 	assert_eq!(annotation.to_sql(), "0 AS \"item_count\"");
 }

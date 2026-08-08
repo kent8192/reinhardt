@@ -109,7 +109,7 @@ fn aggregate_annotations_group_scalar_annotations_once() {
 
 	assert_eq!(
 		query,
-		r#"SELECT *, "typed_annotation_records"."value" AS "first_value", "typed_annotation_records"."value" AS "second_value", COUNT(*) AS "record_count" FROM "typed_annotation_records" GROUP BY "typed_annotation_records"."id", "typed_annotation_records"."display_name", "typed_annotation_records"."value""#
+		r#"SELECT *, "typed_annotation_records"."value" AS "first_value", "typed_annotation_records"."value" AS "second_value", COUNT(*) AS "record_count" FROM "typed_annotation_records" GROUP BY "typed_annotation_records"."id", "typed_annotation_records"."display_name", "typed_annotation_records"."value", "typed_annotation_records"."value""#
 	);
 }
 

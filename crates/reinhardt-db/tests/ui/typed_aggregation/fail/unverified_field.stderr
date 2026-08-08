@@ -1,0 +1,14 @@
+error[E0277]: the trait bound `reinhardt_db::orm::FieldRef<ModelRecord, i64>: NumericAggregateOperand<_>` is not satisfied
+ --> tests/ui/typed_aggregation/fail/unverified_field.rs:8:20
+  |
+8 |     let _ = func::sum(FieldRef::<ModelRecord, i64>::new("value"));
+  |             --------- ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ the trait `NumericAggregateOperand<_>` is not implemented for `reinhardt_db::orm::FieldRef<ModelRecord, i64>`
+  |             |
+  |             required by a bound introduced by this call
+  |
+help: the trait `NumericAggregateOperand<_>` is not implemented for `reinhardt_db::orm::FieldRef<ModelRecord, i64, reinhardt_db::orm::expressions::UnverifiedModelField>`
+      but trait `NumericAggregateOperand<ModelRecord>` is implemented for `reinhardt_db::orm::FieldRef<ModelRecord, i64, reinhardt_db::orm::expressions::GeneratedModelField>`
+ --> src/orm/func.rs
+  = help: for that trait implementation, expected `reinhardt_db::orm::expressions::GeneratedModelField`, found `reinhardt_db::orm::expressions::UnverifiedModelField`
+note: required by a bound in `reinhardt_db::orm::func::sum`
+ --> src/orm/func.rs

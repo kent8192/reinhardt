@@ -56,6 +56,7 @@ pub(crate) enum ExpressionNode {
 	Aggregate {
 		operation: AggregateOperation,
 		operand: Box<Self>,
+		distinct: bool,
 		output_kind: Option<AggregateOutputKind>,
 	},
 	/// A `COUNT(*)` operation with no column operand.
@@ -91,9 +92,17 @@ impl ExpressionNode {
 				Expr::value(crate::orm::database_value_to_query_value(value)).into_simple_expr()
 			}
 			Self::Aggregate {
-				operation, operand, ..
+				operation,
+				operand,
+				distinct,
+				..
 			} => {
 				let operand = operand.into_simple_expr();
+				let operand = if distinct {
+					SimpleExpr::CustomWithExpr("DISTINCT ?".to_owned(), vec![operand])
+				} else {
+					operand
+				};
 				match operation {
 					AggregateOperation::Count => Func::count(operand),
 					AggregateOperation::Sum => Func::sum(operand),
@@ -148,15 +157,18 @@ impl ExpressionNode {
 				Self::Aggregate {
 					operation: left_operation,
 					operand: left_operand,
+					distinct: left_distinct,
 					output_kind: left_output_kind,
 				},
 				Self::Aggregate {
 					operation: right_operation,
 					operand: right_operand,
+					distinct: right_distinct,
 					output_kind: right_output_kind,
 				},
 			) => {
 				left_operation == right_operation
+					&& left_distinct == right_distinct
 					&& left_output_kind == right_output_kind
 					&& left_operand.structurally_eq(right_operand)
 			}

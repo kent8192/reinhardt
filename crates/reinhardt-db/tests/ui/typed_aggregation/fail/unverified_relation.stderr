@@ -1,0 +1,14 @@
+error[E0277]: the trait bound `RelationPath<ModelRecord, RelatedRecord>: CountOperand<_>` is not satisfied
+ --> tests/ui/typed_aggregation/fail/unverified_relation.rs:8:22
+  |
+8 |     let _ = func::count(RelationPath::<ModelRecord, RelatedRecord>::new(&[]));
+  |             ----------- ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ the trait `CountOperand<_>` is not implemented for `RelationPath<ModelRecord, RelatedRecord>`
+  |             |
+  |             required by a bound introduced by this call
+  |
+help: the trait `CountOperand<_>` is not implemented for `RelationPath<ModelRecord, RelatedRecord, reinhardt_db::orm::UnverifiedRelationPath>`
+      but trait `CountOperand<ModelRecord>` is implemented for `RelationPath<ModelRecord, RelatedRecord, reinhardt_db::orm::GeneratedRelationPath>`
+ --> src/orm/func.rs
+  = help: for that trait implementation, expected `reinhardt_db::orm::GeneratedRelationPath`, found `reinhardt_db::orm::UnverifiedRelationPath`
+note: required by a bound in `reinhardt_db::orm::func::count`
+ --> src/orm/func.rs

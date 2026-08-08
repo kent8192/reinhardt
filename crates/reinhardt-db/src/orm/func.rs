@@ -336,6 +336,7 @@ fn aggregate<M, InputValue, Output>(
 		ExpressionNode::Aggregate {
 			operation,
 			operand: Box::new(operand),
+			distinct: false,
 			output_kind,
 		},
 		joins,

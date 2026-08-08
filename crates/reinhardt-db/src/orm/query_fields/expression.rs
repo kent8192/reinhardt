@@ -140,66 +140,48 @@ where
 	R: DatabaseField,
 {
 	/// Compare this scalar expression for equality.
-	pub fn eq<V: crate::orm::IntoFieldValue<R>>(
-		self,
-		value: V,
-	) -> Result<TypedPredicate<M>, Error> {
+	pub fn eq<V: crate::orm::IntoFieldValue<R>>(self, value: V) -> TypedPredicate<M> {
 		self.compare(value, SimpleExpr::eq)
+			.expect("typed scalar comparison values must encode for their database field")
 	}
 
 	/// Compare this scalar expression for inequality.
-	pub fn ne<V: crate::orm::IntoFieldValue<R>>(
-		self,
-		value: V,
-	) -> Result<TypedPredicate<M>, Error> {
+	pub fn ne<V: crate::orm::IntoFieldValue<R>>(self, value: V) -> TypedPredicate<M> {
 		self.compare(value, SimpleExpr::ne)
+			.expect("typed scalar comparison values must encode for their database field")
 	}
 
 	/// Compare this scalar expression using greater-than.
-	pub fn gt<V: crate::orm::IntoFieldValue<R>>(
-		self,
-		value: V,
-	) -> Result<TypedPredicate<M>, Error> {
+	pub fn gt<V: crate::orm::IntoFieldValue<R>>(self, value: V) -> TypedPredicate<M> {
 		self.compare(value, SimpleExpr::gt)
+			.expect("typed scalar comparison values must encode for their database field")
 	}
 
 	/// Compare this scalar expression using greater-than-or-equal.
-	pub fn ge<V: crate::orm::IntoFieldValue<R>>(
-		self,
-		value: V,
-	) -> Result<TypedPredicate<M>, Error> {
+	pub fn ge<V: crate::orm::IntoFieldValue<R>>(self, value: V) -> TypedPredicate<M> {
 		self.compare(value, SimpleExpr::gte)
+			.expect("typed scalar comparison values must encode for their database field")
 	}
 
 	/// Compatibility alias for [`Self::ge`].
-	pub fn gte<V: crate::orm::IntoFieldValue<R>>(
-		self,
-		value: V,
-	) -> Result<TypedPredicate<M>, Error> {
+	pub fn gte<V: crate::orm::IntoFieldValue<R>>(self, value: V) -> TypedPredicate<M> {
 		self.ge(value)
 	}
 
 	/// Compare this scalar expression using less-than.
-	pub fn lt<V: crate::orm::IntoFieldValue<R>>(
-		self,
-		value: V,
-	) -> Result<TypedPredicate<M>, Error> {
+	pub fn lt<V: crate::orm::IntoFieldValue<R>>(self, value: V) -> TypedPredicate<M> {
 		self.compare(value, SimpleExpr::lt)
+			.expect("typed scalar comparison values must encode for their database field")
 	}
 
 	/// Compare this scalar expression using less-than-or-equal.
-	pub fn le<V: crate::orm::IntoFieldValue<R>>(
-		self,
-		value: V,
-	) -> Result<TypedPredicate<M>, Error> {
+	pub fn le<V: crate::orm::IntoFieldValue<R>>(self, value: V) -> TypedPredicate<M> {
 		self.compare(value, SimpleExpr::lte)
+			.expect("typed scalar comparison values must encode for their database field")
 	}
 
 	/// Compatibility alias for [`Self::le`].
-	pub fn lte<V: crate::orm::IntoFieldValue<R>>(
-		self,
-		value: V,
-	) -> Result<TypedPredicate<M>, Error> {
+	pub fn lte<V: crate::orm::IntoFieldValue<R>>(self, value: V) -> TypedPredicate<M> {
 		self.le(value)
 	}
 
@@ -223,67 +205,81 @@ impl<M, R> TypedExpression<M, R, AggregateKind>
 where
 	R: DatabaseField,
 {
+	/// Apply SQL `DISTINCT` to this aggregate's operand.
+	///
+	/// `COUNT(*)` has no operand and therefore cannot be made distinct.
+	/// Aggregate constructors retain the shared [`AggregateKind`] return type,
+	/// so this method validates the structured node instead of using a separate
+	/// public type for `COUNT(*)`.
+	///
+	/// # Panics
+
+	/// Panics when called for `COUNT(*)`. Use [`Self::try_distinct`] when the
+	/// aggregate source is not statically known to have an operand.
+	pub fn distinct(self) -> Self {
+		self.try_distinct()
+			.expect("COUNT(*) does not support DISTINCT because it has no operand")
+	}
+
+	/// Try to apply SQL `DISTINCT` to this aggregate's operand.
+	///
+	/// `COUNT(*)` returns a validation error because it has no operand.
+	pub fn try_distinct(mut self) -> Result<Self, Error> {
+		match &mut self.node {
+			ExpressionNode::Aggregate { distinct, .. } => {
+				*distinct = true;
+				Ok(self)
+			}
+			ExpressionNode::CountAll => Err(Error::Validation(
+				"COUNT(*) does not support DISTINCT because it has no operand".to_owned(),
+			)),
+			_ => unreachable!("aggregate expressions must retain an aggregate node"),
+		}
+	}
+
 	/// Compare this aggregate expression for equality in a HAVING clause.
-	pub fn eq<V: crate::orm::IntoFieldValue<R>>(
-		self,
-		value: V,
-	) -> Result<HavingPredicate<M>, Error> {
+	pub fn eq<V: crate::orm::IntoFieldValue<R>>(self, value: V) -> HavingPredicate<M> {
 		self.compare(value, SimpleExpr::eq)
+			.expect("typed aggregate comparison values must encode for their database field")
 	}
 
 	/// Compare this aggregate expression for inequality in a HAVING clause.
-	pub fn ne<V: crate::orm::IntoFieldValue<R>>(
-		self,
-		value: V,
-	) -> Result<HavingPredicate<M>, Error> {
+	pub fn ne<V: crate::orm::IntoFieldValue<R>>(self, value: V) -> HavingPredicate<M> {
 		self.compare(value, SimpleExpr::ne)
+			.expect("typed aggregate comparison values must encode for their database field")
 	}
 
 	/// Compare this aggregate expression using greater-than in a HAVING clause.
-	pub fn gt<V: crate::orm::IntoFieldValue<R>>(
-		self,
-		value: V,
-	) -> Result<HavingPredicate<M>, Error> {
+	pub fn gt<V: crate::orm::IntoFieldValue<R>>(self, value: V) -> HavingPredicate<M> {
 		self.compare(value, SimpleExpr::gt)
+			.expect("typed aggregate comparison values must encode for their database field")
 	}
 
 	/// Compare this aggregate expression using greater-than-or-equal in a HAVING clause.
-	pub fn ge<V: crate::orm::IntoFieldValue<R>>(
-		self,
-		value: V,
-	) -> Result<HavingPredicate<M>, Error> {
+	pub fn ge<V: crate::orm::IntoFieldValue<R>>(self, value: V) -> HavingPredicate<M> {
 		self.compare(value, SimpleExpr::gte)
+			.expect("typed aggregate comparison values must encode for their database field")
 	}
 
 	/// Compatibility alias for [`Self::ge`].
-	pub fn gte<V: crate::orm::IntoFieldValue<R>>(
-		self,
-		value: V,
-	) -> Result<HavingPredicate<M>, Error> {
+	pub fn gte<V: crate::orm::IntoFieldValue<R>>(self, value: V) -> HavingPredicate<M> {
 		self.ge(value)
 	}
 
 	/// Compare this aggregate expression using less-than in a HAVING clause.
-	pub fn lt<V: crate::orm::IntoFieldValue<R>>(
-		self,
-		value: V,
-	) -> Result<HavingPredicate<M>, Error> {
+	pub fn lt<V: crate::orm::IntoFieldValue<R>>(self, value: V) -> HavingPredicate<M> {
 		self.compare(value, SimpleExpr::lt)
+			.expect("typed aggregate comparison values must encode for their database field")
 	}
 
 	/// Compare this aggregate expression using less-than-or-equal in a HAVING clause.
-	pub fn le<V: crate::orm::IntoFieldValue<R>>(
-		self,
-		value: V,
-	) -> Result<HavingPredicate<M>, Error> {
+	pub fn le<V: crate::orm::IntoFieldValue<R>>(self, value: V) -> HavingPredicate<M> {
 		self.compare(value, SimpleExpr::lte)
+			.expect("typed aggregate comparison values must encode for their database field")
 	}
 
 	/// Compatibility alias for [`Self::le`].
-	pub fn lte<V: crate::orm::IntoFieldValue<R>>(
-		self,
-		value: V,
-	) -> Result<HavingPredicate<M>, Error> {
+	pub fn lte<V: crate::orm::IntoFieldValue<R>>(self, value: V) -> HavingPredicate<M> {
 		self.le(value)
 	}
 
@@ -597,6 +593,7 @@ mod tests {
 	use crate::orm::expressions::{FieldRef, GeneratedModelField};
 	use crate::orm::query_fields::literal;
 	use reinhardt_core::exception::Error;
+	use reinhardt_query::prelude::{PostgresQueryBuilder, Query, QueryStatementBuilder};
 
 	struct TestModel;
 
@@ -687,5 +684,39 @@ mod tests {
 		let unique = StoredExpression::deduplicate(vec![first.expression, duplicate.expression]);
 
 		assert_eq!(unique.len(), 1);
+	}
+
+	#[test]
+	fn distinct_operand_aggregate_retains_structured_state_and_renders_sql() {
+		let expression = crate::orm::func::sum(generated_i64_field("total")).distinct();
+		let (node, _) = expression.clone().into_parts();
+
+		assert!(matches!(
+			node,
+			ExpressionNode::Aggregate { distinct: true, .. }
+		));
+
+		let mut statement = Query::select();
+		statement
+			.expr(expression.into_simple_expr())
+			.from("test_models");
+		assert_eq!(
+			statement.to_string(PostgresQueryBuilder),
+			r#"SELECT SUM(DISTINCT "total") FROM "test_models""#
+		);
+	}
+
+	#[test]
+	fn count_all_rejects_distinct_without_creating_operand_state() {
+		assert!(matches!(
+			crate::orm::func::count_all::<TestModel>().try_distinct(),
+			Err(Error::Validation(message)) if message == "COUNT(*) does not support DISTINCT because it has no operand"
+		));
+	}
+
+	#[test]
+	#[should_panic(expected = "COUNT(*) does not support DISTINCT")]
+	fn count_all_distinct_panics_to_preserve_the_operand_only_contract() {
+		let _ = crate::orm::func::count_all::<TestModel>().distinct();
 	}
 }

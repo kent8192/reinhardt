@@ -1,0 +1,31 @@
+error[E0277]: the trait bound `Status: NumericAggregateField` is not satisfied
+ --> tests/ui/typed_aggregation/fail/model_enum_sum.rs:8:20
+  |
+8 |     let _ = func::sum(ModelRecord::field_status());
+  |             --------- ^^^^^^^^^^^^^^^^^^^^^^^^^^^ unsatisfied trait bound
+  |             |
+  |             required by a bound introduced by this call
+  |
+help: the trait `NumericAggregateField` is not implemented for `Status`
+ --> tests/ui/typed_aggregation/fail/../support.rs
+  = help: the following other types implement trait `NumericAggregateField`:
+            CustomAmount
+            f32
+            f64
+            i32
+            i64
+            rust_decimal::decimal::Decimal
+            std::option::Option<T>
+  = note: required for `reinhardt_db::orm::FieldRef<ModelRecord, Status, reinhardt_db::orm::expressions::GeneratedModelField>` to implement `NumericAggregateOperand<ModelRecord>`
+note: required by a bound in `reinhardt_db::orm::func::sum`
+ --> src/orm/func.rs
+
+error[E0277]: the trait bound `Status: NumericAggregateField` is not satisfied
+ --> tests/ui/typed_aggregation/fail/model_enum_sum.rs:8:10
+  |
+8 |     let _ = func::sum(ModelRecord::field_status());
+  |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ unsatisfied trait bound
+  |
+help: the trait `NumericAggregateField` is not implemented for `Status`
+ --> tests/ui/typed_aggregation/fail/../support.rs
+  = note: required for `reinhardt_db::orm::FieldRef<ModelRecord, Status, reinhardt_db::orm::expressions::GeneratedModelField>` to implement `NumericAggregateOperand<ModelRecord>`

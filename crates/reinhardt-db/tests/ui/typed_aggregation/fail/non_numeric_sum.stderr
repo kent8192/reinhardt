@@ -1,0 +1,69 @@
+error[E0277]: the trait bound `std::string::String: NumericAggregateField` is not satisfied
+ --> tests/ui/typed_aggregation/fail/non_numeric_sum.rs:8:20
+  |
+8 |     let _ = func::sum(ModelRecord::field_name());
+  |             --------- ^^^^^^^^^^^^^^^^^^^^^^^^^ the trait `NumericAggregateField` is not implemented for `std::string::String`
+  |             |
+  |             required by a bound introduced by this call
+  |
+  = help: the following other types implement trait `NumericAggregateField`:
+            CustomAmount
+            f32
+            f64
+            i32
+            i64
+            rust_decimal::decimal::Decimal
+            std::option::Option<T>
+  = note: required for `reinhardt_db::orm::FieldRef<ModelRecord, std::string::String, reinhardt_db::orm::expressions::GeneratedModelField>` to implement `NumericAggregateOperand<ModelRecord>`
+note: required by a bound in `reinhardt_db::orm::func::sum`
+ --> src/orm/func.rs
+
+error[E0277]: the trait bound `std::string::String: reinhardt_db::orm::NumericAggregateStorage` is not satisfied
+ --> tests/ui/typed_aggregation/fail/non_numeric_sum.rs:8:20
+  |
+8 |     let _ = func::sum(ModelRecord::field_name());
+  |             --------- ^^^^^^^^^^^^^^^^^^^^^^^^^ the trait `reinhardt_db::orm::NumericAggregateStorage` is not implemented for `std::string::String`
+  |             |
+  |             required by a bound introduced by this call
+  |
+  = help: the following other types implement trait `reinhardt_db::orm::NumericAggregateStorage`:
+            f32
+            f64
+            i32
+            i64
+            rust_decimal::decimal::Decimal
+            std::option::Option<S>
+  = note: required for `reinhardt_db::orm::FieldRef<ModelRecord, std::string::String, reinhardt_db::orm::expressions::GeneratedModelField>` to implement `NumericAggregateOperand<ModelRecord>`
+note: required by a bound in `reinhardt_db::orm::func::sum`
+ --> src/orm/func.rs
+
+error[E0277]: the trait bound `std::string::String: NumericAggregateField` is not satisfied
+ --> tests/ui/typed_aggregation/fail/non_numeric_sum.rs:8:10
+  |
+8 |     let _ = func::sum(ModelRecord::field_name());
+  |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ the trait `NumericAggregateField` is not implemented for `std::string::String`
+  |
+  = help: the following other types implement trait `NumericAggregateField`:
+            CustomAmount
+            f32
+            f64
+            i32
+            i64
+            rust_decimal::decimal::Decimal
+            std::option::Option<T>
+  = note: required for `reinhardt_db::orm::FieldRef<ModelRecord, std::string::String, reinhardt_db::orm::expressions::GeneratedModelField>` to implement `NumericAggregateOperand<ModelRecord>`
+
+error[E0277]: the trait bound `std::string::String: reinhardt_db::orm::NumericAggregateStorage` is not satisfied
+ --> tests/ui/typed_aggregation/fail/non_numeric_sum.rs:8:10
+  |
+8 |     let _ = func::sum(ModelRecord::field_name());
+  |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ the trait `reinhardt_db::orm::NumericAggregateStorage` is not implemented for `std::string::String`
+  |
+  = help: the following other types implement trait `reinhardt_db::orm::NumericAggregateStorage`:
+            f32
+            f64
+            i32
+            i64
+            rust_decimal::decimal::Decimal
+            std::option::Option<S>
+  = note: required for `reinhardt_db::orm::FieldRef<ModelRecord, std::string::String, reinhardt_db::orm::expressions::GeneratedModelField>` to implement `NumericAggregateOperand<ModelRecord>`

@@ -8,8 +8,27 @@
 //! 4. View tree serialization works correctly
 
 use reinhardt_pages::component::{Component, IntoPage, Page, PageElement};
+use reinhardt_pages::reactive::entity::{Entity, EntityValue};
+use reinhardt_pages::reactive::{QueryFamily, QueryOptions, QueryStatus, use_query};
 use reinhardt_pages::ssr::{SsrOptions, SsrRenderer, SsrState};
 use serde::de::DeserializeOwned;
+use serde::{Deserialize, Serialize};
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
+struct HydratedProject {
+	id: u64,
+	name: String,
+}
+
+impl Entity for HydratedProject {
+	type Id = u64;
+
+	const TYPE: &'static str = "ssr_hydration_integration.project";
+
+	fn entity_id(&self) -> Self::Id {
+		self.id
+	}
+}
 
 /// Test component for SSR
 struct Counter {
@@ -110,6 +129,50 @@ fn get_signal_as<T: DeserializeOwned>(state: &SsrState, key: &str) -> Option<T> 
 	state
 		.get_signal(key)
 		.and_then(|v| serde_json::from_value(v.clone()).ok())
+}
+
+#[tokio::test]
+async fn normalized_ssr_writes_one_reachable_entity_table() {
+	let view = Page::reactive(|| {
+		let query = use_query(
+			QueryFamily::<u64, HydratedProject, String>::new("tests::ssr-normalized-table")
+				.query(1, || async {
+					Ok::<_, String>(HydratedProject {
+						id: 7,
+						name: "Ada".to_string(),
+					})
+				})
+				.with_entities(EntityValue::new()),
+			QueryOptions::default(),
+		);
+		match query.snapshot().status {
+			QueryStatus::Success => PageElement::new("p").child("Ada").into_page(),
+			QueryStatus::Idle | QueryStatus::Pending => {
+				PageElement::new("p").child("loading").into_page()
+			}
+			QueryStatus::Error => PageElement::new("p").child("error").into_page(),
+		}
+	});
+
+	let mut renderer = SsrRenderer::new();
+	let html = renderer.render_view(&view).await;
+	assert!(html.contains("Ada"));
+	let table = renderer
+		.state()
+		.get_resource_state("pages.query-entities:v1")
+		.expect("normalized SSR must emit a reserved entity table");
+	assert_eq!(table["version"], serde_json::json!(1));
+	assert_eq!(
+		table["entities"][HydratedProject::TYPE]
+			.as_array()
+			.unwrap()
+			.len(),
+		1
+	);
+	assert_eq!(
+		table["entities"][HydratedProject::TYPE][0]["id"],
+		serde_json::json!(7)
+	);
 }
 
 /// Success Criterion 2: SSR state serialization

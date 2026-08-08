@@ -14,6 +14,7 @@ use std::time::Duration;
 use futures_util::future::{AbortHandle, Abortable};
 use serde::Serialize;
 use serde::de::DeserializeOwned;
+use serde_json::Value;
 
 use super::super::Signal;
 use super::super::resource::ResourceState;
@@ -27,9 +28,10 @@ use super::state::{QueryDefaults, QueryOptions};
 use super::state::{QueryHydrationSnapshot, QueryHydrationState};
 use crate::cancellation::{AbortableTaskGuard, CancellationSource, scope_cancellation};
 use crate::reactive::entity::{
-	Entity, EntityArena, EntityHandle, EntityIdentity, EntityOverlay, EntityWriteTicket,
-	EntityWriter, ErasedEntityProjection, ProjectionMaterialization, ProjectionRemoval,
-	QueryTicketLease, RemovedEntities,
+	ENTITY_TABLE_VERSION, Entity, EntityArena, EntityHandle, EntityHydrationEnvelope,
+	EntityIdentity, EntityOverlay, EntityWriteTicket, EntityWriter, ErasedEntityProjection,
+	NormalizedHydrationKind, NormalizedQueryHydrationSnapshot, NormalizedQueryHydrationState,
+	ProjectionMaterialization, ProjectionRemoval, QueryTicketLease, RemovedEntities,
 };
 use reinhardt_core::reactive::ReactiveScope;
 
@@ -223,6 +225,8 @@ pub(super) struct QueryClientInner {
 	entity_dependents: RefCell<HashMap<EntityIdentity, Vec<Weak<dyn EntityDependent>>>>,
 	#[cfg(any(wasm, test))]
 	consumed_hydration_identities: RefCell<HashSet<QueryIdentity>>,
+	#[cfg(any(wasm, test))]
+	hydration_table_installed: Cell<bool>,
 	families: RefCell<HashMap<&'static str, QueryFamilyMetadata>>,
 	deadlines: RefCell<BinaryHeap<Reverse<ClientDeadline>>>,
 	next_deadline_sequence: Cell<u64>,
@@ -310,14 +314,20 @@ impl QueryClient {
 		let entity_gc_time = defaults.resolved_gc_time();
 		let document_visible =
 			super::browser::QueryBrowser::initial_visibility(supports_browser_resources);
+		let entities = EntityArena::new(entity_gc_time);
+		if runtime.executes_inline() {
+			entities.enable_ssr_reachability();
+		}
 		let inner = Rc::new_cyclic(|owner| QueryClientInner {
 			defaults,
 			runtime,
-			entities: EntityArena::new(entity_gc_time),
+			entities,
 			entries: RefCell::new(HashMap::new()),
 			entity_dependents: RefCell::new(HashMap::new()),
 			#[cfg(any(wasm, test))]
 			consumed_hydration_identities: RefCell::new(HashSet::new()),
+			#[cfg(any(wasm, test))]
+			hydration_table_installed: Cell::new(false),
 			families: RefCell::new(HashMap::new()),
 			deadlines: RefCell::new(BinaryHeap::new()),
 			next_deadline_sequence: Cell::new(0),
@@ -374,6 +384,14 @@ impl QueryClient {
 	where
 		E: Entity,
 	{
+		#[cfg(wasm)]
+		if let Ok(mut hydration) = crate::hydration::HydrationContext::from_window() {
+			hydration
+				.install_entity_table(self)
+				.unwrap_or_else(|error| {
+					panic!("normalized entity hydration table is invalid: {error}")
+				});
+		}
 		self.inner.entities.entity(id)
 	}
 
@@ -473,6 +491,18 @@ impl QueryClient {
 
 	pub(super) fn same_instance(&self, other: &Self) -> bool {
 		Rc::ptr_eq(&self.inner, &other.inner)
+	}
+
+	pub(crate) fn reachable_entity_hydration_envelope(&self) -> EntityHydrationEnvelope {
+		self.inner.entities.reachable_hydration_envelope()
+	}
+
+	#[cfg(any(wasm, test))]
+	pub(crate) fn install_entity_hydration_envelope(&self, envelope: EntityHydrationEnvelope) {
+		if self.inner.hydration_table_installed.replace(true) {
+			return;
+		}
+		self.inner.entities.install_hydration_envelope(envelope);
 	}
 
 	#[cfg(test)]
@@ -967,6 +997,55 @@ impl<T: Clone + 'static, E: Clone + 'static> QueryEntry<T, E> {
 			ResourceState::Success(_) => self.is_stale(stale_time),
 			ResourceState::Error(_) => self.is_stale(stale_time),
 		})
+	}
+
+	#[cfg(native)]
+	pub(super) fn normalized_hydration_snapshot(&self, stale_time: Duration) -> Option<Value>
+	where
+		E: Serialize,
+	{
+		let projection = self.normalization.as_ref()?;
+		let state = self.state.with_untracked(|state| state.clone());
+		let (kind, hydration_state) = match state {
+			ResourceState::Success(_) => {
+				if self.normalization_missing.get() {
+					return None;
+				}
+				let recipe = self.recipe.borrow();
+				let recipe = recipe
+					.as_deref()
+					.expect("successful normalized hydration requires a stored recipe");
+				let dependencies = projection.dependencies(recipe);
+				for identity in dependencies.identities() {
+					self.entities.mark_reachable(identity.clone());
+				}
+				(
+					NormalizedHydrationKind::Success,
+					NormalizedQueryHydrationState::Success {
+						projection: projection.recipe_to_json(recipe),
+					},
+				)
+			}
+			ResourceState::Error(error) => (
+				NormalizedHydrationKind::Error,
+				NormalizedQueryHydrationState::Error(error),
+			),
+			ResourceState::Loading => return None,
+		};
+		let snapshot = NormalizedQueryHydrationSnapshot {
+			version: ENTITY_TABLE_VERSION,
+			kind,
+			schema: projection.schema().to_string(),
+			state: hydration_state,
+			refetch_error: self.refetch_error.get(),
+			is_fetching: self.is_fetching.get(),
+			is_stale: self.is_stale(stale_time),
+		};
+		Some(serde_json::to_value(snapshot).expect("normalized query snapshots serialize"))
+	}
+
+	pub(super) fn is_normalized(&self) -> bool {
+		self.normalization.is_some()
 	}
 
 	pub(super) fn has_request(&self) -> bool {
@@ -1971,6 +2050,126 @@ impl QueryClient {
 		));
 		entry.refetch_error.set(refetch_error);
 		entries.insert(identity, cached_query_entry(&entry));
+		Ok(())
+	}
+
+	#[cfg(any(wasm, test))]
+	pub(crate) fn seed_query_descriptor<T, E>(
+		&self,
+		descriptor: &QueryDescriptor<T, E>,
+		serialized: &serde_json::Value,
+	) -> Result<(), serde_json::Error>
+	where
+		T: Clone + Serialize + DeserializeOwned + 'static,
+		E: Clone + Serialize + DeserializeOwned + 'static,
+	{
+		let (key, _fetcher, _ssr_prefetch, family_types, normalization) =
+			descriptor.clone().into_parts();
+		let Some(normalization) = normalization else {
+			return self.seed_query_snapshot(key, serialized);
+		};
+		let snapshot: NormalizedQueryHydrationSnapshot<E> =
+			serde_json::from_value(serialized.clone())?;
+		if snapshot.version != ENTITY_TABLE_VERSION {
+			return Err(invalid_hydration_snapshot(
+				"normalized query hydration snapshot has an unsupported version",
+			));
+		}
+		if snapshot.schema != normalization.schema() {
+			return Err(invalid_hydration_snapshot(
+				"normalized query hydration snapshot schema does not match the query projection",
+			));
+		}
+		if snapshot.is_fetching {
+			return Err(invalid_hydration_snapshot(
+				"settled normalized query hydration snapshot is still fetching",
+			));
+		}
+		let identity = key.identity().clone();
+		if self
+			.inner
+			.consumed_hydration_identities
+			.borrow()
+			.contains(&identity)
+		{
+			return Ok(());
+		}
+		self.register_descriptor_family(
+			key.family_id(),
+			family_types,
+			QueryNormalizationContract::from_projection(Some(normalization.as_ref())),
+		);
+		let hydrated_state;
+		let mut recipe_value = None;
+		let mut dependencies = None;
+		match (snapshot.kind, snapshot.state) {
+			(
+				NormalizedHydrationKind::Success,
+				NormalizedQueryHydrationState::Success { projection: value },
+			) => {
+				let recipe = normalization.recipe_from_json(&value);
+				let declared = normalization.dependencies(recipe.as_ref());
+				self.inner.entities.hydrate_dependencies(&declared);
+				let ticket = self.inner.entities.issue_mutation_ticket();
+				let staging = self.inner.entities.stage(|_| {});
+				let overlay = EntityOverlay::new(&self.inner.entities, staging, ticket);
+				let materialized = normalization.materialize(recipe.as_ref(), &overlay);
+				let value = match materialized {
+					ProjectionMaterialization::Ready(value) => value,
+					ProjectionMaterialization::MissingRequired => {
+						return Err(invalid_hydration_snapshot(
+							"normalized query hydration snapshot references a missing required entity",
+						));
+					}
+				};
+				let leases = declared.acquire_leases(&self.inner.entities);
+				recipe_value = Some(recipe);
+				dependencies = Some((declared, leases));
+				hydrated_state = ResourceState::Success(value);
+			}
+			(NormalizedHydrationKind::Error, NormalizedQueryHydrationState::Error(error)) => {
+				if snapshot.refetch_error.is_some() {
+					return Err(invalid_hydration_snapshot(
+						"initial normalized error snapshot contains a refetch error",
+					));
+				}
+				hydrated_state = ResourceState::Error(error);
+			}
+			_ => {
+				return Err(invalid_hydration_snapshot(
+					"normalized query hydration snapshot kind does not match its state",
+				));
+			}
+		}
+		self.inner
+			.consumed_hydration_identities
+			.borrow_mut()
+			.insert(identity.clone());
+		let id = key.id();
+		super::super::resource::reserve_client_resource_key(&id);
+		let entry = Rc::new(QueryEntry::new_with_hydrated_state(
+			key,
+			Some(hydrated_state),
+			Some(normalization),
+			Rc::clone(&self.inner.runtime),
+			self.inner.entities.clone(),
+			Some(Rc::downgrade(&self.inner)),
+		));
+		if let Some(recipe) = recipe_value {
+			entry.recipe.borrow_mut().replace(recipe);
+			let (declared, leases) = dependencies.expect("normalized dependencies are present");
+			let next = declared.identities().clone();
+			entry.dependencies.borrow_mut().extend(leases);
+			let dependent: Rc<dyn EntityDependent> = entry.clone();
+			self.inner
+				.replace_reverse_dependencies(dependent, &HashSet::new(), &next);
+		}
+		entry.refetch_error.set(snapshot.refetch_error);
+		entry.invalidated.set(snapshot.is_stale);
+		self.inner
+			.entries
+			.borrow_mut()
+			.insert(identity, cached_query_entry(&entry));
 		Ok(())
 	}
 

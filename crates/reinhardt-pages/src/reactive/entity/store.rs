@@ -5,9 +5,14 @@ use std::rc::{Rc, Weak};
 use std::time::Duration;
 
 use super::identity::EntityTypeRegistry;
-use super::{Entity, EntityIdentity};
+use super::projection::{EntityHydrationGroup, EntityHydrationRecord};
+use super::{
+	ENTITY_TABLE_VERSION, Entity, EntityDependencies, EntityHydrationEnvelope, EntityHydrationRow,
+	EntityIdentity,
+};
 use crate::reactive::{Signal, batch};
 use reinhardt_core::reactive::ReactiveScope;
+use serde_json::Value;
 
 type EntityGcScheduler = Rc<dyn Fn(EntityIdentity, u64, u64)>;
 
@@ -27,6 +32,9 @@ struct EntityArenaInner {
 	gc_time: Duration,
 	gc_scheduler: RefCell<Option<EntityGcScheduler>>,
 	clock: RefCell<Rc<dyn Fn() -> u64>>,
+	ssr_reachability: Cell<bool>,
+	reachable_identities: RefCell<HashSet<EntityIdentity>>,
+	hydration_groups: RefCell<BTreeMap<String, EntityHydrationGroup>>,
 	_scope: Rc<ReactiveScope>,
 }
 
@@ -45,9 +53,117 @@ impl EntityArena {
 				gc_time,
 				gc_scheduler: RefCell::new(None),
 				clock: RefCell::new(Rc::new(|| 0)),
+				ssr_reachability: Cell::new(false),
+				reachable_identities: RefCell::new(HashSet::new()),
+				hydration_groups: RefCell::new(BTreeMap::new()),
 				_scope: scope,
 			}),
 		}
+	}
+
+	/// Enables request-scoped entity reachability tracking for SSR serialization.
+	pub(crate) fn enable_ssr_reachability(&self) {
+		self.inner.ssr_reachability.set(true);
+	}
+
+	/// Records an identity read by an SSR query or entity handle.
+	pub(crate) fn mark_reachable(&self, identity: EntityIdentity) {
+		if self.inner.ssr_reachability.get() {
+			self.inner
+				.reachable_identities
+				.borrow_mut()
+				.insert(identity);
+		}
+	}
+
+	/// Serializes the present identities reached during this SSR request.
+	pub(crate) fn reachable_hydration_envelope(&self) -> EntityHydrationEnvelope {
+		let mut entities = BTreeMap::<String, Vec<EntityHydrationRow>>::new();
+		let identities = self
+			.inner
+			.reachable_identities
+			.borrow()
+			.iter()
+			.cloned()
+			.collect::<Vec<_>>();
+		for identity in identities {
+			let Some(row) = self
+				.inner
+				.gc_buckets
+				.borrow()
+				.get(identity.entity_type())
+				.and_then(|bucket| bucket.hydration_row(&identity))
+			else {
+				continue;
+			};
+			entities
+				.entry(identity.entity_type().to_string())
+				.or_default()
+				.push(row);
+		}
+		for rows in entities.values_mut() {
+			rows.sort_by(|left, right| {
+				canonical_json_value(&left.id).cmp(&canonical_json_value(&right.id))
+			});
+		}
+		EntityHydrationEnvelope {
+			version: ENTITY_TABLE_VERSION,
+			entities,
+		}
+	}
+
+	/// Stages the browser-side entity table for typed registration.
+	pub(crate) fn install_hydration_envelope(&self, envelope: EntityHydrationEnvelope) {
+		if envelope.version != ENTITY_TABLE_VERSION {
+			panic!(
+				"normalized entity hydration table has unsupported version {}; expected {}",
+				envelope.version, ENTITY_TABLE_VERSION
+			);
+		}
+		let mut groups = self.inner.hydration_groups.borrow_mut();
+		if !groups.is_empty() {
+			return;
+		}
+		for (entity_type, rows) in envelope.entities {
+			let mut seen = HashSet::new();
+			let records = rows
+				.into_iter()
+				.map(|row| {
+					let canonical_id = canonical_json_value(&row.id);
+					if !seen.insert(canonical_id) {
+						panic!(
+							"normalized entity hydration table contains duplicate identity in TYPE `{entity_type}`"
+						);
+					}
+					EntityHydrationRecord::new(row.id, row.value)
+				})
+				.collect();
+			groups.insert(
+				entity_type.clone(),
+				EntityHydrationGroup::new(entity_type, records),
+			);
+		}
+	}
+
+	/// Materializes all groups declared by one normalized recipe in one baseline transaction.
+	pub(crate) fn hydrate_dependencies(&self, dependencies: &EntityDependencies) {
+		let mut selected = Vec::new();
+		for entity_type in dependencies.entity_types() {
+			if let Some(group) = self.inner.hydration_groups.borrow_mut().remove(entity_type) {
+				selected.push(group);
+			}
+		}
+		if selected.is_empty() {
+			return;
+		}
+		let ticket = self.issue_mutation_ticket();
+		let staging = self.stage(|entities| {
+			for group in &selected {
+				dependencies.hydrate(group, entities);
+			}
+		});
+		let overlay = EntityOverlay::new(self, staging, ticket);
+		self.commit_overlay(overlay, ticket, || {}, || {});
 	}
 
 	/// Installs the client-local deadline scheduler used by entity leases.
@@ -223,7 +339,37 @@ impl EntityArena {
 			E::TYPE,
 			Rc::new(ErasedEntityBucketImpl::<E>::new(Rc::clone(&bucket))),
 		);
+		drop(buckets);
+		self.hydrate_registered_type::<E>();
 		bucket
+	}
+
+	fn hydrate_registered_type<E>(&self)
+	where
+		E: Entity,
+	{
+		let Some(group) = self.inner.hydration_groups.borrow_mut().remove(E::TYPE) else {
+			return;
+		};
+		let ids = group
+			.records()
+			.iter()
+			.map(|record| {
+				serde_json::from_value::<E::Id>(record.id.clone()).unwrap_or_else(|error| {
+					panic!(
+						"entity hydration TYPE `{}` failed to deserialize ID type `{}`: {error}",
+						E::TYPE,
+						std::any::type_name::<E::Id>()
+					)
+				})
+			})
+			.collect::<Vec<_>>();
+		let mut dependencies = EntityDependencies::default();
+		dependencies.extend::<E>(ids);
+		let ticket = self.issue_mutation_ticket();
+		let staging = self.stage(|entities| dependencies.hydrate(&group, entities));
+		let overlay = EntityOverlay::new(self, staging, ticket);
+		self.commit_overlay(overlay, ticket, || {}, || {});
 	}
 
 	fn current<E>(&self, id: &E::Id) -> Option<E>
@@ -549,6 +695,10 @@ where
 {
 	/// Returns the current entity value, or `None` for vacant and removed records.
 	pub fn get(&self) -> Option<E> {
+		if let Some(arena) = self.lease.arena.upgrade() {
+			let arena = EntityArena { inner: arena };
+			arena.mark_reachable(EntityIdentity::of::<E>(&self.lease.id));
+		}
 		self.lease.signal.get()
 	}
 }
@@ -860,6 +1010,7 @@ where
 trait ErasedEntityBucket {
 	fn deadline_is_current(&self, identity: &EntityIdentity, generation: u64) -> bool;
 	fn gc_deadline(&self, identity: &EntityIdentity) -> Option<(u64, u64)>;
+	fn hydration_row(&self, identity: &EntityIdentity) -> Option<EntityHydrationRow>;
 	fn collect_if_due(
 		&self,
 		identity: &EntityIdentity,
@@ -896,6 +1047,22 @@ impl<E> ErasedEntityBucket for ErasedEntityBucketImpl<E>
 where
 	E: Entity,
 {
+	fn hydration_row(&self, identity: &EntityIdentity) -> Option<EntityHydrationRow> {
+		let id = Self::parse_id(identity)?;
+		let bucket = self.bucket.borrow();
+		let record = bucket.records.get(&id)?;
+		let entity = record.value()?;
+		let value = serde_json::to_value(&entity).ok()?;
+		let row_id = serde_json::to_value(entity.entity_id()).ok()?;
+		if canonical_json_value(&row_id) != identity.canonical_id() {
+			panic!(
+				"entity TYPE `{}` produced a hydration row whose value ID does not match its identity",
+				E::TYPE
+			);
+		}
+		Some(EntityHydrationRow { id: row_id, value })
+	}
+
 	fn deadline_is_current(&self, identity: &EntityIdentity, generation: u64) -> bool {
 		let Some(id) = Self::parse_id(identity) else {
 			return false;
@@ -947,6 +1114,11 @@ where
 		bucket.records.remove(&id);
 		EntityGcResult::Collected
 	}
+}
+
+fn canonical_json_value(value: &Value) -> String {
+	crate::reactive::query::canonical_json::encode(value)
+		.unwrap_or_else(|error| panic!("entity hydration identity is not valid JSON: {error}"))
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

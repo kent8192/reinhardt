@@ -5,7 +5,9 @@
 
 use crate::component::Component;
 #[cfg(any(wasm, test))]
-use crate::reactive::{QueryClient, QueryKey};
+use crate::reactive::entity::{ENTITY_TABLE_HYDRATION_ID, EntityHydrationEnvelope};
+#[cfg(any(wasm, test))]
+use crate::reactive::{QueryClient, QueryDescriptor, QueryKey};
 use crate::ssr::SsrState;
 #[cfg(any(wasm, test))]
 use serde::{Serialize, de::DeserializeOwned};
@@ -196,6 +198,37 @@ impl HydrationContext {
 		};
 		client.seed_query_snapshot(key, serialized)?;
 		Ok(true)
+	}
+
+	#[cfg(any(wasm, test))]
+	pub(crate) fn seed_query_descriptor<T, E>(
+		&mut self,
+		client: &QueryClient,
+		descriptor: &QueryDescriptor<T, E>,
+	) -> Result<bool, serde_json::Error>
+	where
+		T: Clone + Serialize + DeserializeOwned + 'static,
+		E: Clone + Serialize + DeserializeOwned + 'static,
+	{
+		self.install_entity_table(client)?;
+		let Some(serialized) = self.get_resource_state(&descriptor.key().hydration_id()) else {
+			return Ok(false);
+		};
+		client.seed_query_descriptor(descriptor, serialized)?;
+		Ok(true)
+	}
+
+	#[cfg(any(wasm, test))]
+	pub(crate) fn install_entity_table(
+		&mut self,
+		client: &QueryClient,
+	) -> Result<(), serde_json::Error> {
+		let Some(serialized) = self.state.take_resource_state(ENTITY_TABLE_HYDRATION_ID) else {
+			return Ok(());
+		};
+		let envelope: EntityHydrationEnvelope = serde_json::from_value(serialized)?;
+		client.install_entity_hydration_envelope(envelope);
+		Ok(())
 	}
 
 	/// Marks hydration as complete.

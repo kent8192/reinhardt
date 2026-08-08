@@ -113,6 +113,11 @@ impl SsrState {
 		self.resources.get(id)
 	}
 
+	/// Removes and returns one resource state from the hydration payload.
+	pub(crate) fn take_resource_state(&mut self, id: &str) -> Option<serde_json::Value> {
+		self.resources.remove(id)
+	}
+
 	/// Gets a successful route-loader value by stable loader ID.
 	pub fn get_route_loader_state(&self, id: impl AsRef<str>) -> Option<&serde_json::Value> {
 		self.get_resource_state(&format!("route-loader:{}", id.as_ref()))

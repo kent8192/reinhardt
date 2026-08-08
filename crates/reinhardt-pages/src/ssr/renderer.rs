@@ -874,6 +874,7 @@ impl SsrRenderer {
 		#[cfg(feature = "i18n")]
 		let i18n_context = self.i18n_context.clone();
 		let stream_query_client = query_client.clone();
+		let state_query_client = query_client.clone();
 		let render = scope_context(Rc::clone(&context), async move {
 			let render_start = self.deterministic_render_snapshot();
 			let discovery_scope = Rc::clone(&reactive_scope);
@@ -916,6 +917,7 @@ impl SsrRenderer {
 				resolve_external_resources(&context).await;
 			};
 			self.add_resolved_resources_to_state(&context);
+			self.add_entity_hydration_table(&state_query_client);
 			self.sync_i18n_state();
 
 			let shell = self.wrap_in_html_shell(&content, &head_entries);
@@ -1049,6 +1051,9 @@ impl SsrRenderer {
 											runtime
 												.renderer
 												.add_resolved_resources_to_state(&runtime.context);
+											runtime
+												.renderer
+												.add_entity_hydration_table(&runtime.query_client);
 											runtime.renderer.sync_i18n_state();
 											for future in suspense_boundary_futures(
 												&runtime.context,
@@ -1082,6 +1087,9 @@ impl SsrRenderer {
 								runtime
 									.renderer
 									.add_resolved_resources_to_state(&runtime.context);
+								runtime
+									.renderer
+									.add_entity_hydration_table(&runtime.query_client);
 								runtime.renderer.sync_i18n_state();
 								Some((
 									SsrChunk::Html(runtime.renderer.wrap_in_html_suffix()),
@@ -1138,6 +1146,7 @@ impl SsrRenderer {
 			self.query_client = Some(QueryClient::new_ssr(self.options.query_defaults.clone()));
 		}
 		let query_client = self.request_query_client();
+		let state_query_client = query_client.clone();
 		let reactive_scope = Rc::new(ReactiveScope::new());
 		let _render_owner = register_render_owner(&reactive_scope);
 		let _active_scope_guard = ActiveReactiveScopeGuard::install(
@@ -1203,6 +1212,7 @@ impl SsrRenderer {
 
 				if !has_pending {
 					self.add_resolved_resources_to_state(&context);
+					self.add_entity_hydration_table(&state_query_client);
 					self.sync_i18n_state();
 					return (view, content, String::new(), head_entries);
 				}
@@ -1224,6 +1234,17 @@ impl SsrRenderer {
 	fn add_resolved_resources_to_state(&mut self, context: &Rc<RefCell<SsrResourceContext>>) {
 		for (id, value) in context.borrow().resolved_resources() {
 			self.state.add_resource_state(id, value.clone());
+		}
+	}
+
+	fn add_entity_hydration_table(&mut self, query_client: &QueryClient) {
+		let envelope = query_client.reachable_entity_hydration_envelope();
+		if !envelope.entities.is_empty() {
+			self.state.add_resource_state(
+				crate::reactive::entity::ENTITY_TABLE_HYDRATION_ID,
+				serde_json::to_value(envelope)
+					.expect("normalized entity hydration table must serialize"),
+			);
 		}
 	}
 

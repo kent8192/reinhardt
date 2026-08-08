@@ -1665,6 +1665,225 @@ mod normalized {
 	}
 }
 
+#[cfg(any(wasm, test))]
+mod normalized_hydration {
+	use super::normalized::{Project, project};
+	use super::*;
+	use crate::hydration::HydrationContext;
+	use crate::reactive::entity::{
+		ENTITY_TABLE_HYDRATION_ID, ENTITY_TABLE_VERSION, EntityHydrationEnvelope,
+		EntityHydrationRow,
+	};
+	use crate::ssr::SsrState;
+	use std::collections::BTreeMap;
+
+	#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+	struct Task {
+		id: u64,
+		name: String,
+	}
+
+	impl Entity for Task {
+		type Id = u64;
+
+		const TYPE: &'static str = "reactive.query.tests.normalized-task";
+
+		fn entity_id(&self) -> Self::Id {
+			self.id
+		}
+	}
+
+	fn table(value: Project) -> serde_json::Value {
+		serde_json::to_value(EntityHydrationEnvelope {
+			version: ENTITY_TABLE_VERSION,
+			entities: BTreeMap::from([(
+				Project::TYPE.to_string(),
+				vec![EntityHydrationRow {
+					id: serde_json::to_value(value.entity_id()).unwrap(),
+					value: serde_json::to_value(value).unwrap(),
+				}],
+			)]),
+		})
+		.unwrap()
+	}
+
+	fn snapshot(id: u64) -> serde_json::Value {
+		serde_json::json!({
+			"version": 1,
+			"kind": "success",
+			"schema": "entity-value-v1",
+			"state": { "Success": { "projection": id } },
+			"refetch_error": null,
+			"is_fetching": false,
+			"is_stale": false,
+		})
+	}
+
+	#[test]
+	fn normalized_hydration_reuses_entity_table_without_a_fetch() {
+		ReactiveScope::run(|| {
+			let runtime = TestQueryRuntime::new();
+			let client = QueryClient::with_runtime(QueryDefaults::default(), runtime.handle());
+			let family = QueryFamily::<u64, Project, String>::new("tests.normalized-hydration");
+			let descriptor = family
+				.query(1, || async {
+					panic!("hydrated normalized query must not fetch")
+				})
+				.with_entities(EntityValue::new());
+			let mut state = SsrState::new();
+			state.add_resource_state(ENTITY_TABLE_HYDRATION_ID, table(project(7, "hydrated")));
+			state.add_resource_state(descriptor.key().hydration_id(), snapshot(7));
+			let mut hydration = HydrationContext::from_state(state);
+
+			hydration
+				.seed_query_descriptor(&client, &descriptor)
+				.expect("normalized recipe should hydrate");
+			let query = client.observe(descriptor, QueryOptions::default());
+			assert_eq!(query.data(), Some(project(7, "hydrated")));
+			assert_eq!(runtime.pending_task_count(), 0);
+		});
+	}
+
+	#[test]
+	fn normalized_hydration_rejects_missing_required_entity() {
+		ReactiveScope::run(|| {
+			let runtime = TestQueryRuntime::new();
+			let client = QueryClient::with_runtime(QueryDefaults::default(), runtime.handle());
+			let family =
+				QueryFamily::<u64, Project, String>::new("tests.normalized-hydration-missing");
+			let descriptor = family
+				.query(1, || async { Ok::<_, String>(project(7, "fetch")) })
+				.with_entities(EntityValue::new());
+			let mut state = SsrState::new();
+			state.add_resource_state(descriptor.key().hydration_id(), snapshot(7));
+			let mut hydration = HydrationContext::from_state(state);
+			let error = hydration
+				.seed_query_descriptor(&client, &descriptor)
+				.expect_err("required entity omission must reject the recipe");
+			assert!(error.to_string().contains("missing required entity"));
+		});
+	}
+
+	#[test]
+	fn ssr_entity_handle_reads_mark_only_present_reachable_rows() {
+		ReactiveScope::run(|| {
+			let client = QueryClient::new_ssr(QueryDefaults::default());
+			client.upsert_entity(project(1, "reachable"));
+			client.upsert_entity(project(2, "unread"));
+			let first = client.entity::<Project>(1);
+			let second = client.entity::<Project>(1);
+			assert_eq!(first.get(), Some(project(1, "reachable")));
+			assert_eq!(second.get(), Some(project(1, "reachable")));
+			let envelope = client.reachable_entity_hydration_envelope();
+			assert_eq!(envelope.entities[Project::TYPE].len(), 1);
+			assert_eq!(envelope.entities[Project::TYPE][0].id, serde_json::json!(1));
+		});
+	}
+
+	#[test]
+	fn ssr_entity_table_keeps_raw_ids_separate_by_type() {
+		ReactiveScope::run(|| {
+			let client = QueryClient::new_ssr(QueryDefaults::default());
+			client.upsert_entity(project(1, "project"));
+			client.upsert_entity(Task {
+				id: 1,
+				name: "task".to_string(),
+			});
+			assert_eq!(
+				client.entity::<Project>(1).get(),
+				Some(project(1, "project"))
+			);
+			assert_eq!(
+				client.entity::<Task>(1).get(),
+				Some(Task {
+					id: 1,
+					name: "task".to_string()
+				})
+			);
+			let envelope = client.reachable_entity_hydration_envelope();
+			assert_eq!(envelope.entities[Project::TYPE].len(), 1);
+			assert_eq!(envelope.entities[Task::TYPE].len(), 1);
+		});
+	}
+
+	#[test]
+	fn normalized_entity_type_group_is_consumed_once_and_reused() {
+		ReactiveScope::run(|| {
+			let runtime = TestQueryRuntime::new();
+			let client = QueryClient::with_runtime(QueryDefaults::default(), runtime.handle());
+			let family =
+				QueryFamily::<u64, Project, String>::new("tests.normalized-hydration-once");
+			let first = family
+				.query(1, || async {
+					panic!("first hydrated query must not fetch")
+				})
+				.with_entities(EntityValue::new());
+			let second = family
+				.query(2, || async {
+					panic!("second hydrated query must not fetch")
+				})
+				.with_entities(EntityValue::new());
+			client.install_entity_hydration_envelope(
+				serde_json::from_value(table(project(7, "shared"))).unwrap(),
+			);
+			let mut first_state = SsrState::new();
+			first_state.add_resource_state(first.key().hydration_id(), snapshot(7));
+			HydrationContext::from_state(first_state)
+				.seed_query_descriptor(&client, &first)
+				.expect("first recipe should consume the raw type group");
+			let mut second_state = SsrState::new();
+			second_state.add_resource_state(second.key().hydration_id(), snapshot(7));
+			HydrationContext::from_state(second_state)
+				.seed_query_descriptor(&client, &second)
+				.expect("second recipe should reuse the typed bucket");
+			assert_eq!(
+				client.observe(first, QueryOptions::default()).data(),
+				Some(project(7, "shared"))
+			);
+			assert_eq!(
+				client.observe(second, QueryOptions::default()).data(),
+				Some(project(7, "shared"))
+			);
+		});
+	}
+
+	#[test]
+	fn malformed_entity_table_duplicate_identity_is_rejected() {
+		ReactiveScope::run(|| {
+			let client = QueryClient::with_runtime(
+				QueryDefaults::default(),
+				TestQueryRuntime::new().handle(),
+			);
+			let duplicate = EntityHydrationEnvelope {
+				version: ENTITY_TABLE_VERSION,
+				entities: BTreeMap::from([(
+					Project::TYPE.to_string(),
+					vec![
+						EntityHydrationRow {
+							id: serde_json::json!(1),
+							value: serde_json::json!({"id": 1, "name": "first"}),
+						},
+						EntityHydrationRow {
+							id: serde_json::json!(1),
+							value: serde_json::json!({"id": 1, "name": "duplicate"}),
+						},
+					],
+				)]),
+			};
+			let panic = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+				client.install_entity_hydration_envelope(duplicate);
+			}))
+			.expect_err("duplicate hydration identities must panic");
+			let message = panic
+				.downcast_ref::<String>()
+				.map(String::as_str)
+				.or_else(|| panic.downcast_ref::<&str>().copied())
+				.unwrap_or_default();
+			assert!(message.contains("duplicate identity"));
+		});
+	}
+}
+
 mod entity_removal {
 	use super::normalized::{Project, project};
 	use super::*;

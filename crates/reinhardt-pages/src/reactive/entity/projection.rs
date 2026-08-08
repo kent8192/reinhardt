@@ -142,6 +142,10 @@ impl EntityDependencies {
 		&self.identities
 	}
 
+	pub(crate) fn entity_types(&self) -> impl Iterator<Item = &'static str> + '_ {
+		self.loaders.keys().copied()
+	}
+
 	#[allow(dead_code)] // Used by the staged erased projection materialization bridge below.
 	fn contains(&self, identity: &EntityIdentity) -> bool {
 		self.identities.contains(identity)
@@ -165,14 +169,14 @@ impl EntityHydrationGroup {
 		&self.entity_type
 	}
 
-	fn records(&self) -> &[EntityHydrationRecord] {
+	pub(crate) fn records(&self) -> &[EntityHydrationRecord] {
 		&self.records
 	}
 }
 
 pub(crate) struct EntityHydrationRecord {
-	id: serde_json::Value,
-	value: serde_json::Value,
+	pub(crate) id: serde_json::Value,
+	pub(crate) value: serde_json::Value,
 }
 
 impl EntityHydrationRecord {

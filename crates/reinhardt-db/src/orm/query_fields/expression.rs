@@ -6,6 +6,7 @@ pub(crate) mod node;
 pub(crate) mod operand;
 
 use crate::orm::expressions::{FieldRef, GeneratedModelField};
+use crate::orm::query_fields::comparison::ComparisonOperator;
 use crate::orm::relations::{GeneratedRelatedField, RelatedFieldRef, RelationPathLike};
 use crate::orm::{DatabaseField, DatabaseScalar, Model};
 pub use kind::{AggregateKind, AnnotationExpressionKind, CombineKind, ScalarKind};
@@ -251,25 +252,25 @@ where
 
 	/// Compare this aggregate expression for equality in a HAVING clause.
 	pub fn eq<V: crate::orm::IntoFieldValue<R>>(self, value: V) -> HavingPredicate<M> {
-		self.compare(value, SimpleExpr::eq)
+		self.compare(value, ComparisonOperator::Eq)
 			.expect("typed aggregate comparison values must encode for their database field")
 	}
 
 	/// Compare this aggregate expression for inequality in a HAVING clause.
 	pub fn ne<V: crate::orm::IntoFieldValue<R>>(self, value: V) -> HavingPredicate<M> {
-		self.compare(value, SimpleExpr::ne)
+		self.compare(value, ComparisonOperator::Ne)
 			.expect("typed aggregate comparison values must encode for their database field")
 	}
 
 	/// Compare this aggregate expression using greater-than in a HAVING clause.
 	pub fn gt<V: crate::orm::IntoFieldValue<R>>(self, value: V) -> HavingPredicate<M> {
-		self.compare(value, SimpleExpr::gt)
+		self.compare(value, ComparisonOperator::Gt)
 			.expect("typed aggregate comparison values must encode for their database field")
 	}
 
 	/// Compare this aggregate expression using greater-than-or-equal in a HAVING clause.
 	pub fn ge<V: crate::orm::IntoFieldValue<R>>(self, value: V) -> HavingPredicate<M> {
-		self.compare(value, SimpleExpr::gte)
+		self.compare(value, ComparisonOperator::Gte)
 			.expect("typed aggregate comparison values must encode for their database field")
 	}
 
@@ -280,13 +281,13 @@ where
 
 	/// Compare this aggregate expression using less-than in a HAVING clause.
 	pub fn lt<V: crate::orm::IntoFieldValue<R>>(self, value: V) -> HavingPredicate<M> {
-		self.compare(value, SimpleExpr::lt)
+		self.compare(value, ComparisonOperator::Lt)
 			.expect("typed aggregate comparison values must encode for their database field")
 	}
 
 	/// Compare this aggregate expression using less-than-or-equal in a HAVING clause.
 	pub fn le<V: crate::orm::IntoFieldValue<R>>(self, value: V) -> HavingPredicate<M> {
-		self.compare(value, SimpleExpr::lte)
+		self.compare(value, ComparisonOperator::Lte)
 			.expect("typed aggregate comparison values must encode for their database field")
 	}
 
@@ -298,19 +299,22 @@ where
 	fn compare<V: crate::orm::IntoFieldValue<R>>(
 		self,
 		value: V,
-		operator: fn(SimpleExpr, SimpleExpr) -> SimpleExpr,
+		operator: ComparisonOperator,
 	) -> Result<HavingPredicate<M>, Error> {
 		let value = value
 			.into_field_value()
 			.map(crate::orm::database_value_to_query_value)
 			.map_err(|error| Error::Validation(error.to_string()))?;
 		let joins = self.joins.clone();
-		Ok(HavingPredicate {
-			expr: operator(
-				self.into_simple_expr(),
+		let node = ExpressionNode::Comparison {
+			left: Box::new(self.node),
+			operator,
+			right: Box::new(ExpressionNode::ExistingSimpleExpr(
 				Expr::value(value).into_simple_expr(),
-			),
-			joins,
+			)),
+		};
+		Ok(HavingPredicate {
+			expression: StoredExpression::new(node, joins, None),
 			marker: PhantomData,
 		})
 	}
@@ -558,13 +562,16 @@ pub struct TypedPredicate<M> {
 /// A boolean aggregate comparison to be compiled as a HAVING predicate.
 #[derive(Debug, Clone)]
 pub struct HavingPredicate<M> {
-	// The annotation HAVING planner consumes this expression when it is added.
-	#[allow(dead_code)]
-	pub(crate) expr: SimpleExpr,
-	// The HAVING planner will consume relation paths when aggregate filters are emitted.
-	#[allow(dead_code)]
-	pub(crate) joins: JoinRequirements,
+	/// Structured aggregate comparison consumed by the query planner.
+	pub(crate) expression: StoredExpression,
 	marker: PhantomData<fn() -> M>,
+}
+
+impl<M> HavingPredicate<M> {
+	/// Erase the model marker after the root type has been checked by `QuerySet`.
+	pub(crate) fn into_stored_expression(self) -> StoredExpression {
+		self.expression
+	}
 }
 
 /// A model-rooted expression with an ordering direction.

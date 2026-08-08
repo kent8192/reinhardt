@@ -1,0 +1,15 @@
+error[E0308]: mismatched types
+ --> tests/ui/typed_aggregation/fail/scalar_in_having.rs:8:48
+  |
+8 |     let _ = QuerySet::<ModelRecord>::new().having(ModelRecord::field_i64().into_expression().gt(1_i64));
+  |                                            ------ ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ expected `HavingPredicate<ModelRecord>`, found `TypedPredicate<ModelRecord>`
+  |                                            |
+  |                                            arguments to this method are incorrect
+  |
+  = note: expected struct `HavingPredicate<ModelRecord>`
+             found struct `TypedPredicate<ModelRecord>`
+note: method defined here
+ --> src/orm/query.rs
+  |
+  |     pub fn having(mut self, predicate: HavingPredicate<T>) -> Self {
+  |                           ^^^^^^^^^^^^^^^^^^^^^^^^^^^

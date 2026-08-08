@@ -1,0 +1,14 @@
+error[E0277]: the trait bound `HavingPredicate<ModelRecord>: QueryFilterInput<ModelRecord>` is not satisfied
+ --> tests/ui/typed_aggregation/fail/aggregate_in_where.rs:8:48
+  |
+8 |     let _ = QuerySet::<ModelRecord>::new().filter(func::sum(ModelRecord::field_i64()).gt(1_i64));
+  |                                            ------ ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ the trait `QueryFilterInput<ModelRecord>` is not implemented for `HavingPredicate<ModelRecord>`
+  |                                            |
+  |                                            required by a bound introduced by this call
+  |
+  = help: the trait `QueryFilterInput<ModelRecord>` is not implemented for `HavingPredicate<ModelRecord>`
+note: required by a bound in `QuerySet::<T>::filter`
+ --> src/orm/query.rs
+  |
+  |     pub fn filter(mut self, filter: impl QueryFilterInput<T>) -> Self {
+  |                                          ^^^^^^^^^^^^^^^^^^^ required by this bound in `QuerySet::<T>::filter`

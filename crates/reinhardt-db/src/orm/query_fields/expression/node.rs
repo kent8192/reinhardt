@@ -1,11 +1,11 @@
 //! Structured expression nodes and relation-join requirements.
 
-use super::super::aggregate::AggregateFunction;
+use super::super::comparison::ComparisonOperator;
 use super::kind::AggregateOutputKind;
 use super::operand::{AggregateOperation, ArithmeticOperation};
 use crate::orm::field_codec::{DatabaseStorageKind, DatabaseValue};
 use crate::orm::relations::RelationStep;
-use reinhardt_query::prelude::{Alias, BinOper, Expr, Func, SimpleExpr};
+use reinhardt_query::prelude::{Alias, BinOper, Expr, ExprTrait, Func, SimpleExpr};
 
 /// Root-column metadata retained independently from rendered SQL.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -85,6 +85,12 @@ pub(crate) enum ExpressionNode {
 	},
 	/// A two-operand coalescing expression.
 	Coalesce { left: Box<Self>, right: Box<Self> },
+	/// A comparison between two typed expressions.
+	Comparison {
+		left: Box<Self>,
+		operator: ComparisonOperator,
+		right: Box<Self>,
+	},
 	/// A pre-existing query-builder expression retained for compatibility.
 	ExistingSimpleExpr(SimpleExpr),
 }
@@ -152,6 +158,22 @@ impl ExpressionNode {
 			}
 			Self::Coalesce { left, right } => {
 				Func::coalesce(vec![left.into_simple_expr(), right.into_simple_expr()])
+			}
+			Self::Comparison {
+				left,
+				operator,
+				right,
+			} => {
+				let left = left.into_simple_expr();
+				let right = right.into_simple_expr();
+				match operator {
+					ComparisonOperator::Eq => left.eq(right),
+					ComparisonOperator::Ne => left.ne(right),
+					ComparisonOperator::Gt => left.gt(right),
+					ComparisonOperator::Gte => left.gte(right),
+					ComparisonOperator::Lt => left.lt(right),
+					ComparisonOperator::Lte => left.lte(right),
+				}
 			}
 			Self::ExistingSimpleExpr(expression) => expression,
 		}
@@ -233,6 +255,22 @@ impl ExpressionNode {
 					right: right_right,
 				},
 			) => left_left.structurally_eq(right_left) && left_right.structurally_eq(right_right),
+			(
+				Self::Comparison {
+					left: left_left,
+					operator: left_operator,
+					right: left_right,
+				},
+				Self::Comparison {
+					left: right_left,
+					operator: right_operator,
+					right: right_right,
+				},
+			) => {
+				left_operator == right_operator
+					&& left_left.structurally_eq(right_left)
+					&& left_right.structurally_eq(right_right)
+			}
 			(Self::ExistingSimpleExpr(left), Self::ExistingSimpleExpr(right)) => {
 				format!("{left:?}") == format!("{right:?}")
 			}
@@ -322,6 +360,9 @@ impl ExpressionNode {
 			Self::Arithmetic { left, right, .. } | Self::Coalesce { left, right } => {
 				left.contains_aggregate() || right.contains_aggregate()
 			}
+			Self::Comparison { left, right, .. } => {
+				left.contains_aggregate() || right.contains_aggregate()
+			}
 			Self::Case {
 				result, otherwise, ..
 			} => {
@@ -346,7 +387,29 @@ impl ExpressionNode {
 					.as_deref()
 					.and_then(ExpressionNode::aggregate_output_kind)
 			}),
+			Self::Comparison { left, right, .. } => left
+				.aggregate_output_kind()
+				.or_else(|| right.aggregate_output_kind()),
 			_ => None,
 		}
 	}
+}
+
+/// Aggregate operation metadata retained by stored expressions.
+///
+/// This is intentionally private to the expression planner. Public callers
+/// construct aggregates through [`crate::orm::func`] instead of naming a
+/// function or supplying a field string.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum AggregateFunction {
+	/// COUNT.
+	Count,
+	/// SUM.
+	Sum,
+	/// AVG.
+	Avg,
+	/// MIN.
+	Min,
+	/// MAX.
+	Max,
 }

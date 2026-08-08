@@ -169,6 +169,68 @@ fn multiple_aggregate_annotations_render_together() {
 }
 
 #[test]
+fn typed_having_uses_the_aggregate_expression_compiler() {
+	let query = QuerySet::<TypedAnnotationRecord>::new()
+		.annotate(
+			func::count_all::<TypedAnnotationRecord>()
+				.label("record_count")
+				.expect("valid aggregate label"),
+		)
+		.expect("aggregate annotation should be accepted")
+		.having(func::avg(TypedAnnotationRecord::field_value()).gt(4.0))
+		.to_sql()
+		.expect("query should compile");
+
+	assert_eq!(
+		query,
+		r#"SELECT *, COUNT(*) AS "record_count" FROM "typed_annotation_records" GROUP BY "typed_annotation_records"."id", "typed_annotation_records"."display_name", "typed_annotation_records"."value" HAVING AVG("typed_annotation_records"."value") > 4"#
+	);
+}
+
+#[test]
+fn typed_having_supports_count_sum_min_max_and_multiple_conditions() {
+	let query = QuerySet::<TypedAnnotationRecord>::new()
+		.annotate(
+			func::count_all::<TypedAnnotationRecord>()
+				.label("record_count")
+				.expect("valid aggregate label"),
+		)
+		.expect("aggregate annotation should be accepted")
+		.having(func::count_all::<TypedAnnotationRecord>().gt(1_i64))
+		.having(func::sum(TypedAnnotationRecord::field_value()).ge(2_i64))
+		.having(func::min(TypedAnnotationRecord::field_value()).lt(9_i64))
+		.having(func::max(TypedAnnotationRecord::field_value()).ne(0_i64))
+		.to_sql()
+		.expect("query should compile");
+
+	assert_eq!(
+		query,
+		r#"SELECT *, COUNT(*) AS "record_count" FROM "typed_annotation_records" GROUP BY "typed_annotation_records"."id", "typed_annotation_records"."display_name", "typed_annotation_records"."value" HAVING (COUNT(*) > 1 AND SUM("typed_annotation_records"."value") >= 2 AND MIN("typed_annotation_records"."value") < 9 AND MAX("typed_annotation_records"."value") <> 0)"#
+	);
+}
+
+#[test]
+fn typed_having_relation_aggregate_adds_a_left_join() {
+	use aggregate_support::{ModelRecord, RelatedRecord};
+
+	let query = QuerySet::<ModelRecord>::new()
+		.annotate(
+			func::count_all::<ModelRecord>()
+				.label("record_count")
+				.expect("valid aggregate label"),
+		)
+		.expect("aggregate annotation should be accepted")
+		.having(func::count(ModelRecord::rel_related().field(RelatedRecord::field_i64())).gt(1_i64))
+		.to_sql()
+		.expect("query should compile");
+
+	assert!(query.contains(
+		r#"LEFT JOIN "related_records" AS "related" ON "model_records"."related_id" = "related"."id""#
+	));
+	assert!(query.contains(r#"HAVING COUNT("related"."value_i64") > 1"#));
+}
+
+#[test]
 fn annotation_rejects_invalid_and_colliding_labels() {
 	let invalid = func::count_all::<TypedAnnotationRecord>()
 		.label("record-count")

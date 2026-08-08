@@ -3,9 +3,10 @@
 use super::node::{ExpressionNode, RelatedColumnOperand, StoredExpression};
 use super::operand::{AggregateOperation, ArithmeticOperation};
 use crate::orm::field_codec::database_value_to_query_value;
+use crate::orm::query_fields::comparison::ComparisonOperator;
 use crate::orm::relations::RelationJoinGraph;
 use reinhardt_core::exception::{DatabaseError, DatabaseErrorKind, Result};
-use reinhardt_query::prelude::{Alias, BinOper, Expr, Func, IntoIden, SimpleExpr};
+use reinhardt_query::prelude::{Alias, BinOper, Expr, ExprTrait, Func, IntoIden, SimpleExpr};
 
 /// Lower one erased typed expression after its relation aliases have been planned.
 pub(crate) fn compile_expression(
@@ -103,6 +104,22 @@ fn compile_node(
 			compile_node(left, root_alias, graph)?,
 			compile_node(right, root_alias, graph)?,
 		])),
+		ExpressionNode::Comparison {
+			left,
+			operator,
+			right,
+		} => {
+			let left = compile_node(left, root_alias, graph)?;
+			let right = compile_node(right, root_alias, graph)?;
+			Ok(match operator {
+				ComparisonOperator::Eq => left.eq(right),
+				ComparisonOperator::Ne => left.ne(right),
+				ComparisonOperator::Gt => left.gt(right),
+				ComparisonOperator::Gte => left.gte(right),
+				ComparisonOperator::Lt => left.lt(right),
+				ComparisonOperator::Lte => left.lte(right),
+			})
+		}
 		ExpressionNode::ExistingSimpleExpr(expression) => Ok(
 			crate::orm::query_fields::qualify_model_root(expression, root_alias),
 		),
@@ -332,6 +349,7 @@ fn related_operand_has_composite_key(node: &ExpressionNode) -> bool {
 mod tests {
 	use super::*;
 	use crate::orm::field_codec::DatabaseStorageKind;
+	use crate::orm::query_fields::comparison::ComparisonOperator;
 	use crate::orm::query_fields::expression::node::JoinRequirements;
 	use crate::orm::relations::{RelationJoinKind, RelationMultiplicity, RelationStep};
 	use reinhardt_query::prelude::{
@@ -389,6 +407,42 @@ mod tests {
 		assert_eq!(
 			render(stmt.to_owned(), true),
 			"SELECT COUNT(*) AS \"row_count\" FROM \"authors\""
+		);
+	}
+
+	#[test]
+	fn lowers_structured_aggregate_comparison() {
+		let left = ExpressionNode::Aggregate {
+			operation: AggregateOperation::Average,
+			operand: Box::new(ExpressionNode::RootColumn(
+				crate::orm::query_fields::expression::node::RootColumnOperand {
+					logical_name: "rating".to_owned(),
+					physical_column: "rating".to_owned(),
+					storage_kind: DatabaseStorageKind::I64,
+				},
+			)),
+			distinct: false,
+			output_kind: Some(super::super::kind::AggregateOutputKind::F64),
+		};
+		let node = ExpressionNode::Comparison {
+			left: Box::new(left),
+			operator: ComparisonOperator::Gt,
+			right: Box::new(ExpressionNode::ExistingSimpleExpr(
+				Expr::val(4).into_simple_expr(),
+			)),
+		};
+		let stored = expression(node, JoinRequirements::default());
+		let graph = RelationJoinGraph::new("books");
+		let mut stmt = Query::select();
+		stmt.from(Alias::new("books"));
+		stmt.and_having(
+			compile_expression(&stored, "books", &graph)
+				.expect("structured aggregate comparisons compile"),
+		);
+
+		assert_eq!(
+			render(stmt.to_owned(), true),
+			"SELECT * FROM \"books\" HAVING AVG(\"books\".\"rating\") > 4"
 		);
 	}
 

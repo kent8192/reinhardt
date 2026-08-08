@@ -28,7 +28,6 @@
 //! // User::email().year();       // ERROR: year() only available for DateTime
 //! ```
 
-pub mod aggregate;
 pub mod comparison;
 pub mod compiler;
 pub(crate) mod expression;

@@ -10,7 +10,6 @@ use super::field_codec::{
 };
 use super::{FieldSelector, Model};
 use crate::naming::to_snake_case;
-use crate::orm::query_fields::aggregate::{AggregateExpr, ComparisonExpr};
 use crate::orm::query_fields::comparison::FieldComparison;
 use crate::orm::query_fields::compiler::QueryFieldCompiler;
 use crate::orm::query_fields::expression::{
@@ -18,7 +17,8 @@ use crate::orm::query_fields::expression::{
 	node::{JoinRequirements, StoredExpression},
 };
 use crate::orm::query_fields::{
-	AnnotationExpressionKind, GroupByFields, LabeledExpression, OrderedExpression, TypedExpression,
+	AnnotationExpressionKind, GroupByFields, HavingPredicate, LabeledExpression, OrderedExpression,
+	TypedExpression,
 };
 use crate::orm::relations::{RelationJoinGraph, RelationJoinKind, RelationPathLike, RelationStep};
 use futures::{Stream, StreamExt};
@@ -1219,53 +1219,6 @@ struct JoinClause {
 	on_condition: String,
 }
 
-/// Aggregate function types for HAVING clauses
-#[derive(Clone, Debug)]
-enum AggregateFunc {
-	Avg,
-	Count,
-	Sum,
-	Min,
-	Max,
-}
-
-/// Comparison operators for HAVING clauses
-#[derive(Clone, Debug)]
-pub enum ComparisonOp {
-	/// Eq variant.
-	Eq,
-	/// Ne variant.
-	Ne,
-	/// Gt variant.
-	Gt,
-	/// Gte variant.
-	Gte,
-	/// Lt variant.
-	Lt,
-	/// Lte variant.
-	Lte,
-}
-
-/// Value types for aggregate comparisons in HAVING clauses
-#[derive(Clone, Debug)]
-enum AggregateValue {
-	Int(i64),
-	Float(f64),
-}
-
-/// HAVING clause condition specification
-#[derive(Clone, Debug)]
-enum HavingCondition {
-	/// Compare an aggregate function result with a value
-	/// Example: HAVING AVG(price) > 1500.0
-	AggregateCompare {
-		func: AggregateFunc,
-		field: String,
-		operator: ComparisonOp,
-		value: AggregateValue,
-	},
-}
-
 /// Subquery condition specification for WHERE clause
 #[derive(Clone, Debug)]
 enum SubqueryCondition {
@@ -1779,6 +1732,7 @@ where
 	deferred_fields: Vec<String>,
 	annotations: Vec<super::annotation::Annotation>,
 	typed_annotations: Vec<StoredExpression>,
+	typed_havings: Vec<StoredExpression>,
 	manager: Option<std::sync::Arc<super::manager::Manager<T>>>,
 	limit: Option<usize>,
 	offset: Option<usize>,
@@ -1786,7 +1740,6 @@ where
 	lateral_joins: super::lateral_join::LateralJoins,
 	joins: Vec<JoinClause>,
 	group_by_fields: Vec<String>,
-	having_conditions: Vec<HavingCondition>,
 	subquery_conditions: Vec<SubqueryCondition>,
 	from_alias: Option<String>,
 	empty_result: bool,
@@ -1819,6 +1772,7 @@ where
 			deferred_fields: Vec::new(),
 			annotations: Vec::new(),
 			typed_annotations: Vec::new(),
+			typed_havings: Vec::new(),
 			manager: None,
 			limit: None,
 			offset: None,
@@ -1826,7 +1780,6 @@ where
 			lateral_joins: super::lateral_join::LateralJoins::new(),
 			joins: Vec::new(),
 			group_by_fields: Vec::new(),
-			having_conditions: Vec::new(),
 			subquery_conditions: Vec::new(),
 			from_alias: None,
 			empty_result: false,
@@ -1895,7 +1848,7 @@ where
 			stmt.cond_where(condition);
 		}
 		self.apply_typed_annotation_grouping(&mut stmt)?;
-		self.apply_grouping_and_having(&mut stmt);
+		self.apply_grouping_and_having(&mut stmt)?;
 		self.apply_ordering(&mut stmt);
 		if let Some(limit) = self.limit {
 			stmt.limit(limit as u64);
@@ -1939,6 +1892,10 @@ where
 			.any(StoredExpression::contains_aggregate)
 	}
 
+	fn has_typed_having(&self) -> bool {
+		!self.typed_havings.is_empty()
+	}
+
 	fn apply_typed_annotation_grouping(
 		&self,
 		stmt: &mut SelectStatement,
@@ -1980,47 +1937,26 @@ where
 		Ok(())
 	}
 
-	fn apply_grouping_and_having(&self, stmt: &mut SelectStatement) {
+	fn apply_grouping_and_having(
+		&self,
+		stmt: &mut SelectStatement,
+	) -> reinhardt_core::exception::Result<()> {
 		for group_field in &self.group_by_fields {
 			stmt.group_by_col(self.root_column_reference(group_field));
 		}
 
-		for having_cond in &self.having_conditions {
-			let HavingCondition::AggregateCompare {
-				func,
-				field,
-				operator,
-				value,
-			} = having_cond;
-			let aggregate = self.having_aggregate_expr(func, field);
-			let expression = match operator {
-				ComparisonOp::Eq => match value {
-					AggregateValue::Int(value) => aggregate.eq(*value),
-					AggregateValue::Float(value) => aggregate.eq(*value),
-				},
-				ComparisonOp::Ne => match value {
-					AggregateValue::Int(value) => aggregate.ne(*value),
-					AggregateValue::Float(value) => aggregate.ne(*value),
-				},
-				ComparisonOp::Gt => match value {
-					AggregateValue::Int(value) => aggregate.gt(*value),
-					AggregateValue::Float(value) => aggregate.gt(*value),
-				},
-				ComparisonOp::Gte => match value {
-					AggregateValue::Int(value) => aggregate.gte(*value),
-					AggregateValue::Float(value) => aggregate.gte(*value),
-				},
-				ComparisonOp::Lt => match value {
-					AggregateValue::Int(value) => aggregate.lt(*value),
-					AggregateValue::Float(value) => aggregate.lt(*value),
-				},
-				ComparisonOp::Lte => match value {
-					AggregateValue::Int(value) => aggregate.lte(*value),
-					AggregateValue::Float(value) => aggregate.lte(*value),
-				},
-			};
-			stmt.and_having(expression);
+		self.apply_typed_having(stmt)
+	}
+
+	fn apply_typed_having(
+		&self,
+		stmt: &mut SelectStatement,
+	) -> reinhardt_core::exception::Result<()> {
+		let graph = self.expression_relation_join_graph_for_query();
+		for expression in &self.typed_havings {
+			stmt.and_having(compile_expression(expression, self.root_alias(), &graph)?);
 		}
+		Ok(())
 	}
 
 	fn apply_select_for_update(&self, stmt: &mut SelectStatement) {
@@ -2397,7 +2333,7 @@ where
 			)
 			.into());
 		}
-		if !self.group_by_fields.is_empty() || !self.having_conditions.is_empty() {
+		if !self.group_by_fields.is_empty() || self.has_typed_having() {
 			return Err(DatabaseError::new(
 				DatabaseErrorKind::Unsupported,
 				"date and datetime projections are not supported on grouped querysets",
@@ -2595,6 +2531,7 @@ where
 			deferred_fields: Vec::new(),
 			annotations: Vec::new(),
 			typed_annotations: Vec::new(),
+			typed_havings: Vec::new(),
 			manager: Some(manager),
 			limit: None,
 			offset: None,
@@ -2602,7 +2539,6 @@ where
 			lateral_joins: super::lateral_join::LateralJoins::new(),
 			joins: Vec::new(),
 			group_by_fields: Vec::new(),
-			having_conditions: Vec::new(),
 			subquery_conditions: Vec::new(),
 			from_alias: None,
 			empty_result: false,
@@ -2833,6 +2769,7 @@ where
 			deferred_fields: Vec::new(),
 			annotations: Vec::new(),
 			typed_annotations: Vec::new(),
+			typed_havings: Vec::new(),
 			manager: None,
 			limit: None,
 			offset: None,
@@ -2840,7 +2777,6 @@ where
 			lateral_joins: super::lateral_join::LateralJoins::new(),
 			joins: Vec::new(),
 			group_by_fields: Vec::new(),
-			having_conditions: Vec::new(),
 			subquery_conditions: Vec::new(),
 			from_alias: Some(alias.to_string()),
 			empty_result,
@@ -3812,504 +3748,14 @@ where
 		self
 	}
 
-	/// Add HAVING clause for AVG aggregate
+	/// Add a typed aggregate predicate to the `HAVING` clause.
 	///
-	/// Filters grouped rows based on the average value of a field.
-	///
-	/// # Type Parameters
-	///
-	/// * `F` - Closure that selects the field
-	///
-	/// # Parameters
-	///
-	/// * `field_fn` - Closure that receives a `HavingFieldSelector` and returns it with the field set
-	/// * `operator` - Comparison operator (Eq, Ne, Gt, Gte, Lt, Lte)
-	/// * `value` - Value to compare against
-	///
-	/// # Examples
-	///
-	/// ```
-	/// # use reinhardt_db::orm::{Model, query_fields::{Field, GroupByFields}, FieldSelector};
-	/// # use serde::{Serialize, Deserialize};
-	/// # #[derive(Clone, Serialize, Deserialize)]
-	/// # struct Author { id: Option<i64> }
-	/// #
-	/// # #[derive(Clone)]
-	/// # struct AuthorFields {
-	/// #     pub author_id: Field<Author, i64>,
-	/// #     pub price: Field<Author, f64>,
-	/// # }
-	/// # impl AuthorFields {
-	/// #     pub fn new() -> Self {
-	/// #         Self {
-	/// #             author_id: Field::new(vec!["author_id"]),
-	/// #             price: Field::new(vec!["price"]),
-	/// #         }
-	/// #     }
-	/// # }
-	/// # impl FieldSelector for AuthorFields {
-	/// #     fn with_alias(mut self, alias: &str) -> Self {
-	/// #         self.author_id = self.author_id.with_alias(alias);
-	/// #         self.price = self.price.with_alias(alias);
-	/// #         self
-	/// #     }
-	/// # }
-	/// # impl Model for Author {
-	/// #     type PrimaryKey = i64;
-	/// #     type Fields = AuthorFields;
-	/// #     type Objects = reinhardt_db::orm::Manager<Self>;
-	/// #     fn table_name() -> &'static str { "authors" }
-	/// #     fn new_fields() -> Self::Fields { AuthorFields::new() }
-	/// #     fn primary_key(&self) -> Option<Self::PrimaryKey> { self.id }
-	/// #     fn set_primary_key(&mut self, value: Self::PrimaryKey) { self.id = Some(value); }
-	/// # }
-	/// # fn example() -> Result<(), Box<dyn std::error::Error>> {
-	/// // Find authors with average book price > 1500
-	/// let sql = Author::objects()
-	///     .all()
-	///     .group_by(|fields| GroupByFields::new().add(&fields.author_id))
-	///     .having_avg(|fields| &fields.price, |avg| avg.gt(1500.0))
-	///     .to_sql();
-	/// # Ok(())
-	/// # }
-	/// ```
-	/// # Breaking Change
-	///
-	/// This method signature has been changed to use type-safe field selectors
-	/// and aggregate expressions.
-	pub fn having_avg<FS, FE, NT>(mut self, field_selector: FS, expr_fn: FE) -> Self
-	where
-		FS: FnOnce(&T::Fields) -> &super::query_fields::Field<T, NT>,
-		NT: super::query_fields::NumericType,
-		FE: FnOnce(AggregateExpr) -> ComparisonExpr,
-	{
-		let fields = T::new_fields();
-		let field = field_selector(&fields);
-		let field_path = field.path().join(".");
-
-		let avg_expr = AggregateExpr::avg(&field_path);
-		let comparison = expr_fn(avg_expr);
-
-		// Extract components for HavingCondition
-		let operator = match comparison.op {
-			super::query_fields::comparison::ComparisonOperator::Eq => ComparisonOp::Eq,
-			super::query_fields::comparison::ComparisonOperator::Ne => ComparisonOp::Ne,
-			super::query_fields::comparison::ComparisonOperator::Gt => ComparisonOp::Gt,
-			super::query_fields::comparison::ComparisonOperator::Gte => ComparisonOp::Gte,
-			super::query_fields::comparison::ComparisonOperator::Lt => ComparisonOp::Lt,
-			super::query_fields::comparison::ComparisonOperator::Lte => ComparisonOp::Lte,
-		};
-
-		let value = match comparison.value {
-			super::query_fields::aggregate::ComparisonValue::Int(i) => {
-				AggregateValue::Float(i as f64)
-			}
-			super::query_fields::aggregate::ComparisonValue::Float(f) => AggregateValue::Float(f),
-		};
-
-		self.having_conditions
-			.push(HavingCondition::AggregateCompare {
-				func: AggregateFunc::Avg,
-				field: comparison.aggregate.field().to_string(),
-				operator,
-				value,
-			});
-		self
-	}
-
-	/// Add HAVING clause for COUNT aggregate
-	///
-	/// Filters grouped rows based on the count of rows in each group.
-	///
-	/// # Type Parameters
-	///
-	/// * `F` - Closure that selects the field
-	///
-	/// # Parameters
-	///
-	/// * `field_fn` - Closure that receives a `HavingFieldSelector` and returns it with the field set
-	/// * `operator` - Comparison operator (Eq, Ne, Gt, Gte, Lt, Lte)
-	/// * `value` - Value to compare against
-	///
-	/// # Examples
-	///
-	/// ```
-	/// # use reinhardt_db::orm::{Model, query_fields::{Field, GroupByFields}, FieldSelector};
-	/// # use serde::{Serialize, Deserialize};
-	/// # #[derive(Clone, Serialize, Deserialize)]
-	/// # struct Author { id: Option<i64> }
-	/// #
-	/// # #[derive(Clone)]
-	/// # struct AuthorFields {
-	/// #     pub author_id: Field<Author, i64>,
-	/// # }
-	/// # impl AuthorFields {
-	/// #     pub fn new() -> Self {
-	/// #         Self { author_id: Field::new(vec!["author_id"]) }
-	/// #     }
-	/// # }
-	/// # impl FieldSelector for AuthorFields {
-	/// #     fn with_alias(mut self, alias: &str) -> Self {
-	/// #         self.author_id = self.author_id.with_alias(alias);
-	/// #         self
-	/// #     }
-	/// # }
-	/// # impl Model for Author {
-	/// #     type PrimaryKey = i64;
-	/// #     type Fields = AuthorFields;
-	/// #     type Objects = reinhardt_db::orm::Manager<Self>;
-	/// #     fn table_name() -> &'static str { "authors" }
-	/// #     fn new_fields() -> Self::Fields { AuthorFields::new() }
-	/// #     fn primary_key(&self) -> Option<Self::PrimaryKey> { self.id }
-	/// #     fn set_primary_key(&mut self, value: Self::PrimaryKey) { self.id = Some(value); }
-	/// # }
-	/// # fn example() -> Result<(), Box<dyn std::error::Error>> {
-	/// // Find authors with more than 5 books
-	/// let sql = Author::objects()
-	///     .all()
-	///     .group_by(|fields| GroupByFields::new().add(&fields.author_id))
-	///     .having_count(|count| count.gt(5))
-	///     .to_sql();
-	/// # Ok(())
-	/// # }
-	/// ```
-	/// # Breaking Change
-	///
-	/// This method signature has been changed to use type-safe aggregate expressions.
-	pub fn having_count<F>(mut self, expr_fn: F) -> Self
-	where
-		F: FnOnce(AggregateExpr) -> ComparisonExpr,
-	{
-		let count_expr = AggregateExpr::count("*");
-		let comparison = expr_fn(count_expr);
-
-		// Extract components for HavingCondition
-		let operator = match comparison.op {
-			super::query_fields::comparison::ComparisonOperator::Eq => ComparisonOp::Eq,
-			super::query_fields::comparison::ComparisonOperator::Ne => ComparisonOp::Ne,
-			super::query_fields::comparison::ComparisonOperator::Gt => ComparisonOp::Gt,
-			super::query_fields::comparison::ComparisonOperator::Gte => ComparisonOp::Gte,
-			super::query_fields::comparison::ComparisonOperator::Lt => ComparisonOp::Lt,
-			super::query_fields::comparison::ComparisonOperator::Lte => ComparisonOp::Lte,
-		};
-
-		let value = match comparison.value {
-			super::query_fields::aggregate::ComparisonValue::Int(i) => AggregateValue::Int(i),
-			super::query_fields::aggregate::ComparisonValue::Float(f) => AggregateValue::Float(f),
-		};
-
-		self.having_conditions
-			.push(HavingCondition::AggregateCompare {
-				func: AggregateFunc::Count,
-				field: comparison.aggregate.field().to_string(),
-				operator,
-				value,
-			});
-		self
-	}
-
-	/// Add HAVING clause for SUM aggregate
-	///
-	/// Filters grouped rows based on the sum of values in a field.
-	///
-	/// # Type Parameters
-	///
-	/// * `F` - Closure that selects the field
-	///
-	/// # Parameters
-	///
-	/// * `field_fn` - Closure that receives a `HavingFieldSelector` and returns it with the field set
-	/// * `operator` - Comparison operator (Eq, Ne, Gt, Gte, Lt, Lte)
-	/// * `value` - Value to compare against
-	///
-	/// # Examples
-	///
-	/// ```
-	/// # use reinhardt_db::orm::{Model, query_fields::{Field, GroupByFields}, FieldSelector};
-	/// # use serde::{Serialize, Deserialize};
-	/// # #[derive(Clone, Serialize, Deserialize)]
-	/// # struct Product { id: Option<i64> }
-	/// #
-	/// # #[derive(Clone)]
-	/// # struct ProductFields {
-	/// #     pub category: Field<Product, String>,
-	/// #     pub sales_amount: Field<Product, f64>,
-	/// # }
-	/// # impl ProductFields {
-	/// #     pub fn new() -> Self {
-	/// #         Self {
-	/// #             category: Field::new(vec!["category"]),
-	/// #             sales_amount: Field::new(vec!["sales_amount"]),
-	/// #         }
-	/// #     }
-	/// # }
-	/// # impl FieldSelector for ProductFields {
-	/// #     fn with_alias(mut self, alias: &str) -> Self {
-	/// #         self.category = self.category.with_alias(alias);
-	/// #         self.sales_amount = self.sales_amount.with_alias(alias);
-	/// #         self
-	/// #     }
-	/// # }
-	/// # impl Model for Product {
-	/// #     type PrimaryKey = i64;
-	/// #     type Fields = ProductFields;
-	/// #     type Objects = reinhardt_db::orm::Manager<Self>;
-	/// #     fn table_name() -> &'static str { "products" }
-	/// #     fn new_fields() -> Self::Fields { ProductFields::new() }
-	/// #     fn primary_key(&self) -> Option<Self::PrimaryKey> { self.id }
-	/// #     fn set_primary_key(&mut self, value: Self::PrimaryKey) { self.id = Some(value); }
-	/// # }
-	/// # fn example() -> Result<(), Box<dyn std::error::Error>> {
-	/// // Find categories with total sales > 10000
-	/// let sql = Product::objects()
-	///     .all()
-	///     .group_by(|fields| GroupByFields::new().add(&fields.category))
-	///     .having_sum(|fields| &fields.sales_amount, |sum| sum.gt(10000.0))
-	///     .to_sql();
-	/// # Ok(())
-	/// # }
-	/// ```
-	/// # Breaking Change
-	///
-	/// This method signature has been changed to use type-safe field selectors.
-	pub fn having_sum<FS, FE, NT>(mut self, field_selector: FS, expr_fn: FE) -> Self
-	where
-		FS: FnOnce(&T::Fields) -> &super::query_fields::Field<T, NT>,
-		NT: super::query_fields::NumericType,
-		FE: FnOnce(AggregateExpr) -> ComparisonExpr,
-	{
-		let fields = T::new_fields();
-		let field = field_selector(&fields);
-		let field_path = field.path().join(".");
-
-		let sum_expr = AggregateExpr::sum(&field_path);
-		let comparison = expr_fn(sum_expr);
-
-		let operator = match comparison.op {
-			super::query_fields::comparison::ComparisonOperator::Eq => ComparisonOp::Eq,
-			super::query_fields::comparison::ComparisonOperator::Ne => ComparisonOp::Ne,
-			super::query_fields::comparison::ComparisonOperator::Gt => ComparisonOp::Gt,
-			super::query_fields::comparison::ComparisonOperator::Gte => ComparisonOp::Gte,
-			super::query_fields::comparison::ComparisonOperator::Lt => ComparisonOp::Lt,
-			super::query_fields::comparison::ComparisonOperator::Lte => ComparisonOp::Lte,
-		};
-
-		let value = match comparison.value {
-			super::query_fields::aggregate::ComparisonValue::Int(i) => AggregateValue::Int(i),
-			super::query_fields::aggregate::ComparisonValue::Float(f) => AggregateValue::Float(f),
-		};
-
-		self.having_conditions
-			.push(HavingCondition::AggregateCompare {
-				func: AggregateFunc::Sum,
-				field: comparison.aggregate.field().to_string(),
-				operator,
-				value,
-			});
-		self
-	}
-
-	/// Add HAVING clause for MIN aggregate
-	///
-	/// Filters grouped rows based on the minimum value in a field.
-	///
-	/// # Breaking Change
-	///
-	/// This method signature has been changed to use type-safe field selectors.
-	///
-	/// # Type Parameters
-	///
-	/// * `FS` - Field selector closure that returns a reference to a numeric field
-	/// * `FE` - Expression closure that builds the comparison expression
-	///
-	/// # Parameters
-	///
-	/// * `field_selector` - Closure that selects the field from the model
-	/// * `expr_fn` - Closure that builds the comparison expression using method chaining
-	///
-	/// # Examples
-	///
-	/// ```
-	/// # use reinhardt_db::orm::{Model, query_fields::{Field, GroupByFields}, FieldSelector};
-	/// # use serde::{Serialize, Deserialize};
-	/// # #[derive(Clone, Serialize, Deserialize)]
-	/// # struct Author { id: Option<i64> }
-	/// #
-	/// # #[derive(Clone)]
-	/// # struct AuthorFields {
-	/// #     pub author_id: Field<Author, i64>,
-	/// #     pub price: Field<Author, f64>,
-	/// # }
-	/// # impl AuthorFields {
-	/// #     pub fn new() -> Self {
-	/// #         Self {
-	/// #             author_id: Field::new(vec!["author_id"]),
-	/// #             price: Field::new(vec!["price"]),
-	/// #         }
-	/// #     }
-	/// # }
-	/// # impl FieldSelector for AuthorFields {
-	/// #     fn with_alias(mut self, alias: &str) -> Self {
-	/// #         self.author_id = self.author_id.with_alias(alias);
-	/// #         self.price = self.price.with_alias(alias);
-	/// #         self
-	/// #     }
-	/// # }
-	/// # impl Model for Author {
-	/// #     type PrimaryKey = i64;
-	/// #     type Fields = AuthorFields;
-	/// #     type Objects = reinhardt_db::orm::Manager<Self>;
-	/// #     fn table_name() -> &'static str { "authors" }
-	/// #     fn new_fields() -> Self::Fields { AuthorFields::new() }
-	/// #     fn primary_key(&self) -> Option<Self::PrimaryKey> { self.id }
-	/// #     fn set_primary_key(&mut self, value: Self::PrimaryKey) { self.id = Some(value); }
-	/// # }
-	/// # fn example() -> Result<(), Box<dyn std::error::Error>> {
-	/// // Find authors where minimum book price > 1000
-	/// let sql = Author::objects()
-	///     .all()
-	///     .group_by(|fields| GroupByFields::new().add(&fields.author_id))
-	///     .having_min(|fields| &fields.price, |min| min.gt(1000.0))
-	///     .to_sql();
-	/// # Ok(())
-	/// # }
-	/// ```
-	pub fn having_min<FS, FE, NT>(mut self, field_selector: FS, expr_fn: FE) -> Self
-	where
-		FS: FnOnce(&T::Fields) -> &super::query_fields::Field<T, NT>,
-		NT: super::query_fields::NumericType,
-		FE: FnOnce(AggregateExpr) -> ComparisonExpr,
-	{
-		let fields = T::new_fields();
-		let field = field_selector(&fields);
-		let field_path = field.path().join(".");
-
-		let min_expr = AggregateExpr::min(&field_path);
-		let comparison = expr_fn(min_expr);
-
-		let operator = match comparison.op {
-			super::query_fields::comparison::ComparisonOperator::Eq => ComparisonOp::Eq,
-			super::query_fields::comparison::ComparisonOperator::Ne => ComparisonOp::Ne,
-			super::query_fields::comparison::ComparisonOperator::Gt => ComparisonOp::Gt,
-			super::query_fields::comparison::ComparisonOperator::Gte => ComparisonOp::Gte,
-			super::query_fields::comparison::ComparisonOperator::Lt => ComparisonOp::Lt,
-			super::query_fields::comparison::ComparisonOperator::Lte => ComparisonOp::Lte,
-		};
-
-		let value = match comparison.value {
-			super::query_fields::aggregate::ComparisonValue::Int(i) => AggregateValue::Int(i),
-			super::query_fields::aggregate::ComparisonValue::Float(f) => AggregateValue::Float(f),
-		};
-
-		self.having_conditions
-			.push(HavingCondition::AggregateCompare {
-				func: AggregateFunc::Min,
-				field: comparison.aggregate.field().to_string(),
-				operator,
-				value,
-			});
-		self
-	}
-
-	/// Add HAVING clause for MAX aggregate
-	///
-	/// Filters grouped rows based on the maximum value in a field.
-	///
-	/// # Breaking Change
-	///
-	/// This method signature has been changed to use type-safe field selectors.
-	///
-	/// # Type Parameters
-	///
-	/// * `FS` - Field selector closure that returns a reference to a numeric field
-	/// * `FE` - Expression closure that builds the comparison expression
-	///
-	/// # Parameters
-	///
-	/// * `field_selector` - Closure that selects the field from the model
-	/// * `expr_fn` - Closure that builds the comparison expression using method chaining
-	///
-	/// # Examples
-	///
-	/// ```
-	/// # use reinhardt_db::orm::{Model, query_fields::{Field, GroupByFields}, FieldSelector};
-	/// # use serde::{Serialize, Deserialize};
-	/// # #[derive(Clone, Serialize, Deserialize)]
-	/// # struct Author { id: Option<i64> }
-	/// #
-	/// # #[derive(Clone)]
-	/// # struct AuthorFields {
-	/// #     pub author_id: Field<Author, i64>,
-	/// #     pub price: Field<Author, f64>,
-	/// # }
-	/// # impl AuthorFields {
-	/// #     pub fn new() -> Self {
-	/// #         Self {
-	/// #             author_id: Field::new(vec!["author_id"]),
-	/// #             price: Field::new(vec!["price"]),
-	/// #         }
-	/// #     }
-	/// # }
-	/// # impl FieldSelector for AuthorFields {
-	/// #     fn with_alias(mut self, alias: &str) -> Self {
-	/// #         self.author_id = self.author_id.with_alias(alias);
-	/// #         self.price = self.price.with_alias(alias);
-	/// #         self
-	/// #     }
-	/// # }
-	/// # impl Model for Author {
-	/// #     type PrimaryKey = i64;
-	/// #     type Fields = AuthorFields;
-	/// #     type Objects = reinhardt_db::orm::Manager<Self>;
-	/// #     fn table_name() -> &'static str { "authors" }
-	/// #     fn new_fields() -> Self::Fields { AuthorFields::new() }
-	/// #     fn primary_key(&self) -> Option<Self::PrimaryKey> { self.id }
-	/// #     fn set_primary_key(&mut self, value: Self::PrimaryKey) { self.id = Some(value); }
-	/// # }
-	/// # fn example() -> Result<(), Box<dyn std::error::Error>> {
-	/// // Find authors where maximum book price < 5000
-	/// let sql = Author::objects()
-	///     .all()
-	///     .group_by(|fields| GroupByFields::new().add(&fields.author_id))
-	///     .having_max(|fields| &fields.price, |max| max.lt(5000.0))
-	///     .to_sql();
-	/// # Ok(())
-	/// # }
-	/// ```
-	pub fn having_max<FS, FE, NT>(mut self, field_selector: FS, expr_fn: FE) -> Self
-	where
-		FS: FnOnce(&T::Fields) -> &super::query_fields::Field<T, NT>,
-		NT: super::query_fields::NumericType,
-		FE: FnOnce(AggregateExpr) -> ComparisonExpr,
-	{
-		let fields = T::new_fields();
-		let field = field_selector(&fields);
-		let field_path = field.path().join(".");
-
-		let max_expr = AggregateExpr::max(&field_path);
-		let comparison = expr_fn(max_expr);
-
-		let operator = match comparison.op {
-			super::query_fields::comparison::ComparisonOperator::Eq => ComparisonOp::Eq,
-			super::query_fields::comparison::ComparisonOperator::Ne => ComparisonOp::Ne,
-			super::query_fields::comparison::ComparisonOperator::Gt => ComparisonOp::Gt,
-			super::query_fields::comparison::ComparisonOperator::Gte => ComparisonOp::Gte,
-			super::query_fields::comparison::ComparisonOperator::Lt => ComparisonOp::Lt,
-			super::query_fields::comparison::ComparisonOperator::Lte => ComparisonOp::Lte,
-		};
-
-		let value = match comparison.value {
-			super::query_fields::aggregate::ComparisonValue::Int(i) => AggregateValue::Int(i),
-			super::query_fields::aggregate::ComparisonValue::Float(f) => AggregateValue::Float(f),
-		};
-
-		self.having_conditions
-			.push(HavingCondition::AggregateCompare {
-				func: AggregateFunc::Max,
-				field: comparison.aggregate.field().to_string(),
-				operator,
-				value,
-			});
+	/// Aggregate comparisons are lowered from the same structured expression
+	/// nodes used by typed annotations. Scalar predicates intentionally do not
+	/// implement this method's input type and therefore cannot be reinterpreted
+	/// as `HAVING` conditions.
+	pub fn having(mut self, predicate: HavingPredicate<T>) -> Self {
+		self.typed_havings.push(predicate.into_stored_expression());
 		self
 	}
 
@@ -4750,6 +4196,7 @@ where
 			.iter()
 			.map(|(_, expression)| expression)
 			.chain(self.typed_annotations.iter())
+			.chain(self.typed_havings.iter())
 		{
 			for path in &expression.joins.paths {
 				graph.add_aggregate_steps(path);
@@ -4995,30 +4442,6 @@ where
 			quote_identifier(&format!("{}.{}", self.root_alias(), field))
 		} else {
 			quote_identifier(field)
-		}
-	}
-
-	fn having_aggregate_expr(&self, func: &AggregateFunc, field: &str) -> SimpleExpr {
-		match func {
-			AggregateFunc::Avg => {
-				Func::avg(Expr::col(self.root_column_reference(field)).into_simple_expr())
-			}
-			AggregateFunc::Count => {
-				if field == "*" {
-					Func::count(Expr::asterisk().into_simple_expr())
-				} else {
-					Func::count(Expr::col(self.root_column_reference(field)).into_simple_expr())
-				}
-			}
-			AggregateFunc::Sum => {
-				Func::sum(Expr::col(self.root_column_reference(field)).into_simple_expr())
-			}
-			AggregateFunc::Min => {
-				Func::min(Expr::col(self.root_column_reference(field)).into_simple_expr())
-			}
-			AggregateFunc::Max => {
-				Func::max(Expr::col(self.root_column_reference(field)).into_simple_expr())
-			}
 		}
 	}
 
@@ -6749,7 +6172,7 @@ where
 		}
 		self.apply_annotations_to_select(&mut stmt);
 		self.apply_typed_annotation_grouping(&mut stmt)?;
-		self.apply_grouping_and_having(&mut stmt);
+		self.apply_grouping_and_having(&mut stmt)?;
 
 		self.apply_ordering(&mut stmt);
 
@@ -9973,48 +9396,7 @@ where
 			self.apply_typed_annotation_grouping(&mut stmt)?;
 
 			// Apply HAVING
-			for having_cond in &self.having_conditions {
-				match having_cond {
-					HavingCondition::AggregateCompare {
-						func,
-						field,
-						operator,
-						value,
-					} => {
-						let agg_expr = self.having_aggregate_expr(func, field);
-
-						// Build comparison expression
-						let having_expr = match operator {
-							ComparisonOp::Eq => match value {
-								AggregateValue::Int(v) => agg_expr.eq(*v),
-								AggregateValue::Float(v) => agg_expr.eq(*v),
-							},
-							ComparisonOp::Ne => match value {
-								AggregateValue::Int(v) => agg_expr.ne(*v),
-								AggregateValue::Float(v) => agg_expr.ne(*v),
-							},
-							ComparisonOp::Gt => match value {
-								AggregateValue::Int(v) => agg_expr.gt(*v),
-								AggregateValue::Float(v) => agg_expr.gt(*v),
-							},
-							ComparisonOp::Gte => match value {
-								AggregateValue::Int(v) => agg_expr.gte(*v),
-								AggregateValue::Float(v) => agg_expr.gte(*v),
-							},
-							ComparisonOp::Lt => match value {
-								AggregateValue::Int(v) => agg_expr.lt(*v),
-								AggregateValue::Float(v) => agg_expr.lt(*v),
-							},
-							ComparisonOp::Lte => match value {
-								AggregateValue::Int(v) => agg_expr.lte(*v),
-								AggregateValue::Float(v) => agg_expr.lte(*v),
-							},
-						};
-
-						stmt.and_having(having_expr);
-					}
-				}
-			}
+			self.apply_typed_having(&mut stmt)?;
 
 			self.apply_ordering(&mut stmt);
 
@@ -11011,9 +10393,8 @@ fn plan_value_to_text(value: serde_json::Value) -> String {
 #[cfg(test)]
 mod tests {
 	use super::{
-		AggregateFunc, AggregateValue, ComparisonOp, DateProjectionOrder, FilterCondition,
-		HavingCondition, MAX_FILTER_CONDITION_DEPTH, QueryFilterInput, RowStream,
-		StreamQueryAccounting, TimedRowStream,
+		DateProjectionOrder, FilterCondition, MAX_FILTER_CONDITION_DEPTH, QueryFilterInput,
+		RowStream, StreamQueryAccounting, TimedRowStream,
 	};
 	#[cfg(feature = "pgvector")]
 	use crate::orm::Field;
@@ -14707,15 +14088,9 @@ mod tests {
 			.field(TestCorpusFile::field_normalized_path())
 			.eq("/docs/index.md");
 
-		let mut queryset = QuerySet::<TestUser>::new().filter(related_filter);
-		queryset
-			.having_conditions
-			.push(HavingCondition::AggregateCompare {
-				func: AggregateFunc::Sum,
-				field: "id".to_string(),
-				operator: ComparisonOp::Gt,
-				value: AggregateValue::Int(1),
-			});
+		let queryset = QuerySet::<TestUser>::new()
+			.filter(related_filter)
+			.having(crate::orm::func::sum(TestUser::field_id()).gt(1_i64));
 
 		let sql = queryset.to_sql().expect("query SQL should compile");
 
@@ -14923,16 +14298,10 @@ mod tests {
 
 	#[test]
 	fn temporal_projection_rejects_grouped_querysets() {
-		let mut queryset = QuerySet::<TestUser>::new();
+		let queryset =
+			QuerySet::<TestUser>::new().having(crate::orm::func::count_all::<TestUser>().gt(1_i64));
+		let mut queryset = queryset;
 		queryset.group_by_fields = vec!["id".to_string()];
-		queryset
-			.having_conditions
-			.push(HavingCondition::AggregateCompare {
-				func: AggregateFunc::Count,
-				field: "*".to_string(),
-				operator: ComparisonOp::Gt,
-				value: AggregateValue::Int(1),
-			});
 
 		let error = queryset
 			.temporal_projection_statement(
@@ -14956,15 +14325,8 @@ mod tests {
 
 	#[test]
 	fn temporal_projection_rejects_having_only_querysets() {
-		let mut queryset = QuerySet::<TestUser>::new();
-		queryset
-			.having_conditions
-			.push(HavingCondition::AggregateCompare {
-				func: AggregateFunc::Count,
-				field: "*".to_string(),
-				operator: ComparisonOp::Gt,
-				value: AggregateValue::Int(1),
-			});
+		let queryset =
+			QuerySet::<TestUser>::new().having(crate::orm::func::count_all::<TestUser>().gt(1_i64));
 
 		let error = queryset
 			.temporal_projection_statement(

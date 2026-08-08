@@ -723,6 +723,7 @@ pub(super) struct QueryEntry<T: Clone + 'static, E: Clone + 'static> {
 	recipe: RefCell<Option<Box<dyn Any>>>,
 	dependencies: RefCell<HashMap<EntityIdentity, Box<dyn Any>>>,
 	normalization_missing: Cell<bool>,
+	normalization_recovery_requested: Cell<bool>,
 	pub(super) refetch_error: Signal<Option<E>>,
 	pub(super) is_fetching: Signal<bool>,
 	pub(super) request: RefCell<Option<QueryRequest<T, E>>>,
@@ -881,6 +882,7 @@ impl<T: Clone + 'static, E: Clone + 'static> QueryEntry<T, E> {
 			recipe: RefCell::new(None),
 			dependencies: RefCell::new(HashMap::new()),
 			normalization_missing: Cell::new(false),
+			normalization_recovery_requested: Cell::new(false),
 			refetch_error,
 			is_fetching,
 			request: RefCell::new(None),
@@ -1235,6 +1237,19 @@ impl<T: Clone + 'static, E: Clone + 'static> QueryEntry<T, E> {
 		})
 	}
 
+	fn schedule_normalization_recovery(self: &Rc<Self>) {
+		if !self.has_active_invalidation_interest()
+			|| self.normalization_recovery_requested.replace(true)
+		{
+			return;
+		}
+		if self.has_request() {
+			self.refetch_after_in_flight.set(true);
+		} else {
+			self.start_fetch(true);
+		}
+	}
+
 	pub(super) fn start_fetch(self: &Rc<Self>, force: bool) -> u64 {
 		self.start_fetch_with(force, None)
 	}
@@ -1507,6 +1522,7 @@ impl<T: Clone + 'static, E: Clone + 'static> QueryEntry<T, E> {
 		let owner = self.owner.as_ref().and_then(Weak::upgrade);
 		let dependent: Rc<dyn EntityDependent> = self.clone();
 		let published_candidate = candidate.clone();
+		let normalization_recovery_needed = missing;
 		self.entities.commit_overlay(
 			overlay,
 			ticket,
@@ -1522,6 +1538,9 @@ impl<T: Clone + 'static, E: Clone + 'static> QueryEntry<T, E> {
 				let previous_leases =
 					std::mem::replace(&mut *self.dependencies.borrow_mut(), leases);
 				self.normalization_missing.set(missing);
+				if !missing {
+					self.normalization_recovery_requested.set(false);
+				}
 				self.completed
 					.borrow_mut()
 					.replace((generation, Ok(candidate)));
@@ -1538,6 +1557,9 @@ impl<T: Clone + 'static, E: Clone + 'static> QueryEntry<T, E> {
 					self.invalidated.set(false);
 				}
 				self.is_fetching.set(false);
+				if normalization_recovery_needed {
+					self.schedule_normalization_recovery();
+				}
 				for publish_signal in publish_signals {
 					publish_signal();
 				}
@@ -1607,6 +1629,7 @@ where
 		let published_candidate = candidate.clone();
 		let structure_entry = Rc::clone(&self);
 		let signal_entry = Rc::clone(&self);
+		let normalization_recovery_needed = missing;
 
 		PreparedProjectionCommit {
 			commit_structure: Box::new(move || {
@@ -1622,6 +1645,9 @@ where
 				let previous_leases =
 					std::mem::replace(&mut *structure_entry.dependencies.borrow_mut(), leases);
 				structure_entry.normalization_missing.set(missing);
+				if !missing {
+					structure_entry.normalization_recovery_requested.set(false);
+				}
 				if let (Some(generation), Some(candidate)) =
 					(completed_generation, candidate.as_ref())
 				{
@@ -1635,6 +1661,9 @@ where
 			publish_signal: Box::new(move || {
 				if let Some(candidate) = published_candidate {
 					signal_entry.state.set(ResourceState::Success(candidate));
+				}
+				if normalization_recovery_needed {
+					signal_entry.schedule_normalization_recovery();
 				}
 			}),
 		}

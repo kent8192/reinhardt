@@ -1665,6 +1665,319 @@ mod normalized {
 	}
 }
 
+mod entity_removal {
+	use super::normalized::{Project, project};
+	use super::*;
+	use crate::reactive::entity::{EntityVec, OptionalEntity};
+
+	#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+	struct Task {
+		id: u64,
+		name: String,
+	}
+
+	impl Entity for Task {
+		type Id = u64;
+
+		const TYPE: &'static str = "reactive.query.tests.entity-removal-task";
+
+		fn entity_id(&self) -> Self::Id {
+			self.id
+		}
+	}
+
+	fn task(id: u64, name: &str) -> Task {
+		Task {
+			id,
+			name: name.to_string(),
+		}
+	}
+
+	struct RemovalGate {
+		ready: Rc<Cell<bool>>,
+		reset_ready_on_completion: bool,
+		result: Option<Result<Project, String>>,
+	}
+
+	impl Future for RemovalGate {
+		type Output = Result<Project, String>;
+
+		fn poll(self: Pin<&mut Self>, _context: &mut Context<'_>) -> Poll<Self::Output> {
+			let this = self.get_mut();
+			if this.ready.get() {
+				let result = this
+					.result
+					.take()
+					.expect("removal gate polled after completion");
+				if this.reset_ready_on_completion {
+					this.ready.set(false);
+				}
+				Poll::Ready(result)
+			} else {
+				Poll::Pending
+			}
+		}
+	}
+
+	#[test]
+	#[serial(entity_removal)]
+	fn direct_entity_handle_publishes_none_after_removal() {
+		ReactiveScope::run(|| {
+			let runtime = TestQueryRuntime::new();
+			let client = QueryClient::with_runtime(
+				QueryDefaults::default().stale_time(Duration::from_secs(60)),
+				runtime.handle(),
+			);
+			let entity = client.entity::<Project>(1);
+
+			client.upsert_entity(project(1, "present"));
+			assert_eq!(entity.get(), Some(project(1, "present")));
+
+			client.remove_entity::<Project>(&1);
+			assert_eq!(entity.get(), None);
+		});
+	}
+
+	#[test]
+	#[serial(entity_removal)]
+	fn required_removal_retains_stale_value_and_starts_one_active_refetch() {
+		ReactiveScope::run(|| {
+			let runtime = TestQueryRuntime::new();
+			let client = QueryClient::with_runtime(
+				QueryDefaults::default().stale_time(Duration::from_secs(60)),
+				runtime.handle(),
+			);
+			let calls = Rc::new(Cell::new(0));
+			let query = client.observe(
+				QueryFamily::<(), Project, String>::new("tests.entity-removal-required-active")
+					.query((), {
+						let calls = Rc::clone(&calls);
+						move || {
+							calls.set(calls.get() + 1);
+							async { Ok(project(1, "refetched")) }
+						}
+					})
+					.with_entities(EntityValue::new()),
+				QueryOptions::new(),
+			);
+			runtime.run_until_stalled();
+			assert_eq!(query.data(), Some(project(1, "refetched")));
+			assert_eq!(calls.get(), 1);
+
+			client.remove_entity::<Project>(&1);
+
+			assert_eq!(query.snapshot().status, QueryStatus::Success);
+			assert_eq!(query.data(), Some(project(1, "refetched")));
+			assert!(query.is_stale());
+			assert!(query.is_fetching());
+			assert_eq!(runtime.pending_task_count(), 1);
+
+			runtime.run_until_stalled();
+			assert_eq!(calls.get(), 2);
+			assert_eq!(query.data(), Some(project(1, "refetched")));
+			assert!(!query.is_stale());
+		});
+	}
+
+	#[test]
+	#[serial(entity_removal)]
+	fn inactive_and_disabled_required_queries_wait_for_enabled_mount_or_manual_refetch() {
+		ReactiveScope::run(|| {
+			let runtime = TestQueryRuntime::new();
+			let client = QueryClient::with_runtime(QueryDefaults::default(), runtime.handle());
+			let family = QueryFamily::<(), Project, String>::new("tests.entity-removal-disabled");
+			let calls = Rc::new(Cell::new(0));
+			let descriptor = family
+				.query((), {
+					let calls = Rc::clone(&calls);
+					move || {
+						calls.set(calls.get() + 1);
+						async { Ok(project(1, "fresh")) }
+					}
+				})
+				.with_entities(EntityValue::new());
+			let active = client.observe(descriptor.clone(), QueryOptions::new());
+			runtime.run_until_stalled();
+			drop(active);
+
+			client.remove_entity::<Project>(&1);
+			assert_eq!(runtime.pending_task_count(), 0);
+
+			let disabled = client.observe(descriptor.clone(), QueryOptions::new().enabled(false));
+			assert_eq!(disabled.data(), Some(project(1, "fresh")));
+			assert!(disabled.is_stale());
+			assert_eq!(runtime.pending_task_count(), 0);
+
+			disabled.refetch();
+			assert_eq!(runtime.pending_task_count(), 1);
+			runtime.run_until_stalled();
+			assert_eq!(calls.get(), 2);
+
+			client.remove_entity::<Project>(&1);
+			assert_eq!(runtime.pending_task_count(), 0);
+			let enabled = client.observe(descriptor, QueryOptions::new());
+			assert_eq!(runtime.pending_task_count(), 1);
+			runtime.run_until_stalled();
+			assert_eq!(calls.get(), 3);
+			assert_eq!(enabled.data(), Some(project(1, "fresh")));
+		});
+	}
+
+	#[test]
+	#[serial(entity_removal)]
+	fn optional_and_vector_removals_permanently_update_recipes_and_dependencies() {
+		ReactiveScope::run(|| {
+			let runtime = TestQueryRuntime::new();
+			let client = QueryClient::with_runtime(QueryDefaults::default(), runtime.handle());
+			let optional = client.observe(
+				QueryFamily::<(), Option<Project>, String>::new("tests.entity-removal-optional")
+					.query((), || async { Ok(Some(project(1, "optional"))) })
+					.with_entities(OptionalEntity::new()),
+				QueryOptions::new(),
+			);
+			let vector = client.observe(
+				QueryFamily::<(), Vec<Project>, String>::new("tests.entity-removal-vector")
+					.query((), || async {
+						Ok(vec![
+							project(1, "first"),
+							project(2, "second"),
+							project(1, "first"),
+						])
+					})
+					.with_entities(EntityVec::new()),
+				QueryOptions::new(),
+			);
+			runtime.run_until_stalled();
+
+			client.remove_entity::<Project>(&1);
+
+			assert_eq!(optional.data(), Some(None));
+			assert_eq!(vector.data(), Some(vec![project(2, "second")]));
+			assert_eq!(
+				client.entity_dependency_lease_count_for_test::<Project>(&1),
+				0
+			);
+			assert_eq!(
+				client.entity_dependency_lease_count_for_test::<Project>(&2),
+				1
+			);
+
+			client.upsert_entity(project(1, "later"));
+			assert_eq!(optional.data(), Some(None));
+			assert_eq!(vector.data(), Some(vec![project(2, "second")]));
+			assert_eq!(
+				client.entity_dependency_lease_count_for_test::<Project>(&1),
+				0
+			);
+		});
+	}
+
+	#[test]
+	#[serial(entity_removal)]
+	fn removing_a_project_preserves_related_tasks_until_staged_explicitly() {
+		ReactiveScope::run(|| {
+			let runtime = TestQueryRuntime::new();
+			let client = QueryClient::with_runtime(QueryDefaults::default(), runtime.handle());
+			let project_handle = client.entity::<Project>(1);
+			let task_handle = client.entity::<Task>(1);
+			client.update_entities(|entities| {
+				entities.upsert(project(1, "project"));
+				entities.upsert(task(1, "task"));
+			});
+
+			client.remove_entity::<Project>(&1);
+			assert_eq!(project_handle.get(), None);
+			assert_eq!(task_handle.get(), Some(task(1, "task")));
+
+			client.update_entities(|entities| {
+				entities.remove::<Project>(&1);
+				entities.remove::<Task>(&1);
+			});
+			assert_eq!(task_handle.get(), None);
+		});
+	}
+
+	#[test]
+	#[serial(entity_removal)]
+	fn tombstoned_first_fetch_keeps_raw_stale_fallback_and_queues_one_refetch() {
+		ReactiveScope::run(|| {
+			let runtime = TestQueryRuntime::new();
+			let client = QueryClient::with_runtime(
+				QueryDefaults::default().stale_time(Duration::from_secs(60)),
+				runtime.handle(),
+			);
+			let ready = Rc::new(Cell::new(false));
+			let calls = Rc::new(Cell::new(0));
+			let query = client.observe(
+				QueryFamily::<(), Project, String>::new("tests.entity-removal-first-fetch-race")
+					.query((), {
+						let ready = Rc::clone(&ready);
+						let calls = Rc::clone(&calls);
+						move || {
+							let call = calls.get();
+							calls.set(call + 1);
+							RemovalGate {
+								ready: Rc::clone(&ready),
+								reset_ready_on_completion: call == 0,
+								result: Some(Ok(project(
+									1,
+									if call == 0 { "older" } else { "fresh" },
+								))),
+							}
+						}
+					})
+					.with_entities(EntityValue::new()),
+				QueryOptions::new(),
+			);
+
+			client.remove_entity::<Project>(&1);
+			ready.set(true);
+			runtime.run_until_stalled();
+
+			assert_eq!(query.snapshot().status, QueryStatus::Success);
+			assert_eq!(query.data(), Some(project(1, "older")));
+			assert!(query.is_stale());
+			assert_eq!(client.entity::<Project>(1).get(), None);
+			assert_eq!(runtime.pending_task_count(), 1);
+			assert_eq!(calls.get(), 2);
+
+			ready.set(true);
+			runtime.run_until_stalled();
+			assert_eq!(calls.get(), 2);
+			assert_eq!(query.data(), Some(project(1, "fresh")));
+			assert!(!query.is_stale());
+		});
+	}
+
+	#[test]
+	#[serial(entity_removal)]
+	fn successful_upsert_clears_normalization_missing_without_clearing_invalidation() {
+		ReactiveScope::run(|| {
+			let runtime = TestQueryRuntime::new();
+			let client = QueryClient::with_runtime(QueryDefaults::default(), runtime.handle());
+			let descriptor =
+				QueryFamily::<(), Project, String>::new("tests.entity-removal-missing-recovery")
+					.query((), || async { Ok(project(1, "initial")) })
+					.with_entities(EntityValue::new());
+			let active = client.observe(descriptor.clone(), QueryOptions::new());
+			runtime.run_until_stalled();
+			drop(active);
+			let disabled = client.observe(descriptor.clone(), QueryOptions::new().enabled(false));
+
+			client.remove_entity::<Project>(&1);
+			client.invalidate(descriptor.key());
+			assert!(disabled.is_stale());
+			assert_eq!(runtime.pending_task_count(), 0);
+
+			client.upsert_entity(project(1, "recovered"));
+
+			assert_eq!(disabled.snapshot().status, QueryStatus::Success);
+			assert_eq!(disabled.data(), Some(project(1, "recovered")));
+			assert!(disabled.is_stale());
+		});
+	}
+}
+
 mod entity_propagation {
 	use super::normalized::{
 		Project, ProjectList, ProjectListProjection, materializations, project, project_list,

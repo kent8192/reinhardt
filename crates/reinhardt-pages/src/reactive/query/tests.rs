@@ -1305,6 +1305,28 @@ mod normalized {
 		projects: Vec<Project>,
 	}
 
+	struct ProjectListGate {
+		ready: Rc<Cell<bool>>,
+		result: Option<Result<ProjectList, String>>,
+	}
+
+	impl Future for ProjectListGate {
+		type Output = Result<ProjectList, String>;
+
+		fn poll(self: Pin<&mut Self>, _context: &mut Context<'_>) -> Poll<Self::Output> {
+			let this = self.get_mut();
+			if this.ready.get() {
+				Poll::Ready(
+					this.result
+						.take()
+						.expect("project-list gate polled after completion"),
+				)
+			} else {
+				Poll::Pending
+			}
+		}
+	}
+
 	#[derive(Clone, Deserialize, Serialize)]
 	pub(super) struct ProjectListRecipe {
 		label: String,
@@ -1317,7 +1339,6 @@ mod normalized {
 	thread_local! {
 		static PROJECTION_MATERIALIZATIONS: RefCell<HashMap<String, usize>> =
 			RefCell::new(HashMap::new());
-		static PANIC_ON_MATERIALIZE: Cell<bool> = const { Cell::new(false) };
 	}
 
 	impl EntityProjection<ProjectList> for ProjectListProjection {
@@ -1350,9 +1371,6 @@ mod normalized {
 			recipe: &Self::Recipe,
 			entities: &EntityReader<'_>,
 		) -> ProjectionMaterialization<ProjectList> {
-			if PANIC_ON_MATERIALIZE.with(Cell::get) {
-				panic!("projection precommit panic");
-			}
 			PROJECTION_MATERIALIZATIONS.with(|counts| {
 				*counts.borrow_mut().entry(recipe.label.clone()).or_default() += 1;
 			});
@@ -1396,10 +1414,6 @@ mod normalized {
 	pub(super) fn materializations(label: &str) -> usize {
 		PROJECTION_MATERIALIZATIONS
 			.with(|counts| counts.borrow().get(label).copied().unwrap_or_default())
-	}
-
-	pub(super) fn set_panic_on_materialize(enabled: bool) {
-		PANIC_ON_MATERIALIZE.with(|flag| flag.set(enabled));
 	}
 
 	#[test]
@@ -1487,6 +1501,52 @@ mod normalized {
 				Some(project(1, "mutation"))
 			);
 			assert_eq!(query.data(), Some(project(1, "mutation")));
+		});
+	}
+
+	#[test]
+	fn newer_tombstone_prevents_an_old_collection_query_from_restoring_membership() {
+		ReactiveScope::run(|| {
+			let runtime = TestQueryRuntime::new();
+			let client = QueryClient::with_runtime(QueryDefaults::default(), runtime.handle());
+			let ready = Rc::new(Cell::new(false));
+			let query = client.observe(
+				QueryFamily::<(), ProjectList, String>::new(
+					"tests.normalized-tombstone-membership-race",
+				)
+				.query((), {
+					let ready = Rc::clone(&ready);
+					move || ProjectListGate {
+						ready: Rc::clone(&ready),
+						result: Some(Ok(project_list(
+							"older collection",
+							vec![project(1, "older query")],
+						))),
+					}
+				})
+				.with_entities(ProjectListProjection),
+				QueryOptions::new(),
+			);
+
+			client.remove_entity::<Project>(&1);
+			ready.set(true);
+			runtime.run_until_stalled();
+
+			assert_eq!(query.data(), Some(project_list("older collection", vec![])));
+			assert_eq!(
+				client.entity_dependency_lease_count_for_test::<Project>(&1),
+				0
+			);
+
+			reset_materializations();
+			client.upsert_entity(project(1, "later mutation"));
+
+			assert_eq!(query.data(), Some(project_list("older collection", vec![])));
+			assert_eq!(materializations("older collection"), 0);
+			assert_eq!(
+				client.entity_dependency_lease_count_for_test::<Project>(&1),
+				0
+			);
 		});
 	}
 
@@ -1608,9 +1668,188 @@ mod normalized {
 mod entity_propagation {
 	use super::normalized::{
 		Project, ProjectList, ProjectListProjection, materializations, project, project_list,
-		reset_materializations, set_panic_on_materialize,
+		reset_materializations,
 	};
 	use super::*;
+
+	#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+	struct RollbackCollection {
+		label: String,
+		projects: Vec<Project>,
+	}
+
+	#[derive(Clone, Deserialize, Serialize)]
+	struct RollbackCollectionRecipe {
+		label: String,
+		project_ids: Vec<u64>,
+	}
+
+	#[derive(Clone, Copy)]
+	struct RollbackCollectionProjection;
+
+	#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+	struct RollbackDetail {
+		label: String,
+		project: Project,
+	}
+
+	#[derive(Clone, Deserialize, Serialize)]
+	struct RollbackDetailRecipe {
+		label: String,
+		project_id: u64,
+	}
+
+	#[derive(Clone, Copy)]
+	struct RollbackDetailProjection;
+
+	thread_local! {
+		static ROLLBACK_PREPARATION_TRACE: RefCell<Vec<&'static str>> = const { RefCell::new(Vec::new()) };
+		static PANIC_AFTER_ROLLBACK_PREPARATIONS: Cell<Option<usize>> = const { Cell::new(None) };
+		static ROLLBACK_COLLECTION_MATERIALIZATIONS: Cell<usize> = const { Cell::new(0) };
+		static ROLLBACK_DETAIL_MATERIALIZATIONS: Cell<usize> = const { Cell::new(0) };
+	}
+
+	fn record_rollback_preparation(projection: &'static str) {
+		let preparation_count = ROLLBACK_PREPARATION_TRACE.with(|trace| {
+			let mut trace = trace.borrow_mut();
+			trace.push(projection);
+			trace.len()
+		});
+		if PANIC_AFTER_ROLLBACK_PREPARATIONS
+			.with(Cell::get)
+			.is_some_and(|allowed| preparation_count > allowed)
+		{
+			panic!("heterogeneous projection precommit panic");
+		}
+	}
+
+	fn reset_rollback_projection_state() {
+		ROLLBACK_PREPARATION_TRACE.with(|trace| trace.borrow_mut().clear());
+		PANIC_AFTER_ROLLBACK_PREPARATIONS.with(|limit| limit.set(None));
+		ROLLBACK_COLLECTION_MATERIALIZATIONS.with(|count| count.set(0));
+		ROLLBACK_DETAIL_MATERIALIZATIONS.with(|count| count.set(0));
+	}
+
+	fn set_rollback_preparation_panic_after(limit: Option<usize>) {
+		PANIC_AFTER_ROLLBACK_PREPARATIONS.with(|current| current.set(limit));
+	}
+
+	impl EntityProjection<RollbackCollection> for RollbackCollectionProjection {
+		type Recipe = RollbackCollectionRecipe;
+
+		const SCHEMA: &'static str = "rollback-collection-v1";
+
+		fn normalize(
+			&self,
+			value: RollbackCollection,
+			entities: &mut EntityWriter<'_>,
+		) -> Self::Recipe {
+			let project_ids = value
+				.projects
+				.into_iter()
+				.map(|project| {
+					let id = project.entity_id();
+					entities.upsert(project);
+					id
+				})
+				.collect();
+			RollbackCollectionRecipe {
+				label: value.label,
+				project_ids,
+			}
+		}
+
+		fn dependencies(&self, recipe: &Self::Recipe, dependencies: &mut EntityDependencies) {
+			dependencies.extend::<Project>(recipe.project_ids.iter().copied());
+		}
+
+		fn materialize(
+			&self,
+			recipe: &Self::Recipe,
+			entities: &EntityReader<'_>,
+		) -> ProjectionMaterialization<RollbackCollection> {
+			record_rollback_preparation("collection");
+			ROLLBACK_COLLECTION_MATERIALIZATIONS.with(|count| count.set(count.get() + 1));
+			match entities.required_vec::<Project>(&recipe.project_ids) {
+				ProjectionMaterialization::Ready(projects) => {
+					ProjectionMaterialization::Ready(RollbackCollection {
+						label: recipe.label.clone(),
+						projects,
+					})
+				}
+				ProjectionMaterialization::MissingRequired => {
+					ProjectionMaterialization::MissingRequired
+				}
+			}
+		}
+
+		fn apply_removals(
+			&self,
+			recipe: &mut Self::Recipe,
+			removed: &RemovedEntities<'_>,
+		) -> ProjectionRemoval {
+			let previous_len = recipe.project_ids.len();
+			recipe
+				.project_ids
+				.retain(|id| !removed.contains::<Project>(id));
+			ProjectionRemoval::from_changed(previous_len != recipe.project_ids.len())
+		}
+	}
+
+	impl EntityProjection<RollbackDetail> for RollbackDetailProjection {
+		type Recipe = RollbackDetailRecipe;
+
+		const SCHEMA: &'static str = "rollback-detail-v1";
+
+		fn normalize(
+			&self,
+			value: RollbackDetail,
+			entities: &mut EntityWriter<'_>,
+		) -> Self::Recipe {
+			let project_id = value.project.entity_id();
+			entities.upsert(value.project);
+			RollbackDetailRecipe {
+				label: value.label,
+				project_id,
+			}
+		}
+
+		fn dependencies(&self, recipe: &Self::Recipe, dependencies: &mut EntityDependencies) {
+			dependencies.extend::<Project>([recipe.project_id]);
+		}
+
+		fn materialize(
+			&self,
+			recipe: &Self::Recipe,
+			entities: &EntityReader<'_>,
+		) -> ProjectionMaterialization<RollbackDetail> {
+			record_rollback_preparation("detail");
+			ROLLBACK_DETAIL_MATERIALIZATIONS.with(|count| count.set(count.get() + 1));
+			match entities.required::<Project>(&recipe.project_id) {
+				ProjectionMaterialization::Ready(project) => {
+					ProjectionMaterialization::Ready(RollbackDetail {
+						label: recipe.label.clone(),
+						project,
+					})
+				}
+				ProjectionMaterialization::MissingRequired => {
+					ProjectionMaterialization::MissingRequired
+				}
+			}
+		}
+
+		fn apply_removals(
+			&self,
+			recipe: &mut Self::Recipe,
+			removed: &RemovedEntities<'_>,
+		) -> ProjectionRemoval {
+			if removed.contains::<Project>(&recipe.project_id) {
+				ProjectionRemoval::MissingRequired
+			} else {
+				ProjectionRemoval::Unchanged
+			}
+		}
+	}
 
 	#[test]
 	#[serial(entity_propagation)]
@@ -1817,19 +2056,85 @@ mod entity_propagation {
 	fn callback_and_adapter_panics_roll_back_the_whole_transaction() {
 		ReactiveScope::run(|| {
 			let runtime = TestQueryRuntime::new();
-			let client = QueryClient::with_runtime(QueryDefaults::default(), runtime.handle());
-			let query = client.observe(
-				QueryFamily::<(), ProjectList, String>::new(
-					"tests.entity-propagation-panic-rollback",
-				)
-				.query((), || async {
-					Ok(project_list("panic recipe", vec![project(1, "stable")]))
-				})
-				.with_entities(ProjectListProjection),
-				QueryOptions::new(),
+			let client = QueryClient::with_runtime(
+				QueryDefaults::default().stale_time(Duration::from_secs(3_600)),
+				runtime.handle(),
 			);
+			reset_rollback_projection_state();
+			let collection_descriptor = QueryFamily::<(), RollbackCollection, String>::new(
+				"tests.entity-propagation-panic-rollback-collection",
+			)
+			.query((), || async {
+				Ok(RollbackCollection {
+					label: "collection recipe".to_string(),
+					projects: vec![project(1, "stable")],
+				})
+			})
+			.with_entities(RollbackCollectionProjection);
+			let detail_descriptor = QueryFamily::<(), RollbackDetail, String>::new(
+				"tests.entity-propagation-panic-rollback-detail",
+			)
+			.query((), || async {
+				Ok(RollbackDetail {
+					label: "detail recipe".to_string(),
+					project: project(1, "stable"),
+				})
+			})
+			.with_entities(RollbackDetailProjection);
+			let collection_key = collection_descriptor.key().clone();
+			let detail_key = detail_descriptor.key().clone();
+			let enabled_collection =
+				client.observe(collection_descriptor.clone(), QueryOptions::new());
+			let enabled_detail = client.observe(detail_descriptor.clone(), QueryOptions::new());
 			let entity = client.entity::<Project>(1);
 			runtime.run_until_stalled();
+			drop(enabled_collection);
+			drop(enabled_detail);
+			let disabled_options = QueryOptions::new()
+				.enabled(false)
+				.stale_time(Duration::from_secs(3_600));
+			let collection = client.observe(collection_descriptor, disabled_options);
+			let detail = client.observe(
+				detail_descriptor,
+				QueryOptions::new()
+					.enabled(false)
+					.stale_time(Duration::from_secs(3_600)),
+			);
+			let collection_before = RollbackCollection {
+				label: "collection recipe".to_string(),
+				projects: vec![project(1, "stable")],
+			};
+			let detail_before = RollbackDetail {
+				label: "detail recipe".to_string(),
+				project: project(1, "stable"),
+			};
+			let collection_fetched = collection.entry.last_fetched_ms.get();
+			let detail_fetched = detail.entry.last_fetched_ms.get();
+			let arena = client.entity_arena_for_test();
+			let ticket_before = arena.record_write_ticket::<Project>(&1);
+			assert_eq!(
+				client.entity_dependency_lease_count_for_test::<Project>(&1),
+				2
+			);
+			assert!(!collection.is_stale());
+			assert!(!detail.is_stale());
+			client.invalidate(&collection_key);
+			client.invalidate(&detail_key);
+			assert!(collection.is_stale());
+			assert!(detail.is_stale());
+			let snapshots = Rc::new(RefCell::new(Vec::new()));
+			let snapshots_for_effect = Rc::clone(&snapshots);
+			let entity_for_effect = entity.clone();
+			let collection_for_effect = collection.clone();
+			let detail_for_effect = detail.clone();
+			let _effect = reinhardt_core::reactive::Effect::new(move || {
+				snapshots_for_effect.borrow_mut().push((
+					entity_for_effect.get(),
+					collection_for_effect.data(),
+					detail_for_effect.data(),
+				));
+			});
+			snapshots.borrow_mut().clear();
 
 			let callback_panic = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
 				client.update_entities(|entities| {
@@ -1839,22 +2144,89 @@ mod entity_propagation {
 			}));
 			assert!(callback_panic.is_err());
 			assert_eq!(entity.get(), Some(project(1, "stable")));
-			assert_eq!(
-				query.data(),
-				Some(project_list("panic recipe", vec![project(1, "stable")]))
-			);
+			assert_eq!(collection.data(), Some(collection_before.clone()));
+			assert_eq!(detail.data(), Some(detail_before.clone()));
 
-			set_panic_on_materialize(true);
+			reset_rollback_projection_state();
+			set_rollback_preparation_panic_after(Some(1));
 			let adapter_panic = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
 				client.upsert_entity(project(1, "adapter"));
 			}));
-			set_panic_on_materialize(false);
+			set_rollback_preparation_panic_after(None);
+			reinhardt_core::reactive::runtime::with_runtime(|runtime| {
+				runtime.flush_updates();
+			});
 
 			assert!(adapter_panic.is_err());
-			assert_eq!(entity.get(), Some(project(1, "stable")));
+			let mut preparation_trace =
+				ROLLBACK_PREPARATION_TRACE.with(|trace| trace.borrow().clone());
+			assert_eq!(preparation_trace.len(), 2);
+			preparation_trace.sort_unstable();
+			assert_eq!(preparation_trace, vec!["collection", "detail"]);
 			assert_eq!(
-				query.data(),
-				Some(project_list("panic recipe", vec![project(1, "stable")]))
+				ROLLBACK_COLLECTION_MATERIALIZATIONS.with(Cell::get)
+					+ ROLLBACK_DETAIL_MATERIALIZATIONS.with(Cell::get),
+				1
+			);
+			assert_eq!(entity.get(), Some(project(1, "stable")));
+			assert_eq!(collection.data(), Some(collection_before));
+			assert_eq!(detail.data(), Some(detail_before));
+			assert_eq!(
+				client.entity_dependency_lease_count_for_test::<Project>(&1),
+				2
+			);
+			assert_eq!(arena.record_write_ticket::<Project>(&1), ticket_before);
+			assert!(!arena.record_is_removed::<Project>(&1));
+			assert_eq!(collection.entry.last_fetched_ms.get(), collection_fetched);
+			assert_eq!(detail.entry.last_fetched_ms.get(), detail_fetched);
+			assert!(collection.is_stale());
+			assert!(detail.is_stale());
+			assert!(snapshots.borrow().is_empty());
+
+			reset_rollback_projection_state();
+			client.upsert_entity(project(1, "committed"));
+			reinhardt_core::reactive::runtime::with_runtime(|runtime| {
+				runtime.flush_updates();
+			});
+
+			assert_eq!(entity.get(), Some(project(1, "committed")));
+			assert_eq!(
+				collection.data(),
+				Some(RollbackCollection {
+					label: "collection recipe".to_string(),
+					projects: vec![project(1, "committed")],
+				})
+			);
+			assert_eq!(
+				detail.data(),
+				Some(RollbackDetail {
+					label: "detail recipe".to_string(),
+					project: project(1, "committed"),
+				})
+			);
+			assert_eq!(ROLLBACK_COLLECTION_MATERIALIZATIONS.with(Cell::get), 1);
+			assert_eq!(ROLLBACK_DETAIL_MATERIALIZATIONS.with(Cell::get), 1);
+			assert_eq!(
+				client.entity_dependency_lease_count_for_test::<Project>(&1),
+				2
+			);
+			assert_eq!(collection.entry.last_fetched_ms.get(), collection_fetched);
+			assert_eq!(detail.entry.last_fetched_ms.get(), detail_fetched);
+			assert!(collection.is_stale());
+			assert!(detail.is_stale());
+			assert_eq!(
+				snapshots.borrow().as_slice(),
+				&[(
+					Some(project(1, "committed")),
+					Some(RollbackCollection {
+						label: "collection recipe".to_string(),
+						projects: vec![project(1, "committed")],
+					}),
+					Some(RollbackDetail {
+						label: "detail recipe".to_string(),
+						project: project(1, "committed"),
+					}),
+				)]
 			);
 		});
 	}

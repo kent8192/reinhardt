@@ -264,7 +264,6 @@ impl EntityArena {
 		self.record_ticket::<E>(id)
 	}
 
-	#[cfg(test)]
 	pub(crate) fn record_is_removed<E>(&self, id: &E::Id) -> bool
 	where
 		E: Entity,
@@ -483,6 +482,22 @@ impl<'a> EntityOverlay<'a> {
 			.filter(|operation| operation.is_removed())
 			.map(|operation| operation.identity().clone())
 			.collect()
+	}
+
+	pub(crate) fn is_removed<E>(&self, id: &E::Id) -> bool
+	where
+		E: Entity,
+	{
+		self.arena.register_entity_type::<E>();
+		let identity = EntityIdentity::of::<E>(id);
+		if let Some(operation) = self
+			.operations
+			.iter()
+			.find(|operation| operation.identity() == &identity)
+		{
+			return operation.is_removed();
+		}
+		self.arena.record_is_removed::<E>(id)
 	}
 
 	pub(crate) fn commit(self, ticket: EntityWriteTicket) -> Vec<Box<dyn EntityPublication>> {

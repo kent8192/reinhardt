@@ -13,7 +13,7 @@ use crate::orm::query_fields::{AggregateKind, LabeledExpression};
 use chrono::{DateTime, NaiveDate, NaiveDateTime, NaiveTime, Utc};
 use reinhardt_core::exception::{DatabaseError, DatabaseErrorKind, Error, Result};
 use reinhardt_query::prelude::{Alias, Expr, Query, SelectStatement, SimpleExpr};
-use rust_decimal::prelude::ToPrimitive;
+use rust_decimal::prelude::{FromPrimitive, ToPrimitive};
 use std::collections::BTreeSet;
 use std::str::FromStr;
 
@@ -653,6 +653,10 @@ fn float_aggregate(
 	let value = match raw {
 		QueryValue::Int(value) => Some(value as f64),
 		QueryValue::Float(value) if value.is_finite() => Some(value),
+		QueryValue::String(value) => rust_decimal::Decimal::from_str(&value)
+			.ok()
+			.and_then(|value| value.to_f64())
+			.filter(|value| value.is_finite()),
 		_ => None,
 	};
 	value.map(AggregateValue::Float).ok_or_else(|| {
@@ -673,6 +677,7 @@ fn decimal_aggregate(
 ) -> Result<AggregateValue> {
 	let value = match raw {
 		QueryValue::String(value) => rust_decimal::Decimal::from_str(&value).ok(),
+		QueryValue::Float(value) if value.is_finite() => rust_decimal::Decimal::from_f64(value),
 		_ => None,
 	};
 	value.map(AggregateValue::Decimal).ok_or_else(|| {

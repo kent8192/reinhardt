@@ -17,6 +17,7 @@ mod factory_tests;
 #[cfg(feature = "gcs")]
 mod gcs_tests;
 mod local_tests;
+mod registry_tests;
 mod s3_tests;
 mod settings_tests;
 #[cfg(feature = "azure")]

@@ -12,6 +12,7 @@ use reinhardt_conf::settings::{
 	validation::{ValidationError, ValidationResult},
 };
 use reinhardt_core::macros::settings;
+use serde::de::Error as _;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
@@ -69,7 +70,7 @@ pub struct StorageSettings {
 	pub url_expiry_secs: u64,
 	/// Named storage backends available to file fields.
 	#[setting(node)]
-	#[serde(default)]
+	#[serde(default, deserialize_with = "deserialize_named_storage_settings")]
 	pub named: BTreeMap<String, NamedStorageSettings>,
 	/// Amazon S3 backend settings.
 	#[cfg(feature = "s3")]
@@ -282,6 +283,34 @@ impl NamedStorageSettings {
 			&format!("storage.named.{alias}"),
 		)
 	}
+}
+
+pub(crate) fn is_valid_named_storage_alias(alias: &str) -> bool {
+	alias != "default"
+		&& alias.as_bytes().split_first().is_some_and(|(first, rest)| {
+			first.is_ascii_lowercase()
+				&& rest.iter().all(|character| {
+					character.is_ascii_lowercase()
+						|| character.is_ascii_digit()
+						|| matches!(character, b'_' | b'-')
+				})
+		})
+}
+
+fn deserialize_named_storage_settings<'de, D>(
+	deserializer: D,
+) -> std::result::Result<BTreeMap<String, NamedStorageSettings>, D::Error>
+where
+	D: serde::Deserializer<'de>,
+{
+	let named: BTreeMap<String, NamedStorageSettings> = BTreeMap::deserialize(deserializer)?;
+	for alias in named.keys() {
+		if !is_valid_named_storage_alias(alias) {
+			return Err(D::Error::custom(format!("invalid storage alias `{alias}`")));
+		}
+	}
+
+	Ok(named)
 }
 
 fn storage_config_from_parts(

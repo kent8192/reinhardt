@@ -1,9 +1,8 @@
 //! Named storage backend registry for file fields.
 
-use crate::{
-	FileStorageError, StorageBackend, StorageSettings, create_storage_from_named_settings,
-	create_storage_from_settings,
-};
+use crate::factory::{create_storage_from_named_settings, create_storage_from_settings};
+use crate::settings::is_valid_named_storage_alias;
+use crate::{FileStorageError, StorageBackend, StorageSettings};
 use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Duration;
@@ -187,16 +186,7 @@ fn next_generation() -> std::result::Result<u64, FileStorageError> {
 }
 
 fn validate_named_alias(alias: &str) -> std::result::Result<(), FileStorageError> {
-	let valid = alias.as_bytes().split_first().is_some_and(|(first, rest)| {
-		first.is_ascii_lowercase()
-			&& rest.iter().all(|character| {
-				character.is_ascii_lowercase()
-					|| character.is_ascii_digit()
-					|| matches!(character, b'_' | b'-')
-			})
-	});
-
-	if valid && alias != DEFAULT_STORAGE_ALIAS {
+	if is_valid_named_storage_alias(alias) {
 		Ok(())
 	} else {
 		Err(FileStorageError::UnknownStorageAlias(alias.to_string()))

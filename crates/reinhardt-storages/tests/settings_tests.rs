@@ -142,3 +142,48 @@ backend = "local"
 
 	assert!(result.is_err());
 }
+
+#[rstest]
+fn named_storage_rejects_reserved_default_alias_while_deserializing() {
+	let result = toml::from_str::<SettingsDocument>(
+		r#"
+[storage]
+backend = "local"
+
+[storage.local]
+base_path = "media"
+
+[storage.named.default]
+backend = "local"
+
+[storage.named.default.local]
+base_path = "private-media"
+"#,
+	);
+
+	assert!(result.is_err());
+}
+
+#[rstest]
+#[case("PrivateUploads")]
+#[case("private.uploads")]
+#[case("-private")]
+fn named_storage_rejects_invalid_alias_while_deserializing(#[case] alias: &str) {
+	let result = toml::from_str::<SettingsDocument>(&format!(
+		r#"
+[storage]
+backend = "local"
+
+[storage.local]
+base_path = "media"
+
+[storage.named."{alias}"]
+backend = "local"
+
+[storage.named."{alias}".local]
+base_path = "private-media"
+"#,
+	));
+
+	assert!(result.is_err());
+}

@@ -96,6 +96,17 @@ async fn static_helpers_build_configs_and_assert_single_directory_results() {
 	let traversal = setup.handler.serve(&traversal_path).await;
 	let served_for_not_found_rejection = setup.handler.serve("index.html").await;
 	let served_for_traversal_rejection = setup.handler.serve("index.html").await;
+	let wrong_root = root.join("wrong");
+	let root_assertion_rejection = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+		config_helpers::assert_config_properties(&custom_config, &wrong_root, "/assets/", 1);
+	}));
+	let url_assertion_rejection = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+		config_helpers::assert_config_properties(&custom_config, &root, "/wrong/", 1);
+	}));
+	let directory_count_assertion_rejection =
+		std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+			config_helpers::assert_config_properties(&custom_config, &root, "/assets/", 2);
+		}));
 
 	// Assert
 	assert_eq!(default_config.static_root, PathBuf::from("static"));
@@ -103,6 +114,9 @@ async fn static_helpers_build_configs_and_assert_single_directory_results() {
 	assert_eq!(default_config.staticfiles_dirs, Vec::<PathBuf>::new());
 	assert_eq!(default_config.media_url, None);
 	config_helpers::assert_config_properties(&custom_config, &root, "/assets/", 1);
+	assert!(root_assertion_rejection.is_err());
+	assert!(url_assertion_rejection.is_err());
+	assert!(directory_count_assertion_rejection.is_err());
 	assert_eq!(custom_config.staticfiles_dirs, vec![root]);
 	assert_eq!(fs::read(found).unwrap(), fs::read(created).unwrap());
 	let success_assertion_rejection =

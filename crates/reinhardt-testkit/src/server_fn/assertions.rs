@@ -521,6 +521,9 @@ mod tests {
 
 		// Act
 		assert_server_fn_returns(&successful, &"created");
+		let return_value_mismatch = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+			assert_server_fn_returns(&successful, &"updated");
+		}));
 		assert_server_fn_error(&failing);
 		let successful_error_assertion =
 			std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
@@ -540,6 +543,11 @@ mod tests {
 		failing
 			.should_be_err()
 			.should_have_message("email and username are invalid");
+		let message_mismatch = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+			failing
+				.should_be_err()
+				.should_have_message("email and password are invalid");
+		}));
 		let assertion = ResponseAssertion::new(created).with_status(StatusCode::CREATED);
 		assert_eq!(assertion.status, Some(StatusCode::CREATED));
 		assertion.should_have_status(StatusCode::CREATED);
@@ -565,6 +573,8 @@ mod tests {
 		ResponseAssertion::new(bad_request).should_be_client_error();
 		ResponseAssertion::new(internal).should_be_server_error();
 		assert!(successful_error_assertion.is_err());
+		assert!(return_value_mismatch.is_err());
+		assert!(message_mismatch.is_err());
 		assert!(missing_validation_field.is_err());
 		assert!(missing_validation_member.is_err());
 	}

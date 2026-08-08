@@ -8,6 +8,7 @@ use reinhardt_pages::app::{
 use reinhardt_pages::component::Page;
 use reinhardt_pages::{NavigationType, navigate_named, navigate_or_reload, route_params};
 use reinhardt_urls::routers::ClientRouter;
+use serial_test::serial;
 use wasm_bindgen::JsValue;
 use wasm_bindgen_test::*;
 
@@ -58,6 +59,7 @@ fn test_router() -> ClientRouter {
 }
 
 #[wasm_bindgen_test]
+#[serial(router)]
 fn named_push_and_replace_update_the_active_spa_path() {
 	ReactiveScope::run(|| {
 		let _state = BrowserStateGuard::capture();
@@ -74,6 +76,7 @@ fn named_push_and_replace_update_the_active_spa_path() {
 }
 
 #[wasm_bindgen_test]
+#[serial(router)]
 fn same_origin_absolute_url_uses_spa_navigation() {
 	ReactiveScope::run(|| {
 		let _state = BrowserStateGuard::capture();
@@ -93,6 +96,7 @@ fn same_origin_absolute_url_uses_spa_navigation() {
 }
 
 #[wasm_bindgen_test]
+#[serial(router)]
 async fn missing_router_falls_back_to_the_exact_fragment_path() {
 	let _state = BrowserStateGuard::capture();
 	ReactiveScope::run(|| {

@@ -6,6 +6,7 @@ use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 
+use super::identity::EntityTypeRegistry;
 use super::{Entity, EntityArena, EntityIdentity};
 use crate::reactive::{Effect, ReactiveScope};
 
@@ -122,24 +123,46 @@ fn identity_canonicalizes_structured_ids() {
 
 #[test]
 fn identity_rejects_empty_entity_type() {
-	let panic = std::panic::catch_unwind(|| EntityIdentity::of::<EmptyTypeEntity>(&7))
-		.expect_err("an empty entity TYPE must panic");
+	let mut registry = EntityTypeRegistry::new();
+	let panic = std::panic::catch_unwind(AssertUnwindSafe(|| {
+		registry.register::<EmptyTypeEntity>();
+	}))
+	.expect_err("an empty entity TYPE must panic");
 
 	assert!(panic_message(panic).contains("entity TYPE must not be empty"));
 }
 
 #[test]
 fn identity_rejects_incompatible_type_reuse() {
-	let _ = EntityIdentity::of::<ConflictingProject>(&7);
-	let panic =
-		std::panic::catch_unwind(|| EntityIdentity::of::<ConflictingTask>(&"7".to_string()))
-			.expect_err("an incompatible entity TYPE reuse must panic");
+	let mut registry = EntityTypeRegistry::new();
+	registry.register::<ConflictingProject>();
+	let panic = std::panic::catch_unwind(AssertUnwindSafe(|| {
+		registry.register::<ConflictingTask>();
+	}))
+	.expect_err("an incompatible entity TYPE reuse must panic");
 	let message = panic_message(panic);
 
 	assert!(message.contains(std::any::type_name::<ConflictingProject>()));
 	assert!(message.contains(std::any::type_name::<ConflictingTask>()));
 	assert!(message.contains(std::any::type_name::<u64>()));
 	assert!(message.contains(std::any::type_name::<String>()));
+}
+
+#[test]
+fn entity_type_registration_is_isolated_per_arena() {
+	ReactiveScope::run(|| {
+		let first_arena = EntityArena::new(Duration::from_secs(300));
+		let second_arena = EntityArena::new(Duration::from_secs(300));
+
+		let _first = first_arena.entity::<ConflictingProject>(7);
+		let _second = second_arena.entity::<ConflictingTask>("7".to_string());
+
+		assert_eq!(first_arena.handle_lease_count::<ConflictingProject>(&7), 1);
+		assert_eq!(
+			second_arena.handle_lease_count::<ConflictingTask>(&"7".to_string()),
+			1
+		);
+	});
 }
 
 #[test]

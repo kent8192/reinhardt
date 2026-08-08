@@ -1,7 +1,6 @@
 use std::any::{TypeId, type_name};
 use std::collections::HashMap;
 use std::hash::Hash;
-use std::sync::{Mutex, OnceLock};
 
 use serde::{Serialize, de::DeserializeOwned};
 
@@ -31,7 +30,6 @@ impl EntityIdentity {
 	where
 		E: Entity,
 	{
-		EntityTypeRegistry::register_global::<E>();
 		let canonical_id = canonical_json::encode(id).unwrap_or_else(|error| {
 			panic!(
 				"failed to encode entity TYPE `{}` ID type `{}` as canonical JSON: {error}",
@@ -92,11 +90,6 @@ impl EntityTypeRegistry {
 		}
 	}
 
-	fn global() -> &'static Mutex<Self> {
-		static REGISTRY: OnceLock<Mutex<EntityTypeRegistry>> = OnceLock::new();
-		REGISTRY.get_or_init(|| Mutex::new(Self::new()))
-	}
-
 	pub(crate) fn register<E>(&mut self)
 	where
 		E: Entity,
@@ -130,15 +123,5 @@ impl EntityTypeRegistry {
 				registration.id_name,
 			);
 		}
-	}
-
-	fn register_global<E>()
-	where
-		E: Entity,
-	{
-		Self::global()
-			.lock()
-			.unwrap_or_else(|poisoned| poisoned.into_inner())
-			.register::<E>();
 	}
 }

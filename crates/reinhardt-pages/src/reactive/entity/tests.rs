@@ -1,9 +1,13 @@
 use std::any::Any;
+use std::cell::RefCell;
+use std::panic::{AssertUnwindSafe, catch_unwind};
+use std::rc::Rc;
+use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 
-use super::Entity;
-use super::EntityIdentity;
+use super::{Entity, EntityArena, EntityIdentity};
+use crate::reactive::{Effect, ReactiveScope};
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 struct Project {
@@ -136,6 +140,190 @@ fn identity_rejects_incompatible_type_reuse() {
 	assert!(message.contains(std::any::type_name::<ConflictingTask>()));
 	assert!(message.contains(std::any::type_name::<u64>()));
 	assert!(message.contains(std::any::type_name::<String>()));
+}
+
+#[test]
+fn store_vacant_handle_returns_none_without_write_precedence() {
+	ReactiveScope::run(|| {
+		let arena = EntityArena::new(Duration::from_secs(300));
+
+		let handle = arena.entity::<Project>(1);
+
+		assert_eq!(handle.get(), None);
+		assert_eq!(arena.handle_lease_count::<Project>(&1), 1);
+		assert_eq!(arena.record_write_ticket::<Project>(&1), None);
+	});
+}
+
+#[test]
+fn store_upsert_replaces_the_complete_entity_value() {
+	ReactiveScope::run(|| {
+		let arena = EntityArena::new(Duration::from_secs(300));
+		let handle = arena.entity::<Project>(1);
+
+		arena.update_entities(|writer| {
+			writer.upsert(Project {
+				id: 1,
+				name: "first".to_string(),
+			});
+		});
+		arena.update_entities(|writer| {
+			writer.upsert(Project {
+				id: 1,
+				name: "replacement".to_string(),
+			});
+		});
+
+		assert_eq!(
+			handle.get(),
+			Some(Project {
+				id: 1,
+				name: "replacement".to_string(),
+			}),
+		);
+	});
+}
+
+#[test]
+fn store_remove_publishes_a_retained_tombstone() {
+	ReactiveScope::run(|| {
+		let arena = EntityArena::new(Duration::from_secs(300));
+		let handle = arena.entity::<Project>(1);
+
+		arena.update_entities(|writer| {
+			writer.upsert(Project {
+				id: 1,
+				name: "present".to_string(),
+			});
+		});
+		let present_ticket = arena
+			.record_write_ticket::<Project>(&1)
+			.expect("an upsert must record a write ticket");
+		arena.update_entities(|writer| writer.remove::<Project>(&1));
+
+		assert_eq!(handle.get(), None);
+		assert!(arena.record_is_removed::<Project>(&1));
+		assert!(
+			arena
+				.record_write_ticket::<Project>(&1)
+				.expect("a tombstone must retain its write ticket")
+				> present_ticket
+		);
+	});
+}
+
+#[test]
+fn store_transaction_publishes_only_the_final_value() {
+	ReactiveScope::run(|| {
+		let arena = EntityArena::new(Duration::from_secs(300));
+		let handle = arena.entity::<Project>(1);
+		let observed = Rc::new(RefCell::new(Vec::new()));
+		let observed_for_effect = Rc::clone(&observed);
+		let handle_for_effect = handle.clone();
+		let _effect = Effect::new(move || {
+			observed_for_effect
+				.borrow_mut()
+				.push(handle_for_effect.get());
+		});
+
+		arena.update_entities(|writer| {
+			writer.upsert(Project {
+				id: 1,
+				name: "first".to_string(),
+			});
+			writer.remove::<Project>(&1);
+			writer.upsert(Project {
+				id: 1,
+				name: "final".to_string(),
+			});
+		});
+
+		assert_eq!(
+			handle.get(),
+			Some(Project {
+				id: 1,
+				name: "final".to_string(),
+			}),
+		);
+		assert_eq!(
+			observed.borrow().as_slice(),
+			&[
+				None,
+				Some(Project {
+					id: 1,
+					name: "final".to_string(),
+				}),
+			],
+		);
+	});
+}
+
+#[test]
+fn store_callback_panic_rolls_back_staged_writes() {
+	ReactiveScope::run(|| {
+		let arena = EntityArena::new(Duration::from_secs(300));
+		let handle = arena.entity::<Project>(1);
+		arena.update_entities(|writer| {
+			writer.upsert(Project {
+				id: 1,
+				name: "stable".to_string(),
+			});
+		});
+
+		let panic = catch_unwind(AssertUnwindSafe(|| {
+			arena.update_entities(|writer| {
+				writer.upsert(Project {
+					id: 1,
+					name: "discarded".to_string(),
+				});
+				panic!("callback failure");
+			});
+		}));
+
+		assert!(panic.is_err());
+		assert_eq!(
+			handle.get(),
+			Some(Project {
+				id: 1,
+				name: "stable".to_string(),
+			}),
+		);
+	});
+}
+
+#[test]
+fn store_handle_clones_share_one_lease() {
+	ReactiveScope::run(|| {
+		let arena = EntityArena::new(Duration::from_secs(300));
+		let handle = arena.entity::<Project>(1);
+		let clone = handle.clone();
+
+		assert_eq!(arena.handle_lease_count::<Project>(&1), 1);
+		drop(clone);
+		assert_eq!(arena.handle_lease_count::<Project>(&1), 1);
+		drop(handle);
+		assert_eq!(arena.handle_lease_count::<Project>(&1), 0);
+	});
+}
+
+#[test]
+fn ticket_query_leases_are_counted_and_ordered_with_mutations() {
+	ReactiveScope::run(|| {
+		let arena = EntityArena::new(Duration::from_secs(300));
+		let first_query = arena.acquire_query_ticket();
+		let second_query = arena.acquire_query_ticket();
+		let mutation = arena.issue_mutation_ticket();
+
+		assert!(first_query.ticket() < second_query.ticket());
+		assert!(second_query.ticket() < mutation);
+		assert_eq!(arena.active_query_ticket_count(first_query.ticket()), 1);
+		assert_eq!(arena.active_query_ticket_count(second_query.ticket()), 1);
+		drop(first_query);
+		assert_eq!(arena.active_query_ticket_count(mutation), 0);
+		let second_ticket = second_query.ticket();
+		drop(second_query);
+		assert_eq!(arena.active_query_ticket_count(second_ticket), 0);
+	});
 }
 
 fn panic_message(panic: Box<dyn Any + Send>) -> String {

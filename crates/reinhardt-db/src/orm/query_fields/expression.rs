@@ -214,16 +214,18 @@ where
 	///
 	/// # Panics
 
-	/// Panics when called for `COUNT(*)`. Use [`Self::try_distinct`] when the
-	/// aggregate source is not statically known to have an operand.
+	/// Panics when called for `COUNT(*)` or an aggregate-kind composition. Use
+	/// [`Self::try_distinct`] when the expression is not known to be an operand
+	/// aggregate node.
 	pub fn distinct(self) -> Self {
 		self.try_distinct()
-			.expect("COUNT(*) does not support DISTINCT because it has no operand")
+			.unwrap_or_else(|error| panic!("{error}"))
 	}
 
 	/// Try to apply SQL `DISTINCT` to this aggregate's operand.
 	///
-	/// `COUNT(*)` returns a validation error because it has no operand.
+	/// `COUNT(*)` and aggregate-kind compositions return a validation error
+	/// because they are not operand aggregate nodes.
 	pub fn try_distinct(mut self) -> Result<Self, Error> {
 		match &mut self.node {
 			ExpressionNode::Aggregate { distinct, .. } => {
@@ -233,7 +235,9 @@ where
 			ExpressionNode::CountAll => Err(Error::Validation(
 				"COUNT(*) does not support DISTINCT because it has no operand".to_owned(),
 			)),
-			_ => unreachable!("aggregate expressions must retain an aggregate node"),
+			_ => Err(Error::Validation(
+				"DISTINCT is only available on operand aggregate nodes".to_owned(),
+			)),
 		}
 	}
 
@@ -711,6 +715,17 @@ mod tests {
 		assert!(matches!(
 			crate::orm::func::count_all::<TestModel>().try_distinct(),
 			Err(Error::Validation(message)) if message == "COUNT(*) does not support DISTINCT because it has no operand"
+		));
+	}
+
+	#[test]
+	fn composed_aggregate_rejects_distinct_without_panicking() {
+		let expression = crate::orm::func::sum(generated_i64_field("total"))
+			+ literal::<TestModel, _>(1_i64).expect("integer literals are valid database values");
+
+		assert!(matches!(
+			expression.try_distinct(),
+			Err(Error::Validation(message)) if message == "DISTINCT is only available on operand aggregate nodes"
 		));
 	}
 

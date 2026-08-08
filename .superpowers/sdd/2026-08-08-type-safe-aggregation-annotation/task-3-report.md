@@ -66,4 +66,6 @@ command without `TRYBUILD=overwrite`.
   so Rust cannot expose `distinct()` for operand nodes while omitting it from
   `count_all()` without changing those public return types. `CountAll` retains
   no distinct state; `try_distinct()` reports the validation error and
-  `distinct()` panics with the same reason.
+  `distinct()` panics with the same reason. Aggregate-kind compositions also
+  return a validation error from `try_distinct()` rather than reaching an
+  internal panic.

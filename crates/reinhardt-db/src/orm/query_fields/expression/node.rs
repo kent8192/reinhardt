@@ -255,26 +255,17 @@ impl StoredExpression {
 		joins: JoinRequirements,
 		label: Option<String>,
 	) -> Self {
-		let (output, aggregate_function) = match &node {
-			ExpressionNode::Aggregate {
-				operation,
-				output_kind,
-				..
-			} => (
-				*output_kind,
-				Some(match operation {
-					AggregateOperation::Count => AggregateFunction::Count,
-					AggregateOperation::Sum => AggregateFunction::Sum,
-					AggregateOperation::Average => AggregateFunction::Avg,
-					AggregateOperation::Minimum => AggregateFunction::Min,
-					AggregateOperation::Maximum => AggregateFunction::Max,
-				}),
-			),
-			ExpressionNode::CountAll => (
-				Some(AggregateOutputKind::I64),
-				Some(AggregateFunction::Count),
-			),
-			_ => (None, None),
+		let output = node.aggregate_output_kind();
+		let aggregate_function = match &node {
+			ExpressionNode::Aggregate { operation, .. } => Some(match operation {
+				AggregateOperation::Count => AggregateFunction::Count,
+				AggregateOperation::Sum => AggregateFunction::Sum,
+				AggregateOperation::Average => AggregateFunction::Avg,
+				AggregateOperation::Minimum => AggregateFunction::Min,
+				AggregateOperation::Maximum => AggregateFunction::Max,
+			}),
+			ExpressionNode::CountAll => Some(AggregateFunction::Count),
+			_ => None,
 		};
 		Self {
 			node,
@@ -307,5 +298,25 @@ impl StoredExpression {
 			}
 		}
 		unique
+	}
+}
+
+impl ExpressionNode {
+	fn aggregate_output_kind(&self) -> Option<AggregateOutputKind> {
+		match self {
+			Self::Aggregate { output_kind, .. } => *output_kind,
+			Self::CountAll => Some(AggregateOutputKind::I64),
+			Self::Arithmetic { left, right, .. } | Self::Coalesce { left, right } => left
+				.aggregate_output_kind()
+				.or_else(|| right.aggregate_output_kind()),
+			Self::Case {
+				result, otherwise, ..
+			} => result.aggregate_output_kind().or_else(|| {
+				otherwise
+					.as_deref()
+					.and_then(ExpressionNode::aggregate_output_kind)
+			}),
+			_ => None,
+		}
 	}
 }

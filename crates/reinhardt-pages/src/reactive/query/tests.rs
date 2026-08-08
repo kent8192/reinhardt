@@ -1719,6 +1719,14 @@ mod normalized_hydration {
 		})
 	}
 
+	fn panic_message(panic: Box<dyn std::any::Any + Send>) -> String {
+		panic
+			.downcast_ref::<String>()
+			.cloned()
+			.or_else(|| panic.downcast_ref::<&str>().map(ToString::to_string))
+			.expect("hydration validation should panic with a string")
+	}
+
 	#[test]
 	fn normalized_hydration_reuses_entity_table_without_a_fetch() {
 		ReactiveScope::run(|| {
@@ -1761,6 +1769,167 @@ mod normalized_hydration {
 				.seed_query_descriptor(&client, &descriptor)
 				.expect_err("required entity omission must reject the recipe");
 			assert!(error.to_string().contains("missing required entity"));
+		});
+	}
+
+	#[test]
+	fn normalized_initial_error_round_trips_without_a_fetch() {
+		ReactiveScope::run(|| {
+			let runtime = TestQueryRuntime::new();
+			let client = QueryClient::with_runtime(QueryDefaults::default(), runtime.handle());
+			let family =
+				QueryFamily::<u64, Project, String>::new("tests.normalized-hydration-error");
+			let descriptor = family
+				.query(1, || async {
+					panic!("hydrated normalized errors must not fetch while disabled")
+				})
+				.with_entities(EntityValue::new());
+			let mut state = SsrState::new();
+			state.add_resource_state(
+				descriptor.key().hydration_id(),
+				serde_json::json!({
+					"version": 1,
+					"kind": "error",
+					"schema": "entity-value-v1",
+					"state": { "Error": "offline" },
+					"refetch_error": null,
+					"is_fetching": false,
+					"is_stale": false,
+				}),
+			);
+			let mut hydration = HydrationContext::from_state(state);
+			hydration
+				.seed_query_descriptor(&client, &descriptor)
+				.expect("normalized initial errors should hydrate");
+
+			let query = client.observe(descriptor, QueryOptions::new().enabled(false));
+			assert_eq!(
+				query.snapshot(),
+				QuerySnapshot {
+					status: QueryStatus::Error,
+					data: None,
+					error: Some("offline".to_string()),
+					refetch_error: None,
+					is_fetching: false,
+					is_stale: false,
+				}
+			);
+			assert_eq!(runtime.pending_task_count(), 0);
+		});
+	}
+
+	#[test]
+	fn normalized_snapshot_rejects_unsupported_version_and_schema() {
+		ReactiveScope::run(|| {
+			let runtime = TestQueryRuntime::new();
+			let client = QueryClient::with_runtime(QueryDefaults::default(), runtime.handle());
+			let family =
+				QueryFamily::<u64, Project, String>::new("tests.normalized-hydration-contract");
+			let descriptor = family
+				.query(1, || async { Ok::<_, String>(project(7, "unused")) })
+				.with_entities(EntityValue::new());
+
+			let mut wrong_version = snapshot(7);
+			wrong_version["version"] = serde_json::json!(2);
+			let mut version_state = SsrState::new();
+			version_state.add_resource_state(descriptor.key().hydration_id(), wrong_version);
+			let version_error = HydrationContext::from_state(version_state)
+				.seed_query_descriptor(&client, &descriptor)
+				.expect_err("unsupported normalized snapshot versions must be rejected");
+			assert_eq!(
+				version_error.to_string(),
+				"normalized query hydration snapshot has an unsupported version"
+			);
+
+			let mut wrong_schema = snapshot(7);
+			wrong_schema["schema"] = serde_json::json!("wrong-schema-v1");
+			let mut schema_state = SsrState::new();
+			schema_state.add_resource_state(descriptor.key().hydration_id(), wrong_schema);
+			let schema_error = HydrationContext::from_state(schema_state)
+				.seed_query_descriptor(&client, &descriptor)
+				.expect_err("normalized snapshot schemas must match the descriptor");
+			assert_eq!(
+				schema_error.to_string(),
+				"normalized query hydration snapshot schema does not match the query projection"
+			);
+		});
+	}
+
+	#[test]
+	fn normalized_hydration_rejects_a_row_value_id_mismatch() {
+		ReactiveScope::run(|| {
+			let runtime = TestQueryRuntime::new();
+			let client = QueryClient::with_runtime(QueryDefaults::default(), runtime.handle());
+			let family =
+				QueryFamily::<u64, Project, String>::new("tests.normalized-hydration-row-id");
+			let descriptor = family
+				.query(1, || async {
+					panic!("row-ID mismatch must fail before fetching")
+				})
+				.with_entities(EntityValue::new());
+			client.install_entity_hydration_envelope(EntityHydrationEnvelope {
+				version: ENTITY_TABLE_VERSION,
+				entities: BTreeMap::from([(
+					Project::TYPE.to_string(),
+					vec![EntityHydrationRow {
+						id: serde_json::json!(7),
+						value: serde_json::to_value(project(8, "wrong-id")).unwrap(),
+					}],
+				)]),
+			});
+			let mut state = SsrState::new();
+			state.add_resource_state(descriptor.key().hydration_id(), snapshot(7));
+			let panic = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+				HydrationContext::from_state(state)
+					.seed_query_descriptor(&client, &descriptor)
+					.expect("row-ID mismatch must panic during typed validation");
+			}))
+			.expect_err("a mismatched row ID must be rejected");
+			assert_eq!(
+				panic_message(panic),
+				format!(
+					"entity hydration loader for TYPE `{}` received an entity whose ID differs from its hydration record",
+					Project::TYPE
+				)
+			);
+		});
+	}
+
+	#[test]
+	fn ssr_entity_hydration_is_isolated_per_query_client() {
+		ReactiveScope::run(|| {
+			let first = QueryClient::new_ssr(QueryDefaults::default());
+			first.upsert_entity(project(1, "first-request"));
+			assert_eq!(
+				first.entity::<Project>(1).get(),
+				Some(project(1, "first-request"))
+			);
+
+			let second = QueryClient::new_ssr(QueryDefaults::default());
+			second.upsert_entity(project(2, "second-request"));
+			assert_eq!(
+				second.entity::<Project>(2).get(),
+				Some(project(2, "second-request"))
+			);
+
+			assert_eq!(
+				serde_json::to_value(first.reachable_entity_hydration_envelope()).unwrap(),
+				serde_json::json!({
+					"version": 1,
+					"entities": {
+						Project::TYPE: [{"id": 1, "value": {"id": 1, "name": "first-request"}}]
+					}
+				})
+			);
+			assert_eq!(
+				serde_json::to_value(second.reachable_entity_hydration_envelope()).unwrap(),
+				serde_json::json!({
+					"version": 1,
+					"entities": {
+						Project::TYPE: [{"id": 2, "value": {"id": 2, "name": "second-request"}}]
+					}
+				})
+			);
 		});
 	}
 

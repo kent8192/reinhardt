@@ -2744,6 +2744,162 @@ mod entity_propagation {
 	}
 }
 
+mod entity_gc {
+	use super::normalized::{Project, project};
+	use super::*;
+
+	fn client(runtime: &TestQueryRuntime, gc_time: Duration) -> QueryClient {
+		QueryClient::with_runtime(QueryDefaults::default().gc_time(gc_time), runtime.clock())
+	}
+
+	#[test]
+	#[serial(entity_gc)]
+	fn dependency_and_handle_leases_delay_entity_collection() {
+		ReactiveScope::run(|| {
+			let runtime = TestQueryRuntime::new();
+			let client = client(&runtime, Duration::from_secs(5));
+			let query = client.observe(
+				QueryFamily::<(), Project, String>::new("tests.entity-gc-retention")
+					.query((), || async { Ok(project(1, "cached")) })
+					.with_entities(EntityValue::new()),
+				QueryOptions::new(),
+			);
+			runtime.run_until_stalled();
+			let handle = client.entity::<Project>(1);
+			drop(query);
+			runtime.advance(Duration::from_secs(5));
+			runtime.run_due_maintenance();
+			assert_eq!(handle.get(), Some(project(1, "cached")));
+			drop(handle);
+			runtime.advance(Duration::from_secs(4));
+			runtime.run_due_maintenance();
+			let arena = client.entity_arena_for_test();
+			assert!(arena.entity_record_exists_for_test::<Project>(&1));
+			runtime.advance(Duration::from_secs(1));
+			runtime.run_due_maintenance();
+			assert!(!arena.entity_record_exists_for_test::<Project>(&1));
+		});
+	}
+
+	#[test]
+	#[serial(entity_gc)]
+	fn query_gc_releases_dependency_leases_before_entity_gc() {
+		ReactiveScope::run(|| {
+			let runtime = TestQueryRuntime::new();
+			let client = client(&runtime, Duration::from_secs(5));
+			let descriptor =
+				QueryFamily::<(), Project, String>::new("tests.entity-gc-query-release")
+					.query((), || async { Ok(project(1, "cached")) })
+					.with_entities(EntityValue::new());
+			let query = client.observe(descriptor, QueryOptions::new());
+			runtime.run_until_stalled();
+			assert_eq!(
+				client.entity_dependency_lease_count_for_test::<Project>(&1),
+				1
+			);
+			drop(query);
+			runtime.advance(Duration::from_secs(5));
+			runtime.run_due_maintenance();
+			assert_eq!(
+				client.entity_dependency_lease_count_for_test::<Project>(&1),
+				0
+			);
+			runtime.advance(Duration::from_secs(5));
+			runtime.run_due_maintenance();
+			assert!(
+				!client
+					.entity_arena_for_test()
+					.entity_record_exists_for_test::<Project>(&1)
+			);
+		});
+	}
+
+	#[test]
+	#[serial(entity_gc)]
+	fn reacquire_invalidates_an_entity_gc_generation() {
+		ReactiveScope::run(|| {
+			let runtime = TestQueryRuntime::new();
+			let client = client(&runtime, Duration::from_secs(5));
+			client.upsert_entity(project(1, "cached"));
+			let arena = client.entity_arena_for_test();
+			let first = client.entity::<Project>(1);
+			drop(first);
+			runtime.advance(Duration::from_secs(4));
+			let second = client.entity::<Project>(1);
+			runtime.advance(Duration::from_secs(1));
+			runtime.run_due_maintenance();
+			assert_eq!(second.get(), Some(project(1, "cached")));
+			drop(second);
+			assert!(arena.entity_record_exists_for_test::<Project>(&1));
+		});
+	}
+
+	#[test]
+	#[serial(entity_gc)]
+	fn unreferenced_present_and_tombstone_records_share_grace_period() {
+		ReactiveScope::run(|| {
+			let runtime = TestQueryRuntime::new();
+			let client = client(&runtime, Duration::from_secs(5));
+			let arena = client.entity_arena_for_test();
+			client.upsert_entity(project(1, "present"));
+			client.remove_entity::<Project>(&2);
+			assert!(arena.entity_record_exists_for_test::<Project>(&1));
+			assert!(arena.entity_record_exists_for_test::<Project>(&2));
+			runtime.advance(Duration::from_secs(4));
+			runtime.run_due_maintenance();
+			assert!(arena.entity_record_exists_for_test::<Project>(&1));
+			assert!(arena.entity_record_exists_for_test::<Project>(&2));
+			runtime.advance(Duration::from_secs(1));
+			runtime.run_due_maintenance();
+			assert!(!arena.entity_record_exists_for_test::<Project>(&1));
+			assert!(!arena.entity_record_exists_for_test::<Project>(&2));
+		});
+	}
+
+	#[test]
+	#[serial(entity_gc)]
+	fn zero_duration_collection_waits_for_the_next_maintenance_pass() {
+		ReactiveScope::run(|| {
+			let runtime = TestQueryRuntime::new();
+			let client = client(&runtime, Duration::ZERO);
+			let arena = client.entity_arena_for_test();
+			client.upsert_entity(project(1, "published"));
+			assert!(arena.entity_record_exists_for_test::<Project>(&1));
+			runtime.run_due_maintenance();
+			assert!(!arena.entity_record_exists_for_test::<Project>(&1));
+		});
+	}
+
+	#[test]
+	#[serial(entity_gc)]
+	fn older_query_ticket_blocks_collection_until_ticket_drop() {
+		ReactiveScope::run(|| {
+			let runtime = TestQueryRuntime::new();
+			let client = client(&runtime, Duration::ZERO);
+			let arena = client.entity_arena_for_test();
+			let ticket = arena.acquire_query_ticket();
+			client.upsert_entity(project(1, "ticketed"));
+			runtime.run_due_maintenance();
+			assert!(arena.entity_record_exists_for_test::<Project>(&1));
+			drop(ticket);
+			assert!(!arena.entity_record_exists_for_test::<Project>(&1));
+		});
+	}
+
+	#[test]
+	#[serial(entity_gc)]
+	fn final_client_drop_releases_browser_resources_and_entities() {
+		ReactiveScope::run(|| {
+			let runtime = TestQueryRuntime::new();
+			let client = client(&runtime, Duration::from_secs(5));
+			let probe = query_browser_resource_probe_for_test(&client);
+			client.upsert_entity(project(1, "owned"));
+			drop(client);
+			assert_eq!(probe.counts(), (0, 0));
+		});
+	}
+}
+
 #[test]
 fn query_client_guards_restore_the_previous_client() {
 	let first = QueryClient::new(QueryDefaults::default());

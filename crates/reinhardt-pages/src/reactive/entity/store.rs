@@ -9,6 +9,8 @@ use super::{Entity, EntityIdentity};
 use crate::reactive::{Signal, batch};
 use reinhardt_core::reactive::ReactiveScope;
 
+type EntityGcScheduler = Rc<dyn Fn(EntityIdentity, u64, u64)>;
+
 /// Owns the typed records for one normalized entity cache.
 #[derive(Clone)]
 pub struct EntityArena {
@@ -17,10 +19,14 @@ pub struct EntityArena {
 
 struct EntityArenaInner {
 	buckets: RefCell<HashMap<&'static str, Rc<dyn Any>>>,
+	gc_buckets: RefCell<HashMap<&'static str, Rc<dyn ErasedEntityBucket>>>,
 	type_registry: Rc<RefCell<EntityTypeRegistry>>,
 	next_ticket: Cell<u64>,
 	active_query_tickets: RefCell<BTreeMap<u64, usize>>,
+	ticket_blocked_gc: RefCell<HashSet<EntityIdentity>>,
 	gc_time: Duration,
+	gc_scheduler: RefCell<Option<EntityGcScheduler>>,
+	clock: RefCell<Rc<dyn Fn() -> u64>>,
 	_scope: Rc<ReactiveScope>,
 }
 
@@ -31,13 +37,27 @@ impl EntityArena {
 		Self {
 			inner: Rc::new(EntityArenaInner {
 				buckets: RefCell::new(HashMap::new()),
+				gc_buckets: RefCell::new(HashMap::new()),
 				type_registry: Rc::new(RefCell::new(EntityTypeRegistry::new())),
 				next_ticket: Cell::new(1),
 				active_query_tickets: RefCell::new(BTreeMap::new()),
+				ticket_blocked_gc: RefCell::new(HashSet::new()),
 				gc_time,
+				gc_scheduler: RefCell::new(None),
+				clock: RefCell::new(Rc::new(|| 0)),
 				_scope: scope,
 			}),
 		}
+	}
+
+	/// Installs the client-local deadline scheduler used by entity leases.
+	pub(crate) fn configure_gc_scheduler(
+		&self,
+		scheduler: EntityGcScheduler,
+		clock: Rc<dyn Fn() -> u64>,
+	) {
+		*self.inner.gc_scheduler.borrow_mut() = Some(scheduler);
+		*self.inner.clock.borrow_mut() = clock;
 	}
 
 	/// Returns a reactive handle for an entity identity.
@@ -54,12 +74,25 @@ impl EntityArena {
 				.records
 				.entry(id.clone())
 				.or_insert_with(|| self.inner._scope.enter(EntityRecord::vacant));
+			if record.lease_count() == 0 {
+				record.gc_generation = record.gc_generation.wrapping_add(1);
+				record.gc_due_ms = None;
+				self.inner
+					.ticket_blocked_gc
+					.borrow_mut()
+					.remove(&EntityIdentity::of::<E>(&id));
+			}
 			record.handle_lease_count += 1;
 			record.signal
 		};
 
 		EntityHandle {
-			lease: Rc::new(EntityHandleLease { bucket, id, signal }),
+			lease: Rc::new(EntityHandleLease {
+				arena: Rc::downgrade(&self.inner),
+				bucket,
+				id,
+				signal,
+			}),
 		}
 	}
 
@@ -133,10 +166,22 @@ impl EntityArena {
 				.records
 				.entry(id.clone())
 				.or_insert_with(|| self.inner._scope.enter(EntityRecord::vacant));
+			if record.lease_count() == 0 {
+				record.gc_generation = record.gc_generation.wrapping_add(1);
+				record.gc_due_ms = None;
+				self.inner
+					.ticket_blocked_gc
+					.borrow_mut()
+					.remove(&EntityIdentity::of::<E>(&id));
+			}
 			record.dependency_lease_count += 1;
 		}
 
-		Box::new(TypedEntityDependencyLease::<E> { bucket, id })
+		Box::new(TypedEntityDependencyLease::<E> {
+			arena: Rc::downgrade(&self.inner),
+			bucket,
+			id,
+		})
 	}
 
 	// Retained for the staged entity-GC scheduler integration in Task 8.
@@ -174,6 +219,10 @@ impl EntityArena {
 		let bucket = Rc::new(RefCell::new(EntityBucket::default()));
 		let erased: Rc<dyn Any> = bucket.clone();
 		buckets.insert(E::TYPE, erased);
+		self.inner.gc_buckets.borrow_mut().insert(
+			E::TYPE,
+			Rc::new(ErasedEntityBucketImpl::<E>::new(Rc::clone(&bucket))),
+		);
 		bucket
 	}
 
@@ -183,9 +232,7 @@ impl EntityArena {
 	{
 		self.register_entity_type::<E>();
 		let buckets = self.inner.buckets.borrow();
-		let Some(bucket) = buckets.get(E::TYPE) else {
-			return None;
-		};
+		let bucket = buckets.get(E::TYPE)?;
 		let bucket = Rc::clone(bucket)
 			.downcast::<RefCell<EntityBucket<E>>>()
 			.unwrap_or_else(|_| {
@@ -276,6 +323,28 @@ impl EntityArena {
 	}
 
 	#[cfg(test)]
+	pub(crate) fn entity_record_exists_for_test<E>(&self, id: &E::Id) -> bool
+	where
+		E: Entity,
+	{
+		let bucket = self.bucket::<E>();
+		bucket.borrow().records.contains_key(id)
+	}
+
+	#[cfg(test)]
+	pub(crate) fn entity_gc_generation_for_test<E>(&self, id: &E::Id) -> u64
+	where
+		E: Entity,
+	{
+		let bucket = self.bucket::<E>();
+		bucket
+			.borrow()
+			.records
+			.get(id)
+			.map_or(0, |record| record.gc_generation)
+	}
+
+	#[cfg(test)]
 	pub(crate) fn active_query_ticket_count(&self, ticket: EntityWriteTicket) -> usize {
 		self.inner
 			.active_query_tickets
@@ -283,6 +352,166 @@ impl EntityArena {
 			.get(&ticket.0)
 			.copied()
 			.unwrap_or_default()
+	}
+
+	pub(crate) fn entity_deadline_is_current(
+		&self,
+		identity: &EntityIdentity,
+		generation: u64,
+	) -> bool {
+		self.inner
+			.gc_buckets
+			.borrow()
+			.get(identity.entity_type())
+			.is_some_and(|bucket| bucket.deadline_is_current(identity, generation))
+	}
+
+	pub(crate) fn collect_entity_gc(
+		&self,
+		identity: &EntityIdentity,
+		generation: u64,
+		now_ms: u64,
+	) -> bool {
+		let Some(bucket) = self
+			.inner
+			.gc_buckets
+			.borrow()
+			.get(identity.entity_type())
+			.cloned()
+		else {
+			return false;
+		};
+		match bucket.collect_if_due(
+			identity,
+			generation,
+			now_ms,
+			&self.inner.active_query_tickets.borrow(),
+		) {
+			EntityGcResult::Collected => {
+				self.inner.ticket_blocked_gc.borrow_mut().remove(identity);
+				true
+			}
+			EntityGcResult::Stale => {
+				self.inner.ticket_blocked_gc.borrow_mut().remove(identity);
+				false
+			}
+			EntityGcResult::BlockedByTicket => {
+				self.inner
+					.ticket_blocked_gc
+					.borrow_mut()
+					.insert(identity.clone());
+				false
+			}
+		}
+	}
+
+	fn schedule_unleased_entity_gc<E>(&self, id: &E::Id)
+	where
+		E: Entity,
+	{
+		let schedule = {
+			let bucket = self.bucket::<E>();
+			let mut bucket = bucket.borrow_mut();
+			let Some(record) = bucket.records.get_mut(id) else {
+				return;
+			};
+			if record.lease_count() != 0 {
+				return;
+			}
+			let generation = record.gc_generation.wrapping_add(1);
+			record.gc_generation = generation;
+			let due_ms = (self.inner.clock.borrow())()
+				.saturating_add(self.inner.gc_time.as_millis().min(u64::MAX as u128) as u64);
+			record.gc_due_ms = Some(due_ms);
+			let identity = EntityIdentity::of::<E>(id);
+			self.inner.ticket_blocked_gc.borrow_mut().remove(&identity);
+			Some((identity, generation, due_ms))
+		};
+		if let Some((identity, generation, due_ms)) = schedule {
+			Self::notify_entity_gc(&self.inner, identity, generation, due_ms);
+		}
+	}
+
+	fn notify_entity_gc(
+		inner: &Rc<EntityArenaInner>,
+		identity: EntityIdentity,
+		generation: u64,
+		due_ms: u64,
+	) {
+		if let Some(scheduler) = inner.gc_scheduler.borrow().as_ref() {
+			scheduler(identity, generation, due_ms);
+		}
+	}
+
+	fn release_entity_lease<E>(
+		inner: &Rc<EntityArenaInner>,
+		bucket: &Rc<RefCell<EntityBucket<E>>>,
+		id: &E::Id,
+	) where
+		E: Entity,
+	{
+		let schedule = {
+			let mut bucket = bucket.borrow_mut();
+			let record = bucket
+				.records
+				.get_mut(id)
+				.expect("entity lease record must outlive its lease");
+			if record.lease_count() == 0 {
+				let generation = record.gc_generation.wrapping_add(1);
+				record.gc_generation = generation;
+				let due_ms = (inner.clock.borrow())()
+					.saturating_add(inner.gc_time.as_millis().min(u64::MAX as u128) as u64);
+				record.gc_due_ms = Some(due_ms);
+				let identity = EntityIdentity::of::<E>(id);
+				inner.ticket_blocked_gc.borrow_mut().remove(&identity);
+				Some((identity, generation, due_ms))
+			} else {
+				None
+			}
+		};
+		if let Some((identity, generation, due_ms)) = schedule {
+			Self::notify_entity_gc(inner, identity, generation, due_ms);
+		}
+	}
+
+	fn recheck_ticket_blocked_gc(inner: &Rc<EntityArenaInner>) {
+		let identities = inner
+			.ticket_blocked_gc
+			.borrow()
+			.iter()
+			.cloned()
+			.collect::<Vec<_>>();
+		let now_ms = (inner.clock.borrow())();
+		let buckets = inner.gc_buckets.borrow();
+		let mut reschedule = Vec::new();
+		let mut collect = Vec::new();
+		for identity in identities {
+			let Some(bucket) = buckets.get(identity.entity_type()) else {
+				inner.ticket_blocked_gc.borrow_mut().remove(&identity);
+				continue;
+			};
+			let Some((generation, due_ms)) = bucket.gc_deadline(&identity) else {
+				inner.ticket_blocked_gc.borrow_mut().remove(&identity);
+				continue;
+			};
+			if due_ms <= now_ms {
+				collect.push((identity, generation));
+			} else {
+				reschedule.push((identity, generation, due_ms));
+			}
+		}
+		drop(buckets);
+		for (identity, generation, due_ms) in reschedule {
+			if let Some(scheduler) = inner.gc_scheduler.borrow().as_ref() {
+				scheduler(identity, generation, due_ms);
+			}
+		}
+		for (identity, generation) in collect {
+			let arena = EntityArena {
+				inner: Rc::clone(inner),
+			};
+			arena.collect_entity_gc(&identity, generation, now_ms);
+		}
 	}
 
 	#[cfg(test)]
@@ -328,6 +557,7 @@ struct EntityHandleLease<E>
 where
 	E: Entity,
 {
+	arena: Weak<EntityArenaInner>,
 	bucket: Rc<RefCell<EntityBucket<E>>>,
 	id: E::Id,
 	signal: Signal<Option<E>>,
@@ -344,6 +574,11 @@ where
 			.get_mut(&self.id)
 			.expect("entity handle lease record must outlive its handle");
 		record.handle_lease_count = record.handle_lease_count.saturating_sub(1);
+		let should_schedule = record.lease_count() == 0;
+		drop(bucket);
+		if should_schedule && let Some(arena) = self.arena.upgrade() {
+			EntityArena::release_entity_lease(&arena, &self.bucket, &self.id);
+		}
 	}
 }
 
@@ -351,6 +586,7 @@ struct TypedEntityDependencyLease<E>
 where
 	E: Entity,
 {
+	arena: Weak<EntityArenaInner>,
 	bucket: Rc<RefCell<EntityBucket<E>>>,
 	id: E::Id,
 }
@@ -366,6 +602,11 @@ where
 			.get_mut(&self.id)
 			.expect("entity dependency lease record must outlive its lease");
 		record.dependency_lease_count = record.dependency_lease_count.saturating_sub(1);
+		let should_schedule = record.lease_count() == 0;
+		drop(bucket);
+		if should_schedule && let Some(arena) = self.arena.upgrade() {
+			EntityArena::release_entity_lease(&arena, &self.bucket, &self.id);
+		}
 	}
 }
 
@@ -557,7 +798,7 @@ where
 
 	fn commit(&self, arena: &EntityArena, ticket: EntityWriteTicket) -> Box<dyn EntityPublication> {
 		let bucket = arena.bucket::<E>();
-		let (signal, value) = {
+		let (signal, value, should_schedule) = {
 			let mut bucket = bucket.borrow_mut();
 			let record = bucket
 				.records
@@ -568,8 +809,21 @@ where
 				StagedEntityState::Removed => EntityRecordState::Removed,
 			};
 			record.last_write_ticket = Some(ticket);
-			(record.signal, record.value())
+			let should_schedule = record.lease_count() == 0;
+			if !should_schedule {
+				record.gc_generation = record.gc_generation.wrapping_add(1);
+				record.gc_due_ms = None;
+				arena
+					.inner
+					.ticket_blocked_gc
+					.borrow_mut()
+					.remove(&self.identity);
+			}
+			(record.signal, record.value(), should_schedule)
 		};
+		if should_schedule {
+			arena.schedule_unleased_entity_gc::<E>(&self.id);
+		}
 
 		Box::new(TypedEntityPublication { signal, value })
 	}
@@ -603,6 +857,105 @@ where
 	records: HashMap<E::Id, EntityRecord<E>>,
 }
 
+trait ErasedEntityBucket {
+	fn deadline_is_current(&self, identity: &EntityIdentity, generation: u64) -> bool;
+	fn gc_deadline(&self, identity: &EntityIdentity) -> Option<(u64, u64)>;
+	fn collect_if_due(
+		&self,
+		identity: &EntityIdentity,
+		generation: u64,
+		now_ms: u64,
+		active_tickets: &BTreeMap<u64, usize>,
+	) -> EntityGcResult;
+}
+
+struct ErasedEntityBucketImpl<E>
+where
+	E: Entity,
+{
+	bucket: Rc<RefCell<EntityBucket<E>>>,
+}
+
+impl<E> ErasedEntityBucketImpl<E>
+where
+	E: Entity,
+{
+	fn new(bucket: Rc<RefCell<EntityBucket<E>>>) -> Self {
+		Self { bucket }
+	}
+
+	fn parse_id(identity: &EntityIdentity) -> Option<E::Id> {
+		if identity.entity_type() != E::TYPE {
+			return None;
+		}
+		serde_json::from_str(identity.canonical_id()).ok()
+	}
+}
+
+impl<E> ErasedEntityBucket for ErasedEntityBucketImpl<E>
+where
+	E: Entity,
+{
+	fn deadline_is_current(&self, identity: &EntityIdentity, generation: u64) -> bool {
+		let Some(id) = Self::parse_id(identity) else {
+			return false;
+		};
+		self.bucket
+			.borrow()
+			.records
+			.get(&id)
+			.is_some_and(|record| record.lease_count() == 0 && record.gc_generation == generation)
+	}
+
+	fn gc_deadline(&self, identity: &EntityIdentity) -> Option<(u64, u64)> {
+		let id = Self::parse_id(identity)?;
+		self.bucket.borrow().records.get(&id).and_then(|record| {
+			record
+				.gc_due_ms
+				.map(|due_ms| (record.gc_generation, due_ms))
+		})
+	}
+
+	fn collect_if_due(
+		&self,
+		identity: &EntityIdentity,
+		generation: u64,
+		now_ms: u64,
+		active_tickets: &BTreeMap<u64, usize>,
+	) -> EntityGcResult {
+		let Some(id) = Self::parse_id(identity) else {
+			return EntityGcResult::Stale;
+		};
+		let mut bucket = self.bucket.borrow_mut();
+		let Some(record) = bucket.records.get(&id) else {
+			return EntityGcResult::Stale;
+		};
+		if record.lease_count() != 0
+			|| record.gc_generation != generation
+			|| record.gc_due_ms.is_none_or(|due_ms| due_ms > now_ms)
+		{
+			return EntityGcResult::Stale;
+		}
+		if record.last_write_ticket.is_some_and(|last| {
+			active_tickets
+				.keys()
+				.next()
+				.is_some_and(|active| *active < last.0)
+		}) {
+			return EntityGcResult::BlockedByTicket;
+		}
+		bucket.records.remove(&id);
+		EntityGcResult::Collected
+	}
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum EntityGcResult {
+	Collected,
+	BlockedByTicket,
+	Stale,
+}
+
 impl<E> Default for EntityBucket<E>
 where
 	E: Entity,
@@ -623,6 +976,8 @@ where
 	handle_lease_count: usize,
 	dependency_lease_count: usize,
 	last_write_ticket: Option<EntityWriteTicket>,
+	gc_generation: u64,
+	gc_due_ms: Option<u64>,
 }
 
 impl<E> EntityRecord<E>
@@ -636,7 +991,13 @@ where
 			handle_lease_count: 0,
 			dependency_lease_count: 0,
 			last_write_ticket: None,
+			gc_generation: 0,
+			gc_due_ms: None,
 		}
+	}
+
+	fn lease_count(&self) -> usize {
+		self.handle_lease_count + self.dependency_lease_count
 	}
 
 	fn value(&self) -> Option<E> {
@@ -686,6 +1047,10 @@ impl Drop for QueryTicketLease {
 		};
 		if remove_ticket {
 			tickets.remove(&self.ticket.0);
+		}
+		drop(tickets);
+		if remove_ticket {
+			EntityArena::recheck_ticket_blocked_gc(&arena);
 		}
 	}
 }

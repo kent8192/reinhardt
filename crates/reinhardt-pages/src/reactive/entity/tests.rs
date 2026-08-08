@@ -898,6 +898,49 @@ fn ticket_query_leases_are_counted_and_ordered_with_mutations() {
 	});
 }
 
+#[test]
+fn gc_observes_handle_and_dependency_lease_retention() {
+	ReactiveScope::run(|| {
+		let arena = EntityArena::new(Duration::ZERO);
+		let handle = arena.entity::<Project>(1);
+		arena.update_entities(|writer| {
+			writer.upsert(Project {
+				id: 1,
+				name: "retained".to_string(),
+			});
+		});
+		assert_eq!(arena.handle_lease_count::<Project>(&1), 1);
+		assert!(arena.entity_record_exists_for_test::<Project>(&1));
+		drop(handle);
+		assert_eq!(arena.handle_lease_count::<Project>(&1), 0);
+	});
+}
+
+#[test]
+fn gc_generation_changes_when_a_handle_is_reacquired() {
+	ReactiveScope::run(|| {
+		let arena = EntityArena::new(Duration::ZERO);
+		let first = arena.entity::<Project>(1);
+		let generation = arena.entity_gc_generation_for_test::<Project>(&1);
+		drop(first);
+		let scheduled = arena.entity_gc_generation_for_test::<Project>(&1);
+		assert!(scheduled > generation);
+		let second = arena.entity::<Project>(1);
+		assert!(arena.entity_gc_generation_for_test::<Project>(&1) > scheduled);
+		assert!(second.get().is_none());
+	});
+}
+
+#[test]
+fn gc_keeps_tombstones_until_their_grace_deadline() {
+	ReactiveScope::run(|| {
+		let arena = EntityArena::new(Duration::ZERO);
+		arena.update_entities(|writer| writer.remove::<Project>(&1));
+		assert!(arena.record_is_removed::<Project>(&1));
+		assert!(arena.entity_record_exists_for_test::<Project>(&1));
+	});
+}
+
 fn panic_message(panic: Box<dyn Any + Send>) -> String {
 	if let Some(message) = panic.downcast_ref::<String>() {
 		message.clone()

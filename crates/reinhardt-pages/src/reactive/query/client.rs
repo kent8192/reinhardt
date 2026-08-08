@@ -224,12 +224,14 @@ pub(super) struct QueryClientInner {
 	#[cfg(any(wasm, test))]
 	consumed_hydration_identities: RefCell<HashSet<QueryIdentity>>,
 	families: RefCell<HashMap<&'static str, QueryFamilyMetadata>>,
-	deadlines: RefCell<BinaryHeap<Reverse<QueryDeadline>>>,
+	deadlines: RefCell<BinaryHeap<Reverse<ClientDeadline>>>,
 	next_deadline_sequence: Cell<u64>,
 	maintenance_callback: RefCell<Option<Rc<dyn Fn()>>>,
 	document_visible: Cell<bool>,
 	browser: super::browser::QueryBrowser,
 }
+
+type DeadlineCurrentFn = Rc<dyn Fn(&MaintenanceTarget, u64) -> bool>;
 
 #[derive(Clone)]
 struct CachedQueryEntry {
@@ -240,7 +242,7 @@ struct CachedQueryEntry {
 	poll_due: Rc<dyn Fn(u64)>,
 	#[cfg(wasm)]
 	visibility_changed: Rc<dyn Fn(bool, u64)>,
-	deadline_is_current: Rc<dyn Fn(QueryDeadlineKind, u64) -> bool>,
+	deadline_is_current: DeadlineCurrentFn,
 }
 
 pub(crate) trait EntityDependent {
@@ -263,22 +265,22 @@ struct QueryFamilyMetadata {
 	normalization: QueryNormalizationContract,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum QueryDeadlineKind {
-	Poll,
-	GarbageCollection,
+#[derive(Clone, Debug, Eq, PartialEq)]
+enum MaintenanceTarget {
+	QueryPoll(QueryIdentity),
+	QueryGc(QueryIdentity),
+	EntityGc(EntityIdentity),
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-struct QueryDeadline {
+struct ClientDeadline {
 	due_ms: u64,
 	sequence: u64,
 	generation: u64,
-	identity: QueryIdentity,
-	kind: QueryDeadlineKind,
+	target: MaintenanceTarget,
 }
 
-impl Ord for QueryDeadline {
+impl Ord for ClientDeadline {
 	fn cmp(&self, other: &Self) -> Ordering {
 		self.due_ms
 			.cmp(&other.due_ms)
@@ -286,7 +288,7 @@ impl Ord for QueryDeadline {
 	}
 }
 
-impl PartialOrd for QueryDeadline {
+impl PartialOrd for ClientDeadline {
 	fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
 		Some(self.cmp(other))
 	}
@@ -323,6 +325,20 @@ impl QueryClient {
 			document_visible: Cell::new(document_visible),
 			browser: super::browser::QueryBrowser::new(owner.clone(), supports_browser_resources),
 		});
+		{
+			let owner = Rc::downgrade(&inner);
+			inner.entities.configure_gc_scheduler(
+				Rc::new(move |identity, generation, due_ms| {
+					if let Some(owner) = owner.upgrade() {
+						owner.schedule_entity_deadline(identity, generation, due_ms);
+					}
+				}),
+				Rc::new({
+					let owner = Rc::downgrade(&inner);
+					move || owner.upgrade().map_or(0, |owner| owner.runtime.now_ms())
+				}),
+			);
+		}
 		let maintenance_callback: Rc<dyn Fn()> = Rc::new({
 			let owner = Rc::downgrade(&inner);
 			move || {
@@ -571,33 +587,36 @@ impl QueryClientInner {
 		self.document_visible.get()
 	}
 
-	fn schedule_deadline(
-		&self,
-		identity: QueryIdentity,
-		kind: QueryDeadlineKind,
-		generation: u64,
-		due_ms: u64,
-	) {
+	fn schedule_deadline(&self, target: MaintenanceTarget, generation: u64, due_ms: u64) {
 		let sequence = self.next_deadline_sequence.get();
 		self.next_deadline_sequence.set(sequence.wrapping_add(1));
-		self.deadlines.borrow_mut().push(Reverse(QueryDeadline {
+		self.deadlines.borrow_mut().push(Reverse(ClientDeadline {
 			due_ms,
 			sequence,
 			generation,
-			identity,
-			kind,
+			target,
 		}));
 		self.refresh_browser_timer();
 	}
 
-	fn deadline_is_current(&self, deadline: &QueryDeadline) -> bool {
-		self.entries
-			.borrow()
-			.get(&deadline.identity)
-			.is_some_and(|entry| (entry.deadline_is_current)(deadline.kind, deadline.generation))
+	fn schedule_entity_deadline(&self, identity: EntityIdentity, generation: u64, due_ms: u64) {
+		self.schedule_deadline(MaintenanceTarget::EntityGc(identity), generation, due_ms);
 	}
 
-	fn next_current_deadline(&self) -> Option<QueryDeadline> {
+	fn deadline_is_current(&self, deadline: &ClientDeadline) -> bool {
+		match &deadline.target {
+			MaintenanceTarget::EntityGc(identity) => self
+				.entities
+				.entity_deadline_is_current(identity, deadline.generation),
+			MaintenanceTarget::QueryPoll(identity) | MaintenanceTarget::QueryGc(identity) => {
+				self.entries.borrow().get(identity).is_some_and(|entry| {
+					(entry.deadline_is_current)(&deadline.target, deadline.generation)
+				})
+			}
+		}
+	}
+
+	fn next_current_deadline(&self) -> Option<ClientDeadline> {
 		loop {
 			let deadline = self.deadlines.borrow().peek().cloned()?.0;
 			if self.deadline_is_current(&deadline) {
@@ -622,26 +641,49 @@ impl QueryClientInner {
 			if !self.deadline_is_current(&deadline) {
 				continue;
 			}
-			match deadline.kind {
-				QueryDeadlineKind::Poll => {
+			match deadline.target {
+				MaintenanceTarget::QueryPoll(identity) => {
 					let poll_due = self
 						.entries
 						.borrow()
-						.get(&deadline.identity)
+						.get(&identity)
 						.map(|entry| Rc::clone(&entry.poll_due));
 					if let Some(poll_due) = poll_due {
 						poll_due(deadline.generation);
 					}
 				}
-				QueryDeadlineKind::GarbageCollection => {
-					let cached = self.entries.borrow_mut().remove(&deadline.identity);
+				MaintenanceTarget::QueryGc(identity) => {
+					let cached = self.entries.borrow_mut().remove(&identity);
 					if let Some(cached) = cached {
 						(cached.cancel)();
+					}
+				}
+				MaintenanceTarget::EntityGc(identity) => {
+					if self
+						.entities
+						.collect_entity_gc(&identity, deadline.generation, now_ms)
+					{
+						self.prune_entity_dependents(&identity);
 					}
 				}
 			}
 		}
 		self.refresh_browser_timer();
+	}
+
+	fn prune_entity_dependents(&self, identity: &EntityIdentity) {
+		let should_remove = {
+			let mut index = self.entity_dependents.borrow_mut();
+			if let Some(edges) = index.get_mut(identity) {
+				edges.retain(|edge| edge.strong_count() > 0);
+				edges.is_empty()
+			} else {
+				false
+			}
+		};
+		if should_remove {
+			self.entity_dependents.borrow_mut().remove(identity);
+		}
 	}
 
 	#[cfg(wasm)]
@@ -993,8 +1035,7 @@ impl<T: Clone + 'static, E: Clone + 'static> QueryEntry<T, E> {
 		if let Some(owner) = owner {
 			if let Some(deadline_ms) = deadline_ms {
 				owner.schedule_deadline(
-					self.identity.clone(),
-					QueryDeadlineKind::Poll,
+					MaintenanceTarget::QueryPoll(self.identity.clone()),
 					generation,
 					deadline_ms,
 				);
@@ -1034,8 +1075,7 @@ impl<T: Clone + 'static, E: Clone + 'static> QueryEntry<T, E> {
 		self.gc_generation.set(generation);
 		if let Some(owner) = self.owner.as_ref().and_then(Weak::upgrade) {
 			owner.schedule_deadline(
-				self.identity.clone(),
-				QueryDeadlineKind::GarbageCollection,
+				MaintenanceTarget::QueryGc(self.identity.clone()),
 				generation,
 				self.runtime
 					.now_ms()
@@ -1083,14 +1123,15 @@ impl<T: Clone + 'static, E: Clone + 'static> QueryEntry<T, E> {
 		}
 	}
 
-	fn deadline_is_current(&self, kind: QueryDeadlineKind, generation: u64) -> bool {
-		match kind {
-			QueryDeadlineKind::Poll => {
+	fn deadline_is_current(&self, target: &MaintenanceTarget, generation: u64) -> bool {
+		match target {
+			MaintenanceTarget::QueryPoll(identity) if identity == &self.identity => {
 				self.lease_count.get() > 0 && self.poll_generation.get() == generation
 			}
-			QueryDeadlineKind::GarbageCollection => {
+			MaintenanceTarget::QueryGc(identity) if identity == &self.identity => {
 				self.lease_count.get() == 0 && self.gc_generation.get() == generation
 			}
+			_ => false,
 		}
 	}
 
@@ -2073,7 +2114,7 @@ where
 		}),
 		deadline_is_current: Rc::new({
 			let entry = Rc::clone(entry);
-			move |kind, generation| entry.deadline_is_current(kind, generation)
+			move |target, generation| entry.deadline_is_current(target, generation)
 		}),
 	}
 }

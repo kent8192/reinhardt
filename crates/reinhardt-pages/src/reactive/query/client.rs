@@ -55,6 +55,14 @@ where
 
 pub(crate) trait QueryRuntime {
 	fn now_ms(&self) -> u64;
+
+	fn jitter_sample(&self) -> u64 {
+		let mut bytes = [0_u8; 8];
+		getrandom::fill(&mut bytes)
+			.expect("query retry jitter requires an operating-system random source");
+		u64::from_le_bytes(bytes)
+	}
+
 	fn spawn(&self, task: QueryTask);
 
 	fn register_maintenance(&self, _callback: Weak<dyn Fn()>) {}
@@ -115,6 +123,7 @@ pub(crate) struct TestQueryRuntime {
 #[cfg(all(test, not(wasm)))]
 struct TestQueryRuntimeInner {
 	now_ms: Cell<u64>,
+	jitter_samples: RefCell<VecDeque<u64>>,
 	tasks: RefCell<VecDeque<QueryTask>>,
 	maintenance: RefCell<Vec<Weak<dyn Fn()>>>,
 }
@@ -125,10 +134,17 @@ impl TestQueryRuntime {
 		Self {
 			inner: Rc::new(TestQueryRuntimeInner {
 				now_ms: Cell::new(0),
+				jitter_samples: RefCell::new(VecDeque::new()),
 				tasks: RefCell::new(VecDeque::new()),
 				maintenance: RefCell::new(Vec::new()),
 			}),
 		}
+	}
+
+	pub(crate) fn with_jitter_samples(samples: impl IntoIterator<Item = u64>) -> Self {
+		let runtime = Self::new();
+		runtime.inner.jitter_samples.borrow_mut().extend(samples);
+		runtime
 	}
 
 	pub(crate) fn clock(&self) -> QueryRuntimeHandle {
@@ -195,6 +211,13 @@ impl TestQueryRuntime {
 impl QueryRuntime for TestQueryRuntimeInner {
 	fn now_ms(&self) -> u64 {
 		self.now_ms.get()
+	}
+
+	fn jitter_sample(&self) -> u64 {
+		self.jitter_samples
+			.borrow_mut()
+			.pop_front()
+			.expect("TestQueryRuntime exhausted its configured query retry jitter samples")
 	}
 
 	fn spawn(&self, task: QueryTask) {

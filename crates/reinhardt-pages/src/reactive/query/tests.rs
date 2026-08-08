@@ -53,6 +53,15 @@ impl Serialize for OrderedLargeMapArgs {
 
 struct FailingFingerprintArgs;
 
+#[test]
+fn query_retry_jitter_samples_are_consumed_in_configured_order() {
+	let runtime = TestQueryRuntime::with_jitter_samples([7, 11]);
+	let runtime_handle = runtime.handle();
+
+	assert_eq!(runtime_handle.jitter_sample(), 7);
+	assert_eq!(runtime_handle.jitter_sample(), 11);
+}
+
 fn isolated_query_client() -> QueryClientGuard {
 	provide_query_client(QueryClient::new(QueryDefaults::default()))
 }

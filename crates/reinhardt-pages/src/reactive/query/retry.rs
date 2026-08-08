@@ -82,6 +82,29 @@ impl<E> RetryPolicy<E> {
 			self.base_delay,
 		);
 	}
+
+	pub(crate) fn delay_ms(&self, failed_attempt: u32, sample: u64) -> u64 {
+		assert!(
+			failed_attempt > 0,
+			"query retry failed_attempt must be greater than 0"
+		);
+		let exponent = failed_attempt.saturating_sub(1).min(127);
+		let multiplier = 1_u128.checked_shl(exponent).unwrap_or(u128::MAX);
+		let nominal = self
+			.base_delay
+			.as_millis()
+			.saturating_mul(multiplier)
+			.min(self.max_delay.as_millis())
+			.min(u128::from(u64::MAX)) as u64;
+		if !self.jitter {
+			return nominal;
+		}
+		let floor = nominal / 2;
+		let spread = nominal - floor;
+		let range = u128::from(spread) + 1;
+		let offset = ((u128::from(sample) * range) >> 64) as u64;
+		floor.saturating_add(offset).min(nominal)
+	}
 }
 
 impl<E> fmt::Debug for RetryPolicy<E> {
@@ -172,5 +195,37 @@ mod tests {
 			format!("{policy:?}"),
 			"RetryPolicy { max_attempts: 3, base_delay: 250ms, max_delay: 5s, jitter: false, when: \"<predicate>\" }",
 		);
+	}
+
+	#[test]
+	fn retry_policy_caps_exponential_delay() {
+		let policy = RetryPolicy::<()>::exponential()
+			.base_delay(Duration::from_millis(100))
+			.max_delay(Duration::from_millis(500));
+
+		for (attempt, expected_ms) in [(1, 100), (2, 200), (3, 400), (4, 500)] {
+			assert_eq!(policy.delay_ms(attempt, 0), expected_ms);
+		}
+	}
+
+	#[test]
+	fn retry_policy_projects_equal_jitter_from_the_supplied_sample() {
+		let policy = RetryPolicy::<()>::exponential()
+			.base_delay(Duration::from_millis(100))
+			.max_delay(Duration::from_millis(100))
+			.jitter(true);
+
+		for (sample, expected_ms) in [(0, 50), (u64::MAX / 2, 75), (u64::MAX, 100)] {
+			assert_eq!(policy.delay_ms(1, sample), expected_ms);
+		}
+	}
+
+	#[test]
+	fn retry_policy_saturates_duration_and_attempt_overflow() {
+		let policy = RetryPolicy::<()>::exponential()
+			.base_delay(Duration::MAX)
+			.max_delay(Duration::MAX);
+
+		assert_eq!(policy.delay_ms(u32::MAX, 0), u64::MAX);
 	}
 }

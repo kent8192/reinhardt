@@ -206,3 +206,97 @@ where
 		Self::from_map(map)
 	}
 }
+
+#[cfg(test)]
+mod tests {
+	use super::*;
+	use serde_json::json;
+
+	#[test]
+	fn template_context_defaults_and_from_map_track_entries() {
+		// Arrange
+		let default_context = TemplateContext::new();
+		let map = HashMap::from([("count", 3), ("name", 7)]);
+		let from_map_context = TemplateContext::from_map(map.clone());
+		let from_trait_context = TemplateContext::from(map);
+
+		// Act
+		let from_map_entries = serde_json::to_value(&from_map_context.inner).unwrap();
+		let from_trait_entries = serde_json::to_value(&from_trait_context.inner).unwrap();
+
+		// Assert
+		assert_eq!(default_context.max_entries(), 1_000);
+		assert_eq!(default_context.len(), 0);
+		assert!(default_context.is_empty());
+		assert_eq!(from_map_context.len(), 2);
+		assert_eq!(from_trait_context.len(), 2);
+		assert_eq!(from_map_entries, json!({ "count": 3, "name": 7 }));
+		assert_eq!(from_trait_entries, json!({ "count": 3, "name": 7 }));
+	}
+
+	#[test]
+	fn template_context_capacity_allows_replacement_but_rejects_new_key() {
+		// Arrange
+		let mut context = TemplateContext::with_capacity_limit(1);
+
+		// Act
+		let first_insertion = context.try_insert("status", "draft");
+		let replacement = context.try_insert("status", "published");
+		let capacity_error = context.try_insert("title", "Reinhardt").unwrap_err();
+		let mut zero_capacity_context = TemplateContext::with_capacity_limit(0);
+		let zero_capacity_error = zero_capacity_context
+			.try_insert("status", "draft")
+			.unwrap_err();
+
+		// Assert
+		assert!(first_insertion.is_ok());
+		assert!(replacement.is_ok());
+		assert_eq!(context.len(), 1);
+		assert_eq!(
+			serde_json::to_value(&context.inner).unwrap(),
+			json!({ "status": "published" })
+		);
+		assert!(matches!(
+			&capacity_error,
+			ContextError::CapacityExceeded {
+				limit: 1,
+				current: 1,
+			}
+		));
+		assert_eq!(
+			capacity_error.to_string(),
+			"context capacity exceeded: limit is 1, current size is 1"
+		);
+		assert_eq!(zero_capacity_context.len(), 0);
+		assert!(zero_capacity_context.is_empty());
+		assert!(matches!(
+			&zero_capacity_error,
+			ContextError::CapacityExceeded {
+				limit: 0,
+				current: 0,
+			}
+		));
+		assert_eq!(
+			zero_capacity_error.to_string(),
+			"context capacity exceeded: limit is 0, current size is 0"
+		);
+	}
+
+	#[test]
+	fn template_context_insert_silently_preserves_capacity() {
+		// Arrange
+		let mut context = TemplateContext::with_capacity_limit(1);
+
+		// Act
+		context.insert("status", "draft");
+		context.insert("title", "Reinhardt");
+		context.insert("status", "published");
+
+		// Assert
+		assert_eq!(context.len(), 1);
+		assert_eq!(
+			serde_json::to_value(&context.inner).unwrap(),
+			json!({ "status": "published" })
+		);
+	}
+}

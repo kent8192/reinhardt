@@ -52,3 +52,53 @@ pub trait Table {
 		false
 	}
 }
+
+#[cfg(test)]
+mod tests {
+	use super::*;
+
+	struct ExampleTable {
+		rows: Vec<u32>,
+	}
+
+	impl Table for ExampleTable {
+		type Row = u32;
+
+		fn rows(&self) -> Vec<&Self::Row> {
+			self.rows.iter().collect()
+		}
+
+		fn columns(&self) -> Vec<&dyn Column> {
+			Vec::new()
+		}
+
+		fn render(&self) -> Element {
+			panic!("default table contract test does not render DOM elements")
+		}
+
+		fn handle_sort(&mut self, _field: &str, _direction: SortDirection) {}
+
+		fn handle_pagination(&mut self, _page: usize) {}
+	}
+
+	#[test]
+	fn sorting_and_table_defaults_match_public_contract() {
+		// Arrange
+		let table = ExampleTable {
+			rows: vec![1, 2, 3],
+		};
+
+		// Act
+		let defaults = (
+			table.total_rows(),
+			table.current_page(),
+			table.per_page(),
+			table.is_sortable(),
+			table.is_paginated(),
+			table.columns().len(),
+		);
+
+		// Assert
+		assert_eq!(defaults, (3, 1, 10, true, false, 0));
+	}
+}

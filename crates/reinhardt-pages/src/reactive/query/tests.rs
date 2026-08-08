@@ -1079,6 +1079,33 @@ fn query_retry_superseded_failure_stays_unpublished_and_retargets_waiters() {
 }
 
 #[test]
+fn query_retry_dropped_manual_refetch_publishes_the_in_flight_failure() {
+	let runtime = TestQueryRuntime::new();
+	let client = QueryClient::with_runtime(QueryDefaults::default(), runtime.handle());
+	let family = QueryFamily::<(), String, String>::new("tests.retry-dropped-manual-refetch");
+	let ready = Rc::new(Cell::new(false));
+	let descriptor = family.query((), {
+		let ready = Rc::clone(&ready);
+		move || TestGate {
+			ready: Rc::clone(&ready),
+			dropped: Rc::new(Cell::new(0)),
+			result: Some(Err("offline".to_string())),
+		}
+	});
+	let remaining = client.observe(descriptor.clone(), QueryOptions::default());
+	let requesting = client.observe(descriptor, QueryOptions::default());
+	runtime.run_until_stalled();
+
+	requesting.refetch();
+	drop(requesting);
+	ready.set(true);
+	runtime.run_until_stalled();
+
+	assert_eq!(remaining.error(), Some("offline".to_string()));
+	assert!(!remaining.is_fetching());
+}
+
+#[test]
 fn query_retry_polling_joins_a_waiting_sequence_without_resetting_it() {
 	let runtime = TestQueryRuntime::new();
 	let client = QueryClient::with_runtime(QueryDefaults::default(), runtime.handle());
@@ -1176,6 +1203,32 @@ fn query_retry_client_drop_invalidates_a_waiting_deadline() {
 	assert_eq!(fetch_count.get(), 1);
 	assert!(entry.retry.borrow().is_none());
 	assert!(!entry.is_fetching.get());
+}
+
+#[test]
+fn query_retry_client_drop_clears_disabled_manual_refetch_pending() {
+	let runtime = TestQueryRuntime::new();
+	let client = QueryClient::with_runtime(QueryDefaults::default(), runtime.handle());
+	let family = QueryFamily::<(), String, String>::new("tests.retry-client-cancel-disabled");
+	let query = client.observe(
+		family.query((), || async { Err("offline".to_string()) }),
+		QueryOptions::new().enabled(false).retry(
+			RetryPolicy::exponential()
+				.max_attempts(2)
+				.base_delay(Duration::from_secs(1))
+				.max_delay(Duration::from_secs(1)),
+		),
+	);
+
+	query.refetch();
+	runtime.run_until_stalled();
+	assert_eq!(query.snapshot().status, QueryStatus::Pending);
+	assert!(query.lease.inner.manual_refetch_pending.get());
+
+	drop(client);
+
+	assert_eq!(query.snapshot().status, QueryStatus::Idle);
+	assert!(!query.lease.inner.manual_refetch_pending.get());
 }
 
 #[test]

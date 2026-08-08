@@ -974,8 +974,15 @@ impl<T: Clone + 'static, E: Clone + 'static> QueryEntry<T, E> {
 			request.source.cancel();
 			Self::clear_manual_refetch(request.manual_observer);
 		}
-		self.retry.borrow_mut().take();
+		let retry_manual_observer = self
+			.retry
+			.borrow_mut()
+			.take()
+			.and_then(|retry| retry.manual_observer_id)
+			.and_then(|observer_id| self.observer_by_id(observer_id))
+			.map(|observer| Rc::downgrade(&observer));
 		self.next_retry_generation();
+		Self::clear_manual_refetch(retry_manual_observer);
 		Self::clear_manual_refetch(self.queued_manual_refetch.borrow_mut().take());
 		self.refetch_after_in_flight.set(false);
 		self.is_fetching.set(false);
@@ -1456,7 +1463,14 @@ impl<T: Clone + 'static, E: Clone + 'static> QueryEntry<T, E> {
 		if !sequence_matches {
 			return;
 		}
-		let follow_up_required = self.refetch_after_in_flight.get()
+		let queued_manual_refetch_is_live = self
+			.queued_manual_refetch
+			.borrow()
+			.as_ref()
+			.map_or(true, |observer| observer.strong_count() > 0);
+		let follow_up_required = (self.refetch_after_in_flight.get()
+			&& queued_manual_refetch_is_live
+			&& self.lease_count.get() > 0)
 			|| (self.invalidation_generation.get() > request_invalidation_generation
 				&& self.has_active_invalidation_interest());
 		match result {

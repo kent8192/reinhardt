@@ -14,7 +14,7 @@
 use super::autodetector::{FieldState, IndexDefinition, ModelState, to_snake_case};
 use super::{ConstraintDefinition, GeneratedColumnDefinition};
 use crate::field_domain::FieldDomain;
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
 use std::sync::{Arc, RwLock};
 
 #[cfg_attr(doc, aquamarine::aquamarine)]
@@ -656,6 +656,29 @@ impl ModelRegistry {
 		}
 	}
 
+	/// Collect storage aliases referenced by semantic file fields.
+	///
+	/// Migration metadata records the semantic field type and storage alias in
+	/// [`FieldMetadata::params`]. Keeping this collector in the database crate
+	/// avoids introducing a dependency from storage construction back into the
+	/// model registry.
+	pub fn file_storage_aliases(&self) -> BTreeSet<String> {
+		self.get_models()
+			.into_iter()
+			.flat_map(|model| model.fields.into_values())
+			.filter(|field| {
+				field.params.get("model_field_type").map(String::as_str) == Some("file")
+			})
+			.map(|field| {
+				field
+					.params
+					.get("file_storage")
+					.cloned()
+					.unwrap_or_else(|| "default".to_string())
+			})
+			.collect()
+	}
+
 	/// Get a specific model by app_label and model_name
 	///
 	/// # Django Reference
@@ -923,6 +946,39 @@ mod tests {
 
 		let models = registry.get_models();
 		assert_eq!(models.len(), 2);
+	}
+
+	#[test]
+	fn file_storage_aliases_collect_only_file_fields_and_default_missing_aliases() {
+		// Arrange
+		let registry = ModelRegistry::new();
+		let mut metadata = ModelMetadata::new("media", "Asset", "media_asset");
+		metadata.add_field(
+			"title".to_string(),
+			FieldMetadata::new(FieldType::VarChar(255)).with_param("model_field_type", "string"),
+		);
+		metadata.add_field(
+			"private_file".to_string(),
+			FieldMetadata::new(FieldType::VarChar(255))
+				.with_param("model_field_type", "file")
+				.with_param("file_storage", "private_uploads"),
+		);
+		metadata.add_field(
+			"public_file".to_string(),
+			FieldMetadata::new(FieldType::VarChar(255)).with_param("model_field_type", "file"),
+		);
+		registry.register_model(metadata);
+
+		// Act
+		let aliases = registry.file_storage_aliases();
+
+		// Assert
+		assert_eq!(
+			aliases,
+			["default".to_string(), "private_uploads".to_string()]
+				.into_iter()
+				.collect()
+		);
 	}
 
 	#[test]

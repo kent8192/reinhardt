@@ -9577,7 +9577,8 @@ where
 		alias: impl Into<String>,
 		expression: TypedExpression<T, R>,
 	) -> Self {
-		self.typed_annotations.push((alias.into(), expression.expr));
+		self.typed_annotations
+			.push((alias.into(), expression.into_simple_expr()));
 		self
 	}
 
@@ -10007,7 +10008,7 @@ where
 		expression: TypedExpression<T, R>,
 	) -> Self {
 		self.selected_expressions
-			.push((alias.into(), expression.expr));
+			.push((alias.into(), expression.into_simple_expr()));
 		self
 	}
 

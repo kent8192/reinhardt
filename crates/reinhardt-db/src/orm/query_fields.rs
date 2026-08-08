@@ -37,8 +37,12 @@ mod lookup;
 mod traits;
 
 pub use compiler::QueryFieldCompiler;
+pub(crate) use expression::AggregateOutputKind;
 pub(crate) use expression::qualify_model_root;
-pub use expression::{OrderedExpression, TypedExpression, TypedPredicate};
+pub use expression::{
+	AggregateKind, AnnotationExpressionKind, CaseWhen, CombineKind, LabeledExpression,
+	OrderedExpression, ScalarKind, TypedExpression, TypedPredicate, case_when, coalesce, literal,
+};
 pub use field::Field;
 pub use lookup::{Lookup, LookupType, LookupValue};
 pub use traits::{Comparable, Date, DateTime, DateTimeType, NumericType, StringType};

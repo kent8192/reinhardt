@@ -263,7 +263,8 @@ pub use model::{
 };
 pub use query_fields::{
 	Comparable, DateTimeType, Field, GroupByFields, Lookup, LookupType, LookupValue, NumericType,
-	OrderedExpression, QueryFieldCompiler, StringType, TypedExpression, TypedPredicate,
+	OrderedExpression, QueryFieldCompiler, StringType, TypedExpression, TypedPredicate, case_when,
+	coalesce, literal,
 };
 #[doc(hidden)]
 pub use serde;

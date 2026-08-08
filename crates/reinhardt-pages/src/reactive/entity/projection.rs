@@ -116,6 +116,26 @@ impl EntityDependencies {
 		loader.hydrate(group, &self.identities, entities);
 	}
 
+	/// Hydrates every row in a consumed TYPE group before recipe materialization.
+	///
+	/// The request-scoped SSR table is deduplicated across recipes and entity-handle
+	/// reads, so a group can contain identities not declared by the recipe currently
+	/// being seeded. Those rows still need typed deserialization and validation, but
+	/// are intentionally not acquired as dependencies by the current query.
+	pub(crate) fn hydrate_all(
+		&self,
+		group: &EntityHydrationGroup,
+		entities: &mut EntityWriter<'_>,
+	) {
+		let loader = self.loaders.get(group.entity_type()).unwrap_or_else(|| {
+			panic!(
+				"entity hydration group for TYPE `{}` was not declared by this projection",
+				group.entity_type(),
+			)
+		});
+		loader.hydrate_all(group, entities);
+	}
+
 	pub(crate) fn acquire_leases(
 		&self,
 		arena: &EntityArena,
@@ -196,6 +216,7 @@ trait ErasedEntityHydrationLoader {
 		declared: &HashSet<EntityIdentity>,
 		entities: &mut EntityWriter<'_>,
 	);
+	fn hydrate_all(&self, group: &EntityHydrationGroup, entities: &mut EntityWriter<'_>);
 	fn acquire_leases(
 		&self,
 		arena: &EntityArena,
@@ -212,30 +233,14 @@ trait ErasedEntityHydrationLoader {
 
 struct TypedEntityHydrationLoader<E>(PhantomData<fn() -> E>);
 
-impl<E> ErasedEntityHydrationLoader for TypedEntityHydrationLoader<E>
+impl<E> TypedEntityHydrationLoader<E>
 where
 	E: Entity,
 {
-	fn entity_type_id(&self) -> TypeId {
-		TypeId::of::<E>()
-	}
-
-	fn id_type_id(&self) -> TypeId {
-		TypeId::of::<E::Id>()
-	}
-
-	fn entity_name(&self) -> &'static str {
-		type_name::<E>()
-	}
-
-	fn id_name(&self) -> &'static str {
-		type_name::<E::Id>()
-	}
-
-	fn hydrate(
+	fn hydrate_records(
 		&self,
 		group: &EntityHydrationGroup,
-		declared: &HashSet<EntityIdentity>,
+		declared: Option<&HashSet<EntityIdentity>>,
 		entities: &mut EntityWriter<'_>,
 	) {
 		if group.entity_type() != E::TYPE {
@@ -270,7 +275,7 @@ where
 				);
 			}
 			let identity = EntityIdentity::of::<E>(&id);
-			if !declared.contains(&identity) {
+			if declared.is_some_and(|declared| !declared.contains(&identity)) {
 				panic!(
 					"entity hydration loader for TYPE `{}` received undeclared canonical ID `{}`",
 					E::TYPE,
@@ -279,6 +284,40 @@ where
 			}
 			entities.upsert(entity);
 		}
+	}
+}
+
+impl<E> ErasedEntityHydrationLoader for TypedEntityHydrationLoader<E>
+where
+	E: Entity,
+{
+	fn entity_type_id(&self) -> TypeId {
+		TypeId::of::<E>()
+	}
+
+	fn id_type_id(&self) -> TypeId {
+		TypeId::of::<E::Id>()
+	}
+
+	fn entity_name(&self) -> &'static str {
+		type_name::<E>()
+	}
+
+	fn id_name(&self) -> &'static str {
+		type_name::<E::Id>()
+	}
+
+	fn hydrate(
+		&self,
+		group: &EntityHydrationGroup,
+		declared: &HashSet<EntityIdentity>,
+		entities: &mut EntityWriter<'_>,
+	) {
+		self.hydrate_records(group, Some(declared), entities);
+	}
+
+	fn hydrate_all(&self, group: &EntityHydrationGroup, entities: &mut EntityWriter<'_>) {
+		self.hydrate_records(group, None, entities);
 	}
 
 	fn acquire_leases(

@@ -159,7 +159,7 @@ impl EntityArena {
 		let ticket = self.issue_mutation_ticket();
 		let staging = self.stage(|entities| {
 			for group in &selected {
-				dependencies.hydrate(group, entities);
+				dependencies.hydrate_all(group, entities);
 			}
 		});
 		let overlay = EntityOverlay::new(self, staging, ticket);
@@ -1052,8 +1052,20 @@ where
 		let bucket = self.bucket.borrow();
 		let record = bucket.records.get(&id)?;
 		let entity = record.value()?;
-		let value = serde_json::to_value(&entity).ok()?;
-		let row_id = serde_json::to_value(entity.entity_id()).ok()?;
+		let value = serde_json::to_value(&entity).unwrap_or_else(|error| {
+			panic!(
+				"entity TYPE `{}` failed to serialize Rust type `{}` for hydration: {error}",
+				E::TYPE,
+				std::any::type_name::<E>(),
+			)
+		});
+		let row_id = serde_json::to_value(entity.entity_id()).unwrap_or_else(|error| {
+			panic!(
+				"entity TYPE `{}` failed to serialize ID type `{}` for hydration: {error}",
+				E::TYPE,
+				std::any::type_name::<E::Id>(),
+			)
+		});
 		if canonical_json_value(&row_id) != identity.canonical_id() {
 			panic!(
 				"entity TYPE `{}` produced a hydration row whose value ID does not match its identity",

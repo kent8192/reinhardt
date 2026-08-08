@@ -1848,6 +1848,62 @@ mod normalized_hydration {
 	}
 
 	#[test]
+	fn normalized_entity_type_group_hydrates_distinct_ids_for_separate_recipes() {
+		ReactiveScope::run(|| {
+			let runtime = TestQueryRuntime::new();
+			let client = QueryClient::with_runtime(QueryDefaults::default(), runtime.handle());
+			let family =
+				QueryFamily::<u64, Project, String>::new("tests.normalized-hydration-distinct-ids");
+			let first = family
+				.query(1, || async {
+					panic!("first hydrated query must not fetch")
+				})
+				.with_entities(EntityValue::new());
+			let second = family
+				.query(2, || async {
+					panic!("second hydrated query must not fetch")
+				})
+				.with_entities(EntityValue::new());
+			client.install_entity_hydration_envelope(EntityHydrationEnvelope {
+				version: ENTITY_TABLE_VERSION,
+				entities: BTreeMap::from([(
+					Project::TYPE.to_string(),
+					vec![
+						EntityHydrationRow {
+							id: serde_json::json!(7),
+							value: serde_json::to_value(project(7, "first")).unwrap(),
+						},
+						EntityHydrationRow {
+							id: serde_json::json!(8),
+							value: serde_json::to_value(project(8, "second")).unwrap(),
+						},
+					],
+				)]),
+			});
+
+			let mut first_state = SsrState::new();
+			first_state.add_resource_state(first.key().hydration_id(), snapshot(7));
+			HydrationContext::from_state(first_state)
+				.seed_query_descriptor(&client, &first)
+				.expect("first recipe should hydrate its declared row");
+			let mut second_state = SsrState::new();
+			second_state.add_resource_state(second.key().hydration_id(), snapshot(8));
+			HydrationContext::from_state(second_state)
+				.seed_query_descriptor(&client, &second)
+				.expect("second recipe should reuse the fully hydrated TYPE group");
+
+			assert_eq!(
+				client.observe(first, QueryOptions::default()).data(),
+				Some(project(7, "first"))
+			);
+			assert_eq!(
+				client.observe(second, QueryOptions::default()).data(),
+				Some(project(8, "second"))
+			);
+		});
+	}
+
+	#[test]
 	fn malformed_entity_table_duplicate_identity_is_rejected() {
 		ReactiveScope::run(|| {
 			let client = QueryClient::with_runtime(

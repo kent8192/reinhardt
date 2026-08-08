@@ -601,7 +601,6 @@ impl CookieOptions {
 mod tests {
 	use super::*;
 	use serde::ser::Error as _;
-	use std::collections::BTreeMap;
 
 	#[test]
 	fn test_mock_request_get() {
@@ -731,7 +730,7 @@ mod tests {
 		// Act
 		let decoded_json: Input = json.json().unwrap();
 		let decoded_form: Input = form.form().unwrap();
-		let query: BTreeMap<_, _> = json
+		let mut query: Vec<_> = json
 			.uri
 			.query()
 			.unwrap()
@@ -739,6 +738,7 @@ mod tests {
 			.map(|entry| entry.split_once('=').unwrap())
 			.map(|(key, value)| (key.to_string(), value.to_string()))
 			.collect();
+		query.sort_unstable();
 		let mut cookies: Vec<_> = json
 			.get_header("cookie")
 			.expect("Cookie header should contain the configured cookies")
@@ -774,9 +774,15 @@ mod tests {
 		assert_eq!(json.query_params.get("existing"), Some(&"last".to_string()));
 		assert_eq!(json.query_params.get("page"), Some(&"2".to_string()));
 		assert_eq!(json.query_params.get("filter"), Some(&"ready".to_string()));
-		assert_eq!(query.get("existing"), Some(&"last".to_string()));
-		assert_eq!(query.get("page"), Some(&"2".to_string()));
-		assert_eq!(query.get("filter"), Some(&"ready".to_string()));
+		assert_eq!(query.len(), 3);
+		assert_eq!(
+			query,
+			vec![
+				("existing".to_string(), "last".to_string()),
+				("filter".to_string(), "ready".to_string()),
+				("page".to_string(), "2".to_string()),
+			]
+		);
 		assert_eq!(form.method, Method::PATCH);
 		assert_eq!(
 			form.get_header("content-type"),

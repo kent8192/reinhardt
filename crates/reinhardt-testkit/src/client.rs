@@ -1121,14 +1121,11 @@ mod tests {
 				.get("X-Raw")
 				.and_then(|v| v.to_str().ok())
 				.unwrap_or("missing");
-			let body = String::from_utf8_lossy(request.body()).into_owned();
-
 			let mut response = HttpResponse::ok().with_body(path.clone());
 			response = response.try_with_header("X-Echo-Path", &path)?;
 			response = response.try_with_header("X-Echo-Method", &method)?;
 			response = response.try_with_header("X-Echo-X-Request", request_header)?;
 			response = response.try_with_header("X-Echo-X-Raw", raw_header)?;
-			response = response.try_with_header("X-Echo-Body", &body)?;
 
 			if has_custom {
 				response = response.try_with_header("X-Echo-Custom", "present")?;

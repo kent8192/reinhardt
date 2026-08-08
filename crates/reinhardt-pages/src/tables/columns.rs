@@ -192,11 +192,13 @@ mod tests {
 mod wasm_render_tests {
 	use super::*;
 	use crate::tables::column::Column as ColumnTrait;
+	use rstest::*;
 	use std::collections::HashMap;
 	use wasm_bindgen_test::*;
 
 	wasm_bindgen_test_configure!(run_in_browser);
 
+	#[rstest]
 	#[wasm_bindgen_test]
 	fn specialized_columns_render_configured_values() {
 		// Arrange

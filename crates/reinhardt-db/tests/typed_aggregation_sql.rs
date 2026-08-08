@@ -1,8 +1,11 @@
 #![allow(unexpected_cfgs)]
 
+use async_trait::async_trait;
 use reinhardt_core::exception::Error;
 use reinhardt_core::macros::model;
-use reinhardt_db::orm::{Model, QuerySet, func};
+use reinhardt_db::orm::{
+	DatabaseBackend, Model, OrmExecutor, QueryResult, QuerySet, QueryValue, Row, func,
+};
 use serde::{Deserialize, Serialize};
 
 #[path = "ui/typed_aggregation/support.rs"]
@@ -19,6 +22,69 @@ struct TypedAnnotationRecord {
 	#[field(db_column = "display_name")]
 	name: String,
 	value: i64,
+}
+
+struct RecordingExecutor {
+	sql: Option<String>,
+	params: Vec<QueryValue>,
+}
+
+impl RecordingExecutor {
+	fn postgres() -> Self {
+		Self {
+			sql: None,
+			params: Vec::new(),
+		}
+	}
+}
+
+#[async_trait]
+impl OrmExecutor for RecordingExecutor {
+	fn backend(&self) -> DatabaseBackend {
+		DatabaseBackend::Postgres
+	}
+
+	async fn execute(
+		&mut self,
+		_sql: &str,
+		_params: Vec<QueryValue>,
+	) -> reinhardt_core::exception::Result<QueryResult> {
+		Err(reinhardt_core::exception::DatabaseError::new(
+			reinhardt_core::exception::DatabaseErrorKind::Unsupported,
+			"typed aggregation SQL tests do not execute mutations",
+		)
+		.into())
+	}
+
+	async fn fetch_one(
+		&mut self,
+		_sql: &str,
+		_params: Vec<QueryValue>,
+	) -> reinhardt_core::exception::Result<Row> {
+		Err(reinhardt_core::exception::DatabaseError::new(
+			reinhardt_core::exception::DatabaseErrorKind::Unsupported,
+			"typed aggregation SQL tests fetch all rows",
+		)
+		.into())
+	}
+
+	async fn fetch_all(
+		&mut self,
+		sql: &str,
+		params: Vec<QueryValue>,
+	) -> reinhardt_core::exception::Result<Vec<Row>> {
+		self.sql = Some(sql.to_owned());
+		self.params = params;
+		Ok(Vec::new())
+	}
+
+	async fn fetch_optional(
+		&mut self,
+		_sql: &str,
+		_params: Vec<QueryValue>,
+	) -> reinhardt_core::exception::Result<Option<Row>> {
+		Ok(None)
+	}
 }
 
 #[test]
@@ -187,6 +253,64 @@ fn typed_having_uses_the_aggregate_expression_compiler() {
 	);
 }
 
+#[tokio::test]
+async fn typed_having_binds_comparison_values_for_execution() {
+	let mut executor = RecordingExecutor::postgres();
+
+	QuerySet::<TypedAnnotationRecord>::new()
+		.annotate(
+			func::count_all::<TypedAnnotationRecord>()
+				.label("record_count")
+				.expect("valid aggregate label"),
+		)
+		.expect("aggregate annotation should be accepted")
+		.having(func::avg(TypedAnnotationRecord::field_value()).gt(4.25_f64))
+		.rows_with_db(&mut executor)
+		.await
+		.expect("recording executor should receive the query");
+
+	assert_eq!(
+		executor.sql.as_deref(),
+		Some(
+			r##"SELECT *, COUNT(*) AS "record_count" FROM "typed_annotation_records" GROUP BY "typed_annotation_records"."id", "typed_annotation_records"."display_name", "typed_annotation_records"."value" HAVING AVG("typed_annotation_records"."value") > $1"##
+		)
+	);
+	assert_eq!(executor.params, vec![QueryValue::Float(4.25)]);
+}
+
+#[test]
+fn typed_having_supports_decimal_aggregate_comparisons() {
+	use aggregate_support::ModelRecord;
+
+	let query = QuerySet::<ModelRecord>::new()
+		.having(func::avg(ModelRecord::field_decimal()).gt(rust_decimal::Decimal::new(425, 2)))
+		.to_sql()
+		.expect("decimal aggregate comparison should compile");
+
+	assert_eq!(
+		query,
+		r##"SELECT * FROM "model_records" HAVING AVG("model_records"."value_decimal") > 4.25"##
+	);
+}
+
+#[test]
+fn typed_having_supports_combined_aggregate_arithmetic() {
+	let query = QuerySet::<TypedAnnotationRecord>::new()
+		.having(
+			(func::sum(TypedAnnotationRecord::field_value())
+				+ func::literal::<TypedAnnotationRecord, _>(1_i64)
+					.expect("integer literal should encode"))
+			.gt(10_i64),
+		)
+		.to_sql()
+		.expect("combined aggregate arithmetic should compile");
+
+	assert_eq!(
+		query,
+		r##"SELECT * FROM "typed_annotation_records" HAVING (SUM("typed_annotation_records"."value") + 1) > 10"##
+	);
+}
+
 #[test]
 fn typed_having_supports_count_sum_min_max_and_multiple_conditions() {
 	let query = QuerySet::<TypedAnnotationRecord>::new()
@@ -224,10 +348,10 @@ fn typed_having_relation_aggregate_adds_a_left_join() {
 		.to_sql()
 		.expect("query should compile");
 
-	assert!(query.contains(
-		r#"LEFT JOIN "related_records" AS "related" ON "model_records"."related_id" = "related"."id""#
-	));
-	assert!(query.contains(r#"HAVING COUNT("related"."value_i64") > 1"#));
+	assert_eq!(
+		query,
+		r##"SELECT "model_records".*, COUNT(*) AS "record_count" FROM "model_records" LEFT JOIN "related_records" AS "related" ON "model_records"."related_id" = "related"."id" HAVING COUNT("related"."value_i64") > 1"##
+	);
 }
 
 #[test]

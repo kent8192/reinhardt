@@ -819,6 +819,45 @@ pub fn user(args: TokenStream, input: TokenStream) -> TokenStream {
 /// - Exactly one field must be marked with `primary_key = true`
 /// - String fields must specify `max_length`
 ///
+/// # Storage-backed `FileField`
+///
+/// `FileField` is a typed model value when the database `file-storage` feature
+/// is enabled. Its declaration must include `upload_to`, a relative UTC
+/// directory template. Supported tokens are `%Y`, `%m`, `%d`, `%H`, `%M`, and
+/// `%S`; rooted paths, parent components, backslashes, and unsafe components
+/// are rejected. `file_storage` names a lowercase ASCII storage alias and
+/// defaults to `default`. The generated `file_<field>()` descriptor exposes
+/// `store(upload).await`, while `field_<field>()` carries the alias policy for
+/// typed queries and assignments.
+///
+/// ```rust,ignore
+/// #[model(app_label = "profiles", table_name = "profiles")]
+/// #[derive(Clone, Debug, serde::Deserialize, serde::Serialize)]
+/// struct Profile {
+///     #[field(primary_key = true)]
+///     id: Option<i64>,
+///     #[field(
+///         upload_to = "avatars/%Y/%m/%d",
+///         file_storage = "private_uploads",
+///         max_length = 255
+///     )]
+///     avatar: db::orm::FileField,
+/// }
+///
+/// // The generated descriptor is selected explicitly for an upload.
+/// let avatar = Profile::file_avatar().store(upload).await?;
+/// let mut profile = Profile::build().avatar(avatar).finish();
+/// profile.save().await?;
+/// ```
+///
+/// The database migration metadata records `model_field_type = file`,
+/// `upload_to`, `file_storage`, and `max_length` independently from a
+/// PostgreSQL physical `storage` parameter. The value persists only its
+/// logical path; hydration restores the alias from this field metadata.
+/// `ImageField` is intentionally reserved for the Phase B image API. The
+/// former synchronous descriptors are exposed as deprecated `LegacyFileField`
+/// and `LegacyImageField` types instead.
+///
 #[proc_macro_derive(
 	Model,
 	attributes(

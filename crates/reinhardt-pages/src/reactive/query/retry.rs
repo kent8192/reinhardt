@@ -126,6 +126,11 @@ impl<E> RetrySequence<E> {
 pub struct NoRetry;
 
 /// Configures exponential retry behavior for a query observer.
+///
+/// A policy belongs to an observer, while attempts and intermediate failures
+/// are coordinated by the shared cache entry. The predicate is stored as a
+/// typed `Fn(&E) -> bool`, so policies and [`QueryOptions`](super::QueryOptions)
+/// that contain them implement `Clone` and `Debug`, but not equality.
 pub struct RetryPolicy<E> {
 	pub(crate) max_attempts: u32,
 	pub(crate) base_delay: Duration,
@@ -148,6 +153,11 @@ impl<E> Clone for RetryPolicy<E> {
 
 impl<E> RetryPolicy<E> {
 	/// Creates a policy with standard exponential retry defaults.
+	///
+	/// The defaults allow three total attempts, including the initial request,
+	/// start at 250 milliseconds, cap the nominal delay at five seconds, disable
+	/// jitter, and accept every error. Zero-delay policies are also valid when
+	/// configured explicitly.
 	pub fn exponential() -> Self {
 		Self {
 			max_attempts: 3,
@@ -158,31 +168,47 @@ impl<E> RetryPolicy<E> {
 		}
 	}
 
-	/// Sets the maximum number of retry attempts.
+	/// Sets the maximum number of total attempts, including the initial request.
+	///
+	/// A zero value is rejected when the policy is installed with
+	/// [`QueryOptions::retry`](super::QueryOptions::retry).
 	pub fn max_attempts(mut self, value: u32) -> Self {
 		self.max_attempts = value;
 		self
 	}
 
 	/// Sets the initial delay used by exponential backoff.
+	///
+	/// A zero duration is valid. The policy is rejected when it is installed if
+	/// this delay is greater than the maximum delay.
 	pub fn base_delay(mut self, value: Duration) -> Self {
 		self.base_delay = value;
 		self
 	}
 
-	/// Sets the maximum delay used by exponential backoff.
+	/// Sets the maximum nominal delay used by exponential backoff.
+	///
+	/// The policy is rejected when it is installed if this delay is less than
+	/// the base delay.
 	pub fn max_delay(mut self, value: Duration) -> Self {
 		self.max_delay = value;
 		self
 	}
 
-	/// Enables or disables random jitter for retry delays.
+	/// Enables or disables equal jitter for retry delays.
+	///
+	/// Equal jitter chooses a delay from half the nominal delay through the full
+	/// nominal delay, so it never exceeds the configured exponential backoff.
 	pub fn jitter(mut self, value: bool) -> Self {
 		self.jitter = value;
 		self
 	}
 
-	/// Sets the predicate that selects errors eligible for retry.
+	/// Sets the typed predicate that selects errors eligible for retry.
+	///
+	/// The predicate receives a shared reference to the attempt error and must
+	/// be `'static`. Returning `false` makes that observer ineligible for another
+	/// attempt.
 	pub fn when(mut self, value: impl Fn(&E) -> bool + 'static) -> Self {
 		self.when = Rc::new(value);
 		self

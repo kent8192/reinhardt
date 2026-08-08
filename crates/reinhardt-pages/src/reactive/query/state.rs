@@ -59,6 +59,10 @@ impl Default for QueryDefaults {
 }
 
 /// Per-observer query behavior.
+///
+/// The retry type is [`NoRetry`] until [`QueryOptions::retry`] installs a typed
+/// [`RetryPolicy`]. Because retry predicates are closures, options that contain
+/// a retry policy do not implement equality.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct QueryOptions<R = NoRetry> {
 	enabled: bool,
@@ -75,6 +79,14 @@ impl QueryOptions<NoRetry> {
 	}
 
 	/// Installs a typed retry policy for this observer.
+	///
+	/// The policy error type must match the descriptor error type when the
+	/// options are passed to `use_query`.
+	///
+	/// # Panics
+	///
+	/// Panics if `max_attempts` is zero or `max_delay` is less than
+	/// `base_delay`. Zero delay values are valid when both bounds are ordered.
 	pub fn retry<E>(self, retry: RetryPolicy<E>) -> QueryOptions<RetryPolicy<E>> {
 		retry.validate();
 		QueryOptions {
@@ -166,11 +178,19 @@ pub struct QuerySnapshot<T, E> {
 	pub status: QueryStatus,
 	/// Latest successfully fetched data.
 	pub data: Option<T>,
-	/// Initial fetch error when no data is available.
+	/// Terminal initial-fetch error when no data is available.
+	///
+	/// Intermediate attempt errors remain private and this stays `None` during
+	/// retry backoff.
 	pub error: Option<E>,
-	/// Error from a background fetch that preserved existing data.
+	/// Terminal background-fetch error that preserved existing data.
+	///
+	/// Intermediate attempt errors remain private and this stays `None` until
+	/// the retry sequence is exhausted.
 	pub refetch_error: Option<E>,
-	/// Whether this query currently has a request in flight.
+	/// Whether this query currently has a fetch attempt in flight.
+	///
+	/// This is `false` while a retry sequence is waiting in backoff.
 	pub is_fetching: bool,
 	/// Whether this observer considers the cached state stale.
 	pub is_stale: bool,

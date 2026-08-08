@@ -56,6 +56,7 @@ pub trait Table {
 #[cfg(test)]
 mod tests {
 	use super::*;
+	use rstest::*;
 
 	struct ExampleTable {
 		rows: Vec<u32>,
@@ -81,7 +82,7 @@ mod tests {
 		fn handle_pagination(&mut self, _page: usize) {}
 	}
 
-	#[test]
+	#[rstest]
 	fn sorting_and_table_defaults_match_public_contract() {
 		// Arrange
 		let table = ExampleTable {

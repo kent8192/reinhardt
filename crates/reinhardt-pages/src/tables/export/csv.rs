@@ -30,6 +30,7 @@ pub fn export_csv<W: Write>(writer: &mut W, data: &[Vec<String>]) -> Result<(), 
 #[cfg(test)]
 mod tests {
 	use super::*;
+	use rstest::*;
 
 	struct FailingWriter;
 
@@ -46,7 +47,7 @@ mod tests {
 		}
 	}
 
-	#[test]
+	#[rstest]
 	fn csv_and_json_exports_escape_and_shape_rows_exactly() {
 		// Arrange
 		let data = vec![

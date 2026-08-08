@@ -43,8 +43,9 @@ pub trait Sortable {
 #[cfg(test)]
 mod tests {
 	use super::*;
+	use rstest::*;
 
-	#[test]
+	#[rstest]
 	fn sorting_and_table_defaults_match_public_contract() {
 		// Arrange
 		let expected = [

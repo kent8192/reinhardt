@@ -73,8 +73,9 @@ impl Pagination {
 #[cfg(test)]
 mod tests {
 	use super::*;
+	use rstest::*;
 
-	#[test]
+	#[rstest]
 	fn pagination_clamps_and_moves_at_boundaries() {
 		// Arrange
 		let mut empty = Pagination::new(5);

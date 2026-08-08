@@ -8,6 +8,7 @@ use crate::orm::field_codec::DatabaseStorageKind;
 use crate::orm::query_fields::expression::node::{
 	AggregateFunction, ExpressionNode, StoredExpression,
 };
+use crate::orm::query_fields::expression::operand::AggregateOperation;
 use crate::orm::query_fields::{AggregateKind, LabeledExpression};
 use chrono::{DateTime, NaiveDate, NaiveDateTime, NaiveTime, Utc};
 use reinhardt_core::exception::{DatabaseError, DatabaseErrorKind, Error, Result};
@@ -274,6 +275,7 @@ where
 fn ensure_supported_terminal_expression(node: &ExpressionNode) -> Result<()> {
 	match node {
 		ExpressionNode::Aggregate {
+			operation: AggregateOperation::Count,
 			distinct: true,
 			operand,
 			..

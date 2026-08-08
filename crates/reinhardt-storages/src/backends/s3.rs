@@ -11,7 +11,7 @@ use reinhardt_providers::{
 use std::time::Duration;
 
 use crate::config::S3Config;
-use crate::{Result, StorageBackend, StorageError};
+use crate::{Result, StorageBackend, StorageCapabilities, StorageError};
 
 /// Amazon S3 storage backend.
 #[derive(Debug, Clone)]
@@ -66,6 +66,23 @@ impl StorageBackend for S3Storage {
 		self.client.put_object(&key, content.to_vec()).await?;
 
 		Ok(key)
+	}
+
+	async fn save_if_absent(&self, name: &str, content: &[u8]) -> Result<String> {
+		let key = self.get_key(name);
+
+		self.client
+			.put_object_if_absent(&key, content.to_vec())
+			.await
+			.map_err(|err| map_provider_already_exists(err, name))?;
+
+		Ok(name.to_owned())
+	}
+
+	fn capabilities(&self) -> StorageCapabilities {
+		StorageCapabilities {
+			exclusive_create: true,
+		}
 	}
 
 	async fn open(&self, name: &str) -> Result<Vec<u8>> {
@@ -146,5 +163,51 @@ fn map_provider_not_found(err: ProviderError, name: &str) -> StorageError {
 	match err {
 		ProviderError::NotFound(_) => StorageError::NotFound(name.to_string()),
 		err => err.into(),
+	}
+}
+
+fn map_provider_already_exists(err: ProviderError, name: &str) -> StorageError {
+	match err {
+		ProviderError::Service {
+			status: 409 | 412, ..
+		} => StorageError::AlreadyExists(name.to_owned()),
+		err => err.into(),
+	}
+}
+
+#[cfg(test)]
+mod tests {
+	use super::*;
+
+	#[test]
+	fn precondition_conflicts_map_to_the_logical_name() {
+		for status in [409, 412] {
+			let err = map_provider_already_exists(
+				ProviderError::Service {
+					status,
+					message: "object exists".to_string(),
+				},
+				"avatars/a.png",
+			);
+			assert!(matches!(
+				err,
+				StorageError::AlreadyExists(name) if name == "avatars/a.png"
+			));
+		}
+	}
+
+	#[test]
+	fn other_provider_failures_are_not_relabeled_as_already_exists() {
+		let err = map_provider_already_exists(
+			ProviderError::Service {
+				status: 500,
+				message: "upstream failure".to_string(),
+			},
+			"avatars/a.png",
+		);
+
+		assert!(
+			matches!(err, StorageError::NetworkError(message) if message == "upstream failure")
+		);
 	}
 }

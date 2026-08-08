@@ -665,4 +665,95 @@ mod tests {
 			panic!("Expected array");
 		}
 	}
+
+	#[test]
+	fn model_choice_fields_validate_supported_input_shapes() {
+		// Arrange
+		let single = ModelChoiceField::new(
+			"choice",
+			vec![
+				TestModel {
+					id: 1,
+					name: "One".to_string(),
+				},
+				TestModel {
+					id: 2,
+					name: "Two".to_string(),
+				},
+			],
+		)
+		.error_message("invalid_choice", "Unknown choice.");
+		let multiple = ModelMultipleChoiceField::new(
+			"choices",
+			vec![
+				TestModel {
+					id: 1,
+					name: "One".to_string(),
+				},
+				TestModel {
+					id: 2,
+					name: "Two".to_string(),
+				},
+			],
+		)
+		.error_message("invalid_choice", "Unknown choice.")
+		.error_message("invalid_list", "Values must be a list.");
+
+		// Act and assert
+		assert_eq!(single.clean(Some(&json!("1"))).unwrap(), json!("1"));
+		assert_eq!(single.clean(Some(&json!(2))).unwrap(), json!("2"));
+		assert_eq!(
+			single.clean(Some(&json!("99"))).unwrap_err().to_string(),
+			"Unknown choice.",
+		);
+		assert_eq!(
+			single.clean(Some(&json!(["1"]))).unwrap_err().to_string(),
+			"Unknown choice.",
+		);
+		assert_eq!(
+			single.clean(None).unwrap_err().to_string(),
+			"This field is required.",
+		);
+		assert_eq!(
+			ModelChoiceField::new("choice", Vec::<TestModel>::new())
+				.required(false)
+				.clean(Some(&json!("")))
+				.unwrap(),
+			Value::Null,
+		);
+
+		assert_eq!(
+			multiple.clean(Some(&json!("1, 2"))).unwrap(),
+			json!(["1", "2"])
+		);
+		assert_eq!(
+			multiple.clean(Some(&json!(["2", "1"]))).unwrap(),
+			json!(["2", "1"])
+		);
+		assert_eq!(
+			multiple
+				.clean(Some(&json!(["1", "99"])))
+				.unwrap_err()
+				.to_string(),
+			"Unknown choice.",
+		);
+		assert_eq!(
+			multiple.clean(Some(&json!(2))).unwrap_err().to_string(),
+			"Values must be a list.",
+		);
+		assert_eq!(
+			multiple.clean(None).unwrap_err().to_string(),
+			"This field is required.",
+		);
+		assert_eq!(
+			ModelMultipleChoiceField::new("choices", Vec::<TestModel>::new())
+				.required(false)
+				.clean(Some(&json!("")))
+				.unwrap(),
+			json!([]),
+		);
+		assert!(!multiple.has_changed(Some(&json!(["1", "2"])), Some(&json!(["1", "2"]))));
+		assert!(multiple.has_changed(Some(&json!(["1", "2"])), Some(&json!(["2", "1"]))));
+		assert!(multiple.has_changed(Some(&json!(["1", "1"])), Some(&json!(["1"]))));
+	}
 }

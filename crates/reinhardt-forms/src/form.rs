@@ -981,6 +981,7 @@ impl Index<&str> for Form {
 mod tests {
 	use super::*;
 	use crate::fields::CharField;
+	use serde_json::json;
 
 	#[test]
 	fn test_form_validation() {
@@ -1376,5 +1377,157 @@ mod tests {
 			form.cleaned_data().get("name").unwrap(),
 			&serde_json::json!("JOHN DOE")
 		);
+	}
+
+	#[test]
+	fn form_configuration_and_submission_edges_are_observable() {
+		// Arrange
+		let mut form = Form::with_prefix("profile".to_string());
+		form.add_min_length_validator("username", 3, "Username is too short.");
+		form.add_max_length_validator("username", 24, "Username is too long.");
+		form.add_pattern_validator("username", "^[a-z]+$", "Lowercase letters only.");
+		form.add_min_value_validator("age", 18.0, "Adults only.");
+		form.add_max_value_validator("age", 120.0, "Age is too large.");
+		form.add_email_validator("email", "Enter a valid email.");
+		form.add_url_validator("website", "Enter a valid URL.");
+		form.add_fields_equal_validator(
+			vec!["password".to_string(), "confirmation".to_string()],
+			"Passwords do not match.",
+			Some("confirmation".to_string()),
+		);
+		form.add_validator_rule(
+			"username",
+			"reserved_words",
+			json!({"scope": "registration"}),
+			"Username is reserved.",
+		);
+		form.add_date_range_validator("starts_at", "ends_at", None);
+		form.add_numeric_range_validator("minimum", "maximum", None);
+
+		// Act and assert
+		assert_eq!(
+			serde_json::to_value(form.validation_rules()).unwrap(),
+			json!([
+				{
+					"type": "min_length",
+					"field_name": "username",
+					"min": 3,
+					"error_message": "Username is too short."
+				},
+				{
+					"type": "max_length",
+					"field_name": "username",
+					"max": 24,
+					"error_message": "Username is too long."
+				},
+				{
+					"type": "pattern",
+					"field_name": "username",
+					"pattern": "^[a-z]+$",
+					"error_message": "Lowercase letters only."
+				},
+				{
+					"type": "min_value",
+					"field_name": "age",
+					"min": 18.0,
+					"error_message": "Adults only."
+				},
+				{
+					"type": "max_value",
+					"field_name": "age",
+					"max": 120.0,
+					"error_message": "Age is too large."
+				},
+				{
+					"type": "email",
+					"field_name": "email",
+					"error_message": "Enter a valid email."
+				},
+				{
+					"type": "url",
+					"field_name": "website",
+					"error_message": "Enter a valid URL."
+				},
+				{
+					"type": "fields_equal",
+					"field_names": ["password", "confirmation"],
+					"error_message": "Passwords do not match.",
+					"target_field": "confirmation"
+				},
+				{
+					"type": "validator_ref",
+					"field_name": "username",
+					"validator_id": "reserved_words",
+					"params": {"scope": "registration"},
+					"error_message": "Username is reserved."
+				},
+				{
+					"type": "date_range",
+					"start_field": "starts_at",
+					"end_field": "ends_at",
+					"error_message": "End date must be after or equal to start date",
+					"target_field": "ends_at"
+				},
+				{
+					"type": "numeric_range",
+					"min_field": "minimum",
+					"max_field": "maximum",
+					"error_message": "Maximum value must be greater than or equal to minimum value",
+					"target_field": "maximum"
+				}
+			]),
+		);
+		assert_eq!(form.prefix(), "profile");
+		assert_eq!(form.add_prefix_to_field_name("email"), "profile-email");
+		form.set_prefix("account".to_string());
+		assert_eq!(form.add_prefix_to_field_name("email"), "account-email");
+		assert_eq!(
+			form.render_css_media(&["/assets/<theme>&.css"]),
+			"<link rel=\"stylesheet\" href=\"/assets/&lt;theme&gt;&amp;.css\" />\n",
+		);
+		assert_eq!(
+			form.render_js_media(&["/assets/\"main\".js"]),
+			"<script src=\"/assets/&quot;main&quot;.js\"></script>\n",
+		);
+
+		let mut csrf_form = Form::new();
+		csrf_form.set_csrf_token("expected-token".to_string());
+		csrf_form.bind(HashMap::new());
+		assert!(!csrf_form.is_valid());
+		assert_eq!(
+			csrf_form.errors().get(ALL_FIELDS_KEY),
+			Some(&vec!["CSRF token missing or incorrect.".to_string()]),
+		);
+		csrf_form.bind(HashMap::from([(
+			"csrfmiddlewaretoken".to_string(),
+			json!("wrong-token"),
+		)]));
+		assert!(!csrf_form.is_valid());
+		assert_eq!(
+			csrf_form.errors().get(ALL_FIELDS_KEY),
+			Some(&vec!["CSRF token missing or incorrect.".to_string()]),
+		);
+		csrf_form.bind(HashMap::from([(
+			"csrfmiddlewaretoken".to_string(),
+			json!("expected-token"),
+		)]));
+		assert!(csrf_form.is_valid());
+		csrf_form.add_error(ALL_FIELDS_KEY, "Cross-field validation failed.");
+		assert_eq!(
+			csrf_form.errors().get(ALL_FIELDS_KEY),
+			Some(&vec!["Cross-field validation failed.".to_string()]),
+		);
+
+		let mut bound_form = Form::with_prefix("profile".to_string());
+		bound_form.add_field(Box::new(
+			CharField::new("display_name".to_string()).required(),
+		));
+		bound_form.bind(HashMap::from([("display_name".to_string(), json!(7))]));
+		assert!(!bound_form.is_valid());
+		let bound = bound_form.get_bound_field("display_name").unwrap();
+		assert_eq!(bound.html_name(), "profile-display_name");
+		assert_eq!(bound.id_for_label(), "id_profile-display_name");
+		assert_eq!(bound.value(), Some(&json!(7)));
+		assert_eq!(bound.errors(), ["Value must be a string"]);
 	}
 }

@@ -1,18 +1,17 @@
 //! Model-rooted expressions for type-safe ORM queries.
 
-mod kind;
-mod node;
-mod operand;
+pub(crate) mod kind;
+pub(crate) mod node;
+pub(crate) mod operand;
 
 use crate::orm::expressions::{FieldRef, GeneratedModelField};
 use crate::orm::relations::{GeneratedRelatedField, RelatedFieldRef, RelationPathLike};
 use crate::orm::{DatabaseField, DatabaseScalar, Model};
-pub(crate) use kind::AggregateOutputKind;
 pub use kind::{AggregateKind, AnnotationExpressionKind, CombineKind, ScalarKind};
 use node::{ExpressionNode, JoinRequirements, RootColumnOperand, StoredExpression};
 use operand::ArithmeticOperation;
 use reinhardt_core::exception::Error;
-use reinhardt_query::prelude::{Alias, ColumnRef, ExprTrait, IntoIden, Order, SimpleExpr};
+use reinhardt_query::prelude::{Alias, ColumnRef, Expr, ExprTrait, IntoIden, Order, SimpleExpr};
 use std::marker::PhantomData;
 use std::ops::{Add, Div, Mul, Sub};
 
@@ -95,7 +94,7 @@ impl<M, R, K> TypedExpression<M, R, K> {
 		}
 	}
 
-	fn from_parts(node: ExpressionNode, joins: JoinRequirements) -> Self {
+	pub(crate) fn from_parts(node: ExpressionNode, joins: JoinRequirements) -> Self {
 		Self {
 			node,
 			joins,
@@ -105,6 +104,10 @@ impl<M, R, K> TypedExpression<M, R, K> {
 
 	pub(crate) fn into_simple_expr(self) -> SimpleExpr {
 		self.node.into_simple_expr()
+	}
+
+	pub(crate) fn into_parts(self) -> (ExpressionNode, JoinRequirements) {
+		(self.node, self.joins)
 	}
 
 	/// Assign an identifier-safe label to this expression.
@@ -132,30 +135,171 @@ impl<M, R, K> TypedExpression<M, R, K> {
 	}
 }
 
-impl<M> TypedExpression<M, f64, ScalarKind> {
-	/// Compare this numeric expression for equality.
-	pub fn eq(self, value: f64) -> TypedPredicate<M> {
-		TypedPredicate::new(self.into_simple_expr().eq(value))
+impl<M, R> TypedExpression<M, R, ScalarKind>
+where
+	R: DatabaseField,
+{
+	/// Compare this scalar expression for equality.
+	pub fn eq<V: crate::orm::IntoFieldValue<R>>(
+		self,
+		value: V,
+	) -> Result<TypedPredicate<M>, Error> {
+		self.compare(value, SimpleExpr::eq)
 	}
 
-	/// Compare this numeric expression using less-than.
-	pub fn lt(self, value: f64) -> TypedPredicate<M> {
-		TypedPredicate::new(self.into_simple_expr().lt(value))
+	/// Compare this scalar expression for inequality.
+	pub fn ne<V: crate::orm::IntoFieldValue<R>>(
+		self,
+		value: V,
+	) -> Result<TypedPredicate<M>, Error> {
+		self.compare(value, SimpleExpr::ne)
 	}
 
-	/// Compare this numeric expression using less-than-or-equal.
-	pub fn le(self, value: f64) -> TypedPredicate<M> {
-		TypedPredicate::new(self.into_simple_expr().lte(value))
+	/// Compare this scalar expression using greater-than.
+	pub fn gt<V: crate::orm::IntoFieldValue<R>>(
+		self,
+		value: V,
+	) -> Result<TypedPredicate<M>, Error> {
+		self.compare(value, SimpleExpr::gt)
 	}
 
-	/// Compare this numeric expression using greater-than.
-	pub fn gt(self, value: f64) -> TypedPredicate<M> {
-		TypedPredicate::new(self.into_simple_expr().gt(value))
+	/// Compare this scalar expression using greater-than-or-equal.
+	pub fn ge<V: crate::orm::IntoFieldValue<R>>(
+		self,
+		value: V,
+	) -> Result<TypedPredicate<M>, Error> {
+		self.compare(value, SimpleExpr::gte)
 	}
 
-	/// Compare this numeric expression using greater-than-or-equal.
-	pub fn ge(self, value: f64) -> TypedPredicate<M> {
-		TypedPredicate::new(self.into_simple_expr().gte(value))
+	/// Compatibility alias for [`Self::ge`].
+	pub fn gte<V: crate::orm::IntoFieldValue<R>>(
+		self,
+		value: V,
+	) -> Result<TypedPredicate<M>, Error> {
+		self.ge(value)
+	}
+
+	/// Compare this scalar expression using less-than.
+	pub fn lt<V: crate::orm::IntoFieldValue<R>>(
+		self,
+		value: V,
+	) -> Result<TypedPredicate<M>, Error> {
+		self.compare(value, SimpleExpr::lt)
+	}
+
+	/// Compare this scalar expression using less-than-or-equal.
+	pub fn le<V: crate::orm::IntoFieldValue<R>>(
+		self,
+		value: V,
+	) -> Result<TypedPredicate<M>, Error> {
+		self.compare(value, SimpleExpr::lte)
+	}
+
+	/// Compatibility alias for [`Self::le`].
+	pub fn lte<V: crate::orm::IntoFieldValue<R>>(
+		self,
+		value: V,
+	) -> Result<TypedPredicate<M>, Error> {
+		self.le(value)
+	}
+
+	fn compare<V: crate::orm::IntoFieldValue<R>>(
+		self,
+		value: V,
+		operator: fn(SimpleExpr, SimpleExpr) -> SimpleExpr,
+	) -> Result<TypedPredicate<M>, Error> {
+		let value = value
+			.into_field_value()
+			.map(crate::orm::database_value_to_query_value)
+			.map_err(|error| Error::Validation(error.to_string()))?;
+		Ok(TypedPredicate::new(operator(
+			self.into_simple_expr(),
+			Expr::value(value).into_simple_expr(),
+		)))
+	}
+}
+
+impl<M, R> TypedExpression<M, R, AggregateKind>
+where
+	R: DatabaseField,
+{
+	/// Compare this aggregate expression for equality in a HAVING clause.
+	pub fn eq<V: crate::orm::IntoFieldValue<R>>(
+		self,
+		value: V,
+	) -> Result<HavingPredicate<M>, Error> {
+		self.compare(value, SimpleExpr::eq)
+	}
+
+	/// Compare this aggregate expression for inequality in a HAVING clause.
+	pub fn ne<V: crate::orm::IntoFieldValue<R>>(
+		self,
+		value: V,
+	) -> Result<HavingPredicate<M>, Error> {
+		self.compare(value, SimpleExpr::ne)
+	}
+
+	/// Compare this aggregate expression using greater-than in a HAVING clause.
+	pub fn gt<V: crate::orm::IntoFieldValue<R>>(
+		self,
+		value: V,
+	) -> Result<HavingPredicate<M>, Error> {
+		self.compare(value, SimpleExpr::gt)
+	}
+
+	/// Compare this aggregate expression using greater-than-or-equal in a HAVING clause.
+	pub fn ge<V: crate::orm::IntoFieldValue<R>>(
+		self,
+		value: V,
+	) -> Result<HavingPredicate<M>, Error> {
+		self.compare(value, SimpleExpr::gte)
+	}
+
+	/// Compatibility alias for [`Self::ge`].
+	pub fn gte<V: crate::orm::IntoFieldValue<R>>(
+		self,
+		value: V,
+	) -> Result<HavingPredicate<M>, Error> {
+		self.ge(value)
+	}
+
+	/// Compare this aggregate expression using less-than in a HAVING clause.
+	pub fn lt<V: crate::orm::IntoFieldValue<R>>(
+		self,
+		value: V,
+	) -> Result<HavingPredicate<M>, Error> {
+		self.compare(value, SimpleExpr::lt)
+	}
+
+	/// Compare this aggregate expression using less-than-or-equal in a HAVING clause.
+	pub fn le<V: crate::orm::IntoFieldValue<R>>(
+		self,
+		value: V,
+	) -> Result<HavingPredicate<M>, Error> {
+		self.compare(value, SimpleExpr::lte)
+	}
+
+	/// Compatibility alias for [`Self::le`].
+	pub fn lte<V: crate::orm::IntoFieldValue<R>>(
+		self,
+		value: V,
+	) -> Result<HavingPredicate<M>, Error> {
+		self.le(value)
+	}
+
+	fn compare<V: crate::orm::IntoFieldValue<R>>(
+		self,
+		value: V,
+		operator: fn(SimpleExpr, SimpleExpr) -> SimpleExpr,
+	) -> Result<HavingPredicate<M>, Error> {
+		let value = value
+			.into_field_value()
+			.map(crate::orm::database_value_to_query_value)
+			.map_err(|error| Error::Validation(error.to_string()))?;
+		Ok(HavingPredicate::new(operator(
+			self.into_simple_expr(),
+			Expr::value(value).into_simple_expr(),
+		)))
 	}
 }
 
@@ -392,7 +536,25 @@ pub struct TypedPredicate<M> {
 }
 
 impl<M> TypedPredicate<M> {
-	fn new(expr: SimpleExpr) -> Self {
+	pub(crate) fn new(expr: SimpleExpr) -> Self {
+		Self {
+			expr,
+			marker: PhantomData,
+		}
+	}
+}
+
+/// A boolean aggregate comparison to be compiled as a HAVING predicate.
+#[derive(Debug, Clone)]
+pub struct HavingPredicate<M> {
+	// The annotation HAVING planner consumes this expression when it is added.
+	#[allow(dead_code)]
+	pub(crate) expr: SimpleExpr,
+	marker: PhantomData<fn() -> M>,
+}
+
+impl<M> HavingPredicate<M> {
+	pub(crate) fn new(expr: SimpleExpr) -> Self {
 		Self {
 			expr,
 			marker: PhantomData,

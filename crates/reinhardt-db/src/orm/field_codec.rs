@@ -321,9 +321,14 @@ pub trait DatabaseField:
 /// representation is not a promise that arithmetic is meaningful.
 pub trait NumericAggregateField: DatabaseField {}
 
-// Aggregate constructors consume this internal mapping when they are added to the annotation API.
-#[allow(dead_code)]
-trait NumericAggregateStorage: DatabaseScalar {
+/// Aggregate-result metadata for a numeric storage representation.
+///
+/// This is a crate-provided, sealed implementation detail exposed only so the
+/// typed aggregate operand contracts can derive result types for custom
+/// `DatabaseField` values. Applications cannot implement this trait because
+/// [`DatabaseScalar`] is sealed.
+#[doc(hidden)]
+pub trait NumericAggregateStorage: DatabaseScalar {
 	type SumOutput: DatabaseField;
 	type AverageOutput: DatabaseField;
 	const SUM_KIND: crate::orm::query_fields::AggregateOutputKind;

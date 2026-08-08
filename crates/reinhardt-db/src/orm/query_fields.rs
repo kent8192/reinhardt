@@ -31,17 +31,18 @@
 pub mod aggregate;
 pub mod comparison;
 pub mod compiler;
-mod expression;
+pub(crate) mod expression;
 mod field;
 mod lookup;
 mod traits;
 
 pub use compiler::QueryFieldCompiler;
-pub(crate) use expression::AggregateOutputKind;
+pub use expression::kind::AggregateOutputKind;
 pub(crate) use expression::qualify_model_root;
 pub use expression::{
-	AggregateKind, AnnotationExpressionKind, CaseWhen, CombineKind, LabeledExpression,
-	OrderedExpression, ScalarKind, TypedExpression, TypedPredicate, case_when, coalesce, literal,
+	AggregateKind, AnnotationExpressionKind, CaseWhen, CombineKind, HavingPredicate,
+	LabeledExpression, OrderedExpression, ScalarKind, TypedExpression, TypedPredicate, case_when,
+	coalesce, literal,
 };
 pub use field::Field;
 pub use lookup::{Lookup, LookupType, LookupValue};

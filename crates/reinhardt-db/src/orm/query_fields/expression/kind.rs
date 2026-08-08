@@ -45,9 +45,8 @@ impl CombineKind<AggregateKind> for AggregateKind {
 
 /// Storage kind produced by a numeric aggregate.
 // Aggregate constructors consume this mapping when materializing structured aggregate nodes.
-#[allow(dead_code)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum AggregateOutputKind {
+pub enum AggregateOutputKind {
 	/// Signed 64-bit integer result.
 	I64,
 	/// 64-bit floating-point result.

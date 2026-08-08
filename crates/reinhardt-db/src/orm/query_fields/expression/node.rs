@@ -1,5 +1,6 @@
 //! Structured expression nodes and relation-join requirements.
 
+use super::kind::AggregateOutputKind;
 use super::operand::{AggregateOperation, ArithmeticOperation};
 use crate::orm::field_codec::{DatabaseStorageKind, DatabaseValue};
 use crate::orm::relations::RelationStep;
@@ -52,12 +53,13 @@ pub(crate) enum ExpressionNode {
 	/// A typed, database-bound literal.
 	Literal(DatabaseValue),
 	/// An aggregate operation applied to an operand.
-	// Aggregate constructors materialize this variant in the subsequent annotation API layer.
-	#[allow(dead_code)]
 	Aggregate {
 		operation: AggregateOperation,
 		operand: Box<Self>,
+		output_kind: Option<AggregateOutputKind>,
 	},
+	/// A `COUNT(*)` operation with no column operand.
+	CountAll,
 	/// An arithmetic operation applied to two operands.
 	Arithmetic {
 		left: Box<Self>,
@@ -88,7 +90,9 @@ impl ExpressionNode {
 			Self::Literal(value) => {
 				Expr::value(crate::orm::database_value_to_query_value(value)).into_simple_expr()
 			}
-			Self::Aggregate { operation, operand } => {
+			Self::Aggregate {
+				operation, operand, ..
+			} => {
 				let operand = operand.into_simple_expr();
 				match operation {
 					AggregateOperation::Count => Func::count(operand),
@@ -98,6 +102,7 @@ impl ExpressionNode {
 					AggregateOperation::Maximum => Func::max(operand),
 				}
 			}
+			Self::CountAll => Func::count(Expr::asterisk().into_simple_expr()),
 			Self::Arithmetic {
 				left,
 				operation,
@@ -143,12 +148,19 @@ impl ExpressionNode {
 				Self::Aggregate {
 					operation: left_operation,
 					operand: left_operand,
+					output_kind: left_output_kind,
 				},
 				Self::Aggregate {
 					operation: right_operation,
 					operand: right_operand,
+					output_kind: right_output_kind,
 				},
-			) => left_operation == right_operation && left_operand.structurally_eq(right_operand),
+			) => {
+				left_operation == right_operation
+					&& left_output_kind == right_output_kind
+					&& left_operand.structurally_eq(right_operand)
+			}
+			(Self::CountAll, Self::CountAll) => true,
 			(
 				Self::Arithmetic {
 					left: left_left,

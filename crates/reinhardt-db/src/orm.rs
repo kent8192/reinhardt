@@ -130,6 +130,8 @@ pub mod field_codec;
 pub mod fields;
 /// Fixture loading and dumping module.
 pub mod fixtures;
+/// Static typed expression and aggregate constructors.
+pub mod func;
 /// Functions module.
 pub mod functions;
 pub mod hybrid_dml;
@@ -262,9 +264,9 @@ pub use model::{
 	Timestamps,
 };
 pub use query_fields::{
-	Comparable, DateTimeType, Field, GroupByFields, Lookup, LookupType, LookupValue, NumericType,
-	OrderedExpression, QueryFieldCompiler, StringType, TypedExpression, TypedPredicate, case_when,
-	coalesce, literal,
+	AggregateKind, AggregateOutputKind, Comparable, DateTimeType, Field, GroupByFields,
+	HavingPredicate, Lookup, LookupType, LookupValue, NumericType, OrderedExpression,
+	QueryFieldCompiler, StringType, TypedExpression, TypedPredicate, case_when, coalesce, literal,
 };
 #[doc(hidden)]
 pub use serde;

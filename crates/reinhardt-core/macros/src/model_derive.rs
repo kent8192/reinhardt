@@ -30,6 +30,7 @@ use proc_macro2::{Span, TokenStream};
 use quote::{ToTokens, quote};
 use syn::Token;
 use syn::punctuated::Punctuated;
+use syn::spanned::Spanned;
 use syn::{Data, DeriveInput, Fields, GenericArgument, PathArguments, Result, Type, parse_quote};
 use syn::{Ident, LitBool, LitStr, bracketed, parenthesized};
 
@@ -931,6 +932,7 @@ impl StructuredIndexConfig {
 struct FieldConfig {
 	primary_key: bool,
 	max_length: Option<u64>,
+	max_length_span: Option<Span>,
 	/// Relative UTC upload-directory template for a storage-backed file field.
 	upload_to: Option<String>,
 	/// Named storage alias for a storage-backed file field.
@@ -1067,6 +1069,7 @@ impl FieldConfig {
 				} else if meta.path.is_ident("max_length") {
 					let value: syn::LitInt = meta.value()?.parse()?;
 					config.max_length = Some(value.base10_parse()?);
+					config.max_length_span = Some(value.span());
 					Ok(())
 				} else if meta.path.is_ident("upload_to") {
 					let value: syn::LitStr = meta.value()?.parse()?;
@@ -1799,7 +1802,8 @@ fn map_type_to_field_type(ty: &Type, config: &FieldConfig) -> Result<TokenStream
 	let orm_crate = get_reinhardt_orm_crate();
 
 	if is_file_field_type(ty) {
-		let max_length = file_field_max_length(config);
+		let max_length =
+			file_field_max_length(config).expect("validated FileField max_length must fit in u32");
 		return Ok(quote! { #migrations_crate::FieldType::VarChar(#max_length) });
 	}
 
@@ -2313,8 +2317,10 @@ fn is_file_field_type(ty: &Type) -> bool {
 		.is_some_and(|segment| segment.ident == "FileField")
 }
 
-fn file_field_max_length(config: &FieldConfig) -> u32 {
-	config.max_length.unwrap_or(100) as u32
+fn file_field_max_length(
+	config: &FieldConfig,
+) -> std::result::Result<u32, std::num::TryFromIntError> {
+	config.max_length.unwrap_or(100).try_into()
 }
 
 fn valid_file_storage_alias(alias: &str) -> bool {
@@ -2333,9 +2339,16 @@ fn valid_file_storage_alias(alias: &str) -> bool {
 }
 
 fn file_template_token_length(token: char) -> Option<usize> {
+	file_template_token_replacement(token).map(str::len)
+}
+
+fn file_template_token_replacement(token: char) -> Option<&'static str> {
 	match token {
-		'Y' => Some(4),
-		'm' | 'd' | 'H' | 'M' | 'S' => Some(2),
+		'Y' => Some("2000"),
+		'm' | 'd' => Some("01"),
+		'H' => Some("00"),
+		'M' => Some("34"),
+		'S' => Some("56"),
 		_ => None,
 	}
 }
@@ -2369,6 +2382,26 @@ fn file_template_component_length(component: &str) -> std::result::Result<usize,
 		);
 	}
 	Ok(length)
+}
+
+/// Substitute supported upload-template tokens with the same representative
+/// value used by the runtime validator before checking component structure.
+fn file_template_component_structure(component: &str) -> std::result::Result<String, String> {
+	let mut structural = String::with_capacity(component.len());
+	let mut characters = component.chars();
+	while let Some(character) = characters.next() {
+		if character != '%' {
+			structural.push(character);
+			continue;
+		}
+		let token = characters
+			.next()
+			.ok_or_else(|| "incomplete UTC token".to_owned())?;
+		let replacement = file_template_token_replacement(token)
+			.ok_or_else(|| format!("unsupported UTC token `%{token}`"))?;
+		structural.push_str(replacement);
+	}
+	Ok(structural)
 }
 
 fn validate_file_upload_template(template: &str) -> std::result::Result<usize, String> {
@@ -2406,7 +2439,7 @@ fn validate_file_upload_template(template: &str) -> std::result::Result<usize, S
 			return Err("parent components are not allowed".to_owned());
 		}
 		let length = file_template_component_length(component)?;
-		let structural = component.replace('%', "");
+		let structural = file_template_component_structure(component)?;
 		if component.ends_with(['.', ' ']) || is_windows_device_basename_for_macro(&structural) {
 			return Err("template component has unsafe trailing or device-name syntax".to_owned());
 		}
@@ -2452,7 +2485,12 @@ fn validate_file_field_config(config: &FieldConfig, ty: &Type) -> Result<()> {
 		.saturating_add(1)
 		.saturating_add(2)
 		.saturating_add(17);
-	let max_length = file_field_max_length(config) as usize;
+	let max_length = file_field_max_length(config).map_err(|_| {
+		syn::Error::new(
+			config.max_length_span.unwrap_or_else(|| ty.span()),
+			"FileField max_length must not exceed u32::MAX (4294967295)",
+		)
+	})? as usize;
 	if max_length < minimum_length {
 		return Err(syn::Error::new_spanned(
 			ty,
@@ -3680,7 +3718,9 @@ fn generate_field_accessors(
 					.as_deref()
 					.expect("validated FileField fields always have upload_to");
 				let storage_alias = field.config.file_storage.as_deref().unwrap_or("default");
-				let max_length = file_field_max_length(&field.config) as usize;
+				let max_length = file_field_max_length(&field.config)
+					.expect("validated FileField max_length must fit in u32")
+					as usize;
 				let file_method_name =
 					syn::Ident::new(&format!("file_{}", field_name), field_name.span());
 				quote! {
@@ -5971,7 +6011,10 @@ fn generate_field_metadata(
 		// Build attributes map
 		let mut attrs = Vec::new();
 		let effective_max_length = if is_file_field_type(&field_info.ty) {
-			Some(u64::from(file_field_max_length(config)))
+			Some(u64::from(
+				file_field_max_length(config)
+					.expect("validated FileField max_length must fit in u32"),
+			))
 		} else {
 			config.max_length
 		};
@@ -6464,7 +6507,9 @@ fn generate_registration_code(input: RegistrationCodeInput<'_>) -> Result<TokenS
 				.as_deref()
 				.expect("validated FileField fields always have upload_to");
 			let storage_alias = config.file_storage.as_deref().unwrap_or("default");
-			let max_length = file_field_max_length(config).to_string();
+			let max_length = file_field_max_length(config)
+				.expect("validated FileField max_length must fit in u32")
+				.to_string();
 			params.push(quote! { .with_param("model_field_type", "file") });
 			params.push(quote! { .with_param("upload_to", #upload_to) });
 			params.push(quote! { .with_param("file_storage", #storage_alias) });
@@ -9523,12 +9568,15 @@ mod tests {
 		config
 			.validate_for_field_type(&ty)
 			.expect("default storage alias and max length should be accepted");
-		assert_eq!(file_field_max_length(&config), 100);
+		assert_eq!(file_field_max_length(&config).unwrap(), 100);
 		assert!(is_file_field_type(&ty));
 		assert_eq!(
 			validate_file_upload_template("avatars/%Y/%m/%d").unwrap(),
 			18
 		);
+		assert_eq!(file_template_component_structure("CO%M").unwrap(), "CO34");
+		assert_eq!(validate_file_upload_template("CO%M").unwrap(), 4);
+		assert!(validate_file_upload_template("COM").is_err());
 	}
 
 	#[test]
@@ -9554,6 +9602,19 @@ mod tests {
 			.validate_for_field_type(&parse_quote! { db::orm::FileField })
 			.expect_err("short file paths must be rejected");
 		assert!(error.to_string().contains("too small"));
+	}
+
+	#[test]
+	fn test_file_field_policy_rejects_max_length_over_u32() {
+		let attrs = vec![parse_quote! {
+			#[field(upload_to = "avatars", max_length = 4294967296)]
+		}];
+		let config = FieldConfig::from_attrs(&attrs).expect("file field config should parse");
+		assert!(file_field_max_length(&config).is_err());
+		let error = config
+			.validate_for_field_type(&parse_quote! { db::orm::FileField })
+			.expect_err("FileField max_length must fit the migration u32 type");
+		assert!(error.to_string().contains("u32::MAX"));
 	}
 
 	#[test]

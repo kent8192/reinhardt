@@ -17,6 +17,7 @@ fn model_file_field_validation_failures_are_diagnostic() {
 		"model_file_field_unsafe_template",
 		"model_file_field_invalid_alias",
 		"model_file_field_short_max_length",
+		"model_file_field_max_length_overflow",
 		"model_file_field_storage_name",
 	] {
 		tests.compile_fail(format!("tests/macros/ui/fail/{fixture}.rs"));

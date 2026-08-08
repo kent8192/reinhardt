@@ -2,8 +2,11 @@
 
 use reinhardt_core::exception::Error;
 use reinhardt_core::macros::model;
-use reinhardt_db::orm::{Field, FieldSelector, Model, QuerySet, func};
+use reinhardt_db::orm::{Model, QuerySet, func};
 use serde::{Deserialize, Serialize};
+
+#[path = "ui/typed_aggregation/support.rs"]
+mod aggregate_support;
 
 #[model(
 	app_label = "typed_annotation_sql",
@@ -38,19 +41,23 @@ fn aggregate_annotation_groups_root_columns_and_renders_exact_sql() {
 
 #[test]
 fn scalar_and_composed_annotations_render_exact_sql() {
-	let fields = TypedAnnotationRecord::new_fields();
 	let query = QuerySet::<TypedAnnotationRecord>::new()
 		.annotate(
-			fields
-				.value
-				.clone()
+			TypedAnnotationRecord::field_name()
+				.into_expression()
+				.label("name_copy")
+				.expect("valid physical-column annotation label"),
+		)
+		.expect("physical-column annotation should be accepted")
+		.annotate(
+			TypedAnnotationRecord::field_value()
 				.into_expression()
 				.label("value_copy")
 				.expect("valid scalar annotation label"),
 		)
 		.expect("scalar annotation should be accepted")
 		.annotate(
-			(fields.value.clone().into_expression()
+			(TypedAnnotationRecord::field_value().into_expression()
 				+ func::literal::<TypedAnnotationRecord, _>(1_i64)
 					.expect("integer literal should encode"))
 			.label("value_plus_one")
@@ -59,8 +66,10 @@ fn scalar_and_composed_annotations_render_exact_sql() {
 		.expect("arithmetic annotation should be accepted")
 		.annotate(
 			func::case_when(
-				fields.value.clone().into_expression().gt(0_i64),
-				fields.value.clone().into_expression(),
+				TypedAnnotationRecord::field_value()
+					.into_expression()
+					.gt(0_i64),
+				TypedAnnotationRecord::field_value().into_expression(),
 			)
 			.otherwise(
 				func::literal::<TypedAnnotationRecord, _>(0_i64)
@@ -72,7 +81,7 @@ fn scalar_and_composed_annotations_render_exact_sql() {
 		.expect("case annotation should be accepted")
 		.annotate(
 			func::coalesce(
-				fields.value.into_expression(),
+				TypedAnnotationRecord::field_value().into_expression(),
 				func::literal::<TypedAnnotationRecord, _>(0_i64)
 					.expect("integer literal should encode"),
 			)
@@ -85,15 +94,15 @@ fn scalar_and_composed_annotations_render_exact_sql() {
 
 	assert_eq!(
 		query,
-		r#"SELECT *, "typed_annotation_records"."value" AS "value_copy", ("typed_annotation_records"."value" + 1) AS "value_plus_one", CASE WHEN "typed_annotation_records"."value" > 0 THEN "typed_annotation_records"."value" ELSE 0 END AS "positive_value", COALESCE("typed_annotation_records"."value", 0) AS "value_or_zero" FROM "typed_annotation_records""#
+		r#"SELECT *, "typed_annotation_records"."display_name" AS "name_copy", "typed_annotation_records"."value" AS "value_copy", ("typed_annotation_records"."value" + 1) AS "value_plus_one", CASE WHEN "typed_annotation_records"."value" > 0 THEN "typed_annotation_records"."value" ELSE 0 END AS "positive_value", COALESCE("typed_annotation_records"."value", 0) AS "value_or_zero" FROM "typed_annotation_records""#
 	);
 }
 
 #[test]
 fn aggregate_annotations_group_scalar_annotations_once() {
-	let fields = TypedAnnotationRecord::new_fields();
-	let scalar = fields.value.into_expression();
+	let scalar = TypedAnnotationRecord::field_value().into_expression();
 	let query = QuerySet::<TypedAnnotationRecord>::new()
+		.values(&["id"])
 		.annotate(scalar.clone().label("first_value").expect("valid label"))
 		.expect("first scalar annotation should be accepted")
 		.annotate(scalar.label("second_value").expect("valid label"))
@@ -109,7 +118,53 @@ fn aggregate_annotations_group_scalar_annotations_once() {
 
 	assert_eq!(
 		query,
-		r#"SELECT *, "typed_annotation_records"."value" AS "first_value", "typed_annotation_records"."value" AS "second_value", COUNT(*) AS "record_count" FROM "typed_annotation_records" GROUP BY "typed_annotation_records"."id", "typed_annotation_records"."display_name", "typed_annotation_records"."value", "typed_annotation_records"."value""#
+		r#"SELECT "typed_annotation_records"."id", "typed_annotation_records"."value" AS "first_value", "typed_annotation_records"."value" AS "second_value", COUNT(*) AS "record_count" FROM "typed_annotation_records" GROUP BY "typed_annotation_records"."id", "typed_annotation_records"."value""#
+	);
+}
+
+#[test]
+fn related_field_annotation_adds_a_left_join() {
+	use aggregate_support::{ModelRecord, RelatedRecord};
+
+	let query = QuerySet::<ModelRecord>::new()
+		.annotate(
+			ModelRecord::rel_related()
+				.field(RelatedRecord::field_i64())
+				.into_expression()
+				.label("related_value")
+				.expect("valid relation annotation label"),
+		)
+		.expect("related annotation should be accepted")
+		.to_sql()
+		.expect("query should compile");
+
+	assert_eq!(
+		query,
+		r#"SELECT *, "related"."value_i64" AS "related_value" FROM "model_records" LEFT JOIN "related_records" AS "related" ON "model_records"."related_id" = "related"."id""#
+	);
+}
+
+#[test]
+fn multiple_aggregate_annotations_render_together() {
+	let query = QuerySet::<TypedAnnotationRecord>::new()
+		.annotate(
+			func::count_all::<TypedAnnotationRecord>()
+				.label("record_count")
+				.expect("valid aggregate label"),
+		)
+		.expect("count annotation should be accepted")
+		.annotate(
+			func::sum(TypedAnnotationRecord::field_value())
+				.label("value_total")
+				.expect("valid aggregate label"),
+		)
+		.expect("sum annotation should be accepted")
+		.to_sql()
+		.expect("query should compile");
+
+	assert_eq!(
+		query,
+		r#"SELECT *, COUNT(*) AS "record_count", SUM("typed_annotation_records"."value") AS "value_total" FROM "typed_annotation_records" GROUP BY "typed_annotation_records"."id", "typed_annotation_records"."display_name", "typed_annotation_records"."value""#
 	);
 }
 

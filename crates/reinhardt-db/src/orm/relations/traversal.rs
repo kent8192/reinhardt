@@ -767,6 +767,18 @@ impl<Root: Model, Target: Model, Value, Origin> RelatedFieldRef<Root, Target, Va
 	}
 }
 
+impl<Root, Target, Value> RelatedFieldRef<Root, Target, Value, GeneratedRelatedField>
+where
+	Root: Model,
+	Target: Model,
+	Value: crate::orm::DatabaseField,
+{
+	/// Convert this generated related field into a structured typed expression.
+	pub fn into_expression(self) -> crate::orm::query_fields::TypedExpression<Root, Value> {
+		self.into()
+	}
+}
+
 #[cfg(test)]
 mod tests {
 	use super::*;

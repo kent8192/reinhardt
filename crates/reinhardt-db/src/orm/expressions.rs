@@ -5,7 +5,7 @@ use std::marker::PhantomData;
 use crate::orm::query::{
 	FieldAssignment, Filter, FilterOperator, FilterValue, UpdateValue, quote_identifier,
 };
-use crate::orm::{DatabaseField, IntoFieldValue};
+use crate::orm::{DatabaseField, IntoFieldValue, Model};
 
 /// F expression - represents a database field reference
 /// Similar to Django's F() objects for database-side operations
@@ -1074,6 +1074,18 @@ impl<M, T, Origin> FieldRef<M, T, Origin> {
 }
 
 impl<M, T: DatabaseField> FieldRef<M, T, GeneratedModelField> {
+	/// Convert this generated model field into a structured typed expression.
+	///
+	/// Unlike the legacy [`crate::orm::query_fields::Field`] API, this method is
+	/// available for every generated persisted model field and does not require
+	/// the `pgvector` feature.
+	pub fn into_expression(self) -> crate::orm::query_fields::TypedExpression<M, T>
+	where
+		M: Model,
+	{
+		self.into()
+	}
+
 	/// Convert this persisted scalar field reference into a type-safe ordering field.
 	///
 	/// Relationship fields are virtual model properties and cannot appear in an

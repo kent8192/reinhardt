@@ -796,6 +796,61 @@ let updated = User::objects()
     .await?;
 ```
 
+### Typed Aggregates and Annotations
+
+The standard typed vocabulary is the [`orm::func`](src/orm/func.rs) module.
+Generated fields and relation paths carry the operand and result types through
+`count`, `sum`, `avg`, `min`, and `max`; no string field names are needed.
+Labels are validated identifiers, so `.label(...)` is fallible. A terminal
+`aggregate` executes asynchronously and returns an [`AggregateResult`]; it is
+not a row-loading operation.
+
+```rust,no_run
+use reinhardt_db::orm::{AggregateValue, QuerySet, func};
+
+let filtered = User::objects()
+    .all()
+    .filter(User::field_is_active().exact(true));
+let count = func::count_all::<User>().label("user_count")?;
+let total_age = func::sum(User::field_age()).label("age_total")?;
+let summary = filtered.aggregate([count, total_age]).await?;
+assert!(matches!(summary.get("user_count")?, AggregateValue::Integer(_)));
+
+// Annotation is a fallible, chainable builder. `all()` deserializes User and
+// intentionally ignores computed annotation columns.
+let annotated = filtered
+    .annotate(User::field_email().into_expression().label("email_copy")?)?;
+let users = annotated.all().await?;
+```
+
+For a multi-valued relation, `func::count(path)` retains duplicate joined rows.
+Apply `distinct()` to the operand when the count should contain each related
+value once:
+
+```rust,no_run
+let related_rows = User::objects()
+    .all()
+    .aggregate(func::count(User::rel_posts()).label("post_rows")?)
+    .await?;
+let related_values = User::objects()
+    .all()
+    .aggregate(
+        func::count(User::rel_posts().field_id())
+            .distinct()
+            .label("unique_posts")?,
+    )
+    .await?;
+```
+
+`reinhardt-query` remains the dynamic SQL-builder boundary. Use it for raw
+expressions or backend-neutral statement construction, then pass the resulting
+statement to a low-level executor; it is not a replacement for the typed ORM
+aggregate vocabulary. PostgreSQL-only projections such as `ArrayAgg` and
+`JsonbAgg` stay behind `BackendAnnotation` and `QuerySet::annotate_backend`.
+Explicit raw scalar subqueries likewise use `QuerySet::annotate_subquery` and
+remain a separate, fallible boundary rather than being coerced into typed
+portable aggregates.
+
 ### Typed Manager Upserts
 
 Generated field accessors provide compile-time checked model and value types

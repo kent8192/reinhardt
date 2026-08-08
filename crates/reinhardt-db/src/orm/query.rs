@@ -9029,10 +9029,13 @@ where
 	/// #     fn set_primary_key(&mut self, value: Self::PrimaryKey) { self.id = Some(value); }
 	/// # }
 	/// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
-	/// use reinhardt_db::orm::annotation::{Annotation, AnnotationValue, Value};
+	/// use reinhardt_db::orm::func;
 	///
+	/// let display_name =
+	///     func::literal::<User, String>("user".to_owned())?.label("display_name")?;
 	/// let users = User::objects()
-	///     .annotate_legacy(Annotation::new("display_name", AnnotationValue::Value(Value::String("user".into()))))
+	///     .all()
+	///     .annotate(display_name)?
 	///     .all()
 	///     .await?;
 	/// # Ok(())

@@ -28,6 +28,26 @@
 //! and ordering in the database. Named-zone conversion is supported by
 //! PostgreSQL; MySQL and SQLite return an explicit capability error.
 //!
+//! ## Typed aggregates and annotations
+//!
+//! Use [`func`] as the standard typed vocabulary for `count`, `sum`, `avg`,
+//! `min`, and `max`. Generated field accessors and typed relation paths provide
+//! the aggregate operand, while `.label("name")` validates the result alias and
+//! returns a `Result`. A terminal [`QuerySet::aggregate`] call is asynchronous
+//! and returns an [`AggregateResult`]; it does not hydrate model rows.
+//!
+//! [`QuerySet::annotate`] is a fallible, chainable builder for model-rooted
+//! computed columns. [`QuerySet::all`] intentionally ignores those computed
+//! columns when deserializing the model. For a multi-valued relation,
+//! `func::count(path)` retains duplicate joined rows; call `.distinct()` on the
+//! operand aggregate to count unique related values instead.
+//!
+//! `reinhardt-query` is the dynamic SQL-builder boundary for callers that need
+//! raw expressions or statements. PostgreSQL-only projections are kept
+//! explicit through [`BackendAnnotation`] and [`QuerySet::annotate_backend`],
+//! while raw scalar subqueries use the separate fallible
+//! [`QuerySet::annotate_subquery`] boundary.
+//!
 //! ## Streaming QuerySets
 //!
 //! [`QuerySet::iterator_with_db`] and [`QuerySet::iterator_with_executor`]

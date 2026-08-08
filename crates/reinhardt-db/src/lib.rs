@@ -246,6 +246,57 @@
 //! pgvector's SQLx integration. Reinhardt implements the binary codec against
 //! its workspace SQLx 0.8 dependency, avoiding a second SQLx API surface.
 //!
+//! ## Typed aggregation and annotation
+//!
+//! The standard ORM vocabulary for computed values is [`orm::func`]. Generated
+//! fields carry the model, operand, and result types through `count`, `sum`,
+//! `avg`, `min`, and `max`; assigning a label is fallible because labels are
+//! validated SQL identifiers. `QuerySet::aggregate` is a terminal asynchronous
+//! operation that returns [`orm::AggregateResult`]. `QuerySet::annotate` is a
+//! fallible chainable builder, while `QuerySet::all` intentionally deserializes
+//! only the model and ignores computed annotation columns.
+//!
+//! ```rust,no_run
+//! use reinhardt_core::macros::model;
+//! use reinhardt_db::orm::{QuerySet, func};
+//! use serde::{Deserialize, Serialize};
+//!
+//! #[model(
+//!     app_label = "docs",
+//!     table_name = "typed_aggregate_users",
+//!     info = false
+//! )]
+//! #[derive(Clone, Debug, Serialize, Deserialize)]
+//! struct TypedUser {
+//!     #[field(primary_key = true)]
+//!     id: i64,
+//!     #[field(max_length = 255)]
+//!     email: String,
+//!     age: i64,
+//! }
+//!
+//! # async fn example() -> Result<(), Box<dyn std::error::Error>> {
+//! let filtered = QuerySet::<TypedUser>::new();
+//! let count = func::count_all::<TypedUser>().label("user_count")?;
+//! let total_age = func::sum(TypedUser::field_age()).label("age_total")?;
+//! let summary = filtered.aggregate([count, total_age]).await?;
+//! assert_eq!(summary.get_i64("user_count")?, 0);
+//!
+//! let annotated = filtered
+//!     .annotate(TypedUser::field_email().into_expression().label("email_copy")?)?;
+//! let _users = annotated.all().await?;
+//! # Ok(())
+//! # }
+//! ```
+//!
+//! Relation aggregates retain duplicate joined rows. Apply `.distinct()` to an
+//! operand aggregate when a multi-valued relation should count each related
+//! value once. The dynamic [`reinhardt_query`] crate remains the low-level SQL
+//! builder boundary; it does not replace the typed `func` API. PostgreSQL-only
+//! projections stay explicit through [`orm::BackendAnnotation`] and
+//! `QuerySet::annotate_backend`, and raw scalar subqueries remain behind the
+//! fallible `QuerySet::annotate_subquery` boundary.
+//!
 //! ## Quick Start
 //!
 //! ### Using Schema Editor

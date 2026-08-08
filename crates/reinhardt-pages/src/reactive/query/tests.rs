@@ -666,8 +666,26 @@ fn query_retry_earliest_deadline_moves_later_when_the_shorter_policy_drops() {
 	);
 	runtime.run_until_stalled();
 	runtime.advance(Duration::from_millis(50));
+	let stale_deadline_generation = faster
+		.entry
+		.retry
+		.borrow()
+		.as_ref()
+		.expect("the failed query must be waiting to retry")
+		.generation;
 
 	drop(faster);
+	assert_ne!(
+		slower
+			.entry
+			.retry
+			.borrow()
+			.as_ref()
+			.expect("the slower retry policy must remain eligible")
+			.generation,
+		stale_deadline_generation,
+		"removing the shortest policy must invalidate its queued deadline"
+	);
 	runtime.advance(Duration::from_millis(50));
 	runtime.run_due_maintenance();
 	assert_eq!(fetch_count.get(), 1);
@@ -1060,6 +1078,9 @@ fn query_retry_superseded_failure_stays_unpublished_and_retargets_waiters() {
 		},
 	);
 	runtime.run_until_stalled();
+	let mut result = Box::pin(lease.result());
+	let mut context = Context::from_waker(Waker::noop());
+	assert_eq!(result.as_mut().poll(&mut context), Poll::Pending);
 
 	let entry = Rc::clone(&lease.inner.entry);
 	entry.start_fetch(true);
@@ -1068,14 +1089,68 @@ fn query_retry_superseded_failure_stays_unpublished_and_retargets_waiters() {
 
 	assert_eq!(fetch_count.get(), 2);
 	assert_eq!(
-		tokio_test::block_on(lease.result()),
-		Ok("fresh".to_string())
+		result.as_mut().poll(&mut context),
+		Poll::Ready(Ok("fresh".to_string()))
 	);
 	assert_eq!(entry.refetch_error.get(), None);
 	assert!(matches!(
 		entry.state.with_untracked(|state| state.clone()),
 		ResourceState::Success(value) if value == "fresh"
 	));
+}
+
+#[test]
+fn dropping_a_retargeted_ssr_waiter_cancels_the_replacement_generation() {
+	let client = QueryClient::new_ssr(QueryDefaults::default());
+	let family = QueryFamily::<(), String, String>::new("tests.ssr-retargeted-waiter-drop");
+	let first_ready = Rc::new(Cell::new(false));
+	let second_ready = Rc::new(Cell::new(false));
+	let fetch_count = Rc::new(Cell::new(0));
+	let descriptor = family.query((), {
+		let first_ready = Rc::clone(&first_ready);
+		let second_ready = Rc::clone(&second_ready);
+		let fetch_count = Rc::clone(&fetch_count);
+		move || {
+			let attempt = fetch_count.get() + 1;
+			fetch_count.set(attempt);
+			TestGate {
+				ready: if attempt == 1 {
+					Rc::clone(&first_ready)
+				} else {
+					Rc::clone(&second_ready)
+				},
+				dropped: Rc::new(Cell::new(0)),
+				result: Some(if attempt == 1 {
+					Err("obsolete".to_string())
+				} else {
+					Ok("fresh".to_string())
+				}),
+			}
+		}
+	});
+	let lease = client.acquire(
+		descriptor,
+		QueryAcquireOptions {
+			consumer: QueryConsumer::Navigation(1),
+			error_policy: QueryErrorPolicy::Discard,
+		},
+	);
+	let entry = Rc::clone(&lease.inner.entry);
+	let mut result = Box::pin(lease.result());
+	let mut context = Context::from_waker(Waker::noop());
+	assert_eq!(result.as_mut().poll(&mut context), Poll::Pending);
+	entry.start_fetch(true);
+
+	first_ready.set(true);
+	assert_eq!(result.as_mut().poll(&mut context), Poll::Pending);
+	assert_eq!(fetch_count.get(), 2);
+	assert!(entry.has_request());
+
+	drop(result);
+
+	assert!(!entry.has_request());
+	assert!(entry.retry.borrow().is_none());
+	assert!(!entry.is_fetching.get());
 }
 
 #[test]

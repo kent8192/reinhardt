@@ -137,14 +137,13 @@ impl<T: Clone + 'static, E: Clone + 'static> QueryHandle<T, E> {
 }
 
 /// Creates or subscribes to an app-wide keyed query.
-pub fn use_query<T, E, R>(
+pub fn use_query<T, E>(
 	descriptor: QueryDescriptor<T, E>,
-	options: QueryOptions<R>,
+	options: QueryOptions<impl QueryRetryConfig<E>>,
 ) -> QueryHandle<T, E>
 where
 	T: Clone + Serialize + DeserializeOwned + 'static,
 	E: Clone + Serialize + DeserializeOwned + 'static,
-	R: QueryRetryConfig<E>,
 {
 	queries().observe(descriptor, options)
 }

@@ -1266,6 +1266,7 @@ impl<T: Clone + 'static, E: Clone + 'static> QueryEntry<T, E> {
 				return;
 			}
 			if !sequence.candidates.is_empty() {
+				sequence.generation = self.next_retry_generation();
 				None
 			} else {
 				sequence.last_error.clone().map(|error| {
@@ -1798,23 +1799,24 @@ impl<T: Clone + 'static, E: Clone + 'static> QueryEntry<T, E> {
 }
 
 struct QueryResultFuture<T: Clone + 'static, E: Clone + 'static> {
-	entry: Rc<QueryEntry<T, E>>,
-	generation: Option<u64>,
 	ssr_guard: Option<SsrRetrySequenceGuard<T, E>>,
+	lease: Rc<QueryLeaseInner<T, E>>,
 }
 
 struct SsrRetrySequenceGuard<T: Clone + 'static, E: Clone + 'static> {
-	entry: Weak<QueryEntry<T, E>>,
-	completion_generation: u64,
+	lease: Weak<QueryLeaseInner<T, E>>,
 	armed: bool,
 }
 
 impl<T: Clone + 'static, E: Clone + 'static> Drop for SsrRetrySequenceGuard<T, E> {
 	fn drop(&mut self) {
 		if self.armed
-			&& let Some(entry) = self.entry.upgrade()
+			&& let Some(lease) = self.lease.upgrade()
+			&& let Some(completion_generation) = lease.generation.get()
 		{
-			entry.cancel_sequence_if_current(self.completion_generation);
+			lease
+				.entry
+				.cancel_sequence_if_current(completion_generation);
 		}
 	}
 }
@@ -1824,18 +1826,19 @@ impl<T: Clone + 'static, E: Clone + 'static> Future for QueryResultFuture<T, E> 
 
 	fn poll(self: Pin<&mut Self>, context: &mut Context<'_>) -> Poll<Self::Output> {
 		let this = self.get_mut();
+		let entry = Rc::clone(&this.lease.entry);
 		loop {
-			let inline_task = this.entry.inline_task.borrow_mut().take();
+			let inline_task = entry.inline_task.borrow_mut().take();
 			let Some(mut task) = inline_task else {
 				break;
 			};
 			if task.as_mut().poll(context).is_pending() {
-				this.entry.inline_task.borrow_mut().replace(task);
+				entry.inline_task.borrow_mut().replace(task);
 				break;
 			}
 		}
-		if let Some(generation) = this.generation {
-			if let Some((completed_generation, result)) = this.entry.completed.borrow().as_ref()
+		if let Some(generation) = this.lease.generation.get() {
+			if let Some((completed_generation, result)) = entry.completed.borrow().as_ref()
 				&& *completed_generation == generation
 			{
 				if let Some(guard) = this.ssr_guard.as_mut() {
@@ -1844,7 +1847,7 @@ impl<T: Clone + 'static, E: Clone + 'static> Future for QueryResultFuture<T, E> 
 				return Poll::Ready(result.clone());
 			}
 		} else {
-			match this.entry.state.with_untracked(|state| state.clone()) {
+			match entry.state.with_untracked(|state| state.clone()) {
 				ResourceState::Success(value) => {
 					if let Some(guard) = this.ssr_guard.as_mut() {
 						guard.armed = false;
@@ -1860,7 +1863,7 @@ impl<T: Clone + 'static, E: Clone + 'static> Future for QueryResultFuture<T, E> 
 				ResourceState::Loading => {}
 			}
 		}
-		this.entry.register_waiter(context.waker());
+		entry.register_waiter(context.waker());
 		Poll::Pending
 	}
 }
@@ -1880,17 +1883,15 @@ impl<T: Clone + 'static, E: Clone + 'static> QueryLease<T, E> {
 	// Route preparation awaits this result while the public hook remains
 	// synchronous.
 	pub(crate) async fn result(&self) -> Result<T, E> {
-		let generation = self.inner.generation.get();
+		let lease = Rc::clone(&self.inner);
 		QueryResultFuture {
-			entry: Rc::clone(&self.inner.entry),
-			generation,
 			ssr_guard: (self.inner.entry.runtime.executes_inline()).then(|| {
 				SsrRetrySequenceGuard {
-					entry: Rc::downgrade(&self.inner.entry),
-					completion_generation: generation.unwrap_or_default(),
-					armed: generation.is_some(),
+					lease: Rc::downgrade(&lease),
+					armed: lease.generation.get().is_some(),
 				}
 			}),
+			lease,
 		}
 		.await
 	}

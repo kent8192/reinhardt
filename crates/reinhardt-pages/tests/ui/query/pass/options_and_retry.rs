@@ -20,6 +20,12 @@ fn main() {
 		.jitter(true)
 		.when(|error: &AppError| matches!(error, AppError::Transient));
 	if false {
+		let _explicit_default =
+			use_query::<String, AppError>(descriptor.clone(), QueryOptions::default());
+		let _explicit_retry = use_query::<String, AppError>(
+			descriptor.clone(),
+			QueryOptions::new().retry(policy.clone()),
+		);
 		let _before = use_query(
 			descriptor.clone(),
 			QueryOptions::new().retry(policy.clone()).enabled(true),

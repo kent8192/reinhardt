@@ -16,8 +16,7 @@ help: the trait `QueryRetryConfig<AppError>` is not implemented for `RetryPolicy
 note: required by a bound in `use_query`
   --> src/reactive/query/hook.rs
    |
-   | pub fn use_query<T, E, R>(
+   | pub fn use_query<T, E>(
    |        --------- required by a bound in this function
-...
-   |     R: QueryRetryConfig<E>,
-   |        ^^^^^^^^^^^^^^^^^^^ required by this bound in `use_query`
+   |     options: QueryOptions<impl QueryRetryConfig<E>>,
+   |                           ^^^^^^^^^^^^^^^^^^^^^^^^ required by this bound in `use_query`

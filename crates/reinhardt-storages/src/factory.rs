@@ -2,7 +2,9 @@
 
 #![allow(deprecated)] // Public compatibility factory accepts StorageConfig until removal.
 
-use crate::{Result, StorageBackend, StorageConfig, StorageError, StorageSettings};
+use crate::{
+	NamedStorageSettings, Result, StorageBackend, StorageConfig, StorageError, StorageSettings,
+};
 use std::sync::Arc;
 
 /// Create a storage backend from settings.
@@ -10,6 +12,15 @@ pub async fn create_storage_from_settings(
 	settings: &StorageSettings,
 ) -> Result<Arc<dyn StorageBackend>> {
 	let config = settings.to_config()?;
+	create_storage(config).await
+}
+
+/// Create a named storage backend from a storage registry entry.
+pub(crate) async fn create_storage_from_named_settings(
+	settings: &NamedStorageSettings,
+	alias: &str,
+) -> Result<Arc<dyn StorageBackend>> {
+	let config = settings.to_config_for_alias(alias)?;
 	create_storage(config).await
 }
 

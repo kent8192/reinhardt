@@ -10,6 +10,8 @@
 //! - **Unified API**: Single `StorageBackend` trait for all storage providers
 //! - **Settings-first configuration**: `StorageSettings` composes with the
 //!   Reinhardt `#[settings]` macro
+//! - **Named storage registry**: file fields can resolve validated named
+//!   backends with scoped process-wide activation
 //! - **Async I/O**: All operations are asynchronous using Tokio
 //! - **Feature Flags**: Enable only the backends you need
 //! - **Temporary URLs**: Generate S3 presigned URLs, GCS V4 signed URLs, and
@@ -51,19 +53,24 @@ pub mod backends;
 pub mod config;
 pub mod error;
 pub mod factory;
+pub mod registry;
 pub mod settings;
 
 pub use backend::{StorageBackend, StorageCapabilities};
 #[allow(deprecated)] // Re-export keeps the compatibility API discoverable during the 0.2 line.
 pub use config::{BackendType, StorageConfig};
-pub use error::{Result, StorageError};
+pub use error::{FileStorageError, Result, StorageError};
 pub use factory::{create_storage, create_storage_from_settings};
+pub use registry::{
+	ActiveStorageRegistryGuard, StorageEntry, StorageRegistry, active_storage_registry,
+};
 #[cfg(feature = "azure")]
 pub use settings::AzureStorageSettings;
 #[cfg(feature = "gcs")]
 pub use settings::GcsStorageSettings;
 #[cfg(feature = "local")]
 pub use settings::LocalStorageSettings;
+pub use settings::NamedStorageSettings;
 #[cfg(feature = "s3")]
 pub use settings::S3StorageSettings;
 pub use settings::StorageSettings;

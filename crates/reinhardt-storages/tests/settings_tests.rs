@@ -5,6 +5,12 @@
 use reinhardt_conf::settings::fragment::SettingsFragment;
 use reinhardt_conf::settings::secret_types::SecretString;
 use reinhardt_storages::{BackendType, StorageConfig, StorageError, StorageSettings};
+use rstest::rstest;
+
+#[derive(serde::Deserialize)]
+struct SettingsDocument {
+	storage: StorageSettings,
+}
 
 #[test]
 fn storage_settings_section_is_storage() {
@@ -81,4 +87,58 @@ fn secret_string_debug_redacts_credentials() {
 
 	assert_eq!(format!("{secret:?}"), "SecretString([REDACTED])");
 	assert_eq!(secret.expose_secret(), "super-secret-key");
+}
+
+#[rstest]
+fn named_local_storage_uses_its_own_default_url_expiry() {
+	// A missing url_expiry_secs must receive the file-field URL default instead of
+	// inheriting a value from the default storage entry.
+	let document: SettingsDocument = toml::from_str(
+		r#"
+[storage]
+backend = "local"
+url_expiry_secs = 3600
+
+[storage.local]
+base_path = "media"
+
+[storage.named.private_uploads]
+backend = "local"
+
+[storage.named.private_uploads.local]
+base_path = "private-media"
+"#,
+	)
+	.unwrap();
+
+	assert_eq!(document.storage.url_expiry_secs, 3_600);
+	assert_eq!(
+		document.storage.named["private_uploads"].url_expiry_secs,
+		3_600
+	);
+}
+
+#[rstest]
+fn named_storage_rejects_recursive_named_sections() {
+	// A named entry must remain a backend entry, not another registry tree.
+	let result = toml::from_str::<SettingsDocument>(
+		r#"
+		[storage]
+		backend = "local"
+
+		[storage.local]
+		base_path = "media"
+
+		[storage.named.private_uploads]
+		backend = "local"
+
+		[storage.named.private_uploads.local]
+		base_path = "private-media"
+
+		[storage.named.private_uploads.named.nested]
+backend = "local"
+"#,
+	);
+
+	assert!(result.is_err());
 }

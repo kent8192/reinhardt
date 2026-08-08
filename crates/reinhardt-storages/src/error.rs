@@ -46,6 +46,23 @@ pub enum StorageError {
 	Other(String),
 }
 
+/// Errors raised while resolving file-field storage backends.
+#[derive(Debug, Error)]
+pub enum FileStorageError {
+	/// No storage registry is currently active in this process.
+	#[error("the active storage registry is unavailable")]
+	RegistryUnavailable,
+	/// A requested or configured storage alias does not exist or is invalid.
+	#[error("unknown storage alias `{0}`")]
+	UnknownStorageAlias(String),
+	/// The selected backend cannot atomically create new files.
+	#[error("storage alias `{0}` does not support atomic exclusive creation")]
+	UnsupportedExclusiveSave(String),
+	/// An underlying storage operation failed.
+	#[error(transparent)]
+	Storage(#[from] StorageError),
+}
+
 #[cfg(feature = "s3")]
 impl From<reinhardt_providers::ProviderError> for StorageError {
 	fn from(err: reinhardt_providers::ProviderError) -> Self {

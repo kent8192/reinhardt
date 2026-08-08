@@ -7112,8 +7112,8 @@ fn build_success_url_artifacts(
 	// Submit-time invocation: pull the handler off `self`, compute the
 	// URL, and dispatch through `navigate_or_reload()`. Wrapped in
 	// `#[cfg(all(target_family = "wasm", target_os = "unknown"))]`
-	// because the navigation primitives only exist on browser wasm — on
-	// native/SSR there is no browser history to drive.
+	// because native/SSR has no browser history or hard-navigation fallback to
+	// drive, even though the navigation API itself remains available there.
 	let submit_invocation = quote! {
 		#[cfg(all(target_family = "wasm", target_os = "unknown"))]
 		{

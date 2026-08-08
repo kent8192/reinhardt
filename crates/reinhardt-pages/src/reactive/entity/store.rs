@@ -4,6 +4,7 @@ use std::collections::{BTreeMap, HashMap};
 use std::rc::{Rc, Weak};
 use std::time::Duration;
 
+use super::identity::EntityTypeRegistry;
 use super::{Entity, EntityIdentity};
 use crate::reactive::{Signal, batch};
 
@@ -15,6 +16,7 @@ pub struct EntityArena {
 
 struct EntityArenaInner {
 	buckets: RefCell<HashMap<&'static str, Rc<dyn Any>>>,
+	type_registry: Rc<RefCell<EntityTypeRegistry>>,
 	next_ticket: Cell<u64>,
 	active_query_tickets: RefCell<BTreeMap<u64, usize>>,
 	gc_time: Duration,
@@ -26,6 +28,7 @@ impl EntityArena {
 		Self {
 			inner: Rc::new(EntityArenaInner {
 				buckets: RefCell::new(HashMap::new()),
+				type_registry: Rc::new(RefCell::new(EntityTypeRegistry::new())),
 				next_ticket: Cell::new(1),
 				active_query_tickets: RefCell::new(BTreeMap::new()),
 				gc_time,
@@ -38,6 +41,7 @@ impl EntityArena {
 	where
 		E: Entity,
 	{
+		self.register_entity_type::<E>();
 		let _identity = EntityIdentity::of::<E>(&id);
 		let bucket = self.bucket::<E>();
 		let signal = {
@@ -57,13 +61,22 @@ impl EntityArena {
 
 	/// Stages and atomically publishes a group of entity replacements and removals.
 	pub fn update_entities(&self, update: impl FnOnce(&mut EntityWriter<'_>)) {
+		self.update_entities_with_precommit(update, |_| {});
+	}
+
+	fn update_entities_with_precommit(
+		&self,
+		update: impl FnOnce(&mut EntityWriter<'_>),
+		precommit: impl FnOnce(&EntityOverlay<'_>),
+	) {
 		let ticket = self.issue_mutation_ticket();
-		let mut staging = EntityStaging::default();
+		let mut staging = EntityStaging::new(Rc::clone(&self.inner.type_registry));
 		update(&mut EntityWriter {
 			staging: &mut staging,
 		});
 
 		let overlay = EntityOverlay::new(self, staging, ticket);
+		precommit(&overlay);
 		let publications = overlay.commit(ticket);
 		batch(|| {
 			for publication in publications {
@@ -88,6 +101,8 @@ impl EntityArena {
 		}
 	}
 
+	// Retained for the staged entity-GC scheduler integration in Task 8.
+	#[allow(dead_code)]
 	pub(crate) fn gc_time(&self) -> Duration {
 		self.inner.gc_time
 	}
@@ -105,6 +120,7 @@ impl EntityArena {
 	where
 		E: Entity,
 	{
+		self.register_entity_type::<E>();
 		let mut buckets = self.inner.buckets.borrow_mut();
 		if let Some(existing) = buckets.get(E::TYPE) {
 			return Rc::clone(existing)
@@ -127,6 +143,7 @@ impl EntityArena {
 	where
 		E: Entity,
 	{
+		self.register_entity_type::<E>();
 		let buckets = self.inner.buckets.borrow();
 		let Some(bucket) = buckets.get(E::TYPE) else {
 			return None;
@@ -150,6 +167,7 @@ impl EntityArena {
 	where
 		E: Entity,
 	{
+		self.register_entity_type::<E>();
 		let buckets = self.inner.buckets.borrow();
 		let bucket = buckets.get(E::TYPE)?;
 		let bucket = Rc::clone(bucket)
@@ -165,6 +183,13 @@ impl EntityArena {
 			.records
 			.get(id)
 			.and_then(|record| record.last_write_ticket)
+	}
+
+	fn register_entity_type<E>(&self)
+	where
+		E: Entity,
+	{
+		self.inner.type_registry.borrow_mut().register::<E>();
 	}
 
 	#[cfg(test)]
@@ -208,6 +233,15 @@ impl EntityArena {
 			.get(&ticket.0)
 			.copied()
 			.unwrap_or_default()
+	}
+
+	#[cfg(test)]
+	pub(crate) fn update_entities_with_test_precommit(
+		&self,
+		update: impl FnOnce(&mut EntityWriter<'_>),
+		precommit: impl FnOnce(&EntityOverlay<'_>),
+	) {
+		self.update_entities_with_precommit(update, precommit);
 	}
 }
 
@@ -274,6 +308,7 @@ impl EntityWriter<'_> {
 	where
 		E: Entity,
 	{
+		self.staging.type_registry.borrow_mut().register::<E>();
 		let id = entity.entity_id();
 		self.staging.operations.push(Box::new(TypedEntityOperation {
 			identity: EntityIdentity::of::<E>(&id),
@@ -287,6 +322,7 @@ impl EntityWriter<'_> {
 	where
 		E: Entity,
 	{
+		self.staging.type_registry.borrow_mut().register::<E>();
 		self.staging
 			.operations
 			.push(Box::new(TypedEntityOperation::<E> {
@@ -297,9 +333,18 @@ impl EntityWriter<'_> {
 	}
 }
 
-#[derive(Default)]
 pub(crate) struct EntityStaging {
 	operations: Vec<Box<dyn ErasedEntityOperation>>,
+	type_registry: Rc<RefCell<EntityTypeRegistry>>,
+}
+
+impl EntityStaging {
+	fn new(type_registry: Rc<RefCell<EntityTypeRegistry>>) -> Self {
+		Self {
+			operations: Vec::new(),
+			type_registry,
+		}
+	}
 }
 
 /// A read-only candidate view that overlays staged entity writes on live records.
@@ -334,6 +379,8 @@ impl<'a> EntityOverlay<'a> {
 		}
 	}
 
+	// This read path is consumed by projection materialization in Task 3.
+	#[allow(dead_code)]
 	pub(crate) fn get<E>(&self, id: &E::Id) -> Option<E>
 	where
 		E: Entity,
@@ -508,6 +555,8 @@ pub(crate) struct QueryTicketLease {
 }
 
 impl QueryTicketLease {
+	// Query completion consumes this ticket when normalized requests land in Task 5.
+	#[allow(dead_code)]
 	pub(crate) fn ticket(&self) -> EntityWriteTicket {
 		self.ticket
 	}

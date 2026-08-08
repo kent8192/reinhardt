@@ -31,7 +31,7 @@ impl EntityIdentity {
 	where
 		E: Entity,
 	{
-		EntityTypeRegistry::register::<E>();
+		EntityTypeRegistry::register_global::<E>();
 		let canonical_id = canonical_json::encode(id).unwrap_or_else(|error| {
 			panic!(
 				"failed to encode entity TYPE `{}` ID type `{}` as canonical JSON: {error}",
@@ -86,16 +86,18 @@ pub(crate) struct EntityTypeRegistry {
 }
 
 impl EntityTypeRegistry {
-	fn global() -> &'static Mutex<Self> {
-		static REGISTRY: OnceLock<Mutex<EntityTypeRegistry>> = OnceLock::new();
-		REGISTRY.get_or_init(|| {
-			Mutex::new(Self {
-				registrations: HashMap::new(),
-			})
-		})
+	pub(crate) fn new() -> Self {
+		Self {
+			registrations: HashMap::new(),
+		}
 	}
 
-	fn register<E>()
+	fn global() -> &'static Mutex<Self> {
+		static REGISTRY: OnceLock<Mutex<EntityTypeRegistry>> = OnceLock::new();
+		REGISTRY.get_or_init(|| Mutex::new(Self::new()))
+	}
+
+	pub(crate) fn register<E>(&mut self)
 	where
 		E: Entity,
 	{
@@ -108,17 +110,12 @@ impl EntityTypeRegistry {
 		}
 
 		let registration = EntityTypeRegistration::of::<E>();
-		let conflict = {
-			let mut registry = Self::global()
-				.lock()
-				.unwrap_or_else(|poisoned| poisoned.into_inner());
-			match registry.registrations.get(E::TYPE).copied() {
-				Some(existing) if existing.is_compatible_with(registration) => None,
-				Some(existing) => Some(existing),
-				None => {
-					registry.registrations.insert(E::TYPE, registration);
-					None
-				}
+		let conflict = match self.registrations.get(E::TYPE).copied() {
+			Some(existing) if existing.is_compatible_with(registration) => None,
+			Some(existing) => Some(existing),
+			None => {
+				self.registrations.insert(E::TYPE, registration);
+				None
 			}
 		};
 
@@ -133,5 +130,15 @@ impl EntityTypeRegistry {
 				registration.id_name,
 			);
 		}
+	}
+
+	fn register_global<E>()
+	where
+		E: Entity,
+	{
+		Self::global()
+			.lock()
+			.unwrap_or_else(|poisoned| poisoned.into_inner())
+			.register::<E>();
 	}
 }

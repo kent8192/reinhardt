@@ -263,12 +263,24 @@ fn store_callback_panic_rolls_back_staged_writes() {
 	ReactiveScope::run(|| {
 		let arena = EntityArena::new(Duration::from_secs(300));
 		let handle = arena.entity::<Project>(1);
+		let observed = Rc::new(RefCell::new(Vec::new()));
+		let observed_for_effect = Rc::clone(&observed);
+		let handle_for_effect = handle.clone();
+		let _effect = Effect::new(move || {
+			observed_for_effect
+				.borrow_mut()
+				.push(handle_for_effect.get());
+		});
 		arena.update_entities(|writer| {
 			writer.upsert(Project {
 				id: 1,
 				name: "stable".to_string(),
 			});
 		});
+		let stable_ticket = arena
+			.record_write_ticket::<Project>(&1)
+			.expect("the stable write must record a ticket");
+		observed.borrow_mut().clear();
 
 		let panic = catch_unwind(AssertUnwindSafe(|| {
 			arena.update_entities(|writer| {
@@ -288,6 +300,65 @@ fn store_callback_panic_rolls_back_staged_writes() {
 				name: "stable".to_string(),
 			}),
 		);
+		assert_eq!(
+			arena.record_write_ticket::<Project>(&1),
+			Some(stable_ticket)
+		);
+		assert!(!arena.record_is_removed::<Project>(&1));
+		assert_eq!(observed.borrow().as_slice(), &[]);
+	});
+}
+
+#[test]
+fn store_precommit_panic_rolls_back_staged_writes() {
+	ReactiveScope::run(|| {
+		let arena = EntityArena::new(Duration::from_secs(300));
+		let handle = arena.entity::<Project>(1);
+		let observed = Rc::new(RefCell::new(Vec::new()));
+		let observed_for_effect = Rc::clone(&observed);
+		let handle_for_effect = handle.clone();
+		let _effect = Effect::new(move || {
+			observed_for_effect
+				.borrow_mut()
+				.push(handle_for_effect.get());
+		});
+		arena.update_entities(|writer| {
+			writer.upsert(Project {
+				id: 1,
+				name: "stable".to_string(),
+			});
+		});
+		let stable_ticket = arena
+			.record_write_ticket::<Project>(&1)
+			.expect("the stable write must record a ticket");
+		observed.borrow_mut().clear();
+
+		let panic = catch_unwind(AssertUnwindSafe(|| {
+			arena.update_entities_with_test_precommit(
+				|writer| {
+					writer.upsert(Project {
+						id: 1,
+						name: "discarded".to_string(),
+					});
+				},
+				|_| panic!("precommit validation failure"),
+			);
+		}));
+
+		assert!(panic.is_err());
+		assert_eq!(
+			handle.get(),
+			Some(Project {
+				id: 1,
+				name: "stable".to_string(),
+			}),
+		);
+		assert_eq!(
+			arena.record_write_ticket::<Project>(&1),
+			Some(stable_ticket)
+		);
+		assert!(!arena.record_is_removed::<Project>(&1));
+		assert_eq!(observed.borrow().as_slice(), &[]);
 	});
 }
 

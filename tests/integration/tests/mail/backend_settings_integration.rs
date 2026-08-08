@@ -45,7 +45,6 @@ async fn backend_from_settings_selects_backends_and_rejects_bad_configuration() 
 	let mut memory_settings = EmailSettings::default();
 	memory_settings.backend = "memory".to_string();
 	let memory_backend = backend_from_settings(&memory_settings).unwrap();
-	let memory_name = memory_backend.backend_name();
 	let memory_sent = memory_backend
 		.send_messages(std::slice::from_ref(&message))
 		.await
@@ -54,7 +53,6 @@ async fn backend_from_settings_selects_backends_and_rejects_bad_configuration() 
 	let mut console_settings = EmailSettings::default();
 	console_settings.backend = "console".to_string();
 	let console_backend = backend_from_settings(&console_settings).unwrap();
-	let console_name = console_backend.backend_name();
 	let console_sent = console_backend
 		.send_messages(std::slice::from_ref(&message))
 		.await
@@ -77,8 +75,6 @@ async fn backend_from_settings_selects_backends_and_rejects_bad_configuration() 
 		invalid_from.to_string(),
 		"Invalid email address: Email must contain exactly one @ symbol, found 0"
 	);
-	assert_eq!(memory_name, "memory");
 	assert_eq!(memory_sent, 1);
-	assert_eq!(console_name, "console");
 	assert_eq!(console_sent, 1);
 }

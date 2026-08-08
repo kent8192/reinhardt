@@ -24,11 +24,6 @@ use zeroize::Zeroize;
 pub trait EmailBackend: Send + Sync {
 	/// Send one or more email messages, returning the number of messages sent successfully.
 	async fn send_messages(&self, messages: &[EmailMessage]) -> EmailResult<usize>;
-
-	/// Returns the name of this backend implementation.
-	fn backend_name(&self) -> &str {
-		"custom"
-	}
 }
 
 /// Creates an email backend from settings configuration.
@@ -134,10 +129,6 @@ impl EmailBackend for ConsoleBackend {
 		}
 		Ok(messages.len())
 	}
-
-	fn backend_name(&self) -> &str {
-		"console"
-	}
 }
 
 /// File backend for saving emails to files
@@ -201,10 +192,6 @@ impl EmailBackend for FileBackend {
 
 		Ok(messages.len())
 	}
-
-	fn backend_name(&self) -> &str {
-		"file"
-	}
 }
 
 /// Memory backend for testing
@@ -248,10 +235,6 @@ impl EmailBackend for MemoryBackend {
 		let mut stored = self.messages.lock().await;
 		stored.extend_from_slice(messages);
 		Ok(messages.len())
-	}
-
-	fn backend_name(&self) -> &str {
-		"memory"
 	}
 }
 
@@ -747,10 +730,6 @@ impl EmailBackend for SmtpBackend {
 		}
 
 		Ok(sent_count)
-	}
-
-	fn backend_name(&self) -> &str {
-		"smtp"
 	}
 }
 

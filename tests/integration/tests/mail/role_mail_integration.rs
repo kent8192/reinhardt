@@ -95,7 +95,7 @@ async fn role_mail_helpers_apply_recipient_and_failure_policy() {
 	assert_eq!(messages[1].to(), &["manager@example.com".to_string()]);
 	assert_eq!(messages[2].html_body(), Some("<p>HTML body</p>"));
 	assert_eq!(messages[2].to(), &["recipient@example.com".to_string()]);
-	assert!(silent_admins.is_ok());
+	silent_admins.unwrap();
 	assert_eq!(count_after_silent, 3);
 	assert_eq!(
 		missing_admins.unwrap_err().to_string(),
@@ -105,7 +105,7 @@ async fn role_mail_helpers_apply_recipient_and_failure_policy() {
 		missing_managers.unwrap_err().to_string(),
 		"Missing required field: managers"
 	);
-	assert!(transient_suppressed.is_ok());
+	transient_suppressed.unwrap();
 	assert_eq!(
 		transient_propagated.unwrap_err().to_string(),
 		"IO error: transient failure"

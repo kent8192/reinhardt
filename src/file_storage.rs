@@ -4,8 +4,8 @@ use reinhardt_db::migrations::model_registry::{ModelRegistry, global_registry};
 use std::sync::Arc;
 
 pub use reinhardt_storages::{
-	ActiveStorageRegistryGuard, FileStorageError, StorageBackend, StorageEntry, StorageRegistry,
-	StorageSettings, active_storage_registry,
+	ActiveStorageRegistryGuard, FileStorageError, StorageBackend, StorageCapabilities,
+	StorageEntry, StorageError, StorageRegistry, StorageSettings, active_storage_registry,
 };
 
 /// Initialize and activate the process-wide storage registry for registered models.

@@ -982,12 +982,14 @@ assert_eq!(project.data().map(|value| value.id), None);
 
 Use `EntityValue<E>` for a required entity, `OptionalEntity<E>` for an
 optional entity, and `EntityVec<E>` for an ordered vector. Required removal
-makes the internal query materialization `MissingRequired`; an active enabled
-`QueryHandle` keeps its last successful `T` and `QueryStatus::Success` while
-the cache schedules at most one recovery refetch. Optional removal yields
-`None`; vector removal drops only the removed ID and preserves the remaining
-order. A direct `client.entity::<E>(id)` handle reads `None` for a vacant or
-tombstoned record.
+makes the internal query materialization `MissingRequired`, marks the query
+stale (`normalization_missing` internally), and always retains its last
+successful `T` with `QueryStatus::Success`, even for inactive or disabled
+handles. Only an active enabled `QueryHandle` automatically schedules at most
+one recovery refetch; inactive or disabled handles wait for an enabled mount
+or an explicit refetch. Optional removal yields `None`; vector removal drops
+only the removed ID and preserves the remaining order. A direct
+`client.entity::<E>(id)` handle reads `None` for a vacant or tombstoned record.
 Entity handles and query dependencies hold leases, and the arena retains
 unleased records and tombstones until the client's default `QueryDefaults::gc_time`
 deadline.

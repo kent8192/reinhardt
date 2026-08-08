@@ -60,11 +60,14 @@
 //! ```
 //!
 //! The adapters have different removal semantics. Removing the required value
-//! makes internal materialization report `MissingRequired`; an active enabled
-//! [`crate::reactive::QueryHandle`] retains its last successful `T` and
-//! `QueryStatus::Success` while scheduling at most one recovery refetch.
-//! Removing an optional value changes it to `None`; removing an ID from an
-//! [`EntityVec`] removes that ID while preserving the remaining order. A direct
+//! makes internal materialization report `MissingRequired`, marks the query
+//! stale (`normalization_missing` internally), and always retains its last
+//! successful `T` with `QueryStatus::Success`, even for inactive or disabled
+//! handles. Only an active enabled [`crate::reactive::QueryHandle`] observer
+//! automatically schedules at most one recovery refetch; inactive or disabled
+//! handles wait for an enabled mount or an explicit refetch. Removing an
+//! optional value changes it to `None`; removing an ID from an [`EntityVec`]
+//! removes that ID while preserving the remaining order. A direct
 //! [`EntityHandle::get`] likewise returns `None` for a vacant or tombstoned
 //! record.
 //!
@@ -211,9 +214,10 @@
 //! Entity leases keep records alive while a query dependency or an
 //! [`EntityHandle`] exists. When the lease count reaches zero, the arena
 //! schedules a GC deadline for the present record or tombstone using the
-//! client's default `gc_time`. Active in-flight write tickets only block and
-//! re-check collection at that deadline; they do not postpone scheduling.
-//! Reacquiring a handle invalidates an older deadline.
+//! client's default `gc_time`. Collection is blocked when an active query
+//! ticket is older than the record's last applied write ticket, then rechecked
+//! when that ticket is dropped. Reacquiring a handle invalidates an older
+//! deadline.
 //!
 //! # SSR and hydration
 //!

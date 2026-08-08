@@ -107,12 +107,14 @@
 //! are complete replacements: normalization never infers collection
 //! membership, relationships, cascades, patches, or optimistic rollback.
 //! `remove_entity` creates a tombstone. Required projections become internally
-//! `MissingRequired`; an active enabled `QueryHandle` continues to expose its
-//! last successful `T` with `QueryStatus::Success` while scheduling at most one
-//! recovery refetch. Optional projections become `None`, vectors drop the
-//! removed ID, and direct entity handles read `None`. `update_entities` stages
-//! all writes and publishes dependent query snapshots and handles atomically in
-//! one reactive batch:
+//! `MissingRequired`, mark their query stale (`normalization_missing`), and
+//! always retain the last successful `T` with `QueryStatus::Success`, including
+//! inactive and disabled handles. Only an active enabled `QueryHandle` observer
+//! schedules at most one recovery refetch; inactive and disabled handles wait
+//! for an enabled mount or an explicit refetch. Optional projections become
+//! `None`, vectors drop the removed ID, and direct entity handles read `None`.
+//! `update_entities` stages all writes and publishes dependent query snapshots
+//! and handles atomically in one reactive batch:
 //!
 //! ```rust,no_run
 //! use reinhardt_pages::{Entity, QueryClient, QueryDefaults};

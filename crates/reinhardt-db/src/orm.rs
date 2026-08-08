@@ -331,9 +331,10 @@ pub use query_options::{
 };
 pub use registry::{ColumnInfo, Mapper, MapperRegistry, TableInfo, registry};
 pub use relations::{
-	GenericRelationConfig, GenericRelationSet, PlannedRelationJoin, RelatedFieldRef,
-	RelationDescriptor, RelationJoinGraph, RelationJoinKind, RelationMultiplicity, RelationPath,
-	RelationPathLike, RelationStep, RelationTarget,
+	GeneratedRelatedField, GeneratedRelationPath, GenericRelationConfig, GenericRelationSet,
+	PlannedRelationJoin, RelatedFieldRef, RelationDescriptor, RelationFieldOrigin,
+	RelationJoinGraph, RelationJoinKind, RelationMultiplicity, RelationPath, RelationPathLike,
+	RelationStep, RelationTarget, UnverifiedRelatedField, UnverifiedRelationPath,
 };
 pub use relationship::{CascadeOption, Relationship, RelationshipDirection, RelationshipType};
 pub use session::{Session, SessionError};

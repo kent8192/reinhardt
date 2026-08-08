@@ -211,7 +211,8 @@ fn count_unqualified_columns(expression: &SimpleExpr) -> Option<usize> {
 						.map_or(Some(0), count_unqualified_columns)?,
 			)
 		}
-		SimpleExpr::Window { window, .. } => {
+		SimpleExpr::Window { func, window } => {
+			let function_count = count_unqualified_columns(func)?;
 			let partition_count: usize = window
 				.partition_by
 				.iter()
@@ -231,7 +232,7 @@ fn count_unqualified_columns(expression: &SimpleExpr) -> Option<usize> {
 				.collect::<Option<Vec<_>>>()?
 				.into_iter()
 				.sum();
-			Some(partition_count + order_count)
+			Some(function_count + partition_count + order_count)
 		}
 		SimpleExpr::Value(_) | SimpleExpr::Constant(_) | SimpleExpr::Asterisk => Some(0),
 		SimpleExpr::SubQuery(_, _) | SimpleExpr::Custom(_) => None,

@@ -300,6 +300,7 @@ async fn run_matrix(fixture: BackendFixture) {
 			func::avg(AggregateRecord::field_integer_value()),
 			"integer_average",
 		),
+		label(func::sum(AggregateRecord::field_float_value()), "float_sum"),
 		label(
 			func::avg(AggregateRecord::field_float_value()),
 			"float_average",
@@ -335,6 +336,7 @@ async fn run_matrix(fixture: BackendFixture) {
 	assert_eq!(result.get_i64("integer_count").unwrap(), 2);
 	assert_eq!(result.get_i64("integer_sum").unwrap(), 40);
 	assert_eq!(result.get_f64("integer_average").unwrap(), 20.0);
+	assert_eq!(result.get_f64("float_sum").unwrap(), 4.0);
 	assert_eq!(result.get_f64("float_average").unwrap(), 2.0);
 	assert_eq!(
 		result.get_decimal("decimal_sum").unwrap(),
@@ -374,6 +376,7 @@ async fn run_matrix(fixture: BackendFixture) {
 			"integer_count",
 			"integer_sum",
 			"integer_average",
+			"float_sum",
 			"float_average",
 			"decimal_sum",
 			"decimal_average",

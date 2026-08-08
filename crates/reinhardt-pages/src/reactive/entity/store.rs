@@ -64,25 +64,40 @@ impl EntityArena {
 		self.update_entities_with_precommit(update, |_| {});
 	}
 
+	pub(crate) fn stage(&self, update: impl FnOnce(&mut EntityWriter<'_>)) -> EntityStaging {
+		let mut staging = EntityStaging::new(Rc::clone(&self.inner.type_registry));
+		update(&mut EntityWriter {
+			staging: &mut staging,
+		});
+		staging
+	}
+
+	pub(crate) fn commit_overlay(
+		&self,
+		overlay: EntityOverlay<'_>,
+		ticket: EntityWriteTicket,
+		publish: impl FnOnce(),
+	) {
+		let publications = overlay.commit(ticket);
+		batch(|| {
+			for publication in publications {
+				publication.publish();
+			}
+			publish();
+		});
+	}
+
 	fn update_entities_with_precommit(
 		&self,
 		update: impl FnOnce(&mut EntityWriter<'_>),
 		precommit: impl FnOnce(&EntityOverlay<'_>),
 	) {
 		let ticket = self.issue_mutation_ticket();
-		let mut staging = EntityStaging::new(Rc::clone(&self.inner.type_registry));
-		update(&mut EntityWriter {
-			staging: &mut staging,
-		});
+		let staging = self.stage(update);
 
 		let overlay = EntityOverlay::new(self, staging, ticket);
 		precommit(&overlay);
-		let publications = overlay.commit(ticket);
-		batch(|| {
-			for publication in publications {
-				publication.publish();
-			}
-		});
+		self.commit_overlay(overlay, ticket, || {});
 	}
 
 	pub(crate) fn issue_mutation_ticket(&self) -> EntityWriteTicket {
@@ -99,6 +114,23 @@ impl EntityArena {
 			arena: Rc::downgrade(&self.inner),
 			ticket,
 		}
+	}
+
+	pub(crate) fn acquire_dependency<E>(&self, id: E::Id) -> Box<dyn Any>
+	where
+		E: Entity,
+	{
+		let bucket = self.bucket::<E>();
+		{
+			let mut bucket = bucket.borrow_mut();
+			let record = bucket
+				.records
+				.entry(id.clone())
+				.or_insert_with(EntityRecord::vacant);
+			record.dependency_lease_count += 1;
+		}
+
+		Box::new(TypedEntityDependencyLease::<E> { bucket, id })
 	}
 
 	// Retained for the staged entity-GC scheduler integration in Task 8.
@@ -206,6 +238,19 @@ impl EntityArena {
 	}
 
 	#[cfg(test)]
+	pub(crate) fn dependency_lease_count<E>(&self, id: &E::Id) -> usize
+	where
+		E: Entity,
+	{
+		let bucket = self.bucket::<E>();
+		bucket
+			.borrow()
+			.records
+			.get(id)
+			.map_or(0, |record| record.dependency_lease_count)
+	}
+
+	#[cfg(test)]
 	pub(crate) fn record_write_ticket<E>(&self, id: &E::Id) -> Option<EntityWriteTicket>
 	where
 		E: Entity,
@@ -213,7 +258,6 @@ impl EntityArena {
 		self.record_ticket::<E>(id)
 	}
 
-	#[cfg(test)]
 	pub(crate) fn record_is_removed<E>(&self, id: &E::Id) -> bool
 	where
 		E: Entity,
@@ -294,6 +338,28 @@ where
 			.get_mut(&self.id)
 			.expect("entity handle lease record must outlive its handle");
 		record.handle_lease_count = record.handle_lease_count.saturating_sub(1);
+	}
+}
+
+struct TypedEntityDependencyLease<E>
+where
+	E: Entity,
+{
+	bucket: Rc<RefCell<EntityBucket<E>>>,
+	id: E::Id,
+}
+
+impl<E> Drop for TypedEntityDependencyLease<E>
+where
+	E: Entity,
+{
+	fn drop(&mut self) {
+		let mut bucket = self.bucket.borrow_mut();
+		let record = bucket
+			.records
+			.get_mut(&self.id)
+			.expect("entity dependency lease record must outlive its lease");
+		record.dependency_lease_count = record.dependency_lease_count.saturating_sub(1);
 	}
 }
 
@@ -397,6 +463,22 @@ impl<'a> EntityOverlay<'a> {
 		self.arena.current::<E>(id)
 	}
 
+	pub(crate) fn is_removed<E>(&self, id: &E::Id) -> bool
+	where
+		E: Entity,
+	{
+		self.arena.register_entity_type::<E>();
+		let identity = EntityIdentity::of::<E>(id);
+		if let Some(operation) = self
+			.operations
+			.iter()
+			.find(|operation| operation.identity() == &identity)
+		{
+			return operation.is_removed();
+		}
+		self.arena.record_is_removed::<E>(id)
+	}
+
 	pub(crate) fn commit(self, ticket: EntityWriteTicket) -> Vec<Box<dyn EntityPublication>> {
 		self.operations
 			.iter()
@@ -408,6 +490,7 @@ impl<'a> EntityOverlay<'a> {
 trait ErasedEntityOperation {
 	fn identity(&self) -> &EntityIdentity;
 	fn value(&self) -> Option<&dyn Any>;
+	fn is_removed(&self) -> bool;
 	fn applies_to(&self, arena: &EntityArena, ticket: EntityWriteTicket) -> bool;
 	fn commit(&self, arena: &EntityArena, ticket: EntityWriteTicket) -> Box<dyn EntityPublication>;
 }
@@ -439,6 +522,10 @@ where
 			StagedEntityState::Present(entity) => Some(entity),
 			StagedEntityState::Removed => None,
 		}
+	}
+
+	fn is_removed(&self) -> bool {
+		matches!(self.state, StagedEntityState::Removed)
 	}
 
 	fn applies_to(&self, arena: &EntityArena, ticket: EntityWriteTicket) -> bool {
@@ -513,6 +600,7 @@ where
 	state: EntityRecordState<E>,
 	signal: Signal<Option<E>>,
 	handle_lease_count: usize,
+	dependency_lease_count: usize,
 	last_write_ticket: Option<EntityWriteTicket>,
 }
 
@@ -525,6 +613,7 @@ where
 			state: EntityRecordState::Vacant,
 			signal: Signal::new(None),
 			handle_lease_count: 0,
+			dependency_lease_count: 0,
 			last_write_ticket: None,
 		}
 	}

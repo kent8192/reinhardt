@@ -28,6 +28,11 @@ use super::state::{QueryDefaults, QueryOptions};
 #[cfg(any(wasm, test))]
 use super::state::{QueryHydrationSnapshot, QueryHydrationState};
 use crate::cancellation::{AbortableTaskGuard, CancellationSource, scope_cancellation};
+use crate::reactive::entity::{
+	Entity, EntityArena, EntityHandle, EntityIdentity, EntityOverlay, EntityWriteTicket,
+	EntityWriter, ErasedEntityProjection, ProjectionMaterialization, ProjectionRemoval,
+	QueryTicketLease, RemovedEntities,
+};
 use reinhardt_core::reactive::ReactiveScope;
 
 type QueryTask = Pin<Box<dyn Future<Output = ()> + 'static>>;
@@ -215,6 +220,7 @@ pub struct QueryClient {
 pub(super) struct QueryClientInner {
 	defaults: QueryDefaults,
 	runtime: QueryRuntimeHandle,
+	entities: EntityArena,
 	entries: RefCell<HashMap<QueryIdentity, CachedQueryEntry>>,
 	#[cfg(any(wasm, test))]
 	consumed_hydration_identities: RefCell<HashSet<QueryIdentity>>,
@@ -286,11 +292,13 @@ impl QueryClient {
 
 	pub(crate) fn with_runtime(defaults: QueryDefaults, runtime: QueryRuntimeHandle) -> Self {
 		let supports_browser_resources = runtime.supports_browser_resources();
+		let entity_gc_time = defaults.resolved_gc_time();
 		let document_visible =
 			super::browser::QueryBrowser::initial_visibility(supports_browser_resources);
 		let inner = Rc::new_cyclic(|owner| QueryClientInner {
 			defaults,
 			runtime,
+			entities: EntityArena::new(entity_gc_time),
 			entries: RefCell::new(HashMap::new()),
 			#[cfg(any(wasm, test))]
 			consumed_hydration_identities: RefCell::new(HashSet::new()),
@@ -329,6 +337,35 @@ impl QueryClient {
 		E: Clone + Serialize + DeserializeOwned + 'static,
 	{
 		super::hook::observe_query(self, descriptor, options)
+	}
+
+	/// Returns a reactive handle for one normalized entity.
+	pub fn entity<E>(&self, id: E::Id) -> EntityHandle<E>
+	where
+		E: Entity,
+	{
+		self.inner.entities.entity(id)
+	}
+
+	/// Replaces one normalized entity in an atomic entity transaction.
+	pub fn upsert_entity<E>(&self, entity: E)
+	where
+		E: Entity,
+	{
+		self.update_entities(|entities| entities.upsert(entity));
+	}
+
+	/// Tombstones one normalized entity in an atomic entity transaction.
+	pub fn remove_entity<E>(&self, id: &E::Id)
+	where
+		E: Entity,
+	{
+		self.update_entities(|entities| entities.remove::<E>(id));
+	}
+
+	/// Applies a group of normalized entity writes atomically.
+	pub fn update_entities(&self, update: impl FnOnce(&mut EntityWriter<'_>)) {
+		self.inner.entities.update_entities(update);
 	}
 
 	/// Observes a query without installing an application context.
@@ -385,6 +422,19 @@ impl QueryClient {
 	#[cfg(test)]
 	pub(crate) fn contains_for_test<T, E>(&self, key: &QueryKey<T, E>) -> bool {
 		self.inner.entries.borrow().contains_key(key.identity())
+	}
+
+	#[cfg(test)]
+	pub(crate) fn entity_arena_for_test(&self) -> EntityArena {
+		self.inner.entities.clone()
+	}
+
+	#[cfg(test)]
+	pub(crate) fn entity_dependency_lease_count_for_test<E>(&self, id: &E::Id) -> usize
+	where
+		E: Entity,
+	{
+		self.inner.entities.dependency_lease_count::<E>(id)
 	}
 }
 
@@ -552,6 +602,7 @@ pub(super) struct QueryRequest<T: Clone + 'static, E: Clone + 'static> {
 	invalidation_generation: u64,
 	manual_observer: Option<Weak<QueryLeaseInner<T, E>>>,
 	pub(super) source: CancellationSource,
+	pub(super) ticket: QueryTicketLease,
 	_guard: AbortableTaskGuard,
 	_marker: PhantomData<fn() -> Result<T, E>>,
 }
@@ -562,6 +613,10 @@ pub(super) struct QueryEntry<T: Clone + 'static, E: Clone + 'static> {
 	identity: QueryIdentity,
 	family_id: &'static str,
 	pub(super) state: Signal<ResourceState<T, E>>,
+	normalization: Option<Rc<ErasedEntityProjection<T>>>,
+	recipe: RefCell<Option<Box<dyn Any>>>,
+	dependencies: RefCell<HashMap<EntityIdentity, Box<dyn Any>>>,
+	normalization_missing: Cell<bool>,
 	pub(super) refetch_error: Signal<Option<E>>,
 	pub(super) is_fetching: Signal<bool>,
 	pub(super) request: RefCell<Option<QueryRequest<T, E>>>,
@@ -580,6 +635,7 @@ pub(super) struct QueryEntry<T: Clone + 'static, E: Clone + 'static> {
 	gc_generation: Cell<u64>,
 	epoch_gc_time: Cell<Duration>,
 	runtime: QueryRuntimeHandle,
+	entities: EntityArena,
 	owner: Option<Weak<QueryClientInner>>,
 	inline_task: RefCell<Option<QueryTask>>,
 }
@@ -675,14 +731,23 @@ impl<T: Clone + 'static, E: Clone + 'static> QueryEntry<T, E> {
 		T: Serialize + DeserializeOwned,
 		E: Serialize + DeserializeOwned,
 	{
-		let (key, _fetcher, _ssr_prefetch, _family_types, _normalization) = descriptor.into_parts();
-		Self::new_with_hydrated_state(key, None, platform_query_runtime(), None)
+		let (key, _fetcher, _ssr_prefetch, _family_types, normalization) = descriptor.into_parts();
+		Self::new_with_hydrated_state(
+			key,
+			None,
+			normalization,
+			platform_query_runtime(),
+			EntityArena::new(Duration::from_secs(300)),
+			None,
+		)
 	}
 
 	fn new_with_hydrated_state(
 		key: QueryKey<T, E>,
 		hydrated_state: Option<ResourceState<T, E>>,
+		normalization: Option<Rc<ErasedEntityProjection<T>>>,
 		runtime: QueryRuntimeHandle,
+		entities: EntityArena,
 		owner: Option<Weak<QueryClientInner>>,
 	) -> Self {
 		let (initial_state, last_fetched_ms) =
@@ -706,6 +771,10 @@ impl<T: Clone + 'static, E: Clone + 'static> QueryEntry<T, E> {
 			identity,
 			family_id,
 			state,
+			normalization,
+			recipe: RefCell::new(None),
+			dependencies: RefCell::new(HashMap::new()),
+			normalization_missing: Cell::new(false),
 			refetch_error,
 			is_fetching,
 			request: RefCell::new(None),
@@ -724,13 +793,14 @@ impl<T: Clone + 'static, E: Clone + 'static> QueryEntry<T, E> {
 			gc_generation: Cell::new(0),
 			epoch_gc_time: Cell::new(Duration::ZERO),
 			runtime,
+			entities,
 			owner,
 			inline_task: RefCell::new(None),
 		}
 	}
 
 	pub(super) fn is_stale(&self, stale_time: Duration) -> bool {
-		if self.invalidated.get() {
+		if self.invalidated.get() || self.normalization_missing.get() {
 			return true;
 		}
 		let Some(last_fetched_ms) = self.last_fetched_ms.get() else {
@@ -1129,11 +1199,13 @@ impl<T: Clone + 'static, E: Clone + 'static> QueryEntry<T, E> {
 		let token = source.handle();
 		let (abort_handle, abort_registration) = AbortHandle::new_pair();
 		let guard = AbortableTaskGuard::new(abort_handle);
+		let ticket = self.entities.acquire_query_ticket();
 		*self.request.borrow_mut() = Some(QueryRequest {
 			generation,
 			invalidation_generation,
 			manual_observer: manual_observer.as_ref().map(Rc::downgrade),
 			source,
+			ticket,
 			_guard: guard,
 			_marker: PhantomData,
 		});
@@ -1185,31 +1257,44 @@ impl<T: Clone + 'static, E: Clone + 'static> QueryEntry<T, E> {
 		if cancelled || !matches_request {
 			return;
 		}
-		let request_invalidation_generation = request
-			.as_ref()
-			.map(|request| request.invalidation_generation)
-			.unwrap_or_default();
-		let manual_observer = request
-			.as_ref()
-			.and_then(|request| request.manual_observer.clone());
 		drop(request);
+		let request = self
+			.request
+			.borrow_mut()
+			.take()
+			.expect("matching query request must remain active through completion");
+		let request_invalidation_generation = request.invalidation_generation;
+		let manual_observer = request.manual_observer.clone();
 		let had_success = self
 			.state
 			.with_untracked(|state| matches!(state, ResourceState::Success(_)));
-		self.request.borrow_mut().take();
-		self.completed
-			.borrow_mut()
-			.replace((generation, result.clone()));
+		let mut normalized_success = false;
 		match result {
 			Ok(value) => {
-				self.last_fetched_ms.set(Some(self.runtime.now_ms()));
-				self.refetch_error.set(None);
-				self.state.set(ResourceState::Success(value));
-				if self.invalidation_generation.get() == request_invalidation_generation {
-					self.invalidated.set(false);
+				if self.normalization.is_some() {
+					normalized_success = true;
+					self.complete_normalized_success(
+						generation,
+						value,
+						request.ticket.ticket(),
+						request_invalidation_generation,
+					);
+				} else {
+					self.completed
+						.borrow_mut()
+						.replace((generation, Ok(value.clone())));
+					self.last_fetched_ms.set(Some(self.runtime.now_ms()));
+					self.refetch_error.set(None);
+					self.state.set(ResourceState::Success(value));
+					if self.invalidation_generation.get() == request_invalidation_generation {
+						self.invalidated.set(false);
+					}
 				}
 			}
 			Err(error) => {
+				self.completed
+					.borrow_mut()
+					.replace((generation, Err(error.clone())));
 				if had_success {
 					self.refetch_error.set(Some(error));
 				} else {
@@ -1226,7 +1311,9 @@ impl<T: Clone + 'static, E: Clone + 'static> QueryEntry<T, E> {
 				}
 			}
 		}
-		self.is_fetching.set(false);
+		if !normalized_success {
+			self.is_fetching.set(false);
+		}
 		self.wake_waiters();
 		self.reschedule_polling_from(self.runtime.now_ms());
 		let invalidated_during_request =
@@ -1257,6 +1344,58 @@ impl<T: Clone + 'static, E: Clone + 'static> QueryEntry<T, E> {
 		{
 			self.start_fetch(true);
 		}
+	}
+
+	fn complete_normalized_success(
+		&self,
+		generation: u64,
+		value: T,
+		ticket: EntityWriteTicket,
+		request_invalidation_generation: u64,
+	) {
+		let projection = self
+			.normalization
+			.as_ref()
+			.expect("normalized completion requires an entity projection");
+		let fallback = value.clone();
+		let mut staged_recipe = None;
+		let staging = self.entities.stage(|entities| {
+			staged_recipe.replace(projection.normalize(value, entities));
+		});
+		let mut recipe = staged_recipe.expect("entity normalization must produce a recipe");
+		let initial_dependencies = projection.dependencies(recipe.as_ref());
+		let overlay = EntityOverlay::new(&self.entities, staging, ticket);
+		let removed_identities = initial_dependencies.removed_identities(&overlay);
+		let removal = projection.apply_removals(
+			recipe.as_mut(),
+			&RemovedEntities::borrowed(&removed_identities),
+		);
+		let dependencies = projection.dependencies(recipe.as_ref());
+		let materialization = projection.materialize(recipe.as_ref(), &overlay);
+		let (candidate, missing) = match materialization {
+			ProjectionMaterialization::Ready(candidate) => (
+				candidate,
+				matches!(removal, ProjectionRemoval::MissingRequired),
+			),
+			ProjectionMaterialization::MissingRequired => (fallback, true),
+		};
+		let leases = dependencies.acquire_leases(&self.entities);
+
+		self.recipe.borrow_mut().replace(recipe);
+		*self.dependencies.borrow_mut() = leases;
+		self.normalization_missing.set(missing);
+		self.completed
+			.borrow_mut()
+			.replace((generation, Ok(candidate.clone())));
+		self.last_fetched_ms.set(Some(self.runtime.now_ms()));
+		self.entities.commit_overlay(overlay, ticket, || {
+			self.refetch_error.set(None);
+			self.state.set(ResourceState::Success(candidate));
+			if self.invalidation_generation.get() == request_invalidation_generation {
+				self.invalidated.set(false);
+			}
+			self.is_fetching.set(false);
+		});
 	}
 
 	fn invalidate(self: &Rc<Self>) {
@@ -1386,8 +1525,8 @@ impl QueryClient {
 	{
 		let policy = ObserverPolicy::resolve(&query_options, &self.inner.defaults);
 		let (key, fetcher, _ssr_prefetch, family_types, normalization) = descriptor.into_parts();
-		let normalization = QueryNormalizationContract::from_projection(normalization.as_deref());
-		self.entry_for_key(key, family_types, normalization)
+		let contract = QueryNormalizationContract::from_projection(normalization.as_deref());
+		self.entry_for_key(key, family_types, contract, normalization)
 			.acquire(fetcher, options, policy)
 	}
 
@@ -1423,7 +1562,9 @@ impl QueryClient {
 		let entry = Rc::new(QueryEntry::new_with_hydrated_state(
 			key,
 			Some(hydrated_state),
+			None,
 			Rc::clone(&self.inner.runtime),
+			self.inner.entities.clone(),
 			Some(Rc::downgrade(&self.inner)),
 		));
 		entries.insert(identity, cached_query_entry(&entry));
@@ -1492,7 +1633,9 @@ impl QueryClient {
 		let entry = Rc::new(QueryEntry::new_with_hydrated_state(
 			key,
 			Some(hydrated_state),
+			None,
 			Rc::clone(&self.inner.runtime),
+			self.inner.entities.clone(),
 			Some(Rc::downgrade(&self.inner)),
 		));
 		entry.refetch_error.set(refetch_error);
@@ -1507,21 +1650,22 @@ impl QueryClient {
 		E: Clone + Serialize + DeserializeOwned + 'static,
 	{
 		let (key, _fetcher, _ssr_prefetch, family_types, normalization) = descriptor.into_parts();
-		let normalization = QueryNormalizationContract::from_projection(normalization.as_deref());
-		self.entry_for_key(key, family_types, normalization)
+		let contract = QueryNormalizationContract::from_projection(normalization.as_deref());
+		self.entry_for_key(key, family_types, contract, normalization)
 	}
 
 	fn entry_for_key<T, E>(
 		&self,
 		key: QueryKey<T, E>,
 		family_types: QueryFamilyTypes,
-		normalization: QueryNormalizationContract,
+		contract: QueryNormalizationContract,
+		normalization: Option<Rc<ErasedEntityProjection<T>>>,
 	) -> Rc<QueryEntry<T, E>>
 	where
 		T: Clone + Serialize + DeserializeOwned + 'static,
 		E: Clone + Serialize + DeserializeOwned + 'static,
 	{
-		self.register_descriptor_family(key.family_id(), family_types, normalization);
+		self.register_descriptor_family(key.family_id(), family_types, contract);
 		let id = key.id();
 		#[cfg(any(wasm, test))]
 		super::super::resource::reserve_client_resource_key(&id);
@@ -1539,7 +1683,9 @@ impl QueryClient {
 		let entry = Rc::new(QueryEntry::new_with_hydrated_state(
 			key,
 			None,
+			normalization,
 			Rc::clone(&self.inner.runtime),
+			self.inner.entities.clone(),
 			Some(Rc::downgrade(&self.inner)),
 		));
 		entries.insert(identity, cached_query_entry(&entry));

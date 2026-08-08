@@ -8,14 +8,14 @@ use std::time::Duration;
 
 use reinhardt_core::reactive::ReactiveScope;
 use rstest::rstest;
-use serde::Serialize;
 use serde::Serializer;
 use serde::ser::{Error as _, SerializeMap};
+use serde::{Deserialize, Serialize};
 use serial_test::serial;
 
 use crate::reactive::entity::{
-	EntityDependencies, EntityProjection, EntityReader, EntityWriter, ProjectionMaterialization,
-	ProjectionRemoval, RemovedEntities,
+	Entity, EntityDependencies, EntityProjection, EntityReader, EntityValue, EntityWriter,
+	ProjectionMaterialization, ProjectionRemoval, RemovedEntities,
 };
 
 use super::super::resource::ResourceState;
@@ -1240,6 +1240,264 @@ mod normalization_contract {
 				std::mem::size_of::<StatefulProjection>(),
 			),
 		);
+	}
+}
+
+mod normalized {
+	use super::*;
+
+	#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+	struct Project {
+		id: u64,
+		name: String,
+	}
+
+	impl Entity for Project {
+		type Id = u64;
+
+		const TYPE: &'static str = "reactive.query.tests.normalized-project";
+
+		fn entity_id(&self) -> Self::Id {
+			self.id
+		}
+	}
+
+	struct ProjectGate {
+		ready: Rc<Cell<bool>>,
+		dropped: Rc<Cell<usize>>,
+		result: Option<Result<Project, String>>,
+	}
+
+	impl Future for ProjectGate {
+		type Output = Result<Project, String>;
+
+		fn poll(self: Pin<&mut Self>, _context: &mut Context<'_>) -> Poll<Self::Output> {
+			let this = self.get_mut();
+			if this.ready.get() {
+				Poll::Ready(
+					this.result
+						.take()
+						.expect("project gate polled after completion"),
+				)
+			} else {
+				Poll::Pending
+			}
+		}
+	}
+
+	impl Drop for ProjectGate {
+		fn drop(&mut self) {
+			self.dropped.set(self.dropped.get() + 1);
+		}
+	}
+
+	fn project(id: u64, name: &str) -> Project {
+		Project {
+			id,
+			name: name.to_string(),
+		}
+	}
+
+	#[test]
+	fn normalized_success_publishes_the_entity_and_materialized_query() {
+		ReactiveScope::run(|| {
+			let runtime = TestQueryRuntime::new();
+			let client = QueryClient::with_runtime(QueryDefaults::default(), runtime.handle());
+			let query = client.observe(
+				QueryFamily::<u64, Project, String>::new("tests.normalized-success")
+					.query(1, || async { Ok(project(1, "normalized")) })
+					.with_entities(EntityValue::new()),
+				QueryOptions::new(),
+			);
+
+			runtime.run_until_stalled();
+
+			assert_eq!(
+				client.entity::<Project>(1).get(),
+				Some(project(1, "normalized"))
+			);
+			assert_eq!(query.data(), Some(project(1, "normalized")));
+		});
+	}
+
+	#[test]
+	fn normalized_query_keys_share_one_entity_record() {
+		ReactiveScope::run(|| {
+			let runtime = TestQueryRuntime::new();
+			let client = QueryClient::with_runtime(QueryDefaults::default(), runtime.handle());
+			let family = QueryFamily::<u64, Project, String>::new("tests.normalized-shared-entity");
+			let first = client.observe(
+				family
+					.query(1, || async { Ok(project(7, "shared")) })
+					.with_entities(EntityValue::new()),
+				QueryOptions::new(),
+			);
+			let second = client.observe(
+				family
+					.query(2, || async { Ok(project(7, "shared")) })
+					.with_entities(EntityValue::new()),
+				QueryOptions::new(),
+			);
+
+			runtime.run_until_stalled();
+
+			assert_eq!(first.data(), Some(project(7, "shared")));
+			assert_eq!(second.data(), Some(project(7, "shared")));
+			assert_eq!(
+				client.entity::<Project>(7).get(),
+				Some(project(7, "shared"))
+			);
+			assert_eq!(
+				client.entity_dependency_lease_count_for_test::<Project>(&7),
+				2
+			);
+		});
+	}
+
+	#[test]
+	fn later_mutation_wins_over_an_older_in_flight_query() {
+		ReactiveScope::run(|| {
+			let runtime = TestQueryRuntime::new();
+			let client = QueryClient::with_runtime(QueryDefaults::default(), runtime.handle());
+			let ready = Rc::new(Cell::new(false));
+			let query = client.observe(
+				QueryFamily::<u64, Project, String>::new("tests.normalized-ticket-race")
+					.query(1, {
+						let ready = Rc::clone(&ready);
+						move || ProjectGate {
+							ready: Rc::clone(&ready),
+							dropped: Rc::new(Cell::new(0)),
+							result: Some(Ok(project(1, "older-query"))),
+						}
+					})
+					.with_entities(EntityValue::new()),
+				QueryOptions::new(),
+			);
+
+			client.upsert_entity(project(1, "mutation"));
+			ready.set(true);
+			runtime.run_until_stalled();
+
+			assert_eq!(
+				client.entity::<Project>(1).get(),
+				Some(project(1, "mutation"))
+			);
+			assert_eq!(query.data(), Some(project(1, "mutation")));
+		});
+	}
+
+	#[test]
+	fn later_started_query_wins_when_it_completes_first() {
+		ReactiveScope::run(|| {
+			let runtime = TestQueryRuntime::new();
+			let client = QueryClient::with_runtime(QueryDefaults::default(), runtime.handle());
+			let family = QueryFamily::<u64, Project, String>::new("tests.normalized-query-order");
+			let first_ready = Rc::new(Cell::new(false));
+			let second_ready = Rc::new(Cell::new(false));
+			let first = client.observe(
+				family
+					.query(1, {
+						let ready = Rc::clone(&first_ready);
+						move || ProjectGate {
+							ready: Rc::clone(&ready),
+							dropped: Rc::new(Cell::new(0)),
+							result: Some(Ok(project(1, "first"))),
+						}
+					})
+					.with_entities(EntityValue::new()),
+				QueryOptions::new(),
+			);
+			let second = client.observe(
+				family
+					.query(2, {
+						let ready = Rc::clone(&second_ready);
+						move || ProjectGate {
+							ready: Rc::clone(&ready),
+							dropped: Rc::new(Cell::new(0)),
+							result: Some(Ok(project(1, "second"))),
+						}
+					})
+					.with_entities(EntityValue::new()),
+				QueryOptions::new(),
+			);
+
+			second_ready.set(true);
+			runtime.run_until_stalled();
+			first_ready.set(true);
+			runtime.run_until_stalled();
+
+			assert_eq!(
+				client.entity::<Project>(1).get(),
+				Some(project(1, "second"))
+			);
+			assert_eq!(first.data(), Some(project(1, "second")));
+			assert_eq!(second.data(), Some(project(1, "second")));
+		});
+	}
+
+	#[test]
+	fn cancelling_a_normalized_request_releases_its_query_ticket() {
+		ReactiveScope::run(|| {
+			let runtime = TestQueryRuntime::new();
+			let client = QueryClient::with_runtime(QueryDefaults::default(), runtime.handle());
+			let arena = client.entity_arena_for_test();
+			let query = client.observe(
+				QueryFamily::<u64, Project, String>::new("tests.normalized-ticket-cancel")
+					.query(1, || ProjectGate {
+						ready: Rc::new(Cell::new(false)),
+						dropped: Rc::new(Cell::new(0)),
+						result: Some(Ok(project(1, "pending"))),
+					})
+					.with_entities(EntityValue::new()),
+				QueryOptions::new(),
+			);
+			let ticket = query
+				.entry
+				.request
+				.borrow()
+				.as_ref()
+				.expect("normalized request should own a ticket")
+				.ticket
+				.ticket();
+
+			assert_eq!(arena.active_query_ticket_count(ticket), 1);
+			drop(query);
+
+			assert_eq!(arena.active_query_ticket_count(ticket), 0);
+		});
+	}
+
+	#[test]
+	fn dropping_the_query_client_releases_normalized_request_tickets() {
+		ReactiveScope::run(|| {
+			let runtime = TestQueryRuntime::new();
+			let client = QueryClient::with_runtime(QueryDefaults::default(), runtime.handle());
+			let arena = client.entity_arena_for_test();
+			let query = client.observe(
+				QueryFamily::<u64, Project, String>::new("tests.normalized-ticket-owner-drop")
+					.query(1, || ProjectGate {
+						ready: Rc::new(Cell::new(false)),
+						dropped: Rc::new(Cell::new(0)),
+						result: Some(Ok(project(1, "pending"))),
+					})
+					.with_entities(EntityValue::new()),
+				QueryOptions::new(),
+			);
+			let ticket = query
+				.entry
+				.request
+				.borrow()
+				.as_ref()
+				.expect("normalized request should own a ticket")
+				.ticket
+				.ticket();
+
+			assert_eq!(arena.active_query_ticket_count(ticket), 1);
+			drop(client);
+
+			assert_eq!(arena.active_query_ticket_count(ticket), 0);
+			drop(query);
+		});
 	}
 }
 

@@ -7,7 +7,7 @@ use std::mem::size_of;
 
 use serde::{Serialize, de::DeserializeOwned};
 
-use super::{Entity, EntityIdentity, EntityOverlay, EntityWriter};
+use super::{Entity, EntityArena, EntityIdentity, EntityOverlay, EntityWriter};
 
 /// Describes how a query result is normalized into entities and reconstructed.
 pub trait EntityProjection<T>: Clone + 'static {
@@ -116,6 +116,28 @@ impl EntityDependencies {
 		loader.hydrate(group, &self.identities, entities);
 	}
 
+	pub(crate) fn acquire_leases(
+		&self,
+		arena: &EntityArena,
+	) -> HashMap<EntityIdentity, Box<dyn Any>> {
+		let mut leases = HashMap::with_capacity(self.identities.len());
+		for loader in self.loaders.values() {
+			loader.acquire_leases(arena, &self.identities, &mut leases);
+		}
+		leases
+	}
+
+	pub(crate) fn removed_identities(
+		&self,
+		overlay: &EntityOverlay<'_>,
+	) -> HashSet<EntityIdentity> {
+		let mut removed = HashSet::new();
+		for loader in self.loaders.values() {
+			loader.collect_removed(overlay, &self.identities, &mut removed);
+		}
+		removed
+	}
+
 	#[allow(dead_code)] // Used by the staged erased projection materialization bridge below.
 	fn contains(&self, identity: &EntityIdentity) -> bool {
 		self.identities.contains(identity)
@@ -165,6 +187,18 @@ trait ErasedEntityHydrationLoader {
 		group: &EntityHydrationGroup,
 		declared: &HashSet<EntityIdentity>,
 		entities: &mut EntityWriter<'_>,
+	);
+	fn acquire_leases(
+		&self,
+		arena: &EntityArena,
+		declared: &HashSet<EntityIdentity>,
+		leases: &mut HashMap<EntityIdentity, Box<dyn Any>>,
+	);
+	fn collect_removed(
+		&self,
+		overlay: &EntityOverlay<'_>,
+		declared: &HashSet<EntityIdentity>,
+		removed: &mut HashSet<EntityIdentity>,
 	);
 }
 
@@ -236,6 +270,52 @@ where
 				);
 			}
 			entities.upsert(entity);
+		}
+	}
+
+	fn acquire_leases(
+		&self,
+		arena: &EntityArena,
+		declared: &HashSet<EntityIdentity>,
+		leases: &mut HashMap<EntityIdentity, Box<dyn Any>>,
+	) {
+		for identity in declared
+			.iter()
+			.filter(|identity| identity.entity_type() == E::TYPE)
+		{
+			let id =
+				serde_json::from_str::<E::Id>(identity.canonical_id()).unwrap_or_else(|error| {
+					panic!(
+						"entity dependency TYPE `{}` failed to deserialize canonical ID as `{}`: {error}",
+						E::TYPE,
+						type_name::<E::Id>(),
+					)
+				});
+			leases.insert(identity.clone(), arena.acquire_dependency::<E>(id));
+		}
+	}
+
+	fn collect_removed(
+		&self,
+		overlay: &EntityOverlay<'_>,
+		declared: &HashSet<EntityIdentity>,
+		removed: &mut HashSet<EntityIdentity>,
+	) {
+		for identity in declared
+			.iter()
+			.filter(|identity| identity.entity_type() == E::TYPE)
+		{
+			let id =
+				serde_json::from_str::<E::Id>(identity.canonical_id()).unwrap_or_else(|error| {
+					panic!(
+						"entity dependency TYPE `{}` failed to deserialize canonical ID as `{}`: {error}",
+						E::TYPE,
+						type_name::<E::Id>(),
+					)
+				});
+			if overlay.is_removed::<E>(&id) {
+				removed.insert(identity.clone());
+			}
 		}
 	}
 }

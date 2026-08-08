@@ -134,7 +134,7 @@ impl EntityArena {
 		}
 
 		let bucket = Rc::new(RefCell::new(EntityBucket::default()));
-		let erased: Rc<dyn Any> = Rc::clone(&bucket);
+		let erased: Rc<dyn Any> = bucket.clone();
 		buckets.insert(E::TYPE, erased);
 		bucket
 	}
@@ -379,8 +379,6 @@ impl<'a> EntityOverlay<'a> {
 		}
 	}
 
-	// This read path is consumed by projection materialization in Task 3.
-	#[allow(dead_code)]
 	pub(crate) fn get<E>(&self, id: &E::Id) -> Option<E>
 	where
 		E: Entity,

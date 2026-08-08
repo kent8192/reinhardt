@@ -5,6 +5,7 @@
 //! entities from different types even when their raw IDs are identical.
 
 mod identity;
+mod projection;
 mod store;
 
 #[cfg(all(test, not(target_arch = "wasm32")))]
@@ -12,5 +13,9 @@ mod tests;
 
 pub use identity::Entity;
 pub(crate) use identity::EntityIdentity;
+pub use projection::{
+	EntityDependencies, EntityProjection, EntityReader, EntityValue, EntityVec, OptionalEntity,
+	ProjectionMaterialization, ProjectionRemoval, RemovedEntities,
+};
+pub(crate) use store::EntityOverlay;
 pub use store::{EntityArena, EntityHandle, EntityWriter};
-pub(crate) use store::{EntityOverlay, EntityStaging, EntityWriteTicket, QueryTicketLease};

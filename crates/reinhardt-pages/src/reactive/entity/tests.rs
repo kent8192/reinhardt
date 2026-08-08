@@ -7,7 +7,11 @@ use std::time::Duration;
 use serde::{Deserialize, Serialize};
 
 use super::identity::EntityTypeRegistry;
-use super::{Entity, EntityArena, EntityIdentity};
+use super::projection::ErasedEntityProjection;
+use super::{
+	Entity, EntityArena, EntityDependencies, EntityIdentity, EntityProjection, EntityValue,
+	EntityVec, OptionalEntity, ProjectionMaterialization, ProjectionRemoval, RemovedEntities,
+};
 use crate::reactive::{Effect, ReactiveScope};
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
@@ -43,6 +47,414 @@ impl Entity for Task {
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+struct ProjectPage {
+	title: String,
+	projects: Vec<Project>,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+struct ProjectPageRecipe {
+	title: String,
+	project_ids: Vec<u64>,
+}
+
+#[derive(Clone, Copy)]
+struct ProjectPageProjection;
+
+impl EntityProjection<ProjectPage> for ProjectPageProjection {
+	type Recipe = ProjectPageRecipe;
+
+	const SCHEMA: &'static str = "reactive.entity.tests.project-page-v1";
+
+	fn normalize(
+		&self,
+		value: ProjectPage,
+		entities: &mut super::EntityWriter<'_>,
+	) -> Self::Recipe {
+		let ProjectPage { title, projects } = value;
+		let project_ids = projects.iter().map(Entity::entity_id).collect();
+		for project in projects {
+			entities.upsert(project);
+		}
+		ProjectPageRecipe { title, project_ids }
+	}
+
+	fn dependencies(&self, recipe: &Self::Recipe, dependencies: &mut EntityDependencies) {
+		dependencies.extend::<Project>(recipe.project_ids.iter().copied());
+	}
+
+	fn materialize(
+		&self,
+		recipe: &Self::Recipe,
+		entities: &super::EntityReader<'_>,
+	) -> ProjectionMaterialization<ProjectPage> {
+		match entities.required_vec::<Project>(&recipe.project_ids) {
+			ProjectionMaterialization::Ready(projects) => {
+				ProjectionMaterialization::Ready(ProjectPage {
+					title: recipe.title.clone(),
+					projects,
+				})
+			}
+			ProjectionMaterialization::MissingRequired => {
+				ProjectionMaterialization::MissingRequired
+			}
+		}
+	}
+
+	fn apply_removals(
+		&self,
+		recipe: &mut Self::Recipe,
+		removed: &RemovedEntities<'_>,
+	) -> ProjectionRemoval {
+		let previous_len = recipe.project_ids.len();
+		recipe
+			.project_ids
+			.retain(|id| !removed.contains::<Project>(id));
+		ProjectionRemoval::from_changed(previous_len != recipe.project_ids.len())
+	}
+}
+
+#[derive(Clone, Copy)]
+struct UndeclaredProjectProjection;
+
+impl EntityProjection<Project> for UndeclaredProjectProjection {
+	type Recipe = u64;
+
+	const SCHEMA: &'static str = "reactive.entity.tests.undeclared-project-v1";
+
+	fn normalize(&self, value: Project, _entities: &mut super::EntityWriter<'_>) -> Self::Recipe {
+		value.id
+	}
+
+	fn dependencies(&self, _recipe: &Self::Recipe, _dependencies: &mut EntityDependencies) {}
+
+	fn materialize(
+		&self,
+		recipe: &Self::Recipe,
+		entities: &super::EntityReader<'_>,
+	) -> ProjectionMaterialization<Project> {
+		entities.required::<Project>(recipe)
+	}
+
+	fn apply_removals(
+		&self,
+		_recipe: &mut Self::Recipe,
+		_removed: &RemovedEntities<'_>,
+	) -> ProjectionRemoval {
+		ProjectionRemoval::Unchanged
+	}
+}
+
+#[derive(Clone, Copy)]
+struct EmptySchemaProjection;
+
+impl EntityProjection<Project> for EmptySchemaProjection {
+	type Recipe = u64;
+
+	const SCHEMA: &'static str = "";
+
+	fn normalize(&self, value: Project, entities: &mut super::EntityWriter<'_>) -> Self::Recipe {
+		let id = value.id;
+		entities.upsert(value);
+		id
+	}
+
+	fn dependencies(&self, recipe: &Self::Recipe, dependencies: &mut EntityDependencies) {
+		dependencies.extend::<Project>([*recipe]);
+	}
+
+	fn materialize(
+		&self,
+		recipe: &Self::Recipe,
+		entities: &super::EntityReader<'_>,
+	) -> ProjectionMaterialization<Project> {
+		entities.required::<Project>(recipe)
+	}
+
+	fn apply_removals(
+		&self,
+		_recipe: &mut Self::Recipe,
+		_removed: &RemovedEntities<'_>,
+	) -> ProjectionRemoval {
+		ProjectionRemoval::Unchanged
+	}
+}
+
+#[derive(Clone)]
+struct StatefulProjection(u8);
+
+impl EntityProjection<Project> for StatefulProjection {
+	type Recipe = u64;
+
+	const SCHEMA: &'static str = "reactive.entity.tests.stateful-v1";
+
+	fn normalize(&self, value: Project, entities: &mut super::EntityWriter<'_>) -> Self::Recipe {
+		let _state = self.0;
+		let id = value.id;
+		entities.upsert(value);
+		id
+	}
+
+	fn dependencies(&self, recipe: &Self::Recipe, dependencies: &mut EntityDependencies) {
+		dependencies.extend::<Project>([*recipe]);
+	}
+
+	fn materialize(
+		&self,
+		recipe: &Self::Recipe,
+		entities: &super::EntityReader<'_>,
+	) -> ProjectionMaterialization<Project> {
+		entities.required::<Project>(recipe)
+	}
+
+	fn apply_removals(
+		&self,
+		_recipe: &mut Self::Recipe,
+		_removed: &RemovedEntities<'_>,
+	) -> ProjectionRemoval {
+		ProjectionRemoval::Unchanged
+	}
+}
+
+#[test]
+fn projection_round_trips_standard_and_composite_recipes() {
+	ReactiveScope::run(|| {
+		let arena = EntityArena::new(Duration::from_secs(300));
+		let direct = ErasedEntityProjection::new(
+			"reactive.entity.tests.direct-project",
+			EntityValue::<Project>::new(),
+		);
+		let optional = ErasedEntityProjection::new(
+			"reactive.entity.tests.optional-project",
+			OptionalEntity::<Project>::new(),
+		);
+		let vector = ErasedEntityProjection::new(
+			"reactive.entity.tests.project-list",
+			EntityVec::<Project>::new(),
+		);
+		let composite = ErasedEntityProjection::new(
+			"reactive.entity.tests.project-page",
+			ProjectPageProjection,
+		);
+		let direct_recipe = RefCell::new(None);
+		let optional_recipe = RefCell::new(None);
+		let vector_recipe = RefCell::new(None);
+		let composite_recipe = RefCell::new(None);
+
+		arena.update_entities_with_test_precommit(
+			|writer| {
+				direct_recipe.replace(Some(direct.normalize(
+					Project {
+						id: 1,
+						name: "direct".to_string(),
+					},
+					writer,
+				)));
+				optional_recipe.replace(Some(optional.normalize(
+					Some(Project {
+						id: 2,
+						name: "optional".to_string(),
+					}),
+					writer,
+				)));
+				vector_recipe.replace(Some(vector.normalize(
+					vec![
+						Project {
+							id: 3,
+							name: "first".to_string(),
+						},
+						Project {
+							id: 4,
+							name: "second".to_string(),
+						},
+					],
+					writer,
+				)));
+				composite_recipe.replace(Some(composite.normalize(
+					ProjectPage {
+						title: "projects".to_string(),
+						projects: vec![
+							Project {
+								id: 5,
+								name: "alpha".to_string(),
+							},
+							Project {
+								id: 6,
+								name: "beta".to_string(),
+							},
+						],
+					},
+					writer,
+				)));
+			},
+			|overlay| {
+				let cloned_recipe = vector.clone_recipe(vector_recipe.borrow().as_deref().unwrap());
+				assert_eq!(
+					direct.materialize(direct_recipe.borrow().as_deref().unwrap(), overlay),
+					ProjectionMaterialization::Ready(Project {
+						id: 1,
+						name: "direct".to_string(),
+					}),
+				);
+				assert_eq!(
+					optional.materialize(optional_recipe.borrow().as_deref().unwrap(), overlay),
+					ProjectionMaterialization::Ready(Some(Project {
+						id: 2,
+						name: "optional".to_string(),
+					})),
+				);
+				assert_eq!(
+					vector.materialize(vector_recipe.borrow().as_deref().unwrap(), overlay),
+					ProjectionMaterialization::Ready(vec![
+						Project {
+							id: 3,
+							name: "first".to_string(),
+						},
+						Project {
+							id: 4,
+							name: "second".to_string(),
+						},
+					]),
+				);
+				assert_eq!(
+					vector.materialize(cloned_recipe.as_ref(), overlay),
+					ProjectionMaterialization::Ready(vec![
+						Project {
+							id: 3,
+							name: "first".to_string(),
+						},
+						Project {
+							id: 4,
+							name: "second".to_string(),
+						},
+					]),
+				);
+				let recipe_json =
+					composite.recipe_to_json(composite_recipe.borrow().as_deref().unwrap());
+				let restored_recipe = composite.recipe_from_json(&recipe_json);
+				assert_eq!(
+					composite.materialize(restored_recipe.as_ref(), overlay),
+					ProjectionMaterialization::Ready(ProjectPage {
+						title: "projects".to_string(),
+						projects: vec![
+							Project {
+								id: 5,
+								name: "alpha".to_string(),
+							},
+							Project {
+								id: 6,
+								name: "beta".to_string(),
+							},
+						],
+					}),
+				);
+			},
+		);
+
+		let removed = RemovedEntities::from_ids::<Project>([1, 2, 3, 4, 5]);
+		assert_eq!(
+			direct.apply_removals(direct_recipe.borrow_mut().as_deref_mut().unwrap(), &removed),
+			ProjectionRemoval::MissingRequired,
+		);
+		assert_eq!(
+			optional.apply_removals(
+				optional_recipe.borrow_mut().as_deref_mut().unwrap(),
+				&removed
+			),
+			ProjectionRemoval::Updated,
+		);
+		assert_eq!(
+			vector.apply_removals(vector_recipe.borrow_mut().as_deref_mut().unwrap(), &removed),
+			ProjectionRemoval::Updated,
+		);
+		assert_eq!(
+			composite.apply_removals(
+				composite_recipe.borrow_mut().as_deref_mut().unwrap(),
+				&removed
+			),
+			ProjectionRemoval::Updated,
+		);
+	});
+}
+
+#[test]
+fn projection_rejects_empty_schemas_and_stateful_adapters() {
+	let empty_schema_panic = catch_unwind(|| {
+		let _ = ErasedEntityProjection::<Project>::new(
+			"reactive.entity.tests.empty-schema",
+			EmptySchemaProjection,
+		);
+	})
+	.expect_err("an empty projection schema must panic");
+	assert_eq!(
+		panic_message(empty_schema_panic),
+		format!(
+			"entity projection adapter `{}` for query family `reactive.entity.tests.empty-schema` must define a non-empty schema",
+			std::any::type_name::<EmptySchemaProjection>(),
+		),
+	);
+
+	let stateful_panic = catch_unwind(|| {
+		let _ = ErasedEntityProjection::<Project>::new(
+			"reactive.entity.tests.stateful",
+			StatefulProjection(1),
+		);
+	})
+	.expect_err("a stateful projection adapter must panic");
+	assert_eq!(
+		panic_message(stateful_panic),
+		format!(
+			"entity projection adapter `{}` for query family `reactive.entity.tests.stateful` with schema `reactive.entity.tests.stateful-v1` must be zero-sized, but its size is 1 bytes",
+			std::any::type_name::<StatefulProjection>(),
+		),
+	);
+}
+
+#[test]
+fn projection_panics_when_materialization_reads_an_undeclared_entity() {
+	ReactiveScope::run(|| {
+		let arena = EntityArena::new(Duration::from_secs(300));
+		arena.update_entities(|writer| {
+			writer.upsert(Project {
+				id: 7,
+				name: "undeclared".to_string(),
+			});
+		});
+		let projection = ErasedEntityProjection::new(
+			"reactive.entity.tests.undeclared-project",
+			UndeclaredProjectProjection,
+		);
+		let recipe = RefCell::new(None);
+
+		let panic = catch_unwind(AssertUnwindSafe(|| {
+			arena.update_entities_with_test_precommit(
+				|writer| {
+					recipe.replace(Some(projection.normalize(
+						Project {
+							id: 7,
+							name: "undeclared".to_string(),
+						},
+						writer,
+					)));
+				},
+				|overlay| {
+					let _ = projection.materialize(recipe.borrow().as_deref().unwrap(), overlay);
+				},
+			);
+		}))
+		.expect_err("reading an undeclared entity must panic");
+
+		assert_eq!(
+			panic_message(panic),
+			format!(
+				"entity projection adapter `{}` for query family `reactive.entity.tests.undeclared-project` with schema `reactive.entity.tests.undeclared-project-v1` accessed undeclared entity `reactive.entity.tests.project` with canonical ID `7`",
+				std::any::type_name::<UndeclaredProjectProjection>(),
+			),
+		);
+	});
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
 struct StructuredId {
 	z: u64,
 	a: u64,

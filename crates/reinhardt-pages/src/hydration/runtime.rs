@@ -4,10 +4,12 @@
 //! connecting reactive state with SSR-rendered DOM elements.
 
 use crate::component::Component;
+#[cfg(test)]
+use crate::reactive::QueryKey;
 #[cfg(any(wasm, test))]
 use crate::reactive::entity::{ENTITY_TABLE_HYDRATION_ID, EntityHydrationEnvelope};
 #[cfg(any(wasm, test))]
-use crate::reactive::{QueryClient, QueryDescriptor, QueryKey};
+use crate::reactive::{QueryClient, QueryDescriptor};
 use crate::ssr::SsrState;
 #[cfg(any(wasm, test))]
 use serde::{Serialize, de::DeserializeOwned};
@@ -183,7 +185,7 @@ impl HydrationContext {
 		self.state.get_route_loader_state(id)
 	}
 
-	#[cfg(any(wasm, test))]
+	#[cfg(test)]
 	pub(crate) fn seed_query<T, E>(
 		&self,
 		client: &QueryClient,

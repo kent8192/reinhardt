@@ -248,8 +248,10 @@ mod store;
 #[cfg(all(test, not(target_arch = "wasm32")))]
 mod tests;
 
+#[cfg(native)]
+pub(crate) use hydration::EntityHydrationRow;
 pub(crate) use hydration::{
-	ENTITY_TABLE_HYDRATION_ID, ENTITY_TABLE_VERSION, EntityHydrationEnvelope, EntityHydrationRow,
+	ENTITY_TABLE_HYDRATION_ID, ENTITY_TABLE_VERSION, EntityHydrationEnvelope,
 	NormalizedHydrationKind, NormalizedQueryHydrationSnapshot, NormalizedQueryHydrationState,
 };
 pub use identity::Entity;

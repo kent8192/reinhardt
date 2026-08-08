@@ -4,13 +4,14 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 use std::rc::{Rc, Weak};
 use std::time::Duration;
 
+#[cfg(native)]
+use super::EntityHydrationRow;
 use super::identity::EntityTypeRegistry;
 use super::projection::EntityHydrationGroup;
 #[cfg(any(wasm, test))]
 use super::projection::EntityHydrationRecord;
 use super::{
-	ENTITY_TABLE_VERSION, Entity, EntityDependencies, EntityHydrationEnvelope, EntityHydrationRow,
-	EntityIdentity,
+	ENTITY_TABLE_VERSION, Entity, EntityDependencies, EntityHydrationEnvelope, EntityIdentity,
 };
 use crate::reactive::{Signal, batch};
 use reinhardt_core::reactive::ReactiveScope;
@@ -79,6 +80,7 @@ impl EntityArena {
 	}
 
 	/// Serializes the present identities reached during this SSR request.
+	#[cfg(native)]
 	pub(crate) fn reachable_hydration_envelope(&self) -> EntityHydrationEnvelope {
 		let mut entities = BTreeMap::<String, Vec<EntityHydrationRow>>::new();
 		let identities = self
@@ -1027,6 +1029,7 @@ where
 trait ErasedEntityBucket {
 	fn deadline_is_current(&self, identity: &EntityIdentity, generation: u64) -> bool;
 	fn gc_deadline(&self, identity: &EntityIdentity) -> Option<(u64, u64)>;
+	#[cfg(native)]
 	fn hydration_row(&self, identity: &EntityIdentity) -> Option<EntityHydrationRow>;
 	fn collect_if_due(
 		&self,
@@ -1064,6 +1067,7 @@ impl<E> ErasedEntityBucket for ErasedEntityBucketImpl<E>
 where
 	E: Entity,
 {
+	#[cfg(native)]
 	fn hydration_row(&self, identity: &EntityIdentity) -> Option<EntityHydrationRow> {
 		let id = Self::parse_id(identity)?;
 		let bucket = self.bucket.borrow();

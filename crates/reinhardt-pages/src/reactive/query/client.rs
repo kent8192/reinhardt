@@ -14,6 +14,7 @@ use std::time::Duration;
 use futures_util::future::{AbortHandle, Abortable};
 use serde::Serialize;
 use serde::de::DeserializeOwned;
+#[cfg(native)]
 use serde_json::Value;
 
 use super::super::Signal;
@@ -502,6 +503,7 @@ impl QueryClient {
 		Rc::ptr_eq(&self.inner, &other.inner)
 	}
 
+	#[cfg(native)]
 	pub(crate) fn reachable_entity_hydration_envelope(&self) -> EntityHydrationEnvelope {
 		self.inner.entities.reachable_hydration_envelope()
 	}
@@ -1059,6 +1061,7 @@ impl<T: Clone + 'static, E: Clone + 'static> QueryEntry<T, E> {
 		Some(serde_json::to_value(snapshot).expect("normalized query snapshots serialize"))
 	}
 
+	#[cfg(native)]
 	pub(super) fn is_normalized(&self) -> bool {
 		self.normalization.is_some()
 	}

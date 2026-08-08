@@ -1947,21 +1947,22 @@ where
 			return Ok(());
 		}
 
+		let mut group_expressions = Vec::new();
 		if let Some(fields) = &self.selected_fields {
 			for field in fields {
 				if !field.contains('(') && !field.contains(')') {
-					stmt.group_by_col(ColumnRef::table_column(
+					group_expressions.push(SimpleExpr::Column(ColumnRef::table_column(
 						Alias::new(self.root_alias()),
 						Alias::new(Self::database_column_for_field(field)),
-					));
+					)));
 				}
 			}
 		} else {
 			for field in T::field_metadata() {
-				stmt.group_by_col(ColumnRef::table_column(
+				group_expressions.push(SimpleExpr::Column(ColumnRef::table_column(
 					Alias::new(self.root_alias()),
 					Alias::new(field.db_column_name()),
-				));
+				)));
 			}
 		}
 
@@ -1975,7 +1976,16 @@ where
 				.collect(),
 		);
 		for expression in scalar_expressions {
-			stmt.group_by_expr(compile_expression(&expression, self.root_alias(), &graph)?);
+			group_expressions.push(compile_expression(&expression, self.root_alias(), &graph)?);
+		}
+		let mut deduplicated = Vec::new();
+		for expression in group_expressions {
+			if !deduplicated.contains(&expression) {
+				deduplicated.push(expression);
+			}
+		}
+		for expression in deduplicated {
+			stmt.group_by_expr(expression);
 		}
 		Ok(())
 	}

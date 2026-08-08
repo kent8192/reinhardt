@@ -4909,6 +4909,14 @@ impl MigrationAutodetector {
 		// `ColumnDefinition` form to absorb asymmetric param populations.
 		let from_def = Self::normalized_column_definition(field_name, from_field, from_unique);
 		let to_def = Self::normalized_column_definition(field_name, to_field, to_unique);
+		// File fields persist only a logical path, so changes to their upload
+		// policy must remain visible to migration-state comparison even when the
+		// bounded character column itself is unchanged. PostgreSQL's physical
+		// `storage` parameter is intentionally compared as a separate key; it is
+		// not the storage-backend alias carried by `file_storage`.
+		let semantic_param_changed = ["model_field_type", "upload_to", "file_storage", "storage"]
+			.iter()
+			.any(|key| from_field.params.get(*key) != to_field.params.get(*key));
 		from_def.type_definition != to_def.type_definition
 			|| from_def.not_null != to_def.not_null
 			|| from_def.primary_key != to_def.primary_key
@@ -4916,6 +4924,7 @@ impl MigrationAutodetector {
 			|| from_def.unique != to_def.unique
 			|| from_def.default != to_def.default
 			|| from_def.generated != to_def.generated
+			|| semantic_param_changed
 	}
 
 	fn field_change_touches_generated(
@@ -12088,6 +12097,82 @@ mod tests {
 			!changed,
 			"fields with identical schema but different non-schema params should not be detected as changed"
 		);
+	}
+
+	fn file_field_state(upload_to: &str, file_storage: &str, storage: &str) -> FieldState {
+		let mut field = FieldState::new("avatar", super::super::FieldType::VarChar(255), false);
+		field
+			.params
+			.insert("model_field_type".to_string(), "file".to_string());
+		field
+			.params
+			.insert("upload_to".to_string(), upload_to.to_string());
+		field
+			.params
+			.insert("file_storage".to_string(), file_storage.to_string());
+		field
+			.params
+			.insert("max_length".to_string(), "255".to_string());
+		field
+			.params
+			.insert("storage".to_string(), storage.to_string());
+		field
+	}
+
+	fn altered_file_fields(from_field: FieldState, to_field: FieldState) -> DetectedChanges {
+		let key = ("media".to_string(), "Asset".to_string());
+		let from_model =
+			build_model_state("media", "Asset", vec![from_field], Vec::new(), Vec::new());
+		let to_model = build_model_state("media", "Asset", vec![to_field], Vec::new(), Vec::new());
+		MigrationAutodetector::new(
+			build_project_state(vec![(key.clone(), from_model)]),
+			build_project_state(vec![(key, to_model)]),
+		)
+		.detect_changes()
+	}
+
+	#[test]
+	fn file_field_semantic_params_are_detected_without_changing_physical_column_type() {
+		let upload_to_change = altered_file_fields(
+			file_field_state("avatars/%Y/%m/%d", "private_uploads", "external"),
+			file_field_state("profiles/%Y/%m/%d", "private_uploads", "external"),
+		);
+		assert_eq!(
+			upload_to_change.altered_fields,
+			vec![(
+				"media".to_string(),
+				"Asset".to_string(),
+				"avatar".to_string()
+			)]
+		);
+
+		let file_storage_change = altered_file_fields(
+			file_field_state("avatars/%Y/%m/%d", "private_uploads", "external"),
+			file_field_state("avatars/%Y/%m/%d", "archive_uploads", "external"),
+		);
+		assert_eq!(
+			file_storage_change.altered_fields,
+			vec![(
+				"media".to_string(),
+				"Asset".to_string(),
+				"avatar".to_string()
+			)]
+		);
+
+		let from = file_field_state("avatars/%Y/%m/%d", "private_uploads", "external");
+		let to = file_field_state("avatars/%Y/%m/%d", "private_uploads", "main");
+		let physical_storage_change = altered_file_fields(from.clone(), to.clone());
+		assert_eq!(
+			physical_storage_change.altered_fields,
+			vec![(
+				"media".to_string(),
+				"Asset".to_string(),
+				"avatar".to_string()
+			)]
+		);
+		assert_eq!(from.field_type, to.field_type);
+		assert_eq!(from.params["file_storage"], to.params["file_storage"]);
+		assert_ne!(from.params["storage"], to.params["storage"]);
 	}
 
 	#[rstest]

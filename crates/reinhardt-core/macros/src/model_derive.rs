@@ -9618,6 +9618,68 @@ mod tests {
 	}
 
 	#[test]
+	fn test_file_field_migration_registration_preserves_semantic_params() {
+		let input = quote! {
+			#[model(app_label = "media", table_name = "media_assets")]
+			struct Asset {
+				#[field(
+					upload_to = "avatars/%Y/%m/%d",
+					file_storage = "private_uploads",
+					max_length = 255
+				)]
+				avatar: db::orm::FileField,
+			}
+		};
+
+		let output = model_derive_impl(syn::parse2(input).unwrap())
+			.expect("file-field model registration must generate")
+			.to_string()
+			.replace(' ', "");
+
+		for expected in [
+			"with_param(\"model_field_type\",\"file\")",
+			"with_param(\"upload_to\",\"avatars/%Y/%m/%d\")",
+			"with_param(\"file_storage\",\"private_uploads\")",
+			"with_param(\"max_length\",\"255\")",
+		] {
+			assert!(
+				output.contains(expected),
+				"migration registration must contain `{expected}`: {output}"
+			);
+		}
+	}
+
+	#[cfg(feature = "db-postgres")]
+	#[test]
+	fn test_file_field_registration_keeps_postgres_storage_separate() {
+		let input = quote! {
+			#[model(app_label = "media", table_name = "media_assets")]
+			struct Asset {
+				#[field(
+					upload_to = "avatars/%Y/%m/%d",
+					file_storage = "private_uploads",
+					max_length = 255,
+					storage = "external"
+				)]
+				avatar: db::orm::FileField,
+			}
+		};
+
+		let output = model_derive_impl(syn::parse2(input).unwrap())
+			.expect("PostgreSQL file-field model registration must generate")
+			.to_string()
+			.replace(' ', "");
+
+		assert!(output.contains("with_param(\"file_storage\",\"private_uploads\")"));
+		assert!(output.contains("attributes.insert(\"storage\""));
+		assert!(output.contains("attributes.insert(\"file_storage\""));
+		assert!(
+			output.contains("FieldKwarg::String(\"external\".to_string())"),
+			"PostgreSQL physical storage must remain its own metadata parameter: {output}"
+		);
+	}
+
+	#[test]
 	fn test_full_expansion_keeps_foreign_key_primary_key_type() {
 		let input = quote! {
 			#[model(app_label = "test", table_name = "audits", info = false)]

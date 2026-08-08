@@ -1101,6 +1101,43 @@ mod tests {
 	}
 
 	#[test]
+	fn file_field_model_state_preserves_semantic_and_physical_storage_metadata() {
+		let mut metadata = ModelMetadata::new("media", "Asset", "media_asset");
+		let file_field = FieldMetadata::new(FieldType::VarChar(255))
+			.with_param("model_field_type", "file")
+			.with_param("upload_to", "avatars/%Y/%m/%d")
+			.with_param("file_storage", "private_uploads")
+			.with_param("max_length", "255")
+			.with_param("storage", "external");
+		metadata.add_field("avatar".to_string(), file_field);
+
+		let model_state = metadata.to_model_state();
+		let field_state = model_state
+			.fields
+			.get("avatar")
+			.expect("file field should be present in migration state");
+
+		assert_eq!(field_state.field_type, FieldType::VarChar(255));
+		for (key, value) in [
+			("model_field_type", "file"),
+			("upload_to", "avatars/%Y/%m/%d"),
+			("file_storage", "private_uploads"),
+			("max_length", "255"),
+		] {
+			assert_eq!(
+				field_state.params.get(key).map(String::as_str),
+				Some(value),
+				"migration state must preserve `{key}`"
+			);
+		}
+		assert_eq!(
+			field_state.params.get("storage").map(String::as_str),
+			Some("external"),
+			"PostgreSQL physical storage must remain separate from file_storage"
+		);
+	}
+
+	#[test]
 	fn test_to_model_state_resolves_qualified_fk_target_table() {
 		// Arrange
 		let registry = ModelRegistry::new();

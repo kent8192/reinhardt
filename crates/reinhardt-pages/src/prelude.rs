@@ -185,7 +185,7 @@ pub use crate::router::loader::{
 	Loader, LoaderInputError, LoaderInputKind, LoaderInputSpec, LoaderStore, LoaderStoreError,
 	RouteLoader, RouteLoaderError, canonical_loader_inputs, loader_cache_id,
 };
-pub use crate::router::{NavigationType, navigate, navigate_named};
+pub use crate::router::{NavigationType, navigate, navigate_named, navigate_or_reload};
 pub use crate::{NavigateError, RouterHandle, use_router};
 
 // ============================================================================

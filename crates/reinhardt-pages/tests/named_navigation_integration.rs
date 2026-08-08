@@ -5,7 +5,9 @@ use reinhardt_pages::app::{
 	__clear_spa_router_for_test, __current_path_for_test, __install_client_router_for_test,
 };
 use reinhardt_pages::component::Page;
-use reinhardt_pages::{NavigateError, NavigationType, navigate_named, route_params};
+use reinhardt_pages::{
+	NavigateError, NavigationType, navigate_named, navigate_or_reload, route_params,
+};
 use reinhardt_urls::routers::ClientRouter;
 use serial_test::serial;
 use std::cell::Cell;
@@ -130,4 +132,31 @@ fn route_params_evaluates_each_value_once() {
 
 	assert_eq!(evaluations.get(), 1);
 	assert_eq!(params, vec![("project_id", "9".to_owned())]);
+}
+
+#[test]
+#[serial(router)]
+fn native_fallback_preserves_router_not_installed() {
+	let _component = Page::text("Native fallback");
+	__clear_spa_router_for_test();
+
+	let result = navigate_or_reload("/login/", NavigationType::Push);
+
+	assert!(matches!(result, Err(NavigateError::RouterNotInstalled)));
+}
+
+#[test]
+#[serial(router)]
+fn browser_originated_navigation_types_remain_noops_without_a_router() {
+	let _component = Page::text("Browser navigation");
+	__clear_spa_router_for_test();
+
+	assert!(
+		navigate_or_reload("/ignored/", NavigationType::Pop).is_ok(),
+		"Pop must not require a router or invoke fallback"
+	);
+	assert!(
+		navigate_or_reload("/ignored/", NavigationType::Initial).is_ok(),
+		"Initial must not require a router or invoke fallback"
+	);
 }

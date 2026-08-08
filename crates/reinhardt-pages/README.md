@@ -994,6 +994,22 @@ navigate_named(
 by name without a hard reload. Pass homogeneous parameter arrays directly, or
 use `route_params!` to format mixed `Display` values into owned parameters.
 
+Applications can replace local `navigate_to` wrappers with the framework-owned
+path fallback:
+
+```rust,ignore
+use reinhardt_pages::{NavigationType, navigate_or_reload};
+
+navigate_or_reload(path, NavigationType::Push)?;
+```
+
+On browser WASM, `navigate_or_reload()` falls back to a hard browser navigation
+only after SPA navigation returns `RouterNotInstalled`; rejected routes and
+route-resolution errors are returned without retrying. Cross-origin HTTPS URLs
+use hard navigation directly, while same-origin absolute URLs are normalized to
+their path, query, and fragment and remain SPA navigation. Native and SSR
+callers receive `RouterNotInstalled` when no router is installed.
+
 - `Link`, `Router`, `Route`, `RouterOutlet`, `PathPattern`
 
 ### API and Server Functions

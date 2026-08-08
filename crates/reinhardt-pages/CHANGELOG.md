@@ -10,6 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 - *(pages)* add named-route SPA navigation
+- *(pages)* add framework-owned path fallback and preserve external HTTPS navigation
 
 ### Changed
 

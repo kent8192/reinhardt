@@ -784,7 +784,7 @@ pub use router::loader::{
 	LoaderStoreScope, RouteLoader, RouteLoaderError, active_loader_store, canonical_loader_inputs,
 	enter_loader_store, loader_cache_id, with_loader_store,
 };
-pub use router::{NavigationType, navigate, navigate_named};
+pub use router::{NavigationType, navigate, navigate_named, navigate_or_reload};
 pub use router::{Path, Query, RouteLoaderId};
 pub use server_fn::{
 	ServerFn, ServerFnError, ServerFnErrorKind, ServerFnErrorPayload, ServerFnFieldError,

@@ -1896,6 +1896,83 @@ mod normalized_hydration {
 	}
 
 	#[test]
+	fn normalized_hydration_rejects_a_malformed_entity_value() {
+		ReactiveScope::run(|| {
+			let runtime = TestQueryRuntime::new();
+			let client = QueryClient::with_runtime(QueryDefaults::default(), runtime.handle());
+			let family =
+				QueryFamily::<u64, Project, String>::new("tests.normalized-hydration-entity-value");
+			let descriptor = family
+				.query(1, || async {
+					panic!("malformed entity values must fail before fetching")
+				})
+				.with_entities(EntityValue::new());
+			client.install_entity_hydration_envelope(EntityHydrationEnvelope {
+				version: ENTITY_TABLE_VERSION,
+				entities: BTreeMap::from([(
+					Project::TYPE.to_string(),
+					vec![EntityHydrationRow {
+						id: serde_json::json!(7),
+						value: serde_json::json!({"id": 7}),
+					}],
+				)]),
+			});
+			let mut state = SsrState::new();
+			state.add_resource_state(descriptor.key().hydration_id(), snapshot(7));
+			let panic = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+				HydrationContext::from_state(state)
+					.seed_query_descriptor(&client, &descriptor)
+					.expect("malformed entity values must panic during typed validation");
+			}))
+			.expect_err("malformed entity values must be rejected");
+			assert_eq!(
+				panic_message(panic),
+				format!(
+					"entity hydration loader for TYPE `{}` failed to deserialize entity type `{}`: missing field `name`",
+					Project::TYPE,
+					std::any::type_name::<Project>()
+				)
+			);
+		});
+	}
+
+	#[test]
+	fn normalized_hydration_rejects_a_malformed_recipe() {
+		ReactiveScope::run(|| {
+			let runtime = TestQueryRuntime::new();
+			let client = QueryClient::with_runtime(QueryDefaults::default(), runtime.handle());
+			let family =
+				QueryFamily::<u64, Project, String>::new("tests.normalized-hydration-recipe");
+			let descriptor = family
+				.query(1, || async {
+					panic!("malformed recipes must fail before fetching")
+				})
+				.with_entities(EntityValue::new());
+			client.install_entity_hydration_envelope(
+				serde_json::from_value(table(project(7, "recipe"))).unwrap(),
+			);
+			let mut malformed = snapshot(7);
+			malformed["state"]["Success"]["projection"] = serde_json::json!("bad-recipe");
+			let mut state = SsrState::new();
+			state.add_resource_state(descriptor.key().hydration_id(), malformed);
+			let panic = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+				HydrationContext::from_state(state)
+					.seed_query_descriptor(&client, &descriptor)
+					.expect("malformed recipes must panic during recipe validation");
+			}))
+			.expect_err("malformed recipes must be rejected");
+			assert_eq!(
+				panic_message(panic),
+				format!(
+					"entity projection adapter `{}` for query family `{}` with schema `entity-value-v1` failed to deserialize its recipe: invalid type: string \"bad-recipe\", expected u64",
+					std::any::type_name::<EntityValue<Project>>(),
+					family.id()
+				)
+			);
+		});
+	}
+
+	#[test]
 	fn ssr_entity_hydration_is_isolated_per_query_client() {
 		ReactiveScope::run(|| {
 			let first = QueryClient::new_ssr(QueryDefaults::default());

@@ -214,6 +214,63 @@ async fn normalized_ssr_writes_one_reachable_entity_table() {
 }
 
 #[tokio::test]
+async fn normalized_ssr_deduplicates_shared_entities_across_queries() {
+	let family = QueryFamily::<u64, HydratedProject, String>::new("tests::ssr-shared-table");
+	let view = Page::reactive(move || {
+		let first = use_query(
+			family
+				.query(1, || async {
+					Ok::<_, String>(HydratedProject {
+						id: 7,
+						name: "shared".to_string(),
+					})
+				})
+				.with_entities(EntityValue::new()),
+			QueryOptions::default(),
+		);
+		let second = use_query(
+			family
+				.query(2, || async {
+					Ok::<_, String>(HydratedProject {
+						id: 7,
+						name: "shared".to_string(),
+					})
+				})
+				.with_entities(EntityValue::new()),
+			QueryOptions::default(),
+		);
+		PageElement::new("p")
+			.child(format!(
+				"{}{}",
+				first.data().map(|project| project.name).unwrap_or_default(),
+				second
+					.data()
+					.map(|project| project.name)
+					.unwrap_or_default()
+			))
+			.into_page()
+	});
+
+	let mut renderer = SsrRenderer::new();
+	let html = renderer.render_view(&view).await;
+	assert_eq!(html, "<p>sharedshared</p>");
+	assert_eq!(
+		renderer
+			.state()
+			.get_resource_state("pages.query-entities:v1"),
+		Some(&serde_json::json!({
+			"version": 1,
+			"entities": {
+				HydratedProject::TYPE: [{
+					"id": 7,
+					"value": {"id": 7, "name": "shared"}
+				}]
+			}
+		}))
+	);
+}
+
+#[tokio::test]
 async fn plain_query_ssr_wire_shape_remains_unchanged() {
 	let family = QueryFamily::<(), String, String>::new("tests::ssr-plain-wire-shape");
 	let hydration_id = Rc::new(RefCell::new(None));
@@ -289,8 +346,16 @@ async fn normalized_ssr_entity_tables_are_isolated_between_requests() {
 		.get_resource_state("pages.query-entities:v1")
 		.expect("first request should emit an entity table");
 	assert_eq!(
-		first_table["entities"][HydratedProject::TYPE][0]["id"],
-		serde_json::json!(1)
+		first_table,
+		&serde_json::json!({
+			"version": 1,
+			"entities": {
+				HydratedProject::TYPE: [{
+					"id": 1,
+					"value": {"id": 1, "name": "first-request"}
+				}]
+			}
+		})
 	);
 
 	let mut second_renderer = SsrRenderer::new();
@@ -306,8 +371,16 @@ async fn normalized_ssr_entity_tables_are_isolated_between_requests() {
 		.get_resource_state("pages.query-entities:v1")
 		.expect("second request should emit an entity table");
 	assert_eq!(
-		second_table["entities"][HydratedProject::TYPE][0]["id"],
-		serde_json::json!(2)
+		second_table,
+		&serde_json::json!({
+			"version": 1,
+			"entities": {
+				HydratedProject::TYPE: [{
+					"id": 2,
+					"value": {"id": 2, "name": "second-request"}
+				}]
+			}
+		})
 	);
 }
 

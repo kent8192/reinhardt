@@ -11856,7 +11856,7 @@ mod tests {
 
 	#[rstest]
 	#[tokio::test]
-	async fn mysql_explain_renders_field_annotations_with_mysql_identifiers() {
+	async fn mysql_explain_rejects_unchecked_field_annotations() {
 		use crate::orm::annotation::{Annotation, AnnotationValue, Value};
 		use crate::orm::expressions::F;
 
@@ -11871,25 +11871,20 @@ mod tests {
 			));
 		let mut executor = ExplainRecordingExecutor::new(DatabaseBackend::MySql, Vec::new());
 
-		queryset
+		let error = queryset
 			.explain_with_db(&mut executor, super::ExplainOptions::default())
 			.await
-			.expect("MySQL EXPLAIN should render structural annotations");
+			.expect_err("MySQL plan-only EXPLAIN must reject unchecked annotations");
 
-		assert_eq!(executor.calls.len(), 1);
-		assert!(
-			executor.calls[0]
-				.0
-				.contains("`username` AS `username_copy`")
+		assert_eq!(
+			error.database_kind(),
+			Some(reinhardt_core::exception::DatabaseErrorKind::Unsupported)
 		);
-		assert!(executor.calls[0].0.contains("COUNT(`id`) AS `user_count`"));
-		assert!(
-			executor.calls[0]
-				.0
-				.contains("COUNT(DISTINCT `id`) AS `distinct_user_count`")
+		assert_eq!(
+			error.to_string(),
+			"Database error: plan-only EXPLAIN for subqueries or unchecked expressions is not supported by the MySQL backend"
 		);
-		assert!(!executor.calls[0].0.contains("\"username\""));
-		assert!(!executor.calls[0].0.contains("COUNT(\"id\")"));
+		assert!(executor.calls.is_empty());
 	}
 
 	#[rstest]
@@ -13962,7 +13957,7 @@ mod tests {
 			.to_string(reinhardt_query::prelude::PostgresQueryBuilder);
 
 		assert!(sql.contains(r#"COUNT(*) AS "user_count""#));
-		assert!(sql.contains(r#"SUM(DISTINCT "id") AS "distinct_id_sum""#));
+		assert!(sql.contains(r#"SUM(DISTINCT "test_users"."id") AS "distinct_id_sum""#));
 		assert!(!sql.contains(r#""test_users"."*""#));
 		assert!(!sql.contains(r#"COUNT(DISTINCT "id") AS "distinct_id_sum""#));
 	}

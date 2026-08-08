@@ -13,6 +13,16 @@ use utils::{
 	assert_file_url, assert_storage_exists, assert_storage_not_exists, generate_nested_path,
 };
 
+fn local_storage(base_path: &std::path::Path) -> reinhardt_storages::backends::local::LocalStorage {
+	use reinhardt_storages::backends::local::LocalStorage;
+	use reinhardt_storages::config::LocalConfig;
+
+	LocalStorage::new(LocalConfig {
+		base_path: base_path.to_string_lossy().into_owned(),
+	})
+	.expect("local storage should initialize")
+}
+
 // ============================================================================
 // CRUD Tests
 // ============================================================================
@@ -781,5 +791,117 @@ mod path_traversal_tests {
 
 		// Assert
 		assert!(result.is_ok());
+	}
+}
+
+// ============================================================================
+// Exclusive Create Tests
+// ============================================================================
+
+mod exclusive_create_tests {
+	use super::*;
+	use std::fs;
+
+	#[tokio::test]
+	async fn local_save_if_absent_allows_exactly_one_concurrent_writer() {
+		let temp_dir = tempfile::tempdir().expect("temporary directory should initialize");
+		let storage = local_storage(temp_dir.path());
+
+		let first = storage.save_if_absent("same/key.txt", b"first");
+		let second = storage.save_if_absent("same/key.txt", b"second");
+		let (first, second) = tokio::join!(first, second);
+
+		assert_eq!(usize::from(first.is_ok()) + usize::from(second.is_ok()), 1);
+		assert_eq!(
+			usize::from(matches!(first, Err(StorageError::AlreadyExists(_))))
+				+ usize::from(matches!(second, Err(StorageError::AlreadyExists(_)))),
+			1,
+		);
+	}
+
+	#[tokio::test]
+	async fn save_if_absent_returns_the_logical_name_and_save_still_overwrites() {
+		let temp_dir = tempfile::tempdir().expect("temporary directory should initialize");
+		let storage = local_storage(temp_dir.path());
+
+		assert_eq!(
+			storage
+				.save_if_absent("nested/file.txt", b"first")
+				.await
+				.expect("exclusive create should succeed"),
+			"nested/file.txt"
+		);
+		assert!(matches!(
+			storage.save_if_absent("nested/file.txt", b"second").await,
+			Err(StorageError::AlreadyExists(name)) if name == "nested/file.txt"
+		));
+
+		storage
+			.save("nested/file.txt", b"replacement")
+			.await
+			.expect("save should retain overwrite behavior");
+		assert_eq!(
+			storage
+				.open("nested/file.txt")
+				.await
+				.expect("overwritten content should be readable"),
+			b"replacement"
+		);
+	}
+
+	#[tokio::test]
+	async fn local_storage_reports_exclusive_create_capability() {
+		let temp_dir = tempfile::tempdir().expect("temporary directory should initialize");
+		let storage = local_storage(temp_dir.path());
+
+		assert!(storage.capabilities().exclusive_create);
+	}
+
+	#[cfg(unix)]
+	#[tokio::test]
+	async fn save_if_absent_rejects_a_symlinked_parent_without_escaping_base_directory() {
+		use std::os::unix::fs::symlink;
+
+		let temp_dir = tempfile::tempdir().expect("temporary directory should initialize");
+		let base_dir = temp_dir.path().join("base");
+		let outside_dir = temp_dir.path().join("outside");
+		fs::create_dir(&base_dir).expect("base directory should initialize");
+		fs::create_dir(&outside_dir).expect("outside directory should initialize");
+		symlink(&outside_dir, base_dir.join("linked")).expect("parent symlink should initialize");
+		let storage = local_storage(&base_dir);
+
+		assert!(
+			storage
+				.save_if_absent("linked/escaped.txt", b"content")
+				.await
+				.is_err()
+		);
+		assert!(!outside_dir.join("escaped.txt").exists());
+	}
+
+	#[cfg(unix)]
+	#[tokio::test]
+	async fn save_if_absent_rejects_a_final_symlink_without_escaping_base_directory() {
+		use std::os::unix::fs::symlink;
+
+		let temp_dir = tempfile::tempdir().expect("temporary directory should initialize");
+		let base_dir = temp_dir.path().join("base");
+		let outside_file = temp_dir.path().join("outside.txt");
+		fs::create_dir(&base_dir).expect("base directory should initialize");
+		fs::write(&outside_file, b"original").expect("outside file should initialize");
+		symlink(&outside_file, base_dir.join("linked.txt"))
+			.expect("final symlink should initialize");
+		let storage = local_storage(&base_dir);
+
+		assert!(
+			storage
+				.save_if_absent("linked.txt", b"replacement")
+				.await
+				.is_err()
+		);
+		assert_eq!(
+			fs::read(&outside_file).expect("outside file should remain readable"),
+			b"original"
+		);
 	}
 }

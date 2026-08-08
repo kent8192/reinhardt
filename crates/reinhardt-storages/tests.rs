@@ -12,6 +12,7 @@ mod utils;
 
 // Comprehensive test modules
 mod config_tests;
+mod backend_contract_tests;
 mod factory_tests;
 #[cfg(feature = "gcs")]
 mod gcs_tests;

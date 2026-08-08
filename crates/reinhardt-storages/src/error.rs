@@ -13,6 +13,14 @@ pub enum StorageError {
 	#[error("File not found: {0}")]
 	NotFound(String),
 
+	/// A file with the given name already exists.
+	#[error("File already exists: {0}")]
+	AlreadyExists(String),
+
+	/// The backend does not support the requested operation.
+	#[error("Unsupported operation: {0}")]
+	UnsupportedOperation(String),
+
 	/// Permission was denied for the operation.
 	#[error("Permission denied: {0}")]
 	PermissionDenied(String),

@@ -53,7 +53,7 @@ pub mod error;
 pub mod factory;
 pub mod settings;
 
-pub use backend::StorageBackend;
+pub use backend::{StorageBackend, StorageCapabilities};
 #[allow(deprecated)] // Re-export keeps the compatibility API discoverable during the 0.2 line.
 pub use config::{BackendType, StorageConfig};
 pub use error::{Result, StorageError};

@@ -1,6 +1,6 @@
 #![allow(unexpected_cfgs)]
 
-use reinhardt::db::orm::{FieldRef, FileField, GeneratedModelField, ModelFileField};
+use reinhardt::db::orm::{expressions::GeneratedModelField, FieldRef, FileField, ModelFileField};
 use reinhardt::model;
 use serde::{Deserialize, Serialize};
 

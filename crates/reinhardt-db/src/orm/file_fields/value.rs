@@ -5,11 +5,28 @@ use reinhardt_storages::{
 use std::time::Duration;
 
 /// A validated logical path bound to one named storage backend.
-#[derive(Clone, Debug, Eq, Hash, PartialEq, serde::Deserialize, serde::Serialize)]
+#[derive(Clone, Debug, Eq, Hash, PartialEq, serde::Serialize)]
 pub struct FileField {
 	path: String,
 	#[serde(rename = "storage")]
 	storage_alias: String,
+}
+
+impl<'de> serde::Deserialize<'de> for FileField {
+	fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+	where
+		D: serde::Deserializer<'de>,
+	{
+		#[derive(serde::Deserialize)]
+		struct FileFieldObject {
+			path: String,
+			#[serde(rename = "storage")]
+			storage_alias: String,
+		}
+
+		let value = <FileFieldObject as serde::Deserialize>::deserialize(deserializer)?;
+		Self::from_existing(value.path, value.storage_alias).map_err(serde::de::Error::custom)
+	}
 }
 
 impl FileField {
@@ -148,6 +165,38 @@ mod tests {
 			serde_json::json!({"path": "avatars/a.png", "storage": "default"})
 		);
 		assert_eq!(serde_json::from_value::<FileField>(json).unwrap(), value);
+	}
+
+	#[test]
+	fn serde_rejects_unsafe_logical_keys() {
+		for path in ["../avatar.png", "/avatars/a.png", "avatars//a.png"] {
+			let error = serde_json::from_value::<FileField>(serde_json::json!({
+				"path": path,
+				"storage": "default"
+			}))
+			.unwrap_err();
+
+			assert!(
+				error.to_string().contains("unsafe upload filename"),
+				"unexpected error for {path}: {error}"
+			);
+		}
+	}
+
+	#[test]
+	fn serde_rejects_invalid_storage_aliases() {
+		for storage in ["Default", "-private", "default/backup"] {
+			let error = serde_json::from_value::<FileField>(serde_json::json!({
+				"path": "avatars/a.png",
+				"storage": storage
+			}))
+			.unwrap_err();
+
+			assert!(
+				error.to_string().contains("invalid storage alias"),
+				"unexpected error for {storage}: {error}"
+			);
+		}
 	}
 
 	#[test]

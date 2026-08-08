@@ -162,7 +162,7 @@ pub(crate) fn expand_upload_template(
 			'M' => now.format("%M").to_string(),
 			'S' => now.format("%S").to_string(),
 			_ => {
-				return Err(invalid_template(&format!(
+				return Err(invalid_template(format!(
 					"unsupported UTC token `%{token}`"
 				)));
 			}
@@ -257,7 +257,7 @@ fn validate_template_tokens(component: &str) -> std::result::Result<(), FileStor
 			.next()
 			.ok_or_else(|| invalid_template("incomplete UTC token"))?;
 		if !matches!(token, 'Y' | 'm' | 'd' | 'H' | 'M' | 'S') {
-			return Err(invalid_template(&format!(
+			return Err(invalid_template(format!(
 				"unsupported UTC token `%{token}`"
 			)));
 		}

@@ -6515,6 +6515,19 @@ fn generate_registration_code(input: RegistrationCodeInput<'_>) -> Result<TokenS
 			params.push(quote! { .with_param("file_storage", #storage_alias) });
 			params.push(quote! { .with_param("max_length", #max_length) });
 		}
+		// Keep PostgreSQL's physical TOAST storage strategy in the migration
+		// registry as its own parameter. It is intentionally separate from the
+		// logical `file_storage` backend alias used by FileField.
+		#[cfg(feature = "db-postgres")]
+		if let Some(ref storage) = config.storage {
+			let storage_str = match storage {
+				StorageStrategy::Plain => "plain",
+				StorageStrategy::Extended => "extended",
+				StorageStrategy::External => "external",
+				StorageStrategy::Main => "main",
+			};
+			params.push(quote! { .with_param("storage", #storage_str) });
+		}
 		if config.primary_key {
 			params.push(quote! { .with_param("primary_key", "true") });
 		}

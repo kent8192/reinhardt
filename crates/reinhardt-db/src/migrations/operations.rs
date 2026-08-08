@@ -62,6 +62,108 @@ use reinhardt_query::prelude::{
 	QueryBuilder, SchemaExpr, SchemaFunc, SimpleExpr, SqliteQueryBuilder, Value,
 };
 use serde::{Deserialize, Serialize, ser::SerializeStruct};
+use std::collections::HashMap;
+
+/// Prefix for the migration-only envelope that carries file-field policy
+/// alongside the physical column definition.
+///
+/// `ColumnDefinition` is a long-standing public struct with hundreds of
+/// external struct literals in generated migrations and downstream crates.
+/// Adding a required field would make all of those literals stop compiling.
+/// The envelope keeps the existing shape and is decoded before a migration
+/// operation is applied to `ProjectState`; SQL rendering strips it so policy
+/// metadata can never become a database DEFAULT expression.
+const FILE_FIELD_METADATA_PREFIX: &str = "__reinhardt_file_field_metadata_v1__:";
+const FILE_FIELD_METADATA_KEYS: [&str; 5] = [
+	"model_field_type",
+	"upload_to",
+	"file_storage",
+	"max_length",
+	"storage",
+];
+
+/// Encode file-field policy in the existing `ColumnDefinition.default` slot.
+///
+/// Non-file fields retain their original default representation. File fields
+/// carry both their semantic parameters and the optional SQL default in a
+/// versioned JSON object so generated migration source and serialized
+/// operations can round-trip the complete migration state.
+fn encoded_default_for_field_state(field_state: &FieldState) -> Option<String> {
+	let default = field_state.params.get("default").cloned();
+	if field_state
+		.params
+		.get("model_field_type")
+		.map(String::as_str)
+		!= Some("file")
+	{
+		return default;
+	}
+
+	let mut params = serde_json::Map::new();
+	for key in FILE_FIELD_METADATA_KEYS {
+		if let Some(value) = field_state.params.get(key) {
+			params.insert(key.to_string(), serde_json::Value::String(value.clone()));
+		}
+	}
+	let payload = serde_json::json!({
+		"params": params,
+		"default": default,
+	});
+	Some(format!(
+		"{FILE_FIELD_METADATA_PREFIX}{}",
+		serde_json::to_string(&payload).expect("file-field migration metadata is serializable")
+	))
+}
+
+/// Decode a `ColumnDefinition.default` value and recover file-field policy.
+///
+/// Malformed or unrelated defaults are treated as ordinary SQL expressions;
+/// this preserves compatibility with old migrations and avoids interpreting a
+/// user-supplied default as metadata merely because it shares a prefix.
+pub(crate) fn decode_file_field_metadata(
+	default: Option<&str>,
+) -> (HashMap<String, String>, Option<String>) {
+	let Some(default) = default else {
+		return (HashMap::new(), None);
+	};
+	let Some(payload) = default.strip_prefix(FILE_FIELD_METADATA_PREFIX) else {
+		return (HashMap::new(), Some(default.to_string()));
+	};
+	let Ok(payload) = serde_json::from_str::<serde_json::Value>(payload) else {
+		return (HashMap::new(), Some(default.to_string()));
+	};
+	let Some(params) = payload.get("params").and_then(serde_json::Value::as_object) else {
+		return (HashMap::new(), Some(default.to_string()));
+	};
+	let Some(model_field_type) = params
+		.get("model_field_type")
+		.and_then(serde_json::Value::as_str)
+		.filter(|value| *value == "file")
+	else {
+		return (HashMap::new(), Some(default.to_string()));
+	};
+
+	let mut semantic_params = HashMap::new();
+	semantic_params.insert("model_field_type".to_string(), model_field_type.to_string());
+	for key in FILE_FIELD_METADATA_KEYS {
+		if key == "model_field_type" {
+			continue;
+		}
+		if let Some(value) = params.get(key).and_then(serde_json::Value::as_str) {
+			semantic_params.insert(key.to_string(), value.to_string());
+		}
+	}
+	let default = payload
+		.get("default")
+		.and_then(serde_json::Value::as_str)
+		.map(str::to_string);
+	(semantic_params, default)
+}
+
+/// Return the SQL default represented by a column definition.
+fn effective_column_default(default: Option<&String>) -> Option<String> {
+	decode_file_field_metadata(default.map(String::as_str)).1
+}
 
 #[cfg(feature = "pgvector")]
 pub(super) fn named_index_has_target(columns: &[String], expressions: Option<&[String]>) -> bool {
@@ -2156,8 +2258,8 @@ impl Operation {
 		}
 
 		// DEFAULT value
-		if let Some(default) = &col.default {
-			parts.push(format!("DEFAULT {}", default).into());
+		if let Some(default) = effective_column_default(col.default.as_ref()) {
+			parts.push(format!("DEFAULT {default}").into());
 		}
 
 		parts.join(" ")
@@ -2579,8 +2681,8 @@ impl Operation {
 						if col.unique {
 							parts.push("UNIQUE".to_string().into());
 						}
-						if let Some(default) = &col.default {
-							parts.push(format!("DEFAULT {}", default).into());
+						if let Some(default) = effective_column_default(col.default.as_ref()) {
+							parts.push(format!("DEFAULT {default}").into());
 						}
 						return parts.join(" ");
 					}
@@ -2619,8 +2721,8 @@ impl Operation {
 		}
 
 		// DEFAULT value
-		if let Some(default) = &col.default {
-			parts.push(format!("DEFAULT {}", default).into());
+		if let Some(default) = effective_column_default(col.default.as_ref()) {
+			parts.push(format!("DEFAULT {default}").into());
 		}
 
 		parts.join(" ")
@@ -2809,10 +2911,9 @@ impl Operation {
 				match dialect {
 					SqlDialect::Postgres | SqlDialect::Cockroachdb => {
 						let mut statements = Vec::new();
-						if old_definition
-							.as_ref()
-							.is_some_and(|old_definition| old_definition.default.is_some())
-						{
+						if old_definition.as_ref().is_some_and(|old_definition| {
+							effective_column_default(old_definition.default.as_ref()).is_some()
+						}) {
 							statements.push(format!(
 								"ALTER TABLE {} ALTER COLUMN {} DROP DEFAULT;",
 								Self::quote_schema_identifier(table, dialect),
@@ -2825,7 +2926,9 @@ impl Operation {
 							Self::quote_schema_identifier(column, dialect),
 							sql_type
 						));
-						if let Some(default) = &new_definition.default {
+						if let Some(default) =
+							effective_column_default(new_definition.default.as_ref())
+						{
 							statements.push(format!(
 								"ALTER TABLE {} ALTER COLUMN {} SET DEFAULT {};",
 								Self::quote_schema_identifier(table, dialect),
@@ -4558,12 +4661,14 @@ pub(crate) enum PlannedOperationOutput {
 	Comment(String),
 }
 
-fn field_state_from_column(column: &ColumnDefinition) -> FieldState {
+pub(crate) fn field_state_from_column(column: &ColumnDefinition) -> FieldState {
+	let (semantic_params, default) = decode_file_field_metadata(column.default.as_deref());
 	let mut field = FieldState::new(
 		column.name.to_string(),
 		column.type_definition.clone(),
 		!column.not_null && !column.primary_key,
 	);
+	field.params.extend(semantic_params);
 	field
 		.params
 		.insert("primary_key".to_string(), column.primary_key.to_string());
@@ -4574,8 +4679,8 @@ fn field_state_from_column(column: &ColumnDefinition) -> FieldState {
 		"auto_increment".to_string(),
 		column.auto_increment.to_string(),
 	);
-	if let Some(default) = &column.default {
-		field.params.insert("default".to_string(), default.clone());
+	if let Some(default) = default {
+		field.params.insert("default".to_string(), default);
 	}
 	field.generated = column.generated.clone();
 	field.domain = column.domain.clone();
@@ -4690,7 +4795,7 @@ impl ColumnDefinition {
 			.and_then(|v| v.parse::<bool>().ok())
 			.unwrap_or(false);
 
-		let default = params.get("default").cloned();
+		let default = encoded_default_for_field_state(field_state);
 		let generated = field_state.generated.clone();
 
 		// Resolve ForeignKey column type from the referenced model's primary
@@ -6592,8 +6697,8 @@ impl Operation {
 			if col.auto_increment {
 				column = column.auto_increment(true);
 			}
-			if let Some(default) = &col.default {
-				column = column.default(SimpleExpr::from(self.convert_default_value(default)));
+			if let Some(default) = effective_column_default(col.default.as_ref()) {
+				column = column.default(SimpleExpr::from(self.convert_default_value(&default)));
 			}
 			if let Some(generated) = &col.generated {
 				column = self.apply_generated_column(column, generated);
@@ -6707,8 +6812,8 @@ impl Operation {
 		if column.not_null {
 			col_def = col_def.not_null(true);
 		}
-		if let Some(default) = &column.default {
-			col_def = col_def.default(SimpleExpr::from(self.convert_default_value(default)));
+		if let Some(default) = effective_column_default(column.default.as_ref()) {
+			col_def = col_def.default(SimpleExpr::from(self.convert_default_value(&default)));
 		}
 		if let Some(generated) = &column.generated {
 			col_def = self.apply_generated_column(col_def, generated);

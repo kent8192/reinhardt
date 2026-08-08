@@ -1971,7 +1971,8 @@ impl ProjectState {
 
 	/// Helper: Convert ColumnDefinition to FieldState
 	fn column_def_to_field_state(&self, col: &super::operations::ColumnDefinition) -> FieldState {
-		let mut params = std::collections::HashMap::new();
+		let (mut params, default) =
+			super::operations::decode_file_field_metadata(col.default.as_deref());
 
 		if col.primary_key {
 			params.insert("primary_key".to_string(), "true".to_string());
@@ -1982,8 +1983,8 @@ impl ProjectState {
 		if col.unique {
 			params.insert("unique".to_string(), "true".to_string());
 		}
-		if let Some(default) = &col.default {
-			params.insert("default".to_string(), default.to_string());
+		if let Some(default) = default {
+			params.insert("default".to_string(), default);
 		}
 
 		FieldState {
@@ -12173,6 +12174,70 @@ mod tests {
 		assert_eq!(from.field_type, to.field_type);
 		assert_eq!(from.params["file_storage"], to.params["file_storage"]);
 		assert_ne!(from.params["storage"], to.params["storage"]);
+	}
+
+	#[test]
+	fn file_field_alter_replay_preserves_semantic_params_without_churn() {
+		let from_field = file_field_state("avatars/%Y/%m/%d", "private_uploads", "external");
+		let to_field = file_field_state("profiles/%Y/%m/%d", "private_uploads", "external");
+		let key = ("media".to_string(), "Asset".to_string());
+		let from_state = build_project_state(vec![(
+			key.clone(),
+			build_model_state("media", "Asset", vec![from_field], Vec::new(), Vec::new()),
+		)]);
+		let to_state = build_project_state(vec![(
+			key,
+			build_model_state("media", "Asset", vec![to_field], Vec::new(), Vec::new()),
+		)]);
+
+		let detector = MigrationAutodetector::new(from_state.clone(), to_state.clone());
+		let operations = detector.generate_operations();
+		assert_eq!(
+			operations.len(),
+			1,
+			"policy change should emit one AlterColumn"
+		);
+		let sql = operations[0].to_sql(&super::super::operations::SqlDialect::Postgres);
+		assert!(
+			!sql.contains("__reinhardt_file_field_metadata_v1__"),
+			"file-field policy envelope must never leak into SQL: {sql}"
+		);
+
+		let mut replayed_state = from_state;
+		replayed_state.apply_migration_operations(&operations, "media");
+		let replayed_field = replayed_state
+			.get_model("media", "Asset")
+			.and_then(|model| model.get_field("avatar"))
+			.expect("replayed file field");
+		assert_eq!(
+			replayed_field.params.get("upload_to").map(String::as_str),
+			Some("profiles/%Y/%m/%d"),
+			"replay must retain the changed upload policy"
+		);
+		assert_eq!(
+			replayed_field
+				.params
+				.get("file_storage")
+				.map(String::as_str),
+			Some("private_uploads"),
+			"replay must retain the storage alias"
+		);
+
+		let serialized = serde_json::to_string(&operations[0]).expect("serialize AlterColumn");
+		let reparsed: super::super::Operation =
+			serde_json::from_str(&serialized).expect("deserialize AlterColumn");
+		let mut serde_replayed_state = detector.from_state.clone();
+		serde_replayed_state.apply_migration_operations(&[reparsed], "media");
+		assert_eq!(
+			serde_replayed_state, replayed_state,
+			"serialized migration operations must preserve the same file-field state"
+		);
+
+		let rerun = MigrationAutodetector::new(replayed_state, to_state).detect_changes();
+		assert!(
+			rerun.altered_fields.is_empty(),
+			"re-running detection after applying the migration must not emit a policy-only AlterColumn"
+		);
 	}
 
 	#[rstest]

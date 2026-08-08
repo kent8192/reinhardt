@@ -1,7 +1,6 @@
 use crate::orm::expressions::{FieldRef, GeneratedModelField};
 use crate::orm::field_codec::{
-	DatabaseField, DatabaseScalar, DatabaseValue, FieldCodecContext, FieldCodecError,
-	IntoFieldValue,
+	DatabaseField, DatabaseScalar, DatabaseValue, FieldCodecError, IntoFieldValue,
 };
 use crate::orm::model::Model;
 use reinhardt_core::exception::{DatabaseErrorKind, Error, Result};
@@ -22,10 +21,13 @@ impl<M> TypedAssignment<M> {
 		T: DatabaseField,
 		V: IntoFieldValue<T>,
 	{
+		let context = field.codec_context();
 		Ok(Self {
 			logical_name: field.logical_name(),
 			column_name: field.name(),
-			value: value.into_field_value().map_err(field_codec_error)?,
+			value: value
+				.into_field_value_with_context(&context)
+				.map_err(field_codec_error)?,
 			marker: PhantomData,
 		})
 	}
@@ -99,16 +101,9 @@ impl<M: Model> UpsertCreate<'_, M> {
 		};
 		let storage =
 			T::Storage::from_database_value(assignment.value.clone()).map_err(field_codec_error)?;
-		T::decode_database(
-			storage,
-			&FieldCodecContext::new(
-				std::any::type_name::<M>(),
-				field.logical_name(),
-				field.name(),
-			),
-		)
-		.map(Some)
-		.map_err(field_codec_error)
+		T::decode_database(storage, &field.codec_context())
+			.map(Some)
+			.map_err(field_codec_error)
 	}
 
 	/// Sets a typed create value while preserving immutable lookup fields.
@@ -201,9 +196,10 @@ pub enum UpsertWrite<'a, M> {
 
 fn field_codec_error(error: FieldCodecError) -> Error {
 	let kind = match &error {
-		FieldCodecError::TypeMismatch { .. } | FieldCodecError::InvalidEnumValue { .. } => {
-			DatabaseErrorKind::Type
-		}
+		FieldCodecError::TypeMismatch { .. }
+		| FieldCodecError::InvalidEnumValue { .. }
+		| FieldCodecError::MissingFieldMetadata { .. }
+		| FieldCodecError::FieldPolicyMismatch { .. } => DatabaseErrorKind::Type,
 		FieldCodecError::Serialization(_) => DatabaseErrorKind::Serialization,
 	};
 	Error::database_with_source(
@@ -528,6 +524,15 @@ mod tests {
 	#[case(
 		FieldCodecError::Serialization("invalid payload".to_owned()),
 		reinhardt_core::exception::DatabaseErrorKind::Serialization
+	)]
+	#[case(
+		FieldCodecError::FieldPolicyMismatch {
+			context: FieldCodecContext::new("AssignmentModel", "avatar", "avatar_path"),
+			key: "file_storage".to_owned(),
+			expected: "private_uploads".to_owned(),
+			actual: "default".to_owned(),
+		},
+		reinhardt_core::exception::DatabaseErrorKind::Type
 	)]
 	fn field_codec_errors_keep_their_database_error_kind(
 		#[case] source: FieldCodecError,

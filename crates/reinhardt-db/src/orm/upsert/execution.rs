@@ -436,9 +436,10 @@ fn build_update_candidate<M: Model>(
 
 fn field_codec_error(error: FieldCodecError) -> Error {
 	let kind = match &error {
-		FieldCodecError::TypeMismatch { .. } | FieldCodecError::InvalidEnumValue { .. } => {
-			DatabaseErrorKind::Type
-		}
+		FieldCodecError::TypeMismatch { .. }
+		| FieldCodecError::InvalidEnumValue { .. }
+		| FieldCodecError::MissingFieldMetadata { .. }
+		| FieldCodecError::FieldPolicyMismatch { .. } => DatabaseErrorKind::Type,
 		FieldCodecError::Serialization(_) => DatabaseErrorKind::Serialization,
 	};
 	Error::database_with_source(
@@ -450,7 +451,9 @@ fn field_codec_error(error: FieldCodecError) -> Error {
 
 #[cfg(test)]
 mod tests {
-	use super::{build_update_candidate, execute_get_or_create, execute_update_or_create};
+	use super::{
+		build_update_candidate, execute_get_or_create, execute_update_or_create, field_codec_error,
+	};
 	use crate::backends::error::{DatabaseError, DatabaseErrorKind};
 	use crate::backends::types::{DatabaseType, QueryResult, QueryValue, Row, TransactionExecutor};
 	use crate::orm::composite_pk::CompositePrimaryKey;
@@ -458,7 +461,9 @@ mod tests {
 	use crate::orm::connection::{BackendsConnection, DatabaseConnectionLease};
 	use crate::orm::custom_manager::CustomManager;
 	use crate::orm::expressions::{FieldRef, GeneratedModelField};
-	use crate::orm::field_codec::{DatabaseStorageKind, DatabaseValue, FieldCodecError};
+	use crate::orm::field_codec::{
+		DatabaseStorageKind, DatabaseValue, FieldCodecContext, FieldCodecError,
+	};
 	use crate::orm::inspection::FieldInfo;
 	use crate::orm::json::Json;
 	use crate::orm::manager::Manager;
@@ -472,6 +477,24 @@ mod tests {
 	use rstest::rstest;
 	use serde::{Deserialize, Serialize};
 	use std::collections::{BTreeMap, HashMap, VecDeque};
+
+	#[test]
+	fn field_policy_mismatch_is_a_typed_upsert_execution_error() {
+		let error = field_codec_error(FieldCodecError::FieldPolicyMismatch {
+			context: FieldCodecContext::new("Article", "attachment", "attachment_path"),
+			key: "file_storage".to_owned(),
+			expected: "private_uploads".to_owned(),
+			actual: "default".to_owned(),
+		});
+
+		assert_eq!(error.database_kind(), Some(DatabaseErrorKind::Type));
+		assert!(
+			std::error::Error::source(&error)
+				.unwrap()
+				.downcast_ref::<FieldCodecError>()
+				.is_some()
+		);
+	}
 	use std::sync::{Arc, Mutex};
 	#[cfg(feature = "sqlite")]
 	use std::time::Duration;

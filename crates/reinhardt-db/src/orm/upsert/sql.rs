@@ -358,9 +358,10 @@ fn bound_sql(sql: String, values: Values) -> BoundSql {
 
 fn field_codec_error(error: FieldCodecError) -> Error {
 	let kind = match &error {
-		FieldCodecError::TypeMismatch { .. } | FieldCodecError::InvalidEnumValue { .. } => {
-			DatabaseErrorKind::Type
-		}
+		FieldCodecError::TypeMismatch { .. }
+		| FieldCodecError::InvalidEnumValue { .. }
+		| FieldCodecError::MissingFieldMetadata { .. }
+		| FieldCodecError::FieldPolicyMismatch { .. } => DatabaseErrorKind::Type,
 		FieldCodecError::Serialization(_) => DatabaseErrorKind::Serialization,
 	};
 	Error::database_with_source(
@@ -372,10 +373,13 @@ fn field_codec_error(error: FieldCodecError) -> Error {
 
 #[cfg(test)]
 mod tests {
-	use super::{insert, select_by_lookup, update_by_primary_key, update_values_by_primary_key};
+	use super::{
+		field_codec_error, insert, select_by_lookup, update_by_primary_key,
+		update_values_by_primary_key,
+	};
 	use crate::orm::composite_pk::CompositePrimaryKey;
 	use crate::orm::expressions::FieldRef;
-	use crate::orm::field_codec::DatabaseValue;
+	use crate::orm::field_codec::{DatabaseValue, FieldCodecContext, FieldCodecError};
 	use crate::orm::inspection::FieldInfo;
 	use crate::orm::model::{FieldSelector, Model};
 	use crate::orm::upsert::assignment::TypedAssignment;
@@ -391,6 +395,27 @@ mod tests {
 		tenant_id: i64,
 		slug: Option<String>,
 		headline: String,
+	}
+
+	#[test]
+	fn field_policy_mismatch_is_a_typed_upsert_sql_error() {
+		let error = field_codec_error(FieldCodecError::FieldPolicyMismatch {
+			context: FieldCodecContext::new("Article", "attachment", "attachment_path"),
+			key: "file_storage".to_owned(),
+			expected: "private_uploads".to_owned(),
+			actual: "default".to_owned(),
+		});
+
+		assert_eq!(
+			error.database_kind(),
+			Some(reinhardt_core::exception::DatabaseErrorKind::Type)
+		);
+		assert!(
+			std::error::Error::source(&error)
+				.unwrap()
+				.downcast_ref::<FieldCodecError>()
+				.is_some()
+		);
 	}
 
 	#[derive(Clone)]

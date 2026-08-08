@@ -195,4 +195,70 @@ mod tests {
 			"(\"price\" + 10) AS \"total\""
 		);
 	}
+
+	#[test]
+	fn scalar_values_render_without_aggregate_tree() {
+		assert_eq!(Value::String("O'Reilly".into()).to_sql(), "'O''Reilly'");
+		assert_eq!(Value::Bool(true).to_sql(), "TRUE");
+		assert_eq!(Value::Null.to_sql(), "NULL");
+	}
+
+	#[test]
+	fn field_annotations_quote_aliases_and_fields() {
+		let annotation = Annotation::field("display_name", AnnotationValue::Field(F::new("name")));
+		assert_eq!(annotation.to_sql(), "\"name\" AS \"display_name\"");
+	}
+
+	#[test]
+	fn arithmetic_expression_variants_render() {
+		let field = |name| AnnotationValue::Field(F::new(name));
+		assert_eq!(
+			Expression::Subtract(Box::new(field("a")), Box::new(field("b"))).to_sql(),
+			"(\"a\" - \"b\")"
+		);
+		assert_eq!(
+			Expression::Multiply(Box::new(field("a")), Box::new(field("b"))).to_sql(),
+			"(\"a\" * \"b\")"
+		);
+		assert_eq!(
+			Expression::Divide(Box::new(field("a")), Box::new(field("b"))).to_sql(),
+			"(\"a\" / \"b\")"
+		);
+	}
+
+	#[test]
+	fn case_and_when_render_conditions() {
+		let expression = Expression::Case {
+			whens: vec![When::new(
+				Q::new("active", "=", "true"),
+				AnnotationValue::Value(Value::Int(1)),
+			)],
+			default: Some(Box::new(AnnotationValue::Value(Value::Int(0)))),
+		};
+		assert_eq!(
+			expression.to_sql(),
+			"CASE WHEN active = 'true' THEN 1 ELSE 0 END"
+		);
+	}
+
+	#[test]
+	fn coalesce_renders_each_value_in_order() {
+		let expression = Expression::Coalesce(vec![
+			AnnotationValue::Field(F::new("nickname")),
+			AnnotationValue::Value(Value::String("Anonymous".into())),
+		]);
+		assert_eq!(expression.to_sql(), "COALESCE(\"nickname\", 'Anonymous')");
+	}
+
+	#[test]
+	fn subquery_annotations_preserve_sql_body() {
+		let annotation = Annotation::new(
+			"latest",
+			AnnotationValue::Subquery("(SELECT id FROM items LIMIT 1)".into()),
+		);
+		assert_eq!(
+			annotation.to_sql(),
+			"(SELECT id FROM items LIMIT 1) AS \"latest\""
+		);
+	}
 }

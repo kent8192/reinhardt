@@ -2070,18 +2070,6 @@ mod expressions_extended_tests {
 
 	#[test]
 	// From: Django/expressions
-	fn test_aggregate_rawsql_annotation() {
-		assert_eq!(Value::Int(1).to_sql(), "1");
-	}
-
-	#[test]
-	// From: Django/expressions
-	fn test_aggregate_rawsql_annotation_1() {
-		assert_eq!(Value::Int(2).to_sql(), "2");
-	}
-
-	#[test]
-	// From: Django/expressions
 	fn test_aggregate_subquery_annotation() {
 		// Test subquery with aggregate
 		let subquery = Subquery::new("SELECT COUNT(*) FROM orders WHERE status = 'completed'");
@@ -2108,18 +2096,6 @@ mod expressions_extended_tests {
 
 	#[test]
 	// From: Django/expressions
-	fn test_aggregates() {
-		assert_eq!(Value::Int(3).to_sql(), "3");
-	}
-
-	#[test]
-	// From: Django/expressions
-	fn test_aggregates_1() {
-		assert_eq!(Value::Int(4).to_sql(), "4");
-	}
-
-	#[test]
-	// From: Django/expressions
 	fn test_annotate_by_empty_custom_exists() {
 		// Test EXISTS with empty subquery
 		let exists = Exists::new("");
@@ -2134,30 +2110,6 @@ mod expressions_extended_tests {
 		let exists = Exists::new("SELECT 1");
 		let sql = exists.to_sql();
 		assert_eq!(sql, "EXISTS(SELECT 1)");
-	}
-
-	#[test]
-	// From: Django/expressions
-	fn test_annotate_values_aggregate() {
-		assert_eq!(Value::Int(5).to_sql(), "5");
-	}
-
-	#[test]
-	// From: Django/expressions
-	fn test_annotate_values_aggregate_1() {
-		assert_eq!(Value::Int(6).to_sql(), "6");
-	}
-
-	#[test]
-	// From: Django/expressions
-	fn test_annotate_values_count() {
-		assert_eq!(Value::Int(7).to_sql(), "7");
-	}
-
-	#[test]
-	// From: Django/expressions
-	fn test_annotate_values_count_1() {
-		assert_eq!(Value::Int(8).to_sql(), "8");
 	}
 
 	#[test]
@@ -2411,30 +2363,6 @@ mod expressions_extended_tests {
 
 	#[test]
 	// From: Django/expressions
-	fn test_distinct_aggregates() {
-		assert_eq!(Value::Int(9).to_sql(), "9");
-	}
-
-	#[test]
-	// From: Django/expressions
-	fn test_distinct_aggregates_1() {
-		assert_eq!(Value::Int(10).to_sql(), "10");
-	}
-
-	#[test]
-	// From: Django/expressions
-	fn test_empty_group_by() {
-		assert_eq!(Value::Int(11).to_sql(), "11");
-	}
-
-	#[test]
-	// From: Django/expressions
-	fn test_empty_group_by_1() {
-		assert_eq!(Value::Int(12).to_sql(), "12");
-	}
-
-	#[test]
-	// From: Django/expressions
 	fn test_exists_in_filter() {
 		let q = Q::new("status", "=", "active");
 		assert_eq!(
@@ -2622,30 +2550,6 @@ mod expressions_extended_tests {
 	#[test]
 	// From: Django/expressions
 	fn test_filter_with_join_1() {
-		let q = Q::new("status", "=", "active");
-		assert_eq!(
-			q.to_sql(),
-			"status = 'active'",
-			"Expected exact Q condition SQL, got: {}",
-			q.to_sql()
-		);
-	}
-
-	#[test]
-	// From: Django/expressions
-	fn test_filtered_aggregates() {
-		let q = Q::new("status", "=", "active");
-		assert_eq!(
-			q.to_sql(),
-			"status = 'active'",
-			"Expected exact Q condition SQL, got: {}",
-			q.to_sql()
-		);
-	}
-
-	#[test]
-	// From: Django/expressions
-	fn test_filtered_aggregates_1() {
 		let q = Q::new("status", "=", "active");
 		assert_eq!(
 			q.to_sql(),
@@ -2988,18 +2892,6 @@ mod expressions_extended_tests {
 
 	#[test]
 	// From: Django/expressions
-	fn test_object_create_with_aggregate() {
-		assert_eq!(Value::Int(13).to_sql(), "13");
-	}
-
-	#[test]
-	// From: Django/expressions
-	fn test_object_create_with_aggregate_1() {
-		assert_eq!(Value::Int(14).to_sql(), "14");
-	}
-
-	#[test]
-	// From: Django/expressions
 	fn test_object_create_with_f_expression_in_subquery() {
 		// Test F expression in subquery
 		let f = F::new("price");
@@ -3298,7 +3190,6 @@ pub enum Expression {
 	Value(Value),
 	/// Case variant.
 	Case(Case),
-	// Aggregate(super::aggregation::Aggregate),
 }
 
 impl Expression {

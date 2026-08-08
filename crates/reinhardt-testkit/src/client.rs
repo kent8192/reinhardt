@@ -1404,13 +1404,17 @@ mod tests {
 		let logged_out = client.get("/logged-out").await.unwrap();
 
 		// Assert
-		let expected_authorization = format!(
-			"Basic {}",
-			super::base64::encode(format!("ada:{}", first_password))
-		);
+		let encoded_authorization = authenticated
+			.header("X-Authorization")
+			.unwrap()
+			.strip_prefix("Basic ")
+			.unwrap();
+		let decoded_authorization = base64_simd::STANDARD
+			.decode_to_vec(encoded_authorization)
+			.unwrap();
 		assert_eq!(
-			authenticated.header("X-Authorization"),
-			Some(expected_authorization.as_str())
+			String::from_utf8(decoded_authorization).unwrap(),
+			format!("ada:{}", first_password)
 		);
 		assert_eq!(authenticated.header("X-Cookie"), Some("session=first"));
 		assert_eq!(authenticated.header("X-Custom"), Some("retained"));

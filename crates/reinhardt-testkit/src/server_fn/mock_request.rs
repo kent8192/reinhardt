@@ -791,13 +791,17 @@ mod tests {
 		assert_eq!(text.get_header("content-type"), Some("text/plain"));
 		assert_eq!(text.text().unwrap(), "remove");
 		assert_eq!(raw.body, Bytes::from_static(b"\x00\x01"));
-		let expected_basic_authorization = format!(
-			"Basic {}",
-			base64_simd::STANDARD.encode_to_string(format!("alice:{}", basic_password))
-		);
+		let encoded_basic_authorization = basic
+			.get_header("authorization")
+			.unwrap()
+			.strip_prefix("Basic ")
+			.unwrap();
+		let decoded_basic_authorization = base64_simd::STANDARD
+			.decode_to_vec(encoded_basic_authorization)
+			.unwrap();
 		assert_eq!(
-			basic.get_header("authorization"),
-			Some(expected_basic_authorization.as_str())
+			String::from_utf8(decoded_basic_authorization).unwrap(),
+			format!("alice:{}", basic_password)
 		);
 		assert_eq!(basic.get_header("content-type"), Some("application/custom"));
 		assert_eq!(basic.get_header("accept"), Some("text/plain"));

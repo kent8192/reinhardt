@@ -447,6 +447,20 @@ async fn terminal_aggregate_rejects_composed_aggregate_before_fetching() {
 }
 
 #[tokio::test]
+async fn terminal_aggregate_validates_empty_input_before_opening_connection() {
+	let error = QuerySet::<TypedAnnotationRecord>::new()
+		.aggregate([])
+		.await
+		.expect_err("empty terminal aggregate input must fail validation");
+
+	assert!(matches!(
+		error,
+		Error::Validation(message)
+			if message == "aggregate input must contain at least one labeled expression"
+	));
+}
+
+#[tokio::test]
 async fn terminal_aggregate_fetches_one_row_and_decodes_multiple_labels() {
 	let mut row = Row::new();
 	row.insert("record_count".to_owned(), QueryValue::Int(4));
@@ -513,6 +527,10 @@ async fn terminal_aggregate_normalizes_supported_min_max_scalars() {
 		QueryValue::Timestamp(timestamp),
 	);
 	row.insert(
+		"first_timestamp_from_naive".to_owned(),
+		QueryValue::NaiveTimestamp(naive_timestamp),
+	);
+	row.insert(
 		"first_naive_timestamp".to_owned(),
 		QueryValue::NaiveTimestamp(naive_timestamp),
 	);
@@ -536,6 +554,9 @@ async fn terminal_aggregate_normalizes_supported_min_max_scalars() {
 				func::min(ModelRecord::field_datetime())
 					.label("first_timestamp")
 					.expect("valid UTC timestamp label"),
+				func::min(ModelRecord::field_datetime())
+					.label("first_timestamp_from_naive")
+					.expect("valid UTC timestamp label for naive driver value"),
 				func::min(ModelRecord::field_naive_datetime())
 					.label("first_naive_timestamp")
 					.expect("valid naive timestamp label"),
@@ -564,6 +585,12 @@ async fn terminal_aggregate_normalizes_supported_min_max_scalars() {
 	assert_eq!(
 		result.get("first_timestamp").expect("UTC timestamp value"),
 		&AggregateValue::DateTime(AggregateDateTime::Utc(timestamp))
+	);
+	assert_eq!(
+		result
+			.get("first_timestamp_from_naive")
+			.expect("naive driver timestamp value"),
+		&AggregateValue::DateTime(AggregateDateTime::Utc(naive_timestamp.and_utc()))
 	);
 	assert_eq!(
 		result

@@ -61,6 +61,10 @@ where
 		I: AggregateInput<T>,
 	{
 		let expressions = input.into_expressions();
+		validate_aggregate_input(self, &expressions)?;
+		if self.empty_result {
+			return Ok(empty_aggregate_result(&expressions));
+		}
 		let mut conn = super::super::manager::get_connection().await?;
 		self.aggregate_with_db_expressions(expressions, &mut conn)
 			.await
@@ -515,6 +519,9 @@ fn normalize_storage_value(
 			QueryValue::Timestamp(value) => {
 				Ok(AggregateValue::DateTime(AggregateDateTime::Utc(value)))
 			}
+			QueryValue::NaiveTimestamp(value) => Ok(AggregateValue::DateTime(
+				AggregateDateTime::Utc(value.and_utc()),
+			)),
 			QueryValue::String(value) => parse_datetime(&value)
 				.map(|value| AggregateValue::DateTime(AggregateDateTime::Utc(value)))
 				.map_err(|_| unexpected("DateTime", QueryValue::String(value))),
@@ -580,4 +587,74 @@ fn unexpected_value_error(
 		backend,
 		&format!("database returned {raw:?}, expected {expected}"),
 	)
+}
+
+#[cfg(test)]
+mod tests {
+	use super::*;
+
+	fn normalize(storage_kind: DatabaseStorageKind, raw: QueryValue) -> AggregateValue {
+		normalize_storage_value(
+			raw,
+			storage_kind,
+			"value",
+			AggregateFunction::Min,
+			DatabaseBackend::Postgres,
+		)
+		.expect("fixture value should match its storage kind")
+	}
+
+	#[test]
+	fn normalize_non_numeric_storage_variants() {
+		assert_eq!(
+			normalize(DatabaseStorageKind::F64, QueryValue::Float(4.25)),
+			AggregateValue::Float(4.25)
+		);
+		assert_eq!(
+			normalize(
+				DatabaseStorageKind::Decimal,
+				QueryValue::String("42.50".to_owned()),
+			),
+			AggregateValue::Decimal(rust_decimal::Decimal::new(4250, 2))
+		);
+		assert_eq!(
+			normalize(DatabaseStorageKind::Bool, QueryValue::Bool(true)),
+			AggregateValue::Bool(true)
+		);
+		assert_eq!(
+			normalize(
+				DatabaseStorageKind::Bytes,
+				QueryValue::Bytes(vec![1, 2, 255])
+			),
+			AggregateValue::Bytes(vec![1, 2, 255])
+		);
+		let json = serde_json::json!({"stage": "ready"});
+		assert_eq!(
+			normalize(
+				DatabaseStorageKind::Json,
+				QueryValue::Json(Some(Box::new(json.clone()))),
+			),
+			AggregateValue::Json(json)
+		);
+		assert_eq!(
+			normalize(DatabaseStorageKind::Json, QueryValue::Json(None)),
+			AggregateValue::Null
+		);
+	}
+
+	#[test]
+	fn normalize_datetime_accepts_naive_driver_timestamp() {
+		let naive = NaiveDate::from_ymd_opt(2024, 1, 2)
+			.expect("valid date")
+			.and_hms_opt(3, 4, 5)
+			.expect("valid time");
+
+		assert_eq!(
+			normalize(
+				DatabaseStorageKind::DateTime,
+				QueryValue::NaiveTimestamp(naive)
+			),
+			AggregateValue::DateTime(AggregateDateTime::Utc(naive.and_utc()))
+		);
+	}
 }

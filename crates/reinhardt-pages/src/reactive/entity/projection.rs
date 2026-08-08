@@ -122,6 +122,7 @@ impl EntityDependencies {
 	/// reads, so a group can contain identities not declared by the recipe currently
 	/// being seeded. Those rows still need typed deserialization and validation, but
 	/// are intentionally not acquired as dependencies by the current query.
+	#[cfg(any(wasm, test))]
 	pub(crate) fn hydrate_all(
 		&self,
 		group: &EntityHydrationGroup,
@@ -162,6 +163,7 @@ impl EntityDependencies {
 		&self.identities
 	}
 
+	#[cfg(any(wasm, test))]
 	pub(crate) fn entity_types(&self) -> impl Iterator<Item = &'static str> + '_ {
 		self.loaders.keys().copied()
 	}
@@ -178,6 +180,7 @@ pub(crate) struct EntityHydrationGroup {
 }
 
 impl EntityHydrationGroup {
+	#[cfg(any(wasm, test))]
 	pub(crate) fn new(entity_type: impl Into<String>, records: Vec<EntityHydrationRecord>) -> Self {
 		Self {
 			entity_type: entity_type.into(),
@@ -200,6 +203,7 @@ pub(crate) struct EntityHydrationRecord {
 }
 
 impl EntityHydrationRecord {
+	#[cfg(any(wasm, test))]
 	pub(crate) fn new(id: serde_json::Value, value: serde_json::Value) -> Self {
 		Self { id, value }
 	}
@@ -216,6 +220,7 @@ trait ErasedEntityHydrationLoader {
 		declared: &HashSet<EntityIdentity>,
 		entities: &mut EntityWriter<'_>,
 	);
+	#[cfg(any(wasm, test))]
 	fn hydrate_all(&self, group: &EntityHydrationGroup, entities: &mut EntityWriter<'_>);
 	fn acquire_leases(
 		&self,
@@ -316,6 +321,7 @@ where
 		self.hydrate_records(group, Some(declared), entities);
 	}
 
+	#[cfg(any(wasm, test))]
 	fn hydrate_all(&self, group: &EntityHydrationGroup, entities: &mut EntityWriter<'_>) {
 		self.hydrate_records(group, None, entities);
 	}

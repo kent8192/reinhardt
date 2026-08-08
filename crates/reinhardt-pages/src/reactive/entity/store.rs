@@ -5,7 +5,9 @@ use std::rc::{Rc, Weak};
 use std::time::Duration;
 
 use super::identity::EntityTypeRegistry;
-use super::projection::{EntityHydrationGroup, EntityHydrationRecord};
+use super::projection::EntityHydrationGroup;
+#[cfg(any(wasm, test))]
+use super::projection::EntityHydrationRecord;
 use super::{
 	ENTITY_TABLE_VERSION, Entity, EntityDependencies, EntityHydrationEnvelope, EntityHydrationRow,
 	EntityIdentity,
@@ -113,6 +115,7 @@ impl EntityArena {
 	}
 
 	/// Stages the browser-side entity table for typed registration.
+	#[cfg(any(wasm, test))]
 	pub(crate) fn install_hydration_envelope(&self, envelope: EntityHydrationEnvelope) {
 		if envelope.version != ENTITY_TABLE_VERSION {
 			panic!(
@@ -146,6 +149,7 @@ impl EntityArena {
 	}
 
 	/// Materializes all groups declared by one normalized recipe in one baseline transaction.
+	#[cfg(any(wasm, test))]
 	pub(crate) fn hydrate_dependencies(&self, dependencies: &EntityDependencies) {
 		let mut selected = Vec::new();
 		for entity_type in dependencies.entity_types() {

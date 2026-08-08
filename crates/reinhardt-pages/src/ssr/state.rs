@@ -114,6 +114,7 @@ impl SsrState {
 	}
 
 	/// Removes and returns one resource state from the hydration payload.
+	#[cfg(any(wasm, test))]
 	pub(crate) fn take_resource_state(&mut self, id: &str) -> Option<serde_json::Value> {
 		self.resources.remove(id)
 	}

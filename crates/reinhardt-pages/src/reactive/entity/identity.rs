@@ -11,10 +11,13 @@ use crate::reactive::query::canonical_json;
 /// `TYPE` is a stable, application-wide cache contract. Changing it creates a
 /// distinct entity namespace; reusing it for incompatible Rust types panics.
 pub trait Entity: Clone + Serialize + DeserializeOwned + 'static {
+	/// The type used to address this entity in the normalized cache.
 	type Id: Clone + Eq + Hash + Serialize + DeserializeOwned + 'static;
 
+	/// Stable namespace used to distinguish this entity type in the cache.
 	const TYPE: &'static str;
 
+	/// Returns the stable cache ID for this entity.
 	fn entity_id(&self) -> Self::Id;
 }
 

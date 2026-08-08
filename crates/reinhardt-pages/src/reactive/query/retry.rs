@@ -221,6 +221,17 @@ mod tests {
 	}
 
 	#[test]
+	fn retry_policy_ignores_samples_when_jitter_is_disabled() {
+		let policy = RetryPolicy::<()>::exponential()
+			.base_delay(Duration::from_millis(100))
+			.max_delay(Duration::from_millis(100));
+
+		for sample in [0, u64::MAX / 2, u64::MAX] {
+			assert_eq!(policy.delay_ms(1, sample), 100);
+		}
+	}
+
+	#[test]
 	fn retry_policy_saturates_duration_and_attempt_overflow() {
 		let policy = RetryPolicy::<()>::exponential()
 			.base_delay(Duration::MAX)

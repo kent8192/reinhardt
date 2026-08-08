@@ -1,11 +1,9 @@
 use std::any::Any;
 use std::cell::{Cell, RefCell};
 use std::cmp::{Ordering, Reverse};
-#[cfg(any(wasm, test))]
-use std::collections::HashSet;
 #[cfg(all(test, not(wasm)))]
 use std::collections::VecDeque;
-use std::collections::{BinaryHeap, HashMap};
+use std::collections::{BinaryHeap, HashMap, HashSet};
 use std::future::Future;
 use std::marker::PhantomData;
 use std::pin::Pin;
@@ -222,6 +220,7 @@ pub(super) struct QueryClientInner {
 	runtime: QueryRuntimeHandle,
 	entities: EntityArena,
 	entries: RefCell<HashMap<QueryIdentity, CachedQueryEntry>>,
+	entity_dependents: RefCell<HashMap<EntityIdentity, Vec<Weak<dyn EntityDependent>>>>,
 	#[cfg(any(wasm, test))]
 	consumed_hydration_identities: RefCell<HashSet<QueryIdentity>>,
 	families: RefCell<HashMap<&'static str, QueryFamilyMetadata>>,
@@ -242,6 +241,20 @@ struct CachedQueryEntry {
 	#[cfg(wasm)]
 	visibility_changed: Rc<dyn Fn(bool, u64)>,
 	deadline_is_current: Rc<dyn Fn(QueryDeadlineKind, u64) -> bool>,
+}
+
+pub(crate) trait EntityDependent {
+	fn query_identity(&self) -> &QueryIdentity;
+	fn prepare_entity_change(
+		self: Rc<Self>,
+		overlay: &EntityOverlay<'_>,
+		removed: &RemovedEntities<'_>,
+	) -> PreparedProjectionCommit;
+}
+
+pub(crate) struct PreparedProjectionCommit {
+	pub(crate) commit_structure: Box<dyn FnOnce()>,
+	pub(crate) publish_signal: Box<dyn FnOnce()>,
 }
 
 #[derive(Clone, Copy)]
@@ -300,6 +313,7 @@ impl QueryClient {
 			runtime,
 			entities: EntityArena::new(entity_gc_time),
 			entries: RefCell::new(HashMap::new()),
+			entity_dependents: RefCell::new(HashMap::new()),
 			#[cfg(any(wasm, test))]
 			consumed_hydration_identities: RefCell::new(HashSet::new()),
 			families: RefCell::new(HashMap::new()),
@@ -365,7 +379,33 @@ impl QueryClient {
 
 	/// Applies a group of normalized entity writes atomically.
 	pub fn update_entities(&self, update: impl FnOnce(&mut EntityWriter<'_>)) {
-		self.inner.entities.update_entities(update);
+		let ticket = self.inner.entities.issue_mutation_ticket();
+		let staging = self.inner.entities.stage(update);
+		let overlay = EntityOverlay::new(&self.inner.entities, staging, ticket);
+		let removed_identities = overlay.removed_identities();
+		let prepared = self.inner.prepare_entity_change(
+			&overlay,
+			&RemovedEntities::borrowed(&removed_identities),
+			None,
+		);
+		let (commit_structures, publish_signals): (Vec<_>, Vec<_>) = prepared
+			.into_iter()
+			.map(|prepared| (prepared.commit_structure, prepared.publish_signal))
+			.unzip();
+		self.inner.entities.commit_overlay(
+			overlay,
+			ticket,
+			move || {
+				for commit_structure in commit_structures {
+					commit_structure();
+				}
+			},
+			move || {
+				for publish_signal in publish_signals {
+					publish_signal();
+				}
+			},
+		);
 	}
 
 	/// Observes a query without installing an application context.
@@ -458,6 +498,72 @@ fn validate_query_family_types(
 }
 
 impl QueryClientInner {
+	fn prepare_entity_change(
+		&self,
+		overlay: &EntityOverlay<'_>,
+		removed: &RemovedEntities<'_>,
+		excluded: Option<&QueryIdentity>,
+	) -> Vec<PreparedProjectionCommit> {
+		let affected = overlay.affected_identities();
+		let mut dependents = HashMap::<QueryIdentity, Rc<dyn EntityDependent>>::new();
+		let mut index = self.entity_dependents.borrow_mut();
+		for identity in affected {
+			let Some(edges) = index.get_mut(&identity) else {
+				continue;
+			};
+			edges.retain(|edge| edge.strong_count() > 0);
+			for dependent in edges.iter().filter_map(Weak::upgrade) {
+				if excluded.is_some_and(|excluded| dependent.query_identity() == excluded) {
+					continue;
+				}
+				dependents
+					.entry(dependent.query_identity().clone())
+					.or_insert(dependent);
+			}
+		}
+		drop(index);
+
+		dependents
+			.into_values()
+			.map(|dependent| dependent.prepare_entity_change(overlay, removed))
+			.collect()
+	}
+
+	fn replace_reverse_dependencies(
+		&self,
+		dependent: Rc<dyn EntityDependent>,
+		previous: &HashSet<EntityIdentity>,
+		next: &HashSet<EntityIdentity>,
+	) {
+		let query_identity = dependent.query_identity().clone();
+		let mut index = self.entity_dependents.borrow_mut();
+		for identity in next {
+			let edges = index.entry(identity.clone()).or_default();
+			edges.retain(|edge| edge.strong_count() > 0);
+			if !edges
+				.iter()
+				.filter_map(Weak::upgrade)
+				.any(|existing| existing.query_identity() == &query_identity)
+			{
+				edges.push(Rc::downgrade(&dependent));
+			}
+		}
+		for identity in previous.difference(next) {
+			let should_remove = if let Some(edges) = index.get_mut(identity) {
+				edges.retain(|edge| {
+					edge.upgrade()
+						.is_some_and(|existing| existing.query_identity() != &query_identity)
+				});
+				edges.is_empty()
+			} else {
+				false
+			};
+			if should_remove {
+				index.remove(identity);
+			}
+		}
+	}
+
 	fn polling_is_visible(&self) -> bool {
 		#[cfg(wasm)]
 		self.document_visible
@@ -1347,7 +1453,7 @@ impl<T: Clone + 'static, E: Clone + 'static> QueryEntry<T, E> {
 	}
 
 	fn complete_normalized_success(
-		&self,
+		self: &Rc<Self>,
 		generation: u64,
 		value: T,
 		ticket: EntityWriteTicket,
@@ -1363,9 +1469,8 @@ impl<T: Clone + 'static, E: Clone + 'static> QueryEntry<T, E> {
 			staged_recipe.replace(projection.normalize(value, entities));
 		});
 		let mut recipe = staged_recipe.expect("entity normalization must produce a recipe");
-		let initial_dependencies = projection.dependencies(recipe.as_ref());
 		let overlay = EntityOverlay::new(&self.entities, staging, ticket);
-		let removed_identities = initial_dependencies.removed_identities(&overlay);
+		let removed_identities = overlay.removed_identities();
 		let removal = projection.apply_removals(
 			recipe.as_mut(),
 			&RemovedEntities::borrowed(&removed_identities),
@@ -1380,22 +1485,63 @@ impl<T: Clone + 'static, E: Clone + 'static> QueryEntry<T, E> {
 			ProjectionMaterialization::MissingRequired => (fallback, true),
 		};
 		let leases = dependencies.acquire_leases(&self.entities);
-
-		self.recipe.borrow_mut().replace(recipe);
-		*self.dependencies.borrow_mut() = leases;
-		self.normalization_missing.set(missing);
-		self.completed
-			.borrow_mut()
-			.replace((generation, Ok(candidate.clone())));
-		self.last_fetched_ms.set(Some(self.runtime.now_ms()));
-		self.entities.commit_overlay(overlay, ticket, || {
-			self.refetch_error.set(None);
-			self.state.set(ResourceState::Success(candidate));
-			if self.invalidation_generation.get() == request_invalidation_generation {
-				self.invalidated.set(false);
-			}
-			self.is_fetching.set(false);
-		});
+		let next_dependencies = dependencies.identities().clone();
+		let previous_dependencies = self
+			.dependencies
+			.borrow()
+			.keys()
+			.cloned()
+			.collect::<HashSet<_>>();
+		let removed = RemovedEntities::borrowed(&removed_identities);
+		let prepared = self
+			.owner
+			.as_ref()
+			.and_then(Weak::upgrade)
+			.map(|owner| owner.prepare_entity_change(&overlay, &removed, Some(&self.identity)))
+			.unwrap_or_default();
+		let (commit_structures, publish_signals): (Vec<_>, Vec<_>) = prepared
+			.into_iter()
+			.map(|prepared| (prepared.commit_structure, prepared.publish_signal))
+			.unzip();
+		let owner = self.owner.as_ref().and_then(Weak::upgrade);
+		let dependent: Rc<dyn EntityDependent> = self.clone();
+		let published_candidate = candidate.clone();
+		self.entities.commit_overlay(
+			overlay,
+			ticket,
+			|| {
+				if let Some(owner) = owner {
+					owner.replace_reverse_dependencies(
+						dependent,
+						&previous_dependencies,
+						&next_dependencies,
+					);
+				}
+				self.recipe.borrow_mut().replace(recipe);
+				let previous_leases =
+					std::mem::replace(&mut *self.dependencies.borrow_mut(), leases);
+				self.normalization_missing.set(missing);
+				self.completed
+					.borrow_mut()
+					.replace((generation, Ok(candidate)));
+				self.last_fetched_ms.set(Some(self.runtime.now_ms()));
+				for commit_structure in commit_structures {
+					commit_structure();
+				}
+				drop(previous_leases);
+			},
+			|| {
+				self.refetch_error.set(None);
+				self.state.set(ResourceState::Success(published_candidate));
+				if self.invalidation_generation.get() == request_invalidation_generation {
+					self.invalidated.set(false);
+				}
+				self.is_fetching.set(false);
+				for publish_signal in publish_signals {
+					publish_signal();
+				}
+			},
+		);
 	}
 
 	fn invalidate(self: &Rc<Self>) {
@@ -1404,6 +1550,92 @@ impl<T: Clone + 'static, E: Clone + 'static> QueryEntry<T, E> {
 			.set(self.invalidation_generation.get().wrapping_add(1));
 		if !self.has_request() && self.has_active_invalidation_interest() {
 			self.start_fetch(true);
+		}
+	}
+}
+
+impl<T, E> EntityDependent for QueryEntry<T, E>
+where
+	T: Clone + 'static,
+	E: Clone + 'static,
+{
+	fn query_identity(&self) -> &QueryIdentity {
+		&self.identity
+	}
+
+	fn prepare_entity_change(
+		self: Rc<Self>,
+		overlay: &EntityOverlay<'_>,
+		removed: &RemovedEntities<'_>,
+	) -> PreparedProjectionCommit {
+		let projection = self
+			.normalization
+			.as_ref()
+			.expect("entity dependents require a normalized projection");
+		let mut recipe = {
+			let stored = self.recipe.borrow();
+			projection.clone_recipe(
+				stored
+					.as_deref()
+					.expect("entity dependents require a stored projection recipe"),
+			)
+		};
+		let removal = projection.apply_removals(recipe.as_mut(), removed);
+		let dependencies = projection.dependencies(recipe.as_ref());
+		let materialization = projection.materialize(recipe.as_ref(), overlay);
+		let (candidate, missing) = match materialization {
+			ProjectionMaterialization::Ready(candidate) => (
+				Some(candidate),
+				matches!(removal, ProjectionRemoval::MissingRequired),
+			),
+			ProjectionMaterialization::MissingRequired => (None, true),
+		};
+		let leases = dependencies.acquire_leases(&self.entities);
+		let next_dependencies = dependencies.identities().clone();
+		let previous_dependencies = self
+			.dependencies
+			.borrow()
+			.keys()
+			.cloned()
+			.collect::<HashSet<_>>();
+		let completed_generation = self
+			.completed
+			.borrow()
+			.as_ref()
+			.and_then(|(generation, result)| result.as_ref().ok().map(|_| *generation));
+		let published_candidate = candidate.clone();
+		let structure_entry = Rc::clone(&self);
+		let signal_entry = Rc::clone(&self);
+
+		PreparedProjectionCommit {
+			commit_structure: Box::new(move || {
+				if let Some(owner) = structure_entry.owner.as_ref().and_then(Weak::upgrade) {
+					let dependent: Rc<dyn EntityDependent> = structure_entry.clone();
+					owner.replace_reverse_dependencies(
+						dependent,
+						&previous_dependencies,
+						&next_dependencies,
+					);
+				}
+				structure_entry.recipe.borrow_mut().replace(recipe);
+				let previous_leases =
+					std::mem::replace(&mut *structure_entry.dependencies.borrow_mut(), leases);
+				structure_entry.normalization_missing.set(missing);
+				if let (Some(generation), Some(candidate)) =
+					(completed_generation, candidate.as_ref())
+				{
+					structure_entry
+						.completed
+						.borrow_mut()
+						.replace((generation, Ok(candidate.clone())));
+				}
+				drop(previous_leases);
+			}),
+			publish_signal: Box::new(move || {
+				if let Some(candidate) = published_candidate {
+					signal_entry.state.set(ResourceState::Success(candidate));
+				}
+			}),
 		}
 	}
 }

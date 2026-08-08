@@ -1245,9 +1245,10 @@ mod normalization_contract {
 
 mod normalized {
 	use super::*;
+	use std::collections::HashMap;
 
 	#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
-	struct Project {
+	pub(super) struct Project {
 		id: u64,
 		name: String,
 	}
@@ -1291,11 +1292,114 @@ mod normalized {
 		}
 	}
 
-	fn project(id: u64, name: &str) -> Project {
+	pub(super) fn project(id: u64, name: &str) -> Project {
 		Project {
 			id,
 			name: name.to_string(),
 		}
+	}
+
+	#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+	pub(super) struct ProjectList {
+		label: String,
+		projects: Vec<Project>,
+	}
+
+	#[derive(Clone, Deserialize, Serialize)]
+	pub(super) struct ProjectListRecipe {
+		label: String,
+		project_ids: Vec<u64>,
+	}
+
+	#[derive(Clone, Copy)]
+	pub(super) struct ProjectListProjection;
+
+	thread_local! {
+		static PROJECTION_MATERIALIZATIONS: RefCell<HashMap<String, usize>> =
+			RefCell::new(HashMap::new());
+		static PANIC_ON_MATERIALIZE: Cell<bool> = const { Cell::new(false) };
+	}
+
+	impl EntityProjection<ProjectList> for ProjectListProjection {
+		type Recipe = ProjectListRecipe;
+
+		const SCHEMA: &'static str = "project-list-v1";
+
+		fn normalize(&self, value: ProjectList, entities: &mut EntityWriter<'_>) -> Self::Recipe {
+			let project_ids = value
+				.projects
+				.into_iter()
+				.map(|project| {
+					let id = project.id;
+					entities.upsert(project);
+					id
+				})
+				.collect();
+			ProjectListRecipe {
+				label: value.label,
+				project_ids,
+			}
+		}
+
+		fn dependencies(&self, recipe: &Self::Recipe, dependencies: &mut EntityDependencies) {
+			dependencies.extend::<Project>(recipe.project_ids.iter().copied());
+		}
+
+		fn materialize(
+			&self,
+			recipe: &Self::Recipe,
+			entities: &EntityReader<'_>,
+		) -> ProjectionMaterialization<ProjectList> {
+			if PANIC_ON_MATERIALIZE.with(Cell::get) {
+				panic!("projection precommit panic");
+			}
+			PROJECTION_MATERIALIZATIONS.with(|counts| {
+				*counts.borrow_mut().entry(recipe.label.clone()).or_default() += 1;
+			});
+			match entities.required_vec::<Project>(&recipe.project_ids) {
+				ProjectionMaterialization::Ready(projects) => {
+					ProjectionMaterialization::Ready(ProjectList {
+						label: recipe.label.clone(),
+						projects,
+					})
+				}
+				ProjectionMaterialization::MissingRequired => {
+					ProjectionMaterialization::MissingRequired
+				}
+			}
+		}
+
+		fn apply_removals(
+			&self,
+			recipe: &mut Self::Recipe,
+			removed: &RemovedEntities<'_>,
+		) -> ProjectionRemoval {
+			let previous_len = recipe.project_ids.len();
+			recipe
+				.project_ids
+				.retain(|id| !removed.contains::<Project>(id));
+			ProjectionRemoval::from_changed(previous_len != recipe.project_ids.len())
+		}
+	}
+
+	pub(super) fn project_list(label: &str, projects: Vec<Project>) -> ProjectList {
+		ProjectList {
+			label: label.to_string(),
+			projects,
+		}
+	}
+
+	pub(super) fn reset_materializations() {
+		PROJECTION_MATERIALIZATIONS.with(|counts| counts.borrow_mut().clear());
+	}
+
+	pub(super) fn materializations(label: &str) -> usize {
+		PROJECTION_MATERIALIZATIONS
+			.with(|counts| counts.borrow().get(label).copied().unwrap_or_default())
+	}
+
+	pub(super) fn set_panic_on_materialize(enabled: bool) {
+		PANIC_ON_MATERIALIZE.with(|flag| flag.set(enabled));
 	}
 
 	#[test]
@@ -1497,6 +1601,334 @@ mod normalized {
 
 			assert_eq!(arena.active_query_ticket_count(ticket), 0);
 			drop(query);
+		});
+	}
+}
+
+mod entity_propagation {
+	use super::normalized::{
+		Project, ProjectList, ProjectListProjection, materializations, project, project_list,
+		reset_materializations, set_panic_on_materialize,
+	};
+	use super::*;
+
+	#[test]
+	#[serial(entity_propagation)]
+	fn one_transaction_updates_every_exact_query_and_handle_once() {
+		ReactiveScope::run(|| {
+			let runtime = TestQueryRuntime::new();
+			let client = QueryClient::with_runtime(
+				QueryDefaults::default().stale_time(Duration::from_secs(60)),
+				runtime.handle(),
+			);
+			let family = QueryFamily::<u64, ProjectList, String>::new(
+				"tests.entity-propagation-exact-queries",
+			);
+			let first = client.observe(
+				family
+					.query(1, || async {
+						Ok(project_list(
+							"first recipe",
+							vec![project(1, "one"), project(2, "two")],
+						))
+					})
+					.with_entities(ProjectListProjection),
+				QueryOptions::new(),
+			);
+			let second = client.observe(
+				family
+					.query(2, || async {
+						Ok(project_list("second recipe", vec![project(1, "one")]))
+					})
+					.with_entities(ProjectListProjection),
+				QueryOptions::new(),
+			);
+			let entity = client.entity::<Project>(1);
+
+			runtime.run_until_stalled();
+			let first_fetched = first.entry.last_fetched_ms.get();
+			let second_fetched = second.entry.last_fetched_ms.get();
+			assert_eq!(
+				client.entity_dependency_lease_count_for_test::<Project>(&1),
+				2
+			);
+			assert_eq!(
+				client.entity_dependency_lease_count_for_test::<Project>(&2),
+				1
+			);
+			reset_materializations();
+			let snapshots = Rc::new(RefCell::new(Vec::new()));
+			let snapshots_for_effect = Rc::clone(&snapshots);
+			let entity_for_effect = entity.clone();
+			let first_for_effect = first.clone();
+			let second_for_effect = second.clone();
+			let _effect = reinhardt_core::reactive::Effect::new(move || {
+				snapshots_for_effect.borrow_mut().push((
+					entity_for_effect.get(),
+					first_for_effect.data(),
+					second_for_effect.data(),
+				));
+			});
+			snapshots.borrow_mut().clear();
+			runtime.advance(Duration::from_secs(10));
+
+			client.update_entities(|entities| {
+				entities.upsert(project(1, "updated"));
+				entities.remove::<Project>(&2);
+			});
+			reinhardt_core::reactive::runtime::with_runtime(|runtime| {
+				runtime.flush_updates();
+			});
+
+			let expected_first = project_list("first recipe", vec![project(1, "updated")]);
+			let expected_second = project_list("second recipe", vec![project(1, "updated")]);
+			assert_eq!(entity.get(), Some(project(1, "updated")));
+			assert_eq!(first.data(), Some(expected_first.clone()));
+			assert_eq!(second.data(), Some(expected_second.clone()));
+			assert_eq!(materializations("first recipe"), 1);
+			assert_eq!(materializations("second recipe"), 1);
+			assert_eq!(
+				client.entity_dependency_lease_count_for_test::<Project>(&1),
+				2
+			);
+			assert_eq!(
+				client.entity_dependency_lease_count_for_test::<Project>(&2),
+				0
+			);
+			assert_eq!(first.entry.last_fetched_ms.get(), first_fetched);
+			assert_eq!(second.entry.last_fetched_ms.get(), second_fetched);
+			assert!(!first.is_stale());
+			assert!(!second.is_stale());
+			assert_eq!(
+				snapshots.borrow().as_slice(),
+				&[(
+					Some(project(1, "updated")),
+					Some(expected_first),
+					Some(expected_second),
+				)]
+			);
+
+			runtime.advance(Duration::from_secs(50));
+			assert!(first.is_stale());
+			assert!(second.is_stale());
+		});
+	}
+
+	#[test]
+	#[serial(entity_propagation)]
+	fn unrelated_upsert_does_not_infer_collection_membership() {
+		ReactiveScope::run(|| {
+			let runtime = TestQueryRuntime::new();
+			let client = QueryClient::with_runtime(QueryDefaults::default(), runtime.handle());
+			let query = client.observe(
+				QueryFamily::<(), ProjectList, String>::new(
+					"tests.entity-propagation-no-membership-inference",
+				)
+				.query((), || async {
+					Ok(project_list("stable recipe", vec![project(1, "one")]))
+				})
+				.with_entities(ProjectListProjection),
+				QueryOptions::new(),
+			);
+			runtime.run_until_stalled();
+			reset_materializations();
+
+			client.upsert_entity(project(2, "unrelated"));
+
+			assert_eq!(
+				query.data(),
+				Some(project_list("stable recipe", vec![project(1, "one")]))
+			);
+			assert_eq!(materializations("stable recipe"), 0);
+		});
+	}
+
+	#[test]
+	#[serial(entity_propagation)]
+	fn heterogeneous_query_projections_commit_in_one_transaction() {
+		ReactiveScope::run(|| {
+			let runtime = TestQueryRuntime::new();
+			let client = QueryClient::with_runtime(QueryDefaults::default(), runtime.handle());
+			let collection = client.observe(
+				QueryFamily::<(), ProjectList, String>::new(
+					"tests.entity-propagation-heterogeneous-collection",
+				)
+				.query((), || async {
+					Ok(project_list("heterogeneous", vec![project(1, "initial")]))
+				})
+				.with_entities(ProjectListProjection),
+				QueryOptions::new(),
+			);
+			let detail = client.observe(
+				QueryFamily::<(), Project, String>::new(
+					"tests.entity-propagation-heterogeneous-detail",
+				)
+				.query((), || async { Ok(project(1, "initial")) })
+				.with_entities(EntityValue::new()),
+				QueryOptions::new(),
+			);
+			runtime.run_until_stalled();
+			reset_materializations();
+
+			client.upsert_entity(project(1, "updated"));
+
+			assert_eq!(
+				collection.data(),
+				Some(project_list("heterogeneous", vec![project(1, "updated")]))
+			);
+			assert_eq!(detail.data(), Some(project(1, "updated")));
+			assert_eq!(materializations("heterogeneous"), 1);
+		});
+	}
+
+	#[test]
+	#[serial(entity_propagation)]
+	fn normalized_query_completion_propagates_to_an_existing_exact_query() {
+		ReactiveScope::run(|| {
+			let runtime = TestQueryRuntime::new();
+			let client = QueryClient::with_runtime(QueryDefaults::default(), runtime.handle());
+			let family = QueryFamily::<u64, Project, String>::new(
+				"tests.entity-propagation-query-completion",
+			);
+			let first = client.observe(
+				family
+					.query(1, || async { Ok(project(1, "first completion")) })
+					.with_entities(EntityValue::new()),
+				QueryOptions::new(),
+			);
+			runtime.run_until_stalled();
+			assert_eq!(first.data(), Some(project(1, "first completion")));
+
+			let second = client.observe(
+				family
+					.query(2, || async { Ok(project(1, "second completion")) })
+					.with_entities(EntityValue::new()),
+				QueryOptions::new(),
+			);
+			runtime.run_until_stalled();
+
+			assert_eq!(first.data(), Some(project(1, "second completion")));
+			assert_eq!(second.data(), Some(project(1, "second completion")));
+		});
+	}
+
+	#[test]
+	#[serial(entity_propagation)]
+	fn callback_and_adapter_panics_roll_back_the_whole_transaction() {
+		ReactiveScope::run(|| {
+			let runtime = TestQueryRuntime::new();
+			let client = QueryClient::with_runtime(QueryDefaults::default(), runtime.handle());
+			let query = client.observe(
+				QueryFamily::<(), ProjectList, String>::new(
+					"tests.entity-propagation-panic-rollback",
+				)
+				.query((), || async {
+					Ok(project_list("panic recipe", vec![project(1, "stable")]))
+				})
+				.with_entities(ProjectListProjection),
+				QueryOptions::new(),
+			);
+			let entity = client.entity::<Project>(1);
+			runtime.run_until_stalled();
+
+			let callback_panic = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+				client.update_entities(|entities| {
+					entities.upsert(project(1, "callback"));
+					panic!("entity callback panic");
+				});
+			}));
+			assert!(callback_panic.is_err());
+			assert_eq!(entity.get(), Some(project(1, "stable")));
+			assert_eq!(
+				query.data(),
+				Some(project_list("panic recipe", vec![project(1, "stable")]))
+			);
+
+			set_panic_on_materialize(true);
+			let adapter_panic = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+				client.upsert_entity(project(1, "adapter"));
+			}));
+			set_panic_on_materialize(false);
+
+			assert!(adapter_panic.is_err());
+			assert_eq!(entity.get(), Some(project(1, "stable")));
+			assert_eq!(
+				query.data(),
+				Some(project_list("panic recipe", vec![project(1, "stable")]))
+			);
+		});
+	}
+
+	#[test]
+	#[serial(entity_propagation)]
+	fn reverse_dependencies_are_local_to_the_owning_client() {
+		ReactiveScope::run(|| {
+			let first_runtime = TestQueryRuntime::new();
+			let second_runtime = TestQueryRuntime::new();
+			let first_client =
+				QueryClient::with_runtime(QueryDefaults::default(), first_runtime.handle());
+			let second_client =
+				QueryClient::with_runtime(QueryDefaults::default(), second_runtime.handle());
+			let family = QueryFamily::<(), Project, String>::new(
+				"tests.entity-propagation-client-isolation",
+			);
+			let first = first_client.observe(
+				family
+					.query((), || async { Ok(project(1, "first")) })
+					.with_entities(EntityValue::new()),
+				QueryOptions::new(),
+			);
+			let second = second_client.observe(
+				family
+					.query((), || async { Ok(project(1, "second")) })
+					.with_entities(EntityValue::new()),
+				QueryOptions::new(),
+			);
+			first_runtime.run_until_stalled();
+			second_runtime.run_until_stalled();
+
+			first_client.upsert_entity(project(1, "first updated"));
+
+			assert_eq!(first.data(), Some(project(1, "first updated")));
+			assert_eq!(second.data(), Some(project(1, "second")));
+		});
+	}
+
+	#[test]
+	#[serial(entity_propagation)]
+	fn reverse_index_does_not_retain_inactive_query_entries() {
+		ReactiveScope::run(|| {
+			let runtime = TestQueryRuntime::new();
+			let client = QueryClient::with_runtime(
+				QueryDefaults::default().gc_time(Duration::ZERO),
+				runtime.handle(),
+			);
+			let query = client.observe(
+				QueryFamily::<(), Project, String>::new(
+					"tests.entity-propagation-weak-reverse-index",
+				)
+				.query((), || async { Ok(project(1, "cached")) })
+				.with_entities(EntityValue::new()),
+				QueryOptions::new(),
+			);
+			runtime.run_until_stalled();
+			assert_eq!(
+				client.entity_dependency_lease_count_for_test::<Project>(&1),
+				1
+			);
+
+			drop(query);
+			runtime.run_due_maintenance();
+
+			assert_eq!(
+				client.entity_dependency_lease_count_for_test::<Project>(&1),
+				0
+			);
+			client.upsert_entity(project(1, "uncached"));
+			assert_eq!(
+				client.entity::<Project>(1).get(),
+				Some(project(1, "uncached"))
+			);
 		});
 	}
 }

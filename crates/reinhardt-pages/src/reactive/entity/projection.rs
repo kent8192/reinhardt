@@ -127,15 +127,8 @@ impl EntityDependencies {
 		leases
 	}
 
-	pub(crate) fn removed_identities(
-		&self,
-		overlay: &EntityOverlay<'_>,
-	) -> HashSet<EntityIdentity> {
-		let mut removed = HashSet::new();
-		for loader in self.loaders.values() {
-			loader.collect_removed(overlay, &self.identities, &mut removed);
-		}
-		removed
+	pub(crate) fn identities(&self) -> &HashSet<EntityIdentity> {
+		&self.identities
 	}
 
 	#[allow(dead_code)] // Used by the staged erased projection materialization bridge below.
@@ -193,12 +186,6 @@ trait ErasedEntityHydrationLoader {
 		arena: &EntityArena,
 		declared: &HashSet<EntityIdentity>,
 		leases: &mut HashMap<EntityIdentity, Box<dyn Any>>,
-	);
-	fn collect_removed(
-		&self,
-		overlay: &EntityOverlay<'_>,
-		declared: &HashSet<EntityIdentity>,
-		removed: &mut HashSet<EntityIdentity>,
 	);
 }
 
@@ -292,30 +279,6 @@ where
 					)
 				});
 			leases.insert(identity.clone(), arena.acquire_dependency::<E>(id));
-		}
-	}
-
-	fn collect_removed(
-		&self,
-		overlay: &EntityOverlay<'_>,
-		declared: &HashSet<EntityIdentity>,
-		removed: &mut HashSet<EntityIdentity>,
-	) {
-		for identity in declared
-			.iter()
-			.filter(|identity| identity.entity_type() == E::TYPE)
-		{
-			let id =
-				serde_json::from_str::<E::Id>(identity.canonical_id()).unwrap_or_else(|error| {
-					panic!(
-						"entity dependency TYPE `{}` failed to deserialize canonical ID as `{}`: {error}",
-						E::TYPE,
-						type_name::<E::Id>(),
-					)
-				});
-			if overlay.is_removed::<E>(&id) {
-				removed.insert(identity.clone());
-			}
 		}
 	}
 }

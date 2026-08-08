@@ -1,12 +1,13 @@
 use std::any::Any;
 use std::cell::{Cell, RefCell};
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::rc::{Rc, Weak};
 use std::time::Duration;
 
 use super::identity::EntityTypeRegistry;
 use super::{Entity, EntityIdentity};
 use crate::reactive::{Signal, batch};
+use reinhardt_core::reactive::ReactiveScope;
 
 /// Owns the typed records for one normalized entity cache.
 #[derive(Clone)]
@@ -20,11 +21,13 @@ struct EntityArenaInner {
 	next_ticket: Cell<u64>,
 	active_query_tickets: RefCell<BTreeMap<u64, usize>>,
 	gc_time: Duration,
+	_scope: Rc<ReactiveScope>,
 }
 
 impl EntityArena {
 	/// Creates an empty entity arena with the supplied retention duration.
 	pub fn new(gc_time: Duration) -> Self {
+		let scope = Rc::new(ReactiveScope::new());
 		Self {
 			inner: Rc::new(EntityArenaInner {
 				buckets: RefCell::new(HashMap::new()),
@@ -32,6 +35,7 @@ impl EntityArena {
 				next_ticket: Cell::new(1),
 				active_query_tickets: RefCell::new(BTreeMap::new()),
 				gc_time,
+				_scope: scope,
 			}),
 		}
 	}
@@ -49,7 +53,7 @@ impl EntityArena {
 			let record = bucket
 				.records
 				.entry(id.clone())
-				.or_insert_with(EntityRecord::vacant);
+				.or_insert_with(|| self.inner._scope.enter(EntityRecord::vacant));
 			record.handle_lease_count += 1;
 			record.signal
 		};
@@ -76,14 +80,16 @@ impl EntityArena {
 		&self,
 		overlay: EntityOverlay<'_>,
 		ticket: EntityWriteTicket,
-		publish: impl FnOnce(),
+		commit_structure: impl FnOnce(),
+		publish_signal: impl FnOnce(),
 	) {
 		let publications = overlay.commit(ticket);
+		commit_structure();
 		batch(|| {
 			for publication in publications {
 				publication.publish();
 			}
-			publish();
+			publish_signal();
 		});
 	}
 
@@ -97,7 +103,7 @@ impl EntityArena {
 
 		let overlay = EntityOverlay::new(self, staging, ticket);
 		precommit(&overlay);
-		self.commit_overlay(overlay, ticket, || {});
+		self.commit_overlay(overlay, ticket, || {}, || {});
 	}
 
 	pub(crate) fn issue_mutation_ticket(&self) -> EntityWriteTicket {
@@ -126,7 +132,7 @@ impl EntityArena {
 			let record = bucket
 				.records
 				.entry(id.clone())
-				.or_insert_with(EntityRecord::vacant);
+				.or_insert_with(|| self.inner._scope.enter(EntityRecord::vacant));
 			record.dependency_lease_count += 1;
 		}
 
@@ -258,6 +264,7 @@ impl EntityArena {
 		self.record_ticket::<E>(id)
 	}
 
+	#[cfg(test)]
 	pub(crate) fn record_is_removed<E>(&self, id: &E::Id) -> bool
 	where
 		E: Entity,
@@ -463,20 +470,19 @@ impl<'a> EntityOverlay<'a> {
 		self.arena.current::<E>(id)
 	}
 
-	pub(crate) fn is_removed<E>(&self, id: &E::Id) -> bool
-	where
-		E: Entity,
-	{
-		self.arena.register_entity_type::<E>();
-		let identity = EntityIdentity::of::<E>(id);
-		if let Some(operation) = self
-			.operations
+	pub(crate) fn affected_identities(&self) -> HashSet<EntityIdentity> {
+		self.operations
 			.iter()
-			.find(|operation| operation.identity() == &identity)
-		{
-			return operation.is_removed();
-		}
-		self.arena.record_is_removed::<E>(id)
+			.map(|operation| operation.identity().clone())
+			.collect()
+	}
+
+	pub(crate) fn removed_identities(&self) -> HashSet<EntityIdentity> {
+		self.operations
+			.iter()
+			.filter(|operation| operation.is_removed())
+			.map(|operation| operation.identity().clone())
+			.collect()
 	}
 
 	pub(crate) fn commit(self, ticket: EntityWriteTicket) -> Vec<Box<dyn EntityPublication>> {
@@ -541,7 +547,7 @@ where
 			let record = bucket
 				.records
 				.entry(self.id.clone())
-				.or_insert_with(EntityRecord::vacant);
+				.or_insert_with(|| arena.inner._scope.enter(EntityRecord::vacant));
 			record.state = match &self.state {
 				StagedEntityState::Present(entity) => EntityRecordState::Present(entity.clone()),
 				StagedEntityState::Removed => EntityRecordState::Removed,

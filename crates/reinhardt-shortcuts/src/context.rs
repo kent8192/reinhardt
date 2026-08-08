@@ -1,4 +1,4 @@
-use serde::Serialize;
+use serde::{Serialize, Serializer};
 use serde_json::Value;
 use std::collections::HashMap;
 
@@ -47,6 +47,18 @@ pub enum ContextError {
 pub struct TemplateContext {
 	inner: HashMap<String, Value>,
 	max_entries: usize,
+}
+
+/// Serializes the context entries as the template payload.
+///
+/// The capacity limit is configuration and is not exposed to templates.
+impl Serialize for TemplateContext {
+	fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+	where
+		S: Serializer,
+	{
+		self.inner.serialize(serializer)
+	}
 }
 
 impl Default for TemplateContext {
@@ -221,8 +233,8 @@ mod tests {
 		let from_trait_context = TemplateContext::from(map);
 
 		// Act
-		let from_map_entries = serde_json::to_value(&from_map_context.inner).unwrap();
-		let from_trait_entries = serde_json::to_value(&from_trait_context.inner).unwrap();
+		let from_map_entries = serde_json::to_value(&from_map_context).unwrap();
+		let from_trait_entries = serde_json::to_value(&from_trait_context).unwrap();
 
 		// Assert
 		assert_eq!(default_context.max_entries(), 1_000);
@@ -253,7 +265,7 @@ mod tests {
 		assert!(replacement.is_ok());
 		assert_eq!(context.len(), 1);
 		assert_eq!(
-			serde_json::to_value(&context.inner).unwrap(),
+			serde_json::to_value(&context).unwrap(),
 			json!({ "status": "published" })
 		);
 		assert!(matches!(
@@ -295,7 +307,7 @@ mod tests {
 		// Assert
 		assert_eq!(context.len(), 1);
 		assert_eq!(
-			serde_json::to_value(&context.inner).unwrap(),
+			serde_json::to_value(&context).unwrap(),
 			json!({ "status": "published" })
 		);
 	}

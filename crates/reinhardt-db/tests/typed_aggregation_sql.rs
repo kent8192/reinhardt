@@ -4,7 +4,8 @@ use async_trait::async_trait;
 use reinhardt_core::exception::Error;
 use reinhardt_core::macros::model;
 use reinhardt_db::orm::{
-	DatabaseBackend, Model, OrmExecutor, QueryResult, QuerySet, QueryValue, Row, func,
+	AggregateDateTime, AggregateValue, DatabaseBackend, OrmExecutor, QueryResult, QuerySet,
+	QueryValue, Row, func,
 };
 use serde::{Deserialize, Serialize};
 
@@ -19,7 +20,7 @@ mod aggregate_support;
 struct TypedAnnotationRecord {
 	#[field(primary_key = true)]
 	id: i64,
-	#[field(db_column = "display_name")]
+	#[field(db_column = "display_name", max_length = 255)]
 	name: String,
 	value: i64,
 }
@@ -27,6 +28,7 @@ struct TypedAnnotationRecord {
 struct RecordingExecutor {
 	sql: Option<String>,
 	params: Vec<QueryValue>,
+	fetch_one_row: Option<Row>,
 }
 
 impl RecordingExecutor {
@@ -34,7 +36,13 @@ impl RecordingExecutor {
 		Self {
 			sql: None,
 			params: Vec::new(),
+			fetch_one_row: None,
 		}
+	}
+
+	fn with_fetch_one(mut self, row: Row) -> Self {
+		self.fetch_one_row = Some(row);
+		self
 	}
 }
 
@@ -58,14 +66,18 @@ impl OrmExecutor for RecordingExecutor {
 
 	async fn fetch_one(
 		&mut self,
-		_sql: &str,
-		_params: Vec<QueryValue>,
+		sql: &str,
+		params: Vec<QueryValue>,
 	) -> reinhardt_core::exception::Result<Row> {
-		Err(reinhardt_core::exception::DatabaseError::new(
-			reinhardt_core::exception::DatabaseErrorKind::Unsupported,
-			"typed aggregation SQL tests fetch all rows",
-		)
-		.into())
+		self.sql = Some(sql.to_owned());
+		self.params = params;
+		self.fetch_one_row.take().ok_or_else(|| {
+			reinhardt_core::exception::DatabaseError::new(
+				reinhardt_core::exception::DatabaseErrorKind::Query,
+				"typed aggregation SQL test did not queue a fetch_one row",
+			)
+			.into()
+		})
 	}
 
 	async fn fetch_all(
@@ -160,7 +172,7 @@ fn scalar_and_composed_annotations_render_exact_sql() {
 
 	assert_eq!(
 		query,
-		r#"SELECT *, "typed_annotation_records"."display_name" AS "name_copy", "typed_annotation_records"."value" AS "value_copy", ("typed_annotation_records"."value" + 1) AS "value_plus_one", CASE WHEN "typed_annotation_records"."value" > 0 THEN "typed_annotation_records"."value" ELSE 0 END AS "positive_value", COALESCE("typed_annotation_records"."value", 0) AS "value_or_zero" FROM "typed_annotation_records""#
+		r#"SELECT *, "typed_annotation_records"."display_name" AS "name_copy", "typed_annotation_records"."value" AS "value_copy", "typed_annotation_records"."value" + 1 AS "value_plus_one", CASE WHEN "typed_annotation_records"."value" > 0 THEN "typed_annotation_records"."value" ELSE 0 END AS "positive_value", COALESCE("typed_annotation_records"."value", 0) AS "value_or_zero" FROM "typed_annotation_records""#
 	);
 }
 
@@ -184,7 +196,7 @@ fn aggregate_annotations_group_scalar_annotations_once() {
 
 	assert_eq!(
 		query,
-		r#"SELECT "typed_annotation_records"."id", "typed_annotation_records"."value" AS "first_value", "typed_annotation_records"."value" AS "second_value", COUNT(*) AS "record_count" FROM "typed_annotation_records" GROUP BY "typed_annotation_records"."id", "typed_annotation_records"."value""#
+		r#"SELECT "id", "typed_annotation_records"."value" AS "first_value", "typed_annotation_records"."value" AS "second_value", COUNT(*) AS "record_count" FROM "typed_annotation_records" GROUP BY "typed_annotation_records"."id", "typed_annotation_records"."value""#
 	);
 }
 
@@ -206,7 +218,7 @@ fn related_field_annotation_adds_a_left_join() {
 
 	assert_eq!(
 		query,
-		r#"SELECT *, "related"."value_i64" AS "related_value" FROM "model_records" LEFT JOIN "related_records" AS "related" ON "model_records"."related_id" = "related"."id""#
+		r#"SELECT "model_records".*, "related"."value_i64" AS "related_value" FROM "model_records" LEFT JOIN "related_records" AS "related" ON "model_records"."related_id" = "related"."id""#
 	);
 }
 
@@ -307,7 +319,7 @@ fn typed_having_supports_combined_aggregate_arithmetic() {
 
 	assert_eq!(
 		query,
-		r##"SELECT * FROM "typed_annotation_records" HAVING (SUM("typed_annotation_records"."value") + 1) > 10"##
+		r##"SELECT * FROM "typed_annotation_records" HAVING SUM("typed_annotation_records"."value") + 1 > 10"##
 	);
 }
 
@@ -329,7 +341,7 @@ fn typed_having_supports_count_sum_min_max_and_multiple_conditions() {
 
 	assert_eq!(
 		query,
-		r#"SELECT *, COUNT(*) AS "record_count" FROM "typed_annotation_records" GROUP BY "typed_annotation_records"."id", "typed_annotation_records"."display_name", "typed_annotation_records"."value" HAVING (COUNT(*) > 1 AND SUM("typed_annotation_records"."value") >= 2 AND MIN("typed_annotation_records"."value") < 9 AND MAX("typed_annotation_records"."value") <> 0)"#
+		r#"SELECT *, COUNT(*) AS "record_count" FROM "typed_annotation_records" GROUP BY "typed_annotation_records"."id", "typed_annotation_records"."display_name", "typed_annotation_records"."value" HAVING COUNT(*) > 1 AND SUM("typed_annotation_records"."value") >= 2 AND MIN("typed_annotation_records"."value") < 9 AND MAX("typed_annotation_records"."value") <> 0"#
 	);
 }
 
@@ -365,31 +377,33 @@ fn annotation_rejects_invalid_and_colliding_labels() {
 			if message == "aggregate label must contain only ASCII letters, digits, or underscores"
 	));
 
-	let rust_field = QuerySet::<TypedAnnotationRecord>::new()
-		.annotate(
-			func::count_all::<TypedAnnotationRecord>()
-				.label("name")
-				.expect("label syntax is valid"),
-		)
-		.expect_err("Rust field labels must be rejected");
+	let rust_field = match QuerySet::<TypedAnnotationRecord>::new().annotate(
+		func::count_all::<TypedAnnotationRecord>()
+			.label("name")
+			.expect("label syntax is valid"),
+	) {
+		Ok(_) => panic!("Rust field labels must be rejected"),
+		Err(error) => error,
+	};
 	assert_eq!(
 		rust_field.to_string(),
 		"Validation error: annotation label `name` collides with model field `name`"
 	);
 
-	let physical_field = QuerySet::<TypedAnnotationRecord>::new()
-		.annotate(
-			func::count_all::<TypedAnnotationRecord>()
-				.label("display_name")
-				.expect("label syntax is valid"),
-		)
-		.expect_err("physical field labels must be rejected");
+	let physical_field = match QuerySet::<TypedAnnotationRecord>::new().annotate(
+		func::count_all::<TypedAnnotationRecord>()
+			.label("display_name")
+			.expect("label syntax is valid"),
+	) {
+		Ok(_) => panic!("physical field labels must be rejected"),
+		Err(error) => error,
+	};
 	assert_eq!(
 		physical_field.to_string(),
 		"Validation error: annotation label `display_name` collides with model field `name`"
 	);
 
-	let duplicate = QuerySet::<TypedAnnotationRecord>::new()
+	let duplicate = match QuerySet::<TypedAnnotationRecord>::new()
 		.annotate(
 			func::count_all::<TypedAnnotationRecord>()
 				.label("first_count")
@@ -400,10 +414,250 @@ fn annotation_rejects_invalid_and_colliding_labels() {
 			func::count_all::<TypedAnnotationRecord>()
 				.label("first_count")
 				.expect("label syntax is valid"),
-		)
-		.expect_err("duplicate labels must be rejected");
+		) {
+		Ok(_) => panic!("duplicate labels must be rejected"),
+		Err(error) => error,
+	};
 	assert_eq!(
 		duplicate.to_string(),
 		"Validation error: annotation label `first_count` is already in use"
 	);
+}
+
+#[tokio::test]
+async fn terminal_aggregate_fetches_one_row_and_decodes_multiple_labels() {
+	let mut row = Row::new();
+	row.insert("record_count".to_owned(), QueryValue::Int(4));
+	row.insert(
+		"value_total".to_owned(),
+		QueryValue::String("42".to_owned()),
+	);
+	let mut executor = RecordingExecutor::postgres().with_fetch_one(row);
+
+	let result = QuerySet::<TypedAnnotationRecord>::new()
+		.aggregate_with_db(
+			[
+				func::count_all::<TypedAnnotationRecord>()
+					.label("record_count")
+					.expect("valid count label"),
+				func::sum(TypedAnnotationRecord::field_value())
+					.label("value_total")
+					.expect("valid sum label"),
+			],
+			&mut executor,
+		)
+		.await
+		.expect("terminal aggregate should decode the queued row");
+
+	assert_eq!(result.get_i64("record_count").expect("count value"), 4);
+	assert_eq!(result.get_i64("value_total").expect("sum value"), 42);
+	assert_eq!(
+		executor.sql.as_deref(),
+		Some(
+			r#"SELECT COUNT(*) AS "record_count", SUM("typed_annotation_records"."value") AS "value_total" FROM "typed_annotation_records""#
+		)
+	);
+	assert!(executor.params.is_empty());
+}
+
+#[tokio::test]
+async fn terminal_aggregate_normalizes_supported_min_max_scalars() {
+	use aggregate_support::ModelRecord;
+
+	let timestamp = chrono::DateTime::parse_from_rfc3339("2024-01-02T03:04:05Z")
+		.expect("valid timestamp")
+		.with_timezone(&chrono::Utc);
+	let naive_timestamp = chrono::NaiveDate::from_ymd_opt(2024, 1, 2)
+		.expect("valid date")
+		.and_hms_opt(3, 4, 5)
+		.expect("valid time");
+	let uuid = uuid::Uuid::parse_str("123e4567-e89b-12d3-a456-426614174000").expect("valid UUID");
+	let mut row = Row::new();
+	row.insert(
+		"first_name".to_owned(),
+		QueryValue::String("Alice".to_owned()),
+	);
+	row.insert("first_uuid".to_owned(), QueryValue::Uuid(uuid));
+	row.insert(
+		"first_date".to_owned(),
+		QueryValue::String("2024-01-02".to_owned()),
+	);
+	row.insert(
+		"first_time".to_owned(),
+		QueryValue::String("03:04:05.000000".to_owned()),
+	);
+	row.insert(
+		"first_timestamp".to_owned(),
+		QueryValue::Timestamp(timestamp),
+	);
+	row.insert(
+		"first_naive_timestamp".to_owned(),
+		QueryValue::NaiveTimestamp(naive_timestamp),
+	);
+	let mut executor = RecordingExecutor::postgres().with_fetch_one(row);
+
+	let result = QuerySet::<ModelRecord>::new()
+		.aggregate_with_db(
+			[
+				func::min(ModelRecord::field_name())
+					.label("first_name")
+					.expect("valid string label"),
+				func::min(ModelRecord::field_uuid())
+					.label("first_uuid")
+					.expect("valid UUID label"),
+				func::min(ModelRecord::field_date())
+					.label("first_date")
+					.expect("valid date label"),
+				func::min(ModelRecord::field_time())
+					.label("first_time")
+					.expect("valid time label"),
+				func::min(ModelRecord::field_datetime())
+					.label("first_timestamp")
+					.expect("valid UTC timestamp label"),
+				func::min(ModelRecord::field_naive_datetime())
+					.label("first_naive_timestamp")
+					.expect("valid naive timestamp label"),
+			],
+			&mut executor,
+		)
+		.await
+		.expect("terminal aggregate should decode structured scalar values");
+
+	assert_eq!(
+		result.get("first_name").expect("string value"),
+		&AggregateValue::String("Alice".to_owned())
+	);
+	assert_eq!(
+		result.get("first_uuid").expect("UUID value"),
+		&AggregateValue::Uuid(uuid)
+	);
+	assert_eq!(
+		result.get("first_date").expect("date value"),
+		&AggregateValue::Date(chrono::NaiveDate::from_ymd_opt(2024, 1, 2).expect("valid date"))
+	);
+	assert_eq!(
+		result.get("first_time").expect("time value"),
+		&AggregateValue::Time(chrono::NaiveTime::from_hms_opt(3, 4, 5).expect("valid time"))
+	);
+	assert_eq!(
+		result.get("first_timestamp").expect("UTC timestamp value"),
+		&AggregateValue::DateTime(AggregateDateTime::Utc(timestamp))
+	);
+	assert_eq!(
+		result
+			.get("first_naive_timestamp")
+			.expect("naive timestamp value"),
+		&AggregateValue::DateTime(AggregateDateTime::Naive(naive_timestamp))
+	);
+}
+
+#[tokio::test]
+async fn terminal_aggregate_reports_serialization_context_for_bad_rows() {
+	let mut row = Row::new();
+	row.insert(
+		"value_total".to_owned(),
+		QueryValue::String("9223372036854775808".to_owned()),
+	);
+	let mut executor = RecordingExecutor::postgres().with_fetch_one(row);
+	let error = QuerySet::<TypedAnnotationRecord>::new()
+		.aggregate_with_db(
+			func::sum(TypedAnnotationRecord::field_value())
+				.label("value_total")
+				.expect("valid sum label"),
+			&mut executor,
+		)
+		.await
+		.expect_err("overflow must be reported as serialization failure");
+
+	assert!(matches!(
+		error,
+		Error::Serialization(message)
+			if message.contains("aggregate function SUM")
+				&& message.contains("label 'value_total'")
+				&& message.contains("backend Postgres")
+	));
+
+	let mut missing_executor = RecordingExecutor::postgres().with_fetch_one(Row::new());
+	let missing = QuerySet::<TypedAnnotationRecord>::new()
+		.aggregate_with_db(
+			func::count_all::<TypedAnnotationRecord>()
+				.label("record_count")
+				.expect("valid count label"),
+			&mut missing_executor,
+		)
+		.await
+		.expect_err("missing labels must be reported");
+	assert!(matches!(
+		missing,
+		Error::Serialization(message)
+			if message.contains("aggregate function COUNT")
+				&& message.contains("label 'record_count'")
+				&& message.contains("backend Postgres")
+	));
+
+	let mut unexpected_row = Row::new();
+	unexpected_row.insert(
+		"record_count".to_owned(),
+		QueryValue::String("four".to_owned()),
+	);
+	let mut unexpected_executor = RecordingExecutor::postgres().with_fetch_one(unexpected_row);
+	let unexpected = QuerySet::<TypedAnnotationRecord>::new()
+		.aggregate_with_db(
+			func::count_all::<TypedAnnotationRecord>()
+				.label("record_count")
+				.expect("valid count label"),
+			&mut unexpected_executor,
+		)
+		.await
+		.expect_err("unexpected value kinds must be reported");
+	assert!(matches!(
+		unexpected,
+		Error::Serialization(message)
+			if message.contains("aggregate function COUNT")
+				&& message.contains("label 'record_count'")
+				&& message.contains("backend Postgres")
+	));
+}
+
+#[tokio::test]
+async fn terminal_aggregate_preserves_null_and_none_short_circuits() {
+	let mut row = Row::new();
+	row.insert("value_average".to_owned(), QueryValue::Null);
+	let mut executor = RecordingExecutor::postgres().with_fetch_one(row);
+	let result = QuerySet::<TypedAnnotationRecord>::new()
+		.aggregate_with_db(
+			func::avg(TypedAnnotationRecord::field_value())
+				.label("value_average")
+				.expect("valid average label"),
+			&mut executor,
+		)
+		.await
+		.expect("non-COUNT SQL NULL should be preserved");
+	assert_eq!(
+		result.get("value_average").expect("average value"),
+		&AggregateValue::Null
+	);
+
+	let mut none_executor = RecordingExecutor::postgres();
+	let result = QuerySet::<TypedAnnotationRecord>::new()
+		.none()
+		.aggregate_with_db(
+			[
+				func::count_all::<TypedAnnotationRecord>()
+					.label("record_count")
+					.expect("valid count label"),
+				func::sum(TypedAnnotationRecord::field_value())
+					.label("value_total")
+					.expect("valid sum label"),
+			],
+			&mut none_executor,
+		)
+		.await
+		.expect("none aggregate should synthesize values");
+	assert_eq!(result.get_i64("record_count").expect("count value"), 0);
+	assert_eq!(
+		result.get("value_total").expect("sum value"),
+		&AggregateValue::Null
+	);
+	assert!(none_executor.sql.is_none());
 }

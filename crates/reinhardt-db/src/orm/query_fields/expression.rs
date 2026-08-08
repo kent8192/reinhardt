@@ -507,11 +507,21 @@ impl<M, R, LeftKind> CaseWhen<M, R, LeftKind> {
 }
 
 /// An expression whose result type has been erased after applying a label.
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct LabeledExpression<M, K = ScalarKind> {
 	label: String,
 	expression: StoredExpression,
 	marker: PhantomData<fn() -> (M, K)>,
+}
+
+impl<M, K> Clone for LabeledExpression<M, K> {
+	fn clone(&self) -> Self {
+		Self {
+			label: self.label.clone(),
+			expression: self.expression.clone(),
+			marker: PhantomData,
+		}
+	}
 }
 
 impl<M, K> LabeledExpression<M, K> {

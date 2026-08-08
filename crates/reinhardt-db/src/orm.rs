@@ -239,7 +239,9 @@ pub use vector::{MAX_DENSE_VECTOR_DIMENSIONS, Vector, VectorError};
 pub use paste;
 
 // Core exports - always available
-pub use aggregation::{Aggregate, AggregateFunc, AggregateResult, AggregateValue};
+pub use aggregation::{
+	Aggregate, AggregateDateTime, AggregateFunc, AggregateResult, AggregateValue,
+};
 pub use annotation::{Annotation, AnnotationValue, Expression, Value, When};
 pub use connection::{
 	DatabaseBackend, DatabaseConnection, DatabaseConnectionLease, OrmExecutor, QueryResult,
@@ -364,10 +366,11 @@ pub use reverse_accessor::ReverseAccessor;
 pub use manager::Manager;
 // Query types are always available
 pub use query::{
-	Blocking, DateProjectionField, DateProjectionOrder, DateTimeProjectionField, DateTimeTruncKind,
-	DateTruncKind, ExplainBackend, ExplainBody, ExplainFormat, ExplainOptions, ExplainOutput,
-	FieldAssignment, Filter, FilterCondition, FilterOperator, FilterValue, IntoOrderBy, Nowait,
-	OrmQuery, QuerySet, QuerySetStream, SelectForUpdate, SkipLocked, UpdateValue,
+	AggregateInput, Blocking, DateProjectionField, DateProjectionOrder, DateTimeProjectionField,
+	DateTimeTruncKind, DateTruncKind, ExplainBackend, ExplainBody, ExplainFormat, ExplainOptions,
+	ExplainOutput, FieldAssignment, Filter, FilterCondition, FilterOperator, FilterValue,
+	IntoOrderBy, Nowait, OrmQuery, QuerySet, QuerySetStream, SelectForUpdate, SkipLocked,
+	UpdateValue,
 };
 
 // Advanced ORM features

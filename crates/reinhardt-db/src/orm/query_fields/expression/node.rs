@@ -292,6 +292,8 @@ pub(crate) struct StoredExpression {
 	pub(crate) output: Option<AggregateOutputKind>,
 	/// Aggregate function represented by this expression, when applicable.
 	pub(crate) aggregate_function: Option<AggregateFunction>,
+	/// Scalar storage metadata used to decode MIN/MAX aggregate results.
+	pub(crate) aggregate_storage_kind: Option<DatabaseStorageKind>,
 	/// Optional identifier retained with the erased expression.
 	// Annotation projection planning consumes this label in the next query phase.
 	#[allow(dead_code)]
@@ -308,22 +310,14 @@ impl StoredExpression {
 		label: Option<String>,
 	) -> Self {
 		let output = node.aggregate_output_kind();
-		let aggregate_function = match &node {
-			ExpressionNode::Aggregate { operation, .. } => Some(match operation {
-				AggregateOperation::Count => AggregateFunction::Count,
-				AggregateOperation::Sum => AggregateFunction::Sum,
-				AggregateOperation::Average => AggregateFunction::Avg,
-				AggregateOperation::Minimum => AggregateFunction::Min,
-				AggregateOperation::Maximum => AggregateFunction::Max,
-			}),
-			ExpressionNode::CountAll => Some(AggregateFunction::Count),
-			_ => None,
-		};
+		let aggregate_function = node.aggregate_function();
+		let aggregate_storage_kind = node.aggregate_storage_kind();
 		Self {
 			node,
 			joins,
 			output,
 			aggregate_function,
+			aggregate_storage_kind,
 			label,
 		}
 	}
@@ -334,6 +328,7 @@ impl StoredExpression {
 		self.joins == other.joins
 			&& self.output == other.output
 			&& self.aggregate_function == other.aggregate_function
+			&& self.aggregate_storage_kind == other.aggregate_storage_kind
 			&& self.node.structurally_eq(&other.node)
 	}
 
@@ -392,6 +387,70 @@ impl ExpressionNode {
 				.or_else(|| right.aggregate_output_kind()),
 			_ => None,
 		}
+	}
+
+	fn aggregate_function(&self) -> Option<AggregateFunction> {
+		match self {
+			Self::Aggregate { operation, .. } => Some(match operation {
+				AggregateOperation::Count => AggregateFunction::Count,
+				AggregateOperation::Sum => AggregateFunction::Sum,
+				AggregateOperation::Average => AggregateFunction::Avg,
+				AggregateOperation::Minimum => AggregateFunction::Min,
+				AggregateOperation::Maximum => AggregateFunction::Max,
+			}),
+			Self::CountAll => Some(AggregateFunction::Count),
+			Self::Arithmetic { left, right, .. } | Self::Coalesce { left, right } => left
+				.aggregate_function()
+				.or_else(|| right.aggregate_function()),
+			Self::Case {
+				result, otherwise, ..
+			} => result.aggregate_function().or_else(|| {
+				otherwise
+					.as_deref()
+					.and_then(ExpressionNode::aggregate_function)
+			}),
+			Self::Comparison { left, right, .. } => left
+				.aggregate_function()
+				.or_else(|| right.aggregate_function()),
+			_ => None,
+		}
+	}
+
+	fn aggregate_storage_kind(&self) -> Option<DatabaseStorageKind> {
+		match self {
+			Self::Aggregate { operand, .. } => scalar_storage_kind(operand),
+			Self::Arithmetic { left, right, .. } | Self::Coalesce { left, right } => {
+				scalar_storage_kind(left).or_else(|| scalar_storage_kind(right))
+			}
+			Self::Case {
+				result, otherwise, ..
+			} => scalar_storage_kind(result)
+				.or_else(|| otherwise.as_deref().and_then(scalar_storage_kind)),
+			Self::Comparison { left, right, .. } => {
+				scalar_storage_kind(left).or_else(|| scalar_storage_kind(right))
+			}
+			_ => None,
+		}
+	}
+}
+
+fn scalar_storage_kind(node: &ExpressionNode) -> Option<DatabaseStorageKind> {
+	match node {
+		ExpressionNode::RootColumn(column) => Some(column.storage_kind),
+		ExpressionNode::RelatedColumn(column) => Some(column.storage_kind),
+		ExpressionNode::Aggregate { operand, .. } => scalar_storage_kind(operand),
+		ExpressionNode::Arithmetic { left, right, .. }
+		| ExpressionNode::Coalesce { left, right }
+		| ExpressionNode::Comparison { left, right, .. } => {
+			scalar_storage_kind(left).or_else(|| scalar_storage_kind(right))
+		}
+		ExpressionNode::Case {
+			result, otherwise, ..
+		} => scalar_storage_kind(result)
+			.or_else(|| otherwise.as_deref().and_then(scalar_storage_kind)),
+		ExpressionNode::CountAll
+		| ExpressionNode::Literal(_)
+		| ExpressionNode::ExistingSimpleExpr(_) => None,
 	}
 }
 

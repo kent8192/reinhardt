@@ -513,18 +513,21 @@ fn aggregate_result_insert_and_get() {
 	let mut result = AggregateResult::new();
 
 	// Act
-	result.insert("count".to_string(), AggregateValue::Int(42));
-	result.insert("avg".to_string(), AggregateValue::Float(3.14));
-	result.insert("null_val".to_string(), AggregateValue::Null);
+	result.insert("count", AggregateValue::Integer(42));
+	result.insert("avg", AggregateValue::Float(3.14));
+	result.insert("null_val", AggregateValue::Null);
 
 	// Assert
-	assert!(matches!(result.get("count"), Some(AggregateValue::Int(42))));
+	assert_eq!(
+		result.get_i64("count").expect("count should be an integer"),
+		42
+	);
 	assert!(matches!(
 		result.get("avg"),
-		Some(AggregateValue::Float(f)) if (*f - 3.14).abs() < f64::EPSILON
+		Ok(AggregateValue::Float(f)) if (*f - 3.14).abs() < f64::EPSILON
 	));
-	assert!(matches!(result.get("null_val"), Some(AggregateValue::Null)));
-	assert!(result.get("nonexistent").is_none());
+	assert!(matches!(result.get("null_val"), Ok(AggregateValue::Null)));
+	assert!(result.get("nonexistent").is_err());
 }
 
 #[rstest]
@@ -535,7 +538,7 @@ fn aggregate_result_default() {
 	let result = AggregateResult::default();
 
 	// Assert
-	assert!(result.values.is_empty());
+	assert!(result.is_empty());
 }
 
 // =============================================================================

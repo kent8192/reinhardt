@@ -167,6 +167,38 @@ impl ModelRecord {
 		unsafe { FieldRef::from_generated_model_field_with_names("status", "status") }
 	}
 
+	pub fn field_uuid() -> FieldRef<Self, uuid::Uuid, GeneratedModelField> {
+		// SAFETY: the fixture declares a UUID-backed persisted column named value_uuid.
+		unsafe { FieldRef::from_generated_model_field_with_names("value_uuid", "value_uuid") }
+	}
+
+	pub fn field_date() -> FieldRef<Self, chrono::NaiveDate, GeneratedModelField> {
+		// SAFETY: the fixture declares a date-backed persisted column named value_date.
+		unsafe { FieldRef::from_generated_model_field_with_names("value_date", "value_date") }
+	}
+
+	pub fn field_time() -> FieldRef<Self, chrono::NaiveTime, GeneratedModelField> {
+		// SAFETY: the fixture declares a time-backed persisted column named value_time.
+		unsafe { FieldRef::from_generated_model_field_with_names("value_time", "value_time") }
+	}
+
+	pub fn field_datetime() -> FieldRef<Self, chrono::DateTime<chrono::Utc>, GeneratedModelField> {
+		// SAFETY: the fixture declares a UTC datetime-backed persisted column named value_datetime.
+		unsafe {
+			FieldRef::from_generated_model_field_with_names("value_datetime", "value_datetime")
+		}
+	}
+
+	pub fn field_naive_datetime() -> FieldRef<Self, chrono::NaiveDateTime, GeneratedModelField> {
+		// SAFETY: the fixture declares a naive datetime-backed persisted column named value_naive_datetime.
+		unsafe {
+			FieldRef::from_generated_model_field_with_names(
+				"value_naive_datetime",
+				"value_naive_datetime",
+			)
+		}
+	}
+
 	pub fn field_custom_amount() -> FieldRef<Self, CustomAmount, GeneratedModelField> {
 		// SAFETY: the fixture declares a CustomAmount-backed persisted column named custom_amount.
 		unsafe { FieldRef::from_generated_model_field_with_names("custom_amount", "custom_amount") }

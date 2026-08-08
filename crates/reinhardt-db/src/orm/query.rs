@@ -41,6 +41,10 @@ use std::task::{Context, Poll, Wake, Waker};
 use std::time::Instant;
 use uuid::Uuid;
 
+#[path = "query/aggregate.rs"]
+mod aggregate;
+pub use aggregate::AggregateInput;
+
 pub use reinhardt_query::query::{ExplainFormat, ExplainOptions};
 
 fn executor_error(error: reinhardt_core::exception::Error) -> DatabaseError {
@@ -9230,81 +9234,6 @@ where
 		Ok(self)
 	}
 
-	/// Perform an aggregation on the QuerySet
-	///
-	/// Aggregations allow you to calculate summary statistics (COUNT, SUM, AVG, MAX, MIN)
-	/// for the queryset. The aggregation result will be added to the SELECT clause.
-	///
-	/// # Examples
-	///
-	/// ```no_run
-	/// # use reinhardt_db::orm::Model;
-	/// # use serde::{Serialize, Deserialize};
-	/// # #[derive(Serialize, Deserialize, Clone)]
-	/// # struct User { id: Option<i64> }
-	/// # #[derive(Clone)]
-	/// # struct UserFields;
-	/// # impl reinhardt_db::orm::model::FieldSelector for UserFields {
-	/// #     fn with_alias(self, _alias: &str) -> Self { self }
-	/// # }
-	/// # impl Model for User {
-	/// #     type PrimaryKey = i64;
-	/// #     type Fields = UserFields;
-	/// #     type Objects = reinhardt_db::orm::Manager<Self>;
-	/// #     fn table_name() -> &'static str { "users" }
-	/// #     fn new_fields() -> Self::Fields { UserFields }
-	/// #     fn primary_key(&self) -> Option<Self::PrimaryKey> { self.id }
-	/// #     fn set_primary_key(&mut self, value: Self::PrimaryKey) { self.id = Some(value); }
-	/// # }
-	/// # #[derive(Serialize, Deserialize, Clone)]
-	/// # struct Order { id: Option<i64> }
-	/// # #[derive(Clone)]
-	/// # struct OrderFields;
-	/// # impl reinhardt_db::orm::model::FieldSelector for OrderFields {
-	/// #     fn with_alias(self, _alias: &str) -> Self { self }
-	/// # }
-	/// # impl Model for Order {
-	/// #     type PrimaryKey = i64;
-	/// #     type Fields = OrderFields;
-	/// #     type Objects = reinhardt_db::orm::Manager<Self>;
-	/// #     fn table_name() -> &'static str { "orders" }
-	/// #     fn new_fields() -> Self::Fields { OrderFields }
-	/// #     fn primary_key(&self) -> Option<Self::PrimaryKey> { self.id }
-	/// #     fn set_primary_key(&mut self, value: Self::PrimaryKey) { self.id = Some(value); }
-	/// # }
-	/// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
-	/// use reinhardt_db::orm::aggregation::Aggregate;
-	///
-	/// // Count all users
-	/// let result = User::objects()
-	///     .all()
-	///     .aggregate(Aggregate::count_all().with_alias("total_users"))
-	///     .all()
-	///     .await?;
-	///
-	/// // Sum order amounts
-	/// let result = Order::objects()
-	///     .all()
-	///     .aggregate(Aggregate::sum("amount").with_alias("total_amount"))
-	///     .all()
-	///     .await?;
-	/// # Ok(())
-	/// # }
-	/// ```
-	pub fn aggregate(mut self, aggregate: super::aggregation::Aggregate) -> Self {
-		// Convert Aggregate to Annotation and add to annotations list
-		let alias = aggregate
-			.alias
-			.clone()
-			.unwrap_or_else(|| aggregate.func.to_string().to_lowercase());
-		let annotation = super::annotation::Annotation {
-			alias,
-			value: super::annotation::AnnotationValue::Aggregate(aggregate),
-		};
-		self.annotations.push(annotation);
-		self
-	}
-
 	/// Converts to sql.
 	pub fn to_sql(&self) -> reinhardt_core::exception::Result<String> {
 		let mut stmt = if !self.has_select_related() {
@@ -14005,9 +13934,12 @@ mod tests {
 
 		let sql = QuerySet::<TestUser>::new()
 			.filter(related_filter)
-			.aggregate(
-				crate::orm::aggregation::Aggregate::count(Some("id")).with_alias("user_count"),
+			.annotate(
+				crate::orm::func::count(TestUser::field_id())
+					.label("user_count")
+					.expect("valid aggregate label"),
 			)
+			.expect("typed aggregate annotation should compile")
 			.to_sql()
 			.expect("query SQL should compile");
 
@@ -14025,9 +13957,12 @@ mod tests {
 
 		let sql = QuerySet::<TestUser>::new()
 			.filter(related_filter)
-			.aggregate(
-				crate::orm::aggregation::Aggregate::count(Some("*")).with_alias("user_count"),
+			.annotate(
+				crate::orm::func::count_all::<TestUser>()
+					.label("user_count")
+					.expect("valid aggregate label"),
 			)
+			.expect("typed aggregate annotation should compile")
 			.to_sql()
 			.expect("query SQL should compile");
 
@@ -14037,16 +13972,20 @@ mod tests {
 
 	#[test]
 	fn test_structural_aggregates_preserve_wildcards_and_distinct_functions() {
-		use crate::orm::aggregation::Aggregate;
-
 		let queryset = QuerySet::<TestUser>::new()
-			.aggregate(Aggregate::count(Some("*")).with_alias("user_count"))
-			.aggregate(Aggregate {
-				func: crate::orm::aggregation::AggregateFunc::Sum,
-				field: Some("id".to_string()),
-				alias: Some("distinct_id_sum".to_string()),
-				distinct: true,
-			});
+			.annotate(
+				crate::orm::func::count_all::<TestUser>()
+					.label("user_count")
+					.expect("valid aggregate label"),
+			)
+			.expect("count annotation should compile")
+			.annotate(
+				crate::orm::func::sum(TestUser::field_id())
+					.distinct()
+					.label("distinct_id_sum")
+					.expect("valid aggregate label"),
+			)
+			.expect("distinct aggregate annotation should compile");
 
 		let sql = queryset
 			.build_select_statement()

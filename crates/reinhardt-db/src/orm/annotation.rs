@@ -424,7 +424,10 @@ mod annotation_extended_tests {
 				"other_age",
 				AnnotationValue::Field(F::new("age")),
 			))
-			.aggregate(Aggregate::sum("other_age").with_alias("otherage_sum"));
+			.annotate_legacy(Annotation::field(
+				"otherage_sum",
+				AnnotationValue::Aggregate(Aggregate::sum("other_age")),
+			));
 
 		let sql = qs.to_sql().expect("query SQL should compile");
 
@@ -448,7 +451,10 @@ mod annotation_extended_tests {
 				"value_alias",
 				AnnotationValue::Field(F::new("value")),
 			))
-			.aggregate(Aggregate::count(Some("value_alias")).with_alias("count_alias"));
+			.annotate_legacy(Annotation::field(
+				"count_alias",
+				AnnotationValue::Aggregate(Aggregate::count(Some("value_alias"))),
+			));
 
 		let sql = qs.to_sql().expect("query SQL should compile");
 
@@ -473,7 +479,10 @@ mod annotation_extended_tests {
 				"other_age",
 				AnnotationValue::Field(F::new("age")),
 			))
-			.aggregate(Aggregate::sum("other_age").with_alias("otherage_sum"));
+			.annotate_legacy(Annotation::field(
+				"otherage_sum",
+				AnnotationValue::Aggregate(Aggregate::sum("other_age")),
+			));
 
 		let sql = qs.to_sql().expect("query SQL should compile");
 
@@ -504,7 +513,10 @@ mod annotation_extended_tests {
 				"doubled",
 				AnnotationValue::Field(F::new("value")),
 			))
-			.aggregate(Aggregate::avg("doubled").with_alias("avg_doubled"));
+			.annotate_legacy(Annotation::field(
+				"avg_doubled",
+				AnnotationValue::Aggregate(Aggregate::avg("doubled")),
+			));
 
 		let sql = qs.to_sql().expect("query SQL should compile");
 
@@ -528,7 +540,10 @@ mod annotation_extended_tests {
 				"computed",
 				AnnotationValue::Field(F::new("field1")),
 			))
-			.aggregate(Aggregate::max("computed").with_alias("max_computed"));
+			.annotate_legacy(Annotation::field(
+				"max_computed",
+				AnnotationValue::Aggregate(Aggregate::max("computed")),
+			));
 
 		let sql = qs.to_sql().expect("query SQL should compile");
 
@@ -552,7 +567,10 @@ mod annotation_extended_tests {
 				"calc",
 				AnnotationValue::Field(F::new("price")),
 			))
-			.aggregate(Aggregate::min("calc").with_alias("min_calc"));
+			.annotate_legacy(Annotation::field(
+				"min_calc",
+				AnnotationValue::Aggregate(Aggregate::min("calc")),
+			));
 
 		let sql = qs.to_sql().expect("query SQL should compile");
 
@@ -619,7 +637,10 @@ mod annotation_extended_tests {
 		use crate::orm::query::QuerySet;
 
 		let qs = QuerySet::<TestModel>::new()
-			.aggregate(Aggregate::count(Some("rating")).with_alias("rating_count_alias"))
+			.annotate_legacy(Annotation::field(
+				"rating_count_alias",
+				AnnotationValue::Aggregate(Aggregate::count(Some("rating"))),
+			))
 			.annotate_legacy(Annotation::field(
 				"rating_count",
 				AnnotationValue::Field(F::new("rating_count_alias")),
@@ -643,7 +664,10 @@ mod annotation_extended_tests {
 		use crate::orm::query::QuerySet;
 
 		let qs = QuerySet::<TestModel>::new()
-			.aggregate(Aggregate::sum("price").with_alias("total_alias"))
+			.annotate_legacy(Annotation::field(
+				"total_alias",
+				AnnotationValue::Aggregate(Aggregate::sum("price")),
+			))
 			.annotate_legacy(Annotation::field(
 				"total",
 				AnnotationValue::Field(F::new("total_alias")),
@@ -870,7 +894,10 @@ mod annotation_extended_tests {
 				"value_doubled",
 				AnnotationValue::Field(F::new("value")),
 			))
-			.aggregate(Aggregate::sum("value_doubled").with_alias("total"));
+			.annotate_legacy(Annotation::field(
+				"total",
+				AnnotationValue::Aggregate(Aggregate::sum("value_doubled")),
+			));
 
 		let sql = qs.to_sql().expect("query SQL should compile");
 

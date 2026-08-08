@@ -14,7 +14,6 @@ use serde::{Deserialize, Serialize};
 use reinhardt_core::exception::{DatabaseError, DatabaseErrorKind, Error};
 use reinhardt_db::associations::markers::ManyToManyConfig;
 use reinhardt_db::associations::{ManyToManyField, ManyToManyManager};
-use reinhardt_db::orm::aggregation::Aggregate;
 use reinhardt_db::orm::annotation::{AnnotationValue, Expression, Value};
 use reinhardt_db::orm::composite_pk::{CompositePrimaryKey, PkValue};
 #[cfg(feature = "sqlite")]
@@ -666,7 +665,12 @@ async fn select_for_update_rejects_select_related_aggregate_annotations_without_
 	// Arrange
 	let query = QuerySet::<Article>::new()
 		.select_related(&["author"])
-		.aggregate(Aggregate::count_all().with_alias("article_count"))
+		.annotate(
+			reinhardt_db::orm::func::count_all::<Article>()
+				.label("article_count")
+				.expect("valid aggregate annotation label"),
+		)
+		.expect("typed aggregate annotation should compile")
 		.select_for_update()
 		.of_model();
 	let mut executor = RowLockTransactionExecutor::postgres(Vec::new());

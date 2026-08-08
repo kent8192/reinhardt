@@ -142,6 +142,21 @@ pub(crate) fn decode_file_field_metadata(
 	else {
 		return (HashMap::new(), Some(default.to_string()));
 	};
+	// The envelope is valid only when it carries an explicit SQL-default
+	// member (null means no default) and every known semantic parameter is a
+	// JSON string. Otherwise preserve the original value verbatim so malformed
+	// metadata can never silently remove a real database DEFAULT expression.
+	let decoded_default = match payload.get("default") {
+		Some(serde_json::Value::Null) => None,
+		Some(serde_json::Value::String(value)) => Some(value.clone()),
+		_ => return (HashMap::new(), Some(default.to_string())),
+	};
+	if params
+		.iter()
+		.any(|(key, value)| FILE_FIELD_METADATA_KEYS.contains(&key.as_str()) && !value.is_string())
+	{
+		return (HashMap::new(), Some(default.to_string()));
+	}
 
 	let mut semantic_params = HashMap::new();
 	semantic_params.insert("model_field_type".to_string(), model_field_type.to_string());
@@ -153,11 +168,7 @@ pub(crate) fn decode_file_field_metadata(
 			semantic_params.insert(key.to_string(), value.to_string());
 		}
 	}
-	let default = payload
-		.get("default")
-		.and_then(serde_json::Value::as_str)
-		.map(str::to_string);
-	(semantic_params, default)
+	(semantic_params, decoded_default)
 }
 
 /// Return the SQL default represented by a column definition.
@@ -10271,6 +10282,70 @@ mod tests {
 			"auto_increment should default to false"
 		);
 		assert!(col.default.is_none(), "default should be None");
+	}
+
+	#[test]
+	fn malformed_file_field_envelopes_preserve_default_for_decode_and_sql() {
+		let malformed = [
+			format!(
+				"{FILE_FIELD_METADATA_PREFIX}{{\"params\":{{\"model_field_type\":\"file\"}},\"default\":123}}"
+			),
+			format!("{FILE_FIELD_METADATA_PREFIX}{{\"params\":{{\"model_field_type\":\"file\"}}}}"),
+		];
+
+		for raw in malformed {
+			let (params, default) = decode_file_field_metadata(Some(&raw));
+			assert!(
+				params.is_empty(),
+				"malformed envelope must not restore params"
+			);
+			assert_eq!(
+				default.as_deref(),
+				Some(raw.as_str()),
+				"malformed envelope must remain an ordinary default"
+			);
+
+			let operation = Operation::CreateTable {
+				name: "assets".to_string(),
+				columns: vec![ColumnDefinition {
+					name: "avatar".to_string(),
+					type_definition: FieldType::VarChar(255),
+					not_null: false,
+					unique: false,
+					primary_key: false,
+					auto_increment: false,
+					default: Some(raw.clone()),
+					generated: None,
+					domain: None,
+				}],
+				constraints: Vec::new(),
+				without_rowid: None,
+				interleave_in_parent: None,
+				partition: None,
+			};
+			let sql = operation.to_sql(&SqlDialect::Postgres);
+			assert!(
+				sql.contains(&format!("DEFAULT {raw}")),
+				"malformed envelope must not drop the original SQL default: {sql}"
+			);
+		}
+	}
+
+	#[test]
+	fn valid_file_field_envelope_accepts_null_default() {
+		let raw = format!(
+			"{FILE_FIELD_METADATA_PREFIX}{{\"params\":{{\"model_field_type\":\"file\",\"file_storage\":\"private_uploads\"}},\"default\":null}}"
+		);
+		let (params, default) = decode_file_field_metadata(Some(&raw));
+		assert_eq!(
+			params.get("model_field_type").map(String::as_str),
+			Some("file")
+		);
+		assert_eq!(
+			params.get("file_storage").map(String::as_str),
+			Some("private_uploads")
+		);
+		assert!(default.is_none());
 	}
 
 	// -----------------------------------------------------------------------

@@ -16,7 +16,7 @@ use serde::Deserialize;
 use std::time::Duration;
 
 use crate::config::GcsConfig;
-use crate::{Result, StorageBackend, StorageError};
+use crate::{Result, StorageBackend, StorageCapabilities, StorageError};
 
 #[derive(Debug, Deserialize)]
 struct GcsMetadata {
@@ -135,15 +135,19 @@ impl GcsStorage {
 		Ok(format!("{}?alt=media", self.metadata_url(object)?))
 	}
 
-	fn upload_url(&self, object: &str) -> Result<String> {
+	fn upload_url(&self, object: &str, if_generation_match: Option<i64>) -> Result<String> {
 		let endpoint = self.endpoint().ok_or_else(|| {
 			StorageError::ConfigError("GCS endpoint is not configured".to_string())
 		})?;
+		let if_generation_match = if_generation_match
+			.map(|generation| format!("&ifGenerationMatch={generation}"))
+			.unwrap_or_default();
 		Ok(format!(
-			"{}/upload/storage/v1/b/{}/o?uploadType=media&name={}",
+			"{}/upload/storage/v1/b/{}/o?uploadType=media&name={}{}",
 			endpoint.trim_end_matches('/'),
 			self.config.bucket,
-			Self::encoded_object(object)
+			Self::encoded_object(object),
+			if_generation_match,
 		))
 	}
 
@@ -161,6 +165,20 @@ impl GcsStorage {
 		}
 	}
 
+	fn map_exclusive_status(
+		status: reqwest::StatusCode,
+		object: &str,
+		logical_name: &str,
+	) -> StorageError {
+		if status == reqwest::StatusCode::CONFLICT
+			|| status == reqwest::StatusCode::PRECONDITION_FAILED
+		{
+			StorageError::AlreadyExists(logical_name.to_string())
+		} else {
+			Self::map_status(status, object)
+		}
+	}
+
 	fn map_sdk_error(err: google_cloud_storage::Error, name: &str) -> StorageError {
 		let message = err.to_string();
 		if message.contains("404") || message.to_ascii_lowercase().contains("not found") {
@@ -169,6 +187,18 @@ impl GcsStorage {
 			StorageError::PermissionDenied(message)
 		} else {
 			StorageError::NetworkError(message)
+		}
+	}
+
+	fn map_exclusive_sdk_error(
+		err: google_cloud_storage::Error,
+		object: &str,
+		logical_name: &str,
+	) -> StorageError {
+		if matches!(err.http_status_code(), Some(409 | 412)) {
+			StorageError::AlreadyExists(logical_name.to_string())
+		} else {
+			Self::map_sdk_error(err, object)
 		}
 	}
 
@@ -233,7 +263,7 @@ impl StorageBackend for GcsStorage {
 		let object = self.object_name(name);
 
 		if self.endpoint().is_some() {
-			let url = self.upload_url(&object)?;
+			let url = self.upload_url(&object, None)?;
 			let response = self
 				.http
 				.post(url)
@@ -262,6 +292,48 @@ impl StorageBackend for GcsStorage {
 			.await
 			.map_err(|err| Self::map_sdk_error(err, &object))?;
 		Ok(object)
+	}
+
+	async fn save_if_absent(&self, name: &str, content: &[u8]) -> Result<String> {
+		let object = self.object_name(name);
+
+		if self.endpoint().is_some() {
+			let url = self.upload_url(&object, Some(0))?;
+			let response = self
+				.http
+				.post(url)
+				.header("content-type", "application/octet-stream")
+				.body(content.to_vec())
+				.send()
+				.await
+				.map_err(|err| StorageError::NetworkError(err.to_string()))?;
+			let status = response.status();
+			if !status.is_success() {
+				return Err(Self::map_exclusive_status(status, &object, name));
+			}
+			return Ok(name.to_string());
+		}
+
+		let storage = self.storage.as_ref().ok_or_else(|| {
+			StorageError::ConfigError("GCS storage client is not configured".to_string())
+		})?;
+		storage
+			.write_object(
+				self.bucket_resource(),
+				object.clone(),
+				bytes::Bytes::copy_from_slice(content),
+			)
+			.set_if_generation_match(0_i64)
+			.send_buffered()
+			.await
+			.map_err(|err| Self::map_exclusive_sdk_error(err, &object, name))?;
+		Ok(name.to_string())
+	}
+
+	fn capabilities(&self) -> StorageCapabilities {
+		StorageCapabilities {
+			exclusive_create: true,
+		}
 	}
 
 	async fn open(&self, name: &str) -> Result<Vec<u8>> {

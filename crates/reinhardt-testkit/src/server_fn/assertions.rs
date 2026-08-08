@@ -529,6 +529,14 @@ mod tests {
 		assert_server_fn_error_contains(&failing, "username");
 		assert_validation_error(&failing, "EMAIL");
 		assert_validation_errors(&failing, &["email", "username"]);
+		let missing_validation_field =
+			std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+				assert_validation_error(&failing, "password");
+			}));
+		let missing_validation_member =
+			std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+				assert_validation_errors(&failing, &["email", "password"]);
+			}));
 		failing
 			.should_be_err()
 			.should_have_message("email and username are invalid");
@@ -557,6 +565,8 @@ mod tests {
 		ResponseAssertion::new(bad_request).should_be_client_error();
 		ResponseAssertion::new(internal).should_be_server_error();
 		assert!(successful_error_assertion.is_err());
+		assert!(missing_validation_field.is_err());
+		assert!(missing_validation_member.is_err());
 	}
 
 	fn assert_status_panics(name: &str, assertion: impl FnOnce()) {
@@ -571,7 +581,8 @@ mod tests {
 		// Arrange
 		let ok = StatusResponse(StatusCode::OK);
 		let created = StatusResponse(StatusCode::CREATED);
-		let empty = StatusResponse(StatusCode::NO_CONTENT);
+		let bad_request = StatusResponse(StatusCode::BAD_REQUEST);
+		let internal = StatusResponse(StatusCode::INTERNAL_SERVER_ERROR);
 
 		// Act and assert
 		assert_status_panics("ok", || assert_status::ok(&created));
@@ -587,10 +598,10 @@ mod tests {
 		});
 		assert_status_panics("internal_error", || assert_status::internal_error(&ok));
 		assert_status_panics("client_error_category", || {
-			ResponseAssertion::new(ok).should_be_client_error()
+			ResponseAssertion::new(internal).should_be_client_error()
 		});
 		assert_status_panics("server_error_category", || {
-			ResponseAssertion::new(empty).should_be_server_error()
+			ResponseAssertion::new(bad_request).should_be_server_error()
 		});
 	}
 }

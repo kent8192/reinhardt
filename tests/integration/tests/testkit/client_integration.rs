@@ -72,11 +72,23 @@ impl Handler for RequestMetadataHandler {
 			.get("X-Custom")
 			.and_then(|value| value.to_str().ok())
 			.unwrap_or("missing");
+		let mfa_code = request
+			.headers
+			.get("X-MFA-Code")
+			.and_then(|value| value.to_str().ok())
+			.unwrap_or("missing");
+		let test_user = request
+			.headers
+			.get("X-Test-User")
+			.and_then(|value| value.to_str().ok())
+			.unwrap_or("missing");
 
 		Response::ok()
 			.try_with_header("X-Request-Uri", &request_uri)?
 			.try_with_header("X-Authorization", authorization)?
 			.try_with_header("X-Cookie", cookie)?
+			.try_with_header("X-MFA-Code", mfa_code)?
+			.try_with_header("X-Test-User", test_user)?
 			.try_with_header("X-Custom", custom)
 	}
 }
@@ -211,13 +223,33 @@ async fn api_client_manages_credentials_cookies_and_cleanup_through_requests() {
 	client.remove_cookie("session").await.unwrap();
 	let without_cookie = client.get("/without-cookie").await.unwrap();
 	client.set_cookie("session", "second").await.unwrap();
+	client
+		.set_header("X-MFA-Code", "before-clear")
+		.await
+		.unwrap();
+	client
+		.set_header("X-Test-User", "authenticated")
+		.await
+		.unwrap();
 	client.clear_auth().await.unwrap();
 	let cleared_auth = client.get("/cleared-auth").await.unwrap();
 	client.set_header("X-MFA-Code", "123456").await.unwrap();
+	client
+		.set_header("X-Test-User", "authenticated")
+		.await
+		.unwrap();
 	client.set_cookie("session", "third").await.unwrap();
 	client.cleanup().await;
 	let cleaned = client.get("https://example.test/cleaned").await.unwrap();
 	client.credentials("grace", &logout_password).await.unwrap();
+	client
+		.set_header("X-MFA-Code", "before-logout")
+		.await
+		.unwrap();
+	client
+		.set_header("X-Test-User", "authenticated")
+		.await
+		.unwrap();
 	client
 		.set_cookie("session", "logout-session")
 		.await
@@ -243,6 +275,8 @@ async fn api_client_manages_credentials_cookies_and_cleanup_through_requests() {
 	assert_eq!(without_cookie.header("X-Cookie"), Some("missing"));
 	assert_eq!(cleared_auth.header("X-Authorization"), Some("missing"));
 	assert_eq!(cleared_auth.header("X-Cookie"), Some("missing"));
+	assert_eq!(cleared_auth.header("X-MFA-Code"), Some("missing"));
+	assert_eq!(cleared_auth.header("X-Test-User"), Some("missing"));
 	assert_eq!(cleared_auth.header("X-Custom"), Some("retained"));
 	assert_eq!(
 		cleaned.header("X-Request-Uri"),
@@ -250,7 +284,11 @@ async fn api_client_manages_credentials_cookies_and_cleanup_through_requests() {
 	);
 	assert_eq!(cleaned.header("X-Authorization"), Some("missing"));
 	assert_eq!(cleaned.header("X-Cookie"), Some("missing"));
+	assert_eq!(cleaned.header("X-MFA-Code"), Some("missing"));
+	assert_eq!(cleaned.header("X-Test-User"), Some("missing"));
 	assert_eq!(cleaned.header("X-Custom"), Some("missing"));
 	assert_eq!(logged_out.header("X-Authorization"), Some("missing"));
 	assert_eq!(logged_out.header("X-Cookie"), Some("missing"));
+	assert_eq!(logged_out.header("X-MFA-Code"), Some("missing"));
+	assert_eq!(logged_out.header("X-Test-User"), Some("missing"));
 }

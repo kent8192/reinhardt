@@ -986,7 +986,7 @@ impl TailwindRenderer {
 #[cfg(test)]
 mod tests {
 	use super::*;
-	use rstest::rstest;
+	use rstest::*;
 
 	#[derive(Debug, Clone, Copy)]
 	enum PrimitiveWidget {
@@ -1012,7 +1012,9 @@ mod tests {
 
 		fn widget_type(self) -> WidgetType {
 			match self {
-				Self::Password | Self::Email | Self::Number => TextInput::new().widget_type(),
+				Self::Password => TextInput::password().widget_type(),
+				Self::Email => TextInput::email().widget_type(),
+				Self::Number => TextInput::number().widget_type(),
 				Self::Date => DateInput::new().widget_type(),
 				Self::Checkbox => CheckboxInput::new().widget_type(),
 				Self::File => FileInput::new().widget_type(),
@@ -1078,7 +1080,7 @@ mod tests {
 		assert_eq!(html, expected_html);
 	}
 
-	#[test]
+	#[rstest]
 	fn multi_value_widgets_select_exact_values_and_escape_labels() {
 		// Arrange
 		let choices = vec![
@@ -1121,7 +1123,7 @@ mod tests {
 		);
 	}
 
-	#[test]
+	#[rstest]
 	fn composite_widgets_scope_prefixed_attributes_and_preserve_values() {
 		// Arrange
 		let mut split_attrs = HashMap::new();
@@ -1163,7 +1165,7 @@ mod tests {
 		);
 	}
 
-	#[test]
+	#[rstest]
 	fn widget_attrs_and_framework_renderers_preserve_existing_classes() {
 		// Arrange
 		let attrs = WidgetAttrs::new()
@@ -1247,7 +1249,7 @@ mod tests {
 		);
 	}
 
-	#[test]
+	#[rstest]
 	fn widget_defaults_empty_choices_and_public_kinds_match_html_contract() {
 		// Arrange
 		let attrs = HashMap::from([("data-source".to_string(), "server&cache".to_string())]);

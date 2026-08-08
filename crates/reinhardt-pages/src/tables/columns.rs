@@ -39,9 +39,10 @@ pub use url::URLColumn;
 mod tests {
 	use super::*;
 	use crate::tables::column::Column as ColumnTrait;
+	use rstest::rstest;
 	use std::collections::HashMap;
 
-	#[test]
+	#[rstest]
 	fn table_columns_preserve_metadata_and_visibility_configuration() {
 		// Arrange
 		let basic = Column::<u32>::new("id", "Identifier")
@@ -108,7 +109,7 @@ mod tests {
 			]
 		);
 	}
-	#[test]
+	#[rstest]
 	fn specialized_columns_expose_expected_defaults_and_custom_metadata() {
 		// Arrange
 		let boolean = BooleanColumn::with_icons("verified", "Verified", "yes", "no");
@@ -184,5 +185,70 @@ mod tests {
 				("website", "Website", false, false),
 			]
 		);
+	}
+}
+
+#[cfg(all(test, target_arch = "wasm32"))]
+mod wasm_render_tests {
+	use super::*;
+	use crate::tables::column::Column as ColumnTrait;
+	use std::collections::HashMap;
+	use wasm_bindgen_test::*;
+
+	wasm_bindgen_test_configure!(run_in_browser);
+
+	#[wasm_bindgen_test]
+	fn specialized_columns_render_configured_values() {
+		// Arrange
+		let choice = ChoiceColumn::new("status", "Status")
+			.choices(HashMap::from([("draft".to_string(), "Draft".to_string())]));
+		let boolean = BooleanColumn::with_icons("verified", "Verified", "YES", "NO");
+		let datetime = DateTimeColumn::new("created_at", "Created").format("%Y/%m/%d %H:%M");
+		let link = LinkColumn::new("id", "Profile", "/profiles/{id}");
+		let link_with_text = LinkColumn::with_text("slug", "Article", "/articles/{slug}", "Read");
+
+		// Act
+		let choice_value = "draft".to_string();
+		let choice_element = choice.render(&choice_value);
+		let boolean_value = true;
+		let boolean_element = boolean.render(&boolean_value);
+		let date_value = "2026-08-08 14:30:00".to_string();
+		let date_element = datetime.render(&date_value);
+		let link_value = "42".to_string();
+		let link_element = link.render(&link_value);
+		let slug_value = "coverage".to_string();
+		let link_with_text_element = link_with_text.render(&slug_value);
+
+		// Assert
+		assert_eq!(
+			choice_element.as_web_sys().text_content(),
+			Some("Draft".to_string())
+		);
+		assert_eq!(
+			boolean_element.as_web_sys().text_content(),
+			Some("YES".to_string())
+		);
+		assert_eq!(date_element.as_web_sys().text_content(), Some(date_value));
+		assert_eq!(
+			link_element.as_web_sys().outer_html(),
+			"<td><a href=\"/profiles/42\">42</a></td>",
+		);
+		assert_eq!(
+			link_with_text_element.as_web_sys().outer_html(),
+			"<td><a href=\"/articles/coverage\">Read</a></td>",
+		);
+
+		#[cfg(feature = "chrono")]
+		{
+			let datetime = DateTimeColumn::new("created_at", "Created").format("%Y/%m/%d %H:%M");
+			let value =
+				chrono::NaiveDateTime::parse_from_str("2026-08-08 14:30:00", "%Y-%m-%d %H:%M:%S")
+					.unwrap();
+			let element = datetime.render(&value);
+			assert_eq!(
+				element.as_web_sys().text_content(),
+				Some("2026/08/08 14:30".to_string())
+			);
+		}
 	}
 }

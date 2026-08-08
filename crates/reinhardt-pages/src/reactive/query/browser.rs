@@ -233,7 +233,7 @@ pub struct QueryBrowserResourceProbe {
 
 #[cfg(all(feature = "testing", wasm))]
 impl QueryBrowserResourceProbe {
-	/// Returns active visibility listeners and polling timers.
+	/// Returns active visibility listeners and query maintenance timers.
 	pub fn counts(&self) -> (usize, usize) {
 		self.counts.upgrade().map_or((0, 0), |counts| {
 			(counts.listeners.get(), counts.timers.get())
@@ -247,7 +247,7 @@ pub struct QueryBrowserResourceProbe;
 
 #[cfg(all(feature = "testing", not(wasm)))]
 impl QueryBrowserResourceProbe {
-	/// Returns active visibility listeners and polling timers.
+	/// Returns active visibility listeners and query maintenance timers.
 	pub fn counts(&self) -> (usize, usize) {
 		(0, 0)
 	}

@@ -24,6 +24,7 @@ use super::identity::{
 };
 use super::retry::{
 	ObserverRegistrationId, QueryRetryConfig, RetryCandidate, RetryPolicy, RetrySequence,
+	RetryWaitClock,
 };
 use super::runtime::{ScopedQueryFuture, duration_ms, now_ms, spawn_query_task};
 use super::state::{QueryDefaults, QueryOptions};
@@ -900,6 +901,47 @@ impl<T: Clone + 'static, E: Clone + 'static> QueryEntry<T, E> {
 	fn handle_visibility_change(self: &Rc<Self>, visible: bool, now_ms: u64) {
 		if !visible {
 			self.suspend_polling();
+			let waiting_to_pause = self.retry.borrow().as_ref().is_some_and(|sequence| {
+				matches!(sequence.wait_clock, Some(RetryWaitClock::Visible { .. }))
+			});
+			if waiting_to_pause {
+				let generation = self.next_retry_generation();
+				if let Some(sequence) = self.retry.borrow_mut().as_mut() {
+					sequence.pause(now_ms);
+					sequence.generation = generation;
+				}
+			}
+			return;
+		}
+		let retry_state = self.retry.borrow().as_ref().map(|sequence| {
+			(
+				sequence.generation,
+				sequence.manual_observer_id,
+				sequence.candidates.keys().copied().collect::<Vec<_>>(),
+				sequence.wait_clock,
+			)
+		});
+		if let Some((sequence_generation, manual_observer_id, candidate_ids, wait_clock)) =
+			retry_state
+		{
+			let waiting_is_stale = matches!(wait_clock, Some(RetryWaitClock::Paused { .. }))
+				&& self.live_observers().iter().any(|observer| {
+					candidate_ids.contains(&observer.registration_id)
+						&& self.is_stale(observer.policy.stale_time)
+				});
+			if matches!(wait_clock, Some(RetryWaitClock::Paused { .. })) {
+				if waiting_is_stale {
+					let manual_observer = manual_observer_id
+						.and_then(|observer_id| self.observer_by_id(observer_id))
+						.map(|observer| Rc::downgrade(&observer));
+					self.start_attempt(sequence_generation, manual_observer);
+				} else {
+					if let Some(sequence) = self.retry.borrow_mut().as_mut() {
+						sequence.resume(now_ms);
+					}
+					self.schedule_retry_deadline(sequence_generation);
+				}
+			}
 			return;
 		}
 		let observers = self.enabled_mounted_observers();
@@ -1532,6 +1574,9 @@ impl<T: Clone + 'static, E: Clone + 'static> QueryEntry<T, E> {
 								.insert(observer.registration_id, candidate);
 						}
 					}
+					if !self.polling_is_visible() {
+						sequence.pause(now_ms);
+					}
 					!sequence.candidates.is_empty()
 				};
 				if has_candidates {
@@ -1562,9 +1607,10 @@ impl<T: Clone + 'static, E: Clone + 'static> QueryEntry<T, E> {
 	fn schedule_retry_deadline(&self, sequence_generation: u64) {
 		let now_ms = self.runtime.now_ms();
 		let due_ms = self.retry.borrow().as_ref().and_then(|retry| {
-			(retry.generation == sequence_generation)
-				.then(|| retry.earliest_due_ms(now_ms))
-				.flatten()
+			(retry.generation == sequence_generation
+				&& matches!(retry.wait_clock, Some(RetryWaitClock::Visible { .. })))
+			.then(|| retry.earliest_due_ms(now_ms))
+			.flatten()
 		});
 		if let Some(owner) = self.owner.as_ref().and_then(Weak::upgrade) {
 			if let Some(due_ms) = due_ms {
@@ -2026,7 +2072,7 @@ pub fn set_query_visibility_for_test(client: &QueryClient, visible: bool) {
 	client.inner.browser.set_visibility_for_test(visible);
 }
 
-/// Returns active visibility listeners and polling timers for a query client.
+/// Returns active visibility listeners and query maintenance timers for a query client.
 #[cfg(feature = "testing")]
 pub fn query_browser_resource_counts(client: &QueryClient) -> (usize, usize) {
 	client.inner.browser.resource_counts()

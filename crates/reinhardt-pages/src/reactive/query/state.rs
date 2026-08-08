@@ -2,6 +2,8 @@ use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 
+use super::retry::{NoRetry, RetryPolicy};
+
 /// Application-wide defaults used to resolve query observer options.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct QueryDefaults {
@@ -47,19 +49,34 @@ impl Default for QueryDefaults {
 
 /// Per-observer query behavior.
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub struct QueryOptions {
+pub struct QueryOptions<R = NoRetry> {
 	enabled: bool,
 	stale_time: Option<Duration>,
 	gc_time: Option<Duration>,
 	refetch_interval: Option<Duration>,
+	retry: R,
 }
 
-impl QueryOptions {
+impl QueryOptions<NoRetry> {
 	/// Creates the standard enabled query options.
 	pub fn new() -> Self {
 		Self::default()
 	}
 
+	/// Installs a typed retry policy for this observer.
+	pub fn retry<E>(self, retry: RetryPolicy<E>) -> QueryOptions<RetryPolicy<E>> {
+		retry.validate();
+		QueryOptions {
+			enabled: self.enabled,
+			stale_time: self.stale_time,
+			gc_time: self.gc_time,
+			refetch_interval: self.refetch_interval,
+			retry,
+		}
+	}
+}
+
+impl<R> QueryOptions<R> {
 	/// Enables or disables fetching for this observer.
 	pub fn enabled(mut self, enabled: bool) -> Self {
 		self.enabled = enabled;
@@ -100,15 +117,20 @@ impl QueryOptions {
 	pub(crate) fn refetch_interval_value(&self) -> Option<Duration> {
 		self.refetch_interval
 	}
+
+	pub(crate) fn retry_state(&self) -> &R {
+		&self.retry
+	}
 }
 
-impl Default for QueryOptions {
+impl Default for QueryOptions<NoRetry> {
 	fn default() -> Self {
 		Self {
 			enabled: true,
 			stale_time: None,
 			gc_time: None,
 			refetch_interval: None,
+			retry: NoRetry,
 		}
 	}
 }

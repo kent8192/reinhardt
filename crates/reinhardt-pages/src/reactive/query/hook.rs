@@ -9,6 +9,7 @@ use super::client::{
 };
 use super::context::queries;
 use super::identity::QueryDescriptor;
+use super::retry::QueryRetryConfig;
 #[cfg(native)]
 use super::state::{QueryHydrationSnapshot, QueryHydrationState};
 use super::state::{QueryOptions, QuerySnapshot, QueryStatus};
@@ -136,25 +137,27 @@ impl<T: Clone + 'static, E: Clone + 'static> QueryHandle<T, E> {
 }
 
 /// Creates or subscribes to an app-wide keyed query.
-pub fn use_query<T, E>(
+pub fn use_query<T, E, R>(
 	descriptor: QueryDescriptor<T, E>,
-	options: QueryOptions,
+	options: QueryOptions<R>,
 ) -> QueryHandle<T, E>
 where
 	T: Clone + Serialize + DeserializeOwned + 'static,
 	E: Clone + Serialize + DeserializeOwned + 'static,
+	R: QueryRetryConfig<E>,
 {
 	queries().observe(descriptor, options)
 }
 
-pub(super) fn observe_query<T, E>(
+pub(super) fn observe_query<T, E, R>(
 	client: &QueryClient,
 	descriptor: QueryDescriptor<T, E>,
-	options: QueryOptions,
+	options: QueryOptions<R>,
 ) -> QueryHandle<T, E>
 where
 	T: Clone + Serialize + DeserializeOwned + 'static,
 	E: Clone + Serialize + DeserializeOwned + 'static,
+	R: QueryRetryConfig<E>,
 {
 	#[cfg(wasm)]
 	if let Ok(hydration) = crate::hydration::HydrationContext::from_window() {

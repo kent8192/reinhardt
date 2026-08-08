@@ -22,6 +22,7 @@ use super::super::resource::ResourceState;
 use super::identity::{
 	QueryDescriptor, QueryFamily, QueryFamilyTypes, QueryFetcher, QueryIdentity, QueryKey,
 };
+use super::retry::QueryRetryConfig;
 use super::runtime::{ScopedQueryFuture, duration_ms, now_ms, spawn_query_task};
 use super::state::{QueryDefaults, QueryOptions};
 #[cfg(any(wasm, test))]
@@ -312,14 +313,15 @@ impl QueryClient {
 		Self { inner }
 	}
 
-	pub(crate) fn observe<T, E>(
+	pub(crate) fn observe<T, E, R>(
 		&self,
 		descriptor: QueryDescriptor<T, E>,
-		options: QueryOptions,
+		options: QueryOptions<R>,
 	) -> super::hook::QueryHandle<T, E>
 	where
 		T: Clone + Serialize + DeserializeOwned + 'static,
 		E: Clone + Serialize + DeserializeOwned + 'static,
+		R: QueryRetryConfig<E>,
 	{
 		super::hook::observe_query(self, descriptor, options)
 	}
@@ -327,14 +329,15 @@ impl QueryClient {
 	/// Observes a query without installing an application context.
 	#[doc(hidden)]
 	#[cfg(feature = "testing")]
-	pub fn observe_for_test<T, E>(
+	pub fn observe_for_test<T, E, R>(
 		&self,
 		descriptor: QueryDescriptor<T, E>,
-		options: QueryOptions,
+		options: QueryOptions<R>,
 	) -> super::hook::QueryHandle<T, E>
 	where
 		T: Clone + Serialize + DeserializeOwned + 'static,
 		E: Clone + Serialize + DeserializeOwned + 'static,
+		R: QueryRetryConfig<E>,
 	{
 		self.observe(descriptor, options)
 	}
@@ -555,7 +558,7 @@ pub(super) struct ObserverPolicy {
 }
 
 impl ObserverPolicy {
-	pub(super) fn resolve(options: &QueryOptions, defaults: &QueryDefaults) -> Self {
+	pub(super) fn resolve<R>(options: &QueryOptions<R>, defaults: &QueryDefaults) -> Self {
 		Self {
 			enabled: options.is_enabled(),
 			stale_time: options.resolved_stale_time(defaults),
@@ -1302,14 +1305,15 @@ where
 }
 
 #[cfg(test)]
-pub(super) fn acquire_query_with_options<T, E>(
+pub(super) fn acquire_query_with_options<T, E, R>(
 	descriptor: QueryDescriptor<T, E>,
 	options: QueryAcquireOptions,
-	query_options: QueryOptions,
+	query_options: QueryOptions<R>,
 ) -> QueryLease<T, E>
 where
 	T: Clone + Serialize + DeserializeOwned + 'static,
 	E: Clone + Serialize + DeserializeOwned + 'static,
+	R: QueryRetryConfig<E>,
 {
 	super::context::queries().acquire_with_options(descriptor, options, query_options)
 }
@@ -1336,16 +1340,18 @@ impl QueryClient {
 		self.acquire_with_options(descriptor, options, QueryOptions::default())
 	}
 
-	pub(super) fn acquire_with_options<T, E>(
+	pub(super) fn acquire_with_options<T, E, R>(
 		&self,
 		descriptor: QueryDescriptor<T, E>,
 		options: QueryAcquireOptions,
-		query_options: QueryOptions,
+		query_options: QueryOptions<R>,
 	) -> QueryLease<T, E>
 	where
 		T: Clone + Serialize + DeserializeOwned + 'static,
 		E: Clone + Serialize + DeserializeOwned + 'static,
+		R: QueryRetryConfig<E>,
 	{
+		let _retry_policy = query_options.retry_state().retry_policy();
 		let policy = ObserverPolicy::resolve(&query_options, &self.inner.defaults);
 		let (key, fetcher, _ssr_prefetch, family_types) = descriptor.into_parts();
 		self.entry_for_key(key, family_types)

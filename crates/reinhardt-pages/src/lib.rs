@@ -750,9 +750,9 @@ pub use hydration::{HydrationContext, HydrationError, hydrate};
 pub use portal::{Portal, PortalError, PortalHandle, PortalTarget, mount_portal};
 pub use reactive::{
 	Effect, ExplicitDeps, LatestResourceState, LatestResourceValue, LatestResourceValueBuilder,
-	Memo, QueryClient, QueryDefaults, QueryDescriptor, QueryFamily, QueryHandle, QueryKey,
-	QueryOptions, QuerySnapshot, QueryStatus, ReactiveDeps, Resource, ResourceState, Signal,
-	Trackable, queries, use_latest_resource_value, use_resource, use_resource_with_key,
+	Memo, NoRetry, QueryClient, QueryDefaults, QueryDescriptor, QueryFamily, QueryHandle, QueryKey,
+	QueryOptions, QuerySnapshot, QueryStatus, ReactiveDeps, Resource, ResourceState, RetryPolicy,
+	Signal, Trackable, queries, use_latest_resource_value, use_resource, use_resource_with_key,
 };
 // Re-export Context system
 pub use reactive::{

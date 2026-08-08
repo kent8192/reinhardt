@@ -497,6 +497,8 @@ where
 #[cfg(test)]
 mod tests {
 	use super::*;
+	use reinhardt_http::Handler;
+	use serde_json::json;
 
 	#[tokio::test]
 	async fn test_mock_function() {
@@ -545,5 +547,69 @@ mod tests {
 
 		mock.reset().await;
 		assert_eq!(mock.call_count().await, 0);
+	}
+
+	#[tokio::test]
+	async fn mock_and_spy_preserve_return_queues_call_records_and_wrapped_values() {
+		// Arrange
+		let mock = MockFunction::with_default("fallback".to_string());
+		let empty_mock = MockFunction::<String>::new();
+		let spy = Spy::wrap("wrapped".to_string());
+		mock.returns_many(vec!["first".to_string(), "second".to_string()])
+			.await;
+
+		// Act
+		let first = mock.call(vec![json!("one"), json!(1)]).await;
+		let second = mock.call(vec![json!("two")]).await;
+		let fallback = mock.call(vec![]).await;
+		let empty = empty_mock.call(vec![json!("none")]).await;
+		spy.record_call(vec![json!("wrapped-call")]).await;
+		let calls = mock.get_calls().await;
+		let last = mock.last_call_args().await;
+
+		// Assert
+		assert_eq!(first, Some("first".to_string()));
+		assert_eq!(second, Some("second".to_string()));
+		assert_eq!(fallback, Some("fallback".to_string()));
+		assert_eq!(empty, None);
+		assert_eq!(mock.call_count().await, 3);
+		assert_eq!(mock.was_called().await, true);
+		assert_eq!(mock.was_called_with(vec![json!("two")]).await, true);
+		assert_eq!(mock.was_called_with(vec![json!("missing")]).await, false);
+		assert_eq!(calls.len(), 3);
+		assert_eq!(calls[0].args, vec![json!("one"), json!(1)]);
+		assert_eq!(last, Some(Vec::new()));
+		assert_eq!(spy.inner(), Some(&"wrapped".to_string()));
+		assert_eq!(spy.call_count().await, 1);
+		assert_eq!(spy.was_called_with(vec![json!("wrapped-call")]).await, true);
+		assert_eq!(
+			spy.last_call_args().await,
+			Some(vec![json!("wrapped-call")])
+		);
+		assert_eq!(Spy::wrap(7_u8).into_inner(), Some(7));
+		mock.reset().await;
+		spy.reset().await;
+		assert_eq!(mock.get_calls().await.len(), 0);
+		assert_eq!(spy.get_calls().await.len(), 0);
+	}
+
+	#[tokio::test]
+	async fn simple_handler_delegates_real_request_to_closure() {
+		// Arrange
+		let handler = SimpleHandler::new(|request: reinhardt_http::Request| {
+			Ok(reinhardt_http::Response::ok().with_body(request.uri.path().to_string()))
+		});
+		let request = reinhardt_http::Request::builder()
+			.uri("/mocked")
+			.body(bytes::Bytes::new())
+			.build()
+			.unwrap();
+
+		// Act
+		let response = handler.handle(request).await.unwrap();
+
+		// Assert
+		assert_eq!(response.status, http::StatusCode::OK);
+		assert_eq!(response.body, bytes::Bytes::from_static(b"/mocked"));
 	}
 }

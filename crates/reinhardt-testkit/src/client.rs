@@ -1135,6 +1135,37 @@ mod tests {
 		}
 	}
 
+	/// Handler that exposes selected request metadata through response headers.
+	struct RequestMetadataHandler;
+
+	#[async_trait]
+	impl HttpHandler for RequestMetadataHandler {
+		async fn handle(&self, request: HttpRequest) -> HttpResult<HttpResponse> {
+			let request_uri = request.uri.to_string();
+			let authorization = request
+				.headers
+				.get(http::header::AUTHORIZATION)
+				.and_then(|value| value.to_str().ok())
+				.unwrap_or("missing");
+			let cookie = request
+				.headers
+				.get(http::header::COOKIE)
+				.and_then(|value| value.to_str().ok())
+				.unwrap_or("missing");
+			let custom = request
+				.headers
+				.get("X-Custom")
+				.and_then(|value| value.to_str().ok())
+				.unwrap_or("missing");
+
+			HttpResponse::ok()
+				.try_with_header("X-Request-Uri", &request_uri)?
+				.try_with_header("X-Authorization", authorization)?
+				.try_with_header("X-Cookie", cookie)?
+				.try_with_header("X-Custom", custom)
+		}
+	}
+
 	#[rstest]
 	#[tokio::test]
 	async fn test_from_handler_basic() {
@@ -1241,6 +1272,201 @@ mod tests {
 			.get(http::header::ORIGIN)
 			.expect("Origin header not set");
 		assert_eq!(origin.to_str().unwrap(), "http://mytest");
+	}
+
+	#[rstest]
+	#[tokio::test]
+	async fn api_client_dispatches_all_public_http_methods_and_payload_formats() {
+		#[derive(Serialize)]
+		struct Payload {
+			name: &'static str,
+			count: u8,
+		}
+
+		// Arrange
+		let client = APIClient::from_handler(EchoHandler);
+		let payload = Payload {
+			name: "Ada",
+			count: 2,
+		};
+		client.set_header("X-Custom", "client-value").await.unwrap();
+		client.set_cookie("sessionid", "session-42").await.unwrap();
+
+		// Act
+		let get = client
+			.get_with_headers("/get", &[("X-Request", "get")])
+			.await
+			.unwrap();
+		let post = client.post("/post", &payload, "json").await.unwrap();
+		let put = client.put("/put", &payload, "form").await.unwrap();
+		let patch = client.patch("/patch", &payload, "json").await.unwrap();
+		let delete = client.delete("/delete").await.unwrap();
+		let head = client.head("/head").await.unwrap();
+		let options = client.options("/options").await.unwrap();
+		let raw_headers = client
+			.post_raw_with_headers(
+				"/raw-headers",
+				b"raw-body",
+				"text/plain",
+				&[("X-Raw", "yes")],
+			)
+			.await
+			.unwrap();
+		let raw = client
+			.post_raw("/raw", b"bytes", "application/octet-stream")
+			.await
+			.unwrap();
+		let form_error = match client
+			.post("/invalid-form", &vec!["not-an-object"], "form")
+			.await
+		{
+			Err(error) => error,
+			Ok(_) => panic!("expected form serialization to reject an array"),
+		};
+		let format_error = match client.post("/invalid-format", &payload, "yaml").await {
+			Err(error) => error,
+			Ok(_) => panic!("expected unsupported format to fail"),
+		};
+
+		// Assert
+		for (response, path) in [
+			(&get, "/get"),
+			(&post, "/post"),
+			(&put, "/put"),
+			(&patch, "/patch"),
+			(&delete, "/delete"),
+			(&head, "/head"),
+			(&options, "/options"),
+			(&raw_headers, "/raw-headers"),
+			(&raw, "/raw"),
+		] {
+			assert_eq!(response.status(), http::StatusCode::OK);
+			assert_eq!(response.body().as_ref(), path.as_bytes());
+			assert_eq!(response.header("X-Echo-Custom"), Some("present"));
+		}
+		assert_eq!(post.header("X-Echo-Content-Type"), Some("application/json"));
+		assert_eq!(
+			put.header("X-Echo-Content-Type"),
+			Some("application/x-www-form-urlencoded")
+		);
+		assert_eq!(
+			patch.header("X-Echo-Content-Type"),
+			Some("application/json")
+		);
+		assert_eq!(
+			raw_headers.header("X-Echo-Content-Type"),
+			Some("text/plain")
+		);
+		assert_eq!(
+			raw.header("X-Echo-Content-Type"),
+			Some("application/octet-stream")
+		);
+		assert_eq!(
+			form_error.to_string(),
+			"Request failed: Expected object for form data"
+		);
+		assert_eq!(
+			format_error.to_string(),
+			"Request failed: Unsupported format: yaml"
+		);
+		assert_eq!(form_error.is_request(), true);
+		assert_eq!(format_error.is_timeout(), false);
+		assert_eq!(format_error.is_connect(), false);
+	}
+
+	#[rstest]
+	#[tokio::test]
+	async fn api_client_manages_credentials_cookies_and_cleanup_through_requests() {
+		// Arrange
+		let client = APIClient::from_handler(RequestMetadataHandler);
+		client.set_header("X-Custom", "retained").await.unwrap();
+		client.credentials("ada", "secret").await.unwrap();
+		client.set_cookie("session", "first").await.unwrap();
+
+		// Act
+		let authenticated = client.get("/authenticated").await.unwrap();
+		client.remove_cookie("session").await.unwrap();
+		let without_cookie = client.get("/without-cookie").await.unwrap();
+		client.set_cookie("session", "second").await.unwrap();
+		client.clear_auth().await.unwrap();
+		let cleared_auth = client.get("/cleared-auth").await.unwrap();
+		client.set_header("X-MFA-Code", "123456").await.unwrap();
+		client.set_cookie("session", "third").await.unwrap();
+		client.cleanup().await;
+		let cleaned = client.get("https://example.test/cleaned").await.unwrap();
+		client.credentials("grace", "hopper").await.unwrap();
+		client.logout().await.unwrap();
+		let logged_out = client.get("/logged-out").await.unwrap();
+
+		// Assert
+		assert_eq!(
+			authenticated.header("X-Authorization"),
+			Some("Basic YWRhOnNlY3JldA==")
+		);
+		assert_eq!(authenticated.header("X-Cookie"), Some("session=first"));
+		assert_eq!(authenticated.header("X-Custom"), Some("retained"));
+		assert_eq!(without_cookie.header("X-Cookie"), Some("missing"));
+		assert_eq!(cleared_auth.header("X-Authorization"), Some("missing"));
+		assert_eq!(cleared_auth.header("X-Cookie"), Some("missing"));
+		assert_eq!(cleared_auth.header("X-Custom"), Some("retained"));
+		assert_eq!(
+			cleaned.header("X-Request-Uri"),
+			Some("https://example.test/cleaned")
+		);
+		assert_eq!(cleaned.header("X-Authorization"), Some("missing"));
+		assert_eq!(cleaned.header("X-Cookie"), Some("missing"));
+		assert_eq!(cleaned.header("X-Custom"), Some("missing"));
+		assert_eq!(logged_out.header("X-Authorization"), Some("missing"));
+	}
+
+	#[rstest]
+	#[tokio::test]
+	async fn api_client_sync_handler_and_invalid_headers_report_exact_public_results() {
+		// Arrange
+		let mut client = APIClient::new();
+		client.set_handler(|request| {
+			let method = request.method().as_str().to_string();
+			let content_type = request
+				.headers()
+				.get(http::header::CONTENT_TYPE)
+				.and_then(|value| value.to_str().ok())
+				.unwrap_or("missing")
+				.to_string();
+			Response::builder()
+				.status(http::StatusCode::CREATED)
+				.header("X-Method", method)
+				.header("X-Content-Type", content_type)
+				.body(Full::new(Bytes::from("synchronous")))
+				.unwrap()
+		});
+
+		// Act
+		let response = client
+			.post_raw("/sync", b"body", "text/plain")
+			.await
+			.unwrap();
+		let invalid_name = client
+			.set_header("invalid header", "value")
+			.await
+			.unwrap_err();
+		let invalid_value = client
+			.set_header("X-Valid", "bad\nvalue")
+			.await
+			.unwrap_err();
+
+		// Assert
+		assert_eq!(response.status(), http::StatusCode::CREATED);
+		assert_eq!(response.body().as_ref(), b"synchronous");
+		assert_eq!(response.header("X-Method"), Some("POST"));
+		assert_eq!(response.header("X-Content-Type"), Some("text/plain"));
+		assert_eq!(
+			invalid_name.to_string(),
+			"Request failed: Invalid header name: invalid header"
+		);
+		assert_eq!(invalid_name.is_request(), true);
+		assert_eq!(invalid_value.is_request(), true);
+		assert_eq!(invalid_value.is_timeout(), false);
+		assert_eq!(invalid_value.is_connect(), false);
 	}
 
 	#[rstest]

@@ -219,3 +219,134 @@ pub mod integration_helpers {
 		}
 	}
 }
+
+#[cfg(test)]
+mod tests {
+	use super::*;
+	use reinhardt_utils::staticfiles::handler::StaticError;
+
+	#[test]
+	fn test_file_setup_builders_create_exact_tree_and_cleanup_on_drop() {
+		// Arrange
+		let single = TestFileSetup::new("readme.txt", b"single");
+		let nested = TestFileSetup::with_nested_path("assets/css", "site.css", b"body {}\n");
+		let multiple = TestFileSetup::with_multiple_files(&[
+			("images/logo.svg", b"<svg/>"),
+			("scripts/app.js", b"console.log('ready');"),
+		]);
+
+		// Act
+		let single_content = fs::read(&single.file_path).unwrap();
+		let nested_content = fs::read(&nested.file_path).unwrap();
+		let multiple_content = fs::read(&multiple.file_path).unwrap();
+
+		// Assert
+		assert_eq!(single.file_path, single.temp_dir.path().join("readme.txt"));
+		assert_eq!(single.content, b"single");
+		assert_eq!(single_content, b"single");
+		assert_eq!(
+			nested.file_path,
+			nested.temp_dir.path().join("assets/css/site.css")
+		);
+		assert_eq!(nested.content, b"body {}\n");
+		assert_eq!(nested_content, b"body {}\n");
+		assert_eq!(
+			multiple.file_path,
+			multiple.temp_dir.path().join("images/logo.svg")
+		);
+		assert_eq!(multiple.content, b"<svg/>");
+		assert_eq!(multiple_content, b"<svg/>");
+		assert_eq!(
+			fs::read(multiple.temp_dir.path().join("scripts/app.js")).unwrap(),
+			b"console.log('ready');"
+		);
+
+		let cleanup_setup = TestFileSetup::new("cleanup.txt", b"remove me");
+		let cleanup_path = cleanup_setup.temp_dir.path().to_path_buf();
+		drop(cleanup_setup);
+		assert_eq!(cleanup_path.exists(), false);
+	}
+
+	#[tokio::test]
+	async fn static_integration_helpers_find_serve_and_reject_traversal() {
+		// Arrange
+		let setup = integration_helpers::IntegrationTestSetup::with_multiple_dirs();
+		let first_path = setup.create_test_file("nested/app.css", b"body { color: teal; }");
+		let second_path = setup.temp_dirs[1].path().join("images/logo.svg");
+		fs::create_dir_all(second_path.parent().unwrap()).unwrap();
+		fs::write(&second_path, b"<svg viewBox=\"0 0 1 1\"/>").unwrap();
+
+		// Act
+		let found_first = setup.finder.find("nested/app.css").unwrap();
+		let found_second = setup.finder.find("/images/logo.svg").unwrap();
+		let served = setup.handler.serve("nested/app.css").await.unwrap();
+		let missing = setup.handler.serve("missing.css").await.unwrap_err();
+		let traversal = setup.handler.serve("../secret.txt").await.unwrap_err();
+
+		// Assert
+		assert_eq!(setup.config.static_root, setup.temp_dirs[0].path());
+		assert_eq!(setup.config.static_url, "/static/");
+		assert_eq!(setup.config.staticfiles_dirs.len(), 2);
+		assert_eq!(
+			fs::read(&found_first).unwrap(),
+			fs::read(&first_path).unwrap()
+		);
+		assert_eq!(found_first.file_name().unwrap(), "app.css");
+		assert_eq!(
+			fs::read(&found_second).unwrap(),
+			fs::read(&second_path).unwrap()
+		);
+		assert_eq!(found_second.file_name().unwrap(), "logo.svg");
+		assert_eq!(fs::read(&served.path).unwrap(), b"body { color: teal; }");
+		assert_eq!(served.path.file_name().unwrap(), "app.css");
+		assert_eq!(served.content, b"body { color: teal; }");
+		assert_eq!(served.mime_type, "text/css");
+		match missing {
+			StaticError::NotFound(path) => assert_eq!(path, "missing.css"),
+			other => panic!("expected not found error, got {other:?}"),
+		}
+		match traversal {
+			StaticError::DirectoryTraversal(path) => assert_eq!(path, "../secret.txt"),
+			other => panic!("expected traversal error, got {other:?}"),
+		}
+		match setup.finder.find("../secret.txt") {
+			Err(error) => assert_eq!(error.kind(), std::io::ErrorKind::NotFound),
+			Ok(path) => panic!(
+				"expected traversal lookup to fail, found {}",
+				path.display()
+			),
+		}
+	}
+
+	#[tokio::test]
+	async fn static_helpers_build_configs_and_assert_single_directory_results() {
+		// Arrange
+		let default_config = config_helpers::create_default_config();
+		let setup = integration_helpers::IntegrationTestSetup::default();
+		let root = setup.temp_dirs[0].path().to_path_buf();
+		let custom_config = config_helpers::create_custom_config(
+			root.clone(),
+			"/assets/".into(),
+			vec![root.clone()],
+		);
+		let created = setup.create_test_file("index.html", b"<h1>static</h1>");
+
+		// Act
+		let found = setup.finder.find("index.html").unwrap();
+		let served = setup.handler.serve("index.html").await;
+		let missing = setup.handler.serve("missing.html").await;
+		let traversal = setup.handler.serve("../private.html").await;
+
+		// Assert
+		assert_eq!(default_config.static_root, PathBuf::from("static"));
+		assert_eq!(default_config.static_url, "/static/");
+		assert_eq!(default_config.staticfiles_dirs, Vec::<PathBuf>::new());
+		assert_eq!(default_config.media_url, None);
+		config_helpers::assert_config_properties(&custom_config, &root, "/assets/", 1);
+		assert_eq!(custom_config.staticfiles_dirs, vec![root]);
+		assert_eq!(fs::read(found).unwrap(), fs::read(created).unwrap());
+		assertions::assert_file_served_successfully(served, b"<h1>static</h1>");
+		assertions::assert_file_not_found_error(missing);
+		assertions::assert_directory_traversal_blocked(traversal);
+	}
+}

@@ -430,6 +430,15 @@ pub mod assert_status {
 mod tests {
 	use super::*;
 
+	#[derive(Debug)]
+	struct StatusResponse(StatusCode);
+
+	impl HasStatusCode for StatusResponse {
+		fn status_code(&self) -> StatusCode {
+			self.0
+		}
+	}
+
 	#[test]
 	fn test_should_be_ok() {
 		let result: Result<i32, &str> = Ok(42);
@@ -491,5 +500,55 @@ mod tests {
 		let result: Result<i32, String> =
 			Err("Validation errors: username is required, email is invalid".to_string());
 		assert_validation_errors(&result, &["username", "email"]);
+	}
+
+	#[test]
+	fn server_fn_result_and_response_assertions_cover_public_success_paths() {
+		// Arrange
+		let successful: Result<&str, String> = Ok("created");
+		let failing: Result<&str, String> = Err("email and username are invalid".to_string());
+		let ok = StatusResponse(StatusCode::OK);
+		let created = StatusResponse(StatusCode::CREATED);
+		let empty = StatusResponse(StatusCode::NO_CONTENT);
+		let bad_request = StatusResponse(StatusCode::BAD_REQUEST);
+		let unauthorized = StatusResponse(StatusCode::UNAUTHORIZED);
+		let forbidden = StatusResponse(StatusCode::FORBIDDEN);
+		let missing = StatusResponse(StatusCode::NOT_FOUND);
+		let conflict = StatusResponse(StatusCode::CONFLICT);
+		let invalid = StatusResponse(StatusCode::UNPROCESSABLE_ENTITY);
+		let internal = StatusResponse(StatusCode::INTERNAL_SERVER_ERROR);
+
+		// Act
+		assert_server_fn_returns(&successful, &"created");
+		assert_server_fn_error(&failing);
+		assert_server_fn_error_contains(&failing, "username");
+		assert_validation_error(&failing, "EMAIL");
+		assert_validation_errors(&failing, &["email", "username"]);
+		failing
+			.should_be_err()
+			.should_have_message("email and username are invalid");
+		let assertion = ResponseAssertion::new(created).with_status(StatusCode::CREATED);
+		assertion.should_have_status(StatusCode::CREATED);
+		assertion.should_be_success();
+		let extracted = assertion.into_value();
+
+		// Assert
+		assert_eq!(extracted.status_code(), StatusCode::CREATED);
+		assert_eq!(
+			ResponseAssertion::new(ok).value().status_code(),
+			StatusCode::OK
+		);
+		assert_status::ok(&StatusResponse(StatusCode::OK));
+		assert_status::created(&StatusResponse(StatusCode::CREATED));
+		assert_status::no_content(&empty);
+		assert_status::bad_request(&bad_request);
+		assert_status::unauthorized(&unauthorized);
+		assert_status::forbidden(&forbidden);
+		assert_status::not_found(&missing);
+		assert_status::conflict(&conflict);
+		assert_status::unprocessable_entity(&invalid);
+		assert_status::internal_error(&internal);
+		ResponseAssertion::new(bad_request).should_be_client_error();
+		ResponseAssertion::new(internal).should_be_server_error();
 	}
 }

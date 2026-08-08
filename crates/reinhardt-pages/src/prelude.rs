@@ -100,7 +100,7 @@ pub use crate::reactive::{
 	EntityValue, EntityVec, EntityWriter, LatestResourceState, LatestResourceValue,
 	LatestResourceValueBuilder, Memo, OptionalEntity, ProjectionMaterialization, ProjectionRemoval,
 	QueryClient, QueryDefaults, QueryDescriptor, QueryFamily, QueryHandle, QueryKey, QueryOptions,
-	QuerySnapshot, QueryStatus, RemovedEntities, Resource, ResourceState,
+	QuerySnapshot, QueryStatus, RemovedEntities, Resource, ResourceState, Signal,
 	use_latest_resource_value,
 };
 

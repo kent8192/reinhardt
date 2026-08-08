@@ -457,6 +457,9 @@ fn normalized_entity_api_is_available_from_root_and_prelude() {
 	let _prelude_removal = PreludeProjectionRemoval::Unchanged;
 
 	ReactiveScope::run(|| {
+		let prelude_signal = reinhardt_pages::prelude::Signal::new(0_u8);
+		assert_eq!(prelude_signal.get(), 0);
+
 		let root_arena = RootEntityArena::new(Duration::ZERO);
 		let root_handle: RootEntityHandle<Project> = root_arena.entity(1);
 		root_arena.update_entities(|entities| entities.upsert(project(1, "root")));

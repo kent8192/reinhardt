@@ -1735,6 +1735,7 @@ where
 	selected_expressions: Vec<(String, StoredExpression)>,
 	deferred_fields: Vec<String>,
 	annotations: Vec<super::annotation::Annotation>,
+	backend_annotations: Vec<super::postgres_features::BackendAnnotation>,
 	typed_annotations: Vec<StoredExpression>,
 	typed_havings: Vec<StoredExpression>,
 	manager: Option<std::sync::Arc<super::manager::Manager<T>>>,
@@ -1775,6 +1776,7 @@ where
 			selected_expressions: Vec::new(),
 			deferred_fields: Vec::new(),
 			annotations: Vec::new(),
+			backend_annotations: Vec::new(),
 			typed_annotations: Vec::new(),
 			typed_havings: Vec::new(),
 			manager: None,
@@ -1887,6 +1889,17 @@ where
 						.into_simple_expr()
 				});
 			stmt.expr_as(expression, Alias::new(&annotation.alias));
+		}
+		for annotation in &self.backend_annotations {
+			let root_alias = self.root_alias().to_owned();
+			let expression = annotation.to_sql_with_field_mapper(|field| {
+				if field.contains('.') || field.contains('(') {
+					field.to_owned()
+				} else {
+					quote_identifier(&format!("{root_alias}.{field}"))
+				}
+			});
+			stmt.expr(Expr::cust(expression));
 		}
 	}
 
@@ -2136,42 +2149,7 @@ where
 		self.typed_annotations
 			.iter()
 			.any(StoredExpression::contains_aggregate)
-			|| self
-				.annotations
-				.iter()
-				.any(|annotation| Self::annotation_value_contains_aggregate(&annotation.value))
-	}
-
-	fn annotation_value_contains_aggregate(value: &super::annotation::AnnotationValue) -> bool {
-		use super::annotation::{AnnotationValue, Expression};
-
-		match value {
-			AnnotationValue::Aggregate(_)
-			| AnnotationValue::ArrayAgg(_)
-			| AnnotationValue::StringAgg(_)
-			| AnnotationValue::JsonbAgg(_) => true,
-			AnnotationValue::Expression(expression) => match expression {
-				Expression::Add(left, right)
-				| Expression::Subtract(left, right)
-				| Expression::Multiply(left, right)
-				| Expression::Divide(left, right) => {
-					Self::annotation_value_contains_aggregate(left)
-						|| Self::annotation_value_contains_aggregate(right)
-				}
-				Expression::Case { whens, default } => {
-					whens
-						.iter()
-						.any(|when| Self::annotation_value_contains_aggregate(&when.then))
-						|| default
-							.as_deref()
-							.is_some_and(Self::annotation_value_contains_aggregate)
-				}
-				Expression::Coalesce(values) => {
-					values.iter().any(Self::annotation_value_contains_aggregate)
-				}
-			},
-			_ => false,
-		}
+			|| !self.backend_annotations.is_empty()
 	}
 
 	fn ensure_not_locking_without_transaction(&self) -> reinhardt_core::exception::Result<()> {
@@ -2534,6 +2512,7 @@ where
 			selected_expressions: Vec::new(),
 			deferred_fields: Vec::new(),
 			annotations: Vec::new(),
+			backend_annotations: Vec::new(),
 			typed_annotations: Vec::new(),
 			typed_havings: Vec::new(),
 			manager: Some(manager),
@@ -2732,7 +2711,7 @@ where
 	/// let results = QuerySet::<Book>::from_subquery(
 	///     |subq: QuerySet<Book>| {
 	///         subq.values(&["author_id"])
-	///             .annotate_legacy(Annotation::new("book_count", AnnotationValue::Aggregate(Aggregate::count_all())))
+	///             .annotate_legacy(Annotation::new("book_count", AnnotationValue::Value(Value::Int(0))))
 	///     },
 	///     "book_stats"
 	/// )
@@ -2772,6 +2751,7 @@ where
 			selected_expressions: Vec::new(),
 			deferred_fields: Vec::new(),
 			annotations: Vec::new(),
+			backend_annotations: Vec::new(),
 			typed_annotations: Vec::new(),
 			typed_havings: Vec::new(),
 			manager: None,
@@ -5306,40 +5286,6 @@ where
 			super::annotation::AnnotationValue::Field(field) => {
 				Some(Expr::col(self.root_column_reference(&field.field)).into_simple_expr())
 			}
-			super::annotation::AnnotationValue::Aggregate(aggregate) => {
-				let field_expression = |field: Option<&str>| match field {
-					None | Some("*") => Expr::asterisk().into_simple_expr(),
-					Some(field) => Expr::col(self.root_column_reference(field)).into_simple_expr(),
-				};
-				if aggregate.distinct {
-					let field = aggregate.field.as_deref()?;
-					return Some(SimpleExpr::CustomWithExpr(
-						format!("{}(DISTINCT ?)", aggregate.func),
-						vec![field_expression(Some(field))],
-					));
-				}
-				let expression = match &aggregate.func {
-					super::aggregation::AggregateFunc::Count => {
-						Func::count(field_expression(aggregate.field.as_deref()))
-					}
-					super::aggregation::AggregateFunc::Sum => {
-						Func::sum(field_expression(aggregate.field.as_deref()))
-					}
-					super::aggregation::AggregateFunc::Avg => {
-						Func::avg(field_expression(aggregate.field.as_deref()))
-					}
-					super::aggregation::AggregateFunc::Max => {
-						Func::max(field_expression(aggregate.field.as_deref()))
-					}
-					super::aggregation::AggregateFunc::Min => {
-						Func::min(field_expression(aggregate.field.as_deref()))
-					}
-					super::aggregation::AggregateFunc::CountDistinct => {
-						Func::count(field_expression(aggregate.field.as_deref()))
-					}
-				};
-				Some(expression)
-			}
 			_ => None,
 		}
 	}
@@ -5347,50 +5293,11 @@ where
 	fn annotation_value_to_select_sql(&self, value: &super::annotation::AnnotationValue) -> String {
 		if self.has_joined_tables() {
 			match value {
-				super::annotation::AnnotationValue::Aggregate(aggregate)
-					if let Some(field) = aggregate.field.as_deref() =>
-				{
-					let distinct = if aggregate.distinct { "DISTINCT " } else { "" };
-					let field_sql =
-						if matches!(aggregate.func, super::aggregation::AggregateFunc::Count)
-							&& field == "*"
-						{
-							"*".to_string()
-						} else {
-							quote_identifier(&format!("{}.{}", self.root_alias(), field))
-						};
-					return format!("{}({}{})", aggregate.func, distinct, field_sql);
-				}
 				super::annotation::AnnotationValue::Field(field) => {
 					return self.annotation_field_to_select_sql(field);
 				}
 				super::annotation::AnnotationValue::Expression(expression) => {
 					return self.annotation_expression_to_select_sql(expression);
-				}
-				super::annotation::AnnotationValue::ArrayAgg(aggregate) => {
-					return aggregate.to_sql_with_field_mapper(|field| {
-						self.annotation_root_field_to_select_sql(field)
-					});
-				}
-				super::annotation::AnnotationValue::StringAgg(aggregate) => {
-					return aggregate.to_sql_with_field_mapper(|field| {
-						self.annotation_root_field_to_select_sql(field)
-					});
-				}
-				super::annotation::AnnotationValue::JsonbAgg(aggregate) => {
-					return aggregate.to_sql_with_field_mapper(|field| {
-						self.annotation_root_field_to_select_sql(field)
-					});
-				}
-				super::annotation::AnnotationValue::JsonbBuildObject(builder) => {
-					return builder.to_sql_with_field_mapper(|field| {
-						self.annotation_root_field_to_select_sql(field)
-					});
-				}
-				super::annotation::AnnotationValue::TsRank(rank) => {
-					return rank.to_sql_with_field_mapper(|field| {
-						self.annotation_root_field_to_select_sql(field)
-					});
 				}
 				_ => {}
 			}
@@ -9085,13 +8992,10 @@ where
 	/// #     fn set_primary_key(&mut self, value: Self::PrimaryKey) { self.id = Some(value); }
 	/// # }
 	/// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
-	/// use reinhardt_db::orm::annotation::{Annotation, AnnotationValue};
-	/// use reinhardt_db::orm::aggregation::Aggregate;
+	/// use reinhardt_db::orm::annotation::{Annotation, AnnotationValue, Value};
 	///
-	/// // Add aggregate annotation
 	/// let users = User::objects()
-	///     .annotate_legacy(Annotation::new("total_orders",
-	///         AnnotationValue::Aggregate(Aggregate::count(Some("orders")))))
+	///     .annotate_legacy(Annotation::new("display_name", AnnotationValue::Value(Value::String("user".into()))))
 	///     .all()
 	///     .await?;
 	/// # Ok(())
@@ -9135,6 +9039,34 @@ where
 		}
 		self.typed_annotations
 			.push(expression.into_stored_expression());
+		Ok(self)
+	}
+
+	/// Adds a PostgreSQL-only projection outside the portable annotation tree.
+	pub fn annotate_backend(
+		mut self,
+		annotation: super::postgres_features::BackendAnnotation,
+	) -> reinhardt_core::exception::Result<Self> {
+		let label = annotation.label().to_owned();
+		validate_annotation_label(&label)?;
+		if T::field_metadata()
+			.into_iter()
+			.any(|field| field.name == label || field.db_column_name() == label)
+			|| self.annotations.iter().any(|item| item.alias == label)
+			|| self
+				.typed_annotations
+				.iter()
+				.any(|item| item.label.as_deref() == Some(&label))
+			|| self
+				.backend_annotations
+				.iter()
+				.any(|item| item.label() == label)
+		{
+			return Err(Error::Validation(format!(
+				"annotation label `{label}` is already in use"
+			)));
+		}
+		self.backend_annotations.push(annotation);
 		Ok(self)
 	}
 
@@ -10146,6 +10078,24 @@ pub(crate) fn quote_identifier(field: &str) -> String {
 	} else {
 		quote_single(field)
 	}
+}
+
+/// Validates an annotation label using the same identifier policy as typed annotations.
+pub(crate) fn validate_annotation_label(label: &str) -> reinhardt_core::exception::Result<()> {
+	if label.is_empty()
+		|| !label
+			.chars()
+			.all(|character| character.is_alphanumeric() || character == '_')
+		|| label
+			.chars()
+			.next()
+			.is_some_and(|character| character.is_numeric())
+	{
+		return Err(Error::Validation(format!(
+			"annotation label `{label}` is not a valid identifier"
+		)));
+	}
+	Ok(())
 }
 
 fn filter_lhs_expr(filter: &Filter) -> Expr {
@@ -11882,9 +11832,8 @@ mod tests {
 
 	#[rstest]
 	#[tokio::test]
-	async fn mysql_explain_renders_field_and_aggregate_annotations_with_mysql_identifiers() {
-		use crate::orm::aggregation::Aggregate;
-		use crate::orm::annotation::{Annotation, AnnotationValue};
+	async fn mysql_explain_renders_field_annotations_with_mysql_identifiers() {
+		use crate::orm::annotation::{Annotation, AnnotationValue, Value};
 		use crate::orm::expressions::F;
 
 		let queryset = QuerySet::<TestUser>::new()
@@ -11894,11 +11843,7 @@ mod tests {
 			))
 			.annotate_legacy(Annotation::new(
 				"user_count",
-				AnnotationValue::Aggregate(Aggregate::count(Some("id"))),
-			))
-			.annotate_legacy(Annotation::new(
-				"distinct_user_count",
-				AnnotationValue::Aggregate(Aggregate::count_distinct("id")),
+				AnnotationValue::Value(Value::Int(0)),
 			));
 		let mut executor = ExplainRecordingExecutor::new(DatabaseBackend::MySql, Vec::new());
 
@@ -14102,9 +14047,9 @@ mod tests {
 
 	#[test]
 	fn test_relation_filter_qualifies_postgres_annotation_fields() {
-		use crate::orm::annotation::{Annotation, AnnotationValue};
 		use crate::orm::postgres_features::{
-			ArrayAgg, JsonbAgg, JsonbBuildObject, StringAgg, TsRank,
+			ArrayAgg, BackendAnnotation, BackendAnnotationValue, JsonbAgg, JsonbBuildObject,
+			StringAgg, TsRank,
 		};
 
 		let related_filter =
@@ -14116,29 +14061,56 @@ mod tests {
 
 		let sql = QuerySet::<TestUser>::new()
 			.filter(related_filter)
-			.annotate_legacy(Annotation::field(
-				"ids",
-				AnnotationValue::ArrayAgg(ArrayAgg::<serde_json::Value>::new("id".to_string())),
-			))
-			.annotate_legacy(Annotation::field(
-				"names",
-				AnnotationValue::StringAgg(StringAgg::new("username".to_string(), ",".to_string())),
-			))
-			.annotate_legacy(Annotation::field(
-				"metadata_values",
-				AnnotationValue::JsonbAgg(JsonbAgg::new("metadata".to_string())),
-			))
-			.annotate_legacy(Annotation::field(
-				"payload",
-				AnnotationValue::JsonbBuildObject(JsonbBuildObject::new().add("user_id", "id")),
-			))
-			.annotate_legacy(Annotation::field(
-				"rank",
-				AnnotationValue::TsRank(TsRank::new(
-					"search_vector".to_string(),
-					"rust".to_string(),
-				)),
-			))
+			.annotate_backend(
+				BackendAnnotation::new(
+					"ids",
+					BackendAnnotationValue::ArrayAgg(ArrayAgg::<serde_json::Value>::new(
+						"id".to_string(),
+					)),
+				)
+				.unwrap(),
+			)
+			.expect("ids annotation")
+			.annotate_backend(
+				BackendAnnotation::new(
+					"names",
+					BackendAnnotationValue::StringAgg(StringAgg::new(
+						"username".to_string(),
+						",".to_string(),
+					)),
+				)
+				.unwrap(),
+			)
+			.expect("names annotation")
+			.annotate_backend(
+				BackendAnnotation::new(
+					"metadata_values",
+					BackendAnnotationValue::JsonbAgg(JsonbAgg::new("metadata".to_string())),
+				)
+				.unwrap(),
+			)
+			.expect("metadata annotation")
+			.annotate_backend(
+				BackendAnnotation::new(
+					"payload",
+					BackendAnnotationValue::JsonbBuildObject(
+						JsonbBuildObject::new().add("user_id", "id"),
+					),
+				)
+				.unwrap(),
+			)
+			.expect("payload annotation")
+			.annotate_backend(
+				BackendAnnotation::new(
+					"rank",
+					BackendAnnotationValue::TsRank(TsRank::new(
+						"search_vector".to_string(),
+						"rust".to_string(),
+					)),
+				)
+				.unwrap(),
+			)
+			.expect("rank annotation")
 			.to_sql()
 			.expect("query SQL should compile");
 

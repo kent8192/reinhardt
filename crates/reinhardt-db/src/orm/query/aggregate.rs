@@ -6,7 +6,7 @@ use crate::orm::aggregation::{AggregateDateTime, AggregateResult, AggregateValue
 use crate::orm::connection::{DatabaseBackend, OrmExecutor, QueryValue, Row, TransactionExecutor};
 use crate::orm::field_codec::DatabaseStorageKind;
 use crate::orm::query_fields::expression::node::{
-	AggregateFunction, ExpressionNode, StoredExpression,
+	ExpressionNode, StoredExpression, TypedAggregateFn,
 };
 use crate::orm::query_fields::expression::operand::AggregateOperation;
 use crate::orm::query_fields::{AggregateKind, LabeledExpression};
@@ -230,7 +230,10 @@ where
 	// Keep query-shape diagnostics deterministic: queryset state is checked
 	// before expression metadata, in the documented annotation/group/HAVING/
 	// locking order.
-	if !queryset.annotations.is_empty() || !queryset.typed_annotations.is_empty() {
+	if !queryset.annotations.is_empty()
+		|| !queryset.backend_annotations.is_empty()
+		|| !queryset.typed_annotations.is_empty()
+	{
 		return Err(unsupported_aggregate_shape(
 			"terminal aggregate cannot run on a QuerySet containing annotations",
 		));
@@ -518,7 +521,7 @@ fn empty_aggregate_result<T>(
 	let mut result = AggregateResult::new();
 	for expression in expressions {
 		let stored = expression.clone().into_stored_expression();
-		let value = if stored.aggregate_function == Some(AggregateFunction::Count) {
+		let value = if stored.aggregate_function == Some(TypedAggregateFn::Count) {
 			AggregateValue::Integer(0)
 		} else {
 			AggregateValue::Null
@@ -562,11 +565,11 @@ fn normalize_aggregate_value(
 	stored: &StoredExpression,
 	raw: QueryValue,
 	label: &str,
-	function: AggregateFunction,
+	function: TypedAggregateFn,
 	backend: DatabaseBackend,
 ) -> Result<AggregateValue> {
 	if matches!(raw, QueryValue::Null) {
-		if function == AggregateFunction::Count {
+		if function == TypedAggregateFn::Count {
 			return Err(serialization_error(
 				function_name(function),
 				label,
@@ -577,7 +580,7 @@ fn normalize_aggregate_value(
 		return Ok(AggregateValue::Null);
 	}
 	match function {
-		AggregateFunction::Count => match raw {
+		TypedAggregateFn::Count => match raw {
 			QueryValue::Int(value) => Ok(AggregateValue::Integer(value)),
 			other => Err(unexpected_value_error(
 				function_name(function),
@@ -587,7 +590,7 @@ fn normalize_aggregate_value(
 				"Integer",
 			)),
 		},
-		AggregateFunction::Sum | AggregateFunction::Avg => match stored.output {
+		TypedAggregateFn::Sum | TypedAggregateFn::Avg => match stored.output {
 			Some(crate::orm::query_fields::AggregateOutputKind::I64) => {
 				integer_sum(raw, label, function, backend)
 			}
@@ -604,7 +607,7 @@ fn normalize_aggregate_value(
 				"aggregate output storage kind is missing",
 			)),
 		},
-		AggregateFunction::Min | AggregateFunction::Max => {
+		TypedAggregateFn::Min | TypedAggregateFn::Max => {
 			let storage_kind = stored.aggregate_storage_kind.ok_or_else(|| {
 				serialization_error(
 					function_name(function),
@@ -621,7 +624,7 @@ fn normalize_aggregate_value(
 fn integer_sum(
 	raw: QueryValue,
 	label: &str,
-	function: AggregateFunction,
+	function: TypedAggregateFn,
 	backend: DatabaseBackend,
 ) -> Result<AggregateValue> {
 	let value = match raw {
@@ -644,7 +647,7 @@ fn integer_sum(
 fn float_aggregate(
 	raw: QueryValue,
 	label: &str,
-	function: AggregateFunction,
+	function: TypedAggregateFn,
 	backend: DatabaseBackend,
 ) -> Result<AggregateValue> {
 	let value = match raw {
@@ -665,7 +668,7 @@ fn float_aggregate(
 fn decimal_aggregate(
 	raw: QueryValue,
 	label: &str,
-	function: AggregateFunction,
+	function: TypedAggregateFn,
 	backend: DatabaseBackend,
 ) -> Result<AggregateValue> {
 	let value = match raw {
@@ -686,7 +689,7 @@ fn normalize_storage_value(
 	raw: QueryValue,
 	storage_kind: DatabaseStorageKind,
 	label: &str,
-	function: AggregateFunction,
+	function: TypedAggregateFn,
 	backend: DatabaseBackend,
 ) -> Result<AggregateValue> {
 	let unexpected = |expected: &str, raw: QueryValue| {
@@ -786,13 +789,13 @@ fn parse_datetime(value: &str) -> std::result::Result<DateTime<Utc>, chrono::Par
 	DateTime::parse_from_rfc3339(value).map(|value| value.with_timezone(&Utc))
 }
 
-fn function_name(function: AggregateFunction) -> &'static str {
+fn function_name(function: TypedAggregateFn) -> &'static str {
 	match function {
-		AggregateFunction::Count => "COUNT",
-		AggregateFunction::Sum => "SUM",
-		AggregateFunction::Avg => "AVG",
-		AggregateFunction::Min => "MIN",
-		AggregateFunction::Max => "MAX",
+		TypedAggregateFn::Count => "COUNT",
+		TypedAggregateFn::Sum => "SUM",
+		TypedAggregateFn::Avg => "AVG",
+		TypedAggregateFn::Min => "MIN",
+		TypedAggregateFn::Max => "MAX",
 	}
 }
 
@@ -831,7 +834,7 @@ mod tests {
 			raw,
 			storage_kind,
 			"value",
-			AggregateFunction::Min,
+			TypedAggregateFn::Min,
 			DatabaseBackend::Postgres,
 		)
 		.expect("fixture value should match its storage kind")

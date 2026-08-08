@@ -708,9 +708,9 @@ async fn complex_user_query() -> Result<Vec<User>, Box<dyn std::error::Error>> {
 	let email_lower = Lower::new(User::field_email().into());
 	let username_upper = Upper::new(User::field_username().into());
 
-	// Aggregations using field accessors
-	let user_count = Aggregate::count(User::field_id().into());
-	let latest_joined = Aggregate::max(User::field_date_joined().into());
+	// Aggregations using generated field accessors
+	let user_count = func::count_all::<User>().label("user_count")?;
+	let latest_joined = func::max(User::field_date_joined()).label("latest_joined")?;
 
 	// Window functions for ranking
 	let rank_by_join_date = Window::new()

@@ -1300,20 +1300,16 @@ impl<M: Model> Manager<M> {
 
 	/// Add annotation to QuerySet
 	///
-	/// Adds a computed field to each record using SQL expressions or aggregations.
+	/// Starts a QuerySet for adding typed computed fields.
 	/// Corresponds to Django's QuerySet.annotate().
 	///
 	/// # Examples
 	///
 	/// ```ignore
-	/// use reinhardt_db::orm::annotation::{Annotation, AnnotationValue};
-	/// use reinhardt_db::orm::aggregation::Aggregate;
+	/// use reinhardt_db::orm::func;
 	///
-	/// let users = User::objects()
-	///     .annotate(Annotation::new("total_orders",
-	///         AnnotationValue::Aggregate(Aggregate::count(Some("orders")))))
-	///     .all()
-	///     .await?;
+	/// let display_name = func::literal("user").label("display_name")?;
+	/// let users = User::objects().all().annotate(display_name)?.all().await?;
 	/// ```
 	pub fn annotate(&self, annotation: super::annotation::Annotation) -> QuerySet<M> {
 		QuerySet::new().annotate_legacy(annotation)

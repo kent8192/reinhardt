@@ -830,9 +830,9 @@ async fn terminal_aggregate_rejects_annotations_and_locking_shapes() {
 	let aggregate = func::count_all::<TypedAnnotationRecord>()
 		.label("record_count")
 		.expect("valid label");
-	let annotated = TypedAnnotationRecord::objects().annotate(Annotation::new(
+	let annotated = TypedAnnotationRecord::objects().annotate_legacy(Annotation::new(
 		"legacy_count",
-		AnnotationValue::Aggregate(Aggregate::count_all()),
+		AnnotationValue::Value(crate::orm::annotation::Value::Int(0)),
 	));
 	let mut executor = RecordingExecutor::postgres();
 	let annotation_error = annotated

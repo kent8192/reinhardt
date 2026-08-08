@@ -1,9 +1,7 @@
 //! Tests for ORM model fields: expressions, aggregation, annotation,
 //! transaction, window functions, and validators.
 
-use reinhardt_db::orm::aggregation::{
-	Aggregate, AggregateFunc, AggregateResult, AggregateValue, validate_identifier,
-};
+use reinhardt_db::orm::aggregation::{AggregateResult, AggregateValue};
 use reinhardt_db::orm::annotation::{Annotation, AnnotationValue, Value, When};
 use reinhardt_db::orm::expressions::{Exists, F, OuterRef, Q, Subquery};
 use reinhardt_db::orm::fields::{
@@ -360,150 +358,6 @@ fn savepoint_rejects_numeric_start() {
 }
 
 // =============================================================================
-// AggregateFunc tests
-// =============================================================================
-
-#[rstest]
-#[case(AggregateFunc::Count, "COUNT")]
-#[case(AggregateFunc::CountDistinct, "COUNT")]
-#[case(AggregateFunc::Sum, "SUM")]
-#[case(AggregateFunc::Avg, "AVG")]
-#[case(AggregateFunc::Max, "MAX")]
-#[case(AggregateFunc::Min, "MIN")]
-fn aggregate_func_display(#[case] func: AggregateFunc, #[case] expected: &str) {
-	// Arrange (provided by case parameters)
-
-	// Act
-	let display = format!("{}", func);
-
-	// Assert
-	assert_eq!(display, expected);
-}
-
-// =============================================================================
-// Aggregate tests
-// =============================================================================
-
-#[rstest]
-fn aggregate_count_with_field() {
-	// Arrange
-
-	// Act
-	let agg = Aggregate::count(Some("id"));
-
-	// Assert
-	assert_eq!(agg.to_sql(), "COUNT(id)");
-}
-
-#[rstest]
-fn aggregate_count_all() {
-	// Arrange
-
-	// Act
-	let agg = Aggregate::count_all();
-
-	// Assert
-	assert_eq!(agg.to_sql(), "COUNT(*)");
-}
-
-#[rstest]
-fn aggregate_count_distinct() {
-	// Arrange
-
-	// Act
-	let agg = Aggregate::count_distinct("user_id");
-
-	// Assert
-	assert_eq!(agg.to_sql(), "COUNT(DISTINCT user_id)");
-	assert!(agg.distinct);
-}
-
-#[rstest]
-fn aggregate_sum() {
-	// Arrange
-
-	// Act
-	let agg = Aggregate::sum("amount");
-
-	// Assert
-	assert_eq!(agg.to_sql(), "SUM(amount)");
-}
-
-#[rstest]
-fn aggregate_avg() {
-	// Arrange
-
-	// Act
-	let agg = Aggregate::avg("score");
-
-	// Assert
-	assert_eq!(agg.to_sql(), "AVG(score)");
-}
-
-#[rstest]
-fn aggregate_max() {
-	// Arrange
-
-	// Act
-	let agg = Aggregate::max("price");
-
-	// Assert
-	assert_eq!(agg.to_sql(), "MAX(price)");
-}
-
-#[rstest]
-fn aggregate_min() {
-	// Arrange
-
-	// Act
-	let agg = Aggregate::min("age");
-
-	// Assert
-	assert_eq!(agg.to_sql(), "MIN(age)");
-}
-
-#[rstest]
-fn aggregate_with_alias() {
-	// Arrange
-
-	// Act
-	let agg = Aggregate::sum("amount").with_alias("total_amount");
-
-	// Assert
-	assert_eq!(agg.to_sql(), "SUM(amount) AS total_amount");
-}
-
-#[rstest]
-fn aggregate_to_sql_expr_without_alias() {
-	// Arrange
-	let agg = Aggregate::sum("amount").with_alias("total_amount");
-
-	// Act
-	let expr_sql = agg.to_sql_expr();
-
-	// Assert
-	assert_eq!(expr_sql, "SUM(amount)");
-}
-
-#[rstest]
-#[should_panic(expected = "Invalid field name")]
-fn aggregate_rejects_invalid_field() {
-	// Arrange
-
-	// Act
-	Aggregate::sum("amount; DROP TABLE users");
-}
-
-#[rstest]
-#[should_panic(expected = "Invalid alias")]
-fn aggregate_rejects_invalid_alias() {
-	// Arrange
-
-	// Act
-	Aggregate::sum("amount").with_alias("total; DROP TABLE");
-}
-
-// =============================================================================
 // AggregateResult / AggregateValue tests
 // =============================================================================
 
@@ -539,29 +393,6 @@ fn aggregate_result_default() {
 
 	// Assert
 	assert!(result.is_empty());
-}
-
-// =============================================================================
-// validate_identifier tests
-// =============================================================================
-
-#[rstest]
-#[case("user_id", true)]
-#[case("name123", true)]
-#[case("_internal", true)]
-#[case("*", true)]
-#[case("", false)]
-#[case("123invalid", false)]
-#[case("user-id", false)]
-#[case("user; DROP TABLE", false)]
-fn validate_identifier_cases(#[case] input: &str, #[case] should_be_ok: bool) {
-	// Arrange (provided by case parameters)
-
-	// Act
-	let result = validate_identifier(input);
-
-	// Assert
-	assert_eq!(result.is_ok(), should_be_ok);
 }
 
 // =============================================================================
@@ -655,15 +486,8 @@ fn annotation_with_field_reference() {
 
 #[rstest]
 fn annotation_with_aggregate() {
-	// Arrange
-	let agg = Aggregate::count_all();
-	let annotation = Annotation::new("item_count", AnnotationValue::Aggregate(agg));
-
-	// Act
-	let sql = annotation.to_sql();
-
-	// Assert
-	assert_eq!(sql, "COUNT(*) AS \"item_count\"");
+	let annotation = Annotation::new("item_count", AnnotationValue::Value(Value::Int(0)));
+	assert_eq!(annotation.to_sql(), "0 AS \"item_count\"");
 }
 
 #[rstest]

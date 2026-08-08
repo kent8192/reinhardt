@@ -239,10 +239,7 @@ pub use vector::{MAX_DENSE_VECTOR_DIMENSIONS, Vector, VectorError};
 pub use paste;
 
 // Core exports - always available
-pub use aggregation::{
-	Aggregate, AggregateDateTime, AggregateFunc, AggregateResult, AggregateValue,
-};
-pub use annotation::{Annotation, AnnotationValue, Expression, Value, When};
+pub use aggregation::{AggregateDateTime, AggregateResult, AggregateValue};
 pub use connection::{
 	DatabaseBackend, DatabaseConnection, DatabaseConnectionLease, OrmExecutor, QueryResult,
 	QueryRow, QueryValue, Row, RowLockCapabilities, RowStream, TransactionExecutor,
@@ -304,7 +301,8 @@ pub use postgres_fields::{
 
 // PostgreSQL-specific advanced features
 pub use postgres_features::{
-	ArrayAgg, ArrayOverlap, FullTextSearch, JsonbAgg, JsonbBuildObject, StringAgg, TsRank,
+	ArrayAgg, ArrayOverlap, BackendAnnotation, BackendAnnotationValue, FullTextSearch, JsonbAgg,
+	JsonbBuildObject, StringAgg, TsRank,
 };
 
 // File field types

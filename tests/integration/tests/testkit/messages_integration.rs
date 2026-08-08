@@ -39,6 +39,16 @@ fn message_mixin_delegates_success_and_rejection_paths() {
 	let wrong_order = preserving
 		.assert_messages(&ordered_messages, &ordered_expected, true)
 		.unwrap_err();
+	let wrong_tags = preserving
+		.assert_messages_with_tags(
+			&messages,
+			&[(
+				Level::Success,
+				"Profile saved".to_string(),
+				vec!["other".to_string()],
+			)],
+		)
+		.unwrap_err();
 	let preserved = preserving.filter_stack_trace(stack_trace);
 	let filtered = filtering.filter_stack_trace(stack_trace);
 
@@ -57,6 +67,10 @@ fn message_mixin_delegates_success_and_rejection_paths() {
 	assert_eq!(
 		wrong_order.to_string(),
 		"Order mismatch: expected [\"First message\", \"Second message\"], got [\"Second message\", \"First message\"]"
+	);
+	assert_eq!(
+		wrong_tags.to_string(),
+		"Message not found: Message with level Success, text 'Profile saved', and tags [\"other\"] not found"
 	);
 	assert_eq!(preserved, stack_trace);
 	assert_eq!(filtered, "at app::handler\nat main");

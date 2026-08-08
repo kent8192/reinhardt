@@ -92,7 +92,10 @@ async fn static_helpers_build_configs_and_assert_single_directory_results() {
 	let found = setup.finder.find("index.html").unwrap();
 	let served = setup.handler.serve("index.html").await;
 	let missing = setup.handler.serve("missing.html").await;
+	let missing_for_success_rejection = setup.handler.serve("missing.html").await;
 	let traversal = setup.handler.serve(&traversal_path).await;
+	let served_for_not_found_rejection = setup.handler.serve("index.html").await;
+	let served_for_traversal_rejection = setup.handler.serve("index.html").await;
 
 	// Assert
 	assert_eq!(default_config.static_root, PathBuf::from("static"));
@@ -102,6 +105,24 @@ async fn static_helpers_build_configs_and_assert_single_directory_results() {
 	config_helpers::assert_config_properties(&custom_config, &root, "/assets/", 1);
 	assert_eq!(custom_config.staticfiles_dirs, vec![root]);
 	assert_eq!(fs::read(found).unwrap(), fs::read(created).unwrap());
+	let success_assertion_rejection =
+		std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+			assertions::assert_file_served_successfully(
+				missing_for_success_rejection,
+				b"wrong content",
+			)
+		}));
+	let not_found_assertion_rejection =
+		std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+			assertions::assert_file_not_found_error(served_for_not_found_rejection)
+		}));
+	let traversal_assertion_rejection =
+		std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+			assertions::assert_directory_traversal_blocked(served_for_traversal_rejection)
+		}));
+	assert!(success_assertion_rejection.is_err());
+	assert!(not_found_assertion_rejection.is_err());
+	assert!(traversal_assertion_rejection.is_err());
 	assertions::assert_file_served_successfully(served, b"<h1>static</h1>");
 	assertions::assert_file_not_found_error(missing);
 	assertions::assert_directory_traversal_blocked(traversal);

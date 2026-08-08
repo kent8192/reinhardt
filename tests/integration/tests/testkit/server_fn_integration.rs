@@ -60,7 +60,13 @@ fn server_fn_context_builds_overrides_auth_headers_and_expected_results() {
 		Some("request-cookie")
 	);
 	assert!(env.is_authenticated());
-	assert!(env.user_id().is_some());
+	let session_user_id = env
+		.mock_session
+		.as_ref()
+		.and_then(|session| session.user.as_ref())
+		.map(|user| user.id);
+	assert_eq!(session_user_id, Some(env.test_user.as_ref().unwrap().id));
+	assert_eq!(env.user_id(), session_user_id);
 	assert!(env.has_permission("orders:read"));
 	assert!(!env.has_permission("orders:delete"));
 	assert!(env.has_role("operator"));

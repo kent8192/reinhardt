@@ -1300,6 +1300,7 @@ mod tests {
 			"Request failed: Invalid header name: invalid header"
 		);
 		assert_eq!(invalid_name.is_request(), true);
+		assert!(matches!(&invalid_value, ClientError::InvalidHeaderValue(_)));
 		assert_eq!(invalid_value.is_request(), true);
 		assert_eq!(invalid_value.is_timeout(), false);
 		assert_eq!(invalid_value.is_connect(), false);

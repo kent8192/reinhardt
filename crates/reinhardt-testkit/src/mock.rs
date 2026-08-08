@@ -586,6 +586,10 @@ mod tests {
 			Some(vec![json!("wrapped-call")])
 		);
 		assert_eq!(Spy::wrap(7_u8).into_inner(), Some(7));
+		mock.returns("queued-after-reset".to_string()).await;
+		mock.reset().await;
+		assert_eq!(mock.call(vec![]).await, Some("fallback".to_string()));
+		assert_eq!(mock.get_calls().await.len(), 1);
 		mock.reset().await;
 		spy.reset().await;
 		assert_eq!(mock.get_calls().await.len(), 0);

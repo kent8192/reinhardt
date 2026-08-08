@@ -12,7 +12,10 @@ impl Handler for EchoHandler {
 	async fn handle(&self, request: Request) -> reinhardt_http::Result<Response> {
 		let path = request.uri.path().to_string();
 		let method = request.method.as_str().to_string();
-		let has_custom = request.headers.get("X-Custom").is_some();
+		let custom_header = request
+			.headers
+			.get("X-Custom")
+			.and_then(|value| value.to_str().ok());
 		let content_type = request
 			.headers
 			.get("Content-Type")
@@ -38,8 +41,8 @@ impl Handler for EchoHandler {
 		response = response.try_with_header("X-Echo-X-Raw", raw_header)?;
 		response = response.try_with_header("X-Echo-Body", &body)?;
 
-		if has_custom {
-			response = response.try_with_header("X-Echo-Custom", "present")?;
+		if let Some(custom_header) = custom_header {
+			response = response.try_with_header("X-Echo-Custom", custom_header)?;
 		}
 		if !content_type.is_empty() {
 			response = response.try_with_header("X-Echo-Content-Type", &content_type)?;
@@ -147,7 +150,7 @@ async fn api_client_dispatches_all_public_http_methods_and_payload_formats() {
 		assert_eq!(response.status(), http::StatusCode::OK);
 		assert_eq!(response.body().as_ref(), path.as_bytes());
 		assert_eq!(response.header("X-Echo-Method"), Some(method));
-		assert_eq!(response.header("X-Echo-Custom"), Some("present"));
+		assert_eq!(response.header("X-Echo-Custom"), Some("client-value"));
 	}
 	assert_eq!(post.header("X-Echo-Content-Type"), Some("application/json"));
 	assert_eq!(get.header("X-Echo-X-Request"), Some("get"));

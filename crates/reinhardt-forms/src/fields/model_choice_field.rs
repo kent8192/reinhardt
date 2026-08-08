@@ -512,7 +512,12 @@ impl<T: FormModel> FormField for ModelMultipleChoiceField<T> {
 				if a.len() != b.len() {
 					return true;
 				}
-				a.iter().zip(b.iter()).any(|(x, y)| x != y)
+
+				let mut initial_values: Vec<_> = a.iter().map(Value::to_string).collect();
+				let mut submitted_values: Vec<_> = b.iter().map(Value::to_string).collect();
+				initial_values.sort_unstable();
+				submitted_values.sort_unstable();
+				initial_values != submitted_values
 			}
 			(Some(a), Some(b)) => a != b,
 		}
@@ -780,7 +785,7 @@ mod tests {
 			json!([]),
 		);
 		assert!(!multiple.has_changed(Some(&json!(["1", "2"])), Some(&json!(["1", "2"]))));
-		assert!(multiple.has_changed(Some(&json!(["1", "2"])), Some(&json!(["2", "1"]))));
+		assert!(!multiple.has_changed(Some(&json!(["1", "2"])), Some(&json!(["2", "1"]))));
 		assert!(multiple.has_changed(Some(&json!(["1", "1"])), Some(&json!(["1"]))));
 
 		let string_single = ModelChoiceField::new(

@@ -1951,6 +1951,132 @@ mod entity_removal {
 
 	#[test]
 	#[serial(entity_removal)]
+	fn missing_completion_and_invalidation_start_only_one_follow_up_refetch() {
+		ReactiveScope::run(|| {
+			let runtime = TestQueryRuntime::new();
+			let client = QueryClient::with_runtime(
+				QueryDefaults::default().stale_time(Duration::from_secs(60)),
+				runtime.handle(),
+			);
+			let ready = Rc::new(Cell::new(false));
+			let calls = Rc::new(Cell::new(0));
+			let family = QueryFamily::<(), Project, String>::new(
+				"tests.entity-removal-missing-invalidation-race",
+			);
+			let descriptor = family
+				.query((), {
+					let ready = Rc::clone(&ready);
+					let calls = Rc::clone(&calls);
+					move || {
+						let call = calls.get();
+						calls.set(call + 1);
+						RemovalGate {
+							ready: Rc::clone(&ready),
+							reset_ready_on_completion: call == 0,
+							result: Some(Ok(project(1, if call == 0 { "older" } else { "fresh" }))),
+						}
+					}
+				})
+				.with_entities(EntityValue::new());
+			let query = client.observe(descriptor.clone(), QueryOptions::new());
+
+			client.remove_entity::<Project>(&1);
+			client.invalidate(descriptor.key());
+			ready.set(true);
+			runtime.run_until_stalled();
+
+			assert_eq!(calls.get(), 2);
+			assert_eq!(runtime.pending_task_count(), 1);
+
+			runtime.run_until_stalled();
+			assert_eq!(calls.get(), 2);
+			assert_eq!(runtime.pending_task_count(), 1);
+
+			ready.set(true);
+			runtime.run_until_stalled();
+			assert_eq!(calls.get(), 2);
+			assert_eq!(query.data(), Some(project(1, "fresh")));
+			assert!(!query.is_stale());
+		});
+	}
+
+	#[test]
+	#[serial(entity_removal)]
+	fn canceled_recovery_allows_remount_follow_up_after_newer_tombstone() {
+		ReactiveScope::run(|| {
+			let runtime = TestQueryRuntime::new();
+			let client = QueryClient::with_runtime(
+				QueryDefaults::default().stale_time(Duration::from_secs(60)),
+				runtime.handle(),
+			);
+			let ready = Rc::new(Cell::new(true));
+			let calls = Rc::new(Cell::new(0));
+			let descriptor = QueryFamily::<(), Project, String>::new(
+				"tests.entity-removal-canceled-recovery-remount",
+			)
+			.query((), {
+				let ready = Rc::clone(&ready);
+				let calls = Rc::clone(&calls);
+				move || {
+					let call = calls.get();
+					calls.set(call + 1);
+					RemovalGate {
+						ready: Rc::clone(&ready),
+						reset_ready_on_completion: call == 0 || call == 2,
+						result: Some(Ok(project(
+							1,
+							match call {
+								0 => "initial",
+								1 => "canceled",
+								2 => "stale",
+								_ => "fresh",
+							},
+						))),
+					}
+				}
+			})
+			.with_entities(EntityValue::new());
+
+			let active = client.observe(descriptor.clone(), QueryOptions::new());
+			runtime.run_until_stalled();
+			assert_eq!(calls.get(), 1);
+
+			ready.set(false);
+			client.remove_entity::<Project>(&1);
+			assert!(active.is_stale());
+			assert!(active.is_fetching());
+			assert_eq!(runtime.pending_task_count(), 1);
+			runtime.run_until_stalled();
+			assert_eq!(calls.get(), 2);
+			assert_eq!(runtime.pending_task_count(), 1);
+			drop(active);
+			runtime.run_until_stalled();
+			assert_eq!(calls.get(), 2);
+
+			let remounted = client.observe(descriptor, QueryOptions::new());
+			assert!(remounted.is_stale());
+			assert!(remounted.is_fetching());
+			assert_eq!(runtime.pending_task_count(), 1);
+			runtime.run_until_stalled();
+			assert_eq!(calls.get(), 3);
+			assert_eq!(runtime.pending_task_count(), 1);
+			client.remove_entity::<Project>(&1);
+
+			ready.set(true);
+			runtime.run_until_stalled();
+			assert_eq!(calls.get(), 4);
+			assert_eq!(runtime.pending_task_count(), 1);
+
+			ready.set(true);
+			runtime.run_until_stalled();
+			assert_eq!(calls.get(), 4);
+			assert_eq!(remounted.data(), Some(project(1, "fresh")));
+			assert!(!remounted.is_stale());
+		});
+	}
+
+	#[test]
+	#[serial(entity_removal)]
 	fn successful_upsert_clears_normalization_missing_without_clearing_invalidation() {
 		ReactiveScope::run(|| {
 			let runtime = TestQueryRuntime::new();

@@ -724,6 +724,7 @@ pub(super) struct QueryEntry<T: Clone + 'static, E: Clone + 'static> {
 	dependencies: RefCell<HashMap<EntityIdentity, Box<dyn Any>>>,
 	normalization_missing: Cell<bool>,
 	normalization_recovery_requested: Cell<bool>,
+	normalization_recovery_in_flight: Cell<bool>,
 	pub(super) refetch_error: Signal<Option<E>>,
 	pub(super) is_fetching: Signal<bool>,
 	pub(super) request: RefCell<Option<QueryRequest<T, E>>>,
@@ -883,6 +884,7 @@ impl<T: Clone + 'static, E: Clone + 'static> QueryEntry<T, E> {
 			dependencies: RefCell::new(HashMap::new()),
 			normalization_missing: Cell::new(false),
 			normalization_recovery_requested: Cell::new(false),
+			normalization_recovery_in_flight: Cell::new(false),
 			refetch_error,
 			is_fetching,
 			request: RefCell::new(None),
@@ -1100,6 +1102,8 @@ impl<T: Clone + 'static, E: Clone + 'static> QueryEntry<T, E> {
 
 	fn cancel_request(&self) {
 		self.inline_task.borrow_mut().take();
+		self.normalization_recovery_requested.set(false);
+		self.normalization_recovery_in_flight.set(false);
 		if let Some(request) = self.request.borrow_mut().take() {
 			request.source.cancel();
 			Self::clear_manual_refetch(request.manual_observer);
@@ -1243,10 +1247,14 @@ impl<T: Clone + 'static, E: Clone + 'static> QueryEntry<T, E> {
 		{
 			return;
 		}
-		if self.has_request() {
-			self.refetch_after_in_flight.set(true);
-		} else {
+		if !self.has_request() {
+			self.normalization_recovery_in_flight.set(true);
 			self.start_fetch(true);
+			if self.has_request() {
+				self.normalization_recovery_requested.set(false);
+			} else {
+				self.normalization_recovery_in_flight.set(false);
+			}
 		}
 	}
 
@@ -1379,13 +1387,15 @@ impl<T: Clone + 'static, E: Clone + 'static> QueryEntry<T, E> {
 			return;
 		}
 		drop(request);
-		let request = self
-			.request
-			.borrow_mut()
-			.take()
+		let request_ref = self.request.borrow();
+		let request = request_ref
+			.as_ref()
 			.expect("matching query request must remain active through completion");
 		let request_invalidation_generation = request.invalidation_generation;
 		let manual_observer = request.manual_observer.clone();
+		let request_ticket = request.ticket.ticket();
+		let recovery_request_in_flight = self.normalization_recovery_in_flight.replace(false);
+		drop(request_ref);
 		let had_success = self
 			.state
 			.with_untracked(|state| matches!(state, ResourceState::Success(_)));
@@ -1397,8 +1407,9 @@ impl<T: Clone + 'static, E: Clone + 'static> QueryEntry<T, E> {
 					self.complete_normalized_success(
 						generation,
 						value,
-						request.ticket.ticket(),
+						request_ticket,
 						request_invalidation_generation,
+						recovery_request_in_flight,
 					);
 				} else {
 					self.completed
@@ -1437,9 +1448,17 @@ impl<T: Clone + 'static, E: Clone + 'static> QueryEntry<T, E> {
 		}
 		self.wake_waiters();
 		self.reschedule_polling_from(self.runtime.now_ms());
+		let request = self
+			.request
+			.borrow_mut()
+			.take()
+			.expect("matching query request must remain active through completion");
+		debug_assert_eq!(request.generation, generation);
+		drop(request);
 		let invalidated_during_request =
 			self.invalidation_generation.get() > request_invalidation_generation;
 		let manual_refetch_queued = self.refetch_after_in_flight.replace(false);
+		let normalization_recovery_queued = self.normalization_recovery_requested.replace(false);
 		let queued_manual_observer = self.queued_manual_refetch.borrow_mut().take();
 		let queued_manual_observer_was_present = queued_manual_observer.is_some();
 		let queued_manual_observer_is_live = queued_manual_observer
@@ -1453,16 +1472,24 @@ impl<T: Clone + 'static, E: Clone + 'static> QueryEntry<T, E> {
 		if !same_observer_is_queued {
 			Self::clear_manual_refetch(manual_observer);
 		}
+		let follow_up_recovery = normalization_recovery_queued;
 		if let Some(observer) = queued_manual_observer
 			&& observer.strong_count() > 0
 			&& self.lease_count.get() > 0
 		{
+			if follow_up_recovery {
+				self.normalization_recovery_in_flight.set(true);
+			}
 			self.start_fetch_with(true, Some(observer));
 		} else if ((manual_refetch_queued
 			&& (!queued_manual_observer_was_present || queued_manual_observer_is_live))
+			|| normalization_recovery_queued
 			|| (invalidated_during_request && self.has_active_invalidation_interest()))
 			&& self.lease_count.get() > 0
 		{
+			if follow_up_recovery {
+				self.normalization_recovery_in_flight.set(true);
+			}
 			self.start_fetch(true);
 		}
 	}
@@ -1473,6 +1500,7 @@ impl<T: Clone + 'static, E: Clone + 'static> QueryEntry<T, E> {
 		value: T,
 		ticket: EntityWriteTicket,
 		request_invalidation_generation: u64,
+		recovery_request_in_flight: bool,
 	) {
 		let projection = self
 			.normalization
@@ -1557,7 +1585,7 @@ impl<T: Clone + 'static, E: Clone + 'static> QueryEntry<T, E> {
 					self.invalidated.set(false);
 				}
 				self.is_fetching.set(false);
-				if normalization_recovery_needed {
+				if normalization_recovery_needed && !recovery_request_in_flight {
 					self.schedule_normalization_recovery();
 				}
 				for publish_signal in publish_signals {

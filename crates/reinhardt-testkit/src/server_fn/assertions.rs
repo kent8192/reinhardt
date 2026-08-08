@@ -429,6 +429,7 @@ pub mod assert_status {
 #[cfg(test)]
 mod tests {
 	use super::*;
+	use rstest::rstest;
 
 	#[derive(Debug)]
 	struct StatusResponse(StatusCode);
@@ -502,7 +503,7 @@ mod tests {
 		assert_validation_errors(&result, &["username", "email"]);
 	}
 
-	#[test]
+	#[rstest]
 	fn server_fn_result_and_response_assertions_cover_public_success_paths() {
 		// Arrange
 		let successful: Result<&str, String> = Ok("created");
@@ -550,5 +551,40 @@ mod tests {
 		assert_status::internal_error(&internal);
 		ResponseAssertion::new(bad_request).should_be_client_error();
 		ResponseAssertion::new(internal).should_be_server_error();
+	}
+
+	fn assert_status_panics(name: &str, assertion: impl FnOnce()) {
+		assert!(
+			std::panic::catch_unwind(std::panic::AssertUnwindSafe(assertion)).is_err(),
+			"{name} accepted a mismatched status"
+		);
+	}
+
+	#[rstest]
+	fn status_assertions_reject_mismatched_statuses() {
+		// Arrange
+		let ok = StatusResponse(StatusCode::OK);
+		let created = StatusResponse(StatusCode::CREATED);
+		let empty = StatusResponse(StatusCode::NO_CONTENT);
+
+		// Act and assert
+		assert_status_panics("ok", || assert_status::ok(&created));
+		assert_status_panics("created", || assert_status::created(&ok));
+		assert_status_panics("no_content", || assert_status::no_content(&ok));
+		assert_status_panics("bad_request", || assert_status::bad_request(&ok));
+		assert_status_panics("unauthorized", || assert_status::unauthorized(&ok));
+		assert_status_panics("forbidden", || assert_status::forbidden(&ok));
+		assert_status_panics("not_found", || assert_status::not_found(&ok));
+		assert_status_panics("conflict", || assert_status::conflict(&ok));
+		assert_status_panics("unprocessable_entity", || {
+			assert_status::unprocessable_entity(&ok)
+		});
+		assert_status_panics("internal_error", || assert_status::internal_error(&ok));
+		assert_status_panics("client_error_category", || {
+			ResponseAssertion::new(ok).should_be_client_error()
+		});
+		assert_status_panics("server_error_category", || {
+			ResponseAssertion::new(empty).should_be_server_error()
+		});
 	}
 }

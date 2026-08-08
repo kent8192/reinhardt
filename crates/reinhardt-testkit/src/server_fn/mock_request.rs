@@ -739,7 +739,7 @@ mod tests {
 			.map(|entry| entry.split_once('=').unwrap())
 			.map(|(key, value)| (key.to_string(), value.to_string()))
 			.collect();
-		let cookies: BTreeMap<_, _> = json
+		let mut cookies: Vec<_> = json
 			.get_header("cookie")
 			.expect("Cookie header should contain the configured cookies")
 			.split("; ")
@@ -750,6 +750,7 @@ mod tests {
 			})
 			.map(|(name, value)| (name.to_string(), value.to_string()))
 			.collect();
+		cookies.sort_unstable();
 
 		// Assert
 		assert_eq!(json.method, Method::PUT);
@@ -760,12 +761,13 @@ mod tests {
 		assert_eq!(json.get_header("x-request-id"), Some("req-7"));
 		assert_eq!(json.get_header("accept"), Some("application/json"));
 		assert_eq!(json.get_header("authorization"), Some("Bearer token-123"));
+		assert_eq!(cookies.len(), 2);
 		assert_eq!(
 			cookies,
-			BTreeMap::from([
+			vec![
 				("session".to_string(), "new".to_string()),
 				("theme".to_string(), "light".to_string()),
-			])
+			]
 		);
 		assert_eq!(json.get_cookie("theme"), Some("light"));
 		assert_eq!(json.get_cookie("session"), Some("new"));

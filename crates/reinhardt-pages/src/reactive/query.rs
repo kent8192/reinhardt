@@ -1,7 +1,7 @@
 //! Keyed async query cache hooks.
 
 mod browser;
-mod canonical_json;
+pub(crate) mod canonical_json;
 mod client;
 mod context;
 mod hook;

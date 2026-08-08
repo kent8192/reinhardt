@@ -110,6 +110,7 @@ pub use reinhardt_core::reactive::{
 };
 
 // WASM-specific modules (kept in reinhardt-pages)
+pub mod entity;
 pub mod hooks;
 pub(crate) mod pages_arena;
 pub mod query;
@@ -117,6 +118,7 @@ pub mod resource;
 pub mod resource_value;
 pub mod trackable;
 
+pub use entity::Entity;
 pub use trackable::Trackable;
 
 // Re-export resource types and the unified hook (available on all targets)

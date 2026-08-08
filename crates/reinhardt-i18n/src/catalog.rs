@@ -621,8 +621,11 @@ mod tests {
 
 	#[rstest]
 	#[case("pt-BR", 0, "form 0")]
+	#[case("pt-BR", 1, "form 0")]
+	#[case("pt-BR", 2, "form 1")]
 	#[case("pt-PT", 0, "form 1")]
 	#[case("pt-PT", 1, "form 0")]
+	#[case("pt-PT", 2, "form 1")]
 	#[case("ga", 1, "form 0")]
 	#[case("ga", 2, "form 1")]
 	#[case("ga", 3, "form 2")]

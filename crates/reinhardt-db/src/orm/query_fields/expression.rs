@@ -1,5 +1,6 @@
 //! Model-rooted expressions for type-safe ORM queries.
 
+pub(crate) mod compiler;
 pub(crate) mod kind;
 pub(crate) mod node;
 pub(crate) mod operand;
@@ -110,16 +111,18 @@ impl<M, R, K> TypedExpression<M, R, K> {
 		(self.node, self.joins)
 	}
 
+	/// Erase the result type while retaining metadata required for SQL lowering.
+	pub(crate) fn into_stored_expression(self, label: Option<String>) -> StoredExpression {
+		StoredExpression::new(self.node, self.joins, label)
+	}
+
 	/// Assign an identifier-safe label to this expression.
 	pub fn label(self, label: impl AsRef<str>) -> Result<LabeledExpression<M, K>, Error> {
 		let label = label.as_ref();
 		validate_label(label)?;
 		Ok(LabeledExpression {
 			label: label.to_owned(),
-			expression: StoredExpression {
-				node: self.node,
-				joins: self.joins,
-			},
+			expression: StoredExpression::new(self.node, self.joins, Some(label.to_owned())),
 			marker: PhantomData,
 		})
 	}
@@ -340,6 +343,7 @@ where
 				relation_steps: relation_steps.clone(),
 				terminal_column,
 				storage_kind: <Value::Storage as DatabaseScalar>::STORAGE_KIND,
+				composite_primary_key: false,
 			}),
 			JoinRequirements::from_relation_steps(relation_steps),
 		)
@@ -599,6 +603,7 @@ mod tests {
 	use reinhardt_core::exception::Error;
 	use reinhardt_query::prelude::{PostgresQueryBuilder, Query, QueryStatementBuilder};
 
+	#[derive(Clone)]
 	struct TestModel;
 
 	fn typed_i64_expression() -> TypedExpression<TestModel, i64> {

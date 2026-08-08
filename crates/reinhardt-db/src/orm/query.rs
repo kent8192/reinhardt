@@ -13,6 +13,7 @@ use crate::naming::to_snake_case;
 use crate::orm::query_fields::aggregate::{AggregateExpr, ComparisonExpr};
 use crate::orm::query_fields::comparison::FieldComparison;
 use crate::orm::query_fields::compiler::QueryFieldCompiler;
+use crate::orm::query_fields::expression::{compiler::compile_expression, node::StoredExpression};
 use crate::orm::query_fields::{GroupByFields, OrderedExpression, TypedExpression};
 use crate::orm::relations::{RelationJoinGraph, RelationJoinKind, RelationPathLike, RelationStep};
 use futures::{Stream, StreamExt};
@@ -1762,10 +1763,10 @@ where
 	order_by_expressions: Vec<OrderedExpression<T>>,
 	distinct_enabled: bool,
 	selected_fields: Option<Vec<String>>,
-	selected_expressions: Vec<(String, SimpleExpr)>,
+	selected_expressions: Vec<(String, StoredExpression)>,
 	deferred_fields: Vec<String>,
 	annotations: Vec<super::annotation::Annotation>,
-	typed_annotations: Vec<(String, SimpleExpr)>,
+	typed_annotations: Vec<(String, StoredExpression)>,
 	manager: Option<std::sync::Arc<super::manager::Manager<T>>>,
 	limit: Option<usize>,
 	offset: Option<usize>,
@@ -1873,7 +1874,7 @@ where
 		} else {
 			self.add_default_select_columns(&mut stmt);
 		}
-		self.apply_typed_select_expressions(&mut stmt);
+		self.apply_typed_select_expressions(&mut stmt)?;
 		self.apply_annotations_to_select(&mut stmt);
 		self.apply_relation_joins(&mut stmt);
 		self.apply_manual_joins(&mut stmt);
@@ -4678,6 +4679,18 @@ where
 			.with_root_alias_and_reserved_aliases(self.root_alias(), self.manual_join_aliases())
 	}
 
+	fn expression_relation_join_graph_for_query(&self) -> RelationJoinGraph {
+		let mut graph = self.relation_joins.clone();
+		for (_, expression) in self
+			.selected_expressions
+			.iter()
+			.chain(self.typed_annotations.iter())
+		{
+			graph.add_aggregate_steps(&expression.joins.relation_steps);
+		}
+		graph.with_root_alias_and_reserved_aliases(self.root_alias(), self.manual_join_aliases())
+	}
+
 	fn filter_relation_join_graph_for_query(&self) -> RelationJoinGraph {
 		let mut graph = RelationJoinGraph::new(T::table_name());
 		for filter in &self.filters {
@@ -5020,7 +5033,7 @@ where
 	}
 
 	fn apply_relation_joins(&self, stmt: &mut SelectStatement) {
-		let graph = self.relation_join_graph_for_query();
+		let graph = self.expression_relation_join_graph_for_query();
 		Self::apply_relation_join_graph(stmt, &graph);
 	}
 
@@ -5057,13 +5070,24 @@ where
 		}
 	}
 
-	fn apply_typed_select_expressions(&self, stmt: &mut SelectStatement) {
+	fn apply_typed_select_expressions(
+		&self,
+		stmt: &mut SelectStatement,
+	) -> reinhardt_core::exception::Result<()> {
+		let graph = self.expression_relation_join_graph_for_query();
 		for (alias, expression) in &self.selected_expressions {
-			stmt.expr_as(self.qualify_typed_expression(expression), Alias::new(alias));
+			stmt.expr_as(
+				compile_expression(expression, self.root_alias(), &graph)?,
+				Alias::new(alias),
+			);
 		}
 		for (alias, expression) in &self.typed_annotations {
-			stmt.expr_as(self.qualify_typed_expression(expression), Alias::new(alias));
+			stmt.expr_as(
+				compile_expression(expression, self.root_alias(), &graph)?,
+				Alias::new(alias),
+			);
 		}
+		Ok(())
 	}
 
 	fn qualify_typed_expression(&self, expression: &SimpleExpr) -> SimpleExpr {
@@ -6521,16 +6545,16 @@ where
 	/// //   WHERE posts.published = $1
 	/// ```
 	pub fn select_related_query(&self) -> reinhardt_core::exception::Result<SelectStatement> {
-		Ok(self.select_related_query_with_condition(self.build_where_condition()?))
+		self.select_related_query_with_condition(self.build_where_condition()?)
 	}
 
 	fn select_related_query_with_condition(
 		&self,
 		where_condition: Option<Condition>,
-	) -> SelectStatement {
+	) -> reinhardt_core::exception::Result<SelectStatement> {
 		let table_name = T::table_name();
 		let root_alias = self.from_alias.as_deref().unwrap_or(table_name);
-		let relation_joins = self.relation_join_graph_for_query();
+		let relation_joins = self.expression_relation_join_graph_for_query();
 		let typed_relation_aliases: Vec<_> = self
 			.typed_select_related
 			.iter()
@@ -6552,7 +6576,7 @@ where
 
 		// Add main table columns while preserving explicit projections.
 		self.add_select_related_root_columns(&mut stmt);
-		self.apply_typed_select_expressions(&mut stmt);
+		self.apply_typed_select_expressions(&mut stmt)?;
 
 		// Add LEFT JOIN for each legacy related field that is not already covered
 		// by a typed join. The typed graph owns its aliases and join order.
@@ -6660,7 +6684,7 @@ where
 		}
 
 		self.apply_select_for_update(&mut stmt);
-		stmt.to_owned()
+		Ok(stmt.to_owned())
 	}
 
 	/// Eagerly load related objects using separate queries
@@ -9577,8 +9601,11 @@ where
 		alias: impl Into<String>,
 		expression: TypedExpression<T, R>,
 	) -> Self {
-		self.typed_annotations
-			.push((alias.into(), expression.into_simple_expr()));
+		let alias = alias.into();
+		self.typed_annotations.push((
+			alias.clone(),
+			expression.into_stored_expression(Some(alias)),
+		));
 		self
 	}
 
@@ -9790,7 +9817,7 @@ where
 			} else {
 				self.add_default_select_columns(&mut stmt);
 			}
-			self.apply_typed_select_expressions(&mut stmt);
+			self.apply_typed_select_expressions(&mut stmt)?;
 
 			self.apply_relation_joins(&mut stmt);
 
@@ -9901,7 +9928,7 @@ where
 			stmt.to_owned()
 		} else {
 			// SELECT with JOINs for select_related
-			self.select_related_query_with_condition(self.build_where_condition()?)
+			self.select_related_query_with_condition(self.build_where_condition()?)?
 		};
 
 		if !self.has_select_related() {
@@ -10007,8 +10034,11 @@ where
 		alias: impl Into<String>,
 		expression: TypedExpression<T, R>,
 	) -> Self {
-		self.selected_expressions
-			.push((alias.into(), expression.into_simple_expr()));
+		let alias = alias.into();
+		self.selected_expressions.push((
+			alias.clone(),
+			expression.into_stored_expression(Some(alias)),
+		));
 		self
 	}
 

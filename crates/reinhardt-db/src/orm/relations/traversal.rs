@@ -405,6 +405,66 @@ impl RelationJoinGraph {
 		self.add_steps_with_override(path.steps(), path.join_kind_override());
 	}
 
+	/// Add relation steps required by an aggregate expression.
+	///
+	/// Aggregate paths are optional by nature: a root row with no related rows
+	/// must remain visible with a zero/NULL aggregate result. Existing joins are
+	/// deliberately retained unchanged so an INNER join required by a filter
+	/// cannot be weakened by a later annotation.
+	pub fn add_aggregate_path<P>(&mut self, path: &P)
+	where
+		P: RelationPathLike,
+	{
+		self.add_missing_steps(path.steps(), RelationJoinKind::Left);
+	}
+
+	/// Add aggregate relation steps when only their erased descriptors remain.
+	pub(crate) fn add_aggregate_steps(&mut self, steps: &[RelationStep]) {
+		self.add_missing_steps(steps, RelationJoinKind::Left);
+	}
+
+	fn add_missing_steps(&mut self, steps: &[RelationStep], join_kind: RelationJoinKind) {
+		let mut source_alias = self.root_alias.clone();
+		let mut force_downstream_left = false;
+		let mut reserved_aliases = HashSet::from([self.root_alias.clone()]);
+		reserved_aliases.extend(self.joins.iter().map(|join| join.alias.clone()));
+		for step in steps {
+			let requested_join_kind = if force_downstream_left {
+				RelationJoinKind::Left
+			} else {
+				join_kind
+			};
+			if let Some(existing_index) = self.joins.iter().position(|join| {
+				join.source_alias == source_alias && join.relation_name == step.name.as_ref()
+			}) {
+				let existing = &self.joins[existing_index];
+				force_downstream_left |= existing.join_kind == RelationJoinKind::Left;
+				source_alias.clone_from(&existing.alias);
+				continue;
+			}
+
+			let alias = step_alias_with_reserved(
+				&source_alias,
+				step.name.as_ref(),
+				&self.root_alias,
+				&reserved_aliases,
+			);
+			reserved_aliases.insert(alias.clone());
+			self.joins.push(PlannedRelationJoin {
+				alias: alias.clone(),
+				relation_name: step.name.to_string(),
+				source_alias,
+				target_table: step.target_table.to_string(),
+				source_column: step.source_column.to_string(),
+				target_column: step.target_column.to_string(),
+				join_kind: requested_join_kind,
+				multiplicity: step.multiplicity,
+			});
+			force_downstream_left = true;
+			source_alias = alias;
+		}
+	}
+
 	/// Add relation steps with an explicit join kind.
 	pub fn add_steps(&mut self, steps: &[RelationStep], join_kind: RelationJoinKind) {
 		self.add_steps_with_override(steps, Some(join_kind));
@@ -1081,5 +1141,30 @@ mod tests {
 		assert_eq!(joins[0].alias, "parent");
 		assert_eq!(joins[1].alias, "parent__parent");
 		assert_eq!(joins[1].source_alias, "parent");
+	}
+
+	#[test]
+	fn aggregate_path_keeps_filter_inner_join_and_adds_left_hops() {
+		let filter_path =
+			RelationPath::<Document, CorpusFile>::from_descriptor::<DocumentCorpusFile>();
+		let aggregate_path = filter_path.clone().then::<CorpusFileProject, Project>();
+		let mut graph = RelationJoinGraph::new("documents");
+		graph.add_path(&filter_path);
+		graph.add_aggregate_path(&aggregate_path);
+
+		assert_eq!(graph.joins().len(), 2);
+		assert_eq!(graph.joins()[0].join_kind, RelationJoinKind::Inner);
+		assert_eq!(graph.joins()[1].join_kind, RelationJoinKind::Left);
+	}
+
+	#[test]
+	fn aggregate_path_deduplicates_repeated_left_hops() {
+		let path = RelationPath::<Document, CorpusFile>::from_descriptor::<DocumentCorpusFile>();
+		let mut graph = RelationJoinGraph::new("documents");
+		graph.add_aggregate_path(&path);
+		graph.add_aggregate_path(&path);
+
+		assert_eq!(graph.joins().len(), 1);
+		assert_eq!(graph.joins()[0].join_kind, RelationJoinKind::Left);
 	}
 }

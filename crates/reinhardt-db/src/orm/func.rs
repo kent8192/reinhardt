@@ -228,6 +228,8 @@ where
 				terminal_column: Target::primary_key_column().to_owned(),
 				storage_kind:
 					<<Target::PrimaryKey as DatabaseField>::Storage as DatabaseScalar>::STORAGE_KIND,
+				composite_primary_key: Target::composite_primary_key()
+					.is_some_and(|primary_key| primary_key.field_count() > 1),
 			}),
 			JoinRequirements::from_relation_steps(relation_steps),
 		)

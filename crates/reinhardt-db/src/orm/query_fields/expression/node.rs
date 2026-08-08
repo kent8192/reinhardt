@@ -1,5 +1,6 @@
 //! Structured expression nodes and relation-join requirements.
 
+use super::super::aggregate::AggregateFunction;
 use super::kind::AggregateOutputKind;
 use super::operand::{AggregateOperation, ArithmeticOperation};
 use crate::orm::field_codec::{DatabaseStorageKind, DatabaseValue};
@@ -20,6 +21,8 @@ pub(crate) struct RelatedColumnOperand {
 	pub(crate) relation_steps: Vec<RelationStep>,
 	pub(crate) terminal_column: String,
 	pub(crate) storage_kind: DatabaseStorageKind,
+	/// Whether the terminal relation target has a composite primary key.
+	pub(crate) composite_primary_key: bool,
 }
 
 /// Relation joins required by an expression node.
@@ -236,13 +239,59 @@ pub(crate) struct StoredExpression {
 	// Annotation projection planning consumes these fields after a result type is erased by a label.
 	#[allow(dead_code)]
 	pub(crate) joins: JoinRequirements,
+	/// Aggregate result storage metadata, when this expression is an aggregate.
+	pub(crate) output: Option<AggregateOutputKind>,
+	/// Aggregate function represented by this expression, when applicable.
+	pub(crate) aggregate_function: Option<AggregateFunction>,
+	/// Optional identifier retained with the erased expression.
+	// Annotation projection planning consumes this label in the next query phase.
+	#[allow(dead_code)]
+	pub(crate) label: Option<String>,
 }
 
 impl StoredExpression {
+	pub(crate) fn new(
+		node: ExpressionNode,
+		joins: JoinRequirements,
+		label: Option<String>,
+	) -> Self {
+		let (output, aggregate_function) = match &node {
+			ExpressionNode::Aggregate {
+				operation,
+				output_kind,
+				..
+			} => (
+				*output_kind,
+				Some(match operation {
+					AggregateOperation::Count => AggregateFunction::Count,
+					AggregateOperation::Sum => AggregateFunction::Sum,
+					AggregateOperation::Average => AggregateFunction::Avg,
+					AggregateOperation::Minimum => AggregateFunction::Min,
+					AggregateOperation::Maximum => AggregateFunction::Max,
+				}),
+			),
+			ExpressionNode::CountAll => (
+				Some(AggregateOutputKind::I64),
+				Some(AggregateFunction::Count),
+			),
+			_ => (None, None),
+		};
+		Self {
+			node,
+			joins,
+			output,
+			aggregate_function,
+			label,
+		}
+	}
+
 	// Annotation projection planning consumes structural equality to deduplicate repeated expressions.
 	#[allow(dead_code)]
 	pub(crate) fn structurally_eq(&self, other: &Self) -> bool {
-		self.joins == other.joins && self.node.structurally_eq(&other.node)
+		self.joins == other.joins
+			&& self.output == other.output
+			&& self.aggregate_function == other.aggregate_function
+			&& self.node.structurally_eq(&other.node)
 	}
 
 	// Annotation projection planning consumes this helper when building a SELECT list.

@@ -357,6 +357,14 @@ impl QueryClient {
 					let owner = Rc::downgrade(&inner);
 					move || owner.upgrade().map_or(0, |owner| owner.runtime.now_ms())
 				}),
+				Rc::new({
+					let owner = Rc::downgrade(&inner);
+					move |identity| {
+						if let Some(owner) = owner.upgrade() {
+							owner.prune_entity_dependents(&identity);
+						}
+					}
+				}),
 			);
 		}
 		let maintenance_callback: Rc<dyn Fn()> = Rc::new({
@@ -533,6 +541,11 @@ impl QueryClient {
 	{
 		self.inner.entities.dependency_lease_count::<E>(id)
 	}
+
+	#[cfg(test)]
+	pub(crate) fn entity_dependency_index_len_for_test(&self) -> usize {
+		self.inner.entity_dependents.borrow().len()
+	}
 }
 
 fn validate_query_family_types(
@@ -565,17 +578,23 @@ impl QueryClientInner {
 		let mut dependents = HashMap::<QueryIdentity, Rc<dyn EntityDependent>>::new();
 		let mut index = self.entity_dependents.borrow_mut();
 		for identity in affected {
-			let Some(edges) = index.get_mut(&identity) else {
-				continue;
-			};
-			edges.retain(|edge| edge.strong_count() > 0);
-			for dependent in edges.iter().filter_map(Weak::upgrade) {
-				if excluded.is_some_and(|excluded| dependent.query_identity() == excluded) {
-					continue;
+			let mut remove_identity = false;
+			if let Some(edges) = index.get_mut(&identity) {
+				edges.retain(|edge| edge.strong_count() > 0);
+				remove_identity = edges.is_empty();
+				if !remove_identity {
+					for dependent in edges.iter().filter_map(Weak::upgrade) {
+						if excluded.is_some_and(|excluded| dependent.query_identity() == excluded) {
+							continue;
+						}
+						dependents
+							.entry(dependent.query_identity().clone())
+							.or_insert(dependent);
+					}
 				}
-				dependents
-					.entry(dependent.query_identity().clone())
-					.or_insert(dependent);
+			}
+			if remove_identity {
+				index.remove(&identity);
 			}
 		}
 		drop(index);
@@ -706,12 +725,8 @@ impl QueryClientInner {
 					}
 				}
 				MaintenanceTarget::EntityGc(identity) => {
-					if self
-						.entities
-						.collect_entity_gc(&identity, deadline.generation, now_ms)
-					{
-						self.prune_entity_dependents(&identity);
-					}
+					self.entities
+						.collect_entity_gc(&identity, deadline.generation, now_ms);
 				}
 			}
 		}
@@ -1644,7 +1659,10 @@ impl<T: Clone + 'static, E: Clone + 'static> QueryEntry<T, E> {
 			.normalization
 			.as_ref()
 			.expect("normalized completion requires an entity projection");
-		let fallback = value.clone();
+		let fallback = self
+			.state
+			.with_untracked(|state| state.as_ref().cloned())
+			.unwrap_or_else(|| value.clone());
 		let mut staged_recipe = None;
 		let staging = self.entities.stage(|entities| {
 			staged_recipe.replace(projection.normalize(value, entities));

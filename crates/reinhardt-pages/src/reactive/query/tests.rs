@@ -2472,6 +2472,57 @@ mod entity_removal {
 
 	#[test]
 	#[serial(entity_removal)]
+	fn tombstoned_refetch_retains_an_existing_successful_value() {
+		ReactiveScope::run(|| {
+			let runtime = TestQueryRuntime::new();
+			let client = QueryClient::with_runtime(
+				QueryDefaults::default().stale_time(Duration::from_secs(60)),
+				runtime.handle(),
+			);
+			let ready = Rc::new(Cell::new(true));
+			let calls = Rc::new(Cell::new(0));
+			let descriptor = QueryFamily::<(), Project, String>::new(
+				"tests.entity-removal-existing-success-race",
+			)
+			.query((), {
+				let ready = Rc::clone(&ready);
+				let calls = Rc::clone(&calls);
+				move || {
+					let call = calls.get();
+					calls.set(call + 1);
+					RemovalGate {
+						ready: Rc::clone(&ready),
+						reset_ready_on_completion: call == 1,
+						result: Some(Ok(project(
+							1,
+							if call == 0 { "initial" } else { "in-flight" },
+						))),
+					}
+				}
+			})
+			.with_entities(EntityValue::new());
+			let query = client.observe(descriptor.clone(), QueryOptions::new());
+			runtime.run_until_stalled();
+			assert_eq!(query.data(), Some(project(1, "initial")));
+
+			ready.set(false);
+			query.refetch();
+			runtime.run_until_stalled();
+			assert!(query.is_fetching());
+			client.remove_entity::<Project>(&1);
+			ready.set(true);
+			runtime.run_until_stalled();
+
+			assert_eq!(query.snapshot().status, QueryStatus::Success);
+			assert_eq!(query.data(), Some(project(1, "initial")));
+			assert!(query.is_stale());
+			assert_eq!(calls.get(), 3);
+			assert_eq!(runtime.pending_task_count(), 1);
+		});
+	}
+
+	#[test]
+	#[serial(entity_removal)]
 	fn missing_completion_and_invalidation_start_only_one_follow_up_refetch() {
 		ReactiveScope::run(|| {
 			let runtime = TestQueryRuntime::new();
@@ -3349,6 +3400,7 @@ mod entity_propagation {
 				1
 			);
 
+			let handle = client.entity::<Project>(1);
 			drop(query);
 			runtime.run_due_maintenance();
 
@@ -3357,10 +3409,8 @@ mod entity_propagation {
 				0
 			);
 			client.upsert_entity(project(1, "uncached"));
-			assert_eq!(
-				client.entity::<Project>(1).get(),
-				Some(project(1, "uncached"))
-			);
+			assert_eq!(client.entity_dependency_index_len_for_test(), 0);
+			assert_eq!(handle.get(), Some(project(1, "uncached")));
 		});
 	}
 }
@@ -3504,6 +3554,34 @@ mod entity_gc {
 			assert!(arena.entity_record_exists_for_test::<Project>(&1));
 			drop(ticket);
 			assert!(!arena.entity_record_exists_for_test::<Project>(&1));
+		});
+	}
+
+	#[test]
+	#[serial(entity_gc)]
+	fn ticket_drop_prunes_dead_reverse_dependencies_after_entity_collection() {
+		ReactiveScope::run(|| {
+			let runtime = TestQueryRuntime::new();
+			let client = client(&runtime, Duration::ZERO);
+			let arena = client.entity_arena_for_test();
+			let ticket = arena.acquire_query_ticket();
+			let query = client.observe(
+				QueryFamily::<(), Project, String>::new("tests.entity-gc-ticket-prunes-index")
+					.query((), || async { Ok(project(1, "ticketed")) })
+					.with_entities(EntityValue::new()),
+				QueryOptions::new(),
+			);
+			runtime.run_until_stalled();
+			assert_eq!(client.entity_dependency_index_len_for_test(), 1);
+
+			drop(query);
+			runtime.run_due_maintenance();
+			assert!(arena.entity_record_exists_for_test::<Project>(&1));
+			assert_eq!(client.entity_dependency_index_len_for_test(), 1);
+
+			drop(ticket);
+			assert!(!arena.entity_record_exists_for_test::<Project>(&1));
+			assert_eq!(client.entity_dependency_index_len_for_test(), 0);
 		});
 	}
 

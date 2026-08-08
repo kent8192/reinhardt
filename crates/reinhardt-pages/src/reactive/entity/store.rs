@@ -18,6 +18,7 @@ use reinhardt_core::reactive::ReactiveScope;
 use serde_json::Value;
 
 type EntityGcScheduler = Rc<dyn Fn(EntityIdentity, u64, u64)>;
+type EntityGcCollected = Rc<dyn Fn(EntityIdentity)>;
 
 /// Owns the typed records for one normalized entity cache.
 #[derive(Clone)]
@@ -34,6 +35,7 @@ struct EntityArenaInner {
 	ticket_blocked_gc: RefCell<HashSet<EntityIdentity>>,
 	gc_time: Duration,
 	gc_scheduler: RefCell<Option<EntityGcScheduler>>,
+	gc_collected: RefCell<Option<EntityGcCollected>>,
 	clock: RefCell<Rc<dyn Fn() -> u64>>,
 	ssr_reachability: Cell<bool>,
 	reachable_identities: RefCell<HashSet<EntityIdentity>>,
@@ -55,6 +57,7 @@ impl EntityArena {
 				ticket_blocked_gc: RefCell::new(HashSet::new()),
 				gc_time,
 				gc_scheduler: RefCell::new(None),
+				gc_collected: RefCell::new(None),
 				clock: RefCell::new(Rc::new(|| 0)),
 				ssr_reachability: Cell::new(false),
 				reachable_identities: RefCell::new(HashSet::new()),
@@ -177,8 +180,10 @@ impl EntityArena {
 		&self,
 		scheduler: EntityGcScheduler,
 		clock: Rc<dyn Fn() -> u64>,
+		gc_collected: EntityGcCollected,
 	) {
 		*self.inner.gc_scheduler.borrow_mut() = Some(scheduler);
+		*self.inner.gc_collected.borrow_mut() = Some(gc_collected);
 		*self.inner.clock.borrow_mut() = clock;
 	}
 
@@ -554,6 +559,9 @@ impl EntityArena {
 		) {
 			EntityGcResult::Collected => {
 				self.inner.ticket_blocked_gc.borrow_mut().remove(identity);
+				if let Some(callback) = self.inner.gc_collected.borrow().as_ref() {
+					callback(identity.clone());
+				}
 				true
 			}
 			EntityGcResult::Stale => {

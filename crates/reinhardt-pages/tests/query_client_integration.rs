@@ -1,4 +1,4 @@
-use reinhardt_pages::reactive::{QueryFamily, QueryOptions, use_query};
+use reinhardt_pages::{QueryFamily, QueryOptions, use_query};
 
 #[cfg(all(native, feature = "testing"))]
 use std::cell::{Cell, RefCell};
@@ -10,18 +10,17 @@ use std::time::Duration;
 #[cfg(all(native, feature = "testing"))]
 use reinhardt_core::types::page::{IntoPage, Page, PageElement};
 #[cfg(all(native, feature = "testing"))]
-use reinhardt_pages::reactive::entity::{
-	EntityDependencies, EntityProjection, EntityReader, EntityWriter, ProjectionMaterialization,
-	ProjectionRemoval, RemovedEntities,
-};
+use reinhardt_pages::reactive::ReactiveScope;
 #[cfg(all(native, feature = "testing"))]
 use reinhardt_pages::reactive::hooks::use_action;
 #[cfg(all(native, feature = "testing"))]
-use reinhardt_pages::reactive::{
-	Entity, QueryClient, QueryHandle, QuerySnapshot, QueryStatus, ReactiveScope, queries,
-};
-#[cfg(all(native, feature = "testing"))]
 use reinhardt_pages::testing::component::{Role, render};
+#[cfg(all(native, feature = "testing"))]
+use reinhardt_pages::{
+	Entity, EntityDependencies, EntityProjection, EntityReader, EntityWriter,
+	ProjectionMaterialization, ProjectionRemoval, QueryClient, QueryHandle, QuerySnapshot,
+	QueryStatus, RemovedEntities, queries,
+};
 #[cfg(all(native, feature = "testing"))]
 use serde::{Deserialize, Serialize};
 
@@ -398,5 +397,79 @@ async fn public_entity_mutation_propagates_to_exact_queries_in_one_client_only()
 				vec![project(1, "second client"), project(2, "member")],
 			))
 		);
+	});
+}
+
+#[cfg(all(native, feature = "testing"))]
+#[test]
+fn normalized_entity_api_is_available_from_root_and_prelude() {
+	use reinhardt_pages::prelude::{
+		Entity as PreludeEntity, EntityArena as PreludeEntityArena,
+		EntityHandle as PreludeEntityHandle, EntityProjection as PreludeEntityProjection,
+		EntityValue as PreludeEntityValue, EntityVec as PreludeEntityVec,
+		OptionalEntity as PreludeOptionalEntity,
+		ProjectionMaterialization as PreludeProjectionMaterialization,
+		ProjectionRemoval as PreludeProjectionRemoval, queries as prelude_queries,
+	};
+	use reinhardt_pages::reactive::{
+		Entity as ReactiveEntity, EntityArena as ReactiveEntityArena,
+		EntityHandle as ReactiveEntityHandle, EntityProjection as ReactiveEntityProjection,
+		EntityValue as ReactiveEntityValue,
+	};
+	use reinhardt_pages::{
+		Entity as RootEntity, EntityArena as RootEntityArena,
+		EntityDependencies as RootEntityDependencies, EntityHandle as RootEntityHandle,
+		EntityProjection as RootEntityProjection, EntityReader as RootEntityReader,
+		EntityValue as RootEntityValue, EntityVec as RootEntityVec,
+		EntityWriter as RootEntityWriter, OptionalEntity as RootOptionalEntity,
+		ProjectionMaterialization as RootProjectionMaterialization,
+		ProjectionRemoval as RootProjectionRemoval, QueryClient as RootQueryClient,
+		RemovedEntities as RootRemovedEntities,
+	};
+
+	fn assert_entity<E: RootEntity>() {}
+	fn assert_prelude_entity<E: PreludeEntity>() {}
+	fn assert_reactive_entity<E: ReactiveEntity>() {}
+	fn assert_projection<T, P: RootEntityProjection<T>>() {}
+	fn assert_prelude_projection<T, P: PreludeEntityProjection<T>>() {}
+	fn assert_reactive_projection<T, P: ReactiveEntityProjection<T>>() {}
+
+	assert_entity::<Project>();
+	assert_prelude_entity::<Project>();
+	assert_reactive_entity::<Project>();
+	assert_projection::<Project, RootEntityValue<Project>>();
+	assert_projection::<Option<Project>, RootOptionalEntity<Project>>();
+	assert_projection::<Vec<Project>, RootEntityVec<Project>>();
+	assert_prelude_projection::<Project, PreludeEntityValue<Project>>();
+	assert_prelude_projection::<Vec<Project>, PreludeEntityVec<Project>>();
+	assert_prelude_projection::<Option<Project>, PreludeOptionalEntity<Project>>();
+	assert_reactive_projection::<Project, ReactiveEntityValue<Project>>();
+
+	let _root_queries: fn() -> RootQueryClient = reinhardt_pages::queries;
+	let _prelude_queries: fn() -> RootQueryClient = prelude_queries;
+	let _root_reader: Option<fn(&RootEntityReader<'_>)> = None;
+	let _root_writer: Option<fn(&mut RootEntityWriter<'_>)> = None;
+	let _root_dependencies = RootEntityDependencies::default();
+	let _root_removed = RootRemovedEntities::from_ids::<Project>([1]);
+	let _root_materialization = RootProjectionMaterialization::<Project>::MissingRequired;
+	let _root_removal = RootProjectionRemoval::Unchanged;
+	let _prelude_materialization = PreludeProjectionMaterialization::<Project>::MissingRequired;
+	let _prelude_removal = PreludeProjectionRemoval::Unchanged;
+
+	ReactiveScope::run(|| {
+		let root_arena = RootEntityArena::new(Duration::ZERO);
+		let root_handle: RootEntityHandle<Project> = root_arena.entity(1);
+		root_arena.update_entities(|entities| entities.upsert(project(1, "root")));
+		assert_eq!(root_handle.get(), Some(project(1, "root")));
+
+		let prelude_arena = PreludeEntityArena::new(Duration::ZERO);
+		let prelude_handle: PreludeEntityHandle<Project> = prelude_arena.entity(1);
+		prelude_arena.update_entities(|entities| entities.upsert(project(1, "prelude")));
+		assert_eq!(prelude_handle.get(), Some(project(1, "prelude")));
+
+		let reactive_arena = ReactiveEntityArena::new(Duration::ZERO);
+		let reactive_handle: ReactiveEntityHandle<Project> = reactive_arena.entity(1);
+		reactive_arena.update_entities(|entities| entities.upsert(project(1, "reactive")));
+		assert_eq!(reactive_handle.get(), Some(project(1, "reactive")));
 	});
 }

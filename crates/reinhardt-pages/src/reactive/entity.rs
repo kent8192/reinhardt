@@ -3,6 +3,14 @@
 //! [`Entity`] associates an application-wide entity type with a canonical,
 //! serializable identifier. The entity cache uses this contract to distinguish
 //! entities from different types even when their raw IDs are identical.
+//!
+//! The public entity API is target-neutral. Import the same contracts from
+//! [`crate::reactive`] or [`crate::prelude`] on native SSR and WASM clients:
+//! [`EntityArena`], [`EntityHandle`], [`EntityProjection`], [`EntityValue`],
+//! [`OptionalEntity`], [`EntityVec`], [`EntityDependencies`], [`EntityReader`],
+//! [`EntityWriter`], [`ProjectionMaterialization`], [`ProjectionRemoval`], and
+//! [`RemovedEntities`]. Hydration table types and adapters stay crate-private
+//! because they are transport implementation details.
 
 pub(crate) mod hydration;
 mod identity;

@@ -749,9 +749,11 @@ pub use form_state::{
 pub use hydration::{HydrationContext, HydrationError, hydrate};
 pub use portal::{Portal, PortalError, PortalHandle, PortalTarget, mount_portal};
 pub use reactive::{
-	Effect, ExplicitDeps, LatestResourceState, LatestResourceValue, LatestResourceValueBuilder,
-	Memo, QueryClient, QueryDefaults, QueryDescriptor, QueryFamily, QueryHandle, QueryKey,
-	QueryOptions, QuerySnapshot, QueryStatus, ReactiveDeps, Resource, ResourceState, Signal,
+	Effect, Entity, EntityArena, EntityDependencies, EntityHandle, EntityProjection, EntityReader,
+	EntityValue, EntityVec, EntityWriter, ExplicitDeps, LatestResourceState, LatestResourceValue,
+	LatestResourceValueBuilder, Memo, OptionalEntity, ProjectionMaterialization, ProjectionRemoval,
+	QueryClient, QueryDefaults, QueryDescriptor, QueryFamily, QueryHandle, QueryKey, QueryOptions,
+	QuerySnapshot, QueryStatus, ReactiveDeps, RemovedEntities, Resource, ResourceState, Signal,
 	Trackable, queries, use_latest_resource_value, use_resource, use_resource_with_key,
 };
 // Re-export Context system

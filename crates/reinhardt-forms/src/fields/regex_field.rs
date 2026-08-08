@@ -521,8 +521,8 @@ mod tests {
 		}
 	}
 
-	#[test]
-	fn regex_slug_and_ip_fields_cover_configuration_and_boundary_contracts() {
+	#[rstest]
+	fn regex_field_covers_configuration_and_boundary_contracts() {
 		// Arrange
 		let mut regex = RegexField::new("code".to_string(), r"^[A-Z]+$")
 			.unwrap()
@@ -578,7 +578,11 @@ mod tests {
 			regex.clean(Some(&json!(""))).unwrap(),
 			serde_json::Value::Null
 		);
+	}
 
+	#[rstest]
+	fn slug_field_covers_configuration_and_boundary_contracts() {
+		// Arrange
 		let mut slug = SlugField::new("slug".to_string());
 		slug.required = false;
 		slug.max_length = Some(3);
@@ -604,7 +608,11 @@ mod tests {
 				.to_string(),
 			"Enter a valid slug consisting of Unicode letters, numbers, underscores, or hyphens",
 		);
+	}
 
+	#[rstest]
+	fn generic_ip_address_field_covers_configuration_and_boundary_contracts() {
+		// Arrange
 		let mut ipv4 = GenericIPAddressField::new("ip".to_string());
 		ipv4.protocol = IPProtocol::IPv4;
 		assert_eq!(

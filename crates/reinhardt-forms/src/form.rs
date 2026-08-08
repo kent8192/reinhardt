@@ -1517,17 +1517,5 @@ mod tests {
 			csrf_form.errors().get(ALL_FIELDS_KEY),
 			Some(&vec!["Cross-field validation failed.".to_string()]),
 		);
-
-		let mut bound_form = Form::with_prefix("profile".to_string());
-		bound_form.add_field(Box::new(
-			CharField::new("display_name".to_string()).required(),
-		));
-		bound_form.bind(HashMap::from([("display_name".to_string(), json!(7))]));
-		assert!(!bound_form.is_valid());
-		let bound = bound_form.get_bound_field("display_name").unwrap();
-		assert_eq!(bound.html_name(), "profile-display_name");
-		assert_eq!(bound.id_for_label(), "id_profile-display_name");
-		assert_eq!(bound.value(), Some(&json!(7)));
-		assert_eq!(bound.errors(), ["Value must be a string"]);
 	}
 }

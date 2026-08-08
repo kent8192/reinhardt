@@ -1323,22 +1323,11 @@ mod tests {
 	}
 
 	#[rstest]
-	fn advanced_fields_cover_optional_invalid_type_and_change_boundaries() {
+	fn uuid_field_covers_optional_invalid_type_and_change_boundaries() {
 		// Arrange
 		let uuid = UUIDField::new("identifier")
 			.required(false)
 			.error_message("invalid", "UUID only.");
-		let duration = DurationField::new("duration")
-			.required(false)
-			.error_message("invalid", "Duration only.");
-		let color = ColorField::new("color").required(false);
-		let password = PasswordField::new("password")
-			.required(false)
-			.min_length(8)
-			.require_uppercase(true)
-			.require_lowercase(true)
-			.require_digit(true)
-			.require_special(true);
 
 		// Act and assert
 		assert_eq!(
@@ -1359,7 +1348,16 @@ mod tests {
 			Some(&json!("550e8400-e29b-41d4-a716-446655440000")),
 			Some(&json!("550e8400-e29b-41d4-a716-446655440001")),
 		));
+	}
 
+	#[rstest]
+	fn duration_field_covers_optional_invalid_type_and_change_boundaries() {
+		// Arrange
+		let duration = DurationField::new("duration")
+			.required(false)
+			.error_message("invalid", "Duration only.");
+
+		// Act and assert
 		assert_eq!(duration.clean(Some(&json!("P0W"))).unwrap(), json!("P0W"));
 		assert_eq!(
 			duration.clean(Some(&json!("P999W"))).unwrap(),
@@ -1383,7 +1381,14 @@ mod tests {
 		);
 		assert!(!duration.has_changed(Some(&json!("PT1H")), Some(&json!("PT1H"))));
 		assert!(duration.has_changed(Some(&json!("PT1H")), Some(&json!("PT2H"))));
+	}
 
+	#[rstest]
+	fn color_field_covers_optional_invalid_type_and_change_boundaries() {
+		// Arrange
+		let color = ColorField::new("color").required(false);
+
+		// Act and assert
 		assert_eq!(
 			color.clean(Some(&json!(" #aBc123 "))).unwrap(),
 			json!("#ABC123")
@@ -1398,7 +1403,20 @@ mod tests {
 			"Enter a valid hex color code (e.g., #FF0000).",
 		);
 		assert!(!color.has_changed(Some(&json!("#abc123")), Some(&json!("#ABC123"))));
+	}
 
+	#[rstest]
+	fn password_field_covers_optional_invalid_type_and_change_boundaries() {
+		// Arrange
+		let password = PasswordField::new("password")
+			.required(false)
+			.min_length(8)
+			.require_uppercase(true)
+			.require_lowercase(true)
+			.require_digit(true)
+			.require_special(true);
+
+		// Act and assert
 		assert_eq!(
 			password.clean(Some(&json!("Valid1!a"))).unwrap(),
 			json!(PASSWORD_REDACTED),

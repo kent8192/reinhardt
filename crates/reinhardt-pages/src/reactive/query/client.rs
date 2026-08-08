@@ -1537,7 +1537,7 @@ impl<T: Clone + 'static, E: Clone + 'static> QueryEntry<T, E> {
 			.queued_manual_refetch
 			.borrow()
 			.as_ref()
-			.map_or(true, |observer| observer.strong_count() > 0);
+			.is_none_or(|observer| observer.strong_count() > 0);
 		let follow_up_required = (self.refetch_after_in_flight.get()
 			&& queued_manual_refetch_is_live
 			&& self.lease_count.get() > 0)

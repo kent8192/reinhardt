@@ -291,7 +291,7 @@ pub(crate) struct StoredExpression {
 	/// Aggregate result storage metadata, when this expression is an aggregate.
 	pub(crate) output: Option<AggregateOutputKind>,
 	/// Aggregate function represented by this expression, when applicable.
-	pub(crate) aggregate_function: Option<AggregateFunction>,
+	pub(crate) aggregate_function: Option<TypedAggregateFn>,
 	/// Scalar storage metadata used to decode MIN/MAX aggregate results.
 	pub(crate) aggregate_storage_kind: Option<DatabaseStorageKind>,
 	/// Optional identifier retained with the erased expression.
@@ -389,16 +389,16 @@ impl ExpressionNode {
 		}
 	}
 
-	fn aggregate_function(&self) -> Option<AggregateFunction> {
+	fn aggregate_function(&self) -> Option<TypedAggregateFn> {
 		match self {
 			Self::Aggregate { operation, .. } => Some(match operation {
-				AggregateOperation::Count => AggregateFunction::Count,
-				AggregateOperation::Sum => AggregateFunction::Sum,
-				AggregateOperation::Average => AggregateFunction::Avg,
-				AggregateOperation::Minimum => AggregateFunction::Min,
-				AggregateOperation::Maximum => AggregateFunction::Max,
+				AggregateOperation::Count => TypedAggregateFn::Count,
+				AggregateOperation::Sum => TypedAggregateFn::Sum,
+				AggregateOperation::Average => TypedAggregateFn::Avg,
+				AggregateOperation::Minimum => TypedAggregateFn::Min,
+				AggregateOperation::Maximum => TypedAggregateFn::Max,
 			}),
-			Self::CountAll => Some(AggregateFunction::Count),
+			Self::CountAll => Some(TypedAggregateFn::Count),
 			Self::Arithmetic { left, right, .. } | Self::Coalesce { left, right } => left
 				.aggregate_function()
 				.or_else(|| right.aggregate_function()),
@@ -460,7 +460,7 @@ fn scalar_storage_kind(node: &ExpressionNode) -> Option<DatabaseStorageKind> {
 /// construct aggregates through [`crate::orm::func`] instead of naming a
 /// function or supplying a field string.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum AggregateFunction {
+pub(crate) enum TypedAggregateFn {
 	/// COUNT.
 	Count,
 	/// SUM.

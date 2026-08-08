@@ -922,6 +922,298 @@ fn query_retry_observer_predicate_panic_propagates_unchanged() {
 }
 
 #[test]
+fn query_retry_refetch_resets_a_waiting_sequence_immediately() {
+	let runtime = TestQueryRuntime::new();
+	let client = QueryClient::with_runtime(QueryDefaults::default(), runtime.handle());
+	let family = QueryFamily::<(), String, String>::new("tests.retry-refetch-reset");
+	let fetch_count = Rc::new(Cell::new(0));
+	let query = client.observe(
+		family.query((), {
+			let fetch_count = Rc::clone(&fetch_count);
+			move || {
+				let attempt = fetch_count.get() + 1;
+				fetch_count.set(attempt);
+				async move { Err(format!("attempt-{attempt}")) }
+			}
+		}),
+		QueryOptions::new().retry(
+			RetryPolicy::exponential()
+				.max_attempts(2)
+				.base_delay(Duration::from_secs(1))
+				.max_delay(Duration::from_secs(1)),
+		),
+	);
+	runtime.run_until_stalled();
+
+	query.refetch();
+	runtime.run_until_stalled();
+	assert_eq!(fetch_count.get(), 2);
+	assert_eq!(query.error(), None);
+
+	runtime.advance(Duration::from_secs(1));
+	runtime.run_due_maintenance();
+	assert_eq!(fetch_count.get(), 3);
+	assert_eq!(query.error(), Some("attempt-3".to_string()));
+}
+
+#[test]
+fn query_retry_invalidation_resets_a_waiting_sequence_immediately() {
+	let runtime = TestQueryRuntime::new();
+	let client = QueryClient::with_runtime(QueryDefaults::default(), runtime.handle());
+	let family = QueryFamily::<(), String, String>::new("tests.retry-invalidation-reset");
+	let fetch_count = Rc::new(Cell::new(0));
+	let descriptor = family.query((), {
+		let fetch_count = Rc::clone(&fetch_count);
+		move || {
+			let attempt = fetch_count.get() + 1;
+			fetch_count.set(attempt);
+			async move { Err(format!("attempt-{attempt}")) }
+		}
+	});
+	let key = descriptor.key().clone();
+	let query = client.observe(
+		descriptor,
+		QueryOptions::new().retry(
+			RetryPolicy::exponential()
+				.max_attempts(2)
+				.base_delay(Duration::from_secs(1))
+				.max_delay(Duration::from_secs(1)),
+		),
+	);
+	runtime.run_until_stalled();
+
+	client.invalidate(&key);
+	runtime.run_until_stalled();
+	assert_eq!(fetch_count.get(), 2);
+	assert!(query.is_stale());
+
+	runtime.advance(Duration::from_secs(1));
+	runtime.run_due_maintenance();
+	assert_eq!(fetch_count.get(), 3);
+	assert_eq!(query.error(), Some("attempt-3".to_string()));
+}
+
+#[test]
+fn query_retry_refetch_coalesces_one_follow_up_for_an_in_flight_attempt() {
+	let runtime = TestQueryRuntime::new();
+	let client = QueryClient::with_runtime(QueryDefaults::default(), runtime.handle());
+	let family = QueryFamily::<(), String, String>::new("tests.retry-refetch-coalesce");
+	let ready = Rc::new(Cell::new(false));
+	let fetch_count = Rc::new(Cell::new(0));
+	let query = client.observe(
+		family.query((), {
+			let ready = Rc::clone(&ready);
+			let fetch_count = Rc::clone(&fetch_count);
+			move || {
+				fetch_count.set(fetch_count.get() + 1);
+				TestGate {
+					ready: Rc::clone(&ready),
+					dropped: Rc::new(Cell::new(0)),
+					result: Some(Ok("fresh".to_string())),
+				}
+			}
+		}),
+		QueryOptions::default(),
+	);
+	runtime.run_until_stalled();
+
+	query.refetch();
+	query.refetch();
+	query.refetch();
+	ready.set(true);
+	runtime.run_until_stalled();
+
+	assert_eq!(fetch_count.get(), 2);
+	assert_eq!(query.data(), Some("fresh".to_string()));
+	assert!(!query.is_fetching());
+}
+
+#[test]
+fn query_retry_superseded_failure_stays_unpublished_and_retargets_waiters() {
+	let runtime = TestQueryRuntime::new();
+	let client = QueryClient::with_runtime(QueryDefaults::default(), runtime.handle());
+	let family = QueryFamily::<(), String, String>::new("tests.retry-superseded-failure");
+	let ready = Rc::new(Cell::new(false));
+	let fetch_count = Rc::new(Cell::new(0));
+	let descriptor = family.query((), {
+		let ready = Rc::clone(&ready);
+		let fetch_count = Rc::clone(&fetch_count);
+		move || {
+			let attempt = fetch_count.get() + 1;
+			fetch_count.set(attempt);
+			TestGate {
+				ready: Rc::clone(&ready),
+				dropped: Rc::new(Cell::new(0)),
+				result: Some(if attempt == 1 {
+					Err("obsolete".to_string())
+				} else {
+					Ok("fresh".to_string())
+				}),
+			}
+		}
+	});
+	let lease = client.acquire(
+		descriptor,
+		QueryAcquireOptions {
+			consumer: QueryConsumer::Navigation(1),
+			error_policy: QueryErrorPolicy::Discard,
+		},
+	);
+	runtime.run_until_stalled();
+
+	let entry = Rc::clone(&lease.inner.entry);
+	entry.start_fetch(true);
+	ready.set(true);
+	runtime.run_until_stalled();
+
+	assert_eq!(fetch_count.get(), 2);
+	assert_eq!(
+		tokio_test::block_on(lease.result()),
+		Ok("fresh".to_string())
+	);
+	assert_eq!(entry.refetch_error.get(), None);
+	assert!(matches!(
+		entry.state.with_untracked(|state| state.clone()),
+		ResourceState::Success(value) if value == "fresh"
+	));
+}
+
+#[test]
+fn query_retry_polling_joins_a_waiting_sequence_without_resetting_it() {
+	let runtime = TestQueryRuntime::new();
+	let client = QueryClient::with_runtime(QueryDefaults::default(), runtime.handle());
+	let family = QueryFamily::<(), String, String>::new("tests.retry-polling-joins");
+	let fetch_count = Rc::new(Cell::new(0));
+	let _query = client.observe(
+		family.query((), {
+			let fetch_count = Rc::clone(&fetch_count);
+			move || {
+				fetch_count.set(fetch_count.get() + 1);
+				async { Err("offline".to_string()) }
+			}
+		}),
+		QueryOptions::new()
+			.refetch_interval(Duration::from_millis(500))
+			.retry(
+				RetryPolicy::exponential()
+					.max_attempts(2)
+					.base_delay(Duration::from_secs(1))
+					.max_delay(Duration::from_secs(1)),
+			),
+	);
+	runtime.run_until_stalled();
+
+	runtime.advance(Duration::from_millis(500));
+	runtime.run_due_maintenance();
+	assert_eq!(fetch_count.get(), 1);
+
+	runtime.advance(Duration::from_millis(500));
+	runtime.run_due_maintenance();
+	assert_eq!(fetch_count.get(), 2);
+}
+
+#[test]
+fn query_retry_cancel_invalidates_a_waiting_deadline() {
+	let runtime = TestQueryRuntime::new();
+	let client = QueryClient::with_runtime(QueryDefaults::default(), runtime.handle());
+	let family = QueryFamily::<(), String, String>::new("tests.retry-cancel-wait");
+	let fetch_count = Rc::new(Cell::new(0));
+	let query = client.observe(
+		family.query((), {
+			let fetch_count = Rc::clone(&fetch_count);
+			move || {
+				fetch_count.set(fetch_count.get() + 1);
+				async { Err("offline".to_string()) }
+			}
+		}),
+		QueryOptions::new().retry(
+			RetryPolicy::exponential()
+				.max_attempts(2)
+				.base_delay(Duration::from_secs(1))
+				.max_delay(Duration::from_secs(1)),
+		),
+	);
+	runtime.run_until_stalled();
+	let entry = Rc::clone(&query.entry);
+
+	drop(query);
+	runtime.advance(Duration::from_secs(1));
+	runtime.run_due_maintenance();
+
+	assert_eq!(fetch_count.get(), 1);
+	assert!(entry.retry.borrow().is_none());
+	assert!(!entry.is_fetching.get());
+}
+
+#[test]
+fn query_retry_client_drop_invalidates_a_waiting_deadline() {
+	let runtime = TestQueryRuntime::new();
+	let client = QueryClient::with_runtime(QueryDefaults::default(), runtime.handle());
+	let family = QueryFamily::<(), String, String>::new("tests.retry-client-cancel-wait");
+	let fetch_count = Rc::new(Cell::new(0));
+	let query = client.observe(
+		family.query((), {
+			let fetch_count = Rc::clone(&fetch_count);
+			move || {
+				fetch_count.set(fetch_count.get() + 1);
+				async { Err("offline".to_string()) }
+			}
+		}),
+		QueryOptions::new().retry(
+			RetryPolicy::exponential()
+				.max_attempts(2)
+				.base_delay(Duration::from_secs(1))
+				.max_delay(Duration::from_secs(1)),
+		),
+	);
+	runtime.run_until_stalled();
+	let entry = Rc::clone(&query.entry);
+
+	drop(client);
+	runtime.advance(Duration::from_secs(1));
+	runtime.run_due_maintenance();
+
+	assert_eq!(fetch_count.get(), 1);
+	assert!(entry.retry.borrow().is_none());
+	assert!(!entry.is_fetching.get());
+}
+
+#[test]
+fn query_retry_garbage_collection_invalidates_a_waiting_deadline() {
+	let runtime = TestQueryRuntime::new();
+	let client = QueryClient::with_runtime(QueryDefaults::default(), runtime.handle());
+	let family = QueryFamily::<(), String, String>::new("tests.retry-gc-cancel-wait");
+	let fetch_count = Rc::new(Cell::new(0));
+	let descriptor = family.query((), {
+		let fetch_count = Rc::clone(&fetch_count);
+		move || {
+			fetch_count.set(fetch_count.get() + 1);
+			async { Err("offline".to_string()) }
+		}
+	});
+	let key = descriptor.key().clone();
+	let query = client.observe(
+		descriptor,
+		QueryOptions::new().gc_time(Duration::from_secs(1)).retry(
+			RetryPolicy::exponential()
+				.max_attempts(2)
+				.base_delay(Duration::from_secs(1))
+				.max_delay(Duration::from_secs(1)),
+		),
+	);
+	runtime.run_until_stalled();
+	let entry = Rc::clone(&query.entry);
+
+	drop(query);
+	runtime.advance(Duration::from_secs(1));
+	runtime.run_due_maintenance();
+
+	assert_eq!(fetch_count.get(), 1);
+	assert!(!client.contains_for_test(&key));
+	assert!(entry.retry.borrow().is_none());
+}
+
+#[test]
 fn refetch_after_initial_error_transitions_through_pending() {
 	let runtime = TestQueryRuntime::new();
 	let client = QueryClient::with_runtime(QueryDefaults::default(), runtime.handle());

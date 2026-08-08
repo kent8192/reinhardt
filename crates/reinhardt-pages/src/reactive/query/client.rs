@@ -646,7 +646,7 @@ impl<T: Clone + 'static, E: Clone + 'static> Drop for QueryLeaseInner<T, E> {
 			entry.retain_lease_count.set(retained);
 		}
 		if remaining == 0 {
-			entry.cancel_request();
+			entry.cancel_active_work();
 			entry.schedule_garbage_collection();
 		} else {
 			entry.remove_retry_candidate(self.registration_id);
@@ -881,6 +881,9 @@ impl<T: Clone + 'static, E: Clone + 'static> QueryEntry<T, E> {
 		if generation != self.poll_generation.get() || self.lease_count.get() == 0 {
 			return;
 		}
+		if self.retry.borrow().is_some() {
+			return;
+		}
 		self.suspend_polling();
 		if !self.polling_is_visible() {
 			if let Some(owner) = self.owner.as_ref().and_then(Weak::upgrade) {
@@ -965,16 +968,17 @@ impl<T: Clone + 'static, E: Clone + 'static> QueryEntry<T, E> {
 		self.next_retry_generation();
 	}
 
-	fn cancel_request(&self) {
+	fn cancel_active_work(&self) {
 		self.inline_task.borrow_mut().take();
 		if let Some(request) = self.request.borrow_mut().take() {
 			request.source.cancel();
 			Self::clear_manual_refetch(request.manual_observer);
 		}
+		self.retry.borrow_mut().take();
+		self.next_retry_generation();
 		Self::clear_manual_refetch(self.queued_manual_refetch.borrow_mut().take());
 		self.refetch_after_in_flight.set(false);
 		self.is_fetching.set(false);
-		self.clear_retry_sequence();
 		self.wake_waiters();
 	}
 
@@ -1216,7 +1220,7 @@ impl<T: Clone + 'static, E: Clone + 'static> QueryEntry<T, E> {
 				had_success,
 				error,
 			);
-			self.finish_terminal_sequence(manual_observer, invalidation_generation);
+			self.finish_terminal_sequence(manual_observer, invalidation_generation, None);
 		} else {
 			self.recompute_retry_deadline();
 		}
@@ -1280,6 +1284,12 @@ impl<T: Clone + 'static, E: Clone + 'static> QueryEntry<T, E> {
 			return self.active_completion_generation().unwrap_or_default();
 		}
 
+		let superseded_completion_generation = self
+			.retry
+			.borrow()
+			.as_ref()
+			.filter(|retry| retry.last_error.is_some())
+			.map(|retry| retry.completion_generation);
 		let had_success = self
 			.state
 			.with_untracked(|state| matches!(state, ResourceState::Success(_)));
@@ -1301,6 +1311,9 @@ impl<T: Clone + 'static, E: Clone + 'static> QueryEntry<T, E> {
 			&& let Some(previous_manual_observer) = self.observer_by_id(previous_manual_observer_id)
 		{
 			previous_manual_observer.manual_refetch_pending.set(false);
+		}
+		if let Some(manual_observer) = manual_observer.as_ref() {
+			manual_observer.manual_refetch_pending.set(true);
 		}
 		self.clear_retry_sequence();
 		let sequence_generation = self.next_retry_generation();
@@ -1326,6 +1339,12 @@ impl<T: Clone + 'static, E: Clone + 'static> QueryEntry<T, E> {
 			sequence_generation,
 			manual_observer.as_ref().map(Rc::downgrade),
 		);
+		if let Some(superseded_completion_generation) = superseded_completion_generation {
+			self.retarget_unresolved_leases(
+				superseded_completion_generation,
+				completion_generation,
+			);
+		}
 		completion_generation
 	}
 
@@ -1437,6 +1456,9 @@ impl<T: Clone + 'static, E: Clone + 'static> QueryEntry<T, E> {
 		if !sequence_matches {
 			return;
 		}
+		let follow_up_required = self.refetch_after_in_flight.get()
+			|| (self.invalidation_generation.get() > request_invalidation_generation
+				&& self.has_active_invalidation_interest());
 		match result {
 			Ok(value) => {
 				let completion_generation = self
@@ -1455,9 +1477,28 @@ impl<T: Clone + 'static, E: Clone + 'static> QueryEntry<T, E> {
 					.borrow_mut()
 					.replace((completion_generation, Ok(value)));
 				self.clear_retry_sequence();
-				self.finish_terminal_sequence(manual_observer, request_invalidation_generation);
+				self.finish_terminal_sequence(
+					manual_observer,
+					request_invalidation_generation,
+					None,
+				);
 			}
 			Err(error) => {
+				if follow_up_required {
+					let completion_generation = self
+						.retry
+						.borrow()
+						.as_ref()
+						.map(|retry| retry.completion_generation)
+						.unwrap_or_default();
+					self.clear_retry_sequence();
+					self.finish_terminal_sequence(
+						manual_observer,
+						request_invalidation_generation,
+						Some(completion_generation),
+					);
+					return;
+				}
 				let now_ms = self.runtime.now_ms();
 				let observers = self.live_observers();
 				let has_candidates = {
@@ -1495,7 +1536,11 @@ impl<T: Clone + 'static, E: Clone + 'static> QueryEntry<T, E> {
 					had_success,
 					error,
 				);
-				self.finish_terminal_sequence(manual_observer, request_invalidation_generation);
+				self.finish_terminal_sequence(
+					manual_observer,
+					request_invalidation_generation,
+					None,
+				);
 			}
 		}
 	}
@@ -1589,8 +1634,8 @@ impl<T: Clone + 'static, E: Clone + 'static> QueryEntry<T, E> {
 		self: &Rc<Self>,
 		manual_observer: Option<Weak<QueryLeaseInner<T, E>>>,
 		request_invalidation_generation: u64,
+		superseded_completion_generation: Option<u64>,
 	) {
-		self.wake_waiters();
 		self.reschedule_polling_from(self.runtime.now_ms());
 		let invalidated_during_request =
 			self.invalidation_generation.get() > request_invalidation_generation;
@@ -1608,17 +1653,33 @@ impl<T: Clone + 'static, E: Clone + 'static> QueryEntry<T, E> {
 		if !same_observer_is_queued {
 			Self::clear_manual_refetch(manual_observer);
 		}
-		if let Some(observer) = queued_manual_observer
+		let next_completion_generation = if let Some(observer) = queued_manual_observer
 			&& observer.strong_count() > 0
 			&& self.lease_count.get() > 0
 		{
-			self.start_sequence_with(true, Some(observer));
+			Some(self.start_sequence_with(true, Some(observer)))
 		} else if ((manual_refetch_queued
 			&& (!queued_manual_observer_was_present || queued_manual_observer_is_live))
 			|| (invalidated_during_request && self.has_active_invalidation_interest()))
 			&& self.lease_count.get() > 0
 		{
-			self.start_fetch(true);
+			Some(self.start_fetch(true))
+		} else {
+			None
+		};
+		if let (Some(from), Some(to)) =
+			(superseded_completion_generation, next_completion_generation)
+		{
+			self.retarget_unresolved_leases(from, to);
+		}
+		self.wake_waiters();
+	}
+
+	fn retarget_unresolved_leases(&self, from: u64, to: u64) {
+		for observer in self.live_observers() {
+			if observer.generation.get() == Some(from) {
+				observer.generation.set(Some(to));
+			}
 		}
 	}
 
@@ -1979,7 +2040,7 @@ where
 		}),
 		cancel: Rc::new({
 			let entry = Rc::clone(entry);
-			move || entry.cancel_request()
+			move || entry.cancel_active_work()
 		}),
 		poll_due: Rc::new({
 			let entry = Rc::clone(entry);

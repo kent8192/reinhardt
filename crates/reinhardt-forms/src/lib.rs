@@ -99,10 +99,16 @@
 //! | [`ChoiceField`] | Select dropdown |
 //! | [`MultipleChoiceField`] | Multi-select |
 //! | [`ModelChoiceField`] | Foreign key selection |
+//! | [`ModelMultipleChoiceField`] | Multiple model selection with normalized dirty-state comparison |
 //! | [`JSONField`] | JSON data input |
 //! | [`UUIDField`] | UUID input |
 //! | [`SlugField`] | URL-safe slug input |
 //! | [`RegexField`] | Custom regex validation |
+//!
+//! `ModelMultipleChoiceField` compares selected values without considering
+//! order when [`Form::has_changed`] runs. Numeric IDs and strings with the same
+//! textual representation are equivalent, while booleans, nulls, arrays, and
+//! objects remain distinct JSON types.
 //!
 //! ## FormSets
 //!

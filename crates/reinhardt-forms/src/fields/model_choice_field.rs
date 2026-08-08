@@ -9,8 +9,12 @@ use std::marker::PhantomData;
 
 fn choice_value_text(value: &Value) -> String {
 	match value {
-		Value::String(value) => value.clone(),
-		_ => value.to_string(),
+		Value::String(value) => format!("id:{value}"),
+		Value::Number(value) => format!("id:{value}"),
+		Value::Bool(value) => format!("bool:{value}"),
+		Value::Null => "null:".to_string(),
+		Value::Array(value) => format!("array:{}", Value::Array(value.clone())),
+		Value::Object(value) => format!("object:{}", Value::Object(value.clone())),
 	}
 }
 
@@ -265,6 +269,10 @@ impl<T: FormModel> FormField for ModelChoiceField<T> {
 /// A field for selecting multiple model instances from a queryset
 ///
 /// This field displays model instances as choices in a multiple select widget.
+/// [`Form::has_changed`](crate::Form::has_changed) treats selected arrays as
+/// unordered. Numeric IDs and strings with the same textual representation are
+/// normalized to the same key (for example, `1` and `"1"`), while booleans,
+/// nulls, arrays, and objects retain distinct JSON type tags.
 pub struct ModelMultipleChoiceField<T: FormModel> {
 	/// The field name used as the form data key.
 	pub name: String,
@@ -812,6 +820,8 @@ mod tests {
 		assert!(!multiple.has_changed(Some(&json!(["1", "2"])), Some(&json!(["1", "2"]))));
 		assert!(!multiple.has_changed(Some(&json!(["1", "2"])), Some(&json!(["2", "1"]))));
 		assert!(!multiple.has_changed(Some(&json!([1, 2])), Some(&json!(["1", "2"]))));
+		assert!(multiple.has_changed(Some(&json!(["true"])), Some(&json!([true]))));
+		assert!(multiple.has_changed(Some(&json!(["null"])), Some(&json!([null]))));
 		assert!(multiple.has_changed(Some(&json!(["1", "1"])), Some(&json!(["1"]))));
 
 		let string_multiple = ModelMultipleChoiceField::new(

@@ -93,6 +93,9 @@ use reinhardt::forms::{Form, Field, CharField, IntegerField};
 
 - `ModelChoiceField`: Foreign key selection with queryset support
 - `ModelMultipleChoiceField`: Many-to-many selection
+  - `Form::has_changed` ignores selection order
+  - Numeric IDs and strings with the same textual representation are treated as equivalent
+  - Boolean, null, array, and object values retain their JSON type distinctions
 
 ### Model Integration
 

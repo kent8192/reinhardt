@@ -13,7 +13,9 @@ categories = ["web-programming", "filesystem"]
 async-trait = "0.1"
 tokio = { version = "1", features = ["fs", "rt-multi-thread", "macros"] }
 chrono = { workspace = true }
+rand = { workspace = true }
 thiserror = { workspace = true }
+unicode-normalization = "0.1"
 serde = { workspace = true }
 serde_json = { workspace = true }
 reinhardt-conf = { workspace = true, features = ["settings"] }
@@ -38,7 +40,6 @@ tokio = { workspace = true, features = ["full"] }
 tempfile = "3"
 rstest = { workspace = true }
 uuid = { version = "1", features = ["v4"] }
-rand = { workspace = true }
 serial_test = "3"
 testcontainers = { workspace = true }
 reqwest = { workspace = true }

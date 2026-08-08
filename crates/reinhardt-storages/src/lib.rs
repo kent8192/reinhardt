@@ -12,6 +12,8 @@
 //!   Reinhardt `#[settings]` macro
 //! - **Named storage registry**: file fields can resolve validated named
 //!   backends with scoped process-wide activation
+//! - **Collision-safe uploads**: portable normalized keys use atomic exclusive
+//!   creation and bounded random suffix retries
 //! - **Async I/O**: All operations are asynchronous using Tokio
 //! - **Feature Flags**: Enable only the backends you need
 //! - **Temporary URLs**: Generate S3 presigned URLs, GCS V4 signed URLs, and
@@ -53,14 +55,20 @@ pub mod backends;
 pub mod config;
 pub mod error;
 pub mod factory;
+pub mod file_naming;
 pub mod registry;
 pub mod settings;
+pub mod upload;
 
 pub use backend::{StorageBackend, StorageCapabilities};
 #[allow(deprecated)] // Re-export keeps the compatibility API discoverable during the 0.2 line.
 pub use config::{BackendType, StorageConfig};
 pub use error::{FileStorageError, Result, StorageError};
 pub use factory::{create_storage, create_storage_from_settings};
+pub use file_naming::{
+	normalize_client_filename, validate_logical_key, validate_storage_alias,
+	validate_upload_template,
+};
 pub use registry::{
 	ActiveStorageRegistryGuard, StorageEntry, StorageRegistry, active_storage_registry,
 };
@@ -74,3 +82,4 @@ pub use settings::NamedStorageSettings;
 #[cfg(feature = "s3")]
 pub use settings::S3StorageSettings;
 pub use settings::StorageSettings;
+pub use upload::{StoredFile, UploadPolicy, store_uploaded_file};

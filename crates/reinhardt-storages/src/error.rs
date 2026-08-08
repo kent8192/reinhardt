@@ -58,6 +58,24 @@ pub enum FileStorageError {
 	/// The selected backend cannot atomically create new files.
 	#[error("storage alias `{0}` does not support atomic exclusive creation")]
 	UnsupportedExclusiveSave(String),
+	/// The upload payload omitted its client filename.
+	#[error("the upload does not include a filename")]
+	MissingFilename,
+	/// The client filename has an unsafe structural form.
+	#[error("unsafe upload filename: {0}")]
+	UnsafeFilename(String),
+	/// The configured upload directory template is invalid.
+	#[error("invalid upload template: {0}")]
+	InvalidUploadTemplate(String),
+	/// The generated key cannot fit within the field's character limit.
+	#[error("the generated logical path exceeds max_length {max_length}")]
+	PathTooLong {
+		/// Maximum number of Unicode scalar values allowed by the field.
+		max_length: usize,
+	},
+	/// Every bounded collision candidate already existed.
+	#[error("all collision-safe upload names were exhausted")]
+	CollisionExhausted,
 	/// An underlying storage operation failed.
 	#[error(transparent)]
 	Storage(#[from] StorageError),

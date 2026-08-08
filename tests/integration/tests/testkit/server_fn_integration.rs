@@ -1,8 +1,19 @@
 use http::{HeaderMap, HeaderValue};
 use reinhardt_di::SingletonScope;
+use reinhardt_test::auth::{ForceLoginUser, JwtTestConfig};
 use reinhardt_test::server_fn::{MockHttpRequest, ServerFnTestContext, TransactionMode};
 use rstest::rstest;
+use serde_json::json;
 use std::sync::Arc;
+use uuid::Uuid;
+
+struct FixtureUser(Uuid);
+
+impl ForceLoginUser for FixtureUser {
+	fn session_user_id(&self) -> String {
+		self.0.to_string()
+	}
+}
 
 #[rstest]
 fn server_fn_context_builds_overrides_auth_headers_and_expected_results() {
@@ -60,4 +71,36 @@ fn server_fn_context_builds_overrides_auth_headers_and_expected_results() {
 	assert_eq!(env.csrf_token.as_deref(), Some("csrf-42"));
 	assert_eq!(env.mock_session.as_ref().unwrap().csrf_token, "csrf-42");
 	assert_eq!(env.transaction_mode, TransactionMode::Commit);
+}
+
+#[rstest]
+fn server_fn_auth_builder_preserves_session_and_jwt_identity_overrides() {
+	// Arrange
+	let user = FixtureUser(Uuid::from_u128(0x8a5d));
+	let scope = Arc::new(SingletonScope::new());
+
+	// Act
+	let session_env = ServerFnTestContext::new(scope.clone())
+		.auth()
+		.session(&user)
+		.with_staff(true)
+		.with_superuser(true)
+		.done()
+		.build();
+	let jwt_env = ServerFnTestContext::new(scope)
+		.auth()
+		.jwt(&user, &JwtTestConfig::default())
+		.with_staff(true)
+		.with_superuser(true)
+		.done()
+		.build();
+
+	// Assert
+	for env in [session_env, jwt_env] {
+		let session = env.mock_session.unwrap();
+		assert_eq!(session.user.as_ref().unwrap().id, user.0);
+		assert_eq!(session.get_raw("user_id"), Some(&json!(user.0.to_string())));
+		assert_eq!(session.get_raw("is_staff"), Some(&json!(true)));
+		assert_eq!(session.get_raw("is_superuser"), Some(&json!(true)));
+	}
 }

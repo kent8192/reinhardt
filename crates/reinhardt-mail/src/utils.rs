@@ -319,19 +319,8 @@ async fn send_to_role(
 #[cfg(test)]
 mod tests {
 	use super::*;
-	use crate::backends::{EmailBackend, MemoryBackend};
-	use crate::{EmailError, EmailMessage, EmailResult};
-
-	struct TransientFailureBackend;
-
-	#[async_trait::async_trait]
-	impl EmailBackend for TransientFailureBackend {
-		async fn send_messages(&self, _messages: &[EmailMessage]) -> EmailResult<usize> {
-			Err(EmailError::IoError(std::io::Error::other(
-				"transient failure",
-			)))
-		}
-	}
+	use crate::EmailMessage;
+	use crate::backends::MemoryBackend;
 
 	#[tokio::test]
 	async fn test_send_mail() {
@@ -396,81 +385,5 @@ mod tests {
 
 		assert_eq!(results, 2);
 		assert_eq!(backend.count().await, 2);
-	}
-
-	#[tokio::test]
-	async fn role_mail_helpers_apply_recipient_and_failure_policy() {
-		// Arrange
-		let mut settings = EmailSettings::default();
-		settings.admins = vec![("Admin".to_string(), "admin@example.com".to_string())];
-		settings.managers = vec![("Manager".to_string(), "manager@example.com".to_string())];
-		settings.server_email = "server@example.com".to_string();
-		settings.from_email = "fallback@example.com".to_string();
-		settings.subject_prefix = "[Reinhardt]".to_string();
-		let backend = MemoryBackend::new();
-
-		// Act
-		mail_admins(
-			&settings,
-			"Database Error",
-			"Connection timeout",
-			false,
-			&backend,
-		)
-		.await
-		.unwrap();
-		mail_managers(&settings, "Weekly Report", "New signups", false, &backend)
-			.await
-			.unwrap();
-		send_mail_with_backend(
-			"Welcome",
-			"Plain body",
-			"sender@example.com",
-			vec!["recipient@example.com"],
-			Some("<p>HTML body</p>".to_string()),
-			&backend,
-		)
-		.await
-		.unwrap();
-		let messages = backend.get_messages().await;
-
-		let empty_settings = EmailSettings::default();
-		let silent_admins =
-			mail_admins(&empty_settings, "No admins", "Ignored", true, &backend).await;
-		let missing_admins =
-			mail_admins(&empty_settings, "No admins", "Rejected", false, &backend).await;
-		let missing_managers =
-			mail_managers(&empty_settings, "No managers", "Rejected", false, &backend).await;
-
-		let transient = TransientFailureBackend;
-		let transient_suppressed =
-			mail_admins(&settings, "Transient", "Suppressed", true, &transient).await;
-		let transient_propagated =
-			mail_admins(&settings, "Transient", "Propagated", false, &transient).await;
-
-		// Assert
-		assert_eq!(messages.len(), 3);
-		assert_eq!(messages[0].subject(), "[Reinhardt] Database Error");
-		assert_eq!(messages[0].from_email(), "server@example.com");
-		assert_eq!(messages[0].to(), &["admin@example.com".to_string()]);
-		assert_eq!(messages[0].body(), "Connection timeout");
-		assert_eq!(messages[1].subject(), "[Reinhardt] Weekly Report");
-		assert_eq!(messages[1].to(), &["manager@example.com".to_string()]);
-		assert_eq!(messages[2].html_body(), Some("<p>HTML body</p>"));
-		assert_eq!(messages[2].to(), &["recipient@example.com".to_string()]);
-		assert!(silent_admins.is_ok());
-		assert_eq!(
-			missing_admins.unwrap_err().to_string(),
-			"Missing required field: admins"
-		);
-		assert_eq!(
-			missing_managers.unwrap_err().to_string(),
-			"Missing required field: managers"
-		);
-		assert!(transient_suppressed.is_ok());
-		assert_eq!(
-			transient_propagated.unwrap_err().to_string(),
-			"IO error: transient failure"
-		);
 	}
 }

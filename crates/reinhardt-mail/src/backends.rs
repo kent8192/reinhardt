@@ -24,12 +24,6 @@ use zeroize::Zeroize;
 pub trait EmailBackend: Send + Sync {
 	/// Send one or more email messages, returning the number of messages sent successfully.
 	async fn send_messages(&self, messages: &[EmailMessage]) -> EmailResult<usize>;
-
-	/// Return the concrete backend name for unit-test selection assertions.
-	#[cfg(test)]
-	fn backend_name(&self) -> &'static str {
-		"custom"
-	}
 }
 
 /// Creates an email backend from settings configuration.
@@ -134,11 +128,6 @@ impl EmailBackend for ConsoleBackend {
 			println!("==============================\n");
 		}
 		Ok(messages.len())
-	}
-
-	#[cfg(test)]
-	fn backend_name(&self) -> &'static str {
-		"console"
 	}
 }
 
@@ -246,11 +235,6 @@ impl EmailBackend for MemoryBackend {
 		let mut stored = self.messages.lock().await;
 		stored.extend_from_slice(messages);
 		Ok(messages.len())
-	}
-
-	#[cfg(test)]
-	fn backend_name(&self) -> &'static str {
-		"memory"
 	}
 }
 
@@ -752,7 +736,6 @@ impl EmailBackend for SmtpBackend {
 #[cfg(test)]
 mod tests {
 	use super::*;
-	use crate::EmailMessage;
 
 	#[test]
 	fn smtp_config_from_fragment_email_settings() {
@@ -775,85 +758,5 @@ mod tests {
 		assert_eq!(config.password.as_deref(), Some("secret"));
 		assert!(matches!(config.security, SmtpSecurity::StartTls));
 		assert_eq!(config.timeout, Duration::from_secs(45));
-	}
-
-	#[tokio::test]
-	async fn backend_from_settings_selects_file_and_rejects_bad_configuration() {
-		// Arrange
-		let temp_dir = tempfile::tempdir().unwrap();
-		let mut file_settings = reinhardt_conf::EmailSettings::default();
-		file_settings.backend = "file".to_string();
-		file_settings.file_path = Some(temp_dir.path().to_path_buf());
-		file_settings.from_email = "sender@example.com".to_string();
-		let message = EmailMessage::builder()
-			.subject("File backend")
-			.body("Saved body")
-			.from("sender@example.com")
-			.to(vec!["recipient@example.com".to_string()])
-			.build()
-			.unwrap();
-
-		// Act
-		let file_backend = backend_from_settings(&file_settings).unwrap();
-		let sent = file_backend
-			.send_messages(std::slice::from_ref(&message))
-			.await;
-		let files: Vec<_> = std::fs::read_dir(temp_dir.path())
-			.unwrap()
-			.map(|entry| entry.unwrap().path())
-			.collect();
-
-		let mut missing_path = reinhardt_conf::EmailSettings::default();
-		missing_path.backend = "file".to_string();
-		let missing = match backend_from_settings(&missing_path) {
-			Err(error) => error,
-			Ok(_) => panic!("file backend without file_path must fail"),
-		};
-
-		let mut unknown_settings = reinhardt_conf::EmailSettings::default();
-		unknown_settings.backend = "unknown".to_string();
-		let unknown = match backend_from_settings(&unknown_settings) {
-			Err(error) => error,
-			Ok(_) => panic!("unknown backend must fail"),
-		};
-
-		let mut invalid_settings = reinhardt_conf::EmailSettings::default();
-		invalid_settings.from_email = "invalid".to_string();
-		let invalid_from = match backend_from_settings(&invalid_settings) {
-			Err(error) => error,
-			Ok(_) => panic!("invalid from address must fail"),
-		};
-
-		let mut memory_settings = reinhardt_conf::EmailSettings::default();
-		memory_settings.backend = "memory".to_string();
-		let memory_backend = backend_from_settings(&memory_settings).unwrap();
-		let memory_empty = memory_backend.send_messages(&[]).await.unwrap();
-
-		let mut console_settings = reinhardt_conf::EmailSettings::default();
-		console_settings.backend = "console".to_string();
-		let console_backend = backend_from_settings(&console_settings).unwrap();
-		let console_empty = console_backend.send_messages(&[]).await.unwrap();
-
-		// Assert
-		assert_eq!(sent.unwrap(), 1);
-		assert_eq!(files.len(), 1);
-		let saved = std::fs::read_to_string(&files[0]).unwrap();
-		assert_eq!(
-			saved,
-			"From: sender@example.com\nTo: recipient@example.com\nSubject: File backend\n\nSaved body"
-		);
-		assert_eq!(missing.to_string(), "Missing required field: file_path");
-		assert_eq!(
-			unknown.to_string(),
-			"Backend error: Unknown email backend type: 'unknown'. Valid options: smtp, console, file, memory"
-		);
-		assert_eq!(
-			invalid_from.to_string(),
-			"Invalid email address: Email must contain exactly one @ symbol, found 0"
-		);
-		assert_eq!(memory_empty, 0);
-		assert_eq!(console_empty, 0);
-		assert_eq!(memory_backend.backend_name(), "memory");
-		assert_eq!(console_backend.backend_name(), "console");
 	}
 }

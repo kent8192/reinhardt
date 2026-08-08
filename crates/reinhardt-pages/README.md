@@ -872,6 +872,8 @@ combines the exact key with its fetcher, while `family` selects every cached
 argument set for that endpoint:
 
 ```rust,ignore
+use reinhardt_pages::server_fn::{ServerFnError, ServerFnErrorKind};
+
 let jobs = use_query(
     list_project_jobs::query(project_id),
     QueryOptions::new().refetch_interval(Duration::from_secs(5)),
@@ -885,7 +887,12 @@ let retrying_jobs = use_query(
             .base_delay(Duration::from_millis(250))
             .max_delay(Duration::from_secs(5))
             .jitter(true)
-            .when(|error| error.is_transient()),
+            .when(|error: &ServerFnError| {
+                matches!(
+                    error.kind(),
+                    ServerFnErrorKind::Server | ServerFnErrorKind::Transport
+                )
+            }),
     ),
 );
 

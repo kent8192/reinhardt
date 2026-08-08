@@ -25,6 +25,7 @@
 //! ```ignore
 //! use std::time::Duration;
 //! use reinhardt_pages::prelude::*;
+//! use reinhardt_pages::server_fn::{ServerFnError, ServerFnErrorKind};
 //! use reinhardt_pages::ClientLauncher;
 //!
 //! ClientLauncher::new("#root")
@@ -47,7 +48,12 @@
 //!             .base_delay(Duration::from_millis(250))
 //!             .max_delay(Duration::from_secs(5))
 //!             .jitter(true)
-//!             .when(|error| error.is_transient()),
+//!             .when(|error: &ServerFnError| {
+//!                 matches!(
+//!                     error.kind(),
+//!                     ServerFnErrorKind::Server | ServerFnErrorKind::Transport
+//!                 )
+//!             }),
 //!     ),
 //! );
 //! ```

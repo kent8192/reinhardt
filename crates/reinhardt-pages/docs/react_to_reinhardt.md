@@ -905,6 +905,8 @@ let options = SsrOptions::new()
 Move the fetcher into a descriptor and observer policy into `QueryOptions`:
 
 ```rust,ignore
+use reinhardt_pages::server_fn::{ServerFnError, ServerFnErrorKind};
+
 // Before
 let jobs = use_query(list_project_jobs::key(project_id)).poll(Duration::from_secs(5));
 
@@ -922,7 +924,12 @@ let retrying_jobs = use_query(
             .base_delay(Duration::from_millis(250))
             .max_delay(Duration::from_secs(5))
             .jitter(true)
-            .when(|error| error.is_transient()),
+            .when(|error: &ServerFnError| {
+                matches!(
+                    error.kind(),
+                    ServerFnErrorKind::Server | ServerFnErrorKind::Transport
+                )
+            }),
     ),
 );
 ```

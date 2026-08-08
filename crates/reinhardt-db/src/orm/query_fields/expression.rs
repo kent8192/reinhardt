@@ -555,34 +555,16 @@ pub struct TypedPredicate<M> {
 	marker: PhantomData<fn() -> M>,
 }
 
-impl<M> TypedPredicate<M> {
-	pub(crate) fn new(expr: SimpleExpr) -> Self {
-		Self {
-			expr,
-			joins: JoinRequirements::default(),
-			marker: PhantomData,
-		}
-	}
-}
-
 /// A boolean aggregate comparison to be compiled as a HAVING predicate.
 #[derive(Debug, Clone)]
 pub struct HavingPredicate<M> {
 	// The annotation HAVING planner consumes this expression when it is added.
 	#[allow(dead_code)]
 	pub(crate) expr: SimpleExpr,
+	// The HAVING planner will consume relation paths when aggregate filters are emitted.
+	#[allow(dead_code)]
 	pub(crate) joins: JoinRequirements,
 	marker: PhantomData<fn() -> M>,
-}
-
-impl<M> HavingPredicate<M> {
-	pub(crate) fn new(expr: SimpleExpr) -> Self {
-		Self {
-			expr,
-			joins: JoinRequirements::default(),
-			marker: PhantomData,
-		}
-	}
 }
 
 /// A model-rooted expression with an ordering direction.

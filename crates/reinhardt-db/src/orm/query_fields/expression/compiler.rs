@@ -127,7 +127,14 @@ fn qualify_condition(
 		)
 		.into());
 	}
-	if !joins.paths.is_empty() && count_unqualified_columns(condition) > 1 {
+	if !joins.paths.is_empty()
+		&& count_unqualified_columns(condition).ok_or_else(|| {
+			DatabaseError::new(
+				DatabaseErrorKind::Query,
+				"typed predicate contains an unsupported expression for relation qualification",
+			)
+		})? > 1
+	{
 		return Err(DatabaseError::new(
 			DatabaseErrorKind::Query,
 			"typed predicate mixing root and related columns cannot be qualified safely",
@@ -147,28 +154,92 @@ fn qualify_condition(
 		)
 		.into());
 	};
-	qualify_related_columns(&mut qualified, &alias);
+	if !qualify_related_columns(&mut qualified, &alias) {
+		return Err(DatabaseError::new(
+			DatabaseErrorKind::Query,
+			"typed predicate contains an unsupported expression for relation qualification",
+		)
+		.into());
+	}
 	Ok(qualified)
 }
 
-fn count_unqualified_columns(expression: &SimpleExpr) -> usize {
+fn count_unqualified_columns(expression: &SimpleExpr) -> Option<usize> {
 	match expression {
-		SimpleExpr::Column(reinhardt_query::prelude::ColumnRef::Column(_)) => 1,
+		SimpleExpr::Column(reinhardt_query::prelude::ColumnRef::Column(_)) => Some(1),
+		SimpleExpr::Column(_) | SimpleExpr::TableColumn(_, _) => Some(0),
 		SimpleExpr::Binary(left, _, right) => {
-			count_unqualified_columns(left) + count_unqualified_columns(right)
+			Some(count_unqualified_columns(left)? + count_unqualified_columns(right)?)
 		}
 		SimpleExpr::Unary(_, value)
 		| SimpleExpr::ExprAlias(value, _)
 		| SimpleExpr::Cast(value, _)
-		| SimpleExpr::AsEnum(_, value) => count_unqualified_columns(value),
-		SimpleExpr::FunctionCall(_, values) | SimpleExpr::Tuple(values) => {
-			values.iter().map(count_unqualified_columns).sum()
+		| SimpleExpr::AsEnum(_, value)
+		| SimpleExpr::TemporalTrunc { expr: value, .. }
+		| SimpleExpr::WindowNamed { func: value, .. } => count_unqualified_columns(value),
+		SimpleExpr::FunctionCall(_, values) | SimpleExpr::Tuple(values) => Some(
+			values
+				.iter()
+				.map(count_unqualified_columns)
+				.collect::<Option<Vec<_>>>()?
+				.into_iter()
+				.sum(),
+		),
+		SimpleExpr::CustomWithExpr(_, values) => Some(
+			values
+				.iter()
+				.map(count_unqualified_columns)
+				.collect::<Option<Vec<_>>>()?
+				.into_iter()
+				.sum(),
+		),
+		SimpleExpr::Case(case) => {
+			let when_count: usize = case
+				.when_clauses
+				.iter()
+				.map(|(condition, result)| {
+					Some(count_unqualified_columns(condition)? + count_unqualified_columns(result)?)
+				})
+				.collect::<Option<Vec<_>>>()?
+				.into_iter()
+				.sum();
+			Some(
+				when_count
+					+ case
+						.else_clause
+						.as_ref()
+						.map_or(Some(0), count_unqualified_columns)?,
+			)
 		}
-		_ => 0,
+		SimpleExpr::Window { window, .. } => {
+			let partition_count: usize = window
+				.partition_by
+				.iter()
+				.map(count_unqualified_columns)
+				.collect::<Option<Vec<_>>>()?
+				.into_iter()
+				.sum();
+			let order_count: usize = window
+				.order_by
+				.iter()
+				.map(|order| match &order.expr {
+					reinhardt_query::types::OrderExprKind::Expr(expr) => {
+						count_unqualified_columns(expr)
+					}
+					_ => Some(0),
+				})
+				.collect::<Option<Vec<_>>>()?
+				.into_iter()
+				.sum();
+			Some(partition_count + order_count)
+		}
+		SimpleExpr::Value(_) | SimpleExpr::Constant(_) | SimpleExpr::Asterisk => Some(0),
+		SimpleExpr::SubQuery(_, _) | SimpleExpr::Custom(_) => None,
+		_ => None,
 	}
 }
 
-fn qualify_related_columns(expression: &mut SimpleExpr, alias: &str) {
+fn qualify_related_columns(expression: &mut SimpleExpr, alias: &str) -> bool {
 	match expression {
 		SimpleExpr::Column(reinhardt_query::prelude::ColumnRef::Column(column)) => {
 			let column = column.clone();
@@ -176,21 +247,54 @@ fn qualify_related_columns(expression: &mut SimpleExpr, alias: &str) {
 				Alias::new(alias).into_iden(),
 				column,
 			));
+			true
 		}
+		SimpleExpr::Column(_) | SimpleExpr::TableColumn(_, _) => true,
 		SimpleExpr::Binary(left, _, right) => {
-			qualify_related_columns(left, alias);
-			qualify_related_columns(right, alias);
+			qualify_related_columns(left, alias) && qualify_related_columns(right, alias)
 		}
 		SimpleExpr::Unary(_, value)
 		| SimpleExpr::ExprAlias(value, _)
 		| SimpleExpr::Cast(value, _)
-		| SimpleExpr::AsEnum(_, value) => qualify_related_columns(value, alias),
-		SimpleExpr::FunctionCall(_, values) | SimpleExpr::Tuple(values) => {
-			for value in values {
-				qualify_related_columns(value, alias);
-			}
+		| SimpleExpr::AsEnum(_, value)
+		| SimpleExpr::TemporalTrunc { expr: value, .. }
+		| SimpleExpr::WindowNamed { func: value, .. } => qualify_related_columns(value, alias),
+		SimpleExpr::FunctionCall(_, values) | SimpleExpr::Tuple(values) => values
+			.iter_mut()
+			.all(|value| qualify_related_columns(value, alias)),
+		SimpleExpr::CustomWithExpr(_, values) => values
+			.iter_mut()
+			.all(|value| qualify_related_columns(value, alias)),
+		SimpleExpr::Case(case) => {
+			let when_supported = case.when_clauses.iter_mut().all(|(condition, result)| {
+				qualify_related_columns(condition, alias) && qualify_related_columns(result, alias)
+			});
+			let else_supported = case
+				.else_clause
+				.as_mut()
+				.map_or(true, |value| qualify_related_columns(value, alias));
+			when_supported && else_supported
 		}
-		_ => {}
+		SimpleExpr::Window { func, window } => {
+			let func_supported = qualify_related_columns(func, alias);
+			let partitions_supported = window
+				.partition_by
+				.iter_mut()
+				.all(|value| qualify_related_columns(value, alias));
+			let order_supported = window
+				.order_by
+				.iter_mut()
+				.all(|order| match &mut order.expr {
+					reinhardt_query::types::OrderExprKind::Expr(value) => {
+						qualify_related_columns(value, alias)
+					}
+					_ => true,
+				});
+			func_supported && partitions_supported && order_supported
+		}
+		SimpleExpr::Value(_) | SimpleExpr::Constant(_) | SimpleExpr::Asterisk => true,
+		SimpleExpr::SubQuery(_, _) | SimpleExpr::Custom(_) => false,
+		_ => false,
 	}
 }
 
@@ -230,8 +334,8 @@ mod tests {
 	use crate::orm::query_fields::expression::node::JoinRequirements;
 	use crate::orm::relations::{RelationJoinKind, RelationMultiplicity, RelationStep};
 	use reinhardt_query::prelude::{
-		ExprTrait, PostgresQueryBuilder, Query, QueryStatementBuilder, SelectStatement,
-		SqliteQueryBuilder,
+		CaseStatement, ExprTrait, PostgresQueryBuilder, Query, QueryStatementBuilder,
+		SelectStatement, SqliteQueryBuilder,
 	};
 	use std::borrow::Cow;
 
@@ -413,6 +517,36 @@ mod tests {
 			.eq(Expr::val(1));
 		let error = compile_predicate(&predicate, &joins, "authors", &graph)
 			.expect_err("mixed relation predicates must fail closed");
+		assert_eq!(error.database_kind(), Some(DatabaseErrorKind::Query));
+	}
+
+	#[test]
+	fn nested_case_related_predicate_is_qualified() {
+		let step = relation_step();
+		let joins = JoinRequirements::from_relation_steps(vec![step.clone()]);
+		let mut graph = RelationJoinGraph::new("authors");
+		graph.add_steps(&[step], RelationJoinKind::Inner);
+		let graph = graph.with_root_alias("authors");
+		let condition = SimpleExpr::Case(Box::new(
+			CaseStatement::new().when(Expr::col("amount").eq(Expr::val(1)), Expr::val(true)),
+		));
+		let compiled = compile_predicate(&condition, &joins, "authors", &graph)
+			.expect("nested CASE relation predicate should resolve");
+		let mut stmt = Query::select();
+		stmt.expr(compiled);
+		let sql = stmt.to_string(PostgresQueryBuilder);
+		assert!(sql.contains("\"posts\".\"amount\""));
+	}
+
+	#[test]
+	fn unsupported_custom_related_predicate_fails_closed() {
+		let step = relation_step();
+		let joins = JoinRequirements::from_relation_steps(vec![step.clone()]);
+		let mut graph = RelationJoinGraph::new("authors");
+		graph.add_steps(&[step], RelationJoinKind::Inner);
+		let condition = SimpleExpr::Custom("amount = 1".to_owned());
+		let error = compile_predicate(&condition, &joins, "authors", &graph)
+			.expect_err("raw custom predicates cannot be safely relation-qualified");
 		assert_eq!(error.database_kind(), Some(DatabaseErrorKind::Query));
 	}
 }

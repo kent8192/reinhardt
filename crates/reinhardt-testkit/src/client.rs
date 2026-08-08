@@ -1104,6 +1104,7 @@ mod tests {
 	impl HttpHandler for EchoHandler {
 		async fn handle(&self, request: HttpRequest) -> HttpResult<HttpResponse> {
 			let path = request.uri.path().to_string();
+			let method = request.method.as_str().to_string();
 			let has_custom = request.headers.get("X-Custom").is_some();
 			let content_type = request
 				.headers
@@ -1114,6 +1115,7 @@ mod tests {
 
 			let mut response = HttpResponse::ok().with_body(path.clone());
 			response = response.try_with_header("X-Echo-Path", &path)?;
+			response = response.try_with_header("X-Echo-Method", &method)?;
 
 			if has_custom {
 				response = response.try_with_header("X-Echo-Custom", "present")?;
@@ -1329,19 +1331,20 @@ mod tests {
 		};
 
 		// Assert
-		for (response, path) in [
-			(&get, "/get"),
-			(&post, "/post"),
-			(&put, "/put"),
-			(&patch, "/patch"),
-			(&delete, "/delete"),
-			(&head, "/head"),
-			(&options, "/options"),
-			(&raw_headers, "/raw-headers"),
-			(&raw, "/raw"),
+		for (response, path, method) in [
+			(&get, "/get", "GET"),
+			(&post, "/post", "POST"),
+			(&put, "/put", "PUT"),
+			(&patch, "/patch", "PATCH"),
+			(&delete, "/delete", "DELETE"),
+			(&head, "/head", "HEAD"),
+			(&options, "/options", "OPTIONS"),
+			(&raw_headers, "/raw-headers", "POST"),
+			(&raw, "/raw", "POST"),
 		] {
 			assert_eq!(response.status(), http::StatusCode::OK);
 			assert_eq!(response.body().as_ref(), path.as_bytes());
+			assert_eq!(response.header("X-Echo-Method"), Some(method));
 			assert_eq!(response.header("X-Echo-Custom"), Some("present"));
 		}
 		assert_eq!(post.header("X-Echo-Content-Type"), Some("application/json"));

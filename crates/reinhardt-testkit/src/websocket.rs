@@ -411,7 +411,7 @@ mod tests {
 		});
 
 		(
-			format!("ws://{address}"),
+			format!("ws://{address}/"),
 			WebSocketServerGuard {
 				handle: Some(handle),
 			},

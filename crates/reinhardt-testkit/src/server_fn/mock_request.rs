@@ -738,6 +738,17 @@ mod tests {
 			.map(|entry| entry.split_once('=').unwrap())
 			.map(|(key, value)| (key.to_string(), value.to_string()))
 			.collect();
+		let cookies: BTreeMap<_, _> = json
+			.get_header("cookie")
+			.expect("Cookie header should contain the configured cookies")
+			.split("; ")
+			.map(|entry| {
+				entry
+					.split_once('=')
+					.expect("Cookie header entries should contain a name and value")
+			})
+			.map(|(name, value)| (name.to_string(), value.to_string()))
+			.collect();
 
 		// Assert
 		assert_eq!(json.method, Method::PUT);
@@ -748,8 +759,14 @@ mod tests {
 		assert_eq!(json.get_header("x-request-id"), Some("req-7"));
 		assert_eq!(json.get_header("accept"), Some("application/json"));
 		assert_eq!(json.get_header("authorization"), Some("Bearer token-123"));
-		assert_eq!(json.cookies.get("theme"), Some(&"light".to_string()));
-		assert_eq!(json.cookies.get("session"), Some(&"new".to_string()));
+		assert_eq!(
+			cookies,
+			BTreeMap::from([
+				("session".to_string(), "new".to_string()),
+				("theme".to_string(), "light".to_string()),
+			])
+		);
+		assert_eq!(json.get_cookie("theme"), Some("light"));
 		assert_eq!(json.get_cookie("session"), Some("new"));
 		assert_eq!(json.query_params.get("existing"), Some(&"last".to_string()));
 		assert_eq!(json.query_params.get("page"), Some(&"2".to_string()));

@@ -44,6 +44,29 @@
 //! }
 //! ```
 //!
+//! ### Prefixed Form Data
+//!
+//! A prefixed form expects submitted field names to use the prefix. The
+//! validated values are exposed through canonical field names, while bound
+//! fields continue to read the original submitted values for rerendering.
+//!
+//! ```rust,ignore
+//! use reinhardt_forms::{CharField, Field, Form};
+//! use serde_json::json;
+//! use std::collections::HashMap;
+//!
+//! let mut form = Form::with_prefix("profile".to_string());
+//! form.add_field(Box::new(CharField::new("name".to_string()).required()));
+//! form.bind(HashMap::from([("profile-name".to_string(), json!("Ada"))]));
+//!
+//! assert!(form.is_valid());
+//! assert_eq!(form.cleaned_data().get("name"), Some(&json!("Ada")));
+//! assert_eq!(
+//!     form.get_bound_field("name").unwrap().value(),
+//!     Some(&json!("Ada"))
+//! );
+//! ```
+//!
 //! ### Model Form
 //!
 //! ```rust,ignore

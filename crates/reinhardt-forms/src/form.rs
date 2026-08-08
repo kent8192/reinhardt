@@ -55,6 +55,7 @@ pub const ALL_FIELDS_KEY: &str = "_all";
 pub struct Form {
 	fields: Vec<Box<dyn FormField>>,
 	data: HashMap<String, serde_json::Value>,
+	cleaned_data: HashMap<String, serde_json::Value>,
 	initial: HashMap<String, serde_json::Value>,
 	errors: HashMap<String, Vec<String>>,
 	is_bound: bool,
@@ -87,6 +88,7 @@ impl Form {
 		Self {
 			fields: vec![],
 			data: HashMap::new(),
+			cleaned_data: HashMap::new(),
 			initial: HashMap::new(),
 			errors: HashMap::new(),
 			is_bound: false,
@@ -117,6 +119,7 @@ impl Form {
 		Self {
 			fields: vec![],
 			data: HashMap::new(),
+			cleaned_data: HashMap::new(),
 			initial,
 			errors: HashMap::new(),
 			is_bound: false,
@@ -143,6 +146,7 @@ impl Form {
 		Self {
 			fields: vec![],
 			data: HashMap::new(),
+			cleaned_data: HashMap::new(),
 			initial: HashMap::new(),
 			errors: HashMap::new(),
 			is_bound: false,
@@ -186,6 +190,7 @@ impl Form {
 	/// assert!(form.is_bound());
 	/// ```
 	pub fn bind(&mut self, data: HashMap<String, serde_json::Value>) {
+		self.cleaned_data = data.clone();
 		self.data = data;
 		self.is_bound = true;
 	}
@@ -215,6 +220,7 @@ impl Form {
 		}
 
 		self.errors.clear();
+		self.cleaned_data = self.data.clone();
 
 		// Validate CSRF token if enabled
 		if !self.validate_csrf() {
@@ -246,8 +252,10 @@ impl Form {
 						}
 					}
 					let submitted_name = self.add_prefix_to_field_name(field.name());
-					self.data.remove(&submitted_name);
-					self.data.insert(field.name().to_string(), cleaned);
+					if submitted_name != field.name() {
+						self.cleaned_data.remove(&submitted_name);
+					}
+					self.cleaned_data.insert(field.name().to_string(), cleaned);
 				}
 				Err(e) => {
 					self.errors
@@ -260,7 +268,7 @@ impl Form {
 
 		// Run custom clean functions
 		for clean_fn in &self.clean_functions {
-			if let Err(e) = clean_fn(&self.data) {
+			if let Err(e) = clean_fn(&self.cleaned_data) {
 				match e {
 					FormError::Field { field, error } => {
 						self.errors
@@ -288,7 +296,7 @@ impl Form {
 	}
 	/// Returns the cleaned (validated) form data.
 	pub fn cleaned_data(&self) -> &HashMap<String, serde_json::Value> {
-		&self.data
+		&self.cleaned_data
 	}
 	/// Returns the current validation errors keyed by field name.
 	pub fn errors(&self) -> &HashMap<String, Vec<String>> {
@@ -992,6 +1000,7 @@ impl Index<&str> for Form {
 mod tests {
 	use super::*;
 	use crate::fields::CharField;
+	use rstest::rstest;
 	use serde_json::json;
 
 	#[test]
@@ -1351,7 +1360,7 @@ mod tests {
 		assert!(form.errors().contains_key(ALL_FIELDS_KEY));
 	}
 
-	#[test]
+	#[rstest]
 	fn test_form_prefix() {
 		let mut form = Form::with_prefix("profile".to_string());
 		assert_eq!(form.prefix(), "profile");
@@ -1362,7 +1371,7 @@ mod tests {
 		assert_eq!(form.add_prefix_to_field_name("email"), "user-email");
 	}
 
-	#[test]
+	#[rstest]
 	fn prefixed_forms_do_not_fallback_to_unprefixed_values() {
 		// Arrange
 		let mut form = Form::with_prefix("profile".to_string());
@@ -1374,10 +1383,10 @@ mod tests {
 
 		// Assert
 		assert!(!valid);
-		assert!(form.errors().contains_key("name"));
+		assert_eq!(form.errors().get("name"), Some(&vec!["name".to_string()]));
 	}
 
-	#[test]
+	#[rstest]
 	fn prefixed_forms_expose_only_canonical_cleaned_values() {
 		// Arrange
 		let mut form = Form::with_prefix("profile".to_string());
@@ -1396,6 +1405,31 @@ mod tests {
 			form.cleaned_data(),
 			&HashMap::from([(String::from("name"), json!("Ada"))])
 		);
+	}
+
+	#[rstest]
+	fn prefixed_forms_preserve_bound_values_after_validation_failure() {
+		// Arrange
+		let mut form = Form::with_prefix("profile".to_string());
+		form.add_field(Box::new(CharField::new("name".to_string()).required()));
+		form.add_field(Box::new(CharField::new("email".to_string()).required()));
+		let expected_name = json!("Ada");
+		form.bind(HashMap::from([(
+			String::from("profile-name"),
+			expected_name.clone(),
+		)]));
+
+		// Act
+		let first_valid = form.is_valid();
+		let first_bound_value = form.get_bound_field("name").unwrap().value().cloned();
+		let second_valid = form.is_valid();
+		let second_bound_value = form.get_bound_field("name").unwrap().value().cloned();
+
+		// Assert
+		assert!(!first_valid);
+		assert!(!second_valid);
+		assert_eq!(first_bound_value, Some(expected_name.clone()));
+		assert_eq!(second_bound_value, Some(expected_name));
 	}
 
 	#[test]

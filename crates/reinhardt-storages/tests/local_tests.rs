@@ -807,16 +807,19 @@ mod exclusive_create_tests {
 		let temp_dir = tempfile::tempdir().expect("temporary directory should initialize");
 		let storage = local_storage(temp_dir.path());
 
-		let first = storage.save_if_absent("same/key.txt", b"first");
-		let second = storage.save_if_absent("same/key.txt", b"second");
-		let (first, second) = tokio::join!(first, second);
+		for index in 0..16 {
+			let name = format!("same-{index}/key.txt");
+			let first = storage.save_if_absent(&name, b"first");
+			let second = storage.save_if_absent(&name, b"second");
+			let (first, second) = tokio::join!(first, second);
 
-		assert_eq!(usize::from(first.is_ok()) + usize::from(second.is_ok()), 1);
-		assert_eq!(
-			usize::from(matches!(first, Err(StorageError::AlreadyExists(_))))
-				+ usize::from(matches!(second, Err(StorageError::AlreadyExists(_)))),
-			1,
-		);
+			assert_eq!(usize::from(first.is_ok()) + usize::from(second.is_ok()), 1);
+			assert_eq!(
+				usize::from(matches!(first, Err(StorageError::AlreadyExists(_))))
+					+ usize::from(matches!(second, Err(StorageError::AlreadyExists(_)))),
+				1,
+			);
+		}
 	}
 
 	#[tokio::test]

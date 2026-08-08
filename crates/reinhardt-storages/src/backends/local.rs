@@ -174,7 +174,11 @@ fn write_file_if_absent(base_dir: Dir, name: String, content: Vec<u8>) -> Result
 		directory = match directory.open_dir_nofollow(component) {
 			Ok(next) => next,
 			Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-				directory.create_dir(component)?;
+				if let Err(error) = directory.create_dir(component)
+					&& error.kind() != std::io::ErrorKind::AlreadyExists
+				{
+					return Err(StorageError::IoError(error));
+				}
 				directory.open_dir_nofollow(component)?
 			}
 			Err(error) => return Err(StorageError::IoError(error)),

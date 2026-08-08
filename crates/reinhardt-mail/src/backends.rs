@@ -24,6 +24,12 @@ use zeroize::Zeroize;
 pub trait EmailBackend: Send + Sync {
 	/// Send one or more email messages, returning the number of messages sent successfully.
 	async fn send_messages(&self, messages: &[EmailMessage]) -> EmailResult<usize>;
+
+	/// Return the concrete backend name for unit-test selection assertions.
+	#[cfg(test)]
+	fn backend_name(&self) -> &'static str {
+		"custom"
+	}
 }
 
 /// Creates an email backend from settings configuration.
@@ -128,6 +134,11 @@ impl EmailBackend for ConsoleBackend {
 			println!("==============================\n");
 		}
 		Ok(messages.len())
+	}
+
+	#[cfg(test)]
+	fn backend_name(&self) -> &'static str {
+		"console"
 	}
 }
 
@@ -235,6 +246,11 @@ impl EmailBackend for MemoryBackend {
 		let mut stored = self.messages.lock().await;
 		stored.extend_from_slice(messages);
 		Ok(messages.len())
+	}
+
+	#[cfg(test)]
+	fn backend_name(&self) -> &'static str {
+		"memory"
 	}
 }
 
@@ -786,7 +802,6 @@ mod tests {
 			.unwrap()
 			.map(|entry| entry.unwrap().path())
 			.collect();
-		let saved = std::fs::read_to_string(&files[0]).unwrap();
 
 		let mut missing_path = reinhardt_conf::EmailSettings::default();
 		missing_path.backend = "file".to_string();
@@ -814,13 +829,15 @@ mod tests {
 		let memory_backend = backend_from_settings(&memory_settings).unwrap();
 		let memory_empty = memory_backend.send_messages(&[]).await.unwrap();
 
-		let console_settings = reinhardt_conf::EmailSettings::default();
+		let mut console_settings = reinhardt_conf::EmailSettings::default();
+		console_settings.backend = "console".to_string();
 		let console_backend = backend_from_settings(&console_settings).unwrap();
 		let console_empty = console_backend.send_messages(&[]).await.unwrap();
 
 		// Assert
 		assert_eq!(sent.unwrap(), 1);
 		assert_eq!(files.len(), 1);
+		let saved = std::fs::read_to_string(&files[0]).unwrap();
 		assert_eq!(
 			saved,
 			"From: sender@example.com\nTo: recipient@example.com\nSubject: File backend\n\nSaved body"
@@ -836,5 +853,7 @@ mod tests {
 		);
 		assert_eq!(memory_empty, 0);
 		assert_eq!(console_empty, 0);
+		assert_eq!(memory_backend.backend_name(), "memory");
+		assert_eq!(console_backend.backend_name(), "console");
 	}
 }

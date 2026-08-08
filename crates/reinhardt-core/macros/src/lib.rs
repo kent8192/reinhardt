@@ -796,6 +796,8 @@ pub fn user(args: TokenStream, input: TokenStream) -> TokenStream {
 /// - `default`: Default value
 /// - `db_column`: Custom database column name
 /// - `editable`: Whether field is editable (default: true)
+/// - `upload_to`: UTC directory template required by `FileField`
+/// - `file_storage`: Named storage alias for `FileField` (default: `default`)
 ///
 /// # Supported Types
 ///
@@ -808,6 +810,7 @@ pub fn user(args: TokenStream, input: TokenStream) -> TokenStream {
 /// - `Time` → TimeField
 /// - `f32`, `f64` → FloatField
 /// - `Option<T>` → Sets null=true automatically
+/// - `FileField` and `Option<FileField>` → Storage-backed logical file keys
 ///
 /// # Requirements
 ///

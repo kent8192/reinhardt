@@ -976,6 +976,24 @@ non-goals and are not part of query client v2.
 - `Document`, `Element`, `EventHandle`, `EventType`, `document`
 
 ### Routing
+
+```rust,ignore
+use reinhardt_pages::{NavigationType, navigate_named, route_params};
+
+navigate_named(
+    "workspace-document",
+    route_params! {
+        "workspace_id" => workspace_id,
+        "slug" => slug,
+    },
+    NavigationType::Push,
+)?;
+```
+
+`navigate_named()` requires an active SPA router and resolves registered routes
+by name without a hard reload. Pass homogeneous parameter arrays directly, or
+use `route_params!` to format mixed `Display` values into owned parameters.
+
 - `Link`, `Router`, `Route`, `RouterOutlet`, `PathPattern`
 
 ### API and Server Functions

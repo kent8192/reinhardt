@@ -511,3 +511,93 @@ impl EmailMessageBuilder {
 		})
 	}
 }
+
+#[cfg(test)]
+mod tests {
+	use super::*;
+	use crate::backends::{EmailBackend, MemoryBackend};
+	use crate::{EmailError, EmailResult};
+
+	#[test]
+	fn alternative_content_reports_exact_text_and_invalid_utf8() {
+		// Arrange
+		let html = Alternative::html("<strong>hello</strong>");
+		let invalid = Alternative::new("application/octet-stream", vec![0xff, 0xfe]);
+
+		// Act
+		let html_content = html.content().to_vec();
+
+		// Assert
+		assert_eq!(html.content_type(), "text/html");
+		assert_eq!(html_content, b"<strong>hello</strong>");
+		assert_eq!(html.content_as_string(), Some("<strong>hello</strong>"));
+		assert_eq!(invalid.content_type(), "application/octet-stream");
+		assert_eq!(invalid.content(), &[0xff, 0xfe]);
+		assert_eq!(invalid.content_as_string(), None);
+	}
+
+	#[test]
+	fn attachment_file_and_inline_metadata_round_trip() {
+		// Arrange
+		let temp_dir = tempfile::tempdir().unwrap();
+		let source = temp_dir.path().join("source.bin");
+		std::fs::write(&source, [1_u8, 2, 3, 4]).unwrap();
+
+		// Act
+		let from_file = Attachment::from_path(source, "report.bin").unwrap();
+		let mut inline = Attachment::new("logo.png", vec![9, 8]);
+		inline.with_mime_type("image/custom").as_inline("logo-cid");
+		let missing = Attachment::from_path(temp_dir.path().join("missing.bin"), "missing.bin");
+
+		// Assert
+		assert_eq!(from_file.filename(), "report.bin");
+		assert_eq!(from_file.content(), &[1, 2, 3, 4]);
+		assert_eq!(from_file.mime_type(), "application/octet-stream");
+		assert_eq!(from_file.content_id(), None);
+		assert!(!from_file.is_inline());
+		assert_eq!(inline.filename(), "logo.png");
+		assert_eq!(inline.content(), &[9, 8]);
+		assert_eq!(inline.mime_type(), "image/custom");
+		assert_eq!(inline.content_id(), Some("logo-cid"));
+		assert!(inline.is_inline());
+		assert_eq!(missing.unwrap_err().kind(), std::io::ErrorKind::NotFound);
+	}
+
+	struct FailingBackend;
+
+	#[async_trait::async_trait]
+	impl EmailBackend for FailingBackend {
+		async fn send_messages(&self, _messages: &[EmailMessage]) -> EmailResult<usize> {
+			Err(EmailError::BackendError(
+				"deterministic send failure".to_string(),
+			))
+		}
+	}
+
+	#[tokio::test]
+	async fn email_message_send_delegates_and_propagates_failure() {
+		// Arrange
+		let message = EmailMessage::builder()
+			.subject("Invoice")
+			.body("Attached")
+			.from("billing@example.com")
+			.to(vec!["customer@example.com".to_string()])
+			.build()
+			.unwrap();
+		let memory = MemoryBackend::new();
+
+		// Act
+		let send_result = message.send(&memory).await;
+		let alias_result = message.send_with_backend(&memory).await;
+		let failure = message.send(&FailingBackend).await;
+
+		// Assert
+		send_result.unwrap();
+		alias_result.unwrap();
+		assert_eq!(memory.count().await, 2);
+		assert_eq!(
+			failure.unwrap_err().to_string(),
+			"Backend error: deterministic send failure"
+		);
+	}
+}

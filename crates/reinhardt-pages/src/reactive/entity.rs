@@ -17,6 +17,7 @@ pub use projection::{
 	EntityDependencies, EntityProjection, EntityReader, EntityValue, EntityVec, OptionalEntity,
 	ProjectionMaterialization, ProjectionRemoval, RemovedEntities,
 };
+pub(crate) use projection::{ErasedEntityProjection, erase_projection};
 pub use store::{EntityArena, EntityHandle, EntityWriter};
 // Query-client completion consumes these staged store boundaries in the next slice.
 #[allow(unused_imports)]

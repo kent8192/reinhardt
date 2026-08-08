@@ -13,6 +13,11 @@ use serde::Serializer;
 use serde::ser::{Error as _, SerializeMap};
 use serial_test::serial;
 
+use crate::reactive::entity::{
+	EntityDependencies, EntityProjection, EntityReader, EntityWriter, ProjectionMaterialization,
+	ProjectionRemoval, RemovedEntities,
+};
+
 use super::super::resource::ResourceState;
 use super::client::{
 	ObserverPolicy, QueryClient, QueryEntry, TestQueryRuntime, acquire_query_with_options,
@@ -912,6 +917,330 @@ fn family_invalidation_rejects_an_incompatible_family_with_the_same_id() {
 		message,
 		"incompatible query family types for `tests.invalidate-family-collision`: expected Args=`i64`, data=`alloc::string::String`, error=`alloc::string::String`; actual Args=`i64`, data=`u64`, error=`alloc::string::String`"
 	);
+}
+
+mod normalization_contract {
+	use super::*;
+
+	#[derive(Clone)]
+	struct FirstProjection;
+
+	impl EntityProjection<String> for FirstProjection {
+		type Recipe = String;
+
+		const SCHEMA: &'static str = "first-projection-v1";
+
+		fn normalize(&self, value: String, _entities: &mut EntityWriter<'_>) -> Self::Recipe {
+			value
+		}
+
+		fn dependencies(&self, _recipe: &Self::Recipe, _dependencies: &mut EntityDependencies) {}
+
+		fn materialize(
+			&self,
+			recipe: &Self::Recipe,
+			_entities: &EntityReader<'_>,
+		) -> ProjectionMaterialization<String> {
+			ProjectionMaterialization::Ready(recipe.clone())
+		}
+
+		fn apply_removals(
+			&self,
+			_recipe: &mut Self::Recipe,
+			_removed: &RemovedEntities<'_>,
+		) -> ProjectionRemoval {
+			ProjectionRemoval::Unchanged
+		}
+	}
+
+	#[derive(Clone)]
+	struct SameSchemaProjection;
+
+	impl EntityProjection<String> for SameSchemaProjection {
+		type Recipe = String;
+
+		const SCHEMA: &'static str = "first-projection-v1";
+
+		fn normalize(&self, value: String, _entities: &mut EntityWriter<'_>) -> Self::Recipe {
+			value
+		}
+
+		fn dependencies(&self, _recipe: &Self::Recipe, _dependencies: &mut EntityDependencies) {}
+
+		fn materialize(
+			&self,
+			recipe: &Self::Recipe,
+			_entities: &EntityReader<'_>,
+		) -> ProjectionMaterialization<String> {
+			ProjectionMaterialization::Ready(recipe.clone())
+		}
+
+		fn apply_removals(
+			&self,
+			_recipe: &mut Self::Recipe,
+			_removed: &RemovedEntities<'_>,
+		) -> ProjectionRemoval {
+			ProjectionRemoval::Unchanged
+		}
+	}
+
+	#[derive(Clone)]
+	struct DifferentSchemaProjection;
+
+	impl EntityProjection<String> for DifferentSchemaProjection {
+		type Recipe = String;
+
+		const SCHEMA: &'static str = "different-projection-v1";
+
+		fn normalize(&self, value: String, _entities: &mut EntityWriter<'_>) -> Self::Recipe {
+			value
+		}
+
+		fn dependencies(&self, _recipe: &Self::Recipe, _dependencies: &mut EntityDependencies) {}
+
+		fn materialize(
+			&self,
+			recipe: &Self::Recipe,
+			_entities: &EntityReader<'_>,
+		) -> ProjectionMaterialization<String> {
+			ProjectionMaterialization::Ready(recipe.clone())
+		}
+
+		fn apply_removals(
+			&self,
+			_recipe: &mut Self::Recipe,
+			_removed: &RemovedEntities<'_>,
+		) -> ProjectionRemoval {
+			ProjectionRemoval::Unchanged
+		}
+	}
+
+	#[derive(Clone)]
+	struct EmptySchemaProjection;
+
+	impl EntityProjection<String> for EmptySchemaProjection {
+		type Recipe = String;
+
+		const SCHEMA: &'static str = "";
+
+		fn normalize(&self, value: String, _entities: &mut EntityWriter<'_>) -> Self::Recipe {
+			value
+		}
+
+		fn dependencies(&self, _recipe: &Self::Recipe, _dependencies: &mut EntityDependencies) {}
+
+		fn materialize(
+			&self,
+			recipe: &Self::Recipe,
+			_entities: &EntityReader<'_>,
+		) -> ProjectionMaterialization<String> {
+			ProjectionMaterialization::Ready(recipe.clone())
+		}
+
+		fn apply_removals(
+			&self,
+			_recipe: &mut Self::Recipe,
+			_removed: &RemovedEntities<'_>,
+		) -> ProjectionRemoval {
+			ProjectionRemoval::Unchanged
+		}
+	}
+
+	#[derive(Clone)]
+	#[allow(dead_code)] // This field deliberately makes the test adapter non-zero-sized.
+	struct StatefulProjection(String);
+
+	impl EntityProjection<String> for StatefulProjection {
+		type Recipe = String;
+
+		const SCHEMA: &'static str = "stateful-projection-v1";
+
+		fn normalize(&self, value: String, _entities: &mut EntityWriter<'_>) -> Self::Recipe {
+			value
+		}
+
+		fn dependencies(&self, _recipe: &Self::Recipe, _dependencies: &mut EntityDependencies) {}
+
+		fn materialize(
+			&self,
+			recipe: &Self::Recipe,
+			_entities: &EntityReader<'_>,
+		) -> ProjectionMaterialization<String> {
+			ProjectionMaterialization::Ready(recipe.clone())
+		}
+
+		fn apply_removals(
+			&self,
+			_recipe: &mut Self::Recipe,
+			_removed: &RemovedEntities<'_>,
+		) -> ProjectionRemoval {
+			ProjectionRemoval::Unchanged
+		}
+	}
+
+	fn panic_message(panic: Box<dyn std::any::Any + Send>) -> String {
+		panic
+			.downcast_ref::<String>()
+			.cloned()
+			.or_else(|| panic.downcast_ref::<&str>().map(ToString::to_string))
+			.expect("normalization contract collision should panic with a string")
+	}
+
+	#[test]
+	fn descriptor_retains_a_mode_neutral_key_for_exact_invalidation() {
+		let runtime = TestQueryRuntime::new();
+		let client = QueryClient::with_runtime(QueryDefaults::default(), runtime.handle());
+		let family = QueryFamily::<i64, String, String>::new("tests.normalized-key");
+		let key = family.key(1);
+		let descriptor = family
+			.query(1, || async { Ok::<_, String>("cached".to_string()) })
+			.with_entities(FirstProjection);
+
+		assert_eq!(descriptor.key(), &key);
+		let query = client.observe(descriptor, QueryOptions::new().enabled(false));
+		client.invalidate(&key);
+
+		assert!(query.is_stale());
+	}
+
+	#[test]
+	fn rejects_a_plain_descriptor_after_a_normalized_family_registration() {
+		let runtime = TestQueryRuntime::new();
+		let client = QueryClient::with_runtime(QueryDefaults::default(), runtime.handle());
+		let family = QueryFamily::<i64, String, String>::new("tests.plain-normalized-collision");
+		let _normalized = client.observe(
+			family
+				.query(1, || async { Ok::<_, String>("normalized".to_string()) })
+				.with_entities(FirstProjection),
+			QueryOptions::new().enabled(false),
+		);
+
+		let panic = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+			let _plain = client.observe(
+				family.query(2, || async { Ok::<_, String>("plain".to_string()) }),
+				QueryOptions::new().enabled(false),
+			);
+		}))
+		.expect_err("plain and normalized descriptors must not share a family");
+		let message = panic_message(panic);
+
+		assert_eq!(
+			message,
+			format!(
+				"incompatible query family normalization for `tests.plain-normalized-collision`: expected mode=normalized, adapter_type=`{}`, schema=`first-projection-v1`; actual mode=plain, adapter_type=none, schema=none",
+				std::any::type_name::<FirstProjection>(),
+			),
+		);
+	}
+
+	#[test]
+	fn rejects_normalized_descriptors_with_different_adapter_types() {
+		let runtime = TestQueryRuntime::new();
+		let client = QueryClient::with_runtime(QueryDefaults::default(), runtime.handle());
+		let family = QueryFamily::<i64, String, String>::new("tests.adapter-collision");
+		let _first = client.observe(
+			family
+				.query(1, || async { Ok::<_, String>("first".to_string()) })
+				.with_entities(FirstProjection),
+			QueryOptions::new().enabled(false),
+		);
+
+		let panic = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+			let _second = client.observe(
+				family
+					.query(2, || async { Ok::<_, String>("second".to_string()) })
+					.with_entities(SameSchemaProjection),
+				QueryOptions::new().enabled(false),
+			);
+		}))
+		.expect_err("different projection adapter types must not share a family");
+		let message = panic_message(panic);
+
+		assert_eq!(
+			message,
+			format!(
+				"incompatible query family normalization for `tests.adapter-collision`: expected mode=normalized, adapter_type=`{}`, schema=`first-projection-v1`; actual mode=normalized, adapter_type=`{}`, schema=`first-projection-v1`",
+				std::any::type_name::<FirstProjection>(),
+				std::any::type_name::<SameSchemaProjection>(),
+			),
+		);
+	}
+
+	#[test]
+	fn rejects_normalized_descriptors_with_different_schemas() {
+		let runtime = TestQueryRuntime::new();
+		let client = QueryClient::with_runtime(QueryDefaults::default(), runtime.handle());
+		let family = QueryFamily::<i64, String, String>::new("tests.schema-collision");
+		let _first = client.observe(
+			family
+				.query(1, || async { Ok::<_, String>("first".to_string()) })
+				.with_entities(FirstProjection),
+			QueryOptions::new().enabled(false),
+		);
+
+		let panic = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+			let _second = client.observe(
+				family
+					.query(2, || async { Ok::<_, String>("second".to_string()) })
+					.with_entities(DifferentSchemaProjection),
+				QueryOptions::new().enabled(false),
+			);
+		}))
+		.expect_err("different projection schemas must not share a family");
+		let message = panic_message(panic);
+
+		assert_eq!(
+			message,
+			format!(
+				"incompatible query family normalization for `tests.schema-collision`: expected mode=normalized, adapter_type=`{}`, schema=`first-projection-v1`; actual mode=normalized, adapter_type=`{}`, schema=`different-projection-v1`",
+				std::any::type_name::<FirstProjection>(),
+				std::any::type_name::<DifferentSchemaProjection>(),
+			),
+		);
+	}
+
+	#[test]
+	fn rejects_an_empty_projection_schema() {
+		let family = QueryFamily::<(), String, String>::new("tests.empty-schema");
+
+		let panic = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+			let _descriptor = family
+				.query((), || async { Ok::<_, String>("value".to_string()) })
+				.with_entities(EmptySchemaProjection);
+		}))
+		.expect_err("an empty projection schema must panic");
+		let message = panic_message(panic);
+
+		assert_eq!(
+			message,
+			format!(
+				"entity projection adapter `{}` for query family `tests.empty-schema` with schema `` must define a non-empty schema",
+				std::any::type_name::<EmptySchemaProjection>(),
+			),
+		);
+	}
+
+	#[test]
+	fn rejects_a_non_zero_sized_projection_adapter() {
+		let family = QueryFamily::<(), String, String>::new("tests.non-zst-projection");
+
+		let panic = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+			let _descriptor = family
+				.query((), || async { Ok::<_, String>("value".to_string()) })
+				.with_entities(StatefulProjection("state".to_string()));
+		}))
+		.expect_err("a stateful projection adapter must panic");
+		let message = panic_message(panic);
+
+		assert_eq!(
+			message,
+			format!(
+				"entity projection adapter `{}` for query family `tests.non-zst-projection` with schema `stateful-projection-v1` must be zero-sized, but its size is {} bytes",
+				std::any::type_name::<StatefulProjection>(),
+				std::mem::size_of::<StatefulProjection>(),
+			),
+		);
+	}
 }
 
 #[test]

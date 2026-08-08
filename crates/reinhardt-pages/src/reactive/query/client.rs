@@ -21,6 +21,7 @@ use super::super::Signal;
 use super::super::resource::ResourceState;
 use super::identity::{
 	QueryDescriptor, QueryFamily, QueryFamilyTypes, QueryFetcher, QueryIdentity, QueryKey,
+	QueryNormalizationContract,
 };
 use super::runtime::{ScopedQueryFuture, duration_ms, now_ms, spawn_query_task};
 use super::state::{QueryDefaults, QueryOptions};
@@ -217,7 +218,7 @@ pub(super) struct QueryClientInner {
 	entries: RefCell<HashMap<QueryIdentity, CachedQueryEntry>>,
 	#[cfg(any(wasm, test))]
 	consumed_hydration_identities: RefCell<HashSet<QueryIdentity>>,
-	families: RefCell<HashMap<&'static str, QueryFamilyTypes>>,
+	families: RefCell<HashMap<&'static str, QueryFamilyMetadata>>,
 	deadlines: RefCell<BinaryHeap<Reverse<QueryDeadline>>>,
 	next_deadline_sequence: Cell<u64>,
 	maintenance_callback: RefCell<Option<Rc<dyn Fn()>>>,
@@ -235,6 +236,12 @@ struct CachedQueryEntry {
 	#[cfg(wasm)]
 	visibility_changed: Rc<dyn Fn(bool, u64)>,
 	deadline_is_current: Rc<dyn Fn(QueryDeadlineKind, u64) -> bool>,
+}
+
+#[derive(Clone, Copy)]
+struct QueryFamilyMetadata {
+	types: QueryFamilyTypes,
+	normalization: QueryNormalizationContract,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -339,24 +346,36 @@ impl QueryClient {
 		self.observe(descriptor, options)
 	}
 
-	fn register_family(&self, family_id: &'static str, actual: QueryFamilyTypes) {
+	fn register_descriptor_family(
+		&self,
+		family_id: &'static str,
+		actual_types: QueryFamilyTypes,
+		actual_normalization: QueryNormalizationContract,
+	) {
 		let mut families = self.inner.families.borrow_mut();
 		let Some(expected) = families.get(&family_id) else {
-			families.insert(family_id, actual);
+			families.insert(
+				family_id,
+				QueryFamilyMetadata {
+					types: actual_types,
+					normalization: actual_normalization,
+				},
+			);
 			return;
 		};
-		if expected.matches(&actual) {
-			return;
+		validate_query_family_types(family_id, expected.types, actual_types);
+		if expected.normalization != actual_normalization {
+			panic!(
+				"incompatible query family normalization for `{family_id}`: expected {}; actual {}",
+				expected.normalization, actual_normalization,
+			);
 		}
-		panic!(
-			"incompatible query family types for `{family_id}`: expected Args=`{}`, data=`{}`, error=`{}`; actual Args=`{}`, data=`{}`, error=`{}`",
-			expected.arguments_name,
-			expected.data_name,
-			expected.error_name,
-			actual.arguments_name,
-			actual.data_name,
-			actual.error_name,
-		);
+	}
+
+	fn validate_registered_family_types(&self, family_id: &'static str, actual: QueryFamilyTypes) {
+		if let Some(expected) = self.inner.families.borrow().get(&family_id) {
+			validate_query_family_types(family_id, expected.types, actual);
+		}
 	}
 
 	pub(super) fn same_instance(&self, other: &Self) -> bool {
@@ -367,6 +386,25 @@ impl QueryClient {
 	pub(crate) fn contains_for_test<T, E>(&self, key: &QueryKey<T, E>) -> bool {
 		self.inner.entries.borrow().contains_key(key.identity())
 	}
+}
+
+fn validate_query_family_types(
+	family_id: &'static str,
+	expected: QueryFamilyTypes,
+	actual: QueryFamilyTypes,
+) {
+	if expected.matches(&actual) {
+		return;
+	}
+	panic!(
+		"incompatible query family types for `{family_id}`: expected Args=`{}`, data=`{}`, error=`{}`; actual Args=`{}`, data=`{}`, error=`{}`",
+		expected.arguments_name,
+		expected.data_name,
+		expected.error_name,
+		actual.arguments_name,
+		actual.data_name,
+		actual.error_name,
+	);
 }
 
 impl QueryClientInner {
@@ -637,7 +675,7 @@ impl<T: Clone + 'static, E: Clone + 'static> QueryEntry<T, E> {
 		T: Serialize + DeserializeOwned,
 		E: Serialize + DeserializeOwned,
 	{
-		let (key, _fetcher, _ssr_prefetch, _family_types) = descriptor.into_parts();
+		let (key, _fetcher, _ssr_prefetch, _family_types, _normalization) = descriptor.into_parts();
 		Self::new_with_hydrated_state(key, None, platform_query_runtime(), None)
 	}
 
@@ -1347,8 +1385,9 @@ impl QueryClient {
 		E: Clone + Serialize + DeserializeOwned + 'static,
 	{
 		let policy = ObserverPolicy::resolve(&query_options, &self.inner.defaults);
-		let (key, fetcher, _ssr_prefetch, family_types) = descriptor.into_parts();
-		self.entry_for_key(key, family_types)
+		let (key, fetcher, _ssr_prefetch, family_types, normalization) = descriptor.into_parts();
+		let normalization = QueryNormalizationContract::from_projection(normalization.as_deref());
+		self.entry_for_key(key, family_types, normalization)
 			.acquire(fetcher, options, policy)
 	}
 
@@ -1362,7 +1401,11 @@ impl QueryClient {
 		E: Clone + Serialize + DeserializeOwned + 'static,
 	{
 		let hydrated_state = serde_json::from_value(serialized.clone())?;
-		self.register_family(key.family_id(), key.family_types());
+		self.register_descriptor_family(
+			key.family_id(),
+			key.family_types(),
+			QueryNormalizationContract::Plain,
+		);
 		let id = key.id();
 		#[cfg(any(wasm, test))]
 		super::super::resource::reserve_client_resource_key(&id);
@@ -1428,7 +1471,11 @@ impl QueryClient {
 			.consumed_hydration_identities
 			.borrow_mut()
 			.insert(identity.clone());
-		self.register_family(key.family_id(), key.family_types());
+		self.register_descriptor_family(
+			key.family_id(),
+			key.family_types(),
+			QueryNormalizationContract::Plain,
+		);
 		let id = key.id();
 		#[cfg(any(wasm, test))]
 		super::super::resource::reserve_client_resource_key(&id);
@@ -1459,20 +1506,22 @@ impl QueryClient {
 		T: Clone + Serialize + DeserializeOwned + 'static,
 		E: Clone + Serialize + DeserializeOwned + 'static,
 	{
-		let (key, _fetcher, _ssr_prefetch, family_types) = descriptor.into_parts();
-		self.entry_for_key(key, family_types)
+		let (key, _fetcher, _ssr_prefetch, family_types, normalization) = descriptor.into_parts();
+		let normalization = QueryNormalizationContract::from_projection(normalization.as_deref());
+		self.entry_for_key(key, family_types, normalization)
 	}
 
 	fn entry_for_key<T, E>(
 		&self,
 		key: QueryKey<T, E>,
 		family_types: QueryFamilyTypes,
+		normalization: QueryNormalizationContract,
 	) -> Rc<QueryEntry<T, E>>
 	where
 		T: Clone + Serialize + DeserializeOwned + 'static,
 		E: Clone + Serialize + DeserializeOwned + 'static,
 	{
-		self.register_family(key.family_id(), family_types);
+		self.register_descriptor_family(key.family_id(), family_types, normalization);
 		let id = key.id();
 		#[cfg(any(wasm, test))]
 		super::super::resource::reserve_client_resource_key(&id);
@@ -1499,7 +1548,7 @@ impl QueryClient {
 
 	/// Marks one exact typed query stale and refetches it when actively enabled.
 	pub fn invalidate<T, E>(&self, key: &QueryKey<T, E>) {
-		self.register_family(key.family_id(), key.family_types());
+		self.validate_registered_family_types(key.family_id(), key.family_types());
 		if let Some(cached) = self.inner.entries.borrow().get(key.identity()) {
 			(cached.invalidate)();
 		}
@@ -1510,7 +1559,7 @@ impl QueryClient {
 		&self,
 		family: QueryFamily<Args, T, E>,
 	) {
-		self.register_family(family.id(), family.family_types());
+		self.validate_registered_family_types(family.id(), family.family_types());
 		for cached in self
 			.inner
 			.entries

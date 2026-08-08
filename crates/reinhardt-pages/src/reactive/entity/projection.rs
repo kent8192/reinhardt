@@ -593,6 +593,7 @@ impl<T: 'static> ErasedEntityProjection<T> {
 		P: EntityProjection<T>,
 	{
 		let diagnostics = ProjectionDiagnostics {
+			adapter_type: TypeId::of::<P>(),
 			adapter_name: type_name::<P>(),
 			query_family_id,
 			schema: P::SCHEMA,
@@ -620,6 +621,18 @@ impl<T: 'static> ErasedEntityProjection<T> {
 				marker: PhantomData,
 			}),
 		}
+	}
+
+	pub(crate) fn adapter_type(&self) -> TypeId {
+		self.diagnostics.adapter_type
+	}
+
+	pub(crate) fn adapter_name(&self) -> &'static str {
+		self.diagnostics.adapter_name
+	}
+
+	pub(crate) fn schema(&self) -> &'static str {
+		self.diagnostics.schema
 	}
 
 	pub(crate) fn normalize(&self, value: T, entities: &mut EntityWriter<'_>) -> Box<dyn Any> {
@@ -664,6 +677,17 @@ impl<T: 'static> ErasedEntityProjection<T> {
 	}
 }
 
+pub(crate) fn erase_projection<T, P>(
+	projection: P,
+	query_family_id: &'static str,
+) -> ErasedEntityProjection<T>
+where
+	T: 'static,
+	P: EntityProjection<T>,
+{
+	ErasedEntityProjection::new(query_family_id, projection)
+}
+
 #[allow(dead_code)] // Cloned erased adapters are retained by query-cache records in the following slice.
 impl<T: 'static> Clone for ErasedEntityProjection<T> {
 	fn clone(&self) -> Self {
@@ -677,6 +701,7 @@ impl<T: 'static> Clone for ErasedEntityProjection<T> {
 #[allow(dead_code)] // Diagnostics are carried by the staged erased projection bridge.
 #[derive(Clone, Copy)]
 struct ProjectionDiagnostics {
+	adapter_type: TypeId,
 	adapter_name: &'static str,
 	query_family_id: &'static str,
 	schema: &'static str,

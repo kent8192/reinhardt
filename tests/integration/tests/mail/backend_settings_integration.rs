@@ -32,25 +32,43 @@ fn run_backend_probe(backend: &str) -> String {
 	String::from_utf8(output.stdout).unwrap()
 }
 
-#[test]
+fn backend_message_block(output: &str) -> String {
+	const START: &str = "========== Email 1 ==========\n";
+	const END: &str = "==============================\n\n";
+	let Some(start) = output.find(START) else {
+		return String::new();
+	};
+	let remaining = &output[start..];
+	let end = remaining
+		.find(END)
+		.expect("console backend output was not terminated");
+	remaining[..end + END.len()].to_string()
+}
+
+#[rstest]
 #[ignore = "invoked by the backend settings integration test"]
 fn backend_selection_probe() {
-	let backend_name = std::env::var("REINHARDT_MAIL_BACKEND_PROBE").unwrap();
+	// Arrange
+	let Ok(backend_name) = std::env::var("REINHARDT_MAIL_BACKEND_PROBE") else {
+		return;
+	};
 	let mut settings = EmailSettings::default();
 	settings.backend = backend_name;
 	let backend = backend_from_settings(&settings).unwrap();
 	let message = test_message();
-	tokio::runtime::Runtime::new()
+
+	// Act
+	let sent = tokio::runtime::Runtime::new()
 		.unwrap()
 		.block_on(async move {
-			assert_eq!(
-				backend
-					.send_messages(std::slice::from_ref(&message))
-					.await
-					.unwrap(),
-				1
-			);
+			backend
+				.send_messages(std::slice::from_ref(&message))
+				.await
+				.unwrap()
 		});
+
+	// Assert
+	assert_eq!(sent, 1);
 }
 
 #[rstest]
@@ -107,6 +125,9 @@ async fn backend_from_settings_selects_backends_and_rejects_bad_configuration() 
 		invalid_from.to_string(),
 		"Invalid email address: Email must contain exactly one @ symbol, found 0"
 	);
-	assert!(!memory_output.contains("Subject: File backend"));
-	assert!(console_output.contains("Subject: File backend"));
+	assert_eq!(backend_message_block(&memory_output), "");
+	assert_eq!(
+		backend_message_block(&console_output),
+		"========== Email 1 ==========\nFrom: sender@example.com\nTo: recipient@example.com\nSubject: File backend\n\nSaved body\n==============================\n\n"
+	);
 }

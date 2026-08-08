@@ -7,7 +7,7 @@ use std::time::Duration;
 use serde::{Deserialize, Serialize};
 
 use super::identity::EntityTypeRegistry;
-use super::projection::ErasedEntityProjection;
+use super::projection::{EntityHydrationGroup, EntityHydrationRecord, ErasedEntityProjection};
 use super::{
 	Entity, EntityArena, EntityDependencies, EntityIdentity, EntityProjection, EntityValue,
 	EntityVec, OptionalEntity, ProjectionMaterialization, ProjectionRemoval, RemovedEntities,
@@ -267,6 +267,14 @@ fn projection_round_trips_standard_and_composite_recipes() {
 							id: 4,
 							name: "second".to_string(),
 						},
+						Project {
+							id: 3,
+							name: "first".to_string(),
+						},
+						Project {
+							id: 9,
+							name: "third".to_string(),
+						},
 					],
 					writer,
 				)));
@@ -314,6 +322,14 @@ fn projection_round_trips_standard_and_composite_recipes() {
 							id: 4,
 							name: "second".to_string(),
 						},
+						Project {
+							id: 3,
+							name: "first".to_string(),
+						},
+						Project {
+							id: 9,
+							name: "third".to_string(),
+						},
 					]),
 				);
 				assert_eq!(
@@ -326,6 +342,14 @@ fn projection_round_trips_standard_and_composite_recipes() {
 						Project {
 							id: 4,
 							name: "second".to_string(),
+						},
+						Project {
+							id: 3,
+							name: "first".to_string(),
+						},
+						Project {
+							id: 9,
+							name: "third".to_string(),
 						},
 					]),
 				);
@@ -351,7 +375,7 @@ fn projection_round_trips_standard_and_composite_recipes() {
 			},
 		);
 
-		let removed = RemovedEntities::from_ids::<Project>([1, 2, 3, 4, 5]);
+		let removed = RemovedEntities::from_ids::<Project>([1, 2, 3, 9]);
 		assert_eq!(
 			direct.apply_removals(direct_recipe.borrow_mut().as_deref_mut().unwrap(), &removed),
 			ProjectionRemoval::MissingRequired,
@@ -374,6 +398,48 @@ fn projection_round_trips_standard_and_composite_recipes() {
 			),
 			ProjectionRemoval::Updated,
 		);
+		arena.update_entities_with_test_precommit(
+			|_| {},
+			|overlay| {
+				assert_eq!(
+					optional.materialize(optional_recipe.borrow().as_deref().unwrap(), overlay),
+					ProjectionMaterialization::Ready(None),
+				);
+				assert_eq!(
+					vector.materialize(vector_recipe.borrow().as_deref().unwrap(), overlay),
+					ProjectionMaterialization::Ready(vec![Project {
+						id: 4,
+						name: "second".to_string(),
+					}]),
+				);
+			},
+		);
+	});
+}
+
+#[test]
+fn dependencies_hydrate_declared_typed_entities() {
+	ReactiveScope::run(|| {
+		let arena = EntityArena::new(Duration::from_secs(300));
+		let mut dependencies = EntityDependencies::default();
+		dependencies.extend::<Project>([8]);
+		let group = EntityHydrationGroup::new(
+			Project::TYPE,
+			vec![EntityHydrationRecord::new(
+				serde_json::json!(8),
+				serde_json::json!({ "id": 8, "name": "hydrated" }),
+			)],
+		);
+
+		arena.update_entities(|writer| dependencies.hydrate(&group, writer));
+
+		assert_eq!(
+			arena.entity::<Project>(8).get(),
+			Some(Project {
+				id: 8,
+				name: "hydrated".to_string(),
+			}),
+		);
 	});
 }
 
@@ -389,7 +455,7 @@ fn projection_rejects_empty_schemas_and_stateful_adapters() {
 	assert_eq!(
 		panic_message(empty_schema_panic),
 		format!(
-			"entity projection adapter `{}` for query family `reactive.entity.tests.empty-schema` must define a non-empty schema",
+			"entity projection adapter `{}` for query family `reactive.entity.tests.empty-schema` with schema `` must define a non-empty schema",
 			std::any::type_name::<EmptySchemaProjection>(),
 		),
 	);

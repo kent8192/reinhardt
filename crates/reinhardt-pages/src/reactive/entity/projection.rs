@@ -1,7 +1,7 @@
-use std::any::{Any, type_name};
+use std::any::{Any, TypeId, type_name};
 use std::borrow::Cow;
 use std::cell::RefCell;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::marker::PhantomData;
 use std::mem::size_of;
 
@@ -73,6 +73,7 @@ impl ProjectionRemoval {
 #[derive(Default)]
 pub struct EntityDependencies {
 	identities: HashSet<EntityIdentity>,
+	loaders: HashMap<&'static str, Box<dyn ErasedEntityHydrationLoader>>,
 }
 
 impl EntityDependencies {
@@ -83,11 +84,159 @@ impl EntityDependencies {
 	{
 		self.identities
 			.extend(ids.into_iter().map(|id| EntityIdentity::of::<E>(&id)));
+		match self.loaders.entry(E::TYPE) {
+			std::collections::hash_map::Entry::Occupied(entry) => {
+				let loader = entry.get();
+				if loader.entity_type_id() != TypeId::of::<E>()
+					|| loader.id_type_id() != TypeId::of::<E::Id>()
+				{
+					panic!(
+						"entity dependency TYPE `{}` is already registered for entity type `{}` with ID type `{}`; cannot reuse it for entity type `{}` with ID type `{}`",
+						E::TYPE,
+						loader.entity_name(),
+						loader.id_name(),
+						type_name::<E>(),
+						type_name::<E::Id>(),
+					);
+				}
+			}
+			std::collections::hash_map::Entry::Vacant(entry) => {
+				entry.insert(Box::new(TypedEntityHydrationLoader::<E>(PhantomData)));
+			}
+		}
+	}
+
+	pub(crate) fn hydrate(&self, group: &EntityHydrationGroup, entities: &mut EntityWriter<'_>) {
+		let loader = self.loaders.get(group.entity_type()).unwrap_or_else(|| {
+			panic!(
+				"entity hydration group for TYPE `{}` was not declared by this projection",
+				group.entity_type(),
+			)
+		});
+		loader.hydrate(group, &self.identities, entities);
 	}
 
 	#[allow(dead_code)] // Used by the staged erased projection materialization bridge below.
 	fn contains(&self, identity: &EntityIdentity) -> bool {
 		self.identities.contains(identity)
+	}
+}
+
+pub(crate) struct EntityHydrationGroup {
+	entity_type: String,
+	records: Vec<EntityHydrationRecord>,
+}
+
+impl EntityHydrationGroup {
+	pub(crate) fn new(entity_type: impl Into<String>, records: Vec<EntityHydrationRecord>) -> Self {
+		Self {
+			entity_type: entity_type.into(),
+			records,
+		}
+	}
+
+	fn entity_type(&self) -> &str {
+		&self.entity_type
+	}
+
+	fn records(&self) -> &[EntityHydrationRecord] {
+		&self.records
+	}
+}
+
+pub(crate) struct EntityHydrationRecord {
+	id: serde_json::Value,
+	value: serde_json::Value,
+}
+
+impl EntityHydrationRecord {
+	pub(crate) fn new(id: serde_json::Value, value: serde_json::Value) -> Self {
+		Self { id, value }
+	}
+}
+
+trait ErasedEntityHydrationLoader {
+	fn entity_type_id(&self) -> TypeId;
+	fn id_type_id(&self) -> TypeId;
+	fn entity_name(&self) -> &'static str;
+	fn id_name(&self) -> &'static str;
+	fn hydrate(
+		&self,
+		group: &EntityHydrationGroup,
+		declared: &HashSet<EntityIdentity>,
+		entities: &mut EntityWriter<'_>,
+	);
+}
+
+struct TypedEntityHydrationLoader<E>(PhantomData<fn() -> E>);
+
+impl<E> ErasedEntityHydrationLoader for TypedEntityHydrationLoader<E>
+where
+	E: Entity,
+{
+	fn entity_type_id(&self) -> TypeId {
+		TypeId::of::<E>()
+	}
+
+	fn id_type_id(&self) -> TypeId {
+		TypeId::of::<E::Id>()
+	}
+
+	fn entity_name(&self) -> &'static str {
+		type_name::<E>()
+	}
+
+	fn id_name(&self) -> &'static str {
+		type_name::<E::Id>()
+	}
+
+	fn hydrate(
+		&self,
+		group: &EntityHydrationGroup,
+		declared: &HashSet<EntityIdentity>,
+		entities: &mut EntityWriter<'_>,
+	) {
+		if group.entity_type() != E::TYPE {
+			panic!(
+				"entity hydration loader for TYPE `{}` cannot consume group for TYPE `{}`",
+				E::TYPE,
+				group.entity_type(),
+			);
+		}
+
+		for record in group.records() {
+			let id = serde_json::from_value::<E::Id>(record.id.clone()).unwrap_or_else(|error| {
+				panic!(
+					"entity hydration loader for TYPE `{}` failed to deserialize ID type `{}`: {error}",
+					E::TYPE,
+					type_name::<E::Id>(),
+				)
+			});
+			let entity =
+				serde_json::from_value::<E>(record.value.clone()).unwrap_or_else(|error| {
+					panic!(
+						"entity hydration loader for TYPE `{}` failed to deserialize entity type `{}`: {error}",
+						E::TYPE,
+						type_name::<E>(),
+					)
+				});
+			let entity_id = entity.entity_id();
+			if entity_id != id {
+				panic!(
+					"entity hydration loader for TYPE `{}` received an entity whose ID differs from its hydration record",
+					E::TYPE,
+				);
+			}
+			let identity = EntityIdentity::of::<E>(&id);
+			if !declared.contains(&identity) {
+				panic!(
+					"entity hydration loader for TYPE `{}` received undeclared canonical ID `{}`",
+					E::TYPE,
+					identity.canonical_id(),
+				);
+			}
+			entities.upsert(entity);
+		}
 	}
 }
 
@@ -450,8 +599,8 @@ impl<T: 'static> ErasedEntityProjection<T> {
 		};
 		if diagnostics.schema.is_empty() {
 			panic!(
-				"entity projection adapter `{}` for query family `{}` must define a non-empty schema",
-				diagnostics.adapter_name, diagnostics.query_family_id,
+				"entity projection adapter `{}` for query family `{}` with schema `{}` must define a non-empty schema",
+				diagnostics.adapter_name, diagnostics.query_family_id, diagnostics.schema,
 			);
 		}
 		if size_of::<P>() != 0 {

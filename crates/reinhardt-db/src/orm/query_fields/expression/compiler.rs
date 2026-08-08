@@ -5,7 +5,7 @@ use super::operand::{AggregateOperation, ArithmeticOperation};
 use crate::orm::field_codec::database_value_to_query_value;
 use crate::orm::relations::RelationJoinGraph;
 use reinhardt_core::exception::{DatabaseError, DatabaseErrorKind, Result};
-use reinhardt_query::prelude::{Alias, BinOper, Expr, Func, SimpleExpr};
+use reinhardt_query::prelude::{Alias, BinOper, Expr, Func, IntoIden, SimpleExpr};
 
 /// Lower one erased typed expression after its relation aliases have been planned.
 pub(crate) fn compile_expression(
@@ -14,6 +14,15 @@ pub(crate) fn compile_expression(
 	graph: &RelationJoinGraph,
 ) -> Result<SimpleExpr> {
 	compile_node(&expression.node, root_alias, graph)
+}
+
+pub(crate) fn compile_predicate(
+	expression: &SimpleExpr,
+	joins: &super::node::JoinRequirements,
+	root_alias: &str,
+	graph: &RelationJoinGraph,
+) -> Result<SimpleExpr> {
+	qualify_condition(expression, joins, root_alias, graph)
 }
 
 fn compile_node(
@@ -75,11 +84,12 @@ fn compile_node(
 		)),
 		ExpressionNode::Case {
 			condition,
+			condition_joins,
 			result,
 			otherwise,
 		} => {
 			let case = Expr::case().when(
-				crate::orm::query_fields::qualify_model_root(condition, root_alias),
+				qualify_condition(condition, condition_joins, root_alias, graph)?,
 				compile_node(result, root_alias, graph)?,
 			);
 			Ok(match otherwise {
@@ -96,6 +106,91 @@ fn compile_node(
 		ExpressionNode::ExistingSimpleExpr(expression) => Ok(
 			crate::orm::query_fields::qualify_model_root(expression, root_alias),
 		),
+	}
+}
+
+fn qualify_condition(
+	condition: &SimpleExpr,
+	joins: &super::node::JoinRequirements,
+	root_alias: &str,
+	graph: &RelationJoinGraph,
+) -> Result<SimpleExpr> {
+	let mut qualified = if joins.paths.is_empty() {
+		crate::orm::query_fields::qualify_model_root(condition, root_alias)
+	} else {
+		condition.clone()
+	};
+	if joins.paths.len() > 1 {
+		return Err(DatabaseError::new(
+			DatabaseErrorKind::Query,
+			"typed predicate with multiple relation paths cannot be qualified safely",
+		)
+		.into());
+	}
+	if !joins.paths.is_empty() && count_unqualified_columns(condition) > 1 {
+		return Err(DatabaseError::new(
+			DatabaseErrorKind::Query,
+			"typed predicate mixing root and related columns cannot be qualified safely",
+		)
+		.into());
+	}
+	let Some(path) = joins.paths.first() else {
+		return Ok(qualified);
+	};
+	let Some(alias) = graph
+		.aliases_for_steps(path)
+		.and_then(|aliases| aliases.last().cloned())
+	else {
+		return Err(DatabaseError::new(
+			DatabaseErrorKind::Query,
+			"typed predicate relation path could not be resolved in the query join graph",
+		)
+		.into());
+	};
+	qualify_related_columns(&mut qualified, &alias);
+	Ok(qualified)
+}
+
+fn count_unqualified_columns(expression: &SimpleExpr) -> usize {
+	match expression {
+		SimpleExpr::Column(reinhardt_query::prelude::ColumnRef::Column(_)) => 1,
+		SimpleExpr::Binary(left, _, right) => {
+			count_unqualified_columns(left) + count_unqualified_columns(right)
+		}
+		SimpleExpr::Unary(_, value)
+		| SimpleExpr::ExprAlias(value, _)
+		| SimpleExpr::Cast(value, _)
+		| SimpleExpr::AsEnum(_, value) => count_unqualified_columns(value),
+		SimpleExpr::FunctionCall(_, values) | SimpleExpr::Tuple(values) => {
+			values.iter().map(count_unqualified_columns).sum()
+		}
+		_ => 0,
+	}
+}
+
+fn qualify_related_columns(expression: &mut SimpleExpr, alias: &str) {
+	match expression {
+		SimpleExpr::Column(reinhardt_query::prelude::ColumnRef::Column(column)) => {
+			let column = column.clone();
+			*expression = SimpleExpr::Column(reinhardt_query::prelude::ColumnRef::TableColumn(
+				Alias::new(alias).into_iden(),
+				column,
+			));
+		}
+		SimpleExpr::Binary(left, _, right) => {
+			qualify_related_columns(left, alias);
+			qualify_related_columns(right, alias);
+		}
+		SimpleExpr::Unary(_, value)
+		| SimpleExpr::ExprAlias(value, _)
+		| SimpleExpr::Cast(value, _)
+		| SimpleExpr::AsEnum(_, value) => qualify_related_columns(value, alias),
+		SimpleExpr::FunctionCall(_, values) | SimpleExpr::Tuple(values) => {
+			for value in values {
+				qualify_related_columns(value, alias);
+			}
+		}
+		_ => {}
 	}
 }
 
@@ -135,7 +230,8 @@ mod tests {
 	use crate::orm::query_fields::expression::node::JoinRequirements;
 	use crate::orm::relations::{RelationJoinKind, RelationMultiplicity, RelationStep};
 	use reinhardt_query::prelude::{
-		PostgresQueryBuilder, Query, QueryStatementBuilder, SelectStatement, SqliteQueryBuilder,
+		ExprTrait, PostgresQueryBuilder, Query, QueryStatementBuilder, SelectStatement,
+		SqliteQueryBuilder,
 	};
 	use std::borrow::Cow;
 
@@ -150,6 +246,18 @@ mod tests {
 			target_table: Cow::Borrowed("posts"),
 			source_column: Cow::Borrowed("author_pk"),
 			target_column: Cow::Borrowed("author_id"),
+			default_join_kind: RelationJoinKind::Inner,
+			multiplicity: RelationMultiplicity::Multiple,
+		}
+	}
+
+	fn relation_step_named(name: &'static str, target: &'static str) -> RelationStep {
+		RelationStep {
+			name: name.into(),
+			source_table: "authors".into(),
+			target_table: target.into(),
+			source_column: "author_pk".into(),
+			target_column: "author_id".into(),
 			default_join_kind: RelationJoinKind::Inner,
 			multiplicity: RelationMultiplicity::Multiple,
 		}
@@ -196,7 +304,9 @@ mod tests {
 		};
 		let stored = expression(node, joins);
 		let mut graph = RelationJoinGraph::new("authors");
-		graph.add_aggregate_steps(&stored.joins.relation_steps);
+		for path in &stored.joins.paths {
+			graph.add_aggregate_steps(path);
+		}
 		let graph = graph.with_root_alias("authors");
 		let mut stmt = Query::select();
 		stmt.from(Alias::new("authors"));
@@ -224,5 +334,85 @@ mod tests {
 		assert_eq!(sql.matches("LEFT JOIN").count(), 1);
 		assert!(sql.contains("COUNT(\"posts\".\"post_pk\")"));
 		assert!(!sql.contains("COUNT(\"authors\".\"posts\")"));
+	}
+
+	#[test]
+	fn independent_related_paths_are_not_chained() {
+		let posts = relation_step_named("posts", "posts");
+		let comments = relation_step_named("comments", "comments");
+		let posts_column = ExpressionNode::RelatedColumn(RelatedColumnOperand {
+			relation_steps: vec![posts.clone()],
+			terminal_column: "amount".to_owned(),
+			storage_kind: DatabaseStorageKind::I64,
+			composite_primary_key: false,
+		});
+		let comments_column = ExpressionNode::RelatedColumn(RelatedColumnOperand {
+			relation_steps: vec![comments.clone()],
+			terminal_column: "amount".to_owned(),
+			storage_kind: DatabaseStorageKind::I64,
+			composite_primary_key: false,
+		});
+		let node = ExpressionNode::Arithmetic {
+			left: Box::new(ExpressionNode::Aggregate {
+				operation: AggregateOperation::Sum,
+				operand: Box::new(posts_column),
+				distinct: false,
+				output_kind: Some(super::super::kind::AggregateOutputKind::I64),
+			}),
+			operation: ArithmeticOperation::Add,
+			right: Box::new(ExpressionNode::Aggregate {
+				operation: AggregateOperation::Sum,
+				operand: Box::new(comments_column),
+				distinct: false,
+				output_kind: Some(super::super::kind::AggregateOutputKind::I64),
+			}),
+		};
+		let joins = JoinRequirements::from_relation_steps(vec![posts])
+			.combine(JoinRequirements::from_relation_steps(vec![comments]));
+		let stored = expression(node, joins);
+		let mut graph = RelationJoinGraph::new("authors");
+		for path in &stored.joins.paths {
+			graph.add_aggregate_steps(path);
+		}
+		let graph = graph.with_root_alias("authors");
+		let compiled = compile_expression(&stored, "authors", &graph)
+			.expect("independent related paths must compile");
+		let mut stmt = Query::select();
+		stmt.from(Alias::new("authors")).expr(compiled);
+		let sql = render(stmt.to_owned(), true);
+		assert!(sql.contains("\"posts\"."));
+		assert!(sql.contains("\"comments\"."));
+		assert!(graph.joins().iter().any(|join| join.alias == "posts"));
+		assert!(graph.joins().iter().any(|join| join.alias == "comments"));
+	}
+
+	#[test]
+	fn related_typed_predicate_uses_inner_join_alias() {
+		let step = relation_step();
+		let joins = JoinRequirements::from_relation_steps(vec![step.clone()]);
+		let mut graph = RelationJoinGraph::new("authors");
+		graph.add_steps(&[step], RelationJoinKind::Inner);
+		let graph = graph.with_root_alias("authors");
+		let predicate = Expr::col(Alias::new("amount")).eq(Expr::val(1));
+		let compiled = compile_predicate(&predicate, &joins, "authors", &graph)
+			.expect("related predicate path should resolve");
+		let mut stmt = Query::select();
+		stmt.expr(compiled);
+		let sql = stmt.to_string(PostgresQueryBuilder);
+		assert!(sql.contains("\"posts\".\"amount\""));
+	}
+
+	#[test]
+	fn mixed_root_and_related_predicate_fails_closed() {
+		let step = relation_step();
+		let joins = JoinRequirements::from_relation_steps(vec![step.clone()]);
+		let mut graph = RelationJoinGraph::new("authors");
+		graph.add_steps(&[step], RelationJoinKind::Inner);
+		let predicate = Expr::col(Alias::new("amount"))
+			.add(Expr::col(Alias::new("author_pk")))
+			.eq(Expr::val(1));
+		let error = compile_predicate(&predicate, &joins, "authors", &graph)
+			.expect_err("mixed relation predicates must fail closed");
+		assert_eq!(error.database_kind(), Some(DatabaseErrorKind::Query));
 	}
 }

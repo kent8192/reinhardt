@@ -13,7 +13,10 @@ use crate::naming::to_snake_case;
 use crate::orm::query_fields::aggregate::{AggregateExpr, ComparisonExpr};
 use crate::orm::query_fields::comparison::FieldComparison;
 use crate::orm::query_fields::compiler::QueryFieldCompiler;
-use crate::orm::query_fields::expression::{compiler::compile_expression, node::StoredExpression};
+use crate::orm::query_fields::expression::{
+	compiler::{compile_expression, compile_predicate},
+	node::{JoinRequirements, StoredExpression},
+};
 use crate::orm::query_fields::{GroupByFields, OrderedExpression, TypedExpression};
 use crate::orm::relations::{RelationJoinGraph, RelationJoinKind, RelationPathLike, RelationStep};
 use futures::{Stream, StreamExt};
@@ -467,7 +470,7 @@ pub enum FilterValue {
 enum FilterField {
 	Column,
 	Expression(String),
-	TypedPredicate(Box<SimpleExpr>),
+	TypedPredicate(Box<SimpleExpr>, JoinRequirements),
 }
 
 #[derive(Debug, Clone)]
@@ -608,10 +611,12 @@ impl Filter {
 		}
 	}
 
-	pub(crate) fn typed_predicate(expr: SimpleExpr) -> Self {
+	pub(crate) fn typed_predicate<M>(
+		predicate: crate::orm::query_fields::TypedPredicate<M>,
+	) -> Self {
 		Self {
 			field: String::new(),
-			field_source: FilterField::TypedPredicate(Box::new(expr)),
+			field_source: FilterField::TypedPredicate(Box::new(predicate.expr), predicate.joins),
 			relation: None,
 			field_type: None,
 			operator: FilterOperator::Eq,
@@ -628,6 +633,11 @@ impl Filter {
 	fn add_relation_joins(&self, graph: &mut RelationJoinGraph) {
 		if let Some(relation) = &self.relation {
 			relation.add_to_graph(graph);
+		}
+		if let FilterField::TypedPredicate(_, joins) = &self.field_source {
+			for path in &joins.paths {
+				graph.add_steps(path, RelationJoinKind::Inner);
+			}
 		}
 	}
 
@@ -4686,7 +4696,9 @@ where
 			.iter()
 			.chain(self.typed_annotations.iter())
 		{
-			graph.add_aggregate_steps(&expression.joins.relation_steps);
+			for path in &expression.joins.paths {
+				graph.add_aggregate_steps(path);
+			}
 		}
 		graph.with_root_alias_and_reserved_aliases(self.root_alias(), self.manual_join_aliases())
 	}
@@ -4726,7 +4738,7 @@ where
 	}
 
 	fn add_default_select_columns(&self, stmt: &mut SelectStatement) {
-		if self.relation_joins.is_empty() {
+		if self.expression_relation_join_graph_for_query().is_empty() {
 			stmt.column(ColumnRef::Asterisk);
 		} else {
 			stmt.column(ColumnRef::table_asterisk(Alias::new(self.root_alias())));
@@ -4762,7 +4774,9 @@ where
 	}
 
 	fn root_column_reference(&self, field: &str) -> ColumnRef {
-		if (!self.relation_joins.is_empty() || !self.joins.is_empty() || self.has_select_related())
+		if (!self.expression_relation_join_graph_for_query().is_empty()
+			|| !self.joins.is_empty()
+			|| self.has_select_related())
 			&& !field.contains('.')
 			&& !self.is_projection_alias(field)
 		{
@@ -4917,7 +4931,7 @@ where
 	}
 
 	fn root_column_sql(&self, field: &str) -> String {
-		if !self.relation_joins.is_empty() && !field.contains('.') {
+		if !self.expression_relation_join_graph_for_query().is_empty() && !field.contains('.') {
 			quote_identifier(&format!("{}.{}", self.root_alias(), field))
 		} else {
 			quote_identifier(field)
@@ -5146,8 +5160,9 @@ where
 		let mut added = false;
 
 		for filter in &self.filters {
-			if let FilterField::TypedPredicate(expr) = &filter.field_source {
-				cond = cond.add(self.qualify_typed_expression(expr));
+			if let FilterField::TypedPredicate(expr, joins) = &filter.field_source {
+				let graph = self.expression_relation_join_graph_for_query();
+				cond = cond.add(compile_predicate(expr, joins, self.root_alias(), &graph)?);
 				added = true;
 				continue;
 			}
@@ -6046,7 +6061,7 @@ where
 	}
 
 	fn has_joined_tables(&self) -> bool {
-		!self.relation_joins.is_empty()
+		!self.expression_relation_join_graph_for_query().is_empty()
 			|| !self.select_related_fields.is_empty()
 			|| !self.joins.is_empty()
 	}
@@ -10743,7 +10758,7 @@ fn filter_lhs_expr(filter: &Filter) -> Expr {
 		FilterField::Column => Expr::col(parse_column_reference(&filter.field)),
 		FilterField::Expression(sql) if filter.field == *sql => Expr::cust(sql.clone()),
 		FilterField::Expression(_) => Expr::col(parse_column_reference(&filter.field)),
-		FilterField::TypedPredicate(_) => Expr::cust("TRUE"),
+		FilterField::TypedPredicate(_, _) => Expr::cust("TRUE"),
 	}
 }
 
@@ -10756,7 +10771,7 @@ fn filter_lhs_sql(filter: &Filter) -> String {
 		FilterField::Column => quote_identifier(&filter.field),
 		FilterField::Expression(sql) if filter.field == *sql => sql.clone(),
 		FilterField::Expression(_) => quote_identifier(&filter.field),
-		FilterField::TypedPredicate(_) => "TRUE".to_owned(),
+		FilterField::TypedPredicate(_, _) => "TRUE".to_owned(),
 	}
 }
 
@@ -14957,6 +14972,44 @@ mod tests {
 			sql,
 			r#"SELECT "projects".* FROM "test_projects" AS "projects" WHERE "projects"."test_user_id" IN (1, 2)"#
 		);
+	}
+
+	#[test]
+	fn typed_related_aggregate_qualifies_root_projection_and_filter() {
+		let path = unsafe {
+			crate::orm::relations::RelationPath::<
+				TestUser,
+				TestProject,
+				crate::orm::relations::GeneratedRelationPath,
+			>::from_generated_steps(
+				<TestUserProjects as crate::orm::relations::RelationDescriptor>::steps()
+			)
+		};
+		let expression = crate::orm::func::count(path);
+		let (node, joins) = expression.into_parts();
+		let mut queryset = QuerySet::<TestUser>::new();
+		queryset.typed_annotations.push((
+			"project_count".to_owned(),
+			crate::orm::query_fields::expression::node::StoredExpression::new(
+				node,
+				joins,
+				Some("project_count".to_owned()),
+			),
+		));
+		let sql = queryset
+			.filter(Filter::new(
+				"id",
+				FilterOperator::Eq,
+				FilterValue::Integer(1),
+			))
+			.to_sql()
+			.expect("typed related aggregate query should compile");
+
+		assert!(sql.starts_with(r##"SELECT "test_users".*,"##));
+		assert!(sql.contains(
+			r##"LEFT JOIN "test_projects" AS "projects" ON "test_users"."id" = "projects"."test_user_id""##,
+		));
+		assert!(sql.contains(r##"WHERE "test_users"."id" = 1"##));
 	}
 
 	#[test]

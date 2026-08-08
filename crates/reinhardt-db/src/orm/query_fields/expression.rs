@@ -197,10 +197,15 @@ where
 			.into_field_value()
 			.map(crate::orm::database_value_to_query_value)
 			.map_err(|error| Error::Validation(error.to_string()))?;
-		Ok(TypedPredicate::new(operator(
-			self.into_simple_expr(),
-			Expr::value(value).into_simple_expr(),
-		)))
+		let joins = self.joins.clone();
+		Ok(TypedPredicate {
+			expr: operator(
+				self.into_simple_expr(),
+				Expr::value(value).into_simple_expr(),
+			),
+			joins,
+			marker: PhantomData,
+		})
 	}
 }
 
@@ -299,10 +304,15 @@ where
 			.into_field_value()
 			.map(crate::orm::database_value_to_query_value)
 			.map_err(|error| Error::Validation(error.to_string()))?;
-		Ok(HavingPredicate::new(operator(
-			self.into_simple_expr(),
-			Expr::value(value).into_simple_expr(),
-		)))
+		let joins = self.joins.clone();
+		Ok(HavingPredicate {
+			expr: operator(
+				self.into_simple_expr(),
+				Expr::value(value).into_simple_expr(),
+			),
+			joins,
+			marker: PhantomData,
+		})
 	}
 }
 
@@ -476,13 +486,18 @@ impl<M, R, LeftKind> CaseWhen<M, R, LeftKind> {
 		LeftKind: CombineKind<RightKind>,
 		RightKind: AnnotationExpressionKind,
 	{
+		let condition_joins = self.condition.joins.clone();
 		TypedExpression::from_parts(
 			ExpressionNode::Case {
 				condition: self.condition.expr,
+				condition_joins,
 				result: Box::new(self.result.node),
 				otherwise: Some(Box::new(otherwise.node)),
 			},
-			self.result.joins.combine(otherwise.joins),
+			self.condition
+				.joins
+				.combine(self.result.joins)
+				.combine(otherwise.joins),
 		)
 	}
 }
@@ -536,6 +551,7 @@ fn validate_label(label: &str) -> Result<(), Error> {
 #[derive(Debug, Clone)]
 pub struct TypedPredicate<M> {
 	pub(crate) expr: SimpleExpr,
+	pub(crate) joins: JoinRequirements,
 	marker: PhantomData<fn() -> M>,
 }
 
@@ -543,6 +559,7 @@ impl<M> TypedPredicate<M> {
 	pub(crate) fn new(expr: SimpleExpr) -> Self {
 		Self {
 			expr,
+			joins: JoinRequirements::default(),
 			marker: PhantomData,
 		}
 	}
@@ -554,6 +571,7 @@ pub struct HavingPredicate<M> {
 	// The annotation HAVING planner consumes this expression when it is added.
 	#[allow(dead_code)]
 	pub(crate) expr: SimpleExpr,
+	pub(crate) joins: JoinRequirements,
 	marker: PhantomData<fn() -> M>,
 }
 
@@ -561,6 +579,7 @@ impl<M> HavingPredicate<M> {
 	pub(crate) fn new(expr: SimpleExpr) -> Self {
 		Self {
 			expr,
+			joins: JoinRequirements::default(),
 			marker: PhantomData,
 		}
 	}
@@ -589,9 +608,7 @@ where
 	M: Model,
 {
 	fn into_filter_condition(self) -> crate::orm::query::FilterCondition {
-		crate::orm::query::FilterCondition::Single(crate::orm::query::Filter::typed_predicate(
-			self.expr,
-		))
+		crate::orm::query::FilterCondition::Single(crate::orm::query::Filter::typed_predicate(self))
 	}
 }
 

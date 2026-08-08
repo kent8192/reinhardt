@@ -28,18 +28,24 @@ pub(crate) struct RelatedColumnOperand {
 /// Relation joins required by an expression node.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub(crate) struct JoinRequirements {
-	pub(crate) relation_steps: Vec<RelationStep>,
+	pub(crate) paths: Vec<Vec<RelationStep>>,
 }
 
 impl JoinRequirements {
 	pub(crate) fn from_relation_steps(relation_steps: Vec<RelationStep>) -> Self {
-		Self { relation_steps }
+		if relation_steps.is_empty() {
+			Self::default()
+		} else {
+			Self {
+				paths: vec![relation_steps],
+			}
+		}
 	}
 
 	pub(crate) fn combine(mut self, other: Self) -> Self {
-		for step in other.relation_steps {
-			if !self.relation_steps.contains(&step) {
-				self.relation_steps.push(step);
+		for path in other.paths {
+			if !self.paths.contains(&path) {
+				self.paths.push(path);
 			}
 		}
 		self
@@ -73,6 +79,7 @@ pub(crate) enum ExpressionNode {
 	/// A single-branch conditional expression.
 	Case {
 		condition: SimpleExpr,
+		condition_joins: JoinRequirements,
 		result: Box<Self>,
 		otherwise: Option<Box<Self>>,
 	},
@@ -131,6 +138,7 @@ impl ExpressionNode {
 			),
 			Self::Case {
 				condition,
+				condition_joins: _,
 				result,
 				otherwise,
 			} => {
@@ -195,16 +203,19 @@ impl ExpressionNode {
 			(
 				Self::Case {
 					condition: left_condition,
+					condition_joins: left_condition_joins,
 					result: left_result,
 					otherwise: left_otherwise,
 				},
 				Self::Case {
 					condition: right_condition,
+					condition_joins: right_condition_joins,
 					result: right_result,
 					otherwise: right_otherwise,
 				},
 			) => {
 				format!("{left_condition:?}") == format!("{right_condition:?}")
+					&& left_condition_joins == right_condition_joins
 					&& left_result.structurally_eq(right_result)
 					&& match (left_otherwise, right_otherwise) {
 						(Some(left), Some(right)) => left.structurally_eq(right),

@@ -2,6 +2,7 @@ use async_trait::async_trait;
 use reinhardt_mail::{
 	Alternative, Attachment, EmailBackend, EmailError, EmailMessage, EmailResult, MemoryBackend,
 };
+use rstest::rstest;
 
 struct FailingBackend;
 
@@ -55,6 +56,7 @@ fn assert_message_fields(expected: &EmailMessage, actual: &EmailMessage) {
 	}
 }
 
+#[rstest]
 #[tokio::test]
 async fn email_message_send_delegates_and_propagates_failure() {
 	// Arrange

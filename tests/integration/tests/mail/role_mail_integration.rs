@@ -37,6 +37,9 @@ async fn role_mail_helpers_apply_recipient_and_failure_policy() {
 	settings.from_email = "fallback@example.com".to_string();
 	settings.subject_prefix = "[Reinhardt]".to_string();
 	let backend = MemoryBackend::new();
+	let empty_settings = EmailSettings::default();
+	let transient = TransientFailureBackend;
+	let permanent = PermanentFailureBackend;
 
 	// Act
 	mail_admins(
@@ -63,7 +66,6 @@ async fn role_mail_helpers_apply_recipient_and_failure_policy() {
 	.unwrap();
 	let messages = backend.get_messages().await;
 
-	let empty_settings = EmailSettings::default();
 	let silent_admins = mail_admins(&empty_settings, "No admins", "Ignored", true, &backend).await;
 	let count_after_silent = backend.count().await;
 	let missing_admins =
@@ -71,19 +73,12 @@ async fn role_mail_helpers_apply_recipient_and_failure_policy() {
 	let missing_managers =
 		mail_managers(&empty_settings, "No managers", "Rejected", false, &backend).await;
 
-	let transient = TransientFailureBackend;
 	let transient_suppressed =
 		mail_admins(&settings, "Transient", "Suppressed", true, &transient).await;
 	let transient_propagated =
 		mail_admins(&settings, "Transient", "Propagated", false, &transient).await;
-	let permanent_suppressed = mail_admins(
-		&settings,
-		"Permanent",
-		"Must propagate",
-		true,
-		&PermanentFailureBackend,
-	)
-	.await;
+	let permanent_suppressed =
+		mail_admins(&settings, "Permanent", "Must propagate", true, &permanent).await;
 
 	// Assert
 	assert_eq!(messages.len(), 3);

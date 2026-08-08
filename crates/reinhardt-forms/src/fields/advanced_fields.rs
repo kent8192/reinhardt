@@ -1247,18 +1247,70 @@ mod tests {
 	}
 
 	#[rstest]
-	fn advanced_field_builders_expose_configured_metadata() {
+	fn uuid_field_builder_exposes_configured_metadata() {
 		// Arrange
 		let uuid = UUIDField::new("identifier")
 			.required(false)
 			.help_text("Canonical resource identifier")
 			.initial(json!("550e8400-e29b-41d4-a716-446655440000"))
 			.error_message("invalid", "UUID only.");
+
+		// Act
+		let metadata = (
+			uuid.name(),
+			uuid.required,
+			Some(uuid.help_text.as_str()),
+			uuid.initial.as_ref(),
+			uuid.error_messages.get("invalid").map(String::as_str),
+		);
+
+		// Assert
+		assert_eq!(
+			metadata,
+			(
+				"identifier",
+				false,
+				Some("Canonical resource identifier"),
+				Some(&json!("550e8400-e29b-41d4-a716-446655440000")),
+				Some("UUID only."),
+			),
+		);
+	}
+
+	#[rstest]
+	fn duration_field_builder_exposes_configured_metadata() {
+		// Arrange
 		let duration = DurationField::new("timeout")
 			.required(false)
 			.help_text("ISO 8601 duration")
 			.initial(json!("PT30S"))
 			.error_message("invalid", "Duration only.");
+
+		// Act
+		let metadata = (
+			duration.name(),
+			duration.required,
+			Some(duration.help_text.as_str()),
+			duration.initial.as_ref(),
+			duration.error_messages.get("invalid").map(String::as_str),
+		);
+
+		// Assert
+		assert_eq!(
+			metadata,
+			(
+				"timeout",
+				false,
+				Some("ISO 8601 duration"),
+				Some(&json!("PT30S")),
+				Some("Duration only."),
+			),
+		);
+	}
+
+	#[rstest]
+	fn combo_field_builder_exposes_configured_metadata() {
+		// Arrange
 		let combo = ComboField::new("identifier")
 			.required(false)
 			.help_text("Validated identifier")
@@ -1268,56 +1320,24 @@ mod tests {
 
 		// Act
 		let metadata = (
-			(
-				uuid.name(),
-				uuid.required,
-				Some(uuid.help_text.as_str()),
-				uuid.initial.as_ref(),
-				uuid.error_messages.get("invalid").map(String::as_str),
-			),
-			(
-				duration.name(),
-				duration.required,
-				Some(duration.help_text.as_str()),
-				duration.initial.as_ref(),
-				duration.error_messages.get("invalid").map(String::as_str),
-			),
-			(
-				combo.name(),
-				combo.required,
-				Some(combo.help_text.as_str()),
-				combo.initial.as_ref(),
-				combo.error_messages.get("required").map(String::as_str),
-				combo.validators.len(),
-			),
+			combo.name(),
+			combo.required,
+			Some(combo.help_text.as_str()),
+			combo.initial.as_ref(),
+			combo.error_messages.get("required").map(String::as_str),
+			combo.validators.len(),
 		);
 
 		// Assert
 		assert_eq!(
 			metadata,
 			(
-				(
-					"identifier",
-					false,
-					Some("Canonical resource identifier"),
-					Some(&json!("550e8400-e29b-41d4-a716-446655440000")),
-					Some("UUID only."),
-				),
-				(
-					"timeout",
-					false,
-					Some("ISO 8601 duration"),
-					Some(&json!("PT30S")),
-					Some("Duration only."),
-				),
-				(
-					"identifier",
-					false,
-					Some("Validated identifier"),
-					Some(&json!("initial")),
-					Some("Identifier is optional."),
-					1,
-				),
+				"identifier",
+				false,
+				Some("Validated identifier"),
+				Some(&json!("initial")),
+				Some("Identifier is optional."),
+				1,
 			),
 		);
 	}

@@ -638,7 +638,7 @@ impl<T: Clone + 'static, E: Clone + 'static> Clone for QueryLease<T, E> {
 
 impl<T: Clone + 'static, E: Clone + 'static> Drop for QueryLeaseInner<T, E> {
 	fn drop(&mut self) {
-		let entry = &self.entry;
+		let entry = Rc::clone(&self.entry);
 		let remaining = entry.lease_count.get().saturating_sub(1);
 		entry.lease_count.set(remaining);
 		if self.retains_errors {
@@ -649,6 +649,7 @@ impl<T: Clone + 'static, E: Clone + 'static> Drop for QueryLeaseInner<T, E> {
 			entry.cancel_request();
 			entry.schedule_garbage_collection();
 		} else {
+			entry.remove_retry_candidate(self.registration_id);
 			entry.refresh_polling_deadline();
 		}
 	}
@@ -1038,6 +1039,16 @@ impl<T: Clone + 'static, E: Clone + 'static> QueryEntry<T, E> {
 			}),
 		});
 		self.observers.borrow_mut().push(Rc::downgrade(&inner));
+		{
+			let mut retry = self.retry.borrow_mut();
+			if let Some(sequence) = retry.as_mut()
+				&& sequence.last_error.is_some()
+				&& let Some(candidate) = self.evaluate_retry_candidate(&inner, sequence)
+			{
+				sequence.candidates.insert(registration_id, candidate);
+			}
+		}
+		self.recompute_retry_deadline();
 		self.refresh_polling_deadline();
 		QueryLease { inner }
 	}
@@ -1053,7 +1064,12 @@ impl<T: Clone + 'static, E: Clone + 'static> QueryEntry<T, E> {
 		T: Serialize + DeserializeOwned,
 		E: Serialize + DeserializeOwned,
 	{
-		let should_fetch = if !policy.enabled || self.has_request() {
+		let waiting_to_retry = self
+			.retry
+			.borrow()
+			.as_ref()
+			.is_some_and(|sequence| sequence.last_error.is_some());
+		let should_fetch = if !policy.enabled || self.has_request() || waiting_to_retry {
 			false
 		} else if options.error_policy == QueryErrorPolicy::Retain {
 			self.should_fetch_on_mount(policy.stale_time)
@@ -1104,6 +1120,106 @@ impl<T: Clone + 'static, E: Clone + 'static> QueryEntry<T, E> {
 			.iter()
 			.filter_map(Weak::upgrade)
 			.find(|observer| observer.registration_id == registration_id)
+	}
+
+	fn observer_can_retry(observer: &QueryLeaseInner<T, E>, sequence: &RetrySequence<E>) -> bool {
+		let participates_automatically =
+			observer.policy.enabled && observer.consumer.get() == QueryConsumer::MountedQuery;
+		let participates_manually = sequence.manual_observer_id == Some(observer.registration_id);
+		if !participates_automatically && !participates_manually {
+			return false;
+		}
+		let Some(policy) = observer.retry_policy.as_ref() else {
+			return false;
+		};
+		let Some(error) = sequence.last_error.as_ref() else {
+			return false;
+		};
+		sequence.attempts_started < policy.max_attempts && (policy.when)(error)
+	}
+
+	fn evaluate_retry_candidate(
+		&self,
+		observer: &QueryLeaseInner<T, E>,
+		sequence: &mut RetrySequence<E>,
+	) -> Option<RetryCandidate> {
+		if !Self::observer_can_retry(observer, sequence) {
+			return None;
+		}
+		let policy = observer
+			.retry_policy
+			.as_ref()
+			.expect("a retry-eligible observer must have a retry policy");
+		let sample = if policy.jitter {
+			*sequence
+				.jitter_sample
+				.get_or_insert_with(|| self.runtime.jitter_sample())
+		} else {
+			0
+		};
+		Some(RetryCandidate {
+			delay_ms: policy.delay_ms(sequence.attempts_started, sample),
+		})
+	}
+
+	fn recompute_retry_deadline(self: &Rc<Self>) {
+		let sequence_generation = self
+			.retry
+			.borrow()
+			.as_ref()
+			.filter(|sequence| sequence.last_error.is_some() && !sequence.candidates.is_empty())
+			.map(|sequence| sequence.generation);
+		if let Some(sequence_generation) = sequence_generation {
+			self.schedule_retry_deadline(sequence_generation);
+		} else if let Some(owner) = self.owner.as_ref().and_then(Weak::upgrade) {
+			owner.refresh_browser_timer();
+		}
+	}
+
+	fn remove_retry_candidate(self: &Rc<Self>, registration_id: ObserverRegistrationId) {
+		let terminal_failure = {
+			let mut retry = self.retry.borrow_mut();
+			let Some(sequence) = retry.as_mut() else {
+				return;
+			};
+			if sequence.candidates.remove(&registration_id).is_none() {
+				return;
+			}
+			if !sequence.candidates.is_empty() {
+				None
+			} else {
+				sequence.last_error.clone().map(|error| {
+					(
+						sequence.completion_generation,
+						sequence.invalidation_generation,
+						sequence.had_success,
+						sequence.manual_observer_id,
+						error,
+					)
+				})
+			}
+		};
+		if let Some((
+			completion_generation,
+			invalidation_generation,
+			had_success,
+			manual_id,
+			error,
+		)) = terminal_failure
+		{
+			let manual_observer = manual_id
+				.and_then(|observer_id| self.observer_by_id(observer_id))
+				.map(|observer| Rc::downgrade(&observer));
+			self.publish_terminal_failure(
+				completion_generation,
+				invalidation_generation,
+				had_success,
+				error,
+			);
+			self.finish_terminal_sequence(manual_observer, invalidation_generation);
+		} else {
+			self.recompute_retry_deadline();
+		}
 	}
 
 	fn has_active_invalidation_interest(&self) -> bool {
@@ -1342,35 +1458,28 @@ impl<T: Clone + 'static, E: Clone + 'static> QueryEntry<T, E> {
 				self.finish_terminal_sequence(manual_observer, request_invalidation_generation);
 			}
 			Err(error) => {
-				let retry_observer = self
-					.selected_observer()
-					.or_else(|| manual_observer.as_ref().and_then(Weak::upgrade));
-				let mut candidates = HashMap::new();
-				let mut jitter_sample = None;
-				if let Some(observer) = retry_observer
-					&& let Some(policy) = observer.retry_policy.as_ref()
-					&& attempt_number < policy.max_attempts
-					&& (policy.when)(&error)
-				{
-					let sample = if policy.jitter {
-						let sample = self.runtime.jitter_sample();
-						jitter_sample = Some(sample);
-						sample
-					} else {
-						0
+				let now_ms = self.runtime.now_ms();
+				let observers = self.live_observers();
+				let has_candidates = {
+					let mut retry = self.retry.borrow_mut();
+					let Some(sequence) = retry
+						.as_mut()
+						.filter(|sequence| sequence.generation == sequence_generation)
+					else {
+						return;
 					};
-					candidates.insert(
-						observer.registration_id,
-						RetryCandidate {
-							delay_ms: policy.delay_ms(attempt_number, sample),
-						},
-					);
-				}
-				if !candidates.is_empty() {
-					let now_ms = self.runtime.now_ms();
-					if let Some(retry) = self.retry.borrow_mut().as_mut() {
-						retry.record_failure(error, now_ms, jitter_sample, candidates);
+					sequence.record_failure(error.clone(), now_ms, None, HashMap::new());
+					for observer in observers {
+						if let Some(candidate) = self.evaluate_retry_candidate(&observer, sequence)
+						{
+							sequence
+								.candidates
+								.insert(observer.registration_id, candidate);
+						}
 					}
+					!sequence.candidates.is_empty()
+				};
+				if has_candidates {
 					self.schedule_retry_deadline(sequence_generation);
 					return;
 				}

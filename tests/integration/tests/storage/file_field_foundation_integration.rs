@@ -7,7 +7,7 @@ use reinhardt::db::migrations::{
 	FieldMetadata, FieldType, MigrationAutodetector, ModelMetadata, Operation, ProjectState,
 	SqlDialect, global_registry,
 };
-use reinhardt::db::orm::manager::{get_connection, reinitialize_database};
+use reinhardt::db::orm::manager::install_scoped_database;
 use reinhardt::db::orm::{FileField, Model};
 use reinhardt::file_storage::{
 	FileStorageError, StorageBackend, StorageCapabilities, StorageEntry, StorageError,
@@ -147,20 +147,18 @@ async fn file_field_foundation_round_trip_and_activation_boundaries() {
 	let guard = initialize(&settings)
 		.await
 		.expect("local file storage should initialize before ORM use");
-	let expected_directory = format!("avatars/{}", Utc::now().format("%Y/%m/%d"));
 
-	reinitialize_database("sqlite::memory:")
+	let database_scope = install_scoped_database("sqlite::memory:")
 		.await
 		.expect("SQLite ORM connection should initialize");
-	let connection = get_connection()
-		.await
-		.expect("SQLite ORM connection should be available");
+	let connection = database_scope.connection();
 	connection
 		.execute(&sqlite_model_table_sql(), vec![])
 		.await
 		.expect("FileField model table should be created");
 
 	let payload = b"avatar payload bytes";
+	let upload_started_at = Utc::now();
 	let stored = Profile::file_avatar()
 		.store(UploadedFile {
 			name: "avatar".to_owned(),
@@ -171,8 +169,19 @@ async fn file_field_foundation_round_trip_and_activation_boundaries() {
 		})
 		.await
 		.expect("generated FileField descriptor should store an upload");
+	let upload_finished_at = Utc::now();
 	assert_eq!(stored.storage_alias(), "default");
-	assert!(stored.path().starts_with(&format!("{expected_directory}/")));
+	let expected_directories = [
+		format!("avatars/{}", upload_started_at.format("%Y/%m/%d")),
+		format!("avatars/{}", upload_finished_at.format("%Y/%m/%d")),
+	];
+	assert!(
+		expected_directories
+			.iter()
+			.any(|directory| stored.path().starts_with(&format!("{directory}/"))),
+		"stored path should use the current UTC upload directory: {}",
+		stored.path()
+	);
 	assert!(stored.path().ends_with("/avatar.png"));
 
 	let profile = Profile::objects()
@@ -226,4 +235,5 @@ async fn file_field_foundation_round_trip_and_activation_boundaries() {
 		hydrated.avatar.open().await,
 		Err(FileStorageError::RegistryUnavailable)
 	));
+	drop(database_scope);
 }

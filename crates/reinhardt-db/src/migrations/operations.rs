@@ -81,6 +81,12 @@ const FILE_FIELD_METADATA_KEYS: [&str; 5] = [
 	"max_length",
 	"storage",
 ];
+const REQUIRED_FILE_FIELD_METADATA_KEYS: [&str; 4] = [
+	"model_field_type",
+	"upload_to",
+	"file_storage",
+	"max_length",
+];
 
 /// Encode file-field policy in the existing `ColumnDefinition.default` slot.
 ///
@@ -142,6 +148,12 @@ pub(crate) fn decode_file_field_metadata(
 	else {
 		return (HashMap::new(), Some(default.to_string()));
 	};
+	if REQUIRED_FILE_FIELD_METADATA_KEYS
+		.iter()
+		.any(|key| !params.get(*key).is_some_and(serde_json::Value::is_string))
+	{
+		return (HashMap::new(), Some(default.to_string()));
+	}
 	// The envelope is valid only when it carries an explicit SQL-default
 	// member (null means no default) and every known semantic parameter is a
 	// JSON string. Otherwise preserve the original value verbatim so malformed
@@ -10291,6 +10303,9 @@ mod tests {
 				"{FILE_FIELD_METADATA_PREFIX}{{\"params\":{{\"model_field_type\":\"file\"}},\"default\":123}}"
 			),
 			format!("{FILE_FIELD_METADATA_PREFIX}{{\"params\":{{\"model_field_type\":\"file\"}}}}"),
+			format!(
+				"{FILE_FIELD_METADATA_PREFIX}{{\"params\":{{\"model_field_type\":\"file\",\"upload_to\":\"avatars\",\"file_storage\":\"public\"}},\"default\":\"CURRENT_TIMESTAMP\"}}"
+			),
 		];
 
 		for raw in malformed {
@@ -10334,7 +10349,7 @@ mod tests {
 	#[test]
 	fn valid_file_field_envelope_accepts_null_default() {
 		let raw = format!(
-			"{FILE_FIELD_METADATA_PREFIX}{{\"params\":{{\"model_field_type\":\"file\",\"file_storage\":\"private_uploads\"}},\"default\":null}}"
+			"{FILE_FIELD_METADATA_PREFIX}{{\"params\":{{\"model_field_type\":\"file\",\"upload_to\":\"avatars\",\"file_storage\":\"private_uploads\",\"max_length\":\"255\"}},\"default\":null}}"
 		);
 		let (params, default) = decode_file_field_metadata(Some(&raw));
 		assert_eq!(
@@ -10345,6 +10360,8 @@ mod tests {
 			params.get("file_storage").map(String::as_str),
 			Some("private_uploads")
 		);
+		assert_eq!(params.get("upload_to").map(String::as_str), Some("avatars"));
+		assert_eq!(params.get("max_length").map(String::as_str), Some("255"));
 		assert!(default.is_none());
 	}
 

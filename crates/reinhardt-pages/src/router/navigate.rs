@@ -4,9 +4,11 @@
 //! navigation primitive it can splice into the generated `submit()` body
 //! without going through a hook (hooks must be called from a reactive
 //! context, which the generated `async fn submit(&self)` is not). This free
-//! function is a thin wrapper over [`crate::reactive::hooks::RouterHandle`]
-//! so the macro can call `#pages_crate::navigate(__url, NavigationType::Push)`
-//! from anywhere on wasm.
+//! function is a thin wrapper over [`crate::reactive::hooks::RouterHandle`].
+//! Generated form code calls
+//! `#pages_crate::navigate_or_reload(__url, NavigationType::Push)` from
+//! anywhere on WASM; same-origin SPA destinations delegate through this
+//! function.
 //!
 //! Outside the macro, prefer [`crate::reactive::hooks::use_router`] from
 //! component bodies so the call site documents that it expects an SPA
